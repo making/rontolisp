@@ -344,10 +344,10 @@ final class SwankWire {
 				if (number != null) {
 					return number;
 				}
-				if (name.equals("nil")) {
+				if (name.equalsIgnoreCase("nil")) {
 					return List.of();
 				}
-				if (name.equals("t")) {
+				if (name.equalsIgnoreCase("t")) {
 					return Boolean.TRUE;
 				}
 			}

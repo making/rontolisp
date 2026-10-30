@@ -1,0 +1,14 @@
+# Lem's ncurses frontend (Lem's own Dockerfile, webkit2gtk dropped, steps split into layers).
+# Build context: the Lem checkout (scratchpad/h21/dl/lem).
+FROM alpine:latest
+RUN apk add --no-cache curl bash build-base ncurses-dev sbcl git xdg-utils
+WORKDIR /app
+RUN curl -o /quicklisp.lisp https://beta.quicklisp.org/quicklisp.lisp
+RUN sbcl --noinform --no-userinit --no-sysinit --non-interactive --load /quicklisp.lisp --eval "(quicklisp-quickstart:install)" --eval "(ql-util:without-prompting (ql:add-to-init-file))"
+RUN curl -L https://qlot.tech/installer | bash
+ENV PATH=/root/.qlot/bin:$PATH
+COPY qlfile qlfile.lock /app/
+RUN qlot install --no-deps || qlot install
+COPY . /app/
+RUN qlot install
+RUN qlot exec sbcl --noinform --non-interactive --load scripts/build-ncurses.lisp

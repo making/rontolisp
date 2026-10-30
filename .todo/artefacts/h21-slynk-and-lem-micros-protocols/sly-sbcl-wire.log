@@ -1,0 +1,144 @@
+>> (:emacs-rex (slynk:connection-info) nil t 1)\n
+<< (:return (:ok (:pid 2967514 :style :spawn :encoding (:coding-systems ("utf-8-unix" "iso-latin-1-unix")) :lisp-implementation (:type "SBCL" :name "sbcl" :version "2.2.9.debian" :program nil) :machine (:instance "dorian" :type "X86-64" :version "Intel(R) Xeon(R) CPU E5-2697A v4 @ 2.60GHz") :features (:slynk :x86-64 :gencgc :64-bit :ansi-cl :common-lisp :elf :ieee-floating-point :linux :little-endian :package-local-nicknames :sb-core-compression :sb-ldb :sb-package-locks :sb-thread :sb-unicode :sbcl :unix) :modules ("SLYNK/COMPLETION" "SB-CLTL2" "SB-POSIX" "SB-INTROSPECT" "SB-BSD-SOCKETS") :package (:name "COMMON-LISP-USER" :prompt "CL-USER") :version "1.0.43")) 1)
+>> (:emacs-rex (slynk:slynk-add-load-paths (quote ("@WORK@/dl/sly/contrib/"))) nil t 2)\n
+<< (:return (:ok nil) 2)
+>> (:emacs-rex (slynk:slynk-require (quote ("slynk/indentation" "slynk/stickers" "slynk/trace-dialog" "slynk/package-fu" "slynk/fancy-inspector" "slynk/mrepl" "slynk/arglists"))) nil t 3)\n
+<< (:return (:ok (("SLYNK/ARGLISTS" "SLYNK/MREPL" "SLYNK/FANCY-INSPECTOR" "SLYNK/PACKAGE-FU" "SLYNK/TRACE-DIALOG" "SLYNK/STICKERS" "SLYNK/INDENTATION" "SLYNK/COMPLETION" "SB-CLTL2" "SB-POSIX" "SB-INTROSPECT" "SB-BSD-SOCKETS") ("slynk/arglists" "slynk/mrepl" "slynk/fancy-inspector" "slynk/package-fu" "slynk/trace-dialog" "slynk/stickers" "slynk/indentation"))) 3)
+>> (:emacs-rex (slynk-mrepl:create-mrepl 1) nil t 4)\n
+<< (:channel-send 1 (:write-string "; SLY 1.0.43 (#<MREPL mrepl-1-1>)\n; Global redirection not setup\n"))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 0))
+<< (:return (:ok (1 1)) 4)
+>> (:emacs-channel-send 1 (:process "(+ 1 2)"))\n
+<< (:channel-send 1 (:write-values (("3 (2 bits, #x3, #o3, #b11)" 0 "3"))))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 1))
+>> (:emacs-channel-send 1 (:process "(progn (format t \"hello~%\") (values 1 \"two\"))"))\n
+<< (:channel-send 1 (:write-string "hello\n"))
+<< (:channel-send 1 (:write-values (("1 (1 bit, #x1, #o1, #b1)" 1 "1") ("\"two\"" 1 nil))))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 2))
+>> (:emacs-channel-send 1 (:process "(values)"))\n
+<< (:channel-send 1 (:write-values nil))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 2))
+>> (:emacs-channel-send 1 (:process "(princ \"no newline\")"))\n
+<< (:channel-send 1 (:write-string "no newline"))
+<< (:channel-send 1 (:write-values (("\"no newline\"" 2 nil))))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 3))
+>> (:emacs-channel-send 1 (:process "(defvar *drv* 10)"))\n
+<< (:channel-send 1 (:write-values (("*DRV*" 3 "'*drv*"))))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 4))
+>> (:emacs-channel-send 1 (:process "(list *drv* * ** ***)"))\n
+<< (:channel-send 1 (:write-values (("(10 *DRV* \"no newline\" 1)" 4 nil))))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 5))
+>> (:emacs-channel-send 1 (:process "(defpackage :drv-pkg (:use :cl) (:export #:hello))"))\n
+<< (:channel-send 1 (:write-values (("#<PACKAGE \"DRV-PKG\">" 5 nil))))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 6))
+>> (:emacs-channel-send 1 (:process "(in-package :drv-pkg)"))\n
+<< (:channel-send 1 (:write-values (("#<PACKAGE \"DRV-PKG\">" 6 nil))))
+<< (:channel-send 1 (:prompt "DRV-PKG" "DRV-PKG" 0 7))
+>> (:emacs-channel-send 1 (:process "(defun hello () 'hi)"))\n
+<< (:channel-send 1 (:write-values (("HELLO" 7 "'hello"))))
+<< (:channel-send 1 (:prompt "DRV-PKG" "DRV-PKG" 0 8))
+>> (:emacs-channel-send 1 (:process "(list (package-name *package*) (hello))"))\n
+<< (:channel-send 1 (:write-values (("(\"DRV-PKG\" HI)" 8 nil))))
+<< (:channel-send 1 (:prompt "DRV-PKG" "DRV-PKG" 0 9))
+>> (:emacs-channel-send 1 (:process "(in-package :cl-user)"))\n
+<< (:channel-send 1 (:write-values (("#<PACKAGE \"COMMON-LISP-USER\">" 9 nil))))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 10))
+>> (:emacs-channel-send 1 (:process "(drv-pkg:hello)"))\n
+<< (:channel-send 1 (:write-values (("DRV-PKG::HI" 10 "'drv-pkg::hi"))))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 11))
+>> (:emacs-channel-send 1 (:process "(list (read-line) 7)"))\n
+<< (:channel-send 1 (:set-read-mode :read))
+>> (:emacs-channel-send 1 (:process "typed\n"))\n
+<< (:channel-send 1 (:set-read-mode :finished-reading))
+<< (:channel-send 1 (:write-values (("(\"typed\" 7)" 11 nil))))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 12))
+>> (:emacs-rex (slynk:interactive-eval "(+ 2 3)") nil t 5)\n
+<< (:return (:ok "5 (3 bits, #x5, #o5, #b101)") 5)
+>> (:emacs-rex (slynk:interactive-eval "(values 1 2)") nil t 6)\n
+<< (:return (:ok "1, 2") 6)
+>> (:emacs-rex (slynk:interactive-eval "(progn (print 'x) \"str\")") nil t 7)\n
+<< (:channel-send 1 (:write-string "\nX "))
+<< (:return (:ok "\"str\"") 7)
+>> (:emacs-rex (slynk:interactive-eval "(values)") nil t 8)\n
+<< (:return (:ok "; No value") 8)
+>> (:emacs-rex (slynk:interactive-eval "(* 6 7)\n") ":drv-pkg" t 9)\n
+<< (:return (:ok "42 (6 bits, #x2A, #o52, #b101010)") 9)
+>> (:emacs-rex (slynk:eval-and-grab-output "(progn (princ \"x\") (values 42 43))") nil t 10)\n
+<< (:return (:ok ("x" "42, 43")) 10)
+>> (:emacs-rex (slynk:compile-string-for-emacs "(defun drv-add (a b)\n  (+ a b))\n" "drv-compile.lisp" (quote ((:position 1) (:line 1 1))) "@WORK@/sly-oracle/sbcl-basic/work/drv-compile.lisp" (quote nil)) nil t 11)\n
+<< (:return (:ok (:compilation-result nil t 0.004000000189989805 nil nil)) 11)
+>> (:emacs-rex (slynk:compile-string-for-emacs "(defun drv-bad ()\n  (drv-undefined-fn 1))\n" "drv-compile.lisp" (quote ((:position 34) (:line 4 1))) "@WORK@/sly-oracle/sbcl-basic/work/drv-compile.lisp" (quote nil)) nil t 12)\n
+<< (:channel-send 1 (:write-string "\n\n; file: /tmp/slimeT23Znd\n; in: DEFUN DRV-BAD\n;     (DRV-UNDEFINED-FN 1)\n; \n; caught STYLE-WARNING:\n;   undefined function: COMMON-LISP-USER::DRV-UNDEFINED-FN\n; \n; compilation unit finished\n;   Undefined function:\n;     DRV-UNDEFINED-FN\n;   caught 1 STYLE-WARNING condition\n"))
+<< (:return (:ok (:compilation-result ((:message "undefined function: COMMON-LISP-USER::DRV-UNDEFINED-FN" :severity :style-warning :location (:location (:buffer "drv-compile.lisp") (:offset 34 20) nil) :references nil)) t 0.009999999776482582 nil nil)) 12)
+>> (:emacs-channel-send 1 (:process "(drv-add 1 2)"))\n
+<< (:channel-send 1 (:write-values (("3 (2 bits, #x3, #o3, #b11)" 12 "3"))))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 13))
+>> (:emacs-rex (slynk:compile-file-for-emacs "@WORK@/sly-oracle/sbcl-basic/work/drv-file.lisp" t) nil t 13)\n
+<< (:channel-send 1 (:write-string "; compiling file \"@WORK@/sly-oracle/sbcl-basic/work/drv-file.lisp\" (written 30 OCT 2026 03:52:45 AM):\n"))
+<< (:channel-send 1 (:write-string "\n; file: @WORK@/sly-oracle/sbcl-basic/work/drv-file.lisp\n; in: DEFUN DRV-FILE-WARN\n;     (UNUSED 1)\n; \n; caught STYLE-WARNING:\n;   The variable UNUSED is defined but never used.\n\n; file: @WORK@/sly-oracle/sbcl-basic/work/drv-file.lisp\n; in: DEFUN DRV-FILE-WARN\n;     (DRV-OTHER-UNDEFINED)\n; \n; caught STYLE-WARNING:\n;   undefined function: COMMON-LISP-USER::DRV-OTHER-UNDEFINED\n; \n; compilation unit finished\n;   Undefined function:\n;     DRV-OTHER-UNDEFINED\n;   caught 2 STYLE-WARNING conditions\n"))
+<< (:channel-send 1 (:write-string "\n\n; wrote @WORK@/sly-oracle/sbcl-basic/work/drv-file.fasl\n"))
+<< (:channel-send 1 (:write-string "; compilation finished in 0:00:00.003\n"))
+<< (:return (:ok (:compilation-result ((:message "The variable UNUSED is defined but never used." :severity :style-warning :location (:location (:file "@WORK@/sly-oracle/sbcl-basic/work/drv-file.lisp") (:position 68) nil) :references nil) (:message "undefined function: COMMON-LISP-USER::DRV-OTHER-UNDEFINED" :severity :style-warning :location (:location (:file "@WORK@/sly-oracle/sbcl-basic/work/drv-file.lisp") (:position 84) nil) :references nil)) t 0.004000000189989805 t "@WORK@/sly-oracle/sbcl-basic/work/drv-file.fasl")) 13)
+>> (:emacs-rex (slynk:load-file "@WORK@/sly-oracle/sbcl-basic/work/drv-file.fasl") nil t 14)\n
+<< (:return (:ok "T") 14)
+>> (:emacs-channel-send 1 (:process "(drv-file-fn 21)"))\n
+<< (:channel-send 1 (:write-values (("42 (6 bits, #x2A, #o52, #b101010)" 13 "42"))))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 14))
+>> (:emacs-rex (slynk:load-file "@WORK@/sly-oracle/sbcl-basic/work/drv-file.lisp") nil t 15)\n
+<< (:channel-send 1 (:write-string "\n; file: @WORK@/sly-oracle/sbcl-basic/work/drv-file.lisp\n; in: DEFUN DRV-FILE-WARN\n;     (UNUSED 1)\n; \n; caught STYLE-WARNING:\n;   The variable UNUSED is defined but never used.\n\n; file: @WORK@/sly-oracle/sbcl-basic/work/drv-file.lisp\n; in: DEFUN DRV-FILE-WARN\n;     (DRV-OTHER-UNDEFINED)\n; \n; caught STYLE-WARNING:\n;   undefined function: COMMON-LISP-USER::DRV-OTHER-UNDEFINED\n; \n; compilation unit finished\n;   Undefined function:\n;     DRV-OTHER-UNDEFINED\n;   caught 2 STYLE-WARNING conditions\n"))
+<< (:return (:ok "T") 15)
+>> (:emacs-rex (slynk-completion:simple-completions "mapc" "COMMON-LISP-USER") nil t 16)\n
+<< (:return (:ok (("mapc" "mapcan" "mapcar" "mapcon") "mapc")) 16)
+>> (:emacs-rex (slynk-completion:simple-completions "drv-pkg:he" "COMMON-LISP-USER") nil t 17)\n
+<< (:return (:ok (("drv-pkg:hello") "drv-pkg:hello")) 17)
+>> (:emacs-rex (slynk-completion:flex-completions "mvbind" "COMMON-LISP-USER") nil t 18)\n
+<< (:return (:ok ((("multiple-value-bind" 0.009072388522326946 ((0 "M") (9 "V") (15 "BIND")) "macro")) nil)) 18)
+>> (:emacs-rex (slynk-completion:flex-completions "drv-ad" (quote nil)) nil t 19)\n
+<< (:return (:ok ((("drv-add" 0.4285714328289032 ((0 "DRV-AD")) "fn") ("drv-bad" 0.4285714328289032 ((0 "DRV-") (5 "AD")) "fn") ("slynk-backend:remove-fd-handlers" 0.002808342222124338 ((12 "D") (14 "R") (18 "V") (20 "-") (25 "A") (27 "D")) "fn") ("slynk-backend:remove-sigio-handlers" 0.002218117006123066 ((12 "D") (14 "R") (18 "V") (20 "-") (28 "A") (30 "D")) "fn")) nil)) 19)
+>> (:emacs-rex (slynk-completion:flex-completions "multiple-value-bi" (quote "common-lisp-user")) "common-lisp-user" t 20)\n
+<< (:return (:ok ((("multiple-value-bind" 0.23370873928070068 ((0 "MULTIPLE-VALUE-BI")) "macro")) nil)) 20)
+>> (:emacs-rex (slynk:autodoc (quote ("mapcar" "" slynk::%cursor-marker%)) :print-right-margin 80) nil t 21)\n
+<< (:return (:ok ("(mapcar ===> function <=== list &rest more-lists)" t)) 21)
+>> (:emacs-rex (slynk:operator-arglist "mapcar" "COMMON-LISP-USER") nil t 22)\n
+<< (:return (:ok "(mapcar FUNCTION LIST &REST MORE-LISTS)") 22)
+>> (:emacs-rex (slynk:autodoc (quote ("drv-add" "1" slynk::%cursor-marker%)) :print-right-margin 80) nil t 23)\n
+<< (:return (:ok ("(drv-add ===> a <=== b)" t)) 23)
+>> (:emacs-rex (slynk:describe-symbol "drv-add") nil t 24)\n
+<< (:return (:ok "COMMON-LISP-USER::DRV-ADD\n  [symbol]\n\nDRV-ADD names a compiled function:\n  Lambda-list: (A B)\n  Derived type: (FUNCTION (T T) (VALUES NUMBER &OPTIONAL))\n  Source file: @WORK@/sly-oracle/sbcl-basic/work/drv-compile.lisp\n") 24)
+>> (:emacs-rex (slynk:documentation-symbol "mapcar") nil t 25)\n
+<< (:return (:ok "Documentation for the symbol MAPCAR:\n\nFunction:\n Arglist: (FUNCTION LIST &REST MORE-LISTS)\n\n Apply FUNCTION to successive tuples of elements of LIST and MORE-LISTS.\nReturn list of FUNCTION return values.") 25)
+>> (:emacs-rex (slynk:slynk-macroexpand-1 "(when a b)") nil t 26)\n
+<< (:return (:ok "(if a\n    b)") 26)
+>> (:emacs-rex (slynk:slynk-macroexpand-1 "(when (zerop 0) (print 1))") nil t 27)\n
+<< (:return (:ok "(if (zerop 0)\n    (print 1))") 27)
+>> (:emacs-channel-send 1 (:process "(error \"boom ~a\" 1)"))\n
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 1 14 "#<SIMPLE-ERROR \"boom ~a\" {100164A7A3}>"))
+<< (:debug 1 1 ("boom 1" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLY mREPL evaluation request.") ("*ABORT" "Return to SLY's top level.") ("ABORT" "abort thread (#<THREAD \"sly-channel-1-mrepl-remote-1\" RUNNING {1004858003}>)")) ((0 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (ERROR \"boom ~a\" 1) #<NULL-LEXENV>)") (1 "(EVAL (ERROR \"boom ~a\" 1))") (2 "((LAMBDA NIL :IN SLYNK-MREPL::MREPL-EVAL-1))" (:restartable t)) (3 "(SLYNK::CALL-WITH-RETRY-RESTART \"Retry SLY mREPL evaluation request.\" #<FUNCTION (LAMBDA NIL :IN SLYNK-MREPL::MREPL-EVAL-1) {1001649D2B}>)" (:restartable t)) (4 "((LAMBDA NIL :IN SLYNK-MREPL::MREPL-EVAL-1))" (:restartable t)) (5 "((LAMBDA NIL :IN SLYNK::CALL-WITH-LISTENER))" (:restartable t)) (6 "(SLYNK::CALL-WITH-BINDINGS ((*PACKAGE* . #<PACKAGE \"COMMON-LISP-USER\">) (*DEFAULT-PATHNAME-DEFAULTS* . #P\"@WORK@/s.." (:restartable t)) (7 "(SLYNK-MREPL::MREPL-EVAL-1 #<SLYNK-MREPL::MREPL mrepl-1-1> \"(error \\\"boom ~a\\\" 1)\")" (:restartable t)) (8 "(SLYNK-MREPL::MREPL-EVAL #<SLYNK-MREPL::MREPL mrepl-1-1> \"(error \\\"boom ~a\\\" 1)\")" (:restartable t)) (9 "(SLYNK:PROCESS-REQUESTS NIL)" (:restartable t)) (10 "((LAMBDA NIL :IN SLYNK::SPAWN-CHANNEL-THREAD))" (:restartable t)) (11 "((LAMBDA NIL :IN SLYNK::SPAWN-CHANNEL-THREAD))" (:restartable t)) (12 "(SLYNK-SBCL::CALL-WITH-BREAK-HOOK #<FUNCTION SLYNK:SLYNK-DEBUGGER-HOOK> #<FUNCTION (LAMBDA NIL :IN SLYNK::SPAWN-CHANNEL-THREAD) {1003F0800B}>)") (13 "((FLET SLYNK-BACKEND:CALL-WITH-DEBUGGER-HOOK :IN \"@WORK@/dl/sly-70350623eecd1f41837c9e57cbb6d5c06678a60d/slynk/bac..") (14 "((LAMBDA NIL :IN SLYNK::CALL-WITH-LISTENER))" (:restartable t)) (15 "(SLYNK::CALL-WITH-BINDINGS ((*PACKAGE* . #<PACKAGE \"COMMON-LISP-USER\">) (*DEFAULT-PATHNAME-DEFAULTS* . #P\"@WORK@/s.." (:restartable t)) (16 "((LAMBDA NIL :IN SLYNK::SPAWN-CHANNEL-THREAD))" (:restartable t)) (17 "((FLET SB-UNIX::BODY :IN SB-THREAD::RUN))") (18 "((FLET \"WITHOUT-INTERRUPTS-BODY-11\" :IN SB-THREAD::RUN))") (19 "((FLET SB-UNIX::BODY :IN SB-THREAD::RUN))")) nil)
+<< (:debug-activate 1 1)
+>> (:emacs-rex (slynk:throw-to-toplevel) nil 1 28)\n
+<< (:return (:abort "NIL") 28)
+<< (:debug-return 1 1 nil)
+<< (:channel-send 1 (:evaluation-aborted "#<SIMPLE-ERROR \"boom ~a\" {100164A7A3}>"))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 14))
+>> (:emacs-rex (slynk:interactive-eval "(car 1)") nil t 29)\n
+<< (:debug 2 1 ("The value\n  1\nis not of type\n  LIST\nwhen binding LIST" "   [Condition of type TYPE-ERROR]" nil) (("RETRY" "Retry SLY interactive evaluation request.") ("*ABORT" "Return to SLY's top level.") ("ABORT" "abort thread (#<THREAD \"slynk-worker\" RUNNING {10016A7263}>)")) ((0 "(CAR 1) [external]" (:restartable t)) (1 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (CAR 1) #<NULL-LEXENV>)") (2 "(EVAL (CAR 1))") (3 "((LAMBDA NIL :IN SLYNK:INTERACTIVE-EVAL))" (:restartable t)) (4 "(SLYNK::CALL-WITH-RETRY-RESTART \"Retry SLY interactive evaluation request.\" #<FUNCTION (LAMBDA NIL :IN SLYNK:INTERACTIVE-EVAL) {100164F64B}>)" (:restartable t)) (5 "(SLYNK::CALL-WITH-BUFFER-SYNTAX NIL NIL #<FUNCTION (LAMBDA NIL :IN SLYNK:INTERACTIVE-EVAL) {100164F62B}>)" (:restartable t)) (6 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (SLYNK:INTERACTIVE-EVAL \"(car 1)\") #<NULL-LEXENV>)") (7 "(EVAL (SLYNK:INTERACTIVE-EVAL \"(car 1)\"))") (8 "(SLYNK:EVAL-FOR-EMACS (SLYNK:INTERACTIVE-EVAL \"(car 1)\") NIL 29)" (:restartable t)) (9 "((LAMBDA NIL :IN SLYNK::SPAWN-WORKER-THREAD))" (:restartable t)) (10 "(SLYNK-SBCL::CALL-WITH-BREAK-HOOK #<FUNCTION SLYNK:SLYNK-DEBUGGER-HOOK> #<FUNCTION (LAMBDA NIL :IN SLYNK::SPAWN-WORKER-THREAD) {100164F3CB}>)") (11 "((FLET SLYNK-BACKEND:CALL-WITH-DEBUGGER-HOOK :IN \"@WORK@/dl/sly-70350623eecd1f41837c9e57cbb6d5c06678a60d/slynk/bac..") (12 "((LAMBDA NIL :IN SLYNK::CALL-WITH-LISTENER))" (:restartable t)) (13 "(SLYNK::CALL-WITH-BINDINGS ((*PACKAGE* . #<PACKAGE \"COMMON-LISP-USER\">) (*DEFAULT-PATHNAME-DEFAULTS* . #P\"@WORK@/s.." (:restartable t)) (14 "((LAMBDA NIL :IN SLYNK::SPAWN-WORKER-THREAD))" (:restartable t)) (15 "((FLET SB-UNIX::BODY :IN SB-THREAD::RUN))") (16 "((FLET \"WITHOUT-INTERRUPTS-BODY-11\" :IN SB-THREAD::RUN))") (17 "((FLET SB-UNIX::BODY :IN SB-THREAD::RUN))") (18 "((FLET \"WITHOUT-INTERRUPTS-BODY-4\" :IN SB-THREAD::RUN))") (19 "(SB-THREAD::RUN)")) (29))
+<< (:debug-activate 2 1)
+>> (:emacs-rex (slynk:throw-to-toplevel) nil 2 30)\n
+<< (:return (:abort "NIL") 30)
+<< (:debug-return 2 1 nil)
+<< (:return (:abort "#<TYPE-ERROR expected-type: LIST datum: 1>") 29)
+>> (:emacs-channel-send 1 (:process "(+ 40 2)"))\n
+<< (:channel-send 1 (:write-values (("42 (6 bits, #x2A, #o52, #b101010)" 14 "42"))))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 15))
+>> (:emacs-channel-send 1 (:process "(loop)"))\n
+>> (:emacs-interrupt 1)\n
+<< (:debug 1 1 ("Interrupt from client" "   [Condition of type SIMPLE-ERROR]" nil) (("CONTINUE" "Continue from break.") ("RETRY" "Retry SLY mREPL evaluation request.") ("*ABORT" "Return to SLY's top level.") ("ABORT" "abort thread (#<THREAD \"sly-channel-1-mrepl-remote-1\" RUNNING {1004858003}>)")) ((0 "((LAMBDA ()))" (:restartable t)) (1 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (LOOP) #<NULL-LEXENV>)") (2 "(EVAL (LOOP))") (3 "((LAMBDA NIL :IN SLYNK-MREPL::MREPL-EVAL-1))" (:restartable t)) (4 "(SLYNK::CALL-WITH-RETRY-RESTART \"Retry SLY mREPL evaluation request.\" #<FUNCTION (LAMBDA NIL :IN SLYNK-MREPL::MREPL-EVAL-1) {10017EB25B}>)" (:restartable t)) (5 "((LAMBDA NIL :IN SLYNK-MREPL::MREPL-EVAL-1))" (:restartable t)) (6 "((LAMBDA NIL :IN SLYNK::CALL-WITH-LISTENER))" (:restartable t)) (7 "(SLYNK::CALL-WITH-BINDINGS ((*PACKAGE* . #<PACKAGE \"COMMON-LISP-USER\">) (*DEFAULT-PATHNAME-DEFAULTS* . #P\"@WORK@/s.." (:restartable t)) (8 "(SLYNK-MREPL::MREPL-EVAL-1 #<SLYNK-MREPL::MREPL mrepl-1-1> \"(loop)\")" (:restartable t)) (9 "(SLYNK-MREPL::MREPL-EVAL #<SLYNK-MREPL::MREPL mrepl-1-1> \"(loop)\")" (:restartable t)) (10 "(SLYNK:PROCESS-REQUESTS NIL)" (:restartable t)) (11 "((LAMBDA NIL :IN SLYNK::SPAWN-CHANNEL-THREAD))" (:restartable t)) (12 "((LAMBDA NIL :IN SLYNK::SPAWN-CHANNEL-THREAD))" (:restartable t)) (13 "(SLYNK-SBCL::CALL-WITH-BREAK-HOOK #<FUNCTION SLYNK:SLYNK-DEBUGGER-HOOK> #<FUNCTION (LAMBDA NIL :IN SLYNK::SPAWN-CHANNEL-THREAD) {1003F0800B}>)") (14 "((FLET SLYNK-BACKEND:CALL-WITH-DEBUGGER-HOOK :IN \"@WORK@/dl/sly-70350623eecd1f41837c9e57cbb6d5c06678a60d/slynk/bac..") (15 "((LAMBDA NIL :IN SLYNK::CALL-WITH-LISTENER))" (:restartable t)) (16 "(SLYNK::CALL-WITH-BINDINGS ((*PACKAGE* . #<PACKAGE \"COMMON-LISP-USER\">) (*DEFAULT-PATHNAME-DEFAULTS* . #P\"@WORK@/s.." (:restartable t)) (17 "((LAMBDA NIL :IN SLYNK::SPAWN-CHANNEL-THREAD))" (:restartable t)) (18 "((FLET SB-UNIX::BODY :IN SB-THREAD::RUN))") (19 "((FLET \"WITHOUT-INTERRUPTS-BODY-11\" :IN SB-THREAD::RUN))")) nil)
+<< (:debug-activate 1 1)
+>> (:emacs-rex (slynk:throw-to-toplevel) nil 1 31)\n
+<< (:return (:abort "NIL") 31)
+<< (:debug-return 1 1 nil)
+<< (:channel-send 1 (:evaluation-aborted "T"))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 15))
+>> (:emacs-channel-send 1 (:process "(+ 40 3)"))\n
+<< (:channel-send 1 (:write-values (("43 (6 bits, #x2B, #o53, #b101011)" 15 "43"))))
+<< (:channel-send 1 (:prompt "COMMON-LISP-USER" "CL-USER" 0 16))

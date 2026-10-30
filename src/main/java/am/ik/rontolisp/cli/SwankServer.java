@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -24,10 +25,12 @@ import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import org.jspecify.annotations.Nullable;
 
@@ -50,7 +53,9 @@ import am.ik.rontolisp.eval.LispInterruptSignal;
  * The SWANK server {@code rontolisp --swank} runs: SLIME's protocol over TCP
  * ({@link SwankWire}), answering the requests of SLIME 2.32 and its {@code slime-fancy}
  * contribs over the interpreter ({@link CommonLispSwank}), in the shapes SWANK 2.32 on
- * SBCL answers them.
+ * SBCL answers them, and those of SLY 1.0.43 in Slynk's ({@link SwankDialect}): a
+ * request's dialect is the package of the function it calls, and SLY's REPL is a channel
+ * ({@link MRepl}).
  *
  * <p>
  * The communication style is SWANK's {@code :spawn}: each connection's reader dispatches
@@ -64,18 +69,6 @@ import am.ik.rontolisp.eval.LispInterruptSignal;
  */
 final class SwankServer implements AutoCloseable {
 
-	/**
-	 * The version of the protocol the server answers: SLIME's release it was measured
-	 * against.
-	 */
-	static final String PROTOCOL_VERSION = "2.32";
-
-	/**
-	 * The contribs the server answers for, which {@code connection-info} reports loaded.
-	 */
-	private static final List<String> MODULES = List.of("SWANK-REPL", "SWANK-ARGLISTS", "SWANK-C-P-C", "SWANK-FUZZY",
-			"SWANK-UTIL");
-
 	private final CommonLispSwank lisp;
 
 	private final LispEvaluator evaluator;
@@ -86,7 +79,8 @@ final class SwankServer implements AutoCloseable {
 
 	private final Set<Connection> connections = ConcurrentHashMap.newKeySet();
 
-	private final Set<String> modules = Collections.synchronizedSet(new LinkedHashSet<>(MODULES));
+	/** Each dialect's modules {@code connection-info} reports loaded. */
+	private final Map<SwankDialect, Set<String>> modules = new ConcurrentHashMap<>();
 
 	private volatile @Nullable LispExitSignal exit;
 
@@ -209,8 +203,22 @@ final class SwankServer implements AutoCloseable {
 	private record Request(Object form, @Nullable String pkg, Object id) {
 	}
 
-	/** A request a thread is running, which an interrupt can stop. */
-	private record Running(Thread thread, Request request) {
+	/** A thread running a request, which an interrupt can stop. */
+	private record Running(Thread thread) {
+	}
+
+	/**
+	 * What an evaluation came to.
+	 *
+	 * @param value what it answered
+	 * @param aborted the condition it aborted on, as SWANK prints it, or null
+	 */
+	private record Outcome(@Nullable Object value, @Nullable String aborted) {
+	}
+
+	private Set<String> modules(SwankDialect dialect) {
+		return this.modules.computeIfAbsent(dialect,
+				key -> Collections.synchronizedSet(new LinkedHashSet<>(key.modules())));
 	}
 
 	/**
@@ -238,7 +246,18 @@ final class SwankServer implements AutoCloseable {
 
 		private final AtomicLong tags = new AtomicLong();
 
+		/** SLY's REPLs, by the channel id the server gave each. */
+		private final Map<Long, MRepl> channels = new ConcurrentSkipListMap<>();
+
+		private final AtomicLong channelIds = new AtomicLong();
+
+		/** The ids of the values a micros REPL printed and pretty-eval answered. */
+		private final AtomicLong objectIds = new AtomicLong();
+
 		private volatile boolean closed;
+
+		/** The dialect the editor's last request spoke. */
+		private volatile SwankDialect dialect = SwankDialect.SWANK;
 
 		Connection(Socket socket) throws IOException {
 			this.socket = socket;
@@ -273,24 +292,38 @@ final class SwankServer implements AutoCloseable {
 					Request request = new Request(event.get(1), pkg, event.get(4));
 					Object thread = event.get(3);
 					Thread repl = this.replThread;
+					MRepl mrepl = thread instanceof Number id ? mreplOn(id.longValue()) : null;
 					if (thread instanceof Keyword keyword && keyword.name().equalsIgnoreCase("repl-thread")
 							|| thread instanceof Number id && repl != null && id.longValue() == repl.threadId()) {
 						startRepl();
 						this.replQueue.add(request);
 					}
+					else if (mrepl != null) {
+						mrepl.post(request);
+					}
 					else if (thread instanceof Number id) {
 						send(list(kw("invalid-rpc"), request.id(), "Thread not found: " + id));
 					}
 					else {
-						Thread worker = new Thread(null, () -> run(request), "swank-worker",
+						Thread worker = new Thread(null, () -> run(request, null), "swank-worker",
 								SwankServer.this.stackBytes);
 						worker.setDaemon(true);
 						worker.start();
 					}
 				}
+				case "emacs-channel-send" -> {
+					MRepl channel = event.size() > 2 && event.get(1) instanceof Number id
+							? this.channels.get(id.longValue()) : null;
+					if (channel != null) {
+						channel.post(event.get(2));
+					}
+					else if (event.size() > 1) {
+						send(list(kw("invalid-channel"), event.get(1), "No such channel"));
+					}
+				}
 				case "emacs-interrupt" -> interrupt(event.size() > 1 ? event.get(1) : Boolean.TRUE);
 				case "write-done" -> deliver(this.writeDone, event);
-				case "emacs-return-string" -> deliver(this.input, event);
+				case "emacs-return-string", "emacs-return" -> deliver(this.input, event);
 				default -> {
 					// :emacs-pong and the debugger's events: nothing waits for them
 				}
@@ -315,7 +348,7 @@ final class SwankServer implements AutoCloseable {
 					try {
 						Request request = this.replQueue.poll(1, TimeUnit.SECONDS);
 						if (request != null) {
-							run(request);
+							run(request, null);
 						}
 					}
 					catch (InterruptedException ex) {
@@ -330,33 +363,68 @@ final class SwankServer implements AutoCloseable {
 
 		private void interrupt(Object target) {
 			// t names the newest request running, a number the thread of that id
+			Thread repl = this.replThread;
+			Object thread = target instanceof Keyword keyword && keyword.name().equalsIgnoreCase("repl-thread")
+					&& repl != null ? (Object) repl.threadId() : target;
 			for (Running each : this.running) {
-				if (!(target instanceof Number id) || each.thread().threadId() == id.longValue()) {
+				if (!(thread instanceof Number id) || each.thread().threadId() == id.longValue()) {
 					SwankServer.this.evaluator.interrupt(each.thread());
 					return;
 				}
 			}
 		}
 
-		/** Runs a request on the calling thread and answers it. */
-		void run(Request request) {
-			Thread self = Thread.currentThread();
-			Running running = new Running(self, request);
+		private @Nullable MRepl mreplOn(long threadId) {
+			for (MRepl each : this.channels.values()) {
+				if (each.thread.threadId() == threadId) {
+					return each;
+				}
+			}
+			return null;
+		}
+
+		/**
+		 * Runs a request on the calling thread and answers it.
+		 * @param request the request
+		 * @param channel the SLY REPL whose thread runs it, or null
+		 */
+		void run(Request request, @Nullable MRepl channel) {
+			long self = Thread.currentThread().threadId();
+			SwankDialect dialect = dialectOf(request.form());
+			MRepl target = channel != null ? channel : dialect == SwankDialect.SLYNK ? defaultChannel() : null;
+			Output output = new Output(this, self, dialect, target);
+			Input input = new Input(
+					channel != null ? channel::readLine : () -> askEditor(self, dialect == SwankDialect.SLYNK));
+			Outcome outcome = execute(SwankServer.this.lisp.guessPackage(request.pkg()), output, input,
+					() -> call(request.form(), output, channel));
+			if (outcome != null) {
+				send(list(kw("return"), outcome.aborted() == null ? list(kw("ok"), outcome.value())
+						: list(kw("abort"), outcome.aborted()), request.id()));
+			}
+		}
+
+		/**
+		 * Evaluates on the calling thread, which an interrupt can then stop, with the
+		 * package bound and the standard streams over the editor's.
+		 * @param pkg the package's canonical name, null for {@code cl-user}
+		 * @param output where the standard output writes
+		 * @param input where the standard input reads
+		 * @param body the evaluation
+		 * @return what it came to, null when it ended the process
+		 */
+		@Nullable Outcome execute(@Nullable String pkg, Output output, Input input, Supplier<@Nullable Object> body) {
+			Running running = new Running(Thread.currentThread());
 			this.running.addFirst(running);
-			Output output = new Output(this, self.threadId());
-			Input reader = new Input(this, self.threadId());
 			Runnable restore = SwankServer.this.lisp.controlState();
-			Object reply;
 			try {
-				String pkg = SwankServer.this.lisp.guessPackage(request.pkg());
-				Object value = SwankServer.this.lisp.serve(pkg, output, reader, () -> call(request.form(), output));
+				Object value = SwankServer.this.lisp.serve(pkg, output, input, () -> body.get());
 				output.flush();
-				reply = list(kw("return"), list(kw("ok"), value), request.id());
+				return new Outcome(value, null);
 			}
 			catch (LispInterruptSignal ex) {
 				// what it printed before it stopped still reaches the editor
 				output.flush();
-				reply = list(kw("return"), list(kw("abort"), "#<SIMPLE-ERROR \"Interrupt from Emacs\">"), request.id());
+				return new Outcome(null, "#<SIMPLE-ERROR \"Interrupt from Emacs\">");
 			}
 			catch (LispExitSignal ex) {
 				// the oracle's quit ends its process, and the editor's connection with it
@@ -367,28 +435,73 @@ final class SwankServer implements AutoCloseable {
 				if (onExit != null) {
 					onExit.accept(ex);
 				}
-				return;
+				return null;
 			}
 			catch (StackOverflowError ex) {
 				restore.run();
 				output.flush();
-				reply = list(kw("return"), list(kw("abort"), SwankServer.this.lisp.describeFailure(ex)), request.id());
+				return new Outcome(null, SwankServer.this.lisp.describeFailure(ex));
 			}
 			catch (RuntimeException ex) {
 				output.flush();
-				reply = list(kw("return"), list(kw("abort"), SwankServer.this.lisp.describeFailure(ex)), request.id());
+				return new Outcome(null, SwankServer.this.lisp.describeFailure(ex));
 			}
 			finally {
 				this.running.remove(running);
 				SwankServer.this.evaluator.clearInterrupt();
 			}
-			send(reply);
+		}
+
+		/** The first SLY REPL, where Slynk's other requests write their output. */
+		private @Nullable MRepl defaultChannel() {
+			Iterator<MRepl> first = this.channels.values().iterator();
+			return first.hasNext() ? first.next() : null;
 		}
 
 		/**
-		 * Answers a request's form: a function SWANK defines, else the form evaluated.
+		 * Asks the editor for a line of standard input and waits for it: SLIME's REPL as
+		 * {@code :read-string}, SLY's minibuffer as {@code :read-from-minibuffer}.
+		 * @param id the reading thread's id
+		 * @param minibuffer whether to ask SLY's minibuffer
+		 * @return the line, or null at the end of the input
 		 */
-		private @Nullable Object call(Object form, Output output) {
+		@Nullable String askEditor(long id, boolean minibuffer) {
+			long tag = nextTag();
+			BlockingQueue<List<?>> box = new LinkedBlockingQueue<>();
+			this.input.put(id, box);
+			send(minibuffer ? list(kw("read-from-minibuffer"), id, tag, "Input for thread " + id + "? ", null)
+					: list(kw("read-string"), id, tag));
+			try {
+				while (true) {
+					List<?> event = box.poll(1, TimeUnit.SECONDS);
+					if (event != null) {
+						String line = event.size() > 3 && event.get(3) instanceof String text ? text : null;
+						return line == null || line.isEmpty() ? null : minibuffer ? line + "\n" : line;
+					}
+					if (this.closed) {
+						return null;
+					}
+				}
+			}
+			catch (InterruptedException ex) {
+				if (!minibuffer) {
+					send(list(kw("read-aborted"), id, tag));
+				}
+				throw new LispInterruptSignal();
+			}
+			finally {
+				this.input.remove(id, box);
+			}
+		}
+
+		/**
+		 * Answers a request's form: a function its dialect defines, else the form
+		 * evaluated.
+		 * @param form the form
+		 * @param output the request's output
+		 * @param channel the SLY REPL whose thread runs the request, or null
+		 */
+		private @Nullable Object call(Object form, Output output, @Nullable MRepl channel) {
 			if (!(form instanceof List<?> call) || call.isEmpty() || !(call.getFirst() instanceof Symbol operator)) {
 				throw new IllegalArgumentException("not a function call: " + SwankWire.print(form));
 			}
@@ -396,28 +509,105 @@ final class SwankServer implements AutoCloseable {
 			for (Object arg : call.subList(1, call.size())) {
 				args.add(literal(arg));
 			}
-			if (!operator.pkg().startsWith("swank")) {
+			SwankDialect dialect = SwankDialect.of(operator.pkg());
+			if (dialect == null) {
 				return evaluate(call);
 			}
+			this.dialect = dialect;
 			CommonLispSwank lisp = SwankServer.this.lisp;
-			return switch (operator.member()) {
-				case "connection-info" -> connectionInfo();
+			String member = dialect.canonical(operator.member());
+			if (dialect == SwankDialect.SLYNK) {
+				switch (member) {
+					case "swank-require" -> {
+						List<String> loaded = new ArrayList<>();
+						for (Object module : args.isEmpty() ? List.of() : asList(args.getFirst())) {
+							modules(dialect).add(moduleName(module));
+							loaded.add(String.valueOf(module));
+						}
+						return List.of(List.copyOf(modules(dialect)), loaded);
+					}
+					case "swank-add-load-paths" -> {
+						return null;
+					}
+					case "create-mrepl" -> {
+						return createMrepl(integer(args, 0, 1));
+					}
+					case "eval-for-mrepl" -> {
+						return evalForMrepl(args, channel);
+					}
+					case "simple-completions" -> {
+						List<String> strings = new ArrayList<>();
+						for (CommonLispSwank.Completion each : lisp.simpleCompletions(text(args, 0),
+								optionalText(args, 1))) {
+							strings.add(each.candidate());
+						}
+						return List.of(strings, commonPrefix(strings));
+					}
+					case "flex-completions" -> {
+						String pattern = text(args, 0);
+						if (pattern.isEmpty()) {
+							return null;
+						}
+						List<Object> candidates = new ArrayList<>();
+						for (CommonLispSwank.FlexCompletion each : lisp.flexCompletions(pattern, optionalText(args, 1),
+								key(args, 2, "limit") instanceof Number limit ? limit.intValue() : 300)) {
+							List<Object> chunks = new ArrayList<>();
+							for (Map.Entry<Integer, String> chunk : each.chunks()) {
+								chunks.add(List.of((long) chunk.getKey(), chunk.getValue()));
+							}
+							candidates.add(List.of(each.text(), (double) each.score(), chunks, each.classification()));
+						}
+						return Arrays.asList(candidates, null);
+					}
+					default -> {
+						// SWANK's answer
+					}
+				}
+			}
+			if (dialect == SwankDialect.MICROS) {
+				switch (operator.pkg() + ":" + member) {
+					case "micros:connection-info" -> lisp.defineMicrosLoadFile();
+					case "micros/pretty-eval:pretty-eval" -> {
+						return list(kw("value"), lisp.interactiveEval(text(args, 0), false, dialect.echo(), 0, 0),
+								kw("id"), this.objectIds.incrementAndGet());
+					}
+					case "micros/lsp-api:completions" -> {
+						List<Object> items = new ArrayList<>();
+						for (CommonLispSwank.LspCompletion each : lisp.lspCompletions(text(args, 0),
+								optionalText(args, 1))) {
+							List<Object> chunks = new ArrayList<>();
+							for (Map.Entry<Integer, String> chunk : each.chunks()) {
+								chunks.add(List.of((long) chunk.getKey(), chunk.getValue()));
+							}
+							items.add(list(each.label(), chunks, each.kind(), each.signature(), each.documentation(),
+									String.format("%010d", items.size())));
+						}
+						return items;
+					}
+					case "micros/lsp-api:hover-symbol" -> {
+						return lisp.hoverSymbol(text(args, 0));
+					}
+					default -> {
+						// SWANK's answer
+					}
+				}
+			}
+			return switch (member) {
+				case "connection-info" -> connectionInfo(dialect);
 				case "swank-require" -> {
 					for (Object module : args.isEmpty() ? List.of() : asList(args.getFirst())) {
-						SwankServer.this.modules.add(moduleName(module));
+						modules(dialect).add(moduleName(module));
 					}
-					yield List.copyOf(SwankServer.this.modules);
+					yield List.copyOf(modules(dialect));
 				}
 				case "create-repl" -> {
 					startRepl();
 					yield List.of(lisp.packageName(lisp.currentPackage()), lisp.prompt(lisp.currentPackage()));
 				}
-				case "listener-eval" -> listenerEval(text(args, 0), output);
-				case "interactive-eval" ->
-					lisp.interactiveEval(text(args, 0), integer(args, 1, 1), integer(args, 2, 80));
-				case "interactive-eval-region" ->
-					lisp.interactiveEvalRegion(text(args, 0), integer(args, 1, 1), integer(args, 2, 80));
-				case "eval-and-grab-output" -> lisp.evalAndGrabOutput(text(args, 0));
+				case "listener-eval" -> listenerEval(text(args, 0), output, dialect);
+				case "interactive-eval", "interactive-eval-region" -> lisp.interactiveEval(text(args, 0),
+						member.endsWith("region"), dialect.echo(), integer(args, 1, 1), integer(args, 2, 80));
+				case "eval-and-grab-output" -> lisp.evalAndGrabOutput(text(args, 0), dialect.echo());
 				case "pprint-eval" -> lisp.pprintEval(text(args, 0));
 				case "re-evaluate-defvar" -> lisp.reEvaluateDefvar(text(args, 0));
 				case "set-package" -> {
@@ -467,6 +657,10 @@ final class SwankServer implements AutoCloseable {
 				case "swank-macroexpand", "swank-expand" ->
 					lisp.macroexpand(text(args, 0), CommonLispSwank.Expansion.REPEATEDLY);
 				case "swank-macroexpand-all" -> lisp.macroexpand(text(args, 0), CommonLispSwank.Expansion.ALL);
+				case "macrostep-expand-1" -> {
+					String expansion = lisp.macroexpandOnce(text(args, 0));
+					yield expansion == null ? list(kw("error"), "Not a macro form") : list(kw("ok"), expansion, null);
+				}
 				case "find-definitions-for-emacs", "xref", "xrefs" -> null;
 				case "default-directory" -> directory(Path.of("").toAbsolutePath().toString());
 				case "clear-repl-variables" -> {
@@ -480,18 +674,27 @@ final class SwankServer implements AutoCloseable {
 			};
 		}
 
-		private @Nullable Object listenerEval(String code, Output output) {
+		private @Nullable Object listenerEval(String code, Output output, SwankDialect dialect) {
 			CommonLispSwank lisp = SwankServer.this.lisp;
 			String before = lisp.currentPackage();
 			List<String> values = lisp.listenerEval(code);
-			// the presentation contrib's REPL results start on a line of their own
-			output.freshLine();
+			if (dialect == SwankDialect.SWANK) {
+				// the presentation contrib's REPL results start on a line of their own
+				output.freshLine();
+			}
 			output.flush();
 			if (values.isEmpty()) {
 				send(list(kw("write-string"), "; No value", kw("repl-result")));
 			}
 			for (String value : values) {
-				send(list(kw("write-string"), value + "\n", kw("repl-result")));
+				if (dialect == SwankDialect.MICROS) {
+					// a printed object Lem's inspector may ask for by its id
+					send(list(kw("write-object"), value, this.objectIds.incrementAndGet(), kw("repl-result")));
+					send(list(kw("write-string"), "\n", kw("repl-result")));
+				}
+				else {
+					send(list(kw("write-string"), value + "\n", kw("repl-result")));
+				}
 			}
 			String after = lisp.currentPackage();
 			if (!after.equals(before)) {
@@ -500,7 +703,59 @@ final class SwankServer implements AutoCloseable {
 			return null;
 		}
 
-		private List<Object> connectionInfo() {
+		/**
+		 * Slynk's {@code create-mrepl}: a REPL on a channel of its own, with a thread of
+		 * its own, announced on the editor's channel.
+		 * @param remote the editor's channel id
+		 * @return the channel's id and its thread's
+		 */
+		private List<Object> createMrepl(long remote) {
+			long id = this.channelIds.incrementAndGet();
+			MRepl repl = new MRepl(this, id, remote, SwankServer.this.lisp.currentPackage());
+			this.channels.put(id, repl);
+			repl.send(list(kw("write-string"),
+					"; SLY " + SwankDialect.SLYNK.protocolVersion() + " (#<MREPL mrepl-" + id + "-" + remote + ">)\n"));
+			repl.prompt();
+			repl.thread.start();
+			return list(id, repl.thread.threadId());
+		}
+
+		/**
+		 * Slynk's {@code eval-for-mrepl}: a function changing a REPL's package run on its
+		 * thread, answering the REPL's prompt and the function's values.
+		 */
+		private List<Object> evalForMrepl(List<Object> args, @Nullable MRepl channel) {
+			if (channel == null || args.size() < 2 || !(args.get(1) instanceof Symbol function)) {
+				throw new IllegalArgumentException("This SLYFUN can only be called from threads belonging to MREPL");
+			}
+			CommonLispSwank lisp = SwankServer.this.lisp;
+			List<Object> rest = args.subList(2, args.size());
+			List<Object> values = switch (function.member()) {
+				case "guess-and-set-package" -> {
+					channel.pkg = existingPackage(text(rest, 0));
+					yield list(Boolean.TRUE);
+				}
+				case "sync-package-and-default-directory" -> {
+					if (key(rest, 0, "package-name") instanceof String name) {
+						channel.pkg = existingPackage(name);
+					}
+					yield list(lisp.packageName(channel.pkg), directory(Path.of("").toAbsolutePath().toString()));
+				}
+				default -> throw new IllegalArgumentException(
+						"The function " + function.name().toUpperCase(Locale.ROOT) + " is undefined.");
+			};
+			return list(channel.promptArguments(), values);
+		}
+
+		private String existingPackage(String designator) {
+			String found = SwankServer.this.lisp.guessPackage(designator);
+			if (found == null) {
+				throw new IllegalArgumentException("Can't find a package for designator " + designator);
+			}
+			return found;
+		}
+
+		private List<Object> connectionInfo(SwankDialect dialect) {
 			CommonLispSwank lisp = SwankServer.this.lisp;
 			String host;
 			try {
@@ -522,9 +777,9 @@ final class SwankServer implements AutoCloseable {
 					kw("machine"),
 					list(kw("instance"), host, kw("type"), "JVM", kw("version"),
 							System.getProperty("java.version", "")),
-					kw("features"), features, kw("modules"), List.copyOf(SwankServer.this.modules), kw("package"),
+					kw("features"), features, kw("modules"), List.copyOf(modules(dialect)), kw("package"),
 					list(kw("name"), lisp.packageName(pkg), kw("prompt"), lisp.prompt(pkg)), kw("version"),
-					PROTOCOL_VERSION);
+					dialect.protocolVersion());
 		}
 
 		/**
@@ -571,9 +826,185 @@ final class SwankServer implements AutoCloseable {
 	}
 
 	/**
-	 * A request's output: what it writes goes to the editor as {@code :write-string},
-	 * flushed when asked, when 64000 characters wait, and shortly after a write, each
-	 * flush waiting for the editor's {@code :write-done} as SWANK's does.
+	 * One of SLY's REPLs (Slynk's {@code mrepl}): a channel the editor sends its input to
+	 * ({@code (:emacs-channel-send id (:process text))}) and a thread of its own that
+	 * evaluates it in the REPL's package, answering on the editor's channel -- the
+	 * output, the values or the condition the evaluation aborted on, then a prompt.
+	 */
+	private final class MRepl {
+
+		private final Connection connection;
+
+		private final long id;
+
+		private final long remote;
+
+		final Thread thread;
+
+		/** The editor's channel messages and the requests naming this thread. */
+		private final LinkedBlockingQueue<Object> events = new LinkedBlockingQueue<>();
+
+		/** The REPL's package, which an evaluation that ends normally may change. */
+		volatile String pkg;
+
+		/** How many inputs answered values: the length of the REPL's history. */
+		private int history;
+
+		private volatile boolean closed;
+
+		/** The output of the evaluation running, flushed before a read. */
+		private volatile @Nullable Output output;
+
+		MRepl(Connection connection, long id, long remote, String pkg) {
+			this.connection = connection;
+			this.id = id;
+			this.remote = remote;
+			this.pkg = pkg;
+			this.thread = new Thread(null, this::loop, "slynk-mrepl-" + id, SwankServer.this.stackBytes);
+			this.thread.setDaemon(true);
+		}
+
+		void post(Object event) {
+			this.events.add(event);
+		}
+
+		/** Sends a message on the editor's channel. */
+		void send(Object message) {
+			this.connection.send(list(kw("channel-send"), this.remote, message));
+		}
+
+		/**
+		 * Slynk's {@code prompt-arguments}: package, prompt name, debug level, history.
+		 */
+		List<Object> promptArguments() {
+			CommonLispSwank lisp = SwankServer.this.lisp;
+			return list(lisp.packageName(this.pkg), lisp.prompt(this.pkg), 0L, (long) this.history);
+		}
+
+		void prompt() {
+			List<Object> message = new ArrayList<>();
+			message.add(kw("prompt"));
+			message.addAll(promptArguments());
+			send(message);
+		}
+
+		private void loop() {
+			while (!this.closed && !this.connection.closed) {
+				try {
+					Object event = this.events.poll(1, TimeUnit.SECONDS);
+					if (event instanceof Request request) {
+						this.connection.run(request, this);
+					}
+					else if (event instanceof List<?> message && !message.isEmpty()
+							&& message.getFirst() instanceof Keyword kind) {
+						switch (kind.name().toLowerCase(Locale.ROOT)) {
+							case "process" -> eval(message.size() > 1 ? String.valueOf(message.get(1)) : "");
+							case "clear-repl-history" -> {
+								this.history = 0;
+								SwankServer.this.lisp.clearReplVariables();
+								send(list(kw("clear-repl-history")));
+								prompt();
+							}
+							case "teardown" -> teardown();
+							default -> {
+								// an inspector's or a dedicated stream's message: not
+								// served
+							}
+						}
+					}
+				}
+				catch (InterruptedException ex) {
+					// an interrupt that found no evaluation running: wait on
+				}
+			}
+		}
+
+		private void teardown() {
+			this.closed = true;
+			this.connection.channels.remove(this.id);
+		}
+
+		/** Slynk's {@code mrepl-eval}. */
+		private void eval(String code) {
+			CommonLispSwank lisp = SwankServer.this.lisp;
+			Output output = new Output(this.connection, this.thread.threadId(), SwankDialect.SLYNK, this);
+			this.output = output;
+			Outcome outcome;
+			try {
+				outcome = this.connection.execute(this.pkg, output, new Input(this::readLine), () -> {
+					List<CommonLispSwank.ReplValue> values = lisp.mreplEval(code);
+					this.pkg = lisp.currentPackage();
+					return values;
+				});
+			}
+			finally {
+				this.output = null;
+			}
+			if (outcome == null) {
+				return;
+			}
+			if (outcome.aborted() != null) {
+				send(list(kw("evaluation-aborted"), outcome.aborted()));
+			}
+			else if (outcome.value() instanceof List<?> values) {
+				if (!values.isEmpty()) {
+					this.history++;
+				}
+				List<Object> results = new ArrayList<>();
+				for (Object each : values) {
+					if (each instanceof CommonLispSwank.ReplValue value) {
+						results.add(list(value.presented(), (long) this.history - 1, value.copy()));
+					}
+				}
+				send(list(kw("write-values"), results));
+			}
+			prompt();
+		}
+
+		/**
+		 * A line of standard input from the REPL: the editor is told to read
+		 * ({@code :set-read-mode :read}) and its next input is the line.
+		 */
+		@Nullable String readLine() {
+			Output output = this.output;
+			if (output != null) {
+				output.flush();
+			}
+			send(list(kw("set-read-mode"), kw("read")));
+			try {
+				while (!this.closed && !this.connection.closed) {
+					Object event = this.events.poll(1, TimeUnit.SECONDS);
+					if (event instanceof Request request) {
+						this.connection.run(request, this);
+					}
+					else if (event instanceof List<?> message && message.size() > 1
+							&& message.getFirst() instanceof Keyword kind) {
+						if (kind.name().equalsIgnoreCase("process") && message.get(1) instanceof String text) {
+							return text;
+						}
+					}
+					else if (event instanceof List<?> message && message.size() == 1
+							&& message.getFirst() instanceof Keyword kind && kind.name().equalsIgnoreCase("teardown")) {
+						teardown();
+					}
+				}
+				return null;
+			}
+			catch (InterruptedException ex) {
+				throw new LispInterruptSignal();
+			}
+			finally {
+				send(list(kw("set-read-mode"), kw("finished-reading")));
+			}
+		}
+
+	}
+
+	/**
+	 * A request's output, flushed when asked, when 64000 characters wait, and shortly
+	 * after a write: SWANK's goes to the editor as {@code :write-string}, each flush
+	 * waiting for the editor's {@code :write-done}; Slynk's to a SLY REPL's channel, or
+	 * nowhere when the editor has none.
 	 */
 	private static final class Output extends Writer {
 
@@ -586,6 +1017,10 @@ final class SwankServer implements AutoCloseable {
 
 		private final long id;
 
+		private final SwankDialect dialect;
+
+		private final @Nullable MRepl channel;
+
 		private final StringBuilder buffer = new StringBuilder();
 
 		private boolean scheduled;
@@ -593,9 +1028,11 @@ final class SwankServer implements AutoCloseable {
 		/** The last character written, a newline before the first. */
 		private char last = '\n';
 
-		Output(Connection connection, long id) {
+		Output(Connection connection, long id, SwankDialect dialect, @Nullable MRepl channel) {
 			this.connection = connection;
 			this.id = id;
+			this.dialect = dialect;
+			this.channel = channel;
 		}
 
 		@Override
@@ -628,6 +1065,18 @@ final class SwankServer implements AutoCloseable {
 				}
 				text = this.buffer.toString();
 				this.buffer.setLength(0);
+			}
+			if (this.channel != null) {
+				this.channel.send(list(kw("write-string"), text));
+				return;
+			}
+			if (this.dialect == SwankDialect.MICROS) {
+				// micros's output asks for no :write-done
+				this.connection.send(list(kw("write-string"), text));
+				return;
+			}
+			if (this.dialect != SwankDialect.SWANK) {
+				return;
 			}
 			BlockingQueue<List<?>> box = new LinkedBlockingQueue<>();
 			this.connection.writeDone.put(this.id, box);
@@ -665,22 +1114,19 @@ final class SwankServer implements AutoCloseable {
 	}
 
 	/**
-	 * A request's standard input: a read the buffer cannot answer asks the editor for a
-	 * line ({@code :read-string}) and waits for it ({@code :emacs-return-string}).
+	 * A request's standard input: a read the buffer cannot answer takes the editor's next
+	 * line ({@link Connection#askEditor}, {@link MRepl#readLine}).
 	 */
 	private static final class Input extends Reader {
 
-		private final Connection connection;
-
-		private final long id;
+		private final Supplier<@Nullable String> lines;
 
 		private String pending = "";
 
 		private int pos;
 
-		Input(Connection connection, long id) {
-			this.connection = connection;
-			this.id = id;
+		Input(Supplier<@Nullable String> lines) {
+			this.lines = lines;
 		}
 
 		@Override
@@ -688,43 +1134,18 @@ final class SwankServer implements AutoCloseable {
 			if (length == 0) {
 				return 0;
 			}
-			if (this.pos >= this.pending.length() && !fill()) {
-				return -1;
+			if (this.pos >= this.pending.length()) {
+				String line = this.lines.get();
+				if (line == null || line.isEmpty()) {
+					return -1;
+				}
+				this.pending = line;
+				this.pos = 0;
 			}
 			int count = Math.min(length, this.pending.length() - this.pos);
 			this.pending.getChars(this.pos, this.pos + count, chars, offset);
 			this.pos += count;
 			return count;
-		}
-
-		private boolean fill() throws IOException {
-			long tag = this.connection.nextTag();
-			BlockingQueue<List<?>> box = new LinkedBlockingQueue<>();
-			this.connection.input.put(this.id, box);
-			this.connection.send(list(kw("read-string"), this.id, tag));
-			try {
-				while (true) {
-					List<?> event = box.poll(1, TimeUnit.SECONDS);
-					if (event != null) {
-						if (event.size() > 3 && event.get(3) instanceof String line) {
-							this.pending = line;
-							this.pos = 0;
-							return !line.isEmpty();
-						}
-						return false;
-					}
-					if (this.connection.closed) {
-						return false;
-					}
-				}
-			}
-			catch (InterruptedException ex) {
-				this.connection.send(list(kw("read-aborted"), this.id, tag));
-				throw new LispInterruptSignal();
-			}
-			finally {
-				this.connection.input.remove(this.id, box);
-			}
 		}
 
 		@Override
@@ -806,6 +1227,29 @@ final class SwankServer implements AutoCloseable {
 			default -> String.valueOf(module);
 		};
 		return name.toUpperCase(Locale.ROOT);
+	}
+
+	/** The request's dialect: the package of the function its form calls. */
+	private static SwankDialect dialectOf(Object form) {
+		SwankDialect dialect = form instanceof List<?> call && !call.isEmpty()
+				&& call.getFirst() instanceof Symbol operator ? SwankDialect.of(operator.pkg()) : null;
+		return dialect == null ? SwankDialect.SWANK : dialect;
+	}
+
+	/** Slynk's {@code longest-common-prefix}. */
+	private static String commonPrefix(List<String> strings) {
+		if (strings.isEmpty()) {
+			return "";
+		}
+		String prefix = strings.getFirst();
+		for (String each : strings) {
+			int i = 0;
+			while (i < prefix.length() && i < each.length() && prefix.charAt(i) == each.charAt(i)) {
+				i++;
+			}
+			prefix = prefix.substring(0, i);
+		}
+		return prefix;
 	}
 
 	private static String directory(String path) {
