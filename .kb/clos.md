@@ -364,7 +364,7 @@ Three congruence rules:
   that an UNSUPPLIED optional is not passed on. Gated on the body mentioning
   `call-next-method`/`next-method-p`; pinned against SBCL over six tail shapes.
 
-**The trio, `print-object` and `make-load-form` are function values with no method in the
+**The trio, `print-object`, `make-load-form`, `slot-unbound` and `slot-missing` are function values with no method in the
 program** (`isCallableSystemGenericName`): the interpreter synthesizes the generic in
 `resolveFunction`, the compile path in `expandTopLevelDefinitions` for any program that NAMES one
 (which also takes it off the no-CLOS fast path). Before 2026-10-07, `#'initialize-instance`
@@ -468,21 +468,52 @@ initforms, supplied initargs stored, the instance is the value.
   it must not arm the funcall-dispatch gate's name probes
   ([optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)); a user-written
   `slot-value` keeps the plain quote. `expandSlotValue` is the CHECKED read,
-  `expandSlotValueRaw` the unchecked one the `setf` place expansion (and a runtime name) needs.
+  `expandSlotValueRaw` the unchecked one the `setf` place expansion needs. A RUNTIME slot name
+  is checked too (`%slot-read` over the computed name; the interpreter's `evalSlotValue` calls
+  the same defun) -- before 2026-10-30 it read the marker `#<%UNBOUND%>` on all four backends.
+- **The name `%slot-read` carries is the slot symbol as declared** (`slotNameSpelling`), so
+  `cell-error-name` of a slot declared in package `zp` is `ZP::DATA`, `eq` to `'data` read
+  there (it was the unqualified `DATA` before 2026-10-30), and an `(eql 'data)` specializer
+  written in `zp` matches.
 - `unbound-slot` is seeded under `cell-error` (which gained CL's `name` slot) with an extra
   `instance` slot and a `:report` LAMBDA built in Java (`ClosRegistry.unboundSlotReport`, over
   `%obj-ref` indexes rather than `slot-value`). `type-error-datum`,
   `type-error-expected-type`, `cell-error-name`, `unbound-slot-instance` are prelude defuns.
 
+## `slot-unbound` / `slot-missing`
+CL generics (`CL_FUNCTIONS`, `isCallableSystemGenericName`, `standardGenericShape` 3 / 4+1
+optional); a method in any `(:use :cl)` package joins the one generic. The first method (or a
+mere call) synthesizes the SYSTEM default primary (`synthesizeSlotProtocolDefault`) signalling
+what the program signals without the generic, so an uncovered read is unchanged.
+- **Routing is gated on the generic existing.** Compile paths: `%slot-read`'s unbound arm is
+  `(slot-unbound (class-of instance) instance name)` when the registry has `SLOT-UNBOUND` after
+  the walk (`slotUnboundDefuns(routed)`), else the direct `unbound-slot` signal; a program
+  NAMING either generic forces the metaobject runtime (`class-of`). The interpreter always
+  routes (its `%slot-read` is defined once, lazily, before a later `defmethod` could be seen).
+- `missingSlotAccess`: with `SLOT-MISSING` registered when the access expands, a literal-name
+  read is `(slot-missing (class-of o) o 'slot 'slot-value)`, a `setf`
+  `(slot-missing ... 'setf v)` answering `v`; else `missingSlotStub`. Residuals: `slot-boundp`
+  of an undeclared slot answers nil without the call, a runtime-name access of an undeclared
+  slot keeps its own error, and a slot SOME other class declares is not detected as missing.
+- ci-spec: standalone `clos-slot-unbound-and-slot-missing-methods` (a method reroutes every
+  slot read of the program, so it stays out of the shared corpus).
+
 ## Slot shadowing, `:default-initargs`, `with-slots`/`with-accessors`, slot options
 - **A subclass may re-declare an inherited slot** (CLHS 7.5.3): STORAGE stays the one
   inherited slot (descendants keep the baked index) while the subclass spec overrides
-  initform/initarg and ADDS its readers/accessors (`shadowSlot`).
+  initform and ADDS its initargs and readers/accessors (`shadowSlot`; the initargs are the
+  union over the specifiers, CLHS 7.5.3, a specifier's slot-name default excluded).
 - **`(:default-initargs :arg form)` overrides the matching slot's effective initform**, which
   is where BOTH construction paths read it; before this it only reached the constructor, so
   `(error 'my-cond)` ignored it.
-- **An initarg is any symbol** (CLHS 7.1.1; cl-vectors' `(rx :initarg rx)`): `SlotSpec.initargKeyword`
-  holds the symbol's name as written, the constructor's `&key ((rx slot))` matches it as written
+- **A slot may name several initargs** (CLHS 7.1.1): `SlotSpec.initargs`, never empty, the
+  leftmost supplied one wins (7.1.4). The constructor keeps one `&key` per slot (its first
+  initarg) and only a several-initarg slot adds a `&rest` scan (`keywordConstructorShape`);
+  every other path -- `:default-initargs`, literal `make-instance`/`change-class`/typed-signal
+  sites, the runtime change-class/error/fill helpers, `%mop-fill-slots` -- matches through
+  `acceptsInitarg` or the inline `initargTailScan`, a single-initarg slot keeping its old shape.
+- **An initarg is any symbol** (CLHS 7.1.1; cl-vectors' `(rx :initarg rx)`): `SlotSpec.initargs`
+  hold the symbol's name as written, the constructor's `&key ((rx slot))` matches it as written
   (`.kb/lambda-lists.md`), generated code passes a non-keyword one quoted (`initargForm`), and a
   `make-instance`/`change-class`/typed-signal call site reads `'rx` as a literal initarg
   (`literalInitarg`). Pinned by ci-spec `defclass-default-initargs`.

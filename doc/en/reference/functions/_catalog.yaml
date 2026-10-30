@@ -211,6 +211,8 @@ categories:
       - { slug: list-all-packages, name: "list-all-packages" }
       - { slug: find-class, name: "find-class" }
       - { slug: allocate-instance, name: "allocate-instance" }
+      - { slug: slot-unbound, name: "slot-unbound" }
+      - { slug: slot-missing, name: "slot-missing" }
       - { slug: class-name, name: "class-name" }
       - { slug: copy-structure, name: "copy-structure" }
       - { slug: get, name: "get" }

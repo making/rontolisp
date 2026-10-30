@@ -129,6 +129,8 @@
 | `list-all-packages` | `(list-all-packages)` | 登録済みの全パッケージを `find-package` が返すキーワードのリストで返します(コンパイラはコンパイル時に焼き込んだテーブルから答えます) |
 | `find-class` | `(find-class 'c)` | メモ化された(`eq` 安定な)クラスメタオブジェクト。`errorp` が `nil` でなければシグナル |
 | `allocate-instance` | `(allocate-instance (find-class 'c))` | すべてのスロットが未束縛の新しいインスタンス。initform も `initialize-instance` も実行しない |
+| `slot-unbound` | `(defmethod slot-unbound (class (o c) slot) ...)` | 未束縛スロットの読み出しが呼ぶ総称関数。メソッドの値が読み出しの値になり、システムメソッドは `unbound-slot` をシグナルする |
+| `slot-missing` | `(defmethod slot-missing (class (o c) name op &optional v) ...)` | 宣言されていないスロットへの `slot-value` の読み出し・`setf` が呼ぶ総称関数。システムメソッドはエラーをシグナルする |
 | `class-name` | `(class-name (class-of 42))` | クラスメタオブジェクトの名前シンボル |
 | `copy-structure` | `(copy-structure s)` | `s` の型を持つ新しいインスタンスをスロットの値を共有したまま生成する(浅いコピー)。`defstruct` が特定の型に対して生成する `copy-<name>` コピア関数の、型を問わない汎用版 |
 | `get` | `(get 'sym 'prop)`、`(setf (get 'sym 'prop) v)` | シンボル属性リスト(プログラム全体で 1 つの名前キーのストア) |

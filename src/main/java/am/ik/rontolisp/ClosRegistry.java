@@ -989,8 +989,8 @@ public final class ClosRegistry {
 		java.util.List<SlotSpec> slots = new java.util.ArrayList<>(parentInfo == null ? List.of() : parentInfo.slots());
 		java.util.List<SlotSpec> directSlots = new java.util.ArrayList<>();
 		for (String slotName : slotNames) {
-			SlotSpec spec = new SlotSpec(slotName, slotName, LispNil.INSTANCE, true, ":" + slotName, true, List.of(),
-					List.of(), "T");
+			SlotSpec spec = new SlotSpec(slotName, slotName, LispNil.INSTANCE, true, List.of(":" + slotName), true,
+					List.of(), List.of(), "T");
 			slots.add(spec);
 			directSlots.add(spec);
 		}
@@ -1014,7 +1014,7 @@ public final class ClosRegistry {
 	/**
 	 * One slot of a class: the canonical (package-resolved) slot symbol name, its
 	 * package-stripped base name, the {@code :initform} expression AST, the
-	 * {@code :initarg} keyword (defaults to the slot-name keyword), the
+	 * {@code :initarg} names (default: the slot-name keyword), the
 	 * {@code :reader}/{@code :accessor} function names declared on it, and the declared
 	 * {@code :type} (plain name; {@code "t"} when omitted -- still a no-op for checking,
 	 * but introspectable so serializers can disambiguate a nil value by declared type).
@@ -1026,12 +1026,14 @@ public final class ClosRegistry {
 	 * @param initformSupplied whether the slot specification wrote an {@code :initform};
 	 * false means {@code initform} is the unbound marker, which is also what makes a
 	 * shadowing subclass slot inherit the superclass initform instead of overriding it
-	 * @param initargKeyword the keyword accepted by the constructor, with the colon
+	 * @param initargs the initarg names (a keyword keeps its colon), in declaration order
+	 * and never empty: a slot may declare several and ANY of them fills it, the leftmost
+	 * supplied one winning (CLHS 7.1.1, 7.1.4)
 	 * @param initargSupplied whether the slot specification wrote an {@code :initarg};
-	 * false means {@code initargKeyword} is the slot-name default that only the generated
-	 * constructor honors -- CL's initialization protocol (the {@code shared-initialize}
-	 * initarg fill, and therefore the metaclass-protocol re-fill after a {@code :before}
-	 * hook) only ever fills DECLARED initargs
+	 * false means {@code initargs} is the slot-name default alone, which only the
+	 * generated constructor honors -- CL's initialization protocol (the
+	 * {@code shared-initialize} initarg fill, and therefore the metaclass-protocol
+	 * re-fill after a {@code :before} hook) only ever fills DECLARED initargs
 	 * @param readers the {@code :reader} function names
 	 * @param accessors the {@code :accessor} function names (also setf places)
 	 * @param type the package-stripped {@code :type} option name ({@code "t"} if none)
@@ -1045,8 +1047,17 @@ public final class ClosRegistry {
 	 * CLHS 7.5.3); null for an ordinary {@code :instance} slot
 	 */
 	public record SlotSpec(String name, String baseName, LispVal initform, boolean initformSupplied,
-			String initargKeyword, boolean initargSupplied, List<String> readers, List<String> accessors, String type,
+			List<String> initargs, boolean initargSupplied, List<String> readers, List<String> accessors, String type,
 			List<String> writers, @Nullable String sharedCellVar) {
+
+		/**
+		 * Whether the slot accepts the initarg.
+		 * @param initarg the initarg name as written (a keyword keeps its colon)
+		 * @return true when it is one of {@link #initargs()}
+		 */
+		public boolean acceptsInitarg(String initarg) {
+			return this.initargs.contains(initarg);
+		}
 
 		/**
 		 * The pre-{@code :writer}/{@code :allocation} shape: no writer generics, instance
@@ -1055,15 +1066,15 @@ public final class ClosRegistry {
 		 * @param baseName the package-stripped base name
 		 * @param initform the effective initform expression
 		 * @param initformSupplied whether the source wrote an {@code :initform}
-		 * @param initargKeyword the constructor keyword, with the colon
+		 * @param initargs the initarg names, never empty
 		 * @param initargSupplied whether the source wrote an {@code :initarg}
 		 * @param readers the {@code :reader} function names
 		 * @param accessors the {@code :accessor} function names
 		 * @param type the package-stripped {@code :type} option name
 		 */
-		public SlotSpec(String name, String baseName, LispVal initform, boolean initformSupplied, String initargKeyword,
+		public SlotSpec(String name, String baseName, LispVal initform, boolean initformSupplied, List<String> initargs,
 				boolean initargSupplied, List<String> readers, List<String> accessors, String type) {
-			this(name, baseName, initform, initformSupplied, initargKeyword, initargSupplied, readers, accessors, type,
+			this(name, baseName, initform, initformSupplied, initargs, initargSupplied, readers, accessors, type,
 					List.of(), null);
 		}
 	}
@@ -1268,8 +1279,8 @@ public final class ClosRegistry {
 
 	/**
 	 * The lambda-list shape CL gives a standard generic function the static subset
-	 * models, or null for any other name: the instance-initialization trio and
-	 * {@code print-object}.
+	 * models, or null for any other name: the instance-initialization trio,
+	 * {@code print-object}, {@code slot-unbound} and {@code slot-missing}.
 	 * @param plainName the generic's name without a package qualifier
 	 * @return the standard shape, or null
 	 */
@@ -1279,6 +1290,8 @@ public final class ClosRegistry {
 				new LambdaListShape(1, 0, true, true, List.of(), true);
 			case "SHARED-INITIALIZE" -> new LambdaListShape(2, 0, true, true, List.of(), true);
 			case LispNames.PRINT_OBJECT -> new LambdaListShape(2, 0, false, false, List.of(), false);
+			case LispNames.SLOT_UNBOUND -> new LambdaListShape(3, 0, false, false, List.of(), false);
+			case LispNames.SLOT_MISSING -> new LambdaListShape(4, 1, false, false, List.of(), false);
 			default -> null;
 		};
 	}
@@ -2494,9 +2507,12 @@ public final class ClosRegistry {
 			for (int r = readerNames.size() - 1; r >= 0; r--) {
 				readers = new LispCons(new LispSymbol(readerNames.get(r)), readers);
 			}
+			LispVal initargs = LispNil.INSTANCE;
+			for (int k = slot.initargs().size() - 1; k >= 0; k--) {
+				initargs = new LispCons(new LispSymbol(slot.initargs().get(k)), initargs);
+			}
 			LispInstance slotDefinition = newSeededInstance(STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
-					new LispSymbol(slot.baseName()),
-					new LispCons(new LispSymbol(slot.initargKeyword()), LispNil.INSTANCE),
+					new LispSymbol(slot.baseName()), initargs,
 					slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE, new LispSymbol(slot.type()), readers);
 			effectiveSlots = new LispCons(slotDefinition, effectiveSlots);
 		}

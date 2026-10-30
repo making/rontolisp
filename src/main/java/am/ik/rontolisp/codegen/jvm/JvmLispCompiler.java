@@ -6205,7 +6205,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (int i = 0; i < link.slots().size(); i++) {
 				String base = link.slotBases().get(i);
 				slots.add(new ClosRegistry.SlotSpec(link.slots().get(i), base, am.ik.rontolisp.LispNil.INSTANCE, false,
-						":" + base, false, List.of(), List.of(), "T"));
+						List.of(":" + base), false, List.of(), List.of(), "T"));
 			}
 			registry.registerClass(new ClosRegistry.ClassInfo(entry.getKey(), link.superclasses(), link.cpl(),
 					List.of(), slots, new java.util.LinkedHashSet<>(link.ancestors())));
