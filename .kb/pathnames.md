@@ -72,9 +72,28 @@ The flat model renders CL's directory keywords as the text CL prints: `:up`/`:ba
 ## Deliberate lite edges
 `(eql #P"a" #P"a")` is T on the interpreter, NIL on the compile paths — the pre-existing
 instance `eql` split; **do not pin `eql`**. No PATHNAME metaobject: `class-of` falls back,
-`find-class 'pathname` is absent, `sxhash` is 0. Logical pathnames cannot exist:
-`logical-pathname` always signals, `translate-logical-pathname` is the identity.
+`find-class 'pathname` is absent, `sxhash` is 0.
 `pathname-host`/`-device`/`-version` answer `nil` (SBCL answers `:newest` for VERSION).
+
+## Logical pathnames: a recorded host table (2026-10-31)
+No logical-pathname VALUE: a namestring is logical when its prefix before the first `:` names
+a host in the prelude table `%logical-hosts` (`%logical-host-entry`, `(HOST . translations)`,
+HOST upcased). `(setf logical-pathname-translations)` defines a host; reading an undefined one
+signals `type-error` (SBCL); `load-logical-pathname-translations` is nil for a defined host and
+a `file-error` otherwise (no translations file); `logical-pathname` answers the flat pathname
+for a defined host and a `type-error` otherwise. No host is predefined (SBCL has `SYS`).
+- `translate-logical-pathname` spells the logical part physically -- downcased (SBCL's
+  customary case), `;` -> `/`, a leading `;` and the version dropped -- and each rule's
+  from-pattern the same way (a `HOST:` prefix stripped), then translates by the first rule
+  `pathname-match-p` accepts, through `translate-pathname`, and translates the answer again.
+  No match: `file-error`. Answers pinned against SBCL 2.2.9.
+- `pathname-match-p` is component-wise like `translate-pathname`: `*`/`?` per component via
+  `%wild-captures`, `**` a run of levels, a missing wildcard component matches anything, `*`
+  matches a missing component, absoluteness must agree, and a source with NO directory matches
+  a wildcard directory opening with `**` (SBCL's `directory-components-match`).
+- LITE: `merge-pathnames` does not know a logical namestring (a relative one would merge under
+  a non-empty `*default-pathname-defaults*`); a relative to-pattern stays relative where SBCL
+  makes the answer absolute. cl-fad's load defines `TEMPORARY-FILES` (`.kb/asdf.md`).
 
 ## The algebra over the flat namestring
 All prelude Lisp, so the four backends run ONE definition each.
@@ -172,7 +191,9 @@ through the link in `truename`, `*default-pathname-defaults*` merged; the interp
 twins also pin `(truename "")` = the real `user.dir`), `relativePathClimbsAboveANamedCurrentDirectory`
 (WASM under the native stub's preopens: `uiop:getcwd` and absolute truenames); ci-spec
 `truename-resolves-symbolic-links` (the same over the staged `e95-links/`),
-`pathname-algebra-over-the-flat-namestring`, `pathname-family-and-broadcast-streams`,
+`pathname-algebra-over-the-flat-namestring` (logical hosts and `pathname-match-p` too, as are
+the three `pathnameAlgebraOverTheFlatNamestring` / `translatePathname...` suites, and
+`ClFadE2eTest` on all four), `pathname-family-and-broadcast-streams`,
 `lite-builtins-residue`, `probe-file-existing-and-missing`,
 `directory-listing-and-uiop-walkers`,
 `namestring-halves-nstring-case-and-environment-enquiry`, `wild-pathnames`.
