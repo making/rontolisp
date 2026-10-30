@@ -569,10 +569,11 @@ class LispEvaluatorAsdfTest {
 	@Test
 	void dependsOnBuiltinSwankResolvesWithoutNetworkAndCreateServerSignals() {
 		// clack.asd hard-depends on "swank", whose real .asd is a program the
-		// defsystem-as-data front-end cannot read -- without the stub system the
-		// dependency sends quickload after the slime tarball. stop-server is a nil
-		// no-op (clack calls it whenever a swank port was recorded); create-server
-		// signals, because a caller reaching it explicitly asked for a remote REPL.
+		// defsystem-as-data front-end cannot read -- without the shim system the
+		// dependency sends quickload after the slime tarball. An evaluator the command
+		// line did not create has no server to start: create-server signals, because
+		// a caller reaching it explicitly asked for a remote REPL, and stop-server of a
+		// port nothing listens on answers nil.
 		String output = run("""
 				(asdf:load-system "repl-lib")
 				(print (repl-lib:stop 4005))

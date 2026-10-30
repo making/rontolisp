@@ -27,8 +27,30 @@ answered message for message as SBCL's SWANK answers, the differences listed at 
 - `RontoLispCli`: `--swank[=PORT]` (value-less key, `=` for the port), SWANK's 4005 by
   default, 0 any free port; refused beside a program, `-o`, `test`, `--nrepl` or a
   non-Common-Lisp `--source-language`; prints `;; Swank started at port: P.`
-- The `swank` shim system (`swank.lisp`) keeps signalling from `create-server`, its
-  message now naming `rontolisp --swank`: a program cannot start the server.
+- A program starts the same server (below).
+
+## A program's server
+
+`eval` may not import `cli`, so the command line hands every evaluator it creates (a file,
+`-e`, the REPL, `--swank`'s) an `eval/SwankHost` before the program runs
+(`LispEvaluator.setSwankHost`, `cli/SwankServers`). The `swank` shim system
+(`swank.lisp`) calls it under `#+rontolisp-interpreter`: `create-server` takes SWANK's
+keys, `rontolisp::%swank-listen` binds (`:interface`, loopback by default), the shim prints
+`;; Swank started at port: P.` on `*error-output*` (SWANK's `*log-output*`), then
+`%swank-serve`: `:dont-close t` accepts on a non-daemon thread `Swank P` and returns,
+nil (SWANK's default) accepts the first connection on the calling thread and closes the
+port. It answers the port. `stop-server` (`%swank-stop`) closes the port, connections going
+on; an unknown port warns `No server for :PORT: P`, as SWANK does. `:style` and `:backlog`
+are ignored.
+
+- Such a server's connections read on platform non-daemon threads, so a program that ran
+  off its end is served until the port closes and the editor disconnects (SBCL's script
+  needs `(loop (sleep 1000))` for that).
+- A request's quit (`quit-lisp`) closes the server and ends the process: `main` hands the
+  CLI `System::exit`; an embedded `RontoLispCli` (tests) only closes that server.
+- An evaluator with no host (embedded) signals from `create-server`. A compiled program's
+  shim (`#-rontolisp-interpreter`) signals, naming the interpreter, and its `stop-server`
+  answers nil.
 
 ## A thread's package
 
@@ -129,6 +151,9 @@ channels) and Lem's micros are not served. Interpreter only.
 recorded -- REPL values, output and input, package switches, the editor's evaluations,
 both compiles with their notes, load, completions, autodoc, arglist, describe, expansions,
 the aborts; an interrupt stopping the REPL thread's loop while a worker answers in its own
-package), `RontoLispCliTest#aProgramTheModeCannotTakeIsAClearError`,
+package; an `-e` program starting a `:dont-close t` server and a default one, both
+serving its evaluator, then `stop-server`), `RontoLispCliTest#aProgramTheModeCannotTakeIsAClearError`,
 `LispEvaluatorAsdfTest#dependsOnBuiltinSwankResolvesWithoutNetworkAndCreateServerSignals`.
-By hand: the artefacts' driver against `rontolisp --swank` (2026-10-30).
+By hand: the artefacts' driver against `rontolisp --swank` (2026-10-30); a program file
+served after its end and `quit-lisp` ending the process with 0, and the compiled message on
+JVM, Preview 1 and the component (2026-10-30).

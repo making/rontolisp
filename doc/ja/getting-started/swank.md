@@ -41,6 +41,27 @@ SWANK の `:spawn` 方式と同じく、エディタの要求はそれぞれ専�
 `COMMON-LISP-USER::F` と書くところは `CL-USER::F` です）。サーバはインタプリタでだけ動きます。
 SLIME から分かれた SLY と Lem の micros は独自のプロトコルを話すので、提供しません。
 
-プログラムからはサーバを起動できません。`swank:create-server`（組み込みの `swank` システム、
-[システム（asdf）](../guides/asdf-systems.md)）は引き続きエラーを送出し、メッセージで
-`rontolisp --swank` を案内します。
+## 実行中のプログラムから
+
+インタプリタで実行するプログラム（ファイル、`-e`、REPL）は、組み込みの `swank` システム
+（[システム（asdf）](../guides/asdf-systems.md)）の `swank:create-server` で同じサーバを
+自分のイメージ上に起動できます。プログラムはそのまま実行を続け、SLIME からその中身を調べたり
+再定義したりできます。
+
+```console
+$ cat app.lisp
+(asdf:load-system "swank")
+(defvar *requests* 0)
+(swank:create-server :port 4005 :dont-close t)
+$ rontolisp app.lisp
+;; Swank started at port: 4005.
+```
+
+キーワード引数は SWANK と同じで、SWANK と同じ行を `*error-output*` に出力し、ポート番号を
+返します。
+`:dont-close t` ではすべての接続を受け付け、すぐに戻ります。指定しない場合（SWANK の既定）は
+最初の接続を待ち、その後ポートを閉じます。`:interface` は待ち受けるアドレスです（既定は
+localhost）。`(swank:stop-server 4005)` はポートを閉じますが、確立済みの接続は続きます。
+最後まで実行し終えたプログラムも、ポートが閉じてエディタが切断するまでサーバを提供し続けます。
+SLIME から終了するとプロセスが終了します。コンパイルしたプログラムには提供するインタプリタが
+ないので、`swank:create-server` はエラーを送出し、`swank:stop-server` は `nil` を返します。

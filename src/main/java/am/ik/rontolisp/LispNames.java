@@ -7683,6 +7683,27 @@ public final class LispNames {
 	public static final String HTTP_SERVER_PORT = "%HTTP-SERVER-PORT";
 
 	/**
+	 * The internal {@code rontolisp::%swank-listen port interface} function behind the
+	 * interpreter's {@code swank:create-server}: the evaluator's {@code SwankHost} binds
+	 * the port (0 for any free one) and answers the bound port, before accepting
+	 * anything.
+	 */
+	public static final String SWANK_LISTEN = "%SWANK-LISTEN";
+
+	/**
+	 * The internal {@code rontolisp::%swank-serve port dont-close} function: serves the
+	 * listening server -- every connection, on a thread of its own, when
+	 * {@code dont-close}; else the first one, waited for on the calling thread.
+	 */
+	public static final String SWANK_SERVE = "%SWANK-SERVE";
+
+	/**
+	 * The internal {@code rontolisp::%swank-stop port} function behind the interpreter's
+	 * {@code swank:stop-server}: t when a server listened on the port.
+	 */
+	public static final String SWANK_STOP = "%SWANK-STOP";
+
+	/**
 	 * The {@code with-arena} macro provided by the {@code rontolisp} package. Used as
 	 * {@code (rontolisp:with-arena () body...)} to name a reclamation boundary: on the
 	 * interpreter, the JVM backend and wasm-GC it expands to a plain {@code progn} (a
@@ -11647,25 +11668,27 @@ public final class LispNames {
 	public static final String PRINT_CONDITION_BACKTRACE = "PRINT-CONDITION-BACKTRACE";
 
 	/**
-	 * The {@code swank} stub package (and built-in ASDF system) name. The real swank is
-	 * SLIME's server half, whose {@code .asd} is a program rontolisp cannot parse; the
-	 * interpreter's own server is the command line's {@code --swank}, which a program
-	 * cannot start. clack's {@code .asd} hard-depends on it all the same, so the stub is
-	 * what keeps {@code (ql:quickload "clack")} from downloading SLIME and dying on it.
+	 * The {@code swank} shim package (and built-in ASDF system) name. The real swank is
+	 * SLIME's server half, whose {@code .asd} is a program rontolisp cannot parse; on the
+	 * interpreter the shim's {@code create-server} starts the server {@code --swank}
+	 * runs. clack's {@code .asd} hard-depends on it, so the shim is also what keeps
+	 * {@code (ql:quickload "clack")} from downloading SLIME and dying on it.
 	 */
 	public static final String SWANK_PKG = "SWANK";
 
 	/**
-	 * {@code swank:create-server} -- signals: a program cannot start a SWANK server
-	 * ({@code rontolisp --swank} serves the interpreter's REPL). clack reaches it only
-	 * when {@code clackup} is passed {@code :swank-port}.
+	 * {@code swank:create-server &key port dont-close interface} -- on the interpreter,
+	 * starts the SWANK server on the program's own evaluator ({@link #SWANK_LISTEN},
+	 * {@link #SWANK_SERVE}) and answers its port; a compiled program signals, having no
+	 * interpreter to serve. clack reaches it when {@code clackup} is passed
+	 * {@code :swank-port}.
 	 */
 	public static final String CREATE_SERVER = "CREATE-SERVER";
 
 	/**
-	 * {@code swank:stop-server} -- a nil no-op, the honest counterpart of
-	 * {@link #CREATE_SERVER}: clack's {@code stop} calls it unconditionally when a swank
-	 * port was recorded, and nothing was ever started.
+	 * {@code swank:stop-server port} -- stops the server listening on the port
+	 * ({@link #SWANK_STOP}), its connections going on; nil in a compiled program, which
+	 * started none (clack's {@code stop} calls it whenever a swank port was recorded).
 	 */
 	public static final String STOP_SERVER = "STOP-SERVER";
 
