@@ -2365,6 +2365,12 @@ class LispEvaluatorTest {
 		assertThat(eval("(funcall (coerce 'car 'function) '(7 8))")).isEqualTo(new LispInteger(7));
 		assertThat(eval("(funcall (coerce #'(lambda (x) (* x x)) 'function) 9)")).isEqualTo(new LispInteger(81));
 		assertThat(eval("(funcall (coerce '(lambda (x) (* x x)) 'function) 9)")).isEqualTo(new LispInteger(81));
+		// A COMPUTED lambda expression is compile nil's (lisp-unit's run-code idiom),
+		// under a literal and a computed result type alike.
+		assertThat(eval("(let ((code '((+ 1 1)))) (funcall (coerce `(lambda () ,@code) 'function)))"))
+			.isEqualTo(new LispInteger(2));
+		assertThat(eval("(let ((ty 'function) (def (list 'lambda '(x) '(* x 3)))) (funcall (coerce def ty) 4))"))
+			.isEqualTo(new LispInteger(12));
 	}
 
 	@Test

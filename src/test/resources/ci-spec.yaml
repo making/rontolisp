@@ -16428,6 +16428,17 @@ cases:
       "x=5 y=7"
       to-stdout ok
       "\"q\""
+  - name: coerce-a-computed-lambda-expression-to-function
+    source: |
+      ;; (coerce <lambda expression> 'function) is compile nil's result when the
+      ;; expression is built at run time (lisp-unit's run-code), not only for a literal.
+      (defun run-code (code) (funcall (coerce `(lambda () ,@code) 'function)))
+      (print (run-code '((+ 1 1))))
+      (defun make-adder (n) (coerce (list 'lambda '(x) (list '+ 'x n)) 'function))
+      (print (funcall (make-adder 5) 10))
+    expected: |
+      2
+      15
   - name: runtime-resolved-designators-are-function-values
     source: |
       ;; A designator the compiler cannot read still resolves to a FUNCTION value:
