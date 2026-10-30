@@ -93,7 +93,8 @@ A literal, top-level directive like `in-package`. `PackageResolver.resolveDefpac
 `LispPackage` (exports = owned + external) and replaces the form with the package KEYWORD
 (`:NAME` -- the value `make-package` and `find-package` answer, so the three are `eq`; it was a
 quoted `NAME` symbol until `.todo/917`); it does NOT switch the current package. It is in `CL_SPECIAL_FORMS`. Designators: keywords, bare
-symbols, strings, `#:name` (stripped in `designator`) and CHARACTERS (`#\H` is the string
+symbols, strings, `#:name`, a QUALIFIED symbol (`designator` takes `LispSymbol.memberName`, the
+symbol-name: `(:shadow cl:let)` names `LET`, misc-extensions' idiom) and CHARACTERS (`#\H` is the string
 designator for `"H"`, CLHS glossary -- the ANSI chapter spells every clause that way at least
 once); `:documentation`/`:size` ignored.
 - `(:intern name...)` adds the names to the package's OWN symbols without exporting them, so

@@ -4394,6 +4394,7 @@ cases:
   # The runtime spelling of defpackage's :import-from clause, and the three package
   # registry queries: the interpreter reads its live registry, the compile paths a
   # table baked in at compile time -- so all four backends must print the same thing.
+  # Then a :shadow clause naming a cl symbol by a QUALIFIED designator.
   - name: package-import-and-registry-queries
     source: |
       (defpackage :ci-imp-src (:use :cl) (:export :ci-imp-pub))
@@ -4413,6 +4414,13 @@ cases:
       (defun ci-pql-use (p) (package-use-list p))
       (print (ci-pql-use (find-package "CI-IMP-SRC")))
       (print (mapcar #'package-name (funcall #'package-use-list :ci-pql)))
+      ;; A qualified symbol designates its name: (:shadow cl:let) shadows LET.
+      (defpackage :ci-pqs (:use :cl) (:shadow cl:let))
+      (in-package :ci-pqs)
+      (defmacro let (b &body body) `(cl:let ,b (list :mine (progn ,@body))))
+      (print (let ((x 1)) x))
+      (print (package-shadowing-symbols :ci-pqs))
+      (in-package :cl-user)
     expected: |
       3
       (:CL :CI-IMP-SRC)
@@ -4422,6 +4430,8 @@ cases:
       :CI-PQL
       (:CL)
       ("CL" "CI-IMP-SRC")
+      (:MINE 1)
+      (LET)
   # The runtime-tier package API: make-package / delete-package /
   # rename-package / packagep / package-nicknames over one runtime package, the
   # catchable package-error failures with their :package slot, and the enumeration
