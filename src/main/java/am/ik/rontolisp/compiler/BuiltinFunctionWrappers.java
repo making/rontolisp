@@ -1467,14 +1467,6 @@ public final class BuiltinFunctionWrappers {
 				List.of(body));
 	}
 
-	// The readtable trio, whose call-position lowering is a no-op returning the lite
-	// answer (nil / :upcase / t -- .kb/reader-case-upcase.md): the wrapper takes any
-	// arity and answers the same constant, because the arguments cannot have an effect
-	// the reader would ever see.
-	private static WrapperDef readtableStub(String name) {
-		return new WrapperDef(name, List.of(LispNames.LAMBDA_REST, "r"), List.of(call(name)));
-	}
-
 	/**
 	 * What a map* family wrapper does with the value of each call. See mapFamilyWrapper.
 	 */
@@ -3099,9 +3091,7 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.ENDP), listStarWrapper(), binary(LispNames.REVAPPEND), binary(LispNames.NRECONC),
 			vectorWrapper(), binary(LispNames.SVREF), unary(LispNames.ARRAY_RANK), binary(LispNames.ARRAY_DIMENSION),
 			unary(LispNames.ARRAY_TOTAL_SIZE), arrayRowMajorIndexWrapper(), mapWrapper(), mapIntoWrapper(),
-			boundedSequenceIo(LispNames.READ_SEQUENCE), boundedSequenceIo(LispNames.WRITE_SEQUENCE),
-			readtableStub(LispNames.COPY_READTABLE), readtableStub(LispNames.READTABLE_CASE),
-			readtableStub(LispNames.SET_DISPATCH_MACRO_CHARACTER));
+			boundedSequenceIo(LispNames.READ_SEQUENCE), boundedSequenceIo(LispNames.WRITE_SEQUENCE));
 
 	/** Backing set of {@link #names()}; initialized after {@code WRAPPER_DEFS}. */
 	private static final Set<String> WRAPPER_NAMES;

@@ -63,6 +63,13 @@ public final class LispLexer {
 
 	private int pos;
 
+	/**
+	 * The readtable this read honors, or {@code null} for the standard syntax: the case a
+	 * token is converted by and the characters whose syntax differs, a reader macro
+	 * function among them ({@code .kb/readtables.md}).
+	 */
+	private @Nullable ReadSyntax syntax;
+
 	/** Set by {@link #readFeatureExpr} when the expression it read holds a {@code #.}. */
 	private boolean featureExprReadsEval;
 
@@ -124,6 +131,33 @@ public final class LispLexer {
 		this.file = file;
 		this.readTimeEval = readTimeEval;
 		this.pos = 0;
+	}
+
+	/**
+	 * Reads with a readtable from here on ({@code null}: the standard syntax). An
+	 * incremental read sets it before each top-level datum, since evaluating one may
+	 * change {@code *readtable*} for the next.
+	 * @param syntax the syntax
+	 */
+	void setSyntax(@Nullable ReadSyntax syntax) {
+		this.syntax = syntax;
+	}
+
+	/**
+	 * Moves the scan to an offset: a read of one datum out of the middle of a text (a
+	 * string stream's position).
+	 * @param offset the UTF-16 offset
+	 */
+	void seek(int offset) {
+		this.pos = offset;
+	}
+
+	/**
+	 * The offset the scan stands at.
+	 * @return the UTF-16 offset
+	 */
+	int position() {
+		return this.pos;
 	}
 
 	/**
@@ -227,25 +261,103 @@ public final class LispLexer {
 
 	private void tokenizeInto(List<LocatedToken> tokens) {
 		while (this.pos < this.input.length()) {
+			lexUnit(tokens);
+		}
+	}
+
+	/** How {@link #tokenizeNextDatum} ended. */
+	enum Next {
+
+		/** The tokens of one whole datum were added. */
+		DATUM,
+		/** The input ended before any token of a datum. */
+		END,
+		/** The stop character stands at the scan, before any token of a datum. */
+		STOPPED
+
+	}
+
+	/**
+	 * Tokenizes ONE top-level datum and stops behind it -- the incremental read a
+	 * form-at-a-time {@code load} needs, since evaluating a form may change the readtable
+	 * the next one is read with, and a reader macro function must run when the read
+	 * reaches it, not before. Whitespace, comments, a failed {@code #+} guard and a
+	 * reader macro answering no value add nothing and the scan goes on.
+	 * @param tokens where the datum's tokens are added
+	 * @param stopAt a character that ends the scan when it stands where a datum would
+	 * start ({@code read-delimited-list}'s), or -1
+	 * @return how the scan ended; the input may end INSIDE a datum, which the parse then
+	 * reports
+	 */
+	Next tokenizeNextDatum(List<LocatedToken> tokens, int stopAt) {
+		int start = tokens.size();
+		int depth = 0;
+		boolean pendingPrefix = false;
+		while (this.pos < this.input.length()) {
+			if (stopAt >= 0 && tokens.size() == start && this.input.codePointAt(this.pos) == stopAt) {
+				return Next.STOPPED;
+			}
+			int before = tokens.size();
+			lexUnit(tokens);
+			for (int i = before; i < tokens.size(); i++) {
+				Token token = tokens.get(i).token();
+				if (opensDatum(token)) {
+					depth++;
+					pendingPrefix = false;
+				}
+				else if (token instanceof Token.RightParen) {
+					depth = Math.max(0, depth - 1);
+					pendingPrefix = false;
+				}
+				else {
+					// #0A takes the datum after it whole, with no parenthesis of its own.
+					pendingPrefix = depth == 0
+							&& (isPrefixToken(token) || token instanceof Token.ArrayOpen array && array.rank() == 0);
+				}
+			}
+			if (tokens.size() > start && depth == 0 && !pendingPrefix) {
+				return Next.DATUM;
+			}
+		}
+		return tokens.size() > start ? Next.DATUM : Next.END;
+	}
+
+	// Whether a token opens a datum its own ')' closes.
+	private static boolean opensDatum(Token token) {
+		return token instanceof Token.LeftParen || token instanceof Token.VectorOpen
+				|| token instanceof Token.StructOpen || token instanceof Token.SharpC
+				|| token instanceof Token.ArrayOpen array && array.rank() > 0 || token instanceof Token.FloatArrayOpen
+				|| token instanceof Token.IntVectorOpen;
+	}
+
+	// One lexical unit: a token (or the few a #. or a deferred #+ marker spells), or the
+	// whitespace, comment or failed guard that yields none.
+	private void lexUnit(List<LocatedToken> tokens) {
+		{
 			char c = this.input.charAt(this.pos);
+			// A character the readtable gives another syntax reads by it first: a reader
+			// macro function, a remapped standard one, whitespace or a constituent.
+			if (this.syntax != null && lexSyntaxEntry(tokens)) {
+				return;
+			}
 			// Whitespace, comments and feature conditionals produce no token; consuming
 			// them here lets every token branch below start at a real token start.
 			if (Character.isWhitespace(c)) {
 				this.pos++;
-				continue;
+				return;
 			}
 			if (c == ';') {
 				skipComment();
-				continue;
+				return;
 			}
 			if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '|') {
 				skipBlockComment();
-				continue;
+				return;
 			}
 			if (c == '#' && this.pos + 1 < this.input.length()
 					&& (this.input.charAt(this.pos + 1) == '+' || this.input.charAt(this.pos + 1) == '-')) {
 				readFeatureConditional(tokens);
-				continue;
+				return;
 			}
 			int tokenStart = this.pos;
 			if (c == '(') {
@@ -629,6 +741,99 @@ public final class LispLexer {
 		}
 	}
 
+	// The readtable's own syntax for the character at the scan, when it has one: true
+	// when the unit was read here, false when the character reads as standard after all
+	// (a # whose sub-character the table leaves standard).
+	private boolean lexSyntaxEntry(List<LocatedToken> tokens) {
+		ReadSyntax rs = java.util.Objects.requireNonNull(this.syntax);
+		int c = this.input.codePointAt(this.pos);
+		ReadSyntax.Entry entry = rs.entry(c);
+		if (entry == null) {
+			return false;
+		}
+		int start = this.pos;
+		int after = this.pos + Character.charCount(c);
+		switch (entry) {
+			case ReadSyntax.Whitespace ignored -> this.pos = after;
+			case ReadSyntax.Constituent ignored -> add(tokens, readSymbol(), start);
+			case ReadSyntax.Call call ->
+				callReaderMacro(tokens, rs, call.function(), start, after, List.of(new am.ik.rontolisp.LispChar(c)));
+			case ReadSyntax.Standard standard -> {
+				switch (standard.as()) {
+					case '(' -> {
+						add(tokens, new Token.LeftParen(), start);
+						this.pos = after;
+					}
+					case ')' -> {
+						add(tokens, new Token.RightParen(), start);
+						this.pos = after;
+					}
+					case '\'' -> {
+						add(tokens, new Token.Quote(), start);
+						this.pos = after;
+					}
+					case '`' -> {
+						add(tokens, new Token.Backquote(), start);
+						this.pos = after;
+					}
+					case ',' -> {
+						if (after < this.input.length()
+								&& (this.input.charAt(after) == '@' || this.input.charAt(after) == '.')) {
+							add(tokens, new Token.UnquoteSplicing(), start);
+							this.pos = after + 1;
+						}
+						else {
+							add(tokens, new Token.Unquote(), start);
+							this.pos = after;
+						}
+					}
+					case ';' -> skipComment();
+					case '"' -> add(tokens, readString(c), start);
+					default -> throw err("the standard function of " + Character.toString(standard.as())
+							+ " is not supported under another character: " + Character.toString(c));
+				}
+			}
+			case ReadSyntax.Sharp sharp -> {
+				int sub = after;
+				while (sub < this.input.length() && isDigit(this.input.charAt(sub))) {
+					sub++;
+				}
+				if (sub >= this.input.length()) {
+					return false;
+				}
+				int subChar = this.input.codePointAt(sub);
+				ReadSyntax.Sub entrySub = sharp.subs().get(Character.toUpperCase(subChar));
+				if (entrySub == null || entrySub.standardAs() == Character.toUpperCase(subChar)) {
+					return false;
+				}
+				if (entrySub.standardAs() >= 0 || entrySub.function() == null) {
+					throw err("the standard function of #" + Character.toString(entrySub.standardAs())
+							+ " is not supported under another sub-character: #" + Character.toString(subChar));
+				}
+				LispVal arg = sub > after
+						? new am.ik.rontolisp.LispInteger(
+								new java.math.BigInteger(this.input.substring(after, sub)).longValueExact())
+						: LispNil.INSTANCE;
+				callReaderMacro(tokens, rs, entrySub.function(), start, sub + Character.charCount(subChar),
+						List.of(new am.ik.rontolisp.LispChar(subChar), arg));
+			}
+		}
+		return true;
+	}
+
+	// Calls a reader macro function over the input from `from`: the value it answers is
+	// a Datum token at `start`, none adds nothing (a comment), and the scan goes on where
+	// the function left the input.
+	private void callReaderMacro(List<LocatedToken> tokens, ReadSyntax rs, LispVal function, int start, int from,
+			List<LispVal> arguments) {
+		ReadSyntax.Result result = rs.call(function, this.input, from, arguments);
+		this.pos = Math.max(from, Math.min(result.end(), this.input.length()));
+		LispVal value = result.value();
+		if (value != null) {
+			add(tokens, new Token.Datum(value), start);
+		}
+	}
+
 	private void skipComment() {
 		while (this.pos < this.input.length() && this.input.charAt(this.pos) != '\n') {
 			this.pos++;
@@ -973,9 +1178,19 @@ public final class LispLexer {
 				&& this.input.charAt(this.pos + 1) == ':';
 		boolean unescapedColon = false;
 		StringBuilder sb = new StringBuilder();
+		// A readtable case other than :upcase converts the token as a whole (:invert asks
+		// whether ALL its unescaped letters share a case), so the unescaped characters
+		// are
+		// kept as written and the escaped ones marked; the standard case upcases in
+		// place.
+		boolean upcase = this.syntax == null || this.syntax.caseMode() == ReadSyntax.Case.UPCASE;
+		java.util.BitSet escaped = upcase ? null : new java.util.BitSet();
 		while (this.pos < this.input.length()) {
 			char c = this.input.charAt(this.pos);
 			if (c == '\\' && this.pos + 1 < this.input.length()) {
+				if (escaped != null) {
+					escaped.set(sb.length());
+				}
 				sb.append(this.input.charAt(this.pos + 1));
 				this.pos += 2;
 				continue;
@@ -989,6 +1204,9 @@ public final class LispLexer {
 				this.pos++;
 				while (this.pos < this.input.length() && this.input.charAt(this.pos) != '|') {
 					char e = this.input.charAt(this.pos);
+					if (escaped != null) {
+						escaped.set(sb.length());
+					}
 					if (e == '\\' && this.pos + 1 < this.input.length()) {
 						sb.append(this.input.charAt(this.pos + 1));
 						this.pos += 2;
@@ -1009,11 +1227,15 @@ public final class LispLexer {
 			if (c == ':' && hashColonPrefix && sb.length() >= 2) {
 				unescapedColon = true;
 			}
-			sb.append(Character.toUpperCase(c));
+			sb.append(upcase ? Character.toUpperCase(c) : c);
 			this.pos++;
 		}
 		if (unescapedColon) {
 			throw err("Package marker in uninterned symbol: " + this.input.substring(start, this.pos));
+		}
+		if (escaped != null) {
+			return new Token.SymbolToken(
+					java.util.Objects.requireNonNull(this.syntax).convertCase(sb.toString(), escaped));
 		}
 		return new Token.SymbolToken(sb.toString());
 	}
@@ -1022,14 +1244,23 @@ public final class LispLexer {
 	// runs come straight from the raw input with no escape processing, so the whole
 	// token upcases like every other symbol.
 	private Token.SymbolToken numberFallbackSymbol(String raw) {
+		if (this.syntax != null && this.syntax.caseMode() != ReadSyntax.Case.UPCASE) {
+			return new Token.SymbolToken(this.syntax.convertCase(raw, null));
+		}
 		return new Token.SymbolToken(raw.toUpperCase(java.util.Locale.ROOT));
 	}
 
 	private Token.StringToken readString() {
+		return readString('"');
+	}
+
+	// A string closed by `delimiter`: '"', or the character a readtable gave the
+	// standard string function to, which then closes what it opens (CLHS 2.4.5).
+	private Token.StringToken readString(int delimiter) {
 		int start = this.pos;
-		this.pos++; // skip opening "
+		this.pos += Character.charCount(delimiter); // skip the opening delimiter
 		StringBuilder sb = new StringBuilder();
-		while (this.pos < this.input.length() && this.input.charAt(this.pos) != '"') {
+		while (this.pos < this.input.length() && this.input.codePointAt(this.pos) != delimiter) {
 			if (this.input.charAt(this.pos) == '\\' && this.pos + 1 < this.input.length()) {
 				this.pos++;
 				char escaped = this.input.charAt(this.pos);
@@ -1053,7 +1284,7 @@ public final class LispLexer {
 		if (this.pos >= this.input.length()) {
 			throw eofAt(start, "Unterminated string literal");
 		}
-		this.pos++; // skip closing "
+		this.pos += Character.charCount(delimiter); // skip the closing delimiter
 		return new Token.StringToken(sb.toString());
 	}
 
@@ -1578,7 +1809,19 @@ public final class LispLexer {
 		return c >= '0' && c <= '9';
 	}
 
-	private static boolean isSymbolChar(char c) {
+	// Whether a character continues the token it appears in: the readtable's answer for
+	// a character it gives another syntax, the standard one otherwise.
+	private boolean isSymbolChar(char c) {
+		if (this.syntax != null) {
+			ReadSyntax.Entry entry = this.syntax.entry(c);
+			if (entry != null) {
+				return entry.continuesToken();
+			}
+		}
+		return isStandardSymbolChar(c);
+	}
+
+	private static boolean isStandardSymbolChar(char c) {
 		// ',' and '`' terminate a symbol (Common Lisp terminating macro characters)
 		// so `(a ,b) and `(,x ,@xs) tokenize without surrounding whitespace. A comma
 		// used as a digit-grouping separator ("1,000") is consumed inside readNumber

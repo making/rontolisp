@@ -49,6 +49,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [compiler-macros.md](compiler-macros.md) -- `define-compiler-macro` at call sites + `load-time-value` once per occurrence
 - [make-load-form.md](make-load-form.md) -- a literal object is dumped by its own `make-load-form` method
 - [reader-case-upcase.md](reader-case-upcase.md) -- uppercase-canonical reader model, verbatim `intern`/`find-symbol`
+- [readtables.md](readtables.md) -- a readtable is a value on every backend (one prelude definition over `LispLayout.READTABLE`); the interpreter's reader reads with the current one, form at a time (`ReadSyntax`, reader macro calls over a string stream, case); named-readtables' derived iterator; what is not honored yet
 - [reader-features.md](reader-features.md) -- `#+`/`#-`, `*features*` as a runtime variable, `#|...|#`, `#.`, `--feature`
 - [read-time-constants.md](read-time-constants.md) -- `pi`/float-range/fixnum/array limits as bound symbols, not reader substitutions; per-backend values
 - [source-positions.md](source-positions.md) -- `file:line:column` in reader and frontend errors; the cons-identity rule every AST pass honours; `LocatedCons`, the interpreter's runtime positions; the JVM backend's site-numbered line tables

@@ -451,6 +451,58 @@ public enum SourceLanguage {
 	}
 
 	/**
+	 * Opens a FORM-AT-A-TIME read of Common Lisp source -- what the interpreter's
+	 * {@code load} and its entry file read with ({@code .kb/readtables.md}): each form is
+	 * read with the readtable current when the read reaches it, after the forms before it
+	 * ran, so an {@code in-readtable} or a {@code set-macro-character} changes how the
+	 * rest of the file reads and a reader macro function runs in source order. The rules
+	 * of {@link #read} hold per form: the {@code #.} decision (marker mode when the text
+	 * holds one) and the refusal of a list closed into its own tail.
+	 * @param source the program text
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the read
+	 */
+	public static Forms readForms(String source, Features features, @Nullable String file) {
+		LispReader.Forms forms = SourceProvenance.readingProgramSource(
+				() -> LispReader.forms(source, features, usesReadEvalMarkers(source), file, null, 0, true));
+		return new Forms(forms, LABEL_DEFINITION.matcher(source).find(), file);
+	}
+
+	/** A form-at-a-time read of Common Lisp source ({@link #readForms}). */
+	public static final class Forms {
+
+		private final LispReader.Forms forms;
+
+		private final boolean labels;
+
+		private final @Nullable String file;
+
+		private Forms(LispReader.Forms forms, boolean labels, @Nullable String file) {
+			this.forms = forms;
+			this.labels = labels;
+			this.file = file;
+		}
+
+		/**
+		 * Reads the next top-level form.
+		 * @param syntax the readtable to read it with, or {@code null} for the standard
+		 * syntax
+		 * @return the form, or {@code null} at the end of the source
+		 * @throws LispReadException when the form does not read
+		 */
+		public @Nullable LispVal next(am.ik.rontolisp.reader.@Nullable ReadSyntax syntax) {
+			LispVal form = this.forms.next(syntax);
+			if (form != null && this.labels && LispTrees.circularSpine(form) != null) {
+				throw new LispReadException((this.file == null ? "" : this.file + ": ")
+						+ "a circular list literal (a #n= label referenced in its own tail) is not supported in program source");
+			}
+			return form;
+		}
+
+	}
+
+	/**
 	 * Reads user source text that has no marker-resolution pass downstream, in the
 	 * reader's error mode -- a {@code #.} is a read error rather than a marker. Only the
 	 * browser playground's compile buttons use this: their reduced frontend has no

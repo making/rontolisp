@@ -1860,10 +1860,6 @@ final class WasmExprCompiler {
 			case LispNames.CHAR_EQUAL -> WasmCharCompiler.compileEqual(cons, ctx);
 			case LispNames.PARSE_INTEGER -> compileExpansion(LispMacroExpander.expandParseInteger(cons), ctx, tail);
 			case LispNames.VALUES_LIST -> compileExpansion(LispMacroExpander.expandValuesList(cons), ctx, tail);
-			case LispNames.COPY_READTABLE -> compileExpansion(LispMacroExpander.expandCopyReadtable(cons), ctx, tail);
-			case LispNames.SET_DISPATCH_MACRO_CHARACTER ->
-				compileExpansion(LispMacroExpander.expandSetDispatchMacroCharacter(cons), ctx, tail);
-			case LispNames.READTABLE_CASE -> compileExpansion(LispMacroExpander.expandReadtableCase(cons), ctx, tail);
 			case LispNames.COMPLEX -> WasmComplexCompiler.compileComplex(cons, ctx);
 			case LispNames.NE -> {
 				if (WasmComplexCompiler.hasComplex(cons)) {

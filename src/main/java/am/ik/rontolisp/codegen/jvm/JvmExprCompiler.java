@@ -1547,12 +1547,6 @@ final class JvmExprCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandParseInteger(cons), ctx, className);
 			case LispNames.VALUES_LIST ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandValuesList(cons), ctx, className);
-			case LispNames.COPY_READTABLE ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandCopyReadtable(cons), ctx, className);
-			case LispNames.SET_DISPATCH_MACRO_CHARACTER ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandSetDispatchMacroCharacter(cons), ctx, className);
-			case LispNames.READTABLE_CASE ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandReadtableCase(cons), ctx, className);
 			case LispNames.COMPLEX -> JvmComplexCompiler.compileComplex(cons, ctx, className);
 			case LispNames.NE ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandNumericNotEqual(cons), ctx, className);

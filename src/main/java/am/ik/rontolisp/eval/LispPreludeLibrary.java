@@ -664,6 +664,7 @@ public final class LispPreludeLibrary {
 				    (cond ((and (> n 8) (string= (subseq s 0 8) "%struct-")) (intern (subseq s 8)))
 				          ((and (> n 7) (string= (subseq s 0 7) "%class-")) (intern (subseq s 7)))
 				          ((string= s "%PATHNAME") 'pathname)
+				          ((string= s "%READTABLE") 'readtable)
 				          ((and (string= s "T") (%arrayp object))
 				           (let ((et (array-element-type object))
 				                 (dims (array-dimensions object)))
@@ -4408,6 +4409,235 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.PPRINT_DISPATCH_DEFAULT, """
 				(defun %pprint-dispatch-default (stream object)
 				  (write object :stream stream))
+				""");
+		// The readtable family (.kb/readtables.md): a readtable is an instance of the
+		// fixed LispLayout.READTABLE layout -- slot 0 the readtable-case keyword, slot 1
+		// an eql table from a character to its syntax entry, holding ONLY the characters
+		// whose syntax differs from the standard one. An entry is the list
+		// (KIND FN NON-TERMINATING-P SUBS STD): KIND one of :whitespace :constituent
+		// :macro :single-escape :multiple-escape, FN the macro function, SUBS a dispatch
+		// character's table (sub-char -> (FN . STD-SUB)), and STD the standard character
+		// whose standard function FN is -- the mark the interpreter's reader acts on
+		// natively, where any other function is called. One definition on every backend;
+		// only the interpreter's reader consults the table so far.
+		SOURCES.put(LispNames.RT_MAKE_INTERNAL, """
+				(defun %rt-make ()
+				  (%obj-new '%READTABLE :upcase (make-hash-table)))
+				""");
+		SOURCES.put(LispNames.READTABLEP, """
+				(defun readtablep (object)
+				  (%obj-is object '%READTABLE))
+				""");
+		SOURCES.put(LispNames.RT_STANDARD_INTERNAL, """
+				(defvar %rt-standard nil)
+				(defun %rt-standard ()
+				  (or %rt-standard (setq %rt-standard (%rt-make))))
+				""");
+		SOURCES.put(LispNames.RT_DESIGNATOR_INTERNAL, """
+				(defun %rt-designator (readtable)
+				  (cond ((null readtable) (%rt-standard))
+				        ((readtablep readtable) readtable)
+				        (t (error 'type-error :datum readtable :expected-type 'readtable))))
+				""");
+		// The standard macro functions, made once per character so a function read
+		// back with get-macro-character is EQ to the one installed (named-readtables'
+		// merge compares them with EQ).
+		SOURCES.put(LispNames.RT_STD_FN_INTERNAL, """
+				(defvar %rt-std-fns nil)
+				(defun %rt-std-fn (c)
+				  (let ((hit (assoc c %rt-std-fns)))
+				    (if hit
+				        (cdr hit)
+				        (let ((fn (lambda (stream char) (%rt-call-standard stream char c))))
+				          (setq %rt-std-fns (cons (cons c fn) %rt-std-fns))
+				          fn))))
+				""");
+		SOURCES.put(LispNames.RT_STD_OF_INTERNAL, """
+				(defvar %rt-std-fns nil)
+				(defun %rt-std-of (fn)
+				  (dolist (e %rt-std-fns nil)
+				    (when (eq (cdr e) fn) (return (car e)))))
+				""");
+		// What calling a standard macro function does: the comment and the stray close
+		// parenthesis act here, every other one gives its character back and reads the
+		// datum it starts.
+		SOURCES.put(LispNames.RT_CALL_STANDARD_INTERNAL, """
+				(defun %rt-call-standard (stream char std)
+				  (cond ((char= std #\\;) (read-line stream nil nil) (values))
+				        ((char= std #\\))
+				         (error 'reader-error :format-control "unmatched close parenthesis" :stream stream))
+				        (t (unread-char char stream) (read stream t nil t))))
+				""");
+		// The standard dispatch table of #, made once: the CLHS 2.4.8 sub-characters plus
+		// the ones this reader adds (#f( #d( #L #N@). A standard sub-function cannot be
+		// called directly; it exists to be compared and copied.
+		SOURCES.put(LispNames.RT_STD_SUBS_INTERNAL, """
+				(defvar %rt-std-subs nil)
+				(defun %rt-std-subs ()
+				  (or %rt-std-subs
+				      (let ((table (make-hash-table)))
+				        (dolist (c (append (coerce "\\\\'(*:.BOXRCASP=#+-|<)FDL@" 'list)
+				                           (list #\\Space #\\Tab #\\Newline #\\Page #\\Return)))
+				          (setf (gethash c table)
+				                (cons (let ((sub c))
+				                        (lambda (stream char arg)
+				                          (declare (ignore stream char arg))
+				                          (error "the standard #~A dispatch function cannot be called directly" sub)))
+				                      c)))
+				        (setq %rt-std-subs table))))
+				""");
+		SOURCES.put(LispNames.RT_STD_SUB_OF_INTERNAL, """
+				(defun %rt-std-sub-of (fn)
+				  (let ((found nil))
+				    (maphash (lambda (k v) (when (eq (car v) fn) (setq found k))) (%rt-std-subs))
+				    found))
+				""");
+		SOURCES.put(LispNames.RT_STD_ENTRY_INTERNAL, """
+				(defun %rt-std-entry (c)
+				  (cond ((member c '(#\\( #\\) #\\' #\\; #\\" #\\` #\\,))
+				         (list :macro (%rt-std-fn c) nil nil c))
+				        ((char= c #\\#) (list :macro (%rt-dispatcher) t (%rt-std-subs) c))
+				        ((member c '(#\\Space #\\Tab #\\Newline #\\Page #\\Return))
+				         (list :whitespace nil nil nil nil))
+				        ((char= c #\\\\) (list :single-escape nil nil nil nil))
+				        ((char= c #\\|) (list :multiple-escape nil nil nil nil))
+				        (t (list :constituent nil nil nil nil))))
+				""");
+		SOURCES.put(LispNames.RT_ENTRY_INTERNAL, """
+				(defun %rt-entry (rt c)
+				  (or (gethash c (%obj-ref rt 1)) (%rt-std-entry c)))
+				""");
+		SOURCES.put(LispNames.RT_COPY_ENTRY_INTERNAL, """
+				(defun %rt-copy-entry (e)
+				  (list (first e) (second e) (third e)
+				        (when (fourth e)
+				          (let ((copy (make-hash-table)))
+				            (maphash (lambda (k v) (setf (gethash k copy) v)) (fourth e))
+				            copy))
+				        (fifth e)))
+				""");
+		SOURCES.put(LispNames.RT_OWN_ENTRY_INTERNAL, """
+				(defun %rt-own-entry (rt c)
+				  (let ((chars (%obj-ref rt 1)))
+				    (or (gethash c chars)
+				        (setf (gethash c chars) (%rt-copy-entry (%rt-std-entry c))))))
+				""");
+		// The ONE dispatching function every dispatch macro character has, # included:
+		// the optional decimal argument, the sub-character, and the function the
+		// readtable holds for it. One object, so get-macro-character answers EQ functions
+		// for # in every readtable -- named-readtables' merge compares them with EQ, and
+		// a dispatch character made by make-dispatch-macro-character must not conflict
+		// with the standard one.
+		SOURCES.put(LispNames.RT_DISPATCHER_INTERNAL, """
+				(defvar %rt-dispatcher nil)
+				(defun %rt-dispatcher ()
+				  (or %rt-dispatcher
+				      (setq %rt-dispatcher
+				            (lambda (stream char)
+				              (let ((arg nil) (sub (read-char stream t nil t)))
+				                (do () ((not (digit-char-p sub)))
+				                  (setq arg (+ (* (or arg 0) 10) (digit-char-p sub)))
+				                  (setq sub (read-char stream t nil t)))
+				                (let ((fn (get-dispatch-macro-character char sub)))
+				                  (if fn
+				                      (funcall fn stream sub arg)
+				                      (error "no dispatch function defined for ~S ~S" char sub))))))))
+				""");
+		SOURCES.put(LispNames.COPY_READTABLE, """
+				(defun copy-readtable (&optional (from-readtable *readtable*) to-readtable)
+				  (let ((from (%rt-designator from-readtable))
+				        (to (or to-readtable (%rt-make)))
+				        (chars (make-hash-table)))
+				    (maphash (lambda (k v) (setf (gethash k chars) (%rt-copy-entry v))) (%obj-ref from 1))
+				    (%obj-set to 0 (%obj-ref from 0))
+				    (%obj-set to 1 chars)
+				    to))
+				""");
+		SOURCES.put(LispNames.READTABLE_CASE, """
+				(defun readtable-case (readtable)
+				  (unless (readtablep readtable)
+				    (error 'type-error :datum readtable :expected-type 'readtable))
+				  (%obj-ref readtable 0))
+				(defun (setf readtable-case) (mode readtable)
+				  (unless (readtablep readtable)
+				    (error 'type-error :datum readtable :expected-type 'readtable))
+				  (unless (member mode '(:upcase :downcase :preserve :invert))
+				    (error 'type-error :datum mode :expected-type '(member :upcase :downcase :preserve :invert)))
+				  (%obj-set readtable 0 mode)
+				  mode)
+				""");
+		SOURCES.put(LispNames.GET_MACRO_CHARACTER, """
+				(defun get-macro-character (char &optional (readtable *readtable*))
+				  (let ((e (%rt-entry (%rt-designator readtable) char)))
+				    (if (eq (first e) :macro)
+				        (values (second e) (third e))
+				        (values nil nil))))
+				""");
+		SOURCES.put(LispNames.SET_MACRO_CHARACTER, """
+				(defun set-macro-character (char new-function &optional non-terminating-p (readtable *readtable*))
+				  (setf (gethash char (%obj-ref readtable 1))
+				        (list :macro new-function (if non-terminating-p t nil) nil (%rt-std-of new-function)))
+				  t)
+				""");
+		SOURCES.put(LispNames.MAKE_DISPATCH_MACRO_CHARACTER, """
+				(defun make-dispatch-macro-character (char &optional non-terminating-p (readtable *readtable*))
+				  (setf (gethash char (%obj-ref readtable 1))
+				        (list :macro (%rt-dispatcher) (if non-terminating-p t nil) (make-hash-table) nil))
+				  t)
+				""");
+		SOURCES.put(LispNames.GET_DISPATCH_MACRO_CHARACTER, """
+				(defun get-dispatch-macro-character (disp-char sub-char &optional (readtable *readtable*))
+				  (let ((subs (fourth (%rt-entry (%rt-designator readtable) disp-char))))
+				    (unless subs (error "~S is not a dispatching macro character" disp-char))
+				    (if (digit-char-p sub-char) nil (car (gethash (char-upcase sub-char) subs)))))
+				""");
+		SOURCES.put(LispNames.SET_DISPATCH_MACRO_CHARACTER, """
+				(defun set-dispatch-macro-character (disp-char sub-char new-function &optional (readtable *readtable*))
+				  (unless (fourth (%rt-entry readtable disp-char))
+				    (error "~S is not a dispatching macro character" disp-char))
+				  (when (digit-char-p sub-char)
+				    (error "the sub-character ~S is a decimal digit" sub-char))
+				  (let ((subs (fourth (%rt-own-entry readtable disp-char))))
+				    (if new-function
+				        (setf (gethash (char-upcase sub-char) subs) (cons new-function (%rt-std-sub-of new-function)))
+				        (remhash (char-upcase sub-char) subs))
+				    t))
+				""");
+		SOURCES.put(LispNames.SET_SYNTAX_FROM_CHAR, """
+				(defun set-syntax-from-char (to-char from-char &optional (to-readtable *readtable*) from-readtable)
+				  (setf (gethash to-char (%obj-ref to-readtable 1))
+				        (%rt-copy-entry (%rt-entry (%rt-designator from-readtable) from-char)))
+				  t)
+				""");
+		// The macro characters of a readtable, the standard ones included, as
+		// named-readtables' iterator yields them: (char fn non-terminating-p dispatch-p
+		// ((sub . fn) ...)). What its derived %make-readtable-iterator walks instead of
+		// grovelling every code point twice.
+		SOURCES.put(LispNames.READTABLE_MACRO_ENTRIES_INTERNAL, """
+				(defun %readtable-macro-entries (readtable)
+				  (let ((rt (%rt-designator readtable)) (seen nil) (entries nil))
+				    (maphash (lambda (c e) (setq seen (cons c seen))
+				               (when (eq (first e) :macro) (setq entries (cons (cons c e) entries))))
+				             (%obj-ref rt 1))
+				    (dolist (c (coerce "()';\\"`,#" 'list))
+				      (unless (member c seen) (setq entries (cons (cons c (%rt-std-entry c)) entries))))
+				    (mapcar (lambda (ce)
+				              (let ((e (cdr ce)) (alist nil))
+				                (when (fourth e)
+				                  (maphash (lambda (k v) (setq alist (cons (cons k (car v)) alist))) (fourth e)))
+				                (list (car ce) (second e) (third e) (if (fourth e) t nil) alist)))
+				            entries)))
+				""");
+		// read-delimited-list: the datums up to CHAR, which the reader consumes. The
+		// interpreter serves a string stream natively under a non-standard readtable
+		// (LispEvaluator), where the delimiter is a terminating macro character.
+		SOURCES.put(LispNames.READ_DELIMITED_LIST, """
+				(defun read-delimited-list (char &optional stream recursive-p)
+				  (declare (ignore recursive-p))
+				  (let ((items nil))
+				    (do ((c (peek-char t stream t nil t) (peek-char t stream t nil t)))
+				        ((char= c char) (read-char stream) (nreverse items))
+				      (setq items (cons (read stream t nil t) items)))))
 				""");
 		// read: exactly ONE datum's characters off the stream, leaving it positioned
 		// after them -- CL's contract, and the reason a second datum on the same line

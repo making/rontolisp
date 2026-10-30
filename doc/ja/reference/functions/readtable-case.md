@@ -2,8 +2,15 @@
 
 `(readtable-case readtable)`
 
-Lite スタブ: 常に `:upcase` を返します -- リーダーはリードテーブル駆動ではなく、エスケープされていないシンボル名を常に大文字化します。これは標準リードテーブルの `:upcase` モードそのものです。引数は評価されますが無視されます（`*readtable*` 変数は存在しますが `nil` で初期化されています）。s-sql の `from-sql-name` のようにリードテーブルの case で分岐するライブラリコードが標準モードの分岐を取るために存在します。
+リードテーブルがトークンのエスケープされていない文字を変換するケースです。`:upcase`(標準リードテーブルのケース)、`:downcase`、`:preserve`、`:invert`(エスケープされていない文字がすべて同じケースのトークンは反転し、それ以外はそのまま)のいずれかです。`(setf (readtable-case readtable) mode)` で設定します。4つのバックエンドすべてで動作します。このケースで変換するのはインタプリタのリーダーだけです。
 
 ```lisp
 (readtable-case *readtable*) ; => :UPCASE
+```
+
+```lisp
+(let ((*readtable* (copy-readtable nil)))
+  (setf (readtable-case *readtable*) :invert)
+  (list (read-from-string "foo") (read-from-string "Foo")))
+; => (FOO |Foo|)
 ```

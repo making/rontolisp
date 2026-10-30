@@ -40,8 +40,11 @@ public final class LispReader {
 
 	private final List<Token> tokens;
 
-	/** The source offset where each {@link #tokens} entry starts, aligned by index. */
-	private final int[] offsets;
+	/**
+	 * The source offset where each {@link #tokens} entry starts, aligned by index; only
+	 * the first {@code tokens.size()} cells are meaningful (an incremental read appends).
+	 */
+	private int[] offsets;
 
 	private final Features features;
 
@@ -74,8 +77,9 @@ public final class LispReader {
 
 	private LispReader(List<LocatedToken> tokens, Features features, String input, @Nullable String file,
 			boolean recordProvenance) {
-		this.tokens = tokens.stream().map(LocatedToken::token).toList();
-		this.offsets = tokens.stream().mapToInt(LocatedToken::offset).toArray();
+		this.tokens = new ArrayList<>(tokens.size());
+		this.offsets = new int[Math.max(16, tokens.size())];
+		append(tokens);
 		this.features = features;
 		this.input = input;
 		this.file = file;
@@ -105,7 +109,7 @@ public final class LispReader {
 	 * @return the positioned exception
 	 */
 	private LispReadException errAtToken(int tokenIndex, String message) {
-		SourceLocation location = tokenIndex >= 0 && tokenIndex < this.offsets.length
+		SourceLocation location = tokenIndex >= 0 && tokenIndex < this.tokens.size()
 				? SourceLocation.at(this.file, this.offsets[tokenIndex], this.input)
 				: SourceLocation.at(this.file, this.input.length(), this.input);
 		return new LispReadException(message, location);
@@ -132,7 +136,7 @@ public final class LispReader {
 	 * @return the positioned exception
 	 */
 	private LispReadException eofAtToken(int tokenIndex, String message) {
-		SourceLocation location = tokenIndex >= 0 && tokenIndex < this.offsets.length
+		SourceLocation location = tokenIndex >= 0 && tokenIndex < this.tokens.size()
 				? SourceLocation.at(this.file, this.offsets[tokenIndex], this.input)
 				: SourceLocation.at(this.file, this.input.length(), this.input);
 		return new LispReadException(message, location, true);
@@ -488,6 +492,124 @@ public final class LispReader {
 	}
 
 	/**
+	 * Adds tokens behind the ones this reader holds: the next datum of an incremental
+	 * read.
+	 * @param more the positioned tokens
+	 */
+	private void append(List<LocatedToken> more) {
+		int needed = this.tokens.size() + more.size();
+		if (needed > this.offsets.length) {
+			this.offsets = java.util.Arrays.copyOf(this.offsets, Math.max(needed, this.offsets.length * 2));
+		}
+		for (LocatedToken token : more) {
+			this.offsets[this.tokens.size()] = token.offset();
+			this.tokens.add(token.token());
+		}
+	}
+
+	/**
+	 * A source read ONE top-level datum at a time ({@code .kb/readtables.md}): what a
+	 * form-at-a-time {@code load} reads with, because evaluating a form may change the
+	 * readtable the next one is read with -- {@code in-readtable} -- and a reader macro
+	 * function must run when the read reaches it, after the forms before it ran. Each
+	 * {@link #next} reads with the syntax it is handed.
+	 */
+	public static final class Forms {
+
+		private final LispLexer lexer;
+
+		private final LispReader reader;
+
+		private final List<LocatedToken> buffer = new ArrayList<>();
+
+		private Forms(LispLexer lexer, LispReader reader) {
+			this.lexer = lexer;
+			this.reader = reader;
+		}
+
+		/**
+		 * Reads the next top-level datum.
+		 * @param syntax the readtable to read it with, or {@code null} for the standard
+		 * syntax
+		 * @return the datum, or {@code null} at the end of the input
+		 * @throws LispReadException when the datum does not read
+		 */
+		public @Nullable LispVal next(@Nullable ReadSyntax syntax) {
+			this.lexer.setSyntax(syntax);
+			this.buffer.clear();
+			if (this.lexer.tokenizeNextDatum(this.buffer, -1) != LispLexer.Next.DATUM) {
+				return null;
+			}
+			return readBuffered();
+		}
+
+		/**
+		 * Reads datums up to {@code delimiter}, which is consumed -- the body of
+		 * {@code read-delimited-list}.
+		 * @param syntax the readtable to read with
+		 * @param delimiter the character ending the list
+		 * @return the datums
+		 * @throws LispReadException when a datum does not read, or the input ends first
+		 */
+		public List<LispVal> nextDelimited(@Nullable ReadSyntax syntax, int delimiter) {
+			this.lexer.setSyntax(syntax);
+			List<LispVal> items = new ArrayList<>();
+			while (true) {
+				this.buffer.clear();
+				switch (this.lexer.tokenizeNextDatum(this.buffer, delimiter)) {
+					case STOPPED -> {
+						this.lexer.seek(this.lexer.position() + Character.charCount(delimiter));
+						return items;
+					}
+					case END -> throw new LispReadException(
+							"Unexpected end of input, expected " + Character.toString(delimiter),
+							SourceLocation.at(this.reader.file, this.lexer.position(), this.reader.input), true);
+					case DATUM -> items.add(readBuffered());
+				}
+			}
+		}
+
+		private LispVal readBuffered() {
+			this.reader.append(this.buffer);
+			// Reader labels are scoped to the outermost read (CLHS 2.4.8.15).
+			this.reader.labels.clear();
+			return this.reader.readExpr();
+		}
+
+		/**
+		 * Where the scan stands: just behind the last datum read.
+		 * @return the UTF-16 offset
+		 */
+		public int position() {
+			return this.lexer.position();
+		}
+
+	}
+
+	/**
+	 * Opens an incremental read of a source ({@link Forms}).
+	 * @param input the source text
+	 * @param features the active reader features
+	 * @param readEvalMarkers whether {@code #.} reads as a {@code (%read-eval datum)}
+	 * marker (else it is a read error)
+	 * @param file the origin file, or {@code null} when unknown
+	 * @param readTimeEval decides a {@code #+#.(...)} guard while reading, or
+	 * {@code null} to defer it to a marker
+	 * @param start the UTF-16 offset the read starts at
+	 * @param recordProvenance whether the conses read are located (a source read) or not
+	 * (a runtime read of data)
+	 * @return the read
+	 */
+	public static Forms forms(String input, Features features, boolean readEvalMarkers, @Nullable String file,
+			@Nullable UnaryOperator<LispVal> readTimeEval, int start, boolean recordProvenance) {
+		LispLexer.ReadEvalMode mode = readEvalMarkers ? LispLexer.ReadEvalMode.MARKER : LispLexer.ReadEvalMode.ERROR;
+		Features effective = start == 0 ? FeaturePushes.widen(input, features, mode, file) : features;
+		LispLexer lexer = new LispLexer(input, effective, mode, file, readTimeEval);
+		lexer.seek(start);
+		return new Forms(lexer, new LispReader(List.of(), effective, input, file, recordProvenance));
+	}
+
+	/**
 	 * Reads one datum and, when this read records provenance, records the cons it
 	 * produced against the offset the datum STARTS at: in the compile path's
 	 * {@link #unit} table, or -- for the interpreter's {@link #runtimeFile} -- by
@@ -508,7 +630,7 @@ public final class LispReader {
 			// A datum that returns has consumed at least one token, so `start` indexes a
 			// real one; the end-of-input fallback only exists so a future caller cannot
 			// turn a diagnostic into an AIOOBE.
-			int offset = start < this.offsets.length ? this.offsets[start] : this.input.length();
+			int offset = start < this.tokens.size() ? this.offsets[start] : this.input.length();
 			if (this.unit != null) {
 				SourceProvenance.record(cons, this.unit, offset);
 			}
@@ -614,6 +736,8 @@ public final class LispReader {
 				}
 				yield datum;
 			}
+			// What a reader macro function answered (ReadSyntax) is the datum itself.
+			case Token.Datum datum -> datum.value();
 		};
 	}
 
@@ -1319,6 +1443,14 @@ public final class LispReader {
 			case Token.FunctionQuote ignored -> {
 				this.pos++;
 				yield new TemplateElement(readWrappedTemplate(LispNames.FUNCTION), false);
+			}
+			// A reader macro's datum is template DATA whatever it is -- a list it
+			// answered is a constant of the template, not code that builds one.
+			case Token.Datum datum -> {
+				this.pos++;
+				yield new TemplateElement(datum.value() instanceof LispSymbol || datum.value() instanceof LispCons
+						? new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum.value(), LispNil.INSTANCE))
+						: datum.value(), false);
 			}
 			// Any other token is constant template data: read it normally and quote
 			// symbols so they stay data (numbers, strings, chars, t/nil, vectors are

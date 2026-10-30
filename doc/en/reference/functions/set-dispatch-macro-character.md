@@ -1,11 +1,16 @@
 # set-dispatch-macro-character
 
-`(set-dispatch-macro-character disp-char sub-char function &optional readtable)`
+`(set-dispatch-macro-character disp-char sub-char function &optional (readtable *readtable*))`
 
-Lite stub: accepted and ignored, returning `t` — user dispatch macros cannot extend the Java-side reader.
+Makes `function` the reader function of `sub-char` (case-insensitive) under the dispatch macro character `disp-char`, and returns `t`. When the reader meets `disp-char`, an optional decimal argument and `sub-char`, it calls `(function stream sub-char argument)` -- `argument` is `nil` without digits -- and the value the function returns is the datum. A decimal digit as `sub-char` signals. Works on all four backends.
 
-Two dispatch syntaxes that libraries define this way are built into the reader instead, so those libraries work unchanged: `#N@(...)` (ironclad's s-box literal, read as a vector of the given element width) and `#L(...)` (iterate's numbered-argument lambda: `#L(list !2 !3)` reads as `#'(lambda (!1 !2 !3) (list !2 !3))`, the arity being the highest `!n` the body mentions unless `#nL` spells it out). Any OTHER dispatch character stays unhandled, and its literals reach the ordinary reader.
+Only the interpreter's reader reads with a readtable so far: a program and the files it loads, read form by form, `read-from-string`, and `read` / `read-delimited-list` on a string stream. The compile paths and the compiled backends' run-time readers read the standard syntax ([readtables](../../guides/readtables.md)).
 
 ```lisp
-(set-dispatch-macro-character #\# #\7 (lambda (s c n) nil)) ; => T
+(let ((*readtable* (copy-readtable nil)))
+  (set-dispatch-macro-character #\# #\? (lambda (s c n) (list :q n (read s t nil t))))
+  (read-from-string "#2?foo"))
+; => (:Q 2 FOO)
 ```
+
+Two dispatch syntaxes are built into the standard readtable: `#N@(...)` (ironclad's s-box literal, read as a vector of the given element width) and `#L(...)` (iterate's numbered-argument lambda: `#L(list !2 !3)` reads as `#'(lambda (!1 !2 !3) (list !2 !3))`, the arity being the highest `!n` the body mentions unless `#nL` spells it out).

@@ -177,14 +177,15 @@ appears before '.' in list` and `More than one object follows '.' in list`, on a
   one before evaluating it: a catchable `simple-error` reporting `end of file` / `Unexpected ')'`,
   after the forms before it ran (SBCL's order), the same three reports. Before, a stray `)` evaluated as nil and an unfinished
   form as its partial list; only an unterminated `#|` signalled.
-- The interpreter's `load` (`LispEvaluator.loadFile`) reads through `SourceLanguage.readUntilError`
-  -> `LispReader.readPrefix*`: the forms before the first read error, and that error. The lexer stops
-  at its first error (`LispLexer.tokenizePrefix`), so a form it cuts off reports the LEXER's error
-  (`Unterminated block comment`), not its own end of input. The forms run, then `loadReadError`
-  signals `end-of-file` / `reader-error` (no stream) reporting the reader's bare message
-  (`LispReadException.reason`), while the Java message keeps `file:line:column:` for the uncaught
-  line. A Scheme / Clojure file is lowered whole: a read error there runs no form. Until 2026-10-06
-  the whole file was read first and the `LispReadException` escaped `handler-case`, no form ran.
+- The interpreter's `load` (`LispEvaluator.loadFile`) reads a Common Lisp file FORM AT A TIME
+  (`SourceLanguage.readForms`, [readtables.md](readtables.md)): each form is read after the forms
+  before it ran, so a read error is met after them. `loadReadError` then signals `end-of-file` /
+  `reader-error` (no stream) reporting the reader's bare message (`LispReadException.reason`), while
+  the Java message keeps `file:line:column:` for the uncaught line. A form the lexer cuts off reports
+  the LEXER's error (`Unterminated block comment`), not its own end of input. A Scheme / Clojure file
+  is lowered whole through `SourceLanguage.readUntilError`: a read error there runs no form. Until
+  2026-10-06 the whole file was read first and the `LispReadException` escaped `handler-case`, no
+  form ran.
 - Not covered (remain compiled-only leniencies): a dot-only token elsewhere (`(a . . b)`: the compiled
   readers answer the "more than one object" report, the interpreter `Unexpected '.'`; both are
   `reader-error`), `#` alone reads as a symbol everywhere.
@@ -1543,7 +1544,7 @@ answer.
   `file-stream`/`string-stream` are `LispMacroExpander.makeStreamKindTest` — `(%obj-is x '%STREAM)`
   then an `equal` against `KIND`. **The test must be a `let` plus a nested `if` in that order**:
   `%obj-ref` on a non-instance is undefined on the compile paths, so the tag test comes first.
-  `readtable` lowers to `null`. All four are in `PackageRegistry.CL_TYPES` and
+  `readtable` is `(%obj-is x '%READTABLE)` ([readtables.md](readtables.md)). All four are in `PackageRegistry.CL_TYPES` and
   `LispMacroExpander.makeTypeTest`; **a name in the first without a case in the second is a hard
   expansion error in `typecase`, not a silent nil.**
   `type-of`/`class-of` answer these standard names and `subtypep` places them below `stream`

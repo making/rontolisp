@@ -6486,96 +6486,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (copy-readtable ...)} into a nil-returning progn over its arguments:
-	 * rontolisp's reader is not readtable-driven, so a "readtable" is an opaque nil token
-	 * (the ironclad {@code *ironclad-readtable*} header binds one and never uses it for
-	 * reading -- its {@code #N@(...)} syntax is native in the lexer).
-	 * @param cons the copy-readtable expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandCopyReadtable(LispCons cons) {
-		List<LispVal> forms = new java.util.ArrayList<>(cons.toList().subList(1, cons.toList().size()));
-		forms.add(LispNil.INSTANCE);
-		return makeProgn(forms);
-	}
-
-	/**
-	 * Expands {@code (set-dispatch-macro-character c1 c2 fn [readtable])} into a
-	 * t-returning progn over its arguments: user dispatch macros cannot extend the
-	 * Java-side reader, so the registration is accepted and ignored (see
-	 * {@link #expandCopyReadtable}).
-	 *
-	 * <p>
-	 * The HOOK argument is dropped, not evaluated -- see
-	 * {@link #isDeadReadtableHook(LispVal)}. A {@code #'name} is the only trace of the
-	 * hook function anywhere in the program, and keeping it here is what kept ironclad's
-	 * {@code #@} reader (whose body calls {@code read}) alive in every program that loads
-	 * ironclad -- alive enough to make the compile emit the reader runtime and to hold
-	 * the {@code --optimize} funcall-dispatch gate open. A function reference has no
-	 * effect of its own, so dropping it costs nothing else.
-	 * @param cons the set-dispatch-macro-character expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandSetDispatchMacroCharacter(LispCons cons) {
-		List<LispVal> forms = new java.util.ArrayList<>();
-		for (LispVal arg : cons.toList().subList(1, cons.toList().size())) {
-			if (!isDeadReadtableHook(arg)) {
-				forms.add(arg);
-			}
-		}
-		forms.add(LispTrue.INSTANCE);
-		return makeProgn(forms);
-	}
-
-	/**
-	 * Whether the form registers a reader hook that rontolisp's reader can never fire --
-	 * today exactly {@code set-dispatch-macro-character}, which
-	 * {@link #expandSetDispatchMacroCharacter} lowers to a no-op.
-	 * @param form a form of the program
-	 * @return true when the form is such a registration
-	 */
-	public static boolean isReadtableHookRegistration(LispVal form) {
-		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
-				&& LispNames.SET_DISPATCH_MACRO_CHARACTER.equals(memberOf(op.name()));
-	}
-
-	/**
-	 * Whether the argument of such a registration is the hook itself: a {@code #'name}
-	 * reference or a {@code (lambda ...)}. Both are pure references -- evaluating one has
-	 * no effect -- and the function behind them is unreachable, since nothing can call
-	 * the registration back. {@code LibraryDefunPruner} skips exactly these when it
-	 * collects references, so the definition it names may be pruned; a hook argument that
-	 * is a CALL stays, because a call can do something else too.
-	 * @param arg an argument of a readtable-hook registration
-	 * @return true when the argument is a dead hook reference
-	 */
-	public static boolean isDeadReadtableHook(LispVal arg) {
-		return arg instanceof LispCons cons && cons.car() instanceof LispSymbol head
-				&& (LispNames.FUNCTION.equals(head.name()) || LispNames.LAMBDA.equals(head.name()));
-	}
-
-	/**
-	 * Expands {@code (readtable-case readtable)} into a constant {@code :upcase} progn
-	 * over its argument: the reader always upcases unescaped symbol names -- the standard
-	 * readtable's {@code :upcase} mode -- and there is no readtable object to consult
-	 * (see {@link #expandCopyReadtable}).
-	 * @param cons the readtable-case expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandReadtableCase(LispCons cons) {
-		List<LispVal> forms = new java.util.ArrayList<>();
-		for (LispVal arg : cons.toList().subList(1, cons.toList().size())) {
-			// Only a call can have an effect worth keeping; an atom argument -- usually
-			// the bare *readtable*, which has no compiled global cell -- is dropped.
-			if (arg instanceof LispCons) {
-				forms.add(arg);
-			}
-		}
-		forms.add(new LispSymbol(":UPCASE"));
-		return makeProgn(forms);
-	}
-
-	/**
 	 * A {@code read-from-string} call carrying more than the string --
 	 * {@code eof-error-p}, {@code eof-value} or the keyword tail -- becomes a call of the
 	 * prelude {@code %read-from-string-full}, which takes CL's whole lambda list and
@@ -22715,11 +22625,13 @@ public final class LispMacroExpander {
 		if (form instanceof LispInstance) {
 			return true;
 		}
-		if (form instanceof LispSymbol sym && LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR.equals(sym.name())) {
+		if (form instanceof LispSymbol sym && (LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR.equals(sym.name())
+				|| LispNames.READTABLE_VAR.equals(sym.name()))) {
 			// Mentioning the variable is what makes injectMvSpillGlobal put its #P""
 			// initial value into the program -- an instance literal added AFTER this
 			// scan, so the mention has to stand in for it. Same rule as a #P in source
-			// flipping the gate by itself (.kb/pathnames.md).
+			// flipping the gate by itself (.kb/pathnames.md), and for *readtable*'s
+			// readtable value (.kb/readtables.md).
 			return true;
 		}
 		if (form instanceof LispArray array) {
@@ -25662,7 +25574,7 @@ public final class LispMacroExpander {
 		return atomicTypePredicate(plainName) != null || switch (plainName) {
 			case "BOOLEAN", "BIT", "UNSIGNED-BYTE", "SIGNED-BYTE", "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY",
 					"SEQUENCE", "STANDARD-OBJECT", "STRUCTURE-OBJECT", "PATHNAME", "PACKAGE", "STRUCTURE-CLASS",
-					"BUILT-IN-CLASS" ->
+					"BUILT-IN-CLASS", "READTABLE" ->
 				true;
 			default -> false;
 		};
@@ -36354,13 +36266,10 @@ public final class LispMacroExpander {
 				// synonym-stream's.
 				return objIs(value, List.of(LispLayout.CLASS_TAG_PREFIX + "%" + name));
 			case "READTABLE":
-				// A readtable is the opaque nil token: the reader is not
-				// readtable-driven,
-				// copy-readtable answers nil and *readtable* is seeded nil, so nil is the
-				// only value that can be one (see LispNames.COPY_READTABLE). The test is
-				// therefore `null`, which is what makes (typep *readtable* 'readtable)
-				// answer t rather than lying in the other direction.
-				return callOf(LispNames.NULL, value);
+				// A readtable is a VALUE of the fixed LispLayout.READTABLE layout on
+				// every
+				// backend (.kb/readtables.md), so the test is its tag.
+				return objIs(value, List.of(LispLayout.READTABLE_TAG));
 			case "VECTOR":
 				// A vector IS a rank-1 array, and a string is a rank-1 character array,
 				// so the rank is checked here and a rank-2 (or rank-0) array fails --
@@ -42104,7 +42013,8 @@ public final class LispMacroExpander {
 					LispNames.MACROEXPAND, LispNames.MACROEXPAND_1, LispNames.DECODE_FLOAT,
 					LispNames.INTEGER_DECODE_FLOAT, LispNames.DECODE_UNIVERSAL_TIME, LispNames.GET_DECODED_TIME,
 					LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.GET_PROPERTIES, LispNames.GET_SETF_EXPANSION,
-					LispNames.PARSE_NAMESTRING, LispNames.PPRINT_DISPATCH, LispNames.PPRINT ->
+					LispNames.PARSE_NAMESTRING, LispNames.PPRINT_DISPATCH, LispNames.PPRINT,
+					LispNames.GET_MACRO_CHARACTER ->
 				true;
 			default -> false;
 		};
@@ -47947,18 +47857,13 @@ public final class LispMacroExpander {
 		java.util.List<String> printerVars = new java.util.ArrayList<>();
 		// The load-context pathname variables (LispNames.LOAD_TRUENAME_VAR &c) plus
 		// *readtable*, which a loader binds in the same let (clack's %load-file binds all
-		// four around its read/eval loop), and *modules*. On the compile paths they are
-		// all
-		// nil and stay nil: a library file is SPLICED into the program at compile time,
-		// so
-		// nothing is being loaded -- nor compile-file'd, nor require'd/provide'd -- at
-		// run
-		// time, and the reader is the frontend's, with no runtime readtable object to
-		// name.
-		// Declared anyway so a library that reads or rebinds one (local-time's
-		// (or *compile-file-truename* *load-truename*) zoneinfo lookup, esrap's
-		// (member "SWANK-INDENTATION" *modules*) editor probe) compiles; nil is also what
-		// the interpreter's *readtable* holds, so the value agrees everywhere.
+		// four around its read/eval loop), and *modules*. On the compile paths the
+		// pathname ones are nil and stay nil: a library file is SPLICED into the program
+		// at compile time, so nothing is being loaded -- nor compile-file'd, nor
+		// require'd/provide'd -- at run time. Declared anyway so a library that reads or
+		// rebinds one (local-time's (or *compile-file-truename* *load-truename*) zoneinfo
+		// lookup, esrap's (member "SWANK-INDENTATION" *modules*) editor probe) compiles.
+		// *readtable* holds a standard readtable, as on the interpreter.
 		java.util.List<String> loadContextVars = new java.util.ArrayList<>();
 		boolean quiet = false;
 		for (LispVal form : program) {
@@ -48143,7 +48048,13 @@ public final class LispMacroExpander {
 					new LispSymbol(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED), LispNil.INSTANCE)));
 		}
 		for (String name : loadContextVars) {
-			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(name), LispNil.INSTANCE)));
+			// *readtable* holds a readtable VALUE on every backend (.kb/readtables.md): a
+			// fresh standard one, the instance mayCreateInstance answers for by name.
+			LispVal init = LispNames.READTABLE_VAR.equals(name)
+					? listToCons(List.of(new LispSymbol(LispNames.OBJ_NEW), quoteOf(LispLayout.READTABLE_TAG),
+							new LispSymbol(":UPCASE"), listToCons(List.of(new LispSymbol(LispNames.MAKE_HASH_TABLE)))))
+					: LispNil.INSTANCE;
+			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(name), init)));
 		}
 		// The printer-mode variables: declared with defvar (not setq) because they are
 		// BOUND, not just read -- the print-object route binds *print-escape* around the

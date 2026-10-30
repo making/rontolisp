@@ -595,9 +595,10 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
     nil; (c) a library branching on it is asking "am I being compiled to a fasl", and the honest
     answer is no. **If a real `compile-file` ever exists, bind both pairs together and revisit
     local-time's spelling in the same pass.**
-    **`*readtable*` rides the same list**: nil everywhere, but a loader binds it in the SAME `let`
-    as the pathname pair, so `injectMvSpillGlobal` declares whichever of the four the program
-    mentions, or the rebinding fails with `Cannot compile symbol reference: *READTABLE*`.
+    **`*readtable*` rides the same list**: a loader binds it in the SAME `let` as the pathname
+    pair, so `injectMvSpillGlobal` declares whichever of the four the program mentions, or the
+    rebinding fails with `Cannot compile symbol reference: *READTABLE*`. Its seed is a standard
+    readtable, not nil ([readtables.md](readtables.md)).
   - `merge-pathnames` and `truename` are `LispPreludeLibrary` entries (one Lisp definition over
     primitives), unlike `make-pathname`/`uiop:merge-pathnames*`, which stay Java + compile-time
     folding. `truename` is `%real-path` (links resolved, `.kb/read-load-streams.md`) probed, else

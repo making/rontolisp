@@ -1070,11 +1070,55 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalReadtableCaseIsConstantUpcase() {
-		// The reader always upcases unescaped names (the standard readtable's :upcase
-		// mode); s-sql's from-sql-name branches on this.
-		assertThat(eval("(readtable-case *readtable*)")).isEqualTo(new LispSymbol(":UPCASE"));
-		assertThat(eval("(readtable-case (copy-readtable))")).isEqualTo(new LispSymbol(":UPCASE"));
+	void theReaderHonorsTheCurrentReadtable(@TempDir Path dir) throws Exception {
+		// The interpreter's reader reads with the readtable current WHEN it reads
+		// (.kb/readtables.md): a dispatch sub-character and a macro character call their
+		// functions over a stream positioned behind them, a function answering no value
+		// is a comment, a standard function under another character reads as its own
+		// character does, and the case converts the token. The API itself is pinned on
+		// all four backends by ci-spec readtable-objects-and-the-reader-macro-api.
+		String readtable = """
+				(defvar *rt* (copy-readtable nil))
+				(set-dispatch-macro-character #\\# #\\? (lambda (s c n) (declare (ignore c)) (list :q n (read s t nil t))) *rt*)
+				(set-macro-character #\\] (get-macro-character #\\)) nil *rt*)
+				(set-macro-character #\\[ (lambda (s c) (declare (ignore c)) (read-delimited-list #\\] s t)) nil *rt*)
+				(set-macro-character #\\! (lambda (s c) (declare (ignore s c)) (values)) nil *rt*)
+				""";
+		assertThat(evalMulti(readtable + """
+				(let ((*readtable* *rt*))
+				  (list (read-from-string "#?foo") (read-from-string "#3?(a b)") (read-from-string "! [1 (2) x]")
+				        (multiple-value-list (read-from-string "#?x  y"))
+				        (with-input-from-string (s "#?a [b c] tail") (list (read s) (read s) (read s)))))
+				""").print()).isEqualTo("((:Q NIL FOO) (:Q 3 (A B)) (1 (2) X) ((:Q NIL X) 4) ((:Q NIL A) (B C) TAIL))");
+		// The standard readtable keeps reading #? as a symbol, and the case modes.
+		assertThat(evalMulti(readtable + """
+				(list (read-from-string "#?foo")
+				      (let ((*readtable* (copy-readtable nil)))
+				        (setf (readtable-case *readtable*) :invert)
+				        (list (read-from-string "foo") (read-from-string "FOO") (read-from-string "Foo")))
+				      (let ((*readtable* (copy-readtable nil)))
+				        (setf (readtable-case *readtable*) :preserve)
+				        (symbol-name (read-from-string "fooBar"))))
+				""").print()).isEqualTo("(#?FOO (FOO |foo| |Foo|) \"fooBar\")");
+		// load reads form at a time: a form that installs the readtable changes how the
+		// rest of the file reads, a reader function runs in source order, a symbol it
+		// reads is the current package's, and the file's readtable dies with the load.
+		Path lib = dir.resolve("rt.lisp");
+		Files.writeString(lib, """
+				(defpackage :rt-demo (:use :cl))
+				(in-package :rt-demo)
+				(setf (get 'tag 'arity) 2)
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (setf *readtable* (copy-readtable nil))
+				  (set-macro-character #\\@ (lambda (s c) (declare (ignore c))
+				                                (let ((name (read s t nil t)))
+				                                  (list 'quote (list name (get name 'arity)))))))
+				(defparameter cl-user::*annotated* @tag)
+				""");
+		assertThat(evalMulti("""
+				(load "%s")
+				(list *annotated* (get-macro-character #\\@))
+				""".formatted(lib.toString().replace("\\", "\\\\"))).print()).isEqualTo("((RT-DEMO::TAG 2) NIL)");
 	}
 
 	@Test
@@ -10774,8 +10818,8 @@ class LispEvaluatorTest {
 				      (*readtable* *readtable*)
 				      (*load-pathname* "p")
 				      (*load-truename* "t"))
-				  (list *load-pathname* *load-truename* *readtable*))
-				""").print()).isEqualTo("(\"p\" \"t\" NIL)");
+				  (list *load-pathname* *load-truename* (readtablep *readtable*)))
+				""").print()).isEqualTo("(\"p\" \"t\" T)");
 	}
 
 	@Test

@@ -90,9 +90,13 @@
 | `read` | `(read)`, `(read stream)`, `(read stream eof-error-p eof-value)` | 標準入力(または入力ストリーム)からS式を1つ読み込み、そのデータム分の文字だけを消費します(3つのバックエンドすべて)。EOFでは `eof-value`(既定は `nil`) |
 | `read-from-string` | `(read-from-string "(+ 1 2)")`, `(read-from-string s nil :eof :start 3)` | 文字列からデータを1つパースし(4つのバックエンドすべて)、停止インデックスを 2 番目の値として返します。`eof-error-p`/`eof-value` と `:start`/`:end`/`:preserve-whitespace` を受け付けます |
 | `parse-integer` | `(parse-integer "42")`, `(parse-integer "ff" :radix 16)`, `(parse-integer "12x" :junk-allowed t)` | 文字列から整数をパースします。すべてのバックエンドで `:start`/`:end`/`:radix`/`:junk-allowed` をサポートします。パース停止位置が 2 番目の値になり、`multiple-value-bind` で観測できます。`:junk-allowed` がない場合、末尾の非空白文字はエラーです |
-| `copy-readtable` | `(copy-readtable nil)` | ライト版スタブ: 常に `nil` -- リーダーはリードテーブル駆動ではないため、リードテーブルオブジェクトは存在しません (`*readtable*` は存在しますが `nil` に初期化されています) |
-| `set-dispatch-macro-character` | `(set-dispatch-macro-character #\# #\7 fn)` | ライト版スタブ: 受け付けますが無視し、`t` を返します (ユーザーのディスパッチマクロでリーダーを拡張することはできません) |
-| `readtable-case` | `(readtable-case *readtable*)` | ライト版スタブ: 常に `:upcase` -- リーダーはエスケープされていないシンボル名を常に大文字化します。標準リードテーブルのモードです |
+| `read-delimited-list` | `(read-delimited-list #\) stream)` | ある文字までデータムを読み、その文字を消費します |
+| `copy-readtable` | `(copy-readtable nil)` | リードテーブルの複製(`nil` は標準リードテーブル)。リードテーブルで読むのは今のところインタプリタのリーダーだけです([リードテーブル](../../guides/readtables.md)) |
+| `readtablep` | `(readtablep *readtable*)` | リードテーブルなら真 |
+| `readtable-case` | `(readtable-case *readtable*)` | `:upcase`・`:downcase`・`:preserve`・`:invert` のいずれか。`setf` できます |
+| `get-macro-character` `set-macro-character` | `(set-macro-character #\! fn)` | 文字のリーダーマクロ関数と、それが非終端かどうか |
+| `make-dispatch-macro-character` `get-dispatch-macro-character` `set-dispatch-macro-character` | `(set-dispatch-macro-character #\# #\? fn)` | ディスパッチマクロ文字とそのサブ文字の関数 |
+| `set-syntax-from-char` | `(set-syntax-from-char #\} #\))` | ある文字の構文を別の文字に複製します |
 | `char` `schar` | `(char "hello" 1)` | `#\e` -- 0始まりの文字列インデックスの文字 (文字列でない値や整数でないインデックスは `type-error` を通知) |
 | `char-code` | `(char-code #\A)` | `65` -- 文字のコードポイント |
 | `char-int` | `(char-int #\A)` | `65` -- 文字を表す非負整数。実装固有の属性を持たないため、`char-code` と同じ値になります |
