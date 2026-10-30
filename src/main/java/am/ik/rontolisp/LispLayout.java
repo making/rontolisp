@@ -38,9 +38,12 @@ import java.util.List;
  * input stream's pushback at {@link #TAIL_CELL}). The cells past {@code slotNames.size()}
  * are addressable by {@code %obj-new}/{@code %obj-ref} / {@code %obj-set} and invisible
  * to printing, {@code equal} and slot introspection
+ * @param funcallable whether an instance is a FUNCALLABLE instance (its class descends
+ * from {@code closer-mop:funcallable-standard-object}): {@code functionp} answers t for
+ * it, and calling it calls the function in its {@link #FUNCALLABLE_CELL}
  */
 public record LispLayout(String tag, String printName, Kind kind, List<String> slotNames, List<LispVal> initforms,
-		int capacity) {
+		int capacity, boolean funcallable) {
 
 	/** Whether a layout describes a {@code defstruct} type or a CLOS class. */
 	public enum Kind {
@@ -240,6 +243,18 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	public static final int TAIL_CELL = -1;
 
 	/**
+	 * The literal {@code %obj-ref} / {@code %obj-set} index of the cell holding a
+	 * funcallable instance's function
+	 * ({@code closer-mop:set-funcallable-instance-function} stores it, every backend's
+	 * call path reads it): the cell before the {@link #TAIL_CELL}. A funcallable layout
+	 * reserves both cells ({@link #asFuncallable}), so a class that is also a Gray input
+	 * stream keeps its pushback at the tail beside the function, and counting from the
+	 * end keeps the index one literal across classes and past a {@code change-class}
+	 * target's slots.
+	 */
+	public static final int FUNCALLABLE_CELL = -2;
+
+	/**
 	 * The {@code KIND} slot values of {@link #STREAM}, one keyword per stream kind. They
 	 * are compared with {@code equal} (the keyword is a plain interned name on every
 	 * backend), and the two type tests that read them are
@@ -302,11 +317,26 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	 * @param slotNames the slot base names in layout order
 	 * @param initforms the slot initforms in layout order
 	 * @param capacity the reserved slot count (at least {@code slotNames.size()})
+	 * @param funcallable whether instances are funcallable
 	 */
 	public LispLayout {
 		slotNames = List.copyOf(slotNames);
 		initforms = List.copyOf(initforms);
 		capacity = Math.max(capacity, slotNames.size());
+	}
+
+	/**
+	 * A layout whose instances are not funcallable.
+	 * @param tag the instance tag symbol name
+	 * @param printName the type name as printed
+	 * @param kind the printing kind
+	 * @param slotNames the slot base names in layout order
+	 * @param initforms the slot initforms in layout order
+	 * @param capacity the reserved slot count (at least {@code slotNames.size()})
+	 */
+	public LispLayout(String tag, String printName, Kind kind, List<String> slotNames, List<LispVal> initforms,
+			int capacity) {
+		this(tag, printName, kind, slotNames, initforms, capacity, false);
 	}
 
 	/**
@@ -345,8 +375,18 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	 * @return the widened layout
 	 */
 	public LispLayout withCapacity(int reserved) {
-		return reserved <= this.capacity ? this
-				: new LispLayout(this.tag, this.printName, this.kind, this.slotNames, this.initforms, reserved);
+		return reserved <= this.capacity ? this : new LispLayout(this.tag, this.printName, this.kind, this.slotNames,
+				this.initforms, reserved, this.funcallable);
+	}
+
+	/**
+	 * The same layout marked funcallable, reserving the {@link #FUNCALLABLE_CELL} and the
+	 * {@link #TAIL_CELL} past its declared slots.
+	 * @return the funcallable layout
+	 */
+	public LispLayout asFuncallable() {
+		return new LispLayout(this.tag, this.printName, this.kind, this.slotNames, this.initforms,
+				Math.max(this.capacity, slotCount() - FUNCALLABLE_CELL), true);
 	}
 
 	/**

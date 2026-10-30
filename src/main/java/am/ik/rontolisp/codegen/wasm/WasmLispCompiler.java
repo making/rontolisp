@@ -3288,6 +3288,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// A quoted designator of a wrapped built-in becomes #'name before any wrapper
 		// gate scans the program for that spelling (compiler/FunctionDesignators).
 		program = am.ik.rontolisp.compiler.FunctionDesignators.normalizeBuiltinDesignators(program);
+		// The car/cdr compositions only quoted data names get a named wrapper below,
+		// decided over the program as written.
+		Set<String> dataCalledNames = am.ik.rontolisp.compiler.FunctionDesignators.dataCalledNames(program);
 		// The printer's accessibility table (.kb/pretty-printer.md), as on the JVM
 		// backend: baked only for a program that can print under a package other than
 		// cl-user.
@@ -4362,7 +4365,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> designatedProducers = BuiltinFunctionWrappers.designatedValueProducers(program,
 				closRegistry.conditionReports().values());
 		List<LispVal> wrappers = am.ik.rontolisp.compiler.FunctionValueWrappers.generate(userDefinedNames,
-				wrapperExcludes);
+				wrapperExcludes, dataCalledNames);
 		if (LispMacroExpander.declaresMvSpill(program)) {
 			// A wrapper is a function body like any other: its tail settles the
 			// multiple-value channel (the defuns' tails were settled by
@@ -6293,11 +6296,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		final boolean ladderUsesEval = usesEval;
 		final boolean ladderProbesNamespace = writesFunctionNamespace;
 		final int ladderRawSentinel = rawSentinelGlobalIndex;
+		// A funcallable instance is called through the function installed in it: only a
+		// program defining a funcallable class gets the prologue arm.
+		final @Nullable WasmFuncallableInstances ladderFuncallable = WasmFuncallableInstances.of(closRegistry,
+				layoutAddresses, this.usesInstances ? instanceTypeBase() : -1);
 		LadderBuilder ladderBuilder = (ladder, dispatchable) -> WasmRuntimeBuilder.buildDispatch(ladder.arity(), defuns,
 				lambdaDecls, ladderNumDefuns, stringTable, ladderUsesEval, ladderProbesNamespace, ladderUserFuncBase,
 				ladder.spread(), dispatchable, ladder.pageBase(), ladderArityReport, ladderArityChkIndex,
-				this.optimize.prefersSizeOverSpeed(), ladderNotFunction, this.usesIdentityHashTables,
-				ladderRawSentinel);
+				this.optimize.prefersSizeOverSpeed(), ladderNotFunction, this.usesIdentityHashTables, ladderRawSentinel,
+				ladderFuncallable);
 		List<Ladder> ladders = new ArrayList<>();
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 			if (indirectCallArities.contains(arity)) {

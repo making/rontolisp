@@ -19,12 +19,13 @@ class AsdfSystemsTest {
 
 	// The component order the vendored alexandria.asd resolves to: package first, then
 	// the topological sort of its per-file :depends-on, modules staying contiguous.
+	/** The order SBCL 2.2.9's ASDF plans the vendored alexandria.asd in. */
 	private static final String[] ALEXANDRIA_FILES = { "alexandria-1/package.lisp", "alexandria-1/definitions.lisp",
 			"alexandria-1/binding.lisp", "alexandria-1/strings.lisp", "alexandria-1/conditions.lisp",
-			"alexandria-1/symbols.lisp", "alexandria-1/macros.lisp", "alexandria-1/hash-tables.lisp",
-			"alexandria-1/control-flow.lisp", "alexandria-1/functions.lisp", "alexandria-1/lists.lisp",
-			"alexandria-1/types.lisp", "alexandria-1/arrays.lisp", "alexandria-1/sequences.lisp",
-			"alexandria-1/numbers.lisp", "alexandria-1/features.lisp", "alexandria-1/io.lisp",
+			"alexandria-1/symbols.lisp", "alexandria-1/macros.lisp", "alexandria-1/functions.lisp",
+			"alexandria-1/lists.lisp", "alexandria-1/types.lisp", "alexandria-1/io.lisp",
+			"alexandria-1/hash-tables.lisp", "alexandria-1/control-flow.lisp", "alexandria-1/arrays.lisp",
+			"alexandria-1/sequences.lisp", "alexandria-1/numbers.lisp", "alexandria-1/features.lisp",
 			"alexandria-2/package.lisp", "alexandria-2/arrays.lisp", "alexandria-2/control-flow.lisp",
 			"alexandria-2/sequences.lisp", "alexandria-2/lists.lisp" };
 
@@ -112,13 +113,18 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void componentDependsOnReordersFiles() {
+	void componentDependsOnReordersFilesInAsdfPlanOrder() {
+		// ASDF's plan: definition order, each component after its dependencies, depth
+		// first -- so "debug", declaring none, still loads after "api" (arnesi's
+		// debug.lisp
+		// opens with an in-package of the package "api"'s dependencies define).
 		AsdfSystems.LispSystem system = parse("""
 				(asdf:defsystem :lib
 				  :components ((:file "api" :depends-on ("core" "util"))
 				               (:file "core" :depends-on ("util"))
+				               (:file "debug" :depends-on ())
 				               (:file "util")))""");
-		assertThat(system.files()).containsExactly("util.lisp", "core.lisp", "api.lisp");
+		assertThat(system.files()).containsExactly("util.lisp", "core.lisp", "api.lisp", "debug.lisp");
 	}
 
 	@Test
@@ -174,11 +180,13 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void longNameIsToleratedMetadata() {
-		// array-operations.asd carries :long-name beside :homepage and :bug-tracker.
+	void longNameAndPropertiesAreToleratedMetadata() {
+		// array-operations.asd carries :long-name beside :homepage and :bug-tracker;
+		// arnesi.asd (djula's cl-locale dependency) a :properties list.
 		AsdfSystems.LispSystem system = parse("""
 				(asdf:defsystem :lib
 				  :long-name "A library with a long name"
+				  :properties ((:features "v1.4.0" "cc-interpreter"))
 				  :depends-on ("alexandria"))""");
 		assertThat(system.dependsOn()).containsExactly("alexandria");
 	}
@@ -557,12 +565,12 @@ class AsdfSystemsTest {
 			assertThat(systems).hasSize(1);
 			assertThat(systems.get(0).dependsOn()).containsExactly("split-sequence", "closer-mop", "cl-ppcre",
 					"bordeaux-threads");
-			assertThat(systems.get(0).files()).containsExactly("src/utils.lisp", "src/cache/thread.lisp",
-					"src/logger.lisp", "src/error.lisp", "src/driver.lisp", "src/dbi.lisp");
+			assertThat(systems.get(0).files()).containsExactly("src/utils.lisp", "src/error.lisp", "src/driver.lisp",
+					"src/cache/thread.lisp", "src/logger.lisp", "src/dbi.lisp");
 		}
 		List<AsdfSystems.LispSystem> wasmSystems = loadAsd(source, "sw/dbi.asd", Features.WASM);
-		assertThat(wasmSystems.get(0).files()).containsExactly("src/utils.lisp", "src/cache/single.lisp",
-				"src/logger.lisp", "src/error.lisp", "src/driver.lisp", "src/dbi.lisp");
+		assertThat(wasmSystems.get(0).files()).containsExactly("src/utils.lisp", "src/error.lisp", "src/driver.lisp",
+				"src/cache/single.lisp", "src/logger.lisp", "src/dbi.lisp");
 	}
 
 	@Test

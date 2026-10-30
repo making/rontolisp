@@ -12,9 +12,10 @@ import am.ik.rontolisp.LispVal;
  * A readtable as the lexer reads with it ({@code .kb/readtables.md}): the case a token's
  * unescaped letters are converted by, and the characters whose syntax differs from the
  * standard one, with the evaluator that calls a reader macro function. The interpreter
- * builds one per read from the current {@code *readtable*}
- * ({@code eval/ReadtableSyntax}); a read without one -- every compile-path source read,
- * and the interpreter's own under the standard readtable -- reads the standard syntax.
+ * builds one per read from the current {@code *readtable*}, and the compile path's
+ * read-time image from the one its compile-time evaluator holds
+ * ({@code eval/ReadtableSyntax}, {@code eval/ReadTimeImage}); a read without one -- under
+ * the standard readtable -- reads the standard syntax.
  */
 public final class ReadSyntax {
 
@@ -151,6 +152,34 @@ public final class ReadSyntax {
 	 * @param end the UTF-16 offset it left the input at
 	 */
 	public record Result(@Nullable LispVal value, int end) {
+	}
+
+	/**
+	 * Thrown by an {@link Invoker} that refuses a call -- the compile path's, for a value
+	 * no compiled program can carry as a literal or a function that signalled: the reader
+	 * reports it as a read error at the macro character.
+	 */
+	public static final class Refusal extends RuntimeException {
+
+		private static final long serialVersionUID = 1L;
+
+		/**
+		 * A refusal.
+		 * @param message what was refused
+		 */
+		public Refusal(String message) {
+			super(message);
+		}
+
+		/**
+		 * A refusal of a call that failed.
+		 * @param message what was refused
+		 * @param cause the failure
+		 */
+		public Refusal(String message, Throwable cause) {
+			super(message, cause);
+		}
+
 	}
 
 	private final Case caseMode;

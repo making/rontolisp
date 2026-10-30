@@ -1149,6 +1149,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A quoted designator of a wrapped built-in becomes #'name before any wrapper
 		// gate scans the program for that spelling (compiler/FunctionDesignators).
 		program = am.ik.rontolisp.compiler.FunctionDesignators.normalizeBuiltinDesignators(program);
+		// The car/cdr compositions only quoted data names get a named wrapper below,
+		// decided over the program as written.
+		Set<String> dataCalledNames = am.ik.rontolisp.compiler.FunctionDesignators.dataCalledNames(program);
 		// The printer's accessibility table (.kb/pretty-printer.md): baked from the
 		// final registry over the resolved program, only for a program that can print
 		// under a package other than cl-user -- every other program keeps its raw
@@ -2106,9 +2109,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// gate for every program in the world -- (print 1) included.
 		Set<String> designated = BuiltinFunctionWrappers.functionDesignatorNames(program);
 		designated.addAll(BuiltinFunctionWrappers.functionDesignatorNames(closRegistry.conditionReports().values()));
-		for (String op : List.of(LispNames.COMPLEX, LispNames.CONJUGATE, LispNames.SQRT, LispNames.PHASE,
-				LispNames.UPGRADED_COMPLEX_PART_TYPE, LispNames.CIS, LispNames.ASINH, LispNames.ACOSH, LispNames.ATANH,
-				LispNames.LOG, LispNames.ASIN, LispNames.ACOS, LispNames.EXPT)) {
+		for (String op : BuiltinFunctionWrappers.COMPLEX_GATED_FUNCTIONS) {
 			if (!designated.contains(op)) {
 				wrapperExcludes.add(op);
 			}
@@ -2119,7 +2120,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				closRegistry.conditionReports().values());
 		wrapperExcludes.addAll(linkedWrappers);
 		List<LispVal> wrappers = am.ik.rontolisp.compiler.FunctionValueWrappers.generate(userDefinedNames,
-				wrapperExcludes);
+				wrapperExcludes, dataCalledNames);
 		if (LispMacroExpander.declaresMvSpill(program)) {
 			// A wrapper is a function body like any other: its tail settles the
 			// multiple-value channel (the defuns' tails were settled by
@@ -3745,6 +3746,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		java.util.Collections.sort(funcrefIds);
 		boolean needsFuncRef = !funcrefIds.isEmpty() || mainCtx.computedFunctionBox[0];
+		// A funcallable instance is called through the function installed in it: only a
+		// program defining a funcallable class gets the classification arm, in the
+		// dispatchers and in _apply.
+		List<String> funcallableTags = mayUseInstances ? closRegistry.funcallableTags() : List.of();
 		if (needsLookup) {
 			MethodRefEntry evalRef = cp.methodRef(thisClass, evalName, evalDesc);
 			MethodRefEntry applyRef = cp.methodRef(thisClass, applyName, evalDesc);
@@ -3802,6 +3807,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						: null)
 				.arityOperators(arityOperators)
 				.fenvForwarders(fenvForwarders)
+				.funcallableTags(funcallableTags)
 				.thisClass(thisClass)
 				.globalAccessRef(evalRunsForms ? globalAccessRef(functions) : null)
 				.build();
@@ -3889,7 +3895,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						lambdaFuncInfos, cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass,
 						stringClass, applyRefForDispatch, lookupRefForDispatch, namespaceForDispatch, false,
 						JvmRuntimeBuilder.dispatcherName(arity, false), false, funcIds, arityReporting,
-						mainCtx.unsupplied, foreignRange.get());
+						mainCtx.unsupplied, foreignRange.get(), funcallableTags);
 				built.addAll(shared);
 				// A value tail's real call goes through a copy of its arity's
 				// dispatcher, whose profile holds only what value tails reach. An arity
@@ -3900,7 +3906,7 @@ public final class JvmLispCompiler implements LispCompiler {
 							cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
 							applyRefForDispatch, lookupRefForDispatch, namespaceForDispatch, false,
 							JvmTailBounce.valueTailDispatcherName(arity), true, funcIds, arityReporting,
-							mainCtx.unsupplied, foreignRange.get()));
+							mainCtx.unsupplied, foreignRange.get(), funcallableTags));
 					valueTailCopies.add(arity);
 				}
 			}
@@ -3912,7 +3918,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
 						applyRefForDispatch, lookupRefForDispatch, namespaceForDispatch, true,
 						JvmRuntimeBuilder.dispatcherName(0, true), false, funcIds, arityReporting, mainCtx.unsupplied,
-						foreignRange.get()));
+						foreignRange.get(), funcallableTags));
 			}
 			return built;
 		};

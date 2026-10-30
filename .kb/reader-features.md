@@ -257,10 +257,10 @@ Traps:
   the original name); `PackageResolver.resolveSymbol` passes it through, `designator` and
   `AsdfSystems.designator`/`symbolName` strip it.
 - **`#N@(...)`** (ironclad) reads like `#(...)`, element width dropped. Native in `LispLexer`
-  because the compile paths read source with the standard syntax: a user dispatch macro runs
-  only in the interpreter's reader ([readtables.md](readtables.md)), which keeps `#N@` and `#L`
-  native too, whatever function the readtable holds for them. **Any OTHER user dispatch
-  character is honored on the interpreter and silently not on the compile paths.**
+  whatever function the readtable holds for it, on both read paths
+  ([readtables.md](readtables.md)): a reader macro called inside a backquote template cannot
+  read the template's commas yet. Any other user dispatch character is honored on every
+  backend (the compile paths since h57, through the compile-time evaluator).
 - **`#L(...)` / `#nL(...)`** (iterate): a lambda with positional `!1`, `!2`, ... arguments; native
   for the same reason (without it `#L!2` lexes as ONE symbol). Arity is the highest `!n` mentioned
   unless `#nL` spells it out (a smaller count is a read error); a datum whose first element is a

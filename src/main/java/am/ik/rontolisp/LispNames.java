@@ -6003,6 +6003,15 @@ public final class LispNames {
 	public static final String END_FILE = "%END-FILE";
 
 	/**
+	 * The run-time stack ({@code rontolisp::%load-readtables}) of the readtables current
+	 * as each open {@link #BEGIN_FILE} level began: a program that mentions
+	 * {@link #READTABLE_VAR} pushes onto it at a file's start and pops it back at the
+	 * file's end, the binding {@code load} makes on the interpreter
+	 * ({@code LispMacroExpander.lowerLoadContextMarkers}).
+	 */
+	public static final String LOAD_READTABLES_INTERNAL = "%LOAD-READTABLES";
+
+	/**
 	 * Internal marker {@code (%asdf-component "SYSTEM" INDEX)} inserted by
 	 * {@code LoadInliner} before the forms it splices for one COMPONENT of an ASDF system
 	 * (the file or leaf shim at {@code INDEX} of the system's load order). The compilers
@@ -10847,6 +10856,12 @@ public final class LispNames {
 
 	/** {@code closer-mop:slot-definition-initform} ({@code %obj-ref} index 2). */
 	public static final String SLOT_DEFINITION_INITFORM = "SLOT-DEFINITION-INITFORM";
+
+	/**
+	 * {@code closer-mop:set-funcallable-instance-function}: installs the function a
+	 * funcallable instance calls ({@code LispLayout.FUNCALLABLE_CELL}).
+	 */
+	public static final String SET_FUNCALLABLE_INSTANCE_FUNCTION = "SET-FUNCALLABLE-INSTANCE-FUNCTION";
 
 	/** {@code closer-mop:class-direct-slots} over a class metaobject (index 2). */
 	public static final String CLASS_DIRECT_SLOTS = "CLASS-DIRECT-SLOTS";

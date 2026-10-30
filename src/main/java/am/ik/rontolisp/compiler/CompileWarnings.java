@@ -223,4 +223,27 @@ public final class CompileWarnings {
 		PENDING.remove();
 	}
 
+	/**
+	 * Runs work whose warnings belong to no attempt -- the compile path's read-time image
+	 * ({@code eval/ReadTimeImage}), whose forms the macro-time pass processes again and
+	 * reports -- so nothing it emits is printed or counted. An attempt open around it is
+	 * left as it was.
+	 * @param work the work
+	 */
+	public static void discarding(Runnable work) {
+		Map<String, Boolean> open = PENDING.get();
+		PENDING.set(new LinkedHashMap<>());
+		try {
+			work.run();
+		}
+		finally {
+			if (open == null) {
+				PENDING.remove();
+			}
+			else {
+				PENDING.set(open);
+			}
+		}
+	}
+
 }

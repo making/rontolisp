@@ -652,6 +652,46 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void aLoadedFileReadsWithTheReadtableItsEvalWhenInstallsAtCompileTime() throws Exception {
+		// A source that can change how source reads is read a form at a time, each form
+		// with the readtable the compile-time evaluation of the forms before it left
+		// (.kb/readtables.md): the reader macro runs at compile time, the symbol it reads
+		// is the file's package's, the property the eval-when set is there -- and the
+		// readtable dies with the file, at compile time (the entry reads '@tag as a
+		// symbol) and at run time (get-macro-character).
+		Map<String, String> files = Map.of("rt.lisp", """
+				(defpackage :rt-demo (:use :cl))
+				(in-package :rt-demo)
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (setf (get 'tag 'arity) 2)
+				  (setf *readtable* (copy-readtable nil))
+				  (set-macro-character #\\@ (lambda (s c) (declare (ignore c))
+				                              (let ((name (read s t nil t)))
+				                                (list 'quote (list name (get name 'arity)))))))
+				(defparameter cl-user::*annotated* @tag)
+				""");
+		List<LispVal> loaded = LoadInliner.inlineSource(
+				"(load \"rt.lisp\") (print (list *annotated* (get-macro-character #\\@) '@tag))", loaderOf(files), null,
+				List.of(), Features.JVM, DistClient.createDefault(), SourceStandards.DEFAULT, "main.lisp");
+		List<LispVal> program = CompileFrontend
+			.expand(new CompileFrontend.Loaded(loaded, Features.JVM), CompileFrontend.Options.builder().build())
+			.program();
+		byte[] classBytes = new JvmLispCompiler("TestLoadedReadtable").compile(program);
+		assertThat(runMain(classBytes, "TestLoadedReadtable")).isEqualTo("((RT-DEMO::TAG 2) NIL @TAG)");
+		// What a reader macro function answers becomes part of a compiled form, so a
+		// value with no literal form is a read error at its character.
+		assertThatThrownBy(() -> LoadInliner.inlineSource("""
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (set-macro-character #\\$ (lambda (s c) (declare (ignore s c)) (make-hash-table))))
+				(print $)
+				""", loaderOf(Map.of()), null, List.of(), Features.JVM, DistClient.createDefault(),
+				SourceStandards.DEFAULT, "main.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("main.lisp:3:")
+			.hasMessageContaining("cannot carry as a literal");
+	}
+
+	@Test
 	void aLoadPathBuiltFromTheLoadContextSplicesLikeALiteral() {
 		// The portable spelling of a relative load: merged onto the loading file's
 		// truename, which the compiler knows -- in the entry file and in every spliced

@@ -548,14 +548,64 @@ public final class ClosRegistry {
 	 * @param typeName the type-specifier name as spelled
 	 */
 	public void ensureMopClassesSeededFor(String typeName) {
-		if (this.mopClassesSeeded) {
+		if (this.mopClassesSeeded && this.funcallableClassesSeeded) {
 			return;
 		}
 		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(typeName);
-		String member = qualified == null ? typeName : qualified.member();
-		if (MOP_BASE_CLASS_NAMES.contains(member.toUpperCase(java.util.Locale.ROOT))) {
+		String member = (qualified == null ? typeName : qualified.member()).toUpperCase(java.util.Locale.ROOT);
+		if (FUNCALLABLE_CLASS_NAMES.contains(member)) {
+			ensureFuncallableClassesSeeded();
+		}
+		else if (MOP_BASE_CLASS_NAMES.contains(member)) {
 			ensureMopClassesSeeded();
 		}
+	}
+
+	/**
+	 * Seeds the two funcallable MOP classes over the MOP base classes:
+	 * {@code funcallable-standard-object}, whose descendants are FUNCALLABLE instances
+	 * (their layout reserves {@link LispLayout#FUNCALLABLE_CELL}, see
+	 * {@link #registerClass}), and the metaclass {@code funcallable-standard-class} under
+	 * {@code standard-class}, which makes a {@code defclass} default its superclass list
+	 * to the former. Idempotent, and lazier still than {@link #ensureMopClassesSeeded}:
+	 * run only where a program names one of the two ({@link #ensureMopClassesSeededFor},
+	 * a {@code defclass} naming either), so no other MOP program's tables change.
+	 */
+	public void ensureFuncallableClassesSeeded() {
+		if (this.funcallableClassesSeeded) {
+			return;
+		}
+		ensureMopClassesSeeded();
+		this.funcallableClassesSeeded = true;
+		seedClass(FUNCALLABLE_STANDARD_OBJECT_NAME, null);
+		seedClass(FUNCALLABLE_STANDARD_CLASS_NAME, STANDARD_CLASS_NAME);
+	}
+
+	/**
+	 * Whether {@link #ensureFuncallableClassesSeeded()} has run.
+	 * @return true once the funcallable classes are registered
+	 */
+	public boolean funcallableClassesSeeded() {
+		return this.funcallableClassesSeeded;
+	}
+
+	/**
+	 * The instance tags of every registered funcallable layout, in registration order:
+	 * what a compiled call through a value and {@code functionp} test an instance
+	 * against. Empty for every program defining no funcallable class.
+	 * @return the tags
+	 */
+	public List<String> funcallableTags() {
+		if (!this.funcallableClassesSeeded) {
+			return List.of();
+		}
+		List<String> tags = new java.util.ArrayList<>();
+		for (LispLayout layout : this.layoutsByTag.values()) {
+			if (layout.funcallable()) {
+				tags.add(layout.tag());
+			}
+		}
+		return tags;
 	}
 
 	/**
@@ -897,6 +947,39 @@ public final class ClosRegistry {
 	 * {@code class-slots} entries from. Layout: {@link #SLOT_DEFINITION_NAME}'s.
 	 */
 	public static final String STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME = "STANDARD-EFFECTIVE-SLOT-DEFINITION";
+
+	/** The {@code closer-mop} symbol naming {@link #FUNCALLABLE_STANDARD_OBJECT_NAME}. */
+	public static final String FUNCALLABLE_STANDARD_OBJECT = "FUNCALLABLE-STANDARD-OBJECT";
+
+	/** The {@code closer-mop} symbol naming {@link #FUNCALLABLE_STANDARD_CLASS_NAME}. */
+	public static final String FUNCALLABLE_STANDARD_CLASS = "FUNCALLABLE-STANDARD-CLASS";
+
+	/**
+	 * The seeded root of the funcallable instances (AMOP's
+	 * {@code funcallable-standard-object}): slot-less, and every class descending from it
+	 * gets a funcallable layout ({@link LispLayout#funcallable()}). Registered under its
+	 * {@code closer-mop} name, like {@link #JAVA_EXCEPTION_CLASS_NAME} under its
+	 * package's, so a compiled {@code find-class} of the symbol a program spells matches
+	 * one of the class's spellings.
+	 */
+	public static final String FUNCALLABLE_STANDARD_OBJECT_NAME = LispNames.CLOSER_MOP_PKG + "::"
+			+ FUNCALLABLE_STANDARD_OBJECT;
+
+	/**
+	 * The seeded metaclass of funcallable classes, a slot-less child of
+	 * {@link #STANDARD_CLASS_NAME}: a {@code defclass} naming it (or a metaclass
+	 * descending from it) as its {@code :metaclass} gets
+	 * {@link #FUNCALLABLE_STANDARD_OBJECT_NAME} among its superclasses.
+	 */
+	public static final String FUNCALLABLE_STANDARD_CLASS_NAME = LispNames.CLOSER_MOP_PKG + "::"
+			+ FUNCALLABLE_STANDARD_CLASS;
+
+	/**
+	 * The member names of the classes {@link #ensureFuncallableClassesSeeded()}
+	 * registers.
+	 */
+	private static final List<String> FUNCALLABLE_CLASS_NAMES = List.of(FUNCALLABLE_STANDARD_OBJECT,
+			FUNCALLABLE_STANDARD_CLASS);
 
 	/** The classes {@link #ensureMopClassesSeeded()} registers, in seeding order. */
 	private static final List<String> MOP_BASE_CLASS_NAMES = List.of(CLASS_NAME, STANDARD_CLASS_NAME,
@@ -1603,6 +1686,9 @@ public final class ClosRegistry {
 
 	/** Whether {@link #ensureMopClassesSeeded()} has run. */
 	private boolean mopClassesSeeded;
+
+	/** Whether {@link #ensureFuncallableClassesSeeded()} has run. */
+	private boolean funcallableClassesSeeded;
 
 	/**
 	 * Registers the class a {@link #findClass} lookup missed when a lazily loaded library
@@ -2905,7 +2991,13 @@ public final class ClosRegistry {
 		// the instance shape can never disagree with the slot list it was built from.
 		LispLayout layout = LispLayout.ofClass(info.name(), info.slots().stream().map(SlotSpec::baseName).toList(),
 				info.slots().stream().map(SlotSpec::initform).toList());
-		if (info.ancestors().contains(GRAY_INPUT_STREAM_KEY)) {
+		if (info.ancestors().contains(FUNCALLABLE_STANDARD_OBJECT_NAME)) {
+			// The function cell (LispLayout.FUNCALLABLE_CELL) and the tail cell, past
+			// the declared slots; a funcallable Gray input stream parks its pushback in
+			// the tail one.
+			layout = layout.asFuncallable();
+		}
+		else if (info.ancestors().contains(GRAY_INPUT_STREAM_KEY)) {
 			// The unread-char pushback cell (LispLayout.TAIL_CELL), past the declared
 			// slots so no printer, equal or slot listing sees it.
 			layout = layout.withCapacity(layout.slotCount() + 1);

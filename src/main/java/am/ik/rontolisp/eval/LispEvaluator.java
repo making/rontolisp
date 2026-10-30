@@ -1808,6 +1808,7 @@ public final class LispEvaluator {
 			}
 			boolean errorp = args.size() < 2 || !(args.get(1) instanceof LispNil);
 			if (args.get(0) instanceof LispSymbol sym) {
+				this.closRegistry.ensureMopClassesSeededFor(sym.name());
 				LispVal metaobject = this.closRegistry.classMetaobject(sym.name());
 				if (metaobject == null) {
 					// The built-in classes (integer, string, ..., t) exist too, so
@@ -4531,6 +4532,32 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * {@link #currentReadSyntax()} for a read whose forms are COMPILED rather than run
+	 * here -- the compile path's ({@code ReadTimeImage}): a reader macro function still
+	 * runs in this evaluator, and {@code check} judges what it answered before the value
+	 * becomes part of a form. A function that signals is a read error at its character,
+	 * as the compile reports it.
+	 * @param check answers the call's result, or throws {@link ReadSyntax.Refusal}
+	 * @return the syntax, or {@code null} for the standard one
+	 */
+	@Nullable ReadSyntax currentReadSyntax(java.util.function.UnaryOperator<ReadSyntax.Result> check) {
+		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
+		return readtable == null ? null : ReadtableSyntax.of(readtable, (function, input, offset, arguments) -> {
+			ReadSyntax.Result result;
+			try {
+				result = callReaderMacro(function, input, offset, arguments);
+			}
+			catch (ReadSyntax.Refusal refusal) {
+				throw refusal;
+			}
+			catch (RuntimeException ex) {
+				throw new ReadSyntax.Refusal("the reader macro function signalled: " + ex.getMessage(), ex);
+			}
+			return check.apply(result);
+		});
+	}
+
+	/**
 	 * Calls a reader macro function over the text being read: a string input stream
 	 * positioned where the macro character left the text is its first argument, and where
 	 * the function left that stream is where the read goes on.
@@ -4684,6 +4711,23 @@ public final class LispEvaluator {
 	public void popLoadContext() {
 		this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
 		this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
+	}
+
+	/**
+	 * Binds {@code *readtable*} to its current value for a file whose forms this
+	 * evaluator is about to process -- the binding {@link #loadFile} makes around a file
+	 * it reads (CLHS {@code load}), for the compile path's macro-time pass, which crosses
+	 * a spliced file's {@code (%begin-file P T)} bracket instead: an {@code in-readtable}
+	 * inside the file is the file's ({@code .kb/readtables.md}).
+	 */
+	void pushReadtableBinding() {
+		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
+		this.dynamicBindings.push(LispNames.READTABLE_VAR, readtable == null ? LispNil.INSTANCE : readtable);
+	}
+
+	/** Undoes one {@link #pushReadtableBinding}. */
+	void popReadtableBinding() {
+		this.dynamicBindings.pop(LispNames.READTABLE_VAR);
 	}
 
 	/**
@@ -10275,6 +10319,9 @@ public final class LispEvaluator {
 		if (LispMacroExpander.defclassNamesMopBaseSuperclass(cons)) {
 			this.closRegistry.ensureMopClassesSeeded();
 		}
+		// A funcallable MOP class named as the metaclass or a superclass registers
+		// first, so the protocol below loads with its constructor.
+		LispMacroExpander.seedMopClassesNamedBy(cons, this.closRegistry);
 		if (LispMacroExpander.defclassUsesMetaclass(cons)) {
 			ensureMopProtocolLoaded();
 		}
@@ -16035,6 +16082,12 @@ public final class LispEvaluator {
 				}
 			}
 			return resume.get();
+		}
+		if (function instanceof LispInstance instance && instance.funcallableFunction() instanceof LispVal installed
+				&& (installed instanceof LispFunction || installed instanceof LispLambda)) {
+			// A funcallable instance calls the function installed in it
+			// (closer-mop:set-funcallable-instance-function).
+			return apply(installed, args, env);
 		}
 		// Not a designator at all: CL's type-error. NIL and T ARE symbols, so each is the
 		// undefined-function the symbol arm above reports for any unbound name.

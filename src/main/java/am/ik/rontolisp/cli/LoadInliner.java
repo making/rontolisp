@@ -26,6 +26,7 @@ import am.ik.rontolisp.eval.AsdfSystems;
 import am.ik.rontolisp.eval.BuiltinSystems;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.ReadTimeImage;
 import am.ik.rontolisp.eval.ShimLibraries;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
@@ -211,13 +212,54 @@ public final class LoadInliner {
 	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
 			List<String> systemPath, Features features, DistClient dists, SourceStandards standards,
 			@Nullable String entryFile) {
+		return inline((ctx, out) -> FormSource.of(program), loader, baseDir, systemPath, features, dists, standards,
+				entryFile);
+	}
+
+	/**
+	 * Reads Common Lisp source and inlines it as
+	 * {@link #inline(List, SourceLoader, String, List, Features, DistClient, SourceStandards, String)}
+	 * does a program read beforehand -- except that the source, like every file it loads,
+	 * is read a FORM AT A TIME, each form with the readtable the forms before it left at
+	 * compile time ({@link ReadTimeImage}, {@code .kb/readtables.md}).
+	 * @param source the entry program text
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source, or {@code null}
+	 * @param systemPath extra directories searched for {@code NAME.asd} files
+	 * @param features the reader features, the entry's and the loaded files'
+	 * @param dists the dist downloader behind {@code ql:quickload}
+	 * @param standards what loaded files are read against ({@code --scheme-standard})
+	 * @param entryFile the file the program was read from, or {@code null} for a program
+	 * that is no file's (standard input, {@code -e}, a generated program)
+	 * @return the program with top-level {@code load}/system forms inlined
+	 */
+	public static List<LispVal> inlineSource(String source, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath, Features features, DistClient dists, SourceStandards standards,
+			@Nullable String entryFile) {
+		return inline((ctx, out) -> read(SourceLanguage.COMMON_LISP, source, entryFile, ctx, out), loader, baseDir,
+				systemPath, features, dists, standards, entryFile);
+	}
+
+	/** Opens the entry program's forms once the inlining's state exists. */
+	@FunctionalInterface
+	private interface EntryForms {
+
+		FormSource open(Ctx ctx, List<LispVal> out);
+
+	}
+
+	private static List<LispVal> inline(EntryForms entry, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath, Features features, DistClient dists, SourceStandards standards,
+			@Nullable String entryFile) {
 		List<LispVal> result = new ArrayList<>();
 		// The system registry and the loaded set are insertion-ordered: the baked
 		// %asdf-registry% (AsdfRuntimeLibrary) is emitted from them, and the emitted
 		// program must be deterministic (.kb/emitted-output-determinism.md).
 		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new java.util.LinkedHashMap<>(), new HashMap<>(),
 				new java.util.LinkedHashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, dists,
-				new java.util.concurrent.atomic.AtomicInteger(), baseDir, standards, new BuildImage(features));
+				new java.util.concurrent.atomic.AtomicInteger(), baseDir, standards, new BuildImage(features),
+				new Reading());
+		FormSource program = entry.open(ctx, result);
 		if (entryFile == null) {
 			expandInto(program, result, ctx, new Origin(baseDir, null, null));
 		}
@@ -258,7 +300,61 @@ public final class LoadInliner {
 			Map<String, AsdfSystems.LispSystem> systems, Map<String, String> systemPackages, Set<String> loadedSystems,
 			Deque<String> loadingSystems, List<String> systemPath, Features features, DistClient dists,
 			java.util.concurrent.atomic.AtomicInteger quickloadDepth, @Nullable String entryBaseDir,
-			SourceStandards standards, BuildImage buildImage) {
+			SourceStandards standards, BuildImage buildImage, Reading reading) {
+	}
+
+	/**
+	 * The read-time image the files are read with once one of them can change how source
+	 * reads ({@link ReadTimeImage}); {@code null} until then.
+	 */
+	private static final class Reading {
+
+		@Nullable private ReadTimeImage image;
+
+	}
+
+	/**
+	 * The top-level forms of one file, as {@link #expandInto} takes them: read
+	 * beforehand, or read one at a time as they are taken.
+	 */
+	@FunctionalInterface
+	private interface FormSource {
+
+		/**
+		 * The next form.
+		 * @return the form, or {@code null} after the last one
+		 */
+		@Nullable LispVal next();
+
+		static FormSource of(List<LispVal> forms) {
+			java.util.Iterator<LispVal> iterator = forms.iterator();
+			return () -> iterator.hasNext() ? iterator.next() : null;
+		}
+
+	}
+
+	/**
+	 * Reads one file's forms. Common Lisp source is read a form at a time: once a file
+	 * that can change how source reads has opened the image
+	 * ({@link ReadTimeImage#changesSyntax}), each form is read with the syntax the image
+	 * holds after the forms spliced before it -- the rest of a file already being read
+	 * included, which is why no file is read whole beforehand. Another language's file is
+	 * lowered whole.
+	 */
+	private static FormSource read(SourceLanguage language, String source, @Nullable String path, Ctx ctx,
+			List<LispVal> out) {
+		if (language != SourceLanguage.COMMON_LISP) {
+			return FormSource.of(language.read(source, ctx.features(), path, ctx.standards(), ctx.loader()));
+		}
+		Reading reading = ctx.reading();
+		if (reading.image == null && ReadTimeImage.changesSyntax(source)) {
+			reading.image = new ReadTimeImage();
+		}
+		SourceLanguage.Forms forms = SourceLanguage.readForms(source, ctx.features(), path);
+		return () -> {
+			ReadTimeImage image = reading.image;
+			return forms.next(image == null ? null : image.syntax(out));
+		};
 	}
 
 	/**
@@ -301,9 +397,22 @@ public final class LoadInliner {
 	private record Origin(@Nullable String baseDir, @Nullable String pathname, @Nullable String truename) {
 	}
 
-	private static void expandInto(List<LispVal> forms, List<LispVal> out, Ctx ctx, Origin origin) {
+	private static void expandInto(FormSource forms, List<LispVal> out, Ctx ctx, Origin origin) {
+		expandInto(forms, out, ctx, origin, null);
+	}
+
+	/**
+	 * Expands one file's forms into {@code out}; a spliced file's {@code bracket} gets
+	 * the package save marker in front of its first {@code in-package}.
+	 */
+	private static void expandInto(FormSource forms, List<LispVal> out, Ctx ctx, Origin origin,
+			@Nullable PackageBracket bracket) {
 		String baseDir = origin.baseDir();
-		for (LispVal form : forms) {
+		for (LispVal form = forms.next(); form != null; form = forms.next()) {
+			if (bracket != null && !bracket.pushed && selectsAPackage(List.of(form))) {
+				out.add(marker(LispNames.PUSH_PACKAGE));
+				bracket.pushed = true;
+			}
 			if (WitImportDirective.isDirective(form)) {
 				// A wit-import names its .wit relative to the file that WRITES it, like
 				// load. Splicing flattens every file into one program, though, so by the
@@ -495,21 +604,19 @@ public final class LoadInliner {
 		// error is prefixed with this file's path, so a spliced library's stray paren
 		// names its own line, not a line of the flattened entry program. The read is
 		// the source-language seam's, picked by THIS file's extension, so one program
-		// may mix languages file by file.
-		List<LispVal> forms = SourceLanguage.forFile(path, null)
-			.read(source, ctx.features(), path, ctx.standards(), ctx.loader());
+		// may mix languages file by file -- and Common Lisp a form at a time (read).
+		FormSource forms = read(SourceLanguage.forFile(path, null), source, path, ctx, out);
 		// A file that selects a package with a top-level (in-package ...) must not leak
-		// it
-		// past the load: bracket the spliced forms with package save/restore markers so
-		// the
-		// PackageResolver (and, ahead of it, UserMacroExpander's resolver) restores the
-		// caller's package after the file -- at resolution time AND, through the
-		// (setq *package* ...) the pop marker resolves to, at run time -- mirroring
-		// Common Lisp binding *package* for the
-		// duration of load. Files that never change the package (the common case -- a
-		// plain
+		// it past the load: the spliced forms are bracketed with package save/restore
+		// markers so the PackageResolver (and, ahead of it, UserMacroExpander's
+		// resolver) restores the caller's package after the file -- at resolution time
+		// AND, through the (setq *package* ...) the pop marker resolves to, at run time
+		// -- mirroring Common Lisp binding *package* for the duration of load. The save
+		// goes in front of the file's first in-package (expandInto), which the form at a
+		// time read meets only then; until then the package is the caller's, so it saves
+		// the same one. Files that never change the package (the common case -- a plain
 		// file of defuns) are spliced verbatim, so their output is unchanged.
-		boolean bracket = selectsAPackage(forms);
+		PackageBracket bracket = new PackageBracket();
 		// The load context of the file, for the two variables the interpreter binds
 		// around the same file: the spelling load was called with and the path it
 		// resolved to. The bracket is emitted unconditionally and lowered (or dropped)
@@ -520,15 +627,22 @@ public final class LoadInliner {
 		// load runs from.
 		String truename = ctx.loader().canonicalPath(path);
 		out.add(beginFile(pathname, truename));
-		if (bracket) {
-			out.add(marker(LispNames.PUSH_PACKAGE));
-		}
-		expandInto(forms, out, ctx, new Origin(SourceLoader.parentDir(path), pathname, truename));
-		if (bracket) {
+		expandInto(forms, out, ctx, new Origin(SourceLoader.parentDir(path), pathname, truename), bracket);
+		if (bracket.pushed) {
 			out.add(marker(LispNames.POP_PACKAGE));
 		}
 		out.add(marker(LispNames.END_FILE));
 		ctx.loading().removeLast();
+	}
+
+	/**
+	 * Whether a spliced file's package save marker has been emitted
+	 * ({@link #spliceFile}).
+	 */
+	private static final class PackageBracket {
+
+		private boolean pushed;
+
 	}
 
 	/**
@@ -665,7 +779,7 @@ public final class LoadInliner {
 				: new Ctx(ctx.loader(), ctx.loading(), ctx.provided(), ctx.systems(), ctx.systemPackages(),
 						ctx.loadedSystems(), ctx.loadingSystems(), ctx.systemPath(),
 						ctx.features().with(system.features()), ctx.dists(), ctx.quickloadDepth(), ctx.entryBaseDir(),
-						ctx.standards(), ctx.buildImage());
+						ctx.standards(), ctx.buildImage(), ctx.reading());
 		// Everything spliced from here on belongs to this system. A dependency opens its
 		// own bracket inside this one, so the pruner's innermost-wins rule attributes
 		// each

@@ -19992,6 +19992,8 @@ public final class LispMacroExpander {
 					throw new IllegalArgumentException(
 							LispNames.DEFCLASS + " expects a superclass name: " + cons.print());
 				}
+				// A funcallable MOP class registers when a program first names one.
+				closRegistry.ensureMopClassesSeededFor(superSym.name());
 				ClosRegistry.ClassInfo found = closRegistry.findClass(superSym.name());
 				if (found == null) {
 					throw new IllegalArgumentException(LispNames.DEFCLASS + ": unknown superclass " + superSym.name()
@@ -20007,8 +20009,6 @@ public final class LispMacroExpander {
 		else if (!(parts.get(2) instanceof LispNil)) {
 			throw new IllegalArgumentException(LispNames.DEFCLASS + " expects a superclass list: " + cons.print());
 		}
-		ClosRegistry.ClassInfo superInfo = superInfos.isEmpty() ? null : superInfos.get(0);
-		List<String> cpl = computeCpl(className, superInfos, closRegistry);
 		// Class options after the slot list: (:documentation "...") is accepted and
 		// ignored; (:default-initargs :initarg form ...) overrides the matching slots'
 		// constructor defaults (evaluated at make-instance time when the initarg is
@@ -20027,14 +20027,27 @@ public final class LispMacroExpander {
 					throw new IllegalArgumentException(
 							LispNames.DEFCLASS + " :metaclass expects a class name: " + cons.print());
 				}
+				closRegistry.ensureMopClassesSeededFor(metaclassSym.name());
 				ClosRegistry.ClassInfo metaclassInfo = closRegistry.findClass(metaclassSym.name());
 				if (metaclassInfo == null || !metaclassInfo.ancestors().contains(ClosRegistry.STANDARD_CLASS_NAME)) {
 					throw new IllegalArgumentException(LispNames.DEFCLASS + " :metaclass must name a class inheriting "
 							+ "standard-class, defined before its first use: " + metaclassSym.name());
 				}
 				metaclassName = metaclassInfo.name();
+				if (metaclassInfo.ancestors().contains(ClosRegistry.FUNCALLABLE_STANDARD_CLASS_NAME)
+						&& superInfos.stream()
+							.noneMatch(s -> s.ancestors().contains(ClosRegistry.FUNCALLABLE_STANDARD_OBJECT_NAME))) {
+					// AMOP: a funcallable-standard-class's instances are funcallable,
+					// and its default superclass is funcallable-standard-object.
+					// Appended, so a declared first superclass keeps the layout prefix;
+					// the driver call below hands it on to the metaobject too.
+					superInfos.add(java.util.Objects
+						.requireNonNull(closRegistry.findClass(ClosRegistry.FUNCALLABLE_STANDARD_OBJECT_NAME)));
+				}
 			}
 		}
+		ClosRegistry.ClassInfo superInfo = superInfos.isEmpty() ? null : superInfos.get(0);
+		List<String> cpl = computeCpl(className, superInfos, closRegistry);
 		for (int i = 4; i < parts.size(); i++) {
 			if (parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
 					&& (":DOCUMENTATION".equals(plainTypeName(optSym)) || ":METACLASS".equals(plainTypeName(optSym)))) {
@@ -20557,7 +20570,9 @@ public final class LispMacroExpander {
 					continue;
 				}
 				String member = memberOf(nameSym.name());
-				if ("STANDARD-OBJECT".equals(member)) {
+				// The defaults expandDefclass supplies by itself: standard-object, and
+				// funcallable-standard-object under a funcallable metaclass.
+				if ("STANDARD-OBJECT".equals(member) || ClosRegistry.FUNCALLABLE_STANDARD_OBJECT.equals(member)) {
 					continue;
 				}
 				finalSupers.add(new LispSymbol(nameSym.name()));
@@ -26127,9 +26142,9 @@ public final class LispMacroExpander {
 	 */
 	private static boolean isSupportedTypeSpecializer(String plainName) {
 		return atomicTypePredicate(plainName) != null || switch (plainName) {
-			case "BOOLEAN", "BIT", "UNSIGNED-BYTE", "SIGNED-BYTE", "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY",
-					"SEQUENCE", "STANDARD-OBJECT", "STRUCTURE-OBJECT", "PATHNAME", "PACKAGE", "STRUCTURE-CLASS",
-					"BUILT-IN-CLASS", "READTABLE" ->
+			case "BOOLEAN", "BIT", "UNSIGNED-BYTE", "SIGNED-BYTE", "VECTOR", "SIMPLE-VECTOR", "BIT-VECTOR",
+					"SIMPLE-BIT-VECTOR", "ARRAY", "SIMPLE-ARRAY", "SEQUENCE", "STANDARD-OBJECT", "STRUCTURE-OBJECT",
+					"PATHNAME", "PACKAGE", "STRUCTURE-CLASS", "BUILT-IN-CLASS", "READTABLE" ->
 				true;
 			default -> false;
 		};
@@ -27238,6 +27253,10 @@ public final class LispMacroExpander {
 					case "STANDARD-CHAR", "BASE-CHAR" -> 215;
 					case "DOUBLE-FLOAT", "SINGLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT" -> 218;
 					case "RATIONAL" -> 225;
+					// A bit vector is a vector (cl-slice's canonical-representation pairs
+					// the two), and a simple one a bit vector.
+					case "SIMPLE-BIT-VECTOR" -> 226;
+					case "BIT-VECTOR" -> 228;
 					case "NUMBER", "REAL", "VECTOR", "SIMPLE-VECTOR", "SIMPLE-STRING", "BASE-STRING" -> 230;
 					case "LIST", "ARRAY", "SIMPLE-ARRAY" -> 235;
 					case "SEQUENCE", "ATOM" -> 240;
@@ -27601,6 +27620,11 @@ public final class LispMacroExpander {
 		// any type test over it expands.
 		if (program.stream().anyMatch(f -> usesAnySymbol(f, JAVA_EXCEPTION_NAMES))) {
 			closRegistry.ensureJavaExceptionSeeded();
+		}
+		// The funcallable MOP classes likewise, wherever the program names one (a
+		// funcallable-standard-class :metaclass, a superclass, a type test).
+		if (program.stream().anyMatch(f -> usesAnySymbol(f, FUNCALLABLE_CLASS_SPELLINGS))) {
+			closRegistry.ensureFuncallableClassesSeeded();
 		}
 		// A find-class or class-of reference compiles to the generated metaobject
 		// runtime injected below; the MOP base classes must register BEFORE the walk so
@@ -47246,6 +47270,32 @@ public final class LispMacroExpander {
 		return false;
 	}
 
+	/**
+	 * Seeds the MOP classes the {@code defclass} form names as its superclasses or its
+	 * {@code :metaclass} ({@link ClosRegistry#ensureMopClassesSeededFor}), so a
+	 * {@code funcallable-standard-class} definition finds the funcallable pair registered
+	 * before anything consults the registry for it.
+	 * @param cons the defclass expression
+	 * @param closRegistry the registry to seed
+	 */
+	public static void seedMopClassesNamedBy(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() > 2 && parts.get(2) instanceof LispCons superCons) {
+			for (LispVal superName : superCons.toList()) {
+				if (superName instanceof LispSymbol sym) {
+					closRegistry.ensureMopClassesSeededFor(sym.name());
+				}
+			}
+		}
+		for (int i = 4; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
+					&& ":METACLASS".equals(plainTypeName(optSym)) && optCons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol metaclass) {
+				closRegistry.ensureMopClassesSeededFor(metaclass.name());
+			}
+		}
+	}
+
 	/** Whether any top-level {@code defclass} extends a seeded MOP base class. */
 	private static boolean namesMopBaseSuperclass(List<LispVal> program) {
 		for (LispVal form : program) {
@@ -47285,27 +47335,37 @@ public final class LispMacroExpander {
 
 	/**
 	 * Builds the keyword constructors of the three seeded MOP base classes
-	 * ({@code %make-standard-class}, ...): their {@code defclass} never ran, so the
+	 * ({@code %make-standard-class}, ...), plus {@code funcallable-standard-class}'s once
+	 * it is seeded: their {@code defclass} never ran, so the
 	 * {@code expandDefclass}-generated constructor every {@code make-instance} path
 	 * dispatches to does not otherwise exist. Same shape as the generated ones -- one
 	 * {@code &key} parameter per slot under its seeded {@code :slot-name} initarg (nil
 	 * default) plus {@code &allow-other-keys}. Shared by the compile paths (appended with
 	 * the metaclass runtime) and the interpreter (evaluated once at protocol load).
 	 * @param closRegistry the registry, already seeded
-	 * @return the three constructor defuns
+	 * @return the constructor defuns
 	 */
 	public static List<LispVal> seededMopConstructorDefuns(ClosRegistry closRegistry) {
 		List<LispVal> defuns = new java.util.ArrayList<>();
-		for (String name : List.of(ClosRegistry.STANDARD_CLASS_NAME, ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME,
-				ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME)) {
+		List<String> names = new java.util.ArrayList<>(
+				List.of(ClosRegistry.STANDARD_CLASS_NAME, ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME,
+						ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME));
+		if (closRegistry.funcallableClassesSeeded()) {
+			names.add(ClosRegistry.FUNCALLABLE_STANDARD_CLASS_NAME);
+		}
+		for (String name : names) {
 			ClosRegistry.ClassInfo info = java.util.Objects.requireNonNull(closRegistry.findClass(name),
 					"MOP base class not seeded: " + name);
 			List<LispVal> lambdaList = new java.util.ArrayList<>();
 			List<LispVal> slotVars = new java.util.ArrayList<>();
 			keywordConstructorShape(info.slots(), lambdaList, slotVars);
-			defuns.add(
-					listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(affixFor("%make-", name) + name),
-							listToCons(lambdaList), objNew(LispLayout.CLASS_TAG_PREFIX + name, slotVars))));
+			// The constructor name expandMakeInstance calls: a qualified class keeps its
+			// package and prefixes the member.
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+			String ctor = qn == null ? affixFor("%make-", name) + name
+					: qn.pkg() + "::" + affixFor("%make-", qn.member()) + qn.member();
+			defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(ctor), listToCons(lambdaList),
+					objNew(LispLayout.CLASS_TAG_PREFIX + name, slotVars))));
 		}
 		return defuns;
 	}
@@ -48661,11 +48721,32 @@ public final class LispMacroExpander {
 				}
 			}
 		}
+		// *readtable* too, which load BINDS on the interpreter (.kb/readtables.md): an
+		// in-readtable in a file is the file's. Its value is an object the program makes,
+		// so the restore cannot be static like the paths': each level pushes the
+		// readtable current as the file begins and its end pops it back -- in a program
+		// that mentions the variable at all, the only one that can change it.
+		boolean readtable = program.stream().anyMatch(form -> usesSymbol(form, LispNames.READTABLE_VAR));
+		LispSymbol saved = new LispSymbol(
+				PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.LOAD_READTABLES_INTERNAL));
+		LispSymbol current = new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, LispNames.READTABLE_VAR));
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
 		java.util.Deque<LispVal[]> open = new java.util.ArrayDeque<>();
+		boolean declared = false;
 		for (LispVal form : program) {
 			LispVal[] entered = loadContextValues(form);
 			if (entered != null) {
+				if (readtable) {
+					if (!declared) {
+						out.add(listToCons(
+								List.of(new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, LispNames.DEFVAR)),
+										saved, LispNil.INSTANCE)));
+						declared = true;
+					}
+					out.add(listToCons(
+							List.of(new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, LispNames.PUSH)), current,
+									saved)));
+				}
 				open.addLast(entered);
 				emitLoadContext(out, assigned, entered);
 				continue;
@@ -48673,6 +48754,13 @@ public final class LispMacroExpander {
 			if (isLoadContextMarker(form, LispNames.END_FILE)) {
 				if (!open.isEmpty()) {
 					open.removeLast();
+					if (readtable) {
+						out.add(listToCons(List.of(
+								new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, LispNames.SETQ)), current,
+								listToCons(List.of(
+										new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, LispNames.POP)),
+										saved)))));
+					}
 				}
 				emitLoadContext(out, assigned, open.peekLast());
 				continue;
@@ -49048,6 +49136,18 @@ public final class LispMacroExpander {
 		.of(LispNames.JAVA_EXCEPTION_QUALIFIED, LispNames.JAVA_EXCEPTION_CAUSE_QUALIFIED);
 
 	/**
+	 * Every spelling of the two funcallable MOP class names: closer-mop's, in both colon
+	 * spellings, and the bare member a package using closer-mop's symbols may not have
+	 * resolved.
+	 */
+	private static final java.util.Set<String> FUNCALLABLE_CLASS_SPELLINGS = java.util.stream.Stream
+		.of(ClosRegistry.FUNCALLABLE_STANDARD_CLASS, ClosRegistry.FUNCALLABLE_STANDARD_OBJECT)
+		.flatMap(member -> java.util.stream.Stream.concat(
+				PackageRegistry.spellings(PackageRegistry.qualifyInternal(LispNames.CLOSER_MOP_PKG, member)).stream(),
+				java.util.stream.Stream.of(member)))
+		.collect(java.util.stream.Collectors.toUnmodifiableSet());
+
+	/**
 	 * Whether the form mentions any of the symbol names, in one walk.
 	 * @param form the form
 	 * @param names the canonical symbol names
@@ -49176,6 +49276,21 @@ public final class LispMacroExpander {
 	 * @return the flattened top-level forms
 	 */
 	public static List<LispVal> flattenTopLevel(List<LispVal> program) {
+		return flattenTopLevel(program, null);
+	}
+
+	/**
+	 * {@link #flattenTopLevel(List)}, also collecting -- by identity -- every spliced
+	 * form an {@code eval-when} evaluates at COMPILE time (CLHS 3.2.3.1: under
+	 * {@code :compile-toplevel}, or under {@code :execute} inside compile-time-too
+	 * processing). The splice keeps such a form in the program either way; the macro-time
+	 * pass also runs it, which is what lets a readtable an {@code eval-when} installs
+	 * reach the read of the forms after it ({@code .kb/readtables.md}).
+	 * @param program the top-level forms
+	 * @param compileTime collects the forms evaluated at compile time, or {@code null}
+	 * @return the flattened top-level forms
+	 */
+	public static List<LispVal> flattenTopLevel(List<LispVal> program, @Nullable Set<LispVal> compileTime) {
 		// Keep the identity of a program with nothing to splice (callers may rely on
 		// "returned unchanged", e.g. UserMacroExpander's no-macro early return).
 		if (program.stream().noneMatch(LispMacroExpander::isTopLevelSpliceForm)) {
@@ -49183,7 +49298,7 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> out = new java.util.ArrayList<>();
 		for (LispVal form : program) {
-			flattenTopLevelInto(form, out);
+			flattenTopLevelInto(form, out, false, compileTime);
 		}
 		return out;
 	}
@@ -49191,8 +49306,20 @@ public final class LispMacroExpander {
 	private static boolean isTopLevelSpliceForm(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()
 				&& (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())
+						|| isHandlerlessHandlerBind(cons)
 						|| ((LispNames.EVAL_WHEN.equals(sym.name()) || isUiopWithDeprecationWrapper(sym.name())
 								|| isUiopWithUpgradabilityWrapper(sym.name())) && cons.toList().size() >= 2));
+	}
+
+	/**
+	 * Whether the form is a {@code (handler-bind () body...)}: it establishes no handler,
+	 * so its body is a {@code progn}'s. named-readtables wraps its {@code defpackage} in
+	 * one -- SBCL's muffling binding is {@code #+sbcl} -- inside an {@code eval-when},
+	 * and the compile path's package resolver must see the package.
+	 */
+	private static boolean isHandlerlessHandlerBind(LispCons cons) {
+		return cons.car() instanceof LispSymbol sym && LispNames.HANDLER_BIND.equals(sym.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispNil;
 	}
 
 	/**
@@ -49220,14 +49347,18 @@ public final class LispMacroExpander {
 				&& UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_UPGRADABILITY);
 	}
 
-	private static void flattenTopLevelInto(LispVal form, List<LispVal> out) {
+	private static void flattenTopLevelInto(LispVal form, List<LispVal> out, boolean compileTimeToo,
+			@Nullable Set<LispVal> compileTime) {
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()) {
 			// locally splices like progn: its declarations are no-ops downstream, and
 			// libraries wrap top-level defstruct/defun groups in (locally (declare ...)).
-			if (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())) {
+			// So does a handler-bind that binds no handler.
+			if (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())
+					|| isHandlerlessHandlerBind(cons)) {
 				List<LispVal> parts = cons.toList();
-				for (int i = 1; i < parts.size(); i++) {
-					flattenTopLevelInto(splicedPart(cons, parts.get(i)), out);
+				int from = LispNames.HANDLER_BIND.equals(sym.name()) ? 2 : 1;
+				for (int i = from; i < parts.size(); i++) {
+					flattenTopLevelInto(splicedPart(cons, parts.get(i)), out, compileTimeToo, compileTime);
 				}
 				return;
 			}
@@ -49239,8 +49370,10 @@ public final class LispMacroExpander {
 			if (LispNames.EVAL_WHEN.equals(sym.name()) || isUiopWithUpgradabilityWrapper(sym.name())) {
 				List<LispVal> parts = cons.toList();
 				if (parts.size() >= 2) {
+					boolean memberCompileTime = LispNames.EVAL_WHEN.equals(sym.name())
+							? evaluatesAtCompileTime(parts.get(1), compileTimeToo) : compileTimeToo;
 					for (int i = 2; i < parts.size(); i++) {
-						flattenTopLevelInto(splicedPart(cons, parts.get(i)), out);
+						flattenTopLevelInto(splicedPart(cons, parts.get(i)), out, memberCompileTime, compileTime);
 					}
 					return;
 				}
@@ -49252,12 +49385,37 @@ public final class LispMacroExpander {
 			// pairs; flattening that keeps each a top-level definition.
 			if (isUiopWithDeprecationWrapper(sym.name())) {
 				if (cons.toList().size() >= 2) {
-					flattenTopLevelInto(splicedPart(cons, expandUiopWithDeprecation(cons)), out);
+					flattenTopLevelInto(splicedPart(cons, expandUiopWithDeprecation(cons)), out, compileTimeToo,
+							compileTime);
 					return;
 				}
 			}
 		}
 		out.add(form);
+		if (compileTimeToo && compileTime != null) {
+			compileTime.add(form);
+		}
+	}
+
+	/**
+	 * Whether an {@code eval-when} with these situations evaluates its body at compile
+	 * time (CLHS 3.2.3.1): {@code :compile-toplevel}, or {@code :execute} inside
+	 * compile-time-too processing.
+	 */
+	private static boolean evaluatesAtCompileTime(LispVal situations, boolean compileTimeToo) {
+		boolean execute = false;
+		for (LispVal cell = situations; cell instanceof LispCons c; cell = c.cdr()) {
+			if (!(c.car() instanceof LispSymbol situation)) {
+				continue;
+			}
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(situation.name());
+			String name = qn == null ? situation.name() : qn.member();
+			if (":COMPILE-TOPLEVEL".equals(name) || "COMPILE-TOPLEVEL".equals(name) || "COMPILE".equals(name)) {
+				return true;
+			}
+			execute |= ":EXECUTE".equals(name) || "EXECUTE".equals(name) || "EVAL".equals(name);
+		}
+		return compileTimeToo && execute;
 	}
 
 	/**

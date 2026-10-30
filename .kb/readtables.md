@@ -1,10 +1,11 @@
-# Readtables: the value on every backend, the interpreter's reader reads with it
+# Readtables: the value on every backend, every SOURCE read reads with it
 
 **Invariant**: a readtable is a VALUE on all four backends -- the fixed `LispLayout.READTABLE`
 layout (tag `%READTABLE`, OPAQUE: prints `#<READTABLE>`), built and changed by ONE prelude
-definition (`LispPreludeLibrary`, the `%rt-*` family). Only the INTERPRETER's reader reads
-with one; the compile paths read source with the standard syntax and the emitted runtime
-readers ignore `*readtable*` (`.todo/h57`).
+definition (`LispPreludeLibrary`, the `%rt-*` family). Source is read with one on every
+backend: the interpreter's reader with the current `*readtable*`, the compile paths with the
+compile-time evaluator's (`ReadTimeImage`, below). The emitted runtime readers ignore
+`*readtable*` (`.todo/h71`).
 
 ## The value
 - Slot 0 `CASE` (`:upcase`/`:downcase`/`:preserve`/`:invert`), slot 1 `CHARS`: an eql table
@@ -50,9 +51,8 @@ readers ignore `*readtable*` (`.todo/h57`).
   quoted DATA (`readTemplateElement`).
 - **`#L` and `#N@` stay native whatever function the table holds** (`isNativeSub`): a callout
   inside a backquote template cannot read the outer template's commas (iterate's
-  `#L(member !1 var :test ,test)` failed "Comma is illegal outside of backquote"), and the
-  compile paths read them natively anyway. The real fix is a backquote-depth-aware recursive
-  read (`.todo/h57`).
+  `#L(member !1 var :test ,test)` failed "Comma is illegal outside of backquote"). The real
+  fix is a backquote-depth-aware recursive read (`.todo/h71`).
 - **Reading is FORM AT A TIME**: `SourceLanguage.readForms` -> `LispReader.Forms` ->
   `LispLexer.tokenizeNextDatum` (stops at depth 0 behind a complete datum; prefixes and `#0A`
   keep it going; `stopAt` for `read-delimited-list`). `LispEvaluator.loadFile` (`loadForms`)
@@ -70,7 +70,62 @@ readers ignore `*readtable*` (`.todo/h57`).
   annotation's arity up on the symbol it read, and a bare spelling names cl-user's.
 - Not honored: escape syntax under another character (a constituent there), `read` from a
   file stream or standard input, `with-standard-io-syntax` (does not rebind `*readtable*`),
-  the REPL / playground (whole-buffer reads), `*read-suppress*` around a reader macro.
+  the REPL / playground (whole-buffer reads), `*read-suppress*` around a reader macro
+  (`.todo/h71`).
+
+## The compile paths' read (`eval/ReadTimeImage`, since h57)
+- The compile path read a whole file before `UserMacroExpander` evaluated anything, so no
+  compile-time readtable change reached the read. Now `LoadInliner` reads EVERY Common Lisp
+  file (the entry included: `inlineSource`, which `CompileFrontend.run` and
+  `CompileFrontendAccess.corpus` call) FORM AT A TIME through a `FormSource` -- a whole read
+  of the entry went stale when a `ql:quickload` in it opened the image (cl-interpol's
+  `#?` after `in-readtable` read as a symbol). Once an image exists, each form reads with
+  `ReadTimeImage.syntax(out)`: the image first feeds every form appended to `out` since the
+  last call (the spliced program so far, markers included, component brackets skipped) to a
+  SHALLOW `UserMacroExpander.Session`, then answers that session's evaluator's
+  `currentReadSyntax(check)`. Lazy: the first file whose text can change the syntax
+  (`changesSyntax`: `set-macro-character`, `make-dispatch-macro-character`,
+  `set-syntax-from-char`, `(setf (readtable-case`, a `set-dispatch-macro-character` other
+  than `#\# #\@` / `#\# #\L`) opens the image, which catches up on all of `out`; before it
+  every form reads with the standard syntax. ironclad (`#@`) and iterate (`#L`) do not open
+  one. The package bracket's push now lands in front of the first `in-package`
+  ([packages.md](packages.md)).
+- **The image is thrown away** after the read: the passes between the read and
+  `UserMacroExpander` in `CompileFrontend.expand` rewrite and splice the program, so the
+  real pass reprocesses it from scratch (nothing restates the pipeline). A shallow session
+  is the same per-form code (`Session.accept`) with four differences: top-level macro
+  expansion only (`expandTopLevel`: a head macro call, and the members of a
+  progn/locally/eval-when it becomes -- CLHS 3.2.3.1), nothing emitted, nothing printed
+  (its `CompileWarnings` go through `discarding`), and a spliced system's
+  `defvar`/`defparameter`/`defconstant` EVALUATED where the real pass parks it lazily
+  ([defmacro-backquote.md](defmacro-backquote.md)): cl-syntax's `defsyntax` is
+  `(defvar NAME (defreadtable NAME ...))`, and the readtable jonathan's `use-syntax` finds by
+  name is that value form's effect. A form the image cannot process (a package a later pass
+  synthesizes) is skipped; the real pass reports it. Measured 2026-10-31: the ci-spec corpus
+  (opened by `readtable-objects-and-the-reader-macro-api`) compiles to `.class` in 24.1 s vs
+  23.3 s without the image, and its output and compile warnings are unchanged on all four
+  backends but for the new case.
+- A reader macro function runs in the image; its value must have a literal form (`check`:
+  numbers, symbols, strings, characters, conses, arrays, packed vectors, instances by slot --
+  not a readtable, closure, hash table, stream). Otherwise, and when the function signals,
+  `ReadSyntax.Refusal` -> `LispLexer` turns it into a read error at the macro character.
+- **compile-file semantics**: only what the compile evaluates changes the read. A
+  source-level `eval-when` whose situations evaluate at compile time (`:compile-toplevel`,
+  or `:execute` in compile-time-too mode) has its members recorded by
+  `flattenTopLevel(program, compileTime)` and EVALUATED by the session (`evalAtCompileTime`,
+  a defvar eagerly -- lazily it captured the readtable AFTER the change); before h57 only
+  their definitions registered. The mode carries into a macro-expanded `eval-when`
+  (`processExpandedEvalWhen(.., compileTimeToo)`: named-readtables' `defreadtable` is
+  `(eval-when (:load-toplevel :execute) ...)`), and inside a spliced system its
+  `:load-toplevel`/`:execute` members replay like the system's plain forms (the system is
+  LOADED). So a `defreadtable` the same compile selects needs an `eval-when`, as
+  named-readtables' own doc says; the interpreter evaluates everything anyway.
+- **`load` binds `*readtable*`**: at macro time each `%begin-file` level binds it
+  (`pushReadtableBinding`), and at run time `lowerLoadContextMarkers` pushes the current one
+  on `rontolisp::%load-readtables` at a level's start and pops it back at its end, in a
+  program that mentions `*readtable*` at all (a whole-program gate: a file may change it
+  through a function another file defines).
+- `#L`/`#N@` stay native here too (`isNativeSub`), and a `#.` still rides the marker read.
 
 ## named-readtables and its dependents (measured 2026-10-30, interpreter)
 - Derived form `eval/NamedReadtablesForms` (tier 4, `.kb/asdf.md`): `src/cruft.lisp`'s
@@ -86,13 +141,26 @@ readers ignore `*readtable*` (`.todo/h57`).
   (`.kb/packages.md`, member table), a library's own `while` (`.kb/packages.md`), a `go` in a
   `return-from`'s value form (`.kb/interpreter-tail-calls.md`), the `ratio` type test
   (`.kb/declarations-type-checks.md`). cl-redis now stops in rutils `core/iter.lisp:3162`:
-  `` #`(member % var :test ,test) `` inside a backquote template, `.todo/h57` item 2 (on the
-  way: a built-in macro alias, `(:type list)`, `c2mop:intern-eql-specializer`). Compile paths: named-readtables' `defpackage` sits under
-  `locally`/`handler-bind` in an `eval-when`, which the compile-time resolver does not see.
+  `` #`(member % var :test ,test) `` inside a backquote template, `.todo/h71` item 1 (on
+  the way: a built-in macro alias, `(:type list)`, `c2mop:intern-eql-specializer`).
+- Compile paths (h57, 2026-10-31): named-readtables runs on all four (its `defpackage` sits
+  under `(handler-bind () ...)` -- the SBCL binding is `#+sbcl` -- in an `eval-when`, which
+  `flattenTopLevel` now splices like `progn`). Through `ql:quickload`, output = the
+  interpreter's: cl-interpol (`#?"..."`) and cl-csv (`read-csv`/`write-csv`) on all four,
+  jonathan on the JVM -- verified by hand, no test (the Quicklisp cache).
+  Still stopping, none of it in the reader (`.todo/h71` item 3): jonathan on WASM
+  (`Cannot compile symbol: *`), cl-annot's `@export` (the expansion's
+  `(progn (export 'x) (defun x ...))` nests the export the compilers' resolver needs at top
+  level: "GREET is not external"), parenscript (`property-bindings`: `Cannot compile symbol
+  reference: PARENSCRIPT:VAR`).
 
 ## Tests
-ci-spec `readtable-objects-and-the-reader-macro-api` (the API, all four backends);
-`LispEvaluatorTest.theReaderHonorsTheCurrentReadtable` (interpreter reading: dispatch and macro
-characters, comments, remaps, `read-delimited-list`, case, form-at-a-time `load`, homed
-symbols); `NamedReadtablesE2eTest` (vendored named-readtables 0.9: the derived form's markers,
-`defreadtable`, `in-readtable` in a loaded file).
+ci-spec `readtable-objects-and-the-reader-macro-api` (the API, all four backends) and
+`source-reads-with-the-readtable-an-eval-when-installs` (source reading on all four: macro and
+dispatch characters, a no-value comment, a remapped `)`, `read-delimited-list`, the case, the
+restore); `LispEvaluatorTest.theReaderHonorsTheCurrentReadtable` (the interpreter's run-time
+reads and form-at-a-time `load`, homed symbols);
+`LoadInlinerTest.aLoadedFileReadsWithTheReadtableItsEvalWhenInstallsAtCompileTime` (a loaded
+file on the compile path, the readtable restored at compile and run time, a refused datum);
+`NamedReadtablesE2eTest` (vendored named-readtables 0.9 on all four: `defreadtable`,
+`in-readtable` in a loaded file).

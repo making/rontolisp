@@ -74,9 +74,13 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
   `<asd path>: message`.
 
 ### Options
-- `:components` ordered by a stable topological sort of `:depends-on`; `:serial` = implicit dep
-  on the previous sibling; `:module` = path prefix with files kept contiguous; `:static-file` =
-  ordering-only.
+- `:components` in ASDF's PLAN order: definition order, each component after its `:depends-on`
+  siblings, depth first (`placeComponent`); `:serial` = implicit dep on the previous sibling;
+  `:module` = path prefix with files kept contiguous; `:static-file` = ordering-only. Until
+  2026-10-31 it was a pass-wise topological sort that placed every dependency-free component
+  first: arnesi's `(:file "debug" :depends-on ())` then loaded ahead of `packages.lisp` and its
+  `(in-package :it.bese.arnesi)` failed. Measured against SBCL 2.2.9's `asdf::make-plan`: arnesi
+  and the vendored alexandria come out identical.
 - A SYSTEM-level `:pathname "dir"` prefixes every component; a component-level one decouples the
   component's NAME (its identity in the sibling dependency graph) from the path it contributes.
   On a `:file` the namestring is used verbatim when it carries an extension, else `.lisp` is
@@ -103,7 +107,8 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
 - `:class :package-inferred-system` — the ONE `:class` value implemented.
 - **`IGNORED_OPTIONS` — never resolved, never mentioned**: `:name :description
   :long-description :version :author :maintainer :license :licence :homepage :bug-tracker
-  :source-control :mailto :long-name`, plus `:in-order-to`/`:perform`. It is the CLOSED list, so
+  :source-control :mailto :long-name :properties` (arnesi's free-form property list), plus
+  `:in-order-to`/`:perform`. It is the CLOSED list, so
   an option added later is load-bearing by default. `:version` is on it even though
   `asdf:component-version` reads it BACK: a plain STRING is recorded as written, every other
   spelling answers nil.
@@ -595,8 +600,9 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   MACRO-EXPANSION time, so backends see baked string constants. The macro-time config replay is a
   **static purity judgment, not a data file**: `UserMacroExpander.isPureConfigSetf`/`isPure`
   accept a top-level `(setf (PLACE ...) V)` only when the `(defun (setf PLACE) ...)` writer is a
-  pure config setter. **Deny by default**; no per-library registration, no
-  `eval-when (:compile-toplevel)` escape hatch. Top-level `defvar`/`defparameter`/`defconstant`
+  pure config setter. **Deny by default**; no per-library registration (a user's own
+  `eval-when (:compile-toplevel ...)` around the setf runs it at compile time, as CL does, since
+  h57). Top-level `defvar`/`defparameter`/`defconstant`
   register LAZILY (`Environment.defineLazy`, `.kb/defmacro-backquote.md`). Lite: `:indent`,
   `(let ((*html-mode* ...)) ...)` ignored (use `(setf (html-mode) :html5)`), hyperdoc's
   external-symbols loop empty. **NO render ci-spec case is possible** — the corpus tests
@@ -1059,8 +1065,8 @@ bundled ones, with `Features.INTERPRETER` and `Features.JVM`:
   systems are all built in or inline creates no build image.
 - **Where the four are now** (`ql:quickload`, after h53's readtables): cl-csv and
   function-cache LOAD on the interpreter -- `read-csv`/`write-csv` and a `defcached` function
-  print byte-identically to SBCL 2.2.9 -- and the compile paths stop in named-readtables (`No
-  such package: EDITOR-HINTS.NAMED-READTABLES`, h57); cl-containers stops in metatilities-base's
+  print byte-identically to SBCL 2.2.9 -- and cl-csv on all four since h57 (the compile
+  paths read with the compile-time readtable, [readtables.md](readtables.md)); cl-containers stops in metatilities-base's
   `defpackage`, whose `:import-from` holds `#-(or allegro ... sbcl) (error "Need to adapt
   defpackage ...")` (an implementation guard); cl-pdf LOADS on the interpreter and the JVM
   since h62 (2026-10-31; its AFM parser names readers with `read-from-string` at expansion

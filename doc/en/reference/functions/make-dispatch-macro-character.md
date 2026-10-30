@@ -4,7 +4,7 @@
 
 Makes `char` a dispatch macro character with an empty dispatch table, and returns `t`; [`set-dispatch-macro-character`](set-dispatch-macro-character.md) then fills it. `non-terminating-p` true lets `char` appear inside a token. Works on all four backends.
 
-Only the interpreter's reader reads with a readtable so far: a program and the files it loads, read form by form, `read-from-string`, and `read` / `read-delimited-list` on a string stream. The compile paths and the compiled backends' run-time readers read the standard syntax ([readtables](../../guides/readtables.md)).
+Source is read with the current readtable on every backend: the interpreter reads a program and the files it loads form by form, and the compile paths read each form with the readtable a compile-time `eval-when` left. At run time, `read-from-string` and `read` / `read-delimited-list` on a string stream honor it on the interpreter; the compiled backends' run-time readers read the standard syntax ([readtables](../../guides/readtables.md)).
 
 ```lisp
 (let ((*readtable* (copy-readtable nil)))

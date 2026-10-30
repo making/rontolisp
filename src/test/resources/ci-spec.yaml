@@ -11512,6 +11512,26 @@ cases:
       (print (list (clos-decode-it 1 12) (clos-decode-it 1 :tag) (clos-decode-it 1 99)))
     expected: |
       ((:UTF8 1 12) (:TAG 1 :TAG) (:DEFAULT 1 99))
+  - name: clos-defmethod-bit-vector-specializer
+    source: |
+      ;; A bit-vector specializer (cl-slice's canonical-representation pairs it with
+      ;; a vector one): a bit vector dispatches to it ahead of the vector and array
+      ;; methods whatever order they were defined in, a simple bit vector to a
+      ;; simple-bit-vector method ahead of that.
+      (defgeneric clos-bv-kind (x))
+      (defmethod clos-bv-kind ((x array)) :array)
+      (defmethod clos-bv-kind ((x vector)) :vector)
+      (defmethod clos-bv-kind ((x bit-vector)) (list :bits (count 1 x)))
+      (defmethod clos-bv-kind (x) :other)
+      (defgeneric clos-sbv-kind (x))
+      (defmethod clos-sbv-kind ((x bit-vector)) :bit-vector)
+      (defmethod clos-sbv-kind ((x simple-bit-vector)) :simple)
+      (print (list (clos-bv-kind #*1011) (clos-bv-kind (make-array 3 :element-type 'bit :initial-element 1))
+                   (clos-bv-kind #(1 0 1)) (clos-bv-kind (make-array '(2 2))) (clos-bv-kind 7)))
+      (print (list (clos-sbv-kind #*10) (clos-sbv-kind (make-array 2 :element-type 'bit :adjustable t))))
+    expected: |
+      ((:BITS 3) (:BITS 3) :VECTOR :ARRAY :OTHER)
+      (:SIMPLE :BIT-VECTOR)
   - name: clos-defmethod-lambda-list-congruence
     source: |
       ;; CLHS 7.6.4: a method whose lambda list is not congruent with its generic's
@@ -14609,8 +14629,9 @@ cases:
       (print (mapcar #'boundp '(t nil :fv-kw)))
       (print (mapcar #'fboundp '(fv-none)))
       (print (and (funcall #'fboundp 'car) t))
-      (print (mapcar (lambda (s) (and (funcall #'fboundp s) t)) '(fv-fn car fv-none alphanumericp equalp string<)))
+      (print (mapcar (lambda (s) (and (funcall #'fboundp s) t)) '(fv-fn car fv-none alphanumericp equalp string< aref cadr)))
       (print (and (apply #'fboundp '(fv-fn)) t))
+      (print (let ((fs '(aref cadr))) (list (funcall (first fs) #(7 8) 1) (funcall (symbol-function (second fs)) '(1 2)))))
     expected: |
       (T NIL NIL)
       (T T)
@@ -14618,8 +14639,9 @@ cases:
       (T T T)
       (NIL)
       T
-      (T T NIL T T T)
+      (T T NIL T T T T T)
       T
+      (8 2)
   - name: runtime-package-symbol-ops
     source: |
       ;; the postmodern shapes: computed find-package / find-symbol, fmakunbound,
@@ -24903,6 +24925,32 @@ cases:
       T
       (1 2 (3))
       (:READTABLE :OTHER)
+  # A readtable an eval-when installs at compile time reads the forms after it on every
+  # backend: the interpreter reads form at a time, the compile paths read with the
+  # compile-time evaluator's readtable (.kb/readtables.md) -- macro and dispatch
+  # characters, a no-value comment, a remapped `)`, read-delimited-list, the case.
+  - name: source-reads-with-the-readtable-an-eval-when-installs
+    source: |
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (defvar *ci-rt-standard* *readtable*)
+        (setf *readtable* (copy-readtable nil))
+        (set-macro-character #\! (lambda (s c) (declare (ignore c)) (list 'quote (list :bang (read s t nil t)))))
+        (set-dispatch-macro-character #\# #\? (lambda (s c n) (declare (ignore c)) (list 'list :q n (read s t nil t))))
+        (set-macro-character #\] (get-macro-character #\)))
+        (set-macro-character #\[ (lambda (s c) (declare (ignore c)) (cons 'list (read-delimited-list #\] s t))))
+        (set-macro-character #\% (lambda (s c) (declare (ignore s c)) (values))))
+      (print (list !foo !(a b) #?"bar" #3?(+ 1 2) [1 % (+ 1 1) 3]))
+      (print (let ((x 5)) [x !x]))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (setf (readtable-case *readtable*) :invert))
+      (defparameter *ci-rt-inverted* (list 'foo 'FOO 'Foo))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (setf *readtable* *ci-rt-standard*))
+      (print (list *ci-rt-inverted* '!foo (symbol-name '[x]) (eq *readtable* *ci-rt-standard*)))
+    expected: |
+      ((:BANG FOO) (:BANG (A B)) (:Q NIL "bar") (:Q 3 3) (1 2 3))
+      (5 (:BANG X))
+      ((FOO |foo| |Foo|) !FOO "[X]" T)
   # Shapes parenscript, jonathan and rutils (cl-redis) load through: a package's own
   # `while` beside rontolisp's, a go in a return-from's value form, a ratio specializer,
   # a built-in macro aliased (under a keyword too), a (:type list) struct.
@@ -32091,3 +32139,60 @@ standalone:
       (:UNBOUND OTHER)
       ((:MISSING NOPE SLOT-VALUE NIL) 3)
       "The slot NOPE is missing"
+  # A funcallable class adds an arm to every dispatcher of its program, so it runs
+  # alone, not in the corpus.
+  - name: funcallable-instances-call-their-installed-function
+    source: |
+      ;; closer-mop's funcallable-standard-class (djula's compiled templates): an
+      ;; instance of such a class is a function -- functionp, typep 'function, a
+      ;; function specializer -- and every call through a value (funcall, apply past
+      ;; the per-arity dispatchers, mapcar, a :test, a symbol-function binding) calls
+      ;; what set-funcallable-instance-function installed, a change-class included;
+      ;; a class method stays more specific than the function one.
+      (asdf:load-system "closer-mop")
+      (defclass fin-counter ()
+        ((count :initform 0 :accessor fin-count)
+         (label :initarg :label :reader fin-label))
+        (:metaclass closer-mop:funcallable-standard-class))
+      (defmethod initialize-instance :after ((f fin-counter) &key)
+        (closer-mop:set-funcallable-instance-function
+         f (lambda (x) (incf (fin-count f)) (list (fin-label f) (* x 2)))))
+      (defclass fin-sub (fin-counter) ((extra :initform :e :reader fin-extra))
+        (:metaclass closer-mop:funcallable-standard-class))
+      (defgeneric fin-kind (x))
+      (defmethod fin-kind ((x fin-counter)) :fin)
+      (defmethod fin-kind ((x function)) :function)
+      (defmethod fin-kind (x) :other)
+      (defun fin-wide (&rest args) (length args))
+      (let ((f (make-instance 'fin-counter :label :a))
+            (g (make-instance 'fin-sub :label :b)))
+        (print (list (funcall f 3) (apply f '(4)) (mapcar f '(1 2)) (fin-count f)))
+        (print (list (functionp f) (typep f 'function) (typep f 'closer-mop:funcallable-standard-object)
+                     (typep f 'standard-object) (typep g 'fin-counter) (functionp (find-class 'fin-counter))))
+        (print (list (funcall g 5) (fin-extra g) (fin-count g) (fin-count f)))
+        (print (list (fin-kind f) (fin-kind g) (fin-kind #'car) (fin-kind 1)
+                     (eq (class-of f) (find-class 'fin-counter))
+                     (eq (class-of (class-of f)) (find-class 'closer-mop:funcallable-standard-class))))
+        (change-class f 'fin-sub)
+        (print (list (funcall f 6) (fin-extra f) (fin-count f)))
+        (closer-mop:set-funcallable-instance-function f #'fin-wide)
+        (closer-mop:set-funcallable-instance-function g f)
+        (setf (symbol-function 'fin-named) g)
+        (print (list (apply f 1 2 3 4 5 6 7 8 9 10 11 12 '(13 14)) (fin-named 1 2)
+                     (remove-if (let ((h (make-instance 'fin-counter :label :c)))
+                                  (closer-mop:set-funcallable-instance-function h #'evenp)
+                                  h)
+                                (list 1 2 3 4))))
+        (print (list (handler-case (funcall (allocate-instance (find-class 'fin-sub)) 1) (error () :unset))
+                     (handler-case (closer-mop:set-funcallable-instance-function f 'car)
+                       (type-error () :not-a-function))
+                     (handler-case (closer-mop:set-funcallable-instance-function 42 #'car)
+                       (type-error () :not-funcallable)))))
+    stdout: |
+      ((:A 6) (:A 8) ((:A 2) (:A 4)) 4)
+      (T T T T T NIL)
+      ((:B 10) :E 1 4)
+      (:FIN :FIN :FUNCTION :OTHER T T)
+      ((:A 12) :E 5)
+      (14 2 (1 3))
+      (:UNSET :NOT-A-FUNCTION :NOT-FUNCALLABLE)
