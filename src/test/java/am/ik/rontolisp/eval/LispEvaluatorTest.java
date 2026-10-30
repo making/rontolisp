@@ -11885,11 +11885,21 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> eval("(translate-pathname \"d/a.txt\" \"e/*.*\" \"f/*.*\")"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("does not match");
-		// Every rontolisp pathname is physical, so the logical translation is the
-		// identity and logical-pathname itself can never succeed.
+		// A namestring is logical only under a host defined through (setf
+		// logical-pathname-translations): any other is physical and answers itself, and
+		// no host (SYS included) is predefined.
 		assertThat(eval("(translate-logical-pathname \"d/a.txt\")").print()).isEqualTo("#P\"d/a.txt\"");
-		assertThatThrownBy(() -> eval("(logical-pathname \"SYS:SRC;\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("does not name a logical pathname");
+		assertThatThrownBy(() -> eval("(logical-pathname \"SYS:SRC;\")")).isInstanceOf(LispEvalException.class);
+		assertThat(eval("""
+				(list (pathname-match-p "x/y/a.l" "x/*/a.l") (pathname-match-p "x/a.l" "x/*/a.l")
+				      (pathname-match-p "a" "*.lisp") (pathname-match-p "b.lisp" "/**/*.lisp"))""").print())
+			.isEqualTo("(T NIL NIL T)");
+		assertThat(eval("""
+				(progn
+				  (setf (logical-pathname-translations "LP") '(("SRC;**;*.*.*" "/opt/src/**/*.*")))
+				  (list (translate-logical-pathname "lp:src;a;foo.lisp.newest")
+				        (handler-case (logical-pathname-translations "NOPE") (type-error () :type-error))))""").print())
+			.isEqualTo("(#P\"/opt/src/a/foo.lisp\" :TYPE-ERROR)");
 	}
 
 	@Test

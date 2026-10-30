@@ -549,6 +549,19 @@ syntax (`Cannot quote: #<HASH-TABLE>`). Three spans move: the `defvar` -> `nil` 
 `with-open-file` header's path -> the LITERAL namestring **with `:element-type 'character`
 dropped**, since that option is precisely what suppresses `CompileTimePathnameFolder`'s inlining.
 
+**`eval/ClFadForms`** (pinned by `ClFadE2eTest`, all four, SBCL 2.2.9's answers). cl-fad 0.7.6
+closes each per-implementation run of `#+impl` arms with a `#-(or ...)` arm that signals "not
+supported" -- the arm rontolisp reads. Four spans, each marker exactly once:
+`temporary-files.lisp`'s `getenv` arm -> `(uiop:getenv x)` (it runs at LOAD time, as does the
+`(setf logical-pathname-translations "TEMPORARY-FILES")` beside it, `.kb/pathnames.md`);
+`fad.lisp`'s `list-directory` arm -> `(directory (directory-wildcard dirname) :resolve-symlinks
+follow-symlinks)` (SBCL's), `file-exists-p` -> `(probe-file pathspec)` (SBCL's: a directory's
+truename in directory form), and `delete-directory-and-files`' portable walk gets
+`(delete-file file)` for a directory (deletes an empty one here, `.kb/uiop.md`). Tier 4, not a
+shim: the rest of cl-fad is portable CL. Not working yet: `with-output-to-temporary-file` /
+`with-open-temporary-file` need `(pathname stream)` (h67). hunchentoot (2026-10-31, interpreter)
+now stops at `HUNCHENTOOT::MAKE-EXTERNAL-FORMAT` (`specials.lisp:283`, flexi-streams shim, h52).
+
 Retired from this tier: `eval.AlexandriaSymbols`, deleted once `*package*` became a genuine
 dynamic variable (`.kb/packages.md`).
 

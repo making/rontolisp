@@ -23,4 +23,5 @@ drakma switches one socket stream between octets (bodies) and characters (header
 `.kb/asdf.md` babel), those accessors over the existing `flexi-stream` wrapper, and the two
 sequence macros. Or follow `.todo/147`'s plan and load the real flexi-streams if the stream
 model allows it now; measure that first. drakma's later blockers (cl+ssl, chunga, usocket
-client) are unmeasured.
+client) are unmeasured. hunchentoot stops at the same call (2026-10-31, `specials.lisp:283`,
+`HUNCHENTOOT::MAKE-EXTERNAL-FORMAT`), once cl-fad loads.

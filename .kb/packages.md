@@ -41,7 +41,7 @@ strings, so no per-backend codegen exists.
 CLHS 11.1.2.1 fixes the `common-lisp` package's external set at the **978 standard names**,
 independently of whether an implementation has an operator behind one: the name being there is a
 `find-symbol` / `do-external-symbols` answer, not a promise that calling it works. The names
-rontolisp does not implement (101 on 2026-10-30) are `PackageRegistry.CL_EXPORTED_ONLY` -- plain strings, exactly
+rontolisp does not implement (98 on 2026-10-31) are `PackageRegistry.CL_EXPORTED_ONLY` -- plain strings, exactly
 because there is no implementation to name, and a name that gains one moves OUT of the set into
 its category.
 
