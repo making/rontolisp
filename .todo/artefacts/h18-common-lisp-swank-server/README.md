@@ -20,7 +20,10 @@ Paths are placeholders: `@WORK@` is a work directory, `@CHECKOUT@` this reposito
   proxy and the driver, then stop them. `sbcl-wire.log` (SBCL's `:indentation-update`
   messages dropped) and `rontolisp-wire.log` are the two recordings of the `basic` steps;
   `sbcl-nav-wire.log` and `rontolisp-nav-wire.log` of the `nav` steps (`M-.`, xref, the
-  inspector, macrostep; work paths as `@WORK@/out/work`). `cli/SwankServerTest` replays
+  inspector, macrostep; work paths as `@WORK@/out/work`); `sbcl-loaded-wire.log` and
+  `rontolisp-loaded-wire.log` of the `loaded` steps (h23: `C-c C-l`, REPL definitions,
+  their `M-.` and xref, the class, slot, generic function, method, package and pathname
+  pages). `cli/SwankServerTest` replays
   the requests and pins rontolisp's answers.
 - `gen-arglists.lisp OUT` -- writes `src/main/resources/am/ik/rontolisp/eval/cl-arglists.txt`
   (after its four comment lines): `sbcl --non-interactive --load gen-arglists.lisp

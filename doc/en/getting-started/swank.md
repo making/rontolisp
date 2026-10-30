@@ -28,9 +28,9 @@ SLIME of another version asks "Versions differ" first, as it does for any SWANK 
 | `C-c C-d d`, `C-c C-d f` | a symbol's description: what it names, its lambda list and documentation string, a variable's value |
 | `C-c C-m`, `C-c M-m` | a macro's expansion, one step or every macro in the form |
 | `C-c M-e` (macrostep) | a macro form expanded in place one step at a time, the macro forms in the expansion marked |
-| `M-.` | the definition of the name at point: where `C-c C-c` or `C-c C-k` compiled it -- a function, macro, generic function and its methods, variable, class and its accessors, structure and its functions, package -- else the file and line a `load` read a `defun`, `defmacro` or `defgeneric` from; a built-in operator has none |
-| `C-c C-w c` `w` `r` `b` `s` `m` `a`, `C-c <`, `C-c >` | cross references in the code `C-c C-c` and `C-c C-k` compiled: who calls a function and what it calls, who references, binds or sets a special variable, who expands a macro, which methods specialize on a class |
-| `C-c I` | the inspector: a list's or an array's elements, a hash table's entries, an instance's slots, what a symbol names, a number's representations, each part inspected in turn, with the inspector's actions (remove an entry, unbind a symbol, set a slot ...) |
+| `M-.` | the definition of the name at point: where `C-c C-c`, `C-c C-k` or a `load` (`C-c C-l`, a program's, an ASDF system's) ran it -- a function, macro, generic function and its methods, variable, class and its accessors, structure and its functions, package; one typed at the REPL has no place, as in SBCL; a built-in operator has none |
+| `C-c C-w c` `w` `r` `b` `s` `m` `a`, `C-c <`, `C-c >` | cross references in the code compiled, loaded or typed at the REPL while the server runs: who calls a function and what it calls, who references, binds or sets a special variable, who expands a macro, which methods specialize on a class |
+| `C-c I` | the inspector: a list's or an array's elements, a hash table's entries, an instance's slots, what a symbol names, a number's representations, a class, slot definition, generic function and its methods, package and its symbols, pathname, each part inspected in turn, with the inspector's actions (remove an entry, unbind a symbol, set a slot, remove a method ...) |
 | `C-c C-b` | the running evaluation stopped |
 
 Each editor request runs on a thread of its own, the REPL's on one thread, as SWANK's

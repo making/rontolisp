@@ -27,8 +27,10 @@ answered message for message as SBCL's SWANK answers, the differences listed at 
   completion, argument lists, descriptions, expansion, macrostep. It answers Java records
   the server encodes; an autodoc form arrives with the cursor symbol made
   `CommonLispSwank.CURSOR`.
-- `eval/SwankSources` -- what compiled code defines and uses (`M-.`, `xref`), fed by the
-  compile walk; `eval/SwankInspector` -- one connection's inspector state and pages.
+- `eval/SwankSources` -- what compiled, loaded and typed code defines and uses (`M-.`,
+  `xref`); `eval/SwankInspector` -- one connection's inspector state and pages. Both reach
+  `CommonLispSwank` only through the `eval/SwankLisp` interface (locations are
+  `eval/SwankLocation`), so the three form no class cycle (`PackageCycleTest`).
 - `RontoLispCli`: `--swank[=PORT]` (value-less key, `=` for the port), SWANK's 4005 by
   default, 0 any free port; refused beside a program, `-o`, `test`, `--nrepl` or a
   non-Common-Lisp `--source-language`; prints `;; Swank started at port: P.`
@@ -182,15 +184,26 @@ variable reference (`CallSiteWalk.Rewriter.variable`, the hook symbols in code p
 reach), `let`/`let*` binding, `setq`/`setf`/`psetq`/`psetf` assignment and user macro call.
 A use is placed at its form's text, found by searching `(name` forward from the last hit
 within the top-level form; a use inside a macro's expansion that is not a cons of the
-source is placed at the macro call. A definition compiled again replaces its record and
+source is placed at the macro call. A definition run again replaces its record and
 drops its uses. Places: `(:file f) (:position p)` with a 256-character `(:snippet)` for
 `C-c C-k`; `(:buffer-and-file buffer file) (:offset start offset)` with the datum's text
-for `C-c C-c` (the request's fourth argument; `(:buffer ...)` without one). A definition
-the editor did not compile answers from `LispEvaluator.Definition`, which now keeps the
-operator and the `LocatedCons` file and line of a `defun`, `defmacro` or `defgeneric`
-(position: the line's first non-blank), else `(:error "Error: DEFINITION-SOURCE of function
-F did not contain meaningful information.")` as SBCL answers a REPL definition. A built-in
-answers nil. A name that only names a class or structure is no symbol `findSymbol` finds;
+for `C-c C-c` (the request's fourth argument; `(:buffer ...)` without one).
+
+The same walk takes, while a server runs, every Common Lisp file a `load` runs
+(`C-c C-l`, a program's `load`, an ASDF component; `LispEvaluator.LoadRecorder`, installed
+by the `SwankServer` constructor, one volatile read per load when none is) at its true
+name's positions -- a form starts at the first top-level datum on its `LocatedCons` line,
+a datum a top-level reader conditional left out skipped -- and every REPL or editor
+evaluation (`listener-eval`, `interactive-eval` ...) with no place: such a definition
+answers `(:error "Error: DEFINITION-SOURCE of KIND NAME did not contain meaningful
+information.")` (`function`, `macro`, `variable` ... as SBCL), also as an xref container.
+The search for a use stays inside its top-level form's lower-cased text, so a big file's
+walk is linear. A definition run before a server started answers from
+`LispEvaluator.Definition` (the `LocatedCons` file and line of a `defun`, `defmacro` or
+`defgeneric`, position the line's first non-blank), else the error above. Measured
+against SBCL with the driver's `loaded` steps (2026-10-30): every `M-.` and xref answer
+of a `C-c C-l`'d file and the REPL equal SBCL's, positions included, in recording order.
+A built-in answers nil. A name that only names a class or structure is no symbol `findSymbol` finds;
 its spelling is guessed from the package (`spellingsOf`). `xref` answers `:calls`,
 `:references`, `:binds`, `:sets`, `:macroexpands` at the use labelled with the container
 (`F`, or `(DEFMETHOD F (SPECIALIZERS))`), `:callers` at the container, `:calls-who` and
@@ -214,17 +227,40 @@ declaring class, alphabetical sort, `[set value]` reading the minibuffer through
 `:read-from-minibuffer`/`:emacs-return`, `[make unbound]`), a structure as SBCL's
 `The object is a STRUCTURE-OBJECT of type X.`, anything else SWANK's generic page.
 
+The metaobject pages (2026-10-30, the `loaded` steps' `inspector-pages`): a class (name,
+superclasses, direct and effective slots, documentation, subclasses, precedence list, the
+methods specialized on it, a prototype from `allocate-instance`, then its own slots); a
+slot definition (name, documentation, initargs, initform -- shown when the initform or
+initfunction is non-nil, a plain class's slot carrying no function --, initfunction); a
+generic function (name, arguments, documentation, method combination, methods by
+applicability with `[remove method]`, which `LispEvaluator.removeMethod` drops from the
+registry and reinstalls the dispatcher); a method; a package (a package is its keyword
+here, so a keyword `packagep` answers true for gets the package page) with SWANK's
+`%package-symbols-container` pages and their `[Group by classification]`; a pathname.
+No method or generic function is a first-class object here: a method page's value is a
+`LispJavaObject` around the registry row, a generic function is its dispatcher function.
+A class's and a slot's documentation come from the `defclass` the walk recorded (the
+evaluator keeps none). A metaobject prints as SBCL's `#<STANDARD-CLASS NAME>` on a page.
+
 ## Differences from the oracle
 
 No debugger: an error or an interrupt aborts the request (SLDB, its restarts and frames
 are not sent). No presentation markers, trace, profile, indentation updates or
 `set-default-directory`; SLY's stickers, trace dialog and history references (`#v`), Lem's
 inspection of a printed value (`M-.`, xref and the inspector measured with SLIME only). `:calls-who` answers (SBCL's `:not-implemented`); `xref` covers
-only editor-compiled code, in compile order (SBCL's order is its own), with no entry for a
-REPL-defined caller (SBCL lists one with an `:error` place); `find-definitions` of a
+code run while a server runs, in recording order (SBCL's order is its own);
+`find-definitions` of a
 standard package answers nil. An inspector title is `#<TYPE {identity}>` with rontolisp's
-`type-of` (`INTEGER` where SBCL says `BIT`, `T` for a lambda), no disassembly or
-type-specifier lines, floats as doubles (53 digits). Macrostep expansions print on one
+`type-of` (`INTEGER` where SBCL says `BIT`, `T` for a lambda; `PACKAGE`,
+`STANDARD-GENERIC-FUNCTION`, `STANDARD-METHOD` for those pages), no disassembly or
+type-specifier lines, floats as doubles (53 digits). The metaobject pages show rontolisp's
+MOP: a class with no superclass lists none and its precedence list only itself (SBCL's
+`STANDARD-OBJECT`, `SLOT-OBJECT`, `T`), a slot without `:initarg` has `(:Y)` initargs, a
+plain class's direct slots are its effective slot definitions, a generic function page
+has no `Method class` line and no slots, a method's lambda list is its generic's, method
+documentation is a slot accessor's only; a pathname's host is nil and its version nil
+(SBCL's `#<UNIX-HOST>`, `:NEWEST`); `CL-USER`'s name is `"CL-USER"`, `CL`'s `"CL"`.
+SWANK 2.32's `[Group by classification]` hangs SBCL's request; here it regroups. Macrostep expansions print on one
 line, so positions differ from SBCL's pretty-printed ones. A package prints as its keyword, a name as rontolisp
 spells it (`CL-USER::F`, `CL:MAPC`), a macro expansion on one line (no pretty printer), no
 SBCL compiler output and no unused-variable note (nor micros's `; processing (DEFUN ...)`).
@@ -237,7 +273,9 @@ Interpreter only.
 `cli/SwankServerTest` (in process, port 0: SLIME's requests replayed and answered as
 recorded -- REPL values, output and input, package switches, the editor's evaluations,
 both compiles with their notes, load, completions, autodoc, arglist, describe, expansions,
-definitions, xref, the inspector, macrostep, the aborts; an interrupt stopping the REPL
+definitions, xref (a loaded file's and a REPL definition's too), the inspector (the class,
+slot definition, generic function, method, package, symbols and pathname pages), macrostep,
+the aborts; an interrupt stopping the REPL
 thread's loop while a worker answers in its own package; an `-e` program starting a
 `:dont-close t` server and a default one, both serving its evaluator, then `stop-server`; a
 SLY and a Lem session on one server, their recorded shapes),
@@ -245,6 +283,8 @@ SLY and a Lem session on one server, their recorded shapes),
 `LispEvaluatorAsdfTest#dependsOnBuiltinSwankResolvesWithoutNetworkAndCreateServerSignals`.
 By hand: the artefacts' driver against `rontolisp --swank` (2026-10-30; the `nav` steps --
 `M-.`, xref, inspector, macrostep -- recorded in `sbcl-nav-wire.log` and
-`rontolisp-nav-wire.log`); h21's SLY driver and Lem in Docker against it (2026-10-30); a
+`rontolisp-nav-wire.log`; the `loaded` steps -- `C-c C-l`, REPL definitions, their `M-.`
+and xref, the metaobject, package and pathname pages -- in `sbcl-loaded-wire.log` and
+`rontolisp-loaded-wire.log`); h21's SLY driver and Lem in Docker against it (2026-10-30); a
 program file served after its end and `quit-lisp` ending the
 process with 0, and the compiled message on JVM, Preview 1 and the component (2026-10-30).
