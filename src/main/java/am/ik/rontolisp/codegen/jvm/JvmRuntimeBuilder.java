@@ -203,6 +203,10 @@ final class JvmRuntimeBuilder {
 	 * value tail's depth plus one ({@link JvmTailBounce#emitCopyEntryCheck})
 	 * @param foreign the class's own function ids, outside which a function value goes to
 	 * the host's router, or null for a class linked to none
+	 * @param funcallableTags the funcallable layout tags, whose instances the
+	 * classification replaces by the function installed in them
+	 * ({@link JvmFuncallableInstances}); empty for a program defining no funcallable
+	 * class
 	 * @return the dispatcher method(s): one, or a router plus segments
 	 */
 	static List<JvmLispCompiler.DispatchMethod> buildDispatchMethods(int arity,
@@ -213,8 +217,8 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodRefEntry lookupRef,
 			@org.jspecify.annotations.Nullable FunctionNamespace namespace, boolean spread, String name,
 			boolean checksDepth, @org.jspecify.annotations.Nullable Set<Integer> dispatchable,
-			ArityReporting arityReporting, JvmUnsupplied unsupplied,
-			@org.jspecify.annotations.Nullable Foreign foreign) {
+			ArityReporting arityReporting, JvmUnsupplied unsupplied, @org.jspecify.annotations.Nullable Foreign foreign,
+			List<String> funcallableTags) {
 		// Descriptor: (Object funcval, Object a0, ..., Object aN-1, int depth) -> Object,
 		// or (Object funcval, Object argList, int depth) -> Object for the spread
 		// dispatcher (dispatcherDesc).
@@ -351,6 +355,12 @@ final class JvmRuntimeBuilder {
 				MethodCode.Label toResolved = code.newLabel();
 				code.goto_(toResolved);
 				code.labelBinding(ifNotArray);
+				// A funcallable instance re-enters the classification as the function
+				// installed in it: the Object[] whose slot 0 is no funcId takes the test
+				// on
+				// its way to the throw, every other path jumps past it. Without one the
+				// throw sits at ifNoId, as it always did.
+				MethodCode.Label throwNotFn = funcallableTags.isEmpty() ? ifNoId : code.newLabel();
 				if (lookupRef != null) {
 					// A String funcval is a SYMBOL used as a function designator (the
 					// interpreter's late binding): resolve it through _lookup, whose
@@ -372,12 +382,16 @@ final class JvmRuntimeBuilder {
 					MethodCode.Label ifResolved = code.newLabel();
 					code.ifnonnull(ifResolved);
 					code.pop();
-					notFnThrowAt(code, notFnRef, ifNotString, ifEmpty, ifNoId);
+					emitFuncallableArm(code, cp, objectClass, objectArrayClass, funcallableTags, ifNoId, throwNotFn,
+							fvSlot, restSlot, classify);
+					notFnThrowAt(code, notFnRef, ifNotString, ifEmpty, throwNotFn);
 					code.labelBinding(ifResolved);
 					code.astore(fvSlot);
 				}
 				else {
-					notFnThrowAt(code, notFnRef, ifEmpty, ifNoId);
+					emitFuncallableArm(code, cp, objectClass, objectArrayClass, funcallableTags, ifNoId, throwNotFn,
+							fvSlot, restSlot, classify);
+					notFnThrowAt(code, notFnRef, ifEmpty, throwNotFn);
 				}
 				code.labelBinding(toResolved);
 			}
@@ -662,6 +676,27 @@ final class JvmRuntimeBuilder {
 		code.invokestatic(notFnRef);
 		code.athrow();
 		code.labelBinding(unbound);
+	}
+
+	/**
+	 * The classification's funcallable-instance arm, ahead of the not-a-function throw:
+	 * the code falling through here jumps to {@code throwNotFn}, and {@code noId} -- an
+	 * {@code Object[]} whose slot 0 is no funcId -- re-enters at {@code classify} as the
+	 * function a funcallable instance has installed ({@link JvmFuncallableInstances}),
+	 * else falls through to the throw. Emits nothing for a program defining no
+	 * funcallable class, where {@code throwNotFn} IS {@code noId}.
+	 */
+	private static void emitFuncallableArm(MethodCode code, ConstantPool cp, ClassEntry objectClass,
+			ClassEntry objectArrayClass, List<String> funcallableTags, MethodCode.Label noId,
+			MethodCode.Label throwNotFn, int fvSlot, int scratchSlot, MethodCode.Label classify) {
+		if (funcallableTags.isEmpty()) {
+			return;
+		}
+		code.goto_(throwNotFn);
+		code.labelBinding(noId);
+		JvmFuncallableInstances.emitUnwrap(code, cp, objectArrayClass,
+				cp.methodRef(objectClass, "equals", "(Ljava/lang/Object;)Z"), funcallableTags, fvSlot, fvSlot,
+				scratchSlot, classify);
 	}
 
 	/**

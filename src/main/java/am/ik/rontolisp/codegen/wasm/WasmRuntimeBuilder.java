@@ -2012,6 +2012,24 @@ final class WasmRuntimeBuilder {
 			@Nullable Set<Integer> dispatchable, int pageFuncBase, @Nullable ArityReport report, int arityChkIndex,
 			boolean sharedConsReaders, @Nullable NotFunctionReport notFunction, boolean identityHash,
 			int unsuppliedGlobal) {
+		return buildDispatch(arity, defuns, lambdaDecls, numDefuns, st, usesEval, probesNamespace, userFuncBase, spread,
+				dispatchable, pageFuncBase, report, arityChkIndex, sharedConsReaders, notFunction, identityHash,
+				unsuppliedGlobal, null);
+	}
+
+	/**
+	 * As the dispatcher builder above, with the prologue first replacing a funcallable
+	 * instance by the function installed in it.
+	 * @param funcallable the module's funcallable layouts, or {@code null} when it can
+	 * build no funcallable instance
+	 * @return the dispatcher body and its pages
+	 */
+	static DispatchFunctions buildDispatch(int arity, List<WasmLispCompiler.DefunDecl> defuns,
+			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
+			boolean usesEval, boolean probesNamespace, int userFuncBase, boolean spread,
+			@Nullable Set<Integer> dispatchable, int pageFuncBase, @Nullable ArityReport report, int arityChkIndex,
+			boolean sharedConsReaders, @Nullable NotFunctionReport notFunction, boolean identityHash,
+			int unsuppliedGlobal, @Nullable WasmFuncallableInstances funcallable) {
 		int dispatchArgs = spread ? 1 : arity;
 		List<DispatchTarget> targets = dispatchTargets(arity, defuns, lambdaDecls, spread, dispatchable, userFuncBase);
 		// The callables this dispatcher CANNOT serve: their funcId reaching it is a call
@@ -2043,7 +2061,7 @@ final class WasmRuntimeBuilder {
 			ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			WasmWriter w = new WasmWriter(body);
 			emitDispatchPrologue(w, arity, dispatchArgs, spread, usesEval, probesNamespace, report != null, notFunction,
-					identityHash);
+					identityHash, funcallable);
 			emitDispatchCases(w, targets, missShapes, arity, dispatchArgs, spread, 0, report, arityChkIndex,
 					sharedConsReaders, identityHash, unsuppliedGlobal);
 			emitDispatchEpilogue(w, dispatchArgs, notFunction);
@@ -2095,7 +2113,7 @@ final class WasmRuntimeBuilder {
 		ByteArrayOutputStream rootBody = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter rw = new WasmWriter(rootBody);
 		emitDispatchPrologue(rw, arity, dispatchArgs, spread, usesEval, probesNamespace, report != null, notFunction,
-				identityHash);
+				identityHash, funcallable);
 		int funcIdLocal = dispatchArgs + 1;
 		rw.write(Instruction.GET_LOCAL);
 		rw.writeUnsignedLeb128(funcIdLocal);
@@ -3370,7 +3388,7 @@ final class WasmRuntimeBuilder {
 	 */
 	private static void emitDispatchPrologue(WasmWriter w, int arity, int dispatchArgs, boolean spread,
 			boolean usesEval, boolean probesNamespace, boolean reporting, @Nullable NotFunctionReport notFunction,
-			boolean identityHash) {
+			boolean identityHash, @Nullable WasmFuncallableInstances funcallable) {
 		// Locals: param 0 = funcval, params 1..arity = args
 		// Extra locals: funcId (i32) and the arg list for the _apply fallback (ref); a
 		// reporting dispatcher adds ONE more ref for the message it assembles, so a
@@ -3406,6 +3424,9 @@ final class WasmRuntimeBuilder {
 				w.write(Instruction.IF, 0x40);
 				w.write(Instruction.UNREACHABLE); // retired
 				w.write(Instruction.END);
+				if (funcallable != null) {
+					funcallable.emitUnwrap(w, 0, argListLocal, -1);
+				}
 				emitClosureFuncId(w, funcIdLocal);
 				w.write(Instruction.BR);
 				w.writeUnsignedLeb128(1); // past the symbol arm
@@ -3417,6 +3438,11 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.END);
 			emitSymbolClosure(w, funcIdLocal, identityHash);
 			w.write(Instruction.ELSE);
+			if (funcallable != null) {
+				// A funcallable instance is called through its function; the cast below
+				// traps on an instance with none, as on any other non-function.
+				funcallable.emitUnwrap(w, 0, argListLocal, -1);
+			}
 			emitClosureFuncId(w, funcIdLocal);
 			w.write(Instruction.END);
 		}
@@ -3438,6 +3464,10 @@ final class WasmRuntimeBuilder {
 			w.writeHeapType(WasmLispCompiler.TYPE_CLOSURE);
 			w.write(Instruction.BR_IF);
 			w.writeUnsignedLeb128(0); // $closure
+			if (funcallable != null) {
+				// A funcallable instance joins the closure path as its function.
+				funcallable.emitUnwrap(w, 0, argListLocal, 0);
+			}
 			w.write(Instruction.GET_LOCAL);
 			w.writeUnsignedLeb128(0);
 			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -3467,6 +3497,9 @@ final class WasmRuntimeBuilder {
 				w.writeHeapType(WasmLispCompiler.TYPE_CLOSURE);
 				w.write(Instruction.BR_IF);
 				w.writeUnsignedLeb128(1); // $closure
+				if (funcallable != null) {
+					funcallable.emitUnwrap(w, 0, argListLocal, 1);
+				}
 				w.write(Instruction.BR);
 				w.writeUnsignedLeb128(3); // $notFunction
 				w.write(Instruction.END); // $registry

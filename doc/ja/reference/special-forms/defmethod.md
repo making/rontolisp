@@ -7,12 +7,12 @@
 - `(var (eql literal))` — 引数がそのリテラル（キーワード、クォートされたシンボル、数値、文字）のときにマッチ。素の名前は先に定義された [`defconstant`](defconstant.md) として解決され、その値にマッチします。定数でない名前はシンボル自身を表します。`(eql (find-class 'name))` はそのクラスオブジェクトにマッチします
 - `(var class-name)` — [`defclass`](defclass.md) クラスとそのサブクラスのインスタンスにマッチ
 - `(var struct-name)` — [`defstruct`](defstruct.md) 型のインスタンスにマッチ（ディスパッチャは構造体述語と同じインスタンスタグをテストします）
-- `(var type-name)` — 組み込み型（`integer`、`float`、`number`、`string`、`symbol`、`keyword`、`character`、`cons`、`list`、`null`、`hash-table`、`function`、`pathname`、`package` など）にマッチ。`package` 引数は [`typep`](../macros/typep.md) がパッケージとみなすものにちょうどマッチし、`keyword`/`symbol` より先に判定されます。そのため「`package` メソッド + [`find-package`](../functions/find-package.md) を呼んで再帰する非特定化メソッド」という designator のイディオムが停止します
+- `(var type-name)` — 組み込み型（`integer`、`float`、`number`、`string`、`symbol`、`keyword`、`character`、`cons`、`list`、`null`、`hash-table`、`function`、`bit-vector`、`vector`、`array`、`pathname`、`package` など）にマッチ。`function` は funcallable インスタンス（`closer-mop:funcallable-standard-class` のインスタンス）にもマッチします。`package` 引数は [`typep`](../macros/typep.md) がパッケージとみなすものにちょうどマッチし、`keyword`/`symbol` より先に判定されます。そのため「`package` メソッド + [`find-package`](../functions/find-package.md) を呼んで再帰する非特定化メソッド」という designator のイディオムが停止します
 - `(var metaclass-name)` — `class` と `standard-class` はクラスオブジェクト（[`find-class`](../functions/find-class.md) と [`class-of`](../functions/class-of.md) が返すもの。組み込みクラスを含む）にマッチ。`structure-class` と `built-in-class` は受け付けますが何にもマッチしません（ここではすべてのクラスオブジェクトが `standard-class` です）
 - 名前の代わりにクラスオブジェクト（`#.(class-of 1)`）を書くと、そのクラス名と同じ意味になります
 - `(var t)` または素の `var` — デフォルトメソッド
 
-呼び出しはマッチする最も特定的なメソッドを実行します: まず `eql` メソッド、次にクラスメソッド（サブクラスがスーパークラスより先）、次に組み込み型（`integer` のようなサブタイプが `number` のようなスーパータイプより先）、最後にデフォルトメソッドの順で、マッチがなければエラーを通知します。同じ specializer を再定義すると以前のメソッドを置き換えます。ラムダリストは必須引数の後に `&optional`/`&rest`/`&key` を続けられます（ディスパッチャは末尾を `apply` で転送します）。本体はドキュメント文字列と `(declare ...)` で始められます（どちらも無視されます）。
+呼び出しはマッチする最も特定的なメソッドを実行します: まず `eql` メソッド、次にクラスメソッド（サブクラスがスーパークラスより先）、次に組み込み型（`integer` のようなサブタイプが `number` のようなスーパータイプより先、`bit-vector` が `vector` より、`vector` が `array` より先）、最後にデフォルトメソッドの順で、マッチがなければエラーを通知します。同じ specializer を再定義すると以前のメソッドを置き換えます。ラムダリストは必須引数の後に `&optional`/`&rest`/`&key` を続けられます（ディスパッチャは末尾を `apply` で転送します）。本体はドキュメント文字列と `(declare ...)` で始められます（どちらも無視されます）。
 
 ```lisp
 (defclass animal () ())

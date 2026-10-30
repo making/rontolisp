@@ -6293,11 +6293,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		final boolean ladderUsesEval = usesEval;
 		final boolean ladderProbesNamespace = writesFunctionNamespace;
 		final int ladderRawSentinel = rawSentinelGlobalIndex;
+		// A funcallable instance is called through the function installed in it: only a
+		// program defining a funcallable class gets the prologue arm.
+		final @Nullable WasmFuncallableInstances ladderFuncallable = WasmFuncallableInstances.of(closRegistry,
+				layoutAddresses, this.usesInstances ? instanceTypeBase() : -1);
 		LadderBuilder ladderBuilder = (ladder, dispatchable) -> WasmRuntimeBuilder.buildDispatch(ladder.arity(), defuns,
 				lambdaDecls, ladderNumDefuns, stringTable, ladderUsesEval, ladderProbesNamespace, ladderUserFuncBase,
 				ladder.spread(), dispatchable, ladder.pageBase(), ladderArityReport, ladderArityChkIndex,
-				this.optimize.prefersSizeOverSpeed(), ladderNotFunction, this.usesIdentityHashTables,
-				ladderRawSentinel);
+				this.optimize.prefersSizeOverSpeed(), ladderNotFunction, this.usesIdentityHashTables, ladderRawSentinel,
+				ladderFuncallable);
 		List<Ladder> ladders = new ArrayList<>();
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 			if (indirectCallArities.contains(arity)) {

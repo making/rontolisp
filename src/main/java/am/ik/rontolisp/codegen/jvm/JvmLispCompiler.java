@@ -3745,6 +3745,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		java.util.Collections.sort(funcrefIds);
 		boolean needsFuncRef = !funcrefIds.isEmpty() || mainCtx.computedFunctionBox[0];
+		// A funcallable instance is called through the function installed in it: only a
+		// program defining a funcallable class gets the classification arm, in the
+		// dispatchers and in _apply.
+		List<String> funcallableTags = mayUseInstances ? closRegistry.funcallableTags() : List.of();
 		if (needsLookup) {
 			MethodRefEntry evalRef = cp.methodRef(thisClass, evalName, evalDesc);
 			MethodRefEntry applyRef = cp.methodRef(thisClass, applyName, evalDesc);
@@ -3802,6 +3806,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						: null)
 				.arityOperators(arityOperators)
 				.fenvForwarders(fenvForwarders)
+				.funcallableTags(funcallableTags)
 				.thisClass(thisClass)
 				.globalAccessRef(evalRunsForms ? globalAccessRef(functions) : null)
 				.build();
@@ -3889,7 +3894,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						lambdaFuncInfos, cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass,
 						stringClass, applyRefForDispatch, lookupRefForDispatch, namespaceForDispatch, false,
 						JvmRuntimeBuilder.dispatcherName(arity, false), false, funcIds, arityReporting,
-						mainCtx.unsupplied, foreignRange.get());
+						mainCtx.unsupplied, foreignRange.get(), funcallableTags);
 				built.addAll(shared);
 				// A value tail's real call goes through a copy of its arity's
 				// dispatcher, whose profile holds only what value tails reach. An arity
@@ -3900,7 +3905,7 @@ public final class JvmLispCompiler implements LispCompiler {
 							cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
 							applyRefForDispatch, lookupRefForDispatch, namespaceForDispatch, false,
 							JvmTailBounce.valueTailDispatcherName(arity), true, funcIds, arityReporting,
-							mainCtx.unsupplied, foreignRange.get()));
+							mainCtx.unsupplied, foreignRange.get(), funcallableTags));
 					valueTailCopies.add(arity);
 				}
 			}
@@ -3912,7 +3917,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
 						applyRefForDispatch, lookupRefForDispatch, namespaceForDispatch, true,
 						JvmRuntimeBuilder.dispatcherName(0, true), false, funcIds, arityReporting, mainCtx.unsupplied,
-						foreignRange.get()));
+						foreignRange.get(), funcallableTags));
 			}
 			return built;
 		};
