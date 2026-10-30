@@ -188,12 +188,30 @@ EH mode: a trap); `(setf (ro o) v)` stored on all four. Pinned by
 `SetfFunctionNameFixture.STRUCT_WRITER` (`aDefstructSlotAccessorHasASetfFunction` in the three
 backend suites) and `LispMacroExpanderTest#aDefstructSlotWriterFunctionIsEmittedOnlyForAProgramThatTakesIt`.
 
-## Package-qualified names
-Expansion is POST-resolution, so `(defstruct foo::point x)` generates
-`foo::make-point`/`foo::point-p`/`foo::copy-point`/`foo::point-x`, always the internal
-double-colon spelling; constructor keywords use the unqualified slot base name via the explicit
-`((:x foo::x) default)` `&key` form. Limitation: `:export`ing generated names in `defpackage`
-makes call sites resolve to the single-colon spelling and fail.
+## The package of the derived names
+CL interns the derived constructor/predicate/copier/accessor names in `*package*` at the form.
+Expansion is POST-resolution and sees only the resolved name, so:
+
+- **A name written UNQUALIFIED that resolves to another package's symbol** (inherited or
+  imported) gets `(:%intern-package "CUR")` appended to its header
+  (`PackageResolver.withDefstructInternPackage`, `LispNames.DEFSTRUCT_INTERN_PACKAGE`). Until
+  2026-10-30 the derived names went to the NAME's package: optima's `(defstruct and-pattern)`
+  in `optima`, the name exported by `optima.core`, defined `optima.core::and-pattern-p` and
+  `(optima:match ...)` failed `OPTIMA::AND-PATTERN-P is undefined`. Pinned by ci-spec
+  `defstruct-derived-names-intern-in-the-current-package` (`:include` and `:conc-name` too).
+- **A name written QUALIFIED keeps its own package**: `(defstruct foo::point x)` from `cl-user`
+  defines `foo::make-point`. Deliberate deviation (CL: `cl-user::make-point`): the bundled
+  libraries (`bordeaux-threads.lisp`, `objc*.lisp`) are written in `cl-user` that way.
+- **Spelling**: `PackageResolver.internedSpelling(pkg, member)`, the bare reference's resolution
+  with `pkg` current (CL `intern`): the package's own symbol by its declared export (quri's
+  exported `uri-p`), or an accessible symbol of a used package (an exported `make-ap` of the
+  package the name comes from IS that symbol). A name only `cl` provides stays the package's own,
+  as before (defining it would redefine a standard operator). It mints nothing.
+- Constructor keywords use the unqualified slot base name via the explicit
+  `((:x foo::x) default)` `&key` form.
+- The resolver-less summaries (`defstructDefinedNames`, `defstructSlotFlow`) spell a derived
+  name in the name's package AND the intern package: an over-approximation, since a missed
+  name drops a definition a kept call site needs.
 
 ## Gaps
 No `structurep` (not standard CL). Compiled runtime `eval` cannot define structs or setf
@@ -210,5 +228,6 @@ accessor places (`doc/en/guides/eval-limitations.md`).
   `macroExpandingToDefstructIsKept`
 - ci-spec `defstruct-constructor-accessors-predicate-copier`,
   `defstruct-setf-places-and-first-class-accessors`, `defstruct-keyword-conc-name`,
+  `defstruct-derived-names-intern-in-the-current-package`,
   `defstruct-print-object-and-print-function`, `setf-function-definitions`,
   `ironclad-residue-features`; `DocExamplesTest`.

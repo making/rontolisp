@@ -12578,6 +12578,29 @@ cases:
         (print (ci-kw-thing-state it)))
     expected: |
       5
+  - name: defstruct-derived-names-intern-in-the-current-package
+    # CLHS: the derived names are interned in *package*, not in the struct name's home
+    # (optima's (defstruct and-pattern) names a symbol inherited from optima.core).
+    # An inherited exported derived name (make-ap, ap-subs) stays the used package's.
+    source: |
+      (defpackage :ci-dsh-core (:use :cl) (:export #:ap #:make-ap #:ap-subs #:cp))
+      (defpackage :ci-dsh-main (:use :cl :ci-dsh-core))
+      (in-package :ci-dsh-main)
+      (defstruct ap subs)
+      (defstruct (cp (:include ap) (:conc-name cp-)) w)
+      (let ((a (make-ap :subs 3))
+            (c (make-cp :subs 5 :w 6)))
+        (print (list (ap-p a) (ap-subs (copy-ap a)) (ap-p c) (cp-p c) (cp-p a)))
+        (setf (ap-subs a) 4 (cp-w c) 7)
+        (print (list (ap-subs a) (ap-subs c) (cp-subs c) (cp-w (copy-cp c)))))
+      (print (mapcar (lambda (s) (not (null (fboundp s))))
+                     '(ci-dsh-main::ap-p ci-dsh-core::ap-p ci-dsh-main::copy-ap ci-dsh-core::copy-ap
+                       ci-dsh-main::cp-subs ci-dsh-core::cp-subs)))
+      (in-package :cl-user)
+    expected: |
+      (T 3 T T NIL)
+      (4 5 5 7)
+      (T NIL T NIL T NIL)
   - name: defstruct-print-object-and-print-function
     # The two printer options ride the print-object seam: (:print-object fn) takes
     # (object stream), the CLtL1 (:print-function fn) an extra depth (0 -- nothing
