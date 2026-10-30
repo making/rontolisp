@@ -363,13 +363,51 @@ class SwankServerTest {
 			assertThat(sly.mrepl("typed\n")).containsExactly("(:channel-send 1 (:set-read-mode :finished-reading))",
 					"(:channel-send 1 (:write-values ((\"(\\\"typed\\\" 7)\" 3 nil))))",
 					"(:channel-send 1 (:prompt \"DRV-SLY\" \"DRV-SLY\" 0 4))");
-			assertThat(sly.mrepl("(error \"boom\")")).containsExactly(
+			// an error opens the debugger on the REPL's thread, a prompt naming the level
+			// and the condition first; the REPL reads on inside it, and q aborts the
+			// input
+			sly.write("(:emacs-channel-send 1 (:process \"(error \\\"boom\\\")\"))");
+			assertThat(sly.upTo("debug-activate")).containsExactly(
+					"(:channel-send 1 (:prompt \"DRV-SLY\" \"DRV-SLY\" 1 4 \"#<SIMPLE-ERROR \\\"boom\\\">\"))",
+					"(:debug tid 1 (\"boom\" \"   [Condition of type SIMPLE-ERROR]\" nil)"
+							+ " ((\"RETRY\" \"Retry SLY mREPL evaluation request.\")"
+							+ " (\"*ABORT\" \"Return to SLY's top level.\") (\"ABORT\""
+							+ " \"abort thread (#<THREAD \\\"sly-channel-1-mrepl-remote-1\\\" RUNNING {tid}>)\"))"
+							+ " ((0 \"(EVAL (ERROR \\\"boom\\\"))\")"
+							+ " (1 \"(SLYNK-MREPL::MREPL-EVAL \\\"(error \\\\\\\"boom\\\\\\\")\\\")\")) nil)",
+					"(:debug-activate tid 1)");
+			assertThat(sly.mrepl("(+ 1 1)")).containsExactly(
+					"(:channel-send 1 (:write-values ((\"2 (2 bits, #x2, #o2, #b10)\" 4 \"2\"))))",
+					"(:channel-send 1 (:prompt \"DRV-SLY\" \"DRV-SLY\" 1 5))");
+			sly.send("(slynk:throw-to-toplevel)", null, thread);
+			assertThat(sly.until("(:channel-send 1 (:prompt")).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)",
 					"(:channel-send 1 (:evaluation-aborted \"#<SIMPLE-ERROR \\\"boom\\\">\"))",
-					"(:channel-send 1 (:prompt \"DRV-SLY\" \"DRV-SLY\" 0 4))");
+					"(:channel-send 1 (:prompt \"DRV-SLY\" \"DRV-SLY\" 0 5))");
+			// a history entry inspected, and read back by #v
+			assertThat(sly
+				.rex("(slynk:eval-for-inspector nil nil 'slynk-mrepl:inspect-entry 1 4 0)", "common-lisp-user", thread)
+				.getFirst()).startsWith("(:return (:ok (:title \"#<INTEGER {")
+				.contains(" :id 0 :content ((\"Value: 2 = #x00000002 = #o2 = #b10 = 2.0e+0\" ");
+			assertThat(sly.mrepl("(list #v4:0 #v4)")).first()
+				.isEqualTo("(:channel-send 1 (:write-values ((\"(2 2)\" 5 nil))))");
+			// a worker's error: SLY's restarts, a: its top level
+			long car = sly.send("(slynk:interactive-eval \"(car 1)\")", null, "t");
+			assertThat(sly.upTo("debug-activate")).containsExactly(
+					"(:debug tid 1 (\"CAR: The value 1 is not of type LIST\" \"   [Condition of type TYPE-ERROR]\" nil)"
+							+ " ((\"RETRY\" \"Retry SLY interactive evaluation request.\")"
+							+ " (\"*ABORT\" \"Return to SLY's top level.\")"
+							+ " (\"ABORT\" \"abort thread (#<THREAD \\\"slynk-worker\\\" RUNNING {tid}>)\"))"
+							+ " ((0 \"(CAR 1)\") (1 \"(EVAL (CAR 1))\") (2 \"(SLYNK:INTERACTIVE-EVAL \\\"(car 1)\\\")\"))"
+							+ " (id))",
+					"(:debug-activate tid 1)");
+			assertThat(sly.sldb("(slynk:sly-db-abort)", car)).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)",
+					"(:return (:abort \"#<TYPE-ERROR \\\"CAR: The value 1 is not of type LIST\\\">\") id)");
 			// a package set on the REPL's thread, Slynk's own echo area and completions
 			assertThat(sly.rex("(slynk-mrepl:eval-for-mrepl 1 'slynk-mrepl:guess-and-set-package \"CL-USER\")", null,
 					thread))
-				.containsExactly("(:return (:ok ((\"CL-USER\" \"CL-USER\" 0 4) (t))) id)");
+				.containsExactly("(:return (:ok ((\"CL-USER\" \"CL-USER\" 0 6) (t))) id)");
 			assertThat(sly.rex("(slynk:interactive-eval \"(+ 2 3)\")", null, "t"))
 				.containsExactly("(:return (:ok \"5 (3 bits, #x5, #o5, #b101)\") id)");
 			assertThat(sly.rex("(slynk:interactive-eval \"(values)\")", null, "t"))
@@ -379,13 +417,22 @@ class SwankServerTest {
 			assertThat(sly.rex("(slynk-completion:flex-completions \"mvbind\" \"COMMON-LISP-USER\")", null, "t"))
 				.containsExactly("(:return (:ok (((\"multiple-value-bind\" 0.009072388522326946"
 						+ " ((0 \"M\") (9 \"V\") (15 \"BIND\")) \"macro\")) nil)) id)");
-			// an interrupt names the REPL's thread
+			// an interrupt names the REPL's thread: a level with no prompt, continued,
+			// then quit on no condition
 			sly.write("(:emacs-channel-send 1 (:process \"(loop)\"))");
 			Thread.sleep(200);
 			sly.write("(:emacs-interrupt " + thread + ")");
-			assertThat(sly.until("(:channel-send 1 (:prompt")).containsExactly(
-					"(:channel-send 1 (:evaluation-aborted \"#<SIMPLE-ERROR \\\"Interrupt from Emacs\\\">\"))",
-					"(:channel-send 1 (:prompt \"CL-USER\" \"CL-USER\" 0 4))");
+			assertThat(sly.upTo("debug-activate").getFirst()).startsWith("(:debug tid 1 (\"Interrupt from client\" ")
+				.contains(" ((\"CONTINUE\" \"Continue from break.\") (\"RETRY\" ");
+			sly.send("(slynk:sly-db-continue)", null, thread);
+			assertThat(sly.upTo("debug-return")).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)");
+			sly.write("(:emacs-interrupt " + thread + ")");
+			sly.upTo("debug-activate");
+			sly.send("(slynk:throw-to-toplevel)", null, thread);
+			assertThat(sly.until("(:channel-send 1 (:prompt")).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)", "(:channel-send 1 (:evaluation-aborted \"T\"))",
+					"(:channel-send 1 (:prompt \"CL-USER\" \"CL-USER\" 0 6))");
 
 			assertThat(lem.rex("(micros:connection-info)", "COMMON-LISP-USER", "T").getLast())
 				.contains(":version \"0.0.0\")) id)");
@@ -399,7 +446,32 @@ class SwankServerTest {
 						"(:write-string \"\n\" :repl-result)", "(:write-object \"\\\"two\\\"\" 2 :repl-result)",
 						"(:write-string \"\n\" :repl-result)", "(:return (:ok nil) id)");
 			assertThat(lem.rex("(micros/pretty-eval:pretty-eval \"(* 6 7)\")", "CL-USER", "T"))
-				.containsExactly("(:return (:ok (:value \"=> 42 (6 bits, #x2A, #o52, #b101010)\" :id 3)) id)");
+				.containsExactly("(:return (:ok (:value \"=> 42 (6 bits, #x2A, #o52, #b101010)\" :id 1)) id)");
+			// Lem's inspector asks for an evaluated value and a printed object by id
+			assertThat(lem.rex("(micros/pretty-eval:inspect-evaluation-value 1)", "CL-USER", "T").getFirst())
+				.startsWith("(:return (:ok (:title \"#<INTEGER {")
+				.contains(" :id 0 :content ((\"Value: 42 = #x0000002A = #o52 = #b101010 = 4.2e+1\" ");
+			assertThat(lem.rex("(micros:inspect-printed-object 1)", "CL-USER", "T").getFirst())
+				.contains(" :id 0 :content ((\"Value: 1 = #x00000001 = #o1 = #b1 = 1.0e+0\" ");
+			// an error's level: SWANK's restarts and no :debug-activate
+			long boom = lem.send("(micros/repl:listener-eval \"(error \\\"boom\\\")\" :window-width 148)", "CL-USER",
+					":repl-thread");
+			assertThat(lem.upTo("debug"))
+				.containsExactly("(:debug tid 1 (\"boom\" \"   [Condition of type SIMPLE-ERROR]\""
+						+ " nil) ((\"RETRY\" \"Retry SLIME REPL evaluation request.\")"
+						+ " (\"*ABORT\" \"Return to SLIME's top level.\")"
+						+ " (\"ABORT\" \"abort thread (#<THREAD \\\"repl-thread\\\" RUNNING {tid}>)\"))"
+						+ " ((0 \"(EVAL (ERROR \\\"boom\\\"))\")"
+						+ " (1 \"(MICROS/REPL:LISTENER-EVAL \\\"(error \\\\\\\"boom\\\\\\\")\\\" :WINDOW-WIDTH 148)\")) (id))");
+			assertThat(lem.sldb("(micros:throw-to-toplevel)", boom)).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)", "(:return (:abort \"#<SIMPLE-ERROR \\\"boom\\\">\") id)");
+			long looping = lem.send("(micros/repl:listener-eval \"(loop)\" :window-width 148)", "CL-USER",
+					":repl-thread");
+			Thread.sleep(200);
+			lem.write("(:emacs-interrupt :repl-thread)");
+			assertThat(lem.upTo("debug").getFirst()).startsWith("(:debug tid 1 (\"Interrupt from Editor\" ");
+			assertThat(lem.sldb("(micros:throw-to-toplevel)", looping)).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)", "(:return (:abort \"NIL\") id)");
 			assertThat(lem.rex("(micros:interactive-eval \"(values)\")", "CL-USER", "T"))
 				.containsExactly("(:return (:ok \"; No value\") id)");
 			// C-c C-l calls micros:load-file in a form of Lem's own
@@ -741,16 +813,9 @@ class SwankServerTest {
 			return until("(:channel-send 1 (:prompt");
 		}
 
-		/** The messages up to the first that starts with a text. */
+		/** The messages up to the first that starts with a text, as {@link #replies}. */
 		List<String> until(String prefix) throws IOException {
-			List<String> messages = new ArrayList<>();
-			while (true) {
-				String message = SwankWire.print(Objects.requireNonNull(SwankWire.read(this.in)));
-				messages.add(message);
-				if (message.startsWith(prefix)) {
-					return messages;
-				}
-			}
+			return readUntil(message -> SwankWire.print(message).startsWith(prefix));
 		}
 
 		/** A REPL input, as {@code slime-repl-return} sends it. */

@@ -22,6 +22,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 import org.jspecify.annotations.Nullable;
 
@@ -363,8 +364,12 @@ public final class CommonLispSwank implements SwankLisp {
 	}
 
 	private Region evalRegion(String code) {
+		return evalRegion(code, UnaryOperator.identity());
+	}
+
+	private Region evalRegion(String code, UnaryOperator<LispVal> rewrite) {
 		boolean markers = SourceLanguage.usesReadEvalMarkers(code);
-		List<LispVal> forms = read(code);
+		List<LispVal> forms = read(code).stream().map(rewrite).toList();
 		List<LispVal> values = List.of();
 		LispVal last = LispNil.INSTANCE;
 		List<LispVal> resolved = new ArrayList<>();
@@ -432,15 +437,19 @@ public final class CommonLispSwank implements SwankLisp {
 	 * history variables ({@code *} {@code **} {@code ***}, {@code /} {@code //}
 	 * {@code ///}, {@code +} {@code ++} {@code +++}) set from the last.
 	 * @param code the input
-	 * @return the last form's values, as {@code prin1} prints them
+	 * @return the last form's values
 	 */
-	public List<String> listenerEval(String code) {
-		return listen(code).stream().map(this::print).toList();
+	public List<LispVal> listenerEval(String code) {
+		return listen(code);
 	}
 
 	/** Evaluates a REPL input and sets the history variables from its last form. */
 	private List<LispVal> listen(String code) {
-		Region region = evalRegion(code);
+		return listen(code, UnaryOperator.identity());
+	}
+
+	private List<LispVal> listen(String code, UnaryOperator<LispVal> rewrite) {
+		Region region = evalRegion(code, rewrite);
 		Environment global = this.evaluator.globalEnvironment();
 		LispVal primary = region.values().isEmpty() ? LispNil.INSTANCE : region.values().getFirst();
 		shift(global, "***", "**", "*", primary);
@@ -456,22 +465,149 @@ public final class CommonLispSwank implements SwankLisp {
 	 * its other notations
 	 * @param copy what reads back as the value, for a symbol ({@code 'name}, downcased)
 	 * or a number, else null
+	 * @param value the value
 	 */
-	public record ReplValue(String presented, @Nullable String copy) {
+	public record ReplValue(String presented, @Nullable String copy, LispVal value) {
 	}
 
 	/**
 	 * Evaluates a REPL input as Slynk's mREPL ({@code mrepl-eval}): every form in turn,
-	 * the history variables set from the last.
+	 * the history variables set from the last. {@code #vN:M} reads as the history's entry
+	 * {@code N}'s value {@code M}, {@code #vN} as all its values (Slynk's
+	 * {@code backreference-reader}).
 	 * @param code the input
+	 * @param history the REPL's history: each input's values that answered any
 	 * @return the last form's values
 	 */
-	public List<ReplValue> mreplEval(String code) {
+	public List<ReplValue> mreplEval(String code, List<List<LispVal>> history) {
+		Map<String, LispVal> references = new HashMap<>();
+		String text = backreferences(code, history, references);
 		List<ReplValue> out = new ArrayList<>();
-		for (LispVal value : listen(code)) {
-			out.add(new ReplValue(presentForEmacs(value), copyForm(value)));
+		for (LispVal value : listen(text,
+				references.isEmpty() ? UnaryOperator.identity() : form -> substitute(form, references))) {
+			out.add(new ReplValue(presentForEmacs(value), copyForm(value), value));
 		}
 		return out;
+	}
+
+	/** The name a {@code #v} reference reads as until its form takes its place. */
+	private static final String BACKREFERENCE = "%SLY-BACKREFERENCE-";
+
+	/**
+	 * A REPL input with each {@code #vN[:M]} outside strings, comments, escaped names and
+	 * character names made a symbol, the form taking its place kept by the symbol's name:
+	 * {@code 'value}, {@code (values-list '(values...))}, or the error Slynk's assertion
+	 * signals for an entry the history does not have.
+	 */
+	private static String backreferences(String code, List<List<LispVal>> history, Map<String, LispVal> forms) {
+		StringBuilder out = new StringBuilder(code.length());
+		int n = code.length();
+		int i = 0;
+		while (i < n) {
+			char c = code.charAt(i);
+			if (c == '#' && i + 2 < n && Character.toLowerCase(code.charAt(i + 1)) == 'v'
+					&& Character.isDigit(code.charAt(i + 2))) {
+				int j = digits(code, i + 2);
+				int entry = Integer.parseInt(code.substring(i + 2, j));
+				Integer value = null;
+				if (j + 1 < n && code.charAt(j) == ':' && Character.isDigit(code.charAt(j + 1))) {
+					int k = digits(code, j + 1);
+					value = Integer.parseInt(code.substring(j + 1, k));
+					j = k;
+				}
+				String name = BACKREFERENCE + forms.size() + "%";
+				forms.put(name, backreference(history, entry, value));
+				out.append(' ').append(name).append(' ');
+				i = j;
+				continue;
+			}
+			int end = switch (c) {
+				case '"', '|' -> closing(code, i + 1, c);
+				case ';' -> {
+					int newline = code.indexOf('\n', i);
+					yield newline < 0 ? n : newline;
+				}
+				case '#' -> {
+					char next = i + 1 < n ? code.charAt(i + 1) : ' ';
+					if (next == '|') {
+						int close = code.indexOf("|#", i + 2);
+						yield close < 0 ? n : close + 2;
+					}
+					if (next == '\\') {
+						int j = Math.min(n, i + 3);
+						while (j < n && !Character.isWhitespace(code.charAt(j))
+								&& "()\"';`,".indexOf(code.charAt(j)) < 0) {
+							j++;
+						}
+						yield j;
+					}
+					yield i + 1;
+				}
+				default -> i + 1;
+			};
+			out.append(code, i, end);
+			i = end;
+		}
+		return out.toString();
+	}
+
+	private static int digits(String code, int from) {
+		int i = from;
+		while (i < code.length() && Character.isDigit(code.charAt(i))) {
+			i++;
+		}
+		return i;
+	}
+
+	/** Past the delimiter that closes a string or an escaped name. */
+	private static int closing(String code, int from, char delimiter) {
+		for (int i = from; i < code.length(); i++) {
+			char c = code.charAt(i);
+			if (c == '\\') {
+				i++;
+			}
+			else if (c == delimiter) {
+				return i + 1;
+			}
+		}
+		return code.length();
+	}
+
+	/** Slynk's {@code mrepl-get-object-from-history} as a form. */
+	private static LispVal backreference(List<List<LispVal>> history, int entry, @Nullable Integer value) {
+		if (entry >= history.size()) {
+			return list(new LispSymbol(LispNames.ERROR),
+					LispString.literal("Illegal history entry " + entry + " for " + history.size() + "-long history"));
+		}
+		List<LispVal> values = history.get(entry);
+		if (value == null) {
+			return list(new LispSymbol("VALUES-LIST"), quoted(list(values)));
+		}
+		if (value >= values.size()) {
+			return list(new LispSymbol(LispNames.ERROR),
+					LispString.literal("History entry " + entry + " is only " + values.size() + " elements long."));
+		}
+		return quoted(values.get(value));
+	}
+
+	private static LispVal quoted(LispVal value) {
+		return list(new LispSymbol(LispNames.QUOTE), value);
+	}
+
+	/** A form with each backreference symbol made the form it stands for. */
+	private static LispVal substitute(LispVal form, Map<String, LispVal> forms) {
+		if (form instanceof LispSymbol symbol) {
+			String name = symbol.name();
+			int at = name.indexOf(BACKREFERENCE);
+			LispVal found = at < 0 ? null : forms.get(name.substring(at));
+			return found != null ? found : form;
+		}
+		if (form instanceof LispCons cons) {
+			LispVal car = substitute(cons.car(), forms);
+			LispVal cdr = substitute(cons.cdr(), forms);
+			return car == cons.car() && cdr == cons.cdr() ? form : new LispCons(car, cdr);
+		}
+		return form;
 	}
 
 	private @Nullable String copyForm(LispVal value) {
@@ -558,6 +694,26 @@ public final class CommonLispSwank implements SwankLisp {
 	 */
 	public String interactiveEval(String code, boolean region, Echo echo, int lines, int width) {
 		return echo(region ? evalRegion(code).values() : evalFirstValues(code), echo, lines, width);
+	}
+
+	/**
+	 * Values and how the echo area shows them.
+	 *
+	 * @param values the values
+	 * @param echo the text
+	 */
+	public record Echoed(List<LispVal> values, String echo) {
+	}
+
+	/**
+	 * Evaluates the first form of a text as micros's {@code pretty-eval}: its values,
+	 * which Lem may inspect later, and SWANK's echo of them.
+	 * @param code the text
+	 * @return the values and their echo
+	 */
+	public Echoed prettyEval(String code) {
+		List<LispVal> values = evalFirstValues(code);
+		return new Echoed(values, echo(values, Echo.MICROS, 0, 0));
 	}
 
 	/**
@@ -2320,6 +2476,16 @@ public final class CommonLispSwank implements SwankLisp {
 		 */
 		void enter(Debugging debugging);
 
+		/**
+		 * What an interrupt's debugger level reports: the editor names itself (SLIME's
+		 * {@code Interrupt from Emacs}, SLY's {@code Interrupt from client}, Lem's
+		 * {@code Interrupt from Editor}).
+		 * @return the message
+		 */
+		default String interruptMessage() {
+			return INTERRUPT_MESSAGE;
+		}
+
 	}
 
 	/**
@@ -2474,9 +2640,10 @@ public final class CommonLispSwank implements SwankLisp {
 		public boolean interrupted() {
 			// SWANK's simple-break: a condition no handler sees, under a CONTINUE
 			// restart that goes on with the evaluation
-			LispVal condition = CommonLispSwank.this.evaluator.simpleError(INTERRUPT_MESSAGE);
+			String message = this.sldb.interruptMessage();
+			LispVal condition = CommonLispSwank.this.evaluator.simpleError(message);
 			return withRestart(LispNames.CONTINUE, "Continue from break.", false, () -> {
-				enter(new Debugging(condition, INTERRUPT_MESSAGE, false, null, null));
+				enter(new Debugging(condition, message, false, null, null));
 				return false;
 			}, () -> true);
 		}
@@ -2773,10 +2940,11 @@ public final class CommonLispSwank implements SwankLisp {
 		 * @param pkg the package it reads in, or null for the frame's
 		 * @param lines the echo area's lines
 		 * @param width its width
+		 * @param echo how the echo area shows the values
 		 * @return the values, as SWANK formats them
 		 */
-		public String evalInFrame(String code, int index, @Nullable String pkg, int lines, int width) {
-			return echo(evalIn(code, index, pkg), Echo.SWANK, lines, width);
+		public String evalInFrame(String code, int index, @Nullable String pkg, int lines, int width, Echo echo) {
+			return echo(evalIn(code, index, pkg), echo, lines, width);
 		}
 
 		/**

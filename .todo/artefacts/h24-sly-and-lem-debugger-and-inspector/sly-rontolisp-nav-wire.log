@@ -1,0 +1,74 @@
+>> (:emacs-rex (slynk:connection-info) nil t 1)\n
+<< (:return (:ok (:pid 3844527 :style :spawn :encoding (:coding-systems ("utf-8-unix")) :lisp-implementation (:type "rontolisp" :name "rontolisp" :version "0.1.0-SNAPSHOT" :program nil) :machine (:instance "dorian" :type "JVM" :version "25.0.4") :features (:rontolisp :rontolisp-interpreter :unicode :thread-support) :modules ("SLYNK/COMPLETION") :package (:name "CL-USER" :prompt "CL-USER") :version "1.0.43")) 1)
+>> (:emacs-rex (slynk:slynk-add-load-paths (quote ("@H21@/dl/sly/contrib/"))) nil t 2)\n
+<< (:return (:ok nil) 2)
+>> (:emacs-rex (slynk:slynk-require (quote ("slynk/indentation" "slynk/stickers" "slynk/trace-dialog" "slynk/package-fu" "slynk/fancy-inspector" "slynk/mrepl" "slynk/arglists"))) nil t 3)\n
+<< (:return (:ok (("SLYNK/COMPLETION" "SLYNK/INDENTATION" "SLYNK/STICKERS" "SLYNK/TRACE-DIALOG" "SLYNK/PACKAGE-FU" "SLYNK/FANCY-INSPECTOR" "SLYNK/MREPL" "SLYNK/ARGLISTS") ("slynk/indentation" "slynk/stickers" "slynk/trace-dialog" "slynk/package-fu" "slynk/fancy-inspector" "slynk/mrepl" "slynk/arglists"))) 3)
+>> (:emacs-rex (slynk-mrepl:create-mrepl 1) nil t 4)\n
+<< (:channel-send 1 (:write-string "; SLY 1.0.43 (#<MREPL mrepl-1-1>)\n"))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 0))
+<< (:return (:ok (1 95)) 4)
+>> (:emacs-rex (slynk:compile-file-for-emacs "@WORK@/ronto-nav/work/drv-nav.lisp" t) nil t 5)\n
+<< (:return (:ok (:compilation-result nil t 0.076188097 nil nil)) 5)
+>> (:emacs-channel-send 1 (:process "(defun drv-repl-fn () (drv-callee 3))"))\n
+<< (:channel-send 1 (:write-values (("DRV-REPL-FN" 0 "'drv-repl-fn"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 1))
+>> (:emacs-rex (slynk:find-definitions-for-emacs "drv-callee") nil t 6)\n
+<< (:return (:ok (("(DEFUN DRV-CALLEE)" (:location (:file "@WORK@/ronto-nav/work/drv-nav.lisp") (:position 70) (:snippet "(defun drv-callee (a)\n  \"Callee doc.\"\n  (* a 2))\n\n(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n"))))) 6)
+>> (:emacs-rex (slynk:find-definitions-for-emacs "drv-mac") nil t 7)\n
+<< (:return (:ok (("(DEFMACRO DRV-MAC)" (:location (:file "@WORK@/ronto-nav/work/drv-nav.lisp") (:position 23) (:snippet "(defmacro drv-mac (x)\n  `(list ,x *drv-var*))\n\n(defun drv-callee (a)\n  \"Callee doc.\"\n  (* a 2))\n\n(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :inita"))))) 7)
+>> (:emacs-rex (slynk:find-definitions-for-emacs "*drv-var*") nil t 8)\n
+<< (:return (:ok (("(DEFVAR *DRV-VAR*)" (:location (:file "@WORK@/ronto-nav/work/drv-nav.lisp") (:position 1) (:snippet "(defvar *drv-var* 1)\n\n(defmacro drv-mac (x)\n  `(list ,x *drv-var*))\n\n(defun drv-callee (a)\n  \"Callee doc.\"\n  (* a 2))\n\n(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass d"))))) 8)
+>> (:emacs-rex (slynk:find-definitions-for-emacs "drv-gen") nil t 9)\n
+<< (:return (:ok (("(DEFGENERIC DRV-GEN (O))" (:location (:file "@WORK@/ronto-nav/work/drv-nav.lisp") (:position 220) (:snippet "(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("(DEFMETHOD DRV-GEN DRV-POINT)" (:location (:file "@WORK@/ronto-nav/work/drv-nav.lisp") (:position 327) (:snippet "(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))))) 9)
+>> (:emacs-rex (slynk:find-definitions-for-emacs "drv-point") nil t 10)\n
+<< (:return (:ok (("(DEFCLASS DRV-POINT)" (:location (:file "@WORK@/ronto-nav/work/drv-nav.lisp") (:position 246) (:snippet "(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))))) 10)
+>> (:emacs-rex (slynk:find-definitions-for-emacs "drv-repl-fn") nil t 11)\n
+<< (:return (:ok (("(DEFUN DRV-REPL-FN)" (:error "Error: DEFINITION-SOURCE of function DRV-REPL-FN did not contain meaningful information.")))) 11)
+>> (:emacs-rex (slynk:find-definitions-for-emacs "mapcar") nil t 12)\n
+<< (:return (:ok nil) 12)
+>> (:emacs-rex (slynk:find-definitions-for-emacs "no-such-thing") nil t 13)\n
+<< (:return (:ok nil) 13)
+>> (:emacs-rex (slynk:xref :calls "drv-callee") nil t 14)\n
+<< (:return (:ok (("DRV-CALLER" (:location (:file "@WORK@/ronto-nav/work/drv-nav.lisp") (:position 201) (:snippet "(drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("(DEFMETHOD DRV-GEN (DRV-POINT))" (:location (:file "@WORK@/ronto-nav/work/drv-nav.lisp") (:position 362) (:snippet "(drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("DRV-REPL-FN" (:error "Error: DEFINITION-SOURCE of function DRV-REPL-FN did not contain meaningful information.")))) 14)
+>> (:emacs-rex (slynk:xref :calls-who "drv-callee") nil t 15)\n
+<< (:return (:ok nil) 15)
+>> (:emacs-rex (slynk:xref :references "drv-callee") nil t 16)\n
+<< (:return (:ok nil) 16)
+>> (:emacs-rex (slynk:xref :callers "drv-callee") nil t 17)\n
+<< (:return (:ok (("DRV-CALLER" (:location (:file "@WORK@/ronto-nav/work/drv-nav.lisp") (:position 120) (:snippet "(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1)"))) ("(DEFMETHOD DRV-GEN (DRV-POINT))" (:location (:file "@WORK@/ronto-nav/work/drv-nav.lisp") (:position 327) (:snippet "(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("DRV-REPL-FN" (:error "Error: DEFINITION-SOURCE of function DRV-REPL-FN did not contain meaningful information.")))) 17)
+>> (:emacs-rex (slynk:xref :callees "drv-callee") nil t 18)\n
+<< (:return (:ok nil) 18)
+>> (:emacs-rex (slynk:xref :references "*drv-var*") nil t 19)\n
+<< (:return (:ok (("DRV-CALLER" (:location (:file "@WORK@/ronto-nav/work/drv-nav.lisp") (:position 192) (:snippet "(drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))))) 19)
+>> (:emacs-rex (slynk:xrefs (quote (:calls :calls-who)) "drv-callee") nil t 20)\n
+<< (:return (:ok ((:calls ("DRV-CALLER" (:location (:file "@WORK@/ronto-nav/work/drv-nav.lisp") (:position 201) (:snippet "(drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("(DEFMETHOD DRV-GEN (DRV-POINT))" (:location (:file "@WORK@/ronto-nav/work/drv-nav.lisp") (:position 362) (:snippet "(drv-callee 1))\n\n(defstruct drv-st a b)\n"))) ("DRV-REPL-FN" (:error "Error: DEFINITION-SOURCE of function DRV-REPL-FN did not contain meaningful information."))))) 20)
+>> (:emacs-rex (slynk:eval-for-inspector nil nil (quote slynk:init-inspector) "(list 1 \"two\" 'three)") nil t 21)\n
+<< (:return (:ok (:title "#<CONS {92A405F}>" :id 0 :content (("A proper list:" "\n" "0" ": " (:value "1" 1) "\n" "1" ": " (:value "\"two\"" 2) "\n" "2" ": " (:value "THREE" 3) "\n") 14 0 500))) 21)
+>> (:emacs-rex (slynk:eval-for-inspector nil nil (quote slynk:inspect-nth-part) 1) nil t 22)\n
+<< (:return (:ok (:title "#<INTEGER {1ABAB5F5}>" :id 0 :content (("Value: 1 = #x00000001 = #o1 = #b1 = 1.0e+0" "\n" "Code-char" ": " (:value "#\\" 1) "\n" "Integer-length" ": " (:value "@1=1" 2) "\n" "Universal-time" ": " (:value "\"1900-01-01T00:00:01Z\"" 3) "\n") 14 0 500))) 22)
+>> (:emacs-rex (slynk:eval-for-inspector nil nil (quote slynk:inspector-pop)) nil t 23)\n
+<< (:return (:ok (:title "#<CONS {92A405F}>" :id 4 :content (("A proper list:" "\n" "0" ": " (:value "@1=1" 5) "\n" "1" ": " (:value "\"two\"" 6) "\n" "2" ": " (:value "THREE" 7) "\n") 14 0 500))) 23)
+>> (:emacs-rex (slynk:eval-for-inspector nil nil (quote slynk:quit-inspector)) nil t 24)\n
+<< (:return (:ok nil) 24)
+>> (:emacs-rex (slynk:eval-for-inspector nil nil (quote slynk:init-inspector) "(let ((h (make-hash-table))) (setf (gethash :a h) 1) h)") nil t 25)\n
+<< (:return (:ok (:title "#<HASH-TABLE {8301743}>" :id 0 :content (("Count" ": " (:value "1" 1) "\n" "Size" ": " (:value "1" 2) "\n" "Test" ": " (:value "EQUAL" 3) "\n" "Rehash size" ": " (:value "1.5" 4) "\n" "Rehash threshold" ": " (:value "1.0" 5) "\n" (:action "[clear hashtable]" 0) "\n" "Contents: " "\n" (:value ":A" 6) " = " (:value "1" 7) " " (:action "[remove entry]" 1) "\n") 30 0 500))) 25)
+>> (:emacs-rex (slynk:eval-for-inspector nil nil (quote slynk:init-inspector) "(list 1 2)") nil t 26)\n
+<< (:return (:ok (:title "#<CONS {2325D858}>" :id 0 :content (("A proper list:" "\n" "0" ": " (:value "1" 1) "\n" "1" ": " (:value "2" 2) "\n") 10 0 500))) 26)
+>> (:emacs-channel-send 1 (:process "(list 1 \"two\" 'three)"))\n
+<< (:channel-send 1 (:write-values (("(1 \"two\" THREE)" 1 nil))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 2))
+>> (:emacs-channel-send 1 (:process "(values 7 8)"))\n
+<< (:channel-send 1 (:write-values (("7 (3 bits, #x7, #o7, #b111)" 2 "7") ("8 (4 bits, #x8, #o10, #b1000)" 2 "8"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 3))
+>> (:emacs-rex (slynk:eval-for-inspector nil nil (quote slynk-mrepl:inspect-entry) 1 1 0) "cl-user" 95 27)\n
+<< (:return (:ok (:title "#<CONS {6167325D}>" :id 0 :content (("A proper list:" "\n" "0" ": " (:value "1" 1) "\n" "1" ": " (:value "\"two\"" 2) "\n" "2" ": " (:value "THREE" 3) "\n") 14 0 500))) 27)
+>> (:emacs-rex (slynk:eval-for-inspector nil nil (quote slynk-mrepl:inspect-entry) 1 2 1) "cl-user" 95 28)\n
+<< (:return (:ok (:title "#<INTEGER {16FB5849}>" :id 0 :content (("Value: 8 = #x00000008 = #o10 = #b1000 = 8.0e+0" "\n" "Code-char" ": " (:value "#\\Backspace" 1) "\n" "Integer-length" ": " (:value "4" 2) "\n" "Universal-time" ": " (:value "\"1900-01-01T00:00:08Z\"" 3) "\n") 14 0 500))) 28)
+>> (:emacs-rex (slynk-mrepl:describe-entry 1 2 0) "cl-user" 95 29)\n
+<< (:return (:ok "7\n  [integer]\n") 29)
+>> (:emacs-rex (slynk-mrepl:pprint-entry 1 1 0) "cl-user" 95 30)\n
+<< (:return (:ok "((1 \"two\" THREE))") 30)
+>> (:emacs-channel-send 1 (:process "(list (length #v1) #v2:1 #v2)"))\n
+<< (:channel-send 1 (:write-values (("(3 8 7)" 3 nil))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 4))

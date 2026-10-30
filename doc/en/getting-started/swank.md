@@ -86,14 +86,15 @@ RET 4005 RET` opens SLY's REPL; the server speaks the protocol of SLY 1.0.43, an
 another version asks "Versions differ" first. In Lem, `M-x slime-connect` with the same host
 and port opens Lem's REPL (measured against Lem 2.3.0).
 
-The table's REPL, evaluation, compilation, completion, echo area, description and expansion
-rows hold for both, on their own keys. SLY's REPL shows a number with its other notations
-(`3 (2 bits, #x3, #o3, #b11)`) and completes flexibly (`mvbind` finds
-`multiple-value-bind`); Lem's completion shows each candidate's kind, argument list and
-description, and `C-c Return` expands a macro one step. Neither has the debugger: an error,
-like an interrupt, aborts the evaluation.
-`M-.`, cross references and the inspector are measured with SLIME only; SLY's stickers and
-trace dialog and Lem's inspection of a printed value are not answered.
+The table's rows hold for both, on their own keys, the debugger included: an error or an
+interrupt opens SLY's or Lem's debugger with the same restarts, frames and levels. SLY's
+REPL reads on while its debugger is open, its prompt showing the level (an error typed
+there opens the next one). SLY's REPL shows a number with its other notations
+(`3 (2 bits, #x3, #o3, #b11)`), completes flexibly (`mvbind` finds `multiple-value-bind`),
+inspects a value it printed, and reads `#v3:0` as the first value of its history entry 3.
+Lem's completion shows each candidate's kind, argument list and description, `C-c Return`
+expands a macro one step, and a printed value or an evaluation's result opens in its
+inspector. SLY's stickers and trace dialog are not answered.
 
 ## From a running program
 
