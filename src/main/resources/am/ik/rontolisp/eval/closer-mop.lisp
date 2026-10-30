@@ -81,3 +81,28 @@
 
 (defun closer-mop:class-direct-subclasses (class)
   (%class-direct-subclasses class))
+
+(defun closer-mop:set-funcallable-instance-function (instance function)
+  ;; The function a funcallable instance calls lives in the cell its layout
+  ;; reserves before the tail (LispLayout.FUNCALLABLE_CELL, -2 from the end of
+  ;; the storage), where every backend's call through a value reads it. A
+  ;; funcallable instance handed over as the function is wrapped, so the cell
+  ;; always holds a plain function.
+  (if (typep instance 'closer-mop:funcallable-standard-object)
+      (if (functionp function)
+          (%obj-set instance -2
+                    (if (%obj-p function)
+                        (lambda (&rest args) (apply function args))
+                        function))
+          (error 'type-error
+                 :datum function
+                 :expected-type 'function
+                 :format-control
+                 "SET-FUNCALLABLE-INSTANCE-FUNCTION: The value ~S is not of type FUNCTION"
+                 :format-arguments (list function)))
+      (error 'type-error
+             :datum instance
+             :expected-type 'closer-mop:funcallable-standard-object
+             :format-control
+             "SET-FUNCALLABLE-INSTANCE-FUNCTION: The value ~S is not a funcallable instance"
+             :format-arguments (list instance))))

@@ -506,6 +506,10 @@ class PackageResolverTest {
 		assertThat(resolve("(c2cl:defclass foo nil nil)")).isEqualTo("(DEFCLASS FOO NIL NIL)");
 		// Exported though not implemented: rutils names it in code loading never runs.
 		assertThat(resolve("(c2mop:intern-eql-specializer x)")).isEqualTo("(CLOSER-MOP:INTERN-EQL-SPECIALIZER X)");
+		// closer-mop itself re-exports the cl metaobject names (collectors' shape).
+		assertThat(resolve("(find-class 'closer-mop:standard-object)")).isEqualTo("(FIND-CLASS 'STANDARD-OBJECT)");
+		assertThat(resolve("(find-class 'c2mop:funcallable-standard-class)"))
+			.isEqualTo("(FIND-CLASS 'CLOSER-MOP:FUNCALLABLE-STANDARD-CLASS)");
 	}
 
 	@Test

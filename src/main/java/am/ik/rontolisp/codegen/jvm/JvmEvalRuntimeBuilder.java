@@ -118,6 +118,8 @@ final class JvmEvalRuntimeBuilder {
 
 		private final ClassEntry thisClass;
 
+		private final List<String> funcallableTags;
+
 		private EvalConstants(Builder b) {
 			this.cp = Objects.requireNonNull(b.cp);
 			this.objectClass = Objects.requireNonNull(b.objectClass);
@@ -153,6 +155,7 @@ final class JvmEvalRuntimeBuilder {
 			this.arityOperators = Objects.requireNonNull(b.arityOperators);
 			this.fenvForwarders = b.fenvForwarders;
 			this.thisClass = Objects.requireNonNull(b.thisClass);
+			this.funcallableTags = b.funcallableTags;
 		}
 
 		ConstantPool cp() {
@@ -312,6 +315,15 @@ final class JvmEvalRuntimeBuilder {
 			return this.fenvForwarders;
 		}
 
+		/**
+		 * The funcallable layout tags {@code _apply} replaces an instance of by the
+		 * function installed in it ({@link JvmFuncallableInstances}); empty for a program
+		 * defining no funcallable class.
+		 */
+		List<String> funcallableTags() {
+			return this.funcallableTags;
+		}
+
 		static Builder builder() {
 			return new Builder();
 		}
@@ -390,6 +402,13 @@ final class JvmEvalRuntimeBuilder {
 			private @Nullable JvmArityOperators arityOperators;
 
 			private Set<String> fenvForwarders = Set.of();
+
+			private List<String> funcallableTags = List.of();
+
+			Builder funcallableTags(List<String> tags) {
+				this.funcallableTags = tags;
+				return this;
+			}
 
 			Builder cp(ConstantPool cp) {
 				this.cp = cp;
@@ -1187,6 +1206,11 @@ final class JvmEvalRuntimeBuilder {
 				ARGCUR = 9;
 		final int FUNCID = 18, LEN = 19;
 
+		// Where a funcallable instance re-enters as the function installed in it.
+		MethodCode.Label classify = a.newLabel();
+		if (!this.k.funcallableTags().isEmpty()) {
+			a.labelBinding(classify);
+		}
 		// fn == null: NIL names no function -- an undefined-function, never a silent nil
 		MethodCode.Label notNull = a.newLabel();
 		a.aload(FN);
@@ -1269,6 +1293,10 @@ final class JvmEvalRuntimeBuilder {
 		idx(a, ARR, 0);
 		a.instanceOf(this.k.integerClass());
 		a.ifne(isFunction);
+		if (!this.k.funcallableTags().isEmpty()) {
+			JvmFuncallableInstances.emitUnwrap(a, this.k.cp(), this.k.objectArrayClass(), this.k.objectEquals(),
+					this.k.funcallableTags(), ARR, FN, TMP, classify);
+		}
 		a.labelBinding(notFunction);
 		emitNotFunctionThrow(a, FN);
 		a.labelBinding(isFunction);

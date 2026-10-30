@@ -345,6 +345,10 @@ pinned expectations plus the doc pages. Classification stays visible only at `#'
   resolves under the re-exporting package's spelling, a latent bug for ANY re-export package.
   `C2CL` lives here; `C2MOP` stays on `closer-mop`. Pinned by
   `PackageResolverTest#{closerCommonLispQualifiedMembersResolveToTheirHomePackages,usingCloserCommonLispMakesClAndCloserMopVisible,useListReExportResolvesToTheHomePackage}`.
+- **`closer-mop` itself re-exports `cl` names** (`CLOSER_MOP_CL_REEXPORTS`, upstream's export
+  list: `standard-object`, `standard-class`, `defmethod`, ...) as import redirects to `cl`, so
+  collectors' `(find-class 'closer-mop:standard-object)` is `cl:standard-object` (it was "not
+  external" before 2026-10-31).
 - **babel** records its babel-encodings members as import redirects, so `babel:X` and
   `babel-encodings:X` are ONE symbol
   (`PackageResolverTest#babelSpellingsOfTheBabelEncodingsMembersResolveToTheirHome`).

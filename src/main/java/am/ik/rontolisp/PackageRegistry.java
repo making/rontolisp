@@ -745,9 +745,24 @@ public final class PackageRegistry {
 			ClosRegistry.SLOT_DEFINITION_NAME, ClosRegistry.DIRECT_SLOT_DEFINITION_NAME,
 			ClosRegistry.EFFECTIVE_SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_WRITERS,
 			LispNames.SLOT_DEFINITION_INITFORM,
+			// Funcallable instances (djula's compiled templates): the metaclass, the
+			// class its instances descend from, and the installer.
+			ClosRegistry.FUNCALLABLE_STANDARD_CLASS, ClosRegistry.FUNCALLABLE_STANDARD_OBJECT,
+			LispNames.SET_FUNCALLABLE_INSTANCE_FUNCTION,
 			// Exported, not implemented (methods are not runtime objects here): rutils
 			// names it in an add-method expansion that loading never runs.
 			"INTERN-EQL-SPECIALIZER");
+
+	/**
+	 * The {@code cl} symbols upstream {@code closer-mop} re-exports: the metaobject class
+	 * names and the definition macros. {@code closer-mop:standard-object} IS
+	 * {@code cl:standard-object}; the {@code closer-mop} package records each as an
+	 * import from {@code cl}.
+	 */
+	private static final Set<String> CLOSER_MOP_CL_REEXPORTS = Set.of("BUILT-IN-CLASS", "CLASS", "GENERIC-FUNCTION",
+			"METHOD", "METHOD-COMBINATION", "STANDARD-CLASS", "STANDARD-GENERIC-FUNCTION", "STANDARD-METHOD",
+			"STANDARD-OBJECT", "DEFCLASS", "DEFGENERIC", "DEFINE-METHOD-COMBINATION", "DEFMETHOD",
+			"ENSURE-GENERIC-FUNCTION", "SUBTYPEP", "TYPEP");
 
 	private static final List<String> USOCKET_FUNCTION_NAMES = sorted(USOCKET_FUNCTIONS);
 
@@ -1253,7 +1268,19 @@ public final class PackageRegistry {
 		// names (see eval.ShimLibraries): closer-mop (nickname c2mop),
 		// flexi-streams, org.shirakumo.float-features (nickname float-features) and
 		// trivial-gray-streams.
-		define(new LispPackage(LispNames.CLOSER_MOP_PKG, List.of(), new HashSet<>(CLOSER_MOP_EXTERNALS)));
+		// closer-mop also EXPORTS the cl symbols naming the metaobject classes and the
+		// definition macros (upstream's export list); resolution is textual, so each is
+		// an import redirecting to cl -- collectors' (find-class
+		// 'closer-mop:standard-object)
+		// names cl:standard-object.
+		Map<String, String> closerMopImports = new HashMap<>();
+		for (String name : CLOSER_MOP_CL_REEXPORTS) {
+			closerMopImports.put(name, LispNames.CL_PKG);
+		}
+		Set<String> closerMopSymbols = new HashSet<>(CLOSER_MOP_EXTERNALS);
+		closerMopSymbols.addAll(closerMopImports.keySet());
+		define(new LispPackage(LispNames.CLOSER_MOP_PKG, List.of(), closerMopSymbols, Set.copyOf(closerMopSymbols),
+				Map.copyOf(closerMopImports)));
 		// closer-common-lisp (nickname c2cl): the flat re-export of the cl externals
 		// overlaid with the closer-mop externals (closer-mop wins collisions, per the
 		// upstream package of the same name). Resolution is textual, so every member is

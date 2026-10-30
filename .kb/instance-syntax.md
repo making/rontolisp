@@ -138,7 +138,8 @@ with `setf`/`incf`/`push` without their own case.
 **A cell past the declared slots is storage, not value**: `%obj-slots`, the printers, `_equal` and
 the `equal` hash all stop at the LAYOUT's slot count (JVM: `String[]` length - 3; WASM: the record's
 `OFF_SLOT_COUNT`; interpreter: `slotCount()`), never at the storage length -- the reserved cells
-(change-class room, the synonym-stream reader, the stream and Gray-input pushback) hold machinery.
+(change-class room, the synonym-stream reader, the stream and Gray-input pushback, a funcallable
+instance's function at `LispLayout.FUNCALLABLE_CELL`, `.kb/clos.md`) hold machinery.
 
 **The layout sits at index 0 on the JVM, and NOT in the WASM slot array.** Any per-backend loop over
 slots must account for that: the JVM cursor stops at 1, the WASM one at 0. `%obj-slots` got this

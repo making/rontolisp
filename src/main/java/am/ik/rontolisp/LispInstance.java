@@ -79,21 +79,39 @@ public final class LispInstance implements LispVal {
 	 * initforms right after. The backing array grows when the reserved capacity was not
 	 * enough, which the interpreter can do (the LispInstance is the identity) and the JVM
 	 * backend cannot -- hence {@link LispLayout#capacity()}. A grown array carries its
-	 * last cell to the new end, where {@link LispLayout#TAIL_CELL} reads it: a Gray input
-	 * stream's parked character outlives the change, as on the compile paths.
+	 * last two cells to the new end, where {@link LispLayout#TAIL_CELL} and
+	 * {@link LispLayout#FUNCALLABLE_CELL} read them: a Gray input stream's parked
+	 * character and a funcallable instance's function outlive the change, as on the
+	 * compile paths.
 	 * @param newLayout the layout to adopt
 	 */
 	public void becomeLayout(LispLayout newLayout) {
 		if (this.slots.length < newLayout.capacity()) {
 			LispVal[] grown = Arrays.copyOf(this.slots, newLayout.capacity());
 			Arrays.fill(grown, this.slots.length, grown.length, LispNil.INSTANCE);
-			if (this.slots.length > this.layout.slotCount()) {
-				grown[grown.length - 1] = this.slots[this.slots.length - 1];
-				grown[this.slots.length - 1] = LispNil.INSTANCE;
+			int tail = Math.min(-LispLayout.FUNCALLABLE_CELL, this.slots.length - this.layout.slotCount());
+			for (int i = 1; i <= tail; i++) {
+				grown[this.slots.length - i] = LispNil.INSTANCE;
+			}
+			for (int i = 1; i <= tail; i++) {
+				grown[grown.length - i] = this.slots[this.slots.length - i];
 			}
 			this.slots = grown;
 		}
 		this.layout = newLayout;
+	}
+
+	/**
+	 * The function a funcallable instance calls ({@link LispLayout#FUNCALLABLE_CELL}), or
+	 * null when this instance is not funcallable or has none installed yet.
+	 * @return the installed function, or null
+	 */
+	public @org.jspecify.annotations.Nullable LispVal funcallableFunction() {
+		if (!this.layout.funcallable()) {
+			return null;
+		}
+		LispVal function = this.slots[this.slots.length + LispLayout.FUNCALLABLE_CELL];
+		return function instanceof LispNil ? null : function;
 	}
 
 	/**

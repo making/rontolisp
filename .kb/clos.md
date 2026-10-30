@@ -87,6 +87,9 @@ so `#'name`/`funcall`/`mapcar` work with no `BuiltinFunctionWrappers` entry.
   stable sort keeps definition order within a rank. **`package` ranks 205, ahead of `keyword`
   (210) and `symbol` (220)**, because a package IS a keyword in this value model
   (`.kb/symbol-runtime-api.md`); misordered, rove's `find-suite` recurses forever.
+  `simple-bit-vector` (226) and `bit-vector` (228) rank ahead of `vector` (230), `array` (235) and
+  `sequence` (240) -- cl-slice's `canonical-representation` pairs a `bit-vector` method with a
+  `vector` one (ci-spec `clos-defmethod-bit-vector-specializer`).
 - **The TYPE specializers `defmethod` accepts (`isSupportedTypeSpecializer`) and the types
   `makeTypeTest` builds are ONE definition, not two lists that drift.**
   `makeEqlSpecializerTest`: symbols/keywords compare with `equal` (content-safe on WASM),
@@ -862,6 +865,50 @@ where nested `defmethod`s carry the class METAOBJECT spliced as a literal specia
   calling it falls through to the default or to no-applicable-method (the nested-branch
   guard, todo 445) -- matching the interpreter, where the defmethod never runs.
 
+### Funcallable instances (`closer-mop:funcallable-standard-class`, djula's templates)
+An instance of a class descending from `closer-mop:funcallable-standard-object` IS a function:
+`functionp`, `(typep x 'function)` and a `function` specializer answer t (a class specializer still
+ranks first), and every call through a value calls what `closer-mop:set-funcallable-instance-function`
+installed. Measured against SBCL 2.2.9 (`sb-mop`) over the pinning case: identical but for the
+printed instance and the condition an unset instance signals.
+- **Seeding is lazier than the MOP base's**: `ensureFuncallableClassesSeeded` registers the pair only
+  where a program names one -- `ensureMopClassesSeededFor` by member, the compile path's upfront
+  symbol scan (`FUNCALLABLE_CLASS_SPELLINGS`), `seedMopClassesNamedBy` before a defclass -- under
+  their closer-mop NAMES (`CLOSER-MOP::FUNCALLABLE-STANDARD-CLASS`, the `JAVA::JAVA-EXCEPTION`
+  precedent), so a compiled `find-class` of the spelled symbol matches a table spelling. (The
+  plainly-seeded slot-definition classes do NOT: `(find-class 'closer-mop:standard-direct-slot-definition)`
+  answers on the interpreter and signals on the compile paths.) FSC is a slot-less child of
+  `standard-class`, FSO a slot-less root.
+- A `(:metaclass M)` descending from FSC APPENDS FSO to the superclasses when none carries it (AMOP's
+  default superclass), after the declared ones so the layout prefix stays; the driver call gets it
+  too and `widenDefclassToMetaobjectSupers` skips it like `standard-object`. The metaclass protocol
+  runs as for any `:metaclass`.
+- **Storage**: `registerClass` gives every FSO descendant `LispLayout.asFuncallable()` -- the
+  `funcallable` flag plus two cells past the declared slots: `FUNCALLABLE_CELL` (-2) holds the
+  function, `TAIL_CELL` (-1) stays a Gray input stream's pushback. Counted from the end, so a
+  change-class target's reserved room keeps the index; the interpreter's `becomeLayout` carries the
+  last TWO cells when it grows the array.
+- The shim's `set-funcallable-instance-function` stores into -2 after a `typep` check (a type-error
+  for a non-funcallable instance or a non-function); a funcallable instance handed over as the
+  function is wrapped in a lambda, so the cell always holds a plain closure and every backend unwraps
+  ONE level.
+- **Calls**: interpreter `LispEvaluator.apply` and `Environment`'s `functionp` read the layout flag.
+  JVM `JvmFuncallableInstances`: in each shared dispatcher's classification (and the eval runtime's
+  `_apply`), an `Object[]` whose slot 0 is no funcId -- the not-a-function path, so a function value
+  pays nothing -- is tested for a funcallable layout TAG (text, like `%obj-is`) and re-enters the
+  classification as its cell; `functionp` adds the tag test. WASM `WasmFuncallableInstances`: the
+  prologue arm right after the closure test (EH: replace and `br` to the closure path only when the
+  cell holds a closure, else the report names the instance; trapping module: replace unconditionally
+  before the cast) and in the function-namespace probe; `_apply` hands a non-closure to the spread
+  dispatcher, so it needs none; `functionp` adds the layout-address test. Every arm is gated on
+  `ClosRegistry.funcallableTags()` (wasm: the baked ones), so a program defining no funcallable
+  class is byte-identical.
+- Residuals: `(subtypep 'a-funcallable-class 'function)` answers nil (SBCL t) -- the class lattice
+  does not reach `function`; an unset instance signals the not-a-function type-error (SBCL its own
+  `unset-funcallable-instance-function`).
+- Pinned by ci-spec standalone `funcallable-instances-call-their-installed-function` (standalone:
+  the arm joins every dispatcher of its program).
+
 ### Registry-growth lesson
 The RUNTIME-slot-name dispatch used to be inlined per call site and grows with every layout
 times its slots; five extra ci-spec classes pushed a corpus dolist body past the JVM's SIGNED
@@ -931,12 +978,13 @@ ci-spec: `clos-defgeneric-defmethod-eql-dispatch`,
 `clos-multiple-inheritance-cpl-slots-and-dispatch`, `clos-setf-methods-and-setf-generic`,
 `clos-computed-change-class`, `clos-reinitialize`,
 `clos-slot-options-and-metaobject-types`, `clos-defmethod-eql-specializer-over-a-constant`,
-`clos-print-object-method-defined-below-its-first-use`,
+`clos-defmethod-bit-vector-specializer`, `clos-print-object-method-defined-below-its-first-use`,
 `package-defmethod-specializer`, `defmethod-on-a-builtin-name-keeps-the-builtin`,
 `defgeneric-short-form-method-combination`, `find-class-metaobject-substrate`,
 `defclass-metaclass-protocol`, `mop-widening-for-mito`,
 `compile-definition-time-method-construction`, `runtime-type-dispatch-and-symbol-designators`,
 `runtime-type-dispatch-residue`, `runtime-class-designator-spellings`,
 `with-slots-write-only-unbound-slot-and-missing-slot`,
-`array-operations-enablement-language-group`, `mito-core-enablement-language-group`. Plus the
-five `doc/*/reference/**` pages via `DocExamplesTest`.
+`array-operations-enablement-language-group`, `mito-core-enablement-language-group`, standalone
+`funcallable-instances-call-their-installed-function`. Plus the five `doc/*/reference/**` pages
+via `DocExamplesTest`.

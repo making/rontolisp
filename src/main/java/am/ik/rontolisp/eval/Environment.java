@@ -1292,8 +1292,11 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.FUNCTIONP, new LispFunction(LispNames.FUNCTIONP, args -> {
 			requireArgCount(LispNames.FUNCTIONP, args, 1);
-			return (args.get(0) instanceof LispFunction || args.get(0) instanceof LispLambda) ? LispTrue.INSTANCE
-					: LispNil.INSTANCE;
+			// A funcallable instance is a function too (AMOP), its function installed or
+			// not.
+			return (args.get(0) instanceof LispFunction || args.get(0) instanceof LispLambda
+					|| (args.get(0) instanceof LispInstance instance && instance.layout().funcallable()))
+							? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.ARRAYP_INTERNAL, new LispFunction(LispNames.ARRAYP_INTERNAL, args -> {
 			requireArgCount(LispNames.ARRAYP_INTERNAL, args, 1);
