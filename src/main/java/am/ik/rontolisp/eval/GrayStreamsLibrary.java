@@ -243,6 +243,10 @@ public final class GrayStreamsLibrary {
 		java.util.List<LispVal> out = new java.util.ArrayList<>();
 		java.util.List<LispVal> body = rewritten;
 		boolean definesProtocol = program.stream().anyMatch(GrayStreamsLibrary::definesProtocol);
+		// Where the owned operators' default methods go: right behind the protocol's
+		// base classes, which they specialize on -- in front of the body when the
+		// protocol leads the output, else behind the protocol's last form in place.
+		int defaultsAt = -1;
 		if (!definesProtocol && !hostProtocol) {
 			out.addAll(protocolForms());
 		}
@@ -255,13 +259,36 @@ public final class GrayStreamsLibrary {
 				}
 				body = rest;
 			}
+			else {
+				java.util.Set<String> protocolKeys = protocolDefinitionKeys();
+				for (int i = 0; i < program.size(); i++) {
+					String key = definitionKey(program.get(i));
+					if (key != null && protocolKeys.contains(key)) {
+						defaultsAt = i + 1;
+					}
+				}
+			}
 		}
 		boolean ownReadLine = definesOwnReadLineMethod(program);
 		for (String helper : usedHelpers) {
 			LispVal defun = dispatchDefun(helper);
 			out.add(ownReadLine && READ_LINE_DISPATCH.equals(helper) ? consumingMethodValues(defun) : defun);
 		}
-		out.addAll(body);
+		java.util.List<LispVal> defaults = new java.util.ArrayList<>();
+		if (!hostProtocol) {
+			for (String op : new java.util.TreeSet<>(ctx.owned())) {
+				defaults.add(java.util.Objects.requireNonNull(ownableDefaultMethod(op)));
+			}
+		}
+		if (defaultsAt < 0) {
+			out.addAll(defaults);
+			out.addAll(body);
+		}
+		else {
+			out.addAll(body.subList(0, defaultsAt));
+			out.addAll(defaults);
+			out.addAll(body.subList(defaultsAt, body.size()));
+		}
 		return out;
 	}
 
@@ -653,11 +680,66 @@ public final class GrayStreamsLibrary {
 	 * that shape, and such a method already dispatches on every backend through the
 	 * shadowed-built-in machinery ({@code .kb/clos.md}). So this protocol deliberately
 	 * has no competing generic for them, and the Gray default steps aside as soon as the
-	 * program defines one.
+	 * program defines one -- into a method on the base class
+	 * ({@link #OWNABLE_DEFAULT_METHODS}).
 	 */
 	private static final java.util.Set<String> OWNABLE_OPERATORS = java.util.Set.of(LispNames.CLOSE,
 			LispNames.OPEN_STREAM_P, LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P,
 			LispNames.STREAM_ELEMENT_TYPE);
+
+	/**
+	 * What an owned operator answers for a Gray instance none of the program's methods
+	 * applies to: SBCL's methods on {@code fundamental-stream}, the Gray default the
+	 * dispatch helpers give while nothing is owned. Without them, owning the name for one
+	 * class (chunga's {@code (defmethod close ((stream chunked-stream)) ...)}) sent every
+	 * OTHER Gray instance to the built-in, which rejects it -- drakma closing a
+	 * flexi-streams in-memory stream signalled. Spliced by {@link #process} and evaluated
+	 * by the interpreter ({@link #ownableDefaultMethod}) only for an operator the program
+	 * owns, so a program owning none keeps the unmethoded built-in.
+	 */
+	private static final String OWNABLE_DEFAULT_METHODS = """
+			(defmethod close ((stream rontolisp:fundamental-stream) &key abort)
+			  (declare (ignore abort))
+			  t)
+			(defmethod open-stream-p ((stream rontolisp:fundamental-stream))
+			  t)
+			(defmethod input-stream-p ((stream rontolisp:fundamental-stream))
+			  (if (typep stream 'rontolisp:fundamental-input-stream) t nil))
+			(defmethod output-stream-p ((stream rontolisp:fundamental-stream))
+			  (if (typep stream 'rontolisp:fundamental-output-stream) t nil))
+			(defmethod stream-element-type ((stream rontolisp:fundamental-stream))
+			  (if (or (typep stream 'rontolisp:fundamental-character-input-stream)
+			          (typep stream 'rontolisp:fundamental-character-output-stream))
+			      'character
+			      (if (or (typep stream 'rontolisp:fundamental-binary-input-stream)
+			              (typep stream 'rontolisp:fundamental-binary-output-stream))
+			          '(unsigned-byte 8)
+			          'character)))
+			""";
+
+	private static volatile java.util.@Nullable Map<String, LispVal> ownableDefaults;
+
+	/**
+	 * The Gray default method of an {@link #OWNABLE_OPERATORS} member
+	 * ({@link #OWNABLE_DEFAULT_METHODS}), or null for any other name.
+	 * @param operator the operator's bare name
+	 * @return the {@code defmethod} form, or null
+	 */
+	static @Nullable LispVal ownableDefaultMethod(String operator) {
+		java.util.Map<String, LispVal> cached = ownableDefaults;
+		if (cached == null) {
+			java.util.Map<String, LispVal> byName = new java.util.HashMap<>();
+			for (LispVal form : LispReader.readAllFromString(OWNABLE_DEFAULT_METHODS, Features.INTERPRETER)) {
+				byName.put(member(
+						((am.ik.rontolisp.LispSymbol) ((am.ik.rontolisp.LispCons) ((am.ik.rontolisp.LispCons) form)
+							.cdr()).car()).name()),
+						form);
+			}
+			cached = java.util.Map.copyOf(byName);
+			ownableDefaults = cached;
+		}
+		return cached.get(operator);
+	}
 
 	/**
 	 * The {@link #OWNABLE_OPERATORS} the program OWNS: it defines a {@code defmethod} /

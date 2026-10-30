@@ -2696,6 +2696,27 @@ public final class PackageResolver {
 		return spelling;
 	}
 
+	/**
+	 * The spelling a runtime read gives a symbol token: the token interned in the current
+	 * package, recorded like {@code intern}'s ({@link #internSpelling(String, boolean)})
+	 * -- CL's reader interns in {@code *package*} as it reads. A keyword, a lambda-list
+	 * marker and an uninterned {@code #:name} pass through as {@link #resolve} passes
+	 * them, and so does a token qualified by a package the registry does not know, which
+	 * the runtime read keeps as written.
+	 * @param name the token's name as read
+	 * @return the canonical spelling for the current package
+	 */
+	public synchronized String readSpelling(String name) {
+		if (name.startsWith(":") || name.startsWith("&") || name.startsWith("#:")) {
+			return name;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		if (qn != null && !this.registry.contains(registeredPackageName(this.registry.canonicalName(qn.pkg())))) {
+			return name;
+		}
+		return internSpelling(name, true);
+	}
+
 	private String internSpellingOnly(String name) {
 		boolean savedExactCase = this.exactCase;
 		this.exactCase = true;
@@ -3114,8 +3135,9 @@ public final class PackageResolver {
 	 * cannot fold -- a computed name or package designator -- asks a read/compile-time
 	 * package for a name the package does not own: every symbol it reaches through an
 	 * import, a re-export or a {@code :use} of a package other than {@code cl}, plus
-	 * every present symbol that answers differently from the {@code PKG:NAME} spelling
-	 * such a lookup builds when nothing answers (a shadowing or internal member). The
+	 * every present symbol that answers differently from the spelling such a lookup
+	 * builds when nothing answers ({@link #permissiveAnswer}: an export of a package the
+	 * program defines, a shadowing member, an internal member of a pre-seeded one). The
 	 * lookup is {@link #accessible}'s, split so the runtime can run it: a row's
 	 * {@code present} triples first, then the {@code exports} of each of its {@code uses}
 	 * in order, then -- when {@code standardNames} and the package uses {@code cl} -- the
@@ -3252,12 +3274,18 @@ public final class PackageResolver {
 
 	/**
 	 * The answer a compiled {@code find-symbol} builds when no table row answers: the
-	 * bare internal name in {@code cl-user}, the single-colon external spelling
-	 * elsewhere.
+	 * bare internal name in {@code cl-user}, the internal {@code PKG::NAME} in a package
+	 * the program defines (an export of it answers from its row), the single-colon
+	 * external spelling in a pre-seeded package (whose rows a computed lookup does not
+	 * carry).
 	 */
 	private static Accessible permissiveAnswer(String canonical, String upper, String name) {
-		return LispNames.CL_USER_PKG.equals(canonical) ? new Accessible(name, LispNames.STATUS_INTERNAL)
-				: new Accessible(upper + ":" + name, LispNames.STATUS_EXTERNAL);
+		if (LispNames.CL_USER_PKG.equals(canonical)) {
+			return new Accessible(name, LispNames.STATUS_INTERNAL);
+		}
+		return PackageRegistry.isBuiltinPackageName(canonical)
+				? new Accessible(upper + ":" + name, LispNames.STATUS_EXTERNAL)
+				: new Accessible(upper + "::" + name, LispNames.STATUS_INTERNAL);
 	}
 
 	/**

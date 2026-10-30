@@ -2009,7 +2009,7 @@ class WasmLispCompilerIntegrationTest {
 		// emits that ONE representation's accessor behind a trapping ref.cast instead of
 		// the inline dispatch chain. The shapes below cover every source and every kind
 		// (packed u8/u16/u32 with mask/readback edges past the i31 range, packed float,
-		// general, string), plus shapes that must STAY generic and still answer right (a
+		// general), plus shapes that must STAY generic and still answer right (a
 		// rank-unknown declaration at a rank-2 site). Both optimize levels must agree
 		// with each other and with the interpreter/JVM text.
 		String program = """
@@ -2057,7 +2057,8 @@ class WasmLispCompilerIntegrationTest {
 				    (print (read-both w 1))
 				    (print (aref (wide-chunk-data w) 1)))
 				  (print (sum-simple (vector 30 12)))
-				  (print (first-char "xyz"))
+				  (print (list (first-char "xyz") (first-char (copy-seq "xyz")) (first-char (subseq "wxyz" 1))
+				              (first-char (make-string 2 :initial-element #\\q))))
 				  (print (typep (make-array 2 :element-type '(unsigned-byte 8)) 'octet-vec))
 				  (let ((acc 0))
 				    (do ((c (make-array 3 :element-type '(unsigned-byte 16)))
@@ -2086,7 +2087,7 @@ class WasmLispCompilerIntegrationTest {
 				65542
 				7
 				42
-				#\\x
+				(#\\x #\\x #\\x #\\q)
 				T
 				900
 				5""");
@@ -5186,20 +5187,17 @@ class WasmLispCompilerIntegrationTest {
 	void uiopOsOctetReadersCompileAndRun() throws Exception {
 		// read-little-endian / read-null-terminated-string are portable stream work over
 		// read-byte; flexi-streams' in-memory octet stream is the one binary input every
-		// backend can build without a filesystem. The Gray splice is the CLI's, and is
-		// what routes read-byte on a CLOS instance stream to the protocol.
-		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
+		// backend can build without a filesystem. Through the CLI's front end: the Gray
+		// splice is what routes read-byte on a CLOS instance stream to the protocol, and
+		// the shim defines macros.
+		assertThat(compileAndRunFrontEndWithDir("""
 				(asdf:load-system "flexi-streams")
 				(let* ((v (make-array 7 :element-type '(unsigned-byte 8)
 				                        :initial-contents '(1 2 0 0 104 105 0)))
 				       (s (flex:make-in-memory-input-stream v)))
 				  (print (uiop:read-little-endian s))
 				  (print (uiop:read-null-terminated-string s)))
-				"""), path -> {
-			throw new java.io.FileNotFoundException(path);
-		});
-		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
-			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))).isEqualTo("513\n\"hi\"");
+				""", false)).isEqualTo("513\n\"hi\"");
 	}
 
 	@Test
@@ -10926,6 +10924,11 @@ class WasmLispCompilerIntegrationTest {
 			(print (namestring (translate-pathname "a/b.c" "*/*.*" "x/*-y.*")))
 			(print (translate-logical-pathname "d/a.txt"))
 			(print (handler-case (logical-pathname "SYS:SRC;") (error () :signalled)))
+			(print (list (pathname-match-p "x/y/a.l" "x/*/a.l") (pathname-match-p "x/a.l" "x/*/a.l")
+			             (pathname-match-p "a" "*.lisp") (pathname-match-p "b.lisp" "/**/*.lisp")))
+			(setf (logical-pathname-translations "LP") '(("SRC;**;*.*.*" "/opt/src/**/*.*")))
+			(print (list (translate-logical-pathname "lp:src;a;foo.lisp.newest")
+			             (handler-case (logical-pathname-translations "NOPE") (type-error () :type-error))))
 			(print (handler-case (rename-file "a.txt" "b.txt") (error () :no-rename)))
 			""";
 
@@ -10940,6 +10943,8 @@ class WasmLispCompilerIntegrationTest {
 			"x/b-y.c"
 			#P"d/a.txt"
 			:SIGNALLED
+			(T NIL NIL T)
+			(#P"/opt/src/a/foo.lisp" :TYPE-ERROR)
 			:NO-RENAME""";
 
 	@Test

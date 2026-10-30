@@ -64,9 +64,10 @@ compile-time evaluator's (`ReadTimeImage`, below). The emitted runtime readers i
   would run the reader macros twice). `read` / `read-delimited-list` on a STRING stream under
   a view are served natively by `evalReadCall` (the `evalSequenceScan` shape: only while the
   name resolves to the prelude's defun); other streams, and the standard readtable, run the
-  prelude scanner. **Symbols such a read answers are homed in the current package**
-  (`homeReadSymbols`, the quoted-data resolution): cl-annot looks an annotation's arity up on
-  the symbol it read, and a bare spelling names cl-user's.
+  prelude scanner. **Symbols such a read answers are homed in the current package** as each
+  token is read (`LispReader.Forms.homingSymbols` over `PackageResolver.readSpelling`, the
+  same hook every interpreter runtime read uses -- `.kb/packages.md`): cl-annot looks an
+  annotation's arity up on the symbol it read, and a bare spelling names cl-user's.
 - Not honored: escape syntax under another character (a constituent there), `read` from a
   file stream or standard input, `with-standard-io-syntax` (does not rebind `*readtable*`),
   the REPL / playground (whole-buffer reads), `*read-suppress*` around a reader macro

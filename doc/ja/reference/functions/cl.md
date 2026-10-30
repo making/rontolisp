@@ -68,8 +68,11 @@
 | `enough-namestring` | `(enough-namestring "/a/b/c.lisp" "/a/")` | `"b/c.lisp"` — `defaults` (省略時は `*default-pathname-defaults*`) にマージし直すと同じファイルを指す最短の名前文字列。`merge-pathnames` の逆操作です |
 | `file-namestring` `directory-namestring` `host-namestring` | `(file-namestring #P"/a/b/c.txt")` | `"c.txt"` — ネームストリングの文字列成分。名前と型の部分、ディレクトリ部分(連結すると `namestring` に戻ります)、および rontolisp が持たないホストを表す `""` |
 | `translate-pathname` | `(translate-pathname "src/f.lisp" "src/*.lisp" "build/*.fasl")` | `#P"build/f.fasl"` — source を from-wildcard と照合し、各 `*`/`?` が捕捉した部分を to-wildcard に差し込みます。一致しない source はエラー |
-| `translate-logical-pathname` | `(translate-logical-pathname "d/a.txt")` | `#P"d/a.txt"` — 恒等写像。rontolisp のパス名はすべて物理パス名なので変換するものがありません |
-| `logical-pathname` | `(logical-pathname "SYS:SRC;")` | 常にエラー — 論理ホストを定義できないため、論理パス名を指す引数は存在しません |
+| `translate-logical-pathname` | `(translate-logical-pathname "APP:SRC;A.LISP")` | ホストの変換のうち最初に一致したものが指す物理パス名。`:` より前が定義済みのホストでないパス名は物理パス名であり、そのまま返します |
+| `logical-pathname` | `(logical-pathname "APP:SRC;")` | 定義済みの論理ホストの下の名前文字列のパス名。それ以外は `type-error` (`SYS` を含め、あらかじめ定義されたホストはありません) |
+| `logical-pathname-translations` | `(setf (logical-pathname-translations "APP") '(("**;*.*.*" "/opt/app/**/*.*")))` | ホストの変換リスト。`setf` でホストを定義し、未定義のホストを読むと `type-error` |
+| `load-logical-pathname-translations` | `(load-logical-pathname-translations "APP")` | 定義済みのホストには `nil`。未定義のホストは `file-error` (読み込む変換ファイルはありません) |
+| `pathname-match-p` | `(pathname-match-p "x/y/a.lisp" "x/*/*.lisp")` | `T` — 構成要素ごとのワイルドカード照合。`translate-pathname` と同じ規則です |
 | `pathname` | `(pathname "d/x")` | `#P"d/x"` — 正規のコンストラクタ: パス名はそのまま、文字列はそれが指定するパス名に包まれ、それ以外はシグナルします |
 | `parse-namestring` | `(parse-namestring "d/a.txt")` | `#P"d/a.txt"` (第 2 値は停止位置) — ライト版: ホストのパースはなく、文字列全体が名前文字列です |
 | `make-pathname` | `(make-pathname :name "b" :defaults "d/a.sql")` | `#P"d/b.sql"` — `:directory`/`:name`/`:type` からパス名を組み立て、**指定されなかった**構成要素は `:defaults` から取ります。構成要素ごとの補完でありマージではありません: 指定した構成要素は defaults のものを置き換え、明示的な `nil` は「その構成要素なし」を意味します。4 バックエンドすべてで実行時の関数として動作し、リテラルの呼び出しは加えてコンパイル時に畳み込まれます |

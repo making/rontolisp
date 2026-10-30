@@ -3992,6 +3992,24 @@ cases:
     expected: |
       (CI-TOF-LIB:WIDGET CI-TOF-LIB::GADGET CI-TOF-LIB::POINT)
       (T T T T INTEGER)
+  - name: expansion-time-read-homes-in-the-macro-package
+    source: |
+      ;; cl-pdf's AFM parser names each reader with read-from-string at EXPANSION
+      ;; time. The interpreter expands a macro inside a function body lazily, in its
+      ;; defining package, and the caller's package is current again when the
+      ;; expansion runs: the read has to intern as it reads, as intern does.
+      (defpackage :ci-etr (:use :cl))
+      (in-package :ci-etr)
+      (defun get-x (a) (list :x a))
+      (defmacro call-get (type arg) `(,(read-from-string (format nil "get-~A" type)) ,arg))
+      (defmacro call-get-full (type arg) `(,(read-from-string (format nil " get-~A" type) t nil :start 1) ,arg))
+      (defmacro call-get-read (type arg) `(,(read (make-string-input-stream (format nil "get-~A" type))) ,arg))
+      (defmacro call-get-intern (type arg) `(,(intern (string-upcase (format nil "get-~A" type))) ,arg))
+      (defun use-it () (list (call-get "x" 1) (call-get-full "x" 2) (call-get-read "x" 3) (call-get-intern "x" 4)))
+      (in-package :cl-user)
+      (print (ci-etr::use-it))
+    expected: |
+      ((:X 1) (:X 2) (:X 3) (:X 4))
   - name: lisp-2-function-namespace-via-function
     source: |
       (cl:in-package cl-user)
@@ -11699,10 +11717,23 @@ cases:
       (print (translate-pathname "src/foo.lisp" "src/*.lisp" "build/*.fasl"))
       (print (namestring (translate-pathname "a/b.c" "*/*.*" "x/*-y.*")))
       (print (handler-case (translate-pathname "d/a.txt" "e/*.*" "f/*.*") (error () :no-match)))
-      ;; Every rontolisp pathname is PHYSICAL, so translate-logical-pathname is the
-      ;; identity and logical-pathname can never succeed.
+      ;; A namestring is logical only when its prefix names a host defined through
+      ;; (setf logical-pathname-translations); any other answers itself, and no host
+      ;; (SYS included) is predefined.
       (print (translate-logical-pathname "d/a.txt"))
       (print (handler-case (logical-pathname "SYS:SRC;") (error () :signalled)))
+      ;; pathname-match-p: component-wise, as translate-pathname matches.
+      (print (list (pathname-match-p "x/y/a.l" "x/*/a.l") (pathname-match-p "x/a.l" "x/*/a.l")
+                   (pathname-match-p "a" "*.*") (pathname-match-p "a" "*.lisp")
+                   (pathname-match-p "/a/b.lisp" "/**/*.lisp") (pathname-match-p "b.lisp" "/**/*.lisp")
+                   (pathname-match-p "b/c.lisp" "/**/*.lisp")))
+      (print (handler-case (logical-pathname-translations "CI-UNDEFINED") (type-error () :type-error)))
+      (setf (logical-pathname-translations "CI-LP")
+            '(("SRC;**;*.*.*" "/opt/ci/src/**/*.*") ("**;*.*.*" "/opt/ci/**/*.*")))
+      (print (list (translate-logical-pathname "CI-LP:SRC;A;FOO.LISP")
+                   (translate-logical-pathname "ci-lp:doc;readme.txt.newest")
+                   (namestring (logical-pathname "CI-LP:SRC;FOO.LISP"))
+                   (load-logical-pathname-translations "ci-lp")))
     expected: |
       (NIL NIL NIL)
       (T NIL T)
@@ -11717,6 +11748,9 @@ cases:
       :NO-MATCH
       #P"d/a.txt"
       :SIGNALLED
+      (T NIL T NIL T T NIL)
+      :TYPE-ERROR
+      (#P"/opt/ci/src/a/foo.lisp" #P"/opt/ci/doc/readme.txt" "CI-LP:SRC;FOO.LISP" NIL)
   - name: uiop-pathname-algebra
     source: |
       ;; The uiop/pathname family (uiop-pathname.lisp): one Lisp definition per
@@ -13322,6 +13356,13 @@ cases:
       ;; A failed check-type is a type-error carrying the value and the specifier.
       (print (handler-case (let ((n "5")) (check-type n (integer 0 9)))
                (type-error (c) (list (type-error-datum c) (type-error-expected-type c) (princ-to-string c)))))
+      ;; It is a simple-type-error, so also a simple-condition (CLHS class precedence).
+      (print (typep (make-condition 'simple-type-error :format-control "x") 'simple-condition))
+      (print (handler-case (let ((n 'q)) (check-type n string))
+               (simple-condition (c) (list (type-of c) (type-error-expected-type c)))))
+      (print (block ci-hb
+               (handler-bind ((simple-condition (lambda (c) (return-from ci-hb (type-error-datum c)))))
+                 (let ((n 'q)) (check-type n string)))))
       (assert (= 1 1))
       (print (typecase 7 ((integer 0 9) :digit) (integer :int)))
       (print (typecase 'b ((member a b c) :abc) (t :other)))
@@ -13332,6 +13373,9 @@ cases:
       :CHECKED
       :CHECKED2
       ("5" (INTEGER 0 9) "The value of N is \"5\", which is not of type (INTEGER 0 9).")
+      T
+      (SIMPLE-TYPE-ERROR STRING)
+      Q
       :DIGIT
       :ABC
   - name: declared-array-types-single-arm-access
@@ -13377,7 +13421,8 @@ cases:
           (print (ci-read-both w 1))
           (print (aref (ci-wide-chunk-data w) 1)))
         (print (ci-sum-simple (vector 30 12)))
-        (print (ci-first-char "xyz"))
+        (print (list (ci-first-char "xyz") (ci-first-char (copy-seq "xyz")) (ci-first-char (subseq "wxyz" 1))
+                     (ci-first-char (make-string 2 :initial-element #\q))))
         (print (typep (make-array 2 :element-type '(unsigned-byte 8)) 'ci-octet-vec))
         (let ((acc 0))
           (do ((c (make-array 3 :element-type '(unsigned-byte 16)))
@@ -13396,7 +13441,7 @@ cases:
       65542
       7
       42
-      #\x
+      (#\x #\x #\x #\q)
       T
       900
   - name: user-deftype-typep-satisfies
@@ -14295,12 +14340,21 @@ cases:
       ;; macroexpand-1 answers CL's expanded-p as its second value.
       (print (multiple-value-list (macroexpand-1 '(mfp-mac 1))))
       (print (multiple-value-list (macroexpand-1 '(+ 1 2))))
+      ;; macro-function and macroexpand-1 agree (iterate's walker calls the second
+      ;; when the first says macro): typep is a CL FUNCTION the expander rewrites
+      ;; inline, return a CL macro rontolisp runs natively. SBCL 2.2.9.
+      (print (list (mfp-probe '(typep 1 x)) (mfp-probe '(format t "x")) (mfp-probe '(return 1))))
+      (print (multiple-value-list (macroexpand-1 '(typep 1 x))))
+      (print (multiple-value-list (macroexpand-1 '(return 1))))
     expected: |
       (:SPECIAL :SPECIAL :MACRO :MACRO :MACRO :FUNCTION :FUNCTION)
       (T NIL NIL)
       (T T T T NIL NIL)
       ((LIST 1) T)
       ((+ 1 2) NIL)
+      (:FUNCTION :FUNCTION :MACRO)
+      ((TYPEP 1 X) NIL)
+      ((RETURN-FROM NIL 1) T)
   - name: setf-symbol-function-and-fdefinition
     source: |
       (defun csf-orig (x) (* x 2))
@@ -18917,11 +18971,62 @@ cases:
         (print (read-byte sbi-in)))
       (let ((sbi-h (open "sbi.dat")))
         (print (close sbi-h :abort t)))
+      ;; A Gray class with no close method of its own gets the Gray default,
+      ;; not the built-in, which rejects an instance.
+      (defclass sbi-gray (rontolisp:fundamental-binary-input-stream) ())
+      (print (close (make-instance 'sbi-gray)))
     expected: |
       :SBI-CLOSED
       (42 3)
       65
       T
+      T
+  - name: flexi-streams-external-formats
+    source: |
+      ;; The flexi-streams shim's external formats: an object made from a name
+      ;; and an eol style selects the wrapper's codec, setf switches it mid
+      ;; stream (drakma's headers in Latin-1, a body in its charset), :crlf maps
+      ;; a Newline both ways, and a code point the format cannot carry signals
+      ;; unless *substitution-char* names one.
+      (asdf:load-system "flexi-streams")
+      (let* ((fxef-latin (flex:make-external-format :latin1 :eol-style :crlf))
+             (fxef-sink (flex:make-in-memory-output-stream))
+             (fxef-out (flex:make-flexi-stream fxef-sink :external-format fxef-latin)))
+        (print (list (flex:external-format-name fxef-latin)
+                     (flex:external-format-eol-style fxef-latin)
+                     (flex:external-format-eol-style (flex:make-external-format "utf-8"))))
+        (write-string (coerce (list #\h (code-char 233)) 'string) fxef-out)
+        (terpri fxef-out)
+        (setf (flex:flexi-stream-external-format fxef-out) :utf-8)
+        (write-char (code-char 233) fxef-out)
+        (print (list (flex:external-format-name (flex:flexi-stream-external-format fxef-out))
+                     (coerce (flex:get-output-stream-sequence fxef-sink) 'list))))
+      (let ((fxef-in (flex:make-flexi-stream
+                      (flex:make-in-memory-input-stream #(104 13 10 105 13 106))
+                      :external-format '(:ascii :eol-style :crlf))))
+        (print (list (read-line fxef-in) (read-char fxef-in) (char-code (read-char fxef-in))
+                     (read-char fxef-in) (read-char fxef-in nil :eof))))
+      (print (flex:with-output-to-sequence (fxef-s :as-list t)
+               (write-sequence (flex:string-to-octets (coerce (list #\A (code-char 255)) 'string)
+                                                      :external-format :latin-1)
+                               fxef-s)))
+      (print (flex:with-input-from-sequence (fxef-s (map 'list #'char-code "ok"))
+               (list (read-byte fxef-s) (read-byte fxef-s) (read-byte fxef-s nil :eof))))
+      (print (list (char-code (char (flex:octets-to-string #(233) :external-format :iso-8859-1) 0))
+                   (flex:octets-to-string #(97 13 10 98) :external-format '(:utf-8 :eol-style :crlf))
+                   (handler-case (flex:string-to-octets (string (code-char 12354)) :external-format :latin-1)
+                     (error () :unencodable))
+                   (let ((flex:*substitution-char* #\?))
+                     (flex:octets-to-string #(200) :external-format :ascii))
+                   (handler-case (flex:make-external-format :utf-16) (error () :unsupported))))
+    expected: |
+      (:ISO-8859-1 :CRLF :LF)
+      (:UTF-8 (104 233 13 10 195 169))
+      ("h" #\i 13 #\j :EOF)
+      (65 255)
+      (111 107 :EOF)
+      (233 "a
+      b" :UNENCODABLE "?" :UNSUPPORTED)
   - name: trivia-enablement-language-group
     source: |
       ;; The language features (ql:quickload "trivia") needs,
@@ -23167,6 +23272,25 @@ cases:
         0
         NIL
 
+  # The REPL history variables (* ** *** / // /// + ++ +++) are cl variables, nil
+  # outside a REPL: a compiled read of one never assigned answers nil, and a
+  # package using cl names cl's (trivial-types' proper-list-p reads *).
+  - name: repl-history-variables-are-nil-outside-a-repl
+    source: |
+      (defpackage :ci-repl-vars (:use :cl))
+      (in-package :ci-repl-vars)
+      (defun ci-proper-list-p (var)
+        (loop (typecase var
+                (null (return t))
+                (cons (if (or t (typep (car var) *)) (setq var (cdr var)) (return)))
+                (t (return)))))
+      (print (list (ci-proper-list-p '(1 2 3)) (eq '** 'cl:**)))
+      (print (list * ** *** / // /// + ++ +++))
+      (in-package :cl-user)
+    expected: |
+      (T T)
+      (NIL NIL NIL NIL NIL NIL NIL NIL NIL)
+
   - name: complex-reader-constructor-predicates
     source: |
       (print #C(1 2))
@@ -23870,6 +23994,39 @@ cases:
       "CI-FSI-U1"
       (CI-FSI-U2:D1 :INHERITED)
       (CI-FSI-U1:B1 :INTERNAL)
+  - name: intern-of-an-internal-name-is-the-read-symbol
+    source: |
+      (defpackage :ci-iis (:use :cl) (:nicknames :ci-iisn) (:export #:pub))
+      (defpackage :ci-iis-none (:use :cl))
+      (in-package :ci-iis)
+      (defvar *a* (list 'data (intern "DATA" :ci-iis) 'pub (intern "PUB" :ci-iis)))
+      (defun data (x) (list :data x))
+      (defun ci-iis-in (n p) (multiple-value-list (intern n p)))
+      (defun ci-iis-none::helper () :helper)
+      (in-package :cl-user)
+      (print ci-iis::*a*)
+      (print (list (eq (first ci-iis::*a*) (second ci-iis::*a*)) (eq (third ci-iis::*a*) (fourth ci-iis::*a*))))
+      (print (multiple-value-list (find-symbol (string-upcase "data") :ci-iis)))
+      (print (multiple-value-list (intern (string-upcase "pub") :ci-iisn)))
+      (print (ci-iis::ci-iis-in "DATA" :ci-iis))
+      (print (ci-iis::ci-iis-in "PUB" "CI-IIS"))
+      (print (ci-iis::ci-iis-in "HELPER" :ci-iis-none))
+      (print (eq (car (ci-iis::ci-iis-in (string-upcase "data") :ci-iisn)) 'ci-iis::data))
+      (print (funcall (intern (string-upcase "data") :ci-iis) 1))
+      (print (funcall (car (ci-iis::ci-iis-in "HELPER" "CI-IIS-NONE"))))
+      (print (package-name (symbol-package (car (ci-iis::ci-iis-in "DATA" :ci-iis)))))
+    expected: |
+      (CI-IIS::DATA CI-IIS::DATA CI-IIS:PUB CI-IIS:PUB)
+      (T T)
+      (CI-IIS::DATA :INTERNAL)
+      (CI-IIS:PUB :EXTERNAL)
+      (CI-IIS::DATA :INTERNAL)
+      (CI-IIS:PUB :EXTERNAL)
+      (CI-IIS-NONE::HELPER :INTERNAL)
+      T
+      (:DATA 1)
+      :HELPER
+      "CI-IIS"
   - name: find-symbol-of-a-computed-standard-name
     source: |
       (defpackage :ci-stn-a (:use :cl))

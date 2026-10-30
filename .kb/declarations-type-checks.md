@@ -50,8 +50,11 @@ deliberately NOT built (a possible SPEED lever; re-measure).
 
 `compiler.DeclaredArrayTypes` (backend-free) maps a specifier to a `Kind`: `U8`/`U16`/`U32`
 (requires an explicitly rank-1 dims spec, since an unknown-rank spec could be a rank-n GENERAL
-array of the same element type), `FLOAT`, `GENERAL`, `STRING`. A character element type maps to
-NOTHING; a bare `vector`/`array` proves nothing. Specifier symbols resolve through the
+array of the same element type), `FLOAT`, `GENERAL`. A string specifier (`simple-string`
+included) and a character element type map to NOTHING: a string is the immutable `TYPE_STRING` or
+the marked general character array `copy-seq`/`subseq`/`make-string` answer, so a `STRING` kind
+casting to `TYPE_STRING` trapped on a correct declaration (plump's `decode-entities`, removed
+2026-10-31). A bare `vector`/`array` proves nothing. Specifier symbols resolve through the
 `ClosRegistry` deftype table including the DEFAULTED registration -- an all-`&optional` deftype
 registers its bare-name default expansion, folded by a closed pure evaluator over
 `quote`/`list`/`cons`/`append`/`or`/`let`/`let*` (`LispMacroExpander.defaultedDeftypeExpansion`;
@@ -77,11 +80,10 @@ Four sources (`WasmArrayCompiler.arrayKindOfExpr`):
 
 Emission: `emitKindedAref1` is `ref.cast` + direct read (~19-30 B against 196; u8/u16 box
 `ref.i31` inline, u32 through `_int_new`); `emitKindedAset1` is the same single arm, its packed-int
-arm keeping the raw-value fast path (`tryCompileRaw`), and a STRING kind never stores so kinded
-emission declines; `length` of a packed kind is `ref.cast` + `array.len` + `ref.i31`, other kinds
+arm keeping the raw-value fast path (`tryCompileRaw`); `length` of a packed kind is `ref.cast` + `array.len` + `ref.i31`, other kinds
 keeping the generic chain because a GENERAL vector's length must honour a fill pointer.
 
-- `(setf (aref var i) v)` on a VARIABLE place of non-string kind skips the expansion's
+- `(setf (aref var i) v)` on a VARIABLE place of a pinned kind skips the expansion's
   `stringp`/`schar-set` branch (`nonStringArefStore`, intercepted at both `WasmExprCompiler` setf
   sites).
 - A `replace`/`fill` whose DESTINATION is pinned non-string calls the array-arm-only shared runtime

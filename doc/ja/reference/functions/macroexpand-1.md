@@ -2,7 +2,7 @@
 
 `(macroexpand-1 form)`
 
-`form` の演算子がユーザーマクロ([`defmacro`](../special-forms/defmacro.md) で定義)または組み込みマクロの場合に 1 段階だけ展開し、それ以外の場合はフォームをそのまま返します。展開されるのはトップレベルの演算子だけで、サブフォームには手を付けません。
+`form` の演算子がユーザーマクロ([`defmacro`](../special-forms/defmacro.md) で定義)または組み込みマクロの場合に 1 段階だけ展開し、それ以外の場合はフォームをそのまま返します。展開されるのはトップレベルの演算子だけで、サブフォームには手を付けません。展開するのは [`macro-function`](macro-function.md) が非 nil を返す演算子と正確に同じです: `(return 1)` は `(RETURN-FROM NIL 1)` に展開され、関数呼び出しである `(typep x 'integer)` はそのまま返ります。例外: rontolisp が特殊形式として実行する定義形式(`defun`、`defmacro`、`defvar`、`defparameter`、`defconstant`、`defclass`、`defgeneric`、`defmethod`、`defstruct`、`defsetf`、`defpackage`、`define-symbol-macro`、`in-package`)と `handler-case` はそのまま返り、`expanded-p` は nil です。
 
 2 番目の値は Common Lisp の `expanded-p` フラグです: `(multiple-value-list (macroexpand-1 '(unless c x)))` は `((IF C NIL X) T)` になります。環境引数は受け取って無視します(参照すべきレキシカルなマクロ環境が存在しないため)。
 

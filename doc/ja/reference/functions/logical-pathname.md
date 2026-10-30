@@ -2,19 +2,19 @@
 
 `(logical-pathname pathspec)`
 
-常にエラーを送出します。Common Lisp は、引数が論理パス名または論理パス名の名前文字列で
-ない限りエラーを要求しますが、rontolisp は論理ホストを定義できないため、これを満たす
-引数は存在しません。代わりに物理パス名を返してしまうと、変換表が存在するかのように
-装うことになります。
+[`logical-pathname-translations`](logical-pathname-translations.md) で定義したホストを持つ
+名前文字列のパス名を返します。それ以外の引数は、Common Lisp の要求どおり `type-error` を
+送出します。`SYS` を含め、あらかじめ定義されたホストはありません。
 
-```console
-CL-USER> (logical-pathname "SYS:SRC;")
-LOGICAL-PATHNAME: "SYS:SRC;" does not name a logical pathname (rontolisp defines no logical hosts)
+```lisp
+(setf (logical-pathname-translations "APP") '(("**;*.*.*" "/opt/app/**/*.*")))
+(namestring (logical-pathname "APP:SRC;FOO.LISP"))
+; => "APP:SRC;FOO.LISP"
 ```
 
-名前文字列が指す物理パス名を作るには [`pathname`](pathname.md) を、移植性のあるコードが
-開く前に正規化する箇所には (ここでは恒等写像である)
-[`translate-logical-pathname`](translate-logical-pathname.md) を使ってください。
+返り値は名前文字列を持つ通常のパス名の値で、論理パス名という別の型はありません。
+物理パス名への変換は [`translate-logical-pathname`](translate-logical-pathname.md) が
+行います。
 
 ## バックエンドサポート
 

@@ -422,6 +422,22 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * Interns each symbol token of a runtime read in the current package, as CL's reader
+	 * does -- set by the evaluator, which holds the package state. {@code null} (a bare
+	 * Environment) keeps the names as read.
+	 */
+	@Nullable private UnaryOperator<String> readSymbolHome;
+
+	/**
+	 * Installs the symbol-token interning of the runtime read built-ins; see
+	 * {@link #readSymbolHome}.
+	 * @param home maps a symbol token's name to its spelling in the current package
+	 */
+	public void setReadSymbolHome(UnaryOperator<String> home) {
+		this.readSymbolHome = home;
+	}
+
+	/**
 	 * Answers the current -- dynamic binding first -- value of {@code *read-suppress*}.
 	 * Set by the evaluator for the same reason
 	 * {@link #setReadTimeEvalResolver(UnaryOperator)} is: the built-in holds the GLOBAL
@@ -1123,6 +1139,10 @@ public final class Environment implements Scope {
 		env.define(LispNames.PRINT_PPRINT_DISPATCH_VAR, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE));
 		// The provided-module list `provide` pushes onto and `require` consults.
 		env.define(LispNames.MODULES_VAR, LispNil.INSTANCE);
+		// The REPL history variables: nil outside a REPL (SWANK's listener sets them).
+		for (String name : LispNames.REPL_VARIABLES) {
+			env.define(name, LispNil.INSTANCE);
+		}
 		// The current readtable: a fresh standard one (.kb/readtables.md), the value the
 		// compile paths seed too (LispMacroExpander.injectMvSpillGlobal).
 		env.define(LispNames.READTABLE_VAR, newStandardReadtable());
@@ -7870,19 +7890,13 @@ public final class Environment implements Scope {
 		// literal nil still reads as nil and only a missing datum signals.
 		java.util.function.Function<String, LispVal> readWholeText = input -> {
 			UnaryOperator<LispVal> resolver = env.readTimeEvalResolver;
-			if (resolver != null && input.contains("#.")) {
-				java.util.List<LispVal> exprs = LispReader.readAllWithReadEvalMarkers(input, env.currentReadFeatures(),
-						resolver);
-				if (exprs.isEmpty()) {
-					throw endOfFile(errorStream(streams, nextStreamHandle, input));
-				}
-				return resolver.apply(exprs.get(0));
-			}
-			java.util.List<LispVal> exprs = LispReader.readAllFromString(input, env.currentReadFeatures());
+			boolean markers = resolver != null && input.contains("#.");
+			java.util.List<LispVal> exprs = LispReader.readAllRuntime(input, env.currentReadFeatures(),
+					markers ? resolver : null, env.readSymbolHome);
 			if (exprs.isEmpty()) {
 				throw endOfFile(errorStream(streams, nextStreamHandle, input));
 			}
-			return exprs.get(0);
+			return markers ? java.util.Objects.requireNonNull(resolver).apply(exprs.get(0)) : exprs.get(0);
 		};
 		// The datum is the FIRST one: text after it is never read, so a ')' that closes
 		// nothing or a malformed tail is not the caller's error (SBCL reads "5.)" as 5).
@@ -10768,7 +10782,8 @@ public final class Environment implements Scope {
 			Map<Long, Closeable> streams, AtomicLong nextStreamHandle) {
 		UnaryOperator<LispVal> resolver = env.readTimeEvalResolver;
 		boolean markers = resolver != null && input.contains("#.");
-		LispReader.Forms forms = LispReader.forms(input, env.currentReadFeatures(), markers, null, resolver, 0, false);
+		LispReader.Forms forms = LispReader.forms(input, env.currentReadFeatures(), markers, null, resolver, 0, false)
+			.homingSymbols(env.readSymbolHome);
 		LispVal datum = forms.next(syntax);
 		if (datum == null) {
 			throw endOfFile(errorStream(streams, nextStreamHandle, input));

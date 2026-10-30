@@ -16,6 +16,8 @@ Symbols are read with the reader's [upcasing](../../guides/reader-case.md), iden
 (read-from-string "foo") ; => FOO
 ```
 
+A symbol is interned in the current package as it is read, as in Common Lisp: under `(let ((*package* (find-package :p))) ...)` the text `"foo"` reads as `P::FOO`, so a macro that builds a name with `read-from-string` at expansion time names a symbol of the package it expands in. Deviation: at run time, the compiled backends keep the name as read (a `cl-user` symbol), like their one-argument [`intern`](intern.md). A read during macro expansion is not affected, because the compiler expands macros in the file's package.
+
 
 ## The optional and keyword arguments
 

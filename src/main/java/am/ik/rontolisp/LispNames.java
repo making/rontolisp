@@ -251,6 +251,15 @@ public final class LispNames {
 	/** The {@code mod} built-in function. */
 	public static final String MOD = "MOD";
 
+	/**
+	 * The REPL history variables ({@code *} {@code **} {@code ***}, {@code /} ...,
+	 * {@code +} ...): standard {@code cl} variables only a REPL sets, nil everywhere
+	 * else. The interpreter binds them globally and SWANK's listener sets them; a
+	 * compiled program reads nil from one it never assigns.
+	 */
+	public static final java.util.List<String> REPL_VARIABLES = java.util.List.of("*", "**", "***", "/", "//", "///",
+			"+", "++", "+++");
+
 	/** The {@code rem} built-in function. */
 	public static final String REM = "REM";
 
@@ -3086,6 +3095,14 @@ public final class LispNames {
 	public static final String CL_USERS_INTERNAL = "%CL-USERS%";
 
 	/**
+	 * The {@code (%program-package-p keyword)} helper: whether a computed package
+	 * designator's package is one the program defines, whose name nothing answers builds
+	 * the INTERNAL spelling {@code PKG::NAME}
+	 * ({@code LispMacroExpander.injectBakedAccess}).
+	 */
+	public static final String PROGRAM_PACKAGE_P_INTERNAL = "%PROGRAM-PACKAGE-P";
+
+	/**
 	 * The {@code (%standard-access-status package name)} helper: the status half of a
 	 * {@code find-symbol} / {@code intern} with a computed package designator when the
 	 * program carries the standard names -- the package's row, then a standard name
@@ -5152,22 +5169,49 @@ public final class LispNames {
 	public static final String WILD_CAPTURES = "%WILD-CAPTURES";
 
 	/**
-	 * The {@code translate-logical-pathname} built-in: the pathname itself. Every
-	 * rontolisp pathname is PHYSICAL -- there are no logical hosts and no
-	 * {@code logical-pathname-translations} table to consult -- so the translation is the
-	 * identity, which is what CL prescribes for a physical pathname argument. See
-	 * {@link #LOGICAL_PATHNAME} for the other half of that decision.
+	 * The {@code translate-logical-pathname} built-in. A namestring whose prefix before
+	 * the first {@code :} is a host defined through
+	 * {@link #LOGICAL_PATHNAME_TRANSLATIONS} is translated by the first rule whose
+	 * from-pattern it matches ({@link #PATHNAME_MATCH_P}, then
+	 * {@link #TRANSLATE_PATHNAME}); every other pathname is physical and answers itself,
+	 * as CL prescribes.
 	 */
 	public static final String TRANSLATE_LOGICAL_PATHNAME = "TRANSLATE-LOGICAL-PATHNAME";
 
 	/**
-	 * The {@code logical-pathname} built-in: always signals. CL requires a
-	 * {@code type-error} unless the argument is a logical pathname or a logical-pathname
-	 * namestring, and rontolisp can define no logical host, so NO argument can satisfy
-	 * it. Answering a physical pathname instead would claim a translation table exists;
-	 * signalling is the honest half of the pair with {@link #TRANSLATE_LOGICAL_PATHNAME}.
+	 * The {@code logical-pathname} built-in: the pathname of a namestring naming a
+	 * defined logical host; any other argument signals the {@code type-error} CL
+	 * requires. The answer is the flat pathname value -- there is no distinct
+	 * logical-pathname type ({@code .kb/pathnames.md}).
 	 */
 	public static final String LOGICAL_PATHNAME = "LOGICAL-PATHNAME";
+
+	/**
+	 * The {@code logical-pathname-translations} accessor and its {@code setf} writer: the
+	 * translation list recorded per logical host. Reading an undefined host signals a
+	 * {@code type-error}, as SBCL does.
+	 */
+	public static final String LOGICAL_PATHNAME_TRANSLATIONS = "LOGICAL-PATHNAME-TRANSLATIONS";
+
+	/**
+	 * The {@code load-logical-pathname-translations} built-in: nil for a defined host;
+	 * there is no translations file to search, so an undefined one signals a
+	 * {@code file-error}.
+	 */
+	public static final String LOAD_LOGICAL_PATHNAME_TRANSLATIONS = "LOAD-LOGICAL-PATHNAME-TRANSLATIONS";
+
+	/**
+	 * The internal {@code (%logical-host-entry host &optional create)} helper: the
+	 * {@code (HOST . translations)} cell of the logical-host table, created when asked.
+	 */
+	public static final String LOGICAL_HOST_ENTRY = "%LOGICAL-HOST-ENTRY";
+
+	/**
+	 * The {@code pathname-match-p} built-in: component-wise wildcard matching over the
+	 * flat namestring, the same per-component rule {@link #TRANSLATE_PATHNAME} matches by
+	 * (a missing wildcard component matches anything, {@code *} a missing component).
+	 */
+	public static final String PATHNAME_MATCH_P = "PATHNAME-MATCH-P";
 
 	/**
 	 * The {@code *default-pathname-defaults*} variable: the pathname {@code merge}-style
@@ -10855,7 +10899,7 @@ public final class LispNames {
 
 	/**
 	 * {@code flexi-streams:flexi-stream} -- the WRAPPER class: a Gray stream that lends
-	 * characters (UTF-8, the shim's one external format) to the octet stream it wraps. A
+	 * characters (through its {@link #EXTERNAL_FORMAT}) to the octet stream it wraps. A
 	 * class rather than the identity the shim used to answer, because that is what the
 	 * name means everywhere else -- upstream cl+ssl specializes {@code ssl-stream-handle}
 	 * on it -- and because writing a character to an octet sink found no applicable
@@ -10867,10 +10911,55 @@ public final class LispNames {
 	public static final String FLEXI_STREAM_STREAM = "FLEXI-STREAM-STREAM";
 
 	/**
-	 * {@code flexi-streams:flexi-stream-external-format} -- recorded and readable back,
-	 * but it selects no codec: UTF-8 is the shim's only external format.
+	 * {@code flexi-streams:flexi-stream-external-format} -- the wrapper's
+	 * {@link #EXTERNAL_FORMAT}, which selects its codec; its setf converts a designator.
 	 */
 	public static final String FLEXI_STREAM_EXTERNAL_FORMAT = "FLEXI-STREAM-EXTERNAL-FORMAT";
+
+	/**
+	 * {@code flexi-streams:external-format} -- the class of an external format: a
+	 * canonical name ({@code :utf-8}, {@code :iso-8859-1} or {@code :us-ascii}, the
+	 * shim's three) and an end-of-line style.
+	 */
+	public static final String EXTERNAL_FORMAT = "EXTERNAL-FORMAT";
+
+	/** {@code flexi-streams:make-external-format}. */
+	public static final String MAKE_EXTERNAL_FORMAT = "MAKE-EXTERNAL-FORMAT";
+
+	/** {@code flexi-streams:external-format-name}. */
+	public static final String EXTERNAL_FORMAT_NAME = "EXTERNAL-FORMAT-NAME";
+
+	/** {@code flexi-streams:external-format-eol-style}. */
+	public static final String EXTERNAL_FORMAT_EOL_STYLE = "EXTERNAL-FORMAT-EOL-STYLE";
+
+	/**
+	 * {@code flexi-streams:external-format-little-endian} (recorded, selects nothing).
+	 */
+	public static final String EXTERNAL_FORMAT_LITTLE_ENDIAN = "EXTERNAL-FORMAT-LITTLE-ENDIAN";
+
+	/** {@code flexi-streams:external-format-id} (recorded, selects nothing). */
+	public static final String EXTERNAL_FORMAT_ID = "EXTERNAL-FORMAT-ID";
+
+	/** {@code flexi-streams:external-format-equal}. */
+	public static final String EXTERNAL_FORMAT_EQUAL = "EXTERNAL-FORMAT-EQUAL";
+
+	/** {@code flexi-streams:*default-eol-style*} -- {@code :lf}. */
+	public static final String DEFAULT_EOL_STYLE = "*DEFAULT-EOL-STYLE*";
+
+	/**
+	 * {@code flexi-streams:*substitution-char*} -- what an uncodable code point or octet
+	 * codes as, instead of signalling.
+	 */
+	public static final String SUBSTITUTION_CHAR = "*SUBSTITUTION-CHAR*";
+
+	/** {@code flexi-streams:octet} -- the type {@code (unsigned-byte 8)}. */
+	public static final String OCTET = "OCTET";
+
+	/** {@code flexi-streams:with-input-from-sequence}. */
+	public static final String WITH_INPUT_FROM_SEQUENCE = "WITH-INPUT-FROM-SEQUENCE";
+
+	/** {@code flexi-streams:with-output-to-sequence}. */
+	public static final String WITH_OUTPUT_TO_SEQUENCE = "WITH-OUTPUT-TO-SEQUENCE";
 
 	/**
 	 * {@code flexi-streams:flexi-stream-element-type} -- {@code character} by default.
@@ -10887,7 +10976,7 @@ public final class LispNames {
 	public static final String FLEXI_STREAM_BOUND = "FLEXI-STREAM-BOUND";
 
 	/**
-	 * {@code string-to-octets} -- the flexi-streams shim's UTF-8 encoder, AND (as
+	 * {@code string-to-octets} -- the flexi-streams shim's encoder, AND (as
 	 * {@code rontolisp:string-to-octets}, a distinct symbol the same bare member name
 	 * serves since prelude selection matches by RESOLVED symbol, not by this String alone
 	 * -- {@code am.ik.rontolisp.eval.LispPreludeLibrary#process}) the language's own
@@ -10896,7 +10985,7 @@ public final class LispNames {
 	public static final String STRING_TO_OCTETS = "STRING-TO-OCTETS";
 
 	/**
-	 * {@code octets-to-string} -- the flexi-streams shim's UTF-8 decoder, AND (as
+	 * {@code octets-to-string} -- the flexi-streams shim's decoder, AND (as
 	 * {@code rontolisp:octets-to-string}, a distinct symbol -- see
 	 * {@link #STRING_TO_OCTETS}) a thin public delegator to the native
 	 * {@link #OCTETS_TO_STRING_INTERNAL} lenient decoder.

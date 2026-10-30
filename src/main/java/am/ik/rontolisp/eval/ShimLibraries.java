@@ -18,11 +18,12 @@ import org.jspecify.annotations.Nullable;
  * The lite dependency-shim libraries behind the built-in ASDF systems that real
  * third-party libraries name in {@code :depends-on} clauses: {@code closer-mop} (no slot
  * metaobjects -- class introspection yields no slots), {@code flexi-streams} (a flexi
- * stream is the underlying stream), {@code float-features} (wrappers over the IEEE 754
- * bit primitives) and {@code trivial-gray-streams} (the Gray base classes + generics the
- * {@code write-string} built-in dispatches to for CLOS-instance streams). Each is a small
- * canonical-shape {@code .lisp} resource next to this class (the {@code usocket.lisp}
- * pattern); the packages are seeded in {@code PackageRegistry}.
+ * stream wrapper and in-memory octet streams over the UTF-8, Latin-1 and ASCII external
+ * formats), {@code float-features} (wrappers over the IEEE 754 bit primitives) and
+ * {@code trivial-gray-streams} (the Gray base classes + generics the {@code write-string}
+ * built-in dispatches to for CLOS-instance streams). Each is a small canonical-shape
+ * {@code .lisp} resource next to this class (the {@code usocket.lisp} pattern); the
+ * packages are seeded in {@code PackageRegistry}.
  *
  * <p>
  * Besides whole shim systems, this class also substitutes LEAF MODULES -- individual
@@ -287,6 +288,9 @@ public final class ShimLibraries {
 		}
 		else if (NamedReadtablesForms.SYSTEM.equals(systemName)) {
 			rewritten = NamedReadtablesForms.rewrite(componentFile, source);
+		}
+		else if (ClFadForms.SYSTEM.equals(systemName)) {
+			rewritten = ClFadForms.rewrite(componentFile, source);
 		}
 		return rewritten == null ? source : rewritten;
 	}

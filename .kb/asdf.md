@@ -377,7 +377,8 @@ downloading. `BuiltinSystems.DEPENDENCIES` records edges between shims; one exis
   `.kb/gray-streams.md`); `closer-mop` (slot-definition metaobjects over a class metaobject,
   `.kb/clos.md`; a legacy tag designator's `class-slots` -> `(name declared-type)` pairs from
   `%class-slot-defs`; `compute-slots`, signalling `generic-function-lambda-list`);
-  `flexi-streams` (REAL `flexi-stream` wrapper + in-memory octet pair); `float-features`
+  `flexi-streams` (REAL `flexi-stream` wrapper, in-memory octet pair, UTF-8/Latin-1/ASCII
+  external-format objects); `float-features`
   (interpreter + JVM, no WASM); `bordeaux-threads` (nickname `bt`, locking subset over
   `rontolisp:*-mutex`, `.kb/mutexes.md`); `trivial-garbage` (nickname `tg`; `finalize` registers
   nothing — consequence: a leaked prepared statement lives until the connection closes);
@@ -548,6 +549,19 @@ syntax (`Cannot quote: #<HASH-TABLE>`). Three spans move: the `defvar` -> `nil` 
 `%lite-build-etlds`; the three `*etlds*` reads in `parse-domain` -> `(or *etlds* (...))`; and the
 `with-open-file` header's path -> the LITERAL namestring **with `:element-type 'character`
 dropped**, since that option is precisely what suppresses `CompileTimePathnameFolder`'s inlining.
+
+**`eval/ClFadForms`** (pinned by `ClFadE2eTest`, all four, SBCL 2.2.9's answers). cl-fad 0.7.6
+closes each per-implementation run of `#+impl` arms with a `#-(or ...)` arm that signals "not
+supported" -- the arm rontolisp reads. Four spans, each marker exactly once:
+`temporary-files.lisp`'s `getenv` arm -> `(uiop:getenv x)` (it runs at LOAD time, as does the
+`(setf logical-pathname-translations "TEMPORARY-FILES")` beside it, `.kb/pathnames.md`);
+`fad.lisp`'s `list-directory` arm -> `(directory (directory-wildcard dirname) :resolve-symlinks
+follow-symlinks)` (SBCL's), `file-exists-p` -> `(probe-file pathspec)` (SBCL's: a directory's
+truename in directory form), and `delete-directory-and-files`' portable walk gets
+`(delete-file file)` for a directory (deletes an empty one here, `.kb/uiop.md`). Tier 4, not a
+shim: the rest of cl-fad is portable CL. Not working yet: `with-output-to-temporary-file` /
+`with-open-temporary-file` need `(pathname stream)` (h67). hunchentoot (2026-10-31, interpreter)
+now stops at `HUNCHENTOOT::MAKE-EXTERNAL-FORMAT` (`specials.lisp:283`, flexi-streams shim, h52).
 
 Retired from this tier: `eval.AlexandriaSymbols`, deleted once `*package*` became a genuine
 dynamic variable (`.kb/packages.md`).
@@ -1049,10 +1063,12 @@ bundled ones, with `Features.INTERPRETER` and `Features.JVM`:
   print byte-identically to SBCL 2.2.9 -- and cl-csv on all four since h57 (the compile
   paths read with the compile-time readtable, [readtables.md](readtables.md)); cl-containers stops in metatilities-base's
   `defpackage`, whose `:import-from` holds `#-(or allegro ... sbcl) (error "Need to adapt
-  defpackage ...")` (an implementation guard); cl-pdf in `font.lisp`'s load-time `(load-fonts)`:
-  `The function GET-AFM-STRING is undefined` -- a macro names the reader with
-  `read-from-string` at EXPANSION time, which the interpreter homes in the CALLER's package
-  (SBCL and the JVM: in PDF), h62.
+  defpackage ...")` (an implementation guard); cl-pdf LOADS on the interpreter and the JVM
+  since h62 (2026-10-31; its AFM parser names readers with `read-from-string` at expansion
+  time, `.kb/packages.md`). Writing a document then stops in `write-object`: `The function
+  PDF::EXTENDED-ASCII-P is undefined` -- defined only in `pdf-parser.lisp`, which the `cl-pdf`
+  system does not load; SBCL 2.2.9 (plain ASDF over the same tree) stops identically, so it is
+  upstream's.
 
 ### Earlier: the gate was not what stopped portableaserve
 **Against the `portableaserve-20190813-git` spike, evaluating `.asd` files buys nothing** (still

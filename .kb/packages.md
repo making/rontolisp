@@ -40,8 +40,8 @@ strings, so no per-backend codegen exists.
 ## The `cl` external list is the STANDARD's list, not the implemented one
 CLHS 11.1.2.1 fixes the `common-lisp` package's external set at the **978 standard names**,
 independently of whether an implementation has an operator behind one: the name being there is a
-`find-symbol` / `do-external-symbols` answer, not a promise that calling it works. The 187 names
-rontolisp does not implement are `PackageRegistry.CL_EXPORTED_ONLY` -- plain strings, exactly
+`find-symbol` / `do-external-symbols` answer, not a promise that calling it works. The names
+rontolisp does not implement (98 on 2026-10-31) are `PackageRegistry.CL_EXPORTED_ONLY` -- plain strings, exactly
 because there is no implementation to name, and a name that gains one moves OUT of the set into
 its category.
 
@@ -77,6 +77,14 @@ spellings from `PackageRegistry.CL_EXPORTED_ONLY`, where `.todo/796` had had to 
 missing standard names while the invented spellings sat beside them. `boole` itself stays
 unimplemented (still in `CL_EXPORTED_ONLY`) -- a prelude defun over these constants belongs with
 `.todo/037`'s `logeqv`/`lognor` row.
+
+**The REPL history variables** (`*` `**` `***` `/` `//` `///` `+` `++` `+++`,
+`LispNames.REPL_VARIABLES`) are `CL_VARIABLES` (2026-10-30; the six non-operator spellings left
+`CL_EXPORTED_ONLY`), so a cl-using package's `**` is `cl:**`. Nil outside a REPL: the interpreter
+binds them in `Environment.createGlobal` (SWANK's listener sets them), and a compiled read of one
+the program never assigns compiles to nil (`compileSymbolRef` on the JVM and WASM, ahead of the
+`--dynamic` arm) -- trivial-types' `proper-list-p` reads `*`. Pinned by ci-spec
+`repl-history-variables-are-nil-outside-a-repl`.
 
 **One name still makes `no-extra-symbols-exported-from-common-lisp` fail**, and it is not a name
 list bug: `while` is rontolisp's own loop primitive and lives in `cl` because that is where the
@@ -417,7 +425,17 @@ file's forms: a loaded file's forms are top-level wherever `load` was called fro
 component is loaded from inside `asdf:perform`'s method, `.kb/asdf.md`). Both halves are
 load-bearing (fast-http's `callback-data` vs trivia's top-level `lispn:define-namespace`). Known
 approximation: a macro defined in P and called inside a function of a DIFFERENT file Q gets P
-where CL uses Q. Pinned by `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,
+where CL uses Q. **The swap only reaches what is homed DURING the expansion**: `intern`, and
+(h62, 2026-10-31) every interpreter runtime read -- `read-from-string`, `read`, a readtable
+view's read -- whose `LispReader.symbolHome` (`Environment.setReadSymbolHome` ->
+`PackageResolver.readSpelling`, recording like `intern`) homes each symbol TOKEN as it is read.
+Until then a read answered a bare spelling, resolved later in the caller's package: cl-pdf's AFM
+parser (`(read-from-string (format nil "get-afm-~A" ...))`) called `CL-USER::GET-AFM-STRING`.
+Reader-synthesized symbols (`quote`, the backquote operators) and `#.` values are not tokens and
+are not homed; a token qualified by an unknown package keeps its spelling. The compiled
+backends' run-time reader stays package-blind like their 1-arg `intern`
+(`.kb/symbol-runtime-api.md`). Pinned by `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,
+ci-spec `expansion-time-read-homes-in-the-macro-package`,
 `LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions` (a `load` from a defun), `TriviaE2eTest`,
 `SxqlE2eTest`.
 
@@ -551,9 +569,10 @@ made table-aware. The model:
   `%baked-import-redirect` (it used to walk the whole table converting the home with
   `string` at each).
 - Residual divergences, all documented on the reference pages: `find-symbol` /
-  `intern` over a computed designator naming a READ/COMPILE-TIME package build the
-  permissive `PKG:NAME` spelling on the compiled backends for a name the registry does
-  not know the package to reach (the unknown-name deviation's sibling; a runtime
+  `intern` over a computed designator naming a READ/COMPILE-TIME package build a
+  spelling on the compiled backends for a name the registry does not know the package to
+  reach -- `PKG::NAME` in a program package, `PKG:NAME` in a pre-seeded one (the
+  unknown-name deviation's sibling; a runtime
   package answers from its member table instead, and a reached name from the
   `%baked-access` rows, below); a
   computed package designator naming nothing signals a `package-error`;
@@ -576,7 +595,8 @@ A 2-argument `find-symbol` / `intern` into a read/compile-time package used to B
 - **Computed name or designator**: `LispMacroExpander.injectBakedAccess` prepends the
   `%baked-access%` rows (`PackageResolver.bakedAccessRows`) and `%baked-access` /
   `%baked-access-status`, and rewrites the spliced `%symbol-in-package` to read them before
-  building. A row is a package's present entries that answer differently from the build,
+  building. A row is a package's present entries that answer differently from the build
+  (`permissiveAnswer`, next bullet),
   its non-`cl` uses, and -- for a used package -- its exports at their true home; the
   runtime decodes a row into an `equal` hash table on its first lookup, so a hit is one
   `gethash` and a package with no row one `eq` scan of the index. A literal-designator site
@@ -587,6 +607,26 @@ A 2-argument `find-symbol` / `intern` into a read/compile-time package used to B
   normalizer's own site is exempt (it looks a symbol up in its own home). The status half
   takes a keyword designator as is (nickname keywords are in the table), sparing a second
   `find-package` per call in a program that consumes multiple values.
+- **The build is the internal symbol in a package the program defines** (`.todo/h55`,
+  2026-10-30). It was `PKG:NAME :external` everywhere, so a run-time
+  `(intern "DATA" :p)` of an unexported name was not `eq` to the literal `p::data` (an
+  `(eql 'data)` method missed it) and printed `P:DATA`. Now `permissiveAnswer` is
+  `PKG::NAME :internal` unless `PackageRegistry.isBuiltinPackageName` (the shims keep
+  `PKG:NAME :external`: their rows do not travel with a computed designator), so a program
+  package's EXPORTS are its row entries and an internal member is not. A literal name folds
+  exactly (`BakedSymbolAccess.programPackage`); a computed name in a literal package builds
+  `PKG::` only when the row travels or the package answers nothing itself
+  (`internalBuild` -- a site the scan missed keeps `PKG:`); a computed designator asks the
+  injected `(%program-package-p K)` -- every designator keyword of such a package -- and
+  builds under `K`'s own name, so a nickname designator lands on the same symbol. The two
+  status helpers answer `:internal` for it the same way. `QL-DIST`, seeded but missing from
+  the hand-kept builtin list, joined it (`PackageRegistryTest#everySeededPackageIsABuiltinPackageName`).
+  Cost (2026-10-30): a program with a computed lookup carries every program package's
+  exports -- `examples/net/hello-clack.lisp` 1,226,284 -> 1,243,674 B (JVM class),
+  1,103,046 -> 1,121,563 B (component), the table 4.4 -> 20.7 KB. Restricting the entries to
+  exports the program spells was rejected: an unreferenced export would then print `P::X`.
+  Pinned by ci-spec `intern-of-an-internal-name-is-the-read-symbol`,
+  `LispMacroExpanderTest#aComputedDesignatorWithAComputedNameCarriesTheClUsers`.
 - **The standard names travel as their own layer, not as row entries** -- next section.
 
 Cost (2026-10-05). A program with no served row is byte-identical (the `examples.yaml`
@@ -723,7 +763,8 @@ interpreter's live registry and mirrored for the compiled backends' runtime entr
   there would grow every walking or computed-lookup program by every name it read, and the
   macro-time evaluator's reads (a `defmacro` body never reaches the backend) would still be
   missing. So a compiled run-time lookup of a read-only name keeps the build answer
-  (`.todo/254`, `.todo/h55`). Pinned by ci-spec `macro-time-find-symbol-sees-a-symbol-only-read`
+  (`.todo/254`) -- `PKG::NAME :internal`, which IS the read member's answer since `.todo/h55`
+  (only its existence, nil before, differs). Pinned by ci-spec `macro-time-find-symbol-sees-a-symbol-only-read`
   (expansion time, all four backends) and
   `LispEvaluatorTest#findSymbolSeesSymbolsReadOrDefinedInsideAUserPackage`.
 - `export` (`exportSymbols`): a symbol homed ELSEWHERE must be accessible in the target

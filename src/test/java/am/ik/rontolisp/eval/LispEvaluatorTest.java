@@ -8473,6 +8473,17 @@ class LispEvaluatorTest {
 		// library's same-named symbol is a macro to expand must get no (iterate's
 		// (iter ... (while test)) clause).
 		assertThat(eval("(macro-function 'while)").print()).isEqualTo("NIL");
+		// macro-function and macroexpand-1 agree (iterate's walker calls the second when
+		// the first says macro): typep/format are CL FUNCTIONS the expander rewrites
+		// inline, and return/prog are CL macros the evaluator runs natively. SBCL 2.2.9.
+		assertThat(eval("""
+				(list (macro-function 'typep) (macro-function 'format) (macro-function 'declare)
+				      (multiple-value-list (macroexpand-1 '(typep 1 x)))
+				      (multiple-value-list (macroexpand-1 '(return 1)))
+				      (multiple-value-list (macroexpand-1 '(prog (a) (return a))))
+				      (multiple-value-list (macroexpand-1 '(lambda (x) x))))
+				""").print()).isEqualTo("(NIL NIL NIL ((TYPEP 1 X) NIL) ((RETURN-FROM NIL 1) T)"
+				+ " ((%BLOCK (LET (A) (TAGBODY (RETURN A)))) T) (#'(LAMBDA (X) X) T))");
 	}
 
 	@Test
@@ -11885,11 +11896,21 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> eval("(translate-pathname \"d/a.txt\" \"e/*.*\" \"f/*.*\")"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("does not match");
-		// Every rontolisp pathname is physical, so the logical translation is the
-		// identity and logical-pathname itself can never succeed.
+		// A namestring is logical only under a host defined through (setf
+		// logical-pathname-translations): any other is physical and answers itself, and
+		// no host (SYS included) is predefined.
 		assertThat(eval("(translate-logical-pathname \"d/a.txt\")").print()).isEqualTo("#P\"d/a.txt\"");
-		assertThatThrownBy(() -> eval("(logical-pathname \"SYS:SRC;\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("does not name a logical pathname");
+		assertThatThrownBy(() -> eval("(logical-pathname \"SYS:SRC;\")")).isInstanceOf(LispEvalException.class);
+		assertThat(eval("""
+				(list (pathname-match-p "x/y/a.l" "x/*/a.l") (pathname-match-p "x/a.l" "x/*/a.l")
+				      (pathname-match-p "a" "*.lisp") (pathname-match-p "b.lisp" "/**/*.lisp"))""").print())
+			.isEqualTo("(T NIL NIL T)");
+		assertThat(eval("""
+				(progn
+				  (setf (logical-pathname-translations "LP") '(("SRC;**;*.*.*" "/opt/src/**/*.*")))
+				  (list (translate-logical-pathname "lp:src;a;foo.lisp.newest")
+				        (handler-case (logical-pathname-translations "NOPE") (type-error () :type-error))))""").print())
+			.isEqualTo("(#P\"/opt/src/a/foo.lisp\" :TYPE-ERROR)");
 	}
 
 	@Test
@@ -25122,17 +25143,24 @@ class LispEvaluatorTest {
 	@Test
 	void grayCloseStandsDownForAProgramThatDefinesACloseMethod() {
 		// close is CL's own generic: a program that methods it owns the operator on
-		// every backend, and the Gray default must not get in front of it.
+		// every backend, and the Gray default must not get in front of it. Another
+		// Gray class gets the Gray default, a method on the base class, rather than
+		// the built-in, which rejects an instance. The generic exists here BEFORE the
+		// protocol loads (gc-box), the order whose default the load installs.
 		assertThat(evalMulti("""
+				(defclass gc-box () ())
+				(defmethod close ((b gc-box) &key abort) (declare (ignore abort)) :box)
 				(defclass gc-s (rontolisp:fundamental-character-output-stream)
 				  ((closed :initform nil)))
 				(defmethod rontolisp:stream-write-char ((s gc-s) c) c)
 				(defmethod close ((s gc-s) &key abort)
 				  (declare (ignore abort))
 				  (setf (slot-value s 'closed) :by-method))
+				(defclass gc-plain (rontolisp:fundamental-binary-input-stream) ())
 				(let ((s (make-instance 'gc-s)))
-				  (list (close s) (slot-value s 'closed)))
-				""").print()).isEqualTo("(:BY-METHOD :BY-METHOD)");
+				  (list (close s) (slot-value s 'closed) (close (make-instance 'gc-plain))
+				        (close (make-string-output-stream)) (close (make-instance 'gc-box))))
+				""").print()).isEqualTo("(:BY-METHOD :BY-METHOD T T :BOX)");
 	}
 
 	@Test
@@ -26961,7 +26989,7 @@ class LispEvaluatorTest {
 				                                     :external-format :utf-8)))
 				    (list (and (typep out 'flex:flexi-stream) t)
 				          (eq (flex:flexi-stream-stream out) sink)
-				          (flex:flexi-stream-external-format out)
+				          (flex:external-format-name (flex:flexi-stream-external-format out))
 				          (coerce bytes 'list)
 				          (read-line in nil :eof)
 				          (read-char in nil :eof))))
@@ -27092,15 +27120,27 @@ class LispEvaluatorTest {
 		// interpreter expands it lazily, at call time, so without the definition-package
 		// swap the (intern "SECRET") landed in the caller's package. A TOP-LEVEL macro
 		// call keeps the current package (trivia's lispn:define-namespace needs that).
+		// A name READ at expansion time (cl-pdf's AFM parser) is homed as it is read,
+		// so it lands in the same package: the runtime reader interns like intern does,
+		// read and read-from-string with a standard or a custom readtable alike.
 		assertThat(evalMulti("""
 				(defpackage :mp-lib (:use :cl) (:export :call-it))
 				(in-package :mp-lib)
 				(defun mp-lib::secret (x) (* x 2))
 				(defmacro mp-lib::name-of (x) (list (intern "SECRET") x))
-				(defun mp-lib:call-it (x) (mp-lib::name-of x))
+				(defmacro mp-lib::read-of (x) (list (read-from-string "secret") x))
+				(defmacro mp-lib::read-full-of (x) (list (read-from-string " secret" t nil :start 1) x))
+				(defmacro mp-lib::stream-read-of (x) (list (read (make-string-input-stream "secret")) x))
+				(defmacro mp-lib::syntax-read-of (x)
+				  (let ((*readtable* (copy-readtable nil)))
+				    (list (read (make-string-input-stream "secret")) x)))
+				(defun mp-lib:call-it (x)
+				  (list (mp-lib::name-of x) (mp-lib::read-of x) (mp-lib::read-full-of x) (mp-lib::stream-read-of x)
+				        (mp-lib::syntax-read-of x) (eq (read-from-string "secret") 'secret)
+				        (read-from-string "(a cl-user::b mp-lib::c :d #:e)")))
 				(in-package :cl-user)
 				(mp-lib:call-it 21)
-				""").print()).isEqualTo("42");
+				""").print()).isEqualTo("(42 42 42 42 42 NIL (A B MP-LIB::C :D #:E))");
 	}
 
 	@Test

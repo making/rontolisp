@@ -1516,13 +1516,13 @@ class LispMacroExpanderTest {
 
 	@Test
 	void injectBakedAccessLeavesAProgramNoRowServesUnchanged() {
-		// Every package a computed lookup can reach answers through cl or its own
-		// members only, and every name asked is a constant no standard name spells:
+		// The package a computed name is looked up in answers through cl or its own
+		// members only, and exports nothing -- every name it does not answer is built
+		// IBA-PLAIN::NAME -- and every name asked is a constant no standard name spells:
 		// nothing is injected, so the program stays byte-identical.
 		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
 		List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString("""
-				(defpackage :iba-plain (:use :cl) (:export #:x))
-				(defun iba-f (p) (list (find-symbol "IBA-X" p) (intern (string '#:run) p)))
+				(defpackage :iba-plain (:use :cl))
 				(print (intern (symbol-name :x) :iba-plain))
 				(print (multiple-value-list (find-symbol "IBA-Y")))
 				"""));
@@ -1558,6 +1558,10 @@ class LispMacroExpanderTest {
 		List<LispVal> injected = LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver));
 		assertThat(injected).anySatisfy(form -> assertThat(form.print())
 			.isEqualTo("(DEFVAR %CL-USERS% '(:CL-USER :COMMON-LISP-USER :IBA-D :IBA-DN))"));
+		// ... and every designator of a program package, whose unanswered names the
+		// build spells PKG::NAME.
+		assertThat(injected).anySatisfy(form -> assertThat(form.print())
+			.isEqualTo("(DEFUN %PROGRAM-PACKAGE-P (%PPP-K) (MEMBER %PPP-K '(:IBA-D :IBA-DN :IBA-E)))"));
 	}
 
 	@Test
