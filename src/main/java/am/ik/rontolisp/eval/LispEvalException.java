@@ -151,6 +151,21 @@ public class LispEvalException extends RuntimeException {
 	}
 
 	/**
+	 * Makes this error, raised in place of {@code original} for the same signal, continue
+	 * where {@code original} had been: the frames it already left noted the innermost
+	 * position, which the frames still to come must not overwrite.
+	 * @param original the error this one replaces
+	 * @return this error, to be thrown
+	 */
+	LispEvalException continuing(LispEvalException original) {
+		ConditionTrace earlier = original.trace();
+		synchronized (this) {
+			this.trace = earlier;
+		}
+		return this;
+	}
+
+	/**
 	 * The location lines an uncaught report prints under this error's report line --
 	 * where it was signaled, and every async boundary it crossed -- or none when nothing
 	 * is known.

@@ -467,9 +467,9 @@ value. `:test 'equalp` widens that: such a table FOLDS each key before placing
 it, so `"CS"`, `"Cs"` and `"cs"` are one key, `#\a` and `#\A` are one key, a
 float and the rational it equals are one key (`1` and `1.0`, `1/2` and `0.5`),
 and a list of them folds element-wise. An array deliberately does not fold (a
-vector key is compared by identity, so a folded copy would never find itself),
-and on the compiled backends the `:test` has to be written literally, since
-`make-hash-table`'s arguments are not evaluated there. The fold only places the
+vector key is compared by identity, so a folded copy would never find itself).
+The `:test` is a symbol or one of the four functions (`#'equalp`), written
+literally or computed at run time (`(apply #'make-hash-table initargs)`). The fold only places the
 key: `maphash` hands back each key as it was first stored, `"cs"` for an entry
 written under `"cs"` and then under `"CS"`, and `0.5` for one written under `0.5`.
 Storing under a key the table already has replaces the value and keeps the key, under

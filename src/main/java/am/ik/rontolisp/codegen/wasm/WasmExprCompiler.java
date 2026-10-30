@@ -2277,7 +2277,8 @@ final class WasmExprCompiler {
 				LispVal packed = ConcatenateForms.packedVectorCoerce(cons, ctx.closRegistry);
 				WasmExprCompiler.compileExpr(packed != null ? packed
 						: LispMacroExpander.expandCoerce(cons, true, ctx.functions.containsKey(LispNames.SEQ_TO_LIST),
-								ctx.functions.containsKey(LispNames.DEFTYPE_ALIAS_RUNTIME), null),
+								ctx.functions.containsKey(LispNames.DEFTYPE_ALIAS_RUNTIME), null,
+								ctx.functions.containsKey(LispNames.COMPILE)),
 						ctx);
 			}
 			case LispNames.MAP_INTO -> compileExpansion(LispMacroExpander.expandMapInto(cons,

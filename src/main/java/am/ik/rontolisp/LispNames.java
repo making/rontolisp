@@ -1705,6 +1705,16 @@ public final class LispNames {
 	/** The {@code make-hash-table} built-in function. */
 	public static final String MAKE_HASH_TABLE = "MAKE-HASH-TABLE";
 
+	/**
+	 * The {@code %make-hash-table-by-test} prelude helper: the compiled backends pick a
+	 * table's test from the source, so a {@code make-hash-table} whose {@code :test} is
+	 * computed is lowered onto a call to this helper, which compares the value with the
+	 * four test symbols and function objects and makes the table through a literal
+	 * {@code :test} ({@code LispMacroExpander.lowerComputedTestMakeHashTable}). The
+	 * interpreter's {@code make-hash-table} reads the value directly.
+	 */
+	public static final String MAKE_HASH_TABLE_BY_TEST_INTERNAL = "%MAKE-HASH-TABLE-BY-TEST";
+
 	/** The {@code gethash} built-in function. */
 	public static final String GETHASH = "GETHASH";
 

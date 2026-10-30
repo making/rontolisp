@@ -1298,6 +1298,19 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.MAKE_ARRAY_ET_FP_INTERNAL,
 				makeArrayElementTypeDispatch(LispNames.MAKE_ARRAY_ET_FP_INTERNAL, "%maef", " %maef-fp %maef-adj",
 						"\n                     :fill-pointer %maef-fp :adjustable %maef-adj"));
+		// %make-hash-table-by-test: a compiled make-hash-table whose :test is computed
+		// calls it (LispMacroExpander.lowerComputedTestMakeHashTable), and so does the
+		// #'make-hash-table wrapper. A test is a symbol or one of the four function
+		// objects, compared by identity; each arm's literal :test is what the backends
+		// read the table's representation from, and what turns their equalp and
+		// identity gates on.
+		SOURCES.put(LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL, """
+				(defun %make-hash-table-by-test (%mhbt-test)
+				  (cond ((or (eq %mhbt-test 'equalp) (eq %mhbt-test #'equalp)) (make-hash-table :test 'equalp))
+				        ((or (eq %mhbt-test 'eql) (eq %mhbt-test #'eql)) (make-hash-table :test 'eql))
+				        ((or (eq %mhbt-test 'eq) (eq %mhbt-test #'eq)) (make-hash-table :test 'eq))
+				        (t (make-hash-table :test 'equal))))
+				""");
 		// %symbol-in-package: a compiled find-symbol / intern with a computed package
 		// designator calls it (LispMacroExpander.computedPackageLookup) -- the
 		// find-package guard and the package-error once, not at every site. The body IS
@@ -5147,7 +5160,7 @@ public final class LispPreludeLibrary {
 					// after this pass, whose every dispatch helper resolves through
 					// %stream-target: that edge is the protocol, not a spelling.
 					used = used || entryMemberNames(pulled).contains(member(name))
-							|| (PRINT_CONTROL_ENTRIES.contains(name)
+							|| (PULLED_SURFACE_ENTRIES.contains(name)
 									&& referencedBySurfaceForm(name, formsFor(pulled), false))
 							|| (LispNames.STREAM_TARGET.equals(name)
 									&& GrayStreamsLibrary.usesProtocol(formsFor(pulled)));
@@ -5173,13 +5186,15 @@ public final class LispPreludeLibrary {
 	}
 
 	/**
-	 * The printer-control entries whose selection also asks
-	 * {@link #referencedBySurfaceForm} over each PULLED entry's forms: the prelude
-	 * {@code write} binds every printer-control variable, so a {@code write} user carries
-	 * the renderer and its leaves.
+	 * The entries whose selection also asks {@link #referencedBySurfaceForm} over each
+	 * PULLED entry's forms: the prelude {@code write} binds every printer-control
+	 * variable, so a {@code write} user carries the renderer and its leaves; and
+	 * {@code rontolisp:plist-hash-table} and its siblings hand their initargs to
+	 * {@code #'make-hash-table}, whose wrapper calls {@code %make-hash-table-by-test}.
 	 */
-	private static final java.util.Set<String> PRINT_CONTROL_ENTRIES = java.util.Set.of(LispNames.PRINT_CASED_INTERNAL,
-			LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.PRINT_RADIXED_INTERNAL);
+	private static final java.util.Set<String> PULLED_SURFACE_ENTRIES = java.util.Set.of(LispNames.PRINT_CASED_INTERNAL,
+			LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.PRINT_RADIXED_INTERNAL,
+			LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL);
 
 	/**
 	 * Whether an entry the program never NAMES is nonetheless reached from it.
@@ -5258,6 +5273,12 @@ public final class LispPreludeLibrary {
 		// splice nothing.
 		if (LispNames.MAKE_ARRAY_ET_INTERNAL.equals(entry)) {
 			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, false);
+		}
+		// %make-hash-table-by-test: the same timing, for a make-hash-table whose :test is
+		// computed, or make-hash-table taken as a value (its wrapper passes the :test of
+		// its initargs through, injected after this pass too).
+		if (LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL.equals(entry)) {
+			return am.ik.rontolisp.macro.LispMacroExpander.mayMakeHashTableWithComputedTest(program);
 		}
 		if (LispNames.MAKE_ARRAY_ET_FP_INTERNAL.equals(entry)) {
 			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, true);

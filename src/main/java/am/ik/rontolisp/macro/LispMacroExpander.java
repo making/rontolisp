@@ -27083,7 +27083,12 @@ public final class LispMacroExpander {
 	/**
 	 * Whether the program references {@code compile} without defining it -- the gate for
 	 * the generated {@code compile} runtime (see {@code CompileRuntime}). A user (or
-	 * library) {@code defun compile} wins and suppresses the injection.
+	 * library) {@code defun compile} wins and suppresses the injection. A {@code coerce}
+	 * of a lambda expression built at run time ({@code (coerce `(lambda () ,@code)
+	 * 'function)}, lisp-unit's {@code run-code}) is a reference too: its expansion is
+	 * {@code compile nil}'s, and it calls {@code compile} only when the program carries
+	 * it. Any other computed {@code 'function} coercion leaves the gate alone, so a
+	 * higher-order function does not pull in the eval runtime.
 	 * @param program the top-level forms
 	 * @return true when the runtime is needed
 	 */
@@ -27093,9 +27098,49 @@ public final class LispMacroExpander {
 			if (definesFunction(form, LispNames.COMPILE)) {
 				return false;
 			}
-			referenced = referenced || referencesFunction(form, LispNames.COMPILE);
+			referenced = referenced || referencesFunction(form, LispNames.COMPILE) || coercesBuiltLambda(form);
 		}
 		return referenced;
+	}
+
+	// A (coerce <form building a lambda expression> ...) anywhere outside quoted data.
+	private static boolean coercesBuiltLambda(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.isQuote(member)) {
+					return false;
+				}
+				if (LispNames.COERCE.equals(member) && cons.cdr() instanceof LispCons rest
+						&& buildsLambdaExpression(rest.car())) {
+					return true;
+				}
+			}
+			if (coercesBuiltLambda(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
+	}
+
+	// Whether the form builds a list headed by the symbol LAMBDA: (list 'lambda ...),
+	// (list* 'lambda ...), (cons 'lambda ...), or an append/nconc whose first part does
+	// -- the shapes a backquoted `(lambda ...) template reads as.
+	private static boolean buildsLambdaExpression(LispVal form) {
+		if (!(form instanceof LispCons call) || !(call.car() instanceof LispSymbol op)
+				|| !(call.cdr() instanceof LispCons args)) {
+			return false;
+		}
+		return switch (memberOf(op.name())) {
+			case LispNames.LIST, LispNames.LIST_STAR,
+					LispNames.CONS ->
+				args.car() instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+						&& LispNames.isQuote(q.name()) && quoted.cdr() instanceof LispCons cell
+						&& cell.car() instanceof LispSymbol head && LispNames.LAMBDA.equals(memberOf(head.name()));
+			case LispNames.APPEND, LispNames.NCONC -> buildsLambdaExpression(args.car());
+			default -> false;
+		};
 	}
 
 	/**
@@ -27341,7 +27386,7 @@ public final class LispMacroExpander {
 		boolean allocateInstanceRuntime = needsAllocateInstanceRuntime(program);
 		// A compile reference compiles to the generated runtime defun injected below
 		// (no-op for the definition-time method construction a splice already carried
-		// out, an error for everything else -- see CompileRuntime).
+		// out, an eval of everything else -- see CompileRuntime).
 		boolean compileRuntime = needsCompileRuntime(program);
 		// #'make-instance taken as a VALUE (the (apply #'make-instance class args)
 		// idiom of postmodern's make-dao): the backends inject a wrapper forwarding to
@@ -27620,7 +27665,7 @@ public final class LispMacroExpander {
 		if (compileRuntime) {
 			// Position-independent defuns, appended: a compiled program's compile is a
 			// no-op for the definition-time method construction already spliced into
-			// the program, and an error for anything else (see CompileRuntime).
+			// the program, and an eval of anything else (see CompileRuntime).
 			out.addAll(CompileRuntime.forms());
 		}
 		if (metaclassProtocol || makeInstanceFunction) {
@@ -28018,10 +28063,10 @@ public final class LispMacroExpander {
 	 * that has one carries the flag the fold reads.
 	 *
 	 * <p>
-	 * The test is read from the SOURCE because the compiled backends never evaluate
-	 * {@code make-hash-table}'s arguments ({@code .kb/hash-tables.md}); a test computed
-	 * at run time is therefore not seen, and the table places structurally as it did
-	 * before.
+	 * The test is read from the SOURCE because the compiled backends pick a table's
+	 * representation from it ({@code .kb/hash-tables.md}). A test computed at run time is
+	 * lowered onto {@code %make-hash-table-by-test}, whose spliced body writes every test
+	 * literally, so such a program answers yes here.
 	 * @param forms the program to scan
 	 * @return whether an {@code equalp} table can exist in this program
 	 */
@@ -28117,11 +28162,10 @@ public final class LispMacroExpander {
 
 	/**
 	 * Answers the test code ({@link LispHashTable#TEST_EQUAL} and friends) one
-	 * {@code (make-hash-table ...)} form asks for, read from the SOURCE: the
-	 * {@code :test} argument must be written literally ({@code 'eq} or {@code #'eq} and
-	 * the same for the other three tests) because the compiled backends never evaluate
-	 * {@code make-hash-table}'s arguments; a computed test places as {@code equal}, as it
-	 * did before identity tables existed.
+	 * {@code (make-hash-table ...)} form asks for, read from the SOURCE: a literal
+	 * {@code :test} ({@code 'eq} or {@code #'eq} and the same for the other three tests).
+	 * A computed one answers {@code equal} here; the compiled backends lower that site
+	 * first ({@link #lowerComputedTestMakeHashTable}).
 	 * @param form the {@code make-hash-table} call
 	 * @return the test code
 	 */
@@ -28136,13 +28180,108 @@ public final class LispMacroExpander {
 	}
 
 	private static String designatedTestName(LispVal test) {
-		LispVal named = test;
 		if (test instanceof LispCons quoted && quoted.car() instanceof LispSymbol head
 				&& (LispNames.QUOTE.equals(head.name()) || LispNames.FUNCTION.equals(head.name()))
-				&& quoted.cdr() instanceof LispCons rest) {
-			named = rest.car();
+				&& quoted.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol named) {
+			return named.name();
 		}
-		return named instanceof LispSymbol test0 ? test0.name() : "";
+		return "";
+	}
+
+	/**
+	 * The {@code :test} argument of one {@code (make-hash-table ...)} form when it is
+	 * COMPUTED: anything but a quoted or {@code function}-named symbol and a constant
+	 * atom -- a variable, a call. Its test is known only at run time.
+	 * @param form the {@code make-hash-table} call
+	 * @return the test form, or null when it is literal or absent
+	 */
+	private static @Nullable LispVal computedHashTableTest(LispCons form) {
+		List<LispVal> parts = form.toList();
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol keyword && LispNames.TEST_KEYWORD.equals(keyword.name())) {
+				LispVal test = parts.get(i + 1);
+				boolean constant = switch (test) {
+					case LispSymbol symbol -> symbol.name().startsWith(":");
+					case LispCons cons -> !designatedTestName(cons).isEmpty();
+					default -> true;
+				};
+				return constant ? null : test;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Lowers a {@code make-hash-table} whose {@code :test} is computed
+	 * ({@link #computedHashTableTest}) onto {@code (%make-hash-table-by-test test)}, the
+	 * prelude helper that compares the value with the four test symbols and function
+	 * objects and makes the table through a literal {@code :test}. The compiled backends
+	 * choose a table's representation from that literal; the interpreter reads the value
+	 * itself and needs no lowering. Every other keyword stays unevaluated, as on a
+	 * literal site.
+	 * @param cons the {@code make-hash-table} call
+	 * @param definedFunction whether a function is defined in the program being compiled;
+	 * the helper is spliced by {@link #mayMakeHashTableWithComputedTest}, and a site the
+	 * selection missed keeps the {@code equal} table
+	 * @return the lowered call, or null when the test is literal, absent or the helper is
+	 * missing
+	 */
+	public static @Nullable LispVal lowerComputedTestMakeHashTable(LispCons cons,
+			java.util.function.Predicate<String> definedFunction) {
+		LispVal test = computedHashTableTest(cons);
+		if (test == null || !definedFunction.test(LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL)) {
+			return null;
+		}
+		return mvCall(LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL, test);
+	}
+
+	/**
+	 * Whether the program may make a hash table whose test is decided at run time: a
+	 * {@code make-hash-table} call with a computed {@code :test}, or
+	 * {@code make-hash-table} anywhere but a call's head -- {@code #'make-hash-table},
+	 * whose wrapper passes its initargs' {@code :test} through. The prelude selection
+	 * runs before {@link #lowerComputedTestMakeHashTable} and before the wrapper is
+	 * injected, so this SURFACE fact is what splices {@code %make-hash-table-by-test};
+	 * the helper's literal arms then turn the {@code equalp} and identity gates on.
+	 * @param program the top-level forms
+	 * @return whether any site needs the helper
+	 */
+	public static boolean mayMakeHashTableWithComputedTest(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (mayMakeHashTableWithComputedTest(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mayMakeHashTableWithComputedTest(LispVal form) {
+		if (form instanceof LispSymbol symbol) {
+			return namesMakeHashTable(symbol);
+		}
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		LispVal rest = cons;
+		if (cons.car() instanceof LispSymbol head && namesMakeHashTable(head)) {
+			if (computedHashTableTest(cons) != null) {
+				return true;
+			}
+			rest = cons.cdr();
+		}
+		while (rest instanceof LispCons element) {
+			if (mayMakeHashTableWithComputedTest(element.car())) {
+				return true;
+			}
+			rest = element.cdr();
+		}
+		return false;
+	}
+
+	// The prelude resolves the program before asking, so make-hash-table can arrive
+	// package-QUALIFIED (cl:make-hash-table).
+	private static boolean namesMakeHashTable(LispSymbol symbol) {
+		return LispNames.MAKE_HASH_TABLE.equals(memberName(symbol.name()));
 	}
 
 	/**
@@ -32656,7 +32795,7 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandCoerce(LispCons cons, boolean arraysExist, boolean helpersPresent) {
-		return expandCoerce(cons, arraysExist, helpersPresent, false, null);
+		return expandCoerce(cons, arraysExist, helpersPresent, false, null, false);
 	}
 
 	/**
@@ -32674,10 +32813,14 @@ public final class LispMacroExpander {
 	 * @param closRegistry the live {@code deftype} registry, for the interpreter, which
 	 * has no injected defun to call and spells the resolution inline; null on the compile
 	 * paths
+	 * @param compilePresent whether {@code compile} is callable: always on the
+	 * interpreter, and on a compile path only when the program carries the
+	 * {@code compile} runtime ({@code CompileRuntime}). It decides whether a COMPUTED
+	 * {@code 'function} coercion of a cons answers {@code (compile nil x)} or signals.
 	 * @return the expanded expression
 	 */
 	public static LispVal expandCoerce(LispCons cons, boolean arraysExist, boolean helpersPresent,
-			boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry) {
+			boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry, boolean compilePresent) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			throw new UnsupportedOperationException("coerce expects a value and a result type");
@@ -32734,9 +32877,10 @@ public final class LispMacroExpander {
 			// (coerce x 'function): a designator-to-function conversion, not a
 			// sequence one. A function is returned as is; a symbol resolves through
 			// symbol-function (signalling when unbound); a literal lambda list folds
-			// to (function ...) so the compilers build the closure. Anything else
-			// signals through symbol-function's type check.
-			return coerceToFunctionBody(parts.get(1));
+			// to (function ...) so the compilers build the closure, and a computed one
+			// is compile nil's. Anything else signals through symbol-function's type
+			// check.
+			return coerceToFunctionBody(parts.get(1), compilePresent);
 		}
 		LispVal complexTarget = quotedComplexTarget(parts.get(2));
 		if (complexTarget != null) {
@@ -32754,7 +32898,7 @@ public final class LispMacroExpander {
 		}
 		if (type == null && !(parts.get(2) instanceof LispString)) {
 			return expandComputedCoerce(parts.get(1), parts.get(2), arraysExist, helpersPresent, aliasResolverPresent,
-					closRegistry);
+					closRegistry, compilePresent);
 		}
 		if (helpersPresent) {
 			// The trio member is a one-argument function, so the call IS the one-shot
@@ -32859,10 +33003,12 @@ public final class LispMacroExpander {
 	 * @param helpersPresent whether the program defines the conversion trio
 	 * @param aliasResolverPresent whether the shared alias resolver defun is present
 	 * @param closRegistry the live registry for the interpreter's inline resolution
+	 * @param compilePresent whether {@code compile} is callable (the function arm)
 	 * @return the expanded expression
 	 */
 	private static LispVal expandComputedCoerce(LispVal valueForm, LispVal typeForm, boolean arraysExist,
-			boolean helpersPresent, boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry) {
+			boolean helpersPresent, boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry,
+			boolean compilePresent) {
 		LispSymbol x = new LispSymbol("__coerce_x");
 		LispSymbol spec = new LispSymbol("__coerce_spec");
 		LispSymbol t = new LispSymbol("__coerce_t");
@@ -32879,7 +33025,8 @@ public final class LispMacroExpander {
 		LispVal identity = makeIf(mvCall(LispNames.EQ_GENERAL, t, LispTrue.INSTANCE), x, alreadyOfType);
 		// A computed designator naming FUNCTION coerces the value the way the literal
 		// 'function arm does; anything else falls through to the identity/typep tail.
-		LispVal functionArm = makeIf(memberOfTypeNames(t, "FUNCTION"), coerceTempToFunction(x), identity);
+		LispVal functionArm = makeIf(memberOfTypeNames(t, "FUNCTION"), coerceTempToFunction(x, compilePresent),
+				identity);
 		LispVal toVector = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_VECTOR), x))
 				: coerceToVectorBody(x, true);
 		LispVal toString = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_STRING), x))
@@ -32964,16 +33111,14 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The {@code 'function} conversion body:
-	 * {@code (let ((__coerce_f x)) (if (functionp __coerce_f) __coerce_f
-	 * (symbol-function __coerce_f)))}. A quoted literal lambda list folds to
-	 * {@code (function ...)} so the compilers build the closure directly; anything that
-	 * is neither a function nor a symbol signals through {@code symbol-function}'s type
-	 * check.
+	 * The {@code 'function} conversion body: {@code (let ((__coerce_f x)) <conversion>)}
+	 * over {@link #coerceTempToFunction}. A quoted literal lambda list folds to
+	 * {@code (function ...)} so the compilers build the closure directly.
 	 * @param value the coerced value form, evaluated once
+	 * @param compilePresent whether {@code compile} is callable
 	 * @return the expanded expression
 	 */
-	private static LispVal coerceToFunctionBody(LispVal value) {
+	private static LispVal coerceToFunctionBody(LispVal value, boolean compilePresent) {
 		if (value instanceof LispCons quoted && quoted.toList().size() == 2
 				&& quoted.toList().get(0) instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
 				&& quoted.toList().get(1) instanceof LispCons lambda && lambda.car() instanceof LispSymbol lh
@@ -32981,19 +33126,25 @@ public final class LispMacroExpander {
 			return listToCons(List.of(new LispSymbol(LispNames.FUNCTION), quoted.toList().get(1)));
 		}
 		LispSymbol f = new LispSymbol("__coerce_f");
-		return makeLet(f.name(), value, makeIf(callOf(LispNames.FUNCTIONP, f), f,
-				listToCons(List.of(new LispSymbol(LispNames.SYMBOL_FUNCTION), f))));
+		return makeLet(f.name(), value, coerceTempToFunction(f, compilePresent));
 	}
 
 	/**
 	 * The {@code 'function} conversion over an already-bound temp: {@code (if
-	 * (functionp x) x (symbol-function x))}.
+	 * (functionp x) x (if (consp x) (compile nil x) (symbol-function x)))}. A cons is a
+	 * lambda expression, which CLHS coerces to what {@code compile nil} answers (a
+	 * non-lambda cons signals there). Without {@code compile} (a compiled program that
+	 * does not carry its runtime) the cons arm is left out and the cons signals through
+	 * {@code symbol-function}'s type check, as any other non-symbol does.
 	 * @param x the (temp-bound) value form
+	 * @param compilePresent whether {@code compile} is callable
 	 * @return the form to answer for a function designator
 	 */
-	private static LispVal coerceTempToFunction(LispSymbol x) {
-		return makeIf(callOf(LispNames.FUNCTIONP, x), x,
-				listToCons(List.of(new LispSymbol(LispNames.SYMBOL_FUNCTION), x)));
+	private static LispVal coerceTempToFunction(LispSymbol x, boolean compilePresent) {
+		LispVal viaName = listToCons(List.of(new LispSymbol(LispNames.SYMBOL_FUNCTION), x));
+		LispVal notFunction = compilePresent ? makeIf(callOf(LispNames.CONSP, x),
+				listToCons(List.of(new LispSymbol(LispNames.COMPILE), LispNil.INSTANCE, x)), viaName) : viaName;
+		return makeIf(callOf(LispNames.FUNCTIONP, x), x, notFunction);
 	}
 
 	/**

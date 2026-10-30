@@ -17673,18 +17673,26 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	// The printed :TEST field and hash-table-test report the test lookup implements, now
-	// that a table knows whether it folds.
+	// The printed :TEST field and hash-table-test report the test lookup implements, a
+	// computed :test included (a variable, or the initargs #'make-hash-table is applied
+	// to). The interpreter twin is
+	// LispEvaluatorTest#aHashTableReportsAndPrintsTheTestItImplements.
 	void compileEqualpHashTablePrintsAndReportsItsTest() throws Exception {
-		assertThat(compileAndRun("""
+		assertThat(compileAndRunPrelude("""
+				(defun htc-make (test) (make-hash-table :test test))
+				(defun htc-probe (h) (setf (gethash "A" h) 1) (list (hash-table-test h) (gethash "a" h)))
 				(let ((p (make-hash-table :test 'equalp)) (q (make-hash-table :test 'equal)))
 				  (setf (gethash "a" p) 1)
 				  (print (list (hash-table-test p) (hash-table-test q)))
 				  (princ p)
 				  (terpri)
-				  (princ q))
+				  (princ q)
+				  (terpri))
+				(print (list (htc-probe (htc-make #'equalp)) (htc-probe (htc-make 'eq))
+				             (htc-probe (apply #'make-hash-table (list :size 4 :test #'equalp)))))
 				"""))
-			.isEqualTo("(EQUALP EQUAL)\n#<HASH-TABLE :TEST EQUALP :COUNT 1>\n#<HASH-TABLE :TEST EQUAL :COUNT 0>");
+			.isEqualTo("(EQUALP EQUAL)\n#<HASH-TABLE :TEST EQUALP :COUNT 1>\n#<HASH-TABLE :TEST EQUAL :COUNT 0>\n"
+					+ "((EQUALP 1) (EQ NIL) (EQUALP 1))");
 	}
 
 	@Test

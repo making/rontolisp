@@ -7406,6 +7406,29 @@ cases:
       (EQUAL EQUAL EQUALP)
       #<HASH-TABLE :TEST EQL :COUNT 0>
       #<HASH-TABLE :TEST EQ :COUNT 0>
+  - name: hash-table-computed-test
+    source: |
+      ;; The :test is decided from its VALUE at run time -- a symbol or one of the
+      ;; four function objects -- whether written literally, held in a variable,
+      ;; applied through #'make-hash-table (alexandria's plist-hash-table) or read
+      ;; back from hash-table-test (copy-hash-table).
+      (defun cs-htt-make (test) (make-hash-table :test test))
+      (defun cs-htt-probe (h)
+        (setf (gethash "A" h) 1)
+        (list (hash-table-test h) (gethash "a" h)))
+      (print (list (cs-htt-probe (make-hash-table :test #'equalp)) (cs-htt-probe (cs-htt-make #'equalp))
+                   (cs-htt-probe (cs-htt-make 'equalp)) (cs-htt-probe (cs-htt-make #'eql))
+                   (cs-htt-probe (cs-htt-make 'equal))))
+      (print (list (cs-htt-probe (apply #'make-hash-table (list :size 4 :test #'equalp)))
+                   (cs-htt-probe (apply #'make-hash-table nil))
+                   (hash-table-test (cs-htt-make (hash-table-test (cs-htt-make 'eq))))))
+      (let ((k (list 1)) (h (cs-htt-make #'eq)))
+        (setf (gethash k h) 'ident)
+        (print (list (gethash k h) (gethash (list 1) h) (hash-table-test h))))
+    expected: |
+      ((EQUALP 1) (EQUALP 1) (EQUALP 1) (EQL NIL) (EQUAL NIL))
+      ((EQUALP 1) (EQUAL NIL) EQ)
+      (IDENT NIL EQ)
   - name: eq-eql-on-distinct-equal-strings
     source: |
       ;; Two distinct strings with equal contents are neither eq nor eql (ANSI), on
@@ -16428,6 +16451,17 @@ cases:
       "x=5 y=7"
       to-stdout ok
       "\"q\""
+  - name: coerce-a-computed-lambda-expression-to-function
+    source: |
+      ;; (coerce <lambda expression> 'function) is compile nil's result when the
+      ;; expression is built at run time (lisp-unit's run-code), not only for a literal.
+      (defun run-code (code) (funcall (coerce `(lambda () ,@code) 'function)))
+      (print (run-code '((+ 1 1))))
+      (defun make-adder (n) (coerce (list 'lambda '(x) (list '+ 'x n)) 'function))
+      (print (funcall (make-adder 5) 10))
+    expected: |
+      2
+      15
   - name: runtime-resolved-designators-are-function-values
     source: |
       ;; A designator the compiler cannot read still resolves to a FUNCTION value:

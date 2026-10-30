@@ -854,8 +854,11 @@ where nested `defmethod`s carry the class METAOBJECT spliced as a literal specia
 - Run-time re-execution goes through the generated `compile` runtime (`macro/CompileRuntime` +
   `compile-runtime.lisp`, gated on a compile reference without a user defun, in the native-image
   resource-config): a defmethod-containing definition answers a do-nothing function, anything
-  else signals — so a method-defining form built from RUNTIME data is silently absorbed, the one
-  soft edge. A method under a false definition-time guard still registers in the dispatcher;
+  else is `eval`ed (which gates the eval runtime in) — so a method-defining form built from
+  RUNTIME data is silently absorbed, the one soft edge. A `(coerce <form building (lambda ...)>
+  ...)` counts as a compile reference (`coercesBuiltLambda`, lisp-unit's `run-code`); a computed
+  `'function` coercion calls `compile` on a cons only when the program carries it, so an ordinary
+  higher-order `(coerce f 'function)` stays eval-free. A method under a false definition-time guard still registers in the dispatcher;
   calling it falls through to the default or to no-applicable-method (the nested-branch
   guard, todo 445) -- matching the interpreter, where the defmethod never runs.
 
