@@ -134,9 +134,10 @@ final class NativeCallShapes {
 				LispNames.TCP_SET_TIMEOUT }) {
 			add(rows, rontolisp(member), 2, 2);
 		}
-		for (String member : new String[] { LispNames.FETCH, LispNames.MAKE_THREAD, LispNames.TCP_LISTEN }) {
+		for (String member : new String[] { LispNames.FETCH, LispNames.TCP_LISTEN }) {
 			add(rows, rontolisp(member), 1, 2);
 		}
+		add(rows, rontolisp(LispNames.MAKE_THREAD), 1, 3);
 		add(rows, rontolisp(LispNames.TLS_LISTEN), 3, 4);
 		add(rows, rontolisp(LispNames.TLS_LISTEN_PEM), 3, 4);
 		rows.put(LispNames.CLOSE, new Row(LispNames.CLOSE, 1, 3, true));

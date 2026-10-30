@@ -610,6 +610,10 @@ final class JvmExprCompiler {
 							JvmAsyncRuntimeBuilder.OCTETS_PACKED_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC));
 					return;
 				}
+				if (JvmLispCompiler.CONDITION_VARIABLE_METHODS.containsKey(qn.member())) {
+					compileConditionVariable(qn.member(), cons, ctx, className);
+					return;
+				}
 				if (JvmLispCompiler.INFLATE_METHODS.containsKey(qn.member())) {
 					// The streaming DEFLATE decoder of a compressed HTTP reply:
 					// runtime/RontoInflate, which travels with the class (the wasm
@@ -690,8 +694,8 @@ final class JvmExprCompiler {
 				}
 				if (LispNames.MAKE_THREAD.equals(qn.member()) || LispNames.JOIN_THREAD.equals(qn.member())
 						|| LispNames.THREADP.equals(qn.member()) || LispNames.THREAD_ALIVE_P.equals(qn.member())
-						|| LispNames.DESTROY_THREAD.equals(qn.member())
-						|| LispNames.CURRENT_THREAD.equals(qn.member())) {
+						|| LispNames.DESTROY_THREAD.equals(qn.member()) || LispNames.CURRENT_THREAD.equals(qn.member())
+						|| LispNames.THREAD_NAME_INTERNAL.equals(qn.member())) {
 					// A real virtual thread behind a marker-headed opaque handle
 					// (JvmThreadRuntimeBuilder, emitted because the reference gated it).
 					compileThread(qn.member(), cons, ctx, className);
@@ -2511,6 +2515,31 @@ final class JvmExprCompiler {
 	}
 
 	/**
+	 * Compiles one of the {@code %condition-} primitives behind the bordeaux-threads
+	 * shim's condition variables onto its {@code runtime/RontoConditionVariable} method,
+	 * which travels with the class.
+	 */
+	private static void compileConditionVariable(String member, LispCons cons, JvmLispCompiler.Ctx ctx,
+			String className) {
+		List<LispVal> items = cons.toList();
+		int arity = switch (member) {
+			case LispNames.CONDITION_VARIABLE_NEW_INTERNAL -> 0;
+			case LispNames.CONDITION_WAIT_INTERNAL -> 3;
+			default -> 2;
+		};
+		if (items.size() != arity + 1) {
+			throw new UnsupportedOperationException(member.toLowerCase(java.util.Locale.ROOT) + " expects " + arity
+					+ " arguments, got " + (items.size() - 1));
+		}
+		for (int i = 1; i <= arity; i++) {
+			compileExpr(items.get(i), ctx, className);
+		}
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.CONDITION_VARIABLE_CLASS),
+				java.util.Objects.requireNonNull(JvmLispCompiler.CONDITION_VARIABLE_METHODS.get(member)),
+				"(" + "Ljava/lang/Object;".repeat(arity) + ")Ljava/lang/Object;"));
+	}
+
+	/**
 	 * Compiles one of the three mutex primitives onto its {@link JvmMutexRuntimeBuilder}
 	 * helper. {@code make-mutex} takes no arguments and yields a fresh
 	 * {@code ReentrantLock}; acquire and release take the handle and return it, so a
@@ -2554,16 +2583,17 @@ final class JvmExprCompiler {
 			desc = JvmThreadRuntimeBuilder.CURRENT_DESC;
 		}
 		else if (LispNames.MAKE_THREAD.equals(member)) {
-			if (args.size() < 2 || args.size() > 3) {
+			if (args.size() < 2 || args.size() > 4) {
 				throw new UnsupportedOperationException(
-						"rontolisp:" + member + " expects 1 or 2 argument(s), got " + (args.size() - 1));
+						"rontolisp:" + member + " expects 1 to 3 argument(s), got " + (args.size() - 1));
 			}
-			compileExpr(args.get(1), ctx, className);
-			if (args.size() == 3) {
-				compileExpr(args.get(2), ctx, className);
-			}
-			else {
-				ctx.body.aconst_null();
+			for (int i = 1; i <= 3; i++) {
+				if (i < args.size()) {
+					compileExpr(args.get(i), ctx, className);
+				}
+				else {
+					ctx.body.aconst_null();
+				}
 			}
 			method = JvmThreadRuntimeBuilder.SPAWN_METHOD;
 			desc = JvmThreadRuntimeBuilder.SPAWN_DESC;
@@ -2578,6 +2608,7 @@ final class JvmExprCompiler {
 				case LispNames.JOIN_THREAD -> JvmThreadRuntimeBuilder.JOIN_METHOD;
 				case LispNames.THREADP -> JvmThreadRuntimeBuilder.THREADP_METHOD;
 				case LispNames.THREAD_ALIVE_P -> JvmThreadRuntimeBuilder.ALIVE_METHOD;
+				case LispNames.THREAD_NAME_INTERNAL -> JvmThreadRuntimeBuilder.NAME_METHOD;
 				default -> JvmThreadRuntimeBuilder.DESTROY_METHOD;
 			};
 			desc = JvmThreadRuntimeBuilder.UNARY_DESC;

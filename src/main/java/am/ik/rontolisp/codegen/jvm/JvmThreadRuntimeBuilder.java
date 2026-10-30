@@ -13,6 +13,7 @@ import java.util.Map;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.OperandTypes;
 import org.jspecify.annotations.Nullable;
 
@@ -27,13 +28,14 @@ import org.jspecify.annotations.Nullable;
  * Representations in the compiled value model:
  * <ul>
  * <li>a <em>thread handle</em> is {@code {TMARKER, java.lang.Thread,
- * java.util.concurrent.FutureTask}} -- marker-headed like the async runtime's stream
- * values, so {@code _threadp} is an identity test no reader-producible value can alias.
- * The handle is OPAQUE (the interpreter hands out a {@code LispThread}, the WASM backends
- * nothing at all), so nothing portable may print or compare one;</li>
+ * java.util.concurrent.FutureTask, name}} -- marker-headed like the async runtime's
+ * stream values, so {@code _threadp} is an identity test no reader-producible value can
+ * alias. The handle is OPAQUE (the interpreter hands out a {@code LispThread}, the WASM
+ * backends nothing at all), so nothing portable may print or compare one;</li>
  * <li>the spawned body runs on a virtual thread driving a {@code FutureTask} over the
  * generated class's {@code call()} ({@code implements Callable} -- the Runnable twin of
- * the async runtime's {@code run()}). {@code call()} first establishes the
+ * the async runtime's {@code run()}). {@code call()} first caches the handle its spawner
+ * got as the thread's {@code current-thread}, then establishes the
  * {@code (symbol . value)} bindings alist as thread-scoped dynamic bindings -- resolving
  * each name to its {@code _d$} ThreadLocal at RUNTIME through the generated {@code _dtl}
  * dispatch (the compiler forces every special into the dynamically-bound set when the
@@ -58,7 +60,12 @@ final class JvmThreadRuntimeBuilder {
 
 	static final String SPAWN_METHOD = "_thread_spawn";
 
-	static final String SPAWN_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+	static final String SPAWN_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String NAME_METHOD = "_thread_name";
+
+	/** The length of a thread handle: {@code {TMARKER, thread, task, name}}. */
+	private static final int HANDLE_LENGTH = 4;
 
 	static final String JOIN_METHOD = "_thread_join";
 
@@ -91,6 +98,11 @@ final class JvmThreadRuntimeBuilder {
 
 	static final String BINDINGS_FIELD = "_threadBindings";
 
+	/**
+	 * The spawned thread's own handle, which {@code call()} caches as its current one.
+	 */
+	static final String HANDLE_FIELD = "_threadHandle";
+
 	private JvmThreadRuntimeBuilder() {
 	}
 
@@ -122,19 +134,20 @@ final class JvmThreadRuntimeBuilder {
 	 * {@code _thread_join} records it again on the joining one, so a built-in's
 	 * type-error stays one across the join ({@code JvmAsyncRuntimeBuilder}'s await does
 	 * the same)
+	 * @param plainGlobals the program's global variables (its specials among them):
+	 * binding one of its own that is not special is refused, binding any other name does
+	 * nothing
 	 * @return the runtime bodies
 	 */
 	static ThreadRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
 			ClassEntry objectArrayClass, ClassEntry stringClass, JvmLispCompiler.ConditionChannel channel,
 			MethodRefEntry instanceInitRef, MethodRefEntry stringConcat,
 			JvmDynVarRuntimeBuilder.DynVarRuntime dynVarRuntime, FieldRefEntry curThreadTlField,
-			@Nullable FieldRefEntry teTl) {
+			@Nullable FieldRefEntry teTl, java.util.Collection<String> plainGlobals) {
 		ClassEntry threadClass = cp.classEntry("java/lang/Thread");
 		MethodRefEntry threadOfVirtual = cp.methodRef(threadClass, "ofVirtual",
 				"()Ljava/lang/Thread$Builder$OfVirtual;");
 		ClassEntry ofVirtualClass = cp.classEntry("java/lang/Thread$Builder$OfVirtual");
-		InterfaceMethodRefEntry builderStart = cp.interfaceMethodRef(ofVirtualClass, "start",
-				"(Ljava/lang/Runnable;)Ljava/lang/Thread;");
 		MethodRefEntry threadIsAlive = cp.methodRef(threadClass, "isAlive", "()Z");
 		MethodRefEntry threadInterrupt = cp.methodRef(threadClass, "interrupt", "()V");
 		MethodRefEntry threadJoin = cp.methodRef(threadClass, "join", "()V");
@@ -148,6 +161,10 @@ final class JvmThreadRuntimeBuilder {
 		MethodRefEntry stringEquals = cp.methodRef(stringClass, "equals", "(Ljava/lang/Object;)Z");
 		FieldRefEntry fnField = cp.fieldRef(thisClass, FN_FIELD, "Ljava/lang/Object;");
 		FieldRefEntry bindingsField = cp.fieldRef(thisClass, BINDINGS_FIELD, "Ljava/lang/Object;");
+		FieldRefEntry handleField = cp.fieldRef(thisClass, HANDLE_FIELD, "Ljava/lang/Object;");
+		InterfaceMethodRefEntry builderUnstarted = cp.interfaceMethodRef(ofVirtualClass, "unstarted",
+				"(Ljava/lang/Runnable;)Ljava/lang/Thread;");
+		MethodRefEntry threadStart = cp.methodRef(threadClass, "start", "()V");
 		MethodRefEntry invoke0 = cp.methodRef(thisClass, JvmRuntimeBuilder.dispatcherName(0, false),
 				JvmRuntimeBuilder.dispatcherDesc(0, false));
 		MethodRefEntry dtl = cp.methodRef(thisClass, DTL_METHOD, DTL_DESC);
@@ -163,35 +180,37 @@ final class JvmThreadRuntimeBuilder {
 
 		List<ThreadMethod> methods = new ArrayList<>();
 
-		// --- _thread_spawn(fn, bindings): FutureTask over a fresh runner instance on a
-		// virtual thread; the handle packs the thread (alive/destroy) and the task (join)
+		// --- _thread_spawn(fn, bindings, name): FutureTask over a fresh runner instance
+		// on
+		// a virtual thread; the handle packs the thread (alive/destroy), the task (join)
+		// and the name, and the runner holds the handle before the thread starts
 		{
 			MethodCode a = new MethodCode();
 			emitRequireBindings(a, cp, thisClass, stringClass, objectArrayClass, stringConcat);
-			// runner (slot 2) = new Prog() with the two fields set
+			// runner (slot 3) = new Prog() with the two fields set
 			a.new_(thisClass);
 			a.dup();
 			a.invokespecial(instanceInitRef);
-			a.astore(2);
-			a.aload(2);
+			a.astore(3);
+			a.aload(3);
 			a.aload(0);
 			a.putfield(fnField);
-			a.aload(2);
+			a.aload(3);
 			a.aload(1);
 			a.putfield(bindingsField);
-			// task (slot 3) = new FutureTask(runner)
+			// task (slot 4) = new FutureTask(runner)
 			a.new_(futureTaskClass);
 			a.dup();
-			a.aload(2);
-			a.invokespecial(futureTaskCtor);
-			a.astore(3);
-			// thread (slot 4) = Thread.ofVirtual().start(task)
-			a.invokestatic(threadOfVirtual); // [builder]
 			a.aload(3);
-			a.invokeinterface(builderStart);
+			a.invokespecial(futureTaskCtor);
 			a.astore(4);
-			// {TMARKER, thread, task}
-			a.loadConstant(3);
+			// thread (slot 7) = Thread.ofVirtual().unstarted(task)
+			a.invokestatic(threadOfVirtual); // [builder]
+			a.aload(4);
+			a.invokeinterface(builderUnstarted);
+			a.astore(7);
+			// handle (slot 8) = {TMARKER, thread, task, name}
+			a.loadConstant(HANDLE_LENGTH);
 			a.anewarray(objectClass);
 			a.dup();
 			a.loadConstant(0);
@@ -199,12 +218,24 @@ final class JvmThreadRuntimeBuilder {
 			a.aastore();
 			a.dup();
 			a.loadConstant(1);
-			a.aload(4);
+			a.aload(7);
 			a.aastore();
 			a.dup();
 			a.loadConstant(2);
-			a.aload(3);
+			a.aload(4);
 			a.aastore();
+			a.dup();
+			a.loadConstant(3);
+			a.aload(2);
+			a.aastore();
+			a.astore(8);
+			// runner._threadHandle = handle; thread.start(); return handle
+			a.aload(3);
+			a.aload(8);
+			a.putfield(handleField);
+			a.aload(7);
+			a.invokevirtual(threadStart);
+			a.aload(8);
 			a.areturn();
 			methods.add(new ThreadMethod(cp.utf8Entry(SPAWN_METHOD), cp.utf8Entry(SPAWN_DESC), a));
 		}
@@ -336,11 +367,24 @@ final class JvmThreadRuntimeBuilder {
 			methods.add(new ThreadMethod(cp.utf8Entry(DESTROY_METHOD), cp.utf8Entry(UNARY_DESC), a));
 		}
 
+		// --- _thread_name(h): the name slot (nil for a handle make-thread did not make)
+		{
+			MethodCode a = new MethodCode();
+			emitRequireThread(a, cp, thisClass, objectClass, LispNames.THREAD_NAME);
+			a.aload(0);
+			a.checkcast(objectArrayClass);
+			a.loadConstant(3);
+			a.aaload();
+			a.areturn();
+			methods.add(new ThreadMethod(cp.utf8Entry(NAME_METHOD), cp.utf8Entry(UNARY_DESC), a));
+		}
+
 		// --- _thread_current(): the calling thread's own handle, cached in the
 		// _curThreadTl ThreadLocal so repeated calls return the SAME array (an eq
-		// hash-table key -- dbi's per-thread connection cache). Works for any thread,
-		// not only _thread_spawn's; the task slot is null, so joining your own handle
-		// is an error rather than a value (joining yourself deadlocks upstream too).
+		// hash-table key -- dbi's per-thread connection cache). A spawned thread's call()
+		// cached the handle its spawner got; any other thread gets a fresh one whose task
+		// slot is null, so joining it is an error rather than a value (joining yourself
+		// deadlocks upstream too).
 		{
 			MethodRefEntry threadCurrent = cp.methodRef(threadClass, "currentThread", "()Ljava/lang/Thread;");
 			MethodRefEntry tlGetRef = java.util.Objects.requireNonNull(channel.tlGet);
@@ -352,7 +396,7 @@ final class JvmThreadRuntimeBuilder {
 			MethodCode.Label ret = a.newLabel();
 			a.aload(0);
 			a.ifnonnull(ret);
-			a.loadConstant(3);
+			a.loadConstant(HANDLE_LENGTH);
 			a.anewarray(objectClass);
 			a.dup();
 			a.loadConstant(0);
@@ -382,7 +426,7 @@ final class JvmThreadRuntimeBuilder {
 			a.aload(0);
 			a.checkcast(objectArrayClass);
 			a.arraylength();
-			a.loadConstant(3);
+			a.loadConstant(HANDLE_LENGTH);
 			a.if_icmpne(no);
 			a.aload(0);
 			a.checkcast(objectArrayClass);
@@ -398,7 +442,13 @@ final class JvmThreadRuntimeBuilder {
 			methods.add(new ThreadMethod(cp.utf8Entry(THREADP_METHOD), cp.utf8Entry(UNARY_DESC), a));
 		}
 
-		// --- _dtl(name): the special's _d$ ThreadLocal by runtime name, or a clear error
+		// --- _dtl(name): the special's _d$ ThreadLocal by runtime name; a clear error
+		// for
+		// one of the program's own plain (non-special) globals, whose reads would miss
+		// the binding; otherwise null, and nothing is bound: a name this program has no
+		// variable of (nothing here could read the binding), or a standard variable it
+		// never binds (bordeaux-threads' *standard-io-bindings* binds each to its
+		// standard value; .kb/threads.md)
 		{
 			MethodCode a = new MethodCode();
 			for (Map.Entry<String, FieldRefEntry> entry : dynVarRuntime.fields().entrySet()) {
@@ -411,15 +461,35 @@ final class JvmThreadRuntimeBuilder {
 				a.areturn();
 				a.labelBinding(next);
 			}
-			a.new_(iseClass);
-			a.dup();
-			a.ldc(cp.stringEntry("MAKE-THREAD: cannot dynamically bind "));
-			a.aload(0);
-			a.invokevirtual(stringConcat);
-			a.ldc(cp.stringEntry(" (not a special variable of this program)"));
-			a.invokevirtual(stringConcat);
-			a.invokespecial(iseCtor);
-			a.athrow();
+			List<String> plain = plainGlobals.stream()
+				.filter(name -> !dynVarRuntime.fields().containsKey(name) && !PackageRegistry.isClSymbol(name))
+				.toList();
+			String plainList = "\n" + String.join("\n", plain) + "\n";
+			// One constant string: a constant's UTF-8 form must fit in 65,535 bytes, and
+			// past that every miss stays the error.
+			if (plainList.length() * 3 < 65_535) {
+				MethodCode.Label unknown = a.newLabel();
+				if (!plain.isEmpty()) {
+					a.ldc(cp.stringEntry(plainList));
+					a.ldc(cp.stringEntry("\n"));
+					a.aload(0);
+					a.invokevirtual(stringConcat);
+					a.ldc(cp.stringEntry("\n"));
+					a.invokevirtual(stringConcat);
+					a.invokevirtual(cp.methodRef(stringClass, "contains", "(Ljava/lang/CharSequence;)Z"));
+					a.ifeq(unknown);
+				}
+				else {
+					a.goto_(unknown);
+				}
+				emitNotSpecialError(a, cp, iseClass, iseCtor, stringConcat);
+				a.labelBinding(unknown);
+				a.aconst_null();
+				a.areturn();
+			}
+			else {
+				emitNotSpecialError(a, cp, iseClass, iseCtor, stringConcat);
+			}
 			methods.add(new ThreadMethod(cp.utf8Entry(DTL_METHOD), cp.utf8Entry(DTL_DESC), a));
 		}
 
@@ -429,6 +499,11 @@ final class JvmThreadRuntimeBuilder {
 		{
 			MethodRefEntry dbind = dynVarRuntime.dbind();
 			MethodCode a = new MethodCode();
+			// this thread's current-thread is the handle its spawner got
+			a.getstatic(curThreadTlField);
+			a.aload(0);
+			a.getfield(handleField);
+			a.invokevirtual(java.util.Objects.requireNonNull(channel.tlSet));
 			MethodCode.Label tryStart = a.newBoundLabel();
 			a.aload(0);
 			a.getfield(bindingsField);
@@ -451,11 +526,17 @@ final class JvmThreadRuntimeBuilder {
 			a.aaload();
 			a.checkcast(stringClass);
 			a.invokestatic(dtl); // [tl]
+			a.astore(4);
+			MethodCode.Label advance = a.newLabel();
+			a.aload(4);
+			a.ifnull(advance); // a variable this program does not have
+			a.aload(4);
 			a.aload(3);
 			a.loadConstant(1);
 			a.aaload();
 			a.invokestatic(dbind); // [old cell]
 			a.pop(); // no restore: the bindings die with the thread
+			a.labelBinding(advance);
 			a.aload(2);
 			a.loadConstant(1);
 			a.aaload();
@@ -504,6 +585,20 @@ final class JvmThreadRuntimeBuilder {
 		}
 
 		return new ThreadRuntime(List.copyOf(methods), callMethod);
+	}
+
+	/** Emits {@code _dtl}'s refusal of the name in local 0. */
+	private static void emitNotSpecialError(MethodCode a, ConstantPool cp, ClassEntry iseClass, MethodRefEntry iseCtor,
+			MethodRefEntry stringConcat) {
+		a.new_(iseClass);
+		a.dup();
+		a.ldc(cp.stringEntry("MAKE-THREAD: cannot dynamically bind "));
+		a.aload(0);
+		a.invokevirtual(stringConcat);
+		a.ldc(cp.stringEntry(" (not a special variable of this program)"));
+		a.invokevirtual(stringConcat);
+		a.invokespecial(iseCtor);
+		a.athrow();
 	}
 
 	/**

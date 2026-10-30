@@ -1,6 +1,6 @@
 # rontolisp:make-thread
 
-`(rontolisp:make-thread function &optional bindings)`
+`(rontolisp:make-thread function &optional bindings name)`
 
 引数なしの `function` を実行する新しい(仮想)スレッドを生成し、**不透明なスレッド
 ハンドル**を即座に返します。ハンドルは
@@ -17,6 +17,9 @@
 スペシャル変数はグローバル値を読みます。`*standard-output*` をこの方法で束縛すると
 新しいスレッドの print ファミリが指定したストリームに向かいます —
 `bordeaux-threads`/`bt2` ライブラリ(および Clack のハンドラ)が使う形です。
+
+`name` (既定値 `nil`) はハンドルに保持され、`bt:thread-name` がそれを返します。新しい
+スレッド内の [`rontolisp:current-thread`](rontolisp-current-thread.md) はこれと同じハンドルです。
 
 ```lisp
 (defvar *cap* (make-string-output-stream))

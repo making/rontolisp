@@ -3221,14 +3221,14 @@ public final class LispEvaluator {
 		// bindings from its spawner and its own pushes die with it -- no pop is needed.
 		String makeThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_THREAD);
 		this.globalEnv.defineFunction(makeThreadName, new LispFunction(makeThreadName, args -> {
-			if (args.isEmpty() || args.size() > 2) {
+			if (args.isEmpty() || args.size() > 3) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-						LispNames.MAKE_THREAD + " expects 1 or 2 arguments, got " + args.size());
+						LispNames.MAKE_THREAD + " expects 1 to 3 arguments, got " + args.size());
 			}
 			LispVal fn = args.get(0);
 			List<String> bindingNames = new ArrayList<>();
 			List<LispVal> bindingValues = new ArrayList<>();
-			if (args.size() == 2) {
+			if (args.size() >= 2) {
 				LispVal cur = args.get(1);
 				while (cur instanceof LispCons cons) {
 					if (!(cons.car() instanceof LispCons pair) || !(pair.car() instanceof LispSymbol sym)) {
@@ -3254,7 +3254,7 @@ public final class LispEvaluator {
 					this.dynamicBindings.push(bindingNames.get(i), bindingValues.get(i));
 				}
 				return apply(fn, List.of(), this.globalEnv);
-			});
+			}, args.size() == 3 ? args.get(2) : LispNil.INSTANCE);
 		}));
 		String joinThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JOIN_THREAD);
 		this.globalEnv.defineFunction(joinThreadName, new LispFunction(joinThreadName, args -> {
@@ -3299,6 +3299,11 @@ public final class LispEvaluator {
 			thread.thread().interrupt();
 			return thread;
 		}));
+		// %thread-name: the name make-thread was given (nil for none, and for a thread
+		// it did not spawn) -- bordeaux-threads:thread-name.
+		String threadNameName = LispNames.THREAD_NAME_INTERNAL_QUALIFIED;
+		this.globalEnv.defineFunction(threadNameName,
+				new LispFunction(threadNameName, args -> requireThread(LispNames.THREAD_NAME, args).name()));
 		String currentThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.CURRENT_THREAD);
 		this.globalEnv.defineFunction(currentThreadName, new LispFunction(currentThreadName, args -> {
 			if (!args.isEmpty()) {

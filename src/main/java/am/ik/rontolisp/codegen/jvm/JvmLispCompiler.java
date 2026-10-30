@@ -176,6 +176,29 @@ public final class JvmLispCompiler implements LispCompiler {
 	private boolean needsInflateRuntime;
 
 	/**
+	 * The condition variables behind the {@code bordeaux-threads} shim
+	 * ({@code rontolisp::%condition-variable-new}, {@code %condition-wait},
+	 * {@code %condition-notify}), in internal form: the class {@code JvmExprCompiler}
+	 * calls them on, which travels with the output.
+	 */
+	static final String CONDITION_VARIABLE_CLASS = "am/ik/rontolisp/runtime/RontoConditionVariable";
+
+	/**
+	 * Each {@code %condition-} primitive's method of {@link #CONDITION_VARIABLE_CLASS}.
+	 */
+	static final Map<String, String> CONDITION_VARIABLE_METHODS = Map.of(LispNames.CONDITION_VARIABLE_NEW_INTERNAL,
+			"create", LispNames.CONDITION_WAIT_INTERNAL, "waitOn", LispNames.CONDITION_NOTIFY_INTERNAL, "wake");
+
+	/** The runtime class file a program with condition variables carries beside it. */
+	static final List<String> CONDITION_VARIABLE_RUNTIME_CLASS_FILES = List.of(CONDITION_VARIABLE_CLASS + ".class");
+
+	/**
+	 * Whether the last {@link #compile} makes a condition variable, i.e. whether the
+	 * emitted class needs {@code RontoConditionVariable} beside it.
+	 */
+	private boolean needsConditionVariableRuntime;
+
+	/**
 	 * The terminal probe behind {@code %terminal-p} ({@code interactive-stream-p}), in
 	 * internal form: the class {@code JvmExprCompiler} calls it on, which travels with
 	 * the output.
@@ -941,10 +964,10 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsInflateRuntime
-				&& !this.needsTerminalRuntime && !this.needsHashTableRuntime && !this.needsComplexRuntime
-				&& !this.needsQuantizedRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime
-				&& !this.needsStringInputRuntime && !this.needsJavaValueRuntime && this.partClassFiles.isEmpty()
-				&& this.bridgeClassFiles.isEmpty()) {
+				&& !this.needsConditionVariableRuntime && !this.needsTerminalRuntime && !this.needsHashTableRuntime
+				&& !this.needsComplexRuntime && !this.needsQuantizedRuntime && !this.needsIoStreamRuntime
+				&& !this.needsCharFileRuntime && !this.needsStringInputRuntime && !this.needsJavaValueRuntime
+				&& this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
 		// A program too large for one class brings its $PartN classes, and a bridged
@@ -984,6 +1007,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsInflateRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(INFLATE_RUNTIME_CLASS_FILES));
+		}
+		if (this.needsConditionVariableRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(CONDITION_VARIABLE_RUNTIME_CLASS_FILES));
 		}
 		if (this.needsTerminalRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(TERMINAL_RUNTIME_CLASS_FILES));
@@ -1591,7 +1617,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DESTROY_THREAD))
 				|| programUsesSymbol(program,
-						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.CURRENT_THREAD));
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.CURRENT_THREAD))
+				|| programUsesSymbol(program, LispNames.THREAD_NAME_INTERNAL_QUALIFIED);
 		MethodRefEntry tcpConnectHelperMethod = usesSockets ? cp.methodRef(thisClass,
 				JvmSocketRuntimeBuilder.TCP_CONNECT_METHOD, JvmSocketRuntimeBuilder.TCP_CONNECT_DESC) : null;
 		MethodRefEntry tcpListenHelperMethod = usesSockets ? cp.methodRef(thisClass,
@@ -2543,6 +2570,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// decompressing one the decoder.
 		this.needsFetchRuntime = usesFetch;
 		this.needsInflateRuntime = usesInflate;
+		this.needsConditionVariableRuntime = programUsesSymbol(program,
+				LispNames.CONDITION_VARIABLE_NEW_INTERNAL_QUALIFIED);
 		this.needsTerminalRuntime = programUsesSymbol(program, LispNames.TERMINAL_P_INTERNAL);
 		// An equalp table folds its keys through RontoHashTable.equalpKey, and every
 		// table's put/remove/count/values helpers call its tombstone machinery, so that
@@ -4366,7 +4395,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			curThreadTlFieldRef = cp.fieldRef(thisClass, curThreadTlFieldName, curThreadTlFieldDesc);
 			threadRuntimeBodies = JvmThreadRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass,
 					stringClass, mainCtx.conditionChannel, progInitForThread, stringConcat,
-					java.util.Objects.requireNonNull(dynVarRuntime), curThreadTlFieldRef, teTlField);
+					java.util.Objects.requireNonNull(dynVarRuntime), curThreadTlFieldRef, teTlField, globals);
 			callableClass = cp.classEntry("java/util/concurrent/Callable");
 		}
 		else {
@@ -4380,6 +4409,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				: null;
 		final @Nullable Utf8Entry threadBindingsFieldName = usesThreads
 				? cp.utf8Entry(JvmThreadRuntimeBuilder.BINDINGS_FIELD) : null;
+		final @Nullable Utf8Entry threadHandleFieldName = usesThreads
+				? cp.utf8Entry(JvmThreadRuntimeBuilder.HANDLE_FIELD) : null;
 		final @Nullable Utf8Entry threadInstanceFieldDesc = usesThreads ? cp.utf8Entry("Ljava/lang/Object;") : null;
 		final @Nullable Utf8Entry handoffFieldName = usesAsyncRuntime
 				? cp.utf8Entry(JvmAsyncRuntimeBuilder.HANDOFF_FIELD) : null;
@@ -4713,7 +4744,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (threadRuntimeBodies != null) {
 			for (Utf8Entry instField : List.of(java.util.Objects.requireNonNull(threadFnFieldName),
-					java.util.Objects.requireNonNull(threadBindingsFieldName))) {
+					java.util.Objects.requireNonNull(threadBindingsFieldName),
+					java.util.Objects.requireNonNull(threadHandleFieldName))) {
 				definition.addField(AccessFlag.ACC_PRIVATE, Objects.requireNonNull(instField),
 						Objects.requireNonNull(threadInstanceFieldDesc));
 			}

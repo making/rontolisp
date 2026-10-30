@@ -16,8 +16,10 @@ import java.util.concurrent.CompletableFuture;
  * @param thread the spawned thread
  * @param result the future settling with the thread function's value, or exceptionally
  * with what it threw
+ * @param name the name {@code make-thread} was given ({@code nil} when none, and for a
+ * thread it did not spawn)
  */
-public record LispThread(Thread thread, CompletableFuture<LispVal> result) implements LispVal {
+public record LispThread(Thread thread, CompletableFuture<LispVal> result, LispVal name) implements LispVal {
 
 	@Override
 	public String print() {

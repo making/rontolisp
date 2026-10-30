@@ -7810,12 +7810,54 @@ public final class LispNames {
 	 * can key an {@code eq} hash table -- dbi's per-thread connection cache
 	 * ({@code steal-cache-table}) is the driving consumer through
 	 * {@code bt2:current-thread}. Works for ANY thread (the main thread and served
-	 * requests included, not only {@code make-thread} spawns); the self-handle a spawned
-	 * body sees is its own cached one, not the spawner's handle for it -- only
-	 * {@code threadp}/{@code thread-alive-p} answers are portable on a handle either way.
-	 * Interpreter and JVM only, like the rest of the family.
+	 * requests included, not only {@code make-thread} spawns); in a spawned body it is
+	 * the handle {@code make-thread} returned. Interpreter and JVM only, like the rest of
+	 * the family.
 	 */
 	public static final String CURRENT_THREAD = "CURRENT-THREAD";
+
+	/**
+	 * The internal {@code rontolisp::%thread-name} primitive: the name a thread handle
+	 * was given as {@code make-thread}'s third argument, {@code nil} when none (and for a
+	 * thread {@code make-thread} did not spawn). Behind
+	 * {@code bordeaux-threads:thread-name}; interpreter and JVM only.
+	 */
+	public static final String THREAD_NAME_INTERNAL = "%THREAD-NAME";
+
+	/** The canonical spelling of {@code rontolisp::%thread-name}. */
+	public static final String THREAD_NAME_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + THREAD_NAME_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%condition-variable-new} primitive: a fresh
+	 * condition variable ({@code runtime/RontoConditionVariable}), behind
+	 * {@code bordeaux-threads:make-condition-variable}. Interpreter and JVM only.
+	 */
+	public static final String CONDITION_VARIABLE_NEW_INTERNAL = "%CONDITION-VARIABLE-NEW";
+
+	/** The canonical spelling of {@code rontolisp::%condition-variable-new}. */
+	public static final String CONDITION_VARIABLE_NEW_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
+			+ CONDITION_VARIABLE_NEW_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%condition-wait} primitive:
+	 * {@code (%condition-wait variable mutex nanos)} releases the held mutex (every
+	 * hold), waits for a notify or {@code nanos} nanoseconds ({@code nil}: no limit),
+	 * takes the mutex back and answers {@code t}, or {@code nil} on timeout.
+	 */
+	public static final String CONDITION_WAIT_INTERNAL = "%CONDITION-WAIT";
+
+	/** The canonical spelling of {@code rontolisp::%condition-wait}. */
+	public static final String CONDITION_WAIT_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONDITION_WAIT_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%condition-notify} primitive:
+	 * {@code (%condition-notify variable all)} wakes the oldest waiter, or every waiter
+	 * when {@code all} is non-nil; answers {@code nil}.
+	 */
+	public static final String CONDITION_NOTIFY_INTERNAL = "%CONDITION-NOTIFY";
+
+	/** The canonical spelling of {@code rontolisp::%condition-notify}. */
+	public static final String CONDITION_NOTIFY_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONDITION_NOTIFY_INTERNAL;
 
 	/**
 	 * The {@code rontolisp:current-file} read-time literal: the origin file of the source
@@ -10899,6 +10941,99 @@ public final class LispNames {
 	 * lock {@code make-lock} does.
 	 */
 	public static final String MAKE_RECURSIVE_LOCK = "MAKE-RECURSIVE-LOCK";
+
+	/**
+	 * {@code bt:lock} -- the shim's lock type: a structure over a mutex handle, so a lock
+	 * has a class of its own (a method may specialize on it) rather than the handle's.
+	 * {@code bt:recursive-lock} names the same type.
+	 */
+	public static final String LOCK = "LOCK";
+
+	/** {@code bt:recursive-lock} -- a type naming {@link #LOCK}. */
+	public static final String RECURSIVE_LOCK = "RECURSIVE-LOCK";
+
+	/** {@code bt:lock-p} -- the lock structure's predicate. */
+	public static final String LOCK_P = "LOCK-P";
+
+	/** {@code bt:recursive-lock-p} -- {@link #LOCK_P}, every lock being reentrant. */
+	public static final String RECURSIVE_LOCK_P = "RECURSIVE-LOCK-P";
+
+	/** {@code bt:acquire-recursive-lock} -- {@link #ACQUIRE_LOCK}'s twin. */
+	public static final String ACQUIRE_RECURSIVE_LOCK = "ACQUIRE-RECURSIVE-LOCK";
+
+	/** {@code bt:release-recursive-lock} -- {@link #RELEASE_LOCK}'s twin. */
+	public static final String RELEASE_RECURSIVE_LOCK = "RELEASE-RECURSIVE-LOCK";
+
+	/**
+	 * {@code bt:make-condition-variable} -- over
+	 * {@link #CONDITION_VARIABLE_NEW_INTERNAL}.
+	 */
+	public static final String MAKE_CONDITION_VARIABLE = "MAKE-CONDITION-VARIABLE";
+
+	/**
+	 * {@code bt:condition-wait} -- over {@link #CONDITION_WAIT_INTERNAL}; signals on
+	 * WASM.
+	 */
+	public static final String CONDITION_WAIT = "CONDITION-WAIT";
+
+	/** {@code bt:condition-notify} -- over {@link #CONDITION_NOTIFY_INTERNAL}. */
+	public static final String CONDITION_NOTIFY = "CONDITION-NOTIFY";
+
+	/** {@code bt:condition-broadcast} -- over {@link #CONDITION_NOTIFY_INTERNAL}. */
+	public static final String CONDITION_BROADCAST = "CONDITION-BROADCAST";
+
+	/**
+	 * {@code bt:semaphore} -- the shim's counting semaphore type, a lock and a condition
+	 * variable.
+	 */
+	public static final String SEMAPHORE = "SEMAPHORE";
+
+	/** {@code bt:semaphore-p} -- the semaphore structure's predicate. */
+	public static final String SEMAPHORE_P = "SEMAPHORE-P";
+
+	/** {@code bt:make-semaphore}. */
+	public static final String MAKE_SEMAPHORE = "MAKE-SEMAPHORE";
+
+	/** {@code bt:signal-semaphore}. */
+	public static final String SIGNAL_SEMAPHORE = "SIGNAL-SEMAPHORE";
+
+	/** {@code bt:wait-on-semaphore}. */
+	public static final String WAIT_ON_SEMAPHORE = "WAIT-ON-SEMAPHORE";
+
+	/** {@code bt:thread} -- the type of a thread handle. */
+	public static final String THREAD = "THREAD";
+
+	/** {@code bt:thread-name} -- over {@link #THREAD_NAME_INTERNAL}. */
+	public static final String THREAD_NAME = "THREAD-NAME";
+
+	/** {@code bt:thread-yield}. */
+	public static final String THREAD_YIELD = "THREAD-YIELD";
+
+	/**
+	 * {@code bt:all-threads} -- the main thread and the live threads the shim spawned.
+	 */
+	public static final String ALL_THREADS = "ALL-THREADS";
+
+	/**
+	 * {@code bt:interrupt-thread} -- signals: no backend can run code inside another
+	 * thread.
+	 */
+	public static final String INTERRUPT_THREAD = "INTERRUPT-THREAD";
+
+	/** {@code bt:start-multiprocessing} -- a no-op. */
+	public static final String START_MULTIPROCESSING = "START-MULTIPROCESSING";
+
+	/** {@code bt:with-timeout} -- signals: no backend can interrupt a running body. */
+	public static final String WITH_TIMEOUT = "WITH-TIMEOUT";
+
+	/** {@code bt:timeout} -- the condition {@link #WITH_TIMEOUT} names. */
+	public static final String TIMEOUT = "TIMEOUT";
+
+	/**
+	 * {@code bt:*standard-io-bindings*} -- an {@code :initial-bindings} alist of the
+	 * standard I/O variables.
+	 */
+	public static final String STANDARD_IO_BINDINGS = "*STANDARD-IO-BINDINGS*";
 
 	/**
 	 * The {@code bt2} shim package name: the modern (v2) bordeaux-threads API namespace,

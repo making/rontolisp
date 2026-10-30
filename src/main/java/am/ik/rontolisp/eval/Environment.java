@@ -93,6 +93,7 @@ import am.ik.rontolisp.reader.LispLexer;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.runtime.RontoCharFileReader;
 import am.ik.rontolisp.runtime.RontoCharFileWriter;
+import am.ik.rontolisp.runtime.RontoConditionVariable;
 import am.ik.rontolisp.runtime.RontoInflate;
 import am.ik.rontolisp.runtime.RontoIoFileStream;
 import am.ik.rontolisp.runtime.RontoStringInputStream;
@@ -2653,6 +2654,44 @@ public final class Environment implements Scope {
 			lock.unlock();
 			return args.get(0);
 		}));
+		// The condition variables of the bordeaux-threads shim: here because a wait
+		// releases and retakes a mutex, which only this table resolves.
+		String cvNew = LispNames.CONDITION_VARIABLE_NEW_INTERNAL_QUALIFIED;
+		env.defineFunction(cvNew, new LispFunction(cvNew, args -> {
+			requireArgCount(LispNames.CONDITION_VARIABLE_NEW_INTERNAL, args, 0);
+			return new LispJavaObject(new RontoConditionVariable());
+		}));
+		String cvWait = LispNames.CONDITION_WAIT_INTERNAL_QUALIFIED;
+		env.defineFunction(cvWait, new LispFunction(cvWait, args -> {
+			requireArgCount(LispNames.CONDITION_WAIT_INTERNAL, args, 3);
+			RontoConditionVariable variable = requireConditionVariable(LispNames.CONDITION_WAIT_INTERNAL, args.get(0));
+			ReentrantLock lock = requireMutex(LispNames.CONDITION_WAIT_INTERNAL, mutexes, args.get(1));
+			long nanos = args.get(2) instanceof LispInteger count ? Math.max(0L, count.value()) : -1L;
+			try {
+				return variable.await(lock, nanos) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			catch (IllegalStateException ex) {
+				throw new LispEvalException(String.valueOf(ex.getMessage()));
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+				throw new LispEvalException("CONDITION-WAIT: interrupted while waiting");
+			}
+		}));
+		String cvNotify = LispNames.CONDITION_NOTIFY_INTERNAL_QUALIFIED;
+		env.defineFunction(cvNotify, new LispFunction(cvNotify, args -> {
+			requireArgCount(LispNames.CONDITION_NOTIFY_INTERNAL, args, 2);
+			requireConditionVariable(LispNames.CONDITION_NOTIFY_INTERNAL, args.get(0))
+				.signal(!(args.get(1) instanceof LispNil));
+			return LispNil.INSTANCE;
+		}));
+	}
+
+	private static RontoConditionVariable requireConditionVariable(String fn, LispVal handle) {
+		if (handle instanceof LispJavaObject object && object.ref() instanceof RontoConditionVariable variable) {
+			return variable;
+		}
+		throw new LispEvalException(fn + " expects a condition variable, got " + handle.print());
 	}
 
 	private static ReentrantLock requireMutex(String fn, Map<Long, ReentrantLock> mutexes, LispVal handle) {

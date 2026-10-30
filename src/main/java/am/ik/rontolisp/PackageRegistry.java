@@ -993,6 +993,12 @@ public final class PackageRegistry {
 		rontolispSymbols.add(LispNames.HTTP_SERVER_JOIN);
 		rontolispSymbols.add(LispNames.HTTP_SERVER_STOP);
 		rontolispSymbols.add(LispNames.HTTP_SERVER_PORT);
+		// Internal: the thread name and condition variables behind the bordeaux-threads
+		// shim, spelled rontolisp::%... by its call sites.
+		rontolispSymbols.add(LispNames.THREAD_NAME_INTERNAL);
+		rontolispSymbols.add(LispNames.CONDITION_VARIABLE_NEW_INTERNAL);
+		rontolispSymbols.add(LispNames.CONDITION_WAIT_INTERNAL);
+		rontolispSymbols.add(LispNames.CONDITION_NOTIFY_INTERNAL);
 		// Internal: the interpreter's SWANK server hook behind the swank shim's
 		// create-server / stop-server, spelled rontolisp::%swank-* by its call sites.
 		rontolispSymbols.add(LispNames.SWANK_LISTEN);
@@ -1230,20 +1236,34 @@ public final class PackageRegistry {
 				LispNames.BT2_PKG, LispNames.THREADP, LispNames.BT2_PKG, LispNames.THREAD_ALIVE_P, LispNames.BT2_PKG,
 				LispNames.DESTROY_THREAD, LispNames.BT2_PKG, LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.BT2_PKG,
 				LispNames.CURRENT_THREAD, LispNames.BT2_PKG);
-		Set<String> btV1Externals = new HashSet<>(
-				Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD,
-						LispNames.SUPPORTS_THREADS_P, LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
-						LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.DEFAULT_SPECIAL_BINDINGS,
-						LispNames.CURRENT_THREAD, LispNames.MAKE_RECURSIVE_LOCK, LispNames.WITH_RECURSIVE_LOCK_HELD));
+		// The rest of the v1 API (bordeaux-threads 0.9's export list), home in the v1
+		// package; the members bt2 exports under the same name are imported there.
+		List<String> btV1Members = List.of(LispNames.LOCK, LispNames.RECURSIVE_LOCK, LispNames.RECURSIVE_LOCK_P,
+				LispNames.MAKE_RECURSIVE_LOCK, LispNames.ACQUIRE_RECURSIVE_LOCK, LispNames.RELEASE_RECURSIVE_LOCK,
+				LispNames.WITH_RECURSIVE_LOCK_HELD, LispNames.MAKE_CONDITION_VARIABLE, LispNames.CONDITION_WAIT,
+				LispNames.CONDITION_NOTIFY, LispNames.CONDITION_BROADCAST, LispNames.SEMAPHORE,
+				LispNames.MAKE_SEMAPHORE, LispNames.SIGNAL_SEMAPHORE, LispNames.WAIT_ON_SEMAPHORE, LispNames.THREAD,
+				LispNames.THREAD_NAME, LispNames.THREAD_YIELD, LispNames.ALL_THREADS, LispNames.INTERRUPT_THREAD,
+				LispNames.WITH_TIMEOUT, LispNames.TIMEOUT, LispNames.STANDARD_IO_BINDINGS);
+		Set<String> btV1Externals = new HashSet<>(Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK,
+				LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD, LispNames.SUPPORTS_THREADS_P, LispNames.MAKE_THREAD,
+				LispNames.JOIN_THREAD, LispNames.THREADP, LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD,
+				LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.CURRENT_THREAD, LispNames.LOCK_P, LispNames.SEMAPHORE_P,
+				LispNames.START_MULTIPROCESSING));
+		btV1Externals.addAll(btV1Members);
 		define(new LispPackage(LispNames.BORDEAUX_THREADS_PKG, List.of(), btV1Externals, Set.copyOf(btV1Externals),
 				btThreadImports));
-		Map<String, String> bt2LockImports = Map.of(LispNames.MAKE_LOCK, LispNames.BORDEAUX_THREADS_PKG,
+		Map<String, String> bt2LockImports = new HashMap<>(Map.of(LispNames.MAKE_LOCK, LispNames.BORDEAUX_THREADS_PKG,
 				LispNames.ACQUIRE_LOCK, LispNames.BORDEAUX_THREADS_PKG, LispNames.RELEASE_LOCK,
-				LispNames.BORDEAUX_THREADS_PKG, LispNames.WITH_LOCK_HELD, LispNames.BORDEAUX_THREADS_PKG);
+				LispNames.BORDEAUX_THREADS_PKG, LispNames.WITH_LOCK_HELD, LispNames.BORDEAUX_THREADS_PKG));
+		for (String member : btV1Members) {
+			bt2LockImports.put(member, LispNames.BORDEAUX_THREADS_PKG);
+		}
 		Set<String> bt2Externals = new HashSet<>(Set.of(LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
 				LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.DEFAULT_SPECIAL_BINDINGS,
 				LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD,
 				LispNames.CURRENT_THREAD));
+		bt2Externals.addAll(btV1Members);
 		Set<String> bt2Symbols = new HashSet<>(bt2Externals);
 		// Internal: the shim's own :initial-bindings value-form resolver, spelled
 		// bt2::resolve-binding-value by its call site. Owned by the package rather than

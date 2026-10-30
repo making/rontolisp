@@ -16330,10 +16330,22 @@ cases:
       (print (bt2:threadp 42))
       (print (handler-case (bt2:thread-alive-p 42) (error (e) :not-a-thread)))
       (print (let ((ci-bt2-l (bt2:make-lock))) (bt2:with-lock-held (ci-bt2-l) :held)))
+      ; A lock is a structure of its own, not the mutex handle; a semaphore
+      ; counts, and none of these waits blocks.
+      (print (let ((ci-bt-s (bt:make-semaphore :count 1)))
+               (list (bt:lock-p (bt2:make-lock))
+                     (bt:recursive-lock-p (bt:make-recursive-lock))
+                     (integerp (bt:make-lock))
+                     (bt:wait-on-semaphore ci-bt-s)
+                     (progn (bt:signal-semaphore ci-bt-s :count 2)
+                            (bt:wait-on-semaphore ci-bt-s :timeout 1))
+                     (bt:condition-notify (bt:make-condition-variable))
+                     (bt:thread-yield))))
     expected: |
       NIL
       :NOT-A-THREAD
       :HELD
+      (T T NIL T T NIL NIL)
   - name: equalp-arrays-elementwise
     source: |
       (print (equalp #(1 "A" (2 3)) #(1 "a" (2 3.0))))

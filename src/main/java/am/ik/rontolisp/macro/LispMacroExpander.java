@@ -11906,6 +11906,10 @@ public final class LispMacroExpander {
 
 	private static final String MUTEX_RELEASE_QUALIFIED = LispNames.RONTOLISP_PKG + ":" + LispNames.MUTEX_RELEASE;
 
+	private static final String ACQUIRE_LOCK_QUALIFIED = LispNames.BORDEAUX_THREADS_PKG + ":" + LispNames.ACQUIRE_LOCK;
+
+	private static final String RELEASE_LOCK_QUALIFIED = LispNames.BORDEAUX_THREADS_PKG + ":" + LispNames.RELEASE_LOCK;
+
 	private static final String MUTEX_VAR = "__mutex_lock";
 
 	private static final String MUTEX_RESULT_VAR = "__mutex_result";
@@ -11914,7 +11918,8 @@ public final class LispMacroExpander {
 	 * Expands {@code (rontolisp:with-mutex (mutex-form) body...)} into a {@code let} that
 	 * evaluates the mutex form ONCE, acquires it, runs the body and releases it on every
 	 * exit. {@code (bordeaux-threads:with-lock-held (lock) body...)} has the same shape
-	 * and expands through here.
+	 * and expands through here, onto the shim's {@code acquire-lock} /
+	 * {@code release-lock} (a bordeaux-threads lock is a structure over a mutex).
 	 * @param cons the with-mutex / with-lock-held expression
 	 * @return the expanded expression
 	 */
@@ -11942,7 +11947,10 @@ public final class LispMacroExpander {
 		LispSymbol var = new LispSymbol(MUTEX_VAR);
 		LispVal bindings = new LispCons(listToCons(List.of(var, spec.car())), LispNil.INSTANCE);
 		List<LispVal> body = parts.subList(2, parts.size());
-		LispVal release = callOf(MUTEX_RELEASE_QUALIFIED, var);
+		PackageRegistry.QualifiedName head = parts.get(0) instanceof LispSymbol sym
+				? PackageRegistry.splitQualified(sym.name()) : null;
+		boolean btLock = head != null && LispNames.BORDEAUX_THREADS_PKG.equals(head.pkg());
+		LispVal release = callOf(btLock ? RELEASE_LOCK_QUALIFIED : MUTEX_RELEASE_QUALIFIED, var);
 		LispVal guarded;
 		if (unwindProtect) {
 			guarded = unwindProtectAround(prognOrNil(body), release);
@@ -11952,8 +11960,8 @@ public final class LispMacroExpander {
 			guarded = listToCons(List.of(new LispSymbol(LispNames.LET),
 					new LispCons(listToCons(List.of(result, prognOrNil(body))), LispNil.INSTANCE), release, result));
 		}
-		return listToCons(
-				List.of(new LispSymbol(LispNames.LET), bindings, callOf(MUTEX_ACQUIRE_QUALIFIED, var), guarded));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings,
+				callOf(btLock ? ACQUIRE_LOCK_QUALIFIED : MUTEX_ACQUIRE_QUALIFIED, var), guarded));
 	}
 
 	private static final String USOCKET_SOCKET_CONNECT_QUALIFIED = LispNames.USOCKET_PKG + ":"
