@@ -31,8 +31,10 @@ import org.jspecify.annotations.Nullable;
  * bare {@code vector}/{@code array} proves nothing (a string is a vector too), a packed
  * kind requires an explicitly RANK-1 dimension spec ({@code (simple-array (unsigned-byte
  * 8) (*))} packs, {@code (simple-array (unsigned-byte 8) *)} could be a rank-n general
- * array), and a character element type is never mapped (a character vector may be a
- * string or a marked general array, two representations).
+ * array), and neither a string specifier ({@code simple-string} included) nor a character
+ * element type is mapped: a string may be the immutable string representation or a marked
+ * general character array ({@code copy-seq}, {@code subseq}, {@code make-string}), two
+ * representations.
  *
  * <p>
  * A false declaration is undefined behavior in CL; here it becomes a deterministic
@@ -46,8 +48,8 @@ public final class DeclaredArrayTypes {
 
 	/**
 	 * The array representation a declared type pins down on the wasm-GC backend: a packed
-	 * unsigned integer vector of one width, a packed float array, the general boxed
-	 * array, or a string.
+	 * unsigned integer vector of one width, a packed float array, or the general boxed
+	 * array.
 	 */
 	public enum Kind {
 
@@ -60,9 +62,7 @@ public final class DeclaredArrayTypes {
 		/** A packed float array (either float width; the store dispatches inside). */
 		FLOAT,
 		/** The general boxed array representation. */
-		GENERAL,
-		/** A string (rank-1 character array in the string representation). */
-		STRING;
+		GENERAL;
 
 		/**
 		 * The packed integer element width, or 0 for the non-packed kinds.
@@ -140,7 +140,6 @@ public final class DeclaredArrayTypes {
 		if (resolved instanceof LispSymbol sym) {
 			return switch (plainName(sym.name())) {
 				case "SIMPLE-VECTOR" -> Kind.GENERAL;
-				case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> Kind.STRING;
 				default -> null;
 			};
 		}
@@ -164,7 +163,6 @@ public final class DeclaredArrayTypes {
 				yield agreed;
 			}
 			case "SIMPLE-VECTOR" -> Kind.GENERAL;
-			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> Kind.STRING;
 			// (vector [elt [len]]) is rank-1 by definition; (simple-array elt (dim)) /
 			// (array elt (dim)) must spell ONE dimension for the packed kinds -- an
 			// unknown rank could be a rank-n general array of the same element type.

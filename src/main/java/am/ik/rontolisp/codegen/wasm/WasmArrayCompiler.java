@@ -952,8 +952,7 @@ final class WasmArrayCompiler {
 			// the full dispatch chain (.kb/declarations-type-checks.md).
 			LispVal subscript = subscriptCount == 1 ? args.get(2) : new LispInteger(0);
 			DeclaredArrayTypes.Kind kind = arrayKindOfExpr(args.get(1), ctx);
-			if (kind != null && kind != DeclaredArrayTypes.Kind.STRING && reportsBounds(ctx)
-					&& WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
+			if (kind != null && reportsBounds(ctx) && WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
 				// One representation: its bound compares inline after the subscript's
 				// type check and the rank check, the read's hot path paying the two calls
 				// those checks are.
@@ -1148,8 +1147,8 @@ final class WasmArrayCompiler {
 	 * array-arm-only shared runtime on it ({@code .kb/sequence-op-runtimes.md}). Three
 	 * sources, and each is one already in use for array emission:
 	 * <ol>
-	 * <li>a pinned non-string representation kind (a declaration, a {@code defstruct}
-	 * slot {@code :type}, a {@code (the ...)} wrap, an initializer this compile chose a
+	 * <li>a pinned representation kind (a declaration, a {@code defstruct} slot
+	 * {@code :type}, a {@code (the ...)} wrap, an initializer this compile chose a
 	 * representation for) -- {@link #arrayKindOfExpr};</li>
 	 * <li>a {@code let} binding registered in {@code Ctx.arrayLocals} because its
 	 * initializer proved this weaker fact and the body never reassigns it;</li>
@@ -1169,10 +1168,7 @@ final class WasmArrayCompiler {
 			return true;
 		}
 		DeclaredArrayTypes.Kind kind = arrayKindOfExpr(expr, ctx);
-		if (kind != null) {
-			return kind != DeclaredArrayTypes.Kind.STRING;
-		}
-		return makeArrayBuildsArrayValue(expr, ctx);
+		return kind != null || makeArrayBuildsArrayValue(expr, ctx);
 	}
 
 	/**
@@ -1297,7 +1293,7 @@ final class WasmArrayCompiler {
 			return null;
 		}
 		DeclaredArrayTypes.Kind kind = arrayKindOfExpr(arrayVar, ctx);
-		if (kind == null || kind == DeclaredArrayTypes.Kind.STRING) {
+		if (kind == null) {
 			return null;
 		}
 		return new LispCons(new LispSymbol(LispNames.ASET),
@@ -1389,7 +1385,7 @@ final class WasmArrayCompiler {
 	// the array (as eq), idxSlot the boxed index; leaves the boxed element.
 	private static void emitKindedAref1(WasmLispCompiler.Ctx ctx, DeclaredArrayTypes.Kind kind, int arrSlot,
 			int idxSlot, boolean checked) {
-		if (!checked && kind != DeclaredArrayTypes.Kind.STRING) {
+		if (!checked) {
 			emitFlatCheck(ctx, arrSlot, idxSlot, ctx.simd && kind == DeclaredArrayTypes.Kind.FLOAT);
 		}
 		switch (kind) {
@@ -1424,15 +1420,6 @@ final class WasmArrayCompiler {
 				getLocal(ctx, idxSlot);
 				WasmEmitHelper.castI31GetS(ctx);
 				callArrGet(ctx);
-			}
-			case STRING -> {
-				getLocal(ctx, arrSlot);
-				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
-				getLocal(ctx, idxSlot);
-				WasmEmitHelper.castI31GetS(ctx);
-				WasmEmitHelper.emitStrCharAtCall(ctx);
-				WasmCharCompiler.makeChar(ctx);
 			}
 		}
 	}
@@ -1636,14 +1623,11 @@ final class WasmArrayCompiler {
 		LispVal idxExpr = subscriptCount == 0 ? new LispInteger(0) : args.get(2);
 		if (subscriptCount <= 1) {
 			// A store whose array representation is pinned down (declaration / accessor
-			// slot :type / this compile's own initializer choice) emits that ONE arm; a
-			// string kind never stores (strings are immutable structs -- the generic
-			// general arm's cast traps there too, so the generic path answers it). A
+			// slot :type / this compile's own initializer choice) emits that ONE arm. A
 			// packed integer vector is rank 1, so a rank-0 store to one is the generic
 			// path's: the kinded arm coerces the value before the rank check could run.
 			DeclaredArrayTypes.Kind kind = arrayKindOfExpr(args.get(1), ctx);
-			if (kind != null && kind != DeclaredArrayTypes.Kind.STRING
-					&& (kind.packedIntWidth() == 0 || subscriptCount == 1)) {
+			if (kind != null && (kind.packedIntWidth() == 0 || subscriptCount == 1)) {
 				emitKindedAset1(args, idxExpr, kind, ctx, resultNeeded, subscriptCount);
 				return;
 			}
@@ -1855,7 +1839,6 @@ final class WasmArrayCompiler {
 					ctx.writer.write(Instruction.DROP);
 				}
 			}
-			case STRING -> throw new IllegalStateException("a string kind never reaches the kinded store");
 		}
 	}
 
@@ -2113,7 +2096,6 @@ final class WasmArrayCompiler {
 			};
 			case FLOAT -> farrayBound(ctx, arrSlot, 0);
 			case GENERAL -> generalBound(ctx, arrSlot, 0);
-			case STRING -> null;
 		};
 	}
 

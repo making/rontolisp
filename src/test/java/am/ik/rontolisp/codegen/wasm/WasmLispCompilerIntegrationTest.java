@@ -2009,7 +2009,7 @@ class WasmLispCompilerIntegrationTest {
 		// emits that ONE representation's accessor behind a trapping ref.cast instead of
 		// the inline dispatch chain. The shapes below cover every source and every kind
 		// (packed u8/u16/u32 with mask/readback edges past the i31 range, packed float,
-		// general, string), plus shapes that must STAY generic and still answer right (a
+		// general), plus shapes that must STAY generic and still answer right (a
 		// rank-unknown declaration at a rank-2 site). Both optimize levels must agree
 		// with each other and with the interpreter/JVM text.
 		String program = """
@@ -2057,7 +2057,8 @@ class WasmLispCompilerIntegrationTest {
 				    (print (read-both w 1))
 				    (print (aref (wide-chunk-data w) 1)))
 				  (print (sum-simple (vector 30 12)))
-				  (print (first-char "xyz"))
+				  (print (list (first-char "xyz") (first-char (copy-seq "xyz")) (first-char (subseq "wxyz" 1))
+				              (first-char (make-string 2 :initial-element #\\q))))
 				  (print (typep (make-array 2 :element-type '(unsigned-byte 8)) 'octet-vec))
 				  (let ((acc 0))
 				    (do ((c (make-array 3 :element-type '(unsigned-byte 16)))
@@ -2086,7 +2087,7 @@ class WasmLispCompilerIntegrationTest {
 				65542
 				7
 				42
-				#\\x
+				(#\\x #\\x #\\x #\\q)
 				T
 				900
 				5""");

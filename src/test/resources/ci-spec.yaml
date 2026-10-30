@@ -13403,7 +13403,8 @@ cases:
           (print (ci-read-both w 1))
           (print (aref (ci-wide-chunk-data w) 1)))
         (print (ci-sum-simple (vector 30 12)))
-        (print (ci-first-char "xyz"))
+        (print (list (ci-first-char "xyz") (ci-first-char (copy-seq "xyz")) (ci-first-char (subseq "wxyz" 1))
+                     (ci-first-char (make-string 2 :initial-element #\q))))
         (print (typep (make-array 2 :element-type '(unsigned-byte 8)) 'ci-octet-vec))
         (let ((acc 0))
           (do ((c (make-array 3 :element-type '(unsigned-byte 16)))
@@ -13422,7 +13423,7 @@ cases:
       65542
       7
       42
-      #\x
+      (#\x #\x #\x #\q)
       T
       900
   - name: user-deftype-typep-satisfies
