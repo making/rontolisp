@@ -116,6 +116,15 @@ slot it already had, so no array grew:
   construction since 2026-10-04) — without
   it a top-level `(array-element-type a)` answers `t` while the same form inside a defun
   answers the remembered type.
+- **A quoted bit-vector type spec arms the bit width too** (2026-10-31): `make-sequence`,
+  `coerce`, `concatenate`, `map` and `merge` build a stamped bit array for one
+  (`isBitVectorResultType`) through an expansion the mask scan never sees, so a wasm program
+  with no `#*` literal and no `(make-array ... :element-type 'bit)` answered
+  `(bit-vector-p (make-sequence 'bit-vector 3))` NIL, and printed `#(1 1 1)` wherever the
+  printer reads the type back (a program constructing conditions). `#'make-sequence` arms it
+  too: its computed type may name a bit vector. Pinned by
+  `WasmLispCompilerIntegrationTest#bitVectorPreservationAcrossSequenceOps`; the ci-spec twin
+  cannot catch it, the corpus carries `#*` literals.
 - **`type-of` had to ask the simplicity question FIRST**, because a typed array can have a
   fill pointer: prelude arm order is fill-pointer/adjustable, then the `t`-and-rank-1
   `simple-vector` case, then `(simple-array et dims)`. That needed

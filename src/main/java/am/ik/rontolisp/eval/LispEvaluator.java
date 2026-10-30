@@ -1894,6 +1894,39 @@ public final class LispEvaluator {
 				new LispFunction(LispNames.MOP_MAKE_INSTANCE, runtimeMakeInstance::apply));
 		this.globalEnv.defineFunction(LispNames.MAKE_INSTANCE,
 				new LispFunction(LispNames.MAKE_INSTANCE, runtimeMakeInstance::apply));
+		// The plist dispatches the #'make-condition / #'change-class catalog wrappers
+		// call (the compile paths generate them as defuns): the literal call, every
+		// argument quoted, evaluated like the runtime make-instance above.
+		// A type naming no condition class signals, as the compile paths' dispatch does
+		// (the literal call degrades an unknown type to a simple-condition instead).
+		this.globalEnv.defineFunction(LispNames.MAKE_CONDITION_RUNTIME,
+				new LispFunction(LispNames.MAKE_CONDITION_RUNTIME, args -> {
+					ClosRegistry.ClassInfo info = args.get(0) instanceof LispSymbol type
+							? this.closRegistry.findClass(type.name()) : null;
+					String condition = ClosRegistry.normalize(ClosRegistry.CONDITION_CLASS_NAMES.get(0));
+					if (info == null || !info.ancestors().contains(condition)
+							&& !condition.equals(ClosRegistry.normalize(info.name()))) {
+						throw new LispEvalException(
+								LispNames.MAKE_CONDITION + ": " + args.get(0).print() + " is not a condition type");
+					}
+					return evalQuotedPlistCall(LispNames.MAKE_CONDITION, args.subList(0, 1), args.get(1));
+				}));
+		// The designator resolves here, as resolveChangeClassDesignator resolves a
+		// computed one: anything but a symbol (nil included) would re-enter this
+		// dispatch.
+		this.globalEnv.defineFunction(LispNames.CHANGE_CLASS_RUNTIME,
+				new LispFunction(LispNames.CHANGE_CLASS_RUNTIME, args -> {
+					LispVal designator = args.get(1);
+					if (designator instanceof LispInstance meta && meta.slotCount() > 0
+							&& this.closRegistry.isClassMetaobject(meta)) {
+						designator = meta.slot(0);
+					}
+					if (!(designator instanceof LispSymbol)) {
+						throw new LispEvalException(
+								LispNames.CHANGE_CLASS + " expects a class designator, got " + designator.print());
+					}
+					return evalQuotedPlistCall(LispNames.CHANGE_CLASS, List.of(args.get(0), designator), args.get(2));
+				}));
 		this.globalEnv.defineFunction(LispNames.SLOT_VALUE_SET_RUNTIME,
 				new LispFunction(LispNames.SLOT_VALUE_SET_RUNTIME, args -> {
 					// (%slot-value-set-runtime obj name value) -- what the shared setf
@@ -4542,29 +4575,40 @@ public final class LispEvaluator {
 	 */
 	@Nullable ReadSyntax currentReadSyntax(java.util.function.UnaryOperator<ReadSyntax.Result> check) {
 		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
-		return readtable == null ? null : ReadtableSyntax.of(readtable, (function, input, offset, arguments) -> {
-			ReadSyntax.Result result;
-			try {
-				result = callReaderMacro(function, input, offset, arguments);
-			}
-			catch (ReadSyntax.Refusal refusal) {
-				throw refusal;
-			}
-			catch (RuntimeException ex) {
-				throw new ReadSyntax.Refusal("the reader macro function signalled: " + ex.getMessage(), ex);
-			}
-			return check.apply(result);
-		});
+		return readtable == null ? null
+				: ReadtableSyntax.of(readtable, (function, input, offset, arguments, templateDepth) -> {
+					ReadSyntax.Result result;
+					try {
+						result = callReaderMacro(function, input, offset, arguments, templateDepth);
+					}
+					catch (ReadSyntax.Refusal refusal) {
+						throw refusal;
+					}
+					catch (RuntimeException ex) {
+						throw new ReadSyntax.Refusal("the reader macro function signalled: " + ex.getMessage(), ex);
+					}
+					return check.apply(result);
+				});
 	}
+
+	/**
+	 * How many backquote templates enclose the macro character whose reader macro
+	 * function is running ({@link #callReaderMacro}): a {@code read} it makes starts
+	 * inside them ({@link #readWithSyntax}), as CL's backquote depth is dynamic.
+	 */
+	private int readerMacroTemplateDepth;
 
 	/**
 	 * Calls a reader macro function over the text being read: a string input stream
 	 * positioned where the macro character left the text is its first argument, and where
 	 * the function left that stream is where the read goes on.
 	 */
-	private ReadSyntax.Result callReaderMacro(LispVal function, String input, int offset, List<LispVal> arguments) {
+	private ReadSyntax.Result callReaderMacro(LispVal function, String input, int offset, List<LispVal> arguments,
+			int templateDepth) {
 		StringStreamTable table = this.globalEnv.stringStreams();
 		LispVal stream = table.open(input, offset);
+		int enclosingDepth = this.readerMacroTemplateDepth;
+		this.readerMacroTemplateDepth = templateDepth;
 		try {
 			List<LispVal> args = new ArrayList<>(arguments.size() + 1);
 			args.add(stream);
@@ -4576,6 +4620,7 @@ public final class LispEvaluator {
 			return new ReadSyntax.Result(values.isEmpty() ? null : values.get(0), end);
 		}
 		finally {
+			this.readerMacroTemplateDepth = enclosingDepth;
 			table.close(stream);
 		}
 	}
@@ -4612,7 +4657,8 @@ public final class LispEvaluator {
 		LispReader.Forms forms = LispReader
 			.forms(text, currentReadFeatures(), markers, null, this::resolveReadTimeEval,
 					table.logicalOffset(designator, reader), false)
-			.homingSymbols(this.packageResolver::readSpelling);
+			.homingSymbols(this.packageResolver::readSpelling)
+			.withinTemplates(this.readerMacroTemplateDepth);
 		try {
 			if (delimited) {
 				List<LispVal> items = forms.nextDelimited(syntax, ((LispChar) args.get(0)).codePoint());
@@ -7219,13 +7265,14 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Returns whether the resolver's CURRENT package shadows the given bare name (see
-	 * {@link PackageResolver#currentPackageShadows}).
+	 * Returns whether the resolver's CURRENT package reads the bare name of a {@code cl}
+	 * symbol as some other symbol (see
+	 * {@link PackageResolver#currentPackageRereadsClName}).
 	 * @param name the bare symbol name
-	 * @return {@code true} when the current package shadows the name
+	 * @return {@code true} when the bare name no longer reads as {@code cl}'s here
 	 */
-	public boolean currentPackageShadows(String name) {
-		return this.packageResolver.currentPackageShadows(name);
+	public boolean currentPackageRereadsClName(String name) {
+		return this.packageResolver.currentPackageRereadsClName(name);
 	}
 
 	/**
@@ -8594,6 +8641,9 @@ public final class LispEvaluator {
 									next = LispMacroExpander.expandMakeInstance(cons, this.closRegistry);
 									break dispatch;
 								case LispNames.SLOT_VALUE:
+									if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+										break dispatch;
+									}
 									result = singleValue(evalSlotValue(cons, env));
 									break frame;
 								case LispNames.WITH_SLOTS:
@@ -9309,6 +9359,11 @@ public final class LispEvaluator {
 	 */
 	private @Nullable LispVal rareOperatorExpansion(LispCons cons, Environment env, String name) {
 		switch (name) {
+			case LispNames.HANDLER_CASE_INTERNAL, LispNames.DEFUN_INTERNAL, LispNames.DEFINITION_INTERNAL:
+				// macroexpand-1's answer for a natively-run CL macro, as a walker emits
+				// it
+				return builtinMacroExpansion(cons,
+						form -> java.util.Objects.requireNonNull(LispMacroExpander.foldNativeExpansion(form)));
 			case LispNames.CHANGE_CLASS:
 				return LispMacroExpander.expandChangeClass(resolveChangeClassDesignator(cons, env), this.closRegistry,
 						false);
@@ -11629,6 +11684,20 @@ public final class LispEvaluator {
 
 	private static LispVal quoteForm(LispVal v) {
 		return consList(List.of(new LispSymbol(LispNames.QUOTE), v));
+	}
+
+	// (op 'arg... 'k1 'v1 ...): the fixed arguments, then the plist's elements, each
+	// quoted -- the keys keep the literal-initarg shape the expansions read.
+	private LispVal evalQuotedPlistCall(String op, List<LispVal> fixed, LispVal plist) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(op));
+		for (LispVal arg : fixed) {
+			call.add(quoteForm(arg));
+		}
+		for (LispVal cur = plist; cur instanceof LispCons cell; cur = cell.cdr()) {
+			call.add(cell.car() instanceof LispSymbol key && key.isKeyword() ? key : quoteForm(cell.car()));
+		}
+		return eval(consList(call), this.globalEnv);
 	}
 
 	private LispVal letStarForm(List<LispVal> bindings, List<LispVal> body) {
@@ -14022,13 +14091,14 @@ public final class LispEvaluator {
 	private static final String NIL_BLOCK = "NIL";
 
 	/**
-	 * The block name a designator form denotes; {@code nil} denotes {@link #NIL_BLOCK}.
+	 * The block name a designator form denotes; {@code nil} denotes {@link #NIL_BLOCK}. A
+	 * keyword names a block of its own: its name keeps the {@code :} marker.
 	 */
 	private static String blockName(LispVal designator) {
 		if (designator instanceof LispNil) {
 			return NIL_BLOCK;
 		}
-		if (designator instanceof LispSymbol sym && !sym.isKeyword()) {
+		if (designator instanceof LispSymbol sym) {
 			return sym.name();
 		}
 		throw new LispEvalException(LispNames.BLOCK + ": block name must be a symbol, got " + designator.print());

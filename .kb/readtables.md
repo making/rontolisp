@@ -5,7 +5,9 @@ layout (tag `%READTABLE`, OPAQUE: prints `#<READTABLE>`), built and changed by O
 definition (`LispPreludeLibrary`, the `%rt-*` family). Source is read with one on every
 backend: the interpreter's reader with the current `*readtable*`, the compile paths with the
 compile-time evaluator's (`ReadTimeImage`, below). The emitted runtime readers ignore
-`*readtable*` (`.todo/h71`).
+`*readtable*` (`.todo/h77`). Under the STANDARD one, an undefined dispatch sub-character reads
+as part of a symbol on all four instead of signalling (CLHS 2.4.8; measured 2026-10-31:
+`` "#`(a ,b)" `` answers `|#`|` compiled and `#` on the interpreter, `"#!x"` the symbol `#!X`).
 
 ## The value
 - Slot 0 `CASE` (`:upcase`/`:downcase`/`:preserve`/`:invert`), slot 1 `CHARS`: an eql table
@@ -49,10 +51,24 @@ compile-time evaluator's (`ReadTimeImage`, below). The emitted runtime readers i
   zero values = a comment (`consumeValues`), the stream's position (pushback counted back) is
   where lexing resumes; one value becomes `Token.Datum`. In a backquote template a datum is
   quoted DATA (`readTemplateElement`).
-- **`#L` and `#N@` stay native whatever function the table holds** (`isNativeSub`): a callout
-  inside a backquote template cannot read the outer template's commas (iterate's
-  `#L(member !1 var :test ,test)` failed "Comma is illegal outside of backquote"). The real
-  fix is a backquote-depth-aware recursive read (`.todo/h71`).
+- **A reader macro in a backquote template reads the template's commas** (CLHS 2.4.6, h71):
+  `LispLexer.followTemplateDepth` counts the backquotes and commas open at the macro
+  character, the `Invoker` hands that depth to the call, `LispEvaluator.callReaderMacro`
+  holds it (`readerMacroTemplateDepth`, dynamic like CL's) for every `read` /
+  `read-delimited-list` the function makes (`readWithSyntax` -> `Forms.withinTemplates`), and
+  that read takes a comma outside its own templates as the CLtL2 raw marker
+  (`LispReader.readOuterComma`: `(%bq-comma x)` / `(%bq-comma-at x)`, identity sentinels), its
+  operand one level further out. The datum comes back as a `Token.Datum`; `readRawTemplate`
+  finds the marker (`holdsComma`) and the template takes the CLtL2 path
+  (`bqCompletelyProcess`), which consumes it, `,,x` across a nested template included. rutils'
+  `` #`(member % var :test ,test) `` (iter.lisp:3162) reads. Deviations: the function sees
+  the marker as a two-element LIST where SBCL's comma is an atom (a `listp`/tree walk over
+  it differs); `read-from-string` inside the function (`Environment.readOneWithSyntax`) and a
+  non-string stream (the prelude scanner) start at depth 0.
+- **`#L` and `#N@` stay native whatever function the table holds** (`isNativeSub`): the
+  compile paths open no image for them (`ReadTimeImage.changesSyntax`), and the interpreter
+  reads them as the compiled backends do. A library giving either another meaning is
+  misread.
 - **Reading is FORM AT A TIME**: `SourceLanguage.readForms` -> `LispReader.Forms` ->
   `LispLexer.tokenizeNextDatum` (stops at depth 0 behind a complete datum; prefixes and `#0A`
   keep it going; `stopAt` for `read-delimited-list`). `LispEvaluator.loadFile` (`loadForms`)
@@ -71,7 +87,7 @@ compile-time evaluator's (`ReadTimeImage`, below). The emitted runtime readers i
 - Not honored: escape syntax under another character (a constituent there), `read` from a
   file stream or standard input, `with-standard-io-syntax` (does not rebind `*readtable*`),
   the REPL / playground (whole-buffer reads), `*read-suppress*` around a reader macro
-  (`.todo/h71`).
+  (`.todo/h77`).
 
 ## The compile paths' read (`eval/ReadTimeImage`, since h57)
 - The compile path read a whole file before `UserMacroExpander` evaluated anything, so no
@@ -140,26 +156,34 @@ compile-time evaluator's (`ReadTimeImage`, below). The emitted runtime readers i
   What h58 fixed, none of it reader work: a `shadowing-import` of a symbol its home uninterned
   (`.kb/packages.md`, member table), a library's own `while` (`.kb/packages.md`), a `go` in a
   `return-from`'s value form (`.kb/interpreter-tail-calls.md`), the `ratio` type test
-  (`.kb/declarations-type-checks.md`). cl-redis now stops in rutils `core/iter.lisp:3162`:
-  `` #`(member % var :test ,test) `` inside a backquote template, `.todo/h71` item 1 (on
-  the way: a built-in macro alias, `(:type list)`, `c2mop:intern-eql-specializer`).
+  (`.kb/declarations-type-checks.md`). rutils loads since h71 (its `iter` `:unioning`
+  reads `` #`(member % var :test ,test) `` in a template, 2026-10-31); cl-redis then stops
+  in its own `connection.lisp`: `TRIVIAL-GRAY-STREAMS:STREAM-CLEAR-INPUT` is not external
+  (`.todo/h77`), and past it the same file names `sb-sys:fd-stream` with no feature guard
+  (cl-redis 20250622 loads on SBCL only).
 - Compile paths (h57, 2026-10-31): named-readtables runs on all four (its `defpackage` sits
   under `(handler-bind () ...)` -- the SBCL binding is `#+sbcl` -- in an `eval-when`, which
   `flattenTopLevel` now splices like `progn`). Through `ql:quickload`, output = the
   interpreter's: cl-interpol (`#?"..."`) and cl-csv (`read-csv`/`write-csv`) on all four,
-  jonathan on the JVM -- verified by hand, no test (the Quicklisp cache).
-  Still stopping, none of it in the reader (`.todo/h71` item 3): jonathan on WASM
-  (`Cannot compile symbol: *`), cl-annot's `@export` (the expansion's
-  `(progn (export 'x) (defun x ...))` nests the export the compilers' resolver needs at top
-  level: "GREET is not external"), parenscript (`property-bindings`: `Cannot compile symbol
-  reference: PARENSCRIPT:VAR`).
+  jonathan on the JVM, and (re-measured 2026-10-31, `to-json`/`parse`) on WASM, and cl-annot's
+  `@export` on the JVM and WASM since h74 (its `(progn (export 'x) ...)` is top level member by
+  member, [packages.md](packages.md)), and parenscript's `ps` (h74: its `loop` pattern
+  `(var p)`, [flet-labels.md](flet-labels.md)) -- verified by hand, no test (the Quicklisp
+  cache).
+  Still stopping, none of it in the reader (`.todo/h77`): rutils -- past `(block :+ ...)` since h74
+  ([do-return-block.md](do-return-block.md)) -- at `merge-hash-tables-with`, which calls
+  `dotable` before `hash-table.lisp` defines it: the call's argument reads a free `v`, which
+  both compilers refuse (`Cannot compile symbol reference`) where SBCL warns; and
+  `rutils:flatten` is not external there (`rutils.lisp` re-exports by a computed `dolist`).
 
 ## Tests
 ci-spec `readtable-objects-and-the-reader-macro-api` (the API, all four backends) and
 `source-reads-with-the-readtable-an-eval-when-installs` (source reading on all four: macro and
 dispatch characters, a no-value comment, a remapped `)`, `read-delimited-list`, the case, the
-restore); `LispEvaluatorTest.theReaderHonorsTheCurrentReadtable` (the interpreter's run-time
-reads and form-at-a-time `load`, homed symbols);
+restore, a template's commas read by a reader macro, `,,` across a nested template);
+`LispEvaluatorTest.theReaderHonorsTheCurrentReadtable` (the interpreter's run-time
+reads -- a template's commas, one outside every template signalling -- and form-at-a-time
+`load`, homed symbols);
 `LoadInlinerTest.aLoadedFileReadsWithTheReadtableItsEvalWhenInstallsAtCompileTime` (a loaded
 file on the compile path, the readtable restored at compile and run time, a refused datum);
 `NamedReadtablesE2eTest` (vendored named-readtables 0.9 on all four: `defreadtable`,

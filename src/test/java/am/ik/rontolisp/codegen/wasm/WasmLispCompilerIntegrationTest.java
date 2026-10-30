@@ -9787,6 +9787,21 @@ class WasmLispCompilerIntegrationTest {
 				    (list (eq (class-of #*01) (find-class 'bit-vector))
 				          (class-name (class-of #*01)))))
 				""")).isEqualTo("((T BIT 1 0 T 2) (T BIT 0) (T BIT T T BIT 1) (\"#*101\" T \"#*\") (T BIT-VECTOR))");
+		// With no #* literal and no (make-array ... :element-type 'bit) in the program,
+		// the quoted result type alone arms the stamp's read-back -- and so does
+		// #'make-sequence, whose computed type may name a bit vector.
+		assertThat(compileAndRunPrelude("""
+				(define-condition bvp-c (error) ())
+				(print (list (bit-vector-p (make-sequence 'bit-vector 3))
+				             (bit-vector-p (coerce '(1 0) 'bit-vector))
+				             (typep (concatenate '(vector bit) '(1) '(0)) 'simple-bit-vector)
+				             (type-of (make-condition 'bvp-c))
+				             (make-sequence 'bit-vector 2 :initial-element 1)))
+				""")).isEqualTo("(T T T BVP-C #*11)");
+		assertThat(compileAndRunPrelude("""
+				(print (list (funcall #'make-sequence (intern "BIT-VECTOR") 2 :initial-element 1)
+				             (type-of (make-condition 'simple-error))))
+				""")).isEqualTo("(#*11 SIMPLE-ERROR)");
 	}
 
 	@Test

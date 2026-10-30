@@ -182,10 +182,19 @@ call too. **Compiled computed probe** (data-held symbol, same 636): 163 NIL on t
 2026-10-31 -- 123 implemented functions: the reference-gated / native / complex wrappers, the
 restart runtime and the generated `find-class`/`allocate-instance`/`compile` defuns, all injected
 only for a program spelling `#'name`, and the 28 `car`/`cdr` compositions, which compile inline.
-Now 49 on the JVM, P1 and the component (the interpreter's 37 plus `provide`/`require`, literal
-top-level only, and ten with no compiled function value at all: `complement`, `make-condition`,
-`make-sequence`, `documentation`, `proclaim`, `change-class`, `slot-value`/`-boundp`/
-`-exists-p`/`-makunbound`; `.todo/h70`). The reach
+Now 39 on the JVM, P1 and the component: the interpreter's 37 plus `provide`/`require`, literal
+top-level only. The ten CL functions the expander rewrites in call position (`complement`,
+`make-condition`, `make-sequence`, `documentation`, `proclaim`, `change-class`, `slot-value`/
+`-boundp`/`-exists-p`/`-makunbound`; `BuiltinFunctionWrappers.INLINE_EXPANDED_VALUE_FUNCTIONS`)
+had no function value on ANY backend until 2026-10-31 -- the interpreter's `fboundp` answered T,
+but its `symbol-function` of seven of them was undefined. They are reference-gated catalog
+wrappers now, so the interpreter's value is the same lambda: a computed slot name lowers to the
+`%slot-*-runtime` dispatches (whose gates count `#'slot-value` and siblings), `make-sequence`
+classifies its computed type at run time, and `make-condition` / `change-class` forward to the
+plist dispatches `%make-condition-runtime` (generated over every registered condition class for a
+program naming `#'make-condition`) and `%change-class-runtime`, which the interpreter defines as
+the literal call over quoted arguments. Measured: all ten answer T and run, `#'` and data-held, on
+all four (`BoundpFunctionValueFixture`). The reach
 (`FunctionDesignators.dataCalledNames`): a program that can turn data into a call (a computed
 `funcall`/`apply`/designator argument, a computed `fboundp`/`symbol-function`/`fdefinition`, or
 one of those taken as a value) and spells such a name inside a `quote` gets a top-level
@@ -768,13 +777,27 @@ evaluator runs natively expands through `LispMacroExpander.expandNativeMacro`: t
 every backend already lowers it to (`prog`, `psetf`, `shiftf`, `with-open-stream`,
 `do-symbols`, ...) or CL's own (`return` -> `(return-from nil ...)`, `lambda` -> `#'(lambda
 ...)`). It is kept out of `expandBuiltinMacro`, which also feeds compile passes that keep these
-forms native. A walker EMITS what it gets, so the expansion must run on every backend. Still
-answered unchanged with `expanded-p` nil (the contradiction left): `handler-case` and the
-definers run as special forms (`defun`, `defmacro`, `defvar`, `defparameter`, `defconstant`,
-`defclass`, `defgeneric`, `defmethod`, `defstruct`, `defsetf`, `defpackage`,
-`define-symbol-macro`, `in-package`). Pins: `IterateE2eTest` (clauses inside `typep`/`return`),
+forms native. A walker EMITS what it gets, so the expansion must run on every backend.
+`handler-case` and the definers have no lowering, so they expand to an internal form that
+`LispMacroExpander.foldNativeExpansion` turns back into the native one:
+`(%handler-case form 'type #'(lambda ll . body)...)`, `(%defun 'name #'(lambda ll [doc] [decls]
+(block name . forms)))`, and `(%definition 'form)` for `defmacro`, `defvar`, `defparameter`,
+`defconstant`, `defclass`, `defgeneric`, `defmethod`, `defstruct`, `defsetf`, `defpackage`,
+`define-symbol-macro`, `in-package` (`QUOTED_DEFINERS`: their code sits in a grammar of their own
+a walker cannot read). A walker sees the protected form, clause bodies and defun body as an
+ordinary argument and lambda bodies (iterate's `walk-fspec`), and the rest as quoted data. The
+interpreter folds in `rareOperatorExpansion`; the compile path in `UserMacroExpander`
+(`expandAllLocated` and `expandTopLevel`, right after a user macro expands -- the only producer),
+so no surface scan (`usesRestartSystem`, `needsSignalClauseMatch`, EH mode, `FreeVarAnalyzer`)
+ever sees the internal head and the output is the native form's. CL's own `handler-case`
+expansion (`handler-bind` + a `go` out of the handler lambda) was not taken: a `handler-bind`
+anywhere puts the whole compiled program in restart mode (`.kb/error-handling.md`, "The
+restart-mode gate"), and a cross-lambda `go` forces EH mode on WASM. The compiled `eval`
+runtime does not fold them (it runs no `defvar`/`defparameter`/`defconstant` either,
+`doc/en/guides/eval-limitations.md`).
+Pins: `IterateE2eTest` (clauses inside `typep`/`handler-case`/`return`),
 `LispEvaluatorTest#macroFunctionAndSpecialOperatorPPartitionTheOperators`, ci-spec
-`macro-function-and-special-operator-p`.
+`macro-function-and-special-operator-p` (a macro emitting the expansions, four backends).
 
 **One definition per predicate, shared by every backend, and no compile-time fold.** Both are
 `LispPreludeLibrary` entries whose baked name table is GENERATED from `PackageRegistry` (so it

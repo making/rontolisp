@@ -204,10 +204,12 @@ public final class LispMacroExpander {
 	 * Single-step expansion, for {@code macroexpand-1} only, of a CL macro the evaluator
 	 * and the compilers run natively instead of through {@link #expandBuiltinMacro}: the
 	 * same expansion every backend lowers the form to, or the CL one where the native
-	 * form has none ({@code return}, {@code lambda}). A code walker that trusts
-	 * {@code macro-function} emits what this answers, so it must run on every backend.
-	 * Kept apart from {@link #expandBuiltinMacro} because that one also feeds the compile
-	 * passes, which keep these forms native.
+	 * form has none ({@code return}, {@code lambda}), or -- for {@code handler-case} and
+	 * the definers, which have no lowering -- a form {@link #foldNativeExpansion} turns
+	 * back into the native one. A code walker that trusts {@code macro-function} emits
+	 * what this answers, so it must run on every backend. Kept apart from
+	 * {@link #expandBuiltinMacro} because that one also feeds the compile passes, which
+	 * keep these forms native.
 	 * @param cons the form to expand
 	 * @return the expansion, or {@code null} when the operator has none here
 	 */
@@ -230,8 +232,210 @@ public final class LispMacroExpander {
 			case LispNames.DO_EXTERNAL_SYMBOLS -> expandDoSymbols(cons, true);
 			case LispNames.DO_ALL_SYMBOLS -> expandDoAllSymbols(cons);
 			case LispNames.DEFINE_MODIFY_MACRO -> expandDefineModifyMacro(cons);
+			case LispNames.HANDLER_CASE -> cons.isProperList() ? expandHandlerCaseNatively(cons) : null;
+			case LispNames.DEFUN -> cons.isProperList() ? expandDefunNatively(cons) : null;
+			default -> QUOTED_DEFINERS.contains(sym.name())
+					? listToCons(List.of(new LispSymbol(LispNames.DEFINITION_INTERNAL), quoteOf(cons))) : null;
+		};
+	}
+
+	/**
+	 * The definers {@link #expandNativeMacro} answers as {@code (%definition 'form)}: the
+	 * whole form is data to a walker, as it was while the expansion was the form itself.
+	 * Most hold their code inside a grammar of their own (slot specs, specialized or
+	 * destructuring lambda lists, option lists) a walker cannot read as code; the
+	 * variable definers' one value form is not worth an operator of its own.
+	 */
+	private static final Set<String> QUOTED_DEFINERS = Set.of(LispNames.DEFMACRO, LispNames.DEFVAR,
+			LispNames.DEFPARAMETER, LispNames.DEFCONSTANT, LispNames.DEFCLASS, LispNames.DEFGENERIC,
+			LispNames.DEFMETHOD, LispNames.DEFSTRUCT, LispNames.DEFSETF, LispNames.DEFPACKAGE,
+			LispNames.DEFINE_SYMBOL_MACRO, LispNames.IN_PACKAGE);
+
+	/**
+	 * {@code (handler-case form (type ll . body)...)} as {@code (%handler-case form 'type
+	 * #'(lambda ll . body)...)}: every sub-form a walker must reach sits where an
+	 * ordinary call's argument or a lambda body sits, and {@link #foldNativeExpansion}
+	 * gives the native form back, so what a walker emits runs at the native form's cost.
+	 */
+	private static LispVal expandHandlerCaseNatively(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException(LispNames.HANDLER_CASE + " expects an expression: " + cons.print());
+		}
+		List<LispVal> expansion = new ArrayList<>();
+		expansion.add(new LispSymbol(LispNames.HANDLER_CASE_INTERNAL));
+		expansion.add(parts.get(1));
+		for (LispVal clause : parts.subList(2, parts.size())) {
+			if (!(clause instanceof LispCons clauseCons) || !clauseCons.isProperList()
+					|| !(clauseCons.cdr() instanceof LispCons llCell)) {
+				throw new IllegalArgumentException(
+						LispNames.HANDLER_CASE + " expects (type (var) body...) clauses: " + clause.print());
+			}
+			expansion.add(quoteOf(clauseCons.car()));
+			expansion.add(functionOfLambda(llCell));
+		}
+		return listToCons(expansion);
+	}
+
+	/**
+	 * {@code (defun name ll . body)} as {@code (%defun 'name #'(lambda ll [doc] [decls]
+	 * (block block-name . forms)))}: the body a walker must reach is a lambda body, with
+	 * the implicit block spelled out as CL's expansion spells it.
+	 */
+	private static LispVal expandDefunNatively(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException(LispNames.DEFUN + " expects a name and a lambda list: " + cons.print());
+		}
+		LispVal name = parts.get(1);
+		LispVal blockName = name instanceof LispCons setfName && setfName.cdr() instanceof LispCons rest ? rest.car()
+				: name;
+		List<LispVal> body = parts.subList(3, parts.size());
+		int forms = bodyPreambleLength(body);
+		List<LispVal> lambda = new ArrayList<>();
+		lambda.add(new LispSymbol(LispNames.LAMBDA));
+		lambda.add(parts.get(2));
+		lambda.addAll(body.subList(0, forms));
+		List<LispVal> block = new ArrayList<>();
+		block.add(new LispSymbol(LispNames.BLOCK));
+		block.add(blockName);
+		block.addAll(body.subList(forms, body.size()));
+		lambda.add(listToCons(block));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN_INTERNAL), quoteOf(name),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCTION), listToCons(lambda)))));
+	}
+
+	/**
+	 * The number of leading body forms that are declarations or the documentation string
+	 * (a string is documentation only when a form follows it, CLHS 3.4.11).
+	 */
+	private static int bodyPreambleLength(List<LispVal> body) {
+		int index = 0;
+		boolean documented = false;
+		while (index < body.size()) {
+			LispVal form = body.get(index);
+			if (form instanceof LispCons decl && decl.car() instanceof LispSymbol head
+					&& LispNames.DECLARE.equals(head.name())) {
+				index++;
+			}
+			else if (form instanceof LispString && !documented && index < body.size() - 1) {
+				documented = true;
+				index++;
+			}
+			else {
+				break;
+			}
+		}
+		return index;
+	}
+
+	/**
+	 * The native form behind an expansion {@link #expandNativeMacro} answered for a CL
+	 * macro rontolisp runs as a special form ({@code %handler-case}, {@code %defun},
+	 * {@code %definition}), whatever a walker did to the sub-forms it exposes; null for
+	 * any other form. The interpreter evaluates the answer in the expansion's place and
+	 * the compile path folds it before any pass that looks for the native head.
+	 * @param form a form
+	 * @return the native form, or null
+	 */
+	public static @Nullable LispVal foldNativeExpansion(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		return switch (head.name()) {
+			case LispNames.HANDLER_CASE_INTERNAL -> foldHandlerCase(cons);
+			case LispNames.DEFUN_INTERNAL -> foldDefun(cons);
+			case LispNames.DEFINITION_INTERNAL -> foldDefinition(cons);
 			default -> null;
 		};
+	}
+
+	private static LispVal foldHandlerCase(LispCons cons) {
+		List<LispVal> parts = cons.isProperList() ? cons.toList() : List.of();
+		if (parts.size() < 2 || parts.size() % 2 != 0) {
+			throw malformedNativeExpansion(cons);
+		}
+		List<LispVal> nativeForm = new ArrayList<>();
+		nativeForm.add(new LispSymbol(LispNames.HANDLER_CASE));
+		nativeForm.add(parts.get(1));
+		for (int i = 2; i < parts.size(); i += 2) {
+			LispVal type = quotedDatum(parts.get(i));
+			LispCons lambda = functionLambda(parts.get(i + 1));
+			if (type == null || lambda == null) {
+				throw malformedNativeExpansion(cons);
+			}
+			nativeForm.add(new LispCons(type, lambda.cdr()));
+		}
+		return listToCons(nativeForm);
+	}
+
+	private static LispVal foldDefun(LispCons cons) {
+		List<LispVal> parts = cons.isProperList() ? cons.toList() : List.of();
+		LispVal name = parts.size() == 3 ? quotedDatum(parts.get(1)) : null;
+		LispCons lambda = parts.size() == 3 ? functionLambda(parts.get(2)) : null;
+		if (name == null || lambda == null) {
+			throw malformedNativeExpansion(cons);
+		}
+		List<LispVal> lambdaParts = lambda.toList();
+		List<LispVal> body = lambdaParts.subList(2, lambdaParts.size());
+		int forms = bodyPreambleLength(body);
+		List<LispVal> defun = new ArrayList<>();
+		defun.add(new LispSymbol(LispNames.DEFUN));
+		defun.add(name);
+		defun.add(lambdaParts.get(1));
+		defun.addAll(body.subList(0, forms));
+		// The block defun establishes itself: spelled out by the expansion, dropped here
+		// when it is still the whole body (a walker may have rewritten it).
+		if (body.size() == forms + 1 && body.get(forms) instanceof LispCons block && block.isProperList()
+				&& block.car() instanceof LispSymbol blockHead && LispNames.BLOCK.equals(blockHead.name())
+				&& block.cdr() instanceof LispCons blockRest) {
+			List<LispVal> blockForms = blockRest.cdr() instanceof LispCons inner ? inner.toList() : List.of();
+			if (bodyPreambleLength(blockForms) == 0) {
+				defun.addAll(blockForms);
+				return listToCons(defun);
+			}
+		}
+		defun.addAll(body.subList(forms, body.size()));
+		return listToCons(defun);
+	}
+
+	private static LispVal foldDefinition(LispCons cons) {
+		LispVal definition = cons.cdr() instanceof LispCons arg && arg.cdr() instanceof LispNil ? quotedDatum(arg.car())
+				: null;
+		if (!(definition instanceof LispCons definer) || !(definer.car() instanceof LispSymbol head)
+				|| !QUOTED_DEFINERS.contains(head.name())) {
+			throw malformedNativeExpansion(cons);
+		}
+		return definition;
+	}
+
+	private static @Nullable LispVal quotedDatum(LispVal form) {
+		return form instanceof LispCons quote && quote.car() instanceof LispSymbol head
+				&& LispNames.isQuote(head.name()) && quote.cdr() instanceof LispCons datum
+				&& datum.cdr() instanceof LispNil ? datum.car() : null;
+	}
+
+	/** The {@code (lambda ll . body)} of a {@code #'(lambda ll . body)} form, or null. */
+	private static @Nullable LispCons functionLambda(LispVal form) {
+		return form instanceof LispCons function && function.car() instanceof LispSymbol head
+				&& LispNames.FUNCTION.equals(head.name()) && function.cdr() instanceof LispCons arg
+				&& arg.cdr() instanceof LispNil && arg.car() instanceof LispCons lambda && lambda.isProperList()
+				&& lambda.car() instanceof LispSymbol lambdaHead && LispNames.LAMBDA.equals(lambdaHead.name())
+				&& lambda.cdr() instanceof LispCons ? lambda : null;
+	}
+
+	private static LispVal quoteOf(LispVal datum) {
+		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), datum));
+	}
+
+	/** {@code #'(lambda . llAndBody)}. */
+	private static LispVal functionOfLambda(LispCons llAndBody) {
+		return listToCons(
+				List.of(new LispSymbol(LispNames.FUNCTION), new LispCons(new LispSymbol(LispNames.LAMBDA), llAndBody)));
+	}
+
+	private static IllegalArgumentException malformedNativeExpansion(LispCons cons) {
+		return new IllegalArgumentException("Malformed native macro expansion: " + cons.print());
 	}
 
 	/**
@@ -22289,7 +22493,9 @@ public final class LispMacroExpander {
 	 * not a literal quoted symbol -- the gate for {@link #runtimeSlotExistsPDefuns}.
 	 */
 	private static boolean needsRuntimeSlotExistsDispatch(List<LispVal> program) {
-		return program.stream().anyMatch(f -> containsRuntimeSlotNameCall(f, LispNames.SLOT_EXISTS_P));
+		return program.stream()
+			.anyMatch(f -> containsRuntimeSlotNameCall(f, LispNames.SLOT_EXISTS_P)
+					|| containsFunctionReference(f, LispNames.SLOT_EXISTS_P));
 	}
 
 	private static boolean containsRuntimeSlotNameCall(LispVal form, String opName) {
@@ -22324,7 +22530,11 @@ public final class LispMacroExpander {
 	 * data is skipped.
 	 */
 	private static boolean needsRuntimeSlotNameDispatch(List<LispVal> program, ClosRegistry closRegistry) {
-		return program.stream().anyMatch(form -> containsRuntimeSlotName(form, closRegistry));
+		// #'slot-value / #'slot-boundp: the wrapper's slot name is a parameter.
+		return program.stream()
+			.anyMatch(form -> containsRuntimeSlotName(form, closRegistry)
+					|| containsFunctionReference(form, LispNames.SLOT_VALUE)
+					|| containsFunctionReference(form, LispNames.SLOT_BOUNDP));
 	}
 
 	/**
@@ -22335,7 +22545,10 @@ public final class LispMacroExpander {
 	 * without the defun fails loudly at compile time rather than silently.
 	 */
 	private static boolean needsRuntimeSlotSetDispatch(List<LispVal> program, ClosRegistry closRegistry) {
-		return program.stream().anyMatch(form -> containsRuntimeSlotSet(form, closRegistry));
+		// #'slot-makunbound: the wrapper writes through a parameter slot name.
+		return program.stream()
+			.anyMatch(form -> containsRuntimeSlotSet(form, closRegistry)
+					|| containsFunctionReference(form, LispNames.SLOT_MAKUNBOUND));
 	}
 
 	private static boolean containsRuntimeSlotSet(LispVal form, ClosRegistry closRegistry) {
@@ -22686,7 +22899,9 @@ public final class LispMacroExpander {
 	 * literal quoted symbol -- the gate for {@link #changeClassRuntimeDefuns}.
 	 */
 	private static boolean needsChangeClassRuntime(List<LispVal> program) {
-		return program.stream().anyMatch(LispMacroExpander::containsComputedChangeClass);
+		// #'change-class: the wrapper forwards to the dispatch.
+		return program.stream()
+			.anyMatch(f -> containsComputedChangeClass(f) || containsFunctionReference(f, LispNames.CHANGE_CLASS));
 	}
 
 	private static boolean containsComputedChangeClass(LispVal form) {
@@ -22706,6 +22921,48 @@ public final class LispMacroExpander {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * The {@code #'make-condition} construction dispatch
+	 * ({@link LispNames#MAKE_CONDITION_RUNTIME}): one arm per registered condition class,
+	 * each the literal {@code (make-condition 'name ...)} call with every keyword initarg
+	 * the class declares read out of the runtime plist, its slot's initform when the
+	 * plist lacks it. Chained-chunked like the change-class dispatch; an unknown type
+	 * signals.
+	 */
+	private static List<LispVal> makeConditionRuntimeDefuns(ClosRegistry closRegistry) {
+		LispSymbol type = new LispSymbol("%mcr_t");
+		LispSymbol args = new LispSymbol("%mcr_a");
+		String conditionKey = ClosRegistry.normalize(ClosRegistry.CONDITION_CLASS_NAMES.get(0));
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			if (!info.ancestors().contains(conditionKey) && !conditionKey.equals(ClosRegistry.normalize(info.name()))) {
+				continue;
+			}
+			List<LispVal> call = new java.util.ArrayList<>();
+			call.add(new LispSymbol(LispNames.MAKE_CONDITION));
+			call.add(quoteOf(info.name()));
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				List<String> keys = slot.initargs().stream().filter(k -> k.startsWith(":")).toList();
+				if (keys.isEmpty()) {
+					continue;
+				}
+				LispVal value = slot.initform();
+				for (int i = keys.size() - 1; i >= 0; i--) {
+					value = mvCall(LispNames.GETF, args, new LispSymbol(keys.get(i)), value);
+				}
+				call.add(new LispSymbol(keys.get(0)));
+				call.add(value);
+			}
+			List<String> spellings = new java.util.ArrayList<>();
+			addDesignatorSpellings(spellings, info.name());
+			clauses.add(
+					listToCons(List.of(mvCall(LispNames.MEMBER, type, quotedSymbolList(spellings)), listToCons(call))));
+		}
+		LispVal fallback = listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString(LispNames.MAKE_CONDITION + ": ~S is not a condition type"), type));
+		return chainedDispatchDefuns(LispNames.MAKE_CONDITION_RUNTIME, "%MCR-", List.of(type, args), clauses, fallback);
 	}
 
 	/**
@@ -22828,17 +23085,15 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands {@code (change-class instance 'name initarg value ...)} into an IN-PLACE
-	 * class change: the instance keeps its identity and every slot the old and the new
-	 * layout share (single inheritance makes the shared part a prefix), the slots the new
-	 * class adds are filled from their {@code :initform}s, the supplied initargs are
-	 * stored, and the instance is the value.
+	 * class change: the instance keeps its identity and every slot whose NAME the old and
+	 * the new class share, the slots the new class adds are filled from their
+	 * {@code :initform}s, the supplied initargs are stored, and the instance is the
+	 * value.
 	 *
 	 * <p>
-	 * The source class is a RUNTIME property, so the initform fill is a {@code cond} over
-	 * the statically-known classes of the target's inheritance chain -- exactly the set
-	 * whose instances a change to this class is defined for. An instance of any other
-	 * class keeps its slot values and only changes layout, which is what CL's "slots with
-	 * the same name are retained" degrades to when the two classes share no chain.
+	 * The source class is a RUNTIME property, so the slot remap is a {@code cond} over
+	 * the statically-known classes an instance can be changed from
+	 * ({@link #changeClassInitformFill}).
 	 * @param cons the change-class expression
 	 * @param closRegistry the class registry
 	 * @param coldBranchOk whether an unknown target lowers to a runtime error instead of
@@ -22918,43 +23173,37 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The {@code cond} filling the slots the target class adds beyond the instance's
-	 * CURRENT class, from the target's initforms -- one arm per class of the target's
-	 * inheritance chain that is narrower than it. Null when no class in the chain is
-	 * narrower (nothing to fill).
+	 * The {@code cond} mapping the instance's slots from its OLD class onto the target's
+	 * layout by slot NAME (CLHS 7.2): a target slot whose name the old class has keeps
+	 * that slot's value (read from its old index, or from the old class's shared cell), a
+	 * slot the old class lacks is filled from its initform, and a target
+	 * {@code :allocation :class} slot is left to its shared cell. One arm per class an
+	 * instance can be changed FROM whose mapping is not the identity: every class of the
+	 * target's inheritance chain and every non-seeded class (the seeded condition/MOP
+	 * classes have system-built instances). Runs right after the layout swap: every moved
+	 * value is read before any store, and the old slots are still in the storage
+	 * ({@link ClosRegistry#applyChangeClassCapacities()} reserved the target's room in
+	 * every such class). Null when no arm is needed.
 	 */
 	@Nullable private static LispVal changeClassInitformFill(LispSymbol objVar, LispSymbol oldTagVar,
 			ClosRegistry.ClassInfo target, ClosRegistry closRegistry) {
 		String targetKey = ClosRegistry.normalize(target.name());
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		for (ClosRegistry.ClassInfo source : closRegistry.classes().values()) {
-			boolean sameChain = source.ancestors().contains(targetKey)
-					|| target.ancestors().contains(ClosRegistry.normalize(source.name()));
-			if (!sameChain || source.slots().size() >= target.slots().size()) {
+			String sourceKey = ClosRegistry.normalize(source.name());
+			if (sourceKey.equals(targetKey)) {
 				continue;
 			}
-			// Multiple inheritance can relate two classes whose layouts do NOT share a
-			// prefix (the source's slots sit at shifted indexes in the target). The
-			// positional fill below would write the wrong slots there, so such a source
-			// degrades to the layout-swap-only behavior unrelated classes get ("slots
-			// with the same name are retained" cannot hold positionally).
-			boolean prefix = true;
-			for (int i = 0; i < source.slots().size(); i++) {
-				if (!source.slots().get(i).baseName().equals(target.slots().get(i).baseName())) {
-					prefix = false;
-					break;
-				}
-			}
-			if (!prefix) {
+			boolean sameChain = source.ancestors().contains(targetKey) || target.ancestors().contains(sourceKey);
+			if (!sameChain && closRegistry.isSeededClass(source.name())) {
 				continue;
 			}
-			List<LispVal> stores = new java.util.ArrayList<>();
-			for (int i = source.slots().size(); i < target.slots().size(); i++) {
-				stores.add(objSet(objVar, i, target.slots().get(i).initform()));
+			LispVal remap = changeClassSlotRemap(objVar, source, target);
+			if (remap == null) {
+				continue;
 			}
-			clauses.add(listToCons(concatForms(
-					List.of(fmtCall(LispNames.EQUAL, oldTagVar, quoteOf(LispLayout.CLASS_TAG_PREFIX + source.name()))),
-					stores)));
+			clauses.add(listToCons(List
+				.of(fmtCall(LispNames.EQUAL, oldTagVar, quoteOf(LispLayout.CLASS_TAG_PREFIX + source.name())), remap)));
 		}
 		if (clauses.isEmpty()) {
 			return null;
@@ -22963,6 +23212,58 @@ public final class LispMacroExpander {
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);
 		return listToCons(condParts);
+	}
+
+	/**
+	 * The stores turning an instance of {@code source}, already swapped to the target's
+	 * layout, into one of {@code target} by slot name; null when every instance slot of
+	 * the target already holds its value in place.
+	 */
+	@Nullable private static LispVal changeClassSlotRemap(LispSymbol objVar, ClosRegistry.ClassInfo source,
+			ClosRegistry.ClassInfo target) {
+		List<ClosRegistry.SlotSpec> from = source.slots();
+		List<ClosRegistry.SlotSpec> to = target.slots();
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		List<LispVal> stores = new java.util.ArrayList<>();
+		for (int i = 0; i < to.size(); i++) {
+			ClosRegistry.SlotSpec slot = to.get(i);
+			if (slot.sharedCellVar() != null) {
+				continue;
+			}
+			int j = -1;
+			for (int k = 0; k < from.size() && j < 0; k++) {
+				if (from.get(k).baseName().equals(slot.baseName())) {
+					j = k;
+				}
+			}
+			LispVal value;
+			if (j < 0) {
+				value = slot.initform();
+			}
+			else if (from.get(j).sharedCellVar() instanceof String cell) {
+				value = new LispSymbol(cell);
+			}
+			else if (j == i) {
+				continue;
+			}
+			else {
+				LispSymbol temp = new LispSymbol(objVar.name() + "_s" + j);
+				bindings.add(listToCons(List.of(temp, objRef(objVar, j))));
+				value = temp;
+			}
+			stores.add(objSet(objVar, i, value));
+		}
+		if (stores.isEmpty()) {
+			return null;
+		}
+		if (bindings.isEmpty()) {
+			return makeProgn(stores);
+		}
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET));
+		letParts.add(listToCons(bindings));
+		letParts.addAll(stores);
+		return listToCons(letParts);
 	}
 
 	/**
@@ -23373,9 +23674,10 @@ public final class LispMacroExpander {
 				// wrappers can read a #P"..." pathname instance, like the head case.
 				// #'aref / #'array-row-major-index: the shared fold's per-axis
 				// bound check and subscript-count check signal a type-error/simple-error
-				// the same way.
+				// the same way. #'make-condition: its runtime dispatch constructs.
 				return form.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol fn
-						&& (LispNames.SIGNAL.equals(fn.name()) || LispNames.READ_CHAR.equals(fn.name())
+						&& (LispNames.SIGNAL.equals(fn.name()) || LispNames.MAKE_CONDITION.equals(fn.name())
+								|| LispNames.READ_CHAR.equals(fn.name())
 								|| LispNames.READ_CHAR_NO_HANG.equals(fn.name())
 								|| LispNames.PEEK_CHAR.equals(fn.name()) || LispNames.READ_BYTE.equals(fn.name())
 								|| LispNames.READ_SEQUENCE.equals(fn.name())
@@ -27675,6 +27977,10 @@ public final class LispMacroExpander {
 		// the runtime target, so the shared dispatch is generated after the walk and
 		// every class joins the capacity reservation.
 		boolean changeClassRuntime = needsChangeClassRuntime(program);
+		// #'make-condition: its wrapper forwards to the runtime-type construction
+		// dispatch, generated after the walk over every registered condition class.
+		boolean makeConditionRuntime = program.stream()
+			.anyMatch(f -> containsFunctionReference(f, LispNames.MAKE_CONDITION));
 		boolean runtimeSubtypep = needsRuntimeSubtypep(program);
 		// The valid-p twin: emitted only by the multiple-value lowering of a subtypep
 		// producer, so it joins the dispatch above exactly when a computed specifier and
@@ -27931,6 +28237,9 @@ public final class LispMacroExpander {
 				}
 			}
 			out.addAll(changeClassRuntimeDefuns(closRegistry));
+		}
+		if (makeConditionRuntime) {
+			out.addAll(makeConditionRuntimeDefuns(closRegistry));
 		}
 		if (compileRuntime) {
 			// Position-independent defuns, appended: a compiled program's compile is a
@@ -36738,7 +37047,9 @@ public final class LispMacroExpander {
 	 * The block name a {@code block}/{@code %fn-block}/{@code return-from} name
 	 * designator denotes on the compile path: {@code null} for the {@code nil} block
 	 * (which behaves as the plain {@code return} boundary), otherwise the symbol's
-	 * resolved name verbatim -- mirroring the interpreter's name matching.
+	 * resolved name verbatim -- mirroring the interpreter's name matching. A keyword is a
+	 * symbol and names a block of its own: its name keeps the {@code :} marker, so
+	 * {@code :x} and {@code x} are two blocks.
 	 * @param designator the name designator form (a symbol or nil)
 	 * @return the block name, or {@code null} for the nil block
 	 */
@@ -36746,7 +37057,7 @@ public final class LispMacroExpander {
 		if (designator instanceof LispNil) {
 			return null;
 		}
-		if (designator instanceof LispSymbol sym && !sym.isKeyword()) {
+		if (designator instanceof LispSymbol sym) {
 			return "NIL".equals(sym.name()) ? null : sym.name();
 		}
 		throw new IllegalArgumentException(
@@ -40333,6 +40644,18 @@ public final class LispMacroExpander {
 	 */
 	private static int makeArrayElementTypeCodesOfCall(LispCons cons, @Nullable ClosRegistry registry) {
 		int mask = 0;
+		// A quoted bit-vector type spec: make-sequence, coerce, concatenate, map and
+		// merge build a stamped bit array for one (isBitVectorResultType), and typep
+		// asks for the stamp back. #'make-sequence classifies a computed type the same
+		// way.
+		if (cons.car() instanceof LispSymbol quote && LispNames.QUOTE.equals(quote.name())
+				&& cons.cdr() instanceof LispCons datum
+				&& isBitVectorResultType(cons, datum.car() instanceof LispSymbol s ? plainTypeName(s) : null)
+				|| cons.car() instanceof LispSymbol function && LispNames.FUNCTION.equals(function.name())
+						&& cons.cdr() instanceof LispCons named && named.car() instanceof LispSymbol target
+						&& LispNames.MAKE_SEQUENCE.equals(target.name())) {
+			return 1 << ArrayElementTypes.BIT;
+		}
 		if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(head.name())) {
 			List<LispVal> args = cons.toList();
 			for (int i = 2; i + 1 < args.size(); i++) {
@@ -41596,6 +41919,20 @@ public final class LispMacroExpander {
 	 * otherwise every form around a local call would lose the line an uncaught report
 	 * gives for a condition inside it.
 	 */
+	private static final Set<String> LOOP_DATA_KEYWORDS = Set.of("FOR", "AS", "WITH", "AND", "USING", "OF-TYPE",
+			"INTO");
+
+	/**
+	 * Whether a {@code loop} element is a keyword a variable, a destructuring pattern or
+	 * a type follows -- data a walk over the clauses must not take for a call form.
+	 * Compared by name in any package, as {@code loop} compares its keywords.
+	 * @param element the element before the one in question
+	 * @return whether the next element is data
+	 */
+	public static boolean isLoopDataKeyword(LispVal element) {
+		return element instanceof LispSymbol sym && LOOP_DATA_KEYWORDS.contains(LispSymbol.memberName(sym.name()));
+	}
+
 	private static LispVal rewriteLocalCalls(LispVal form, java.util.Map<String, LispSymbol> fns) {
 		if (fns.isEmpty() || !(form instanceof LispCons cons)) {
 			return form;
@@ -41667,6 +42004,18 @@ public final class LispMacroExpander {
 					spec = rebuilt(specCons, newSpec);
 				}
 				return rewriteKeeping(cons, parts, 2, fns, spec);
+			}
+			case LispNames.LOOP: {
+				// (loop clause...): a list in a variable or type position is data -- a
+				// destructuring pattern whose head may name a local function -- and the
+				// rest is walked.
+				List<LispVal> out = new java.util.ArrayList<>(parts.size());
+				out.add(parts.get(0));
+				for (int i = 1; i < parts.size(); i++) {
+					LispVal part = parts.get(i);
+					out.add(isLoopDataKeyword(parts.get(i - 1)) ? part : rewriteLocalCalls(part, fns));
+				}
+				return rebuilt(cons, out);
 			}
 			case LispNames.MULTIPLE_VALUE_BIND: {
 				// (multiple-value-bind (vars...) values-form body...): the variable

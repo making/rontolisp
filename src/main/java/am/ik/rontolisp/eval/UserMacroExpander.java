@@ -321,6 +321,39 @@ public final class UserMacroExpander {
 			if (!this.shallow) {
 				this.canonicalForms.add(expanded);
 			}
+			// CLHS 3.2.3.1: the members of a top-level progn are top-level forms. Both
+			// resolvers consume a package directive only at top level, so a progn a
+			// macro expanded into that holds one -- cl-annot's @export is
+			// (progn (export 'x) (defun x ...)) -- is processed member by member, and
+			// the forms after it resolve against the package state it leaves.
+			List<LispVal> members = expanded == resolved ? null : prognMembersWithPackageDirective(expanded);
+			if (members != null) {
+				for (LispVal member : members) {
+					if (isPackageDirective(member)) {
+						macroEval.resolvePackages(member);
+						if (!this.shallow) {
+							this.result.add(requalifyShadowedClNames(member, macroEval));
+						}
+					}
+					else {
+						acceptExpansion(member, member, member, compileTime, true);
+					}
+				}
+				return;
+			}
+			acceptExpansion(form, resolved, expanded, compileTime, false);
+		}
+
+		/**
+		 * The rest of {@link #accept} for one expanded top-level form: the compile-file
+		 * situations of an expanded eval-when, the macro-time replay, and the emitted
+		 * spelling.
+		 * @param member whether the form is a member of a progn a macro expanded into,
+		 * which has no original spelling to keep
+		 */
+		private void acceptExpansion(LispVal form, LispVal resolved, LispVal expanded, boolean compileTime,
+				boolean member) {
+			LispEvaluator macroEval = this.macroEval;
 			if (isOperator(expanded, LispNames.EVAL_WHEN)) {
 				// A macro EXPANDED into an eval-when (source-level top-level eval-whens
 				// were flattened before the loop): honor the compile-file situations.
@@ -385,7 +418,7 @@ public final class UserMacroExpander {
 			// SAME object and needs no printing to recognize; the print comparison stays
 			// for a walk that rebuilt an equal form (a macro that expands to itself).
 			if (!this.shallow) {
-				this.result.add(expanded == resolved || expanded.print().equals(resolved.print()) ? form
+				this.result.add(!member && (expanded == resolved || expanded.print().equals(resolved.print())) ? form
 						: requalifyShadowedClNames(expanded, macroEval));
 			}
 			// Drain the definition-time method constructions the form's macro-time
@@ -577,7 +610,7 @@ public final class UserMacroExpander {
 	private static LispVal expandTopLevel(LispVal form, LispEvaluator macroEval) {
 		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 				&& macroEval.isUserMacro(sym.name())) {
-			form = SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons));
+			form = foldNativeExpansion(SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons)));
 		}
 		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
 			return form;
@@ -597,6 +630,16 @@ public final class UserMacroExpander {
 			expanded.add(part);
 		}
 		return changed ? properList(expanded) : form;
+	}
+
+	/**
+	 * The native form behind {@code macroexpand-1}'s answer for a natively-run CL macro
+	 * ({@code LispMacroExpander.foldNativeExpansion}), keeping the position; any other
+	 * form unchanged.
+	 */
+	private static LispVal foldNativeExpansion(LispVal form) {
+		LispVal folded = LispMacroExpander.foldNativeExpansion(form);
+		return folded == null ? form : SourceProvenance.inherit((LispCons) form, folded);
 	}
 
 	/**
@@ -808,19 +851,22 @@ public final class UserMacroExpander {
 	}
 
 	/**
-	 * Re-spells every bare CL-symbol name that the resolver's current package shadows as
-	 * the explicit {@code cl:}-qualified form, recursively through the expansion. Quoted
-	 * data is exempt (the compilers' resolution pass leaves it untouched, and rewriting
-	 * it would change the datum). Only code positions resolved from an explicit
-	 * {@code cl:} template spelling can contain such a bare name -- an unqualified use
-	 * under the shadowing package resolved to the package's own qualified symbol.
+	 * Re-spells every bare CL-symbol name that the resolver's current package reads as
+	 * some other symbol -- one it shadows, or a {@code cl} extension name it has come to
+	 * own ({@code (defmacro while ...)}) -- as the explicit {@code cl:}-qualified form,
+	 * recursively through the expansion. Only a {@code cl} symbol the expansion resolved
+	 * from a {@code cl:} spelling, or before the package took the name, is spelled bare
+	 * there. A quoted datum is walked too, since the compilers' resolution pass resolves
+	 * its symbols as well; an {@code %unspelled-quote} datum is not.
 	 */
 	private static LispVal requalifyShadowedClNames(LispVal form, LispEvaluator macroEval) {
 		return LispTrees.rebuildSpine(form, node -> switch (node) {
 			case LispSymbol sym -> PackageRegistry.splitQualified(sym.name()) == null
-					&& PackageRegistry.isClSymbol(sym.name()) && macroEval.currentPackageShadows(sym.name())
+					&& PackageRegistry.isClSymbol(sym.name()) && macroEval.currentPackageRereadsClName(sym.name())
 							? new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, sym.name())) : sym;
-			case LispCons cons when cons.car() instanceof LispSymbol op && LispNames.isQuote(op.name()) -> cons;
+			case LispCons cons when cons.car() instanceof LispSymbol op && LispNames.isQuote(op.name())
+					&& !LispNames.QUOTE.equals(op.name()) ->
+				cons;
 			case LispCons cons -> null;
 			default -> node;
 		}, car -> requalifyShadowedClNames(car, macroEval),
@@ -1387,6 +1433,30 @@ public final class UserMacroExpander {
 				|| LispNames.POP_PACKAGE.equals(member);
 	}
 
+	/**
+	 * The members of a {@code progn}, nested ones flattened, when one of them is a
+	 * package directive; null for any other form.
+	 */
+	private static @Nullable List<LispVal> prognMembersWithPackageDirective(LispVal form) {
+		if (!isOperator(form, LispNames.PROGN) || !((LispCons) form).isProperList()) {
+			return null;
+		}
+		List<LispVal> members = new ArrayList<>();
+		flattenProgn((LispCons) form, members);
+		return members.stream().anyMatch(UserMacroExpander::isPackageDirective) ? members : null;
+	}
+
+	private static void flattenProgn(LispCons progn, List<LispVal> into) {
+		for (LispVal member = progn.cdr(); member instanceof LispCons cell; member = cell.cdr()) {
+			if (isOperator(cell.car(), LispNames.PROGN) && ((LispCons) cell.car()).isProperList()) {
+				flattenProgn((LispCons) cell.car(), into);
+			}
+			else {
+				into.add(cell.car());
+			}
+		}
+	}
+
 	private static boolean usesMacroexpand(LispVal form) {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol sym
@@ -1709,6 +1779,9 @@ public final class UserMacroExpander {
 			// the line of the call that built it.
 			form = SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons));
 		}
+		// What a walker emitted for a natively-run CL macro (macroexpand-1's answer)
+		// becomes the native form again before any pass looks for the native head.
+		form = foldNativeExpansion(form);
 		// Then the operator's compiler macro, at most ONCE: the standard shape rewrites a
 		// call into a call of the SAME function with a better argument (cl-ppcre's
 		// literal regex becomes a load-time-value scanner), so re-applying would either
@@ -1931,13 +2004,18 @@ public final class UserMacroExpander {
 					// (loop clause...): clause keywords and expressions are walked, but a
 					// destructuring pattern is data -- an improper or cons-headed element
 					// (`for ((x . y) . rest) on args`) must survive verbatim, where the
-					// generic walk would reject it as a call form.
+					// generic walk would reject it as a call form, and so must a list in
+					// a
+					// variable or type position, whose head may name a macro:
+					// parenscript's
+					// `for (var p) = ...` beside its own (defmacro var ...).
 					List<LispVal> newParts = new ArrayList<>();
 					newParts.add(parts.get(0));
 					for (int i = 1; i < parts.size(); i++) {
 						LispVal part = parts.get(i);
 						boolean pattern = part instanceof LispCons pc
-								&& (!pc.isProperList() || !(pc.car() instanceof LispSymbol));
+								&& (!pc.isProperList() || !(pc.car() instanceof LispSymbol)
+										|| LispMacroExpander.isLoopDataKeyword(parts.get(i - 1)));
 						newParts.add(pattern ? part : expandAll(part, macroEval));
 					}
 					return properList(newParts);

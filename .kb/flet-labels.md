@@ -7,8 +7,11 @@ lambdas; `labels` = letrec -- bind to nil, then `setq` each lambda, so
 - `rewriteLocalCalls` (Lisp-2): only call position `(f ...)` -> `(funcall var ...)` and `#'f` ->
   `var`; a bare `f` stays a variable. Shape-awareness mirrors `UserMacroExpander.expandAll`.
   Nested definitions shadow: flet defs walked with the outer map, labels defs with the shadowed one.
-- `loop` clauses are walked generically, so a `for` destructuring pattern colliding with a local
-  function name misrewrites (same limitation as UserMacroExpander).
+- `loop` clauses are walked, but a list after `for`/`as`/`with`/`and`/`using`/`of-type`/`into`
+  is data (`LispMacroExpander.isLoopDataKeyword`, shared with `UserMacroExpander`'s walk), so a
+  destructuring pattern whose head names a local function or a macro stays a pattern (since
+  2026-10-31; parenscript's `for (var p) = ...` beside its `(defmacro var ...)` compiled
+  `var` as `defparameter`). ci-spec `loop-parallel-and-destructuring`.
 - **Ordering trap: the improper-list test runs BEFORE the non-symbol-head test.** That branch
   rebuilds from `cons.toList()` and DROPS an improper tail. An improper list is never a call form.
 - **A local no surviving reference names is dropped, binding and all** -- unconditional, every

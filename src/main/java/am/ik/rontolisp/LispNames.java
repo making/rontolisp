@@ -3202,10 +3202,9 @@ public final class LispNames {
 
 	/**
 	 * The {@code change-class} macro: mutates an instance IN PLACE into a statically
-	 * known class of the same inheritance chain, retaining the slots both classes share,
-	 * filling the new ones from their initforms (or the supplied initargs) and yielding
-	 * the instance. The MOP protocol around it
-	 * ({@code update-instance-for-different-class}) is out of scope.
+	 * known class, retaining the slots both classes share by name, filling the new ones
+	 * from their initforms (or the supplied initargs) and yielding the instance. The MOP
+	 * protocol around it ({@code update-instance-for-different-class}) is out of scope.
 	 */
 	public static final String CHANGE_CLASS = "CHANGE-CLASS";
 
@@ -3224,6 +3223,28 @@ public final class LispNames {
 	 * WASM error is an uncatchable trap).
 	 */
 	public static final String HANDLER_CASE = "HANDLER-CASE";
+
+	/**
+	 * {@code macroexpand-1}'s answer for {@link #HANDLER_CASE}:
+	 * {@code (%handler-case form 'type #'(lambda ll . body)...)}, folded back to the
+	 * native form ({@code LispMacroExpander.foldNativeExpansion}) wherever a walker emits
+	 * it.
+	 */
+	public static final String HANDLER_CASE_INTERNAL = "%HANDLER-CASE";
+
+	/**
+	 * {@code macroexpand-1}'s answer for {@code defun}:
+	 * {@code (%defun 'name #'(lambda ll (block name . body)))}, folded back like
+	 * {@link #HANDLER_CASE_INTERNAL}.
+	 */
+	public static final String DEFUN_INTERNAL = "%DEFUN";
+
+	/**
+	 * {@code macroexpand-1}'s answer for the other natively-run definers
+	 * ({@code defmacro}, {@code defvar}, {@code defclass}, {@code in-package}, ...):
+	 * {@code (%definition 'form)}, folded back like {@link #HANDLER_CASE_INTERNAL}.
+	 */
+	public static final String DEFINITION_INTERNAL = "%DEFINITION";
 
 	/**
 	 * The {@code ignore-errors} macro: sugar over {@code (handler-case (progn forms...)
@@ -4687,6 +4708,16 @@ public final class LispNames {
 	 * interpreter resolves the designator natively and re-enters the static expansion.
 	 */
 	public static final String CHANGE_CLASS_RUNTIME = "%CHANGE-CLASS-RUNTIME";
+
+	/**
+	 * The function value of {@code make-condition}:
+	 * {@code (%make-condition-runtime type initarg-plist)} constructs the condition a
+	 * type known only at run time names, one arm per registered condition class, each the
+	 * literal call's construction with the initargs read out of the plist. Generated on
+	 * the compile paths for a program naming {@code #'make-condition}; the interpreter
+	 * evaluates the literal call.
+	 */
+	public static final String MAKE_CONDITION_RUNTIME = "%MAKE-CONDITION-RUNTIME";
 
 	/**
 	 * The slot-name fold every runtime-slot-name dispatch above applies to its name

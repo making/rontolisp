@@ -31,7 +31,22 @@ T
 
 リーダーマクロ関数は、読み込み中のテキストを対象とし、マクロ文字の直後に位置付けられた文字列入力ストリームを受け取ります。関数が読んだシンボルは現在のパッケージに intern されます。値を1つも返さない関数は、その文字をコメントの開始にします。大文字小文字の変換は `readtable-case` に従います。
 
-そのため、自分のソースをリードテーブル経由で読むライブラリがロードできます。named-readtables・cl-interpol(`#?"Hello, ${name}"`)・cl-csv は4つのバックエンドすべてで、jonathan(cl-syntax 経由)はインタプリタと JVM で、cl-annot(`@export`)はインタプリタでロードできます。
+バッククォートのテンプレート内で使ったリーダーマクロは、Common Lisp と同じくそのテンプレートのカンマを読みます。関数が呼ぶ `read` はテンプレートの内側から読み始め、カンマはテンプレートの評価時に評価されます。
+
+```console
+$ cat keep.lisp
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf *readtable* (copy-readtable nil))
+  (set-dispatch-macro-character #\# #\`
+    (lambda (s c n) (declare (ignore c n)) (list 'lambda '(%) (read s t nil t)))))
+(defmacro keep-if (test xs) `(remove-if-not #`(funcall ,test % 2) ,xs))
+(print (keep-if #'> '(1 2 3 4)))
+$ rontolisp keep.lisp -o keep.wasm && wasmtime run keep.wasm
+
+(3 4)
+```
+
+そのため、自分のソースをリードテーブル経由で読むライブラリがロードできます。named-readtables・cl-interpol(`#?"Hello, ${name}"`)・cl-csv は4つのバックエンドすべてで、jonathan(cl-syntax 経由)はインタプリタと JVM で、cl-annot(`@export`)と rutils はインタプリタでロードできます。
 
 ## 未対応
 

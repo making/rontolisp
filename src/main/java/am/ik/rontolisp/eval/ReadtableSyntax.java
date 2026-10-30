@@ -112,12 +112,11 @@ final class ReadtableSyntax {
 					continue;
 				}
 				// #L and #N@ are this reader's own syntax on every backend -- iterate's
-				// and
-				// ironclad's dispatch functions, which the compile paths cannot call --
-				// so
-				// the reader keeps reading them natively whatever function the table
-				// holds: the interpreter then reads those libraries as the compiled
-				// backends do (.kb/readtables.md).
+				// and ironclad's dispatch functions, for which the compile paths open
+				// no read-time image (ReadTimeImage.changesSyntax) -- so the reader
+				// keeps reading them natively whatever function the table holds: the
+				// interpreter then reads those libraries as the compiled backends do
+				// (.kb/readtables.md).
 				int standardAs = pair.cdr() instanceof LispChar std ? std.codePoint()
 						: isNativeSub(subChar.codePoint()) ? subChar.codePoint() : -1;
 				view.put(subChar.codePoint(), new ReadSyntax.Sub(standardAs >= 0 ? null : pair.car(), standardAs));

@@ -169,6 +169,15 @@ public final class BuiltinFunctionWrappers {
 			rontolisp(LispNames.TLS_LISTEN), rontolisp(LispNames.TLS_LISTEN_PEM));
 
 	/**
+	 * The CL functions the expander rewrites in call position whose catalog wrapper is
+	 * reference-gated ({@link #REFERENCE_GATED_FUNCTIONS}).
+	 */
+	public static final List<String> INLINE_EXPANDED_VALUE_FUNCTIONS = List.of(LispNames.COMPLEMENT,
+			LispNames.MAKE_CONDITION, LispNames.MAKE_SEQUENCE, LispNames.DOCUMENTATION, LispNames.PROCLAIM,
+			LispNames.CHANGE_CLASS, LispNames.SLOT_VALUE, LispNames.SLOT_BOUNDP, LispNames.SLOT_EXISTS_P,
+			LispNames.SLOT_MAKUNBOUND);
+
+	/**
 	 * Wrappers injected only when the program takes the operator as a first-class value
 	 * (see {@link #referencesFunctionValue}), so ordinary programs stay byte-identical:
 	 * the signal operators plus {@code format}. The {@code #'format} wrapper renders
@@ -305,6 +314,12 @@ public final class BuiltinFunctionWrappers {
 		// its own bound check is a separate, already-gated backend intrinsic.
 		gated.add(LispNames.AREF);
 		gated.add(LispNames.ARRAY_ROW_MAJOR_INDEX);
+		// The CL functions lowered only in call position: the slot and class bodies reach
+		// runtime dispatches LispMacroExpander generates only for a program naming the
+		// operator, #'make-condition and #'make-sequence construct (or signal), and
+		// #'complement's body applies. A program that never takes one as a value keeps
+		// the output it always had.
+		gated.addAll(INLINE_EXPANDED_VALUE_FUNCTIONS);
 		gated.addAll(NATIVE_VALUE_FUNCTIONS);
 		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
 	}
@@ -355,8 +370,9 @@ public final class BuiltinFunctionWrappers {
 
 	/**
 	 * The wrappers whose BODY calls {@code apply}: the {@code map*} family, {@code every}
-	 * / {@code some}, {@code funcall} and {@code apply} themselves. All of them forward a
-	 * runtime number of arguments, which is what {@code apply} is for.
+	 * / {@code some}, {@code funcall} and {@code apply} themselves, and
+	 * {@code complement}, whose expansion applies past three arguments. All of them
+	 * forward a runtime number of arguments, which is what {@code apply} is for.
 	 *
 	 * <p>
 	 * They are injected ungated, but a backend that GATES its {@code apply} runtime on
@@ -369,7 +385,8 @@ public final class BuiltinFunctionWrappers {
 	 */
 	public static final Set<String> APPLY_USING_FUNCTIONS = Set.of(LispNames.MAPCAR, LispNames.MAPC, LispNames.MAPCAN,
 			LispNames.MAPLIST, LispNames.MAPCON, LispNames.MAPL, LispNames.EVERY, LispNames.SOME, LispNames.NOTANY,
-			LispNames.NOTEVERY, LispNames.MAP, LispNames.MAP_INTO, LispNames.FUNCALL, LispNames.APPLY);
+			LispNames.NOTEVERY, LispNames.MAP, LispNames.MAP_INTO, LispNames.FUNCALL, LispNames.APPLY,
+			LispNames.COMPLEMENT);
 
 	/**
 	 * Whether the expression takes any {@link #APPLY_USING_FUNCTIONS} member as a
@@ -2725,6 +2742,58 @@ public final class BuiltinFunctionWrappers {
 				List.of(body));
 	}
 
+	// #'make-sequence: the call position needs a literal result type, so the wrapper
+	// classifies the runtime type the way expandMakeSequence classifies the literal one
+	// and takes that family's call position, forwarding :initial-element only when the
+	// tail carries one (an omitted element is not a nil one).
+	//
+	// (lambda (type size &rest kw)
+	// (let ((h (if (consp type) (car type) type)))
+	// (cond ((member h '(string ...)) <'string arm>)
+	// ((eq h 'list) <'list arm>)
+	// ((or (member h '(bit-vector simple-bit-vector))
+	// (and (member h '(vector array simple-array)) (eq (car (cdr type)) 'bit)))
+	// <'bit-vector arm>)
+	// ((member h '(vector simple-vector array simple-array)) <'vector arm>)
+	// (t (error "make-sequence: unsupported result type ~S" type)))))
+	private static WrapperDef makeSequenceWrapper() {
+		LispSymbol type = new LispSymbol("type");
+		LispSymbol head = new LispSymbol("h");
+		LispVal headOf = callV(LispNames.IF, callV(LispNames.CONSP, type), callV(LispNames.CAR, type), type);
+		LispVal bitElement = callV(LispNames.AND, memberOf(head, "VECTOR", "ARRAY", "SIMPLE-ARRAY"),
+				callV(LispNames.EQ_GENERAL, callV(LispNames.CAR, callV(LispNames.CDR, type)),
+						callV(LispNames.QUOTE, new LispSymbol(LispNames.BIT))));
+		LispVal cond = callV(LispNames.COND,
+				listToCons(List.of(memberOf(head, "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING"),
+						makeSequenceArm("STRING"))),
+				listToCons(List.of(
+						callV(LispNames.EQ_GENERAL, head, callV(LispNames.QUOTE, new LispSymbol(LispNames.LIST))),
+						makeSequenceArm(LispNames.LIST))),
+				listToCons(List.of(
+						callV(LispNames.OR, memberOf(head, "BIT-VECTOR", "SIMPLE-BIT-VECTOR"),
+								callV(LispNames.AND, callV(LispNames.CONSP, type), bitElement)),
+						makeSequenceArm("BIT-VECTOR"))),
+				listToCons(List.of(memberOf(head, "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY"),
+						makeSequenceArm("VECTOR"))),
+				listToCons(List.of(LispTrue.INSTANCE,
+						callV(LispNames.ERROR, new LispString("make-sequence: unsupported result type ~S"), type))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of((LispVal) listToCons(List.of(head, headOf)))), cond));
+		return new WrapperDef(LispNames.MAKE_SEQUENCE, List.of("type", "size", LispNames.LAMBDA_REST, "kw"),
+				List.of(body));
+	}
+
+	// (if kw (make-sequence 'family size :initial-element (getf kw :initial-element))
+	// (make-sequence 'family size))
+	private static LispVal makeSequenceArm(String family) {
+		LispVal quoted = callV(LispNames.QUOTE, new LispSymbol(family));
+		LispSymbol size = new LispSymbol("size");
+		return callV(LispNames.IF, new LispSymbol("kw"),
+				callV(LispNames.MAKE_SEQUENCE, quoted, size, new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD),
+						callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD))),
+				callV(LispNames.MAKE_SEQUENCE, quoted, size));
+	}
+
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
 			// Signal operators and format (gated by REFERENCE_GATED_FUNCTIONS in the
 			// backend compilers)
@@ -3103,6 +3172,21 @@ public final class BuiltinFunctionWrappers {
 			// optional environment is accepted and ignored, as in call position.
 			new WrapperDef(LispNames.SUBTYPEP, List.of("a", "b", LispNames.LAMBDA_OPTIONAL, "e"),
 					List.of(call(LispNames.SUBTYPEP, "a", "b"))),
+			// The CL functions the expander rewrites in call position
+			// (PackageRegistry.inlineExpandedClFunctions), all REFERENCE_GATED_FUNCTIONS.
+			// Each body is the call with its arguments as parameters: a computed slot
+			// name lowers to the %slot-*-runtime dispatches, documentation and proclaim
+			// answer nil as their calls do. The two whose call position needs a literal
+			// type or class with literal initargs forward to a runtime dispatch over a
+			// plist instead: %make-condition-runtime and %change-class-runtime, which
+			// LispMacroExpander generates for a program naming the operator as a value.
+			unary(LispNames.COMPLEMENT), binary(LispNames.DOCUMENTATION), unary(LispNames.PROCLAIM),
+			binary(LispNames.SLOT_VALUE), binary(LispNames.SLOT_BOUNDP), binary(LispNames.SLOT_EXISTS_P),
+			binary(LispNames.SLOT_MAKUNBOUND), makeSequenceWrapper(),
+			new WrapperDef(LispNames.MAKE_CONDITION, List.of("type", LispNames.LAMBDA_REST, "r"),
+					List.of(call(LispNames.MAKE_CONDITION_RUNTIME, "type", "r"))),
+			new WrapperDef(LispNames.CHANGE_CLASS, List.of("o", "c", LispNames.LAMBDA_REST, "r"),
+					List.of(call(LispNames.CHANGE_CLASS_RUNTIME, "o", "c", "r"))),
 			unary(LispNames.ENDP), listStarWrapper(), binary(LispNames.REVAPPEND), binary(LispNames.NRECONC),
 			vectorWrapper(), binary(LispNames.SVREF), unary(LispNames.ARRAY_RANK), binary(LispNames.ARRAY_DIMENSION),
 			unary(LispNames.ARRAY_TOTAL_SIZE), arrayRowMajorIndexWrapper(), mapWrapper(), mapIntoWrapper(),

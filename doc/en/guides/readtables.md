@@ -31,7 +31,22 @@ T
 
 A reader macro function receives a string input stream over the text being read, positioned behind its character, and a symbol it reads is interned in the current package. A function returning no values makes its character start a comment. Case conversion follows `readtable-case`.
 
-So libraries that read their own source through a readtable load: named-readtables, cl-interpol (`#?"Hello, ${name}"`) and cl-csv on all four backends, jonathan (through cl-syntax) on the interpreter and the JVM, and cl-annot (`@export`) on the interpreter.
+A reader macro used inside a backquote template reads that template's commas, as in Common Lisp: the `read` its function makes starts inside the template, and the comma is evaluated when the template is.
+
+```console
+$ cat keep.lisp
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf *readtable* (copy-readtable nil))
+  (set-dispatch-macro-character #\# #\`
+    (lambda (s c n) (declare (ignore c n)) (list 'lambda '(%) (read s t nil t)))))
+(defmacro keep-if (test xs) `(remove-if-not #`(funcall ,test % 2) ,xs))
+(print (keep-if #'> '(1 2 3 4)))
+$ rontolisp keep.lisp -o keep.wasm && wasmtime run keep.wasm
+
+(3 4)
+```
+
+So libraries that read their own source through a readtable load: named-readtables, cl-interpol (`#?"Hello, ${name}"`) and cl-csv on all four backends, jonathan (through cl-syntax) on the interpreter and the JVM, and cl-annot (`@export`) and rutils on the interpreter.
 
 ## Not yet
 

@@ -74,6 +74,28 @@ public final class LispLexer {
 	private boolean featureExprReadsEval;
 
 	/**
+	 * How many backquote templates enclose every datum this read reads: zero, but for a
+	 * reader macro function's recursive read inside a template
+	 * ({@link LispReader.Forms#withinTemplates}).
+	 */
+	private int baseTemplateDepth;
+
+	/**
+	 * How many backquote templates enclose the scan, within the datum
+	 * {@link #tokenizeNextDatum} is reading (CLHS 2.4.6): what a reader macro function
+	 * called here is handed for its own recursive read ({@code .kb/readtables.md}).
+	 */
+	private int templateDepth;
+
+	/**
+	 * The backquotes and commas whose datum is still being read, innermost last: the list
+	 * depth each stands at, doubled, plus one for a backquote.
+	 */
+	private int[] templatePrefixes = new int[8];
+
+	private int templatePrefixCount;
+
+	/**
 	 * Create a new lexer for the given input with the interpreter feature set.
 	 * @param input the source code string
 	 */
@@ -141,6 +163,15 @@ public final class LispLexer {
 	 */
 	void setSyntax(@Nullable ReadSyntax syntax) {
 		this.syntax = syntax;
+	}
+
+	/**
+	 * Reads every datum from here on inside {@code depth} backquote templates: a reader
+	 * macro function's recursive read.
+	 * @param depth how many templates enclose the read
+	 */
+	void withinTemplates(int depth) {
+		this.baseTemplateDepth = depth;
 	}
 
 	/**
@@ -293,6 +324,8 @@ public final class LispLexer {
 		int start = tokens.size();
 		int depth = 0;
 		boolean pendingPrefix = false;
+		this.templateDepth = this.baseTemplateDepth;
+		this.templatePrefixCount = 0;
 		while (this.pos < this.input.length()) {
 			if (stopAt >= 0 && tokens.size() == start && this.input.codePointAt(this.pos) == stopAt) {
 				return Next.STOPPED;
@@ -312,12 +345,34 @@ public final class LispLexer {
 				else {
 					pendingPrefix = depth == 0 && isPrefixToken(token);
 				}
+				followTemplateDepth(token, depth);
 			}
 			if (tokens.size() > start && depth == 0 && !pendingPrefix) {
 				return Next.DATUM;
 			}
 		}
 		return tokens.size() > start ? Next.DATUM : Next.END;
+	}
+
+	// Follows the backquote depth across one token of the datum being read (CLHS 2.4.6):
+	// a backquote adds one and a comma takes one away, each for the datum after it,
+	// which ends at an atom -- or at the ')' bringing the list depth back to where the
+	// prefix stood. listDepth is the depth after the token.
+	private void followTemplateDepth(Token token, int listDepth) {
+		boolean backquote = token instanceof Token.Backquote;
+		if (backquote || token instanceof Token.Unquote || token instanceof Token.UnquoteSplicing) {
+			if (this.templatePrefixCount == this.templatePrefixes.length) {
+				this.templatePrefixes = java.util.Arrays.copyOf(this.templatePrefixes, this.templatePrefixCount * 2);
+			}
+			this.templatePrefixes[this.templatePrefixCount++] = listDepth << 1 | (backquote ? 1 : 0);
+			this.templateDepth += backquote ? 1 : -1;
+		}
+		else if (!opensDatum(token) && !isPrefixToken(token)) {
+			while (this.templatePrefixCount > 0
+					&& this.templatePrefixes[this.templatePrefixCount - 1] >> 1 >= listDepth) {
+				this.templateDepth -= (this.templatePrefixes[--this.templatePrefixCount] & 1) == 1 ? 1 : -1;
+			}
+		}
 	}
 
 	// Whether a token opens a datum its own ')' closes.
@@ -826,7 +881,7 @@ public final class LispLexer {
 			List<LispVal> arguments) {
 		ReadSyntax.Result result;
 		try {
-			result = rs.call(function, this.input, from, arguments);
+			result = rs.call(function, this.input, from, arguments, this.templateDepth);
 		}
 		catch (ReadSyntax.Refusal refusal) {
 			throw errAt(start, String.valueOf(refusal.getMessage()));

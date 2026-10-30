@@ -282,11 +282,11 @@ public final class CrossLambdaExitLowering {
 			}, element -> transform(element, lambdaDepth));
 		}
 
-		// A well-formed block/return-from name: a non-keyword symbol or nil. Anything
-		// else
-		// (a cons, a number, a keyword) means the head is not really that special form.
+		// A well-formed block/return-from name: a symbol (a keyword included, CLHS) or
+		// nil. Anything else (a cons, a number) means the head is not really that
+		// special form.
 		private static boolean isBlockName(LispVal form) {
-			return (form instanceof LispSymbol sym && !sym.isKeyword()) || form instanceof LispNil;
+			return form instanceof LispSymbol || form instanceof LispNil;
 		}
 
 		private LispVal transformLambda(LispCons cons, int lambdaDepth) {

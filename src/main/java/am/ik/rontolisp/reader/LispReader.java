@@ -80,6 +80,14 @@ public final class LispReader {
 	 */
 	private @Nullable UnaryOperator<String> symbolHome;
 
+	/**
+	 * How many backquote templates enclose the datum being read, outside this read's own
+	 * backquotes: zero, but for a reader macro function's recursive read inside a
+	 * template ({@link Forms#withinTemplates}), where a comma reads as the raw marker the
+	 * enclosing template processes ({@link #readOuterComma}).
+	 */
+	private int templateDepth;
+
 	private int pos;
 
 	private LispReader(List<LocatedToken> tokens, Features features, String input, @Nullable String file,
@@ -591,6 +599,21 @@ public final class LispReader {
 		}
 
 		/**
+		 * Reads as a reader macro function's recursive read does inside {@code depth}
+		 * backquote templates (CLHS 2.4.6): a comma outside the read's own templates
+		 * reads as the raw marker the template the macro character stands in processes
+		 * once the function answers, and a reader macro called in turn is handed its own
+		 * depth ({@code .kb/readtables.md}).
+		 * @param depth how many templates enclose the read
+		 * @return this read
+		 */
+		public Forms withinTemplates(int depth) {
+			this.lexer.withinTemplates(depth);
+			this.reader.templateDepth = depth;
+			return this;
+		}
+
+		/**
 		 * Reads the next top-level datum.
 		 * @param syntax the readtable to read it with, or {@code null} for the standard
 		 * syntax
@@ -767,9 +790,8 @@ public final class LispReader {
 			case Token.Quote ignored -> readQuote();
 			case Token.FunctionQuote ignored -> readFunctionQuote();
 			case Token.Backquote ignored -> readBackquote();
-			// The token is already consumed: the error names it, not the one after it.
-			case Token.Unquote ignored -> throw errAtToken(this.pos - 1, "Comma is illegal outside of backquote");
-			case Token.UnquoteSplicing ignored -> throw errAtToken(this.pos - 1, ",@ is illegal outside of backquote");
+			case Token.Unquote ignored -> readOuterComma(BQ_COMMA, "Comma is illegal outside of backquote");
+			case Token.UnquoteSplicing ignored -> readOuterComma(BQ_COMMA_AT, ",@ is illegal outside of backquote");
 			case Token.RightParen ignored -> throw errAtToken(this.pos - 1, "Unexpected ')'");
 			case Token.Dot ignored -> throw errAtToken(this.pos - 1, "Unexpected '.'");
 			case Token.Eof ignored -> throw eof("Unexpected end of input");
@@ -802,6 +824,27 @@ public final class LispReader {
 			// What a reader macro function answered (ReadSyntax) is the datum itself.
 			case Token.Datum datum -> datum.value();
 		};
+	}
+
+	/**
+	 * A comma outside every template this read's own backquotes open. It is legal only in
+	 * a reader macro function's recursive read inside a template
+	 * ({@link #templateDepth}), where it reads as the raw marker that template's
+	 * backquote processes once the function's datum reaches it
+	 * ({@link #readRawTemplate}), its operand read one template further out.
+	 */
+	private LispVal readOuterComma(LispSymbol marker, String illegal) {
+		if (this.templateDepth == 0) {
+			// The token is already consumed: the error names it, not the one after it.
+			throw errAtToken(this.pos - 1, illegal);
+		}
+		this.templateDepth--;
+		try {
+			return list2(marker, readExpr());
+		}
+		finally {
+			this.templateDepth++;
+		}
 	}
 
 	/** The datums recorded by {@code #n=} reader labels, shared across the read. */
@@ -1321,9 +1364,9 @@ public final class LispReader {
 	 */
 	private LispVal readSharpLTemplate(int declared) {
 		int save = this.pos;
-		boolean sawNested = this.rawSawNestedBackquote;
+		boolean sawNested = this.rawNeedsFullProcessing;
 		LispVal raw = readRawTemplate();
-		this.rawSawNestedBackquote = sawNested;
+		this.rawNeedsFullProcessing = sawNested;
 		this.pos = save;
 		TemplateElement body = readTemplateElement();
 		if (body.splicing()) {
@@ -1434,27 +1477,40 @@ public final class LispReader {
 	private record TemplateElement(LispVal form, boolean splicing) {
 	}
 
-	private boolean rawSawNestedBackquote;
+	/**
+	 * Set by {@link #readRawTemplate} when the template cannot take the single-level
+	 * expander: it nests a backquote, or holds a reader macro function's datum carrying
+	 * one of its commas.
+	 */
+	private boolean rawNeedsFullProcessing;
 
 	private LispVal readBackquote() {
 		// First read the template as a raw marker tree to detect whether it nests an
 		// inner backquote. Non-nested templates keep the optimized single-level
-		// expansion (and its exact output shape); nested ones go through CLtL2.
+		// expansion (and its exact output shape); nested ones go through CLtL2. The
+		// flag is the enclosing raw read's again afterwards: a template read whole
+		// inside one (in a vector literal) must not clear what that one saw.
 		int save = this.pos;
-		this.rawSawNestedBackquote = false;
-		LispVal raw = readRawTemplate();
-		if (this.rawSawNestedBackquote) {
-			if (mentions(raw, LispNames.READ_TIME_FEATURE)) {
-				throw err("a #+/#- guard computed by #. is not supported inside a nested backquote template");
+		boolean enclosing = this.rawNeedsFullProcessing;
+		this.rawNeedsFullProcessing = false;
+		try {
+			LispVal raw = readRawTemplate();
+			if (this.rawNeedsFullProcessing) {
+				if (mentions(raw, LispNames.READ_TIME_FEATURE)) {
+					throw err("a #+/#- guard computed by #. is not supported inside a nested backquote template");
+				}
+				return bqCompletelyProcess(raw);
 			}
-			return bqCompletelyProcess(raw);
+			this.pos = save;
+			TemplateElement element = readTemplateElement();
+			if (element.splicing()) {
+				throw err(",@ must appear inside a list in a backquote template");
+			}
+			return element.form();
 		}
-		this.pos = save;
-		TemplateElement element = readTemplateElement();
-		if (element.splicing()) {
-			throw err(",@ must appear inside a list in a backquote template");
+		finally {
+			this.rawNeedsFullProcessing = enclosing;
 		}
-		return element.form();
 	}
 
 	private TemplateElement readTemplateElement() {
@@ -1699,8 +1755,9 @@ public final class LispReader {
 
 	// Reads one datum of a backquote template into the raw marker representation,
 	// preserving `/,/,@ as BACKQUOTE/COMMA/COMMA-AT marker conses so the CLtL2
-	// processor can walk the structure. Sets rawSawNestedBackquote if it reads an
-	// inner backquote (the signal that the optimized path cannot be used).
+	// processor can walk the structure. Sets rawNeedsFullProcessing if it reads an
+	// inner backquote, or a reader macro function's datum holding a comma of this
+	// template (the signal that the optimized path cannot be used).
 	private LispVal readRawTemplate() {
 		if (this.pos >= this.tokens.size()) {
 			throw eof("Unexpected end of input in backquote template");
@@ -1709,7 +1766,7 @@ public final class LispReader {
 		switch (token) {
 			case Token.Backquote ignored -> {
 				this.pos++;
-				this.rawSawNestedBackquote = true;
+				this.rawNeedsFullProcessing = true;
 				return list2(BQ_BACKQUOTE, readRawTemplate());
 			}
 			case Token.Unquote ignored -> {
@@ -1736,6 +1793,13 @@ public final class LispReader {
 				this.pos++;
 				return list2(new LispSymbol(LispNames.FUNCTION), readRawTemplate());
 			}
+			// A reader macro function's datum is constant template data, unless its
+			// recursive read met a comma of this template (readOuterComma).
+			case Token.Datum datum -> {
+				this.pos++;
+				this.rawNeedsFullProcessing |= holdsComma(datum.value());
+				return datum.value();
+			}
 			// Any other token (atoms, vectors, arrays) is constant template data:
 			// read it with the ordinary reader. Commas inside a vector literal are
 			// therefore unsupported, matching the single-level path.
@@ -1743,6 +1807,24 @@ public final class LispReader {
 				return readExpr();
 			}
 		}
+	}
+
+	// Whether a reader macro function's datum holds a raw comma marker: the walk is
+	// guarded against a circular datum.
+	private static boolean holdsComma(LispVal datum) {
+		java.util.Set<LispCons> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		java.util.ArrayDeque<LispVal> pending = new java.util.ArrayDeque<>();
+		pending.push(datum);
+		while (!pending.isEmpty()) {
+			if (pending.pop() instanceof LispCons cons && seen.add(cons)) {
+				if (cons.car() == BQ_COMMA || cons.car() == BQ_COMMA_AT) {
+					return true;
+				}
+				pending.push(cons.cdr());
+				pending.push(cons.car());
+			}
+		}
+		return false;
 	}
 
 	// Reads the elements of a raw template list, preserving a dotted tail.

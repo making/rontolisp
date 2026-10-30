@@ -2,7 +2,7 @@
 
 `(slot-exists-p instance 'slot-name)`
 
-Whether the instance's class declares a slot of that name, regardless of boundness: an unbound slot exists ([`slot-boundp`](slot-boundp.md) is the boundness test), an undeclared one does not, and a non-instance answers `nil`. The slot name may be a runtime-computed symbol on every backend.
+Whether the instance's class declares a slot of that name, regardless of boundness: an unbound slot exists ([`slot-boundp`](slot-boundp.md) is the boundness test), an undeclared one does not, and a non-instance answers `nil`. The slot name may be a runtime-computed symbol on every backend, and `#'slot-exists-p` is a function value.
 
 ```lisp
 (defclass se-point () ((x :initarg :x) (y :initform 0)))
