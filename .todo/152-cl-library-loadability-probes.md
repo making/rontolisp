@@ -109,8 +109,9 @@ verification against the actual Quicklisp dist at probe time)
 - **Probe round 2026-10-30 (interpreter, live dist).** First failure per library, and the
   todo that owns it:
   - `yason` -- loads; parse/encode identical on all four backends (h38).
-  - `fiveam` -- `asdf:perform` / `load-op` absent (asdf-flv, h30); `#+#.` (h31). With both
-    worked around it runs on the interpreter.
+  - `fiveam` -- loads unpatched and runs on the interpreter, asdf-flv's file-local `*suite*`
+    included (h30, h31 done). Compiled: the JVM stops on a `nil` hash key (h56); wasm loads,
+    then `run!` needs the run-time `compile` of a test body.
   - `parachute`, `plump` -- `compiler-macro-function` (documentation-utils, h32). parachute
     then runs. plump then needs a symbol that was only read (h34).
   - `log4cl` -- `makunbound` (h32), then bt `thread-name` / semaphores (h37).
@@ -122,9 +123,10 @@ verification against the actual Quicklisp dist at probe time)
   - Load and match SBCL: `metabang-bind`, `arrow-macros`, `cl-slug`, `do-urlencode`,
     `cl-yaml` (cffi + libyaml; only the table test differs, h47).
   - Load, wrong result: `3bmd` (warning, h39), `optima` (h40), `zpng` (h41),
-    `trivial-types` (h42), `lisp-unit` (h45), `cl-markup` (h46), `st-json` (h51), `uuid` v5 (h48), `cl-annot` (h53).
+    `trivial-types` (h42), `lisp-unit` (h45), `cl-markup` (h46), `st-json` (h51), `uuid` v5 (h48), `cl-annot` (h53),
+    `lass` (a block keeps only its first property: h46; `~&` inside `~@[`: `.todo/001`).
   - Do not load: `fset` (h43), `vecto` (h44), `djula` (h49), `hunchentoot`/`cl-fad` (h50),
-    `cl-smtp` (h48), `drakma` (h52), `lass` (h30), `cl-csv`/`function-cache`/
+    `cl-smtp` (h48), `drakma` (h52), `cl-csv`/`function-cache`/
     `cl-containers`/`cl-pdf` (h35), `jonathan`/`cl-redis`/`parenscript` (h53),
     `cl-store` (implementation guard), `screamer` (not in the dist).
 

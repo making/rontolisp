@@ -24948,7 +24948,7 @@ class WasmLispCompilerIntegrationTest {
 	// #+rontolisp-wasm defuns are the ones compiled (the *supports-threads-p* rule).
 	@Test
 	void bt2ThreadEntryPointsSignalWhileThreadpAnswersNil() throws Exception {
-		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus("""
 				(asdf:load-system "bordeaux-threads")
 				(print (bt2:threadp 42))
 				(print (handler-case (bt2:thread-alive-p 42)
@@ -24956,13 +24956,21 @@ class WasmLispCompilerIntegrationTest {
 				                               (princ-to-string e)))))
 				(print (handler-case (bt2:make-thread (lambda () 1)) (error (e) :spawn-error)))
 				(print bordeaux-threads:*supports-threads-p*)
-				"""), path -> {
-			throw new java.io.FileNotFoundException(path);
-		}, null, List.of(), am.ik.rontolisp.reader.Features.WASM);
+				(let ((s (bt:make-semaphore :count 1))
+				      (cv (bt:make-condition-variable)))
+				  (print (list (bt:lock-p (bt:make-lock))
+				               (bt:wait-on-semaphore s)
+				               (progn (bt:signal-semaphore s :count 2) (bt:wait-on-semaphore s))
+				               (bt:condition-notify cv)
+				               (bt:thread-yield)
+				               (handler-case (bt:condition-wait cv (bt:make-lock))
+				                 (error (e) :wait-error)))))
+				""", am.ik.rontolisp.reader.Features.WASM, true, false);
 		// thread-alive-p's type-error is the interpreter's and the JVM's
-		// (HandleOperandFixture): every wasm-reachable argument is a non-thread.
-		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(program))).isEqualTo(
-				"NIL\n(42 (SATISFIES RONTOLISP:THREADP) \"THREAD-ALIVE-P: The value 42 is not of type (SATISFIES RONTOLISP:THREADP)\")\n:SPAWN-ERROR\nNIL");
+		// (HandleOperandFixture): every wasm-reachable argument is a non-thread. A
+		// semaphore counts, and a condition wait -- which nothing could end -- signals.
+		assertThat(compileAndRunProgram(program)).isEqualTo(
+				"NIL\n(42 (SATISFIES RONTOLISP:THREADP) \"THREAD-ALIVE-P: The value 42 is not of type (SATISFIES RONTOLISP:THREADP)\")\n:SPAWN-ERROR\nNIL\n(T T T NIL NIL :WAIT-ERROR)");
 	}
 
 	/**

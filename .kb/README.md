@@ -35,7 +35,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [loop-iteration-heads.md](loop-iteration-heads.md) -- `loop` per-clause iteration heads: what is assigned before vs after the termination test
 - [flet-labels.md](flet-labels.md) -- `flet`/`labels` as let-bound lambdas + Lisp-2 call-site rewrite
 - [symbol-macrolet.md](symbol-macrolet.md) -- `symbol-macrolet` via one shared shadow-aware substitution
-- [dynamic-special-variables.md](dynamic-special-variables.md) -- special variable binding: `defvar`/`declaim special`, `let`/`progv`, a local `(declare (special ...))` scoped as CLHS 3.3.4 scopes it (no dual binding: a closure reads the binding active when it runs), a parameter named like a special, the by-name dispatch as a search, `boundp` of a special without a value (the unbound marker), a read of one signalling `unbound-variable`, and of a global before its first store
+- [dynamic-special-variables.md](dynamic-special-variables.md) -- special variable binding: `defvar`/`declaim special`, `let`/`progv`, a local `(declare (special ...))` scoped as CLHS 3.3.4 scopes it (no dual binding: a closure reads the binding active when it runs), a parameter named like a special, the by-name dispatch as a search, `boundp` of a special without a value (the unbound marker), a read of one signalling `unbound-variable`, and of a global before its first store, `makunbound`
 - [multiple-values.md](multiple-values.md) -- `values`/`multiple-value-bind`/`-list`/`-call`/`nth-value` as a syntactic lowering
 - [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when`, runtime type checks
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
@@ -46,7 +46,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 - [defmacro-backquote.md](defmacro-backquote.md) -- `defmacro`, read-time backquote, compile-time expansion
 - [gensym-macroexpand.md](gensym-macroexpand.md) -- `gensym`, `macroexpand`/`macroexpand-1`
-- [compiler-macros.md](compiler-macros.md) -- `define-compiler-macro` at call sites + `load-time-value` once per occurrence
+- [compiler-macros.md](compiler-macros.md) -- `define-compiler-macro` at call sites + `load-time-value` once per occurrence, `compiler-macro-function`
 - [make-load-form.md](make-load-form.md) -- a literal object is dumped by its own `make-load-form` method
 - [reader-case-upcase.md](reader-case-upcase.md) -- uppercase-canonical reader model, verbatim `intern`/`find-symbol`
 - [readtables.md](readtables.md) -- a readtable is a value on every backend (one prelude definition over `LispLayout.READTABLE`); the interpreter's reader reads with the current one, form at a time (`ReadSyntax`, reader macro calls over a string stream, case); named-readtables' derived iterator; what is not honored yet
@@ -215,7 +215,8 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## Ecosystem and tooling
 
-- [asdf.md](asdf.md) -- the limited `asdf:defsystem`/`load-system`/`test-system` subset
+- [asdf.md](asdf.md) -- the limited `asdf:defsystem`/`load-system`/`test-system` subset, and
+  the operation protocol (`asdf:perform` around every component load, the compile paths' thunks)
 - [uiop.md](uiop.md) -- uiop as the 15-sub-package bundle upstream is
 - [dists.md](dists.md) -- the download half of `ql:quickload`; `am.ik.artifact`, the fetch-and-cache layer every downloader shares (size + MD5 verification, timeouts, tar.gz/zip, atomic install)
 - [git-fetcher.md](git-fetcher.md) -- `am.ik.artifact.GitFetcher`: a repository at a full sha into the cache through the `git` CLI (why not forge archives), the clone/checkout layout and key, tag checks, the resolver's questions (a revision's commit, a tag, the descendant of two commits), the refusals

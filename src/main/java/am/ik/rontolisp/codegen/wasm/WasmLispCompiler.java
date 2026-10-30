@@ -67,6 +67,7 @@ import am.ik.rontolisp.compiler.ReactorEnvelope;
 import am.ik.rontolisp.compiler.RuntimeNameProducers;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.compiler.SequenceIoNarrowing;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.compiler.SuspendingImports;
 import am.ik.rontolisp.compiler.WasmImportDirective;
@@ -3275,6 +3276,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Before the resolver, whose own marker arm is the backstop for a bracket this
 		// pass did not lower.
 		program = LispMacroExpander.lowerLoadContextMarkers(program);
+		// The spliced components' brackets become asdf:perform calls over top-level
+		// groups once the program defines a perform method, and nothing otherwise
+		// (compiler/SplicedComponentGroups); WasmToplevelEmit emits the groups.
+		program = SplicedComponentGroups.lower(program, null);
 		// Resolve packages (in-package directives, qualified symbols, *package*) up front
 		// so
 		// the rest of compilation sees canonical names.
@@ -3870,7 +3875,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// before its first store, or a special a progv short of values binds.
 		boolean readsUnboundGlobal = !readBeforeStore.isEmpty() || !probedBeforeInjection.isEmpty()
 				|| !SpecialVarCollector.collectValueless(program, specialVars).isEmpty()
-				|| !SpecialVarCollector.collectProgvUnbindable(program, specialVars).isEmpty();
+				|| !SpecialVarCollector.collectUnbindable(program, specialVars).isEmpty();
 		// Every reason for the runtime except the four pure READERS: the program can
 		// write GLOBAL_FENV (eval's defun, load, fmakunbound, a (setf (symbol-function
 		// ...)) whose raw place shape is scanned, since the %set-symbol-function
@@ -4555,7 +4560,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// that calls progv every read of a special is checked, the ones that start with a
 		// value included -- which keep their plain start.
 		SequencedSet<String> checkedGlobals = new LinkedHashSet<>(unboundGlobals);
-		checkedGlobals.addAll(SpecialVarCollector.collectProgvUnbindable(program, specialVars));
+		checkedGlobals.addAll(SpecialVarCollector.collectUnbindable(program, specialVars));
 		this.emitsUnboundVariable = ehMode && !checkedGlobals.isEmpty();
 		if (!probedUnboundGlobals.isEmpty() && LispMacroExpander.programUsesComputedBoundp(probedForms)
 				&& !LispMacroExpander.definesRuntimeName(userDefinedNames, LispNames.BOUNDP_DYNAMIC)) {
@@ -5032,6 +5037,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// maintains the eval env mirror from any position, while the top-level-only
 			// consumers keep their own ctx.topLevel guard.
 			.usesEval(usesEval)
+			.unbindsSpecials(LispMacroExpander.programUnbindsSpecials(program))
 			.packageTable(packageResolver.runtimePackageTable())
 			.packageUseTable(packageResolver.runtimePackageUseTable())
 			.bakedSymbolAccess(symbolAccess)
@@ -11355,6 +11361,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		List<LambdaInfo> lambdaDecls;
 
+		/**
+		 * The chunk functions of each top-level GROUP, in run order -- the functions the
+		 * top-level emission compiled a spliced component's forms into but {@code _start}
+		 * does not call; {@code %run-top-group} does
+		 * ({@code compiler.SplicedComponentGroups}). Shared by every context of the
+		 * compilation: filled while {@code _start} is built, read by the lambda bodies
+		 * Pass 2c compiles.
+		 */
+		Map<Integer, List<Integer>> topGroupChunks;
+
 		Set<Integer> indirectCallArities;
 
 		/**
@@ -11869,6 +11885,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesEval = false;
 
 		/**
+		 * True when a special can lose its value at run time -- the program calls
+		 * {@code makunbound} or {@code progv}
+		 * ({@code LispMacroExpander.programUnbindsSpecials}) -- so no read skips its
+		 * UNBOUND test for a binding of its own frame ({@link #boundSpecials}).
+		 */
+		boolean unbindsSpecials = false;
+
+		/**
 		 * The one top-level form whose returned NAME the emitter is dropping, or
 		 * {@code null}. Set by {@link WasmToplevelEmit} immediately before it compiles a
 		 * {@code defvar}/{@code defparameter}/{@code defconstant} in statement position;
@@ -12024,9 +12048,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * sentinel ({@link #rawSentinelGlobalIndex}), before any user code -- and in a
 		 * program that calls {@code progv} every special but a {@code cl} symbol, which a
 		 * {@code progv} short of values binds to the marker
-		 * ({@code SpecialVarCollector.collectProgvUnbindable}). A store overwrites the
-		 * marker; a binding saves and restores it like any value; a read that finds it
-		 * signals the {@code unbound-variable} naming the global
+		 * ({@code SpecialVarCollector.collectUnbindable}). A store overwrites the marker;
+		 * a binding saves and restores it like any value; a read that finds it signals
+		 * the {@code unbound-variable} naming the global
 		 * ({@code WasmExprCompiler.emitCheckedRead}) and {@code boundp} answers nil
 		 * ({@code WasmSymbolApiCompiler.compileGlobalBoundp}).
 		 */
@@ -12328,6 +12352,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.stringTable = Objects.requireNonNull(builder.stringTable);
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
+			this.topGroupChunks = builder.topGroupChunks;
 			this.indirectCallArities = builder.indirectCallArities;
 			this.fdlibmUsed = builder.fdlibmUsed;
 			this.runtimeDesignatorDispatch = builder.runtimeDesignatorDispatch;
@@ -12393,6 +12418,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.bindsRuntimeFunctionNames = builder.bindsRuntimeFunctionNames;
 			this.usesRuntimePackages = builder.usesRuntimePackages;
 			this.usesEval = builder.usesEval;
+			this.unbindsSpecials = builder.unbindsSpecials;
 			this.packageTable = builder.packageTable;
 			this.packageUseTable = builder.packageUseTable;
 			this.bakedSymbolAccess = builder.bakedSymbolAccess;
@@ -12470,6 +12496,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<String> duplicatedDefunNames = Set.of();
 
 			private List<LambdaInfo> lambdaDecls = new ArrayList<>();
+
+			private Map<Integer, List<Integer>> topGroupChunks = new HashMap<>();
 
 			private Set<Integer> indirectCallArities = new HashSet<>();
 
@@ -12601,6 +12629,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private boolean usesEval = false;
 
+			private boolean unbindsSpecials = false;
+
 			private Map<String, String> packageTable = Map.of();
 
 			private Map<String, java.util.List<String>> packageUseTable = Map.of();
@@ -12680,6 +12710,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.stringTable = proto.stringTable;
 				this.functions = proto.functions;
 				this.lambdaDecls = proto.lambdaDecls;
+				this.topGroupChunks = proto.topGroupChunks;
 				this.indirectCallArities = proto.indirectCallArities;
 				this.fdlibmUsed = proto.fdlibmUsed;
 				this.runtimeDesignatorDispatch = proto.runtimeDesignatorDispatch;
@@ -12745,6 +12776,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.bindsRuntimeFunctionNames = proto.bindsRuntimeFunctionNames;
 				this.usesRuntimePackages = proto.usesRuntimePackages;
 				this.usesEval = proto.usesEval;
+				this.unbindsSpecials = proto.unbindsSpecials;
 				this.packageTable = proto.packageTable;
 				this.packageUseTable = proto.packageUseTable;
 				this.bakedSymbolAccess = proto.bakedSymbolAccess;
@@ -13122,6 +13154,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder usesEval(boolean usesEval) {
 				this.usesEval = usesEval;
+				return this;
+			}
+
+			Builder unbindsSpecials(boolean unbindsSpecials) {
+				this.unbindsSpecials = unbindsSpecials;
 				return this;
 			}
 

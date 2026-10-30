@@ -269,6 +269,7 @@ public final class BuiltinFunctionWrappers {
 		// the _store mirror call, real only under usesEval, and the (function set)
 		// spelling fires the same scan.
 		gated.add(LispNames.SET);
+		gated.add(LispNames.MAKUNBOUND);
 		// #'boundp / #'fboundp: the wrapper body is a COMPUTED probe, which reads the
 		// eval
 		// mirror (real only under usesEval) and, for a special declared without a value,
@@ -3058,6 +3059,9 @@ public final class BuiltinFunctionWrappers {
 			// set beside it, reference-gated for the same reason: the body is the
 			// backing-store chain plus the mirror store.
 			binary(LispNames.SET),
+			// makunbound beside it, reference-gated likewise: the body is the
+			// computed-name chain plus the mirror unlink.
+			unary(LispNames.MAKUNBOUND),
 			// find-package IS one of them, because its wrapper body is a COMPUTED
 			// designator and that already has a real lowering: the per-expression
 			// compilers rewrite it to a lookup in the package table the backend bakes in

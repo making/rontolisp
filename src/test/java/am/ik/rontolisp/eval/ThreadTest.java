@@ -221,6 +221,46 @@ class ThreadTest {
 	}
 
 	@Test
+	void btConditionVariablesAndSemaphoresHandOffBetweenNamedThreads() {
+		// A lock has a class of its own (serapeum specializes on it); a spawned thread
+		// finds its own name through current-thread; a semaphore and a condition
+		// variable hand off between threads, and each wait times out with nil. The JVM
+		// twin binds *standard-io-bindings*' reader variables in a program that has
+		// none of them.
+		LispEvaluator evaluator = evaluator();
+		evaluator.eval(LispReader.readFromString("(asdf:load-system \"bordeaux-threads\")"));
+		assertThat(evalAll(evaluator, """
+				(defmethod bt-kind ((x bt:lock)) :lock)
+				(defmethod bt-kind ((x integer)) :integer)
+				(defvar *cv-lock* (bt:make-lock))
+				(defvar *cv* (bt:make-condition-variable))
+				(defvar *cv-box* nil)
+				(defvar *go* (bt:make-semaphore :name "go"))
+				(let ((th (bt:make-thread (lambda ()
+				                            (bt:wait-on-semaphore *go*)
+				                            (bt:with-lock-held (*cv-lock*)
+				                              (setq *cv-box* (bt:thread-name (bt:current-thread)))
+				                              (bt:condition-broadcast *cv*))
+				                            :finished)
+				                          :name "worker"
+				                          :initial-bindings bt:*standard-io-bindings*)))
+				  (list (bt-kind (bt:make-recursive-lock)) (bt-kind 7)
+				         (bt:thread-name th)
+				         (if (member th (bt:all-threads)) t nil)
+				         (bt:wait-on-semaphore (bt:make-semaphore) :timeout 1/100)
+				         (bt:with-lock-held (*cv-lock*) (bt:condition-wait *cv* *cv-lock* :timeout 1/100))
+				         (progn (bt:signal-semaphore *go*)
+				                (bt:with-lock-held (*cv-lock*)
+				                  (loop until (or *cv-box* (not (bt:thread-alive-p th)))
+				                        do (bt:condition-wait *cv* *cv-lock* :timeout 1))
+				                  *cv-box*))
+				         (bt:join-thread th)
+				         (bt:wait-on-semaphore (bt:make-semaphore :count 1))
+				         (bt:thread-name (bt:current-thread))))
+				""").print()).isEqualTo("(:LOCK :INTEGER \"worker\" T NIL NIL \"worker\" :FINISHED T NIL)");
+	}
+
+	@Test
 	void bt2RejectsAVariableReferenceBindingForm() {
 		LispEvaluator evaluator = evaluator();
 		evaluator.eval(LispReader.readFromString("(asdf:load-system \"bordeaux-threads\")"));

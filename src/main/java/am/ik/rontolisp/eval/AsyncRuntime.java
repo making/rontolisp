@@ -6,6 +6,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 import am.ik.rontolisp.LispFuture;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispThread;
 import am.ik.rontolisp.LispVal;
 
@@ -76,13 +77,17 @@ final class AsyncRuntime {
 	 * server accept loop, say) may neither await nor complete. Kept HERE so the browser
 	 * playground's wholesale substitution of this class covers thread creation too (Web
 	 * Image has no threads; the substituted spawn runs the body synchronously to
-	 * completion).
+	 * completion). The new thread's {@link #currentThreadHandle()} is the handle returned
+	 * here, so a spawned body finds itself {@code eq} to what its spawner holds.
 	 * @param body the zero-argument thread function
+	 * @param name the thread's name ({@code nil} for none)
 	 * @return the thread handle carrying the thread and its result future
 	 */
-	static LispThread spawnThread(Supplier<LispVal> body) {
+	static LispThread spawnThread(Supplier<LispVal> body, LispVal name) {
 		CompletableFuture<LispVal> result = new CompletableFuture<>();
-		Thread thread = Thread.ofVirtual().start(() -> {
+		LispThread[] self = new LispThread[1];
+		Thread thread = Thread.ofVirtual().unstarted(() -> {
+			CURRENT_THREAD_HANDLE.set(self[0]);
 			try {
 				result.complete(body.get());
 			}
@@ -90,7 +95,9 @@ final class AsyncRuntime {
 				result.completeExceptionally(ex);
 			}
 		});
-		return new LispThread(thread, result);
+		self[0] = new LispThread(thread, result, name);
+		thread.start();
+		return self[0];
 	}
 
 	/**
@@ -108,7 +115,7 @@ final class AsyncRuntime {
 	static LispThread currentThreadHandle() {
 		LispThread handle = CURRENT_THREAD_HANDLE.get();
 		if (handle == null) {
-			handle = new LispThread(Thread.currentThread(), new CompletableFuture<>());
+			handle = new LispThread(Thread.currentThread(), new CompletableFuture<>(), LispNil.INSTANCE);
 			CURRENT_THREAD_HANDLE.set(handle);
 		}
 		return handle;

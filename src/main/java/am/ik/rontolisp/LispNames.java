@@ -4526,6 +4526,15 @@ public final class LispNames {
 	public static final String MACRO_FUNCTION = "MACRO-FUNCTION";
 
 	/**
+	 * The {@code compiler-macro-function} standard function: the compiler macro
+	 * {@code define-compiler-macro} registered for a name, or nil. The interpreter
+	 * answers the real expander; a compiled program has expanded its compiler macros
+	 * away, so it answers {@link #MACRO_EXPANDER_STUB} for a registered name (a prelude
+	 * defun the compile path's macro pass overrides with the program's table).
+	 */
+	public static final String COMPILER_MACRO_FUNCTION = "COMPILER-MACRO-FUNCTION";
+
+	/**
 	 * The {@code %macro-fn} internal: the compile-path body of {@link #MACRO_FUNCTION},
 	 * testing the name against the baked built-in macro table plus the program's own
 	 * macro names ({@code UserMacroExpander} passes them in).
@@ -5929,6 +5938,51 @@ public final class LispNames {
 	 * file, closing the innermost {@link #BEGIN_FILE}.
 	 */
 	public static final String END_FILE = "%END-FILE";
+
+	/**
+	 * Internal marker {@code (%asdf-component "SYSTEM" INDEX)} inserted by
+	 * {@code LoadInliner} before the forms it splices for one COMPONENT of an ASDF system
+	 * (the file or leaf shim at {@code INDEX} of the system's load order). The compilers
+	 * lower the bracket ({@code compiler.SplicedComponentGroups}): once the program has
+	 * defined an {@code asdf:perform} method, the component's forms become a top-level
+	 * group run through {@code asdf:perform}, so an extension's {@code :around} method
+	 * wraps them as it wraps a load on the interpreter; otherwise the bracket is dropped.
+	 * Consumed by the resolver like {@link #BEGIN_FILE} as the backstop. Paired with
+	 * {@link #ASDF_COMPONENT_END}.
+	 */
+	public static final String ASDF_COMPONENT = "%ASDF-COMPONENT";
+
+	/** Closes the innermost {@link #ASDF_COMPONENT} bracket. */
+	public static final String ASDF_COMPONENT_END = "%ASDF-COMPONENT-END";
+
+	/**
+	 * Internal marker {@code (%asdf-system-op "SYSTEM" :before|:after)} inserted by
+	 * {@code LoadInliner} where the interpreter performs a system's own operations:
+	 * {@code :before} after the dependencies and ahead of the components (prepare-op),
+	 * {@code :after} behind them (compile-op, load-op). Lowered or dropped with the
+	 * {@link #ASDF_COMPONENT} brackets.
+	 */
+	public static final String ASDF_SYSTEM_OP = "%ASDF-SYSTEM-OP";
+
+	/**
+	 * Internal marker {@code (%top-group N)} opening a TOP-LEVEL GROUP: the top-level
+	 * forms up to the matching {@link #TOP_GROUP_END} are compiled as top-level forms
+	 * (the static passes see them where they stand) but are not run in sequence -- their
+	 * run-time code is reached only through {@link #RUN_TOP_GROUP}. What a spliced
+	 * component lowers to once {@code asdf:perform} has methods
+	 * ({@code compiler.SplicedComponentGroups}). Kept verbatim by the resolver.
+	 */
+	public static final String TOP_GROUP = "%TOP-GROUP";
+
+	/** Closes the {@link #TOP_GROUP} of the same number. */
+	public static final String TOP_GROUP_END = "%TOP-GROUP-END";
+
+	/**
+	 * {@code (%run-top-group N)}: runs top-level group {@code N}'s forms and answers nil
+	 * -- the body of the thunk the group's {@code asdf:perform} call receives. A special
+	 * form of the compile backends, kept verbatim by the resolver.
+	 */
+	public static final String RUN_TOP_GROUP = "%RUN-TOP-GROUP";
 
 	/**
 	 * Internal marker {@code (%struct-definition (defstruct ...))} left in the form
@@ -7877,12 +7931,54 @@ public final class LispNames {
 	 * can key an {@code eq} hash table -- dbi's per-thread connection cache
 	 * ({@code steal-cache-table}) is the driving consumer through
 	 * {@code bt2:current-thread}. Works for ANY thread (the main thread and served
-	 * requests included, not only {@code make-thread} spawns); the self-handle a spawned
-	 * body sees is its own cached one, not the spawner's handle for it -- only
-	 * {@code threadp}/{@code thread-alive-p} answers are portable on a handle either way.
-	 * Interpreter and JVM only, like the rest of the family.
+	 * requests included, not only {@code make-thread} spawns); in a spawned body it is
+	 * the handle {@code make-thread} returned. Interpreter and JVM only, like the rest of
+	 * the family.
 	 */
 	public static final String CURRENT_THREAD = "CURRENT-THREAD";
+
+	/**
+	 * The internal {@code rontolisp::%thread-name} primitive: the name a thread handle
+	 * was given as {@code make-thread}'s third argument, {@code nil} when none (and for a
+	 * thread {@code make-thread} did not spawn). Behind
+	 * {@code bordeaux-threads:thread-name}; interpreter and JVM only.
+	 */
+	public static final String THREAD_NAME_INTERNAL = "%THREAD-NAME";
+
+	/** The canonical spelling of {@code rontolisp::%thread-name}. */
+	public static final String THREAD_NAME_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + THREAD_NAME_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%condition-variable-new} primitive: a fresh
+	 * condition variable ({@code runtime/RontoConditionVariable}), behind
+	 * {@code bordeaux-threads:make-condition-variable}. Interpreter and JVM only.
+	 */
+	public static final String CONDITION_VARIABLE_NEW_INTERNAL = "%CONDITION-VARIABLE-NEW";
+
+	/** The canonical spelling of {@code rontolisp::%condition-variable-new}. */
+	public static final String CONDITION_VARIABLE_NEW_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
+			+ CONDITION_VARIABLE_NEW_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%condition-wait} primitive:
+	 * {@code (%condition-wait variable mutex nanos)} releases the held mutex (every
+	 * hold), waits for a notify or {@code nanos} nanoseconds ({@code nil}: no limit),
+	 * takes the mutex back and answers {@code t}, or {@code nil} on timeout.
+	 */
+	public static final String CONDITION_WAIT_INTERNAL = "%CONDITION-WAIT";
+
+	/** The canonical spelling of {@code rontolisp::%condition-wait}. */
+	public static final String CONDITION_WAIT_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONDITION_WAIT_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%condition-notify} primitive:
+	 * {@code (%condition-notify variable all)} wakes the oldest waiter, or every waiter
+	 * when {@code all} is non-nil; answers {@code nil}.
+	 */
+	public static final String CONDITION_NOTIFY_INTERNAL = "%CONDITION-NOTIFY";
+
+	/** The canonical spelling of {@code rontolisp::%condition-notify}. */
+	public static final String CONDITION_NOTIFY_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONDITION_NOTIFY_INTERNAL;
 
 	/**
 	 * The {@code rontolisp:current-file} read-time literal: the origin file of the source
@@ -8937,6 +9033,54 @@ public final class LispNames {
 	/** The {@code test-op} operation name in a {@code .asd}'s test-op wiring options. */
 	public static final String TEST_OP = "TEST-OP";
 
+	/**
+	 * {@code asdf:perform} -- the operation protocol's generic function
+	 * {@code (perform operation component)}. {@code load-system} performs prepare-op,
+	 * compile-op and load-op on every component file and on the system itself, so an
+	 * extension's {@code :around}/{@code :before}/{@code :after} method runs around each
+	 * component load (asdf-flv's file-local variables).
+	 */
+	public static final String PERFORM = "PERFORM";
+
+	/** The canonical qualified spelling of {@code asdf:perform}. */
+	public static final String ASDF_PERFORM = ASDF_PKG + ":" + PERFORM;
+
+	/** The {@code asdf:operation} base class of the operation classes. */
+	public static final String OPERATION = "OPERATION";
+
+	/** The {@code asdf:prepare-op} operation class. */
+	public static final String PREPARE_OP = "PREPARE-OP";
+
+	/** The {@code asdf:compile-op} operation class. */
+	public static final String COMPILE_OP = "COMPILE-OP";
+
+	/** The {@code asdf:load-op} operation class. */
+	public static final String LOAD_OP = "LOAD-OP";
+
+	/**
+	 * {@code asdf:operate} -- {@code (operate operation system &rest keys)}: load-op is
+	 * {@code load-system}, test-op is {@code test-system}; any other operation signals.
+	 */
+	public static final String OPERATE = "OPERATE";
+
+	/** {@code asdf:make-operation} -- the one cached instance of an operation class. */
+	public static final String MAKE_OPERATION = "MAKE-OPERATION";
+
+	/** {@code asdf:input-files} -- generic: the files an operation reads. */
+	public static final String INPUT_FILES = "INPUT-FILES";
+
+	/**
+	 * {@code asdf:output-files} -- generic: the files an operation writes (none here).
+	 */
+	public static final String OUTPUT_FILES = "OUTPUT-FILES";
+
+	/**
+	 * {@code asdf:source-file-type} -- generic: a component's file extension. Only the
+	 * {@code .asd} parse decides an extension here; the run-time generic exists so a
+	 * library may define methods on it (lass).
+	 */
+	public static final String SOURCE_FILE_TYPE = "SOURCE-FILE-TYPE";
+
 	/** The canonical qualified spelling of {@code asdf:test-system}. */
 	public static final String ASDF_TEST_SYSTEM = ASDF_PKG + ":" + TEST_SYSTEM;
 
@@ -9450,6 +9594,16 @@ public final class LispNames {
 	public static final String FMAKUNBOUND = "FMAKUNBOUND";
 
 	/**
+	 * The {@code makunbound} built-in function: the symbol's current value binding -- the
+	 * active dynamic binding, else the global value -- loses its value, so {@code boundp}
+	 * answers nil and a read signals {@code unbound-variable}. The compile paths store
+	 * the UNBOUND marker into the variable
+	 * ({@code LispMacroExpander.expandMakunboundForCompile}) and take the name out of the
+	 * eval mirror ({@code .kb/dynamic-special-variables.md}).
+	 */
+	public static final String MAKUNBOUND = "MAKUNBOUND";
+
+	/**
 	 * The internal primitive behind {@code (setf (symbol-function 'f) fn)} /
 	 * {@code (setf (fdefinition 'f) fn)}: installs {@code fn} as the symbol's global
 	 * function binding in the runtime function namespace (the {@code _fenv} the
@@ -9738,9 +9892,10 @@ public final class LispNames {
 	/**
 	 * The internal {@code (%slot-read value instance 'name)} checked read: the value
 	 * unless it is the unbound marker, in which case {@code unbound-slot} is signalled
-	 * with the slot name and the instance. Every {@code slot-value} and every generated
+	 * with the slot name and the instance (through {@code slot-unbound} when the program
+	 * has that generic). Every {@code slot-value} and every generated
 	 * {@code :reader}/{@code :accessor} body goes through it. Not a public function;
-	 * generated by {@code LispMacroExpander.slotUnboundDefuns()}.
+	 * generated by {@code LispMacroExpander.slotUnboundDefuns}.
 	 */
 	public static final String SLOT_READ_INTERNAL = "%SLOT-READ";
 
@@ -9868,6 +10023,19 @@ public final class LispNames {
 	 * only routes a type some method specializes on.
 	 */
 	public static final String PRINT_OBJECT = "PRINT-OBJECT";
+
+	/**
+	 * The {@code slot-unbound} generic: a read of an unbound slot calls it with the
+	 * instance's class, the instance and the slot name; its system method signals
+	 * {@code unbound-slot}.
+	 */
+	public static final String SLOT_UNBOUND = "SLOT-UNBOUND";
+
+	/**
+	 * The {@code slot-missing} generic: a {@code slot-value} read or write of a slot the
+	 * object's class does not declare calls it; its system method signals an error.
+	 */
+	public static final String SLOT_MISSING = "SLOT-MISSING";
 
 	/**
 	 * The {@code initialize-instance} generic: {@code make-instance} runs it on the fresh
@@ -10956,6 +11124,99 @@ public final class LispNames {
 	 * lock {@code make-lock} does.
 	 */
 	public static final String MAKE_RECURSIVE_LOCK = "MAKE-RECURSIVE-LOCK";
+
+	/**
+	 * {@code bt:lock} -- the shim's lock type: a structure over a mutex handle, so a lock
+	 * has a class of its own (a method may specialize on it) rather than the handle's.
+	 * {@code bt:recursive-lock} names the same type.
+	 */
+	public static final String LOCK = "LOCK";
+
+	/** {@code bt:recursive-lock} -- a type naming {@link #LOCK}. */
+	public static final String RECURSIVE_LOCK = "RECURSIVE-LOCK";
+
+	/** {@code bt:lock-p} -- the lock structure's predicate. */
+	public static final String LOCK_P = "LOCK-P";
+
+	/** {@code bt:recursive-lock-p} -- {@link #LOCK_P}, every lock being reentrant. */
+	public static final String RECURSIVE_LOCK_P = "RECURSIVE-LOCK-P";
+
+	/** {@code bt:acquire-recursive-lock} -- {@link #ACQUIRE_LOCK}'s twin. */
+	public static final String ACQUIRE_RECURSIVE_LOCK = "ACQUIRE-RECURSIVE-LOCK";
+
+	/** {@code bt:release-recursive-lock} -- {@link #RELEASE_LOCK}'s twin. */
+	public static final String RELEASE_RECURSIVE_LOCK = "RELEASE-RECURSIVE-LOCK";
+
+	/**
+	 * {@code bt:make-condition-variable} -- over
+	 * {@link #CONDITION_VARIABLE_NEW_INTERNAL}.
+	 */
+	public static final String MAKE_CONDITION_VARIABLE = "MAKE-CONDITION-VARIABLE";
+
+	/**
+	 * {@code bt:condition-wait} -- over {@link #CONDITION_WAIT_INTERNAL}; signals on
+	 * WASM.
+	 */
+	public static final String CONDITION_WAIT = "CONDITION-WAIT";
+
+	/** {@code bt:condition-notify} -- over {@link #CONDITION_NOTIFY_INTERNAL}. */
+	public static final String CONDITION_NOTIFY = "CONDITION-NOTIFY";
+
+	/** {@code bt:condition-broadcast} -- over {@link #CONDITION_NOTIFY_INTERNAL}. */
+	public static final String CONDITION_BROADCAST = "CONDITION-BROADCAST";
+
+	/**
+	 * {@code bt:semaphore} -- the shim's counting semaphore type, a lock and a condition
+	 * variable.
+	 */
+	public static final String SEMAPHORE = "SEMAPHORE";
+
+	/** {@code bt:semaphore-p} -- the semaphore structure's predicate. */
+	public static final String SEMAPHORE_P = "SEMAPHORE-P";
+
+	/** {@code bt:make-semaphore}. */
+	public static final String MAKE_SEMAPHORE = "MAKE-SEMAPHORE";
+
+	/** {@code bt:signal-semaphore}. */
+	public static final String SIGNAL_SEMAPHORE = "SIGNAL-SEMAPHORE";
+
+	/** {@code bt:wait-on-semaphore}. */
+	public static final String WAIT_ON_SEMAPHORE = "WAIT-ON-SEMAPHORE";
+
+	/** {@code bt:thread} -- the type of a thread handle. */
+	public static final String THREAD = "THREAD";
+
+	/** {@code bt:thread-name} -- over {@link #THREAD_NAME_INTERNAL}. */
+	public static final String THREAD_NAME = "THREAD-NAME";
+
+	/** {@code bt:thread-yield}. */
+	public static final String THREAD_YIELD = "THREAD-YIELD";
+
+	/**
+	 * {@code bt:all-threads} -- the main thread and the live threads the shim spawned.
+	 */
+	public static final String ALL_THREADS = "ALL-THREADS";
+
+	/**
+	 * {@code bt:interrupt-thread} -- signals: no backend can run code inside another
+	 * thread.
+	 */
+	public static final String INTERRUPT_THREAD = "INTERRUPT-THREAD";
+
+	/** {@code bt:start-multiprocessing} -- a no-op. */
+	public static final String START_MULTIPROCESSING = "START-MULTIPROCESSING";
+
+	/** {@code bt:with-timeout} -- signals: no backend can interrupt a running body. */
+	public static final String WITH_TIMEOUT = "WITH-TIMEOUT";
+
+	/** {@code bt:timeout} -- the condition {@link #WITH_TIMEOUT} names. */
+	public static final String TIMEOUT = "TIMEOUT";
+
+	/**
+	 * {@code bt:*standard-io-bindings*} -- an {@code :initial-bindings} alist of the
+	 * standard I/O variables.
+	 */
+	public static final String STANDARD_IO_BINDINGS = "*STANDARD-IO-BINDINGS*";
 
 	/**
 	 * The {@code bt2} shim package name: the modern (v2) bordeaux-threads API namespace,

@@ -170,8 +170,9 @@ library still has to stay inside the supported subset below.
   expression holds, or `(:version NAME "1.2.3")`, resolving to the plain
   dependency (the version constraint is not checked — the `:version` option is
   ignored metadata here, so there is nothing to check against). A top-level
-  `defmethod` is tolerated and ignored — there is no `operate` machinery for
-  one to run on — except
+  `defmethod` is tolerated and ignored — the `.asd` is data and never runs
+  (a library's `asdf:perform` method in its own sources does run, see below) —
+  except
   `(defmethod source-file-type ((c CLASS) (s module)) "ext")`, which sets that
   class's file extension wherever in the file it sits. A top-level `defclass`
   declares a **component class**: every superclass must be one of ASDF's
@@ -220,12 +221,12 @@ library still has to stay inside the supported subset below.
   a component may carry `:if-feature expr`, which drops the component's files
   when the feature expression does not hold (how libraries gate CLOS-only
   files behind `(:or :sbcl ...)`) while keeping its place in the dependency
-  order. The test-op wiring options are the one op with machinery behind
-  them: `:in-order-to ((test-op (test-op ...)))` and
-  `:perform (test-op (o c) ...)` are recorded and driven by
-  [`asdf:test-system`](../reference/functions/asdf-test-system.md) (any other
-  operation, a qualified `test-op :after` method, or a `#.` in the body stays
-  tolerated and ignored — there is still no general `operate` machinery). A
+  order. The test-op wiring options are recorded:
+  `:in-order-to ((test-op (test-op ...)))` and
+  `:perform (test-op (o c) ...)` are driven by
+  [`asdf:test-system`](../reference/functions/asdf-test-system.md) (a
+  `:perform` for any other operation, a qualified `test-op :after` method, or a
+  `#.` in the body stays tolerated and ignored). A
   `:version` value may be any literal form including ASDF's
   `(:read-file-form ...)` indirection (never inspected — only a plain string is
   recorded). Anything else (`:around-compile`, ...) is an error naming the
@@ -275,12 +276,26 @@ library still has to stay inside the supported subset below.
   lists every registered name, and `asdf:*user-cache*` is external and `nil`
   (there is no fasl cache). This is the component model rove's system-driven
   test runner reads.
+- **So is the operation protocol.** Every action of a load is an
+  [`asdf:perform`](../reference/functions/asdf-perform.md) call on an
+  operation instance (`asdf:prepare-op`, `asdf:compile-op`, `asdf:load-op`,
+  `asdf:test-op`, all `asdf:operation`s) and a component: `prepare-op` on the
+  system, `prepare-op`/`compile-op`/`load-op` on each component file in load
+  order, then `compile-op`/`load-op` on the system. A library's method on
+  `perform` therefore runs around every component load on every backend —
+  asdf-flv's `:around` method gives fiveam its file-local `*suite*`.
+  [`asdf:operate`](../reference/functions/asdf-operate.md) performs `load-op`
+  (`load-system`) or `test-op` (`test-system`); `asdf:make-operation`,
+  `asdf:input-files`, `asdf:output-files` and `asdf:source-file-type` exist
+  for the methods libraries define. `asdf/interface` and real ASDF's internal
+  packages (`asdf/component`, `asdf/action`, ...) name these same symbols.
 - **`asdf:test-system` runs the recorded test-op wiring.**
   [`asdf:test-system`](../reference/functions/asdf-test-system.md) loads the
-  system, follows its `:in-order-to` test-op chain, and runs each recorded
-  `:perform (test-op (o c) ...)` body with the component bound to the system
-  metaobject. On the compile paths a literal top-level call splices the test
-  systems too.
+  system, follows its `:in-order-to` test-op chain, and performs `test-op` on
+  each system, whose default method runs the recorded
+  `:perform (test-op (o c) ...)` body with the operation bound to the
+  `asdf:test-op` instance and the component to the system metaobject. On the
+  compile paths a literal top-level call splices the test systems too.
 - **Compiling tree-shakes the system.** A function, variable or constant a
   loaded system defines but your program never reaches — following names
   through the source, including quoted symbols and whole string literals — is
@@ -327,7 +342,7 @@ real library) resolve the name to a bundled shim instead of downloading it.
 | `flexi-streams` | the `flexi-stream` WRAPPER class — a Gray stream that lends UTF-8 characters to the octet stream it wraps (`make-flexi-stream`, `flexi-stream-stream`, `:external-format`, `:bound`) — plus the in-memory octet pair: `make-in-memory-input-stream` over the `vector-stream` class, and `make-in-memory-output-stream` / `get-output-stream-sequence` (which resets the stream, as upstream does). UTF-8 is the only external format; `close` on a wrapper does not close the stream it wraps. See [Gray Streams](gray-streams.md) |
 | `babel` | the UTF-8 codec in both of babel's layers. The everyday one: `babel:string-to-octets`/`octets-to-string` (with `:start`/`:end`/`:errorp`), `babel:string-size-in-octets` (`:max` included), `babel-encodings:*default-character-encoding*` (`:utf-8`) and `babel:list-character-encodings`. The MAPPING layer underneath, for a library that decodes incrementally and has no whole octet vector to convert: `babel-encodings:get-character-encoding`, `enc-max-units-per-char`, `lookup-mapping` over `babel:*string-vector-mappings*`, and the `code-point-counter` / `octet-counter` / `decoder` / `encoder` it answers, plus the `babel:unicode-char` type. Malformed input signals babel's own conditions (`babel:character-decoding-error` and the leaves `end-of-input-in-character`, `character-out-of-range`, `invalid-utf8-starter-byte`, `invalid-utf8-continuation-byte`, `overlong-utf8-sequence`; `babel:character-encoding-error` on the way out), and `babel-encodings:*suppress-character-coding-errors*` — which every `:errorp` defaults from — replaces the signal with the substitution character. An encoding and a mapping are both just the encoding NAME here: real babel generates 40+ code pages from 20,000 lines of tables, while rontolisp has one character model (a character IS a Unicode code point, the wire form is UTF-8), so the shim implements that codec, treats the `:latin-1`/`:us-ascii` aliases as the code-point identity they are for the octets they can represent, and **signals on any other `:encoding`** rather than handing back mis-coded bytes |
 | `float-features` | `single-float-bits`/`bits-single-float` and the double variants over the IEEE 754 bit primitives (interpreter + JVM; the WASM numeric model cannot carry 64-bit bit patterns) |
-| `bordeaux-threads` (nicknames `bt` and `bt2`) | both API namespaces of the one shim. The locking subset — `make-lock`, `acquire-lock`, `release-lock`, `with-lock-held`, `*supports-threads-p*` — rides [`rontolisp:make-mutex`](../reference/functions/rontolisp-make-mutex.md) and friends; thread creation — `bt2:make-thread` (with `:initial-bindings`), `join-thread`, `threadp`, `thread-alive-p`, `destroy-thread` — rides [`rontolisp:make-thread`](../reference/functions/rontolisp-make-thread.md), a real virtual thread on the interpreter and the JVM. On the single-threaded WASM backends the thread entry points signal at call time and `bt:*supports-threads-p*` is `nil`. `make-lock` returns a reentrant lock (upstream's is not) — so `make-recursive-lock` and `with-recursive-lock-held` are the same object and the same expansion — `acquire-lock`'s `:wait-p` is ignored — the acquisition always blocks — and an `:initial-bindings` value form must be a quote form or self-evaluating (anything else would need the new thread's dynamic environment and signals) |
+| `bordeaux-threads` (nicknames `bt` and `bt2`) | the v1 API of bordeaux-threads 0.9, with the `bt2` names that mean the same. Locks — `make-lock`, `make-recursive-lock`, `acquire-lock`, `release-lock`, `with-lock-held`, their recursive twins, `lock-p` — ride [`rontolisp:make-mutex`](../reference/functions/rontolisp-make-mutex.md) and friends; a lock is a structure of type `bt:lock`, so a method can specialize on it. Condition variables (`make-condition-variable`, `condition-wait` with `:timeout`, `condition-notify`, `condition-broadcast`) and semaphores (`make-semaphore`, `signal-semaphore`, `wait-on-semaphore` with `:timeout`, `semaphore-p`) are real. Threads — `make-thread` (with `:name` and `:initial-bindings`), `join-thread`, `threadp`, `thread-alive-p`, `destroy-thread`, `current-thread`, `thread-name`, `all-threads`, `thread-yield` — ride [`rontolisp:make-thread`](../reference/functions/rontolisp-make-thread.md), a real virtual thread on the interpreter and the JVM. On the single-threaded WASM backends the thread entry points and `condition-wait` signal at call time, `condition-notify` wakes nobody, and `bt:*supports-threads-p*` is `nil`. Differences from upstream: `make-lock` returns a reentrant lock (so `make-recursive-lock` makes the same type); `acquire-lock`'s `:wait-p` is ignored — the acquisition always blocks; an `:initial-bindings` value form must be a quote form or self-evaluating (anything else would need the new thread's dynamic environment and signals); `all-threads` lists the main thread and the live threads `make-thread` spawned; `interrupt-thread` and `with-timeout` signal on every backend, as upstream does on an implementation without them |
 | `uiop` | ASDF's portability layer, registered as 15 sub-packages and 429 exports. See **[The uiop Package](../reference/uiop.md)** for what is implemented; every other export resolves and signals `uiop:not-implemented-error` naming the operation, so a library that merely names one still loads |
 | `swank` | `swank:create-server` and `swank:stop-server` only. On the interpreter they start and stop the [SWANK server](../getting-started/swank.md#from-a-running-program) `rontolisp --swank` runs, on the program's own image; in a compiled program `create-server` signals and `stop-server` returns `nil`. Real swank is SLIME's server half, whose own `.asd` is a program the defsystem-as-data front-end cannot read -- without the shim, `(ql:quickload "clack")` fetches the SLIME tarball and dies on it |
 | `mgl-pax-bootstrap` | the `mgl-pax` package (nickname `pax`) as a stub, so a library documented with [mgl-pax](https://github.com/melisgl/mgl-pax) can load (trivial-utf-8, a uuid dependency, hard-depends on it; the real system's `.asd` declares `:around-compile`, a compile hook outside the defsystem-as-data subset). `pax:define-package` acts as `defpackage`, `pax:defsection` defines its section name as a `nil` variable **and exports the section's `(symbol locative)` entries** — mgl-pax's documented default, and how such libraries export their public API — and the PAX-World registration helpers are `nil` no-ops. No documentation is generated |

@@ -1,6 +1,9 @@
 package am.ik.rontolisp.codegen.wasm;
 
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -9,6 +12,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.compiler.ToplevelStatements;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -75,6 +79,10 @@ final class WasmToplevelEmit {
 	static void emit(List<LispVal> exprs, WasmLispCompiler.Ctx start, @Nullable Set<String> boxedVars,
 			boolean guarded) {
 		Chunk chunk = null;
+		// The open top-level GROUPS (compiler/SplicedComponentGroups), innermost last: a
+		// chunk opened inside one belongs to it -- reached through %run-top-group, never
+		// called from here -- and no chunk spans a group boundary.
+		Deque<Integer> openGroups = new ArrayDeque<>();
 		// A named local allocated in a chunk cannot be read from the next one: every
 		// chunk compiles under a fresh context, so a cut between the allocating form
 		// and a form that reads the name would outline the reader away from its
@@ -86,8 +94,30 @@ final class WasmToplevelEmit {
 		// it no longer disables them for the rest of the program.
 		for (int i = 0; i < exprs.size(); i++) {
 			LispVal expr = exprs.get(i);
+			Integer groupOpened = SplicedComponentGroups.groupOpened(expr);
+			Integer groupClosed = groupOpened == null ? SplicedComponentGroups.groupClosed(expr) : null;
+			if (groupOpened != null || groupClosed != null) {
+				if (chunk != null) {
+					// The forms on either side run from different callers, so the cut is
+					// not optional; a local still read across it would be outlined away.
+					if (readsChunkLocal(exprs, i, chunk.ctx)) {
+						throw new UnsupportedOperationException(
+								"a top-level local is read across a spliced component's boundary");
+					}
+					closeChunk(chunk, start, guarded);
+					chunk = null;
+				}
+				if (groupOpened != null) {
+					openGroups.addLast(groupOpened);
+					start.topGroupChunks.put(groupOpened, new ArrayList<>());
+				}
+				else {
+					openGroups.pollLast();
+				}
+				continue;
+			}
 			if (chunk == null) {
-				chunk = openChunk(start, boxedVars);
+				chunk = openChunk(start, boxedVars, openGroups.peekLast());
 			}
 			// Statement position: the chunk drops whatever the form returns, so a definer
 			// that returns nothing but the name it just bound is offered the chance to
@@ -182,8 +212,14 @@ final class WasmToplevelEmit {
 		}
 	}
 
+	/**
+	 * One chunk function under construction.
+	 *
+	 * @param group the top-level group it belongs to, or {@code null} for a chunk the
+	 * enclosing body calls
+	 */
 	private record Chunk(WasmLispCompiler.Ctx ctx, WasmWriter writer, ByteArrayOutputStream body, int lambdaIdx,
-			int funcId, int funcIndex) {
+			int funcId, int funcIndex, @Nullable Integer group) {
 	}
 
 	/**
@@ -191,7 +227,8 @@ final class WasmToplevelEmit {
 	 * its body compiles into. The slot is reserved BEFORE the body is compiled, like
 	 * {@code compileResume}: lambdas discovered while compiling the body append after it.
 	 */
-	private static Chunk openChunk(WasmLispCompiler.Ctx start, @Nullable Set<String> boxedVars) {
+	private static Chunk openChunk(WasmLispCompiler.Ctx start, @Nullable Set<String> boxedVars,
+			@Nullable Integer group) {
 		int funcId = start.nextFuncId[0]++;
 		int funcIndex = start.userFuncBase + start.numDefuns + start.lambdaDecls.size();
 		int lambdaIdx = start.lambdaDecls.size();
@@ -213,12 +250,14 @@ final class WasmToplevelEmit {
 		// --report-locations: a top-level form's condition is noted here, with the unit
 		// of whichever file the form came from.
 		WasmUncaughtLocations.open(ctx, WasmUncaughtLocations.topLevelSpec(ctx.uncaughtLocations));
-		return new Chunk(ctx, writer, body, lambdaIdx, funcId, funcIndex);
+		return new Chunk(ctx, writer, body, lambdaIdx, funcId, funcIndex, group);
 	}
 
 	/**
 	 * Finishes the chunk's body and emits {@code ref.null eq; call chunk; drop} into the
-	 * enclosing body, under the resume's {@code $rt == 0} guard when {@code guarded}.
+	 * enclosing body, under the resume's {@code $rt == 0} guard when {@code guarded} --
+	 * or, for a chunk of a top-level group, records it for the group's
+	 * {@code %run-top-group} instead.
 	 */
 	private static void closeChunk(Chunk chunk, WasmLispCompiler.Ctx start, boolean guarded) {
 		chunk.writer.write(Instruction.REF_NULL);
@@ -229,6 +268,10 @@ final class WasmToplevelEmit {
 		start.lambdaDecls.set(chunk.lambdaIdx,
 				body(chunk.funcId, chunk.funcIndex, WasmLispCompiler.buildLocalsAndPatch(chunk.ctx, 1, chunk.body)));
 
+		if (chunk.group != null) {
+			start.topGroupChunks.computeIfAbsent(chunk.group, g -> new ArrayList<>()).add(chunk.funcIndex);
+			return;
+		}
 		WasmWriter s = start.writer;
 		if (guarded) {
 			s.write(Instruction.GET_LOCAL);

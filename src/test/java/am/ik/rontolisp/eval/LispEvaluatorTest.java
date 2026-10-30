@@ -11228,6 +11228,25 @@ class LispEvaluatorTest {
 		assertThat(loadResult).isEqualTo(LispTrue.INSTANCE);
 		// Definitions from the loaded file are reusable afterwards.
 		assertThat(evaluator.eval(LispReader.readFromString("(square base)"))).isEqualTo(new LispInteger(100));
+		// A load called from a function body evaluates the file's forms as TOP-LEVEL
+		// forms all the same, so a macro they call expands in the file's package rather
+		// than in the macro's own -- every ASDF component is loaded from inside
+		// asdf:perform's load-op method this way (lisp-namespace's define-namespace).
+		Path user = tempDir.resolve("user.lisp");
+		Files.writeString(user, "(defpackage :ld-user (:use :cl))\n(in-package :ld-user)\n(ld-gen:defacc foo)\n");
+		LispVal last = null;
+		for (LispVal form : LispReader.readAllFromString("""
+				(defpackage :ld-gen (:use :cl) (:export #:defacc))
+				(in-package :ld-gen)
+				(defmacro defacc (name) (list 'defun (intern (format nil "GET-~a" name)) () 1))
+				(in-package :cl-user)
+				(defun load-user () (load "%s"))
+				(load-user)
+				(fboundp 'ld-user::get-foo)
+				""".formatted(user.toString().replace("\\", "\\\\")))) {
+			last = evaluator.eval(form);
+		}
+		assertThat(last).isEqualTo(LispTrue.INSTANCE);
 	}
 
 	@Test

@@ -205,11 +205,14 @@ categories:
       - { slug: both-case-p, name: "both-case-p" }
       - { slug: special-operator-p, name: "special-operator-p" }
       - { slug: macro-function, name: "macro-function" }
+      - { slug: compiler-macro-function, name: "compiler-macro-function" }
       - { slug: compiled-function-p, name: "compiled-function-p" }
       - { slug: function-lambda-expression, name: "function-lambda-expression" }
       - { slug: list-all-packages, name: "list-all-packages" }
       - { slug: find-class, name: "find-class" }
       - { slug: allocate-instance, name: "allocate-instance" }
+      - { slug: slot-unbound, name: "slot-unbound" }
+      - { slug: slot-missing, name: "slot-missing" }
       - { slug: class-name, name: "class-name" }
       - { slug: copy-structure, name: "copy-structure" }
       - { slug: get, name: "get" }
@@ -449,6 +452,7 @@ categories:
       - { slug: boundp, name: "boundp" }
       - { slug: fboundp, name: "fboundp" }
       - { slug: fmakunbound, name: "fmakunbound" }
+      - { slug: makunbound, name: "makunbound" }
       - { slug: macroexpand-1, name: "macroexpand-1" }
       - { slug: macroexpand, name: "macroexpand" }
       - { slug: fdefinition, name: "fdefinition" }
@@ -1059,6 +1063,8 @@ categories:
       - { slug: asdf-defsystem, name: "asdf:defsystem" }
       - { slug: asdf-load-system, name: "asdf:load-system" }
       - { slug: asdf-test-system, name: "asdf:test-system" }
+      - { slug: asdf-operate, name: "asdf:operate" }
+      - { slug: asdf-perform, name: "asdf:perform" }
       - { slug: asdf-find-system, name: "asdf:find-system" }
       - { slug: asdf-registered-systems, name: "asdf:registered-systems" }
       - { slug: asdf-system-relative-pathname, name: "asdf:system-relative-pathname" }

@@ -127,11 +127,14 @@
 | `both-case-p` | `(both-case-p #\a)` | 大小両形を持つ英字なら真(`lower-case-p` または `upper-case-p`) |
 | `special-operator-p` | `(special-operator-p 'if)` | ANSI の 25 個の特殊オペレータで `t`、それ以外は `nil` |
 | `macro-function` | `(macro-function 'when)` | マクロ展開器(インタープリタでは本物、コンパイル済み出力ではシグナルするスタブ)。関数と特殊オペレータには `nil` |
+| `compiler-macro-function` | `(compiler-macro-function 'square)` | `define-compiler-macro` の展開器(インタープリタでは本物、コンパイル済み出力ではシグナルするスタブ)。なければ `nil` |
 | `compiled-function-p` | `(compiled-function-p #'car)` | ライト版スタブ: 常に `nil` |
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | ライト版スタブ: `(values nil t nil)`(ソース未記録) |
 | `list-all-packages` | `(list-all-packages)` | 登録済みの全パッケージを `find-package` が返すキーワードのリストで返します(コンパイラはコンパイル時に焼き込んだテーブルから答えます) |
 | `find-class` | `(find-class 'c)` | メモ化された(`eq` 安定な)クラスメタオブジェクト。`errorp` が `nil` でなければシグナル |
 | `allocate-instance` | `(allocate-instance (find-class 'c))` | すべてのスロットが未束縛の新しいインスタンス。initform も `initialize-instance` も実行しない |
+| `slot-unbound` | `(defmethod slot-unbound (class (o c) slot) ...)` | 未束縛スロットの読み出しが呼ぶ総称関数。メソッドの値が読み出しの値になり、システムメソッドは `unbound-slot` をシグナルする |
+| `slot-missing` | `(defmethod slot-missing (class (o c) name op &optional v) ...)` | 宣言されていないスロットへの `slot-value` の読み出し・`setf` が呼ぶ総称関数。システムメソッドはエラーをシグナルする |
 | `class-name` | `(class-name (class-of 42))` | クラスメタオブジェクトの名前シンボル |
 | `copy-structure` | `(copy-structure s)` | `s` の型を持つ新しいインスタンスをスロットの値を共有したまま生成する(浅いコピー)。`defstruct` が特定の型に対して生成する `copy-<name>` コピア関数の、型を問わない汎用版 |
 | `get` | `(get 'sym 'prop)`、`(setf (get 'sym 'prop) v)` | シンボル属性リスト(プログラム全体で 1 つの名前キーのストア) |
@@ -175,6 +178,7 @@
 | `boundp` | `(boundp '*level*)` | シンボルが束縛されたグローバル変数を指すとき `t`(t/nil/キーワードは自己束縛) |
 | `fboundp` | `(fboundp 'car)` | 関数・マクロ・特殊形式に対して `t`(コンパイラ: 計算された引数は関数のみ判定) |
 | `fmakunbound` | `(fmakunbound 'greet)` | `greet` -- 名前を再び「呼び出し時に未定義」にします(コンパイラ: 遅延束縛の参照のみ) |
+| `makunbound` | `(makunbound '*level*)` | `*level*` -- 現在の束縛が値を失います: `boundp` は `nil`、読み出しは `unbound-variable` を通知 |
 | `macroexpand-1` | `(macroexpand-1 '(unless c x))` | `(if c nil x)` -- トップレベルのフォームを 1 段階だけ展開します(ユーザーマクロと組み込みマクロ) |
 | `macroexpand` | `(macroexpand '(outer 41))` | 完全な展開結果: `macroexpand-1` を変化しなくなるまで繰り返します |
 | `null` | `(null nil)` | `t` |

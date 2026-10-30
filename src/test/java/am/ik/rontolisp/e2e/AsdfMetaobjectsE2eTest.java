@@ -23,6 +23,17 @@ import java.util.List;
  * file is READ (the {@code platform} defun) without ever becoming a sideway dependency,
  * and {@code asdf:system-relative-pathname} has a runtime form on the compile paths --
  * the relative argument is a variable there, so the compile-time fold cannot answer it.
+ *
+ * <p>
+ * And the operation protocol ({@code .kb/asdf.md}, "The operation protocol"): the
+ * recorded test-op body receives a real {@code asdf:test-op}; {@code asdf/interface} and
+ * the sub-packages name asdf's own symbols; {@code operate}, {@code make-operation},
+ * {@code input-files}/{@code output-files} answer; and the {@code asdf:perform} methods
+ * {@code hooks.lisp} defines run around every later component load -- asdf-flv's
+ * {@code :around} keeping an assignment in the file that made it, a nested
+ * {@code load-system} from inside a component included -- in the same order on every
+ * backend, the compile paths running each spliced component as the thunk its load-op is
+ * performed with.
  */
 class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 
@@ -66,13 +77,29 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			(print :nested-load-ok)
 			(asdf:test-system "meta-demo")
 			(print (one-fn))
+			(print (eq 'asdf/interface::perform 'asdf:perform))
+			(print (eq 'asdf/component:component-name 'asdf:component-name))
+			(print (eq (asdf:make-operation 'asdf:load-op) (asdf:make-operation 'asdf:load-op)))
+			(print (asdf:output-files 'asdf:compile-op (asdf:find-system "meta-demo")))
+			(print (length (asdf:input-files 'asdf:load-op
+			                                 (car (asdf:component-children (asdf:find-system "meta-demo"))))))
+			(print (typep (asdf:operate 'asdf:load-op "meta-demo") 'asdf:load-op))
+			(print (handler-case (asdf:operate 'asdf:compile-op "meta-demo") (error () :refused)))
+			(asdf:load-system "meta-demo/perform")
+			(print (list meta-hooks::*seen-in-a* meta-hooks::*seen-in-b* meta-hooks::*seen-in-c*
+			             meta-hooks:*current*))
+			(print (reverse meta-hooks:*log*))
 			""";
 
 	private static final List<String> EXPECTED = List.of("T", "T", "NIL", "T", "\"meta-demo\"",
 			"(\"src/one\" \"src/m/two\")", "NIL", "T", "NIL", "T", "T", "(\"meta-demo\")", "\"1.2.3\"", "NIL", ":UNIX",
 			":RELATIVE-OK", ":SYSTEM", ":FILE", "NIL", "NIL",
-			"(\"meta-demo\" \"meta-demo/tests\" \"trivial-features\")", ":NESTED-LOAD-OK",
-			"\"testing meta-demo/tests\"", "3", "1");
+			"(\"meta-demo\" \"meta-demo/tests\" \"meta-demo/hooks\" \"meta-demo/perform\" \"meta-demo/nested\""
+					+ " \"trivial-features\")",
+			":NESTED-LOAD-OK", "\"testing meta-demo/tests\"", "T", "3", "1", "T", "T", "T", "NIL", "1", "T", ":REFUSED",
+			"(:A :GLOBAL :B :GLOBAL)",
+			"((:SYSTEM \"meta-demo/hooks\") (:COMPILE \"a\") (:LOAD \"a\") (:COMPILE \"b\") (:LOAD \"b\")"
+					+ " (:COMPILE \"c\") (:LOAD \"c\") (:SYSTEM \"meta-demo/nested\") (:SYSTEM \"meta-demo/perform\"))");
 
 	@Override
 	protected String systemDir() {

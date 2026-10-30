@@ -455,6 +455,22 @@ final class WasmSymbolApiCompiler {
 	}
 
 	/**
+	 * {@code (makunbound name)}: the marker stored into a read-checked global, the name
+	 * taken out of the eval mirror
+	 * ({@link LispMacroExpander#expandMakunboundForCompile}).
+	 */
+	static void compileMakunbound(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<String> targets = new java.util.ArrayList<>();
+		for (String name : ctx.unboundGlobals) {
+			if (ctx.globalIndices.containsKey(name)) {
+				targets.add(name);
+			}
+		}
+		WasmExprCompiler.compileExpr(
+				LispMacroExpander.expandMakunboundForCompile(cons, targets, ctx.specialVars, ctx.usesEval), ctx);
+	}
+
+	/**
 	 * {@code (set name value)} -- store {@code value} into the global variable
 	 * {@code name} names, creating the binding when unbound: the computed-name
 	 * counterpart of {@code setq}. Lowered by

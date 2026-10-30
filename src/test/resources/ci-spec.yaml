@@ -16328,10 +16328,22 @@ cases:
       (print (bt2:threadp 42))
       (print (handler-case (bt2:thread-alive-p 42) (error (e) :not-a-thread)))
       (print (let ((ci-bt2-l (bt2:make-lock))) (bt2:with-lock-held (ci-bt2-l) :held)))
+      ; A lock is a structure of its own, not the mutex handle; a semaphore
+      ; counts, and none of these waits blocks.
+      (print (let ((ci-bt-s (bt:make-semaphore :count 1)))
+               (list (bt:lock-p (bt2:make-lock))
+                     (bt:recursive-lock-p (bt:make-recursive-lock))
+                     (integerp (bt:make-lock))
+                     (bt:wait-on-semaphore ci-bt-s)
+                     (progn (bt:signal-semaphore ci-bt-s :count 2)
+                            (bt:wait-on-semaphore ci-bt-s :timeout 1))
+                     (bt:condition-notify (bt:make-condition-variable))
+                     (bt:thread-yield))))
     expected: |
       NIL
       :NOT-A-THREAD
       :HELD
+      (T T NIL T T NIL NIL)
   - name: equalp-arrays-elementwise
     source: |
       (print (equalp #(1 "A" (2 3)) #(1 "a" (2 3.0))))
@@ -22630,6 +22642,48 @@ cases:
       (T 4)
       (NIL 1)
       (:UNBOUND *PSV-A*)
+
+  # makunbound takes the CURRENT binding's value (the global's back after the binding),
+  # boundp and every read path agree, a store gives it back; compiler-macro-function
+  # answers non-nil exactly for a define-compiler-macro name. Matches SBCL 2.2.9.
+  - name: makunbound-and-compiler-macro-function
+    source: |
+      (defvar *mku-a* 1)
+      (defvar *mku-b*)
+      (defparameter *mku-names* (list '*mku-a* '*mku-b*))
+      (defun mku-try (thunk)
+        (handler-case (funcall thunk)
+          (unbound-variable (c) (list :unbound (cell-error-name c)))))
+      (defun mku-a () *mku-a*)
+      (defun mku-unbind (name) (makunbound name))
+      (print (list (makunbound '*mku-a*) (boundp '*mku-a*) (mku-try #'mku-a)))
+      (setq *mku-a* 3 *mku-b* 2)
+      (print (list (boundp '*mku-a*) (mku-a)))
+      (print (let ((*mku-a* 4))
+               (mku-unbind '*mku-a*)
+               (list (boundp '*mku-a*) (mku-try #'mku-a))))
+      (print (list (mapcar #'boundp *mku-names*) (mku-a)))
+      (mapc #'makunbound *mku-names*)
+      (print (list (mapcar #'boundp *mku-names*) (eval '(boundp '*mku-a*))
+                   (mku-try (lambda () (symbol-value '*mku-b*))) (mku-try (lambda () (eval '*mku-a*)))))
+      (eval '(setq *mku-a* 7))
+      (let ((*mku-b* 5))
+        (print (list (mapcar #'boundp *mku-names*) (mku-a) *mku-b*)))
+      (print (mapcar #'boundp *mku-names*))
+      (define-compiler-macro mku-square (&whole form x)
+        (if (numberp x) (* x x) form))
+      (defun mku-square (x) (* x x))
+      (print (list (if (compiler-macro-function 'mku-square) t nil) (compiler-macro-function 'mku-a)
+                   (if (funcall #'compiler-macro-function 'mku-square) t nil) (mku-square 5)))
+    expected: |
+      (*MKU-A* NIL (:UNBOUND *MKU-A*))
+      (T 3)
+      (NIL (:UNBOUND *MKU-A*))
+      ((T T) 3)
+      ((NIL NIL) NIL (:UNBOUND *MKU-B*) (:UNBOUND *MKU-A*))
+      ((T T) 7 5)
+      (T NIL)
+      (T NIL T 25)
 
   # The tokenizer package (tokenizers.lisp, .kb/tokenizers.md): the five byte-level
   # pre-tokenizer shapes, the ranked merge loop, the special-token scan, Llama 3's
@@ -29077,6 +29131,21 @@ cases:
       (print (handler-case (error 'di-cond 'what 7) (di-cond (c) (di-what c))))
       (defun di-f (&key ((rx v) 0)) v)
       (print (list (di-f 'rx 3) (di-f) (handler-case (di-f :rx 1) (program-error () :refused))))
+      (defclass di-multi () ((x :initarg :x :initarg :ex :reader di-mx)
+                             (y :initarg :y :initarg :why :initform 0 :reader di-my))
+        (:default-initargs :ex 5))
+      (defclass di-multi2 (di-multi) ((y :initarg :yy)))
+      (print (list (di-mx (make-instance 'di-multi :x 1)) (di-mx (make-instance 'di-multi :ex 2 :x 1))
+                   (di-mx (make-instance 'di-multi)) (di-my (make-instance 'di-multi :why 3 :y 4))
+                   (di-my (make-instance 'di-multi))))
+      (print (list (di-my (make-instance 'di-multi2 :yy 1)) (di-my (make-instance 'di-multi2 :why 2))
+                   (di-my (reinitialize-instance (make-instance 'di-multi) :why 7 :y 8))
+                   (di-my (change-class (make-instance 'di-multi) 'di-multi2 :yy 9 :y 1))
+                   (let ((cls 'di-multi2)) (di-my (change-class (make-instance 'di-multi) cls :why 4 :yy 5)))))
+      (print (mapcar (lambda (s) (%obj-ref s 1)) (%obj-ref (find-class 'di-multi2) 3)))
+      (define-condition di-cond2 (error) ((what :initarg what :initarg :what :reader di-what2)))
+      (print (list (handler-case (error 'di-cond2 :what 8) (di-cond2 (c) (di-what2 c)))
+                   (let ((ty 'di-cond2)) (handler-case (error ty 'what 9 :what 1) (di-cond2 (c) (di-what2 c))))))
     expected: |
       ("localhost" 8080)
       9090
@@ -29087,6 +29156,10 @@ cases:
       4
       7
       (3 0 :REFUSED)
+      (1 2 5 3 0)
+      (1 2 7 9 4)
+      ((:X :EX) (:YY :Y :WHY))
+      (8 9)
   - name: with-slots-write-through
     source: |
       (defclass ws-pt () ((x :initarg :x) (y :initarg :y)))
@@ -31545,3 +31618,29 @@ standalone:
     stdout: |
       (T T T)
       (NIL T)
+  # A slot-unbound or slot-missing method routes EVERY unbound read and missing-slot
+  # access of the program through the generic, so it runs alone, not in the corpus.
+  - name: clos-slot-unbound-and-slot-missing-methods
+    source: |
+      ;; zpng fills a slot lazily from slot-unbound, specialized on (eql 'slot) in
+      ;; its own package; a read the method does not cover reaches the system method.
+      (defpackage :susm (:use :cl))
+      (in-package :susm)
+      (defclass png () ((data :reader data :writer (setf %data)) (other :accessor other)))
+      (defmethod slot-unbound (class (p png) (slot (eql 'data)))
+        (setf (%data p) (list :lazy)))
+      (print (list (data (make-instance 'png)) (slot-value (make-instance 'png) 'data)
+                   (with-slots (data) (make-instance 'png) data)
+                   (let ((name 'data)) (slot-value (make-instance 'png) name))))
+      (print (handler-case (other (make-instance 'png))
+               (unbound-slot (c) (list :unbound (cell-error-name c)))))
+      (defmethod slot-missing (class (p png) name op &optional value)
+        (list :missing name op value))
+      (print (list (slot-value (make-instance 'png) 'nope)
+                   (setf (slot-value (make-instance 'png) 'nope) 3)))
+      (print (handler-case (slot-value 5 'nope) (error (e) (princ-to-string e))))
+    stdout: |
+      ((:LAZY) (:LAZY) (:LAZY) (:LAZY))
+      (:UNBOUND OTHER)
+      ((:MISSING NOPE SLOT-VALUE NIL) 3)
+      "The slot NOPE is missing"

@@ -59,6 +59,7 @@ import am.ik.rontolisp.compiler.ReadBeforeStore;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.compiler.SequenceIoNarrowing;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.compiler.JvmExportDirective;
 import am.ik.rontolisp.compiler.WasmImportDirective;
@@ -174,6 +175,29 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * needs the decoder ({@code RontoInflate}) beside it.
 	 */
 	private boolean needsInflateRuntime;
+
+	/**
+	 * The condition variables behind the {@code bordeaux-threads} shim
+	 * ({@code rontolisp::%condition-variable-new}, {@code %condition-wait},
+	 * {@code %condition-notify}), in internal form: the class {@code JvmExprCompiler}
+	 * calls them on, which travels with the output.
+	 */
+	static final String CONDITION_VARIABLE_CLASS = "am/ik/rontolisp/runtime/RontoConditionVariable";
+
+	/**
+	 * Each {@code %condition-} primitive's method of {@link #CONDITION_VARIABLE_CLASS}.
+	 */
+	static final Map<String, String> CONDITION_VARIABLE_METHODS = Map.of(LispNames.CONDITION_VARIABLE_NEW_INTERNAL,
+			"create", LispNames.CONDITION_WAIT_INTERNAL, "waitOn", LispNames.CONDITION_NOTIFY_INTERNAL, "wake");
+
+	/** The runtime class file a program with condition variables carries beside it. */
+	static final List<String> CONDITION_VARIABLE_RUNTIME_CLASS_FILES = List.of(CONDITION_VARIABLE_CLASS + ".class");
+
+	/**
+	 * Whether the last {@link #compile} makes a condition variable, i.e. whether the
+	 * emitted class needs {@code RontoConditionVariable} beside it.
+	 */
+	private boolean needsConditionVariableRuntime;
 
 	/**
 	 * The terminal probe behind {@code %terminal-p} ({@code interactive-stream-p}), in
@@ -941,10 +965,10 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsInflateRuntime
-				&& !this.needsTerminalRuntime && !this.needsHashTableRuntime && !this.needsComplexRuntime
-				&& !this.needsQuantizedRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime
-				&& !this.needsStringInputRuntime && !this.needsJavaValueRuntime && this.partClassFiles.isEmpty()
-				&& this.bridgeClassFiles.isEmpty()) {
+				&& !this.needsConditionVariableRuntime && !this.needsTerminalRuntime && !this.needsHashTableRuntime
+				&& !this.needsComplexRuntime && !this.needsQuantizedRuntime && !this.needsIoStreamRuntime
+				&& !this.needsCharFileRuntime && !this.needsStringInputRuntime && !this.needsJavaValueRuntime
+				&& this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
 		// A program too large for one class brings its $PartN classes, and a bridged
@@ -984,6 +1008,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsInflateRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(INFLATE_RUNTIME_CLASS_FILES));
+		}
+		if (this.needsConditionVariableRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(CONDITION_VARIABLE_RUNTIME_CLASS_FILES));
 		}
 		if (this.needsTerminalRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(TERMINAL_RUNTIME_CLASS_FILES));
@@ -1105,6 +1132,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Before the resolver, whose own marker arm is the backstop for a bracket this
 		// pass did not lower.
 		program = LispMacroExpander.lowerLoadContextMarkers(program);
+		// The spliced components' brackets become asdf:perform calls over top-level
+		// groups once the program defines a perform method, and nothing otherwise
+		// (compiler/SplicedComponentGroups); Pass 2b emits the groups.
+		program = SplicedComponentGroups.lower(program, null);
 		// Resolve packages (in-package directives, qualified symbols, *package*) up front
 		// so
 		// the rest of compilation sees canonical names.
@@ -1591,7 +1622,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DESTROY_THREAD))
 				|| programUsesSymbol(program,
-						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.CURRENT_THREAD));
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.CURRENT_THREAD))
+				|| programUsesSymbol(program, LispNames.THREAD_NAME_INTERNAL_QUALIFIED);
 		MethodRefEntry tcpConnectHelperMethod = usesSockets ? cp.methodRef(thisClass,
 				JvmSocketRuntimeBuilder.TCP_CONNECT_METHOD, JvmSocketRuntimeBuilder.TCP_CONNECT_DESC) : null;
 		MethodRefEntry tcpListenHelperMethod = usesSockets ? cp.methodRef(thisClass,
@@ -2356,7 +2388,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// that calls progv every read of a special is checked, the ones that start with a
 		// value included -- which keep their plain start.
 		SequencedSet<String> checkedGlobals = new java.util.LinkedHashSet<>(unboundGlobals);
-		checkedGlobals.addAll(SpecialVarCollector.collectProgvUnbindable(program, specialVars));
+		checkedGlobals.addAll(SpecialVarCollector.collectUnbindable(program, specialVars));
 		if (linked != null) {
 			// a linked global its class reads checked for the marker is read so here
 			for (String g : globals) {
@@ -2543,6 +2575,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// decompressing one the decoder.
 		this.needsFetchRuntime = usesFetch;
 		this.needsInflateRuntime = usesInflate;
+		this.needsConditionVariableRuntime = programUsesSymbol(program,
+				LispNames.CONDITION_VARIABLE_NEW_INTERNAL_QUALIFIED);
 		this.needsTerminalRuntime = programUsesSymbol(program, LispNames.TERMINAL_P_INTERNAL);
 		// An equalp table folds its keys through RontoHashTable.equalpKey, and every
 		// table's put/remove/count/values helpers call its tombstone machinery, so that
@@ -3141,9 +3175,33 @@ public final class JvmLispCompiler implements LispCompiler {
 		// over-limit check below cuts the largest form of an over-limit chunk.
 		List<Integer> topFormSizes = new ArrayList<>(topLevelExprs.size());
 		List<int[]> topChunkRanges = new ArrayList<>();
+		// The top-level GROUPS (compiler/SplicedComponentGroups): a chunk opened inside
+		// one belongs to it and is reached through %run-top-group, never from main.
+		// No chunk spans a group boundary. -1 marks a chunk main calls.
+		List<Integer> topChunkGroups = new ArrayList<>();
+		java.util.Deque<Integer> openTopGroups = new java.util.ArrayDeque<>();
+		ctxBuilder.topGroupChunks.clear();
 		int chunkStart = 0;
 		for (int formIndex = 0; formIndex < topLevelExprs.size(); formIndex++) {
 			LispVal expr = topLevelExprs.get(formIndex);
+			Integer groupOpened = SplicedComponentGroups.groupOpened(expr);
+			Integer groupClosed = groupOpened == null ? SplicedComponentGroups.groupClosed(expr) : null;
+			if (groupOpened != null || groupClosed != null) {
+				if (chunkCtx != null) {
+					chunkCtx.body.return_();
+					topChunkRanges.add(new int[] { chunkStart, formIndex });
+					chunkCtx = null;
+				}
+				if (groupOpened != null) {
+					openTopGroups.addLast(groupOpened);
+					ctxBuilder.topGroupChunks.put(groupOpened, new ArrayList<>());
+				}
+				else {
+					openTopGroups.pollLast();
+				}
+				topFormSizes.add(0);
+				continue;
+			}
 			if (chunkCtx == null || chunkCtx.body.size() >= chunkCodeBudget) {
 				if (chunkCtx != null) {
 					chunkCtx.body.return_();
@@ -3155,9 +3213,15 @@ public final class JvmLispCompiler implements LispCompiler {
 				chunkCtx.shareDefinedGlobals(sharedDefinedGlobals);
 				chunkStart = formIndex;
 				Utf8Entry nameUtf8 = cp.utf8Entry("_top$" + topChunks.size());
+				MethodRefEntry chunkRef = cp.methodRef(thisClass, nameUtf8, topChunkDesc);
 				topChunks.add(chunkCtx);
 				topChunkNames.add(nameUtf8);
-				topChunkRefs.add(cp.methodRef(thisClass, nameUtf8, topChunkDesc));
+				topChunkRefs.add(chunkRef);
+				Integer group = openTopGroups.peekLast();
+				topChunkGroups.add(group == null ? -1 : group);
+				if (group != null) {
+					ctxBuilder.topGroupChunks.computeIfAbsent(group, g -> new ArrayList<>()).add(chunkRef);
+				}
 			}
 			// Statement position: the chunk pops whatever the form returns, so a definer
 			// that returns nothing but the name it just bound is offered the chance to
@@ -3240,8 +3304,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			topRunnerCtx.evalStoreRef = evalStoreRef;
 			entryCtx = topRunnerCtx;
 		}
-		for (MethodRefEntry ref : topChunkRefs) {
-			entryCtx.body.invokestatic(ref);
+		for (int i = 0; i < topChunkRefs.size(); i++) {
+			if (topChunkGroups.get(i) < 0) {
+				entryCtx.body.invokestatic(topChunkRefs.get(i));
+			}
 		}
 		// A program that writes RAW OCTETS to standard output has to drain the
 		// PrintStream itself. It auto-flushes on a newline and on every byte[] write --
@@ -4366,7 +4432,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			curThreadTlFieldRef = cp.fieldRef(thisClass, curThreadTlFieldName, curThreadTlFieldDesc);
 			threadRuntimeBodies = JvmThreadRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass,
 					stringClass, mainCtx.conditionChannel, progInitForThread, stringConcat,
-					java.util.Objects.requireNonNull(dynVarRuntime), curThreadTlFieldRef, teTlField);
+					java.util.Objects.requireNonNull(dynVarRuntime), curThreadTlFieldRef, teTlField, globals);
 			callableClass = cp.classEntry("java/util/concurrent/Callable");
 		}
 		else {
@@ -4380,6 +4446,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				: null;
 		final @Nullable Utf8Entry threadBindingsFieldName = usesThreads
 				? cp.utf8Entry(JvmThreadRuntimeBuilder.BINDINGS_FIELD) : null;
+		final @Nullable Utf8Entry threadHandleFieldName = usesThreads
+				? cp.utf8Entry(JvmThreadRuntimeBuilder.HANDLE_FIELD) : null;
 		final @Nullable Utf8Entry threadInstanceFieldDesc = usesThreads ? cp.utf8Entry("Ljava/lang/Object;") : null;
 		final @Nullable Utf8Entry handoffFieldName = usesAsyncRuntime
 				? cp.utf8Entry(JvmAsyncRuntimeBuilder.HANDOFF_FIELD) : null;
@@ -4713,7 +4781,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (threadRuntimeBodies != null) {
 			for (Utf8Entry instField : List.of(java.util.Objects.requireNonNull(threadFnFieldName),
-					java.util.Objects.requireNonNull(threadBindingsFieldName))) {
+					java.util.Objects.requireNonNull(threadBindingsFieldName),
+					java.util.Objects.requireNonNull(threadHandleFieldName))) {
 				definition.addField(AccessFlag.ACC_PRIVATE, Objects.requireNonNull(instField),
 						Objects.requireNonNull(threadInstanceFieldDesc));
 			}
@@ -6173,7 +6242,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (int i = 0; i < link.slots().size(); i++) {
 				String base = link.slotBases().get(i);
 				slots.add(new ClosRegistry.SlotSpec(link.slots().get(i), base, am.ik.rontolisp.LispNil.INSTANCE, false,
-						":" + base, false, List.of(), List.of(), "T"));
+						List.of(":" + base), false, List.of(), List.of(), "T"));
 			}
 			registry.registerClass(new ClosRegistry.ClassInfo(entry.getKey(), link.superclasses(), link.cpl(),
 					List.of(), slots, new java.util.LinkedHashSet<>(link.ancestors())));
@@ -8195,6 +8264,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final List<JvmBodyOutliner.OutlinedBody> outlinedBodies;
 
+		/**
+		 * The top-level chunk methods of each top-level GROUP, in run order -- the
+		 * {@code _top$N} methods the top-level loop compiled a spliced component's forms
+		 * into but {@code main} does not call; {@code %run-top-group} does
+		 * ({@code compiler.SplicedComponentGroups}). One map for the whole compilation,
+		 * filled by Pass 2b and read by the lambda bodies Pass 2c compiles.
+		 */
+		final Map<Integer, List<MethodRefEntry>> topGroupChunks;
+
 		/** The next {@code _k$N} name, shared like {@link #nextFuncId}. */
 		final int[] nextOutlinedBodyId;
 
@@ -9129,6 +9207,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.nextFuncId = builder.nextFuncId;
 			this.ctxBuilder = builder;
 			this.outlinedBodies = builder.outlinedBodies;
+			this.topGroupChunks = builder.topGroupChunks;
 			this.nextOutlinedBodyId = builder.nextOutlinedBodyId;
 			this.sharedHelpers = builder.sharedHelpers;
 			this.numOps = builder.numOps;
@@ -9522,6 +9601,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private int[] nextFuncId = new int[1];
 
 			private final List<JvmBodyOutliner.OutlinedBody> outlinedBodies = new ArrayList<>();
+
+			private final Map<Integer, List<MethodRefEntry>> topGroupChunks = new HashMap<>();
 
 			private final int[] nextOutlinedBodyId = new int[1];
 

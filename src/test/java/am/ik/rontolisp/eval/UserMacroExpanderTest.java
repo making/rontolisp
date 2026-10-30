@@ -126,12 +126,19 @@ class UserMacroExpanderTest {
 	@Test
 	void macroExpandingToDefmacroIsConsumedToo() {
 		// Nested backquote is unsupported, so the generated defmacro is built with
-		// list/quote instead.
+		// list/quote instead. The second shape is fiveam's def-special-environment: the
+		// definitions inside an flet of the eval-when it expands to, the flet's value
+		// after them -- left in place, it compiles to a call of DEFMACRO.
 		assertThat(expand("""
 				(defmacro def-twice () '(defmacro twice2 (x) (list '* 2 x)))
 				(def-twice)
 				(print (twice2 21))
-				""")).isEqualTo("(PRINT (* 2 21))");
+				(defmacro def-thrice ()
+				  '(eval-when (:compile-toplevel :load-toplevel :execute)
+				     (flet () (defmacro thrice (x) (list '* 3 x)) 'thrice)))
+				(def-thrice)
+				(print (thrice 7))
+				""")).isEqualTo("(PRINT (* 2 21))\n(PRINT (* 3 7))");
 	}
 
 	@Test

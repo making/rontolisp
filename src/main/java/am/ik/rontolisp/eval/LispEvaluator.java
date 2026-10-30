@@ -1484,6 +1484,30 @@ public final class LispEvaluator {
 				return macroexpand1(macroCallForm(name, callArgs.get(0)));
 			});
 		}));
+		// compiler-macro-function: macro-function's twin over the define-compiler-macro
+		// table -- the expander (funcall f form env), or nil when the name has none.
+		this.globalEnv.defineFunction(LispNames.COMPILER_MACRO_FUNCTION,
+				new LispFunction(LispNames.COMPILER_MACRO_FUNCTION, args -> {
+					if (args.isEmpty() || args.size() > 2) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.COMPILER_MACRO_FUNCTION + " expects 1 or 2 arguments, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispSymbol sym) || !this.compilerMacros.containsKey(sym.name())) {
+						return LispNil.INSTANCE;
+					}
+					String name = sym.name();
+					return new LispFunction(LispNames.COMPILER_MACRO_FUNCTION + " " + name, callArgs -> {
+						if (callArgs.size() != 2) {
+							throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+									"a compiler macro function expects 2 arguments, got " + callArgs.size());
+						}
+						UserMacro macro = this.compilerMacros.get(name);
+						if (macro == null || !(macroCallForm(name, callArgs.get(0)) instanceof LispCons form)) {
+							return callArgs.get(0);
+						}
+						return expandMacroCall(name, macro, form);
+					});
+				}));
 		this.globalEnv.defineFunction(LispNames.SYMBOL_FUNCTION, new LispFunction(LispNames.SYMBOL_FUNCTION, args -> {
 			if (args.size() != 1) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
@@ -1794,8 +1818,7 @@ public final class LispEvaluator {
 				ClosRegistry.SlotSpec slot = slots.get(i);
 				// Only a DECLARED :initarg fills from the initargs, per CL -- see the
 				// generated twin in LispMacroExpander.
-				LispVal supplied = slot.initargSupplied() ? leftmostInitargValue(args.get(1), slot.initargKeyword())
-						: null;
+				LispVal supplied = slot.initargSupplied() ? leftmostInitargValue(args.get(1), slot) : null;
 				if (supplied != null) {
 					obj.setSlot(i, supplied);
 				}
@@ -2584,6 +2607,26 @@ public final class LispEvaluator {
 			removeUserMacro(name);
 			return args.get(0);
 		}));
+		// makunbound: set's unbinding twin -- the CURRENT dynamic binding loses its value
+		// when one is active (the global comes back with the binding's exit), otherwise
+		// the global value is dropped. boundp then answers nil and a read signals the
+		// unbound-variable. Answers the symbol.
+		this.globalEnv.defineFunction(LispNames.MAKUNBOUND, new LispFunction(LispNames.MAKUNBOUND, args -> {
+			requireSingleArg(LispNames.MAKUNBOUND, args);
+			if (!(args.get(0) instanceof LispSymbol sym)) {
+				throw new LispEvalException(LispNames.MAKUNBOUND + " expects a symbol, got " + args.get(0).print());
+			}
+			if (sym.isKeyword() || sym.name().isEmpty() || LispNames.PACKAGE_VAR.equals(sym.name())) {
+				throw new LispEvalException(LispNames.MAKUNBOUND + " cannot make " + sym.print() + " unbound");
+			}
+			if (this.dynamicBindings.isBound(sym.name())) {
+				this.dynamicBindings.unbindCurrent(sym.name());
+			}
+			else {
+				this.globalEnv.undefine(sym.name());
+			}
+			return sym;
+		}));
 		// (setf (symbol-function 'f) fn) / (setf (fdefinition 'f) fn) lower here:
 		// install fn as f's global function binding -- fmakunbound's write-side twin,
 		// so a same-named user macro stops shadowing the new definition -- and return
@@ -3184,14 +3227,14 @@ public final class LispEvaluator {
 		// bindings from its spawner and its own pushes die with it -- no pop is needed.
 		String makeThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_THREAD);
 		this.globalEnv.defineFunction(makeThreadName, new LispFunction(makeThreadName, args -> {
-			if (args.isEmpty() || args.size() > 2) {
+			if (args.isEmpty() || args.size() > 3) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-						LispNames.MAKE_THREAD + " expects 1 or 2 arguments, got " + args.size());
+						LispNames.MAKE_THREAD + " expects 1 to 3 arguments, got " + args.size());
 			}
 			LispVal fn = args.get(0);
 			List<String> bindingNames = new ArrayList<>();
 			List<LispVal> bindingValues = new ArrayList<>();
-			if (args.size() == 2) {
+			if (args.size() >= 2) {
 				LispVal cur = args.get(1);
 				while (cur instanceof LispCons cons) {
 					if (!(cons.car() instanceof LispCons pair) || !(pair.car() instanceof LispSymbol sym)) {
@@ -3217,7 +3260,7 @@ public final class LispEvaluator {
 					this.dynamicBindings.push(bindingNames.get(i), bindingValues.get(i));
 				}
 				return apply(fn, List.of(), this.globalEnv);
-			});
+			}, args.size() == 3 ? args.get(2) : LispNil.INSTANCE);
 		}));
 		String joinThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JOIN_THREAD);
 		this.globalEnv.defineFunction(joinThreadName, new LispFunction(joinThreadName, args -> {
@@ -3262,6 +3305,11 @@ public final class LispEvaluator {
 			thread.thread().interrupt();
 			return thread;
 		}));
+		// %thread-name: the name make-thread was given (nil for none, and for a thread
+		// it did not spawn) -- bordeaux-threads:thread-name.
+		String threadNameName = LispNames.THREAD_NAME_INTERNAL_QUALIFIED;
+		this.globalEnv.defineFunction(threadNameName,
+				new LispFunction(threadNameName, args -> requireThread(LispNames.THREAD_NAME, args).name()));
 		String currentThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.CURRENT_THREAD);
 		this.globalEnv.defineFunction(currentThreadName, new LispFunction(currentThreadName, args -> {
 			if (!args.isEmpty()) {
@@ -3827,20 +3875,55 @@ public final class LispEvaluator {
 			}
 			return tail;
 		}));
-		// asdf:test-system: load the system, follow its :in-order-to test-op chain,
-		// then run its recorded :perform (test-op (o c) BODY) with the operation nil
-		// and the component bound to the system's metaobject (fukamachi's .asd shape:
-		// :perform (test-op (op c) (symbol-call :rove :run c))).
-		String testSystemName = PackageRegistry.qualify(LispNames.ASDF_PKG, LispNames.TEST_SYSTEM);
-		this.globalEnv.defineFunction(testSystemName, new LispFunction(testSystemName, args -> {
-			if (args.size() != 1) {
-				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-						LispNames.ASDF_TEST_SYSTEM + " expects 1 argument, got " + args.size());
+		// The interpreter's halves of the operation protocol's seams (asdf.lisp defines
+		// asdf:perform, asdf:operate and asdf:test-system over them): loading one
+		// component, and the test-op wiring a system's .asd recorded.
+		String loadComponentName = "%ASDF-LOAD-COMPONENT";
+		this.globalEnv.defineFunction(loadComponentName, new LispFunction(loadComponentName, args -> {
+			if (args.size() != 2 || !(args.get(0) instanceof LispString system)
+					|| !(args.get(1) instanceof LispInteger index)) {
+				throw new LispEvalException(loadComponentName + " expects a system name and a component index");
 			}
-			ensureAsdfRuntimeLoaded();
-			String name = asdfDesignator(LispNames.ASDF_TEST_SYSTEM, args.get(0));
-			runTestOp(name, new java.util.HashSet<>());
+			loadComponent(system.value(), (int) index.value());
 			return LispTrue.INSTANCE;
+		}));
+		String testOpEdgesName = "%ASDF-TEST-OP-EDGES";
+		this.globalEnv.defineFunction(testOpEdgesName, new LispFunction(testOpEdgesName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(testOpEdgesName + " expects a system name string");
+			}
+			AsdfSystems.LispSystem system = this.asdfSystems.get(key.value());
+			java.util.List<LispVal> edges = new java.util.ArrayList<>();
+			if (system != null) {
+				for (String edge : system.testOpEdges()) {
+					edges.add(new LispString(edge));
+				}
+			}
+			return consList(edges);
+		}));
+		// The recorded :perform (test-op (o c) BODY): the LAST parameter is the
+		// component, every earlier one the operation (fukamachi's .asd shape:
+		// :perform (test-op (op c) (symbol-call :rove :run c))).
+		String recordedTestOpName = "%ASDF-RUN-RECORDED-TEST-OP";
+		this.globalEnv.defineFunction(recordedTestOpName, new LispFunction(recordedTestOpName, args -> {
+			if (args.size() != 3 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(
+						recordedTestOpName + " expects a system name, an operation and a component");
+			}
+			AsdfSystems.LispSystem system = this.asdfSystems.get(key.value());
+			AsdfSystems.TestOp testOp = system == null ? null : system.testOp();
+			if (testOp == null) {
+				return LispNil.INSTANCE;
+			}
+			java.util.List<LispVal> lambda = new java.util.ArrayList<>();
+			lambda.add(new LispSymbol(LispNames.LAMBDA));
+			lambda.add(consList(testOp.params()));
+			lambda.addAll(testOp.body());
+			java.util.List<LispVal> callArgs = new java.util.ArrayList<>();
+			for (int i = 0; i < testOp.params().size(); i++) {
+				callArgs.add(i == testOp.params().size() - 1 ? args.get(2) : args.get(1));
+			}
+			return applyGlobally(eval(consList(lambda), this.globalEnv), callArgs);
 		}));
 		// merge-pathnames* / file-exists-p / native-namestring used to be Java built-ins
 		// here. They are Lisp source now (uiop-pathname.lisp, uiop-filesystem.lisp),
@@ -4198,6 +4281,11 @@ public final class LispEvaluator {
 		// *readtable* too (CLHS load): an in-readtable inside the file is the file's.
 		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
 		this.dynamicBindings.push(LispNames.READTABLE_VAR, readtable == null ? LispNil.INSTANCE : readtable);
+		// The file's forms are TOP-LEVEL forms whoever called load -- a function, or
+		// asdf:perform's load-op method, which is where every ASDF component load runs
+		// -- so a macro they call expands in the file's package (expandMacroCall).
+		int callerFunctionBodyDepth = this.functionBodyDepth;
+		this.functionBodyDepth = 0;
 		try {
 			// Only a file that textually contains #. pays for the marker read + the
 			// per-form substitution walk; every other file keeps the plain read.
@@ -4230,6 +4318,7 @@ public final class LispEvaluator {
 			}
 		}
 		finally {
+			this.functionBodyDepth = callerFunctionBodyDepth;
 			this.dynamicBindings.pop(LispNames.READTABLE_VAR);
 			this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
 			this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
@@ -4835,7 +4924,7 @@ public final class LispEvaluator {
 	 * the shared macro expansion (positional {@code nth}, compile-path parity); a
 	 * computed name -- a variable or expression, e.g. a serializer walking
 	 * {@code %class-slot-defs} results as data -- resolves the slot at runtime by base
-	 * name (interpreter only).
+	 * name, and checks it is bound like the compile paths' {@code %slot-read} wrap.
 	 */
 	private LispVal evalSlotValue(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
@@ -4849,7 +4938,10 @@ public final class LispEvaluator {
 				throw new LispEvalException(
 						LispNames.SLOT_VALUE + ": unknown slot " + slotName.print() + " on " + instance.print());
 			}
-			return slot.read();
+			// Boundness-checked like a literal name's read: an unbound slot reaches
+			// slot-unbound.
+			return apply(resolveFunction(LispNames.SLOT_READ_INTERNAL), List.of(slot.read(), instance, slotName),
+					this.globalEnv);
 		}
 		return eval(LispMacroExpander.expandSlotValue(cons, this.closRegistry), env);
 	}
@@ -5508,46 +5600,61 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * The interpreter's {@code asdf:test-system}: load the system, follow its recorded
-	 * {@code :in-order-to} test-op chain (each edge loaded and tested the same way,
-	 * {@code visited} terminating a cycle), then apply the recorded
-	 * {@code :perform (test-op ...)} body with the operation parameter nil and the
-	 * component parameter bound to the system's metaobject.
+	 * Performs one action of the operation protocol through {@code asdf.lisp}'s driver
+	 * ({@code %asdf-perform-component} / {@code %asdf-perform-system}), so the methods a
+	 * library added to {@code asdf:perform} run around it.
 	 */
-	private void runTestOp(String name, java.util.Set<String> visited) {
-		if (!visited.add(name)) {
-			return;
-		}
-		loadSystem(name);
+	private void performAsdf(String driver, String system, LispVal argument) {
+		eval(consList(java.util.List.of(new LispSymbol(driver), new LispString(system), argument)), this.globalEnv);
+	}
+
+	/**
+	 * Loads one component of a parsed system -- what the primary {@code asdf:perform}
+	 * method for {@code load-op} on a {@code cl-source-file} does here: the substituted
+	 * leaf module's forms, or the file read with the system's features and against its
+	 * base directory. Self-contained, so a program that performs load-op on a component
+	 * itself reloads it the same way.
+	 */
+	private void loadComponent(String name, int index) {
 		AsdfSystems.LispSystem system = this.asdfSystems.get(name);
-		if (system == null) {
-			// A built-in shim system: no test-op wiring to run.
-			return;
+		if (system == null || index < 0 || index >= system.files().size()) {
+			throw new LispEvalException("ASDF:PERFORM: no component " + index + " in system '" + name + "'");
 		}
-		for (String edge : system.testOpEdges()) {
-			runTestOp(edge, visited);
-		}
-		AsdfSystems.TestOp testOp = system.testOp();
-		if (testOp == null) {
-			return;
-		}
-		// ((lambda (o c) BODY...) nil (asdf:find-system "name")): the LAST parameter is
-		// the component, every earlier one (the operation) is nil.
-		java.util.List<LispVal> lambda = new java.util.ArrayList<>();
-		lambda.add(new LispSymbol(LispNames.LAMBDA));
-		lambda.add(consList(testOp.params()));
-		lambda.addAll(testOp.body());
-		java.util.List<LispVal> call = new java.util.ArrayList<>();
-		call.add(consList(lambda));
-		for (int i = 0; i < testOp.params().size(); i++) {
-			if (i == testOp.params().size() - 1) {
-				call.add(consList(java.util.List.of(new LispSymbol(LispNames.ASDF_FIND_SYSTEM), new LispString(name))));
+		String file = system.files().get(index);
+		this.loadDirStack.addLast(system.baseDir());
+		try {
+			List<LispVal> leafShim = ShimLibraries.leafModuleForms(name, file, system.baseDir(), this.sourceLoader);
+			if (leafShim != null) {
+				// A substituted leaf module: evaluate the shim forms through the package
+				// resolver (the defpackage must register before the dependent components
+				// resolve), like the replaced file would. Bracketed exactly as loadFile
+				// brackets a real component, so a shim that selects a package with
+				// (in-package ...) -- the cffi backend does, being a near-verbatim
+				// analogue of upstream's own implementation file -- confines it to
+				// itself.
+				// Top-level forms, like a loaded file's (see loadFile).
+				int callerFunctionBodyDepth = this.functionBodyDepth;
+				this.functionBodyDepth = 0;
+				this.packageResolver.pushPackage();
+				try {
+					for (LispVal form : leafShim) {
+						eval(form);
+					}
+				}
+				finally {
+					this.packageResolver.popPackage();
+					this.functionBodyDepth = callerFunctionBodyDepth;
+				}
+				return;
 			}
-			else {
-				call.add(LispNil.INSTANCE);
-			}
+			// A system that declares :rontolisp-features has its own component files
+			// read with the interpreter's features widened by that declaration -- the
+			// static encoding of the eval-when *features* push a real .asd would do.
+			loadFile(LispNames.ASDF_LOAD_SYSTEM, file, name, this.features.with(system.features()));
 		}
-		eval(consList(call), this.globalEnv);
+		finally {
+			this.loadDirStack.removeLast();
+		}
 	}
 
 	private void loadSystem(String name) {
@@ -5625,12 +5732,8 @@ public final class LispEvaluator {
 			}
 		}
 		this.loadingSystems.addLast(name);
-		// A system that declares :rontolisp-features has its own component files read
-		// with the interpreter's features widened by that declaration -- the static
-		// encoding of the eval-when *features* push a real .asd would do.
-		Features systemFeatures = this.features.with(system.features());
-		// Component paths (and a dependency's .asd lookup) resolve against the system's
-		// base directory, not the caller's.
+		// A dependency's .asd lookup resolves against the system's base directory, not
+		// the caller's.
 		this.loadDirStack.addLast(system.baseDir());
 		try {
 			// :defsystem-depends-on first: real ASDF loads those while the .asd is READ,
@@ -5642,29 +5745,15 @@ public final class LispEvaluator {
 			for (String dependency : system.dependsOn()) {
 				loadSystem(dependency);
 			}
-			for (String file : system.files()) {
-				List<LispVal> leafShim = ShimLibraries.leafModuleForms(name, file, system.baseDir(), this.sourceLoader);
-				if (leafShim != null) {
-					// A substituted leaf module: evaluate the shim forms through the
-					// package resolver (the defpackage must register before the
-					// dependent components resolve), like the replaced file would.
-					// Bracketed exactly as loadFile brackets a real component, so a
-					// shim that selects a package with (in-package ...) -- the cffi
-					// backend does, being a near-verbatim analogue of upstream's own
-					// implementation file -- confines it to itself.
-					this.packageResolver.pushPackage();
-					try {
-						for (LispVal form : leafShim) {
-							eval(form);
-						}
-					}
-					finally {
-						this.packageResolver.popPackage();
-					}
-					continue;
-				}
-				loadFile(LispNames.ASDF_LOAD_SYSTEM, file, name, systemFeatures);
+			// Real ASDF's action order for a source tree, each action an asdf:perform
+			// call (asdf.lisp): the system's prepare-op, then prepare-op, compile-op and
+			// load-op on every component file in load order -- load-op's primary method
+			// is loadComponent -- then the system's compile-op and load-op.
+			performAsdf("%ASDF-PERFORM-SYSTEM", name, new LispSymbol(":BEFORE"));
+			for (int i = 0; i < system.files().size(); i++) {
+				performAsdf("%ASDF-PERFORM-COMPONENT", name, new LispInteger(i));
 			}
+			performAsdf("%ASDF-PERFORM-SYSTEM", name, new LispSymbol(":AFTER"));
 		}
 		finally {
 			this.loadDirStack.removeLast();
@@ -7704,14 +7793,14 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * The value of the leftmost pair of the initarg plist whose key is the given keyword
-	 * (compared by spelling), or null when absent -- absent and supplied-nil must stay
-	 * distinguishable for the {@code %mop-fill-slots} fill.
+	 * The value of the leftmost pair of the initarg plist whose key is one of the slot's
+	 * initargs (compared by spelling), or null when absent -- absent and supplied-nil
+	 * must stay distinguishable for the {@code %mop-fill-slots} fill.
 	 */
-	private static @Nullable LispVal leftmostInitargValue(LispVal plist, String keyword) {
+	private static @Nullable LispVal leftmostInitargValue(LispVal plist, ClosRegistry.SlotSpec slot) {
 		LispVal cursor = plist;
 		while (cursor instanceof LispCons pair) {
-			if (pair.car() instanceof LispSymbol key && keyword.equals(key.name())
+			if (pair.car() instanceof LispSymbol key && slot.acceptsInitarg(key.name())
 					&& pair.cdr() instanceof LispCons valueCell) {
 				return valueCell.car();
 			}
@@ -10543,6 +10632,16 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Returns the names {@code define-compiler-macro} registered, sorted -- the table
+	 * {@code UserMacroExpander} bakes into a compiled program for
+	 * {@code compiler-macro-function}.
+	 * @return the sorted compiler macro names
+	 */
+	public List<String> compilerMacroNames() {
+		return this.compilerMacros.keySet().stream().sorted().toList();
+	}
+
+	/**
 	 * Carries out {@code (setf (macro-function 'new) (macro-function 'existing))} -- a
 	 * macro ALIAS, the shape lisp-namespace uses to give {@code namespace-let} the short
 	 * name {@code nslet}. The new name is bound to the SAME expander, so the two names
@@ -12199,7 +12298,7 @@ public final class LispEvaluator {
 			// same AST.
 			if ((LispNames.SLOT_READ_INTERNAL.equals(name) || LispNames.SLOT_BOUND_P_INTERNAL.equals(name))
 					&& this.loadedPreludeNames.add(name)) {
-				for (LispVal form : LispMacroExpander.slotUnboundDefuns()) {
+				for (LispVal form : LispMacroExpander.slotUnboundDefuns(true)) {
 					eval(form, this.globalEnv);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
