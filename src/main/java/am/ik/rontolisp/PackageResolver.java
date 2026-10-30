@@ -2696,6 +2696,27 @@ public final class PackageResolver {
 		return spelling;
 	}
 
+	/**
+	 * The spelling a runtime read gives a symbol token: the token interned in the current
+	 * package, recorded like {@code intern}'s ({@link #internSpelling(String, boolean)})
+	 * -- CL's reader interns in {@code *package*} as it reads. A keyword, a lambda-list
+	 * marker and an uninterned {@code #:name} pass through as {@link #resolve} passes
+	 * them, and so does a token qualified by a package the registry does not know, which
+	 * the runtime read keeps as written.
+	 * @param name the token's name as read
+	 * @return the canonical spelling for the current package
+	 */
+	public synchronized String readSpelling(String name) {
+		if (name.startsWith(":") || name.startsWith("&") || name.startsWith("#:")) {
+			return name;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		if (qn != null && !this.registry.contains(registeredPackageName(this.registry.canonicalName(qn.pkg())))) {
+			return name;
+		}
+		return internSpelling(name, true);
+	}
+
 	private String internSpellingOnly(String name) {
 		boolean savedExactCase = this.exactCase;
 		this.exactCase = true;

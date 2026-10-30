@@ -107,7 +107,10 @@ since `.todo/917` a package keeps a MEMBER table of what `intern` / `export` / `
 - 1-arg `intern` interns into the **current package** on the interpreter
   (`PackageResolver.internSpelling(name, record)`, the `LispEvaluator` override; the
   `Environment` converter and the compiled backends' 1-arg intern stay package-blind) and
-  RECORDS a fresh name in the package's member table (`recordInterned`). `(intern name
+  RECORDS a fresh name in the package's member table (`recordInterned`). The interpreter's
+  runtime READ homes each symbol token the same way (`PackageResolver.readSpelling`,
+  `.kb/packages.md`); the compiled backends' runtime reader stays package-blind with their
+  intern. `(intern name
   :keyword)` builds a keyword; any other package argument goes through
   `PackageResolver.internSpellingIn`. A designator naming no package is a catchable
   `package-error` on every backend (the interpreter's `intern` checks before the resolver,
