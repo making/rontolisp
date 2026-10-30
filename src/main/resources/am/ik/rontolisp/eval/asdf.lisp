@@ -165,6 +165,10 @@
 
 (defclass asdf:test-op (asdf:operation) ())
 
+;; A class only: there are no fasls to bundle, so operate refuses it (arnesi's
+;; make-single-fasl names it in a body loading never runs).
+(defclass asdf:compile-bundle-op (asdf:operation) ())
+
 ;; class name -> its one instance: an operation is a singleton per class, as
 ;; real ASDF's make-operation answers it.
 (defvar %asdf-operations% nil)
@@ -250,6 +254,18 @@
 (defmethod asdf:output-files
     ((operation asdf:operation) (component asdf:component))
   (values nil t))
+
+;; Every action is done as far as the plan is concerned (load-system performs
+;; a fixed plan); the generic is here for the methods a library defines on it
+;; (arnesi's clean-op).
+(defgeneric asdf:operation-done-p (operation component))
+
+(defmethod asdf:operation-done-p ((operation symbol) component)
+  (asdf:operation-done-p (asdf:make-operation operation) component))
+
+(defmethod asdf:operation-done-p
+    ((operation asdf:operation) (component asdf:component))
+  t)
 
 ;; The .asd parse decides a component's extension (AsdfSystems); the generic is
 ;; here for the methods a library defines on it.

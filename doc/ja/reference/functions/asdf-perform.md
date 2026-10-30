@@ -31,7 +31,10 @@ operation も何もしません。ただし、システムへの `test-op` は�
 `compile-op` と `load-op` はそのパス名を読み、ファイルを書く operation はありません
 （`output-files` は `nil` を返します）。`asdf:source-file-type` は、ライブラリが
 メソッドを定義できるように存在します（lass が定義します）。コンポーネントの拡張子は
-`.asd` の解析時に決まります。`asdf/interface`（本物の ASDF が `asdf` パッケージ自体に
+`.asd` の解析時に決まります。`asdf:operation-done-p` も同じ理由で存在し、既定では
+`t` を返します（arnesi の `clean-op` がメソッドを定義します）。
+`asdf:compile-bundle-op` は `asdf:operation` のサブクラスですが、バンドルする fasl が
+ないため `asdf:operate` は受け付けません。`asdf/interface`（本物の ASDF が `asdf` パッケージ自体に
 付けている名前）と、本物の ASDF の内部パッケージ（`asdf/action`・`asdf/component`・
 `asdf/lisp-action` など）は、これらと同じシンボルを指します。
 

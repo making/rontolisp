@@ -131,8 +131,11 @@ verification against the actual Quicklisp dist at probe time)
     `lass` (a block keeps only its first property: h46; `~&` inside `~@[`: `.todo/001`).
   - Do not load: `fset` (h43), `vecto` (h44), `djula` (h49, h59 done: `access`, `cl-slice`'s `bit-vector` method, funcallable
     templates on all four backends, `collectors`' `closer-mop:standard-object`, arnesi's
-    `:properties` and ASDF plan order; h72 done: arnesi's unexported `defmacro while`; next
-    arnesi's `asdf:operation-done-p`, h73), `hunchentoot` (h50 done:
+    `:properties` and ASDF plan order; h72 done: arnesi's unexported `defmacro while`; h73 done:
+    `asdf:operation-done-p`/`compile-bundle-op`; next arnesi's long-form
+    `define-method-combination` (`cc-standard` in `src/call-cc/generic-functions.lisp`,
+    `wrapping-standard` in `src/mop.lisp`), which `.kb/clos.md` "Short-form
+    `:method-combination`" puts out of scope), `hunchentoot` (h50 done:
     `cl-fad` loads and runs; next `flex:make-external-format`, h52),
     `cl-smtp` (h48), `drakma` (h52), `cl-csv`/`function-cache`/
     `cl-containers`/`cl-pdf` (h35), `jonathan`/`cl-redis`/`parenscript` (h53),

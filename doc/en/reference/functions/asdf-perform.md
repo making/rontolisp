@@ -33,7 +33,10 @@ A method in the `.asd` itself is not run: the `.asd` is read as data.
 `compile-op` and `load-op` on a source file read its pathname, and no
 operation writes a file (`output-files` answers `nil`). `asdf:source-file-type`
 exists so a library may define methods on it (lass does); the extension of a
-component is decided when the `.asd` is parsed. `asdf/interface` (the name
+component is decided when the `.asd` is parsed. `asdf:operation-done-p` answers
+`t` by default and exists for the same reason (arnesi's `clean-op` defines a
+method); `asdf:compile-bundle-op` is a subclass of `asdf:operation` that
+`asdf:operate` refuses, since there are no fasls to bundle. `asdf/interface` (the name
 real ASDF gives the `asdf` package itself) and real ASDF's internal packages
 (`asdf/action`, `asdf/component`, `asdf/lisp-action`, ...) name these same
 symbols.

@@ -9169,6 +9169,19 @@ public final class LispNames {
 	 */
 	public static final String SOURCE_FILE_TYPE = "SOURCE-FILE-TYPE";
 
+	/**
+	 * {@code asdf:operation-done-p} -- generic: whether an action needs no performing.
+	 * The default answers {@code t}; it exists so a library may define methods on it
+	 * (arnesi's {@code clean-op}).
+	 */
+	public static final String OPERATION_DONE_P = "OPERATION-DONE-P";
+
+	/**
+	 * The {@code asdf:compile-bundle-op} operation class -- a class only: {@code operate}
+	 * refuses it (there are no fasls to bundle).
+	 */
+	public static final String COMPILE_BUNDLE_OP = "COMPILE-BUNDLE-OP";
+
 	/** The canonical qualified spelling of {@code asdf:test-system}. */
 	public static final String ASDF_TEST_SYSTEM = ASDF_PKG + ":" + TEST_SYSTEM;
 
