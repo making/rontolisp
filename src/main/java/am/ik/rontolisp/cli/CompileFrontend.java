@@ -5,6 +5,7 @@ import java.util.Objects;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
+import am.ik.rontolisp.compiler.CurrentPackageIntern;
 import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.WitExportDirective;
@@ -829,10 +830,12 @@ final class CompileFrontend {
 		// is named only by clojure.lisp's HTTP client, and a wasm target compiles the
 		// Lisp one (the interpreter and the JVM have runtime/RontoInflate); inside the
 		// prelude, which supplies what the decoder is written over.
-		List<LispVal> languages = InflateLibrary.process(
-				ClojureLibrary.process(SchemeLibrary.process(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded)),
-						features, input.standards()), !wasm, input.lowersAtRunTime(), input.linked()),
-				witBackend);
+		// A one-argument intern / find-symbol of the user program reads *package*
+		// (CurrentPackageIntern): right after user-macro expansion, before any library
+		// splice, whose own one-argument interns take a canonical spelling verbatim.
+		List<LispVal> languages = InflateLibrary.process(ClojureLibrary.process(SchemeLibrary.process(
+				CurrentPackageIntern.rewrite(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded))), features,
+				input.standards()), !wasm, input.lowersAtRunTime(), input.linked()), witBackend);
 		List<LispVal> macos = ObjcLibrary
 			.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
 				.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary.process(

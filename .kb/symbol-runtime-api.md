@@ -105,12 +105,32 @@ since `.todo/917` a package keeps a MEMBER table of what `intern` / `export` / `
 - `intern`/`find-symbol` take the name VERBATIM: `(find-symbol "car")` = `NIL`,
   `(intern "time")` = the distinct `time`.
 - 1-arg `intern` interns into the **current package** on the interpreter
-  (`PackageResolver.internSpelling(name, record)`, the `LispEvaluator` override; the
-  `Environment` converter and the compiled backends' 1-arg intern stay package-blind) and
-  RECORDS a fresh name in the package's member table (`recordInterned`). The interpreter's
+  (`PackageResolver.internSpelling(name, record)`, the `LispEvaluator` override) and
+  RECORDS a fresh name in the package's member table (`recordInterned`). **The compile
+  paths reach it by rewriting the call** (`compiler/CurrentPackageIntern`, `.todo/h66`,
+  2026-10-31): in a program with an `(in-package X)` for an X other than `cl-user`, a
+  1-arg `intern` / `find-symbol` call of the USER program becomes
+  `(if (eq cl:*package* :cl-user) (intern x) (intern x cl:*package*))` in `CompileFrontend`,
+  right after user-macro expansion and before any library splice, so the prelude selection,
+  the pruner, `injectMvSpillGlobal` and `injectBakedAccess` all see a computed-designator
+  site that reads `*package*`. The cl-user arm keeps the 1-arg lowering: a computed
+  designator naming cl-user answers a fresh name `:external` (the builtin-package rule) and
+  a literal `(find-symbol "car")` would stop folding to NIL -- both broke ci-spec
+  `mv-producer-function-return` / `symbol-runtime-api` in the corpus program, which has
+  `in-package` forms, before the arm existed. Not later: the implementation's own Lisp
+  (`LispPreludeLibrary`, `scheme.lisp`, `format-render-slash.lisp`) and the lowerings use the
+  1-arg form to intern a CANONICAL spelling verbatim (`"PKG::MEMBER"`), which the rewrite
+  would requalify. What stays package-blind: the `Environment` converter, the function
+  object (`#'intern` / `'intern` / `#'find-symbol` called with one argument -- the wrapper's
+  1-arg branch, `.todo/h76`), `eval`'d code and the compiled run-time reader. A program that
+  never leaves `cl-user` is byte-identical. Cost (2026-10-31, JVM class of every
+  `examples.yaml` program): 124 of 125 byte-identical; `jvm/cffi-sqlite.lisp` (alexandria's
+  `symbolicate`, `(values (intern name))`, survives pruning) 2.652 -> 2.690 MB, output
+  unchanged. Pinned by ci-spec `intern-of-an-internal-name-is-the-read-symbol`
+  (SBCL-checked). The interpreter's
   runtime READ homes each symbol token the same way (`PackageResolver.readSpelling`,
-  `.kb/packages.md`); the compiled backends' runtime reader stays package-blind with their
-  intern. `(intern name
+  `.kb/packages.md`); the compiled backends' runtime reader stays package-blind.
+  `(intern name
   :keyword)` builds a keyword; any other package argument goes through
   `PackageResolver.internSpellingIn`. A designator naming no package is a catchable
   `package-error` on every backend (the interpreter's `intern` checks before the resolver,
