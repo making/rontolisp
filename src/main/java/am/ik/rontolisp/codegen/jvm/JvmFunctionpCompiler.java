@@ -10,7 +10,8 @@ import am.ik.rontolisp.LispVal;
  * Compiles the {@code functionp} predicate. A function reference is an {@code Object[]}
  * whose slot 0 is a boxed {@code Integer} funcId (integers are {@code Long} at runtime,
  * so the {@code Integer} marker distinguishes it from a cons cell -- the mirror image of
- * {@link JvmConspCompiler}).
+ * {@link JvmConspCompiler}) -- plus, in a program defining one, a funcallable instance
+ * ({@link JvmFuncallableInstances}).
  */
 final class JvmFunctionpCompiler {
 
@@ -35,6 +36,15 @@ final class JvmFunctionpCompiler {
 		JvmEmitHelper.compileTrue(ctx);
 		MethodCode.Label gotoEndPos = ctx.body.newLabel();
 		ctx.body.goto_(gotoEndPos);
+		List<String> funcallableTags = ctx.mayUseInstances ? ctx.closRegistry.funcallableTags() : List.of();
+		if (!funcallableTags.isEmpty()) {
+			ctx.body.labelBinding(ifNotFuncRefPos);
+			ifNotFuncRefPos = ctx.body.newLabel();
+			JvmFuncallableInstances.emitTagTest(ctx.body, ctx.cp, ctx.objectArrayClass, ctx.objectEquals,
+					funcallableTags, tempSlot, ctx.allocTemp(), ifNotFuncRefPos);
+			JvmEmitHelper.compileTrue(ctx);
+			ctx.body.goto_(gotoEndPos);
+		}
 		ctx.body.labelBinding(ifNotArrayPos);
 		ctx.body.labelBinding(ifRatioPos);
 		ctx.body.labelBinding(ifNotFuncRefPos);

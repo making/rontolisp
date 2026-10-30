@@ -100,10 +100,13 @@ can arrive unnoticed.
 `PackageRegistry.isClExtensionName`): a package's own `while` (a `defpackage` `:export` no longer
 redirects it to `cl`) and one inherited from another used package win over `cl`'s, in
 `resolveUnqualified`, `accessibleIn` and `accessibleEntries` -- SBCL's resolution wherever a library
-owns the name. Measured: parenscript, iterate, arnesi and `for` export `while`; parenscript, arnesi
+owns the name. Measured: parenscript, iterate and `for` export `while`; parenscript, arnesi
 and fset `defmacro` it (parenscript's `DEFMACRO cannot redefine the standard operator WHILE`
 before). Still not covered: fset's UNEXPORTED `defmacro while` in a package using `cl` reads `cl`'s
-(`while` is not shadowed by a definition). iterate's `while` is `ITERATE:WHILE` again.
+(`while` is not shadowed by a definition), and so does arnesi's -- its `defpackage` has
+`;; #:while ; iterate` COMMENTED OUT (arnesi-20250622, re-measured 2026-10-31; the earlier count
+listed it as exporting), the next djula blocker (`.todo/h72`). iterate's `while` is
+`ITERATE:WHILE` again.
 
 ## `defpackage`
 A literal, top-level directive like `in-package`. `PackageResolver.resolveDefpackage` registers a
@@ -353,6 +356,10 @@ pinned expectations plus the doc pages. Classification stays visible only at `#'
   resolves under the re-exporting package's spelling, a latent bug for ANY re-export package.
   `C2CL` lives here; `C2MOP` stays on `closer-mop`. Pinned by
   `PackageResolverTest#{closerCommonLispQualifiedMembersResolveToTheirHomePackages,usingCloserCommonLispMakesClAndCloserMopVisible,useListReExportResolvesToTheHomePackage}`.
+- **`closer-mop` itself re-exports `cl` names** (`CLOSER_MOP_CL_REEXPORTS`, upstream's export
+  list: `standard-object`, `standard-class`, `defmethod`, ...) as import redirects to `cl`, so
+  collectors' `(find-class 'closer-mop:standard-object)` is `cl:standard-object` (it was "not
+  external" before 2026-10-31).
 - **babel** records its babel-encodings members as import redirects, so `babel:X` and
   `babel-encodings:X` are ONE symbol
   (`PackageResolverTest#babelSpellingsOfTheBabelEncodingsMembersResolveToTheirHome`).

@@ -10857,6 +10857,12 @@ public final class LispNames {
 	/** {@code closer-mop:slot-definition-initform} ({@code %obj-ref} index 2). */
 	public static final String SLOT_DEFINITION_INITFORM = "SLOT-DEFINITION-INITFORM";
 
+	/**
+	 * {@code closer-mop:set-funcallable-instance-function}: installs the function a
+	 * funcallable instance calls ({@code LispLayout.FUNCALLABLE_CELL}).
+	 */
+	public static final String SET_FUNCALLABLE_INSTANCE_FUNCTION = "SET-FUNCALLABLE-INSTANCE-FUNCTION";
+
 	/** {@code closer-mop:class-direct-slots} over a class metaobject (index 2). */
 	public static final String CLASS_DIRECT_SLOTS = "CLASS-DIRECT-SLOTS";
 

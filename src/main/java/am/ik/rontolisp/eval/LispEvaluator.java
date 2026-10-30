@@ -1808,6 +1808,7 @@ public final class LispEvaluator {
 			}
 			boolean errorp = args.size() < 2 || !(args.get(1) instanceof LispNil);
 			if (args.get(0) instanceof LispSymbol sym) {
+				this.closRegistry.ensureMopClassesSeededFor(sym.name());
 				LispVal metaobject = this.closRegistry.classMetaobject(sym.name());
 				if (metaobject == null) {
 					// The built-in classes (integer, string, ..., t) exist too, so
@@ -10318,6 +10319,9 @@ public final class LispEvaluator {
 		if (LispMacroExpander.defclassNamesMopBaseSuperclass(cons)) {
 			this.closRegistry.ensureMopClassesSeeded();
 		}
+		// A funcallable MOP class named as the metaclass or a superclass registers
+		// first, so the protocol below loads with its constructor.
+		LispMacroExpander.seedMopClassesNamedBy(cons, this.closRegistry);
 		if (LispMacroExpander.defclassUsesMetaclass(cons)) {
 			ensureMopProtocolLoaded();
 		}
@@ -16078,6 +16082,12 @@ public final class LispEvaluator {
 				}
 			}
 			return resume.get();
+		}
+		if (function instanceof LispInstance instance && instance.funcallableFunction() instanceof LispVal installed
+				&& (installed instanceof LispFunction || installed instanceof LispLambda)) {
+			// A funcallable instance calls the function installed in it
+			// (closer-mop:set-funcallable-instance-function).
+			return apply(installed, args, env);
 		}
 		// Not a designator at all: CL's type-error. NIL and T ARE symbols, so each is the
 		// undefined-function the symbol arm above reports for any unbound name.
