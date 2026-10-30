@@ -25233,8 +25233,16 @@ public final class LispMacroExpander {
 		if (spec instanceof LispTrue) {
 			return ClosRegistry.Specializer.DEFAULT;
 		}
+		if (classMetaobjectName(spec, closRegistry) instanceof LispVal className) {
+			// A class OBJECT (a #.(class-of ...) or #.(find-class ...) literal) means the
+			// same as its name.
+			return parseSpecializer(className, form, closRegistry);
+		}
 		if (spec instanceof LispSymbol specSym) {
 			String plainName = plainTypeName(specSym);
+			// A metaclass name (class, standard-class) is a MOP seeding trigger, exactly
+			// like the same name as a type specifier (makeTypeTest).
+			closRegistry.ensureMopClassesSeededFor(specSym.name());
 			ClosRegistry.ClassInfo specClass = closRegistry.findClass(specSym.name());
 			if ("T".equals(plainName)) {
 				return ClosRegistry.Specializer.DEFAULT;
@@ -25255,6 +25263,23 @@ public final class LispMacroExpander {
 					+ " (a class must be defined by defclass before the method)");
 		}
 		throw new IllegalArgumentException(LispNames.DEFMETHOD + ": unsupported specializer " + spec.print());
+	}
+
+	/**
+	 * The name of a class metaobject literal -- an instance of {@code standard-class}
+	 * (seeded or not in this registry: a {@code #.} literal comes from the macro-time
+	 * evaluator) or of a registered metaclass -- or null for anything else. The built-in
+	 * {@code T} class answers the boolean {@code t}.
+	 */
+	@Nullable private static LispVal classMetaobjectName(LispVal value, ClosRegistry closRegistry) {
+		if (!(value instanceof LispInstance inst)) {
+			return null;
+		}
+		String typeName = LispLayout.printNameOfTag(inst.layout().tag());
+		boolean metaobject = typeName != null && (ClosRegistry.STANDARD_CLASS_NAME.equals(plainName(typeName))
+				|| closRegistry.isClassMetaobject(inst));
+		return metaobject && inst.slot(0) instanceof LispVal name
+				&& (name instanceof LispSymbol || name instanceof LispTrue) ? name : null;
 	}
 
 	/** The canonical key text of a method's specializer list. */
@@ -25501,6 +25526,10 @@ public final class LispMacroExpander {
 				&& !(quotedRest.car() instanceof LispCons)) {
 			value = quotedRest.car();
 		}
+		else if (classMetaobjectName(value, closRegistry) instanceof LispSymbol className) {
+			// (eql #<class>): the literal metaobject is the one find-class answers.
+			value = findClassForm(className);
+		}
 		else if (value instanceof LispSymbol bare
 				&& closRegistry.findConstant(bare.name()) instanceof LispVal constant) {
 			// (eql +k+) where +k+ is a defconstant: CLHS 7.6.2 evaluates the specializer
@@ -25512,8 +25541,44 @@ public final class LispMacroExpander {
 		if (isEqlSpecializerLiteral(value)) {
 			return value;
 		}
+		if (findClassFormName(value) instanceof LispSymbol className) {
+			// (eql (find-class 'c)): the form is evaluated where the method is defined
+			// (CLHS 7.6.2), and find-class answers one memoized metaobject per class, so
+			// the dispatcher evaluating it again compares against the same object. The
+			// class must exist now, as find-class would require.
+			closRegistry.ensureMopClassesSeededFor(className.name());
+			String plain = plainName(className.name());
+			if (closRegistry.findClass(className.name()) == null && closRegistry.findStructTag(className.name()) == null
+					&& !ClosRegistry.BUILTIN_CLASS_NAMES.contains(plain)
+					&& !ClosRegistry.FIND_CLASS_ONLY_CLASS_NAMES.contains(plain)) {
+				throw new IllegalArgumentException(LispNames.DEFMETHOD + ": there is no class named " + className.name()
+						+ " in " + specCons.print());
+			}
+			return findClassForm(className);
+		}
 		throw new UnsupportedOperationException(LispNames.DEFMETHOD
-				+ " eql specializers support keyword/symbol/number/character literals only: " + defmethodForm.print());
+				+ " eql specializers support keyword/symbol/number/character literals and (find-class 'name) only: "
+				+ defmethodForm.print());
+	}
+
+	/** {@code (find-class 'name)}. */
+	private static LispVal findClassForm(LispSymbol className) {
+		return listToCons(List.of(new LispSymbol(LispNames.FIND_CLASS),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), className))));
+	}
+
+	/**
+	 * The class name of a {@code (find-class 'name)} form, or null for any other value.
+	 */
+	@Nullable private static LispSymbol findClassFormName(LispVal value) {
+		if (value instanceof LispCons call && call.isProperList() && call.toList().size() == 2
+				&& call.car() instanceof LispSymbol op && LispNames.FIND_CLASS.equals(plainName(op.name()))
+				&& call.toList().get(1) instanceof LispCons quoted && quoted.isProperList()
+				&& quoted.toList().size() == 2 && quoted.car() instanceof LispSymbol q && LispNames.isQuote(q.name())
+				&& quoted.toList().get(1) instanceof LispSymbol name) {
+			return name;
+		}
+		return null;
 	}
 
 	/** Whether a value is one an {@code (eql ...)} specializer can compare against. */
@@ -25586,7 +25651,8 @@ public final class LispMacroExpander {
 	private static boolean isSupportedTypeSpecializer(String plainName) {
 		return atomicTypePredicate(plainName) != null || switch (plainName) {
 			case "BOOLEAN", "BIT", "UNSIGNED-BYTE", "SIGNED-BYTE", "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY",
-					"SEQUENCE", "STANDARD-OBJECT", "STRUCTURE-OBJECT", "PATHNAME", "PACKAGE" ->
+					"SEQUENCE", "STANDARD-OBJECT", "STRUCTURE-OBJECT", "PATHNAME", "PACKAGE", "STRUCTURE-CLASS",
+					"BUILT-IN-CLASS" ->
 				true;
 			default -> false;
 		};
@@ -26628,6 +26694,10 @@ public final class LispMacroExpander {
 	 * strings -- and numbers/characters with {@code eql}.
 	 */
 	private static LispVal makeEqlSpecializerTest(LispVal arg, LispVal value) {
+		if (value instanceof LispCons findClass) {
+			// (find-class 'c): one memoized metaobject, compared by identity.
+			return listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), arg, findClass));
+		}
 		if (value instanceof LispNil) {
 			return callOf(LispNames.NULL, arg);
 		}

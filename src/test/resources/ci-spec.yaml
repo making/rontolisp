@@ -20694,10 +20694,26 @@ cases:
                      (clsurf-selfward (make-instance 'clsurf-load-op))
                      (clsurf-r-a y) (slot-value y 'a) (slot-value y nm))))
       (print (typecase (find-class 'clsurf-op) (standard-class :meta) (t :other)))
+      ;; Metaclass names, a class OBJECT and (eql (find-class 'c)) as specializers.
+      (defstruct clsurf-s a)
+      (defgeneric clsurf-meta (x))
+      (defmethod clsurf-meta ((c class)) (list :class (class-name c)))
+      (defmethod clsurf-meta ((c (eql (find-class 'clsurf-op)))) :op-class)
+      (defmethod clsurf-meta ((c structure-class)) :never)
+      (defmethod clsurf-meta ((c built-in-class)) :never)
+      (defmethod clsurf-meta ((n #.(class-of 1))) (list :integer n))
+      (defmethod clsurf-meta (x) :other)
+      (defgeneric clsurf-std (x))
+      (defmethod clsurf-std ((c standard-class)) :standard)
+      (defmethod clsurf-std (x) :no)
+      (print (list (clsurf-meta (class-of (make-instance 'clsurf-op))) (clsurf-meta (find-class 'clsurf-r))
+                   (clsurf-meta (find-class 'clsurf-s)) (clsurf-meta (class-of 42)) (clsurf-meta 7)
+                   (clsurf-meta "s") (clsurf-std (find-class 'clsurf-r)) (clsurf-std (make-instance 'clsurf-r))))
     expected: |
       (5 7)
       (BASE-OP LOAD-DEP 9 9 9)
       :META
+      (:OP-CLASS (:CLASS CLSURF-R) (:CLASS CLSURF-S) (:CLASS INTEGER) (:INTEGER 7) :OTHER :STANDARD :NO)
 
   - name: missing-cl-names
     source: |
