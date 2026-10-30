@@ -933,17 +933,16 @@ public final class PackageRegistry {
 	 * used by {@link #isBuiltinPackageName} for the upcase reader mode's canonical fold,
 	 * which must not depend on a registry instance.
 	 */
-	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(
-			Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG, LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG,
-					LispNames.TORCH_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
-					LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG, LispNames.TOKENIZER_PKG,
-					LispNames.CHECKPOINT_PKG, LispNames.SAFETENSORS_PKG, LispNames.GGUF_PKG, LispNames.METAL_PKG,
-					LispNames.SCENE_PKG, LispNames.COCOA_PKG, LispNames.FLI_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG,
-					LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
-					LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
-					LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
-					LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
-					LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG, "KEYWORD"),
+	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
+			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.TORCH_PKG, LispNames.VEC_PKG,
+			LispNames.USOCKET_PKG, LispNames.JAVA_PKG, LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG,
+			LispNames.TOKENIZER_PKG, LispNames.CHECKPOINT_PKG, LispNames.SAFETENSORS_PKG, LispNames.GGUF_PKG,
+			LispNames.METAL_PKG, LispNames.SCENE_PKG, LispNames.COCOA_PKG, LispNames.FLI_PKG, LispNames.FFI_PKG,
+			LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG,
+			LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG,
+			LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
+			LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG, LispNames.MGL_PAX_PKG,
+			LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG, LispNames.QL_DIST_PKG, "KEYWORD"),
 			union(Set.copyOf(UiopExports.subPackages()), ASDF_SUB_PACKAGES.keySet()));
 
 	/**

@@ -98,3 +98,9 @@ nothing they read (the baked tables would grow by every name read, and a `defmac
 never reaches them), so the table has to be carried from the macro-time evaluator to the
 backend, not rebuilt there. Weigh it against `.todo/h55` (building `PKG::NAME` for an
 unexported name), which leaves the internal read members agreeing with the build.
+
+## Update 2026-10-30 (`.todo/h55`)
+
+The build is now `PKG::NAME :internal` in a program package (`.kb/packages.md`, "The build is
+the internal symbol in a package the program defines"), so a read-only internal name already
+answers the read symbol; what this item still lacks is nil for a name the package never got.

@@ -6,6 +6,8 @@ Returns `t` when `function-name` names something callable or expandable: a funct
 
 On the compiled backends a **literal** quoted argument is decided at compile time with full knowledge (macros and special forms included); a computed argument is checked at runtime against the function registries, which only know real functions — so `(fboundp (intern "cond"))` is nil in compiled code but `t` in the interpreter, and `defmacro` macros are likewise compile-time-only there.
 
+Every standard function rontolisp implements answers `t` before its first call, including those defined in Lisp and loaded on first use (`alphanumericp`, `equalp`, `string<`, the `uiop` functions); a standard name with no implementation behind it (`find-method`) answers `nil`. On the compiled backends a computed argument answers `t` only for a function the program carries: a built-in it never takes as a value (`aref`, `typep`) and the `car`/`cdr` compositions answer `nil` there.
+
 As a function value (`#'fboundp`, as in `(mapcar #'fboundp names)`) it is a computed probe on every backend, with the run-time answers above; the eval runtime is pulled in only for a program that names `#'fboundp`.
 
 `t`, `nil` and keywords are symbols that name no function, so the answer is `nil` for them on every backend.

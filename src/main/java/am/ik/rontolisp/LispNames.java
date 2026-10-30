@@ -3086,6 +3086,14 @@ public final class LispNames {
 	public static final String CL_USERS_INTERNAL = "%CL-USERS%";
 
 	/**
+	 * The {@code (%program-package-p keyword)} helper: whether a computed package
+	 * designator's package is one the program defines, whose name nothing answers builds
+	 * the INTERNAL spelling {@code PKG::NAME}
+	 * ({@code LispMacroExpander.injectBakedAccess}).
+	 */
+	public static final String PROGRAM_PACKAGE_P_INTERNAL = "%PROGRAM-PACKAGE-P";
+
+	/**
 	 * The {@code (%standard-access-status package name)} helper: the status half of a
 	 * {@code find-symbol} / {@code intern} with a computed package designator when the
 	 * program carries the standard names -- the package's row, then a standard name

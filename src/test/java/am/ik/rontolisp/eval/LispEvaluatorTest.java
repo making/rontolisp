@@ -17762,6 +17762,11 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(fboundp 'cond)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(fboundp 'defun)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(fboundp 'cadr)")).isEqualTo(LispTrue.INSTANCE);
+		// A function a library defines answers before its first call loads it, however
+		// the symbol was built.
+		assertThat(evalMulti("""
+				(list (fboundp 'alphanumericp) (fboundp (find-symbol "EQUALP" "CL"))
+				      (fboundp (intern "SPLIT-STRING" "UIOP")))""").print()).isEqualTo("(T T T)");
 		assertThat(evalMulti("(fboundp 'no-such-fn)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(evalMulti("(defun fb-fn (x) x) (fboundp 'fb-fn)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(defmacro fb-mac (x) x) (fboundp 'fb-mac)")).isEqualTo(LispTrue.INSTANCE);

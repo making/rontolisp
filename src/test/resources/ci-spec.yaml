@@ -13338,6 +13338,13 @@ cases:
       ;; A failed check-type is a type-error carrying the value and the specifier.
       (print (handler-case (let ((n "5")) (check-type n (integer 0 9)))
                (type-error (c) (list (type-error-datum c) (type-error-expected-type c) (princ-to-string c)))))
+      ;; It is a simple-type-error, so also a simple-condition (CLHS class precedence).
+      (print (typep (make-condition 'simple-type-error :format-control "x") 'simple-condition))
+      (print (handler-case (let ((n 'q)) (check-type n string))
+               (simple-condition (c) (list (type-of c) (type-error-expected-type c)))))
+      (print (block ci-hb
+               (handler-bind ((simple-condition (lambda (c) (return-from ci-hb (type-error-datum c)))))
+                 (let ((n 'q)) (check-type n string)))))
       (assert (= 1 1))
       (print (typecase 7 ((integer 0 9) :digit) (integer :int)))
       (print (typecase 'b ((member a b c) :abc) (t :other)))
@@ -13348,6 +13355,9 @@ cases:
       :CHECKED
       :CHECKED2
       ("5" (INTEGER 0 9) "The value of N is \"5\", which is not of type (INTEGER 0 9).")
+      T
+      (SIMPLE-TYPE-ERROR STRING)
+      Q
       :DIGIT
       :ABC
   - name: declared-array-types-single-arm-access
@@ -14549,7 +14559,7 @@ cases:
       (print (mapcar #'boundp '(t nil :fv-kw)))
       (print (mapcar #'fboundp '(fv-none)))
       (print (and (funcall #'fboundp 'car) t))
-      (print (mapcar (lambda (s) (and (funcall #'fboundp s) t)) '(fv-fn car fv-none)))
+      (print (mapcar (lambda (s) (and (funcall #'fboundp s) t)) '(fv-fn car fv-none alphanumericp equalp string<)))
       (print (and (apply #'fboundp '(fv-fn)) t))
     expected: |
       (T NIL NIL)
@@ -14558,7 +14568,7 @@ cases:
       (T T T)
       (NIL)
       T
-      (T T NIL)
+      (T T NIL T T T)
       T
   - name: runtime-package-symbol-ops
     source: |
@@ -23886,6 +23896,39 @@ cases:
       "CI-FSI-U1"
       (CI-FSI-U2:D1 :INHERITED)
       (CI-FSI-U1:B1 :INTERNAL)
+  - name: intern-of-an-internal-name-is-the-read-symbol
+    source: |
+      (defpackage :ci-iis (:use :cl) (:nicknames :ci-iisn) (:export #:pub))
+      (defpackage :ci-iis-none (:use :cl))
+      (in-package :ci-iis)
+      (defvar *a* (list 'data (intern "DATA" :ci-iis) 'pub (intern "PUB" :ci-iis)))
+      (defun data (x) (list :data x))
+      (defun ci-iis-in (n p) (multiple-value-list (intern n p)))
+      (defun ci-iis-none::helper () :helper)
+      (in-package :cl-user)
+      (print ci-iis::*a*)
+      (print (list (eq (first ci-iis::*a*) (second ci-iis::*a*)) (eq (third ci-iis::*a*) (fourth ci-iis::*a*))))
+      (print (multiple-value-list (find-symbol (string-upcase "data") :ci-iis)))
+      (print (multiple-value-list (intern (string-upcase "pub") :ci-iisn)))
+      (print (ci-iis::ci-iis-in "DATA" :ci-iis))
+      (print (ci-iis::ci-iis-in "PUB" "CI-IIS"))
+      (print (ci-iis::ci-iis-in "HELPER" :ci-iis-none))
+      (print (eq (car (ci-iis::ci-iis-in (string-upcase "data") :ci-iisn)) 'ci-iis::data))
+      (print (funcall (intern (string-upcase "data") :ci-iis) 1))
+      (print (funcall (car (ci-iis::ci-iis-in "HELPER" "CI-IIS-NONE"))))
+      (print (package-name (symbol-package (car (ci-iis::ci-iis-in "DATA" :ci-iis)))))
+    expected: |
+      (CI-IIS::DATA CI-IIS::DATA CI-IIS:PUB CI-IIS:PUB)
+      (T T)
+      (CI-IIS::DATA :INTERNAL)
+      (CI-IIS:PUB :EXTERNAL)
+      (CI-IIS::DATA :INTERNAL)
+      (CI-IIS:PUB :EXTERNAL)
+      (CI-IIS-NONE::HELPER :INTERNAL)
+      T
+      (:DATA 1)
+      :HELPER
+      "CI-IIS"
   - name: find-symbol-of-a-computed-standard-name
     source: |
       (defpackage :ci-stn-a (:use :cl))
