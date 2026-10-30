@@ -35,6 +35,7 @@ import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.eval.ClojureCommandLine;
 import am.ik.rontolisp.eval.ClojureNrepl;
+import am.ik.rontolisp.eval.CommonLispSwank;
 import am.ik.rontolisp.eval.ClojureDepsRepositories;
 import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.LinalgBlas;
@@ -271,6 +272,9 @@ public final class RontoLispCli {
 		}
 		if (options.contains("--nrepl")) {
 			// --nrepl[=PORT]: a REPL served to editors, so it takes no program
+			if (options.contains("--swank")) {
+				throw new IllegalArgumentException("--nrepl and --swank cannot be combined: one server per process");
+			}
 			if (test || inline != null || positional != null || generated != null || options.contains("-o")) {
 				throw new IllegalArgumentException("--nrepl serves a Clojure REPL over nREPL: it takes no program to"
 						+ " run or compile (no input file, -e, -o or test)");
@@ -286,6 +290,24 @@ public final class RontoLispCli {
 							options.contains("--parallel"), commandLine(null, programArguments), standards,
 							javaResolution.warnReflection(), javaClassPath(javaResolution)),
 					standards);
+			return;
+		}
+		if (options.contains("--swank")) {
+			// --swank[=PORT]: a Common Lisp REPL served to SLIME, so it takes no program
+			if (test || inline != null || positional != null || generated != null || options.contains("-o")) {
+				throw new IllegalArgumentException("--swank serves a Common Lisp REPL over SWANK: it takes no program"
+						+ " to run or compile (no input file, -e, -o or test)");
+			}
+			if (sourceLanguage != null && SourceLanguage.parse(sourceLanguage) != SourceLanguage.COMMON_LISP) {
+				throw new IllegalArgumentException("--swank serves Common Lisp: --source-language " + sourceLanguage
+						+ " cannot be served over SWANK");
+			}
+			refuseCompileOnlyJavaOptions(javaResolution);
+			swank(swankPort(Objects.requireNonNull(options.get("--swank"))),
+					interactive(this.out, InputStream.nullInputStream(), systemPath, dists, features,
+							options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"),
+							options.contains("--parallel"), commandLine(null, programArguments), standards,
+							javaResolution.warnReflection(), javaClassPath(javaResolution)));
 			return;
 		}
 		if (!test && inline == null && positional == null && generated == null) {
@@ -718,6 +740,49 @@ public final class RontoLispCli {
 			catch (IOException ex) {
 				// deleteOnExit tries again
 			}
+			evaluator.flushOpenStreams();
+		}
+	}
+
+	/**
+	 * The port {@code --swank} names: SWANK's 4005 when it names none, any free one for
+	 * 0.
+	 * @param option the option's value, empty for the bare flag
+	 * @return the port
+	 */
+	static int swankPort(String option) {
+		if (option.isEmpty()) {
+			return 4005;
+		}
+		try {
+			int port = Integer.parseInt(option);
+			if (port >= 0 && port <= 65535) {
+				return port;
+			}
+		}
+		catch (NumberFormatException ex) {
+			// refused below
+		}
+		throw new IllegalArgumentException("--swank=PORT expects a port between 0 and 65535, not '" + option + "'");
+	}
+
+	/**
+	 * Serves a Common Lisp REPL over SWANK on the loopback interface until the process
+	 * ends, printing the line SWANK's {@code create-server} prints.
+	 */
+	private void swank(int port, Interactive interactive) {
+		LispEvaluator evaluator = interactive.evaluator();
+		CommonLispSwank lisp = new CommonLispSwank(evaluator);
+		try (SwankServer server = new SwankServer(lisp, evaluator, InetAddress.getLoopbackAddress(), port,
+				this.stackBytes)) {
+			this.out.println(server.startedMessage());
+			this.out.flush();
+			server.serve();
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+		finally {
 			evaluator.flushOpenStreams();
 		}
 	}
@@ -1908,6 +1973,8 @@ public final class RontoLispCli {
 		this.out.println("                     editor (CIDER, Calva, Conjure) or clj -M -m nrepl.cmdline");
 		this.out.println("                     --connect; any free port unless PORT is given, written to");
 		this.out.println("                     .nrepl-port in the working directory");
+		this.out.println("  --swank[=PORT]     Common Lisp: serve the REPL over SWANK on localhost, for");
+		this.out.println("                     SLIME (M-x slime-connect); port 4005 unless PORT is given");
 	}
 
 	private static String readFile(String path) {

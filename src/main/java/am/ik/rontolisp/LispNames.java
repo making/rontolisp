@@ -11648,17 +11648,17 @@ public final class LispNames {
 
 	/**
 	 * The {@code swank} stub package (and built-in ASDF system) name. The real swank is
-	 * SLIME's server half, whose {@code .asd} is a program rontolisp cannot parse and
-	 * whose job (attaching a remote REPL to a running image) no backend can do. clack's
-	 * {@code .asd} hard-depends on it all the same, so the stub is what keeps
-	 * {@code (ql:quickload "clack")} from downloading SLIME and dying on it.
+	 * SLIME's server half, whose {@code .asd} is a program rontolisp cannot parse; the
+	 * interpreter's own server is the command line's {@code --swank}, which a program
+	 * cannot start. clack's {@code .asd} hard-depends on it all the same, so the stub is
+	 * what keeps {@code (ql:quickload "clack")} from downloading SLIME and dying on it.
 	 */
 	public static final String SWANK_PKG = "SWANK";
 
 	/**
-	 * {@code swank:create-server} -- signals: a remote REPL server is not something any
-	 * backend can start. clack reaches it only when {@code clackup} is passed
-	 * {@code :swank-port}.
+	 * {@code swank:create-server} -- signals: a program cannot start a SWANK server
+	 * ({@code rontolisp --swank} serves the interpreter's REPL). clack reaches it only
+	 * when {@code clackup} is passed {@code :swank-port}.
 	 */
 	public static final String CREATE_SERVER = "CREATE-SERVER";
 

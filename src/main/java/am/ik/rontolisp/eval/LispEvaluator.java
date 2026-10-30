@@ -191,9 +191,10 @@ public final class LispEvaluator {
 	private static final String WARNING_LABEL = "WARNING: ";
 
 	// Where a warning that reaches its report goes instead of *error-output* while a
-	// macro expands on the compile path (reportingWarningsTo): the report's text and
-	// whether it is a style-warning. Null everywhere else.
-	private @Nullable BiConsumer<String, Boolean> macroTimeWarnings;
+	// macro expands on the compile path, or an editor's compile request runs
+	// (reportingWarningsTo): the report's text and whether it is a style-warning. Per
+	// thread; unset everywhere else.
+	private final ThreadLocal<@Nullable BiConsumer<String, Boolean>> macroTimeWarnings = new ThreadLocal<>();
 
 	// Whether the runtime format renderer (FormatRenderer.defuns(), the same forms the
 	// compile path injects) has been evaluated into the global environment. The
@@ -298,9 +299,25 @@ public final class LispEvaluator {
 	/**
 	 * User macros defined with {@code defmacro}, keyed by name. A macro call is expanded
 	 * (the body evaluated with the unevaluated argument forms bound) and the expansion is
-	 * evaluated in its place.
+	 * evaluated in its place. Concurrent: an editor's request defines a macro on one
+	 * thread while another runs code that expands macros.
 	 */
-	private final java.util.Map<String, UserMacro> userMacros = new java.util.HashMap<>();
+	private final java.util.Map<String, UserMacro> userMacros = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
+	 * What a {@code defun}, {@code defmacro} or {@code defgeneric} wrote down, keyed by
+	 * the name it defined: the lambda list as written (a {@link LispLambda} keeps only
+	 * its desugared shape) and the documentation string, for an editor's argument list
+	 * and description ({@link CommonLispSwank}). {@code documentation} itself answers nil
+	 * on every backend, so nothing a program reads changes.
+	 *
+	 * @param lambdaList the lambda list, as written
+	 * @param documentation the documentation string, or null
+	 */
+	record Definition(LispVal lambdaList, @Nullable String documentation) {
+	}
+
+	private final java.util.Map<String, Definition> definitions = new java.util.concurrent.ConcurrentHashMap<>();
 
 	/**
 	 * Global symbol macros defined with {@code define-symbol-macro}, keyed by name. A
@@ -2000,7 +2017,7 @@ public final class LispEvaluator {
 			// (LispMacroExpander.expandWarnWithDesignator); only the macro-time report
 			// reads it, so the write below sees the message alone.
 			List<LispVal> args = rawArgs.size() == 2 ? rawArgs.subList(0, 1) : rawArgs;
-			BiConsumer<String, Boolean> macroTimeSink = this.macroTimeWarnings;
+			BiConsumer<String, Boolean> macroTimeSink = this.macroTimeWarnings.get();
 			if (macroTimeSink != null && args.size() == 1) {
 				String message = args.get(0) instanceof LispString s ? s.value() : args.get(0).display();
 				String text = message.startsWith(WARNING_LABEL) ? message.substring(WARNING_LABEL.length()) : message;
@@ -2403,14 +2420,7 @@ public final class LispEvaluator {
 			if (name == null) {
 				throw new LispEvalException(LispNames.FBOUNDP + " expects a symbol, got " + args.get(0).print());
 			}
-			// A catalog built-in (elt, make-broadcast-stream, ...) has no binding until
-			// its
-			// first #' resolution evaluates the wrapper (resolveFunction), and is a
-			// function all the same.
-			boolean bound = SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)
-					|| this.globalEnv.lookupFunctionOrNull(name) != null || LispNames.isCarCdrComposition(name)
-					|| BuiltinFunctionWrappers.names().contains(name);
-			return bound ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			return fbound(name) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// fmakunbound: drop the global function binding AND any user macro of the same
 		// name, so the name is undefined again for every later reference (fboundp, a
@@ -5537,9 +5547,24 @@ public final class LispEvaluator {
 	 * @return the result
 	 */
 	public LispVal eval(LispVal expr) {
+		return evalTopLevel(expr, null);
+	}
+
+	/**
+	 * Evaluates a top-level form, handing the form as resolved to {@code resolvedForm}
+	 * before it runs: an editor's compile request checks the calls it makes
+	 * ({@link CommonLispSwank}).
+	 * @param expr the expression to evaluate
+	 * @param resolvedForm what sees the resolved form, or null
+	 * @return the result
+	 */
+	LispVal evalTopLevel(LispVal expr, @Nullable Consumer<LispVal> resolvedForm) {
 		// Resolve packages at the top-level entry only; nested evaluation and macro
 		// expansion operate on the already-resolved canonical form.
 		LispVal resolved = prepareJavaSites(resolveStructLiterals(this.packageResolver.resolve(expr)));
+		if (resolvedForm != null) {
+			resolvedForm.accept(resolved);
+		}
 		// Register the form's special proclamations BEFORE evaluating it, so a defvar
 		// makes the bindings of its name in the same form dynamic. A local
 		// (declare (special x)) is no proclamation: the binding form it heads reads it
@@ -8779,7 +8804,43 @@ public final class LispEvaluator {
 		boolean sourced = LispTrees.anyCons(blockForm, form -> form instanceof LocatedCons);
 		this.globalEnv.defineFunction(funcName,
 				new LispLambda(expanded.required(), expanded.rest(), List.of(blockForm), env, funcName, sourced));
+		recordDefinition(funcName, parts);
 		return singleValue(nameForm);
+	}
+
+	/**
+	 * Writes down a definition's lambda list and documentation string
+	 * ({@link #definitions}).
+	 * @param name the defined name
+	 * @param parts the definition form: operator, name, lambda list, body
+	 */
+	private void recordDefinition(String name, List<LispVal> parts) {
+		if (parts.size() < 3) {
+			return;
+		}
+		String documentation = null;
+		for (int i = 3; i < parts.size() - 1; i++) {
+			LispVal form = parts.get(i);
+			if (form instanceof LispString doc) {
+				documentation = doc.value();
+				break;
+			}
+			if (!(form instanceof LispCons declaration && declaration.car() instanceof LispSymbol head
+					&& LispNames.DECLARE.equals(head.name()))) {
+				break;
+			}
+		}
+		this.definitions.put(name, new Definition(parts.get(2), documentation));
+	}
+
+	/**
+	 * What the definition of a name wrote down, or null when no {@code defun},
+	 * {@code defmacro} or {@code defgeneric} this evaluator ran defined it.
+	 * @param name the canonical name
+	 * @return the definition
+	 */
+	@Nullable Definition definition(String name) {
+		return this.definitions.get(name);
 	}
 
 	private LispVal evalDefstruct(LispCons cons, Environment env) {
@@ -8931,7 +8992,20 @@ public final class LispEvaluator {
 			eval(defun, env);
 		}
 		defineDispatcher(generic, env);
-		return cons.toList().get(1);
+		List<LispVal> parts = cons.toList();
+		if (parts.size() > 2) {
+			// a defgeneric's documentation is an option, not a body string
+			String documentation = null;
+			for (LispVal option : parts.subList(3, parts.size())) {
+				if (option instanceof LispCons pair && pair.car() instanceof LispSymbol key
+						&& ":DOCUMENTATION".equals(key.name()) && pair.cdr() instanceof LispCons value
+						&& value.car() instanceof LispString doc) {
+					documentation = doc.value();
+				}
+			}
+			this.definitions.put(generic, new Definition(parts.get(2), documentation));
+		}
+		return parts.get(1);
 	}
 
 	/**
@@ -9200,6 +9274,7 @@ public final class LispEvaluator {
 		}
 		putUserMacro(name.name(),
 				makeUserMacro(LispNames.DEFMACRO, name, parts.get(2), parts.subList(3, parts.size()), env));
+		recordDefinition(name.name(), parts);
 		return singleValue(name);
 	}
 
@@ -9571,20 +9646,22 @@ public final class LispEvaluator {
 	 * report's text (without the {@code WARNING: } label) and whether the condition is a
 	 * {@code style-warning}. The compile path's macro-time evaluator reports a warning a
 	 * macro signals while it expands this way, as a compile-time warning
-	 * ({@code UserMacroExpander}); the enclosing sink is restored afterwards.
+	 * ({@code UserMacroExpander}), and an editor's compile request its notes
+	 * ({@link CommonLispSwank}); the enclosing sink is restored afterwards. The sink is
+	 * the calling thread's: another thread's warnings still print.
 	 * @param <T> what the body produces
 	 * @param sink where the reports go
 	 * @param body the evaluation to run
 	 * @return what the body produced
 	 */
 	<T> T reportingWarningsTo(BiConsumer<String, Boolean> sink, java.util.function.Supplier<T> body) {
-		BiConsumer<String, Boolean> previous = this.macroTimeWarnings;
-		this.macroTimeWarnings = sink;
+		BiConsumer<String, Boolean> previous = this.macroTimeWarnings.get();
+		this.macroTimeWarnings.set(sink);
 		try {
 			return body.get();
 		}
 		finally {
-			this.macroTimeWarnings = previous;
+			this.macroTimeWarnings.set(previous);
 		}
 	}
 
@@ -12740,7 +12817,7 @@ public final class LispEvaluator {
 	 * a definition registers here, and only the runtime {@code intern} writes the package
 	 * registry's member table.
 	 */
-	private boolean definedInImage(String name) {
+	boolean definedInImage(String name) {
 		return this.userMacros.containsKey(name) || this.globalEnv.lookupFunctionOrNull(name) != null
 				|| this.globalEnv.hasBinding(name);
 	}
@@ -14236,6 +14313,67 @@ public final class LispEvaluator {
 			}
 		}
 		return apply(resolveFunction(helperName), args, this.globalEnv);
+	}
+
+	/**
+	 * Whether a canonical name names a function, a macro or a special operator -- what
+	 * {@code fboundp} answers for its symbol.
+	 * @param name the canonical name
+	 * @return whether it is fbound
+	 */
+	boolean fbound(String name) {
+		// A catalog built-in (elt, make-broadcast-stream, ...) has no binding until its
+		// first #' resolution evaluates the wrapper (resolveFunction), and is a function
+		// all the same.
+		return SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)
+				|| this.globalEnv.lookupFunctionOrNull(name) != null || LispNames.isCarCdrComposition(name)
+				|| BuiltinFunctionWrappers.names().contains(name);
+	}
+
+	/**
+	 * Whether a canonical name has a global value or a dynamic binding on the calling
+	 * thread -- what {@code boundp} answers for its symbol.
+	 * @param name the canonical name
+	 * @return whether it is bound
+	 */
+	boolean bound(String name) {
+		return name.startsWith(":") || LispNames.PACKAGE_VAR.equals(name) || (this.dynamicBindings.isBound(name)
+				? this.dynamicBindings.get(name) != null : this.globalEnv.hasBinding(name));
+	}
+
+	/**
+	 * Whether a canonical name is proclaimed special ({@code defvar},
+	 * {@code defparameter}, a {@code special} proclamation).
+	 * @param name the canonical name
+	 * @return whether it is special
+	 */
+	boolean isSpecialVariable(String name) {
+		return this.specialVars.contains(name);
+	}
+
+	/**
+	 * The resolver this evaluator reads every form through, for an editor's half that
+	 * names packages and symbols ({@link CommonLispSwank}).
+	 * @return the resolver
+	 */
+	PackageResolver packageResolver() {
+		return this.packageResolver;
+	}
+
+	/**
+	 * The global environment.
+	 * @return the environment
+	 */
+	Environment globalEnvironment() {
+		return this.globalEnv;
+	}
+
+	/**
+	 * The CLOS registry.
+	 * @return the registry
+	 */
+	ClosRegistry closRegistry() {
+		return this.closRegistry;
 	}
 
 	/**

@@ -945,6 +945,16 @@ class RontoLispCliTest {
 			.hasMessageContaining("--nrepl serves Clojure: --source-language scheme");
 		assertThatThrownBy(() -> runCli("", "--nrepl=70000")).isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("--nrepl=PORT expects a port between 0 and 65535, not '70000'");
+		// --swank serves a Common Lisp REPL, likewise
+		assertThatThrownBy(() -> runCli("", "--swank", file.toString())).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--swank serves a Common Lisp REPL over SWANK: it takes no program");
+		assertThatThrownBy(() -> runCli("", "--swank", "--source-language", "clojure"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--swank serves Common Lisp: --source-language clojure");
+		assertThatThrownBy(() -> runCli("", "--swank=x")).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--swank=PORT expects a port between 0 and 65535, not 'x'");
+		assertThatThrownBy(() -> runCli("", "--nrepl", "--swank")).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--nrepl and --swank cannot be combined");
 	}
 
 	@Test

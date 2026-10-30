@@ -1306,9 +1306,9 @@ public final class PackageRegistry {
 				"%CONTINUATION-P", "%INVALID-CB-P", "STRING-GET", "STRING-SET"));
 		define(new LispPackage(LispNames.BABEL_PKG, List.of(), babelSymbols, babelExternals, babelImports));
 		// swank: the STUB behind the built-in ASDF system of the same name
-		// (swank.lisp, eval.ShimLibraries). The real swank is SLIME's server half --
-		// a remote REPL attached to a running image, which no backend can offer, and
-		// whose .asd is a program the defsystem-as-data front-end cannot read at all.
+		// (swank.lisp, eval.ShimLibraries). The real swank is SLIME's server half,
+		// whose .asd is a program the defsystem-as-data front-end cannot read at all;
+		// the interpreter's own server is the command line's --swank (cli.SwankServer).
 		// clack's .asd hard-depends on it, so without the stub (ql:quickload "clack")
 		// downloads the SLIME tarball and dies on it.
 		define(new LispPackage(LispNames.SWANK_PKG, List.of(),

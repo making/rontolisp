@@ -68,6 +68,11 @@ bugs, and each looks like someone else's fault.
   `applyJsonHelper`. Fast path stays lock-free. Inside the lock the flag is set BEFORE evaluating
   (stops a library re-entering its own gate). A new lazy load MUST be
   take-lock / check-flag / set-flag / evaluate.
+- The interpreter's `PackageResolver` is a monitor (2026-10-30, `.kb/swank.md`): a resolution
+  walk and a printer's `printsBare` keep transient state in fields, so an `eval`, `intern` or
+  symbol print on one thread could change another thread's walk mid-way (found by reading, not
+  by a failure). The user macro table is a `ConcurrentHashMap` and the macro-time warning sink
+  a `ThreadLocal`.
 - `Environment.NameMap` promotes a scope outgrowing its 8-entry linear arrays to a
   `ConcurrentHashMap` (the global environment always is one); `LispEvaluator.specialVars` likewise.
 

@@ -189,6 +189,11 @@ public final class Environment implements Scope {
 			this.size++;
 		}
 
+		List<String> names() {
+			Map<String, LispVal> map = this.overflow;
+			return map != null ? List.copyOf(map.keySet()) : List.of(java.util.Arrays.copyOf(this.keys, this.size));
+		}
+
 		void remove(String name) {
 			Map<String, LispVal> map = this.overflow;
 			if (map != null) {
@@ -801,6 +806,24 @@ public final class Environment implements Scope {
 	 */
 	public void undefineFunction(String name) {
 		this.functions.remove(name);
+	}
+
+	/**
+	 * The names this scope binds in its own function namespace (not its parents'), a
+	 * snapshot: an editor's completion over the global environment.
+	 * @return the names
+	 */
+	List<String> functionNames() {
+		return this.functions.names();
+	}
+
+	/**
+	 * The names this scope binds in its own variable namespace (not its parents'), a
+	 * snapshot.
+	 * @return the names
+	 */
+	List<String> variableNames() {
+		return this.bindings.names();
 	}
 
 	/**

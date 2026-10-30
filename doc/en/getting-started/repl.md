@@ -23,7 +23,8 @@ CL-USER> (quit)
 Each top-level form is evaluated as soon as it is complete, and its value is
 echoed back. Definitions persist across inputs: a `defun`, `defvar`, or `setq`
 entered at one prompt is visible at every later one, so you can build up state
-incrementally within a session.
+incrementally within a session. The same REPL runs in Emacs through SLIME:
+[SWANK (SLIME)](swank.md).
 
 The prompt is the name of the [current package](../reference/packages.md),
 the way `CL-USER>` names it in any Common Lisp REPL. It is read again before

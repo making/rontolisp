@@ -513,6 +513,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.CommonLispSwank"
+        },
+        "pattern": "am/ik/rontolisp/eval/cl-arglists\\.txt"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
         },
         "pattern": "am/ik/rontolisp/eval/trivial-cltl2\\.lisp"

@@ -41,12 +41,19 @@ import org.jspecify.annotations.Nullable;
  * unqualified {@code cl} symbol used in a package that does not use {@code cl} (such as
  * {@code rontolisp}). The instance keeps the current-package state across calls, so a
  * REPL session keeps {@code in-package} in effect across inputs.
+ *
+ * <p>
+ * A thread may hold a current package of its own ({@link #bindThreadPackage}): an
+ * editor's request names the package it reads and runs in, and two requests run at once
+ * in two packages. Every other thread shares the one state. The instance is a monitor: a
+ * resolution walk keeps transient state in fields, so two threads resolving at once take
+ * turns.
  */
 public final class PackageResolver {
 
 	private final PackageRegistry registry;
 
-	private String currentPackage = LispNames.CL_USER_PKG;
+	private volatile String currentPackage = LispNames.CL_USER_PKG;
 
 	/**
 	 * The stack of packages saved by a {@code %push-package} marker (and around a runtime
@@ -56,6 +63,27 @@ public final class PackageResolver {
 	 * {@link #pushPackage}).
 	 */
 	private final Deque<String> packageStack = new ArrayDeque<>();
+
+	/**
+	 * The current package and saved-package stack of a thread {@link #bindThreadPackage}
+	 * bound, which every read and write of the state on that thread goes to.
+	 */
+	private static final class ThreadPackage {
+
+		String current;
+
+		final Deque<String> stack = new ArrayDeque<>();
+
+		ThreadPackage(String current) {
+			this.current = current;
+		}
+
+	}
+
+	private final ThreadLocal<@Nullable ThreadPackage> threadPackage = new ThreadLocal<>();
+
+	/** How many bindings are live on any thread: zero keeps the reads off the local. */
+	private final java.util.concurrent.atomic.AtomicInteger threadBindings = new java.util.concurrent.atomic.AtomicInteger();
 
 	/**
 	 * Whether resolution is inside a {@code defmacro}/{@code macrolet} definition, where
@@ -134,8 +162,8 @@ public final class PackageResolver {
 	 * @param name the bare symbol name
 	 * @return {@code true} when the current package shadows the name
 	 */
-	public boolean currentPackageShadows(String name) {
-		LispPackage current = this.registry.get(this.currentPackage);
+	public synchronized boolean currentPackageShadows(String name) {
+		LispPackage current = this.registry.get(current());
 		return current != null && current.shadows(name);
 	}
 
@@ -145,7 +173,7 @@ public final class PackageResolver {
 	 * @param program the top-level forms
 	 * @return the resolved forms
 	 */
-	public List<LispVal> resolveProgram(List<LispVal> program) {
+	public synchronized List<LispVal> resolveProgram(List<LispVal> program) {
 		this.runtimePackagesMutable = programUsesRuntimePackageMutation(program);
 		this.inProgramResolution = true;
 		try {
@@ -223,7 +251,7 @@ public final class PackageResolver {
 	 * @param form the form to resolve
 	 * @return the resolved form
 	 */
-	public LispVal resolve(LispVal form) {
+	public synchronized LispVal resolve(LispVal form) {
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op) {
 			String member = operatorMember(op);
 			if (LispNames.IN_PACKAGE.equals(member)) {
@@ -299,11 +327,11 @@ public final class PackageResolver {
 				// holds the package this pass has current, and the restore below
 				// re-assigns it explicitly.
 				pushPackage();
-				return quotedSymbol(this.currentPackage);
+				return quotedSymbol(current());
 			}
 			if (LispNames.POP_PACKAGE.equals(member)) {
 				popPackage();
-				return packageAssignment(this.currentPackage);
+				return packageAssignment(current());
 			}
 			// The ASDF provenance brackets are consumed here too, so a marker never
 			// survives into a backend as a call to an undefined %END-SYSTEM in whatever
@@ -318,7 +346,7 @@ public final class PackageResolver {
 			// re-emitted verbatim on its way to that lowering.
 			if (LispNames.BEGIN_SYSTEM.equals(member) || LispNames.END_SYSTEM.equals(member)
 					|| LispNames.BEGIN_FILE.equals(member) || LispNames.END_FILE.equals(member)) {
-				return quotedSymbol(this.currentPackage);
+				return quotedSymbol(current());
 			}
 			// The bundled-defstruct bookkeeping marker SURVIVES resolution -- unlike the
 			// system brackets it carries a payload a later pass still needs: the pruner
@@ -399,7 +427,7 @@ public final class PackageResolver {
 			}
 		}
 		if (!names.isEmpty()) {
-			exportSymbols(names, this.currentPackage, true);
+			exportSymbols(names, current(), true);
 		}
 	}
 
@@ -462,7 +490,7 @@ public final class PackageResolver {
 			return null;
 		}
 		List<String> used = literalDesignatorList(parts.get(1));
-		String target = this.currentPackage;
+		String target = current();
 		if (parts.size() == 3) {
 			target = literalDesignator(parts.get(2));
 		}
@@ -489,7 +517,7 @@ public final class PackageResolver {
 			return null;
 		}
 		List<String> used = literalDesignatorList(parts.get(1));
-		String target = this.currentPackage;
+		String target = current();
 		if (parts.size() == 3) {
 			target = literalDesignator(parts.get(2));
 		}
@@ -511,7 +539,7 @@ public final class PackageResolver {
 		if (parts.size() < 2 || parts.size() > 3) {
 			return null;
 		}
-		String target = this.currentPackage;
+		String target = current();
 		if (parts.size() == 3) {
 			target = literalDesignator(parts.get(2));
 		}
@@ -600,7 +628,7 @@ public final class PackageResolver {
 	 * @throws RuntimePackageException when a symbol is not accessible in the target or
 	 * the export creates a name conflict
 	 */
-	public void exportSymbols(List<String> names, String targetPackage, boolean export) {
+	public synchronized void exportSymbols(List<String> names, String targetPackage, boolean export) {
 		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
 		if (!this.registry.contains(target)) {
 			throw new LispPackageException("No such package: " + targetPackage);
@@ -729,7 +757,7 @@ public final class PackageResolver {
 	 * @param targetPackage the package that gains the redirects
 	 * @throws RuntimePackageException on a name conflict
 	 */
-	public void importSymbols(List<String> spellings, String targetPackage) {
+	public synchronized void importSymbols(List<String> spellings, String targetPackage) {
 		importInto(spellings, targetPackage, false);
 	}
 
@@ -742,7 +770,7 @@ public final class PackageResolver {
 	 * @param spellings the symbol spellings to import
 	 * @param targetPackage the package that gains the redirects
 	 */
-	public void shadowingImportSymbols(List<String> spellings, String targetPackage) {
+	public synchronized void shadowingImportSymbols(List<String> spellings, String targetPackage) {
 		importInto(spellings, targetPackage, true);
 	}
 
@@ -806,7 +834,7 @@ public final class PackageResolver {
 	 * @param names the symbol names
 	 * @param targetPackage the package whose shadowing set grows
 	 */
-	public void shadowSymbols(List<String> names, String targetPackage) {
+	public synchronized void shadowSymbols(List<String> names, String targetPackage) {
 		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
 		if (!this.registry.contains(target)) {
 			throw new LispPackageException("No such package: " + targetPackage);
@@ -841,7 +869,7 @@ public final class PackageResolver {
 	 * @return whether the symbol was present and has been removed
 	 * @throws RuntimePackageException when the removal would uncover a name conflict
 	 */
-	public boolean uninternSymbol(String spelling, String targetPackage) {
+	public synchronized boolean uninternSymbol(String spelling, String targetPackage) {
 		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
 		if (!this.registry.contains(target)) {
 			throw new LispPackageException("No such package: " + targetPackage);
@@ -904,7 +932,7 @@ public final class PackageResolver {
 	 * @return the shadowing symbols' spellings
 	 * @throws LispPackageException when no such package exists
 	 */
-	public List<String> shadowingSymbols(String packageDesignator) {
+	public synchronized List<String> shadowingSymbols(String packageDesignator) {
 		String pkg = findPackageName(packageDesignator);
 		if (pkg == null) {
 			throw new LispPackageException("No such package: " + packageDesignator);
@@ -934,7 +962,7 @@ public final class PackageResolver {
 		if (parts.size() < 2 || parts.size() > 3) {
 			return null;
 		}
-		String target = this.currentPackage;
+		String target = current();
 		if (parts.size() == 3) {
 			target = literalDesignator(parts.get(2));
 		}
@@ -989,7 +1017,7 @@ public final class PackageResolver {
 	 * @param used the package names to use (any case, nicknames allowed)
 	 * @param targetPackage the package whose use list grows
 	 */
-	public void usePackage(List<String> used, String targetPackage) {
+	public synchronized void usePackage(List<String> used, String targetPackage) {
 		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
 		if (!this.registry.contains(target)) {
 			throw new LispPackageException("No such package: " + targetPackage);
@@ -1024,7 +1052,7 @@ public final class PackageResolver {
 	 * @param used the package names to stop using (any case, nicknames allowed)
 	 * @param targetPackage the package whose use list shrinks
 	 */
-	public void unusePackage(List<String> used, String targetPackage) {
+	public synchronized void unusePackage(List<String> used, String targetPackage) {
 		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
 		if (!this.registry.contains(target)) {
 			throw new LispPackageException("No such package: " + targetPackage);
@@ -1080,7 +1108,7 @@ public final class PackageResolver {
 	 * @return the current package name
 	 */
 	public String currentPackageName() {
-		return this.currentPackage;
+		return current();
 	}
 
 	/**
@@ -1090,10 +1118,10 @@ public final class PackageResolver {
 	 * under the binding homes where CL would. The caller restores the saved name.
 	 * @param name the package name (any case, nickname allowed)
 	 */
-	public void setCurrentPackage(String name) {
+	public synchronized void setCurrentPackage(String name) {
 		String canonical = registeredPackageName(
 				this.registry.canonicalName(PackageRegistry.canonicalBuiltinName(name)));
-		this.currentPackage = canonical;
+		setCurrent(canonical);
 	}
 
 	/**
@@ -1103,8 +1131,8 @@ public final class PackageResolver {
 	 * to the load and does not leak to the caller -- mirroring Common Lisp binding
 	 * {@code *package*} for the duration of {@code load}.
 	 */
-	public void pushPackage() {
-		this.packageStack.addLast(this.currentPackage);
+	public synchronized void pushPackage() {
+		stack().addLast(current());
 	}
 
 	/**
@@ -1112,9 +1140,9 @@ public final class PackageResolver {
 	 * prior push leaves the current package unchanged (defensive: the marker pairs are
 	 * always balanced in practice).
 	 */
-	public void popPackage() {
-		if (!this.packageStack.isEmpty()) {
-			this.currentPackage = this.packageStack.removeLast();
+	public synchronized void popPackage() {
+		if (!stack().isEmpty()) {
+			setCurrent(stack().removeLast());
 		}
 	}
 
@@ -1123,8 +1151,8 @@ public final class PackageResolver {
 	 * restored yet.
 	 * @return the depth of the saved-package stack
 	 */
-	public int packageStackDepth() {
-		return this.packageStack.size();
+	public synchronized int packageStackDepth() {
+		return stack().size();
 	}
 
 	/**
@@ -1134,11 +1162,82 @@ public final class PackageResolver {
 	 * @param depth the depth {@link #packageStackDepth} answered then
 	 * @param current the current package name then
 	 */
-	public void restorePackageState(int depth, String current) {
-		while (this.packageStack.size() > depth) {
-			this.packageStack.removeLast();
+	public synchronized void restorePackageState(int depth, String current) {
+		while (stack().size() > depth) {
+			stack().removeLast();
 		}
-		this.currentPackage = current;
+		setCurrent(current);
+	}
+
+	/**
+	 * Gives the calling thread a current package and a saved-package stack of its own
+	 * until {@link #unbindThreadPackage}: what it resolves reads that package, an
+	 * {@code in-package} it runs moves only that package, and another thread keeps its
+	 * own -- an editor's requests, each naming the package it runs in, run at once.
+	 * @param name the package (any case, nickname allowed), which must exist
+	 * @return the binding the new one shadows, which {@link #unbindThreadPackage} puts
+	 * back
+	 * @throws LispPackageException when no such package exists
+	 */
+	public synchronized @Nullable Object bindThreadPackage(String name) {
+		String pkg = findPackageName(name);
+		if (pkg == null || "keyword".equals(pkg)) {
+			throw new LispPackageException("No such package: " + name);
+		}
+		ThreadPackage previous = this.threadPackage.get();
+		this.threadPackage.set(new ThreadPackage(pkg));
+		if (previous == null) {
+			this.threadBindings.incrementAndGet();
+		}
+		return previous;
+	}
+
+	/**
+	 * Ends the calling thread's {@link #bindThreadPackage} binding, putting back the one
+	 * it shadowed.
+	 * @param previous what {@link #bindThreadPackage} answered
+	 */
+	public void unbindThreadPackage(@Nullable Object previous) {
+		if (previous instanceof ThreadPackage outer) {
+			this.threadPackage.set(outer);
+			return;
+		}
+		if (this.threadPackage.get() != null) {
+			this.threadPackage.remove();
+			this.threadBindings.decrementAndGet();
+		}
+	}
+
+	/** The current package: the calling thread's binding, else the shared one. */
+	private String current() {
+		if (this.threadBindings.get() != 0) {
+			ThreadPackage bound = this.threadPackage.get();
+			if (bound != null) {
+				return bound.current;
+			}
+		}
+		return this.currentPackage;
+	}
+
+	private void setCurrent(String name) {
+		if (this.threadBindings.get() != 0) {
+			ThreadPackage bound = this.threadPackage.get();
+			if (bound != null) {
+				bound.current = name;
+				return;
+			}
+		}
+		this.currentPackage = name;
+	}
+
+	private Deque<String> stack() {
+		if (this.threadBindings.get() != 0) {
+			ThreadPackage bound = this.threadPackage.get();
+			if (bound != null) {
+				return bound.stack;
+			}
+		}
+		return this.packageStack;
 	}
 
 	private LispVal resolveInPackage(LispCons cons) {
@@ -1151,7 +1250,7 @@ public final class PackageResolver {
 		if (!this.registry.contains(name)) {
 			throw new LispPackageException("No such package: " + name);
 		}
-		this.currentPackage = name;
+		setCurrent(name);
 		return packageAssignment(name);
 	}
 
@@ -1549,7 +1648,7 @@ public final class PackageResolver {
 	 * @param nickname the nickname as written (prefix already stripped)
 	 * @param actual the target package name as written
 	 */
-	public void registerLocalNickname(String nickname, String actual) {
+	public synchronized void registerLocalNickname(String nickname, String actual) {
 		String target = this.registry.canonicalName(actual);
 		if (!this.registry.contains(target)) {
 			throw new LispPackageException("No such package: " + actual);
@@ -1577,7 +1676,7 @@ public final class PackageResolver {
 	 * @return {@code true} when a mapping was removed
 	 * @throws LispPackageException when the scope names no package
 	 */
-	public boolean removeLocalNickname(String nickname, @Nullable String scopeDesignator) {
+	public synchronized boolean removeLocalNickname(String nickname, @Nullable String scopeDesignator) {
 		if (!this.registry.contains(nickname) || this.registry.canonicalName(nickname).equals(nickname)) {
 			// Not a nickname mapping at all (unknown, or a package's own name):
 			// nothing to remove.
@@ -1608,7 +1707,8 @@ public final class PackageResolver {
 	 * @throws RuntimePackageException when the name exists, a use entry is unknown, or a
 	 * nickname collides
 	 */
-	public String createRuntimePackage(String name, java.util.List<String> use, java.util.List<String> nicknames) {
+	public synchronized String createRuntimePackage(String name, java.util.List<String> use,
+			java.util.List<String> nicknames) {
 		String canonical = name.toUpperCase(java.util.Locale.ROOT);
 		if (canonical.isEmpty()) {
 			throw new RuntimePackageException("MAKE-PACKAGE expects a package name", name);
@@ -1655,7 +1755,7 @@ public final class PackageResolver {
 	 * @return the deleted canonical package name
 	 * @throws RuntimePackageException when no package answers or it is not runtime-tier
 	 */
-	public String deleteRuntimePackage(String designator) {
+	public synchronized String deleteRuntimePackage(String designator) {
 		String pkg = findPackageName(designator);
 		if (pkg == null) {
 			throw new RuntimePackageException("DELETE-PACKAGE: no such package: " + designator, designator);
@@ -1680,7 +1780,8 @@ public final class PackageResolver {
 	 * @throws RuntimePackageException when no package answers, it is not runtime-tier, or
 	 * the new name (or a nickname) collides with a different package
 	 */
-	public String renameRuntimePackage(String designator, String newName, java.util.List<String> newNicknames) {
+	public synchronized String renameRuntimePackage(String designator, String newName,
+			java.util.List<String> newNicknames) {
 		String pkg = findPackageName(designator);
 		if (pkg == null) {
 			throw new RuntimePackageException("RENAME-PACKAGE: no such package: " + designator, designator);
@@ -1717,7 +1818,7 @@ public final class PackageResolver {
 	 * @return the nicknames as spelled at registration
 	 * @throws RuntimePackageException when no package answers
 	 */
-	public java.util.List<String> runtimePackageNicknames(String designator) {
+	public synchronized java.util.List<String> runtimePackageNicknames(String designator) {
 		String pkg = findPackageName(designator);
 		if (pkg == null) {
 			throw new RuntimePackageException("PACKAGE-NICKNAMES: no such package: " + designator, designator);
@@ -2182,7 +2283,7 @@ public final class PackageResolver {
 	 * @param member the unqualified symbol name
 	 * @return {@code true} when the package exports the name
 	 */
-	public boolean spellsAsExternal(String pkg, String member) {
+	public synchronized boolean spellsAsExternal(String pkg, String member) {
 		return this.registry.contains(pkg) && spellsExternal(pkg, member);
 	}
 
@@ -2191,7 +2292,7 @@ public final class PackageResolver {
 		// the package this pass has current (see packageAssignment) -- so it takes the
 		// generic cl-symbol path below: bare when the current package uses cl, else the
 		// undefined-symbol error every unqualified cl name gets there.
-		LispPackage current = this.registry.get(this.currentPackage);
+		LispPackage current = this.registry.get(current());
 		// A symbol imported via :import-from resolves to its source package's canonical
 		// spelling. Checked before the cl branch so (:import-from :cl :car) works in a
 		// package that does not use cl.
@@ -2206,7 +2307,7 @@ public final class PackageResolver {
 		// the cl (or any used package's) symbol of the same name. Checked before the cl
 		// branch: shadowing a cl name is the whole point of the :shadow clause.
 		if (current.shadows(name)) {
-			return canonical(this.currentPackage, name);
+			return canonical(current(), name);
 		}
 		if (PackageRegistry.isClSymbol(name)) {
 			if (currentUsesCl()) {
@@ -2225,13 +2326,13 @@ public final class PackageResolver {
 			// unknown name below.
 			if (this.inQuotedData) {
 				unsealCurrent();
-				return canonical(this.currentPackage, name);
+				return canonical(current(), name);
 			}
 			throw new LispPackageException(
 					"Undefined symbol: " + name + " (use " + PackageRegistry.qualify(LispNames.CL_PKG, name) + ")");
 		}
 		if (current.owns(name)) {
-			return canonical(this.currentPackage, name);
+			return canonical(current(), name);
 		}
 		for (String used : current.useList()) {
 			if (LispNames.CL_PKG.equals(used)) {
@@ -2252,9 +2353,8 @@ public final class PackageResolver {
 		// verbatim and never a reader-case mismatch (PackageRegistry.isRecorded).
 		String lower = name.toLowerCase(java.util.Locale.ROOT);
 		if (!this.exactCase && !lower.equals(name)) {
-			if ((current.owns(lower) || current.exports(lower))
-					&& !this.registry.isRecorded(this.currentPackage, lower)) {
-				return canonical(this.currentPackage, lower);
+			if ((current.owns(lower) || current.exports(lower)) && !this.registry.isRecorded(current(), lower)) {
+				return canonical(current(), lower);
 			}
 			for (String used : current.useList()) {
 				if (!LispNames.CL_PKG.equals(used) && !this.registry.isRecorded(used, lower)) {
@@ -2284,9 +2384,8 @@ public final class PackageResolver {
 		// browser demo without a word.
 		String upper = name.toUpperCase(java.util.Locale.ROOT);
 		if (!this.exactCase && !upper.equals(name)) {
-			if ((current.owns(upper) || current.exports(upper))
-					&& !this.registry.isRecorded(this.currentPackage, upper)) {
-				return canonical(this.currentPackage, upper);
+			if ((current.owns(upper) || current.exports(upper)) && !this.registry.isRecorded(current(), upper)) {
+				return canonical(current(), upper);
 			}
 			for (String used : current.useList()) {
 				if (!LispNames.CL_PKG.equals(used) && !this.registry.isRecorded(used, upper)) {
@@ -2299,7 +2398,7 @@ public final class PackageResolver {
 		}
 		// Unknown symbol: a user definition or forward reference in the current package.
 		unsealCurrent();
-		return canonical(this.currentPackage, name);
+		return canonical(current(), name);
 	}
 
 	// Source minted an unrecorded name in the current package (see
@@ -2307,7 +2406,7 @@ public final class PackageResolver {
 	// not: the first records what it mints, the second mints nothing in CL.
 	private void unsealCurrent() {
 		if (!this.exactCase) {
-			this.registry.unseal(this.currentPackage);
+			this.registry.unseal(current());
 		}
 	}
 
@@ -2373,10 +2472,10 @@ public final class PackageResolver {
 	}
 
 	private boolean currentUsesCl() {
-		if (LispNames.CL_PKG.equals(this.currentPackage)) {
+		if (LispNames.CL_PKG.equals(current())) {
 			return true;
 		}
-		LispPackage current = this.registry.get(this.currentPackage);
+		LispPackage current = this.registry.get(current());
 		return current != null && current.uses(LispNames.CL_PKG);
 	}
 
@@ -2416,7 +2515,7 @@ public final class PackageResolver {
 	 * @param name the bare name to intern
 	 * @return the canonical spelling for the current package
 	 */
-	public String internSpelling(String name) {
+	public synchronized String internSpelling(String name) {
 		return internSpelling(name, false);
 	}
 
@@ -2431,7 +2530,7 @@ public final class PackageResolver {
 	 * @param record whether to record a freshly minted name in its package
 	 * @return the canonical spelling for the current package
 	 */
-	public String internSpelling(String name, boolean record) {
+	public synchronized String internSpelling(String name, boolean record) {
 		String spelling = internSpellingOnly(name);
 		if (record) {
 			recordInterned(spelling);
@@ -2474,7 +2573,7 @@ public final class PackageResolver {
 			// The reader never mints PKG::T -- t and nil read as the singletons in every
 			// cl-using package -- so intern answers them too, bare, rather than the
 			// qualified spelling the resolver would give a name cl owns (CL:T under cl).
-			LispPackage current = this.registry.get(this.currentPackage);
+			LispPackage current = this.registry.get(current());
 			if (current == null || (!current.shadows(name) && !current.imports().containsKey(name))) {
 				return name;
 			}
@@ -2488,7 +2587,7 @@ public final class PackageResolver {
 			// An inaccessible cl symbol in a non-cl-using package: intern it into the
 			// current package like CL would.
 		}
-		return canonical(this.currentPackage, name).name();
+		return canonical(current(), name).name();
 	}
 
 	/**
@@ -2561,7 +2660,8 @@ public final class PackageResolver {
 	 * @return the accessible symbol and its status, or null
 	 * @throws LispPackageException when no such package exists
 	 */
-	public @Nullable Accessible accessible(String pkgDesignator, String member, Predicate<String> definedProbe) {
+	public synchronized @Nullable Accessible accessible(String pkgDesignator, String member,
+			Predicate<String> definedProbe) {
 		String pkg = findPackageName(pkgDesignator);
 		if (pkg == null) {
 			throw new LispPackageException("No such package: " + pkgDesignator);
@@ -2690,7 +2790,7 @@ public final class PackageResolver {
 	 * @return the accessible symbols with their statuses
 	 * @throws LispPackageException when no such package exists
 	 */
-	public List<Accessible> accessibleEntries(String packageDesignator) {
+	public synchronized List<Accessible> accessibleEntries(String packageDesignator) {
 		String pkg = findPackageName(packageDesignator);
 		if (pkg == null) {
 			throw new LispPackageException("No such package: " + packageDesignator);
@@ -2765,7 +2865,7 @@ public final class PackageResolver {
 	 * @return the external symbols, canonically spelled
 	 * @throws LispPackageException when no such package exists
 	 */
-	public java.util.List<LispSymbol> externalSymbols(String packageDesignator) {
+	public synchronized java.util.List<LispSymbol> externalSymbols(String packageDesignator) {
 		java.util.List<LispSymbol> out = new java.util.ArrayList<>();
 		for (Accessible entry : accessibleEntries(packageDesignator)) {
 			if (LispNames.STATUS_EXTERNAL.equals(entry.status())) {
@@ -2792,7 +2892,7 @@ public final class PackageResolver {
 	 * @return the accessible symbols, canonically spelled
 	 * @throws LispPackageException when no such package exists
 	 */
-	public java.util.List<LispSymbol> accessibleSymbols(String packageDesignator) {
+	public synchronized java.util.List<LispSymbol> accessibleSymbols(String packageDesignator) {
 		java.util.List<LispSymbol> out = new java.util.ArrayList<>();
 		for (Accessible entry : accessibleEntries(packageDesignator)) {
 			out.add(new LispSymbol(entry.spelling()));
@@ -2809,7 +2909,7 @@ public final class PackageResolver {
 	 * @param member the verbatim symbol name
 	 * @return the accessible symbol and its status, or null
 	 */
-	public @Nullable Accessible bakedAccessible(String pkgDesignator, String member) {
+	public synchronized @Nullable Accessible bakedAccessible(String pkgDesignator, String member) {
 		String pkg = findPackageName(pkgDesignator);
 		return pkg == null ? null : accessibleIn(pkg, member, s -> false);
 	}
@@ -2860,7 +2960,7 @@ public final class PackageResolver {
 	 * {@code cl} from the table of the standard names
 	 * @return the rows by upcased package name, in name order
 	 */
-	public Map<String, AccessRow> bakedAccessRows(boolean standardNames) {
+	public synchronized Map<String, AccessRow> bakedAccessRows(boolean standardNames) {
 		Map<String, ExportRow> exportRows = new HashMap<>();
 		Map<String, AccessRow> rows = new java.util.TreeMap<>();
 		Set<String> exporters = new java.util.TreeSet<>();
@@ -2976,7 +3076,7 @@ public final class PackageResolver {
 	 * @param pkgDesignator the package name as given
 	 * @return whether the package exists and uses {@code cl}
 	 */
-	public boolean usesCl(String pkgDesignator) {
+	public synchronized boolean usesCl(String pkgDesignator) {
 		String pkg = findPackageName(pkgDesignator);
 		return pkg != null && this.registry.contains(pkg)
 				&& this.registry.get(pkg).useList().contains(LispNames.CL_PKG);
@@ -3002,7 +3102,7 @@ public final class PackageResolver {
 	 * @return the canonical spelling for that package
 	 * @throws LispPackageException if no such package exists
 	 */
-	public String internSpellingIn(String packageDesignator, String name) {
+	public synchronized String internSpellingIn(String packageDesignator, String name) {
 		return internSpellingIn(packageDesignator, name, false);
 	}
 
@@ -3016,7 +3116,7 @@ public final class PackageResolver {
 	 * @return the canonical spelling for that package
 	 * @throws LispPackageException if no such package exists
 	 */
-	public String internSpellingIn(String packageDesignator, String name, boolean record) {
+	public synchronized String internSpellingIn(String packageDesignator, String name, boolean record) {
 		String pkg = findPackageName(packageDesignator);
 		if (pkg == null) {
 			throw new LispPackageException("No such package: " + packageDesignator);
@@ -3024,13 +3124,13 @@ public final class PackageResolver {
 		if ("keyword".equals(pkg)) {
 			return ":" + name;
 		}
-		String saved = this.currentPackage;
-		this.currentPackage = pkg;
+		String saved = current();
+		setCurrent(pkg);
 		try {
 			return internSpelling(name, record);
 		}
 		finally {
-			this.currentPackage = saved;
+			setCurrent(saved);
 		}
 	}
 
@@ -3044,7 +3144,7 @@ public final class PackageResolver {
 	 * @param designator the package name as given (any case, nickname allowed)
 	 * @return the canonical registered name, or null
 	 */
-	public @Nullable String findPackageName(String designator) {
+	public synchronized @Nullable String findPackageName(String designator) {
 		if (designator.isEmpty()) {
 			return null;
 		}
@@ -3073,7 +3173,7 @@ public final class PackageResolver {
 	 * frozen this snapshot.
 	 * @return the designator-to-package-name table, in a deterministic order
 	 */
-	public Map<String, String> runtimePackageTable() {
+	public synchronized Map<String, String> runtimePackageTable() {
 		Map<String, String> table = new java.util.TreeMap<>();
 		Map<String, String> designators = new java.util.HashMap<>(this.registry.designatorTable());
 		// The keyword pseudo-package is not a registration (its "symbols" are the
@@ -3103,7 +3203,7 @@ public final class PackageResolver {
 	 * for it, so the listing must contain it.
 	 * @return the package-to-use-list table, in a deterministic order
 	 */
-	public Map<String, List<String>> runtimePackageUseTable() {
+	public synchronized Map<String, List<String>> runtimePackageUseTable() {
 		Map<String, List<String>> table = new java.util.TreeMap<>();
 		for (String canonical : new java.util.TreeSet<>(this.registry.designatorTable().values())) {
 			LispPackage pkg = this.registry.get(canonical);
@@ -3149,7 +3249,7 @@ public final class PackageResolver {
 	 * interpreter does not use it -- it keeps the live registry.
 	 * @return the baked package entries
 	 */
-	public java.util.List<BakedPackage> runtimeBakedPackages() {
+	public synchronized java.util.List<BakedPackage> runtimeBakedPackages() {
 		java.util.List<BakedPackage> out = new java.util.ArrayList<>();
 		for (String canonical : new java.util.TreeSet<>(this.registry.designatorTable().values())) {
 			String upcased = canonical.toUpperCase(java.util.Locale.ROOT);
@@ -3207,7 +3307,7 @@ public final class PackageResolver {
 	 * @param symbolName the stored symbol name
 	 * @return the canonical package name, or null
 	 */
-	public @Nullable String symbolPackageName(String symbolName) {
+	public synchronized @Nullable String symbolPackageName(String symbolName) {
 		String home = homeOf(symbolName);
 		if (home == null || "keyword".equals(home)) {
 			return home;
@@ -3228,7 +3328,7 @@ public final class PackageResolver {
 	 * @param member the verbatim symbol name
 	 * @return the canonical spelling, or null
 	 */
-	public @Nullable String memberSpelling(String pkgDesignator, String member) {
+	public synchronized @Nullable String memberSpelling(String pkgDesignator, String member) {
 		Accessible found = accessible(pkgDesignator, member, s -> false);
 		return found == null ? null : found.spelling();
 	}
@@ -3242,7 +3342,7 @@ public final class PackageResolver {
 	 * @param member the verbatim symbol name
 	 * @return the status keyword spelling (with its leading colon), or null
 	 */
-	public @Nullable String memberStatus(String pkgDesignator, String member) {
+	public synchronized @Nullable String memberStatus(String pkgDesignator, String member) {
 		Accessible found = accessible(pkgDesignator, member, s -> false);
 		return found == null ? null : found.status();
 	}
@@ -3282,7 +3382,7 @@ public final class PackageResolver {
 	 * @return {@code true} when the qualifier is dropped; also for a name that carries
 	 * none (a bare, keyword or uninterned symbol prints as it is)
 	 */
-	public boolean printsBare(String symbolName) {
+	public synchronized boolean printsBare(String symbolName) {
 		if (symbolName.startsWith(":") || symbolName.startsWith("#:")) {
 			return true;
 		}
@@ -3291,7 +3391,7 @@ public final class PackageResolver {
 			return true;
 		}
 		String home = this.registry.canonicalName(qn.pkg());
-		if (home.equals(this.currentPackage)) {
+		if (home.equals(current())) {
 			return true;
 		}
 		boolean savedQuoted = this.inQuotedData;
@@ -3314,8 +3414,8 @@ public final class PackageResolver {
 	 * printer-control renderer ({@code %print-package-raw-p}).
 	 * @return {@code true} when the raw conversion needs no accessibility check
 	 */
-	public boolean currentPackageIsPristineClUser() {
-		return LispNames.CL_USER_PKG.equals(this.currentPackage) && clUserIsPristine();
+	public synchronized boolean currentPackageIsPristineClUser() {
+		return LispNames.CL_USER_PKG.equals(current()) && clUserIsPristine();
 	}
 
 	private boolean clUserIsPristine() {
@@ -3335,7 +3435,7 @@ public final class PackageResolver {
 	 * @param resolvedProgram the resolved top-level forms
 	 * @return the table, in a deterministic order
 	 */
-	public SymbolPrintTable symbolPrintTable(List<LispVal> resolvedProgram) {
+	public synchronized SymbolPrintTable symbolPrintTable(List<LispVal> resolvedProgram) {
 		java.util.SequencedMap<String, List<String>> rows = new java.util.LinkedHashMap<>();
 		java.util.SequencedMap<String, List<String>> extra = new java.util.LinkedHashMap<>();
 		java.util.SequencedMap<String, List<String>> excluded = new java.util.LinkedHashMap<>();
@@ -3343,7 +3443,7 @@ public final class PackageResolver {
 		for (LispVal form : resolvedProgram) {
 			collectQualifiedSymbols(form, occurring);
 		}
-		String savedPackage = this.currentPackage;
+		String savedPackage = current();
 		try {
 			for (String pkg : new java.util.TreeSet<>(this.registry.designatorTable().values())) {
 				LispPackage registered = this.registry.get(pkg);
@@ -3359,7 +3459,7 @@ public final class PackageResolver {
 				}
 				String key = pkg.toUpperCase(java.util.Locale.ROOT);
 				rows.put(key, List.copyOf(row));
-				this.currentPackage = pkg;
+				setCurrent(pkg);
 				List<String> extraHere = new ArrayList<>();
 				List<String> excludedHere = new ArrayList<>();
 				for (String symbol : occurring) {
@@ -3386,7 +3486,7 @@ public final class PackageResolver {
 			}
 		}
 		finally {
-			this.currentPackage = savedPackage;
+			setCurrent(savedPackage);
 		}
 		return new SymbolPrintTable(rows, extra, excluded, clUserIsPristine());
 	}

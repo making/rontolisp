@@ -1,8 +1,9 @@
 ;; The swank package: a STUB satisfying the built-in ASDF system "swank".
-;; Upstream swank is SLIME's server half -- a remote REPL attached to a running
-;; image -- and it cannot be loaded here for two independent reasons: no backend
-;; can hand out its own evaluator over a socket, and slime's system definition is
-;; a PROGRAM, not the defsystem-as-data subset the .asd front-end reads.
+;; Upstream swank is SLIME's server half, and it cannot be loaded here: slime's
+;; system definition is a PROGRAM, not the defsystem-as-data subset the .asd
+;; front-end reads, and its server is built on its host's own debugger, threads and
+;; streams. rontolisp's SWANK server is the command line's: `rontolisp --swank`
+;; serves the interpreter's REPL to SLIME (.kb/swank.md). A program cannot start it.
 ;;
 ;; The stub exists because clack.asd hard-depends on "swank": without it,
 ;; (ql:quickload "clack") downloads the slime tarball and then dies parsing it.
@@ -18,6 +19,6 @@
 
 (defun swank:create-server (&rest args)
   (error
-   "swank:create-server is not supported: rontolisp cannot serve a remote REPL"))
+   "swank:create-server is not supported: a program cannot serve its REPL; rontolisp --swank serves one to SLIME"))
 
 (defun swank:stop-server (&rest args) nil)

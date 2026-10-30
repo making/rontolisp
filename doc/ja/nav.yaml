@@ -9,6 +9,8 @@ sections:
         title: ビルドとインストール
       - file: getting-started/repl.md
         title: REPL
+      - file: getting-started/swank.md
+        title: SWANK (SLIME)
       - file: getting-started/file-interpretation.md
         title: ファイルのインタプリタ実行
       - file: getting-started/format.md

@@ -1,0 +1,197 @@
+>> (:emacs-rex (swank:connection-info) "COMMON-LISP-USER" t 1)\n
+<< (:return (:ok (:pid 2645884 :style :spawn :encoding (:coding-systems ("utf-8-unix" "iso-latin-1-unix")) :lisp-implementation (:type "SBCL" :name "sbcl" :version "2.2.9.debian" :program nil) :machine (:instance "dorian" :type "X86-64" :version "Intel(R) Xeon(R) CPU E5-2697A v4 @ 2.60GHz") :features (:asdf3.3 :asdf3.2 :asdf3.1 :asdf3 :asdf2 :asdf :os-unix :non-base-chars-exist-p :asdf-unicode :swank :x86-64 :gencgc :64-bit :ansi-cl :common-lisp :elf :ieee-floating-point :linux :little-endian :package-local-nicknames :sb-core-compression :sb-ldb :sb-package-locks :sb-thread :sb-unicode :sbcl :unix) :modules ("SWANK-INDENTATION" "SWANK-QUICKLISP" "SWANK-MACROSTEP" "SWANK-TRACE-DIALOG" "SWANK-MREPL" "SWANK-SBCL-EXTS" "SWANK-HYPERDOC" "SWANK-PACKAGE-FU" "SWANK-ASDF" "ASDF" "asdf" "UIOP" "uiop" "SWANK-PRESENTATIONS" "SWANK-FANCY-INSPECTOR" "SWANK-FUZZY" "SWANK-ARGLISTS" "SWANK-C-P-C" "SWANK-REPL" "SWANK-UTIL" "SB-CLTL2" "SB-POSIX" "SB-INTROSPECT" "SB-BSD-SOCKETS") :package (:name "COMMON-LISP-USER" :prompt "CL-USER") :version "2.32")) 1)
+>> (:emacs-rex (swank:swank-require '(swank-indentation swank-trace-dialog swank-package-fu swank-presentations swank-macrostep swank-fuzzy swank-fancy-inspector swank-c-p-c swank-arglists swank-repl)) "COMMON-LISP-USER" t 2)\n
+<< (:return (:ok ("SWANK-INDENTATION" "SWANK-QUICKLISP" "SWANK-MACROSTEP" "SWANK-TRACE-DIALOG" "SWANK-MREPL" "SWANK-SBCL-EXTS" "SWANK-HYPERDOC" "SWANK-PACKAGE-FU" "SWANK-ASDF" "ASDF" "asdf" "UIOP" "uiop" "SWANK-PRESENTATIONS" "SWANK-FANCY-INSPECTOR" "SWANK-FUZZY" "SWANK-ARGLISTS" "SWANK-C-P-C" "SWANK-REPL" "SWANK-UTIL" "SB-CLTL2" "SB-POSIX" "SB-INTROSPECT" "SB-BSD-SOCKETS")) 2)
+>> (:emacs-rex (swank:init-presentations) "COMMON-LISP-USER" t 3)\n
+<< (:return (:ok swank::present-repl-results) 3)
+>> (:emacs-rex (swank-repl:create-repl nil) "COMMON-LISP-USER" t 4)\n
+<< (:return (:ok ("COMMON-LISP-USER" "CL-USER")) 4)
+>> (:emacs-rex (swank-repl:listener-eval "(+ 1 2)\n") "COMMON-LISP-USER" :repl-thread 5)\n
+<< (:presentation-start 1 :repl-result)
+<< (:write-string "3" :repl-result)
+<< (:presentation-end 1 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 5)
+>> (:emacs-rex (swank-repl:listener-eval "(progn (format t \"hello~%\") (values 1 \"two\"))\n") "COMMON-LISP-USER" :repl-thread 6)\n
+<< (:write-string "hello\n" nil 2645917)
+>> (:write-done 2645917)\n
+<< (:presentation-start 2 :repl-result)
+<< (:write-string "1" :repl-result)
+<< (:presentation-end 2 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:presentation-start 3 :repl-result)
+<< (:write-string "\"two\"" :repl-result)
+<< (:presentation-end 3 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 6)
+>> (:emacs-rex (swank-repl:listener-eval "(values)\n") "COMMON-LISP-USER" :repl-thread 7)\n
+<< (:write-string "; No value" :repl-result)
+<< (:return (:ok nil) 7)
+>> (:emacs-rex (swank-repl:listener-eval "(princ \"no newline\")\n") "COMMON-LISP-USER" :repl-thread 8)\n
+<< (:write-string "no newline\n" nil 2645917)
+>> (:write-done 2645917)\n
+<< (:presentation-start 4 :repl-result)
+<< (:write-string "\"no newline\"" :repl-result)
+<< (:presentation-end 4 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 8)
+>> (:emacs-rex (swank-repl:listener-eval "(defvar *drv* 10)\n") "COMMON-LISP-USER" :repl-thread 9)\n
+<< (:presentation-start 5 :repl-result)
+<< (:write-string "*DRV*" :repl-result)
+<< (:presentation-end 5 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 9)
+>> (:emacs-rex (swank-repl:listener-eval "(list *drv* * ** ***)\n") "COMMON-LISP-USER" :repl-thread 10)\n
+<< (:presentation-start 6 :repl-result)
+<< (:write-string "(10 *DRV* \"no newline\" NIL)" :repl-result)
+<< (:presentation-end 6 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 10)
+>> (:emacs-rex (swank-repl:listener-eval "(defpackage :drv-pkg (:use :cl) (:export #:hello))\n") "COMMON-LISP-USER" :repl-thread 11)\n
+<< (:presentation-start 7 :repl-result)
+<< (:write-string "#<PACKAGE \"DRV-PKG\">" :repl-result)
+<< (:presentation-end 7 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 11)
+>> (:emacs-rex (swank-repl:listener-eval "(in-package :drv-pkg)\n") "COMMON-LISP-USER" :repl-thread 12)\n
+<< (:presentation-start 7 :repl-result)
+<< (:write-string "#<PACKAGE \"DRV-PKG\">" :repl-result)
+<< (:presentation-end 7 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:new-package "DRV-PKG" "DRV-PKG")
+<< (:return (:ok nil) 12)
+>> (:emacs-rex (swank-repl:listener-eval "(defun hello () 'hi)\n") "DRV-PKG" :repl-thread 13)\n
+<< (:presentation-start 8 :repl-result)
+<< (:write-string "HELLO" :repl-result)
+<< (:presentation-end 8 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 13)
+>> (:emacs-rex (swank-repl:listener-eval "(list *package* (hello))\n") "DRV-PKG" :repl-thread 14)\n
+<< (:presentation-start 9 :repl-result)
+<< (:write-string "(#<PACKAGE \"DRV-PKG\"> HI)" :repl-result)
+<< (:presentation-end 9 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 14)
+>> (:emacs-rex (swank-repl:listener-eval "(in-package :cl-user)\n") "DRV-PKG" :repl-thread 15)\n
+<< (:presentation-start 10 :repl-result)
+<< (:write-string "#<PACKAGE \"COMMON-LISP-USER\">" :repl-result)
+<< (:presentation-end 10 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:new-package "COMMON-LISP-USER" "CL-USER")
+<< (:return (:ok nil) 15)
+>> (:emacs-rex (swank-repl:listener-eval "(drv-pkg:hello)\n") "COMMON-LISP-USER" :repl-thread 16)\n
+<< (:presentation-start 11 :repl-result)
+<< (:write-string "DRV-PKG::HI" :repl-result)
+<< (:presentation-end 11 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 16)
+>> (:emacs-rex (swank:interactive-eval "(+ 2 3)" 6 80) "COMMON-LISP-USER" t 17)\n
+<< (:return (:ok "=> 5 (3 bits, #x5, #o5, #b101)") 17)
+>> (:emacs-rex (swank:interactive-eval "(values 1 2)" 6 80) "COMMON-LISP-USER" t 18)\n
+<< (:return (:ok "=> 1, 2") 18)
+>> (:emacs-rex (swank:interactive-eval "(progn (print 'x) \"str\")" 6 80) "COMMON-LISP-USER" t 19)\n
+<< (:write-string "\nX " nil 2645928)
+>> (:write-done 2645928)\n
+<< (:return (:ok "=> \"str\"") 19)
+>> (:emacs-rex (swank:interactive-eval "(values)" 6 80) "COMMON-LISP-USER" t 20)\n
+<< (:return (:ok "") 20)
+>> (:emacs-rex (swank:interactive-eval "(* 6 7)\n" 6 80) ":drv-pkg" t 21)\n
+<< (:return (:ok "=> 42 (6 bits, #x2A, #o52, #b101010)") 21)
+>> (:emacs-rex (swank:eval-and-grab-output "(progn (princ \"x\") (values 42 43))") "COMMON-LISP-USER" t 22)\n
+<< (:return (:ok ("x" "42\n43")) 22)
+>> (:emacs-rex (swank:compile-string-for-emacs "(defun drv-add (a b)\n  (+ a b))\n" "drv-compile.lisp" '((:position 1) (:line 1 1)) "@WORK@/oracle/sbcl-basic/work/drv-compile.lisp" 'nil) "COMMON-LISP-USER" t 23)\n
+<< (:write-string "\n; processing (DEFUN DRV-ADD ...)" nil 2645932)
+>> (:write-done 2645932)\n
+<< (:return (:ok (:compilation-result nil t 0.0020000000949949026 nil nil)) 23)
+>> (:emacs-rex (swank:compile-string-for-emacs "(defun drv-bad ()\n  (drv-undefined-fn 1))\n" "drv-compile.lisp" '((:position 34) (:line 4 1)) "@WORK@/oracle/sbcl-basic/work/drv-compile.lisp" 'nil) "COMMON-LISP-USER" t 24)\n
+<< (:write-string "\n; processing (DEFUN DRV-BAD ...)" nil 2645916)
+>> (:write-done 2645916)\n
+<< (:write-string "\n\n; file: /tmp/slime6EMPid\n; in: DEFUN DRV-BAD\n;     (DRV-UNDEFINED-FN 1)\n; \n; caught STYLE-WARNING:\n;   undefined function: COMMON-LISP-USER::DRV-UNDEFINED-FN\n; \n; compilation unit finished\n;   Undefined function:\n;     DRV-UNDEFINED-FN\n;   caught 1 STYLE-WARNING condition\n" nil 2645933)
+>> (:write-done 2645933)\n
+<< (:return (:ok (:compilation-result ((:message "undefined function: COMMON-LISP-USER::DRV-UNDEFINED-FN" :severity :style-warning :location (:location (:buffer "drv-compile.lisp") (:offset 34 20) nil) :references nil)) t 0.00800000037997961 nil nil)) 24)
+>> (:emacs-rex (swank-repl:listener-eval "(drv-add 1 2)\n") "COMMON-LISP-USER" :repl-thread 25)\n
+<< (:presentation-start 1 :repl-result)
+<< (:write-string "3" :repl-result)
+<< (:presentation-end 1 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 25)
+>> (:emacs-rex (swank:compile-file-for-emacs "@WORK@/oracle/sbcl-basic/work/drv-file.lisp" t) "COMMON-LISP-USER" t 26)\n
+<< (:write-string "; compiling file \"@WORK@/oracle/sbcl-basic/work/drv-file.lisp\" (written 30 OCT 2026 01:58:30 AM):\n\n; file: @WORK@/oracle/sbcl-basic/work/drv-file.lisp\n; in: DEFUN DRV-FILE-WARN\n;     (UNUSED 1)\n; \n; caught STYLE-WARNING:\n;   The variable UNUSED is defined but never used.\n\n; file: @WORK@/oracle/sbcl-basic/work/drv-file.lisp\n; in: DEFUN DRV-FILE-WARN\n;     (DRV-OTHER-UNDEFINED)\n; \n; caught STYLE-WARNING:\n;   undefined function: COMMON-LISP-USER::DRV-OTHER-UNDEFINED\n; \n; compilation unit finished\n;   Undefined function:\n;     DRV-OTHER-UNDEFINED\n;   caught 2 STYLE-WARNING conditions\n\n\n; wrote @WORK@/oracle/sbcl-basic/work/drv-file.fasl\n; compilation finished in 0:00:00.003\n" nil 2645934)
+>> (:write-done 2645934)\n
+<< (:return (:ok (:compilation-result ((:message "The variable UNUSED is defined but never used." :severity :style-warning :location (:location (:file "@WORK@/oracle/sbcl-basic/work/drv-file.lisp") (:position 68) nil) :references nil) (:message "undefined function: COMMON-LISP-USER::DRV-OTHER-UNDEFINED" :severity :style-warning :location (:location (:file "@WORK@/oracle/sbcl-basic/work/drv-file.lisp") (:position 84) nil) :references nil)) t 0.003000000026077032 t "@WORK@/oracle/sbcl-basic/work/drv-file.fasl")) 26)
+>> (:emacs-rex (swank:load-file "@WORK@/oracle/sbcl-basic/work/drv-file.fasl") "COMMON-LISP-USER" t 27)\n
+<< (:return (:ok "T") 27)
+>> (:emacs-rex (swank-repl:listener-eval "(drv-file-fn 21)\n") "COMMON-LISP-USER" :repl-thread 28)\n
+<< (:presentation-start 12 :repl-result)
+<< (:write-string "42" :repl-result)
+<< (:presentation-end 12 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 28)
+>> (:emacs-rex (swank:load-file "@WORK@/oracle/sbcl-basic/work/drv-file.lisp") "COMMON-LISP-USER" t 29)\n
+<< (:write-string "\n; file: @WORK@/oracle/sbcl-basic/work/drv-file.lisp\n; in: DEFUN DRV-FILE-WARN\n;     (UNUSED 1)\n; \n; caught STYLE-WARNING:\n;   The variable UNUSED is defined but never used.\n\n; file: @WORK@/oracle/sbcl-basic/work/drv-file.lisp\n; in: DEFUN DRV-FILE-WARN\n;     (DRV-OTHER-UNDEFINED)\n; \n; caught STYLE-WARNING:\n;   undefined function: COMMON-LISP-USER::DRV-OTHER-UNDEFINED\n; \n; compilation unit finished\n;   Undefined function:\n;     DRV-OTHER-UNDEFINED\n;   caught 2 STYLE-WARNING conditions\n" nil 2645936)
+>> (:write-done 2645936)\n
+<< (:return (:ok "T") 29)
+>> (:emacs-rex (swank:simple-completions "mapc" "COMMON-LISP-USER") "COMMON-LISP-USER" t 30)\n
+<< (:return (:ok (("mapc" "-f-------" "COMMON-LISP:MAPC") ("mapcan" "-f-------" "COMMON-LISP:MAPCAN") ("mapcar" "-f-------" "COMMON-LISP:MAPCAR") ("mapcon" "-f-------" "COMMON-LISP:MAPCON"))) 30)
+>> (:emacs-rex (swank:simple-completions "drv-pkg:he" "COMMON-LISP-USER") "COMMON-LISP-USER" t 31)\n
+<< (:return (:ok (("drv-pkg:hello" "-f-------" "DRV-PKG:HELLO"))) 31)
+>> (:emacs-rex (swank:completions "m-v-b" "COMMON-LISP-USER") "COMMON-LISP-USER" t 32)\n
+<< (:return (:ok (("multiple-value-bind" "-f---m---" "COMMON-LISP:MULTIPLE-VALUE-BIND"))) 32)
+>> (:emacs-rex (swank:fuzzy-completions "mvbind" "COMMON-LISP-USER" :limit 5 :time-limit-in-msec 1500) "COMMON-LISP-USER" t 33)\n
+<< (:return (:ok ((("multiple-value-bind" "-f---m---" "COMMON-LISP:MULTIPLE-VALUE-BIND" ((0 "m") (9 "v") (15 "bind")))) nil)) 33)
+>> (:emacs-rex (swank:completions "mapc" '"COMMON-LISP-USER") "COMMON-LISP-USER" t 34)\n
+<< (:return (:ok (("mapc" "-f-------" "COMMON-LISP:MAPC") ("mapcan" "-f-------" "COMMON-LISP:MAPCAN") ("mapcar" "-f-------" "COMMON-LISP:MAPCAR") ("mapcon" "-f-------" "COMMON-LISP:MAPCON"))) 34)
+>> (:emacs-rex (swank:autodoc '("mapcar" "" swank::%cursor-marker%) :print-right-margin 80) "COMMON-LISP-USER" t 35)\n
+<< (:return (:ok ("(mapcar ===> function <=== list &rest more-lists)" t)) 35)
+>> (:emacs-rex (swank:operator-arglist "mapcar" "COMMON-LISP-USER") "COMMON-LISP-USER" t 36)\n
+<< (:return (:ok "(mapcar FUNCTION LIST &REST MORE-LISTS)") 36)
+>> (:emacs-rex (swank:operator-arglist "drv-add" "COMMON-LISP-USER") "COMMON-LISP-USER" t 37)\n
+<< (:return (:ok "(drv-add A B)") 37)
+>> (:emacs-rex (swank:autodoc '("drv-add" "1" swank::%cursor-marker%) :print-right-margin 80) "COMMON-LISP-USER" t 38)\n
+<< (:return (:ok ("(drv-add ===> a <=== b)" t)) 38)
+>> (:emacs-rex (swank:describe-symbol "drv-add") "COMMON-LISP-USER" t 39)\n
+<< (:return (:ok "COMMON-LISP-USER::DRV-ADD\n  [symbol]\n\nDRV-ADD names a compiled function:\n  Lambda-list: (A B)\n  Derived type: (FUNCTION (T T) (VALUES NUMBER &OPTIONAL))\n  Source file: @WORK@/oracle/sbcl-basic/work/drv-compile.lisp\n") 39)
+>> (:emacs-rex (swank:documentation-symbol "mapcar") "COMMON-LISP-USER" t 40)\n
+<< (:return (:ok "Documentation for the symbol MAPCAR:\n\nFunction:\n Arglist: (FUNCTION LIST &REST MORE-LISTS)\n\n Apply FUNCTION to successive tuples of elements of LIST and MORE-LISTS.\nReturn list of FUNCTION return values.") 40)
+>> (:emacs-rex (swank:swank-macroexpand-1 "(when a b)") "COMMON-LISP-USER" t 41)\n
+<< (:return (:ok "(IF A\n    B)") 41)
+>> (:emacs-rex (swank:swank-macroexpand-all "(when a (unless b c))") "COMMON-LISP-USER" t 42)\n
+<< (:return (:ok "(IF A\n    (IF B\n        NIL\n        C))") 42)
+>> (:emacs-rex (swank:swank-macroexpand-1 "(when (zerop 0) (print 1))") "COMMON-LISP-USER" t 43)\n
+<< (:return (:ok "(IF (ZEROP 0)\n    (PRINT 1))") 43)
+>> (:emacs-rex (swank:set-package "DRV-PKG") "COMMON-LISP-USER" :repl-thread 44)\n
+<< (:return (:ok ("DRV-PKG" "DRV-PKG")) 44)
+>> (:emacs-rex (swank-repl:listener-eval "(hello)\n") "DRV-PKG" :repl-thread 45)\n
+<< (:presentation-start 11 :repl-result)
+<< (:write-string "HI" :repl-result)
+<< (:presentation-end 11 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 45)
+>> (:emacs-rex (swank-repl:listener-eval "(in-package :cl-user)\n") "DRV-PKG" :repl-thread 46)\n
+<< (:presentation-start 10 :repl-result)
+<< (:write-string "#<PACKAGE \"COMMON-LISP-USER\">" :repl-result)
+<< (:presentation-end 10 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:new-package "COMMON-LISP-USER" "CL-USER")
+<< (:return (:ok nil) 46)
+>> (:emacs-rex (swank-repl:listener-eval "(error \"boom ~a\" 1)\n") "COMMON-LISP-USER" :repl-thread 47)\n
+<< (:debug 2645917 1 ("boom 1" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {1002181683}>)")) ((0 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (ERROR \"boom ~a\" 1) #<NULL-LEXENV>)") (1 "(EVAL (ERROR \"boom ~a\" 1))") (2 "(SWANK::EVAL-REGION \"(error \\\"boom ~a\\\" 1) ..)" (:restartable t)) (3 "((LAMBDA NIL :IN SWANK-REPL::REPL-EVAL))" (:restartable t)) (4 "(SWANK-REPL::TRACK-PACKAGE #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {1002FD11CB}>)" (:restartable t)) (5 "(SWANK::CALL-WITH-RETRY-RESTART \"Retry SLIME REPL evaluation request.\" #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {1002FD116B}>)" (:restartable t)) (6 "(SWANK::CALL-WITH-BUFFER-SYNTAX NIL #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {1002FD114B}>)" (:restartable t)) (7 "(SWANK-REPL::REPL-EVAL \"(error \\\"boom ~a\\\" 1) ..)" (:restartable t)) (8 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (SWANK-REPL:LISTENER-EVAL \"(error \\\"boom ~a\\\" 1) ..)") (9 "(EVAL (SWANK-REPL:LISTENER-EVAL \"(error \\\"boom ~a\\\" 1) ..)") (10 "(SWANK:EVAL-FOR-EMACS (SWANK-REPL:LISTENER-EVAL \"(error \\\"boom ~a\\\" 1) ..)" (:restartable t)) (11 "(SWANK::PROCESS-REQUESTS NIL #<FUNCTION (LAMBDA (SWANK-REPL::INTERRUPT-FUNCTION) :IN SWANK-REPL::REPL-LOOP) {100218194B}>)" (:restartable t)) (12 "((LAMBDA NIL :IN SWANK::HANDLE-REQUESTS))" (:restartable t)) (13 "((LAMBDA NIL :IN SWANK::HANDLE-REQUESTS))" (:restartable t)) (14 "(SWANK/SBCL::CALL-WITH-BREAK-HOOK #<FUNCTION SWANK:SWANK-DEBUGGER-HOOK> #<FUNCTION (LAMBDA NIL :IN SWANK::HANDLE-REQUESTS) {100218196B}>)") (15 "((FLET SWANK/BACKEND:CALL-WITH-DEBUGGER-HOOK :IN \"@WORK@/dl/slime/slime-2.32/swank/sbcl.lisp\") #<FUNCTION SWANK:SWANK-..") (16 "(SWANK::CALL-WITH-BINDINGS ((*STANDARD-INPUT* . #1=#<SWANK/GRAY::SLIME-INPUT-STREAM {1002180FB3}>) (*STANDARD-OUTPUT* . #2=#<SWANK/GRAY::SLIME-OUTPUT-STREAM {1002181083}>) (*TRACE-OUTPUT* . #2#) (*ERR.." (:restartable t)) (17 "(SWANK::HANDLE-REQUESTS #<SWANK::MULTITHREADED-CONNECTION {10018A1813}> NIL #<FUNCTION (LAMBDA (SWANK-REPL::INTERRUPT-FUNCTION) :IN SWANK-REPL::REPL-LOOP) {100218194B}>)" (:restartable t)) (18 "(SWANK-REPL::REPL-LOOP #<SWANK::MULTITHREADED-CONNECTION {10018A1813}>)" (:restartable t)) (19 "((FLET SB-UNIX::BODY :IN SB-THREAD::RUN))")) (47))
+<< (:debug-activate 2645917 1 nil)
+>> (:emacs-rex (swank-repl:listener-eval "(loop)\n") "COMMON-LISP-USER" :repl-thread 48)\n
+>> (:emacs-interrupt t)\n
+<< (:debug 2645917 2 ("Interrupt from Emacs" "   [Condition of type SIMPLE-ERROR]" nil) (("CONTINUE" "Continue from break.") ("RETRY" "Retry SLIME REPL evaluation request.") ("ABORT" "Return to sldb level 1.") ("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {1002181683}>)")) ((0 "((LAMBDA ()))" (:restartable t)) (1 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (LOOP) #<NULL-LEXENV>)") (2 "(EVAL (LOOP))") (3 "(SWANK::EVAL-REGION \"(loop) ..)" (:restartable t)) (4 "((LAMBDA NIL :IN SWANK-REPL::REPL-EVAL))" (:restartable t)) (5 "(SWANK-REPL::TRACK-PACKAGE #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {1003539BAB}>)" (:restartable t)) (6 "(SWANK::CALL-WITH-RETRY-RESTART \"Retry SLIME REPL evaluation request.\" #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {1003539B4B}>)" (:restartable t)) (7 "(SWANK::CALL-WITH-BUFFER-SYNTAX NIL #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {1003539B2B}>)" (:restartable t)) (8 "(SWANK-REPL::REPL-EVAL \"(loop) ..)" (:restartable t)) (9 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (SWANK-REPL:LISTENER-EVAL \"(loop) ..)") (10 "(EVAL (SWANK-REPL:LISTENER-EVAL \"(loop) ..)") (11 "(SWANK:EVAL-FOR-EMACS (SWANK-REPL:LISTENER-EVAL \"(loop) ..)" (:restartable t)) (12 "(SWANK::SLDB-LOOP 1)" (:restartable t)) (13 "((FLET SWANK/BACKEND:CALL-WITH-DEBUGGING-ENVIRONMENT :IN \"@WORK@/dl/slime/slime-2.32/swank/sbcl.lisp\") #<FUNCTION (LAM..") (14 "(SWANK::DEBUG-IN-EMACS #<SIMPLE-ERROR \"boom ~a\" {1002FD1293}>)" (:restartable t)) (15 "(SWANK:INVOKE-SLIME-DEBUGGER #<SIMPLE-ERROR \"boom ~a\" {1002FD1293}>)" (:restartable t)) (16 "(SWANK/SBCL::CALL-WITH-BREAK-HOOK #<FUNCTION SWANK:SWANK-DEBUGGER-HOOK> #<FUNCTION (LAMBDA NIL :IN SWANK:SWANK-DEBUGGER-HOOK) {1002FD175B}>)") (17 "((FLET SWANK/BACKEND:CALL-WITH-DEBUGGER-HOOK :IN \"@WORK@/dl/slime/slime-2.32/swank/sbcl.lisp\") #<FUNCTION SWANK:SWANK-..") (18 "(SWANK:SWANK-DEBUGGER-HOOK #<SIMPLE-ERROR \"boom ~a\" {1002FD1293}> #<unused argument>)" (:restartable t)) (19 "(SB-DEBUG::RUN-HOOK *DEBUGGER-HOOK* #<SIMPLE-ERROR \"boom ~a\" {1002FD1293}>)")) (48 47))
+<< (:debug-activate 2645917 2 nil)
+>> (:emacs-rex (swank:throw-to-toplevel) "COMMON-LISP-USER" 2645917 49)\n
+<< (:return (:abort "NIL") 49)
+<< (:debug-return 2645917 2 nil)
+<< (:return (:abort "NIL") 48)
+<< (:debug-return 2645917 1 nil)
+<< (:return (:abort "#<SIMPLE-ERROR \"boom ~a\" {1002FD1293}>") 47)
+>> (:emacs-rex (swank-repl:listener-eval "(+ 40 2)\n") "COMMON-LISP-USER" :repl-thread 50)\n
+<< (:presentation-start 12 :repl-result)
+<< (:write-string "42" :repl-result)
+<< (:presentation-end 12 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 50)
+<< (:ping 2645917 1)
+>> (:emacs-pong 2645917 1)\n

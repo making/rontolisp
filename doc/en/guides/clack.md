@@ -583,7 +583,8 @@ this is module size and isolate startup.
 - One Clack server per process: a second concurrent `clackup` replaces the
   first one's application.
 - `clack.socket` (WebSocket) and `:swank-port` are unsupported (`:swank-port`
-  reaches the `swank` stub, which signals).
+  reaches the `swank` stub, which signals; [`rontolisp --swank`](../getting-started/swank.md)
+  serves a REPL to SLIME, and a `clackup` evaluated there serves the application).
 - Streaming-writer responses and bare-string/pathname bodies signal, as noted
   above (delayed function responses work).
 

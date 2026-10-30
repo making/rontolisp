@@ -76,6 +76,8 @@ class SourceLanguageSeamTest {
 			Map.entry("am.ik.rontolisp.eval.AsdfSystems", SYSTEM_METADATA),
 			Map.entry("am.ik.rontolisp.eval.CheckpointLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.ClUnicodeTables", SHIPPED_SOURCE),
+			// the shipped table of the standard operators' lambda lists, cl-arglists.txt
+			Map.entry("am.ik.rontolisp.eval.CommonLispSwank", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.Environment", RUNTIME_DATA),
 			Map.entry("am.ik.rontolisp.eval.EnvironmentLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.ExitLibrary", SHIPPED_SOURCE),

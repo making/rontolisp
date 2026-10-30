@@ -706,7 +706,9 @@ both WASM, 2 on the interpreter, and a `setq` of such a parameter wrote the glob
   `%push-package`/`%pop-package` markers) and run-time (a genuine variable kept in step by
   resolving `in-package` to `(setq *package* :P)`). On the compile paths the run-time face is an
   ordinary special of this file; on the interpreter the two faces are ONE cell, which is why it
-  is the one special the interpreter does NOT thread-scope. `.kb/packages.md`.
+  is the one special the interpreter does NOT thread-scope through `DynamicBindings`. A thread a
+  SWANK request runs on holds that cell of its own instead (`PackageResolver.bindThreadPackage`,
+  `.kb/swank.md`). `.kb/packages.md`.
 - Macro-time setf replay is separate: `UserMacroExpander` replays a top-level
   `(setf (PLACE) ...)` into its macro-time evaluator under a deny-by-default purity judgment
   (`isPureConfigSetf`/`isPure`). `.kb/asdf.md`.

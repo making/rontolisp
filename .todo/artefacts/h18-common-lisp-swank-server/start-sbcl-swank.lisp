@@ -1,0 +1,5 @@
+(load "@WORK@/dl/slime/slime-2.32/swank-loader.lisp")
+(setf swank-loader::*fasl-directory* "@WORK@/oracle/fasl/")
+(swank-loader:init :load-contribs t)
+(swank:create-server :port (parse-integer (car (last sb-ext:*posix-argv*))) :dont-close t)
+(loop (sleep 1000))
