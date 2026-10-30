@@ -217,7 +217,7 @@ public final class LoadInliner {
 		// program must be deterministic (.kb/emitted-output-determinism.md).
 		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new java.util.LinkedHashMap<>(), new HashMap<>(),
 				new java.util.LinkedHashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, dists,
-				baseDir, standards, new BuildImage(features));
+				new java.util.concurrent.atomic.AtomicInteger(), baseDir, standards, new BuildImage(features));
 		if (entryFile == null) {
 			expandInto(program, result, ctx, new Origin(baseDir, null, null));
 		}
@@ -248,14 +248,17 @@ public final class LoadInliner {
 	 * system reads when it derives a dependency), the already-loaded systems, the
 	 * in-progress system stack (cycle guard) and the (mutable) {@code .asd} search path,
 	 * which {@code ql:quickload} extends with the downloaded cache directories -- the
-	 * reader features for loaded files, the dist downloader, the entry source's directory
-	 * (the base every path in the spliced program is resolved against once this pass has
+	 * reader features for loaded files, the dist downloader and how many
+	 * {@code ql:quickload}s are splicing (while one is, a system no search directory
+	 * holds is downloaded where it is first needed), the entry source's directory (the
+	 * base every path in the spliced program is resolved against once this pass has
 	 * flattened it), and the build image {@code .asd} files are loaded into.
 	 */
 	private record Ctx(SourceLoader loader, Deque<String> loading, Set<String> provided,
 			Map<String, AsdfSystems.LispSystem> systems, Map<String, String> systemPackages, Set<String> loadedSystems,
 			Deque<String> loadingSystems, List<String> systemPath, Features features, DistClient dists,
-			@Nullable String entryBaseDir, SourceStandards standards, BuildImage buildImage) {
+			java.util.concurrent.atomic.AtomicInteger quickloadDepth, @Nullable String entryBaseDir,
+			SourceStandards standards, BuildImage buildImage) {
 	}
 
 	/**
@@ -377,7 +380,13 @@ public final class LoadInliner {
 					if (!BuiltinSystems.isBuiltin(name)) {
 						downloadQuicklisp(name, ctx);
 					}
-					spliceSystem(name, out, ctx, baseDir);
+					ctx.quickloadDepth().incrementAndGet();
+					try {
+						spliceSystem(name, out, ctx, baseDir);
+					}
+					finally {
+						ctx.quickloadDepth().decrementAndGet();
+					}
 					out.add(quotedSymbol(name));
 				}
 				continue;
@@ -616,7 +625,7 @@ public final class LoadInliner {
 			List<String> searchDirs = new ArrayList<>();
 			searchDirs.add(requestBaseDir == null ? "" : requestBaseDir);
 			searchDirs.addAll(ctx.systemPath());
-			AsdfSystems.LocatedAsd asd = AsdfSystems.locate(name, searchDirs, ctx.loader());
+			AsdfSystems.LocatedAsd asd = locateAsd(name, searchDirs, ctx);
 			// The .asd runs in the build image, and each system it defines is registered
 			// the moment it is defined. .asd forms read upcased like all source;
 			// AsdfSystems matches clause keywords case-insensitively and coerce-names
@@ -655,8 +664,8 @@ public final class LoadInliner {
 		Ctx systemCtx = system.features().isEmpty() ? ctx
 				: new Ctx(ctx.loader(), ctx.loading(), ctx.provided(), ctx.systems(), ctx.systemPackages(),
 						ctx.loadedSystems(), ctx.loadingSystems(), ctx.systemPath(),
-						ctx.features().with(system.features()), ctx.dists(), ctx.entryBaseDir(), ctx.standards(),
-						ctx.buildImage());
+						ctx.features().with(system.features()), ctx.dists(), ctx.quickloadDepth(), ctx.entryBaseDir(),
+						ctx.standards(), ctx.buildImage());
 		// Everything spliced from here on belongs to this system. A dependency opens its
 		// own bracket inside this one, so the pruner's innermost-wins rule attributes
 		// each
@@ -805,7 +814,7 @@ public final class LoadInliner {
 	 * {@link DistClient} and adds the extracted {@code .asd} directories to the search
 	 * path, so the following {@link #spliceSystem} can locate and splice it.
 	 */
-	private static void downloadQuicklisp(String name, Ctx ctx) {
+	private static List<String> downloadQuicklisp(String name, Ctx ctx) {
 		List<String> asdDirs;
 		try {
 			asdDirs = ctx.dists().ensureAvailable(name);
@@ -817,6 +826,26 @@ public final class LoadInliner {
 			if (!ctx.systemPath().contains(dir)) {
 				ctx.systemPath().add(dir);
 			}
+		}
+		return asdDirs;
+	}
+
+	/**
+	 * Locates a system's {@code .asd}; under {@code ql:quickload}, one no search
+	 * directory holds is downloaded first -- the interpreter's
+	 * {@code LispEvaluator.locateAsd}, whose comment says why the index misses it.
+	 * @param searchDirs the search directories, widened in place by a download
+	 */
+	private static AsdfSystems.LocatedAsd locateAsd(String name, List<String> searchDirs, Ctx ctx) {
+		try {
+			return AsdfSystems.locate(name, searchDirs, ctx.loader());
+		}
+		catch (AsdfSystems.SystemNotFoundException ex) {
+			if (ctx.quickloadDepth().get() == 0) {
+				throw ex;
+			}
+			searchDirs.addAll(downloadQuicklisp(name, ctx));
+			return AsdfSystems.locate(name, searchDirs, ctx.loader());
 		}
 	}
 

@@ -154,10 +154,10 @@ class IroncladNativeTest {
 	// --- the declined inputs stay ironclad's -------------------------------------
 
 	@Test
-	void anUnsupportedDigestFallsBackToIroncladsOwnError() {
-		// SHA-1 is outside both the kernel and the loadable slice: the native must
-		// DECLINE rather than answer, so ironclad's own message is what surfaces.
-		assertThat(errorFrom(":sha1", 2)).isEqualTo("Digest SHA1 is not a supported digest.");
+	void aDigestOutsideTheKernelFallsBackToIroncladsOwnCode() {
+		// SHA-1 is outside the kernel: the native must DECLINE rather than answer, so
+		// ironclad's own Lisp derives RFC 6070's PBKDF2-HMAC-SHA1 vector.
+		assertThat(deriveKey(":sha1", "password", "salt", 2, 20)).isEqualTo("ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957");
 	}
 
 	@Test

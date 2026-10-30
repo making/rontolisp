@@ -599,8 +599,21 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   `LoopExpander.parseForBeingHash`. Lite: `equalp` on arrays/hash-tables/structures falls back to
   `eql`; `define-modify-macro` place subforms may double-evaluate.
 - **ironclad 0.61 slice** — `IroncladE2eTest` (all four). `ironclad-slice.asd` declares
-  `ironclad/core`, `/digest/sha256`, `/digest/sha512`, `/mac/hmac`, `/kdf/pkcs5`, `/kdf/hmac`,
-  `/kdf/password-hash`, `/kdfs`, `/public-key/rsa`, aggregate `ironclad`.
+  `ironclad/core`, every `/digest/X` but sha3/kupyna/skein, `/prngs`, `/mac/hmac`, `/kdf/pkcs5`,
+  `/kdf/hmac`, `/kdf/password-hash`, `/kdfs`, `/public-key/rsa`, aggregate `ironclad` (the
+  original surface + sha1 + md5 + prngs: uuid's v5/v3 reach SHA-1/MD5 through it).
+  - **Digest measurement 2026-10-30**: adler32, blake2, blake2s, crc24, crc32, groestl, jh, md2,
+    md4, md5, ripemd-128/160, sha1, sm3, streebog, tiger, tree-hash, whirlpool load UNPATCHED and
+    digest `"abc"` identically to SBCL 2.2.9 on all four backends. Only sha1/md5 are pinned
+    (`IroncladE2eTest`, vendored); the rest are declared, not in CI. The others are NOT in the
+    aggregate: all of them would compile into every `"ironclad"` dependent (cl-postgres, mito).
+    tiger.lisp's `(#.+tiger-block-copy-fn+ ...)` needed the operator-position `#.` rule
+    ([reader-features.md](reader-features.md)). Out: **sha3** (`keccak-rounds`' `macrolet`
+    macroexpands a `dotimes-unrolled` symbol-macro through `&environment`, which a rontolisp macro
+    gets as nil -- [defmacro-backquote.md](defmacro-backquote.md)), kupyna/skein (need ciphers).
+  - **`public-key/public-key.lisp` is a CORE component, as upstream**: the prng shim's
+    `strong-random`/`random-bits` call its `octets-to-integer`. Moved down into the RSA system it
+    left `ironclad/prngs` alone (frugal-uuid's strong-random) undefined-function at the first draw.
   - **One deliberate layout deviation, forced by eager compilation: kdf/kdf.lisp loads LAST.** It
     `make-instance`s every KDF class and the compilers expand `make-instance` where it stands, so
     kdf/hmac.lisp is declared a DEPENDENCY of `ironclad/kdfs`, not a sibling.
@@ -608,7 +621,8 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
     rest of prng/, non-RSA public-key, scrypt/argon2/bcrypt.
   - **Not a rontolisp gap**: PS512 with a 1024-bit key trips ironclad's own assertion.
   - **`random-data` is a leaf shim** over `rontolisp:random-bytes` keeping upstream's REJECTION
-    SAMPLING (a modulo fold would bias a SCRAM nonce). `:fortuna` is not implemented.
+    SAMPLING (a modulo fold would bias a SCRAM nonce). `:fortuna` is not implemented;
+    `ironclad/prngs` is declared over core alone (the real one aggregates Fortuna).
   - **Why the SCRAM names had to exist before cl-postgres could compile at all**: an undefined
     function is a **compile-time** error on JVM/WASM while the interpreter defers it.
   - `gen-client-proof` XORs two 32-byte digests as 256-bit INTEGERS (`.kb/wasm-bignum.md`).

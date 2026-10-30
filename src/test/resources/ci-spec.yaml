@@ -13241,10 +13241,17 @@ cases:
       (print +ci-sd-beta+)
       (print +ci-sd-gamma+)
       (print (list :stamp #.(* 7 6)))
+      ;; ironclad tiger.lisp: a symbol value in a call's operator position names
+      ;; the function (spliced raw, not quoted).
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (defconstant +ci-sd-fn+ (if (= 1 1) 'ci-sd-double 'ci-sd-triple)))
+      (defun ci-sd-double (x) (* 2 x))
+      (print (#.+ci-sd-fn+ 21))
     expected: |
       1
       2
       (:STAMP 42)
+      42
   - name: declarations-eval-when-check-type-assert
     source: |
       (declaim (optimize (speed 3)))

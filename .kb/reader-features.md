@@ -229,6 +229,11 @@ Traps:
 - `*read-eval*` (`LispNames.READ_EVAL_VAR`, `CL_VARIABLES`) is seeded `t`, proclaimed special, and
   checked dynamically by `resolveReadTimeEval` before any marker evaluates. INTERPRETER only --
   the compiled runtime readers signal on `#.` unconditionally ([[read-load-streams]]).
+- **A marker in a call's OPERATOR position splices RAW** (`resolveReadTimeEval`'s head check):
+  ironclad tiger.lisp's `(#.+tiger-block-copy-fn+ block ...)`. Quoted, the head was
+  `('FILL-BLOCK-UB8-LE ...)`, which the interpreter and the JVM ran anyway and WASM refused
+  (`Cannot compile`). Only a FORM's head: a list TAIL walks through `resolveReadTimeEvalSpine`, whose
+  first element is an argument.
 - **A marker value that is a SYMBOL in an evaluated position splices QUOTED**
   (`resolveReadTimeEvalInCode`); plain `resolveReadTimeEval` substitutes RAW, the runtime `read`
   family's contract. **Every other value splices raw, like CL's object splice** -- a CONS in code
@@ -241,7 +246,7 @@ Traps:
   `.evalReadEvalNilMakesSharpDotSignal`, `.evalSharpDotGeneratedDefconstants`,
   `.loadSharpDotSymbolValueInCodePositionIsTheObject`;
   `JvmLispCompilerTest.compileAndRunReadTimeEvalGeneratedDefconstants`;
-  `WasmLispCompilerIntegrationTest.readTimeEvalGeneratedDefconstants`; ci-spec
+  `WasmLispCompilerIntegrationTest.readTimeEvalGeneratedDefconstants` (+ the operator position); ci-spec
   `reader-sharp-dot-generated-defconstants` and the `#.` leg of `sxql-enablement-language-group`.
 
 ## Other syntaxes

@@ -38,12 +38,8 @@ class LispEvaluatorQuicklispTest {
 
 	@Test
 	void quickloadDownloadsAndLoadsASystem(@TempDir Path base) {
-		DistClient client = new DistClient(base, DistTestSupport.dist(//
-				"mylib mylib mylib\n", //
-				"mylib " + MYLIB_URL + " {sums} mylib-1.0 mylib\n", //
-				Map.of(MYLIB_URL, DistTestSupport.tarGz(Map.of(//
-						"mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))", //
-						"mylib-1.0/mylib.lisp", "(defun mylib-answer () (* 6 7))")))));
+		// Including a dependency the dist index never names (a secondary system's).
+		DistClient client = new DistClient(base, DistTestSupport.secondaryDependencyDist());
 
 		String output = run("(ql:quickload \"mylib\") (print (mylib-answer))", client);
 
