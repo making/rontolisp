@@ -106,6 +106,28 @@ verification against the actual Quicklisp dist at probe time)
   undefined `stream-error-stream` (a condition accessor no part of the Gray
   protocol supplies, `.kb/gray-streams.md`; unowned).
 
+- **Probe round 2026-10-30 (interpreter, live dist).** First failure per library, and the
+  todo that owns it:
+  - `yason` -- loads; parse/encode identical on all four backends (h38).
+  - `fiveam` -- `asdf:perform` / `load-op` absent (asdf-flv, h30); `#+#.` (h31). With both
+    worked around it runs on the interpreter.
+  - `parachute`, `plump` -- `compiler-macro-function` (documentation-utils, h32). parachute
+    then runs. plump then needs a symbol that was only read (h34).
+  - `log4cl` -- `makunbound` (h32), then bt `thread-name` / semaphores (h37).
+  - `lparallel` -- bt condition variables (h37).
+  - `serapeum`, `spinneret` -- metaclass / class-object specializers (h33).
+  - `cl-interpol`, `cl-csv` -- named-readtables: `:common-lisp` feature (h31), then the
+    `readtable` class (h53). cl-csv's `.asd` first (h35).
+- **Probe round 2 (2026-10-30), compared against SBCL 2.2.9 on the same sources.**
+  - Load and match SBCL: `metabang-bind`, `arrow-macros`, `cl-slug`, `do-urlencode`,
+    `cl-yaml` (cffi + libyaml; only the table test differs, h47).
+  - Load, wrong result: `3bmd` (warning, h39), `optima` (h40), `zpng` (h41),
+    `trivial-types` (h42), `lisp-unit` (h45), `cl-markup` (h46), `st-json` (h51), `uuid` v5 (h48), `cl-annot` (h53).
+  - Do not load: `fset` (h43), `vecto` (h44), `djula` (h49), `hunchentoot`/`cl-fad` (h50),
+    `cl-smtp` (h48), `drakma` (h52), `lass` (h30), `cl-csv`/`function-cache`/
+    `cl-containers`/`cl-pdf` (h35), `jonathan`/`cl-redis`/`parenscript` (h53),
+    `cl-store` (implementation guard), `screamer` (not in the dist).
+
 ## Deliverable
 
 Per probe: either the library loads end-to-end (checklist complete), or a

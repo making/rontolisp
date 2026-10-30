@@ -64,7 +64,7 @@ may then fail.
 | the printer surface: `print` 126, `write` 58, the `pprint-*` family 153 | ~200 | `.todo/041` (layout + `pprint-*` operators) |
 | the array surface: `adjust-array` 96 (`:displaced-to` 40, non-adjustable 18), `make-array` 10 | ~100 | `.todo/905` (`:displaced-to`/adjustability residue; `.todo/043`/`.todo/180` closed without covering it) |
 | `loop` | 97 | `.todo/029` (134 names left: validation ~30, hash/`across` destructuring, dotted `append`, typed init) |
-| the reader surface: `read-preserving-whitespace` 27, `set-syntax-from-char` 12, `get-macro-character` 9, `name-char` 9 | ~60 | `.todo/214`, `.todo/041` (readtable half) |
+| the reader surface: `read-preserving-whitespace` 27, `set-syntax-from-char` 12, `get-macro-character` 9, `name-char` 9 | ~60 | `.todo/214`, h53 |
 | the runtime packages' missing MEMBER table -- `use-package` 21, `intern` 17, `with-package-iterator` 16, `unintern` 16, `find-symbol` 15, `shadowing-import` 13, `shadow` 12, `import` 14, all behind one cause | ~120 | `.todo/917` (`.todo/904` closed 2026-09-20 taking `packages` 35.2% -> 55.1% and measuring the rest down to this) |
 | the sequence surface: `make-sequence` 39, `write-sequence` 33, `read-sequence` 29, `fill` 23 | ~120 | `.todo/006` / `.todo/031` |
 | compile/loader introspection: `make-load-form` 41, `compile-file` 23, `disassemble` 14, `trace` 15 | ~90 | `.todo/042` |

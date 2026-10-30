@@ -51,7 +51,7 @@ The next frontier. Most of the language gaps have since closed; what is left:
   API-surface catalog.
 - Pathname layer (`merge-pathnames`, `probe-file`, `*load-pathname*`) -- the
   one wholly-unstarted item; none of the three exists in `LispNames`.
-- Readtables (.todo/041) -- open.
+- Readtables (h53) -- open.
 
 Done since this plan was written: the CLOS subset (`.kb/clos.md`) and
 dynamic/special variable binding (`.kb/dynamic-special-variables.md`) -- the latter was the

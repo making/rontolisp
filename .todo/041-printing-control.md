@@ -1,11 +1,10 @@
-# Readtable and printing control (`*readtable*` + the reader-macro API, the remaining character I/O, the stream COLUMN, `pprint` layout)
+# Printing control (the remaining character I/O, the stream COLUMN, `pprint` layout)
 
 Difficulty: High (the stream column touches every write primitive on four
-backends; the readtable API needs a readtable-driven reader in the frontend AND
-in the three embedded read runtimes)
+backends)
 
 **Status:** the printing half is done except for LAYOUT (and the two `~W`
-reads); the READTABLE half is still a set of no-op stubs. `.kb/pretty-printer.md` owns what is real and what is
+reads); the READTABLE half moved to h53. `.kb/pretty-printer.md` owns what is real and what is
 not -- every printer-control variable holds the value the printer actually
 behaves as, and `*print-escape*` / `*print-readably*` / `*print-pretty*` /
 `*print-case*` are the four that change the text when bound.
@@ -72,25 +71,6 @@ is byte-identical).
 - **`pprint-linear` / `pprint-tabular` / `pprint-fill` / `pprint-pop` /
   `pprint-exit-if-list-exhausted`** -- not defined; the first three are layout the
   column would decide, the last two are `pprint-logical-block` iteration.
-
-### Readtable system
-
-| Operator | State |
-|----------|-------|
-| `*readtable*` | exists, always nil (an opaque token: there is no readtable OBJECT) |
-| `copy-readtable` | a nil-returning no-op (arguments still evaluated) |
-| `set-dispatch-macro-character` | a t-returning no-op |
-| `readtable-case` | a constant `:upcase` stub (todo-195) |
-| `readtablep` | MISSING |
-| `set-macro-character` / `get-macro-character` | MISSING |
-
-Custom readtables need the readtable threaded through the reader -- and the
-current reader has a fixed configuration in FOUR places: the frontend
-`LispReader` plus the embedded read runtimes of the JVM and both WASM backends.
-The one known user syntax in the loadable set, ironclad's `#N@(...)` s-box
-literal, is native in `LispLexer` instead. Deferred deliberately; a real
-readtable is its own project, and nothing in the loadable library set has
-needed one.
 
 ### Character I/O
 
