@@ -501,12 +501,19 @@ what the program signals without the generic, so an uncovered read is unchanged.
 ## Slot shadowing, `:default-initargs`, `with-slots`/`with-accessors`, slot options
 - **A subclass may re-declare an inherited slot** (CLHS 7.5.3): STORAGE stays the one
   inherited slot (descendants keep the baked index) while the subclass spec overrides
-  initform/initarg and ADDS its readers/accessors (`shadowSlot`).
+  initform and ADDS its initargs and readers/accessors (`shadowSlot`; the initargs are the
+  union over the specifiers, CLHS 7.5.3, a specifier's slot-name default excluded).
 - **`(:default-initargs :arg form)` overrides the matching slot's effective initform**, which
   is where BOTH construction paths read it; before this it only reached the constructor, so
   `(error 'my-cond)` ignored it.
-- **An initarg is any symbol** (CLHS 7.1.1; cl-vectors' `(rx :initarg rx)`): `SlotSpec.initargKeyword`
-  holds the symbol's name as written, the constructor's `&key ((rx slot))` matches it as written
+- **A slot may name several initargs** (CLHS 7.1.1): `SlotSpec.initargs`, never empty, the
+  leftmost supplied one wins (7.1.4). The constructor keeps one `&key` per slot (its first
+  initarg) and only a several-initarg slot adds a `&rest` scan (`keywordConstructorShape`);
+  every other path -- `:default-initargs`, literal `make-instance`/`change-class`/typed-signal
+  sites, the runtime change-class/error/fill helpers, `%mop-fill-slots` -- matches through
+  `acceptsInitarg` or the inline `initargTailScan`, a single-initarg slot keeping its old shape.
+- **An initarg is any symbol** (CLHS 7.1.1; cl-vectors' `(rx :initarg rx)`): `SlotSpec.initargs`
+  hold the symbol's name as written, the constructor's `&key ((rx slot))` matches it as written
   (`.kb/lambda-lists.md`), generated code passes a non-keyword one quoted (`initargForm`), and a
   `make-instance`/`change-class`/typed-signal call site reads `'rx` as a literal initarg
   (`literalInitarg`). Pinned by ci-spec `defclass-default-initargs`.

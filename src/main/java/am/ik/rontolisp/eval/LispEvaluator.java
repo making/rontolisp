@@ -1811,8 +1811,7 @@ public final class LispEvaluator {
 				ClosRegistry.SlotSpec slot = slots.get(i);
 				// Only a DECLARED :initarg fills from the initargs, per CL -- see the
 				// generated twin in LispMacroExpander.
-				LispVal supplied = slot.initargSupplied() ? leftmostInitargValue(args.get(1), slot.initargKeyword())
-						: null;
+				LispVal supplied = slot.initargSupplied() ? leftmostInitargValue(args.get(1), slot) : null;
 				if (supplied != null) {
 					obj.setSlot(i, supplied);
 				}
@@ -7602,14 +7601,14 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * The value of the leftmost pair of the initarg plist whose key is the given keyword
-	 * (compared by spelling), or null when absent -- absent and supplied-nil must stay
-	 * distinguishable for the {@code %mop-fill-slots} fill.
+	 * The value of the leftmost pair of the initarg plist whose key is one of the slot's
+	 * initargs (compared by spelling), or null when absent -- absent and supplied-nil
+	 * must stay distinguishable for the {@code %mop-fill-slots} fill.
 	 */
-	private static @Nullable LispVal leftmostInitargValue(LispVal plist, String keyword) {
+	private static @Nullable LispVal leftmostInitargValue(LispVal plist, ClosRegistry.SlotSpec slot) {
 		LispVal cursor = plist;
 		while (cursor instanceof LispCons pair) {
-			if (pair.car() instanceof LispSymbol key && keyword.equals(key.name())
+			if (pair.car() instanceof LispSymbol key && slot.acceptsInitarg(key.name())
 					&& pair.cdr() instanceof LispCons valueCell) {
 				return valueCell.car();
 			}
