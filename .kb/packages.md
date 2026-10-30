@@ -88,12 +88,22 @@ against the standard's own checked-in list (`src/test/resources/cl-standard-symb
 BOTH directions, listing `while` by name, so neither a missing standard name nor a new extension
 can arrive unnoticed.
 
+**But `cl`'s `while` YIELDS** (h58, 2026-10-31,
+`PackageRegistry.isClExtensionName`): a package's own `while` (a `defpackage` `:export` no longer
+redirects it to `cl`) and one inherited from another used package win over `cl`'s, in
+`resolveUnqualified`, `accessibleIn` and `accessibleEntries` -- SBCL's resolution wherever a library
+owns the name. Measured: parenscript, iterate, arnesi and `for` export `while`; parenscript, arnesi
+and fset `defmacro` it (parenscript's `DEFMACRO cannot redefine the standard operator WHILE`
+before). Still not covered: fset's UNEXPORTED `defmacro while` in a package using `cl` reads `cl`'s
+(`while` is not shadowed by a definition). iterate's `while` is `ITERATE:WHILE` again.
+
 ## `defpackage`
 A literal, top-level directive like `in-package`. `PackageResolver.resolveDefpackage` registers a
 `LispPackage` (exports = owned + external) and replaces the form with the package KEYWORD
 (`:NAME` -- the value `make-package` and `find-package` answer, so the three are `eq`; it was a
 quoted `NAME` symbol until `.todo/917`); it does NOT switch the current package. It is in `CL_SPECIAL_FORMS`. Designators: keywords, bare
-symbols, strings, `#:name` (stripped in `designator`) and CHARACTERS (`#\H` is the string
+symbols, strings, `#:name`, a QUALIFIED symbol (`designator` takes `LispSymbol.memberName`, the
+symbol-name: `(:shadow cl:let)` names `LET`, misc-extensions' idiom) and CHARACTERS (`#\H` is the string
 designator for `"H"`, CLHS glossary -- the ANSI chapter spells every clause that way at least
 once); `:documentation`/`:size` ignored.
 - `(:intern name...)` adds the names to the package's OWN symbols without exporting them, so
@@ -129,11 +139,13 @@ once); `:documentation`/`:size` ignored.
   name (the pre-existing `resolveQualified` rule); `find-symbol` answers the inherited one.
 - **An `:import-from`/`:shadowing-import-from` of a name the source lacks is refused only for a
   SEALED source** (`PackageRegistry.sealed`): made by `defpackage`/`make-package` and never read
-  into since. A symbol merely READ is not recorded ("The member table"), so once source minted an
-  unrecorded name in a package (`resolveUnqualified`'s final intern, a quoted cl name in a non-cl
-  package, a `pkg::name` the package does not provide -- all skipped under `exactCase`, i.e. the
-  runtime `intern` and `find-symbol` probes) its table no longer answers "no such symbol" and
-  the check is off. Built-in / pre-seeded packages are never sealed. The failure carries the
+  into since. Once source minted a name in a package (`PackageResolver.mint`:
+  `resolveUnqualified`'s final intern, a quoted cl name in a non-cl package, a `pkg::name` the
+  package does not provide -- skipped under `exactCase`, i.e. the runtime `intern` and
+  `find-symbol` probes, and for the printer's probe and helper forms) its table no longer
+  answers "no such symbol" and the check is off: a backend's resolver records no read symbol,
+  and even a recording reader ("The member table") misses the names a definition derives and
+  those of forms pruned before it reads them. Built-in / pre-seeded packages are never sealed. The failure carries the
   source package and name (`DefpackageException.missingSymbol`). A pruned third-party
   `defstruct` leaves its `%struct-definition` marker in the stream so this check stays off for
   a kept defpackage that imports one of the struct's slot names (.kb/library-defun-pruning.md).
@@ -212,13 +224,13 @@ one disagrees with the interpreter's mid-program answer there (`.kb/uiop.md`). c
   on the skip; the `export` directive already recorded the `cl` redirect (`exportSymbols`).
   One exception: a name an EXISTING package already owns stays its own (a `defpackage` over a
   pre-seeded package whose members include `sin`, `read`, `close`). Libraries that re-export a
-  standard name: ironclad (`stream`), yason (`null`), iterate (`while`, rontolisp's own `cl`
-  extension). A `wit-import :package` is unaffected: it exports the lower-kebab labels
+  standard name: ironclad (`stream`), yason (`null`); not `while`, rontolisp's own `cl`
+  extension, which stays the package's own (above). A `wit-import :package` is unaffected: it exports the lower-kebab labels
   (`get`), never the reader's `GET`; a hand-written `(:use cl) (:export "READ")` that binds its
   own `READ` must `:shadow` it, as in CL. On the `examples.yaml` + `size-report` + `bench-report` sweep (JVM / P1
   / component) the output changes only where a re-export lands in the packed package rows (the
   clack / tiny-routes / ningle examples, `ironclad`'s `stream` and yason's `null`)
-  and `jvm/cffi-sqlite.lisp` (`ITERATE:WHILE` -> `WHILE`). Pinned by
+  and `jvm/cffi-sqlite.lisp` (`ITERATE:WHILE` -> `WHILE`, undone by h58). Pinned by
   `ReExportedStandardNameFixture` (four suites), ci-spec `export-of-an-inherited-standard-name`,
   `PackageResolverTest#{exportOfAStandardNameReExportsTheClSymbol,aDefpackageOverAPackageThatOwnsAStandardNameKeepsItsOwnSymbol,aStandardNameInAPackageWithoutClResolvesThroughItsUseList}`.
 - **The recorded entry must point at the TRUE home, not the used package** (`trueHome`): a used
@@ -680,11 +692,36 @@ interpreter's live registry and mirrored for the compiled backends' runtime entr
 
 - `intern` (`PackageResolver.internSpelling(name, record=true)` -> `recordInterned`):
   the home package of the spelling answered OWNS the member unless it already provides
-  it. Only the runtime `intern` writes; **a symbol merely READ under a package is not
-  recorded, deliberately** -- recording every name the resolver mints would grow every
-  package's enumeration (and the baked tables) with every local variable ever read, and
-  the chapter's tests that would notice (`find-symbol.11`, the `cl-user` iterator
-  cases) need `in-package`, which the ANSI driver skips.
+  it.
+- **The reader of a live image** (`.todo/h34`, 2026-10-30): a resolver made
+  `recordingReadSymbols()` -- `LispEvaluator`'s, so the interpreter AND the compile paths'
+  macro-time evaluator -- records every name it MINTS for source (`PackageResolver.mint`,
+  the same `recordInterned`, `markRecorded` so the case-fold retries skip it), CL's reader
+  interning what it reads: `find-symbol`, its status, the enumerations and the conflict
+  checks see a symbol that was only read, from the form that read it on (form at a time,
+  so an earlier form's lookup answers nil). The consumer was plump's matcher DSL, which
+  dispatches at macro time on `(find-symbol (string (car form)) "PLUMP-LEXER")` against
+  case keys read there; plump now matches SBCL on the interpreter and the JVM. Not
+  recorded: a standard name `cl` exports without implementing (a cl-using package reads it
+  as its own symbol, `find-symbol` keeps answering cl's), and what is not the program's
+  reading -- the exact-case probes, `printsBare` (which used to UNSEAL the current package as
+  a side effect of printing), and the implementation's own helper forms
+  (`resolveHelper`: `LispEvaluator.evalHelper` -- the REPL's routed echo, the Scheme/Clojure
+  echo -- and SWANK's inspector helpers, read in `cl-user`; they interned their lambda's
+  `X` into whatever package was current, which `SwankServerTest`'s package page showed).
+  The conflict checks are `export`'s and `import`'s; `use-package` has none, so a name the
+  target read before the use stays its own symbol where CL signals a name conflict (before
+  the recording a LATER read switched to the inherited symbol, earlier code keeping the
+  target's).
+  **The backends' whole-program resolvers record nothing they read**: their registry
+  becomes the baked tables (`%baked-packages%` universes, the `%baked-access%` rows, whose
+  build answer `PKG:NAME :external` differs from every internal read member), so recording
+  there would grow every walking or computed-lookup program by every name it read, and the
+  macro-time evaluator's reads (a `defmacro` body never reaches the backend) would still be
+  missing. So a compiled run-time lookup of a read-only name keeps the build answer
+  (`.todo/254`, `.todo/h55`). Pinned by ci-spec `macro-time-find-symbol-sees-a-symbol-only-read`
+  (expansion time, all four backends) and
+  `LispEvaluatorTest#findSymbolSeesSymbolsReadOrDefinedInsideAUserPackage`.
 - `export` (`exportSymbols`): a symbol homed ELSEWHERE must be accessible in the target
   (imported, or inherited -- an inherited one becomes an import redirect to its home as
   it is exported); a symbol homed in the target is taken on its spelling alone (it may
@@ -694,7 +731,11 @@ interpreter's live registry and mirrored for the compiled backends' runtime entr
 - `import` / `shadowing-import` (`importInto`): an import redirect to the symbol's home
   (a bare symbol's home is `cl-user`, or `cl` for a standard name -- the old code skipped
   unqualified names); a different PRESENT symbol of that name is a conflict for `import`
-  and is uninterned by `shadowing-import`, whose names also join `shadows`.
+  and is uninterned by `shadowing-import`, whose names also join `shadows`. A symbol its home
+  UNINTERNED redirects to that home as is, not through `trueHome` (whose table may hold the
+  displacing symbol by then): parenscript's `re-export-symbols` shadowing-imports `cl:class-name`
+  into a DOM package, then the old `CLASS-NAME` into the next (`EXPORT ... conflicts` before, h58).
+  It still prints `PS-DOM1-SYMBOLS::CLASS-NAME` where SBCL prints `#:CLASS-NAME`.
 - `shadow` (`shadowSymbols`): present -> marked; absent -> a fresh own member, marked.
 - `unintern` (`uninternSymbol`): removes own/import/external/shadow; an own symbol is
   TOMBSTONED (`PackageRegistry.markUnhomed`), which is what makes `symbol-package`
@@ -770,8 +811,9 @@ uninterned-symbol home and `import.error.4`'s restarts); `def-macro-test` rows
 (`macro-function` arity, `.todo/922`); `in-package` as a function; `%READ-EVAL`
 / `*universe*` driver artefacts; restarts (`make-package.error`); `go` / special
 declaration scope inside `do-symbols` bodies; `find-symbol.4` (no keyword table),
-`find-symbol.11` (read-time recording, above), `find-all-symbols.error.2` (the optional
-package argument is a documented extension).
+`find-symbol.11` (needs read-time recording, which the interpreter has since 2026-10-30 --
+not re-measured; the driver also skips its `in-package`), `find-all-symbols.error.2` (the
+optional package argument is a documented extension).
 
 **Clause validation (2026-09-22, interpreter, suite `ca06bd9`): the `defpackage.13`-`.26` rows
 are fixed, nothing regressed.** Premise correction: the item's plan put

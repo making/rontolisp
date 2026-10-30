@@ -4394,6 +4394,7 @@ cases:
   # The runtime spelling of defpackage's :import-from clause, and the three package
   # registry queries: the interpreter reads its live registry, the compile paths a
   # table baked in at compile time -- so all four backends must print the same thing.
+  # Then a :shadow clause naming a cl symbol by a QUALIFIED designator.
   - name: package-import-and-registry-queries
     source: |
       (defpackage :ci-imp-src (:use :cl) (:export :ci-imp-pub))
@@ -4413,6 +4414,13 @@ cases:
       (defun ci-pql-use (p) (package-use-list p))
       (print (ci-pql-use (find-package "CI-IMP-SRC")))
       (print (mapcar #'package-name (funcall #'package-use-list :ci-pql)))
+      ;; A qualified symbol designates its name: (:shadow cl:let) shadows LET.
+      (defpackage :ci-pqs (:use :cl) (:shadow cl:let))
+      (in-package :ci-pqs)
+      (defmacro let (b &body body) `(cl:let ,b (list :mine (progn ,@body))))
+      (print (let ((x 1)) x))
+      (print (package-shadowing-symbols :ci-pqs))
+      (in-package :cl-user)
     expected: |
       3
       (:CL :CI-IMP-SRC)
@@ -4422,6 +4430,8 @@ cases:
       :CI-PQL
       (:CL)
       ("CL" "CI-IMP-SRC")
+      (:MINE 1)
+      (LET)
   # The runtime-tier package API: make-package / delete-package /
   # rename-package / packagep / package-nicknames over one runtime package, the
   # catchable package-error failures with their :package slot, and the enumeration
@@ -4565,6 +4575,28 @@ cases:
       (CI-MT1::BAR)
       ((CI-MT1::BAR :INTERNAL :CI-MT2) (CI-MT2::BAZ :INTERNAL :CI-MT2))
       T
+      T
+  # Reading a symbol interns it: a macro's find-symbol sees a name source only READ
+  # in the package -- plump's matcher DSL dispatches on (find-symbol (string (car
+  # form)) "PLUMP-LEXER") against case keys read there -- from the forms read before
+  # it, not the later ones. Expansion-time, so the same on all four backends (SBCL's
+  # output).
+  - name: macro-time-find-symbol-sees-a-symbol-only-read
+    source: |
+      (defpackage :ci-fsr (:use :cl))
+      (in-package :ci-fsr)
+      (defmacro dispatch (form)
+        (case (find-symbol (string (car form)) "CI-FSR") (in ''matched) (t ''nope)))
+      (defmacro known-p (name) (if (find-symbol name "CI-FSR") t nil))
+      (in-package :cl-user)
+      (print (list (ci-fsr::dispatch (in 1 2)) (ci-fsr::dispatch (out 1 2))))
+      (print (ci-fsr::known-p "ZAP"))
+      (print 'ci-fsr::zap)
+      (print (ci-fsr::known-p "ZAP"))
+    expected: |
+      (CI-FSR::MATCHED CI-FSR::NOPE)
+      NIL
+      CI-FSR::ZAP
       T
   # remprop, the plist REMOVER: one prelude defun over the same %symbol-plists store
   # get / (setf get) / symbol-plist share.
@@ -13264,6 +13296,9 @@ cases:
       (print (ci-ew-fn 21))
       (let ((n 5)) (check-type n (integer 0 9)) (print :checked))
       (let ((s "x")) (check-type s (or null string)) (print :checked2))
+      ;; A failed check-type is a type-error carrying the value and the specifier.
+      (print (handler-case (let ((n "5")) (check-type n (integer 0 9)))
+               (type-error (c) (list (type-error-datum c) (type-error-expected-type c) (princ-to-string c)))))
       (assert (= 1 1))
       (print (typecase 7 ((integer 0 9) :digit) (integer :int)))
       (print (typecase 'b ((member a b c) :abc) (t :other)))
@@ -13273,6 +13308,7 @@ cases:
       42
       :CHECKED
       :CHECKED2
+      ("5" (INTEGER 0 9) "The value of N is \"5\", which is not of type (INTEGER 0 9).")
       :DIGIT
       :ABC
   - name: declared-array-types-single-arm-access
@@ -18915,7 +18951,7 @@ cases:
       ;; INTERPRETER semantics: pattern expansion always runs there, and the
       ;; compiled 2-arg lowering keeps its documented unknown-name-yields-a-
       ;; symbol deviation (.kb/symbol-runtime-api.md). Pinned by
-      ;; LispEvaluatorTest#findSymbolSeesDefinitionsMadeInsideAUserPackage.)
+      ;; LispEvaluatorTest#findSymbolSeesSymbolsReadOrDefinedInsideAUserPackage.)
     expected: |
       (1 2 3 4 5)
       (2 3 . TVS-ATOM)
@@ -24665,6 +24701,45 @@ cases:
       T
       (1 2 (3))
       (:READTABLE :OTHER)
+  # Shapes parenscript, jonathan and rutils (cl-redis) load through: a package's own
+  # `while` beside rontolisp's, a go in a return-from's value form, a ratio specializer,
+  # a built-in macro aliased (under a keyword too), a (:type list) struct.
+  - name: library-shapes-own-while-go-in-an-exit-value-ratio-macro-alias-list-struct
+    source: |
+      (defpackage :ci-loops (:use :cl) (:export #:while))
+      (in-package :ci-loops)
+      (defmacro while (test &body body) `(do () ((not ,test) :done) ,@body))
+      (defpackage :ci-loop-user (:use :cl :ci-loops))
+      (in-package :ci-loop-user)
+      (print (let ((i 0)) (list (while (< i 3) (incf i)) i)))
+      (in-package :cl-user)
+      (print (let ((i 0)) (list (while (< i 3) (incf i)) i)))
+      (defun ci-go-in-exit-value ()
+        (block outer
+          (tagbody
+             (return-from outer (progn (go :eof) 1))
+           :eof
+             (return-from outer :eof))))
+      (print (ci-go-in-exit-value))
+      (defgeneric ci-number-kind (x))
+      (defmethod ci-number-kind ((x number)) :number)
+      (defmethod ci-number-kind ((x ratio)) :ratio)
+      (print (list (ci-number-kind 3) (ci-number-kind 1/2) (typep 3 'ratio) (typep 1/2 'ratio)))
+      (setf (macro-function 'ci-incf) (macro-function 'incf))
+      (setf (macro-function :ci+) (macro-function 'incf))
+      (print (let ((y 1)) (ci-incf y 5) (:ci+ y) y))
+      (defstruct (ci-pair (:type list)) left right)
+      (let ((p (make-ci-pair :left 1 :right 2)))
+        (setf (ci-pair-right p) 20)
+        (incf (ci-pair-left p))
+        (print (list p (ci-pair-left p) (copy-ci-pair p) (consp p))))
+    expected: |
+      (:DONE 3)
+      (NIL 3)
+      :EOF
+      (:NUMBER :RATIO NIL T)
+      7
+      ((2 20) 2 (2 20) T)
   - name: with-output-to-string-does-not-touch-standard-output
     source: |
       (with-output-to-string (s) (princ "hidden" s)) (princ "visible")
@@ -30543,6 +30618,96 @@ cases:
       #(1732584193 4023233417 2225363975 255870178 1578413049 1761846468 178639645 2993401642)
       130
       14.5
+  - name: yason-enablement-language-group
+    source: |
+      ;; The idioms (ql:quickload "yason") rests on, exercised without the asdf
+      ;; load -- yason's tree lives in the quicklisp cache, so the end-to-end run is
+      ;; manual (.kb/asdf.md). The parser half: a special named by an ordinary
+      ;; symbol whose value is that symbol (yason's TRUE/FALSE), a number read off
+      ;; an adjustable buffer under a rebound *read-default-float-format*, a generic
+      ;; over stream and string, ecase on character key lists, check-type member.
+      (declaim (type symbol yse-true))
+      (defvar yse-true 'yse-true)
+      (defvar *yse-as* :list)
+      (defun yse-number (input)
+        (let ((buffer (make-array 4 :adjustable t :fill-pointer 0 :element-type 'character))
+              (*read-default-float-format* 'double-float))
+          (loop while (position (peek-char nil input nil) ".0123456789+-Ee")
+                do (vector-push-extend (read-char input) buffer))
+          (values (read-from-string buffer))))
+      (defgeneric yse-parse (input)
+        (:method ((input stream))
+          (check-type *yse-as* (member :list :vector))
+          (ecase (peek-char t input)
+            ((#\- #\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9) (yse-number input))
+            ((#\t) (dotimes (i 4) (read-char input)) yse-true)
+            ((#\[)
+             (read-char input)
+             (let ((items (loop for item = (yse-parse input)
+                                collect item
+                                until (char= (peek-char t input) #\])
+                                do (read-char input))))
+               (read-char input)
+               (if (eq *yse-as* :vector) (coerce items 'vector) items)))))
+        (:method ((input string))
+          (yse-parse (make-string-input-stream input))))
+      (let ((parsed (yse-parse "[1, -2.5e1, true, [ 300 ]]")))
+        (print (list (first parsed) (floatp (second parsed)) (round (second parsed))
+                     (third parsed) (fourth parsed))))
+      (let ((yse-true :yes) (*yse-as* :vector))
+        (print (yse-parse "[true,[1]]")))
+      (print (handler-case (yse-parse "x") (error () :ecase-error)))
+      ;; The encoder half: a Gray output stream carrying the aggregate stack, the
+      ;; separator kept in the stack's car, an unbound-special context check, and
+      ;; the escape table keyed by characters plus \uXXXX through format.
+      (defclass yse-out (rontolisp:fundamental-character-output-stream)
+        ((target :initarg :target :reader yse-target)
+         (stack :initform nil :accessor yse-stack)))
+      (defmethod rontolisp:stream-write-char ((s yse-out) char)
+        (write-char char (yse-target s)))
+      (defvar *yse-out*)
+      (defparameter *yse-replacements*
+        (let ((h (make-hash-table)))
+          (setf (gethash #\" h) "\\\"" (gethash #\Tab h) "\\t")
+          h))
+      (defun yse-string (string stream)
+        (write-char #\" stream)
+        (dotimes (i (length string))
+          (let* ((char (aref string i))
+                 (replacement (gethash char *yse-replacements*)))
+            (cond (replacement (write-string replacement stream))
+                  ((<= 0 (char-code char) 31) (format stream "\\u~4,'0X" (char-code char)))
+                  (t (write-char char stream)))))
+        (write-char #\" stream))
+      (defun yse-next ()
+        (if (car (yse-stack *yse-out*))
+            (write-char (car (yse-stack *yse-out*)) *yse-out*)
+            (setf (car (yse-stack *yse-out*)) #\,)))
+      (defmacro yse-with-array (() &body body)
+        `(progn
+           (unless (boundp '*yse-out*) (error "no JSON output context"))
+           (when (yse-stack *yse-out*) (yse-next))
+           (write-char #\[ *yse-out*)
+           (push nil (yse-stack *yse-out*))
+           (prog1 (progn ,@body)
+             (pop (yse-stack *yse-out*))
+             (write-char #\] *yse-out*))))
+      (defun yse-element (x)
+        (yse-next)
+        (if (stringp x) (yse-string x *yse-out*) (format *yse-out* "~D" x)))
+      (print (with-output-to-string (s)
+               (let ((*yse-out* (make-instance 'yse-out :target s)))
+                 (yse-with-array ()
+                   (yse-element 1)
+                   (yse-element (format nil "a~Cb\"~C" #\Tab (code-char 1)))
+                   (yse-with-array () (yse-element 2) (yse-element 3))))))
+      (print (handler-case (yse-with-array () 1) (error () :no-context)))
+    expected: |
+      (1 T -25 YSE-TRUE (300))
+      #(:YES #(1))
+      :ECASE-ERROR
+      "[1,\"a\\tb\\\"\\u0001\",[2,3]]"
+      :NO-CONTEXT
 standalone:
   - name: uncaught-defmethod-lambda-list-refusal
     source: |

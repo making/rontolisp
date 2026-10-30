@@ -125,9 +125,11 @@ once; the names given to `:shadow`, `:shadowing-import-from`, `:import-from`
 and `:intern` must be pairwise disjoint, as must those of `:intern` and
 `:export` (a `program-error`). Importing a name the source package does not
 have is a `package-error` whose `continue` restart interns the name there;
-since rontolisp does not record the symbols a program merely reads, this is
-checked only for a package made by `defpackage`/`make-package` that no source
-has been read into yet. A `defpackage` that runs at run time (inside a function
+since a package's table can lack a name Common Lisp would have interned there
+(the compiled backends do not record a symbol that was only read, and no
+backend records the names a `defstruct` derives), this is checked only for a
+package made by `defpackage`/`make-package` that no source has been read into
+yet. A `defpackage` that runs at run time (inside a function
 body, or through `eval`) signals these as conditions a handler can catch; a
 top-level one fails at read/compile time. A `defpackage` naming a package that already
 exists MODIFIES it (Common Lisp's rule): the clauses merge into what is there,
@@ -189,13 +191,15 @@ answers `nil` for a name before it is interned and the symbol (with its
 `:internal` / `:external` / `:inherited` status) after, `use-package` makes an
 exported member inherited, and [`do-symbols`](macros/do-symbols.md) /
 [`with-package-iterator`](macros/with-package-iterator.md) walk the table plus
-what the use list brings in, every symbol spelled the way code spells it. A
-symbol merely read in the source under a package is not recorded -- a
-definition made under it counts, since a `defun` is an interning. On the
-interpreter every package's table is live; on the compiled backends the
-packages the program creates with `make-package` keep a live table while the
-read/compile-time ones are frozen (the mutators answer `t` there without a
-change).
+what the use list brings in, every symbol spelled the way code spells it.
+Reading a symbol interns it, as in Common Lisp: a name the source reads under a
+package is recorded from the form that read it on, and a definition made under
+the package counts too (a `defun` is an interning). On the interpreter every
+package's table is live; on the compiled backends the packages the program
+creates with `make-package` keep a live table while the read/compile-time ones
+are frozen (the mutators answer `t` there without a change) and leave out the
+symbols that were only read -- a macro body, which runs as the program
+compiles, still sees them.
 
 Packages are resolved at read/compile time (in source order), so `in-package` is a top-level directive: which package a symbol in the source belongs to is decided by the `in-package` above it, not by a runtime `setq` of `*package*` (in compiled output the whole file is resolved before it runs; the interpreter resolves each top-level form as it reaches it, so a runtime assignment does affect the forms after it there). In compiled output a runtime-loaded file's package directives are not processed; the `rontolisp` package's functions (`version`, ...) are not available as first-class values (they cannot be passed to `mapcar`/`funcall`); and a `cl` symbol name must not be shadowed as a local variable inside a package that does not use `cl`.
 

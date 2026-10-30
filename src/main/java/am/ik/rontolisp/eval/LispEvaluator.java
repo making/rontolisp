@@ -106,7 +106,10 @@ public final class LispEvaluator {
 
 	private final Environment globalEnv;
 
-	private final PackageResolver packageResolver = new PackageResolver();
+	// The image's reader: a symbol source reads is a member of its package from then on
+	// (find-symbol, the enumerations), on the interpreter and in the compile paths'
+	// macro-time evaluator alike.
+	private final PackageResolver packageResolver = new PackageResolver().recordingReadSymbols();
 
 	/**
 	 * Serializes every lazy load of a Lisp-source library / generated runtime into the
@@ -4864,6 +4867,11 @@ public final class LispEvaluator {
 		TagbodyLabels labels = TagbodyLabels.of(body);
 		@org.jspecify.annotations.Nullable
 		String[] keys = labels.keys();
+		// A tagbody with labels is a dynamic extent to an exit's value form: a go in it
+		// (jonathan's (return-from read-number ...) reaching proc-parse's (go :eof))
+		// must find this tagbody, so the form is not handed to the frame below.
+		Environment statementExitTo = exitTo != null
+				&& java.util.Arrays.stream(keys).noneMatch(java.util.Objects::nonNull) ? exitTo : null;
 		int pc = 0;
 		while (pc < keys.length) {
 			if (keys[pc] != null) {
@@ -4872,7 +4880,7 @@ public final class LispEvaluator {
 			}
 			pollInterrupt();
 			try {
-				int jump = evalTagbodyStatement(body.get(pc), env, labels, exitTo);
+				int jump = evalTagbodyStatement(body.get(pc), env, labels, statementExitTo);
 				pc = jump == NO_JUMP ? pc + 1 : jump + 1;
 			}
 			catch (GoSignal go) {
@@ -7130,14 +7138,27 @@ public final class LispEvaluator {
 	 * Calls a printer written as a one-argument lambda on a value the program computed.
 	 * The value is handed to the closure as an ARGUMENT, never quoted into a form: a
 	 * top-level form is walked by the package resolver first, and that walk never ends on
-	 * a cyclic value.
+	 * a cyclic value. The printer is the implementation's own helper, read in
+	 * {@code cl-user} and interning nothing ({@link #evalHelper}).
 	 * @param printer the source of a {@code (lambda (x) ...)} answering the text
 	 * @param value the value to print
 	 * @return what the printer answered
 	 */
 	LispVal printThrough(String printer, LispVal value) {
-		LispVal closure = eval(SourceLanguage.COMMON_LISP.read(printer, Features.INTERPRETER, null).get(0));
+		LispVal closure = evalHelper(SourceLanguage.COMMON_LISP.read(printer, Features.INTERPRETER, null).get(0));
 		return applyGlobal(closure, List.of(value));
+	}
+
+	/**
+	 * Evaluates a top-level form of the implementation's own -- a helper evaluated on the
+	 * program's behalf, never the program's source -- resolved in {@code cl-user}
+	 * whatever package is current, and interning nothing: its names are not symbols the
+	 * program read ({@code PackageResolver.resolveHelper}).
+	 * @param form the helper form
+	 * @return its value
+	 */
+	LispVal evalHelper(LispVal form) {
+		return evalResolved(this.packageResolver.resolveHelper(form));
 	}
 
 	/** The elements of a value list (nil -- no values -- included). */
@@ -11097,11 +11118,25 @@ public final class LispEvaluator {
 					+ cons.print());
 		}
 		java.util.Map.Entry<String, UserMacro> macro = lookupUserMacro(target);
-		if (macro == null) {
-			throw new LispEvalException("setf " + LispNames.MACRO_FUNCTION + ": " + target
-					+ " is not a user macro (only a defmacro-defined macro can be aliased)");
+		if (macro != null) {
+			putUserMacro(alias, macro.getValue());
 		}
-		putUserMacro(alias, macro.getValue());
+		else if (PackageRegistry.runtimeMacroNames().contains(target)) {
+			// A built-in macro has no expander object to share; the alias rewrites its
+			// call into the target's (rutils' (abbr :+ incf)).
+			LispSymbol args = new LispSymbol("__alias_args");
+			LispVal quoted = new LispCons(new LispSymbol(LispNames.QUOTE),
+					new LispCons(new LispSymbol(target), LispNil.INSTANCE));
+			LispVal body = new LispCons(new LispSymbol(LispNames.CONS),
+					new LispCons(quoted, new LispCons(args, LispNil.INSTANCE)));
+			LispVal params = new LispCons(new LispSymbol(LispNames.LAMBDA_REST), new LispCons(args, LispNil.INSTANCE));
+			putUserMacro(alias,
+					makeUserMacro(LispNames.DEFMACRO, new LispSymbol(alias), params, List.of(body), this.globalEnv));
+		}
+		else {
+			throw new LispEvalException("setf " + LispNames.MACRO_FUNCTION + ": " + target
+					+ " is not a macro (only a macro can be aliased)");
+		}
 		return new LispSymbol(alias);
 	}
 

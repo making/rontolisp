@@ -3325,18 +3325,14 @@ public final class CommonLispSwank implements SwankLisp {
 		return list(params);
 	}
 
-	/** Calls a one-argument lambda, read once in {@code cl-user}, on a value. */
+	/**
+	 * Calls a one-argument lambda, read once in {@code cl-user} without interning its
+	 * names there ({@code LispEvaluator.evalHelper}), on a value.
+	 */
 	@Override
 	public LispVal helper(String source, LispVal argument) {
-		LispVal function = this.helpers.computeIfAbsent(source, text -> {
-			Object previous = this.resolver.bindThreadPackage(LispNames.CL_USER_PKG);
-			try {
-				return this.evaluator.eval(read(text).getFirst());
-			}
-			finally {
-				this.resolver.unbindThreadPackage(previous);
-			}
-		});
+		LispVal function = this.helpers.computeIfAbsent(source,
+				text -> this.evaluator.evalHelper(read(text).getFirst()));
 		// a helper's failure is its caller's to answer: no debugger stops it
 		return this.evaluator.withoutDebugger(() -> this.evaluator.applyGlobal(function, List.of(argument)));
 	}

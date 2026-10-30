@@ -20,7 +20,7 @@
 
 **コンパイル済み**プログラムにはマクロテーブルが残っていない(バックエンドが見る前にマクロは完全展開される)ため、そこでの値はスタブです。上記の述語としての用途は 4 バックエンドすべてで正確ですが、呼び出すと `macro-function: a compiled program cannot expand a macro at run time` をシグナルします。
 
-`setf` の場所としては 1 つの形だけをサポートします。`(setf (macro-function 'new) (macro-function 'existing))` は既存の `defmacro` 定義マクロに 2 つ目の名前を与え、展開器を共有させます。以降、両方の名前は同一に展開されます。それ以外 — 任意の展開器関数や、ユーザマクロでない名前 — はエラーをシグナルします。保存すべきマクロ関数オブジェクトが存在しないためです。
+`setf` の場所としては 1 つの形だけをサポートします。`(setf (macro-function 'new) (macro-function 'existing))` は既存のマクロに 2 つ目の名前を与え、以降、両方の名前は同一に展開されます。`defmacro` 定義マクロは展開器を共有し、`incf` などの組み込みマクロは呼び出しの書き換えで到達します。新しい名前はキーワードでも構いません（`(setf (macro-function :+) (macro-function 'incf))`）。それ以外 — 任意の展開器関数や、マクロでない名前 — はエラーをシグナルします。保存すべきマクロ関数オブジェクトが存在しないためです。
 
 ```lisp
 (defmacro greet2 (x) `(list :hello ,x))

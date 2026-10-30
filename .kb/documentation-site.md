@@ -43,8 +43,9 @@ playground's WebAssembly runtime, so `lisp` and `scheme` examples run in-page.
 - **A live built-in package is not stable either**: a `; =>` listing what a shipped package
   holds goes red when an unrelated change adds a symbol — build the example's OWN packages.
   `do-symbols`' "sorted order" sorts on the OWNER-QUALIFIED spelling
-  (`PackageResolver.accessibleSymbols`); `intern` cannot help (no intern table,
-  `.kb/symbol-runtime-api.md`) and `defpackage`'s `:intern` is unsupported.
+  (`PackageResolver.accessibleSymbols`). An example's own package lists every symbol the
+  example READ or interned under it (reading interns, `.kb/packages.md` "The member
+  table"), parameters included -- filter by name rather than print the whole listing.
 - ` ```scheme ` = a whole Scheme program on a fresh evaluator, stdout asserted by a following
   plain block. With any `; =>` in it, the block instead runs through a
   REPL session of its own, form by form, and each annotation is what that REPL echoes (the

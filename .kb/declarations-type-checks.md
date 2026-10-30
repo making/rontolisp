@@ -28,9 +28,15 @@ Seven `LispMacroExpander` expansions (no per-backend codegen), in `PackageRegist
 
 - `declare`/`declaim`/`proclaim` -> `nil`, arguments never evaluated or validated (`proclaim`
   deviates from CL); `the` -> its value form; `eval-when` -> `progn` of the body.
-- `check-type` -> `(let ((__check-type place)) (if <type-test> nil (error "...~s...")))`, place and
-  spec printed at EXPANSION time, only the value a runtime `~s` argument; an optional third string
-  replaces the "of type ..." part.
+- `check-type` -> `(let ((__check-type place)) (if <type-test> nil (error 'simple-type-error :datum
+  __check-type :expected-type 'spec :format-control "...~s..." :format-arguments (list
+  __check-type))))` (2026-10-30; was a plain `simple-error`, so `(type-error (c) ...)` missed it),
+  place and spec printed at EXPANSION time, only the value a runtime `~s` argument; an optional
+  third string replaces the "of type ..." part. The expansion runs inside the compilers, AFTER the
+  whole-program gates, so the gates name `check-type` themselves: `constructsInstance` (instance
+  + condition-report gates), `ConditionTagScan` walks the expansion (report-arm narrowing + the
+  runtime format renderer -- without it a JVM uncaught message printed the raw `~s`), and wasm's
+  `usedLayoutTags` keeps the `SIMPLE-TYPE-ERROR` layout.
 - `assert` -> `(if test nil (error ...))`; the places list is dropped (no `continue`/`store-value`
   restart, though the restart system exists, [error-handling.md](error-handling.md)).
 
@@ -106,7 +112,9 @@ form may be evaluated several times, so callers bind a temp (`__check-type` / `_
   `CLASS`/`STRUCTURE`/`TYPE` joined CL_TYPES for a different reason: trivia NAMES its patterns with
   them, and the defpattern site and a user's pattern site must resolve to the same bare spelling.
 - **Atomic map** (`atomicTypePredicate`): integer/fixnum/bignum -> `integerp`, float* -> `floatp`,
-  number/real -> `numberp`, rational/ratio -> `rationalp`, plus string, symbol, keyword, cons, list,
+  number/real -> `numberp`, rational -> `rationalp`, ratio -> `(and (rationalp v) (not (integerp v)))`
+  (it was `rationalp` until 2026-10-31: jonathan's `(number)`/`(ratio)` methods sent `3` to the
+  ratio one and printed `3.0`; ci-spec `library-shapes-own-while-...`), plus string, symbol, keyword, cons, list,
   null, atom, character, hash-table, function -> `functionp`; `boolean` -> `(or (null v) (eq v t))`;
   `unsigned-byte` -> `(and (integerp v) (>= v 0))`; `array` -> `(or (stringp v) (%arrayp v))` (rank
   NOT checked -- that separates it from `vector`, whose atomic arm goes through

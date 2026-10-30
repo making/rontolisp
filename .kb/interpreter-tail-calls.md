@@ -40,7 +40,11 @@ Lisp call enters fewer Java frames. Landed 2026-09-19 (`.todo/912`).
   (`evalAllButLast`, `evalWhile`, `evalConsRareOperator`'s `tagbody`); every other method
   evaluates through `eval`, which passes none, so a special `let`, `unwind-protect`,
   `handler-case`, `catch`, `progv`, a `multiple-value-prog1` first form keep the value form
-  inside their extent BY CONSTRUCTION. Entering a function body drops `deferTo`: an exit
+  inside their extent BY CONSTRUCTION. **A tagbody WITH LABELS hands its statements none**
+  (`evalTagbody`): a `go` in the value form must find it, and a deferred form ran after it was
+  gone (`(block b (tagbody (return-from b (progn (go :eof) 1)) :eof ...))` escaped as a
+  `GoSignal`: jonathan's `parse` through proc-parse's `(go :eof)`, h58). A label-less one
+  (`prog`, the 100,000-deep pin) still hands its owner on. Entering a function body drops `deferTo`: an exit
   there evaluates its value form inside the call (its `funcallSeam`, its
   `functionBodyDepth`). An exit to a block of a frame further out than the innermost owner
   still evaluates and throws. Not a `BlockReturnSignal`, whose other catchers

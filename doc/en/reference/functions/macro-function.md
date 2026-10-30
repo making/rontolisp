@@ -20,7 +20,7 @@ On the interpreter the value is the real expander -- a single-step expansion cal
 
 A COMPILED program has no macro table left (macros are fully expanded before the backends see the program), so there the value is a stub: the predicate above is exact on all four backends, but calling it signals `macro-function: a compiled program cannot expand a macro at run time`.
 
-The `setf` place is supported for one shape only: `(setf (macro-function 'new) (macro-function 'existing))` gives an existing `defmacro`-defined macro a second name sharing its expander, so both names expand identically from then on. Anything else -- an arbitrary expander function, or a name that is not a user macro -- signals an error, because there is no macro function object to store.
+The `setf` place is supported for one shape only: `(setf (macro-function 'new) (macro-function 'existing))` gives an existing macro a second name, so both names expand identically from then on: a `defmacro`-defined macro shares its expander, and a built-in macro such as `incf` is reached by rewriting the call. The new name may be a keyword (`(setf (macro-function :+) (macro-function 'incf))`). Anything else -- an arbitrary expander function, or a name that is not a macro -- signals an error, because there is no macro function object to store.
 
 ```lisp
 (defmacro greet2 (x) `(list :hello ,x))
