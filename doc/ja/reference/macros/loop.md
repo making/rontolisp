@@ -61,10 +61,11 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
 (loop for i from 1 to 10 when (evenp i) sum i) ; => 30
 ```
 
-本体節の後 (または `in`/`on`/`across` のように本体の先頭で変数を代入する `for` の後) に置いた `while`/`until` は、その記述位置で判定するため、現在の要素を参照できます。
+`while`/`until` は記述位置で判定します。`for` の後に置けばその節の現在の要素を参照でき、`for` の前に置けばその節が代入する前に判定します (SBCL と同じ動作です。CLHS は `for` の前の `while` を規格外としています)。
 
 ```lisp
 (loop for x in '(1 2 3 9 4) while (< x 4) collect x) ; => (1 2 3)
+(let ((s (list 1 2 3))) (loop while s for x = (pop s) collect x)) ; => (1 2 3)
 ```
 
 `when`/`if`/`unless` の内側では、アナフォリックな `it` で判定式の値を参照できます。
