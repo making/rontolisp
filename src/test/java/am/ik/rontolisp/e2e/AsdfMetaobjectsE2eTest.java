@@ -36,12 +36,13 @@ import java.util.List;
  * And the operation protocol ({@code .kb/asdf.md}, "The operation protocol"): the
  * recorded test-op body receives a real {@code asdf:test-op}; {@code asdf/interface} and
  * the sub-packages name asdf's own symbols; {@code operate}, {@code make-operation},
- * {@code input-files}/{@code output-files} answer; and the {@code asdf:perform} methods
- * {@code hooks.lisp} defines run around every later component load -- asdf-flv's
- * {@code :around} keeping an assignment in the file that made it, a nested
- * {@code load-system} from inside a component included -- in the same order on every
- * backend, the compile paths running each spliced component as the thunk its load-op is
- * performed with.
+ * {@code input-files}/{@code output-files}/{@code operation-done-p} answer, a library's
+ * own operation class and {@code operation-done-p} method included (arnesi's); and the
+ * {@code asdf:perform} methods {@code hooks.lisp} defines run around every later
+ * component load -- asdf-flv's {@code :around} keeping an assignment in the file that
+ * made it, a nested {@code load-system} from inside a component included -- in the same
+ * order on every backend, the compile paths running each spliced component as the thunk
+ * its load-op is performed with.
  */
 class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 
@@ -99,6 +100,10 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			(print (list meta-hooks::*seen-in-a* meta-hooks::*seen-in-b* meta-hooks::*seen-in-c*
 			             meta-hooks:*current*))
 			(print (reverse meta-hooks:*log*))
+			(let ((sys (asdf:find-system "meta-demo")))
+			  (print (list (asdf:operation-done-p 'asdf:load-op sys)
+			               (asdf:operation-done-p (make-instance 'meta-hooks::clean-op) sys)
+			               (handler-case (meta-hooks::make-single-fasl "meta-demo") (error () :refused)))))
 			""";
 
 	private static final List<String> EXPECTED = List.of("T", "T", "NIL", "T", "\"meta-demo\"",
@@ -109,7 +114,8 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			":NESTED-LOAD-OK", "\"testing meta-demo/tests\"", "T", "3", "1", "T", "T", "T", "NIL", "1", "T", ":REFUSED",
 			"(:A :GLOBAL :B :GLOBAL)",
 			"((:SYSTEM \"meta-demo/hooks\") (:COMPILE \"a\") (:LOAD \"a\") (:COMPILE \"b\") (:LOAD \"b\")"
-					+ " (:COMPILE \"c\") (:LOAD \"c\") (:SYSTEM \"meta-demo/nested\") (:SYSTEM \"meta-demo/perform\"))");
+					+ " (:COMPILE \"c\") (:LOAD \"c\") (:SYSTEM \"meta-demo/nested\") (:SYSTEM \"meta-demo/perform\"))",
+			"(T :CLEAN :REFUSED)");
 
 	@Override
 	protected String systemDir() {

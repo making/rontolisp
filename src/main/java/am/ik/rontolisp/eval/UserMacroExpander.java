@@ -223,6 +223,10 @@ public final class UserMacroExpander {
 			LispVal resolved = macroEval.resolvePackages(form);
 			if (isOperator(resolved, LispNames.DEFMACRO)) {
 				macroEval.evalResolved(resolved);
+				LispVal ownSymbol = ownSymbolMarker(form, resolved);
+				if (ownSymbol != null) {
+					this.result.add(ownSymbol);
+				}
 				return;
 			}
 			if (LispMacroExpander.isSetfMacroFunctionForm(resolved)) {
@@ -1358,6 +1362,23 @@ public final class UserMacroExpander {
 	// in-package/defpackage in any package spelling ((cl:in-package ...) included) --
 	// the resolver consumes these, so they must be recognized BEFORE resolution to be
 	// kept verbatim for the compilers.
+	/**
+	 * The {@code (%own-symbol "NAME")} marker ({@link LispNames#OWN_SYMBOL}) for a
+	 * consumed {@code defmacro} whose unqualified {@code cl} extension name resolved to
+	 * another package's symbol: the compilers' resolution pass never sees the definition,
+	 * and without the marker it would keep reading the name as {@code cl}'s. Null for any
+	 * other definition.
+	 */
+	private static @Nullable LispVal ownSymbolMarker(LispVal form, LispVal resolved) {
+		if (!(form instanceof LispCons cons) || !(cons.cdr() instanceof LispCons nameCell)
+				|| !(nameCell.car() instanceof LispSymbol name) || !PackageRegistry.isClExtensionName(name.name())
+				|| !(resolved instanceof LispCons out) || !(out.cdr() instanceof LispCons outNameCell)
+				|| !(outNameCell.car() instanceof LispSymbol outName) || outName.name().equals(name.name())) {
+			return null;
+		}
+		return properList(List.of(new LispSymbol(LispNames.OWN_SYMBOL), new LispString(name.name())));
+	}
+
 	private static boolean isPackageDirective(LispVal form) {
 		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol sym)) {
 			return false;

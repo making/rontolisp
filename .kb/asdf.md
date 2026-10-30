@@ -292,8 +292,10 @@ with FILES `(RELATIVE . RESOLVED)` pairs.
 `asdf.lisp` defines real ASDF's operation classes (`operation`; `prepare-op`, `compile-op`,
 `load-op`, `test-op` directly under it -- ASDF's `downward-operation` & co. are not modelled),
 `make-operation` (one instance per class), the generics `perform`, `input-files`,
-`output-files` and `source-file-type`, and `operate` (load-op -> `load-system`, test-op ->
-`test-system`, anything else SIGNALS: there is nothing for compile-op alone to produce). Default
+`output-files`, `source-file-type` and `operation-done-p` (default `t`; arnesi's `clean-op`
+adds a method), and `operate` (load-op -> `load-system`, test-op -> `test-system`, anything
+else SIGNALS: there is nothing for compile-op alone to produce). `compile-bundle-op` is a bare
+subclass of `operation` (arnesi's `make-single-fasl` names it; `operate` refuses it). Default
 methods are ASDF 3.3.1's for the classes the model has: load-op on a `cl-source-file` loads the
 source (`%asdf-load-component`, the seam), compile-op on a source file and everything on a
 parent component is a no-op, any other op on a source file signals, test-op on a system runs the
@@ -302,7 +304,8 @@ recorded body. A designator op (`'asdf:load-op`) dispatches through a `symbol` m
   dependencies), then `%asdf-perform-component NAME I` per file in load order (prepare-op,
   compile-op, load-op on the I-th child), then `:after` (compile-op, load-op on the system) --
   real ASDF's action order for a source tree with a fresh cache. Compile-op does run each time
-  (rontolisp compiles a source file BY loading it); no `operation-done-p`.
+  (rontolisp compiles a source file BY loading it); the plan never consults
+  `operation-done-p`.
 - **Interpreter**: `loadSystem` evaluates those driver calls; load-op's method reaches the Java
   built-in `%asdf-load-component` -> `loadComponent` (leaf shim or `loadFile` with the system's
   features and base dir; self-contained, so a program performing load-op on a component reloads
@@ -564,8 +567,8 @@ supported" -- the arm rontolisp reads. Four spans, each marker exactly once:
 follow-symlinks)` (SBCL's), `file-exists-p` -> `(probe-file pathspec)` (SBCL's: a directory's
 truename in directory form), and `delete-directory-and-files`' portable walk gets
 `(delete-file file)` for a directory (deletes an empty one here, `.kb/uiop.md`). Tier 4, not a
-shim: the rest of cl-fad is portable CL. Not working yet: `with-output-to-temporary-file` /
-`with-open-temporary-file` need `(pathname stream)` (h67). hunchentoot (2026-10-31, interpreter)
+shim: the rest of cl-fad is portable CL; `with-output-to-temporary-file` /
+`with-open-temporary-file` run on `(pathname stream)` (`.kb/pathnames.md`). hunchentoot (2026-10-31, interpreter)
 now stops at `HUNCHENTOOT::MAKE-EXTERNAL-FORMAT` (`specials.lisp:283`, flexi-streams shim, h52).
 
 Retired from this tier: `eval.AlexandriaSymbols`, deleted once `*package*` became a genuine

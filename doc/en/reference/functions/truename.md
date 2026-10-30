@@ -18,7 +18,9 @@ relative path, as `wasmtime run --dir .` does -- the answer stays relative,
 (with its trailing `/`) whatever the spelling, and a link whose target is missing
 answers the link itself, as SBCL's does. When you
 want an existence answer without the condition, use [`probe-file`](probe-file.md),
-which answers the same pathname and returns `nil` instead of signalling.
+which answers the same pathname and returns `nil` instead of signalling. A file
+stream is accepted too and answers the truename of the file it was opened on
+([`pathname`](pathname.md)).
 
 On both WASM backends a link is resolved only where the module can read it, through a
 preopened directory, and a link whose target is absolute is not followed (the WASI

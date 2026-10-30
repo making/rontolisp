@@ -296,8 +296,8 @@ library still has to stay inside the supported subset below.
   asdf-flv's `:around` method gives fiveam its file-local `*suite*`.
   [`asdf:operate`](../reference/functions/asdf-operate.md) performs `load-op`
   (`load-system`) or `test-op` (`test-system`); `asdf:make-operation`,
-  `asdf:input-files`, `asdf:output-files` and `asdf:source-file-type` exist
-  for the methods libraries define. `asdf/interface` and real ASDF's internal
+  `asdf:input-files`, `asdf:output-files`, `asdf:source-file-type` and
+  `asdf:operation-done-p` exist for the methods libraries define. `asdf/interface` and real ASDF's internal
   packages (`asdf/component`, `asdf/action`, ...) name these same symbols.
 - **`asdf:test-system` runs the recorded test-op wiring.**
   [`asdf:test-system`](../reference/functions/asdf-test-system.md) loads the

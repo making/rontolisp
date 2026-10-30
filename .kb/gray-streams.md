@@ -531,6 +531,12 @@ can make one carries it and, with it, the protocol. Pin:
   default to `:utf-8` (upstream `:latin1`). `with-input-from-sequence` (a list reads as its
   vector) / `with-output-to-sequence` close their stream. drakma loads and an `http-request`
   (http and https, text and binary bodies) answers on the interpreter, measured 2026-10-31.
+  Compiled (2026-10-31, after the `*read-suppress*` defvar, `.kb/read-load-streams.md`): JVM
+  output = the interpreter's (example.com over http and https, a local server's text and
+  binary bodies). Component (`-S inherit-network=y -S tcp=y -S tls=y`): an IP-literal URL
+  answers text and binary bodies; a host name stops at the missing name lookup
+  (`.todo/048`), and so does https (the peer needs the name; `:verify nil` is refused there).
+  Preview 1: no sockets, and cl+ssl's `tls-upgrade` is a compile error (permanent).
 - Not the real library: 48,418 of its 52,557 lines are the GBK table (`enc-cn-tbl.lisp`), the
   rest mostly code-page tables and per-(encoding, eol) class macrology (measured 2026-10-31).
 - **Deliberately no `close` method**: the stand-down is PROGRAM-wide, so one

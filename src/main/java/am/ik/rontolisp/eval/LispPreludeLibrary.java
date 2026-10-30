@@ -796,21 +796,26 @@ public final class LispPreludeLibrary {
 						                    (t (concatenate 'string ddir pdir)))))
 						    (pathname (concatenate 'string dir (if (string= pfile "") dfile pfile)))))
 						""");
-		// %path-ns: the LENIENT designator unwrap -- a pathname value's namestring,
-		// anything else unchanged -- so the family below keeps its "a non-string
-		// coerces to the empty namestring" tolerance while accepting pathname values.
-		// namestring is the STRICT sibling (it signals on a non-designator).
+		// %path-ns: the LENIENT designator unwrap -- a pathname value's namestring, a
+		// file stream's (the literal 4 is LispLayout.STREAM_PATH_CELL), anything else
+		// unchanged -- so the family below keeps its "a non-string coerces to the empty
+		// namestring" tolerance while accepting pathname values. namestring is the
+		// STRICT sibling (it signals on a non-designator).
 		SOURCES.put(LispNames.PATH_NS, """
 				(defun %path-ns (%pns-x)
-				  (if (%obj-is %pns-x '%PATHNAME) (%obj-ref %pns-x 0) %pns-x))
+				  (cond ((%obj-is %pns-x '%PATHNAME) (%obj-ref %pns-x 0))
+				        ((and (%obj-is %pns-x '%STREAM) (%obj-ref %pns-x 4)) (%obj-ref %pns-x 4))
+				        (t %pns-x)))
 				""");
 		// pathname: the canonical constructor every producer funnels through. The
 		// value is an instance of the fixed %PATHNAME layout carrying its namestring,
-		// which is what pathnamep / (typep x 'pathname) test.
+		// which is what pathnamep / (typep x 'pathname) test. A FILE stream designates
+		// the pathname it was opened with (LispLayout.STREAM_PATH_CELL, the literal 4).
 		SOURCES.put(LispNames.PATHNAME, """
 				(defun pathname (%pth-x)
 				  (cond ((%obj-is %pth-x '%PATHNAME) %pth-x)
 				        ((stringp %pth-x) (%obj-new '%PATHNAME %pth-x))
+				        ((and (%obj-is %pth-x '%STREAM) (%obj-ref %pth-x 4)) (%obj-new '%PATHNAME (%obj-ref %pth-x 4)))
 				        (t (error "PATHNAME: not a pathname designator: ~S" %pth-x))))
 				""");
 		// parse-namestring -- lite: no host parsing (a rontolisp namestring has no
@@ -2436,6 +2441,7 @@ public final class LispPreludeLibrary {
 				(defun namestring (%ns-path)
 				  (cond ((stringp %ns-path) %ns-path)
 				        ((%obj-is %ns-path '%PATHNAME) (%obj-ref %ns-path 0))
+				        ((and (%obj-is %ns-path '%STREAM) (%obj-ref %ns-path 4)) (%obj-ref %ns-path 4))
 				        (t (error "NAMESTRING: not a pathname designator: ~S" %ns-path))))
 				""");
 		// truename: probe-file plus the signal on a missing file.

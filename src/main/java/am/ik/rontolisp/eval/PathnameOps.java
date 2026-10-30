@@ -33,7 +33,9 @@ public final class PathnameOps {
 
 	/**
 	 * The namestring a pathname DESIGNATOR carries: a string is its own namestring, a
-	 * pathname value unwraps to its slot, anything else is null (the caller's error).
+	 * pathname value unwraps to its slot, a file stream to the namestring it was opened
+	 * with ({@link LispLayout#STREAM_PATH_CELL}), anything else is null (the caller's
+	 * error).
 	 * @param value the Lisp value
 	 * @return the namestring, or null when the value designates no pathname
 	 */
@@ -43,6 +45,10 @@ public final class PathnameOps {
 		}
 		if (value instanceof LispInstance inst && inst.layout().kind() == LispLayout.Kind.PATHNAME
 				&& inst.slot(0) instanceof LispString ns) {
+			return ns.value();
+		}
+		if (value instanceof LispInstance inst && inst.hasTag(LispLayout.STREAM_TAG)
+				&& inst.slot(LispLayout.STREAM_PATH_CELL) instanceof LispString ns) {
 			return ns.value();
 		}
 		return null;

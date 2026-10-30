@@ -3992,6 +3992,21 @@ cases:
     expected: |
       (CI-TOF-LIB:WIDGET CI-TOF-LIB::GADGET CI-TOF-LIB::POINT)
       (T T T T INTEGER)
+  - name: a-package-own-definition-of-while-wins-over-cl
+    source: |
+      ;; arnesi's defmacro while, unexported: cl has no while, so the definition
+      ;; interns the package's own symbol. A reference read before it stays
+      ;; rontolisp's while; cl-user's is untouched.
+      (defpackage :ci-own-while (:use :cl))
+      (in-package :ci-own-while)
+      (defun before () (let ((n 0)) (while (< n 3) (setq n (+ n 1))) n))
+      (defmacro while (test &body body) `(list :own ,test ,@body))
+      (print (list (before) (while 1 2) (package-name (symbol-package 'while)) (eq 'while 'cl:while)))
+      (in-package :cl-user)
+      (print (let ((n 0)) (while (< n 2) (setq n (+ n 1))) n))
+    expected: |
+      (3 (:OWN 1 2) "CI-OWN-WHILE" NIL)
+      2
   - name: expansion-time-read-homes-in-the-macro-package
     source: |
       ;; cl-pdf's AFM parser names each reader with read-from-string at EXPANSION
@@ -12749,6 +12764,28 @@ cases:
       NIL
       YES
       (#P"probe.dat" NIL)
+  - name: pathname-of-a-file-stream
+    # A file stream is a pathname designator: pathname, namestring, truename and
+    # the path-taking operators take it, after its close too, a :probe stream
+    # included, and open takes one as its filespec. A string stream is none.
+    # SBCL 2.2.9's answers (its pathname is absolute, so it is printed below the
+    # run directory's truename, as the truenames are).
+    source: |
+      (defun fs-rel (p) (and p (pathname (enough-namestring p (truename "")))))
+      (let ((s (open "fstream.dat" :direction :output :if-exists :supersede)))
+        (write-line "fs" s)
+        (print (list (fs-rel (pathname s)) (fs-rel (namestring s)) (file-namestring s) (fs-rel (truename s))))
+        (close s)
+        (print (list (fs-rel (pathname s)) (fs-rel (probe-file s)) (with-open-file (in s) (read-line in))))
+        (print (fs-rel (pathname (open "fstream.dat" :direction :probe))))
+        (print (handler-case (pathname (make-string-input-stream "x")) (error () :error)))
+        (print (list (delete-file s) (probe-file "fstream.dat"))))
+    expected: |
+      (#P"fstream.dat" #P"fstream.dat" "fstream.dat" #P"fstream.dat")
+      (#P"fstream.dat" #P"fstream.dat" "fs")
+      #P"fstream.dat"
+      :ERROR
+      (T NIL)
   - name: truename-resolves-symbolic-links
     # truename resolves every symbolic link in the path over %read-link (both WASM
     # backends through path_readlink, the component adapter's over readlink-at) and
@@ -24928,9 +24965,15 @@ cases:
         (set-dispatch-macro-character #\# #\? (lambda (s c n) (declare (ignore c)) (list 'list :q n (read s t nil t))))
         (set-macro-character #\] (get-macro-character #\)))
         (set-macro-character #\[ (lambda (s c) (declare (ignore c)) (cons 'list (read-delimited-list #\] s t))))
-        (set-macro-character #\% (lambda (s c) (declare (ignore s c)) (values))))
+        (set-macro-character #\% (lambda (s c) (declare (ignore s c)) (values)))
+        (set-dispatch-macro-character #\# #\u
+          (lambda (s c n) (declare (ignore c n))
+            (let ((d (read s t nil t))) (if *read-suppress* nil (list 'quote (list :uri d)))))))
       (print (list !foo !(a b) #?"bar" #3?(+ 1 2) [1 % (+ 1 1) 3]))
       (print (let ((x 5)) [x !x]))
+      ;; puri's #u tests *read-suppress*: the reader variables are bound on every backend.
+      (defun ci-rt-suppress-p () *read-suppress*)
+      (print (list #u"http://x/" (ci-rt-suppress-p) (let ((*read-suppress* t)) (ci-rt-suppress-p)) *read-eval*))
       (eval-when (:compile-toplevel :load-toplevel :execute)
         (setf (readtable-case *readtable*) :invert))
       (defparameter *ci-rt-inverted* (list 'foo 'FOO 'Foo))
@@ -24940,6 +24983,7 @@ cases:
     expected: |
       ((:BANG FOO) (:BANG (A B)) (:Q NIL "bar") (:Q 3 3) (1 2 3))
       (5 (:BANG X))
+      ((:URI "http://x/") NIL T T)
       ((FOO |foo| |Foo|) !FOO "[X]" T)
   # Shapes parenscript, jonathan and rutils (cl-redis) load through: a package's own
   # `while` beside rontolisp's, a go in a return-from's value form, a ratio specializer,

@@ -47,3 +47,12 @@ Still open, but SMALLER than originally written. The old plan (import into
 hand-written adapter and the whole sockets blob variant. A tcp program is now the
 base variant plus one appended user WIT import, so this is Lisp + WIT work plus
 the one stream-lift extension -- no blob regeneration.
+
+## drakma waits on this (measured 2026-10-31)
+
+drakma compiles to a component and answers an IP-literal URL (text and binary bodies);
+`http://example.com/` and every https URL stop here (`.kb/gray-streams.md`). The vendored
+`ip-name-lookup.wit` declares `resolve-addresses: async func(name: string) ->
+result<list<ip-address>, error-code>` -- an async func's `list<variant>` result, not the
+`stream<ip-address>` the plan above names; check which lift that needs before extending
+`emitStreamRead`. wasmtime 49 hosts it behind `-S allow-ip-name-lookup=y`.
