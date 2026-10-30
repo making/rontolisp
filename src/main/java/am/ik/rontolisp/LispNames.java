@@ -9726,6 +9726,9 @@ public final class LispNames {
 	/** The {@code char-name} built-in function. */
 	public static final String CHAR_NAME = "CHAR-NAME";
 
+	/** The {@code name-char} function: the inverse of {@link #CHAR_NAME}. */
+	public static final String NAME_CHAR = "NAME-CHAR";
+
 	/** The {@code fdefinition} built-in function (alias of {@code symbol-function}). */
 	public static final String FDEFINITION = "FDEFINITION";
 

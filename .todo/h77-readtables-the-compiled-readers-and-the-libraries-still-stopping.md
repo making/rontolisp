@@ -6,7 +6,8 @@ h74 made a keyword a block name on every backend, the cross-lambda lowering incl
 (`.kb/do-return-block.md`), so rutils gets past `(block :+ ...)` on the compile paths; and a
 `progn` a macro expands into is top level member by member when it holds a package directive
 (`.kb/packages.md`), so cl-annot's `@export` runs on the JVM and WASM; and a `loop` pattern
-whose head names a macro stays a pattern (`.kb/flet-labels.md`), so parenscript's `ps` does.
+whose head names a macro stays a pattern (`.kb/flet-labels.md`), so parenscript's `ps` does;
+and `name-char` exists, so cl-unicode no longer warns it undefined (`.kb/pretty-printer.md`).
 What is left, in the order it unblocks libraries (measured 2026-10-31 by hand through the
 Quicklisp cache unless noted):
 
@@ -43,8 +44,6 @@ Quicklisp cache unless noted):
      dispatch (`clear-input` is a prelude defun answering nil); chunga defines a method on it
      too. It does not load cl-redis 20250622 by itself: its `connection.lisp` names
      `sb-sys:fd-stream` and `sb-impl::clear-input` with no feature guard (SBCL only).
-   - cl-unicode (under cl-interpol) warns `CL-UNICODE::NAME-CHAR is undefined` on the
-     compile paths (not re-measured).
    - jonathan on WASM no longer stops (`to-json`/`parse` on preview 1).
 3. Interpreter gaps: `read` from a file stream / standard input (the prelude scanner
    delimits by the standard syntax), the REPL and playground (whole-buffer reads),

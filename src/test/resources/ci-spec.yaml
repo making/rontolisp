@@ -16061,6 +16061,9 @@ cases:
       (print (scale-float 1.5 3))
       (print (char-name #\Space))
       (print (char-name (code-char 1)))
+      ;; name-char inverts char-name (cl-unicode's character-named calls it).
+      (print (list (name-char "space") (name-char 'linefeed) (char-code (name-char "U+0001"))
+                   (name-char "a") (name-char "Bogus")))
       (defun lbr-double (x) (* x 2))
       (print (funcall (fdefinition 'lbr-double) 21))
       ;; pathnamep answers NIL for a string (a pathname is a distinct value)
@@ -16092,6 +16095,7 @@ cases:
       12.0
       "Space"
       "U+0001"
+      (#\Space #\Newline 1 NIL NIL)
       42
       (NIL NIL NIL T)
       (T T NIL)
