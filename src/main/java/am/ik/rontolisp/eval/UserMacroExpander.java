@@ -577,7 +577,7 @@ public final class UserMacroExpander {
 	private static LispVal expandTopLevel(LispVal form, LispEvaluator macroEval) {
 		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 				&& macroEval.isUserMacro(sym.name())) {
-			form = SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons));
+			form = foldNativeExpansion(SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons)));
 		}
 		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
 			return form;
@@ -597,6 +597,16 @@ public final class UserMacroExpander {
 			expanded.add(part);
 		}
 		return changed ? properList(expanded) : form;
+	}
+
+	/**
+	 * The native form behind {@code macroexpand-1}'s answer for a natively-run CL macro
+	 * ({@code LispMacroExpander.foldNativeExpansion}), keeping the position; any other
+	 * form unchanged.
+	 */
+	private static LispVal foldNativeExpansion(LispVal form) {
+		LispVal folded = LispMacroExpander.foldNativeExpansion(form);
+		return folded == null ? form : SourceProvenance.inherit((LispCons) form, folded);
 	}
 
 	/**
@@ -1709,6 +1719,9 @@ public final class UserMacroExpander {
 			// the line of the call that built it.
 			form = SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons));
 		}
+		// What a walker emitted for a natively-run CL macro (macroexpand-1's answer)
+		// becomes the native form again before any pass looks for the native head.
+		form = foldNativeExpansion(form);
 		// Then the operator's compiler macro, at most ONCE: the standard shape rewrites a
 		// call into a call of the SAME function with a better argument (cl-ppcre's
 		// literal regex becomes a load-time-value scanner), so re-applying would either

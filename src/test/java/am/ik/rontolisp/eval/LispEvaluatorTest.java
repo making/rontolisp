@@ -8484,14 +8484,22 @@ class LispEvaluatorTest {
 		// macro-function and macroexpand-1 agree (iterate's walker calls the second when
 		// the first says macro): typep/format are CL FUNCTIONS the expander rewrites
 		// inline, and return/prog are CL macros the evaluator runs natively. SBCL 2.2.9.
+		// handler-case and the definers expand to forms a walker reads as code (or, past
+		// defun, as data) and that fold back to the native form.
 		assertThat(eval("""
 				(list (macro-function 'typep) (macro-function 'format) (macro-function 'declare)
 				      (multiple-value-list (macroexpand-1 '(typep 1 x)))
 				      (multiple-value-list (macroexpand-1 '(return 1)))
 				      (multiple-value-list (macroexpand-1 '(prog (a) (return a))))
-				      (multiple-value-list (macroexpand-1 '(lambda (x) x))))
+				      (multiple-value-list (macroexpand-1 '(lambda (x) x)))
+				      (macroexpand-1 '(handler-case (f) (error (c) c) (:no-error (v) v)))
+				      (macroexpand-1 '(defun (setf f) (v x) "d" (declare (ignore x)) v))
+				      (macroexpand-1 '(defvar *v* 1)))
 				""").print()).isEqualTo("(NIL NIL NIL ((TYPEP 1 X) NIL) ((RETURN-FROM NIL 1) T)"
-				+ " ((%BLOCK (LET (A) (TAGBODY (RETURN A)))) T) (#'(LAMBDA (X) X) T))");
+				+ " ((%BLOCK (LET (A) (TAGBODY (RETURN A)))) T) (#'(LAMBDA (X) X) T)"
+				+ " (%HANDLER-CASE (F) 'ERROR #'(LAMBDA (C) C) ':NO-ERROR #'(LAMBDA (V) V))"
+				+ " (%DEFUN '(SETF F) #'(LAMBDA (V X) \"d\" (DECLARE (IGNORE X)) (BLOCK F V)))"
+				+ " (%DEFINITION '(DEFVAR *V* 1)))");
 	}
 
 	@Test

@@ -204,10 +204,12 @@ public final class LispMacroExpander {
 	 * Single-step expansion, for {@code macroexpand-1} only, of a CL macro the evaluator
 	 * and the compilers run natively instead of through {@link #expandBuiltinMacro}: the
 	 * same expansion every backend lowers the form to, or the CL one where the native
-	 * form has none ({@code return}, {@code lambda}). A code walker that trusts
-	 * {@code macro-function} emits what this answers, so it must run on every backend.
-	 * Kept apart from {@link #expandBuiltinMacro} because that one also feeds the compile
-	 * passes, which keep these forms native.
+	 * form has none ({@code return}, {@code lambda}), or -- for {@code handler-case} and
+	 * the definers, which have no lowering -- a form {@link #foldNativeExpansion} turns
+	 * back into the native one. A code walker that trusts {@code macro-function} emits
+	 * what this answers, so it must run on every backend. Kept apart from
+	 * {@link #expandBuiltinMacro} because that one also feeds the compile passes, which
+	 * keep these forms native.
 	 * @param cons the form to expand
 	 * @return the expansion, or {@code null} when the operator has none here
 	 */
@@ -230,8 +232,210 @@ public final class LispMacroExpander {
 			case LispNames.DO_EXTERNAL_SYMBOLS -> expandDoSymbols(cons, true);
 			case LispNames.DO_ALL_SYMBOLS -> expandDoAllSymbols(cons);
 			case LispNames.DEFINE_MODIFY_MACRO -> expandDefineModifyMacro(cons);
+			case LispNames.HANDLER_CASE -> cons.isProperList() ? expandHandlerCaseNatively(cons) : null;
+			case LispNames.DEFUN -> cons.isProperList() ? expandDefunNatively(cons) : null;
+			default -> QUOTED_DEFINERS.contains(sym.name())
+					? listToCons(List.of(new LispSymbol(LispNames.DEFINITION_INTERNAL), quoteOf(cons))) : null;
+		};
+	}
+
+	/**
+	 * The definers {@link #expandNativeMacro} answers as {@code (%definition 'form)}: the
+	 * whole form is data to a walker, as it was while the expansion was the form itself.
+	 * Most hold their code inside a grammar of their own (slot specs, specialized or
+	 * destructuring lambda lists, option lists) a walker cannot read as code; the
+	 * variable definers' one value form is not worth an operator of its own.
+	 */
+	private static final Set<String> QUOTED_DEFINERS = Set.of(LispNames.DEFMACRO, LispNames.DEFVAR,
+			LispNames.DEFPARAMETER, LispNames.DEFCONSTANT, LispNames.DEFCLASS, LispNames.DEFGENERIC,
+			LispNames.DEFMETHOD, LispNames.DEFSTRUCT, LispNames.DEFSETF, LispNames.DEFPACKAGE,
+			LispNames.DEFINE_SYMBOL_MACRO, LispNames.IN_PACKAGE);
+
+	/**
+	 * {@code (handler-case form (type ll . body)...)} as {@code (%handler-case form 'type
+	 * #'(lambda ll . body)...)}: every sub-form a walker must reach sits where an
+	 * ordinary call's argument or a lambda body sits, and {@link #foldNativeExpansion}
+	 * gives the native form back, so what a walker emits runs at the native form's cost.
+	 */
+	private static LispVal expandHandlerCaseNatively(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new IllegalArgumentException(LispNames.HANDLER_CASE + " expects an expression: " + cons.print());
+		}
+		List<LispVal> expansion = new ArrayList<>();
+		expansion.add(new LispSymbol(LispNames.HANDLER_CASE_INTERNAL));
+		expansion.add(parts.get(1));
+		for (LispVal clause : parts.subList(2, parts.size())) {
+			if (!(clause instanceof LispCons clauseCons) || !clauseCons.isProperList()
+					|| !(clauseCons.cdr() instanceof LispCons llCell)) {
+				throw new IllegalArgumentException(
+						LispNames.HANDLER_CASE + " expects (type (var) body...) clauses: " + clause.print());
+			}
+			expansion.add(quoteOf(clauseCons.car()));
+			expansion.add(functionOfLambda(llCell));
+		}
+		return listToCons(expansion);
+	}
+
+	/**
+	 * {@code (defun name ll . body)} as {@code (%defun 'name #'(lambda ll [doc] [decls]
+	 * (block block-name . forms)))}: the body a walker must reach is a lambda body, with
+	 * the implicit block spelled out as CL's expansion spells it.
+	 */
+	private static LispVal expandDefunNatively(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException(LispNames.DEFUN + " expects a name and a lambda list: " + cons.print());
+		}
+		LispVal name = parts.get(1);
+		LispVal blockName = name instanceof LispCons setfName && setfName.cdr() instanceof LispCons rest ? rest.car()
+				: name;
+		List<LispVal> body = parts.subList(3, parts.size());
+		int forms = bodyPreambleLength(body);
+		List<LispVal> lambda = new ArrayList<>();
+		lambda.add(new LispSymbol(LispNames.LAMBDA));
+		lambda.add(parts.get(2));
+		lambda.addAll(body.subList(0, forms));
+		List<LispVal> block = new ArrayList<>();
+		block.add(new LispSymbol(LispNames.BLOCK));
+		block.add(blockName);
+		block.addAll(body.subList(forms, body.size()));
+		lambda.add(listToCons(block));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN_INTERNAL), quoteOf(name),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCTION), listToCons(lambda)))));
+	}
+
+	/**
+	 * The number of leading body forms that are declarations or the documentation string
+	 * (a string is documentation only when a form follows it, CLHS 3.4.11).
+	 */
+	private static int bodyPreambleLength(List<LispVal> body) {
+		int index = 0;
+		boolean documented = false;
+		while (index < body.size()) {
+			LispVal form = body.get(index);
+			if (form instanceof LispCons decl && decl.car() instanceof LispSymbol head
+					&& LispNames.DECLARE.equals(head.name())) {
+				index++;
+			}
+			else if (form instanceof LispString && !documented && index < body.size() - 1) {
+				documented = true;
+				index++;
+			}
+			else {
+				break;
+			}
+		}
+		return index;
+	}
+
+	/**
+	 * The native form behind an expansion {@link #expandNativeMacro} answered for a CL
+	 * macro rontolisp runs as a special form ({@code %handler-case}, {@code %defun},
+	 * {@code %definition}), whatever a walker did to the sub-forms it exposes; null for
+	 * any other form. The interpreter evaluates the answer in the expansion's place and
+	 * the compile path folds it before any pass that looks for the native head.
+	 * @param form a form
+	 * @return the native form, or null
+	 */
+	public static @Nullable LispVal foldNativeExpansion(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		return switch (head.name()) {
+			case LispNames.HANDLER_CASE_INTERNAL -> foldHandlerCase(cons);
+			case LispNames.DEFUN_INTERNAL -> foldDefun(cons);
+			case LispNames.DEFINITION_INTERNAL -> foldDefinition(cons);
 			default -> null;
 		};
+	}
+
+	private static LispVal foldHandlerCase(LispCons cons) {
+		List<LispVal> parts = cons.isProperList() ? cons.toList() : List.of();
+		if (parts.size() < 2 || parts.size() % 2 != 0) {
+			throw malformedNativeExpansion(cons);
+		}
+		List<LispVal> nativeForm = new ArrayList<>();
+		nativeForm.add(new LispSymbol(LispNames.HANDLER_CASE));
+		nativeForm.add(parts.get(1));
+		for (int i = 2; i < parts.size(); i += 2) {
+			LispVal type = quotedDatum(parts.get(i));
+			LispCons lambda = functionLambda(parts.get(i + 1));
+			if (type == null || lambda == null) {
+				throw malformedNativeExpansion(cons);
+			}
+			nativeForm.add(new LispCons(type, lambda.cdr()));
+		}
+		return listToCons(nativeForm);
+	}
+
+	private static LispVal foldDefun(LispCons cons) {
+		List<LispVal> parts = cons.isProperList() ? cons.toList() : List.of();
+		LispVal name = parts.size() == 3 ? quotedDatum(parts.get(1)) : null;
+		LispCons lambda = parts.size() == 3 ? functionLambda(parts.get(2)) : null;
+		if (name == null || lambda == null) {
+			throw malformedNativeExpansion(cons);
+		}
+		List<LispVal> lambdaParts = lambda.toList();
+		List<LispVal> body = lambdaParts.subList(2, lambdaParts.size());
+		int forms = bodyPreambleLength(body);
+		List<LispVal> defun = new ArrayList<>();
+		defun.add(new LispSymbol(LispNames.DEFUN));
+		defun.add(name);
+		defun.add(lambdaParts.get(1));
+		defun.addAll(body.subList(0, forms));
+		// The block defun establishes itself: spelled out by the expansion, dropped here
+		// when it is still the whole body (a walker may have rewritten it).
+		if (body.size() == forms + 1 && body.get(forms) instanceof LispCons block && block.isProperList()
+				&& block.car() instanceof LispSymbol blockHead && LispNames.BLOCK.equals(blockHead.name())
+				&& block.cdr() instanceof LispCons blockRest) {
+			List<LispVal> blockForms = blockRest.cdr() instanceof LispCons inner ? inner.toList() : List.of();
+			if (bodyPreambleLength(blockForms) == 0) {
+				defun.addAll(blockForms);
+				return listToCons(defun);
+			}
+		}
+		defun.addAll(body.subList(forms, body.size()));
+		return listToCons(defun);
+	}
+
+	private static LispVal foldDefinition(LispCons cons) {
+		LispVal definition = cons.cdr() instanceof LispCons arg && arg.cdr() instanceof LispNil ? quotedDatum(arg.car())
+				: null;
+		if (!(definition instanceof LispCons definer) || !(definer.car() instanceof LispSymbol head)
+				|| !QUOTED_DEFINERS.contains(head.name())) {
+			throw malformedNativeExpansion(cons);
+		}
+		return definition;
+	}
+
+	private static @Nullable LispVal quotedDatum(LispVal form) {
+		return form instanceof LispCons quote && quote.car() instanceof LispSymbol head
+				&& LispNames.isQuote(head.name()) && quote.cdr() instanceof LispCons datum
+				&& datum.cdr() instanceof LispNil ? datum.car() : null;
+	}
+
+	/** The {@code (lambda ll . body)} of a {@code #'(lambda ll . body)} form, or null. */
+	private static @Nullable LispCons functionLambda(LispVal form) {
+		return form instanceof LispCons function && function.car() instanceof LispSymbol head
+				&& LispNames.FUNCTION.equals(head.name()) && function.cdr() instanceof LispCons arg
+				&& arg.cdr() instanceof LispNil && arg.car() instanceof LispCons lambda && lambda.isProperList()
+				&& lambda.car() instanceof LispSymbol lambdaHead && LispNames.LAMBDA.equals(lambdaHead.name())
+				&& lambda.cdr() instanceof LispCons ? lambda : null;
+	}
+
+	private static LispVal quoteOf(LispVal datum) {
+		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), datum));
+	}
+
+	/** {@code #'(lambda . llAndBody)}. */
+	private static LispVal functionOfLambda(LispCons llAndBody) {
+		return listToCons(
+				List.of(new LispSymbol(LispNames.FUNCTION), new LispCons(new LispSymbol(LispNames.LAMBDA), llAndBody)));
+	}
+
+	private static IllegalArgumentException malformedNativeExpansion(LispCons cons) {
+		return new IllegalArgumentException("Malformed native macro expansion: " + cons.print());
 	}
 
 	/**

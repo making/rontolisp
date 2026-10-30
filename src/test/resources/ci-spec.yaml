@@ -14403,6 +14403,15 @@ cases:
       (print (list (mfp-probe '(typep 1 x)) (mfp-probe '(format t "x")) (mfp-probe '(return 1))))
       (print (multiple-value-list (macroexpand-1 '(typep 1 x))))
       (print (multiple-value-list (macroexpand-1 '(return 1))))
+      ;; handler-case and the definers rontolisp runs as special forms expand too,
+      ;; and the expansion a walker emits runs as the native form.
+      (defmacro mfp-expand-1 (form) (macroexpand-1 form))
+      (print (mfp-expand-1 (handler-case (error "boom") (error (c) (princ-to-string c)))))
+      (print (mfp-expand-1 (handler-case (values 1 2) (:no-error (a b) (list a b)))))
+      (mfp-expand-1 (defun mfp-twice (x) (when (> x 9) (return-from mfp-twice :big)) (* x 2)))
+      (mfp-expand-1 (defvar *mfp-var* 5))
+      (print (list (mfp-twice 4) (mfp-twice 10) *mfp-var*
+                   (second (multiple-value-list (macroexpand-1 '(defclass mfp-k () ()))))))
     expected: |
       (:SPECIAL :SPECIAL :MACRO :MACRO :MACRO :FUNCTION :FUNCTION)
       (T NIL NIL)
@@ -14412,6 +14421,9 @@ cases:
       (:FUNCTION :FUNCTION :MACRO)
       ((TYPEP 1 X) NIL)
       ((RETURN-FROM NIL 1) T)
+      "boom"
+      (1 2)
+      (8 :BIG 5 T)
   - name: setf-symbol-function-and-fdefinition
     source: |
       (defun csf-orig (x) (* x 2))
