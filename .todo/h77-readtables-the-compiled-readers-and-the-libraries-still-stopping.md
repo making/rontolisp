@@ -5,9 +5,10 @@ Difficulty: High
 h74 made a keyword a block name on every backend, the cross-lambda lowering included
 (`.kb/do-return-block.md`), so rutils gets past `(block :+ ...)` on the compile paths; and a
 `progn` a macro expands into is top level member by member when it holds a package directive
-(`.kb/packages.md`), so cl-annot's `@export` runs on the JVM and WASM. What is left, in the
-order it unblocks libraries (measured 2026-10-31 by hand through the Quicklisp cache unless
-noted):
+(`.kb/packages.md`), so cl-annot's `@export` runs on the JVM and WASM; and a `loop` pattern
+whose head names a macro stays a pattern (`.kb/flet-labels.md`), so parenscript's `ps` does.
+What is left, in the order it unblocks libraries (measured 2026-10-31 by hand through the
+Quicklisp cache unless noted):
 
 1. **The emitted runtime readers** (JVM `JvmReadRuntimeBuilder`, WASM
    `WasmReadRuntimeBuilder`) and the prelude `read` scanner (it delimits a datum, then calls
@@ -42,9 +43,6 @@ noted):
      dispatch (`clear-input` is a prelude defun answering nil); chunga defines a method on it
      too. It does not load cl-redis 20250622 by itself: its `connection.lisp` names
      `sb-sys:fd-stream` and `sb-impl::clear-input` with no feature guard (SBCL only).
-   - parenscript: `property-bindings` still fails `Cannot compile symbol reference:
-     PARENSCRIPT:VAR`; the shape alone (a `loop` destructuring `(var p)` under a nested
-     backquote, `var` external) compiles and runs on the JVM. Not traced further.
    - cl-unicode (under cl-interpol) warns `CL-UNICODE::NAME-CHAR is undefined` on the
      compile paths (not re-measured).
    - jonathan on WASM no longer stops (`to-json`/`parse` on preview 1).

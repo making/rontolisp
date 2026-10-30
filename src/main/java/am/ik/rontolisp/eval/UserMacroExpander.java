@@ -2001,13 +2001,18 @@ public final class UserMacroExpander {
 					// (loop clause...): clause keywords and expressions are walked, but a
 					// destructuring pattern is data -- an improper or cons-headed element
 					// (`for ((x . y) . rest) on args`) must survive verbatim, where the
-					// generic walk would reject it as a call form.
+					// generic walk would reject it as a call form, and so must a list in
+					// a
+					// variable or type position, whose head may name a macro:
+					// parenscript's
+					// `for (var p) = ...` beside its own (defmacro var ...).
 					List<LispVal> newParts = new ArrayList<>();
 					newParts.add(parts.get(0));
 					for (int i = 1; i < parts.size(); i++) {
 						LispVal part = parts.get(i);
 						boolean pattern = part instanceof LispCons pc
-								&& (!pc.isProperList() || !(pc.car() instanceof LispSymbol));
+								&& (!pc.isProperList() || !(pc.car() instanceof LispSymbol)
+										|| LispMacroExpander.isLoopDataKeyword(parts.get(i - 1)));
 						newParts.add(pattern ? part : expandAll(part, macroEval));
 					}
 					return properList(newParts);

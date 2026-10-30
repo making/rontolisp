@@ -167,9 +167,10 @@ as part of a symbol on all four instead of signalling (CLHS 2.4.8; measured 2026
   interpreter's: cl-interpol (`#?"..."`) and cl-csv (`read-csv`/`write-csv`) on all four,
   jonathan on the JVM, and (re-measured 2026-10-31, `to-json`/`parse`) on WASM, and cl-annot's
   `@export` on the JVM and WASM since h74 (its `(progn (export 'x) ...)` is top level member by
-  member, [packages.md](packages.md)) -- verified by hand, no test (the Quicklisp cache).
-  Still stopping, none of it in the reader (`.todo/h77`): parenscript (`property-bindings`:
-  `Cannot compile symbol reference: PARENSCRIPT:VAR`), rutils -- past `(block :+ ...)` since h74
+  member, [packages.md](packages.md)), and parenscript's `ps` (h74: its `loop` pattern
+  `(var p)`, [flet-labels.md](flet-labels.md)) -- verified by hand, no test (the Quicklisp
+  cache).
+  Still stopping, none of it in the reader (`.todo/h77`): rutils -- past `(block :+ ...)` since h74
   ([do-return-block.md](do-return-block.md)) -- at `merge-hash-tables-with`, which calls
   `dotable` before `hash-table.lisp` defines it: the call's argument reads a free `v`, which
   both compilers refuse (`Cannot compile symbol reference`) where SBCL warns; and

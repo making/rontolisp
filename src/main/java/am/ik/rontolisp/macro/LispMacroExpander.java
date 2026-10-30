@@ -41919,6 +41919,20 @@ public final class LispMacroExpander {
 	 * otherwise every form around a local call would lose the line an uncaught report
 	 * gives for a condition inside it.
 	 */
+	private static final Set<String> LOOP_DATA_KEYWORDS = Set.of("FOR", "AS", "WITH", "AND", "USING", "OF-TYPE",
+			"INTO");
+
+	/**
+	 * Whether a {@code loop} element is a keyword a variable, a destructuring pattern or
+	 * a type follows -- data a walk over the clauses must not take for a call form.
+	 * Compared by name in any package, as {@code loop} compares its keywords.
+	 * @param element the element before the one in question
+	 * @return whether the next element is data
+	 */
+	public static boolean isLoopDataKeyword(LispVal element) {
+		return element instanceof LispSymbol sym && LOOP_DATA_KEYWORDS.contains(LispSymbol.memberName(sym.name()));
+	}
+
 	private static LispVal rewriteLocalCalls(LispVal form, java.util.Map<String, LispSymbol> fns) {
 		if (fns.isEmpty() || !(form instanceof LispCons cons)) {
 			return form;
@@ -41990,6 +42004,18 @@ public final class LispMacroExpander {
 					spec = rebuilt(specCons, newSpec);
 				}
 				return rewriteKeeping(cons, parts, 2, fns, spec);
+			}
+			case LispNames.LOOP: {
+				// (loop clause...): a list in a variable or type position is data -- a
+				// destructuring pattern whose head may name a local function -- and the
+				// rest is walked.
+				List<LispVal> out = new java.util.ArrayList<>(parts.size());
+				out.add(parts.get(0));
+				for (int i = 1; i < parts.size(); i++) {
+					LispVal part = parts.get(i);
+					out.add(isLoopDataKeyword(parts.get(i - 1)) ? part : rewriteLocalCalls(part, fns));
+				}
+				return rebuilt(cons, out);
 			}
 			case LispNames.MULTIPLE_VALUE_BIND: {
 				// (multiple-value-bind (vars...) values-form body...): the variable

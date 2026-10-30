@@ -28323,12 +28323,22 @@ cases:
       (print (loop for (a b) in '((1 2) (3 4) (5 6)) collect (+ a b)))
       (print (loop for (a b) = '(1 2) then (list b (+ a b)) repeat 5 collect a))
       (print (loop with (x y) = '(10 20) repeat 1 collect (+ x y)))
+      ;; A pattern's head naming a macro or a local function is still a variable
+      ;; (parenscript's `var`).
+      (defmacro lpd-var (name &optional value) `(defparameter ,name ,value))
+      (print (loop for b in '((a 1) b)
+                   for (lpd-var p) = (if (consp b) b (list b b))
+                   collect (list lpd-var p)))
+      (print (flet ((lpd-f (x) (* x 10)))
+               (loop for (lpd-f q) in '((1 2) (3 4)) collect (list lpd-f q (lpd-f q)))))
     expected: |
       (1 1 2 3 5 8 13 21)
       ((5 10))
       (3 7 11)
       (1 2 3 5 8)
       (30)
+      ((A 1) (B B))
+      ((1 2 20) (3 4 40))
   - name: substitute-as-function-value
     source: |
       (print (funcall #'substitute 0 2 '(2 2 2)))
