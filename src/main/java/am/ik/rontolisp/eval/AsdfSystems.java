@@ -6,7 +6,6 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -952,7 +951,7 @@ public final class AsdfSystems {
 	 */
 	private static final Set<String> IGNORED_OPTIONS = Set.of(":NAME", ":LONG-NAME", ":DESCRIPTION",
 			":LONG-DESCRIPTION", ":VERSION", ":AUTHOR", ":MAINTAINER", ":LICENSE", ":LICENCE", ":HOMEPAGE",
-			":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO", ":IN-ORDER-TO", ":PERFORM");
+			":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO", ":PROPERTIES", ":IN-ORDER-TO", ":PERFORM");
 
 	/**
 	 * Parses a {@code defsystem} form with the component classes in scope in the
@@ -1031,9 +1030,11 @@ public final class AsdfSystems {
 			LispVal value = IGNORED_OPTIONS.contains(key.name()) ? items.get(i + 1) : resolveReadEval(asd,
 					LispNames.ASDF_DEFSYSTEM + " " + name + " " + lower(key.name()), items.get(i + 1));
 			switch (key.name()) {
-				// Metadata: accepted for .asd compatibility, not recorded anywhere.
+				// Metadata: accepted for .asd compatibility, not recorded anywhere
+				// (:properties is ASDF's free-form property list, arnesi's feature
+				// names).
 				case ":NAME", ":LONG-NAME", ":DESCRIPTION", ":LONG-DESCRIPTION", ":AUTHOR", ":MAINTAINER", ":LICENSE",
-						":LICENCE", ":HOMEPAGE", ":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO" ->
+						":LICENCE", ":HOMEPAGE", ":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO", ":PROPERTIES" ->
 					{
 					}
 				// The one metadata option something reads back: asdf:component-version.
@@ -1822,27 +1823,47 @@ public final class AsdfSystems {
 				}
 			}
 		}
+		// ASDF's plan order: the components in definition order, each after its
+		// dependencies (depth first, in the order its :depends-on lists them). A
+		// component
+		// declaring no dependency therefore still loads after every component listed
+		// before it -- arnesi's (:file "debug" :depends-on ()) comes after the "asdf"
+		// component that pulls "packages" in, and opens with (in-package
+		// :it.bese.arnesi).
+		Map<String, Component> byName = new java.util.LinkedHashMap<>();
+		for (Component component : components) {
+			byName.put(component.name(), component);
+		}
 		List<String> files = new ArrayList<>();
 		Set<String> placed = new HashSet<>();
-		List<Component> remaining = new ArrayList<>(components);
-		while (!remaining.isEmpty()) {
-			boolean progress = false;
-			for (Iterator<Component> it = remaining.iterator(); it.hasNext();) {
-				Component component = it.next();
-				if (placed.containsAll(component.dependsOn())) {
-					files.addAll(component.files());
-					placed.add(component.name());
-					it.remove();
-					progress = true;
-				}
-			}
-			if (!progress) {
-				List<String> stuck = remaining.stream().map(Component::name).toList();
-				throw new IllegalStateException(
-						"system " + systemName + ": circular component :depends-on among " + stuck);
-			}
+		for (Component component : components) {
+			placeComponent(systemName, component, byName, placed, new java.util.LinkedHashSet<>(), files);
 		}
 		return List.copyOf(files);
+	}
+
+	/**
+	 * Places a component after its not-yet-placed dependencies, depth first: ASDF's plan
+	 * traversal. {@code visiting} is the dependency path being walked, which a cycle
+	 * returns to.
+	 */
+	private static void placeComponent(String systemName, Component component, Map<String, Component> byName,
+			Set<String> placed, Set<String> visiting, List<String> files) {
+		if (placed.contains(component.name())) {
+			return;
+		}
+		if (!visiting.add(component.name())) {
+			throw new IllegalStateException(
+					"system " + systemName + ": circular component :depends-on among " + List.copyOf(visiting));
+		}
+		for (String dep : component.dependsOn()) {
+			// Every name was checked against the siblings above.
+			placeComponent(systemName, java.util.Objects.requireNonNull(byName.get(dep)), byName, placed, visiting,
+					files);
+		}
+		visiting.remove(component.name());
+		files.addAll(component.files());
+		placed.add(component.name());
 	}
 
 	/**

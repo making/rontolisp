@@ -74,9 +74,13 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
   `<asd path>: message`.
 
 ### Options
-- `:components` ordered by a stable topological sort of `:depends-on`; `:serial` = implicit dep
-  on the previous sibling; `:module` = path prefix with files kept contiguous; `:static-file` =
-  ordering-only.
+- `:components` in ASDF's PLAN order: definition order, each component after its `:depends-on`
+  siblings, depth first (`placeComponent`); `:serial` = implicit dep on the previous sibling;
+  `:module` = path prefix with files kept contiguous; `:static-file` = ordering-only. Until
+  2026-10-31 it was a pass-wise topological sort that placed every dependency-free component
+  first: arnesi's `(:file "debug" :depends-on ())` then loaded ahead of `packages.lisp` and its
+  `(in-package :it.bese.arnesi)` failed. Measured against SBCL 2.2.9's `asdf::make-plan`: arnesi
+  and the vendored alexandria come out identical.
 - A SYSTEM-level `:pathname "dir"` prefixes every component; a component-level one decouples the
   component's NAME (its identity in the sibling dependency graph) from the path it contributes.
   On a `:file` the namestring is used verbatim when it carries an extension, else `.lisp` is
@@ -103,7 +107,8 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
 - `:class :package-inferred-system` — the ONE `:class` value implemented.
 - **`IGNORED_OPTIONS` — never resolved, never mentioned**: `:name :description
   :long-description :version :author :maintainer :license :licence :homepage :bug-tracker
-  :source-control :mailto :long-name`, plus `:in-order-to`/`:perform`. It is the CLOSED list, so
+  :source-control :mailto :long-name :properties` (arnesi's free-form property list), plus
+  `:in-order-to`/`:perform`. It is the CLOSED list, so
   an option added later is load-bearing by default. `:version` is on it even though
   `asdf:component-version` reads it BACK: a plain STRING is recorded as written, every other
   spelling answers nil.
