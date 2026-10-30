@@ -1090,6 +1090,14 @@ class LispEvaluatorTest {
 				        (multiple-value-list (read-from-string "#?x  y"))
 				        (with-input-from-string (s "#?a [b c] tail") (list (read s) (read s) (read s)))))
 				""").print()).isEqualTo("((:Q NIL FOO) (:Q 3 (A B)) (1 (2) X) ((:Q NIL X) 4) ((:Q NIL A) (B C) TAIL))");
+		// A reader macro in a backquote template reads the template's commas: its
+		// recursive read starts inside the template. Outside every template a comma
+		// still signals.
+		assertThat(evalMulti(readtable + """
+				(let ((*readtable* *rt*))
+				  (list (eval (list 'let '((c '(7 8))) (read-from-string "`(a #?(b ,c) [,@c])")))
+				        (handler-case (read-from-string "#?,c") (reader-error () :outside))))
+				""").print()).isEqualTo("((A (:Q NIL (B (7 8))) (7 8)) :OUTSIDE)");
 		// The standard readtable keeps reading #? as a symbol, and the case modes.
 		assertThat(evalMulti(readtable + """
 				(list (read-from-string "#?foo")

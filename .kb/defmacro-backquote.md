@@ -17,7 +17,9 @@ so all backends get it for free.
   CLtL2/Steele Appendix C port (`bqCompletelyProcess` = `bqProcess` + `bqSimplify` +
   `bqRemoveTokens`, over identity-compared `BQ_*` sentinels). Every level expands at READ
   time. One deviation: an inner backquote escaping to level 0 is expanded in place by
-  `bqExpandEscaped`, the runtime having no backquote.
+  `bqExpandEscaped`, the runtime having no backquote. A reader macro's datum carrying a raw
+  comma marker (its recursive read inside the template, [readtables.md](readtables.md))
+  takes the CLtL2 path too (`holdsComma`).
 - Template symbols are package-resolved against the DEFINING package (backquote quotes them
   before `PackageResolver` runs, [packages.md](packages.md)).
 

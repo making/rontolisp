@@ -4542,29 +4542,40 @@ public final class LispEvaluator {
 	 */
 	@Nullable ReadSyntax currentReadSyntax(java.util.function.UnaryOperator<ReadSyntax.Result> check) {
 		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
-		return readtable == null ? null : ReadtableSyntax.of(readtable, (function, input, offset, arguments) -> {
-			ReadSyntax.Result result;
-			try {
-				result = callReaderMacro(function, input, offset, arguments);
-			}
-			catch (ReadSyntax.Refusal refusal) {
-				throw refusal;
-			}
-			catch (RuntimeException ex) {
-				throw new ReadSyntax.Refusal("the reader macro function signalled: " + ex.getMessage(), ex);
-			}
-			return check.apply(result);
-		});
+		return readtable == null ? null
+				: ReadtableSyntax.of(readtable, (function, input, offset, arguments, templateDepth) -> {
+					ReadSyntax.Result result;
+					try {
+						result = callReaderMacro(function, input, offset, arguments, templateDepth);
+					}
+					catch (ReadSyntax.Refusal refusal) {
+						throw refusal;
+					}
+					catch (RuntimeException ex) {
+						throw new ReadSyntax.Refusal("the reader macro function signalled: " + ex.getMessage(), ex);
+					}
+					return check.apply(result);
+				});
 	}
+
+	/**
+	 * How many backquote templates enclose the macro character whose reader macro
+	 * function is running ({@link #callReaderMacro}): a {@code read} it makes starts
+	 * inside them ({@link #readWithSyntax}), as CL's backquote depth is dynamic.
+	 */
+	private int readerMacroTemplateDepth;
 
 	/**
 	 * Calls a reader macro function over the text being read: a string input stream
 	 * positioned where the macro character left the text is its first argument, and where
 	 * the function left that stream is where the read goes on.
 	 */
-	private ReadSyntax.Result callReaderMacro(LispVal function, String input, int offset, List<LispVal> arguments) {
+	private ReadSyntax.Result callReaderMacro(LispVal function, String input, int offset, List<LispVal> arguments,
+			int templateDepth) {
 		StringStreamTable table = this.globalEnv.stringStreams();
 		LispVal stream = table.open(input, offset);
+		int enclosingDepth = this.readerMacroTemplateDepth;
+		this.readerMacroTemplateDepth = templateDepth;
 		try {
 			List<LispVal> args = new ArrayList<>(arguments.size() + 1);
 			args.add(stream);
@@ -4576,6 +4587,7 @@ public final class LispEvaluator {
 			return new ReadSyntax.Result(values.isEmpty() ? null : values.get(0), end);
 		}
 		finally {
+			this.readerMacroTemplateDepth = enclosingDepth;
 			table.close(stream);
 		}
 	}
@@ -4612,7 +4624,8 @@ public final class LispEvaluator {
 		LispReader.Forms forms = LispReader
 			.forms(text, currentReadFeatures(), markers, null, this::resolveReadTimeEval,
 					table.logicalOffset(designator, reader), false)
-			.homingSymbols(this.packageResolver::readSpelling);
+			.homingSymbols(this.packageResolver::readSpelling)
+			.withinTemplates(this.readerMacroTemplateDepth);
 		try {
 			if (delimited) {
 				List<LispVal> items = forms.nextDelimited(syntax, ((LispChar) args.get(0)).codePoint());

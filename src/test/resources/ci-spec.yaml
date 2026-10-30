@@ -24928,7 +24928,8 @@ cases:
   # A readtable an eval-when installs at compile time reads the forms after it on every
   # backend: the interpreter reads form at a time, the compile paths read with the
   # compile-time evaluator's readtable (.kb/readtables.md) -- macro and dispatch
-  # characters, a no-value comment, a remapped `)`, read-delimited-list, the case.
+  # characters, a no-value comment, a remapped `)`, read-delimited-list, the case, and
+  # a reader macro in a backquote template reading the template's commas.
   - name: source-reads-with-the-readtable-an-eval-when-installs
     source: |
       (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -24944,6 +24945,13 @@ cases:
             (let ((d (read s t nil t))) (if *read-suppress* nil (list 'quote (list :uri d)))))))
       (print (list !foo !(a b) #?"bar" #3?(+ 1 2) [1 % (+ 1 1) 3]))
       (print (let ((x 5)) [x !x]))
+      ;; A reader macro called in a backquote template reads the template's commas, a
+      ;; nested template's ,, included (rutils' #`(member % var :test ,test)).
+      (defmacro ci-rt-template (x ys) `(list [,x ,@ys] #?(+ ,x 1) !,x))
+      (print (ci-rt-template 5 (6 7)))
+      (defmacro ci-rt-outer (v) `(defmacro ci-rt-inner (w) `(list [,w ,,v])))
+      (ci-rt-outer 10)
+      (print (ci-rt-inner 3))
       ;; puri's #u tests *read-suppress*: the reader variables are bound on every backend.
       (defun ci-rt-suppress-p () *read-suppress*)
       (print (list #u"http://x/" (ci-rt-suppress-p) (let ((*read-suppress* t)) (ci-rt-suppress-p)) *read-eval*))
@@ -24956,6 +24964,8 @@ cases:
     expected: |
       ((:BANG FOO) (:BANG (A B)) (:Q NIL "bar") (:Q 3 3) (1 2 3))
       (5 (:BANG X))
+      ((5 6 7) (:Q NIL 6) (:BANG 5))
+      ((3 10))
       ((:URI "http://x/") NIL T T)
       ((FOO |foo| |Foo|) !FOO "[X]" T)
   # Shapes parenscript, jonathan and rutils (cl-redis) load through: a package's own
