@@ -15225,16 +15225,25 @@ class LispEvaluatorTest {
 
 	@Test
 	void aHashTableReportsAndPrintsTheTestItImplements() {
-		// EQUALP for a table whose keys are folded, EQUAL for every other -- an eql table
-		// still places structurally, so reporting eql would describe behavior
-		// that does not exist. The same two answers on all four backends.
+		// The test lookup implements, decided from the :test VALUE: a symbol or one of
+		// the four function objects, written literally or computed (alexandria's
+		// plist-hash-table hands it through apply). The compiled twins are
+		// compileEqualpHashTablePrintsAndReportsItsTest; ci-spec
+		// hash-table-computed-test runs it on all four backends.
 		LispVal result = evalMulti("""
 				(defparameter *tp* (make-hash-table :test 'equalp))
 				(setf (gethash "a" *tp*) 1)
+				(defun htt-probe (h) (setf (gethash "A" h) 1) (list (hash-table-test h) (gethash "a" h)))
+				(defun htt-make (test) (make-hash-table :test test))
 				(list (hash-table-test *tp*) (hash-table-test (make-hash-table :test 'equal))
-				      (hash-table-test (make-hash-table)) (princ-to-string *tp*))
+				      (hash-table-test (make-hash-table)) (princ-to-string *tp*)
+				      (htt-probe (make-hash-table :test #'equalp)) (htt-probe (htt-make #'equalp))
+				      (htt-probe (htt-make 'eq)) (htt-probe (htt-make #'eql)) (htt-probe (htt-make 'equal))
+				      (htt-probe (apply #'make-hash-table (list :size 4 :test #'equalp)))
+				      (hash-table-test (htt-make (hash-table-test (htt-make 'eq)))))
 				""");
-		assertThat(result.print()).isEqualTo("(EQUALP EQUAL EQUAL \"#<HASH-TABLE :TEST EQUALP :COUNT 1>\")");
+		assertThat(result.print()).isEqualTo("(EQUALP EQUAL EQUAL \"#<HASH-TABLE :TEST EQUALP :COUNT 1>\" (EQUALP 1) "
+				+ "(EQUALP 1) (EQ NIL) (EQL NIL) (EQUAL NIL) (EQUALP 1) EQ)");
 	}
 
 	@Test

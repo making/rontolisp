@@ -28063,10 +28063,10 @@ public final class LispMacroExpander {
 	 * that has one carries the flag the fold reads.
 	 *
 	 * <p>
-	 * The test is read from the SOURCE because the compiled backends never evaluate
-	 * {@code make-hash-table}'s arguments ({@code .kb/hash-tables.md}); a test computed
-	 * at run time is therefore not seen, and the table places structurally as it did
-	 * before.
+	 * The test is read from the SOURCE because the compiled backends pick a table's
+	 * representation from it ({@code .kb/hash-tables.md}). A test computed at run time is
+	 * lowered onto {@code %make-hash-table-by-test}, whose spliced body writes every test
+	 * literally, so such a program answers yes here.
 	 * @param forms the program to scan
 	 * @return whether an {@code equalp} table can exist in this program
 	 */
@@ -28162,11 +28162,10 @@ public final class LispMacroExpander {
 
 	/**
 	 * Answers the test code ({@link LispHashTable#TEST_EQUAL} and friends) one
-	 * {@code (make-hash-table ...)} form asks for, read from the SOURCE: the
-	 * {@code :test} argument must be written literally ({@code 'eq} or {@code #'eq} and
-	 * the same for the other three tests) because the compiled backends never evaluate
-	 * {@code make-hash-table}'s arguments; a computed test places as {@code equal}, as it
-	 * did before identity tables existed.
+	 * {@code (make-hash-table ...)} form asks for, read from the SOURCE: a literal
+	 * {@code :test} ({@code 'eq} or {@code #'eq} and the same for the other three tests).
+	 * A computed one answers {@code equal} here; the compiled backends lower that site
+	 * first ({@link #lowerComputedTestMakeHashTable}).
 	 * @param form the {@code make-hash-table} call
 	 * @return the test code
 	 */
@@ -28181,13 +28180,108 @@ public final class LispMacroExpander {
 	}
 
 	private static String designatedTestName(LispVal test) {
-		LispVal named = test;
 		if (test instanceof LispCons quoted && quoted.car() instanceof LispSymbol head
 				&& (LispNames.QUOTE.equals(head.name()) || LispNames.FUNCTION.equals(head.name()))
-				&& quoted.cdr() instanceof LispCons rest) {
-			named = rest.car();
+				&& quoted.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol named) {
+			return named.name();
 		}
-		return named instanceof LispSymbol test0 ? test0.name() : "";
+		return "";
+	}
+
+	/**
+	 * The {@code :test} argument of one {@code (make-hash-table ...)} form when it is
+	 * COMPUTED: anything but a quoted or {@code function}-named symbol and a constant
+	 * atom -- a variable, a call. Its test is known only at run time.
+	 * @param form the {@code make-hash-table} call
+	 * @return the test form, or null when it is literal or absent
+	 */
+	private static @Nullable LispVal computedHashTableTest(LispCons form) {
+		List<LispVal> parts = form.toList();
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol keyword && LispNames.TEST_KEYWORD.equals(keyword.name())) {
+				LispVal test = parts.get(i + 1);
+				boolean constant = switch (test) {
+					case LispSymbol symbol -> symbol.name().startsWith(":");
+					case LispCons cons -> !designatedTestName(cons).isEmpty();
+					default -> true;
+				};
+				return constant ? null : test;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Lowers a {@code make-hash-table} whose {@code :test} is computed
+	 * ({@link #computedHashTableTest}) onto {@code (%make-hash-table-by-test test)}, the
+	 * prelude helper that compares the value with the four test symbols and function
+	 * objects and makes the table through a literal {@code :test}. The compiled backends
+	 * choose a table's representation from that literal; the interpreter reads the value
+	 * itself and needs no lowering. Every other keyword stays unevaluated, as on a
+	 * literal site.
+	 * @param cons the {@code make-hash-table} call
+	 * @param definedFunction whether a function is defined in the program being compiled;
+	 * the helper is spliced by {@link #mayMakeHashTableWithComputedTest}, and a site the
+	 * selection missed keeps the {@code equal} table
+	 * @return the lowered call, or null when the test is literal, absent or the helper is
+	 * missing
+	 */
+	public static @Nullable LispVal lowerComputedTestMakeHashTable(LispCons cons,
+			java.util.function.Predicate<String> definedFunction) {
+		LispVal test = computedHashTableTest(cons);
+		if (test == null || !definedFunction.test(LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL)) {
+			return null;
+		}
+		return mvCall(LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL, test);
+	}
+
+	/**
+	 * Whether the program may make a hash table whose test is decided at run time: a
+	 * {@code make-hash-table} call with a computed {@code :test}, or
+	 * {@code make-hash-table} anywhere but a call's head -- {@code #'make-hash-table},
+	 * whose wrapper passes its initargs' {@code :test} through. The prelude selection
+	 * runs before {@link #lowerComputedTestMakeHashTable} and before the wrapper is
+	 * injected, so this SURFACE fact is what splices {@code %make-hash-table-by-test};
+	 * the helper's literal arms then turn the {@code equalp} and identity gates on.
+	 * @param program the top-level forms
+	 * @return whether any site needs the helper
+	 */
+	public static boolean mayMakeHashTableWithComputedTest(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (mayMakeHashTableWithComputedTest(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mayMakeHashTableWithComputedTest(LispVal form) {
+		if (form instanceof LispSymbol symbol) {
+			return namesMakeHashTable(symbol);
+		}
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		LispVal rest = cons;
+		if (cons.car() instanceof LispSymbol head && namesMakeHashTable(head)) {
+			if (computedHashTableTest(cons) != null) {
+				return true;
+			}
+			rest = cons.cdr();
+		}
+		while (rest instanceof LispCons element) {
+			if (mayMakeHashTableWithComputedTest(element.car())) {
+				return true;
+			}
+			rest = element.cdr();
+		}
+		return false;
+	}
+
+	// The prelude resolves the program before asking, so make-hash-table can arrive
+	// package-QUALIFIED (cl:make-hash-table).
+	private static boolean namesMakeHashTable(LispSymbol symbol) {
+		return LispNames.MAKE_HASH_TABLE.equals(memberName(symbol.name()));
 	}
 
 	/**

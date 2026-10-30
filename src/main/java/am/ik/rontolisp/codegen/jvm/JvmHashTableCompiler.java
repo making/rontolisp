@@ -55,7 +55,13 @@ final class JvmHashTableCompiler {
 	static void compileMake(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// The arguments are read from the SOURCE, never evaluated: a literal :test
 		// marks the table so its lookups compare and hash by that test, and every
-		// other keyword (:size and friends) is accepted and ignored.
+		// other keyword (:size and friends) is accepted and ignored. A computed :test
+		// is evaluated and dispatched by the %make-hash-table-by-test helper.
+		LispVal computedTest = LispMacroExpander.lowerComputedTestMakeHashTable(cons, ctx.functions::containsKey);
+		if (computedTest != null) {
+			JvmExprCompiler.compileExpr(computedTest, ctx, className);
+			return;
+		}
 		if (ctx.usesEqualpHashTables && LispMacroExpander.isEqualpHashTableMake(cons)) {
 			invokeHelper(ctx, className, JvmHashRuntimeBuilder.MAKE_EQUALP, JvmHashRuntimeBuilder.MAKE_EQUALP_DESC);
 			return;

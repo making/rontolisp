@@ -1194,6 +1194,29 @@ public final class Environment implements Scope {
 		return featureList;
 	}
 
+	/**
+	 * Names the test a {@code make-hash-table :test} VALUE designates: a symbol by its
+	 * name, a function by being the very object {@code #'eq}, {@code #'eql},
+	 * {@code #'equal} or {@code #'equalp} answers -- the comparison the compiled
+	 * backends' {@code %make-hash-table-by-test} makes. {@code equalp} is a prelude
+	 * defun, a closure with no name of its own, so no name-based reading sees it.
+	 * Anything else answers the empty name, which places as {@code equal}.
+	 * @param env the global environment the four functions are bound in
+	 * @param test the evaluated {@code :test} argument
+	 * @return the designated test name
+	 */
+	private static String hashTableTestName(Environment env, LispVal test) {
+		if (test instanceof LispSymbol symbol) {
+			return symbol.name();
+		}
+		for (String name : List.of(LispNames.EQ_GENERAL, LispNames.EQL, LispNames.EQUAL, LispNames.EQUALP)) {
+			if (env.lookupFunctionOrNull(name) == test) {
+				return name;
+			}
+		}
+		return "";
+	}
+
 	private static void registerHashTables(Environment env) {
 		env.defineFunction(LispNames.MAKE_HASH_TABLE, new LispFunction(LispNames.MAKE_HASH_TABLE, args -> {
 			// Reads :test and ignores other keywords such as :size. Only equalp changes
@@ -1202,12 +1225,7 @@ public final class Environment implements Scope {
 			int testCode = LispHashTable.TEST_EQUAL;
 			for (int i = 0; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol kw && LispNames.TEST_KEYWORD.equals(kw.name())) {
-					String testName = switch (args.get(i + 1)) {
-						case LispSymbol s -> s.name();
-						case LispFunction f -> f.name();
-						default -> "";
-					};
-					testCode = LispHashTable.testCodeFor(testName);
+					testCode = LispHashTable.testCodeFor(hashTableTestName(env, args.get(i + 1)));
 				}
 			}
 			return new LispHashTable(testCode);
