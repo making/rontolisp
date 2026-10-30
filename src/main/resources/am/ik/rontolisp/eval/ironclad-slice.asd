@@ -59,8 +59,8 @@
                                      ;; octets-to-integer is what the prng's random-bits and
                                      ;; strong-random fold their bytes with.
                                      (:module "public-key"
-                                              :serial t
-                                              :components ((:file "public-key")))))))
+                                      :serial t
+                                      :components ((:file "public-key")))))))
 
 (defsystem "ironclad/digest/sha256"
   :depends-on ("ironclad/core")
@@ -82,86 +82,117 @@
 ;;; md5-lispworks-int32.lisp reads to nothing outside its LispWorks feature.
 (defsystem "ironclad/digest/adler32"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "adler32")))))))
+  :components ((:module "src"
+                        :components ((:module "digests"
+                                      :components ((:file "adler32")))))))
 
 (defsystem "ironclad/digest/blake2"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "blake2")))))))
+  :components ((:module "src"
+                        :components ((:module "digests"
+                                      :components ((:file "blake2")))))))
 
 (defsystem "ironclad/digest/blake2s"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "blake2s")))))))
+  :components ((:module "src"
+                        :components ((:module "digests"
+                                      :components ((:file "blake2s")))))))
 
 (defsystem "ironclad/digest/crc24"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "crc24")))))))
+  :components ((:module "src"
+                        :components ((:module "digests"
+                                              :components ((:file "crc24")))))))
 
 (defsystem "ironclad/digest/crc32"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "crc32")))))))
+  :components ((:module "src"
+                        :components ((:module "digests"
+                                              :components ((:file "crc32")))))))
 
 (defsystem "ironclad/digest/groestl"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "groestl")))))))
+  :components ((:module "src"
+                        :components ((:module "digests"
+                                      :components ((:file "groestl")))))))
 
 (defsystem "ironclad/digest/jh"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "jh")))))))
+  :components ((:module "src"
+                :components ((:module "digests" :components ((:file "jh")))))))
 
 (defsystem "ironclad/digest/md2"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "md2")))))))
+  :components ((:module "src"
+                :components ((:module "digests" :components ((:file "md2")))))))
 
 (defsystem "ironclad/digest/md4"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "md4")))))))
+  :components ((:module "src"
+                :components ((:module "digests" :components ((:file "md4")))))))
 
 (defsystem "ironclad/digest/md5"
   :depends-on ("ironclad/core")
   :components ((:module "src"
                         :components ((:module "digests"
-                                      :serial t
-                                      :components ((:file "md5")
-                                                   (:file "md5-lispworks-int32")))))))
+                                              :serial t
+                                              :components
+                                              ((:file "md5")
+                                               (:file
+                                                "md5-lispworks-int32")))))))
 
 (defsystem "ironclad/digest/ripemd-128"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "ripemd-128")))))))
+  :components ((:module "src"
+                        :components ((:module "digests"
+                                      :components ((:file "ripemd-128")))))))
 
 (defsystem "ironclad/digest/ripemd-160"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "ripemd-160")))))))
+  :components ((:module "src"
+                        :components ((:module "digests"
+                                      :components ((:file "ripemd-160")))))))
 
 (defsystem "ironclad/digest/sha1"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "sha1")))))))
+  :components ((:module "src"
+                        :components ((:module "digests"
+                                              :components ((:file "sha1")))))))
 
 (defsystem "ironclad/digest/sm3"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "sm3")))))))
+  :components ((:module "src"
+                :components ((:module "digests" :components ((:file "sm3")))))))
 
 (defsystem "ironclad/digest/streebog"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "streebog")))))))
+  :components ((:module "src"
+                        :components ((:module "digests"
+                                      :components ((:file "streebog")))))))
 
 (defsystem "ironclad/digest/tiger"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "tiger")))))))
+  :components ((:module "src"
+                        :components ((:module "digests"
+                                              :components ((:file "tiger")))))))
 
 (defsystem "ironclad/digest/tree-hash"
   :depends-on ("ironclad/core" "ironclad/digest/tiger")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "tree-hash")))))))
+  :components ((:module "src"
+                        :components ((:module "digests"
+                                      :components ((:file "tree-hash")))))))
 
 (defsystem "ironclad/digest/whirlpool"
   :depends-on ("ironclad/core")
-  :components ((:module "src" :components ((:module "digests" :components ((:file "whirlpool")))))))
+  :components ((:module "src"
+                        :components ((:module "digests"
+                                      :components ((:file "whirlpool")))))))
 
 ;;; The real "ironclad/prngs" aggregates Fortuna, which this slice does not
 ;;; implement; the OS generator it also provides lives in the core's prng shim.
 ;;; Declared so a :depends-on ("ironclad/prngs") (frugal-uuid's strong-random,
 ;;; cl-smtp through it) resolves to what the slice has.
-(defsystem "ironclad/prngs"
-  :depends-on ("ironclad/core"))
+(defsystem "ironclad/prngs" :depends-on ("ironclad/core"))
 
 (defsystem "ironclad/mac/hmac"
   :depends-on ("ironclad/core")
