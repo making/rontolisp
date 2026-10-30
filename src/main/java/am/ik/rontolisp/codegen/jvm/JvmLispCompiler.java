@@ -59,6 +59,7 @@ import am.ik.rontolisp.compiler.ReadBeforeStore;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.compiler.SequenceIoNarrowing;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.compiler.JvmExportDirective;
 import am.ik.rontolisp.compiler.WasmImportDirective;
@@ -1131,6 +1132,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Before the resolver, whose own marker arm is the backstop for a bracket this
 		// pass did not lower.
 		program = LispMacroExpander.lowerLoadContextMarkers(program);
+		// The spliced components' brackets become asdf:perform calls over top-level
+		// groups once the program defines a perform method, and nothing otherwise
+		// (compiler/SplicedComponentGroups); Pass 2b emits the groups.
+		program = SplicedComponentGroups.lower(program, null);
 		// Resolve packages (in-package directives, qualified symbols, *package*) up front
 		// so
 		// the rest of compilation sees canonical names.
@@ -3170,9 +3175,33 @@ public final class JvmLispCompiler implements LispCompiler {
 		// over-limit check below cuts the largest form of an over-limit chunk.
 		List<Integer> topFormSizes = new ArrayList<>(topLevelExprs.size());
 		List<int[]> topChunkRanges = new ArrayList<>();
+		// The top-level GROUPS (compiler/SplicedComponentGroups): a chunk opened inside
+		// one belongs to it and is reached through %run-top-group, never from main.
+		// No chunk spans a group boundary. -1 marks a chunk main calls.
+		List<Integer> topChunkGroups = new ArrayList<>();
+		java.util.Deque<Integer> openTopGroups = new java.util.ArrayDeque<>();
+		ctxBuilder.topGroupChunks.clear();
 		int chunkStart = 0;
 		for (int formIndex = 0; formIndex < topLevelExprs.size(); formIndex++) {
 			LispVal expr = topLevelExprs.get(formIndex);
+			Integer groupOpened = SplicedComponentGroups.groupOpened(expr);
+			Integer groupClosed = groupOpened == null ? SplicedComponentGroups.groupClosed(expr) : null;
+			if (groupOpened != null || groupClosed != null) {
+				if (chunkCtx != null) {
+					chunkCtx.body.return_();
+					topChunkRanges.add(new int[] { chunkStart, formIndex });
+					chunkCtx = null;
+				}
+				if (groupOpened != null) {
+					openTopGroups.addLast(groupOpened);
+					ctxBuilder.topGroupChunks.put(groupOpened, new ArrayList<>());
+				}
+				else {
+					openTopGroups.pollLast();
+				}
+				topFormSizes.add(0);
+				continue;
+			}
 			if (chunkCtx == null || chunkCtx.body.size() >= chunkCodeBudget) {
 				if (chunkCtx != null) {
 					chunkCtx.body.return_();
@@ -3184,9 +3213,15 @@ public final class JvmLispCompiler implements LispCompiler {
 				chunkCtx.shareDefinedGlobals(sharedDefinedGlobals);
 				chunkStart = formIndex;
 				Utf8Entry nameUtf8 = cp.utf8Entry("_top$" + topChunks.size());
+				MethodRefEntry chunkRef = cp.methodRef(thisClass, nameUtf8, topChunkDesc);
 				topChunks.add(chunkCtx);
 				topChunkNames.add(nameUtf8);
-				topChunkRefs.add(cp.methodRef(thisClass, nameUtf8, topChunkDesc));
+				topChunkRefs.add(chunkRef);
+				Integer group = openTopGroups.peekLast();
+				topChunkGroups.add(group == null ? -1 : group);
+				if (group != null) {
+					ctxBuilder.topGroupChunks.computeIfAbsent(group, g -> new ArrayList<>()).add(chunkRef);
+				}
 			}
 			// Statement position: the chunk pops whatever the form returns, so a definer
 			// that returns nothing but the name it just bound is offered the chance to
@@ -3269,8 +3304,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			topRunnerCtx.evalStoreRef = evalStoreRef;
 			entryCtx = topRunnerCtx;
 		}
-		for (MethodRefEntry ref : topChunkRefs) {
-			entryCtx.body.invokestatic(ref);
+		for (int i = 0; i < topChunkRefs.size(); i++) {
+			if (topChunkGroups.get(i) < 0) {
+				entryCtx.body.invokestatic(topChunkRefs.get(i));
+			}
 		}
 		// A program that writes RAW OCTETS to standard output has to drain the
 		// PrintStream itself. It auto-flushes on a newline and on every byte[] write --
@@ -8227,6 +8264,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final List<JvmBodyOutliner.OutlinedBody> outlinedBodies;
 
+		/**
+		 * The top-level chunk methods of each top-level GROUP, in run order -- the
+		 * {@code _top$N} methods the top-level loop compiled a spliced component's forms
+		 * into but {@code main} does not call; {@code %run-top-group} does
+		 * ({@code compiler.SplicedComponentGroups}). One map for the whole compilation,
+		 * filled by Pass 2b and read by the lambda bodies Pass 2c compiles.
+		 */
+		final Map<Integer, List<MethodRefEntry>> topGroupChunks;
+
 		/** The next {@code _k$N} name, shared like {@link #nextFuncId}. */
 		final int[] nextOutlinedBodyId;
 
@@ -9161,6 +9207,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.nextFuncId = builder.nextFuncId;
 			this.ctxBuilder = builder;
 			this.outlinedBodies = builder.outlinedBodies;
+			this.topGroupChunks = builder.topGroupChunks;
 			this.nextOutlinedBodyId = builder.nextOutlinedBodyId;
 			this.sharedHelpers = builder.sharedHelpers;
 			this.numOps = builder.numOps;
@@ -9554,6 +9601,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private int[] nextFuncId = new int[1];
 
 			private final List<JvmBodyOutliner.OutlinedBody> outlinedBodies = new ArrayList<>();
+
+			private final Map<Integer, List<MethodRefEntry>> topGroupChunks = new HashMap<>();
 
 			private final int[] nextOutlinedBodyId = new int[1];
 

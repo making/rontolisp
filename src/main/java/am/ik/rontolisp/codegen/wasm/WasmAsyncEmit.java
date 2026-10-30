@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -473,10 +474,24 @@ final class WasmAsyncEmit {
 	// future's value is unused).
 	private static void compileTopLevelChunkedProgn(List<LispVal> stmts, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> run = new ArrayList<>();
+		// A top-level group (compiler/SplicedComponentGroups) runs inside the thunk its
+		// asdf:perform call is handed, and a thunk cannot suspend the top level: an
+		// await inside one has nowhere to resume.
+		int groupDepth = 0;
 		for (LispVal stmt : stmts) {
+			if (SplicedComponentGroups.groupOpened(stmt) != null) {
+				groupDepth++;
+			}
+			else if (SplicedComponentGroups.groupClosed(stmt) != null) {
+				groupDepth--;
+			}
 			if (WasmAwaitAnalysis.countAwaits(stmt) == 0) {
 				run.add(stmt);
 				continue;
+			}
+			if (groupDepth > 0) {
+				throw new UnsupportedOperationException("a top-level await inside a component of an ASDF system that"
+						+ " an asdf:perform method wraps cannot be compiled: the component runs inside the method");
 			}
 			flushTopLevelChunk(run, ctx);
 			compileGuardedStatement(stmt, ctx);

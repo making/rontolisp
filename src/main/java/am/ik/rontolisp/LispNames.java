@@ -5864,6 +5864,51 @@ public final class LispNames {
 	public static final String END_FILE = "%END-FILE";
 
 	/**
+	 * Internal marker {@code (%asdf-component "SYSTEM" INDEX)} inserted by
+	 * {@code LoadInliner} before the forms it splices for one COMPONENT of an ASDF system
+	 * (the file or leaf shim at {@code INDEX} of the system's load order). The compilers
+	 * lower the bracket ({@code compiler.SplicedComponentGroups}): once the program has
+	 * defined an {@code asdf:perform} method, the component's forms become a top-level
+	 * group run through {@code asdf:perform}, so an extension's {@code :around} method
+	 * wraps them as it wraps a load on the interpreter; otherwise the bracket is dropped.
+	 * Consumed by the resolver like {@link #BEGIN_FILE} as the backstop. Paired with
+	 * {@link #ASDF_COMPONENT_END}.
+	 */
+	public static final String ASDF_COMPONENT = "%ASDF-COMPONENT";
+
+	/** Closes the innermost {@link #ASDF_COMPONENT} bracket. */
+	public static final String ASDF_COMPONENT_END = "%ASDF-COMPONENT-END";
+
+	/**
+	 * Internal marker {@code (%asdf-system-op "SYSTEM" :before|:after)} inserted by
+	 * {@code LoadInliner} where the interpreter performs a system's own operations:
+	 * {@code :before} after the dependencies and ahead of the components (prepare-op),
+	 * {@code :after} behind them (compile-op, load-op). Lowered or dropped with the
+	 * {@link #ASDF_COMPONENT} brackets.
+	 */
+	public static final String ASDF_SYSTEM_OP = "%ASDF-SYSTEM-OP";
+
+	/**
+	 * Internal marker {@code (%top-group N)} opening a TOP-LEVEL GROUP: the top-level
+	 * forms up to the matching {@link #TOP_GROUP_END} are compiled as top-level forms
+	 * (the static passes see them where they stand) but are not run in sequence -- their
+	 * run-time code is reached only through {@link #RUN_TOP_GROUP}. What a spliced
+	 * component lowers to once {@code asdf:perform} has methods
+	 * ({@code compiler.SplicedComponentGroups}). Kept verbatim by the resolver.
+	 */
+	public static final String TOP_GROUP = "%TOP-GROUP";
+
+	/** Closes the {@link #TOP_GROUP} of the same number. */
+	public static final String TOP_GROUP_END = "%TOP-GROUP-END";
+
+	/**
+	 * {@code (%run-top-group N)}: runs top-level group {@code N}'s forms and answers nil
+	 * -- the body of the thunk the group's {@code asdf:perform} call receives. A special
+	 * form of the compile backends, kept verbatim by the resolver.
+	 */
+	public static final String RUN_TOP_GROUP = "%RUN-TOP-GROUP";
+
+	/**
 	 * Internal marker {@code (%struct-definition (defstruct ...))} left in the form
 	 * stream by {@code LibraryDefunPruner} when it expands a BUNDLED library's
 	 * {@code defstruct} into its generated defuns AHEAD of pruning (so each defun prunes
@@ -8911,6 +8956,54 @@ public final class LispNames {
 
 	/** The {@code test-op} operation name in a {@code .asd}'s test-op wiring options. */
 	public static final String TEST_OP = "TEST-OP";
+
+	/**
+	 * {@code asdf:perform} -- the operation protocol's generic function
+	 * {@code (perform operation component)}. {@code load-system} performs prepare-op,
+	 * compile-op and load-op on every component file and on the system itself, so an
+	 * extension's {@code :around}/{@code :before}/{@code :after} method runs around each
+	 * component load (asdf-flv's file-local variables).
+	 */
+	public static final String PERFORM = "PERFORM";
+
+	/** The canonical qualified spelling of {@code asdf:perform}. */
+	public static final String ASDF_PERFORM = ASDF_PKG + ":" + PERFORM;
+
+	/** The {@code asdf:operation} base class of the operation classes. */
+	public static final String OPERATION = "OPERATION";
+
+	/** The {@code asdf:prepare-op} operation class. */
+	public static final String PREPARE_OP = "PREPARE-OP";
+
+	/** The {@code asdf:compile-op} operation class. */
+	public static final String COMPILE_OP = "COMPILE-OP";
+
+	/** The {@code asdf:load-op} operation class. */
+	public static final String LOAD_OP = "LOAD-OP";
+
+	/**
+	 * {@code asdf:operate} -- {@code (operate operation system &rest keys)}: load-op is
+	 * {@code load-system}, test-op is {@code test-system}; any other operation signals.
+	 */
+	public static final String OPERATE = "OPERATE";
+
+	/** {@code asdf:make-operation} -- the one cached instance of an operation class. */
+	public static final String MAKE_OPERATION = "MAKE-OPERATION";
+
+	/** {@code asdf:input-files} -- generic: the files an operation reads. */
+	public static final String INPUT_FILES = "INPUT-FILES";
+
+	/**
+	 * {@code asdf:output-files} -- generic: the files an operation writes (none here).
+	 */
+	public static final String OUTPUT_FILES = "OUTPUT-FILES";
+
+	/**
+	 * {@code asdf:source-file-type} -- generic: a component's file extension. Only the
+	 * {@code .asd} parse decides an extension here; the run-time generic exists so a
+	 * library may define methods on it (lass).
+	 */
+	public static final String SOURCE_FILE_TYPE = "SOURCE-FILE-TYPE";
 
 	/** The canonical qualified spelling of {@code asdf:test-system}. */
 	public static final String ASDF_TEST_SYSTEM = ASDF_PKG + ":" + TEST_SYSTEM;

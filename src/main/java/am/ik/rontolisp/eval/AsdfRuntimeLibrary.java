@@ -16,29 +16,33 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The ASDF component metaobjects at run time ({@code asdf.lisp}): the
- * {@code asdf:component} class family, the readers over it, and {@code asdf:find-system}
- * answering a memoized {@code asdf:system} instance per name -- one Lisp source shared by
- * every backend, so {@code typecase}/{@code typep}/defmethod specializers over the
- * classes work by construction (rove's system-driven {@code run} reads the whole
- * component model this way).
+ * The ASDF component metaobjects and operation protocol at run time ({@code asdf.lisp}):
+ * the {@code asdf:component} class family, the readers over it, {@code asdf:find-system}
+ * answering a memoized {@code asdf:system} instance per name, and the operation classes
+ * with the {@code asdf:perform} generic every component load goes through -- one Lisp
+ * source shared by every backend, so {@code typecase}/{@code typep}/defmethod
+ * specializers over the classes work by construction (rove's system-driven {@code run}
+ * reads the whole component model this way, asdf-flv's {@code perform :around} wraps
+ * every load).
  *
  * <p>
- * The one per-backend seam is the record source behind
- * {@code %asdf-system-record}/{@code %asdf-system-names}: the interpreter registers them
- * as Java built-ins over its live {@code asdfSystems} registry ({@link LispEvaluator}),
- * while the compile paths bake the registry {@code LoadInliner} spliced into a
- * {@code %asdf-registry%} table and generate the two defuns over it ({@link #process}) --
- * plus the compile-only runtime forms the interpreter keeps in Java:
- * {@code asdf:load-system}/{@code ql:quickload} ("already spliced" answers nil, anything
- * else is the call-time error) and the {@code asdf:test-system} dispatch over the
- * {@code %asdf-test-op-<name>} defuns {@code LoadInliner.spliceSystem} emitted at each
- * system's splice point.
+ * The per-backend seams are the record source behind
+ * {@code %asdf-system-record}/{@code %asdf-system-names}, the component load
+ * ({@code %asdf-load-component}) and the recorded test-op wiring
+ * ({@code %asdf-test-op-edges}/{@code %asdf-run-recorded-test-op}): the interpreter
+ * registers them as Java built-ins over its live {@code asdfSystems} registry
+ * ({@link LispEvaluator}), while the compile paths bake the registry {@code LoadInliner}
+ * spliced into a {@code %asdf-registry%} table and generate the defuns over it
+ * ({@link #process}) -- plus the compile-only runtime forms the interpreter keeps in
+ * Java: {@code asdf:load-system}/{@code ql:quickload} ("already spliced" answers nil,
+ * anything else is the call-time error), and the component load that runs the thunk of a
+ * spliced component ({@code compiler.SplicedComponentGroups}).
  *
  * <p>
  * A record is {@code (CLASS DIR FILES DEPS LOADED-P VERSION)}: the component class
@@ -63,13 +67,33 @@ public final class AsdfRuntimeLibrary {
 			qualify(LispNames.COMPONENT_CHILDREN), qualify(LispNames.COMPONENT_SIDEWAY_DEPENDENCIES),
 			qualify(LispNames.COMPONENT_PARENT), qualify(LispNames.COMPONENT_SYSTEM),
 			LispNames.ASDF_SYSTEM_SOURCE_DIRECTORY, LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME,
-			qualify(LispNames.ASDF_USER_CACHE));
+			qualify(LispNames.ASDF_USER_CACHE), LispNames.ASDF_TEST_SYSTEM, qualify(LispNames.OPERATE),
+			LispNames.ASDF_PERFORM, qualify(LispNames.MAKE_OPERATION), qualify(LispNames.INPUT_FILES),
+			qualify(LispNames.OUTPUT_FILES), qualify(LispNames.SOURCE_FILE_TYPE));
 
-	/** The component metaobject class names {@code asdf.lisp} defines. */
+	/** The component metaobject and operation class names {@code asdf.lisp} defines. */
 	private static final Set<String> CLASS_NAMES = Set.of(qualify(LispNames.COMPONENT),
 			qualify(LispNames.CHILD_COMPONENT), qualify(LispNames.PARENT_COMPONENT), qualify(LispNames.MODULE),
 			qualify("SYSTEM"), qualify(LispNames.PACKAGE_INFERRED_SYSTEM), qualify(LispNames.SOURCE_FILE),
-			qualify(LispNames.CL_SOURCE_FILE), qualify(LispNames.STATIC_FILE));
+			qualify(LispNames.CL_SOURCE_FILE), qualify(LispNames.STATIC_FILE), qualify(LispNames.OPERATION),
+			qualify(LispNames.PREPARE_OP), qualify(LispNames.COMPILE_OP), qualify(LispNames.LOAD_OP),
+			qualify(LispNames.TEST_OP));
+
+	/**
+	 * What a {@code defmethod}/{@code typep}/... form has to mention for the interpreter
+	 * to seed {@code asdf.lisp} before evaluating it: a class name, or a generic a method
+	 * may be added to -- a method on {@code asdf:perform} specializing nothing names no
+	 * class, and the generic it extends must already be {@code asdf.lisp}'s.
+	 */
+	private static final Set<String> SEEDING_NAMES;
+	static {
+		Set<String> seeding = new java.util.HashSet<>(CLASS_NAMES);
+		seeding.add(LispNames.ASDF_PERFORM);
+		seeding.add(qualify(LispNames.INPUT_FILES));
+		seeding.add(qualify(LispNames.OUTPUT_FILES));
+		seeding.add(qualify(LispNames.SOURCE_FILE_TYPE));
+		SEEDING_NAMES = Set.copyOf(seeding);
+	}
 
 	/**
 	 * The names whose presence in a compiled program splices the runtime: everything
@@ -103,18 +127,19 @@ public final class AsdfRuntimeLibrary {
 	}
 
 	/**
-	 * Whether {@code form} mentions an ASDF component class name -- the trigger for the
-	 * interpreter to seed the classes before a {@code defmethod} specializer /
-	 * {@code typep} / {@code typecase} / {@code make-instance} resolves one.
+	 * Whether {@code form} mentions an ASDF class name or a generic {@code asdf.lisp}
+	 * defines -- the trigger for the interpreter to seed the classes and generics before
+	 * a {@code defmethod} specializer / {@code typep} / {@code typecase} /
+	 * {@code make-instance} resolves one.
 	 * @param form the form about to be evaluated
-	 * @return {@code true} when a class name occurs anywhere in it
+	 * @return {@code true} when such a name occurs anywhere in it
 	 */
 	public static boolean mentionsComponentClass(LispVal form) {
 		// The spine is a loop: the scan runs at whatever depth the evaluating program
 		// has reached, so it costs frames for the form's NESTING, never its length.
 		for (LispVal val = form;;) {
 			if (val instanceof LispSymbol sym) {
-				return CLASS_NAMES.contains(sym.name());
+				return SEEDING_NAMES.contains(sym.name());
 			}
 			if (val instanceof LispCons cons) {
 				if (mentionsComponentClass(cons.car())) {
@@ -153,8 +178,9 @@ public final class AsdfRuntimeLibrary {
 	 * name, prepends the class family plus the compile seam -- the baked
 	 * {@code %asdf-registry%} table, the record defuns over it, the runtime
 	 * {@code asdf:load-system}/{@code ql:quickload} ("already spliced" is a nil no-op,
-	 * anything else the call-time error the nested forms always were), and the
-	 * {@code asdf:test-system} dispatch over the recorded test-op wiring.
+	 * anything else the call-time error the nested forms always were), the component load
+	 * and the recorded test-op wiring. It also drops {@code LoadInliner}'s component
+	 * brackets from a program that defines no {@code asdf:perform} method.
 	 * @param program the inlined and folded top-level forms
 	 * @param systems the registry of every system the inline pass parsed
 	 * @param loadedSystems the names of the systems it actually spliced
@@ -162,13 +188,23 @@ public final class AsdfRuntimeLibrary {
 	 */
 	public static List<LispVal> process(List<LispVal> program, Map<String, AsdfSystems.LispSystem> systems,
 			Set<String> loadedSystems) {
-		if (program.stream().noneMatch(AsdfRuntimeLibrary::referencesRuntime)) {
+		// The component brackets LoadInliner put around every spliced component matter
+		// only to a program that defines an asdf:perform method (the compilers lower
+		// them once its forms are expanded, SplicedComponentGroups); every other program
+		// loses them here, as if they had never been emitted. One that keeps them needs
+		// the runtime its lowering calls, whatever else it references.
+		boolean performMethods = program.stream().anyMatch(SplicedComponentGroups::definesPerformMethod);
+		if (!performMethods) {
+			program = SplicedComponentGroups.stripComponentMarkers(program);
+		}
+		if (!performMethods && program.stream().noneMatch(AsdfRuntimeLibrary::referencesRuntime)) {
 			return program;
 		}
 		List<LispVal> out = new ArrayList<>(classForms());
 		out.add(registryDefvar(systems, loadedSystems));
 		out.addAll(seamForms());
-		out.add(runTestOpDefun(systems, loadedSystems));
+		out.add(testOpEdgesDefun(systems, loadedSystems));
+		out.add(recordedTestOpDefun(systems, loadedSystems));
 		out.addAll(program);
 		return out;
 	}
@@ -267,37 +303,53 @@ public final class AsdfRuntimeLibrary {
 	}
 
 	/**
-	 * The generated {@code %asdf-run-test-op} dispatch: one {@code cond} arm per spliced
-	 * system with recorded test-op wiring -- its {@code :in-order-to} test-op edges first
-	 * (each loaded-then-dispatched through {@code %asdf-test-edge}), then its own perform
-	 * defun; a system with no wiring is real ASDF's default no-op.
+	 * The generated {@code %asdf-test-op-edges} seam: the {@code :in-order-to} test-op
+	 * edges of each spliced system that records any, which {@code asdf.lisp}'s test-op
+	 * walks before performing test-op on the system itself.
 	 */
-	private static LispVal runTestOpDefun(Map<String, AsdfSystems.LispSystem> systems, Set<String> loadedSystems) {
+	private static LispVal testOpEdgesDefun(Map<String, AsdfSystems.LispSystem> systems, Set<String> loadedSystems) {
 		List<LispVal> cond = new ArrayList<>();
 		cond.add(new LispSymbol(LispNames.COND));
 		for (AsdfSystems.LispSystem system : systems.values()) {
-			if (!loadedSystems.contains(system.name()) || (system.testOp() == null && system.testOpEdges().isEmpty())) {
+			if (!loadedSystems.contains(system.name()) || system.testOpEdges().isEmpty()) {
 				continue;
 			}
-			List<LispVal> arm = new ArrayList<>();
-			arm.add(list(new LispSymbol(LispNames.EQUAL), new LispSymbol("%ASDF-KEY"), new LispString(system.name())));
+			List<LispVal> edges = new ArrayList<>();
 			for (String edge : system.testOpEdges()) {
-				if (!edge.equals(system.name())) {
-					arm.add(list(new LispSymbol("%ASDF-TEST-EDGE"), new LispString(edge)));
-				}
+				edges.add(new LispString(edge));
 			}
-			if (system.testOp() != null) {
-				arm.add(list(new LispSymbol(testOpDefunName(system.name())), LispNil.INSTANCE,
-						list(new LispSymbol(LispNames.ASDF_FIND_SYSTEM), new LispString(system.name()))));
-			}
-			if (arm.size() == 1) {
-				arm.add(LispNil.INSTANCE);
-			}
-			cond.add(list(arm.toArray(LispVal[]::new)));
+			cond.add(list(keyTest(system), list(new LispSymbol(LispNames.QUOTE), list(edges.toArray(LispVal[]::new)))));
 		}
 		cond.add(list(LispTrue.INSTANCE, LispNil.INSTANCE));
-		return list(new LispSymbol(LispNames.DEFUN), new LispSymbol("%ASDF-RUN-TEST-OP"),
+		return list(new LispSymbol(LispNames.DEFUN), new LispSymbol("%ASDF-TEST-OP-EDGES"),
 				list(new LispSymbol("%ASDF-KEY")), list(cond.toArray(LispVal[]::new)));
+	}
+
+	/**
+	 * The generated {@code %asdf-run-recorded-test-op} seam: the default
+	 * {@code asdf:perform} method for test-op on a system calls the
+	 * {@code %asdf-test-op-<name>} defun of the spliced system's recorded
+	 * {@code :perform (test-op ...)} body with the operation and the component; a system
+	 * that records none is real ASDF's default no-op.
+	 */
+	private static LispVal recordedTestOpDefun(Map<String, AsdfSystems.LispSystem> systems, Set<String> loadedSystems) {
+		List<LispVal> cond = new ArrayList<>();
+		cond.add(new LispSymbol(LispNames.COND));
+		for (AsdfSystems.LispSystem system : systems.values()) {
+			if (!loadedSystems.contains(system.name()) || system.testOp() == null) {
+				continue;
+			}
+			cond.add(list(keyTest(system), list(new LispSymbol(testOpDefunName(system.name())),
+					new LispSymbol("%ASDF-O"), new LispSymbol("%ASDF-C"))));
+		}
+		cond.add(list(LispTrue.INSTANCE, LispNil.INSTANCE));
+		return list(new LispSymbol(LispNames.DEFUN), new LispSymbol("%ASDF-RUN-RECORDED-TEST-OP"),
+				list(new LispSymbol("%ASDF-KEY"), new LispSymbol("%ASDF-O"), new LispSymbol("%ASDF-C")),
+				list(cond.toArray(LispVal[]::new)));
+	}
+
+	private static LispVal keyTest(AsdfSystems.LispSystem system) {
+		return list(new LispSymbol(LispNames.EQUAL), new LispSymbol("%ASDF-KEY"), new LispString(system.name()));
 	}
 
 	/** The fixed compile-seam defuns, parsed once and cached. */
@@ -316,8 +368,12 @@ public final class AsdfRuntimeLibrary {
 	}
 
 	// The compile-path halves of the seam: the record defuns over the baked table, the
-	// runtime load forms and the test-system entry (the interpreter keeps all of these
-	// in Java over its live registry).
+	// runtime load forms and the component load of the operation protocol (the
+	// interpreter keeps all of these in Java over its live registry). A spliced
+	// component is not loaded at run time: once the program defines an asdf:perform
+	// method, its forms are a top-level group whose thunk %asdf-load-spliced hands the
+	// protocol (compiler.SplicedComponentGroups), and load-op's primary method runs that
+	// thunk. Any other component load is the error a run-time load-system is.
 	private static final String SEAM_SOURCE = """
 			(defun %asdf-system-record (key)
 			  (let ((found nil))
@@ -341,14 +397,17 @@ public final class AsdfRuntimeLibrary {
 			        (%asdf-runtime-load "QL:QUICKLOAD" entry))
 			      (%asdf-runtime-load "QL:QUICKLOAD" name))
 			  name)
-			(defun %asdf-test-edge (key)
-			  (asdf:load-system key)
-			  (%asdf-run-test-op key))
-			(defun asdf:test-system (name)
-			  (let ((sys (asdf:find-system name)))
-			    (asdf:load-system sys)
-			    (%asdf-run-test-op (asdf:component-name sys))
-			    t))
+			(defvar %asdf-pending-load% nil)
+			(defun %asdf-load-spliced (system index thunk)
+			  (let ((%asdf-pending-load% (list system index thunk)))
+			    (%asdf-perform-component system index)))
+			(defun %asdf-load-component (system index)
+			  (let ((pending %asdf-pending-load%))
+			    (if (and pending (equal (car pending) system) (eql (car (cdr pending)) index))
+			        (funcall (car (cdr (cdr pending))))
+			        (error "ASDF:PERFORM cannot load ~a of system ~a at run time on the compiled backends (systems are spliced at compile time)"
+			               (asdf:component-name (nth index (asdf:component-children (asdf:find-system system))))
+			               system))))
 			""";
 
 	private static String readSource(String resource) {

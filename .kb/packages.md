@@ -396,10 +396,13 @@ right at top level and wrong inside any defun that outlives its file.
 **A user macro called from inside a FUNCTION BODY expands with the macro's DEFINING package
 current** (`LispEvaluator.UserMacro.definitionPackage`, swapped in `expandMacroCall`, restored in
 the `finally`); a TOP-LEVEL macro call keeps the current package. `functionBodyDepth` (incremented
-around every user-lambda body in `apply`) tells them apart. Both halves are load-bearing
-(fast-http's `callback-data` vs trivia's top-level `lispn:define-namespace`). Known approximation:
-a macro defined in P and called inside a function of a DIFFERENT file Q gets P where CL uses Q.
-Pinned by `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`, `TriviaE2eTest`,
+around every user-lambda body in `apply`) tells them apart, and `loadFile` ZEROES it for the
+file's forms: a loaded file's forms are top-level wherever `load` was called from (every ASDF
+component is loaded from inside `asdf:perform`'s method, `.kb/asdf.md`). Both halves are
+load-bearing (fast-http's `callback-data` vs trivia's top-level `lispn:define-namespace`). Known
+approximation: a macro defined in P and called inside a function of a DIFFERENT file Q gets P
+where CL uses Q. Pinned by `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,
+`LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions` (a `load` from a defun), `TriviaE2eTest`,
 `SxqlE2eTest`.
 
 ## The REPL prompt IS the current package

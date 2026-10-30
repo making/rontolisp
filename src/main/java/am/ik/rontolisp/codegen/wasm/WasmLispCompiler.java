@@ -67,6 +67,7 @@ import am.ik.rontolisp.compiler.ReactorEnvelope;
 import am.ik.rontolisp.compiler.RuntimeNameProducers;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.compiler.SequenceIoNarrowing;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.compiler.SuspendingImports;
 import am.ik.rontolisp.compiler.WasmImportDirective;
@@ -3275,6 +3276,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Before the resolver, whose own marker arm is the backstop for a bracket this
 		// pass did not lower.
 		program = LispMacroExpander.lowerLoadContextMarkers(program);
+		// The spliced components' brackets become asdf:perform calls over top-level
+		// groups once the program defines a perform method, and nothing otherwise
+		// (compiler/SplicedComponentGroups); WasmToplevelEmit emits the groups.
+		program = SplicedComponentGroups.lower(program, null);
 		// Resolve packages (in-package directives, qualified symbols, *package*) up front
 		// so
 		// the rest of compilation sees canonical names.
@@ -11356,6 +11361,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		List<LambdaInfo> lambdaDecls;
 
+		/**
+		 * The chunk functions of each top-level GROUP, in run order -- the functions the
+		 * top-level emission compiled a spliced component's forms into but {@code _start}
+		 * does not call; {@code %run-top-group} does
+		 * ({@code compiler.SplicedComponentGroups}). Shared by every context of the
+		 * compilation: filled while {@code _start} is built, read by the lambda bodies
+		 * Pass 2c compiles.
+		 */
+		Map<Integer, List<Integer>> topGroupChunks;
+
 		Set<Integer> indirectCallArities;
 
 		/**
@@ -12337,6 +12352,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.stringTable = Objects.requireNonNull(builder.stringTable);
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
+			this.topGroupChunks = builder.topGroupChunks;
 			this.indirectCallArities = builder.indirectCallArities;
 			this.fdlibmUsed = builder.fdlibmUsed;
 			this.runtimeDesignatorDispatch = builder.runtimeDesignatorDispatch;
@@ -12480,6 +12496,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<String> duplicatedDefunNames = Set.of();
 
 			private List<LambdaInfo> lambdaDecls = new ArrayList<>();
+
+			private Map<Integer, List<Integer>> topGroupChunks = new HashMap<>();
 
 			private Set<Integer> indirectCallArities = new HashSet<>();
 
@@ -12692,6 +12710,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.stringTable = proto.stringTable;
 				this.functions = proto.functions;
 				this.lambdaDecls = proto.lambdaDecls;
+				this.topGroupChunks = proto.topGroupChunks;
 				this.indirectCallArities = proto.indirectCallArities;
 				this.fdlibmUsed = proto.fdlibmUsed;
 				this.runtimeDesignatorDispatch = proto.runtimeDesignatorDispatch;

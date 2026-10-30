@@ -33,6 +33,7 @@ import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.eval.ClojureCommandLine;
 import am.ik.rontolisp.eval.ClojureNrepl;
@@ -958,7 +959,11 @@ public final class RontoLispCli {
 			// The load-context brackets are lowered as every backend lowers them first:
 			// to the assignments a program reading the variables needs, and to nothing
 			// otherwise -- a marker is no Common Lisp to read back.
-			for (LispVal form : LispMacroExpander.lowerLoadContextMarkers(frontend.program())) {
+			// So are the spliced components' brackets: to the asdf:perform calls and
+			// top-level groups a program defining a perform method compiles, and to
+			// nothing otherwise.
+			for (LispVal form : SplicedComponentGroups
+				.lower(LispMacroExpander.lowerLoadContextMarkers(frontend.program()), null)) {
 				// A (%struct-definition (defstruct ...)) marker is compile-path
 				// bookkeeping
 				// the BACKENDS consume (LispMacroExpander.expandTopLevelDefinitions); the

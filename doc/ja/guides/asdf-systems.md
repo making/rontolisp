@@ -163,7 +163,8 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   `(:version NAME "1.2.3")` も書けます (素の依存として解決されます。バージョン制約は
   検査されません — ここでは `:version` オプションは無視されるメタデータなので、
   比較する相手がありません)。トップレベルの `defmethod` は許容され無視されます
-  (それを実行する `operate` 機構はありません)。ただし
+  (`.asd` はデータであり実行されません。ライブラリが自身のソースで定義した
+  `asdf:perform` メソッドは実行されます。後述)。ただし
   `(defmethod source-file-type ((c CLASS) (s module)) "ext")` だけは例外で、
   ファイル内のどこに書かれていてもそのクラスのファイル拡張子を設定します。
   トップレベルの `defclass` は**コンポーネントクラス**を宣言します: 各スーパークラスは
@@ -210,12 +211,11 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   コンポーネントには `:if-feature expr` を付けられます。フィーチャー式が成立しない
   場合、そのコンポーネントのファイルは除外されますが (ライブラリが CLOS 専用
   ファイルを `(:or :sbcl ...)` の後ろにゲートする方法)、依存順序内の位置は
-  維持されます。test-op 配線用のオプションは機構を持つ唯一の op です:
+  維持されます。test-op 配線用のオプションは記録されます:
   `:in-order-to ((test-op (test-op ...)))` と `:perform (test-op (o c) ...)` は
-  記録され、[`asdf:test-system`](../reference/functions/asdf-test-system.md) が
-  駆動します (それ以外の operation、修飾子つきの `test-op :after` メソッド、本体中の
-  `#.` は従来どおり許容されて無視されます — 汎用の `operate` 機構は依然として
-  ありません)。`:version` の値は ASDF の
+  [`asdf:test-system`](../reference/functions/asdf-test-system.md) が駆動します
+  (ほかの operation についての `:perform`、修飾子つきの `test-op :after` メソッド、
+  本体中の `#.` は許容されて無視されます)。`:version` の値は ASDF の
   `(:read-file-form ...)` 間接参照を含む任意のリテラルフォームで構いません
   (検査されません — 記録されるのは素の文字列だけです)。それ以外
   (`:around-compile` など) は句を名指しするエラーです。
@@ -264,12 +264,28 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   が登録済みの全名前を列挙します。`asdf:*user-cache*` は external で `nil` です
   (fasl キャッシュはありません)。これは rove のシステム駆動テストランナーが読む
   コンポーネントモデルです。
+- **operation プロトコルも本物です。** ロードを構成する各動作は、operation の
+  インスタンス (`asdf:prepare-op`・`asdf:compile-op`・`asdf:load-op`・`asdf:test-op`。
+  いずれも `asdf:operation`) とコンポーネントに対する
+  [`asdf:perform`](../reference/functions/asdf-perform.md) の呼び出しです。順序は、
+  システムの `prepare-op`、コンポーネントファイルごとにロード順で
+  `prepare-op`/`compile-op`/`load-op`、最後にシステムの `compile-op`/`load-op` です。
+  したがって、ライブラリが `perform` に定義したメソッドは、すべてのバックエンドで
+  コンポーネントのロードのたびにその周りで実行されます。fiveam のファイルローカルな
+  `*suite*` は、asdf-flv の `:around` メソッドによるものです。
+  [`asdf:operate`](../reference/functions/asdf-operate.md) は `load-op`
+  (`load-system`) か `test-op` (`test-system`) を perform します。
+  `asdf:make-operation`、`asdf:input-files`、`asdf:output-files`、
+  `asdf:source-file-type` は、ライブラリが定義するメソッドのために存在します。
+  `asdf/interface` と本物の ASDF の内部パッケージ (`asdf/component`、`asdf/action`
+  など) は、これらと同じシンボルを指します。
 - **`asdf:test-system` は記録された test-op 配線を実行します。**
   [`asdf:test-system`](../reference/functions/asdf-test-system.md) はシステムを
-  ロードし、`:in-order-to` の test-op 連鎖をたどり、記録された各
-  `:perform (test-op (o c) ...)` 本体を component にシステムメタオブジェクトを束縛して
-  実行します。コンパイルパスではリテラルなトップレベルの呼び出しがテストシステムも
-  スプライスします。
+  ロードし、`:in-order-to` の test-op 連鎖をたどり、各システムに `test-op` を
+  perform します。そのデフォルトメソッドが、記録された `:perform (test-op (o c) ...)`
+  本体を、operation に `asdf:test-op` のインスタンス、component にシステム
+  メタオブジェクトを束縛して実行します。コンパイルパスではリテラルなトップレベルの
+  呼び出しがテストシステムもスプライスします。
 - **コンパイル時にシステムはツリーシェイキングされます。** ロードしたシステムが定義していても
   プログラムから到達しない関数・変数・定数は — クォートされたシンボルや文字列リテラル全体も
   含めてソース中の名前を辿った上で — `.class`/`.wasm` に含まれません。クラス・総称関数・

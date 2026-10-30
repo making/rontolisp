@@ -38,6 +38,7 @@ import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.wasm.ExternalKind;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Mutability;
@@ -443,6 +444,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// backend has no dynamic variables at all, so the pass only ever DROPS them
 		// here (a program reading *load-pathname* fails on the symbol either way).
 		program = LispMacroExpander.lowerLoadContextMarkers(program);
+		// The spliced components' brackets, likewise: dropped, unless the program
+		// defines an asdf:perform method, which needs CLOS and a thunk per component --
+		// neither of which this backend has.
+		program = SplicedComponentGroups.lower(program,
+				"an asdf:perform method around a spliced component needs CLOS, which --no-gc does not compile");
 		// Resolve packages first, like the other backends, so qualified names
 		// (rontolisp:wasm-export) and in-package directives are canonical.
 		program = new PackageResolver().resolveProgram(program);

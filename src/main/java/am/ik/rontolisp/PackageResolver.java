@@ -344,8 +344,14 @@ public final class PackageResolver {
 			// (LispMacroExpander.lowerLoadContextMarkers); what reaches here is a
 			// bracket that pass dropped -- or, in the CLI, one the macro expander
 			// re-emitted verbatim on its way to that lowering.
+			// The ASDF component brackets likewise: the compilers lower them before this
+			// pass (compiler.SplicedComponentGroups), so what reaches here is a bracket
+			// on its way to that lowering -- the macro-time evaluator's resolve, which
+			// must neither replay nor rename it.
 			if (LispNames.BEGIN_SYSTEM.equals(member) || LispNames.END_SYSTEM.equals(member)
-					|| LispNames.BEGIN_FILE.equals(member) || LispNames.END_FILE.equals(member)) {
+					|| LispNames.BEGIN_FILE.equals(member) || LispNames.END_FILE.equals(member)
+					|| LispNames.ASDF_COMPONENT.equals(member) || LispNames.ASDF_COMPONENT_END.equals(member)
+					|| LispNames.ASDF_SYSTEM_OP.equals(member)) {
 				return quotedSymbol(current());
 			}
 			// The bundled-defstruct bookkeeping marker SURVIVES resolution -- unlike the
