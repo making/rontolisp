@@ -356,8 +356,7 @@
 (defun %fmt-exp-suffix (e expdigits marker)
   (let* ((eneg (< e 0))
          (eabs0 (%princ-piece (if eneg (- 0 e) e)))
-         (eabs
-          (if (> expdigits 0) (%fmt-pad eabs0 expdigits 1 0 "0" t) eabs0)))
+         (eabs (if (> expdigits 0) (%fmt-pad eabs0 expdigits 1 0 "0" t) eabs0)))
     (%fmt-cat (string marker) (%fmt-cat (if eneg "-" "+") eabs))))
 
 (defun %fmt-exp-zero (places strip at expdigits marker k)
@@ -365,7 +364,7 @@
          (if strip
              "0.0"
              (%fmt-cat "0."
-                       (%fmt-repeat "0" (- (%fmt-exp-digits places strip k) k))))))
+              (%fmt-repeat "0" (- (%fmt-exp-digits places strip k) k))))))
     (%fmt-cat (if at "+" "")
               (%fmt-cat mant (%fmt-exp-suffix (- 1 k) expdigits marker)))))
 
@@ -382,12 +381,12 @@
            (ovf (>= sc (* pd 10)))
            (s (%princ-piece (if ovf pd sc)))
            (ip (if (> k 0) (subseq s 0 k) "0"))
-           (fr0 (if (> k 0) (subseq s k) (%fmt-cat (%fmt-repeat "0" (- 0 k)) s)))
+           (fr0
+            (if (> k 0) (subseq s k) (%fmt-cat (%fmt-repeat "0" (- 0 k)) s)))
            (fr (if strip (%fmt-strip-zeros fr0) fr0)))
       (%fmt-cat (if neg "-" (if at "+" ""))
                 (%fmt-cat (%fmt-cat (%fmt-cat ip ".") fr)
-                          (%fmt-exp-suffix (if ovf (+ ee 1) ee) expdigits
-                                           marker))))))
+                 (%fmt-exp-suffix (if ovf (+ ee 1) ee) expdigits marker))))))
 
 ;;; ~G: the plain float representation inside [0.1, 1e16) (and for zero), the ~E
 ;;; default form outside it.
