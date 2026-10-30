@@ -823,7 +823,12 @@ public final class PackageResolver {
 				this.registry.rehome(target, name);
 			}
 			else {
-				imports.put(name, trueHome(java.util.Objects.requireNonNull(id.home()), name));
+				String home = java.util.Objects.requireNonNull(id.home());
+				// A symbol its home uninterned is no longer reachable through that home's
+				// table, which may hold another symbol of the name by now (parenscript's
+				// re-export: shadowing-import cl's symbol into the home, then the old one
+				// into the next package); the redirect keeps the old spelling.
+				imports.put(name, this.registry.isUnhomed(home, name) ? home : trueHome(home, name));
 			}
 			if (shadowing) {
 				shadows.add(name);
@@ -1490,12 +1495,15 @@ public final class PackageResolver {
 		// (usedExport) only see this map. cl is asked first, as resolveUnqualified asks
 		// it before the use list; a name an EXISTING package already owns stays its own
 		// (a pre-seeded linalg:sin is not cl's).
+		// A cl extension name (while) is the package's own unless another used package
+		// exports it (PackageRegistry.isClExtensionName).
 		boolean usesCl = useList.contains(LispNames.CL_PKG);
 		for (String exported : exports) {
 			if (shadows.contains(exported) || imports.containsKey(exported)) {
 				continue;
 			}
-			if (usesCl && this.registry.get(LispNames.CL_PKG).exports(exported)) {
+			if (usesCl && this.registry.get(LispNames.CL_PKG).exports(exported)
+					&& !PackageRegistry.isClExtensionName(exported)) {
 				if (existing == null || !existing.owns(exported)) {
 					imports.put(exported, LispNames.CL_PKG);
 				}
@@ -2316,6 +2324,19 @@ public final class PackageResolver {
 			return canonical(current(), name);
 		}
 		if (PackageRegistry.isClSymbol(name)) {
+			if (PackageRegistry.isClExtensionName(name)) {
+				// cl's while yields to the package's own symbol and to another used
+				// package's (PackageRegistry.isClExtensionName).
+				if (current.owns(name) && !this.registry.isUnhomed(current(), name)) {
+					return canonical(current(), name);
+				}
+				for (String used : current.useList()) {
+					LispSymbol viaUsed = LispNames.CL_PKG.equals(used) ? null : usedExport(used, name);
+					if (viaUsed != null) {
+						return viaUsed;
+					}
+				}
+			}
 			if (currentUsesCl()) {
 				return new LispSymbol(name);
 			}
@@ -2698,6 +2719,14 @@ public final class PackageResolver {
 		if (present != null) {
 			return present;
 		}
+		if (PackageRegistry.isClExtensionName(member)) {
+			for (String used : p.useList()) {
+				Accessible inherited = LispNames.CL_PKG.equals(used) ? null : inheritedFrom(used, member);
+				if (inherited != null) {
+					return inherited;
+				}
+			}
+		}
 		if (!unhomed) {
 			if (LispNames.CL_USER_PKG.equals(pkg) && PackageRegistry.isClMemberName(member)) {
 				// A standard name reaches cl-user through its use of cl -- inherited,
@@ -2854,6 +2883,10 @@ public final class PackageResolver {
 					continue;
 				}
 				Accessible inherited = inheritedFrom(used, name);
+				if (inherited != null && PackageRegistry.isClExtensionName(name)) {
+					// Whichever used package's symbol wins (accessibleIn), not each.
+					inherited = accessibleIn(pkg, name, s -> false);
+				}
 				if (inherited != null) {
 					bySpelling.putIfAbsent(inherited.spelling(), inherited);
 				}

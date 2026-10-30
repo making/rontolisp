@@ -79,10 +79,14 @@ readers ignore `*readtable*` (`.todo/h57`).
 - `swank:*readtable-alist*` exists (nil) on the interpreter: the swank package always does,
   so `in-readtable`'s `%frob-swank-readtable-alist` reaches it (`(boundp nil)` is true).
 - Load on the interpreter: named-readtables, cl-interpol (`#?"..."`, 9.7 s with cl-unicode),
-  cl-annot (`enable-annot-syntax`, `@export`), cl-syntax, jonathan (loads; `jonathan:parse`
-  escapes a `GoSignal`). Not: parenscript (a `shadowing-import`/`export` conflict in its DOM
-  symbol packages, after `:invert` reads fine), cl-csv (`.asd` holds a `defpackage` under
-  `unless`), cl-redis (not reached) -- `.todo/h58`. Compile paths: named-readtables' `defpackage` sits under
+  cl-annot (`enable-annot-syntax`, `@export`), cl-syntax, cl-csv (since h35's `.asd` as Lisp),
+  and (h58, 2026-10-31, output = SBCL 2.2.9) jonathan (`parse`/`to-json`) and parenscript (`ps`).
+  What h58 fixed, none of it reader work: a `shadowing-import` of a symbol its home uninterned
+  (`.kb/packages.md`, member table), a library's own `while` (`.kb/packages.md`), a `go` in a
+  `return-from`'s value form (`.kb/interpreter-tail-calls.md`), the `ratio` type test
+  (`.kb/declarations-type-checks.md`). cl-redis now stops in rutils `core/iter.lisp:3162`:
+  `` #`(member % var :test ,test) `` inside a backquote template, `.todo/h57` item 2 (on the
+  way: a built-in macro alias, `(:type list)`, `c2mop:intern-eql-specializer`). Compile paths: named-readtables' `defpackage` sits under
   `locally`/`handler-bind` in an `eval-when`, which the compile-time resolver does not see.
 
 ## Tests

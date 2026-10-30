@@ -106,7 +106,9 @@ form may be evaluated several times, so callers bind a temp (`__check-type` / `_
   `CLASS`/`STRUCTURE`/`TYPE` joined CL_TYPES for a different reason: trivia NAMES its patterns with
   them, and the defpattern site and a user's pattern site must resolve to the same bare spelling.
 - **Atomic map** (`atomicTypePredicate`): integer/fixnum/bignum -> `integerp`, float* -> `floatp`,
-  number/real -> `numberp`, rational/ratio -> `rationalp`, plus string, symbol, keyword, cons, list,
+  number/real -> `numberp`, rational -> `rationalp`, ratio -> `(and (rationalp v) (not (integerp v)))`
+  (it was `rationalp` until 2026-10-31: jonathan's `(number)`/`(ratio)` methods sent `3` to the
+  ratio one and printed `3.0`; ci-spec `library-shapes-own-while-...`), plus string, symbol, keyword, cons, list,
   null, atom, character, hash-table, function -> `functionp`; `boolean` -> `(or (null v) (eq v t))`;
   `unsigned-byte` -> `(and (integerp v) (>= v 0))`; `array` -> `(or (stringp v) (%arrayp v))` (rank
   NOT checked -- that separates it from `vector`, whose atomic arm goes through

@@ -743,7 +743,10 @@ public final class PackageRegistry {
 			// remaining slot-definition readers.
 			ClosRegistry.SLOT_DEFINITION_NAME, ClosRegistry.DIRECT_SLOT_DEFINITION_NAME,
 			ClosRegistry.EFFECTIVE_SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_WRITERS,
-			LispNames.SLOT_DEFINITION_INITFORM);
+			LispNames.SLOT_DEFINITION_INITFORM,
+			// Exported, not implemented (methods are not runtime objects here): rutils
+			// names it in an add-method expansion that loading never runs.
+			"INTERN-EQL-SPECIALIZER");
 
 	private static final List<String> USOCKET_FUNCTION_NAMES = sorted(USOCKET_FUNCTIONS);
 
@@ -1943,6 +1946,19 @@ public final class PackageRegistry {
 	 */
 	public static boolean isClSymbol(String name) {
 		return CL_SYMBOLS.contains(name) || LispNames.isCarCdrComposition(name);
+	}
+
+	/**
+	 * Returns whether the name is one {@code cl} exports that the standard does not:
+	 * rontolisp's own {@code while}. A portable library may own a symbol of that name
+	 * (parenscript, iterate, arnesi and for export one), so {@code cl}'s yields to it: a
+	 * package's own symbol and one inherited from another used package win over the
+	 * {@code cl} one, as when {@code cl} does not export the name at all.
+	 * @param name the symbol name
+	 * @return {@code true} for a {@code cl} extension name
+	 */
+	public static boolean isClExtensionName(String name) {
+		return LispNames.WHILE.equals(name);
 	}
 
 	/**

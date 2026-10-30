@@ -101,7 +101,10 @@ Interpreter `evalCons`'s `SETF` case -> `aliasMacroFunction`; compile path
 predicate in the pass's activation list (an alias-only program must still activate it) and
 `expandAll`'s `SETF` case returning the shape verbatim. Reaching `expandSetf`'s
 `MACRO-FUNCTION` case means neither interception applied; it throws. Lookup is
-package-tolerant (`lookupUserMacro`: exact -> qualified member -> unique member). Open: an
+package-tolerant (`lookupUserMacro`: exact -> qualified member -> unique member). A BUILT-IN
+macro target (`runtimeMacroNames`) has no expander to share: the alias is a synthesized
+`(&rest args) (cons 'TARGET args)` user macro; the new name may be a keyword
+(`macroFunctionArgumentName`) -- rutils' `(abbr :+ incf)`, h58. Open: an
 arbitrary expander FUNCTION is rejected -- `macro-function` builds a `LispFunction` on demand
 rather than storing one, so supporting it means the macro table must hold callables.
 Class-name twin: `(setf (find-class ...))`, [clos.md](clos.md).
