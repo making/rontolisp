@@ -20,8 +20,8 @@ import org.jspecify.annotations.Nullable;
  * program that switches to another package, this pass spells the default out:
  * {@code (intern x)} becomes {@code (intern x cl:*package*)} unless {@code *package*} is
  * {@code cl-user}, so the site takes the computed-designator lowering and the mention
- * keeps {@code *package*} live ({@code .kb/symbol-runtime-api.md}, "1-arg
- * {@code intern}"). The function object -- {@code #'intern}, or {@code 'intern} in a
+ * keeps {@code *package*} live ({@code .kb/symbol-runtime-api.md}, "Packages at
+ * runtime"). The function object -- {@code #'intern}, or {@code 'intern} in a
  * function-designator argument -- becomes a lambda making the same call, so a mapped or
  * funcalled intern reads {@code *package*} too.
  *
