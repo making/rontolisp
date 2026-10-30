@@ -9309,6 +9309,11 @@ public final class LispEvaluator {
 	 */
 	private @Nullable LispVal rareOperatorExpansion(LispCons cons, Environment env, String name) {
 		switch (name) {
+			case LispNames.HANDLER_CASE_INTERNAL, LispNames.DEFUN_INTERNAL, LispNames.DEFINITION_INTERNAL:
+				// macroexpand-1's answer for a natively-run CL macro, as a walker emits
+				// it
+				return builtinMacroExpansion(cons,
+						form -> java.util.Objects.requireNonNull(LispMacroExpander.foldNativeExpansion(form)));
 			case LispNames.CHANGE_CLASS:
 				return LispMacroExpander.expandChangeClass(resolveChangeClassDesignator(cons, env), this.closRegistry,
 						false);

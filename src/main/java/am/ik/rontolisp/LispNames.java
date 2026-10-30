@@ -3226,6 +3226,28 @@ public final class LispNames {
 	public static final String HANDLER_CASE = "HANDLER-CASE";
 
 	/**
+	 * {@code macroexpand-1}'s answer for {@link #HANDLER_CASE}:
+	 * {@code (%handler-case form 'type #'(lambda ll . body)...)}, folded back to the
+	 * native form ({@code LispMacroExpander.foldNativeExpansion}) wherever a walker emits
+	 * it.
+	 */
+	public static final String HANDLER_CASE_INTERNAL = "%HANDLER-CASE";
+
+	/**
+	 * {@code macroexpand-1}'s answer for {@code defun}:
+	 * {@code (%defun 'name #'(lambda ll (block name . body)))}, folded back like
+	 * {@link #HANDLER_CASE_INTERNAL}.
+	 */
+	public static final String DEFUN_INTERNAL = "%DEFUN";
+
+	/**
+	 * {@code macroexpand-1}'s answer for the other natively-run definers
+	 * ({@code defmacro}, {@code defvar}, {@code defclass}, {@code in-package}, ...):
+	 * {@code (%definition 'form)}, folded back like {@link #HANDLER_CASE_INTERNAL}.
+	 */
+	public static final String DEFINITION_INTERNAL = "%DEFINITION";
+
+	/**
 	 * The {@code ignore-errors} macro: sugar over {@code (handler-case (progn forms...)
 	 * (error (c) (values nil c)))}. Interpreter and JVM backends only, like
 	 * {@link #HANDLER_CASE}.

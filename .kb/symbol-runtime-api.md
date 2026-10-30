@@ -748,13 +748,27 @@ evaluator runs natively expands through `LispMacroExpander.expandNativeMacro`: t
 every backend already lowers it to (`prog`, `psetf`, `shiftf`, `with-open-stream`,
 `do-symbols`, ...) or CL's own (`return` -> `(return-from nil ...)`, `lambda` -> `#'(lambda
 ...)`). It is kept out of `expandBuiltinMacro`, which also feeds compile passes that keep these
-forms native. A walker EMITS what it gets, so the expansion must run on every backend. Still
-answered unchanged with `expanded-p` nil (the contradiction left): `handler-case` and the
-definers run as special forms (`defun`, `defmacro`, `defvar`, `defparameter`, `defconstant`,
-`defclass`, `defgeneric`, `defmethod`, `defstruct`, `defsetf`, `defpackage`,
-`define-symbol-macro`, `in-package`). Pins: `IterateE2eTest` (clauses inside `typep`/`return`),
+forms native. A walker EMITS what it gets, so the expansion must run on every backend.
+`handler-case` and the definers have no lowering, so they expand to an internal form that
+`LispMacroExpander.foldNativeExpansion` turns back into the native one:
+`(%handler-case form 'type #'(lambda ll . body)...)`, `(%defun 'name #'(lambda ll [doc] [decls]
+(block name . forms)))`, and `(%definition 'form)` for `defmacro`, `defvar`, `defparameter`,
+`defconstant`, `defclass`, `defgeneric`, `defmethod`, `defstruct`, `defsetf`, `defpackage`,
+`define-symbol-macro`, `in-package` (`QUOTED_DEFINERS`: their code sits in a grammar of their own
+a walker cannot read). A walker sees the protected form, clause bodies and defun body as an
+ordinary argument and lambda bodies (iterate's `walk-fspec`), and the rest as quoted data. The
+interpreter folds in `rareOperatorExpansion`; the compile path in `UserMacroExpander`
+(`expandAllLocated` and `expandTopLevel`, right after a user macro expands -- the only producer),
+so no surface scan (`usesRestartSystem`, `needsSignalClauseMatch`, EH mode, `FreeVarAnalyzer`)
+ever sees the internal head and the output is the native form's. CL's own `handler-case`
+expansion (`handler-bind` + a `go` out of the handler lambda) was not taken: a `handler-bind`
+anywhere puts the whole compiled program in restart mode (`.kb/error-handling.md`, "The
+restart-mode gate"), and a cross-lambda `go` forces EH mode on WASM. The compiled `eval`
+runtime does not fold them (it runs no `defvar`/`defparameter`/`defconstant` either,
+`doc/en/guides/eval-limitations.md`).
+Pins: `IterateE2eTest` (clauses inside `typep`/`handler-case`/`return`),
 `LispEvaluatorTest#macroFunctionAndSpecialOperatorPPartitionTheOperators`, ci-spec
-`macro-function-and-special-operator-p`.
+`macro-function-and-special-operator-p` (a macro emitting the expansions, four backends).
 
 **One definition per predicate, shared by every backend, and no compile-time fold.** Both are
 `LispPreludeLibrary` entries whose baked name table is GENERATED from `PackageRegistry` (so it
