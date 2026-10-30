@@ -20995,14 +20995,23 @@ cases:
       ;; literal spelling.
       (defclass clsurf-base () ((n :initarg :n)))
       (defclass clsurf-sub (clsurf-base) ((extra :initform 42)))
+      (defclass clsurf-other () ((tag :initform :t) (extra) (n) (fresh)))
       (let ((o (make-instance 'clsurf-base :n 1)) (cls 'clsurf-sub))
         (change-class o cls)
         (let ((p (make-instance 'clsurf-base :n 5)))
           (change-class p (find-class 'clsurf-sub) :n 7)
           (print (list (class-name (class-of o)) (slot-value o 'n) (slot-value o 'extra)
-                       (slot-value p 'n)))))
+                       (slot-value p 'n))))
+        ;; An UNRELATED class with the slots reordered: they match by name, literal
+        ;; or computed, an added slot without :initform starts unbound.
+        (change-class o 'clsurf-other)
+        (print (list (slot-value o 'tag) (slot-value o 'extra) (slot-value o 'n) (slot-boundp o 'fresh)))
+        (change-class o cls)
+        (print (list (class-name (class-of o)) (slot-value o 'n) (slot-value o 'extra))))
     expected: |
       (CLSURF-SUB 1 42 7)
+      (:T 42 1 NIL)
+      (CLSURF-SUB 1 42)
   - name: clos-slot-options-and-metaobject-types
     source: |
       ;; The rest of that CLOS surface: :writer in both spellings, the

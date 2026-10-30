@@ -3101,11 +3101,13 @@ public final class ClosRegistry {
 	}
 
 	/**
-	 * Applies every recorded {@link #registerChangeClassTarget} reservation: each
-	 * target's ancestors (and the target itself) widen to the target's capacity -- its
-	 * slot count, plus the {@link LispLayout#TAIL_CELL} a Gray input stream keeps past
-	 * them, so a changed instance's last cell is past every slot of its new class too.
-	 * Idempotent, and a no-op for a program with no {@code change-class}.
+	 * Applies every recorded {@link #registerChangeClassTarget} reservation: every class
+	 * an instance can be changed FROM -- the target's ancestors (and the target itself)
+	 * and every non-seeded class, since the instance's class is a runtime property --
+	 * widens to the target's capacity: its slot count, plus the
+	 * {@link LispLayout#TAIL_CELL} a Gray input stream keeps past them, so a changed
+	 * instance's last cell is past every slot of its new class too. Idempotent, and a
+	 * no-op for a program with no {@code change-class}.
 	 */
 	public void applyChangeClassCapacities() {
 		for (String target : this.changeClassTargets) {
@@ -3117,15 +3119,23 @@ public final class ClosRegistry {
 			int reserved = targetLayout == null ? info.slots().size() : targetLayout.capacity();
 			for (String ancestor : info.ancestors()) {
 				ClassInfo owner = findClass(ancestor);
-				if (owner == null) {
-					continue;
-				}
-				String tag = LispLayout.CLASS_TAG_PREFIX + owner.name();
-				LispLayout layout = this.layoutsByTag.get(tag);
-				if (layout != null) {
-					this.layoutsByTag.put(tag, layout.withCapacity(reserved));
+				if (owner != null) {
+					reserveCapacity(owner, reserved);
 				}
 			}
+			for (ClassInfo source : this.classes.values()) {
+				if (!isSeededClass(source.name())) {
+					reserveCapacity(source, reserved);
+				}
+			}
+		}
+	}
+
+	private void reserveCapacity(ClassInfo owner, int reserved) {
+		String tag = LispLayout.CLASS_TAG_PREFIX + owner.name();
+		LispLayout layout = this.layoutsByTag.get(tag);
+		if (layout != null) {
+			this.layoutsByTag.put(tag, layout.withCapacity(reserved));
 		}
 	}
 

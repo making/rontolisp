@@ -23085,17 +23085,15 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands {@code (change-class instance 'name initarg value ...)} into an IN-PLACE
-	 * class change: the instance keeps its identity and every slot the old and the new
-	 * layout share (single inheritance makes the shared part a prefix), the slots the new
-	 * class adds are filled from their {@code :initform}s, the supplied initargs are
-	 * stored, and the instance is the value.
+	 * class change: the instance keeps its identity and every slot whose NAME the old and
+	 * the new class share, the slots the new class adds are filled from their
+	 * {@code :initform}s, the supplied initargs are stored, and the instance is the
+	 * value.
 	 *
 	 * <p>
-	 * The source class is a RUNTIME property, so the initform fill is a {@code cond} over
-	 * the statically-known classes of the target's inheritance chain -- exactly the set
-	 * whose instances a change to this class is defined for. An instance of any other
-	 * class keeps its slot values and only changes layout, which is what CL's "slots with
-	 * the same name are retained" degrades to when the two classes share no chain.
+	 * The source class is a RUNTIME property, so the slot remap is a {@code cond} over
+	 * the statically-known classes an instance can be changed from
+	 * ({@link #changeClassInitformFill}).
 	 * @param cons the change-class expression
 	 * @param closRegistry the class registry
 	 * @param coldBranchOk whether an unknown target lowers to a runtime error instead of
@@ -23175,43 +23173,37 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The {@code cond} filling the slots the target class adds beyond the instance's
-	 * CURRENT class, from the target's initforms -- one arm per class of the target's
-	 * inheritance chain that is narrower than it. Null when no class in the chain is
-	 * narrower (nothing to fill).
+	 * The {@code cond} mapping the instance's slots from its OLD class onto the target's
+	 * layout by slot NAME (CLHS 7.2): a target slot whose name the old class has keeps
+	 * that slot's value (read from its old index, or from the old class's shared cell), a
+	 * slot the old class lacks is filled from its initform, and a target
+	 * {@code :allocation :class} slot is left to its shared cell. One arm per class an
+	 * instance can be changed FROM whose mapping is not the identity: every class of the
+	 * target's inheritance chain and every non-seeded class (the seeded condition/MOP
+	 * classes have system-built instances). Runs right after the layout swap: every moved
+	 * value is read before any store, and the old slots are still in the storage
+	 * ({@link ClosRegistry#applyChangeClassCapacities()} reserved the target's room in
+	 * every such class). Null when no arm is needed.
 	 */
 	@Nullable private static LispVal changeClassInitformFill(LispSymbol objVar, LispSymbol oldTagVar,
 			ClosRegistry.ClassInfo target, ClosRegistry closRegistry) {
 		String targetKey = ClosRegistry.normalize(target.name());
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		for (ClosRegistry.ClassInfo source : closRegistry.classes().values()) {
-			boolean sameChain = source.ancestors().contains(targetKey)
-					|| target.ancestors().contains(ClosRegistry.normalize(source.name()));
-			if (!sameChain || source.slots().size() >= target.slots().size()) {
+			String sourceKey = ClosRegistry.normalize(source.name());
+			if (sourceKey.equals(targetKey)) {
 				continue;
 			}
-			// Multiple inheritance can relate two classes whose layouts do NOT share a
-			// prefix (the source's slots sit at shifted indexes in the target). The
-			// positional fill below would write the wrong slots there, so such a source
-			// degrades to the layout-swap-only behavior unrelated classes get ("slots
-			// with the same name are retained" cannot hold positionally).
-			boolean prefix = true;
-			for (int i = 0; i < source.slots().size(); i++) {
-				if (!source.slots().get(i).baseName().equals(target.slots().get(i).baseName())) {
-					prefix = false;
-					break;
-				}
-			}
-			if (!prefix) {
+			boolean sameChain = source.ancestors().contains(targetKey) || target.ancestors().contains(sourceKey);
+			if (!sameChain && closRegistry.isSeededClass(source.name())) {
 				continue;
 			}
-			List<LispVal> stores = new java.util.ArrayList<>();
-			for (int i = source.slots().size(); i < target.slots().size(); i++) {
-				stores.add(objSet(objVar, i, target.slots().get(i).initform()));
+			LispVal remap = changeClassSlotRemap(objVar, source, target);
+			if (remap == null) {
+				continue;
 			}
-			clauses.add(listToCons(concatForms(
-					List.of(fmtCall(LispNames.EQUAL, oldTagVar, quoteOf(LispLayout.CLASS_TAG_PREFIX + source.name()))),
-					stores)));
+			clauses.add(listToCons(List
+				.of(fmtCall(LispNames.EQUAL, oldTagVar, quoteOf(LispLayout.CLASS_TAG_PREFIX + source.name())), remap)));
 		}
 		if (clauses.isEmpty()) {
 			return null;
@@ -23220,6 +23212,58 @@ public final class LispMacroExpander {
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);
 		return listToCons(condParts);
+	}
+
+	/**
+	 * The stores turning an instance of {@code source}, already swapped to the target's
+	 * layout, into one of {@code target} by slot name; null when every instance slot of
+	 * the target already holds its value in place.
+	 */
+	@Nullable private static LispVal changeClassSlotRemap(LispSymbol objVar, ClosRegistry.ClassInfo source,
+			ClosRegistry.ClassInfo target) {
+		List<ClosRegistry.SlotSpec> from = source.slots();
+		List<ClosRegistry.SlotSpec> to = target.slots();
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		List<LispVal> stores = new java.util.ArrayList<>();
+		for (int i = 0; i < to.size(); i++) {
+			ClosRegistry.SlotSpec slot = to.get(i);
+			if (slot.sharedCellVar() != null) {
+				continue;
+			}
+			int j = -1;
+			for (int k = 0; k < from.size() && j < 0; k++) {
+				if (from.get(k).baseName().equals(slot.baseName())) {
+					j = k;
+				}
+			}
+			LispVal value;
+			if (j < 0) {
+				value = slot.initform();
+			}
+			else if (from.get(j).sharedCellVar() instanceof String cell) {
+				value = new LispSymbol(cell);
+			}
+			else if (j == i) {
+				continue;
+			}
+			else {
+				LispSymbol temp = new LispSymbol(objVar.name() + "_s" + j);
+				bindings.add(listToCons(List.of(temp, objRef(objVar, j))));
+				value = temp;
+			}
+			stores.add(objSet(objVar, i, value));
+		}
+		if (stores.isEmpty()) {
+			return null;
+		}
+		if (bindings.isEmpty()) {
+			return makeProgn(stores);
+		}
+		List<LispVal> letParts = new java.util.ArrayList<>();
+		letParts.add(new LispSymbol(LispNames.LET));
+		letParts.add(listToCons(bindings));
+		letParts.addAll(stores);
+		return listToCons(letParts);
 	}
 
 	/**
