@@ -93,6 +93,7 @@ import am.ik.rontolisp.reader.LispLexer;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.runtime.RontoCharFileReader;
 import am.ik.rontolisp.runtime.RontoCharFileWriter;
+import am.ik.rontolisp.runtime.RontoConditionVariable;
 import am.ik.rontolisp.runtime.RontoInflate;
 import am.ik.rontolisp.runtime.RontoIoFileStream;
 import am.ik.rontolisp.runtime.RontoStringInputStream;
@@ -465,10 +466,74 @@ public final class Environment implements Scope {
 		this.readFeaturesQuery = query;
 	}
 
+	/**
+	 * Answers the readtable a RUN-TIME read honors: the current -- dynamic binding first
+	 * -- {@code *readtable*}, as the syntax the reader reads with, or {@code null} while
+	 * it reads as the standard one ({@code .kb/readtables.md}). Installed by the
+	 * evaluator for the reason {@link #setReadFeaturesQuery} is; a bare
+	 * {@code Environment} reads the standard syntax.
+	 */
+	@Nullable private Supplier<am.ik.rontolisp.reader.@Nullable ReadSyntax> readSyntaxQuery;
+
+	/**
+	 * Installs the {@code *readtable*} query consulted by the runtime read built-ins; see
+	 * {@link #readSyntaxQuery}.
+	 * @param query answers the current syntax
+	 */
+	public void setReadSyntaxQuery(Supplier<am.ik.rontolisp.reader.@Nullable ReadSyntax> query) {
+		this.readSyntaxQuery = query;
+	}
+
+	/** The syntax the runtime read built-ins read with, {@code null} for the standard. */
+	private am.ik.rontolisp.reader.@Nullable ReadSyntax currentReadSyntax() {
+		return this.readSyntaxQuery == null ? null : this.readSyntaxQuery.get();
+	}
+
+	/**
+	 * The string-input-stream view of this environment's stream table, set by
+	 * {@link #createGlobal}: what a reader macro function's stream is opened through.
+	 */
+	@Nullable private StringStreamTable stringStreams;
+
+	/**
+	 * The string-input-stream view of the stream table.
+	 * @return the view
+	 */
+	StringStreamTable stringStreams() {
+		return java.util.Objects.requireNonNull(this.stringStreams, "no stream table");
+	}
+
+	/**
+	 * The text and the stop index of the last one-argument {@code read-from-string} read
+	 * under a non-standard readtable: the second value {@code %read-from-string-end}
+	 * answers for the SAME string, since a second read would run its reader macros twice.
+	 */
+	private volatile @Nullable SyntaxRead lastSyntaxRead;
+
+	/**
+	 * One {@link #lastSyntaxRead}.
+	 *
+	 * @param input the text read, compared by identity
+	 * @param end its stop index
+	 */
+	private record SyntaxRead(String input, LispVal end) {
+	}
+
 	/** The feature set the runtime read built-ins test their guards against. */
 	private am.ik.rontolisp.reader.Features currentReadFeatures() {
 		return this.readFeaturesQuery == null ? am.ik.rontolisp.reader.Features.INTERPRETER
 				: this.readFeaturesQuery.get();
+	}
+
+	/**
+	 * A fresh standard readtable: the {@code LispLayout.READTABLE} value with the
+	 * {@code :upcase} case and no entry, which is what the prelude's {@code %rt-make}
+	 * builds on every backend.
+	 * @return the readtable
+	 */
+	static LispInstance newStandardReadtable() {
+		return new LispInstance(LispLayout.READTABLE,
+				new LispVal[] { new LispSymbol(":UPCASE"), new LispHashTable(LispHashTable.TEST_EQL) });
 	}
 
 	/**
@@ -1058,9 +1123,12 @@ public final class Environment implements Scope {
 		env.define(LispNames.PRINT_PPRINT_DISPATCH_VAR, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE));
 		// The provided-module list `provide` pushes onto and `require` consults.
 		env.define(LispNames.MODULES_VAR, LispNil.INSTANCE);
-		// Accepted and ignored: the reader is not readtable-driven, a "readtable" is an
-		// opaque nil token (see LispNames.COPY_READTABLE).
-		env.define(LispNames.READTABLE_VAR, LispNil.INSTANCE);
+		// The current readtable: a fresh standard one (.kb/readtables.md), the value the
+		// compile paths seed too (LispMacroExpander.injectMvSpillGlobal).
+		env.define(LispNames.READTABLE_VAR, newStandardReadtable());
+		// SLIME's per-package readtable alist, in the swank package that is always there
+		// (named-readtables' in-readtable updates it).
+		env.define(LispNames.SWANK_PKG + ":" + LispNames.SWANK_READTABLE_ALIST, LispNil.INSTANCE);
 		// #. read-time eval is enabled by default; binding it nil makes the marker
 		// resolver signal (LispEvaluator.resolveReadTimeEval), per CLHS.
 		env.define(LispNames.READ_EVAL_VAR, LispTrue.INSTANCE);
@@ -2653,6 +2721,44 @@ public final class Environment implements Scope {
 			lock.unlock();
 			return args.get(0);
 		}));
+		// The condition variables of the bordeaux-threads shim: here because a wait
+		// releases and retakes a mutex, which only this table resolves.
+		String cvNew = LispNames.CONDITION_VARIABLE_NEW_INTERNAL_QUALIFIED;
+		env.defineFunction(cvNew, new LispFunction(cvNew, args -> {
+			requireArgCount(LispNames.CONDITION_VARIABLE_NEW_INTERNAL, args, 0);
+			return new LispJavaObject(new RontoConditionVariable());
+		}));
+		String cvWait = LispNames.CONDITION_WAIT_INTERNAL_QUALIFIED;
+		env.defineFunction(cvWait, new LispFunction(cvWait, args -> {
+			requireArgCount(LispNames.CONDITION_WAIT_INTERNAL, args, 3);
+			RontoConditionVariable variable = requireConditionVariable(LispNames.CONDITION_WAIT_INTERNAL, args.get(0));
+			ReentrantLock lock = requireMutex(LispNames.CONDITION_WAIT_INTERNAL, mutexes, args.get(1));
+			long nanos = args.get(2) instanceof LispInteger count ? Math.max(0L, count.value()) : -1L;
+			try {
+				return variable.await(lock, nanos) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			catch (IllegalStateException ex) {
+				throw new LispEvalException(String.valueOf(ex.getMessage()));
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+				throw new LispEvalException("CONDITION-WAIT: interrupted while waiting");
+			}
+		}));
+		String cvNotify = LispNames.CONDITION_NOTIFY_INTERNAL_QUALIFIED;
+		env.defineFunction(cvNotify, new LispFunction(cvNotify, args -> {
+			requireArgCount(LispNames.CONDITION_NOTIFY_INTERNAL, args, 2);
+			requireConditionVariable(LispNames.CONDITION_NOTIFY_INTERNAL, args.get(0))
+				.signal(!(args.get(1) instanceof LispNil));
+			return LispNil.INSTANCE;
+		}));
+	}
+
+	private static RontoConditionVariable requireConditionVariable(String fn, LispVal handle) {
+		if (handle instanceof LispJavaObject object && object.ref() instanceof RontoConditionVariable variable) {
+			return variable;
+		}
+		throw new LispEvalException(fn + " expects a condition variable, got " + handle.print());
 	}
 
 	private static ReentrantLock requireMutex(String fn, Map<Long, ReentrantLock> mutexes, LispVal handle) {
@@ -5584,6 +5690,10 @@ public final class Environment implements Scope {
 		// case of its own. It writes THROUGH on every call (System.err is autoflush, and
 		// a buffered writer would reorder warnings against stdout).
 		AtomicLong nextStreamHandle = new AtomicLong(StreamDesignators.FIRST_USER_HANDLE);
+		// The view the readtable-honoring reads open their string streams through
+		// (.kb/readtables.md).
+		env.stringStreams = new StringStreamTable(streams, nextStreamHandle, Environment::streamTarget,
+				Environment::synonymTarget);
 		// The buffered served-request body rides the same table (its handle IS the
 		// :raw-body value), but it is opened and closed from Java: per-request Lisp
 		// marshalling was the measured POST regression, and the transport must be able
@@ -7805,6 +7915,13 @@ public final class Environment implements Scope {
 				// an out-of-range digit all pass silently.
 				return LispNil.INSTANCE;
 			}
+			am.ik.rontolisp.reader.ReadSyntax syntax = env.currentReadSyntax();
+			if (syntax != null) {
+				// A non-standard readtable: ONE datum, read with it -- reading the whole
+				// text would run the reader macros of the datums after it
+				// (.kb/readtables.md).
+				return readOneWithSyntax(env, str.value(), syntax, streams, nextStreamHandle);
+			}
 			// Folds like read above (upcase premise), so (read-from-string "foo") is
 			// the symbol FOO and (read-from-string "car") folds to the standard car.
 			return readRuntimeDatum.apply(str.value());
@@ -7818,6 +7935,10 @@ public final class Environment implements Scope {
 			requireMinArgCount(LispNames.READ_FROM_STRING_END, args, 1);
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.READ_FROM_STRING_END + " expects a string");
+			}
+			SyntaxRead last = env.lastSyntaxRead;
+			if (last != null && last.input() == str.value() && env.currentReadSyntax() != null) {
+				return last.end();
 			}
 			return readDatumStop(str.value(), env.currentReadFeatures(), env.readTimeEvalResolver);
 		}));
@@ -10617,6 +10738,29 @@ public final class Environment implements Scope {
 	 */
 	static LispEvalException endOfFile(LispVal stream) {
 		return new LispEvalException(ClosRegistry.END_OF_FILE_MESSAGE, ClosRegistry.newEndOfFileCondition(stream));
+	}
+
+	/**
+	 * The one-argument {@code read-from-string} under a non-standard readtable: the first
+	 * datum read with it, and nothing after it -- a reader macro of a later datum must
+	 * not run ({@code .kb/readtables.md}). The stop index is kept for
+	 * {@code %read-from-string-end}.
+	 */
+	private static LispVal readOneWithSyntax(Environment env, String input, am.ik.rontolisp.reader.ReadSyntax syntax,
+			Map<Long, Closeable> streams, AtomicLong nextStreamHandle) {
+		UnaryOperator<LispVal> resolver = env.readTimeEvalResolver;
+		boolean markers = resolver != null && input.contains("#.");
+		LispReader.Forms forms = LispReader.forms(input, env.currentReadFeatures(), markers, null, resolver, 0, false);
+		LispVal datum = forms.next(syntax);
+		if (datum == null) {
+			throw endOfFile(errorStream(streams, nextStreamHandle, input));
+		}
+		int end = forms.position();
+		if (end < input.length() && Character.isWhitespace(input.charAt(end))) {
+			end++;
+		}
+		env.lastSyntaxRead = new SyntaxRead(input, new LispInteger(input.codePointCount(0, end)));
+		return markers ? java.util.Objects.requireNonNull(resolver).apply(datum) : datum;
 	}
 
 	/**

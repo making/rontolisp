@@ -1,6 +1,7 @@
 package am.ik.rontolisp.reader;
 
 import am.ik.rontolisp.FloatWidth;
+import am.ik.rontolisp.LispVal;
 
 /**
  * Token types produced by the lexer.
@@ -205,6 +206,15 @@ public sealed interface Token {
 
 	/** End-of-file token. */
 	record Eof() implements Token {
+	}
+
+	/**
+	 * The datum a reader macro function answered ({@link ReadSyntax}): it reads as
+	 * itself.
+	 *
+	 * @param value the datum
+	 */
+	record Datum(LispVal value) implements Token {
 	}
 
 }

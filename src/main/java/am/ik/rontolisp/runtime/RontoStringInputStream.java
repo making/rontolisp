@@ -48,6 +48,32 @@ public final class RontoStringInputStream extends BufferedReader {
 	}
 
 	/**
+	 * The text the stream reads.
+	 * @return the text
+	 */
+	public String text() {
+		return this.text;
+	}
+
+	/**
+	 * The UTF-16 index of the next character -- where a reader reading the text in place
+	 * resumes (the interpreter's readtable-honoring {@code read}).
+	 * @return the cursor
+	 */
+	public int cursor() {
+		return this.cursor;
+	}
+
+	/**
+	 * Moves the cursor to a UTF-16 index, clamped to the text: where a read of the text
+	 * in place left it.
+	 * @param index the index
+	 */
+	public void moveCursor(int index) {
+		this.cursor = Math.max(0, Math.min(index, this.text.length()));
+	}
+
+	/**
 	 * The number of CHARACTERS (code points) read so far.
 	 * @return the position
 	 */

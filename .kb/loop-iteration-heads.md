@@ -18,6 +18,10 @@ later clause's head see. Do NOT make it a fresh binding per iteration — `dolis
 - `for VAR = INIT [then STEP]` is a `bodyPrefix` record, assigned in the head.
 - `parseRepeat` places its head at its OWN position in clause order, like `for`. **Trap**: from
   the trailing `endTests` bucket instead, a later clause runs one extra time on the exhausting pass.
+- A `while`/`until` before any body clause is a head at its own position too:
+  `(loop while s for x = (pop s) collect x)` tests before popping, `(1 2 3)` (SBCL; cl-markup's
+  `map-group-if` relies on it). CLHS calls it nonconforming. Same trap as `repeat`: a bucket ANDed
+  after every head pops the last element and drops it.
 - Divergence: the outer `let*` binds an element variable to its first element (`guardedElt`), not
   nil, so a later clause's setup form can reference it; SBCL binds nil. Ours is the lenient superset.
 - `parseForNumeric` splices literal step/limit in place (`isSelfEvaluatingNumber`), binding gensyms
@@ -30,6 +34,6 @@ later clause's head see. Do NOT make it a fresh binding per iteration — `dolis
 
 ## Tests
 `LispEvaluatorTest#evalLoopVariableKeepsLastValueAfterTermination`,
-`#evalLoopRepeatIsAClauseOrderedDriver`, `#evalLoopSequentialDriverStepping`; ci-spec
+`#evalLoopRepeatAndWhileAreClauseOrdered`, `#evalLoopSequentialDriverStepping`; ci-spec
 `loop-variable-after-termination`. Expectations were measured against SBCL 2.6.5 — measure new
 forms there too.

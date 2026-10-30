@@ -1121,36 +1121,112 @@ public final class LispNames {
 	public static final String SPLIT_PACKED_INTERNAL = "%SPLIT-PACKED";
 
 	/**
-	 * The {@code copy-readtable} standard function, lowered to a nil-returning no-op:
-	 * rontolisp's reader is not readtable-driven, so there is no readtable object to copy
-	 * (the ironclad {@code *ironclad-readtable*} header idiom). The arguments are still
-	 * evaluated for effect.
+	 * The {@code copy-readtable} standard function: a prelude defun over the
+	 * {@code LispLayout.READTABLE} value on every backend ({@code .kb/readtables.md}).
 	 */
 	public static final String COPY_READTABLE = "COPY-READTABLE";
 
-	/**
-	 * The {@code set-dispatch-macro-character} standard function, lowered to a
-	 * t-returning no-op like {@link #COPY_READTABLE}: user dispatch macros cannot extend
-	 * the Java-side reader. The one known user syntax, ironclad's {@code #N@(...)} s-box
-	 * literal, is native in {@code LispLexer} instead.
-	 */
+	/** The {@code set-dispatch-macro-character} standard function (prelude). */
 	public static final String SET_DISPATCH_MACRO_CHARACTER = "SET-DISPATCH-MACRO-CHARACTER";
 
+	/** The {@code get-dispatch-macro-character} standard function (prelude). */
+	public static final String GET_DISPATCH_MACRO_CHARACTER = "GET-DISPATCH-MACRO-CHARACTER";
+
+	/** The {@code make-dispatch-macro-character} standard function (prelude). */
+	public static final String MAKE_DISPATCH_MACRO_CHARACTER = "MAKE-DISPATCH-MACRO-CHARACTER";
+
+	/** The {@code set-macro-character} standard function (prelude). */
+	public static final String SET_MACRO_CHARACTER = "SET-MACRO-CHARACTER";
+
+	/** The {@code get-macro-character} standard function (prelude). */
+	public static final String GET_MACRO_CHARACTER = "GET-MACRO-CHARACTER";
+
+	/** The {@code set-syntax-from-char} standard function (prelude). */
+	public static final String SET_SYNTAX_FROM_CHAR = "SET-SYNTAX-FROM-CHAR";
+
+	/** The {@code readtablep} standard function (prelude). */
+	public static final String READTABLEP = "READTABLEP";
+
 	/**
-	 * The {@code readtable-case} standard function, lowered to a constant {@code :upcase}
-	 * (its argument still evaluated for effect): rontolisp's reader is not
-	 * readtable-driven and always upcases unescaped symbol names (see
-	 * {@code .kb/reader-case-upcase.md}), which is exactly what the standard readtable's
-	 * {@code :upcase} mode does -- s-sql's {@code from-sql-name} branches on it.
+	 * The {@code read-delimited-list} standard function: a prelude defun over
+	 * {@code read}, which the interpreter serves natively for a string stream when the
+	 * current readtable is not the standard one ({@code .kb/readtables.md}).
+	 */
+	public static final String READ_DELIMITED_LIST = "READ-DELIMITED-LIST";
+
+	/**
+	 * The {@code readtable-case} standard function and its {@code setf} place: the
+	 * readtable's slot 0 (prelude). The interpreter's reader converts a token's case by
+	 * it; the compile paths read source as {@code :upcase} ({@code .kb/readtables.md}).
 	 */
 	public static final String READTABLE_CASE = "READTABLE-CASE";
 
 	/**
-	 * The {@code *readtable*} standard variable, seeded nil so the
-	 * {@code (setq *readtable* ...)} idiom loads (the assigned value is an opaque no-op
-	 * token -- see {@link #COPY_READTABLE}).
+	 * The {@code *readtable*} standard variable, holding a readtable value
+	 * ({@code LispLayout.READTABLE}) on every backend.
 	 */
 	public static final String READTABLE_VAR = "*READTABLE*";
+
+	/**
+	 * SLIME's {@code swank:*readtable-alist*} member: the package-name to readtable alist
+	 * named-readtables' {@code in-readtable} pushes onto whenever a {@code swank} package
+	 * exists -- here it always does. Bound to nil on the interpreter.
+	 */
+	public static final String SWANK_READTABLE_ALIST = "*READTABLE-ALIST*";
+
+	/**
+	 * The prelude's readtable constructor: a fresh standard readtable, the value
+	 * {@code *readtable*} starts with.
+	 */
+	public static final String RT_MAKE_INTERNAL = "%RT-MAKE";
+
+	/**
+	 * The prelude's syntax entry of a character in a readtable (standard when absent).
+	 */
+	public static final String RT_ENTRY_INTERNAL = "%RT-ENTRY";
+
+	/** The prelude's standard syntax entry of a character. */
+	public static final String RT_STD_ENTRY_INTERNAL = "%RT-STD-ENTRY";
+
+	/** The prelude's memoized standard macro function of a standard macro character. */
+	public static final String RT_STD_FN_INTERNAL = "%RT-STD-FN";
+
+	/** The prelude's memoized standard dispatch table of {@code #}. */
+	public static final String RT_STD_SUBS_INTERNAL = "%RT-STD-SUBS";
+
+	/**
+	 * The prelude's reverse lookup: the standard character a macro function stands for.
+	 */
+	public static final String RT_STD_OF_INTERNAL = "%RT-STD-OF";
+
+	/** The prelude's reverse lookup over the standard {@code #} sub-functions. */
+	public static final String RT_STD_SUB_OF_INTERNAL = "%RT-STD-SUB-OF";
+
+	/** The body of every standard macro function: what calling one does. */
+	public static final String RT_CALL_STANDARD_INTERNAL = "%RT-CALL-STANDARD";
+
+	/** The memoized dispatching function of a user dispatch macro character. */
+	public static final String RT_DISPATCHER_INTERNAL = "%RT-DISPATCHER";
+
+	/** A readtable entry made the readtable's own (copied out of the standard one). */
+	public static final String RT_OWN_ENTRY_INTERNAL = "%RT-OWN-ENTRY";
+
+	/** A fresh copy of a readtable entry (its dispatch table included). */
+	public static final String RT_COPY_ENTRY_INTERNAL = "%RT-COPY-ENTRY";
+
+	/** A readtable designator resolved: nil is the standard readtable. */
+	public static final String RT_DESIGNATOR_INTERNAL = "%RT-DESIGNATOR";
+
+	/** The memoized standard readtable, what a nil readtable designator denotes. */
+	public static final String RT_STANDARD_INTERNAL = "%RT-STANDARD";
+
+	/**
+	 * The macro characters of a readtable as named-readtables' iterator wants them:
+	 * {@code (char fn non-terminating-p dispatch-p sub-alist)} per character, the
+	 * standard ones included. What the named-readtables derived form iterates instead of
+	 * grovelling every code point ({@code .kb/readtables.md}).
+	 */
+	public static final String READTABLE_MACRO_ENTRIES_INTERNAL = "%READTABLE-MACRO-ENTRIES";
 
 	/**
 	 * The {@code *load-pathname*} standard variable: the path {@code load} was CALLED
@@ -5864,6 +5940,51 @@ public final class LispNames {
 	public static final String END_FILE = "%END-FILE";
 
 	/**
+	 * Internal marker {@code (%asdf-component "SYSTEM" INDEX)} inserted by
+	 * {@code LoadInliner} before the forms it splices for one COMPONENT of an ASDF system
+	 * (the file or leaf shim at {@code INDEX} of the system's load order). The compilers
+	 * lower the bracket ({@code compiler.SplicedComponentGroups}): once the program has
+	 * defined an {@code asdf:perform} method, the component's forms become a top-level
+	 * group run through {@code asdf:perform}, so an extension's {@code :around} method
+	 * wraps them as it wraps a load on the interpreter; otherwise the bracket is dropped.
+	 * Consumed by the resolver like {@link #BEGIN_FILE} as the backstop. Paired with
+	 * {@link #ASDF_COMPONENT_END}.
+	 */
+	public static final String ASDF_COMPONENT = "%ASDF-COMPONENT";
+
+	/** Closes the innermost {@link #ASDF_COMPONENT} bracket. */
+	public static final String ASDF_COMPONENT_END = "%ASDF-COMPONENT-END";
+
+	/**
+	 * Internal marker {@code (%asdf-system-op "SYSTEM" :before|:after)} inserted by
+	 * {@code LoadInliner} where the interpreter performs a system's own operations:
+	 * {@code :before} after the dependencies and ahead of the components (prepare-op),
+	 * {@code :after} behind them (compile-op, load-op). Lowered or dropped with the
+	 * {@link #ASDF_COMPONENT} brackets.
+	 */
+	public static final String ASDF_SYSTEM_OP = "%ASDF-SYSTEM-OP";
+
+	/**
+	 * Internal marker {@code (%top-group N)} opening a TOP-LEVEL GROUP: the top-level
+	 * forms up to the matching {@link #TOP_GROUP_END} are compiled as top-level forms
+	 * (the static passes see them where they stand) but are not run in sequence -- their
+	 * run-time code is reached only through {@link #RUN_TOP_GROUP}. What a spliced
+	 * component lowers to once {@code asdf:perform} has methods
+	 * ({@code compiler.SplicedComponentGroups}). Kept verbatim by the resolver.
+	 */
+	public static final String TOP_GROUP = "%TOP-GROUP";
+
+	/** Closes the {@link #TOP_GROUP} of the same number. */
+	public static final String TOP_GROUP_END = "%TOP-GROUP-END";
+
+	/**
+	 * {@code (%run-top-group N)}: runs top-level group {@code N}'s forms and answers nil
+	 * -- the body of the thunk the group's {@code asdf:perform} call receives. A special
+	 * form of the compile backends, kept verbatim by the resolver.
+	 */
+	public static final String RUN_TOP_GROUP = "%RUN-TOP-GROUP";
+
+	/**
 	 * Internal marker {@code (%struct-definition (defstruct ...))} left in the form
 	 * stream by {@code LibraryDefunPruner} when it expands a BUNDLED library's
 	 * {@code defstruct} into its generated defuns AHEAD of pruning (so each defun prunes
@@ -7810,12 +7931,54 @@ public final class LispNames {
 	 * can key an {@code eq} hash table -- dbi's per-thread connection cache
 	 * ({@code steal-cache-table}) is the driving consumer through
 	 * {@code bt2:current-thread}. Works for ANY thread (the main thread and served
-	 * requests included, not only {@code make-thread} spawns); the self-handle a spawned
-	 * body sees is its own cached one, not the spawner's handle for it -- only
-	 * {@code threadp}/{@code thread-alive-p} answers are portable on a handle either way.
-	 * Interpreter and JVM only, like the rest of the family.
+	 * requests included, not only {@code make-thread} spawns); in a spawned body it is
+	 * the handle {@code make-thread} returned. Interpreter and JVM only, like the rest of
+	 * the family.
 	 */
 	public static final String CURRENT_THREAD = "CURRENT-THREAD";
+
+	/**
+	 * The internal {@code rontolisp::%thread-name} primitive: the name a thread handle
+	 * was given as {@code make-thread}'s third argument, {@code nil} when none (and for a
+	 * thread {@code make-thread} did not spawn). Behind
+	 * {@code bordeaux-threads:thread-name}; interpreter and JVM only.
+	 */
+	public static final String THREAD_NAME_INTERNAL = "%THREAD-NAME";
+
+	/** The canonical spelling of {@code rontolisp::%thread-name}. */
+	public static final String THREAD_NAME_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + THREAD_NAME_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%condition-variable-new} primitive: a fresh
+	 * condition variable ({@code runtime/RontoConditionVariable}), behind
+	 * {@code bordeaux-threads:make-condition-variable}. Interpreter and JVM only.
+	 */
+	public static final String CONDITION_VARIABLE_NEW_INTERNAL = "%CONDITION-VARIABLE-NEW";
+
+	/** The canonical spelling of {@code rontolisp::%condition-variable-new}. */
+	public static final String CONDITION_VARIABLE_NEW_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
+			+ CONDITION_VARIABLE_NEW_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%condition-wait} primitive:
+	 * {@code (%condition-wait variable mutex nanos)} releases the held mutex (every
+	 * hold), waits for a notify or {@code nanos} nanoseconds ({@code nil}: no limit),
+	 * takes the mutex back and answers {@code t}, or {@code nil} on timeout.
+	 */
+	public static final String CONDITION_WAIT_INTERNAL = "%CONDITION-WAIT";
+
+	/** The canonical spelling of {@code rontolisp::%condition-wait}. */
+	public static final String CONDITION_WAIT_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONDITION_WAIT_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%condition-notify} primitive:
+	 * {@code (%condition-notify variable all)} wakes the oldest waiter, or every waiter
+	 * when {@code all} is non-nil; answers {@code nil}.
+	 */
+	public static final String CONDITION_NOTIFY_INTERNAL = "%CONDITION-NOTIFY";
+
+	/** The canonical spelling of {@code rontolisp::%condition-notify}. */
+	public static final String CONDITION_NOTIFY_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONDITION_NOTIFY_INTERNAL;
 
 	/**
 	 * The {@code rontolisp:current-file} read-time literal: the origin file of the source
@@ -8869,6 +9032,54 @@ public final class LispNames {
 
 	/** The {@code test-op} operation name in a {@code .asd}'s test-op wiring options. */
 	public static final String TEST_OP = "TEST-OP";
+
+	/**
+	 * {@code asdf:perform} -- the operation protocol's generic function
+	 * {@code (perform operation component)}. {@code load-system} performs prepare-op,
+	 * compile-op and load-op on every component file and on the system itself, so an
+	 * extension's {@code :around}/{@code :before}/{@code :after} method runs around each
+	 * component load (asdf-flv's file-local variables).
+	 */
+	public static final String PERFORM = "PERFORM";
+
+	/** The canonical qualified spelling of {@code asdf:perform}. */
+	public static final String ASDF_PERFORM = ASDF_PKG + ":" + PERFORM;
+
+	/** The {@code asdf:operation} base class of the operation classes. */
+	public static final String OPERATION = "OPERATION";
+
+	/** The {@code asdf:prepare-op} operation class. */
+	public static final String PREPARE_OP = "PREPARE-OP";
+
+	/** The {@code asdf:compile-op} operation class. */
+	public static final String COMPILE_OP = "COMPILE-OP";
+
+	/** The {@code asdf:load-op} operation class. */
+	public static final String LOAD_OP = "LOAD-OP";
+
+	/**
+	 * {@code asdf:operate} -- {@code (operate operation system &rest keys)}: load-op is
+	 * {@code load-system}, test-op is {@code test-system}; any other operation signals.
+	 */
+	public static final String OPERATE = "OPERATE";
+
+	/** {@code asdf:make-operation} -- the one cached instance of an operation class. */
+	public static final String MAKE_OPERATION = "MAKE-OPERATION";
+
+	/** {@code asdf:input-files} -- generic: the files an operation reads. */
+	public static final String INPUT_FILES = "INPUT-FILES";
+
+	/**
+	 * {@code asdf:output-files} -- generic: the files an operation writes (none here).
+	 */
+	public static final String OUTPUT_FILES = "OUTPUT-FILES";
+
+	/**
+	 * {@code asdf:source-file-type} -- generic: a component's file extension. Only the
+	 * {@code .asd} parse decides an extension here; the run-time generic exists so a
+	 * library may define methods on it (lass).
+	 */
+	public static final String SOURCE_FILE_TYPE = "SOURCE-FILE-TYPE";
 
 	/** The canonical qualified spelling of {@code asdf:test-system}. */
 	public static final String ASDF_TEST_SYSTEM = ASDF_PKG + ":" + TEST_SYSTEM;
@@ -10922,6 +11133,99 @@ public final class LispNames {
 	 * lock {@code make-lock} does.
 	 */
 	public static final String MAKE_RECURSIVE_LOCK = "MAKE-RECURSIVE-LOCK";
+
+	/**
+	 * {@code bt:lock} -- the shim's lock type: a structure over a mutex handle, so a lock
+	 * has a class of its own (a method may specialize on it) rather than the handle's.
+	 * {@code bt:recursive-lock} names the same type.
+	 */
+	public static final String LOCK = "LOCK";
+
+	/** {@code bt:recursive-lock} -- a type naming {@link #LOCK}. */
+	public static final String RECURSIVE_LOCK = "RECURSIVE-LOCK";
+
+	/** {@code bt:lock-p} -- the lock structure's predicate. */
+	public static final String LOCK_P = "LOCK-P";
+
+	/** {@code bt:recursive-lock-p} -- {@link #LOCK_P}, every lock being reentrant. */
+	public static final String RECURSIVE_LOCK_P = "RECURSIVE-LOCK-P";
+
+	/** {@code bt:acquire-recursive-lock} -- {@link #ACQUIRE_LOCK}'s twin. */
+	public static final String ACQUIRE_RECURSIVE_LOCK = "ACQUIRE-RECURSIVE-LOCK";
+
+	/** {@code bt:release-recursive-lock} -- {@link #RELEASE_LOCK}'s twin. */
+	public static final String RELEASE_RECURSIVE_LOCK = "RELEASE-RECURSIVE-LOCK";
+
+	/**
+	 * {@code bt:make-condition-variable} -- over
+	 * {@link #CONDITION_VARIABLE_NEW_INTERNAL}.
+	 */
+	public static final String MAKE_CONDITION_VARIABLE = "MAKE-CONDITION-VARIABLE";
+
+	/**
+	 * {@code bt:condition-wait} -- over {@link #CONDITION_WAIT_INTERNAL}; signals on
+	 * WASM.
+	 */
+	public static final String CONDITION_WAIT = "CONDITION-WAIT";
+
+	/** {@code bt:condition-notify} -- over {@link #CONDITION_NOTIFY_INTERNAL}. */
+	public static final String CONDITION_NOTIFY = "CONDITION-NOTIFY";
+
+	/** {@code bt:condition-broadcast} -- over {@link #CONDITION_NOTIFY_INTERNAL}. */
+	public static final String CONDITION_BROADCAST = "CONDITION-BROADCAST";
+
+	/**
+	 * {@code bt:semaphore} -- the shim's counting semaphore type, a lock and a condition
+	 * variable.
+	 */
+	public static final String SEMAPHORE = "SEMAPHORE";
+
+	/** {@code bt:semaphore-p} -- the semaphore structure's predicate. */
+	public static final String SEMAPHORE_P = "SEMAPHORE-P";
+
+	/** {@code bt:make-semaphore}. */
+	public static final String MAKE_SEMAPHORE = "MAKE-SEMAPHORE";
+
+	/** {@code bt:signal-semaphore}. */
+	public static final String SIGNAL_SEMAPHORE = "SIGNAL-SEMAPHORE";
+
+	/** {@code bt:wait-on-semaphore}. */
+	public static final String WAIT_ON_SEMAPHORE = "WAIT-ON-SEMAPHORE";
+
+	/** {@code bt:thread} -- the type of a thread handle. */
+	public static final String THREAD = "THREAD";
+
+	/** {@code bt:thread-name} -- over {@link #THREAD_NAME_INTERNAL}. */
+	public static final String THREAD_NAME = "THREAD-NAME";
+
+	/** {@code bt:thread-yield}. */
+	public static final String THREAD_YIELD = "THREAD-YIELD";
+
+	/**
+	 * {@code bt:all-threads} -- the main thread and the live threads the shim spawned.
+	 */
+	public static final String ALL_THREADS = "ALL-THREADS";
+
+	/**
+	 * {@code bt:interrupt-thread} -- signals: no backend can run code inside another
+	 * thread.
+	 */
+	public static final String INTERRUPT_THREAD = "INTERRUPT-THREAD";
+
+	/** {@code bt:start-multiprocessing} -- a no-op. */
+	public static final String START_MULTIPROCESSING = "START-MULTIPROCESSING";
+
+	/** {@code bt:with-timeout} -- signals: no backend can interrupt a running body. */
+	public static final String WITH_TIMEOUT = "WITH-TIMEOUT";
+
+	/** {@code bt:timeout} -- the condition {@link #WITH_TIMEOUT} names. */
+	public static final String TIMEOUT = "TIMEOUT";
+
+	/**
+	 * {@code bt:*standard-io-bindings*} -- an {@code :initial-bindings} alist of the
+	 * standard I/O variables.
+	 */
+	public static final String STANDARD_IO_BINDINGS = "*STANDARD-IO-BINDINGS*";
 
 	/**
 	 * The {@code bt2} shim package name: the modern (v2) bordeaux-threads API namespace,

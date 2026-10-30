@@ -15,4 +15,19 @@
 (defsystem "meta-demo/tests"
   :depends-on ("meta-demo")
   :components ((:file "tests"))
-  :perform (test-op (o c) (run-demo-tests (component-name c))))
+  :perform (test-op (o c) (run-demo-tests (component-name c) (typep o 'asdf:test-op))))
+
+;; The operation protocol: meta-demo/hooks adds asdf:perform methods from its
+;; own source (asdf-flv's :around shape plus :before/:after loggers), and the
+;; components of the systems loaded after it -- one of them loading a third
+;; system from inside its own file -- go through them.
+(defsystem "meta-demo/hooks"
+  :components ((:file "hooks")))
+
+(defsystem "meta-demo/perform"
+  :depends-on ("meta-demo/hooks")
+  :serial t
+  :components ((:file "a") (:file "b")))
+
+(defsystem "meta-demo/nested"
+  :components ((:file "c")))

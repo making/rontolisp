@@ -8,7 +8,9 @@ on the compile path, `LispEvaluator` on the interpreter. One type owns "source t
 `usesReadEvalMarkers`), and one method picks the language (`forFile`: the file's
 extension, with the `--source-language` CLI override winning for the entry source).
 `read` is `readUntilError` plus a throw: the forms before the first read error and that
-error, which the interpreter's `load` evaluates and then signals (`.kb/read-load-streams.md`).
+error. The interpreter's `load` and its entry file read Common Lisp form at a time instead
+(`readForms`), each form with the readtable the forms before it left
+(`.kb/readtables.md`, `.kb/read-load-streams.md`).
 
 The pick is PER FILE: a `(load ...)`ed file is read in the language ITS extension
 names, so one program may mix languages file by file (`LoadInliner.spliceFile` on the

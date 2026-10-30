@@ -163,7 +163,8 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   `(:version NAME "1.2.3")` も書けます (素の依存として解決されます。バージョン制約は
   検査されません — ここでは `:version` オプションは無視されるメタデータなので、
   比較する相手がありません)。トップレベルの `defmethod` は許容され無視されます
-  (それを実行する `operate` 機構はありません)。ただし
+  (`.asd` はデータであり実行されません。ライブラリが自身のソースで定義した
+  `asdf:perform` メソッドは実行されます。後述)。ただし
   `(defmethod source-file-type ((c CLASS) (s module)) "ext")` だけは例外で、
   ファイル内のどこに書かれていてもそのクラスのファイル拡張子を設定します。
   トップレベルの `defclass` は**コンポーネントクラス**を宣言します: 各スーパークラスは
@@ -210,12 +211,11 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   コンポーネントには `:if-feature expr` を付けられます。フィーチャー式が成立しない
   場合、そのコンポーネントのファイルは除外されますが (ライブラリが CLOS 専用
   ファイルを `(:or :sbcl ...)` の後ろにゲートする方法)、依存順序内の位置は
-  維持されます。test-op 配線用のオプションは機構を持つ唯一の op です:
+  維持されます。test-op 配線用のオプションは記録されます:
   `:in-order-to ((test-op (test-op ...)))` と `:perform (test-op (o c) ...)` は
-  記録され、[`asdf:test-system`](../reference/functions/asdf-test-system.md) が
-  駆動します (それ以外の operation、修飾子つきの `test-op :after` メソッド、本体中の
-  `#.` は従来どおり許容されて無視されます — 汎用の `operate` 機構は依然として
-  ありません)。`:version` の値は ASDF の
+  [`asdf:test-system`](../reference/functions/asdf-test-system.md) が駆動します
+  (ほかの operation についての `:perform`、修飾子つきの `test-op :after` メソッド、
+  本体中の `#.` は許容されて無視されます)。`:version` の値は ASDF の
   `(:read-file-form ...)` 間接参照を含む任意のリテラルフォームで構いません
   (検査されません — 記録されるのは素の文字列だけです)。それ以外
   (`:around-compile` など) は句を名指しするエラーです。
@@ -264,12 +264,28 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   が登録済みの全名前を列挙します。`asdf:*user-cache*` は external で `nil` です
   (fasl キャッシュはありません)。これは rove のシステム駆動テストランナーが読む
   コンポーネントモデルです。
+- **operation プロトコルも本物です。** ロードを構成する各動作は、operation の
+  インスタンス (`asdf:prepare-op`・`asdf:compile-op`・`asdf:load-op`・`asdf:test-op`。
+  いずれも `asdf:operation`) とコンポーネントに対する
+  [`asdf:perform`](../reference/functions/asdf-perform.md) の呼び出しです。順序は、
+  システムの `prepare-op`、コンポーネントファイルごとにロード順で
+  `prepare-op`/`compile-op`/`load-op`、最後にシステムの `compile-op`/`load-op` です。
+  したがって、ライブラリが `perform` に定義したメソッドは、すべてのバックエンドで
+  コンポーネントのロードのたびにその周りで実行されます。fiveam のファイルローカルな
+  `*suite*` は、asdf-flv の `:around` メソッドによるものです。
+  [`asdf:operate`](../reference/functions/asdf-operate.md) は `load-op`
+  (`load-system`) か `test-op` (`test-system`) を perform します。
+  `asdf:make-operation`、`asdf:input-files`、`asdf:output-files`、
+  `asdf:source-file-type` は、ライブラリが定義するメソッドのために存在します。
+  `asdf/interface` と本物の ASDF の内部パッケージ (`asdf/component`、`asdf/action`
+  など) は、これらと同じシンボルを指します。
 - **`asdf:test-system` は記録された test-op 配線を実行します。**
   [`asdf:test-system`](../reference/functions/asdf-test-system.md) はシステムを
-  ロードし、`:in-order-to` の test-op 連鎖をたどり、記録された各
-  `:perform (test-op (o c) ...)` 本体を component にシステムメタオブジェクトを束縛して
-  実行します。コンパイルパスではリテラルなトップレベルの呼び出しがテストシステムも
-  スプライスします。
+  ロードし、`:in-order-to` の test-op 連鎖をたどり、各システムに `test-op` を
+  perform します。そのデフォルトメソッドが、記録された `:perform (test-op (o c) ...)`
+  本体を、operation に `asdf:test-op` のインスタンス、component にシステム
+  メタオブジェクトを束縛して実行します。コンパイルパスではリテラルなトップレベルの
+  呼び出しがテストシステムもスプライスします。
 - **コンパイル時にシステムはツリーシェイキングされます。** ロードしたシステムが定義していても
   プログラムから到達しない関数・変数・定数は — クォートされたシンボルや文字列リテラル全体も
   含めてソース中の名前を辿った上で — `.class`/`.wasm` に含まれません。クラス・総称関数・
@@ -314,7 +330,7 @@ Quicklisp ライブラリの中には、rontolisp 側を知り得ない実装ご
 | `flexi-streams` | `flexi-stream` ラッパクラス — ラップしたオクテットストリームに UTF-8 の文字入出力を与える Gray ストリーム (`make-flexi-stream`、`flexi-stream-stream`、`:external-format`、`:bound`) — に加え、インメモリ・オクテットストリームの対: `vector-stream` クラス上の `make-in-memory-input-stream` と、`make-in-memory-output-stream` / `get-output-stream-sequence` (upstream と同じくストリームをリセットします)。external format は UTF-8 のみで、ラッパへの `close` はラップ先のストリームを閉じません。[Gray Streams](gray-streams.md) を参照 |
 | `babel` | babel の 2 つの層それぞれにおける UTF-8 コーデック。日常的に使う層: `babel:string-to-octets`/`octets-to-string` (`:start`/`:end`/`:errorp` 付き)、`babel:string-size-in-octets` (`:max` も)、`babel-encodings:*default-character-encoding*` (`:utf-8`)、`babel:list-character-encodings`。その下のマッピング層は、オクテット列全体を一度に変換できずインクリメンタルにデコードするライブラリのためのものです: `babel-encodings:get-character-encoding`、`enc-max-units-per-char`、`babel:*string-vector-mappings*` に対する `lookup-mapping`、そこから得られる `code-point-counter` / `octet-counter` / `decoder` / `encoder`、そして `babel:unicode-char` 型。不正な入力は babel 自身のコンディションをシグナルし (`babel:character-decoding-error` とその葉である `end-of-input-in-character`、`character-out-of-range`、`invalid-utf8-starter-byte`、`invalid-utf8-continuation-byte`、`overlong-utf8-sequence`。符号化側は `babel:character-encoding-error`)、`babel-encodings:*suppress-character-coding-errors*` (すべての `:errorp` のデフォルト値の由来) が真ならシグナルの代わりに代替文字を返します。ここではエンコーディングもマッピングもエンコーディング名そのものです: 本物の babel は 20,000 行のテーブルから 40 種類以上のコードページを生成しますが、rontolisp の文字モデルは 1 つだけ (文字は Unicode コードポイントそのもので、外部表現は UTF-8) なので、シムはそのコーデックだけを実装し、`:latin-1`/`:us-ascii` は表現できるオクテットの範囲でコードポイント同一視として扱い、**それ以外の `:encoding` はシグナルします** — 誤った符号化のバイト列を黙って返すよりも |
 | `float-features` | IEEE 754 ビットプリミティブ上の `single-float-bits`/`bits-single-float` と double 版 (インタープリタ + JVM。WASM の数値モデルは 64 ビットのビットパターンを保持できない) |
-| `bordeaux-threads` (ニックネーム `bt` と `bt2`) | 1 つのシムが両方の API 名前空間を提供します。ロック関連のサブセット — `make-lock`、`acquire-lock`、`release-lock`、`with-lock-held`、`*supports-threads-p*` — は [`rontolisp:make-mutex`](../reference/functions/rontolisp-make-mutex.md) などの上に、スレッド生成 — `bt2:make-thread` (`:initial-bindings` 付き)、`join-thread`、`threadp`、`thread-alive-p`、`destroy-thread` — は [`rontolisp:make-thread`](../reference/functions/rontolisp-make-thread.md) の上に実装されており、インタプリタと JVM では本物の仮想スレッドが生成されます。シングルスレッドの WASM バックエンドではスレッド生成の入口は呼び出し時にエラーを送出し、`bt:*supports-threads-p*` は `nil` です。`make-lock` は再入可能なロックを返し (上流のものは再入不可) — したがって `make-recursive-lock` と `with-recursive-lock-held` は同じオブジェクト・同じ展開になります — `acquire-lock` の `:wait-p` は無視されます — 獲得は常にブロックします。`:initial-bindings` の値フォームは quote フォームか自己評価値に限られます (それ以外は新スレッドの動的環境が必要になるためエラーを送出します) |
+| `bordeaux-threads` (ニックネーム `bt` と `bt2`) | bordeaux-threads 0.9 の v1 API と、同じ意味の `bt2` の名前。ロック — `make-lock`、`make-recursive-lock`、`acquire-lock`、`release-lock`、`with-lock-held`、それぞれの recursive 版、`lock-p` — は [`rontolisp:make-mutex`](../reference/functions/rontolisp-make-mutex.md) などの上に実装されています。ロックは `bt:lock` 型の構造体なので、メソッドを特化できます。条件変数 (`make-condition-variable`、`:timeout` 付きの `condition-wait`、`condition-notify`、`condition-broadcast`) とセマフォ (`make-semaphore`、`signal-semaphore`、`:timeout` 付きの `wait-on-semaphore`、`semaphore-p`) は本物です。スレッド — `make-thread` (`:name` と `:initial-bindings` 付き)、`join-thread`、`threadp`、`thread-alive-p`、`destroy-thread`、`current-thread`、`thread-name`、`all-threads`、`thread-yield` — は [`rontolisp:make-thread`](../reference/functions/rontolisp-make-thread.md) の上に実装されており、インタプリタと JVM では本物の仮想スレッドが生成されます。シングルスレッドの WASM バックエンドではスレッドの入口と `condition-wait` は呼び出し時にエラーを送出し、`condition-notify` は誰も起こさず、`bt:*supports-threads-p*` は `nil` です。上流との違い: `make-lock` は再入可能なロックを返します (したがって `make-recursive-lock` も同じ型を作ります)。`acquire-lock` の `:wait-p` は無視され、獲得は常にブロックします。`:initial-bindings` の値フォームは quote フォームか自己評価値に限られます (それ以外は新スレッドの動的環境が必要になるためエラーを送出します)。`all-threads` はメインスレッドと `make-thread` が生成した生存中のスレッドを返します。`interrupt-thread` と `with-timeout` は、それらを持たない処理系での上流と同じく、全バックエンドでエラーを送出します |
 | `uiop` | ASDF の移植性レイヤ。15 個のサブパッケージと 429 個のエクスポートとして登録されています。実装済みのものは **[uiop パッケージ](../reference/uiop.md)** を参照してください。これ以外のエクスポートは解決はされ、操作名とともに `uiop:not-implemented-error` をシグナルするので、名前を挙げているだけのライブラリも読み込めます |
 | `swank` | `swank:create-server` と `swank:stop-server` だけを持ちます。インタプリタでは、`rontolisp --swank` と同じ [SWANK サーバ](../getting-started/swank.md#from-a-running-program)をプログラム自身のイメージ上で起動・停止します。コンパイルしたプログラムでは `create-server` はエラーを送出し、`stop-server` は `nil` を返します。本物の swank は SLIME のサーバ側であり、その `.asd` はデータとしての defsystem フロントエンドが読めないプログラムです -- シムがないと `(ql:quickload "clack")` は SLIME の tarball を取得してそこで失敗します |
 | `mgl-pax-bootstrap` | [mgl-pax](https://github.com/melisgl/mgl-pax) でドキュメント化されたライブラリをロードできるようにする、`mgl-pax` パッケージ (ニックネーム `pax`) のスタブです (uuid の依存である trivial-utf-8 がハード依存しています。本物のシステムの `.asd` は defsystem-as-data のサブセット外のコンパイルフックである `:around-compile` を宣言しています)。`pax:define-package` は `defpackage` として働き、`pax:defsection` はセクション名を `nil` の変数として定義し、**さらにセクションの `(シンボル ロケーティブ)` エントリを export します** — mgl-pax のドキュメント化されたデフォルトであり、この種のライブラリが公開 API を export する方法です。PAX-World 登録ヘルパーは `nil` を返す何もしない関数です。ドキュメントは生成されません |

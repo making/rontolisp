@@ -185,7 +185,9 @@ public final class PackageRegistry {
 			LispNames.MAKE_PATHNAME, LispNames.MERGE_PATHNAMES, LispNames.TRUENAME, LispNames.PATHNAME,
 			LispNames.PARSE_NAMESTRING, LispNames.PATHNAME_NAME, LispNames.PATHNAME_TYPE, LispNames.DELETE_FILE,
 			LispNames.Y_OR_N_P, LispNames.NAMESTRING_CL, LispNames.COPY_READTABLE,
-			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE, LispNames.FIND_PACKAGE,
+			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE, LispNames.GET_DISPATCH_MACRO_CHARACTER,
+			LispNames.MAKE_DISPATCH_MACRO_CHARACTER, LispNames.SET_MACRO_CHARACTER, LispNames.GET_MACRO_CHARACTER,
+			LispNames.SET_SYNTAX_FROM_CHAR, LispNames.READTABLEP, LispNames.READ_DELIMITED_LIST, LispNames.FIND_PACKAGE,
 			LispNames.SYMBOL_PACKAGE, LispNames.PACKAGE_NAME, LispNames.TYPE_OF, LispNames.INVOKE_RESTART,
 			LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING,
 			LispNames.ABORT, LispNames.CONTINUE, LispNames.USE_VALUE, LispNames.STORE_VALUE, LispNames.REMPROP,
@@ -244,8 +246,8 @@ public final class PackageRegistry {
 			// self-describing value carrying its KIND, so `file-stream`,
 			// `string-stream` and `synonym-stream` all have exact tests; the
 			// composite streams are prelude Gray classes, tested by class tag; a
-			// "readtable" is the nil token the non-readtable-driven reader hands
-			// out. See LispMacroExpander.makeTypeTest.
+			// readtable is a value of the fixed LispLayout.READTABLE layout. See
+			// LispMacroExpander.makeTypeTest.
 			"FILE-STREAM", "STRING-STREAM", "SYNONYM-STREAM", "BROADCAST-STREAM", "TWO-WAY-STREAM", "ECHO-STREAM",
 			"CONCATENATED-STREAM", "READTABLE",
 			// Bit-vector types (no longer empty: a bit vector is the
@@ -322,16 +324,21 @@ public final class PackageRegistry {
 			LispNames.RD_DISPATCH, LispNames.RD_SKIP, LispNames.RD_SKIP_LINE, LispNames.RD_BLOCK_COMMENT,
 			LispNames.RD_LIST, LispNames.RD_STRING, LispNames.RD_BARS, LispNames.RD_TOKEN_REST,
 			LispNames.RD_CHAR_LITERAL, LispNames.RD_SHARP, LispNames.RD_GUARD, LispNames.RD_FEATURE,
-			LispNames.RD_FEATUREP, LispNames.RD_WHITESPACE_P, LispNames.RD_TERMINATING_P,
-			LispNames.PPRINT_DISPATCH_DEFAULT, LispNames.OBJ_NEW, LispNames.OBJ_REF, LispNames.OBJ_SET,
-			LispNames.OBJ_IS, LispNames.OBJ_TAG, LispNames.OBJ_P, LispNames.OBJ_SLOTS, LispNames.RUN_HANDLERS_INTERNAL,
-			LispNames.HB_GUARD_INTERNAL, LispNames.HC_MATCH_INTERNAL, LispNames.PROGRAM_ERROR_INTERNAL,
-			LispNames.PARSE_ERROR_INTERNAL, LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL,
-			LispNames.ARITY_MISSING_MESSAGE_INTERNAL, LispNames.FILE_ERROR_INTERNAL, LispNames.PACKAGE_ERROR_INTERNAL,
-			LispNames.SYMBOL_IN_PACKAGE_INTERNAL, LispNames.FIND_PACKAGE_INTERNAL, LispNames.OPEN_OR_NIL_INTERNAL,
-			LispNames.HANDLER_CLUSTERS_VAR, LispNames.RESTART_CLUSTERS_VAR, LispNames.RESTART_RECORD_TAG,
-			LispNames.LIST_DIRECTORY, LispNames.DIR_NAMESTRING, LispNames.WILD_MATCH, LispNames.PATHNAME_TYPED_P,
-			LispNames.SLEEP_MS, LispNames.MAKE_DIRECTORIES, LispNames.PATHNAME_SPLIT, LispNames.MAKE_ARRAY_ET_INTERNAL,
+			LispNames.RD_FEATUREP, LispNames.RD_WHITESPACE_P, LispNames.RD_TERMINATING_P, LispNames.RT_MAKE_INTERNAL,
+			LispNames.RT_ENTRY_INTERNAL, LispNames.RT_STD_ENTRY_INTERNAL, LispNames.RT_STD_FN_INTERNAL,
+			LispNames.RT_STD_SUBS_INTERNAL, LispNames.RT_STD_OF_INTERNAL, LispNames.RT_STD_SUB_OF_INTERNAL,
+			LispNames.RT_CALL_STANDARD_INTERNAL, LispNames.RT_DISPATCHER_INTERNAL, LispNames.RT_OWN_ENTRY_INTERNAL,
+			LispNames.RT_COPY_ENTRY_INTERNAL, LispNames.RT_DESIGNATOR_INTERNAL, LispNames.RT_STANDARD_INTERNAL,
+			LispNames.READTABLE_MACRO_ENTRIES_INTERNAL, LispNames.PPRINT_DISPATCH_DEFAULT, LispNames.OBJ_NEW,
+			LispNames.OBJ_REF, LispNames.OBJ_SET, LispNames.OBJ_IS, LispNames.OBJ_TAG, LispNames.OBJ_P,
+			LispNames.OBJ_SLOTS, LispNames.RUN_HANDLERS_INTERNAL, LispNames.HB_GUARD_INTERNAL,
+			LispNames.HC_MATCH_INTERNAL, LispNames.PROGRAM_ERROR_INTERNAL, LispNames.PARSE_ERROR_INTERNAL,
+			LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL, LispNames.ARITY_MISSING_MESSAGE_INTERNAL,
+			LispNames.FILE_ERROR_INTERNAL, LispNames.PACKAGE_ERROR_INTERNAL, LispNames.SYMBOL_IN_PACKAGE_INTERNAL,
+			LispNames.FIND_PACKAGE_INTERNAL, LispNames.OPEN_OR_NIL_INTERNAL, LispNames.HANDLER_CLUSTERS_VAR,
+			LispNames.RESTART_CLUSTERS_VAR, LispNames.RESTART_RECORD_TAG, LispNames.LIST_DIRECTORY,
+			LispNames.DIR_NAMESTRING, LispNames.WILD_MATCH, LispNames.PATHNAME_TYPED_P, LispNames.SLEEP_MS,
+			LispNames.MAKE_DIRECTORIES, LispNames.PATHNAME_SPLIT, LispNames.MAKE_ARRAY_ET_INTERNAL,
 			LispNames.MAKE_ARRAY_ET_FP_INTERNAL, LispNames.MAKE_BROADCAST_STREAM_INTERNAL,
 			LispNames.WRITE_TO_STRING_KEYED_INTERNAL, LispNames.BROADCAST_STREAM_CLASS,
 			LispNames.BROADCAST_STREAM_COMPONENTS, LispNames.TWO_WAY_STREAM_CLASS,
@@ -406,19 +413,18 @@ public final class PackageRegistry {
 			"DEFINE-METHOD-COMBINATION", "DESCRIBE", "DESCRIBE-OBJECT", "DISASSEMBLE", "DRIBBLE", "DYNAMIC-EXTENT",
 			"ED", "ENSURE-GENERIC-FUNCTION", "EXTENDED-CHAR", "FILE-AUTHOR", "FIND-METHOD", "FLOAT-PRECISION",
 			"FLOATING-POINT-INEXACT", "FLOATING-POINT-INVALID-OPERATION", "FLOATING-POINT-OVERFLOW",
-			"FLOATING-POINT-UNDERFLOW", "FORMATTER", "FTYPE", "FUNCTION-KEYWORDS", "GET-DISPATCH-MACRO-CHARACTER",
-			"GET-MACRO-CHARACTER", "HASH-TABLE", "IGNORABLE", "IGNORE", "INLINE", "INSPECT", "INVALID-METHOD-ERROR",
-			"INVOKE-RESTART-INTERACTIVELY", "KEYWORD", "LOAD-LOGICAL-PATHNAME-TRANSLATIONS",
-			"LOGICAL-PATHNAME-TRANSLATIONS", "LOOP-FINISH", "MAKE-DISPATCH-MACRO-CHARACTER", "MAKE-INSTANCES-OBSOLETE",
-			"MAKE-METHOD", "METHOD", "METHOD-COMBINATION", "METHOD-COMBINATION-ERROR", "METHOD-QUALIFIERS", "NAME-CHAR",
-			"NEXT-METHOD-P", "NIL", "NO-APPLICABLE-METHOD", "NO-NEXT-METHOD", "NOTINLINE", "OPTIMIZE",
-			"PATHNAME-MATCH-P", "PPRINT-EXIT-IF-LIST-EXHAUSTED", "PPRINT-FILL", "PPRINT-LINEAR", "PPRINT-POP",
-			"PPRINT-TABULAR", "PRINT-NOT-READABLE", "PRINT-NOT-READABLE-OBJECT", "RANDOM-STATE", "RANDOM-STATE-P",
-			"READ-DELIMITED-LIST", "READ-PRESERVING-WHITESPACE", "READTABLEP", "RESTART", "ROOM", "SAFETY",
-			"SET-MACRO-CHARACTER", "SET-SYNTAX-FROM-CHAR", "SIMPLE-BASE-STRING", "SPACE", "SPECIAL", "SPEED",
-			"STANDARD", "STANDARD-METHOD", "STEP", "STORAGE-CONDITION", "STRUCTURE-OBJECT", "SYMBOL", "T", "TRACE",
-			"UNTRACE", "UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "UPDATE-INSTANCE-FOR-REDEFINED-CLASS",
-			"UPGRADED-ARRAY-ELEMENT-TYPE", "VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
+			"FLOATING-POINT-UNDERFLOW", "FORMATTER", "FTYPE", "FUNCTION-KEYWORDS", "HASH-TABLE", "IGNORABLE", "IGNORE",
+			"INLINE", "INSPECT", "INVALID-METHOD-ERROR", "INVOKE-RESTART-INTERACTIVELY", "KEYWORD",
+			"LOAD-LOGICAL-PATHNAME-TRANSLATIONS", "LOGICAL-PATHNAME-TRANSLATIONS", "LOOP-FINISH",
+			"MAKE-INSTANCES-OBSOLETE", "MAKE-METHOD", "METHOD", "METHOD-COMBINATION", "METHOD-COMBINATION-ERROR",
+			"METHOD-QUALIFIERS", "NAME-CHAR", "NEXT-METHOD-P", "NIL", "NO-APPLICABLE-METHOD", "NO-NEXT-METHOD",
+			"NOTINLINE", "OPTIMIZE", "PATHNAME-MATCH-P", "PPRINT-EXIT-IF-LIST-EXHAUSTED", "PPRINT-FILL",
+			"PPRINT-LINEAR", "PPRINT-POP", "PPRINT-TABULAR", "PRINT-NOT-READABLE", "PRINT-NOT-READABLE-OBJECT",
+			"RANDOM-STATE", "RANDOM-STATE-P", "READ-PRESERVING-WHITESPACE", "RESTART", "ROOM", "SAFETY",
+			"SIMPLE-BASE-STRING", "SPACE", "SPECIAL", "SPEED", "STANDARD", "STANDARD-METHOD", "STEP",
+			"STORAGE-CONDITION", "STRUCTURE-OBJECT", "SYMBOL", "T", "TRACE", "UNTRACE",
+			"UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "UPDATE-INSTANCE-FOR-REDEFINED-CLASS", "UPGRADED-ARRAY-ELEMENT-TYPE",
+			"VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
 
 	/**
 	 * The 28 car/cdr compositions ({@code caar} .. {@code cddddr}). Resolution recognizes
@@ -817,7 +823,54 @@ public final class PackageRegistry {
 			Map.entry("FLOAT-FEATURES", LispNames.FLOAT_FEATURES_PKG), Map.entry("BT", LispNames.BORDEAUX_THREADS_PKG),
 			Map.entry("BORDEAUX-THREADS-2", LispNames.BT2_PKG), Map.entry("CLTL2", LispNames.TRIVIAL_CLTL2_PKG),
 			Map.entry("PAX", LispNames.MGL_PAX_PKG), Map.entry("TG", LispNames.TRIVIAL_GARBAGE_PKG),
-			Map.entry("FLEX", LispNames.FLEXI_STREAMS_PKG));
+			Map.entry("FLEX", LispNames.FLEXI_STREAMS_PKG),
+			// Real ASDF's own names for the asdf package: it IS asdf/interface, with
+			// asdf and asdf-utilities as nicknames (lass defines a component class in
+			// asdf/interface:: so ASDF finds it by its keyword).
+			Map.entry("ASDF/INTERFACE", LispNames.ASDF_PKG), Map.entry("ASDF-UTILITIES", LispNames.ASDF_PKG),
+			Map.entry("ASDF/DEFSYSTEM", "ASDF/PARSE-DEFSYSTEM"));
+
+	/**
+	 * Real ASDF's internal packages (ASDF 3.3.1) with the asdf members each one is the
+	 * home of -- only the members the {@code asdf} package here exports. Each becomes a
+	 * package whose members are import redirects into {@code asdf}, so
+	 * {@code asdf/component:component-name} is {@code asdf:component-name}.
+	 */
+	private static final Map<String, List<String>> ASDF_SUB_PACKAGES = asdfSubPackages();
+
+	private static Map<String, List<String>> asdfSubPackages() {
+		Map<String, List<String>> map = new java.util.LinkedHashMap<>();
+		map.put("ASDF/UPGRADE", List.of());
+		map.put("ASDF/SESSION", List.of("RETRY"));
+		map.put("ASDF/COMPONENT",
+				List.of(LispNames.COMPONENT, LispNames.CHILD_COMPONENT, LispNames.PARENT_COMPONENT, LispNames.MODULE,
+						LispNames.SOURCE_FILE, LispNames.STATIC_FILE, LispNames.COMPONENT_NAME,
+						LispNames.COMPONENT_VERSION, LispNames.COMPONENT_CHILDREN,
+						LispNames.COMPONENT_SIDEWAY_DEPENDENCIES, LispNames.COMPONENT_PARENT,
+						LispNames.COMPONENT_SYSTEM, LispNames.COMPONENT_PATHNAME, LispNames.SOURCE_FILE_TYPE));
+		map.put("ASDF/OPERATION", List.of(LispNames.OPERATION, LispNames.MAKE_OPERATION));
+		map.put("ASDF/SYSTEM", List.of("SYSTEM", LispNames.FIND_SYSTEM, LispNames.SYSTEM_SOURCE_DIRECTORY,
+				LispNames.SYSTEM_RELATIVE_PATHNAME));
+		map.put("ASDF/SYSTEM-REGISTRY", List.of(LispNames.REGISTERED_SYSTEMS));
+		map.put("ASDF/ACTION", List.of(LispNames.PERFORM, LispNames.INPUT_FILES, LispNames.OUTPUT_FILES));
+		map.put("ASDF/LISP-ACTION", List.of(LispNames.CL_SOURCE_FILE, LispNames.PREPARE_OP, LispNames.COMPILE_OP,
+				LispNames.LOAD_OP, LispNames.TEST_OP));
+		map.put("ASDF/FIND-COMPONENT", List.of("MISSING-COMPONENT"));
+		map.put("ASDF/FORCING", List.of());
+		map.put("ASDF/PLAN", List.of());
+		map.put("ASDF/OPERATE", List.of(LispNames.OPERATE, LispNames.LOAD_SYSTEM, LispNames.TEST_SYSTEM));
+		map.put("ASDF/FIND-SYSTEM", List.of());
+		map.put("ASDF/PARSE-DEFSYSTEM", List.of(LispNames.DEFSYSTEM));
+		map.put("ASDF/BUNDLE", List.of());
+		map.put("ASDF/CONCATENATE-SOURCE", List.of());
+		map.put("ASDF/PACKAGE-INFERRED-SYSTEM", List.of(LispNames.PACKAGE_INFERRED_SYSTEM));
+		map.put("ASDF/OUTPUT-TRANSLATIONS", List.of());
+		map.put("ASDF/SOURCE-REGISTRY", List.of());
+		map.put("ASDF/BACKWARD-INTERNALS", List.of());
+		map.put("ASDF/BACKWARD-INTERFACE", List.of());
+		map.put("ASDF/FOOTER", List.of());
+		return java.util.Collections.unmodifiableMap(map);
+	}
 
 	/**
 	 * Package nicknames, mapping each nickname to the canonical package name. Seeded with
@@ -885,7 +938,7 @@ public final class PackageRegistry {
 					LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
 					LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
 					LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG, "KEYWORD"),
-			Set.copyOf(UiopExports.subPackages()));
+			union(Set.copyOf(UiopExports.subPackages()), ASDF_SUB_PACKAGES.keySet()));
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -1000,6 +1053,12 @@ public final class PackageRegistry {
 		rontolispSymbols.add(LispNames.HTTP_SERVER_JOIN);
 		rontolispSymbols.add(LispNames.HTTP_SERVER_STOP);
 		rontolispSymbols.add(LispNames.HTTP_SERVER_PORT);
+		// Internal: the thread name and condition variables behind the bordeaux-threads
+		// shim, spelled rontolisp::%... by its call sites.
+		rontolispSymbols.add(LispNames.THREAD_NAME_INTERNAL);
+		rontolispSymbols.add(LispNames.CONDITION_VARIABLE_NEW_INTERNAL);
+		rontolispSymbols.add(LispNames.CONDITION_WAIT_INTERNAL);
+		rontolispSymbols.add(LispNames.CONDITION_NOTIFY_INTERNAL);
 		// Internal: the interpreter's SWANK server hook behind the swank shim's
 		// create-server / stop-server, spelled rontolisp::%swank-* by its call sites.
 		rontolispSymbols.add(LispNames.SWANK_LISTEN);
@@ -1112,13 +1171,26 @@ public final class PackageRegistry {
 						// load-system call -- dead code here, since a missing system is
 						// a hard error, never a signaled missing-component.
 						"MISSING-COMPONENT", "RETRY",
-						// operate (and the load-op it names) is the general CLOS entry
-						// point real ASDF's load-system is defined in terms of --
-						// external and resolve-only here too, for the same reason:
-						// cffi's define-foreign-library calls (asdf:operate
-						// 'asdf:load-op 'cffi-libffi) inside a restart body that never
-						// runs here, and the READ must not fail on an unknown external.
-						"OPERATE", "LOAD-OP"))));
+						// The operation protocol (asdf.lisp): the operation classes,
+						// the perform generic load-system drives every component load
+						// through, operate, and the generics a library extends
+						// (asdf-flv's perform :around, lass's output-files).
+						LispNames.OPERATE, LispNames.OPERATION, LispNames.PREPARE_OP, LispNames.COMPILE_OP,
+						LispNames.LOAD_OP, LispNames.TEST_OP, LispNames.PERFORM, LispNames.MAKE_OPERATION,
+						LispNames.INPUT_FILES, LispNames.OUTPUT_FILES, LispNames.SOURCE_FILE_TYPE))));
+		// Real ASDF's internal packages, each exporting the members it is the home of
+		// (measured against ASDF 3.3.1) as import redirects into asdf, so
+		// asdf/component:component-name IS asdf:component-name. Only the members asdf
+		// above exports are listed; asdf/interface, the package real ASDF names asdf
+		// itself, is a nickname (BUILTIN_NICKNAMES).
+		ASDF_SUB_PACKAGES.forEach((subPackage, members) -> {
+			Map<String, String> redirects = new HashMap<>();
+			for (String member : members) {
+				redirects.put(member, LispNames.ASDF_PKG);
+			}
+			define(new LispPackage(subPackage, List.of(), new HashSet<>(members), Set.copyOf(members),
+					Map.copyOf(redirects)));
+		});
 		// A limited, API-compatible subset of Quicklisp: ql:quickload downloads a system
 		// (and its dependencies) from the real Quicklisp distribution into a local cache
 		// and then defers to the asdf subset (see eval.QuicklispClient). Its canonical
@@ -1237,20 +1309,34 @@ public final class PackageRegistry {
 				LispNames.BT2_PKG, LispNames.THREADP, LispNames.BT2_PKG, LispNames.THREAD_ALIVE_P, LispNames.BT2_PKG,
 				LispNames.DESTROY_THREAD, LispNames.BT2_PKG, LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.BT2_PKG,
 				LispNames.CURRENT_THREAD, LispNames.BT2_PKG);
-		Set<String> btV1Externals = new HashSet<>(
-				Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD,
-						LispNames.SUPPORTS_THREADS_P, LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
-						LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.DEFAULT_SPECIAL_BINDINGS,
-						LispNames.CURRENT_THREAD, LispNames.MAKE_RECURSIVE_LOCK, LispNames.WITH_RECURSIVE_LOCK_HELD));
+		// The rest of the v1 API (bordeaux-threads 0.9's export list), home in the v1
+		// package; the members bt2 exports under the same name are imported there.
+		List<String> btV1Members = List.of(LispNames.LOCK, LispNames.RECURSIVE_LOCK, LispNames.RECURSIVE_LOCK_P,
+				LispNames.MAKE_RECURSIVE_LOCK, LispNames.ACQUIRE_RECURSIVE_LOCK, LispNames.RELEASE_RECURSIVE_LOCK,
+				LispNames.WITH_RECURSIVE_LOCK_HELD, LispNames.MAKE_CONDITION_VARIABLE, LispNames.CONDITION_WAIT,
+				LispNames.CONDITION_NOTIFY, LispNames.CONDITION_BROADCAST, LispNames.SEMAPHORE,
+				LispNames.MAKE_SEMAPHORE, LispNames.SIGNAL_SEMAPHORE, LispNames.WAIT_ON_SEMAPHORE, LispNames.THREAD,
+				LispNames.THREAD_NAME, LispNames.THREAD_YIELD, LispNames.ALL_THREADS, LispNames.INTERRUPT_THREAD,
+				LispNames.WITH_TIMEOUT, LispNames.TIMEOUT, LispNames.STANDARD_IO_BINDINGS);
+		Set<String> btV1Externals = new HashSet<>(Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK,
+				LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD, LispNames.SUPPORTS_THREADS_P, LispNames.MAKE_THREAD,
+				LispNames.JOIN_THREAD, LispNames.THREADP, LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD,
+				LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.CURRENT_THREAD, LispNames.LOCK_P, LispNames.SEMAPHORE_P,
+				LispNames.START_MULTIPROCESSING));
+		btV1Externals.addAll(btV1Members);
 		define(new LispPackage(LispNames.BORDEAUX_THREADS_PKG, List.of(), btV1Externals, Set.copyOf(btV1Externals),
 				btThreadImports));
-		Map<String, String> bt2LockImports = Map.of(LispNames.MAKE_LOCK, LispNames.BORDEAUX_THREADS_PKG,
+		Map<String, String> bt2LockImports = new HashMap<>(Map.of(LispNames.MAKE_LOCK, LispNames.BORDEAUX_THREADS_PKG,
 				LispNames.ACQUIRE_LOCK, LispNames.BORDEAUX_THREADS_PKG, LispNames.RELEASE_LOCK,
-				LispNames.BORDEAUX_THREADS_PKG, LispNames.WITH_LOCK_HELD, LispNames.BORDEAUX_THREADS_PKG);
+				LispNames.BORDEAUX_THREADS_PKG, LispNames.WITH_LOCK_HELD, LispNames.BORDEAUX_THREADS_PKG));
+		for (String member : btV1Members) {
+			bt2LockImports.put(member, LispNames.BORDEAUX_THREADS_PKG);
+		}
 		Set<String> bt2Externals = new HashSet<>(Set.of(LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
 				LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.DEFAULT_SPECIAL_BINDINGS,
 				LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD,
 				LispNames.CURRENT_THREAD));
+		bt2Externals.addAll(btV1Members);
 		Set<String> bt2Symbols = new HashSet<>(bt2Externals);
 		// Internal: the shim's own :initial-bindings value-form resolver, spelled
 		// bt2::resolve-binding-value by its call site. Owned by the package rather than
@@ -1324,8 +1410,10 @@ public final class PackageRegistry {
 		// on the interpreter the shim's create-server starts the command line's server
 		// (cli.SwankServer). clack's .asd hard-depends on it, so without the shim
 		// (ql:quickload "clack") downloads the SLIME tarball and dies on it.
-		define(new LispPackage(LispNames.SWANK_PKG, List.of(),
-				new HashSet<>(Set.of(LispNames.CREATE_SERVER, LispNames.STOP_SERVER))));
+		// *readtable-alist* is SLIME's package-name -> readtable alist, which
+		// named-readtables' in-readtable updates whenever a swank package exists.
+		define(new LispPackage(LispNames.SWANK_PKG, List.of(), new HashSet<>(
+				Set.of(LispNames.CREATE_SERVER, LispNames.STOP_SERVER, LispNames.SWANK_READTABLE_ALIST))));
 		// trivial-cltl2 (nickname cltl2): the shim behind the built-in ASDF system of
 		// the same name (trivial-cltl2.lisp, eval.ShimLibraries). The real library is
 		// a pure re-export of the host's CLtL2 environment API; on rontolisp every
@@ -1342,11 +1430,11 @@ public final class PackageRegistry {
 		// mgl-pax-bootstrap's own .asd declares :around-compile, a compile hook outside
 		// the defsystem-as-data subset; trivial-utf-8 (a uuid dependency) hard-depends on
 		// it and its source calls exactly these members. define-package is consumed by
-		// PackageResolver.resolve like defpackage; section appears only as data inside
-		// defsection bodies (unevaluated, so it needs to resolve but never to be
-		// defined).
+		// PackageResolver.resolve like defpackage; section and macro appear only as data
+		// inside defsection bodies (unevaluated, so they need to resolve but never to be
+		// defined) -- macro is the locative named-readtables' reference section spells.
 		define(new LispPackage(LispNames.MGL_PAX_PKG, List.of(), new HashSet<>(Set.of(LispNames.DEFINE_PACKAGE,
-				"DEFSECTION", "SECTION", "MAKE-GITHUB-SOURCE-URI-FN", "REGISTER-DOC-IN-PAX-WORLD"))));
+				"DEFSECTION", "SECTION", "MACRO", "MAKE-GITHUB-SOURCE-URI-FN", "REGISTER-DOC-IN-PAX-WORLD"))));
 		// trivial-garbage (nickname tg): the no-op GC-finalizer shim behind the
 		// built-in ASDF system of the same name (trivial-garbage.lisp,
 		// eval.ShimLibraries) -- dbd-postgres imports the finalizer pair, and the

@@ -1,18 +1,20 @@
 # Threads (`rontolisp:make-thread` family) and the `bt2` shim package
 
-`rontolisp:make-thread` (fn + optional bindings alist), `join-thread`, `threadp`,
-`thread-alive-p`, `destroy-thread`, `current-thread` — interpreter and JVM only. Driving
+`rontolisp:make-thread` (fn + optional bindings alist + optional name), `join-thread`, `threadp`,
+`thread-alive-p`, `destroy-thread`, `current-thread`, internal `%thread-name` — interpreter and
+JVM only. Driving
 consumers: clack `src/handler.lisp` (`:use-thread t`); Scheme `parallel-execute`
 (`.kb/scheme-frontend.md`).
 **Invariant: a thread handle is OPAQUE** (`.kb/mutexes.md`); only `threadp` and the join
 round-trip are portable.
 
 ## Backends
-- Interpreter: `LispThread` record from `AsyncRuntime.spawnThread` — the ONLY
+- Interpreter: `LispThread` record (thread, result, name) from `AsyncRuntime.spawnThread` — the ONLY
   LispEvaluator-reachable class touching threads, so the browser playground substitutes it
   wholesale (`Target_AsyncRuntime.spawnThread` runs the body synchronously).
-- JVM: `{TMARKER, Thread, FutureTask}` marker-headed `Object[]`; `JvmThreadRuntimeBuilder`'s class
-  `implements Callable`, `_thread_spawn` starts a virtual thread.
+- JVM: `{TMARKER, Thread, FutureTask, name}` marker-headed `Object[]`; `JvmThreadRuntimeBuilder`'s
+  class `implements Callable`, `_thread_spawn` builds the handle on an UNSTARTED virtual thread,
+  stores it in the runner's `_threadHandle`, then starts it.
 - WASM (both): no handle can exist; the shim's `#+rontolisp-wasm` defuns SIGNAL at CALL time —
   never inline, which would turn a compile-time error into a silently sequential program.
   `threadp` answers nil, `bt:*supports-threads-p*` nil (WASM clackup runs `:use-thread nil`), the
@@ -38,7 +40,10 @@ non-function first argument still spawns on both and fails at the join. Pinned b
   through the alist, invisible to `SpecialVarCollector`; `.kb/standard-output-redirect.md`) and
   ALL specials into `boundSpecialVars`, which the thread primitives make thread-scoped (the
   program's specials are never bound shallow, `.kb/dynamic-special-variables.md` "One thread").
-  A non-special name is a clear runtime error, not a silent global write. A closure built inside
+  A name that is one of the program's own plain (non-special) globals is a clear runtime error,
+  not a silent miss; any other name (none of the program's variables, or a CL standard variable
+  it never binds -- `bt:*standard-io-bindings*`'s reader variables) binds nothing, since no
+  compiled read could see it (`_dtl` answers null). A closure built inside
   a binding extent captures no special: run on the new thread it reads that thread's binding,
   else the global.
 - `join-thread` RE-SIGNALS the thread's error so `handler-case` dispatches by condition type. On
@@ -65,8 +70,13 @@ otherwise; a library passing a variable-reference form would need eval-in-the-ne
 `current-thread` is **EQ-stable per thread** — what dbi's per-thread connection cache keys on
 (`cache/thread.lisp`'s `steal-cache-table`). Interpreter `AsyncRuntime.currentThreadHandle()`
 (ThreadLocal-cached, future never completed — self-join blocks forever); JVM `_thread_current`
-caching in `_curThreadTl` (null task slot — self-join NPEs). Works for ANY thread; a spawned
-body's self-handle is its own, NOT the spawner's handle for it.
+caching in `_curThreadTl` (null task slot — self-join NPEs). Works for ANY thread; in a spawned
+body it IS the spawner's handle (spawnThread / `call()` seed the ThreadLocal before the body
+runs), which is how `bt:thread-name` of `(bt:current-thread)` finds the name (log4cl).
+
+`bt:all-threads` is a shim registry: `bt2:make-thread` spawns and registers under one mutex,
+dropping dead entries; the answer is the thread that loaded the system plus the live entries.
+Threads spawned otherwise (a served request, the raw primitive) are absent.
 
 ## Tests
 `ThreadTest`, `JvmThreadTest` (both run `HandleOperandFixture`),

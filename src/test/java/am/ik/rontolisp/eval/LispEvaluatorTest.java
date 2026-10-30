@@ -1070,11 +1070,55 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalReadtableCaseIsConstantUpcase() {
-		// The reader always upcases unescaped names (the standard readtable's :upcase
-		// mode); s-sql's from-sql-name branches on this.
-		assertThat(eval("(readtable-case *readtable*)")).isEqualTo(new LispSymbol(":UPCASE"));
-		assertThat(eval("(readtable-case (copy-readtable))")).isEqualTo(new LispSymbol(":UPCASE"));
+	void theReaderHonorsTheCurrentReadtable(@TempDir Path dir) throws Exception {
+		// The interpreter's reader reads with the readtable current WHEN it reads
+		// (.kb/readtables.md): a dispatch sub-character and a macro character call their
+		// functions over a stream positioned behind them, a function answering no value
+		// is a comment, a standard function under another character reads as its own
+		// character does, and the case converts the token. The API itself is pinned on
+		// all four backends by ci-spec readtable-objects-and-the-reader-macro-api.
+		String readtable = """
+				(defvar *rt* (copy-readtable nil))
+				(set-dispatch-macro-character #\\# #\\? (lambda (s c n) (declare (ignore c)) (list :q n (read s t nil t))) *rt*)
+				(set-macro-character #\\] (get-macro-character #\\)) nil *rt*)
+				(set-macro-character #\\[ (lambda (s c) (declare (ignore c)) (read-delimited-list #\\] s t)) nil *rt*)
+				(set-macro-character #\\! (lambda (s c) (declare (ignore s c)) (values)) nil *rt*)
+				""";
+		assertThat(evalMulti(readtable + """
+				(let ((*readtable* *rt*))
+				  (list (read-from-string "#?foo") (read-from-string "#3?(a b)") (read-from-string "! [1 (2) x]")
+				        (multiple-value-list (read-from-string "#?x  y"))
+				        (with-input-from-string (s "#?a [b c] tail") (list (read s) (read s) (read s)))))
+				""").print()).isEqualTo("((:Q NIL FOO) (:Q 3 (A B)) (1 (2) X) ((:Q NIL X) 4) ((:Q NIL A) (B C) TAIL))");
+		// The standard readtable keeps reading #? as a symbol, and the case modes.
+		assertThat(evalMulti(readtable + """
+				(list (read-from-string "#?foo")
+				      (let ((*readtable* (copy-readtable nil)))
+				        (setf (readtable-case *readtable*) :invert)
+				        (list (read-from-string "foo") (read-from-string "FOO") (read-from-string "Foo")))
+				      (let ((*readtable* (copy-readtable nil)))
+				        (setf (readtable-case *readtable*) :preserve)
+				        (symbol-name (read-from-string "fooBar"))))
+				""").print()).isEqualTo("(#?FOO (FOO |foo| |Foo|) \"fooBar\")");
+		// load reads form at a time: a form that installs the readtable changes how the
+		// rest of the file reads, a reader function runs in source order, a symbol it
+		// reads is the current package's, and the file's readtable dies with the load.
+		Path lib = dir.resolve("rt.lisp");
+		Files.writeString(lib, """
+				(defpackage :rt-demo (:use :cl))
+				(in-package :rt-demo)
+				(setf (get 'tag 'arity) 2)
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (setf *readtable* (copy-readtable nil))
+				  (set-macro-character #\\@ (lambda (s c) (declare (ignore c))
+				                                (let ((name (read s t nil t)))
+				                                  (list 'quote (list name (get name 'arity)))))))
+				(defparameter cl-user::*annotated* @tag)
+				""");
+		assertThat(evalMulti("""
+				(load "%s")
+				(list *annotated* (get-macro-character #\\@))
+				""".formatted(lib.toString().replace("\\", "\\\\"))).print()).isEqualTo("((RT-DEMO::TAG 2) NIL)");
 	}
 
 	@Test
@@ -4582,7 +4626,7 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalLoopRepeatIsAClauseOrderedDriver() {
+	void evalLoopRepeatAndWhileAreClauseOrdered() {
 		// `repeat` terminates at its own position in the clause order, so a clause
 		// written AFTER it does not run one extra time on the terminating pass...
 		assertThat(eval("(let ((s (list 1 2 3 4 5))) (loop repeat 3 for x = (pop s) collect x) s)").print())
@@ -4600,6 +4644,15 @@ class LispEvaluatorTest {
 		assertThat(eval("(loop repeat 3 collect 'x)").print()).isEqualTo("(X X X)");
 		assertThat(eval("(loop repeat 0 collect 'x)")).isSameAs(LispNil.INSTANCE);
 		assertThat(eval("(loop for x in '(1 2) repeat 5 collect x)").print()).isEqualTo("(1 2)");
+		// A `while`/`until` written before a `for` tests before that `for` assigns
+		// (nonconforming per CLHS, but SBCL keeps source order and cl-markup relies on
+		// it).
+		assertThat(eval("(let ((s (list 1 2 3))) (loop while s for x = (pop s) collect x))").print())
+			.isEqualTo("(1 2 3)");
+		assertThat(eval("(let ((s (list 1 2 3)) (n 0)) (loop until (null s) for x = (progn (incf n) (pop s))) n)"))
+			.isEqualTo(new LispInteger(3));
+		assertThat(eval("(let ((s (list 1 2 3))) (loop for x = (pop s) while x collect x))").print())
+			.isEqualTo("(1 2 3)");
 	}
 
 	@Test
@@ -10774,8 +10827,8 @@ class LispEvaluatorTest {
 				      (*readtable* *readtable*)
 				      (*load-pathname* "p")
 				      (*load-truename* "t"))
-				  (list *load-pathname* *load-truename* *readtable*))
-				""").print()).isEqualTo("(\"p\" \"t\" NIL)");
+				  (list *load-pathname* *load-truename* (readtablep *readtable*)))
+				""").print()).isEqualTo("(\"p\" \"t\" T)");
 	}
 
 	@Test
@@ -11184,6 +11237,25 @@ class LispEvaluatorTest {
 		assertThat(loadResult).isEqualTo(LispTrue.INSTANCE);
 		// Definitions from the loaded file are reusable afterwards.
 		assertThat(evaluator.eval(LispReader.readFromString("(square base)"))).isEqualTo(new LispInteger(100));
+		// A load called from a function body evaluates the file's forms as TOP-LEVEL
+		// forms all the same, so a macro they call expands in the file's package rather
+		// than in the macro's own -- every ASDF component is loaded from inside
+		// asdf:perform's load-op method this way (lisp-namespace's define-namespace).
+		Path user = tempDir.resolve("user.lisp");
+		Files.writeString(user, "(defpackage :ld-user (:use :cl))\n(in-package :ld-user)\n(ld-gen:defacc foo)\n");
+		LispVal last = null;
+		for (LispVal form : LispReader.readAllFromString("""
+				(defpackage :ld-gen (:use :cl) (:export #:defacc))
+				(in-package :ld-gen)
+				(defmacro defacc (name) (list 'defun (intern (format nil "GET-~a" name)) () 1))
+				(in-package :cl-user)
+				(defun load-user () (load "%s"))
+				(load-user)
+				(fboundp 'ld-user::get-foo)
+				""".formatted(user.toString().replace("\\", "\\\\")))) {
+			last = evaluator.eval(form);
+		}
+		assertThat(last).isEqualTo(LispTrue.INSTANCE);
 	}
 
 	@Test

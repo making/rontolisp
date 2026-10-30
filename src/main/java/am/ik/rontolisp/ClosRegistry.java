@@ -68,6 +68,9 @@ public final class ClosRegistry {
 		// the value carries the backend handle plus the kind keyword, so streamp can
 		// tell a stream from a file descriptor and file-stream from string-stream.
 		this.layoutsByTag.put(LispLayout.STREAM_TAG, LispLayout.STREAM);
+		// And for the readtable layout: a readtable is a VALUE (LispLayout.READTABLE)
+		// built and read by prelude Lisp on every backend.
+		this.layoutsByTag.put(LispLayout.READTABLE_TAG, LispLayout.READTABLE);
 		// reader-error inherits from BOTH parse-error and stream-error (CLHS 9.1.2):
 		// parse-error provides the slot layout, stream-error joins the ancestor set
 		// (the define-condition multiple-parents rule).

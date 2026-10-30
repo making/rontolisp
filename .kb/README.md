@@ -49,6 +49,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [compiler-macros.md](compiler-macros.md) -- `define-compiler-macro` at call sites + `load-time-value` once per occurrence, `compiler-macro-function`
 - [make-load-form.md](make-load-form.md) -- a literal object is dumped by its own `make-load-form` method
 - [reader-case-upcase.md](reader-case-upcase.md) -- uppercase-canonical reader model, verbatim `intern`/`find-symbol`
+- [readtables.md](readtables.md) -- a readtable is a value on every backend (one prelude definition over `LispLayout.READTABLE`); the interpreter's reader reads with the current one, form at a time (`ReadSyntax`, reader macro calls over a string stream, case); named-readtables' derived iterator; what is not honored yet
 - [reader-features.md](reader-features.md) -- `#+`/`#-`, `*features*` as a runtime variable, `#|...|#`, `#.`, `--feature`
 - [read-time-constants.md](read-time-constants.md) -- `pi`/float-range/fixnum/array limits as bound symbols, not reader substitutions; per-backend values
 - [source-positions.md](source-positions.md) -- `file:line:column` in reader and frontend errors; the cons-identity rule every AST pass honours; `LocatedCons`, the interpreter's runtime positions; the JVM backend's site-numbered line tables
@@ -214,7 +215,8 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## Ecosystem and tooling
 
-- [asdf.md](asdf.md) -- the limited `asdf:defsystem`/`load-system`/`test-system` subset
+- [asdf.md](asdf.md) -- the limited `asdf:defsystem`/`load-system`/`test-system` subset, and
+  the operation protocol (`asdf:perform` around every component load, the compile paths' thunks)
 - [uiop.md](uiop.md) -- uiop as the 15-sub-package bundle upstream is
 - [dists.md](dists.md) -- the download half of `ql:quickload`; `am.ik.artifact`, the fetch-and-cache layer every downloader shares (size + MD5 verification, timeouts, tar.gz/zip, atomic install)
 - [git-fetcher.md](git-fetcher.md) -- `am.ik.artifact.GitFetcher`: a repository at a full sha into the cache through the `git` CLI (why not forge archives), the clone/checkout layout and key, tag checks, the resolver's questions (a revision's commit, a tag, the descendant of two commits), the refusals

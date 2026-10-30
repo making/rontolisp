@@ -1,11 +1,16 @@
 # set-dispatch-macro-character
 
-`(set-dispatch-macro-character disp-char sub-char function &optional readtable)`
+`(set-dispatch-macro-character disp-char sub-char function &optional (readtable *readtable*))`
 
-ライト版スタブ: 受け付けますが無視し、`t` を返します。ユーザーのディスパッチマクロで Java 側リーダーを拡張することはできません。
+ディスパッチマクロ文字 `disp-char` の下の `sub-char`(大文字小文字を区別しません)のリーダー関数を `function` にし、`t` を返します。リーダーは `disp-char`、省略可能な10進数の引数、`sub-char` を読むと `(function stream sub-char argument)` を呼びます(数字がなければ `argument` は `nil`)。関数が返す値がデータムです。`sub-char` が10進数字ならエラーを通知します。4つのバックエンドすべてで動作します。
 
-ライブラリがこの方法で定義するディスパッチ構文のうち 2 つはリーダーに組み込まれているため、それらのライブラリはそのまま動作します: `#N@(...)`(ironclad の S ボックスリテラル。指定した要素幅のベクタとして読まれます)と `#L(...)`(iterate の番号付き引数ラムダ。`#L(list !2 !3)` は `#'(lambda (!1 !2 !3) (list !2 !3))` として読まれ、引数の個数は `#nL` で明示しない限り本体が言及する最大の `!n` になります)。それ以外のディスパッチ文字は未対応のままで、そのリテラルは通常のリーダーに渡ります。
+リードテーブルで読むのは今のところインタプリタのリーダーだけです。フォーム単位で読むプログラムとロードするファイル、`read-from-string`、文字列ストリームに対する `read` / `read-delimited-list` が対象です。コンパイルパスとコンパイル済みバックエンドの実行時リーダーは標準の構文で読みます([リードテーブル](../../guides/readtables.md))。
 
 ```lisp
-(set-dispatch-macro-character #\# #\7 (lambda (s c n) nil)) ; => T
+(let ((*readtable* (copy-readtable nil)))
+  (set-dispatch-macro-character #\# #\? (lambda (s c n) (list :q n (read s t nil t))))
+  (read-from-string "#2?foo"))
+; => (:Q 2 FOO)
 ```
+
+標準リードテーブルには2つのディスパッチ構文が組み込まれています。`#N@(...)`(ironclad の S-box リテラル。指定した要素幅のベクタとして読みます)と `#L(...)`(iterate の番号付き引数ラムダ。`#L(list !2 !3)` は `#'(lambda (!1 !2 !3) (list !2 !3))` と読み、引数の数は本体が参照する最大の `!n`、または `#nL` で明示した数です)です。

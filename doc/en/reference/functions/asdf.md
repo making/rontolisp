@@ -11,6 +11,8 @@ layout and the search-path details.
 | `asdf:defsystem` | `(asdf:defsystem :my-lib :components ((:file "main")))` | define a system (name, `:depends-on`, `:serial`, `:components`) for a later `load-system` |
 | `asdf:load-system` | `(asdf:load-system :my-lib)` | load a system: its dependency systems first, then its component files in order (a literal, top-level form on the compile path) |
 | `asdf:test-system` | `(asdf:test-system "my-app")` | load the system, follow its `:in-order-to` test-op chain, then run its recorded `:perform (test-op ...)` body — the standard `.asd` test entry point |
+| `asdf:operate` | `(asdf:operate 'asdf:load-op :my-lib)` | perform an operation on a system: `load-op` is `load-system`, `test-op` is `test-system`; any other operation signals |
+| `asdf:perform` | `(defmethod asdf:perform :around ((o asdf:load-op) (c asdf:cl-source-file)) ...)` | generic: every action of a system load (`prepare-op`, `compile-op`, `load-op` on each file and on the system), so a library's method runs around each component load |
 | `asdf:find-system` | `(asdf:find-system :my-lib nil)` | the system's metaobject, a real `asdf:system` CLOS instance memoized per name (`eq` across calls); nil for an unknown name when `error-p` is nil |
 | `asdf:registered-systems` | `(asdf:registered-systems)` | the downcased names of every registered system, in registration order |
 | `asdf:system-relative-pathname` | `(asdf:system-relative-pathname :my-lib "data/tlds.dat")` | the namestring of a path resolved against the system's source directory (folded to a literal on the compile path) |

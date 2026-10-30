@@ -9,9 +9,10 @@ per name (`eq` across calls); the classes (`component`, `child-component`/`paren
 `module`, `system`, `package-inferred-system`, `source-file`, `cl-source-file`, `static-file`)
 are real on every backend so `typecase`/`typep`/defmethod specializers work; the readers
 (`component-name`/`-pathname`/`-children`/`-sideway-dependencies`/`-parent`/`-system`,
-`registered-systems`, `*user-cache*` = nil) walk the model. `test-op` is the ONE op with
-machinery. **No general CLOS `operate`/`perform`, no `compile-op`/fasl output-translations.**
-Docs: `doc/*/guides/asdf-systems.md`, `reference/functions/asdf-{defsystem,load-system}.md`.
+`registered-systems`, `*user-cache*` = nil) walk the model. The OPERATION PROTOCOL is real too
+(`asdf:perform` over a fixed plan, see "The operation protocol"); there are no fasls and no
+output-translations. Docs: `doc/*/guides/asdf-systems.md`,
+`reference/functions/asdf-{defsystem,load-system,perform,operate}.md`.
 
 ## What a `.asd` may contain
 Anything not listed is a hard error naming the form — deny by default.
@@ -108,7 +109,10 @@ a per-`.asd` `ComponentClasses` scope.
   does not matter. **The CLASS still has to precede its use**; only the METHOD is position-free.
 - **Every other top-level `defmethod` is tolerated and ignored** — the one deliberately opened
   part of the closed world, safe because a method that really moved a file surfaces as the
-  missing file, NAMED.
+  missing file, NAMED. It stays ignored now that `perform` is real: the `.asd` is data, and a
+  `(defmethod perform :after ((o load-op) (c (eql (find-system ...)))) ...)` there is the
+  `.asd`-evaluation question (h35), as are `:perform` clauses for any op but test-op (cl-smtp's
+  and rt's `(pushnew :X *features*)`). A method in a library's SOURCE runs.
 - **`:default-component-class`** is what a bare `(:file "name")` takes, readable on the system
   AND on a module. NOT in `IGNORED_OPTIONS`: its `#.` resolves and an unknown class is an error.
 - Driving library: **portableaserve** (`aserve.asd`, `htmlgen.asd`, `webactions.asd` all parse).
@@ -140,16 +144,17 @@ iff declared) is the whole marker. All rules in `AsdfSystems`:
 ## Interpreter / compile path / search order
 - **Interpreter**: `asdf:defsystem` is an `evalConsRareOperator` case on `LispNames.ASDF_DEFSYSTEM` (special
   form — options are data); `asdf:load-system` is a global function accepting computed names,
-  driving `loadFile` with the system's `baseDir` on `loadDirStack`. State:
+  performing each component through `asdf:perform` (whose load-op method reaches
+  `loadComponent` -> `loadFile`, the system's `baseDir` on `loadDirStack`). State:
   `asdfSystems`/`loadedSystems`/`loadingSystems` + `systemPath`.
 - **Compile path**: handled *inside* `LoadInliner`'s recursion; the `Ctx` record threads the
   system registry, loaded set, cycle stack and search path. A non-literal `load-system` name is a
   hard error at inline time; a *nested* asdf form is rejected by both compilers in the same
   `case` as `REQUIRE`/`PROVIDE`.
 - **`load-system`/`quickload` keyword options are accepted and IGNORED on every path**
-  (`AsdfSystems.checkIgnoredLoadOptions`): there is no `operate` machinery for
-  `:force`/`:verbose`/`:silent`, and rejecting them would make lack's `find-package-or-load`
-  unloadable. The SHAPE is still checked.
+  (`AsdfSystems.checkIgnoredLoadOptions`): `:force`/`:verbose`/`:silent` have nothing to drive
+  (no fasl cache, a second load is a no-op), and rejecting them would make lack's
+  `find-package-or-load` unloadable. The SHAPE is still checked.
 - **Search order**: dir of the loading file, then `--system-path`, then
   `RONTOLISP_SOURCE_REGISTRY`, plus a `ql:quickload`'s download cache ([dists.md](dists.md)).
   `RontoLispCli.systemPath()` parses the `File.pathSeparator`-joined lists. The `asdf` package is
@@ -218,14 +223,90 @@ with FILES `(RELATIVE . RESOLVED)` pairs.
   `test-op :after` method, stays tolerated-and-ignored.
 - `LispSystem.packageInferredClass` marks which systems instantiate
   `asdf:package-inferred-system` (the branch rove's `run-system` typecase takes).
-- Interpreter `test-system` = `loadSystem` + follow edges (visited-set guard) + eval
-  `((lambda (o c) BODY) nil <metaobject>)`. Compile path: `spliceSystem` emits
-  `(defun %asdf-test-op-<name> (o c) BODY)`; a top-level literal `(asdf:test-system NAME)`
-  splices the system AND its test-op closure (`spliceTestOpClosure`) and KEEPS the call;
-  `%asdf-run-test-op` dispatches per name (edges via `%asdf-test-edge`).
-- Pinned by `AsdfMetaobjectsE2eTest` (all four; fixture `src/test/resources/asdf-metaobjects-demo`),
-  `PackageInferredSystemE2eTest`, `LispEvaluatorAsdfTest`, `AsdfSystemsTest`'s test-op group,
-  `LoadInlinerTest.nestedLoadSystemOfASplicedSystemAnswersNilOnJvm`.
+- `asdf:test-system` is `asdf.lisp`'s, on every backend: `(operate 'test-op s)` -> load, follow
+  the edges (`%asdf-tested%` visited set), then `(perform test-op system)`, whose default method
+  runs the recorded body with `o` = the `test-op` INSTANCE (it was nil before the protocol) and
+  `c` = the metaobject. Seams: `%asdf-test-op-edges` / `%asdf-run-recorded-test-op` -- Java
+  built-ins over `asdfSystems` on the interpreter, generated `cond` defuns on the compile paths
+  (`AsdfRuntimeLibrary.testOpEdgesDefun`/`recordedTestOpDefun`), where `spliceSystem` still emits
+  `(defun %asdf-test-op-<name> (o c) BODY)` at the system's splice point and a top-level literal
+  `(asdf:test-system NAME)` splices the system AND its test-op closure (`spliceTestOpClosure`)
+  and KEEPS the call.
+- Pinned by `AsdfMetaobjectsE2eTest` (all four; fixture `src/test/resources/asdf-metaobjects-demo`,
+  whose body prints `(typep o 'asdf:test-op)`), `PackageInferredSystemE2eTest`,
+  `AsdfSystemsTest`'s test-op group, `LoadInlinerTest.nestedLoadSystemOfASplicedSystemAnswersNilOnJvm`.
+
+## The operation protocol
+`asdf.lisp` defines real ASDF's operation classes (`operation`; `prepare-op`, `compile-op`,
+`load-op`, `test-op` directly under it -- ASDF's `downward-operation` & co. are not modelled),
+`make-operation` (one instance per class), the generics `perform`, `input-files`,
+`output-files` and `source-file-type`, and `operate` (load-op -> `load-system`, test-op ->
+`test-system`, anything else SIGNALS: there is nothing for compile-op alone to produce). Default
+methods are ASDF 3.3.1's for the classes the model has: load-op on a `cl-source-file` loads the
+source (`%asdf-load-component`, the seam), compile-op on a source file and everything on a
+parent component is a no-op, any other op on a source file signals, test-op on a system runs the
+recorded body. A designator op (`'asdf:load-op`) dispatches through a `symbol` method.
+- **The plan is fixed**: `%asdf-perform-system NAME :before` (prepare-op on the system, after its
+  dependencies), then `%asdf-perform-component NAME I` per file in load order (prepare-op,
+  compile-op, load-op on the I-th child), then `:after` (compile-op, load-op on the system) --
+  real ASDF's action order for a source tree with a fresh cache. Compile-op does run each time
+  (rontolisp compiles a source file BY loading it); no `operation-done-p`.
+- **Interpreter**: `loadSystem` evaluates those driver calls; load-op's method reaches the Java
+  built-in `%asdf-load-component` -> `loadComponent` (leaf shim or `loadFile` with the system's
+  features and base dir; self-contained, so a program performing load-op on a component reloads
+  it). **`loadFile` zeroes `functionBodyDepth` for the file's forms** -- they are top-level forms
+  wherever `load` is called from, and every component is now loaded from inside `perform`'s
+  method; without it a top-level macro call expanded in the MACRO's package
+  (`.kb/packages.md`), and lisp-namespace's `define-namespace` interned trivia's
+  `symbol-optimizer` in `lisp-namespace` (`TriviaE2eTest` caught it).
+- **Compile paths -- the component as a thunk.** `LoadInliner.spliceSystem` brackets every
+  spliced component (file or leaf shim) with `(%asdf-component "SYSTEM" I)` /
+  `(%asdf-component-end)` and marks `(%asdf-system-op "SYSTEM" :before|:after)`
+  (`compiler/SplicedComponentGroups` builds them). `AsdfRuntimeLibrary.process` STRIPS them when
+  no form defines an `asdf:perform` method (`definesPerformMethod`: a `defmethod`/`defgeneric
+  :method` of `perform` qualified asdf/asdf-family or bare, at any depth -- so a macro template
+  counts), so every other program is byte-identical, and otherwise splices the runtime whatever
+  else is referenced. The resolver consumes them like `%begin-file` (so `UserMacroExpander`
+  keeps them verbatim and never replays them). Each compiler lowers them right after
+  `lowerLoadContextMarkers` (`SplicedComponentGroups.lower`; JVM, wasm-GC, the CLI dump; NoGc
+  REFUSES): after the first perform definition, a component becomes
+  `(cl-user::%asdf-load-spliced "S" I (cl:lambda () (cl-user::%run-top-group N)))` then
+  `(%top-group N)` FORMS `(%top-group-end N)`, a system mark a `%asdf-perform-system` call;
+  before it, both are dropped. A group's forms stay TOP-LEVEL forms for every static pass; only
+  the chunk emitters treat the markers: JVM Pass 2b and `WasmToplevelEmit` cut a chunk at each
+  boundary, never call a group's chunks from `main`/`_start`, and record them in
+  `topGroupChunks`; `%run-top-group` (a special form of both expression compilers, compiled in
+  Pass 2c after every chunk exists) calls them. Groups NEST (a component file that calls
+  `load-system` splices that system inside its own group). The seam's `%asdf-load-spliced` binds
+  `%asdf-pending-load%` and performs; load-op's method funcalls the pending thunk and signals for
+  any other component.
+- **Divergence: compiled method dispatch is static** (`.kb/clos.md`), so a perform method applies
+  from program start; the lowering only wraps components AFTER the first definition, but a
+  component between two definitions sees both. A top-level `await` inside a group is refused on
+  wasm (`WasmAsyncEmit`), and so is a top-level local read across a boundary
+  (`WasmToplevelEmit`): a thunk cannot suspend the top level.
+- **Packages**: the protocol names are asdf externals; `asdf/interface` and `asdf-utilities` are
+  nicknames of `asdf` (they ARE that package in ASDF 3); the other ASDF 3.3.1 internal packages
+  (`asdf/component`, `asdf/action`, ... -- `PackageRegistry.ASDF_SUB_PACKAGES`) are packages whose
+  members are import redirects into `asdf`, listing only the members asdf exports here (the home
+  of each measured against SBCL 2.2.9's ASDF 3.3.1); `asdf/defsystem` nicknames
+  `asdf/parse-defsystem`. No `asdf/user`: its use list would make `*user-cache*` (asdf's own here,
+  uiop's in ASDF) a conflict.
+- **Measured consumers** (interpreter, 2026-10-30): `(ql:quickload "fiveam")` loads unpatched
+  through the REAL asdf-flv, and `*suite*` is file-local exactly as on SBCL 2.2.9 (a test in a
+  file with no `in-suite` lands in the global suite; the global `*suite*` is untouched after the
+  load); `run!` passes. On wasm the load half matches too; `run!` then fails (`The function NIL
+  is undefined`: fiveam compiles test bodies at run time), and the JVM stops earlier on a
+  `(setf (gethash nil h) ...)` NPE in an `eql` table (h56). lass loads (its `asdf.lisp`
+  defines `asdf/interface::lass-file` and perform/output-files methods); its rendering differs
+  from SBCL through h46 (`loop until ... for`) and `.todo/001` (`~&` inside `~@[`). A lass-file
+  COMPONENT in a consumer's `.asd` is still unknown to the data parse (the class is defined in
+  lass's source): h35.
+- Pinned by `AsdfMetaobjectsE2eTest` (all four: `hooks.lisp` defines asdf-flv's `:around` plus
+  `:before`/`:after` loggers; `a`/`b`/`c` -- `c` loaded from inside `b` -- pin the order, the
+  file-local binding and nesting), `LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions`
+  (the `functionBodyDepth` reset), `UserMacroExpanderTest#macroExpandingToDefmacroIsConsumedToo`
+  (fiveam's `(flet () (defmacro ...) 'name)`, `.kb/defmacro-backquote.md`).
 
 ## The substitution ladder (five tiers, widest first)
 1. **Whole shim system** (`eval/ShimLibraries` + `BuiltinSystems`).
@@ -596,9 +677,10 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
     nil; (c) a library branching on it is asking "am I being compiled to a fasl", and the honest
     answer is no. **If a real `compile-file` ever exists, bind both pairs together and revisit
     local-time's spelling in the same pass.**
-    **`*readtable*` rides the same list**: nil everywhere, but a loader binds it in the SAME `let`
-    as the pathname pair, so `injectMvSpillGlobal` declares whichever of the four the program
-    mentions, or the rebinding fails with `Cannot compile symbol reference: *READTABLE*`.
+    **`*readtable*` rides the same list**: a loader binds it in the SAME `let` as the pathname
+    pair, so `injectMvSpillGlobal` declares whichever of the four the program mentions, or the
+    rebinding fails with `Cannot compile symbol reference: *READTABLE*`. Its seed is a standard
+    readtable, not nil ([readtables.md](readtables.md)).
   - `merge-pathnames` and `truename` are `LispPreludeLibrary` entries (one Lisp definition over
     primitives), unlike `make-pathname`/`uiop:merge-pathnames*`, which stay Java + compile-time
     folding. `truename` is `%real-path` (links resolved, `.kb/read-load-streams.md`) probed, else

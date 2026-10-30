@@ -1,14 +1,17 @@
 # asdf:test-system
 
-`(asdf:test-system name)`
+`(asdf:test-system name &rest keys)`
 
 Loads the named system, follows its `:in-order-to ((test-op (test-op ...)))`
-chain (loading and testing each chained system the same way), then runs the
-system's recorded `:perform (test-op (o c) ...)` body with the operation
-parameter bound to `nil` (there is no `operate` machinery) and the component
-parameter bound to the system's metaobject
-([`asdf:find-system`](asdf-find-system.md)'s answer). Returns `t`. A system
-with no test-op wiring is a no-op, like real ASDF's default `perform`.
+chain (loading and testing each chained system the same way), then performs
+`asdf:test-op` on the system ([`asdf:perform`](asdf-perform.md)), whose
+default method runs the system's recorded `:perform (test-op (o c) ...)` body
+with the operation parameter bound to the `asdf:test-op` instance and the
+component parameter bound to the system's metaobject
+([`asdf:find-system`](asdf-find-system.md)'s answer). Returns `t`; the keys are
+accepted and ignored. A system with no test-op wiring is a no-op, like real
+ASDF's default `perform`, and a library's own `perform` method on `test-op`
+runs as for any other operation.
 
 This is the standard entry point fukamachi-style `.asd`s ship:
 
@@ -29,8 +32,8 @@ This is the standard entry point fukamachi-style `.asd`s ship:
 The body is recorded as data when the `.asd` is parsed; its bare symbols
 resolve the way `asdf-user` would resolve them (`symbol-call` is
 `uiop:symbol-call`, `component-name` is `asdf:component-name`). A `:perform`
-with a method qualifier (`test-op :after (o c)`) or a `#.` reader macro in its
-body stays tolerated-and-ignored, as all test-op wiring used to be.
+with a method qualifier (`test-op :after (o c)`), one for another operation, or
+a `#.` reader macro in its body is tolerated and ignored.
 
 ## Backend support
 

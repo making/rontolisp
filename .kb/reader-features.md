@@ -251,10 +251,10 @@ Traps:
   the original name); `PackageResolver.resolveSymbol` passes it through, `designator` and
   `AsdfSystems.designator`/`symbolName` strip it.
 - **`#N@(...)`** (ironclad) reads like `#(...)`, element width dropped. Native in `LispLexer`
-  because a user dispatch macro cannot extend the Java-side reader --
-  `set-dispatch-macro-character` is an accepted no-op returning `t`, `copy-readtable` a no-op
-  returning nil, `*readtable*` a variable seeded nil. **Any OTHER user dispatch character is
-  therefore silently not honored.**
+  because the compile paths read source with the standard syntax: a user dispatch macro runs
+  only in the interpreter's reader ([readtables.md](readtables.md)), which keeps `#N@` and `#L`
+  native too, whatever function the readtable holds for them. **Any OTHER user dispatch
+  character is honored on the interpreter and silently not on the compile paths.**
 - **`#L(...)` / `#nL(...)`** (iterate): a lambda with positional `!1`, `!2`, ... arguments; native
   for the same reason (without it `#L!2` lexes as ONE symbol). Arity is the highest `!n` mentioned
   unless `#nL` spells it out (a smaller count is a read error); a datum whose first element is a

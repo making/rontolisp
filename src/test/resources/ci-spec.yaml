@@ -4600,7 +4600,7 @@ cases:
                    (*readtable* *readtable*)
                    (*load-pathname* "p")
                    (*load-truename* "t"))
-               (list *load-pathname* *load-truename* *readtable*)))
+               (list *load-pathname* *load-truename* (readtablep *readtable*))))
     expected: |
       "lack-mw-backtrace"
       (0 2 0 4 0)
@@ -4611,7 +4611,7 @@ cases:
       (0 2 0)
       SLEPT
       NIL
-      ("p" "t" NIL)
+      ("p" "t" T)
   # rl/la are built-in nicknames for rontolisp/linalg; a user defpackage nickname
   # resolves everywhere the canonical name does.
   - name: builtin-package-nicknames
@@ -6216,6 +6216,7 @@ cases:
       (print (loop for x = 1 then (* x 2) repeat 3 finally (return x)))
       (print (loop repeat 2 for x in '(1 2 3) finally (return x)))
       (print (loop for x in '(1 2 3) repeat 2 finally (return x)))
+      (print (let ((s (list 1 2 3))) (loop while s for x = (pop s) collect x)))
     expected: |
       (3 3 3)
       ((3 4) (3 4))
@@ -6234,6 +6235,7 @@ cases:
       8
       2
       3
+      (1 2 3)
   - name: delete-delete-if-delete-if-not
     source: |
       (print (delete 2 '(1 2 3 2 1)))
@@ -8705,8 +8707,7 @@ cases:
         (print (funcall #'notevery #'evenp '(2 4 5)))
         (print (funcall #'typep 3 'integer))
         (print (funcall #'typep "x" 'integer))
-        (print (funcall #'/= 1 2))
-        (print (funcall #'readtable-case nil)))
+        (print (funcall #'/= 1 2)))
       (ci-lowered-values)
     expected: |
       ("a" "b")
@@ -8732,7 +8733,6 @@ cases:
       T
       NIL
       T
-      :UPCASE
   # A redefined defun binds every call to its LAST definition on the compile
   # backends (whole-program static resolution through the per-name map); the
   # JVM emits only that definition (a class cannot hold duplicate methods), the
@@ -16336,10 +16336,22 @@ cases:
       (print (bt2:threadp 42))
       (print (handler-case (bt2:thread-alive-p 42) (error (e) :not-a-thread)))
       (print (let ((ci-bt2-l (bt2:make-lock))) (bt2:with-lock-held (ci-bt2-l) :held)))
+      ; A lock is a structure of its own, not the mutex handle; a semaphore
+      ; counts, and none of these waits blocks.
+      (print (let ((ci-bt-s (bt:make-semaphore :count 1)))
+               (list (bt:lock-p (bt2:make-lock))
+                     (bt:recursive-lock-p (bt:make-recursive-lock))
+                     (integerp (bt:make-lock))
+                     (bt:wait-on-semaphore ci-bt-s)
+                     (progn (bt:signal-semaphore ci-bt-s :count 2)
+                            (bt:wait-on-semaphore ci-bt-s :timeout 1))
+                     (bt:condition-notify (bt:make-condition-variable))
+                     (bt:thread-yield))))
     expected: |
       NIL
       :NOT-A-THREAD
       :HELD
+      (T T NIL T T NIL NIL)
   - name: equalp-arrays-elementwise
     source: |
       (print (equalp #(1 "A" (2 3)) #(1 "a" (2 3.0))))
@@ -17333,10 +17345,10 @@ cases:
         (print (list (typep 5 ic-spec) (typep "s" ic-spec))))
       (let ((ic-spec 'ic-base))
         (print (list (typep (make-ic-child) ic-spec) (typep 5 ic-spec))))
-      ;; the readtable API is an accepted no-op, and #N@(...) reads as a vector
-      ;; whose element width is dropped
-      (print (copy-readtable nil))
-      (print (set-dispatch-macro-character #\# #\7 (lambda (s c n) nil)))
+      ;; ironclad's header copies a readtable and sets a dispatch sub-character in it,
+      ;; and #N@(...) reads as a vector whose element width is dropped
+      (print (readtablep (copy-readtable nil)))
+      (print (set-dispatch-macro-character #\# #\! (lambda (s c n) nil) (copy-readtable)))
       (print (aref #32@(#x428A2F98 #x71374491) 1))
       ;; (setf (aref s i) c) works on a string place too (a string is a rank-1
       ;; character array)
@@ -17356,7 +17368,7 @@ cases:
       ("IC-KW" "IC-KW")
       (T NIL)
       (T NIL)
-      NIL
+      T
       T
       1899447441
       "aza"
@@ -24558,13 +24570,56 @@ cases:
       (terpri)
     expected: |
       foo.bar42|visible
-  - name: readtable-case-is-constant-upcase-and-intern-accepts-found-keyword-package
+  - name: standard-readtable-case-is-upcase-and-intern-accepts-found-keyword-package
     source: |
       (print (readtable-case *readtable*))
       (print (intern "ZAP" (find-package :keyword)))
     expected: |
       :UPCASE
       :ZAP
+  # A readtable is a value on every backend (.kb/readtables.md): copy-readtable,
+  # readtable-case and its setf, the macro and dispatch characters and their functions
+  # (EQ when read back, so named-readtables' merge sees no conflict), set-syntax-from-char,
+  # read-delimited-list, and a method specialized on readtable. Only the interpreter's
+  # reader reads with one so far, which is why no read here goes through a user macro.
+  - name: readtable-objects-and-the-reader-macro-api
+    source: |
+      (let ((rt (copy-readtable nil)))
+        (print (list (readtablep rt) (readtablep 3) (type-of rt) (eq rt *readtable*)))
+        (setf (readtable-case rt) :invert)
+        (print (list (readtable-case rt) (readtable-case *readtable*) (readtable-case (copy-readtable rt))))
+        (print (list (functionp (get-macro-character #\()) (get-macro-character #\a)
+                     (nth-value 1 (get-macro-character #\#))))
+        (print (eq (get-macro-character #\( rt) (get-macro-character #\()))
+        (print (set-macro-character #\$ (lambda (s c) (declare (ignore s c)) 7) t rt))
+        (print (list (funcall (get-macro-character #\$ rt) nil #\$) (nth-value 1 (get-macro-character #\$ rt))
+                     (get-macro-character #\$)))
+        (print (make-dispatch-macro-character #\! nil rt))
+        (print (set-dispatch-macro-character #\! #\x (lambda (s c n) (declare (ignore s c)) (list :x n)) rt))
+        (print (funcall (get-dispatch-macro-character #\! #\X rt) nil #\x 3))
+        (print (list (get-dispatch-macro-character #\# #\0) (functionp (get-dispatch-macro-character #\# #\'))))
+        (print (set-syntax-from-char #\} #\) rt))
+        (print (eq (get-macro-character #\} rt) (get-macro-character #\))))
+        (print (read-delimited-list #\) (make-string-input-stream "1 2 (3) )"))))
+      (defgeneric ci-rt-kind (x))
+      (defmethod ci-rt-kind ((x readtable)) :readtable)
+      (defmethod ci-rt-kind ((x t)) :other)
+      (print (list (ci-rt-kind *readtable*) (ci-rt-kind 3)))
+    expected: |
+      (T NIL READTABLE NIL)
+      (:INVERT :UPCASE :INVERT)
+      (T NIL T)
+      T
+      T
+      (7 T NIL)
+      T
+      T
+      (:X 3)
+      (NIL T)
+      T
+      T
+      (1 2 (3))
+      (:READTABLE :OTHER)
   - name: with-output-to-string-does-not-touch-standard-output
     source: |
       (with-output-to-string (s) (princ "hidden" s)) (princ "visible")
