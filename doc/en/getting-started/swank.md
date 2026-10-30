@@ -27,6 +27,10 @@ SLIME of another version asks "Versions differ" first, as it does for any SWANK 
 | Echo area | the argument list of the operator around the cursor, the argument being typed marked; a variable's value |
 | `C-c C-d d`, `C-c C-d f` | a symbol's description: what it names, its lambda list and documentation string, a variable's value |
 | `C-c C-m`, `C-c M-m` | a macro's expansion, one step or every macro in the form |
+| `C-c M-e` (macrostep) | a macro form expanded in place one step at a time, the macro forms in the expansion marked |
+| `M-.` | the definition of the name at point: where `C-c C-c` or `C-c C-k` compiled it -- a function, macro, generic function and its methods, variable, class and its accessors, structure and its functions, package -- else the file and line a `load` read a `defun`, `defmacro` or `defgeneric` from; a built-in operator has none |
+| `C-c C-w c` `w` `r` `b` `s` `m` `a`, `C-c <`, `C-c >` | cross references in the code `C-c C-c` and `C-c C-k` compiled: who calls a function and what it calls, who references, binds or sets a special variable, who expands a macro, which methods specialize on a class |
+| `C-c I` | the inspector: a list's or an array's elements, a hash table's entries, an instance's slots, what a symbol names, a number's representations, each part inspected in turn, with the inspector's actions (remove an entry, unbind a symbol, set a slot ...) |
 | `C-c C-b` | the running evaluation stopped |
 
 Each editor request runs on a thread of its own, the REPL's on one thread, as SWANK's
@@ -36,9 +40,10 @@ Every connection shares one image.
 
 There is no debugger: an error, like an interrupt, aborts the evaluation and SLIME prints
 the condition (`; Evaluation aborted on #<SIMPLE-ERROR "boom">.`) instead of opening its
-debugger. Not answered: the inspector, cross references and `M-.` (no definition is
-found), tracing and profiling, presentations, changing the working directory. A package
-prints as its keyword (`:CL-USER`), a macro expansion on one line, and a value or a name
+debugger. Not answered: tracing and profiling, presentations, changing the working
+directory. Cross references cover only code compiled from the editor, and a function
+typed at the REPL has no place to go to. A package prints as its keyword (`:CL-USER`), a
+macro expansion on one line, and a value or a name
 the way rontolisp prints it (`CL-USER::F`, where SBCL writes `COMMON-LISP-USER::F`). The
 server runs on the interpreter only.
 
@@ -50,12 +55,13 @@ RET 4005 RET` opens SLY's REPL; the server speaks the protocol of SLY 1.0.43, an
 another version asks "Versions differ" first. In Lem, `M-x slime-connect` with the same host
 and port opens Lem's REPL (measured against Lem 2.3.0).
 
-The table above holds for both, on their own keys. SLY's REPL shows a number with its other
-notations (`3 (2 bits, #x3, #o3, #b11)`) and completes flexibly (`mvbind` finds
+The table's REPL, evaluation, compilation, completion, echo area, description and expansion
+rows hold for both, on their own keys. SLY's REPL shows a number with its other notations
+(`3 (2 bits, #x3, #o3, #b11)`) and completes flexibly (`mvbind` finds
 `multiple-value-bind`); Lem's completion shows each candidate's kind, argument list and
-description, and `C-c Return` expands a macro one step. As with SLIME there is no debugger,
-inspector or `M-.`; SLY's stickers and trace dialog and Lem's inspection of a printed value
-are not answered.
+description, and `C-c Return` expands a macro one step. As with SLIME there is no debugger.
+`M-.`, cross references and the inspector are measured with SLIME only; SLY's stickers and
+trace dialog and Lem's inspection of a printed value are not answered.
 
 ## From a running program
 

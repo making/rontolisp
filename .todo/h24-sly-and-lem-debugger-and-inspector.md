@@ -4,8 +4,8 @@ Difficulty: Medium
 
 `rontolisp --swank` answers SLY (Slynk) and Lem (micros) on the same port as SLIME
 (`.kb/swank.md`, "Dialects"), but an error or an interrupt in SLY's REPL only answers
-`(:channel-send R (:evaluation-aborted "cond"))`, and a micros request aborts, while the
-debugger and the inspector are built for SLIME's requests.
+`(:channel-send R (:evaluation-aborted "cond"))`, and a micros request aborts; the debugger
+(h19) and the inspector, `M-.` and xref (`.kb/swank.md`) are measured with SLIME only.
 
 Recorded on SBCL (`.todo/artefacts/h21-slynk-and-lem-micros-protocols/`):
 
@@ -23,5 +23,6 @@ Recorded on SBCL (`.todo/artefacts/h21-slynk-and-lem-micros-protocols/`):
 
 Direction: run SLIME's debugger loop (h19) on SLY's REPL thread and on micros requests, with
 the mREPL's prompt levels; keep the printed values by id so Lem's inspector and SLY's
-history references (`#v`, `slynk-mrepl:inspect-entry`) reach the inspector (h20). Measure
+history references (`#v`, `slynk-mrepl:inspect-entry`) reach the inspector; check SLY's and
+Lem's `M-.` and xref against their servers. Measure
 with the h21 drivers, extend `cli/SwankServerTest#aSlyAndALemSessionAreAnsweredInTheirOwnDialects`.

@@ -24,8 +24,11 @@ answered message for message as SBCL's SWANK answers, the differences listed at 
 - `eval/CommonLispSwank` -- the Common Lisp half, so `cli` touches no evaluator internals:
   `serve` (the package bound, `*standard-output*`/`*error-output*`/`*trace-output*` and
   `*standard-input*` bound over the request's writer and reader), evaluation, compilation,
-  completion, argument lists, descriptions, expansion. It answers Java records the server
-  encodes; an autodoc form arrives with the cursor symbol made `CommonLispSwank.CURSOR`.
+  completion, argument lists, descriptions, expansion, macrostep. It answers Java records
+  the server encodes; an autodoc form arrives with the cursor symbol made
+  `CommonLispSwank.CURSOR`.
+- `eval/SwankSources` -- what compiled code defines and uses (`M-.`, `xref`), fed by the
+  compile walk; `eval/SwankInspector` -- one connection's inspector state and pages.
 - `RontoLispCli`: `--swank[=PORT]` (value-less key, `=` for the port), SWANK's 4005 by
   default, 0 any free port; refused beside a program, `-o`, `test`, `--nrepl` or a
   non-Common-Lisp `--source-language`; prints `;; Swank started at port: P.`
@@ -52,7 +55,7 @@ dialect request by request; a request's output and input follow its dialect.
 | `eval-for-mrepl` | on the REPL's thread (the request names its id): `guess-and-set-package`, `sync-package-and-default-directory`; answers `(prompt-arguments values)` | |
 | echo area | `echo-for-emacs`: no `=> `, `; No value`, hex up to 64 bits, octal/binary up to 8, ratio with float and percentage | SWANK's, uncut, `; No value` (`Echo`) |
 | completion | `slynk-completion:simple-completions` `(strings common-prefix)`; `flex-completions` `((text score chunks classification)...) nil`, Slynk's score in single floats (`mvbind` 0.009072388522326946, as SBCL), accessible symbols then other packages' externals qualified by each name, `::` every symbol at home | `micros/lsp-api:completions`: SWANK's fuzzy (100) as `(label chunks kind signature markdown sort-key)` |
-| other | | `micros/pretty-eval:pretty-eval` `(:value echo :id n)`, `micros/lsp-api:hover-symbol` Markdown, `micros/macrostep:macrostep-expand-1` `(:ok expansion nil)`; `C-c C-l` sends a form calling `micros:load-file`, defined in the image at `micros:connection-info` |
+| other | | `micros/pretty-eval:pretty-eval` `(:value echo :id n)`, `micros/lsp-api:hover-symbol` Markdown, `micros/macrostep:macrostep-expand-1` SWANK's macrostep; `C-c C-l` sends a form calling `micros:load-file`, defined in the image at `micros:connection-info` |
 | interrupt | `(:emacs-interrupt thread)` of the REPL's thread | `(:emacs-interrupt :repl-thread)` |
 
 ## A program's server
@@ -122,8 +125,10 @@ user macro table concurrent for the same reason: a worker defines while the REPL
 | `autodoc`, `operator-arglist` | below |
 | `describe-symbol`, `describe-function`, `documentation-symbol` | what the symbol names, its lambda list and documentation string, a variable's value |
 | `swank-macroexpand-1`, `swank-macroexpand`, `swank-macroexpand-all` | `macroexpand-1`, `macroexpand`, and every macro in the form (`CallSiteWalk`'s code positions) |
-| `buffer-first-change`, `init-presentations`, `update-indentation-information`, `fuzzy-completion-selected` | nil; `find-definitions-for-emacs`, `xref`, `xrefs` nil (no definition known) |
-| `macrostep-expand-1` | `(:ok expansion nil)` by `macroexpand-1`, no subforms marked; `(:error "Not a macro form")` |
+| `buffer-first-change`, `init-presentations`, `update-indentation-information`, `fuzzy-completion-selected` | nil |
+| `find-definitions-for-emacs`, `xref`, `xrefs` | below |
+| `init-inspector`, `inspect-nth-part`, `inspector-nth-part`, `inspector-range`, `inspector-call-nth-action`, `inspector-pop`, `inspector-next`, `inspector-reinspect`, `inspector-toggle-verbose`, `inspector-eval`, `inspector-history`, `quit-inspector`, `describe-inspectee`, `pprint-inspector-part` | below |
+| `swank-macrostep:macro-form-p`, `macrostep-expand-1` (micros's too) | `(:ok :macro)`/`(:ok nil)`; `(:ok "expansion" (("WHEN" :macro 6)))`, each macro form of the expansion placed by printing it and finding it in the printed whole in walk order; `(:error "Not a macro form")` |
 | anything else in a dialect's package | aborts: `The function SWANK:X is undefined.` (the package as sent) |
 | a form of another package | evaluated in the request's package, its value as a reply carries it (a string, number, symbol, list; anything else `prin1`'d) |
 
@@ -140,10 +145,13 @@ each form in turn under `reportingWarningsTo` (a warning no handler muffles is a
 `:warning`/`:style-warning` note at its form); the first failure is an `:error` note that
 ends the run, the place the text stops reading a `:read-error` note, and once it ran, a
 call of a function nothing defines a `:style-warning` `undefined function: PKG::NAME` at
-the first call in the text. That walk takes the forms as resolved
+the first call in the text. That walk (`SwankSources.record`) takes the forms as resolved
 (`LispEvaluator.evalTopLevel`'s consumer) through `CallSiteWalk`, local functions in scope;
-a built-in operator outside the shapes it knows is not looked into, nor a user macro's call
-(expanding it again would run its expander twice). Locations: `(:buffer name) (:offset
+a built-in operator outside the shapes it knows is not looked into. A user macro's call is
+expanded through `LispEvaluator.expandUserMacro`, whose memo is keyed by the call site the
+evaluator runs, so the expander does not run again when the call runs (it does after a
+`defmacro` clears the memo) -- before 2026-10-30 the walk skipped macro calls and missed
+the calls in their arguments. Locations: `(:buffer name) (:offset
 start offset)` and `(:file path) (:position 1-based)`, a form's offset from a scan of the
 text's top-level data (a top-level reader conditional places every note at the start).
 `compile-file-for-emacs` with load-p loads the file this way and answers loadp nil, fasl
@@ -163,14 +171,63 @@ the parameter the argument binds -- by position, `&rest`/`&body` past them, a ke
 the keyword before the value, inside a destructuring parameter the item within it -- or
 shows a variable's value when the cursor is on one (`*DRV* => 10`, not cacheable).
 
+## Definitions and cross references
+
+The compile walk records, per top-level form, each definition -- `defun`, `defmacro`,
+`defgeneric`, `defmethod`, `defvar`/`defparameter` (`(DEFVAR X)` as SBCL), `defconstant`,
+`deftype`, `defclass`/`define-condition` with each accessor, reader and writer as a method
+at its slot, `defstruct` with its constructor, predicate, copier and accessors as `DEFUN`s
+at the form, `defpackage` -- and, inside a definition, each call (and `#'`), special
+variable reference (`CallSiteWalk.Rewriter.variable`, the hook symbols in code positions
+reach), `let`/`let*` binding, `setq`/`setf`/`psetq`/`psetf` assignment and user macro call.
+A use is placed at its form's text, found by searching `(name` forward from the last hit
+within the top-level form; a use inside a macro's expansion that is not a cons of the
+source is placed at the macro call. A definition compiled again replaces its record and
+drops its uses. Places: `(:file f) (:position p)` with a 256-character `(:snippet)` for
+`C-c C-k`; `(:buffer-and-file buffer file) (:offset start offset)` with the datum's text
+for `C-c C-c` (the request's fourth argument; `(:buffer ...)` without one). A definition
+the editor did not compile answers from `LispEvaluator.Definition`, which now keeps the
+operator and the `LocatedCons` file and line of a `defun`, `defmacro` or `defgeneric`
+(position: the line's first non-blank), else `(:error "Error: DEFINITION-SOURCE of function
+F did not contain meaningful information.")` as SBCL answers a REPL definition. A built-in
+answers nil. A name that only names a class or structure is no symbol `findSymbol` finds;
+its spelling is guessed from the package (`spellingsOf`). `xref` answers `:calls`,
+`:references`, `:binds`, `:sets`, `:macroexpands` at the use labelled with the container
+(`F`, or `(DEFMETHOD F (SPECIALIZERS))`), `:callers` at the container, `:calls-who` and
+`:callees` the callees' definitions, `:specializes` `(DEFMETHOD F)`; another kind
+`:not-implemented`.
+
+## Inspector
+
+One `SwankInspector` per connection (SWANK's is global). A page is computed once per
+inspect and reshown by `pop`/`next` as SWANK's `istate>elisp` does: each showing appends
+to that state's value and action tables, so ids grow (`:id 4` on the second showing). A
+value printed after it was inspected carries `@N=` (an `eql` position in the history).
+Range arithmetic is SWANK's, counting raw parts: `label-value-line` is four, `iline` one.
+Content follows `swank-fancy-inspector`: list (proper, improper, circular), cons, array
+(dimensions, element type, size, adjustable, fill pointer, displacement, elements),
+integer (`format` line, code-char, integer-length, universal time), ratio, complex, float,
+character, hash table (`[clear hashtable]`, `[remove entry]`), symbol (value, function,
+documentation, package with `[export]`/`[unintern]`, plist, class), function (name,
+argument list, documentation), a `defclass` instance (the check boxes, grouping by
+declaring class, alphabetical sort, `[set value]` reading the minibuffer through
+`:read-from-minibuffer`/`:emacs-return`, `[make unbound]`), a structure as SBCL's
+`The object is a STRUCTURE-OBJECT of type X.`, anything else SWANK's generic page.
+
 ## Differences from the oracle
 
 No debugger: an error or an interrupt aborts the request (SLDB, its restarts and frames
-are not sent). No presentation markers, inspector, xref, `M-.`, trace, profile, indentation
-updates or `set-default-directory`; SLY's stickers, trace dialog, inspector and history
-references (`#v`), Lem's printed-object inspection. A package prints as its keyword, a name
-as rontolisp spells it (`CL-USER::F`, `CL:MAPC`), a macro expansion on one line (no pretty
-printer), no SBCL compiler output and no unused-variable note (nor micros's `; processing (DEFUN ...)`).
+are not sent). No presentation markers, trace, profile, indentation updates or
+`set-default-directory`; SLY's stickers, trace dialog and history references (`#v`), Lem's
+inspection of a printed value (`M-.`, xref and the inspector measured with SLIME only). `:calls-who` answers (SBCL's `:not-implemented`); `xref` covers
+only editor-compiled code, in compile order (SBCL's order is its own), with no entry for a
+REPL-defined caller (SBCL lists one with an `:error` place); `find-definitions` of a
+standard package answers nil. An inspector title is `#<TYPE {identity}>` with rontolisp's
+`type-of` (`INTEGER` where SBCL says `BIT`, `T` for a lambda), no disassembly or
+type-specifier lines, floats as doubles (53 digits). Macrostep expansions print on one
+line, so positions differ from SBCL's pretty-printed ones. A package prints as its keyword, a name as rontolisp
+spells it (`CL-USER::F`, `CL:MAPC`), a macro expansion on one line (no pretty printer), no
+SBCL compiler output and no unused-variable note (nor micros's `; processing (DEFUN ...)`).
 Thread ids are Java's. An aborted SLY REPL input names `Interrupt from Emacs` where Slynk's
 debugger says `Interrupt from client`. `connection-info` carries no `:system-file-patterns`.
 Interpreter only.
@@ -180,12 +237,14 @@ Interpreter only.
 `cli/SwankServerTest` (in process, port 0: SLIME's requests replayed and answered as
 recorded -- REPL values, output and input, package switches, the editor's evaluations,
 both compiles with their notes, load, completions, autodoc, arglist, describe, expansions,
-the aborts; an interrupt stopping the REPL thread's loop while a worker answers in its own
-package; an `-e` program starting a `:dont-close t` server and a default one, both
-serving its evaluator, then `stop-server`; a SLY and a Lem session on one server, their
-recorded shapes), `RontoLispCliTest#aProgramTheModeCannotTakeIsAClearError`,
+definitions, xref, the inspector, macrostep, the aborts; an interrupt stopping the REPL
+thread's loop while a worker answers in its own package; an `-e` program starting a
+`:dont-close t` server and a default one, both serving its evaluator, then `stop-server`; a
+SLY and a Lem session on one server, their recorded shapes),
+`RontoLispCliTest#aProgramTheModeCannotTakeIsAClearError`,
 `LispEvaluatorAsdfTest#dependsOnBuiltinSwankResolvesWithoutNetworkAndCreateServerSignals`.
-By hand: the artefacts' driver against `rontolisp --swank` (2026-10-30); h21's SLY driver
-and Lem in Docker against it (2026-10-30); a program file
-served after its end and `quit-lisp` ending the process with 0, and the compiled message on
-JVM, Preview 1 and the component (2026-10-30).
+By hand: the artefacts' driver against `rontolisp --swank` (2026-10-30; the `nav` steps --
+`M-.`, xref, inspector, macrostep -- recorded in `sbcl-nav-wire.log` and
+`rontolisp-nav-wire.log`); h21's SLY driver and Lem in Docker against it (2026-10-30); a
+program file served after its end and `quit-lisp` ending the
+process with 0, and the compiled message on JVM, Preview 1 and the component (2026-10-30).

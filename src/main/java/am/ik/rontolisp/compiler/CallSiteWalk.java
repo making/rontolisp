@@ -56,6 +56,15 @@ public final class CallSiteWalk {
 			return this;
 		}
 
+		/**
+		 * Sees a symbol in a code position: a variable reference (or a constant). A
+		 * call's operator, a binding's variable and a place the walk takes apart are not
+		 * code positions.
+		 * @param symbol the symbol
+		 */
+		default void variable(LispSymbol symbol) {
+		}
+
 	}
 
 	/**
@@ -66,6 +75,9 @@ public final class CallSiteWalk {
 	 */
 	public static LispVal walk(LispVal form, Rewriter rewriter) {
 		if (!(form instanceof LispCons cons)) {
+			if (form instanceof LispSymbol symbol) {
+				rewriter.variable(symbol);
+			}
 			return form;
 		}
 		if (cons.car() instanceof LispSymbol head && cons.isProperList()) {
@@ -78,7 +90,8 @@ public final class CallSiteWalk {
 				return shaped;
 			}
 		}
-		return LispCons.rebuilt(cons, walk(cons.car(), rewriter), arguments(cons.cdr(), rewriter));
+		LispVal operator = cons.car() instanceof LispSymbol ? cons.car() : walk(cons.car(), rewriter);
+		return LispCons.rebuilt(cons, operator, arguments(cons.cdr(), rewriter));
 	}
 
 	/**

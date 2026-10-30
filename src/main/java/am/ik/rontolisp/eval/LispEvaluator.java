@@ -307,14 +307,20 @@ public final class LispEvaluator {
 	/**
 	 * What a {@code defun}, {@code defmacro} or {@code defgeneric} wrote down, keyed by
 	 * the name it defined: the lambda list as written (a {@link LispLambda} keeps only
-	 * its desugared shape) and the documentation string, for an editor's argument list
-	 * and description ({@link CommonLispSwank}). {@code documentation} itself answers nil
-	 * on every backend, so nothing a program reads changes.
+	 * its desugared shape), the documentation string and the file and line a
+	 * {@link LocatedCons} carried, for an editor's argument list, description and
+	 * {@code M-.} ({@link CommonLispSwank}). {@code documentation} itself answers nil on
+	 * every backend, so nothing a program reads changes.
 	 *
+	 * @param operator the defining operator's name ({@code DEFUN}, {@code DEFMACRO} or
+	 * {@code DEFGENERIC})
 	 * @param lambdaList the lambda list, as written
 	 * @param documentation the documentation string, or null
+	 * @param file the file the definition was read from, or null
+	 * @param line the 1-based line its form starts on, 0 without a file
 	 */
-	record Definition(LispVal lambdaList, @Nullable String documentation) {
+	record Definition(String operator, LispVal lambdaList, @Nullable String documentation, @Nullable String file,
+			int line) {
 	}
 
 	private final java.util.Map<String, Definition> definitions = new java.util.concurrent.ConcurrentHashMap<>();
@@ -8809,6 +8815,7 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalDefun(LispCons cons, Environment env) {
+		LispCons source = cons;
 		checkAwaitPlacement(cons);
 		if (treeContainsMacrolet(cons)) {
 			// A body carrying a macrolet is pre-expanded at DEFINITION time, like CL's
@@ -8874,17 +8881,18 @@ public final class LispEvaluator {
 		boolean sourced = LispTrees.anyCons(blockForm, form -> form instanceof LocatedCons);
 		this.globalEnv.defineFunction(funcName,
 				new LispLambda(expanded.required(), expanded.rest(), List.of(blockForm), env, funcName, sourced));
-		recordDefinition(funcName, parts);
+		recordDefinition(funcName, source, parts);
 		return singleValue(nameForm);
 	}
 
 	/**
-	 * Writes down a definition's lambda list and documentation string
+	 * Writes down a definition's lambda list, documentation string and where it was read
 	 * ({@link #definitions}).
 	 * @param name the defined name
+	 * @param source the definition form as it reached the evaluator
 	 * @param parts the definition form: operator, name, lambda list, body
 	 */
-	private void recordDefinition(String name, List<LispVal> parts) {
+	private void recordDefinition(String name, LispCons source, List<LispVal> parts) {
 		if (parts.size() < 3) {
 			return;
 		}
@@ -8900,7 +8908,14 @@ public final class LispEvaluator {
 				break;
 			}
 		}
-		this.definitions.put(name, new Definition(parts.get(2), documentation));
+		this.definitions.put(name, definition(source, parts.get(2), documentation));
+	}
+
+	private static Definition definition(LispCons source, LispVal lambdaList, @Nullable String documentation) {
+		String operator = source.car() instanceof LispSymbol head ? LispSymbol.memberName(head.name()) : "DEFUN";
+		return source instanceof LocatedCons located
+				? new Definition(operator, lambdaList, documentation, located.file(), located.line())
+				: new Definition(operator, lambdaList, documentation, null, 0);
 	}
 
 	/**
@@ -9053,6 +9068,7 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalDefgeneric(LispCons cons, Environment env) {
+		LispCons source = cons;
 		// A (defgeneric (setf name) ...) rides the %setf- writer-generic convention.
 		cons = LispMacroExpander.normalizeSetfMethodForm(cons, this.structAccessors);
 		ensureGrayProtocolDeclared(cons);
@@ -9073,7 +9089,7 @@ public final class LispEvaluator {
 					documentation = doc.value();
 				}
 			}
-			this.definitions.put(generic, new Definition(parts.get(2), documentation));
+			this.definitions.put(generic, definition(source, parts.get(2), documentation));
 		}
 		return parts.get(1);
 	}
@@ -9344,7 +9360,7 @@ public final class LispEvaluator {
 		}
 		putUserMacro(name.name(),
 				makeUserMacro(LispNames.DEFMACRO, name, parts.get(2), parts.subList(3, parts.size()), env));
-		recordDefinition(name.name(), parts);
+		recordDefinition(name.name(), cons, parts);
 		return singleValue(name);
 	}
 

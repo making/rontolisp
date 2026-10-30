@@ -48,6 +48,8 @@ import am.ik.rontolisp.eval.CommonLispSwank;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.LispInterruptSignal;
+import am.ik.rontolisp.eval.SwankInspector;
+import am.ik.rontolisp.eval.SwankSources;
 
 /**
  * The SWANK server {@code rontolisp --swank} runs: SLIME's protocol over TCP
@@ -244,6 +246,11 @@ final class SwankServer implements AutoCloseable {
 
 		private final Map<Long, BlockingQueue<List<?>>> input = new ConcurrentHashMap<>();
 
+		private final Map<Long, BlockingQueue<List<?>>> minibuffer = new ConcurrentHashMap<>();
+
+		/** The editor's inspector, which keeps what it inspected between requests. */
+		private final SwankInspector inspector = SwankServer.this.lisp.newInspector();
+
 		private final AtomicLong tags = new AtomicLong();
 
 		/** SLY's REPLs, by the channel id the server gave each. */
@@ -323,7 +330,8 @@ final class SwankServer implements AutoCloseable {
 				}
 				case "emacs-interrupt" -> interrupt(event.size() > 1 ? event.get(1) : Boolean.TRUE);
 				case "write-done" -> deliver(this.writeDone, event);
-				case "emacs-return-string", "emacs-return" -> deliver(this.input, event);
+				case "emacs-return-string" -> deliver(this.input, event);
+				case "emacs-return" -> deliver(this.minibuffer, event);
 				default -> {
 					// :emacs-pong and the debugger's events: nothing waits for them
 				}
@@ -393,8 +401,8 @@ final class SwankServer implements AutoCloseable {
 			SwankDialect dialect = dialectOf(request.form());
 			MRepl target = channel != null ? channel : dialect == SwankDialect.SLYNK ? defaultChannel() : null;
 			Output output = new Output(this, self, dialect, target);
-			Input input = new Input(
-					channel != null ? channel::readLine : () -> askEditor(self, dialect == SwankDialect.SLYNK));
+			Input input = new Input(channel != null ? channel::readLine : dialect == SwankDialect.SLYNK
+					? () -> line(readFromMinibuffer("Input for thread " + self + "? ")) : () -> readString(self));
 			Outcome outcome = execute(SwankServer.this.lisp.guessPackage(request.pkg()), output, input,
 					() -> call(request.form(), output, channel));
 			if (outcome != null) {
@@ -459,24 +467,21 @@ final class SwankServer implements AutoCloseable {
 		}
 
 		/**
-		 * Asks the editor for a line of standard input and waits for it: SLIME's REPL as
-		 * {@code :read-string}, SLY's minibuffer as {@code :read-from-minibuffer}.
+		 * Asks SLIME's REPL for a line of standard input ({@code :read-string}) and waits
+		 * for it ({@code :emacs-return-string}).
 		 * @param id the reading thread's id
-		 * @param minibuffer whether to ask SLY's minibuffer
 		 * @return the line, or null at the end of the input
 		 */
-		@Nullable String askEditor(long id, boolean minibuffer) {
+		@Nullable String readString(long id) {
 			long tag = nextTag();
 			BlockingQueue<List<?>> box = new LinkedBlockingQueue<>();
 			this.input.put(id, box);
-			send(minibuffer ? list(kw("read-from-minibuffer"), id, tag, "Input for thread " + id + "? ", null)
-					: list(kw("read-string"), id, tag));
+			send(list(kw("read-string"), id, tag));
 			try {
 				while (true) {
 					List<?> event = box.poll(1, TimeUnit.SECONDS);
 					if (event != null) {
-						String line = event.size() > 3 && event.get(3) instanceof String text ? text : null;
-						return line == null || line.isEmpty() ? null : minibuffer ? line + "\n" : line;
+						return event.size() > 3 && event.get(3) instanceof String text && !text.isEmpty() ? text : null;
 					}
 					if (this.closed) {
 						return null;
@@ -484,14 +489,19 @@ final class SwankServer implements AutoCloseable {
 				}
 			}
 			catch (InterruptedException ex) {
-				if (!minibuffer) {
-					send(list(kw("read-aborted"), id, tag));
-				}
+				send(list(kw("read-aborted"), id, tag));
 				throw new LispInterruptSignal();
 			}
 			finally {
 				this.input.remove(id, box);
 			}
+		}
+
+		/**
+		 * A minibuffer's answer as a line of input, Slynk's {@code read-input} ending it.
+		 */
+		private static @Nullable String line(@Nullable String answer) {
+			return answer == null || answer.isEmpty() ? null : answer + "\n";
 		}
 
 		/**
@@ -619,7 +629,7 @@ final class SwankServer implements AutoCloseable {
 				}
 				case "list-all-package-names" -> lisp.packageNames(args.size() > 0 && truthy(args.getFirst()));
 				case "compile-string-for-emacs" -> compilation(lisp.compileString(text(args, 0), text(args, 1),
-						position(args.size() > 2 ? args.get(2) : null)), false);
+						position(args.size() > 2 ? args.get(2) : null), optionalText(args, 3)), false);
 				case "compile-file-for-emacs", "compile-file-if-needed" ->
 					compilation(lisp.compileFile(text(args, 0), args.size() > 1 && truthy(args.get(1))), false);
 				case "load-file" -> lisp.loadFile(text(args, 0));
@@ -657,11 +667,56 @@ final class SwankServer implements AutoCloseable {
 				case "swank-macroexpand", "swank-expand" ->
 					lisp.macroexpand(text(args, 0), CommonLispSwank.Expansion.REPEATEDLY);
 				case "swank-macroexpand-all" -> lisp.macroexpand(text(args, 0), CommonLispSwank.Expansion.ALL);
-				case "macrostep-expand-1" -> {
-					String expansion = lisp.macroexpandOnce(text(args, 0));
-					yield expansion == null ? list(kw("error"), "Not a macro form") : list(kw("ok"), expansion, null);
+				case "find-definitions-for-emacs" -> entries(lisp.findDefinitions(text(args, 0)));
+				case "xref" -> xref(args.isEmpty() ? null : args.getFirst(), text(args, 1));
+				case "xrefs" -> {
+					List<Object> found = new ArrayList<>();
+					for (Object type : args.isEmpty() ? List.of() : asList(args.getFirst())) {
+						if (xref(type, text(args, 1)) instanceof List<?> entries && !entries.isEmpty()) {
+							List<Object> group = new ArrayList<>();
+							group.add(type);
+							group.addAll(entries);
+							found.add(group);
+						}
+					}
+					yield found;
 				}
-				case "find-definitions-for-emacs", "xref", "xrefs" -> null;
+				case "init-inspector" -> page(this.inspector.init(text(args, 0), optionalText(args, 1)));
+				case "inspect-nth-part" -> page(this.inspector.inspectNthPart(integer(args, 0, 0)));
+				case "inspector-nth-part" -> wire(this.inspector.nthPart(integer(args, 0, 0)), lisp);
+				case "inspector-range" -> range(this.inspector.range(integer(args, 0, 0), integer(args, 1, 0)));
+				case "inspector-call-nth-action" ->
+					page(this.inspector.callNthAction(integer(args, 0, 0), this::readFromMinibuffer));
+				case "inspector-pop" -> page(this.inspector.pop());
+				case "inspector-next" -> page(this.inspector.next());
+				case "inspector-reinspect" -> page(this.inspector.reinspect());
+				case "inspector-toggle-verbose" -> page(this.inspector.toggleVerbose());
+				case "inspector-eval" -> this.inspector.eval(text(args, 0));
+				case "inspector-history" -> this.inspector.historyText();
+				case "quit-inspector" -> {
+					this.inspector.quit();
+					yield null;
+				}
+				case "describe-inspectee" -> this.inspector.describe();
+				case "pprint-inspector-part" -> this.inspector.printPart(integer(args, 0, 0));
+				case "macro-form-p" -> {
+					CommonLispSwank.MacroForm answer = lisp.macroForm(text(args, 0),
+							args.size() > 1 && truthy(args.get(1)));
+					yield answer.error() != null ? list(kw("error"), answer.error())
+							: list(kw("ok"), answer.kind() == null ? null : kw(answer.kind()));
+				}
+				case "macrostep-expand-1" -> {
+					CommonLispSwank.MacroStep step = lisp.macrostepExpand(text(args, 0),
+							args.size() > 1 && truthy(args.get(1)));
+					if (step.error() != null) {
+						yield list(kw("error"), step.error());
+					}
+					List<Object> subforms = new ArrayList<>();
+					for (CommonLispSwank.Subform each : step.subforms()) {
+						subforms.add(list(each.operator(), kw(each.kind()), (long) each.start()));
+					}
+					yield list(kw("ok"), step.expansion(), subforms);
+				}
 				case "default-directory" -> directory(Path.of("").toAbsolutePath().toString());
 				case "clear-repl-variables" -> {
 					lisp.clearReplVariables();
@@ -672,6 +727,43 @@ final class SwankServer implements AutoCloseable {
 				default -> throw new IllegalArgumentException(
 						"The function " + operator.name().toUpperCase(Locale.ROOT) + " is undefined.");
 			};
+		}
+
+		/**
+		 * The uses of a name an {@code xref} kind asks for, or {@code :not-implemented}.
+		 */
+		private Object xref(@Nullable Object type, String name) {
+			String kind = type instanceof Keyword keyword ? keyword.name() : String.valueOf(type);
+			List<SwankSources.Entry> found = SwankServer.this.lisp.xref(kind, name);
+			return found == null ? kw("not-implemented") : entries(found);
+		}
+
+		/**
+		 * Asks the editor for a line ({@code :read-from-minibuffer}) and waits for it
+		 * ({@code :emacs-return}).
+		 */
+		private @Nullable String readFromMinibuffer(String prompt) {
+			long thread = Thread.currentThread().threadId();
+			BlockingQueue<List<?>> box = new LinkedBlockingQueue<>();
+			this.minibuffer.put(thread, box);
+			send(list(kw("read-from-minibuffer"), thread, nextTag(), prompt, null));
+			try {
+				while (true) {
+					List<?> event = box.poll(1, TimeUnit.SECONDS);
+					if (event != null) {
+						return event.size() > 3 && event.get(3) instanceof String line ? line : null;
+					}
+					if (this.closed) {
+						return null;
+					}
+				}
+			}
+			catch (InterruptedException ex) {
+				throw new LispInterruptSignal();
+			}
+			finally {
+				this.minibuffer.remove(thread, box);
+			}
 		}
 
 		private @Nullable Object listenerEval(String code, Output output, SwankDialect dialect) {
@@ -1115,7 +1207,7 @@ final class SwankServer implements AutoCloseable {
 
 	/**
 	 * A request's standard input: a read the buffer cannot answer takes the editor's next
-	 * line ({@link Connection#askEditor}, {@link MRepl#readLine}).
+	 * line ({@link Connection#readString}, {@link MRepl#readLine}, a minibuffer).
 	 */
 	private static final class Input extends Reader {
 
@@ -1296,13 +1388,50 @@ final class SwankServer implements AutoCloseable {
 	}
 
 	private static List<Object> location(CommonLispSwank.@Nullable Location location) {
+		return location(location, null);
+	}
+
+	private static List<Object> location(CommonLispSwank.@Nullable Location location, @Nullable String snippet) {
+		Object hints = snippet == null ? null : list(kw("snippet"), snippet);
 		return switch (location) {
 			case null -> list(kw("error"), "No location");
 			case CommonLispSwank.Location.Buffer buffer -> list(kw("location"), list(kw("buffer"), buffer.buffer()),
-					list(kw("offset"), (long) buffer.start(), (long) buffer.offset()), null);
-			case CommonLispSwank.Location.File file ->
-				list(kw("location"), list(kw("file"), file.file()), list(kw("position"), (long) file.position()), null);
+					list(kw("offset"), (long) buffer.start(), (long) buffer.offset()), hints);
+			case CommonLispSwank.Location.BufferAndFile buffer ->
+				list(kw("location"), list(kw("buffer-and-file"), buffer.buffer(), buffer.file()),
+						list(kw("offset"), (long) buffer.start(), (long) buffer.offset()), hints);
+			case CommonLispSwank.Location.File file -> list(kw("location"), list(kw("file"), file.file()),
+					list(kw("position"), (long) file.position()), hints);
 		};
+	}
+
+	/** Definitions or uses as SWANK's {@code xref>elisp}: {@code (label location)}. */
+	private static List<Object> entries(List<SwankSources.Entry> entries) {
+		List<Object> out = new ArrayList<>(entries.size());
+		for (SwankSources.Entry entry : entries) {
+			SwankSources.Place place = entry.place();
+			out.add(list(entry.label(),
+					place == null ? list(kw("error"), entry.error()) : location(place.location(), place.snippet())));
+		}
+		return out;
+	}
+
+	/** An inspector page as SWANK's {@code istate>elisp}. */
+	private static @Nullable List<Object> page(SwankInspector.@Nullable Page page) {
+		return page == null ? null
+				: list(kw("title"), page.title(), kw("id"), (long) page.id(), kw("content"), range(page.content()));
+	}
+
+	private static List<Object> range(SwankInspector.Range range) {
+		List<Object> parts = new ArrayList<>(range.parts().size());
+		for (SwankInspector.Part part : range.parts()) {
+			parts.add(switch (part) {
+				case SwankInspector.Text text -> text.text();
+				case SwankInspector.Value value -> list(kw("value"), value.text(), (long) value.index());
+				case SwankInspector.Action action -> list(kw("action"), action.label(), (long) action.index());
+			});
+		}
+		return list(parts, (long) range.next(), (long) range.start(), (long) range.end());
 	}
 
 	/**
