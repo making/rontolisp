@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceProvenance;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A one-argument {@code intern} / {@code find-symbol} reads {@code *package*} when it
@@ -20,7 +21,9 @@ import am.ik.rontolisp.SourceProvenance;
  * {@code (intern x)} becomes {@code (intern x cl:*package*)} unless {@code *package*} is
  * {@code cl-user}, so the site takes the computed-designator lowering and the mention
  * keeps {@code *package*} live ({@code .kb/symbol-runtime-api.md}, "1-arg
- * {@code intern}").
+ * {@code intern}"). The function object -- {@code #'intern}, or {@code 'intern} in a
+ * function-designator argument -- becomes a lambda making the same call, so a mapped or
+ * funcalled intern reads {@code *package*} too.
  *
  * <p>
  * It runs on the user program (the read program, its inlined loads and its expanded user
@@ -34,6 +37,8 @@ public final class CurrentPackageIntern {
 	private static final LispSymbol PACKAGE_VARIABLE = new LispSymbol(LispNames.CL_PKG + ":" + LispNames.PACKAGE_VAR);
 
 	private static final LispSymbol NAME_VARIABLE = new LispSymbol("%CURRENT-PACKAGE-INTERN-NAME");
+
+	private static final LispSymbol REST_VARIABLE = new LispSymbol("%CURRENT-PACKAGE-INTERN-PACKAGE");
 
 	private CurrentPackageIntern() {
 	}
@@ -110,17 +115,24 @@ public final class CurrentPackageIntern {
 			if (isClOperator(head, LispNames.QUOTE)) {
 				return form;
 			}
-			if ((isClOperator(head, LispNames.INTERN) || isClOperator(head, LispNames.FIND_SYMBOL))
-					&& cons.cdr() instanceof LispCons arg && arg.cdr() instanceof LispNil) {
+			if (isInternOperator(head) && cons.cdr() instanceof LispCons arg && arg.cdr() instanceof LispNil) {
 				return SourceProvenance.inherit(cons, currentPackageCall(head, rewriteForm(arg.car())));
 			}
+			if (isClOperator(head, LispNames.FUNCTION) && cons.cdr() instanceof LispCons arg
+					&& arg.car() instanceof LispSymbol name && isInternOperator(name)) {
+				return SourceProvenance.inherit(cons, currentPackageFunction(name));
+			}
 		}
-		// Element-wise, rebuilding only a changed spine.
+		// Element-wise, rebuilding only a changed spine. A quoted 'intern in a function
+		// designator position is #'intern.
+		int designator = cons.car() instanceof LispSymbol head ? designatorArgument(head) : -1;
 		List<LispVal> elements = new ArrayList<>();
 		boolean changed = false;
 		LispVal node = cons;
 		while (node instanceof LispCons cell) {
-			LispVal element = rewriteForm(cell.car());
+			LispVal element = elements.size() == designator
+					&& quotedInternOperator(cell.car()) instanceof LispSymbol name ? currentPackageFunction(name)
+							: rewriteForm(cell.car());
 			changed |= element != cell.car();
 			elements.add(element);
 			node = cell.cdr();
@@ -145,6 +157,35 @@ public final class CurrentPackageIntern {
 		LispVal choice = list(cl(LispNames.IF), list(cl("EQ"), PACKAGE_VARIABLE, new LispSymbol(":CL-USER")),
 				list(op, value), list(op, value, PACKAGE_VARIABLE));
 		return simple ? choice : list(cl(LispNames.LET), list(list(NAME_VARIABLE, name)), choice);
+	}
+
+	// The function object with the call's *package* default:
+	// #'(lambda (name &rest p) (if p (OP name (car p)) <the call above>)).
+	private static LispVal currentPackageFunction(LispSymbol op) {
+		LispVal call = list(cl(LispNames.IF), REST_VARIABLE, list(op, NAME_VARIABLE, list(cl("CAR"), REST_VARIABLE)),
+				currentPackageCall(op, NAME_VARIABLE));
+		LispVal lambda = list(cl(LispNames.LAMBDA), list(NAME_VARIABLE, new LispSymbol("&REST"), REST_VARIABLE), call);
+		return list(cl(LispNames.FUNCTION), lambda);
+	}
+
+	private static boolean isInternOperator(LispSymbol symbol) {
+		return isClOperator(symbol, LispNames.INTERN) || isClOperator(symbol, LispNames.FIND_SYMBOL);
+	}
+
+	private static @Nullable LispSymbol quotedInternOperator(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& isClOperator(head, LispNames.QUOTE) && cons.cdr() instanceof LispCons arg
+				&& arg.cdr() instanceof LispNil && arg.car() instanceof LispSymbol name && isInternOperator(name) ? name
+						: null;
+	}
+
+	private static int designatorArgument(LispSymbol head) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
+		if (qn == null) {
+			return FunctionDesignators.designatorArgument(head.name());
+		}
+		return LispNames.CL_PKG.equals(qn.pkg()) || "COMMON-LISP".equals(qn.pkg())
+				? FunctionDesignators.designatorArgument(qn.member()) : -1;
 	}
 
 	private static LispSymbol cl(String member) {

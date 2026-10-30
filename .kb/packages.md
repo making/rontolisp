@@ -460,7 +460,7 @@ Until then a read answered a bare spelling, resolved later in the caller's packa
 parser (`(read-from-string (format nil "get-afm-~A" ...))`) called `CL-USER::GET-AFM-STRING`.
 Reader-synthesized symbols (`quote`, the backquote operators) and `#.` values are not tokens and
 are not homed; a token qualified by an unknown package keeps its spelling. The compiled
-backends' run-time reader stays package-blind, as their function-object `intern` does
+backends' run-time reader stays package-blind
 (`.kb/symbol-runtime-api.md`, "1-arg `intern`"). Pinned by `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,
 ci-spec `expansion-time-read-homes-in-the-macro-package`,
 `LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions` (a `load` from a defun), `TriviaE2eTest`,

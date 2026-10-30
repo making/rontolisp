@@ -113,16 +113,20 @@ since `.todo/917` a package keeps a MEMBER table of what `intern` / `export` / `
   `(if (eq cl:*package* :cl-user) (intern x) (intern x cl:*package*))` in `CompileFrontend`,
   right after user-macro expansion and before any library splice, so the prelude selection,
   the pruner, `injectMvSpillGlobal` and `injectBakedAccess` all see a computed-designator
-  site that reads `*package*`. The cl-user arm keeps the 1-arg lowering: a computed
+  site that reads `*package*`. The function object rides the same pass (`.todo/h76`,
+  2026-10-31): `#'intern` / `#'find-symbol`, and a quoted `'intern` in a function-designator
+  argument (`FunctionDesignators.designatorArgument`: `funcall`, `apply`, `mapcar`, ...),
+  become `#'(lambda (n &rest p) (if p (intern n (car p)) <the rewritten 1-arg call>))`, so
+  the wrapper (`BuiltinFunctionWrappers`) is no longer reached from such a program. The cl-user arm keeps the 1-arg lowering: a computed
   designator naming cl-user answers a fresh name `:external` (the builtin-package rule) and
   a literal `(find-symbol "car")` would stop folding to NIL -- both broke ci-spec
   `mv-producer-function-return` / `symbol-runtime-api` in the corpus program, which has
   `in-package` forms, before the arm existed. Not later: the implementation's own Lisp
   (`LispPreludeLibrary`, `scheme.lisp`, `format-render-slash.lisp`) and the lowerings use the
   1-arg form to intern a CANONICAL spelling verbatim (`"PKG::MEMBER"`), which the rewrite
-  would requalify. What stays package-blind: the `Environment` converter, the function
-  object (`#'intern` / `'intern` / `#'find-symbol` called with one argument -- the wrapper's
-  1-arg branch, `.todo/h76`), `eval`'d code and the compiled run-time reader. A program that
+  would requalify. What stays package-blind: the `Environment` converter, a designator the
+  pass cannot see as one (`(symbol-function 'intern)`, a symbol held in a variable -- the
+  wrapper's 1-arg branch), `eval`'d code and the compiled run-time reader. A program that
   never leaves `cl-user` is byte-identical. Cost (2026-10-31, JVM class of every
   `examples.yaml` program): 124 of 125 byte-identical; `jvm/cffi-sqlite.lisp` (alexandria's
   `symbolicate`, `(values (intern name))`, survives pruning) 2.652 -> 2.690 MB, output

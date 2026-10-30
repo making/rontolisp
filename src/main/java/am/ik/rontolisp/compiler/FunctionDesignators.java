@@ -70,6 +70,15 @@ public final class FunctionDesignators {
 	}
 
 	/**
+	 * The argument index of the function designator a standard operator calls.
+	 * @param op the operator's member name
+	 * @return the index, or {@code -1} when {@code op} takes no function designator
+	 */
+	static int designatorArgument(String op) {
+		return DESIGNATOR_ARGUMENT.getOrDefault(op, -1);
+	}
+
+	/**
 	 * Rewrites every literal {@code 'name} designator of a WRAPPED built-in
 	 * ({@link BuiltinFunctionWrappers#names()} and the reference-gated ones) into
 	 * {@code #'name}, where an operator takes it as its function argument
