@@ -5,7 +5,8 @@
 `condition` を通知し、決して戻りません。どのバックエンドにも入り込める対話的デバッガは
 無いため、「デバッガに入り、そこで中断を指示された」ことに相当するのは、その条件が
 呼び出し元の外側に確立されたハンドラへ届くこと、そしてハンドラが無ければ標準エラーへの
-レポートと非ゼロ終了です。
+レポートと非ゼロ終了です。[`rontolisp --swank`](../../getting-started/swank.md) の下では、
+どのハンドラも処理しない条件は代わりに SLIME のデバッガを開きます。
 
 ```lisp
 (handler-case (invoke-debugger (make-condition 'simple-error :format-control "boom"))

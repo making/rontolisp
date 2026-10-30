@@ -1020,7 +1020,9 @@ is a separate surface scan.**
   compound type spec cannot reject the analysis.
 - Lite deviations (on the doc pages): `&optional` clause parameters take nil rather than their
   default, no condition-restart association, restart records print as plain lists,
-  `:report`/`:interactive` stored but never rendered/run (no debugger),
+  `:report`/`:interactive` stored, rendered/run only by `rontolisp --swank`'s debugger
+  ([swank.md](swank.md)) -- a `with-simple-restart`'s or `cerror`'s report is its format control
+  WITHOUT the arguments, which the lowering drops --
   `check-type`/`assert`/`ccase`/`ctypecase` offer no `store-value` restart.
 - `use-value`/`store-value` share `LispMacroExpander.valueRestartDefun`: invoke the innermost restart
   of that name with ONE value, nil when none is active. In `RESTART_RUNTIME_FUNCTION_NAMES` and
@@ -3089,8 +3091,8 @@ standalone `uncaught-non-function-report`, `LispEvaluatorTest`
   dispatch prologue on both, a little more with `type-error` / `undefined-function` clauses.
 
 ## Out of scope (still)
-The interactive debugger (`break`, `*debugger-hook*`, rendering a restart's `:report` or running its
-`:interactive` function), condition-restart association, a `store-value` restart for
+A program's interactive debugger (`break`, `*debugger-hook*`; only `rontolisp --swank` has one,
+SLIME's, [swank.md](swank.md)), condition-restart association, a `store-value` restart for
 `check-type`/`assert`/`ccase`/`ctypecase` (`expandCcase` -> `expandEcase`, `expandCtypecase` ->
 `expandEtypecase`), `--no-gc` catching (the GC path's `$lisp-cond` tag has no MVP equivalent, which
 is why `--no-gc` rejects the forms outright rather than degrading). Postmodern is the real restart customer

@@ -1,0 +1,98 @@
+>> (:emacs-rex (swank:connection-info) "COMMON-LISP-USER" t 1)\n
+<< (:return (:ok (:pid 3287893 :style :spawn :encoding (:coding-systems ("utf-8-unix")) :lisp-implementation (:type "rontolisp" :name "rontolisp" :version "0.1.0-SNAPSHOT" :program nil) :machine (:instance "dorian" :type "JVM" :version "25.0.4") :features (:rontolisp :rontolisp-interpreter :unicode :thread-support) :modules ("SWANK-REPL" "SWANK-ARGLISTS" "SWANK-C-P-C" "SWANK-FUZZY" "SWANK-UTIL") :package (:name "CL-USER" :prompt "CL-USER") :version "2.32")) 1)
+>> (:emacs-rex (swank:swank-require '(swank-indentation swank-trace-dialog swank-package-fu swank-presentations swank-macrostep swank-fuzzy swank-fancy-inspector swank-c-p-c swank-arglists swank-repl)) "COMMON-LISP-USER" t 2)\n
+<< (:return (:ok ("SWANK-REPL" "SWANK-ARGLISTS" "SWANK-C-P-C" "SWANK-FUZZY" "SWANK-UTIL" "SWANK-INDENTATION" "SWANK-TRACE-DIALOG" "SWANK-PACKAGE-FU" "SWANK-PRESENTATIONS" "SWANK-MACROSTEP" "SWANK-FANCY-INSPECTOR")) 2)
+>> (:emacs-rex (swank:init-presentations) "COMMON-LISP-USER" t 3)\n
+<< (:return (:ok nil) 3)
+>> (:emacs-rex (swank-repl:create-repl nil) "COMMON-LISP-USER" t 4)\n
+<< (:return (:ok ("CL-USER" "CL-USER")) 4)
+>> (:emacs-rex (swank-repl:listener-eval "(error \"boom ~a\" 1)\n") "CL-USER" :repl-thread 5)\n
+<< (:debug 93 1 ("boom 1" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5D}>)")) ((0 "(EVAL (ERROR \"boom ~a\" 1))") (1 "(SWANK-REPL:LISTENER-EVAL \"(error \\\"boom ~a\\\" 1) ..)")) (5))
+<< (:debug-activate 93 1 nil)
+>> (:emacs-rex (swank:sldb-continue) "CL-USER" 93 6)\n
+<< (:return (:ok nil) 6)
+>> (:emacs-rex (swank:throw-to-toplevel) "CL-USER" 93 7)\n
+<< (:return (:abort "NIL") 7)
+<< (:debug-return 93 1 nil)
+<< (:return (:abort "#<SIMPLE-ERROR \"boom 1\">") 5)
+>> (:emacs-rex (swank-repl:listener-eval "(restart-case (error \"pick ~a\" 2) (use-five () :report \"Return five.\" 5) (use-ten () 10))\n") "CL-USER" :repl-thread 8)\n
+<< (:debug 93 1 ("pick 2" "   [Condition of type SIMPLE-ERROR]" nil) (("USE-FIVE" "Return five.") ("USE-TEN" "USE-TEN") ("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5D}>)")) ((0 "(EVAL (RESTART-CASE (ERROR \"pick ~a\" 2) (USE-FIVE NIL :REPORT \"Return five.\" 5) (USE-TEN NIL 10)))") (1 "(SWANK-REPL:LISTENER-EVAL \"(restart-case (error \\\"pick ~a\\\" 2) (use-five () :report \\\"Return five.\\\" 5) (use-ten () 10)) ..)")) (8))
+<< (:debug-activate 93 1 nil)
+>> (:emacs-rex (swank:invoke-nth-restart-for-emacs 1 0) "CL-USER" 93 9)\n
+<< (:return (:abort "NIL") 9)
+<< (:debug-return 93 1 nil)
+<< (:write-string "5\n" :repl-result)
+<< (:return (:ok nil) 8)
+>> (:emacs-rex (swank-repl:listener-eval "(progn (cerror \"Keep going.\" \"Cerror ~a\" 3) :went-on)\n") "CL-USER" :repl-thread 10)\n
+<< (:debug 93 1 ("Cerror 3" "   [Condition of type SIMPLE-ERROR]" nil) (("CONTINUE" "Keep going.") ("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5D}>)")) ((0 "(EVAL (PROGN (CERROR \"Keep going.\" \"Cerror ~a\" 3) :WENT-ON))") (1 "(SWANK-REPL:LISTENER-EVAL \"(progn (cerror \\\"Keep going.\\\" \\\"Cerror ~a\\\" 3) :went-on) ..)")) (10))
+<< (:debug-activate 93 1 nil)
+>> (:emacs-rex (swank:sldb-continue) "CL-USER" 93 11)\n
+<< (:return (:abort "NIL") 11)
+<< (:debug-return 93 1 nil)
+<< (:write-string ":WENT-ON\n" :repl-result)
+<< (:return (:ok nil) 10)
+>> (:emacs-rex (swank:interactive-eval "(car 1)" 6 80) "CL-USER" t 12)\n
+<< (:debug 94 1 ("CAR: The value 1 is not of type LIST" "   [Condition of type TYPE-ERROR]" nil) (("RETRY" "Retry SLIME interactive evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"worker\" RUNNING {5E}>)")) ((0 "(CAR 1)") (1 "(EVAL (CAR 1))") (2 "(SWANK:INTERACTIVE-EVAL \"(car 1)\" 6 80)")) (12))
+<< (:debug-activate 94 1 nil)
+>> (:emacs-rex (swank:sldb-abort) "CL-USER" 94 13)\n
+<< (:return (:abort "NIL") 13)
+<< (:debug-return 94 1 nil)
+<< (:return (:abort "#<TYPE-ERROR \"CAR: The value 1 is not of type LIST\">") 12)
+>> (:emacs-rex (swank-repl:listener-eval "(defun drv-g (z) (list (error \"deep ~a\" z)))\n") "CL-USER" :repl-thread 14)\n
+<< (:write-string "DRV-G\n" :repl-result)
+<< (:return (:ok nil) 14)
+>> (:emacs-rex (swank-repl:listener-eval "(defun drv-f (x) (let ((y (* x 2))) (list (drv-g y))))\n") "CL-USER" :repl-thread 15)\n
+<< (:write-string "DRV-F\n" :repl-result)
+<< (:return (:ok nil) 15)
+>> (:emacs-rex (swank-repl:listener-eval "(drv-f 21)\n") "CL-USER" :repl-thread 16)\n
+<< (:debug 93 1 ("deep 42" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5D}>)")) ((0 "(DRV-G 42)") (1 "(DRV-F 21)") (2 "(EVAL (DRV-F 21))") (3 "(SWANK-REPL:LISTENER-EVAL \"(drv-f 21) ..)")) (16))
+<< (:debug-activate 93 1 nil)
+>> (:emacs-rex (swank:frame-locals-and-catch-tags 0) "CL-USER" 93 17)\n
+<< (:return (:ok (((:name "Z" :id 0 :value "42")) nil)) 17)
+>> (:emacs-rex (swank:frame-locals-and-catch-tags 1) "CL-USER" 93 18)\n
+<< (:return (:ok (((:name "X" :id 0 :value "21") (:name "Y" :id 0 :value "42")) nil)) 18)
+>> (:emacs-rex (swank:frame-package-name 1) "CL-USER" 93 19)\n
+<< (:return (:ok "CL-USER") 19)
+>> (:emacs-rex (swank:eval-string-in-frame "(* x 2)" 1 "COMMON-LISP-USER" 6 80) "CL-USER" 93 20)\n
+<< (:return (:ok "=> 42 (6 bits, #x2A, #o52, #b101010)") 20)
+>> (:emacs-rex (swank:backtrace 1 3) "CL-USER" 93 21)\n
+<< (:return (:ok ((1 "(DRV-F 21)") (2 "(EVAL (DRV-F 21))"))) 21)
+>> (:emacs-rex (swank:throw-to-toplevel) "CL-USER" 93 22)\n
+<< (:return (:abort "NIL") 22)
+<< (:debug-return 93 1 nil)
+<< (:return (:abort "#<SIMPLE-ERROR \"deep 42\">") 16)
+>> (:emacs-rex (swank-repl:listener-eval "(loop)\n") "CL-USER" :repl-thread 23)\n
+>> (:emacs-interrupt t)\n
+<< (:debug 93 1 ("Interrupt from Emacs" "   [Condition of type SIMPLE-ERROR]" nil) (("CONTINUE" "Continue from break.") ("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5D}>)")) ((0 "(EVAL (LOOP))") (1 "(SWANK-REPL:LISTENER-EVAL \"(loop) ..)")) (23))
+<< (:debug-activate 93 1 nil)
+>> (:emacs-rex (swank:sldb-continue) "CL-USER" 93 24)\n
+<< (:return (:abort "NIL") 24)
+<< (:debug-return 93 1 nil)
+>> (:emacs-interrupt t)\n
+<< (:debug 93 1 ("Interrupt from Emacs" "   [Condition of type SIMPLE-ERROR]" nil) (("CONTINUE" "Continue from break.") ("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5D}>)")) ((0 "(EVAL (LOOP))") (1 "(SWANK-REPL:LISTENER-EVAL \"(loop) ..)")) (23))
+<< (:debug-activate 93 1 nil)
+>> (:emacs-rex (swank:throw-to-toplevel) "CL-USER" 93 25)\n
+<< (:return (:abort "NIL") 25)
+<< (:debug-return 93 1 nil)
+<< (:return (:abort "NIL") 23)
+>> (:emacs-rex (swank-repl:listener-eval "(error \"outer\")\n") "CL-USER" :repl-thread 26)\n
+<< (:debug 93 1 ("outer" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5D}>)")) ((0 "(EVAL (ERROR \"outer\"))") (1 "(SWANK-REPL:LISTENER-EVAL \"(error \\\"outer\\\") ..)")) (26))
+<< (:debug-activate 93 1 nil)
+>> (:emacs-rex (swank-repl:listener-eval "(error \"inner\")\n") "CL-USER" :repl-thread 27)\n
+<< (:debug 93 2 ("inner" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("ABORT" "Return to sldb level 1.") ("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5D}>)")) ((0 "(EVAL (ERROR \"inner\"))") (1 "(SWANK-REPL:LISTENER-EVAL \"(error \\\"inner\\\") ..)") (2 "(SWANK::SLDB-LOOP 1)") (3 "(EVAL (ERROR \"outer\"))") (4 "(SWANK-REPL:LISTENER-EVAL \"(error \\\"outer\\\") ..)")) (27 26))
+<< (:debug-activate 93 2 nil)
+>> (:emacs-rex (swank:invoke-nth-restart-for-emacs 2 1) "CL-USER" 93 28)\n
+<< (:return (:abort "NIL") 28)
+<< (:debug-return 93 2 nil)
+<< (:return (:abort "#<SIMPLE-ERROR \"inner\">") 27)
+<< (:debug 93 1 ("outer" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5D}>)")) ((0 "(EVAL (ERROR \"outer\"))") (1 "(SWANK-REPL:LISTENER-EVAL \"(error \\\"outer\\\") ..)")) (26))
+<< (:debug-activate 93 1 nil)
+<< (:debug 93 1 ("outer" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5D}>)")) ((0 "(EVAL (ERROR \"outer\"))") (1 "(SWANK-REPL:LISTENER-EVAL \"(error \\\"outer\\\") ..)")) (26))
+<< (:debug-activate 93 1 nil)
+>> (:emacs-rex (swank:throw-to-toplevel) "CL-USER" 93 29)\n
+<< (:return (:abort "NIL") 29)
+<< (:debug-return 93 1 nil)
+<< (:return (:abort "#<SIMPLE-ERROR \"inner\">") 26)
+>> (:emacs-rex (swank-repl:listener-eval "(+ 40 2)\n") "CL-USER" :repl-thread 30)\n
+<< (:write-string "42\n" :repl-result)
+<< (:return (:ok nil) 30)

@@ -292,6 +292,33 @@ public final class LispEvaluator {
 	 */
 	private final Set<Thread> interruptedThreads = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+	/**
+	 * Whether a debugger can be installed on a thread ({@link #enableDebugging}): every
+	 * function call keeps a frame on its thread's stack, and an error is offered to the
+	 * thread's debugger at its signal point. Written once, before any thread that reads
+	 * it starts, so a call pays one plain field read while it is off.
+	 */
+	private boolean debugging;
+
+	/** Each thread's call stack top, while frames are kept ({@link #debugging}). */
+	private final ThreadLocal<@Nullable CallFrame[]> frameTops = ThreadLocal.withInitial(() -> new CallFrame[1]);
+
+	/** Each thread's debugger, where one is installed ({@link #withDebugger}). */
+	private final ThreadLocal<@Nullable Debugger> debuggers = new ThreadLocal<>();
+
+	/**
+	 * How many debugger levels run on each thread: an evaluation inside one is nested in
+	 * another the debugger stopped, whose catches and blocks a throw or an exit may still
+	 * reach ({@link #nestedInDebugger}).
+	 */
+	private final ThreadLocal<int[]> debuggerLevels = ThreadLocal.withInitial(() -> new int[1]);
+
+	/**
+	 * The catch tags Java code established around the evaluations on each thread
+	 * ({@link #catchingOutside}): a debugger's own restarts.
+	 */
+	private final ThreadLocal<List<LispVal>> outerCatches = ThreadLocal.withInitial(ArrayList::new);
+
 	private boolean usocketLibraryLoaded = false;
 
 	private boolean witLibraryLoaded = false;
@@ -1229,6 +1256,8 @@ public final class LispEvaluator {
 		// read that follows it. The read-time set cannot answer for that; it was fixed
 		// when the frontend read this source.
 		this.globalEnv.setReadFeaturesQuery(this::currentReadFeatures);
+		// a sleep an interrupt woke asks whether a debugger went on with the evaluation
+		this.globalEnv.setInterruptResumed(this::resumeAfterInterrupt);
 		this.globalEnv.defineFunction(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
 			if (args.size() != 1) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
@@ -5576,9 +5605,15 @@ public final class LispEvaluator {
 		catch (BlockReturnSignal signal) {
 			// A named return-from whose block was never established (or whose exit
 			// extent already ended) surfaces as an ordinary error, not a raw signal.
+			if (nestedInDebugger()) {
+				throw signal;
+			}
 			throw new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + signal.name());
 		}
 		catch (ThrowSignal signal) {
+			if (nestedInDebugger() || caughtOutside(signal)) {
+				throw signal;
+			}
 			throw new LispEvalException(unmatchedThrowMessage(signal));
 		}
 	}
@@ -5640,7 +5675,9 @@ public final class LispEvaluator {
 	 * Asks the evaluation running on a thread to stop: at its next function call or loop
 	 * step it throws {@link LispInterruptSignal}, which no handler catches and every
 	 * {@code unwind-protect} cleanup runs for. The thread is interrupted too, so a call
-	 * blocked in a sleep or a wait wakes. What an nREPL {@code interrupt} does.
+	 * blocked in a sleep or a wait wakes. What an nREPL {@code interrupt} does. A thread
+	 * with a debugger enters it there instead ({@link Debugger#interrupted}), as SWANK's
+	 * interrupt does.
 	 * @param thread the thread
 	 */
 	public void interrupt(Thread thread) {
@@ -5727,8 +5764,347 @@ public final class LispEvaluator {
 		this.pendingInterrupts.decrementAndGet();
 		// the status only woke a blocked call: the cleanups on the way out may block
 		Thread.interrupted();
+		Debugger debugger = this.debugging ? this.debuggers.get() : null;
+		if (debugger != null) {
+			int[] levels = this.debuggerLevels.get();
+			levels[0]++;
+			try {
+				if (debugger.interrupted()) {
+					return;
+				}
+			}
+			finally {
+				levels[0]--;
+			}
+		}
 		throw new LispInterruptSignal();
 	}
+
+	// ------------------------------------------------------------------------------------
+	// The debugger seam (SWANK's SLDB, .kb/swank.md)
+
+	/**
+	 * Whether the calling thread evaluates inside a debugger level, nested in an
+	 * evaluation the debugger stopped: a {@code throw} or a {@code return-from} no catch
+	 * or block of this evaluation takes goes on to that one, as it would on SBCL, rather
+	 * than being the unmatched exit an outermost evaluation reports.
+	 */
+	private boolean nestedInDebugger() {
+		return this.debugging && this.debuggerLevels.get()[0] > 0;
+	}
+
+	/**
+	 * Whether the calling thread has a debugger: every frame an error leaves is then its
+	 * signal point until one offers it, so its handlers run, and the debugger meets it,
+	 * before anything it unwinds -- not only at a built-in's seam.
+	 */
+	private boolean debuggerHere() {
+		return this.debugging && this.debuggers.get() != null;
+	}
+
+	/**
+	 * Runs the body with a catch tag Java code takes established around it: a
+	 * {@code throw} to it -- the invocation of a restart a debugger established -- leaves
+	 * every evaluation inside for that code.
+	 * @param <T> what the body answers
+	 * @param tag the tag
+	 * @param body the body
+	 * @return what it answered
+	 */
+	<T extends @Nullable Object> T catchingOutside(LispVal tag, Supplier<T> body) {
+		List<LispVal> tags = this.outerCatches.get();
+		tags.add(tag);
+		try {
+			return body.get();
+		}
+		finally {
+			tags.removeLast();
+		}
+	}
+
+	/** Whether Java code around the evaluation takes a throw's tag. */
+	private boolean caughtOutside(ThrowSignal signal) {
+		if (this.debugging) {
+			for (LispVal tag : this.outerCatches.get()) {
+				if (tag == signal.tag()) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Stops the calling thread where an interrupt is pending for it, as its next function
+	 * call would: what a wait an interrupt woke checks.
+	 */
+	void checkInterrupt() {
+		pollInterrupt();
+	}
+
+	/**
+	 * For a blocked call an interrupt woke: whether the interrupt was this evaluator's,
+	 * on a thread with a debugger, and the debugger went on with the evaluation -- the
+	 * call then waits out the rest. Without a debugger nothing is taken: the call fails
+	 * as before and the evaluation stops at its next step.
+	 * @return whether the call goes on
+	 */
+	private boolean resumeAfterInterrupt() {
+		if (!this.debugging || this.debuggers.get() == null
+				|| !this.interruptedThreads.contains(Thread.currentThread())) {
+			return false;
+		}
+		stopIfInterrupted();
+		return true;
+	}
+
+	/**
+	 * Whether a Java exception is the interpreter's transfer of control -- a
+	 * {@code throw} (a restart's invocation among them), a {@code return-from}, a
+	 * {@code go} -- rather than a condition: what a frame it leaves lets pass.
+	 * @param ex the exception
+	 * @return whether it transfers control
+	 */
+	static boolean isControlTransfer(RuntimeException ex) {
+		return ex instanceof ThrowSignal || ex instanceof BlockReturnSignal || ex instanceof BlockTailExit
+				|| ex instanceof GoSignal;
+	}
+
+	/**
+	 * Runs the body with the calling thread's {@code handler-case} clauses out of reach:
+	 * what a debugger level evaluates is caught by no handler of the evaluation it
+	 * stopped.
+	 * @param body the body
+	 */
+	void withHandlerCasesIsolated(Runnable body) {
+		ArrayDeque<List<LispVal>> outer = this.handlerCaseTypes.get();
+		this.handlerCaseTypes.set(new ArrayDeque<>());
+		try {
+			body.run();
+		}
+		finally {
+			this.handlerCaseTypes.set(outer);
+		}
+	}
+
+	/**
+	 * A {@code simple-error} reporting a text, as {@code (make-condition 'simple-error
+	 * :format-control text)} makes one.
+	 * @param text the report
+	 * @return the condition
+	 */
+	LispVal simpleError(String text) {
+		return synthesizeCondition(new LispEvalException(text));
+	}
+
+	/**
+	 * Lets a thread install a debugger ({@link #withDebugger}): loads the restart
+	 * runtime, so every restart a program establishes sits on its thread's restart stack
+	 * and every signal runs the handlers before anything unwinds, and keeps each thread's
+	 * call frames. Called before any thread a debugger serves starts.
+	 */
+	void enableDebugging() {
+		ensureRestartRuntimeLoaded();
+		this.debugging = true;
+	}
+
+	/**
+	 * Runs the body with a debugger installed on the calling thread, or with none.
+	 * @param <T> what the body answers
+	 * @param debugger the debugger, or null for none
+	 * @param body the body
+	 * @return what it answered
+	 */
+	<T extends @Nullable Object> T withDebugger(@Nullable Debugger debugger, Supplier<T> body) {
+		Debugger previous = this.debuggers.get();
+		this.debuggers.set(debugger);
+		try {
+			return body.get();
+		}
+		finally {
+			this.debuggers.set(previous);
+		}
+	}
+
+	/**
+	 * Runs the body with no debugger on the calling thread: Java code that catches what
+	 * the body signals, as a {@code handler-case} would, so no debugger may stop it.
+	 * @param <T> what the body answers
+	 * @param body the body
+	 * @return what it answered
+	 */
+	<T extends @Nullable Object> T withoutDebugger(Supplier<T> body) {
+		return this.debugging ? withDebugger(null, body) : body.get();
+	}
+
+	/**
+	 * Runs the body under a marker frame on the calling thread's stack.
+	 * @param <T> what the body answers
+	 * @param call the call the frame shows
+	 * @param body the body
+	 * @return what it answered
+	 */
+	<T extends @Nullable Object> T withFrame(LispVal call, Supplier<T> body) {
+		if (!this.debugging) {
+			return body.get();
+		}
+		CallFrame frame = CallFrame.mark(this.frameTops.get(), call);
+		try {
+			return body.get();
+		}
+		finally {
+			frame.exit();
+		}
+	}
+
+	/**
+	 * The calling thread's innermost frame.
+	 * @return the frame, or null for none
+	 */
+	@Nullable CallFrame topFrame() {
+		return this.frameTops.get()[0];
+	}
+
+	/**
+	 * A special variable's value on the calling thread: its dynamic binding, else its
+	 * global value.
+	 * @param name the variable's name
+	 * @return the value, or null when it has none
+	 */
+	@Nullable LispVal specialValue(String name) {
+		return currentSpecialValue(name);
+	}
+
+	/**
+	 * A special variable's dynamic binding on the calling thread.
+	 * @param name the variable's name
+	 * @return its value, or null when the thread does not bind it
+	 */
+	@Nullable LispVal threadBinding(String name) {
+		return this.dynamicBindings.isBound(name) ? this.dynamicBindings.get(name) : null;
+	}
+
+	/**
+	 * Assigns a special variable on the calling thread: its dynamic binding, else its
+	 * global value.
+	 * @param name the variable's name
+	 * @param value the value
+	 */
+	void setSpecialValue(String name, LispVal value) {
+		if (this.dynamicBindings.isBound(name)) {
+			this.dynamicBindings.setCurrent(name, value);
+		}
+		else {
+			this.globalEnv.set(name, value);
+		}
+	}
+
+	/**
+	 * Evaluates a form in a scope, as a debugger evaluates in a frame, answering its
+	 * values.
+	 * @param form the form, read in the calling thread's package
+	 * @param env the scope
+	 * @return the values, primary first (empty for none)
+	 */
+	List<LispVal> evalValuesIn(LispVal form, Environment env) {
+		LispVal resolved = this.packageResolver.resolve(form);
+		if (LispMacroExpander.isSyntacticMultipleValueProducer(resolved)) {
+			return spilledValues(eval(new LispCons(new LispSymbol(LispNames.MULTIPLE_VALUE_LIST),
+					new LispCons(resolved, LispNil.INSTANCE)), env));
+		}
+		this.globalEnv.clearSpill();
+		return consumeValues(eval(resolved, env));
+	}
+
+	/**
+	 * Where an error a built-in raised, or one a frame is leaving, is signalled: runs the
+	 * {@code handler-bind} handlers ({@link #withHandlerBindHandlersRun}), then, while
+	 * debugging, offers it to the thread's debugger ({@link #offerDebugger}).
+	 * @param e the error
+	 * @param env the scope it was signalled in
+	 * @param builtIn the built-in that raised it, or null
+	 * @param args the built-in's arguments
+	 * @return the error to throw on
+	 */
+	private LispEvalException signalPoint(LispEvalException e, Environment env, @Nullable LispFunction builtIn,
+			List<LispVal> args) {
+		LispEvalException walked = withHandlerBindHandlersRun(e);
+		if (this.debugging) {
+			offerDebugger(walked, env, builtIn == null ? null : operatorCall(builtIn, args));
+		}
+		return walked;
+	}
+
+	private LispEvalException signalPoint(LispEvalException e, Environment env, @Nullable LispFunction builtIn) {
+		return signalPoint(e, env, builtIn, List.of());
+	}
+
+	/**
+	 * The signal point of an error a top-level evaluation is leaving: what no frame of it
+	 * signalled (a variable the form is) runs its handlers and meets the debugger here.
+	 * @param e the error
+	 * @return the error to throw on
+	 */
+	LispEvalException atSignalPoint(LispEvalException e) {
+		return signalPoint(e, this.globalEnv, null);
+	}
+
+	/**
+	 * Offers an error to the calling thread's debugger, once, when no
+	 * {@code handler-case} takes it: CL's {@code invoke-debugger} for an error its
+	 * handlers declined. The debugger runs here, before anything unwinds, and leaves by a
+	 * restart's transfer of control; when it declines, the error goes on unwinding.
+	 * @param e the error, its handlers run
+	 * @param env the scope it was signalled in, or null
+	 * @param operatorCall the call of the built-in that raised it, or null
+	 */
+	private void offerDebugger(LispEvalException e, @Nullable Environment env, @Nullable LispVal operatorCall) {
+		Debugger debugger = this.debuggers.get();
+		if (debugger == null || e.offerDebugger()) {
+			return;
+		}
+		LispVal condition = e.condition() != null ? e.condition() : synthesizeCondition(e);
+		// a clause type's own failure is the handler-case's to report, not a debugger's
+		if (withoutDebugger(() -> anyHandlerCaseMatches(condition))) {
+			return;
+		}
+		String message = e.getMessage();
+		// an interrupt that woke the call failing here is answered by this debugger: it
+		// is not left to stop an evaluation the debugger runs
+		clearInterrupt();
+		int[] levels = this.debuggerLevels.get();
+		levels[0]++;
+		try {
+			debugger.debug(condition, message == null ? "" : message, env,
+					operatorCall == null ? null : CallFrame.operator(topFrame(), operatorCall));
+		}
+		finally {
+			levels[0]--;
+		}
+	}
+
+	/**
+	 * The call of a built-in an error was raised in, as a frame shows it, or null for one
+	 * no frame shows: an internal primitive, or a signalling operator, whose caller is
+	 * where the error happened.
+	 */
+	private static @Nullable LispVal operatorCall(LispFunction builtIn, List<LispVal> args) {
+		String name = builtIn.name();
+		if (name.startsWith("%") || SIGNALLING_OPERATORS.contains(name)) {
+			return null;
+		}
+		LispVal call = LispNil.INSTANCE;
+		for (int i = args.size() - 1; i >= 0; i--) {
+			call = new LispCons(args.get(i), call);
+		}
+		return new LispCons(new LispSymbol(name), call);
+	}
+
+	/**
+	 * The operators whose own frame a debugger leaves out, as SWANK leaves out ERROR's.
+	 */
+	private static final Set<String> SIGNALLING_OPERATORS = Set.of(LispNames.ERROR, LispNames.CERROR, LispNames.SIGNAL,
+			LispNames.WARN);
 
 	/**
 	 * Captures the evaluator's control state -- the stacks every binding form pushes
@@ -5745,7 +6121,7 @@ public final class LispEvaluator {
 		return new ControlState(this.dynamicBindings.depths(), this.handlerCaseTypes.get().size(),
 				this.functionBodyDepth, this.packageResolver.packageStackDepth(),
 				this.packageResolver.currentPackageName(), this.loadDirStack.size(), this.loadingSystems.size(),
-				this.out.muted);
+				this.out.muted, this.debugging ? topFrame() : null);
 	}
 
 	/**
@@ -5770,9 +6146,11 @@ public final class LispEvaluator {
 
 		private final boolean muted;
 
+		private final @Nullable CallFrame topFrame;
+
 		private ControlState(Map<String, Integer> bindingDepths, int handlerCaseFrames, int functionBodyDepth,
-				int packageStackDepth, String currentPackage, int loadDirDepth, int loadingSystemsDepth,
-				boolean muted) {
+				int packageStackDepth, String currentPackage, int loadDirDepth, int loadingSystemsDepth, boolean muted,
+				@Nullable CallFrame topFrame) {
 			this.bindingDepths = bindingDepths;
 			this.handlerCaseFrames = handlerCaseFrames;
 			this.functionBodyDepth = functionBodyDepth;
@@ -5781,6 +6159,7 @@ public final class LispEvaluator {
 			this.loadDirDepth = loadDirDepth;
 			this.loadingSystemsDepth = loadingSystemsDepth;
 			this.muted = muted;
+			this.topFrame = topFrame;
 		}
 
 		/** Puts the evaluator's control stacks back to this state. */
@@ -5800,6 +6179,9 @@ public final class LispEvaluator {
 				evaluator.loadingSystems.removeLast();
 			}
 			evaluator.out.muted = this.muted;
+			if (evaluator.debugging) {
+				evaluator.frameTops.get()[0] = this.topFrame;
+			}
 		}
 
 	}
@@ -5824,8 +6206,10 @@ public final class LispEvaluator {
 			return value.print();
 		}
 		try {
-			return printThrough("(lambda (x) (prin1-to-string x))", value) instanceof LispString rendered
-					? rendered.value() : value.print();
+			// the rendering's failure is caught below: no debugger stops it
+			return withoutDebugger(
+					() -> printThrough("(lambda (x) (prin1-to-string x))", value)) instanceof LispString rendered
+							? rendered.value() : value.print();
 		}
 		catch (RuntimeException ex) {
 			return value.print();
@@ -6085,9 +6469,15 @@ public final class LispEvaluator {
 			return eval(expr, this.globalEnv);
 		}
 		catch (BlockReturnSignal signal) {
+			if (nestedInDebugger()) {
+				throw signal;
+			}
 			throw new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + signal.name());
 		}
 		catch (ThrowSignal signal) {
+			if (nestedInDebugger() || caughtOutside(signal)) {
+				throw signal;
+			}
 			throw new LispEvalException(unmatchedThrowMessage(signal));
 		}
 	}
@@ -6139,7 +6529,7 @@ public final class LispEvaluator {
 			String savedPackage = this.packageResolver.currentPackageName();
 			this.packageResolver.setCurrentPackage(definingPackage);
 			try {
-				return eval(valueForm, this.globalEnv);
+				return withoutDebugger(() -> eval(valueForm, this.globalEnv));
 			}
 			catch (RuntimeException ex) {
 				System.err.println("warning: skipping macro-time evaluation of " + op.print() + " " + name.print()
@@ -7116,6 +7506,9 @@ public final class LispEvaluator {
 		LocatedCons located = null;
 		String locatedIn = null;
 		LispLambda frameLambda = null;
+		// The thread's call-stack frame of the function this loop entered, while a
+		// debugger may ask for the stack (debugging); a tail call replaces its function.
+		CallFrame callFrame = null;
 		LispVal result;
 		try {
 			frame: while (true) {
@@ -7675,6 +8068,11 @@ public final class LispEvaluator {
 							Environment lambdaEnv = lexicalLambdaScope(lambda, args);
 							if (lambdaEnv != null) {
 								frameLambda = lambda;
+								if (this.debugging) {
+									callFrame = callFrame == null
+											? CallFrame.enter(this.frameTops.get(), lambda, args, lambdaEnv, env)
+											: callFrame.replaced(lambda, args, lambdaEnv);
+								}
 								// A function body is no statement of the frame that ran
 								// this one: an exit from it evaluates its value form
 								// here.
@@ -7756,21 +8154,24 @@ public final class LispEvaluator {
 		}
 		catch (LispEvalException e) {
 			e.trace().passing(located, locatedIn);
-			throw funcallSeam ? withHandlerBindHandlersRun(e) : e;
+			throw funcallSeam || debuggerHere() ? signalPoint(e, env, null) : e;
 		}
 		catch (IllegalArgumentException | IndexOutOfBoundsException raw) {
 			LispEvalException failure = rawEvaluationFailure(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, raw);
 			failure.trace().passing(located, locatedIn);
-			throw funcallSeam ? withHandlerBindHandlersRun(failure) : failure;
+			throw funcallSeam || debuggerHere() ? signalPoint(failure, env, null) : failure;
 		}
 		catch (ClassCastException | ArithmeticException | NegativeArraySizeException raw) {
 			LispEvalException failure = rawEvaluationFailure(rawFailureConditionClass(raw), raw);
 			failure.trace().passing(located, locatedIn);
-			throw funcallSeam ? withHandlerBindHandlersRun(failure) : failure;
+			throw funcallSeam || debuggerHere() ? signalPoint(failure, env, null) : failure;
 		}
 		finally {
 			if (inBody) {
 				this.functionBodyDepth--;
+			}
+			if (callFrame != null) {
+				callFrame.exit();
 			}
 		}
 		return result;
@@ -9371,7 +9772,7 @@ public final class LispEvaluator {
 		boolean savedMute = this.out.muted;
 		this.out.muted = true;
 		try {
-			LispVal expansion = expandMacroCall(op.name(), macro, form);
+			LispVal expansion = withoutDebugger(() -> expandMacroCall(op.name(), macro, form));
 			return expansion.print().equals(form.print()) ? form : expansion;
 		}
 		catch (RuntimeException | StackOverflowError ex) {
@@ -11791,7 +12192,7 @@ public final class LispEvaluator {
 			letParts.add(bindings.isEmpty() ? LispNil.INSTANCE : consListOf(bindings));
 			letParts.addAll(body);
 			try {
-				LispVal spec = eval(consListOf(letParts), this.globalEnv);
+				LispVal spec = withoutDebugger(() -> eval(consListOf(letParts), this.globalEnv));
 				if (spec instanceof LispSymbol || spec instanceof LispCons) {
 					this.closRegistry.registerDeftype(nameSym.name(), spec);
 					return spec;
@@ -14483,17 +14884,17 @@ public final class LispEvaluator {
 			catch (OperandTypeException e) {
 				// A coercion funnel cannot know which operator it serves; the built-in
 				// whose body raised the error does (OperandTypes).
-				throw withHandlerBindHandlersRun(wrongCountOr(builtIn, args, e.named(builtIn.name())));
+				throw signalPoint(wrongCountOr(builtIn, args, e.named(builtIn.name())), env, builtIn, args);
 			}
 			catch (LispEvalException e) {
-				throw withHandlerBindHandlersRun(wrongCountOr(builtIn, args, e));
+				throw signalPoint(wrongCountOr(builtIn, args, e), env, builtIn, args);
 			}
 			catch (IndexOutOfBoundsException | NegativeArraySizeException | ArithmeticException
 					| ClassCastException raw) {
 				LispEvalException wrapped = LispEvalException.ofClass(rawFailureConditionClass(raw),
 						builtinFailureMessage(builtIn.name(), raw));
 				wrapped.initCause(raw);
-				throw withHandlerBindHandlersRun(wrongCountOr(builtIn, args, wrapped));
+				throw signalPoint(wrongCountOr(builtIn, args, wrapped), env, builtIn, args);
 			}
 		}
 		if (function instanceof LispLambda lambda) {
@@ -14527,6 +14928,8 @@ public final class LispEvaluator {
 			// site is a TOP-LEVEL form (whose file's package is still current) or one
 			// buried in a function body evaluated long after its file was read.
 			this.functionBodyDepth++;
+			CallFrame callFrame = this.debugging ? CallFrame.enter(this.frameTops.get(), lambda, args, lambdaEnv, env)
+					: null;
 			try {
 				List<LispVal> blockForm = soleBlockForm(lambda.body());
 				if (blockForm != null) {
@@ -14545,6 +14948,9 @@ public final class LispEvaluator {
 			}
 			finally {
 				this.functionBodyDepth--;
+				if (callFrame != null) {
+					callFrame.exit();
+				}
 				if (dynamicParams != null) {
 					for (int i = dynamicParams.size() - 1; i >= 0; i--) {
 						this.dynamicBindings.pop(dynamicParams.get(i));

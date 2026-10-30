@@ -33,6 +33,12 @@ public class LispEvalException extends RuntimeException {
 	private boolean handlersRan;
 
 	/**
+	 * Whether a debugger was offered this error at its signal point, so no frame it
+	 * unwinds through offers it again ({@link Debugger}).
+	 */
+	private boolean debuggerOffered;
+
+	/**
 	 * Create a new evaluation exception with the given message.
 	 * @param message the error message
 	 */
@@ -116,6 +122,16 @@ public class LispEvalException extends RuntimeException {
 	LispEvalException markHandlersRan() {
 		this.handlersRan = true;
 		return this;
+	}
+
+	/**
+	 * Records that a debugger was offered this error, answering whether one was before.
+	 * @return whether it had been offered already
+	 */
+	boolean offerDebugger() {
+		boolean offered = this.debuggerOffered;
+		this.debuggerOffered = true;
+		return offered;
 	}
 
 	/**

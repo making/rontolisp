@@ -5,7 +5,9 @@
 Signals `condition` and never returns. No backend has an interactive debugger to
 enter, so what "entering the debugger and being told to abort" amounts to here is
 the condition reaching whatever handler is established outside the caller -- and
-the standard-error report plus a non-zero exit when none is.
+the standard-error report plus a non-zero exit when none is. Under
+[`rontolisp --swank`](../../getting-started/swank.md) a condition no handler takes
+opens SLIME's debugger instead.
 
 ```lisp
 (handler-case (invoke-debugger (make-condition 'simple-error :format-control "boom"))

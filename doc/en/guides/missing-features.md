@@ -92,10 +92,11 @@ restarts, and [`find-restart`](../reference/functions/find-restart.md) /
 [`abort`](../reference/functions/abort.md) /
 [`continue`](../reference/functions/continue.md) drive them;
 [`cerror`](../reference/macros/cerror.md) is continuable. What is missing is the
-**interactive debugger**: `break` and `*debugger-hook*` do not exist, a restart's
-`:report` is stored but never rendered and its `:interactive` function never
-runs, and restarts are not associated with conditions (the optional condition
-argument of `find-restart`/`compute-restarts` is ignored).
+**interactive debugger** of a program: `break` and `*debugger-hook*` do not exist
+(only [`rontolisp --swank`](../getting-started/swank.md) has a debugger, SLIME's,
+which renders a restart's `:report` and runs its `:interactive` function), and
+restarts are not associated with conditions (the optional condition argument of
+`find-restart`/`compute-restarts` is ignored).
 [`check-type`](../reference/macros/check-type.md) /
 [`assert`](../reference/macros/assert.md) /
 [`ccase`](../reference/macros/ccase.md) still signal without offering a

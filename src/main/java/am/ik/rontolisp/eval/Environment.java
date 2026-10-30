@@ -472,6 +472,43 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * Answers, for a {@code sleep} an interrupt woke, whether the interrupt was the
+	 * evaluator's and its debugger went on with the evaluation, so the sleep sleeps out
+	 * its time ({@code LispEvaluator.resumeAfterInterrupt}); null on a bare
+	 * {@code Environment}.
+	 */
+	@Nullable private BooleanSupplier interruptResumed;
+
+	/**
+	 * Installs the query a {@code sleep} an interrupt woke asks; see
+	 * {@link #interruptResumed}.
+	 * @param query whether the evaluation goes on
+	 */
+	void setInterruptResumed(BooleanSupplier query) {
+		this.interruptResumed = query;
+	}
+
+	/**
+	 * Sleeps a number of milliseconds: an interrupt the evaluator's debugger went on from
+	 * sleeps out the rest, any other ends the sleep as an error.
+	 */
+	private static void sleepMillis(Environment env, long millis) {
+		long deadline = System.nanoTime() + millis * 1_000_000L;
+		for (long left = millis; left > 0; left = (deadline - System.nanoTime()) / 1_000_000L) {
+			try {
+				Thread.sleep(left);
+			}
+			catch (InterruptedException e) {
+				BooleanSupplier resumed = env.interruptResumed;
+				if (resumed == null || !resumed.getAsBoolean()) {
+					Thread.currentThread().interrupt();
+					throw new LispEvalException(LispNames.SLEEP + " was interrupted");
+				}
+			}
+		}
+	}
+
+	/**
 	 * Value expressions registered by {@link #defineLazy} that have not been forced yet.
 	 * Allocated on first use: only the compile path's macro-time environment ever has
 	 * one, so an ordinary (per-call) environment pays a null check and no map.
@@ -643,6 +680,14 @@ public final class Environment implements Scope {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * The scope this one lies in.
+	 * @return the parent scope, or null for the global one
+	 */
+	@Nullable Environment parentScope() {
+		return this.parent;
 	}
 
 	/**
@@ -3416,13 +3461,7 @@ public final class Environment implements Scope {
 			double seconds = asDouble(args.get(0));
 			long millis = Math.round(seconds * 1000.0);
 			if (millis > 0) {
-				try {
-					Thread.sleep(millis);
-				}
-				catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-					throw new LispEvalException(LispNames.SLEEP + " was interrupted");
-				}
+				sleepMillis(env, millis);
 			}
 			return LispNil.INSTANCE;
 		}));
@@ -3432,13 +3471,7 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.SLEEP_MS, args, 1);
 			long millis = (long) asDouble(args.get(0));
 			if (millis > 0) {
-				try {
-					Thread.sleep(millis);
-				}
-				catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-					throw new LispEvalException(LispNames.SLEEP + " was interrupted");
-				}
+				sleepMillis(env, millis);
 			}
 			return LispNil.INSTANCE;
 		}));

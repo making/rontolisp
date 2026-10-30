@@ -13,9 +13,11 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -27,11 +29,13 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -57,9 +61,15 @@ import am.ik.rontolisp.eval.LispInterruptSignal;
  * {@code :repl-thread} and to a thread of its own otherwise, every thread sized like the
  * command line's. A request's output streams to the editor ({@code :write-string}, each
  * write waiting for the editor's {@code :write-done}), and its standard input reads what
- * the editor's REPL types ({@code :read-string}). An {@code :emacs-interrupt} stops the
- * newest request's evaluation, which then answers {@code :abort}: there is no debugger,
- * so an error aborts the request with its condition too.
+ * the editor's REPL types ({@code :read-string}).
+ *
+ * <p>
+ * An error no handler handles enters SWANK's debugger on the thread it was signalled on,
+ * before anything unwinds ({@code :debug}, {@code :debug-activate}): the thread answers
+ * the requests the editor's SLDB sends it until one invokes a restart, the program's or
+ * one a request established (SWANK's top level, a retry, a debugger level), and announces
+ * the level's end ({@code :debug-return}). An {@code :emacs-interrupt} enters it where it
+ * stops the newest request's evaluation, a {@code CONTINUE} restart going on with it.
  */
 final class SwankServer implements AutoCloseable {
 
@@ -74,6 +84,11 @@ final class SwankServer implements AutoCloseable {
 	 */
 	private static final List<String> MODULES = List.of("SWANK-REPL", "SWANK-ARGLISTS", "SWANK-C-P-C", "SWANK-FUZZY",
 			"SWANK-UTIL");
+
+	/**
+	 * How many frames a debugger level announces, SWANK's {@code *sldb-initial-frames*}.
+	 */
+	private static final int INITIAL_FRAMES = 20;
 
 	private final CommonLispSwank lisp;
 
@@ -164,7 +179,37 @@ final class SwankServer implements AutoCloseable {
 	}
 
 	/** One {@code :emacs-rex} request. */
-	private record Request(Object form, @Nullable String pkg, Object id) {
+	private static final class Request {
+
+		final Object form;
+
+		final @Nullable String pkg;
+
+		final Object id;
+
+		/**
+		 * The last condition a debugger level was entered for while the request ran, what
+		 * its {@code :abort} reports, as SWANK's {@code eval-for-emacs} records every
+		 * condition signalled in its extent.
+		 */
+		volatile CommonLispSwank.@Nullable Debugging condition;
+
+		Request(Object form, @Nullable String pkg, Object id) {
+			this.form = form;
+			this.pkg = pkg;
+			this.id = id;
+		}
+
+	}
+
+	/** What ends a request a top-level restart left. */
+	private enum Unwound {
+
+		/** SWANK's top level: the request aborts, its thread goes on. */
+		TOP_LEVEL,
+		/** The thread's own abort: the request aborts and its thread ends. */
+		THREAD
+
 	}
 
 	/** A request a thread is running, which an interrupt can stop. */
@@ -186,6 +231,9 @@ final class SwankServer implements AutoCloseable {
 		private volatile @Nullable Thread replThread;
 
 		private final ConcurrentLinkedDeque<Running> running = new ConcurrentLinkedDeque<>();
+
+		/** Each worker's session by its thread's id, while it runs. */
+		private final Map<Long, Session> workers = new ConcurrentHashMap<>();
 
 		/**
 		 * Each waiting writer's and reader's mailbox, by the id it put in its message.
@@ -233,15 +281,31 @@ final class SwankServer implements AutoCloseable {
 					Thread repl = this.replThread;
 					if (thread instanceof Keyword keyword && keyword.name().equalsIgnoreCase("repl-thread")
 							|| thread instanceof Number id && repl != null && id.longValue() == repl.threadId()) {
-						startRepl();
+						// queued first: a REPL thread ending now sees it and starts the
+						// next
 						this.replQueue.add(request);
+						startRepl();
+					}
+					else if (thread instanceof Number id
+							&& this.workers.get(id.longValue()) instanceof Session worker) {
+						// a worker's debugger level answers what its SLDB sends it
+						worker.mailbox.add(request);
 					}
 					else if (thread instanceof Number id) {
-						send(list(kw("invalid-rpc"), request.id(), "Thread not found: " + id));
+						send(list(kw("invalid-rpc"), request.id, "Thread not found: " + id));
 					}
 					else {
-						Thread worker = new Thread(null, () -> run(request), "swank-worker",
-								SwankServer.this.stackBytes);
+						Thread worker = new Thread(null, () -> {
+							long self = Thread.currentThread().threadId();
+							Session session = new Session("worker", new LinkedBlockingQueue<>());
+							this.workers.put(self, session);
+							try {
+								run(session, request);
+							}
+							finally {
+								this.workers.remove(self);
+							}
+						}, "swank-worker", SwankServer.this.stackBytes);
 						worker.setDaemon(true);
 						worker.start();
 					}
@@ -269,21 +333,36 @@ final class SwankServer implements AutoCloseable {
 				return;
 			}
 			Thread thread = new Thread(null, () -> {
+				Session session = new Session("repl-thread", this.replQueue);
 				while (!this.closed) {
 					try {
 						Request request = this.replQueue.poll(1, TimeUnit.SECONDS);
-						if (request != null) {
-							run(request);
+						if (request != null && run(session, request) == Unwound.THREAD) {
+							break;
 						}
 					}
 					catch (InterruptedException ex) {
 						// an interrupt that found no request running: wait on
 					}
 				}
+				replEnded();
 			}, "swank-repl-thread", SwankServer.this.stackBytes);
 			thread.setDaemon(true);
 			this.replThread = thread;
 			thread.start();
+		}
+
+		/**
+		 * The REPL thread ended, by its own abort restart: the next REPL request starts
+		 * another, as SWANK spawns a REPL thread for one that died.
+		 */
+		private synchronized void replEnded() {
+			if (this.replThread == Thread.currentThread()) {
+				this.replThread = null;
+				if (!this.closed && !this.replQueue.isEmpty()) {
+					startRepl();
+				}
+			}
 		}
 
 		private void interrupt(Object target) {
@@ -296,53 +375,104 @@ final class SwankServer implements AutoCloseable {
 			}
 		}
 
-		/** Runs a request on the calling thread and answers it. */
-		void run(Request request) {
+		/**
+		 * Runs a request on the calling thread and answers it: one the thread starts with
+		 * under SWANK's top-level restarts, one a debugger level runs inside the
+		 * evaluation it stopped. A restart invoked further out passes on, the request
+		 * answering {@code :abort} first.
+		 * @return how a top-level restart ended it, or null when none did
+		 */
+		@Nullable Unwound run(Session session, Request request) {
+			CommonLispSwank lisp = SwankServer.this.lisp;
 			Thread self = Thread.currentThread();
+			boolean topLevel = session.requests.isEmpty();
 			Running running = new Running(self, request);
 			this.running.addFirst(running);
 			Output output = new Output(this, self.threadId());
-			Input reader = new Input(this, self.threadId());
-			Runnable restore = SwankServer.this.lisp.controlState();
+			Input reader = new Input(this, self.threadId(), lisp);
+			session.requests.push(request);
+			session.outputs.push(output);
+			Runnable restore = lisp.controlState();
 			Object reply;
+			Unwound unwound = null;
 			try {
-				String pkg = SwankServer.this.lisp.guessPackage(request.pkg());
-				Object value = SwankServer.this.lisp.serve(pkg, output, reader, () -> call(request.form(), output));
+				String pkg = lisp.guessPackage(request.pkg);
+				Object value = lisp.serve(pkg, output, reader, session,
+						() -> lisp.withFrame(lisp(request.form), topLevel ? () -> topLevel(session, request, output)
+								: () -> call(request.form, output, session)));
 				output.flush();
-				reply = list(kw("return"), list(kw("ok"), value), request.id());
+				if (value instanceof Unwound how) {
+					unwound = how;
+					reply = aborted(request);
+				}
+				else {
+					reply = list(kw("return"), list(kw("ok"), value), request.id);
+				}
 			}
 			catch (LispInterruptSignal ex) {
 				// what it printed before it stopped still reaches the editor
 				output.flush();
-				reply = list(kw("return"), list(kw("abort"), "#<SIMPLE-ERROR \"Interrupt from Emacs\">"), request.id());
+				reply = list(kw("return"),
+						list(kw("abort"), "#<SIMPLE-ERROR \"" + CommonLispSwank.INTERRUPT_MESSAGE + "\">"), request.id);
 			}
 			catch (LispExitSignal ex) {
 				// the oracle's quit ends its process, and the editor's connection with it
 				output.flush();
 				SwankServer.this.exit = ex;
 				SwankServer.this.close();
-				return;
+				return null;
 			}
 			catch (StackOverflowError ex) {
 				restore.run();
 				output.flush();
-				reply = list(kw("return"), list(kw("abort"), SwankServer.this.lisp.describeFailure(ex)), request.id());
+				reply = list(kw("return"), list(kw("abort"), lisp.describeFailure(ex)), request.id);
 			}
 			catch (RuntimeException ex) {
 				output.flush();
-				reply = list(kw("return"), list(kw("abort"), SwankServer.this.lisp.describeFailure(ex)), request.id());
+				if (lisp.isTransfer(ex)) {
+					// a restart further out: this request ends on its way there
+					send(aborted(request));
+					throw ex;
+				}
+				reply = list(kw("return"), list(kw("abort"), lisp.describeFailure(ex)), request.id);
 			}
 			finally {
+				session.requests.pop();
+				session.outputs.pop();
 				this.running.remove(running);
 				SwankServer.this.evaluator.clearInterrupt();
 			}
 			send(reply);
+			return unwound;
+		}
+
+		/**
+		 * A request's {@code :abort}: the last condition it entered a debugger for, or
+		 * nil.
+		 */
+		private List<Object> aborted(Request request) {
+			CommonLispSwank.Debugging condition = request.condition;
+			return list(kw("return"), list(kw("abort"), condition == null ? "NIL" : condition.describe()), request.id);
+		}
+
+		/**
+		 * A request the thread starts with, under SWANK's top-level restarts: the
+		 * thread's own abort, and inside it the quit restart {@code throw-to-toplevel}
+		 * invokes.
+		 */
+		private Object topLevel(Session session, Request request, Output output) {
+			CommonLispSwank lisp = SwankServer.this.lisp;
+			return lisp
+				.withRestart(LispNames.ABORT, "abort thread (" + session.describe() + ")", false,
+						() -> lisp.withRestart(LispNames.ABORT, "Return to SLIME's top level.", true,
+								() -> call(request.form, output, session), () -> Unwound.TOP_LEVEL),
+						() -> Unwound.THREAD);
 		}
 
 		/**
 		 * Answers a request's form: a function SWANK defines, else the form evaluated.
 		 */
-		private @Nullable Object call(Object form, Output output) {
+		private @Nullable Object call(Object form, Output output, Session session) {
 			if (!(form instanceof List<?> call) || call.isEmpty() || !(call.getFirst() instanceof Symbol operator)) {
 				throw new IllegalArgumentException("not a function call: " + SwankWire.print(form));
 			}
@@ -366,14 +496,54 @@ final class SwankServer implements AutoCloseable {
 					startRepl();
 					yield List.of(lisp.packageName(lisp.currentPackage()), lisp.prompt(lisp.currentPackage()));
 				}
-				case "listener-eval" -> listenerEval(text(args, 0), output);
-				case "interactive-eval" ->
-					lisp.interactiveEval(text(args, 0), integer(args, 1, 1), integer(args, 2, 80));
-				case "interactive-eval-region" ->
-					lisp.interactiveEvalRegion(text(args, 0), integer(args, 1, 1), integer(args, 2, 80));
-				case "eval-and-grab-output" -> lisp.evalAndGrabOutput(text(args, 0));
+				case "listener-eval" ->
+					retrying("Retry SLIME REPL evaluation request.", () -> listenerEval(text(args, 0), output));
+				case "interactive-eval" -> retrying("Retry SLIME interactive evaluation request.",
+						() -> lisp.interactiveEval(text(args, 0), integer(args, 1, 1), integer(args, 2, 80)));
+				case "interactive-eval-region" -> retrying("Retry SLIME interactive evaluation request.",
+						() -> lisp.interactiveEvalRegion(text(args, 0), integer(args, 1, 1), integer(args, 2, 80)));
+				case "eval-and-grab-output" ->
+					retrying("Retry SLIME evaluation request.", () -> lisp.evalAndGrabOutput(text(args, 0)));
 				case "pprint-eval" -> lisp.pprintEval(text(args, 0));
-				case "re-evaluate-defvar" -> lisp.reEvaluateDefvar(text(args, 0));
+				case "re-evaluate-defvar" ->
+					retrying("Retry SLIME evaluation request.", () -> lisp.reEvaluateDefvar(text(args, 0)));
+				// SLDB: what the debugger level running on this thread answers
+				case "throw-to-toplevel" -> lisp.throwToToplevel();
+				case "invoke-nth-restart-for-emacs" -> session.level() instanceof CommonLispSwank.Debugging level
+						&& integer(args, 0, -1) == session.levels.size()
+								? wireOrNil(level.invokeNth(integer(args, 1, -1))) : null;
+				case "invoke-nth-restart" -> session.level() instanceof CommonLispSwank.Debugging level
+						? wireOrNil(level.invokeNth(integer(args, 0, -1))) : null;
+				case "sldb-abort" -> session.level() instanceof CommonLispSwank.Debugging level
+						? wireOrNil(level.invokeNamed(LispNames.ABORT)) : null;
+				case "sldb-continue" -> session.level() instanceof CommonLispSwank.Debugging level
+						? wireOrNil(level.invokeNamed(LispNames.CONTINUE)) : null;
+				case "backtrace" -> session.level() instanceof CommonLispSwank.Debugging level
+						? backtrace(level, integer(args, 0, 0), integer(args, 1, Integer.MAX_VALUE)) : List.of();
+				case "debugger-info-for-emacs" -> session.level() instanceof CommonLispSwank.Debugging level
+						? debuggerInfo(session, level, integer(args, 0, 0), integer(args, 1, Integer.MAX_VALUE)) : null;
+				case "frame-locals-and-catch-tags" -> {
+					List<Object> locals = new ArrayList<>();
+					int index = integer(args, 0, -1);
+					if (session.level() instanceof CommonLispSwank.Debugging level && index >= 0
+							&& index < level.frameCount()) {
+						for (CommonLispSwank.Local local : level.locals(index)) {
+							locals.add(list(kw("name"), local.name(), kw("id"), (long) local.id(), kw("value"),
+									local.value()));
+						}
+					}
+					yield Arrays.asList(locals, null);
+				}
+				case "frame-package-name" -> session.level() instanceof CommonLispSwank.Debugging level
+						? level.framePackage(integer(args, 0, 0)) : lisp.packageName(lisp.currentPackage());
+				case "eval-string-in-frame" -> session.level() instanceof CommonLispSwank.Debugging level
+						? level.evalInFrame(text(args, 0), integer(args, 1, 0), optionalText(args, 2),
+								integer(args, 3, 1), integer(args, 4, 80))
+						: lisp.interactiveEval(text(args, 0), integer(args, 3, 1), integer(args, 4, 80));
+				case "pprint-eval-string-in-frame" -> session.level() instanceof CommonLispSwank.Debugging level
+						? level.pprintEvalInFrame(text(args, 0), integer(args, 1, 0), optionalText(args, 2))
+						: lisp.pprintEval(text(args, 0));
+				case "frame-source-location" -> list(kw("error"), "No source location");
 				case "set-package" -> {
 					String found = lisp.guessPackage(text(args, 0));
 					if (found == null) {
@@ -522,6 +692,171 @@ final class SwankServer implements AutoCloseable {
 			return this.tags.incrementAndGet();
 		}
 
+		/**
+		 * Runs a request's body under a retry restart, as SWANK's
+		 * {@code with-retry-restart}: invoking it runs the body again.
+		 */
+		private @Nullable Object retrying(String report, Supplier<@Nullable Object> body) {
+			while (true) {
+				Object value = SwankServer.this.lisp.withRestart("SWANK::RETRY", report, false, body,
+						() -> Retry.AGAIN);
+				if (value != Retry.AGAIN) {
+					return value;
+				}
+			}
+		}
+
+		private @Nullable Object wireOrNil(@Nullable LispVal value) {
+			return value == null ? null : wire(value, SwankServer.this.lisp);
+		}
+
+		/** A debugger level's frames from start to end, as SWANK's {@code backtrace}. */
+		private List<Object> backtrace(CommonLispSwank.Debugging level, int start, int end) {
+			List<Object> frames = new ArrayList<>();
+			for (int i = Math.max(0, start); i < Math.min(end, level.frameCount()); i++) {
+				frames.add(list((long) i, level.frame(i)));
+			}
+			return frames;
+		}
+
+		/**
+		 * A debugger level's condition, restarts, frames and pending requests, as SWANK's
+		 * {@code debugger-info-for-emacs}.
+		 */
+		private List<Object> debuggerInfo(Session session, CommonLispSwank.Debugging level, int start, int end) {
+			List<Object> restarts = new ArrayList<>();
+			for (List<String> restart : level.restarts()) {
+				restarts.add(List.copyOf(restart));
+			}
+			List<Object> continuations = new ArrayList<>();
+			for (Request request : session.requests) {
+				continuations.add(request.id);
+			}
+			return list(list(level.message(), "   [Condition of type " + level.conditionType() + "]", null), restarts,
+					backtrace(level, start, end), continuations);
+		}
+
+		/**
+		 * One request thread: the requests it runs, innermost first, their outputs, its
+		 * debugger levels and the mailbox the requests addressed to it wait in -- the
+		 * REPL's queue for the REPL thread, one of its own for a worker. Its debugger
+		 * levels run here ({@link #enter}).
+		 */
+		private final class Session implements CommonLispSwank.Sldb {
+
+			/** What SWANK names the thread: {@code repl-thread} or {@code worker}. */
+			private final String name;
+
+			final BlockingQueue<Request> mailbox;
+
+			final Deque<Request> requests = new ArrayDeque<>();
+
+			final Deque<Output> outputs = new ArrayDeque<>();
+
+			final Deque<CommonLispSwank.Debugging> levels = new ArrayDeque<>();
+
+			/**
+			 * A debugger level that ended back into the one below it, which then shows
+			 * itself again, as SWANK's {@code :sldb-return} event makes it.
+			 */
+			private int returned;
+
+			Session(String name, BlockingQueue<Request> mailbox) {
+				this.name = name;
+				this.mailbox = mailbox;
+			}
+
+			/** The innermost debugger level running, or null. */
+			CommonLispSwank.@Nullable Debugging level() {
+				return this.levels.peek();
+			}
+
+			/** The thread as SBCL prints it, in its abort restart's report. */
+			String describe() {
+				return "#<THREAD \"" + this.name + "\" RUNNING {"
+						+ Long.toHexString(Thread.currentThread().threadId()).toUpperCase(Locale.ROOT) + "}>";
+			}
+
+			/**
+			 * A debugger level, as SWANK's {@code sldb-loop}: announced to the editor,
+			 * then the requests addressed to the thread answered until a restart
+			 * transfers control out of it -- under a restart of its own, which a deeper
+			 * level lists, that comes back here. Returns only when the connection closed.
+			 */
+			@Override
+			public void enter(CommonLispSwank.Debugging debugging) {
+				if (debugging.signalled()) {
+					for (Request request : this.requests) {
+						request.condition = debugging;
+					}
+				}
+				Output output = this.outputs.peek();
+				if (output != null) {
+					output.flush();
+				}
+				this.levels.push(debugging);
+				int level = this.levels.size();
+				long thread = Thread.currentThread().threadId();
+				try {
+					// what this level runs shows the level as a frame, as SWANK's
+					// sldb-loop
+					SwankServer.this.lisp.withFrame(lisp(List.of(new Symbol("swank::sldb-loop"), (long) level)), () -> {
+						while (SwankServer.this.lisp.withRestart(LispNames.ABORT, "Return to sldb level " + level + ".",
+								false, () -> answer(debugging, level, thread), () -> Boolean.TRUE)) {
+							// this level's restart, or a deeper level ending: announced
+							// again
+						}
+						return null;
+					});
+				}
+				finally {
+					this.levels.pop();
+					this.returned = level > 1 ? level : 0;
+					send(list(kw("debug-return"), thread, (long) level, null));
+				}
+			}
+
+			/**
+			 * Announces a level and answers the requests addressed to the thread: true to
+			 * announce it again, false when the connection closed.
+			 */
+			private boolean answer(CommonLispSwank.Debugging debugging, int level, long thread) {
+				List<Object> announce = new ArrayList<>(List.of(kw("debug"), thread, (long) level));
+				announce.addAll(debuggerInfo(this, debugging, 0, INITIAL_FRAMES));
+				send(announce);
+				send(list(kw("debug-activate"), thread, (long) level, null));
+				while (true) {
+					if (this.returned == level + 1) {
+						this.returned = 0;
+						return true;
+					}
+					if (Connection.this.closed) {
+						return false;
+					}
+					Request request;
+					try {
+						request = this.mailbox.poll(1, TimeUnit.SECONDS);
+					}
+					catch (InterruptedException ex) {
+						// an interrupt here enters a deeper level
+						SwankServer.this.lisp.checkInterrupt();
+						continue;
+					}
+					if (request != null) {
+						run(this, request);
+					}
+				}
+			}
+
+		}
+
+	}
+
+	/** What a retry restart's invocation answers, to run the body again. */
+	private enum Retry {
+
+		AGAIN
+
 	}
 
 	/**
@@ -628,13 +963,16 @@ final class SwankServer implements AutoCloseable {
 
 		private final long id;
 
+		private final CommonLispSwank lisp;
+
 		private String pending = "";
 
 		private int pos;
 
-		Input(Connection connection, long id) {
+		Input(Connection connection, long id, CommonLispSwank lisp) {
 			this.connection = connection;
 			this.id = id;
+			this.lisp = lisp;
 		}
 
 		@Override
@@ -656,10 +994,20 @@ final class SwankServer implements AutoCloseable {
 			BlockingQueue<List<?>> box = new LinkedBlockingQueue<>();
 			this.connection.input.put(this.id, box);
 			this.connection.send(list(kw("read-string"), this.id, tag));
+			boolean read = false;
 			try {
 				while (true) {
-					List<?> event = box.poll(1, TimeUnit.SECONDS);
+					List<?> event;
+					try {
+						event = box.poll(1, TimeUnit.SECONDS);
+					}
+					catch (InterruptedException ex) {
+						// the interrupt enters the debugger, and its continue reads on
+						this.lisp.checkInterrupt();
+						continue;
+					}
 					if (event != null) {
+						read = true;
 						if (event.size() > 3 && event.get(3) instanceof String line) {
 							this.pending = line;
 							this.pos = 0;
@@ -668,16 +1016,17 @@ final class SwankServer implements AutoCloseable {
 						return false;
 					}
 					if (this.connection.closed) {
+						read = true;
 						return false;
 					}
 				}
 			}
-			catch (InterruptedException ex) {
-				this.connection.send(list(kw("read-aborted"), this.id, tag));
-				throw new LispInterruptSignal();
-			}
 			finally {
 				this.connection.input.remove(this.id, box);
+				if (!read) {
+					// left by an interrupt or a restart: the editor stops reading
+					this.connection.send(list(kw("read-aborted"), this.id, tag));
+				}
 			}
 		}
 

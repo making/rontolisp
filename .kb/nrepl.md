@@ -83,7 +83,8 @@ condition: no handler-case or Clojure catch takes it, every `unwind-protect` cle
 and `Thread.interrupt` wakes a sleep. The server answers the running message
 `[interrupted done]` at once, suppresses its later replies and hands the session a fresh
 thread, like the oracle (whose `Thread.stop` is gone on Java 25: the cooperative stop is the
-only one). `destroy-thread` keeps `Thread.interrupt` alone.
+only one). `destroy-thread` keeps `Thread.interrupt` alone. A thread with a debugger
+(`rontolisp --swank`, `.kb/swank.md` "Interrupts") enters it instead of stopping.
 
 ## The cmdline client's forms
 

@@ -28,6 +28,7 @@ import org.jspecify.annotations.Nullable;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispNames;
@@ -97,6 +98,7 @@ public final class CommonLispSwank {
 				evaluator.globalEnvironment().define(name, LispNil.INSTANCE);
 			}
 		}
+		evaluator.enableDebugging();
 	}
 
 	// ------------------------------------------------------------------------------------
@@ -241,6 +243,26 @@ public final class CommonLispSwank {
 	 * @return what the body answered
 	 */
 	public <T> T serve(@Nullable String pkg, Writer out, Reader in, Supplier<T> body) {
+		return serve(pkg, out, in, null, body);
+	}
+
+	/**
+	 * Runs a request's body as {@link #serve(String, Writer, Reader, Supplier)} does,
+	 * with a debugger on the thread: an error no handler handles enters it where it is
+	 * signalled, and an interrupt enters it where it stops the evaluation. The thread's
+	 * handler and restart stacks are its own -- empty for a request the thread starts
+	 * with, the debugged evaluation's for one a debugger level runs -- so two requests on
+	 * two threads never see each other's.
+	 * @param <T> what the body answers
+	 * @param pkg the package's canonical name ({@link #guessPackage}), or null for
+	 * {@code cl-user}
+	 * @param out where the standard output, error and trace streams write
+	 * @param in where standard input reads from
+	 * @param debugger what runs a debugger level on the thread, or null for none
+	 * @param body the request
+	 * @return what the body answered
+	 */
+	public <T> T serve(@Nullable String pkg, Writer out, Reader in, @Nullable Sldb debugger, Supplier<T> body) {
 		Object previous = this.resolver.bindThreadPackage(pkg == null ? LispNames.CL_USER_PKG : pkg);
 		LispVal outStream = this.evaluator.openJavaStream(out);
 		// the stream table reads lines and characters off a buffered reader
@@ -251,9 +273,14 @@ public final class CommonLispSwank {
 		streams.put(LispNames.ERROR_OUTPUT_VAR, outStream);
 		streams.put(LispNames.TRACE_OUTPUT_VAR, outStream);
 		streams.put(LispNames.STANDARD_INPUT_VAR, inStream);
+		for (String stack : List.of(LispNames.HANDLER_CLUSTERS_VAR, LispNames.RESTART_CLUSTERS_VAR)) {
+			LispVal bound = this.evaluator.threadBinding(stack);
+			streams.put(stack, bound == null ? LispNil.INSTANCE : bound);
+		}
 		List<T> result = new ArrayList<>(1);
 		try {
-			this.evaluator.withThreadBindings(streams, () -> result.add(body.get()));
+			this.evaluator.withThreadBindings(streams, () -> result
+				.add(this.evaluator.withDebugger(debugger == null ? null : new ThreadDebugger(debugger), body)));
 		}
 		finally {
 			this.evaluator.closeJavaStream(outStream);
@@ -326,9 +353,26 @@ public final class CommonLispSwank {
 		LispVal last = LispNil.INSTANCE;
 		for (LispVal form : forms) {
 			last = form;
-			values = this.evaluator.evalValues(markers ? this.evaluator.resolveReadTimeEvalInCode(form) : form);
+			values = evalForm(form, markers);
 		}
 		return new Region(values, last);
+	}
+
+	/**
+	 * Evaluates a top-level form under its {@code (EVAL form)} frame, as SWANK's
+	 * {@code eval} shows it in a backtrace. An error that left the form unoffered to the
+	 * thread's debugger -- one no frame of it signalled, a variable the form is -- is
+	 * offered here.
+	 */
+	private List<LispVal> evalForm(LispVal form, boolean markers) {
+		return this.evaluator.withFrame(list(new LispSymbol(LispNames.EVAL), form), () -> {
+			try {
+				return this.evaluator.evalValues(markers ? this.evaluator.resolveReadTimeEvalInCode(form) : form);
+			}
+			catch (LispEvalException ex) {
+				throw this.evaluator.atSignalPoint(ex);
+			}
+		});
 	}
 
 	private List<LispVal> read(String code) {
@@ -345,9 +389,7 @@ public final class CommonLispSwank {
 	}
 
 	private List<LispVal> evalFirstValues(String code) {
-		LispVal form = readFirst(code);
-		return this.evaluator.evalValues(
-				SourceLanguage.usesReadEvalMarkers(code) ? this.evaluator.resolveReadTimeEvalInCode(form) : form);
+		return evalForm(readFirst(code), SourceLanguage.usesReadEvalMarkers(code));
 	}
 
 	/**
@@ -455,7 +497,11 @@ public final class CommonLispSwank {
 			throw new LispEvalException("Not a DEFVAR form: " + code);
 		}
 		// a defvar of a variable made unbound first assigns its value: a defparameter
-		return print(this.evaluator.eval(new LispCons(new LispSymbol("DEFPARAMETER"), cons.cdr())));
+		return print(first(evalForm(new LispCons(new LispSymbol("DEFPARAMETER"), cons.cdr()), false)));
+	}
+
+	private static LispVal first(List<LispVal> values) {
+		return values.isEmpty() ? LispNil.INSTANCE : values.getFirst();
 	}
 
 	/**
@@ -464,7 +510,7 @@ public final class CommonLispSwank {
 	 * @return what {@code load} answered, as {@code prin1} prints it
 	 */
 	public String loadFile(String filename) {
-		return print(this.evaluator.eval(list(new LispSymbol(LispNames.LOAD), LispString.literal(filename))));
+		return print(first(evalForm(list(new LispSymbol(LispNames.LOAD), LispString.literal(filename)), false)));
 	}
 
 	/**
@@ -618,6 +664,12 @@ public final class CommonLispSwank {
 	}
 
 	private Compilation compile(String code, java.util.function.IntFunction<Location> place, boolean run) {
+		// compiling is evaluating, and a failure is the compilation's note, as SBCL's
+		// compiler takes an error: no debugger stops it
+		return this.evaluator.withoutDebugger(() -> compileNoting(code, place, run));
+	}
+
+	private Compilation compileNoting(String code, java.util.function.IntFunction<Location> place, boolean run) {
 		long started = System.nanoTime();
 		List<Note> notes = new ArrayList<>();
 		LispReader.ReadPrefix read = SourceLanguage.COMMON_LISP.readUntilError(code, this.evaluator.features(), null,
@@ -1839,7 +1891,7 @@ public final class CommonLispSwank {
 	 * @return its value
 	 */
 	public LispVal evaluate(LispVal form) {
-		return this.evaluator.eval(form);
+		return first(evalForm(form, false));
 	}
 
 	/**
@@ -1849,6 +1901,621 @@ public final class CommonLispSwank {
 		for (String name : REPL_VARIABLES) {
 			this.evaluator.globalEnvironment().define(name, LispNil.INSTANCE);
 		}
+	}
+
+	// ------------------------------------------------------------------------------------
+	// The debugger (SLDB)
+
+	/** What an interrupt's debugger level reports, as SWANK's {@code simple-break}. */
+	public static final String INTERRUPT_MESSAGE = "Interrupt from Emacs";
+
+	/**
+	 * The width a frame's or a local's text is cut at, SWANK's backtrace right margin.
+	 */
+	private static final int FRAME_WIDTH = 200;
+
+	/** Prints a frame's call under SWANK's backtrace print length and level. */
+	private static final String FRAME_PRINTER = "(lambda (x) (let ((*print-length* 6) (*print-level* 4))"
+			+ " (prin1-to-string x)))";
+
+	/**
+	 * The restart each thread's {@code throw-to-toplevel} invokes ({@link #withRestart}),
+	 * SWANK's {@code *sldb-quit-restart*}.
+	 */
+	private final ThreadLocal<@Nullable LispVal> quitRestart = new ThreadLocal<>();
+
+	/** What runs SLDB on the thread a condition was signalled on ({@link #serve}). */
+	public interface Sldb {
+
+		/**
+		 * Runs a debugger level over a condition, answering the editor's requests on this
+		 * thread until a restart transfers control out of it. Returning declines: the
+		 * condition goes on as if no debugger were there.
+		 * @param debugging the condition, its restarts and its frames
+		 */
+		void enter(Debugging debugging);
+
+	}
+
+	/**
+	 * Runs the body with a restart established on the calling thread, as
+	 * {@code restart-case} establishes one: the debugger lists it, {@code find-restart}
+	 * finds it, and invoking it -- by the debugger, or by name -- leaves the body for
+	 * {@code invoked}.
+	 * @param <T> what the body answers
+	 * @param name the restart's name, a canonical symbol spelling
+	 * @param report its report
+	 * @param quit whether it is what {@code throw-to-toplevel} invokes, listed with a
+	 * {@code *}
+	 * @param body the body
+	 * @param invoked what answers once the restart is invoked
+	 * @return what the body or {@code invoked} answered
+	 */
+	public <T extends @Nullable Object> T withRestart(String name, String report, boolean quit, Supplier<T> body,
+			Supplier<T> invoked) {
+		LispVal tag = new LispCons(new LispSymbol(LispNames.RESTART_RECORD_TAG), LispNil.INSTANCE);
+		LispVal record = list(new LispSymbol(LispNames.RESTART_RECORD_TAG), new LispSymbol(name),
+				new LispFunction(LispNames.INVOKE_RESTART, args -> {
+					throw new ThrowSignal(tag, args.isEmpty() ? LispNil.INSTANCE : args.getFirst());
+				}), LispString.literal(report), LispNil.INSTANCE, LispNil.INSTANCE);
+		LispVal saved = restartStack();
+		this.evaluator.setSpecialValue(LispNames.RESTART_CLUSTERS_VAR, new LispCons(list(record), saved));
+		LispVal savedQuit = this.quitRestart.get();
+		if (quit) {
+			this.quitRestart.set(record);
+		}
+		try {
+			return this.evaluator.catchingOutside(tag, body);
+		}
+		catch (ThrowSignal signal) {
+			if (signal.tag() != tag) {
+				throw signal;
+			}
+			return invoked.get();
+		}
+		finally {
+			this.evaluator.setSpecialValue(LispNames.RESTART_CLUSTERS_VAR, saved);
+			if (quit) {
+				this.quitRestart.set(savedQuit);
+			}
+		}
+	}
+
+	private LispVal restartStack() {
+		LispVal stack = this.evaluator.specialValue(LispNames.RESTART_CLUSTERS_VAR);
+		return stack == null ? LispNil.INSTANCE : stack;
+	}
+
+	/**
+	 * Invokes the calling thread's quit restart, as SWANK's {@code throw-to-toplevel}:
+	 * the one {@link #withRestart} marked, else the outermost restart. Leaves by its
+	 * transfer of control.
+	 * @return the text SWANK answers when no restart is active
+	 */
+	public String throwToToplevel() {
+		LispVal restart = this.quitRestart.get();
+		if (restart == null) {
+			List<LispVal> restarts = activeRestarts();
+			restart = restarts.isEmpty() ? null : restarts.getLast();
+		}
+		if (restart == null) {
+			return "Restart not active [NIL]";
+		}
+		return print(invoke(restart, LispNil.INSTANCE));
+	}
+
+	/**
+	 * Runs the body under a frame on the calling thread's stack, as a debugger's
+	 * backtrace shows it: what a request evaluates.
+	 * @param <T> what the body answers
+	 * @param call the call the frame shows
+	 * @param body the body
+	 * @return what it answered
+	 */
+	public <T extends @Nullable Object> T withFrame(LispVal call, Supplier<T> body) {
+		return this.evaluator.withFrame(call, body);
+	}
+
+	/**
+	 * Whether a Java exception leaving a request is a transfer of control -- a restart's
+	 * invocation, a {@code throw}, a {@code return-from} -- that a frame further out
+	 * takes, rather than the request's failure.
+	 * @param ex the exception
+	 * @return whether it transfers control
+	 */
+	public boolean isTransfer(RuntimeException ex) {
+		return LispEvaluator.isControlTransfer(ex);
+	}
+
+	/**
+	 * Stops the calling thread where an interrupt is pending for it, as its next function
+	 * call would -- into its debugger: what a wait an interrupt woke checks.
+	 */
+	public void checkInterrupt() {
+		this.evaluator.checkInterrupt();
+	}
+
+	/** The calling thread's restarts, innermost first, as {@code compute-restarts}. */
+	private List<LispVal> activeRestarts() {
+		List<LispVal> restarts = new ArrayList<>();
+		for (LispVal cluster = restartStack(); cluster instanceof LispCons cell; cluster = cell.cdr()) {
+			for (LispVal entry = cell.car(); entry instanceof LispCons each; entry = each.cdr()) {
+				restarts.add(each.car());
+			}
+		}
+		return restarts;
+	}
+
+	/**
+	 * A restart record's slot ({@code (%restart name invoker report interactive test)}).
+	 */
+	private static LispVal slot(LispVal record, int index) {
+		LispVal rest = record;
+		for (int i = 0; i < index && rest instanceof LispCons cell; i++) {
+			rest = cell.cdr();
+		}
+		return rest instanceof LispCons cell ? cell.car() : LispNil.INSTANCE;
+	}
+
+	/**
+	 * Invokes a restart with an argument list; answers only what a restart-bind's
+	 * returns.
+	 */
+	private LispVal invoke(LispVal restart, LispVal args) {
+		return this.evaluator.applyGlobal(slot(restart, 2), List.of(args));
+	}
+
+	/** A restart's name as SWANK lists it: {@code ~a} of the symbol. */
+	private static String restartName(LispVal restart) {
+		return slot(restart, 1) instanceof LispSymbol name ? LispSymbol.memberName(name.name())
+				: slot(restart, 1).display();
+	}
+
+	/** The evaluator's debugger seam over a thread's SLDB. */
+	private final class ThreadDebugger implements Debugger {
+
+		private final Sldb sldb;
+
+		ThreadDebugger(Sldb sldb) {
+			this.sldb = sldb;
+		}
+
+		@Override
+		public void debug(LispVal condition, String message, @Nullable Environment env, @Nullable CallFrame operator) {
+			enter(new Debugging(condition, message, true, env, operator));
+		}
+
+		@Override
+		public boolean interrupted() {
+			// SWANK's simple-break: a condition no handler sees, under a CONTINUE
+			// restart that goes on with the evaluation
+			LispVal condition = CommonLispSwank.this.evaluator.simpleError(INTERRUPT_MESSAGE);
+			return withRestart(LispNames.CONTINUE, "Continue from break.", false, () -> {
+				enter(new Debugging(condition, INTERRUPT_MESSAGE, false, null, null));
+				return false;
+			}, () -> true);
+		}
+
+		private void enter(Debugging debugging) {
+			CommonLispSwank.this.evaluator.withHandlerCasesIsolated(() -> this.sldb.enter(debugging));
+		}
+
+	}
+
+	/**
+	 * One frame of a debugger level's backtrace, taken where the condition was signalled.
+	 *
+	 * @param call what a marker or a built-in's frame shows, or null for a function's
+	 * @param lambda the function, or null
+	 * @param args the function's arguments
+	 * @param entry the function's call scope, or null
+	 * @param scope the frame's innermost scope, where its locals are and an expression
+	 * evaluates, or null for none
+	 */
+	private record Frame(@Nullable LispVal call, @Nullable LispLambda lambda, List<LispVal> args,
+			@Nullable Environment entry, @Nullable Environment scope) {
+	}
+
+	/**
+	 * One local variable of a frame, as SWANK's {@code frame-locals-and-catch-tags} lists
+	 * it.
+	 *
+	 * @param name the variable's name, as {@code prin1} prints it
+	 * @param id its number among the frame's variables of that name
+	 * @param value its value on one line
+	 */
+	public record Local(String name, int id, String value) {
+	}
+
+	/**
+	 * A debugger level's view of the condition it was entered for, taken where it was
+	 * signalled, before anything unwound: the condition SLDB shows, the restarts then
+	 * active and the frames then waiting -- and what SLDB asks of them, a restart's
+	 * invocation, a frame's locals, an evaluation in a frame.
+	 */
+	public final class Debugging {
+
+		private final LispVal condition;
+
+		private final String message;
+
+		private final boolean signalled;
+
+		private final String pkg;
+
+		private final List<LispVal> restarts;
+
+		private final @Nullable LispVal quit;
+
+		private final List<Frame> frames;
+
+		Debugging(LispVal condition, String message, boolean signalled, @Nullable Environment env,
+				@Nullable CallFrame operator) {
+			this.condition = condition;
+			this.message = message;
+			this.signalled = signalled;
+			this.pkg = currentPackage();
+			this.restarts = activeRestarts();
+			this.quit = CommonLispSwank.this.quitRestart.get();
+			this.frames = frames(env, operator);
+		}
+
+		/**
+		 * The frames from the signal point down, each function's with its innermost
+		 * scope: the signal's for the innermost, the scope the next one in was called
+		 * from for each further out. A marker's top-level form has the scope its own
+		 * bindings made, the {@code let} of an {@code (EVAL (LET ...))}.
+		 */
+		private List<Frame> frames(@Nullable Environment env, @Nullable CallFrame operator) {
+			List<Frame> out = new ArrayList<>();
+			Environment inner = env;
+			for (CallFrame each = operator != null ? operator
+					: CommonLispSwank.this.evaluator.topFrame(); each != null; each = each.parent) {
+				LispLambda lambda = each.lambda();
+				Environment entry = each.entry();
+				if (each == operator) {
+					out.add(new Frame(each.call, null, List.of(), null, null));
+				}
+				else if (lambda == null || entry == null) {
+					out.add(new Frame(each.call, null, List.of(), null, inner));
+					// what ran below a marker ran in no scope of what runs above it
+					inner = null;
+				}
+				else {
+					out.add(new Frame(null, lambda, List.copyOf(each.args()), entry,
+							inner != null && descends(inner, entry) ? inner : entry));
+					inner = each.caller;
+				}
+			}
+			return out;
+		}
+
+		/**
+		 * The condition's report.
+		 * @return the text
+		 */
+		public String message() {
+			return this.message;
+		}
+
+		/**
+		 * Whether the condition was signalled, which handlers then saw, rather than an
+		 * interrupt's, which SWANK hands its debugger directly.
+		 * @return whether it was signalled
+		 */
+		public boolean signalled() {
+			return this.signalled;
+		}
+
+		/**
+		 * The condition's type, as {@code ~S} of {@code type-of} prints it.
+		 * @return the type's name
+		 */
+		public String conditionType() {
+			return inPackage(() -> {
+				LispVal type = helper("(lambda (c) (prin1-to-string (type-of c)))", this.condition);
+				return type instanceof LispString text ? text.value() : "SIMPLE-ERROR";
+			});
+		}
+
+		/**
+		 * What a request the condition aborted reports, as SWANK prints the condition:
+		 * {@code #<TYPE "report">}.
+		 * @return the text
+		 */
+		public String describe() {
+			return "#<" + conditionType() + " " + LispString.literal(this.message).print() + ">";
+		}
+
+		/**
+		 * The restarts active where the condition was signalled, innermost first, each
+		 * its name -- {@code *} before the quit restart's -- and its report.
+		 * @return the name and report pairs
+		 */
+		public List<List<String>> restarts() {
+			List<List<String>> out = new ArrayList<>(this.restarts.size());
+			for (LispVal restart : this.restarts) {
+				out.add(List.of((restart == this.quit ? "*" : "") + restartName(restart), report(restart)));
+			}
+			return out;
+		}
+
+		/**
+		 * A restart's report, as {@code princ} prints the restart: its report function's
+		 * output, a report string as written ({@code restart-case}'s, and the format
+		 * control of a {@code with-simple-restart} or a {@code cerror}, whose arguments
+		 * the restart does not keep), or its name.
+		 */
+		private String report(LispVal restart) {
+			LispVal report = slot(restart, 3);
+			return inPackage(() -> switch (report) {
+				case LispNil nil -> restartName(restart);
+				case LispString text -> text.value();
+				default -> {
+					try {
+						yield helper("(lambda (f) (with-output-to-string (s) (funcall f s)))",
+								report) instanceof LispString done ? done.value() : "";
+					}
+					catch (RuntimeException ex) {
+						yield "<<error printing restart>>";
+					}
+				}
+			});
+		}
+
+		/**
+		 * Invokes the restart at an index of the list, as SWANK's
+		 * {@code invoke-nth-restart}: its {@code :interactive} function supplies the
+		 * arguments. Leaves by the restart's transfer of control.
+		 * @param index the index
+		 * @return what a {@code restart-bind} function returned, or null when no restart
+		 * is at the index
+		 */
+		public @Nullable LispVal invokeNth(int index) {
+			if (index < 0 || index >= this.restarts.size()) {
+				return null;
+			}
+			LispVal restart = this.restarts.get(index);
+			LispVal interactive = slot(restart, 4);
+			LispVal args = interactive == LispNil.INSTANCE ? LispNil.INSTANCE
+					: CommonLispSwank.this.evaluator.applyGlobal(interactive, List.of());
+			return invoke(restart, args);
+		}
+
+		/**
+		 * Invokes the first listed restart of a name, as SWANK's {@code sldb-abort} and
+		 * {@code sldb-continue}. Leaves by the restart's transfer of control.
+		 * @param name the restart's name
+		 * @return what a {@code restart-bind} function returned, or null when no restart
+		 * has the name
+		 */
+		public @Nullable LispVal invokeNamed(String name) {
+			for (LispVal restart : this.restarts) {
+				if (restartName(restart).equals(name)) {
+					return invoke(restart, LispNil.INSTANCE);
+				}
+			}
+			return null;
+		}
+
+		/**
+		 * How many frames the backtrace has.
+		 * @return the count
+		 */
+		public int frameCount() {
+			return this.frames.size();
+		}
+
+		/**
+		 * A frame's call on one line, as SWANK's {@code backtrace} prints it.
+		 * @param index the frame's index, 0 the innermost
+		 * @return the text
+		 */
+		public String frame(int index) {
+			Frame frame = this.frames.get(index);
+			LispVal call = frame.call();
+			if (call == null) {
+				LispLambda lambda = Objects.requireNonNull(frame.lambda());
+				LispVal head = lambda.name() != null ? new LispSymbol(Objects.requireNonNull(lambda.name()))
+						: list(new LispSymbol(LispNames.LAMBDA), lambdaList(lambda));
+				call = new LispCons(head, list(frame.args()));
+			}
+			LispVal printed = call;
+			return frameLine(inPackage(() -> {
+				try {
+					return helper(FRAME_PRINTER, printed) instanceof LispString text ? text.value() : "";
+				}
+				catch (RuntimeException ex) {
+					return "[error printing frame]";
+				}
+			}));
+		}
+
+		/**
+		 * A frame's local variables: its parameters and the variables bound in it where
+		 * it is waiting, outermost binding first, as SWANK's
+		 * {@code frame-locals-and-catch-tags} lists them.
+		 * @param index the frame's index
+		 * @return the locals
+		 */
+		public List<Local> locals(int index) {
+			Frame frame = this.frames.get(index);
+			Environment entry = frame.entry();
+			Environment scope = frame.scope();
+			if (scope == null) {
+				return List.of();
+			}
+			// a function's scopes up to its call scope, a top-level form's up to the
+			// global one, which holds no local
+			List<Environment> chain = new ArrayList<>();
+			for (Environment each = scope; each != null && each.parentScope() != null; each = each.parentScope()) {
+				chain.add(each);
+				if (each == entry) {
+					break;
+				}
+			}
+			Map<String, Integer> seen = new HashMap<>();
+			List<Local> locals = new ArrayList<>();
+			for (int i = chain.size() - 1; i >= 0; i--) {
+				Environment each = chain.get(i);
+				for (String name : each.variableNames()) {
+					LispVal value = each.lookupOrNull(name);
+					if (value == null || value == Environment.SPECIAL || name.startsWith("__")) {
+						continue;
+					}
+					int id = seen.merge(name, 1, Integer::sum) - 1;
+					locals.add(inPackage(() -> new Local(print(new LispSymbol(name)), id, valueLine(value))));
+				}
+			}
+			return locals;
+		}
+
+		/**
+		 * The package a frame's expressions read in, as SWANK's
+		 * {@code frame-package-name}: the package the debugged request ran in.
+		 * @param index the frame's index
+		 * @return the package's name
+		 */
+		public String framePackage(int index) {
+			return packageName(this.pkg);
+		}
+
+		/**
+		 * Evaluates an expression in a frame -- its locals in reach -- as SWANK's
+		 * {@code eval-string-in-frame}, answering its values for the echo area.
+		 * @param code the expression
+		 * @param index the frame's index
+		 * @param pkg the package it reads in, or null for the frame's
+		 * @param lines the echo area's lines
+		 * @param width its width
+		 * @return the values, as SWANK formats them
+		 */
+		public String evalInFrame(String code, int index, @Nullable String pkg, int lines, int width) {
+			return echoArea(evalIn(code, index, pkg), lines, width);
+		}
+
+		/**
+		 * Evaluates an expression in a frame, as SWANK's
+		 * {@code pprint-eval-string-in-frame}: each value on a line of its own.
+		 * @param code the expression
+		 * @param index the frame's index
+		 * @param pkg the package it reads in, or null for the frame's
+		 * @return the values
+		 */
+		public String pprintEvalInFrame(String code, int index, @Nullable String pkg) {
+			List<LispVal> values = evalIn(code, index, pkg);
+			StringBuilder text = new StringBuilder();
+			if (values.isEmpty()) {
+				text.append("; No value");
+			}
+			for (LispVal value : values) {
+				text.append(print(value)).append('\n');
+			}
+			return text.toString();
+		}
+
+		private List<LispVal> evalIn(String code, int index, @Nullable String pkg) {
+			String found = pkg == null ? null : guessPackage(pkg);
+			Environment scope = index >= 0 && index < this.frames.size() ? this.frames.get(index).scope() : null;
+			Object previous = CommonLispSwank.this.resolver.bindThreadPackage(found == null ? this.pkg : found);
+			try {
+				LispVal form = readFirst(code);
+				return CommonLispSwank.this.evaluator.evalValuesIn(form,
+						scope == null ? CommonLispSwank.this.evaluator.globalEnvironment() : scope);
+			}
+			finally {
+				CommonLispSwank.this.resolver.unbindThreadPackage(previous);
+			}
+		}
+
+		/** Runs a printing in the package the debugged request ran in. */
+		private <T> T inPackage(Supplier<T> body) {
+			Object previous = CommonLispSwank.this.resolver.bindThreadPackage(this.pkg);
+			try {
+				return body.get();
+			}
+			finally {
+				CommonLispSwank.this.resolver.unbindThreadPackage(previous);
+			}
+		}
+
+	}
+
+	/** Whether a scope is the other or lies inside it. */
+	private static boolean descends(Environment scope, Environment ancestor) {
+		for (Environment each = scope; each != null; each = each.parentScope()) {
+			if (each == ancestor) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** A value on one line, as SWANK's {@code to-line} prints a local's. */
+	private String valueLine(LispVal value) {
+		String text = print(value);
+		int newline = text.indexOf('\n');
+		if (newline >= 0) {
+			text = text.substring(0, newline) + " ..";
+		}
+		return text.length() > FRAME_WIDTH ? text.substring(0, FRAME_WIDTH) + ".." : text;
+	}
+
+	/**
+	 * A frame's printed call on one line, as SWANK's backtrace printer cuts it: at the
+	 * first line break, {@code " .."} and the lists it was inside closed, then at the
+	 * right margin, {@code ".."}.
+	 * @param printed the printed call
+	 * @return the line
+	 */
+	static String frameLine(String printed) {
+		String line = printed;
+		int newline = printed.indexOf('\n');
+		if (newline >= 0) {
+			String head = printed.substring(0, newline);
+			line = head + " .." + ")".repeat(openLists(head));
+		}
+		return line.length() > FRAME_WIDTH ? line.substring(0, FRAME_WIDTH) + ".." : line;
+	}
+
+	/** How many lists a printed prefix leaves open, strings and escapes skipped. */
+	private static int openLists(String text) {
+		int depth = 0;
+		boolean string = false;
+		for (int i = 0; i < text.length(); i++) {
+			char c = text.charAt(i);
+			if (string) {
+				if (c == '\\') {
+					i++;
+				}
+				else if (c == '"') {
+					string = false;
+				}
+			}
+			else if (c == '"') {
+				string = true;
+			}
+			else if (c == '\\') {
+				i++;
+			}
+			else if (c == '(') {
+				depth++;
+			}
+			else if (c == ')' && depth > 0) {
+				depth--;
+			}
+		}
+		return depth;
+	}
+
+	/** A function's lambda list, as a frame of it shows it. */
+	private static LispVal lambdaList(LispLambda lambda) {
+		List<LispVal> params = new ArrayList<>(lambda.params());
+		if (lambda.rest() != null) {
+			params.add(new LispSymbol(LispNames.LAMBDA_REST));
+			params.add(Objects.requireNonNull(lambda.rest()));
+		}
+		return list(params);
 	}
 
 	/** Calls a one-argument lambda, read once in {@code cl-user}, on a value. */
@@ -1862,7 +2529,8 @@ public final class CommonLispSwank {
 				this.resolver.unbindThreadPackage(previous);
 			}
 		});
-		return this.evaluator.applyGlobal(function, List.of(argument));
+		// a helper's failure is its caller's to answer: no debugger stops it
+		return this.evaluator.withoutDebugger(() -> this.evaluator.applyGlobal(function, List.of(argument)));
 	}
 
 	private static LispVal list(List<LispVal> items) {

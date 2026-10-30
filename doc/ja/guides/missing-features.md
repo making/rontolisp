@@ -91,8 +91,9 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 [`abort`](../reference/functions/abort.md) /
 [`continue`](../reference/functions/continue.md) がそれらを駆動します。
 [`cerror`](../reference/macros/cerror.md) は継続可能です。欠けているのは
-**対話的デバッガ**です: `break` と `*debugger-hook*` は存在せず、リスタートの
-`:report` は保存されるだけで描画されず、`:interactive` 関数も実行されません。
+プログラムの**対話的デバッガ**です: `break` と `*debugger-hook*` は存在しません
+(デバッガを持つのは [`rontolisp --swank`](../getting-started/swank.md) だけで、その SLIME の
+デバッガがリスタートの `:report` を描画し、`:interactive` 関数を実行します)。
 またリスタートはコンディションと関連付けられません
 (`find-restart`/`compute-restarts` の省略可能なコンディション引数は無視されます)。
 [`check-type`](../reference/macros/check-type.md) /

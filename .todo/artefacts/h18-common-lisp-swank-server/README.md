@@ -20,6 +20,13 @@ Paths are placeholders: `@WORK@` is a work directory, `@CHECKOUT@` this reposito
   driver, then stop them. `sbcl-wire.log` (SBCL's `:indentation-update` messages dropped)
   and `rontolisp-wire.log` are the two recordings; `cli/SwankServerTest` replays the
   requests and pins rontolisp's answers.
+- `drive-sldb.el` -- the debugger session, the same head with `DRV_STEPS=sldb`:
+  an error quit with `q` after `c` found no continue restart, a `restart-case`'s numbered
+  restart, `cerror`'s continue, a worker's `a`, frames with their locals and an evaluation
+  in a frame, an interrupt continued and then quit, a nested level returned from. Run it
+  with `run-sbcl.sh` / `run-ronto.sh` loading it instead of `drive.el`; `sbcl-sldb-wire.log`
+  and `rontolisp-sldb-wire.log` are the two recordings (the `:debug` messages and their
+  order agree; the frames are each Lisp's own).
 - `gen-arglists.lisp OUT` -- writes `src/main/resources/am/ik/rontolisp/eval/cl-arglists.txt`
   (after its four comment lines): `sbcl --non-interactive --load gen-arglists.lisp
   --end-toplevel-options OUT`.
