@@ -22289,7 +22289,9 @@ public final class LispMacroExpander {
 	 * not a literal quoted symbol -- the gate for {@link #runtimeSlotExistsPDefuns}.
 	 */
 	private static boolean needsRuntimeSlotExistsDispatch(List<LispVal> program) {
-		return program.stream().anyMatch(f -> containsRuntimeSlotNameCall(f, LispNames.SLOT_EXISTS_P));
+		return program.stream()
+			.anyMatch(f -> containsRuntimeSlotNameCall(f, LispNames.SLOT_EXISTS_P)
+					|| containsFunctionReference(f, LispNames.SLOT_EXISTS_P));
 	}
 
 	private static boolean containsRuntimeSlotNameCall(LispVal form, String opName) {
@@ -22324,7 +22326,11 @@ public final class LispMacroExpander {
 	 * data is skipped.
 	 */
 	private static boolean needsRuntimeSlotNameDispatch(List<LispVal> program, ClosRegistry closRegistry) {
-		return program.stream().anyMatch(form -> containsRuntimeSlotName(form, closRegistry));
+		// #'slot-value / #'slot-boundp: the wrapper's slot name is a parameter.
+		return program.stream()
+			.anyMatch(form -> containsRuntimeSlotName(form, closRegistry)
+					|| containsFunctionReference(form, LispNames.SLOT_VALUE)
+					|| containsFunctionReference(form, LispNames.SLOT_BOUNDP));
 	}
 
 	/**
@@ -22335,7 +22341,10 @@ public final class LispMacroExpander {
 	 * without the defun fails loudly at compile time rather than silently.
 	 */
 	private static boolean needsRuntimeSlotSetDispatch(List<LispVal> program, ClosRegistry closRegistry) {
-		return program.stream().anyMatch(form -> containsRuntimeSlotSet(form, closRegistry));
+		// #'slot-makunbound: the wrapper writes through a parameter slot name.
+		return program.stream()
+			.anyMatch(form -> containsRuntimeSlotSet(form, closRegistry)
+					|| containsFunctionReference(form, LispNames.SLOT_MAKUNBOUND));
 	}
 
 	private static boolean containsRuntimeSlotSet(LispVal form, ClosRegistry closRegistry) {
@@ -22686,7 +22695,9 @@ public final class LispMacroExpander {
 	 * literal quoted symbol -- the gate for {@link #changeClassRuntimeDefuns}.
 	 */
 	private static boolean needsChangeClassRuntime(List<LispVal> program) {
-		return program.stream().anyMatch(LispMacroExpander::containsComputedChangeClass);
+		// #'change-class: the wrapper forwards to the dispatch.
+		return program.stream()
+			.anyMatch(f -> containsComputedChangeClass(f) || containsFunctionReference(f, LispNames.CHANGE_CLASS));
 	}
 
 	private static boolean containsComputedChangeClass(LispVal form) {
@@ -22706,6 +22717,48 @@ public final class LispMacroExpander {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * The {@code #'make-condition} construction dispatch
+	 * ({@link LispNames#MAKE_CONDITION_RUNTIME}): one arm per registered condition class,
+	 * each the literal {@code (make-condition 'name ...)} call with every keyword initarg
+	 * the class declares read out of the runtime plist, its slot's initform when the
+	 * plist lacks it. Chained-chunked like the change-class dispatch; an unknown type
+	 * signals.
+	 */
+	private static List<LispVal> makeConditionRuntimeDefuns(ClosRegistry closRegistry) {
+		LispSymbol type = new LispSymbol("%mcr_t");
+		LispSymbol args = new LispSymbol("%mcr_a");
+		String conditionKey = ClosRegistry.normalize(ClosRegistry.CONDITION_CLASS_NAMES.get(0));
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			if (!info.ancestors().contains(conditionKey) && !conditionKey.equals(ClosRegistry.normalize(info.name()))) {
+				continue;
+			}
+			List<LispVal> call = new java.util.ArrayList<>();
+			call.add(new LispSymbol(LispNames.MAKE_CONDITION));
+			call.add(quoteOf(info.name()));
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				List<String> keys = slot.initargs().stream().filter(k -> k.startsWith(":")).toList();
+				if (keys.isEmpty()) {
+					continue;
+				}
+				LispVal value = slot.initform();
+				for (int i = keys.size() - 1; i >= 0; i--) {
+					value = mvCall(LispNames.GETF, args, new LispSymbol(keys.get(i)), value);
+				}
+				call.add(new LispSymbol(keys.get(0)));
+				call.add(value);
+			}
+			List<String> spellings = new java.util.ArrayList<>();
+			addDesignatorSpellings(spellings, info.name());
+			clauses.add(
+					listToCons(List.of(mvCall(LispNames.MEMBER, type, quotedSymbolList(spellings)), listToCons(call))));
+		}
+		LispVal fallback = listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString(LispNames.MAKE_CONDITION + ": ~S is not a condition type"), type));
+		return chainedDispatchDefuns(LispNames.MAKE_CONDITION_RUNTIME, "%MCR-", List.of(type, args), clauses, fallback);
 	}
 
 	/**
@@ -23373,9 +23426,10 @@ public final class LispMacroExpander {
 				// wrappers can read a #P"..." pathname instance, like the head case.
 				// #'aref / #'array-row-major-index: the shared fold's per-axis
 				// bound check and subscript-count check signal a type-error/simple-error
-				// the same way.
+				// the same way. #'make-condition: its runtime dispatch constructs.
 				return form.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol fn
-						&& (LispNames.SIGNAL.equals(fn.name()) || LispNames.READ_CHAR.equals(fn.name())
+						&& (LispNames.SIGNAL.equals(fn.name()) || LispNames.MAKE_CONDITION.equals(fn.name())
+								|| LispNames.READ_CHAR.equals(fn.name())
 								|| LispNames.READ_CHAR_NO_HANG.equals(fn.name())
 								|| LispNames.PEEK_CHAR.equals(fn.name()) || LispNames.READ_BYTE.equals(fn.name())
 								|| LispNames.READ_SEQUENCE.equals(fn.name())
@@ -27675,6 +27729,10 @@ public final class LispMacroExpander {
 		// the runtime target, so the shared dispatch is generated after the walk and
 		// every class joins the capacity reservation.
 		boolean changeClassRuntime = needsChangeClassRuntime(program);
+		// #'make-condition: its wrapper forwards to the runtime-type construction
+		// dispatch, generated after the walk over every registered condition class.
+		boolean makeConditionRuntime = program.stream()
+			.anyMatch(f -> containsFunctionReference(f, LispNames.MAKE_CONDITION));
 		boolean runtimeSubtypep = needsRuntimeSubtypep(program);
 		// The valid-p twin: emitted only by the multiple-value lowering of a subtypep
 		// producer, so it joins the dispatch above exactly when a computed specifier and
@@ -27931,6 +27989,9 @@ public final class LispMacroExpander {
 				}
 			}
 			out.addAll(changeClassRuntimeDefuns(closRegistry));
+		}
+		if (makeConditionRuntime) {
+			out.addAll(makeConditionRuntimeDefuns(closRegistry));
 		}
 		if (compileRuntime) {
 			// Position-independent defuns, appended: a compiled program's compile is a
@@ -40333,6 +40394,18 @@ public final class LispMacroExpander {
 	 */
 	private static int makeArrayElementTypeCodesOfCall(LispCons cons, @Nullable ClosRegistry registry) {
 		int mask = 0;
+		// A quoted bit-vector type spec: make-sequence, coerce, concatenate, map and
+		// merge build a stamped bit array for one (isBitVectorResultType), and typep
+		// asks for the stamp back. #'make-sequence classifies a computed type the same
+		// way.
+		if (cons.car() instanceof LispSymbol quote && LispNames.QUOTE.equals(quote.name())
+				&& cons.cdr() instanceof LispCons datum
+				&& isBitVectorResultType(cons, datum.car() instanceof LispSymbol s ? plainTypeName(s) : null)
+				|| cons.car() instanceof LispSymbol function && LispNames.FUNCTION.equals(function.name())
+						&& cons.cdr() instanceof LispCons named && named.car() instanceof LispSymbol target
+						&& LispNames.MAKE_SEQUENCE.equals(target.name())) {
+			return 1 << ArrayElementTypes.BIT;
+		}
 		if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(head.name())) {
 			List<LispVal> args = cons.toList();
 			for (int i = 2; i + 1 < args.size(); i++) {

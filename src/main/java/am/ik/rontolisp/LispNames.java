@@ -4689,6 +4689,16 @@ public final class LispNames {
 	public static final String CHANGE_CLASS_RUNTIME = "%CHANGE-CLASS-RUNTIME";
 
 	/**
+	 * The function value of {@code make-condition}:
+	 * {@code (%make-condition-runtime type initarg-plist)} constructs the condition a
+	 * type known only at run time names, one arm per registered condition class, each the
+	 * literal call's construction with the initargs read out of the plist. Generated on
+	 * the compile paths for a program naming {@code #'make-condition}; the interpreter
+	 * evaluates the literal call.
+	 */
+	public static final String MAKE_CONDITION_RUNTIME = "%MAKE-CONDITION-RUNTIME";
+
+	/**
 	 * The slot-name fold every runtime-slot-name dispatch above applies to its name
 	 * argument first: {@code (%slot-name-key n)} is {@code (intern (symbol-name n))},
 	 * which re-spells a symbol arriving in the caller's package as the bare base name the

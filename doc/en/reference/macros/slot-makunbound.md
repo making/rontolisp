@@ -4,7 +4,7 @@
 
 Makes the named slot unbound and returns the instance: [`slot-boundp`](slot-boundp.md) then answers `nil` and a read through [`slot-value`](slot-value.md) or an accessor signals `unbound-slot`. Storing into the slot binds it again.
 
-On the JVM and WASM compilers the slot name must be a literal quoted symbol, like [`slot-value`](slot-value.md); a runtime-computed slot name works on the interpreter only.
+The slot name may be a runtime-computed symbol on every backend, like [`slot-value`](slot-value.md), and `#'slot-makunbound` is a function value.
 
 ```lisp
 (defclass sm-point () ((x :initarg :x)))
