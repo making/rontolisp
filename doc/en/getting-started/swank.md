@@ -61,13 +61,17 @@ Backtrace:
 restart (a `cerror`'s, an interrupt's), and a number the restart it lists, a
 `restart-case`'s or a `with-simple-restart`'s included. A frame is a function still
 waiting for its value, with its arguments; `t` on it lists its locals (its parameters and
-the variables bound where it waits) and `e` evaluates an expression with them in reach.
+the variables bound where it waits) and its active `catch` tags, `e` evaluates an
+expression with them in reach, and `v` shows the form it waits in: in the buffer or file
+it was compiled or loaded from, or, for a function typed at the REPL, its printed source
+with that form marked `#:***HERE***`. `i` inspects an expression's value in a frame, `C`
+the condition, `RET` on a local its value. `r` calls a frame's function again with the
+same arguments and `R` returns from a frame the values of an expression evaluated in it.
 An error inside the debugger opens the next level, whose `ABORT` restart returns to the
 one below. `C-c C-b` stops a running evaluation the same way, a sleep or a read included.
 
-Compiling a buffer or a file keeps its errors as notes and opens no debugger. A frame
-cannot be restarted or returned from, stepping is not offered, and a frame shows no source
-and no catch tags.
+Compiling a buffer or a file keeps its errors as notes and opens no debugger. Stepping is
+not offered.
 
 ## Differences from SBCL
 

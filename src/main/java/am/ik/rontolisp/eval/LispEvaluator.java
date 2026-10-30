@@ -6009,13 +6009,14 @@ public final class LispEvaluator {
 	/**
 	 * Whether a Java exception is the interpreter's transfer of control -- a
 	 * {@code throw} (a restart's invocation among them), a {@code return-from}, a
-	 * {@code go} -- rather than a condition: what a frame it leaves lets pass.
+	 * {@code go}, a debugger's transfer to a frame -- rather than a condition: what a
+	 * frame it leaves lets pass.
 	 * @param ex the exception
 	 * @return whether it transfers control
 	 */
 	static boolean isControlTransfer(RuntimeException ex) {
 		return ex instanceof ThrowSignal || ex instanceof BlockReturnSignal || ex instanceof BlockTailExit
-				|| ex instanceof GoSignal;
+				|| ex instanceof GoSignal || ex instanceof FrameSignal;
 	}
 
 	/**
@@ -7657,6 +7658,8 @@ public final class LispEvaluator {
 		// The thread's call-stack frame of the function this loop entered, while a
 		// debugger may ask for the stack (debugging); a tail call replaces its function.
 		CallFrame callFrame = null;
+		// What a debugger's transfer to callFrame answers in its place (FrameSignal).
+		Supplier<LispVal> resume = null;
 		LispVal result;
 		try {
 			frame: while (true) {
@@ -7664,6 +7667,14 @@ public final class LispEvaluator {
 				if (cons instanceof LocatedCons here) {
 					located = here;
 					locatedIn = env.lexicalFunction();
+					if (this.debugging) {
+						// the source form the frame waits in, as a debugger shows it: a
+						// form a macro expansion made is never located
+						CallFrame at = callFrame != null ? callFrame : this.frameTops.get()[0];
+						if (at != null) {
+							at.at(here);
+						}
+					}
 				}
 				try {
 					dispatch: {
@@ -8300,6 +8311,13 @@ public final class LispEvaluator {
 			}
 			result = signal.value();
 		}
+		catch (FrameSignal signal) {
+			if (callFrame == null || signal.frame() != callFrame) {
+				throw signal;
+			}
+			result = LispNil.INSTANCE;
+			resume = signal.action();
+		}
 		catch (LispEvalException e) {
 			e.trace().passing(located, locatedIn);
 			throw funcallSeam || debuggerHere() ? signalPoint(e, env, null) : e;
@@ -8322,7 +8340,7 @@ public final class LispEvaluator {
 				callFrame.exit();
 			}
 		}
-		return result;
+		return resume == null ? result : resume.get();
 	}
 
 	/**
@@ -9386,7 +9404,7 @@ public final class LispEvaluator {
 
 	private static Definition definition(LispCons source, LispVal lambdaList, @Nullable String documentation) {
 		String operator = source.car() instanceof LispSymbol head ? LispSymbol.memberName(head.name()) : "DEFUN";
-		return source instanceof LocatedCons located
+		return source instanceof LocatedCons located && located.line() >= 1
 				? new Definition(operator, lambdaList, documentation, located.file(), located.line())
 				: new Definition(operator, lambdaList, documentation, null, 0);
 	}
@@ -13045,6 +13063,13 @@ public final class LispEvaluator {
 			throw new LispEvalException(LispNames.CATCH + " expects (catch tag body...)");
 		}
 		LispVal tag = eval(parts.get(1), env);
+		// a debugger lists the catch in its frame, unless an expansion's own (a
+		// restart-case's tag variable)
+		CallFrame frame = this.debugging && !(parts.get(1) instanceof LispSymbol var && var.name().startsWith("__"))
+				? topFrame() : null;
+		if (frame != null) {
+			frame.pushCatch(tag);
+		}
 		try {
 			LispVal result = LispNil.INSTANCE;
 			for (int i = 2; i < parts.size(); i++) {
@@ -13057,6 +13082,11 @@ public final class LispEvaluator {
 				return signal.value();
 			}
 			throw signal;
+		}
+		finally {
+			if (frame != null) {
+				frame.popCatch();
+			}
 		}
 	}
 
@@ -15105,6 +15135,7 @@ public final class LispEvaluator {
 			this.functionBodyDepth++;
 			CallFrame callFrame = this.debugging ? CallFrame.enter(this.frameTops.get(), lambda, args, lambdaEnv, env)
 					: null;
+			Supplier<LispVal> resume;
 			try {
 				List<LispVal> blockForm = soleBlockForm(lambda.body());
 				if (blockForm != null) {
@@ -15121,6 +15152,13 @@ public final class LispEvaluator {
 				}
 				return result;
 			}
+			catch (FrameSignal signal) {
+				if (callFrame == null || signal.frame() != callFrame) {
+					throw signal;
+				}
+				// answered once the frame and its bindings are off the stack
+				resume = signal.action();
+			}
 			finally {
 				this.functionBodyDepth--;
 				if (callFrame != null) {
@@ -15132,6 +15170,7 @@ public final class LispEvaluator {
 					}
 				}
 			}
+			return resume.get();
 		}
 		// Not a designator at all: CL's type-error. NIL and T ARE symbols, so each is the
 		// undefined-function the symbol arm above reports for any unbound name.

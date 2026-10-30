@@ -401,6 +401,9 @@ class SwankServerTest {
 							+ " ((0 \"(CAR 1)\") (1 \"(EVAL (CAR 1))\") (2 \"(SLYNK:INTERACTIVE-EVAL \\\"(car 1)\\\")\"))"
 							+ " (id))",
 					"(:debug-activate tid 1)");
+			// the level's condition in SLY's inspector
+			assertThat(sly.sldb("(slynk:eval-for-inspector nil nil 'slynk:inspect-current-condition)", "return")
+				.getFirst()).contains(" :content ((\"The object is a CONDITION of type TYPE-ERROR.\" ");
 			assertThat(sly.sldb("(slynk:sly-db-abort)", car)).containsExactly("(:return (:abort \"NIL\") id)",
 					"(:debug-return tid 1 nil)",
 					"(:return (:abort \"#<TYPE-ERROR \\\"CAR: The value 1 is not of type LIST\\\">\") id)");
@@ -591,25 +594,61 @@ class SwankServerTest {
 			assertThat(client.sldb("(swank:sldb-abort)", car)).containsExactly("(:return (:abort \"NIL\") id)",
 					"(:debug-return tid 1 nil)",
 					"(:return (:abort \"#<TYPE-ERROR \\\"CAR: The value 1 is not of type LIST\\\">\") id)");
-			// the functions waiting are frames, each with its locals; an expression
-			// evaluates in a frame
+			// the functions waiting are frames, restartable, each with its locals and
+			// catch tags and the source form it waits in (a C-c C-c'd function's in its
+			// buffer, a REPL one's printed and marked); an expression evaluates in a
+			// frame; i, C and a local's RET inspect what the level holds
 			client.repl("(defun drv-g (z) (list (error \"deep ~a\" z)))");
-			client.repl("(defun drv-f (x) (let ((y (* x 2))) (list (drv-g y))))");
+			client.rex("(swank:compile-string-for-emacs"
+					+ " \"(defun drv-f (x) (let ((y (* x 2))) (catch 'drv-tag (list (drv-g y)))))\" \"drv.lisp\""
+					+ " '((:position 1) (:line 1 1)) \"/tmp/drv.lisp\" 'nil)", "CL-USER", "t");
 			long deep = client.send("(swank-repl:listener-eval \"(drv-f 21)\n\")", "CL-USER", ":repl-thread");
-			assertThat(client.upTo("debug-activate").getFirst()).endsWith(" ((0 \"(DRV-G 42)\") (1 \"(DRV-F 21)\")"
-					+ " (2 \"(EVAL (DRV-F 21))\") (3 \"(SWANK-REPL:LISTENER-EVAL \\\"(drv-f 21) ..)\")) (id))");
+			assertThat(client.upTo("debug-activate").getFirst())
+				.endsWith(" ((0 \"(DRV-G 42)\" (:restartable t)) (1 \"(DRV-F 21)\" (:restartable t))"
+						+ " (2 \"(EVAL (DRV-F 21))\") (3 \"(SWANK-REPL:LISTENER-EVAL \\\"(drv-f 21) ..)\")) (id))");
 			assertThat(client.sldb("(swank:frame-locals-and-catch-tags 0)", "return"))
 				.containsExactly("(:return (:ok (((:name \"Z\" :id 0 :value \"42\")) nil)) id)");
-			assertThat(client.sldb("(swank:frame-locals-and-catch-tags 1)", "return")).containsExactly(
-					"(:return (:ok (((:name \"X\" :id 0 :value \"21\") (:name \"Y\" :id 0 :value \"42\")) nil)) id)");
+			assertThat(client.sldb("(swank:frame-locals-and-catch-tags 1)", "return"))
+				.containsExactly("(:return (:ok (((:name \"X\" :id 0 :value \"21\") (:name \"Y\" :id 0 :value \"42\"))"
+						+ " (\"DRV-TAG\"))) id)");
+			assertThat(client.sldb("(swank:frame-source-location 0)", "return"))
+				.containsExactly("(:return (:ok (:location (:source-form \"(LAMBDA (Z) (BLOCK DRV-G"
+						+ " (LIST (#:***HERE*** (ERROR \\\"deep ~a\\\" Z)))))\") (:position 1) nil)) id)");
+			assertThat(client.sldb("(swank:frame-source-location 1)", "return")).containsExactly(
+					"(:return (:ok (:location (:buffer-and-file \"drv.lisp\" \"/tmp/drv.lisp\") (:offset 1 58)"
+							+ " (:snippet \"(drv-g y)\"))) id)");
+			assertThat(client.sldb("(swank:frame-source-location 2)", "return"))
+				.containsExactly("(:return (:ok (:error \"No source location\")) id)");
+			assertThat(client.sldb("(swank:inspect-in-frame \"(list x y)\" 1)", "return").getFirst())
+				.contains(" :content ((\"A proper list:\" \"\n\" \"0\" \": \" (:value \"21\" 1) \"\n\" \"1\" \": \""
+						+ " (:value \"42\" 2) ");
+			assertThat(client.sldb("(swank:inspect-frame-var 1 1)", "return").getFirst())
+				.contains(" :content ((\"Value: 42 = #x0000002A = #o52 = #b101010 = 4.2e+1\" ");
+			assertThat(client.sldb("(swank:inspect-current-condition)", "return").getFirst())
+				.contains(" :content ((\"The object is a CONDITION of type SIMPLE-ERROR.\" \"\n\" \"FORMAT-CONTROL\" ");
 			assertThat(client.sldb("(swank:frame-package-name 1)", "return"))
 				.containsExactly("(:return (:ok \"CL-USER\") id)");
 			assertThat(client.sldb("(swank:eval-string-in-frame \"(* x 2)\" 1 \"COMMON-LISP-USER\" 6 80)", "return"))
 				.containsExactly("(:return (:ok \"=> 42 (6 bits, #x2A, #o52, #b101010)\") id)");
 			assertThat(client.sldb("(swank:backtrace 1 3)", "return"))
-				.containsExactly("(:return (:ok ((1 \"(DRV-F 21)\") (2 \"(EVAL (DRV-F 21))\"))) id)");
-			assertThat(client.sldb("(swank:throw-to-toplevel)", deep)).containsExactly("(:return (:abort \"NIL\") id)",
-					"(:debug-return tid 1 nil)", "(:return (:abort \"#<SIMPLE-ERROR \\\"deep 42\\\">\") id)");
+				.containsExactly("(:return (:ok ((1 \"(DRV-F 21)\" (:restartable t)) (2 \"(EVAL (DRV-F 21))\"))) id)");
+			// R: a frame returns what an expression evaluated in it answers; a marker
+			// cannot
+			assertThat(client.sldb("(swank:sldb-return-from-frame 2 \"1\")", "return"))
+				.containsExactly("(:return (:ok \"(\\\"Cannot return from frame: (EVAL (DRV-F 21))\\\")\") id)");
+			assertThat(client.sldb("(swank:sldb-return-from-frame 0 \"(+ 40 z)\")", deep)).containsExactly(
+					"(:return (:abort \"NIL\") id)", "(:debug-return tid 1 nil)",
+					"(:write-string \"(82)\n\" :repl-result)", "(:return (:ok nil) id)");
+			// r: a frame's function called again with its arguments
+			client.repl("(defvar *drv-n* 0)");
+			client.repl("(defun drv-h (a) (if (< (incf *drv-n*) 2) (error \"once\") (list :done a *drv-n*)))");
+			long once = client.send("(swank-repl:listener-eval \"(list (drv-h 7))\n\")", "CL-USER", ":repl-thread");
+			client.upTo("debug-activate");
+			assertThat(client.sldb("(swank:restart-frame 1)", "return"))
+				.containsExactly("(:return (:ok \"Cannot restart frame: (EVAL (LIST (DRV-H 7)))\") id)");
+			assertThat(client.sldb("(swank:restart-frame 0)", once)).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)", "(:write-string \"((:DONE 7 2))\n\" :repl-result)",
+					"(:return (:ok nil) id)");
 			// an error in a level opens the next, whose restarts return to the one below:
 			// that level shows itself again, twice as SWANK does
 			long outer = client.send("(swank-repl:listener-eval \"(error \\\"outer\\\")\n\")", "CL-USER",

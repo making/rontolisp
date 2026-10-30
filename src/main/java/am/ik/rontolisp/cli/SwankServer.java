@@ -764,7 +764,7 @@ final class SwankServer implements AutoCloseable {
 						if (name.equals("inspect-entry")) {
 							return page(target.inspectValue(entry(rest)));
 						}
-						Object answer = inspectorRequest(name, rest, current, target);
+						Object answer = inspectorRequest(name, rest, current, target, session);
 						if (answer == UNANSWERED) {
 							throw new IllegalArgumentException(
 									"The function " + function.name().toUpperCase(Locale.ROOT) + " is undefined.");
@@ -859,7 +859,7 @@ final class SwankServer implements AutoCloseable {
 					}
 				}
 			}
-			Object inspected = inspectorRequest(member, args, this.inspector, this.inspector);
+			Object inspected = inspectorRequest(member, args, this.inspector, this.inspector, session);
 			if (inspected != UNANSWERED) {
 				return inspected;
 			}
@@ -913,6 +913,8 @@ final class SwankServer implements AutoCloseable {
 							locals.add(list(kw("name"), local.name(), kw("id"), (long) local.id(), kw("value"),
 									local.value()));
 						}
+						List<String> tags = level.catchTags(index);
+						yield Arrays.asList(locals, tags.isEmpty() ? null : List.copyOf(tags));
 					}
 					yield Arrays.asList(locals, null);
 				}
@@ -926,7 +928,16 @@ final class SwankServer implements AutoCloseable {
 				case "pprint-eval-string-in-frame" -> level(session) instanceof CommonLispSwank.Debugging level
 						? level.pprintEvalInFrame(text(args, 0), integer(args, 1, 0), optionalText(args, 2))
 						: lisp.pprintEval(text(args, 0));
-				case "frame-source-location" -> list(kw("error"), "No source location");
+				case "frame-source-location" -> {
+					SwankSources.Place place = level(session) instanceof CommonLispSwank.Debugging level
+							? level.source(integer(args, 0, -1)) : null;
+					yield place == null ? list(kw("error"), "No source location")
+							: location(place.location(), place.snippet());
+				}
+				case "restart-frame" -> level(session) instanceof CommonLispSwank.Debugging level
+						? level.restartFrame(integer(args, 0, -1)) : null;
+				case "sldb-return-from-frame" -> level(session) instanceof CommonLispSwank.Debugging level
+						? level.returnFromFrame(integer(args, 0, -1), text(args, 1)) : null;
 				case "set-package" -> {
 					String found = lisp.guessPackage(text(args, 0));
 					if (found == null) {
@@ -1021,14 +1032,23 @@ final class SwankServer implements AutoCloseable {
 		/**
 		 * An inspector request: one reading the inspector {@code current} shows, one
 		 * inspecting a value showing it in {@code target} (SLY's
-		 * {@code eval-for-inspector} names both, SLIME's requests use one).
+		 * {@code eval-for-inspector} names both, SLIME's requests use one); one
+		 * inspecting a value the thread's debugger level holds starts the target over.
 		 * @return the answer, or {@link #UNANSWERED} for a request of no inspector
 		 */
 		private @Nullable Object inspectorRequest(String member, List<Object> args, SwankInspector current,
-				SwankInspector target) {
+				SwankInspector target, @Nullable Session session) {
 			CommonLispSwank lisp = SwankServer.this.lisp;
+			CommonLispSwank.Debugging level = level(session);
 			return switch (member) {
 				case "init-inspector" -> page(target.init(text(args, 0), optionalText(args, 1)));
+				case "inspect-in-frame" ->
+					level == null ? null : inspectAnew(target, level.valueInFrame(text(args, 0), integer(args, 1, 0)));
+				case "inspect-current-condition" -> level == null ? null : inspectAnew(target, level.condition());
+				case "inspect-frame-var" -> {
+					LispVal value = level == null ? null : level.localValue(integer(args, 0, -1), integer(args, 1, -1));
+					yield value == null ? null : inspectAnew(target, value);
+				}
 				case "inspect-nth-part" -> page(target == current ? current.inspectNthPart(integer(args, 0, 0))
 						: target.inspectValue(current.nthPart(integer(args, 0, 0))));
 				case "inspector-nth-part", "inspector-nth-part-or-lose" ->
@@ -1051,6 +1071,15 @@ final class SwankServer implements AutoCloseable {
 				case "pprint-inspector-part" -> current.printPart(integer(args, 0, 0));
 				default -> UNANSWERED;
 			};
+		}
+
+		/**
+		 * A value inspected with the history started over, as SWANK's
+		 * {@code reset-inspector}.
+		 */
+		private @Nullable Object inspectAnew(SwankInspector target, LispVal value) {
+			target.quit();
+			return page(target.inspectValue(value));
 		}
 
 		/**
@@ -1292,7 +1321,8 @@ final class SwankServer implements AutoCloseable {
 		private List<Object> backtrace(CommonLispSwank.Debugging level, int start, int end) {
 			List<Object> frames = new ArrayList<>();
 			for (int i = Math.max(0, start); i < Math.min(end, level.frameCount()); i++) {
-				frames.add(list((long) i, level.frame(i)));
+				frames.add(level.restartable(i) ? list((long) i, level.frame(i), list(kw("restartable"), Boolean.TRUE))
+						: list((long) i, level.frame(i)));
 			}
 			return frames;
 		}
@@ -2058,6 +2088,8 @@ final class SwankServer implements AutoCloseable {
 						list(kw("offset"), (long) buffer.start(), (long) buffer.offset()), hints);
 			case SwankLocation.File file -> list(kw("location"), list(kw("file"), file.file()),
 					list(kw("position"), (long) file.position()), hints);
+			case SwankLocation.SourceForm form ->
+				list(kw("location"), list(kw("source-form"), form.form()), list(kw("position"), 1L), hints);
 		};
 	}
 

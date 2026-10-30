@@ -72,7 +72,8 @@ final class ConditionTrace {
 	 * defined under, or {@code null} for none
 	 */
 	synchronized void passing(@Nullable LocatedCons located, @Nullable String writtenIn) {
-		if (located == null) {
+		// an editor's text a SWANK server evaluated is located in no file (line 0)
+		if (located == null || located.line() < 1) {
 			return;
 		}
 		List<Hop> crossed = this.hops;

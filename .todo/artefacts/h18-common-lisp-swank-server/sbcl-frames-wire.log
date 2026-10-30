@@ -1,0 +1,115 @@
+>> (:emacs-rex (swank:connection-info) "COMMON-LISP-USER" t 1)\n
+<< (:return (:ok (:pid 4069879 :style :spawn :encoding (:coding-systems ("utf-8-unix" "iso-latin-1-unix")) :lisp-implementation (:type "SBCL" :name "sbcl" :version "2.2.9.debian" :program nil) :machine (:instance "dorian" :type "X86-64" :version "Intel(R) Xeon(R) CPU E5-2697A v4 @ 2.60GHz") :features (:asdf3.3 :asdf3.2 :asdf3.1 :asdf3 :asdf2 :asdf :os-unix :non-base-chars-exist-p :asdf-unicode :swank :x86-64 :gencgc :64-bit :ansi-cl :common-lisp :elf :ieee-floating-point :linux :little-endian :package-local-nicknames :sb-core-compression :sb-ldb :sb-package-locks :sb-thread :sb-unicode :sbcl :unix) :modules ("SWANK-INDENTATION" "SWANK-QUICKLISP" "SWANK-MACROSTEP" "SWANK-TRACE-DIALOG" "SWANK-MREPL" "SWANK-SBCL-EXTS" "SWANK-HYPERDOC" "SWANK-PACKAGE-FU" "SWANK-ASDF" "ASDF" "asdf" "UIOP" "uiop" "SWANK-PRESENTATIONS" "SWANK-FANCY-INSPECTOR" "SWANK-FUZZY" "SWANK-ARGLISTS" "SWANK-C-P-C" "SWANK-REPL" "SWANK-UTIL" "SB-CLTL2" "SB-POSIX" "SB-INTROSPECT" "SB-BSD-SOCKETS") :package (:name "COMMON-LISP-USER" :prompt "CL-USER") :version "2.32")) 1)
+>> (:emacs-rex (swank:swank-require '(swank-indentation swank-trace-dialog swank-package-fu swank-presentations swank-macrostep swank-fuzzy swank-fancy-inspector swank-c-p-c swank-arglists swank-repl)) "COMMON-LISP-USER" t 2)\n
+<< (:return (:ok ("SWANK-INDENTATION" "SWANK-QUICKLISP" "SWANK-MACROSTEP" "SWANK-TRACE-DIALOG" "SWANK-MREPL" "SWANK-SBCL-EXTS" "SWANK-HYPERDOC" "SWANK-PACKAGE-FU" "SWANK-ASDF" "ASDF" "asdf" "UIOP" "uiop" "SWANK-PRESENTATIONS" "SWANK-FANCY-INSPECTOR" "SWANK-FUZZY" "SWANK-ARGLISTS" "SWANK-C-P-C" "SWANK-REPL" "SWANK-UTIL" "SB-CLTL2" "SB-POSIX" "SB-INTROSPECT" "SB-BSD-SOCKETS")) 2)
+>> (:emacs-rex (swank:init-presentations) "COMMON-LISP-USER" t 3)\n
+<< (:return (:ok swank::present-repl-results) 3)
+>> (:emacs-rex (swank-repl:create-repl nil) "COMMON-LISP-USER" t 4)\n
+<< (:return (:ok ("COMMON-LISP-USER" "CL-USER")) 4)
+>> (:emacs-rex (swank:load-file "@WORK@/out/work/drv-frames.lisp") "COMMON-LISP-USER" t 5)\n
+<< (:return (:ok "T") 5)
+>> (:emacs-rex (swank-repl:listener-eval "(defvar *drv-xn* 0)\n") "COMMON-LISP-USER" :repl-thread 6)\n
+<< (:presentation-start 1 :repl-result)
+<< (:write-string "*DRV-XN*" :repl-result)
+<< (:presentation-end 1 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 6)
+>> (:emacs-rex (swank-repl:listener-eval "(defun drv-xh (a) (incf *drv-xn*) (if (< *drv-xn* 2) (error \"once ~a\" a) (list :done a *drv-xn*)))\n") "COMMON-LISP-USER" :repl-thread 7)\n
+<< (:presentation-start 2 :repl-result)
+<< (:write-string "DRV-XH" :repl-result)
+<< (:presentation-end 2 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 7)
+>> (:emacs-rex (swank-repl:listener-eval "(defun drv-xk (b) (list (drv-xh b)))\n") "COMMON-LISP-USER" :repl-thread 8)\n
+<< (:presentation-start 3 :repl-result)
+<< (:write-string "DRV-XK" :repl-result)
+<< (:presentation-end 3 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 8)
+>> (:emacs-rex (swank-repl:listener-eval "(defun drv-xr (c) (list (error \"ret ~a\" c)))\n") "COMMON-LISP-USER" :repl-thread 9)\n
+<< (:presentation-start 4 :repl-result)
+<< (:write-string "DRV-XR" :repl-result)
+<< (:presentation-end 4 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 9)
+>> (:emacs-rex (swank-repl:listener-eval "(drv-xf 21)\n") "COMMON-LISP-USER" :repl-thread 10)\n
+<< (:debug 4069908 1 ("deep 42" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {1002210433}>)")) ((0 "(DRV-XG 42)" (:restartable t)) (1 "(DRV-XF 21)" (:restartable t)) (2 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (DRV-XF 21) #<NULL-LEXENV>)") (3 "(EVAL (DRV-XF 21))") (4 "(SWANK::EVAL-REGION \"(drv-xf 21) ..)" (:restartable t)) (5 "((LAMBDA NIL :IN SWANK-REPL::REPL-EVAL))" (:restartable t)) (6 "(SWANK-REPL::TRACK-PACKAGE #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {100246551B}>)" (:restartable t)) (7 "(SWANK::CALL-WITH-RETRY-RESTART \"Retry SLIME REPL evaluation request.\" #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {10024654BB}>)" (:restartable t)) (8 "(SWANK::CALL-WITH-BUFFER-SYNTAX NIL #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {100246549B}>)" (:restartable t)) (9 "(SWANK-REPL::REPL-EVAL \"(drv-xf 21) ..)" (:restartable t)) (10 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (SWANK-REPL:LISTENER-EVAL \"(drv-xf 21) ..)") (11 "(EVAL (SWANK-REPL:LISTENER-EVAL \"(drv-xf 21) ..)") (12 "(SWANK:EVAL-FOR-EMACS (SWANK-REPL:LISTENER-EVAL \"(drv-xf 21) ..)" (:restartable t)) (13 "(SWANK::PROCESS-REQUESTS NIL #<FUNCTION (LAMBDA (SWANK-REPL::INTERRUPT-FUNCTION) :IN SWANK-REPL::REPL-LOOP) {10022106FB}>)" (:restartable t)) (14 "((LAMBDA NIL :IN SWANK::HANDLE-REQUESTS))" (:restartable t)) (15 "((LAMBDA NIL :IN SWANK::HANDLE-REQUESTS))" (:restartable t)) (16 "(SWANK/SBCL::CALL-WITH-BREAK-HOOK #<FUNCTION SWANK:SWANK-DEBUGGER-HOOK> #<FUNCTION (LAMBDA NIL :IN SWANK::HANDLE-REQUESTS) {100221071B}>)") (17 "((FLET SWANK/BACKEND:CALL-WITH-DEBUGGER-HOOK :IN \"@WORK@/dl/slime/slime-2.32/swank/sbcl.lisp\") #<FUNCTION SWANK:SWANK-..") (18 "(SWANK::CALL-WITH-BINDINGS ((*STANDARD-INPUT* . #1=#<SWANK/GRAY::SLIME-INPUT-STREAM {100217FCA3}>) (*STANDARD-OUTPUT* . #2=#<SWANK/GRAY::SLIME-OUTPUT-STREAM {100217FD73}>) (*TRACE-OUTPUT* . #2#) (*ERR.." (:restartable t)) (19 "(SWANK::HANDLE-REQUESTS #<SWANK::MULTITHREADED-CONNECTION {10018A1813}> NIL #<FUNCTION (LAMBDA (SWANK-REPL::INTERRUPT-FUNCTION) :IN SWANK-REPL::REPL-LOOP) {10022106FB}>)" (:restartable t))) (10))
+<< (:debug-activate 4069908 1 nil)
+>> (:emacs-rex (swank:frame-source-location 0) "COMMON-LISP-USER" 4069908 11)\n
+<< (:return (:ok (:location (:file "@WORK@/out/work/drv-frames.lisp") (:position 26) (:snippet "(error \"deep ~a\" z)))\n\n(defun drv-xf (x)\n  (let ((y (* x 2)))\n    (catch 'drv-tag\n      (list (drv-xg y)))))\n"))) 11)
+>> (:emacs-rex (swank:frame-source-location 1) "COMMON-LISP-USER" 4069908 12)\n
+<< (:return (:ok (:location (:file "@WORK@/out/work/drv-frames.lisp") (:position 120) (:snippet "(drv-xg y)))))\n"))) 12)
+>> (:emacs-rex (swank:frame-source-location 2) "COMMON-LISP-USER" 4069908 13)\n
+<< (:return (:ok (:error "Error: Failed to find the TRUENAME of /usr/share/sbcl-source/src/code/eval.lisp:\n\n         No such file or directory")) 13)
+>> (:emacs-rex (swank:frame-source-location 3) "COMMON-LISP-USER" 4069908 14)\n
+<< (:return (:ok (:error "Error: Failed to find the TRUENAME of /usr/share/sbcl-source/src/code/eval.lisp:\n\n         No such file or directory")) 14)
+>> (:emacs-rex (swank:frame-locals-and-catch-tags 0) "COMMON-LISP-USER" 4069908 15)\n
+<< (:return (:ok (((:name "Z" :id 0 :value "42")) nil)) 15)
+>> (:emacs-rex (swank:frame-locals-and-catch-tags 1) "COMMON-LISP-USER" 4069908 16)\n
+<< (:return (:ok (((:name "X" :id 0 :value "21")) ("DRV-TAG"))) 16)
+>> (:emacs-rex (swank:inspect-in-frame "(list x 1)" 1) "COMMON-LISP-USER" 4069908 17)\n
+<< (:return (:ok (:title "#<CONS {1002C03647}>" :id 0 :content (("A proper list:" "\n" "0" ": " (:value "21" 1) "\n" "1" ": " (:value "1" 2) "\n") 10 0 500))) 17)
+>> (:emacs-rex (swank:inspect-current-condition) "COMMON-LISP-USER" 4069908 18)\n
+<< (:return (:ok (:title "#<SIMPLE-ERROR {10024655B3}>" :id 0 :content (("The object is a CONDITION of type SIMPLE-ERROR." "\n" "FORMAT-CONTROL" ": " (:value "\"deep ~a\"" 1) "\n" "FORMAT-ARGUMENTS" ": " (:value "(42)" 2) "\n") 10 0 500))) 18)
+>> (:emacs-rex (swank:inspect-frame-var 1 0) "COMMON-LISP-USER" 4069908 19)\n
+<< (:return (:ok (:title "#<(INTEGER 0 4611686018427387903) {2A}>" :id 0 :content (("Value: 21 = #x00000015 = #o25 = #b10101 = 2.1e+1" "\n" "Code-char" ": " (:value "#\\Nak" 1) "\n" "Integer-length" ": " (:value "5" 2) "\n" "Universal-time" ": " (:value "\"1900-01-01T00:00:21Z\"" 3) "\n") 14 0 500))) 19)
+>> (:emacs-rex (swank:quit-inspector) "COMMON-LISP-USER" 4069908 20)\n
+<< (:return (:ok nil) 20)
+>> (:emacs-rex (swank:throw-to-toplevel) "COMMON-LISP-USER" 4069908 21)\n
+<< (:return (:abort "NIL") 21)
+<< (:debug-return 4069908 1 nil)
+<< (:return (:abort "#<SIMPLE-ERROR \"deep ~a\" {10024655B3}>") 10)
+>> (:emacs-rex (swank-repl:listener-eval "(drv-xr 1)\n") "COMMON-LISP-USER" :repl-thread 22)\n
+<< (:debug 4069908 1 ("ret 1" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {1002210433}>)")) ((0 "(DRV-XR 1)" (:restartable t)) (1 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (DRV-XR 1) #<NULL-LEXENV>)") (2 "(EVAL (DRV-XR 1))") (3 "(SWANK::EVAL-REGION \"(drv-xr 1) ..)" (:restartable t)) (4 "((LAMBDA NIL :IN SWANK-REPL::REPL-EVAL))" (:restartable t)) (5 "(SWANK-REPL::TRACK-PACKAGE #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {1002D1764B}>)" (:restartable t)) (6 "(SWANK::CALL-WITH-RETRY-RESTART \"Retry SLIME REPL evaluation request.\" #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {1002D175EB}>)" (:restartable t)) (7 "(SWANK::CALL-WITH-BUFFER-SYNTAX NIL #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {1002D175CB}>)" (:restartable t)) (8 "(SWANK-REPL::REPL-EVAL \"(drv-xr 1) ..)" (:restartable t)) (9 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (SWANK-REPL:LISTENER-EVAL \"(drv-xr 1) ..)") (10 "(EVAL (SWANK-REPL:LISTENER-EVAL \"(drv-xr 1) ..)") (11 "(SWANK:EVAL-FOR-EMACS (SWANK-REPL:LISTENER-EVAL \"(drv-xr 1) ..)" (:restartable t)) (12 "(SWANK::PROCESS-REQUESTS NIL #<FUNCTION (LAMBDA (SWANK-REPL::INTERRUPT-FUNCTION) :IN SWANK-REPL::REPL-LOOP) {10022106FB}>)" (:restartable t)) (13 "((LAMBDA NIL :IN SWANK::HANDLE-REQUESTS))" (:restartable t)) (14 "((LAMBDA NIL :IN SWANK::HANDLE-REQUESTS))" (:restartable t)) (15 "(SWANK/SBCL::CALL-WITH-BREAK-HOOK #<FUNCTION SWANK:SWANK-DEBUGGER-HOOK> #<FUNCTION (LAMBDA NIL :IN SWANK::HANDLE-REQUESTS) {100221071B}>)") (16 "((FLET SWANK/BACKEND:CALL-WITH-DEBUGGER-HOOK :IN \"@WORK@/dl/slime/slime-2.32/swank/sbcl.lisp\") #<FUNCTION SWANK:SWANK-..") (17 "(SWANK::CALL-WITH-BINDINGS ((*STANDARD-INPUT* . #1=#<SWANK/GRAY::SLIME-INPUT-STREAM {100217FCA3}>) (*STANDARD-OUTPUT* . #2=#<SWANK/GRAY::SLIME-OUTPUT-STREAM {100217FD73}>) (*TRACE-OUTPUT* . #2#) (*ERR.." (:restartable t)) (18 "(SWANK::HANDLE-REQUESTS #<SWANK::MULTITHREADED-CONNECTION {10018A1813}> NIL #<FUNCTION (LAMBDA (SWANK-REPL::INTERRUPT-FUNCTION) :IN SWANK-REPL::REPL-LOOP) {10022106FB}>)" (:restartable t)) (19 "(SWANK-REPL::REPL-LOOP #<SWANK::MULTITHREADED-CONNECTION {10018A1813}>)" (:restartable t))) (22))
+<< (:debug-activate 4069908 1 nil)
+>> (:emacs-rex (swank:frame-source-location 0) "COMMON-LISP-USER" 4069908 23)\n
+<< (:return (:ok (:location (:source-form "(SB-INT:NAMED-LAMBDA DRV-XR\n    (C)\n  (BLOCK DRV-XR (LIST (#:***HERE*** (ERROR \"ret ~a\" C)))))") (:position 1) nil)) 23)
+>> (:emacs-rex (swank:frame-source-location 1) "COMMON-LISP-USER" 4069908 24)\n
+<< (:return (:ok (:error "Error: Failed to find the TRUENAME of /usr/share/sbcl-source/src/code/eval.lisp:\n\n         No such file or directory")) 24)
+>> (:emacs-rex (swank:sldb-return-from-frame 1 "1") "COMMON-LISP-USER" 4069908 25)\n
+<< (:return (:ok "(\"Cannot return from frame: #<SB-DI::COMPILED-FRAME SB-INT:SIMPLE-EVAL-IN-LEXENV>\")") 25)
+>> (:emacs-rex (swank:restart-frame 1) "COMMON-LISP-USER" 4069908 26)\n
+<< (:return (:ok "Cannot restart frame: #<SB-DI::COMPILED-FRAME SB-INT:SIMPLE-EVAL-IN-LEXENV>") 26)
+>> (:emacs-rex (swank:throw-to-toplevel) "COMMON-LISP-USER" 4069908 27)\n
+<< (:return (:abort "NIL") 27)
+<< (:debug-return 4069908 1 nil)
+<< (:return (:abort "#<SIMPLE-ERROR \"ret ~a\" {1002D176E3}>") 22)
+>> (:emacs-rex (swank-repl:listener-eval "(drv-xk 7)\n") "COMMON-LISP-USER" :repl-thread 28)\n
+<< (:debug 4069908 1 ("once 7" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {1002210433}>)")) ((0 "(DRV-XH 7)" (:restartable t)) (1 "(DRV-XK 7)" (:restartable t)) (2 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (DRV-XK 7) #<NULL-LEXENV>)") (3 "(EVAL (DRV-XK 7))") (4 "(SWANK::EVAL-REGION \"(drv-xk 7) ..)" (:restartable t)) (5 "((LAMBDA NIL :IN SWANK-REPL::REPL-EVAL))" (:restartable t)) (6 "(SWANK-REPL::TRACK-PACKAGE #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {10034D168B}>)" (:restartable t)) (7 "(SWANK::CALL-WITH-RETRY-RESTART \"Retry SLIME REPL evaluation request.\" #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {10034D162B}>)" (:restartable t)) (8 "(SWANK::CALL-WITH-BUFFER-SYNTAX NIL #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {10034D160B}>)" (:restartable t)) (9 "(SWANK-REPL::REPL-EVAL \"(drv-xk 7) ..)" (:restartable t)) (10 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (SWANK-REPL:LISTENER-EVAL \"(drv-xk 7) ..)") (11 "(EVAL (SWANK-REPL:LISTENER-EVAL \"(drv-xk 7) ..)") (12 "(SWANK:EVAL-FOR-EMACS (SWANK-REPL:LISTENER-EVAL \"(drv-xk 7) ..)" (:restartable t)) (13 "(SWANK::PROCESS-REQUESTS NIL #<FUNCTION (LAMBDA (SWANK-REPL::INTERRUPT-FUNCTION) :IN SWANK-REPL::REPL-LOOP) {10022106FB}>)" (:restartable t)) (14 "((LAMBDA NIL :IN SWANK::HANDLE-REQUESTS))" (:restartable t)) (15 "((LAMBDA NIL :IN SWANK::HANDLE-REQUESTS))" (:restartable t)) (16 "(SWANK/SBCL::CALL-WITH-BREAK-HOOK #<FUNCTION SWANK:SWANK-DEBUGGER-HOOK> #<FUNCTION (LAMBDA NIL :IN SWANK::HANDLE-REQUESTS) {100221071B}>)") (17 "((FLET SWANK/BACKEND:CALL-WITH-DEBUGGER-HOOK :IN \"@WORK@/dl/slime/slime-2.32/swank/sbcl.lisp\") #<FUNCTION SWANK:SWANK-..") (18 "(SWANK::CALL-WITH-BINDINGS ((*STANDARD-INPUT* . #1=#<SWANK/GRAY::SLIME-INPUT-STREAM {100217FCA3}>) (*STANDARD-OUTPUT* . #2=#<SWANK/GRAY::SLIME-OUTPUT-STREAM {100217FD73}>) (*TRACE-OUTPUT* . #2#) (*ERR.." (:restartable t)) (19 "(SWANK::HANDLE-REQUESTS #<SWANK::MULTITHREADED-CONNECTION {10018A1813}> NIL #<FUNCTION (LAMBDA (SWANK-REPL::INTERRUPT-FUNCTION) :IN SWANK-REPL::REPL-LOOP) {10022106FB}>)" (:restartable t))) (28))
+<< (:debug-activate 4069908 1 nil)
+>> (:emacs-rex (swank:restart-frame 0) "COMMON-LISP-USER" 4069908 29)\n
+<< (:return (:abort "NIL") 29)
+<< (:debug-return 4069908 1 nil)
+<< (:presentation-start 5 :repl-result)
+<< (:write-string "((:DONE 7 2))" :repl-result)
+<< (:presentation-end 5 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 28)
+>> (:emacs-rex (swank-repl:listener-eval "(list (drv-xr 1) :after)\n") "COMMON-LISP-USER" :repl-thread 30)\n
+<< (:debug 4069908 1 ("ret 1" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {1002210433}>)")) ((0 "(DRV-XR 1)" (:restartable t)) (1 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (DRV-XR 1) #<NULL-LEXENV>)") (2 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (LIST (DRV-XR 1) :AFTER) #<NULL-LEXENV>)") (3 "(EVAL (LIST (DRV-XR 1) :AFTER))") (4 "(SWANK::EVAL-REGION \"(list (drv-xr 1) :after) ..)" (:restartable t)) (5 "((LAMBDA NIL :IN SWANK-REPL::REPL-EVAL))" (:restartable t)) (6 "(SWANK-REPL::TRACK-PACKAGE #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {10039C718B}>)" (:restartable t)) (7 "(SWANK::CALL-WITH-RETRY-RESTART \"Retry SLIME REPL evaluation request.\" #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {10039C712B}>)" (:restartable t)) (8 "(SWANK::CALL-WITH-BUFFER-SYNTAX NIL #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {10039C710B}>)" (:restartable t)) (9 "(SWANK-REPL::REPL-EVAL \"(list (drv-xr 1) :after) ..)" (:restartable t)) (10 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (SWANK-REPL:LISTENER-EVAL \"(list (drv-xr 1) :after) ..)") (11 "(EVAL (SWANK-REPL:LISTENER-EVAL \"(list (drv-xr 1) :after) ..)") (12 "(SWANK:EVAL-FOR-EMACS (SWANK-REPL:LISTENER-EVAL \"(list (drv-xr 1) :after) ..)" (:restartable t)) (13 "(SWANK::PROCESS-REQUESTS NIL #<FUNCTION (LAMBDA (SWANK-REPL::INTERRUPT-FUNCTION) :IN SWANK-REPL::REPL-LOOP) {10022106FB}>)" (:restartable t)) (14 "((LAMBDA NIL :IN SWANK::HANDLE-REQUESTS))" (:restartable t)) (15 "((LAMBDA NIL :IN SWANK::HANDLE-REQUESTS))" (:restartable t)) (16 "(SWANK/SBCL::CALL-WITH-BREAK-HOOK #<FUNCTION SWANK:SWANK-DEBUGGER-HOOK> #<FUNCTION (LAMBDA NIL :IN SWANK::HANDLE-REQUESTS) {100221071B}>)") (17 "((FLET SWANK/BACKEND:CALL-WITH-DEBUGGER-HOOK :IN \"@WORK@/dl/slime/slime-2.32/swank/sbcl.lisp\") #<FUNCTION SWANK:SWANK-..") (18 "(SWANK::CALL-WITH-BINDINGS ((*STANDARD-INPUT* . #1=#<SWANK/GRAY::SLIME-INPUT-STREAM {100217FCA3}>) (*STANDARD-OUTPUT* . #2=#<SWANK/GRAY::SLIME-OUTPUT-STREAM {100217FD73}>) (*TRACE-OUTPUT* . #2#) (*ERR.." (:restartable t)) (19 "(SWANK::HANDLE-REQUESTS #<SWANK::MULTITHREADED-CONNECTION {10018A1813}> NIL #<FUNCTION (LAMBDA (SWANK-REPL::INTERRUPT-FUNCTION) :IN SWANK-REPL::REPL-LOOP) {10022106FB}>)" (:restartable t))) (30))
+<< (:debug-activate 4069908 1 nil)
+>> (:emacs-rex (swank:sldb-return-from-frame 0 "(+ 40 2)") "COMMON-LISP-USER" 4069908 31)\n
+<< (:return (:abort "NIL") 31)
+<< (:debug-return 4069908 1 nil)
+<< (:presentation-start 6 :repl-result)
+<< (:write-string "(42 :AFTER)" :repl-result)
+<< (:presentation-end 6 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 30)
+>> (:emacs-rex (swank-repl:listener-eval "(setq *drv-xn* 0)\n") "COMMON-LISP-USER" :repl-thread 32)\n
+<< (:presentation-start 7 :repl-result)
+<< (:write-string "0" :repl-result)
+<< (:presentation-end 7 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 32)
+>> (:emacs-rex (swank-repl:listener-eval "(drv-xk 9)\n") "COMMON-LISP-USER" :repl-thread 33)\n
+<< (:debug 4069908 1 ("once 9" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {1002210433}>)")) ((0 "(DRV-XH 9)" (:restartable t)) (1 "(DRV-XK 9)" (:restartable t)) (2 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (DRV-XK 9) #<NULL-LEXENV>)") (3 "(EVAL (DRV-XK 9))") (4 "(SWANK::EVAL-REGION \"(drv-xk 9) ..)" (:restartable t)) (5 "((LAMBDA NIL :IN SWANK-REPL::REPL-EVAL))" (:restartable t)) (6 "(SWANK-REPL::TRACK-PACKAGE #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {1004060F2B}>)" (:restartable t)) (7 "(SWANK::CALL-WITH-RETRY-RESTART \"Retry SLIME REPL evaluation request.\" #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {1004060ECB}>)" (:restartable t)) (8 "(SWANK::CALL-WITH-BUFFER-SYNTAX NIL #<FUNCTION (LAMBDA NIL :IN SWANK-REPL::REPL-EVAL) {1004060EAB}>)" (:restartable t)) (9 "(SWANK-REPL::REPL-EVAL \"(drv-xk 9) ..)" (:restartable t)) (10 "(SB-INT:SIMPLE-EVAL-IN-LEXENV (SWANK-REPL:LISTENER-EVAL \"(drv-xk 9) ..)") (11 "(EVAL (SWANK-REPL:LISTENER-EVAL \"(drv-xk 9) ..)") (12 "(SWANK:EVAL-FOR-EMACS (SWANK-REPL:LISTENER-EVAL \"(drv-xk 9) ..)" (:restartable t)) (13 "(SWANK::PROCESS-REQUESTS NIL #<FUNCTION (LAMBDA (SWANK-REPL::INTERRUPT-FUNCTION) :IN SWANK-REPL::REPL-LOOP) {10022106FB}>)" (:restartable t)) (14 "((LAMBDA NIL :IN SWANK::HANDLE-REQUESTS))" (:restartable t)) (15 "((LAMBDA NIL :IN SWANK::HANDLE-REQUESTS))" (:restartable t)) (16 "(SWANK/SBCL::CALL-WITH-BREAK-HOOK #<FUNCTION SWANK:SWANK-DEBUGGER-HOOK> #<FUNCTION (LAMBDA NIL :IN SWANK::HANDLE-REQUESTS) {100221071B}>)") (17 "((FLET SWANK/BACKEND:CALL-WITH-DEBUGGER-HOOK :IN \"@WORK@/dl/slime/slime-2.32/swank/sbcl.lisp\") #<FUNCTION SWANK:SWANK-..") (18 "(SWANK::CALL-WITH-BINDINGS ((*STANDARD-INPUT* . #1=#<SWANK/GRAY::SLIME-INPUT-STREAM {100217FCA3}>) (*STANDARD-OUTPUT* . #2=#<SWANK/GRAY::SLIME-OUTPUT-STREAM {100217FD73}>) (*TRACE-OUTPUT* . #2#) (*ERR.." (:restartable t)) (19 "(SWANK::HANDLE-REQUESTS #<SWANK::MULTITHREADED-CONNECTION {10018A1813}> NIL #<FUNCTION (LAMBDA (SWANK-REPL::INTERRUPT-FUNCTION) :IN SWANK-REPL::REPL-LOOP) {10022106FB}>)" (:restartable t))) (33))
+<< (:debug-activate 4069908 1 nil)
+>> (:emacs-rex (swank:restart-frame 1) "COMMON-LISP-USER" 4069908 34)\n
+<< (:return (:abort "NIL") 34)
+<< (:debug-return 4069908 1 nil)
+<< (:presentation-start 8 :repl-result)
+<< (:write-string "((:DONE 9 2))" :repl-result)
+<< (:presentation-end 8 :repl-result)
+<< (:write-string "\n" :repl-result)
+<< (:return (:ok nil) 33)

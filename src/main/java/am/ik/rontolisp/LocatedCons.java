@@ -4,7 +4,10 @@ package am.ik.rontolisp;
  * A cons the reader produced from a NAMED file while reading code that will run in this
  * process -- the interpreter's entry file, a {@code load}, an ASDF component -- carrying
  * the file and the line its datum starts on, so an uncaught runtime condition can say
- * where it happened ({@code eval.ConditionTrace}).
+ * where it happened ({@code eval.ConditionTrace}) and a debugger's frame which source
+ * form it waits in ({@code eval.CallFrame}). A text an editor sends a SWANK server is
+ * located in no file, line 0 ({@code eval.CommonLispSwank#located}): only the frame reads
+ * that.
  *
  * <p>
  * <b>A subclass, not a field on every cons and not a side table.</b> A third field on

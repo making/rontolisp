@@ -1,6 +1,9 @@
 package am.ik.rontolisp.eval;
 
-/** Where a compiler note or a definition points, in an editor buffer or a file. */
+/**
+ * Where a compiler note, a definition or a debugger's frame points, in an editor buffer,
+ * a file, or a printed form.
+ */
 public sealed interface SwankLocation {
 
 	/**
@@ -31,6 +34,15 @@ public sealed interface SwankLocation {
 	 * @param position the 1-based character position
 	 */
 	record File(String file, int position) implements SwankLocation {
+	}
+
+	/**
+	 * A form with no text to point into, printed: a function typed at the REPL, the form
+	 * a frame waits in marked {@code (#:***HERE*** form)}.
+	 *
+	 * @param form the printed form
+	 */
+	record SourceForm(String form) implements SwankLocation {
 	}
 
 }

@@ -31,6 +31,10 @@ Paths are placeholders: `@WORK@` is a work directory, `@CHECKOUT@` this reposito
   nested level returned from; `sbcl-sldb-wire.log` and `rontolisp-sldb-wire.log` are the
   two recordings (the `:debug` messages and their order agree; the frames are each Lisp's
   own).
+- The `frames` steps (h26): a `C-c C-l`'d file's frames -- `v` on each, `t`'s catch tags,
+  `i`, `C`, a local's `RET` -- a REPL function's `v`, `R` and `r` refused on a marker, `r` of
+  the innermost and of an outer frame, `R`; `sbcl-frames-wire.log` and
+  `rontolisp-frames-wire.log`.
 - `gen-arglists.lisp OUT` -- writes `src/main/resources/am/ik/rontolisp/eval/cl-arglists.txt`
   (after its four comment lines): `sbcl --non-interactive --load gen-arglists.lisp
   --end-toplevel-options OUT`.

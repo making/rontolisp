@@ -146,8 +146,9 @@ public final class SwankSources implements LispEvaluator.LoadRecorder {
 	 * @param target the used name's key ({@link #key})
 	 * @param container the definition it is in
 	 * @param place where it is, or null in a definition typed at the REPL
+	 * @param form the form that uses it, as the evaluator runs it
 	 */
-	private record Ref(Use use, String target, Def container, @Nullable Place place) {
+	private record Ref(Use use, String target, Def container, @Nullable Place place, LispVal form) {
 	}
 
 	/**
@@ -404,7 +405,7 @@ public final class SwankSources implements LispEvaluator.LoadRecorder {
 			if (builtin && LispNames.FUNCTION.equals(member)) {
 				if (form.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol fn) {
 					called(fn.name(), this.expansion != null && !this.text.source.contains(form) ? this.expansion
-							: tokenOffset(fn));
+							: tokenOffset(fn), form);
 				}
 				return null;
 			}
@@ -417,27 +418,28 @@ public final class SwankSources implements LispEvaluator.LoadRecorder {
 			}
 			if (SwankSources.this.evaluator.isUserMacro(name)) {
 				int at = offset(form, member);
-				use(Use.MACROEXPAND, name, at);
+				use(Use.MACROEXPAND, name, at, form);
 				expand(form, at);
 				return form;
 			}
 			if (builtin) {
 				return WALKED_OPERATORS.contains(member) ? variables(form, member) : form;
 			}
-			called(name, offset(form, member));
+			called(name, offset(form, member), form);
 			return null;
 		}
 
 		@Override
 		public void variable(LispSymbol symbol) {
 			if (special(symbol.name())) {
-				use(Use.REFERENCE, symbol.name(), this.expansion != null ? this.expansion : tokenOffset(symbol));
+				use(Use.REFERENCE, symbol.name(), this.expansion != null ? this.expansion : tokenOffset(symbol),
+						symbol);
 			}
 		}
 
-		private void called(String name, int at) {
+		private void called(String name, int at, LispVal form) {
 			check(name);
-			use(Use.CALL, name, at);
+			use(Use.CALL, name, at, form);
 		}
 
 		/** A user macro's call expanded once, memoized, and the expansion walked. */
@@ -464,7 +466,7 @@ public final class SwankSources implements LispEvaluator.LoadRecorder {
 						for (LispVal binding = parts.get(1); binding instanceof LispCons cell; binding = cell.cdr()) {
 							LispVal variable = cell.car() instanceof LispCons pair ? pair.car() : cell.car();
 							if (variable instanceof LispSymbol symbol && special(symbol.name())) {
-								use(Use.BIND, symbol.name(), offset(form, member));
+								use(Use.BIND, symbol.name(), offset(form, member), form);
 							}
 						}
 					}
@@ -478,7 +480,7 @@ public final class SwankSources implements LispEvaluator.LoadRecorder {
 						}
 						else if (part instanceof LispSymbol symbol) {
 							if (special(symbol.name())) {
-								use(Use.SET, symbol.name(), offset(form, member));
+								use(Use.SET, symbol.name(), offset(form, member), form);
 							}
 						}
 						else if (part instanceof LispCons place && place.car() instanceof LispSymbol) {
@@ -805,13 +807,13 @@ public final class SwankSources implements LispEvaluator.LoadRecorder {
 			return at < 0 ? this.text.start : at;
 		}
 
-		private void use(Use use, String target, int offset) {
+		private void use(Use use, String target, int offset, LispVal form) {
 			Def in = this.container;
 			if (in == null || offset < 0) {
 				return;
 			}
 			SwankSources.this.uses.computeIfAbsent(key(in), k -> new ArrayList<>())
-				.add(new Ref(use, target, in, this.text.place(offset)));
+				.add(new Ref(use, target, in, this.text.place(offset), form));
 		}
 
 	}
@@ -1015,9 +1017,68 @@ public final class SwankSources implements LispEvaluator.LoadRecorder {
 	}
 
 	/**
+	 * Where the first of some forms the evaluator ran is in the text it was compiled or
+	 * loaded from: as the walk placed it -- a call, a special variable's use, a user
+	 * macro's call (a form of its expansion at the call) -- or on the line of the file it
+	 * was read from.
+	 * @param forms the forms
+	 * @return the place, or null when none has one
+	 */
+	@Nullable Place placeOf(List<LispVal> forms) {
+		if (forms.isEmpty()) {
+			return null;
+		}
+		Map<LispVal, Place> placed = new IdentityHashMap<>();
+		Set<LispVal> wanted = Collections.newSetFromMap(new IdentityHashMap<>());
+		wanted.addAll(forms);
+		synchronized (this) {
+			for (List<Ref> refs : this.uses.values()) {
+				for (Ref ref : refs) {
+					Place place = ref.place();
+					if (place != null && wanted.contains(ref.form())) {
+						placed.putIfAbsent(ref.form(), place);
+					}
+				}
+			}
+		}
+		for (LispVal form : forms) {
+			Place place = placed.get(form);
+			if (place == null && form instanceof LocatedCons located && located.line() >= 1) {
+				place = formPlace(located.file(), located.line(), form);
+			}
+			if (place != null) {
+				return place;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Where a form read from a file starts: on the line it was read from, the first
+	 * {@code (} followed by its operator's name, else the line's first character that is
+	 * not a blank.
+	 * @param file the file
+	 * @param line the 1-based line
+	 * @param form the form
+	 * @return the place, or null when the file cannot be read
+	 */
+	private static @Nullable Place formPlace(String file, int line, LispVal form) {
+		return filePlace(file, line, form instanceof LispCons cell && cell.car() instanceof LispSymbol head
+				? "(" + LispSymbol.memberName(head.name()).toLowerCase(Locale.ROOT) : null);
+	}
+
+	/**
 	 * Where a line of a file starts its form: its first character that is not a blank.
 	 */
 	private static @Nullable Place filePlace(String file, int line) {
+		return filePlace(file, line, null);
+	}
+
+	/**
+	 * Where a line of a file starts its form, or where a text (lower case) first occurs
+	 * on the line, when it does.
+	 */
+	private static @Nullable Place filePlace(String file, int line, @Nullable String token) {
 		Path path = Path.of(file).toAbsolutePath();
 		String code;
 		try {
@@ -1036,6 +1097,13 @@ public final class SwankSources implements LispEvaluator.LoadRecorder {
 		}
 		while (offset < code.length() && (code.charAt(offset) == ' ' || code.charAt(offset) == '\t')) {
 			offset++;
+		}
+		if (token != null) {
+			int end = code.indexOf('\n', offset);
+			int found = find(code.substring(offset, end < 0 ? code.length() : end).toLowerCase(Locale.ROOT), token, 0);
+			if (found > 0) {
+				offset += found;
+			}
 		}
 		return new Place(new SwankLocation.File(path.toString(), offset + 1),
 				code.substring(offset, Math.min(code.length(), offset + SNIPPET_LENGTH)));

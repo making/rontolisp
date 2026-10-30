@@ -622,6 +622,7 @@ public final class SwankInspector {
 				pathname(out, instance);
 			case LispInstance instance when isA(instance, ClosRegistry.CLASS_NAME) -> classPage(out, s, instance);
 			case LispInstance instance when slotDefinition(instance) -> slotDefinitionPage(out, s, instance);
+			case LispInstance instance when isA(instance, "CONDITION") -> condition(out, instance);
 			case LispInstance instance when instance.layout().kind() == LispLayout.Kind.CLASS ->
 				standardObject(out, s, instance);
 			case LispInstance instance when instance.layout().kind() == LispLayout.Kind.STRUCT ->
@@ -968,7 +969,19 @@ public final class SwankInspector {
 
 	/** A structure's slots, as SBCL's inspector shows one. */
 	private void structure(List<Raw> out, LispInstance instance) {
-		out.add(new RText("The object is a STRUCTURE-OBJECT of type " + instance.layout().printName() + "."));
+		slotLines(out, "STRUCTURE-OBJECT", instance);
+	}
+
+	/**
+	 * A condition's slots, as SBCL's inspector shows one (a condition is no standard
+	 * object there).
+	 */
+	private void condition(List<Raw> out, LispInstance instance) {
+		slotLines(out, "CONDITION", instance);
+	}
+
+	private void slotLines(List<Raw> out, String kind, LispInstance instance) {
+		out.add(new RText("The object is a " + kind + " of type " + instance.layout().printName() + "."));
 		out.add(new RNewline());
 		List<String> names = instance.layout().slotNames();
 		for (int i = 0; i < names.size(); i++) {

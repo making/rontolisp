@@ -10,8 +10,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -40,10 +42,12 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.LocatedCons;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.compiler.CallSiteWalk;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 
@@ -369,7 +373,7 @@ public final class CommonLispSwank implements SwankLisp {
 
 	private Region evalRegion(String code, UnaryOperator<LispVal> rewrite) {
 		boolean markers = SourceLanguage.usesReadEvalMarkers(code);
-		List<LispVal> forms = read(code).stream().map(rewrite).toList();
+		List<LispVal> forms = read(code).stream().map(CommonLispSwank::located).map(rewrite).toList();
 		List<LispVal> values = List.of();
 		LispVal last = LispNil.INSTANCE;
 		List<LispVal> resolved = new ArrayList<>();
@@ -412,6 +416,51 @@ public final class CommonLispSwank implements SwankLisp {
 		return SourceLanguage.COMMON_LISP.read(code, this.evaluator.features(), null, this.evaluator.sourceStandards());
 	}
 
+	/**
+	 * A form the editor sent to evaluate, with every datum's outermost cons a
+	 * {@link LocatedCons}, as a named file's read makes them, in no file
+	 * ({@link #EDITOR_TEXT}, line 0): the source a debugger's frame waits in
+	 * ({@link CallFrame#at}) is a located form, which no macro expansion makes. Shared
+	 * structure stays shared.
+	 */
+	static LispVal located(LispVal form) {
+		return located(form, new IdentityHashMap<>());
+	}
+
+	private static LispVal located(LispVal form, Map<LispCons, LispCons> copies) {
+		if (!(form instanceof LispCons head) || head instanceof LocatedCons) {
+			return form;
+		}
+		LispCons done = copies.get(head);
+		if (done != null) {
+			return done;
+		}
+		LispCons first = new LocatedCons(LispNil.INSTANCE, LispNil.INSTANCE, EDITOR_TEXT, 0);
+		copies.put(head, first);
+		LispCons cell = head;
+		LispCons copy = first;
+		while (true) {
+			copy.setCar(located(cell.car(), copies));
+			if (!(cell.cdr() instanceof LispCons next) || next instanceof LocatedCons) {
+				copy.setCdr(cell.cdr());
+				return first;
+			}
+			LispCons seen = copies.get(next);
+			if (seen != null) {
+				copy.setCdr(seen);
+				return first;
+			}
+			LispCons chained = new LispCons(LispNil.INSTANCE, LispNil.INSTANCE);
+			copies.put(next, chained);
+			copy.setCdr(chained);
+			copy = chained;
+			cell = next;
+		}
+	}
+
+	/** The file a form the editor sent is located in ({@link #located}): none. */
+	static final String EDITOR_TEXT = "";
+
 	/** The first form of a text, as SWANK's {@code from-string} reads it. */
 	private LispVal readFirst(String code) {
 		List<LispVal> forms = read(code);
@@ -422,7 +471,7 @@ public final class CommonLispSwank implements SwankLisp {
 	}
 
 	private List<LispVal> evalFirstValues(String code) {
-		LispVal form = readFirst(code);
+		LispVal form = located(readFirst(code));
 		List<LispVal> resolved = new ArrayList<>(1);
 		try {
 			return evalForm(form, SourceLanguage.usesReadEvalMarkers(code), resolved::add);
@@ -770,7 +819,7 @@ public final class CommonLispSwank implements SwankLisp {
 	 * @return its value, as {@code prin1} prints it
 	 */
 	public String reEvaluateDefvar(String code) {
-		LispVal form = readFirst(code);
+		LispVal form = located(readFirst(code));
 		if (!(form instanceof LispCons cons && cons.car() instanceof LispSymbol head
 				&& LispNames.DEFVAR.equals(head.name().toUpperCase(Locale.ROOT)) && cons.cdr() instanceof LispCons rest
 				&& rest.car() instanceof LispSymbol)) {
@@ -965,7 +1014,7 @@ public final class CommonLispSwank implements SwankLisp {
 		List<Integer> starts = new ArrayList<>();
 		for (int i = 0; run && i < read.forms().size(); i++) {
 			int offset = aligned ? offsets.get(i) : 0;
-			LispVal form = read.forms().get(i);
+			LispVal form = located(read.forms().get(i));
 			try {
 				this.evaluator.reportingWarningsTo(
 						(text, style) -> notes
@@ -2663,9 +2712,15 @@ public final class CommonLispSwank implements SwankLisp {
 	 * @param entry the function's call scope, or null
 	 * @param scope the frame's innermost scope, where its locals are and an expression
 	 * evaluates, or null for none
+	 * @param live the function's activation on the stack, to restart or return from, or
+	 * null
+	 * @param forms the forms the frame stepped onto last, newest first: the newest of the
+	 * source is the one it waits in
+	 * @param catches the tags of its active {@code catch} forms, innermost first
 	 */
 	private record Frame(@Nullable LispVal call, @Nullable LispLambda lambda, List<LispVal> args,
-			@Nullable Environment entry, @Nullable Environment scope) {
+			@Nullable Environment entry, @Nullable Environment scope, @Nullable CallFrame live, List<LispVal> forms,
+			List<LispVal> catches) {
 	}
 
 	/**
@@ -2726,16 +2781,21 @@ public final class CommonLispSwank implements SwankLisp {
 				LispLambda lambda = each.lambda();
 				Environment entry = each.entry();
 				if (each == operator) {
-					out.add(new Frame(each.call, null, List.of(), null, null));
+					// a built-in's call is the form its caller waits in
+					CallFrame caller = each.parent;
+					out.add(new Frame(each.call, null, List.of(), null, null, null,
+							caller == null ? List.of() : caller.recentForms(), List.of()));
 				}
 				else if (lambda == null || entry == null) {
-					out.add(new Frame(each.call, null, List.of(), null, inner));
+					out.add(new Frame(each.call, null, List.of(), null, inner, null, each.recentForms(),
+							each.catchTags()));
 					// what ran below a marker ran in no scope of what runs above it
 					inner = null;
 				}
 				else {
 					out.add(new Frame(null, lambda, List.copyOf(each.args()), entry,
-							inner != null && descends(inner, entry) ? inner : entry));
+							inner != null && descends(inner, entry) ? inner : entry, each.restartable() ? each : null,
+							each.recentForms(), each.catchTags()));
 					inner = each.caller;
 				}
 			}
@@ -2891,6 +2951,32 @@ public final class CommonLispSwank implements SwankLisp {
 		 * @return the locals
 		 */
 		public List<Local> locals(int index) {
+			Map<String, Integer> seen = new HashMap<>();
+			List<Local> locals = new ArrayList<>();
+			for (Map.Entry<String, LispVal> each : localValues(index)) {
+				int id = seen.merge(each.getKey(), 1, Integer::sum) - 1;
+				locals.add(inPackage(
+						() -> new Local(print(new LispSymbol(each.getKey())), id, valueLine(each.getValue()))));
+			}
+			return locals;
+		}
+
+		/**
+		 * A frame's local variable's value, as SWANK's {@code frame-var-value}.
+		 * @param index the frame's index
+		 * @param var the variable's index among {@link #locals}
+		 * @return the value, or null when there is no such variable
+		 */
+		public @Nullable LispVal localValue(int index, int var) {
+			if (index < 0 || index >= this.frames.size()) {
+				return null;
+			}
+			List<Map.Entry<String, LispVal>> values = localValues(index);
+			return var >= 0 && var < values.size() ? values.get(var).getValue() : null;
+		}
+
+		/** A frame's locals by name and value, in {@link #locals}'s order. */
+		private List<Map.Entry<String, LispVal>> localValues(int index) {
 			Frame frame = this.frames.get(index);
 			Environment entry = frame.entry();
 			Environment scope = frame.scope();
@@ -2906,8 +2992,7 @@ public final class CommonLispSwank implements SwankLisp {
 					break;
 				}
 			}
-			Map<String, Integer> seen = new HashMap<>();
-			List<Local> locals = new ArrayList<>();
+			List<Map.Entry<String, LispVal>> values = new ArrayList<>();
 			for (int i = chain.size() - 1; i >= 0; i--) {
 				Environment each = chain.get(i);
 				for (String name : each.variableNames()) {
@@ -2915,11 +3000,134 @@ public final class CommonLispSwank implements SwankLisp {
 					if (value == null || value == Environment.SPECIAL || name.startsWith("__")) {
 						continue;
 					}
-					int id = seen.merge(name, 1, Integer::sum) - 1;
-					locals.add(inPackage(() -> new Local(print(new LispSymbol(name)), id, valueLine(value))));
+					values.add(Map.entry(name, value));
 				}
 			}
-			return locals;
+			return values;
+		}
+
+		/**
+		 * The tags of the {@code catch} forms active in a frame, innermost first, as
+		 * SWANK's {@code frame-locals-and-catch-tags} prints them.
+		 * @param index the frame's index
+		 * @return the printed tags
+		 */
+		public List<String> catchTags(int index) {
+			List<String> tags = new ArrayList<>();
+			for (LispVal tag : this.frames.get(index).catches()) {
+				tags.add(inPackage(() -> print(tag)));
+			}
+			return tags;
+		}
+
+		/**
+		 * The condition the level was entered for, as SWANK's
+		 * {@code inspect-current-condition} inspects it.
+		 * @return the condition
+		 */
+		public LispVal condition() {
+			return this.condition;
+		}
+
+		/**
+		 * Whether a frame is a function's activation the debugger can restart or return
+		 * from, which SWANK's backtrace marks {@code (:restartable t)}.
+		 * @param index the frame's index
+		 * @return whether it is
+		 */
+		public boolean restartable(int index) {
+			return this.frames.get(index).live() != null;
+		}
+
+		/**
+		 * Calls a frame's function again with its arguments, as SWANK's
+		 * {@code restart-frame}: every frame further in unwinds, the frame's activation
+		 * ends with the new call's values. Leaves by that transfer of control.
+		 * @param index the frame's index
+		 * @return SWANK's text for a frame it cannot restart
+		 */
+		public String restartFrame(int index) {
+			CallFrame live = liveFrame(index);
+			if (live == null) {
+				return "Cannot restart frame: " + frameOrNil(index);
+			}
+			LispLambda lambda = Objects.requireNonNull(live.lambda());
+			List<LispVal> args = List.copyOf(live.args());
+			throw new FrameSignal(live, () -> CommonLispSwank.this.evaluator.applyGlobal(lambda, args));
+		}
+
+		/**
+		 * Returns from a frame the values of an expression evaluated in it, as SWANK's
+		 * {@code sldb-return-from-frame}. Leaves by that transfer of control.
+		 * @param index the frame's index
+		 * @param code the expression
+		 * @return SWANK's text for a frame it cannot return from: the list of its
+		 * message, printed
+		 */
+		public String returnFromFrame(int index, String code) {
+			CallFrame live = liveFrame(index);
+			if (live == null) {
+				return print(list(LispString.literal("Cannot return from frame: " + frameOrNil(index))));
+			}
+			List<LispVal> values = evalIn(code, index, null);
+			Environment global = CommonLispSwank.this.evaluator.globalEnvironment();
+			throw new FrameSignal(live, () -> {
+				if (values.isEmpty()) {
+					global.publishSpill(LispMacroExpander.MV_ZERO_VALUES);
+					return LispNil.INSTANCE;
+				}
+				global.publishSpill(list(values.subList(1, values.size())));
+				return values.getFirst();
+			});
+		}
+
+		private @Nullable CallFrame liveFrame(int index) {
+			return index >= 0 && index < this.frames.size() ? this.frames.get(index).live() : null;
+		}
+
+		private String frameOrNil(int index) {
+			return index >= 0 && index < this.frames.size() ? frame(index) : "NIL";
+		}
+
+		/**
+		 * The value of an expression evaluated in a frame, as SWANK's
+		 * {@code inspect-in-frame} inspects it: the primary value.
+		 * @param code the expression
+		 * @param index the frame's index
+		 * @return the value
+		 */
+		public LispVal valueInFrame(String code, int index) {
+			List<LispVal> values = evalIn(code, index, null);
+			return values.isEmpty() ? LispNil.INSTANCE : values.getFirst();
+		}
+
+		/**
+		 * Where the form a frame waits in is, as SWANK's {@code frame-source-location}:
+		 * the newest form it stepped onto that the walk of a compiled or loaded text
+		 * placed, or that was read from a file (a form a macro expansion made is
+		 * neither); for a function with no text, its form printed with the newest of its
+		 * forms marked.
+		 * @param index the frame's index
+		 * @return the place, or null for none
+		 */
+		public SwankSources.@Nullable Place source(int index) {
+			if (index < 0 || index >= this.frames.size()) {
+				return null;
+			}
+			Frame frame = this.frames.get(index);
+			SwankSources.Place place = CommonLispSwank.this.sources.placeOf(frame.forms());
+			if (place != null) {
+				return place;
+			}
+			LispLambda lambda = frame.lambda();
+			if (lambda == null) {
+				return null;
+			}
+			LispVal whole = new LispCons(new LispSymbol(LispNames.LAMBDA),
+					new LispCons(lambdaList(lambda), list(lambda.body())));
+			LispVal marked = marking(whole, frame.forms());
+			String printed = inPackage(() -> print(marked)).replace("(" + HERE + " ", "(#:" + HERE + " ");
+			return new SwankSources.Place(new SwankLocation.SourceForm(printed), null);
 		}
 
 		/**
@@ -2992,6 +3200,52 @@ public final class CommonLispSwank implements SwankLisp {
 			}
 		}
 
+	}
+
+	/**
+	 * The marker SBCL wraps around the form a frame waits in, in a printed source form.
+	 */
+	private static final String HERE = "***HERE***";
+
+	/**
+	 * A tree with the first of some conses it holds, by identity, wrapped in
+	 * {@code (***HERE*** form)}; the tree itself when it holds none.
+	 */
+	private static LispVal marking(LispVal tree, List<LispVal> candidates) {
+		Set<LispVal> conses = Collections.newSetFromMap(new IdentityHashMap<>());
+		collectConses(tree, conses);
+		for (LispVal candidate : candidates) {
+			if (conses.contains(candidate)) {
+				return marking(tree, candidate, Collections.newSetFromMap(new IdentityHashMap<>()));
+			}
+		}
+		return tree;
+	}
+
+	private static LispVal marking(LispVal tree, LispVal target, Set<LispVal> seen) {
+		if (tree == target) {
+			return list(new LispSymbol(HERE), target);
+		}
+		List<LispVal> items = new ArrayList<>();
+		boolean changed = false;
+		LispVal rest = tree;
+		while (rest instanceof LispCons cell && seen.add(cell)) {
+			LispVal item = marking(cell.car(), target, seen);
+			changed |= item != cell.car();
+			items.add(item);
+			rest = cell.cdr();
+			if (rest == target) {
+				break;
+			}
+		}
+		if (!changed) {
+			return tree;
+		}
+		LispVal out = rest;
+		for (int i = items.size() - 1; i >= 0; i--) {
+			out = new LispCons(items.get(i), out);
+		}
+		return out;
 	}
 
 	/** Whether a scope is the other or lies inside it. */

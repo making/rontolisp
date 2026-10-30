@@ -1,9 +1,11 @@
 package am.ik.rontolisp.eval;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.LocatedCons;
 
 import org.jspecify.annotations.Nullable;
 
@@ -19,6 +21,9 @@ import org.jspecify.annotations.Nullable;
  * still waiting for a value, not every call made.
  */
 final class CallFrame {
+
+	/** How many forms a frame remembers stepping onto, a power of two. */
+	private static final int RECENT = 8;
 
 	/** The frame below this one, or null at the bottom of the thread's stack. */
 	final @Nullable CallFrame parent;
@@ -40,6 +45,19 @@ final class CallFrame {
 	private List<LispVal> args;
 
 	private @Nullable Environment entry;
+
+	/**
+	 * The last source forms -- read from a file or an editor's text ({@link LocatedCons})
+	 * -- this frame stepped onto, a ring: the newest is the one it waits in while a frame
+	 * further in runs, or where a condition was signalled.
+	 */
+	private @Nullable LispVal @Nullable [] recent;
+
+	/** How many forms {@link #at} noted. */
+	private int steps;
+
+	/** The tags of the {@code catch} forms active in this frame, innermost last. */
+	private @Nullable List<LispVal> catches;
 
 	private CallFrame(@Nullable CallFrame parent, @Nullable CallFrame @Nullable [] top, @Nullable LispVal call,
 			@Nullable LispLambda lambda, List<LispVal> args, @Nullable Environment entry,
@@ -112,6 +130,77 @@ final class CallFrame {
 		if (cell != null) {
 			cell[0] = this.parent;
 		}
+	}
+
+	/**
+	 * Notes the source form this frame evaluates now.
+	 * @param form the form
+	 */
+	void at(LocatedCons form) {
+		@Nullable LispVal[] ring = this.recent;
+		if (ring == null) {
+			ring = new LispVal[RECENT];
+			this.recent = ring;
+		}
+		ring[this.steps++ & (RECENT - 1)] = form;
+	}
+
+	/**
+	 * The source forms this frame stepped onto last, newest first.
+	 * @return the forms
+	 */
+	List<LispVal> recentForms() {
+		@Nullable LispVal[] ring = this.recent;
+		if (ring == null) {
+			return List.of();
+		}
+		List<LispVal> forms = new ArrayList<>(RECENT);
+		for (int i = 1; i <= Math.min(this.steps, RECENT); i++) {
+			LispVal form = ring[(this.steps - i) & (RECENT - 1)];
+			if (form != null) {
+				forms.add(form);
+			}
+		}
+		return forms;
+	}
+
+	/**
+	 * Notes a {@code catch} established in this frame.
+	 * @param tag its tag
+	 */
+	void pushCatch(LispVal tag) {
+		List<LispVal> tags = this.catches;
+		if (tags == null) {
+			tags = new ArrayList<>(2);
+			this.catches = tags;
+		}
+		tags.add(tag);
+	}
+
+	/** Drops the innermost {@code catch} {@link #pushCatch} noted. */
+	void popCatch() {
+		List<LispVal> tags = this.catches;
+		if (tags != null && !tags.isEmpty()) {
+			tags.removeLast();
+		}
+	}
+
+	/**
+	 * The tags of the {@code catch} forms active in this frame, innermost first.
+	 * @return the tags
+	 */
+	List<LispVal> catchTags() {
+		List<LispVal> tags = this.catches;
+		return tags == null ? List.of() : List.copyOf(tags.reversed());
+	}
+
+	/**
+	 * Whether this frame is a function's activation on its thread's stack, which a
+	 * debugger can restart or return from ({@link FrameSignal}).
+	 * @return whether it is
+	 */
+	boolean restartable() {
+		return this.lambda != null && this.top != null;
 	}
 
 	/**

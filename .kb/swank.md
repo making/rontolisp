@@ -143,9 +143,9 @@ user macro table concurrent for the same reason: a worker defines while the REPL
 | `swank-macroexpand-1`, `swank-macroexpand`, `swank-macroexpand-all` | `macroexpand-1`, `macroexpand`, and every macro in the form (`CallSiteWalk`'s code positions) |
 | `buffer-first-change`, `init-presentations`, `update-indentation-information`, `fuzzy-completion-selected` | nil |
 | `find-definitions-for-emacs`, `xref`, `xrefs` | below |
-| `init-inspector`, `inspect-nth-part`, `inspector-nth-part`, `inspector-range`, `inspector-call-nth-action`, `inspector-pop`, `inspector-next`, `inspector-reinspect`, `inspector-toggle-verbose`, `inspector-eval`, `inspector-history`, `quit-inspector`, `describe-inspectee`, `describe-inspector-part`, `pprint-inspector-part` | below |
+| `init-inspector`, `inspect-nth-part`, `inspector-nth-part`, `inspector-range`, `inspector-call-nth-action`, `inspector-pop`, `inspector-next`, `inspector-reinspect`, `inspector-toggle-verbose`, `inspector-eval`, `inspector-history`, `quit-inspector`, `describe-inspectee`, `describe-inspector-part`, `pprint-inspector-part`; from SLDB `inspect-in-frame`, `inspect-current-condition`, `inspect-frame-var` (the inspector started over on a value the thread's level holds) | below |
 | `swank-macrostep:macro-form-p`, `macrostep-expand-1` (micros's too) | `(:ok :macro)`/`(:ok nil)`; `(:ok "expansion" (("WHEN" :macro 6)))`, each macro form of the expansion placed by printing it and finding it in the printed whole in walk order; `(:error "Not a macro form")` |
-| `throw-to-toplevel`, `invoke-nth-restart-for-emacs`, `invoke-nth-restart`, `sldb-abort`, `sldb-continue`, `backtrace`, `debugger-info-for-emacs`, `frame-locals-and-catch-tags`, `frame-package-name`, `eval-string-in-frame`, `pprint-eval-string-in-frame` | the thread's innermost debugger level, below; `frame-source-location` `(:error "No source location")` |
+| `throw-to-toplevel`, `invoke-nth-restart-for-emacs`, `invoke-nth-restart`, `sldb-abort`, `sldb-continue`, `backtrace`, `debugger-info-for-emacs`, `frame-locals-and-catch-tags`, `frame-package-name`, `eval-string-in-frame`, `pprint-eval-string-in-frame`, `frame-source-location`, `restart-frame`, `sldb-return-from-frame` | the thread's innermost debugger level, below |
 | anything else in a dialect's package | aborts: `The function SWANK:X is undefined.` (the package as sent) |
 | a form of another package | evaluated in the request's package, its value as a reply carries it (a string, number, symbol, list; anything else `prin1`'d) |
 
@@ -192,13 +192,41 @@ and the program's alike; the tag is registered with `catchingOutside`, since
 
 **Frames.** `CallFrame`: every function entry pushes one (`evalCons`'s loop, a tail call
 replacing it; `apply`'s frame-keeping path) while `debugging`, one plain field read per call
-otherwise (`evalCons` 5,273 -> 5,382 bytecodes). Markers: `(EVAL form)` per top-level form,
+otherwise (`evalCons` 5,273 -> 5,382 bytecodes, measured before the frame sources and
+`FrameSignal` were added). Markers: `(EVAL form)` per top-level form,
 the request's form, `(SWANK::SLDB-LOOP n)` under each level. A frame's locals walk its
 innermost scope up to its call scope (the signal's scope for the innermost, the next frame's
 caller scope further out, the scope its own `let`s made for a marker);
 `eval-string-in-frame` evaluates there. Printed under `*print-length*` 6 / `*print-level*`
 4, cut at the first line break (` ..` and the open lists closed) and at 200 characters,
-SWANK's backtrace printer. `ControlState` restores the stack top after an overflow.
+SWANK's backtrace printer. `ControlState` restores the stack top after an overflow. A
+function's frame is `(:restartable t)`. A frame lists the `catch` tags active in it
+(`evalCatch` notes each on the top frame while debugging; a `restart-case` expansion's own,
+its tag variable `__`-prefixed, is left out).
+
+**Frame sources** (`v`). A frame remembers the last 8 `LocatedCons` forms it stepped onto
+(`CallFrame.at`, in `evalCons`'s located branch: no cost for unlocated code, nothing when
+not debugging). A located form is a reader's, never an expansion's -- recording every step
+instead put the 20-odd forms of `error`'s expansion in front of the `(error ...)` call --
+so the server locates what the editor sends to evaluate too (`CommonLispSwank.located`:
+`listener-eval`, the `interactive-eval`s, `eval-and-grab-output`, `re-evaluate-defvar`,
+both compiles), in file `""`, line 0, which `ConditionTrace` and `Definition` ignore. The
+frame's source is the newest of those forms that `SwankSources` placed (each walked use
+keeps its form: `C-c C-c` answers `(:buffer-and-file ...) (:offset ...)`, `C-c C-k` and a
+loaded file `(:file ...) (:position ...)`), or that a file read before the server
+started holds (its line, at the first `(name` on it); else, for a function, `(:location
+(:source-form "(LAMBDA (Z) (BLOCK G (LIST (#:***HERE*** (ERROR ...)))))") (:position 1)
+nil)` -- its body printed, the newest form found in it marked, SBCL's shape for a REPL
+function; else `(:error "No source location")`. A built-in's frame answers its caller's.
+
+**Restart and return** (`r`, `R`). `FrameSignal` (a control transfer, `isControlTransfer`)
+carries the frame and an action; the activation that pushed the frame (`evalCons`, or
+`apply`'s frame-keeping path) takes it after everything further in unwound, pops the frame
+and its bindings, and answers the action: the function applied again to its arguments, or
+the values evaluated in the frame (the spill channel set for the extra ones). The request
+answers `(:abort "NIL")`, then the level's `:debug-return`, then the evaluation goes on --
+SBCL's order. A marker or a built-in's frame answers `"Cannot restart frame: (EVAL ...)"`,
+`"(\"Cannot return from frame: (EVAL ...)\")"` (SWANK's `to-string` of the list).
 
 **Levels.** `Session.enter`: the requests' conditions recorded, output flushed, then under
 `(SWANK::SLDB-LOOP n)` and its own `ABORT "Return to sldb level n."` -- listed by deeper
@@ -304,7 +332,8 @@ Content follows `swank-fancy-inspector`: list (proper, improper, circular), cons
 integer (`format` line, code-char, integer-length, universal time), ratio, complex, float,
 character, hash table (`[clear hashtable]`, `[remove entry]`), symbol (value, function,
 documentation, package with `[export]`/`[unintern]`, plist, class), function (name,
-argument list, documentation), a `defclass` instance (the check boxes, grouping by
+argument list, documentation), a condition as SBCL's `The object is a CONDITION of type
+X.` and a line per slot, a `defclass` instance (the check boxes, grouping by
 declaring class, alphabetical sort, `[set value]` reading the minibuffer through
 `:read-from-minibuffer`/`:emacs-return`, `[make unbound]`), a structure as SBCL's
 `The object is a STRUCTURE-OBJECT of type X.`, anything else SWANK's generic page.
@@ -333,9 +362,16 @@ inspector of the `nav` steps differ from Slynk only as SWANK's below do; Lem 2.3
 error, restart, `cerror` continue and interrupt steps answer as micros's recording. A SLY
 REPL thread's own abort restart leaves the REPL reading (Slynk's thread ends). After
 `inspector-pop` a value still in the history keeps its `@N=` in SLY's inspector too
-(Slynk's history ends at the page shown). The debugger's frames are the interpreter's own (no SBCL or SWANK internals, none restartable, every
-local kept: SBCL dropped `drv-f`'s `Y`), a frame shows no source and no catch tags, no
-`restart-frame`, `sldb-return-from-frame`, stepping or `sldb-break-with-default-debugger`;
+(Slynk's history ends at the page shown). The debugger's frames are the interpreter's own (no SBCL or SWANK internals, every
+local kept: SBCL dropped `drv-f`'s `Y`); no stepping or `sldb-break-with-default-debugger`.
+The `frames` steps (2026-10-30, `sbcl-frames-wire.log`, `rontolisp-frames-wire.log`):
+`v`, `t`'s catch tags, `i`, `C`, a local's `RET`, `r` of the innermost and of an outer
+frame, `R` and both refusals answer as SBCL's but a frame's `:position` points at the form's
+`(` (SBCL's one character before it, where its reader started the subform), a REPL
+function's source form is `(LAMBDA ...)` on one line (SBCL's pretty-printed
+`(SB-INT:NAMED-LAMBDA ...)`), a refusal names the frame as printed (SBCL
+`#<SB-DI::COMPILED-FRAME ...>`), and a condition's `FORMAT-CONTROL` is its formatted report,
+`FORMAT-ARGUMENTS` nil (SBCL `"deep ~a"`, `(42)`);
 a condition prints with its report (`#<SIMPLE-ERROR "boom 1">`, SBCL
 `#<SIMPLE-ERROR "boom ~a" {...}>`); a compile request's error is a note, never SLDB (SBCL
 loads the fasl, so a load-time error enters it); `frame-package-name` answers `"CL-USER"`.
@@ -370,11 +406,13 @@ slot definition, generic function, method, package, symbols and pathname pages),
 the aborts; `anInterruptEntersTheDebugger...`: the loop's simple-break continued and quit
 while a worker answers in its own package, a sleep continued;
 `anErrorEntersTheDebugger...`: `q`, `c`, a numbered restart, `cerror`'s continue, a
-worker's `a`, frames, locals, eval in frame, a nested level returned from; an `-e`
+worker's `a`, frames, locals and catch tags, each frame's source (a `C-c C-c`'d function's
+buffer place, a REPL one's marked form, a marker's none), `i`, `C`, a local's `RET`, eval in
+frame, `R` and `r` with their refusals, a nested level returned from; an `-e`
 program starting a `:dont-close t` server and a default one, both serving its evaluator,
 then `stop-server`; a SLY and a Lem session on one server, their recorded shapes, SLY's
 REPL debugger with a level read inside, a history entry inspected and read by `#v`, a SLY
-worker's level, an interrupt continued and quit, Lem's inspection by id and its levels),
+worker's level and its condition inspected, an interrupt continued and quit, Lem's inspection by id and its levels),
 `RontoLispCliTest#aProgramTheModeCannotTakeIsAClearError`,
 `LispEvaluatorAsdfTest#dependsOnBuiltinSwankResolvesWithoutNetworkAndCreateServerSignals`.
 By hand: the artefacts' driver against `rontolisp --swank` (2026-10-30; the `nav` steps --
@@ -382,7 +420,8 @@ By hand: the artefacts' driver against `rontolisp --swank` (2026-10-30; the `nav
 `rontolisp-nav-wire.log`; the `loaded` steps -- `C-c C-l`, REPL definitions, their `M-.`
 and xref, the metaobject, package and pathname pages -- in `sbcl-loaded-wire.log` and
 `rontolisp-loaded-wire.log`; the `sldb` steps -- the debugger -- in `sbcl-sldb-wire.log`
-and `rontolisp-sldb-wire.log`); h21's SLY driver and Lem in Docker against it, h24's
+and `rontolisp-sldb-wire.log`; the `frames` steps in `sbcl-frames-wire.log` and
+`rontolisp-frames-wire.log`); h21's SLY driver and Lem in Docker against it, h24's
 `sldb` and `nav` steps and Lem steps (2026-10-30)
 (2026-10-30); a program file served after its end and `quit-lisp` ending the
 process with 0, and the compiled message on JVM, Preview 1 and the component (2026-10-30).

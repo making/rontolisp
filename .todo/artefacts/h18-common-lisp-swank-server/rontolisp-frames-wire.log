@@ -1,0 +1,91 @@
+>> (:emacs-rex (swank:connection-info) "COMMON-LISP-USER" t 1)\n
+<< (:return (:ok (:pid 4083323 :style :spawn :encoding (:coding-systems ("utf-8-unix")) :lisp-implementation (:type "rontolisp" :name "rontolisp" :version "0.1.0-SNAPSHOT" :program nil) :machine (:instance "dorian" :type "JVM" :version "25.0.4") :features (:rontolisp :rontolisp-interpreter :unicode :thread-support) :modules ("SWANK-REPL" "SWANK-ARGLISTS" "SWANK-C-P-C" "SWANK-FUZZY" "SWANK-UTIL") :package (:name "CL-USER" :prompt "CL-USER") :version "2.32")) 1)
+>> (:emacs-rex (swank:swank-require '(swank-indentation swank-trace-dialog swank-package-fu swank-presentations swank-macrostep swank-fuzzy swank-fancy-inspector swank-c-p-c swank-arglists swank-repl)) "COMMON-LISP-USER" t 2)\n
+<< (:return (:ok ("SWANK-REPL" "SWANK-ARGLISTS" "SWANK-C-P-C" "SWANK-FUZZY" "SWANK-UTIL" "SWANK-INDENTATION" "SWANK-TRACE-DIALOG" "SWANK-PACKAGE-FU" "SWANK-PRESENTATIONS" "SWANK-MACROSTEP" "SWANK-FANCY-INSPECTOR")) 2)
+>> (:emacs-rex (swank:init-presentations) "COMMON-LISP-USER" t 3)\n
+<< (:return (:ok nil) 3)
+>> (:emacs-rex (swank-repl:create-repl nil) "COMMON-LISP-USER" t 4)\n
+<< (:return (:ok ("CL-USER" "CL-USER")) 4)
+>> (:emacs-rex (swank:load-file "@WORK@/out/work/drv-frames.lisp") "CL-USER" t 5)\n
+<< (:return (:ok "T") 5)
+>> (:emacs-rex (swank-repl:listener-eval "(defvar *drv-xn* 0)\n") "CL-USER" :repl-thread 6)\n
+<< (:write-string "*DRV-XN*\n" :repl-result)
+<< (:return (:ok nil) 6)
+>> (:emacs-rex (swank-repl:listener-eval "(defun drv-xh (a) (incf *drv-xn*) (if (< *drv-xn* 2) (error \"once ~a\" a) (list :done a *drv-xn*)))\n") "CL-USER" :repl-thread 7)\n
+<< (:write-string "DRV-XH\n" :repl-result)
+<< (:return (:ok nil) 7)
+>> (:emacs-rex (swank-repl:listener-eval "(defun drv-xk (b) (list (drv-xh b)))\n") "CL-USER" :repl-thread 8)\n
+<< (:write-string "DRV-XK\n" :repl-result)
+<< (:return (:ok nil) 8)
+>> (:emacs-rex (swank-repl:listener-eval "(defun drv-xr (c) (list (error \"ret ~a\" c)))\n") "CL-USER" :repl-thread 9)\n
+<< (:write-string "DRV-XR\n" :repl-result)
+<< (:return (:ok nil) 9)
+>> (:emacs-rex (swank-repl:listener-eval "(drv-xf 21)\n") "CL-USER" :repl-thread 10)\n
+<< (:debug 94 1 ("deep 42" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5E}>)")) ((0 "(DRV-XG 42)" (:restartable t)) (1 "(DRV-XF 21)" (:restartable t)) (2 "(EVAL (DRV-XF 21))") (3 "(SWANK-REPL:LISTENER-EVAL \"(drv-xf 21) ..)")) (10))
+<< (:debug-activate 94 1 nil)
+>> (:emacs-rex (swank:frame-source-location 0) "CL-USER" 94 11)\n
+<< (:return (:ok (:location (:file "@WORK@/out/work/drv-frames.lisp") (:position 27) (:snippet "(error \"deep ~a\" z)))\n\n(defun drv-xf (x)\n  (let ((y (* x 2)))\n    (catch 'drv-tag\n      (list (drv-xg y)))))\n"))) 11)
+>> (:emacs-rex (swank:frame-source-location 1) "CL-USER" 94 12)\n
+<< (:return (:ok (:location (:file "@WORK@/out/work/drv-frames.lisp") (:position 121) (:snippet "(drv-xg y)))))\n"))) 12)
+>> (:emacs-rex (swank:frame-source-location 2) "CL-USER" 94 13)\n
+<< (:return (:ok (:error "No source location")) 13)
+>> (:emacs-rex (swank:frame-source-location 3) "CL-USER" 94 14)\n
+<< (:return (:ok (:error "No source location")) 14)
+>> (:emacs-rex (swank:frame-locals-and-catch-tags 0) "CL-USER" 94 15)\n
+<< (:return (:ok (((:name "Z" :id 0 :value "42")) nil)) 15)
+>> (:emacs-rex (swank:frame-locals-and-catch-tags 1) "CL-USER" 94 16)\n
+<< (:return (:ok (((:name "X" :id 0 :value "21") (:name "Y" :id 0 :value "42")) ("DRV-TAG"))) 16)
+>> (:emacs-rex (swank:inspect-in-frame "(list x 1)" 1) "CL-USER" 94 17)\n
+<< (:return (:ok (:title "#<CONS {1420769A}>" :id 0 :content (("A proper list:" "\n" "0" ": " (:value "21" 1) "\n" "1" ": " (:value "1" 2) "\n") 10 0 500))) 17)
+>> (:emacs-rex (swank:inspect-current-condition) "CL-USER" 94 18)\n
+<< (:return (:ok (:title "#<SIMPLE-ERROR {3F665875}>" :id 0 :content (("The object is a CONDITION of type SIMPLE-ERROR." "\n" "FORMAT-CONTROL" ": " (:value "\"deep 42\"" 1) "\n" "FORMAT-ARGUMENTS" ": " (:value "NIL" 2) "\n") 10 0 500))) 18)
+>> (:emacs-rex (swank:inspect-frame-var 1 0) "CL-USER" 94 19)\n
+<< (:return (:ok (:title "#<INTEGER {1D20FD85}>" :id 0 :content (("Value: 21 = #x00000015 = #o25 = #b10101 = 2.1e+1" "\n" "Code-char" ": " (:value "#\\" 1) "\n" "Integer-length" ": " (:value "5" 2) "\n" "Universal-time" ": " (:value "\"1900-01-01T00:00:21Z\"" 3) "\n") 14 0 500))) 19)
+>> (:emacs-rex (swank:quit-inspector) "CL-USER" 94 20)\n
+<< (:return (:ok nil) 20)
+>> (:emacs-rex (swank:throw-to-toplevel) "CL-USER" 94 21)\n
+<< (:return (:abort "NIL") 21)
+<< (:debug-return 94 1 nil)
+<< (:return (:abort "#<SIMPLE-ERROR \"deep 42\">") 10)
+>> (:emacs-rex (swank-repl:listener-eval "(drv-xr 1)\n") "CL-USER" :repl-thread 22)\n
+<< (:debug 94 1 ("ret 1" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5E}>)")) ((0 "(DRV-XR 1)" (:restartable t)) (1 "(EVAL (DRV-XR 1))") (2 "(SWANK-REPL:LISTENER-EVAL \"(drv-xr 1) ..)")) (22))
+<< (:debug-activate 94 1 nil)
+>> (:emacs-rex (swank:frame-source-location 0) "CL-USER" 94 23)\n
+<< (:return (:ok (:location (:source-form "(LAMBDA (C) (BLOCK DRV-XR (LIST (#:***HERE*** (ERROR \"ret ~a\" C)))))") (:position 1) nil)) 23)
+>> (:emacs-rex (swank:frame-source-location 1) "CL-USER" 94 24)\n
+<< (:return (:ok (:error "No source location")) 24)
+>> (:emacs-rex (swank:sldb-return-from-frame 1 "1") "CL-USER" 94 25)\n
+<< (:return (:ok "(\"Cannot return from frame: (EVAL (DRV-XR 1))\")") 25)
+>> (:emacs-rex (swank:restart-frame 1) "CL-USER" 94 26)\n
+<< (:return (:ok "Cannot restart frame: (EVAL (DRV-XR 1))") 26)
+>> (:emacs-rex (swank:throw-to-toplevel) "CL-USER" 94 27)\n
+<< (:return (:abort "NIL") 27)
+<< (:debug-return 94 1 nil)
+<< (:return (:abort "#<SIMPLE-ERROR \"ret 1\">") 22)
+>> (:emacs-rex (swank-repl:listener-eval "(drv-xk 7)\n") "CL-USER" :repl-thread 28)\n
+<< (:debug 94 1 ("once 7" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5E}>)")) ((0 "(DRV-XH 7)" (:restartable t)) (1 "(DRV-XK 7)" (:restartable t)) (2 "(EVAL (DRV-XK 7))") (3 "(SWANK-REPL:LISTENER-EVAL \"(drv-xk 7) ..)")) (28))
+<< (:debug-activate 94 1 nil)
+>> (:emacs-rex (swank:restart-frame 0) "CL-USER" 94 29)\n
+<< (:return (:abort "NIL") 29)
+<< (:debug-return 94 1 nil)
+<< (:write-string "((:DONE 7 2))\n" :repl-result)
+<< (:return (:ok nil) 28)
+>> (:emacs-rex (swank-repl:listener-eval "(list (drv-xr 1) :after)\n") "CL-USER" :repl-thread 30)\n
+<< (:debug 94 1 ("ret 1" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5E}>)")) ((0 "(DRV-XR 1)" (:restartable t)) (1 "(EVAL (LIST (DRV-XR 1) :AFTER))") (2 "(SWANK-REPL:LISTENER-EVAL \"(list (drv-xr 1) :after) ..)")) (30))
+<< (:debug-activate 94 1 nil)
+>> (:emacs-rex (swank:sldb-return-from-frame 0 "(+ 40 2)") "CL-USER" 94 31)\n
+<< (:return (:abort "NIL") 31)
+<< (:debug-return 94 1 nil)
+<< (:write-string "(42 :AFTER)\n" :repl-result)
+<< (:return (:ok nil) 30)
+>> (:emacs-rex (swank-repl:listener-eval "(setq *drv-xn* 0)\n") "CL-USER" :repl-thread 32)\n
+<< (:write-string "0\n" :repl-result)
+<< (:return (:ok nil) 32)
+>> (:emacs-rex (swank-repl:listener-eval "(drv-xk 9)\n") "CL-USER" :repl-thread 33)\n
+<< (:debug 94 1 ("once 9" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLIME REPL evaluation request.") ("*ABORT" "Return to SLIME's top level.") ("ABORT" "abort thread (#<THREAD \"repl-thread\" RUNNING {5E}>)")) ((0 "(DRV-XH 9)" (:restartable t)) (1 "(DRV-XK 9)" (:restartable t)) (2 "(EVAL (DRV-XK 9))") (3 "(SWANK-REPL:LISTENER-EVAL \"(drv-xk 9) ..)")) (33))
+<< (:debug-activate 94 1 nil)
+>> (:emacs-rex (swank:restart-frame 1) "CL-USER" 94 34)\n
+<< (:return (:abort "NIL") 34)
+<< (:debug-return 94 1 nil)
+<< (:write-string "((:DONE 9 2))\n" :repl-result)
+<< (:return (:ok nil) 33)

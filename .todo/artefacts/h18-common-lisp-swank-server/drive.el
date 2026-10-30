@@ -463,6 +463,78 @@
               (drv-settle)
               (drv-repl "(+ 40 2)"))))
 
+;;; The frame steps: a loaded function's frame source, inspecting from SLDB, catch tags,
+;;; restarting a frame and returning from one.
+
+(defun drv-fev (label form)
+  (drv-log "%s %S" label (condition-case err (slime-eval form) (error (list 'ERR err)))))
+
+(defun drv-frex (label form)
+  (slime-rex () (form)
+    ((:ok value) (drv-log "%s OK %S" label value))
+    ((:abort reason) (drv-log "%s ABORT %S" label reason))))
+
+(when (member "frames" drv-steps)
+  (drv-step "frames-setup"
+            (lambda ()
+              (with-current-buffer (drv-source-buffer "drv-frames.lisp"
+                                                      "(defun drv-xg (z)\n  (list (error \"deep ~a\" z)))\n\n(defun drv-xf (x)\n  (let ((y (* x 2)))\n    (catch 'drv-tag\n      (list (drv-xg y)))))\n")
+                (slime-load-file (buffer-file-name))
+                (drv-settle))
+              (drv-repl "(defvar *drv-xn* 0)")
+              (drv-repl "(defun drv-xh (a) (incf *drv-xn*) (if (< *drv-xn* 2) (error \"once ~a\" a) (list :done a *drv-xn*)))")
+              (drv-repl "(defun drv-xk (b) (list (drv-xh b)))")
+              (drv-repl "(defun drv-xr (c) (list (error \"ret ~a\" c)))")))
+  (drv-step "frames-source-inspect"
+            (lambda ()
+              (drv-repl-send "(drv-xf 21)")
+              (drv-wait-sldb 1)
+              (drv-log "SLDB-TEXT %s" (drv-sldb-text))
+              (unwind-protect
+                  (drv-in-sldb (lambda ()
+                                 (dotimes (i 4)
+                                   (drv-fev (format "SOURCE%d" i) `(swank:frame-source-location ,i)))
+                                 (drv-fev "LOCALS0" '(swank:frame-locals-and-catch-tags 0))
+                                 (drv-fev "LOCALS1" '(swank:frame-locals-and-catch-tags 1))
+                                 (drv-fev "INSPECT-IN-FRAME" '(swank:inspect-in-frame "(list x 1)" 1))
+                                 (drv-fev "INSPECT-CONDITION" '(swank:inspect-current-condition))
+                                 (drv-fev "INSPECT-VAR" '(swank:inspect-frame-var 1 0))
+                                 (drv-fev "INSPECT-QUIT" '(swank:quit-inspector))))
+                (drv-in-sldb #'sldb-quit))
+              (drv-settle)))
+  (drv-step "frames-repl-source"
+            (lambda ()
+              (drv-repl-send "(drv-xr 1)")
+              (drv-wait-sldb 1)
+              (unwind-protect
+                  (drv-in-sldb (lambda ()
+                                 (drv-fev "SOURCE-REPL0" '(swank:frame-source-location 0))
+                                 (drv-fev "SOURCE-REPL1" '(swank:frame-source-location 1))
+                                 (drv-fev "CANNOT-RETURN" '(swank:sldb-return-from-frame 1 "1"))
+                                 (drv-fev "CANNOT-RESTART" '(swank:restart-frame 1))))
+                (drv-in-sldb #'sldb-quit))
+              (drv-settle)))
+  (drv-step "frames-restart"
+            (lambda ()
+              (drv-repl-send "(drv-xk 7)")
+              (drv-wait-sldb 1)
+              (drv-log "SLDB-TEXT %s" (drv-sldb-text))
+              (drv-in-sldb (lambda () (drv-frex "RESTART" '(swank:restart-frame 0))))
+              (drv-settle)))
+  (drv-step "frames-return"
+            (lambda ()
+              (drv-repl-send "(list (drv-xr 1) :after)")
+              (drv-wait-sldb 1)
+              (drv-in-sldb (lambda () (drv-frex "RETURN" '(swank:sldb-return-from-frame 0 "(+ 40 2)"))))
+              (drv-settle)))
+  (drv-step "frames-restart-outer"
+            (lambda ()
+              (drv-repl "(setq *drv-xn* 0)")
+              (drv-repl-send "(drv-xk 9)")
+              (drv-wait-sldb 1)
+              (drv-in-sldb (lambda () (drv-frex "RESTART-OUTER" '(swank:restart-frame 1))))
+              (drv-settle))))
+
 (drv-log "== REPL-BUFFER\n%s\n== END-REPL-BUFFER" (drv-repl-text))
 (drv-log "DONE")
 (kill-emacs 0)

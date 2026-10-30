@@ -92,9 +92,11 @@ The compile path's table is per-thread and opens only in `RontoLispCli.compileTo
 read with no scope open is the interpreter's, and there the reader answers each datum's
 OUTERMOST cons (for a named file) as `am.ik.rontolisp.LocatedCons` -- a `LispCons`
 subclass carrying `file`/`line`, identical to a plain cell for everything a program can
-observe. Used ONLY by the top-level uncaught report (`eval/ConditionTrace`, the location
-lines of [error-handling.md](error-handling.md)); no message ever gets a prefix, so
-`handler-case`, `princ` and every pinned output are unchanged.
+observe. Used by the top-level uncaught report (`eval/ConditionTrace`, the location
+lines of [error-handling.md](error-handling.md)) and by SWANK's frame sources
+([swank.md](swank.md), "Frame sources", which also locates the editor's texts in file `""`,
+line 0, a mark the report skips); no message ever gets a prefix, so `handler-case`,
+`princ` and every pinned output are unchanged.
 - **Why a subclass** (measured 2026-09-26, GraalVM 25.0.3): a third field on `LispCons` is
   free on HotSpot's default layout (24 bytes either way) but grows EVERY cons 16 -> 24
   bytes in the native image and under compact headers; a weak identity table costs ~56
