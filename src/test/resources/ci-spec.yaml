@@ -5202,11 +5202,18 @@ cases:
     source: |
       (defun ci-fmt-exp ()
         (format t "~e|~,4e|~e|~,2e|~e~%" pi pi 1234.5 9.999 0.0)
-        (format t "~e|~@e~%" -1234.5 42.0))
+        (format t "~e|~@e~%" -1234.5 42.0)
+        (format t "~,,,0,,,'eE|~,3,,-1e|~,3,,2e|~,,,3e|~,3,,4e|~,0e|~,3,,0e|~10,3,2,0e~%"
+                2.5 123.456 123.456 1.23e-4 2.5 2.0 0.0 2.5)
+        (let ((c "~,,,0e|~,3,,2e|~,,,3e"))
+          (format t c 2.5 123.456 0.0)
+          (terpri)))
       (ci-fmt-exp)
     expected: |
       3.141593e+0|3.1416e+0|1.2345e+3|1.00e+1|0.0e+0
       -1.2345e+3|+4.2e+1
+      0.25e+1|0.012e+4|12.35e+1|123.0e-6|2500.e-3|2.e+0|0.000e+1| 0.250e+01
+      0.25e+1|12.35e+1|0.0e-2
   - name: format-runtime-control-string
     source: |
       (defun ci-fmt-runtime (c) (format nil c 1 "s" 42 7 (list 1 2) "c"))
@@ -20703,10 +20710,26 @@ cases:
                      (clsurf-selfward (make-instance 'clsurf-load-op))
                      (clsurf-r-a y) (slot-value y 'a) (slot-value y nm))))
       (print (typecase (find-class 'clsurf-op) (standard-class :meta) (t :other)))
+      ;; Metaclass names, a class OBJECT and (eql (find-class 'c)) as specializers.
+      (defstruct clsurf-s a)
+      (defgeneric clsurf-meta (x))
+      (defmethod clsurf-meta ((c class)) (list :class (class-name c)))
+      (defmethod clsurf-meta ((c (eql (find-class 'clsurf-op)))) :op-class)
+      (defmethod clsurf-meta ((c structure-class)) :never)
+      (defmethod clsurf-meta ((c built-in-class)) :never)
+      (defmethod clsurf-meta ((n #.(class-of 1))) (list :integer n))
+      (defmethod clsurf-meta (x) :other)
+      (defgeneric clsurf-std (x))
+      (defmethod clsurf-std ((c standard-class)) :standard)
+      (defmethod clsurf-std (x) :no)
+      (print (list (clsurf-meta (class-of (make-instance 'clsurf-op))) (clsurf-meta (find-class 'clsurf-r))
+                   (clsurf-meta (find-class 'clsurf-s)) (clsurf-meta (class-of 42)) (clsurf-meta 7)
+                   (clsurf-meta "s") (clsurf-std (find-class 'clsurf-r)) (clsurf-std (make-instance 'clsurf-r))))
     expected: |
       (5 7)
       (BASE-OP LOAD-DEP 9 9 9)
       :META
+      (:OP-CLASS (:CLASS CLSURF-R) (:CLASS CLSURF-S) (:CLASS INTEGER) (:INTEGER 7) :OTHER :STANDARD :NO)
 
   - name: missing-cl-names
     source: |
@@ -29001,9 +29024,28 @@ cases:
       (let ((c1 (make-instance 'di-conf)) (c2 (make-instance 'di-conf :port 9090)))
         (print (list (slot-value c1 'host) (slot-value c1 'port)))
         (print (slot-value c2 'port)))
+      (defclass di-arc () ((rx :initarg rx :reader di-rx) (ry :initarg ry :reader di-ry))
+        (:default-initargs ry 5))
+      (print (list (di-rx (make-instance 'di-arc 'rx 1)) (di-ry (make-instance 'di-arc))))
+      (let ((cls 'di-arc)) (print (di-ry (make-instance cls 'ry 2))))
+      (defclass di-arc2 (di-arc) ((rz :initarg rz :initform 0 :reader di-rz)))
+      (defmethod initialize-instance :after ((a di-arc2) &key ((rz z) nil)) (print (list :init z)))
+      (print (di-rz (make-instance 'di-arc2 'rz 9)))
+      (print (di-rz (change-class (make-instance 'di-arc 'rx 3) 'di-arc2 'rz 4)))
+      (define-condition di-cond (error) ((what :initarg what :reader di-what)))
+      (print (handler-case (error 'di-cond 'what 7) (di-cond (c) (di-what c))))
+      (defun di-f (&key ((rx v) 0)) v)
+      (print (list (di-f 'rx 3) (di-f) (handler-case (di-f :rx 1) (program-error () :refused))))
     expected: |
       ("localhost" 8080)
       9090
+      (1 5)
+      2
+      (:INIT 9)
+      9
+      4
+      7
+      (3 0 :REFUSED)
   - name: with-slots-write-through
     source: |
       (defclass ws-pt () ((x :initarg :x) (y :initarg :y)))

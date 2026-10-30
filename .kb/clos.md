@@ -108,6 +108,17 @@ so `#'name`/`funcall`/`mapcar` work with no `BuiltinFunctionWrappers` entry.
   `defconstant` name -> literal value table (`registerConstant`/`findConstant`) filled in
   DEFINITION ORDER. `parseEqlSpecializerValue` consults it for a BARE symbol only; `(eql 'x)`
   is the symbol, and a bare symbol naming no constant stands for itself.
+  `(eql (find-class 'c))` (and `(eql #<class>)`) is the one COMPUTED form accepted: the eql
+  value stays the `(find-class 'c)` form and `makeEqlSpecializerTest` emits
+  `(eq arg (find-class 'c))` -- find-class is memoized, so re-evaluating it per call compares
+  against the definition-time object. `c` must resolve at definition time.
+- **Metaclass specializers**: `parseSpecializer` seeds the MOP classes for `class` /
+  `standard-class` (`ensureMopClassesSeededFor`, like a type specifier) so they become CLASS
+  specializers matching every class metaobject (built-in classes included);
+  `structure-class` / `built-in-class` are TYPE specializers with the empty test. A class
+  OBJECT in specializer position (serapeum's `#.(class-of ...)`) is read as its slot-0 name
+  (`classMetaobjectName`; the literal comes from the macro-time evaluator, so the tag is
+  checked by name, not only via this registry). ci-spec: `clos-slot-options-and-metaobject-types`.
 
 ### The two dispatch bodies
 - `simpleDispatchBody` (one call per branch) when the generic has NO qualifier and NO
@@ -470,6 +481,11 @@ initforms, supplied initargs stored, the instance is the value.
 - **`(:default-initargs :arg form)` overrides the matching slot's effective initform**, which
   is where BOTH construction paths read it; before this it only reached the constructor, so
   `(error 'my-cond)` ignored it.
+- **An initarg is any symbol** (CLHS 7.1.1; cl-vectors' `(rx :initarg rx)`): `SlotSpec.initargKeyword`
+  holds the symbol's name as written, the constructor's `&key ((rx slot))` matches it as written
+  (`.kb/lambda-lists.md`), generated code passes a non-keyword one quoted (`initargForm`), and a
+  `make-instance`/`change-class`/typed-signal call site reads `'rx` as a literal initarg
+  (`literalInitarg`). Pinned by ci-spec `defclass-default-initargs`.
 - **`with-accessors`** is the accessor-call twin of `with-slots` (`expandWithAccessors`),
   needing no registry. **`with-slots` resolves `defstruct` slots too**: `expandSlotValueRaw`
   picks the index out of the LAYOUT registry (`uniqueLayoutSlotIndex`), falling back to the

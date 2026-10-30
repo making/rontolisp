@@ -1317,12 +1317,13 @@ public final class LambdaLists {
 		LispSymbol keyword;
 		LispSymbol name;
 		if (parts.get(0) instanceof LispCons kvCons) {
-			// ((:keyword var) default supplied-p)
+			// ((keyword-name var) default supplied-p): the keyword name is any symbol,
+			// matched as written (CLHS 3.4.1.4) -- (&key ((rx v))) takes 'rx, not :rx.
 			List<LispVal> kv = kvCons.toList();
 			if (kv.size() != 2 || !(kv.get(0) instanceof LispSymbol kwSym)) {
 				throw new IllegalArgumentException("Malformed &key parameter: " + spec.print());
 			}
-			keyword = kwSym.isKeyword() ? kwSym : keywordFor(kwSym);
+			keyword = kwSym;
 			name = asParamSymbol(kv.get(1));
 		}
 		else {
@@ -1378,7 +1379,13 @@ public final class LambdaLists {
 		// also accepts its upcased twin: user call sites read upcased. Nil when the
 		// spellings coincide, so a nil INDICATOR never matches through the twin.
 		LispSymbol upper = upcasedTwin(keyword);
-		return list(new LispSymbol(LispNames.LL_KEY_CELL), source, keyword, upper != null ? upper : LispNil.INSTANCE);
+		return list(new LispSymbol(LispNames.LL_KEY_CELL), source, quotedUnlessKeyword(keyword),
+				upper != null ? quotedUnlessKeyword(upper) : LispNil.INSTANCE);
+	}
+
+	// A keyword evaluates to itself; any other keyword NAME is passed quoted.
+	private static LispVal quotedUnlessKeyword(LispSymbol keyword) {
+		return keyword.isKeyword() ? keyword : list(new LispSymbol(LispNames.QUOTE), keyword);
 	}
 
 	// The all-uppercase spelling of a keyword whose name has lowercase letters, or null
