@@ -14646,7 +14646,8 @@ cases:
       (T T 8 T)
   - name: boundp-and-fboundp-as-function-values
     source: |
-      ;; #'boundp and #'fboundp reach mapcar, funcall and apply. BoundpFunctionValueFixture.
+      ;; #'boundp and #'fboundp reach mapcar, funcall and apply, and the CL functions
+      ;; the expander rewrites in call position are values. BoundpFunctionValueFixture.
       (defvar *fv* 1)
       (defvar *fv-nv*)
       (defun fv-fn () 1)
@@ -14659,6 +14660,15 @@ cases:
       (print (mapcar (lambda (s) (and (funcall #'fboundp s) t)) '(fv-fn car fv-none alphanumericp equalp string< aref cadr)))
       (print (and (apply #'fboundp '(fv-fn)) t))
       (print (let ((fs '(aref cadr))) (list (funcall (first fs) #(7 8) 1) (funcall (symbol-function (second fs)) '(1 2)))))
+      (defclass fvb-pt () ((x :initarg :x) (y)))
+      (defclass fvb-pt3 (fvb-pt) ((z :initform 9) (w :initarg :w)))
+      (define-condition fvb-cond (error) ((a :initarg :a :reader fvb-cond-a) (b :initform 4 :initarg :b :reader fvb-cond-b)))
+      (print (mapcar (lambda (s) (and (fboundp s) t)) '(complement make-condition make-sequence documentation proclaim change-class slot-value slot-boundp slot-exists-p slot-makunbound)))
+      (print (let ((c (funcall #'make-condition 'fvb-cond :a 5))) (list (fvb-cond-a c) (fvb-cond-b c) (typep c 'error))))
+      (print (princ-to-string (apply #'make-condition 'simple-error '(:format-control "x ~a" :format-arguments (1)))))
+      (print (let ((fs '(complement make-sequence documentation proclaim))) (list (funcall (funcall (first fs) #'evenp) 3) (funcall (second fs) 'list 2 :initial-element 7) (funcall (second fs) '(vector t) 2 :initial-element #\a) (funcall (third fs) 'fv-fn 'function) (null (funcall (fourth fs) '(optimize speed))))))
+      (print (let ((p (make-instance 'fvb-pt :x 1)) (fs '(slot-value slot-boundp slot-exists-p slot-makunbound change-class))) (list (funcall (first fs) p 'x) (funcall (second fs) p 'y) (funcall (third fs) p 'q) (eq p (funcall (fourth fs) p 'x)) (slot-boundp p 'x) (eq p (funcall (fifth fs) p 'fvb-pt3 :w 3)) (slot-value p 'z) (slot-value p 'w))))
+      (print (list (handler-case (funcall #'make-condition 'fv-none) (error () :err)) (handler-case (funcall #'make-sequence 'hash-table 1) (error () :err))))
     expected: |
       (T NIL NIL)
       (T T)
@@ -14669,6 +14679,12 @@ cases:
       (T T NIL T T T T T)
       T
       (8 2)
+      (T T T T T T T T T T)
+      (5 4 T)
+      "x 1"
+      (T (7 7) #(#\a #\a) NIL T)
+      (1 NIL NIL T NIL T 9 3)
+      (:ERR :ERR)
   - name: runtime-package-symbol-ops
     source: |
       ;; the postmodern shapes: computed find-package / find-symbol, fmakunbound,

@@ -1894,6 +1894,39 @@ public final class LispEvaluator {
 				new LispFunction(LispNames.MOP_MAKE_INSTANCE, runtimeMakeInstance::apply));
 		this.globalEnv.defineFunction(LispNames.MAKE_INSTANCE,
 				new LispFunction(LispNames.MAKE_INSTANCE, runtimeMakeInstance::apply));
+		// The plist dispatches the #'make-condition / #'change-class catalog wrappers
+		// call (the compile paths generate them as defuns): the literal call, every
+		// argument quoted, evaluated like the runtime make-instance above.
+		// A type naming no condition class signals, as the compile paths' dispatch does
+		// (the literal call degrades an unknown type to a simple-condition instead).
+		this.globalEnv.defineFunction(LispNames.MAKE_CONDITION_RUNTIME,
+				new LispFunction(LispNames.MAKE_CONDITION_RUNTIME, args -> {
+					ClosRegistry.ClassInfo info = args.get(0) instanceof LispSymbol type
+							? this.closRegistry.findClass(type.name()) : null;
+					String condition = ClosRegistry.normalize(ClosRegistry.CONDITION_CLASS_NAMES.get(0));
+					if (info == null || !info.ancestors().contains(condition)
+							&& !condition.equals(ClosRegistry.normalize(info.name()))) {
+						throw new LispEvalException(
+								LispNames.MAKE_CONDITION + ": " + args.get(0).print() + " is not a condition type");
+					}
+					return evalQuotedPlistCall(LispNames.MAKE_CONDITION, args.subList(0, 1), args.get(1));
+				}));
+		// The designator resolves here, as resolveChangeClassDesignator resolves a
+		// computed one: anything but a symbol (nil included) would re-enter this
+		// dispatch.
+		this.globalEnv.defineFunction(LispNames.CHANGE_CLASS_RUNTIME,
+				new LispFunction(LispNames.CHANGE_CLASS_RUNTIME, args -> {
+					LispVal designator = args.get(1);
+					if (designator instanceof LispInstance meta && meta.slotCount() > 0
+							&& this.closRegistry.isClassMetaobject(meta)) {
+						designator = meta.slot(0);
+					}
+					if (!(designator instanceof LispSymbol)) {
+						throw new LispEvalException(
+								LispNames.CHANGE_CLASS + " expects a class designator, got " + designator.print());
+					}
+					return evalQuotedPlistCall(LispNames.CHANGE_CLASS, List.of(args.get(0), designator), args.get(2));
+				}));
 		this.globalEnv.defineFunction(LispNames.SLOT_VALUE_SET_RUNTIME,
 				new LispFunction(LispNames.SLOT_VALUE_SET_RUNTIME, args -> {
 					// (%slot-value-set-runtime obj name value) -- what the shared setf
@@ -8607,6 +8640,9 @@ public final class LispEvaluator {
 									next = LispMacroExpander.expandMakeInstance(cons, this.closRegistry);
 									break dispatch;
 								case LispNames.SLOT_VALUE:
+									if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+										break dispatch;
+									}
 									result = singleValue(evalSlotValue(cons, env));
 									break frame;
 								case LispNames.WITH_SLOTS:
@@ -11647,6 +11683,20 @@ public final class LispEvaluator {
 
 	private static LispVal quoteForm(LispVal v) {
 		return consList(List.of(new LispSymbol(LispNames.QUOTE), v));
+	}
+
+	// (op 'arg... 'k1 'v1 ...): the fixed arguments, then the plist's elements, each
+	// quoted -- the keys keep the literal-initarg shape the expansions read.
+	private LispVal evalQuotedPlistCall(String op, List<LispVal> fixed, LispVal plist) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(op));
+		for (LispVal arg : fixed) {
+			call.add(quoteForm(arg));
+		}
+		for (LispVal cur = plist; cur instanceof LispCons cell; cur = cell.cdr()) {
+			call.add(cell.car() instanceof LispSymbol key && key.isKeyword() ? key : quoteForm(cell.car()));
+		}
+		return eval(consList(call), this.globalEnv);
 	}
 
 	private LispVal letStarForm(List<LispVal> bindings, List<LispVal> body) {

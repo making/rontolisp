@@ -139,7 +139,9 @@ public final class ShadowedBuiltins {
 		if (cached == null) {
 			Set<String> names = new HashSet<>(BuiltinFunctionWrappers.names());
 			names.removeIf(
-					name -> name.startsWith("%") || NOT_SHADOWABLE.contains(name) || EXPANSION_LOWERED.contains(name));
+					name -> name.startsWith("%") || NOT_SHADOWABLE.contains(name) || EXPANSION_LOWERED.contains(name)
+					// The interpreter expands these in call position too.
+							|| BuiltinFunctionWrappers.INLINE_EXPANDED_VALUE_FUNCTIONS.contains(name));
 			names.addAll(LOWERED_WITHOUT_WRAPPER);
 			cached = Set.copyOf(names);
 			lowered = cached;
