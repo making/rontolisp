@@ -18450,6 +18450,9 @@ public final class LispMacroExpander {
 		// read-only in this child.
 		Set<String> includeReadOnly = new java.util.HashSet<>();
 		boolean typedVector = false;
+		// (:type list): a typed struct that is a plain LIST (typedVector is set too --
+		// everything but the representation is shared).
+		boolean typedList = false;
 		// The packed element width of a (:type (vector (unsigned-byte 8|16|32))) struct,
 		// or 0 for any other typed-vector element type (see the :TYPE case below).
 		int typedVectorElementBits = 0;
@@ -18568,14 +18571,14 @@ public final class LispMacroExpander {
 						printerTakesDepth = ":PRINT-FUNCTION".equals(optName);
 					}
 					case ":TYPE" -> {
-						// Only the vector shape: the struct is a plain vector (no
-						// instance
-						// tag), accessors are aref reads at the slot index. (:type list)
-						// is not supported.
+						// The vector or list shape: the struct is a plain vector or list
+						// (no instance tag), accessors are aref / nth reads at the slot
+						// index.
 						boolean vectorShape = (optValue instanceof LispSymbol ts && "VECTOR".equals(plainTypeName(ts)))
 								|| (optValue instanceof LispCons tc && tc.car() instanceof LispSymbol th
 										&& "VECTOR".equals(plainTypeName(th)));
-						if (!vectorShape) {
+						typedList = optValue instanceof LispSymbol ls && LispNames.LIST.equals(plainTypeName(ls));
+						if (!vectorShape && !typedList) {
 							throw new UnsupportedOperationException(
 									LispNames.DEFSTRUCT + " option is not supported: " + option.print());
 						}
@@ -18764,8 +18767,8 @@ public final class LispMacroExpander {
 						boaValues.add(param != null ? param : slotDefaults.get(i));
 					}
 					forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(ctor.name()),
-							ctor.boaLambdaList(),
-							typedVector ? vectorOf(boaValues, typedVectorElementBits) : objNew(structTag, boaValues))));
+							ctor.boaLambdaList(), typedList ? listOf(boaValues) : typedVector
+									? vectorOf(boaValues, typedVectorElementBits) : objNew(structTag, boaValues))));
 				}
 				else {
 					// A slot-less struct has an EMPTY lambda list, which is nil rather
@@ -18773,8 +18776,9 @@ public final class LispMacroExpander {
 					// a cons -- listToCons would blow up casting it.
 					LispVal params0 = lambdaList.isEmpty() ? LispNil.INSTANCE : listToCons(lambdaList);
 					forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(ctor.name()), params0,
-							typedVector ? vectorOf(List.copyOf(slotSyms), typedVectorElementBits)
-									: objNew(structTag, List.copyOf(slotSyms)))));
+							typedList ? listOf(List.copyOf(slotSyms))
+									: typedVector ? vectorOf(List.copyOf(slotSyms), typedVectorElementBits)
+											: objNew(structTag, List.copyOf(slotSyms)))));
 				}
 			}
 		}
@@ -18826,7 +18830,9 @@ public final class LispMacroExpander {
 			String accessor = inPackage.apply(concName + affixFor(slotBases.get(i), base));
 			boolean readOnly = readOnlySlots.contains(slotBases.get(i));
 			if (typedVector) {
-				LispVal arefRead = listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(i)));
+				LispVal arefRead = typedList
+						? listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(i), obj))
+						: listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(i)));
 				forms.add(listToCons(
 						List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params, arefRead)));
 				if (readOnly) {
@@ -18835,11 +18841,14 @@ public final class LispMacroExpander {
 				}
 				LispSymbol newVal = new LispSymbol(STRUCT_NEWVAL_VAR);
 				LispVal writerParams = listToCons(List.<LispVal>of(newVal, obj));
-				LispVal arefPlace = listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(i)));
-				LispVal store = listToCons(List.of(new LispSymbol(LispNames.SETF), arefPlace, newVal));
+				LispVal slotPlace = typedList
+						? listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(i), obj))
+						: listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(i)));
+				LispVal store = listToCons(List.of(new LispSymbol(LispNames.SETF), slotPlace, newVal));
 				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN),
 						new LispSymbol(setfFunctionName(accessor)), writerParams, store)));
-				structAccessors.put(accessor, TYPED_VECTOR_SLOT_BASE - i);
+				// A list slot stores through the writer; a vector one inlines its aref.
+				structAccessors.put(accessor, typedList ? SETF_FUNCTION_MARKER : TYPED_VECTOR_SLOT_BASE - i);
 			}
 			else {
 				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params,
@@ -18952,6 +18961,13 @@ public final class LispMacroExpander {
 	 * v...))} so the instance is a packed integer vector and every accessor's
 	 * {@code aref} takes the packed fast path on every backend.
 	 */
+	private static LispVal listOf(List<LispVal> values) {
+		List<LispVal> call = new java.util.ArrayList<>();
+		call.add(new LispSymbol(LispNames.LIST));
+		call.addAll(values);
+		return listToCons(call);
+	}
+
 	private static LispVal vectorOf(List<LispVal> values, int elementBits) {
 		if (elementBits == 0) {
 			List<LispVal> call = new java.util.ArrayList<>();
@@ -27003,7 +27019,7 @@ public final class LispMacroExpander {
 					case "BOOLEAN" -> 212;
 					case "STANDARD-CHAR", "BASE-CHAR" -> 215;
 					case "DOUBLE-FLOAT", "SINGLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT" -> 218;
-					case "RATIONAL", "RATIO" -> 225;
+					case "RATIONAL" -> 225;
 					case "NUMBER", "REAL", "VECTOR", "SIMPLE-VECTOR", "SIMPLE-STRING", "BASE-STRING" -> 230;
 					case "LIST", "ARRAY", "SIMPLE-ARRAY" -> 235;
 					case "SEQUENCE", "ATOM" -> 240;
@@ -29090,8 +29106,8 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The macro name inside a literal {@code (macro-function 'name)} form -- the only
-	 * shape both sides of a macro alias may take.
+	 * The macro name inside a literal {@code (macro-function 'name)} (or keyword) form --
+	 * the only shape both sides of a macro alias may take.
 	 * @param form the place or value form
 	 * @return the quoted macro name, or null when the form is not that shape
 	 */
@@ -29099,6 +29115,10 @@ public final class LispMacroExpander {
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
 				&& LispNames.MACRO_FUNCTION.equals(plainTypeName(op))) {
 			List<LispVal> parts = cons.toList();
+			if (parts.size() >= 2 && parts.get(1) instanceof LispSymbol keyword && keyword.isKeyword()) {
+				// A keyword names itself (rutils' (abbr :+ incf)).
+				return keyword.name();
+			}
 			return parts.size() >= 2 ? quotedSymbolName(parts.get(1)) : null;
 		}
 		return null;
@@ -36795,6 +36815,11 @@ public final class LispMacroExpander {
 				// (there is one character type here, .kb/declarations-type-checks.md).
 				return listToCons(List.of(new LispSymbol(LispNames.AND),
 						callOf(LispNames.SIMPLE_ARRAY_P_INTERNAL, value), callOf(LispNames.STRINGP, value)));
+			case "RATIO":
+				// A rational that is not an integer: jonathan's (number) / (ratio)
+				// methods sent an integer to the ratio one.
+				return listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.RATIONALP, value),
+						listToCons(List.of(new LispSymbol(LispNames.NOT), callOf(LispNames.INTEGERP, value)))));
 			case "SEQUENCE":
 				return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, value),
 						callOf(LispNames.STRINGP, value), callOf(LispNames.ARRAYP_INTERNAL, value)));

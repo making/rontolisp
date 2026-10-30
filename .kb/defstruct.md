@@ -101,7 +101,9 @@ matched on the UNQUALIFIED slot name; an unknown slot throws.
 ## `:type (vector ...)`
 A typed struct IS a plain vector: no tag, NOT registered as a type (no specializer, no `typep`,
 not a `structure-object`, as in CL). Constructor `(vector v...)`, copier `copy-seq`, accessor an
-`aref`, plus a generated `%setf-<accessor>` writer. `(:type list)` and `:include` are rejected.
+`aref`, plus a generated `%setf-<accessor>` writer. `:include` is rejected.
+`(:type list)` (rutils' `pair`, h58) shares the path (`typedList` beside `typedVector`): `list`
+constructor, `nth` accessor, the writer registered as `SETF_FUNCTION_MARKER` (no inline store).
 
 - A declared `(vector (unsigned-byte 8|16|32))` element type is KEPT, so the constructor's
   `make-array` is packed on every backend and stores MASK to the declared width.

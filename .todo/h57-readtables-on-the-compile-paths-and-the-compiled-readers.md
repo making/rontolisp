@@ -17,7 +17,8 @@ h53 made a readtable a value on every backend and the INTERPRETER's reader read 
    `LispEvaluatorTest.theReaderHonorsTheCurrentReadtable` into a ci-spec case.
 2. **A reader macro called inside a backquote template cannot read the template's commas**:
    the callout's recursive `read` is a fresh read (iterate's `#L(member !1 var :test ,test)`
-   failed "Comma is illegal outside of backquote"). Needed: the backquote depth at the call
+   failed "Comma is illegal outside of backquote"; cl-redis stops here too, in rutils
+   `core/iter.lisp:3162`'s user-defined `` #`(member % var :test ,test) ``). Needed: the backquote depth at the call
    (the lexer knows the open `Backquote` tokens) handed to the recursive read, which then
    reads `,x` as the CLtL2 raw markers, and `LispReader.readBackquote` taking the raw path for a
    `Token.Datum` holding them. Until then `#L`/`#N@` stay native (`ReadtableSyntax.isNativeSub`).

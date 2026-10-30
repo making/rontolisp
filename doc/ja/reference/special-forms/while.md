@@ -11,3 +11,5 @@
     (setq i (+ i 1)))
   sum) ; => 10
 ```
+
+`while` は rontolisp の拡張で、`cl` パッケージがエクスポートしていますが標準の Common Lisp の名前ではありません。パッケージ自身の `while` が優先されます。パッケージが宣言した `while`（parenscript、iterate、arnesi、`for` のような `(:export #:while)`）はそのパッケージのシンボルになり、そのパッケージを use するパッケージはこの `while` ではなくそちらを継承します。

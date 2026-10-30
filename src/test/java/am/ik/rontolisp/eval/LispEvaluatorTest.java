@@ -8538,23 +8538,27 @@ class LispEvaluatorTest {
 		// lisp-namespace's (setf (macro-function 'nslet) (macro-function
 		// 'namespace-let)):
 		// the new name shares the existing macro's expander, so both spellings expand
-		// identically -- and macroexpand-1 through the alias yields the same form.
+		// identically -- and macroexpand-1 through the alias yields the same form. A
+		// built-in macro's alias (rutils' (abbr :+ incf), a keyword name) rewrites the
+		// call into the target's.
 		assertThat(evalMulti("""
 				(defmacro sfmf-greet (x) `(list :hello ,x))
 				(setf (macro-function 'sfmf-hi) (macro-function 'sfmf-greet))
-				(list (sfmf-hi "world") (macroexpand-1 '(sfmf-hi 1)))
-				""").print()).isEqualTo("((:HELLO \"world\") (LIST :HELLO 1))");
+				(setf (macro-function :sfmf+) (macro-function 'incf))
+				(list (sfmf-hi "world") (macroexpand-1 '(sfmf-hi 1))
+				      (let ((y 1)) (:sfmf+ y 2) y) (macroexpand-1 '(:sfmf+ y)))
+				""").print()).isEqualTo("((:HELLO \"world\") (LIST :HELLO 1) 3 (INCF Y))");
 	}
 
 	@Test
 	void setfMacroFunctionRejectsNonAliasShapes() {
 		// There is no runtime macro table on any backend, so only aliasing an existing
-		// user macro is supported -- an arbitrary expander function is rejected, as is
-		// an alias of a name that is not a defmacro-defined macro.
+		// macro is supported -- an arbitrary expander function is rejected, as is an
+		// alias of a name that is not a macro.
 		assertThatThrownBy(() -> eval("(setf (macro-function 'sfmf-x) (lambda (form env) form))"))
 			.hasMessageContaining("only supports aliasing a user macro");
 		assertThatThrownBy(() -> eval("(setf (macro-function 'sfmf-y) (macro-function 'sfmf-no-such))"))
-			.hasMessageContaining("is not a user macro");
+			.hasMessageContaining("is not a macro");
 	}
 
 	@Test
@@ -13623,8 +13627,9 @@ class LispEvaluatorTest {
 	void aReturnOutOfALoopBodyThroughADynamicExtentRunsItsValueFormInsideIt() {
 		// SBCL prints the same: the value form of an exit sees the loop's bindings and
 		// runs inside every special binding, unwind-protect, handler-case and catch
-		// between it and the loop body, so only an exit with none of them in between
-		// runs its value form in the block's frame.
+		// between it and the loop body -- a tagbody with labels too, which a go in the
+		// value form returns to -- so only an exit with none of them in between runs
+		// its value form in the block's frame.
 		assertThat(evalMulti("""
 				(defvar *s* :outer)
 				(defvar *log* nil)
@@ -13636,8 +13641,9 @@ class LispEvaluatorTest {
 				      *log*
 				      (dolist (x '(1)) (handler-case (return (error "e")) (error () (return :caught))))
 				      (block nil (dolist (x '(1)) (catch 'k (return (throw 'k :thrown)))) :after)
-				      (block outer (dolist (x '(1)) (block inner (return-from outer (list x :outer))))))
-				""").print()).isEqualTo("(20 (1 2) 7 :INNER :UP (:CLEANUP :VALUE) :CAUGHT :AFTER (1 :OUTER))");
+				      (block outer (dolist (x '(1)) (block inner (return-from outer (list x :outer)))))
+				      (block outer (tagbody (return-from outer (progn (go :eof) 1)) :eof (return-from outer :eof))))
+				""").print()).isEqualTo("(20 (1 2) 7 :INNER :UP (:CLEANUP :VALUE) :CAUGHT :AFTER (1 :OUTER) :EOF)");
 	}
 
 	@Test
@@ -17473,7 +17479,8 @@ class LispEvaluatorTest {
 	void shadowingImportDisplacesThePresentSymbol() {
 		// The ANSI shadowing-import.1 and .5 shapes (SBCL-checked): the imported symbol
 		// replaces the package's own one of that name, which loses its home; t is a
-		// symbol like any other.
+		// symbol like any other. The displaced symbol shadowing-imported elsewhere stays
+		// itself, not the one that displaced it (parenscript's re-export-symbols).
 		assertThat(evalMulti("""
 				(let* ((p1 (make-package "MTI1" :use nil))
 				       (p2 (make-package "MTI2" :use nil))
@@ -17486,12 +17493,17 @@ class LispEvaluatorTest {
 				        (eq (find-symbol "X" p2) s1)
 				        (multiple-value-list (find-symbol "X" p2))
 				        (symbol-package s2)
+				        (let ((p3 (make-package "MTI3" :use nil)))
+				          (shadowing-import s2 p3)
+				          (prog1 (list (eq (find-symbol "X" p3) s2) (eq (find-symbol "X" p3) s1))
+				            (delete-package p3)))
 				        (shadowing-import t p1)
 				        (package-shadowing-symbols p1)
 				        (multiple-value-list (find-symbol "T" p1))
 				        (delete-package p2)
 				        (delete-package p1)))
-				""").print()).isEqualTo("(NIL T T (MTI1::X) T (MTI1::X :INTERNAL) NIL T (T) (T :INTERNAL) T T)");
+				""").print())
+			.isEqualTo("(NIL T T (MTI1::X) T (MTI1::X :INTERNAL) NIL (T NIL) T (T) (T :INTERNAL) T T)");
 	}
 
 	@Test

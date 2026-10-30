@@ -24694,6 +24694,45 @@ cases:
       T
       (1 2 (3))
       (:READTABLE :OTHER)
+  # Shapes parenscript, jonathan and rutils (cl-redis) load through: a package's own
+  # `while` beside rontolisp's, a go in a return-from's value form, a ratio specializer,
+  # a built-in macro aliased (under a keyword too), a (:type list) struct.
+  - name: library-shapes-own-while-go-in-an-exit-value-ratio-macro-alias-list-struct
+    source: |
+      (defpackage :ci-loops (:use :cl) (:export #:while))
+      (in-package :ci-loops)
+      (defmacro while (test &body body) `(do () ((not ,test) :done) ,@body))
+      (defpackage :ci-loop-user (:use :cl :ci-loops))
+      (in-package :ci-loop-user)
+      (print (let ((i 0)) (list (while (< i 3) (incf i)) i)))
+      (in-package :cl-user)
+      (print (let ((i 0)) (list (while (< i 3) (incf i)) i)))
+      (defun ci-go-in-exit-value ()
+        (block outer
+          (tagbody
+             (return-from outer (progn (go :eof) 1))
+           :eof
+             (return-from outer :eof))))
+      (print (ci-go-in-exit-value))
+      (defgeneric ci-number-kind (x))
+      (defmethod ci-number-kind ((x number)) :number)
+      (defmethod ci-number-kind ((x ratio)) :ratio)
+      (print (list (ci-number-kind 3) (ci-number-kind 1/2) (typep 3 'ratio) (typep 1/2 'ratio)))
+      (setf (macro-function 'ci-incf) (macro-function 'incf))
+      (setf (macro-function :ci+) (macro-function 'incf))
+      (print (let ((y 1)) (ci-incf y 5) (:ci+ y) y))
+      (defstruct (ci-pair (:type list)) left right)
+      (let ((p (make-ci-pair :left 1 :right 2)))
+        (setf (ci-pair-right p) 20)
+        (incf (ci-pair-left p))
+        (print (list p (ci-pair-left p) (copy-ci-pair p) (consp p))))
+    expected: |
+      (:DONE 3)
+      (NIL 3)
+      :EOF
+      (:NUMBER :RATIO NIL T)
+      7
+      ((2 20) 2 (2 20) T)
   - name: with-output-to-string-does-not-touch-standard-output
     source: |
       (with-output-to-string (s) (princ "hidden" s)) (princ "visible")

@@ -4860,6 +4860,11 @@ public final class LispEvaluator {
 		TagbodyLabels labels = TagbodyLabels.of(body);
 		@org.jspecify.annotations.Nullable
 		String[] keys = labels.keys();
+		// A tagbody with labels is a dynamic extent to an exit's value form: a go in it
+		// (jonathan's (return-from read-number ...) reaching proc-parse's (go :eof))
+		// must find this tagbody, so the form is not handed to the frame below.
+		Environment statementExitTo = exitTo != null
+				&& java.util.Arrays.stream(keys).noneMatch(java.util.Objects::nonNull) ? exitTo : null;
 		int pc = 0;
 		while (pc < keys.length) {
 			if (keys[pc] != null) {
@@ -4868,7 +4873,7 @@ public final class LispEvaluator {
 			}
 			pollInterrupt();
 			try {
-				int jump = evalTagbodyStatement(body.get(pc), env, labels, exitTo);
+				int jump = evalTagbodyStatement(body.get(pc), env, labels, statementExitTo);
 				pc = jump == NO_JUMP ? pc + 1 : jump + 1;
 			}
 			catch (GoSignal go) {
@@ -11051,11 +11056,25 @@ public final class LispEvaluator {
 					+ cons.print());
 		}
 		java.util.Map.Entry<String, UserMacro> macro = lookupUserMacro(target);
-		if (macro == null) {
-			throw new LispEvalException("setf " + LispNames.MACRO_FUNCTION + ": " + target
-					+ " is not a user macro (only a defmacro-defined macro can be aliased)");
+		if (macro != null) {
+			putUserMacro(alias, macro.getValue());
 		}
-		putUserMacro(alias, macro.getValue());
+		else if (PackageRegistry.runtimeMacroNames().contains(target)) {
+			// A built-in macro has no expander object to share; the alias rewrites its
+			// call into the target's (rutils' (abbr :+ incf)).
+			LispSymbol args = new LispSymbol("__alias_args");
+			LispVal quoted = new LispCons(new LispSymbol(LispNames.QUOTE),
+					new LispCons(new LispSymbol(target), LispNil.INSTANCE));
+			LispVal body = new LispCons(new LispSymbol(LispNames.CONS),
+					new LispCons(quoted, new LispCons(args, LispNil.INSTANCE)));
+			LispVal params = new LispCons(new LispSymbol(LispNames.LAMBDA_REST), new LispCons(args, LispNil.INSTANCE));
+			putUserMacro(alias,
+					makeUserMacro(LispNames.DEFMACRO, new LispSymbol(alias), params, List.of(body), this.globalEnv));
+		}
+		else {
+			throw new LispEvalException("setf " + LispNames.MACRO_FUNCTION + ": " + target
+					+ " is not a macro (only a macro can be aliased)");
+		}
 		return new LispSymbol(alias);
 	}
 
