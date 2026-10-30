@@ -15246,14 +15246,13 @@ public final class LispMacroExpander {
 	 * canonical spelling there, so building that spelling is the lookup -- with two
 	 * deviations from the interpreter's registry-backed version: an unknown name yields a
 	 * symbol instead of nil (harmless where find-symbol feeds a plist/dispatch lookup
-	 * that then answers nil anyway), and the qualifier follows the package: the
-	 * internal {@code PKG::} in a package the program defines, whose exports its row
-	 * answers ({@link #builtQualifier}), the single-colon {@code PKG:} in a pre-seeded
-	 * one. The {@code keyword},
-	 * {@code cl} and {@code cl-user} packages need no qualifier work, and a designator
-	 * naming NO package signals a call-time {@code package-error} (the interpreter's
-	 * answer): a literal one is decided against the backend's baked package table, a
-	 * computed one behind a {@code find-package} guard.
+	 * that then answers nil anyway), and the qualifier follows the package: the internal
+	 * {@code PKG::} in a package the program defines, whose exports its row answers
+	 * ({@link #builtQualifier}), the single-colon {@code PKG:} in a pre-seeded one. The
+	 * {@code keyword}, {@code cl} and {@code cl-user} packages need no qualifier work,
+	 * and a designator naming NO package signals a call-time {@code package-error} (the
+	 * interpreter's answer): a literal one is decided against the backend's baked package
+	 * table, a computed one behind a {@code find-package} guard.
 	 * @param cons the find-symbol call
 	 * @param packageTable the backend's baked package table
 	 * ({@code PackageResolver.runtimePackageTable()})
@@ -15568,10 +15567,10 @@ public final class LispMacroExpander {
 	 * registry-backed one. Anything the compile-time view cannot decide (a computed name,
 	 * a computed package designator) reports the status of the SPELLING the lowering
 	 * builds, which is the only symbol identity a compiled program has: a {@code PKG:}
-	 * spelling is external, a {@code PKG::} or unqualified one internal. The
-	 * residual divergence is a known one -- a compiled {@code find-symbol} answers a
-	 * symbol where the interpreter answers nil -- and it retires with the planned
-	 * symbol-identity model.
+	 * spelling is external, a {@code PKG::} or unqualified one internal. The residual
+	 * divergence is a known one -- a compiled {@code find-symbol} answers a symbol where
+	 * the interpreter answers nil -- and it retires with the planned symbol-identity
+	 * model.
 	 * @param cons the find-symbol / intern call
 	 * @param packageTable the backend's baked package table
 	 * @param userDefunNames the Pass-1 user definition names

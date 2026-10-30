@@ -144,6 +144,24 @@ since `.todo/917` a package keeps a MEMBER table of what `intern` / `export` / `
 `userMacros`/`SPECIAL_OPERATORS`. t/nil/keywords are self-bound in boundp/symbol-value on every
 backend.
 
+**Interpreter `fboundp` answers what a call would** (`LispEvaluator.fbound` ->
+`loadFunction`, the lazy-load half `resolveFunction` shares): a probe of a library-defined name
+LOADS it (a prelude defun, a uiop definition, a qualified library, a system generic, the
+restart runtime), as the first call would. It does not take `resolveFunction`'s last step, the
+`pkg::member` -> bare image-function fallback: a package's own symbol that only falls back is no
+definition of it. Measured 2026-10-31 against SBCL 2.2.9's 636 external `cl` functions
+(macros and special operators excluded): 223 NIL before (183 of them callable, e.g.
+`alphanumericp`, `equalp`, `get`, `read`, which esrap's rule check warned about), 40 after --
+exactly the unimplemented ones (`CL_EXPORTED_ONLY`: `add-method`, `boole`, `describe`, ...,
+owned by `.todo/715`/`041`/`042`), the same 40 the compiled literal fold (`CL_FUNCTIONS`)
+answers NIL for. `uiop:split-string`, `linalg:` and `appkit:` names were NIL before their first
+call too. **Compiled computed probe** (data-held symbol, same 636): 163 NIL on the JVM, i.e.
+123 implemented functions -- the reference-gated / native / complex wrappers a program does not
+take as `#'name`, and the `car`/`cdr` compositions -- which `symbol-function` / `funcall` of the
+same symbol also call undefined, so the backend is consistent with itself; the reach is
+`.todo/h65`. Pinned by `BoundpFunctionValueFixture` (all four) and
+`LispEvaluatorTest#fboundpChecksFunctionsMacrosAndSpecialForms`.
+
 **JVM** (`JvmSymbolApiCompiler`): symbol-name = the princ-to-string emission; intern/make-symbol
 = quote-strip `substring(1, len-1)` (+ `"#:".concat`); boundp, and symbol-value of a name no
 special has, read the `_genv` mirror via `_envLookup` (binding pair `Object[2]`, value = index 1;
