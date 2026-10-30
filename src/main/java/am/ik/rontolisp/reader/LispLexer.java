@@ -310,9 +310,7 @@ public final class LispLexer {
 					pendingPrefix = false;
 				}
 				else {
-					// #0A takes the datum after it whole, with no parenthesis of its own.
-					pendingPrefix = depth == 0
-							&& (isPrefixToken(token) || token instanceof Token.ArrayOpen array && array.rank() == 0);
+					pendingPrefix = depth == 0 && isPrefixToken(token);
 				}
 			}
 			if (tokens.size() > start && depth == 0 && !pendingPrefix) {
@@ -1331,8 +1329,8 @@ public final class LispLexer {
 	// in, or dropped -- by the consumer that resolves the #. markers, just before the
 	// top-level form runs. The marker stands where the datum would, so it is refused
 	// where a datum is not simply an element of a list: behind a prefix (', #', `, ,,
-	// ,@, #n=, a dotted '.') or inside a vector/array/structure literal, whose elements
-	// no marker walk reaches.
+	// ,@, #n=, a dotted '.', #0A) or inside a vector/array/structure literal, whose
+	// elements no marker walk reaches.
 	private void deferFeatureConditional(List<LocatedToken> tokens, int start, boolean negated, int exprStart,
 			String exprText) {
 		if (!tokens.isEmpty() && isPrefixToken(tokens.get(tokens.size() - 1).token()) || !insidePlainLists(tokens)) {
@@ -1400,29 +1398,43 @@ public final class LispLexer {
 		}
 	}
 
+	// A token that takes the datum after it: #0A among them, which has no parenthesis
+	// of its own.
 	private static boolean isPrefixToken(Token token) {
 		return token instanceof Token.Quote || token instanceof Token.FunctionQuote || token instanceof Token.Backquote
 				|| token instanceof Token.Unquote || token instanceof Token.UnquoteSplicing
 				|| token instanceof Token.LabelDef || token instanceof Token.Dot || token instanceof Token.SharpL
-				|| token instanceof Token.PathnameOpen;
+				|| token instanceof Token.PathnameOpen || token instanceof Token.ArrayOpen array && array.rank() == 0;
 	}
 
-	// Whether every literal still open at the end of the tokens is a plain list.
+	// Whether every literal still open at the end of the tokens is a plain list. A #0A
+	// closes nothing: it encloses the end only when its datum is the outermost list
+	// still open there.
 	private static boolean insidePlainLists(List<LocatedToken> tokens) {
 		int depth = 0;
+		int outermostOpen = -1;
 		for (int i = tokens.size() - 1; i >= 0; i--) {
 			Token token = tokens.get(i).token();
 			if (token instanceof Token.RightParen) {
 				depth++;
 			}
-			else if (token instanceof Token.LeftParen || token instanceof Token.VectorOpen
-					|| token instanceof Token.StructOpen || token instanceof Token.SharpC
-					|| token instanceof Token.ArrayOpen || token instanceof Token.FloatArrayOpen
-					|| token instanceof Token.IntVectorOpen) {
+			else if (token instanceof Token.ArrayOpen array && array.rank() == 0) {
+				int datum = i + 1;
+				while (datum < tokens.size() && isPrefixToken(tokens.get(datum).token())) {
+					datum++;
+				}
+				if (depth == 0 && datum == outermostOpen) {
+					return false;
+				}
+			}
+			else if (opensDatum(token)) {
 				if (depth > 0) {
 					depth--;
 				}
-				else if (!(token instanceof Token.LeftParen)) {
+				else if (token instanceof Token.LeftParen) {
+					outermostOpen = i;
+				}
+				else {
 					return false;
 				}
 			}

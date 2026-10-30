@@ -918,6 +918,21 @@ class LispReaderTest {
 	}
 
 	@Test
+	void readComputedFeatureGuardDefersOnlyWhereAListElementStands() {
+		// #0A takes the next datum with no parenthesis of its own: an earlier, complete
+		// one leaves a later guard in plain lists, while a guard that is (or sits inside)
+		// its datum ends up in an array no marker walk reaches.
+		String guard = "#+#.(if t '(and) '(or)) 1";
+		assertThat(LispReader.readAllWithReadEvalMarkers("#0A5 (a #0A(1 2) " + guard + ") " + guard, Features.JVM))
+			.hasSize(3);
+		for (String refused : List.of("#0A " + guard, "#0A(a " + guard + ")", "'#0A(a (b " + guard + "))")) {
+			assertThatThrownBy(() -> LispReader.readAllWithReadEvalMarkers(refused, Features.JVM)).as(refused)
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining("a #+/#- guard computed by #. is supported only");
+		}
+	}
+
+	@Test
 	void readFeatureConditionalAtEndOfInputFails() {
 		assertThatThrownBy(() -> LispReader.readAllFromString("#+sbcl")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("expected a form to skip");
