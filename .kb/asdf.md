@@ -962,6 +962,15 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   `(array-element-type (make-array 4 :element-type 'fixnum))` answers `T`. The two gaps that
   closed were the RANK-0 array (`.kb/array-literals.md`) and the ARRAY TYPE LATTICE
   (`.kb/declarations-type-checks.md`).
+- **yason 0.8.3** — ci-spec `yason-enablement-language-group` (its parser/encoder idioms in
+  miniature); quickload MANUAL. Measured 2026-10-30: `(ql:quickload "yason")` loads UNPATCHED and
+  `parse` (every `:object-as`, the key/array/boolean/null options), `encode` of hash tables /
+  lists / vectors, `encode-alist`/`encode-plist`, the streaming encoder (`with-output-to-string*`
+  `:indent t` included) and `encode-object` over a user `encode-slots progn` method print
+  identically on all four. Deps: alexandria + the `trivial-gray-streams` shim. One bug fell out
+  of writing the case: **`check-type` signalled a `simple-error`, so yason's `(check-type
+  *parse-object-as* (member ...))` was not a catchable `type-error`** — now a
+  `simple-type-error` ([declarations-type-checks.md](declarations-type-checks.md)).
 
 ## Why this is a shim and not real ASDF (spike)
 Upstream ASDF 3.3.7 (14,130 lines, 700 KB) **loads end to end** in the INTERPRETER with a patch

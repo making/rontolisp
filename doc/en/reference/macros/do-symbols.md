@@ -15,7 +15,9 @@ local ones by bare name.
 This works on every backend: the interpreter reads its live registry, and the
 compiled backends answer from the package table baked in at compile time (plus
 any package a [`make-package`](../functions/make-package.md) call creates at run
-time). A `return` in the body exits the whole form -- the loop establishes the
+time). The live registry holds every symbol the program has read under a package,
+as Common Lisp's reader interns it; the baked table leaves out the ones that were
+only read. A `return` in the body exits the whole form -- the loop establishes the
 implicit nil block every iteration macro has -- skipping the result form.
 
 The example builds packages of its own rather than walking a built-in one, so the

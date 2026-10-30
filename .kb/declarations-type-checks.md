@@ -28,9 +28,15 @@ Seven `LispMacroExpander` expansions (no per-backend codegen), in `PackageRegist
 
 - `declare`/`declaim`/`proclaim` -> `nil`, arguments never evaluated or validated (`proclaim`
   deviates from CL); `the` -> its value form; `eval-when` -> `progn` of the body.
-- `check-type` -> `(let ((__check-type place)) (if <type-test> nil (error "...~s...")))`, place and
-  spec printed at EXPANSION time, only the value a runtime `~s` argument; an optional third string
-  replaces the "of type ..." part.
+- `check-type` -> `(let ((__check-type place)) (if <type-test> nil (error 'simple-type-error :datum
+  __check-type :expected-type 'spec :format-control "...~s..." :format-arguments (list
+  __check-type))))` (2026-10-30; was a plain `simple-error`, so `(type-error (c) ...)` missed it),
+  place and spec printed at EXPANSION time, only the value a runtime `~s` argument; an optional
+  third string replaces the "of type ..." part. The expansion runs inside the compilers, AFTER the
+  whole-program gates, so the gates name `check-type` themselves: `constructsInstance` (instance
+  + condition-report gates), `ConditionTagScan` walks the expansion (report-arm narrowing + the
+  runtime format renderer -- without it a JVM uncaught message printed the raw `~s`), and wasm's
+  `usedLayoutTags` keeps the `SIMPLE-TYPE-ERROR` layout.
 - `assert` -> `(if test nil (error ...))`; the places list is dropped (no `continue`/`store-value`
   restart, though the restart system exists, [error-handling.md](error-handling.md)).
 

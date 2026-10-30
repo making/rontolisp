@@ -201,16 +201,21 @@ removal plus a tombstone that makes `symbol-package` answer nil, but interning t
 homes the OLD symbol again where CL mints a new one. `.todo/917` weighed a real intern table
 against this model and kept the model (`.kb/packages.md`, "The member table"):
 **re-evaluate only when a consumer needs symbol OBJECTS**, not for a conformance count.
+plump (2026-10-30) was not one: it needed MEMBERSHIP (a name it only read, found by
+`find-symbol`), which the member table answers once the reader records into it.
 
 ## A definition IS an interning: the find-symbol namespace probe
 - **Interpreter `find-symbol` probes the global namespaces under the canonical spelling**
   (`LispEvaluator.definedInImage`: user macros, functions, global bindings) as one arm of
   `PackageResolver.accessible` -- after the member table's own/imported arms, before the
   inherited one (`LispEvaluator.findSymbolAccessible` passes the probe; both arities go
-  through it, the 1-arg form against the current package). Deliberately NOT done: a symbol
-  merely READ is still invisible. `nil` is a SYMBOL to `fboundp` now. Pinned by
-  `LispEvaluatorTest#findSymbolSeesDefinitionsMadeInsideAUserPackage`; the COMPILED 2-arg
-  lowering keeps its unknown-name-yields-a-symbol deviation for read/compile-time packages.
+  through it, the 1-arg form against the current package). The probe still covers the names
+  a definition DERIVES (a `defstruct`'s accessors); a symbol that was only READ is a recorded
+  member now, on the interpreter and in the compile paths' macro-time evaluator
+  (`.kb/packages.md`, "The member table", the reader of a live image). `nil` is a SYMBOL to
+  `fboundp` now. Pinned by `LispEvaluatorTest#findSymbolSeesSymbolsReadOrDefinedInsideAUserPackage`;
+  the COMPILED 2-arg lowering keeps its unknown-name-yields-a-symbol deviation for
+  read/compile-time packages, a read-only name included.
 - **`#'find-symbol` is a reference-gated wrapper** (`BuiltinFunctionWrappers.findSymbolWrapper`)
   dispatching on argument count onto the two call-position lowerings; gated because the body
   lowers to `intern` and `usesIntern` counts a `find-symbol` reference.

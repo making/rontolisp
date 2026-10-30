@@ -23114,6 +23114,10 @@ public final class LispMacroExpander {
 				// or bound -- the arguments are runtime values, so any call can reach
 				// it.
 				return true;
+			case LispNames.CHECK_TYPE:
+				// A failed check signals a simple-type-error instance, built by the
+				// expression expansion (expandCheckType) after this scan.
+				return true;
 			case LispNames.PEEK_CHAR: {
 				// Same, one argument later: peek-char's peek-type comes first, and the
 				// scan runs on the source program, before expandPeekChar rewrites it.
@@ -35608,6 +35612,12 @@ public final class LispMacroExpander {
 				signalSite(member, parts.subList(1, parts.size()));
 				return;
 			}
+			if (LispNames.CHECK_TYPE.equals(member) && parts.size() >= 3 && parts.size() <= 4) {
+				// Its signal (a simple-type-error over a runtime format argument) exists
+				// only in the expression expansion, after this scan: scan that instead.
+				walk(expandCheckType(cons), false);
+				return;
+			}
 			if (LispNames.CASE.equals(member) || LispNames.ECASE.equals(member) || LispNames.TYPECASE.equals(member)
 					|| LispNames.ETYPECASE.equals(member) || LispNames.CTYPECASE.equals(member)) {
 				// A clause's keys / type-specifier head are compared, never called or
@@ -37395,12 +37405,13 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands {@code (check-type place typespec [string])} into a temp-bound type test
-	 * that signals an error when the value does not match. Lite version of Common Lisp's
-	 * {@code check-type}: no restarts, so the place cannot be re-stored; the error
-	 * message reports the place, the offending value, and the expected type (or the given
-	 * description string). Type specifiers are the ones {@code makeTypeTest} supports; a
-	 * user {@code deftype} name (or any other unsupported specifier) makes the check a
-	 * no-op -- the place is still evaluated, but the assertion is skipped rather than
+	 * that signals a {@code simple-type-error} (datum: the value, expected type: the
+	 * specifier) when the value does not match. Lite version of Common Lisp's
+	 * {@code check-type}: no restarts, so the place cannot be re-stored; the report names
+	 * the place, the offending value, and the expected type (or the given description
+	 * string). Type specifiers are the ones {@code makeTypeTest} supports; a user
+	 * {@code deftype} name (or any other unsupported specifier) makes the check a no-op
+	 * -- the place is still evaluated, but the assertion is skipped rather than
 	 * signalling a compile error, since there is no {@code deftype} registry to resolve
 	 * the name here. {@code typecase}/{@code etypecase} stay strict.
 	 * @param cons the check-type expression
@@ -37416,10 +37427,12 @@ public final class LispMacroExpander {
 		String expected = parts.size() == 4 && parts.get(3) instanceof LispString desc ? desc.value()
 				: "of type " + typeSpec.print();
 		LispSymbol var = new LispSymbol(CHECK_TYPE_VAR);
-		LispVal errorCall = listToCons(List.of(new LispSymbol(LispNames.ERROR),
-				new LispString("The value of " + ClosRegistry.textControl(place.print()) + " is ~s, which is not "
-						+ ClosRegistry.textControl(expected) + "."),
-				var));
+		LispVal errorCall = listToCons(
+				List.of(new LispSymbol(LispNames.ERROR), quoteOf("SIMPLE-TYPE-ERROR"), new LispSymbol(":DATUM"), var,
+						new LispSymbol(":EXPECTED-TYPE"), quotedValue(typeSpec), new LispSymbol(":FORMAT-CONTROL"),
+						new LispString("The value of " + ClosRegistry.textControl(place.print())
+								+ " is ~s, which is not " + ClosRegistry.textControl(expected) + "."),
+						new LispSymbol(":FORMAT-ARGUMENTS"), listToCons(List.of(new LispSymbol(LispNames.LIST), var))));
 		LispVal test;
 		try {
 			test = makeTypeTest(var, typeSpec);

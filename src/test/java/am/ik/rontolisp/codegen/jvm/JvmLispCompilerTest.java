@@ -9052,6 +9052,9 @@ class JvmLispCompilerTest {
 			.isEqualTo("\"ok\"\n\"ok2\"");
 		assertThatThrownBy(() -> compileAndRun("(let ((n \"5\")) (check-type n integer))"))
 			.hasRootCauseMessage("The value of N is \"5\", which is not of type INTEGER.");
+		assertThat(compileAndRun("(print (handler-case (let ((n \"5\")) (check-type n integer))"
+				+ " (type-error (c) (list (type-error-datum c) (type-error-expected-type c)))))"))
+			.isEqualTo("(\"5\" INTEGER)");
 	}
 
 	@Test
