@@ -74,6 +74,14 @@ ignored `~:}` (the renderer already signalled and forced).
   inline arm**; `LispMacroExpanderTest.aFixedDecimalDirectiveIsOneCallAndNotAnInlinedScaleRoundSliceExpansion`
   fails the moment `round`/`princ-to-string`/`subseq`/`%string-concat` reappear.
 
+## `~E`'s scale factor
+`decimalExpExpr` and `%fmt-exp` share one rule (CLHS 22.3.3.2): `k > 0` puts `k` digits before
+the point, `k <= 0` puts `-k` zeros after it; the exponent counter STARTS at `1 - k`, so the
+normalization loop leaves the printed exponent. The point is always printed (`~,0e` of 2.0 is
+`2.e+0`, as SBCL). Not matched: SBCL's own deviations when rounding carries
+(`~,3,,0E` of -9.9999 is SBCL `-1.000e+1`, here `-0.100e+2`). Pinned by ci-spec
+`format-directive-exponential`.
+
 ## Injection (compile path) and lazy load (interpreter)
 `LispMacroExpander.expandTopLevelDefinitions` appends `FormatRenderer.defuns()` at BOTH exits
 (`withFormatRenderer`) -- including the early "nothing to splice" fast path that the plainest

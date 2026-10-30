@@ -5202,11 +5202,18 @@ cases:
     source: |
       (defun ci-fmt-exp ()
         (format t "~e|~,4e|~e|~,2e|~e~%" pi pi 1234.5 9.999 0.0)
-        (format t "~e|~@e~%" -1234.5 42.0))
+        (format t "~e|~@e~%" -1234.5 42.0)
+        (format t "~,,,0,,,'eE|~,3,,-1e|~,3,,2e|~,,,3e|~,3,,4e|~,0e|~,3,,0e|~10,3,2,0e~%"
+                2.5 123.456 123.456 1.23e-4 2.5 2.0 0.0 2.5)
+        (let ((c "~,,,0e|~,3,,2e|~,,,3e"))
+          (format t c 2.5 123.456 0.0)
+          (terpri)))
       (ci-fmt-exp)
     expected: |
       3.141593e+0|3.1416e+0|1.2345e+3|1.00e+1|0.0e+0
       -1.2345e+3|+4.2e+1
+      0.25e+1|0.012e+4|12.35e+1|123.0e-6|2500.e-3|2.e+0|0.000e+1| 0.250e+01
+      0.25e+1|12.35e+1|0.0e-2
   - name: format-runtime-control-string
     source: |
       (defun ci-fmt-runtime (c) (format nil c 1 "s" 42 7 (list 1 2) "c"))

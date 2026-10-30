@@ -45,7 +45,7 @@ With destination `nil` the result is returned as a string instead of printed:
 | `~R` | Radix: `~NR` prints the integer in radix `N` (2-36). Without the radix parameter the integer is spelled: `~R` an English cardinal (`twelve`), `~:R` an ordinal (`twelfth`), `~@R` Roman numerals (`XIV`), `~:@R` old Roman numerals (`XIIII`); the other parameters are ignored |
 | `~c`, `~C` | Character: prints the glyph like `write-char`. With `@`, the `#\` reader syntax (like `prin1`); with `:`, non-graphic characters print their name (`Newline`, `Space`, ...) |
 | `~f`, `~F` | Fixed-format floating point. `~,Df` prints `D` digits after the decimal point (rounded); with `@`, a leading `+`. Full parameters: `~w,d,k,overflowchar,padchar F` |
-| `~e`, `~E` | Exponential (scientific) floating point: `[-]d.ddde[+/-]xx`. `~,De` prints `D` digits after the decimal point (default 6, rounded); with `@`, a leading `+`. Full parameters: `~w,d,e,k,overflowchar,padchar,exponentchar E` (`k` must be 1) |
+| `~e`, `~E` | Exponential (scientific) floating point: `[-]d.ddde[+/-]xx`. `~,De` prints `D` digits after the decimal point (default 6, rounded); with `@`, a leading `+`. Full parameters: `~w,d,e,k,overflowchar,padchar,exponentchar E`; the scale factor `k` (default 1) puts `k` digits before the point when positive and `-k` zeros after it otherwise (`(format nil "~,,,0e" 2.5)` is `"0.25e+1"`) |
 | `~g`, `~G` | General floating point: the plain float representation for magnitudes in `[0.1, 1e16)` (and zero), the `~e` form otherwise |
 | `~$` | Monetary: `~D$` prints `D` digits after the decimal point (default 2); with `@`, a leading `+` |
 | `~%` | Newline (one, or the count given by a prefix parameter) |
@@ -113,8 +113,7 @@ body), but its `~:^`/`~@^` variants and prefix parameters are not. Further notes
   would; supply a digit count for a fixed decimal layout. `~g` accepts no prefix
   parameters.
 - `~e` builds its mantissa from integer arithmetic (so the output is identical on
-  every backend) and the digit count must be a literal, not a runtime `v`. The scaled mantissa is computed in 64-bit arithmetic, which limits `~,De` to roughly `D` <= 17 digits of precision (identically on every backend); the default (`~e`, 6 digits) is well within that bound. The scale factor of `~e` must be 1 (the default), and
-  the overflow character of `~f`/`~e` requires a literal width.
+  every backend) and the digit count must be a literal, not a runtime `v`. The scaled mantissa is computed in 64-bit arithmetic, which limits `~,De` to roughly `D` <= 17 digits of precision (identically on every backend); the default (`~e`, 6 digits) is well within that bound. The overflow character of `~f`/`~e` requires a literal width.
 - The repeat count of `~%`/`~&`/`~~` must be a literal or `#` (a runtime `v` count
   there is not supported). `~&` decides whether to emit a newline from the actual
   output column for destination `t`, but from the surrounding literal text (a

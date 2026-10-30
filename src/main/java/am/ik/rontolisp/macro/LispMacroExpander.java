@@ -29409,12 +29409,9 @@ public final class LispMacroExpander {
 						throw new IllegalArgumentException("format: ~e precision must be non-negative");
 					}
 					int expDigits = fmtHasParam(params, 2) ? fmtIntParam(params, 2, directive) : 0;
-					if (fmtHasParam(params, 3) && fmtIntParam(params, 3, directive) != 1) {
-						throw new UnsupportedOperationException(
-								"format: ~e scale factors other than 1 are not supported");
-					}
+					int scale = fmtHasParam(params, 3) ? fmtIntParam(params, 3, directive) : 1;
 					char marker = fmtCharParam(params, 6, 'e');
-					LispVal base = decimalExpExpr(arg, places, !dGiven, at, expDigits, marker);
+					LispVal base = decimalExpExpr(arg, places, !dGiven, at, expDigits, marker, scale);
 					if (fmtHasParam(params, 0)) {
 						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 5, ' '), true);
 					}
@@ -29941,15 +29938,24 @@ public final class LispMacroExpander {
 	 * {@code [sign]d.ddd...e[+/-]xx}. A mantissa that rounds up to {@code 10.0} bumps the
 	 * exponent and renormalizes to {@code 1.0}. When {@code strip} is true (the {@code d}
 	 * parameter was omitted) trailing fractional zeros are dropped down to a single
-	 * digit. On the WASM backend the scaled mantissa must fit in an {@code i31}, so
-	 * {@code places} is effectively limited to about 8. When {@code expDigits} is
-	 * positive the exponent magnitude is zero-padded to that many digits, and
-	 * {@code marker} is the exponent-marker character (default {@code e}).
+	 * digit. When {@code expDigits} is positive the exponent magnitude is zero-padded to
+	 * that many digits, and {@code marker} is the exponent-marker character (default
+	 * {@code e}). The scale factor {@code k} follows CLHS 22.3.3.2: {@code k > 0} puts
+	 * {@code k} digits before the point and {@code places - k + 1} after it,
+	 * {@code k <= 0} puts {@code -k} zeros after the point followed by {@code places + k}
+	 * significant digits; the printed exponent is the normalized one plus {@code 1 - k}.
 	 */
 	private static LispVal decimalExpExpr(LispVal arg, int places, boolean strip, boolean plus, int expDigits,
-			char marker) {
-		long pd = pow10(places);
-		long pd1 = pow10(places + 1L);
+			char marker, int k) {
+		// Significant digits rendered; an out-of-range k (CLHS requires -places < k <
+		// places + 2) still renders, with at least one digit and no negative digit count.
+		int defaultDigits = DEFAULT_EXP_PLACES + 1;
+		int digits = (k > 0) ? (strip ? Math.max(defaultDigits, k + 1) : Math.max(places + 1, k))
+				: (strip ? defaultDigits : Math.max(1, places + k));
+		int leadingZeros = (k > 0) ? 0 : -k;
+		int fracLen = digits - k;
+		long pd = pow10(digits - 1L);
+		long pd1 = pow10(digits);
 		LispSymbol v = new LispSymbol("__ev");
 		LispSymbol neg = new LispSymbol("__eneg");
 		LispSymbol a = new LispSymbol("__ea");
@@ -29974,14 +29980,16 @@ public final class LispMacroExpander {
 		LispVal down = fmtCall(LispNames.WHILE, fmtCall(LispNames.LT, a, new LispDouble(1.0)),
 				fmtCall(LispNames.SETQ, a, fmtCall(LispNames.MUL, a, new LispDouble(10.0))),
 				fmtCall(LispNames.SETQ, ee, fmtCall(LispNames.SUB, ee, new LispInteger(1))));
-		// Inner let*: round to (places+1) significant digits, renormalize on overflow.
+		// Inner let*: round to `digits` significant digits, renormalize on overflow.
 		LispVal scInit = fmtCall(LispNames.ROUND, fmtCall(LispNames.MUL, a, new LispDouble((double) pd)));
 		LispVal ovfInit = fmtCall(LispNames.GE, sc, new LispInteger(pd1));
 		LispVal sc2Init = makeIf(ovf, new LispInteger(pd), sc);
 		LispVal eefInit = makeIf(ovf, fmtCall(LispNames.ADD, ee, new LispInteger(1)), ee);
 		LispVal sInit = fmtCall(LispNames.PRINC_PIECE_INTERNAL, sc2);
-		LispVal ipInit = fmtCall(LispNames.SUBSEQ, s, new LispInteger(0), new LispInteger(1));
-		LispVal frInit = fmtCall(LispNames.SUBSEQ, s, new LispInteger(1));
+		LispVal ipInit = (k > 0) ? fmtCall(LispNames.SUBSEQ, s, new LispInteger(0), new LispInteger(k))
+				: new LispString("0");
+		LispVal frInit = (k > 0) ? fmtCall(LispNames.SUBSEQ, s, new LispInteger(k))
+				: (leadingZeros == 0) ? s : fmtConcat(new LispString("0".repeat(leadingZeros)), s);
 		// Exponent suffix: always-signed, magnitude printed as an integer.
 		LispVal eneg = fmtCall(LispNames.LT, eef, new LispInteger(0));
 		LispVal esign = makeIf(eneg, new LispString("-"), new LispString("+"));
@@ -29992,7 +30000,7 @@ public final class LispMacroExpander {
 		}
 		LispVal sign = makeIf(neg, new LispString("-"), new LispString(plus ? "+" : ""));
 		LispVal frFinal = strip ? stripTrailingZeros(fr) : fr;
-		LispVal mant = (places == 0) ? ip : fmtConcat(ip, new LispString("."), frFinal);
+		LispVal mant = fmtConcat(ip, new LispString("."), frFinal);
 		LispVal body = fmtConcat(sign, mant, new LispString(String.valueOf(marker)), esign, eabs);
 		List<LispVal> innerBindings = List.of(listToCons(List.of(sc, scInit)), listToCons(List.of(ovf, ovfInit)),
 				listToCons(List.of(sc2, sc2Init)), listToCons(List.of(eef, eefInit)), listToCons(List.of(s, sInit)),
@@ -30000,11 +30008,16 @@ public final class LispMacroExpander {
 		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(innerBindings), body));
 		LispVal normal = listToCons(List.of(new LispSymbol(LispNames.PROGN), up, down, innerLet));
 		// Zero needs no normalization (it would loop forever), so short-circuit it.
-		String zeroMant = (places == 0) ? "0" : (strip ? "0.0" : "0." + "0".repeat(places));
-		LispVal zero = new LispString((plus ? "+" : "") + zeroMant + marker + "+" + "0".repeat(Math.max(1, expDigits)));
+		String zeroMant = strip ? "0.0" : "0." + "0".repeat(fracLen);
+		int zeroExp = 1 - k;
+		String zeroExpDigits = String.valueOf(Math.abs(zeroExp));
+		zeroExpDigits = "0".repeat(Math.max(0, expDigits - zeroExpDigits.length())) + zeroExpDigits;
+		LispVal zero = new LispString(
+				(plus ? "+" : "") + zeroMant + marker + (zeroExp < 0 ? "-" : "+") + zeroExpDigits);
 		LispVal outerBody = makeIf(fmtCall(LispNames.EQ, a, new LispDouble(0.0)), zero, normal);
+		// The exponent starts at 1 - k, so normalization leaves the scaled one in ee.
 		List<LispVal> outerBindings = List.of(listToCons(List.of(v, vInit)), listToCons(List.of(neg, negInit)),
-				listToCons(List.of(a, aInit)), listToCons(List.of(ee, new LispInteger(0))));
+				listToCons(List.of(a, aInit)), listToCons(List.of(ee, new LispInteger(1L - k))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(outerBindings), outerBody));
 	}
 
@@ -30412,7 +30425,7 @@ public final class LispMacroExpander {
 					makeIf(fmtCall(LispNames.LT, v, new LispDouble(0.0)), new LispString(""), new LispString("+")),
 					fixed);
 		}
-		LispVal expo = decimalExpExpr(v, DEFAULT_EXP_PLACES, true, plus, 0, 'e');
+		LispVal expo = decimalExpExpr(v, DEFAULT_EXP_PLACES, true, plus, 0, 'e', 1);
 		List<LispVal> bindings = List.of(listToCons(List.of(v, vInit)), listToCons(List.of(a, aInit)));
 		return listToCons(
 				List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), makeIf(fixedRange, fixed, expo)));
