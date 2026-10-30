@@ -245,8 +245,9 @@ downloading. `BuiltinSystems.DEPENDENCIES` records edges between shims; one exis
 `Features`. Replacement-by-real-library is a standing item.
 
 - `usocket`; `trivial-gray-streams` (adapts onto rontolisp's Gray protocol,
-  `.kb/gray-streams.md`); `closer-mop` (`class-slots` -> `(name declared-type)` pairs from
-  `%class-slot-defs`, plus `compute-slots`, signalling `generic-function-lambda-list`);
+  `.kb/gray-streams.md`); `closer-mop` (slot-definition metaobjects over a class metaobject,
+  `.kb/clos.md`; a legacy tag designator's `class-slots` -> `(name declared-type)` pairs from
+  `%class-slot-defs`; `compute-slots`, signalling `generic-function-lambda-list`);
   `flexi-streams` (REAL `flexi-stream` wrapper + in-memory octet pair); `float-features`
   (interpreter + JVM, no WASM); `bordeaux-threads` (nickname `bt`, locking subset over
   `rontolisp:*-mutex`, `.kb/mutexes.md`); `trivial-garbage` (nickname `tg`; `finalize` registers

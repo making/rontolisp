@@ -123,7 +123,7 @@ verification against the actual Quicklisp dist at probe time)
     `cl-yaml` (cffi + libyaml; only the table test differs, h47).
   - Load, wrong result: `3bmd` (warning, h39), `optima` (h40), `zpng` (h41),
     `trivial-types` (h42), `lisp-unit` (h45), `cl-markup` (h46), `st-json` (h51), `uuid` v5 (h48), `cl-annot` (h53).
-  - Do not load: `fset` (h43), `vecto` (h44), `djula` (h49), `hunchentoot`/`cl-fad` (h50),
+  - Do not load: `fset` (h43), `vecto` (h44), `djula` (h49 done: `access` loads and runs; next h59), `hunchentoot`/`cl-fad` (h50),
     `cl-smtp` (h48), `drakma` (h52), `lass` (h30), `cl-csv`/`function-cache`/
     `cl-containers`/`cl-pdf` (h35), `jonathan`/`cl-redis`/`parenscript` (h53),
     `cl-store` (implementation guard), `screamer` (not in the dist).

@@ -20339,6 +20339,8 @@ public final class LispMacroExpander {
 				readers = new LispCons(new LispSymbol(readerNames.get(i)), readers);
 			}
 			spec.add(quotedData(readers));
+			spec.add(new LispSymbol(":WRITERS"));
+			spec.add(quotedData(ClosRegistry.slotWriters(slot)));
 			// The extras alternate keyword and VALUE; the value position is quoted so
 			// the spec list evaluates (the spine is a list call now).
 			List<LispVal> extras = parsed.extras();
@@ -25126,7 +25128,15 @@ public final class LispMacroExpander {
 			if (tail.stream().anyMatch(p -> p instanceof LispSymbol s && LispNames.LAMBDA_KEY.equals(s.name())) && tail
 				.stream()
 				.noneMatch(p -> p instanceof LispSymbol s && LispNames.LAMBDA_ALLOW_OTHER_KEYS.equals(s.name()))) {
-				tail.add(new LispSymbol(LispNames.LAMBDA_ALLOW_OTHER_KEYS));
+				// It closes the &key section, so it goes ahead of an &aux section.
+				int auxAt = tail.size();
+				for (int i = 0; i < tail.size(); i++) {
+					if (tail.get(i) instanceof LispSymbol s && LispNames.LAMBDA_AUX.equals(s.name())) {
+						auxAt = i;
+						break;
+					}
+				}
+				tail.add(auxAt, new LispSymbol(LispNames.LAMBDA_ALLOW_OTHER_KEYS));
 			}
 		}
 		// A bare (call-next-method) passes the method's ORIGINAL arguments, the optional
@@ -46395,21 +46405,23 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> slotDefs = new java.util.ArrayList<>();
 			for (ClosRegistry.SlotSpec slot : info.slots()) {
-				List<String> readerNames = new java.util.ArrayList<>(slot.readers());
-				readerNames.addAll(slot.accessors());
-				LispVal readers = LispNil.INSTANCE;
-				for (int i = readerNames.size() - 1; i >= 0; i--) {
-					readers = new LispCons(new LispSymbol(readerNames.get(i)), readers);
-				}
-				slotDefs.add(listToCons(List.of(new LispSymbol(slot.baseName()),
-						listToCons(slot.initargs().stream().<LispVal>map(LispSymbol::new).toList()),
-						slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE, new LispSymbol(slot.type()),
-						readers)));
+				slotDefs.add(slotDataRow(slot));
+			}
+			// The direct slots, each (writers . slot-data) with the slot data a full
+			// row, or (writers name) when the effective slot is the same spec (an own
+			// slot nothing shadows, the common case), so the table repeats only what
+			// differs. Proper lists only: quoted-data passes walk them with toList.
+			List<LispVal> directDefs = new java.util.ArrayList<>();
+			for (ClosRegistry.SlotSpec direct : info.directSlots()) {
+				boolean sameAsEffective = info.slots().stream().anyMatch(direct::equals);
+				directDefs.add(new LispCons(ClosRegistry.slotWriters(direct), sameAsEffective
+						? new LispCons(new LispSymbol(direct.baseName()), LispNil.INSTANCE) : slotDataRow(direct)));
 			}
 			LispVal superNames = info.superclasses().isEmpty() ? LispNil.INSTANCE
 					: listToCons(info.superclasses().stream().<LispVal>map(LispSymbol::new).toList());
 			entries.add(listToCons(List.of(listToCons(spellingSyms), superNames,
-					slotDefs.isEmpty() ? LispNil.INSTANCE : listToCons(slotDefs))));
+					slotDefs.isEmpty() ? LispNil.INSTANCE : listToCons(slotDefs),
+					directDefs.isEmpty() ? LispNil.INSTANCE : listToCons(directDefs))));
 		}
 		for (LispLayout layout : closRegistry.layouts().values()) {
 			if (!layout.tag().startsWith(LispLayout.STRUCT_TAG_PREFIX) || !seen.add(layout.printName())) {
@@ -46447,6 +46459,15 @@ public final class LispMacroExpander {
 		forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO),
 				LispNil.INSTANCE)));
 		return forms;
+	}
+
+	// One slot's (name initargs initform type readers) row of the class meta table.
+	private static LispVal slotDataRow(ClosRegistry.SlotSpec slot) {
+		List<String> readerNames = new java.util.ArrayList<>(slot.readers());
+		readerNames.addAll(slot.accessors());
+		return listToCons(List.of(new LispSymbol(slot.baseName()), ClosRegistry.symbolList(slot.initargs()),
+				slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE, new LispSymbol(slot.type()),
+				ClosRegistry.symbolList(readerNames)));
 	}
 
 	/**
@@ -46587,13 +46608,33 @@ public final class LispMacroExpander {
 				mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, slotDef)))));
 		// The 6th slot (initfunction, appended 2026-08-03) stays nil on materialized
 		// plain views: the table is quoted data and cannot carry a live thunk; only
-		// driver-built definitions fill it.
+		// driver-built definitions fill it. The 7th (writers) is nil on an effective
+		// slot.
 		LispVal slotBuild = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
 				listToCons(List.of(slotDef, slotData, LispNil.INSTANCE)),
 				listToCons(List.of(new LispSymbol(LispNames.SETQ), slots, mvCall(LispNames.CONS,
 						objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
-								List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE)),
+								List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, LispNil.INSTANCE)),
 						slots)))));
+		// The direct slots: each table element is (writers . data), the data either a
+		// full row or (name) naming the effective row it equals (see the table
+		// builder).
+		LispSymbol directSlots = new LispSymbol("%fc_ds");
+		LispSymbol directDef = new LispSymbol("%fc_d");
+		LispVal directData = mvCall(LispNames.CAR,
+				mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, entry))));
+		LispVal directRow = makeIf(mvCall(LispNames.CDR, mvCall(LispNames.CDR, directDef)),
+				mvCall(LispNames.CDR, directDef),
+				mvCall(LispNames.ASSOC, mvCall(LispNames.CAR, mvCall(LispNames.CDR, directDef)), slotData));
+		// The row binds the same %fc_s variable, so s0..s4 read it.
+		LispVal directInstance = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME,
+				List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, mvCall(LispNames.CAR, directDef)));
+		LispVal pushDirect = listToCons(List.of(new LispSymbol(LispNames.SETQ), directSlots,
+				mvCall(LispNames.CONS, directInstance, directSlots)));
+		LispVal directBuild = listToCons(
+				List.of(new LispSymbol(LispNames.DOLIST), listToCons(List.of(directDef, directData, LispNil.INSTANCE)),
+						listToCons(List.of(new LispSymbol(LispNames.LET),
+								listToCons(List.of(listToCons(List.of(slotDef, directRow)))), pushDirect))));
 		// The entry's superclass column is a LIST of names (multiple inheritance);
 		// materialize each through the recursive resolver, preserving order.
 		LispVal superNames = mvCall(LispNames.CAR, mvCall(LispNames.CDR, entry));
@@ -46606,14 +46647,15 @@ public final class LispMacroExpander {
 						listToCons(List.of(new LispSymbol(LispNames.SETQ), superAcc, mvCall(LispNames.CONS,
 								mvCall(LispNames.FIND_CLASS_INTERNAL, superVar, LispTrue.INSTANCE), superAcc))))),
 				mvCall(LispNames.REVERSE, superAcc)));
-		LispVal buildMetaobject = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_CLASS_NAME,
-				List.of(name, supers, LispNil.INSTANCE, mvCall(LispNames.REVERSE, slots), LispTrue.INSTANCE));
+		LispVal buildMetaobject = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_CLASS_NAME, List.of(name,
+				supers, mvCall(LispNames.REVERSE, directSlots), mvCall(LispNames.REVERSE, slots), LispTrue.INSTANCE));
 		LispVal memoize = listToCons(List.of(new LispSymbol(LispNames.SETQ),
 				new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO), mvCall(LispNames.CONS,
 						mvCall(LispNames.CONS, name, metaobject), new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO))));
 		LispVal construct = listToCons(List.of(new LispSymbol(LispNames.LET),
-				listToCons(List.of(listToCons(List.of(slots, LispNil.INSTANCE)))), slotBuild,
-				listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(slots, LispNil.INSTANCE)),
+						listToCons(List.of(directSlots, LispNil.INSTANCE)))),
+				slotBuild, directBuild, listToCons(List.of(new LispSymbol(LispNames.LET),
 						listToCons(List.of(listToCons(List.of(metaobject, buildMetaobject)))), memoize, metaobject))));
 		LispVal materialize = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
 				new LispSymbol(LispNames.FIND_CLASS_MATERIALIZE), listToCons(List.of(name, entry)),
@@ -46768,7 +46810,7 @@ public final class LispMacroExpander {
 
 	/**
 	 * Whether the {@code defclass} form names one of the seeded MOP base classes
-	 * ({@code standard-class}, the two slot-definition classes) as a superclass -- a
+	 * ({@code standard-class}, the slot-definition classes) as a superclass -- a
 	 * metaclass or slot-definition-class definition, which needs
 	 * {@code ClosRegistry.ensureMopClassesSeeded()} to have run before the superclass
 	 * lookup. Qualified spellings ({@code closer-mop:standard-direct-slot-definition})
@@ -46785,9 +46827,7 @@ public final class LispMacroExpander {
 			if (superName instanceof LispSymbol sym) {
 				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 				String member = qn == null ? sym.name() : qn.member();
-				if (ClosRegistry.STANDARD_CLASS_NAME.equals(member)
-						|| ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME.equals(member)
-						|| ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME.equals(member)) {
+				if (!ClosRegistry.CLASS_NAME.equals(member) && ClosRegistry.isMopBaseClassName(member)) {
 					return true;
 				}
 			}

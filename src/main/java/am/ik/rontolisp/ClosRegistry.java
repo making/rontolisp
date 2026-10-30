@@ -517,10 +517,15 @@ public final class ClosRegistry {
 		seedClass(CLASS_NAME, null);
 		seedClass(STANDARD_CLASS_NAME, CLASS_NAME, "NAME", "DIRECT-SUPERCLASSES", "DIRECT-SLOTS", "EFFECTIVE-SLOTS",
 				"FINALIZED-P");
-		seedClass(STANDARD_DIRECT_SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS",
-				"INITFUNCTION");
-		seedClass(STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS",
-				"INITFUNCTION");
+		// The slot-definition hierarchy (AMOP 5.4, single-inheritance cut: the abstract
+		// standard-slot-definition mixin is left out): the root holds every slot, so
+		// both standard classes keep the same layout.
+		seedClass(SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS", "INITFUNCTION",
+				"WRITERS");
+		seedClass(DIRECT_SLOT_DEFINITION_NAME, SLOT_DEFINITION_NAME);
+		seedClass(EFFECTIVE_SLOT_DEFINITION_NAME, SLOT_DEFINITION_NAME);
+		seedClass(STANDARD_DIRECT_SLOT_DEFINITION_NAME, DIRECT_SLOT_DEFINITION_NAME);
+		seedClass(STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME, EFFECTIVE_SLOT_DEFINITION_NAME);
 	}
 
 	/**
@@ -859,23 +864,46 @@ public final class ClosRegistry {
 	public static final String CLASS_NAME = "CLASS";
 
 	/**
-	 * The seeded direct-slot-definition base class a user metaclass protocol subclasses
-	 * (postmodern's {@code direct-column-slot}). Slot order: name, initargs, initform,
-	 * type, readers, initfunction (appended 2026-08-03; nil except on driver-built
-	 * definitions).
+	 * The seeded root of the slot-definition metaobjects; it declares every slot the two
+	 * standard classes carry. Slot order: name, initargs, initform, type, readers,
+	 * initfunction (appended 2026-08-03; nil except on driver-built definitions), writers
+	 * (appended 2026-10-30; filled on direct slot definitions only).
+	 */
+	public static final String SLOT_DEFINITION_NAME = "SLOT-DEFINITION";
+
+	/** The slot-less class every direct slot definition is a {@code typep} of. */
+	public static final String DIRECT_SLOT_DEFINITION_NAME = "DIRECT-SLOT-DEFINITION";
+
+	/** The slot-less class every effective slot definition is a {@code typep} of. */
+	public static final String EFFECTIVE_SLOT_DEFINITION_NAME = "EFFECTIVE-SLOT-DEFINITION";
+
+	/**
+	 * The seeded direct-slot-definition class a user metaclass protocol subclasses
+	 * (postmodern's {@code direct-column-slot}), and what {@code class-direct-slots}
+	 * answers. Layout: {@link #SLOT_DEFINITION_NAME}'s.
 	 */
 	public static final String STANDARD_DIRECT_SLOT_DEFINITION_NAME = "STANDARD-DIRECT-SLOT-DEFINITION";
 
 	/**
 	 * The seeded effective-slot-definition class {@link #classMetaobject} builds the
-	 * {@code class-slots} entries from. Slot order: name, initargs, initform, type,
-	 * readers, initfunction.
+	 * {@code class-slots} entries from. Layout: {@link #SLOT_DEFINITION_NAME}'s.
 	 */
 	public static final String STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME = "STANDARD-EFFECTIVE-SLOT-DEFINITION";
 
 	/** The classes {@link #ensureMopClassesSeeded()} registers, in seeding order. */
 	private static final List<String> MOP_BASE_CLASS_NAMES = List.of(CLASS_NAME, STANDARD_CLASS_NAME,
+			SLOT_DEFINITION_NAME, DIRECT_SLOT_DEFINITION_NAME, EFFECTIVE_SLOT_DEFINITION_NAME,
 			STANDARD_DIRECT_SLOT_DEFINITION_NAME, STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME);
+
+	/**
+	 * Whether the name (a package-stripped member spelling) is one of the seeded MOP base
+	 * classes -- a {@code defclass} naming one as a superclass needs them seeded.
+	 * @param member the upcased member name
+	 * @return true for a MOP base class name
+	 */
+	public static boolean isMopBaseClassName(String member) {
+		return MOP_BASE_CLASS_NAMES.contains(member);
+	}
 
 	/**
 	 * The built-in class names {@code class-of} can answer for a non-instance value --
@@ -2500,26 +2528,72 @@ public final class ClosRegistry {
 		LispVal effectiveSlots = LispNil.INSTANCE;
 		List<SlotSpec> slots = info.slots();
 		for (int i = slots.size() - 1; i >= 0; i--) {
-			SlotSpec slot = slots.get(i);
-			List<String> readerNames = new java.util.ArrayList<>(slot.readers());
-			readerNames.addAll(slot.accessors());
-			LispVal readers = LispNil.INSTANCE;
-			for (int r = readerNames.size() - 1; r >= 0; r--) {
-				readers = new LispCons(new LispSymbol(readerNames.get(r)), readers);
-			}
-			LispVal initargs = LispNil.INSTANCE;
-			for (int k = slot.initargs().size() - 1; k >= 0; k--) {
-				initargs = new LispCons(new LispSymbol(slot.initargs().get(k)), initargs);
-			}
-			LispInstance slotDefinition = newSeededInstance(STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
-					new LispSymbol(slot.baseName()), initargs,
-					slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE, new LispSymbol(slot.type()), readers);
-			effectiveSlots = new LispCons(slotDefinition, effectiveSlots);
+			effectiveSlots = new LispCons(slotDefinitionInstance(slots.get(i), false), effectiveSlots);
+		}
+		LispVal directSlots = LispNil.INSTANCE;
+		for (int i = info.directSlots().size() - 1; i >= 0; i--) {
+			directSlots = new LispCons(slotDefinitionInstance(info.directSlots().get(i), true), directSlots);
 		}
 		LispInstance metaobject = newSeededInstance(STANDARD_CLASS_NAME, new LispSymbol(info.name()), supers,
-				LispNil.INSTANCE, effectiveSlots, LispTrue.INSTANCE);
+				directSlots, effectiveSlots, LispTrue.INSTANCE);
 		this.classMetaobjects.put(key, metaobject);
 		return metaobject;
+	}
+
+	// One slot-definition metaobject of a materialized plain view: a direct one carries
+	// the slot's writers ((setf accessor) for an accessor, the :writer names), an
+	// effective one none (AMOP 5.4.3) -- readers stay on both, which trivia's effective
+	// slot walk reads. The compile paths build the same data from the class table
+	// (LispMacroExpander.classMetaTableForms).
+	private LispInstance slotDefinitionInstance(SlotSpec slot, boolean direct) {
+		LispVal initargs = symbolList(slot.initargs());
+		List<String> readerNames = new java.util.ArrayList<>(slot.readers());
+		readerNames.addAll(slot.accessors());
+		return newSeededInstance(
+				direct ? STANDARD_DIRECT_SLOT_DEFINITION_NAME : STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
+				new LispSymbol(slot.baseName()), initargs, slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE,
+				new LispSymbol(slot.type()), symbolList(readerNames), LispNil.INSTANCE,
+				direct ? slotWriters(slot) : LispNil.INSTANCE);
+	}
+
+	/**
+	 * A proper list of the named symbols ({@code nil} when empty).
+	 * @param names the symbol names
+	 * @return the list
+	 */
+	public static LispVal symbolList(List<String> names) {
+		LispVal out = LispNil.INSTANCE;
+		for (int i = names.size() - 1; i >= 0; i--) {
+			out = new LispCons(new LispSymbol(names.get(i)), out);
+		}
+		return out;
+	}
+
+	/**
+	 * The {@code slot-definition-writers} answer of a direct slot: {@code (setf a)} per
+	 * accessor, then each {@code :writer} name -- a {@code (setf place)} writer back in
+	 * its list spelling (the registry keeps it mangled).
+	 * @param slot the direct slot
+	 * @return the writer function names
+	 */
+	public static LispVal slotWriters(SlotSpec slot) {
+		List<LispVal> names = new java.util.ArrayList<>();
+		for (String accessor : slot.accessors()) {
+			names.add(setfName(accessor));
+		}
+		for (String writer : slot.writers()) {
+			names.add(writer.startsWith(SETF_FUNCTION_PREFIX)
+					? setfName(writer.substring(SETF_FUNCTION_PREFIX.length())) : new LispSymbol(writer));
+		}
+		LispVal out = LispNil.INSTANCE;
+		for (int i = names.size() - 1; i >= 0; i--) {
+			out = new LispCons(names.get(i), out);
+		}
+		return out;
+	}
+
+	private static LispVal setfName(String place) {
+		return new LispCons(new LispSymbol(LispNames.SETF), new LispCons(new LispSymbol(place), LispNil.INSTANCE));
 	}
 
 	/**

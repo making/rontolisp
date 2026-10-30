@@ -10545,6 +10545,15 @@ public final class LispNames {
 	 */
 	public static final String SLOT_DEFINITION_INITFUNCTION = "SLOT-DEFINITION-INITFUNCTION";
 
+	/**
+	 * {@code closer-mop:slot-definition-writers} ({@code %obj-ref} index 6, appended
+	 * 2026-10-30): filled on direct slot definitions, nil on effective ones.
+	 */
+	public static final String SLOT_DEFINITION_WRITERS = "SLOT-DEFINITION-WRITERS";
+
+	/** {@code closer-mop:slot-definition-initform} ({@code %obj-ref} index 2). */
+	public static final String SLOT_DEFINITION_INITFORM = "SLOT-DEFINITION-INITFORM";
+
 	/** {@code closer-mop:class-direct-slots} over a class metaobject (index 2). */
 	public static final String CLASS_DIRECT_SLOTS = "CLASS-DIRECT-SLOTS";
 

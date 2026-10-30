@@ -732,7 +732,12 @@ public final class PackageRegistry {
 			// The mito-era accessors: readers/initfunction on slot
 			// definitions, direct slots/subclasses on class metaobjects.
 			LispNames.SLOT_DEFINITION_READERS, LispNames.SLOT_DEFINITION_INITFUNCTION, LispNames.CLASS_DIRECT_SLOTS,
-			LispNames.CLASS_DIRECT_SUBCLASSES);
+			LispNames.CLASS_DIRECT_SUBCLASSES,
+			// The slot-definition class hierarchy (access dispatches on these) and the
+			// remaining slot-definition readers.
+			ClosRegistry.SLOT_DEFINITION_NAME, ClosRegistry.DIRECT_SLOT_DEFINITION_NAME,
+			ClosRegistry.EFFECTIVE_SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_WRITERS,
+			LispNames.SLOT_DEFINITION_INITFORM);
 
 	private static final List<String> USOCKET_FUNCTION_NAMES = sorted(USOCKET_FUNCTIONS);
 

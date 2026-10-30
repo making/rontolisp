@@ -11144,6 +11144,11 @@ cases:
       (print (ll-mix 1 2 :c 3 :d 4))
       (defun ll-aux (x &aux (y (+ x 1)) z) (list x y z))
       (print (ll-aux 5))
+      ;; A &key method is made permissive (&allow-other-keys appended), which must
+      ;; land ahead of its &aux section (access's rem-arg-list-key-value).
+      (defgeneric ll-gaux (a &key k))
+      (defmethod ll-gaux (a &key (k 1) &aux (s (+ a k))) (list a k s))
+      (print (list (ll-gaux 1 :k 2) (ll-gaux 1)))
     expected: |
       (1 (2 3))
       (1 NIL)
@@ -11156,6 +11161,7 @@ cases:
       (0 1 NIL NIL)
       (1 2 (:C 3 :D 4) 3)
       (5 6 NIL)
+      ((1 2 3) (1 1 2))
   - name: lambda-list-first-class-and-eval
     source: |
       (print (funcall (lambda (&rest xs) xs) 1 2 3))
