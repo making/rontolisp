@@ -5947,6 +5947,15 @@ public final class LispNames {
 	public static final String RUNTIME_PACKAGE_OP_INTERNAL = "%RUNTIME-PACKAGE-OP";
 
 	/**
+	 * Internal marker {@code (%own-symbol "NAME")} the compile path's macro expander
+	 * leaves where it consumed a {@code defmacro} that made the current package own a
+	 * {@code cl} extension name ({@code PackageResolver}'s definition claim): the
+	 * compilers' own resolution pass never sees the definition, so the marker replays the
+	 * claim there. Consumed by the resolver, never reaching the backends.
+	 */
+	public static final String OWN_SYMBOL = "%OWN-SYMBOL";
+
+	/**
 	 * Internal marker inserted by {@code LoadInliner} before the spliced forms of a
 	 * loaded file: it makes the {@code PackageResolver} save the current package so a
 	 * file's internal {@code in-package} cannot leak past the load, mirroring Common Lisp

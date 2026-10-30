@@ -102,11 +102,19 @@ redirects it to `cl`) and one inherited from another used package win over `cl`'
 `resolveUnqualified`, `accessibleIn` and `accessibleEntries` -- SBCL's resolution wherever a library
 owns the name. Measured: parenscript, iterate and `for` export `while`; parenscript, arnesi
 and fset `defmacro` it (parenscript's `DEFMACRO cannot redefine the standard operator WHILE`
-before). Still not covered: fset's UNEXPORTED `defmacro while` in a package using `cl` reads `cl`'s
-(`while` is not shadowed by a definition), and so does arnesi's -- its `defpackage` has
-`;; #:while ; iterate` COMMENTED OUT (arnesi-20250622, re-measured 2026-10-31; the earlier count
-listed it as exporting), the next djula blocker (`.todo/h72`). iterate's `while` is
-`ITERATE:WHILE` again.
+before). iterate's `while` is `ITERATE:WHILE` again.
+**A definition claims it too** (h72, 2026-10-31, `PackageResolver.claimDefinedClExtensionName`):
+an unqualified `(defmacro while ...)` / `(defun while ...)` in a package other than `cl`/`cl-user`
+that would read `cl`'s makes the package OWN the name (member table) from that form on -- fset's
+and arnesi's UNEXPORTED `defmacro while` (arnesi's `defpackage` has `;; #:while ; iterate`
+commented out, arnesi-20250622). A reference read BEFORE the definition stays `cl`'s (SBCL reads
+the package's symbol throughout, an undefined operator there; neither library reads one early).
+The compile path's macro expander consumes a `defmacro`, so the compilers' own resolver pass never
+sees it: `UserMacroExpander` leaves `(%own-symbol "WHILE")` (`LispNames.OWN_SYMBOL`) in its place,
+which `resolve` consumes as the same claim -- without it `'while` after the definition was `cl`'s
+on the compiled backends (the call sites worked: they are expanded before that pass). Pinned by
+`PackageResolverTest#exportOfAStandardNameReExportsTheClSymbol` and ci-spec
+`a-package-own-definition-of-while-wins-over-cl`.
 
 ## `defpackage`
 A literal, top-level directive like `in-package`. `PackageResolver.resolveDefpackage` registers a

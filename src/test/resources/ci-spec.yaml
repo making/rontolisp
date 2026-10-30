@@ -3992,6 +3992,21 @@ cases:
     expected: |
       (CI-TOF-LIB:WIDGET CI-TOF-LIB::GADGET CI-TOF-LIB::POINT)
       (T T T T INTEGER)
+  - name: a-package-own-definition-of-while-wins-over-cl
+    source: |
+      ;; arnesi's defmacro while, unexported: cl has no while, so the definition
+      ;; interns the package's own symbol. A reference read before it stays
+      ;; rontolisp's while; cl-user's is untouched.
+      (defpackage :ci-own-while (:use :cl))
+      (in-package :ci-own-while)
+      (defun before () (let ((n 0)) (while (< n 3) (setq n (+ n 1))) n))
+      (defmacro while (test &body body) `(list :own ,test ,@body))
+      (print (list (before) (while 1 2) (package-name (symbol-package 'while)) (eq 'while 'cl:while)))
+      (in-package :cl-user)
+      (print (let ((n 0)) (while (< n 2) (setq n (+ n 1))) n))
+    expected: |
+      (3 (:OWN 1 2) "CI-OWN-WHILE" NIL)
+      2
   - name: expansion-time-read-homes-in-the-macro-package
     source: |
       ;; cl-pdf's AFM parser names each reader with read-from-string at EXPANSION
