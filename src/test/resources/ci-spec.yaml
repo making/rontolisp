@@ -7376,24 +7376,28 @@ cases:
       ;; :test 'eq / 'eql key aggregates by identity on every backend: two
       ;; instances with equal slots are two keys, a key mutated after insertion
       ;; still finds its entry, and a freshly built cons with equal contents is a
-      ;; MISS. Numbers compare by type and value under eql.
+      ;; MISS. Numbers compare by type and value under eql. NIL is a key like any
+      ;; other (fiveam's (setf (get-test 'nil) ...)).
       (defstruct ci-ipoint x y)
       (let ((q (make-hash-table :test 'eq)))
+        (setf (gethash nil q) 'nought)
         (let ((p (make-ci-ipoint :x 1 :y 2))
               (r (make-ci-ipoint :x 1 :y 2)))
           (setf (gethash p q) 'pee)
           (setf (gethash r q) 'arr)
           (setf (ci-ipoint-x p) 99)
           (print (list (gethash p q) (gethash r q) (gethash (make-ci-ipoint :x 99 :y 2) q nil)
-                       (hash-table-count q) (hash-table-test q)))))
+                       (gethash nil q) (hash-table-count q) (hash-table-test q)))))
       (let ((e (make-hash-table :test 'eql)))
+        (setf (gethash nil e) 'nought)
+        (remhash nil e)
         (setf (gethash 1.5 e) 'one-half)
         (setf (gethash 1 e) 'one)
         (setf (gethash 's e) 'ess)
         (let ((a (list 1)) (b (list 1)))
           (setf (gethash a e) 'ay)
           (print (list (gethash 1.5 e) (gethash 1 e) (gethash 's e) (gethash a e)
-                       (gethash b e nil) (hash-table-count e) (hash-table-test e)))))
+                       (gethash b e nil) (gethash nil e 'none) (hash-table-count e) (hash-table-test e)))))
       (print (list (hash-table-test (make-hash-table)) (hash-table-test (make-hash-table :test 'equal))
                    (hash-table-test (make-hash-table :test 'equalp))))
       (princ (make-hash-table :test 'eql))
@@ -7401,8 +7405,8 @@ cases:
       (princ (make-hash-table :test 'eq))
       (terpri)
     expected: |
-      (PEE ARR NIL 2 EQ)
-      (ONE-HALF ONE ESS AY NIL 4 EQL)
+      (PEE ARR NIL NOUGHT 3 EQ)
+      (ONE-HALF ONE ESS AY NIL NONE 4 EQL)
       (EQUAL EQUAL EQUALP)
       #<HASH-TABLE :TEST EQL :COUNT 0>
       #<HASH-TABLE :TEST EQ :COUNT 0>
