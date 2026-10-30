@@ -3581,22 +3581,17 @@ class JvmLispCompilerTest {
 		// read-little-endian / read-null-terminated-string are portable stream work over
 		// read-byte, so the compiled program must answer what the interpreter does. The
 		// stream is flexi-streams' in-memory octet stream, the one binary input every
-		// backend can build without a filesystem.
-		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
+		// backend can build without a filesystem. Through the CLI's front end: the Gray
+		// splice is what routes read-byte on a CLOS instance stream to the protocol, and
+		// the shim defines macros.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.withSystemPath("""
 				(asdf:load-system "flexi-streams")
 				(let* ((v (make-array 7 :element-type '(unsigned-byte 8)
 				                        :initial-contents '(1 2 0 0 104 105 0)))
 				       (s (flex:make-in-memory-input-stream v)))
 				  (print (uiop:read-little-endian s))
 				  (print (uiop:read-null-terminated-string s)))
-				"""), path -> {
-			throw new java.io.FileNotFoundException(path);
-		});
-		// GrayStreamsLibrary in the CLI's order: read-byte on a CLOS instance stream --
-		// which flexi-streams' in-memory octet stream is -- reaches the Gray dispatch
-		// only through that rewrite; without it the call compiles to the raw stdin read.
-		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
-			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))).isEqualTo("513\n\"hi\"");
+				""", List.of(), false, false).forms())).isEqualTo("513\n\"hi\"");
 	}
 
 	@Test
@@ -10260,17 +10255,20 @@ class JvmLispCompilerTest {
 		// close is CL's own generic: a program that defines a method on it owns the
 		// operator, so the Gray rewrite leaves every close call site alone and the
 		// shadowed-built-in dispatcher answers -- for the Gray class AND for a
-		// handle.
+		// handle. Another Gray class gets the Gray default, a method on the base
+		// class, rather than the built-in, which rejects an instance.
 		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
 			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
 					(defclass gc-s (rontolisp:fundamental-character-output-stream)
 					  ((acc :initform "")))
+					(defclass gc-plain (rontolisp:fundamental-binary-input-stream) ())
 					(defmethod rontolisp:stream-write-char ((s gc-s) c) c)
 					(defmethod close ((s gc-s) &key abort)
 					  (declare (ignore abort))
 					  :by-method)
-					(print (close (make-instance 'gc-s)))
-					"""))))).isEqualTo(":BY-METHOD");
+					(print (list (close (make-instance 'gc-s)) (close (make-instance 'gc-plain))
+					             (close (make-string-output-stream))))
+					"""))))).isEqualTo("(:BY-METHOD T T)");
 	}
 
 	@Test

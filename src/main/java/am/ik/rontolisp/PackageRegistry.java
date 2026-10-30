@@ -1277,11 +1277,18 @@ public final class PackageRegistry {
 		// flex::vector-stream-vector with a double one. The flexi-stream class and its
 		// five accessors are external for the same reason: upstream cl+ssl spells
 		// flexi-streams:flexi-stream / flexi-streams:flexi-stream-stream with one colon.
+		// The external-format surface and the two sequence macros are external as
+		// upstream: drakma :uses the package and cl-smtp imports from it.
 		Set<String> flexiExternals = Set.of(LispNames.MAKE_FLEXI_STREAM, LispNames.STRING_TO_OCTETS,
 				LispNames.OCTETS_TO_STRING, LispNames.VECTOR_STREAM, LispNames.MAKE_IN_MEMORY_INPUT_STREAM,
 				LispNames.MAKE_IN_MEMORY_OUTPUT_STREAM, LispNames.GET_OUTPUT_STREAM_SEQUENCE, LispNames.FLEXI_STREAM,
 				LispNames.FLEXI_STREAM_STREAM, LispNames.FLEXI_STREAM_EXTERNAL_FORMAT,
-				LispNames.FLEXI_STREAM_ELEMENT_TYPE, LispNames.FLEXI_STREAM_POSITION, LispNames.FLEXI_STREAM_BOUND);
+				LispNames.FLEXI_STREAM_ELEMENT_TYPE, LispNames.FLEXI_STREAM_POSITION, LispNames.FLEXI_STREAM_BOUND,
+				LispNames.EXTERNAL_FORMAT, LispNames.MAKE_EXTERNAL_FORMAT, LispNames.EXTERNAL_FORMAT_NAME,
+				LispNames.EXTERNAL_FORMAT_EOL_STYLE, LispNames.EXTERNAL_FORMAT_LITTLE_ENDIAN,
+				LispNames.EXTERNAL_FORMAT_ID, LispNames.EXTERNAL_FORMAT_EQUAL, LispNames.DEFAULT_EOL_STYLE,
+				LispNames.SUBSTITUTION_CHAR, LispNames.OCTET, LispNames.WITH_INPUT_FROM_SEQUENCE,
+				LispNames.WITH_OUTPUT_TO_SEQUENCE);
 		Set<String> flexiSymbols = new HashSet<>(flexiExternals);
 		flexiSymbols.addAll(Set.of(LispNames.VECTOR_INPUT_STREAM, LispNames.VECTOR_STREAM_VECTOR,
 				LispNames.VECTOR_STREAM_INDEX, LispNames.VECTOR_STREAM_END, LispNames.VECTOR_OUTPUT_STREAM));

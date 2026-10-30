@@ -18894,11 +18894,62 @@ cases:
         (print (read-byte sbi-in)))
       (let ((sbi-h (open "sbi.dat")))
         (print (close sbi-h :abort t)))
+      ;; A Gray class with no close method of its own gets the Gray default,
+      ;; not the built-in, which rejects an instance.
+      (defclass sbi-gray (rontolisp:fundamental-binary-input-stream) ())
+      (print (close (make-instance 'sbi-gray)))
     expected: |
       :SBI-CLOSED
       (42 3)
       65
       T
+      T
+  - name: flexi-streams-external-formats
+    source: |
+      ;; The flexi-streams shim's external formats: an object made from a name
+      ;; and an eol style selects the wrapper's codec, setf switches it mid
+      ;; stream (drakma's headers in Latin-1, a body in its charset), :crlf maps
+      ;; a Newline both ways, and a code point the format cannot carry signals
+      ;; unless *substitution-char* names one.
+      (asdf:load-system "flexi-streams")
+      (let* ((fxef-latin (flex:make-external-format :latin1 :eol-style :crlf))
+             (fxef-sink (flex:make-in-memory-output-stream))
+             (fxef-out (flex:make-flexi-stream fxef-sink :external-format fxef-latin)))
+        (print (list (flex:external-format-name fxef-latin)
+                     (flex:external-format-eol-style fxef-latin)
+                     (flex:external-format-eol-style (flex:make-external-format "utf-8"))))
+        (write-string (coerce (list #\h (code-char 233)) 'string) fxef-out)
+        (terpri fxef-out)
+        (setf (flex:flexi-stream-external-format fxef-out) :utf-8)
+        (write-char (code-char 233) fxef-out)
+        (print (list (flex:external-format-name (flex:flexi-stream-external-format fxef-out))
+                     (coerce (flex:get-output-stream-sequence fxef-sink) 'list))))
+      (let ((fxef-in (flex:make-flexi-stream
+                      (flex:make-in-memory-input-stream #(104 13 10 105 13 106))
+                      :external-format '(:ascii :eol-style :crlf))))
+        (print (list (read-line fxef-in) (read-char fxef-in) (char-code (read-char fxef-in))
+                     (read-char fxef-in) (read-char fxef-in nil :eof))))
+      (print (flex:with-output-to-sequence (fxef-s :as-list t)
+               (write-sequence (flex:string-to-octets (coerce (list #\A (code-char 255)) 'string)
+                                                      :external-format :latin-1)
+                               fxef-s)))
+      (print (flex:with-input-from-sequence (fxef-s (map 'list #'char-code "ok"))
+               (list (read-byte fxef-s) (read-byte fxef-s) (read-byte fxef-s nil :eof))))
+      (print (list (char-code (char (flex:octets-to-string #(233) :external-format :iso-8859-1) 0))
+                   (flex:octets-to-string #(97 13 10 98) :external-format '(:utf-8 :eol-style :crlf))
+                   (handler-case (flex:string-to-octets (string (code-char 12354)) :external-format :latin-1)
+                     (error () :unencodable))
+                   (let ((flex:*substitution-char* #\?))
+                     (flex:octets-to-string #(200) :external-format :ascii))
+                   (handler-case (flex:make-external-format :utf-16) (error () :unsupported))))
+    expected: |
+      (:ISO-8859-1 :CRLF :LF)
+      (:UTF-8 (104 233 13 10 195 169))
+      ("h" #\i 13 #\j :EOF)
+      (65 255)
+      (111 107 :EOF)
+      (233 "a
+      b" :UNENCODABLE "?" :UNSUPPORTED)
   - name: trivia-enablement-language-group
     source: |
       ;; The language features (ql:quickload "trivia") needs,

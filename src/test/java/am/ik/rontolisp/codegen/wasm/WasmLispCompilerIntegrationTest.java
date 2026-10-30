@@ -5186,20 +5186,17 @@ class WasmLispCompilerIntegrationTest {
 	void uiopOsOctetReadersCompileAndRun() throws Exception {
 		// read-little-endian / read-null-terminated-string are portable stream work over
 		// read-byte; flexi-streams' in-memory octet stream is the one binary input every
-		// backend can build without a filesystem. The Gray splice is the CLI's, and is
-		// what routes read-byte on a CLOS instance stream to the protocol.
-		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
+		// backend can build without a filesystem. Through the CLI's front end: the Gray
+		// splice is what routes read-byte on a CLOS instance stream to the protocol, and
+		// the shim defines macros.
+		assertThat(compileAndRunFrontEndWithDir("""
 				(asdf:load-system "flexi-streams")
 				(let* ((v (make-array 7 :element-type '(unsigned-byte 8)
 				                        :initial-contents '(1 2 0 0 104 105 0)))
 				       (s (flex:make-in-memory-input-stream v)))
 				  (print (uiop:read-little-endian s))
 				  (print (uiop:read-null-terminated-string s)))
-				"""), path -> {
-			throw new java.io.FileNotFoundException(path);
-		});
-		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
-			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))).isEqualTo("513\n\"hi\"");
+				""", false)).isEqualTo("513\n\"hi\"");
 	}
 
 	@Test

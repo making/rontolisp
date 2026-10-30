@@ -90,7 +90,10 @@ release. A stream that DOES hold something writes CL's own spelling, a method on
 ```
 
 Such a method dispatches on every backend. A program that defines one owns
-`close` outright: the Gray default steps aside for it.
+`close` outright: the Gray default steps aside for it, into a method on
+`rontolisp:fundamental-stream` (as in SBCL), so a Gray stream of another class
+still closes with `t`. The same holds for `open-stream-p`, `input-stream-p`,
+`output-stream-p` and `stream-element-type`.
 
 A character INPUT stream defines **`stream-read-char` -- that one method is
 enough** (a binary one defines `stream-read-byte`). Everything else on the read

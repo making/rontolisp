@@ -377,7 +377,8 @@ downloading. `BuiltinSystems.DEPENDENCIES` records edges between shims; one exis
   `.kb/gray-streams.md`); `closer-mop` (slot-definition metaobjects over a class metaobject,
   `.kb/clos.md`; a legacy tag designator's `class-slots` -> `(name declared-type)` pairs from
   `%class-slot-defs`; `compute-slots`, signalling `generic-function-lambda-list`);
-  `flexi-streams` (REAL `flexi-stream` wrapper + in-memory octet pair); `float-features`
+  `flexi-streams` (REAL `flexi-stream` wrapper, in-memory octet pair, UTF-8/Latin-1/ASCII
+  external-format objects); `float-features`
   (interpreter + JVM, no WASM); `bordeaux-threads` (nickname `bt`, locking subset over
   `rontolisp:*-mutex`, `.kb/mutexes.md`); `trivial-garbage` (nickname `tg`; `finalize` registers
   nothing — consequence: a leaked prepared statement lives until the connection closes);

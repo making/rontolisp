@@ -21,13 +21,11 @@ Current built-in systems (`eval.BuiltinSystems` + `eval.ShimLibraries`):
 - `uiop` -- KEEP as a stub package/system (ASDF-implementation
   infrastructure; rontolisp's asdf is a subset). Grow individual functions
   (`uiop:native-namestring`, ...) only on demand.
-- `flexi-streams` -- REPLACE: the real library is mostly portable CL over
-  trivial-gray-streams. Try loading the real sources; expected gaps are the
-  binary/external-format surface (rontolisp streams are character-only
-  integer handles, no element types), so this likely needs the stream model
-  to grow octet streams first. Until then the identity shim
-  (`make-flexi-stream` = the stream) stays -- semantically consistent with
-  character-only streams, but a lie for binary re-encoding.
+- `flexi-streams` -- KEEP as shim (re-measured 2026-10-31): 48,418 of the real library's
+  52,557 lines are the GBK table, most of the rest code-page tables and per-(encoding, eol)
+  class macrology -- the babel argument below, an encoding purpose that does not exist here.
+  The shim is a real wrapper with UTF-8/Latin-1/ASCII external-format objects, enough for
+  drakma and cl-smtp (`.kb/gray-streams.md`).
 
 - `bordeaux-threads` -- KEEP as shim (its own `.asd` hard-errors on an
   unknown implementation, so there is no route to loading it for real;
