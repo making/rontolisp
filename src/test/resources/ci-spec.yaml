@@ -13322,6 +13322,13 @@ cases:
       ;; A failed check-type is a type-error carrying the value and the specifier.
       (print (handler-case (let ((n "5")) (check-type n (integer 0 9)))
                (type-error (c) (list (type-error-datum c) (type-error-expected-type c) (princ-to-string c)))))
+      ;; It is a simple-type-error, so also a simple-condition (CLHS class precedence).
+      (print (typep (make-condition 'simple-type-error :format-control "x") 'simple-condition))
+      (print (handler-case (let ((n 'q)) (check-type n string))
+               (simple-condition (c) (list (type-of c) (type-error-expected-type c)))))
+      (print (block ci-hb
+               (handler-bind ((simple-condition (lambda (c) (return-from ci-hb (type-error-datum c)))))
+                 (let ((n 'q)) (check-type n string)))))
       (assert (= 1 1))
       (print (typecase 7 ((integer 0 9) :digit) (integer :int)))
       (print (typecase 'b ((member a b c) :abc) (t :other)))
@@ -13332,6 +13339,9 @@ cases:
       :CHECKED
       :CHECKED2
       ("5" (INTEGER 0 9) "The value of N is \"5\", which is not of type (INTEGER 0 9).")
+      T
+      (SIMPLE-TYPE-ERROR STRING)
+      Q
       :DIGIT
       :ABC
   - name: declared-array-types-single-arm-access
