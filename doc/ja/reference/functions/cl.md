@@ -91,7 +91,7 @@
 | `read-from-string` | `(read-from-string "(+ 1 2)")`, `(read-from-string s nil :eof :start 3)` | 文字列からデータを1つパースし(4つのバックエンドすべて)、停止インデックスを 2 番目の値として返します。`eof-error-p`/`eof-value` と `:start`/`:end`/`:preserve-whitespace` を受け付けます |
 | `parse-integer` | `(parse-integer "42")`, `(parse-integer "ff" :radix 16)`, `(parse-integer "12x" :junk-allowed t)` | 文字列から整数をパースします。すべてのバックエンドで `:start`/`:end`/`:radix`/`:junk-allowed` をサポートします。パース停止位置が 2 番目の値になり、`multiple-value-bind` で観測できます。`:junk-allowed` がない場合、末尾の非空白文字はエラーです |
 | `read-delimited-list` | `(read-delimited-list #\) stream)` | ある文字までデータムを読み、その文字を消費します |
-| `copy-readtable` | `(copy-readtable nil)` | リードテーブルの複製(`nil` は標準リードテーブル)。リードテーブルで読むのは今のところインタプリタのリーダーだけです([リードテーブル](../../guides/readtables.md)) |
+| `copy-readtable` | `(copy-readtable nil)` | リードテーブルの複製(`nil` は標準リードテーブル)。ソースの読み込みはすべてのバックエンドで `*readtable*` に従い、実行時の読み込みで従うのはインタプリタだけです([リードテーブル](../../guides/readtables.md)) |
 | `readtablep` | `(readtablep *readtable*)` | リードテーブルなら真 |
 | `readtable-case` | `(readtable-case *readtable*)` | `:upcase`・`:downcase`・`:preserve`・`:invert` のいずれか。`setf` できます |
 | `get-macro-character` `set-macro-character` | `(set-macro-character #\! fn)` | 文字のリーダーマクロ関数と、それが非終端かどうか |

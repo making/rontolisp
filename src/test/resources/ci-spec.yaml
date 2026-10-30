@@ -24724,6 +24724,32 @@ cases:
       T
       (1 2 (3))
       (:READTABLE :OTHER)
+  # A readtable an eval-when installs at compile time reads the forms after it on every
+  # backend: the interpreter reads form at a time, the compile paths read with the
+  # compile-time evaluator's readtable (.kb/readtables.md) -- macro and dispatch
+  # characters, a no-value comment, a remapped `)`, read-delimited-list, the case.
+  - name: source-reads-with-the-readtable-an-eval-when-installs
+    source: |
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (defvar *ci-rt-standard* *readtable*)
+        (setf *readtable* (copy-readtable nil))
+        (set-macro-character #\! (lambda (s c) (declare (ignore c)) (list 'quote (list :bang (read s t nil t)))))
+        (set-dispatch-macro-character #\# #\? (lambda (s c n) (declare (ignore c)) (list 'list :q n (read s t nil t))))
+        (set-macro-character #\] (get-macro-character #\)))
+        (set-macro-character #\[ (lambda (s c) (declare (ignore c)) (cons 'list (read-delimited-list #\] s t))))
+        (set-macro-character #\% (lambda (s c) (declare (ignore s c)) (values))))
+      (print (list !foo !(a b) #?"bar" #3?(+ 1 2) [1 % (+ 1 1) 3]))
+      (print (let ((x 5)) [x !x]))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (setf (readtable-case *readtable*) :invert))
+      (defparameter *ci-rt-inverted* (list 'foo 'FOO 'Foo))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (setf *readtable* *ci-rt-standard*))
+      (print (list *ci-rt-inverted* '!foo (symbol-name '[x]) (eq *readtable* *ci-rt-standard*)))
+    expected: |
+      ((:BANG FOO) (:BANG (A B)) (:Q NIL "bar") (:Q 3 3) (1 2 3))
+      (5 (:BANG X))
+      ((FOO |foo| |Foo|) !FOO "[X]" T)
   # Shapes parenscript, jonathan and rutils (cl-redis) load through: a package's own
   # `while` beside rontolisp's, a go in a return-from's value form, a ratio specializer,
   # a built-in macro aliased (under a keyword too), a (:type list) struct.

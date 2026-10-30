@@ -124,6 +124,12 @@ registry with plain top-level CALLS was invisible (trivia's `(set-vector-matcher
   (`UserMacroExpander.processExpandedEvalWhen`; source-level top-level ones are flattened
   earlier): `:compile-toplevel` replays the member, `:load-toplevel` keeps it, a defmacro
   member is consumed, a nested eval-when recurses, a neither-situation member is dropped.
+  Since h57 also `:execute` in compile-time-too mode (named-readtables' `defreadtable` is
+  `(eval-when (:load-toplevel :execute) ...)`), and inside a spliced system a
+  `:load-toplevel`/`:execute` member replays like a plain form. **A SOURCE-level `eval-when`**
+  whose situations evaluate at compile time has its members recorded by
+  `flattenTopLevel(program, compileTime)` and evaluated (`Session.evalAtCompileTime`, a defvar
+  eagerly) -- before h57 only their definitions registered ([readtables.md](readtables.md)).
 - **A `defmacro` a macro EXPANDS to is consumed wherever it lands**
   (`stripDefmacroDefinitions`): directly, inside the `progn` the macro wrapped around it
   (recursing through `progn`/`eval-when`, dropping an emptied wrapper, mirroring

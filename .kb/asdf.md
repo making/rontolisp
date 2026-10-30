@@ -581,8 +581,9 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   MACRO-EXPANSION time, so backends see baked string constants. The macro-time config replay is a
   **static purity judgment, not a data file**: `UserMacroExpander.isPureConfigSetf`/`isPure`
   accept a top-level `(setf (PLACE ...) V)` only when the `(defun (setf PLACE) ...)` writer is a
-  pure config setter. **Deny by default**; no per-library registration, no
-  `eval-when (:compile-toplevel)` escape hatch. Top-level `defvar`/`defparameter`/`defconstant`
+  pure config setter. **Deny by default**; no per-library registration (a user's own
+  `eval-when (:compile-toplevel ...)` around the setf runs it at compile time, as CL does, since
+  h57). Top-level `defvar`/`defparameter`/`defconstant`
   register LAZILY (`Environment.defineLazy`, `.kb/defmacro-backquote.md`). Lite: `:indent`,
   `(let ((*html-mode* ...)) ...)` ignored (use `(setf (html-mode) :html5)`), hyperdoc's
   external-symbols loop empty. **NO render ci-spec case is possible** — the corpus tests
@@ -1045,8 +1046,8 @@ bundled ones, with `Features.INTERPRETER` and `Features.JVM`:
   systems are all built in or inline creates no build image.
 - **Where the four are now** (`ql:quickload`, after h53's readtables): cl-csv and
   function-cache LOAD on the interpreter -- `read-csv`/`write-csv` and a `defcached` function
-  print byte-identically to SBCL 2.2.9 -- and the compile paths stop in named-readtables (`No
-  such package: EDITOR-HINTS.NAMED-READTABLES`, h57); cl-containers stops in metatilities-base's
+  print byte-identically to SBCL 2.2.9 -- and cl-csv on all four since h57 (the compile
+  paths read with the compile-time readtable, [readtables.md](readtables.md)); cl-containers stops in metatilities-base's
   `defpackage`, whose `:import-from` holds `#-(or allegro ... sbcl) (error "Need to adapt
   defpackage ...")` (an implementation guard); cl-pdf in `font.lisp`'s load-time `(load-fonts)`:
   `The function GET-AFM-STRING is undefined` -- a macro names the reader with

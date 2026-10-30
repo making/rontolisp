@@ -376,6 +376,10 @@ path: `LoadInliner.spliceFile` brackets a spliced file with `(%push-package)`/`(
 markers (`LispNames.PUSH_PACKAGE`/`POP_PACKAGE`) -- but ONLY when the file has a top-level
 `in-package` (`selectsAPackage`), so a plain-defun file splices byte-identically;
 `PackageResolver.resolve` consumes the markers and `isPackageDirective` treats them as directives.
+Since h57 a file is read a form at a time ([readtables.md](readtables.md)), so the push goes in
+front of the file's FIRST `in-package` (`PackageBracket`), not right after `%begin-file`: until
+then the package is the caller's, so it saves the same one. A leaf shim's forms are a list and
+keep the old placement.
 Tests: `LispEvaluatorAsdfTest`, `LoadInlinerTest`.
 
 ## `*package*` is a DYNAMIC variable -- two faces, kept in step
