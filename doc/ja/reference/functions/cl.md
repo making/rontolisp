@@ -123,6 +123,7 @@
 | `both-case-p` | `(both-case-p #\a)` | 大小両形を持つ英字なら真(`lower-case-p` または `upper-case-p`) |
 | `special-operator-p` | `(special-operator-p 'if)` | ANSI の 25 個の特殊オペレータで `t`、それ以外は `nil` |
 | `macro-function` | `(macro-function 'when)` | マクロ展開器(インタープリタでは本物、コンパイル済み出力ではシグナルするスタブ)。関数と特殊オペレータには `nil` |
+| `compiler-macro-function` | `(compiler-macro-function 'square)` | `define-compiler-macro` の展開器(インタープリタでは本物、コンパイル済み出力ではシグナルするスタブ)。なければ `nil` |
 | `compiled-function-p` | `(compiled-function-p #'car)` | ライト版スタブ: 常に `nil` |
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | ライト版スタブ: `(values nil t nil)`(ソース未記録) |
 | `list-all-packages` | `(list-all-packages)` | 登録済みの全パッケージを `find-package` が返すキーワードのリストで返します(コンパイラはコンパイル時に焼き込んだテーブルから答えます) |
@@ -171,6 +172,7 @@
 | `boundp` | `(boundp '*level*)` | シンボルが束縛されたグローバル変数を指すとき `t`(t/nil/キーワードは自己束縛) |
 | `fboundp` | `(fboundp 'car)` | 関数・マクロ・特殊形式に対して `t`(コンパイラ: 計算された引数は関数のみ判定) |
 | `fmakunbound` | `(fmakunbound 'greet)` | `greet` -- 名前を再び「呼び出し時に未定義」にします(コンパイラ: 遅延束縛の参照のみ) |
+| `makunbound` | `(makunbound '*level*)` | `*level*` -- 現在の束縛が値を失います: `boundp` は `nil`、読み出しは `unbound-variable` を通知 |
 | `macroexpand-1` | `(macroexpand-1 '(unless c x))` | `(if c nil x)` -- トップレベルのフォームを 1 段階だけ展開します(ユーザーマクロと組み込みマクロ) |
 | `macroexpand` | `(macroexpand '(outer 41))` | 完全な展開結果: `macroexpand-1` を変化しなくなるまで繰り返します |
 | `null` | `(null nil)` | `t` |

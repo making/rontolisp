@@ -652,6 +652,25 @@ final class JvmSymbolApiCompiler {
 	}
 
 	/**
+	 * {@code (makunbound name)}: the marker stored into a read-checked global, the name
+	 * taken out of the eval mirror
+	 * ({@link LispMacroExpander#expandMakunboundForCompile}).
+	 */
+	static void compileMakunbound(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<String> targets = new java.util.ArrayList<>();
+		if (ctx.unboundMarker != null) {
+			for (String name : ctx.unboundMarker.globals()) {
+				if (ctx.globalFields.containsKey(name)) {
+					targets.add(name);
+				}
+			}
+		}
+		JvmExprCompiler.compileExpr(
+				LispMacroExpander.expandMakunboundForCompile(cons, targets, ctx.specialVars, ctx.evalStoreRef != null),
+				ctx, className);
+	}
+
+	/**
 	 * {@code (%set-mirror name value)} -- the checked half of {@code set}: constants
 	 * (nil, t and keywords, by value or by computed name, and the empty name) and
 	 * non-symbols signal; otherwise the eval mirror is written through {@code _store},

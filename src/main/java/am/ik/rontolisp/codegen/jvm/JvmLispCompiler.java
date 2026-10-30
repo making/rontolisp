@@ -2356,7 +2356,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// that calls progv every read of a special is checked, the ones that start with a
 		// value included -- which keep their plain start.
 		SequencedSet<String> checkedGlobals = new java.util.LinkedHashSet<>(unboundGlobals);
-		checkedGlobals.addAll(SpecialVarCollector.collectProgvUnbindable(program, specialVars));
+		checkedGlobals.addAll(SpecialVarCollector.collectUnbindable(program, specialVars));
 		if (linked != null) {
 			// a linked global its class reads checked for the marker is read so here
 			for (String g : globals) {

@@ -29,8 +29,13 @@ no-op.
   standard operator (never registered).
 - **Expansion-time output is suppressed everywhere**: compile path writes to a null stream,
   `LispEvaluator` mutes `MutablePrintStream` around the expansion.
-- Not implemented: `notinline` (still rewritten), `compiler-macro-function`.
-  `LispMacroExpander.expandDefineCompilerMacro` survives as the `--no-gc` nil lowering and for
+- Not implemented: `notinline` (still rewritten), `(setf compiler-macro-function)`.
+- `compiler-macro-function`: the interpreter answers the real expander off `compilerMacros`;
+  the compile path answers `macro-function`'s `%macro-expander-stub` for a registered name
+  (`UserMacroExpander.emitCompilerMacroFunctionTable` appends the defun when the program names
+  the function and has a compiler macro), nil otherwise (prelude defun). documentation-utils'
+  `#'compiler-macro-function` documentation test is the consumer.
+- `LispMacroExpander.expandDefineCompilerMacro` survives as the `--no-gc` nil lowering and for
   `macroexpand-1` of a DEFINITION form.
 
 ## `load-time-value`
@@ -59,4 +64,5 @@ order ([emitted-output-determinism.md](emitted-output-determinism.md)). Interpre
   `.evalDefmacroWinsOverCompilerMacro`, `.loadTimeValueEvaluatesOncePerOccurrence`
 - `JvmLispCompilerTest.compileAndRunDefineCompilerMacroRewritesCallSites`, `.compileAndRunLoadTimeValue`
 - `WasmLispCompilerIntegrationTest.defineCompilerMacroAndRestartCase`, `.shiftfAndLoadTimeValue`
-- ci-spec `macrolet-compiler-macro-restart-case` (all four backends)
+- ci-spec `macrolet-compiler-macro-restart-case`, `makunbound-and-compiler-macro-function` (all four
+  backends)

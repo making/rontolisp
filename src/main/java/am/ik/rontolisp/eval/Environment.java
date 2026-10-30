@@ -884,6 +884,18 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * Removes a binding (and any pending value expression) from this environment's
+	 * variable namespace, if present -- {@code makunbound} of a global.
+	 * @param name the variable name
+	 */
+	public void undefine(String name) {
+		if (this.pending != null) {
+			this.pending.remove(name);
+		}
+		this.bindings.remove(name);
+	}
+
+	/**
 	 * Returns whether a variable is bound in this environment (not including parent
 	 * scopes). Used by {@code defvar} to decide whether to assign the initial value. A
 	 * name whose value expression is still pending counts as bound -- {@code defvar} is

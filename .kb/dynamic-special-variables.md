@@ -543,7 +543,7 @@ every backend bound it to nil, documented as a divergence.
   of a special without a value" (JVM `_unbound`, wasm the raw-local sentinel); nil where no read is
   checked. Any special can be among the symbols, so in a program that calls `progv`
   (`programCallsProgv`) every special but a `cl` symbol is read-checked
-  (`SpecialVarCollector.collectProgvUnbindable`, joined to JVM `UnboundMarker.globals` / wasm
+  (`SpecialVarCollector.collectUnbindable`, joined to JVM `UnboundMarker.globals` / wasm
   `Ctx.unboundGlobals`). Only the valueless ones are SEEDED with the marker; a special a definer
   gives a value keeps its plain start. A `cl` symbol's `%progv-dyn-bind` arm binds nil in place of
   the marker: the runtimes read the standard variables outside any compiled read.
@@ -570,6 +570,32 @@ every backend bound it to nil, documented as a divergence.
   `WasmLispCompilerIntegrationTest`), ci-spec
   `a-progv-short-of-values-leaves-the-extra-symbols-unbound`, `BoundpInBindingFixture`'s
   `UNBOUND_READ_SOURCE`, `SpecialVarCollectorTest`.
+
+## makunbound (all four backends, 2026-10-30)
+
+**Invariant: `(makunbound 'S)` takes the value of S's CURRENT binding -- the active dynamic
+binding (the previous value back at its exit), else the global; `boundp` answers NIL and every
+read (direct, `symbol-value`, `eval`) signals `unbound-variable` until a store, as in SBCL.**
+Landed with `.todo/h32`.
+
+- Interpreter: `DynamicBindings.unbindCurrent` (progv's private sentinel) inside a binding,
+  `Environment.undefine` of the global otherwise.
+- Compile paths (`LispMacroExpander.expandMakunboundForCompile`): `%global-store-set S
+  (%progv-unbound)` -- the marker stored where a `setq` stores -- over the read-checked globals
+  with a backing variable (a literal quoted name folds to its arm, a computed one is an inline
+  chain), and the name unlinked from the eval mirror when there is one. A program that names
+  `makunbound` (`programCallsMakunbound`: a call or `#'makunbound`) is gated like a `progv` one
+  (`programUnbindsSpecials`): every special but a `cl` symbol is read-checked
+  (`SpecialVarCollector.collectUnbindable`), the literal-`boundp` fold refuses it, wasm reads in
+  a binding's own frame keep their test (`Ctx.unbindsSpecials`), and -- beyond progv -- every
+  special is a `collectProbedValueless` candidate, so `boundp` of a bound special answers from
+  its variable (the mirror, which no binding restores, would stay NIL after a `makunbound` inside
+  one), and such a special is seeded with the marker until its definer runs, as SBCL has it.
+- Not covered: a global that is no special is only taken out of the mirror (its compiled read
+  keeps the value); a `cl` special likewise.
+- Checked 2026-10-30 on SBCL 2.2.9 / interpreter / JVM / P1 / component: the ci-spec case
+  `makunbound-and-compiler-macro-function` answers the same text everywhere. Pins: that case,
+  `SpecialVarCollectorTest`.
 
 ## Local special declarations; a special is never captured (all four backends, 2026-10-05)
 

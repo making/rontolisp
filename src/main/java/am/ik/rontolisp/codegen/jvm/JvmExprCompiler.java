@@ -1050,6 +1050,7 @@ final class JvmExprCompiler {
 				JvmSymbolApiCompiler.compileUndefinedSetfFunction(cons, ctx, className);
 			case LispNames.SYMBOL_VALUE -> JvmSymbolApiCompiler.compileSymbolValue(cons, ctx, className);
 			case LispNames.SET -> JvmSymbolApiCompiler.compileSet(cons, ctx, className);
+			case LispNames.MAKUNBOUND -> JvmSymbolApiCompiler.compileMakunbound(cons, ctx, className);
 			// Only a COMPUTED designator reaches here: PackageResolver folds a
 			// literal
 			// one to the quoted package keyword before the compiler ever sees it

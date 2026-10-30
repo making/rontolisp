@@ -7,6 +7,8 @@ import java.util.SequencedSet;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -176,24 +178,32 @@ class SpecialVarCollectorTest {
 	}
 
 	/**
-	 * The specials a {@code progv} short of values can leave without a value: in a
-	 * program that calls {@code progv}, every one but a {@code cl} symbol, valued or not;
-	 * none in a program that only quotes the symbol (a code walker's table).
+	 * The specials a {@code progv} short of values or a {@code makunbound} can leave
+	 * without a value: in a program that calls either (or names {@code #'makunbound}),
+	 * every one but a {@code cl} symbol, valued or not; none in a program that only
+	 * quotes the symbol (a code walker's table). A {@code makunbound} also makes every
+	 * one a {@code boundp} probes answer from its variable.
 	 */
-	@Test
-	void aProgvCanLeaveEverySpecialButAClSymbolWithoutAValue() {
+	@ParameterizedTest
+	@ValueSource(strings = { "(progv s v (list *a* *b* *print-base*))", "(makunbound s)", "(mapc #'makunbound s)" })
+	void aProgvOrMakunboundCanLeaveEverySpecialButAClSymbolWithoutAValue(String body) {
 		SequencedSet<String> specials = new LinkedHashSet<>(List.of("*A*", "*B*", "*PRINT-BASE*", "P::*C*"));
 		List<LispVal> program = LispReader.readAllFromString("""
 				(defvar *a* 1)
 				(defvar *b*)
-				(defun f (s v) (progv s v (list *a* *b* *print-base*)))
-				""");
-		assertThat(SpecialVarCollector.collectProgvUnbindable(program, specials)).containsExactly("*A*", "*B*",
-				"P::*C*");
-		assertThat(SpecialVarCollector.collectProgvUnbindable(
-				LispReader.readAllFromString("(defvar *a* 1) (defvar *walk* '((progv . walk-cdr)))"), specials))
+				(defun f (s v) %s)
+				(defun p () (boundp '*a*))
+				""".formatted(body));
+		assertThat(SpecialVarCollector.collectUnbindable(program, specials)).containsExactly("*A*", "*B*", "P::*C*");
+		assertThat(SpecialVarCollector.collectProbedValueless(program, specials))
+			.containsExactly(body.contains("makunbound") ? new String[] { "*A*" } : new String[0]);
+		assertThat(
+				SpecialVarCollector.collectUnbindable(
+						LispReader.readAllFromString(
+								"(defvar *a* 1) (defvar *walk* '((progv . walk-cdr) (makunbound . walk-cdr)))"),
+						specials))
 			.isEmpty();
-		assertThat(SpecialVarCollector.collectProgvUnbindable(program, new LinkedHashSet<>())).isEmpty();
+		assertThat(SpecialVarCollector.collectUnbindable(program, new LinkedHashSet<>())).isEmpty();
 	}
 
 	/**

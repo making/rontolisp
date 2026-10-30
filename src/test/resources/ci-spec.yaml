@@ -22610,6 +22610,48 @@ cases:
       (NIL 1)
       (:UNBOUND *PSV-A*)
 
+  # makunbound takes the CURRENT binding's value (the global's back after the binding),
+  # boundp and every read path agree, a store gives it back; compiler-macro-function
+  # answers non-nil exactly for a define-compiler-macro name. Matches SBCL 2.2.9.
+  - name: makunbound-and-compiler-macro-function
+    source: |
+      (defvar *mku-a* 1)
+      (defvar *mku-b*)
+      (defparameter *mku-names* (list '*mku-a* '*mku-b*))
+      (defun mku-try (thunk)
+        (handler-case (funcall thunk)
+          (unbound-variable (c) (list :unbound (cell-error-name c)))))
+      (defun mku-a () *mku-a*)
+      (defun mku-unbind (name) (makunbound name))
+      (print (list (makunbound '*mku-a*) (boundp '*mku-a*) (mku-try #'mku-a)))
+      (setq *mku-a* 3 *mku-b* 2)
+      (print (list (boundp '*mku-a*) (mku-a)))
+      (print (let ((*mku-a* 4))
+               (mku-unbind '*mku-a*)
+               (list (boundp '*mku-a*) (mku-try #'mku-a))))
+      (print (list (mapcar #'boundp *mku-names*) (mku-a)))
+      (mapc #'makunbound *mku-names*)
+      (print (list (mapcar #'boundp *mku-names*) (eval '(boundp '*mku-a*))
+                   (mku-try (lambda () (symbol-value '*mku-b*))) (mku-try (lambda () (eval '*mku-a*)))))
+      (eval '(setq *mku-a* 7))
+      (let ((*mku-b* 5))
+        (print (list (mapcar #'boundp *mku-names*) (mku-a) *mku-b*)))
+      (print (mapcar #'boundp *mku-names*))
+      (define-compiler-macro mku-square (&whole form x)
+        (if (numberp x) (* x x) form))
+      (defun mku-square (x) (* x x))
+      (print (list (if (compiler-macro-function 'mku-square) t nil) (compiler-macro-function 'mku-a)
+                   (if (funcall #'compiler-macro-function 'mku-square) t nil) (mku-square 5)))
+    expected: |
+      (*MKU-A* NIL (:UNBOUND *MKU-A*))
+      (T 3)
+      (NIL (:UNBOUND *MKU-A*))
+      ((T T) 3)
+      ((NIL NIL) NIL (:UNBOUND *MKU-B*) (:UNBOUND *MKU-A*))
+      ((T T) 7 5)
+      (T NIL)
+      (T NIL T 25)
+
   # The tokenizer package (tokenizers.lisp, .kb/tokenizers.md): the five byte-level
   # pre-tokenizer shapes, the ranked merge loop, the special-token scan, Llama 3's
   # ignore-merges and the SentencePiece half, on all four backends. The vocabulary is

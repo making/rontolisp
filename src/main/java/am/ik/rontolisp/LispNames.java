@@ -4450,6 +4450,15 @@ public final class LispNames {
 	public static final String MACRO_FUNCTION = "MACRO-FUNCTION";
 
 	/**
+	 * The {@code compiler-macro-function} standard function: the compiler macro
+	 * {@code define-compiler-macro} registered for a name, or nil. The interpreter
+	 * answers the real expander; a compiled program has expanded its compiler macros
+	 * away, so it answers {@link #MACRO_EXPANDER_STUB} for a registered name (a prelude
+	 * defun the compile path's macro pass overrides with the program's table).
+	 */
+	public static final String COMPILER_MACRO_FUNCTION = "COMPILER-MACRO-FUNCTION";
+
+	/**
 	 * The {@code %macro-fn} internal: the compile-path body of {@link #MACRO_FUNCTION},
 	 * testing the name against the baked built-in macro table plus the program's own
 	 * macro names ({@code UserMacroExpander} passes them in).
@@ -9352,6 +9361,16 @@ public final class LispNames {
 	 * ({@code .kb/symbol-runtime-api.md}).
 	 */
 	public static final String FMAKUNBOUND = "FMAKUNBOUND";
+
+	/**
+	 * The {@code makunbound} built-in function: the symbol's current value binding -- the
+	 * active dynamic binding, else the global value -- loses its value, so {@code boundp}
+	 * answers nil and a read signals {@code unbound-variable}. The compile paths store
+	 * the UNBOUND marker into the variable
+	 * ({@code LispMacroExpander.expandMakunboundForCompile}) and take the name out of the
+	 * eval mirror ({@code .kb/dynamic-special-variables.md}).
+	 */
+	public static final String MAKUNBOUND = "MAKUNBOUND";
 
 	/**
 	 * The internal primitive behind {@code (setf (symbol-function 'f) fn)} /

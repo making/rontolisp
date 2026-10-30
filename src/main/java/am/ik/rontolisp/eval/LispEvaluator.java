@@ -1477,6 +1477,30 @@ public final class LispEvaluator {
 				return macroexpand1(macroCallForm(name, callArgs.get(0)));
 			});
 		}));
+		// compiler-macro-function: macro-function's twin over the define-compiler-macro
+		// table -- the expander (funcall f form env), or nil when the name has none.
+		this.globalEnv.defineFunction(LispNames.COMPILER_MACRO_FUNCTION,
+				new LispFunction(LispNames.COMPILER_MACRO_FUNCTION, args -> {
+					if (args.isEmpty() || args.size() > 2) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.COMPILER_MACRO_FUNCTION + " expects 1 or 2 arguments, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispSymbol sym) || !this.compilerMacros.containsKey(sym.name())) {
+						return LispNil.INSTANCE;
+					}
+					String name = sym.name();
+					return new LispFunction(LispNames.COMPILER_MACRO_FUNCTION + " " + name, callArgs -> {
+						if (callArgs.size() != 2) {
+							throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+									"a compiler macro function expects 2 arguments, got " + callArgs.size());
+						}
+						UserMacro macro = this.compilerMacros.get(name);
+						if (macro == null || !(macroCallForm(name, callArgs.get(0)) instanceof LispCons form)) {
+							return callArgs.get(0);
+						}
+						return expandMacroCall(name, macro, form);
+					});
+				}));
 		this.globalEnv.defineFunction(LispNames.SYMBOL_FUNCTION, new LispFunction(LispNames.SYMBOL_FUNCTION, args -> {
 			if (args.size() != 1) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
@@ -2576,6 +2600,26 @@ public final class LispEvaluator {
 			this.globalEnv.undefineFunction(name);
 			removeUserMacro(name);
 			return args.get(0);
+		}));
+		// makunbound: set's unbinding twin -- the CURRENT dynamic binding loses its value
+		// when one is active (the global comes back with the binding's exit), otherwise
+		// the global value is dropped. boundp then answers nil and a read signals the
+		// unbound-variable. Answers the symbol.
+		this.globalEnv.defineFunction(LispNames.MAKUNBOUND, new LispFunction(LispNames.MAKUNBOUND, args -> {
+			requireSingleArg(LispNames.MAKUNBOUND, args);
+			if (!(args.get(0) instanceof LispSymbol sym)) {
+				throw new LispEvalException(LispNames.MAKUNBOUND + " expects a symbol, got " + args.get(0).print());
+			}
+			if (sym.isKeyword() || sym.name().isEmpty() || LispNames.PACKAGE_VAR.equals(sym.name())) {
+				throw new LispEvalException(LispNames.MAKUNBOUND + " cannot make " + sym.print() + " unbound");
+			}
+			if (this.dynamicBindings.isBound(sym.name())) {
+				this.dynamicBindings.unbindCurrent(sym.name());
+			}
+			else {
+				this.globalEnv.undefine(sym.name());
+			}
+			return sym;
 		}));
 		// (setf (symbol-function 'f) fn) / (setf (fdefinition 'f) fn) lower here:
 		// install fn as f's global function binding -- fmakunbound's write-side twin,
@@ -10295,6 +10339,16 @@ public final class LispEvaluator {
 	 */
 	public List<String> userMacroNames() {
 		return this.userMacros.keySet().stream().sorted().toList();
+	}
+
+	/**
+	 * Returns the names {@code define-compiler-macro} registered, sorted -- the table
+	 * {@code UserMacroExpander} bakes into a compiled program for
+	 * {@code compiler-macro-function}.
+	 * @return the sorted compiler macro names
+	 */
+	public List<String> compilerMacroNames() {
+		return this.compilerMacros.keySet().stream().sorted().toList();
 	}
 
 	/**
