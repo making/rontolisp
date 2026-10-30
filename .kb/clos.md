@@ -108,6 +108,17 @@ so `#'name`/`funcall`/`mapcar` work with no `BuiltinFunctionWrappers` entry.
   `defconstant` name -> literal value table (`registerConstant`/`findConstant`) filled in
   DEFINITION ORDER. `parseEqlSpecializerValue` consults it for a BARE symbol only; `(eql 'x)`
   is the symbol, and a bare symbol naming no constant stands for itself.
+  `(eql (find-class 'c))` (and `(eql #<class>)`) is the one COMPUTED form accepted: the eql
+  value stays the `(find-class 'c)` form and `makeEqlSpecializerTest` emits
+  `(eq arg (find-class 'c))` -- find-class is memoized, so re-evaluating it per call compares
+  against the definition-time object. `c` must resolve at definition time.
+- **Metaclass specializers**: `parseSpecializer` seeds the MOP classes for `class` /
+  `standard-class` (`ensureMopClassesSeededFor`, like a type specifier) so they become CLASS
+  specializers matching every class metaobject (built-in classes included);
+  `structure-class` / `built-in-class` are TYPE specializers with the empty test. A class
+  OBJECT in specializer position (serapeum's `#.(class-of ...)`) is read as its slot-0 name
+  (`classMetaobjectName`; the literal comes from the macro-time evaluator, so the tag is
+  checked by name, not only via this registry). ci-spec: `clos-slot-options-and-metaobject-types`.
 
 ### The two dispatch bodies
 - `simpleDispatchBody` (one call per branch) when the generic has NO qualifier and NO
