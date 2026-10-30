@@ -1,6 +1,7 @@
 package am.ik.rontolisp.clojure;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -54,7 +55,7 @@ final class ClojureCoreMacros {
 			out.put(macro, "expand-" + macro);
 		}
 		out.put("..", "expand-dotdot");
-		return Map.copyOf(out);
+		return Collections.unmodifiableMap(out);
 	}
 
 	/**
