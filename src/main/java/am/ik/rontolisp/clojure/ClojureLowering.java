@@ -2901,14 +2901,15 @@ public final class ClojureLowering {
 	/**
 	 * Whether a redefinition re-points the function cells the calls lowered before it
 	 * name, so it reaches every caller, as the oracle's calls through the var do: an
-	 * incremental lowering (a session's buffer, a datum lowered as the program runs)
-	 * whose target resolves a function when the call runs -- the interpreter; a compiled
-	 * class links its calls when it is compiled ({@link #carriesRuntimes}). A call costs
-	 * what it did: the cell it reads is the one the redefinition stores.
+	 * incremental lowering (a session's buffer, a datum lowered as the program runs). On
+	 * the interpreter a call resolves the cell's function when it runs, so a call costs
+	 * what it did; a JVM class that lowers as it runs ({@link #carriesRuntimes}) calls
+	 * each function a redefinition may re-point through the cell its class keeps for it
+	 * ({@link #define}'s {@code notinline} declaration).
 	 * @return {@code true} where a redefinition re-points its callers
 	 */
 	boolean repointsRedefinitions() {
-		return this.incremental && !this.carriesRuntimes;
+		return this.incremental;
 	}
 
 	/**
@@ -2918,10 +2919,14 @@ public final class ClojureLowering {
 	 * @param fn the function cell it defines its function under: the bare var symbol for
 	 * the first, a fresh one per redefinition ({@link #defnSym}), so the replaced
 	 * function is still bound while the definition validates and notifies
+	 * @param declared what goes ahead of the definition: where a compiled class lowers as
+	 * it runs ({@link #carriesRuntimes}), the {@code notinline} declaration of a function
+	 * a later redefinition may re-point, whose calls by name the class then routes
+	 * through the function's cell
 	 * @param repoints what points the cells earlier calls name at the new function, once
 	 * it is defined: none unless the lowering re-points redefinitions
 	 */
-	record Definition(int number, LispSymbol fn, List<LispVal> repoints) {
+	record Definition(int number, LispSymbol fn, List<LispVal> declared, List<LispVal> repoints) {
 	}
 
 	/**
@@ -2932,18 +2937,30 @@ public final class ClojureLowering {
 	Definition define(String key) {
 		int number = this.defnCounts.merge(key, 1, Integer::sum);
 		LispSymbol fn = defnSym(key, number);
-		if (!repointsRedefinitions()) {
+		boolean pinning = !repointsRedefinitions();
+		if (pinning) {
 			this.pinnedDefnCounts.put(key, number);
-			return new Definition(number, fn, List.of());
 		}
-		return new Definition(number, fn,
-				number > 1 ? repointed(key, ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn)) : List.of());
+		// the functions a redefinition re-points (repointed): every version a pinning
+		// pass defines, and a re-pointing lowering's first definition of a name
+		List<LispVal> declared = List.of();
+		if (this.carriesRuntimes && (pinning || number == 1)) {
+			declared = List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("declaim"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("notinline"), fn)));
+		}
+		List<LispVal> repoints = List.of();
+		if (!pinning && number > 1) {
+			repoints = repointed(key, ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn));
+		}
+		return new Definition(number, fn, declared, repoints);
 	}
 
 	/**
 	 * The stores pointing every function cell a call of the var may name -- the bare var
 	 * symbol and each version a pinning pass lowered calls of -- at a function, for a
-	 * lowering that re-points redefinitions.
+	 * lowering that re-points redefinitions: {@code (setf (symbol-function 'cell) fn)},
+	 * where a compiled class lowers as it runs the store of the cell its class keeps
+	 * ({@code rontolisp::%run-time-redefine}).
 	 * @param key the var key
 	 * @param function the lowered function
 	 * @return the stores
@@ -2952,11 +2969,11 @@ public final class ClojureLowering {
 		List<LispVal> stores = new ArrayList<>();
 		int pinned = Math.max(1, this.pinnedDefnCounts.getOrDefault(key, 0));
 		for (int version = 1; version <= pinned; version++) {
-			stores
-				.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("symbol-function"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), defnSym(key, version))),
-						function));
+			LispVal cell = ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), defnSym(key, version));
+			stores.add(this.carriesRuntimes
+					? ClojureLowerUtil.list(new LispSymbol(LispNames.RUN_TIME_REDEFINE_QUALIFIED), cell, function)
+					: ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("symbol-function"), cell), function));
 		}
 		return stores;
 	}

@@ -1245,8 +1245,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A nested defun a run-time name can reach (a computed name, fmakunbound, eval)
 		// lives in the run-time function namespace instead of its global, so every
 		// reference reads it from there as for a setf-only symbol-function name
-		// (compiler/NestedDefunNamespace).
-		Set<String> namespaceNestedDefuns = NestedDefunNamespace.heldNames(program);
+		// (compiler/NestedDefunNamespace). Not in a host or a fragment: a Clojure program
+		// names a function at run time only through a lowering verb, whose fragment
+		// links the name at compile time, and the global is a field every later class
+		// shares (JvmLinkage.Global#nestedDefun) where the namespace is not.
+		Set<String> namespaceNestedDefuns = this.runTimeImage != null || this.fragment != null ? Set.of()
+				: NestedDefunNamespace.heldNames(program);
 		fenvForwarders.addAll(namespaceNestedDefuns);
 		program = NestedDefunRedefinition.rewrite(program, namespaceNestedDefuns);
 		// Whether an instance value can exist in this class at all. The predicates and
@@ -2237,10 +2241,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// with none its indices.
 		globals.addAll(GlobalVarCollector.collectFreeAssigned(program));
 		if (linked != null) {
-			// a global of a class before this one, read and assigned through its field
-			for (String g : linked.linked().globals().keySet()) {
-				if (linkedNames.contains(g)) {
-					globals.add(g);
+			// a global of a class before this one, read and assigned through its field --
+			// the function of a defun it nested below the top level too, which this
+			// class's calls, #'name and redefinition read and store as their own
+			for (Map.Entry<String, JvmLinkage.Global> g : linked.linked().globals().entrySet()) {
+				if (linkedNames.contains(g.getKey())) {
+					globals.add(g.getKey());
+					if (g.getValue().nestedDefun()) {
+						nestedDefunNames.add(g.getKey());
+					}
 				}
 			}
 		}
@@ -2386,6 +2395,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		final int funcIdBase = linked != null ? linked.funcIdBase() : 0;
 		int[] nextFuncId = { funcIdBase };
 		Map<String, FunctionInfo> functions = new HashMap<>();
+		// A linked class calls a notinline function by name through its cell, which a
+		// redefinition lowered as the program runs sets (JvmFunctionCell); an ordinary
+		// class binds every call.
+		Set<String> notinline = linkedClass ? JvmFunctionCell.notinlineNames(program) : Set.of();
 		for (DefunDecl defun : defuns) {
 			int funcId = nextFuncId[0]++;
 			boolean bounces = bouncingDefuns.contains(defun.name);
@@ -2394,8 +2407,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			Utf8Entry nameUtf8 = cp.utf8Entry(mangleMethodName(defun.name));
 			Utf8Entry descUtf8 = cp.utf8Entry(descriptor);
 			MethodRefEntry methodref = cp.methodRef(thisClass, nameUtf8, descUtf8);
-			functions.put(defun.name, new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, defun.optionals,
-					false, methodref, nameUtf8, descUtf8, bounces));
+			functions.put(defun.name,
+					new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, defun.optionals, false, methodref,
+							nameUtf8, descUtf8, bounces,
+							notinline.contains(defun.name) ? functionCell(cp, thisClass, defun.name, descUtf8) : null));
 		}
 		Map<String, JvmLinkage.Function> externals = new LinkedHashMap<>(externalFunctions);
 		externals.putAll(externalWrappers);
@@ -2407,10 +2422,12 @@ public final class JvmLispCompiler implements LispCompiler {
 					+ ")Ljava/lang/Object;";
 			Utf8Entry nameUtf8 = cp.utf8Entry(mangleMethodName(external.getKey()));
 			Utf8Entry descUtf8 = cp.utf8Entry(descriptor);
+			// a notinline one's cell is its class's field, linked here
 			functions.put(external.getKey(),
 					new FunctionInfo(nextFuncId[0]++, fn.paramCount(), fn.variadic(), fn.optionals(), false,
 							cp.methodRef(cp.classEntry(fn.owner()), nameUtf8, descUtf8), nameUtf8, descUtf8,
-							fn.bounces()));
+							fn.bounces(),
+							fn.celled() ? functionCell(cp, thisClass, external.getKey(), descUtf8) : null));
 		}
 		Map<String, JvmTailGroup.Member> defunMembers = new HashMap<>();
 		for (JvmTailGroup group : defunGroups) {
@@ -3283,7 +3300,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// Any lambda may answer a bounce: a tail through a value, or a named callee's
 			// passed on.
 			FunctionInfo fi = new FunctionInfo(lambda.funcId, lambda.paramNames.size(), lambda.variadic,
-					lambda.optionals, true, methodref, nameUtf8, descUtf8, true);
+					lambda.optionals, true, methodref, nameUtf8, descUtf8, true, null);
 			lambdaFuncInfos.add(fi);
 
 			Ctx lambdaCtx = ctxBuilder.build();
@@ -3371,7 +3388,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				Utf8Entry plainUtf8 = cp.utf8Entry(plain);
 				lambdaFuncInfos.set(lambdaIdx,
 						new FunctionInfo(lambda.funcId, lambda.paramNames.size(), lambda.variadic, lambda.optionals,
-								true, cp.methodRef(thisClass, nameUtf8, plainUtf8), nameUtf8, plainUtf8, false));
+								true, cp.methodRef(thisClass, nameUtf8, plainUtf8), nameUtf8, plainUtf8, false, null));
 				lambda.madeIn().retargetValueOf(lambda.methodName, descriptor, plain);
 			}
 			lambdaCtxs.add(lambdaCtx);
@@ -3444,9 +3461,13 @@ public final class JvmLispCompiler implements LispCompiler {
 				exported.add(decl.name());
 			}
 			for (JvmTailGroup group : tailGroups) {
+				// a call of a notinline member by name names its entry, which calls the
+				// member (JvmFunctionCell)
 				group.finish(this.className, HUGE_METHOD_LIMIT,
 						member -> member.function != null
 								&& (calledEntries.contains(member.function.methodref().index())
+										|| member.function.cell() != null && calledEntries
+											.contains(Objects.requireNonNull(member.function.cell()).named().index())
 										|| exported.contains(member.name)));
 			}
 		}
@@ -4840,6 +4861,30 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
 					table.setName(), table.setDesc(), table.setCode());
 		}
+		// The cell of each notinline function the class defines, and the named entry of
+		// each it calls by name (JvmFunctionCell) -- built before the UNSUPPLIED marker
+		// closes, an entry over optionals reads it -- in definition order, so one
+		// program's class is one sequence of bytes. The shake drops an entry no body
+		// calls. A cell is volatile like the oracle's var root: a redefinition on one
+		// thread reaches a loop of calls on another.
+		for (DefunDecl defun : defuns) {
+			FunctionInfo fi = Objects.requireNonNull(functions.get(defun.name));
+			JvmFunctionCell cell = fi.cell();
+			if (cell != null) {
+				definition.addField(AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, cell.field().name(),
+						cell.field().type());
+				definition.addMethod(AccessFlag.ACC_STATIC, cell.named().name(), cell.named().type(),
+						cell.namedEntryBody(fi, cp, thisClass, mainCtx.unsupplied));
+			}
+		}
+		for (String name : externalFunctions.keySet()) {
+			FunctionInfo fi = Objects.requireNonNull(functions.get(name));
+			JvmFunctionCell cell = fi.cell();
+			if (cell != null) {
+				definition.addMethod(AccessFlag.ACC_STATIC, cell.named().name(), cell.named().type(),
+						cell.namedEntryBody(fi, cp, thisClass, mainCtx.unsupplied));
+			}
+		}
 		// The UNSUPPLIED marker (JvmUnsupplied): its field and the two helpers that
 		// create it on first use, in a class with a callee that takes physical
 		// optionals. Every body and dispatcher is built by now, so nothing may reference
@@ -5534,7 +5579,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			addModeIf(modes, JvmLinkage.Mode.INT_ARRAYS, usesIntArray);
 			addModeIf(modes, JvmLinkage.Mode.COMPLEX, usesComplex);
 			this.linkTable = ownLinkTable(programDefunNames, wrapperNames, functions, globals, specialVars,
-					dynVarRuntime != null ? boundSpecialVars : Set.of(), checkedGlobals, nextFuncId[0], definition)
+					dynVarRuntime != null ? boundSpecialVars : Set.of(), checkedGlobals, nestedDefunNames,
+					nextFuncId[0], definition)
 				.merge(new JvmLinkage.Table(Map.of(), Map.of(), Map.of(), 0, linkedClasses(closRegistry), modes));
 		}
 		if (this.runTimeImage != null) {
@@ -6135,27 +6181,41 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
+	 * The cell of a {@code notinline} function of a linked class and this class's named
+	 * entry for it ({@link JvmFunctionCell}): the field of the class declaring the
+	 * function -- this one's, or, linked, the class before it that declares it -- and the
+	 * entry, of the function's descriptor.
+	 */
+	private static JvmFunctionCell functionCell(ConstantPool cp, ClassEntry thisClass, String name,
+			Utf8Entry descUtf8) {
+		return new JvmFunctionCell(cp.fieldRef(thisClass, JvmLinkage.cellField(name), JvmLinkage.CELL_DESC),
+				cp.methodRef(thisClass, cp.utf8Entry(JvmLinkage.namedEntry(name)), descUtf8));
+	}
+
+	/**
 	 * The table of what this class defines for a later fragment to link against: its
 	 * functions (the defuns it compiled, and the built-in wrappers it injected, as
-	 * wrappers), its global variables and how each is stored, and the end of its function
-	 * ids.
+	 * wrappers), its global variables and how each is stored (a global of a class before
+	 * it again where this class's defun below the top level makes it hold a function),
+	 * and the end of its function ids.
 	 */
 	private JvmLinkage.Table ownLinkTable(Set<String> programDefunNames, Set<String> wrapperNames,
 			Map<String, FunctionInfo> functions, Set<String> globals, Set<String> specialVars, Set<String> threadBound,
-			Set<String> checkedGlobals, int funcIdEnd, ClassDefinition.Builder definition) {
+			Set<String> checkedGlobals, Set<String> nestedDefunNames, int funcIdEnd,
+			ClassDefinition.Builder definition) {
 		Map<String, JvmLinkage.Function> fns = new LinkedHashMap<>();
 		for (String name : programDefunNames) {
 			FunctionInfo fi = functions.get(name);
 			if (fi != null) {
 				fns.put(name, new JvmLinkage.Function(this.className, fi.paramCount(), fi.variadic(), fi.optionals(),
-						fi.bounceVisible(), fi.funcId(), false));
+						fi.bounceVisible(), fi.funcId(), fi.cell() != null, false));
 			}
 		}
 		for (String name : wrapperNames) {
 			FunctionInfo fi = functions.get(name);
 			if (fi != null && !fns.containsKey(name)) {
 				fns.put(name, new JvmLinkage.Function(this.className, fi.paramCount(), fi.variadic(), fi.optionals(),
-						fi.bounceVisible(), fi.funcId(), true));
+						fi.bounceVisible(), fi.funcId(), false, true));
 			}
 		}
 		Map<String, String> fields = new LinkedHashMap<>();
@@ -6167,11 +6227,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		Map<String, JvmLinkage.Global> gs = new LinkedHashMap<>();
 		JvmLinkage.Fragment linked = this.fragment;
 		for (String g : globals) {
-			if (linked != null && linked.linked().globals().containsKey(g)) {
-				continue;
+			boolean nested = nestedDefunNames.contains(g);
+			JvmLinkage.Global before = linked != null ? linked.linked().globals().get(g) : null;
+			if (before == null) {
+				gs.put(g, new JvmLinkage.Global(this.className, specialVars.contains(g), threadBound.contains(g),
+						checkedGlobals.contains(g), nested));
 			}
-			gs.put(g, new JvmLinkage.Global(this.className, specialVars.contains(g), threadBound.contains(g),
-					checkedGlobals.contains(g)));
+			else if (nested && !before.nestedDefun()) {
+				gs.put(g, new JvmLinkage.Global(before.owner(), before.special(), before.threadBound(),
+						before.checked(), true));
+			}
 		}
 		return new JvmLinkage.Table(fns, gs, fields, funcIdEnd, Map.of(), Set.of());
 	}
@@ -7142,10 +7207,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * marker, {@link JvmPhysicalArgs}), and the callable minimum is {@link #required()}
 	 * arguments. A function whose method may answer a trampoline bounce
 	 * ({@code bounceVisible}: the defuns {@link JvmTailBounce} finds, a lambda whose body
-	 * reads its depth) takes one {@code int} more after them, the value-tail depth.
+	 * reads its depth) takes one {@code int} more after them, the value-tail depth. A
+	 * {@code notinline} function of a linked class has a {@code cell}, which a call of it
+	 * by name reads ({@link JvmFunctionCell}).
 	 */
 	record FunctionInfo(int funcId, int paramCount, boolean variadic, int optionals, boolean isClosure,
-			MethodRefEntry methodref, Utf8Entry nameUtf8, Utf8Entry descUtf8, boolean bounceVisible) {
+			MethodRefEntry methodref, Utf8Entry nameUtf8, Utf8Entry descUtf8, boolean bounceVisible,
+			@Nullable JvmFunctionCell cell) {
 
 		/**
 		 * {@return the arguments a call must pass at least}

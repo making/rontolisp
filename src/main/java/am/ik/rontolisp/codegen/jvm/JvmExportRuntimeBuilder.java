@@ -224,7 +224,12 @@ final class JvmExportRuntimeBuilder {
 		boolean needBytesOut = false;
 		for (JvmExportDirective decl : decls) {
 			JvmLispCompiler.FunctionInfo function = java.util.Objects.requireNonNull(functions.get(decl.name()));
-			methods.add(buildWrapper(cp, decl, function.methodref(), function.bounceVisible(), refs, mvChannel));
+			// Java calls the function by name: a notinline one of a linked class through
+			// its
+			// named entry, which reaches a redefinition (JvmFunctionCell)
+			JvmFunctionCell cell = function.cell();
+			methods.add(buildWrapper(cp, decl, cell != null ? cell.named() : function.methodref(),
+					function.bounceVisible(), refs, mvChannel));
 			for (BoundaryType t : decl.paramTypes()) {
 				needArgGuard |= t == BoundaryType.U8 || t == BoundaryType.U16 || t == BoundaryType.U32
 						|| t == BoundaryType.U64;

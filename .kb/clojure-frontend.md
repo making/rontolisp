@@ -125,7 +125,7 @@ answered `2 5 3` before).
 |---|---|---|
 | `defn` | `defun` of the mangled name, called directly | keeps the direct call and the tree shaker. Several arities: one `c%f%N` `defun` per arity (`%*` variadic) plus a dispatch `defun`; a wrong count signals the oracle's `Wrong number of args (N) passed to: ns/f` ("Arity refusals"); at most one variadic clause and one clause per arity. In a body: statement position only, every form behind a `progn` -- each arity's and the dispatch `defun` nested ones, defined when the body runs (`defnInBody`; medley's `(letfn [...] (defn map-padded ...))`, refused until 2026-10-12). A condition map (`:pre`/`:post`, the body's first map or the parameter vector's metadata) rewrites the clause's body datums (`ClojureBindingLowering.conditioned`): each `:pre` a `clojure.core/assert`, `:post` a `clojure.core/let` of `%` over the body; every fn-shaped `clause` (fn, defn, letfn, defmacro, defmethod, a protocol extension's fn), never an inline method (tools.cli's `compile-option-specs`; until 2026-10-12 the map was a statement and `%` unknown) |
 | `definline` | `defn` with the head rewritten: the inline body is a documented no-op (nothing here inlines call sites), so the definition is the function itself (g25, clojure-spec `definline-defines-a-function-like-defn`) | same arities, direct calls, values and forward uses as `defn`; as a value unknown like every macro (g16, still open) |
-| redefined `defn` | a fresh internal name per definition: the first keeps the bare name, later ones `%defN` | call sites below each definition call the newest; a value position (`#'f`, `(def g f)`) captures the one current there. Each namespace versions its own names; a session keeps the counts. In a session or a datum lowered as an interpreter program runs, the redefinition also re-points the cells earlier calls name (`.kb/nrepl.md`, "Redefinition in an open lowering") |
+| redefined `defn` | a fresh internal name per definition: the first keeps the bare name, later ones `%defN` | call sites below each definition call the newest; a value position (`#'f`, `(def g f)`) captures the one current there. Each namespace versions its own names; a session keeps the counts. In a session or a datum lowered as the program runs, the redefinition also re-points the cells earlier calls name (`.kb/nrepl.md`, "Redefinition in an open lowering"; a JVM host's, `.kb/jvm-run-time-lowering.md`, "Redefinition") |
 | a call to a `VARIABLE`-kind head | `funcall` of the value cell when it holds a real function (a `let` binding of one, a `def`'d one), else `rontolisp::%clojure-call` | the dispatcher applies functions and looks up collections, like `IFn`, so a parameter may hold a set or map; a `declare`d-never-defined name (`Kind.DECLARED`) calls its unbound root through the dispatcher (the oracle's `Attempting to call unbound fn`); a session keeps it a direct call, since a later buffer may define it |
 | a call whose head is a compound form (`((fn ...) x)`, `((set v) x)`, `((first ks) m)`) | `funcall` when the head lowers to a `function`/`lambda`, else `rontolisp::%clojure-call` | a call result may be a set, map, vector or keyword, which the dispatcher looks up like `IFn`; a collection literal head and a `#'f` head keep their own rows |
 | a call to a core name the program defines or binds | the program's call | `call` checks `known(name)` before the core rows |
@@ -4320,11 +4320,12 @@ library splices the hand-off to the compiler it carries in its place.
   is (g90: spec.alpha's gen requires `(c/symbol ns)` under `(alias 'c 'clojure.core)`; it
   read the prefix list `c/symbol`). A bare unknown symbol, vector or prefix list stays the
   leniency's spec.
-- Redefinition: on the interpreter a datum's `defn` (or `def`) over a defn re-points every
-  cell the program's calls name, so it reaches every caller, the oracle's calls through the
-  var, at no cost per call -- measured against calls through the var's cell before choosing
-  (`.kb/nrepl.md`, "Redefinition in an open lowering"). A JVM fragment's definition reaches
-  only the forms lowered after it (`.kb/jvm-run-time-lowering.md`, Limits; `.todo/h14`).
+- Redefinition: a datum's `defn` (or `def`) over a defn re-points every cell the program's
+  calls name, so it reaches every caller, the oracle's calls through the var: on the
+  interpreter at no cost per call -- measured against calls through the var's cell before
+  choosing (`.kb/nrepl.md`, "Redefinition in an open lowering") -- and in a JVM host through
+  the cell each such function's class keeps (`.kb/jvm-run-time-lowering.md`,
+  "Redefinition").
 - Deviations: a quoted `resolve` answers at lower time; `in-ns` answers nil; a verb taken
   out of a namespace's mapping (`@(get (ns-map 'user) 'eval)`) and called over computed
   arguments refuses, as on wasm, unless something else opened the program. Measured against

@@ -539,6 +539,7 @@ final class ClojureBindingLowering {
 		forms.add(ClojureValueMethodLowering.noteFnClass(ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
 				key));
 		forms.addAll(0, metaStore); // ahead, so the definition still answers the form
+		forms.addAll(0, defined.declared());
 		return forms;
 	}
 

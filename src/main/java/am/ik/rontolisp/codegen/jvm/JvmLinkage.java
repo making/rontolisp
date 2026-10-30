@@ -34,13 +34,15 @@ public final class JvmLinkage {
 	 * @param optionals its physical optionals
 	 * @param bounces whether it takes the value-tail depth and may answer a bounce
 	 * @param id the id its function values carry, which its class's dispatchers take
+	 * @param celled whether it is declared {@code notinline}: a call of it by name reads
+	 * its cell ({@link #cellField}), which a redefinition sets
 	 * @param wrapper whether it is a built-in's function value the class injected (a
 	 * wrapper), not a definition of the program: a later fragment takes the value from
 	 * the class and generates no wrapper of its own, while a call of the name stays the
 	 * built-in's
 	 */
 	public record Function(String owner, int paramCount, boolean variadic, int optionals, boolean bounces, int id,
-			boolean wrapper) {
+			boolean celled, boolean wrapper) {
 	}
 
 	/**
@@ -50,8 +52,11 @@ public final class JvmLinkage {
 	 * @param special whether it is special (a binding of it is dynamic)
 	 * @param threadBound whether a binding of it goes through its {@code _d$} ThreadLocal
 	 * @param checked whether a read of it checks for the unbound marker
+	 * @param nestedDefun whether it holds the function a {@code defun} below the top
+	 * level defines, which a later fragment's call, {@code #'name} and redefinition of
+	 * the name then read and store
 	 */
-	public record Global(String owner, boolean special, boolean threadBound, boolean checked) {
+	public record Global(String owner, boolean special, boolean threadBound, boolean checked, boolean nestedDefun) {
 	}
 
 	/**
@@ -205,7 +210,7 @@ public final class JvmLinkage {
 			this.functions.forEach((name, fn) -> {
 				String owner = declaring.get(methodName(name) + descriptor(fn));
 				fns.put(name, owner == null ? fn : new Function(owner, fn.paramCount(), fn.variadic(), fn.optionals(),
-						fn.bounces(), fn.id(), fn.wrapper()));
+						fn.bounces(), fn.id(), fn.celled(), fn.wrapper()));
 			});
 			return new Table(fns, this.globals, this.fields, this.funcIdEnd, this.classes, this.modes);
 		}
@@ -225,13 +230,15 @@ public final class JvmLinkage {
 				fields.add(name);
 				fields.add(fn.owner());
 				fields.add(fn.paramCount() + "," + fn.optionals() + "," + (fn.variadic() ? 1 : 0) + ","
-						+ (fn.bounces() ? 1 : 0) + "," + fn.id() + "," + (fn.wrapper() ? 1 : 0));
+						+ (fn.bounces() ? 1 : 0) + "," + fn.id() + "," + (fn.celled() ? 1 : 0) + ","
+						+ (fn.wrapper() ? 1 : 0));
 			});
 			fields.add(Integer.toString(this.globals.size()));
 			new TreeMap<>(this.globals).forEach((name, g) -> {
 				fields.add(name);
 				fields.add(g.owner());
-				fields.add((g.special() ? "s" : "") + (g.threadBound() ? "t" : "") + (g.checked() ? "c" : "") + ".");
+				fields.add((g.special() ? "s" : "") + (g.threadBound() ? "t" : "") + (g.checked() ? "c" : "")
+						+ (g.nestedDefun() ? "f" : "") + ".");
 			});
 			fields.add(Integer.toString(this.fields.size()));
 			new TreeMap<>(this.fields).forEach((field, owner) -> {
@@ -281,7 +288,7 @@ public final class JvmLinkage {
 				functions.put(name,
 						new Function(owner, Integer.parseInt(shape[0]), shape[2].equals("1"),
 								Integer.parseInt(shape[1]), shape[3].equals("1"), Integer.parseInt(shape[4]),
-								shape[5].equals("1")));
+								shape[5].equals("1"), shape[6].equals("1")));
 			}
 			Map<String, Global> globals = new LinkedHashMap<>();
 			int globalCount = Integer.parseInt(in.next());
@@ -289,7 +296,8 @@ public final class JvmLinkage {
 				String name = in.next();
 				String owner = in.next();
 				String flags = in.next();
-				globals.put(name, new Global(owner, flags.contains("s"), flags.contains("t"), flags.contains("c")));
+				globals.put(name, new Global(owner, flags.contains("s"), flags.contains("t"), flags.contains("c"),
+						flags.contains("f")));
 			}
 			Map<String, String> fields = new LinkedHashMap<>();
 			int fieldCount = Integer.parseInt(in.next());
@@ -343,18 +351,45 @@ public final class JvmLinkage {
 	/**
 	 * Whether a later class shares a static field of this name with the class declaring
 	 * it rather than declaring its own: a global variable's ({@code _g$}), a special's
-	 * per-thread binding ({@code _d$}), an instance layout ({@code _ly$}), and the
-	 * run-time state a value or a condition carries from one class into another -- the
-	 * stream table, the output column, the gensym counter, the condition, non-local exit
-	 * and wrong-type channels, the unbound and unsupplied markers, the multiple-value
-	 * register, the thread handle cache.
+	 * per-thread binding ({@code _d$}), an instance layout ({@code _ly$}), a function's
+	 * cell ({@link #cellField}), and the run-time state a value or a condition carries
+	 * from one class into another -- the stream table, the output column, the gensym
+	 * counter, the condition, non-local exit and wrong-type channels, the unbound and
+	 * unsupplied markers, the multiple-value register, the thread handle cache.
 	 * @param name a static field's name
 	 * @return whether it is shared
 	 */
 	public static boolean shared(String name) {
 		return name.startsWith("_g$") || name.startsWith("_d$") || name.startsWith("_ly$")
-				|| SHARED_STATE.contains(name);
+				|| name.startsWith(CELL_PREFIX) || SHARED_STATE.contains(name);
 	}
+
+	/**
+	 * The static field a {@code notinline} function's class declares for it in a linked
+	 * class: null until a redefinition stores the function every call of it by name then
+	 * reaches ({@code (rontolisp::%run-time-redefine 'name fn)}).
+	 * @param name the function's canonical name
+	 * @return the field's name
+	 */
+	public static String cellField(String name) {
+		return CELL_PREFIX + methodName(name);
+	}
+
+	/** A function cell's descriptor ({@link #cellField}). */
+	public static final String CELL_DESC = "Ljava/lang/Object;";
+
+	/**
+	 * The static method a linked class calls a {@code notinline} function by name
+	 * through, one per class calling it: the function's own method while its cell is
+	 * null, the function in the cell once a redefinition set it.
+	 * @param name the function's canonical name
+	 * @return the method's name
+	 */
+	public static String namedEntry(String name) {
+		return "_n$" + methodName(name);
+	}
+
+	private static final String CELL_PREFIX = "_fc$";
 
 	private static final Set<String> SHARED_STATE = Set.of("_stdinReader", "_streams", "_streamCount", "_streamPaths",
 			"_streamPositions", "_col", "_gensymCtr", "_condTl", "_hcDepthTl", "_nleTl", "_teTl", "_jexMap", "_jsigTl",
@@ -471,7 +506,7 @@ public final class JvmLinkage {
 	 */
 	public static final String CONSTANTS_FIELD = "_constants";
 
-	private static final String VERSION = "rontolisp-link-4";
+	private static final String VERSION = "rontolisp-link-5";
 
 	private static final class Fields {
 

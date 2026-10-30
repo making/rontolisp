@@ -581,6 +581,12 @@ final class JvmTailGroup {
 			emitters.add(() -> JvmExprCompiler.compileExpr(arg, ctx, className));
 		}
 		JvmPhysicalArgs.emit(ctx, className, target.required(), target.optionals(), target.variadic(), emitters);
+		JvmLispCompiler.FunctionInfo function = target.function;
+		if (function != null && target.variable == null) {
+			// A redefinition of a notinline sibling reaches the tail call: the call takes
+			// the new function instead of the jump (JvmFunctionCell).
+			JvmFunctionCell.emitRedefinedExit(function, ctx);
+		}
 		String variable = target.variable;
 		if (variable != null) {
 			JvmExprCompiler.compileExpr(new LispSymbol(variable), ctx, className);

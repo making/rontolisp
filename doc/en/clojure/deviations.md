@@ -350,11 +350,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   resolves. A name the program only declares and such a call defines answers the program's
   own forms from then on, as the oracle's. Such a call lowers like one REPL input, in
   the namespace `*ns*` holds:
-  what it defines joins the program for the later calls and inputs. On the interpreter a
-  redefined `defn` reaches every caller, as in the REPL; a JVM class's own compiled forms
-  keep calling the definition they were compiled against. A name only such a call defines is
-  unknown to the program's own forms (an `intern` of a quoted name is not: it defines the var
-  where it stands). A program that may make such a call as it runs -- the call itself, or
+  what it defines joins the program for the later calls and inputs, and a redefined `defn`
+  reaches every caller, as in the REPL, on the interpreter and in a JVM class alike. A name
+  only such a call defines is unknown to the program's own forms (an `intern` of a quoted
+  name is not: it defines the var where it stands). A program that may make such a call as
+  it runs -- the call itself, or
   the verb taken as a value or as a var -- lowers open, like a session, so its protocols
   dispatch through the class walk and a name it only declares stays open. A call in a macro
   body, or in a function only macro bodies call, runs while the program lowers and opens it
