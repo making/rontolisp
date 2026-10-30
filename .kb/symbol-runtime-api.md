@@ -71,9 +71,10 @@ literals.
   nil before an intern and the symbol after hold there too). What the registry KNOWS a baked
   package reaches -- an import, a re-export, a `:use`-inherited symbol, a recorded own member
   (`:shadow`, `:intern`) -- answers as on the interpreter, literal or computed
-  (`.kb/packages.md`, "Compiled lookups answer through the registry"). Two deviations for
-  the rest: an unknown name yields a symbol instead of nil, and the qualifier is the
-  single-colon EXTERNAL spelling. **The first is NOT harmless in the `find-symbol` ->
+  (`.kb/packages.md`, "Compiled lookups answer through the registry"). For the rest the
+  build answers: `PKG::NAME :internal` in a package the program defines (its exports are row
+  entries, `.kb/packages.md`), `PKG:NAME :external` in a pre-seeded one. The deviation left:
+  an unknown name yields a symbol instead of nil. **It is NOT harmless in the `find-symbol` ->
   `symbol-function` idiom**: sxql's `find-make-op` probes with `:errorp nil` expecting nil, so
   every sxql SQL FUNCTION operator dies on JVM and WASM while the interpreter is correct. The
   honest fix is symbol IDENTITY. Tripwire:
@@ -469,8 +470,9 @@ A computed NAME lowers to `(intern name)` (`LispMacroExpander.computedFindSymbol
 IS the lookup — carrying the unknown-name-yields-a-symbol deviation. A computed PACKAGE
 designator builds the spelling through a runtime test of the three packages whose members carry
 no qualifier (`computedQualifiedSpelling`: `keyword` -> `:NAME`, `cl`/`cl-user` -> bare,
-anything else -> `PKG:NAME`); unconditionally prefixing `(string PKG)` built `KEYWORD:X` instead
-of the keyword `:X`. Before either build, a package the registry knows to reach the name
+anything else -> `PKG:NAME`, or `K::NAME` under the found package's own name when
+`%program-package-p` says the program defines it); unconditionally prefixing `(string PKG)`
+built `KEYWORD:X` instead of the keyword `:X`. Before either build, a package the registry knows to reach the name
 another way answers it (`%baked-access`, `.kb/packages.md` "Compiled lookups answer through
 the registry"), and a standard name a package using `cl` inherits answers the `cl` symbol
 (`.kb/packages.md`, "The standard names at run time").
@@ -558,13 +560,16 @@ symbol-to-function route (the interpreter resolves designators against the live 
   `{LispEvaluatorTest,JvmLispCompilerTest,WasmLispCompilerIntegrationTest}#internIntoAMissingPackage*`.
 - **Alias rows for internal names in the `_lookup` registries**
   (`JvmEvalRuntimeBuilder.lookupSegments`, the registry-blob loop in `WasmLispCompiler`): the
-  runtime-built spelling is always the single-colon EXTERNAL one, so every registered
-  `PKG::NAME` defun also answers to `PKG:NAME` — appended after the base rows, genuine keys win.
+  runtime-built spelling in a pre-seeded package, or in a program package whose row a site the
+  scan missed did not carry, is the single-colon EXTERNAL one, so every registered `PKG::NAME`
+  defun also answers to `PKG:NAME` — appended after the base rows, genuine keys win. (Before
+  `.todo/h55` every build was single-colon, so these rows carried every internal designator.)
   Emitted only when the registry is (`usesRuntimeFunctionDesignator` / `usesEval`) **and only
   when the alias SPELLING can reach the run time** (a builder can assemble it, the reader can
   read it under `--dynamic`/`anyNameResolvable`, or this compile spells it). Pinned by
   `WasmLispCompilerTest.theRegistrysSingleColonAliasShipsOnlyWhereItCanBeSpelled`. **VARIABLES
-  do not get the alias**: only EXPORTED specials resolve through the `_genv` mirror.
+  do not get the alias**: an internal special resolves through the `_genv` mirror only where
+  the build spells it `PKG::NAME` (a program package, `.todo/h55`).
 - **CLASS names get the same widening, at the LOOKUP**: every generated class-designator
   dispatch (`%find-class`, `%mop-make-instance`, `%allocate-instance`, the runtime
   `typep`/`subtypep` tables, the condition-class arm of `error`) matches BOTH colon spellings of

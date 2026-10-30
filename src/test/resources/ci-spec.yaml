@@ -23826,6 +23826,39 @@ cases:
       "CI-FSI-U1"
       (CI-FSI-U2:D1 :INHERITED)
       (CI-FSI-U1:B1 :INTERNAL)
+  - name: intern-of-an-internal-name-is-the-read-symbol
+    source: |
+      (defpackage :ci-iis (:use :cl) (:nicknames :ci-iisn) (:export #:pub))
+      (defpackage :ci-iis-none (:use :cl))
+      (in-package :ci-iis)
+      (defvar *a* (list 'data (intern "DATA" :ci-iis) 'pub (intern "PUB" :ci-iis)))
+      (defun data (x) (list :data x))
+      (defun ci-iis-in (n p) (multiple-value-list (intern n p)))
+      (defun ci-iis-none::helper () :helper)
+      (in-package :cl-user)
+      (print ci-iis::*a*)
+      (print (list (eq (first ci-iis::*a*) (second ci-iis::*a*)) (eq (third ci-iis::*a*) (fourth ci-iis::*a*))))
+      (print (multiple-value-list (find-symbol (string-upcase "data") :ci-iis)))
+      (print (multiple-value-list (intern (string-upcase "pub") :ci-iisn)))
+      (print (ci-iis::ci-iis-in "DATA" :ci-iis))
+      (print (ci-iis::ci-iis-in "PUB" "CI-IIS"))
+      (print (ci-iis::ci-iis-in "HELPER" :ci-iis-none))
+      (print (eq (car (ci-iis::ci-iis-in (string-upcase "data") :ci-iisn)) 'ci-iis::data))
+      (print (funcall (intern (string-upcase "data") :ci-iis) 1))
+      (print (funcall (car (ci-iis::ci-iis-in "HELPER" "CI-IIS-NONE"))))
+      (print (package-name (symbol-package (car (ci-iis::ci-iis-in "DATA" :ci-iis)))))
+    expected: |
+      (CI-IIS::DATA CI-IIS::DATA CI-IIS:PUB CI-IIS:PUB)
+      (T T)
+      (CI-IIS::DATA :INTERNAL)
+      (CI-IIS:PUB :EXTERNAL)
+      (CI-IIS::DATA :INTERNAL)
+      (CI-IIS:PUB :EXTERNAL)
+      (CI-IIS-NONE::HELPER :INTERNAL)
+      T
+      (:DATA 1)
+      :HELPER
+      "CI-IIS"
   - name: find-symbol-of-a-computed-standard-name
     source: |
       (defpackage :ci-stn-a (:use :cl))

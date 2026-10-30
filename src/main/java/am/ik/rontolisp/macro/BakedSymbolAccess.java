@@ -65,6 +65,39 @@ public final class BakedSymbolAccess {
 	}
 
 	/**
+	 * The row name of a literal package designator naming a package the program defines
+	 * (not one the registry seeds), whose name nothing answers is the INTERNAL symbol
+	 * {@code PKG::NAME} -- exact for a literal name, which the registry answers at
+	 * compile time -- or null.
+	 * @param pkg the literal package designator
+	 * @return the upcased canonical name, or null
+	 */
+	@Nullable String programPackage(String pkg) {
+		String canonical = this.resolver == null ? null : this.resolver.findPackageName(pkg);
+		return canonical == null || am.ik.rontolisp.PackageRegistry.isBuiltinPackageName(canonical) ? null
+				: canonical.toUpperCase(java.util.Locale.ROOT);
+	}
+
+	/**
+	 * {@link #programPackage} for a COMPUTED name, which the run time answers: only when
+	 * the package's row travels or the package answers no name itself (an export, an
+	 * import, a use), so a name the build spells {@code PKG::NAME} is one it does not
+	 * export. A row a site the scan missed left behind keeps the external build.
+	 * @param pkg the literal package designator
+	 * @return the upcased canonical name, or null
+	 */
+	@Nullable String internalBuild(String pkg) {
+		String row = programPackage(pkg);
+		return row == null || this.served.contains(row) || !answersItself(rows(this.standardNames).get(row)) ? row
+				: null;
+	}
+
+	/** Whether a row answers any name itself (not only a used package's exports). */
+	static boolean answersItself(PackageResolver.@Nullable AccessRow row) {
+		return row != null && (!row.present().isEmpty() || !row.uses().isEmpty());
+	}
+
+	/**
 	 * Every package designator mapped to the upcased canonical name of the package it
 	 * names.
 	 * @return the designator table

@@ -44,6 +44,14 @@ class PackageRegistryTest {
 	}
 
 	@Test
+	void everySeededPackageIsABuiltinPackageName() {
+		// The hand-kept list decides which packages the compiled lookups treat as the
+		// program's own (a name nothing answers is built PKG::NAME there); a seeded
+		// package missing from it shipped its exports in every computed lookup.
+		assertThat(new PackageRegistry().designatorTable().values()).allMatch(PackageRegistry::isBuiltinPackageName);
+	}
+
+	@Test
 	void anUnqualifiedNameIsItsOwnAndOnlySpelling() {
 		assertThat(PackageRegistry.spellings("car")).containsExactly("car");
 	}
