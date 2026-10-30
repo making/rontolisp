@@ -3,9 +3,11 @@
 Difficulty: High
 
 h74 made a keyword a block name on every backend, the cross-lambda lowering included
-(`.kb/do-return-block.md`); rutils gets past `(block :+ ...)` on the compile paths. What is
-left, in the order it unblocks libraries (measured 2026-10-31 by hand through the Quicklisp
-cache unless noted):
+(`.kb/do-return-block.md`), so rutils gets past `(block :+ ...)` on the compile paths; and a
+`progn` a macro expands into is top level member by member when it holds a package directive
+(`.kb/packages.md`), so cl-annot's `@export` runs on the JVM and WASM. What is left, in the
+order it unblocks libraries (measured 2026-10-31 by hand through the Quicklisp cache unless
+noted):
 
 1. **The emitted runtime readers** (JVM `JvmReadRuntimeBuilder`, WASM
    `WasmReadRuntimeBuilder`) and the prelude `read` scanner (it delimits a datum, then calls
@@ -32,14 +34,7 @@ cache unless noted):
      `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest` pin the refusal
      (`Cannot compile symbol reference: CAR`). Past it, `rutils:flatten` is "not external":
      `core/rutils.lisp` re-exports by `(dolist (p *all-packages*) (re-export-symbols p ...))`
-     in `eval-always`, which neither resolver sees.
-   - cl-annot's `@export`, minimal: `(defmacro exporting (name) `(progn (export ',name)
-     (defun ,name () :greeted)))`, `(exporting greet)`, then `(pe:greet)`: "GREET is not
-     external" on the compile paths. `UserMacroExpander.Session.accept` resolves each form
-     through `macroEval.resolvePackages`, and `PackageResolver.resolve` consumes only a
-     LITERAL top-level `export`; the macro-expanded `progn` is kept whole, where CLHS 3.2.3.1
-     makes its members top-level forms. Splitting it changes the emitted program's shape
-     (`--dump-ir`, the passes after the expander), so measure that first.
+     in `eval-always`, which neither resolver sees (a COMPUTED export, `.kb/packages.md`).
    - cl-redis on the interpreter: the trivial-gray-streams shim lacks `stream-clear-input`,
      and also `stream-peek-char`, `stream-read-char-no-hang`, `fundamental-character-stream`
      and `fundamental-binary-stream`, all upstream exports (the shim's comment saying the two

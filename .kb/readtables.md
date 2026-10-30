@@ -165,12 +165,11 @@ as part of a symbol on all four instead of signalling (CLHS 2.4.8; measured 2026
   under `(handler-bind () ...)` -- the SBCL binding is `#+sbcl` -- in an `eval-when`, which
   `flattenTopLevel` now splices like `progn`). Through `ql:quickload`, output = the
   interpreter's: cl-interpol (`#?"..."`) and cl-csv (`read-csv`/`write-csv`) on all four,
-  jonathan on the JVM, and (re-measured 2026-10-31, `to-json`/`parse`) on WASM -- verified by
-  hand, no test (the Quicklisp cache).
-  Still stopping, none of it in the reader (`.todo/h77`): cl-annot's `@export` (the expansion's
-  `(progn (export 'x) (defun x ...))` nests the export the compilers' resolver needs at top
-  level: "GREET is not external"), parenscript (`property-bindings`: `Cannot compile symbol
-  reference: PARENSCRIPT:VAR`), rutils -- past `(block :+ ...)` since h74
+  jonathan on the JVM, and (re-measured 2026-10-31, `to-json`/`parse`) on WASM, and cl-annot's
+  `@export` on the JVM and WASM since h74 (its `(progn (export 'x) ...)` is top level member by
+  member, [packages.md](packages.md)) -- verified by hand, no test (the Quicklisp cache).
+  Still stopping, none of it in the reader (`.todo/h77`): parenscript (`property-bindings`:
+  `Cannot compile symbol reference: PARENSCRIPT:VAR`), rutils -- past `(block :+ ...)` since h74
   ([do-return-block.md](do-return-block.md)) -- at `merge-hash-tables-with`, which calls
   `dotable` before `hash-table.lisp` defines it: the call's argument reads a free `v`, which
   both compilers refuse (`Cannot compile symbol reference`) where SBCL warns; and

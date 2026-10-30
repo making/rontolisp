@@ -316,6 +316,13 @@ keeps reading the LIVE set. Consequence: a LATE-exported symbol prints `PKG::NAM
 is purely compile-time spelling; deliberately not widened, because the widening would accept ANY
 `pkg:x` and swallow typos.
 
+**A `progn` a macro expands into is top level member by member** (CLHS 3.2.3.1) when it holds a
+package directive: `UserMacroExpander.Session.accept` hands each directive member to the
+macro-time resolver and emits every member as its own top-level form, so both resolvers consume
+it as a literal one (cl-annot's `@export` = `(progn (export 'x) (defun x ...))`; before
+2026-10-31, "X is not external" at the next `pkg:x` on the compile paths). Any other expanded
+`progn` stays whole. ci-spec `export-and-unexport`.
+
 ## Registry queries
 `list-all-packages`, `package-use-list`, `package-used-by-list` share one table,
 `PackageResolver.runtimePackageUseTable()`. The interpreter reads the LIVE registry; the compile
