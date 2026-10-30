@@ -4,7 +4,7 @@
 
 `char` を空のディスパッチテーブルを持つディスパッチマクロ文字にし、`t` を返します。テーブルは [`set-dispatch-macro-character`](set-dispatch-macro-character.md) で埋めます。`non-terminating-p` が真なら `char` はトークンの途中に現れてもかまいません。4つのバックエンドすべてで動作します。
 
-リードテーブルで読むのは今のところインタプリタのリーダーだけです。フォーム単位で読むプログラムとロードするファイル、`read-from-string`、文字列ストリームに対する `read` / `read-delimited-list` が対象です。コンパイルパスとコンパイル済みバックエンドの実行時リーダーは標準の構文で読みます([リードテーブル](../../guides/readtables.md))。
+ソースはすべてのバックエンドで現在のリードテーブルを使って読みます。インタプリタはプログラムとロードするファイルをフォーム単位で読み、コンパイルパスはコンパイル時の `eval-when` が残したリードテーブルで各フォームを読みます。実行時には、インタプリタの `read-from-string` と文字列ストリームに対する `read` / `read-delimited-list` がリードテーブルに従います。コンパイル済みバックエンドの実行時リーダーは標準の構文で読みます([リードテーブル](../../guides/readtables.md))。
 
 ```lisp
 (let ((*readtable* (copy-readtable nil)))

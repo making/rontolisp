@@ -824,7 +824,13 @@ public final class LispLexer {
 	// the function left the input.
 	private void callReaderMacro(List<LocatedToken> tokens, ReadSyntax rs, LispVal function, int start, int from,
 			List<LispVal> arguments) {
-		ReadSyntax.Result result = rs.call(function, this.input, from, arguments);
+		ReadSyntax.Result result;
+		try {
+			result = rs.call(function, this.input, from, arguments);
+		}
+		catch (ReadSyntax.Refusal refusal) {
+			throw errAt(start, String.valueOf(refusal.getMessage()));
+		}
 		this.pos = Math.max(from, Math.min(result.end(), this.input.length()));
 		LispVal value = result.value();
 		if (value != null) {

@@ -537,6 +537,16 @@ final class CompileFrontend {
 		}
 		SourceLoader files = SourceLoader.fileSystem(request.javaClassLoader(), request.javaClassLookup(),
 				request.javaClassPath());
+		if (language == SourceLanguage.COMMON_LISP) {
+			// A Common Lisp entry file is the file being loaded, so its forms run inside
+			// its own load context (LoadInliner brackets it, the interpreter binds it).
+			// The read is the inliner's, a form at a time: once a file can change how
+			// source reads, each form reads with the readtable the compile-time
+			// evaluation of the forms before it left (.kb/readtables.md).
+			List<LispVal> loaded = LoadInliner.inlineSource(request.source(), files, options.baseDir(),
+					request.systemPath(), features, request.dists(), request.standards(), entryFile);
+			return expand(new Loaded(loaded, features, request.standards(), false, null), options);
+		}
 		List<LispVal> read;
 		RunTimeImage image = null;
 		if (language == SourceLanguage.CLOJURE && !wasm) {
@@ -556,11 +566,9 @@ final class CompileFrontend {
 		else {
 			read = language.read(request.source(), features, entryFile, request.standards(), files);
 		}
-		// A Common Lisp entry file is the file being loaded, so its forms run inside its
-		// own load context (LoadInliner brackets it, the interpreter binds it). The
-		// other languages have no *load-truename* to answer.
+		// The other languages have no *load-truename* to answer.
 		List<LispVal> loaded = LoadInliner.inline(read, files, options.baseDir(), request.systemPath(), features,
-				request.dists(), request.standards(), language == SourceLanguage.COMMON_LISP ? entryFile : null);
+				request.dists(), request.standards(), null);
 		Result result = expand(new Loaded(loaded, features, request.standards(), image != null, null), options);
 		return image == null ? result : result.lowersAtRunTime(image.encode());
 	}

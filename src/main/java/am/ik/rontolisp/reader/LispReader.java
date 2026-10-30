@@ -73,6 +73,13 @@ public final class LispReader {
 	/** The offset each line starts at, built on the first located datum. */
 	private int @Nullable [] lineStarts;
 
+	/**
+	 * Maps each symbol token's name to its spelling: a runtime read's interning in the
+	 * current package ({@link #readAllRuntime}, {@link Forms#homingSymbols}), or
+	 * {@code null} for a source read, whose symbols {@code PackageResolver} resolves.
+	 */
+	private @Nullable UnaryOperator<String> symbolHome;
+
 	private int pos;
 
 	private LispReader(List<LocatedToken> tokens, Features features, String input, @Nullable String file,
@@ -342,24 +349,38 @@ public final class LispReader {
 	}
 
 	/**
-	 * {@link #readAllWithReadEvalMarkers(String, Features)} for a read that runs with an
-	 * evaluator at hand -- the runtime {@code read} family: a {@code #+}/{@code #-} guard
-	 * whose feature expression holds a {@code #.} is decided while reading, as CL's
-	 * reader decides it, instead of being deferred to a marker.
-	 * @param input the source code string
+	 * A RUNTIME read of data -- the {@code read} family's. With {@code readTimeEval} set,
+	 * {@code #.} reads as a {@code (%read-eval datum)} marker and a {@code #+}/{@code #-}
+	 * guard whose feature expression holds a {@code #.} is decided while reading, as CL's
+	 * reader decides it; without it {@code #.} is a read error. {@code symbolHome}
+	 * interns each symbol TOKEN as it is read, as CL's reader interns in
+	 * {@code *package*}: a source read leaves that to {@code PackageResolver}, which a
+	 * runtime read never meets. The symbols the reader itself synthesizes ({@code quote},
+	 * the backquote operators) are not tokens and keep their spelling.
+	 * @param input the text
 	 * @param features the active reader features
 	 * @param readTimeEval replaces the {@code (%read-eval datum)} markers of a feature
-	 * expression by their values
+	 * expression by their values, or {@code null} for a read refusing {@code #.}
+	 * @param symbolHome maps a symbol token's name to its spelling, or {@code null} to
+	 * keep the name as read
 	 * @return the list of parsed expressions
 	 */
-	public static List<LispVal> readAllWithReadEvalMarkers(String input, Features features,
-			UnaryOperator<LispVal> readTimeEval) {
-		return readAll(input, features, LispLexer.ReadEvalMode.MARKER, null, readTimeEval);
+	public static List<LispVal> readAllRuntime(String input, Features features,
+			@Nullable UnaryOperator<LispVal> readTimeEval, @Nullable UnaryOperator<String> symbolHome) {
+		return readAll(input, features,
+				readTimeEval == null ? LispLexer.ReadEvalMode.ERROR : LispLexer.ReadEvalMode.MARKER, null, readTimeEval,
+				symbolHome);
 	}
 
 	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
 			@Nullable String file, @Nullable UnaryOperator<LispVal> readTimeEval) {
-		ReadPrefix read = readPrefix(input, features, readEvalMode, file, readTimeEval);
+		return readAll(input, features, readEvalMode, file, readTimeEval, null);
+	}
+
+	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
+			@Nullable String file, @Nullable UnaryOperator<LispVal> readTimeEval,
+			@Nullable UnaryOperator<String> symbolHome) {
+		ReadPrefix read = readPrefix(input, features, readEvalMode, file, readTimeEval, symbolHome);
 		LispReadException error = read.error();
 		if (error != null) {
 			throw error;
@@ -369,6 +390,12 @@ public final class LispReader {
 
 	private static ReadPrefix readPrefix(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
 			@Nullable String file, @Nullable UnaryOperator<LispVal> readTimeEval) {
+		return readPrefix(input, features, readEvalMode, file, readTimeEval, null);
+	}
+
+	private static ReadPrefix readPrefix(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
+			@Nullable String file, @Nullable UnaryOperator<LispVal> readTimeEval,
+			@Nullable UnaryOperator<String> symbolHome) {
 		// A source may announce features about ITSELF -- the header
 		// (eval-when (...) (pushnew :F *features*)) idiom -- and the #+F below it must
 		// see them. Real CL gets that free by loading form at a time; here the reader
@@ -377,6 +404,7 @@ public final class LispReader {
 		Features effective = FeaturePushes.widen(input, features, readEvalMode, file);
 		LispLexer.Prefix lexed = new LispLexer(input, effective, readEvalMode, file, readTimeEval).tokenizePrefix();
 		LispReader reader = new LispReader(lexed.tokens(), effective, input, file, true);
+		reader.symbolHome = symbolHome;
 		List<LispVal> result = new ArrayList<>();
 		while (reader.pos < reader.tokens.size()) {
 			try {
@@ -548,6 +576,18 @@ public final class LispReader {
 		private Forms(LispLexer lexer, LispReader reader) {
 			this.lexer = lexer;
 			this.reader = reader;
+		}
+
+		/**
+		 * Interns each symbol token this read builds through {@code symbolHome}, as
+		 * {@link #readAllRuntime} does.
+		 * @param symbolHome maps a symbol token's name to its spelling, or {@code null}
+		 * to keep the name as read
+		 * @return this read
+		 */
+		public Forms homingSymbols(@Nullable UnaryOperator<String> symbolHome) {
+			this.reader.symbolHome = symbolHome;
+			return this;
 		}
 
 		/**
@@ -852,7 +892,8 @@ public final class LispReader {
 		if (sourceLiteral != null) {
 			return sourceLiteral;
 		}
-		return new LispSymbol(name);
+		UnaryOperator<String> home = this.symbolHome;
+		return new LispSymbol(home == null ? name : home.apply(name));
 	}
 
 	/**

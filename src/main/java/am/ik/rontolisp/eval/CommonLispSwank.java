@@ -78,9 +78,6 @@ public final class CommonLispSwank implements SwankLisp {
 	/** What a stack overflow reports, as the REPL does. */
 	public static final String STACK_OVERFLOW = "stack overflow (--stack <MiB> raises the limit)";
 
-	/** The REPL's history variables, which {@link #listenerEval} sets as SWANK's does. */
-	private static final List<String> REPL_VARIABLES = List.of("*", "**", "***", "/", "//", "///", "+", "++", "+++");
-
 	/** The flag letters of a symbol's classification, in SWANK's order. */
 	private static final String CLASSIFICATION_LETTERS = "bfgctmspa";
 
@@ -104,11 +101,6 @@ public final class CommonLispSwank implements SwankLisp {
 		this.evaluator = evaluator;
 		this.resolver = evaluator.packageResolver();
 		this.sources = new SwankSources(this, evaluator);
-		for (String name : REPL_VARIABLES) {
-			if (!evaluator.globalEnvironment().hasBinding(name)) {
-				evaluator.globalEnvironment().define(name, LispNil.INSTANCE);
-			}
-		}
 		evaluator.enableDebugging();
 	}
 
@@ -2488,7 +2480,7 @@ public final class CommonLispSwank implements SwankLisp {
 	 * Sets the REPL's history variables to nil, as SWANK's {@code clear-repl-variables}.
 	 */
 	public void clearReplVariables() {
-		for (String name : REPL_VARIABLES) {
+		for (String name : LispNames.REPL_VARIABLES) {
 			this.evaluator.globalEnvironment().define(name, LispNil.INSTANCE);
 		}
 	}

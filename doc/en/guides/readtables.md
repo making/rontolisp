@@ -11,18 +11,30 @@ A readtable is a value on all four backends: `*readtable*` holds one, [`copy-rea
 
 ## Which reads honor it
 
-The interpreter's reader reads with the readtable current when it reads:
+Source is read form by form, each form with the readtable current when the read reaches it:
 
-- A program and every file it loads are read form by form. A form that changes `*readtable*` -- named-readtables' `in-readtable`, or a `setf` of it in an `eval-when` -- changes how the rest of that file reads. `load` binds `*readtable*`, so the change ends with the file.
-- `read-from-string`, and `read` and [`read-delimited-list`](../reference/functions/read-delimited-list.md) on a string stream.
+- On the interpreter, a program and every file it loads: a form that changes `*readtable*` -- named-readtables' `in-readtable`, or a `setf` of it -- changes how the rest of that file reads.
+- On the compile paths (`-o`), the same reads, with the forms before evaluated as `compile-file` evaluates them: a change made in an `eval-when` with `:compile-toplevel` (what `in-readtable` expands to) reads the rest of the file, and the files of an ASDF system loaded earlier count as loaded. The reader macro functions run at compile time, and what one returns must be data a compiled program can carry: a closure or a hash table is a read error. A `defreadtable` the same compile selects goes in an `eval-when`, as named-readtables' documentation asks.
+
+`load` binds `*readtable*` on every backend, so a change ends with the file. On the interpreter, `read-from-string`, and `read` and [`read-delimited-list`](../reference/functions/read-delimited-list.md) on a string stream, honor `*readtable*` too.
+
+```console
+$ cat bang.lisp
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf *readtable* (copy-readtable nil))
+  (set-macro-character #\! (lambda (s c) (list 'not (read s t nil t)))))
+(print !nil)
+$ rontolisp bang.lisp -o bang.wasm && wasmtime run bang.wasm
+
+T
+```
 
 A reader macro function receives a string input stream over the text being read, positioned behind its character, and a symbol it reads is interned in the current package. A function returning no values makes its character start a comment. Case conversion follows `readtable-case`.
 
-So libraries that read their own source through a readtable load on the interpreter: named-readtables, cl-interpol (`#?"Hello, ${name}"`), cl-annot (`@export`), cl-syntax and jonathan.
+So libraries that read their own source through a readtable load: named-readtables, cl-interpol (`#?"Hello, ${name}"`) and cl-csv on all four backends, jonathan (through cl-syntax) on the interpreter and the JVM, and cl-annot (`@export`) on the interpreter.
 
 ## Not yet
 
-- The compile paths (`-o`) read source with the standard syntax: a reader macro a program installs is not called there.
 - The compiled backends' run-time `read` and `read-from-string` ignore `*readtable*`.
 - `read` from a file stream or standard input uses the standard syntax.
 - `with-standard-io-syntax` does not rebind `*readtable*`.

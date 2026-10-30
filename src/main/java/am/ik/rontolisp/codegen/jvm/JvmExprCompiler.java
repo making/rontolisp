@@ -381,6 +381,11 @@ final class JvmExprCompiler {
 			// thread's binding first (compileSpecialRead).
 			compileSpecialRead(name, ctx);
 		}
+		else if (LispNames.REPL_VARIABLES.contains(name)) {
+			// A REPL history variable the program never assigns: nil, as outside any
+			// REPL.
+			ctx.body.aconst_null();
+		}
 		else if (ctx.dynamic) {
 			JvmDynamicCallCompiler.compileVarRef(name, ctx);
 		}

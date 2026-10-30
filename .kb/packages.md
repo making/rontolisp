@@ -40,8 +40,8 @@ strings, so no per-backend codegen exists.
 ## The `cl` external list is the STANDARD's list, not the implemented one
 CLHS 11.1.2.1 fixes the `common-lisp` package's external set at the **978 standard names**,
 independently of whether an implementation has an operator behind one: the name being there is a
-`find-symbol` / `do-external-symbols` answer, not a promise that calling it works. The 187 names
-rontolisp does not implement are `PackageRegistry.CL_EXPORTED_ONLY` -- plain strings, exactly
+`find-symbol` / `do-external-symbols` answer, not a promise that calling it works. The names
+rontolisp does not implement (98 on 2026-10-31) are `PackageRegistry.CL_EXPORTED_ONLY` -- plain strings, exactly
 because there is no implementation to name, and a name that gains one moves OUT of the set into
 its category.
 
@@ -77,6 +77,14 @@ spellings from `PackageRegistry.CL_EXPORTED_ONLY`, where `.todo/796` had had to 
 missing standard names while the invented spellings sat beside them. `boole` itself stays
 unimplemented (still in `CL_EXPORTED_ONLY`) -- a prelude defun over these constants belongs with
 `.todo/037`'s `logeqv`/`lognor` row.
+
+**The REPL history variables** (`*` `**` `***` `/` `//` `///` `+` `++` `+++`,
+`LispNames.REPL_VARIABLES`) are `CL_VARIABLES` (2026-10-30; the six non-operator spellings left
+`CL_EXPORTED_ONLY`), so a cl-using package's `**` is `cl:**`. Nil outside a REPL: the interpreter
+binds them in `Environment.createGlobal` (SWANK's listener sets them), and a compiled read of one
+the program never assigns compiles to nil (`compileSymbolRef` on the JVM and WASM, ahead of the
+`--dynamic` arm) -- trivial-types' `proper-list-p` reads `*`. Pinned by ci-spec
+`repl-history-variables-are-nil-outside-a-repl`.
 
 **One name still makes `no-extra-symbols-exported-from-common-lisp` fail**, and it is not a name
 list bug: `while` is rontolisp's own loop primitive and lives in `cl` because that is where the
@@ -380,6 +388,10 @@ path: `LoadInliner.spliceFile` brackets a spliced file with `(%push-package)`/`(
 markers (`LispNames.PUSH_PACKAGE`/`POP_PACKAGE`) -- but ONLY when the file has a top-level
 `in-package` (`selectsAPackage`), so a plain-defun file splices byte-identically;
 `PackageResolver.resolve` consumes the markers and `isPackageDirective` treats them as directives.
+Since h57 a file is read a form at a time ([readtables.md](readtables.md)), so the push goes in
+front of the file's FIRST `in-package` (`PackageBracket`), not right after `%begin-file`: until
+then the package is the caller's, so it saves the same one. A leaf shim's forms are a list and
+keep the old placement.
 Tests: `LispEvaluatorAsdfTest`, `LoadInlinerTest`.
 
 ## `*package*` is a DYNAMIC variable -- two faces, kept in step
@@ -417,7 +429,17 @@ file's forms: a loaded file's forms are top-level wherever `load` was called fro
 component is loaded from inside `asdf:perform`'s method, `.kb/asdf.md`). Both halves are
 load-bearing (fast-http's `callback-data` vs trivia's top-level `lispn:define-namespace`). Known
 approximation: a macro defined in P and called inside a function of a DIFFERENT file Q gets P
-where CL uses Q. Pinned by `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,
+where CL uses Q. **The swap only reaches what is homed DURING the expansion**: `intern`, and
+(h62, 2026-10-31) every interpreter runtime read -- `read-from-string`, `read`, a readtable
+view's read -- whose `LispReader.symbolHome` (`Environment.setReadSymbolHome` ->
+`PackageResolver.readSpelling`, recording like `intern`) homes each symbol TOKEN as it is read.
+Until then a read answered a bare spelling, resolved later in the caller's package: cl-pdf's AFM
+parser (`(read-from-string (format nil "get-afm-~A" ...))`) called `CL-USER::GET-AFM-STRING`.
+Reader-synthesized symbols (`quote`, the backquote operators) and `#.` values are not tokens and
+are not homed; a token qualified by an unknown package keeps its spelling. The compiled
+backends' run-time reader stays package-blind like their 1-arg `intern`
+(`.kb/symbol-runtime-api.md`). Pinned by `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,
+ci-spec `expansion-time-read-homes-in-the-macro-package`,
 `LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions` (a `load` from a defun), `TriviaE2eTest`,
 `SxqlE2eTest`.
 

@@ -7,7 +7,6 @@ import java.util.List;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.eval.DistClient;
-import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import org.jspecify.annotations.Nullable;
@@ -76,16 +75,16 @@ public final class CompileFrontendAccess {
 	 * @return the expanded, spliced and pruned top-level forms
 	 */
 	public static List<LispVal> corpus(String source, Features features, boolean wasm, boolean noWasi) {
-		// #. in the corpus rides the marker read (resolved in UserMacroExpander), like
-		// the CLI -- through the same source-language seam, so the decision cannot
-		// drift from the production read.
-		List<LispVal> read = SourceLanguage.COMMON_LISP.read(source, features, null);
-		// LoadInliner splices the built-in ASDF shim systems the corpus load-systems
-		// (bordeaux-threads' bt2 case), exactly like the CLI. The loader throws: see the
-		// class comment -- the corpus must reference no filesystem source.
-		List<LispVal> loaded = LoadInliner.inline(read, path -> {
+		// The read is the CLI's (LoadInliner.inlineSource): #. in the corpus rides the
+		// marker read (resolved in UserMacroExpander), and a case that installs a
+		// readtable at compile time is read with it, so neither decision can drift
+		// from the production read. LoadInliner splices the built-in ASDF shim systems
+		// the corpus load-systems (bordeaux-threads' bt2 case), exactly like the CLI.
+		// The loader throws: see the class comment -- the corpus must reference no
+		// filesystem source.
+		List<LispVal> loaded = LoadInliner.inlineSource(source, path -> {
 			throw new FileNotFoundException(path);
-		}, null, List.of(), features);
+		}, null, List.of(), features, DistClient.createDefault(), SourceStandards.DEFAULT, null);
 		return CompileFrontend
 			.expand(new CompileFrontend.Loaded(loaded, features),
 					CompileFrontend.Options.builder().wasm(wasm).noWasi(noWasi).build())

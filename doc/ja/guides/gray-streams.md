@@ -88,7 +88,9 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
 ```
 
 このメソッドはすべてのバックエンドでディスパッチします。これを定義したプログラムが
-`close` を完全に所有し、Gray のデフォルトは道を譲ります。
+`close` を完全に所有し、Gray のデフォルトは `rontolisp:fundamental-stream` 上のメソッドに
+退きます (SBCL と同じ)。そのため別のクラスの Gray ストリームは引き続き `t` を返して閉じます。
+`open-stream-p`、`input-stream-p`、`output-stream-p`、`stream-element-type` も同様です。
 
 文字**入力**ストリームが定義すべきなのは **`stream-read-char` ただ 1 つ**です
 (バイナリなら `stream-read-byte`)。読み取り側の残りはすべてその上に書かれています:

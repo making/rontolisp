@@ -231,7 +231,7 @@ public final class PackageRegistry {
 			LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR),
 			// The float-range constants (most-positive-single-float &c): constant
 			// variables like pi, bound as globals (see ClConstants).
-			ClConstants.FLOAT_NAMES);
+			ClConstants.FLOAT_NAMES, Set.copyOf(LispNames.REPL_VARIABLES));
 
 	/**
 	 * The {@code cl} type-specifier (and clause-keyword) names that are not also
@@ -409,19 +409,19 @@ public final class PackageRegistry {
 	 * standard's own list, so neither direction can drift.
 	 */
 	private static final Set<String> CL_EXPORTED_ONLY = Set.of("&ALLOW-OTHER-KEYS", "&AUX", "&BODY", "&ENVIRONMENT",
-			"&KEY", "&OPTIONAL", "&REST", "&WHOLE", "**", "***", "*BREAK-ON-SIGNALS*", "*DEBUGGER-HOOK*",
-			"*MACROEXPAND-HOOK*", "*READ-BASE*", "++", "+++", "//", "///", "ADD-METHOD", "ARITHMETIC-ERROR-OPERANDS",
-			"ARITHMETIC-ERROR-OPERATION", "BOOLE", "BREAK", "CALL-METHOD", "CALL-NEXT-METHOD", "COMPILATION-SPEED",
-			"COMPILED-FUNCTION", "COMPILER-MACRO", "COMPUTE-APPLICABLE-METHODS", "DEBUG", "DECLARATION",
-			"DEFINE-METHOD-COMBINATION", "DESCRIBE", "DESCRIBE-OBJECT", "DISASSEMBLE", "DRIBBLE", "DYNAMIC-EXTENT",
-			"ED", "ENSURE-GENERIC-FUNCTION", "EXTENDED-CHAR", "FILE-AUTHOR", "FIND-METHOD", "FLOAT-PRECISION",
-			"FLOATING-POINT-INEXACT", "FLOATING-POINT-INVALID-OPERATION", "FLOATING-POINT-OVERFLOW",
-			"FLOATING-POINT-UNDERFLOW", "FORMATTER", "FTYPE", "FUNCTION-KEYWORDS", "HASH-TABLE", "IGNORABLE", "IGNORE",
-			"INLINE", "INSPECT", "INVALID-METHOD-ERROR", "INVOKE-RESTART-INTERACTIVELY", "KEYWORD", "LOOP-FINISH",
-			"MAKE-INSTANCES-OBSOLETE", "MAKE-METHOD", "METHOD", "METHOD-COMBINATION", "METHOD-COMBINATION-ERROR",
-			"METHOD-QUALIFIERS", "NAME-CHAR", "NEXT-METHOD-P", "NIL", "NO-APPLICABLE-METHOD", "NO-NEXT-METHOD",
-			"NOTINLINE", "OPTIMIZE", "PPRINT-EXIT-IF-LIST-EXHAUSTED", "PPRINT-FILL", "PPRINT-LINEAR", "PPRINT-POP",
-			"PPRINT-TABULAR", "PRINT-NOT-READABLE", "PRINT-NOT-READABLE-OBJECT", "RANDOM-STATE", "RANDOM-STATE-P",
+			"&KEY", "&OPTIONAL", "&REST", "&WHOLE", "*BREAK-ON-SIGNALS*", "*DEBUGGER-HOOK*", "*MACROEXPAND-HOOK*",
+			"*READ-BASE*", "ADD-METHOD", "ARITHMETIC-ERROR-OPERANDS", "ARITHMETIC-ERROR-OPERATION", "BOOLE", "BREAK",
+			"CALL-METHOD", "CALL-NEXT-METHOD", "COMPILATION-SPEED", "COMPILED-FUNCTION", "COMPILER-MACRO",
+			"COMPUTE-APPLICABLE-METHODS", "DEBUG", "DECLARATION", "DEFINE-METHOD-COMBINATION", "DESCRIBE",
+			"DESCRIBE-OBJECT", "DISASSEMBLE", "DRIBBLE", "DYNAMIC-EXTENT", "ED", "ENSURE-GENERIC-FUNCTION",
+			"EXTENDED-CHAR", "FILE-AUTHOR", "FIND-METHOD", "FLOAT-PRECISION", "FLOATING-POINT-INEXACT",
+			"FLOATING-POINT-INVALID-OPERATION", "FLOATING-POINT-OVERFLOW", "FLOATING-POINT-UNDERFLOW", "FORMATTER",
+			"FTYPE", "FUNCTION-KEYWORDS", "HASH-TABLE", "IGNORABLE", "IGNORE", "INLINE", "INSPECT",
+			"INVALID-METHOD-ERROR", "INVOKE-RESTART-INTERACTIVELY", "KEYWORD", "LOOP-FINISH", "MAKE-INSTANCES-OBSOLETE",
+			"MAKE-METHOD", "METHOD", "METHOD-COMBINATION", "METHOD-COMBINATION-ERROR", "METHOD-QUALIFIERS", "NAME-CHAR",
+			"NEXT-METHOD-P", "NIL", "NO-APPLICABLE-METHOD", "NO-NEXT-METHOD", "NOTINLINE", "OPTIMIZE",
+			"PPRINT-EXIT-IF-LIST-EXHAUSTED", "PPRINT-FILL", "PPRINT-LINEAR", "PPRINT-POP", "PPRINT-TABULAR",
+			"PRINT-NOT-READABLE", "PRINT-NOT-READABLE-OBJECT", "RANDOM-STATE", "RANDOM-STATE-P",
 			"READ-PRESERVING-WHITESPACE", "RESTART", "ROOM", "SAFETY", "SIMPLE-BASE-STRING", "SPACE", "SPECIAL",
 			"SPEED", "STANDARD", "STANDARD-METHOD", "STEP", "STORAGE-CONDITION", "STRUCTURE-OBJECT", "SYMBOL", "T",
 			"TRACE", "UNTRACE", "UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "UPDATE-INSTANCE-FOR-REDEFINED-CLASS",
@@ -786,21 +786,40 @@ public final class PackageRegistry {
 			LispNames.THE, LispNames.THROW, LispNames.UNWIND_PROTECT);
 
 	/**
-	 * The operators {@code macro-function} answers NIL for: the 25 ANSI special operators
-	 * plus {@code while}. {@code while} is rontolisp's OWN extension, not a CL name at
-	 * all, and it only sits in the {@code cl} package because that is where the built-in
-	 * operators live -- so claiming a macro function for it answers a question about a
-	 * symbol CL does not have. A code walker asking "is this head a macro I should
-	 * expand?" about a library's own {@code while} then gets a yes and refuses to walk
-	 * its own clause: iterate's `(iter ... (while test))` warned "a macro that won't
-	 * expand" and looped forever, because the clause survived into the emitted tagbody
-	 * instead of becoming its exit test.
+	 * The operators {@code macro-function} answers NIL for: the 25 ANSI special
+	 * operators, {@code while}, and the names of {@link #inlineExpandedClFunctions()}.
+	 * {@code while} is rontolisp's OWN extension, not a CL name at all, and it only sits
+	 * in the {@code cl} package because that is where the built-in operators live -- so
+	 * claiming a macro function for it answers a question about a symbol CL does not
+	 * have. A code walker asking "is this head a macro I should expand?" about a
+	 * library's own {@code while} then gets a yes and refuses to walk its own clause:
+	 * iterate's `(iter ... (while test))` warned "a macro that won't expand" and looped
+	 * forever, because the clause survived into the emitted tagbody instead of becoming
+	 * its exit test.
 	 */
-	private static final Set<String> NO_MACRO_FUNCTION = union(ANSI_SPECIAL_OPERATORS, Set.of(LispNames.WHILE));
+	private static final Set<String> NO_MACRO_FUNCTION = union(ANSI_SPECIAL_OPERATORS, Set.of(LispNames.WHILE),
+			Set.of(LispNames.DECLARE), PackageRegistry.inlineExpandedClFunctions());
+
+	/**
+	 * The CL FUNCTIONS (and {@code declare}, which CL defines as no operator at all) that
+	 * sit in {@link #CL_MACROS} only because the expander rewrites their calls inline. CL
+	 * gives them no macro function and {@code macroexpand-1} leaves their calls alone
+	 * (SBCL 2.2.9): iterate's walker asks {@code macro-function} about every head and
+	 * warned "a macro that won't expand" for each {@code typep} in an {@code iter} body.
+	 * @return the inline-expanded CL function names
+	 */
+	private static Set<String> inlineExpandedClFunctions() {
+		return Set.of(LispNames.CERROR, LispNames.CHANGE_CLASS, LispNames.COMPLEMENT, LispNames.DOCUMENTATION,
+				LispNames.ERROR, LispNames.FORMAT, LispNames.MAKE_CONDITION, LispNames.MAKE_INSTANCE,
+				LispNames.MAKE_SEQUENCE, LispNames.PROCLAIM, LispNames.SIGNAL, LispNames.SLOT_BOUNDP,
+				LispNames.SLOT_EXISTS_P, LispNames.SLOT_MAKUNBOUND, LispNames.SLOT_VALUE, LispNames.TYPEP,
+				LispNames.WARN);
+	}
 
 	/**
 	 * Returns the operators {@code macro-function} must answer nil for -- the ANSI
-	 * special operators plus rontolisp's own {@code while}.
+	 * special operators, rontolisp's own {@code while}, {@code declare}, and the CL
+	 * functions the expander rewrites inline.
 	 * @return the names with no macro function
 	 */
 	public static Set<String> namesWithoutMacroFunction() {
@@ -1304,11 +1323,18 @@ public final class PackageRegistry {
 		// flex::vector-stream-vector with a double one. The flexi-stream class and its
 		// five accessors are external for the same reason: upstream cl+ssl spells
 		// flexi-streams:flexi-stream / flexi-streams:flexi-stream-stream with one colon.
+		// The external-format surface and the two sequence macros are external as
+		// upstream: drakma :uses the package and cl-smtp imports from it.
 		Set<String> flexiExternals = Set.of(LispNames.MAKE_FLEXI_STREAM, LispNames.STRING_TO_OCTETS,
 				LispNames.OCTETS_TO_STRING, LispNames.VECTOR_STREAM, LispNames.MAKE_IN_MEMORY_INPUT_STREAM,
 				LispNames.MAKE_IN_MEMORY_OUTPUT_STREAM, LispNames.GET_OUTPUT_STREAM_SEQUENCE, LispNames.FLEXI_STREAM,
 				LispNames.FLEXI_STREAM_STREAM, LispNames.FLEXI_STREAM_EXTERNAL_FORMAT,
-				LispNames.FLEXI_STREAM_ELEMENT_TYPE, LispNames.FLEXI_STREAM_POSITION, LispNames.FLEXI_STREAM_BOUND);
+				LispNames.FLEXI_STREAM_ELEMENT_TYPE, LispNames.FLEXI_STREAM_POSITION, LispNames.FLEXI_STREAM_BOUND,
+				LispNames.EXTERNAL_FORMAT, LispNames.MAKE_EXTERNAL_FORMAT, LispNames.EXTERNAL_FORMAT_NAME,
+				LispNames.EXTERNAL_FORMAT_EOL_STYLE, LispNames.EXTERNAL_FORMAT_LITTLE_ENDIAN,
+				LispNames.EXTERNAL_FORMAT_ID, LispNames.EXTERNAL_FORMAT_EQUAL, LispNames.DEFAULT_EOL_STYLE,
+				LispNames.SUBSTITUTION_CHAR, LispNames.OCTET, LispNames.WITH_INPUT_FROM_SEQUENCE,
+				LispNames.WITH_OUTPUT_TO_SEQUENCE);
 		Set<String> flexiSymbols = new HashSet<>(flexiExternals);
 		flexiSymbols.addAll(Set.of(LispNames.VECTOR_INPUT_STREAM, LispNames.VECTOR_STREAM_VECTOR,
 				LispNames.VECTOR_STREAM_INDEX, LispNames.VECTOR_STREAM_END, LispNames.VECTOR_OUTPUT_STREAM));

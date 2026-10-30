@@ -196,6 +196,40 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Single-step expansion, for {@code macroexpand-1} only, of a CL macro the evaluator
+	 * and the compilers run natively instead of through {@link #expandBuiltinMacro}: the
+	 * same expansion every backend lowers the form to, or the CL one where the native
+	 * form has none ({@code return}, {@code lambda}). A code walker that trusts
+	 * {@code macro-function} emits what this answers, so it must run on every backend.
+	 * Kept apart from {@link #expandBuiltinMacro} because that one also feeds the compile
+	 * passes, which keep these forms native.
+	 * @param cons the form to expand
+	 * @return the expansion, or {@code null} when the operator has none here
+	 */
+	public static @Nullable LispVal expandNativeMacro(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol sym)) {
+			return null;
+		}
+		return switch (sym.name()) {
+			case LispNames.RETURN ->
+				new LispCons(new LispSymbol(LispNames.RETURN_FROM), new LispCons(LispNil.INSTANCE, cons.cdr()));
+			case LispNames.LAMBDA -> listToCons(List.of(new LispSymbol(LispNames.FUNCTION), cons));
+			case LispNames.PROG -> expandProg(cons, false);
+			case LispNames.PROG_STAR -> expandProg(cons, true);
+			case LispNames.PSETF -> expandPsetf(cons);
+			case LispNames.SHIFTF -> expandShiftf(cons);
+			case LispNames.WITH_OPEN_STREAM -> expandWithOpenStream(cons, true);
+			case LispNames.PRINT_UNREADABLE_OBJECT -> expandPrintUnreadableObject(cons);
+			case LispNames.WITH_PACKAGE_ITERATOR -> expandWithPackageIterator(cons);
+			case LispNames.DO_SYMBOLS -> expandDoSymbols(cons, false);
+			case LispNames.DO_EXTERNAL_SYMBOLS -> expandDoSymbols(cons, true);
+			case LispNames.DO_ALL_SYMBOLS -> expandDoAllSymbols(cons);
+			case LispNames.DEFINE_MODIFY_MACRO -> expandDefineModifyMacro(cons);
+			default -> null;
+		};
+	}
+
+	/**
 	 * Expands (cond (test body...) ...) into nested if/let/progn expressions.
 	 *
 	 * <pre>
@@ -48624,11 +48658,32 @@ public final class LispMacroExpander {
 				}
 			}
 		}
+		// *readtable* too, which load BINDS on the interpreter (.kb/readtables.md): an
+		// in-readtable in a file is the file's. Its value is an object the program makes,
+		// so the restore cannot be static like the paths': each level pushes the
+		// readtable current as the file begins and its end pops it back -- in a program
+		// that mentions the variable at all, the only one that can change it.
+		boolean readtable = program.stream().anyMatch(form -> usesSymbol(form, LispNames.READTABLE_VAR));
+		LispSymbol saved = new LispSymbol(
+				PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.LOAD_READTABLES_INTERNAL));
+		LispSymbol current = new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, LispNames.READTABLE_VAR));
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
 		java.util.Deque<LispVal[]> open = new java.util.ArrayDeque<>();
+		boolean declared = false;
 		for (LispVal form : program) {
 			LispVal[] entered = loadContextValues(form);
 			if (entered != null) {
+				if (readtable) {
+					if (!declared) {
+						out.add(listToCons(
+								List.of(new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, LispNames.DEFVAR)),
+										saved, LispNil.INSTANCE)));
+						declared = true;
+					}
+					out.add(listToCons(
+							List.of(new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, LispNames.PUSH)), current,
+									saved)));
+				}
 				open.addLast(entered);
 				emitLoadContext(out, assigned, entered);
 				continue;
@@ -48636,6 +48691,13 @@ public final class LispMacroExpander {
 			if (isLoadContextMarker(form, LispNames.END_FILE)) {
 				if (!open.isEmpty()) {
 					open.removeLast();
+					if (readtable) {
+						out.add(listToCons(List.of(
+								new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, LispNames.SETQ)), current,
+								listToCons(List.of(
+										new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, LispNames.POP)),
+										saved)))));
+					}
 				}
 				emitLoadContext(out, assigned, open.peekLast());
 				continue;
@@ -49151,6 +49213,21 @@ public final class LispMacroExpander {
 	 * @return the flattened top-level forms
 	 */
 	public static List<LispVal> flattenTopLevel(List<LispVal> program) {
+		return flattenTopLevel(program, null);
+	}
+
+	/**
+	 * {@link #flattenTopLevel(List)}, also collecting -- by identity -- every spliced
+	 * form an {@code eval-when} evaluates at COMPILE time (CLHS 3.2.3.1: under
+	 * {@code :compile-toplevel}, or under {@code :execute} inside compile-time-too
+	 * processing). The splice keeps such a form in the program either way; the macro-time
+	 * pass also runs it, which is what lets a readtable an {@code eval-when} installs
+	 * reach the read of the forms after it ({@code .kb/readtables.md}).
+	 * @param program the top-level forms
+	 * @param compileTime collects the forms evaluated at compile time, or {@code null}
+	 * @return the flattened top-level forms
+	 */
+	public static List<LispVal> flattenTopLevel(List<LispVal> program, @Nullable Set<LispVal> compileTime) {
 		// Keep the identity of a program with nothing to splice (callers may rely on
 		// "returned unchanged", e.g. UserMacroExpander's no-macro early return).
 		if (program.stream().noneMatch(LispMacroExpander::isTopLevelSpliceForm)) {
@@ -49158,7 +49235,7 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> out = new java.util.ArrayList<>();
 		for (LispVal form : program) {
-			flattenTopLevelInto(form, out);
+			flattenTopLevelInto(form, out, false, compileTime);
 		}
 		return out;
 	}
@@ -49166,8 +49243,20 @@ public final class LispMacroExpander {
 	private static boolean isTopLevelSpliceForm(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()
 				&& (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())
+						|| isHandlerlessHandlerBind(cons)
 						|| ((LispNames.EVAL_WHEN.equals(sym.name()) || isUiopWithDeprecationWrapper(sym.name())
 								|| isUiopWithUpgradabilityWrapper(sym.name())) && cons.toList().size() >= 2));
+	}
+
+	/**
+	 * Whether the form is a {@code (handler-bind () body...)}: it establishes no handler,
+	 * so its body is a {@code progn}'s. named-readtables wraps its {@code defpackage} in
+	 * one -- SBCL's muffling binding is {@code #+sbcl} -- inside an {@code eval-when},
+	 * and the compile path's package resolver must see the package.
+	 */
+	private static boolean isHandlerlessHandlerBind(LispCons cons) {
+		return cons.car() instanceof LispSymbol sym && LispNames.HANDLER_BIND.equals(sym.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispNil;
 	}
 
 	/**
@@ -49195,14 +49284,18 @@ public final class LispMacroExpander {
 				&& UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_UPGRADABILITY);
 	}
 
-	private static void flattenTopLevelInto(LispVal form, List<LispVal> out) {
+	private static void flattenTopLevelInto(LispVal form, List<LispVal> out, boolean compileTimeToo,
+			@Nullable Set<LispVal> compileTime) {
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()) {
 			// locally splices like progn: its declarations are no-ops downstream, and
 			// libraries wrap top-level defstruct/defun groups in (locally (declare ...)).
-			if (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())) {
+			// So does a handler-bind that binds no handler.
+			if (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())
+					|| isHandlerlessHandlerBind(cons)) {
 				List<LispVal> parts = cons.toList();
-				for (int i = 1; i < parts.size(); i++) {
-					flattenTopLevelInto(splicedPart(cons, parts.get(i)), out);
+				int from = LispNames.HANDLER_BIND.equals(sym.name()) ? 2 : 1;
+				for (int i = from; i < parts.size(); i++) {
+					flattenTopLevelInto(splicedPart(cons, parts.get(i)), out, compileTimeToo, compileTime);
 				}
 				return;
 			}
@@ -49214,8 +49307,10 @@ public final class LispMacroExpander {
 			if (LispNames.EVAL_WHEN.equals(sym.name()) || isUiopWithUpgradabilityWrapper(sym.name())) {
 				List<LispVal> parts = cons.toList();
 				if (parts.size() >= 2) {
+					boolean memberCompileTime = LispNames.EVAL_WHEN.equals(sym.name())
+							? evaluatesAtCompileTime(parts.get(1), compileTimeToo) : compileTimeToo;
 					for (int i = 2; i < parts.size(); i++) {
-						flattenTopLevelInto(splicedPart(cons, parts.get(i)), out);
+						flattenTopLevelInto(splicedPart(cons, parts.get(i)), out, memberCompileTime, compileTime);
 					}
 					return;
 				}
@@ -49227,12 +49322,37 @@ public final class LispMacroExpander {
 			// pairs; flattening that keeps each a top-level definition.
 			if (isUiopWithDeprecationWrapper(sym.name())) {
 				if (cons.toList().size() >= 2) {
-					flattenTopLevelInto(splicedPart(cons, expandUiopWithDeprecation(cons)), out);
+					flattenTopLevelInto(splicedPart(cons, expandUiopWithDeprecation(cons)), out, compileTimeToo,
+							compileTime);
 					return;
 				}
 			}
 		}
 		out.add(form);
+		if (compileTimeToo && compileTime != null) {
+			compileTime.add(form);
+		}
+	}
+
+	/**
+	 * Whether an {@code eval-when} with these situations evaluates its body at compile
+	 * time (CLHS 3.2.3.1): {@code :compile-toplevel}, or {@code :execute} inside
+	 * compile-time-too processing.
+	 */
+	private static boolean evaluatesAtCompileTime(LispVal situations, boolean compileTimeToo) {
+		boolean execute = false;
+		for (LispVal cell = situations; cell instanceof LispCons c; cell = c.cdr()) {
+			if (!(c.car() instanceof LispSymbol situation)) {
+				continue;
+			}
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(situation.name());
+			String name = qn == null ? situation.name() : qn.member();
+			if (":COMPILE-TOPLEVEL".equals(name) || "COMPILE-TOPLEVEL".equals(name) || "COMPILE".equals(name)) {
+				return true;
+			}
+			execute |= ":EXECUTE".equals(name) || "EXECUTE".equals(name) || "EVAL".equals(name);
+		}
+		return compileTimeToo && execute;
 	}
 
 	/**

@@ -10,7 +10,9 @@ extension, with the `--source-language` CLI override winning for the entry sourc
 `read` is `readUntilError` plus a throw: the forms before the first read error and that
 error. The interpreter's `load` and its entry file read Common Lisp form at a time instead
 (`readForms`), each form with the readtable the forms before it left
-(`.kb/readtables.md`, `.kb/read-load-streams.md`).
+(`.kb/readtables.md`, `.kb/read-load-streams.md`), and so does the compile path's
+`LoadInliner` for every Common Lisp file, the entry included (`inlineSource`), with the
+readtable the compile-time evaluator holds.
 
 The pick is PER FILE: a `(load ...)`ed file is read in the language ITS extension
 names, so one program may mix languages file by file (`LoadInliner.spliceFile` on the

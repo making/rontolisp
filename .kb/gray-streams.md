@@ -109,6 +109,19 @@ the print family wrote PAST the instance to standard output on the compile paths
   `rontolisp:stream-close` generic** (`GrayStreamsLibrary.ownsClose` /
   `closRegistry.findGeneric(CLOSE)`). With none, `close`/`open-stream-p` = `t` and
   `stream-element-type` = `character` / `(unsigned-byte 8)` by `typep` on the base classes.
+- **An OWNED operator keeps the Gray default as a method on `rontolisp:fundamental-stream`**
+  (SBCL's shape; `GrayStreamsLibrary.OWNABLE_DEFAULT_METHODS`), added only for an operator the
+  program owns. Before (2026-10-31) owning `close` for ONE class sent every other Gray instance
+  to the built-in, which rejects it: chunga's `close` method broke drakma's
+  `flex:with-input-from-sequence` on all four backends. Compile path: `GrayStreamsLibrary.process`
+  splices the method behind the protocol's last form (an unhoisted load-spliced protocol: in
+  place, else in front of the body; a defmethod ahead of its specializer's defclass is a compile
+  error). Interpreter: `LispEvaluator.installGrayOwnableDefault`, called from `defineDispatcher`
+  and from `ensureGrayStreamsLoaded`, since either half can come first. Pins:
+  `LispEvaluatorTest#grayCloseStandsDownForAProgramThatDefinesACloseMethod` (generic before the
+  protocol), `JvmLispCompilerTest#compileAndRunGrayCloseStandsDownForAProgramThatMethodsClose`,
+  ci-spec `defmethod-on-a-builtin-name-keeps-the-builtin` (`sbi-gray`), `FastIoCircularStreamsE2eTest`
+  (load-spliced protocol).
   A Gray base class carries no width, so this stays the octet even though a built-in FILE stream
   now answers its real widened type (`read-load-streams.md`, "Element types wider and narrower
   than one octet"); the built-in answer is what a Gray dispatcher's non-instance arm reaches.
@@ -501,9 +514,25 @@ can make one carries it and, with it, the protocol. Pin:
   (bivalent), slots `stream`/`external-format`/`element-type`/`position`/`bound` with EXTERNAL
   `flexi-stream-*` readers (cl+ssl spells `flexi-streams:flexi-stream-stream` single-colon and
   specializes on the class). **Reads/writes OCTETS on the wrapped stream**, which must be
-  binary-capable: `stream-read-char`/`-write-char` are a UTF-8 codec over
-  `read-byte`/`write-byte`; UTF-8 is the only external format. `:bound` honoured, `:position`
-  seeds the octet counter, `:column` ignored.
+  binary-capable: `stream-read-char`/`-write-char` run the codec of the stream's external format
+  over `read-byte`/`write-byte`. `:bound` honoured, `:position` seeds the octet counter,
+  `:column` ignored. The element type is recorded, selects nothing (bivalent; a non-string
+  `read-sequence` buffer gets octets).
+- **External formats** (2026-10-31, for drakma and cl-smtp): a `flexi-streams:external-format`
+  object (name + `:eol-style`; `:little-endian`/`:id` recorded only), from `make-external-format`
+  or a keyword / `(:name :eol-style ...)` designator, which the constructor and
+  `(setf flexi-stream-external-format)` convert. Names by `string-equal` onto `:utf-8`,
+  `:iso-8859-1` (`latin-1`, `latin1`) and `:us-ascii` (`ascii`); any other SIGNALS (drakma's
+  `determine-body-format` falls back to binary on it). One encoder (`%encode-char`) and one
+  decoder (`%decode-char`) serve the string functions and the wrapper; `:crlf` reads one octet
+  ahead past a CR (the wrapper parks it in its `ahead` slot, not counted in the position).
+  Unencodable code points / undecodable ASCII octets signal unless `*substitution-char*`;
+  malformed UTF-8 never signals. **Divergence**: string functions and `make-flexi-stream`
+  default to `:utf-8` (upstream `:latin1`). `with-input-from-sequence` (a list reads as its
+  vector) / `with-output-to-sequence` close their stream. drakma loads and an `http-request`
+  (http and https, text and binary bodies) answers on the interpreter, measured 2026-10-31.
+- Not the real library: 48,418 of its 52,557 lines are the GBK table (`enc-cn-tbl.lisp`), the
+  rest mostly code-page tables and per-(encoding, eol) class macrology (measured 2026-10-31).
 - **Deliberately no `close` method**: the stand-down is PROGRAM-wide, so one
   `(defmethod close ...)` in a shim every lack/clack program loads would disable the Gray
   `close` rewrite for every class.
@@ -527,7 +556,8 @@ can make one carries it and, with it, the protocol. Pin:
 - ci-spec: `gray-stream-instance-dispatch`, `gray-stream-binary-round-trip-and-file-position`,
   `gray-stream-input-protocol-widening`, `gray-stream-is-a-stream`,
   `gray-stream-unbounded-write-passes-integer-bounds` (`GrayStreamCallFixture
-  .UNBOUNDED_WRITE_PROGRAM` in the three backend suites), `gray-stream-operators-as-function-values`.
+  .UNBOUNDED_WRITE_PROGRAM` in the three backend suites), `gray-stream-operators-as-function-values`,
+  `flexi-streams-external-formats`.
 
 ## The composite stream classes as CL type names, and the zero-component broadcast stream (2026-09-23, `.todo/927`)
 

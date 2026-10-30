@@ -251,6 +251,15 @@ public final class LispNames {
 	/** The {@code mod} built-in function. */
 	public static final String MOD = "MOD";
 
+	/**
+	 * The REPL history variables ({@code *} {@code **} {@code ***}, {@code /} ...,
+	 * {@code +} ...): standard {@code cl} variables only a REPL sets, nil everywhere
+	 * else. The interpreter binds them globally and SWANK's listener sets them; a
+	 * compiled program reads nil from one it never assigns.
+	 */
+	public static final java.util.List<String> REPL_VARIABLES = java.util.List.of("*", "**", "***", "/", "//", "///",
+			"+", "++", "+++");
+
 	/** The {@code rem} built-in function. */
 	public static final String REM = "REM";
 
@@ -5994,6 +6003,15 @@ public final class LispNames {
 	public static final String END_FILE = "%END-FILE";
 
 	/**
+	 * The run-time stack ({@code rontolisp::%load-readtables}) of the readtables current
+	 * as each open {@link #BEGIN_FILE} level began: a program that mentions
+	 * {@link #READTABLE_VAR} pushes onto it at a file's start and pops it back at the
+	 * file's end, the binding {@code load} makes on the interpreter
+	 * ({@code LispMacroExpander.lowerLoadContextMarkers}).
+	 */
+	public static final String LOAD_READTABLES_INTERNAL = "%LOAD-READTABLES";
+
+	/**
 	 * Internal marker {@code (%asdf-component "SYSTEM" INDEX)} inserted by
 	 * {@code LoadInliner} before the forms it splices for one COMPONENT of an ASDF system
 	 * (the file or leaf shim at {@code INDEX} of the system's load order). The compilers
@@ -10887,7 +10905,7 @@ public final class LispNames {
 
 	/**
 	 * {@code flexi-streams:flexi-stream} -- the WRAPPER class: a Gray stream that lends
-	 * characters (UTF-8, the shim's one external format) to the octet stream it wraps. A
+	 * characters (through its {@link #EXTERNAL_FORMAT}) to the octet stream it wraps. A
 	 * class rather than the identity the shim used to answer, because that is what the
 	 * name means everywhere else -- upstream cl+ssl specializes {@code ssl-stream-handle}
 	 * on it -- and because writing a character to an octet sink found no applicable
@@ -10899,10 +10917,55 @@ public final class LispNames {
 	public static final String FLEXI_STREAM_STREAM = "FLEXI-STREAM-STREAM";
 
 	/**
-	 * {@code flexi-streams:flexi-stream-external-format} -- recorded and readable back,
-	 * but it selects no codec: UTF-8 is the shim's only external format.
+	 * {@code flexi-streams:flexi-stream-external-format} -- the wrapper's
+	 * {@link #EXTERNAL_FORMAT}, which selects its codec; its setf converts a designator.
 	 */
 	public static final String FLEXI_STREAM_EXTERNAL_FORMAT = "FLEXI-STREAM-EXTERNAL-FORMAT";
+
+	/**
+	 * {@code flexi-streams:external-format} -- the class of an external format: a
+	 * canonical name ({@code :utf-8}, {@code :iso-8859-1} or {@code :us-ascii}, the
+	 * shim's three) and an end-of-line style.
+	 */
+	public static final String EXTERNAL_FORMAT = "EXTERNAL-FORMAT";
+
+	/** {@code flexi-streams:make-external-format}. */
+	public static final String MAKE_EXTERNAL_FORMAT = "MAKE-EXTERNAL-FORMAT";
+
+	/** {@code flexi-streams:external-format-name}. */
+	public static final String EXTERNAL_FORMAT_NAME = "EXTERNAL-FORMAT-NAME";
+
+	/** {@code flexi-streams:external-format-eol-style}. */
+	public static final String EXTERNAL_FORMAT_EOL_STYLE = "EXTERNAL-FORMAT-EOL-STYLE";
+
+	/**
+	 * {@code flexi-streams:external-format-little-endian} (recorded, selects nothing).
+	 */
+	public static final String EXTERNAL_FORMAT_LITTLE_ENDIAN = "EXTERNAL-FORMAT-LITTLE-ENDIAN";
+
+	/** {@code flexi-streams:external-format-id} (recorded, selects nothing). */
+	public static final String EXTERNAL_FORMAT_ID = "EXTERNAL-FORMAT-ID";
+
+	/** {@code flexi-streams:external-format-equal}. */
+	public static final String EXTERNAL_FORMAT_EQUAL = "EXTERNAL-FORMAT-EQUAL";
+
+	/** {@code flexi-streams:*default-eol-style*} -- {@code :lf}. */
+	public static final String DEFAULT_EOL_STYLE = "*DEFAULT-EOL-STYLE*";
+
+	/**
+	 * {@code flexi-streams:*substitution-char*} -- what an uncodable code point or octet
+	 * codes as, instead of signalling.
+	 */
+	public static final String SUBSTITUTION_CHAR = "*SUBSTITUTION-CHAR*";
+
+	/** {@code flexi-streams:octet} -- the type {@code (unsigned-byte 8)}. */
+	public static final String OCTET = "OCTET";
+
+	/** {@code flexi-streams:with-input-from-sequence}. */
+	public static final String WITH_INPUT_FROM_SEQUENCE = "WITH-INPUT-FROM-SEQUENCE";
+
+	/** {@code flexi-streams:with-output-to-sequence}. */
+	public static final String WITH_OUTPUT_TO_SEQUENCE = "WITH-OUTPUT-TO-SEQUENCE";
 
 	/**
 	 * {@code flexi-streams:flexi-stream-element-type} -- {@code character} by default.
@@ -10919,7 +10982,7 @@ public final class LispNames {
 	public static final String FLEXI_STREAM_BOUND = "FLEXI-STREAM-BOUND";
 
 	/**
-	 * {@code string-to-octets} -- the flexi-streams shim's UTF-8 encoder, AND (as
+	 * {@code string-to-octets} -- the flexi-streams shim's encoder, AND (as
 	 * {@code rontolisp:string-to-octets}, a distinct symbol the same bare member name
 	 * serves since prelude selection matches by RESOLVED symbol, not by this String alone
 	 * -- {@code am.ik.rontolisp.eval.LispPreludeLibrary#process}) the language's own
@@ -10928,7 +10991,7 @@ public final class LispNames {
 	public static final String STRING_TO_OCTETS = "STRING-TO-OCTETS";
 
 	/**
-	 * {@code octets-to-string} -- the flexi-streams shim's UTF-8 decoder, AND (as
+	 * {@code octets-to-string} -- the flexi-streams shim's decoder, AND (as
 	 * {@code rontolisp:octets-to-string}, a distinct symbol -- see
 	 * {@link #STRING_TO_OCTETS}) a thin public delegator to the native
 	 * {@link #OCTETS_TO_STRING_INTERNAL} lenient decoder.

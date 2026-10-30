@@ -1469,6 +1469,12 @@ public final class LispEvaluator {
 		// it (a bare Environment) the error-mode read signals, matching the compiled
 		// backends' embedded readers.
 		this.globalEnv.setReadTimeEvalResolver(this::resolveReadTimeEval);
+		// Symbol interning for the runtime readers: a token is homed in the package
+		// current WHEN it is read, as CL's reader interns in *package* -- a macro that
+		// reads a name at expansion time (cl-pdf's AFM parser) expands inside its
+		// defining package (expandMacroCall), and the caller's package is current again
+		// by the time the expansion runs.
+		this.globalEnv.setReadSymbolHome(this.packageResolver::readSpelling);
 		// *read-suppress* for the runtime readers: the built-in holds the global
 		// environment, so the dynamic binding a (let ((*read-suppress* t)) ...) makes is
 		// visible only from here.
@@ -4526,6 +4532,32 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * {@link #currentReadSyntax()} for a read whose forms are COMPILED rather than run
+	 * here -- the compile path's ({@code ReadTimeImage}): a reader macro function still
+	 * runs in this evaluator, and {@code check} judges what it answered before the value
+	 * becomes part of a form. A function that signals is a read error at its character,
+	 * as the compile reports it.
+	 * @param check answers the call's result, or throws {@link ReadSyntax.Refusal}
+	 * @return the syntax, or {@code null} for the standard one
+	 */
+	@Nullable ReadSyntax currentReadSyntax(java.util.function.UnaryOperator<ReadSyntax.Result> check) {
+		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
+		return readtable == null ? null : ReadtableSyntax.of(readtable, (function, input, offset, arguments) -> {
+			ReadSyntax.Result result;
+			try {
+				result = callReaderMacro(function, input, offset, arguments);
+			}
+			catch (ReadSyntax.Refusal refusal) {
+				throw refusal;
+			}
+			catch (RuntimeException ex) {
+				throw new ReadSyntax.Refusal("the reader macro function signalled: " + ex.getMessage(), ex);
+			}
+			return check.apply(result);
+		});
+	}
+
+	/**
 	 * Calls a reader macro function over the text being read: a string input stream
 	 * positioned where the macro character left the text is its first argument, and where
 	 * the function left that stream is where the read goes on.
@@ -4577,8 +4609,10 @@ public final class LispEvaluator {
 		}
 		String text = reader.text();
 		boolean markers = SourceLanguage.usesReadEvalMarkers(text);
-		LispReader.Forms forms = LispReader.forms(text, currentReadFeatures(), markers, null, this::resolveReadTimeEval,
-				table.logicalOffset(designator, reader), false);
+		LispReader.Forms forms = LispReader
+			.forms(text, currentReadFeatures(), markers, null, this::resolveReadTimeEval,
+					table.logicalOffset(designator, reader), false)
+			.homingSymbols(this.packageResolver::readSpelling);
 		try {
 			if (delimited) {
 				List<LispVal> items = forms.nextDelimited(syntax, ((LispChar) args.get(0)).codePoint());
@@ -4588,7 +4622,7 @@ public final class LispEvaluator {
 					LispVal item = items.get(i);
 					list = new LispCons(markers ? resolveReadTimeEval(item) : item, list);
 				}
-				return homeReadSymbols(list);
+				return list;
 			}
 			LispVal datum = forms.next(syntax);
 			int end = forms.position();
@@ -4605,8 +4639,7 @@ public final class LispEvaluator {
 				end++;
 			}
 			table.moveTo(designator, reader, end);
-			return homeReadSymbols(
-					StructLiteralFolder.fold(markers ? resolveReadTimeEval(datum) : datum, this.closRegistry));
+			return StructLiteralFolder.fold(markers ? resolveReadTimeEval(datum) : datum, this.closRegistry);
 		}
 		catch (LispReadException e) {
 			table.moveTo(designator, reader, forms.position());
@@ -4614,22 +4647,6 @@ public final class LispEvaluator {
 			throw new LispEvalException(message, e.isEndOfFile() ? ClosRegistry.newEndOfFileCondition(designator)
 					: ClosRegistry.newReaderErrorCondition(new LispString(e.reason()), designator));
 		}
-	}
-
-	/**
-	 * The symbols of a datum the readtable-honoring read answered, homed in the current
-	 * package as data -- what CL's reader does when it interns. A reader macro inspects
-	 * what it reads at read time (cl-annot looks an annotation's arity up on the symbol
-	 * it read), so a bare spelling, which names a {@code cl-user} symbol, would miss the
-	 * current package's own one.
-	 */
-	private LispVal homeReadSymbols(LispVal datum) {
-		if (!(datum instanceof LispSymbol) && !(datum instanceof LispCons)) {
-			return datum;
-		}
-		LispVal resolved = this.packageResolver
-			.resolve(new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum, LispNil.INSTANCE)));
-		return resolved instanceof LispCons quote && quote.cdr() instanceof LispCons rest ? rest.car() : datum;
 	}
 
 	/**
@@ -4694,6 +4711,23 @@ public final class LispEvaluator {
 	public void popLoadContext() {
 		this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
 		this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
+	}
+
+	/**
+	 * Binds {@code *readtable*} to its current value for a file whose forms this
+	 * evaluator is about to process -- the binding {@link #loadFile} makes around a file
+	 * it reads (CLHS {@code load}), for the compile path's macro-time pass, which crosses
+	 * a spliced file's {@code (%begin-file P T)} bracket instead: an {@code in-readtable}
+	 * inside the file is the file's ({@code .kb/readtables.md}).
+	 */
+	void pushReadtableBinding() {
+		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
+		this.dynamicBindings.push(LispNames.READTABLE_VAR, readtable == null ? LispNil.INSTANCE : readtable);
+	}
+
+	/** Undoes one {@link #pushReadtableBinding}. */
+	void popReadtableBinding() {
+		this.dynamicBindings.pop(LispNames.READTABLE_VAR);
 	}
 
 	/**
@@ -8237,6 +8271,30 @@ public final class LispEvaluator {
 			for (LispVal form : GrayStreamsLibrary.forms()) {
 				eval(form, this.globalEnv);
 			}
+			for (String owned : List.copyOf(this.closRegistry.generics().keySet())) {
+				installGrayOwnableDefault(owned);
+			}
+		}
+	}
+
+	/** The owned stream operators whose Gray default method is installed. */
+	private final Set<String> grayOwnableDefaults = new HashSet<>();
+
+	/**
+	 * Installs the Gray default method of an operator the program owns
+	 * ({@code GrayStreamsLibrary.OWNABLE_DEFAULT_METHODS}) once both halves exist: the
+	 * protocol is loaded and the program has a generic on the name. Called from both
+	 * sides, since either can come first; the compile path splices the same method.
+	 * @param genericName the generic-function name
+	 */
+	private void installGrayOwnableDefault(String genericName) {
+		if (!this.grayStreamsLoaded || this.grayOwnableDefaults.contains(genericName)) {
+			return;
+		}
+		LispVal method = GrayStreamsLibrary.ownableDefaultMethod(genericName);
+		if (method != null) {
+			this.grayOwnableDefaults.add(genericName);
+			eval(method, this.globalEnv);
 		}
 	}
 
@@ -10440,6 +10498,7 @@ public final class LispEvaluator {
 		boolean producerWasMethoded = this.methodedProducerDispatch.containsKey(genericName);
 		String fallback = builtinDefaultMethodFor(genericName);
 		eval(LispMacroExpander.generateDispatcher(genericName, this.closRegistry, fallback), env);
+		installGrayOwnableDefault(genericName);
 		String alias = this.methodedProducerDispatch.get(genericName);
 		if (alias != null) {
 			LispVal dispatcher = this.globalEnv.lookupFunctionOrNull(genericName);
@@ -11744,7 +11803,10 @@ public final class LispEvaluator {
 	 * Expands the top-level form once when its operator is a user macro or a built-in
 	 * macro ({@code macroexpand-1}). Subforms are not walked. Returns the form itself
 	 * (same reference) when the operator is not a macro, so callers can detect
-	 * non-expansion by identity.
+	 * non-expansion by identity. It expands exactly the names {@code macro-function}
+	 * claims ({@link #isMacroName}): a code walker trusts the one and calls the other, so
+	 * a CL function the expander happens to rewrite inline ({@code typep}) stays a call,
+	 * and a CL macro the evaluator runs natively ({@code return}) still expands.
 	 * @param form the form to expand
 	 * @return the expansion, or {@code form} unchanged
 	 */
@@ -11753,7 +11815,13 @@ public final class LispEvaluator {
 			if (isUserMacro(sym.name())) {
 				return expandUserMacro(cons);
 			}
+			if (!isMacroName(sym.name())) {
+				return form;
+			}
 			LispVal expanded = LispMacroExpander.expandBuiltinMacro(cons);
+			if (expanded == null) {
+				expanded = LispMacroExpander.expandNativeMacro(cons);
+			}
 			if (expanded != null) {
 				return expanded;
 			}
@@ -11795,9 +11863,9 @@ public final class LispEvaluator {
 	/**
 	 * Whether the name has a macro function: a user {@code defmacro} (a {@code macrolet}
 	 * body's local macro and a {@code (setf macro-function)} alias register in the same
-	 * table) or a built-in operator with no function value that is not one of the 25 ANSI
-	 * special operators -- the CL macros the expander dispatches on, plus the ones
-	 * rontolisp implements as special forms of its own.
+	 * table) or a built-in operator with no function value outside
+	 * {@link PackageRegistry#namesWithoutMacroFunction()} -- the CL macros the expander
+	 * dispatches on, plus the ones rontolisp implements as special forms of its own.
 	 */
 	private boolean isMacroName(String name) {
 		return isUserMacro(name)
