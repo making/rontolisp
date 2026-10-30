@@ -30532,9 +30532,12 @@ public final class LispMacroExpander {
 	 * Expands {@code (cerror ...)} like {@link #expandCerror(LispCons, ClosRegistry)},
 	 * but in restart mode the error becomes REAL {@code cerror}: the equivalent
 	 * {@code (restart-case (error datum args...) (continue () :report cfc nil))}, so a
-	 * handler (or the {@code continue} function) can resume past it with nil. Outside
-	 * restart mode nothing can invoke the restart, so the lite lowering is
-	 * behavior-identical and keeps the program byte-identical.
+	 * handler (or the {@code continue} function) can resume past it with nil. With format
+	 * arguments the report is {@code (lambda (s) (format s cfc args...))} over
+	 * temporaries the error call assigns as it evaluates each non-constant argument, so
+	 * the error and the report see the same values. Outside restart mode nothing can
+	 * invoke the restart, so the lite lowering is behavior-identical and keeps the
+	 * program byte-identical.
 	 * @param cons the cerror expression
 	 * @param closRegistry the class registry
 	 * @param restartMode whether the program uses the restart system
@@ -30549,12 +30552,59 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(
 					LispNames.CERROR + " expects a continue format control and a datum: " + cons.print());
 		}
-		List<LispVal> errorParts = new java.util.ArrayList<>();
+		List<LispVal> args = parts.subList(3, parts.size());
+		List<LispVal> bindings = new ArrayList<>();
+		java.util.function.Supplier<LispSymbol> temps = freshTemps(CERROR_ARG_VAR, cons);
+		LispVal control = parts.get(1);
+		if (!args.isEmpty() && !isOrderFreeConstant(control)) {
+			control = bind(temps.get(), control, bindings);
+		}
+		// Each non-constant argument is assigned to its temporary where the error call
+		// evaluates it: the order is the call's, and the datum stays as written for the
+		// signal lowering's static dispatch.
+		List<LispVal> errorParts = new ArrayList<>();
 		errorParts.add(new LispSymbol(LispNames.ERROR));
-		errorParts.addAll(parts.subList(2, parts.size()));
+		errorParts.add(parts.get(2));
+		List<LispVal> reportArgs = new ArrayList<>(args.size());
+		for (LispVal arg : args) {
+			if (isOrderFreeConstant(arg)) {
+				errorParts.add(arg);
+				reportArgs.add(arg);
+			}
+			else {
+				LispSymbol temp = bind(temps.get(), LispNil.INSTANCE, bindings);
+				errorParts.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), temp, arg)));
+				reportArgs.add(temp);
+			}
+		}
+		LispVal report = args.isEmpty() ? control : formatReport(cons, control, reportArgs);
 		LispVal clause = listToCons(List.of(new LispSymbol(LispNames.CONTINUE), LispNil.INSTANCE,
-				new LispSymbol(":REPORT"), parts.get(1), LispNil.INSTANCE));
-		return listToCons(List.of(new LispSymbol(LispNames.RESTART_CASE), listToCons(errorParts), clause));
+				new LispSymbol(":REPORT"), report, LispNil.INSTANCE));
+		LispVal restartCase = listToCons(
+				List.of(new LispSymbol(LispNames.RESTART_CASE), listToCons(errorParts), clause));
+		return bindings.isEmpty() ? restartCase
+				: listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), restartCase));
+	}
+
+	private static final String CERROR_ARG_VAR = "__cerror_arg";
+
+	private static final String REPORT_STREAM_VAR = "__report_stream";
+
+	/**
+	 * A restart report over format arguments, {@code (lambda (s) (format s control
+	 * args...))}: the arguments are evaluated each time the report prints (CLHS
+	 * {@code with-simple-restart}). The stream parameter is named apart from every symbol
+	 * of {@code form}, so it captures no variable an argument reads.
+	 */
+	private static LispVal formatReport(LispCons form, LispVal control, List<LispVal> args) {
+		LispSymbol stream = freshTemps(REPORT_STREAM_VAR, form).get();
+		List<LispVal> formatCall = new ArrayList<>(args.size() + 3);
+		formatCall.add(new LispSymbol(LispNames.FORMAT));
+		formatCall.add(stream);
+		formatCall.add(control);
+		formatCall.addAll(args);
+		return listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.<LispVal>of(stream)),
+				listToCons(formatCall)));
 	}
 
 	/**
@@ -37861,8 +37911,10 @@ public final class LispMacroExpander {
 	/**
 	 * Expands {@code (with-simple-restart (name format-control format-args...)
 	 * body...)} into the equivalent {@code restart-case} whose named clause returns
-	 * {@code (values nil t)} from the form (the CL contract). The format control (and
-	 * lite: its arguments, dropped) become the restart's report.
+	 * {@code (values nil t)} from the form (the CL contract). The format control is the
+	 * restart's report; with arguments the report is
+	 * {@code (lambda (s) (format s control args...))}, the arguments evaluated when it
+	 * prints.
 	 * @param cons the with-simple-restart expression
 	 * @return the expanded expression
 	 */
@@ -37874,7 +37926,9 @@ public final class LispMacroExpander {
 					LispNames.WITH_SIMPLE_RESTART + " expects (name format-control args...): " + cons.print());
 		}
 		List<LispVal> specParts = spec.toList();
-		LispVal report = specParts.size() > 1 ? specParts.get(1) : LispNil.INSTANCE;
+		LispVal report = specParts.size() > 2
+				? formatReport(cons, specParts.get(1), specParts.subList(2, specParts.size()))
+				: specParts.size() > 1 ? specParts.get(1) : LispNil.INSTANCE;
 		LispVal valuesForm = listToCons(List.of(new LispSymbol(LispNames.VALUES), LispNil.INSTANCE, LispTrue.INSTANCE));
 		LispVal clause = listToCons(List.of(nameSym, LispNil.INSTANCE, new LispSymbol(":REPORT"), report, valuesForm));
 		return listToCons(
@@ -45132,11 +45186,12 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Whether the program contains an {@code error} call with a computed condition-type
-	 * datum AND initargs -- the condition under which the compile-path
-	 * {@link #expandSignalDesignator} emits a call to the shared {@code %error-runtime}
-	 * dispatch defun, which {@link #expandTopLevelDefinitions} must then inject together
-	 * with its per-condition-class construction helpers. Quoted data is skipped.
+	 * Whether the program contains an {@code error} (or {@code cerror}) call with a
+	 * computed condition-type datum AND initargs -- the condition under which the
+	 * compile-path {@link #expandSignalDesignator} emits a call to the shared
+	 * {@code %error-runtime} dispatch defun, which {@link #expandTopLevelDefinitions}
+	 * must then inject together with its per-condition-class construction helpers. Quoted
+	 * data is skipped.
 	 * @param program the top-level forms
 	 * @return {@code true} when the shared dispatch defun is needed
 	 */
@@ -45178,9 +45233,12 @@ public final class LispMacroExpander {
 				}
 				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 				String member = qn == null ? op.name() : qn.member();
-				if (LispNames.ERROR.equals(member) && cons.isProperList()) {
+				if ((LispNames.ERROR.equals(member) || LispNames.CERROR.equals(member)) && cons.isProperList()) {
+					// (cerror continue-control datum args...): restart mode lowers it to
+					// (error datum args...) after this scan.
+					int datumIndex = LispNames.CERROR.equals(member) ? 2 : 1;
 					List<LispVal> parts = cons.toList();
-					if (parts.size() > 2 && isRuntimeErrorDatum(parts.get(1))) {
+					if (parts.size() > datumIndex + 1 && isRuntimeErrorDatum(parts.get(datumIndex))) {
 						return true;
 					}
 				}

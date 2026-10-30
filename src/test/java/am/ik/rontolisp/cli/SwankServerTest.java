@@ -483,23 +483,26 @@ class SwankServerTest {
 			assertThat(client.sldb("(swank:sldb-continue)", "return")).containsExactly("(:return (:ok nil) id)");
 			assertThat(client.sldb("(swank:throw-to-toplevel)", boom)).containsExactly("(:return (:abort \"NIL\") id)",
 					"(:debug-return tid 1 nil)", "(:return (:abort \"#<SIMPLE-ERROR \\\"boom 1\\\">\") id)");
-			// a numbered restart: the program's own, the request answering its value
+			// a numbered restart: the program's own, the request answering its value; a
+			// with-simple-restart report formats its arguments
 			long pick = client.send(
-					"(swank-repl:listener-eval \"(restart-case (error \\\"pick ~a\\\" 2)"
-							+ " (use-five () :report \\\"Return five.\\\" 5) (use-ten () 10))\n\")",
+					"(swank-repl:listener-eval \"(with-simple-restart (skip \\\"Skip ~a.\\\" 'it)"
+							+ " (restart-case (error \\\"pick ~a\\\" 2)"
+							+ " (use-five () :report \\\"Return five.\\\" 5) (use-ten () 10)))\n\")",
 					"CL-USER", ":repl-thread");
 			assertThat(client.upTo("debug-activate").getFirst()).contains(" (\"pick 2\" ")
-				.contains(" ((\"USE-FIVE\" \"Return five.\") (\"USE-TEN\" \"USE-TEN\") (\"RETRY\" ");
+				.contains(" ((\"USE-FIVE\" \"Return five.\") (\"USE-TEN\" \"USE-TEN\") (\"SKIP\" \"Skip IT.\")"
+						+ " (\"RETRY\" ");
 			assertThat(client.sldb("(swank:invoke-nth-restart-for-emacs 1 0)", pick)).containsExactly(
 					"(:return (:abort \"NIL\") id)", "(:debug-return tid 1 nil)",
 					"(:write-string \"5\n\" :repl-result)", "(:return (:ok nil) id)");
-			// c: cerror's continue
+			// c: cerror's continue, its report formatted with the error's arguments
 			long cerror = client.send(
 					"(swank-repl:listener-eval"
-							+ " \"(progn (cerror \\\"Keep going.\\\" \\\"Cerror ~a\\\" 3) :went-on)\n\")",
+							+ " \"(progn (cerror \\\"Use ~a.\\\" \\\"Cerror ~a\\\" 3) :went-on)\n\")",
 					"CL-USER", ":repl-thread");
-			assertThat(client.upTo("debug-activate").getFirst())
-				.contains(" ((\"CONTINUE\" \"Keep going.\") (\"RETRY\" ");
+			assertThat(client.upTo("debug-activate").getFirst()).contains(" (\"Cerror 3\" ")
+				.contains(" ((\"CONTINUE\" \"Use 3.\") (\"RETRY\" ");
 			assertThat(client.sldb("(swank:sldb-continue)", cerror)).containsExactly("(:return (:abort \"NIL\") id)",
 					"(:debug-return tid 1 nil)", "(:write-string \":WENT-ON\n\" :repl-result)",
 					"(:return (:ok nil) id)");

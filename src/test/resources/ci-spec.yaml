@@ -15524,10 +15524,16 @@ cases:
       (print (handler-bind ((error (lambda (c) (invoke-restart :five 1 2 3 4 5))))
                (restart-case (error "x")
                  (:five (a b c d e) (list a b c d e)))))
-      (print (handler-bind ((error (lambda (c) (continue))))
-               (list :after (cerror "Continue." "problem"))))
-      (print (handler-bind ((error (lambda (c) (invoke-restart 'ci-skip))))
-               (multiple-value-list (with-simple-restart (ci-skip "Skip it") (error "x")))))
+      ;; cerror evaluates its format arguments once, for the error and the report;
+      ;; with-simple-restart's are evaluated only when the report prints.
+      (print (let ((ci-rs-k 0) (ci-rs-msg nil))
+               (handler-bind ((error (lambda (c) (setq ci-rs-msg (princ-to-string c)) (continue))))
+                 (list :after (cerror "Use ~a." "problem ~a" (incf ci-rs-k)) ci-rs-k ci-rs-msg))))
+      (print (let ((ci-rs-k 0))
+               (handler-bind ((error (lambda (c) (invoke-restart 'ci-skip))))
+                 (list (multiple-value-list
+                        (with-simple-restart (ci-skip "Skip ~a." (incf ci-rs-k)) (error "x")))
+                       ci-rs-k))))
       (print (handler-bind ((warning (lambda (w) (muffle-warning))))
                (list :done (warn "noise"))))
       (print (let ((ci-rs-hit nil))
@@ -15584,8 +15590,8 @@ cases:
       (:RECONNECTED 42)
       3
       (1 2 3 4 5)
-      (:AFTER NIL)
-      (NIL T)
+      (:AFTER NIL 1 "problem 1")
+      ((NIL T) 0)
       (:DONE NIL)
       9
       (CI-AAA CI-BBB)

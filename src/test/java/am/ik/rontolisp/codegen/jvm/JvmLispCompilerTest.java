@@ -9489,6 +9489,13 @@ class JvmLispCompilerTest {
 				(print (handler-case (boom 'my-err) (my-err (c) (list :caught (my-err-code c)))))
 				(print (handler-case (boom 'type-error) (type-error (c) :caught-type-error)))
 				""")).isEqualTo("(:CAUGHT 42)\n:CAUGHT-TYPE-ERROR");
+		// cerror's datum stands one place later; restart mode lowers it after the scan
+		// that decides the injection.
+		assertThat(compileAndRun("""
+				(define-condition my-err (error) ((code :initarg :code :reader my-err-code)))
+				(defun boom (ty) (cerror "Go on." ty :code 7))
+				(print (handler-bind ((my-err (lambda (c) (continue)))) (list (boom 'my-err) :went-on)))
+				""")).isEqualTo("(NIL :WENT-ON)");
 	}
 
 	// define-setf-expander / defsetf are handled by the compile-path pass

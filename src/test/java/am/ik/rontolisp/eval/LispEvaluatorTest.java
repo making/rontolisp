@@ -14015,17 +14015,20 @@ class LispEvaluatorTest {
 	@Test
 	void withSimpleRestartReturnsNilAndT() {
 		assertThat(eval("""
-				(handler-bind ((error (lambda (c) (invoke-restart 'skip))))
-				  (multiple-value-list (with-simple-restart (skip "Skip it") (error "x"))))
-				""").print()).isEqualTo("(NIL T)");
+				(let ((k 0))
+				  (handler-bind ((error (lambda (c) (invoke-restart 'skip))))
+				    (list (multiple-value-list (with-simple-restart (skip "Skip ~a." (incf k)) (error "x")))
+				          k)))
+				""").print()).isEqualTo("((NIL T) 0)");
 	}
 
 	@Test
 	void cerrorEstablishesContinueRestart() {
 		assertThat(eval("""
-				(handler-bind ((error (lambda (c) (continue))))
-				  (list :after (cerror "Continue." "problem")))
-				""").print()).isEqualTo("(:AFTER NIL)");
+				(let ((k 0) (msg nil))
+				  (handler-bind ((error (lambda (c) (setq msg (princ-to-string c)) (continue))))
+				    (list :after (cerror "Use ~a." "problem ~a" (incf k)) k msg)))
+				""").print()).isEqualTo("(:AFTER NIL 1 \"problem 1\")");
 	}
 
 	@Test
