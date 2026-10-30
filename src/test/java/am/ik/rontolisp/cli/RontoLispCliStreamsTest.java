@@ -320,6 +320,19 @@ class RontoLispCliStreamsTest {
 		assertThat(lines).hasSize(2);
 		assertThat(lines.get(0)).isEqualTo("Unhandled condition: twice: bad argument N");
 		assertThat(lines.get(1)).startsWith("  at ").endsWith("lib.lisp:2 in TWICE");
+		// A run-time error while the loaded file's top-level forms run: the handler-bind
+		// seam re-raises a condition-less error as a replacement carrying the instance,
+		// and the replacement keeps where the original had been.
+		Files.writeString(this.tempDir.resolve("run.lisp"), """
+				(defun g ()
+				  (no-such-fn 1))
+
+				(g)
+				""");
+		Files.writeString(main, "(print 0)\n(load \"run.lisp\")\n");
+		assertThat(runReporting(main.toString())[2].lines()).containsExactly(
+				"Unhandled condition: The function NO-SUCH-FN is undefined",
+				"  at " + this.tempDir.resolve("run.lisp") + ":2 in G");
 	}
 
 	@Test

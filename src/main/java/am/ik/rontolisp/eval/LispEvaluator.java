@@ -13818,7 +13818,7 @@ public final class LispEvaluator {
 		String message = e.getMessage();
 		LispEvalException typed = new LispEvalException(message == null ? "" : message, condition);
 		typed.initCause(e);
-		return typed.markHandlersRan();
+		return typed.continuing(e).markHandlersRan();
 	}
 
 	/**

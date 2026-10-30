@@ -104,6 +104,10 @@ line 0, a mark the report skips); no message ever gets a prefix, so `handler-cas
   a type test, which is what lets `evalCons` track the innermost located form on every
   loop step (`located`/`locatedIn` locals). Interpreter and compiled fib, list-build and
   caught-error loops: within noise of the build before it.
+- **A replacement exception continues the original's trace** (`LispEvalException.continuing`).
+  Trap (fixed 2026-10-30): `withHandlerBindHandlersRun` re-raises a condition-less error (an
+  undefined function) as a NEW exception once the restart runtime is loaded -- which a `load`
+  does -- so the innermost position was dropped and the outer `load` form reported.
 - **Lifetime = the cons's**, so a served request's run-time `load` leaves nothing behind
   (the reason the compile table is thread-local).
 - **Keeping it through rewrites**: `LispCons.rebuilt`/`rebuiltList` rebuild a located
@@ -144,6 +148,6 @@ class in which nothing was located is byte-identical to one compiled without a r
 `theSourcePositionLiteralsNameTheLoadedFileNotTheEntryFile`), ci-spec
 `source-position-literals`; Phase 4: `LispReaderTest#aNamedFilesDatumsAreLocatedAndAStringsAreNot`,
 `#locatingADatumKeepsEveryLabelReferenceToIt`, `LispConsTest#aRebuildOfALocatedConsStaysLocated`,
-`RontoLispCliStreamsTest`'s `anUncaught*` cases, `SchemeReaderTest#aNamedFilesListHeadsAreLocatedAndABuffersAreNot`;
+`RontoLispCliStreamsTest`'s `anUncaught*` cases (`anUncaughtConditionInALoadedFileNamesThatFile` for the replacement), `SchemeReaderTest#aNamedFilesListHeadsAreLocatedAndABuffersAreNot`;
 Phase 5: `cli/UncaughtReportParityTest` (every rewrite above that used to drop a function's
 positions has a case), `am.ik.jvm.LineNumberTableTest`.
