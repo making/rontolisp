@@ -1149,6 +1149,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A quoted designator of a wrapped built-in becomes #'name before any wrapper
 		// gate scans the program for that spelling (compiler/FunctionDesignators).
 		program = am.ik.rontolisp.compiler.FunctionDesignators.normalizeBuiltinDesignators(program);
+		// The car/cdr compositions only quoted data names get a named wrapper below,
+		// decided over the program as written.
+		Set<String> dataCalledNames = am.ik.rontolisp.compiler.FunctionDesignators.dataCalledNames(program);
 		// The printer's accessibility table (.kb/pretty-printer.md): baked from the
 		// final registry over the resolved program, only for a program that can print
 		// under a package other than cl-user -- every other program keeps its raw
@@ -2106,9 +2109,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// gate for every program in the world -- (print 1) included.
 		Set<String> designated = BuiltinFunctionWrappers.functionDesignatorNames(program);
 		designated.addAll(BuiltinFunctionWrappers.functionDesignatorNames(closRegistry.conditionReports().values()));
-		for (String op : List.of(LispNames.COMPLEX, LispNames.CONJUGATE, LispNames.SQRT, LispNames.PHASE,
-				LispNames.UPGRADED_COMPLEX_PART_TYPE, LispNames.CIS, LispNames.ASINH, LispNames.ACOSH, LispNames.ATANH,
-				LispNames.LOG, LispNames.ASIN, LispNames.ACOS, LispNames.EXPT)) {
+		for (String op : BuiltinFunctionWrappers.COMPLEX_GATED_FUNCTIONS) {
 			if (!designated.contains(op)) {
 				wrapperExcludes.add(op);
 			}
@@ -2119,7 +2120,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				closRegistry.conditionReports().values());
 		wrapperExcludes.addAll(linkedWrappers);
 		List<LispVal> wrappers = am.ik.rontolisp.compiler.FunctionValueWrappers.generate(userDefinedNames,
-				wrapperExcludes);
+				wrapperExcludes, dataCalledNames);
 		if (LispMacroExpander.declaresMvSpill(program)) {
 			// A wrapper is a function body like any other: its tail settles the
 			// multiple-value channel (the defuns' tails were settled by
