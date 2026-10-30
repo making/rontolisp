@@ -1,0 +1,103 @@
+>> (:emacs-rex (slynk:connection-info) nil t 1)\n
+<< (:return (:ok (:pid 3841324 :style :spawn :encoding (:coding-systems ("utf-8-unix")) :lisp-implementation (:type "rontolisp" :name "rontolisp" :version "0.1.0-SNAPSHOT" :program nil) :machine (:instance "dorian" :type "JVM" :version "25.0.4") :features (:rontolisp :rontolisp-interpreter :unicode :thread-support) :modules ("SLYNK/COMPLETION") :package (:name "CL-USER" :prompt "CL-USER") :version "1.0.43")) 1)
+>> (:emacs-rex (slynk:slynk-add-load-paths (quote ("@H21@/dl/sly/contrib/"))) nil t 2)\n
+<< (:return (:ok nil) 2)
+>> (:emacs-rex (slynk:slynk-require (quote ("slynk/indentation" "slynk/stickers" "slynk/trace-dialog" "slynk/package-fu" "slynk/fancy-inspector" "slynk/mrepl" "slynk/arglists"))) nil t 3)\n
+<< (:return (:ok (("SLYNK/COMPLETION" "SLYNK/INDENTATION" "SLYNK/STICKERS" "SLYNK/TRACE-DIALOG" "SLYNK/PACKAGE-FU" "SLYNK/FANCY-INSPECTOR" "SLYNK/MREPL" "SLYNK/ARGLISTS") ("slynk/indentation" "slynk/stickers" "slynk/trace-dialog" "slynk/package-fu" "slynk/fancy-inspector" "slynk/mrepl" "slynk/arglists"))) 3)
+>> (:emacs-rex (slynk-mrepl:create-mrepl 1) nil t 4)\n
+<< (:channel-send 1 (:write-string "; SLY 1.0.43 (#<MREPL mrepl-1-1>)\n"))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 0))
+<< (:return (:ok (1 94)) 4)
+>> (:emacs-channel-send 1 (:process "(restart-case (error \"pick ~a\" 2) (use-five () :report \"Return five.\" 5) (use-ten () 10))"))\n
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 1 0 "#<SIMPLE-ERROR \"pick 2\">"))
+<< (:debug 94 1 ("pick 2" "   [Condition of type SIMPLE-ERROR]" nil) (("USE-FIVE" "Return five.") ("USE-TEN" "USE-TEN") ("RETRY" "Retry SLY mREPL evaluation request.") ("*ABORT" "Return to SLY's top level.") ("ABORT" "abort thread (#<THREAD \"sly-channel-1-mrepl-remote-1\" RUNNING {5E}>)")) ((0 "(EVAL (RESTART-CASE (ERROR \"pick ~a\" 2) (USE-FIVE NIL :REPORT \"Return five.\" 5) (USE-TEN NIL 10)))") (1 "(SLYNK-MREPL::MREPL-EVAL \"(restart-case (error \\\"pick ~a\\\" 2) (use-five () :report \\\"Return five.\\\" 5) (use-ten () 10))\")")) nil)
+<< (:debug-activate 94 1)
+>> (:emacs-rex (slynk:invoke-nth-restart-for-emacs 1 0) nil 94 5)\n
+<< (:return (:abort "NIL") 5)
+<< (:debug-return 94 1 nil)
+<< (:channel-send 1 (:write-values (("5 (3 bits, #x5, #o5, #b101)" 0 "5"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 1))
+>> (:emacs-channel-send 1 (:process "(progn (cerror \"Keep going.\" \"Cerror ~a\" 3) :went-on)"))\n
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 1 1 "#<SIMPLE-ERROR \"Cerror 3\">"))
+<< (:debug 94 1 ("Cerror 3" "   [Condition of type SIMPLE-ERROR]" nil) (("CONTINUE" "Keep going.") ("RETRY" "Retry SLY mREPL evaluation request.") ("*ABORT" "Return to SLY's top level.") ("ABORT" "abort thread (#<THREAD \"sly-channel-1-mrepl-remote-1\" RUNNING {5E}>)")) ((0 "(EVAL (PROGN (CERROR \"Keep going.\" \"Cerror ~a\" 3) :WENT-ON))") (1 "(SLYNK-MREPL::MREPL-EVAL \"(progn (cerror \\\"Keep going.\\\" \\\"Cerror ~a\\\" 3) :went-on)\")")) nil)
+<< (:debug-activate 94 1)
+>> (:emacs-rex (slynk:sly-db-continue) nil 94 6)\n
+<< (:return (:abort "NIL") 6)
+<< (:debug-return 94 1 nil)
+<< (:channel-send 1 (:write-values ((":WENT-ON" 1 ":went-on"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 2))
+>> (:emacs-rex (slynk:interactive-eval "(car 1)") nil t 7)\n
+<< (:debug 95 1 ("CAR: The value 1 is not of type LIST" "   [Condition of type TYPE-ERROR]" nil) (("RETRY" "Retry SLY interactive evaluation request.") ("*ABORT" "Return to SLY's top level.") ("ABORT" "abort thread (#<THREAD \"slynk-worker\" RUNNING {5F}>)")) ((0 "(CAR 1)") (1 "(EVAL (CAR 1))") (2 "(SLYNK:INTERACTIVE-EVAL \"(car 1)\")")) (7))
+<< (:debug-activate 95 1)
+>> (:emacs-rex (slynk:sly-db-abort) nil 95 8)\n
+<< (:return (:abort "NIL") 8)
+<< (:debug-return 95 1 nil)
+<< (:return (:abort "#<TYPE-ERROR \"CAR: The value 1 is not of type LIST\">") 7)
+>> (:emacs-channel-send 1 (:process "(defun drv-g (z) (list (error \"deep ~a\" z)))"))\n
+<< (:channel-send 1 (:write-values (("DRV-G" 2 "'drv-g"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 3))
+>> (:emacs-channel-send 1 (:process "(defun drv-f (x) (let ((y (* x 2))) (list (drv-g y))))"))\n
+<< (:channel-send 1 (:write-values (("DRV-F" 3 "'drv-f"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 4))
+>> (:emacs-channel-send 1 (:process "(drv-f 21)"))\n
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 1 4 "#<SIMPLE-ERROR \"deep 42\">"))
+<< (:debug 94 1 ("deep 42" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLY mREPL evaluation request.") ("*ABORT" "Return to SLY's top level.") ("ABORT" "abort thread (#<THREAD \"sly-channel-1-mrepl-remote-1\" RUNNING {5E}>)")) ((0 "(DRV-G 42)") (1 "(DRV-F 21)") (2 "(EVAL (DRV-F 21))") (3 "(SLYNK-MREPL::MREPL-EVAL \"(drv-f 21)\")")) nil)
+<< (:debug-activate 94 1)
+>> (:emacs-rex (slynk:frame-locals-and-catch-tags 0) nil 94 9)\n
+<< (:return (:ok (((:name "Z" :id 0 :value "42")) nil)) 9)
+>> (:emacs-rex (slynk:frame-locals-and-catch-tags 1) nil 94 10)\n
+<< (:return (:ok (((:name "X" :id 0 :value "21") (:name "Y" :id 0 :value "42")) nil)) 10)
+>> (:emacs-rex (slynk:frame-package-name 1) nil 94 11)\n
+<< (:return (:ok "CL-USER") 11)
+>> (:emacs-rex (slynk:eval-string-in-frame "(* x 2)" 1 "COMMON-LISP-USER") nil 94 12)\n
+<< (:return (:ok "=> 42 (6 bits, #x2A, #o52, #b101010)") 12)
+>> (:emacs-rex (slynk:backtrace 1 3) nil 94 13)\n
+<< (:return (:ok ((1 "(DRV-F 21)") (2 "(EVAL (DRV-F 21))"))) 13)
+>> (:emacs-rex (slynk:throw-to-toplevel) nil 94 14)\n
+<< (:return (:abort "NIL") 14)
+<< (:debug-return 94 1 nil)
+<< (:channel-send 1 (:evaluation-aborted "#<SIMPLE-ERROR \"deep 42\">"))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 4))
+>> (:emacs-channel-send 1 (:process "(loop)"))\n
+>> (:emacs-interrupt 94)\n
+<< (:debug 94 1 ("Interrupt from client" "   [Condition of type SIMPLE-ERROR]" nil) (("CONTINUE" "Continue from break.") ("RETRY" "Retry SLY mREPL evaluation request.") ("*ABORT" "Return to SLY's top level.") ("ABORT" "abort thread (#<THREAD \"sly-channel-1-mrepl-remote-1\" RUNNING {5E}>)")) ((0 "(EVAL (LOOP))") (1 "(SLYNK-MREPL::MREPL-EVAL \"(loop)\")")) nil)
+<< (:debug-activate 94 1)
+>> (:emacs-rex (slynk:sly-db-continue) nil 94 15)\n
+<< (:return (:abort "NIL") 15)
+<< (:debug-return 94 1 nil)
+>> (:emacs-interrupt 94)\n
+<< (:debug 94 1 ("Interrupt from client" "   [Condition of type SIMPLE-ERROR]" nil) (("CONTINUE" "Continue from break.") ("RETRY" "Retry SLY mREPL evaluation request.") ("*ABORT" "Return to SLY's top level.") ("ABORT" "abort thread (#<THREAD \"sly-channel-1-mrepl-remote-1\" RUNNING {5E}>)")) ((0 "(EVAL (LOOP))") (1 "(SLYNK-MREPL::MREPL-EVAL \"(loop)\")")) nil)
+<< (:debug-activate 94 1)
+>> (:emacs-rex (slynk:throw-to-toplevel) nil 94 16)\n
+<< (:return (:abort "NIL") 16)
+<< (:debug-return 94 1 nil)
+<< (:channel-send 1 (:evaluation-aborted "T"))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 4))
+>> (:emacs-channel-send 1 (:process "(error \"outer\")"))\n
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 1 4 "#<SIMPLE-ERROR \"outer\">"))
+<< (:debug 94 1 ("outer" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLY mREPL evaluation request.") ("*ABORT" "Return to SLY's top level.") ("ABORT" "abort thread (#<THREAD \"sly-channel-1-mrepl-remote-1\" RUNNING {5E}>)")) ((0 "(EVAL (ERROR \"outer\"))") (1 "(SLYNK-MREPL::MREPL-EVAL \"(error \\\"outer\\\")\")")) nil)
+<< (:debug-activate 94 1)
+>> (:emacs-channel-send 1 (:process "(+ 1 1)"))\n
+<< (:channel-send 1 (:write-values (("2 (2 bits, #x2, #o2, #b10)" 4 "2"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 1 5))
+>> (:emacs-channel-send 1 (:process "(error \"inner\")"))\n
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 2 5 "#<SIMPLE-ERROR \"inner\">"))
+<< (:debug 94 2 ("inner" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLY mREPL evaluation request.") ("ABORT" "Return to sly-db level 1.") ("RETRY" "Retry SLY mREPL evaluation request.") ("*ABORT" "Return to SLY's top level.") ("ABORT" "abort thread (#<THREAD \"sly-channel-1-mrepl-remote-1\" RUNNING {5E}>)")) ((0 "(EVAL (ERROR \"inner\"))") (1 "(SLYNK-MREPL::MREPL-EVAL \"(error \\\"inner\\\")\")") (2 "(SWANK::SLDB-LOOP 1)") (3 "(EVAL (ERROR \"outer\"))") (4 "(SLYNK-MREPL::MREPL-EVAL \"(error \\\"outer\\\")\")")) nil)
+<< (:debug-activate 94 2)
+>> (:emacs-rex (slynk:invoke-nth-restart-for-emacs 2 1) nil 94 17)\n
+<< (:return (:abort "NIL") 17)
+<< (:debug-return 94 2 nil)
+<< (:channel-send 1 (:evaluation-aborted "#<SIMPLE-ERROR \"inner\">"))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 1 5))
+<< (:debug 94 1 ("outer" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLY mREPL evaluation request.") ("*ABORT" "Return to SLY's top level.") ("ABORT" "abort thread (#<THREAD \"sly-channel-1-mrepl-remote-1\" RUNNING {5E}>)")) ((0 "(EVAL (ERROR \"outer\"))") (1 "(SLYNK-MREPL::MREPL-EVAL \"(error \\\"outer\\\")\")")) nil)
+<< (:debug-activate 94 1)
+<< (:debug 94 1 ("outer" "   [Condition of type SIMPLE-ERROR]" nil) (("RETRY" "Retry SLY mREPL evaluation request.") ("*ABORT" "Return to SLY's top level.") ("ABORT" "abort thread (#<THREAD \"sly-channel-1-mrepl-remote-1\" RUNNING {5E}>)")) ((0 "(EVAL (ERROR \"outer\"))") (1 "(SLYNK-MREPL::MREPL-EVAL \"(error \\\"outer\\\")\")")) nil)
+<< (:debug-activate 94 1)
+>> (:emacs-rex (slynk:throw-to-toplevel) nil 94 18)\n
+<< (:return (:abort "NIL") 18)
+<< (:debug-return 94 1 nil)
+<< (:channel-send 1 (:evaluation-aborted "#<SIMPLE-ERROR \"outer\">"))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 5))
+>> (:emacs-channel-send 1 (:process "(+ 40 2)"))\n
+<< (:channel-send 1 (:write-values (("42 (6 bits, #x2A, #o52, #b101010)" 5 "42"))))
+<< (:channel-send 1 (:prompt "CL-USER" "CL-USER" 0 6))

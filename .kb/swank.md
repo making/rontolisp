@@ -18,8 +18,9 @@ answered message for message as SBCL's SWANK answers, the differences listed at 
   id) queues on the connection's REPL thread, `t` gets a thread of its own, a running
   worker's id its `Session`'s mailbox (what its debugger level answers), another id
   `(:invalid-rpc id "Thread not found: N")`. Every request thread takes `--stack`. A
-  `Session` per SLIME request thread: its requests (innermost first: SWANK's pending
-  continuations), their outputs, its debugger levels; it is the thread's `Sldb`.
+  `Session` per request thread (a SLY REPL's too): its requests (innermost first: SWANK's
+  pending continuations) and SLY REPL inputs, their outputs, its debugger levels, its
+  mailbox and what answers an event of it; it is the thread's `Sldb`.
 - `cli/SwankDialect` -- SWANK, Slynk or micros, told per request by the package prefix of the
   function the form calls (below, "Dialects"); `SwankServer.MRepl` is SLY's REPL channel.
 - `cli/SwankWire` -- the framing (six hex digits counting the UTF-8 octets, then one
@@ -69,6 +70,9 @@ dialect request by request; a request's output and input follow its dialect.
 | completion | `slynk-completion:simple-completions` `(strings common-prefix)`; `flex-completions` `((text score chunks classification)...) nil`, Slynk's score in single floats (`mvbind` 0.009072388522326946, as SBCL), accessible symbols then other packages' externals qualified by each name, `::` every symbol at home | `micros/lsp-api:completions`: SWANK's fuzzy (100) as `(label chunks kind signature markdown sort-key)` |
 | other | | `micros/pretty-eval:pretty-eval` `(:value echo :id n)`, `micros/lsp-api:hover-symbol` Markdown, `micros/macrostep:macrostep-expand-1` SWANK's macrostep; `C-c C-l` sends a form calling `micros:load-file`, defined in the image at `micros:connection-info` |
 | interrupt | `(:emacs-interrupt thread)` of the REPL's thread | `(:emacs-interrupt :repl-thread)` |
+| debugger | SWANK's levels; `SLY` for `SLIME` in the restarts (`Return to SLY's top level.`, `Retry SLY interactive evaluation request.`, the REPL's `Retry SLY mREPL evaluation request.`, `Return to sly-db level 1.`), threads `slynk-worker` and `sly-channel-C-mrepl-remote-R`, `(:debug-activate thread level)` without the nil, `Interrupt from client`; `sly-db-abort` / `sly-db-continue` | SWANK's restarts and levels, no `:debug-activate`, `Interrupt from Editor` |
+| debugger in the REPL | an error's level sends `(:prompt pkg prompt level history "cond")` first (level: the error levels open, once per input), the REPL reads on inside it, its prompts showing the level; an input a restart leaves answers `(:evaluation-aborted "cond")` -- the last condition its level was entered for, not one of an input nested in it, `"T"` for an interrupt's -- and a prompt | |
+| inspector | `(slynk:eval-for-inspector current target 'fn args...)`: `fn` in the inspector `current` names (nil `default`, SLIME's), a value it inspects shown in `target`; `slynk-mrepl:inspect-entry` / `describe-entry` / `pprint-entry` `(channel entry value)`; `#vN:M` in the REPL reads as that history value, `#vN` as the entry's values | `micros:inspect-printed-object id` (a REPL value's `:write-object` id, history kept), `micros/pretty-eval:inspect-evaluation-value id` (`pretty-eval`'s own ids from 1, inspector reset, one value or the list), `clear-printed-objects`, `remove-evaluated-values` |
 
 ## A program's server
 
@@ -139,7 +143,7 @@ user macro table concurrent for the same reason: a worker defines while the REPL
 | `swank-macroexpand-1`, `swank-macroexpand`, `swank-macroexpand-all` | `macroexpand-1`, `macroexpand`, and every macro in the form (`CallSiteWalk`'s code positions) |
 | `buffer-first-change`, `init-presentations`, `update-indentation-information`, `fuzzy-completion-selected` | nil |
 | `find-definitions-for-emacs`, `xref`, `xrefs` | below |
-| `init-inspector`, `inspect-nth-part`, `inspector-nth-part`, `inspector-range`, `inspector-call-nth-action`, `inspector-pop`, `inspector-next`, `inspector-reinspect`, `inspector-toggle-verbose`, `inspector-eval`, `inspector-history`, `quit-inspector`, `describe-inspectee`, `pprint-inspector-part` | below |
+| `init-inspector`, `inspect-nth-part`, `inspector-nth-part`, `inspector-range`, `inspector-call-nth-action`, `inspector-pop`, `inspector-next`, `inspector-reinspect`, `inspector-toggle-verbose`, `inspector-eval`, `inspector-history`, `quit-inspector`, `describe-inspectee`, `describe-inspector-part`, `pprint-inspector-part` | below |
 | `swank-macrostep:macro-form-p`, `macrostep-expand-1` (micros's too) | `(:ok :macro)`/`(:ok nil)`; `(:ok "expansion" (("WHEN" :macro 6)))`, each macro form of the expansion placed by printing it and finding it in the printed whole in walk order; `(:error "Not a macro form")` |
 | `throw-to-toplevel`, `invoke-nth-restart-for-emacs`, `invoke-nth-restart`, `sldb-abort`, `sldb-continue`, `backtrace`, `debugger-info-for-emacs`, `frame-locals-and-catch-tags`, `frame-package-name`, `eval-string-in-frame`, `pprint-eval-string-in-frame` | the thread's innermost debugger level, below; `frame-source-location` `(:error "No source location")` |
 | anything else in a dialect's package | aborts: `The function SWANK:X is undefined.` (the package as sent) |
@@ -216,7 +220,7 @@ request's `:abort` stays `"NIL"`. A wait the interrupt woke breaks the same way 
 on: `Connection.readString` (`:read-aborted` only when left), the level's own mailbox (a deeper
 level), `sleep` (`Environment.sleepMillis` asks `resumeAfterInterrupt`, then sleeps out its
 time). `offerDebugger` clears a pending interrupt, which the level answers. A thread with
-no debugger (nREPL, a SLY REPL's, a program's own) stops as before.
+no debugger (nREPL, a program's own) stops as before.
 
 ## Compilation
 
@@ -322,16 +326,21 @@ evaluator keeps none). A metaobject prints as SBCL's `#<STANDARD-CLASS NAME>` on
 
 ## Differences from the oracle
 
-The debugger is SLIME's only: a SLY or Lem request's error, like its interrupt, aborts it.
-Its frames are the interpreter's own (no SBCL or SWANK internals, none restartable, every
+Each dialect's debugger and inspector answer as SWANK's here. Measured 2026-10-30 with SLY
+1.0.43 against Slynk on SBCL 2.2.9 and against rontolisp (`.todo/artefacts/h24-sly-and-lem-debugger-and-inspector/`):
+every debugger message of the `sldb` steps agrees but the frames, and `M-.`, xref and the
+inspector of the `nav` steps differ from Slynk only as SWANK's below do; Lem 2.3.0's
+error, restart, `cerror` continue and interrupt steps answer as micros's recording. A SLY
+REPL thread's own abort restart leaves the REPL reading (Slynk's thread ends). After
+`inspector-pop` a value still in the history keeps its `@N=` in SLY's inspector too
+(Slynk's history ends at the page shown). The debugger's frames are the interpreter's own (no SBCL or SWANK internals, none restartable, every
 local kept: SBCL dropped `drv-f`'s `Y`), a frame shows no source and no catch tags, no
 `restart-frame`, `sldb-return-from-frame`, stepping or `sldb-break-with-default-debugger`;
 a condition prints with its report (`#<SIMPLE-ERROR "boom 1">`, SBCL
 `#<SIMPLE-ERROR "boom ~a" {...}>`); a compile request's error is a note, never SLDB (SBCL
 loads the fasl, so a load-time error enters it); `frame-package-name` answers `"CL-USER"`.
 No presentation markers, trace, profile, indentation updates or
-`set-default-directory`; SLY's stickers, trace dialog and history references (`#v`), Lem's
-inspection of a printed value (`M-.`, xref and the inspector measured with SLIME only). `:calls-who` answers (SBCL's `:not-implemented`); `xref` covers
+`set-default-directory`; SLY's stickers and trace dialog. `:calls-who` answers (SBCL's `:not-implemented`); `xref` covers
 code run while a server runs, in recording order (SBCL's order is its own);
 `find-definitions` of a
 standard package answers nil. An inspector title is `#<TYPE {identity}>` with rontolisp's
@@ -348,8 +357,7 @@ SWANK 2.32's `[Group by classification]` hangs SBCL's request; here it regroups.
 line, so positions differ from SBCL's pretty-printed ones. A package prints as its keyword, a name as rontolisp
 spells it (`CL-USER::F`, `CL:MAPC`), a macro expansion on one line (no pretty printer), no
 SBCL compiler output and no unused-variable note (nor micros's `; processing (DEFUN ...)`).
-Thread ids are Java's. An aborted SLY REPL input names `Interrupt from Emacs` where Slynk's
-debugger says `Interrupt from client`. `connection-info` carries no `:system-file-patterns`.
+Thread ids are Java's. `connection-info` carries no `:system-file-patterns`.
 Interpreter only.
 
 ## Tests
@@ -364,7 +372,9 @@ while a worker answers in its own package, a sleep continued;
 `anErrorEntersTheDebugger...`: `q`, `c`, a numbered restart, `cerror`'s continue, a
 worker's `a`, frames, locals, eval in frame, a nested level returned from; an `-e`
 program starting a `:dont-close t` server and a default one, both serving its evaluator,
-then `stop-server`; a SLY and a Lem session on one server, their recorded shapes),
+then `stop-server`; a SLY and a Lem session on one server, their recorded shapes, SLY's
+REPL debugger with a level read inside, a history entry inspected and read by `#v`, a SLY
+worker's level, an interrupt continued and quit, Lem's inspection by id and its levels),
 `RontoLispCliTest#aProgramTheModeCannotTakeIsAClearError`,
 `LispEvaluatorAsdfTest#dependsOnBuiltinSwankResolvesWithoutNetworkAndCreateServerSignals`.
 By hand: the artefacts' driver against `rontolisp --swank` (2026-10-30; the `nav` steps --
@@ -372,6 +382,7 @@ By hand: the artefacts' driver against `rontolisp --swank` (2026-10-30; the `nav
 `rontolisp-nav-wire.log`; the `loaded` steps -- `C-c C-l`, REPL definitions, their `M-.`
 and xref, the metaobject, package and pathname pages -- in `sbcl-loaded-wire.log` and
 `rontolisp-loaded-wire.log`; the `sldb` steps -- the debugger -- in `sbcl-sldb-wire.log`
-and `rontolisp-sldb-wire.log`); h21's SLY driver and Lem in Docker against it
+and `rontolisp-sldb-wire.log`); h21's SLY driver and Lem in Docker against it, h24's
+`sldb` and `nav` steps and Lem steps (2026-10-30)
 (2026-10-30); a program file served after its end and `quit-lisp` ending the
 process with 0, and the compiled message on JVM, Preview 1 and the component (2026-10-30).

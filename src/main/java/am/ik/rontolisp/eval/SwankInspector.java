@@ -242,6 +242,26 @@ public final class SwankInspector {
 	}
 
 	/**
+	 * Inspects a value the server kept, as SWANK's {@code inspect-object}: a printed
+	 * object Lem asks for by its id, an entry of SLY's REPL history, another inspector's
+	 * part. The history goes on; {@link #quit} first starts it over.
+	 * @param value the value
+	 * @return its page
+	 */
+	public synchronized Page inspectValue(LispVal value) {
+		return inspect(value);
+	}
+
+	/**
+	 * A value described, as SWANK's {@code describe-to-string}.
+	 * @param value the value
+	 * @return the description
+	 */
+	public synchronized String describeValue(LispVal value) {
+		return describe(value);
+	}
+
+	/**
 	 * Inspects one of the page's values, as {@code inspect-nth-part}.
 	 * @param index its place in the value table
 	 * @return its page
@@ -388,6 +408,15 @@ public final class SwankInspector {
 	 */
 	public synchronized String describe() {
 		return describe(current().object);
+	}
+
+	/**
+	 * Describes one of the page's values, as {@code describe-inspector-part}.
+	 * @param index its place in the value table
+	 * @return the description
+	 */
+	public synchronized String describePart(int index) {
+		return describe(nthPart(index));
 	}
 
 	/**
