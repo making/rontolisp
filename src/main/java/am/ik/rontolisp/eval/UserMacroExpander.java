@@ -818,19 +818,22 @@ public final class UserMacroExpander {
 	}
 
 	/**
-	 * Re-spells every bare CL-symbol name that the resolver's current package shadows as
-	 * the explicit {@code cl:}-qualified form, recursively through the expansion. Quoted
-	 * data is exempt (the compilers' resolution pass leaves it untouched, and rewriting
-	 * it would change the datum). Only code positions resolved from an explicit
-	 * {@code cl:} template spelling can contain such a bare name -- an unqualified use
-	 * under the shadowing package resolved to the package's own qualified symbol.
+	 * Re-spells every bare CL-symbol name that the resolver's current package reads as
+	 * some other symbol -- one it shadows, or a {@code cl} extension name it has come to
+	 * own ({@code (defmacro while ...)}) -- as the explicit {@code cl:}-qualified form,
+	 * recursively through the expansion. Only a {@code cl} symbol the expansion resolved
+	 * from a {@code cl:} spelling, or before the package took the name, is spelled bare
+	 * there. A quoted datum is walked too, since the compilers' resolution pass resolves
+	 * its symbols as well; an {@code %unspelled-quote} datum is not.
 	 */
 	private static LispVal requalifyShadowedClNames(LispVal form, LispEvaluator macroEval) {
 		return LispTrees.rebuildSpine(form, node -> switch (node) {
 			case LispSymbol sym -> PackageRegistry.splitQualified(sym.name()) == null
-					&& PackageRegistry.isClSymbol(sym.name()) && macroEval.currentPackageShadows(sym.name())
+					&& PackageRegistry.isClSymbol(sym.name()) && macroEval.currentPackageRereadsClName(sym.name())
 							? new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, sym.name())) : sym;
-			case LispCons cons when cons.car() instanceof LispSymbol op && LispNames.isQuote(op.name()) -> cons;
+			case LispCons cons when cons.car() instanceof LispSymbol op && LispNames.isQuote(op.name())
+					&& !LispNames.QUOTE.equals(op.name()) ->
+				cons;
 			case LispCons cons -> null;
 			default -> node;
 		}, car -> requalifyShadowedClNames(car, macroEval),
