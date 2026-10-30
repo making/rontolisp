@@ -328,8 +328,7 @@ local kept: SBCL dropped `drv-f`'s `Y`), a frame shows no source and no catch ta
 `restart-frame`, `sldb-return-from-frame`, stepping or `sldb-break-with-default-debugger`;
 a condition prints with its report (`#<SIMPLE-ERROR "boom 1">`, SBCL
 `#<SIMPLE-ERROR "boom ~a" {...}>`); a compile request's error is a note, never SLDB (SBCL
-loads the fasl, so a load-time error enters it); a `with-simple-restart`'s or `cerror`'s
-report is its control without the arguments; `frame-package-name` answers `"CL-USER"`.
+loads the fasl, so a load-time error enters it); `frame-package-name` answers `"CL-USER"`.
 No presentation markers, trace, profile, indentation updates or
 `set-default-directory`; SLY's stickers, trace dialog and history references (`#v`), Lem's
 inspection of a printed value (`M-.`, xref and the inspector measured with SLIME only). `:calls-who` answers (SBCL's `:not-implemented`); `xref` covers

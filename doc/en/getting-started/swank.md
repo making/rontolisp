@@ -66,9 +66,8 @@ An error inside the debugger opens the next level, whose `ABORT` restart returns
 one below. `C-c C-b` stops a running evaluation the same way, a sleep or a read included.
 
 Compiling a buffer or a file keeps its errors as notes and opens no debugger. A frame
-cannot be restarted or returned from, stepping is not offered, a frame shows no source
-and no catch tags, and the report of a `with-simple-restart` or a `cerror` restart shows
-its format control without the arguments.
+cannot be restarted or returned from, stepping is not offered, and a frame shows no source
+and no catch tags.
 
 ## Differences from SBCL
 

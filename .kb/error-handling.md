@@ -822,6 +822,16 @@ the same cost as `function`.
   drops the control and emits `(error datum args...)` (behavior-identical, since nothing could invoke
   a `continue` restart); in restart mode `expandCerror(cons, registry, true)` emits the REAL
   `(restart-case (error ...) (continue () :report continue-format nil))`.
+- **A report over format arguments is a function** (since 2026-10-30): `with-simple-restart`'s
+  `:report (lambda (s) (format s control args...))`, the arguments evaluated when it prints (CLHS,
+  SBCL); `cerror`'s the same over temporaries the `error` call assigns, `(error datum (setq tmp
+  arg) ...)`, so the error and the report see one evaluation in the call's order and the datum stays
+  as written for the static signal dispatch (binding it to a variable sent a `make-condition` datum
+  to `%error-runtime`). A form without arguments keeps the string report. Until then the arguments
+  were dropped and SLDB listed `Skip ~a.`.
+- `needsRuntimeErrorDispatch` reads `cerror`'s datum one place later: restart mode lowers
+  `cerror` in the backend, after the scan, so `(cerror "c" ty :code 7)` with a computed `ty` called
+  an uninjected `%error-runtime` on the JVM and both wasm-GC (until 2026-10-30).
 - `error`/`signal`/`warn`/`cerror` also have FUNCTION values. Interpreter: `registerEval` defines
   real functions that rebuild the literal call from evaluated arguments (`rebuildSignalForm`) and
   re-enter `eval`, `resolveFunction` checking the function namespace BEFORE the
@@ -1021,8 +1031,7 @@ is a separate surface scan.**
 - Lite deviations (on the doc pages): `&optional` clause parameters take nil rather than their
   default, no condition-restart association, restart records print as plain lists,
   `:report`/`:interactive` stored, rendered/run only by `rontolisp --swank`'s debugger
-  ([swank.md](swank.md)) -- a `with-simple-restart`'s or `cerror`'s report is its format control
-  WITHOUT the arguments, which the lowering drops --
+  ([swank.md](swank.md)),
   `check-type`/`assert`/`ccase`/`ctypecase` offer no `store-value` restart.
 - `use-value`/`store-value` share `LispMacroExpander.valueRestartDefun`: invoke the innermost restart
   of that name with ONE value, nil when none is active. In `RESTART_RUNTIME_FUNCTION_NAMES` and
