@@ -158,12 +158,26 @@ definition of it. Measured 2026-10-31 against SBCL 2.2.9's 636 external `cl` fun
 exactly the unimplemented ones (`CL_EXPORTED_ONLY`: `add-method`, `boole`, `describe`, ...,
 owned by `.todo/715`/`041`/`042`), the same 40 the compiled literal fold (`CL_FUNCTIONS`)
 answers NIL for. `uiop:split-string`, `linalg:` and `appkit:` names were NIL before their first
-call too. **Compiled computed probe** (data-held symbol, same 636): 163 NIL on the JVM, i.e.
-123 implemented functions -- the reference-gated / native / complex wrappers a program does not
-take as `#'name`, and the `car`/`cdr` compositions -- which `symbol-function` / `funcall` of the
-same symbol also call undefined, so the backend is consistent with itself; the reach is
-`.todo/h65`. Pinned by `BoundpFunctionValueFixture` (all four) and
-`LispEvaluatorTest#fboundpChecksFunctionsMacrosAndSpecialForms`.
+call too. **Compiled computed probe** (data-held symbol, same 636): 163 NIL on the JVM before
+2026-10-31 -- 123 implemented functions: the reference-gated / native / complex wrappers, the
+restart runtime and the generated `find-class`/`allocate-instance`/`compile` defuns, all injected
+only for a program spelling `#'name`, and the 28 `car`/`cdr` compositions, which compile inline.
+Now 49 on the JVM, P1 and the component (the interpreter's 37 plus `provide`/`require`, literal
+top-level only, and ten with no compiled function value at all: `complement`, `make-condition`,
+`make-sequence`, `documentation`, `proclaim`, `change-class`, `slot-value`/`-boundp`/
+`-exists-p`/`-makunbound`; `.todo/h70`). The reach
+(`FunctionDesignators.dataCalledNames`): a program that can turn data into a call (a computed
+`funcall`/`apply`/designator argument, a computed `fboundp`/`symbol-function`/`fdefinition`, or
+one of those taken as a value) and spells such a name inside a `quote` gets a top-level
+`(function name)` appended by `normalizeBuiltinDesignators`, so every wrapper gate and every
+scan pairing a runtime with a wrapper body sees the spelling it already reads; a composition
+instead gets a named `(lambda (x) (cadr x))` wrapper (`FunctionValueWrappers.generate`), so a
+program spelling `#'cadr` keeps its inline lambda. A quoted name an operator reads as a type,
+class, condition or slot (`(typep c 'error)`, `(slot-value o 'log)`) does not count. A program
+that does not do both is unchanged. Measured with all 101 names in one program's data: compiles
+and answers T on all four. Cost on the ci-spec corpus class (2026-10-31): 63,363 constant-pool
+entries against 63,348 with the reach off (16 names in its data). Pinned by `BoundpFunctionValueFixture` (all four, `aref`/`cadr` in data),
+`FunctionDesignatorsTest` and `LispEvaluatorTest#fboundpChecksFunctionsMacrosAndSpecialForms`.
 
 **JVM** (`JvmSymbolApiCompiler`): symbol-name = the princ-to-string emission; intern/make-symbol
 = quote-strip `substring(1, len-1)` (+ `"#:".concat`); boundp, and symbol-value of a name no

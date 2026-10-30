@@ -9077,8 +9077,8 @@ public final class LispNames {
 	 * and proclaimed special on the interpreter, checked by
 	 * {@code LispEvaluator.resolveReadTimeEval} -- which also covers the compile path's
 	 * macro-time marker resolution. The compiled runtime readers signal on {@code #.}
-	 * unconditionally (a permanent limit, see {@code .kb/read-load-streams.md}), so the
-	 * variable itself exists only on the interpreter.
+	 * unconditionally (a permanent limit, see {@code .kb/read-load-streams.md}); a
+	 * compiled program that names the variable gets a {@code defvar} of it ({@code t}).
 	 */
 	public static final String READ_EVAL_VAR = "*READ-EVAL*";
 
@@ -9087,9 +9087,11 @@ public final class LispNames {
 	 * exactly the characters a real read would) but yields {@code nil} and suppresses
 	 * every error the datum would otherwise signal (CLHS 2.2). Seeded {@code nil} and
 	 * proclaimed special on the interpreter, honored by the runtime {@code read} /
-	 * {@code read-from-string} built-ins through {@code LispReader.datumEnd}. Like
-	 * {@link #READ_EVAL_VAR} the variable exists only on the interpreter: the compiled
-	 * runtime readers have no suppressed mode (see {@code .kb/read-load-streams.md}).
+	 * {@code read-from-string} built-ins through {@code LispReader.datumEnd}. The
+	 * compiled runtime readers have no suppressed mode (see
+	 * {@code .kb/read-load-streams.md}); a compiled program that names the variable gets
+	 * a {@code defvar} of it ({@code nil}), which a reader macro such as puri's
+	 * {@code #u} tests.
 	 */
 	public static final String READ_SUPPRESS_VAR = "*READ-SUPPRESS*";
 

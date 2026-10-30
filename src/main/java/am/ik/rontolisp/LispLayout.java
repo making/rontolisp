@@ -166,14 +166,15 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	 * {@code %class-slot-defs} answer.
 	 *
 	 * <p>
-	 * TWO reserved cells past the declared slots, hence capacity 4:
+	 * THREE reserved cells past the declared slots, hence capacity 5:
 	 * {@link #STREAM_CLOSED_CELL}, the wasm backends' CLOSED mark (a WASI descriptor has
 	 * no stream table behind it and is reused by the next {@code open}, so whether a
-	 * stream is still open is a fact about the VALUE there, not the handle), and
-	 * {@link #STREAM_PUSHBACK_CELL}, the character {@code unread-char} parked.
+	 * stream is still open is a fact about the VALUE there, not the handle),
+	 * {@link #STREAM_PUSHBACK_CELL}, the character {@code unread-char} parked, and
+	 * {@link #STREAM_PATH_CELL}, the namestring a file stream was opened with.
 	 */
 	public static final LispLayout STREAM = new LispLayout(STREAM_TAG, "STREAM", Kind.OPAQUE, List.of("HANDLE", "KIND"),
-			List.of(LispNil.INSTANCE, LispNil.INSTANCE), 4);
+			List.of(LispNil.INSTANCE, LispNil.INSTANCE), 5);
 
 	/**
 	 * The instance tag of the built-in readtable type, spelled in upper case for the same
@@ -214,6 +215,19 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	 * {@code unread-char.lisp}, which writes the index as a literal.
 	 */
 	public static final int STREAM_PUSHBACK_CELL = 3;
+
+	/**
+	 * The reserved {@link #STREAM} cell holding the namestring a FILE stream was opened
+	 * with, nil on every other stream: a file stream is a pathname designator, and
+	 * {@code pathname} answers it even after the close, so it lives on the value rather
+	 * than in a table keyed by a handle the next {@code open} may reuse
+	 * ({@code .kb/pathnames.md}, "A file stream is a pathname designator"). The
+	 * interpreter's {@code open} always fills it; the compile paths fill it only where
+	 * the program can read it ({@code LispMacroExpander.recordingStreamPath}). Read by
+	 * the prelude's {@code pathname} / {@code namestring} / {@code %path-ns}, which write
+	 * the index as a literal.
+	 */
+	public static final int STREAM_PATH_CELL = 4;
 
 	/**
 	 * The literal {@code %obj-ref} / {@code %obj-set} index of an instance's LAST storage

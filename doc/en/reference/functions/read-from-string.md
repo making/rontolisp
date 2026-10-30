@@ -50,7 +50,7 @@ Like Common Lisp's, `read-from-string` answers a SECOND value: the index of the 
 (nth-value 1 (read-from-string "(1 2) x")) ; => 6
 ```
 
-Binding `*read-suppress*` to true makes the reader consume exactly the characters a real read would and answer `nil`, suppressing every error the datum would otherwise signal -- an unknown package, a bogus character name, an out-of-range digit. This is what a `#+`/`#-` guard does to the form it skips, and it is the interpreter's behavior: the runtime reader of compiled output has no suppressed mode.
+Binding `*read-suppress*` to true makes the reader consume exactly the characters a real read would and answer `nil`, suppressing every error the datum would otherwise signal -- an unknown package, a bogus character name, an out-of-range digit. This is what a `#+`/`#-` guard does to the form it skips, and it is the interpreter's behavior: the runtime reader of compiled output has no suppressed mode. The variable itself exists on every backend (default `nil`), so a program can bind it and a reader macro can test it.
 
 ```lisp
 (let ((*read-suppress* t)) (read-from-string "nonexistent-package::foo")) ; => NIL

@@ -1146,6 +1146,13 @@ final class JvmExprCompiler {
 				// wrapped again: the existence guard around it answers nil or an
 				// already-wrapped closed stream, and a second wrap would turn the
 				// nil into a stream.
+				LispVal recording = recordsStreamPaths(ctx) ? LispMacroExpander.recordingStreamPath(cons) : null;
+				if (recording != null) {
+					// The namestring on the stream value, so it is a pathname
+					// designator; the inner open comes back here unrecorded.
+					JvmExprCompiler.compileExpr(recording, ctx, className);
+					break;
+				}
 				LispVal lowered = OpenModes.lowerRuntimeOptions(cons);
 				if (lowered != null) {
 					JvmExprCompiler.compileExpr(lowered, ctx, className);
@@ -2716,6 +2723,14 @@ final class JvmExprCompiler {
 	private static LispVal guardPackedForWideStreams(LispVal expansion, JvmLispCompiler.Ctx ctx) {
 		return ctx.functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL)
 				? LispMacroExpander.guardPackedSequenceForWideStreams(expansion) : expansion;
+	}
+
+	// Whether every open records its namestring on the stream value it answers
+	// (LispMacroExpander.recordingStreamPath): only where a stream value and a
+	// pathname reader can both exist.
+	private static boolean recordsStreamPaths(JvmLispCompiler.Ctx ctx) {
+		return ctx.usesStreamValues && ctx.mayUseInstances
+				&& LispMacroExpander.recordsStreamPaths(ctx.functions::containsKey);
 	}
 
 	private static void wrapStreamValue(JvmLispCompiler.Ctx ctx, String className, String kind) {

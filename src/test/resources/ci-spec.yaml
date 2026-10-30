@@ -12764,6 +12764,28 @@ cases:
       NIL
       YES
       (#P"probe.dat" NIL)
+  - name: pathname-of-a-file-stream
+    # A file stream is a pathname designator: pathname, namestring, truename and
+    # the path-taking operators take it, after its close too, a :probe stream
+    # included, and open takes one as its filespec. A string stream is none.
+    # SBCL 2.2.9's answers (its pathname is absolute, so it is printed below the
+    # run directory's truename, as the truenames are).
+    source: |
+      (defun fs-rel (p) (and p (pathname (enough-namestring p (truename "")))))
+      (let ((s (open "fstream.dat" :direction :output :if-exists :supersede)))
+        (write-line "fs" s)
+        (print (list (fs-rel (pathname s)) (fs-rel (namestring s)) (file-namestring s) (fs-rel (truename s))))
+        (close s)
+        (print (list (fs-rel (pathname s)) (fs-rel (probe-file s)) (with-open-file (in s) (read-line in))))
+        (print (fs-rel (pathname (open "fstream.dat" :direction :probe))))
+        (print (handler-case (pathname (make-string-input-stream "x")) (error () :error)))
+        (print (list (delete-file s) (probe-file "fstream.dat"))))
+    expected: |
+      (#P"fstream.dat" #P"fstream.dat" "fstream.dat" #P"fstream.dat")
+      (#P"fstream.dat" #P"fstream.dat" "fs")
+      #P"fstream.dat"
+      :ERROR
+      (T NIL)
   - name: truename-resolves-symbolic-links
     # truename resolves every symbolic link in the path over %read-link (both WASM
     # backends through path_readlink, the component adapter's over readlink-at) and
@@ -14622,8 +14644,9 @@ cases:
       (print (mapcar #'boundp '(t nil :fv-kw)))
       (print (mapcar #'fboundp '(fv-none)))
       (print (and (funcall #'fboundp 'car) t))
-      (print (mapcar (lambda (s) (and (funcall #'fboundp s) t)) '(fv-fn car fv-none alphanumericp equalp string<)))
+      (print (mapcar (lambda (s) (and (funcall #'fboundp s) t)) '(fv-fn car fv-none alphanumericp equalp string< aref cadr)))
       (print (and (apply #'fboundp '(fv-fn)) t))
+      (print (let ((fs '(aref cadr))) (list (funcall (first fs) #(7 8) 1) (funcall (symbol-function (second fs)) '(1 2)))))
     expected: |
       (T NIL NIL)
       (T T)
@@ -14631,8 +14654,9 @@ cases:
       (T T T)
       (NIL)
       T
-      (T T NIL T T T)
+      (T T NIL T T T T T)
       T
+      (8 2)
   - name: runtime-package-symbol-ops
     source: |
       ;; the postmodern shapes: computed find-package / find-symbol, fmakunbound,
@@ -24929,9 +24953,15 @@ cases:
         (set-dispatch-macro-character #\# #\? (lambda (s c n) (declare (ignore c)) (list 'list :q n (read s t nil t))))
         (set-macro-character #\] (get-macro-character #\)))
         (set-macro-character #\[ (lambda (s c) (declare (ignore c)) (cons 'list (read-delimited-list #\] s t))))
-        (set-macro-character #\% (lambda (s c) (declare (ignore s c)) (values))))
+        (set-macro-character #\% (lambda (s c) (declare (ignore s c)) (values)))
+        (set-dispatch-macro-character #\# #\u
+          (lambda (s c n) (declare (ignore c n))
+            (let ((d (read s t nil t))) (if *read-suppress* nil (list 'quote (list :uri d)))))))
       (print (list !foo !(a b) #?"bar" #3?(+ 1 2) [1 % (+ 1 1) 3]))
       (print (let ((x 5)) [x !x]))
+      ;; puri's #u tests *read-suppress*: the reader variables are bound on every backend.
+      (defun ci-rt-suppress-p () *read-suppress*)
+      (print (list #u"http://x/" (ci-rt-suppress-p) (let ((*read-suppress* t)) (ci-rt-suppress-p)) *read-eval*))
       (eval-when (:compile-toplevel :load-toplevel :execute)
         (setf (readtable-case *readtable*) :invert))
       (defparameter *ci-rt-inverted* (list 'foo 'FOO 'Foo))
@@ -24941,6 +24971,7 @@ cases:
     expected: |
       ((:BANG FOO) (:BANG (A B)) (:Q NIL "bar") (:Q 3 3) (1 2 3))
       (5 (:BANG X))
+      ((:URI "http://x/") NIL T T)
       ((FOO |foo| |Foo|) !FOO "[X]" T)
   # Shapes parenscript, jonathan and rutils (cl-redis) load through: a package's own
   # `while` beside rontolisp's, a go in a return-from's value form, a ratio specializer,

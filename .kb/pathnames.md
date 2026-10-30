@@ -54,6 +54,26 @@ with `(pathname ...)`.
   transport still REFUSES a pathname response body (`%http-body-string` /
   `LispEvaluator.responseBody`); `lack-app-file` is deferred.
 
+## A file stream is a pathname designator (2026-10-31)
+`open` puts the namestring it opened on the stream VALUE (`LispLayout.STREAM_PATH_CELL`, a
+reserved cell, nil on every other stream); `pathname`, `namestring` and `%path-ns` read it
+(literal index 4), so every path-taking prelude operator, `truename` / `probe-file` /
+`delete-file` included, takes a file stream. On the value, not in a handle-keyed registry like
+`%file-stream-directions`: cl-fad's `with-open-temporary-file` deletes `(pathname s)` AFTER the
+close, which forgets a registry entry, and a wasm descriptor is reused by the next `open`.
+- Interpreter: `Environment.fileStreamValue` fills it on every open (`:probe` too);
+  `PathnameOps.designatorNamestring` reads it, so the `open` / `load` built-ins take a stream.
+- Compile paths: `LispMacroExpander.recordingStreamPath`, applied by both `Jvm/WasmExprCompiler`
+  `open` cases AHEAD of `lowerRuntimeOptions` (one record per source open; the inner open, whose
+  filespec is the `__open_arg` temporary, comes back unrecorded). It also unwraps a file stream
+  given as the filespec (ANSI `OPEN.66`). Gate `recordsStreamPaths`: stream values, instances,
+  and `pathname` / `namestring` / `%path-ns` spliced -- the only readers -- so a program that
+  cannot ask keeps its bytes.
+- The value is the namestring AS GIVEN (our `open` merges nothing); SBCL's is merged with its
+  defaults, so absolute. A string stream designates none and signals, as SBCL's type check does.
+  Not done: a synonym stream (SBCL's `pathname` takes one).
+- Pinned by ci-spec `pathname-of-a-file-stream` and `ClFadE2eTest` (both macros, all four).
+
 ## Wild components: `:wild` / `:wild-inferiors`
 The flat model renders CL's directory keywords as the text CL prints: `:up`/`:back` ->
 `..`, `:wild` -> `*`, `:wild-inferiors` -> `**` (`%pathname-directory-string`, Java twin
