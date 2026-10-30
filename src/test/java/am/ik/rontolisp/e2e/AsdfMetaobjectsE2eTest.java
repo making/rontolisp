@@ -25,6 +25,14 @@ import java.util.List;
  * the relative argument is a variable there, so the compile-time fold cannot answer it.
  *
  * <p>
+ * The {@code .asd} runs as Lisp ({@code .kb/asdf.md}, "What a {@code .asd} may contain"):
+ * a {@code defpackage} guarded by {@code find-package}, a feature computed from
+ * {@code *features*} and pushed -- read by the {@code #-} below it and by
+ * {@code src/one.lisp} (the {@code build} defun) -- and a {@code load-system} of
+ * {@code meta-demo-tool} from the file itself, which the compile paths run in their build
+ * image and splice ahead of the systems defined after it ({@code tool-fn}).
+ *
+ * <p>
  * And the operation protocol ({@code .kb/asdf.md}, "The operation protocol"): the
  * recorded test-op body receives a real {@code asdf:test-op}; {@code asdf/interface} and
  * the sub-packages name asdf's own symbols; {@code operate}, {@code make-operation},
@@ -60,6 +68,8 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			(print (asdf:component-version (asdf:find-system "meta-demo")))
 			(print (asdf:component-version (asdf:find-system "meta-demo/tests")))
 			(print (platform))
+			(print (build))
+			(print (tool-fn))
 			(print (if (search "asdf-metaobjects-demo/data.txt"
 			                   (let ((rel "data.txt"))
 			                     (asdf:system-relative-pathname "meta-demo" rel)))
@@ -93,9 +103,9 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 
 	private static final List<String> EXPECTED = List.of("T", "T", "NIL", "T", "\"meta-demo\"",
 			"(\"src/one\" \"src/m/two\")", "NIL", "T", "NIL", "T", "T", "(\"meta-demo\")", "\"1.2.3\"", "NIL", ":UNIX",
-			":RELATIVE-OK", ":SYSTEM", ":FILE", "NIL", "NIL",
-			"(\"meta-demo\" \"meta-demo/tests\" \"meta-demo/hooks\" \"meta-demo/perform\" \"meta-demo/nested\""
-					+ " \"trivial-features\")",
+			":SMALL", ":TOOL", ":RELATIVE-OK", ":SYSTEM", ":FILE", "NIL", "NIL",
+			"(\"meta-demo-tool\" \"meta-demo\" \"meta-demo/tests\" \"meta-demo/hooks\" \"meta-demo/perform\""
+					+ " \"meta-demo/nested\" \"trivial-features\")",
 			":NESTED-LOAD-OK", "\"testing meta-demo/tests\"", "T", "3", "1", "T", "T", "T", "NIL", "1", "T", ":REFUSED",
 			"(:A :GLOBAL :B :GLOBAL)",
 			"((:SYSTEM \"meta-demo/hooks\") (:COMPILE \"a\") (:LOAD \"a\") (:COMPILE \"b\") (:LOAD \"b\")"

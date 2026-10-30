@@ -1,7 +1,8 @@
 # asdf (limited system-definition subset)
 
-An API-compatible mini-ASDF, **not a port**. Shared core `eval/AsdfSystems.java` parses
-`defsystem` forms and whole `.asd` files **as plain data — never evaluated**.
+An API-compatible mini-ASDF, **not a port**. Shared core `eval/AsdfSystems.java` LOADS a `.asd`
+file as Lisp, form at a time, and parses each `defsystem` form in it **as plain data** (the
+recording operator) -- see "What a `.asd` may contain".
 
 Surface: `asdf:defsystem` + `asdf:load-system` + `asdf:test-system`, with component
 METAOBJECTS real at run time. `asdf:find-system` answers a memoized `asdf:system` CLOS instance
@@ -14,19 +15,63 @@ are real on every backend so `typecase`/`typep`/defmethod specializers work; the
 output-translations. Docs: `doc/*/guides/asdf-systems.md`,
 `reference/functions/asdf-{defsystem,load-system,perform,operate}.md`.
 
-## What a `.asd` may contain
-Anything not listed is a hard error naming the form — deny by default.
-- `defsystem` in any package spelling.
-- `register-system-packages` — RECORDED into the loader's package -> system map (only the
-  package-inferred consumer reaches here).
-- `in-package`, `defpackage` — skipped.
-- top-level `defparameter` — evaluated into a parse-time env by `evalDataForm` when the value is
-  pure data. An IMPURE value does NOT fail the file: `defineParameter` records it as unevaluable
-  and only a later form that READS it errors, naming the parameter.
-- top-level `progn` — **FLATTENED** onto the worklist; an unsupported form inside still errors by
-  its OWN name, never `PROGN`'s.
-- `(eval-when (...) (pushnew :F *features*))` or a bare top-level `pushnew`/`push` — see below.
-- component-class `defclass` and any top-level `defmethod` — see below.
+## What a `.asd` may contain: it RUNS (h35, 2026-10-30)
+`AsdfSystems.loadAsd` loads the file into an `AsdImage` FORM AT A TIME (`LispReader.readNextForm`,
+tolerant `#.` mode), each form read with the loader's features widened by what the file pushed
+so far -- so a computed push decides the `#+`/`#-` below it, CL's `load` (cl-pdf's
+`#-(or use-...-zlib) (error ...)` guard). The image: the INTERPRETER's is the program's own
+evaluator; a COMPILE PATH's is `LispEvaluator.buildImage`, created by `LoadInliner.BuildImage` on
+the first `.asd` (never for built-in or inline systems), reading with the TARGET's features,
+`*features*` seeded from them, and SHARING `ctx.systems()`/`ctx.systemPackages()` -- so a
+`find-system` in a file sees what the compile path registered, and a system the file loads is
+registered where the splice reads it. Nothing the build image does reaches the program except
+the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` = `asdf-user`
+(defined on the image's first `.asd`: uses `cl`/`asdf`/`uiop`, shadowing asdf's
+`*user-cache*`, which is a different symbol from uiop's here), `*load-pathname*`/`*load-truename*`
+= the file, `*features*` BOUND to its current value, the asdf runtime loaded.
+- **Recognized by SHAPE, before anything runs** (the plan reads them; unchanged from the data
+  parse): `defsystem` in any package spelling (the recording operator: `parseDefsystem` on the RAW
+  form, so a recorded test-op body keeps its unresolved symbols); `register-system-packages`
+  (recorded into the package -> system map); a component-class `defclass` (below; any OTHER
+  defclass runs); `defmethod` (ignored, except the `source-file-type` pre-pass); `progn` and an
+  `eval-when` whose situations fire on load (`firesOnLoad`) are FLATTENED onto the worklist, a
+  `(:compile-toplevel)`-only one is dropped (the interpreter's own `eval-when` runs every body,
+  so this is decided here); a top-level `#.` marker of either kind is dropped (the ASDF version
+  guard: evaluated, it refused bordeaux-threads, fiveam, in-nomine, split-sequence and
+  static-vectors in the h35 prototype -- there is no `asdf:asdf-version` here).
+- **Everything else is EVALUATED** in the image (`AsdLoad.eval`, `#.` markers resolved first; one
+  holding an unreadable `#.` fails the load naming it): the package header (a conditional
+  `defpackage` included -- cl-csv, function-cache), `warn` (to `*error-output*`; cl-containers),
+  `find-system` (answers REGISTERED + built-in systems only, never searches -- so cl-containers'
+  optional `asdf-system-connections` probe answers nil and the warning runs, as on a fresh
+  Quicklisp), `defparameter`/`defun`/`defvar`, `error` (an implementation guard fails the load
+  with the library's own message; the compile path wraps it with the `.asd` path), a feature push
+  however computed.
+- **A push is the FILE's declaration**: `*features*` is bound for the load, so the push is undone
+  when the file closes, and `AsdLoad.pushedFeatures` (bound value minus the snapshot at open,
+  oldest first, downcased like `symbolName`) is merged into every system defined AFTER it
+  (`parseDefsystem`'s `pushedFeatures`, ahead of `:rontolisp-features`). Real CL keeps the push
+  in `*features*` (SBCL 2.2.9, measured on the `asdf-metaobjects-demo` fixture) -- the deviation
+  is the determinism decision below. A `#+` ABOVE a push no longer sees it (the old whole-file
+  `FeaturePushes` widening is not applied to `.asd` reads).
+- **A system the file's own forms load** (`asdf:load-system`, or `operate`/`quickload` through it;
+  `AsdLoadScope.isOwnForm`: innermost scope, `loadingSystems` at the open depth, not inside such a
+  load) is noted (`takeLoadedSystems`) and leads the `:defsystem-depends-on` of every system the
+  file defines AFTER the call (`withEarlierLoads`) -- so the compile paths splice it ahead of
+  them, matching the interpreter, where it is simply loaded. The interpreter loads it OUTSIDE the
+  file's bindings (`loadOutsideTheFile`): `*features*` unbound for it, so what it pushes stays in
+  the image (and is added to the file's bound value), and the package current when the file
+  OPENED. SBCL reads a component without `in-package` there in the `.asd`'s package (measured);
+  the compile paths cannot (that package lives in the build image), so every backend uses the
+  caller's. Real ASDF refuses to load a system the reading `.asd` itself defines (circular
+  dependency on its definition, measured), so a fixture's tool system lives in its own `.asd`.
+- **An `asdf:defsystem` that EVALUATION reaches** (inside a `when`, out of a macro) is the file's:
+  `evalDefsystem` hands it to the scope (`AsdImage.open`'s recorder), parsed with the same
+  features/classes/earlier loads -- but from the RESOLVED form (its symbols already homed in the
+  file's package).
+- Errors: interpreter -- the condition propagates unwrapped (a handler around `load-system` sees
+  the library's own); compile path -- `LoadInliner` wraps a non-parse exception as
+  `<asd path>: message`.
 
 ### Options
 - `:components` ordered by a stable topological sort of `:depends-on`; `:serial` = implicit dep
@@ -41,7 +86,7 @@ Anything not listed is a hard error naming the form — deny by default.
 - `locate()` finds `NAME.asd` by *attempting to read* each search dir through `SourceLoader` — no
   existence check, so the browser playground's in-memory loader works. Secondary names
   (`lib/tests`) map to the primary `.asd`.
-- Features (`parseAsdSource`/`parseDefsystem` take a `reader.Features`): component-level
+- Features (`loadAsd`/`parseDefsystem` take a `reader.Features`): component-level
   `:if-feature EXPR` keeps the component in the dependency graph but drops its files; a
   `:depends-on` entry may be `(:feature EXPR DEP)` (`dependencyName`); a *surviving*
   `(:require MODULE)` is a hard error; elements past the dependency are IGNORED, matching
@@ -50,9 +95,8 @@ Anything not listed is a hard error naming the form — deny by default.
   designators are stripped in `designator`/`symbolName`.
 - **`:rontolisp-features (...)`** — rontolisp-added, parsed by `AsdfSystems.declaredFeatures`
   **before** the option loop onto `LispSystem.features()`. Each loader WIDENS its own base set
-  (`Features.with(...)`, **additive only**); a DEPENDENCY keeps the outer set. Exists because a
-  real `.asd` pushes a feature at LOAD time while component conditionals resolve at READ time
-  (`.kb/reader-features.md`).
+  (`Features.with(...)`, **additive only**); a DEPENDENCY keeps the outer set. Still needed by a
+  replacement `.asd` that decides a per-implementation branch statically (postmodern's two).
 - **`:defsystem-depends-on`** parsed and recorded on `LispSystem.defsystemDependsOn`; resolved
   BEFORE `:depends-on`. Deliberately NOT merged into `dependsOn` — `component-sideway-dependencies`
   must not list it (pinned on all four backends).
@@ -64,58 +108,60 @@ Anything not listed is a hard error naming the form — deny by default.
   `asdf:component-version` reads it BACK: a plain STRING is recorded as written, every other
   spelling answers nil.
 
-### `#.` in a `.asd` — the CONSUMER decides, never the evaluator
-- The tolerant lexer (`LispLexer` with `tolerateReadEval`, used only by
-  `readAllSkippingReadEval`/`readFirstForm`) re-lexes the skipped datum into a
-  `(%read-eval datum)` marker (`LispNames.READ_EVAL`) or a
-  `(%read-eval-unreadable "RAW")` marker (`LispNames.READ_EVAL_UNREADABLE`). **One datum either
-  way**, so a `#.` inside a plist never shifts the surrounding pairing.
-- **Neither marker is resolved where it is read.** `parseDefsystem`'s option loop resolves per
-  option (`resolveReadEval` against the enclosing `.asd`'s defparameter env + path, threaded as
-  `AsdContext`; other callers pass `AsdContext.NONE`).
-- **Everything outside `IGNORED_OPTIONS` is resolved, and unresolvable is a HARD ERROR** naming
-  the `.asd` and the clause. A silent nil drops a dependency or a source file and surfaces much
-  later as an undefined symbol far from the cause.
-- **Do not teach `evalDataForm` `with-open-file`/`uiop:read-file-string`.** A top-level marker of
-  either kind is ignored whole (the ASDF version-guard idiom). Non-`.asd` sources support `#.`
-  everywhere (`.kb/reader-features.md`).
+### `#.` in a `defsystem` — the CONSUMER decides
+- The tolerant lexer (`ReadEvalMode.SKIP_UNREADABLE`, used by `readNextForm`/`scanForms` and
+  `readFirstForm`) re-lexes the skipped datum into a `(%read-eval datum)` marker
+  (`LispNames.READ_EVAL`) or a `(%read-eval-unreadable "RAW")` marker
+  (`LispNames.READ_EVAL_UNREADABLE`). **One datum either way**, so a `#.` inside a plist never
+  shifts the surrounding pairing.
+- **A marker inside a `defsystem` is not resolved where it is read.** `parseDefsystem`'s option
+  loop resolves per option (`resolveReadEval` -> `AsdLoad.readEval`, the image's evaluator, threaded
+  as `AsdContext`; an inline `defsystem` gets `AsdContext.NONE` and cannot resolve one). So
+  cl-postgres' `(:file #.*string-file*)` reads the `defparameter` the file evaluated above it --
+  any value form, not only the pure data the old `evalDataForm` accepted.
+- **Everything outside `IGNORED_OPTIONS` is resolved, and a failure is a HARD ERROR** naming the
+  `.asd` and the clause. A silent nil drops a dependency or a source file and surfaces much later
+  as an undefined symbol far from the cause. In `IGNORED_OPTIONS` a marker is never evaluated: a
+  `:long-description` reading the README, a `:version` read-file indirection, say nothing.
 
-### Feature announcements read out of a real `.asd`
-`AsdfSystems.collectFeaturePushes` hands a top-level push to `parseDefsystem` as if the system
-had declared `:rontolisp-features (:F)` (`mergedFeatures`, pushes first).
-- Pushes accumulate in FILE order and reach only systems defined AFTER them. Only the
-  announcement shape is accepted inside the `eval-when`; a `(:compile-toplevel)`-ONLY situation
-  list is inert; the `*features*` argument must be the symbol itself.
+### Feature announcements from a dependency
 - **A DEPENDENCY announces features to the system that names it**:
   `BuiltinSystems.declaredFeatures` is read at PARSE time, so announced names hold for this
   system's `:if-feature`/`(:feature ...)` and for reading its components. **Only a BUILT-IN
-  system announces** — a real third-party one announces by RUNNING. Both `:depends-on` and
-  `:defsystem-depends-on` announce. Divergence: an announcement also reaches this definition's
-  own `:if-feature` clauses (a one-pass parse has no "load between the clauses").
+  system announces** — a real third-party one announces by RUNNING, after the parse. Both
+  `:depends-on` and `:defsystem-depends-on` announce. Divergence: an announcement also reaches
+  this definition's own `:if-feature` clauses (a one-pass parse has no "load between the
+  clauses").
 
 ### The component-class surface
-Only two things can reach a data-only front end: whether an instance contributes a SOURCE file,
-and which file EXTENSION its name gets. Model: `AsdfSystems.ComponentClass(source, fileType)` +
-a per-`.asd` `ComponentClasses` scope.
+Only two things reach the plan from a component class: whether an instance contributes a SOURCE
+file, and which file EXTENSION its name gets. Model: `AsdfSystems.ComponentClass(source,
+fileType)` + a per-`.asd` `ComponentClasses` scope, read from the classes' SHAPE (a live CLOS
+query would need ASDF's own `source-file` `type` slot and `class-for-type`, which the runtime
+classes in `asdf.lisp` do not model).
 - **ASDF's own classes are component types and superclasses without a defclass**
   (`BUILTIN_COMPONENT_CLASSES`): `cl-source-file` (`.lisp`, `DEFAULT_COMPONENT_CLASS`),
   `cl-source-file.cl`, `cl-source-file.lsp`, `static-file`, `doc-file`, `html-file`.
-- **A top-level `defclass` declares a component class** (`collectComponentClass`): every
-  superclass must resolve in that scope, `source`/`fileType` inherit from the first source
-  superclass, a `(type :initform "cl")` slot overrides the extension. A defclass that is NOT a
-  component class stays a hard error.
+- **A top-level `defclass` declares a component class** (`componentClass`) when every superclass
+  resolves in that scope: `source`/`fileType` inherit from the first source superclass, a
+  `(type :initform "cl")` slot overrides the extension. Any other `defclass` RUNS (it is no
+  component type, so naming it as one still fails by name).
 - **`(defmethod source-file-type ((c CLASS) (s module)) "ext")` sets that class's extension**,
-  collected in a PRE-PASS (`collectSourceFileTypes`, descending into `progn`) so its position
-  does not matter. **The CLASS still has to precede its use**; only the METHOD is position-free.
-- **Every other top-level `defmethod` is tolerated and ignored** — the one deliberately opened
-  part of the closed world, safe because a method that really moved a file surfaces as the
-  missing file, NAMED. It stays ignored now that `perform` is real: the `.asd` is data, and a
-  `(defmethod perform :after ((o load-op) (c (eql (find-system ...)))) ...)` there is the
-  `.asd`-evaluation question (h35), as are `:perform` clauses for any op but test-op (cl-smtp's
-  and rt's `(pushnew :X *features*)`). A method in a library's SOURCE runs.
+  collected in a PRE-PASS (`collectSourceFileTypes` over `LispReader.scanForms`, descending into
+  `progn` and a firing `eval-when`) so its position does not matter. **The CLASS still has to
+  precede its use**; only the METHOD is position-free.
+- **Every other top-level `defmethod` is ignored, not run** -- two measured reasons. (1) Its effect
+  lives in the image that loaded the file: the compile paths' build image never runs the
+  program, so running it on the interpreter alone would make the backends disagree (cl-store's
+  `perform :after load-op`, esrap's capability pushes, cl-smtp's and rt's `:perform` pushes).
+  (2) The common shape, `(eql (find-system :x))`, is an eql specializer FORM, which the
+  interpreter's `defmethod` refuses (literal or `(find-class ...)` only): 22 of the 339 cached
+  `.asd` files define one. A method that really moved a file still surfaces as the missing file,
+  NAMED; a method in a library's SOURCE runs. **Re-evaluate when** a loadable library's `.asd`
+  method carries behavior its program observes.
 - **`:default-component-class`** is what a bare `(:file "name")` takes, readable on the system
   AND on a module. NOT in `IGNORED_OPTIONS`: its `#.` resolves and an unknown class is an error.
-- Driving library: **portableaserve** (`aserve.asd`, `htmlgen.asd`, `webactions.asd` all parse).
+- Driving library: **portableaserve** (`aserve.asd`, `htmlgen.asd`, `webactions.asd` all load).
 
 ## `:class :package-inferred-system`
 Consumers: ningle, rove, array-operations, jose. Every other `:class` value is a hard error
@@ -148,9 +194,10 @@ iff declared) is the whole marker. All rules in `AsdfSystems`:
   `loadComponent` -> `loadFile`, the system's `baseDir` on `loadDirStack`). State:
   `asdfSystems`/`loadedSystems`/`loadingSystems` + `systemPath`.
 - **Compile path**: handled *inside* `LoadInliner`'s recursion; the `Ctx` record threads the
-  system registry, loaded set, cycle stack and search path. A non-literal `load-system` name is a
-  hard error at inline time; a *nested* asdf form is rejected by both compilers in the same
-  `case` as `REQUIRE`/`PROVIDE`.
+  system registry, loaded set, cycle stack, search path and the lazily created build image a
+  `.asd` runs in. A non-literal `load-system` name is a hard error at inline time; a *nested*
+  asdf form is rejected by both compilers in the same `case` as `REQUIRE`/`PROVIDE` (a `.asd`'s
+  own `load-system` is not one: it runs in the build image).
 - **`load-system`/`quickload` keyword options are accepted and IGNORED on every path**
   (`AsdfSystems.checkIgnoredLoadOptions`): `:force`/`:verbose`/`:silent` have nothing to drive
   (no fasl cache, a second load is a no-op), and rejecting them would make lack's
@@ -300,8 +347,9 @@ recorded body. A designator op (`'asdf:load-op`) dispatches through a `symbol` m
   `(setf (gethash nil h) ...)` NPE in an `eql` table (h56). lass loads (its `asdf.lisp`
   defines `asdf/interface::lass-file` and perform/output-files methods); its rendering differs
   from SBCL through h46 (`loop until ... for`) and `.todo/001` (`~&` inside `~@[`). A lass-file
-  COMPONENT in a consumer's `.asd` is still unknown to the data parse (the class is defined in
-  lass's source): h35.
+  COMPONENT in a consumer's `.asd` is still unknown: component classes are read from the `.asd`'s
+  own shape ("The component-class surface"), and lass defines the class in its SOURCE -- the gap
+  prove-asdf's `:test-file` leaves in 12 cached test systems.
 - Pinned by `AsdfMetaobjectsE2eTest` (all four: `hooks.lisp` defines asdf-flv's `:around` plus
   `:before`/`:after` loggers; `a`/`b`/`c` -- `c` loaded from inside `b` -- pin the order, the
   file-local binding and nesting), `LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions`
@@ -741,8 +789,8 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   **never a sink**. (1) `(:version NAME "1.2.3")` entries. (2) A top-level `(defmethod perform
   ...)` tolerated, since WIDENED to every top-level method with `source-file-type` read; ignoring
   esrap's `perform :after` capability pushes is a **VERIFIED decision** (a grep of the cached dist
-  found zero `#+esrap.` reads). **Trigger**: if anything starts reading one, fold the keywords
-  into `LispSystem.features()` via `collectFeaturePushes`. (3) A top-level component-class
+  found zero `#+esrap.` reads). **Trigger**: if anything starts reading one, the method has to
+  run (the `.asd` `defmethod` rule, "The component-class surface"). (3) A top-level component-class
   `defclass`, generalized to any component class. (4) `mgl-pax-bootstrap` as a shim.
   Two resolver rules landed in `PackageResolver.resolve`: **a literal top-level qualified
   `define-package` is consumed exactly like `defpackage`** (its extra clauses still error until a
@@ -939,20 +987,62 @@ adding `:common-lisp` to every `:use`, dropping `:recycle`/`:unintern`/`:intern`
 port guard and `(pushnew :unix *features*)` and make `not-implemented-error` a no-op; inject the
 missing `cl` names as per-package defuns.
 
-## The `.asd`-as-data boundary is not what stops portableaserve
-**Against the `portableaserve-20190813-git` spike: widening the boundary into an evaluator buys
-nothing.** The first refusal is `acl-compat.asd`'s top-level `(defun lisp-system-shortname ...)`
-called from a `(defmethod component-pathname ...)` routing four source files into
-per-implementation subdirectories. Behind that door: dependencies that do not exist here (`puri`,
-`cl-fad`, and the SBCL contribs `sb-bsd-sockets`/`sb-posix`); `acl-compat/packages.lisp` does
+## The `.asd` runs as Lisp: the decision and its measurement (h35, 2026-10-30)
+**The trigger fired**: four libraries that are NOT per-implementation layers were refused by the
+data parse's deny-by-default gate -- cl-csv and function-cache (a `defpackage` guarded by
+`find-package`), cl-containers (a `find-system` probe, a `warn`, a guarded `load-system`), cl-pdf
+(a feature computed from `*features*`, pushed, then read by a `#-` guard). The narrow fix -- one
+recognized idiom per library, which for cl-pdf's `(when (notany #'(lambda ...) ...) (push ...))`
+means a second evaluator written in Java -- was rejected for the evaluator the image already has.
+
+Measured with the data parse (`AsdfSystems` as of `cc2095474`, renamed) beside `loadAsd` in one
+shared build image, over the 339 `.asd` files of the Quicklisp cache, the 41 vendored and the 8
+bundled ones, with `Features.INTERPRETER` and `Features.JVM`:
+- **Plans**: all 343 files the data parse took (296 cached, 39 vendored, 8 bundled) produce
+  IDENTICAL systems (name, deps, `:defsystem-depends-on`, files, features, test-op, version); 6
+  more load (cl-csv, cl-csv-clsql, function-cache, function-cache-clsql, cl-pdf, and
+  flexi-streams, whose `(when (<= char-code-limit 65533) (error ...))` passes), cl-containers
+  too in a fresh image; 0 regressions. Still refused (37): implementation guards
+  (trivial-features, trivial-garbage, cl-store, static-vectors), `defsystem` options outside the
+  subset (`:around-compile` x6, `:properties`, `:output-files`, a `#P"..."` `:pathname` x2),
+  component classes from another system's source (prove-asdf's `:test-file` x12,
+  `:docudown-source`), ASDF API absent here (`oos`, `load-systems`, `(load-system "asdf")`, and
+  `(in-package :asdf)` before CL code -- the `asdf` package here does not use `cl`, real
+  ASDF's does), ironclad's system class, one read error.
+- **Determinism**: a first prototype that left pushes in `*features*` changed 187 of 233 plans in
+  alphabetical load order -- cl-json.asd's `(pushnew :cl-json *features*)` reached every file read
+  after it. Hence the binding: a push is the file's declaration. `find-system` answers registered
+  systems only, so the cache's CONTENTS never decide a plan, but load ORDER can: with every `.asd`
+  registered in one image, cl-containers' probe finds asdf-system-connections and loads it, whose
+  source then fails (`(in-package :asdf)` + `eval-when`, the `asdf`-uses-`cl` gap) -- real ASDF
+  takes that branch too whenever the system is installed.
+- **Startup**: the first evaluator in a JVM 370-630 ms (class loading, which the compile path's
+  later macro-time evaluator would pay anyway), a warm one 3-11 ms plus the asdf runtime
+  20-60 ms; per file 0.5 ms parsed vs 1.7 ms loaded (183 vs 586 ms over 339). A compile whose
+  systems are all built in or inline creates no build image.
+- **Where the four are now** (`ql:quickload`, after h53's readtables): cl-csv and
+  function-cache LOAD on the interpreter -- `read-csv`/`write-csv` and a `defcached` function
+  print byte-identically to SBCL 2.2.9 -- and the compile paths stop in named-readtables (`No
+  such package: EDITOR-HINTS.NAMED-READTABLES`, h57); cl-containers stops in metatilities-base's
+  `defpackage`, whose `:import-from` holds `#-(or allegro ... sbcl) (error "Need to adapt
+  defpackage ...")` (an implementation guard); cl-pdf in `font.lisp`'s load-time `(load-fonts)`:
+  `The function GET-AFM-STRING is undefined` -- a macro names the reader with
+  `read-from-string` at EXPANSION time, which the interpreter homes in the CALLER's package
+  (SBCL and the JVM: in PDF), h62.
+
+### Earlier: the gate was not what stopped portableaserve
+**Against the `portableaserve-20190813-git` spike, evaluating `.asd` files buys nothing** (still
+true now that they run). `acl-compat.asd`'s `(defun lisp-system-shortname ...)` feeds a
+`(defmethod component-pathname ...)` routing four source files into per-implementation
+subdirectories. Behind it: dependencies that do not exist here (`puri`, `cl-fad`, and the SBCL
+contribs `sb-bsd-sockets`/`sb-posix`); `acl-compat/packages.lisp` does
 `#+sbcl (:use #:sb-bsd-sockets)` while without `#+sbcl` the `.asd` signals its own implementation
-guard — so the two ways through are "announce `#+sbcl` and need SBCL's internals" or "announce
+guard -- so the two ways through are "announce `#+sbcl` and need SBCL's internals" or "announce
 nothing and be refused by name"; and the files the method selects are a port of SBCL's internals
 (62 `sb-thread:` references in `acl-mp.lisp` alone). **SBCL on this machine cannot load it
 either** (`Component :PURI not found`), so there is not even an oracle. The reachable path is the
-substitution ladder — a shim `net.aserve`/`acl-compat` surface over rontolisp's own HTTP server
-(`.kb/http-server.md`, `.kb/clack.md`). **Re-evaluate when** something OTHER than a
-per-implementation compatibility layer is refused by that gate.
+substitution ladder -- a shim `net.aserve`/`acl-compat` surface over rontolisp's own HTTP server
+(`.kb/http-server.md`, `.kb/clack.md`).
 
 ### The _Practical Common Lisp_ book corpus, as a standing result
 `practicals-1.0.3` (twelve systems over eleven chapters) diffed byte for byte against SBCL

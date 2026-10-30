@@ -36,20 +36,38 @@ class AsdfSystemsTest {
 		return AsdfSystems.parseDefsystem(form(source), null, Features.INTERPRETER);
 	}
 
-	/** What {@link #parseCapturingStderr} saw on {@code System.err}. */
+	/**
+	 * Loads a {@code .asd} the way both loaders do -- into an image, here a fresh build
+	 * image for {@code features} -- and answers the systems it defined.
+	 */
+	private static List<AsdfSystems.LispSystem> loadAsd(String source, String asdPath, Features features) {
+		return loadAsd(source, asdPath, features, new java.util.HashMap<>());
+	}
+
+	private static List<AsdfSystems.LispSystem> loadAsd(String source, String asdPath, Features features,
+			Map<String, String> systemPackages) {
+		Map<String, AsdfSystems.LispSystem> registry = new java.util.LinkedHashMap<>();
+		LispEvaluator image = LispEvaluator.buildImage(new PrintStream(java.io.OutputStream.nullOutputStream()),
+				features, SourceLoader.fileSystem(), registry, systemPackages);
+		return AsdfSystems.loadAsd(source, asdPath, features, systemPackages, image.asdImage(),
+				defined -> registry.putIfAbsent(defined.name(), defined));
+	}
+
+	/** What {@link #loadCapturingStderr} saw on {@code System.err}. */
 	private String stderr = "";
 
 	/**
-	 * Parses a {@code .asd} with {@code System.err} redirected: the consumer-decides rule
+	 * Loads a {@code .asd} with {@code System.err} redirected: the consumer-decides rule
 	 * for {@code #.} markers is as much about what is NOT printed as about what parses,
-	 * and only a capture can pin "says nothing".
+	 * and only a capture can pin "says nothing" -- or what a {@code warn} in the file
+	 * said.
 	 */
-	private List<AsdfSystems.LispSystem> parseCapturingStderr(String source, String asdPath) {
+	private List<AsdfSystems.LispSystem> loadCapturingStderr(String source, String asdPath) {
 		ByteArrayOutputStream captured = new ByteArrayOutputStream();
 		PrintStream oldErr = System.err;
 		System.setErr(new PrintStream(captured));
 		try {
-			return AsdfSystems.parseAsdSource(source, asdPath, Features.INTERPRETER);
+			return loadAsd(source, asdPath, Features.INTERPRETER);
 		}
 		finally {
 			System.setErr(oldErr);
@@ -304,8 +322,10 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void parseAsdSourceSkipsInPackageAndResolvesAgainstTheAsdDirectory() {
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+	void loadAsdRunsThePackageHeaderAndResolvesAgainstTheAsdDirectory() {
+		// A .asd loads in asdf-user, so its own (in-package :asdf-user) names a package
+		// that exists.
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				(in-package :asdf-user)
 				(defsystem :lib :components ((:file "main")))
 				(defsystem :lib/tests :components ((:file "tests")))""", "proj/lib.asd", Features.INTERPRETER);
@@ -316,21 +336,127 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void parseAsdSourceRejectsOtherForms() {
-		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(print 1)", "lib.asd", Features.INTERPRETER))
-			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("lib.asd")
-			.hasMessageContaining("unsupported form in .asd file");
+	void theClCsvHeaderRunsItsConditionalDefpackage() {
+		// cl-csv.asd verbatim (function-cache.asd opens the same way): the defpackage is
+		// guarded by find-package, so it is code, and the in-package below it selects
+		// the package it made.
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (unless (find-package :cl-csv.system)
+				    (defpackage :cl-csv.system
+					(:use :common-lisp :asdf))))
+
+				(in-package cl-csv.system)
+
+				(defsystem :cl-csv
+				  :serial t
+				  :components ((:file "packages")
+				               (:file "vars"))
+				  :depends-on (:iterate :alexandria :cl-interpol)
+				  :in-order-to ((test-op (test-op :cl-csv/test))))
+
+				(defsystem :cl-csv/test
+				  :components ((:module :tests :serial t :components ((:file "csv"))))
+				  :depends-on (:cl-csv :lisp-unit2)
+				  :perform (test-op (op system)
+				                    (uiop:symbol-call :cl-csv-test 'run-all-tests)))""", "sw/cl-csv.asd",
+				Features.INTERPRETER);
+		assertThat(systems).extracting(AsdfSystems.LispSystem::name).containsExactly("cl-csv", "cl-csv/test");
+		assertThat(systems.get(0).files()).containsExactly("packages.lisp", "vars.lisp");
+		assertThat(systems.get(1).testOp()).isNotNull();
+	}
+
+	@Test
+	void theClContainersHeaderProbesForAnOptionalSystemAndWarns() {
+		// cl-containers.asd verbatim: asdf-system-connections is optional -- probed with
+		// find-system, warned about when absent, loaded when present. Nothing registers
+		// it here, so the warning runs, on stderr like real ASDF's, the load does not,
+		// and the forms behind #+asdf-system-connections stay unread.
+		List<AsdfSystems.LispSystem> systems = loadCapturingStderr("""
+				(unless (or (member :asdf-system-connections *features*)
+					    (find-system 'asdf-system-connections nil))
+				  (warn "The CL-Containers system would enjoy having ~
+				asdf-system-connections around. See
+				http://www.cliki.net/asdf-system-connections for details and download
+				instructions."))
+				(when (and (not (member :asdf-system-connections *features*))
+					   (find-system 'asdf-system-connections nil))
+				  (load-system "asdf-system-connections"))
+
+				(defsystem "cl-containers"
+				  :components ((:module "setup" :pathname "dev/" :components ((:file "package")))))
+
+				#+asdf-system-connections
+				(defsystem-connection "cl-containers/with-moptilities"
+				  :requires ("cl-containers" "moptilities")
+				  :components ((:module "dev" :components ((:file "containers-moptilities")))))""",
+				"sw/cl-containers.asd");
+		assertThat(systems).singleElement()
+			.extracting(AsdfSystems.LispSystem::files)
+			.isEqualTo(List.of("dev/package.lisp"));
+		assertThat(this.stderr)
+			.contains("WARNING: The CL-Containers system would enjoy having asdf-system-connections");
+	}
+
+	@Test
+	void theClPdfHeaderComputesAFeatureTheFormsBelowItRead() {
+		// cl-pdf.asd verbatim: a feature COMPUTED from *features* and pushed, an #- guard
+		// below it that has to see the push -- each form is read only after the ones
+		// above it ran, CL's load -- or the file signals its own error, and a component
+		// and a dependency behind #+ on the alternatives. The push holds for the system
+		// defined after it.
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
+				(in-package :common-lisp-user)
+
+				(defpackage #:cl-pdf-system
+				    (:use #:cl #:asdf))
+
+				(in-package #:cl-pdf-system)
+
+				(eval-when (:load-toplevel :compile-toplevel :execute)
+				  (when (notany #'(lambda (feature) (find feature *features*))
+				                '(:use-salza2-zlib :use-salza-zlib :use-uffi-zlib :use-abcl-zlib :use-no-zlib))
+				    (push :use-no-zlib *features*))
+				  )
+
+				#-(or use-uffi-zlib use-salza-zlib use-salza2-zlib use-abcl-zlib use-no-zlib)
+				(error "You must choose which zlib implementation you want to use!")
+
+				(defsystem :cl-pdf
+				  :perform (load-op :after (op cl-pdf)
+				                    (pushnew :cl-pdf *features*))
+				  :components ((:file "defpackage")
+				               #+use-uffi-zlib (:file "init" :depends-on ("defpackage"))
+				               (:file "zlib" :depends-on ("defpackage" #+use-uffi-zlib "init")))
+				  :depends-on (:iterate #+use-salza-zlib :salza #+use-salza2-zlib :salza2 :zpb-ttf :uiop))""",
+				"sw/cl-pdf.asd", Features.INTERPRETER);
+		assertThat(systems).singleElement().satisfies(system -> {
+			assertThat(system.features()).containsExactly("use-no-zlib");
+			assertThat(system.files()).containsExactly("defpackage.lisp", "zlib.lisp");
+			assertThat(system.dependsOn()).containsExactly("iterate", "zpb-ttf", "uiop");
+		});
+	}
+
+	@Test
+	void anErrorTheFileSignalsFailsTheLoadByItsOwnMessage() {
+		// trivial-garbage.asd's implementation guard, now run rather than refused by
+		// shape.
+		assertThatThrownBy(() -> loadAsd("""
+				#-(or cmu scl sbcl allegro clisp openmcl corman lispworks ecl abcl clasp mezzano genera)
+				(error "Sorry, your Lisp is not supported by trivial-garbage.")
+
+				(defsystem trivial-garbage :components ((:file "trivial-garbage")))""", "sw/trivial-garbage.asd",
+				Features.INTERPRETER))
+			.hasMessageContaining("Sorry, your Lisp is not supported by trivial-garbage.");
 	}
 
 	@Test
 	void aTopLevelPrognIsFlattened() {
 		// cl-json.asd's shape: the outer reader conditional survives (rontolisp declares
 		// no :no-cl-json-clos), the inner #+ drops every implementation keyword it lists,
-		// so what reaches the parser is the literal (PROGN) -- flattened to a no-op
-		// rather than rejected as an unrecognized form, and :cl-json-clos is NOT pushed
-		// (exactly as on an implementation outside that #+ list).
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		// so what reaches the load is the literal (PROGN) -- a no-op -- and :cl-json-clos
+		// is NOT pushed (exactly as on an implementation outside that #+ list).
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				#-no-cl-json-clos
 				(progn
 				  #+(or mcl openmcl cmu sbcl clisp ecl scl lispworks allegro abcl genera)
@@ -343,7 +469,7 @@ class AsdfSystemsTest {
 
 	@Test
 	void aNestedPrognFlattensRecursivelyAndAnEmptyOneIsANoOp() {
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				(progn)
 				(progn
 				  (progn
@@ -351,16 +477,6 @@ class AsdfSystemsTest {
 		assertThat(systems).hasSize(1);
 		assertThat(systems.get(0).name()).isEqualTo("lib");
 		assertThat(systems.get(0).files()).containsExactly("main.lisp");
-	}
-
-	@Test
-	void anUnsupportedFormInsideAPrognErrorsByItsOwnNameNotPrognsName() {
-		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(progn (print 1))", "lib.asd", Features.INTERPRETER))
-			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("lib.asd")
-			.hasMessageContaining("unsupported form in .asd file")
-			.hasMessageContaining("(PRINT 1)")
-			.satisfies(ex -> assertThat(ex.getMessage()).doesNotContain("(PROGN"));
 	}
 
 	@Test
@@ -373,8 +489,7 @@ class AsdfSystemsTest {
 		// drops the build system and the test system with it.
 		String source = AsdOverrides.replacementSource("cl-unicode.asd");
 		assertThat(source).isNotNull();
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(source, "sw/cl-unicode.asd",
-				Features.INTERPRETER);
+		List<AsdfSystems.LispSystem> systems = loadAsd(source, "sw/cl-unicode.asd", Features.INTERPRETER);
 		assertThat(systems).hasSize(2);
 		assertThat(systems.get(0).name()).isEqualTo("cl-unicode/base");
 		assertThat(systems.get(0).dependsOn()).containsExactly("cl-ppcre");
@@ -399,7 +514,7 @@ class AsdfSystemsTest {
 		// resource, so upstream's tree on disk is never edited (.kb/cffi.md).
 		String source = AsdOverrides.replacementSource("cffi.asd");
 		assertThat(source).isNotNull();
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(source, "sw/cffi.asd", Features.INTERPRETER);
+		List<AsdfSystems.LispSystem> systems = loadAsd(source, "sw/cffi.asd", Features.INTERPRETER);
 		assertThat(systems).hasSize(1);
 		AsdfSystems.LispSystem cffi = systems.get(0);
 		assertThat(cffi.name()).isEqualTo("cffi");
@@ -438,14 +553,14 @@ class AsdfSystemsTest {
 		String source = AsdOverrides.replacementSource("dbi.asd");
 		assertThat(source).isNotNull();
 		for (Features features : List.of(Features.INTERPRETER, Features.JVM)) {
-			List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(source, "sw/dbi.asd", features);
+			List<AsdfSystems.LispSystem> systems = loadAsd(source, "sw/dbi.asd", features);
 			assertThat(systems).hasSize(1);
 			assertThat(systems.get(0).dependsOn()).containsExactly("split-sequence", "closer-mop", "cl-ppcre",
 					"bordeaux-threads");
 			assertThat(systems.get(0).files()).containsExactly("src/utils.lisp", "src/cache/thread.lisp",
 					"src/logger.lisp", "src/error.lisp", "src/driver.lisp", "src/dbi.lisp");
 		}
-		List<AsdfSystems.LispSystem> wasmSystems = AsdfSystems.parseAsdSource(source, "sw/dbi.asd", Features.WASM);
+		List<AsdfSystems.LispSystem> wasmSystems = loadAsd(source, "sw/dbi.asd", Features.WASM);
 		assertThat(wasmSystems.get(0).files()).containsExactly("src/utils.lisp", "src/cache/single.lisp",
 				"src/logger.lisp", "src/error.lisp", "src/driver.lisp", "src/dbi.lisp");
 	}
@@ -475,7 +590,7 @@ class AsdfSystemsTest {
 		// The esrap pushes are IGNORED with the whole body (grep-verified 2026-08-03:
 		// nothing in the dist reads #+esrap.*), so they must NOT surface as system
 		// features.
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				(defsystem :lib :components ((:file "main")))
 				(defmethod perform ((operation test-op) (component (eql (find-system :lib))))
 				  (uiop:symbol-call '#:lib.test '#:run))
@@ -494,7 +609,7 @@ class AsdfSystemsTest {
 		// machinery for one to run on, and the only method whose EFFECT is representable
 		// here (source-file-type) has its own channel. An unrepresentable method that
 		// really did move a file surfaces as the missing file at load time, named.
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				(defmethod operation-done-p ((o compile-op) (c t)) nil)
 				(defmethod component-pathname ((c my-file)) (call-next-method))
 				(defsystem :lib :components ((:file "main")))""", "lib.asd", Features.INTERPRETER);
@@ -506,7 +621,7 @@ class AsdfSystemsTest {
 		// chipz.asd's documentation-file machinery: two defclasses over ASDF's
 		// doc-file, whose component types then appear inside a :module. They
 		// participate in ordering but contribute no source, like :static-file.
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				(cl:defpackage :chipz-system (:use :cl :asdf) (:export #:gray-streams))
 				(cl:in-package :chipz-system)
 				(defclass txt-file (doc-file) ((type :initform "txt")))
@@ -523,14 +638,20 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void aDefclassThatIsNotAComponentClassIsAHardError() {
-		// The closed world holds: a class whose superclass is not a component class
-		// (an operation, a condition) still names itself and stops the parse.
-		assertThatThrownBy(
-				() -> AsdfSystems.parseAsdSource("(defclass my-op (operation) ())", "lib.asd", Features.INTERPRETER))
+	void aDefclassThatIsNotAComponentClassRunsAndTypesNoComponent() {
+		// A class whose superclass is not a component class (an operation, here) is the
+		// file's own business and runs; it is no component type, so naming it as one
+		// still fails by name.
+		assertThat(loadAsd("""
+				(defclass my-op (operation) ())
+				(defsystem :lib :components ((:file "main")))""", "lib.asd", Features.INTERPRETER)).singleElement()
+			.extracting(AsdfSystems.LispSystem::files)
+			.isEqualTo(List.of("main.lisp"));
+		assertThatThrownBy(() -> loadAsd("""
+				(defclass my-op (operation) ())
+				(defsystem :lib :components ((:my-op "main")))""", "lib.asd", Features.INTERPRETER))
 			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("lib.asd")
-			.hasMessageContaining("MY-OP");
+			.hasMessageContaining(":MY-OP");
 	}
 
 	@Test
@@ -539,7 +660,7 @@ class AsdfSystemsTest {
 		// cl-source-file.cl subclass, a perform :around hook on it, a
 		// :default-component-class, and components of both the declared class and the
 		// built-in one. Every file the system names is .cl, not .lisp.
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				(defpackage #:aserve-system (:use #:cl #:asdf))
 				(in-package #:aserve-system)
 				(defclass legacy-acl-source-file (cl-source-file.cl)
@@ -570,7 +691,7 @@ class AsdfSystemsTest {
 		// systems' methods on either side of their defsystems. (The CLASS still has to
 		// precede its use: real ASDF resolves a component type by find-class while it
 		// reads the defsystem.)
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				(defclass acl-file (cl-source-file) ())
 				(defmethod asdf:source-file-type ((c acl-file) (s module)) "cl")
 				(defclass late-file (cl-source-file) ())
@@ -594,7 +715,7 @@ class AsdfSystemsTest {
 	void aTypeInitformSlotSetsTheClassExtension() {
 		// The other half of how a class says "my sources are .cl": the very slot ASDF's
 		// own source-file-type reads, which is also how chipz spells its doc classes.
-		AsdfSystems.LispSystem system = AsdfSystems.parseAsdSource("""
+		AsdfSystems.LispSystem system = loadAsd("""
 				(defclass acl-file (cl-source-file) ((type :initform "cl")))
 				(defsystem :lib :components ((:acl-file "main") (:file "plain")))""", "lib.asd", Features.INTERPRETER)
 			.get(0);
@@ -670,7 +791,7 @@ class AsdfSystemsTest {
 		// #+fast-io-sv :depends-on entry drops :static-vectors. Checked on every
 		// backend: the announcement must not depend on which set is reading.
 		for (Features features : List.of(Features.INTERPRETER, Features.JVM, Features.WASM)) {
-			List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(FAST_IO_ASD, "sw/fast-io.asd", features);
+			List<AsdfSystems.LispSystem> systems = loadAsd(FAST_IO_ASD, "sw/fast-io.asd", features);
 			assertThat(systems).hasSize(1);
 			assertThat(systems.get(0).features()).containsExactly("fast-io");
 			assertThat(systems.get(0).dependsOn()).containsExactly("alexandria", "trivial-gray-streams");
@@ -682,9 +803,9 @@ class AsdfSystemsTest {
 	@Test
 	void anAnnouncedFeatureReachesTheSystemsOwnFeatureClauses() {
 		// What the declaration buys inside the same defsystem: :if-feature and
-		// (:feature ...) see the pushed name. (A #+ in the same file sees it too, but
-		// through the reader -- reader.FeaturePushes -- not through this parse.)
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		// (:feature ...) see the pushed name. (A #+ below the push sees it too: each form
+		// is read after the ones above it ran.)
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				(eval-when (:load-toplevel :execute) (pushnew :lib-sv *features*))
 				(defsystem :lib
 				  :depends-on ((:feature :lib-sv "static-vectors"))
@@ -695,18 +816,26 @@ class AsdfSystemsTest {
 
 	@Test
 	void anAnnouncedFeatureReachesOnlyTheSystemsDefinedAfterIt() {
-		// A push takes effect where it stands, like the load-time push it encodes.
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		// A push takes effect where it stands, and it is the FILE's declaration: it does
+		// not stay in the image's *features*, so what another .asd or another system's
+		// read sees never depends on which files happened to load first.
+		Map<String, AsdfSystems.LispSystem> registry = new java.util.LinkedHashMap<>();
+		LispEvaluator image = LispEvaluator.buildImage(new PrintStream(java.io.OutputStream.nullOutputStream()),
+				Features.INTERPRETER, SourceLoader.fileSystem(), registry, new java.util.HashMap<>());
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.loadAsd("""
 				(defsystem :lib/early)
 				(pushnew :lib *features*)
-				(defsystem :lib)""", "lib.asd", Features.INTERPRETER);
+				(defsystem :lib)""", "lib.asd", Features.INTERPRETER, new java.util.HashMap<>(), image.asdImage(),
+				defined -> registry.putIfAbsent(defined.name(), defined));
 		assertThat(systems.get(0).features()).isEmpty();
 		assertThat(systems.get(1).features()).containsExactly("lib");
+		assertThat(image.eval(form("(member :lib *features*)")).print()).isEqualTo("NIL");
+		assertThat(registry).containsOnlyKeys("lib/early", "lib");
 	}
 
 	@Test
 	void anAnnouncedFeatureJoinsTheDeclaredOnes() {
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				(eval-when (:execute) (pushnew :pushed *features*))
 				(defsystem :lib :rontolisp-features (:declared))""", "lib.asd", Features.INTERPRETER);
 		assertThat(systems.get(0).features()).containsExactly("pushed", "declared");
@@ -716,27 +845,10 @@ class AsdfSystemsTest {
 	void aCompileToplevelOnlyPushIsInert() {
 		// ASDF loads a .asd, it never compiles one, so such a push has no effect in a
 		// real implementation either.
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				(eval-when (:compile-toplevel) (pushnew :never *features*))
 				(defsystem :lib)""", "lib.asd", Features.INTERPRETER);
 		assertThat(systems.get(0).features()).isEmpty();
-	}
-
-	@Test
-	void anEvalWhenThatIsNotAFeatureAnnouncementIsRejected() {
-		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("""
-				(eval-when (:load-toplevel :execute) (load "helper.lisp"))
-				(defsystem :lib)""", "lib.asd", Features.INTERPRETER)).isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("lib.asd")
-			.hasMessageContaining("only a feature announcement")
-			.hasMessageContaining("(LOAD \"helper.lisp\")");
-	}
-
-	@Test
-	void aPushOntoSomethingOtherThanFeaturesIsRejected() {
-		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(pushnew :x '(:a :b))", "lib.asd", Features.INTERPRETER))
-			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("only a feature announcement");
 	}
 
 	@Test
@@ -786,10 +898,10 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void parseAsdSourceSkipsATopLevelReadEvalGuard() {
+	void aTopLevelReadEvalGuardIsIgnored() {
 		// The ASDF-version-guard idiom: a leading top-level #. form is skipped, silently
 		// -- nothing consumes its value, so nothing may complain about it.
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				#.(unless (uiop-version<= "3.1" (asdf-version)) (error "too old"))
 				(defsystem :lib :components ((:file "main")))""", "lib.asd", Features.INTERPRETER);
 		assertThat(systems).hasSize(1);
@@ -797,8 +909,8 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void parseAsdSourceHonorsFeatureConditionals() {
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+	void loadAsdHonorsFeatureConditionals() {
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				(defsystem :lib
 				  :components (#+rontolisp (:file "main")
 				               #+sbcl (:file "sbcl-only")))""", "lib.asd", Features.INTERPRETER);
@@ -860,7 +972,7 @@ class AsdfSystemsTest {
 		// in-package, #+/#- conditional defparameters feeding #. component names, and
 		// (:feature ...) clauses inside :depends-on. rontolisp advertises :unicode, so
 		// *unicode* is true and #.*string-file* resolves to "strings-utf-8".
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				(defpackage :cl-postgres-system
 				  (:use :common-lisp :asdf))
 				(in-package :cl-postgres-system)
@@ -910,8 +1022,7 @@ class AsdfSystemsTest {
 		// in AlexandriaE2eTest.
 		String source = java.nio.file.Files
 			.readString(java.nio.file.Path.of("src", "test", "resources", "alexandria", "alexandria.asd"));
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(source, "alexandria/alexandria.asd",
-				Features.INTERPRETER);
+		List<AsdfSystems.LispSystem> systems = loadAsd(source, "alexandria/alexandria.asd", Features.INTERPRETER);
 		// The file defines two systems: alexandria and the secondary alexandria/tests
 		// (whose own :depends-on carries the #+sbcl/#-sbcl pair -- :rt survives here).
 		assertThat(systems).extracting(AsdfSystems.LispSystem::name).containsExactly("alexandria", "alexandria/tests");
@@ -948,8 +1059,7 @@ class AsdfSystemsTest {
 		// uax-15 (called by the sources, never declared upstream) are present.
 		String source = AsdOverrides.replacementSource("postmodern.asd");
 		assertThat(source).isNotNull();
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(source, "sw/postmodern.asd",
-				Features.INTERPRETER);
+		List<AsdfSystems.LispSystem> systems = loadAsd(source, "sw/postmodern.asd", Features.INTERPRETER);
 		assertThat(systems).hasSize(1);
 		AsdfSystems.LispSystem system = systems.get(0);
 		assertThat(system.name()).isEqualTo("postmodern");
@@ -979,8 +1089,7 @@ class AsdfSystemsTest {
 		String nonMop = source.replace(":rontolisp-features (:postmodern-thread-safe :postmodern-use-mop)",
 				":rontolisp-features (:postmodern-thread-safe)");
 		assertThat(nonMop).isNotEqualTo(source);
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(nonMop, "sw/postmodern.asd",
-				Features.INTERPRETER);
+		List<AsdfSystems.LispSystem> systems = loadAsd(nonMop, "sw/postmodern.asd", Features.INTERPRETER);
 		assertThat(systems.get(0).files()).doesNotContain("postmodern/table.lisp").contains("postmodern/deftable.lisp");
 		assertThat(systems.get(0).dependsOn()).doesNotContain("closer-mop");
 	}
@@ -1087,28 +1196,14 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void asdDefparameterWithAnImpureValueParsesFineWhenNothingReadsIt() {
-		// cl-json/test's *cl-json-directory* shape: the binding exists for the test
-		// system's own runtime and no .asd form ever consumes it -- failing the whole
-		// file over a binding nothing asks for is the deny landing in the wrong place.
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
-				(defparameter *when* (get-universal-time))
-				(defsystem :lib :components ((:file "main")))""", "lib.asd", Features.INTERPRETER);
+	void aReadEvalReadsWhatTheFileComputedAboveIt() {
+		// A defparameter runs in the image, whatever its value form computes, and a #.
+		// in a load-bearing option reads it there -- cl-postgres's #.*string-file*, with
+		// a value no data parse could have computed.
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
+				(defparameter *main* (concatenate 'string "ma" "in"))
+				(defsystem :lib :components ((:file #.*main*)))""", "lib.asd", Features.INTERPRETER);
 		assertThat(systems.get(0).files()).containsExactly("main.lisp");
-	}
-
-	@Test
-	void anImpureDefparameterErrorsNamingItselfOnlyWhenALaterFormReadsIt() {
-		// The denial moves to the USE site: the binding parses, and only the #. that
-		// actually reads it fails, naming the parameter -- the same "consumer decides"
-		// rule this file already applies to #. itself.
-		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("""
-				(defparameter *when* (get-universal-time))
-				(defsystem :lib :components ((:file #.*when*)))""", "lib.asd", Features.INTERPRETER))
-			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("lib.asd")
-			.hasMessageContaining("*WHEN*")
-			.hasMessageContaining("pure data");
 	}
 
 	@Test
@@ -1116,7 +1211,7 @@ class AsdfSystemsTest {
 		// A #. in ignored metadata (the :version read-file indirection) must not fail
 		// the parse -- and must not SAY anything either: the option loop throws the value
 		// away one line later, so a warning about it is noise with nothing to act on.
-		List<AsdfSystems.LispSystem> systems = parseCapturingStderr("""
+		List<AsdfSystems.LispSystem> systems = loadCapturingStderr("""
 				(defsystem :lib
 				  :version #.(uiop:read-file-form "version.sexp")
 				  :components ((:file "main")))""", "lib.asd");
@@ -1130,7 +1225,7 @@ class AsdfSystemsTest {
 		// a :long-description that opens the project's README at load time. Seven of
 		// these are on the ningle/clack dependency graph, and each one used to print a
 		// 370-character warning about a value :long-description discards.
-		List<AsdfSystems.LispSystem> systems = parseCapturingStderr("""
+		List<AsdfSystems.LispSystem> systems = loadCapturingStderr("""
 				(defsystem myway
 				  :version "0.1.0"
 				  :author "Eitaro Fukamachi"
@@ -1163,7 +1258,7 @@ class AsdfSystemsTest {
 		// The other ignored-option shape, from the seven *-test.asd files on the same
 		// graph: a #. inside the :perform test-op wiring, which has no operate machinery
 		// to run and is dropped whole.
-		List<AsdfSystems.LispSystem> systems = parseCapturingStderr("""
+		List<AsdfSystems.LispSystem> systems = loadCapturingStderr("""
 				(defsystem "lib-test"
 				  :depends-on ("lib")
 				  :components ((:file "main"))
@@ -1240,7 +1335,7 @@ class AsdfSystemsTest {
 		// The other half of the same rule: where the value DECIDES something, a silent
 		// nil drops a dependency and surfaces much later as an undefined symbol far from
 		// the cause, so the parse fails naming the .asd and the clause instead.
-		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("""
+		assertThatThrownBy(() -> loadAsd("""
 				(defsystem :lib
 				  :depends-on ("base" #.(uiop:read-file-form "extra.sexp"))
 				  :components ((:file "main")))""", "proj/lib.asd", Features.INTERPRETER))
@@ -1254,7 +1349,7 @@ class AsdfSystemsTest {
 	void anUnresolvableReadEvalInComponentsIsAHardError() {
 		// Same rule one level down: an unresolvable #. inside :components would silently
 		// REMOVE a source file from the system (the cffi-toolchain :if-feature shape).
-		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("""
+		assertThatThrownBy(() -> loadAsd("""
 				(defsystem :lib
 				  :components ((:file "main")
 				               (:file "bundle" :if-feature (#.(if (version< "3.1.8" (asdf-version)) :or :and)))))""",
@@ -1270,13 +1365,13 @@ class AsdfSystemsTest {
 		// A #. whose datum the lexer cannot even re-lex reaches the parse as raw source
 		// text rather than as a warning: same consumer-decides rule, so it is dropped
 		// with the metadata and quoted verbatim where it would pick a dependency.
-		List<AsdfSystems.LispSystem> systems = parseCapturingStderr("""
+		List<AsdfSystems.LispSystem> systems = loadCapturingStderr("""
 				(defsystem :lib
 				  :long-description #.,readme
 				  :components ((:file "main")))""", "lib.asd");
 		assertThat(systems.get(0).files()).containsExactly("main.lisp");
 		assertThat(stderr).isEmpty();
-		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("""
+		assertThatThrownBy(() -> loadAsd("""
 				(defsystem :lib :depends-on (#.,extra) :components ((:file "main")))""", "proj/lib.asd",
 				Features.INTERPRETER))
 			.isInstanceOf(IllegalStateException.class)
@@ -1327,29 +1422,11 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void parseAsdSourceSkipsRegisterSystemPackages() {
-		// lack-component.asd verbatim: real ASDF maps the package onto the system for
-		// its own autoloading; nothing here consults such a map, so the form is dropped
-		// like in-package/defpackage rather than failing the whole .asd.
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
-				(defsystem "lack-component"
-				  :version "0.2.0"
-				  :author "Eitaro Fukamachi"
-				  :license "MIT"
-				  :components ((:file "src/component")))
-
-				(register-system-packages "lack-component" '(:lack.component))""", "lack-component.asd",
-				Features.INTERPRETER);
-		assertThat(systems).hasSize(1);
-		assertThat(systems.get(0).files()).containsExactly("src/component.lisp");
-	}
-
-	@Test
 	void parsesTheVerbatimLackAsd() {
 		// The whole upstream lack.asd (lack-20260101-git): the :pathname system, the
 		// eighteen one-line alias systems, and the lack/tests system whose :pathname,
 		// nested :module, #+todo-guarded component and :perform must all parse.
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		List<AsdfSystems.LispSystem> systems = loadAsd("""
 				(defsystem "lack"
 				  :version "0.3.0"
 				  :author "Eitaro Fukamachi"
@@ -1499,8 +1576,8 @@ class AsdfSystemsTest {
 		// The .asd names ONE sub-system and no components at all: everything the load
 		// needs beyond "ningle/main" is reachable only through the component files.
 		Map<String, String> systemPackages = new java.util.HashMap<>();
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(NINGLE_ASD, "sw/ningle/ningle.asd",
-				Features.INTERPRETER, systemPackages);
+		List<AsdfSystems.LispSystem> systems = loadAsd(NINGLE_ASD, "sw/ningle/ningle.asd", Features.INTERPRETER,
+				systemPackages);
 		assertThat(systems).hasSize(1);
 		AsdfSystems.LispSystem ningle = systems.get(0);
 		assertThat(ningle.name()).isEqualTo("ningle");
@@ -1521,7 +1598,7 @@ class AsdfSystemsTest {
 	void packageInferredSubSystemsAreDerivedFromTheirFilesDefpackage() {
 		Map<String, String> systemPackages = new java.util.HashMap<>();
 		Map<String, AsdfSystems.LispSystem> registry = registryOf(
-				AsdfSystems.parseAsdSource(NINGLE_ASD, "sw/ningle/ningle.asd", Features.INTERPRETER, systemPackages));
+				loadAsd(NINGLE_ASD, "sw/ningle/ningle.asd", Features.INTERPRETER, systemPackages));
 		AsdfSystems.inferPackageInferredSystems("ningle/main", registry, systemPackages, loaderOf(NINGLE_FILES),
 				Features.INTERPRETER);
 		// One pass derives the whole closure reachable from ningle/main, so the .asd is
@@ -1552,7 +1629,7 @@ class AsdfSystemsTest {
 		// rove's shape: rove/tests/main is tests/main.lisp, and rove/tests is defined by
 		// the .asd itself so the derivation must not overwrite it.
 		Map<String, String> systemPackages = new java.util.HashMap<>();
-		Map<String, AsdfSystems.LispSystem> registry = registryOf(AsdfSystems.parseAsdSource("""
+		Map<String, AsdfSystems.LispSystem> registry = registryOf(loadAsd("""
 				(defsystem "rove"
 				  :class :package-inferred-system
 				  :depends-on ("rove/main"))
@@ -1579,7 +1656,7 @@ class AsdfSystemsTest {
 		// array-operations.asd's shape: :pathname "src/" plus a package-inferred class,
 		// so array-operations/all is src/all.lisp.
 		Map<String, String> systemPackages = new java.util.HashMap<>();
-		Map<String, AsdfSystems.LispSystem> registry = registryOf(AsdfSystems.parseAsdSource("""
+		Map<String, AsdfSystems.LispSystem> registry = registryOf(loadAsd("""
 				(defsystem "array-operations"
 				  :class :package-inferred-system
 				  :pathname "src/"
@@ -1602,9 +1679,9 @@ class AsdfSystemsTest {
 		// rather than recursing until the stack ends. The cycle itself is reported by
 		// the loader's own :depends-on guard, with the stack that reached it.
 		Map<String, String> systemPackages = new java.util.HashMap<>();
-		Map<String, AsdfSystems.LispSystem> registry = registryOf(AsdfSystems.parseAsdSource(
-				"(defsystem \"lib\" :class :package-inferred-system :depends-on (\"lib/a\"))", "sw/lib/lib.asd",
-				Features.INTERPRETER, systemPackages));
+		Map<String, AsdfSystems.LispSystem> registry = registryOf(
+				loadAsd("(defsystem \"lib\" :class :package-inferred-system :depends-on (\"lib/a\"))", "sw/lib/lib.asd",
+						Features.INTERPRETER, systemPackages));
 		AsdfSystems.inferPackageInferredSystems("lib/a", registry, systemPackages,
 				loaderOf(Map.of("sw/lib/a.lisp", "(defpackage #:lib/a (:use #:cl #:lib/b))", "sw/lib/b.lisp",
 						"(defpackage #:lib/b (:use #:cl #:lib/a))")),
@@ -1620,8 +1697,8 @@ class AsdfSystemsTest {
 		// ordinary system stays "the .asd does not define it", as before.
 		Map<String, String> systemPackages = new java.util.HashMap<>();
 		Map<String, AsdfSystems.LispSystem> registry = registryOf(
-				AsdfSystems.parseAsdSource("(defsystem \"lib\" :components ((:file \"main\")))", "sw/lib/lib.asd",
-						Features.INTERPRETER, systemPackages));
+				loadAsd("(defsystem \"lib\" :components ((:file \"main\")))", "sw/lib/lib.asd", Features.INTERPRETER,
+						systemPackages));
 		AsdfSystems.inferPackageInferredSystems("lib/tests", registry, systemPackages,
 				loaderOf(Map.of("sw/lib/tests.lisp", "(defpackage #:lib/tests (:use #:cl))")), Features.INTERPRETER);
 		assertThat(registry).containsOnlyKeys("lib");
@@ -1631,8 +1708,8 @@ class AsdfSystemsTest {
 	void aMissingSubSystemFileNamesThePathItLooked() {
 		Map<String, String> systemPackages = new java.util.HashMap<>();
 		Map<String, AsdfSystems.LispSystem> registry = registryOf(
-				AsdfSystems.parseAsdSource("(defsystem \"lib\" :class :package-inferred-system)", "sw/lib/lib.asd",
-						Features.INTERPRETER, systemPackages));
+				loadAsd("(defsystem \"lib\" :class :package-inferred-system)", "sw/lib/lib.asd", Features.INTERPRETER,
+						systemPackages));
 		assertThatThrownBy(() -> AsdfSystems.inferPackageInferredSystems("lib/missing", registry, systemPackages,
 				loaderOf(Map.of()), Features.INTERPRETER))
 			.isInstanceOf(IllegalStateException.class)
@@ -1643,8 +1720,8 @@ class AsdfSystemsTest {
 	void aSubSystemFileWithoutADefpackageAtAllIsAHardError() {
 		Map<String, String> systemPackages = new java.util.HashMap<>();
 		Map<String, AsdfSystems.LispSystem> registry = registryOf(
-				AsdfSystems.parseAsdSource("(defsystem \"lib\" :class :package-inferred-system)", "sw/lib/lib.asd",
-						Features.INTERPRETER, systemPackages));
+				loadAsd("(defsystem \"lib\" :class :package-inferred-system)", "sw/lib/lib.asd", Features.INTERPRETER,
+						systemPackages));
 		assertThatThrownBy(() -> AsdfSystems.inferPackageInferredSystems("lib/a", registry, systemPackages,
 				loaderOf(Map.of("sw/lib/a.lisp", "(in-package #:lib)\n(defun f () 1)")), Features.INTERPRETER))
 			.isInstanceOf(IllegalStateException.class)
@@ -1659,8 +1736,8 @@ class AsdfSystemsTest {
 		// definition form, so the header must not hide the dependency graph.
 		Map<String, String> systemPackages = new java.util.HashMap<>();
 		Map<String, AsdfSystems.LispSystem> registry = registryOf(
-				AsdfSystems.parseAsdSource("(defsystem \"lib\" :class :package-inferred-system)", "sw/lib/lib.asd",
-						Features.INTERPRETER, systemPackages));
+				loadAsd("(defsystem \"lib\" :class :package-inferred-system)", "sw/lib/lib.asd", Features.INTERPRETER,
+						systemPackages));
 		AsdfSystems.inferPackageInferredSystems("lib/a", registry, systemPackages, loaderOf(Map.of("sw/lib/a.lisp", """
 				(in-package #:cl-user)
 				(defpackage #:lib/a
@@ -1675,8 +1752,8 @@ class AsdfSystemsTest {
 		// and a defpackage further down is NOT a second declaration to merge.
 		Map<String, String> systemPackages = new java.util.HashMap<>();
 		Map<String, AsdfSystems.LispSystem> registry = registryOf(
-				AsdfSystems.parseAsdSource("(defsystem \"lib\" :class :package-inferred-system)", "sw/lib/lib.asd",
-						Features.INTERPRETER, systemPackages));
+				loadAsd("(defsystem \"lib\" :class :package-inferred-system)", "sw/lib/lib.asd", Features.INTERPRETER,
+						systemPackages));
 		AsdfSystems.inferPackageInferredSystems("lib/a", registry, systemPackages, loaderOf(Map.of("sw/lib/a.lisp", """
 				;; a comment, then two forms before the package declaration
 				(in-package #:cl-user)
@@ -1712,7 +1789,7 @@ class AsdfSystemsTest {
 	@Test
 	void registerSystemPackagesAcceptsEverySpelling() {
 		Map<String, String> systemPackages = new java.util.HashMap<>();
-		AsdfSystems.parseAsdSource("""
+		loadAsd("""
 				(defsystem "lib")
 				(register-system-packages "a-sys" '(#:a.one #:a.two))
 				(register-system-packages :b-sys :b.one)
@@ -1723,8 +1800,7 @@ class AsdfSystemsTest {
 
 	@Test
 	void registerSystemPackagesChecksItsShape() {
-		assertThatThrownBy(
-				() -> AsdfSystems.parseAsdSource("(register-system-packages \"a\")", "lib.asd", Features.INTERPRETER))
+		assertThatThrownBy(() -> loadAsd("(register-system-packages \"a\")", "lib.asd", Features.INTERPRETER))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("REGISTER-SYSTEM-PACKAGES expects");
 	}

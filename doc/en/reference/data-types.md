@@ -137,8 +137,9 @@ it behaves identically on all four backends here. Only a **literal** keyword
 push counts: a push whose value the program computes
 (`(pushnew (intern name :keyword) *features*)`) is a real run-time push but is
 invisible to the reader, because deciding it would mean running the program to
-decide how the program is read. A `.asd` that needs to announce a feature to
-the files of the systems it defines uses `:rontolisp-features` instead (see the
+decide how the program is read. A `.asd` file is the exception: it is loaded
+form at a time, so a push it computes decides every `#+` below it and holds for
+the files of the systems it defines after the push (see the
 [Systems guide](../guides/asdf-systems.md)).
 
 And **you** may declare features on the command line: `--feature NAME`
@@ -200,9 +201,10 @@ Notes:
 - `#.` read-time evaluation **is** supported: each `#.` datum is evaluated
   just before its top-level form runs — against the global environment on the
   interpreter, and against the compile-time (macro-time) evaluator on the
-  JVM/WASM compile path — and the value is substituted into the form. In
-  `.asd` files a `#.` form is instead skipped with a warning (see the
-  [Systems guide](../guides/asdf-systems.md)); the browser playground's
+  JVM/WASM compile path — and the value is substituted into the form. Inside a
+  `.asd` file's `defsystem`, a `#.` is evaluated only where its value decides
+  what gets loaded (see the [Systems guide](../guides/asdf-systems.md)); the
+  browser playground's
   Compile buttons do not support `#.`.
 - A feature expression may be computed by `#.`, as in
   `#+#.(cl:if (cl:find-symbol "X" "SB-IMPL") '(and) '(or)) form`. The guard is

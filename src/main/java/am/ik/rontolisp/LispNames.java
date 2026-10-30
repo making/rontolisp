@@ -8897,12 +8897,17 @@ public final class LispNames {
 	public static final String FFI_APPLY_CALL = "%APPLY-CALL";
 
 	/**
-	 * The {@code asdf} package name (a limited, API-compatible subset of ASDF: system
-	 * definitions parsed from {@code .asd} files as plain data -- see
-	 * {@code eval.AsdfSystems}). Real ASDF is not ported; only {@code defsystem} and
-	 * {@code load-system} exist.
+	 * The {@code asdf} package name (a limited, API-compatible subset of ASDF -- see
+	 * {@code eval.AsdfSystems}). Real ASDF is not ported.
 	 */
 	public static final String ASDF_PKG = "ASDF";
+
+	/**
+	 * The {@code asdf-user} package name: where a {@code .asd} file is loaded
+	 * ({@code eval.AsdfSystems#loadAsd}). Defined in an image when it loads its first
+	 * {@code .asd}.
+	 */
+	public static final String ASDF_USER_PKG = "ASDF-USER";
 
 	/**
 	 * {@code asdf:defsystem} -- defines a system (name, {@code :depends-on},
@@ -8968,10 +8973,10 @@ public final class LispNames {
 	 * text rather than a datum precisely because there is no datum, and it exists so the
 	 * decision "does this value matter" stays with the CONSUMER -- the lexer is the one
 	 * layer that cannot know whether the position is load-bearing. {@code AsdfSystems}
-	 * ignores it in an option nothing reads and fails the parse quoting the raw text
-	 * where it would decide a dependency or a source file. Only
-	 * {@code LispLexer.ReadEvalMode.SKIP_UNREADABLE} produces it, so it never reaches an
-	 * evaluator or a backend.
+	 * ignores it in an option nothing reads and fails the load quoting the raw text where
+	 * it would decide a dependency or a source file, or sits in a form the {@code .asd}
+	 * runs. Only {@code LispLexer.ReadEvalMode.SKIP_UNREADABLE} produces it, so it never
+	 * reaches an evaluator or a backend.
 	 */
 	public static final String READ_EVAL_UNREADABLE = "%READ-EVAL-UNREADABLE";
 
