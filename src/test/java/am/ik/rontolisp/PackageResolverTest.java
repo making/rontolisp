@@ -563,6 +563,8 @@ class PackageResolverTest {
 		// spelling and a package using this one -- even without cl -- reach the bare
 		// name. rontolisp's own while is not a standard name: exporting it makes the
 		// package's own symbol, which a package using cl as well inherits (parenscript).
+		// Defining it unexported makes it the package's own from the definition on
+		// (arnesi); cl-user keeps cl's.
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage :rsa (:use :cl) (:export :car :boole :while))");
 		assertThat(resolve(resolver, "(rsa:car x)")).isEqualTo("(CAR X)");
@@ -576,7 +578,13 @@ class PackageResolverTest {
 		assertThat(resolve(resolver, "(while x)")).isEqualTo("(RSA:WHILE RSC::X)");
 		resolve(resolver, "(in-package :rsa)");
 		assertThat(resolve(resolver, "(while x)")).isEqualTo("(RSA:WHILE RSA::X)");
+		resolve(resolver, "(defpackage :rsd (:use :cl))");
+		resolve(resolver, "(in-package :rsd)");
+		assertThat(resolve(resolver, "(while x)")).isEqualTo("(WHILE RSD::X)");
+		assertThat(resolve(resolver, "(defmacro while (x) x)")).isEqualTo("(DEFMACRO RSD::WHILE (RSD::X) RSD::X)");
+		assertThat(resolve(resolver, "(while x)")).isEqualTo("(RSD::WHILE RSD::X)");
 		resolve(resolver, "(in-package :cl-user)");
+		assertThat(resolve(resolver, "(defun while (x) x)")).isEqualTo("(DEFUN WHILE (X) X)");
 		assertThat(resolve(resolver, "(while x)")).isEqualTo("(WHILE X)");
 	}
 

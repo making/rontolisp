@@ -12,4 +12,4 @@
   sum) ; => 10
 ```
 
-`while` は rontolisp の拡張で、`cl` パッケージがエクスポートしていますが標準の Common Lisp の名前ではありません。パッケージ自身の `while` が優先されます。パッケージが宣言した `while`（parenscript、iterate、arnesi、`for` のような `(:export #:while)`）はそのパッケージのシンボルになり、そのパッケージを use するパッケージはこの `while` ではなくそちらを継承します。
+`while` は rontolisp の拡張で、`cl` パッケージがエクスポートしていますが標準の Common Lisp の名前ではありません。パッケージ自身の `while` が優先されます。パッケージが宣言した `while`（parenscript、iterate、`for` のような `(:export #:while)`）はそのパッケージのシンボルになり、そのパッケージを use するパッケージはこの `while` ではなくそちらを継承します。`cl-user` 以外のパッケージで `while` を `defmacro` または `defun` すると（arnesi と fset はエクスポートせずに定義します）、そのパッケージ自身のシンボルが定義され、以後そのパッケージで読む `while` はそれを指します。定義より前に読んだ `while` と `cl-user` の `while` は、この `while` のままです。

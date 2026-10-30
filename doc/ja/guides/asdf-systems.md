@@ -288,7 +288,7 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   [`asdf:operate`](../reference/functions/asdf-operate.md) は `load-op`
   (`load-system`) か `test-op` (`test-system`) を perform します。
   `asdf:make-operation`、`asdf:input-files`、`asdf:output-files`、
-  `asdf:source-file-type` は、ライブラリが定義するメソッドのために存在します。
+  `asdf:source-file-type`、`asdf:operation-done-p` は、ライブラリが定義するメソッドのために存在します。
   `asdf/interface` と本物の ASDF の内部パッケージ (`asdf/component`、`asdf/action`
   など) は、これらと同じシンボルを指します。
 - **`asdf:test-system` は記録された test-op 配線を実行します。**

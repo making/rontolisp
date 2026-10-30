@@ -3992,6 +3992,21 @@ cases:
     expected: |
       (CI-TOF-LIB:WIDGET CI-TOF-LIB::GADGET CI-TOF-LIB::POINT)
       (T T T T INTEGER)
+  - name: a-package-own-definition-of-while-wins-over-cl
+    source: |
+      ;; arnesi's defmacro while, unexported: cl has no while, so the definition
+      ;; interns the package's own symbol. A reference read before it stays
+      ;; rontolisp's while; cl-user's is untouched.
+      (defpackage :ci-own-while (:use :cl))
+      (in-package :ci-own-while)
+      (defun before () (let ((n 0)) (while (< n 3) (setq n (+ n 1))) n))
+      (defmacro while (test &body body) `(list :own ,test ,@body))
+      (print (list (before) (while 1 2) (package-name (symbol-package 'while)) (eq 'while 'cl:while)))
+      (in-package :cl-user)
+      (print (let ((n 0)) (while (< n 2) (setq n (+ n 1))) n))
+    expected: |
+      (3 (:OWN 1 2) "CI-OWN-WHILE" NIL)
+      2
   - name: expansion-time-read-homes-in-the-macro-package
     source: |
       ;; cl-pdf's AFM parser names each reader with read-from-string at EXPANSION
@@ -14388,6 +14403,15 @@ cases:
       (print (list (mfp-probe '(typep 1 x)) (mfp-probe '(format t "x")) (mfp-probe '(return 1))))
       (print (multiple-value-list (macroexpand-1 '(typep 1 x))))
       (print (multiple-value-list (macroexpand-1 '(return 1))))
+      ;; handler-case and the definers rontolisp runs as special forms expand too,
+      ;; and the expansion a walker emits runs as the native form.
+      (defmacro mfp-expand-1 (form) (macroexpand-1 form))
+      (print (mfp-expand-1 (handler-case (error "boom") (error (c) (princ-to-string c)))))
+      (print (mfp-expand-1 (handler-case (values 1 2) (:no-error (a b) (list a b)))))
+      (mfp-expand-1 (defun mfp-twice (x) (when (> x 9) (return-from mfp-twice :big)) (* x 2)))
+      (mfp-expand-1 (defvar *mfp-var* 5))
+      (print (list (mfp-twice 4) (mfp-twice 10) *mfp-var*
+                   (second (multiple-value-list (macroexpand-1 '(defclass mfp-k () ()))))))
     expected: |
       (:SPECIAL :SPECIAL :MACRO :MACRO :MACRO :FUNCTION :FUNCTION)
       (T NIL NIL)
@@ -14397,6 +14421,9 @@ cases:
       (:FUNCTION :FUNCTION :MACRO)
       ((TYPEP 1 X) NIL)
       ((RETURN-FROM NIL 1) T)
+      "boom"
+      (1 2)
+      (8 :BIG 5 T)
   - name: setf-symbol-function-and-fdefinition
     source: |
       (defun csf-orig (x) (* x 2))
@@ -24944,7 +24971,8 @@ cases:
   # A readtable an eval-when installs at compile time reads the forms after it on every
   # backend: the interpreter reads form at a time, the compile paths read with the
   # compile-time evaluator's readtable (.kb/readtables.md) -- macro and dispatch
-  # characters, a no-value comment, a remapped `)`, read-delimited-list, the case.
+  # characters, a no-value comment, a remapped `)`, read-delimited-list, the case, and
+  # a reader macro in a backquote template reading the template's commas.
   - name: source-reads-with-the-readtable-an-eval-when-installs
     source: |
       (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -24960,6 +24988,13 @@ cases:
             (let ((d (read s t nil t))) (if *read-suppress* nil (list 'quote (list :uri d)))))))
       (print (list !foo !(a b) #?"bar" #3?(+ 1 2) [1 % (+ 1 1) 3]))
       (print (let ((x 5)) [x !x]))
+      ;; A reader macro called in a backquote template reads the template's commas, a
+      ;; nested template's ,, included (rutils' #`(member % var :test ,test)).
+      (defmacro ci-rt-template (x ys) `(list [,x ,@ys] #?(+ ,x 1) !,x))
+      (print (ci-rt-template 5 (6 7)))
+      (defmacro ci-rt-outer (v) `(defmacro ci-rt-inner (w) `(list [,w ,,v])))
+      (ci-rt-outer 10)
+      (print (ci-rt-inner 3))
       ;; puri's #u tests *read-suppress*: the reader variables are bound on every backend.
       (defun ci-rt-suppress-p () *read-suppress*)
       (print (list #u"http://x/" (ci-rt-suppress-p) (let ((*read-suppress* t)) (ci-rt-suppress-p)) *read-eval*))
@@ -24972,6 +25007,8 @@ cases:
     expected: |
       ((:BANG FOO) (:BANG (A B)) (:Q NIL "bar") (:Q 3 3) (1 2 3))
       (5 (:BANG X))
+      ((5 6 7) (:Q NIL 6) (:BANG 5))
+      ((3 10))
       ((:URI "http://x/") NIL T T)
       ((FOO |foo| |Foo|) !FOO "[X]" T)
   # Shapes parenscript, jonathan and rutils (cl-redis) load through: a package's own

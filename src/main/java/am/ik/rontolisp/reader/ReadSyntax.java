@@ -138,9 +138,13 @@ public final class ReadSyntax {
 		 * @param offset the UTF-16 offset the function reads from
 		 * @param arguments the arguments after the stream (the character; or the
 		 * sub-character and the numeric argument)
+		 * @param templateDepth how many backquote templates enclose the macro character
+		 * (CLHS 2.4.6): a recursive read the function makes starts inside them
+		 * ({@link LispReader.Forms#withinTemplates}), so a comma it meets belongs to the
+		 * template the character stands in
 		 * @return the value the function answered, and where it left the input
 		 */
-		Result call(LispVal function, String input, int offset, List<LispVal> arguments);
+		Result call(LispVal function, String input, int offset, List<LispVal> arguments, int templateDepth);
 
 	}
 
@@ -236,10 +240,11 @@ public final class ReadSyntax {
 	 * @param input the text being read
 	 * @param offset the offset it reads from
 	 * @param arguments the arguments after the stream
+	 * @param templateDepth how many backquote templates enclose the macro character
 	 * @return its value and where it left the input
 	 */
-	Result call(LispVal function, String input, int offset, List<LispVal> arguments) {
-		return this.invoker.call(function, input, offset, arguments);
+	Result call(LispVal function, String input, int offset, List<LispVal> arguments, int templateDepth) {
+		return this.invoker.call(function, input, offset, arguments, templateDepth);
 	}
 
 	/**

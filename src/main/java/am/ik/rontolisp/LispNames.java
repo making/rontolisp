@@ -3226,6 +3226,28 @@ public final class LispNames {
 	public static final String HANDLER_CASE = "HANDLER-CASE";
 
 	/**
+	 * {@code macroexpand-1}'s answer for {@link #HANDLER_CASE}:
+	 * {@code (%handler-case form 'type #'(lambda ll . body)...)}, folded back to the
+	 * native form ({@code LispMacroExpander.foldNativeExpansion}) wherever a walker emits
+	 * it.
+	 */
+	public static final String HANDLER_CASE_INTERNAL = "%HANDLER-CASE";
+
+	/**
+	 * {@code macroexpand-1}'s answer for {@code defun}:
+	 * {@code (%defun 'name #'(lambda ll (block name . body)))}, folded back like
+	 * {@link #HANDLER_CASE_INTERNAL}.
+	 */
+	public static final String DEFUN_INTERNAL = "%DEFUN";
+
+	/**
+	 * {@code macroexpand-1}'s answer for the other natively-run definers
+	 * ({@code defmacro}, {@code defvar}, {@code defclass}, {@code in-package}, ...):
+	 * {@code (%definition 'form)}, folded back like {@link #HANDLER_CASE_INTERNAL}.
+	 */
+	public static final String DEFINITION_INTERNAL = "%DEFINITION";
+
+	/**
 	 * The {@code ignore-errors} macro: sugar over {@code (handler-case (progn forms...)
 	 * (error (c) (values nil c)))}. Interpreter and JVM backends only, like
 	 * {@link #HANDLER_CASE}.
@@ -5955,6 +5977,15 @@ public final class LispNames {
 	 * signalling a {@code package-error} for a designator naming nothing.
 	 */
 	public static final String RUNTIME_PACKAGE_OP_INTERNAL = "%RUNTIME-PACKAGE-OP";
+
+	/**
+	 * Internal marker {@code (%own-symbol "NAME")} the compile path's macro expander
+	 * leaves where it consumed a {@code defmacro} that made the current package own a
+	 * {@code cl} extension name ({@code PackageResolver}'s definition claim): the
+	 * compilers' own resolution pass never sees the definition, so the marker replays the
+	 * claim there. Consumed by the resolver, never reaching the backends.
+	 */
+	public static final String OWN_SYMBOL = "%OWN-SYMBOL";
 
 	/**
 	 * Internal marker inserted by {@code LoadInliner} before the spliced forms of a
@@ -9169,6 +9200,19 @@ public final class LispNames {
 	 * library may define methods on it (lass).
 	 */
 	public static final String SOURCE_FILE_TYPE = "SOURCE-FILE-TYPE";
+
+	/**
+	 * {@code asdf:operation-done-p} -- generic: whether an action needs no performing.
+	 * The default answers {@code t}; it exists so a library may define methods on it
+	 * (arnesi's {@code clean-op}).
+	 */
+	public static final String OPERATION_DONE_P = "OPERATION-DONE-P";
+
+	/**
+	 * The {@code asdf:compile-bundle-op} operation class -- a class only: {@code operate}
+	 * refuses it (there are no fasls to bundle).
+	 */
+	public static final String COMPILE_BUNDLE_OP = "COMPILE-BUNDLE-OP";
 
 	/** The canonical qualified spelling of {@code asdf:test-system}. */
 	public static final String ASDF_TEST_SYSTEM = ASDF_PKG + ":" + TEST_SYSTEM;

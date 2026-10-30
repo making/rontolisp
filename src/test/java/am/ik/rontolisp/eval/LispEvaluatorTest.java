@@ -1090,6 +1090,14 @@ class LispEvaluatorTest {
 				        (multiple-value-list (read-from-string "#?x  y"))
 				        (with-input-from-string (s "#?a [b c] tail") (list (read s) (read s) (read s)))))
 				""").print()).isEqualTo("((:Q NIL FOO) (:Q 3 (A B)) (1 (2) X) ((:Q NIL X) 4) ((:Q NIL A) (B C) TAIL))");
+		// A reader macro in a backquote template reads the template's commas: its
+		// recursive read starts inside the template. Outside every template a comma
+		// still signals.
+		assertThat(evalMulti(readtable + """
+				(let ((*readtable* *rt*))
+				  (list (eval (list 'let '((c '(7 8))) (read-from-string "`(a #?(b ,c) [,@c])")))
+				        (handler-case (read-from-string "#?,c") (reader-error () :outside))))
+				""").print()).isEqualTo("((A (:Q NIL (B (7 8))) (7 8)) :OUTSIDE)");
 		// The standard readtable keeps reading #? as a symbol, and the case modes.
 		assertThat(evalMulti(readtable + """
 				(list (read-from-string "#?foo")
@@ -8476,14 +8484,22 @@ class LispEvaluatorTest {
 		// macro-function and macroexpand-1 agree (iterate's walker calls the second when
 		// the first says macro): typep/format are CL FUNCTIONS the expander rewrites
 		// inline, and return/prog are CL macros the evaluator runs natively. SBCL 2.2.9.
+		// handler-case and the definers expand to forms a walker reads as code (or, past
+		// defun, as data) and that fold back to the native form.
 		assertThat(eval("""
 				(list (macro-function 'typep) (macro-function 'format) (macro-function 'declare)
 				      (multiple-value-list (macroexpand-1 '(typep 1 x)))
 				      (multiple-value-list (macroexpand-1 '(return 1)))
 				      (multiple-value-list (macroexpand-1 '(prog (a) (return a))))
-				      (multiple-value-list (macroexpand-1 '(lambda (x) x))))
+				      (multiple-value-list (macroexpand-1 '(lambda (x) x)))
+				      (macroexpand-1 '(handler-case (f) (error (c) c) (:no-error (v) v)))
+				      (macroexpand-1 '(defun (setf f) (v x) "d" (declare (ignore x)) v))
+				      (macroexpand-1 '(defvar *v* 1)))
 				""").print()).isEqualTo("(NIL NIL NIL ((TYPEP 1 X) NIL) ((RETURN-FROM NIL 1) T)"
-				+ " ((%BLOCK (LET (A) (TAGBODY (RETURN A)))) T) (#'(LAMBDA (X) X) T))");
+				+ " ((%BLOCK (LET (A) (TAGBODY (RETURN A)))) T) (#'(LAMBDA (X) X) T)"
+				+ " (%HANDLER-CASE (F) 'ERROR #'(LAMBDA (C) C) ':NO-ERROR #'(LAMBDA (V) V))"
+				+ " (%DEFUN '(SETF F) #'(LAMBDA (V X) \"d\" (DECLARE (IGNORE X)) (BLOCK F V)))"
+				+ " (%DEFINITION '(DEFVAR *V* 1)))");
 	}
 
 	@Test
