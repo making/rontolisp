@@ -13503,6 +13503,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				break;
 			}
 		}
+		// A failed check-type constructs its simple-type-error during the EXPRESSION
+		// expansion (expandCheckType) -- after this scan -- so the operator stands in.
+		if (symbols.contains(LispNames.CHECK_TYPE)) {
+			used.add(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-TYPE-ERROR");
+		}
 		// #'aref / #'array-row-major-index construct a type-error instance in
 		// the FUNCTION-VALUE wrapper's fold (BuiltinFunctionWrappers's row-major fold),
 		// never in ordinary call position -- whose own bound check is a separate bare

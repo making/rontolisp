@@ -47,7 +47,7 @@ description and a runnable example you can evaluate in your browser.
 | `format` | `(format t "Hello ~a, ~d!~%" 'world 42)`, `(format nil "~a" x)` | Formatted output to standard output (`t`, returns nil) or to a string (`nil`) |
 | `with-open-file` | `(with-open-file (s "f.txt" :direction :output) (write-line "hi" s))` | Open a file, bind the stream to `s`, evaluate the body, close the file. Returns the body value. Supports the `:direction` option (`:input` default, `:output`) and the `:element-type` option (`'character` default, `'(unsigned-byte 8)` for a binary stream); both must be literal |
 | `with-open-stream` | `(with-open-stream (s (make-string-input-stream "hi")) (read-line s))` | Bind an ALREADY-OPEN stream, evaluate the body, close it. `with-open-file` without the `open` |
-| `check-type` | `(check-type place typespec [string])` | Signal an error when the value of `place` is not of the given type; return nil when it is. Lite version: no restarts, so the place is never re-stored |
+| `check-type` | `(check-type place typespec [string])` | Signal a `type-error` when the value of `place` is not of the given type; return nil when it is. Lite version: no restarts, so the place is never re-stored |
 | `assert` | `(assert test-form [(place...) [datum args...]])` | Signal an error when `test-form` is false; return nil when it is true. The places list is accepted but ignored (no restarts) |
 | `declare` | `(declare declaration...)` | Parsed no-op: evaluates to nil, arguments never evaluated or validated |
 | `declaim` | `(declaim declaration...)` | Parsed no-op like `declare`, for file-level declarations |

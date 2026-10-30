@@ -13253,6 +13253,9 @@ cases:
       (print (ci-ew-fn 21))
       (let ((n 5)) (check-type n (integer 0 9)) (print :checked))
       (let ((s "x")) (check-type s (or null string)) (print :checked2))
+      ;; A failed check-type is a type-error carrying the value and the specifier.
+      (print (handler-case (let ((n "5")) (check-type n (integer 0 9)))
+               (type-error (c) (list (type-error-datum c) (type-error-expected-type c) (princ-to-string c)))))
       (assert (= 1 1))
       (print (typecase 7 ((integer 0 9) :digit) (integer :int)))
       (print (typecase 'b ((member a b c) :abc) (t :other)))
@@ -13262,6 +13265,7 @@ cases:
       42
       :CHECKED
       :CHECKED2
+      ("5" (INTEGER 0 9) "The value of N is \"5\", which is not of type (INTEGER 0 9).")
       :DIGIT
       :ABC
   - name: declared-array-types-single-arm-access
@@ -30532,6 +30536,96 @@ cases:
       #(1732584193 4023233417 2225363975 255870178 1578413049 1761846468 178639645 2993401642)
       130
       14.5
+  - name: yason-enablement-language-group
+    source: |
+      ;; The idioms (ql:quickload "yason") rests on, exercised without the asdf
+      ;; load -- yason's tree lives in the quicklisp cache, so the end-to-end run is
+      ;; manual (.kb/asdf.md). The parser half: a special named by an ordinary
+      ;; symbol whose value is that symbol (yason's TRUE/FALSE), a number read off
+      ;; an adjustable buffer under a rebound *read-default-float-format*, a generic
+      ;; over stream and string, ecase on character key lists, check-type member.
+      (declaim (type symbol yse-true))
+      (defvar yse-true 'yse-true)
+      (defvar *yse-as* :list)
+      (defun yse-number (input)
+        (let ((buffer (make-array 4 :adjustable t :fill-pointer 0 :element-type 'character))
+              (*read-default-float-format* 'double-float))
+          (loop while (position (peek-char nil input nil) ".0123456789+-Ee")
+                do (vector-push-extend (read-char input) buffer))
+          (values (read-from-string buffer))))
+      (defgeneric yse-parse (input)
+        (:method ((input stream))
+          (check-type *yse-as* (member :list :vector))
+          (ecase (peek-char t input)
+            ((#\- #\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9) (yse-number input))
+            ((#\t) (dotimes (i 4) (read-char input)) yse-true)
+            ((#\[)
+             (read-char input)
+             (let ((items (loop for item = (yse-parse input)
+                                collect item
+                                until (char= (peek-char t input) #\])
+                                do (read-char input))))
+               (read-char input)
+               (if (eq *yse-as* :vector) (coerce items 'vector) items)))))
+        (:method ((input string))
+          (yse-parse (make-string-input-stream input))))
+      (let ((parsed (yse-parse "[1, -2.5e1, true, [ 300 ]]")))
+        (print (list (first parsed) (floatp (second parsed)) (round (second parsed))
+                     (third parsed) (fourth parsed))))
+      (let ((yse-true :yes) (*yse-as* :vector))
+        (print (yse-parse "[true,[1]]")))
+      (print (handler-case (yse-parse "x") (error () :ecase-error)))
+      ;; The encoder half: a Gray output stream carrying the aggregate stack, the
+      ;; separator kept in the stack's car, an unbound-special context check, and
+      ;; the escape table keyed by characters plus \uXXXX through format.
+      (defclass yse-out (rontolisp:fundamental-character-output-stream)
+        ((target :initarg :target :reader yse-target)
+         (stack :initform nil :accessor yse-stack)))
+      (defmethod rontolisp:stream-write-char ((s yse-out) char)
+        (write-char char (yse-target s)))
+      (defvar *yse-out*)
+      (defparameter *yse-replacements*
+        (let ((h (make-hash-table)))
+          (setf (gethash #\" h) "\\\"" (gethash #\Tab h) "\\t")
+          h))
+      (defun yse-string (string stream)
+        (write-char #\" stream)
+        (dotimes (i (length string))
+          (let* ((char (aref string i))
+                 (replacement (gethash char *yse-replacements*)))
+            (cond (replacement (write-string replacement stream))
+                  ((<= 0 (char-code char) 31) (format stream "\\u~4,'0X" (char-code char)))
+                  (t (write-char char stream)))))
+        (write-char #\" stream))
+      (defun yse-next ()
+        (if (car (yse-stack *yse-out*))
+            (write-char (car (yse-stack *yse-out*)) *yse-out*)
+            (setf (car (yse-stack *yse-out*)) #\,)))
+      (defmacro yse-with-array (() &body body)
+        `(progn
+           (unless (boundp '*yse-out*) (error "no JSON output context"))
+           (when (yse-stack *yse-out*) (yse-next))
+           (write-char #\[ *yse-out*)
+           (push nil (yse-stack *yse-out*))
+           (prog1 (progn ,@body)
+             (pop (yse-stack *yse-out*))
+             (write-char #\] *yse-out*))))
+      (defun yse-element (x)
+        (yse-next)
+        (if (stringp x) (yse-string x *yse-out*) (format *yse-out* "~D" x)))
+      (print (with-output-to-string (s)
+               (let ((*yse-out* (make-instance 'yse-out :target s)))
+                 (yse-with-array ()
+                   (yse-element 1)
+                   (yse-element (format nil "a~Cb\"~C" #\Tab (code-char 1)))
+                   (yse-with-array () (yse-element 2) (yse-element 3))))))
+      (print (handler-case (yse-with-array () 1) (error () :no-context)))
+    expected: |
+      (1 T -25 YSE-TRUE (300))
+      #(:YES #(1))
+      :ECASE-ERROR
+      "[1,\"a\\tb\\\"\\u0001\",[2,3]]"
+      :NO-CONTEXT
 standalone:
   - name: uncaught-defmethod-lambda-list-refusal
     source: |

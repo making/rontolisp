@@ -46,7 +46,7 @@
 | `format` | `(format t "Hello ~a, ~d!~%" 'world 42)`, `(format nil "~a" x)` | 標準出力(`t`、nilを返す)または文字列(`nil`)への整形出力 |
 | `with-open-file` | `(with-open-file (s "f.txt" :direction :output) (write-line "hi" s))` | ファイルを開き、ストリームを `s` に束縛し、bodyを評価し、ファイルを閉じます。bodyの値を返します。サポートされるのは `:direction` オプション(`:input` がデフォルト、`:output`)と `:element-type` オプション(`'character` がデフォルト、バイナリストリームには `'(unsigned-byte 8)`)で、どちらもリテラルでなければなりません |
 | `with-open-stream` | `(with-open-stream (s (make-string-input-stream "hi")) (read-line s))` | すでに開いているストリームを束縛して本体を評価し、閉じる。`open` を伴わない `with-open-file` |
-| `check-type` | `(check-type place typespec [string])` | `place` の値が指定された型でなければエラーをシグナルし、型に合致していれば nil を返します。ライト版: リスタートがないため place への再格納はありません |
+| `check-type` | `(check-type place typespec [string])` | `place` の値が指定された型でなければ `type-error` をシグナルし、型に合致していれば nil を返します。ライト版: リスタートがないため place への再格納はありません |
 | `assert` | `(assert test-form [(place...) [datum args...]])` | `test-form` が偽ならエラーをシグナルし、真なら nil を返します。place のリストは受理されますが無視されます（リスタートなし） |
 | `declare` | `(declare declaration...)` | 解析されるだけの no-op: nil に評価され、引数は評価も検証もされません |
 | `declaim` | `(declaim declaration...)` | `declare` と同様の no-op（ファイルレベルの宣言用） |

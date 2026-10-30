@@ -108,7 +108,8 @@ verification against the actual Quicklisp dist at probe time)
 
 - **Probe round 2026-10-30 (interpreter, live dist).** First failure per library, and the
   todo that owns it:
-  - `yason` -- loads; parse/encode identical on all four backends (h38).
+  - `yason` -- DONE: pinned (ci-spec `yason-enablement-language-group`), guide row, `.kb/asdf.md`.
+    Fell out: `check-type` now signals a `simple-type-error`.
   - `fiveam` -- loads unpatched and runs on the interpreter, asdf-flv's file-local `*suite*`
     included (h30, h31 done). Compiled: the JVM stops on a `nil` hash key (h56); wasm loads,
     then `run!` needs the run-time `compile` of a test body.

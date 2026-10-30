@@ -8335,6 +8335,11 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> eval("(let ((n 12)) (check-type n (integer 0 9) \"a single digit\"))"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("The value of N is 12, which is not a single digit.");
+		// CLHS: the error is a TYPE-ERROR naming the value and the specifier.
+		assertThat(eval("(handler-case (let ((n \"5\")) (check-type n (integer 0 9)))"
+				+ " (type-error (c) (list (type-error-datum c) (type-error-expected-type c) (princ-to-string c))))")
+			.print())
+			.isEqualTo("(\"5\" (INTEGER 0 9) \"The value of N is \\\"5\\\", which is not of type (INTEGER 0 9).\")");
 	}
 
 	@Test
