@@ -481,6 +481,11 @@ initforms, supplied initargs stored, the instance is the value.
 - **`(:default-initargs :arg form)` overrides the matching slot's effective initform**, which
   is where BOTH construction paths read it; before this it only reached the constructor, so
   `(error 'my-cond)` ignored it.
+- **An initarg is any symbol** (CLHS 7.1.1; cl-vectors' `(rx :initarg rx)`): `SlotSpec.initargKeyword`
+  holds the symbol's name as written, the constructor's `&key ((rx slot))` matches it as written
+  (`.kb/lambda-lists.md`), generated code passes a non-keyword one quoted (`initargForm`), and a
+  `make-instance`/`change-class`/typed-signal call site reads `'rx` as a literal initarg
+  (`literalInitarg`). Pinned by ci-spec `defclass-default-initargs`.
 - **`with-accessors`** is the accessor-call twin of `with-slots` (`expandWithAccessors`),
   needing no registry. **`with-slots` resolves `defstruct` slots too**: `expandSlotValueRaw`
   picks the index out of the LAYOUT registry (`uniqueLayoutSlotIndex`), falling back to the

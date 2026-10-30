@@ -4,7 +4,7 @@
 
 クラスを定義し、名前シンボルを返します。これは **静的な CLOS サブセット**です。すべてのスーパークラスは先行する `defclass` で定義済みでなければならず、インスタンスは [`make-instance`](../macros/make-instance.md) で生成される第一級のオブジェクトです（[`defstruct`](defstruct.md) のインスタンスと同様にリストではなく、`consp` は `nil`、`print` は `#<NAME :SLOT value ...>` と表示します）。スロットオプション:
 
-- `:initarg keyword` — コンストラクタで使うキーワード（省略時はスロット名のキーワード）
+- `:initarg name` — スロットを埋める initarg。キーワードでもそれ以外のシンボルでもよく、後者はクォートして渡す（`(make-instance 'arc 'rx 1)`）。省略時はスロット名のキーワード
 - `:initform expr` — スロットが与えられなかったときに生成時に評価されるデフォルト値。**省略するとスロットは未束縛のまま**になります（CL と同じ）: [`slot-boundp`](../macros/slot-boundp.md) は `nil` を返し、読み取りは `unbound-slot` をシグナルします
 - `:reader fn` — `fn` を読み取り関数として定義
 - `:accessor fn` — `:reader` と同様で、さらに `setf` 可能な place になります

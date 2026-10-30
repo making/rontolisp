@@ -35,7 +35,7 @@ The parameter list supports the Common Lisp lambda-list keywords `&optional`, `&
 (make-point :y 5) ; => (0 5 T)
 ```
 
-An unknown keyword argument signals an error unless the lambda list declares `&allow-other-keys` or the caller passes `:allow-other-keys t`. `&aux` introduces auxiliary variables bound like a trailing `let*`. `&whole` is not supported.
+An unknown keyword argument signals an error unless the lambda list declares `&allow-other-keys` or the caller passes `:allow-other-keys t`. `&aux` introduces auxiliary variables bound like a trailing `let*`. `&whole` is not supported. A key parameter `((name var) default)` takes `name` as written: a non-keyword `name` is passed quoted (`(f 'name 1)`).
 
 ```lisp
 (defun area (w &optional (h w) &aux (a (* w h)))

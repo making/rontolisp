@@ -35,7 +35,7 @@
 (make-point :y 5) ; => (0 5 T)
 ```
 
-未知のキーワード引数は、ラムダリストが `&allow-other-keys` を宣言しているか、呼び出し側が `:allow-other-keys t` を渡さない限りエラーを通知します。`&aux` は末尾の `let*` のように束縛される補助変数を導入します。`&whole` はサポートされません。
+未知のキーワード引数は、ラムダリストが `&allow-other-keys` を宣言しているか、呼び出し側が `:allow-other-keys t` を渡さない限りエラーを通知します。`&aux` は末尾の `let*` のように束縛される補助変数を導入します。`&whole` はサポートされません。キーパラメータ `((name var) default)` は `name` をそのまま受け取ります: キーワードでない `name` はクォートして渡します（`(f 'name 1)`）。
 
 ```lisp
 (defun area (w &optional (h w) &aux (a (* w h)))

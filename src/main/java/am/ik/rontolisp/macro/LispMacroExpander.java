@@ -19811,9 +19811,9 @@ public final class LispMacroExpander {
 					&& ":DEFAULT-INITARGS".equals(plainTypeName(optSym))) {
 				List<LispVal> pairs = optCons.toList();
 				for (int j = 1; j + 1 < pairs.size(); j += 2) {
-					if (!(pairs.get(j) instanceof LispSymbol key) || !key.name().startsWith(":")) {
+					if (!(pairs.get(j) instanceof LispSymbol key)) {
 						throw new IllegalArgumentException(
-								LispNames.DEFCLASS + " :default-initargs expects keyword/form pairs: " + cons.print());
+								LispNames.DEFCLASS + " :default-initargs expects initarg/form pairs: " + cons.print());
 					}
 					defaultInitargs.put(key.name(), pairs.get(j + 1));
 				}
@@ -20706,11 +20706,13 @@ public final class LispMacroExpander {
 				LispVal optValue = specParts.get(i + 1);
 				switch (keySym.name()) {
 					case ":INITARG" -> {
-						if (!(optValue instanceof LispSymbol kw && kw.isKeyword())) {
+						// Any symbol names an initarg (CLHS 7.1.1), not only a keyword:
+						// cl-vectors' (rx :initarg rx).
+						if (!(optValue instanceof LispSymbol initargSym)) {
 							throw new IllegalArgumentException(
-									LispNames.DEFCLASS + " :initarg expects a keyword: " + spec.print());
+									LispNames.DEFCLASS + " :initarg expects a symbol: " + spec.print());
 						}
-						initarg = kw.name();
+						initarg = initargSym.name();
 					}
 					case ":INITFORM" -> {
 						initform = optValue;
@@ -20965,7 +20967,7 @@ public final class LispMacroExpander {
 				}
 				// Leftmost initarg wins, per CL's duplicate-initarg rule.
 				for (int k = 2; k < parts.size() - 1; k += 2) {
-					LispSymbol keyword = literalKeyword(parts.get(k));
+					LispSymbol keyword = literalInitarg(parts.get(k));
 					if (keyword != null && keyword.name().equals(slot.initargKeyword())) {
 						letParts.add(listToCons(List.of(new LispSymbol(LispNames.OBJ_SET), objVar, new LispInteger(s),
 								new LispSymbol(prefix + "_a" + (k - 1)))));
@@ -20979,17 +20981,24 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The keyword a literal initarg position of a {@code make-instance} call names:
-	 * either the bare keyword symbol or its quote-wrapped spelling (the
-	 * {@code %mop-make-instance} builtin re-enters the static expansion with every
-	 * argument quoted). Null for a computed key, which the re-fill then skips.
+	 * The initarg a literal initarg position names: a bare keyword, or any quoted symbol
+	 * (an initarg need not be a keyword, and the {@code %mop-make-instance} builtin
+	 * re-enters the static expansion with every argument quoted). Null for a computed
+	 * key.
 	 */
-	private static @org.jspecify.annotations.Nullable LispSymbol literalKeyword(LispVal form) {
+	private static @org.jspecify.annotations.Nullable LispSymbol literalInitarg(LispVal form) {
 		if (form instanceof LispSymbol sym && sym.isKeyword()) {
 			return sym;
 		}
-		LispSymbol quoted = quotedSymbol(form);
-		return quoted != null && quoted.isKeyword() ? quoted : null;
+		return quotedSymbol(form);
+	}
+
+	/**
+	 * The form evaluating to the initarg {@code name}: a keyword is self-evaluating, any
+	 * other symbol is quoted.
+	 */
+	private static LispVal initargForm(String name) {
+		return name.startsWith(":") ? new LispSymbol(name) : quoteOf(name);
 	}
 
 	/**
@@ -22370,7 +22379,7 @@ public final class LispMacroExpander {
 			LispVal store = cell != null
 					? listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(cell), val))
 					: objSet(obj, i, val);
-			LispVal supplied = mvCall(LispNames.GETF, args, new LispSymbol(slot.initargKeyword()),
+			LispVal supplied = mvCall(LispNames.GETF, args, initargForm(slot.initargKeyword()),
 					quoteOf("%CCR-UNSUPPLIED"));
 			body.add(makeLet(val.name(), supplied,
 					makeIf(fmtCall(LispNames.EQUAL, val, quoteOf("%CCR-UNSUPPLIED")), LispNil.INSTANCE, store)));
@@ -22465,9 +22474,10 @@ public final class LispMacroExpander {
 		// and BEFORE the layout swap, like every other initarg-taking expansion.
 		java.util.Map<String, LispVal> byInitarg = new java.util.LinkedHashMap<>();
 		for (int i = 3; i + 1 < parts.size(); i += 2) {
-			if (!(parts.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
+			LispSymbol key = literalInitarg(parts.get(i));
+			if (key == null) {
 				throw new IllegalArgumentException(
-						LispNames.CHANGE_CLASS + " expects keyword/value initarg pairs: " + cons.print());
+						LispNames.CHANGE_CLASS + " expects initarg/value pairs: " + cons.print());
 			}
 			LispSymbol temp = new LispSymbol(prefix + "_a" + i);
 			bindings.add(listToCons(List.of(temp, parts.get(i + 1))));
@@ -31629,7 +31639,7 @@ public final class LispMacroExpander {
 			ClosRegistry.@Nullable ClassInfo cls, List<LispVal> bindings, List<LispVal> items) {
 		boolean pairs = args.size() % 2 == 0;
 		for (int i = 0; pairs && i < args.size(); i += 2) {
-			pairs = args.get(i) instanceof LispSymbol k && k.isKeyword();
+			pairs = literalInitarg(args.get(i)) != null;
 		}
 		for (int i = 0; i < args.size(); i++) {
 			if (pairs && i % 2 == 0) {
@@ -31646,7 +31656,7 @@ public final class LispMacroExpander {
 			// (ClosRegistry.SlotSpec / parseDefclassSlot), so both sides agree.
 			java.util.Map<String, LispVal> byInitarg = new java.util.LinkedHashMap<>();
 			for (int i = 0; i + 1 < items.size(); i += 2) {
-				byInitarg.put(((LispSymbol) items.get(i)).name(), items.get(i + 1));
+				byInitarg.put(java.util.Objects.requireNonNull(literalInitarg(items.get(i))).name(), items.get(i + 1));
 			}
 			List<LispVal> slotValues = new java.util.ArrayList<>();
 			for (ClosRegistry.SlotSpec slot : cls.slots()) {
@@ -45616,11 +45626,11 @@ public final class LispMacroExpander {
 				if (slot.initargKeyword() == null) {
 					continue;
 				}
-				items.add(new LispSymbol(slot.initargKeyword()));
+				items.add(initargForm(slot.initargKeyword()));
 				List<LispVal> getfParts = new java.util.ArrayList<>();
 				getfParts.add(new LispSymbol(LispNames.GETF));
 				getfParts.add(ha);
-				getfParts.add(new LispSymbol(slot.initargKeyword()));
+				getfParts.add(initargForm(slot.initargKeyword()));
 				if (!(slot.initform() instanceof LispNil)) {
 					getfParts.add(slot.initform());
 				}
@@ -46697,7 +46707,7 @@ public final class LispMacroExpander {
 				continue;
 			}
 			LispSymbol tail = new LispSymbol("%mmi_tail");
-			forms.add(makeLet(tail.name(), mvCall(MMI_INIT_TAIL, args, new LispSymbol(slot.initargKeyword())),
+			forms.add(makeLet(tail.name(), mvCall(MMI_INIT_TAIL, args, initargForm(slot.initargKeyword())),
 					makeIf(tail, mvCall(LispNames.OBJ_SET, obj, new LispInteger(s), callOf(LispNames.CAR, tail)),
 							LispNil.INSTANCE)));
 		}

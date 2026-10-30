@@ -42,6 +42,9 @@ parameters"). User docs: `doc/en/reference/special-forms/defun.md`, `lambda.md`.
   passing `:index` 3.0 -> 0.78 us, of `(a &key (index 0))` 2.0 -> 0.58 (2026-09-29, `java -cp
   target/classes`, M4 Max). Pinned by
   `LispEvaluatorTest#theKeywordHelpersAreBuiltInsThatAnswerAsTheirLispBody`.
+- **`((name var) default)` matches `name` AS WRITTEN** (CLHS 3.4.1.4), a non-keyword one passed
+  quoted to `%ll-key-cell`; only a bare `var` derives `:var`. Until 2026-10-30 a non-keyword
+  `name` was coerced to its keyword.
 - **Trap**: `&key` with NO key params still switches the tail to keyword convention
   (`Parsed.sawKey`); losing that marker makes the function fixed-arity.
 - Helpers use the `__ll_` prefix; `PackageResolver` passes `&`-prefixed symbols through

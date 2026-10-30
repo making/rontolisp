@@ -29008,9 +29008,28 @@ cases:
       (let ((c1 (make-instance 'di-conf)) (c2 (make-instance 'di-conf :port 9090)))
         (print (list (slot-value c1 'host) (slot-value c1 'port)))
         (print (slot-value c2 'port)))
+      (defclass di-arc () ((rx :initarg rx :reader di-rx) (ry :initarg ry :reader di-ry))
+        (:default-initargs ry 5))
+      (print (list (di-rx (make-instance 'di-arc 'rx 1)) (di-ry (make-instance 'di-arc))))
+      (let ((cls 'di-arc)) (print (di-ry (make-instance cls 'ry 2))))
+      (defclass di-arc2 (di-arc) ((rz :initarg rz :initform 0 :reader di-rz)))
+      (defmethod initialize-instance :after ((a di-arc2) &key ((rz z) nil)) (print (list :init z)))
+      (print (di-rz (make-instance 'di-arc2 'rz 9)))
+      (print (di-rz (change-class (make-instance 'di-arc 'rx 3) 'di-arc2 'rz 4)))
+      (define-condition di-cond (error) ((what :initarg what :reader di-what)))
+      (print (handler-case (error 'di-cond 'what 7) (di-cond (c) (di-what c))))
+      (defun di-f (&key ((rx v) 0)) v)
+      (print (list (di-f 'rx 3) (di-f) (handler-case (di-f :rx 1) (program-error () :refused))))
     expected: |
       ("localhost" 8080)
       9090
+      (1 5)
+      2
+      (:INIT 9)
+      9
+      4
+      7
+      (3 0 :REFUSED)
   - name: with-slots-write-through
     source: |
       (defclass ws-pt () ((x :initarg :x) (y :initarg :y)))
