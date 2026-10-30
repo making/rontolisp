@@ -190,6 +190,10 @@ column: both want the same seam.
 
 **`char-name` answers nil for a graphic character**, which is CL; SBCL additionally returns the
 Unicode NAME — the only difference between esrap's parse-error report here and on SBCL.
+`name-char` (a prelude defun, 2026-10-31) inverts exactly what `char-name` answers, plus
+`Linefeed`/`Nul`, so no Unicode name either: before it existed, cl-unicode's
+`character-named` compiled `name-char` as an undefined `CL-UNICODE::NAME-CHAR`. ci-spec
+`lite-builtins-residue`.
 
 ## The printer-control variables
 `LispMacroExpander.PRINTER_MODE_VARS` is the single table: name -> global value. The interpreter

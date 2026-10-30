@@ -420,6 +420,7 @@ page.
 | `decode-float` | `(decode-float 6.5)` | `0.8125`, `3`, `1.0` -- significand in [1/2, 1), binary exponent, sign |
 | `integer-decode-float` | `(integer-decode-float 6.5)` | `7318349394477056`, `-50`, `1` -- integer significand, binary exponent, integer sign |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- `nil` for graphic characters |
+| `name-char` | `(name-char "space")` | `#\Space` -- the inverse of `char-name`, compared with `string-equal`; `nil` for a string naming no character |
 | `fdefinition` | `(fdefinition 'car)` | the function value, like `symbol-function` |
 | `use-package` | `(use-package :mypkg)` | add packages to a package's use list, so their external symbols are visible unqualified (a literal top-level call is a compile-time directive) |
 | `unuse-package` | `(unuse-package :mypkg)` | the inverse of `use-package`: the packages leave the use list, so their external symbols stop being visible unqualified |

@@ -55,16 +55,17 @@ as part of a symbol on all four instead of signalling (CLHS 2.4.8; measured 2026
   `LispLexer.followTemplateDepth` counts the backquotes and commas open at the macro
   character, the `Invoker` hands that depth to the call, `LispEvaluator.callReaderMacro`
   holds it (`readerMacroTemplateDepth`, dynamic like CL's) for every `read` /
-  `read-delimited-list` the function makes (`readWithSyntax` -> `Forms.withinTemplates`), and
-  that read takes a comma outside its own templates as the CLtL2 raw marker
+  `read-delimited-list` the function makes (`readWithSyntax` -> `Forms.withinTemplates`) and,
+  since h74, every `read-from-string` under the readtable (`Environment.readOneWithSyntax`,
+  through `setTemplateDepthQuery`), and that read takes a comma outside its own templates as
+  the CLtL2 raw marker
   (`LispReader.readOuterComma`: `(%bq-comma x)` / `(%bq-comma-at x)`, identity sentinels), its
   operand one level further out. The datum comes back as a `Token.Datum`; `readRawTemplate`
   finds the marker (`holdsComma`) and the template takes the CLtL2 path
   (`bqCompletelyProcess`), which consumes it, `,,x` across a nested template included. rutils'
   `` #`(member % var :test ,test) `` (iter.lisp:3162) reads. Deviations: the function sees
   the marker as a two-element LIST where SBCL's comma is an atom (a `listp`/tree walk over
-  it differs); `read-from-string` inside the function (`Environment.readOneWithSyntax`) and a
-  non-string stream (the prelude scanner) start at depth 0.
+  it differs); a read off a non-string stream (the prelude scanner) starts at depth 0.
 - **`#L` and `#N@` stay native whatever function the table holds** (`isNativeSub`): the
   compile paths open no image for them (`ReadTimeImage.changesSyntax`), and the interpreter
   reads them as the compiled backends do. A library giving either another meaning is

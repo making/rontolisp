@@ -222,6 +222,7 @@ categories:
       - { slug: digit-char-p, name: "digit-char-p" }
       - { slug: digit-char, name: "digit-char" }
       - { slug: char-name, name: "char-name" }
+      - { slug: name-char, name: "name-char" }
   - title: "Cons & List Construction"
     index_page: reference/functions/cl.md
     functions:

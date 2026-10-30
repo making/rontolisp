@@ -2861,6 +2861,26 @@ public final class LispPreludeLibrary {
 				               (hex cp ""))))
 				          (t nil))))
 				""");
+		// name-char: the inverse of char-name, compared with string-equal -- the names
+		// char-name answers, the reader's Linefeed and Nul, and U+ with hex digits; any
+		// other string, a one-character one included, names no character.
+		SOURCES.put(LispNames.NAME_CHAR, """
+				(defun name-char (name)
+				  (let ((s (string name)))
+				    (cond ((string-equal s "Space") (code-char 32))
+				          ((or (string-equal s "Newline") (string-equal s "Linefeed")) (code-char 10))
+				          ((string-equal s "Tab") (code-char 9))
+				          ((string-equal s "Return") (code-char 13))
+				          ((string-equal s "Page") (code-char 12))
+				          ((string-equal s "Backspace") (code-char 8))
+				          ((or (string-equal s "Null") (string-equal s "Nul")) (code-char 0))
+				          ((string-equal s "Rubout") (code-char 127))
+				          ((and (> (length s) 2) (char-equal (char s 0) #\\U) (char= (char s 1) #\\+)
+				                (every (lambda (c) (digit-char-p c 16)) (subseq s 2)))
+				           (let ((cp (parse-integer s :start 2 :radix 16)))
+				             (if (< cp char-code-limit) (code-char cp) nil)))
+				          (t nil))))
+				""");
 		// %octets-join: a list of (unsigned-byte 8) vectors -> ONE packed vector holding
 		// them in order. The blit every drain of an octet-chunk stream needs (read-all
 		// below, %http-drain in http-server.lisp): the chunks are collected and blitted

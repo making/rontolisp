@@ -420,6 +420,7 @@
 | `decode-float` | `(decode-float 6.5)` | `0.8125`、`3`、`1.0` -- [1/2, 1) の仮数部、2 進指数部、符号 |
 | `integer-decode-float` | `(integer-decode-float 6.5)` | `7318349394477056`、`-50`、`1` -- 整数の仮数部、2 進指数部、整数の符号 |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- 図形文字には `nil` |
+| `name-char` | `(name-char "space")` | `#\Space` -- `char-name` の逆。`string-equal` で比較し、どの文字の名前でもない文字列には `nil` |
 | `fdefinition` | `(fdefinition 'car)` | 関数値を返します。`symbol-function` と同じ |
 | `use-package` | `(use-package :mypkg)` | パッケージを use リストに追加し、その外部シンボルを修飾なしで見えるようにします（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |
 | `unuse-package` | `(unuse-package :mypkg)` | `use-package` の逆操作。パッケージが use リストから外れ、その外部シンボルが修飾なしでは見えなくなります |

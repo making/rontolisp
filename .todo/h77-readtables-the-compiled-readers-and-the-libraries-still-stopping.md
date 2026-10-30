@@ -2,13 +2,14 @@
 
 Difficulty: High
 
-h74 made a keyword a block name on every backend, the cross-lambda lowering included
-(`.kb/do-return-block.md`), so rutils gets past `(block :+ ...)` on the compile paths; and a
-`progn` a macro expands into is top level member by member when it holds a package directive
-(`.kb/packages.md`), so cl-annot's `@export` runs on the JVM and WASM; and a `loop` pattern
-whose head names a macro stays a pattern (`.kb/flet-labels.md`), so parenscript's `ps` does.
-What is left, in the order it unblocks libraries (measured 2026-10-31 by hand through the
-Quicklisp cache unless noted):
+Done in h74: a keyword names a block (`.kb/do-return-block.md`; rutils past `(block :+ ...)`
+on the compile paths), a macro-expanded `progn` holding a package directive is top level
+member by member (`.kb/packages.md`; cl-annot's `@export` on the JVM and WASM), a `loop`
+pattern whose head names a macro stays a pattern (`.kb/flet-labels.md`; parenscript's `ps`),
+`name-char` (`.kb/pretty-printer.md`; cl-unicode's warning), a reader macro's
+`read-from-string` inside its template (`.kb/readtables.md`). jonathan on WASM no longer
+stops. What is left, in the order it unblocks libraries (measured 2026-10-31 by hand through
+the Quicklisp cache unless noted):
 
 1. **The emitted runtime readers** (JVM `JvmReadRuntimeBuilder`, WASM
    `WasmReadRuntimeBuilder`) and the prelude `read` scanner (it delimits a datum, then calls
@@ -43,16 +44,11 @@ Quicklisp cache unless noted):
      dispatch (`clear-input` is a prelude defun answering nil); chunga defines a method on it
      too. It does not load cl-redis 20250622 by itself: its `connection.lisp` names
      `sb-sys:fd-stream` and `sb-impl::clear-input` with no feature guard (SBCL only).
-   - cl-unicode (under cl-interpol) warns `CL-UNICODE::NAME-CHAR is undefined` on the
-     compile paths (not re-measured).
-   - jonathan on WASM no longer stops (`to-json`/`parse` on preview 1).
 3. Interpreter gaps: `read` from a file stream / standard input (the prelude scanner
    delimits by the standard syntax), the REPL and playground (whole-buffer reads),
    `with-standard-io-syntax` (does not rebind `*readtable*`; its expansion runs after the
    instance gate is computed), calling a standard `#` sub-function, escape syntax under
-   another character, `*read-suppress*` around a reader macro, and `read-from-string`
-   inside a reader macro function starting outside the enclosing template
-   (`Environment.readOneWithSyntax` is not handed the depth `readWithSyntax` is).
+   another character, and `*read-suppress*` around a reader macro.
 4. The image is a second macro-time pass over the program (thrown away, because the passes
    between the read and `UserMacroExpander` rewrite the program): the ci-spec corpus compiles
    in 24.1 s with it vs 23.3 s without. Reusing the session when those passes change nothing
