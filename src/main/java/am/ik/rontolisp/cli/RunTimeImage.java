@@ -16,10 +16,11 @@ import org.jspecify.annotations.Nullable;
  * What a compiled JVM class whose Clojure program lowers at run time carries to lower
  * that program again when it first runs a lowering verb ({@code eval}, a computed
  * {@code resolve} ...): the program text, its entry file, the standards it was read
- * against, and every file answer the compile-time lowering got -- the read of a file,
- * whether one exists, a directory's listing -- so the run-time lowering takes the same
- * decisions wherever the class runs, and names the same functions and globals the class
- * holds ({@code cli/JvmRunTimeLowering}).
+ * against, every file answer the compile-time lowering got -- the read of a file, whether
+ * one exists, a directory's listing -- and where its open passes began, so the run-time
+ * lowering takes the same decisions wherever the class runs, without the passes before,
+ * and names the same functions and globals the class holds
+ * ({@code cli/JvmRunTimeLowering}).
  *
  * <p>
  * The class holds it as one string ({@link #encode()}), opaque to the backend.
@@ -34,12 +35,14 @@ import org.jspecify.annotations.Nullable;
  * @param exists the answer to every existence question the lowering asked, by path
  * @param listings the listing of every directory the lowering listed, by path (a missing
  * directory absent)
+ * @param decisions where the lowering's open passes began
+ * ({@code eval/ClojureProgramLowering#decisions}), or {@code null} to lower from nothing
  */
 record RunTimeImage(String source, @Nullable String entryFile, @Nullable String clojureConfigDir,
 		List<String> clojureAliases, boolean fetches, Map<String, String> reads, Map<String, Boolean> exists,
-		Map<String, List<String>> listings) {
+		Map<String, List<String>> listings, @Nullable String decisions) {
 
-	private static final String VERSION = "rontolisp-run-time-image-1";
+	private static final String VERSION = "rontolisp-run-time-image-2";
 
 	RunTimeImage {
 		clojureAliases = List.copyOf(clojureAliases);
@@ -156,6 +159,7 @@ record RunTimeImage(String source, @Nullable String entryFile, @Nullable String 
 			fields.add(Integer.toString(names.size()));
 			fields.addAll(names);
 		});
+		fields.add(this.decisions == null ? "-" : "+" + this.decisions);
 		StringBuilder out = new StringBuilder();
 		for (String field : fields) {
 			out.append(field.length()).append(':').append(field);
@@ -204,7 +208,8 @@ record RunTimeImage(String source, @Nullable String entryFile, @Nullable String 
 			}
 			listings.put(path, List.copyOf(names));
 		}
-		return new RunTimeImage(source, entryFile, configDir, aliases, fetches, reads, exists, listings);
+		String decisions = in.optional();
+		return new RunTimeImage(source, entryFile, configDir, aliases, fetches, reads, exists, listings, decisions);
 	}
 
 	private static final class Fields {
@@ -256,12 +261,14 @@ record RunTimeImage(String source, @Nullable String entryFile, @Nullable String 
 		 * @param source the program text
 		 * @param entryFile its entry file, or {@code null}
 		 * @param standards the standards it was read against
+		 * @param decisions where its lowering's open passes began, or {@code null}
 		 * @return the image
 		 */
-		synchronized RunTimeImage image(String source, @Nullable String entryFile, SourceStandards standards) {
+		synchronized RunTimeImage image(String source, @Nullable String entryFile, SourceStandards standards,
+				@Nullable String decisions) {
 			return new RunTimeImage(source, entryFile, standards.clojureConfigDir(), standards.clojureAliases(),
 					standards.clojureRepositories() != null, new LinkedHashMap<>(this.reads),
-					new LinkedHashMap<>(this.exists), new LinkedHashMap<>(this.listings));
+					new LinkedHashMap<>(this.exists), new LinkedHashMap<>(this.listings), decisions);
 		}
 
 		@Override

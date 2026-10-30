@@ -543,13 +543,14 @@ final class CompileFrontend {
 			// A JVM class lowers a Clojure program's lowering verbs over computed
 			// arguments as it runs: it reads the program again then, through every file
 			// answer this read got (RunTimeImage), so the lowering it rebuilds names the
-			// functions and globals it holds (JvmRunTimeLowering).
+			// functions and globals it holds (JvmRunTimeLowering), from where this read's
+			// open passes began.
 			RunTimeImage.Recording recording = new RunTimeImage.Recording(files);
 			ClojureProgramLowering clojure = ClojureProgramLowering.read(request.source(), features, entryFile,
-					request.standards(), recording);
+					request.standards(), recording, null);
 			read = clojure.forms();
 			if (clojure.lowersAtRunTime()) {
-				image = recording.image(request.source(), entryFile, request.standards());
+				image = recording.image(request.source(), entryFile, request.standards(), clojure.decisions());
 			}
 		}
 		else {

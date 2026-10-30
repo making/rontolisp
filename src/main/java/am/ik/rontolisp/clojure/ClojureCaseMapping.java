@@ -212,10 +212,17 @@ public final class ClojureCaseMapping {
 	// (defun rontolisp::%clojure-special-<name> (code)
 	// (rontolisp::%clojure-special-case code "<keys>" '#("<mapping>" ...)))
 	// with the keys, every code point the mapping departs at, as one string in order.
+	// An unassigned, private-use or surrogate code point has no case mapping at all: the
+	// 959,049 of them are passed over unasked (JDK 25: none departs): the build, paid by
+	// every Clojure read, went from 650 to 280 ms cold.
 	private static void special(StringBuilder source, String name, IntFunction<@Nullable String> mapping) {
 		StringBuilder keys = new StringBuilder();
 		StringBuilder values = new StringBuilder();
 		for (int codePoint = 0; codePoint <= Character.MAX_CODE_POINT; codePoint++) {
+			int type = Character.getType(codePoint);
+			if (type == Character.UNASSIGNED || type == Character.PRIVATE_USE || type == Character.SURROGATE) {
+				continue;
+			}
 			String mapped = mapping.apply(codePoint);
 			if (mapped != null) {
 				keys.appendCodePoint(codePoint);

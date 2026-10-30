@@ -4,8 +4,8 @@
 arguments (`ClojureRunTime.ENTRIES`: `eval`, a computed `resolve` / `require` /
 `load-string` ...; "What opens a program") compiles to a HOST class that carries its
 program's image and the compiler. Its first verb
-reads and lowers the program again from the image -- the same decisions, so the same names
--- and each verb's lowered forms compile into a FRAGMENT class defined into the host's
+reads and lowers the program again from the image, from where the compile's open passes
+began -- the same decisions, so the same names ("The first verb's read") -- and each verb's lowered forms compile into a FRAGMENT class defined into the host's
 package through the host's own lookup, linked against the host and the fragments before
 it: functions by name, globals and run-time state through the host's fields, function
 values routed by id; a defn a fragment redefines through its cell ("Redefinition").**
@@ -62,7 +62,8 @@ Pins: `ClojureLoweringTest#evalAndResolveRefuseWhatTheyCannotTake`, clojure-spec
   `eval/ClojureProgramLowering` (the run-time half reads through the same class) over a
   recording loader (`cli/RunTimeImage.Recording`): every file read, existence answer and
   listing joins the image, so the run-time read decides as this one did wherever the class
-  runs. A program keeping its lowering sets `Loaded.lowersAtRunTime`:
+  runs; so do the decisions its open passes began from (`ClojureWholeDecisions`, "The first
+  verb's read"). A program keeping its lowering sets `Loaded.lowersAtRunTime`:
   - `ClojureLibrary.process(..., lowersAtRunTime)`: the whole library, unstripped (host arms
     and every family -- a value a fragment makes may meet any arm), the refusing
     `%clojure-lower-at-run-time` stood in by the hand-off (`HOST_LOWERING`) and the
@@ -270,20 +271,66 @@ global `_g$` -- never in `_fenv` -- and a later fragment's call, `#'name`, liter
   one; oracle-identical). Before, the second line also failed on a fragment's nested defn
   (`#'name` late-bound through `_lookup`, which never knew it).
 
+## The first verb's read
+
+**Invariant: the run-time read is the compile's whole-program lowering from the point its
+open passes began -- `ClojureLowering.lowerWhole` called with the decisions recorded there
+(`ClojureWholeDecisions`: redefinable vars, walked protocols, interface guards, root setters,
+thread binders, conveyed dynamics, each in the loop's iteration order), carried in the image
+(`rontolisp-run-time-image-2`).** For a compiled target the first open pass takes a fresh
+macro evaluator and source path, so nothing a closed pass left behind (the macro-time gensym
+and `RT/nextID` counters, an evaluated definition) reaches it; the read repeats only the open
+passes. Pin: `ClojureLoweringTest#aCompiledClassReadsItsProgramAgainFromWhereItsOpenPassesBegan`
+(a macro-time gensym naming a `def`: with the closed pass's evaluator carried over, the
+replay named another global).
+
+Measured 2026-10-30 on spec's `instrument`/`check` probe (Xeon E5-2697A v4, GraalVM 25.0.4,
+load 5-7). The first verb comes 70 ms into `main` (gen's `dynaload` while spec loads), so
+the whole read is waited for:
+
+- Before: the read 4.2-4.5 s of a 9.9-10.2 s run, as passes: a closed one (3.0-3.4 s, its
+  macro evaluator's start included) and an open one (0.74-0.9 s). JFR over the read: the
+  interpreter running macro bodies 27%, the macro evaluator's start (evaluating
+  `ClojureLibrary.forms()`) 18%, the lowering itself 17%, the case-mapping tables 16%,
+  pending definitions 13%, parsing `clojure.lisp` 6%.
+- The case-mapping tables (`ClojureCaseMapping`, built once per JVM into
+  `ClojureLibrary.forms()`, so paid by every Clojure read, the interpreter's too) asked
+  `String.toUpperCase` / `toLowerCase` of all 1,114,112 code points: 650 ms cold. The
+  959,049 unassigned, private-use and surrogate ones have no case mapping and are passed over
+  (JDK 25: none departs, checked over all of them): 280 ms.
+- After both: the read 3.1 s, the run 8.5-8.9 s; JFR samples in the read 310 -> 202. The
+  probe's compile is unchanged (22 s both; the fresh evaluator's start, about 260 ms, against
+  the tables' saving).
+- Weighed and not made:
+  - Starting the read on its own thread as the host's `main` starts. The probe gains nothing
+    (its verb comes 70 ms in). A host whose verb comes later gained the read (a `fib 32`
+    then an `eval`: 2.72-2.97 s -> 2.51-2.60 s), but a run never reaching its verb paid
+    every time: 0.59-0.67 s -> 0.66-0.70 s wall, 0.89 -> 1.72 s CPU, 460 -> 495 MB RSS.
+  - Carrying the lowering's state instead of the source: its macro expanders are closures
+    of the interpreter's environment, which no image holds; the decisions are the part that
+    travels.
+  - Lowering only the namespaces a verb names: the passes' misses are program-wide, so a
+    part lowered alone decides otherwise and names other functions than the class holds.
+- What is left in the read: the interpreter running spec's and test.check's macro bodies
+  (30% of its samples), the macro evaluator's start (24%), the lowering (14%), pending
+  definitions (10%), parsing `clojure.lisp` (10%, needed by the first fragment's splice
+  too), the tables (8%).
+
 ## Limits (2026-10-30)
 
 - A computed symbol designator (`(funcall 'name)` through `_lookup`) reaches the definition's
   method, not its cell; Clojure code spells none. A Common Lisp `(setf (symbol-function
   'f) ...)` still reaches no compiled call (`.kb/symbol-runtime-api.md`).
 - Every verb compiles and defines a class, never unloaded; the first verb pays the program's
-  lowering again. Measured 2026-10-30 on spec's `instrument`/`check` probe
+  open passes again ("The first verb's read"). Measured 2026-10-30 on spec's `instrument`/`check` probe
   (`.kb/clojure-frontend.md`, "clojure.spec.alpha"): 69 verbs -- 41 `resolve`s (the
   registry walk, `instrument`, `check`) and 28 `require`s (gen's `dynaload`, once per
   combinator, 26 of a namespace already loaded). Before h15: 22.9 MB of fragments (about
   300 KB each), 61 s where the interpreter takes 7.7 s; JFR put 78% of the samples in the
   fragment's front end (the whole library re-spliced, above), 12% in its compile. After:
-  1.48 MB (13-27 KB each; the two that load a namespace, 169 and 203 KB), 10 s. What is left:
-  the first verb's re-read of the program 34% of the samples (`.todo/h17`), the program 27%, the
+  1.48 MB (13-27 KB each; the two that load a namespace, 169 and 203 KB), 10 s. What was left:
+  the first verb's re-read of the program 34% of the samples (8.5-8.9 s and 44% after h17,
+  "The first verb's read"), the program 27%, the
   fragments' compile 20%, front end 12%, lowering 5%; per verb (timed) 25-40 ms, mostly the
   compile pipeline's fixed cost. Weighed and not made: a `require` of a loaded namespace or a
   `resolve` of a lowered var answered without a compile (the first checks a run-time flag,

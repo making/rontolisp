@@ -1859,7 +1859,7 @@ regex ops (`cat`, `alt`, `*`, `+`, `?`), `int-in`/`double-in`/`conformer`/`nonco
   `ClassCastException` after it; seeded `stest/check`s (`:num-tests 30 :seed 42`) of a
   passing `fdef` and of one failing at 1434 that shrinks to `[(11)]`; `tgen/generate` of
   `(s/gen int?)` at size 100 -- prints the oracle's 10 lines on the interpreter (about 8 s)
-  and the JVM (about 10 s, 61 s before h15: 41 `resolve`s and 28 `require`s lower as it
+  and the JVM (about 8.8 s; 10 s before h17, 61 s before h15: 41 `resolve`s and 28 `require`s lower as it
   runs, 1.48 MB of fragments in all, `.kb/jvm-run-time-lowering.md`, "Limits"). Fixed on the way,
   each as infrastructure in its own section: a function whose qualified name a quote spells
   is redefinable in an open program altering a computed root (`s/fdef`'s registry key;
@@ -6485,7 +6485,8 @@ fold per code point (`.kb/characters-code-points.md`). Before 2026-10-11 the ver
   `ClojureLibrary.forms()`, pruned like any definition): `%clojure-special-upcase` (the 102 code
   points whose `toUpperCase` is not `Character.toUpperCase`), `%clojure-special-downcase`
   (U+0130 alone), `%clojure-word-runs` (2,236 runs of the word class, delta-encoded, decoded on
-  first use). An ASCII string takes Common Lisp's fold; an ASCII LITERAL keeps the old
+  first use; built skipping the 959,049 code points with no case mapping, 650 -> 280 ms cold,
+  `.kb/jvm-run-time-lowering.md`, "The first verb's read"). An ASCII string takes Common Lisp's fold; an ASCII LITERAL keeps the old
   `string-upcase` / `string-downcase` / inline capitalize at the site, which the pure-builtin fold
   answers while compiling.
 - **Final_Sigma is the JDK's, not Unicode's** (`scheme.lisp`'s is Unicode 3.13's):

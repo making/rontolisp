@@ -173,7 +173,8 @@ public enum SourceLanguage {
 				return new LispReader.ReadPrefix(Scheme.read(source, file, standards.scheme(), schemeFiles(loader)),
 						null);
 			}
-			return new LispReader.ReadPrefix(clojure(source, features, file, standards, loader, false).forms(), null);
+			return new LispReader.ReadPrefix(clojure(source, features, file, standards, loader, false, null).forms(),
+					null);
 		}
 		catch (LispReadException ex) {
 			return new LispReader.ReadPrefix(List.of(), ex);
@@ -199,21 +200,39 @@ public enum SourceLanguage {
 	 */
 	public Clojure.Program readClojure(String source, Features features, @Nullable String file,
 			SourceStandards standards, @Nullable SourceLoader loader) {
+		return readClojure(source, features, file, standards, loader, null);
+	}
+
+	/**
+	 * {@link #readClojure(String, Features, String, SourceStandards, SourceLoader)} from
+	 * where a compile's open passes began ({@link Clojure.Program#decisions}): a compiled
+	 * JVM class's read of its own program as it runs.
+	 * @param source the program text
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @param standards what the program is read against
+	 * @param loader where named files are read from, or {@code null} when none can be
+	 * @param decisions the decisions, or {@code null} to lower from nothing
+	 * @return the lowered program
+	 */
+	public Clojure.Program readClojure(String source, Features features, @Nullable String file,
+			SourceStandards standards, @Nullable SourceLoader loader, @Nullable String decisions) {
 		if (this != CLOJURE) {
 			throw new IllegalStateException(this + " is no Clojure source");
 		}
 		return SourceProvenance.readingProgramSource(() -> clojure(source, features, file, standards, loader,
-				features.contains("rontolisp-interpreter") || features.contains("rontolisp-jvm")));
+				features.contains("rontolisp-interpreter") || features.contains("rontolisp-jvm"), decisions));
 	}
 
 	private static Clojure.Program clojure(String source, Features features, @Nullable String file,
-			SourceStandards standards, @Nullable SourceLoader loader, boolean runTimeTarget) {
+			SourceStandards standards, @Nullable SourceLoader loader, boolean runTimeTarget,
+			@Nullable String decisions) {
 		// The host is wherever the target is no wasm one: a java: member can throw and
 		// take an exception there. A JVM class links its library when it is compiled.
 		return Clojure.program(source, file,
-				loader == null ? ClojureMacroTime.create() : ClojureMacroTime.create(loader.javaClassLoader()),
+				() -> loader == null ? ClojureMacroTime.create() : ClojureMacroTime.create(loader.javaClassLoader()),
 				clojureFiles(loader, standards), !features.contains("rontolisp-wasm"), ClojureHostBoundary.INSTANCE,
-				runTimeTarget, runTimeTarget && features.contains("rontolisp-jvm"));
+				runTimeTarget, runTimeTarget && features.contains("rontolisp-jvm"), decisions);
 	}
 
 	/**

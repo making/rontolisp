@@ -13,6 +13,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
@@ -1778,7 +1779,8 @@ public final class ClojureLowering {
 	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader,
 			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
 			ClojureBoundary boundary) {
-		return lowerWhole(datums, reader, macroEvaluator, files, hostTarget, boundary, false, false).forms();
+		return lowerWhole(datums, reader, () -> macroEvaluator, files, hostTarget, boundary, false, false, null)
+			.forms();
 	}
 
 	/**
@@ -1788,8 +1790,10 @@ public final class ClojureLowering {
 	 * @param forms the core forms
 	 * @param runTime the lowering, open for what the program hands it as it runs, or null
 	 * when the program never lowers at run time or its target lowers nothing then
+	 * @param decisions where a compiled target's open passes began, which its run-time
+	 * read starts from, or null where none did
 	 */
-	record Whole(List<LispVal> forms, @Nullable ClojureLowering runTime) {
+	record Whole(List<LispVal> forms, @Nullable ClojureLowering runTime, @Nullable ClojureWholeDecisions decisions) {
 	}
 
 	/**
@@ -1801,9 +1805,19 @@ public final class ClojureLowering {
 	 * program hands the lowering as it runs joins it like a session's later buffer, so
 	 * every decision code not seen yet could miss takes its open shape from the start.
 	 * The program itself still lowers whole, so a miss lowers it again as before.
+	 *
+	 * <p>
+	 * A compiled target lowers its program again when its class first runs a verb, and
+	 * that read starts where the open passes began ({@link Whole#decisions}): the first
+	 * open pass takes a fresh macro evaluator and source path, so nothing an earlier pass
+	 * left in either (a macro-time gensym counter, a definition) reaches it, and the
+	 * run-time read -- this method from those decisions -- is the same computation from
+	 * there, without the closed pass before ({@code .kb/jvm-run-time-lowering.md}, "The
+	 * first verb's read").
 	 * @param datums the program's datums
 	 * @param reader the reader they came out of, for error positions
-	 * @param macroEvaluator who evaluates one macro application at lower time
+	 * @param macroEvaluators a new evaluator of one macro application at lower time each
+	 * call (or null where macro call sites must fail)
 	 * @param files where required namespace files are read from
 	 * @param hostTarget whether the target is one where the host is
 	 * @param boundary the host boundary
@@ -1811,11 +1825,13 @@ public final class ClojureLowering {
 	 * class)
 	 * @param compiledTarget whether the target is a compiled class, which carries every
 	 * runtime the library reaches from the start ({@link #carriesRuntimes})
+	 * @param start where the open passes began, or null to lower from nothing
 	 * @return the forms, and the open lowering where the program lowers at run time
 	 */
 	static Whole lowerWhole(List<LispVal> datums, @Nullable ClojureReader reader,
-			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files, boolean hostTarget,
-			ClojureBoundary boundary, boolean runTimeTarget, boolean compiledTarget) {
+			Supplier<@Nullable ClojureMacroEvaluator> macroEvaluators, ClojureFiles files, boolean hostTarget,
+			ClojureBoundary boundary, boolean runTimeTarget, boolean compiledTarget,
+			@Nullable ClojureWholeDecisions start) {
 		Set<String> redefinable = new HashSet<>();
 		Set<String> walking = new HashSet<>();
 		Map<String, Set<String>> guards = new LinkedHashMap<>();
@@ -1824,7 +1840,24 @@ public final class ClojureLowering {
 		boolean threadBinders = false;
 		boolean open = false;
 		Set<String> dynamicSeed = new HashSet<>();
+		ClojureMacroEvaluator macroEvaluator = macroEvaluators.get();
+		ClojureWholeDecisions decisions = start;
+		if (start != null) {
+			redefinable.addAll(start.redefinable());
+			walking.addAll(start.walking());
+			start.guards().forEach((protocol, tests) -> guards.put(protocol, new LinkedHashSet<>(tests)));
+			rootSetters = start.rootSetters();
+			threadBinders = start.threadBinders();
+			open = start.open();
+			dynamicSeed.addAll(start.dynamics());
+		}
 		while (true) {
+			if (compiledTarget && open && decisions == null) {
+				decisions = ClojureWholeDecisions.of(redefinable, walking, guards, rootSetters, threadBinders, open,
+						dynamicSeed);
+				macroEvaluator = macroEvaluators.get();
+				sourcePath = null;
+			}
 			ClojureLowering lowering = new ClojureLowering();
 			lowering.open = open;
 			lowering.carriesRuntimes = open && compiledTarget;
@@ -1860,7 +1893,7 @@ public final class ClojureLowering {
 				}
 			}
 			if (!redefs && !walks && !guarded && !setters && !binders && !dynamics && !opens && !named) {
-				return new Whole(forms, open ? lowering : null);
+				return new Whole(forms, open ? lowering : null, open ? decisions : null);
 			}
 			sourcePath = lowering.sourcePath;
 		}

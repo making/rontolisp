@@ -40,10 +40,11 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * The first verb of a host starts its session: the program read and lowered again from
- * the image the class carries ({@link RunTimeImage}), which takes the decisions the
- * compile-time lowering took, so the lowering this keeps names the functions and globals
- * the class holds ({@link ClojureProgramLowering}); and the class's link table, which
- * every fragment's own joins.
+ * the image the class carries ({@link RunTimeImage}), from where the compile-time
+ * lowering's open passes began, which takes the decisions that lowering took, so the
+ * lowering this keeps names the functions and globals the class holds
+ * ({@link ClojureProgramLowering}); and the class's link table, which every fragment's
+ * own joins.
  *
  * <p>
  * A fragment is a class of the host's package defined through the host's own lookup, so
@@ -160,7 +161,7 @@ public final class JvmRunTimeLowering {
 				// read on a thread of the compiler's stack, like the compile it repeats
 				this.lowering = SizedThread.call("rontolisp-run-time-lowering", SizedThread.WORKER_STACK_BYTES,
 						() -> ClojureProgramLowering.read(read.source(), Features.JVM, read.entryFile(),
-								read.standards(), read.loader(this.host.getClassLoader())));
+								read.standards(), read.loader(this.host.getClassLoader()), read.decisions()));
 				this.ranges = List.of(new Range(this.host, 0, this.table.funcIdEnd()));
 				install(JvmLinkage.FOREIGN_FIELD, "foreignApply",
 						MethodType.methodType(Object.class, Object.class, Object.class, int.class));

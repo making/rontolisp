@@ -48,9 +48,12 @@ public final class ClojureProgramLowering {
 
 	private final @Nullable ClojureRunTime runTime;
 
-	private ClojureProgramLowering(List<LispVal> forms, @Nullable ClojureRunTime runTime) {
+	private final @Nullable String decisions;
+
+	private ClojureProgramLowering(List<LispVal> forms, @Nullable ClojureRunTime runTime, @Nullable String decisions) {
 		this.forms = forms;
 		this.runTime = runTime;
+		this.decisions = decisions;
 	}
 
 	/**
@@ -60,12 +63,15 @@ public final class ClojureProgramLowering {
 	 * @param file the entry file, or {@code null}
 	 * @param standards what the program is read against
 	 * @param loader where the files the program names are read from
+	 * @param decisions where the compile's open passes began ({@link #decisions()}), for
+	 * the class's read as it runs, or {@code null} for the compile's own read
 	 * @return the program, with its lowering where it lowers at run time
 	 */
 	public static ClojureProgramLowering read(String source, Features features, @Nullable String file,
-			SourceStandards standards, SourceLoader loader) {
-		Clojure.Program program = SourceLanguage.CLOJURE.readClojure(source, features, file, standards, loader);
-		return new ClojureProgramLowering(program.forms(), program.runTime());
+			SourceStandards standards, SourceLoader loader, @Nullable String decisions) {
+		Clojure.Program program = SourceLanguage.CLOJURE.readClojure(source, features, file, standards, loader,
+				decisions);
+		return new ClojureProgramLowering(program.forms(), program.runTime(), program.decisions());
 	}
 
 	/**
@@ -73,6 +79,15 @@ public final class ClojureProgramLowering {
 	 */
 	public List<LispVal> forms() {
 		return this.forms;
+	}
+
+	/**
+	 * {@return where the whole-program lowering's open passes began, as text} -- the
+	 * class carries it, so its read as it runs lowers those passes alone; null where the
+	 * program does not lower at run time
+	 */
+	public @Nullable String decisions() {
+		return this.decisions;
 	}
 
 	/**

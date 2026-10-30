@@ -3473,9 +3473,29 @@ class ClojureLoweringTest {
 
 	private static @Nullable ClojureRunTime runTimeOf(String source, boolean runTimeTarget) {
 		return Clojure
-			.program(source, null, ClojureMacroTime.create(), ClojureFiles.NONE, true, ClojureBoundary.NONE,
-					runTimeTarget, false)
+			.program(source, null, ClojureMacroTime::create, ClojureFiles.NONE, true, ClojureBoundary.NONE,
+					runTimeTarget, false, null)
 			.runTime();
+	}
+
+	@Test
+	void aCompiledClassReadsItsProgramAgainFromWhereItsOpenPassesBegan() {
+		// the closed pass draws a macro-time gensym before the program turns out open;
+		// the
+		// open pass starts over with a fresh macro evaluator, so a read from where it
+		// began -- the class's own as it runs -- lowers to the same global names
+		String source = "(defmacro defg [] `(def ~(gensym \"g\") 1)) (defg) (prn (eval (list '+ 1 2)))";
+		Clojure.Program compiled = compiledProgram(source, null);
+		assertThat(compiled.decisions()).isNotNull();
+		Clojure.Program again = compiledProgram(source, compiled.decisions());
+		assertThat(again.forms().stream().map(LispVal::print).toList())
+			.isEqualTo(compiled.forms().stream().map(LispVal::print).toList());
+		assertThat(again.decisions()).isEqualTo(compiled.decisions());
+	}
+
+	private static Clojure.Program compiledProgram(String source, @Nullable String decisions) {
+		return Clojure.program(source, null, ClojureMacroTime::create, ClojureFiles.NONE, true, ClojureBoundary.NONE,
+				true, true, decisions);
 	}
 
 	@Test
