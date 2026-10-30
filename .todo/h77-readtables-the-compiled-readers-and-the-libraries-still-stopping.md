@@ -2,14 +2,14 @@
 
 Difficulty: High
 
-h74 made a keyword a block name on every backend, the cross-lambda lowering included
-(`.kb/do-return-block.md`), so rutils gets past `(block :+ ...)` on the compile paths; and a
-`progn` a macro expands into is top level member by member when it holds a package directive
-(`.kb/packages.md`), so cl-annot's `@export` runs on the JVM and WASM; and a `loop` pattern
-whose head names a macro stays a pattern (`.kb/flet-labels.md`), so parenscript's `ps` does;
-and `name-char` exists, so cl-unicode no longer warns it undefined (`.kb/pretty-printer.md`).
-What is left, in the order it unblocks libraries (measured 2026-10-31 by hand through the
-Quicklisp cache unless noted):
+Done in h74: a keyword names a block (`.kb/do-return-block.md`; rutils past `(block :+ ...)`
+on the compile paths), a macro-expanded `progn` holding a package directive is top level
+member by member (`.kb/packages.md`; cl-annot's `@export` on the JVM and WASM), a `loop`
+pattern whose head names a macro stays a pattern (`.kb/flet-labels.md`; parenscript's `ps`),
+`name-char` (`.kb/pretty-printer.md`; cl-unicode's warning), a reader macro's
+`read-from-string` inside its template (`.kb/readtables.md`). jonathan on WASM no longer
+stops. What is left, in the order it unblocks libraries (measured 2026-10-31 by hand through
+the Quicklisp cache unless noted):
 
 1. **The emitted runtime readers** (JVM `JvmReadRuntimeBuilder`, WASM
    `WasmReadRuntimeBuilder`) and the prelude `read` scanner (it delimits a datum, then calls
@@ -44,7 +44,6 @@ Quicklisp cache unless noted):
      dispatch (`clear-input` is a prelude defun answering nil); chunga defines a method on it
      too. It does not load cl-redis 20250622 by itself: its `connection.lisp` names
      `sb-sys:fd-stream` and `sb-impl::clear-input` with no feature guard (SBCL only).
-   - jonathan on WASM no longer stops (`to-json`/`parse` on preview 1).
 3. Interpreter gaps: `read` from a file stream / standard input (the prelude scanner
    delimits by the standard syntax), the REPL and playground (whole-buffer reads),
    `with-standard-io-syntax` (does not rebind `*readtable*`; its expansion runs after the
