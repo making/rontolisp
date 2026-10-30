@@ -2714,11 +2714,27 @@ final class JvmNumericRuntimeBuilder {
 	// a bare String and keeps comparing by name. In a java: program (hostTest non-null)
 	// a HOST OBJECT is identity too, a host Map included: its equals is equal's answer,
 	// not eql's -- asked here, a reify whose equals answers true was eq to T and to 1
-	// (.kb/eq-numbers.md, "Host objects").
+	// (.kb/eq-numbers.md, "Host objects"). Either operand may be nil (null): the same
+	// object is eql to itself, and a null operand is eql to nothing else -- a chain scan
+	// of an eql/eq hash table compares a stored nil key against the probe.
 	private static NumericMethod buildEqv(Utf8Entry name, Utf8Entry desc, ClassEntry ratArrClass,
 			ClassEntry intArrClass, MethodRefEntry objEquals, StringRefs strings,
 			@org.jspecify.annotations.Nullable MethodRefEntry hostTest) {
 		MethodCode c = new MethodCode();
+		// if (a == b) return 1; if (a == null) return 0;
+		c.aload(0);
+		c.aload(1);
+		MethodCode.Label ifNotSame = c.newLabel();
+		c.if_acmpne(ifNotSame);
+		c.iconst_1();
+		c.ireturn();
+		c.labelBinding(ifNotSame);
+		c.aload(0);
+		MethodCode.Label ifANotNull = c.newLabel();
+		c.ifnonnull(ifANotNull);
+		c.iconst_0();
+		c.ireturn();
+		c.labelBinding(ifANotNull);
 		// CHARACTER compare (int[]{cp}): if both operands are length-1 int[], value
 		// equality is (a[0] == b[0]). Emitted BEFORE the ratio and equals paths so a
 		// character never falls through to Object.equals.
