@@ -25143,17 +25143,24 @@ class LispEvaluatorTest {
 	@Test
 	void grayCloseStandsDownForAProgramThatDefinesACloseMethod() {
 		// close is CL's own generic: a program that methods it owns the operator on
-		// every backend, and the Gray default must not get in front of it.
+		// every backend, and the Gray default must not get in front of it. Another
+		// Gray class gets the Gray default, a method on the base class, rather than
+		// the built-in, which rejects an instance. The generic exists here BEFORE the
+		// protocol loads (gc-box), the order whose default the load installs.
 		assertThat(evalMulti("""
+				(defclass gc-box () ())
+				(defmethod close ((b gc-box) &key abort) (declare (ignore abort)) :box)
 				(defclass gc-s (rontolisp:fundamental-character-output-stream)
 				  ((closed :initform nil)))
 				(defmethod rontolisp:stream-write-char ((s gc-s) c) c)
 				(defmethod close ((s gc-s) &key abort)
 				  (declare (ignore abort))
 				  (setf (slot-value s 'closed) :by-method))
+				(defclass gc-plain (rontolisp:fundamental-binary-input-stream) ())
 				(let ((s (make-instance 'gc-s)))
-				  (list (close s) (slot-value s 'closed)))
-				""").print()).isEqualTo("(:BY-METHOD :BY-METHOD)");
+				  (list (close s) (slot-value s 'closed) (close (make-instance 'gc-plain))
+				        (close (make-string-output-stream)) (close (make-instance 'gc-box))))
+				""").print()).isEqualTo("(:BY-METHOD :BY-METHOD T T :BOX)");
 	}
 
 	@Test
@@ -26982,7 +26989,7 @@ class LispEvaluatorTest {
 				                                     :external-format :utf-8)))
 				    (list (and (typep out 'flex:flexi-stream) t)
 				          (eq (flex:flexi-stream-stream out) sink)
-				          (flex:flexi-stream-external-format out)
+				          (flex:external-format-name (flex:flexi-stream-external-format out))
 				          (coerce bytes 'list)
 				          (read-line in nil :eof)
 				          (read-char in nil :eof))))

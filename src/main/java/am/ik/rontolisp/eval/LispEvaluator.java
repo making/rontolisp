@@ -8227,6 +8227,30 @@ public final class LispEvaluator {
 			for (LispVal form : GrayStreamsLibrary.forms()) {
 				eval(form, this.globalEnv);
 			}
+			for (String owned : List.copyOf(this.closRegistry.generics().keySet())) {
+				installGrayOwnableDefault(owned);
+			}
+		}
+	}
+
+	/** The owned stream operators whose Gray default method is installed. */
+	private final Set<String> grayOwnableDefaults = new HashSet<>();
+
+	/**
+	 * Installs the Gray default method of an operator the program owns
+	 * ({@code GrayStreamsLibrary.OWNABLE_DEFAULT_METHODS}) once both halves exist: the
+	 * protocol is loaded and the program has a generic on the name. Called from both
+	 * sides, since either can come first; the compile path splices the same method.
+	 * @param genericName the generic-function name
+	 */
+	private void installGrayOwnableDefault(String genericName) {
+		if (!this.grayStreamsLoaded || this.grayOwnableDefaults.contains(genericName)) {
+			return;
+		}
+		LispVal method = GrayStreamsLibrary.ownableDefaultMethod(genericName);
+		if (method != null) {
+			this.grayOwnableDefaults.add(genericName);
+			eval(method, this.globalEnv);
 		}
 	}
 
@@ -10427,6 +10451,7 @@ public final class LispEvaluator {
 		boolean producerWasMethoded = this.methodedProducerDispatch.containsKey(genericName);
 		String fallback = builtinDefaultMethodFor(genericName);
 		eval(LispMacroExpander.generateDispatcher(genericName, this.closRegistry, fallback), env);
+		installGrayOwnableDefault(genericName);
 		String alias = this.methodedProducerDispatch.get(genericName);
 		if (alias != null) {
 			LispVal dispatcher = this.globalEnv.lookupFunctionOrNull(genericName);
