@@ -19904,9 +19904,9 @@ public final class LispMacroExpander {
 					&& ":DEFAULT-INITARGS".equals(plainTypeName(optSym))) {
 				List<LispVal> pairs = optCons.toList();
 				for (int j = 1; j + 1 < pairs.size(); j += 2) {
-					if (!(pairs.get(j) instanceof LispSymbol key) || !key.name().startsWith(":")) {
+					if (!(pairs.get(j) instanceof LispSymbol key)) {
 						throw new IllegalArgumentException(
-								LispNames.DEFCLASS + " :default-initargs expects keyword/form pairs: " + cons.print());
+								LispNames.DEFCLASS + " :default-initargs expects initarg/form pairs: " + cons.print());
 					}
 					defaultInitargs.put(key.name(), pairs.get(j + 1));
 				}
@@ -20799,11 +20799,13 @@ public final class LispMacroExpander {
 				LispVal optValue = specParts.get(i + 1);
 				switch (keySym.name()) {
 					case ":INITARG" -> {
-						if (!(optValue instanceof LispSymbol kw && kw.isKeyword())) {
+						// Any symbol names an initarg (CLHS 7.1.1), not only a keyword:
+						// cl-vectors' (rx :initarg rx).
+						if (!(optValue instanceof LispSymbol initargSym)) {
 							throw new IllegalArgumentException(
-									LispNames.DEFCLASS + " :initarg expects a keyword: " + spec.print());
+									LispNames.DEFCLASS + " :initarg expects a symbol: " + spec.print());
 						}
-						initarg = kw.name();
+						initarg = initargSym.name();
 					}
 					case ":INITFORM" -> {
 						initform = optValue;
@@ -21058,7 +21060,7 @@ public final class LispMacroExpander {
 				}
 				// Leftmost initarg wins, per CL's duplicate-initarg rule.
 				for (int k = 2; k < parts.size() - 1; k += 2) {
-					LispSymbol keyword = literalKeyword(parts.get(k));
+					LispSymbol keyword = literalInitarg(parts.get(k));
 					if (keyword != null && keyword.name().equals(slot.initargKeyword())) {
 						letParts.add(listToCons(List.of(new LispSymbol(LispNames.OBJ_SET), objVar, new LispInteger(s),
 								new LispSymbol(prefix + "_a" + (k - 1)))));
@@ -21072,17 +21074,24 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The keyword a literal initarg position of a {@code make-instance} call names:
-	 * either the bare keyword symbol or its quote-wrapped spelling (the
-	 * {@code %mop-make-instance} builtin re-enters the static expansion with every
-	 * argument quoted). Null for a computed key, which the re-fill then skips.
+	 * The initarg a literal initarg position names: a bare keyword, or any quoted symbol
+	 * (an initarg need not be a keyword, and the {@code %mop-make-instance} builtin
+	 * re-enters the static expansion with every argument quoted). Null for a computed
+	 * key.
 	 */
-	private static @org.jspecify.annotations.Nullable LispSymbol literalKeyword(LispVal form) {
+	private static @org.jspecify.annotations.Nullable LispSymbol literalInitarg(LispVal form) {
 		if (form instanceof LispSymbol sym && sym.isKeyword()) {
 			return sym;
 		}
-		LispSymbol quoted = quotedSymbol(form);
-		return quoted != null && quoted.isKeyword() ? quoted : null;
+		return quotedSymbol(form);
+	}
+
+	/**
+	 * The form evaluating to the initarg {@code name}: a keyword is self-evaluating, any
+	 * other symbol is quoted.
+	 */
+	private static LispVal initargForm(String name) {
+		return name.startsWith(":") ? new LispSymbol(name) : quoteOf(name);
 	}
 
 	/**
@@ -22463,7 +22472,7 @@ public final class LispMacroExpander {
 			LispVal store = cell != null
 					? listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(cell), val))
 					: objSet(obj, i, val);
-			LispVal supplied = mvCall(LispNames.GETF, args, new LispSymbol(slot.initargKeyword()),
+			LispVal supplied = mvCall(LispNames.GETF, args, initargForm(slot.initargKeyword()),
 					quoteOf("%CCR-UNSUPPLIED"));
 			body.add(makeLet(val.name(), supplied,
 					makeIf(fmtCall(LispNames.EQUAL, val, quoteOf("%CCR-UNSUPPLIED")), LispNil.INSTANCE, store)));
@@ -22558,9 +22567,10 @@ public final class LispMacroExpander {
 		// and BEFORE the layout swap, like every other initarg-taking expansion.
 		java.util.Map<String, LispVal> byInitarg = new java.util.LinkedHashMap<>();
 		for (int i = 3; i + 1 < parts.size(); i += 2) {
-			if (!(parts.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
+			LispSymbol key = literalInitarg(parts.get(i));
+			if (key == null) {
 				throw new IllegalArgumentException(
-						LispNames.CHANGE_CLASS + " expects keyword/value initarg pairs: " + cons.print());
+						LispNames.CHANGE_CLASS + " expects initarg/value pairs: " + cons.print());
 			}
 			LispSymbol temp = new LispSymbol(prefix + "_a" + i);
 			bindings.add(listToCons(List.of(temp, parts.get(i + 1))));
@@ -29572,12 +29582,9 @@ public final class LispMacroExpander {
 						throw new IllegalArgumentException("format: ~e precision must be non-negative");
 					}
 					int expDigits = fmtHasParam(params, 2) ? fmtIntParam(params, 2, directive) : 0;
-					if (fmtHasParam(params, 3) && fmtIntParam(params, 3, directive) != 1) {
-						throw new UnsupportedOperationException(
-								"format: ~e scale factors other than 1 are not supported");
-					}
+					int scale = fmtHasParam(params, 3) ? fmtIntParam(params, 3, directive) : 1;
 					char marker = fmtCharParam(params, 6, 'e');
-					LispVal base = decimalExpExpr(arg, places, !dGiven, at, expDigits, marker);
+					LispVal base = decimalExpExpr(arg, places, !dGiven, at, expDigits, marker, scale);
 					if (fmtHasParam(params, 0)) {
 						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 5, ' '), true);
 					}
@@ -30104,15 +30111,24 @@ public final class LispMacroExpander {
 	 * {@code [sign]d.ddd...e[+/-]xx}. A mantissa that rounds up to {@code 10.0} bumps the
 	 * exponent and renormalizes to {@code 1.0}. When {@code strip} is true (the {@code d}
 	 * parameter was omitted) trailing fractional zeros are dropped down to a single
-	 * digit. On the WASM backend the scaled mantissa must fit in an {@code i31}, so
-	 * {@code places} is effectively limited to about 8. When {@code expDigits} is
-	 * positive the exponent magnitude is zero-padded to that many digits, and
-	 * {@code marker} is the exponent-marker character (default {@code e}).
+	 * digit. When {@code expDigits} is positive the exponent magnitude is zero-padded to
+	 * that many digits, and {@code marker} is the exponent-marker character (default
+	 * {@code e}). The scale factor {@code k} follows CLHS 22.3.3.2: {@code k > 0} puts
+	 * {@code k} digits before the point and {@code places - k + 1} after it,
+	 * {@code k <= 0} puts {@code -k} zeros after the point followed by {@code places + k}
+	 * significant digits; the printed exponent is the normalized one plus {@code 1 - k}.
 	 */
 	private static LispVal decimalExpExpr(LispVal arg, int places, boolean strip, boolean plus, int expDigits,
-			char marker) {
-		long pd = pow10(places);
-		long pd1 = pow10(places + 1L);
+			char marker, int k) {
+		// Significant digits rendered; an out-of-range k (CLHS requires -places < k <
+		// places + 2) still renders, with at least one digit and no negative digit count.
+		int defaultDigits = DEFAULT_EXP_PLACES + 1;
+		int digits = (k > 0) ? (strip ? Math.max(defaultDigits, k + 1) : Math.max(places + 1, k))
+				: (strip ? defaultDigits : Math.max(1, places + k));
+		int leadingZeros = (k > 0) ? 0 : -k;
+		int fracLen = digits - k;
+		long pd = pow10(digits - 1L);
+		long pd1 = pow10(digits);
 		LispSymbol v = new LispSymbol("__ev");
 		LispSymbol neg = new LispSymbol("__eneg");
 		LispSymbol a = new LispSymbol("__ea");
@@ -30137,14 +30153,16 @@ public final class LispMacroExpander {
 		LispVal down = fmtCall(LispNames.WHILE, fmtCall(LispNames.LT, a, new LispDouble(1.0)),
 				fmtCall(LispNames.SETQ, a, fmtCall(LispNames.MUL, a, new LispDouble(10.0))),
 				fmtCall(LispNames.SETQ, ee, fmtCall(LispNames.SUB, ee, new LispInteger(1))));
-		// Inner let*: round to (places+1) significant digits, renormalize on overflow.
+		// Inner let*: round to `digits` significant digits, renormalize on overflow.
 		LispVal scInit = fmtCall(LispNames.ROUND, fmtCall(LispNames.MUL, a, new LispDouble((double) pd)));
 		LispVal ovfInit = fmtCall(LispNames.GE, sc, new LispInteger(pd1));
 		LispVal sc2Init = makeIf(ovf, new LispInteger(pd), sc);
 		LispVal eefInit = makeIf(ovf, fmtCall(LispNames.ADD, ee, new LispInteger(1)), ee);
 		LispVal sInit = fmtCall(LispNames.PRINC_PIECE_INTERNAL, sc2);
-		LispVal ipInit = fmtCall(LispNames.SUBSEQ, s, new LispInteger(0), new LispInteger(1));
-		LispVal frInit = fmtCall(LispNames.SUBSEQ, s, new LispInteger(1));
+		LispVal ipInit = (k > 0) ? fmtCall(LispNames.SUBSEQ, s, new LispInteger(0), new LispInteger(k))
+				: new LispString("0");
+		LispVal frInit = (k > 0) ? fmtCall(LispNames.SUBSEQ, s, new LispInteger(k))
+				: (leadingZeros == 0) ? s : fmtConcat(new LispString("0".repeat(leadingZeros)), s);
 		// Exponent suffix: always-signed, magnitude printed as an integer.
 		LispVal eneg = fmtCall(LispNames.LT, eef, new LispInteger(0));
 		LispVal esign = makeIf(eneg, new LispString("-"), new LispString("+"));
@@ -30155,7 +30173,7 @@ public final class LispMacroExpander {
 		}
 		LispVal sign = makeIf(neg, new LispString("-"), new LispString(plus ? "+" : ""));
 		LispVal frFinal = strip ? stripTrailingZeros(fr) : fr;
-		LispVal mant = (places == 0) ? ip : fmtConcat(ip, new LispString("."), frFinal);
+		LispVal mant = fmtConcat(ip, new LispString("."), frFinal);
 		LispVal body = fmtConcat(sign, mant, new LispString(String.valueOf(marker)), esign, eabs);
 		List<LispVal> innerBindings = List.of(listToCons(List.of(sc, scInit)), listToCons(List.of(ovf, ovfInit)),
 				listToCons(List.of(sc2, sc2Init)), listToCons(List.of(eef, eefInit)), listToCons(List.of(s, sInit)),
@@ -30163,11 +30181,16 @@ public final class LispMacroExpander {
 		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(innerBindings), body));
 		LispVal normal = listToCons(List.of(new LispSymbol(LispNames.PROGN), up, down, innerLet));
 		// Zero needs no normalization (it would loop forever), so short-circuit it.
-		String zeroMant = (places == 0) ? "0" : (strip ? "0.0" : "0." + "0".repeat(places));
-		LispVal zero = new LispString((plus ? "+" : "") + zeroMant + marker + "+" + "0".repeat(Math.max(1, expDigits)));
+		String zeroMant = strip ? "0.0" : "0." + "0".repeat(fracLen);
+		int zeroExp = 1 - k;
+		String zeroExpDigits = String.valueOf(Math.abs(zeroExp));
+		zeroExpDigits = "0".repeat(Math.max(0, expDigits - zeroExpDigits.length())) + zeroExpDigits;
+		LispVal zero = new LispString(
+				(plus ? "+" : "") + zeroMant + marker + (zeroExp < 0 ? "-" : "+") + zeroExpDigits);
 		LispVal outerBody = makeIf(fmtCall(LispNames.EQ, a, new LispDouble(0.0)), zero, normal);
+		// The exponent starts at 1 - k, so normalization leaves the scaled one in ee.
 		List<LispVal> outerBindings = List.of(listToCons(List.of(v, vInit)), listToCons(List.of(neg, negInit)),
-				listToCons(List.of(a, aInit)), listToCons(List.of(ee, new LispInteger(0))));
+				listToCons(List.of(a, aInit)), listToCons(List.of(ee, new LispInteger(1L - k))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(outerBindings), outerBody));
 	}
 
@@ -30575,7 +30598,7 @@ public final class LispMacroExpander {
 					makeIf(fmtCall(LispNames.LT, v, new LispDouble(0.0)), new LispString(""), new LispString("+")),
 					fixed);
 		}
-		LispVal expo = decimalExpExpr(v, DEFAULT_EXP_PLACES, true, plus, 0, 'e');
+		LispVal expo = decimalExpExpr(v, DEFAULT_EXP_PLACES, true, plus, 0, 'e', 1);
 		List<LispVal> bindings = List.of(listToCons(List.of(v, vInit)), listToCons(List.of(a, aInit)));
 		return listToCons(
 				List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), makeIf(fixedRange, fixed, expo)));
@@ -31709,7 +31732,7 @@ public final class LispMacroExpander {
 			ClosRegistry.@Nullable ClassInfo cls, List<LispVal> bindings, List<LispVal> items) {
 		boolean pairs = args.size() % 2 == 0;
 		for (int i = 0; pairs && i < args.size(); i += 2) {
-			pairs = args.get(i) instanceof LispSymbol k && k.isKeyword();
+			pairs = literalInitarg(args.get(i)) != null;
 		}
 		for (int i = 0; i < args.size(); i++) {
 			if (pairs && i % 2 == 0) {
@@ -31726,7 +31749,7 @@ public final class LispMacroExpander {
 			// (ClosRegistry.SlotSpec / parseDefclassSlot), so both sides agree.
 			java.util.Map<String, LispVal> byInitarg = new java.util.LinkedHashMap<>();
 			for (int i = 0; i + 1 < items.size(); i += 2) {
-				byInitarg.put(((LispSymbol) items.get(i)).name(), items.get(i + 1));
+				byInitarg.put(java.util.Objects.requireNonNull(literalInitarg(items.get(i))).name(), items.get(i + 1));
 			}
 			List<LispVal> slotValues = new java.util.ArrayList<>();
 			for (ClosRegistry.SlotSpec slot : cls.slots()) {
@@ -45696,11 +45719,11 @@ public final class LispMacroExpander {
 				if (slot.initargKeyword() == null) {
 					continue;
 				}
-				items.add(new LispSymbol(slot.initargKeyword()));
+				items.add(initargForm(slot.initargKeyword()));
 				List<LispVal> getfParts = new java.util.ArrayList<>();
 				getfParts.add(new LispSymbol(LispNames.GETF));
 				getfParts.add(ha);
-				getfParts.add(new LispSymbol(slot.initargKeyword()));
+				getfParts.add(initargForm(slot.initargKeyword()));
 				if (!(slot.initform() instanceof LispNil)) {
 					getfParts.add(slot.initform());
 				}
@@ -46777,7 +46800,7 @@ public final class LispMacroExpander {
 				continue;
 			}
 			LispSymbol tail = new LispSymbol("%mmi_tail");
-			forms.add(makeLet(tail.name(), mvCall(MMI_INIT_TAIL, args, new LispSymbol(slot.initargKeyword())),
+			forms.add(makeLet(tail.name(), mvCall(MMI_INIT_TAIL, args, initargForm(slot.initargKeyword())),
 					makeIf(tail, mvCall(LispNames.OBJ_SET, obj, new LispInteger(s), callOf(LispNames.CAR, tail)),
 							LispNil.INSTANCE)));
 		}

@@ -105,7 +105,9 @@ backend plus one backend-identifying feature — `:rontolisp-interpreter`,
 `:rontolisp-jvm` or `:rontolisp-wasm` — so one source file can select
 per-backend code, and `:unicode`, the portable spelling of "characters are
 Unicode code points" (true on every backend, so a library that branches on it
-takes its UTF-8 path). The interpreter and the JVM also have
+takes its UTF-8 path), and `:common-lisp`, the feature of the language
+family that portable code writes `#+common-lisp` fallbacks against
+(`:ansi-cl`, the conformance claim, is absent). The interpreter and the JVM also have
 `:thread-support` (they really spawn threads — see
 [`rontolisp:make-thread`](functions/rontolisp-make-thread.md)); a WASM compile
 in reactor mode (`--no-wasi`, or `--no-gc`) additionally has
@@ -202,11 +204,16 @@ Notes:
   `.asd` files a `#.` form is instead skipped with a warning (see the
   [Systems guide](../guides/asdf-systems.md)); the browser playground's
   Compile buttons do not support `#.`.
+- A feature expression may be computed by `#.`, as in
+  `#+#.(cl:if (cl:find-symbol "X" "SB-IMPL") '(and) '(or)) form`. The guard is
+  decided where its `#.` is evaluated — just before the top-level form runs,
+  so it sees the forms before it — and a failing guard drops `form` without
+  looking up the packages it names. Such a guard must stand as a top-level form
+  or a list element: behind `'`, `#'`, `` ` ``, `,`, `#n=` or a dotted `.`, in a
+  vector or array literal, or in a nested backquote it is a read error.
 - The runtime reader of compiled programs (`read`, `read-from-string`, runtime
   `load`) does not know block comments or feature conditionals, like backquote
   — see [Compiled read/load Limitations](../guides/read-load-limitations.md).
-- `:common-lisp` is deliberately **not** in `*features*`: rontolisp is a
-  subset, not a conforming implementation.
 
 ## Source position literals (`rontolisp:current-file`, `rontolisp:current-line`)
 

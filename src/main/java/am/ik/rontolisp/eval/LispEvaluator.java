@@ -4986,6 +4986,21 @@ public final class LispEvaluator {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
+		if (cons.car() instanceof LispCons element && isMarker(element, LispNames.READ_TIME_FEATURE)) {
+			// A deferred #+#. guard as a list element: the guarded datum splices in, or
+			// the element is dropped.
+			LispVal rest = resolveReadTimeEval(cons.cdr(), inCode);
+			LispVal guarded = readTimeFeatureChoice(element, inCode);
+			return guarded == null ? rest : new LispCons(guarded, rest);
+		}
+		if (isMarker(cons, LispNames.READ_TIME_FEATURE)) {
+			// The whole form is the guard (a top-level #+#.): a dropped form is nil.
+			return Objects.requireNonNullElse(readTimeFeatureChoice(cons, inCode), LispNil.INSTANCE);
+		}
+		if (isMarker(cons, LispNames.READ_TIME_FEATURE_TEMPLATE)) {
+			// Inside backquote construction code the marker is a spliced segment.
+			return Objects.requireNonNullElse(readTimeFeatureChoice(cons, true), LispNil.INSTANCE);
+		}
 		if (cons.car() instanceof LispSymbol head && LispNames.READ_EVAL.equals(head.name())
 				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
 			requireReadEvalEnabled();
@@ -5032,6 +5047,50 @@ public final class LispEvaluator {
 			return new LispCons(cons.car(), rest);
 		}
 		return null;
+	}
+
+	/**
+	 * Decides a {@code %read-time-feature} marker (or its template variant): its feature
+	 * expression's {@code #.} values put in place and the result tested against the
+	 * feature set the read used, as a {@code #+}/{@code #-} would have.
+	 * @return the guarded datum, resolved, when the guard holds; {@code null} when it
+	 * fails or nested guards left no datum
+	 */
+	private @Nullable LispVal readTimeFeatureChoice(LispCons marker, boolean inCode) {
+		List<LispVal> parts = marker.toList();
+		if (parts.size() < 4 || parts.size() > 5 || !(parts.get(1) instanceof LispString sign)
+				|| !(parts.get(2) instanceof LispCons || parts.get(2) instanceof LispNil)) {
+			throw new LispEvalException("malformed " + LispNames.READ_TIME_FEATURE + " marker: " + marker.print());
+		}
+		requireReadEvalEnabled();
+		List<String> spelling = new ArrayList<>();
+		if (parts.get(2) instanceof LispCons set) {
+			for (LispVal name : set.toList()) {
+				spelling.add(((LispString) name).value());
+			}
+		}
+		LispVal expr = resolveReadTimeEval(parts.get(3), false);
+		boolean holds;
+		try {
+			holds = Features.decode(spelling).isEnabled(expr) != "-".equals(sign.value());
+		}
+		catch (LispReadException ex) {
+			throw new LispEvalException("#" + sign.value() + "#.: " + ex.getMessage());
+		}
+		if (!holds || parts.size() < 5) {
+			return null;
+		}
+		LispVal guarded = parts.get(4);
+		if (isMarker(guarded, LispNames.READ_EVAL_UNREADABLE) && guarded instanceof LispCons raw
+				&& raw.cdr() instanceof LispCons text && text.car() instanceof LispString source) {
+			throw new LispEvalException("#" + sign.value() + "#.: the guard holds, but the form behind it could not"
+					+ " be read: " + source.value());
+		}
+		return resolveReadTimeEval(guarded, inCode);
+	}
+
+	private static boolean isMarker(LispVal form, String name) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head && name.equals(head.name());
 	}
 
 	/**

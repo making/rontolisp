@@ -8803,6 +8803,26 @@ public final class LispNames {
 	public static final String READ_EVAL_UNREADABLE = "%READ-EVAL-UNREADABLE";
 
 	/**
+	 * The marker a source read leaves for a {@code #+}/{@code #-} guard whose feature
+	 * expression holds a {@code #.} ({@code #+#.(cl:if ... '(and) '(or)) FORM}): no
+	 * evaluator exists while a source is read, so the guard is decided where the
+	 * {@link #READ_EVAL} markers are resolved. Shape:
+	 * {@code (%read-time-feature "+"|"-" (FEATURE-SET-SPELLING...) EXPR [FORM])} --
+	 * {@code EXPR} with its {@code #.} as {@code %read-eval} markers, the set as
+	 * {@code reader.Features.encode} spells it, {@code FORM} absent when nested guards
+	 * left nothing. The resolution splices {@code FORM} in or drops the element.
+	 */
+	public static final String READ_TIME_FEATURE = "%READ-TIME-FEATURE";
+
+	/**
+	 * The {@link #READ_TIME_FEATURE} variant inside backquote construction code: a
+	 * SPLICED template element whose last argument is the guarded element's segment code
+	 * (a {@code (list ...)} or the {@code ,@} form), resolved to that code or to
+	 * {@code nil}.
+	 */
+	public static final String READ_TIME_FEATURE_TEMPLATE = "%READ-TIME-FEATURE-TEMPLATE";
+
+	/**
 	 * {@code *read-eval*} -- whether {@code #.} read-time evaluation is enabled (CLHS:
 	 * binding it to {@code nil} makes the reader signal on {@code #.}). Seeded {@code t}
 	 * and proclaimed special on the interpreter, checked by

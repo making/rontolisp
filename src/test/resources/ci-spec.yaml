@@ -5202,11 +5202,18 @@ cases:
     source: |
       (defun ci-fmt-exp ()
         (format t "~e|~,4e|~e|~,2e|~e~%" pi pi 1234.5 9.999 0.0)
-        (format t "~e|~@e~%" -1234.5 42.0))
+        (format t "~e|~@e~%" -1234.5 42.0)
+        (format t "~,,,0,,,'eE|~,3,,-1e|~,3,,2e|~,,,3e|~,3,,4e|~,0e|~,3,,0e|~10,3,2,0e~%"
+                2.5 123.456 123.456 1.23e-4 2.5 2.0 0.0 2.5)
+        (let ((c "~,,,0e|~,3,,2e|~,,,3e"))
+          (format t c 2.5 123.456 0.0)
+          (terpri)))
       (ci-fmt-exp)
     expected: |
       3.141593e+0|3.1416e+0|1.2345e+3|1.00e+1|0.0e+0
       -1.2345e+3|+4.2e+1
+      0.25e+1|0.012e+4|12.35e+1|123.0e-6|2500.e-3|2.e+0|0.000e+1| 0.250e+01
+      0.25e+1|12.35e+1|0.0e-2
   - name: format-runtime-control-string
     source: |
       (defun ci-fmt-runtime (c) (format nil c 1 "s" 42 7 (list 1 2) "c"))
@@ -13095,10 +13102,26 @@ cases:
       #-(or sbcl ccl) (print :portable)
       #+(and rontolisp (not sbcl)) (print :compound)
       #+nil (print :never)
+      ;; A guard computed by #. (fiveam's run.lisp): decided where the #. resolves,
+      ;; after the forms before it ran; a failing one drops a form naming packages
+      ;; that do not exist, a holding one inside a template splices an unquote.
+      #+#.(cl:if (cl:find-package "SB-KERNEL") '(and) '(or))
+      (declaim (sb-ext:muffle-conditions sb-kernel:&optional-and-&key-in-lambda-list))
+      (print (list #+#.(cl:if nil '(and) '(or)) (sb-ext:foo) 2))
+      (print (list #-#.(cl:if t '(and) '(or)) 5 6))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (defparameter *ci-have-it* t))
+      (print (list #+#.(cl:if *ci-have-it* '(cl:and) '(cl:or)) :earlier-form
+                   #+(or sbcl #.(cl:if t :rontolisp :sbcl)) :computed-name))
+      (print (let ((x 3)) `(a #+#.(cl:if t '(and) '(or)) ,x #-#.(cl:if t '(and) '(or)) b c)))
     expected: |
       :YES
       :PORTABLE
       :COMPOUND
+      (2)
+      (6)
+      (:EARLIER-FORM :COMPUTED-NAME)
+      (A 3 C)
   - name: reader-per-backend-features
     source: |
       (print #+rontolisp-interpreter :interpreter
@@ -13115,26 +13138,26 @@ cases:
     source: |
       (print (length *features*))
       (print (car *features*))
-      (print #+unicode :unicode #-unicode :octets)
+      (print (list #+unicode :unicode #-unicode :octets #+common-lisp :common-lisp))
     expected: |
-      4
+      5
       :RONTOLISP
-      :UNICODE
+      (:UNICODE :COMMON-LISP)
     expectedByBackend:
       # The WASM backends are single-threaded by construction, so :thread-support
       # (declared statically on the interpreter and the JVM, see reader.Features)
       # is absent there.
       wasm: |
-        3
+        4
         :RONTOLISP
-        :UNICODE
+        (:UNICODE :COMMON-LISP)
       # ... and a component carries one MORE than Preview 1: :rontolisp-component,
       # the boundary feature a source guards a core wasm-import with (the reactor
       # features cannot say "not a component" -- a reactor component has them too).
       wasm_component: |
-        4
+        5
         :RONTOLISP
-        :UNICODE
+        (:UNICODE :COMMON-LISP)
   - name: reader-features-own-push-is-visible
     # A source announces a feature about ITSELF -- push in the header, #+ on it
     # below -- and real CL sees it because load/compile-file both go form at a
@@ -29043,9 +29066,28 @@ cases:
       (let ((c1 (make-instance 'di-conf)) (c2 (make-instance 'di-conf :port 9090)))
         (print (list (slot-value c1 'host) (slot-value c1 'port)))
         (print (slot-value c2 'port)))
+      (defclass di-arc () ((rx :initarg rx :reader di-rx) (ry :initarg ry :reader di-ry))
+        (:default-initargs ry 5))
+      (print (list (di-rx (make-instance 'di-arc 'rx 1)) (di-ry (make-instance 'di-arc))))
+      (let ((cls 'di-arc)) (print (di-ry (make-instance cls 'ry 2))))
+      (defclass di-arc2 (di-arc) ((rz :initarg rz :initform 0 :reader di-rz)))
+      (defmethod initialize-instance :after ((a di-arc2) &key ((rz z) nil)) (print (list :init z)))
+      (print (di-rz (make-instance 'di-arc2 'rz 9)))
+      (print (di-rz (change-class (make-instance 'di-arc 'rx 3) 'di-arc2 'rz 4)))
+      (define-condition di-cond (error) ((what :initarg what :reader di-what)))
+      (print (handler-case (error 'di-cond 'what 7) (di-cond (c) (di-what c))))
+      (defun di-f (&key ((rx v) 0)) v)
+      (print (list (di-f 'rx 3) (di-f) (handler-case (di-f :rx 1) (program-error () :refused))))
     expected: |
       ("localhost" 8080)
       9090
+      (1 5)
+      2
+      (:INIT 9)
+      9
+      4
+      7
+      (3 0 :REFUSED)
   - name: with-slots-write-through
     source: |
       (defclass ws-pt () ((x :initarg :x) (y :initarg :y)))

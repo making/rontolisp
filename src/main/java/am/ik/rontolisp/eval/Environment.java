@@ -7741,12 +7741,14 @@ public final class Environment implements Scope {
 		// read is through readAll (whose first datum readFromString answers), so a
 		// literal nil still reads as nil and only a missing datum signals.
 		java.util.function.Function<String, LispVal> readWholeText = input -> {
-			if (env.readTimeEvalResolver != null && input.contains("#.")) {
-				java.util.List<LispVal> exprs = LispReader.readAllWithReadEvalMarkers(input, env.currentReadFeatures());
+			UnaryOperator<LispVal> resolver = env.readTimeEvalResolver;
+			if (resolver != null && input.contains("#.")) {
+				java.util.List<LispVal> exprs = LispReader.readAllWithReadEvalMarkers(input, env.currentReadFeatures(),
+						resolver);
 				if (exprs.isEmpty()) {
 					throw endOfFile(errorStream(streams, nextStreamHandle, input));
 				}
-				return env.readTimeEvalResolver.apply(exprs.get(0));
+				return resolver.apply(exprs.get(0));
 			}
 			java.util.List<LispVal> exprs = LispReader.readAllFromString(input, env.currentReadFeatures());
 			if (exprs.isEmpty()) {
@@ -7766,7 +7768,7 @@ public final class Environment implements Scope {
 			catch (LispReadException ex) {
 				int end;
 				try {
-					end = LispLexer.datumEnd(input, env.currentReadFeatures());
+					end = LispLexer.datumEnd(input, env.currentReadFeatures(), env.readTimeEvalResolver);
 				}
 				catch (LispReadException ignored) {
 					throw ex;
@@ -7817,7 +7819,7 @@ public final class Environment implements Scope {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.READ_FROM_STRING_END + " expects a string");
 			}
-			return readDatumStop(str.value(), env.currentReadFeatures());
+			return readDatumStop(str.value(), env.currentReadFeatures(), env.readTimeEvalResolver);
 		}));
 		// parse-integer: parse an integer from a string, with the common :radix,
 		// :junk-allowed, :start and :end keywords. A spelled bound is checked as the
@@ -7868,10 +7870,12 @@ public final class Environment implements Scope {
 	 * error.
 	 * @param input the source text
 	 * @param features the features the {@code #+}/{@code #-} guards in it test
+	 * @param readTimeEval decides a guard computed by {@code #.}, or {@code null}
 	 */
-	private static LispVal readDatumStop(String input, am.ik.rontolisp.reader.Features features) {
+	private static LispVal readDatumStop(String input, am.ik.rontolisp.reader.Features features,
+			@Nullable UnaryOperator<LispVal> readTimeEval) {
 		try {
-			return new LispInteger(input.codePointCount(0, LispLexer.datumEnd(input, features)));
+			return new LispInteger(input.codePointCount(0, LispLexer.datumEnd(input, features, readTimeEval)));
 		}
 		catch (RuntimeException ex) {
 			return new LispInteger(input.codePointCount(0, input.length()));

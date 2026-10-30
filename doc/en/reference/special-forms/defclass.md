@@ -4,7 +4,7 @@
 
 Defines a class and returns the name symbol. This is a **static CLOS subset**: every superclass must be defined by an earlier `defclass`, and instances are first-class objects created with [`make-instance`](../macros/make-instance.md) (like [`defstruct`](defstruct.md) instances they are not lists — `consp` is `nil` — and `print` shows them as `#<NAME :SLOT value ...>`). Slot options:
 
-- `:initarg keyword` — the constructor keyword for the slot (defaults to the slot-name keyword)
+- `:initarg name` — the initarg that fills the slot: a keyword or any other symbol, passed quoted (`(make-instance 'arc 'rx 1)`); defaults to the slot-name keyword
 - `:initform expr` — the default value, evaluated at construction time when the slot is not supplied. **Omitting it leaves the slot UNBOUND**, as in CL: [`slot-boundp`](../macros/slot-boundp.md) is `nil` and a read signals `unbound-slot`
 - `:reader fn` — defines `fn` as a reader function
 - `:accessor fn` — like `:reader`, and additionally a `setf`-able place

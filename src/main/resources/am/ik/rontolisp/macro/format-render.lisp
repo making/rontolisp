@@ -333,52 +333,60 @@
 
 ;;; ~E: the magnitude is normalized into [1, 10) by a divide/multiply loop that
 ;;; tracks the decimal exponent, then rounded through integer scaling so the
-;;; digits are identical on every backend.
-(defun %fmt-exp (x places strip at expdigits marker)
+;;; digits are identical on every backend. The scale factor k (CLHS 22.3.3.2):
+;;; k > 0 puts k digits before the point, k <= 0 puts -k zeros after it; the
+;;; exponent starts at 1 - k so the loop leaves the scaled one.
+(defun %fmt-exp (x places strip at expdigits marker k)
   (if (not (numberp x))
       (%princ-piece x)
       (let* ((v (* x 1.0)) (neg (< v 0.0)) (a (if neg (- 0.0 v) v)))
         (if (= a 0.0)
-            (%fmt-exp-zero places strip at expdigits marker)
-            (%fmt-exp-value a neg places strip at expdigits marker)))))
+            (%fmt-exp-zero places strip at expdigits marker k)
+            (%fmt-exp-value a neg places strip at expdigits marker k)))))
 
-(defun %fmt-exp-zero (places strip at expdigits marker)
+;;; The significant digits ~E renders; an out-of-range k still renders at least
+;;; one digit and no negative digit count.
+(defun %fmt-exp-digits (places strip k)
+  (if (> k 0)
+      (if strip
+          (if (> (+ k 1) 7) (+ k 1) 7)
+          (if (> k (+ places 1)) k (+ places 1)))
+      (if strip 7 (if (< (+ places k) 1) 1 (+ places k)))))
+
+(defun %fmt-exp-suffix (e expdigits marker)
+  (let* ((eneg (< e 0))
+         (eabs0 (%princ-piece (if eneg (- 0 e) e)))
+         (eabs (if (> expdigits 0) (%fmt-pad eabs0 expdigits 1 0 "0" t) eabs0)))
+    (%fmt-cat (string marker) (%fmt-cat (if eneg "-" "+") eabs))))
+
+(defun %fmt-exp-zero (places strip at expdigits marker k)
   (let ((mant
-         (cond ((= places 0) "0")
-               (strip "0.0")
-               (t (%fmt-cat "0." (%fmt-repeat "0" places)))))
-        (ed (if (> expdigits 1) expdigits 1)))
+         (if strip
+             "0.0"
+             (%fmt-cat "0."
+              (%fmt-repeat "0" (- (%fmt-exp-digits places strip k) k))))))
     (%fmt-cat (if at "+" "")
-              (%fmt-cat mant
-                        (%fmt-cat (string marker)
-                                  (%fmt-cat "+" (%fmt-repeat "0" ed)))))))
+              (%fmt-cat mant (%fmt-exp-suffix (- 1 k) expdigits marker)))))
 
-(defun %fmt-exp-value (a neg places strip at expdigits marker)
-  (let ((m a) (ee 0))
+(defun %fmt-exp-value (a neg places strip at expdigits marker k)
+  (let ((m a) (ee (- 1 k)))
     (while (>= m 10.0)
       (setq m (/ m 10.0))
       (setq ee (+ ee 1)))
     (while (< m 1.0)
       (setq m (* m 10.0))
       (setq ee (- ee 1)))
-    (let* ((pd (%fmt-pow10 places))
+    (let* ((pd (%fmt-pow10 (- (%fmt-exp-digits places strip k) 1)))
            (sc (round (* m (* pd 1.0))))
            (ovf (>= sc (* pd 10)))
-           (sc2 (if ovf pd sc))
-           (eef (if ovf (+ ee 1) ee))
-           (s (%princ-piece sc2))
-           (ip (subseq s 0 1))
-           (fr0 (subseq s 1))
-           (fr (if strip (%fmt-strip-zeros fr0) fr0))
-           (eneg (< eef 0))
-           (eabs0 (%princ-piece (if eneg (- 0 eef) eef)))
-           (eabs
-            (if (> expdigits 0) (%fmt-pad eabs0 expdigits 1 0 "0" t) eabs0))
-           (mant (if (= places 0) ip (%fmt-cat (%fmt-cat ip ".") fr))))
+           (s (%princ-piece (if ovf pd sc)))
+           (ip (if (> k 0) (subseq s 0 k) "0"))
+           (fr0
+            (if (> k 0) (subseq s k) (%fmt-cat (%fmt-repeat "0" (- 0 k)) s)))
+           (fr (if strip (%fmt-strip-zeros fr0) fr0)))
       (%fmt-cat (if neg "-" (if at "+" ""))
-                (%fmt-cat mant
-                          (%fmt-cat (string marker)
-                                    (%fmt-cat (if eneg "-" "+") eabs)))))))
+                (%fmt-cat (%fmt-cat (%fmt-cat ip ".") fr)
+                 (%fmt-exp-suffix (if ovf (+ ee 1) ee) expdigits marker))))))
 
 ;;; ~G: the plain float representation inside [0.1, 1e16) (and for zero), the ~E
 ;;; default form outside it.
@@ -390,7 +398,7 @@
             (if at
                 (%fmt-cat (if (< v 0.0) "" "+") (%princ-piece v))
                 (%princ-piece v))
-            (%fmt-exp v 6 t at 0 #\e)))))
+            (%fmt-exp v 6 t at 0 #\e 1)))))
 
 ;;; ~@(: downcase, then upcase the first alphabetic character.
 (defun %fmt-cap-first (str)
@@ -813,14 +821,13 @@
                     t)))
     (%fmt-overflow padded params 0 3)))
 
-;;; ~w,d,e,k,overflowchar,padchar,exponentchar E. The scale factor k is fixed at
-;;; 1 (the default), as in the static expansion.
+;;; ~w,d,e,k,overflowchar,padchar,exponentchar E
 (defun %fmt-field-exp (v params at)
   (let* ((d (%fmt-nth params 1))
          (places (if (null d) 6 (%fmt-int params 1 6)))
          (base
           (%fmt-exp v places (null d) at (%fmt-int params 2 0)
-                    (%fmt-marker params 6)))
+                    (%fmt-marker params 6) (%fmt-int params 3 1)))
          (padded
           (%fmt-pad base (%fmt-int params 0 0) 1 0 (%fmt-pad-char params 5 " ")
                     t)))

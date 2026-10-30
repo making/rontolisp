@@ -1354,6 +1354,13 @@ class LispEvaluatorTest {
 		assertThat(eval("(format nil \"~e\" -1234.5)")).isEqualTo(new LispString("-1.2345e+3"));
 		assertThat(eval("(format nil \"~,2e\" 0.00031415)")).isEqualTo(new LispString("3.14e-4"));
 		assertThat(eval("(format nil \"~@e\" 42.0)")).isEqualTo(new LispString("+4.2e+1"));
+		// The scale factor k (CLHS 22.3.3.2): k <= 0 puts -k zeros after the point, k > 0
+		// puts k digits before it; the exponent moves by 1 - k. Values agree with SBCL.
+		assertThat(eval(
+				"(format nil \"~,,,0,,,'eE|~,3,,-1e|~,3,,2e|~,,,3e|~,3,,4e|~,0e\" 2.5 123.456 123.456 1.23e-4 2.5 2.0)"))
+			.isEqualTo(new LispString("0.25e+1|0.012e+4|12.35e+1|123.0e-6|2500.e-3|2.e+0"));
+		assertThat(eval("(format nil \"~,3,,0e|~,,,3e|~10,3,2,0e|~,,,-2e\" 0.0 0.0 2.5 1.0)"))
+			.isEqualTo(new LispString("0.000e+1|0.0e-2| 0.250e+01|0.001e+3"));
 	}
 
 	@Test
@@ -14967,6 +14974,14 @@ class LispEvaluatorTest {
 				  (list (multiple-value-list (read-from-string "#+nope #+x a b c"))
 				        (multiple-value-list (read-from-string "#+nope #-x a b c"))))""").print())
 			.isEqualTo("((B 15) (C 16))");
+		// A guard computed by #. is decided while reading, with the stop index
+		// following it; a failing one skips a form naming a package that does not
+		// exist, without looking the package up.
+		assertThat(eval("""
+				(list (multiple-value-list (read-from-string "#-#.(if t '(and) '(or)) 5 6"))
+				      (multiple-value-list (read-from-string "#+#.(if nil '(and) '(or)) (sb-ext:foo) 2"))
+				      (multiple-value-list (read-from-string "#+nope #+#.(if t '(and) '(or)) a b c")))""").print())
+			.isEqualTo("((6 27) (2 40) (B 35))");
 	}
 
 	@Test

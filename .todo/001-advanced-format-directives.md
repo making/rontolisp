@@ -29,8 +29,7 @@ set (`~a`/`~s`, `~d`, `~f`, `~e`, `~$`, `~%`, `~&`, `~~`, prefix parameters,
   [0.1, 1e16) and zero, the `~e` default form otherwise — an approximation of
   the CLHS significant-digit rule.
 - Runtime (`v`) pad characters (`~v,vd`), `~f` scale factor and overflowchar,
-  `~e` exponent-digit count / overflowchar / exponentchar (scale factor fixed
-  at 1).
+  `~e` exponent-digit count / overflowchar / exponentchar / scale factor.
 - `~<newline>` (line continuation), with its `:` / `@` variants.
 - `~w` (write): `prin1` of the argument on both paths. It takes no prefix
   parameters, and its modifiers bind printer variables that change no text

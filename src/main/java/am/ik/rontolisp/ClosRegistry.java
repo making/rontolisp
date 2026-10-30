@@ -1228,7 +1228,7 @@ public final class ClosRegistry {
 		private static @Nullable String keywordOf(LispVal param) {
 			LispVal named = param instanceof LispCons spec ? spec.car() : param;
 			if (named instanceof LispCons explicit && explicit.car() instanceof LispSymbol keyword) {
-				return keyword.isKeyword() ? keyword.name() : ":" + plainNameOf(keyword.name());
+				return keyword.name();
 			}
 			return named instanceof LispSymbol var ? ":" + plainNameOf(var.name()) : null;
 		}
