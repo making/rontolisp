@@ -2,7 +2,7 @@
 
 `(deftype name lambda-list body...)`
 
-A **zero-parameter** `deftype` whose body is a literal (quoted) type specifier is registered, so the defined name resolves as a type in later [`typep`](typep.md)/[`typecase`](typecase.md) tests (a `(satisfies predicate)` body calls the named predicate; the name may itself expand to another type name). A **parameterized** or otherwise computed `deftype` stays a parsed no-op returning `nil` — there is no per-call expansion, so its name is not resolvable, which supports the common library shape where such a name only appears inside (equally no-op) `declaim`/`declare` declarations.
+Defines `name` as a type for later [`typep`](typep.md)/[`typecase`](typecase.md) tests and returns `nil`. The body returns the type specifier the name stands for (a `(satisfies predicate)` body calls the named predicate; the name may expand to another type name). For a parameterized `deftype`, a compound specifier `(name args...)` is what the body returns with the lambda list bound to `args`, an `&optional` or `&key` parameter without an init form defaulting to `*`; the bare name of one whose parameters are all optional means `(name)`.
 
 ```lisp
 (deftype my-even () '(satisfies evenp))
@@ -10,5 +10,6 @@ A **zero-parameter** `deftype` whose body is a literal (quoted) type specifier i
 ```
 
 ```lisp
-(deftype array-index (&optional (length 1000)) `(integer 0 (,length))) ; => NIL
+(deftype vec-of (n) `(simple-vector ,n))
+(list (typep (vector 1 2) '(vec-of 2)) (typep (vector 1 2 3) '(vec-of 2))) ; => (T NIL)
 ```

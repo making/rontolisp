@@ -31,9 +31,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the macro package keep reading it through {@code LispReader} directly.</li>
  * <li>The runtime {@code read}/{@code read-from-string} data reads in {@code Environment}
  * are reads of DATA, not of user source.</li>
- * <li>{@code AsdfSystems} reads {@code .asd} system metadata (in a tolerant mode the seam
- * deliberately does not offer) and scans only a file's leading package declaration; the
- * program itself is the load's business.</li>
+ * <li>{@code AsdfSystems} reads {@code .asd} system definitions (form at a time, in a
+ * tolerant mode the seam deliberately does not offer) and scans only a file's leading
+ * package declaration; the program itself is the load's business.</li>
  * <li>The {@code reader} package implements the seam, so it reads through itself.</li>
  * </ul>
  *
@@ -47,8 +47,8 @@ class SourceLanguageSeamTest {
 	private static final List<Path> SOURCE_ROOTS = List.of(Path.of("src", "main", "java"),
 			Path.of("src", "web", "java"));
 
-	private static final Pattern DIRECT_READ = Pattern
-		.compile("LispReader\\s*\\.\\s*(readAll|readPrefix|readFromString|readFirstForm)\\w*|new\\s+LispLexer\\s*\\(");
+	private static final Pattern DIRECT_READ = Pattern.compile(
+			"LispReader\\s*\\.\\s*(readAll|readPrefix|readFromString|readFirstForm|readNextForm|scanForms)\\w*|new\\s+LispLexer\\s*\\(");
 
 	/** Library source (or a self-synthesized form) that stays Common Lisp. */
 	private static final String SHIPPED_SOURCE = "reads Common Lisp the implementation ships or synthesizes itself"

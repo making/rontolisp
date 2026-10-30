@@ -20245,6 +20245,8 @@ public final class LispMacroExpander {
 				readers = new LispCons(new LispSymbol(readerNames.get(i)), readers);
 			}
 			spec.add(quotedData(readers));
+			spec.add(new LispSymbol(":WRITERS"));
+			spec.add(quotedData(ClosRegistry.slotWriters(slot)));
 			// The extras alternate keyword and VALUE; the value position is quoted so
 			// the spec list evaluates (the spine is a list call now).
 			List<LispVal> extras = parsed.extras();
@@ -25034,7 +25036,15 @@ public final class LispMacroExpander {
 			if (tail.stream().anyMatch(p -> p instanceof LispSymbol s && LispNames.LAMBDA_KEY.equals(s.name())) && tail
 				.stream()
 				.noneMatch(p -> p instanceof LispSymbol s && LispNames.LAMBDA_ALLOW_OTHER_KEYS.equals(s.name()))) {
-				tail.add(new LispSymbol(LispNames.LAMBDA_ALLOW_OTHER_KEYS));
+				// It closes the &key section, so it goes ahead of an &aux section.
+				int auxAt = tail.size();
+				for (int i = 0; i < tail.size(); i++) {
+					if (tail.get(i) instanceof LispSymbol s && LispNames.LAMBDA_AUX.equals(s.name())) {
+						auxAt = i;
+						break;
+					}
+				}
+				tail.add(auxAt, new LispSymbol(LispNames.LAMBDA_ALLOW_OTHER_KEYS));
 			}
 		}
 		// A bare (call-next-method) passes the method's ORIGINAL arguments, the optional
@@ -27073,7 +27083,12 @@ public final class LispMacroExpander {
 	/**
 	 * Whether the program references {@code compile} without defining it -- the gate for
 	 * the generated {@code compile} runtime (see {@code CompileRuntime}). A user (or
-	 * library) {@code defun compile} wins and suppresses the injection.
+	 * library) {@code defun compile} wins and suppresses the injection. A {@code coerce}
+	 * of a lambda expression built at run time ({@code (coerce `(lambda () ,@code)
+	 * 'function)}, lisp-unit's {@code run-code}) is a reference too: its expansion is
+	 * {@code compile nil}'s, and it calls {@code compile} only when the program carries
+	 * it. Any other computed {@code 'function} coercion leaves the gate alone, so a
+	 * higher-order function does not pull in the eval runtime.
 	 * @param program the top-level forms
 	 * @return true when the runtime is needed
 	 */
@@ -27083,9 +27098,49 @@ public final class LispMacroExpander {
 			if (definesFunction(form, LispNames.COMPILE)) {
 				return false;
 			}
-			referenced = referenced || referencesFunction(form, LispNames.COMPILE);
+			referenced = referenced || referencesFunction(form, LispNames.COMPILE) || coercesBuiltLambda(form);
 		}
 		return referenced;
+	}
+
+	// A (coerce <form building a lambda expression> ...) anywhere outside quoted data.
+	private static boolean coercesBuiltLambda(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.isQuote(member)) {
+					return false;
+				}
+				if (LispNames.COERCE.equals(member) && cons.cdr() instanceof LispCons rest
+						&& buildsLambdaExpression(rest.car())) {
+					return true;
+				}
+			}
+			if (coercesBuiltLambda(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
+	}
+
+	// Whether the form builds a list headed by the symbol LAMBDA: (list 'lambda ...),
+	// (list* 'lambda ...), (cons 'lambda ...), or an append/nconc whose first part does
+	// -- the shapes a backquoted `(lambda ...) template reads as.
+	private static boolean buildsLambdaExpression(LispVal form) {
+		if (!(form instanceof LispCons call) || !(call.car() instanceof LispSymbol op)
+				|| !(call.cdr() instanceof LispCons args)) {
+			return false;
+		}
+		return switch (memberOf(op.name())) {
+			case LispNames.LIST, LispNames.LIST_STAR,
+					LispNames.CONS ->
+				args.car() instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+						&& LispNames.isQuote(q.name()) && quoted.cdr() instanceof LispCons cell
+						&& cell.car() instanceof LispSymbol head && LispNames.LAMBDA.equals(memberOf(head.name()));
+			case LispNames.APPEND, LispNames.NCONC -> buildsLambdaExpression(args.car());
+			default -> false;
+		};
 	}
 
 	/**
@@ -27331,7 +27386,7 @@ public final class LispMacroExpander {
 		boolean allocateInstanceRuntime = needsAllocateInstanceRuntime(program);
 		// A compile reference compiles to the generated runtime defun injected below
 		// (no-op for the definition-time method construction a splice already carried
-		// out, an error for everything else -- see CompileRuntime).
+		// out, an eval of everything else -- see CompileRuntime).
 		boolean compileRuntime = needsCompileRuntime(program);
 		// #'make-instance taken as a VALUE (the (apply #'make-instance class args)
 		// idiom of postmodern's make-dao): the backends inject a wrapper forwarding to
@@ -27392,7 +27447,7 @@ public final class LispMacroExpander {
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || structDefinitionPayload(f) != null || isClosDefinitionForm(f)
 							|| isSetfFunctionDefun(f) || isLetWithNestedDefmethod(f)
-							|| isNamedForm(f, LispNames.DEFTYPE))) {
+							|| isNamedForm(f, LispNames.DEFTYPE) || deftypeInstanceDeclamation(f) != null)) {
 			// No definitions to splice, so the registry stays as seeded: a #S(...)
 			// literal
 			// here can only name an unregistered structure type and the fold says so. It
@@ -27499,6 +27554,16 @@ public final class LispMacroExpander {
 				// its name; the form itself is a runtime no-op (replaced by nil).
 				out.add(expandDeftype((LispCons) form, closRegistry));
 			}
+			else if (deftypeInstanceDeclamation(form) instanceof LispCons instance) {
+				// What one compound specifier headed by a parameterized deftype expands
+				// to, computed by the macro pass's evaluator: registered here, before
+				// any type test reads it, and a runtime no-op like the deftype itself.
+				List<LispVal> payload = instance.toList();
+				if (payload.size() == 3 && unquoted(payload.get(1)) instanceof LispCons specifier) {
+					closRegistry.registerDeftypeInstance(specifier, unquoted(payload.get(2)));
+				}
+				out.add(LispNil.INSTANCE);
+			}
 			else if (isSetfFindClassForm(form)) {
 				// (setf (find-class 'alias) (find-class 'target)): the alias must join
 				// the registry HERE, in the definition walk, so it is in the class table
@@ -27600,7 +27665,7 @@ public final class LispMacroExpander {
 		if (compileRuntime) {
 			// Position-independent defuns, appended: a compiled program's compile is a
 			// no-op for the definition-time method construction already spliced into
-			// the program, and an error for anything else (see CompileRuntime).
+			// the program, and an eval of anything else (see CompileRuntime).
 			out.addAll(CompileRuntime.forms());
 		}
 		if (metaclassProtocol || makeInstanceFunction) {
@@ -27705,17 +27770,18 @@ public final class LispMacroExpander {
 			// The stream subtype names are narrowed the same way: a program that neither
 			// spells one nor can turn a stream into one keeps the bytes it had.
 			java.util.Set<String> spelled = spelledSymbolNames(out);
-			java.util.Map<String, LispVal> aliases = narrowedDeftypeAliases(closRegistry, spelled);
+			RuntimeDeftypeTable deftypes = narrowedDeftypeAliases(closRegistry, spelled);
+			boolean resolvesDeftypes = !deftypes.aliases().isEmpty() || !deftypes.instances().isEmpty();
 			List<String> streamNames = runtimeStreamTypeNames(spelled);
-			out.add(runtimeTypepDefun(closRegistry, !aliases.isEmpty(), streamNames));
+			out.add(runtimeTypepDefun(closRegistry, resolvesDeftypes, streamNames));
 			out.add(runtimeTypepCompoundDefun());
 			out.addAll(0, typepTagTableForms(closRegistry, streamNames));
-			if (!aliases.isEmpty()) {
+			if (resolvesDeftypes) {
 				// The user-deftype alias resolver the dispatch above normalizes its
 				// designator through, gated on the program registering one: without an
 				// alias the module must compile to the bytes it did before.
-				out.add(deftypeAliasDefun());
-				out.addAll(0, deftypeAliasTableForms(aliases));
+				out.add(deftypeAliasDefun(!deftypes.instances().isEmpty()));
+				out.addAll(0, deftypeAliasTableForms(deftypes));
 			}
 		}
 		if (runtimeElementTypeAlias && !elementTypeAliasExpansions(closRegistry).isEmpty()) {
@@ -27997,10 +28063,10 @@ public final class LispMacroExpander {
 	 * that has one carries the flag the fold reads.
 	 *
 	 * <p>
-	 * The test is read from the SOURCE because the compiled backends never evaluate
-	 * {@code make-hash-table}'s arguments ({@code .kb/hash-tables.md}); a test computed
-	 * at run time is therefore not seen, and the table places structurally as it did
-	 * before.
+	 * The test is read from the SOURCE because the compiled backends pick a table's
+	 * representation from it ({@code .kb/hash-tables.md}). A test computed at run time is
+	 * lowered onto {@code %make-hash-table-by-test}, whose spliced body writes every test
+	 * literally, so such a program answers yes here.
 	 * @param forms the program to scan
 	 * @return whether an {@code equalp} table can exist in this program
 	 */
@@ -28096,11 +28162,10 @@ public final class LispMacroExpander {
 
 	/**
 	 * Answers the test code ({@link LispHashTable#TEST_EQUAL} and friends) one
-	 * {@code (make-hash-table ...)} form asks for, read from the SOURCE: the
-	 * {@code :test} argument must be written literally ({@code 'eq} or {@code #'eq} and
-	 * the same for the other three tests) because the compiled backends never evaluate
-	 * {@code make-hash-table}'s arguments; a computed test places as {@code equal}, as it
-	 * did before identity tables existed.
+	 * {@code (make-hash-table ...)} form asks for, read from the SOURCE: a literal
+	 * {@code :test} ({@code 'eq} or {@code #'eq} and the same for the other three tests).
+	 * A computed one answers {@code equal} here; the compiled backends lower that site
+	 * first ({@link #lowerComputedTestMakeHashTable}).
 	 * @param form the {@code make-hash-table} call
 	 * @return the test code
 	 */
@@ -28115,13 +28180,108 @@ public final class LispMacroExpander {
 	}
 
 	private static String designatedTestName(LispVal test) {
-		LispVal named = test;
 		if (test instanceof LispCons quoted && quoted.car() instanceof LispSymbol head
 				&& (LispNames.QUOTE.equals(head.name()) || LispNames.FUNCTION.equals(head.name()))
-				&& quoted.cdr() instanceof LispCons rest) {
-			named = rest.car();
+				&& quoted.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol named) {
+			return named.name();
 		}
-		return named instanceof LispSymbol test0 ? test0.name() : "";
+		return "";
+	}
+
+	/**
+	 * The {@code :test} argument of one {@code (make-hash-table ...)} form when it is
+	 * COMPUTED: anything but a quoted or {@code function}-named symbol and a constant
+	 * atom -- a variable, a call. Its test is known only at run time.
+	 * @param form the {@code make-hash-table} call
+	 * @return the test form, or null when it is literal or absent
+	 */
+	private static @Nullable LispVal computedHashTableTest(LispCons form) {
+		List<LispVal> parts = form.toList();
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol keyword && LispNames.TEST_KEYWORD.equals(keyword.name())) {
+				LispVal test = parts.get(i + 1);
+				boolean constant = switch (test) {
+					case LispSymbol symbol -> symbol.name().startsWith(":");
+					case LispCons cons -> !designatedTestName(cons).isEmpty();
+					default -> true;
+				};
+				return constant ? null : test;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Lowers a {@code make-hash-table} whose {@code :test} is computed
+	 * ({@link #computedHashTableTest}) onto {@code (%make-hash-table-by-test test)}, the
+	 * prelude helper that compares the value with the four test symbols and function
+	 * objects and makes the table through a literal {@code :test}. The compiled backends
+	 * choose a table's representation from that literal; the interpreter reads the value
+	 * itself and needs no lowering. Every other keyword stays unevaluated, as on a
+	 * literal site.
+	 * @param cons the {@code make-hash-table} call
+	 * @param definedFunction whether a function is defined in the program being compiled;
+	 * the helper is spliced by {@link #mayMakeHashTableWithComputedTest}, and a site the
+	 * selection missed keeps the {@code equal} table
+	 * @return the lowered call, or null when the test is literal, absent or the helper is
+	 * missing
+	 */
+	public static @Nullable LispVal lowerComputedTestMakeHashTable(LispCons cons,
+			java.util.function.Predicate<String> definedFunction) {
+		LispVal test = computedHashTableTest(cons);
+		if (test == null || !definedFunction.test(LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL)) {
+			return null;
+		}
+		return mvCall(LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL, test);
+	}
+
+	/**
+	 * Whether the program may make a hash table whose test is decided at run time: a
+	 * {@code make-hash-table} call with a computed {@code :test}, or
+	 * {@code make-hash-table} anywhere but a call's head -- {@code #'make-hash-table},
+	 * whose wrapper passes its initargs' {@code :test} through. The prelude selection
+	 * runs before {@link #lowerComputedTestMakeHashTable} and before the wrapper is
+	 * injected, so this SURFACE fact is what splices {@code %make-hash-table-by-test};
+	 * the helper's literal arms then turn the {@code equalp} and identity gates on.
+	 * @param program the top-level forms
+	 * @return whether any site needs the helper
+	 */
+	public static boolean mayMakeHashTableWithComputedTest(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (mayMakeHashTableWithComputedTest(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mayMakeHashTableWithComputedTest(LispVal form) {
+		if (form instanceof LispSymbol symbol) {
+			return namesMakeHashTable(symbol);
+		}
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		LispVal rest = cons;
+		if (cons.car() instanceof LispSymbol head && namesMakeHashTable(head)) {
+			if (computedHashTableTest(cons) != null) {
+				return true;
+			}
+			rest = cons.cdr();
+		}
+		while (rest instanceof LispCons element) {
+			if (mayMakeHashTableWithComputedTest(element.car())) {
+				return true;
+			}
+			rest = element.cdr();
+		}
+		return false;
+	}
+
+	// The prelude resolves the program before asking, so make-hash-table can arrive
+	// package-QUALIFIED (cl:make-hash-table).
+	private static boolean namesMakeHashTable(LispSymbol symbol) {
+		return LispNames.MAKE_HASH_TABLE.equals(memberName(symbol.name()));
 	}
 
 	/**
@@ -32635,7 +32795,7 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandCoerce(LispCons cons, boolean arraysExist, boolean helpersPresent) {
-		return expandCoerce(cons, arraysExist, helpersPresent, false, null);
+		return expandCoerce(cons, arraysExist, helpersPresent, false, null, false);
 	}
 
 	/**
@@ -32653,10 +32813,14 @@ public final class LispMacroExpander {
 	 * @param closRegistry the live {@code deftype} registry, for the interpreter, which
 	 * has no injected defun to call and spells the resolution inline; null on the compile
 	 * paths
+	 * @param compilePresent whether {@code compile} is callable: always on the
+	 * interpreter, and on a compile path only when the program carries the
+	 * {@code compile} runtime ({@code CompileRuntime}). It decides whether a COMPUTED
+	 * {@code 'function} coercion of a cons answers {@code (compile nil x)} or signals.
 	 * @return the expanded expression
 	 */
 	public static LispVal expandCoerce(LispCons cons, boolean arraysExist, boolean helpersPresent,
-			boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry) {
+			boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry, boolean compilePresent) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			throw new UnsupportedOperationException("coerce expects a value and a result type");
@@ -32713,9 +32877,10 @@ public final class LispMacroExpander {
 			// (coerce x 'function): a designator-to-function conversion, not a
 			// sequence one. A function is returned as is; a symbol resolves through
 			// symbol-function (signalling when unbound); a literal lambda list folds
-			// to (function ...) so the compilers build the closure. Anything else
-			// signals through symbol-function's type check.
-			return coerceToFunctionBody(parts.get(1));
+			// to (function ...) so the compilers build the closure, and a computed one
+			// is compile nil's. Anything else signals through symbol-function's type
+			// check.
+			return coerceToFunctionBody(parts.get(1), compilePresent);
 		}
 		LispVal complexTarget = quotedComplexTarget(parts.get(2));
 		if (complexTarget != null) {
@@ -32733,7 +32898,7 @@ public final class LispMacroExpander {
 		}
 		if (type == null && !(parts.get(2) instanceof LispString)) {
 			return expandComputedCoerce(parts.get(1), parts.get(2), arraysExist, helpersPresent, aliasResolverPresent,
-					closRegistry);
+					closRegistry, compilePresent);
 		}
 		if (helpersPresent) {
 			// The trio member is a one-argument function, so the call IS the one-shot
@@ -32838,10 +33003,12 @@ public final class LispMacroExpander {
 	 * @param helpersPresent whether the program defines the conversion trio
 	 * @param aliasResolverPresent whether the shared alias resolver defun is present
 	 * @param closRegistry the live registry for the interpreter's inline resolution
+	 * @param compilePresent whether {@code compile} is callable (the function arm)
 	 * @return the expanded expression
 	 */
 	private static LispVal expandComputedCoerce(LispVal valueForm, LispVal typeForm, boolean arraysExist,
-			boolean helpersPresent, boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry) {
+			boolean helpersPresent, boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry,
+			boolean compilePresent) {
 		LispSymbol x = new LispSymbol("__coerce_x");
 		LispSymbol spec = new LispSymbol("__coerce_spec");
 		LispSymbol t = new LispSymbol("__coerce_t");
@@ -32858,7 +33025,8 @@ public final class LispMacroExpander {
 		LispVal identity = makeIf(mvCall(LispNames.EQ_GENERAL, t, LispTrue.INSTANCE), x, alreadyOfType);
 		// A computed designator naming FUNCTION coerces the value the way the literal
 		// 'function arm does; anything else falls through to the identity/typep tail.
-		LispVal functionArm = makeIf(memberOfTypeNames(t, "FUNCTION"), coerceTempToFunction(x), identity);
+		LispVal functionArm = makeIf(memberOfTypeNames(t, "FUNCTION"), coerceTempToFunction(x, compilePresent),
+				identity);
 		LispVal toVector = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_VECTOR), x))
 				: coerceToVectorBody(x, true);
 		LispVal toString = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_STRING), x))
@@ -32943,16 +33111,14 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The {@code 'function} conversion body:
-	 * {@code (let ((__coerce_f x)) (if (functionp __coerce_f) __coerce_f
-	 * (symbol-function __coerce_f)))}. A quoted literal lambda list folds to
-	 * {@code (function ...)} so the compilers build the closure directly; anything that
-	 * is neither a function nor a symbol signals through {@code symbol-function}'s type
-	 * check.
+	 * The {@code 'function} conversion body: {@code (let ((__coerce_f x)) <conversion>)}
+	 * over {@link #coerceTempToFunction}. A quoted literal lambda list folds to
+	 * {@code (function ...)} so the compilers build the closure directly.
 	 * @param value the coerced value form, evaluated once
+	 * @param compilePresent whether {@code compile} is callable
 	 * @return the expanded expression
 	 */
-	private static LispVal coerceToFunctionBody(LispVal value) {
+	private static LispVal coerceToFunctionBody(LispVal value, boolean compilePresent) {
 		if (value instanceof LispCons quoted && quoted.toList().size() == 2
 				&& quoted.toList().get(0) instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
 				&& quoted.toList().get(1) instanceof LispCons lambda && lambda.car() instanceof LispSymbol lh
@@ -32960,19 +33126,25 @@ public final class LispMacroExpander {
 			return listToCons(List.of(new LispSymbol(LispNames.FUNCTION), quoted.toList().get(1)));
 		}
 		LispSymbol f = new LispSymbol("__coerce_f");
-		return makeLet(f.name(), value, makeIf(callOf(LispNames.FUNCTIONP, f), f,
-				listToCons(List.of(new LispSymbol(LispNames.SYMBOL_FUNCTION), f))));
+		return makeLet(f.name(), value, coerceTempToFunction(f, compilePresent));
 	}
 
 	/**
 	 * The {@code 'function} conversion over an already-bound temp: {@code (if
-	 * (functionp x) x (symbol-function x))}.
+	 * (functionp x) x (if (consp x) (compile nil x) (symbol-function x)))}. A cons is a
+	 * lambda expression, which CLHS coerces to what {@code compile nil} answers (a
+	 * non-lambda cons signals there). Without {@code compile} (a compiled program that
+	 * does not carry its runtime) the cons arm is left out and the cons signals through
+	 * {@code symbol-function}'s type check, as any other non-symbol does.
 	 * @param x the (temp-bound) value form
+	 * @param compilePresent whether {@code compile} is callable
 	 * @return the form to answer for a function designator
 	 */
-	private static LispVal coerceTempToFunction(LispSymbol x) {
-		return makeIf(callOf(LispNames.FUNCTIONP, x), x,
-				listToCons(List.of(new LispSymbol(LispNames.SYMBOL_FUNCTION), x)));
+	private static LispVal coerceTempToFunction(LispSymbol x, boolean compilePresent) {
+		LispVal viaName = listToCons(List.of(new LispSymbol(LispNames.SYMBOL_FUNCTION), x));
+		LispVal notFunction = compilePresent ? makeIf(callOf(LispNames.CONSP, x),
+				listToCons(List.of(new LispSymbol(LispNames.COMPILE), LispNil.INSTANCE, x)), viaName) : viaName;
+		return makeIf(callOf(LispNames.FUNCTIONP, x), x, notFunction);
 	}
 
 	/**
@@ -37140,6 +37312,15 @@ public final class LispMacroExpander {
 			default: {
 				String pred = atomicTypePredicate(plainTypeName(head));
 				if (pred == null) {
+					// A user deftype head: (proper-list integer) is what the body
+					// computes for those arguments; a bare (name) is the name.
+					LispVal deftypeExpansion = closRegistry.expandDeftypeSpecifier(spec);
+					if (deftypeExpansion != null) {
+						return makeTypeTest(value, deftypeExpansion, closRegistry);
+					}
+					if (parts.size() == 1 && closRegistry.findDeftype(head.name()) != null) {
+						return makeTypeTest(value, head, closRegistry);
+					}
 					throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
 				}
 				if (!NUMERIC_TYPE_PREDICATES.contains(pred)) {
@@ -37320,6 +37501,49 @@ public final class LispMacroExpander {
 			closRegistry.registerDeftype(nameSym.name(), expansion);
 		}
 		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Builds {@code (declaim (%deftype-instance 'specifier 'expansion))}: the record the
+	 * macro pass leaves of what one compound specifier headed by a parameterized
+	 * {@code deftype} expands to, for the compile paths' definition walk to register. A
+	 * declamation because every pass already reads one as inert data.
+	 * @param specifier the compound specifier
+	 * @param expansion the type specifier its deftype's body computed
+	 * @return the declamation form
+	 */
+	public static LispVal deftypeInstanceDeclamation(LispCons specifier, LispVal expansion) {
+		return listToCons(List.of(new LispSymbol(LispNames.DECLAIM),
+				listToCons(List.of(new LispSymbol(LispNames.DEFTYPE_INSTANCE_DECLARATION), quotedValue(specifier),
+						quotedValue(expansion)))));
+	}
+
+	/**
+	 * The {@code (%deftype-instance 'specifier 'expansion)} declaration of a top-level
+	 * form {@link #deftypeInstanceDeclamation(LispCons, LispVal)} built, or null for any
+	 * other form. Matched by member name: the compilers' resolver may qualify the
+	 * identifier into the package current where the macro pass appended it.
+	 * @param form a top-level form
+	 * @return the declaration, or null
+	 */
+	public static @Nullable LispCons deftypeInstanceDeclamation(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.DECLAIM.equals(LispSymbol.memberName(op.name())) && cons.cdr() instanceof LispCons rest
+				&& rest.cdr() instanceof LispNil && rest.car() instanceof LispCons declaration
+				&& declaration.car() instanceof LispSymbol id
+				&& LispNames.DEFTYPE_INSTANCE_DECLARATION.equals(LispSymbol.memberName(id.name()))) {
+			return declaration;
+		}
+		return null;
+	}
+
+	/** The datum of a {@code (quote datum)} form, or the form itself. */
+	private static LispVal unquoted(LispVal form) {
+		if (form instanceof LispCons quoted && quoted.car() instanceof LispSymbol op
+				&& LispNames.QUOTE.equals(op.name()) && quoted.cdr() instanceof LispCons rest) {
+			return rest.car();
+		}
+		return form;
 	}
 
 	/**
@@ -44276,6 +44500,12 @@ public final class LispMacroExpander {
 		if (normalize != null) {
 			prologue.add(normalize);
 		}
+		// A compound designator headed by a parameterized deftype is expanded first,
+		// through the interpreter's evaluator, since its arguments decide the type.
+		if (closRegistry.expandsDeftypeSpecifiers()) {
+			prologue.add(listToCons(
+					List.of(new LispSymbol(LispNames.SETQ), tn, callOf(LispNames.DEFTYPE_EXPAND_INTERNAL, tn))));
+		}
 		// A designator naming a user deftype is rewritten to its expansion before the
 		// dispatch, so a name held in a VARIABLE decides what its literal spelling
 		// decides. It runs AFTER the metaobject normalization, which turns a class
@@ -44961,15 +45191,11 @@ public final class LispMacroExpander {
 				continue;
 			}
 			LispVal spec = registry.findDeftype(name);
-			for (int hop = 0; hop < ELEMENT_TYPE_ALIAS_HOPS && spec instanceof LispSymbol sym; hop++) {
-				LispVal next = registry.findDeftype(sym.name());
-				if (next == null || (next instanceof LispSymbol self
-						&& ClosRegistry.normalize(self.name()).equals(ClosRegistry.normalize(sym.name())))) {
-					break;
-				}
-				spec = next;
+			if (spec == null) {
+				continue;
 			}
-			if (spec == null || (spec instanceof LispSymbol sym && ClosRegistry.normalize(sym.name()).equals(name))) {
+			spec = followDeftypeHops(spec, registry);
+			if (spec instanceof LispSymbol sym && ClosRegistry.normalize(sym.name()).equals(name)) {
 				continue;
 			}
 			table.put(name, spec);
@@ -44978,19 +45204,81 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Follows a deftype expansion to the end of its chain -- an alias NAME to the
+	 * specifier it names, a compound specifier headed by a parameterized deftype to what
+	 * its body computed -- so the run-time resolver answers in one hop. Bounded like
+	 * {@link #resolveElementTypeAlias}, which is what makes a self-referential deftype
+	 * terminate.
+	 */
+	private static LispVal followDeftypeHops(LispVal spec, ClosRegistry registry) {
+		for (int hop = 0; hop < ELEMENT_TYPE_ALIAS_HOPS; hop++) {
+			LispVal next;
+			if (spec instanceof LispSymbol sym) {
+				next = registry.findDeftype(sym.name());
+				if (next instanceof LispSymbol self
+						&& ClosRegistry.normalize(self.name()).equals(ClosRegistry.normalize(sym.name()))) {
+					break;
+				}
+			}
+			else if (spec instanceof LispCons compound) {
+				next = registry.expandDeftypeSpecifier(compound);
+			}
+			else {
+				break;
+			}
+			if (next == null) {
+				break;
+			}
+			spec = next;
+		}
+		return spec;
+	}
+
+	/**
+	 * The recorded compound-specifier instances whose head the program spells, each
+	 * expansion followed to the end of its chain ({@link #followDeftypeHops}).
+	 */
+	private static List<ClosRegistry.DeftypeInstance> deftypeInstanceExpansions(ClosRegistry registry,
+			java.util.Set<String> spelled) {
+		List<ClosRegistry.DeftypeInstance> instances = new java.util.ArrayList<>();
+		for (ClosRegistry.DeftypeInstance instance : registry.deftypeInstances()) {
+			if (instance.specifier().car() instanceof LispSymbol head && spelled.contains(head.name())) {
+				instances.add(new ClosRegistry.DeftypeInstance(instance.specifier(),
+						followDeftypeHops(instance.expansion(), registry)));
+			}
+		}
+		return instances;
+	}
+
+	/**
+	 * What the compile paths' run-time deftype resolver carries: the alias names and the
+	 * compound-specifier instances, each mapped to its resolved expansion.
+	 *
+	 * @param aliases alias name to its expansion
+	 * @param instances the compound-specifier instances
+	 */
+	private record RuntimeDeftypeTable(java.util.Map<String, LispVal> aliases,
+			List<ClosRegistry.DeftypeInstance> instances) {
+	}
+
+	/**
 	 * Builds the {@code %deftype-alias-table%} data-table forms backing
 	 * {@link #deftypeAliasDefun}: each entry maps the spellings of one registered
 	 * {@code deftype} name to the specifier it expands to. Pure quoted data, emitted
 	 * through {@link #chunkedTableForms}.
 	 */
-	private static List<LispVal> deftypeAliasTableForms(java.util.Map<String, LispVal> aliases) {
+	private static List<LispVal> deftypeAliasTableForms(RuntimeDeftypeTable deftypes) {
 		List<LispVal> entries = new java.util.ArrayList<>();
-		for (java.util.Map.Entry<String, LispVal> alias : aliases.entrySet()) {
+		for (java.util.Map.Entry<String, LispVal> alias : deftypes.aliases().entrySet()) {
 			List<LispVal> nameSyms = new java.util.ArrayList<>();
 			for (String name : deftypeAliasSpellings(alias.getKey())) {
 				nameSyms.add(new LispSymbol(name));
 			}
 			entries.add(listToCons(List.of(listToCons(nameSyms), alias.getValue())));
+		}
+		// A compound instance is its own single key, matched by equal.
+		for (ClosRegistry.DeftypeInstance instance : deftypes.instances()) {
+			entries.add(listToCons(List.of(listToCons(List.of(instance.specifier())), instance.expansion())));
 		}
 		return chunkedTableForms(LispNames.DEFTYPE_ALIAS_TABLE, entries);
 	}
@@ -45037,24 +45325,23 @@ public final class LispMacroExpander {
 	 * forms, taken BEFORE the table's own forms join them
 	 * @return the aliases to emit, in registration order
 	 */
-	private static java.util.Map<String, LispVal> narrowedDeftypeAliases(ClosRegistry closRegistry,
+	private static RuntimeDeftypeTable narrowedDeftypeAliases(ClosRegistry closRegistry,
 			java.util.Set<String> programSpellings) {
 		java.util.Set<String> spelled = new java.util.HashSet<>(programSpellings);
-		java.util.Map<String, LispVal> aliases = deftypeAliasExpansions(closRegistry, spelled);
 		// One entry's EXPANSION can name another alias -- alexandria's proper-sequence
 		// is (or proper-list ...) -- and %typep-compound-runtime recurses back into the
 		// dispatch for a sub-specifier, so the table has to be closed under that
 		// reference even when the program never spelled the inner name itself.
 		while (true) {
+			java.util.Map<String, LispVal> aliases = deftypeAliasExpansions(closRegistry, spelled);
+			List<ClosRegistry.DeftypeInstance> instances = deftypeInstanceExpansions(closRegistry, spelled);
 			List<LispVal> expansions = new java.util.ArrayList<>(aliases.values());
+			for (ClosRegistry.DeftypeInstance instance : instances) {
+				expansions.add(instance.expansion());
+			}
 			if (!spelled.addAll(spelledSymbolNames(expansions))) {
-				return aliases;
+				return new RuntimeDeftypeTable(aliases, instances);
 			}
-			java.util.Map<String, LispVal> grown = deftypeAliasExpansions(closRegistry, spelled);
-			if (grown.size() == aliases.size()) {
-				return grown;
-			}
-			aliases = grown;
 		}
 	}
 
@@ -45088,13 +45375,19 @@ public final class LispMacroExpander {
 	 * per-alias data lives in the table, so the defun's size is fixed.
 	 * @return the defun form
 	 */
-	private static LispVal deftypeAliasDefun() {
+	private static LispVal deftypeAliasDefun(boolean compoundKeys) {
 		LispSymbol x = new LispSymbol("%dta_x");
 		LispSymbol entry = new LispSymbol("%dta_e");
-		// (dolist (e table x) (if (member x (car e)) (return (car (cdr e))) nil))
+		// (dolist (e table x) (if (member x (car e)) (return (car (cdr e))) nil)); a
+		// table holding compound-specifier keys compares by equal.
+		LispVal keyTest = compoundKeys
+				? listToCons(List.of(new LispSymbol(LispNames.MEMBER), x, mvCall(LispNames.CAR, entry),
+						new LispSymbol(":TEST"),
+						listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.EQUAL)))))
+				: mvCall(LispNames.MEMBER, x, mvCall(LispNames.CAR, entry));
 		LispVal scan = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
 				listToCons(List.of(entry, new LispSymbol(LispNames.DEFTYPE_ALIAS_TABLE), x)),
-				makeIf(mvCall(LispNames.MEMBER, x, mvCall(LispNames.CAR, entry)), listToCons(
+				makeIf(keyTest, listToCons(
 						List.of(new LispSymbol(LispNames.RETURN), mvCall(LispNames.CAR, mvCall(LispNames.CDR, entry)))),
 						LispNil.INSTANCE)));
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.DEFTYPE_ALIAS_RUNTIME),
@@ -46301,21 +46594,23 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> slotDefs = new java.util.ArrayList<>();
 			for (ClosRegistry.SlotSpec slot : info.slots()) {
-				List<String> readerNames = new java.util.ArrayList<>(slot.readers());
-				readerNames.addAll(slot.accessors());
-				LispVal readers = LispNil.INSTANCE;
-				for (int i = readerNames.size() - 1; i >= 0; i--) {
-					readers = new LispCons(new LispSymbol(readerNames.get(i)), readers);
-				}
-				slotDefs.add(listToCons(List.of(new LispSymbol(slot.baseName()),
-						listToCons(slot.initargs().stream().<LispVal>map(LispSymbol::new).toList()),
-						slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE, new LispSymbol(slot.type()),
-						readers)));
+				slotDefs.add(slotDataRow(slot));
+			}
+			// The direct slots, each (writers . slot-data) with the slot data a full
+			// row, or (writers name) when the effective slot is the same spec (an own
+			// slot nothing shadows, the common case), so the table repeats only what
+			// differs. Proper lists only: quoted-data passes walk them with toList.
+			List<LispVal> directDefs = new java.util.ArrayList<>();
+			for (ClosRegistry.SlotSpec direct : info.directSlots()) {
+				boolean sameAsEffective = info.slots().stream().anyMatch(direct::equals);
+				directDefs.add(new LispCons(ClosRegistry.slotWriters(direct), sameAsEffective
+						? new LispCons(new LispSymbol(direct.baseName()), LispNil.INSTANCE) : slotDataRow(direct)));
 			}
 			LispVal superNames = info.superclasses().isEmpty() ? LispNil.INSTANCE
 					: listToCons(info.superclasses().stream().<LispVal>map(LispSymbol::new).toList());
 			entries.add(listToCons(List.of(listToCons(spellingSyms), superNames,
-					slotDefs.isEmpty() ? LispNil.INSTANCE : listToCons(slotDefs))));
+					slotDefs.isEmpty() ? LispNil.INSTANCE : listToCons(slotDefs),
+					directDefs.isEmpty() ? LispNil.INSTANCE : listToCons(directDefs))));
 		}
 		for (LispLayout layout : closRegistry.layouts().values()) {
 			if (!layout.tag().startsWith(LispLayout.STRUCT_TAG_PREFIX) || !seen.add(layout.printName())) {
@@ -46353,6 +46648,15 @@ public final class LispMacroExpander {
 		forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO),
 				LispNil.INSTANCE)));
 		return forms;
+	}
+
+	// One slot's (name initargs initform type readers) row of the class meta table.
+	private static LispVal slotDataRow(ClosRegistry.SlotSpec slot) {
+		List<String> readerNames = new java.util.ArrayList<>(slot.readers());
+		readerNames.addAll(slot.accessors());
+		return listToCons(List.of(new LispSymbol(slot.baseName()), ClosRegistry.symbolList(slot.initargs()),
+				slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE, new LispSymbol(slot.type()),
+				ClosRegistry.symbolList(readerNames)));
 	}
 
 	/**
@@ -46493,13 +46797,33 @@ public final class LispMacroExpander {
 				mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, slotDef)))));
 		// The 6th slot (initfunction, appended 2026-08-03) stays nil on materialized
 		// plain views: the table is quoted data and cannot carry a live thunk; only
-		// driver-built definitions fill it.
+		// driver-built definitions fill it. The 7th (writers) is nil on an effective
+		// slot.
 		LispVal slotBuild = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
 				listToCons(List.of(slotDef, slotData, LispNil.INSTANCE)),
 				listToCons(List.of(new LispSymbol(LispNames.SETQ), slots, mvCall(LispNames.CONS,
 						objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
-								List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE)),
+								List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, LispNil.INSTANCE)),
 						slots)))));
+		// The direct slots: each table element is (writers . data), the data either a
+		// full row or (name) naming the effective row it equals (see the table
+		// builder).
+		LispSymbol directSlots = new LispSymbol("%fc_ds");
+		LispSymbol directDef = new LispSymbol("%fc_d");
+		LispVal directData = mvCall(LispNames.CAR,
+				mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, entry))));
+		LispVal directRow = makeIf(mvCall(LispNames.CDR, mvCall(LispNames.CDR, directDef)),
+				mvCall(LispNames.CDR, directDef),
+				mvCall(LispNames.ASSOC, mvCall(LispNames.CAR, mvCall(LispNames.CDR, directDef)), slotData));
+		// The row binds the same %fc_s variable, so s0..s4 read it.
+		LispVal directInstance = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME,
+				List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, mvCall(LispNames.CAR, directDef)));
+		LispVal pushDirect = listToCons(List.of(new LispSymbol(LispNames.SETQ), directSlots,
+				mvCall(LispNames.CONS, directInstance, directSlots)));
+		LispVal directBuild = listToCons(
+				List.of(new LispSymbol(LispNames.DOLIST), listToCons(List.of(directDef, directData, LispNil.INSTANCE)),
+						listToCons(List.of(new LispSymbol(LispNames.LET),
+								listToCons(List.of(listToCons(List.of(slotDef, directRow)))), pushDirect))));
 		// The entry's superclass column is a LIST of names (multiple inheritance);
 		// materialize each through the recursive resolver, preserving order.
 		LispVal superNames = mvCall(LispNames.CAR, mvCall(LispNames.CDR, entry));
@@ -46512,14 +46836,15 @@ public final class LispMacroExpander {
 						listToCons(List.of(new LispSymbol(LispNames.SETQ), superAcc, mvCall(LispNames.CONS,
 								mvCall(LispNames.FIND_CLASS_INTERNAL, superVar, LispTrue.INSTANCE), superAcc))))),
 				mvCall(LispNames.REVERSE, superAcc)));
-		LispVal buildMetaobject = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_CLASS_NAME,
-				List.of(name, supers, LispNil.INSTANCE, mvCall(LispNames.REVERSE, slots), LispTrue.INSTANCE));
+		LispVal buildMetaobject = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_CLASS_NAME, List.of(name,
+				supers, mvCall(LispNames.REVERSE, directSlots), mvCall(LispNames.REVERSE, slots), LispTrue.INSTANCE));
 		LispVal memoize = listToCons(List.of(new LispSymbol(LispNames.SETQ),
 				new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO), mvCall(LispNames.CONS,
 						mvCall(LispNames.CONS, name, metaobject), new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO))));
 		LispVal construct = listToCons(List.of(new LispSymbol(LispNames.LET),
-				listToCons(List.of(listToCons(List.of(slots, LispNil.INSTANCE)))), slotBuild,
-				listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(slots, LispNil.INSTANCE)),
+						listToCons(List.of(directSlots, LispNil.INSTANCE)))),
+				slotBuild, directBuild, listToCons(List.of(new LispSymbol(LispNames.LET),
 						listToCons(List.of(listToCons(List.of(metaobject, buildMetaobject)))), memoize, metaobject))));
 		LispVal materialize = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
 				new LispSymbol(LispNames.FIND_CLASS_MATERIALIZE), listToCons(List.of(name, entry)),
@@ -46674,7 +46999,7 @@ public final class LispMacroExpander {
 
 	/**
 	 * Whether the {@code defclass} form names one of the seeded MOP base classes
-	 * ({@code standard-class}, the two slot-definition classes) as a superclass -- a
+	 * ({@code standard-class}, the slot-definition classes) as a superclass -- a
 	 * metaclass or slot-definition-class definition, which needs
 	 * {@code ClosRegistry.ensureMopClassesSeeded()} to have run before the superclass
 	 * lookup. Qualified spellings ({@code closer-mop:standard-direct-slot-definition})
@@ -46691,9 +47016,7 @@ public final class LispMacroExpander {
 			if (superName instanceof LispSymbol sym) {
 				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 				String member = qn == null ? sym.name() : qn.member();
-				if (ClosRegistry.STANDARD_CLASS_NAME.equals(member)
-						|| ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME.equals(member)
-						|| ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME.equals(member)) {
+				if (!ClosRegistry.CLASS_NAME.equals(member) && ClosRegistry.isMopBaseClassName(member)) {
 					return true;
 				}
 			}

@@ -1705,6 +1705,16 @@ public final class LispNames {
 	/** The {@code make-hash-table} built-in function. */
 	public static final String MAKE_HASH_TABLE = "MAKE-HASH-TABLE";
 
+	/**
+	 * The {@code %make-hash-table-by-test} prelude helper: the compiled backends pick a
+	 * table's test from the source, so a {@code make-hash-table} whose {@code :test} is
+	 * computed is lowered onto a call to this helper, which compares the value with the
+	 * four test symbols and function objects and makes the table through a literal
+	 * {@code :test} ({@code LispMacroExpander.lowerComputedTestMakeHashTable}). The
+	 * interpreter's {@code make-hash-table} reads the value directly.
+	 */
+	public static final String MAKE_HASH_TABLE_BY_TEST_INTERNAL = "%MAKE-HASH-TABLE-BY-TEST";
+
 	/** The {@code gethash} built-in function. */
 	public static final String GETHASH = "GETHASH";
 
@@ -8887,12 +8897,17 @@ public final class LispNames {
 	public static final String FFI_APPLY_CALL = "%APPLY-CALL";
 
 	/**
-	 * The {@code asdf} package name (a limited, API-compatible subset of ASDF: system
-	 * definitions parsed from {@code .asd} files as plain data -- see
-	 * {@code eval.AsdfSystems}). Real ASDF is not ported; only {@code defsystem} and
-	 * {@code load-system} exist.
+	 * The {@code asdf} package name (a limited, API-compatible subset of ASDF -- see
+	 * {@code eval.AsdfSystems}). Real ASDF is not ported.
 	 */
 	public static final String ASDF_PKG = "ASDF";
+
+	/**
+	 * The {@code asdf-user} package name: where a {@code .asd} file is loaded
+	 * ({@code eval.AsdfSystems#loadAsd}). Defined in an image when it loads its first
+	 * {@code .asd}.
+	 */
+	public static final String ASDF_USER_PKG = "ASDF-USER";
 
 	/**
 	 * {@code asdf:defsystem} -- defines a system (name, {@code :depends-on},
@@ -8958,10 +8973,10 @@ public final class LispNames {
 	 * text rather than a datum precisely because there is no datum, and it exists so the
 	 * decision "does this value matter" stays with the CONSUMER -- the lexer is the one
 	 * layer that cannot know whether the position is load-bearing. {@code AsdfSystems}
-	 * ignores it in an option nothing reads and fails the parse quoting the raw text
-	 * where it would decide a dependency or a source file. Only
-	 * {@code LispLexer.ReadEvalMode.SKIP_UNREADABLE} produces it, so it never reaches an
-	 * evaluator or a backend.
+	 * ignores it in an option nothing reads and fails the load quoting the raw text where
+	 * it would decide a dependency or a source file, or sits in a form the {@code .asd}
+	 * runs. Only {@code LispLexer.ReadEvalMode.SKIP_UNREADABLE} produces it, so it never
+	 * reaches an evaluator or a backend.
 	 */
 	public static final String READ_EVAL_UNREADABLE = "%READ-EVAL-UNREADABLE";
 
@@ -9575,6 +9590,21 @@ public final class LispNames {
 	 * recognizer.
 	 */
 	public static final String DEFTYPE_ALIAS_RUNTIME = "%DEFTYPE-ALIAS";
+
+	/**
+	 * The declaration identifier of {@code (declaim (%deftype-instance 'spec
+	 * 'expansion))}: the macro pass's record of what one compound specifier headed by a
+	 * parameterized {@code deftype} expands to, consumed by the compile paths' definition
+	 * walk ({@code ClosRegistry.registerDeftypeInstance}). Matched by member name.
+	 */
+	public static final String DEFTYPE_INSTANCE_DECLARATION = "%DEFTYPE-INSTANCE";
+
+	/**
+	 * The interpreter's run-time expansion of a {@code typep} designator that is a
+	 * compound specifier headed by a parameterized {@code deftype}; any other designator
+	 * comes back unchanged.
+	 */
+	public static final String DEFTYPE_EXPAND_INTERNAL = "%DEFTYPE-EXPAND";
 
 	/** The {@code char-name} built-in function. */
 	public static final String CHAR_NAME = "CHAR-NAME";
@@ -10755,6 +10785,15 @@ public final class LispNames {
 	 * materialized plain views answer nil.
 	 */
 	public static final String SLOT_DEFINITION_INITFUNCTION = "SLOT-DEFINITION-INITFUNCTION";
+
+	/**
+	 * {@code closer-mop:slot-definition-writers} ({@code %obj-ref} index 6, appended
+	 * 2026-10-30): filled on direct slot definitions, nil on effective ones.
+	 */
+	public static final String SLOT_DEFINITION_WRITERS = "SLOT-DEFINITION-WRITERS";
+
+	/** {@code closer-mop:slot-definition-initform} ({@code %obj-ref} index 2). */
+	public static final String SLOT_DEFINITION_INITFORM = "SLOT-DEFINITION-INITFORM";
 
 	/** {@code closer-mop:class-direct-slots} over a class metaobject (index 2). */
 	public static final String CLASS_DIRECT_SLOTS = "CLASS-DIRECT-SLOTS";

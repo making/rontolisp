@@ -2365,6 +2365,12 @@ class LispEvaluatorTest {
 		assertThat(eval("(funcall (coerce 'car 'function) '(7 8))")).isEqualTo(new LispInteger(7));
 		assertThat(eval("(funcall (coerce #'(lambda (x) (* x x)) 'function) 9)")).isEqualTo(new LispInteger(81));
 		assertThat(eval("(funcall (coerce '(lambda (x) (* x x)) 'function) 9)")).isEqualTo(new LispInteger(81));
+		// A COMPUTED lambda expression is compile nil's (lisp-unit's run-code idiom),
+		// under a literal and a computed result type alike.
+		assertThat(eval("(let ((code '((+ 1 1)))) (funcall (coerce `(lambda () ,@code) 'function)))"))
+			.isEqualTo(new LispInteger(2));
+		assertThat(eval("(let ((ty 'function) (def (list 'lambda '(x) '(* x 3)))) (funcall (coerce def ty) 4))"))
+			.isEqualTo(new LispInteger(12));
 	}
 
 	@Test
@@ -8058,6 +8064,23 @@ class LispEvaluatorTest {
 				      (coerce 3 (car (list 'octet))) (coerce (list #\\a #\\b) (car (list 'str)))
 				      (typep 3 'octet) (tp 3 'no-such-type))
 				""").print()).isEqualTo("(T NIL T T NIL T NIL 3 \"ab\" T NIL)");
+		// A compound specifier headed by a PARAMETERIZED deftype is what the body
+		// computes for its arguments, literal or held in a value, through a chain
+		// (alist -> a plist instance); the typecase head used to be refused. The
+		// four-backend twin is the typep-parameterized-deftype-compound ci-spec case.
+		assertThat(evalMulti("""
+				(defun plp (x) (listp x))
+				(deftype plist (&optional (et '*)) (declare (ignore et)) '(and list (satisfies plp)))
+				(deftype vec (n) `(simple-vector ,n))
+				(deftype tuple (&rest types)
+				  `(and list ,(reduce (lambda (e acc) `(cons ,e ,acc)) types :from-end t :initial-value 'null)))
+				(deftype alist (&optional (k '*) (v '*)) `(plist (cons ,k ,v)))
+				(defun tp (x ty) (typep x ty))
+				(list (typep '(1 2) '(plist integer)) (typep 3 '(plist integer)) (typep (vector 1 2 3) '(vec 2))
+				      (typep '(1 "a") '(tuple integer string)) (typecase (vector 1 2 3) ((vec 2) :two) ((vec 3) :three))
+				      (tp (vector 1 2 3) '(vec 2)) (tp (vector 1 2) '(or string (vec 2)))
+				      (tp '(1 2) '(tuple integer string)) (tp '((a . 1)) '(alist symbol integer)))
+				""").print()).isEqualTo("(T NIL NIL T :THREE NIL T NIL T)");
 	}
 
 	@Test
@@ -15202,16 +15225,25 @@ class LispEvaluatorTest {
 
 	@Test
 	void aHashTableReportsAndPrintsTheTestItImplements() {
-		// EQUALP for a table whose keys are folded, EQUAL for every other -- an eql table
-		// still places structurally, so reporting eql would describe behavior
-		// that does not exist. The same two answers on all four backends.
+		// The test lookup implements, decided from the :test VALUE: a symbol or one of
+		// the four function objects, written literally or computed (alexandria's
+		// plist-hash-table hands it through apply). The compiled twins are
+		// compileEqualpHashTablePrintsAndReportsItsTest; ci-spec
+		// hash-table-computed-test runs it on all four backends.
 		LispVal result = evalMulti("""
 				(defparameter *tp* (make-hash-table :test 'equalp))
 				(setf (gethash "a" *tp*) 1)
+				(defun htt-probe (h) (setf (gethash "A" h) 1) (list (hash-table-test h) (gethash "a" h)))
+				(defun htt-make (test) (make-hash-table :test test))
 				(list (hash-table-test *tp*) (hash-table-test (make-hash-table :test 'equal))
-				      (hash-table-test (make-hash-table)) (princ-to-string *tp*))
+				      (hash-table-test (make-hash-table)) (princ-to-string *tp*)
+				      (htt-probe (make-hash-table :test #'equalp)) (htt-probe (htt-make #'equalp))
+				      (htt-probe (htt-make 'eq)) (htt-probe (htt-make #'eql)) (htt-probe (htt-make 'equal))
+				      (htt-probe (apply #'make-hash-table (list :size 4 :test #'equalp)))
+				      (hash-table-test (htt-make (hash-table-test (htt-make 'eq)))))
 				""");
-		assertThat(result.print()).isEqualTo("(EQUALP EQUAL EQUAL \"#<HASH-TABLE :TEST EQUALP :COUNT 1>\")");
+		assertThat(result.print()).isEqualTo("(EQUALP EQUAL EQUAL \"#<HASH-TABLE :TEST EQUALP :COUNT 1>\" (EQUALP 1) "
+				+ "(EQUALP 1) (EQ NIL) (EQL NIL) (EQUAL NIL) (EQUALP 1) EQ)");
 	}
 
 	@Test
@@ -19490,20 +19522,35 @@ class LispEvaluatorTest {
 		// The shim serves BOTH generations: real metaobjects (find-class) answer with
 		// effective-slot-definition instances; a class-of TAG symbol keeps the legacy
 		// (name type) pairs so slot-walking serializers (jzon) are unchanged.
-		assertThat(evalMulti("""
-				(asdf:load-system "closer-mop")
-				(defclass cmm-p () ((name :initarg :name) (age :initarg :age :type integer)))
-				(let ((c (find-class 'cmm-p)))
-				  (list (closer-mop:classp c)
-				        (closer-mop:classp 42)
-				        (closer-mop:class-name c)
-				        (closer-mop:class-finalized-p c)
-				        (mapcar #'closer-mop:slot-definition-name (closer-mop:class-slots c))
-				        (mapcar #'closer-mop:slot-definition-type (closer-mop:class-slots c))
-				        (mapcar #'closer-mop:slot-definition-initargs (closer-mop:class-slots c))
-				        (mapcar #'closer-mop:slot-definition-name
-				                (closer-mop:class-slots (class-of (make-instance 'cmm-p :name "x"))))))
-				""").print()).isEqualTo("(T NIL CMM-P T (NAME AGE) (T INTEGER) ((:NAME) (:AGE)) (NAME AGE))");
+		assertThat(evalMulti(
+				"""
+						(asdf:load-system "closer-mop")
+						(defclass cmm-p () ((name :initarg :name) (age :initarg :age :type integer)))
+						(defclass cmm-q (cmm-p) ((age :initform 3) (zip :writer set-zip :accessor q-zip)))
+						(let ((c (find-class 'cmm-p)) (q (find-class 'cmm-q)))
+						  (list (closer-mop:classp c)
+						        (closer-mop:classp 42)
+						        (closer-mop:class-name c)
+						        (closer-mop:class-finalized-p c)
+						        (mapcar #'closer-mop:slot-definition-name (closer-mop:class-slots c))
+						        (mapcar #'closer-mop:slot-definition-type (closer-mop:class-slots c))
+						        (mapcar #'closer-mop:slot-definition-initargs (closer-mop:class-slots c))
+						        (mapcar #'closer-mop:slot-definition-name
+						                (closer-mop:class-slots (class-of (make-instance 'cmm-p :name "x"))))
+						        (list (mapcar #'closer-mop:slot-definition-name (closer-mop:class-direct-slots q))
+						              (mapcar #'closer-mop:slot-definition-initform (closer-mop:class-direct-slots q))
+						              (mapcar #'closer-mop:slot-definition-writers (closer-mop:class-direct-slots q))
+						              (mapcar #'closer-mop:slot-definition-writers (closer-mop:class-slots q))
+						              (mapcar #'closer-mop:slot-definition-initargs (closer-mop:class-direct-slots c))
+						              (let ((d (first (closer-mop:class-direct-slots c))) (e (first (closer-mop:class-slots c))))
+						                (list (typep d 'closer-mop:direct-slot-definition) (typep d 'closer-mop:effective-slot-definition)
+						                      (typep e 'closer-mop:effective-slot-definition) (typep e 'closer-mop:direct-slot-definition)
+						                      (typep e 'closer-mop:slot-definition) (typep d 'closer-mop:standard-direct-slot-definition)
+						                      (typep c 'closer-mop:slot-definition))))))
+						""")
+			.print())
+			.isEqualTo("(T NIL CMM-P T (NAME AGE) (T INTEGER) ((:NAME) (:AGE)) (NAME AGE) "
+					+ "((AGE ZIP) (3 NIL) (NIL ((SETF Q-ZIP) SET-ZIP)) (NIL NIL NIL) ((:NAME) (:AGE)) (T NIL T NIL T T NIL)))");
 	}
 
 	@Test

@@ -16,10 +16,10 @@ import org.jspecify.annotations.Nullable;
  * {@link MopProtocol}): a definition that defines methods -- postmodern's
  * {@code build-dao-methods} {@code %eval} idiom, whose method construction already ran at
  * definition time and was spliced into the program (see {@link MopEvalCapture}) -- is a
- * deliberate no-op; everything else signals, because a compiled program has no runtime
- * compiler. Injected by {@code LispMacroExpander.expandTopLevelDefinitions}, gated on the
- * program referencing {@code compile} without defining it. The interpreter (and the
- * compile paths' macro-time evaluator) instead carries the real evaluator-backed
+ * deliberate no-op; everything else is evaluated, because a compiled program has no
+ * runtime compiler. Injected by {@code LispMacroExpander.expandTopLevelDefinitions},
+ * gated on the program referencing {@code compile} without defining it. The interpreter
+ * (and the compile paths' macro-time evaluator) instead carries the real evaluator-backed
  * {@code compile} built-in and never evaluates these forms.
  */
 public final class CompileRuntime {

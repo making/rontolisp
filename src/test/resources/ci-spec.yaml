@@ -7428,6 +7428,29 @@ cases:
       (EQUAL EQUAL EQUALP)
       #<HASH-TABLE :TEST EQL :COUNT 0>
       #<HASH-TABLE :TEST EQ :COUNT 0>
+  - name: hash-table-computed-test
+    source: |
+      ;; The :test is decided from its VALUE at run time -- a symbol or one of the
+      ;; four function objects -- whether written literally, held in a variable,
+      ;; applied through #'make-hash-table (alexandria's plist-hash-table) or read
+      ;; back from hash-table-test (copy-hash-table).
+      (defun cs-htt-make (test) (make-hash-table :test test))
+      (defun cs-htt-probe (h)
+        (setf (gethash "A" h) 1)
+        (list (hash-table-test h) (gethash "a" h)))
+      (print (list (cs-htt-probe (make-hash-table :test #'equalp)) (cs-htt-probe (cs-htt-make #'equalp))
+                   (cs-htt-probe (cs-htt-make 'equalp)) (cs-htt-probe (cs-htt-make #'eql))
+                   (cs-htt-probe (cs-htt-make 'equal))))
+      (print (list (cs-htt-probe (apply #'make-hash-table (list :size 4 :test #'equalp)))
+                   (cs-htt-probe (apply #'make-hash-table nil))
+                   (hash-table-test (cs-htt-make (hash-table-test (cs-htt-make 'eq))))))
+      (let ((k (list 1)) (h (cs-htt-make #'eq)))
+        (setf (gethash k h) 'ident)
+        (print (list (gethash k h) (gethash (list 1) h) (hash-table-test h))))
+    expected: |
+      ((EQUALP 1) (EQUALP 1) (EQUALP 1) (EQL NIL) (EQUAL NIL))
+      ((EQUALP 1) (EQUAL NIL) EQ)
+      (IDENT NIL EQ)
   - name: eq-eql-on-distinct-equal-strings
     source: |
       ;; Two distinct strings with equal contents are neither eq nor eql (ANSI), on
@@ -11166,6 +11189,11 @@ cases:
       (print (ll-mix 1 2 :c 3 :d 4))
       (defun ll-aux (x &aux (y (+ x 1)) z) (list x y z))
       (print (ll-aux 5))
+      ;; A &key method is made permissive (&allow-other-keys appended), which must
+      ;; land ahead of its &aux section (access's rem-arg-list-key-value).
+      (defgeneric ll-gaux (a &key k))
+      (defmethod ll-gaux (a &key (k 1) &aux (s (+ a k))) (list a k s))
+      (print (list (ll-gaux 1 :k 2) (ll-gaux 1)))
     expected: |
       (1 (2 3))
       (1 NIL)
@@ -11178,6 +11206,7 @@ cases:
       (0 1 NIL NIL)
       (1 2 (:C 3 :D 4) 3)
       (5 6 NIL)
+      ((1 2 3) (1 1 2))
   - name: lambda-list-first-class-and-eval
     source: |
       (print (funcall (lambda (&rest xs) xs) 1 2 3))
@@ -16444,6 +16473,17 @@ cases:
       "x=5 y=7"
       to-stdout ok
       "\"q\""
+  - name: coerce-a-computed-lambda-expression-to-function
+    source: |
+      ;; (coerce <lambda expression> 'function) is compile nil's result when the
+      ;; expression is built at run time (lisp-unit's run-code), not only for a literal.
+      (defun run-code (code) (funcall (coerce `(lambda () ,@code) 'function)))
+      (print (run-code '((+ 1 1))))
+      (defun make-adder (n) (coerce (list 'lambda '(x) (list '+ 'x n)) 'function))
+      (print (funcall (make-adder 5) 10))
+    expected: |
+      2
+      15
   - name: runtime-resolved-designators-are-function-values
     source: |
       ;; A designator the compiler cannot read still resolves to a FUNCTION value:
@@ -31354,6 +31394,33 @@ standalone:
     stdout: |
       (T NIL T T NIL T NIL T NIL)
       (3 "ab")
+  # A compound specifier headed by a parameterized deftype is what the deftype's body
+  # computes for its arguments -- literal or held in a value, inside an or, through a
+  # chain (ptd-alist expands to a ptd-list instance). trivial-types' shapes; every
+  # answer is SBCL 2.2.9's.
+  - name: typep-parameterized-deftype-compound
+    source: |
+      (defun ptd-listp (x) (listp x))
+      (deftype ptd-list (&optional (et '*)) (declare (ignore et)) '(and list (satisfies ptd-listp)))
+      (deftype ptd-vec (n) `(simple-vector ,n))
+      (deftype ptd-non-nil (&optional type) (if type `(and (not null) ,type) '(not null)))
+      (deftype ptd-tuple (&rest types)
+        `(and list ,(reduce (lambda (e acc) `(cons ,e ,acc)) types :from-end t :initial-value 'null)))
+      (deftype ptd-alist (&optional (k '*) (v '*)) `(ptd-list (cons ,k ,v)))
+      (defun ptd-tp (x ty) (typep x ty))
+      (print (list (typep '(1 2) '(ptd-list integer)) (typep 3 '(ptd-list integer)) (typep '(1) '(ptd-list))
+                   (typep (vector 1 2) '(ptd-vec 2)) (typep (vector 1 2 3) '(ptd-vec 2))
+                   (typep 'a '(ptd-non-nil symbol)) (typep nil '(ptd-non-nil symbol)) (typep nil 'ptd-non-nil)
+                   (typep '(1 "a") '(ptd-tuple integer string)) (typep '(1 2) '(ptd-tuple integer string))
+                   (typep '((a . 1)) '(ptd-alist symbol integer))
+                   (typecase (vector 1 2 3) ((ptd-vec 2) :two) ((ptd-vec 3) :three))))
+      (print (list (ptd-tp '(1 2) '(ptd-list integer)) (ptd-tp (vector 1 2) '(ptd-vec 2))
+                   (ptd-tp (vector 1 2 3) '(ptd-vec 2)) (ptd-tp '(1 "a") '(ptd-tuple integer string))
+                   (ptd-tp '(1 2) '(ptd-tuple integer string)) (ptd-tp '((a . 1)) '(ptd-alist symbol integer))
+                   (ptd-tp (vector 1 2) '(or string (ptd-vec 2))) (ptd-tp (vector 1) '(or string (ptd-vec 2)))))
+    stdout: |
+      (T NIL T T NIL T NIL NIL T NIL T :THREE)
+      (T T NIL T NIL T T NIL)
   - name: bfloat16-bits
     source: |
       (print (list (rontolisp:bfloat16-bits 1.0) (rontolisp:bfloat16-bits -2.5)

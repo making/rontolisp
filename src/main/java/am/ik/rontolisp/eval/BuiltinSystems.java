@@ -92,7 +92,7 @@ public final class BuiltinSystems {
 	 * The features a built-in system ANNOUNCES to whatever names it in
 	 * {@code :defsystem-depends-on} -- the read-time half of such a dependency, and the
 	 * only half a parse can honor (a real third-party system announces its features by
-	 * RUNNING, and a {@code .asd} is data here, never evaluated).
+	 * RUNNING, which happens when the loader loads it, after the parse).
 	 * <p>
 	 * One entry: upstream trivial-features exists to make {@code *features*} agree across
 	 * implementations, and its {@code .asd} ends in

@@ -13785,24 +13785,39 @@ class WasmLispCompilerIntegrationTest {
 		// mirroring the CLI pipeline; the shim serves BOTH generations, exactly like the
 		// interpreter
 		// (LispEvaluatorTest#closerMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators).
-		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
-				(asdf:load-system "closer-mop")
-				(defclass cmm-p () ((name :initarg :name) (age :initarg :age :type integer)))
-				(let ((c (find-class 'cmm-p)))
-				  (print (list (closer-mop:classp c)
-				               (closer-mop:classp 42)
-				               (closer-mop:class-name c)
-				               (closer-mop:class-finalized-p c)
-				               (mapcar #'closer-mop:slot-definition-name (closer-mop:class-slots c))
-				               (mapcar #'closer-mop:slot-definition-type (closer-mop:class-slots c))
-				               (mapcar #'closer-mop:slot-definition-initargs (closer-mop:class-slots c))
-				               (mapcar #'closer-mop:slot-definition-name
-				                       (closer-mop:class-slots (class-of (make-instance 'cmm-p :name "x")))))))
-				"""), path -> {
-			throw new java.io.FileNotFoundException(path);
-		});
+		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(
+				LispReader.readAllFromString(
+						"""
+								(asdf:load-system "closer-mop")
+								(defclass cmm-p () ((name :initarg :name) (age :initarg :age :type integer)))
+								(defclass cmm-q (cmm-p) ((age :initform 3) (zip :writer set-zip :accessor q-zip)))
+								(let ((c (find-class 'cmm-p)) (q (find-class 'cmm-q)))
+								  (print (list (closer-mop:classp c)
+								               (closer-mop:classp 42)
+								               (closer-mop:class-name c)
+								               (closer-mop:class-finalized-p c)
+								               (mapcar #'closer-mop:slot-definition-name (closer-mop:class-slots c))
+								               (mapcar #'closer-mop:slot-definition-type (closer-mop:class-slots c))
+								               (mapcar #'closer-mop:slot-definition-initargs (closer-mop:class-slots c))
+								               (mapcar #'closer-mop:slot-definition-name
+								                       (closer-mop:class-slots (class-of (make-instance 'cmm-p :name "x"))))
+								               (list (mapcar #'closer-mop:slot-definition-name (closer-mop:class-direct-slots q))
+								                     (mapcar #'closer-mop:slot-definition-initform (closer-mop:class-direct-slots q))
+								                     (mapcar #'closer-mop:slot-definition-writers (closer-mop:class-direct-slots q))
+								                     (mapcar #'closer-mop:slot-definition-writers (closer-mop:class-slots q))
+								                     (mapcar #'closer-mop:slot-definition-initargs (closer-mop:class-direct-slots c))
+								                     (let ((d (first (closer-mop:class-direct-slots c))) (e (first (closer-mop:class-slots c))))
+								                       (list (typep d 'closer-mop:direct-slot-definition) (typep d 'closer-mop:effective-slot-definition)
+								                             (typep e 'closer-mop:effective-slot-definition) (typep e 'closer-mop:direct-slot-definition)
+								                             (typep e 'closer-mop:slot-definition) (typep d 'closer-mop:standard-direct-slot-definition)
+								                             (typep c 'closer-mop:slot-definition)))))))
+								"""),
+				path -> {
+					throw new java.io.FileNotFoundException(path);
+				});
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))
-			.isEqualTo("(T NIL CMM-P T (NAME AGE) (T INTEGER) ((:NAME) (:AGE)) (NAME AGE))");
+			.isEqualTo("(T NIL CMM-P T (NAME AGE) (T INTEGER) ((:NAME) (:AGE)) (NAME AGE) "
+					+ "((AGE ZIP) (3 NIL) (NIL ((SETF Q-ZIP) SET-ZIP)) (NIL NIL NIL) ((:NAME) (:AGE)) (T NIL T NIL T T NIL)))");
 	}
 
 	@Test
@@ -17658,18 +17673,26 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	// The printed :TEST field and hash-table-test report the test lookup implements, now
-	// that a table knows whether it folds.
+	// The printed :TEST field and hash-table-test report the test lookup implements, a
+	// computed :test included (a variable, or the initargs #'make-hash-table is applied
+	// to). The interpreter twin is
+	// LispEvaluatorTest#aHashTableReportsAndPrintsTheTestItImplements.
 	void compileEqualpHashTablePrintsAndReportsItsTest() throws Exception {
-		assertThat(compileAndRun("""
+		assertThat(compileAndRunPrelude("""
+				(defun htc-make (test) (make-hash-table :test test))
+				(defun htc-probe (h) (setf (gethash "A" h) 1) (list (hash-table-test h) (gethash "a" h)))
 				(let ((p (make-hash-table :test 'equalp)) (q (make-hash-table :test 'equal)))
 				  (setf (gethash "a" p) 1)
 				  (print (list (hash-table-test p) (hash-table-test q)))
 				  (princ p)
 				  (terpri)
-				  (princ q))
+				  (princ q)
+				  (terpri))
+				(print (list (htc-probe (htc-make #'equalp)) (htc-probe (htc-make 'eq))
+				             (htc-probe (apply #'make-hash-table (list :size 4 :test #'equalp)))))
 				"""))
-			.isEqualTo("(EQUALP EQUAL)\n#<HASH-TABLE :TEST EQUALP :COUNT 1>\n#<HASH-TABLE :TEST EQUAL :COUNT 0>");
+			.isEqualTo("(EQUALP EQUAL)\n#<HASH-TABLE :TEST EQUALP :COUNT 1>\n#<HASH-TABLE :TEST EQUAL :COUNT 0>\n"
+					+ "((EQUALP 1) (EQ NIL) (EQUALP 1))");
 	}
 
 	@Test

@@ -352,7 +352,9 @@ construction through the chain (same values, different emitted shape).
 
 Three congruence rules:
 - **A `&key` method never rejects a sibling's keyword** — the lite model appends
-  `&allow-other-keys` to every `&key` method lambda list instead of taking CL's union.
+  `&allow-other-keys` to every `&key` method lambda list instead of taking CL's union --
+  AHEAD of an `&aux` section, which it would otherwise misplace (access's
+  `rem-arg-list-key-value`; ci-spec `lambda-list-extensions`).
 - **A defclass constructor tolerates extra initargs** (`&allow-other-keys` on `%make-<name>`).
 - **A bare `(call-next-method)` forwards the WHOLE original argument list**:
   `rewriteNextMethod` emits `apply` over the method's `&rest` variable, injecting one
@@ -724,7 +726,21 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   wrapper is REFERENCE_GATED; `class-name` is a prelude defun over metaobject slot 0.
 - **Metaobject slot order is a `%obj-ref` index contract** shared with the closer-mop shim —
   append, never reorder: class = name, direct-superclasses, direct-slots, effective-slots,
-  finalized-p; slot-definition = name, initargs, initform, type, readers, initfunction (5).
+  finalized-p; slot-definition = name, initargs, initform, type, readers, initfunction (5),
+  writers (6, 2026-10-30).
+- **Slot-definition classes** (seeded with the MOP trio): `slot-definition` declares every
+  slot; `direct-slot-definition` / `effective-slot-definition` are slot-less children and the
+  two `standard-*` classes slot-less grandchildren, so the layout is unchanged. AMOP's
+  `standard-slot-definition` mixin is left out (`seedClass` takes one parent). All five are
+  `closer-mop` externals except that mixin; access dispatches on `closer-mop:slot-definition`
+  and `direct-slot-definition`.
+- **A plain view carries direct slots too** (`class-direct-slots`; it used to be nil): the
+  interpreter builds them from `ClassInfo.directSlots()`, the compile paths from a 4th
+  `%class-meta-table%` column whose element is `(writers . row)` -- or `(writers name)`, a
+  reference to the effective row, when the direct `SlotSpec` IS the effective one (an own slot
+  nothing shadows). Writers (`ClosRegistry.slotWriters`: `(setf accessor)` then `:writer`
+  names, a mangled `%setf-` writer back in list form) fill direct definitions only, AMOP
+  5.4.3; the driver passes them as `:writers`. A struct's direct slots stay nil.
 - **`allocate-instance`** is IN: an instance of a registered CLOS class with EVERY slot the
   unbound marker — no initforms, no `initialize-instance`; initargs accepted and ignored.
   Interpreter: a registry-backed built-in. Compile paths: `%obj-new` needs a LITERAL tag, so
@@ -789,7 +805,8 @@ value is the option TAIL list (AMOP canonicalization); unknown SLOT options ride
   add-referencing-slots `rplacd`s ghost markers into them — carrying
   `:initfunction (lambda () initform)`; the materialized plain views answer nil (the meta table
   is quoted data and cannot carry a live thunk). closer-mop.lisp adds
-  `slot-definition-readers` (4), `slot-definition-initfunction` (5), `class-direct-slots` (2),
+  `slot-definition-readers` (4), `slot-definition-initfunction` (5), `-writers` (6),
+  `-initform` (2), `class-direct-slots` (2),
   `class-direct-subclasses` (interpreter = `directSubclassNames`, metaobject memo FIRST since a
   user `:around` may have INJECTED a superclass; compile paths = a generated defun plus chunked
   `%CDS-<n>` helpers).
@@ -837,8 +854,11 @@ where nested `defmethod`s carry the class METAOBJECT spliced as a literal specia
 - Run-time re-execution goes through the generated `compile` runtime (`macro/CompileRuntime` +
   `compile-runtime.lisp`, gated on a compile reference without a user defun, in the native-image
   resource-config): a defmethod-containing definition answers a do-nothing function, anything
-  else signals — so a method-defining form built from RUNTIME data is silently absorbed, the one
-  soft edge. A method under a false definition-time guard still registers in the dispatcher;
+  else is `eval`ed (which gates the eval runtime in) — so a method-defining form built from
+  RUNTIME data is silently absorbed, the one soft edge. A `(coerce <form building (lambda ...)>
+  ...)` counts as a compile reference (`coercesBuiltLambda`, lisp-unit's `run-code`); a computed
+  `'function` coercion calls `compile` on a cons only when the program carries it, so an ordinary
+  higher-order `(coerce f 'function)` stays eval-free. A method under a false definition-time guard still registers in the dispatcher;
   calling it falls through to the default or to no-applicable-method (the nested-branch
   guard, todo 445) -- matching the interpreter, where the defmethod never runs.
 

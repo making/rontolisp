@@ -137,8 +137,9 @@ it behaves identically on all four backends here. Only a **literal** keyword
 push counts: a push whose value the program computes
 (`(pushnew (intern name :keyword) *features*)`) is a real run-time push but is
 invisible to the reader, because deciding it would mean running the program to
-decide how the program is read. A `.asd` that needs to announce a feature to
-the files of the systems it defines uses `:rontolisp-features` instead (see the
+decide how the program is read. A `.asd` file is the exception: it is loaded
+form at a time, so a push it computes decides every `#+` below it and holds for
+the files of the systems it defines after the push (see the
 [Systems guide](../guides/asdf-systems.md)).
 
 And **you** may declare features on the command line: `--feature NAME`
@@ -200,9 +201,10 @@ Notes:
 - `#.` read-time evaluation **is** supported: each `#.` datum is evaluated
   just before its top-level form runs — against the global environment on the
   interpreter, and against the compile-time (macro-time) evaluator on the
-  JVM/WASM compile path — and the value is substituted into the form. In
-  `.asd` files a `#.` form is instead skipped with a warning (see the
-  [Systems guide](../guides/asdf-systems.md)); the browser playground's
+  JVM/WASM compile path — and the value is substituted into the form. Inside a
+  `.asd` file's `defsystem`, a `#.` is evaluated only where its value decides
+  what gets loaded (see the [Systems guide](../guides/asdf-systems.md)); the
+  browser playground's
   Compile buttons do not support `#.`.
 - A feature expression may be computed by `#.`, as in
   `#+#.(cl:if (cl:find-symbol "X" "SB-IMPL") '(and) '(or)) form`. The guard is
@@ -465,9 +467,9 @@ value. `:test 'equalp` widens that: such a table FOLDS each key before placing
 it, so `"CS"`, `"Cs"` and `"cs"` are one key, `#\a` and `#\A` are one key, a
 float and the rational it equals are one key (`1` and `1.0`, `1/2` and `0.5`),
 and a list of them folds element-wise. An array deliberately does not fold (a
-vector key is compared by identity, so a folded copy would never find itself),
-and on the compiled backends the `:test` has to be written literally, since
-`make-hash-table`'s arguments are not evaluated there. The fold only places the
+vector key is compared by identity, so a folded copy would never find itself).
+The `:test` is a symbol or one of the four functions (`#'equalp`), written
+literally or computed at run time (`(apply #'make-hash-table initargs)`). The fold only places the
 key: `maphash` hands back each key as it was first stored, `"cs"` for an entry
 written under `"cs"` and then under `"CS"`, and `0.5` for one written under `0.5`.
 Storing under a key the table already has replaces the value and keeps the key, under

@@ -225,31 +225,6 @@ public final class LispReader {
 	}
 
 	/**
-	 * Read all expressions from the input string, skipping {@code #.} read-time-eval
-	 * forms with a warning instead of erroring. Used for {@code .asd} files, whose
-	 * leading {@code #.} version guards would otherwise make the whole file unreadable.
-	 * @param input the source code string
-	 * @param features the active reader features
-	 * @return the list of parsed expressions
-	 */
-	public static List<LispVal> readAllSkippingReadEval(String input, Features features) {
-		return readAll(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, null, null);
-	}
-
-	/**
-	 * Read all expressions from the input string, skipping {@code #.} read-time-eval
-	 * forms with a warning instead of erroring. Used for {@code .asd} files, whose
-	 * leading {@code #.} version guards would otherwise make the whole file unreadable.
-	 * @param input the source code string
-	 * @param features the active reader features
-	 * @param file the origin file, or {@code null} when unknown
-	 * @return the list of parsed expressions
-	 */
-	public static List<LispVal> readAllSkippingReadEval(String input, Features features, @Nullable String file) {
-		return readAll(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, file, null);
-	}
-
-	/**
 	 * Read all expressions from the input string, wrapping each {@code #.} read-time-eval
 	 * datum in a {@code (%read-eval datum)} marker instead of erroring. The consumer (the
 	 * evaluator's {@code load}) resolves each marker by evaluating the datum just before
@@ -418,13 +393,61 @@ public final class LispReader {
 	}
 
 	/**
+	 * One step of a FORM-AT-A-TIME read ({@link #readNextForm}).
+	 *
+	 * @param form the datum read, or {@code null} when the input held no further datum
+	 * (whitespace, comments and dropped {@code #+}/{@code #-} guards only)
+	 * @param end the offset the next step starts at
+	 */
+	public record NextForm(@Nullable LispVal form, int end) {
+	}
+
+	/**
+	 * Reads the next top-level datum of {@code input} at or after {@code offset}, with
+	 * {@code features} deciding its {@code #+}/{@code #-} guards -- CL's {@code load},
+	 * which reads a form, evaluates it, and only then reads the next, so a feature an
+	 * evaluated form pushed decides the conditionals of every later form. Unlike
+	 * {@link Forms}, whose feature set is fixed when it opens, the caller passes a fresh
+	 * set at each step, and no {@link FeaturePushes} widening applies (a push decides
+	 * only what is read after it). A {@code #.} datum is tolerated like a {@code .asd}
+	 * read tolerates it ({@code %read-eval} markers, an unreadable datum included); the
+	 * syntax is the standard one, as real ASDF reads a {@code .asd}; positions are
+	 * recorded against the whole input, so an error names the file's own line.
+	 * @param input the source code string
+	 * @param offset where the step starts
+	 * @param features the features the guards of this datum test
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the datum read and where the next step starts
+	 */
+	public static NextForm readNextForm(String input, int offset, Features features, @Nullable String file) {
+		LispLexer lexer = new LispLexer(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, file);
+		lexer.seek(offset);
+		Forms forms = new Forms(lexer, new LispReader(List.of(), features, input, file, true));
+		LispVal form = forms.next(null);
+		return new NextForm(form, forms.position());
+	}
+
+	/**
+	 * Every top-level form {@code input} yields to a SCAN ({@link #readAllForScan}): no
+	 * provenance, a {@code #.} datum tolerated, a read error ending the scan quietly. For
+	 * a pre-pass that looks for one shape before the real, positioned read runs.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the forms read before the input ended or a read error stopped the scan
+	 */
+	public static List<LispVal> scanForms(String input, Features features, @Nullable String file) {
+		return readAllForScan(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, file);
+	}
+
+	/**
 	 * Reads as many top-level forms as the input yields, recording NO provenance and
 	 * propagating NO read error -- whatever was read before the failure is the answer.
-	 * This is the shape {@link FeaturePushes} needs and nothing else should want: its
-	 * conses are inspected and thrown away, so the real read of the same source must be
-	 * the one that claims its positions (the provenance table is first-write-wins), and a
-	 * source that does not read cleanly is the real read's error to report, positioned,
-	 * rather than a scan's.
+	 * This is the shape {@link FeaturePushes} and a pre-pass ({@link #scanForms}) need
+	 * and nothing else should want: its conses are inspected and thrown away, so the real
+	 * read of the same source must be the one that claims its positions (the provenance
+	 * table is first-write-wins), and a source that does not read cleanly is the real
+	 * read's error to report, positioned, rather than a scan's.
 	 * @param input the source code string
 	 * @param features the active reader features
 	 * @param readEvalMode how a {@code #.} datum is treated

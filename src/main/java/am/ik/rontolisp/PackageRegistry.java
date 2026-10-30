@@ -339,9 +339,9 @@ public final class PackageRegistry {
 			LispNames.RESTART_CLUSTERS_VAR, LispNames.RESTART_RECORD_TAG, LispNames.LIST_DIRECTORY,
 			LispNames.DIR_NAMESTRING, LispNames.WILD_MATCH, LispNames.PATHNAME_TYPED_P, LispNames.SLEEP_MS,
 			LispNames.MAKE_DIRECTORIES, LispNames.PATHNAME_SPLIT, LispNames.MAKE_ARRAY_ET_INTERNAL,
-			LispNames.MAKE_ARRAY_ET_FP_INTERNAL, LispNames.MAKE_BROADCAST_STREAM_INTERNAL,
-			LispNames.WRITE_TO_STRING_KEYED_INTERNAL, LispNames.BROADCAST_STREAM_CLASS,
-			LispNames.BROADCAST_STREAM_COMPONENTS, LispNames.TWO_WAY_STREAM_CLASS,
+			LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL, LispNames.MAKE_ARRAY_ET_FP_INTERNAL,
+			LispNames.MAKE_BROADCAST_STREAM_INTERNAL, LispNames.WRITE_TO_STRING_KEYED_INTERNAL,
+			LispNames.BROADCAST_STREAM_CLASS, LispNames.BROADCAST_STREAM_COMPONENTS, LispNames.TWO_WAY_STREAM_CLASS,
 			LispNames.TWO_WAY_STREAM_INPUT_INTERNAL, LispNames.TWO_WAY_STREAM_OUTPUT_INTERNAL,
 			LispNames.ECHO_STREAM_CLASS, LispNames.ECHO_STREAM_INPUT_INTERNAL, LispNames.ECHO_STREAM_OUTPUT_INTERNAL,
 			LispNames.CONCATENATED_STREAM_CLASS, LispNames.CONCATENATED_STREAM_STREAMS_INTERNAL,
@@ -738,7 +738,12 @@ public final class PackageRegistry {
 			// The mito-era accessors: readers/initfunction on slot
 			// definitions, direct slots/subclasses on class metaobjects.
 			LispNames.SLOT_DEFINITION_READERS, LispNames.SLOT_DEFINITION_INITFUNCTION, LispNames.CLASS_DIRECT_SLOTS,
-			LispNames.CLASS_DIRECT_SUBCLASSES);
+			LispNames.CLASS_DIRECT_SUBCLASSES,
+			// The slot-definition class hierarchy (access dispatches on these) and the
+			// remaining slot-definition readers.
+			ClosRegistry.SLOT_DEFINITION_NAME, ClosRegistry.DIRECT_SLOT_DEFINITION_NAME,
+			ClosRegistry.EFFECTIVE_SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_WRITERS,
+			LispNames.SLOT_DEFINITION_INITFORM);
 
 	private static final List<String> USOCKET_FUNCTION_NAMES = sorted(USOCKET_FUNCTIONS);
 
@@ -1144,10 +1149,10 @@ public final class PackageRegistry {
 						LispNames.FFI_CALLBACK, LispNames.FFI_ALLOC, LispNames.FFI_FREE, LispNames.FFI_PEEK,
 						LispNames.FFI_POKE, LispNames.FFI_SIZE, LispNames.FFI_ALIGN, LispNames.FFI_POINTERP,
 						LispNames.FFI_ADDRESS, LispNames.FFI_ERRNO, LispNames.FFI_APPLY_CALL))));
-		// A limited, API-compatible subset of ASDF (system definitions parsed from .asd
-		// files as plain data -- see eval.AsdfSystems; the runtime component metaobject
-		// family lives in Lisp source, eval.AsdfRuntimeLibrary / asdf.lisp). Does not
-		// use cl; every registered symbol is external.
+		// A limited, API-compatible subset of ASDF (.asd files run as Lisp, their
+		// defsystem forms parsed as data -- see eval.AsdfSystems; the runtime component
+		// metaobject family lives in Lisp source, eval.AsdfRuntimeLibrary / asdf.lisp).
+		// Does not use cl; every registered symbol is external.
 		define(new LispPackage(LispNames.ASDF_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.DEFSYSTEM, LispNames.LOAD_SYSTEM, LispNames.FIND_SYSTEM,
 						LispNames.TEST_SYSTEM, LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.SYSTEM_RELATIVE_PATHNAME,
