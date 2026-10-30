@@ -1491,6 +1491,9 @@ public final class LispEvaluator {
 		// *readtable* for the runtime readers, for the same reason: the readtable a
 		// read honors is the one current WHEN it reads (.kb/readtables.md).
 		this.globalEnv.setReadSyntaxQuery(this::currentReadSyntax);
+		// and the backquote depth a running reader macro function was called at, which a
+		// read-from-string it makes starts inside
+		this.globalEnv.setTemplateDepthQuery(() -> this.readerMacroTemplateDepth);
 		// a sleep an interrupt woke asks whether a debugger went on with the evaluation
 		this.globalEnv.setInterruptResumed(this::resumeAfterInterrupt);
 		this.globalEnv.defineFunction(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {

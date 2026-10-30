@@ -49,9 +49,7 @@ Quicklisp cache unless noted):
    delimits by the standard syntax), the REPL and playground (whole-buffer reads),
    `with-standard-io-syntax` (does not rebind `*readtable*`; its expansion runs after the
    instance gate is computed), calling a standard `#` sub-function, escape syntax under
-   another character, `*read-suppress*` around a reader macro, and `read-from-string`
-   inside a reader macro function starting outside the enclosing template
-   (`Environment.readOneWithSyntax` is not handed the depth `readWithSyntax` is).
+   another character, and `*read-suppress*` around a reader macro.
 4. The image is a second macro-time pass over the program (thrown away, because the passes
    between the read and `UserMacroExpander` rewrite the program): the ci-spec corpus compiles
    in 24.1 s with it vs 23.3 s without. Reusing the session when those passes change nothing

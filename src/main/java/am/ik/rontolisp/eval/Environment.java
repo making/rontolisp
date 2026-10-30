@@ -506,6 +506,23 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * Answers how many backquote templates enclose the reader macro function running now:
+	 * a {@code read-from-string} it makes starts inside them, as a {@code read} off its
+	 * stream does -- CL's backquote depth is dynamic ({@code .kb/readtables.md}).
+	 * Installed by the evaluator; a bare {@code Environment} reads at depth 0.
+	 */
+	private java.util.function.@Nullable IntSupplier templateDepthQuery;
+
+	/**
+	 * Installs the template depth query consulted by {@code read-from-string}; see
+	 * {@link #templateDepthQuery}.
+	 * @param query answers the depth
+	 */
+	public void setTemplateDepthQuery(java.util.function.IntSupplier query) {
+		this.templateDepthQuery = query;
+	}
+
+	/**
 	 * The string-input-stream view of this environment's stream table, set by
 	 * {@link #createGlobal}: what a reader macro function's stream is opened through.
 	 */
@@ -10786,7 +10803,8 @@ public final class Environment implements Scope {
 		UnaryOperator<LispVal> resolver = env.readTimeEvalResolver;
 		boolean markers = resolver != null && input.contains("#.");
 		LispReader.Forms forms = LispReader.forms(input, env.currentReadFeatures(), markers, null, resolver, 0, false)
-			.homingSymbols(env.readSymbolHome);
+			.homingSymbols(env.readSymbolHome)
+			.withinTemplates(env.templateDepthQuery == null ? 0 : env.templateDepthQuery.getAsInt());
 		LispVal datum = forms.next(syntax);
 		if (datum == null) {
 			throw endOfFile(errorStream(streams, nextStreamHandle, input));
