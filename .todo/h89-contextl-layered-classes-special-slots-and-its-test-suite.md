@@ -26,11 +26,12 @@ package `contextl`) stops at:
    (spx's `slot1`).
 3. `layer-gc` passes four of five sections; the fifth needs a later `defmethod` on
    `adjoin-layer-using-class` to run `add-method`'s `:after` (cache clearing).
-4. `spx`: `(setf (find-class 'x) nil)` (a run-time error now, `.kb/clos.md`). Past it (the line
-   removed, 2026-11-01) its special slots and special layer slots pass on all four, and it stops
-   at line 86 of the file, the redefinition of `class1` with `:reinitialize t`: the rest
-   redefines singleton classes and layers, which the compile paths cannot follow (they keep the
-   LAST definition, `.kb/clos.md`).
+4. `spx` (its opening `(setf (find-class 'test) nil)` is a no-op since 2026-11-01): its special
+   slots and special layer slots pass on all four, and it stops at the redefinition of `class1`
+   with `:reinitialize t` (`(assert (eql (some-slot (class-prototype ...)) *check-counter*))`):
+   the rest redefines singleton classes and layers, which the compile paths cannot follow (they
+   keep the LAST definition, `.kb/clos.md`), and forgetting a DEFINED class (`layer-makunbound`)
+   is still a run-time error.
 
 Done 2026-11-01, on all four: `grouped-layers` (`closer-mop:slot-definition-allocation`, and a
 slot-definition `initialize-instance :around`'s `:allocation :class` reaching the static layout)

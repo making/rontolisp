@@ -273,7 +273,10 @@ asking "is library X loaded" must therefore not be a `findClass` of X's class na
   SPELLING of `%class-meta-table%`, the runtime `typep` tag table and the `subtypep` universe.
   Only the ALIASING shape is accepted; any other shape (forgetting a class with `nil`,
   contextl's `layer-makunbound`; a computed name) expands to a run-time `error` where it runs, so
-  a function carrying one compiles (a compile failure until 2026-10-31); an unknown target
+  a function carrying one compiles (a compile failure until 2026-10-31) -- except forgetting a
+  literal name no class has when the form expands (a top-level form in program order on the
+  compile paths, a nested one against the whole program; the live registry on the
+  interpreter), which is `nil` (2026-11-01, contextl's spx opens with one); an unknown target
   throws `there is no class named`; a NON-top-level alias is an error (`markClassMetaTableEmitted` makes `registerClassAlias`
   refuse); `--no-gc` shares one never-mutated `EMPTY_CLOS_REGISTRY` and rejects the place
   outright. Macro-namespace twin: `(setf (macro-function ...))`, `.kb/defmacro-backquote.md`.

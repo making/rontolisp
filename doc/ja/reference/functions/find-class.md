@@ -16,7 +16,7 @@
       (subtypep (find-class 'vector) 'array)) ; => (BIT-VECTOR T T)
 ```
 
-`(setf (find-class alias) class)` は `class` を 2 つ目の名前で登録します。これ以降、`find-class`、`make-instance`、`typep`、`subtypep`、`handler-case` の節はいずれも別名を同一のクラスへ解決します(メタオブジェクトは `eq`)。サポートするのはこの別名付けの形だけで、値は既に定義済みのクラスを名指すリテラルな `(find-class 'target)` である必要があり、かつトップレベルでのみ使えます。コンパイルバックエンドはクラステーブルをコンパイル時に構築するためです。`nil` でクラスを忘れさせるなど、それ以外の形は実行時にエラーをシグナルします。
+`(setf (find-class alias) class)` は `class` を 2 つ目の名前で登録します。これ以降、`find-class`、`make-instance`、`typep`、`subtypep`、`handler-case` の節はいずれも別名を同一のクラスへ解決します(メタオブジェクトは `eq`)。サポートするのはこの別名付けの形だけで、値は既に定義済みのクラスを名指すリテラルな `(find-class 'target)` である必要があり、かつトップレベルでのみ使えます。コンパイルバックエンドはクラステーブルをコンパイル時に構築するためです。`nil` でクラスを忘れさせるなど、それ以外の形は実行時にエラーをシグナルします。ただし、その時点(プログラムの順序)でクラスを持たない名前への `(setf (find-class 'name) nil)` は何も取り除かず `nil` を返します。
 
 ```lisp
 (defclass shape () ((n :initarg :n :reader shape-n)))

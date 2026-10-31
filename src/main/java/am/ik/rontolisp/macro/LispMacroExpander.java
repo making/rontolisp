@@ -4641,6 +4641,11 @@ public final class LispMacroExpander {
 			List<LispVal> valueParts = valueCons.toList();
 			target = valueParts.size() >= 2 ? quotedSymbolName(valueParts.get(1)) : null;
 		}
+		if (alias != null && value instanceof LispNil && closRegistry.findClass(alias) == null) {
+			// Forgetting a name no class has (yet, in program order: contextl's spx test
+			// opens with one) removes nothing; CL answers nil.
+			return LispNil.INSTANCE;
+		}
 		if (alias == null || target == null) {
 			// Any other shape -- removing a class with nil (contextl's layer-makunbound),
 			// a computed name -- is a run-time error where it runs, so a library carrying
