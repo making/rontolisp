@@ -25646,11 +25646,18 @@ cases:
       (print (list (lower-case-p #\A) (upper-case-p #\a)))
       (print (list (constantp 5) (constantp 'x) (constantp '(quote y))))
       (print (mapcar #'upper-case-p '(#\A #\b)))
+      ;; a defconstant's name is constant, a computed designator too (defined after
+      ;; the probing defun: alexandria's %reevaluate-constant)
+      (defun ci-cp-p (name) (constantp name))
+      (defconstant +ci-cp-k+ (list 1 2))
+      (print (list (constantp '+ci-cp-k+) (ci-cp-p '+ci-cp-k+) (funcall #'constantp '+ci-cp-k+)
+                   (ci-cp-p '+ci-cp-unknown+)))
     expected: |
       (T T)
       (NIL NIL)
       (T NIL T)
       (T NIL)
+      (T T T NIL)
   - name: streamp
     source: |
       (princ (with-output-to-string (s) (princ (streamp s) s)))

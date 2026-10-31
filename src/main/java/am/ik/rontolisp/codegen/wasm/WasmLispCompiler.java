@@ -3788,6 +3788,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// so an unordered set here makes the emitted module differ per JVM run
 		// (.kb/emitted-output-determinism.md).
 		SequencedSet<String> specialVars = SpecialVarCollector.collect(program);
+		// What constantp answers t for at run time (LispMacroExpander.expandConstantp).
+		closRegistry.registerConstantNames(SpecialVarCollector.collectConstants(program));
 		// Detect whether the program uses (eval ...). When it does, a runtime
 		// interpreter (_eval) and a function-name registry are emitted, and dispatch
 		// functions are generated for every registered arity so _eval can apply them.

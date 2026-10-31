@@ -1634,7 +1634,8 @@ final class WasmExprCompiler {
 			case LispNames.SCHAR_SET -> compileExpansion(LispMacroExpander.expandScharSetFunctional(cons), ctx, tail);
 			case LispNames.LOWER_CASE_P -> WasmCharCompiler.compileLowerCaseP(cons, ctx);
 			case LispNames.UPPER_CASE_P -> WasmCharCompiler.compileUpperCaseP(cons, ctx);
-			case LispNames.CONSTANTP -> compileExpansion(LispMacroExpander.expandConstantp(cons), ctx, tail);
+			case LispNames.CONSTANTP ->
+				compileExpansion(LispMacroExpander.expandConstantp(cons, ctx.closRegistry.constantNames()), ctx, tail);
 			case LispNames.STREAMP -> compileExpansion(LispMacroExpander.expandStreamp(cons, ctx.usesSynonymStreams,
 					ctx.usesStreamValues, ctx.closRegistry), ctx, tail);
 			case LispNames.SIMPLE_STRING_P -> compileExpansion(LispMacroExpander.expandSimpleStringP(cons), ctx, tail);

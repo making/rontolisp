@@ -1,5 +1,6 @@
 package am.ik.rontolisp;
 
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -1883,6 +1884,15 @@ public final class ClosRegistry {
 	private final Map<String, LispVal> constants = new LinkedHashMap<>();
 
 	/**
+	 * Every name a {@code defconstant} anywhere in a compiled program defines, as spelled
+	 * there (canonical once packages are resolved): what {@code constantp} answers t for
+	 * at run time on the compile paths ({@code LispMacroExpander.expandConstantp}).
+	 * Scope-blind and order-free, unlike {@link #constants}: the value may be computed,
+	 * and a name defined after a probe still names a constant when the probe runs later.
+	 */
+	private final Set<String> constantNames = new java.util.LinkedHashSet<>();
+
+	/**
 	 * {@code defstruct} accessor name (normalized) to the declared {@code :type} of the
 	 * slot it reads, and struct name (normalized) to its per-slot {@code :type} table
 	 * (what an {@code :include} child inherits). Registered by
@@ -2049,6 +2059,23 @@ public final class ClosRegistry {
 			return this.constants.get(qn.member());
 		}
 		return null;
+	}
+
+	/**
+	 * Records the names the program's {@code defconstant} forms define; see
+	 * {@link #constantNames}.
+	 * @param names the names as spelled in the program
+	 */
+	public void registerConstantNames(Collection<String> names) {
+		this.constantNames.addAll(names);
+	}
+
+	/**
+	 * The names the program's {@code defconstant} forms define, in first-seen order.
+	 * @return the names, read-only
+	 */
+	public Set<String> constantNames() {
+		return java.util.Collections.unmodifiableSet(this.constantNames);
 	}
 
 	/**

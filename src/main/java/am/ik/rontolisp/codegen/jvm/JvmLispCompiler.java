@@ -1354,6 +1354,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// an unordered set here makes the emitted class differ per JVM run
 		// (.kb/emitted-output-determinism.md).
 		SequencedSet<String> specialVars = SpecialVarCollector.collect(program);
+		// What constantp answers t for at run time (LispMacroExpander.expandConstantp).
+		closRegistry.registerConstantNames(SpecialVarCollector.collectConstants(program));
 		// A fragment names what the classes before it define: their functions by name,
 		// their globals through their fields, their specials bound dynamically
 		// (JvmLinkage). Only what it names joins it.

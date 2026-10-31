@@ -1416,8 +1416,8 @@ final class JvmExprCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx, className);
 			case LispNames.LOWER_CASE_P -> JvmCharCompiler.compileLowerCaseP(cons, ctx, className);
 			case LispNames.UPPER_CASE_P -> JvmCharCompiler.compileUpperCaseP(cons, ctx, className);
-			case LispNames.CONSTANTP ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx, className);
+			case LispNames.CONSTANTP -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandConstantp(cons, ctx.closRegistry.constantNames()), ctx, className);
 			case LispNames.STREAMP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons,
 					ctx.usesSynonymStreams, ctx.usesStreamValues, ctx.closRegistry), ctx, className);
 			case LispNames.SIMPLE_STRING_P ->

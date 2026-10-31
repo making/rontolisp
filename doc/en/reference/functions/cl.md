@@ -205,7 +205,7 @@ page.
 | `listp` | `(listp '(1 2))` | `t` |
 | `consp` | `(consp '(1 2))` | `t` |
 | `keywordp` | `(keywordp :foo)` | `t` |
-| `constantp` | `(constantp 5)`, `(constantp 'x)` | `t`, `nil` -- true for self-evaluating objects (numbers, strings, characters, keywords, `t`/`nil`) and `(quote x)` forms (lite); an optional environment argument is accepted and ignored |
+| `constantp` | `(constantp 5)`, `(constantp 'x)` | `t`, `nil` -- true for self-evaluating objects (numbers, strings, characters, keywords, `t`/`nil`), `(quote x)` forms and constant-variable names (lite); an optional environment argument is accepted and ignored |
 | `streamp` | `(streamp s)` | `t` if `s` is a stream, else `nil` (a stream is a self-describing value, so an integer is not one; also backs the `stream`, `file-stream` and `string-stream` type specifiers) |
 | `cons` | `(cons 1 2)` | `(1 . 2)` |
 | `car` | `(car (cons 1 2))` | `1` (`(car nil)` is `nil`) |

@@ -13828,33 +13828,43 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands {@code (constantp form [env])} into a runtime type test: true for numbers,
-	 * strings, characters, keywords, {@code t}/{@code nil}, and {@code (quote x)} forms
-	 * (lite -- false negatives only push work to runtime). The optional environment
-	 * argument is accepted and ignored (there is no environment object; a macro's
-	 * {@code &environment} parameter is bound to nil).
+	 * strings, characters, keywords, {@code t}/{@code nil}, {@code (quote x)} forms and
+	 * the symbols a {@code defconstant} of the program defines (lite -- false negatives
+	 * only push work to runtime). The optional environment argument is accepted and
+	 * ignored (there is no environment object; a macro's {@code &environment} parameter
+	 * is bound to nil). The interpreter calls its built-in function instead, which reads
+	 * the constants defined so far.
 	 * @param cons the constantp expression
+	 * @param constantNames the names the program's {@code defconstant} forms define
+	 * ({@code ClosRegistry.constantNames}), the seeded standard constants included
 	 * @return the expanded expression
 	 */
-	public static LispVal expandConstantp(LispCons cons) {
+	public static LispVal expandConstantp(LispCons cons, Set<String> constantNames) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2 && parts.size() != 3) {
 			throw new IllegalArgumentException("constantp expects one or two arguments");
 		}
-		// A quoted standard constant ('pi) is constant (SBCL answers t): fold the
-		// literal at expansion time. A computed designator keeps the runtime test
-		// (a false negative there only narrows a macro's view, per the contract).
+		// A quoted constant name ('pi, '+k+) is constant (SBCL answers t): fold the
+		// literal at expansion time.
 		if (parts.get(1) instanceof LispCons qc && qc.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
 				&& qc.cdr() instanceof LispCons qd && qd.car() instanceof LispSymbol s && qd.cdr() instanceof LispNil
-				&& ClConstants.isSpelling(s.name())) {
+				&& (ClConstants.isSpelling(s.name()) || constantNames.contains(s.name()))) {
 			return LispTrue.INSTANCE;
 		}
 		LispSymbol c = new LispSymbol("__cp");
 		LispVal quoteForm = fmtCall(LispNames.AND, callOf(LispNames.CONSP, c),
 				fmtCall(LispNames.EQ_GENERAL, callOf(LispNames.CAR, c), quoteOf(LispNames.QUOTE)));
-		LispVal test = fmtCall(LispNames.OR, callOf(LispNames.NUMBERP, c), callOf(LispNames.STRINGP, c),
-				callOf(LispNames.CHARACTERP, c), callOf(LispNames.KEYWORDP, c),
-				fmtCall(LispNames.EQ_GENERAL, c, LispTrue.INSTANCE), callOf(LispNames.NULL, c), quoteForm);
-		return makeLet("__cp", parts.get(1), test);
+		List<LispVal> tests = new java.util.ArrayList<>(
+				List.of(new LispSymbol(LispNames.OR), callOf(LispNames.NUMBERP, c), callOf(LispNames.STRINGP, c),
+						callOf(LispNames.CHARACTERP, c), callOf(LispNames.KEYWORDP, c),
+						fmtCall(LispNames.EQ_GENERAL, c, LispTrue.INSTANCE), callOf(LispNames.NULL, c), quoteForm));
+		if (!constantNames.isEmpty()) {
+			// A computed designator naming a constant (alexandria's %reevaluate-constant
+			// probes the name it is redefining).
+			tests.add(fmtCall(LispNames.AND, fmtCall(LispNames.MEMBER, c, quotedSymbolList(List.copyOf(constantNames))),
+					LispTrue.INSTANCE));
+		}
+		return makeLet("__cp", parts.get(1), listToCons(tests));
 	}
 
 	/**

@@ -1006,6 +1006,37 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * The names a {@code defconstant} has defined, on the global environment only (null
+	 * until the first): what the {@code constantp} built-in answers t for.
+	 */
+	private @Nullable Set<String> constantNames;
+
+	/**
+	 * Records that a {@code defconstant} defined the name; called on the global
+	 * environment.
+	 * @param name the constant name
+	 */
+	public void markConstant(String name) {
+		Set<String> names = this.constantNames;
+		if (names == null) {
+			names = java.util.concurrent.ConcurrentHashMap.newKeySet();
+			this.constantNames = names;
+		}
+		names.add(name);
+	}
+
+	/**
+	 * Whether a {@code defconstant} has defined the name; asked of the global
+	 * environment.
+	 * @param name the variable name
+	 * @return true when the name names a constant
+	 */
+	public boolean isConstant(String name) {
+		Set<String> names = this.constantNames;
+		return names != null && names.contains(name);
+	}
+
+	/**
 	 * Set an existing binding, searching up the scope chain.
 	 * @param name the variable name
 	 * @param value the new value
@@ -8515,8 +8546,9 @@ public final class Environment implements Scope {
 					|| v instanceof LispDouble || v instanceof LispString || v instanceof LispChar
 					|| v instanceof LispTrue || v instanceof LispNil
 					|| (v instanceof LispSymbol s && s.name().startsWith(":"))
-			// A quoted constant variable ('pi) is constant too (SBCL answers t).
-					|| (v instanceof LispSymbol s && ClConstants.isSpelling(s.name()))
+			// A constant variable ('pi, a defconstant's name) is constant too (SBCL
+			// answers t).
+					|| (v instanceof LispSymbol s && (ClConstants.isSpelling(s.name()) || env.isConstant(s.name())))
 					|| (v instanceof LispCons c && c.car() instanceof LispSymbol h && LispNames.QUOTE.equals(h.name()));
 			return constant ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
