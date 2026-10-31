@@ -11525,8 +11525,29 @@ cases:
       (defmethod clos-decode-it (a (b (eql +clos-eql-utf8+))) (list :utf8 a b))
       (defmethod clos-decode-it (a (b (eql +clos-eql-tag+))) (list :tag a b))
       (print (list (clos-decode-it 1 12) (clos-decode-it 1 :tag) (clos-decode-it 1 99)))
+      ;; Any other specializer form is evaluated ONCE, when its method is defined
+      ;; (CLHS 7.6.2) -- contextl's (eql (lf-definer-name '...)) -- and (find-class
+      ;; 't) names the class T by the reader's t (contextl's base layer). A string
+      ;; matches only the very object, and a call before the definition runs does
+      ;; not see the method.
+      (defvar *clos-eql-count* 0)
+      (defun clos-eql-key (name) (incf *clos-eql-count*) (intern (format nil "=DEF-~A=" (symbol-name name))))
+      (defvar *clos-eql-s* "key")
+      (defgeneric clos-eql-form (x)
+        (:method (x) (list :other x))
+        (:method ((x (eql (clos-eql-key 'alpha)))) :alpha)
+        (:method ((x (eql (find-class 't)))) :class-t))
+      (print (list (clos-eql-form '=def-alpha=) (clos-eql-form (find-class 't)) (clos-eql-form 'beta) *clos-eql-count*))
+      (print (clos-eql-form 42))
+      (defmethod clos-eql-form ((x (eql (+ 40 2)))) :forty-two)
+      (defmethod clos-eql-form ((x (eql (identity *clos-eql-s*)))) :that-string)
+      (print (list (clos-eql-form 42) (clos-eql-form *clos-eql-s*) (clos-eql-form (copy-seq *clos-eql-s*))
+                   (clos-eql-form '=def-alpha=) *clos-eql-count*))
     expected: |
       ((:UTF8 1 12) (:TAG 1 :TAG) (:DEFAULT 1 99))
+      (:ALPHA :CLASS-T (:OTHER BETA) 1)
+      (:OTHER 42)
+      (:FORTY-TWO :THAT-STRING (:OTHER "key") :ALPHA 1)
   - name: clos-defmethod-bit-vector-specializer
     source: |
       ;; A bit-vector specializer (cl-slice's canonical-representation pairs it with
@@ -18919,10 +18940,21 @@ cases:
                                  (mcp-column-type (mcp-slot-column s))
                                  :plain)))
                      (%obj-ref (find-class 'mcp-user) 3)))
+      ;; Any symbol names a class option, and its value is the option's tail,
+      ;; dotted or not: contextl's deflayer writes (original-name . name) for a
+      ;; slot whose :initarg is that plain symbol.
+      (defclass mcp-layer-class (standard-class)
+        ((layer-name :initarg original-name :initform nil :reader mcp-layer-name)
+         (extra :initarg :extra :initform nil :reader mcp-extra)))
+      (defclass mcp-root () () (:metaclass mcp-layer-class) (original-name . t))
+      (defclass mcp-named () () (:metaclass mcp-layer-class) (original-name . named) (:extra . "x"))
+      (print (list (mcp-layer-name (find-class 'mcp-root)) (mcp-layer-name (find-class 'mcp-named))
+                   (mcp-extra (find-class 'mcp-named)) (mcp-extra (find-class 'mcp-root))))
     expected: |
       (MCP-USER T T "users" (ID) (MCP-USER) T)
       (7 "n/a" T)
       ((ID INTEGER) (NOTE :PLAIN))
+      (T NAMED "x" NIL)
   - name: mop-widening-for-mito
     source: |
       ;; The mito metaclass shape WITHOUT mito: the defclass driver
@@ -32349,3 +32381,26 @@ standalone:
       ((:A 12) :E 5)
       (14 2 (1 3))
       (:UNSET :NOT-A-FUNCTION :NOT-FUNCALLABLE)
+  - name: closer-mop-class-utilities
+    source: |
+      ;; closer-mop's subclassp (reflexive; metaobjects or names), class-prototype
+      ;; (one memoized all-unbound instance per class -- contextl caches its layer
+      ;; contexts by it) and required-args (the parameters ahead of the first
+      ;; lambda-list keyword, through an optional collector).
+      (asdf:load-system "closer-mop")
+      (defclass cmu-base () ((a :initarg :a :initform 1)))
+      (defclass cmu-sub (cmu-base) ())
+      (print (list (closer-mop:subclassp 'cmu-sub 'cmu-base)
+                   (closer-mop:subclassp (find-class 'cmu-sub) (find-class 'cmu-sub))
+                   (closer-mop:subclassp 'cmu-base 'cmu-sub)
+                   (closer-mop:subclassp (find-class 'cmu-sub) (find-class 't))))
+      (let ((p (closer-mop:class-prototype (find-class 'cmu-sub))))
+        (print (list (eq p (closer-mop:class-prototype (find-class 'cmu-sub))) (typep p 'cmu-base)
+                     (slot-boundp p 'a) (eq (class-of p) (find-class 'cmu-sub)))))
+      (print (list (closer-mop:required-args '(a b &optional c &rest r))
+                   (closer-mop:required-args '(&key x))
+                   (closer-mop:required-args '(x (y integer)) (lambda (p) (if (consp p) (car p) p)))))
+    stdout: |
+      (T T NIL T)
+      (T T NIL T)
+      ((A B) NIL (X Y))

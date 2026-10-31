@@ -20304,7 +20304,10 @@ public final class LispMacroExpander {
 				continue;
 			}
 			if (metaclassName != null && parts.get(i) instanceof LispCons optCons
-					&& optCons.car() instanceof LispSymbol optSym && optSym.isKeyword()) {
+					&& optCons.car() instanceof LispSymbol optSym) {
+				// Any symbol names a class option (CLHS defclass), and an initarg is any
+				// symbol: contextl's deflayer writes (original-name . name), whose value
+				// is the dotted tail itself.
 				classInitargs.add(optSym);
 				classInitargs.add(optCons.cdr());
 				continue;
@@ -20695,13 +20698,13 @@ public final class LispMacroExpander {
 	 * ({@code :name}/{@code :initargs}/{@code :initform}/{@code :initfunction}/
 	 * {@code :type}/{@code :readers} -- the seeded slot-definition initarg contract --
 	 * followed by the slot's non-standard options verbatim), the class initargs are the
-	 * unknown class options keyed by their keyword with the option TAIL as the value. The
-	 * spec spines are built with {@code list} rather than quoted, for two reasons:
-	 * {@code :initfunction} carries a LIVE {@code (lambda () initform)} thunk (mito's
-	 * migration diffing funcalls it), and a user {@code initialize-instance :around} may
-	 * MUTATE a spec in place (mito's {@code add-referencing-slots} rplacd's ghost markers
-	 * into column plists) -- each driver-call evaluation must hand out fresh cells, never
-	 * shared literals.
+	 * unknown class options keyed by their name (any symbol) with the option TAIL as the
+	 * value. The spec spines are built with {@code list} rather than quoted, for two
+	 * reasons: {@code :initfunction} carries a LIVE {@code (lambda () initform)} thunk
+	 * (mito's migration diffing funcalls it), and a user
+	 * {@code initialize-instance :around} may MUTATE a spec in place (mito's
+	 * {@code add-referencing-slots} rplacd's ghost markers into column plists) -- each
+	 * driver-call evaluation must hand out fresh cells, never shared literals.
 	 */
 	private static LispVal ensureClassWithMetaclassCall(String className, String metaclassName,
 			List<ClosRegistry.ClassInfo> superInfos, List<ParsedSlot> ownSlots, List<LispVal> classInitargs) {
@@ -20748,7 +20751,8 @@ public final class LispMacroExpander {
 		List<LispVal> initargsCall = new java.util.ArrayList<>();
 		initargsCall.add(new LispSymbol(LispNames.LIST));
 		for (int i = 0; i < classInitargs.size(); i++) {
-			initargsCall.add(i % 2 == 0 ? classInitargs.get(i) : quotedData(classInitargs.get(i)));
+			initargsCall.add(i % 2 == 0 && classInitargs.get(i) instanceof LispSymbol key ? initargForm(key.name())
+					: quotedData(classInitargs.get(i)));
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.ENSURE_CLASS_WITH_METACLASS), quoteOf(className),
 				quoteOf(metaclassName), quotedData(supers),
@@ -25697,6 +25701,12 @@ public final class LispMacroExpander {
 				insertRestVariable(tail, methodRestVar);
 			}
 		}
+		// A computed (eql form) specializer reads its generic's cell; the expansion
+		// assigns the cell ahead of the method-body defun.
+		List<LispVal> eqlCellAssignments = new java.util.ArrayList<>();
+		List<ClosRegistry.Specializer> bound = bindComputedEqlSpecializers(specializers, generic, eqlCellAssignments);
+		specializers.clear();
+		specializers.addAll(bound);
 		String functionName = methodFunctionName(generic);
 		String specKey = specKeyText(specializers);
 		// Qualifier + specializers form the registry key, so a :before dog method and a
@@ -25755,7 +25765,7 @@ public final class LispMacroExpander {
 			List<LispVal> synthesized = new java.util.ArrayList<>();
 			synthesizeInitProtocolDefault(generic, closRegistry, synthesized);
 			synthesized.add(methodDefun);
-			return makeProgn(synthesized);
+			return withEqlCellAssignments(eqlCellAssignments, makeProgn(synthesized));
 		}
 		// print-object is the same shape for the same reason: CL supplies a system
 		// method for EVERY object, so a program that specializes it on one class must
@@ -25765,7 +25775,7 @@ public final class LispMacroExpander {
 			List<LispVal> synthesized = new java.util.ArrayList<>();
 			synthesizePrintObjectDefault(generic, synthesized);
 			synthesized.add(methodDefun);
-			return makeProgn(synthesized);
+			return withEqlCellAssignments(eqlCellAssignments, makeProgn(synthesized));
 		}
 		// make-load-form too: its standard methods answer every instance (with an
 		// error), so a method on one type must leave the others theirs.
@@ -25773,7 +25783,7 @@ public final class LispMacroExpander {
 			List<LispVal> synthesized = new java.util.ArrayList<>();
 			synthesizeMakeLoadFormDefault(generic, synthesized);
 			synthesized.add(methodDefun);
-			return makeProgn(synthesized);
+			return withEqlCellAssignments(eqlCellAssignments, makeProgn(synthesized));
 		}
 		// slot-unbound / slot-missing too: their system methods signal for every
 		// object, which is what a read the user's method does not cover still does.
@@ -25781,9 +25791,28 @@ public final class LispMacroExpander {
 			List<LispVal> synthesized = new java.util.ArrayList<>();
 			synthesizeSlotProtocolDefault(generic, synthesized);
 			synthesized.add(methodDefun);
-			return makeProgn(synthesized);
+			return withEqlCellAssignments(eqlCellAssignments, makeProgn(synthesized));
 		}
-		return methodDefun;
+		return withEqlCellAssignments(eqlCellAssignments, methodDefun);
+	}
+
+	/**
+	 * A method expansion with the computed-{@code eql}-specializer cell assignments ahead
+	 * of it, in one {@code progn}; the expansion itself when there are none.
+	 */
+	private static LispVal withEqlCellAssignments(List<LispVal> assignments, LispVal expansion) {
+		if (assignments.isEmpty()) {
+			return expansion;
+		}
+		List<LispVal> forms = new java.util.ArrayList<>(assignments);
+		if (isNamedForm(expansion, LispNames.PROGN) && expansion instanceof LispCons progn) {
+			List<LispVal> members = progn.toList();
+			forms.addAll(members.subList(1, members.size()));
+		}
+		else {
+			forms.add(expansion);
+		}
+		return makeProgn(forms);
 	}
 
 	/** Whether the plain generic name is {@code slot-unbound} or {@code slot-missing}. */
@@ -26385,7 +26414,7 @@ public final class LispMacroExpander {
 				&& !(quotedRest.car() instanceof LispCons)) {
 			value = quotedRest.car();
 		}
-		else if (classMetaobjectName(value, closRegistry) instanceof LispSymbol className) {
+		else if (classMetaobjectName(value, closRegistry) instanceof LispVal className) {
 			// (eql #<class>): the literal metaobject is the one find-class answers.
 			value = findClassForm(className);
 		}
@@ -26400,42 +26429,81 @@ public final class LispMacroExpander {
 		if (isEqlSpecializerLiteral(value)) {
 			return value;
 		}
-		if (findClassFormName(value) instanceof LispSymbol className) {
+		if (findClassFormName(value) instanceof LispVal className) {
 			// (eql (find-class 'c)): the form is evaluated where the method is defined
 			// (CLHS 7.6.2), and find-class answers one memoized metaobject per class, so
 			// the dispatcher evaluating it again compares against the same object. The
-			// class must exist now, as find-class would require.
-			closRegistry.ensureMopClassesSeededFor(className.name());
-			String plain = plainName(className.name());
-			if (closRegistry.findClass(className.name()) == null && closRegistry.findStructTag(className.name()) == null
+			// class must exist now, as find-class would require. The reader's t is no
+			// symbol, so (find-class 't) -- contextl's base-layer specializer -- names
+			// the built-in class T by that value.
+			String name = className instanceof LispSymbol sym ? sym.name() : "T";
+			closRegistry.ensureMopClassesSeededFor(name);
+			String plain = plainName(name);
+			if (closRegistry.findClass(name) == null && closRegistry.findStructTag(name) == null
 					&& !ClosRegistry.BUILTIN_CLASS_NAMES.contains(plain)
 					&& !ClosRegistry.FIND_CLASS_ONLY_CLASS_NAMES.contains(plain)) {
-				throw new IllegalArgumentException(LispNames.DEFMETHOD + ": there is no class named " + className.name()
-						+ " in " + specCons.print());
+				throw new IllegalArgumentException(
+						LispNames.DEFMETHOD + ": there is no class named " + name + " in " + specCons.print());
 			}
 			return findClassForm(className);
 		}
-		throw new UnsupportedOperationException(LispNames.DEFMETHOD
-				+ " eql specializers support keyword/symbol/number/character literals and (find-class 'name) only: "
-				+ defmethodForm.print());
+		// Any other form (contextl's (eql (lf-definer-name 'adjoin-layer-using-class)),
+		// a string) is evaluated ONCE, where the method is defined: expandDefmethod
+		// stores its value in a global cell the dispatcher compares against.
+		return listToCons(List.of(new LispSymbol(EQL_SPECIALIZER_FORM), value));
+	}
+
+	/**
+	 * The head of the placeholder {@link #parseEqlSpecializerValue} answers for a
+	 * computed {@code (eql form)} specializer, which {@link #expandDefmethod} replaces by
+	 * the generic's cell for that form before anything else sees the specializer.
+	 */
+	private static final String EQL_SPECIALIZER_FORM = "%EQL-SPECIALIZER-FORM";
+
+	/**
+	 * The specializers with every computed {@code (eql form)} placeholder replaced by a
+	 * read of its generic's cell ({@code (the t cell)}), the cell assignments
+	 * {@code (setq cell form)} appended to {@code assignments} in parameter order. CLHS
+	 * 7.6.2 evaluates the form when the method is defined -- where the expansion puts the
+	 * assignment -- and the dispatcher compares with {@code eql} against the value.
+	 */
+	private static List<ClosRegistry.Specializer> bindComputedEqlSpecializers(
+			List<ClosRegistry.Specializer> specializers, ClosRegistry.GenericInfo generic, List<LispVal> assignments) {
+		List<ClosRegistry.Specializer> out = new java.util.ArrayList<>(specializers.size());
+		for (ClosRegistry.Specializer spec : specializers) {
+			if (spec.kind() == ClosRegistry.SpecializerKind.EQL && spec.eqlValue() instanceof LispCons placeholder
+					&& placeholder.car() instanceof LispSymbol head && EQL_SPECIALIZER_FORM.equals(head.name())
+					&& placeholder.cdr() instanceof LispCons formCell) {
+				LispVal form = formCell.car();
+				LispSymbol cell = new LispSymbol(generic.eqlSpecializerCell(form.print()));
+				assignments.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), cell, form)));
+				out.add(new ClosRegistry.Specializer(ClosRegistry.SpecializerKind.EQL,
+						listToCons(List.of(new LispSymbol(LispNames.THE), LispTrue.INSTANCE, cell)), null));
+			}
+			else {
+				out.add(spec);
+			}
+		}
+		return out;
 	}
 
 	/** {@code (find-class 'name)}. */
-	private static LispVal findClassForm(LispSymbol className) {
+	private static LispVal findClassForm(LispVal className) {
 		return listToCons(List.of(new LispSymbol(LispNames.FIND_CLASS),
 				listToCons(List.of(new LispSymbol(LispNames.QUOTE), className))));
 	}
 
 	/**
-	 * The class name of a {@code (find-class 'name)} form, or null for any other value.
+	 * The class name of a {@code (find-class 'name)} form -- a symbol, or the reader's
+	 * {@code t} -- or null for any other value.
 	 */
-	@Nullable private static LispSymbol findClassFormName(LispVal value) {
+	@Nullable private static LispVal findClassFormName(LispVal value) {
 		if (value instanceof LispCons call && call.isProperList() && call.toList().size() == 2
 				&& call.car() instanceof LispSymbol op && LispNames.FIND_CLASS.equals(plainName(op.name()))
 				&& call.toList().get(1) instanceof LispCons quoted && quoted.isProperList()
 				&& quoted.toList().size() == 2 && quoted.car() instanceof LispSymbol q && LispNames.isQuote(q.name())
-				&& quoted.toList().get(1) instanceof LispSymbol name) {
-			return name;
+				&& (quoted.toList().get(1) instanceof LispSymbol || quoted.toList().get(1) instanceof LispTrue)) {
+			return quoted.toList().get(1);
 		}
 		return null;
 	}
@@ -27553,9 +27621,14 @@ public final class LispMacroExpander {
 	 * strings -- and numbers/characters with {@code eql}.
 	 */
 	private static LispVal makeEqlSpecializerTest(LispVal arg, LispVal value) {
-		if (value instanceof LispCons findClass) {
+		if (findClassFormName(value) != null) {
 			// (find-class 'c): one memoized metaobject, compared by identity.
-			return listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), arg, findClass));
+			return listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), arg, value));
+		}
+		if (value instanceof LispCons cellRead) {
+			// (the t cell): a computed specializer's value, stored when its method was
+			// defined.
+			return listToCons(List.of(new LispSymbol(LispNames.EQL), arg, cellRead));
 		}
 		if (value instanceof LispNil) {
 			return callOf(LispNames.NULL, arg);
@@ -28254,6 +28327,18 @@ public final class LispMacroExpander {
 		for (java.util.Map.Entry<Integer, String> slot : dispatcherSlots.entrySet()) {
 			out.set(slot.getKey(), generateDispatcher(slot.getValue(), closRegistry, null, activeNarrower));
 		}
+		// A computed (eql form) specializer's cell is assigned where its defmethod runs,
+		// but a dispatcher placed earlier may run first: each cell starts out holding a
+		// fresh cons no argument can be eql to, so the method stays inapplicable until
+		// its definition has run -- the interpreter's answer for the same program.
+		List<LispVal> eqlCells = new java.util.ArrayList<>();
+		for (ClosRegistry.GenericInfo info : closRegistry.generics().values()) {
+			for (String cell : info.eqlSpecializerCells()) {
+				eqlCells.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(cell),
+						listToCons(List.of(new LispSymbol(LispNames.LIST), LispNil.INSTANCE)))));
+			}
+		}
+		out.addAll(0, eqlCells);
 		// Same phase, same reason as the dispatchers: a struct predicate emitted before
 		// its :include children were registered tests too few tags.
 		refreshStructPredicates(out, closRegistry);

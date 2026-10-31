@@ -83,6 +83,34 @@
 (defun closer-mop:class-direct-subclasses (class)
   (%class-direct-subclasses class))
 
+(defun closer-mop:subclassp (class superclass)
+  ;; Whether SUPERCLASS is in CLASS's precedence list (reflexive); each argument
+  ;; a metaobject or a class name. The class lattice is what subtypep consults.
+  (if (subtypep class superclass) t nil))
+
+;; One prototype per class (AMOP class-prototype), so (eq (class-prototype c)
+;; (class-prototype c)) holds -- contextl caches layer contexts by it.
+(defvar closer-mop::*class-prototypes* nil)
+
+(defun closer-mop:class-prototype (class)
+  (let ((hit (assoc class closer-mop::*class-prototypes* :test #'eq)))
+    (if hit
+        (cdr hit)
+        (let ((prototype (allocate-instance class)))
+          (setq closer-mop::*class-prototypes*
+                (cons (cons class prototype) closer-mop::*class-prototypes*))
+          prototype))))
+
+(defun closer-mop:required-args (lambda-list &optional (collector #'identity))
+  ;; The parameters ahead of the first lambda-list keyword, each passed through
+  ;; COLLECTOR.
+  (let ((out nil))
+    (dolist (arg lambda-list)
+      (if (member arg lambda-list-keywords)
+          (return)
+          (setq out (cons (funcall collector arg) out))))
+    (reverse out)))
+
 (defun closer-mop:set-funcallable-instance-function (instance function)
   ;; The function a funcallable instance calls lives in the cell its layout
   ;; reserves before the tail (LispLayout.FUNCALLABLE_CELL, -2 from the end of

@@ -1575,6 +1575,8 @@ public final class ClosRegistry {
 
 		private int methodCounter = 0;
 
+		private final LinkedHashMap<String, String> eqlSpecializerCells = new LinkedHashMap<>();
+
 		@Nullable private String methodCombination;
 
 		private boolean mostSpecificLast;
@@ -1740,6 +1742,31 @@ public final class ClosRegistry {
 		 */
 		public int nextMethodIndex() {
 			return this.methodCounter++;
+		}
+
+		/**
+		 * The global cell holding the value of a COMPUTED {@code (eql form)} specializer,
+		 * minted on first request: {@code %NAME--eqlN}, the {@code %} after the package
+		 * qualifier when there is one. One cell per form TEXT, so a method defined again
+		 * with the same form replaces the earlier one (its specializer key is the cell)
+		 * while the form is evaluated anew.
+		 * @param formText the printed specializer form
+		 * @return the cell's variable name
+		 */
+		public String eqlSpecializerCell(String formText) {
+			return this.eqlSpecializerCells.computeIfAbsent(formText, text -> {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(this.name);
+				return (qn == null ? "%" + this.name : qn.pkg() + "::%" + qn.member()) + "--eql"
+						+ this.eqlSpecializerCells.size();
+			});
+		}
+
+		/**
+		 * Every computed-{@code eql}-specializer cell of this generic, in minting order.
+		 * @return the cell names
+		 */
+		public java.util.Collection<String> eqlSpecializerCells() {
+			return this.eqlSpecializerCells.values();
 		}
 
 		/**

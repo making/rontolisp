@@ -761,7 +761,9 @@ public final class PackageRegistry {
 			ClosRegistry.STANDARD_WRITER_METHOD, ClosRegistry.EQL_SPECIALIZER,
 			// Exported, not implemented (methods are not runtime objects here): rutils
 			// names it in an add-method expansion that loading never runs.
-			"INTERN-EQL-SPECIALIZER");
+			"INTERN-EQL-SPECIALIZER",
+			// contextl's class utilities.
+			"SUBCLASSP", "CLASS-PROTOTYPE", "REQUIRED-ARGS");
 
 	/**
 	 * The {@code cl} symbols upstream {@code closer-mop} re-exports: the metaobject class

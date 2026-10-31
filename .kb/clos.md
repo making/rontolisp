@@ -111,10 +111,21 @@ so `#'name`/`funcall`/`mapcar` work with no `BuiltinFunctionWrappers` entry.
   `defconstant` name -> literal value table (`registerConstant`/`findConstant`) filled in
   DEFINITION ORDER. `parseEqlSpecializerValue` consults it for a BARE symbol only; `(eql 'x)`
   is the symbol, and a bare symbol naming no constant stands for itself.
-  `(eql (find-class 'c))` (and `(eql #<class>)`) is the one COMPUTED form accepted: the eql
-  value stays the `(find-class 'c)` form and `makeEqlSpecializerTest` emits
-  `(eq arg (find-class 'c))` -- find-class is memoized, so re-evaluating it per call compares
-  against the definition-time object. `c` must resolve at definition time.
+  `(eql (find-class 'c))` (and `(eql #<class>)`) stays the `(find-class 'c)` form and
+  `makeEqlSpecializerTest` emits `(eq arg (find-class 'c))` -- find-class is memoized, so
+  re-evaluating it per call compares against the definition-time object. `c` must resolve at
+  definition time; the reader's `t` (not a symbol) names the class T (contextl's base layer).
+- **Any other `(eql form)` is evaluated ONCE, where the method is defined** (2026-10-31,
+  contextl's `(eql (lf-definer-name '...))`; a string too): `parseEqlSpecializerValue` answers an
+  `%EQL-SPECIALIZER-FORM` placeholder, `expandDefmethod` binds it to a per-generic CELL
+  (`GenericInfo.eqlSpecializerCell`, `%<generic>--eqlN`, one per form TEXT so a same-form
+  redefinition keeps its key) and puts `(setq cell form)` ahead of the method defun
+  (`withEqlCellAssignments`); the specializer value is `(the t cell)` and the test `(eql arg
+  (the t cell))`. The compile paths prepend `(defvar cell (list nil))` per cell after the
+  dispatchers are placed, so a dispatcher running before the defmethod form sees a cons no
+  argument is `eql` to -- the interpreter's answer (the method does not exist yet). Before, such a
+  form was an `UnsupportedOperationException` at expansion. ci-spec
+  `clos-defmethod-eql-specializer-over-a-constant`.
 - **Metaclass specializers**: `parseSpecializer` seeds the MOP classes for `class` /
   `standard-class` (`ensureMopClassesSeededFor`, like a type specifier) so they become CLASS
   specializers matching every class metaobject (built-in classes included);
@@ -815,7 +826,10 @@ A `defclass` carrying `(:metaclass M)` — `M` registered and descending from `s
 keeps its full static expansion and additionally emits ONE
 `(%ensure-class-with-metaclass 'name 'M '(supers) (list slot-specs...) (list class-initargs...))`
 driver call as its last generated form. Unknown CLASS options become metaclass initargs whose
-value is the option TAIL list (AMOP canonicalization); unknown SLOT options ride the canonical
+value is the option TAIL (AMOP canonicalization, SBCL's `(cdr option)`); the option name is ANY
+symbol, a non-keyword one passed quoted, and the tail may be dotted -- contextl's deflayer writes
+`(original-name . name)` for a slot whose `:initarg` is `original-name` (keywords only until
+2026-10-31, ci-spec `defclass-metaclass-protocol`); unknown SLOT options ride the canonical
 `(:name .. :initargs .. :initform .. :type .. :readers ..)` spec plist as
 `direct-slot-definition-class` initargs.
 - The driver + system defaults for `closer-mop:{validate-superclass (permissive t),
