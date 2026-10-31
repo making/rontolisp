@@ -70,7 +70,7 @@ may then fail.
 | compile/loader introspection: `make-load-form` 41, `compile-file` 23, `disassemble` 14, `trace` 15 | ~90 | `.todo/042` |
 | condition restarts: `restart-case` 19, `with-condition-restarts` 8 | ~30 | `.todo/039` |
 | `copy-structure` (31 by reason -- the failing tests are named `STRUCT-TEST-*`, not `COPY-STRUCTURE`) | 31 | `.todo/907` |
-| `boole` 13, `upgraded-array-element-type` 11, `formatter` 10, `pathname-match-p` 14 | ~50 | various |
+| `upgraded-array-element-type` 11, `formatter` 10, `pathname-match-p` 14 (`boole` 13 implemented 2026-10-31, unmeasured) | ~35 | various |
 | `#:test-not` keyword, `:allow-other-keys`, arity (`expects 1 argument, got N`) | ~60 | `.todo/006`, `.todo/031` |
 
 ### 3. Decided against -- do not read these as gaps

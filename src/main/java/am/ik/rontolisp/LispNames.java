@@ -608,6 +608,12 @@ public final class LispNames {
 	public static final String LOGCOUNT = "LOGCOUNT";
 
 	/**
+	 * The {@code boole} prelude function (the two-operand bit operation a {@code boole-*}
+	 * constant names).
+	 */
+	public static final String BOOLE = "BOOLE";
+
+	/**
 	 * The {@code byte} built-in (builds a byte specifier). Represented internally as a
 	 * two-element list {@code (size position)}.
 	 */

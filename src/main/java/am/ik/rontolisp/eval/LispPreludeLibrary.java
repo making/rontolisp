@@ -3580,6 +3580,37 @@ public final class LispPreludeLibrary {
 				          (setq x (ash x -1)))
 				        c)))
 				""");
+		// boole: the sixteen two-operand bit operations, chosen by a boole-*
+		// constant. Each is one of the log* operators (or an operand, its
+		// complement, 0 or -1), so it is exact for integers of any size wherever
+		// those are. The dispatch compares against the constants by name, never
+		// their values, which CLHS leaves to the implementation.
+		SOURCES.put(LispNames.BOOLE, """
+				(defun boole (op integer-1 integer-2)
+				  (check-type integer-1 integer)
+				  (check-type integer-2 integer)
+				  (cond ((eql op boole-and) (logand integer-1 integer-2))
+				        ((eql op boole-ior) (logior integer-1 integer-2))
+				        ((eql op boole-xor) (logxor integer-1 integer-2))
+				        ((eql op boole-eqv) (logeqv integer-1 integer-2))
+				        ((eql op boole-nand) (lognand integer-1 integer-2))
+				        ((eql op boole-nor) (lognor integer-1 integer-2))
+				        ((eql op boole-andc1) (logandc1 integer-1 integer-2))
+				        ((eql op boole-andc2) (logandc2 integer-1 integer-2))
+				        ((eql op boole-orc1) (logorc1 integer-1 integer-2))
+				        ((eql op boole-orc2) (logorc2 integer-1 integer-2))
+				        ((eql op boole-1) integer-1)
+				        ((eql op boole-2) integer-2)
+				        ((eql op boole-c1) (lognot integer-1))
+				        ((eql op boole-c2) (lognot integer-2))
+				        ((eql op boole-clr) 0)
+				        ((eql op boole-set) -1)
+				        (t (error 'type-error :datum op
+				                  :expected-type (list 'member boole-1 boole-2 boole-and boole-andc1
+				                                       boole-andc2 boole-c1 boole-c2 boole-clr boole-eqv
+				                                       boole-ior boole-nand boole-nor boole-orc1
+				                                       boole-orc2 boole-set boole-xor)))))
+				""");
 		// integer-decode-float: like decode-float but the significand is an
 		// integer -- f = significand * 2^exponent * sign, exactly, with the sign
 		// an INTEGER (CLHS: a float sign is decode-float's business only). The

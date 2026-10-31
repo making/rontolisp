@@ -96,6 +96,7 @@ categories:
       - { slug: logbitp, name: "logbitp" }
       - { slug: logtest, name: "logtest" }
       - { slug: logcount, name: "logcount" }
+      - { slug: boole, name: "boole" }
       - { slug: byte, name: "byte" }
       - { slug: byte-size, name: "byte-size" }
       - { slug: byte-position, name: "byte-position" }

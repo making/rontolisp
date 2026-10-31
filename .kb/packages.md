@@ -74,9 +74,9 @@ each is blocked by a missing OPERATOR, which is the distinction this change draw
 ... constants (CLHS 12.1.4); `.todo/803` renamed them in `LispNames` and `ClConstants` (values
 kept in the same 1..16 assignment, boole-1/boole-2 unchanged) and dropped the fourteen correct
 spellings from `PackageRegistry.CL_EXPORTED_ONLY`, where `.todo/796` had had to list them as
-missing standard names while the invented spellings sat beside them. `boole` itself stays
-unimplemented (still in `CL_EXPORTED_ONLY`) -- a prelude defun over these constants belongs with
-`.todo/037`'s `logeqv`/`lognor` row.
+missing standard names while the invented spellings sat beside them. `boole` itself is a
+`LispPreludeLibrary` defun (2026-10-31) that dispatches by `eql` against the constants by NAME, so
+the value assignment stays free to change; pinned by ci-spec `boole`.
 
 **The REPL history variables** (`*` `**` `***` `/` `//` `///` `+` `++` `+++`,
 `LispNames.REPL_VARIABLES`) are `CL_VARIABLES` (2026-10-30; the six non-operator spellings left
