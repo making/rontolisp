@@ -16,8 +16,11 @@ import java.util.List;
  * {@code :in} a layer, an {@code :around}, {@code call-next-method},
  * {@code with-active-layers} / {@code with-inactive-layers} in every order demo3 asserts,
  * {@code ensure-active-layer} / {@code ensure-inactive-layer}, {@code active-layers},
- * {@code layer-active-p}, and the layer context cache (an {@code :after} method on
- * {@code adjoin-layer-using-class} runs once per new context). Every activation makes an
+ * {@code layer-active-p}, the layer context cache (an {@code :after} method on
+ * {@code adjoin-layer-using-class} runs once per new context), and contextl's own
+ * {@code test/grouped-layers.lisp}: a {@code standard-layer-class} subclass whose
+ * {@code adjoin-layer-using-class}/{@code remove-layer-using-class} methods read layer
+ * slots the singleton slot definition makes class-allocated. Every activation makes an
  * anonymous {@code standard-layer-class} at RUN time and dispatches on its prototype
  * ({@code .kb/clos.md}, "Classes made at run time"). The output is keywords and strings
  * only: the interpreter prints a {@code contextl-user} symbol qualified inside a form
@@ -72,13 +75,45 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			(print (test))
 			(ensure-inactive-layer 'info-layer)
 			(print (test))
+			(defclass grouped-layer (standard-layer-class) ())
+			(defgeneric group-root (layer))
+			(defgeneric default-layer (layer))
+			(define-layered-method adjoin-layer-using-class ((to-add grouped-layer) active-layers)
+			  (call-next-layered-method to-add (remove-layer (group-root (find-layer to-add)) active-layers)))
+			(define-layered-method remove-layer-using-class ((to-remove grouped-layer) active-layers)
+			  (declare (ignore active-layers))
+			  (multiple-value-bind (new-layers cacheablep) (call-next-method)
+			    (values (adjoin-layer (default-layer (find-layer to-remove)) new-layers) cacheablep)))
+			(deflayer output ()
+			  ((group-root :initform 'output :reader group-root)
+			   (default-layer :initform 'plain-output :reader default-layer)))
+			(deflayer plain-output (output) () (:metaclass grouped-layer))
+			(deflayer html-output (output) () (:metaclass grouped-layer))
+			(deflayer xml-output (output) () (:metaclass grouped-layer))
+			(define-layered-function make-output ()
+			  (:method () (list :output))
+			  (:method :in plain-output () (list* :plain (call-next-method)))
+			  (:method :in html-output () (list* :html (call-next-method)))
+			  (:method :in xml-output () (list* :xml (call-next-method))))
+			(print (mapcar #'slot-definition-allocation (class-direct-slots (find-layer-class 'output))))
+			(print (list (eq (group-root (find-layer 'xml-output)) 'output)
+			             (eq (default-layer (find-layer 'html-output)) 'plain-output)))
+			(print (list (make-output)
+			             (with-active-layers (plain-output)
+			               (list (make-output)
+			                     (with-active-layers (html-output)
+			                       (list (make-output)
+			                             (with-active-layers (xml-output)
+			                               (list (make-output)
+			                                     (with-inactive-layers (xml-output) (make-output))))))))))
 			""";
 
 	private static final List<String> EXPECTED = List.of("(:ROOT)", "(:INFO :ROOT)", "(:EMPLOYMENT :INFO :ROOT)",
 			"(:INFO :EMPLOYMENT :ROOT)", "(:EMPLOYMENT :INFO :ROOT)", "(:EMPLOYMENT :ROOT)", "(:INFO :ROOT)",
 			"(:EMPLOYMENT :ROOT)", "(\"EMPLOYMENT-LAYER\" \"INFO-LAYER\" \"T\")", "(NIL T)",
 			"(\"Hello, Ann\" \"Hello, Bob, please\" \"Dear Hello, Cy, please\")", "(:ADJOINED)", "(:INFO :ROOT)",
-			"(:ROOT)");
+			"(:ROOT)", "(:CLASS :CLASS)", "(T T)",
+			"((:OUTPUT) ((:PLAIN :OUTPUT) ((:HTML :OUTPUT) ((:XML :OUTPUT) (:PLAIN :OUTPUT)))))");
 
 	@Override
 	protected String systemDir() {

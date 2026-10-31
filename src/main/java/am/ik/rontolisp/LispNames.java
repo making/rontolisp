@@ -10928,6 +10928,12 @@ public final class LispNames {
 	public static final String SLOT_DEFINITION_INITFORM = "SLOT-DEFINITION-INITFORM";
 
 	/**
+	 * {@code closer-mop:slot-definition-allocation} ({@code %obj-ref} index 7, appended
+	 * 2026-11-01): {@code :class} on a class-allocated slot, {@code :instance} otherwise.
+	 */
+	public static final String SLOT_DEFINITION_ALLOCATION = "SLOT-DEFINITION-ALLOCATION";
+
+	/**
 	 * {@code closer-mop:set-funcallable-instance-function}: installs the function a
 	 * funcallable instance calls ({@code LispLayout.FUNCALLABLE_CELL}).
 	 */

@@ -13817,7 +13817,8 @@ class WasmLispCompilerIntegrationTest {
 								(asdf:load-system "closer-mop")
 								(defclass cmm-p () ((name :initarg :name) (age :initarg :age :type integer)))
 								(defclass cmm-q (cmm-p) ((age :initform 3) (zip :writer set-zip :accessor q-zip)))
-								(let ((c (find-class 'cmm-p)) (q (find-class 'cmm-q)))
+								(defclass cmm-r () ((hits :allocation :class) (id)))
+								(let ((c (find-class 'cmm-p)) (q (find-class 'cmm-q)) (r (find-class 'cmm-r)))
 								  (print (list (closer-mop:classp c)
 								               (closer-mop:classp 42)
 								               (closer-mop:class-name c)
@@ -13836,14 +13837,17 @@ class WasmLispCompilerIntegrationTest {
 								                       (list (typep d 'closer-mop:direct-slot-definition) (typep d 'closer-mop:effective-slot-definition)
 								                             (typep e 'closer-mop:effective-slot-definition) (typep e 'closer-mop:direct-slot-definition)
 								                             (typep e 'closer-mop:slot-definition) (typep d 'closer-mop:standard-direct-slot-definition)
-								                             (typep c 'closer-mop:slot-definition)))))))
+								                             (typep c 'closer-mop:slot-definition)))
+								                     (list (mapcar #'closer-mop:slot-definition-allocation (closer-mop:class-direct-slots r))
+								                           (mapcar #'closer-mop:slot-definition-allocation (closer-mop:class-slots r))
+								                           (closer-mop:slot-definition-allocation (first (closer-mop:class-slots c))))))))
 								"""),
 				path -> {
 					throw new java.io.FileNotFoundException(path);
 				});
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))
 			.isEqualTo("(T NIL CMM-P T (NAME AGE) (T INTEGER) ((:NAME) (:AGE)) (NAME AGE) "
-					+ "((AGE ZIP) (3 NIL) (NIL ((SETF Q-ZIP) SET-ZIP)) (NIL NIL NIL) ((:NAME) (:AGE)) (T NIL T NIL T T NIL)))");
+					+ "((AGE ZIP) (3 NIL) (NIL ((SETF Q-ZIP) SET-ZIP)) (NIL NIL NIL) ((:NAME) (:AGE)) (T NIL T NIL T T NIL) ((:CLASS :INSTANCE) (:CLASS :INSTANCE) :INSTANCE)))");
 	}
 
 	@Test

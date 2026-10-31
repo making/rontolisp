@@ -750,7 +750,7 @@ public final class PackageRegistry {
 			// remaining slot-definition readers.
 			ClosRegistry.SLOT_DEFINITION_NAME, ClosRegistry.DIRECT_SLOT_DEFINITION_NAME,
 			ClosRegistry.EFFECTIVE_SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_WRITERS,
-			LispNames.SLOT_DEFINITION_INITFORM,
+			LispNames.SLOT_DEFINITION_INITFORM, LispNames.SLOT_DEFINITION_ALLOCATION,
 			// Funcallable instances (djula's compiled templates): the metaclass, the
 			// class its instances descend from, and the installer.
 			ClosRegistry.FUNCALLABLE_STANDARD_CLASS, ClosRegistry.FUNCALLABLE_STANDARD_OBJECT,

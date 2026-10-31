@@ -530,7 +530,7 @@ public final class ClosRegistry {
 		// standard-slot-definition mixin is left out): the root holds every slot, so
 		// both standard classes keep the same layout.
 		seedClass(SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS", "INITFUNCTION",
-				"WRITERS");
+				"WRITERS", "ALLOCATION");
 		seedClass(DIRECT_SLOT_DEFINITION_NAME, SLOT_DEFINITION_NAME);
 		seedClass(EFFECTIVE_SLOT_DEFINITION_NAME, SLOT_DEFINITION_NAME);
 		seedClass(STANDARD_DIRECT_SLOT_DEFINITION_NAME, DIRECT_SLOT_DEFINITION_NAME);
@@ -995,6 +995,9 @@ public final class ClosRegistry {
 	 * {@code class-slots} entries from. Layout: {@link #SLOT_DEFINITION_NAME}'s.
 	 */
 	public static final String STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME = "STANDARD-EFFECTIVE-SLOT-DEFINITION";
+
+	/** The {@code :allocation :class} keyword, as a slot definition's allocation. */
+	public static final String CLASS_ALLOCATION = ":CLASS";
 
 	/** The {@code closer-mop} symbol naming {@link #FUNCALLABLE_STANDARD_OBJECT_NAME}. */
 	public static final String FUNCALLABLE_STANDARD_OBJECT = "FUNCALLABLE-STANDARD-OBJECT";
@@ -2975,7 +2978,18 @@ public final class ClosRegistry {
 				direct ? STANDARD_DIRECT_SLOT_DEFINITION_NAME : STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
 				new LispSymbol(slot.name()), initargs, slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE,
 				new LispSymbol(slot.type()), symbolList(readerNames), LispNil.INSTANCE,
-				direct ? slotWriters(slot) : LispNil.INSTANCE);
+				direct ? slotWriters(slot) : LispNil.INSTANCE, slotAllocation(slot));
+	}
+
+	/**
+	 * The {@code allocation} slot of a slot-definition metaobject materialized from a
+	 * spec: {@code :class} for a {@code :allocation :class} slot, nil otherwise --
+	 * {@code closer-mop:slot-definition-allocation} answers {@code :instance} for nil.
+	 * @param slot the slot
+	 * @return the allocation value
+	 */
+	public static LispVal slotAllocation(SlotSpec slot) {
+		return slot.sharedCellVar() != null ? new LispSymbol(CLASS_ALLOCATION) : LispNil.INSTANCE;
 	}
 
 	/**

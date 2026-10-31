@@ -69,6 +69,13 @@
   ;; slot definition; an effective one has none (AMOP 5.4.3).
   (if (%obj-p slot) (slot-value slot 'writers) nil))
 
+(defun closer-mop:slot-definition-allocation (slot)
+  ;; Index 7 (appended 2026-11-01): :class on a class-allocated slot; nil -- a
+  ;; definition no :allocation initarg reached, a materialized instance slot --
+  ;; is AMOP's default :instance.
+  (let ((allocation (if (%obj-p slot) (slot-value slot 'allocation) nil)))
+    (if allocation allocation :instance)))
+
 (defun closer-mop:slot-definition-initform (slot)
   (if (%obj-p slot) (slot-value slot 'initform) nil))
 

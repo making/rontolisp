@@ -150,7 +150,8 @@
      :initform (slot-value dsd 'initform)
      :type (slot-value dsd 'type)
      :readers (slot-value dsd 'readers)
-     :initfunction (slot-value dsd 'initfunction))))
+     :initfunction (slot-value dsd 'initfunction)
+     :allocation (slot-value dsd 'allocation))))
 
 (defmethod closer-mop:finalize-inheritance (class)
   ;; Effective slots in static-layout order: the superclasses' effective slots

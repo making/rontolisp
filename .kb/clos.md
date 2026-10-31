@@ -806,7 +806,10 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
 - **Metaobject slot order is a `%obj-ref` index contract** shared with the closer-mop shim —
   append, never reorder: class = name, direct-superclasses, direct-slots, effective-slots,
   finalized-p; slot-definition = name, initargs, initform, type, readers, initfunction (5),
-  writers (6, 2026-10-30).
+  writers (6, 2026-10-30), allocation (7, 2026-11-01: `:class`, or nil, which
+  `closer-mop:slot-definition-allocation` answers as `:instance`; a materialized plain view
+  carries `:class` for a `SlotSpec.sharedCellVar` slot -- the compile paths' meta-table row as
+  an optional sixth element, so a table without class slots keeps its size).
 - **Slot-definition classes** (seeded with the MOP trio): `slot-definition` declares every
   slot; `direct-slot-definition` / `effective-slot-definition` are slot-less children and the
   two `standard-*` classes slot-less grandchildren, so the layout is unchanged. AMOP's
@@ -899,10 +902,20 @@ symbol, a non-keyword one passed quoted, and the tail may be dotted -- contextl'
 - **Injected direct superclasses reconcile the STATIC registration**: the driver-built metaobject
   is the truth, so `evalDefclass` re-registers from `widenDefclassToMetaobjectSupers` (its
   superclass list minus the `standard-object` default, plus per-slot `:initarg`s a
-  slot-definition `:around` pushed, ONLY onto specs that declare none) and
+  slot-definition `:around` pushed, ONLY onto specs that declare none, plus `:allocation :class`
+  where the driver-built direct slot definition is class-allocated and the spec writes no
+  `:allocation`, `reconcileSlotAllocations`, 2026-11-01) and
   `UserMacroExpander.widenMetaclassDefclasses` rewrites the EMITTED defclass form the same way
   on the compile paths. The runtime driver re-runs the `:around`, whose contains-checks make the
-  injection idempotent.
+  injection idempotent. The allocation case is contextl's singleton layer slots:
+  `singleton-direct-slot-definition`'s `initialize-instance :around` defaults `:allocation` to
+  `:class`, so the canonical spec passes `:allocation` ONLY when the slot wrote one
+  (`ParsedSlot.allocation`) -- an `:instance` default would make that `:around` signal -- and a
+  class-allocated slot's `:initform`/`:initfunction` are the WRITTEN initform
+  (`ParsedSlot.cellInitform`), not the static spec's read of the shared cell, so contextl's
+  `:reinitialize t` re-evaluation reaches the form. Residual: a materialized plain view's
+  `slot-definition-initform` of a class slot is still the cell symbol (`SlotSpec` keeps no
+  written initform).
 - **A driver-built class with no direct superclasses defaults to `(standard-object)`**, per AMOP;
   `standard-object` resolves through find-class ONLY (`FIND_CLASS_ONLY_CLASS_NAMES`). A
   `defclass` may WRITE it as a superclass (contextl's `(defclass special-object
@@ -1081,11 +1094,16 @@ chunk-loop wrapper).
   system's component files. Its own `test/` (measured on the interpreter, in package `contextl`):
   `demo3`, `special-slots-2` need layered ACCESSORS (`define-layered-class` makes generic
   functions and methods at run time through `ensure-layered-function`/`ensure-method`) and
-  partial classes (anonymous slot-carrying superclasses); `special-slots-1`/`-3`, `dynenv` need
-  `slot-definition-allocation` and the `slot-value-using-class` protocol of special slots;
-  `grouped-layers` the singleton class-allocated layer slots; `spx` `(setf (find-class 'x)
-  nil)`; `layer-gc` passes its first four sections and stops where `add-method :after` should
-  clear the caches (`defmethod` calls no `add-method` here). `contextl-user`/`cxcl` work on
+  partial classes (anonymous slot-carrying superclasses); `dynenv` (past everything up to its
+  `special-class` part) needs the `slot-value-using-class` protocol: contextl's `slot-unbound`
+  method calls `(setf slot-value-using-class)` itself, which has no system method here
+  (`call-next-method: no next method`, 2026-11-01); `special-slots-1`/`-3` LOOP: the `dletf` of a
+  non-special slot `cerror`s, and the handler `eval`s a redefinition making the slot special and
+  continues, so they also need run-time class redefinition with obsolete instances (and `-1` the
+  layered classes); `spx` `(setf (find-class 'x) nil)`; `layer-gc` passes its first four sections
+  and stops where `add-method :after` should clear the caches (`defmethod` calls no `add-method`
+  here). `grouped-layers` passes on all four since 2026-11-01 (`slot-definition-allocation` and
+  the `:allocation` reconciliation above; `ContextlE2eTest` carries it). `contextl-user`/`cxcl` work on
   all four since the same day: cxcl's `#.(loop for sym being the external-symbols of ...)`
   export list was empty (the LOOP clause iterated nothing, `.kb/loop-iteration-heads.md`), and
   past it a `nil`/`t` export, an exported `make-package`, a `cl` internal under a package using

@@ -20806,12 +20806,22 @@ public final class LispMacroExpander {
 			spec.add(quoteOf(slot.baseName()));
 			spec.add(new LispSymbol(":INITARGS"));
 			spec.add(quotedData(listToCons(slot.initargs().stream().<LispVal>map(LispSymbol::new).toList())));
+			// A class-allocated slot's static initform READS its shared cell; the
+			// definition carries the WRITTEN one, which its initfunction evaluates
+			// again (contextl's :reinitialize singleton slots re-run it).
+			boolean initformWritten = parsed.cellInitform() != null ? !isUnboundMarkerForm(parsed.cellInitform())
+					: slot.initformSupplied();
+			LispVal writtenInitform = parsed.cellInitform() != null ? parsed.cellInitform() : slot.initform();
 			spec.add(new LispSymbol(":INITFORM"));
-			spec.add(slot.initformSupplied() ? quotedData(slot.initform()) : LispNil.INSTANCE);
+			spec.add(initformWritten ? quotedData(writtenInitform) : LispNil.INSTANCE);
 			spec.add(new LispSymbol(":INITFUNCTION"));
-			spec.add(slot.initformSupplied()
-					? listToCons(List.of(new LispSymbol(LispNames.LAMBDA), LispNil.INSTANCE, slot.initform()))
+			spec.add(initformWritten
+					? listToCons(List.of(new LispSymbol(LispNames.LAMBDA), LispNil.INSTANCE, writtenInitform))
 					: LispNil.INSTANCE);
+			if (parsed.allocation() != null) {
+				spec.add(new LispSymbol(":ALLOCATION"));
+				spec.add(new LispSymbol(parsed.allocation()));
+			}
 			spec.add(new LispSymbol(":TYPE"));
 			spec.add(quoteOf(slot.type()));
 			spec.add(new LispSymbol(":READERS"));
@@ -20918,7 +20928,8 @@ public final class LispMacroExpander {
 			widened.set(2, listToCons(finalSupers));
 		}
 		boolean slotsChanged = parts.size() >= 4 && reconcileSlotInitargs(widened, metaobject);
-		if (!supersChanged && !slotsChanged) {
+		boolean allocationsChanged = parts.size() >= 4 && reconcileSlotAllocations(widened, metaobject);
+		if (!supersChanged && !slotsChanged && !allocationsChanged) {
 			return null;
 		}
 		return (LispCons) listToCons(widened);
@@ -20997,6 +21008,63 @@ public final class LispMacroExpander {
 		return changed;
 	}
 
+	/**
+	 * Adds {@code :allocation :class} to each direct-slot spec of the (mutable) defclass
+	 * part list that writes no {@code :allocation} while its driver-built
+	 * direct-slot-definition metaobject is class-allocated -- a slot-definition
+	 * {@code initialize-instance :around} defaulted it (contextl's singleton layer
+	 * slots), so the static layout gets the shared cell; true when any spec changed.
+	 */
+	private static boolean reconcileSlotAllocations(List<LispVal> widened, LispInstance metaobject) {
+		if (!(metaobjectSlot(metaobject, "DIRECT-SLOTS") instanceof LispCons directSlots) || !directSlots.isProperList()
+				|| !(widened.get(3) instanceof LispCons specList) || !specList.isProperList()) {
+			return false;
+		}
+		java.util.Set<String> classAllocated = new java.util.HashSet<>();
+		for (LispVal dsdVal : directSlots.toList()) {
+			if (dsdVal instanceof LispInstance dsd && metaobjectSlot(dsd, "NAME") instanceof LispSymbol nameSym
+					&& metaobjectSlot(dsd, "ALLOCATION") instanceof LispSymbol allocation
+					&& ClosRegistry.CLASS_ALLOCATION.equals(allocation.name())) {
+				classAllocated.add(memberOf(nameSym.name()));
+			}
+		}
+		if (classAllocated.isEmpty()) {
+			return false;
+		}
+		boolean changed = false;
+		List<LispVal> newSpecs = new java.util.ArrayList<>();
+		for (LispVal specVal : specList.toList()) {
+			String slotName = specVal instanceof LispSymbol bare ? memberOf(bare.name())
+					: specVal instanceof LispCons specCons && specCons.car() instanceof LispSymbol head
+							? memberOf(head.name()) : null;
+			if (slotName == null || !classAllocated.contains(slotName)) {
+				newSpecs.add(specVal);
+				continue;
+			}
+			List<LispVal> spec = specVal instanceof LispCons specCons ? new java.util.ArrayList<>(specCons.toList())
+					: new java.util.ArrayList<>(List.of(specVal));
+			boolean declaresAllocation = false;
+			for (int i = 1; i + 1 < spec.size(); i += 2) {
+				if (spec.get(i) instanceof LispSymbol opt && ":ALLOCATION".equals(memberOf(opt.name()))) {
+					declaresAllocation = true;
+					break;
+				}
+			}
+			if (declaresAllocation) {
+				newSpecs.add(specVal);
+				continue;
+			}
+			spec.add(new LispSymbol(":ALLOCATION"));
+			spec.add(new LispSymbol(ClosRegistry.CLASS_ALLOCATION));
+			changed = true;
+			newSpecs.add(listToCons(spec));
+		}
+		if (changed) {
+			widened.set(3, listToCons(newSpecs));
+		}
+		return changed;
+	}
+
 	/** Parameter holding the new value in a generated {@code %setf-} writer method. */
 	private static final String CLOS_NEW_VAL_VAR = "__new";
 
@@ -21010,13 +21078,13 @@ public final class LispMacroExpander {
 	 * list in source order: they are stripped from the static {@code SlotSpec} and handed
 	 * to {@code direct-slot-definition-class} as initargs by the definition-time driver
 	 * (single occurrence per key, the AMOP canonicalization for one appearance).
+	 * {@code cellInitform} is a class-allocated slot's WRITTEN initform (the unbound
+	 * marker when none), {@code allocation} the {@code :allocation} keyword as written
+	 * (null when omitted, so a slot-definition class may default it, contextl's singleton
+	 * slots to {@code :class}).
 	 */
 	private record ParsedSlot(ClosRegistry.SlotSpec spec, boolean initargSupplied, List<LispVal> extras,
-			@Nullable LispVal cellInitform) {
-
-		ParsedSlot(ClosRegistry.SlotSpec spec, boolean initargSupplied, List<LispVal> extras) {
-			this(spec, initargSupplied, extras, null);
-		}
+			@Nullable LispVal cellInitform, @Nullable String allocation) {
 	}
 
 	/**
@@ -21071,6 +21139,11 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal unboundMarker() {
 		return objNew(ClosRegistry.UNBOUND_TAG, List.of());
+	}
+
+	/** Whether the form is the {@link #unboundMarker()} construction. */
+	private static boolean isUnboundMarkerForm(LispVal form) {
+		return unboundMarker().equals(form);
 	}
 
 	/**
@@ -21296,6 +21369,7 @@ public final class LispMacroExpander {
 		List<String> accessors = new java.util.ArrayList<>();
 		List<String> writers = new java.util.ArrayList<>();
 		boolean classAllocated = false;
+		String allocation = null;
 		List<LispVal> extras = new java.util.ArrayList<>();
 		if (spec instanceof LispSymbol s) {
 			slotSym = s;
@@ -21344,6 +21418,7 @@ public final class LispMacroExpander {
 									LispNames.DEFCLASS + " :allocation expects :instance or :class: " + spec.print());
 						}
 						classAllocated = ":CLASS".equals(allocSym.name());
+						allocation = allocSym.name();
 					}
 					case ":DOCUMENTATION" -> {
 						// Accepted and dropped (docstrings are not stored anywhere).
@@ -21400,7 +21475,7 @@ public final class LispMacroExpander {
 				new ClosRegistry.SlotSpec(slotSym.name(), baseName, initform, initformSupplied,
 						initargs.isEmpty() ? List.of(":" + baseName) : List.copyOf(initargs), !initargs.isEmpty(),
 						List.copyOf(readers), List.copyOf(accessors), type, List.copyOf(writers), cellVar),
-				!initargs.isEmpty(), List.copyOf(extras), cellInitform);
+				!initargs.isEmpty(), List.copyOf(extras), cellInitform, allocation);
 	}
 
 	/** The global cell variable of one class's {@code :allocation :class} slot. */
@@ -47767,13 +47842,19 @@ public final class LispMacroExpander {
 		return forms;
 	}
 
-	// One slot's (name initargs initform type readers) row of the class meta table.
+	// One slot's (name initargs initform type readers [allocation]) row of the class meta
+	// table; the sixth element only on a :allocation :class slot, so a table with none
+	// keeps its size.
 	private static LispVal slotDataRow(ClosRegistry.SlotSpec slot) {
 		List<String> readerNames = new java.util.ArrayList<>(slot.readers());
 		readerNames.addAll(slot.accessors());
-		return listToCons(List.of(new LispSymbol(slot.name()), ClosRegistry.symbolList(slot.initargs()),
-				slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE, new LispSymbol(slot.type()),
-				ClosRegistry.symbolList(readerNames)));
+		List<LispVal> row = new java.util.ArrayList<>(List.of(new LispSymbol(slot.name()),
+				ClosRegistry.symbolList(slot.initargs()), slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE,
+				new LispSymbol(slot.type()), ClosRegistry.symbolList(readerNames)));
+		if (slot.sharedCellVar() != null) {
+			row.add(ClosRegistry.slotAllocation(slot));
+		}
+		return listToCons(row);
 	}
 
 	/**
@@ -47912,15 +47993,18 @@ public final class LispMacroExpander {
 				mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, slotDef))));
 		LispVal s4 = mvCall(LispNames.CAR,
 				mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, slotDef)))));
+		// The row's optional sixth element: :class on a class-allocated slot.
+		LispVal s5 = mvCall(LispNames.CAR, mvCall(LispNames.CDR,
+				mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, slotDef))))));
 		// The 6th slot (initfunction, appended 2026-08-03) stays nil on materialized
 		// plain views: the table is quoted data and cannot carry a live thunk; only
 		// driver-built definitions fill it. The 7th (writers) is nil on an effective
-		// slot.
+		// slot; the 8th is the allocation (appended 2026-11-01).
 		LispVal slotBuild = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
 				listToCons(List.of(slotDef, slotData, LispNil.INSTANCE)),
 				listToCons(List.of(new LispSymbol(LispNames.SETQ), slots, mvCall(LispNames.CONS,
 						objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
-								List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, LispNil.INSTANCE)),
+								List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, LispNil.INSTANCE, s5)),
 						slots)))));
 		// The direct slots: each table element is (writers . data), the data either a
 		// full row or (name) naming the effective row it equals (see the table
@@ -47934,7 +48018,7 @@ public final class LispMacroExpander {
 				mvCall(LispNames.ASSOC, mvCall(LispNames.CAR, mvCall(LispNames.CDR, directDef)), slotData));
 		// The row binds the same %fc_s variable, so s0..s4 read it.
 		LispVal directInstance = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME,
-				List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, mvCall(LispNames.CAR, directDef)));
+				List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, mvCall(LispNames.CAR, directDef), s5));
 		LispVal pushDirect = listToCons(List.of(new LispSymbol(LispNames.SETQ), directSlots,
 				mvCall(LispNames.CONS, directInstance, directSlots)));
 		LispVal directBuild = listToCons(
