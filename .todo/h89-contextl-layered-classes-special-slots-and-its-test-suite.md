@@ -26,7 +26,11 @@ package `contextl`) stops at:
    (spx's `slot1`).
 3. `layer-gc` passes four of five sections; the fifth needs a later `defmethod` on
    `adjoin-layer-using-class` to run `add-method`'s `:after` (cache clearing).
-4. `spx`: `(setf (find-class 'x) nil)` (a run-time error now, `.kb/clos.md`).
+4. `spx`: `(setf (find-class 'x) nil)` (a run-time error now, `.kb/clos.md`). Past it (the line
+   removed, 2026-11-01) the class-allocated special slot `slot1` stops at the construction
+   residual of 2 (`The variable BAR is unbound` in `(setf dynamic-symbol-value)`), and the rest
+   redefines singleton classes and layers with `:reinitialize t`, which the compile paths cannot
+   follow (they keep the LAST definition, `.kb/clos.md`).
 
 Done 2026-11-01, on all four: `grouped-layers` (`closer-mop:slot-definition-allocation`, and a
 slot-definition `initialize-instance :around`'s `:allocation :class` reaching the static layout)
