@@ -48,9 +48,3 @@ implicit block -- a named loop establishes no NIL block of its own, so bare
 - NOT loop (do not bill here): the extra second-value `T` (~60, `.todo/213`),
   package-`being` enumeration (~18, `.todo/156` Phase 5), the 8 remaining
   `:BAD`/`:GOOD` (do-family special-var scope, `DoExpander`), driver `:NOTES`.
-- **`being` over a PACKAGE**: `symbols`/`present-symbols`/`external-symbols` parse,
-  but are a lite no-op: rontolisp has no runtime intern table
-  (`.kb/symbol-runtime-api.md`), so the package form is evaluated once for effect
-  and the EMPTY sequence is iterated — `VAR` binds to nil and the body never runs
-  (`LispMacroExpander.parseForBeing`). Enough for cl-who's hyperdoc table; a real
-  enumeration needs the intern table first — its go/no-go is `.todo/156` Phase 5 (A1).

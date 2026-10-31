@@ -609,6 +609,10 @@ class PackageResolverTest {
 		assertThat(resolve(resolver, "(sin x)")).isEqualTo("(LIN:SIN LU::X)");
 		assertThatThrownBy(() -> resolve(resolver, "(cos x)")).isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("Undefined symbol: COS");
+		// An implementation-internal cl name is injected by expansions wherever they run
+		// -- the macro-function table appended under contextl-user, which uses only
+		// cxcl -- so it resolves in every package.
+		assertThat(resolve(resolver, "(%macro-fn x nil)")).isEqualTo("(%MACRO-FN LU::X NIL)");
 	}
 
 	@Test
@@ -1345,6 +1349,13 @@ class PackageResolverTest {
 			.resolveProgram(LispReader.readAllFromString("(print (find-package :late))", Features.INTERPRETER));
 		assertThat(quiet.runtimePackagesMutable()).isFalse();
 		assertThat(folded.get(0).print()).isEqualTo("(PRINT NIL)");
+		// A defpackage clause naming make-package is a name, not a call (contextl's cxcl
+		// re-exports every closer-common-lisp external).
+		PackageResolver reexporting = new PackageResolver();
+		reexporting.resolveProgram(LispReader.readAllFromString(
+				"(defpackage :reex (:use :cl) (:export make-package)) (print (find-package :late))",
+				Features.INTERPRETER));
+		assertThat(reexporting.runtimePackagesMutable()).isFalse();
 		PackageResolver loud = new PackageResolver();
 		List<LispVal> kept = loud.resolveProgram(LispReader
 			.readAllFromString("(make-package :late) (print (find-package :late))", Features.INTERPRETER));

@@ -4330,22 +4330,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalLoopBeingSymbols() {
-		// Lite `being` package iteration: parses and iterates the empty sequence (no
-		// runtime intern table), so every variant yields nil / an empty accumulation.
-		assertThat(eval("(loop for s being the external-symbols of :cl collect s)").print()).isEqualTo("NIL");
-		assertThat(eval("(loop for s being the symbols of :cl collect s)").print()).isEqualTo("NIL");
-		assertThat(eval("(loop for s being each present-symbols in :cl-user collect s)").print()).isEqualTo("NIL");
-		assertThat(eval("(loop for s being the external-symbols of :cl count s)")).isEqualTo(new LispInteger(0));
-		// Embedded in the cl-who hyperdoc shape: the let+defun loads without error.
-		assertThat(evalMulti("""
-				(let ((alist (loop for symbol being the external-symbols of :cl-who
-				                   collect (cons symbol (string-downcase symbol)))))
-				  (defun hyperdoc-lookup (symbol type) (cdr (assoc symbol alist))))
-				(hyperdoc-lookup 'with-html-output 'function)""").print()).isEqualTo("NIL");
-	}
-
-	@Test
 	void evalSetfMultiplePairs() {
 		// Multiple place/value pairs assign sequentially, like consecutive setfs.
 		assertThat(evalMulti("(setq l (list 1 2 3)) (setf (car l) 9 (second l) 8) l").print()).isEqualTo("(9 8 3)");

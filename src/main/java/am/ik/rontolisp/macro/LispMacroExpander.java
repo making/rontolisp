@@ -2058,10 +2058,11 @@ public final class LispMacroExpander {
 		 * which is what CL leaves there too (a closure over a {@code hash-key} variable
 		 * answers nil after the loop on SBCL).</li>
 		 * <li>{@code symbols}/{@code present-symbols}/{@code external-symbols} of a
-		 * package are a lite no-op: rontolisp has no runtime intern table (see
-		 * {@code .kb/symbol-runtime-api.md}), so {@code SOURCE} is evaluated once for
-		 * effect and the empty sequence is iterated ({@code VAR} bound to nil, body never
-		 * runs) -- enough for cl-who's hyperdoc table.</li>
+		 * package walk what {@code do-symbols} (the accessible symbols),
+		 * {@code with-package-iterator}'s {@code :internal :external} (the present ones)
+		 * and {@code do-external-symbols} enumerate, snapshotted once like a hash table's
+		 * entries -- contextl's cxcl builds its export list this way. Until 2026-10-31
+		 * the clause iterated nothing.</li>
 		 * </ul>
 		 */
 		private void parseForBeing(ForPiece piece, LispSymbol var) {
@@ -2094,12 +2095,27 @@ public final class LispMacroExpander {
 				throw new IllegalArgumentException("loop: being clause expects of/in, got: " + of);
 			}
 			LispVal pkg = nextForm();
-			// Evaluate PACKAGE for effect, but do not enumerate it (no intern table).
-			LispSymbol ignore = gensym("pkg");
-			piece.binds.add(new ForBinding(ignore, pkg, false));
-			piece.binds.add(new ForBinding(var, LispNil.INSTANCE, true));
-			// Iterate the empty sequence: terminate before the first body pass.
-			piece.endTests.add(LispTrue.INSTANCE);
+			LispVal universe;
+			if ("present-symbols".equals(kind) || "present-symbol".equals(kind)) {
+				// (mapcar #'car (%package-iterator-entries pkg '(:internal :external)))
+				universe = call(LispNames.MAPCAR,
+						listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.CAR))),
+						call(LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL, pkg, listToCons(List.of(
+								new LispSymbol(LispNames.QUOTE),
+								listToCons(List.of(new LispSymbol(":INTERNAL"), new LispSymbol(":EXTERNAL")))))));
+			}
+			else {
+				universe = listToCons(List.of(new LispSymbol(LispNames.DO_SYMBOLS_LIST_INTERNAL), pkg,
+						"external-symbols".equals(kind) || "external-symbol".equals(kind) ? LispTrue.INSTANCE
+								: LispNil.INSTANCE,
+						new LispString(LispNames.LOOP)));
+			}
+			LispSymbol cursor = gensym("scur");
+			piece.binds.add(new ForBinding(cursor, universe, false));
+			piece.endTests.add(makeNot(call(LispNames.CONSP, cursor)));
+			piece.binds.add(new ForBinding(var, call(LispNames.CAR, cursor), true));
+			piece.steps.add(new LispVal[] { cursor, call(LispNames.CDR, cursor) });
+			piece.postSteps.add(setq(var, call(LispNames.CAR, cursor)));
 		}
 
 		/**
@@ -4315,6 +4331,19 @@ public final class LispMacroExpander {
 					yield makeLet(specVar.name(), placeParts.get(1),
 							makeLet(valVar.name(), value, makeProgn(List.of(inner, valVar))));
 				}
+				case LispNames.CLASS_NAME -> {
+					// (setf (class-name c) name): AMOP's (setf class-name) renames the
+					// metaobject -- its name slot -- and leaves the class table alone
+					// (contextl's layer-makunbound).
+					if (placeParts.size() != 2) {
+						throw new IllegalArgumentException(
+								"setf " + LispNames.CLASS_NAME + " expects one argument: " + cons.print());
+					}
+					LispVal slotPlace = listToCons(List.of(new LispSymbol(LispNames.SLOT_VALUE), placeParts.get(1),
+							listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("NAME")))));
+					yield expandSetf(listToCons(List.of(new LispSymbol(LispNames.SETF), slotPlace, value)),
+							structAccessors, closRegistry);
+				}
 				case LispNames.SLOT_VALUE -> {
 					// (setf (slot-value obj 'slot) val) -> (%obj-set obj <index> val):
 					// the index comes from the CLOS class registry.
@@ -4646,9 +4675,12 @@ public final class LispMacroExpander {
 			target = valueParts.size() >= 2 ? quotedSymbolName(valueParts.get(1)) : null;
 		}
 		if (alias == null || target == null) {
-			throw new UnsupportedOperationException(
-					"setf " + LispNames.FIND_CLASS + " only supports aliasing an existing class -- "
-							+ "(setf (find-class 'alias) (find-class 'target)): " + cons.print());
+			// Any other shape -- removing a class with nil (contextl's layer-makunbound),
+			// a computed name -- is a run-time error where it runs, so a library carrying
+			// one in a function no call reaches still compiles.
+			return listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString("~A"),
+					new LispString("setf " + LispNames.FIND_CLASS + " only supports aliasing an existing class -- "
+							+ "(setf (find-class 'alias) (find-class 'target)): " + cons.print())));
 		}
 		if (closRegistry == EMPTY_CLOS_REGISTRY) {
 			// The CLOS-free expandSetf overloads (the --no-gc backend, the generic expand
@@ -16868,6 +16900,63 @@ public final class LispMacroExpander {
 	 */
 	public static final java.util.Set<String> RUNTIME_PACKAGE_MUTATIONS = java.util.Set.of(LispNames.MAKE_PACKAGE,
 			LispNames.DELETE_PACKAGE, LispNames.RENAME_PACKAGE);
+
+	/**
+	 * Whether a {@code loop} in the program iterates a package's symbols
+	 * ({@code for s being the external-symbols of p}): its lowering calls
+	 * {@code %do-symbols-list}, or {@code %package-iterator-entries} for
+	 * {@code present-symbols}, so the prelude must carry those defuns.
+	 * @param program the top-level forms
+	 * @param presentOnly whether only a {@code present-symbols} clause counts
+	 * @return {@code true} when such a loop exists
+	 */
+	public static boolean loopIteratesPackageSymbols(List<LispVal> program, boolean presentOnly) {
+		for (LispVal form : program) {
+			if (loopIteratesPackageSymbols(form, presentOnly)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean loopIteratesPackageSymbols(LispVal form, boolean presentOnly) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())) {
+				return false;
+			}
+			if (cons.car() instanceof LispSymbol op && LispNames.LOOP.equals(plainName(op.name()))
+					&& loopClausesIteratePackageSymbols(cons.cdr(), presentOnly)) {
+				return true;
+			}
+			if (loopIteratesPackageSymbols(cons.car(), presentOnly)) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a loop's clause list holds {@code being [the|each] <package-symbols kind>}.
+	 */
+	private static boolean loopClausesIteratePackageSymbols(LispVal clauses, boolean presentOnly) {
+		boolean afterBeing = false;
+		for (LispVal cursor = clauses; cursor instanceof LispCons cell; cursor = cell.cdr()) {
+			String word = cell.car() instanceof LispSymbol sym ? plainName(sym.name()) : "";
+			if (afterBeing && ("THE".equals(word) || "EACH".equals(word))) {
+				continue;
+			}
+			if (afterBeing) {
+				boolean present = "PRESENT-SYMBOLS".equals(word) || "PRESENT-SYMBOL".equals(word);
+				if (present || (!presentOnly && ("SYMBOLS".equals(word) || "SYMBOL".equals(word)
+						|| "EXTERNAL-SYMBOLS".equals(word) || "EXTERNAL-SYMBOL".equals(word)))) {
+					return true;
+				}
+			}
+			afterBeing = "BEING".equals(word);
+		}
+		return false;
+	}
 
 	/**
 	 * Whether the program reads the {@code %baked-packages%} table: some form -- in

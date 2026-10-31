@@ -14,7 +14,14 @@ later clause's head see. Do NOT make it a fresh binding per iteration — `dolis
 `loop` steps one; both match SBCL.
 
 - Clauses that legitimately end at nil keep the end-of-body assignment (`ForPiece.postSteps`):
-  `for c on LIST` without destructuring, `for k being the hash-key/hash-value`.
+  `for c on LIST` without destructuring, `for k being the hash-key/hash-value`, and
+  `for s being the [external-|present-]symbols of P` -- since 2026-10-31 a snapshot of what
+  `do-symbols` / `do-external-symbols` (`%do-symbols-list`) or `with-package-iterator`'s
+  `:internal :external` (`%package-iterator-entries`) enumerate; it iterated nothing before.
+  The compile paths splice those prelude helpers on `loopIteratesPackageSymbols`. On the compile
+  paths a package's INTERNAL symbols are not in the baked universe, so `present-symbols` (and
+  `symbols`) miss them there, as `do-symbols` does. ci-spec
+  `package-walks-list-the-car-cdr-compositions`.
 - `for VAR = INIT [then STEP]` is a `bodyPrefix` record, assigned in the head.
 - `parseRepeat` places its head at its OWN position in clause order, like `for`. **Trap**: from
   the trailing `endTests` bucket instead, a later clause runs one extra time on the exhausting pass.

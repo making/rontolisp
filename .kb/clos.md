@@ -270,8 +270,10 @@ asking "is library X loaded" must therefore not be a `findClass` of X's class na
   (`expandSetfFindClass`; the compile path's `isSetfFindClassForm` branch runs inside
   `expandTopLevelDefinitions`, BEFORE the class tables are built) and becomes an extra
   SPELLING of `%class-meta-table%`, the runtime `typep` tag table and the `subtypep` universe.
-  Only the ALIASING shape is accepted; an unknown target throws `there is no class named`; a
-  NON-top-level alias is an error (`markClassMetaTableEmitted` makes `registerClassAlias`
+  Only the ALIASING shape is accepted; any other shape (forgetting a class with `nil`,
+  contextl's `layer-makunbound`; a computed name) expands to a run-time `error` where it runs, so
+  a function carrying one compiles (a compile failure until 2026-10-31); an unknown target
+  throws `there is no class named`; a NON-top-level alias is an error (`markClassMetaTableEmitted` makes `registerClassAlias`
   refuse); `--no-gc` shares one never-mutated `EMPTY_CLOS_REGISTRY` and rejects the place
   outright. Macro-namespace twin: `(setf (macro-function ...))`, `.kb/defmacro-backquote.md`.
 
@@ -1081,9 +1083,12 @@ chunk-loop wrapper).
   `slot-definition-allocation` and the `slot-value-using-class` protocol of special slots;
   `grouped-layers` the singleton class-allocated layer slots; `spx` `(setf (find-class 'x)
   nil)`; `layer-gc` passes its first four sections and stops where `add-method :after` should
-  clear the caches (`defmethod` calls no `add-method` here). `contextl-user`/`cxcl` see no
-  `cl` or contextl names: cxcl's `#.(loop for sym being the external-symbols of ...)` export list
-  is empty, the `being ... symbols` LOOP clause being a no-op (`.todo/029`). Residual: on the
+  clear the caches (`defmethod` calls no `add-method` here). `contextl-user`/`cxcl` work on
+  all four since the same day: cxcl's `#.(loop for sym being the external-symbols of ...)`
+  export list was empty (the LOOP clause iterated nothing, `.kb/loop-iteration-heads.md`), and
+  past it a `nil`/`t` export, an exported `make-package`, a `cl` internal under a package using
+  only cxcl (`.kb/packages.md`) and `layer-makunbound`'s `(setf (find-class x) nil)` /
+  `(setf (class-name c) nil)` (below) each stopped the compile. Residual: on the
   interpreter, a top-level form that activates a layer prints symbols of `contextl` qualified
   (`CONTEXTL::INFO-LAYER`) where the compiled backends print `INFO-LAYER` (identity is intact).
 - **lisp-binary, 2026-10-31**: `(ql:quickload :lisp-binary)` LOADS on all four backends, the
@@ -1095,6 +1100,9 @@ chunk-loop wrapper).
   and an 8-bit signed field) then round-trips through `write-binary`/`read-binary` over
   flexi-streams' in-memory streams on all four, octets `(2 1 254)`. Not measured further (bit
   streams, the README's 7-bit compressor, its own test suite).
+- **`(setf class-name)`** renames the METAOBJECT (its `name` slot), AMOP's answer, and leaves the
+  class table alone: `expandSetf`'s `CLASS-NAME` place is `(setf (slot-value c 'name) v)`, the
+  closer-mop shim carries `(setf closer-mop:class-name)`. ci-spec `classes-made-at-run-time`.
 - **A slot-definition metaobject's name is the slot's SYMBOL** (`SlotSpec.name`, package and
   all), not the package-stripped `baseName`: `ClosRegistry.slotDefinitionInstance` and the
   compile paths' class meta table (`LispMacroExpander.slotDataRow`). Until 2026-10-31 it was the

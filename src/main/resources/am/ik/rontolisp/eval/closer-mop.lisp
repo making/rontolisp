@@ -23,6 +23,11 @@
 
 (defun closer-mop:class-name (class) (slot-value class 'name))
 
+(defun (setf closer-mop:class-name) (new-name class)
+  ;; AMOP's (setf class-name): the metaobject's name, not the class table --
+  ;; find-class keeps answering for the old name (contextl's layer-makunbound).
+  (setf (slot-value class 'name) new-name))
+
 (defun closer-mop:class-direct-superclasses (class)
   (slot-value class 'direct-superclasses))
 

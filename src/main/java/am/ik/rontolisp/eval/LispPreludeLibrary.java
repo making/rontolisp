@@ -5624,7 +5624,8 @@ public final class LispPreludeLibrary {
 		// %package-iterator-entries: the with-package-iterator expansion calls it, and
 		// the expansion happens inside the expression compilers, after this pass.
 		if (LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL.equals(entry)) {
-			return referencesName(program, LispNames.WITH_PACKAGE_ITERATOR, canonical);
+			return referencesName(program, LispNames.WITH_PACKAGE_ITERATOR, canonical)
+					|| am.ik.rontolisp.macro.LispMacroExpander.loopIteratesPackageSymbols(program, true);
 		}
 		// The %do-symbols-list universe helper: the do-symbols lowerings call it, from
 		// the expression compilers, after this pass -- and so do the find-all-symbols
@@ -5639,7 +5640,8 @@ public final class LispPreludeLibrary {
 					|| referencesName(program, LispNames.FIND_ALL_SYMBOLS, canonical)
 					|| referencesName(program, LispNames.APROPOS, canonical)
 					|| referencesName(program, LispNames.APROPOS_LIST, canonical)
-					|| referencesName(program, LispNames.WITH_PACKAGE_ITERATOR, canonical);
+					|| referencesName(program, LispNames.WITH_PACKAGE_ITERATOR, canonical)
+					|| am.ik.rontolisp.macro.LispMacroExpander.loopIteratesPackageSymbols(program, false);
 		}
 		return false;
 	}

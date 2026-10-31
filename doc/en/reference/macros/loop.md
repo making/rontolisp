@@ -121,10 +121,11 @@ A dotted pattern binds the rest of the list, so it walks an alist directly:
 
 The clause snapshots the table and walks the snapshot, so the iteration order is the table's, and mutating the table inside the body does not affect the walk in progress.
 
-The package form of `being` — `for VAR being {the|each} {symbols|present-symbols|external-symbols} {of|in} PACKAGE` — is accepted but **lite**: rontolisp has no runtime intern table, so the clause parses and iterates the *empty* sequence. The body never runs and accumulation yields `nil`. It exists so libraries whose load-time code walks a package (such as cl-who's hyperdoc table) load without error:
+The package form of `being` — `for VAR being {the|each} {symbols|present-symbols|external-symbols} {of|in} PACKAGE` — walks the symbols [`do-symbols`](do-symbols.md) (the accessible ones), `with-package-iterator`'s `:internal :external` (the present ones) and [`do-external-symbols`](do-external-symbols.md) enumerate, snapshotted once:
 
 ```lisp
-(loop for s being the external-symbols of :cl collect s) ; => NIL
+(defpackage :loop-demo (:use :cl) (:export #:alpha #:beta))
+(sort (loop for s being the external-symbols of :loop-demo collect (symbol-name s)) #'string<) ; => ("ALPHA" "BETA")
 ```
 
 A type spec after the variable — either spelling — is accepted and ignored:

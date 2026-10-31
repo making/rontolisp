@@ -121,10 +121,11 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
 
 この節はテーブルのスナップショットを取ってそれを走査するため、反復順序はテーブルのものになり、本体でテーブルを変更しても進行中の走査には影響しません。
 
-`being` のパッケージ形式 — `for VAR being {the|each} {symbols|present-symbols|external-symbols} {of|in} PACKAGE` — は受け付けますが **簡易版** です: rontolisp には実行時のインターンテーブルがないため、この節は解析され *空* のシーケンスを反復します。本体は実行されず、集約結果は `nil` になります。ロード時にパッケージを走査するライブラリ (cl-who の hyperdoc テーブルなど) がエラーなくロードできるようにするためのものです:
+`being` のパッケージ形式 — `for VAR being {the|each} {symbols|present-symbols|external-symbols} {of|in} PACKAGE` — は、[`do-symbols`](do-symbols.md)(アクセス可能なシンボル)、`with-package-iterator` の `:internal :external`(present なシンボル)、[`do-external-symbols`](do-external-symbols.md) が列挙するシンボルを、一度スナップショットを取ってから走査します:
 
 ```lisp
-(loop for s being the external-symbols of :cl collect s) ; => NIL
+(defpackage :loop-demo (:use :cl) (:export #:alpha #:beta))
+(sort (loop for s being the external-symbols of :loop-demo collect (symbol-name s)) #'string<) ; => ("ALPHA" "BETA")
 ```
 
 変数の後の型宣言は、どちらの綴りでも受け付けられ、無視されます。

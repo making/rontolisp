@@ -112,9 +112,7 @@ patterns, parallel `and`, the anaphoric `it`, `loop-finish` and
 `thereis`/`always`/`never`. What is out of scope: `named` (and the
 `return-from` it would name); a destructuring pattern does not recognize
 lambda-list keywords (`&optional` and friends bind as ordinary variables instead
-of signalling); `being` drives hash tables, but its package form
-(`being the external-symbols of ...`) parses and iterates the EMPTY sequence,
-because there is no runtime intern table.
+of signalling).
 
 ## Structures and objects
 

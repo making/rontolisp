@@ -2023,6 +2023,16 @@ public final class PackageRegistry {
 	}
 
 	/**
+	 * Returns whether the name is one of {@code cl}'s implementation-internal names --
+	 * spelled by the expansions and runtimes rontolisp generates, never by a program.
+	 * @param name the symbol name
+	 * @return true for an internal name
+	 */
+	public static boolean isClInternal(String name) {
+		return CL_INTERNALS.contains(name);
+	}
+
+	/**
 	 * Returns whether the name is one {@code cl} exports that the standard does not:
 	 * rontolisp's own {@code while}. A portable library may own a symbol of that name
 	 * (parenscript, iterate, arnesi and for export one), so {@code cl}'s yields to it: a

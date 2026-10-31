@@ -272,8 +272,12 @@ public final class PackageResolver {
 							|| LispNames.RENAME_PACKAGE.equals(operatorMember(sym)));
 				}
 				case LispCons cons -> {
+					// A defpackage's clauses are names, not calls: an exported
+					// make-package (contextl's cxcl re-exports every cl external) makes
+					// no package at run time.
 					boolean quoteHead = cons.car() instanceof LispSymbol head
-							&& LispNames.QUOTE.equals(operatorMember(head));
+							&& (LispNames.QUOTE.equals(operatorMember(head))
+									|| LispNames.DEFPACKAGE.equals(operatorMember(head)));
 					if (referencesRuntimePackageMutation(cons.car(), inQuote)) {
 						return true;
 					}
@@ -1914,6 +1918,10 @@ public final class PackageResolver {
 			// symbol (#:cl-user, the common defpackage idiom), a bare symbol (cl-user)
 			// or a qualified one ((:shadow cl:let) names "LET", not the symbol).
 			case LispSymbol sym -> LispSymbol.memberName(sym.name());
+			// nil and t are symbols as well (contextl's cxcl exports every
+			// closer-common-lisp external, these two among them).
+			case LispNil nil -> "NIL";
+			case LispTrue t -> "T";
 			case LispString str -> str.value();
 			// A CHARACTER is a string designator too (CLHS glossary), so #\A names the
 			// package -- or the symbol -- "A"; the defpackage tests spell every clause
@@ -2508,7 +2516,10 @@ public final class PackageResolver {
 					}
 				}
 			}
-			if (currentUsesCl()) {
+			// An implementation-internal name is never written by a program: expansions
+			// inject it into whatever package they run in, a package using no cl
+			// included (the macro-function table appended under contextl-user).
+			if (currentUsesCl() || PackageRegistry.isClInternal(name)) {
 				return new LispSymbol(name);
 			}
 			// A package that does not use cl may still inherit a symbol of this name

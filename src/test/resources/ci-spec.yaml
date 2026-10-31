@@ -18880,6 +18880,11 @@ cases:
                    (typep 42 (find-class 'integer))
                    (typep 42 (find-class 't))
                    (typep (make-instance 'fcm-dog) (find-class 't))))
+      ;; Any other (setf (find-class ...)) shape -- forgetting a class with nil,
+      ;; contextl's layer-makunbound -- is a run-time error where it runs, so a
+      ;; function carrying one compiles.
+      (defun fcm-forget (name) (setf (find-class name) nil))
+      (print (handler-case (fcm-forget 'fcm-dog) (error () :refused)))
     expected: |
       (T FCM-DOG T T)
       NIL
@@ -18892,6 +18897,7 @@ cases:
       (T NIL "rex" NIL :SIGNALED)
       (T FCM-DOG T T 42)
       (T NIL T T T NIL T T T T)
+      :REFUSED
   - name: defclass-metaclass-protocol
     source: |
       ;; The metaclass protocol (the postmodern dao-class shape): a defclass
@@ -24326,6 +24332,12 @@ cases:
       (print (apropos-list "CDAR" :ci-ccu-a))
       (print (eq (car (find-all-symbols "CADDR")) 'caddr))
       (print (multiple-value-list (find-symbol "CAADR" :ci-ccu-a)))
+      ;; LOOP's being clauses walk the same universes (contextl's cxcl exports what
+      ;; (loop for sym being the external-symbols of :closer-common-lisp collect sym)
+      ;; finds; the clause iterated nothing before).
+      (print (list (length (ci-ccu-names (loop for s being the external-symbols of :cl collect (symbol-name s))))
+                   (length (ci-ccu-names (loop for s being each symbol in :ci-ccu-a collect (symbol-name s))))
+                   (loop for s being the external-symbols of :ci-ccu-a count t)))
     expected: |
       28
       ("CAAAAR" "CDDR")
@@ -24342,6 +24354,7 @@ cases:
       (CDAR)
       T
       (CAADR :INHERITED)
+      (28 28 0)
   - name: export-of-an-inherited-standard-name
     source: |
       (defpackage :ci-rsn-x (:use :cl) (:export #:car #:list #:print #:boole #:ci-rsn-own))
@@ -24366,6 +24379,13 @@ cases:
       (print (car (list 5 6)))
       (print (cons 7 (cl:if (cl:eq 'car 'cl:car) 1 0)))
       (cl:in-package :cl-user)
+      ;; nil and t are symbols too, so a defpackage clause may name them, and an
+      ;; exported make-package is a name, not a call that makes packages at run time
+      ;; (contextl's cxcl re-exports every closer-common-lisp external).
+      (defpackage :ci-rsn-nt (:use :cl) (:export nil t make-package #:ci-rsn-nt-own))
+      (defun ci-rsn-find (name) (find-package name))
+      (print (list (nth-value 1 (find-symbol "NIL" :ci-rsn-nt)) (nth-value 1 (find-symbol "T" :ci-rsn-nt))
+                   (nth-value 1 (find-symbol "MAKE-PACKAGE" (ci-rsn-find (string-upcase "ci-rsn-nt"))))))
     expected: |
       (T T T T)
       (CAR :EXTERNAL)
@@ -24382,6 +24402,7 @@ cases:
       (CI-RSN-X:CI-RSN-OWN :INHERITED)
       5
       (7 . 1)
+      (:EXTERNAL :EXTERNAL :EXTERNAL)
   - name: find-class-returns-an-eq-stable-class-metaobject
     source: |
       (defclass fc-animal () ((legs :initarg :legs :accessor fc-legs :type integer)))
@@ -32452,7 +32473,11 @@ standalone:
                      (closer-mop:subclassp c2 (find-class 'rtc-b)) (closer-mop:subclassp c1 (find-class 'rtc-b))))
         (print (list (typep p2 'rtc-a) (typep p1 'rtc-b) (typep p2 (find-class 'rtc-root)) (typep p2 c1)
                      (typep p1 c2) (typep p2 'standard-object) (typecase p3 (rtc-b :b) (t :other))
-                     (typep p2 'integer))))
+                     (typep p2 'integer)))
+        ;; (setf class-name) renames the metaobject (contextl's layer-makunbound).
+        (setf (class-name c1) 'rtc-renamed)
+        (setf (closer-mop:class-name c2) 'rtc-renamed-too)
+        (print (list (class-name (class-of p1)) (class-name c2) (rtc-who p2))))
     stdout: |
       (T T NIL T)
       (T T NIL T)
@@ -32461,3 +32486,4 @@ standalone:
       ((:ONE (:A-Y 1)) (:A-Y 2) (:BEFORE-B :AFTER-A :BEFORE-B :AFTER-A))
       (T T T NIL T NIL T NIL)
       (T NIL T T NIL T :B NIL)
+      (RTC-RENAMED RTC-RENAMED-TOO (:AROUND-A :B :A :ROOT))

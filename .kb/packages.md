@@ -127,7 +127,8 @@ A literal, top-level directive like `in-package`. `PackageResolver.resolveDefpac
 (`:NAME` -- the value `make-package` and `find-package` answer, so the three are `eq`; it was a
 quoted `NAME` symbol until `.todo/917`); it does NOT switch the current package. It is in `CL_SPECIAL_FORMS`. Designators: keywords, bare
 symbols, strings, `#:name`, a QUALIFIED symbol (`designator` takes `LispSymbol.memberName`, the
-symbol-name: `(:shadow cl:let)` names `LET`, misc-extensions' idiom) and CHARACTERS (`#\H` is the string
+symbol-name: `(:shadow cl:let)` names `LET`, misc-extensions' idiom), `nil` and `t` (symbols too:
+cxcl's `#.`-computed export list carries both; an error until 2026-10-31) and CHARACTERS (`#\H` is the string
 designator for `"H"`, CLHS glossary -- the ANSI chapter spells every clause that way at least
 once); `:documentation`/`:size` ignored.
 - `(:intern name...)` adds the names to the package's OWN symbols without exporting them, so
@@ -234,7 +235,10 @@ one disagrees with the interpreter's mid-program answer there (`.kb/uiop.md`). c
 - `resolveUnqualified` consults, in order: `current.imports()`, the shadow set, the `cl` table,
   `current.owns()`, then the use list. In a package that does not use `cl`, a `cl`-table name
   first tries the use list (a re-exported standard symbol, or a used package's own `sin`) before
-  the undefined-symbol error.
+  the undefined-symbol error -- except an implementation-internal one (`CL_INTERNALS`,
+  `PackageRegistry.isClInternal`), which resolves to `cl`'s in every package: expansions inject
+  it wherever they run (the macro-function table `UserMacroExpander` appends under the trailing
+  `in-package`, which for contextl-user is a package using only cxcl).
 - **Use-list visibility checks `exports`, not `owns`.** Conflicts resolve first-wins in `:use`
   order (real CL signals). `resolveQualified` redirects through `imports` after the externality
   check. Uninterned `#:g1` symbols pass through unresolved, like keywords and `&`-markers.
@@ -537,7 +541,10 @@ made table-aware. The model:
   the same reason strings.
 - The gate is one predicate everywhere: `resolveProgram` records
   `runtimePackagesMutable()` (a `make-`/`delete-`/`rename-package` reference
-  outside quoted data), the `Ctx` flag follows it, and the find-package /
+  outside quoted data AND outside a `defpackage`: an exported `make-package` is a name --
+  contextl's cxcl re-exports every closer-common-lisp external, and until 2026-10-31 that
+  flipped the gate while the prelude's own scan did not, so the compiled `%find-package` read
+  an undefined `%runtime-packages%`), the `Ctx` flag follows it, and the find-package /
   query / find-symbol / intern / status lowerings consult the runtime table only
   then -- any other program keeps the baked-only lowerings and stays
   byte-identical. The prelude support entries (`%runtime-packages%`,
