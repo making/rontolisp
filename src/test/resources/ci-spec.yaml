@@ -20897,6 +20897,13 @@ cases:
       (terpri)
       (print (list (make-array '(2 2) :initial-element 3)
                    (make-array 2 :element-type 'double-float :initial-element 1.5d0)))
+      ;; A print under a rebound *package* (map-symbol's with-standard-io-syntax in
+      ;; contextl) inside another print's argument leaves the outer print spelling its
+      ;; symbols for the outer package.
+      (defpackage :pon-p (:use :cl))
+      (in-package :pon-p)
+      (print (list 'foo (let ((*package* (find-package :cl-user))) (prin1-to-string 'zz)) 'bar))
+      (in-package :cl-user)
     expected: |
       #<C custom>
       (#<C custom>)
@@ -20907,6 +20914,7 @@ cases:
       (1 2 . 3)
       (1 s SYM)
       (#2A((3 3) (3 3)) #d(1.5 1.5))
+      (FOO "PON-P::ZZ" BAR)
   - name: computed-stream-options
     # A portable file wrapper takes the open options as ARGUMENTS and passes
     # them down -- uiop's call-with-input-file / call-with-output-file are

@@ -224,6 +224,11 @@ public final class LispEvaluator {
 	// complete.
 	private int printObjectRuntimeStamp = -1;
 
+	// Whether the print-object runtime was ever generated for a printer control in
+	// effect:
+	// from then on it keeps the %print-cased leaf (ensurePrintObjectRuntimeLoaded).
+	private boolean printObjectRuntimeControls;
+
 	// Forms already verified against the rontolisp:await placement rules, by identity:
 	// a lambda form evaluated repeatedly (a closure created in a loop) is walked once.
 	private final java.util.Set<LispVal> awaitCheckedForms = java.util.Collections
@@ -13214,22 +13219,31 @@ public final class LispEvaluator {
 	 * A generated DEFUN rather than a body inlined at the print site (which is what this
 	 * was before nested rendering): the renderer walks a list/vector by recursing into
 	 * itself, and an inlined form cannot recurse.
+	 * <p>
+	 * Once generated for a printer control in effect, the pair keeps the
+	 * {@code %print-cased} leaf, which answers every state ({@code %print-cased} takes
+	 * the raw conversion itself under the defaults): a print expanded for that leaf -- in
+	 * a package other than the pristine {@code cl-user}, the seventh control -- may run
+	 * after a print nested in its argument under the defaults (a {@code *package*}
+	 * rebound to {@code cl-user}, contextl's {@code map-symbol}), and a raw leaf
+	 * regenerated there printed the outer print's symbols qualified.
 	 * @param printControls whether a printer-control variable currently holds a
 	 * non-default value
 	 */
 	private void ensurePrintObjectRuntimeLoaded(boolean printControls) {
 		synchronized (this.libraryLoadLock) {
+			boolean controls = printControls || this.printObjectRuntimeControls;
 			java.util.List<String> tags = LispMacroExpander.printObjectTags(this.closRegistry);
-			int stamp = tags.hashCode() * 4 + (this.closRegistry.routesConditionReports() ? 1 : 0)
-					+ (printControls ? 2 : 0);
+			int stamp = tags.hashCode() * 4 + (this.closRegistry.routesConditionReports() ? 1 : 0) + (controls ? 2 : 0);
 			if (stamp == this.printObjectRuntimeStamp) {
 				return;
 			}
 			this.printObjectRuntimeStamp = stamp;
+			this.printObjectRuntimeControls = controls;
 			// The interpreter always emits the vector arm: the gate the compile paths use
 			// exists to keep the array runtime out of an array-free ARTIFACT, and there
 			// is no artifact here.
-			for (LispVal form : LispMacroExpander.printObjectStrDefuns(this.closRegistry, printControls, true)) {
+			for (LispVal form : LispMacroExpander.printObjectStrDefuns(this.closRegistry, controls, true)) {
 				eval(form, this.globalEnv);
 			}
 		}

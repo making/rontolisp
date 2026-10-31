@@ -28,28 +28,13 @@ package `contextl`) stops at:
    `adjoin-layer-using-class` to run `add-method`'s `:after` (cache clearing).
 4. `spx`: `(setf (find-class 'x) nil)` (a run-time error now, `.kb/clos.md`).
 
-Smaller residual (interpreter only, NOT contextl-specific -- measured 2026-11-01): in a
-program with a `print-object` method, in a package other than `cl-user`,
-
-    (print (list 'foo (let ((*package* (find-package :cl-user)) (*print-readably* t))
-                        (format nil "~A" 1))
-                 'bar))
-
-prints `(P::FOO "1" P::BAR)` (compiled: `(FOO "1" BAR)`); the next top-level form prints bare
-again. The inner print, under a non-default printer control, regenerates the print-object
-renderer (`LispEvaluator.ensurePrintObjectRuntimeLoaded`: the stamp carries `printControls`)
-while `*package*` is bound to `cl-user`, and the enclosing form's own print then qualifies
-every symbol. Binding only `*print-readably*`, or only `*package*`, does not reproduce it.
-contextl reaches it through `map-symbol`'s `with-standard-io-syntax` (`defining-layer`,
-`find-layer-class`, `adjoin-layer`), which is why its prints of `contextl-user` symbols inside a
-layer-activating form come out qualified.
-
 Done 2026-11-01, on all four: `grouped-layers` (`closer-mop:slot-definition-allocation`, and a
 slot-definition `initialize-instance :around`'s `:allocation :class` reaching the static layout)
 and `dynenv` (the slot-access protocol, `slot-value-using-class` and its siblings; `assert`'s
 message doubling the tildes of the test it quotes), `.kb/clos.md`; a layer-context prototype
 prints through contextl's `print-object` (and a class an exported symbol names no longer breaks
-the dynamic dispatch arm on the compile paths).
+the dynamic dispatch arm on the compile paths); the interpreter no longer prints a
+layer-activating form's symbols qualified.
 
 Plan: 1 is the large one; decide between first-class generic functions (a funcallable
 `standard-generic-function` plus a run-time method table) and a narrower `ensure-method` over

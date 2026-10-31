@@ -1157,14 +1157,10 @@ chunk-loop wrapper).
   export list was empty (the LOOP clause iterated nothing, `.kb/loop-iteration-heads.md`), and
   past it a `nil`/`t` export, an exported `make-package`, a `cl` internal under a package using
   only cxcl (`.kb/packages.md`) and `layer-makunbound`'s `(setf (find-class x) nil)` /
-  `(setf (class-name c) nil)` (below) each stopped the compile. Residual: on the
-  interpreter, a top-level form that activates a layer prints symbols of `contextl` qualified
-  (`CONTEXTL::INFO-LAYER`) where the compiled backends print `INFO-LAYER` (identity is intact):
-  `map-symbol`'s `with-standard-io-syntax` regenerates the print-object renderer while
-  `*package*` is bound to `cl-user`, and the enclosing form's print then qualifies -- reproduced
-  without contextl (2026-11-01): with a `print-object` method, in package `p`, `(print (list 'foo
-  (let ((*package* (find-package :cl-user)) (*print-readably* t)) (format nil "~A" 1)) 'bar))`
-  prints `(P::FOO "1" P::BAR)`; either binding alone does not.
+  `(setf (class-name c) nil)` (below) each stopped the compile. Until 2026-11-01 the
+  interpreter printed the symbols of a top-level form that activates a layer qualified
+  (`CONTEXTL-USER::INFO-LAYER`): `map-symbol`'s `with-standard-io-syntax` print regenerated the
+  print-object renderer under `cl-user` (`.kb/pretty-printer.md`, "Interpreter trap").
 - **lisp-binary, 2026-10-31**: `(ql:quickload :lisp-binary)` LOADS on all four backends, the
   WASM pair with `--feature lisp-binary/no-cffi` (its cffi dependency needs `ffi:`, which no
   `.wasm` has). Cleared that day: the Gray `fundamental-binary-stream`/`-character-stream`

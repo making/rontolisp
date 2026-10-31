@@ -117,6 +117,14 @@ under `prin1` with embedded `|`/`\` doubled; `princ` never escapes. Abbreviation
 spells a qualifier only when the symbol is NOT accessible in the current `*package*` (CLHS
 22.1.3.3.1); `princ`/`~A` never spell one.
 
+- **Interpreter trap (2026-11-01)**: the print-object renderer is ONE generated defun pair
+  (`ensurePrintObjectRuntimeLoaded`), so a print in progress -- expanded for the `%print-cased`
+  leaf because the package is not the pristine `cl-user` -- used to run the RAW leaf a print
+  nested in its argument under a `*package*` rebound to `cl-user` had regenerated, and spelled
+  every symbol qualified (contextl's `map-symbol` does exactly that with
+  `with-standard-io-syntax`). Once generated for a control, the pair now keeps the
+  `%print-cased` leaf, which takes the raw conversion itself under the defaults. ci-spec
+  `print-object-nested`.
 - Rides `%print-cased` as the seventh control: the `prin1` symbol leaf goes through
   `%pc-unqualified`, which parses the qualifier off the canonical `PKG:NAME` and asks
   `%symbol-print-bare-p`. Interpreter: LIVE registry (`PackageResolver.printsBare`,
