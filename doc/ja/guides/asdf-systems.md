@@ -274,7 +274,9 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   がモデルをたどり、
   [`asdf:registered-systems`](../reference/functions/asdf-registered-systems.md)
   が登録済みの全名前を列挙します。`asdf:*user-cache*` は external で `nil` です
-  (fasl キャッシュはありません)。これは rove のシステム駆動テストランナーが読む
+  (fasl キャッシュはありません)。`asdf:*asdf-version*` は `"3.3.7"` で、このサブセットが
+  従う API のリリースです (lisp-binary のように、バージョンが古ければ同梱の ASDF を
+  ロードする `.asd` はそれをロードしません)。これは rove のシステム駆動テストランナーが読む
   コンポーネントモデルです。
 - **operation プロトコルも本物です。** ロードを構成する各動作は、operation の
   インスタンス (`asdf:prepare-op`・`asdf:compile-op`・`asdf:load-op`・`asdf:test-op`。

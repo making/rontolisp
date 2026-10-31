@@ -24,20 +24,28 @@
                                                           rontolisp:fundamental-output-stream)
   ())
 
-(defclass trivial-gray-streams:fundamental-character-output-stream (trivial-gray-streams:fundamental-output-stream
-                                                                    rontolisp:fundamental-character-output-stream)
+(defclass trivial-gray-streams:fundamental-character-stream (trivial-gray-streams:fundamental-stream
+                                                             rontolisp:fundamental-character-stream)
   ())
 
-(defclass trivial-gray-streams:fundamental-character-input-stream (trivial-gray-streams:fundamental-input-stream
-                                                                   rontolisp:fundamental-character-input-stream)
+(defclass trivial-gray-streams:fundamental-binary-stream (trivial-gray-streams:fundamental-stream
+                                                          rontolisp:fundamental-binary-stream)
   ())
 
-(defclass trivial-gray-streams:fundamental-binary-input-stream (trivial-gray-streams:fundamental-input-stream
-                                                                rontolisp:fundamental-binary-input-stream)
+(defclass trivial-gray-streams:fundamental-character-output-stream (trivial-gray-streams:fundamental-output-stream trivial-gray-streams:fundamental-character-stream
+                                                                                                                   rontolisp:fundamental-character-output-stream)
   ())
 
-(defclass trivial-gray-streams:fundamental-binary-output-stream (trivial-gray-streams:fundamental-output-stream
-                                                                 rontolisp:fundamental-binary-output-stream)
+(defclass trivial-gray-streams:fundamental-character-input-stream (trivial-gray-streams:fundamental-input-stream trivial-gray-streams:fundamental-character-stream
+                                                                                                                 rontolisp:fundamental-character-input-stream)
+  ())
+
+(defclass trivial-gray-streams:fundamental-binary-input-stream (trivial-gray-streams:fundamental-input-stream trivial-gray-streams:fundamental-binary-stream
+                                                                                                              rontolisp:fundamental-binary-input-stream)
+  ())
+
+(defclass trivial-gray-streams:fundamental-binary-output-stream (trivial-gray-streams:fundamental-output-stream trivial-gray-streams:fundamental-binary-stream
+                                                                                                                rontolisp:fundamental-binary-output-stream)
   ())
 
 ;; The portable mixin (upstream trivial-gray-streams' own class): carries no

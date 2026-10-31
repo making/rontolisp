@@ -47373,7 +47373,7 @@ public final class LispMacroExpander {
 			for (ClosRegistry.SlotSpec direct : info.directSlots()) {
 				boolean sameAsEffective = info.slots().stream().anyMatch(direct::equals);
 				directDefs.add(new LispCons(ClosRegistry.slotWriters(direct), sameAsEffective
-						? new LispCons(new LispSymbol(direct.baseName()), LispNil.INSTANCE) : slotDataRow(direct)));
+						? new LispCons(new LispSymbol(direct.name()), LispNil.INSTANCE) : slotDataRow(direct)));
 			}
 			LispVal superNames = info.superclasses().isEmpty() ? LispNil.INSTANCE
 					: listToCons(info.superclasses().stream().<LispVal>map(LispSymbol::new).toList());
@@ -47423,7 +47423,7 @@ public final class LispMacroExpander {
 	private static LispVal slotDataRow(ClosRegistry.SlotSpec slot) {
 		List<String> readerNames = new java.util.ArrayList<>(slot.readers());
 		readerNames.addAll(slot.accessors());
-		return listToCons(List.of(new LispSymbol(slot.baseName()), ClosRegistry.symbolList(slot.initargs()),
+		return listToCons(List.of(new LispSymbol(slot.name()), ClosRegistry.symbolList(slot.initargs()),
 				slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE, new LispSymbol(slot.type()),
 				ClosRegistry.symbolList(readerNames)));
 	}
@@ -49831,7 +49831,7 @@ public final class LispMacroExpander {
 	private static boolean isTopLevelSpliceForm(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()
 				&& (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())
-						|| isHandlerlessHandlerBind(cons)
+						|| defclassInitializer(cons) != null || isHandlerlessHandlerBind(cons)
 						|| ((LispNames.EVAL_WHEN.equals(sym.name()) || isUiopWithDeprecationWrapper(sym.name())
 								|| isUiopWithUpgradabilityWrapper(sym.name())) && cons.toList().size() >= 2));
 	}
@@ -49915,11 +49915,39 @@ public final class LispMacroExpander {
 					return;
 				}
 			}
+			// (defparameter NAME (defclass C ...)) -- lisp-binary's struct-like-defclass:
+			// defclass answers the class object (CLHS), and the compile paths define
+			// classes at top level only, so the defclass runs first as a top-level form
+			// and the variable takes (find-class 'C), the same object.
+			LispCons defclass = defclassInitializer(cons);
+			if (defclass != null) {
+				flattenTopLevelInto(splicedPart(cons, defclass), out, compileTimeToo, compileTime);
+				List<LispVal> parts = new java.util.ArrayList<>(cons.toList());
+				parts.set(2, listToCons(List.of(new LispSymbol(LispNames.FIND_CLASS),
+						listToCons(List.of(new LispSymbol(LispNames.QUOTE), defclass.toList().get(1))))));
+				flattenTopLevelInto(splicedPart(cons, listToCons(parts)), out, compileTimeToo, compileTime);
+				return;
+			}
 		}
 		out.add(form);
 		if (compileTimeToo && compileTime != null) {
 			compileTime.add(form);
 		}
+	}
+
+	/**
+	 * The {@code defclass} a top-level {@code (defparameter NAME (defclass C ...) ...)}
+	 * or {@code defvar} initializes its variable with, or null.
+	 */
+	private static @Nullable LispCons defclassInitializer(LispCons form) {
+		if (!(form.car() instanceof LispSymbol op)
+				|| !(LispNames.DEFPARAMETER.equals(op.name()) || LispNames.DEFVAR.equals(op.name()))) {
+			return null;
+		}
+		List<LispVal> parts = form.toList();
+		return parts.size() >= 3 && parts.get(2) instanceof LispCons init && init.car() instanceof LispSymbol head
+				&& LispNames.DEFCLASS.equals(head.name()) && init.isProperList() && init.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol ? init : null;
 	}
 
 	/**

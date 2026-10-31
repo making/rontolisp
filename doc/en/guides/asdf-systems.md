@@ -284,8 +284,10 @@ library still has to stay inside the supported subset below.
   walk the model;
   [`asdf:registered-systems`](../reference/functions/asdf-registered-systems.md)
   lists every registered name, and `asdf:*user-cache*` is external and `nil`
-  (there is no fasl cache). This is the component model rove's system-driven
-  test runner reads.
+  (there is no fasl cache), and `asdf:*asdf-version*` is `"3.3.7"`, the
+  release whose API this subset follows (a `.asd` that loads its own bundled
+  ASDF when the version is older, as lisp-binary's does, keeps it unloaded).
+  This is the component model rove's system-driven test runner reads.
 - **So is the operation protocol.** Every action of a load is an
   [`asdf:perform`](../reference/functions/asdf-perform.md) call on an
   operation instance (`asdf:prepare-op`, `asdf:compile-op`, `asdf:load-op`,

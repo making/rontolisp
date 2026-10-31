@@ -45,7 +45,9 @@ public final class GrayStreamCallFixture {
 	/**
 	 * The stream operators as function values ({@code #'op}, a quoted designator,
 	 * {@code apply}) handed a Gray stream instance reach its methods as a call does, and
-	 * a stream handle still reaches the built-in.
+	 * a stream handle still reaches the built-in. A class over the element-kind
+	 * intermediates ({@code fundamental-binary-stream}, lisp-binary's {@code bit-stream})
+	 * answers like a binary leaf.
 	 */
 	public static final String FUNCTION_VALUE_PROGRAM = """
 			(defclass gfv-out (rontolisp:fundamental-character-output-stream)
@@ -102,8 +104,13 @@ public final class GrayStreamCallFixture {
 			             (gfv-in (lambda (s) (read-char s) (funcall #'file-position s)) :i)))
 			(print (let ((b (make-instance 'gfv-bytes)))
 			         (list (funcall #'read-byte b) (funcall #'read-byte b) (funcall #'read-byte b nil :done))))
-			(print (mapcar (lambda (f) (list (funcall f (make-instance 'gfv-out)) (funcall f (make-instance 'gfv-in :text ""))))
+			(defclass gfv-bits (rontolisp:fundamental-binary-stream rontolisp:fundamental-input-stream) ())
+			(print (mapcar (lambda (f) (list (funcall f (make-instance 'gfv-out)) (funcall f (make-instance 'gfv-in :text ""))
+			                                 (funcall f (make-instance 'gfv-bits))))
 			               (list #'input-stream-p #'output-stream-p #'stream-element-type)))
+			(print (list (subtypep 'rontolisp:fundamental-character-input-stream 'rontolisp:fundamental-character-stream)
+			             (subtypep 'rontolisp:fundamental-binary-output-stream 'rontolisp:fundamental-binary-stream)
+			             (subtypep 'rontolisp:fundamental-binary-stream 'rontolisp:fundamental-input-stream)))
 			(print (list (with-output-to-string (s) (funcall #'write-string "plain" s) (funcall #'princ 1 s))
 			             (with-input-from-string (s "x") (funcall #'read-char s))))
 			""";
@@ -114,8 +121,8 @@ public final class GrayStreamCallFixture {
 			"\")))", "((ABC (\"ABC\")) (ABC (\"ABC\")) (NIL (\"xy\")) (\"hello\" (\"lo\")) (NIL (\"", "\")))", "((\"",
 			"\") (NIL (:FORCED)) (NIL (:FINISHED)) (NIL (:CLEARED)))",
 			"((#\\a \"b\") (#\\a \"b\") (#\\a \"ab\") (\"ab\" \"cd\") (T \"ab\"))",
-			"((:EOF :END) ((3 \"-ab\") \"\") (1 \"b\"))", "(1 2 :DONE)", "((NIL T) (T NIL) (CHARACTER CHARACTER))",
-			"(\"plain1\" #\\x)");
+			"((:EOF :END) ((3 \"-ab\") \"\") (1 \"b\"))", "(1 2 :DONE)",
+			"((NIL T T) (T NIL NIL) (CHARACTER CHARACTER (UNSIGNED-BYTE 8)))", "(T T NIL)", "(\"plain1\" #\\x)");
 
 	/**
 	 * The default {@code stream-unread-char} parks the character on ITS instance: two

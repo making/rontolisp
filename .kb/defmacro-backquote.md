@@ -32,7 +32,12 @@ so all backends get it for free.
   `LoadInliner`, before the compilers. It evals `defmacro`s into a macro-time `LispEvaluator`,
   registers top-level `defun`s, expands every call site with a structure-aware walker (skips
   `quote`, `let`/`do` binding names, `lambda`/`defun` params, `case`-family keys,
-  `dolist`/`dotimes` vars), and drops the definitions. **Anything compiling without the CLI
+  `dolist`/`dotimes` vars), and drops the definitions. A lambda list's NAMES stay but an
+  `&optional`/`&key`/`&aux` default is an expression (`expandLambdaList`: `lambda`, `defun`,
+  `defmethod`, a `defgeneric`'s `(:method ...)`, `flet`/`labels`, `destructuring-bind` with its
+  nested patterns). Until 2026-10-31 the whole list stayed verbatim and a user macro there
+  compiled "undefined function" on JVM and both WASM (lisp-binary's `read-bytes` `&key` default,
+  a quasiquote-2.0 template). Pin: `UserMacroExpanderTest#lambdaListNamesStayButDefaultFormsExpand`. **Anything compiling without the CLI
   (corpus tests) must apply the pass itself.**
 - Compiled output's `_eval`/`read` knows neither `defmacro` nor `` ` ``: define before use.
 

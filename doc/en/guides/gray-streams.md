@@ -8,10 +8,14 @@ those methods when handed such an instance instead of a stream handle. This
 works on every backend (interpreter, JVM, both WASM variants).
 
 The base classes form the CL-shaped hierarchy: `fundamental-stream` at the
-root, `fundamental-input-stream` / `fundamental-output-stream` below it, and
+root, the direction classes `fundamental-input-stream` /
+`fundamental-output-stream` and the element classes
+`fundamental-character-stream` / `fundamental-binary-stream` below it, and
 `fundamental-character-input-stream` / `fundamental-character-output-stream` /
 `fundamental-binary-input-stream` / `fundamental-binary-output-stream` as the
-leaves (all in the `rontolisp` package).
+leaves, each under one direction and one element class (all in the
+`rontolisp` package). A class may also combine a direction class and an
+element class itself.
 
 | built-in | dispatches to |
 | --- | --- |
@@ -33,7 +37,7 @@ leaves (all in the `rontolisp` package).
 | `listen` | `rontolisp:stream-listen` (default method answers `nil`) |
 | `open-stream-p` | answers `t` -- like `close`, a name a program may own |
 | `streamp`, `(typep x 'stream)` | answer `t` -- a Gray stream IS a stream, so a library that dispatches on the type routes it to its Lisp-stream arm |
-| `stream-element-type` | `character`, or `(unsigned-byte 8)` for a binary base class -- a class subclassing BOTH (a bivalent stream) answers `character`, because the answer is which buffer to allocate. A name a program may own |
+| `stream-element-type` | `character`, or `(unsigned-byte 8)` below `fundamental-binary-stream` -- a class subclassing BOTH (a bivalent stream) answers `character`, because the answer is which buffer to allocate. A name a program may own |
 | `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (default methods loop the element generics; a string goes to `stream-write-string` in one call) |
 | `file-position` | `rontolisp:stream-file-position`; the two-argument form calls the `(setf rontolisp:stream-file-position)` writer generic |
 

@@ -8,7 +8,8 @@
 ;;
 ;; The file runs as Lisp. Its header is cl-csv.asd's (a defpackage guarded by
 ;; find-package) and cl-pdf.asd's (a feature computed from *features*, pushed,
-;; and read by the #- below it and by src/one.lisp); then the file loads
+;; and read by the #- below it and by src/one.lisp) and lisp-binary.asd's
+;; asdf:*asdf-version* gate; then the file loads
 ;; meta-demo-tool itself, which every system defined after that call needs.
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (unless (find-package :meta-demo.system)
@@ -24,6 +25,13 @@
 
 #-(or meta-demo-fast meta-demo-small)
 (error "meta-demo: no build was chosen")
+
+;; lisp-binary.asd's ASDF version gate: an ASDF older than 3.1.5 (or none
+;; announcing a version) would load the library's own bundled asdf.lisp.
+(let ((version (symbol-value (or (find-symbol (string :*asdf-version*) :asdf)
+                                 (find-symbol (string :*asdf-revision*) :asdf)))))
+  (unless (and (stringp version) (string>= version "3.1.5"))
+    (error "meta-demo: ASDF ~a is too old" version)))
 
 (load-system "meta-demo-tool")
 

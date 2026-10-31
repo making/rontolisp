@@ -1820,9 +1820,10 @@ public final class UserMacroExpander {
 					// the body are expressions.
 					return rebuild(cons, parts, 2, macroEval, expandBindings(parts.get(1), macroEval));
 				case LispNames.LAMBDA:
-					return rebuild(cons, parts, 2, macroEval, parts.get(1));
+					return rebuild(cons, parts, 2, macroEval, expandLambdaList(parts.get(1), false, macroEval));
 				case LispNames.DEFUN:
-					return rebuild(cons, parts, 3, macroEval, parts.get(1), parts.get(2));
+					return rebuild(cons, parts, 3, macroEval, parts.get(1),
+							expandLambdaList(parts.get(2), false, macroEval));
 				case LispNames.DEFMETHOD: {
 					// (defmethod name [qualifier] (params...) body...): the name,
 					// optional
@@ -1842,6 +1843,7 @@ public final class UserMacroExpander {
 					for (int k = 1; k <= llIndex; k++) {
 						kept[k - 1] = parts.get(k);
 					}
+					kept[llIndex - 1] = expandLambdaList(parts.get(llIndex), false, macroEval);
 					return rebuild(cons, parts, llIndex + 1, macroEval, kept);
 				}
 				case LispNames.DEFGENERIC: {
@@ -1858,6 +1860,7 @@ public final class UserMacroExpander {
 							int llIndex = mp.size() > 1 && mp.get(1) instanceof LispSymbol ? 2 : 1;
 							if (mp.size() > llIndex + 1) {
 								List<LispVal> newMethod = new ArrayList<>(mp.subList(0, llIndex + 1));
+								newMethod.set(llIndex, expandLambdaList(mp.get(llIndex), false, macroEval));
 								for (int j = llIndex + 1; j < mp.size(); j++) {
 									newMethod.add(expandAll(mp.get(j), macroEval));
 								}
@@ -1936,7 +1939,7 @@ public final class UserMacroExpander {
 							List<LispVal> dp = defCons.toList();
 							List<LispVal> newDef = new ArrayList<>();
 							newDef.add(dp.get(0));
-							newDef.add(dp.get(1));
+							newDef.add(expandLambdaList(dp.get(1), false, macroEval));
 							for (int i = 2; i < dp.size(); i++) {
 								newDef.add(expandAll(dp.get(i), macroEval));
 							}
@@ -1993,12 +1996,13 @@ public final class UserMacroExpander {
 					return rebuild(cons, parts, 2, macroEval, parts.get(1));
 				}
 				case LispNames.DESTRUCTURING_BIND: {
-					// (destructuring-bind pattern form body...): the pattern stays (like
-					// a lambda list), the form and the body are expressions.
+					// (destructuring-bind pattern form body...): the pattern's names
+					// stay (like a lambda list), its defaults, the form and the body are
+					// expressions.
 					if (parts.size() < 2) {
 						return form; // malformed; the expansion reports it
 					}
-					return rebuild(cons, parts, 2, macroEval, parts.get(1));
+					return rebuild(cons, parts, 2, macroEval, expandLambdaList(parts.get(1), true, macroEval));
 				}
 				case LispNames.LOOP: {
 					// (loop clause...): clause keywords and expressions are walked, but a
@@ -2197,6 +2201,60 @@ public final class UserMacroExpander {
 			newParts.add(expandAll(parts.get(i), macroEval));
 		}
 		return LispCons.rebuiltList(original, newParts);
+	}
+
+	/**
+	 * Expands the default forms of a lambda list -- an {@code &optional}/{@code &key}/
+	 * {@code &aux} entry's second element -- keeping every name, a specializer and a
+	 * supplied-p variable. The same object when nothing expanded.
+	 * @param lambdaList the lambda list
+	 * @param destructuring whether a list in a required position is a nested pattern
+	 * (walked the same way) rather than a defmethod's {@code (var specializer)}
+	 * @param macroEval the macro-time evaluator
+	 * @return the lambda list with its defaults expanded
+	 */
+	private static LispVal expandLambdaList(LispVal lambdaList, boolean destructuring, LispEvaluator macroEval) {
+		if (!(lambdaList instanceof LispCons listCons)) {
+			return lambdaList;
+		}
+		List<LispVal> out = new ArrayList<>();
+		boolean defaults = false;
+		boolean changed = false;
+		LispVal cell = listCons;
+		for (; cell instanceof LispCons c; cell = c.cdr()) {
+			LispVal element = c.car();
+			LispVal next = element;
+			if (element instanceof LispSymbol sym && sym.name().startsWith("&")) {
+				defaults = LispNames.LAMBDA_OPTIONAL.equals(sym.name()) || LispNames.LAMBDA_KEY.equals(sym.name())
+						|| LispNames.LAMBDA_AUX.equals(sym.name());
+			}
+			else if (element instanceof LispCons entry && entry.isProperList()) {
+				if (defaults) {
+					List<LispVal> entryParts = entry.toList();
+					if (entryParts.size() >= 2) {
+						List<LispVal> newEntry = new ArrayList<>(entryParts);
+						newEntry.set(0, destructuring ? expandLambdaList(entryParts.get(0), true, macroEval)
+								: entryParts.get(0));
+						newEntry.set(1, expandAll(entryParts.get(1), macroEval));
+						next = LispCons.rebuiltList(entry, newEntry);
+					}
+				}
+				else if (destructuring) {
+					next = expandLambdaList(entry, true, macroEval);
+				}
+			}
+			changed |= next != element;
+			out.add(next);
+		}
+		if (!changed) {
+			return lambdaList;
+		}
+		// A dotted tail (destructuring's (a . rest)) is a name and stays.
+		LispVal result = cell;
+		for (int i = out.size() - 1; i >= 0; i--) {
+			result = new LispCons(out.get(i), result);
+		}
+		return result;
 	}
 
 	// Expands the init/step forms of a let/do binding list, keeping the bound names.

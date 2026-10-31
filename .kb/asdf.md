@@ -39,6 +39,16 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
   so this is decided here); a top-level `#.` marker of either kind is dropped (the ASDF version
   guard: evaluated, it refused bordeaux-threads, fiveam, in-nomine, split-sequence and
   static-vectors in the h35 prototype -- there is no `asdf:asdf-version` here).
+- **`asdf:*asdf-version*` is `"3.3.7"`** (asdf.lisp, uiop's contract version; 2026-10-31). A
+  `.asd` evaluating a version gate finds a current ASDF: lisp-binary's computes the version through
+  `find-symbol` and, below 3.1.5 (or "1.0" when unbound), pushes `:lisp-binary-upgrade-asdf` and
+  loads its bundled 14k-line `asdf.lisp`, which refuses the implementation. Pin:
+  `AsdfMetaobjectsE2eTest` (the gate in `meta-demo.asd`, the value printed, all four).
+- **The `.asd` read's feature set is the loader's STATIC one** (measured 2026-10-31, interpreter):
+  the evaluator's `features` plus `--feature`, never the program's run-time `*features*` -- a
+  `(push :lisp-binary/never-use-own-asdf *features*)` ahead of `ql:quickload` does not reach the
+  `.asd`'s `#-`; a `--feature` does (`--feature lisp-binary/no-cffi` drops its cffi dependency). The compile paths cannot honor a
+  run-time push anyway (compile-file semantics), so this stays.
 - **Everything else is EVALUATED** in the image (`AsdLoad.eval`, `#.` markers resolved first; one
   holding an unreadable `#.` fails the load naming it): the package header (a conditional
   `defpackage` included -- cl-csv, function-cache), `warn` (to `*error-output*`; cl-containers),

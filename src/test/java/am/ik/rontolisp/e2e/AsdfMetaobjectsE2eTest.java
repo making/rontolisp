@@ -26,11 +26,12 @@ import java.util.List;
  *
  * <p>
  * The {@code .asd} runs as Lisp ({@code .kb/asdf.md}, "What a {@code .asd} may contain"):
- * a {@code defpackage} guarded by {@code find-package}, a feature computed from
- * {@code *features*} and pushed -- read by the {@code #-} below it and by
- * {@code src/one.lisp} (the {@code build} defun) -- and a {@code load-system} of
- * {@code meta-demo-tool} from the file itself, which the compile paths run in their build
- * image and splice ahead of the systems defined after it ({@code tool-fn}).
+ * a {@code defpackage} guarded by {@code find-package}, lisp-binary's gate on
+ * {@code asdf:*asdf-version*}, a feature computed from {@code *features*} and pushed --
+ * read by the {@code #-} below it and by {@code src/one.lisp} (the {@code build} defun)
+ * -- and a {@code load-system} of {@code meta-demo-tool} from the file itself, which the
+ * compile paths run in their build image and splice ahead of the systems defined after it
+ * ({@code tool-fn}).
  *
  * <p>
  * And the operation protocol ({@code .kb/asdf.md}, "The operation protocol"): the
@@ -81,7 +82,7 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			(print (kind-of (asdf:find-system "meta-demo")))
 			(print (kind-of (car (asdf:component-children (asdf:find-system "meta-demo")))))
 			(print (asdf:find-system :absent nil))
-			(print asdf:*user-cache*)
+			(print (list asdf:*user-cache* asdf:*asdf-version*))
 			(print (asdf:registered-systems))
 			(defun nested-load () (asdf:load-system "meta-demo"))
 			(nested-load)
@@ -108,7 +109,7 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 
 	private static final List<String> EXPECTED = List.of("T", "T", "NIL", "T", "\"meta-demo\"",
 			"(\"src/one\" \"src/m/two\")", "NIL", "T", "NIL", "T", "T", "(\"meta-demo\")", "\"1.2.3\"", "NIL", ":UNIX",
-			":SMALL", ":TOOL", ":RELATIVE-OK", ":SYSTEM", ":FILE", "NIL", "NIL",
+			":SMALL", ":TOOL", ":RELATIVE-OK", ":SYSTEM", ":FILE", "NIL", "(NIL \"3.3.7\")",
 			"(\"meta-demo-tool\" \"meta-demo\" \"meta-demo/tests\" \"meta-demo/hooks\" \"meta-demo/perform\""
 					+ " \"meta-demo/nested\" \"trivial-features\")",
 			":NESTED-LOAD-OK", "\"testing meta-demo/tests\"", "T", "3", "1", "T", "T", "T", "NIL", "1", "T", ":REFUSED",

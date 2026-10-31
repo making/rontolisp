@@ -78,12 +78,14 @@ public final class GrayStreamsLibrary {
 			LispNames.GRAY_STREAM_FORCE_OUTPUT, LispNames.GRAY_STREAM_FINISH_OUTPUT, LispNames.GRAY_STREAM_CLEAR_OUTPUT,
 			LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_FUNDAMENTAL_STREAM,
 			LispNames.GRAY_INPUT_STREAM, LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM,
-			LispNames.GRAY_BINARY_OUTPUT_STREAM, LispNames.GRAY_STREAM_MIXIN);
+			LispNames.GRAY_BINARY_OUTPUT_STREAM, LispNames.GRAY_CHARACTER_STREAM, LispNames.GRAY_BINARY_STREAM,
+			LispNames.GRAY_STREAM_MIXIN);
 
 	/** The protocol's base classes, by member name (UPPERCASE, like the set above). */
 	private static final java.util.Set<String> BASE_CLASS_NAMES = java.util.Set.of(LispNames.GRAY_CHAR_OUTPUT_STREAM,
 			LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM,
-			LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM);
+			LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM,
+			LispNames.GRAY_CHARACTER_STREAM, LispNames.GRAY_BINARY_STREAM);
 
 	/** The class a host's registry knows when the host carries the protocol. */
 	private static final String HOST_PROTOCOL_CLASS = am.ik.rontolisp.PackageRegistry.qualify(LispNames.RONTOLISP_PKG,
@@ -708,11 +710,9 @@ public final class GrayStreamsLibrary {
 			(defmethod output-stream-p ((stream rontolisp:fundamental-stream))
 			  (if (typep stream 'rontolisp:fundamental-output-stream) t nil))
 			(defmethod stream-element-type ((stream rontolisp:fundamental-stream))
-			  (if (or (typep stream 'rontolisp:fundamental-character-input-stream)
-			          (typep stream 'rontolisp:fundamental-character-output-stream))
+			  (if (typep stream 'rontolisp:fundamental-character-stream)
 			      'character
-			      (if (or (typep stream 'rontolisp:fundamental-binary-input-stream)
-			              (typep stream 'rontolisp:fundamental-binary-output-stream))
+			      (if (typep stream 'rontolisp:fundamental-binary-stream)
 			          '(unsigned-byte 8)
 			          'character)))
 			""";

@@ -5,8 +5,12 @@ Lisp in `src/main/resources/am/ik/rontolisp/eval/gray.lisp`, served by
 `eval/GrayStreamsLibrary`; backend-free expansion output, no codegen.
 
 ## Protocol
-- Classes: `rontolisp:fundamental-stream`; `-input-stream`/`-output-stream`; leaves
-  `-character-input/-output-stream`, `-binary-input/-output-stream`.
+- Classes: `rontolisp:fundamental-stream`; direction `-input-stream`/`-output-stream` and
+  element `-character-stream`/`-binary-stream` (2026-10-31, lisp-binary's `bit-stream` is
+  `(fundamental-binary-stream fundamental-input-stream fundamental-output-stream)`); leaves
+  `-character-input/-output-stream`, `-binary-input/-output-stream`, each one direction + one
+  element class, as sb-gray. The trivial-gray-streams shim mirrors all nine. Pin:
+  `GrayStreamCallFixture.FUNCTION_VALUE_PROGRAM` (`gfv-bits`, `subtypep`) in the three suites.
 - Generics: `stream-write-char`, `stream-write-string (stream string &optional start end)` (ALWAYS
   called with integer start/end, see "Bounds on `write-line` / `write-string`"),
   `stream-write-byte`; `stream-line-column`, `stream-start-line-p`, `stream-terpri`,
@@ -125,8 +129,9 @@ the print family wrote PAST the instance to standard output on the compile paths
   A Gray base class carries no width, so this stays the octet even though a built-in FILE stream
   now answers its real widened type (`read-load-streams.md`, "Element types wider and narrower
   than one octet"); the built-in answer is what a Gray dispatcher's non-instance arm reaches.
-- **A BIVALENT class answers `character`** — the order of the two `typep`s in
-  `%gray-stream-element-type-dispatch`. The answer is the buffer to allocate;
+- **A BIVALENT class answers `character`** — the order of the two `typep`s (on the ELEMENT
+  classes, so a class over `fundamental-binary-stream` and a direction class answers the octet) in
+  `%gray-stream-element-type-dispatch` and the owned `stream-element-type` default. The answer is the buffer to allocate;
   `read-sequence`/`write-sequence` pick bytes vs. chars off the SEQUENCE (`stringp`). The
   binary answer signals on SBCL (`.kb/http-server.md`, `:raw-body`).
 

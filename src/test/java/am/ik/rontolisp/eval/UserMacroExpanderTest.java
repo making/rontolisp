@@ -115,11 +115,21 @@ class UserMacroExpanderTest {
 	}
 
 	@Test
-	void lambdaAndDefunParameterListsAreNotWalked() {
+	void lambdaListNamesStayButDefaultFormsExpand() {
+		// A parameter named like the macro is no call; an &optional/&key/&aux default
+		// is an expression (lisp-binary's read-bytes method defaults :element-type
+		// through quasiquote-2.0's macros).
 		assertThat(expand("""
 				(defmacro m (x) `(+ ,x 1))
-				(defun f (m) (funcall (lambda (m) m) m))
-				""")).isEqualTo("(DEFUN F (M) (FUNCALL (LAMBDA (M) M) M))");
+				(defun f (m &optional (o (m 1) o-p) &key ((:k m) (m 2)) &aux (a (m 3)))
+				  (funcall (lambda (m &optional (p (m 4))) m) m))
+				(flet ((g (&key (q (m 5))) q)) (g))
+				(destructuring-bind (a (b &optional (c (m 6)))) (list 1 (list 2)) (list a b c))
+				""")).isEqualTo("""
+				(DEFUN F (M &OPTIONAL (O (+ 1 1) O-P) &KEY ((:K M) (+ 2 1)) &AUX (A (+ 3 1))) \
+				(FUNCALL (LAMBDA (M &OPTIONAL (P (+ 4 1))) M) M))
+				(FLET ((G (&KEY (Q (+ 5 1))) Q)) (G))
+				(DESTRUCTURING-BIND (A (B &OPTIONAL (C (+ 6 1)))) (LIST 1 (LIST 2)) (LIST A B C))""");
 	}
 
 	@Test
@@ -194,8 +204,8 @@ class UserMacroExpanderTest {
 		// macro named eql/x; the body is expressions.
 		assertThat(expand("""
 				(defmacro x (v) `(g ,v))
-				(defmethod f ((x (eql :br)) y) (x y))
-				""")).isEqualTo("(DEFMETHOD F ((X (EQL :BR)) Y) (G Y))");
+				(defmethod f ((x (eql :br)) y &key (z (x 1))) (x y))
+				""")).isEqualTo("(DEFMETHOD F ((X (EQL :BR)) Y &KEY (Z (G 1))) (G Y))");
 	}
 
 	@Test

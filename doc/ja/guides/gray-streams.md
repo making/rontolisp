@@ -8,10 +8,12 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 (インタープリタ、JVM、両 WASM) で動作します。
 
 基底クラスは CL と同じ形の階層を成します: ルートに `fundamental-stream`、その下に
-`fundamental-input-stream` / `fundamental-output-stream`、リーフとして
+方向のクラス `fundamental-input-stream` / `fundamental-output-stream` と要素のクラス
+`fundamental-character-stream` / `fundamental-binary-stream`、リーフとして
 `fundamental-character-input-stream` / `fundamental-character-output-stream` /
 `fundamental-binary-input-stream` / `fundamental-binary-output-stream`
-(すべて `rontolisp` パッケージ)。
+があり、各リーフは方向のクラスと要素のクラスを 1 つずつ継承します
+(すべて `rontolisp` パッケージ)。方向のクラスと要素のクラスをクラス自身で組み合わせることもできます。
 
 | 組み込み | ディスパッチ先 |
 | --- | --- |
@@ -33,7 +35,7 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 | `listen` | `rontolisp:stream-listen` (デフォルトメソッドは `nil` を返す) |
 | `open-stream-p` | `t` を返します -- `close` と同じく、プログラムが所有できる名前です |
 | `streamp`, `(typep x 'stream)` | `t` を返します -- Gray ストリームはストリームそのものなので、型で分岐するライブラリは Lisp ストリーム側の枝を選びます |
-| `stream-element-type` | `character`、バイナリ基底クラスなら `(unsigned-byte 8)`。両方を継承したクラス (バイバレントなストリーム) は `character` を返します。この答えはどちらのバッファを確保すべきかを示すものだからです。プログラムが所有できる名前です |
+| `stream-element-type` | `character`、`fundamental-binary-stream` の下なら `(unsigned-byte 8)`。両方を継承したクラス (バイバレントなストリーム) は `character` を返します。この答えはどちらのバッファを確保すべきかを示すものだからです。プログラムが所有できる名前です |
 | `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (デフォルトメソッドは要素総称関数をループ。文字列は 1 回の `stream-write-string` に渡す) |
 | `file-position` | `rontolisp:stream-file-position`。2 引数形式は `(setf rontolisp:stream-file-position)` ライタ総称関数を呼ぶ |
 

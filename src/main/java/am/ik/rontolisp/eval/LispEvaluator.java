@@ -10421,7 +10421,11 @@ public final class LispEvaluator {
 				defineDispatcher(generic.name(), env);
 			}
 		}
-		return cons.toList().get(1);
+		// CLHS: defclass answers the class object, find-class's (lisp-binary binds a
+		// defparameter to it and hands it to moptilities' slot-names).
+		LispVal name = cons.toList().get(1);
+		LispVal metaobject = name instanceof LispSymbol sym ? this.closRegistry.classMetaobject(sym.name()) : null;
+		return metaobject != null ? metaobject : name;
 	}
 
 	/**

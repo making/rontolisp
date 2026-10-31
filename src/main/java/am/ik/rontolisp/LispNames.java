@@ -9236,6 +9236,12 @@ public final class LispNames {
 	 */
 	public static final String ASDF_USER_CACHE = "*USER-CACHE*";
 
+	/**
+	 * {@code asdf:*asdf-version*} -- the contract version {@code "3.3.7"} (uiop's), so an
+	 * {@code .asd} gating on it (lisp-binary's bundled-ASDF upgrade) finds a current one.
+	 */
+	public static final String ASDF_VERSION_VAR = "*ASDF-VERSION*";
+
 	/** {@code asdf:component-name} -- reader: the component's downcase-canonical name. */
 	public static final String COMPONENT_NAME = "COMPONENT-NAME";
 
@@ -12430,6 +12436,12 @@ public final class LispNames {
 
 	/** {@code rontolisp:fundamental-binary-output-stream}. */
 	public static final String GRAY_BINARY_OUTPUT_STREAM = "FUNDAMENTAL-BINARY-OUTPUT-STREAM";
+
+	/** {@code rontolisp:fundamental-character-stream} -- the character leaves' parent. */
+	public static final String GRAY_CHARACTER_STREAM = "FUNDAMENTAL-CHARACTER-STREAM";
+
+	/** {@code rontolisp:fundamental-binary-stream} -- the binary leaves' parent. */
+	public static final String GRAY_BINARY_STREAM = "FUNDAMENTAL-BINARY-STREAM";
 
 	/**
 	 * {@code trivial-gray-streams:trivial-gray-stream-mixin} -- the portable mixin class

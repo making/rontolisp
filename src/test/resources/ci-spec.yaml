@@ -24348,6 +24348,18 @@ cases:
                      (%obj-ref c 4))))
     expected: |
       (T FC-DOG T T)
+  - name: defclass-answers-the-class-object
+    source: |
+      (defmacro dco-struct-like (name &rest slots)
+        `(progn (defparameter ,name (defclass ,name () ,(mapcar (lambda (s) (list s :initform 0)) slots)))))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (dco-struct-like dco-point x y))
+      (defmacro dco-slot-count (class) (length (%obj-ref (eval class) 3)))
+      (defvar *dco-plain* (defclass dco-plain () ()))
+      (print (list (eq dco-point (find-class 'dco-point)) (eq *dco-plain* (find-class 'dco-plain))
+                   (dco-slot-count dco-point) (slot-value (make-instance dco-point) 'y)))
+    expected: |
+      (T T 2 0)
   - name: find-class-metaobject-carries-effective-slot-definitions
     source: |
       (defclass fc-box () ((w :initarg :w :accessor fc-w :type integer) (h :initform 2)))
@@ -24374,14 +24386,19 @@ cases:
       (defpackage :rsn-pkg (:use :cl) (:export #:make-holder))
       (in-package :rsn-pkg)
       (defstruct holder (fields-clause 7))
+      (defclass gauge () ((depth :initform 3)))
       (in-package :cl-user)
       (let ((h (rsn-pkg:make-holder))
             (n (car (list 'rsn-pkg::fields-clause))))
         (setf (slot-value h n) 8)
         (print (slot-value h n)))
+      (let ((s (car (%obj-ref (find-class 'rsn-pkg::gauge) 3))))
+        (print (list (eq (%obj-ref s 0) 'rsn-pkg::depth) (%obj-ref s 0)
+                     (slot-value (make-instance 'rsn-pkg::gauge) (%obj-ref s 0)))))
       (in-package :cl-user)
     expected: |
       8
+      (T RSN-PKG::DEPTH 3)
   - name: make-instance-as-a-first-class-function
     source: |
       (defclass fv-pt () ((x :initarg :x :initform 0)))

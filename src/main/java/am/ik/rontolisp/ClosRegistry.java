@@ -2886,7 +2886,7 @@ public final class ClosRegistry {
 		readerNames.addAll(slot.accessors());
 		return newSeededInstance(
 				direct ? STANDARD_DIRECT_SLOT_DEFINITION_NAME : STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
-				new LispSymbol(slot.baseName()), initargs, slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE,
+				new LispSymbol(slot.name()), initargs, slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE,
 				new LispSymbol(slot.type()), symbolList(readerNames), LispNil.INSTANCE,
 				direct ? slotWriters(slot) : LispNil.INSTANCE);
 	}

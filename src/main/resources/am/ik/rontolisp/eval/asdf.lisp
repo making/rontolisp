@@ -64,6 +64,11 @@
 ;; on it.
 (defvar asdf:*user-cache* nil)
 
+;; The contract version, uiop's (uiop-version.lisp): a version gate gets the
+;; answer matching the API it finds. lisp-binary.asd loads its bundled ASDF on
+;; anything older than 3.1.5.
+(defvar asdf:*asdf-version* "3.3.7")
+
 ;; name -> system instance; one object per system, which is what makes
 ;; find-system `eq` across calls (and what (setf (gethash system ...)) shapes
 ;; in callers assume).

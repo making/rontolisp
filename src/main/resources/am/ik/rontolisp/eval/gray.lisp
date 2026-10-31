@@ -46,20 +46,28 @@
 
 (defclass rontolisp:fundamental-output-stream (rontolisp:fundamental-stream) ())
 
+;; The element-kind intermediates; a class may subclass one beside a direction
+;; class instead of a leaf (lisp-binary's bit-stream).
+
+(defclass rontolisp:fundamental-character-stream (rontolisp:fundamental-stream)
+  ())
+
+(defclass rontolisp:fundamental-binary-stream (rontolisp:fundamental-stream) ())
+
 (defclass rontolisp:fundamental-character-output-stream
-    (rontolisp:fundamental-output-stream)
+    (rontolisp:fundamental-output-stream rontolisp:fundamental-character-stream)
   ())
 
 (defclass rontolisp:fundamental-character-input-stream
-    (rontolisp:fundamental-input-stream)
+    (rontolisp:fundamental-input-stream rontolisp:fundamental-character-stream)
   ())
 
 (defclass rontolisp:fundamental-binary-input-stream
-    (rontolisp:fundamental-input-stream)
+    (rontolisp:fundamental-input-stream rontolisp:fundamental-binary-stream)
   ())
 
 (defclass rontolisp:fundamental-binary-output-stream
-    (rontolisp:fundamental-output-stream)
+    (rontolisp:fundamental-output-stream rontolisp:fundamental-binary-stream)
   ())
 
 ;; Output generics.
@@ -645,11 +653,9 @@
   ;; here, so it is a divergence rather than a stricter reading.
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
-        (if (or (typep stream 'rontolisp:fundamental-character-input-stream)
-                (typep stream 'rontolisp:fundamental-character-output-stream))
+        (if (typep stream 'rontolisp:fundamental-character-stream)
             'character
-            (if (or (typep stream 'rontolisp:fundamental-binary-input-stream)
-                    (typep stream 'rontolisp:fundamental-binary-output-stream))
+            (if (typep stream 'rontolisp:fundamental-binary-stream)
                 '(unsigned-byte 8)
                 'character))
         (stream-element-type stream))))

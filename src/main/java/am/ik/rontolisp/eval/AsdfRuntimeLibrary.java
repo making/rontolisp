@@ -60,16 +60,17 @@ public final class AsdfRuntimeLibrary {
 
 	@Nullable private static volatile List<LispVal> seamForms;
 
-	/** The names {@code asdf.lisp} defines (functions plus the one variable). */
+	/** The names {@code asdf.lisp} defines (functions plus the two variables). */
 	private static final Set<String> DEFINED_NAMES = Set.of(LispNames.ASDF_FIND_SYSTEM,
 			qualify(LispNames.REGISTERED_SYSTEMS), qualify(LispNames.COMPONENT_NAME),
 			qualify(LispNames.COMPONENT_VERSION), LispNames.ASDF_COMPONENT_PATHNAME,
 			qualify(LispNames.COMPONENT_CHILDREN), qualify(LispNames.COMPONENT_SIDEWAY_DEPENDENCIES),
 			qualify(LispNames.COMPONENT_PARENT), qualify(LispNames.COMPONENT_SYSTEM),
 			LispNames.ASDF_SYSTEM_SOURCE_DIRECTORY, LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME,
-			qualify(LispNames.ASDF_USER_CACHE), LispNames.ASDF_TEST_SYSTEM, qualify(LispNames.OPERATE),
-			LispNames.ASDF_PERFORM, qualify(LispNames.MAKE_OPERATION), qualify(LispNames.INPUT_FILES),
-			qualify(LispNames.OUTPUT_FILES), qualify(LispNames.SOURCE_FILE_TYPE), qualify(LispNames.OPERATION_DONE_P));
+			qualify(LispNames.ASDF_USER_CACHE), qualify(LispNames.ASDF_VERSION_VAR), LispNames.ASDF_TEST_SYSTEM,
+			qualify(LispNames.OPERATE), LispNames.ASDF_PERFORM, qualify(LispNames.MAKE_OPERATION),
+			qualify(LispNames.INPUT_FILES), qualify(LispNames.OUTPUT_FILES), qualify(LispNames.SOURCE_FILE_TYPE),
+			qualify(LispNames.OPERATION_DONE_P));
 
 	/** The component metaobject and operation class names {@code asdf.lisp} defines. */
 	private static final Set<String> CLASS_NAMES = Set.of(qualify(LispNames.COMPONENT),

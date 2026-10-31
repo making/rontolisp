@@ -191,6 +191,16 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
   metaobject table, so they cannot close over the let, and hoisting a capture-free one
   would have to happen before the many earlier top-level scans that look for definers. No
   program needing it is known.
+- **`defclass` answers the class object** (CLHS; the name until 2026-10-31): the interpreter's
+  `evalDefclass` returns `classMetaobject`, `find-class`'s object. On the compile paths a
+  top-level `(defparameter|defvar NAME (defclass C ...))` -- lisp-binary's
+  `struct-like-defclass`, which hands the value to moptilities' `slot-names` at macro-expansion
+  time -- is two top-level forms, the defclass and `(NAME (find-class 'C))`:
+  `LispMacroExpander.flattenTopLevel` splits it (`defclassInitializer`), so the CLI's flatten,
+  the tree-shaker's and each backend's all see the defclass at top level. The macro-time
+  evaluator runs the unsplit form (an interpreter, so it gets the object). Unconditional, unlike
+  a `defvar` whose variable is bound -- the class table is whole-program on these paths anyway.
+  Pin: ci-spec `defclass-answers-the-class-object`.
 - **A nested method's body exists only once its defmethod form runs, so every
   dispatcher branch calling one is guarded on the assignment** (`(and (not (null
   %<generic>--m<i>)) <specializer-test>)`, todo 445; `ClosRegistry`
@@ -1008,14 +1018,22 @@ chunk-loop wrapper).
   those stood in for, it loads; then `with-active-layers` dies: `adjoin-layer-using-class`
   makes an ANONYMOUS `standard-layer-class` over two known classes at RUN time and dispatches on
   its `class-prototype` -- runtime class construction, outside this model.
-- **lisp-binary, re-probed 2026-10-31**: moptilities loads on all four backends now (its
-  `slot-names` of a SYMBOL is moptilities' own `nyi` off sbcl/ccl/lispworks/allegro). Next, in
-  order: `trivial-gray-streams:fundamental-binary-stream` (and `-character-stream`) are not
-  classes here (`simple-bit-stream.lisp:8`); `asdf:*asdf-version*` is unbound, so its `.asd`
-  pushes `:lisp-binary-upgrade-asdf` and loads its bundled `asdf.lisp`, which refuses the
-  implementation; `struct-like-defclass` is `(defparameter name (defclass name ...))`, which
-  needs `defclass` to answer the class OBJECT (CLHS; it answers the name here) and, on the
-  compile paths, a non-top-level `defclass`.
+- **lisp-binary, 2026-10-31**: `(ql:quickload :lisp-binary)` LOADS on all four backends, the
+  WASM pair with `--feature lisp-binary/no-cffi` (its cffi dependency needs `ffi:`, which no
+  `.wasm` has). Cleared that day: the Gray `fundamental-binary-stream`/`-character-stream`
+  classes (`.kb/gray-streams.md`), `asdf:*asdf-version*` (`.kb/asdf.md`), `defclass`'s value
+  (above), a user macro in a lambda-list default on the compile paths
+  (`.kb/defmacro-backquote.md`) and the slot NAME below. A `defbinary` struct (a 16-bit unsigned
+  and an 8-bit signed field) then round-trips through `write-binary`/`read-binary` over
+  flexi-streams' in-memory streams on all four, octets `(2 1 254)`. Not measured further (bit
+  streams, the README's 7-bit compressor, its own test suite).
+- **A slot-definition metaobject's name is the slot's SYMBOL** (`SlotSpec.name`, package and
+  all), not the package-stripped `baseName`: `ClosRegistry.slotDefinitionInstance` and the
+  compile paths' class meta table (`LispMacroExpander.slotDataRow`). Until 2026-10-31 it was the
+  bare name, so `(eq (slot-definition-name s) 'p::x)` was NIL for a class defined in package `p`
+  on all four (SBCL: T), and lisp-binary's `bind-class-slots`, binding those names around a body
+  that reads `lisp-binary::stream-symbol`, died "unbound" while a `defbinary` expanded. Slot
+  LOOKUP stays by base name. Pin: ci-spec `slot-value-with-a-package-qualified-runtime-slot-name`.
 - eql specializers on strings. The `:type` slot option is RECORDED (`SlotSpec.type`, `"t"` when
   omitted; a checking no-op). Compiled runtime `eval`: generated functions are callable;
   defining classes/methods or using `make-instance`/`slot-value` inside `eval` is not

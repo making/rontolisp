@@ -22320,7 +22320,8 @@ class LispEvaluatorTest {
 	void closerCommonLispPackageServesTheDaoPackageShape() {
 		// (:use :closer-common-lisp) -- postmodern's DAO package -- sees cl AND the
 		// closer-mop overlay; the qualified c2cl spellings resolve to the home
-		// packages, so the shim defuns serve them.
+		// packages, so the shim defuns serve them. Printed from cl-user, the slot names
+		// carry their package like the class name (SBCL's answer).
 		assertThat(evalMulti("""
 				(asdf:load-system "closer-mop")
 				(defpackage :ccl-probe (:use :closer-common-lisp) (:export :probe))
@@ -22334,7 +22335,7 @@ class LispEvaluatorTest {
 				          (car (c2cl:list 1 2)))))
 				(in-package :cl-user)
 				(ccl-probe:probe)
-				""").print()).isEqualTo("(T (X Y) CCL-PROBE::CCL-PT 1)");
+				""").print()).isEqualTo("(T (CCL-PROBE::X CCL-PROBE::Y) CCL-PROBE::CCL-PT 1)");
 	}
 
 	@Test
