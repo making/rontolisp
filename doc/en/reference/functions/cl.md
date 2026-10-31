@@ -362,6 +362,7 @@ page.
 | `ash` | `(ash 1 4)`, `(ash 255 -4)` | `16`, `15` (arithmetic shift: left for a non-negative count, right otherwise) |
 | `logtest` | `(logtest 1 3)`, `(logtest 1 2)` | `T`, `NIL` (any bits set in common; `(not (zerop (logand a b)))`) |
 | `logcount` | `(logcount 7)`, `(logcount -1)` | `3`, `0` (1 bits of a non-negative, 0 bits of a negative) |
+| `boole` | `(boole boole-and 12 10)`, `(boole boole-orc1 12 10)` | `8`, `-5` (the bit operation a `boole-*` constant names) |
 | `funcall` | `(funcall #'+ 3 4)` | Apply a function to args. Accepts a function value (`#'f`, a lambda) or a symbol naming a function (`(funcall 'car ...)`) |
 | `mapcar` | `(mapcar #'car '((1 2) (3 4)))` | Apply a function to each element, return new list |
 | `map` | `(map 'list #'+ '(1 2 3) '(10 20 30))` | `(11 22 33)` (map over sequences -- list/string -- up to the shortest, building a `'list`/`'string` result, or nil for effect) |

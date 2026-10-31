@@ -5852,33 +5852,23 @@ cases:
       T
       T
       T
-  - name: lognand-lognor-logeqv
+  # boole over every boole-* constant, with the operator a runtime value (the
+  # lambda's parameter), on a bignum and as a function value; an unknown
+  # operator is a type-error.
+  - name: boole
     source: |
-      (print (lognand 0 0))
-      (print (lognand -1 123))
-      (print (lognor 0 0))
-      (print (lognor 0 -1))
-      (print (logeqv))
-      (print (logeqv 1231))
-      (print (logeqv 12 10))
-      (print (logeqv 27 22 53))
-      (print (funcall #'lognand 0 0))
-      (print (funcall #'lognor 0 -1))
-      (print (funcall #'logeqv 27 22 53))
-      (print (apply #'logeqv '(27 22 53)))
+      (print (mapcar (lambda (op) (boole op 12 10))
+                     (list boole-clr boole-set boole-1 boole-2 boole-c1 boole-c2 boole-and boole-ior
+                           boole-xor boole-eqv boole-nand boole-nor boole-andc1 boole-andc2 boole-orc1
+                           boole-orc2)))
+      (print (boole boole-and 12 10))
+      (print (funcall #'boole boole-xor (ash 1 100) -1))
+      (print (handler-case (boole 99 1 2) (type-error () :type-error)))
     expected: |
-      -1
-      -124
-      -1
-      0
-      -1
-      1231
-      -7
-      56
-      -1
-      0
-      56
-      56
+      (0 -1 12 10 -13 -11 8 14 6 -7 -9 -15 2 4 -5 -3)
+      8
+      -1267650600228229401496703205377
+      :TYPE-ERROR
   - name: byte-field-ops
     source: |
       (print (byte-size (byte 8 3)))
