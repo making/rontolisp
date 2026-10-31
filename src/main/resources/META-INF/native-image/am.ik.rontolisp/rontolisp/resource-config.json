@@ -171,6 +171,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.DynamicClasses"
+        },
+        "pattern": "am/ik/rontolisp/macro/dynamic-classes\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.macro.CompileRuntime"
         },
         "pattern": "am/ik/rontolisp/macro/compile-runtime\\.lisp"

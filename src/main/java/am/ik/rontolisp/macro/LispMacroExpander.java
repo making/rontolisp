@@ -22262,8 +22262,12 @@ public final class LispMacroExpander {
 		LispVal vectorOrBit = makeIf(isBit, unspelledQuoteOf("BIT-VECTOR"), unspelledQuoteOf("VECTOR"));
 		LispVal narrowed = makeIf(callOf(LispNames.ARRAYP_INTERNAL, v),
 				makeIf(rankOne, vectorOrBit, unspelledQuoteOf("ARRAY")), designator);
-		return nestMvBindings(List.of(new MvBinding(v, parts.get(1))),
-				mvCall(LispNames.FIND_CLASS_INTERNAL, narrowed, LispTrue.INSTANCE));
+		LispVal answer = mvCall(LispNames.FIND_CLASS_INTERNAL, narrowed, LispTrue.INSTANCE);
+		if (closRegistry.dynamicClasses()) {
+			// An instance of a class made at run time carries its class in slot 0.
+			answer = makeIf(objIs(v, List.of(ClosRegistry.DYNAMIC_OBJECT_TAG)), objRef(v, 0), answer);
+		}
+		return nestMvBindings(List.of(new MvBinding(v, parts.get(1))), answer);
 	}
 
 	/**
@@ -26646,6 +26650,9 @@ public final class LispMacroExpander {
 		boolean combined = generic.methods().values().stream().anyMatch(m -> !m.isPrimary() || m.usesNext());
 		LispVal chain = combined ? combinedDispatchBody(generic, params, closRegistry, builtinFallback, narrower)
 				: simpleDispatchBody(generic, params, closRegistry, builtinFallback, narrower);
+		if (closRegistry.dynamicClasses() && generic.methodCombination() == null) {
+			chain = withDynamicDispatchArm(generic, params, variadic, closRegistry, chain);
+		}
 		List<LispVal> defun = new java.util.ArrayList<>();
 		defun.add(new LispSymbol(LispNames.DEFUN));
 		defun.add(new LispSymbol(generic.name()));
@@ -26657,6 +26664,108 @@ public final class LispMacroExpander {
 		defun.add(defunParams.isEmpty() ? LispNil.INSTANCE : listToCons(defunParams));
 		defun.add(chain);
 		return listToCons(defun);
+	}
+
+	/**
+	 * The dispatcher body with the arm for an instance of a class made at RUN time
+	 * ({@code ClosRegistry.dynamicClasses}): when a parameter some method specializes on
+	 * a class holds such an instance, the static tag tests cannot see its class, so each
+	 * method's applicability and precedence keys are computed at run time
+	 * ({@code dynamic-classes.lisp}) -- a class specializer is keyed by its position in
+	 * the instance's class precedence list, everything else by the static rank -- and the
+	 * standard method combination runs over the result. With no applicable primary the
+	 * static body answers, as it does for every call no such instance reaches. The body
+	 * itself when no method specializes on a class.
+	 */
+	private static LispVal withDynamicDispatchArm(ClosRegistry.GenericInfo generic, List<LispVal> params,
+			boolean variadic, ClosRegistry closRegistry, LispVal chain) {
+		java.util.SortedSet<Integer> positions = new java.util.TreeSet<>();
+		for (ClosRegistry.MethodInfo m : generic.methods().values()) {
+			List<ClosRegistry.Specializer> specs = m.specializers();
+			for (int i = 0; i < specs.size() && i < params.size(); i++) {
+				if (specs.get(i).kind() == ClosRegistry.SpecializerKind.CLASS) {
+					positions.add(i);
+				}
+			}
+		}
+		if (positions.isEmpty()) {
+			return chain;
+		}
+		List<LispVal> anyDynamic = new java.util.ArrayList<>();
+		anyDynamic.add(new LispSymbol(LispNames.OR));
+		for (int i : positions) {
+			anyDynamic.add(objIs(params.get(i), List.of(ClosRegistry.DYNAMIC_OBJECT_TAG)));
+		}
+		List<LispVal> entries = new java.util.ArrayList<>();
+		entries.add(new LispSymbol(LispNames.LIST));
+		for (ClosRegistry.MethodInfo m : generic.methods().values()) {
+			entries.add(dynamicMethodEntry(m, params, closRegistry));
+		}
+		List<LispVal> argList = new java.util.ArrayList<>();
+		argList.add(new LispSymbol(variadic ? LispNames.LIST_STAR : LispNames.LIST));
+		argList.addAll(params);
+		if (variadic) {
+			argList.add(new LispSymbol(GF_REST_VAR));
+		}
+		LispSymbol found = new LispSymbol("%dyn-entries");
+		LispVal test = anyDynamic.size() == 2 ? anyDynamic.get(1) : listToCons(anyDynamic);
+		return makeLet(found.name(), makeIf(test, mvCall("%DYNAMIC-APPLICABLE", listToCons(entries)), LispNil.INSTANCE),
+				makeIf(found, mvCall("%DYNAMIC-DISPATCH", found, listToCons(argList)), chain));
+	}
+
+	/**
+	 * One method's entry for the run-time dispatch of {@link #withDynamicDispatchArm}:
+	 * {@code (qualifier function key...)} when the method applies, nil otherwise. A key
+	 * is 0 for an {@code eql} specializer, 10000 plus the class's precedence-list
+	 * position for a class specializer over an instance of a class made at run time, the
+	 * static rank times 1000 for everything else (so a type specializer orders after
+	 * every class), and 1000000 for an unspecialized parameter.
+	 */
+	private static LispVal dynamicMethodEntry(ClosRegistry.MethodInfo method, List<LispVal> params,
+			ClosRegistry closRegistry) {
+		List<ClosRegistry.Specializer> specs = method.specializers();
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		List<LispVal> checks = new java.util.ArrayList<>();
+		List<LispVal> keys = new java.util.ArrayList<>();
+		for (int i = 0; i < params.size(); i++) {
+			ClosRegistry.Specializer spec = i < specs.size() ? specs.get(i) : ClosRegistry.Specializer.DEFAULT;
+			if (spec.kind() == ClosRegistry.SpecializerKind.DEFAULT) {
+				keys.add(new LispInteger(1000000));
+				continue;
+			}
+			LispVal param = params.get(i);
+			LispVal staticKey = makeIf(singleSpecializerTest(spec, param, closRegistry),
+					new LispInteger(specializerRank(spec, closRegistry) * 1000L), LispNil.INSTANCE);
+			LispVal key = spec.kind() == ClosRegistry.SpecializerKind.CLASS
+					? makeIf(objIs(param, List.of(ClosRegistry.DYNAMIC_OBJECT_TAG)),
+							mvCall("%DYNAMIC-CLASS-KEY", param,
+									findClassForm(new LispSymbol(java.util.Objects.requireNonNull(spec.name())))),
+							staticKey)
+					: staticKey;
+			LispSymbol var = new LispSymbol("%dk" + i);
+			bindings.add(listToCons(List.of(var, key)));
+			checks.add(var);
+			keys.add(var);
+		}
+		boolean nested = closRegistry.isNestedMethodFunction(method.functionName());
+		if (nested) {
+			checks.add(methodAssignedTest(method.functionName()));
+		}
+		List<LispVal> entry = new java.util.ArrayList<>();
+		entry.add(new LispSymbol(LispNames.LIST));
+		entry.add(method.isPrimary() ? LispNil.INSTANCE : new LispSymbol(method.qualifier()));
+		entry.add(nested ? new LispSymbol(method.functionName())
+				: listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(method.functionName()))));
+		entry.addAll(keys);
+		LispVal built = listToCons(entry);
+		if (!checks.isEmpty()) {
+			List<LispVal> and = new java.util.ArrayList<>();
+			and.add(new LispSymbol(LispNames.AND));
+			and.addAll(checks);
+			built = makeIf(checks.size() == 1 ? checks.get(0) : listToCons(and), built, LispNil.INSTANCE);
+		}
+		return bindings.isEmpty() ? built
+				: listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), built));
 	}
 
 	/**
@@ -27380,15 +27489,16 @@ public final class LispMacroExpander {
 		if (afters.isEmpty()) {
 			return beforeAndPrimary;
 		}
-		List<LispVal> let = new java.util.ArrayList<>();
-		let.add(new LispSymbol(LispNames.LET));
-		LispSymbol resultVar = new LispSymbol("%clos-result");
-		let.add(listToCons(List.of(listToCons(List.of(resultVar, beforeAndPrimary)))));
+		// Every value of the primary chain is the effective method's (CLHS 7.6.6.2),
+		// so the afters run inside a multiple-value-prog1, not after a let that keeps
+		// the first value only.
+		List<LispVal> prog1 = new java.util.ArrayList<>();
+		prog1.add(new LispSymbol(LispNames.MULTIPLE_VALUE_PROG1));
+		prog1.add(beforeAndPrimary);
 		for (ClosRegistry.MethodInfo after : afters) {
-			let.add(callWithNext(after.functionName(), LispNil.INSTANCE, params, variadic));
+			prog1.add(callWithNext(after.functionName(), LispNil.INSTANCE, params, variadic));
 		}
-		let.add(resultVar);
-		return listToCons(let);
+		return listToCons(prog1);
 	}
 
 	/**
@@ -28044,6 +28154,17 @@ public final class LispMacroExpander {
 			// mopMakeInstanceDefuns) is valid exactly when the protocol's
 			// shared-initialize fill primaries are part of the program.
 			closRegistry.setMopProtocolActive();
+			// A class made at RUN time (contextl's layer contexts) needs both a
+			// metaclass to instantiate and an allocate-instance (class-prototype) to
+			// make its instances: its runtime is prepended like the protocol's, and
+			// the dispatchers, class-of, subtypep and allocate-instance generated below
+			// learn its instances.
+			if (needsAllocateInstanceRuntime(program)) {
+				List<LispVal> withDynamic = new java.util.ArrayList<>(DynamicClasses.forms());
+				withDynamic.addAll(program);
+				program = withDynamic;
+				closRegistry.enableDynamicClasses();
+			}
 		}
 		// The closer-mop library's classp is (typep x 'standard-class): when its defuns
 		// are in the program (spliced by the system loaders, which have no registry in
@@ -37682,6 +37803,10 @@ public final class LispMacroExpander {
 		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
 			tags.add(LispLayout.CLASS_TAG_PREFIX + info.name());
 		}
+		if (closRegistry.dynamicClasses()) {
+			// An instance of a class made at run time is a standard object too.
+			tags.add(ClosRegistry.DYNAMIC_OBJECT_TAG);
+		}
 		return objIs(value, tags);
 	}
 
@@ -37691,7 +37816,20 @@ public final class LispMacroExpander {
 	 * -- the same shape a class specializer compiles to.
 	 */
 	private static LispVal makeClassInstanceTest(LispVal value, String className, ClosRegistry closRegistry) {
-		return objIs(value, List.copyOf(closRegistry.descendantTags(className)));
+		LispVal staticTest = objIs(value, List.copyOf(closRegistry.descendantTags(className)));
+		ClosRegistry.ClassInfo info = closRegistry.findClass(className);
+		if (!closRegistry.dynamicClasses() || info == null || info.ancestors().contains("CONDITION")) {
+			return staticTest;
+		}
+		// An instance of a class made at run time is of the class when the class is in
+		// its precedence list (dynamic-classes.lisp).
+		if (!(value instanceof LispSymbol var)) {
+			LispSymbol temp = new LispSymbol("%cit_v");
+			return makeLet(temp.name(), value, makeClassInstanceTest(temp, className, closRegistry));
+		}
+		LispVal dynamicTest = makeIf(mvCall("%DYNAMIC-CLASS-KEY", var, findClassForm(new LispSymbol(info.name()))),
+				LispTrue.INSTANCE, LispNil.INSTANCE);
+		return makeIf(objIs(var, List.of(ClosRegistry.DYNAMIC_OBJECT_TAG)), dynamicTest, staticTest);
 	}
 
 	/**
@@ -45375,7 +45513,26 @@ public final class LispMacroExpander {
 			prognParts.add(body);
 			body = listToCons(prognParts);
 		}
-		return makeLet(v.name(), value, makeLet(tn.name(), typeExpr, body));
+		return makeLet(v.name(), value, makeLet(tn.name(), typeExpr, withDynamicTypepArm(v, tn, closRegistry, body)));
+	}
+
+	/**
+	 * A runtime {@code typep} body with the arm for an instance of a class made at run
+	 * time ({@code ClosRegistry.dynamicClasses}) ahead of the metaobject normalization,
+	 * which would turn such a class into a name nothing knows: a type name or class
+	 * metaobject matches when the class is in the instance's precedence list; a compound
+	 * specifier keeps its own arm. The body itself when no such class can exist.
+	 */
+	private static LispVal withDynamicTypepArm(LispSymbol value, LispSymbol spec, ClosRegistry closRegistry,
+			LispVal body) {
+		if (!closRegistry.dynamicClasses()) {
+			return body;
+		}
+		return makeIf(
+				listToCons(
+						List.of(new LispSymbol(LispNames.AND), objIs(value, List.of(ClosRegistry.DYNAMIC_OBJECT_TAG)),
+								callOf(LispNames.NOT, callOf(LispNames.CONSP, spec)))),
+				mvCall("%DYNAMIC-TYPEP", value, spec), body);
 	}
 
 	/**
@@ -46468,8 +46625,16 @@ public final class LispMacroExpander {
 	private static LispVal runtimeSubtypepDefun(ClosRegistry closRegistry, boolean intervals) {
 		LispSymbol a = new LispSymbol("%st_ra");
 		LispSymbol b = new LispSymbol("%st_rb");
+		LispVal body = expandRuntimeSubtypep(a, b, closRegistry, intervals);
+		if (closRegistry.dynamicClasses()) {
+			// A class made at run time answers through its precedence list -- its
+			// metaobject has no name the tables know (an anonymous one names nil, which
+			// the tables would read as the empty type).
+			body = makeIf(listToCons(List.of(new LispSymbol(LispNames.OR), mvCall("%DYNAMIC-CLASS-P", a),
+					mvCall("%DYNAMIC-CLASS-P", b))), mvCall("%DYNAMIC-SUBTYPEP", a, b), body);
+		}
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SUBTYPEP_RUNTIME),
-				listToCons(List.of(a, b)), expandRuntimeSubtypep(a, b, closRegistry, intervals)));
+				listToCons(List.of(a, b)), body));
 	}
 
 	/**
@@ -47356,22 +47521,31 @@ public final class LispMacroExpander {
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);
-		List<LispVal> bodyParts = new java.util.ArrayList<>();
-		bodyParts.add(new LispSymbol(LispNames.DEFUN));
-		bodyParts.add(new LispSymbol(LispNames.TYPEP_RUNTIME));
-		bodyParts.add(listToCons(List.of(v, tn)));
+		List<LispVal> statements = new java.util.ArrayList<>();
+		statements.add(new LispSymbol(LispNames.PROGN));
 		LispVal normalize = metaobjectNameNormalization(tn, closRegistry, false);
 		if (normalize != null) {
-			bodyParts.add(normalize);
+			statements.add(normalize);
 		}
 		// The alias normalization is one CALL here, not one arm per alias: the table is
 		// data (%deftype-alias-table%) and the scan is shared (.kb/array-literals.md).
 		if (resolvesAliases) {
-			bodyParts.add(listToCons(
+			statements.add(listToCons(
 					List.of(new LispSymbol(LispNames.SETQ), tn, mvCall(LispNames.DEFTYPE_ALIAS_RUNTIME, tn))));
 		}
-		bodyParts.add(listToCons(condParts));
-		return listToCons(bodyParts);
+		statements.add(listToCons(condParts));
+		List<LispVal> defun = new java.util.ArrayList<>();
+		defun.add(new LispSymbol(LispNames.DEFUN));
+		defun.add(new LispSymbol(LispNames.TYPEP_RUNTIME));
+		defun.add(listToCons(List.of(v, tn)));
+		if (closRegistry.dynamicClasses()) {
+			LispVal body = statements.size() == 2 ? statements.get(1) : listToCons(statements);
+			defun.add(withDynamicTypepArm(v, tn, closRegistry, body));
+		}
+		else {
+			defun.addAll(statements.subList(1, statements.size()));
+		}
+		return listToCons(defun);
 	}
 
 	/**
@@ -47795,6 +47969,11 @@ public final class LispMacroExpander {
 		LispVal body = makeLet(name.name(), designator,
 				makeLet(result.name(), chain, makeIf(result, result, listToCons(List.of(new LispSymbol(LispNames.ERROR),
 						new LispString(LispNames.ALLOCATE_INSTANCE + ": not an allocatable class: ~A"), name)))));
+		if (closRegistry.dynamicClasses()) {
+			// A class made at run time has no arm (no tag): its instance is a
+			// dynamic object carrying the class (dynamic-classes.lisp).
+			body = makeIf(mvCall("%DYNAMIC-CLASS-P", cls), mvCall("%DYNAMIC-ALLOCATE", cls), body);
+		}
 		defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.ALLOCATE_INSTANCE),
 				listToCons(List.of(cls, new LispSymbol(LispNames.LAMBDA_REST), initargs)), body)));
 		return defuns;

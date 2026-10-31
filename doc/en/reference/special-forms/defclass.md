@@ -13,6 +13,8 @@ A subclass inherits every slot of its superclasses and its instances match the s
 
 **Metaclasses** (the static MOP subset): the class option `(:metaclass M)` names a class inheriting `standard-class`, defined earlier by `defclass`. The class definition then runs the class-definition protocol at **definition time**: the metaclass is instantiated — its `shared-initialize` methods see every other unknown class option as an initarg whose value is the option's tail (`(:table-name "users")` passes `("users")`; the option name may be any symbol and the tail may be dotted, so `(original-name . t)` passes `t` under the initarg `original-name`), and a `:before` method's write to a slot with a declared `:initarg` is overwritten by the supplied initarg afterwards, CL's fill order (a slot without a declared `:initarg`, like `table-name` below, keeps the `:before`'s write) — each slot's non-standard options (`:col-type`, ...) are handed to `closer-mop:direct-slot-definition-class` as initargs and its answer is instantiated as that slot's direct-slot-definition metaobject, effective slots are computed through `closer-mop:compute-effective-slot-definition` (the default method picks and instantiates `closer-mop:effective-slot-definition-class` inside the dynamic extent of a user override's `call-next-method`), and `closer-mop:finalize-inheritance` runs **eagerly** (CL finalizes lazily; inputs are static, so only the timing of definition errors differs). `find-class` and `class-of` answer the metaclass instance from then on, while instances of the class itself stay ordinary objects. The definition routes through `closer-mop:ensure-class-using-class` — its user `:around` methods dispatch on the EXISTING class metaobject, so they fire when the same name is defined again (the first definition passes `nil`), and the redefinition takes the `reinitialize-instance` path on the same metaobject. Initialization runs through the ordinary generic chain, so user `initialize-instance`/`reinitialize-instance` `:around` methods on the metaclass (or on a slot-definition class) may rewrite the initargs — `:direct-superclasses` and `:direct-slots` included — before `(apply #'call-next-method ...)`, as mito's table classes do. Slot-definition metaobjects also carry `closer-mop:slot-definition-initfunction` (a zero-argument function evaluating the `:initform`; `nil` when the slot has none). The protocol is static: a `defclass` in a non-top-level position, or protocol calls on classes unknown at definition time, signal an error.
 
+**Classes made at run time**: `(make-instance 'M :direct-superclasses (list ...))` of such a metaclass `M` makes a class metaobject at run time over defined (or run-time) superclasses, as contextl does for its layer contexts. Its class precedence list follows CLHS 4.3.5, and its instances (from [`allocate-instance`](../functions/allocate-instance.md) or `closer-mop:class-prototype`) answer [`class-of`](../functions/class-of.md) with that class, `typep`/`typecase` and `subtypep` through the precedence list, and every generic function orders their methods by it (standard method combination). Such an instance has no slots of its own.
+
 ```lisp
 (defclass animal () ((name :initarg :name :accessor animal-name)))
 (defclass dog (animal) ((breed :initarg :breed :initform "mixed" :reader dog-breed)))
@@ -56,4 +58,18 @@ A subclass inherits every slot of its superclasses and its instances match the s
 (list (class-name (find-class 'account))
       (slot-value (find-class 'account) 'table-name)
       (typep (find-class 'account) 'table-class)) ; => (ACCOUNT "accounts" T)
+```
+
+```lisp
+(defclass layer-class (standard-class) ())
+(defmethod closer-mop:validate-superclass ((c layer-class) (s standard-class)) t)
+(defclass base-layer () () (:metaclass layer-class))
+(defclass extra-layer () () (:metaclass layer-class))
+(defgeneric greet (layer)
+  (:method ((l base-layer)) (list :base))
+  (:method ((l extra-layer)) (cons :extra (call-next-method))))
+(let* ((c (make-instance 'layer-class
+                         :direct-superclasses (list (find-class 'extra-layer) (find-class 'base-layer))))
+       (p (allocate-instance c)))
+  (list (greet p) (eq (class-of p) c) (typep p 'base-layer))) ; => ((:EXTRA :BASE) T T)
 ```

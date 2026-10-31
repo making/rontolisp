@@ -35,6 +35,7 @@ import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispLambda;
+import am.ik.rontolisp.macro.DynamicClasses;
 import am.ik.rontolisp.macro.FormatRenderer;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.macro.MopEvalCapture;
@@ -1667,6 +1668,12 @@ public final class LispEvaluator {
 		// primary value: t when sub is known to be a subtype of super, nil otherwise.
 		this.globalEnv.defineFunction(LispNames.SUBTYPEP, new LispFunction(LispNames.SUBTYPEP, args -> {
 			Environment.requireCallShape(LispNames.SUBTYPEP, args);
+			if (this.closRegistry.isDynamicClassMetaobject(args.get(0))
+					|| this.closRegistry.isDynamicClassMetaobject(args.get(1))) {
+				// A class made at run time answers through its precedence list; its
+				// name (nil for an anonymous one) designates nothing the lattice knows.
+				return callDynamicClassesRuntime("%DYNAMIC-SUBTYPEP", args.get(0), args.get(1));
+			}
 			return subtypep(args.get(0), args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// subtypep's SECOND value, emitted beside the primary by the multiple-value
@@ -1764,6 +1771,10 @@ public final class LispEvaluator {
 			// holds. The old tag/type-name view lives on as %class-designator.
 			LispVal v = args.get(0);
 			if (v instanceof LispInstance inst) {
+				if (ClosRegistry.DYNAMIC_OBJECT_TAG.equals(inst.layout().tag())) {
+					// An instance of a class made at run time carries its class.
+					return inst.slot(0);
+				}
 				// A built-in stream answers its standard class, before its layout's
 				// (the composites are prelude classes, the rest layout-only).
 				String streamClass = ClosRegistry.streamClassName(inst);
@@ -1847,6 +1858,11 @@ public final class LispEvaluator {
 						throw new LispEvalException(LispNames.ALLOCATE_INSTANCE + " expects a class, got 0 arguments");
 					}
 					LispVal designator = args.get(0);
+					if (this.closRegistry.isDynamicClassMetaobject(designator)) {
+						// A class made at run time: no layout of its own, so its
+						// instance carries the class (dynamic-classes.lisp).
+						return callDynamicClassesRuntime("%DYNAMIC-ALLOCATE", designator);
+					}
 					if (designator instanceof LispInstance inst && this.closRegistry.isClassMetaobject(inst)) {
 						designator = inst.slot(0);
 					}
@@ -8397,6 +8413,46 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Calls one function of the runtime of classes made at run time
+	 * ({@code DynamicClasses}), loading it first.
+	 * @param name the function's name
+	 * @param args the argument values
+	 * @return the function's value
+	 */
+	private LispVal callDynamicClassesRuntime(String name, LispVal... args) {
+		ensureDynamicClassesLoaded();
+		LispVal call = LispNil.INSTANCE;
+		for (int i = args.length - 1; i >= 0; i--) {
+			call = new LispCons(quoteValue(args[i]), call);
+		}
+		return eval(new LispCons(new LispSymbol(name), call), this.globalEnv);
+	}
+
+	/**
+	 * Loads the runtime of classes made at run time once, on the first such class a
+	 * program meets: registers the dynamic-object layout, evaluates
+	 * {@code DynamicClasses}' forms, and regenerates every dispatcher with a class
+	 * specializer so it carries the arm consulting a dynamic instance's precedence list
+	 * (later dispatchers get it as they are generated).
+	 */
+	private void ensureDynamicClassesLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.closRegistry.dynamicClasses()) {
+				return;
+			}
+			this.closRegistry.enableDynamicClasses();
+			for (LispVal form : DynamicClasses.forms()) {
+				eval(form, this.globalEnv);
+			}
+			for (ClosRegistry.GenericInfo generic : List.copyOf(this.closRegistry.generics().values())) {
+				if (generic.hasClassMethod()) {
+					defineDispatcher(generic.name(), this.globalEnv);
+				}
+			}
+		}
+	}
+
+	/**
 	 * Evaluates the WIT runtime ({@code wit.lisp}: the provider registry,
 	 * {@code rontolisp:wit-provide} and the {@code rontolisp:wit-error} condition -- the
 	 * provider mechanism, and no provider for any concrete interface) into the global
@@ -9875,13 +9931,13 @@ public final class LispEvaluator {
 				// A condition type is an ordinary CLOS-subset class;
 				// the :report form is registered for the
 				// error/signal/warn message building.
-				LispVal defined = evalDefclass(
-						(LispCons) LispMacroExpander.defineConditionToDefclass(cons, this.closRegistry), env);
+				evalDefclass((LispCons) LispMacroExpander.defineConditionToDefclass(cons, this.closRegistry), env);
 				// The report renderer partitions the registry, so a
 				// new condition class makes the loaded one stale;
 				// rebuilding here keeps it in step.
 				ensureConditionReportRuntimeLoaded();
-				return singleValue(defined);
+				// CLHS define-condition answers the NAME (defclass the class).
+				return singleValue(cons.toList().get(1));
 			}
 			case LispNames.DEFINE_SETF_EXPANDER:
 				return singleValue(registerSetfExpander(cons));
@@ -12018,10 +12074,11 @@ public final class LispEvaluator {
 			// #'disconnect in its connection pool at load time and dbd-postgres
 			// defines its method afterwards. The wrapper resolves the CURRENT binding
 			// at call time (real CL semantics: #'name IS the generic object methods
-			// join). Non-generic names keep the direct value.
+			// join). Non-generic names keep the direct value. It hands on every value
+			// the dispatcher answers.
 			if (this.closRegistry.findGeneric(sym.name()) != null) {
 				String name = sym.name();
-				return new LispFunction(name, args -> apply(resolveFunction(name), args, this.globalEnv));
+				return new LispFunction(name, args -> apply(resolveFunction(name), args, this.globalEnv), true);
 			}
 			return resolveFunction(sym.name());
 		}

@@ -11677,9 +11677,22 @@ cases:
       (defmethod clos-mc-touch :around ((x clos-mc-animal)) (list :around (call-next-method) (next-method-p)))
       (print (clos-mc-touch (make-instance 'clos-mc-dog)))
       (print (reverse *clos-mc-log*))
+      ;; The primary's values are the effective method's, every one of them, an
+      ;; :after method notwithstanding (CLHS 7.6.6.2; contextl's
+      ;; adjoin-layer-using-class answers (values context cacheablep)).
+      (defgeneric clos-mc-two (x))
+      (defmethod clos-mc-two ((x clos-mc-animal)) (values 1 2))
+      (defmethod clos-mc-two :after ((x clos-mc-animal)) (push :after-two *clos-mc-log*))
+      (print (list (multiple-value-list (clos-mc-two (make-instance 'clos-mc-dog))) (car *clos-mc-log*)))
+      ;; ... and through the generic's function value too (contextl's layered
+      ;; function caller is (funcall #'definer ...)).
+      (print (list (multiple-value-list (funcall #'clos-mc-two (make-instance 'clos-mc-dog)))
+                   (multiple-value-list (apply #'clos-mc-two (list (make-instance 'clos-mc-dog))))))
     expected: |
       (:AROUND :DONE T)
       (:BEFORE-DOG :BEFORE-ANIMAL :PRIMARY-DOG :PRIMARY-ANIMAL :AFTER-ANIMAL :AFTER-DOG)
+      ((1 2) :AFTER-TWO)
+      ((1 2) (1 2))
   - name: pathname-family-and-broadcast-streams
     source: |
       ;; The pathname DECOMPOSITION rule: the LAST dot separates the type, and a
@@ -32381,7 +32394,9 @@ standalone:
       ((:A 12) :E 5)
       (14 2 (1 3))
       (:UNSET :NOT-A-FUNCTION :NOT-FUNCALLABLE)
-  - name: closer-mop-class-utilities
+  # A class made at run time adds an arm to every dispatcher with a class
+  # specializer, so it runs alone, not in the corpus.
+  - name: classes-made-at-run-time
     source: |
       ;; closer-mop's subclassp (reflexive; metaobjects or names), class-prototype
       ;; (one memoized all-unbound instance per class -- contextl caches its layer
@@ -32400,7 +32415,49 @@ standalone:
       (print (list (closer-mop:required-args '(a b &optional c &rest r))
                    (closer-mop:required-args '(&key x))
                    (closer-mop:required-args '(x (y integer)) (lambda (p) (if (consp p) (car p) p)))))
+      ;; A class made at run time (contextl's layer contexts): a metaclass instance
+      ;; made by make-instance over registered superclasses has a class precedence
+      ;; list (CLHS 4.3.5), its prototype answers class-of, a generic function
+      ;; orders its methods by that list -- call-next-method, :around/:before/:after
+      ;; and an eql specializer on another argument included -- and subtypep
+      ;; answers through it.
+      (defclass rtc-meta (standard-class) ())
+      (defmethod closer-mop:validate-superclass ((c rtc-meta) (s standard-class)) t)
+      (defclass rtc-root () () (:metaclass rtc-meta))
+      (defclass rtc-a () () (:metaclass rtc-meta))
+      (defclass rtc-b () () (:metaclass rtc-meta))
+      (defgeneric rtc-who (x)
+        (:method ((x rtc-root)) (list :root))
+        (:method ((x rtc-a)) (cons :a (call-next-method)))
+        (:method ((x rtc-b)) (cons :b (if (next-method-p) (call-next-method) (list :end))))
+        (:method :around ((x rtc-a)) (cons :around-a (call-next-method))))
+      (defvar *rtc-log* nil)
+      (defgeneric rtc-pair (x y)
+        (:method (x (y rtc-a)) (list :a-y x))
+        (:method :before (x (y rtc-b)) (push :before-b *rtc-log*))
+        (:method :after (x (y rtc-a)) (push :after-a *rtc-log*))
+        (:method ((x (eql 1)) (y rtc-root)) (list :one (call-next-method))))
+      (defun rtc-prototype (supers)
+        (closer-mop:class-prototype
+         (closer-mop:ensure-finalized (make-instance 'rtc-meta :direct-superclasses supers))))
+      (let* ((p1 (rtc-prototype (list (find-class 'rtc-a) (find-class 'rtc-root))))
+             (c1 (class-of p1))
+             (p2 (rtc-prototype (list (find-class 'rtc-b) c1)))
+             (c2 (class-of p2))
+             (p3 (rtc-prototype (list c1 (find-class 'rtc-b)))))
+        (print (list (rtc-who p1) (rtc-who p2) (rtc-who p3) (rtc-who (closer-mop:class-prototype (find-class 'rtc-b)))))
+        (print (list (rtc-pair 1 p2) (rtc-pair 2 p2) (reverse *rtc-log*)))
+        (print (list (eq p2 (closer-mop:class-prototype c2)) (subtypep c2 (find-class 'rtc-a)) (subtypep c2 c1)
+                     (subtypep c1 c2) (subtypep c2 'rtc-root) (subtypep (find-class 'rtc-a) c1)
+                     (closer-mop:subclassp c2 (find-class 'rtc-b)) (closer-mop:subclassp c1 (find-class 'rtc-b))))
+        (print (list (typep p2 'rtc-a) (typep p1 'rtc-b) (typep p2 (find-class 'rtc-root)) (typep p2 c1)
+                     (typep p1 c2) (typep p2 'standard-object) (typecase p3 (rtc-b :b) (t :other))
+                     (typep p2 'integer))))
     stdout: |
       (T T NIL T)
       (T T NIL T)
       ((A B) NIL (X Y))
+      ((:AROUND-A :A :ROOT) (:AROUND-A :B :A :ROOT) (:AROUND-A :A :ROOT) (:B :END))
+      ((:ONE (:A-Y 1)) (:A-Y 2) (:BEFORE-B :AFTER-A :BEFORE-B :AFTER-A))
+      (T T T NIL T NIL T NIL)
+      (T NIL T T NIL T :B NIL)

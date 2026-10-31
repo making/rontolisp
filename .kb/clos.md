@@ -150,7 +150,9 @@ so `#'name`/`funcall`/`mapcar` work with no `BuiltinFunctionWrappers` entry.
   byte-identical. **Trigger**: the JVM 64 KB method ceiling
   (`.kb/jvm-method-size-limits.md`) if a library ever has many incomparable methods.
 - Composition: `:around` (most specific first) wrap a `coreThunk`; the core runs `:before`
-  (msf, for effect), the primary chain (msf, value kept via a `%clos-result` let), then
+  (msf, for effect), the primary chain (msf, EVERY value kept by a `multiple-value-prog1` --
+  a `let` until 2026-10-31 dropped the secondary values on all four backends, contextl's
+  `(values context cacheablep)` under an `:after`), then
   `:after` (LEAST specific first). `buildNextChain` builds nested
   `(lambda (params) (%m next params))` literals — NO free-variable capture; base next = `nil`
   for the innermost primary, the `coreThunk` for the innermost around.
@@ -203,7 +205,9 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
   would have to happen before the many earlier top-level scans that look for definers. No
   program needing it is known.
 - **`defclass` answers the class object** (CLHS; the name until 2026-10-31): the interpreter's
-  `evalDefclass` returns `classMetaobject`, `find-class`'s object. On the compile paths a
+  `evalDefclass` returns `classMetaobject`, `find-class`'s object. `define-condition`, evaluated
+  through it, still answers the NAME (CLHS): the same day's switch had made it the object too,
+  which `DocExamplesTest` caught on `define-condition.md`. On the compile paths a
   top-level `(defparameter|defvar NAME (defclass C ...))` -- lisp-binary's
   `struct-like-defclass`, which hands the value to moptilities' `slot-names` at macro-expansion
   time -- is two top-level forms, the defclass and `(NAME (find-class 'C))`:
@@ -986,6 +990,45 @@ printed instance and the condition an unset instance signals.
 - Pinned by ci-spec standalone `funcallable-instances-call-their-installed-function` (standalone:
   the arm joins every dispatcher of its program).
 
+### Classes made at run time (contextl's layer contexts)
+A class metaobject a program makes AFTER the static tables were built --
+`(make-instance 'standard-layer-class :direct-superclasses (list a b))`, contextl's
+`adjoin-layer-using-class` -- has no tag, layout or ancestor set, and a static `%obj-is` tag list
+cannot name it. Since 2026-10-31 such a class works on all four backends:
+- **Its instances** (`allocate-instance`, so the shim's memoized `closer-mop:class-prototype`) are
+  `%DYNAMIC-OBJECT%`s (`ClosRegistry.DYNAMIC_OBJECT_TAG`, a LAYOUT ONLY like the unbound marker):
+  slot 0 the class metaobject, slot 1 its class precedence list (CLHS 4.3.5, computed over the
+  metaobjects' `direct-superclasses`, memoized per class). No slots of their own.
+- **"Made at run time"** = a class metaobject `find-class` does not answer for its own name
+  (`ClosRegistry.isDynamicClassMetaobject`, `%dynamic-class-p`); an anonymous one names nil, which
+  the type tables read as the EMPTY type -- before this, `(subtypep anon x)` answered t.
+- **The runtime** is Lisp (`macro/dynamic-classes.lisp`, `DynamicClasses.forms()`, in the
+  native resource config): the compile paths PREPEND it when the program carries a `:metaclass`
+  defclass AND an `allocate-instance` reference (`expandTopLevelDefinitions`, beside
+  `MopProtocol.forms()`), turning `ClosRegistry.enableDynamicClasses()` on; the interpreter loads
+  it at the first such class (`ensureDynamicClassesLoaded`: allocate-instance or subtypep met one)
+  and regenerates every dispatcher with a class method. Every program without the gate is
+  byte-identical. It uses no prelude defun (`class-name` is one: a prelude splice ran before the
+  prepend, so the forms read slot `name` instead).
+- **Dispatch** (`withDynamicDispatchArm`): a dispatcher whose generic has a CLASS specializer
+  (standard combination only) tests those parameters for the dynamic tag; if one holds, each
+  method's entry is computed at run time (`dynamicMethodEntry`: `(qualifier function key...)` or
+  nil, keys 0 for eql, 10000 + CPL position for a class over a dynamic instance, static rank x 1000
+  otherwise, 1000000 unspecialized), and `%dynamic-dispatch` runs the standard combination over
+  the stable-sorted entries. With no applicable primary the static body answers. Pinned with
+  `:around`/`:before`/`:after`, `call-next-method`, an eql specializer on another argument.
+- **class-of** reads slot 0 (`expandClassOf`, the interpreter built-in); **typep**: a class test
+  (`makeClassInstanceTest`, conditions excepted) and both runtime typep shapes (`%typep-runtime`,
+  `expandRuntimeTypep`, ahead of the metaobject normalization) consult the CPL, and the
+  `standard-object` enumeration carries the tag; **subtypep** with a dynamic class on either side
+  goes to `%dynamic-subtypep`; **allocate-instance**'s generated defun gains the arm.
+- Residuals: a dynamic instance PRINTS as `#<%DYNAMIC-OBJECT% ...>` (a `print-object` method on
+  one of its classes is not routed); `make-instance` of a class made at run time and its slots
+  are out; a short-form method-combination generic gets no arm; a `call-next-method` past the
+  last user primary does not reach a built-in default method.
+- Pinned by ci-spec standalone `classes-made-at-run-time` (standalone: the arm joins every
+  dispatcher with a class method).
+
 ### Registry-growth lesson
 The RUNTIME-slot-name dispatch used to be inlined per call site and grows with every layout
 times its slots; five extra ci-spec classes pushed a corpus dolist body past the JVM's SIGNED
@@ -1000,8 +1043,9 @@ chunk-loop wrapper).
 - Qualifier combination is for class + default methods; eql/type-specialized qualified methods
   combine only with same-specializer primaries + the default method.
 - Still OUT of the MOP (classes are compile-time-static; `--optimize` DCE and the dispatch
-  tables depend on it): runtime class construction (`ensure-class` from computed data, a
-  non-top-level `defclass`), `add-method`, `compute-applicable-methods`,
+  tables depend on it): runtime class construction beyond `make-instance` of a metaclass
+  ("Classes made at run time": `ensure-class` from computed data, a non-top-level `defclass`, a
+  class made at run time with slots), `add-method`, `compute-applicable-methods`,
   `update-instance-for-*`. `remove-method` EXISTS as a `cl` name and SIGNALS when called: a
   method here is a registry row plus a generated defun, never a first-class object, and without
   `find-method` no caller can name the method it means. Class REdefinition of a
@@ -1020,18 +1064,28 @@ chunk-loop wrapper).
   (`find-method` + `add-method`/`remove-method`). The faithful shape is a generic's value as a
   funcallable instance of `standard-generic-function` (gated, like the funcallable arms) plus a
   materialized method table; no consumer measured so far is blocked on it alone.
-- **contextl, measured 2026-10-31** (interpreter, after the method classes and the
-  `standard-object` superclass): the GENERIC-FUNCTION protocol is not what stops it --
-  `:generic-function-class layered-function` is accepted and ignored and a layered function
-  dispatches statically on the layer prototype (`(greet 1)` with a base method answers). In
-  load order it next needs `(eql (find-class 't))` as a specializer (the reader's `t` is no
-  symbol), the layer GC's computed `(eql (lf-definer-name '...))` specializer plus
-  `add-method`/`remove-method` `:after` methods (contextl's own `:cx-disable-layer-gc` removes
-  them), a NON-keyword class option under a metaclass (`(original-name . name)`, initarg
-  `original-name`), and closer-mop's `subclassp`, `class-prototype`, `required-args`. With
-  those stood in for, it loads; then `with-active-layers` dies: `adjoin-layer-using-class`
-  makes an ANONYMOUS `standard-layer-class` over two known classes at RUN time and dispatches on
-  its `class-prototype` -- runtime class construction, outside this model.
+- **contextl, 2026-10-31**: `(ql:quickload :contextl)` LOADS on all four backends, its layer GC
+  included, and `deflayer`, `define-layered-function`/`-method` (`:in` a layer, qualifiers,
+  `call-next-method`), `with-active-layers`/`with-inactive-layers`, `active-layers` and
+  `layer-active-p` answer what SBCL does. Cleared that day: `(eql (find-class 't))`, a COMPUTED
+  eql specializer, any class option under a metaclass, closer-mop's `subclassp`,
+  `class-prototype`, `required-args`, an `:after` method dropping the primary's secondary values
+  and the interpreter's `#'generic` doing the same (both lost `adjoin-layer-using-class`'s
+  `cacheablep`), and the classes made at run time above. `--feature cx-disable-layer-gc` is the
+  spelling of contextl's documented switch: a `(push :cx-disable-layer-gc *features*)` in the
+  program reaches only that program's own `#+` (`.kb/reader-features.md`), never a loaded
+  system's component files. Its own `test/` (measured on the interpreter, in package `contextl`):
+  `demo3`, `special-slots-2` need layered ACCESSORS (`define-layered-class` makes generic
+  functions and methods at run time through `ensure-layered-function`/`ensure-method`) and
+  partial classes (anonymous slot-carrying superclasses); `special-slots-1`/`-3`, `dynenv` need
+  `slot-definition-allocation` and the `slot-value-using-class` protocol of special slots;
+  `grouped-layers` the singleton class-allocated layer slots; `spx` `(setf (find-class 'x)
+  nil)`; `layer-gc` passes its first four sections and stops where `add-method :after` should
+  clear the caches (`defmethod` calls no `add-method` here). `contextl-user`/`cxcl` see no
+  `cl` or contextl names: cxcl's `#.(loop for sym being the external-symbols of ...)` export list
+  is empty, the `being ... symbols` LOOP clause being a no-op (`.todo/029`). Residual: on the
+  interpreter, a top-level form that activates a layer prints symbols of `contextl` qualified
+  (`CONTEXTL::INFO-LAYER`) where the compiled backends print `INFO-LAYER` (identity is intact).
 - **lisp-binary, 2026-10-31**: `(ql:quickload :lisp-binary)` LOADS on all four backends, the
   WASM pair with `--feature lisp-binary/no-cffi` (its cffi dependency needs `ffi:`, which no
   `.wasm` has). Cleared that day: the Gray `fundamental-binary-stream`/`-character-stream`
@@ -1102,5 +1156,5 @@ ci-spec: `clos-defgeneric-defmethod-eql-dispatch`,
 `runtime-type-dispatch-residue`, `runtime-class-designator-spellings`,
 `with-slots-write-only-unbound-slot-and-missing-slot`,
 `array-operations-enablement-language-group`, `mito-core-enablement-language-group`, standalone
-`funcallable-instances-call-their-installed-function`. Plus the five `doc/*/reference/**` pages
+`funcallable-instances-call-their-installed-function` and `classes-made-at-run-time`. Plus the five `doc/*/reference/**` pages
 via `DocExamplesTest`.

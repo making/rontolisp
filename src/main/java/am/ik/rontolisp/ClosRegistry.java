@@ -1906,6 +1906,66 @@ public final class ClosRegistry {
 		this.mopProtocolActive = true;
 	}
 
+	/**
+	 * The internal type of an instance of a class made at RUN time
+	 * ({@link #enableDynamicClasses}): slot 0 holds the class metaobject, slot 1 its
+	 * class precedence list.
+	 */
+	public static final String DYNAMIC_OBJECT_CLASS_NAME = "%DYNAMIC-OBJECT%";
+
+	/** The instance tag of {@link #DYNAMIC_OBJECT_CLASS_NAME}. */
+	public static final String DYNAMIC_OBJECT_TAG = LispLayout.CLASS_TAG_PREFIX + DYNAMIC_OBJECT_CLASS_NAME;
+
+	private boolean dynamicClasses;
+
+	/**
+	 * Whether instances of classes made at run time can exist in this registry's program:
+	 * every dispatcher with a class specializer then carries the arm that orders methods
+	 * by such an instance's class precedence list, and {@code class-of} reads its class
+	 * out of it.
+	 * @return {@code true} once {@link #enableDynamicClasses} ran
+	 */
+	public boolean dynamicClasses() {
+		return this.dynamicClasses;
+	}
+
+	/**
+	 * Registers the {@link #DYNAMIC_OBJECT_TAG} layout -- a LAYOUT ONLY, never a class,
+	 * like the unbound marker -- and turns {@link #dynamicClasses} on. Lazy, so a program
+	 * that makes no class at run time keeps its layout set (WASM bakes every layout).
+	 */
+	public void enableDynamicClasses() {
+		if (this.dynamicClasses) {
+			return;
+		}
+		this.dynamicClasses = true;
+		this.layoutsByTag.put(DYNAMIC_OBJECT_TAG, LispLayout.ofClass(DYNAMIC_OBJECT_CLASS_NAME,
+				List.of("CLASS", "PRECEDENCE-LIST"), List.of(LispNil.INSTANCE, LispNil.INSTANCE)));
+	}
+
+	/**
+	 * Whether a value is a class metaobject made at RUN time: a class metaobject that
+	 * {@code find-class} does not answer for its own name (an anonymous one included).
+	 * @param value the value
+	 * @return {@code true} for such a metaobject
+	 */
+	public boolean isDynamicClassMetaobject(LispVal value) {
+		if (!(value instanceof LispInstance inst) || inst.slotCount() == 0 || !isClassMetaobject(inst)) {
+			return false;
+		}
+		LispInstance registered = null;
+		if (inst.slot(0) instanceof LispSymbol name) {
+			registered = classMetaobject(name.name());
+			if (registered == null) {
+				registered = builtinClassMetaobject(name.name());
+			}
+		}
+		else if (inst.slot(0) instanceof LispTrue) {
+			registered = builtinClassMetaobject("T");
+		}
+		return registered != inst;
+	}
+
 	/** The names registered by {@code seedClass} (see {@link #isSeededClass}). */
 	private final Set<String> seededClassNames = new java.util.HashSet<>();
 

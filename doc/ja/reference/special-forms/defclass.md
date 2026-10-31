@@ -13,6 +13,8 @@
 
 **メタクラス**（静的な MOP サブセット）: クラスオプション `(:metaclass M)` には、先に `defclass` で定義された `standard-class` を継承するクラスを指定します。クラス定義は**定義時**にクラス定義プロトコルを実行します: メタクラスがインスタンス化され（その `shared-initialize` メソッドは、他の未知のクラスオプションを「オプションの残り部分」を値とする initarg として受け取ります。`(:table-name "users")` なら `("users")` を渡します。オプション名は任意のシンボルでよく、残り部分はドット対でもよいため、`(original-name . t)` は initarg `original-name` で `t` を渡します。`:before` メソッドが宣言済み `:initarg` を持つスロットに書いた値は、その後に供給された initarg で上書きされます — CL の充填順です。下の `table-name` のように `:initarg` 宣言のないスロットは `:before` の書き込みを保持します）、各スロットの非標準オプション（`:col-type` など）は initarg として `closer-mop:direct-slot-definition-class` に渡され、その答えのクラスがそのスロットの direct-slot-definition メタオブジェクトとしてインスタンス化されます。実効スロットは `closer-mop:compute-effective-slot-definition` を通して計算され（デフォルトメソッドは、ユーザーのオーバーライドの `call-next-method` の動的スコープの内側で `closer-mop:effective-slot-definition-class` を選んでインスタンス化します）、`closer-mop:finalize-inheritance` は**即時に**実行されます（CL は遅延ファイナライズですが、入力は静的なので定義時エラーのタイミングだけが異なります）。以後 `find-class` と `class-of` はメタクラスのインスタンスを返し、クラス自体のインスタンスは通常のオブジェクトのままです。定義は `closer-mop:ensure-class-using-class` を経由します — そのユーザー `:around` メソッドは**既存の**クラスメタオブジェクトでディスパッチされるため、同じ名前が再定義されたときに発火し（初回定義では `nil` が渡ります）、再定義は同一メタオブジェクトに対する `reinitialize-instance` パスを取ります。初期化は通常の generic チェーンを通るため、メタクラス（またはスロット定義クラス）上のユーザー `initialize-instance`/`reinitialize-instance` `:around` メソッドは、mito のテーブルクラスが行うように、`(apply #'call-next-method ...)` の前に initarg（`:direct-superclasses` や `:direct-slots` を含む）を書き換えられます。スロット定義メタオブジェクトは `closer-mop:slot-definition-initfunction`（`:initform` を評価する 0 引数関数。`:initform` がなければ `nil`）も保持します。プロトコルは静的です: トップレベル以外の位置の `defclass` や、定義時に未知のクラスに対するプロトコル呼び出しはエラーをシグナルします。
 
+**実行時に作るクラス**: このようなメタクラス `M` に対する `(make-instance 'M :direct-superclasses (list ...))` は、定義済み(または実行時に作った)スーパークラスの上にクラスメタオブジェクトを実行時に作ります。contextl はレイヤーコンテキストをこうして作ります。クラス優先順位リストは CLHS 4.3.5 に従い、そのインスタンス([`allocate-instance`](../functions/allocate-instance.md) または `closer-mop:class-prototype` で得たもの)は [`class-of`](../functions/class-of.md) にそのクラスを返し、`typep`/`typecase` と `subtypep` は優先順位リストで答え、どの総称関数もメソッドをそのリストの順に並べます(標準メソッド結合)。このインスタンスは自前のスロットを持ちません。
+
 ```lisp
 (defclass animal () ((name :initarg :name :accessor animal-name)))
 (defclass dog (animal) ((breed :initarg :breed :initform "mixed" :reader dog-breed)))
@@ -56,4 +58,18 @@
 (list (class-name (find-class 'account))
       (slot-value (find-class 'account) 'table-name)
       (typep (find-class 'account) 'table-class)) ; => (ACCOUNT "accounts" T)
+```
+
+```lisp
+(defclass layer-class (standard-class) ())
+(defmethod closer-mop:validate-superclass ((c layer-class) (s standard-class)) t)
+(defclass base-layer () () (:metaclass layer-class))
+(defclass extra-layer () () (:metaclass layer-class))
+(defgeneric greet (layer)
+  (:method ((l base-layer)) (list :base))
+  (:method ((l extra-layer)) (cons :extra (call-next-method))))
+(let* ((c (make-instance 'layer-class
+                         :direct-superclasses (list (find-class 'extra-layer) (find-class 'base-layer))))
+       (p (allocate-instance c)))
+  (list (greet p) (eq (class-of p) c) (typep p 'base-layer))) ; => ((:EXTRA :BASE) T T)
 ```
