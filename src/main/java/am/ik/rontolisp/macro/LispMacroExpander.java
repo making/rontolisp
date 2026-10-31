@@ -27040,7 +27040,8 @@ public final class LispMacroExpander {
 			LispVal key = spec.kind() == ClosRegistry.SpecializerKind.CLASS
 					? makeIf(objIs(param, List.of(ClosRegistry.DYNAMIC_OBJECT_TAG)),
 							mvCall("%DYNAMIC-CLASS-KEY", param,
-									findClassForm(new LispSymbol(java.util.Objects.requireNonNull(spec.name())))),
+									findClassForm(new LispSymbol(registeredClassSpelling(
+											java.util.Objects.requireNonNull(spec.name()), closRegistry)))),
 							staticKey)
 					: staticKey;
 			LispSymbol var = new LispSymbol("%dk" + i);
@@ -27067,6 +27068,20 @@ public final class LispMacroExpander {
 		}
 		return bindings.isEmpty() ? built
 				: listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), built));
+	}
+
+	/**
+	 * The spelling a class was registered under, which the compile paths' class table
+	 * carries: a specializer holds the NORMALIZED name ({@code PKG::NAME}), and for a
+	 * class whose name is external ({@code PKG:NAME}, read in a package exporting it)
+	 * that spelling is no table entry's, so a {@code find-class} of it signalled.
+	 * @param normalized the specializer's class name
+	 * @param closRegistry the registry
+	 * @return the registered spelling, or the name itself for an unregistered one
+	 */
+	private static String registeredClassSpelling(String normalized, ClosRegistry closRegistry) {
+		ClosRegistry.ClassInfo info = closRegistry.findClass(normalized);
+		return info != null ? info.name() : normalized;
 	}
 
 	/**

@@ -1032,15 +1032,23 @@ cannot name it. Since 2026-10-31 such a class works on all four backends:
   nil, keys 0 for eql, 10000 + CPL position for a class over a dynamic instance, static rank x 1000
   otherwise, 1000000 unspecialized), and `%dynamic-dispatch` runs the standard combination over
   the stable-sorted entries. With no applicable primary the static body answers. Pinned with
-  `:around`/`:before`/`:after`, `call-next-method`, an eql specializer on another argument.
+  `:around`/`:before`/`:after`, `call-next-method`, an eql specializer on another argument. The
+  entry's `(find-class 'C)` names the REGISTERED spelling (`registeredClassSpelling`): a
+  specializer holds the normalized `PKG::NAME`, which the compile paths' class table does not
+  carry for a class an exported symbol names, so until 2026-11-01 such a method signalled
+  `FIND-CLASS: there is no class named C` on the three compile backends (contextl's
+  `layered-function`, once a layer-context prototype reached `print-object`).
 - **class-of** reads slot 0 (`expandClassOf`, the interpreter built-in); **typep**: a class test
   (`makeClassInstanceTest`, conditions excepted) and both runtime typep shapes (`%typep-runtime`,
   `expandRuntimeTypep`, ahead of the metaobject normalization) consult the CPL, and the
   `standard-object` enumeration carries the tag; **subtypep** with a dynamic class on either side
   goes to `%dynamic-subtypep`; **allocate-instance**'s generated defun gains the arm.
-- Residuals: a dynamic instance PRINTS as `#<%DYNAMIC-OBJECT% ...>` (a `print-object` method on
-  one of its classes is not routed); `make-instance` of a class made at run time and its slots
-  are out; a short-form method-combination generic gets no arm; a `call-next-method` past the
+- **print-object** reaches one (2026-11-01): `ClosRegistry.printObjectTags` adds the dynamic tag
+  when a `print-object` method has a class specializer, so the printer routes the instance and
+  the dispatcher's arm picks the method by its precedence list (contextl's `#<LAYER NIL>` for a
+  layer-context prototype); with none applicable the system method prints
+  `#<%DYNAMIC-OBJECT% ...>`.
+- Residuals: `make-instance` of a class made at run time and its slots are out; a short-form method-combination generic gets no arm; a `call-next-method` past the
   last user primary does not reach a built-in default method.
 - Pinned by ci-spec standalone `classes-made-at-run-time` (standalone: the arm joins every
   dispatcher with a class method).

@@ -2206,7 +2206,7 @@ public final class ClosRegistry {
 	private @Nullable PrintObjectTags printObjectTagsMemo;
 
 	private record PrintObjectTags(int hierarchyVersion, @Nullable GenericInfo generic, int methodCount,
-			List<String> tags) {
+			boolean dynamicClasses, List<String> tags) {
 	}
 
 	/**
@@ -3499,6 +3499,7 @@ public final class ClosRegistry {
 	public List<String> printObjectTags() {
 		PrintObjectTags memo = this.printObjectTagsMemo;
 		if (memo != null && memo.hierarchyVersion() == this.hierarchyVersion
+				&& memo.dynamicClasses() == this.dynamicClasses
 				&& (memo.generic() == null || memo.generic().methods().size() == memo.methodCount())) {
 			return memo.tags();
 		}
@@ -3521,6 +3522,14 @@ public final class ClosRegistry {
 							&& specializer.kind() != SpecializerKind.TYPE)) {
 						continue;
 					}
+					// An instance of a class made at run time (contextl's layer-context
+					// prototypes) may have the class in its precedence list: the
+					// dispatcher's dynamic arm decides, and the system method answers
+					// when no method applies.
+					if (this.dynamicClasses && specializer.kind() == SpecializerKind.CLASS
+							&& !tags.contains(DYNAMIC_OBJECT_TAG)) {
+						tags.add(DYNAMIC_OBJECT_TAG);
+					}
 					List<String> descendants = new java.util.ArrayList<>(descendantTags(specializer.name()));
 					descendants.addAll(descendantStructTags(specializer.name()));
 					for (String tag : descendants) {
@@ -3533,7 +3542,7 @@ public final class ClosRegistry {
 		}
 		List<String> answer = List.copyOf(tags);
 		this.printObjectTagsMemo = new PrintObjectTags(this.hierarchyVersion, generic,
-				generic == null ? 0 : generic.methods().size(), answer);
+				generic == null ? 0 : generic.methods().size(), this.dynamicClasses, answer);
 		return answer;
 	}
 

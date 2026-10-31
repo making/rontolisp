@@ -32483,6 +32483,15 @@ standalone:
         (setf (class-name c1) 'rtc-renamed)
         (setf (closer-mop:class-name c2) 'rtc-renamed-too)
         (print (list (class-name (class-of p1)) (class-name c2) (rtc-who p2))))
+      ;; A class an EXPORTED symbol names (a specializer holds the PKG::NAME spelling,
+      ;; the class table PKG:NAME), and print-object routing such an instance through
+      ;; its precedence list.
+      (defpackage :rtc-pkg (:use :cl) (:export #:rtc-node))
+      (defclass rtc-pkg:rtc-node () () (:metaclass rtc-meta))
+      (defmethod print-object ((x rtc-pkg:rtc-node) stream) (write-string "#<RTC-NODE>" stream))
+      (defgeneric rtc-kind (x) (:method ((x rtc-pkg:rtc-node)) :node))
+      (let ((p (rtc-prototype (list (find-class 'rtc-pkg:rtc-node)))))
+        (print (list (rtc-kind p) (princ-to-string p) (prin1-to-string (list p)))))
     stdout: |
       (T T NIL T)
       (T T NIL T)
@@ -32492,6 +32501,7 @@ standalone:
       (T T T NIL T NIL T NIL)
       (T NIL T T NIL T :B NIL)
       (RTC-RENAMED RTC-RENAMED-TOO (:AROUND-A :B :A :ROOT))
+      (:NODE "#<RTC-NODE>" "(#<RTC-NODE>)")
   - name: slot-access-protocol-methods
     source: |
       ;; The slot-access protocol (AMOP 5.5): with a method on slot-value-using-class

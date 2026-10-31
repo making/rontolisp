@@ -25,9 +25,10 @@ import java.util.List;
  * environments, {@code slot-boundp}/{@code slot-makunbound}) through the slot-access
  * protocol ({@code .kb/clos.md}), as its {@code test/dynenv.lisp} does. Every activation
  * makes an anonymous {@code standard-layer-class} at RUN time and dispatches on its
- * prototype ({@code .kb/clos.md}, "Classes made at run time"). The output is keywords and
- * strings only: the interpreter prints a {@code contextl-user} symbol qualified inside a
- * form that activated a layer, a residual {@code .kb/clos.md} records.
+ * prototype, which prints through contextl's {@code print-object} method
+ * ({@code .kb/clos.md}, "Classes made at run time"). The output is keywords and strings
+ * only: the interpreter prints a {@code contextl-user} symbol qualified inside a form
+ * that activated a layer, a residual {@code .kb/clos.md} records.
  */
 class ContextlE2eTest extends AsdfLibraryE2eSupport {
 
@@ -122,6 +123,8 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			(setf (x *obj*) 10)
 			(print (list (x *obj*) (dletf (((x *obj*) 20)) (list (x *obj*) (slot-value *obj* 'x)))
 			             (slot-value *obj* 'x) (progn (slot-makunbound *obj* 'x) (slot-boundp *obj* 'x))))
+			(print (with-active-layers (info-layer)
+			         (princ-to-string (contextl::layer-context-prototype (current-layer-context)))))
 			""";
 
 	private static final List<String> EXPECTED = List.of("(:ROOT)", "(:INFO :ROOT)", "(:EMPLOYMENT :INFO :ROOT)",
@@ -130,7 +133,7 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			"(\"Hello, Ann\" \"Hello, Bob, please\" \"Dear Hello, Cy, please\")", "(:ADJOINED)", "(:INFO :ROOT)",
 			"(:ROOT)", "(:CLASS :CLASS)", "(T T)",
 			"((:OUTPUT) ((:PLAIN :OUTPUT) ((:HTML :OUTPUT) ((:XML :OUTPUT) (:PLAIN :OUTPUT)))))",
-			"(NIL (1 2) (2 3) (2 3) NIL)", "(10 (20 20) 10 NIL)");
+			"(NIL (1 2) (2 3) (2 3) NIL)", "(10 (20 20) 10 NIL)", "\"#<LAYER NIL>\"");
 
 	@Override
 	protected String systemDir() {

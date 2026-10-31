@@ -31,13 +31,15 @@ package `contextl`) stops at:
 Smaller residuals: on the interpreter, a top-level form that calls `map-symbol` (through
 `defining-layer`, `find-layer-class`, `adjoin-layer`) prints every symbol of that form qualified
 (`CONTEXTL::FOO`) while `*package*` is `contextl` and the symbols stay `eq` -- the compiled
-backends print `FOO`; reproduced only with contextl loaded. A layer context's prototype prints as
-`#<%DYNAMIC-OBJECT% ...>` (`print-object` is not routed for a dynamic instance).
+backends print `FOO`; reproduced only with contextl loaded (not with a plain
+`with-standard-io-syntax` + `intern` in a user package, 2026-11-01).
 
 Done 2026-11-01, on all four: `grouped-layers` (`closer-mop:slot-definition-allocation`, and a
 slot-definition `initialize-instance :around`'s `:allocation :class` reaching the static layout)
 and `dynenv` (the slot-access protocol, `slot-value-using-class` and its siblings; `assert`'s
-message doubling the tildes of the test it quotes), `.kb/clos.md`.
+message doubling the tildes of the test it quotes), `.kb/clos.md`; a layer-context prototype
+prints through contextl's `print-object` (and a class an exported symbol names no longer breaks
+the dynamic dispatch arm on the compile paths).
 
 Plan: 1 is the large one; decide between first-class generic functions (a funcallable
 `standard-generic-function` plus a run-time method table) and a narrower `ensure-method` over
