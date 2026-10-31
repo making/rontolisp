@@ -907,7 +907,13 @@ symbol, a non-keyword one passed quoted, and the tail may be dotted -- contextl'
   `:allocation`, `reconcileSlotAllocations`, 2026-11-01) and
   `UserMacroExpander.widenMetaclassDefclasses` rewrites the EMITTED defclass form the same way
   on the compile paths. The runtime driver re-runs the `:around`, whose contains-checks make the
-  injection idempotent. The allocation case is contextl's singleton layer slots:
+  injection idempotent. On the interpreter the widened re-registration comes AFTER the driver
+  call, so a slot it makes class-allocated gets its cell only then; what finalization stored
+  meanwhile went to the prototype's instance slot (contextl's `special-class`
+  `finalize-inheritance :after` shifts a class-allocated special slot into a special symbol), so
+  `evalDefclass` runs `closer-mop:finalize-inheritance` again when the allocations widened
+  (`widensSlotAllocations`); the compile paths emit the widened form, whose cell precedes the
+  driver. The allocation case is contextl's singleton layer slots:
   `singleton-direct-slot-definition`'s `initialize-instance :around` defaults `:allocation` to
   `:class`, so the canonical spec passes `:allocation` ONLY when the slot wrote one
   (`ParsedSlot.allocation`) -- an `:instance` default would make that `:around` signal -- and a
@@ -1157,9 +1163,8 @@ chunk-loop wrapper).
   `dletf` of a non-special slot `cerror`s and the handler `eval`s a redefinition making the slot
   special: the instance keeps its raw value (`SYMBOL-VALUE expects a symbol, got "Dr. Jekyll"`),
   since nothing makes instances obsolete (`special-slots-1` also needs layered classes); `spx`
-  `(setf (find-class 'x) nil)`, and past it the class-allocated special slot (`The variable FOO
-  is unbound`: the finalization-time shift of the shared cell does not hold) and class
-  redefinition; `layer-gc` passes its
+  `(setf (find-class 'x) nil)`; past it, its special and special layer slots pass on all four
+  and it stops at class redefinition (a singleton slot's `:reinitialize t`); `layer-gc` passes its
   first four sections and stops where `add-method :after` should clear the caches (`defmethod`
   calls no `add-method` here). `grouped-layers` (`slot-definition-allocation` and the
   `:allocation` reconciliation above) and `dynenv` (the slot-access protocol) pass on all four

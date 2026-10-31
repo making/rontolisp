@@ -20985,6 +20985,35 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Whether the widened defclass form writes more {@code :allocation} slot options than
+	 * the original -- {@link #reconcileSlotAllocations} made a slot class-allocated.
+	 * @param original the defclass form as written
+	 * @param widened its {@link #widenDefclassToMetaobjectSupers} spelling
+	 * @return true when a slot's allocation was reconciled
+	 */
+	public static boolean widensSlotAllocations(LispCons original, LispCons widened) {
+		return allocationOptionCount(original) < allocationOptionCount(widened);
+	}
+
+	private static int allocationOptionCount(LispCons defclass) {
+		List<LispVal> parts = defclass.toList();
+		if (parts.size() < 4 || !(parts.get(3) instanceof LispCons specs) || !specs.isProperList()) {
+			return 0;
+		}
+		int count = 0;
+		for (LispVal spec : specs.toList()) {
+			if (spec instanceof LispCons specCons && specCons.isProperList()) {
+				for (LispVal option : specCons.toList()) {
+					if (option instanceof LispSymbol opt && ":ALLOCATION".equals(memberOf(opt.name()))) {
+						count++;
+					}
+				}
+			}
+		}
+		return count;
+	}
+
+	/**
 	 * Adds {@code :allocation :class} to each direct-slot spec of the (mutable) defclass
 	 * part list that writes no {@code :allocation} while its driver-built
 	 * direct-slot-definition metaobject is class-allocated -- a slot-definition

@@ -10516,6 +10516,16 @@ public final class LispEvaluator {
 				if (cons.toList().get(1) instanceof LispSymbol nameSym) {
 					this.closRegistry.registerClassMetaobject(nameSym.name(), metaobject);
 				}
+				// A slot the driver made class-allocated (contextl's singleton layer
+				// slots) has its shared cell only now: what finalization stored into the
+				// prototype's instance slot -- contextl's special-class :after shifts a
+				// class-allocated special slot's value into a special symbol -- missed
+				// the cell, so finalization runs again over the layout it now has. The
+				// compile paths emit the widened form, so their cell exists before the
+				// driver runs.
+				if (LispMacroExpander.widensSlotAllocations(cons, widened)) {
+					apply(resolveFunction(CLOSER_MOP_FINALIZE_INHERITANCE), List.of(metaobject), this.globalEnv);
+				}
 			}
 		}
 		for (ClosRegistry.GenericInfo generic : this.closRegistry.generics().values()) {
@@ -10529,6 +10539,11 @@ public final class LispEvaluator {
 		LispVal metaobject = name instanceof LispSymbol sym ? this.closRegistry.classMetaobject(sym.name()) : null;
 		return metaobject != null ? metaobject : name;
 	}
+
+	/**
+	 * The metaclass protocol's {@code finalize-inheritance} generic, as it is defined.
+	 */
+	private static final String CLOSER_MOP_FINALIZE_INHERITANCE = "CLOSER-MOP:" + LispNames.FINALIZE_INHERITANCE;
 
 	/**
 	 * Whether the generated form is the metaclass-protocol driver call

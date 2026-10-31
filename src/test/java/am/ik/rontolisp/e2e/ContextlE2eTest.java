@@ -23,9 +23,10 @@ import java.util.List;
  * slots the singleton slot definition makes class-allocated, and special slots (a
  * {@code special-class} instance's {@code dletf}, captured and re-entered dynamic
  * environments, {@code slot-boundp}/{@code slot-makunbound}) through the slot-access
- * protocol ({@code .kb/clos.md}), as its {@code test/dynenv.lisp} does. Every activation
- * makes an anonymous {@code standard-layer-class} at RUN time and dispatches on its
- * prototype, which prints through contextl's {@code print-object} method
+ * protocol ({@code .kb/clos.md}), as its {@code test/dynenv.lisp} does, and special layer
+ * slots bound by a layer activation's initargs, as its {@code test/spx.lisp} does. Every
+ * activation makes an anonymous {@code standard-layer-class} at RUN time and dispatches
+ * on its prototype, which prints through contextl's {@code print-object} method
  * ({@code .kb/clos.md}, "Classes made at run time"). The last line prints
  * {@code contextl-user} symbols inside a form that activates a layer, which the
  * interpreter used to spell qualified ({@code .kb/pretty-printer.md}, "Interpreter
@@ -128,6 +129,13 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			         (princ-to-string (contextl::layer-context-prototype (current-layer-context)))))
 			(print (with-active-layers (info-layer)
 			         (list 'info-layer (layer-name (find-layer 'info-layer)) (mapcar #'layer-name (active-layers)))))
+			(deflayer test-layer ()
+			  ((slot0 :initarg :slot0 :initform 'foo :reader slot0 :special t)
+			   (slot1 :initarg :slot1 :initform 'bar :reader slot1 :special t)))
+			(print (list (slot0 (find-layer 'test-layer)) (slot1 (find-layer 'test-layer))
+			             (with-active-layers ((test-layer :slot0 4711))
+			               (list (slot0 (find-layer 'test-layer)) (slot1 (find-layer 'test-layer))))
+			             (slot0 (find-layer 'test-layer))))
 			""";
 
 	private static final List<String> EXPECTED = List.of("(:ROOT)", "(:INFO :ROOT)", "(:EMPLOYMENT :INFO :ROOT)",
@@ -137,7 +145,7 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			"(:ROOT)", "(:CLASS :CLASS)", "(T T)",
 			"((:OUTPUT) ((:PLAIN :OUTPUT) ((:HTML :OUTPUT) ((:XML :OUTPUT) (:PLAIN :OUTPUT)))))",
 			"(NIL (1 2) (2 3) (2 3) NIL)", "(10 (20 20) 10 NIL)", "\"#<LAYER NIL>\"",
-			"(INFO-LAYER INFO-LAYER (INFO-LAYER T))");
+			"(INFO-LAYER INFO-LAYER (INFO-LAYER T))", "(FOO BAR (4711 BAR) FOO)");
 
 	@Override
 	protected String systemDir() {
