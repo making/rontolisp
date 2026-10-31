@@ -43,30 +43,33 @@
   ;; every class's local precedence order.
   (let ((classes nil) (pending (list class)) (pairs nil) (built nil))
     (loop while pending
-          do (let ((c (car pending)))
-               (setq pending (cdr pending))
-               (if (member c classes :test #'eq)
-                   nil
-                   (let ((prev c))
-                     (setq classes (cons c classes))
-                     (dolist (s (slot-value c 'direct-superclasses))
-                       (setq pairs (cons (cons prev s) pairs))
-                       (setq prev s)
-                       (setq pending (append pending (list s))))))))
+          do
+            (let ((c (car pending)))
+              (setq pending (cdr pending))
+              (if (member c classes :test #'eq)
+                  nil
+                  (let ((prev c))
+                    (setq classes (cons c classes))
+                    (dolist (s (slot-value c 'direct-superclasses))
+                      (setq pairs (cons (cons prev s) pairs))
+                      (setq prev s)
+                      (setq pending (append pending (list s))))))))
     (setq classes (reverse classes))
     (loop while classes
-          do (let ((candidates
-                    (remove-if (lambda (c) (find c pairs :key #'cdr :test #'eq))
-                               classes)))
-               (if (null candidates)
-                   (error "No consistent class precedence list for ~S" class)
-                   nil)
-               (let ((next (if (cdr candidates)
-                               (%dynamic-cpl-tie built candidates)
-                               (car candidates))))
-                 (setq built (cons next built))
-                 (setq classes (remove next classes :test #'eq))
-                 (setq pairs (remove-if (lambda (p) (eq (car p) next)) pairs)))))
+          do
+            (let ((candidates
+                   (remove-if (lambda (c) (find c pairs :key #'cdr :test #'eq))
+                              classes)))
+              (if (null candidates)
+                  (error "No consistent class precedence list for ~S" class)
+                  nil)
+              (let ((next
+                     (if (cdr candidates)
+                         (%dynamic-cpl-tie built candidates)
+                         (car candidates))))
+                (setq built (cons next built))
+                (setq classes (remove next classes :test #'eq))
+                (setq pairs (remove-if (lambda (p) (eq (car p) next)) pairs)))))
     (reverse built)))
 
 (defun %dynamic-cpl (class)
@@ -115,17 +118,21 @@
   ;; per inapplicable one. Nil unless a primary method applies -- the static
   ;; dispatch then answers, as for a call no class made at run time reaches.
   (let ((applicable (remove nil entries)) (primary nil))
-    (dolist (e applicable)
-      (if (null (car e)) (setq primary t) nil))
+    (dolist (e applicable) (if (null (car e)) (setq primary t) nil))
     (if primary applicable nil)))
 
 (defun %dynamic-more-specific-p (a b)
   ;; Leftmost argument first; a smaller key is more specific.
   (let ((x (cdr (cdr a))) (y (cdr (cdr b))) (answer nil) (done nil))
     (loop while (and x (not done))
-          do (cond ((< (car x) (car y)) (setq answer t) (setq done t))
-                   ((> (car x) (car y)) (setq done t))
-                   (t (setq x (cdr x)) (setq y (cdr y)))))
+          do
+            (cond ((< (car x) (car y))
+                   (setq answer t)
+                   (setq done t))
+                  ((> (car x) (car y)) (setq done t))
+                  (t
+                   (setq x (cdr x))
+                   (setq y (cdr y)))))
     answer))
 
 (defun %dynamic-chain (functions base)
@@ -140,7 +147,10 @@
   ;; The standard method combination over the applicable ENTRIES, most
   ;; specific first (a stable sort keeps definition order between equals).
   (let ((sorted (stable-sort (copy-list entries) #'%dynamic-more-specific-p))
-        (arounds nil) (befores nil) (primaries nil) (afters nil))
+        (arounds nil)
+        (befores nil)
+        (primaries nil)
+        (afters nil))
     (dolist (e (reverse sorted))
       (let ((q (car e)) (fn (car (cdr e))))
         (cond ((eq q :around) (setq arounds (cons fn arounds)))
@@ -148,10 +158,11 @@
               ((eq q :after) (setq afters (cons fn afters)))
               (t (setq primaries (cons fn primaries))))))
     (let* ((primary (%dynamic-chain primaries nil))
-           (core (if (or befores afters)
-                     (lambda (&rest a)
-                       (dolist (b befores) (apply b nil a))
-                       (multiple-value-prog1 (apply primary a)
-                         (dolist (f (reverse afters)) (apply f nil a))))
-                     primary)))
+           (core
+            (if (or befores afters)
+                (lambda (&rest a)
+                  (dolist (b befores) (apply b nil a))
+                  (multiple-value-prog1 (apply primary a)
+                    (dolist (f (reverse afters)) (apply f nil a))))
+                primary)))
       (apply (if arounds (%dynamic-chain arounds core) core) args))))
