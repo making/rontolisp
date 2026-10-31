@@ -180,9 +180,17 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
   at its defgeneric's position (or the first defmethod's) AFTER the walk, so descendant and
   method sets are complete regardless of definition order. Non-top-level
   defclass/defgeneric/defmethod -> "only supported as a top-level form", with ONE
-  exception: a `defmethod` in a top-level `let`/`let*` body (the closure-over-let idiom)
-  is registered statically by `expandLetNestedDefmethods`/`rewriteNestedDefmethods`
-  while its body defun stays in the let (a global-closure `setq`).
+  exception: a `defmethod` or `defgeneric` anywhere in a top-level `let`/`let*` body (the
+  closure-over-let idiom) is registered statically by
+  `expandLetNestedDefmethods`/`rewriteNestedDefmethods` while its body defun stays in the
+  let (a global-closure `setq`). A nested `defgeneric` (`expandNestedDefgeneric`) leaves
+  its `(:method ...)` clauses' defuns plus `'name` in place; the dispatcher goes after the
+  let. cl-qrencode's `rs-ecc.lisp` needs it (2026-10-31: `encode-symbol` agrees on all
+  four). `defclass`/`define-condition`/`defstruct` in a let stay refused: their initforms
+  are inlined into top-level constructors (the class's and every subclass's) and the
+  metaobject table, so they cannot close over the let, and hoisting a capture-free one
+  would have to happen before the many earlier top-level scans that look for definers. No
+  program needing it is known.
 - **A nested method's body exists only once its defmethod form runs, so every
   dispatcher branch calling one is guarded on the assignment** (`(and (not (null
   %<generic>--m<i>)) <specializer-test>)`, todo 445; `ClosRegistry`

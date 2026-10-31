@@ -2,7 +2,7 @@
 
 `(defgeneric name (param...) option...)`
 
-総称関数を定義し、名前シンボルを返します。メソッドは [`defmethod`](defmethod.md) で追加します。指定子は**任意の**必須引数に書け、呼び出しは最も特定的なマッチするメソッドを実行します（引数は左優先でランク付け）。マッチするメソッドがなければエラーを通知します。`defgeneric` は省略可能で、最初の `defmethod` が暗黙に総称関数を作りますが、`defgeneric` を書くと全メソッドが合同であるべきラムダリストを宣言できます（[defmethod](defmethod.md#lambda-list-congruence)）。既存のメソッドが合同でない `defgeneric` は `program-error` を通知し、総称関数は元のまま残ります。`defgeneric` を再評価すると、以前の `(:method ...)` 節が定義したメソッドは取り除かれます。コンパイルパスでは、同じ名前の 2 回目の `defgeneric` で必須引数の数を変えることはできません。総称関数は通常の関数なので `#'name` や `funcall` が使えます。 `name` には setf 関数名 `(setf reader)` も書けます（[defmethod](defmethod.md) 参照）。
+総称関数を定義し、名前シンボルを返します。メソッドは [`defmethod`](defmethod.md) で追加します。指定子は**任意の**必須引数に書け、呼び出しは最も特定的なマッチするメソッドを実行します（引数は左優先でランク付け）。マッチするメソッドがなければエラーを通知します。`defgeneric` は省略可能で、最初の `defmethod` が暗黙に総称関数を作りますが、`defgeneric` を書くと全メソッドが合同であるべきラムダリストを宣言できます（[defmethod](defmethod.md#lambda-list-congruence)）。既存のメソッドが合同でない `defgeneric` は `program-error` を通知し、総称関数は元のまま残ります。`defgeneric` を再評価すると、以前の `(:method ...)` 節が定義したメソッドは取り除かれます。コンパイルパスでは `defgeneric` はトップレベルか、トップレベルの `let`/`let*` 本体の中でサポートされ（`(:method ...)` 節はその束縛を閉じ込められます）、同じ名前の 2 回目の `defgeneric` で必須引数の数を変えることはできません。総称関数は通常の関数なので `#'name` や `funcall` が使えます。 `name` には setf 関数名 `(setf reader)` も書けます（[defmethod](defmethod.md) 参照）。
 
 ラムダリストは必須引数の後に `&optional`/`&rest`/`&key` を続けられ（ディスパッチャは末尾を選択されたメソッドへ転送します）、インラインの `(:method [qualifier] (param...) body...)` 節で `defgeneric` 内にメソッドを定義できます。`(:documentation "...")` は記録して無視されます。
 

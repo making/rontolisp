@@ -25246,6 +25246,17 @@ public final class LispMacroExpander {
 	 * @return the normalized generic-function name
 	 */
 	public static String registerDefgeneric(LispCons cons, ClosRegistry closRegistry, List<LispVal> methodDefuns) {
+		return registerDefgeneric(cons, closRegistry, methodDefuns, false);
+	}
+
+	/**
+	 * As {@link #registerDefgeneric(LispCons, ClosRegistry, List)}, expanding the inline
+	 * {@code (:method ...)} clauses with {@code nested} (see
+	 * {@link #expandDefmethod(LispCons, ClosRegistry, boolean)}): true for a defgeneric
+	 * inside a top-level {@code let} body, whose clauses may close over the let.
+	 */
+	private static String registerDefgeneric(LispCons cons, ClosRegistry closRegistry, List<LispVal> methodDefuns,
+			boolean nested) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol nameSym)) {
 			throw new IllegalArgumentException(
@@ -25364,7 +25375,7 @@ public final class LispMacroExpander {
 				.stream()
 				.map(ClosRegistry.MethodInfo::functionName)
 				.collect(java.util.stream.Collectors.toSet());
-			methodDefuns.add(expandDefmethod(method, closRegistry));
+			methodDefuns.add(expandDefmethod(method, closRegistry, nested));
 			info.methods().forEach((key, added) -> {
 				if (!before.contains(added.functionName())) {
 					info.inlineMethodKeys().add(key);
@@ -28022,7 +28033,7 @@ public final class LispMacroExpander {
 				&& !readsSlots(program) && !closRegistry.routesConditionReports()
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || structDefinitionPayload(f) != null || isClosDefinitionForm(f)
-							|| isSetfFunctionDefun(f) || isLetWithNestedDefmethod(f)
+							|| isSetfFunctionDefun(f) || isLetWithNestedMethodDefinition(f)
 							|| isNamedForm(f, LispNames.DEFTYPE) || deftypeInstanceDeclamation(f) != null)) {
 			// No definitions to splice, so the registry stays as seeded: a #S(...)
 			// literal
@@ -28101,20 +28112,8 @@ public final class LispMacroExpander {
 			}
 			else if (isNamedForm(form, LispNames.DEFGENERIC)) {
 				List<LispVal> methodDefuns = new java.util.ArrayList<>();
-				LispCons defgeneric = normalizeSetfMethodForm((LispCons) form, structAccessors);
-				ClosRegistry.GenericInfo prior = defgeneric.cdr() instanceof LispCons named
-						&& named.car() instanceof LispSymbol nameSym ? closRegistry.findGeneric(nameSym.name()) : null;
-				int priorRequired = prior == null ? -1 : prior.paramNames().size();
-				String generic = registerDefgeneric(defgeneric, closRegistry, methodDefuns);
-				if (prior != null && prior.paramNames().size() != priorRequired) {
-					// The interpreter redefines the generic in place (CLHS defgeneric); a
-					// compiled program has ONE dispatcher per generic, whose lambda list
-					// cannot be both.
-					throw new UnsupportedOperationException(
-							LispNames.DEFGENERIC + " " + ClosRegistry.functionNameForReport(generic)
-									+ ": redefining a generic function with a different number of required parameters"
-									+ " is supported by the interpreter only");
-				}
+				String generic = registerCompiledDefgeneric((LispCons) form, closRegistry, structAccessors,
+						methodDefuns, false);
 				out.addAll(methodDefuns);
 				if (placedDispatchers.add(generic)) {
 					dispatcherSlots.put(out.size(), generic);
@@ -28155,10 +28154,11 @@ public final class LispMacroExpander {
 				registerDefconstant((LispCons) form, closRegistry);
 				out.add(form);
 			}
-			else if (isLetWithNestedDefmethod(form)) {
+			else if (isLetWithNestedMethodDefinition(form)) {
 				// The closure-over-let method idiom (cl-ppcre's
-				// build-replacement-template capturing reg-scanner): each defmethod in
-				// the let's body is registered and expanded in place, so its
+				// build-replacement-template capturing reg-scanner): each defmethod (and
+				// defgeneric) in the let's body is registered and expanded in place, so
+				// its
 				// method-body defun stays INSIDE the let and compiles to (setq name
 				// (lambda ...)) -- a global closure the dispatcher (placed at top
 				// level, after the let) reaches through the call-through-variable
@@ -29139,6 +29139,32 @@ public final class LispMacroExpander {
 		}
 	}
 
+	/**
+	 * Registers a {@code defgeneric} on a compile path, top-level or below a top-level
+	 * {@code let} body ({@code nested}): the {@code (setf name)} spelling normalized, the
+	 * inline {@code (:method ...)} clauses' expansions (or the refusal) appended to
+	 * {@code methodDefuns}.
+	 * @return the normalized generic-function name
+	 */
+	private static String registerCompiledDefgeneric(LispCons form, ClosRegistry closRegistry,
+			java.util.Map<String, Integer> structAccessors, List<LispVal> methodDefuns, boolean nested) {
+		LispCons defgeneric = normalizeSetfMethodForm(form, structAccessors);
+		ClosRegistry.GenericInfo prior = defgeneric.cdr() instanceof LispCons named
+				&& named.car() instanceof LispSymbol nameSym ? closRegistry.findGeneric(nameSym.name()) : null;
+		int priorRequired = prior == null ? -1 : prior.paramNames().size();
+		String generic = registerDefgeneric(defgeneric, closRegistry, methodDefuns, nested);
+		if (prior != null && prior.paramNames().size() != priorRequired) {
+			// The interpreter redefines the generic in place (CLHS defgeneric); a
+			// compiled program has ONE dispatcher per generic, whose lambda list
+			// cannot be both.
+			throw new UnsupportedOperationException(
+					LispNames.DEFGENERIC + " " + ClosRegistry.functionNameForReport(generic)
+							+ ": redefining a generic function with a different number of required parameters"
+							+ " is supported by the interpreter only");
+		}
+		return generic;
+	}
+
 	private static boolean isSetfFunctionDefun(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.DEFUN.equals(op.name())
 				&& cons.cdr() instanceof LispCons rest && LambdaLists.setfFunctionPlaceName(rest.car()) != null;
@@ -29146,9 +29172,10 @@ public final class LispMacroExpander {
 
 	/**
 	 * Whether the form is a top-level {@code let}/{@code let*} carrying a
-	 * {@code defmethod} directly in its body -- the closure-over-let method idiom.
+	 * {@code defmethod} or {@code defgeneric} anywhere in its body (quoted data skipped)
+	 * -- the closure-over-let method idiom.
 	 */
-	private static boolean isLetWithNestedDefmethod(LispVal form) {
+	private static boolean isLetWithNestedMethodDefinition(LispVal form) {
 		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
 				|| (!LispNames.LET.equals(op.name()) && !LispNames.LET_STAR.equals(op.name()))
 				|| !cons.isProperList()) {
@@ -29156,9 +29183,28 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> parts = cons.toList();
 		for (int i = 2; i < parts.size(); i++) {
-			if (MopEvalCapture.definesMethods(parts.get(i))) {
+			if (definesMethodsOrGenerics(parts.get(i))) {
 				return true;
 			}
+		}
+		return false;
+	}
+
+	private static boolean definesMethodsOrGenerics(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.isQuote(member)) {
+					return false;
+				}
+				if (LispNames.DEFMETHOD.equals(member) || LispNames.DEFGENERIC.equals(member)) {
+					return true;
+				}
+			}
+			if (definesMethodsOrGenerics(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
 		return false;
 	}
@@ -29177,7 +29223,8 @@ public final class LispMacroExpander {
 	 * at run time its body global is never assigned, so calling it falls through to the
 	 * default or to no-applicable-method -- the branch is guarded on the body's
 	 * assignment ({@code .kb/clos.md}), which is also what the interpreter answers when
-	 * the defmethod never runs.
+	 * the defmethod never runs. A {@code defgeneric} at any depth is registered the same
+	 * way ({@link #expandNestedDefgeneric}).
 	 */
 	private static void expandLetNestedDefmethods(LispCons letForm, ClosRegistry closRegistry, List<LispVal> out,
 			java.util.Map<Integer, String> dispatcherSlots, java.util.Set<String> placedDispatchers,
@@ -29230,6 +29277,32 @@ public final class LispMacroExpander {
 		return expandedMethod;
 	}
 
+	/**
+	 * A {@code defgeneric} below a top-level {@code let} body: registered like a
+	 * top-level one, its dispatcher placed after the let with the nested defmethods'. The
+	 * form itself captures nothing; what stands in its place is the method-body defuns of
+	 * its {@code (:method ...)} clauses, which may close over the let like a nested
+	 * {@code defmethod}'s, followed by the quoted name -- the form's value, as the
+	 * interpreter's.
+	 */
+	private static LispVal expandNestedDefgeneric(LispCons cons, ClosRegistry closRegistry, List<String> generics,
+			java.util.Map<String, Integer> structAccessors, List<LispVal> hoisted) {
+		LispCons defgeneric = normalizeSetfMethodForm(cons, structAccessors);
+		List<LispVal> methodDefuns = new java.util.ArrayList<>();
+		generics.add(registerCompiledDefgeneric(defgeneric, closRegistry, structAccessors, methodDefuns, true));
+		LispVal name = quoteOf(defgeneric.toList().get(1));
+		if (methodDefuns.isEmpty()) {
+			return name;
+		}
+		List<LispVal> inPlace = new java.util.ArrayList<>();
+		inPlace.add(new LispSymbol(LispNames.PROGN));
+		for (LispVal methodDefun : methodDefuns) {
+			inPlace.add(splitNestedMethodExpansion(methodDefun, hoisted));
+		}
+		inPlace.add(name);
+		return listToCons(inPlace);
+	}
+
 	// Rewrites every defmethod nested below a top-level let body member in place
 	// (quoted data skipped): registered like a top-level defmethod, replaced by its
 	// user method-body defun -- an expression-position form, so no splicing is possible
@@ -29253,6 +29326,9 @@ public final class LispMacroExpander {
 							hoisted);
 					generics.add(ClosRegistry.normalize(((LispSymbol) normalized.toList().get(1)).name()));
 					return inPlace;
+				}
+				if (LispNames.DEFGENERIC.equals(member) && cons.isProperList()) {
+					return expandNestedDefgeneric(cons, closRegistry, generics, structAccessors, hoisted);
 				}
 			}
 			return null;

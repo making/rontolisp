@@ -29674,18 +29674,25 @@ cases:
     expected: |
       (A T NIL)
       (1 99)
-  - name: nested-defmethod-call-before-its-form-falls-through
+  - name: generics-defined-in-a-top-level-let-close-over-it
     source: |
-      (defclass nd-late () ())
-      (defgeneric nd-greet (x))
-      (defmethod nd-greet (x) "default")
-      (let ((o (make-instance 'nd-late)))
-        (print (nd-greet o))
-        (defmethod nd-greet ((x nd-late)) "special")
-        (print (nd-greet o)))
+      ;; cl-qrencode's rs-ecc shape: defgeneric beside defmethod in a top-level let.
+      ;; A defgeneric captures nothing; its (:method ...) clauses close over the
+      ;; let like a defmethod's body, at any depth below it.
+      (defvar *gl-cell* (list 0))
+      (let ((k 2))
+        (defgeneric gl-scale (x)
+          (:method ((x string)) (list k x)))
+        (defmethod gl-scale ((x integer)) (* k x))
+        (defgeneric (setf gl-cell) (v c))
+        (defmethod (setf gl-cell) (v (c cons)) (setf (car c) (* k v)))
+        (print (when t
+                 (defgeneric gl-deep (x) (:method (x) (list :deep k x))))))
+      (setf (gl-cell *gl-cell*) 5)
+      (print (list (gl-scale 3) (gl-scale "a") *gl-cell* (gl-deep 1)))
     expected: |
-      "default"
-      "special"
+      GL-DEEP
+      (6 (2 "a") (10) (:DEEP 2 1))
   - name: negative-zero-literal-keeps-its-sign
     source: |
       (print -0.0)
@@ -30715,18 +30722,6 @@ cases:
       0
       (15360 16384)
       (1.0 2.0)
-  - name: nested-defmethod-call-before-its-form-falls-through
-    source: |
-      (defclass wnd-late () ())
-      (defgeneric wnd-greet (x))
-      (defmethod wnd-greet (x) "default")
-      (let ((o (make-instance 'wnd-late)))
-        (print (wnd-greet o))
-        (defmethod wnd-greet ((x wnd-late)) "special")
-        (print (wnd-greet o)))
-    expected: |
-      "default"
-      "special"
   - name: unbound-slot-signals-unbound-slot
     source: |
       (defclass wu-box () ((a :initarg :a) (b :initform 7)))
