@@ -215,7 +215,7 @@ class MitoE2eTest {
 		runCli(workDir, program.getFileName().toString(), "-o", "Probe.class");
 		Result result = run(workDir, JAVA, "-cp", workDir.toString(), "Probe");
 		assertThat(result.exitCode()).as("%s", result).isNotZero();
-		assertThat(result.err()).contains("The function SXQL/OPERATOR:MAKE-COUNT-OP is undefined");
+		assertThat(result.err()).contains("The function SXQL/OPERATOR::MAKE-COUNT-OP is undefined");
 	}
 
 	@Test
