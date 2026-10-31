@@ -20328,6 +20328,7 @@ public final class LispMacroExpander {
 							+ "standard-class, defined before its first use: " + metaclassSym.name());
 				}
 				metaclassName = metaclassInfo.name();
+				closRegistry.markMetaclassed(className);
 				if (metaclassInfo.ancestors().contains(ClosRegistry.FUNCALLABLE_STANDARD_CLASS_NAME)
 						&& superInfos.stream()
 							.noneMatch(s -> s.ancestors().contains(ClosRegistry.FUNCALLABLE_STANDARD_OBJECT_NAME))) {
@@ -20433,6 +20434,7 @@ public final class LispMacroExpander {
 		// Of a slot's several initargs the first one defaulted wins: the defaults
 		// follow the supplied initargs in their own order (CLHS 7.1.3, 7.1.4).
 		if (!defaultInitargs.isEmpty()) {
+			closRegistry.markDefaultInitargs(className);
 			for (int i = 0; i < slots.size(); i++) {
 				ClosRegistry.SlotSpec slot = slots.get(i);
 				LispVal override = defaultInitargs.entrySet()
@@ -21577,6 +21579,30 @@ public final class LispMacroExpander {
 				.orElse(null);
 			sharedInit = init != null;
 		}
+		// A class defined with a :metaclass under the slot-access protocol fills its
+		// slots through (setf slot-value-using-class), as CL's shared-initialize does:
+		// the chain fill below, or -- with no initialization generic in the program --
+		// the protocol's own fill right after the unbound allocation.
+		boolean protocolFill = closRegistry.fillsThroughSlotProtocol(info.name());
+		if (init == null && protocolFill) {
+			String prefix = "__mi" + MV_COUNTER.getAndIncrement();
+			LispSymbol objVar = new LispSymbol(prefix + "_obj");
+			List<LispVal> bindings = new java.util.ArrayList<>();
+			List<LispVal> initargs = new java.util.ArrayList<>();
+			initargs.add(new LispSymbol(LispNames.LIST));
+			for (int i = 2; i < parts.size(); i++) {
+				LispSymbol temp = new LispSymbol(prefix + "_a" + (i - 2));
+				bindings.add(listToCons(List.of(temp, parts.get(i))));
+				initargs.add(temp);
+			}
+			List<LispVal> unbound = new java.util.ArrayList<>();
+			for (int i = 0; i < info.slots().size(); i++) {
+				unbound.add(unboundMarker());
+			}
+			bindings.add(listToCons(List.of(objVar, objNew(LispLayout.CLASS_TAG_PREFIX + info.name(), unbound))));
+			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings),
+					mvCall(LispNames.SLOT_PROTOCOL_FILL, objVar, listToCons(initargs), LispTrue.INSTANCE), objVar));
+		}
 		if (init == null) {
 			List<LispVal> call = new java.util.ArrayList<>();
 			call.add(new LispSymbol(ctor));
@@ -21591,7 +21617,7 @@ public final class LispMacroExpander {
 		// initialize-instance :around's munged initargs (mito's :direct-superclasses /
 		// :direct-slots rewrites) take effect. CL's ordering (:before -> fill) holds
 		// natively here, so the refill replay below is skipped.
-		boolean chainFill = closRegistry.isMopProtocolActive() && isMetaobjectClass(info);
+		boolean chainFill = closRegistry.isMopProtocolActive() && (isMetaobjectClass(info) || protocolFill);
 		// A user initialize-instance method exists (an :after in practice; make-instance
 		// runs it on the fresh instance with the initargs, like CL). Each initarg
 		// expression is hoisted into a let* temp so the constructor call and the
@@ -48564,7 +48590,9 @@ public final class LispMacroExpander {
 			// UNBOUND and the initialization generic -- whose system shared-initialize
 			// primary performs the fill -- runs on it like on any other construction.
 			// CL's ordering holds natively there, so the refill replay is skipped.
-			boolean chainFill = closRegistry.isMopProtocolActive() && isMetaobjectClass(info) && initCallOnObj != null;
+			boolean chainFill = closRegistry.isMopProtocolActive()
+					&& (isMetaobjectClass(info) || closRegistry.fillsThroughSlotProtocol(info.name()))
+					&& initCallOnObj != null;
 			LispVal refillForms = !chainFill && info.ancestors().stream().anyMatch(refillTargets::contains)
 					? initRefillFormsFor(info, obj, args) : null;
 			if (refillForms != null) {
@@ -48805,9 +48833,14 @@ public final class LispMacroExpander {
 		for (String helper : helperNames) {
 			orParts.add(mvCall(helper, obj, args, initforms));
 		}
+		LispVal fill = helperNames.isEmpty() ? LispNil.INSTANCE : listToCons(orParts);
+		if (closRegistry.slotProtocol()) {
+			// An instance of a :metaclass class fills through the slot-access protocol.
+			fill = makeIf(callOf(LispNames.SLOT_PROTOCOL_INSTANCE_P, obj),
+					mvCall(LispNames.SLOT_PROTOCOL_FILL, obj, args, initforms), fill);
+		}
 		defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.MOP_FILL_SLOTS),
-				listToCons(List.of(obj, args, initforms)),
-				helperNames.isEmpty() ? LispNil.INSTANCE : listToCons(orParts))));
+				listToCons(List.of(obj, args, initforms)), fill)));
 		return defuns;
 	}
 

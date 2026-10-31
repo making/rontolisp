@@ -1931,6 +1931,45 @@ public final class ClosRegistry {
 		this.slotProtocol = true;
 	}
 
+	/** The classes a {@code defclass} defined with a {@code :metaclass}, normalized. */
+	private final Set<String> metaclassedClasses = new java.util.HashSet<>();
+
+	/**
+	 * Records that the class was defined with a {@code (:metaclass M)} option.
+	 * @param className the class name as spelled
+	 */
+	public void markMetaclassed(String className) {
+		this.metaclassedClasses.add(normalize(className));
+	}
+
+	/** The classes a {@code defclass} gave {@code :default-initargs}, normalized. */
+	private final Set<String> defaultInitargClasses = new java.util.HashSet<>();
+
+	/**
+	 * Records that the class was defined with {@code (:default-initargs ...)}.
+	 * @param className the class name as spelled
+	 */
+	public void markDefaultInitargs(String className) {
+		this.defaultInitargClasses.add(normalize(className));
+	}
+
+	/**
+	 * Whether {@code make-instance} of the class fills its slots through the slot-access
+	 * protocol: the protocol is on and the class was defined with a {@code :metaclass}
+	 * (its instances are the ones the protocol routes). A class whose precedence list
+	 * carries {@code :default-initargs} keeps the constructor fill, which honors them
+	 * (through the effective initforms) where the protocol's fill would not.
+	 * @param className the class name as spelled
+	 * @return true for such a class
+	 */
+	public boolean fillsThroughSlotProtocol(String className) {
+		if (!this.slotProtocol || !this.metaclassedClasses.contains(normalize(className))) {
+			return false;
+		}
+		ClassInfo info = findClass(className);
+		return info != null && info.ancestors().stream().noneMatch(this.defaultInitargClasses::contains);
+	}
+
 	/**
 	 * The internal type of an instance of a class made at RUN time
 	 * ({@link #enableDynamicClasses}): slot 0 holds the class metaobject, slot 1 its

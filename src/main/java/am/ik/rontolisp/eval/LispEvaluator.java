@@ -1971,6 +1971,11 @@ public final class LispEvaluator {
 					return args.get(2);
 				}));
 		this.globalEnv.defineFunction(LispNames.MOP_FILL_SLOTS, new LispFunction(LispNames.MOP_FILL_SLOTS, args -> {
+			if (args.size() == 3 && isSlotProtocolInstance(args.get(0))) {
+				// An instance of a :metaclass class fills through the slot-access
+				// protocol.
+				return apply(resolveFunction(LispNames.SLOT_PROTOCOL_FILL), args, this.globalEnv);
+			}
 			// (%mop-fill-slots obj initargs initforms-p) -- the metaclass
 			// protocol's system initarg fill (the shared-initialize primaries of
 			// mop-protocol.lisp call it): store each supplied initarg into its

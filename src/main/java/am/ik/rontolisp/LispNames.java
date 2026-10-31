@@ -4730,6 +4730,12 @@ public final class LispNames {
 	public static final String SLOT_PROTOCOL_MAKUNBOUND = "%SLOT-PROTOCOL-MAKUNBOUND";
 
 	/**
+	 * {@code (%slot-protocol-fill obj initargs slot-names)}: CL's initarg and initform
+	 * fill (CLHS 7.1.4) through {@code (setf slot-value-using-class)}.
+	 */
+	public static final String SLOT_PROTOCOL_FILL = "%SLOT-PROTOCOL-FILL";
+
+	/**
 	 * The shared runtime-class-designator {@code change-class} dispatch:
 	 * {@code (%change-class-runtime obj designator initarg-plist)} resolves a class
 	 * designator known only at run time (a symbol or a class metaobject -- upstream

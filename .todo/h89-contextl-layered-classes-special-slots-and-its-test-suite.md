@@ -27,8 +27,9 @@ package `contextl`) stops at:
 3. `layer-gc` passes four of five sections; the fifth needs a later `defmethod` on
    `adjoin-layer-using-class` to run `add-method`'s `:after` (cache clearing).
 4. `spx`: `(setf (find-class 'x) nil)` (a run-time error now, `.kb/clos.md`). Past it (the line
-   removed, 2026-11-01) the class-allocated special slot `slot1` stops at the construction
-   residual of 2 (`The variable BAR is unbound` in `(setf dynamic-symbol-value)`), and the rest
+   removed, 2026-11-01) the class-allocated special slot `slot1` reads its raw initform
+   (`The variable FOO is unbound` in `dynamic-symbol-boundp`): the shift of the shared cell at
+   finalization (`special-class`'s `finalize-inheritance :after`) does not hold. The rest
    redefines singleton classes and layers with `:reinitialize t`, which the compile paths cannot
    follow (they keep the LAST definition, `.kb/clos.md`).
 
@@ -38,7 +39,8 @@ and `dynenv` (the slot-access protocol, `slot-value-using-class` and its sibling
 message doubling the tildes of the test it quotes), `.kb/clos.md`; a layer-context prototype
 prints through contextl's `print-object` (and a class an exported symbol names no longer breaks
 the dynamic dispatch arm on the compile paths); the interpreter no longer prints a
-layer-activating form's symbols qualified.
+layer-activating form's symbols qualified; `make-instance` of a `:metaclass` class fills
+through the slot-access protocol.
 
 Plan: 1 is the large one; decide between first-class generic functions (a funcallable
 `standard-generic-function` plus a run-time method table) and a narrower `ensure-method` over

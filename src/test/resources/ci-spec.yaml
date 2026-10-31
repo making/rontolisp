@@ -32517,9 +32517,10 @@ standalone:
       ;; slot-boundp, slot-makunbound and the accessors of an instance of a
       ;; :metaclass class go through the four generics with the class metaobject and
       ;; the effective slot definition; the system methods use the instance's own
-      ;; storage, an unbound slot reaching slot-unbound. A plain class's instance
-      ;; (sap-plain shares the sap-x reader) keeps the static access. Standalone: the
-      ;; routing joins every slot form of its program. SBCL 2.2.9 (sb-mop) agrees.
+      ;; storage, an unbound slot reaching slot-unbound, and make-instance fills the
+      ;; initarg and the initform through them. A plain class's instance (sap-plain
+      ;; shares the sap-x reader) keeps the static access. Standalone: the routing
+      ;; joins every slot form of its program. SBCL 2.2.9 (sb-mop) agrees.
       (asdf:load-system "closer-mop")
       (defclass sap-meta (standard-class) ())
       (defvar *sap-log* nil)
@@ -32538,18 +32539,22 @@ standalone:
       (defmethod slot-unbound ((class sap-meta) object name)
         (list :unbound name))
       (defclass sap-point ()
-        ((x :accessor sap-x) (y :accessor sap-y))
+        ((x :initarg :x :accessor sap-x) (y :initform 2 :accessor sap-y))
         (:metaclass sap-meta))
       (defclass sap-plain () ((x :initarg :x :accessor sap-x)))
-      (let ((p (make-instance 'sap-point)) (q (make-instance 'sap-plain :x 1)) (name 'y))
+      (let ((p (make-instance 'sap-point :x 1)) (q (make-instance 'sap-plain :x 1)) (name 'y))
+        (print (reverse *sap-log*))
         (setq *sap-log* nil)
-        (setf (sap-x p) 1)
-        (setf (slot-value p name) 2)
         (print (list (sap-x p) (slot-value p name) (slot-boundp p 'x)))
+        (setf (sap-x p) 3)
+        (setf (slot-value p 'y) 4)
+        (print (list (sap-x p) (sap-y p)))
         (slot-makunbound p 'x)
-        (print (list (slot-boundp p 'x) (sap-x p) (sap-y p) (sap-x q) (slot-value q 'x)))
+        (print (list (slot-boundp p 'x) (sap-x p) (sap-x q) (slot-value q 'x)))
         (print (reverse *sap-log*)))
     stdout: |
+      ((:WRITE X 1) :BOUNDP (:WRITE Y 2))
       (10 20 T)
-      (NIL (:UNBOUND X) 20 1 1)
-      ((:WRITE X 1) (:WRITE Y 2) (:READ X) (:READ Y) :BOUNDP :MAKUNBOUND :BOUNDP (:READ X) (:READ Y))
+      (30 40)
+      (NIL (:UNBOUND X) 1 1)
+      ((:READ X) (:READ Y) :BOUNDP (:WRITE X 3) (:WRITE Y 4) (:READ X) (:READ Y) :MAKUNBOUND :BOUNDP (:READ X))

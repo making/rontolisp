@@ -85,6 +85,35 @@
         t
         nil)))
 
+(defun %slot-protocol-initarg-tail (initargs keys)
+  ;; The tail of INITARGS at its leftmost key KEYS holds, nil when none does.
+  (do ((cursor initargs (cdr (cdr cursor))))
+      ((null cursor) nil)
+    (if (member (car cursor) keys) (return (cdr cursor)) nil)))
+
+(defun %slot-protocol-fill (object initargs slot-names)
+  ;; CLHS 7.1.4 through the protocol: a slot an initarg names takes the
+  ;; leftmost such value; otherwise a slot SLOT-NAMES selects (t: every one)
+  ;; that is still unbound takes its initfunction's value.
+  (let ((class (class-of object)))
+    (dolist (slotd (%slot-value-runtime class 'effective-slots))
+      (let ((tail
+             (%slot-protocol-initarg-tail initargs
+                                          (%slot-value-runtime slotd 'initargs)))
+            (initfunction (%slot-value-runtime slotd 'initfunction)))
+        (cond (tail
+               (setf (closer-mop:slot-value-using-class class object slotd)
+                     (car tail)))
+              ((and initfunction
+                    (or (eq slot-names t)
+                        (member (%slot-protocol-name slotd) slot-names))
+                    (not
+                     (closer-mop:slot-boundp-using-class class object slotd)))
+               (setf (closer-mop:slot-value-using-class class object slotd)
+                     (funcall initfunction)))
+              (t nil))))
+    object))
+
 (defun %slot-protocol-makunbound (object name)
   (let ((class (class-of object)))
     (closer-mop:slot-makunbound-using-class class object

@@ -1081,10 +1081,23 @@ the four generics with the class metaobject, the instance and the effective slot
   way when the gate is on as the class is defined. The interpreter's Java `slot-boundp` and
   `slot-makunbound` builtins and `evalSlotValue`'s computed-name path test the instance and call
   the Lisp entries.
-- Residuals: `make-instance` still fills initargs and initforms through the constructor, not
-  `(setf slot-value-using-class)` (SBCL logs one write per filled slot; contextl's
-  `shared-initialize` on `special-object` shifts the raw values afterwards, but a
-  class-allocated SPECIAL slot's initarg overwrites the cell's special symbol -- spx's `slot1`);
+- **Construction** (2026-11-01): `make-instance` of a class defined with a `:metaclass`
+  (`ClosRegistry.fillsThroughSlotProtocol`, `markMetaclassed`) fills through the protocol, CLHS
+  7.1.4 -- an initarg's leftmost value, then a still-unbound slot's initfunction, each by
+  `(setf slot-value-using-class)` after `slot-boundp-using-class` (`%slot-protocol-fill`, SBCL's
+  order). With an initialization generic in the program it is the metaobject classes' CHAIN
+  FILL (`expandMakeInstance`: allocate unbound, run the generic), and `%mop-fill-slots` (the
+  generated defun, the interpreter builtin) hands a protocol instance to `%slot-protocol-fill`,
+  so a user `shared-initialize` that never calls the next method (contextl's on
+  `special-object`) is the only fill, as in CL; with none, the unbound allocation is followed
+  by `%slot-protocol-fill` directly.
+- Residuals: a class whose precedence list carries `:default-initargs` keeps the constructor
+  fill (`markDefaultInitargs`: the protocol fill reads the driver-built initfunctions, which
+  know no default initargs) and then re-fills through the protocol inside `shared-initialize`
+  (extra writes, same values); a `make-instance` of a COMPUTED class takes the chain fill in
+  `%mop-make-instance` too, but with no initialization generic in the program its compiled
+  arm keeps the constructor (the interpreter re-enters `expandMakeInstance`, so it fills
+  through the protocol there).
   `slot-exists-p` is not routed; an interpreter accessor defined before the first protocol
   method is not routed; an inherited plain class's accessor is not routed for a `:metaclass`
   subclass instance.
@@ -1144,8 +1157,9 @@ chunk-loop wrapper).
   `dletf` of a non-special slot `cerror`s and the handler `eval`s a redefinition making the slot
   special: the instance keeps its raw value (`SYMBOL-VALUE expects a symbol, got "Dr. Jekyll"`),
   since nothing makes instances obsolete (`special-slots-1` also needs layered classes); `spx`
-  `(setf (find-class 'x) nil)`, and past it the class-allocated special slot the constructor
-  overwrites (the slot-access protocol's residual) and class redefinition; `layer-gc` passes its
+  `(setf (find-class 'x) nil)`, and past it the class-allocated special slot (`The variable FOO
+  is unbound`: the finalization-time shift of the shared cell does not hold) and class
+  redefinition; `layer-gc` passes its
   first four sections and stops where `add-method :after` should clear the caches (`defmethod`
   calls no `add-method` here). `grouped-layers` (`slot-definition-allocation` and the
   `:allocation` reconciliation above) and `dynenv` (the slot-access protocol) pass on all four
