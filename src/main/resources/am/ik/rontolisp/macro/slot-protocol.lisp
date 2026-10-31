@@ -99,16 +99,14 @@
     (dolist (slotd (%slot-value-runtime class 'effective-slots))
       (let ((tail
              (%slot-protocol-initarg-tail initargs
-                                          (%slot-value-runtime slotd 'initargs)))
+              (%slot-value-runtime slotd 'initargs)))
             (initfunction (%slot-value-runtime slotd 'initfunction)))
-        (cond (tail
-               (setf (closer-mop:slot-value-using-class class object slotd)
-                     (car tail)))
+        (cond (tail (setf (closer-mop:slot-value-using-class class object slotd)
+                          (car tail)))
               ((and initfunction
-                    (or (eq slot-names t)
-                        (member (%slot-protocol-name slotd) slot-names))
-                    (not
-                     (closer-mop:slot-boundp-using-class class object slotd)))
+                (or (eq slot-names t)
+                    (member (%slot-protocol-name slotd) slot-names))
+                (not (closer-mop:slot-boundp-using-class class object slotd)))
                (setf (closer-mop:slot-value-using-class class object slotd)
                      (funcall initfunction)))
               (t nil))))
