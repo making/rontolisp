@@ -50184,7 +50184,7 @@ public final class LispMacroExpander {
 	private static boolean isTopLevelSpliceForm(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()
 				&& (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())
-						|| defclassInitializer(cons) != null || isHandlerlessHandlerBind(cons)
+						|| classDefinerInitializer(cons) != null || isHandlerlessHandlerBind(cons)
 						|| ((LispNames.EVAL_WHEN.equals(sym.name()) || isUiopWithDeprecationWrapper(sym.name())
 								|| isUiopWithUpgradabilityWrapper(sym.name())) && cons.toList().size() >= 2));
 	}
@@ -50269,15 +50269,17 @@ public final class LispMacroExpander {
 				}
 			}
 			// (defparameter NAME (defclass C ...)) -- lisp-binary's struct-like-defclass:
-			// defclass answers the class object (CLHS), and the compile paths define
-			// classes at top level only, so the defclass runs first as a top-level form
-			// and the variable takes (find-class 'C), the same object.
-			LispCons defclass = defclassInitializer(cons);
-			if (defclass != null) {
-				flattenTopLevelInto(splicedPart(cons, defclass), out, compileTimeToo, compileTime);
+			// the compile paths define classes at top level only, so the definer runs
+			// first as a top-level form and the variable takes its value: defclass
+			// answers the class object, (find-class 'C), define-condition the name 'C
+			// (CLHS).
+			LispCons definer = classDefinerInitializer(cons);
+			if (definer != null) {
+				flattenTopLevelInto(splicedPart(cons, definer), out, compileTimeToo, compileTime);
+				LispVal quotedName = listToCons(List.of(new LispSymbol(LispNames.QUOTE), definer.toList().get(1)));
 				List<LispVal> parts = new java.util.ArrayList<>(cons.toList());
-				parts.set(2, listToCons(List.of(new LispSymbol(LispNames.FIND_CLASS),
-						listToCons(List.of(new LispSymbol(LispNames.QUOTE), defclass.toList().get(1))))));
+				parts.set(2, LispNames.DEFCLASS.equals(((LispSymbol) definer.car()).name())
+						? listToCons(List.of(new LispSymbol(LispNames.FIND_CLASS), quotedName)) : quotedName);
 				flattenTopLevelInto(splicedPart(cons, listToCons(parts)), out, compileTimeToo, compileTime);
 				return;
 			}
@@ -50289,18 +50291,20 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The {@code defclass} a top-level {@code (defparameter NAME (defclass C ...) ...)}
-	 * or {@code defvar} initializes its variable with, or null.
+	 * The {@code defclass} or {@code define-condition} a top-level
+	 * {@code (defparameter NAME (defclass C ...) ...)} or {@code defvar} initializes its
+	 * variable with, or null.
 	 */
-	private static @Nullable LispCons defclassInitializer(LispCons form) {
+	private static @Nullable LispCons classDefinerInitializer(LispCons form) {
 		if (!(form.car() instanceof LispSymbol op)
 				|| !(LispNames.DEFPARAMETER.equals(op.name()) || LispNames.DEFVAR.equals(op.name()))) {
 			return null;
 		}
 		List<LispVal> parts = form.toList();
 		return parts.size() >= 3 && parts.get(2) instanceof LispCons init && init.car() instanceof LispSymbol head
-				&& LispNames.DEFCLASS.equals(head.name()) && init.isProperList() && init.cdr() instanceof LispCons rest
-				&& rest.car() instanceof LispSymbol ? init : null;
+				&& (LispNames.DEFCLASS.equals(head.name()) || LispNames.DEFINE_CONDITION.equals(head.name()))
+				&& init.isProperList() && init.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol ? init
+						: null;
 	}
 
 	/**

@@ -211,11 +211,12 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
   top-level `(defparameter|defvar NAME (defclass C ...))` -- lisp-binary's
   `struct-like-defclass`, which hands the value to moptilities' `slot-names` at macro-expansion
   time -- is two top-level forms, the defclass and `(NAME (find-class 'C))`:
-  `LispMacroExpander.flattenTopLevel` splits it (`defclassInitializer`), so the CLI's flatten,
+  `LispMacroExpander.flattenTopLevel` splits it (`classDefinerInitializer`; a `define-condition`
+  initializer splits the same way into `(NAME 'C)`, since 2026-10-31), so the CLI's flatten,
   the tree-shaker's and each backend's all see the defclass at top level. The macro-time
   evaluator runs the unsplit form (an interpreter, so it gets the object). Unconditional, unlike
   a `defvar` whose variable is bound -- the class table is whole-program on these paths anyway.
-  Pin: ci-spec `defclass-answers-the-class-object`.
+  Pin: ci-spec `defclass-answers-the-class-object` (both definers, all four backends).
 - **A nested method's body exists only once its defmethod form runs, so every
   dispatcher branch calling one is guarded on the assignment** (`(and (not (null
   %<generic>--m<i>)) <specializer-test>)`, todo 445; `ClosRegistry`

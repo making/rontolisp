@@ -24422,10 +24422,12 @@ cases:
         (dco-struct-like dco-point x y))
       (defmacro dco-slot-count (class) (length (%obj-ref (eval class) 3)))
       (defvar *dco-plain* (defclass dco-plain () ()))
+      (defvar *dco-condition* (define-condition dco-error (error) ((why :initarg :why :reader dco-why))))
       (print (list (eq dco-point (find-class 'dco-point)) (eq *dco-plain* (find-class 'dco-plain))
-                   (dco-slot-count dco-point) (slot-value (make-instance dco-point) 'y)))
+                   (dco-slot-count dco-point) (slot-value (make-instance dco-point) 'y)
+                   *dco-condition* (handler-case (error *dco-condition* :why 3) (dco-error (e) (dco-why e)))))
     expected: |
-      (T T 2 0)
+      (T T 2 0 DCO-ERROR 3)
   - name: find-class-metaobject-carries-effective-slot-definitions
     source: |
       (defclass fc-box () ((w :initarg :w :accessor fc-w :type integer) (h :initform 2)))
