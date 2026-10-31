@@ -29,8 +29,8 @@ import java.util.List;
  * on its prototype, which prints through contextl's {@code print-object} method
  * ({@code .kb/clos.md}, "Classes made at run time"). The last line prints
  * {@code contextl-user} symbols inside a form that activates a layer, which the
- * interpreter used to spell qualified ({@code .kb/pretty-printer.md}, "Interpreter
- * trap").
+ * interpreter used to spell qualified ({@code .kb/pretty-printer.md}, "The package
+ * qualifier follows `*package*` accessibility").
  */
 class ContextlE2eTest extends AsdfLibraryE2eSupport {
 

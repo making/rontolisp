@@ -122,7 +122,8 @@ class SourceLanguageSeamTest {
 			Map.entry("am.ik.rontolisp.macro.DynamicClasses", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.macro.FormatRenderer", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.macro.LispMacroExpander", SHIPPED_SOURCE),
-			Map.entry("am.ik.rontolisp.macro.MopProtocol", SHIPPED_SOURCE));
+			Map.entry("am.ik.rontolisp.macro.MopProtocol", SHIPPED_SOURCE),
+			Map.entry("am.ik.rontolisp.macro.SlotProtocol", SHIPPED_SOURCE));
 
 	@Test
 	void userSourceReachesFormsOnlyThroughTheSeam() throws IOException {
