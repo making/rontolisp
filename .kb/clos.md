@@ -1068,8 +1068,9 @@ chunk-loop wrapper).
   materialized method table; no consumer measured so far is blocked on it alone.
 - **contextl, 2026-10-31**: `(ql:quickload :contextl)` LOADS on all four backends, its layer GC
   included, and `deflayer`, `define-layered-function`/`-method` (`:in` a layer, qualifiers,
-  `call-next-method`), `with-active-layers`/`with-inactive-layers`, `active-layers` and
-  `layer-active-p` answer what SBCL does. Cleared that day: `(eql (find-class 't))`, a COMPUTED
+  `call-next-method`), `with-active-layers`/`with-inactive-layers`, `ensure-active-layer`,
+  `active-layers` and `layer-active-p` answer what SBCL does -- `ContextlE2eTest` (vendored
+  contextl + lw-compat, in `contextl-user`). Cleared that day: `(eql (find-class 't))`, a COMPUTED
   eql specializer, any class option under a metaclass, closer-mop's `subclassp`,
   `class-prototype`, `required-args`, an `:after` method dropping the primary's secondary values
   and the interpreter's `#'generic` doing the same (both lost `adjoin-layer-using-class`'s
