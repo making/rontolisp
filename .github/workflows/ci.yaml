@@ -231,7 +231,7 @@ jobs:
     # cross-target ones the other Linux architecture's output, under qemu user mode.
     - name: Install qemu
       if: runner.os == 'Linux'
-      run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+      run: sudo apt-get update && sudo apt-get install -y qemu-user
     # -Drontolisp.native.required=true: a binary without the host's pair (or, on
     # Linux, with a stub that links glibc dynamically) fails here instead of shipping
     # a --native that says "not available".
