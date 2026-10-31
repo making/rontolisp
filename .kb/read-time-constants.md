@@ -61,11 +61,22 @@ list) is one value everywhere.
 
 ## `constantp`
 
-`(constantp 'pi)` is `T` (SBCL agrees): the `macro/expandConstantp` expansion
-folds a literal quote of a constant name, and the first-class function in
-`eval/Environment` (the `funcall`/`mapcar` path) tests the name too. A computed
-designator keeps the runtime test -- a false negative there only narrows a
-macro's view, per that expansion's contract.
+`(constantp 'pi)` and `(constantp '+k+)` after a user `(defconstant +k+ ...)` are `T`
+(SBCL agrees), a computed designator too -- alexandria's `%reevaluate-constant` probes the
+name it redefines, so a second `define-constant` of one name (cl-colors2, under
+cl-ansi-text) signalled while user constants were unknown.
+
+- Compile paths: both compilers collect every `defconstant` name scope-blind
+  (`SpecialVarCollector.collectConstants`, after `injectMvSpillGlobal`, so the seeded
+  standard names count) into `ClosRegistry.constantNames`. `macro/expandConstantp` folds a
+  literal quote of one (or of a `ClConstants` spelling) to `T` and adds
+  `(and (member x '(names...)) t)` to the runtime test; a program with no `defconstant`
+  expands as before.
+- Interpreter: no expansion (a per-site memo would freeze the set before a later
+  `defconstant`); the built-in function in `eval/Environment` answers from
+  `Environment.markConstant`, set by `evalDefconstant`.
+- Difference: a compiled program knows a `defconstant` that has not run yet; the interpreter
+  only the ones evaluated so far.
 
 ## Pins
 
@@ -74,5 +85,6 @@ macro's view, per that expansion's contract.
 - `codegen/jvm/JvmLispCompilerTest#compileAndRunQuotedConstantsStaySymbolsWhileCodePositionAnswersTheValue`
 - `codegen/wasm/WasmLispCompilerIntegrationTest#quotedConstantsStaySymbolsWhileCodePositionAnswersTheValue`
 - `codegen/wasm/NoGcWasmCompilerTest#standardConstantsInCodePositionAnswerTheirLiterals`
+- `ci-spec.yaml` `case-predicates-and-constantp` (user `defconstant` names).
 - `ci-spec.yaml` `quoted-constants-read-as-symbols` (four-backend agreement; the
   fixnum assertions compare relatively because the value differs).

@@ -9550,8 +9550,9 @@ public final class LispEvaluator {
 			// successive replaces (cl-who's string-list-to-string) mutates in place.
 			// The compilers still expand it to a fresh concatenate (no runtime string
 			// mutation there; cl-who resolves it at macro-expansion time).
-			case LispNames.CONSTANTP:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandConstantp);
+			// CONSTANTP is not expanded here: the built-in function (Environment) reads
+			// the
+			// constants defined so far, which a memoized expansion would freeze.
 			case LispNames.SIMPLE_STRING_P:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandSimpleStringP);
 			// make-broadcast-stream goes through the SAME expansion the compile paths
@@ -11967,6 +11968,7 @@ public final class LispEvaluator {
 	private LispVal evalDefconstant(LispCons cons, Environment env) {
 		LispVal name = evalDefvar(cons, env, true);
 		if (name instanceof LispSymbol sym && this.globalEnv.isBound(sym.name())) {
+			this.globalEnv.markConstant(sym.name());
 			LispMacroExpander.registerConstantValue(sym.name(), this.globalEnv.lookup(sym.name()), this.closRegistry);
 		}
 		return name;

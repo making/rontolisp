@@ -441,6 +441,36 @@ public final class SpecialVarCollector {
 		}
 	}
 
+	/**
+	 * The name of every {@code defconstant} in the program, scope-blind, quoted data
+	 * skipped: what {@code constantp} answers t for at run time on the compile paths.
+	 * @param program the program's forms, the injected standard constants included
+	 * @return the names, in first-seen order
+	 */
+	public static LinkedHashSet<String> collectConstants(Collection<LispVal> program) {
+		LinkedHashSet<String> out = new LinkedHashSet<>();
+		for (LispVal form : program) {
+			collectConstants(form, out);
+		}
+		return out;
+	}
+
+	private static void collectConstants(LispVal form, Set<String> out) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				if (LispNames.isQuote(head.name())) {
+					return;
+				}
+				if (LispNames.DEFCONSTANT.equals(head.name()) && cons.cdr() instanceof LispCons nameCell
+						&& nameCell.car() instanceof LispSymbol name) {
+					out.add(name.name());
+				}
+			}
+			collectConstants(cons.car(), out);
+			form = cons.cdr();
+		}
+	}
+
 	/** Whether the form contains a {@code progv} head anywhere outside quoted data. */
 	private static boolean usesProgv(LispVal form) {
 		while (form instanceof LispCons cons) {
