@@ -14,7 +14,7 @@ Every one of those works, on all four backends, and the reference page
 | --- | --- | --- |
 | destructuring | supported (nested + dotted patterns) | ci-spec `loop-macro-extended-clauses`, `loop-variable-after-termination` |
 | parallel `and` | supported (the Fibonacci shape) | ci-spec `loop-macro-extended-clauses` |
-| `being` | supported for hash-keys/hash-values; the package form is a documented lite no-op | ci-spec `loop-being-symbols-lite`, `LispEvaluatorTest` |
+| `being` | supported for hash-keys/hash-values and the package form (walks the package since 2026-10-31) | ci-spec `loop-being-symbols`, `package-walks-list-the-car-cdr-compositions` |
 | the anaphoric `it` | supported | ci-spec `loop-macro-extended-clauses` |
 | `named` | supported (wraps the expansion in `(block name ...)`) | `.kb/do-return-block.md` |
 | `loop-finish` | supported | ci-spec `loop-macro-extended-clauses` |

@@ -2194,7 +2194,8 @@ public final class LispPreludeLibrary {
 		// member table carries the status; a baked row answers :external from its
 		// external universe, :internal for a symbol homed in the package and
 		// :inherited otherwise (cl-user's standard names are inherited, though the
-		// spelling homes a bare name in cl-user). The interpreter binds a native over
+		// spelling homes a bare name in cl-user; the test reads find-symbol's status,
+		// since its symbol is NIL for cl's NIL). The interpreter binds a native over
 		// its live registry instead.
 		SOURCES.put(LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL,
 				"""
@@ -2209,7 +2210,7 @@ public final class LispPreludeLibrary {
 						        (dolist (%pie-s (%do-symbols-list %pie-k nil "WITH-PACKAGE-ITERATOR"))
 						          (let ((%pie-st (cond (%pie-e (%runtime-member-status %pie-e (symbol-name %pie-s)))
 						                               ((member %pie-s %pie-ext) :external)
-						                               ((and (string= (string %pie-k) "CL-USER") (find-symbol (symbol-name %pie-s) :cl))
+						                               ((and (string= (string %pie-k) "CL-USER") (nth-value 1 (find-symbol (symbol-name %pie-s) :cl)))
 						                                :inherited)
 						                               ((string= (string (%symbol-home %pie-s)) (string %pie-k)) :internal)
 						                               (t :inherited))))

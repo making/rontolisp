@@ -6249,13 +6249,6 @@ cases:
       (0 1 2)
       (0 1 2)
       (11 12 13)
-  - name: loop-being-symbols-lite
-    source: |
-      (print (loop for s being the external-symbols of :cl collect s))
-      (print (loop for s being each present-symbols in :cl-user count s))
-    expected: |
-      NIL
-      0
   # A loop variable is ONE binding stepped in place, so after the loop it still
   # holds the value from the final iteration -- the assignment that reads the
   # exhausted cursor must never happen. Every expectation below was measured on
@@ -28369,13 +28362,23 @@ cases:
       ((1 2 3) (2 3) (3))
       (#\h #\e #\l #\l #\o)
       2
+  # What a package holds depends on what the program read and compiled before (on SBCL
+  # the reader interns every symbol into cl-user), so the walk pins properties, not a list:
+  # every external of cl is :external there, and every present symbol of cl-user is
+  # :internal/:external in it -- the compiled walk once answered cl's NIL as present.
   - name: loop-being-symbols
     source: |
-      (print (loop for s being the external-symbols of :cl collect s))
-      (print (loop for s being each present-symbols in :cl-user count s))
+      (let ((ext (loop for s being the external-symbols of :cl collect s))
+            (present (loop for s being each present-symbols in :cl-user collect s)))
+        (print (list (and (member 'car ext) t) (and (member 'loop ext) t)
+                     (every (lambda (s) (eq (nth-value 1 (find-symbol (symbol-name s) :cl)) :external)) ext)))
+        (print (every (lambda (s) (member (nth-value 1 (find-symbol (symbol-name s) :cl-user)) '(:internal :external)))
+                      present))
+        (print (= (loop for s being each present-symbols in :cl-user count s) (length present))))
     expected: |
-      NIL
-      0
+      (T T T)
+      T
+      T
   - name: loop-accumulators
     source: |
       (print (loop for i from 1 to 5 sum i))
@@ -30002,7 +30005,6 @@ cases:
       (print (loop repeat 3 collect 'x))
       (print (loop for i from 1 do (when (> i 3) (return i))))
       (print (loop for c across "hello" collect c))
-      (print (loop for s being the external-symbols of :cl collect s))
     expected: |
       (1 2 3 4 5)
       ((0 A) (1 B) (2 C))
@@ -30011,7 +30013,6 @@ cases:
       (X X X)
       4
       (#\h #\e #\l #\l #\o)
-      NIL
   - name: preview1-time-from-host-clock
     source: |
       (print (> (get-universal-time) 3786825600))
