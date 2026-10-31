@@ -255,13 +255,17 @@ public final class PackageRegistry {
 			"CONCATENATED-STREAM", "READTABLE",
 			// Bit-vector types (no longer empty: a bit vector is the
 			// general array stamped with the remembered element type bit, with its
-			// lattice edges in LispMacroExpander.SUBTYPEP_PARENTS). The remaining four
-			// are empty types (nothing satisfies them, by the same must-not-become-
-			// pkg::name rule): a defgeneric's dispatcher is a plain function, a
-			// defstruct's class metaobject is a standard-class and built-in types have
-			// no metaobjects -- trivia level2 dispatches typecase/etypecase over them.
-			"BIT-VECTOR", "SIMPLE-BIT-VECTOR", "GENERIC-FUNCTION", "STANDARD-GENERIC-FUNCTION", "STRUCTURE-CLASS",
-			"BUILT-IN-CLASS",
+			// lattice edges in LispMacroExpander.SUBTYPEP_PARENTS). The two metaclass
+			// names are empty types (nothing satisfies them, by the same must-not-become-
+			// pkg::name rule): a defstruct's class metaobject is a standard-class and
+			// built-in types have no metaobjects -- trivia level2 dispatches
+			// typecase/etypecase over them.
+			"BIT-VECTOR", "SIMPLE-BIT-VECTOR", "STRUCTURE-CLASS", "BUILT-IN-CLASS",
+			// The generic-function and method metaobject classes
+			// (ClosRegistry.METHOD_METAOBJECT_FAMILIES): seeded where a program names
+			// one, instantiated only through a user subclass -- a defgeneric's
+			// dispatcher is a plain function and a method a registry row.
+			"GENERIC-FUNCTION", "STANDARD-GENERIC-FUNCTION", "METHOD", "STANDARD-METHOD", "METHOD-COMBINATION",
 			// CL symbols used as NAMES by libraries: trivia's class/structure/type
 			// patterns are (defpattern class ...) &c on the CL symbols, so the
 			// defpattern site (inside trivia's package) and a user's pattern site must
@@ -420,14 +424,14 @@ public final class PackageRegistry {
 			"FLOATING-POINT-INVALID-OPERATION", "FLOATING-POINT-OVERFLOW", "FLOATING-POINT-UNDERFLOW", "FORMATTER",
 			"FTYPE", "FUNCTION-KEYWORDS", "HASH-TABLE", "IGNORABLE", "IGNORE", "INLINE", "INSPECT",
 			"INVALID-METHOD-ERROR", "INVOKE-RESTART-INTERACTIVELY", "KEYWORD", "LOOP-FINISH", "MAKE-INSTANCES-OBSOLETE",
-			"MAKE-METHOD", "METHOD", "METHOD-COMBINATION", "METHOD-COMBINATION-ERROR", "METHOD-QUALIFIERS",
-			"NEXT-METHOD-P", "NIL", "NO-APPLICABLE-METHOD", "NO-NEXT-METHOD", "NOTINLINE", "OPTIMIZE",
-			"PPRINT-EXIT-IF-LIST-EXHAUSTED", "PPRINT-FILL", "PPRINT-LINEAR", "PPRINT-POP", "PPRINT-TABULAR",
-			"PRINT-NOT-READABLE", "PRINT-NOT-READABLE-OBJECT", "RANDOM-STATE", "RANDOM-STATE-P",
-			"READ-PRESERVING-WHITESPACE", "RESTART", "ROOM", "SAFETY", "SIMPLE-BASE-STRING", "SPACE", "SPECIAL",
-			"SPEED", "STANDARD", "STANDARD-METHOD", "STEP", "STORAGE-CONDITION", "STRUCTURE-OBJECT", "SYMBOL", "T",
-			"TRACE", "UNTRACE", "UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "UPDATE-INSTANCE-FOR-REDEFINED-CLASS",
-			"UPGRADED-ARRAY-ELEMENT-TYPE", "VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
+			"MAKE-METHOD", "METHOD-COMBINATION-ERROR", "METHOD-QUALIFIERS", "NEXT-METHOD-P", "NIL",
+			"NO-APPLICABLE-METHOD", "NO-NEXT-METHOD", "NOTINLINE", "OPTIMIZE", "PPRINT-EXIT-IF-LIST-EXHAUSTED",
+			"PPRINT-FILL", "PPRINT-LINEAR", "PPRINT-POP", "PPRINT-TABULAR", "PRINT-NOT-READABLE",
+			"PRINT-NOT-READABLE-OBJECT", "RANDOM-STATE", "RANDOM-STATE-P", "READ-PRESERVING-WHITESPACE", "RESTART",
+			"ROOM", "SAFETY", "SIMPLE-BASE-STRING", "SPACE", "SPECIAL", "SPEED", "STANDARD", "STEP",
+			"STORAGE-CONDITION", "STRUCTURE-OBJECT", "SYMBOL", "T", "TRACE", "UNTRACE",
+			"UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "UPDATE-INSTANCE-FOR-REDEFINED-CLASS", "UPGRADED-ARRAY-ELEMENT-TYPE",
+			"VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
 
 	/**
 	 * The 28 car/cdr compositions ({@code caar} .. {@code cddddr}). Resolution recognizes
@@ -751,6 +755,10 @@ public final class PackageRegistry {
 			// class its instances descend from, and the installer.
 			ClosRegistry.FUNCALLABLE_STANDARD_CLASS, ClosRegistry.FUNCALLABLE_STANDARD_OBJECT,
 			LispNames.SET_FUNCALLABLE_INSTANCE_FUNCTION,
+			// The method metaobject classes closer-mop adds to cl's (specializers in
+			// moptilities; ClosRegistry.METHOD_METAOBJECT_FAMILIES).
+			ClosRegistry.STANDARD_ACCESSOR_METHOD, ClosRegistry.STANDARD_READER_METHOD,
+			ClosRegistry.STANDARD_WRITER_METHOD, ClosRegistry.EQL_SPECIALIZER,
 			// Exported, not implemented (methods are not runtime objects here): rutils
 			// names it in an add-method expansion that loading never runs.
 			"INTERN-EQL-SPECIALIZER");

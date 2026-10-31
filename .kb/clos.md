@@ -366,7 +366,12 @@ Three congruence rules:
   `&allow-other-keys` to every `&key` method lambda list instead of taking CL's union --
   AHEAD of an `&aux` section, which it would otherwise misplace (access's
   `rem-arg-list-key-value`; ci-spec `lambda-list-extensions`).
-- **A defclass constructor tolerates extra initargs** (`&allow-other-keys` on `%make-<name>`).
+- **A defclass constructor tolerates extra initargs** (`&allow-other-keys` on `%make-<name>`),
+  a class with NO slots included (`(&key &allow-other-keys)`, `keywordConstructorShape`). Until
+  2026-10-31 that one took no arguments, so an initarg an `initialize-instance` method declares
+  (valid, CLHS 7.1.2) failed `Function expects 0 arguments, got 2` on the interpreter and JVM --
+  and so did every method initarg on a user subclass of the slot-less `standard-method`. ci-spec
+  `defclass-default-initargs`.
 - **A bare `(call-next-method)` forwards the WHOLE original argument list**:
   `rewriteNextMethod` emits `apply` over the method's `&rest` variable, injecting one
   (`%method-args`) when the method declares a `&key` tail without a `&rest`. **`&optional`
@@ -711,7 +716,7 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   `types-and-classes`): adding the names fixes 40 `arrays` cases and one
   `types-and-classes` case, **+41 tests**, with `objects` unchanged. Only
   8 `there is no class named` lines survive, for `broadcast-stream` (7) and
-  `standard-generic-function` (1). `.todo/744` priced the row at **156** by counting every
+  `standard-generic-function` (1; a class since 2026-10-31, not remeasured). `.todo/744` priced the row at **156** by counting every
   TEST-level `ERROR` line naming `array`/`vector`/`bit-vector`/..., which over-counts: the
   test behind such a line often fails for a second reason once the class resolves. 14
   `BIT-VECTOR.*`/`SIMPLE-BIT-VECTOR.*` tests turned ERROR into FAIL for exactly that reason
@@ -731,6 +736,35 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
 - `class` is a SEEDED slot-less class (`ClosRegistry.CLASS_NAME`), superclass of
   `standard-class`, so `(typep x 'class)` is the metaobject predicate through the ordinary
   ancestor machinery. Never instantiated.
+- **The method metaobject classes** (2026-10-31, `ClosRegistry.METHOD_METAOBJECT_FAMILIES`):
+  `generic-function` > `standard-generic-function`; `method` > `standard-method` > closer-mop's
+  `standard-accessor-method` > `standard-reader-method`/`standard-writer-method`;
+  `method-combination`; closer-mop's `eql-specializer`. Slot-less single-parent roots (AMOP's
+  `metaobject`/`specializer` and `generic-function`'s `funcallable-standard-object` parent left
+  out); the CL names registered bare (moved from `PackageRegistry.CL_EXPORTED_ONLY` into
+  `CL_TYPES`), the closer-mop ones (its externals) under the EXTERNAL spelling
+  `CLOSER-MOP:NAME` the reader gives them, so `class-name` is `eq` to the symbol read --
+  `seedClass` normalizes its parent lookup for that. The funcallable pair and
+  `java:java-exception` are registered `CLOSER-MOP::`/`JAVA::`, and their `class-name` is NOT
+  `eq` to the read symbol (`(eq (class-name (find-class 'closer-mop:funcallable-standard-class))
+  'closer-mop:funcallable-standard-class)` is nil on all four backends, 2026-10-31). Each FAMILY seeds
+  whole where a program names a member: `ensureMopClassesSeededFor` (specializer, type test,
+  superclass, the interpreter's `find-class`) and, on the compile paths, a pre-walk symbol scan
+  (`seedMethodMetaobjectClassesNamedIn`) so a `find-class` of one is in the tables built after
+  the walk -- a keyword never counts, and a bare `method` only QUOTED (it is a common variable
+  name; its type/specializer/superclass positions seed during the walk anyway). The shared
+  `EMPTY_CLOS_REGISTRY` is never seeded: `makeTypeTest` answers the empty test there.
+  **No system-made instance exists**: a generic's value stays a plain function (`class-of` is
+  `function`, `(typep #'g 'generic-function)` nil, trivia's `(etypecase fn (generic-function
+  ...) (function ...))` still takes the function arm) and a method is a registry row, so such
+  a specializer or type matches only an instance of a USER subclass (contextl's
+  `(defclass layered-method (standard-method) ())`). `make-instance` of a seeded one is a
+  run-time error after the initargs evaluate (`expandMakeInstance`; mito's relational reader
+  and rutils build a `standard-method` for `add-method`, which is out of scope anyway), so a
+  library carrying the call compiles. Unblocked moptilities' load (`(:method ((method
+  standard-method)) ...)`); `ArgumentShapes` stopped deciding the two generic-function names.
+  Residual: `(subtypep 'standard-generic-function 'function)` is `nil t` (SBCL `t t`), the
+  funcallable classes' residual below. ci-spec: `clos-slot-options-and-metaobject-types`.
 - **Two traps from LAZY seeding**: (a) the preamble's tag list is
   `descendantTags(STANDARD-CLASS)`, and an EMPTY one means "no metaobject can exist" on the
   compile paths but NOT in the interpreter, where the `(find-class 'c)` in the test's own
@@ -839,7 +873,12 @@ value is the option TAIL list (AMOP canonicalization); unknown SLOT options ride
   on the compile paths. The runtime driver re-runs the `:around`, whose contains-checks make the
   injection idempotent.
 - **A driver-built class with no direct superclasses defaults to `(standard-object)`**, per AMOP;
-  `standard-object` resolves through find-class ONLY (`FIND_CLASS_ONLY_CLASS_NAMES`).
+  `standard-object` resolves through find-class ONLY (`FIND_CLASS_ONLY_CLASS_NAMES`). A
+  `defclass` may WRITE it as a superclass (contextl's `(defclass special-object
+  (standard-object) ())`): `expandDefclass` drops it -- the root every class already has, so
+  layout, ancestry and CPL are the empty list's, on every path, the driver call included -- and
+  refuses it AHEAD of another superclass (SBCL's precedence error) or twice. Residual:
+  `class-direct-superclasses` of a plain class answers nil, never `(standard-object)`.
   `STANDARD-OBJECT`/`STANDARD-CLASS` are in `PackageRegistry.CL_TYPES` — the compiled
   `%find-class` matches SPELLINGS, so a package-local `MITO...::STANDARD-CLASS` otherwise missed
   the seeded entry.
@@ -946,6 +985,37 @@ chunk-loop wrapper).
 - **Known static-model seam**: on the compile paths `find-class`/`class-of` see the WHOLE
   program's classes regardless of form order, while the interpreter only knows classes already
   defined at call time. `change-class` is the ONE runtime exception and is not MOP.
+- **Generic functions and methods are not first-class metaobjects** (only their CLASSES exist,
+  "MOP boundary"): no `find-method`, `generic-function-methods`, `method-generic-function`,
+  `generic-function-name`, `compute-applicable-methods`. Consumers measured 2026-10-31 in the
+  local Quicklisp cache: moptilities' method side (`method-name`, `get-method`, `map-methods`
+  -- nothing loaded calls them), access's `(etypecase fn (standard-generic-function
+  (compute-applicable-methods ...)) (function ...))` (a generic takes the function arm and is
+  called unconditionally), trivia's `unary-function-p` (its test-call arm instead of the lambda
+  list), cl-store, trivial-arguments, documentation-utils, clunit2, in-nomine, rutils
+  (`find-method` + `add-method`/`remove-method`). The faithful shape is a generic's value as a
+  funcallable instance of `standard-generic-function` (gated, like the funcallable arms) plus a
+  materialized method table; no consumer measured so far is blocked on it alone.
+- **contextl, measured 2026-10-31** (interpreter, after the method classes and the
+  `standard-object` superclass): the GENERIC-FUNCTION protocol is not what stops it --
+  `:generic-function-class layered-function` is accepted and ignored and a layered function
+  dispatches statically on the layer prototype (`(greet 1)` with a base method answers). In
+  load order it next needs `(eql (find-class 't))` as a specializer (the reader's `t` is no
+  symbol), the layer GC's computed `(eql (lf-definer-name '...))` specializer plus
+  `add-method`/`remove-method` `:after` methods (contextl's own `:cx-disable-layer-gc` removes
+  them), a NON-keyword class option under a metaclass (`(original-name . name)`, initarg
+  `original-name`), and closer-mop's `subclassp`, `class-prototype`, `required-args`. With
+  those stood in for, it loads; then `with-active-layers` dies: `adjoin-layer-using-class`
+  makes an ANONYMOUS `standard-layer-class` over two known classes at RUN time and dispatches on
+  its `class-prototype` -- runtime class construction, outside this model.
+- **lisp-binary, re-probed 2026-10-31**: moptilities loads on all four backends now (its
+  `slot-names` of a SYMBOL is moptilities' own `nyi` off sbcl/ccl/lispworks/allegro). Next, in
+  order: `trivial-gray-streams:fundamental-binary-stream` (and `-character-stream`) are not
+  classes here (`simple-bit-stream.lisp:8`); `asdf:*asdf-version*` is unbound, so its `.asd`
+  pushes `:lisp-binary-upgrade-asdf` and loads its bundled `asdf.lisp`, which refuses the
+  implementation; `struct-like-defclass` is `(defparameter name (defclass name ...))`, which
+  needs `defclass` to answer the class OBJECT (CLHS; it answers the name here) and, on the
+  compile paths, a non-top-level `defclass`.
 - eql specializers on strings. The `:type` slot option is RECORDED (`SlotSpec.type`, `"t"` when
   omitted; a checking no-op). Compiled runtime `eval`: generated functions are callable;
   defining classes/methods or using `make-instance`/`slot-value` inside `eval` is not

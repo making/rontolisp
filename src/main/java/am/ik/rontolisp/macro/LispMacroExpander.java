@@ -20206,10 +20206,29 @@ public final class LispMacroExpander {
 		// remaining slots after it (see the merge below).
 		List<ClosRegistry.ClassInfo> superInfos = new java.util.ArrayList<>();
 		if (parts.get(2) instanceof LispCons superCons) {
+			boolean standardObjectWritten = false;
 			for (LispVal superVal : superCons.toList()) {
 				if (!(superVal instanceof LispSymbol superSym)) {
 					throw new IllegalArgumentException(
 							LispNames.DEFCLASS + " expects a superclass name: " + cons.print());
+				}
+				if (ClosRegistry.STANDARD_OBJECT_NAME.equals(superSym.name())) {
+					// The root every class has (contextl's (defclass special-object
+					// (standard-object) ())): writing it adds nothing to the layout, the
+					// ancestry or the precedence list, so it is the empty list's class.
+					if (standardObjectWritten) {
+						throw new IllegalArgumentException(
+								LispNames.DEFCLASS + ": duplicate superclass " + superSym.name() + ": " + cons.print());
+					}
+					standardObjectWritten = true;
+					continue;
+				}
+				if (standardObjectWritten) {
+					// standard-object follows every other class in a precedence list, so
+					// a superclass written after it contradicts that superclass's own.
+					throw new IllegalArgumentException(LispNames.DEFCLASS
+							+ ": no consistent class precedence order for " + className + " (STANDARD-OBJECT precedes "
+							+ superSym.name() + ", which precedes STANDARD-OBJECT)");
 				}
 				// A funcallable MOP class registers when a program first names one.
 				closRegistry.ensureMopClassesSeededFor(superSym.name());
@@ -20770,7 +20789,8 @@ public final class LispMacroExpander {
 		List<String> declared = new java.util.ArrayList<>();
 		if (parts.get(2) instanceof LispCons declaredCons && declaredCons.isProperList()) {
 			for (LispVal sup : declaredCons.toList()) {
-				if (sup instanceof LispSymbol sym) {
+				// A written standard-object is the default expandDefclass drops.
+				if (sup instanceof LispSymbol sym && !ClosRegistry.STANDARD_OBJECT_NAME.equals(sym.name())) {
 					declared.add(memberOf(sym.name()));
 				}
 			}
@@ -20791,7 +20811,8 @@ public final class LispMacroExpander {
 				String member = memberOf(nameSym.name());
 				// The defaults expandDefclass supplies by itself: standard-object, and
 				// funcallable-standard-object under a funcallable metaclass.
-				if ("STANDARD-OBJECT".equals(member) || ClosRegistry.FUNCALLABLE_STANDARD_OBJECT.equals(member)) {
+				if (ClosRegistry.STANDARD_OBJECT_NAME.equals(member)
+						|| ClosRegistry.FUNCALLABLE_STANDARD_OBJECT.equals(member)) {
 					continue;
 				}
 				finalSupers.add(new LispSymbol(nameSym.name()));
@@ -21377,6 +21398,19 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(LispNames.MAKE_INSTANCE + ": unknown class " + classSym.name());
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
+		if (closRegistry.isSeededClass(info.name())
+				&& ClosRegistry.isMethodMetaobjectClassName(qn == null ? info.name() : qn.member())) {
+			// A seeded method metaobject class has no constructor: methods and generic
+			// functions are static here (mito's relational reader and rutils build a
+			// standard-method for add-method, which does not exist either). The
+			// refusal is a run-time error, after the initargs evaluate as the call's
+			// arguments would, so a library carrying the call compiles.
+			List<LispVal> refusal = new java.util.ArrayList<>(parts.subList(2, parts.size()));
+			refusal.add(listToCons(
+					List.of(new LispSymbol(LispNames.ERROR), textDatum(LispNames.MAKE_INSTANCE + ": cannot make a "
+							+ info.name() + ": generic functions and methods are not run-time objects here"))));
+			return makeProgn(refusal);
+		}
 		String ctor = qn == null ? affixFor("%make-", info.name()) + info.name()
 				: qn.pkg() + "::" + affixFor("%make-", qn.member()) + qn.member();
 		// CL has ONE initialize-instance generic; the registry keys generics by their
@@ -21509,14 +21543,19 @@ public final class LispMacroExpander {
 	 * one {@code &key} parameter per slot under its first initarg, defaulting to its
 	 * initform, then {@code &allow-other-keys}. A slot naming several initargs takes the
 	 * leftmost supplied one (CLHS 7.1.4) from a scan of the {@code &rest} list -- added
-	 * only then -- and falls back to its parameter, which then holds the initform.
+	 * only then -- and falls back to its parameter, which then holds the initform. A
+	 * class with no slots still takes initargs ({@code &key &allow-other-keys}): one its
+	 * {@code initialize-instance} methods declare is valid (CLHS 7.1.2), and
+	 * make-instance hands the constructor every initarg.
 	 * @param slots the class's effective slots
-	 * @param lambdaList receives the lambda list (left empty for no slots)
+	 * @param lambdaList receives the lambda list
 	 * @param slotValues receives one value form per slot
 	 */
 	private static void keywordConstructorShape(List<ClosRegistry.SlotSpec> slots, List<LispVal> lambdaList,
 			List<LispVal> slotValues) {
 		if (slots.isEmpty()) {
+			lambdaList.add(new LispSymbol(LispNames.LAMBDA_KEY));
+			lambdaList.add(new LispSymbol(LispNames.LAMBDA_ALLOW_OTHER_KEYS));
 			return;
 		}
 		LispSymbol rest = new LispSymbol(CTOR_INITARGS_VAR);
@@ -27953,6 +27992,11 @@ public final class LispMacroExpander {
 		// funcallable-standard-class :metaclass, a superclass, a type test).
 		if (program.stream().anyMatch(f -> usesAnySymbol(f, FUNCALLABLE_CLASS_SPELLINGS))) {
 			closRegistry.ensureFuncallableClassesSeeded();
+		}
+		// And the method metaobject classes, family by family, so a find-class of one
+		// finds it in the class tables built after the walk.
+		for (LispVal form : program) {
+			seedMethodMetaobjectClassesNamedIn(form, closRegistry);
 		}
 		// A find-class or class-of reference compiles to the generated metaobject
 		// runtime injected below; the MOP base classes must register BEFORE the walk so
@@ -37388,13 +37432,6 @@ public final class LispMacroExpander {
 				// simple-vector above.
 				return makeArrayTypeTest(value, new LispSymbol(LispNames.BIT), listToCons(List.of(new LispSymbol("*"))),
 						closRegistry, "SIMPLE-BIT-VECTOR".equals(name));
-			case "GENERIC-FUNCTION", "STANDARD-GENERIC-FUNCTION":
-				// A defgeneric's dispatcher is a plain function value on every backend
-				// -- no marker distinguishes it, and runtime typep answers NIL the same
-				// way. The empty test routes an etypecase's generic-function clause to
-				// its portable function fallback (trivia level2's unary-function-p
-				// test-call path).
-				return LispNil.INSTANCE;
 			case "STRUCTURE-CLASS", "BUILT-IN-CLASS":
 				// A defstruct's class metaobject IS a standard-class here (the one
 				// instance model, .kb/instance-syntax.md) and built-in types have no
@@ -37474,10 +37511,19 @@ public final class LispMacroExpander {
 		}
 		String pred = atomicTypePredicate(name);
 		if (pred == null) {
-			// A metaobject type specifier (standard-class, class) is itself a MOP
-			// seeding trigger, exactly like the interpreter's typep/subtypep: a
-			// typecase over (find-class 'c) expands BEFORE the find-class call that
-			// produces the very metaobject the clause is about had a chance to seed.
+			if (closRegistry == EMPTY_CLOS_REGISTRY && ClosRegistry.isMethodMetaobjectClassName(name)) {
+				// Without a registry no class can subclass one, so nothing is an
+				// instance: the empty test, and the shared registry stays unseeded.
+				return LispNil.INSTANCE;
+			}
+			// A metaobject type specifier (standard-class, class, standard-method) is
+			// itself a MOP seeding trigger, exactly like the interpreter's
+			// typep/subtypep: a typecase over (find-class 'c) expands BEFORE the
+			// find-class call that produces the very metaobject the clause is about had
+			// a chance to seed. A defgeneric's dispatcher is a plain function value on
+			// every backend, so a generic-function clause selects only an instance of
+			// a user subclass, and trivia level2's (etypecase fn (generic-function ...)
+			// (function ...)) still routes a generic to its portable function arm.
 			closRegistry.ensureMopClassesSeededFor(sym.name());
 			// A defclass/define-condition class (incl. the built-in condition
 			// hierarchy): instance-of by tag membership, like a class specializer. Use
@@ -49586,6 +49632,45 @@ public final class LispMacroExpander {
 				PackageRegistry.spellings(PackageRegistry.qualifyInternal(LispNames.CLOSER_MOP_PKG, member)).stream(),
 				java.util.stream.Stream.of(member)))
 		.collect(java.util.stream.Collectors.toUnmodifiableSet());
+
+	/**
+	 * Seeds the method-metaobject family of every member name the form mentions
+	 * ({@link ClosRegistry#ensureMethodMetaobjectClassesSeeded}), in any package. A bare
+	 * {@code method} counts only quoted ({@code 'method}, a {@code find-class} or type
+	 * argument): it is also a common variable name, and its specializer, type and
+	 * superclass positions seed by themselves as the walk expands them.
+	 * @param form the form
+	 * @param closRegistry the registry to seed
+	 */
+	private static void seedMethodMetaobjectClassesNamedIn(LispVal form, ClosRegistry closRegistry) {
+		if (form instanceof LispSymbol sym) {
+			// A keyword is an option name (defgeneric's :method-combination), never a
+			// class.
+			String member = memberOf(sym.name());
+			if (!sym.isKeyword() && !METHOD_CLASS_MEMBER.equals(member)) {
+				closRegistry.ensureMethodMetaobjectClassesSeeded(member);
+			}
+			return;
+		}
+		if (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name())
+					&& cons.cdr() instanceof LispCons quoted && quoted.car() instanceof LispSymbol datum
+					&& METHOD_CLASS_MEMBER.equals(memberOf(datum.name()))) {
+				closRegistry.ensureMethodMetaobjectClassesSeeded(METHOD_CLASS_MEMBER);
+			}
+			for (LispVal cur = cons; cur instanceof LispCons cell; cur = cell.cdr()) {
+				seedMethodMetaobjectClassesNamedIn(cell.car(), closRegistry);
+				if (!(cell.cdr() instanceof LispCons)) {
+					seedMethodMetaobjectClassesNamedIn(cell.cdr(), closRegistry);
+				}
+			}
+		}
+	}
+
+	/**
+	 * CL's {@code method} class name, the one method-metaobject name only quoting seeds.
+	 */
+	private static final String METHOD_CLASS_MEMBER = "METHOD";
 
 	/**
 	 * Whether the form mentions any of the symbol names, in one walk.

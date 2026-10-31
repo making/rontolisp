@@ -549,7 +549,8 @@ public final class ClosRegistry {
 	 * @param typeName the type-specifier name as spelled
 	 */
 	public void ensureMopClassesSeededFor(String typeName) {
-		if (this.mopClassesSeeded && this.funcallableClassesSeeded) {
+		if (this.mopClassesSeeded && this.funcallableClassesSeeded
+				&& this.seededMethodMetaobjectFamilies.size() == METHOD_METAOBJECT_FAMILIES.size()) {
 			return;
 		}
 		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(typeName);
@@ -560,6 +561,45 @@ public final class ClosRegistry {
 		else if (MOP_BASE_CLASS_NAMES.contains(member)) {
 			ensureMopClassesSeeded();
 		}
+		else {
+			ensureMethodMetaobjectClassesSeeded(member);
+		}
+	}
+
+	/**
+	 * Seeds the method-metaobject family the member name belongs to (see
+	 * {@link #METHOD_METAOBJECT_FAMILIES}): the whole family, parents first, each class
+	 * slot-less. Idempotent, and as lazy as the funcallable pair: run where a program
+	 * names a member -- a specializer, a type, a superclass, a {@code find-class} name
+	 * ({@link #ensureMopClassesSeededFor}) or, on the compile paths, anywhere in the
+	 * program before the walk -- so no other program's tables change. A class a program
+	 * already registered under one of the names is left alone.
+	 * @param member the upcased, package-stripped class name
+	 * @return whether the name belongs to a family
+	 */
+	public boolean ensureMethodMetaobjectClassesSeeded(String member) {
+		List<MopSeed> family = METHOD_METAOBJECT_FAMILY_BY_MEMBER.get(member);
+		if (family == null) {
+			return false;
+		}
+		if (this.seededMethodMetaobjectFamilies.add(family.get(0).name())) {
+			for (MopSeed seed : family) {
+				if (!this.classes.containsKey(normalize(seed.name()))) {
+					seedClass(seed.name(), seed.parent());
+				}
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Whether the name (a package-stripped member spelling) is a class of a
+	 * method-metaobject family ({@link #METHOD_METAOBJECT_FAMILIES}).
+	 * @param member the upcased member name
+	 * @return true for {@code standard-method}, {@code generic-function}, ...
+	 */
+	public static boolean isMethodMetaobjectClassName(String member) {
+		return METHOD_METAOBJECT_FAMILY_BY_MEMBER.containsKey(member);
 	}
 
 	/**
@@ -914,6 +954,13 @@ public final class ClosRegistry {
 	public static final String STANDARD_CLASS_NAME = "STANDARD-CLASS";
 
 	/**
+	 * CL's root class: every class's last ancestor before {@code t}, never registered
+	 * ({@link #FIND_CLASS_ONLY_CLASS_NAMES}) -- a {@code typep} of it is "any class
+	 * instance", and a {@code defclass} writing it as a superclass adds nothing.
+	 */
+	public static final String STANDARD_OBJECT_NAME = "STANDARD-OBJECT";
+
+	/**
 	 * The seeded root of the metaclass hierarchy -- CL's {@code class}, the superclass of
 	 * {@link #STANDARD_CLASS_NAME} and hence of every user metaclass. Slot-less and never
 	 * instantiated: its only job is to make {@code (typep x 'class)} / {@code (subtypep m
@@ -981,6 +1028,88 @@ public final class ClosRegistry {
 	 */
 	private static final List<String> FUNCALLABLE_CLASS_NAMES = List.of(FUNCALLABLE_STANDARD_OBJECT,
 			FUNCALLABLE_STANDARD_CLASS);
+
+	/** The {@code closer-mop} symbol naming {@link #STANDARD_ACCESSOR_METHOD_NAME}. */
+	public static final String STANDARD_ACCESSOR_METHOD = "STANDARD-ACCESSOR-METHOD";
+
+	/** The {@code closer-mop} symbol naming {@link #STANDARD_READER_METHOD_NAME}. */
+	public static final String STANDARD_READER_METHOD = "STANDARD-READER-METHOD";
+
+	/** The {@code closer-mop} symbol naming {@link #STANDARD_WRITER_METHOD_NAME}. */
+	public static final String STANDARD_WRITER_METHOD = "STANDARD-WRITER-METHOD";
+
+	/** The {@code closer-mop} symbol naming {@link #EQL_SPECIALIZER_NAME}. */
+	public static final String EQL_SPECIALIZER = "EQL-SPECIALIZER";
+
+	/**
+	 * AMOP's {@code standard-accessor-method}, registered under its {@code closer-mop}
+	 * name in the EXTERNAL spelling the reader gives it, so {@code class-name} answers
+	 * the symbol a program reads ({@link #FUNCALLABLE_STANDARD_OBJECT_NAME}'s internal
+	 * spelling does not).
+	 */
+	public static final String STANDARD_ACCESSOR_METHOD_NAME = LispNames.CLOSER_MOP_PKG + ":"
+			+ STANDARD_ACCESSOR_METHOD;
+
+	/** AMOP's {@code standard-reader-method}, under its {@code closer-mop} name. */
+	public static final String STANDARD_READER_METHOD_NAME = LispNames.CLOSER_MOP_PKG + ":" + STANDARD_READER_METHOD;
+
+	/** AMOP's {@code standard-writer-method}, under its {@code closer-mop} name. */
+	public static final String STANDARD_WRITER_METHOD_NAME = LispNames.CLOSER_MOP_PKG + ":" + STANDARD_WRITER_METHOD;
+
+	/** AMOP's {@code eql-specializer}, under its {@code closer-mop} name. */
+	public static final String EQL_SPECIALIZER_NAME = LispNames.CLOSER_MOP_PKG + ":" + EQL_SPECIALIZER;
+
+	/** One class a seeding family registers: its canonical name and its parent. */
+	private record MopSeed(String name, @Nullable String parent) {
+
+		/**
+		 * The package-stripped name. Plain string work: the index below is built during
+		 * this class's static initialization, which must not start PackageRegistry's (it
+		 * reads this class's statics).
+		 */
+		String member() {
+			return this.name.substring(this.name.lastIndexOf(':') + 1);
+		}
+	}
+
+	/**
+	 * The metaobject classes of generic functions and methods (AMOP 5.2), as four
+	 * families, each seeded whole the first time a program names a member
+	 * ({@link #ensureMethodMetaobjectClassesSeeded}): {@code generic-function} /
+	 * {@code standard-generic-function}; {@code method} / {@code standard-method} and
+	 * closer-mop's accessor-method trio; {@code method-combination}; closer-mop's
+	 * {@code eql-specializer}. The CL names are registered bare, the closer-mop ones
+	 * under their external {@code closer-mop:} names. Slot-less, single-parent roots
+	 * (AMOP's abstract {@code metaobject}/{@code specializer} roots and
+	 * {@code generic-function}'s {@code funcallable-standard-object} parent are left
+	 * out), and the system never makes an instance of one: a generic function's value is
+	 * a plain function and a method a registry row plus a defun. They exist so a program
+	 * can SPECIALIZE on them, test them as types, {@code find-class} them and SUBCLASS
+	 * them -- moptilities' {@code (:method ((method standard-method)) ...)}, contextl's
+	 * {@code (defclass layered-method (standard-method) ())} -- and an instance exists
+	 * only as an instance of such a user subclass.
+	 */
+	private static final List<List<MopSeed>> METHOD_METAOBJECT_FAMILIES = List.of(
+			List.of(new MopSeed("GENERIC-FUNCTION", null),
+					new MopSeed("STANDARD-GENERIC-FUNCTION", "GENERIC-FUNCTION")),
+			List.of(new MopSeed("METHOD", null), new MopSeed("STANDARD-METHOD", "METHOD"),
+					new MopSeed(STANDARD_ACCESSOR_METHOD_NAME, "STANDARD-METHOD"),
+					new MopSeed(STANDARD_READER_METHOD_NAME, STANDARD_ACCESSOR_METHOD_NAME),
+					new MopSeed(STANDARD_WRITER_METHOD_NAME, STANDARD_ACCESSOR_METHOD_NAME)),
+			List.of(new MopSeed("METHOD-COMBINATION", null)), List.of(new MopSeed(EQL_SPECIALIZER_NAME, null)));
+
+	/** Each member name of {@link #METHOD_METAOBJECT_FAMILIES} to its family. */
+	private static final Map<String, List<MopSeed>> METHOD_METAOBJECT_FAMILY_BY_MEMBER = methodMetaobjectFamilyIndex();
+
+	private static Map<String, List<MopSeed>> methodMetaobjectFamilyIndex() {
+		Map<String, List<MopSeed>> index = new java.util.HashMap<>();
+		for (List<MopSeed> family : METHOD_METAOBJECT_FAMILIES) {
+			for (MopSeed seed : family) {
+				index.put(seed.member(), family);
+			}
+		}
+		return Map.copyOf(index);
+	}
 
 	/** The classes {@link #ensureMopClassesSeeded()} registers, in seeding order. */
 	private static final List<String> MOP_BASE_CLASS_NAMES = List.of(CLASS_NAME, STANDARD_CLASS_NAME,
@@ -1105,7 +1234,7 @@ public final class ClosRegistry {
 	 */
 	private void seedClass(String name, @Nullable String parent, String... slotNames) {
 		this.seededClassNames.add(name);
-		ClassInfo parentInfo = parent == null ? null : this.classes.get(parent);
+		ClassInfo parentInfo = parent == null ? null : this.classes.get(normalize(parent));
 		java.util.List<SlotSpec> slots = new java.util.ArrayList<>(parentInfo == null ? List.of() : parentInfo.slots());
 		java.util.List<SlotSpec> directSlots = new java.util.ArrayList<>();
 		for (String slotName : slotNames) {
@@ -1118,7 +1247,9 @@ public final class ClosRegistry {
 		if (parentInfo != null) {
 			ancestors.addAll(parentInfo.ancestors());
 		}
-		ancestors.add(name);
+		// The ancestor set holds registry KEYS (descendantTags, a specializer's
+		// applicability), as a defclass's does: an externally spelled name normalizes.
+		ancestors.add(normalize(name));
 		java.util.List<String> cpl = new java.util.ArrayList<>();
 		cpl.add(name);
 		if (parentInfo != null) {
@@ -1690,6 +1821,12 @@ public final class ClosRegistry {
 
 	/** Whether {@link #ensureFuncallableClassesSeeded()} has run. */
 	private boolean funcallableClassesSeeded;
+
+	/**
+	 * The root names of the {@link #METHOD_METAOBJECT_FAMILIES} seeded so far (see
+	 * {@link #ensureMethodMetaobjectClassesSeeded}).
+	 */
+	private final Set<String> seededMethodMetaobjectFamilies = new java.util.HashSet<>();
 
 	/**
 	 * Registers the class a {@link #findClass} lookup missed when a lazily loaded library

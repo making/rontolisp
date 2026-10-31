@@ -153,8 +153,9 @@ public final class ArgumentShapes {
 		// class can never produce, so "no shape satisfies it" is exact rather than
 		// an omission -- the metaclass and bit-vector rows are additionally types
 		// makeTypeTest answers NIL for, i.e. types with no instances here at all.
-		names.addAll(Set.of("PATHNAME", "HASH-TABLE", "STREAM", "STRUCTURE-CLASS", "BUILT-IN-CLASS", "GENERIC-FUNCTION",
-				"STANDARD-GENERIC-FUNCTION", "BIT-VECTOR", "SIMPLE-BIT-VECTOR"));
+		// (generic-function is not one: an instance of a user subclass satisfies it.)
+		names.addAll(Set.of("PATHNAME", "HASH-TABLE", "STREAM", "STRUCTURE-CLASS", "BUILT-IN-CLASS", "BIT-VECTOR",
+				"SIMPLE-BIT-VECTOR"));
 		return Set.copyOf(names);
 	}
 

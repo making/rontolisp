@@ -2,7 +2,7 @@
 
 `(defclass name (superclass*) ((slot slot-option...) ...) class-option...)`
 
-クラスを定義し、名前シンボルを返します。これは **静的な CLOS サブセット**です。すべてのスーパークラスは先行する `defclass` で定義済みでなければならず、インスタンスは [`make-instance`](../macros/make-instance.md) で生成される第一級のオブジェクトです（[`defstruct`](defstruct.md) のインスタンスと同様にリストではなく、`consp` は `nil`、`print` は `#<NAME :SLOT value ...>` と表示します）。スロットオプション:
+クラスを定義し、名前シンボルを返します。これは **静的な CLOS サブセット**です。すべてのスーパークラスは先行する `defclass` で定義済みであるか、`standard-object`（すべてのクラスがもともと持つ根なので、書いても何も変わりません。別のスーパークラスより前に書くと優先順位の矛盾でエラーです）か、[`defmethod`](defmethod.md) に挙げるメソッドのメタオブジェクトクラスでなければならず、インスタンスは [`make-instance`](../macros/make-instance.md) で生成される第一級のオブジェクトです（[`defstruct`](defstruct.md) のインスタンスと同様にリストではなく、`consp` は `nil`、`print` は `#<NAME :SLOT value ...>` と表示します）。スロットオプション:
 
 - `:initarg name` — スロットを埋める initarg。キーワードでもそれ以外のシンボルでもよく、後者はクォートして渡す（`(make-instance 'arc 'rx 1)`）。省略時はスロット名のキーワード。このオプションは繰り返せる: 指定したどの initarg でもスロットが埋まり、複数渡されたときは最も左のものが勝つ
 - `:initform expr` — スロットが与えられなかったときに生成時に評価されるデフォルト値。**省略するとスロットは未束縛のまま**になります（CL と同じ）: [`slot-boundp`](../macros/slot-boundp.md) は `nil` を返し、読み取りは `unbound-slot` をシグナルします

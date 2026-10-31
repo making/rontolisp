@@ -22700,6 +22700,12 @@ class LispEvaluatorTest {
 				(defclass cy-d (cy-b cy-a) ())
 				(defclass cy-e (cy-c cy-d) ())
 				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("class precedence");
+		// standard-object, the root every class has, written before another
+		// superclass contradicts that superclass's own order.
+		assertThatThrownBy(() -> evalMulti("""
+				(defclass cy-f () ())
+				(defclass cy-g (standard-object cy-f) ())
+				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("class precedence");
 	}
 
 	@Test

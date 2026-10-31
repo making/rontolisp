@@ -19164,9 +19164,10 @@ cases:
       ;;    (trivia level2's set-vector-matcher).
       (defun tvs-export-it () (export 'tvs-exported))
       (print (tvs-export-it))
-      ;; 7. The empty types trivia dispatches typecase/etypecase over: a
-      ;;    defgeneric's dispatcher is a plain function, no bit-vector value
-      ;;    exists, and a defstruct's class metaobject is a standard-class.
+      ;; 7. The types trivia dispatches typecase/etypecase over: a defgeneric's
+      ;;    dispatcher is a plain function (not a generic-function instance), a
+      ;;    simple vector is no bit vector, and a defstruct's class metaobject is a
+      ;;    standard-class.
       (defgeneric tvs-gf (tvs-a))
       (defmethod tvs-gf ((tvs-a integer)) tvs-a)
       (defstruct tvs-pt tvs-slot-x)
@@ -21062,11 +21063,35 @@ cases:
       (print (list (clsurf-meta (class-of (make-instance 'clsurf-op))) (clsurf-meta (find-class 'clsurf-r))
                    (clsurf-meta (find-class 'clsurf-s)) (clsurf-meta (class-of 42)) (clsurf-meta 7)
                    (clsurf-meta "s") (clsurf-std (find-class 'clsurf-r)) (clsurf-std (make-instance 'clsurf-r))))
+      ;; standard-object written as a superclass (contextl's special-object), and
+      ;; the method / generic-function metaobject classes as specializers
+      ;; (moptilities' (:method ((method standard-method)) ...)), types, find-class
+      ;; names and superclasses -- an instance exists only as a user subclass's.
+      (defclass clsurf-so (standard-object) ((a :initarg :a :reader clsurf-so-a)))
+      (defclass clsurf-so2 (clsurf-so standard-object) ())
+      (defclass clsurf-mth (standard-method) ())
+      (defclass clsurf-rdr (closer-mop:standard-reader-method) ())
+      (defgeneric clsurf-mo (x)
+        (:method ((m standard-method)) :method)
+        (:method ((m closer-mop:standard-reader-method)) :reader)
+        (:method ((g standard-generic-function)) :gf)
+        (:method ((x standard-object)) :object)
+        (:method (x) :other))
+      (print (list (clsurf-so-a (make-instance 'clsurf-so2 :a 3)) (typep (make-instance 'clsurf-so2) 'clsurf-so)
+                   (clsurf-mo (make-instance 'clsurf-mth :lambda-list '(x) :function #'list))
+                   (clsurf-mo (make-instance 'clsurf-rdr :lambda-list '(x) :function #'list))
+                   (clsurf-mo (make-instance 'clsurf-so)) (clsurf-mo 1)
+                   (typep (make-instance 'clsurf-rdr :lambda-list '(x) :function #'list) 'method)
+                   (multiple-value-list (subtypep 'closer-mop:standard-reader-method 'standard-method))
+                   (multiple-value-list (subtypep 'standard-generic-function 'generic-function))
+                   (class-name (find-class 'standard-generic-function))
+                   (eq (find-class 'method-combination) (find-class 'method-combination))))
     expected: |
       (5 7)
       (BASE-OP LOAD-DEP 9 9 9)
       :META
       (:OP-CLASS (:CLASS CLSURF-R) (:CLASS CLSURF-S) (:CLASS INTEGER) (:INTEGER 7) :OTHER :STANDARD :NO)
+      (3 T :METHOD :READER :OBJECT :OTHER T (T T) (T T) STANDARD-GENERIC-FUNCTION T)
 
   - name: missing-cl-names
     source: |
@@ -29634,6 +29659,11 @@ cases:
       (define-condition di-cond2 (error) ((what :initarg what :initarg :what :reader di-what2)))
       (print (list (handler-case (error 'di-cond2 :what 8) (di-cond2 (c) (di-what2 c)))
                    (let ((ty 'di-cond2)) (handler-case (error ty 'what 9 :what 1) (di-cond2 (c) (di-what2 c))))))
+      ;; An initarg an initialize-instance method declares is valid for a class with
+      ;; no slots too (CLHS 7.1.2).
+      (defclass di-bare () ())
+      (defmethod initialize-instance :after ((b di-bare) &key ((size n) 0)) (print (list :bare n)))
+      (make-instance 'di-bare 'size 3)
     expected: |
       ("localhost" 8080)
       9090
@@ -29648,6 +29678,7 @@ cases:
       (1 2 7 9 4)
       ((:X :EX) (:YY :Y :WHY))
       (8 9)
+      (:BARE 3)
   - name: with-slots-write-through
     source: |
       (defclass ws-pt () ((x :initarg :x) (y :initarg :y)))

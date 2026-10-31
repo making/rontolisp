@@ -42,8 +42,9 @@
 (defun closer-mop:generic-function-lambda-list (fn)
   ;; A defgeneric's dispatcher is a plain function value on every backend; no
   ;; metaobject exists to read a lambda list from. Reachable only through an
-  ;; explicit call -- the generic-function TYPE is empty, so trivia level2's
-  ;; (etypecase fn (generic-function ...)) guard never routes here.
+  ;; explicit call -- only an instance of a user subclass is of type
+  ;; generic-function, so trivia level2's (etypecase fn (generic-function ...))
+  ;; guard never routes a generic here.
   (error "generic-function-lambda-list is not supported: ~S" fn))
 
 (defun closer-mop:slot-definition-name (slot)
