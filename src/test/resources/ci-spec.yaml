@@ -13455,6 +13455,8 @@ cases:
                (handler-bind ((simple-condition (lambda (c) (return-from ci-hb (type-error-datum c)))))
                  (let ((n 'q)) (check-type n string)))))
       (assert (= 1 1))
+      ;; The default report quotes the test form, a tilde in it included.
+      (print (handler-case (assert (string= "~S" "x")) (error (c) (princ-to-string c))))
       (print (typecase 7 ((integer 0 9) :digit) (integer :int)))
       (print (typecase 'b ((member a b c) :abc) (t :other)))
     expected: |
@@ -13467,6 +13469,7 @@ cases:
       T
       (SIMPLE-TYPE-ERROR STRING)
       Q
+      "The assertion (STRING= \"~S\" \"x\") failed."
       :DIGIT
       :ABC
   - name: declared-array-types-single-arm-access
@@ -32489,3 +32492,46 @@ standalone:
       (T T T NIL T NIL T NIL)
       (T NIL T T NIL T :B NIL)
       (RTC-RENAMED RTC-RENAMED-TOO (:AROUND-A :B :A :ROOT))
+  - name: slot-access-protocol-methods
+    source: |
+      ;; The slot-access protocol (AMOP 5.5): with a method on slot-value-using-class
+      ;; or a sibling in the program, slot-value (a computed name too), its setf,
+      ;; slot-boundp, slot-makunbound and the accessors of an instance of a
+      ;; :metaclass class go through the four generics with the class metaobject and
+      ;; the effective slot definition; the system methods use the instance's own
+      ;; storage, an unbound slot reaching slot-unbound. A plain class's instance
+      ;; (sap-plain shares the sap-x reader) keeps the static access. Standalone: the
+      ;; routing joins every slot form of its program. SBCL 2.2.9 (sb-mop) agrees.
+      (asdf:load-system "closer-mop")
+      (defclass sap-meta (standard-class) ())
+      (defvar *sap-log* nil)
+      (defmethod closer-mop:slot-value-using-class ((class sap-meta) object slotd)
+        (push (list :read (closer-mop:slot-definition-name slotd)) *sap-log*)
+        (call-next-method))
+      (defmethod (setf closer-mop:slot-value-using-class) (new (class sap-meta) object slotd)
+        (push (list :write (closer-mop:slot-definition-name slotd) new) *sap-log*)
+        (call-next-method (* 10 new) class object slotd))
+      (defmethod closer-mop:slot-boundp-using-class ((class sap-meta) object slotd)
+        (push :boundp *sap-log*)
+        (call-next-method))
+      (defmethod closer-mop:slot-makunbound-using-class ((class sap-meta) object slotd)
+        (push :makunbound *sap-log*)
+        (call-next-method))
+      (defmethod slot-unbound ((class sap-meta) object name)
+        (list :unbound name))
+      (defclass sap-point ()
+        ((x :accessor sap-x) (y :accessor sap-y))
+        (:metaclass sap-meta))
+      (defclass sap-plain () ((x :initarg :x :accessor sap-x)))
+      (let ((p (make-instance 'sap-point)) (q (make-instance 'sap-plain :x 1)) (name 'y))
+        (setq *sap-log* nil)
+        (setf (sap-x p) 1)
+        (setf (slot-value p name) 2)
+        (print (list (sap-x p) (slot-value p name) (slot-boundp p 'x)))
+        (slot-makunbound p 'x)
+        (print (list (slot-boundp p 'x) (sap-x p) (sap-y p) (sap-x q) (slot-value q 'x)))
+        (print (reverse *sap-log*)))
+    stdout: |
+      (10 20 T)
+      (NIL (:UNBOUND X) 20 1 1)
+      ((:WRITE X 1) (:WRITE Y 2) (:READ X) (:READ Y) :BOUNDP :MAKUNBOUND :BOUNDP (:READ X) (:READ Y))

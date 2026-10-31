@@ -58,6 +58,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.SpecialDeclarations;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.SlotProtocol;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
@@ -2087,6 +2088,9 @@ public final class LispEvaluator {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.SLOT_BOUNDP + " expects 2 arguments, got " + args.size());
 			}
+			if (isSlotProtocolInstance(args.get(0))) {
+				return apply(resolveFunction(LispNames.SLOT_PROTOCOL_BOUNDP), args, this.globalEnv);
+			}
 			// Bound = the type declares the slot AND it does not hold the unbound
 			// marker (a slot written with no :initform, or emptied by
 			// slot-makunbound, holds one).
@@ -2654,6 +2658,9 @@ public final class LispEvaluator {
 			if (args.size() != 2) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.SLOT_MAKUNBOUND + " expects 2 arguments, got " + args.size());
+			}
+			if (isSlotProtocolInstance(args.get(0))) {
+				return apply(resolveFunction(LispNames.SLOT_PROTOCOL_MAKUNBOUND), args, this.globalEnv);
 			}
 			SlotRef slot = instanceSlotRef(args.get(0), args.get(1));
 			if (slot == null) {
@@ -5164,7 +5171,9 @@ public final class LispEvaluator {
 		List<LispVal> parts = cons.toList();
 		boolean literalName = parts.size() == 3 && parts.get(2) instanceof LispCons q
 				&& q.car() instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name());
-		if (parts.size() == 3 && !literalName) {
+		// Under the slot-access protocol a computed name takes the shared expansion too,
+		// which routes an instance of a :metaclass class through slot-value-using-class.
+		if (parts.size() == 3 && !literalName && !this.closRegistry.slotProtocol()) {
 			LispVal instance = eval(parts.get(1), env);
 			LispVal slotName = eval(parts.get(2), env);
 			SlotRef slot = instanceSlotRef(instance, slotName);
@@ -8429,6 +8438,33 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Loads the slot-access protocol runtime ({@code SlotProtocol}) once, at the first
+	 * method a program defines on one of its generics: from then on the slot forms and
+	 * the accessors of a {@code :metaclass} class route an instance of such a class
+	 * through {@code slot-value-using-class} and its siblings.
+	 */
+	private void ensureSlotProtocolLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.closRegistry.slotProtocol()) {
+				return;
+			}
+			this.closRegistry.enableSlotProtocol();
+			for (LispVal form : SlotProtocol.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * Whether the slot-access protocol routes this value: the runtime is loaded and the
+	 * value is an instance of a class defined with a {@code :metaclass}.
+	 */
+	private boolean isSlotProtocolInstance(LispVal value) {
+		return this.closRegistry.slotProtocol() && value instanceof LispInstance
+				&& isTruthy(apply(resolveFunction(LispNames.SLOT_PROTOCOL_INSTANCE_P), List.of(value), this.globalEnv));
+	}
+
+	/**
 	 * Loads the runtime of classes made at run time once, on the first such class a
 	 * program meets: registers the dynamic-object layout, evaluates
 	 * {@code DynamicClasses}' forms, and regenerates every dispatcher with a class
@@ -10564,6 +10600,9 @@ public final class LispEvaluator {
 		// it merges with any defclass :accessor writer methods on the same place.
 		cons = LispMacroExpander.normalizeSetfMethodForm(cons, this.structAccessors);
 		ensureGrayProtocolDeclared(cons);
+		if (SlotProtocol.isProtocolGenericName(cons.toList().get(1))) {
+			ensureSlotProtocolLoaded();
+		}
 		// Evaluate the generated method-body defun, then redefine the dispatcher so it
 		// sees the new method (calls by name always dispatch through the fresh one; a
 		// #'name captured earlier keeps the previous dispatcher).

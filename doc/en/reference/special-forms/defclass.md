@@ -15,6 +15,8 @@ A subclass inherits every slot of its superclasses and its instances match the s
 
 **Classes made at run time**: `(make-instance 'M :direct-superclasses (list ...))` of such a metaclass `M` makes a class metaobject at run time over defined (or run-time) superclasses, as contextl does for its layer contexts. Its class precedence list follows CLHS 4.3.5, and its instances (from [`allocate-instance`](../functions/allocate-instance.md) or `closer-mop:class-prototype`) answer [`class-of`](../functions/class-of.md) with that class, `typep`/`typecase` and `subtypep` through the precedence list, and every generic function orders their methods by it (standard method combination). Such an instance has no slots of its own.
 
+**The slot-access protocol**: when the program defines a method on `closer-mop:slot-value-using-class`, `(setf closer-mop:slot-value-using-class)`, `closer-mop:slot-boundp-using-class` or `closer-mop:slot-makunbound-using-class`, then [`slot-value`](../macros/slot-value.md) (a computed slot name included), its `setf`, `slot-boundp`, `slot-makunbound` and the accessors of an instance of a class defined with a `:metaclass` call those generic functions with the class metaobject, the instance and the effective slot definition (AMOP 5.5), as contextl's special slots require. Their system methods read and write the instance's own slot, and reading an unbound one calls `slot-unbound`. `make-instance` still fills the initargs and initforms directly; Common Lisp passes them through `(setf closer-mop:slot-value-using-class)` too.
+
 ```lisp
 (defclass animal () ((name :initarg :name :accessor animal-name)))
 (defclass dog (animal) ((breed :initarg :breed :initform "mixed" :reader dog-breed)))

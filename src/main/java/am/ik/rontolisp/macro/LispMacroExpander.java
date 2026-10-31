@@ -4346,48 +4346,15 @@ public final class LispMacroExpander {
 				}
 				case LispNames.SLOT_VALUE -> {
 					// (setf (slot-value obj 'slot) val) -> (%obj-set obj <index> val):
-					// the index comes from the CLOS class registry.
-					LispSymbol litSlot = placeParts.size() == 3 ? quotedSymbol(placeParts.get(2)) : null;
-					if (litSlot == null && placeParts.size() == 3) {
-						// A runtime slot name: the write-side twin of the runtime-name
-						// read -- one shared dispatch defun on the compile paths
-						// (runtimeSlotValueSetDefuns), a native builtin on the
-						// interpreter. Argument order keeps place subforms ahead of the
-						// value, like every other setf expansion.
-						yield mvCall(LispNames.SLOT_VALUE_SET_RUNTIME, placeParts.get(1), placeParts.get(2), value);
+					// the index comes from the CLOS class registry -- unless the
+					// slot-access protocol routes the instance.
+					if (closRegistry.slotProtocol() && placeParts.size() == 3) {
+						yield slotProtocolRoute(placeParts.get(1), placeParts.get(2), value,
+								LispNames.SLOT_PROTOCOL_SET,
+								(o, n, v) -> expandSlotValueSet((LispCons) listToCons(List.of(placeParts.get(0), o, n)),
+										java.util.Objects.requireNonNull(v), structAccessors, closRegistry));
 					}
-					if (litSlot != null && resolveSlotBaseName(slotBaseSpelling(litSlot), closRegistry) == null) {
-						// No registered class declares the slot: a run-time error like
-						// the READ's, never a compile-time one (see missingSlotStub).
-						yield missingSlotAccess(litSlot, closRegistry, placeParts.get(1), value);
-					}
-					if (litSlot != null) {
-						String cellBase = resolveSlotBaseName(slotBaseSpelling(litSlot), closRegistry);
-						LispVal cellWrite = cellBase == null ? null
-								: classSlotCellWrite(placeParts.get(1), cellBase, value, closRegistry);
-						if (cellWrite != null) {
-							// A :allocation :class declaration somewhere: store into the
-							// shared cell, not the instance mirror.
-							yield cellWrite;
-						}
-					}
-					if (litSlot != null && ambiguousSlotPosition(litSlot, closRegistry)) {
-						// The name sits at different indexes in unrelated types, so no
-						// one
-						// index can be baked: dispatch on the instance TAG, the
-						// write-side
-						// twin of the ambiguous READ dispatch. (Routing through the
-						// reader
-						// generic would only work when the class declares an :accessor.)
-						yield expandAmbiguousSlotSet(placeParts.get(1), litSlot, value, closRegistry);
-					}
-					// The RAW read: a write must reach the %obj-ref place, and storing
-					// into
-					// an unbound slot is legal (that is how it becomes bound).
-					LispVal expandedPlace = expandSlotValueRaw(placeCons, closRegistry);
-					yield expandSetf(
-							(LispCons) listToCons(List.of(new LispSymbol(LispNames.SETF), expandedPlace, value)),
-							structAccessors, closRegistry);
+					yield expandSlotValueSet(placeCons, value, structAccessors, closRegistry);
 				}
 				case LispNames.OBJ_REF ->
 					// (setf (%obj-ref obj k) val) -> (%obj-set obj k val). The read
@@ -20550,6 +20517,10 @@ public final class LispMacroExpander {
 		LispSymbol obj = new LispSymbol(CLOS_OBJ_VAR);
 		LispSymbol newVal = new LispSymbol(CLOS_NEW_VAL_VAR);
 		LispVal specialized = listToCons(List.<LispVal>of(listToCons(List.of(obj, new LispSymbol(className)))));
+		// The accessors of a :metaclass class route through the slot-access protocol
+		// when the program carries it (an instance of a plain subclass still takes the
+		// static access, by the run-time test).
+		boolean protocolAccessors = metaclassName != null && closRegistry.slotProtocol();
 		for (java.util.Map.Entry<Integer, ClosRegistry.SlotSpec> entry : ownAt.entrySet()) {
 			int i = entry.getKey();
 			ClosRegistry.SlotSpec effective = slots.get(i);
@@ -20560,11 +20531,12 @@ public final class LispMacroExpander {
 			// overrides must cover them all. An instance slot keeps the own set only
 			// (inherited methods stay valid -- positions are shared).
 			ClosRegistry.SlotSpec slot = cellVar != null ? effective : entry.getValue();
-			LispVal body = cellVar != null ? checkedCellRead(cellVar, obj, effective.name())
-					: checkedSlotRead(obj, i, effective.name());
-			LispVal writeBody = cellVar != null
-					? listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(cellVar), newVal))
-					: objSet(obj, i, newVal);
+			LispVal body = protocolReadBody(protocolAccessors, obj, effective.name(), cellVar != null
+					? checkedCellRead(cellVar, obj, effective.name()) : checkedSlotRead(obj, i, effective.name()));
+			LispVal writeBody = protocolWriteBody(protocolAccessors, obj, newVal, effective.name(),
+					cellVar != null
+							? listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(cellVar), newVal))
+							: objSet(obj, i, newVal));
 			LispVal writerParams = listToCons(List.of(newVal, listToCons(List.of(obj, new LispSymbol(className)))));
 			for (String reader : slot.readers()) {
 				forms.add(listToCons(
@@ -20625,8 +20597,10 @@ public final class LispMacroExpander {
 				if (!shifted) {
 					continue;
 				}
-				LispVal body = checkedSlotRead(obj, i, slot.name());
-				LispVal writeBody = objSet(obj, i, newVal);
+				LispVal body = protocolReadBody(protocolAccessors, obj, slot.name(),
+						checkedSlotRead(obj, i, slot.name()));
+				LispVal writeBody = protocolWriteBody(protocolAccessors, obj, newVal, slot.name(),
+						objSet(obj, i, newVal));
 				LispVal writerParams = listToCons(List.of(newVal, listToCons(List.of(obj, new LispSymbol(className)))));
 				for (String reader : slot.readers()) {
 					if (!ownEmitted.contains(reader)) {
@@ -21794,6 +21768,120 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The {@code (setf (slot-value obj name) value)} expansion without the slot-access
+	 * protocol's routing: {@code (%obj-set obj <index> value)} with the index from the
+	 * CLOS class registry, or the shared-cell, ambiguous-name, runtime-name and
+	 * missing-slot forms.
+	 */
+	private static LispVal expandSlotValueSet(LispCons placeCons, LispVal value,
+			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry) {
+		List<LispVal> placeParts = placeCons.toList();
+		LispSymbol litSlot = placeParts.size() == 3 ? quotedSymbol(placeParts.get(2)) : null;
+		if (litSlot == null && placeParts.size() == 3) {
+			// A runtime slot name: the write-side twin of the runtime-name
+			// read -- one shared dispatch defun on the compile paths
+			// (runtimeSlotValueSetDefuns), a native builtin on the
+			// interpreter. Argument order keeps place subforms ahead of the
+			// value, like every other setf expansion.
+			return mvCall(LispNames.SLOT_VALUE_SET_RUNTIME, placeParts.get(1), placeParts.get(2), value);
+		}
+		if (litSlot != null && resolveSlotBaseName(slotBaseSpelling(litSlot), closRegistry) == null) {
+			// No registered class declares the slot: a run-time error like
+			// the READ's, never a compile-time one (see missingSlotStub).
+			return missingSlotAccess(litSlot, closRegistry, placeParts.get(1), value);
+		}
+		if (litSlot != null) {
+			String cellBase = resolveSlotBaseName(slotBaseSpelling(litSlot), closRegistry);
+			LispVal cellWrite = cellBase == null ? null
+					: classSlotCellWrite(placeParts.get(1), cellBase, value, closRegistry);
+			if (cellWrite != null) {
+				// A :allocation :class declaration somewhere: store into the
+				// shared cell, not the instance mirror.
+				return cellWrite;
+			}
+		}
+		if (litSlot != null && ambiguousSlotPosition(litSlot, closRegistry)) {
+			// The name sits at different indexes in unrelated types, so no one
+			// index can be baked: dispatch on the instance TAG, the write-side
+			// twin of the ambiguous READ dispatch. (Routing through the reader
+			// generic would only work when the class declares an :accessor.)
+			return expandAmbiguousSlotSet(placeParts.get(1), litSlot, value, closRegistry);
+		}
+		// The RAW read: a write must reach the %obj-ref place, and storing into
+		// an unbound slot is legal (that is how it becomes bound).
+		LispVal expandedPlace = expandSlotValueRaw(placeCons, closRegistry);
+		return expandSetf((LispCons) listToCons(List.of(new LispSymbol(LispNames.SETF), expandedPlace, value)),
+				structAccessors, closRegistry);
+	}
+
+	/** One arm builder of {@link #slotProtocolRoute}: the access over bound variables. */
+	@FunctionalInterface
+	private interface SlotAccessArm {
+
+		LispVal build(LispVal obj, LispVal name, @Nullable LispVal value);
+
+	}
+
+	/**
+	 * The slot-access protocol's routing of one slot form
+	 * ({@code macro/slot-protocol.lisp}, {@link ClosRegistry#slotProtocol()}):
+	 * {@code (let ((o obj) (n name) (v value)) (if
+	 * (%slot-protocol-instance-p o) (<protocolFn> o n v) <direct>))}, the arguments
+	 * evaluated once, in order. A literal quoted slot name is not bound (both arms carry
+	 * the quote), nor is an absent value.
+	 * @param objExpr the instance form
+	 * @param nameExpr the slot-name form
+	 * @param valueExpr the new-value form of a write, or null
+	 * @param protocolFn the protocol entry ({@code %slot-protocol-value}, ...)
+	 * @param direct the static access over the bound variables
+	 * @return the routed form
+	 */
+	private static LispVal slotProtocolRoute(LispVal objExpr, LispVal nameExpr, @Nullable LispVal valueExpr,
+			String protocolFn, SlotAccessArm direct) {
+		String prefix = "__sp" + MV_COUNTER.getAndIncrement();
+		LispSymbol o = new LispSymbol(prefix + "_o");
+		boolean literalName = quotedSymbol(nameExpr) != null;
+		LispVal n = literalName ? nameExpr : new LispSymbol(prefix + "_n");
+		@Nullable LispSymbol v = valueExpr == null ? null : new LispSymbol(prefix + "_v");
+		List<LispVal> call = new java.util.ArrayList<>(List.of(new LispSymbol(protocolFn), o, n));
+		if (v != null) {
+			call.add(v);
+		}
+		LispVal body = makeIf(callOf(LispNames.SLOT_PROTOCOL_INSTANCE_P, o), listToCons(call), direct.build(o, n, v));
+		if (v != null && valueExpr != null) {
+			body = makeLet(v.name(), valueExpr, body);
+		}
+		if (!literalName) {
+			body = makeLet(((LispSymbol) n).name(), nameExpr, body);
+		}
+		return makeLet(o.name(), objExpr, body);
+	}
+
+	/**
+	 * A generated reader body routed through the slot-access protocol when
+	 * {@code routed}:
+	 * {@code (if (%slot-protocol-instance-p obj) (%slot-protocol-value obj
+	 * 'name) <body>)}, the name carried like a checked read's.
+	 */
+	private static LispVal protocolReadBody(boolean routed, LispSymbol obj, String slotName, LispVal body) {
+		if (!routed) {
+			return body;
+		}
+		return makeIf(callOf(LispNames.SLOT_PROTOCOL_INSTANCE_P, obj),
+				callOf(LispNames.SLOT_PROTOCOL_VALUE, obj, unspelledQuoteOf(slotNameSpelling(slotName))), body);
+	}
+
+	/** The writer twin of {@link #protocolReadBody}. */
+	private static LispVal protocolWriteBody(boolean routed, LispSymbol obj, LispSymbol newVal, String slotName,
+			LispVal body) {
+		if (!routed) {
+			return body;
+		}
+		return makeIf(callOf(LispNames.SLOT_PROTOCOL_INSTANCE_P, obj),
+				mvCall(LispNames.SLOT_PROTOCOL_SET, obj, unspelledQuoteOf(slotNameSpelling(slotName)), newVal), body);
+	}
+
+	/**
 	 * Expands {@code (slot-value obj 'slot)} into the slot's {@code nth} position. The
 	 * slot name must be a literal quoted symbol whose position is the same in every class
 	 * declaring it (guaranteed within one inheritance chain; two unrelated classes
@@ -21804,6 +21892,19 @@ public final class LispMacroExpander {
 	 * @return the {@code (nth position obj)} expression
 	 */
 	public static LispVal expandSlotValue(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (closRegistry.slotProtocol() && parts.size() == 3) {
+			return slotProtocolRoute(parts.get(1), parts.get(2), null, LispNames.SLOT_PROTOCOL_VALUE, (o, n,
+					v) -> expandSlotValueDirect((LispCons) listToCons(List.of(parts.get(0), o, n)), closRegistry));
+		}
+		return expandSlotValueDirect(cons, closRegistry);
+	}
+
+	/**
+	 * {@link #expandSlotValue(LispCons, ClosRegistry)} without the slot-access protocol's
+	 * routing.
+	 */
+	private static LispVal expandSlotValueDirect(LispCons cons, ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			return expandSlotValueRaw(cons, closRegistry);
@@ -22569,6 +22670,20 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(
 					LispNames.SLOT_BOUNDP + " expects (slot-boundp obj 'slot): " + cons.print());
 		}
+		if (closRegistry.slotProtocol()) {
+			return slotProtocolRoute(parts.get(1), parts.get(2), null, LispNames.SLOT_PROTOCOL_BOUNDP,
+					(o, n, v) -> expandSlotBoundpDirect(parts.get(0), o, n, closRegistry));
+		}
+		return expandSlotBoundpDirect(parts.get(0), parts.get(1), parts.get(2), closRegistry);
+	}
+
+	/**
+	 * {@link #expandSlotBoundp(LispCons, ClosRegistry)} without the slot-access
+	 * protocol's routing.
+	 */
+	private static LispVal expandSlotBoundpDirect(LispVal head, LispVal objExpr, LispVal nameExpr,
+			ClosRegistry closRegistry) {
+		List<LispVal> parts = List.of(head, objExpr, nameExpr);
 		LispSymbol slotSym = quotedSymbol(parts.get(2));
 		if (slotSym == null) {
 			// A runtime slot name: a class-tag dispatch over a per-class slot-name
@@ -22751,6 +22866,10 @@ public final class LispMacroExpander {
 	 * data is skipped.
 	 */
 	private static boolean needsRuntimeSlotNameDispatch(List<LispVal> program, ClosRegistry closRegistry) {
+		// The slot-access protocol's system methods read through the dispatch.
+		if (closRegistry.slotProtocol()) {
+			return true;
+		}
 		// #'slot-value / #'slot-boundp: the wrapper's slot name is a parameter.
 		return program.stream()
 			.anyMatch(form -> containsRuntimeSlotName(form, closRegistry)
@@ -22766,6 +22885,10 @@ public final class LispMacroExpander {
 	 * without the defun fails loudly at compile time rather than silently.
 	 */
 	private static boolean needsRuntimeSlotSetDispatch(List<LispVal> program, ClosRegistry closRegistry) {
+		// The slot-access protocol's system methods write through the dispatch.
+		if (closRegistry.slotProtocol()) {
+			return true;
+		}
 		// #'slot-makunbound: the wrapper writes through a parameter slot name.
 		return program.stream()
 			.anyMatch(form -> containsRuntimeSlotSet(form, closRegistry)
@@ -22889,6 +23012,20 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(
 					LispNames.SLOT_MAKUNBOUND + " expects (slot-makunbound obj 'slot): " + cons.print());
 		}
+		if (closRegistry.slotProtocol()) {
+			return slotProtocolRoute(parts.get(1), parts.get(2), null, LispNames.SLOT_PROTOCOL_MAKUNBOUND,
+					(o, n, v) -> expandSlotMakunboundDirect(o, n));
+		}
+		return expandSlotMakunboundDirect(parts.get(1), parts.get(2));
+	}
+
+	/**
+	 * {@link #expandSlotMakunbound(LispCons, ClosRegistry)} without the slot-access
+	 * protocol's routing (the store it expands into still routes, and its own test then
+	 * fails for an instance this one did not route).
+	 */
+	private static LispVal expandSlotMakunboundDirect(LispVal objExpr, LispVal nameExpr) {
+		List<LispVal> parts = List.of(new LispSymbol(LispNames.SLOT_MAKUNBOUND), objExpr, nameExpr);
 		String prefix = "__sm" + MV_COUNTER.getAndIncrement();
 		LispSymbol v = new LispSymbol(prefix + "_v");
 		LispVal write = fmtCall(LispNames.SETF, fmtCall(LispNames.SLOT_VALUE, v, parts.get(2)), unboundMarker());
@@ -28328,6 +28465,16 @@ public final class LispMacroExpander {
 				withDynamic.addAll(program);
 				program = withDynamic;
 				closRegistry.enableDynamicClasses();
+			}
+			// A method on slot-value-using-class or a sibling (contextl's special
+			// slots) switches the slot-access protocol on: its runtime is prepended,
+			// and every slot form -- and the accessors of a :metaclass class -- expanded
+			// from here on routes an instance of a :metaclass class through it.
+			if (definesSlotProtocolMethod(program)) {
+				List<LispVal> withSlotProtocol = new java.util.ArrayList<>(SlotProtocol.forms());
+				withSlotProtocol.addAll(program);
+				program = withSlotProtocol;
+				closRegistry.enableSlotProtocol();
 			}
 		}
 		// The closer-mop library's classp is (typep x 'standard-class): when its defuns
@@ -38546,7 +38693,10 @@ public final class LispMacroExpander {
 			errorParts.addAll(parts.subList(3, parts.size()));
 		}
 		else {
-			errorParts.add(new LispString("The assertion " + test.print() + " failed."));
+			// The message is the error's FORMAT CONTROL, so a tilde the printed test
+			// carries (a string literal, or a macro expansion's own format string) is
+			// doubled: it reads back as itself, not as a directive with no argument.
+			errorParts.add(new LispString("The assertion " + test.print().replace("~", "~~") + " failed."));
 		}
 		return makeIf(test, LispNil.INSTANCE, listToCons(errorParts));
 	}
@@ -48054,6 +48204,24 @@ public final class LispMacroExpander {
 						makeIf(hit, mvCall(LispNames.CDR, hit), construct)))));
 		return publicFindClass ? List.of(findClassInternal, findClass, materialize)
 				: List.of(findClassInternal, materialize);
+	}
+
+	/**
+	 * Whether a top-level form defines a method on (or the generic of) one of the
+	 * slot-access protocol's generic functions
+	 * ({@link SlotProtocol#isProtocolGenericName}).
+	 * @param program the top-level forms
+	 * @return true when the program carries the slot-access protocol
+	 */
+	private static boolean definesSlotProtocolMethod(List<LispVal> program) {
+		for (LispVal form : program) {
+			if ((isNamedForm(form, LispNames.DEFMETHOD) || isNamedForm(form, LispNames.DEFGENERIC))
+					&& ((LispCons) form).cdr() instanceof LispCons rest
+					&& SlotProtocol.isProtocolGenericName(rest.car())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

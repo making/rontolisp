@@ -763,7 +763,10 @@ public final class PackageRegistry {
 			// names it in an add-method expansion that loading never runs.
 			"INTERN-EQL-SPECIALIZER",
 			// contextl's class utilities.
-			"SUBCLASSP", "CLASS-PROTOTYPE", "REQUIRED-ARGS");
+			"SUBCLASSP", "CLASS-PROTOTYPE", "REQUIRED-ARGS",
+			// The slot-access protocol (macro/slot-protocol.lisp): contextl's special
+			// slots are methods on these.
+			"SLOT-VALUE-USING-CLASS", "SLOT-BOUNDP-USING-CLASS", "SLOT-MAKUNBOUND-USING-CLASS");
 
 	/**
 	 * The {@code cl} symbols upstream {@code closer-mop} re-exports: the metaobject class

@@ -1909,6 +1909,28 @@ public final class ClosRegistry {
 		this.mopProtocolActive = true;
 	}
 
+	private boolean slotProtocol;
+
+	/**
+	 * Whether the slot-access protocol runtime ({@code macro/slot-protocol.lisp}) is part
+	 * of this evaluation/compilation: {@code slot-value}, its {@code setf},
+	 * {@code slot-boundp}, {@code slot-makunbound} and the accessors of a
+	 * {@code :metaclass} class then route an instance of a class defined with a
+	 * {@code :metaclass} through {@code slot-value-using-class} and its siblings.
+	 * @return {@code true} once {@link #enableSlotProtocol} ran
+	 */
+	public boolean slotProtocol() {
+		return this.slotProtocol;
+	}
+
+	/**
+	 * Records that the slot-access protocol runtime is loaded (interpreter) or prepended
+	 * (compile paths).
+	 */
+	public void enableSlotProtocol() {
+		this.slotProtocol = true;
+	}
+
 	/**
 	 * The internal type of an instance of a class made at RUN time
 	 * ({@link #enableDynamicClasses}): slot 0 holds the class metaobject, slot 1 its

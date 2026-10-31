@@ -1045,6 +1045,44 @@ cannot name it. Since 2026-10-31 such a class works on all four backends:
 - Pinned by ci-spec standalone `classes-made-at-run-time` (standalone: the arm joins every
   dispatcher with a class method).
 
+### The slot-access protocol (contextl's special slots)
+AMOP 5.5, since 2026-11-01 on all four backends: with a method on
+`closer-mop:slot-value-using-class`, its `setf`, `slot-boundp-using-class` or
+`slot-makunbound-using-class` in the program (`SlotProtocol.isProtocolGenericName`: the
+closer-mop symbol, which contextl's unqualified names resolve to since the three are
+closer-mop externals), `slot-value` (a computed name too), its `setf`, `slot-boundp`,
+`slot-makunbound` and the accessors of an instance of a class defined with a `:metaclass` call
+the four generics with the class metaobject, the instance and the effective slot definition.
+- **The runtime** is Lisp (`macro/slot-protocol.lisp`, `SlotProtocol.forms()`, in the native
+  resource config): the system methods, specialized on `standard-class`, read and write the
+  instance's own storage through `%slot-value-runtime`/`%slot-value-set-runtime` (a
+  class-allocated slot's cell included), an unbound read calling `slot-unbound`; NEVER through
+  `slot-value`, whose expansion would route back. `%slot-protocol-instance-p`: `(class-of
+  (class-of x))` is not `standard-class`. The compile paths prepend it beside `MopProtocol`
+  (gate: a `:metaclass` defclass AND a top-level defmethod/defgeneric on a protocol name),
+  `ClosRegistry.enableSlotProtocol()` before the walk, and the runtime-name dispatch gates
+  (`needsRuntimeSlotNameDispatch`/`needsRuntimeSlotSetDispatch`) answer true; the interpreter
+  loads it at the first such `defmethod` (`ensureSlotProtocolLoaded`). Every other program is
+  byte-identical.
+- **Routing** (`slotProtocolRoute`): `(let ((o obj) [(n name)] [(v value)]) (if
+  (%slot-protocol-instance-p o) (%slot-protocol-value o n) <the static expansion over o>))` in
+  `expandSlotValue`, the `expandSetf` `slot-value` place (its static half is
+  `expandSlotValueSet`), `expandSlotBoundp`, `expandSlotMakunbound`; the static half is the
+  `...Direct` builder, never the surface form again (that would expand forever). A generated
+  reader/writer of a `:metaclass` class (`protocolReadBody`/`protocolWriteBody`) routes the same
+  way when the gate is on as the class is defined. The interpreter's Java `slot-boundp` and
+  `slot-makunbound` builtins and `evalSlotValue`'s computed-name path test the instance and call
+  the Lisp entries.
+- Residuals: `make-instance` still fills initargs and initforms through the constructor, not
+  `(setf slot-value-using-class)` (SBCL logs one write per filled slot; contextl's
+  `shared-initialize` on `special-object` shifts the raw values afterwards, but a
+  class-allocated SPECIAL slot's initarg overwrites the cell's special symbol -- spx's `slot1`);
+  `slot-exists-p` is not routed; an interpreter accessor defined before the first protocol
+  method is not routed; an inherited plain class's accessor is not routed for a `:metaclass`
+  subclass instance.
+- Pinned by ci-spec standalone `slot-access-protocol-methods` (SBCL 2.2.9 `sb-mop` agrees) and
+  `ContextlE2eTest` (special slots, `dletf`, captured dynamic environments).
+
 ### Registry-growth lesson
 The RUNTIME-slot-name dispatch used to be inlined per call site and grows with every layout
 times its slots; five extra ci-spec classes pushed a corpus dolist body past the JVM's SIGNED
@@ -1094,16 +1132,19 @@ chunk-loop wrapper).
   system's component files. Its own `test/` (measured on the interpreter, in package `contextl`):
   `demo3`, `special-slots-2` need layered ACCESSORS (`define-layered-class` makes generic
   functions and methods at run time through `ensure-layered-function`/`ensure-method`) and
-  partial classes (anonymous slot-carrying superclasses); `dynenv` (past everything up to its
-  `special-class` part) needs the `slot-value-using-class` protocol: contextl's `slot-unbound`
-  method calls `(setf slot-value-using-class)` itself, which has no system method here
-  (`call-next-method: no next method`, 2026-11-01); `special-slots-1`/`-3` LOOP: the `dletf` of a
-  non-special slot `cerror`s, and the handler `eval`s a redefinition making the slot special and
-  continues, so they also need run-time class redefinition with obsolete instances (and `-1` the
-  layered classes); `spx` `(setf (find-class 'x) nil)`; `layer-gc` passes its first four sections
-  and stops where `add-method :after` should clear the caches (`defmethod` calls no `add-method`
-  here). `grouped-layers` passes on all four since 2026-11-01 (`slot-definition-allocation` and
-  the `:allocation` reconciliation above; `ContextlE2eTest` carries it). `contextl-user`/`cxcl` work on
+  partial classes (anonymous slot-carrying superclasses); `special-slots-3` stops where the
+  `dletf` of a non-special slot `cerror`s and the handler `eval`s a redefinition making the slot
+  special: the instance keeps its raw value (`SYMBOL-VALUE expects a symbol, got "Dr. Jekyll"`),
+  since nothing makes instances obsolete (`special-slots-1` also needs layered classes); `spx`
+  `(setf (find-class 'x) nil)`, and past it the class-allocated special slot the constructor
+  overwrites (the slot-access protocol's residual) and class redefinition; `layer-gc` passes its
+  first four sections and stops where `add-method :after` should clear the caches (`defmethod`
+  calls no `add-method` here). `grouped-layers` (`slot-definition-allocation` and the
+  `:allocation` reconciliation above) and `dynenv` (the slot-access protocol) pass on all four
+  since 2026-11-01; `ContextlE2eTest` carries both. On the compile paths `dynenv` first needed
+  `assert`'s default message to double the tildes of the test it quotes: a test holding a
+  `dletf`'s expansion carries contextl's `cerror` control string, whose `~S` failed the static
+  format check (`.kb/pure-builtin-fold.md`). `contextl-user`/`cxcl` work on
   all four since the same day: cxcl's `#.(loop for sym being the external-symbols of ...)`
   export list was empty (the LOOP clause iterated nothing, `.kb/loop-iteration-heads.md`), and
   past it a `nil`/`t` export, an exported `make-package`, a `cl` internal under a package using

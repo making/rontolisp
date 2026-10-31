@@ -20,11 +20,14 @@ import java.util.List;
  * {@code adjoin-layer-using-class} runs once per new context), and contextl's own
  * {@code test/grouped-layers.lisp}: a {@code standard-layer-class} subclass whose
  * {@code adjoin-layer-using-class}/{@code remove-layer-using-class} methods read layer
- * slots the singleton slot definition makes class-allocated. Every activation makes an
- * anonymous {@code standard-layer-class} at RUN time and dispatches on its prototype
- * ({@code .kb/clos.md}, "Classes made at run time"). The output is keywords and strings
- * only: the interpreter prints a {@code contextl-user} symbol qualified inside a form
- * that activated a layer, a residual {@code .kb/clos.md} records.
+ * slots the singleton slot definition makes class-allocated, and special slots (a
+ * {@code special-class} instance's {@code dletf}, captured and re-entered dynamic
+ * environments, {@code slot-boundp}/{@code slot-makunbound}) through the slot-access
+ * protocol ({@code .kb/clos.md}), as its {@code test/dynenv.lisp} does. Every activation
+ * makes an anonymous {@code standard-layer-class} at RUN time and dispatches on its
+ * prototype ({@code .kb/clos.md}, "Classes made at run time"). The output is keywords and
+ * strings only: the interpreter prints a {@code contextl-user} symbol qualified inside a
+ * form that activated a layer, a residual {@code .kb/clos.md} records.
  */
 class ContextlE2eTest extends AsdfLibraryE2eSupport {
 
@@ -106,6 +109,19 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			                             (with-active-layers (xml-output)
 			                               (list (make-output)
 			                                     (with-inactive-layers (xml-output) (make-output))))))))))
+			(defclass dummy ()
+			  ((x :special t :accessor x) (y :special t :accessor y))
+			  (:metaclass special-class))
+			(defparameter *obj* (make-instance 'dummy))
+			(defparameter *env* (dletf (((x *obj*) 1) ((y *obj*) 2)) (capture-dynamic-environment)))
+			(print (list (slot-boundp *obj* 'x)
+			             (with-dynamic-environment (*env*) (list (x *obj*) (y *obj*)))
+			             (with-dynamic-environment (*env*) (list (incf (x *obj*)) (incf (y *obj*))))
+			             (with-dynamic-environment (*env*) (list (x *obj*) (y *obj*)))
+			             (slot-boundp *obj* 'y)))
+			(setf (x *obj*) 10)
+			(print (list (x *obj*) (dletf (((x *obj*) 20)) (list (x *obj*) (slot-value *obj* 'x)))
+			             (slot-value *obj* 'x) (progn (slot-makunbound *obj* 'x) (slot-boundp *obj* 'x))))
 			""";
 
 	private static final List<String> EXPECTED = List.of("(:ROOT)", "(:INFO :ROOT)", "(:EMPLOYMENT :INFO :ROOT)",
@@ -113,7 +129,8 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			"(:EMPLOYMENT :ROOT)", "(\"EMPLOYMENT-LAYER\" \"INFO-LAYER\" \"T\")", "(NIL T)",
 			"(\"Hello, Ann\" \"Hello, Bob, please\" \"Dear Hello, Cy, please\")", "(:ADJOINED)", "(:INFO :ROOT)",
 			"(:ROOT)", "(:CLASS :CLASS)", "(T T)",
-			"((:OUTPUT) ((:PLAIN :OUTPUT) ((:HTML :OUTPUT) ((:XML :OUTPUT) (:PLAIN :OUTPUT)))))");
+			"((:OUTPUT) ((:PLAIN :OUTPUT) ((:HTML :OUTPUT) ((:XML :OUTPUT) (:PLAIN :OUTPUT)))))",
+			"(NIL (1 2) (2 3) (2 3) NIL)", "(10 (20 20) 10 NIL)");
 
 	@Override
 	protected String systemDir() {

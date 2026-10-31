@@ -14,16 +14,16 @@ package `contextl`) stops at:
    superclasses. Needs first-class generic functions / methods (`.kb/clos.md`, "Generic functions
    and methods are not first-class metaobjects") and classes made at run time WITH slots, as
    superclasses of a statically defined class.
-2. `dynenv`, `special-slots-3` (and `-1`): special slots need the AMOP slot-access protocol --
-   `slot-value`/`slot-boundp`/`slot-makunbound` and accessors of a `special-class` instance
-   going through `slot-value-using-class` / `(setf slot-value-using-class)` /
-   `slot-boundp-using-class` / `slot-makunbound-using-class` (closer-mop externals, with system
-   default methods: contextl's `slot-unbound` method calls `(setf slot-value-using-class)`
-   itself and dies `call-next-method: no next method`, measured 2026-11-01). `special-slots-1`/`-3`
-   then LOOP: a `dletf` of a non-special slot `cerror`s and the handler `eval`s a redefinition
-   making the slot special, which needs run-time class redefinition with obsolete instances
-   (`make-instances-obsolete`, `update-instance-for-redefined-class`) -- interpreter-only at best,
-   since a compiled `eval` defines no class.
+2. `special-slots-3` (and `-1`): the `dletf` of a non-special slot `cerror`s and the handler
+   `eval`s a redefinition making the slot special, then reads the existing instance: it still
+   holds the raw value (`SYMBOL-VALUE expects a symbol, got "Dr. Jekyll"`, 2026-11-01), because
+   nothing makes instances obsolete (`make-instances-obsolete` from contextl's
+   `finalize-inheritance :after`, then `update-instance-for-redefined-class` ->
+   `shared-initialize`, which shifts the slot). Interpreter-only at best: a compiled `eval`
+   defines no class. Also open from the slot-access protocol (`.kb/clos.md`): `make-instance`
+   fills initargs/initforms through the constructor, not `(setf slot-value-using-class)` (SBCL
+   writes each through it), which overwrites a class-allocated SPECIAL slot's special symbol
+   (spx's `slot1`).
 3. `layer-gc` passes four of five sections; the fifth needs a later `defmethod` on
    `adjoin-layer-using-class` to run `add-method`'s `:after` (cache clearing).
 4. `spx`: `(setf (find-class 'x) nil)` (a run-time error now, `.kb/clos.md`).
@@ -34,12 +34,13 @@ Smaller residuals: on the interpreter, a top-level form that calls `map-symbol` 
 backends print `FOO`; reproduced only with contextl loaded. A layer context's prototype prints as
 `#<%DYNAMIC-OBJECT% ...>` (`print-object` is not routed for a dynamic instance).
 
-Done 2026-11-01: `grouped-layers` (`closer-mop:slot-definition-allocation`, and a slot-definition
-`initialize-instance :around`'s `:allocation :class` reaching the static layout, `.kb/clos.md`)
-passes on all four.
+Done 2026-11-01, on all four: `grouped-layers` (`closer-mop:slot-definition-allocation`, and a
+slot-definition `initialize-instance :around`'s `:allocation :class` reaching the static layout)
+and `dynenv` (the slot-access protocol, `slot-value-using-class` and its siblings; `assert`'s
+message doubling the tildes of the test it quotes), `.kb/clos.md`.
 
-Plan: 2 first (the protocol is expansion-level plus a Lisp runtime, so all four backends move
-together; gate it on a method on one of the four generics so other programs stay
-byte-identical). 1 is the large one; decide between first-class generic functions (a
-funcallable `standard-generic-function` plus a run-time method table) and a narrower
-`ensure-method` over the existing dispatcher before building either.
+Plan: 1 is the large one; decide between first-class generic functions (a funcallable
+`standard-generic-function` plus a run-time method table) and a narrower `ensure-method` over
+the existing dispatcher before building either. 2's construction residual is the chain fill
+`expandMakeInstance` already does for metaobject classes, extended to a `:metaclass` class under
+the slot-access protocol with a protocol-routed `%mop-fill-slots`.

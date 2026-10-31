@@ -177,6 +177,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.SlotProtocol"
+        },
+        "pattern": "am/ik/rontolisp/macro/slot-protocol\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.macro.CompileRuntime"
         },
         "pattern": "am/ik/rontolisp/macro/compile-runtime\\.lisp"

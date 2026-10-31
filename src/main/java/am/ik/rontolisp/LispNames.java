@@ -4705,6 +4705,31 @@ public final class LispNames {
 	public static final String SLOT_VALUE_SET_RUNTIME = "%SLOT-VALUE-SET-RUNTIME";
 
 	/**
+	 * The slot-access protocol's routing test ({@code macro/slot-protocol.lisp}): whether
+	 * an instance's class was defined with a {@code :metaclass}, so its slot forms go
+	 * through {@code slot-value-using-class} and its siblings.
+	 */
+	public static final String SLOT_PROTOCOL_INSTANCE_P = "%SLOT-PROTOCOL-INSTANCE-P";
+
+	/**
+	 * {@code (%slot-protocol-value obj name)}: a read through the slot-access protocol.
+	 */
+	public static final String SLOT_PROTOCOL_VALUE = "%SLOT-PROTOCOL-VALUE";
+
+	/** {@code (%slot-protocol-set obj name value)}: a write through the protocol. */
+	public static final String SLOT_PROTOCOL_SET = "%SLOT-PROTOCOL-SET";
+
+	/**
+	 * {@code (%slot-protocol-boundp obj name)}: a boundness test through the protocol.
+	 */
+	public static final String SLOT_PROTOCOL_BOUNDP = "%SLOT-PROTOCOL-BOUNDP";
+
+	/**
+	 * {@code (%slot-protocol-makunbound obj name)}: a makunbound through the protocol.
+	 */
+	public static final String SLOT_PROTOCOL_MAKUNBOUND = "%SLOT-PROTOCOL-MAKUNBOUND";
+
+	/**
 	 * The shared runtime-class-designator {@code change-class} dispatch:
 	 * {@code (%change-class-runtime obj designator initarg-plist)} resolves a class
 	 * designator known only at run time (a symbol or a class metaobject -- upstream

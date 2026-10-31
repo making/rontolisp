@@ -143,7 +143,11 @@ fold odd indices only, `incf`/`decf` their delta, `push`/`pushnew` their value;
 `pop`/`rotatef`/`shiftf`/`remf`/`with-slots`/`with-accessors` are skipped whole. **Trap**:
 `assert`'s TEST is evaluated and still must not fold — the message quotes the test's SOURCE TEXT,
 so folding turns "The assertion (= 1 2) failed." into "The assertion NIL failed."
-(`JvmLispCompilerTest.compileAndRunAssert`). `aNonEvaluatedPositionIsNeverFolded` pins the list by
+(`JvmLispCompilerTest.compileAndRunAssert`). That message is the error's FORMAT CONTROL, so
+`expandAssert` doubles each tilde of the printed test (2026-11-01; before, a test whose text held
+a `~S` -- a string literal, or contextl's `cerror` string inside a macro-expanded `dletf` -- was a
+"not enough arguments" format error at run time on the interpreter and a compile error on the
+other three; ci-spec `declarations-eval-when-check-type-assert`). `aNonEvaluatedPositionIsNeverFolded` pins the list by
 OBJECT IDENTITY: the pass must hand back the very list it was given.
 
 **2. A user definition of the name wins.** `shadowedOperators` blocks every table name the program
