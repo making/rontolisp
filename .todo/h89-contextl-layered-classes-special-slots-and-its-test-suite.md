@@ -28,11 +28,21 @@ package `contextl`) stops at:
    `adjoin-layer-using-class` to run `add-method`'s `:after` (cache clearing).
 4. `spx`: `(setf (find-class 'x) nil)` (a run-time error now, `.kb/clos.md`).
 
-Smaller residuals: on the interpreter, a top-level form that calls `map-symbol` (through
-`defining-layer`, `find-layer-class`, `adjoin-layer`) prints every symbol of that form qualified
-(`CONTEXTL::FOO`) while `*package*` is `contextl` and the symbols stay `eq` -- the compiled
-backends print `FOO`; reproduced only with contextl loaded (not with a plain
-`with-standard-io-syntax` + `intern` in a user package, 2026-11-01).
+Smaller residual (interpreter only, NOT contextl-specific -- measured 2026-11-01): in a
+program with a `print-object` method, in a package other than `cl-user`,
+
+    (print (list 'foo (let ((*package* (find-package :cl-user)) (*print-readably* t))
+                        (format nil "~A" 1))
+                 'bar))
+
+prints `(P::FOO "1" P::BAR)` (compiled: `(FOO "1" BAR)`); the next top-level form prints bare
+again. The inner print, under a non-default printer control, regenerates the print-object
+renderer (`LispEvaluator.ensurePrintObjectRuntimeLoaded`: the stamp carries `printControls`)
+while `*package*` is bound to `cl-user`, and the enclosing form's own print then qualifies
+every symbol. Binding only `*print-readably*`, or only `*package*`, does not reproduce it.
+contextl reaches it through `map-symbol`'s `with-standard-io-syntax` (`defining-layer`,
+`find-layer-class`, `adjoin-layer`), which is why its prints of `contextl-user` symbols inside a
+layer-activating form come out qualified.
 
 Done 2026-11-01, on all four: `grouped-layers` (`closer-mop:slot-definition-allocation`, and a
 slot-definition `initialize-instance :around`'s `:allocation :class` reaching the static layout)
