@@ -4621,11 +4621,12 @@ public final class LispMacroExpander {
 
 	/**
 	 * Registers the {@code (setf (find-class 'alias) (find-class 'target))} alias and
-	 * yields the form's value (the target's metaobject). Only the ALIASING shape is
-	 * supported: both names must be literal quoted symbols and the value must be a
-	 * {@code find-class} call, because an alias is a fact about the class TABLE -- which
-	 * the compile paths freeze at compile time -- and not a runtime assignment. Anything
-	 * else is rejected with a message naming the supported shape.
+	 * yields the form's value (the target's metaobject): with both names literal quoted
+	 * symbols and the value a {@code find-class} call, the alias is a fact about the
+	 * class TABLE -- which the compile paths freeze at compile time -- so it joins it
+	 * statically. Forgetting a literal name no class has is a no-op; every other shape is
+	 * the run-time {@code (%set-find-class name value)}
+	 * ({@link LispNames#SET_FIND_CLASS}).
 	 * @param cons the whole setf form, for the error message
 	 * @param placeParts the {@code (find-class 'alias ...)} place, already split
 	 * @param value the value form
@@ -4647,12 +4648,15 @@ public final class LispMacroExpander {
 			return LispNil.INSTANCE;
 		}
 		if (alias == null || target == null) {
-			// Any other shape -- removing a class with nil (contextl's layer-makunbound),
-			// a computed name -- is a run-time error where it runs, so a library carrying
-			// one in a function no call reaches still compiles.
-			return listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString("~A"),
-					new LispString("setf " + LispNames.FIND_CLASS + " only supports aliasing an existing class -- "
-							+ "(setf (find-class 'alias) (find-class 'target)): " + cons.print())));
+			// Any other shape -- forgetting a class with nil (contextl's
+			// layer-makunbound), a computed name or value -- is the RUN-TIME (setf
+			// find-class): the public find-class answers the value for the name from
+			// then on, and nothing else changes (the class tables stay whole).
+			if (placeParts.size() < 2) {
+				throw new IllegalArgumentException(
+						"setf " + LispNames.FIND_CLASS + " needs a class name: " + cons.print());
+			}
+			return listToCons(List.of(new LispSymbol(LispNames.SET_FIND_CLASS), placeParts.get(1), value));
 		}
 		if (closRegistry == EMPTY_CLOS_REGISTRY) {
 			// The CLOS-free expandSetf overloads (the --no-gc backend, the generic expand
@@ -20916,6 +20920,23 @@ public final class LispMacroExpander {
 		return (LispCons) listToCons(widened);
 	}
 
+	/**
+	 * The defclass form with only the slot allocations of an EARLIER driver-built
+	 * metaobject of the class reconciled onto it ({@link #reconcileSlotAllocations}), or
+	 * null when nothing changes. A redefinition registers from this before its driver
+	 * runs, so a slot the previous definition's slot-definition class made
+	 * class-allocated keeps its shared cell while the driver's hooks write it (contextl's
+	 * singleton {@code :reinitialize t} slot) -- the interpreter widens from the new
+	 * metaobject only after the driver call.
+	 * @param cons the defclass form as written
+	 * @param previous the class's metaobject from its previous definition
+	 * @return the form carrying the previous allocations, or null
+	 */
+	@Nullable public static LispCons withPreviousSlotAllocations(LispCons cons, LispInstance previous) {
+		List<LispVal> parts = new java.util.ArrayList<>(cons.toList());
+		return parts.size() >= 4 && reconcileSlotAllocations(parts, previous) ? (LispCons) listToCons(parts) : null;
+	}
+
 	/** A metaobject slot read BY NAME off the instance's own layout, or null. */
 	@Nullable private static LispVal metaobjectSlot(LispInstance instance, String slotName) {
 		int index = instance.layout().slotNames().indexOf(slotName);
@@ -28590,8 +28611,11 @@ public final class LispMacroExpander {
 		boolean classDirectSubclasses = needsClassDirectSubclassesRuntime(program);
 		// slot-unbound / slot-missing are called with the object's class, so a program
 		// naming either needs class-of as well.
+		// A run-time (setf (find-class ...)) (contextl's layer-makunbound): the public
+		// find-class consults its overrides, and every defclass ends one.
+		boolean findClassOverrides = usesRuntimeSetfFindClass(program);
 		boolean metaobjectRuntime = findClassDefun || referencesClassOf(program) || classDirectSubclasses
-				|| program.stream()
+				|| findClassOverrides || program.stream()
 					.anyMatch(f -> usesSymbol(f, LispNames.SLOT_UNBOUND) || usesSymbol(f, LispNames.SLOT_MISSING));
 		if (metaobjectRuntime) {
 			closRegistry.ensureMopClassesSeeded();
@@ -28733,6 +28757,12 @@ public final class LispMacroExpander {
 					}
 					addExpandedDefinition(generated, out, closRegistry, dispatcherSlots, placedDispatchers);
 				}
+				if (findClassOverrides && ((LispCons) form).cdr() instanceof LispCons named
+						&& named.car() instanceof LispSymbol className) {
+					// A class defined again after it was forgotten is found again.
+					out.add(listToCons(
+							List.of(new LispSymbol(LispNames.FIND_CLASS_DEFINED), quoteOf(className.name()))));
+				}
 			}
 			else if (isNamedForm(form, LispNames.DEFINE_CONDITION)) {
 				// A condition type is an ordinary CLOS-subset class over the built-in
@@ -28862,8 +28892,12 @@ public final class LispMacroExpander {
 			// the dispatcher slots above were filled by index). Emitted before the
 			// instance/condition re-answers below so the %obj-new inside the
 			// materializer is in their view.
-			out.addAll(findClassRuntimeDefuns(findClassDefun));
+			out.addAll(findClassRuntimeDefuns(findClassDefun, findClassOverrides));
 			out.addAll(0, classMetaTableForms(closRegistry));
+			if (findClassOverrides) {
+				out.add(0, listToCons(List.of(new LispSymbol(LispNames.DEFVAR),
+						new LispSymbol(LispNames.FIND_CLASS_OVERRIDES), LispNil.INSTANCE)));
+			}
 			if (classDirectSubclasses) {
 				out.addAll(classDirectSubclassesDefuns(closRegistry));
 			}
@@ -30077,6 +30111,54 @@ public final class LispMacroExpander {
 	 */
 	public static boolean usesSymbolFunctionWrite(List<LispVal> program) {
 		return program.stream().anyMatch(LispMacroExpander::containsSymbolFunctionWrite);
+	}
+
+	/**
+	 * Whether the program carries a RUN-TIME {@code (setf (find-class ...) ...)} -- any
+	 * pair but the static alias shape {@code (setf (find-class 'a) (find-class 'b))}
+	 * ({@link #expandSetfFindClass}) -- so the public {@code find-class} must consult the
+	 * {@link LispNames#SET_FIND_CLASS} overrides.
+	 * @param program the program
+	 * @return whether it can override find-class at run time
+	 */
+	public static boolean usesRuntimeSetfFindClass(List<LispVal> program) {
+		return program.stream().anyMatch(LispMacroExpander::containsRuntimeSetfFindClass);
+	}
+
+	private static boolean containsRuntimeSetfFindClass(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.isQuote(member)) {
+					return false;
+				}
+				if (LispNames.SETF.equals(member) && cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					for (int i = 1; i + 1 < parts.size(); i += 2) {
+						if (parts.get(i) instanceof LispCons place && place.car() instanceof LispSymbol accessor
+								&& LispNames.FIND_CLASS.equals(plainTypeName(accessor))
+								&& !isStaticFindClassAlias(place, parts.get(i + 1))) {
+							return true;
+						}
+					}
+				}
+			}
+			if (containsRuntimeSetfFindClass(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
+	}
+
+	// The (setf (find-class 'a) (find-class 'b)) shape expandSetfFindClass registers
+	// statically.
+	private static boolean isStaticFindClassAlias(LispCons place, LispVal value) {
+		List<LispVal> placeParts = place.toList();
+		return placeParts.size() >= 2 && quotedSymbolName(placeParts.get(1)) != null
+				&& value instanceof LispCons valueCons && valueCons.car() instanceof LispSymbol op
+				&& LispNames.FIND_CLASS.equals(plainTypeName(op)) && valueCons.toList().size() >= 2
+				&& quotedSymbolName(valueCons.toList().get(1)) != null;
 	}
 
 	private static boolean containsSymbolFunctionWrite(LispVal form) {
@@ -48140,6 +48222,45 @@ public final class LispMacroExpander {
 	 * lives in the table.
 	 * @param publicFindClass whether to emit the public {@code find-class} defun
 	 */
+	private static List<LispVal> findClassRuntimeDefuns(boolean publicFindClass, boolean overrides) {
+		List<LispVal> defuns = new java.util.ArrayList<>(findClassRuntimeDefuns(publicFindClass && !overrides));
+		if (overrides) {
+			// The run-time (setf find-class): an alist the public find-class reads
+			// first; class-of and every internal resolution keep %find-class. The
+			// symbols compare with equal, content-safe on every backend.
+			defuns.addAll(LispReader.readAllFromString(FIND_CLASS_OVERRIDES_SOURCE, Features.INTERPRETER));
+			if (publicFindClass) {
+				defuns.addAll(LispReader.readAllFromString(FIND_CLASS_WITH_OVERRIDES_SOURCE, Features.INTERPRETER));
+			}
+		}
+		return defuns;
+	}
+
+	/** The {@link LispNames#SET_FIND_CLASS} runtime of the compile paths. */
+	private static final String FIND_CLASS_OVERRIDES_SOURCE = """
+			(defun %find-class-defined (name)
+			  (if (assoc name %find-class-overrides% :test #'equal)
+			      (setq %find-class-overrides%
+			            (remove-if (lambda (entry) (equal (car entry) name)) %find-class-overrides%))
+			      nil)
+			  name)
+			(defun %set-find-class (name class)
+			  (%find-class-defined name)
+			  (setq %find-class-overrides% (cons (cons name class) %find-class-overrides%))
+			  class)
+			""";
+
+	/** The public {@code find-class} of a program carrying the overrides. */
+	private static final String FIND_CLASS_WITH_OVERRIDES_SOURCE = """
+			(defun find-class (name &optional (errorp t) environment)
+			  (let ((override (assoc name %find-class-overrides% :test #'equal)))
+			    (if override
+			        (if (cdr override)
+			            (cdr override)
+			            (if errorp (error "FIND-CLASS: there is no class named ~A" name) nil))
+			        (%find-class name errorp))))
+			""";
+
 	private static List<LispVal> findClassRuntimeDefuns(boolean publicFindClass) {
 		LispSymbol sym = new LispSymbol("%fc_sym");
 		LispSymbol errorp = new LispSymbol("%fc_errorp");

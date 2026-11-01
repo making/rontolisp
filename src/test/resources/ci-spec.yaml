@@ -18876,11 +18876,26 @@ cases:
                    (typep 42 (find-class 'integer))
                    (typep 42 (find-class 't))
                    (typep (make-instance 'fcm-dog) (find-class 't))))
-      ;; Any other (setf (find-class ...)) shape -- forgetting a class with nil,
-      ;; contextl's layer-makunbound -- is a run-time error where it runs, so a
-      ;; function carrying one compiles.
+      ;; Any other (setf (find-class ...)) shape runs: forgetting a class with
+      ;; nil (contextl's layer-makunbound) makes find-class answer nil for the
+      ;; name while the class, its instances and class-of stay; setting it back,
+      ;; or defining the class again, makes it findable (SBCL 2.2.9 agrees).
       (defun fcm-forget (name) (setf (find-class name) nil))
-      (print (handler-case (fcm-forget 'fcm-dog) (error () :refused)))
+      (let ((class (find-class 'fcm-dog)) (dog (make-instance 'fcm-dog :name "rex")))
+        (fcm-forget 'fcm-dog)
+        (print (list (find-class 'fcm-dog nil)
+                     (handler-case (find-class 'fcm-dog) (error () :signaled))
+                     (class-name class)
+                     (eq (class-of dog) class)
+                     (slot-value dog 'name)
+                     (typep dog 'fcm-animal)))
+        (setf (find-class 'fcm-dog) class)
+        (print (eq (find-class 'fcm-dog) class)))
+      (defclass fcm-again () ((x :initform 1 :reader fcm-x)))
+      (fcm-forget 'fcm-again)
+      (print (find-class 'fcm-again nil))
+      (defclass fcm-again () ((x :initform 2 :reader fcm-x)))
+      (print (list (class-name (find-class 'fcm-again)) (fcm-x (make-instance 'fcm-again))))
       ;; Forgetting a name no class has removes nothing (contextl's spx opens so).
       (print (setf (find-class 'fcm-never-defined) nil))
     expected: |
@@ -18895,7 +18910,10 @@ cases:
       (T NIL "rex" NIL :SIGNALED)
       (T FCM-DOG T T 42)
       (T NIL T T T NIL T T T T)
-      :REFUSED
+      (NIL :SIGNALED FCM-DOG T "rex" T)
+      T
+      NIL
+      (FCM-AGAIN 2)
       NIL
   - name: defclass-metaclass-protocol
     source: |

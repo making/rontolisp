@@ -4654,6 +4654,30 @@ public final class LispNames {
 	public static final String FIND_CLASS_INTERNAL = "%FIND-CLASS";
 
 	/**
+	 * The run-time {@code (setf find-class)}: {@code (%set-find-class name class)} makes
+	 * the public {@link #FIND_CLASS} answer {@code class} for {@code name} from then on,
+	 * nil FORGETTING the name (contextl's {@code layer-makunbound}); the class object and
+	 * its instances are untouched, and {@code class-of} keeps answering it. A later
+	 * {@code defclass} of the name ends the override. Everything but the static alias
+	 * shape {@code (setf (find-class 'a) (find-class 'b))} lowers to it.
+	 */
+	public static final String SET_FIND_CLASS = "%SET-FIND-CLASS";
+
+	/**
+	 * The compile paths' alist of {@link #SET_FIND_CLASS} overrides, name to class (nil
+	 * when forgotten), consulted by the public {@link #FIND_CLASS} wrapper first.
+	 */
+	public static final String FIND_CLASS_OVERRIDES = "%FIND-CLASS-OVERRIDES%";
+
+	/**
+	 * The compile paths' end of a {@link #SET_FIND_CLASS} override:
+	 * {@code (%find-class-defined 'name)} follows each top-level {@code defclass} of a
+	 * program carrying the overrides, so a class defined again after it was forgotten is
+	 * found again.
+	 */
+	public static final String FIND_CLASS_DEFINED = "%FIND-CLASS-DEFINED";
+
+	/**
 	 * The quoted per-class data table backing the compile paths' generated
 	 * {@link #FIND_CLASS_INTERNAL}: one entry per registered class or struct layout --
 	 * the accepted name spellings (instance tag included, so a {@code class-of}

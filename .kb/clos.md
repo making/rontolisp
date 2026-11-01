@@ -271,12 +271,19 @@ asking "is library X loaded" must therefore not be a `findClass` of X's class na
   (`expandSetfFindClass`; the compile path's `isSetfFindClassForm` branch runs inside
   `expandTopLevelDefinitions`, BEFORE the class tables are built) and becomes an extra
   SPELLING of `%class-meta-table%`, the runtime `typep` tag table and the `subtypep` universe.
-  Only the ALIASING shape is accepted; any other shape (forgetting a class with `nil`,
-  contextl's `layer-makunbound`; a computed name) expands to a run-time `error` where it runs, so
-  a function carrying one compiles (a compile failure until 2026-10-31) -- except forgetting a
-  literal name no class has when the form expands (a top-level form in program order on the
-  compile paths, a nested one against the whole program; the live registry on the
-  interpreter), which is `nil` (2026-11-01, contextl's spx opens with one); an unknown target
+  Any other shape is the RUN-TIME `(setf find-class)` (2026-11-01, all four backends; a
+  run-time `error` until then): `(%set-find-class name value)` (`LispNames.SET_FIND_CLASS`)
+  changes what the PUBLIC `find-class` answers and nothing else -- `nil` forgets the name
+  (contextl's `layer-makunbound`), a class metaobject answers for it, and a later `defclass` of
+  the name ends either. The class, its instances, `class-of` and every internal resolution keep
+  the static tables (`%find-class`; a forgotten name stays a static class, so `make-instance` of
+  a literal name still constructs -- SBCL signals). Interpreter: `ClosRegistry.findClassOverrides`,
+  cleared by `evalDefclass`; compile paths (`usesRuntimeSetfFindClass`): a
+  `%find-class-overrides%` alist the public `find-class` reads first, and a
+  `(%find-class-defined 'name)` after each top-level defclass. Forgetting a literal name no
+  class has when the form expands (a top-level form in program order on the compile paths, a
+  nested one against the whole program; the live registry on the interpreter) stays the static
+  `nil` (contextl's spx opens with one). ci-spec `find-class-metaobject-substrate`; an unknown target
   throws `there is no class named`; a NON-top-level alias is an error (`markClassMetaTableEmitted` makes `registerClassAlias`
   refuse); `--no-gc` shares one never-mutated `EMPTY_CLOS_REGISTRY` and rejects the place
   outright. Macro-namespace twin: `(setf (macro-function ...))`, `.kb/defmacro-backquote.md`.
@@ -888,6 +895,12 @@ symbol, a non-keyword one passed quoted, and the tail may be dotted -- contextl'
   definition in the static tables (`classDefunSlots` nil-s the earlier constructor defun; two
   same-name defuns in one class file are a JVM ClassFormatError) while BOTH driver calls run.
   Existing instances are not updated, and a slot whose INDEX changes poisons `slotPositions`.
+  The interpreter registers a redefinition from the form plus the PREVIOUS driver-built
+  metaobject's class allocations (`withPreviousSlotAllocations`, 2026-11-01) before its driver
+  runs: a hook writing a class-allocated slot during the redefinition (contextl's singleton
+  `reinitialize-instance :after` for a `:reinitialize t` slot) otherwise wrote the instance slot
+  the plain form gives, and the widened re-registration then read the stale shared cell (spx's
+  `class1`: 1, SBCL 2). The compile paths emit the widened form, so they always agreed.
 - **Slot-definition contract: index 5 = INITFUNCTION** (append-only). The driver builds each
   canonicalized spec with `list` — fresh cells per evaluation, because mito's
   add-referencing-slots `rplacd`s ghost markers into them — carrying
@@ -1166,8 +1179,10 @@ chunk-loop wrapper).
   `dletf` of a non-special slot `cerror`s and the handler `eval`s a redefinition making the slot
   special: the instance keeps its raw value (`SYMBOL-VALUE expects a symbol, got "Dr. Jekyll"`),
   since nothing makes instances obsolete (`special-slots-1` also needs layered classes); `spx`
-  `(setf (find-class 'x) nil)`; past it, its special and special layer slots pass on all four
-  and it stops at class redefinition (a singleton slot's `:reinitialize t`); `layer-gc` passes its
+  passes on all four since 2026-11-01 (measured that day: the compile paths already passed it
+  whole -- the premise that they cannot follow its redefinitions was wrong -- and the interpreter
+  stopped at `class1`'s `:reinitialize t`, "Class REdefinition" above); `ContextlE2eTest` carries
+  its redefinitions and a `layer-makunbound`; `layer-gc` passes its
   first four sections and stops where `add-method :after` should clear the caches (`defmethod`
   calls no `add-method` here). `grouped-layers` (`slot-definition-allocation` and the
   `:allocation` reconciliation above) and `dynenv` (the slot-access protocol) pass on all four

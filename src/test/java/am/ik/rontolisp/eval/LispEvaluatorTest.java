@@ -21639,12 +21639,13 @@ class LispEvaluatorTest {
 
 	@Test
 	void setfFindClassRejectsNonAliasShapesAndUnknownTargets() {
-		// Only the aliasing shape is supported (the class table is fixed at compile time
-		// on the compiled backends), and the target must already be a registered class.
+		// Any shape but the static alias is the run-time (setf find-class), whose value
+		// must be a class (or nil); the alias's target must already be a registered
+		// class.
 		assertThatThrownBy(() -> evalMulti("""
 				(defclass fca-thing () ())
 				(setf (find-class 'fca-other) (make-instance 'fca-thing))
-				""")).hasMessageContaining("only supports aliasing an existing class");
+				""")).hasMessageContaining("not a class");
 		assertThatThrownBy(() -> eval("(setf (find-class 'fca-gone) (find-class 'fca-no-such))"))
 			.hasMessageContaining("there is no class named");
 		// An exact class name wins over the alias table, so rebinding one would be a

@@ -24,13 +24,15 @@ import java.util.List;
  * {@code special-class} instance's {@code dletf}, captured and re-entered dynamic
  * environments, {@code slot-boundp}/{@code slot-makunbound}) through the slot-access
  * protocol ({@code .kb/clos.md}), as its {@code test/dynenv.lisp} does, and special layer
- * slots bound by a layer activation's initargs, as its {@code test/spx.lisp} does. Every
- * activation makes an anonymous {@code standard-layer-class} at RUN time and dispatches
- * on its prototype, which prints through contextl's {@code print-object} method
- * ({@code .kb/clos.md}, "Classes made at run time"). The last line prints
- * {@code contextl-user} symbols inside a form that activates a layer, which the
- * interpreter used to spell qualified ({@code .kb/pretty-printer.md}, "The package
- * qualifier follows `*package*` accessibility").
+ * slots bound by a layer activation's initargs, singleton classes and layers redefined
+ * with and without {@code :reinitialize t} slots, and a layer forgotten with
+ * {@code layer-makunbound}, as its {@code test/spx.lisp} does. Every activation makes an
+ * anonymous {@code standard-layer-class} at RUN time and dispatches on its prototype,
+ * which prints through contextl's {@code print-object} method ({@code .kb/clos.md},
+ * "Classes made at run time"). The last line prints {@code contextl-user} symbols inside
+ * a form that activates a layer, which the interpreter used to spell qualified
+ * ({@code .kb/pretty-printer.md}, "The package qualifier follows `*package*`
+ * accessibility").
  */
 class ContextlE2eTest extends AsdfLibraryE2eSupport {
 
@@ -136,6 +138,25 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			             (with-active-layers ((test-layer :slot0 4711))
 			               (list (slot0 (find-layer 'test-layer)) (slot1 (find-layer 'test-layer))))
 			             (slot0 (find-layer 'test-layer))))
+			(defparameter *counter* 0)
+			(defclass class1 () ((some-slot :initform (incf *counter*) :reader some-slot)) (:metaclass singleton-class))
+			(ensure-finalized (find-class 'class1))
+			(defclass class1 () ((some-slot :initform (incf *counter*) :reader some-slot)) (:metaclass singleton-class))
+			(print (list (some-slot (class-prototype (find-class 'class1))) *counter*))
+			(defclass class1 ()
+			  ((some-slot :initform (incf *counter*) :reader some-slot :reinitialize t))
+			  (:metaclass singleton-class))
+			(print (list (some-slot (class-prototype (find-class 'class1))) *counter*))
+			(deflayer layer1 () ((some-slot :initform (incf *counter*) :reader some-slot)))
+			(print (some-slot (find-layer 'layer1)))
+			(deflayer layer1 () ((some-slot :initform (incf *counter*) :reader some-slot :reinitialize t)))
+			(deflayer layer3 () ((some-slot :initform (incf *counter*) :reader some-slot :special t)))
+			(print (list (some-slot (find-layer 'layer1)) (some-slot (find-layer 'layer3)) *counter*))
+			(deflayer layer3 () ((some-slot :initform (incf *counter*) :reader some-slot :special t :reinitialize t)))
+			(print (list (dletf (((some-slot (find-layer 'layer3)) 'foo)) (some-slot (find-layer 'layer3)))
+			             (some-slot (find-layer 'layer3)) *counter*))
+			(layer-makunbound 'layer1)
+			(print (list (find-layer-class 'layer1 nil) (layer-name (find-layer 'layer3))))
 			""";
 
 	private static final List<String> EXPECTED = List.of("(:ROOT)", "(:INFO :ROOT)", "(:EMPLOYMENT :INFO :ROOT)",
@@ -145,7 +166,8 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			"(:ROOT)", "(:CLASS :CLASS)", "(T T)",
 			"((:OUTPUT) ((:PLAIN :OUTPUT) ((:HTML :OUTPUT) ((:XML :OUTPUT) (:PLAIN :OUTPUT)))))",
 			"(NIL (1 2) (2 3) (2 3) NIL)", "(10 (20 20) 10 NIL)", "\"#<LAYER NIL>\"",
-			"(INFO-LAYER INFO-LAYER (INFO-LAYER T))", "(FOO BAR (4711 BAR) FOO)");
+			"(INFO-LAYER INFO-LAYER (INFO-LAYER T))", "(FOO BAR (4711 BAR) FOO)", "(1 1)", "(2 2)", "3", "(4 5 5)",
+			"(FOO 6 6)", "(NIL LAYER3)");
 
 	@Override
 	protected String systemDir() {

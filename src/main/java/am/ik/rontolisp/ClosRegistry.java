@@ -3108,6 +3108,53 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * The metaobject memoized for a class name, without materializing a plain view: what
+	 * a redefinition starts from (the driver-built instance of an earlier
+	 * {@code :metaclass} definition), or null when none is memoized.
+	 * @param name the class name as spelled in its defclass
+	 * @return the memoized metaobject, or null
+	 */
+	@Nullable public LispInstance memoizedClassMetaobject(String name) {
+		return this.classMetaobjects.get(normalize(name));
+	}
+
+	/**
+	 * The run-time {@code (setf find-class)} overrides, normalized name to the class the
+	 * public {@code find-class} answers (nil: the name is forgotten).
+	 */
+	private final Map<String, LispVal> findClassOverrides = new java.util.HashMap<>();
+
+	/**
+	 * Makes the public {@code find-class} answer {@code value} for {@code name} from now
+	 * on ({@code (setf (find-class name) value)}); nil forgets the name. Nothing else
+	 * changes: the class, its instances, {@code class-of} and the static tables.
+	 * @param name the class name
+	 * @param value the class metaobject, or nil
+	 */
+	public void setFindClassOverride(String name, LispVal value) {
+		this.findClassOverrides.put(normalize(name), value);
+	}
+
+	/**
+	 * Ends a {@link #setFindClassOverride} of the name: a {@code defclass} of it makes
+	 * {@code find-class} answer the class again.
+	 * @param name the class name
+	 */
+	public void clearFindClassOverride(String name) {
+		this.findClassOverrides.remove(normalize(name));
+	}
+
+	/**
+	 * The {@link #setFindClassOverride} answer for a name, or null when none is in force
+	 * (nil itself means forgotten).
+	 * @param name the class name
+	 * @return the overriding class, nil, or null
+	 */
+	@Nullable public LispVal findClassOverride(String name) {
+		return this.findClassOverrides.isEmpty() ? null : this.findClassOverrides.get(normalize(name));
+	}
+
+	/**
 	 * The canonical names of the classes whose DIRECT superclasses contain the given
 	 * class -- the {@code class-direct-subclasses} answer. Two sources, merged: the
 	 * memoized metaobjects' direct-superclass lists (a driver-built metaclass instance

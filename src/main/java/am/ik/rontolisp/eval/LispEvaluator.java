@@ -1827,7 +1827,12 @@ public final class LispEvaluator {
 						LispNames.FIND_CLASS + " expects 1 to 3 arguments, got " + args.size());
 			}
 			boolean errorp = args.size() < 2 || !(args.get(1) instanceof LispNil);
-			if (args.get(0) instanceof LispSymbol sym) {
+			LispVal override = args.get(0) instanceof LispSymbol named
+					? this.closRegistry.findClassOverride(named.name()) : null;
+			if (override != null && !(override instanceof LispNil)) {
+				return override;
+			}
+			if (override == null && args.get(0) instanceof LispSymbol sym) {
 				this.closRegistry.ensureMopClassesSeededFor(sym.name());
 				LispVal metaobject = this.closRegistry.classMetaobject(sym.name());
 				if (metaobject == null) {
@@ -1849,6 +1854,20 @@ public final class LispEvaluator {
 						+ (args.get(0) instanceof LispSymbol s ? s.name() : args.get(0).print()));
 			}
 			return LispNil.INSTANCE;
+		}));
+		// (setf (find-class name) class): find-class answers class for name from now on,
+		// nil forgetting it (contextl's layer-makunbound); see LispNames.SET_FIND_CLASS.
+		this.globalEnv.defineFunction(LispNames.SET_FIND_CLASS, new LispFunction(LispNames.SET_FIND_CLASS, args -> {
+			if (args.size() != 2 || !(args.get(0) instanceof LispSymbol name)) {
+				throw new LispEvalException("(setf " + LispNames.FIND_CLASS + ") expects a class name and a class, got "
+						+ args.stream().map(LispVal::print).toList());
+			}
+			LispVal value = args.get(1);
+			if (!(value instanceof LispNil) && !this.closRegistry.isClassMetaobject(value)) {
+				throw new LispEvalException("(setf " + LispNames.FIND_CLASS + "): not a class: " + value.print());
+			}
+			this.closRegistry.setFindClassOverride(name.name(), value);
+			return value;
 		}));
 		this.globalEnv.defineFunction(LispNames.ALLOCATE_INSTANCE,
 				new LispFunction(LispNames.ALLOCATE_INSTANCE, args -> {
@@ -10483,14 +10502,25 @@ public final class LispEvaluator {
 		// A funcallable MOP class named as the metaclass or a superclass registers
 		// first, so the protocol below loads with its constructor.
 		LispMacroExpander.seedMopClassesNamedBy(cons, this.closRegistry);
+		LispCons registered = cons;
 		if (LispMacroExpander.defclassUsesMetaclass(cons)) {
 			ensureMopProtocolLoaded();
+			// A REdefinition starts from what the previous driver-built metaobject knew
+			// about slot allocations: the static side below is registered before this
+			// definition's driver runs, and its hooks may write a class-allocated slot
+			// (contextl's singleton :reinitialize t), which must reach the shared cell.
+			LispInstance previous = cons.toList().get(1) instanceof LispSymbol defined
+					? this.closRegistry.memoizedClassMetaobject(defined.name()) : null;
+			LispCons carried = previous == null ? null : LispMacroExpander.withPreviousSlotAllocations(cons, previous);
+			if (carried != null) {
+				registered = carried;
+			}
 		}
 		// Expand into the generated defuns (constructor, readers/accessors) and
 		// evaluate each, then regenerate the dispatchers that test class specializers:
 		// the new class may extend one of their descendant tag sets.
 		LispVal driverMetaobject = null;
-		for (LispVal form : LispMacroExpander.expandDefclass(cons, this.closRegistry, this.structAccessors)) {
+		for (LispVal form : LispMacroExpander.expandDefclass(registered, this.closRegistry, this.structAccessors)) {
 			LispVal value = eval(form, env);
 			if (isEnsureClassDriverCall(form)) {
 				driverMetaobject = value;
@@ -10504,6 +10534,10 @@ public final class LispEvaluator {
 		// list. The driver call itself is NOT re-run (its :arounds are user code).
 		if (driverMetaobject instanceof LispInstance metaobject) {
 			LispCons widened = LispMacroExpander.widenDefclassToMetaobjectSupers(cons, metaobject);
+			if (widened == null && registered != cons) {
+				// The carried allocations no longer hold: back to the form as written.
+				widened = cons;
+			}
 			if (widened != null) {
 				for (LispVal form : LispMacroExpander.expandDefclass(widened, this.closRegistry,
 						this.structAccessors)) {
@@ -10523,7 +10557,7 @@ public final class LispEvaluator {
 				// the cell, so finalization runs again over the layout it now has. The
 				// compile paths emit the widened form, so their cell exists before the
 				// driver runs.
-				if (LispMacroExpander.widensSlotAllocations(cons, widened)) {
+				if (LispMacroExpander.widensSlotAllocations(registered, widened)) {
 					apply(resolveFunction(CLOSER_MOP_FINALIZE_INHERITANCE), List.of(metaobject), this.globalEnv);
 				}
 			}
@@ -10536,6 +10570,10 @@ public final class LispEvaluator {
 		// CLHS: defclass answers the class object, find-class's (lisp-binary binds a
 		// defparameter to it and hands it to moptilities' slot-names).
 		LispVal name = cons.toList().get(1);
+		if (name instanceof LispSymbol defined) {
+			// A class defined again after (setf (find-class name) nil) is found again.
+			this.closRegistry.clearFindClassOverride(defined.name());
+		}
 		LispVal metaobject = name instanceof LispSymbol sym ? this.closRegistry.classMetaobject(sym.name()) : null;
 		return metaobject != null ? metaobject : name;
 	}
