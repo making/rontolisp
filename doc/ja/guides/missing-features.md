@@ -153,9 +153,10 @@ CLOS は**静的なサブセット**です
 の DAO 層を無改変でロードする仕組みです。多重継承も動作します
 （クラス優先順位リスト、スーパークラス間のスロットマージ）。対象外: 実行時のクラス構築
 （計算されたデータからの `ensure-class`、トップレベル以外の `defclass`、
-`add-method`、`compute-applicable-methods`、クラス再定義、
+`compute-applicable-methods`、クラス再定義、
 `update-instance-for-different-class`）—
-コンパイルされたプログラムのクラスとメソッドの集合はコンパイル時に固定されます。
+コンパイルされたプログラムのクラスの集合はコンパイル時に固定されます。実行時に作った
+メソッドは [`add-method`](../reference/functions/add-method.md) で総称関数に加わります。
 
 ## ユーザー定義パッケージ
 

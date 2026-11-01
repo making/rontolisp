@@ -21597,13 +21597,13 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(LispNames.MAKE_INSTANCE + ": unknown class " + classSym.name());
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
-		if (closRegistry.isSeededClass(info.name())
+		if (closRegistry.isSeededClass(info.name()) && !closRegistry.gfProtocol()
 				&& ClosRegistry.isMethodMetaobjectClassName(qn == null ? info.name() : qn.member())) {
-			// A seeded method metaobject class has no constructor: methods and generic
-			// functions are static here (mito's relational reader and rutils build a
-			// standard-method for add-method, which does not exist either). The
-			// refusal is a run-time error, after the initargs evaluate as the call's
-			// arguments would, so a library carrying the call compiles.
+			// A seeded method metaobject class has a constructor only under the
+			// generic-function protocol (generic-functions.lisp), which a program
+			// carrying add-method has. Elsewhere the refusal is a run-time error, after
+			// the initargs evaluate as the call's arguments would, so a library carrying
+			// the call compiles.
 			List<LispVal> refusal = new java.util.ArrayList<>(parts.subList(2, parts.size()));
 			refusal.add(listToCons(
 					List.of(new LispSymbol(LispNames.ERROR), textDatum(LispNames.MAKE_INSTANCE + ": cannot make a "
@@ -25706,8 +25706,24 @@ public final class LispMacroExpander {
 		String documentation = null;
 		String combination = null;
 		boolean mostSpecificLast = false;
+		LispVal genericFunctionClass = null;
+		LispVal methodClass = null;
 		List<LispCons> inlineMethods = new java.util.ArrayList<>();
 		for (int i = 3; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
+					&& optCons.cdr() instanceof LispCons valueCons
+					&& (":GENERIC-FUNCTION-CLASS".equals(plainTypeName(optSym))
+							|| ":METHOD-CLASS".equals(plainTypeName(optSym)))) {
+				// The metaobject classes of the generic and its methods: what the
+				// generic-function protocol instantiates (macro/generic-functions.lisp).
+				if (":GENERIC-FUNCTION-CLASS".equals(plainTypeName(optSym))) {
+					genericFunctionClass = valueCons.car();
+				}
+				else {
+					methodClass = valueCons.car();
+				}
+				continue;
+			}
 			if (parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
 					&& ":METHOD-COMBINATION".equals(plainTypeName(optSym))) {
 				// (:method-combination NAME [:most-specific-first | :most-specific-last])
@@ -25754,12 +25770,11 @@ public final class LispMacroExpander {
 			}
 			if (parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
 					&& (LispNames.DECLARE.equals(plainTypeName(optSym))
-							|| ":ARGUMENT-PRECEDENCE-ORDER".equals(plainTypeName(optSym))
-							|| ":GENERIC-FUNCTION-CLASS".equals(plainTypeName(optSym))
-							|| ":METHOD-CLASS".equals(plainTypeName(optSym)))) {
+							|| ":ARGUMENT-PRECEDENCE-ORDER".equals(plainTypeName(optSym)))) {
 				// (declare (optimize ...)) is a no-op like every declaration;
-				// :argument-precedence-order and the metaclass options are accepted and
-				// ignored (lite: leftmost-first ordering, no MOP).
+				// :argument-precedence-order is accepted and ignored (lite:
+				// leftmost-first
+				// ordering).
 				continue;
 			}
 			throw new UnsupportedOperationException(
@@ -25805,6 +25820,7 @@ public final class LispMacroExpander {
 		// and checks each clause's lambda list against this one.
 		info.methodCombination(combination, mostSpecificLast);
 		info.lambdaListShape(shape, true);
+		info.metaobjectOptions(genericFunctionClass, methodClass, parts.get(2));
 		if (ll.variadic()) {
 			info.markVariadic();
 		}
@@ -26104,6 +26120,7 @@ public final class LispMacroExpander {
 			.put(key, new ClosRegistry.MethodInfo(List.copyOf(specializers), functionName, qualifier, usesNext));
 		generic.methodShapes().put(key, methodShape);
 		generic.inlineMethodKeys().remove(key);
+		generic.methodDefined(key, unspecializedLambdaList(parts.get(llIndex)));
 		if (nested) {
 			// The method-body defun stays inside the let and compiles to a global-closure
 			// setq, so the dispatcher must skip this branch until the defmethod form
@@ -26199,6 +26216,190 @@ public final class LispMacroExpander {
 			forms.add(expansion);
 		}
 		return makeProgn(forms);
+	}
+
+	/**
+	 * A specialized lambda list with its specializers dropped (AMOP's
+	 * {@code method-lambda-list}): {@code ((a integer) b &optional c)} is
+	 * {@code (a b &optional c)}.
+	 */
+	private static LispVal unspecializedLambdaList(LispVal lambdaList) {
+		if (!(lambdaList instanceof LispCons cons) || !cons.isProperList()) {
+			return LispNil.INSTANCE;
+		}
+		List<LispVal> out = new java.util.ArrayList<>();
+		boolean required = true;
+		for (LispVal param : cons.toList()) {
+			if (param instanceof LispSymbol sym && sym.name().startsWith("&")) {
+				required = false;
+			}
+			out.add(required && param instanceof LispCons specialized ? specialized.car() : param);
+		}
+		return listToCons(out);
+	}
+
+	/**
+	 * Whether a program uses the generic-function protocol
+	 * ({@code macro/generic-functions.lisp}): it names one of its operators
+	 * ({@link GenericFunctions#isProtocolName}) anywhere, or a {@code defgeneric} names
+	 * its generic-function or method class.
+	 * @param program the top-level forms
+	 * @return true when the runtime joins the program
+	 */
+	public static boolean usesGenericFunctionProtocol(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (mentionsGenericFunctionProtocol(form) || declaresMetaobjectClasses(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mentionsGenericFunctionProtocol(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (mentionsGenericFunctionProtocol(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return form instanceof LispSymbol sym && GenericFunctions.isProtocolName(sym.name());
+	}
+
+	/**
+	 * Whether the form is a {@code defgeneric} with a {@code :generic-function-class} or
+	 * {@code :method-class} option.
+	 * @param form the form
+	 * @return true for such a defgeneric
+	 */
+	public static boolean declaresMetaobjectClasses(LispVal form) {
+		if (!isNamedForm(form, LispNames.DEFGENERIC) || !((LispCons) form).isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = ((LispCons) form).toList();
+		for (int i = 3; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispCons option && option.car() instanceof LispSymbol key
+					&& (":GENERIC-FUNCTION-CLASS".equals(plainTypeName(key))
+							|| ":METHOD-CLASS".equals(plainTypeName(key)))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The {@code (%gf-declare 'name 'class 'method-class 'lambda-list)} form recording a
+	 * {@code defgeneric}'s metaobject classes for the generic-function protocol, or null
+	 * when it names none.
+	 * @param generic the generic
+	 * @param name the generic's name as its defgeneric wrote it
+	 * @return the form, or null
+	 */
+	public static @Nullable LispVal genericDeclaration(ClosRegistry.GenericInfo generic, LispVal name) {
+		if (generic.genericFunctionClass() == null && generic.methodClass() == null) {
+			return null;
+		}
+		LispVal lambdaList = generic.declaredLambdaList();
+		return listToCons(List.of(new LispSymbol("%GF-DECLARE"), quotedData(name),
+				quotedData(generic.genericFunctionClass() == null ? new LispSymbol("STANDARD-GENERIC-FUNCTION")
+						: java.util.Objects.requireNonNull(generic.genericFunctionClass())),
+				quotedData(generic.methodClass() == null ? LispNil.INSTANCE
+						: java.util.Objects.requireNonNull(generic.methodClass())),
+				quotedData(lambdaList == null ? LispNil.INSTANCE : lambdaList)));
+	}
+
+	/**
+	 * The {@code (%gf-static-method-added ...)} form handing the method a
+	 * {@code defmethod} defined to {@code add-method} as a method metaobject, for a
+	 * generic whose {@code defgeneric} named its metaobject classes (contextl's layered
+	 * functions); null for any other generic, a nested method, or an unknown key.
+	 * @param generic the generic
+	 * @param key the method's key
+	 * @param closRegistry the registry
+	 * @return the form, or null
+	 */
+	public static @Nullable LispVal staticMethodAdded(ClosRegistry.GenericInfo generic, String key,
+			ClosRegistry closRegistry) {
+		ClosRegistry.MethodInfo method = generic.methods().get(key);
+		if (method == null || (generic.genericFunctionClass() == null && generic.methodClass() == null)
+				|| closRegistry.isNestedMethodFunction(method.functionName())) {
+			return null;
+		}
+		List<LispVal> specializers = new java.util.ArrayList<>();
+		specializers.add(new LispSymbol(LispNames.LIST));
+		for (ClosRegistry.Specializer spec : method.specializers()) {
+			specializers.add(switch (spec.kind()) {
+				case DEFAULT -> findClassForm(LispTrue.INSTANCE);
+				case CLASS -> findClassForm(new LispSymbol(
+						registeredClassSpelling(java.util.Objects.requireNonNull(spec.name()), closRegistry)));
+				case TYPE -> findClassForm(new LispSymbol(java.util.Objects.requireNonNull(spec.name())));
+				case EQL -> mvCall("CLOSER-MOP:INTERN-EQL-SPECIALIZER",
+						eqlValueForm(java.util.Objects.requireNonNull(spec.eqlValue())));
+			});
+		}
+		LispVal qualifiers = method.isPrimary() ? LispNil.INSTANCE
+				: listToCons(List.of(new LispSymbol(method.qualifier())));
+		LispVal lambdaList = generic.methodLambdaLists().get(key);
+		return listToCons(List.of(new LispSymbol("%GF-STATIC-METHOD-ADDED"), quotedData(new LispSymbol(generic.name())),
+				quotedData(qualifiers), listToCons(specializers), functionRef(method.functionName()),
+				quotedData(lambdaList == null ? LispNil.INSTANCE : lambdaList), new LispString(key)));
+	}
+
+	/**
+	 * The {@link #staticMethodAdded} form of the method a just-expanded {@code defmethod}
+	 * defined, or null (no protocol interest, or the method was refused).
+	 * @param defmethod the defmethod form, its setf name normalized
+	 * @param closRegistry the registry
+	 * @return the form, or null
+	 */
+	public static @Nullable LispVal staticMethodAdded(LispCons defmethod, ClosRegistry closRegistry) {
+		if (!(defmethod.toList().get(1) instanceof LispSymbol name)) {
+			return null;
+		}
+		ClosRegistry.GenericInfo generic = closRegistry.findGeneric(name.name());
+		String key = generic == null ? null : generic.lastMethodKey();
+		return key == null ? null : staticMethodAdded(java.util.Objects.requireNonNull(generic), key, closRegistry);
+	}
+
+	/**
+	 * What follows a {@code defgeneric} under the generic-function protocol: its
+	 * {@link #genericDeclaration} and the {@link #staticMethodAdded} form of each method
+	 * its {@code (:method ...)} options defined, in definition order.
+	 * @param generic the generic, or null when the defgeneric was refused
+	 * @param name the generic's name as its defgeneric wrote it
+	 * @param closRegistry the registry
+	 * @return the forms
+	 */
+	public static List<LispVal> genericProtocolForms(ClosRegistry.@Nullable GenericInfo generic, LispVal name,
+			ClosRegistry closRegistry) {
+		List<LispVal> forms = new java.util.ArrayList<>();
+		if (generic == null) {
+			return forms;
+		}
+		LispVal declaration = genericDeclaration(generic, name);
+		if (declaration != null) {
+			forms.add(declaration);
+		}
+		for (String key : generic.methods().keySet()) {
+			if (generic.inlineMethodKeys().contains(key)) {
+				LispVal added = staticMethodAdded(generic, key, closRegistry);
+				if (added != null) {
+					forms.add(added);
+				}
+			}
+		}
+		return forms;
+	}
+
+	/**
+	 * The form evaluating to an {@code eql} specializer's object: a computed form's cell
+	 * read as it stands, any other value quoted.
+	 */
+	private static LispVal eqlValueForm(LispVal value) {
+		if (value instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.THE.equals(plainTypeName(head))) {
+			return value;
+		}
+		return value instanceof LispSymbol || value instanceof LispCons ? quotedData(value) : value;
 	}
 
 	/** Whether the plain generic name is {@code slot-unbound} or {@code slot-missing}. */
@@ -27032,7 +27233,7 @@ public final class LispMacroExpander {
 		boolean combined = generic.methods().values().stream().anyMatch(m -> !m.isPrimary() || m.usesNext());
 		LispVal chain = combined ? combinedDispatchBody(generic, params, closRegistry, builtinFallback, narrower)
 				: simpleDispatchBody(generic, params, closRegistry, builtinFallback, narrower);
-		if (closRegistry.dynamicClasses() && generic.methodCombination() == null) {
+		if ((closRegistry.dynamicClasses() || closRegistry.gfProtocol()) && generic.methodCombination() == null) {
 			chain = withDynamicDispatchArm(generic, params, variadic, closRegistry, chain);
 		}
 		List<LispVal> defun = new java.util.ArrayList<>();
@@ -27061,22 +27262,47 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal withDynamicDispatchArm(ClosRegistry.GenericInfo generic, List<LispVal> params,
 			boolean variadic, ClosRegistry closRegistry, LispVal chain) {
+		boolean runtimeMethods = closRegistry.gfProtocol();
 		java.util.SortedSet<Integer> positions = new java.util.TreeSet<>();
-		for (ClosRegistry.MethodInfo m : generic.methods().values()) {
-			List<ClosRegistry.Specializer> specs = m.specializers();
-			for (int i = 0; i < specs.size() && i < params.size(); i++) {
-				if (specs.get(i).kind() == ClosRegistry.SpecializerKind.CLASS) {
-					positions.add(i);
+		if (closRegistry.dynamicClasses()) {
+			for (ClosRegistry.MethodInfo m : generic.methods().values()) {
+				List<ClosRegistry.Specializer> specs = m.specializers();
+				for (int i = 0; i < specs.size() && i < params.size(); i++) {
+					if (specs.get(i).kind() == ClosRegistry.SpecializerKind.CLASS) {
+						positions.add(i);
+					}
 				}
 			}
 		}
-		if (positions.isEmpty()) {
+		if (positions.isEmpty() && !runtimeMethods) {
 			return chain;
 		}
 		List<LispVal> anyDynamic = new java.util.ArrayList<>();
 		anyDynamic.add(new LispSymbol(LispNames.OR));
+		if (runtimeMethods) {
+			anyDynamic.add(new LispSymbol(GF_RUNTIME_METHODS_VAR));
+		}
 		for (int i : positions) {
 			anyDynamic.add(objIs(params.get(i), List.of(ClosRegistry.DYNAMIC_OBJECT_TAG)));
+		}
+		if (anyDynamic.size() > 1
+				&& generic.methods().values().stream().anyMatch(m -> !m.isPrimary() || m.usesNext())) {
+			// An argument an eql specializer selects takes the run-time combination too:
+			// the static eql branch admits only methods specialized the same way, so a
+			// class method its object is an instance of (contextl's eql :before method
+			// on a layer class beside the class primary) would go missing.
+			java.util.Set<String> seen = new java.util.HashSet<>();
+			for (ClosRegistry.MethodInfo m : generic.methods().values()) {
+				List<ClosRegistry.Specializer> specs = m.specializers();
+				for (int i = 0; i < specs.size() && i < params.size(); i++) {
+					if (specs.get(i).kind() == ClosRegistry.SpecializerKind.EQL) {
+						LispVal test = singleSpecializerTest(specs.get(i), params.get(i), closRegistry);
+						if (seen.add(test.print())) {
+							anyDynamic.add(test);
+						}
+					}
+				}
+			}
 		}
 		List<LispVal> entries = new java.util.ArrayList<>();
 		entries.add(new LispSymbol(LispNames.LIST));
@@ -27089,11 +27315,31 @@ public final class LispMacroExpander {
 		if (variadic) {
 			argList.add(new LispSymbol(GF_REST_VAR));
 		}
+		LispVal allEntries = listToCons(entries);
+		if (runtimeMethods) {
+			// The run-time methods' entries join the defmethods'
+			// (generic-functions.lisp).
+			allEntries = mvCall(LispNames.APPEND, allEntries,
+					mvCall("%GF-RUNTIME-ENTRIES", new LispSymbol(GF_RUNTIME_METHODS_VAR), listToCons(argList)));
+		}
 		LispSymbol found = new LispSymbol("%dyn-entries");
 		LispVal test = anyDynamic.size() == 2 ? anyDynamic.get(1) : listToCons(anyDynamic);
-		return makeLet(found.name(), makeIf(test, mvCall("%DYNAMIC-APPLICABLE", listToCons(entries)), LispNil.INSTANCE),
+		LispVal arm = makeLet(found.name(), makeIf(test, mvCall("%DYNAMIC-APPLICABLE", allEntries), LispNil.INSTANCE),
 				makeIf(found, mvCall("%DYNAMIC-DISPATCH", found, listToCons(argList)), chain));
+		if (!runtimeMethods) {
+			return arm;
+		}
+		// The generic's run-time method table, read once per call: nil keeps the
+		// compiled dispatch.
+		return makeLet(GF_RUNTIME_METHODS_VAR,
+				mvCall("%GF-RUNTIME-METHODS", quotedData(new LispSymbol(generic.name()))), arm);
 	}
+
+	/**
+	 * The dispatcher variable holding its generic's run-time methods under the
+	 * generic-function protocol ({@link #withDynamicDispatchArm}).
+	 */
+	private static final String GF_RUNTIME_METHODS_VAR = "%gf-rt";
 
 	/**
 	 * One method's entry for the run-time dispatch of {@link #withDynamicDispatchArm}:
@@ -27118,9 +27364,16 @@ public final class LispMacroExpander {
 			LispVal param = params.get(i);
 			LispVal staticKey = makeIf(singleSpecializerTest(spec, param, closRegistry),
 					new LispInteger(specializerRank(spec, closRegistry) * 1000L), LispNil.INSTANCE);
+			LispVal dynamicTest = objIs(param, List.of(ClosRegistry.DYNAMIC_OBJECT_TAG));
+			if (closRegistry.gfProtocol()) {
+				// With run-time methods in the call, every class key is the class's
+				// position in the argument's precedence list, the scale theirs use.
+				dynamicTest = listToCons(
+						List.of(new LispSymbol(LispNames.OR), new LispSymbol(GF_RUNTIME_METHODS_VAR), dynamicTest));
+			}
 			LispVal key = spec.kind() == ClosRegistry.SpecializerKind.CLASS
-					? makeIf(objIs(param, List.of(ClosRegistry.DYNAMIC_OBJECT_TAG)),
-							mvCall("%DYNAMIC-CLASS-KEY", param,
+					? makeIf(dynamicTest,
+							mvCall(closRegistry.gfProtocol() ? "%CLASS-KEY" : "%DYNAMIC-CLASS-KEY", param,
 									findClassForm(new LispSymbol(registeredClassSpelling(
 											java.util.Objects.requireNonNull(spec.name()), closRegistry)))),
 							staticKey)
@@ -28188,31 +28441,80 @@ public final class LispMacroExpander {
 					// (the 100-199 band sits between classes and built-in types).
 					yield Math.max(100, 199 - closRegistry.structAncestorCount(spec.name()));
 				}
-				yield switch (spec.name()) {
-					case "NULL" -> 200;
-					// A package IS a keyword here, so a package method must be tried
-					// before a keyword/symbol one -- rove's find-suite pairs a
-					// (package) method with an unspecialized DESIGNATOR method that
-					// calls find-package and recurses; misordered it recurses forever.
-					case "PACKAGE" -> 205;
-					case "KEYWORD", "UNSIGNED-BYTE" -> 210;
-					case "BOOLEAN" -> 212;
-					case "STANDARD-CHAR", "BASE-CHAR" -> 215;
-					case "DOUBLE-FLOAT", "SINGLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT" -> 218;
-					case "RATIONAL" -> 225;
-					// A bit vector is a vector (cl-slice's canonical-representation pairs
-					// the two), and a simple one a bit vector.
-					case "SIMPLE-BIT-VECTOR" -> 226;
-					case "BIT-VECTOR" -> 228;
-					case "NUMBER", "REAL", "VECTOR", "SIMPLE-VECTOR", "SIMPLE-STRING", "BASE-STRING" -> 230;
-					case "LIST", "ARRAY", "SIMPLE-ARRAY" -> 235;
-					case "SEQUENCE", "ATOM" -> 240;
-					case "STANDARD-OBJECT", "STRUCTURE-OBJECT" -> 250;
-					default -> 220;
-				};
+				yield builtInTypeRank(java.util.Objects.requireNonNull(spec.name()));
 			}
 			case DEFAULT -> 1000;
 		};
+	}
+
+	/**
+	 * The specificity rank of a built-in TYPE specializer (subtypes before their
+	 * supertypes, 220 for any other name).
+	 * @param name the type name
+	 * @return the rank
+	 */
+	private static int builtInTypeRank(String name) {
+		Integer rank = BUILT_IN_TYPE_RANKS.get(name);
+		return rank == null ? 220 : rank;
+	}
+
+	/**
+	 * The ranks of the built-in type specializers whose rank is not the default 220. A
+	 * package IS a keyword here, so a package method must be tried before a
+	 * keyword/symbol one (rove's find-suite pairs a {@code (package)} method with an
+	 * unspecialized DESIGNATOR method that calls find-package and recurses; misordered it
+	 * recurses forever); a bit vector is a vector (cl-slice's canonical-representation
+	 * pairs the two), and a simple one a bit vector. The generic-function protocol's
+	 * run-time methods rank a built-in class specializer from the same table
+	 * ({@link #classKeyRanksForm}).
+	 */
+	private static final java.util.Map<String, Integer> BUILT_IN_TYPE_RANKS = builtInTypeRanks();
+
+	private static java.util.Map<String, Integer> builtInTypeRanks() {
+		java.util.Map<String, Integer> ranks = new java.util.LinkedHashMap<>();
+		ranks.put("NULL", 200);
+		ranks.put("PACKAGE", 205);
+		for (String name : List.of("KEYWORD", "UNSIGNED-BYTE")) {
+			ranks.put(name, 210);
+		}
+		ranks.put("BOOLEAN", 212);
+		for (String name : List.of("STANDARD-CHAR", "BASE-CHAR")) {
+			ranks.put(name, 215);
+		}
+		for (String name : List.of("DOUBLE-FLOAT", "SINGLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT")) {
+			ranks.put(name, 218);
+		}
+		ranks.put("RATIONAL", 225);
+		ranks.put("SIMPLE-BIT-VECTOR", 226);
+		ranks.put("BIT-VECTOR", 228);
+		for (String name : List.of("NUMBER", "REAL", "VECTOR", "SIMPLE-VECTOR", "SIMPLE-STRING", "BASE-STRING")) {
+			ranks.put(name, 230);
+		}
+		for (String name : List.of("LIST", "ARRAY", "SIMPLE-ARRAY")) {
+			ranks.put(name, 235);
+		}
+		for (String name : List.of("SEQUENCE", "ATOM")) {
+			ranks.put(name, 240);
+		}
+		for (String name : List.of("STANDARD-OBJECT", "STRUCTURE-OBJECT")) {
+			ranks.put(name, 250);
+		}
+		return java.util.Collections.unmodifiableMap(ranks);
+	}
+
+	/**
+	 * The {@code (setq %class-key-ranks% '((name . rank) ...))} form giving
+	 * {@code dynamic-classes.lisp}'s {@code %class-key} the built-in type ranks, so a
+	 * run-time method's built-in class specializer orders like a {@code defmethod}'s.
+	 * @return the form
+	 */
+	public static LispVal classKeyRanksForm() {
+		List<LispVal> pairs = new java.util.ArrayList<>();
+		for (java.util.Map.Entry<String, Integer> rank : BUILT_IN_TYPE_RANKS.entrySet()) {
+			pairs.add(new LispCons(new LispSymbol(rank.getKey()), new LispInteger(rank.getValue())));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol("%CLASS-KEY-RANKS%"),
+				quotedData(listToCons(pairs))));
 	}
 
 	/**
@@ -28539,6 +28841,19 @@ public final class LispMacroExpander {
 		// after the walk once the registry is complete. A defclass merely EXTENDING one
 		// of the seeded MOP base classes (a metaclass definition, a slot-definition
 		// subclass) only needs the seeding.
+		// The generic-function protocol (ensure-generic-function, add-method,
+		// closer-mop's
+		// ensure-method ...): its runtime is prepended, with the run-time-classes one it
+		// dispatches through, and every dispatcher generated below consults its generic's
+		// run-time methods.
+		boolean gfProtocol = usesGenericFunctionProtocol(program);
+		if (gfProtocol) {
+			closRegistry.enableGfProtocol();
+			List<LispVal> withGf = new java.util.ArrayList<>(GenericFunctions.forms());
+			withGf.add(classKeyRanksForm());
+			withGf.addAll(program);
+			program = withGf;
+		}
 		boolean metaclassProtocol = usesMetaclassProtocol(program);
 		if (metaclassProtocol || namesMopBaseSuperclass(program)) {
 			closRegistry.ensureMopClassesSeeded();
@@ -28572,6 +28887,12 @@ public final class LispMacroExpander {
 				program = withSlotProtocol;
 				closRegistry.enableSlotProtocol();
 			}
+		}
+		if (gfProtocol && !closRegistry.dynamicClasses()) {
+			List<LispVal> withDynamic = new java.util.ArrayList<>(DynamicClasses.forms());
+			withDynamic.addAll(program);
+			program = withDynamic;
+			closRegistry.enableDynamicClasses();
 		}
 		// The closer-mop library's classp is (typep x 'standard-class): when its defuns
 		// are in the program (spliced by the system loaders, which have no registry in
@@ -28783,10 +29104,25 @@ public final class LispMacroExpander {
 					dispatcherSlots.put(out.size(), generic);
 					out.add(LispNil.INSTANCE);
 				}
+				if (gfProtocol) {
+					out.addAll(genericProtocolForms(closRegistry.findGeneric(generic),
+							((LispCons) form).toList().get(1), closRegistry));
+				}
 			}
 			else if (isNamedForm(form, LispNames.DEFMETHOD)) {
-				addExpandedDefinition(normalizeSetfMethodForm((LispCons) form, structAccessors), out, closRegistry,
-						dispatcherSlots, placedDispatchers);
+				LispCons method = normalizeSetfMethodForm((LispCons) form, structAccessors);
+				ClosRegistry.GenericInfo before = method.toList().get(1) instanceof LispSymbol named
+						? closRegistry.findGeneric(named.name()) : null;
+				if (before != null) {
+					before.methodDefined(null, LispNil.INSTANCE);
+				}
+				addExpandedDefinition(method, out, closRegistry, dispatcherSlots, placedDispatchers);
+				if (gfProtocol) {
+					LispVal added = staticMethodAdded(method, closRegistry);
+					if (added != null) {
+						out.add(added);
+					}
+				}
 			}
 			else if (isNamedForm(form, LispNames.DEFTYPE)) {
 				// Register a zero-parameter deftype so a later typep/typecase resolves
@@ -28862,7 +29198,12 @@ public final class LispMacroExpander {
 			activeNarrower.analyze(out, closRegistry, structAccessors);
 		}
 		for (java.util.Map.Entry<Integer, String> slot : dispatcherSlots.entrySet()) {
-			out.set(slot.getKey(), generateDispatcher(slot.getValue(), closRegistry, null, activeNarrower));
+			// A method on make-instance (contextl's refusal for a singleton class) keeps
+			// the system's for every other class: #'make-instance reaches this
+			// dispatcher, whose default is the run-time construction.
+			String fallback = (metaclassProtocol || makeInstanceFunction)
+					&& LispNames.MAKE_INSTANCE.equals(plainName(slot.getValue())) ? LispNames.MOP_MAKE_INSTANCE : null;
+			out.set(slot.getKey(), generateDispatcher(slot.getValue(), closRegistry, fallback, activeNarrower));
 		}
 		// A computed (eql form) specializer's cell is assigned where its defmethod runs,
 		// but a dispatcher placed earlier may run first: each cell starts out holding a
@@ -48621,14 +48962,22 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The seeded classes the generic-function protocol instantiates, which get keyword
+	 * constructors and {@code %mop-make-instance} arms under it.
+	 */
+	private static final List<String> GF_PROTOCOL_INSTANTIATED_CLASSES = List.of("STANDARD-GENERIC-FUNCTION",
+			"STANDARD-METHOD", ClosRegistry.EQL_SPECIALIZER_NAME);
+
+	/**
 	 * Builds the keyword constructors of the three seeded MOP base classes
 	 * ({@code %make-standard-class}, ...), plus {@code funcallable-standard-class}'s once
-	 * it is seeded: their {@code defclass} never ran, so the
-	 * {@code expandDefclass}-generated constructor every {@code make-instance} path
-	 * dispatches to does not otherwise exist. Same shape as the generated ones -- one
-	 * {@code &key} parameter per slot under its seeded {@code :slot-name} initarg (nil
-	 * default) plus {@code &allow-other-keys}. Shared by the compile paths (appended with
-	 * the metaclass runtime) and the interpreter (evaluated once at protocol load).
+	 * it is seeded and the generic-function protocol's metaobject classes under it: their
+	 * {@code defclass} never ran, so the {@code expandDefclass}-generated constructor
+	 * every {@code make-instance} path dispatches to does not otherwise exist. Same shape
+	 * as the generated ones -- one {@code &key} parameter per slot under its seeded
+	 * {@code :slot-name} initarg (nil default) plus {@code &allow-other-keys}. Shared by
+	 * the compile paths (appended with the metaclass runtime) and the interpreter
+	 * (evaluated once at protocol load).
 	 * @param closRegistry the registry, already seeded
 	 * @return the constructor defuns
 	 */
@@ -48639,6 +48988,11 @@ public final class LispMacroExpander {
 						ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME));
 		if (closRegistry.funcallableClassesSeeded()) {
 			names.add(ClosRegistry.FUNCALLABLE_STANDARD_CLASS_NAME);
+		}
+		if (closRegistry.gfProtocol()) {
+			// The metaobjects the generic-function protocol makes
+			// (generic-functions.lisp).
+			names.addAll(GF_PROTOCOL_INSTANTIATED_CLASSES);
 		}
 		for (String name : names) {
 			ClosRegistry.ClassInfo info = java.util.Objects.requireNonNull(closRegistry.findClass(name),
@@ -48731,7 +49085,8 @@ public final class LispMacroExpander {
 			// A seeded class other than the MOP trio (the condition hierarchy) has no
 			// generated keyword constructor to dispatch to; the fall-through error arm
 			// answers for it.
-			if (allClasses && closRegistry.isSeededClass(info.name()) && !isMetaobjectClass(info)) {
+			if (allClasses && closRegistry.isSeededClass(info.name()) && !isMetaobjectClass(info)
+					&& !(closRegistry.gfProtocol() && GF_PROTOCOL_INSTANTIATED_CLASSES.contains(info.name()))) {
 				continue;
 			}
 			List<String> spellings = new java.util.ArrayList<>();

@@ -45,11 +45,11 @@ Common Lisp との差異: コンパイルバックエンド(JVM/WASM)で読み�
 ```
 
 ```lisp
-(multiple-value-list (find-symbol "FIND-METHOD" 'common-lisp)) ; => (FIND-METHOD :EXTERNAL)
+(multiple-value-list (find-symbol "INVALID-METHOD-ERROR" 'common-lisp)) ; => (INVALID-METHOD-ERROR :EXTERNAL)
 ```
 
 ```lisp
-(fboundp 'find-method) ; => NIL
+(fboundp 'invalid-method-error) ; => NIL
 ```
 
 ```lisp

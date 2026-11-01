@@ -45,12 +45,13 @@
   (closer-mop:class-slots (closer-mop:ensure-finalized class)))
 
 (defun closer-mop:generic-function-lambda-list (fn)
-  ;; A defgeneric's dispatcher is a plain function value on every backend; no
-  ;; metaobject exists to read a lambda list from. Reachable only through an
-  ;; explicit call -- only an instance of a user subclass is of type
-  ;; generic-function, so trivia level2's (etypecase fn (generic-function ...))
-  ;; guard never routes a generic here.
-  (error "generic-function-lambda-list is not supported: ~S" fn))
+  ;; A generic function METAOBJECT (the generic-function protocol,
+  ;; macro/generic-functions.lisp) carries its lambda list; a defgeneric's
+  ;; dispatcher is a plain function value, with none to read. trivia level2's
+  ;; (etypecase fn (generic-function ...)) guard routes only a metaobject here.
+  (if (%obj-p fn)
+      (slot-value fn 'lambda-list)
+      (error "generic-function-lambda-list is not supported: ~S" fn)))
 
 (defun closer-mop:slot-definition-name (slot)
   (if (%obj-p slot) (slot-value slot 'name) (car slot)))

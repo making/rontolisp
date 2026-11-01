@@ -24,10 +24,13 @@ package `contextl`) stops at:
    fills initargs/initforms through the constructor, not `(setf slot-value-using-class)` (SBCL
    writes each through it), which overwrites a class-allocated SPECIAL slot's special symbol
    (spx's `slot1`).
-3. `layer-gc` passes four of five sections; the fifth needs a later `defmethod` on
-   `adjoin-layer-using-class` to run `add-method`'s `:after` (cache clearing).
 
-Done 2026-11-01, on all four: `spx` whole (measured: the compile paths already passed it, so
+Done 2026-11-01, on all four: item 1's decision (first-class generic function and method
+metaobjects with a run-time method table the dispatchers consult -- contextl's
+`:generic-function-class` and `add-method :after`, mito's and rutils' closure methods ruled out
+a narrow `ensure-method`) and its first stage, the generic-function protocol, which also closed
+`layer-gc` (a `defmethod` on a generic naming its metaobject classes reaches `add-method`;
+`.kb/clos.md`, "The generic-function protocol"); `spx` whole (measured: the compile paths already passed it, so
 their "keep the LAST definition" was no obstacle; the interpreter's redefinition now carries the
 previous metaobject's class allocations) and the run-time `(setf find-class)`
 (`layer-makunbound`), `.kb/clos.md`; `grouped-layers` (`closer-mop:slot-definition-allocation`, and a

@@ -37,6 +37,7 @@ import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.macro.DynamicClasses;
 import am.ik.rontolisp.macro.FormatRenderer;
+import am.ik.rontolisp.macro.GenericFunctions;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.macro.MopEvalCapture;
 import am.ik.rontolisp.macro.MopProtocol;
@@ -1855,6 +1856,14 @@ public final class LispEvaluator {
 			}
 			return LispNil.INSTANCE;
 		}));
+		// The generic-function protocol's operators load its runtime at the first call;
+		// its definitions replace these.
+		for (String name : GenericFunctions.ENTRY_NAMES) {
+			this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+				ensureGfProtocolLoaded();
+				return apply(resolveFunction(name), args, this.globalEnv);
+			}));
+		}
 		// (setf (find-class name) class): find-class answers class for name from now on,
 		// nil forgetting it (contextl's layer-makunbound); see LispNames.SET_FIND_CLASS.
 		this.globalEnv.defineFunction(LispNames.SET_FIND_CLASS, new LispFunction(LispNames.SET_FIND_CLASS, args -> {
@@ -8500,6 +8509,49 @@ public final class LispEvaluator {
 	 * specializer so it carries the arm consulting a dynamic instance's precedence list
 	 * (later dispatchers get it as they are generated).
 	 */
+	/** Whether an instance is a generic function metaobject of the protocol. */
+	private boolean isGenericFunctionMetaobject(LispInstance instance) {
+		if (!this.closRegistry.gfProtocol() || !instance.layout().funcallable()) {
+			return false;
+		}
+		String typeName = LispLayout.printNameOfTag(instance.layout().tag());
+		ClosRegistry.ClassInfo info = typeName == null ? null : this.closRegistry.findClass(typeName);
+		return info != null && info.ancestors().contains("GENERIC-FUNCTION");
+	}
+
+	/**
+	 * Loads the generic-function protocol runtime ({@code GenericFunctions}) once, at the
+	 * first use of one of its operators, a {@code defgeneric} naming its metaobject
+	 * classes or a method on {@code add-method}/{@code remove-method}: the method
+	 * metaobject classes are seeded with their constructors, the runtime of classes made
+	 * at run time it dispatches through is loaded, and every dispatcher is regenerated to
+	 * consult its generic's run-time methods.
+	 */
+	private void ensureGfProtocolLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.closRegistry.gfProtocol()) {
+				return;
+			}
+			this.closRegistry.enableGfProtocol();
+			for (LispVal form : LispMacroExpander.seededMopConstructorDefuns(this.closRegistry)) {
+				eval(form, this.globalEnv);
+			}
+			ensureDynamicClassesLoaded();
+			// The loading stubs go first: a stub left bound would be stashed as the
+			// built-in default method of add-method / remove-method.
+			for (String name : GenericFunctions.ENTRY_NAMES) {
+				this.globalEnv.undefineFunction(name);
+			}
+			for (LispVal form : GenericFunctions.forms()) {
+				eval(form, this.globalEnv);
+			}
+			eval(LispMacroExpander.classKeyRanksForm(), this.globalEnv);
+			for (ClosRegistry.GenericInfo generic : List.copyOf(this.closRegistry.generics().values())) {
+				defineDispatcher(generic.name(), this.globalEnv);
+			}
+		}
+	}
+
 	private void ensureDynamicClassesLoaded() {
 		synchronized (this.libraryLoadLock) {
 			if (this.closRegistry.dynamicClasses()) {
@@ -10624,12 +10676,21 @@ public final class LispEvaluator {
 		// A (defgeneric (setf name) ...) rides the %setf- writer-generic convention.
 		cons = LispMacroExpander.normalizeSetfMethodForm(cons, this.structAccessors);
 		ensureGrayProtocolDeclared(cons);
+		if (LispMacroExpander.declaresMetaobjectClasses(cons)) {
+			ensureGfProtocolLoaded();
+		}
 		java.util.List<LispVal> methodDefuns = new java.util.ArrayList<>();
 		String generic = LispMacroExpander.registerDefgeneric(cons, this.closRegistry, methodDefuns);
 		for (LispVal defun : methodDefuns) {
 			eval(defun, env);
 		}
 		defineDispatcher(generic, env);
+		if (this.closRegistry.gfProtocol()) {
+			for (LispVal form : LispMacroExpander.genericProtocolForms(this.closRegistry.findGeneric(generic),
+					source.toList().get(1), this.closRegistry)) {
+				eval(form, env);
+			}
+		}
 		List<LispVal> parts = cons.toList();
 		if (parts.size() > 2) {
 			// a defgeneric's documentation is an option, not a body string
@@ -10666,12 +10727,28 @@ public final class LispEvaluator {
 		if (SlotProtocol.isProtocolGenericName(cons.toList().get(1))) {
 			ensureSlotProtocolLoaded();
 		}
+		if (GenericFunctions.isMethodSetGenericName(cons.toList().get(1))) {
+			// A method on add-method / remove-method joins the protocol's own.
+			ensureGfProtocolLoaded();
+		}
+		ClosRegistry.GenericInfo before = this.closRegistry.findGeneric(((LispSymbol) cons.toList().get(1)).name());
+		if (before != null) {
+			before.methodDefined(null, LispNil.INSTANCE);
+		}
 		// Evaluate the generated method-body defun, then redefine the dispatcher so it
 		// sees the new method (calls by name always dispatch through the fresh one; a
 		// #'name captured earlier keeps the previous dispatcher).
 		eval(LispMacroExpander.expandDefmethod(cons, this.closRegistry), env);
 		String generic = ((LispSymbol) cons.toList().get(1)).name();
 		defineDispatcher(generic, env);
+		if (this.closRegistry.gfProtocol()) {
+			// A method on a generic whose defgeneric named its metaobject classes
+			// reaches add-method as a metaobject.
+			LispVal added = LispMacroExpander.staticMethodAdded(cons, this.closRegistry);
+			if (added != null) {
+				eval(added, env);
+			}
+		}
 		// The expansion may have REGISTERED a further generic (the
 		// instance-initialization protocol's shared-initialize) whose dispatcher does not
 		// exist yet; define any such dispatcher too.
@@ -10718,7 +10795,19 @@ public final class LispEvaluator {
 		}
 		boolean producerWasMethoded = this.methodedProducerDispatch.containsKey(genericName);
 		String fallback = builtinDefaultMethodFor(genericName);
+		LispVal previous = this.globalEnv.lookupFunctionOrNull(genericName);
 		eval(LispMacroExpander.generateDispatcher(genericName, this.closRegistry, fallback), env);
+		if (previous instanceof LispInstance metaobject && isGenericFunctionMetaobject(metaobject)) {
+			// The name answers its generic function METAOBJECT (the generic-function
+			// protocol bound it): the metaobject stays the name's function and calls the
+			// new dispatcher.
+			LispVal dispatcher = this.globalEnv.lookupFunctionOrNull(genericName);
+			int staticSlot = metaobject.layout().slotNames().indexOf("%STATIC");
+			if (dispatcher != null && staticSlot >= 0) {
+				metaobject.setSlot(staticSlot, dispatcher);
+				this.globalEnv.defineFunction(genericName, metaobject);
+			}
+		}
 		installGrayOwnableDefault(genericName);
 		String alias = this.methodedProducerDispatch.get(genericName);
 		if (alias != null) {

@@ -777,9 +777,12 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
 - **The method metaobject classes** (2026-10-31, `ClosRegistry.METHOD_METAOBJECT_FAMILIES`):
   `generic-function` > `standard-generic-function`; `method` > `standard-method` > closer-mop's
   `standard-accessor-method` > `standard-reader-method`/`standard-writer-method`;
-  `method-combination`; closer-mop's `eql-specializer`. Slot-less single-parent roots (AMOP's
-  `metaobject`/`specializer` and `generic-function`'s `funcallable-standard-object` parent left
-  out); the CL names registered bare (moved from `PackageRegistry.CL_EXPORTED_ONLY` into
+  `method-combination`; closer-mop's `eql-specializer`. Single-parent roots (AMOP's
+  `metaobject`/`specializer` left out); `generic-function` descends from closer-mop's
+  `funcallable-standard-object` since 2026-11-01, so naming the family seeds the funcallable pair
+  and the MOP base too, and `standard-generic-function`, `standard-method` and `eql-specializer`
+  carry the slots of the generic-function protocol below (`GENERIC_FUNCTION_SLOTS`,
+  `METHOD_SLOTS`, `OBJECT`); the CL names registered bare (moved from `PackageRegistry.CL_EXPORTED_ONLY` into
   `CL_TYPES`), the closer-mop ones (its externals) under the EXTERNAL spelling
   `CLOSER-MOP:NAME` the reader gives them, so `class-name` is `eq` to the symbol read --
   `seedClass` normalizes its parent lookup for that. The funcallable pair and
@@ -792,14 +795,15 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   the walk -- a keyword never counts, and a bare `method` only QUOTED (it is a common variable
   name; its type/specializer/superclass positions seed during the walk anyway). The shared
   `EMPTY_CLOS_REGISTRY` is never seeded: `makeTypeTest` answers the empty test there.
-  **No system-made instance exists**: a generic's value stays a plain function (`class-of` is
-  `function`, `(typep #'g 'generic-function)` nil, trivia's `(etypecase fn (generic-function
-  ...) (function ...))` still takes the function arm) and a method is a registry row, so such
-  a specializer or type matches only an instance of a USER subclass (contextl's
-  `(defclass layered-method (standard-method) ())`). `make-instance` of a seeded one is a
-  run-time error after the initargs evaluate (`expandMakeInstance`; mito's relational reader
-  and rutils build a `standard-method` for `add-method`, which is out of scope anyway), so a
-  library carrying the call compiles. Unblocked moptilities' load (`(:method ((method
+  **Instances exist only under the generic-function protocol** (below): elsewhere a generic's
+  value stays a plain function (`class-of` is `function`, `(typep #'g 'generic-function)` nil,
+  trivia's `(etypecase fn (generic-function ...) (function ...))` still takes the function arm)
+  and a method is a registry row, so such a specializer or type matches only an instance of a
+  USER subclass (contextl's `(defclass layered-method (standard-method) ())`), and
+  `make-instance` of a seeded one is a run-time error after the initargs evaluate
+  (`expandMakeInstance`), so a library carrying the call compiles. `funcallableTags()` is
+  empty while every funcallable layout is a SEEDED class and the protocol is off: nothing can
+  make an instance of one, so naming the family adds no call-through-a-value arm. Unblocked moptilities' load (`(:method ((method
   standard-method)) ...)`); `ArgumentShapes` stopped deciding the two generic-function names.
   Residual: `(subtypep 'standard-generic-function 'function)` is `nil t` (SBCL `t t`), the
   funcallable classes' residual below. ci-spec: `clos-slot-options-and-metaobject-types`.
@@ -1126,6 +1130,71 @@ the four generics with the class metaobject, the instance and the effective slot
 - Pinned by ci-spec standalone `slot-access-protocol-methods` (SBCL 2.2.9 `sb-mop` agrees) and
   `ContextlE2eTest` (special slots, `dletf`, captured dynamic environments).
 
+### The generic-function protocol (method metaobjects at run time)
+Since 2026-11-01 on all four backends (`macro/generic-functions.lisp`, `GenericFunctions`):
+`ensure-generic-function`, `add-method`/`remove-method` (generics, so contextl's `:after`
+methods merge), `find-method`, `method-qualifiers`, closer-mop's `ensure-method`, the
+`generic-function-*`/`method-*` readers, `intern-eql-specializer`/`eql-specializer-object`.
+- **The decision** (h89 item 1, measured 2026-11-01): first-class generic function and method
+  METAOBJECTS with a run-time method table the existing dispatchers consult, NOT a narrow
+  `ensure-method` over the dispatcher. What the consumers call settled it: contextl's layered
+  accessors make generics with `:generic-function-class 'layered-function`, read
+  `generic-function-method-class`, and apply the generic object; its layer GC is an
+  `add-method :after` on `(layered-function layered-method)` reading `method-specializers` and
+  `eql-specializer-object`; mito's relational readers and rutils `add-method` a
+  `(make-instance 'standard-method :function <closure>)` -- a closure, which no definition-time
+  capture of a `defmethod` form can serve. Every generic's value stays the compiled dispatcher.
+- **Gate** (`usesGenericFunctionProtocol`): a program naming one of the operators (quoted data
+  included -- `(fboundp 'find-method)` answers t as on the interpreter) or a `defgeneric` with
+  `:generic-function-class`/`:method-class`. The compile paths prepend the runtime (with the
+  run-time-classes one, whose `%dynamic-dispatch` combination and `%class-key` it uses) and
+  `enableGfProtocol()` seeds the method metaobject families with constructors; the interpreter
+  binds a loading stub per operator (`ENTRY_NAMES`, unbound again before the runtime loads, or
+  `add-method`'s dispatcher would stash a stub as its built-in default and recurse) and loads at
+  a `defgeneric` naming metaobject classes or a method on `add-method`/`remove-method`. The
+  prelude's signalling `remove-method` is gone. Every other program compiles as before.
+- **A generic function metaobject** is a funcallable instance (`generic-function` descends from
+  `funcallable-standard-object`) made on first request and memoized by name (`%gf-metaobjects%`,
+  keyed by the dispatcher's symbol, `%setf-` for a setf name); its `%STATIC` slot holds the
+  compiled dispatcher (nil for a generic made only at run time) and its function calls that, or
+  dispatches the run-time methods alone. `ensure-generic-function` installs it as the name's
+  function, so a COMPUTED `fdefinition` answers it (contextl's `ensure-layered-method`); the
+  compile paths' direct calls, `#'g` and a literal `fdefinition` keep the compiled function, and
+  the interpreter's `defineDispatcher` re-installs the metaobject over each regenerated
+  dispatcher, updating `%STATIC`.
+- **Dispatch** (`withDynamicDispatchArm`): every dispatcher reads `(%gf-runtime-methods 'G)`
+  first; nil keeps the compiled body. With run-time methods every method's entry is computed --
+  a `defmethod`'s by `dynamicMethodEntry`, whose class keys then become the class's position in
+  the argument's precedence list (`%class-key`, over the class metaobjects' direct superclasses,
+  memoized like a dynamic class's), a run-time method's by its specializer metaobjects
+  (`%gf-runtime-entry`; a built-in class ranks from `BUILT_IN_TYPE_RANKS`, the TYPE ranks
+  `specializerRank` uses, handed over by `classKeyRanksForm`) -- and `%dynamic-dispatch` runs the
+  standard combination. A run-time method's function is AMOP's `(args next-methods)`; its next
+  methods are method metaobjects (`%gf-next-method` wraps the rest of the chain), so
+  `(funcall (method-function (car next-methods)) args (cdr next-methods))` works.
+- **A `defmethod` reaching `add-method`** (h89 item 3): on a generic whose `defgeneric` named
+  `:generic-function-class`/`:method-class` (`%gf-declare` records it), each `defmethod` -- a
+  `defgeneric`'s `(:method ...)` options included -- is followed by `%gf-static-method-added`
+  (`LispMacroExpander.staticMethodAdded`, the same form on every path): a method metaobject of
+  the generic's method class with the method's specializers (class metaobjects, eql
+  specializers), qualifiers, lambda list (`GenericInfo.methodLambdaLists`) and a function over
+  its defun; its `%STATIC-KEY` keeps it out of the run-time table, so `add-method` only records
+  it and runs the user's methods. contextl's layer GC clears its caches from there.
+- **An eql-selected argument takes the run-time combination** whenever the arm exists (dynamic
+  classes or the protocol) and the generic combines (a qualifier or `call-next-method`): the
+  static eql branch admits only same-specialized methods, so contextl's
+  `(eql (find-layer-class 'bar))` `:before` lost the class primary ("No applicable method",
+  layer-gc section 7).
+- **`make-instance` with a user method** (contextl's refusal for a singleton class): on the
+  compile paths its dispatcher, which `#'make-instance` reaches, defaults to
+  `%mop-make-instance` (the run-time construction) when that is emitted; `make-instance` is
+  `NOT_SHADOWABLE`, so nothing else gave it a default and every other class signalled.
+- Residuals: `remove-method` of a `defmethod`'s method drops only the metaobject (the compiled
+  dispatcher keeps it); a short-form method combination generic ignores run-time methods; a
+  standard generic's `generic-function-methods` lists only the methods added at run time.
+- Pinned by ci-spec standalone `generic-function-protocol` (SBCL 2.2.9 + closer-mop agrees) and
+  `ContextlE2eTest` (contextl's `test/layer-gc.lisp` at top level).
+
 ### Registry-growth lesson
 The RUNTIME-slot-name dispatch used to be inlined per call site and grows with every layout
 times its slots; five extra ci-spec classes pushed a corpus dolist body past the JVM's SIGNED
@@ -1142,25 +1211,20 @@ chunk-loop wrapper).
 - Still OUT of the MOP (classes are compile-time-static; `--optimize` DCE and the dispatch
   tables depend on it): runtime class construction beyond `make-instance` of a metaclass
   ("Classes made at run time": `ensure-class` from computed data, a non-top-level `defclass`, a
-  class made at run time with slots), `add-method`, `compute-applicable-methods`,
-  `update-instance-for-*`. `remove-method` EXISTS as a `cl` name and SIGNALS when called: a
-  method here is a registry row plus a generated defun, never a first-class object, and without
-  `find-method` no caller can name the method it means. Class REdefinition of a
+  class made at run time with slots), `compute-applicable-methods`, `update-instance-for-*`.
+  Methods made at run time are IN ("The generic-function protocol"). Class REdefinition of a
   statically-known name is IN; redefinition from computed data is out.
 - **Known static-model seam**: on the compile paths `find-class`/`class-of` see the WHOLE
   program's classes regardless of form order, while the interpreter only knows classes already
   defined at call time. `change-class` is the ONE runtime exception and is not MOP.
-- **Generic functions and methods are not first-class metaobjects** (only their CLASSES exist,
-  "MOP boundary"): no `find-method`, `generic-function-methods`, `method-generic-function`,
-  `generic-function-name`, `compute-applicable-methods`. Consumers measured 2026-10-31 in the
-  local Quicklisp cache: moptilities' method side (`method-name`, `get-method`, `map-methods`
-  -- nothing loaded calls them), access's `(etypecase fn (standard-generic-function
-  (compute-applicable-methods ...)) (function ...))` (a generic takes the function arm and is
-  called unconditionally), trivia's `unary-function-p` (its test-call arm instead of the lambda
-  list), cl-store, trivial-arguments, documentation-utils, clunit2, in-nomine, rutils
-  (`find-method` + `add-method`/`remove-method`). The faithful shape is a generic's value as a
-  funcallable instance of `standard-generic-function` (gated, like the funcallable arms) plus a
-  materialized method table; no consumer measured so far is blocked on it alone.
+- **A generic's VALUE is still a plain function** (`#'g`, a literal `fdefinition`): access's
+  `(etypecase fn (standard-generic-function (compute-applicable-methods ...)) (function ...))`
+  takes the function arm and calls it, trivia's `unary-function-p` its test-call arm. No
+  `compute-applicable-methods`. Consumers of the rest, measured 2026-10-31 in the local
+  Quicklisp cache: moptilities' method side (`method-name`, `get-method`, `map-methods` --
+  nothing loaded calls them), cl-store, trivial-arguments, documentation-utils, clunit2 and
+  in-nomine (`find-method` of a `defmethod`'s method, which only a generic naming its
+  metaobject classes lists).
 - **contextl, 2026-10-31**: `(ql:quickload :contextl)` LOADS on all four backends, its layer GC
   included, and `deflayer`, `define-layered-function`/`-method` (`:in` a layer, qualifiers,
   `call-next-method`), `with-active-layers`/`with-inactive-layers`, `ensure-active-layer`,
@@ -1183,8 +1247,10 @@ chunk-loop wrapper).
   whole -- the premise that they cannot follow its redefinitions was wrong -- and the interpreter
   stopped at `class1`'s `:reinitialize t`, "Class REdefinition" above); `ContextlE2eTest` carries
   its redefinitions and a `layer-makunbound`; `layer-gc` passes its
-  first four sections and stops where `add-method :after` should clear the caches (`defmethod`
-  calls no `add-method` here). `grouped-layers` (`slot-definition-allocation` and the
+  first four sections and stopped where `add-method :after` should clear the caches -- passes
+  on all four since 2026-11-01 ("The generic-function protocol"; the compile paths refuse its
+  `(loop repeat 2 do ...)` of definitions, so `ContextlE2eTest` runs its body once at top
+  level). `grouped-layers` (`slot-definition-allocation` and the
   `:allocation` reconciliation above) and `dynenv` (the slot-access protocol) pass on all four
   since 2026-11-01; `ContextlE2eTest` carries both. On the compile paths `dynenv` first needed
   `assert`'s default message to double the tildes of the test it quotes: a test holding a
@@ -1271,5 +1337,5 @@ ci-spec: `clos-defgeneric-defmethod-eql-dispatch`,
 `runtime-type-dispatch-residue`, `runtime-class-designator-spellings`,
 `with-slots-write-only-unbound-slot-and-missing-slot`,
 `array-operations-enablement-language-group`, `mito-core-enablement-language-group`, standalone
-`funcallable-instances-call-their-installed-function` and `classes-made-at-run-time`. Plus the five `doc/*/reference/**` pages
+`funcallable-instances-call-their-installed-function`, `classes-made-at-run-time`, `slot-access-protocol-methods` and `generic-function-protocol`. Plus the five `doc/*/reference/**` pages
 via `DocExamplesTest`.

@@ -472,11 +472,28 @@ public final class LispNames {
 	public static final String INVOKE_DEBUGGER = "INVOKE-DEBUGGER";
 
 	/**
-	 * The {@code remove-method} prelude function: exists and signals. A method is a
-	 * registry row plus a generated defun here, never a first-class object, and there is
-	 * no {@code find-method} to obtain one from ({@code .kb/clos.md}).
+	 * The {@code remove-method} generic function of the generic-function protocol
+	 * ({@code macro/generic-functions.lisp}, {@code .kb/clos.md}).
 	 */
 	public static final String REMOVE_METHOD = "REMOVE-METHOD";
+
+	/**
+	 * The {@code add-method} generic function of the generic-function protocol
+	 * ({@code macro/generic-functions.lisp}): a method metaobject joins a generic.
+	 */
+	public static final String ADD_METHOD = "ADD-METHOD";
+
+	/** The {@code find-method} function of the generic-function protocol. */
+	public static final String FIND_METHOD = "FIND-METHOD";
+
+	/**
+	 * The {@code ensure-generic-function} function of the generic-function protocol: the
+	 * generic function METAOBJECT of a name.
+	 */
+	public static final String ENSURE_GENERIC_FUNCTION = "ENSURE-GENERIC-FUNCTION";
+
+	/** The {@code method-qualifiers} reader of the generic-function protocol. */
+	public static final String METHOD_QUALIFIERS = "METHOD-QUALIFIERS";
 
 	/**
 	 * The {@code compile-file} prelude function: exists and signals. There is no file

@@ -3408,16 +3408,6 @@ public final class LispPreludeLibrary {
 				(defun invoke-debugger (%id-condition)
 				  (error %id-condition))
 				""");
-		// remove-method: a method is a registry row plus a generated defun here, never a
-		// first-class object -- there is no method metaobject and no find-method to
-		// obtain one from (.kb/clos.md), so no caller can name the method to remove. It
-		// exists (a program that loads may reference it) and signals if it is reached.
-		// RE-EVALUATE when method metaobjects land.
-		SOURCES.put(LispNames.REMOVE_METHOD, """
-				(defun remove-method (%rm-generic %rm-method)
-				  (declare (ignore %rm-generic %rm-method))
-				  (error "remove-method is not supported (no method metaobjects exist to name a method)"))
-				""");
 		// compile-file / compile-file-pathname: there is no file compiler. The compile
 		// backends compile a whole PROGRAM in one pass and a loaded file is spliced into
 		// it, so no fasl is ever produced and no pathname names one -- which is also why

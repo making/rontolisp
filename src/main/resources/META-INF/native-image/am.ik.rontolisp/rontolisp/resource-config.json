@@ -183,6 +183,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.GenericFunctions"
+        },
+        "pattern": "am/ik/rontolisp/macro/generic-functions\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.macro.CompileRuntime"
         },
         "pattern": "am/ik/rontolisp/macro/compile-runtime\\.lisp"

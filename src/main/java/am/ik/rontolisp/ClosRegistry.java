@@ -584,8 +584,12 @@ public final class ClosRegistry {
 		}
 		if (this.seededMethodMetaobjectFamilies.add(family.get(0).name())) {
 			for (MopSeed seed : family) {
+				if (FUNCALLABLE_STANDARD_OBJECT_NAME.equals(seed.parent())) {
+					// generic-function is a funcallable-standard-object (AMOP 5.2).
+					ensureFuncallableClassesSeeded();
+				}
 				if (!this.classes.containsKey(normalize(seed.name()))) {
-					seedClass(seed.name(), seed.parent());
+					seedClass(seed.name(), seed.parent(), seed.slots().toArray(String[]::new));
 				}
 			}
 		}
@@ -641,12 +645,20 @@ public final class ClosRegistry {
 			return List.of();
 		}
 		List<String> tags = new java.util.ArrayList<>();
+		boolean instantiable = this.gfProtocol;
 		for (LispLayout layout : this.layoutsByTag.values()) {
 			if (layout.funcallable()) {
 				tags.add(layout.tag());
+				String name = LispLayout.printNameOfTag(layout.tag());
+				instantiable = instantiable || name == null || !this.seededClassNames.contains(name);
 			}
 		}
-		return tags;
+		// Only SEEDED funcallable classes (the funcallable-standard-object a program
+		// names,
+		// the generic-function classes it specializes on) and no generic-function
+		// protocol: nothing can make an instance of one, so no call through a value needs
+		// the arm.
+		return instantiable ? tags : List.of();
 	}
 
 	/**
@@ -1062,8 +1074,15 @@ public final class ClosRegistry {
 	/** AMOP's {@code eql-specializer}, under its {@code closer-mop} name. */
 	public static final String EQL_SPECIALIZER_NAME = LispNames.CLOSER_MOP_PKG + ":" + EQL_SPECIALIZER;
 
-	/** One class a seeding family registers: its canonical name and its parent. */
-	private record MopSeed(String name, @Nullable String parent) {
+	/**
+	 * One class a seeding family registers: its canonical name, its parent and its own
+	 * slots.
+	 */
+	private record MopSeed(String name, @Nullable String parent, List<String> slots) {
+
+		MopSeed(String name, @Nullable String parent) {
+			this(name, parent, List.of());
+		}
 
 		/**
 		 * The package-stripped name. Plain string work: the index below is built during
@@ -1076,30 +1095,50 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * The slots of a {@code standard-generic-function} metaobject, AMOP 5.3's initargs
+	 * plus the methods and {@code %STATIC}, the compiled dispatcher of a generic the
+	 * program defines statically (nil for one made only at run time). Read and written by
+	 * name ({@code macro/generic-functions.lisp}).
+	 */
+	public static final List<String> GENERIC_FUNCTION_SLOTS = List.of("NAME", "LAMBDA-LIST", "METHODS", "METHOD-CLASS",
+			"METHOD-COMBINATION", "ARGUMENT-PRECEDENCE-ORDER", "DECLARATIONS", "DOCUMENTATION", "%STATIC");
+
+	/**
+	 * The slots of a {@code standard-method} metaobject, AMOP 5.4's initargs plus its
+	 * generic function and {@code %STATIC-KEY}, the registry key of a method a
+	 * {@code defmethod} defined (nil for one made at run time, which the dispatchers find
+	 * in the run-time method table instead).
+	 */
+	public static final List<String> METHOD_SLOTS = List.of("QUALIFIERS", "SPECIALIZERS", "LAMBDA-LIST", "FUNCTION",
+			"GENERIC-FUNCTION", "DOCUMENTATION", "%STATIC-KEY");
+
+	/**
 	 * The metaobject classes of generic functions and methods (AMOP 5.2), as four
 	 * families, each seeded whole the first time a program names a member
 	 * ({@link #ensureMethodMetaobjectClassesSeeded}): {@code generic-function} /
 	 * {@code standard-generic-function}; {@code method} / {@code standard-method} and
 	 * closer-mop's accessor-method trio; {@code method-combination}; closer-mop's
 	 * {@code eql-specializer}. The CL names are registered bare, the closer-mop ones
-	 * under their external {@code closer-mop:} names. Slot-less, single-parent roots
-	 * (AMOP's abstract {@code metaobject}/{@code specializer} roots and
-	 * {@code generic-function}'s {@code funcallable-standard-object} parent are left
-	 * out), and the system never makes an instance of one: a generic function's value is
-	 * a plain function and a method a registry row plus a defun. They exist so a program
-	 * can SPECIALIZE on them, test them as types, {@code find-class} them and SUBCLASS
-	 * them -- moptilities' {@code (:method ((method standard-method)) ...)}, contextl's
-	 * {@code (defclass layered-method (standard-method) ())} -- and an instance exists
-	 * only as an instance of such a user subclass.
+	 * under their external {@code closer-mop:} names. Single-parent roots (AMOP's
+	 * abstract {@code metaobject}/{@code specializer} roots are left out);
+	 * {@code generic-function} descends from {@code funcallable-standard-object}, so a
+	 * generic function metaobject is a FUNCALLABLE instance. Instances exist only under
+	 * the generic-function protocol ({@link #enableGfProtocol},
+	 * {@code macro/generic-functions.lisp}): without it a generic function's value is a
+	 * plain function and a method a registry row plus a defun, and the classes exist so a
+	 * program can SPECIALIZE on them, test them as types, {@code find-class} them and
+	 * SUBCLASS them -- moptilities' {@code (:method ((method standard-method)) ...)},
+	 * contextl's {@code (defclass layered-method (standard-method) ())}.
 	 */
 	private static final List<List<MopSeed>> METHOD_METAOBJECT_FAMILIES = List.of(
-			List.of(new MopSeed("GENERIC-FUNCTION", null),
-					new MopSeed("STANDARD-GENERIC-FUNCTION", "GENERIC-FUNCTION")),
-			List.of(new MopSeed("METHOD", null), new MopSeed("STANDARD-METHOD", "METHOD"),
+			List.of(new MopSeed("GENERIC-FUNCTION", FUNCALLABLE_STANDARD_OBJECT_NAME),
+					new MopSeed("STANDARD-GENERIC-FUNCTION", "GENERIC-FUNCTION", GENERIC_FUNCTION_SLOTS)),
+			List.of(new MopSeed("METHOD", null), new MopSeed("STANDARD-METHOD", "METHOD", METHOD_SLOTS),
 					new MopSeed(STANDARD_ACCESSOR_METHOD_NAME, "STANDARD-METHOD"),
 					new MopSeed(STANDARD_READER_METHOD_NAME, STANDARD_ACCESSOR_METHOD_NAME),
 					new MopSeed(STANDARD_WRITER_METHOD_NAME, STANDARD_ACCESSOR_METHOD_NAME)),
-			List.of(new MopSeed("METHOD-COMBINATION", null)), List.of(new MopSeed(EQL_SPECIALIZER_NAME, null)));
+			List.of(new MopSeed("METHOD-COMBINATION", null)),
+			List.of(new MopSeed(EQL_SPECIALIZER_NAME, null, List.of("OBJECT"))));
 
 	/** Each member name of {@link #METHOD_METAOBJECT_FAMILIES} to its family. */
 	private static final Map<String, List<MopSeed>> METHOD_METAOBJECT_FAMILY_BY_MEMBER = methodMetaobjectFamilyIndex();
@@ -1584,6 +1623,85 @@ public final class ClosRegistry {
 
 		private boolean mostSpecificLast;
 
+		@Nullable private LispVal genericFunctionClass;
+
+		@Nullable private LispVal methodClass;
+
+		@Nullable private LispVal declaredLambdaList;
+
+		/**
+		 * The {@code (:generic-function-class C)} option of the generic's
+		 * {@code defgeneric}, or null for {@code standard-generic-function}.
+		 * @return the class name, or null
+		 */
+		@Nullable public LispVal genericFunctionClass() {
+			return this.genericFunctionClass;
+		}
+
+		/**
+		 * The {@code (:method-class C)} option of the generic's {@code defgeneric}, or
+		 * null for the generic-function class's default.
+		 * @return the class name, or null
+		 */
+		@Nullable public LispVal methodClass() {
+			return this.methodClass;
+		}
+
+		/**
+		 * The lambda list the generic's {@code defgeneric} wrote, or null.
+		 * @return the lambda list, or null
+		 */
+		@Nullable public LispVal declaredLambdaList() {
+			return this.declaredLambdaList;
+		}
+
+		private final Map<String, LispVal> methodLambdaLists = new java.util.HashMap<>();
+
+		@Nullable private String lastMethodKey;
+
+		/**
+		 * Each method's lambda list without its specializers (a method metaobject's
+		 * {@code method-lambda-list}), keyed like {@link #methods()}.
+		 * @return the lambda lists
+		 */
+		public Map<String, LispVal> methodLambdaLists() {
+			return this.methodLambdaLists;
+		}
+
+		/**
+		 * The key of the method a {@code defmethod} defined last, or null.
+		 * @return the key, or null
+		 */
+		@Nullable public String lastMethodKey() {
+			return this.lastMethodKey;
+		}
+
+		/**
+		 * Records the method a {@code defmethod} just defined; a null key forgets the
+		 * last one (a {@code defmethod} about to be expanded may be refused).
+		 * @param key its key in {@link #methods()}, or null
+		 * @param lambdaList its lambda list without specializers
+		 */
+		public void methodDefined(@Nullable String key, LispVal lambdaList) {
+			this.lastMethodKey = key;
+			if (key != null) {
+				this.methodLambdaLists.put(key, lambdaList);
+			}
+		}
+
+		/**
+		 * Records the metaobject options of the generic's {@code defgeneric}.
+		 * @param genericFunctionClass the {@code :generic-function-class}, or null
+		 * @param methodClass the {@code :method-class}, or null
+		 * @param lambdaList the written lambda list
+		 */
+		public void metaobjectOptions(@Nullable LispVal genericFunctionClass, @Nullable LispVal methodClass,
+				LispVal lambdaList) {
+			this.genericFunctionClass = genericFunctionClass;
+			this.methodClass = methodClass;
+			this.declaredLambdaList = lambdaList;
+		}
+
 		/**
 		 * Creates a generic-function record.
 		 * @param name the generic function name
@@ -1929,6 +2047,35 @@ public final class ClosRegistry {
 	 */
 	public void enableSlotProtocol() {
 		this.slotProtocol = true;
+	}
+
+	private boolean gfProtocol;
+
+	/**
+	 * Whether the generic-function protocol runtime
+	 * ({@code macro/generic-functions.lisp}) is part of this evaluation/compilation:
+	 * generic function and method metaobjects exist ({@code ensure-generic-function},
+	 * {@code add-method}, closer-mop's {@code ensure-method}), every dispatcher consults
+	 * its generic's run-time methods, and a {@code defmethod} on a generic of a user
+	 * generic-function class reaches {@code add-method}.
+	 * @return {@code true} once {@link #enableGfProtocol} ran
+	 */
+	public boolean gfProtocol() {
+		return this.gfProtocol;
+	}
+
+	/**
+	 * Records that the generic-function protocol runtime is loaded (interpreter) or
+	 * prepended (compile paths), seeding the method metaobject classes it instantiates.
+	 */
+	public void enableGfProtocol() {
+		if (this.gfProtocol) {
+			return;
+		}
+		this.gfProtocol = true;
+		for (List<MopSeed> family : METHOD_METAOBJECT_FAMILIES) {
+			ensureMethodMetaobjectClassesSeeded(family.get(0).member());
+		}
 	}
 
 	/** The classes a {@code defclass} defined with a {@code :metaclass}, normalized. */

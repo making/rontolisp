@@ -45,11 +45,11 @@ A second value reports the ANSI accessibility status of the name in that package
 ```
 
 ```lisp
-(multiple-value-list (find-symbol "FIND-METHOD" 'common-lisp)) ; => (FIND-METHOD :EXTERNAL)
+(multiple-value-list (find-symbol "INVALID-METHOD-ERROR" 'common-lisp)) ; => (INVALID-METHOD-ERROR :EXTERNAL)
 ```
 
 ```lisp
-(fboundp 'find-method) ; => NIL
+(fboundp 'invalid-method-error) ; => NIL
 ```
 
 ```lisp

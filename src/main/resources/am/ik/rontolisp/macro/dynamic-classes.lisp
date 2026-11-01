@@ -113,6 +113,38 @@
   (let ((position (position class (%obj-ref instance 1) :test #'eq)))
     (if position (+ 10000 position) nil)))
 
+;; Built-in class name -> its static rank (LispMacroExpander.specializerRank),
+;; set by the generic-function protocol, whose run-time methods may name one.
+(defvar %class-key-ranks% nil)
+
+(defun %instance-cpl (x)
+  ;; The class precedence list of an instance's class, computed over the class
+  ;; metaobjects; nil for a value that is no instance.
+  (if (%obj-is x '|%class-%DYNAMIC-OBJECT%|)
+      (%obj-ref x 1)
+      (if (%obj-p x)
+          (let ((class (class-of x)))
+            (if (%obj-p class) (%dynamic-cpl class) nil))
+          nil)))
+
+(defun %class-key (instance class)
+  ;; The precedence key of a class specializer for any argument, on the scale of
+  ;; %dynamic-class-key: 10000 plus the class's position in the argument's class
+  ;; precedence list, the static rank times 1000 for a built-in class the
+  ;; argument is of (t: 1000000), nil when the class does not apply.
+  (let* ((name (slot-value class 'name))
+         (position
+          (if (member name '(t standard-object structure-object))
+              nil
+              (let ((cpl (%instance-cpl instance)))
+                (if cpl (position class cpl :test #'eq) nil)))))
+    (cond (position (+ 10000 position))
+          ((eq name t) 1000000)
+          ((typep instance class)
+           (let ((rank (assoc name %class-key-ranks% :test #'equal)))
+             (* 1000 (if rank (cdr rank) 220))))
+          (t nil))))
+
 (defun %dynamic-applicable (entries)
   ;; ENTRIES holds one (qualifier function key...) per applicable method, nil
   ;; per inapplicable one. Nil unless a primary method applies -- the static

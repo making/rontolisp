@@ -21191,7 +21191,6 @@ cases:
       (print (symbol-name (copy-symbol 'stdnames-sym)))
       (print (list (handler-case (compile-file "x") (error (e) :cf))
                    (handler-case (compile-file-pathname "x") (error (e) :cfp))
-                   (handler-case (remove-method 1 2) (error (e) :rm))
                    (handler-case (invoke-debugger (make-condition 'simple-error :format-control "b"))
                      (error (e) :dbg))))
       (print-object 42 *standard-output*)
@@ -21209,7 +21208,7 @@ cases:
       (NIL T T)
       T
       "STDNAMES-SYM"
-      (:CF :CFP :RM :DBG)
+      (:CF :CFP :DBG)
       42
       #<STDNAMES!>
       #<STDNAMES!>
@@ -32580,3 +32579,70 @@ standalone:
       (30 40)
       (NIL (:UNBOUND X) 1 1)
       ((:READ X) (:READ Y) :BOUNDP (:WRITE X 3) (:WRITE Y 4) (:READ X) (:READ Y) :MAKUNBOUND :BOUNDP (:READ X))
+  # The generic-function protocol adds an arm consulting its generic's run-time
+  # methods to every dispatcher, so it runs alone, not in the corpus.
+  - name: generic-function-protocol
+    source: |
+      ;; Generic function and method metaobjects (AMOP 5.3-5.4): ensure-generic-function,
+      ;; add-method of a standard-method made at run time, an eql specializer,
+      ;; find-method / remove-method, the readers, and a defgeneric naming its
+      ;; generic-function class, whose defmethods reach add-method. SBCL 2.2.9
+      ;; (closer-mop) agrees.
+      (asdf:load-system "closer-mop")
+      (defpackage :gfp (:use :closer-common-lisp))
+      (in-package :gfp)
+      ;; A method made at run time joins a defgeneric's (mito's relational reader and
+      ;; rutils build them from closures): it dispatches by its specializers among the
+      ;; compiled methods, and its next method is a method metaobject.
+      (defclass gfp-animal () ((name :initarg :name :reader gfp-name)))
+      (defclass gfp-dog (gfp-animal) ())
+      (defgeneric gfp-speak (x))
+      (defmethod gfp-speak ((x gfp-animal)) (list :animal (gfp-name x)))
+      (add-method (ensure-generic-function 'gfp-speak)
+                  (make-instance 'standard-method
+                                 :lambda-list '(x) :qualifiers ()
+                                 :specializers (list (find-class 'gfp-dog))
+                                 :function (lambda (args next-methods)
+                                             (list* :dog (funcall (method-function (car next-methods))
+                                                                  args (cdr next-methods))))))
+      (print (list (gfp-speak (make-instance 'gfp-dog :name "rex"))
+                   (gfp-speak (make-instance 'gfp-animal :name "cat"))))
+      ;; A generic made at run time: its methods, an eql specializer, find-method,
+      ;; remove-method; its name's function is the metaobject.
+      (defparameter *area* (ensure-generic-function 'gfp-area :lambda-list '(shape)))
+      (add-method *area* (make-instance 'standard-method :lambda-list '(s) :qualifiers ()
+                                        :specializers (list (find-class 'integer))
+                                        :function (lambda (args next) (* (car args) (car args)))))
+      (add-method *area* (make-instance 'standard-method :lambda-list '(s) :qualifiers ()
+                                        :specializers (list (intern-eql-specializer 0))
+                                        :function (lambda (args next) :zero)))
+      (print (list (funcall 'gfp-area 3) (funcall *area* 4) (funcall 'gfp-area 0)
+                   (generic-function-name *area*) (length (generic-function-methods *area*))
+                   (eq (fdefinition 'gfp-area) *area*) (functionp *area*)))
+      (remove-method *area* (find-method *area* nil (list (find-class 'integer))))
+      (print (list (funcall 'gfp-area 0) (handler-case (funcall 'gfp-area 5) (error () :no-method))
+                   (find-method *area* nil (list (find-class 'integer)) nil)))
+      ;; A defmethod on a generic whose defgeneric names its generic-function class
+      ;; reaches add-method with the method's metaobject (contextl clears its layer
+      ;; caches from an add-method :after).
+      (defclass gfp-logged (standard-generic-function) ()
+        (:metaclass funcallable-standard-class))
+      (defvar *gfp-added* nil)
+      (defmethod add-method :after ((gf gfp-logged) method)
+        (push (list (generic-function-name gf) (method-qualifiers method)
+                    (mapcar (lambda (s)
+                              (if (typep s 'eql-specializer)
+                                  (list 'eql (eql-specializer-object s))
+                                  (class-name s)))
+                            (method-specializers method)))
+              *gfp-added*))
+      (defgeneric gfp-volume (s) (:generic-function-class gfp-logged))
+      (defmethod gfp-volume ((s integer)) (* s s s))
+      (defmethod gfp-volume :before ((s (eql 0))) nil)
+      (print (list (gfp-volume 2) (reverse *gfp-added*)
+                   (class-name (class-of (ensure-generic-function 'gfp-volume :generic-function-class 'gfp-logged)))))
+    stdout: |
+      ((:DOG :ANIMAL "rex") (:ANIMAL "cat"))
+      (9 16 :ZERO GFP-AREA 2 T T)
+      (:ZERO :NO-METHOD NIL)
+      (8 ((GFP-VOLUME NIL (INTEGER)) (GFP-VOLUME (:BEFORE) ((EQL 0)))) GFP-LOGGED)

@@ -18044,8 +18044,8 @@ class LispEvaluatorTest {
 		// CLHS 11.1.2.1: the cl package's external list IS the standard's 978 names,
 		// whether or not an operator stands behind one. The name being there is a
 		// find-symbol answer and nothing more -- calling it still signals.
-		assertThat(evalMulti("(multiple-value-list (find-symbol \"FIND-METHOD\" 'common-lisp))").print())
-			.isEqualTo("(FIND-METHOD :EXTERNAL)");
+		assertThat(evalMulti("(multiple-value-list (find-symbol \"INVALID-METHOD-ERROR\" 'common-lisp))").print())
+			.isEqualTo("(INVALID-METHOD-ERROR :EXTERNAL)");
 		assertThat(evalMulti("(multiple-value-list (find-symbol \"ARRAY-IN-BOUNDS-P\" :cl))").print())
 			.isEqualTo("(ARRAY-IN-BOUNDS-P :EXTERNAL)");
 		assertThat(evalMulti("(multiple-value-list (find-symbol \"&AUX\" 'common-lisp))").print())
@@ -18053,9 +18053,9 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp))").print())
 			.isEqualTo("(NIL NIL)");
 		// Exported, not bound: the operator question is separate and still answers no.
-		assertThat(evalMulti("(fboundp 'find-method)")).isEqualTo(LispNil.INSTANCE);
-		assertThat(evalMulti("(macro-function 'find-method)")).isEqualTo(LispNil.INSTANCE);
-		assertThat(evalMulti("(special-operator-p 'find-method)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(fboundp 'invalid-method-error)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(macro-function 'invalid-method-error)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(special-operator-p 'invalid-method-error)")).isEqualTo(LispNil.INSTANCE);
 		// ... and the name is not a standard OPERATOR, so a program may still define it.
 		assertThat(evalMulti("(defun bit-and (a b) (list a b)) (bit-and 1 2)").print()).isEqualTo("(1 2)");
 	}
@@ -22026,9 +22026,8 @@ class LispEvaluatorTest {
 		// rather than answering something fabricated.
 		assertThat(evalMulti("""
 				(list (handler-case (compile-file "x") (error (e) :cf))
-				      (handler-case (compile-file-pathname "x") (error (e) :cfp))
-				      (handler-case (remove-method 1 2) (error (e) :rm)))
-				""").print()).isEqualTo("(:CF :CFP :RM)");
+				      (handler-case (compile-file-pathname "x") (error (e) :cfp)))
+				""").print()).isEqualTo("(:CF :CFP)");
 	}
 
 	@Test

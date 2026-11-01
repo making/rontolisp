@@ -212,6 +212,7 @@ categories:
       - { slug: list-all-packages, name: "list-all-packages" }
       - { slug: find-class, name: "find-class" }
       - { slug: allocate-instance, name: "allocate-instance" }
+      - { slug: add-method, name: "ensure-generic-function add-method remove-method find-method method-qualifiers" }
       - { slug: slot-unbound, name: "slot-unbound" }
       - { slug: slot-missing, name: "slot-missing" }
       - { slug: class-name, name: "class-name" }
@@ -544,7 +545,7 @@ categories:
       - { slug: environment-enquiry, name: "lisp-implementation-type lisp-implementation-version software-type software-version machine-type machine-version machine-instance short-site-name long-site-name" }
       - { slug: user-homedir-pathname, name: "user-homedir-pathname" }
       - { slug: invoke-debugger, name: "invoke-debugger" }
-      - { slug: compile-file, name: "compile-file compile-file-pathname remove-method" }
+      - { slug: compile-file, name: "compile-file compile-file-pathname" }
   - title: "rontolisp Package"
     index_page: reference/functions/rontolisp.md
     functions:

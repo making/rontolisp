@@ -3726,11 +3726,11 @@ class JvmLispCompilerTest {
 		// The interpreter twin is
 		// LispEvaluatorTest#findSymbolAnswersForTheStandardNamesClExportsWithoutImplementing:
 		// the fold reads the same name list, so the four backends cannot disagree.
-		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"FIND-METHOD\" 'common-lisp)))"
+		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"INVALID-METHOD-ERROR\" 'common-lisp)))"
 				+ "(print (multiple-value-list (find-symbol \"&AUX\" :cl)))"
 				+ "(print (multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp)))"
-				+ "(print (fboundp 'find-method))"))
-			.isEqualTo("(FIND-METHOD :EXTERNAL)\n(&AUX :EXTERNAL)\n(NIL NIL)\nNIL");
+				+ "(print (fboundp 'invalid-method-error))"))
+			.isEqualTo("(INVALID-METHOD-ERROR :EXTERNAL)\n(&AUX :EXTERNAL)\n(NIL NIL)\nNIL");
 	}
 
 	@Test
@@ -15294,10 +15294,9 @@ class JvmLispCompilerTest {
 				(print (let ((h (user-homedir-pathname))) (or (null h) (pathnamep h))))
 				(print (list (handler-case (compile-file "x") (error (e) :cf))
 				             (handler-case (compile-file-pathname "x") (error (e) :cfp))
-				             (handler-case (remove-method 1 2) (error (e) :rm))
 				             (handler-case (invoke-debugger (make-condition 'simple-error :format-control "b"))
 				               (error (e) :dbg))))
-				""")).isEqualTo("3\n(NIL NIL)\nT\n(T T NIL NIL)\n(NIL T T)\n\"JCS-NAME\"\nT\n(:CF :CFP :RM :DBG)");
+				""")).isEqualTo("3\n(NIL NIL)\nT\n(T T NIL NIL)\n(NIL T T)\n\"JCS-NAME\"\nT\n(:CF :CFP :DBG)");
 	}
 
 	@Test

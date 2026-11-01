@@ -153,10 +153,11 @@ definition time (see [`defclass`](../reference/special-forms/defclass.md)) — t
 is what loads postmodern's DAO layer verbatim. Multiple inheritance works
 (class precedence list, slot merge across superclasses). Out of scope: runtime
 class construction
-(`ensure-class` from computed data, a non-top-level `defclass`, `add-method`,
+(`ensure-class` from computed data, a non-top-level `defclass`,
 `compute-applicable-methods`, class redefinition,
-`update-instance-for-different-class`) — the class and method sets of a compiled
-program are fixed at compile time.
+`update-instance-for-different-class`) — the class set of a compiled program is
+fixed at compile time. Methods made at run time join generic functions through
+[`add-method`](../reference/functions/add-method.md).
 
 ## User-defined packages
 
