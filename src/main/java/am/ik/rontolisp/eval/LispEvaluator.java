@@ -7372,6 +7372,16 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Resolves an implementation form against the current package state, recording
+	 * nothing it reads (see {@link PackageResolver#resolveUnrecorded}).
+	 * @param form the form to resolve
+	 * @return the resolved form
+	 */
+	public LispVal resolveImplementationPackages(LispVal form) {
+		return this.packageResolver.resolveUnrecorded(form);
+	}
+
+	/**
 	 * Returns whether the resolver's CURRENT package reads the bare name of a {@code cl}
 	 * symbol as some other symbol (see
 	 * {@link PackageResolver#currentPackageRereadsClName}).

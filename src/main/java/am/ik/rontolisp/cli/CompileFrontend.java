@@ -619,6 +619,9 @@ final class CompileFrontend {
 		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun
 		// checks and the library pruner all recognize async-defun, never the sugar.
 		loaded = LispMacroExpander.rewriteAsyncSugar(loaded);
+		// The program's own first form: every library spliced below goes in front of it,
+		// and UserMacroExpander reads that prefix as implementation source.
+		LispVal programHead = loaded.isEmpty() ? null : loaded.get(0);
 		// "Serve on this target's native transport" (http-serve.lisp), read with the
 		// target's features: the clack-handler-rontolisp shim's run and the Clojure
 		// ring.adapter.rontolisp/run-server both call it. FIRST, because each leg is
@@ -833,9 +836,13 @@ final class CompileFrontend {
 		// A one-argument intern / find-symbol of the user program reads *package*
 		// (CurrentPackageIntern): right after user-macro expansion, before any library
 		// splice, whose own one-argument interns take a canonical spelling verbatim.
-		List<LispVal> languages = InflateLibrary.process(ClojureLibrary.process(SchemeLibrary.process(
-				CurrentPackageIntern.rewrite(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded))), features,
-				input.standards()), !wasm, input.lowersAtRunTime(), input.linked()), witBackend);
+		List<LispVal> languages = InflateLibrary
+			.process(
+					ClojureLibrary.process(SchemeLibrary.process(
+							CurrentPackageIntern
+								.rewrite(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded), programHead)),
+							features, input.standards()), !wasm, input.lowersAtRunTime(), input.linked()),
+					witBackend);
 		List<LispVal> macos = ObjcLibrary
 			.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
 				.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary.process(

@@ -4356,17 +4356,23 @@ cases:
       (2 4 6)
       42
   # use-package widens the current package's use list at read/compile time, so the
-  # inherited EXTERNAL names resolve unqualified from the next form on.
+  # inherited EXTERNAL names resolve unqualified from the next form on. The compile
+  # paths splice a library this program names (the HTTP one here) IN FRONT of it, and
+  # the library's lexicals -- a bare OK among them -- are not cl-user's reads: OK
+  # still inherits (rove's ok macro was called as an undefined function).
   - name: use-package
     source: |
-      (defpackage :ci-use (:use :cl) (:export :ci-use-hello))
+      (defpackage :ci-use (:use :cl) (:export :ci-use-hello :ok))
       (in-package :ci-use)
       (defun ci-use-hello () "hi")
+      (defmacro ok (x) `(list :ok ,x))
       (in-package :cl-user)
       (use-package :ci-use)
       (print (ci-use-hello))
+      (print (ok (functionp #'rontolisp::%http-make-env)))
     expected: |
       "hi"
+      (:OK T)
   # unuse-package is the inverse, consumed the same way: after it the bare name is the
   # current package's own symbol again and the qualified one still reaches the definition.
   - name: unuse-package

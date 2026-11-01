@@ -786,7 +786,12 @@ interpreter's live registry and mirrored for the compiled backends' runtime entr
   a side effect of printing), and the implementation's own helper forms
   (`resolveHelper`: `LispEvaluator.evalHelper` -- the REPL's routed echo, the Scheme/Clojure
   echo -- and SWANK's inspector helpers, read in `cl-user`; they interned their lambda's
-  `X` into whatever package was current, which `SwankServerTest`'s package page showed).
+  `X` into whatever package was current, which `SwankServerTest`'s package page showed), and
+  the libraries `CompileFrontend` splices in front of the program's own first form
+  (`UserMacroExpander`'s `implementationPrefix`, `resolveUnrecorded`: http-server.lisp's
+  lexical `OK` read into `cl-user` shadowed the `ok` a later `(use-package :rove)` lends, so
+  `examples/cloudflare-workers/httpbin/check.lisp` called rove's macro as an undefined
+  function on both compile paths; ci-spec `use-package` pins it).
   The conflict checks are `export`'s and `import`'s; `use-package` has none, so a name the
   target read before the use stays its own symbol where CL signals a name conflict (before
   the recording a LATER read switched to the inherited symbol, earlier code keeping the

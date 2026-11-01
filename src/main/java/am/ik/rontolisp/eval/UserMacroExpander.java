@@ -49,6 +49,18 @@ public final class UserMacroExpander {
 	 * @return the program with macro definitions consumed and macro calls expanded
 	 */
 	public static List<LispVal> expand(List<LispVal> program) {
+		return expand(program, null);
+	}
+
+	/**
+	 * Expands user macros like {@link #expand(List)}, reading the forms in front of
+	 * {@code programHead} -- the libraries a compile path spliced before the program --
+	 * as implementation source, whose names no package records.
+	 * @param program the top-level forms
+	 * @param programHead the program's own first form before any splice, or null
+	 * @return the program with macro definitions consumed and macro calls expanded
+	 */
+	public static List<LispVal> expand(List<LispVal> program, @Nullable LispVal programHead) {
 		// Splice top-level (progn ...)/(eval-when ...) first so a defmacro nested in
 		// the (eval-when (:compile-toplevel ...) (defmacro ...)) idiom is seen (and
 		// nested defuns become top-level for the compilers' Pass 1). The members an
@@ -76,6 +88,10 @@ public final class UserMacroExpander {
 			return program;
 		}
 		Session session = new Session(false);
+		// The forms in front of the program's own first form are the libraries the
+		// compile path spliced there: implementation source, read without recording.
+		session.programHead = programHead;
+		session.implementationPrefix = programHead != null && program.stream().anyMatch(form -> form == programHead);
 		for (LispVal rawForm : program) {
 			session.accept(rawForm, compileTime.contains(rawForm));
 		}
@@ -142,6 +158,17 @@ public final class UserMacroExpander {
 		// eval-when evaluates at compile time runs; nothing else does.
 		private int systemDepth;
 
+		// The program's own first form, as CompileFrontend saw it before any library
+		// splice (the entry file's (%begin-file ...) marker when there is one), or null.
+		@Nullable private LispVal programHead;
+
+		// Whether the forms accepted so far precede programHead: the libraries
+		// CompileFrontend spliced in front of the program. Their
+		// names are implementation names, so the macro-time resolver records none of
+		// them -- a bare lexical of theirs (http-server.lisp's OK) read into cl-user
+		// would shadow the symbol a later (use-package :rove) lends.
+		private boolean implementationPrefix;
+
 		// Nesting depth of the (%begin-file P T) / (%end-file) load-context brackets
 		// LoadInliner puts around every spliced file, so the closing marker knows whether
 		// it has a binding to undo. The values themselves live in the macro-time
@@ -183,6 +210,9 @@ public final class UserMacroExpander {
 			// expandAll's own hook (a defmacro whose registration signals, a package
 			// directive naming a package that does not exist).
 			SourceProvenance.enterTopLevelForm(rawForm);
+			if (rawForm == this.programHead) {
+				this.implementationPrefix = false;
+			}
 			if (isProvenanceMarker(rawForm, LispNames.BEGIN_SYSTEM)) {
 				this.systemDepth++;
 			}
@@ -230,7 +260,8 @@ public final class UserMacroExpander {
 			// Resolve through the same resolver so macro CALL SITES match the
 			// canonical registered names (a defmacro under (in-package P) registers
 			// P-qualified).
-			LispVal resolved = macroEval.resolvePackages(form);
+			LispVal resolved = this.implementationPrefix ? macroEval.resolveImplementationPackages(form)
+					: macroEval.resolvePackages(form);
 			if (isOperator(resolved, LispNames.DEFMACRO)) {
 				macroEval.evalResolved(resolved);
 				LispVal ownSymbol = ownSymbolMarker(form, resolved);

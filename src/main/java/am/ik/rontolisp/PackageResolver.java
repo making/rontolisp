@@ -302,6 +302,23 @@ public final class PackageResolver {
 	 */
 	public synchronized LispVal resolveHelper(LispVal form) {
 		Object previous = bindThreadPackage(LispNames.CL_USER_PKG);
+		try {
+			return resolveUnrecorded(form);
+		}
+		finally {
+			unbindThreadPackage(previous);
+		}
+	}
+
+	/**
+	 * Resolves a form of the implementation's own source -- a library the compile path
+	 * splices in front of the program -- against the current package state, minting
+	 * nothing: its names (its lexicals) are not symbols the program read, so a package
+	 * the program uses later still lends its own symbol of the same name.
+	 * @param form the implementation form
+	 * @return the resolved form
+	 */
+	public synchronized LispVal resolveUnrecorded(LispVal form) {
 		boolean savedProbing = this.probing;
 		this.probing = true;
 		try {
@@ -309,7 +326,6 @@ public final class PackageResolver {
 		}
 		finally {
 			this.probing = savedProbing;
-			unbindThreadPackage(previous);
 		}
 	}
 
