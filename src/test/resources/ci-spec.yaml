@@ -11506,9 +11506,18 @@ cases:
       (defmethod clos-describe-it ((x (eql :br))) (list :special x))
       (print (list (clos-describe-it 5) (clos-describe-it :br)))
       (print (funcall #'clos-describe-it 9))
+      ;; :argument-precedence-order: the second argument's specializer ranks first.
+      (defclass clos-apo-a () ())
+      (defclass clos-apo-b (clos-apo-a) ())
+      (defgeneric clos-apo (x y) (:argument-precedence-order y x))
+      (defmethod clos-apo ((x clos-apo-b) y) (list :xb (call-next-method)))
+      (defmethod clos-apo (x (y clos-apo-b)) (list :yb (call-next-method)))
+      (defmethod clos-apo (x y) :root)
+      (print (clos-apo (make-instance 'clos-apo-b) (make-instance 'clos-apo-b)))
     expected: |
       ((:DEFAULT 5) (:SPECIAL :BR))
       (:DEFAULT 9)
+      (:YB (:XB :ROOT))
   - name: clos-defmethod-eql-specializer-over-a-constant
     source: |
       (defconstant +clos-eql-utf8+ 12)
@@ -11630,11 +11639,25 @@ cases:
       (defclass clos-mi-ba (clos-mi-b clos-mi-a) ())
       (print (clos-mi-trace (make-instance 'clos-mi-c :x 1 :y 2 :z 3)))
       (print (clos-mi-trace (make-instance 'clos-mi-ba)))
+      ;; Classes an exported symbol names (contextl's layered-class over partial-class
+      ;; and special-layered-access-class): the :around on each superclass applies.
+      (defpackage :clos-mi-pkg (:use :cl) (:export #:mi-p #:mi-s #:mi-ps #:mi-hook))
+      (in-package :clos-mi-pkg)
+      (defclass mi-p () ())
+      (defclass mi-s () ())
+      (defclass mi-ps (mi-p mi-s) ())
+      (defgeneric mi-hook (x))
+      (defmethod mi-hook :around ((x mi-p)) (cons :p (call-next-method)))
+      (defmethod mi-hook :around ((x mi-s)) (cons :s (call-next-method)))
+      (defmethod mi-hook (x) (list :base))
+      (print (mi-hook (make-instance 'mi-ps)))
+      (in-package :cl-user)
     expected: |
       (1 9 3 7 T)
       (:RIGHT 1)
       (:A :B :DEFAULT)
       (:B :A :DEFAULT)
+      (:P :S :BASE)
   - name: clos-setf-methods-and-setf-generic
     source: |
       (defclass csm-a () ((x :initarg :x :accessor csm-val)))
@@ -32573,12 +32596,21 @@ standalone:
         (slot-makunbound p 'x)
         (print (list (slot-boundp p 'x) (sap-x p) (sap-x q) (slot-value q 'x)))
         (print (reverse *sap-log*)))
+      ;; A slot definition is named by the slot's own symbol, whatever its package.
+      (defpackage :sap-other (:use :cl))
+      (defclass sap-other::sap-cell () ((sap-other::v :initarg :v)) (:metaclass sap-meta))
+      (let ((cell (make-instance 'sap-other::sap-cell :v 5)))
+        (print (list (slot-value cell 'sap-other::v)
+                     (eq (closer-mop:slot-definition-name
+                          (first (closer-mop:class-slots (class-of cell))))
+                         'sap-other::v))))
     stdout: |
       ((:WRITE X 1) :BOUNDP (:WRITE Y 2))
       (10 20 T)
       (30 40)
       (NIL (:UNBOUND X) 1 1)
       ((:READ X) (:READ Y) :BOUNDP (:WRITE X 3) (:WRITE Y 4) (:READ X) (:READ Y) :MAKUNBOUND :BOUNDP (:READ X))
+      (50 T)
   # The generic-function protocol adds an arm consulting its generic's run-time
   # methods to every dispatcher, so it runs alone, not in the corpus.
   - name: generic-function-protocol
@@ -32646,3 +32678,28 @@ standalone:
       (9 16 :ZERO GFP-AREA 2 T T)
       (:ZERO :NO-METHOD NIL)
       (8 ((GFP-VOLUME NIL (INTEGER)) (GFP-VOLUME (:BEFORE) ((EQL 0)))) GFP-LOGGED)
+  # Instance updating tracks the instances of a :metaclass class defined more than
+  # once, so it runs alone, not in the corpus.
+  - name: instance-updating-of-a-redefined-metaclass-class
+    source: |
+      ;; CLHS 4.3.6: defining a :metaclass class again with a slot added and one
+      ;; dropped updates the instance made before -- the added slot takes its
+      ;; initform through update-instance-for-redefined-class, whose method sees the
+      ;; added and discarded slots. (Not the dropped slot's value: on the compile
+      ;; paths the instance has the last definition's slots from the start.) SBCL
+      ;; 2.2.9 agrees.
+      (asdf:load-system "closer-mop")
+      (defclass iu-meta (standard-class) ())
+      (defmethod closer-mop:validate-superclass ((c iu-meta) (s standard-class)) t)
+      (defclass iu-thing () ((a :initarg :a :accessor iu-a) (b :initform :b)) (:metaclass iu-meta))
+      (defvar *iu* (make-instance 'iu-thing :a 1))
+      (defvar *iu-log* nil)
+      (defmethod update-instance-for-redefined-class :before
+          ((instance iu-thing) added discarded plist &rest initargs)
+        (declare (ignore plist initargs))
+        (push (list added discarded) *iu-log*))
+      (defclass iu-thing () ((a :initarg :a :accessor iu-a) (c :initform :c :accessor iu-c))
+        (:metaclass iu-meta))
+      (print (list (iu-a *iu*) (iu-c *iu*) (slot-exists-p *iu* 'b) *iu-log*))
+    stdout: |
+      (1 :C NIL (((C) (B))))

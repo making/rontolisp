@@ -102,6 +102,26 @@ public final class LispInstance implements LispVal {
 	}
 
 	/**
+	 * Gives this instance a new layout with the given declared slot values -- the
+	 * interpreter's update of an instance whose class was redefined (CLHS 4.3.6): the
+	 * object identity survives, and the cells past the declared slots (a funcallable
+	 * instance's function, a Gray stream's pushback) keep their values.
+	 * @param newLayout the layout
+	 * @param declared the declared slot values, in the new layout's order
+	 */
+	public void replaceStorage(LispLayout newLayout, LispVal[] declared) {
+		LispVal[] storage = new LispVal[Math.max(newLayout.capacity(), declared.length)];
+		Arrays.fill(storage, LispNil.INSTANCE);
+		System.arraycopy(declared, 0, storage, 0, declared.length);
+		int tail = Math.min(-LispLayout.FUNCALLABLE_CELL, this.slots.length - this.layout.slotCount());
+		for (int i = 1; i <= tail && storage.length - i >= declared.length; i++) {
+			storage[storage.length - i] = this.slots[this.slots.length - i];
+		}
+		this.slots = storage;
+		this.layout = newLayout;
+	}
+
+	/**
 	 * The function a funcallable instance calls ({@link LispLayout#FUNCALLABLE_CELL}), or
 	 * null when this instance is not funcallable or has none installed yet.
 	 * @return the installed function, or null

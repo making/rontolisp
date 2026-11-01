@@ -496,6 +496,21 @@ public final class LispNames {
 	public static final String METHOD_QUALIFIERS = "METHOD-QUALIFIERS";
 
 	/**
+	 * {@code make-instances-obsolete}: the interpreter updates the existing instances of
+	 * the class (and its subclasses) when the class definition in progress completes; on
+	 * the compile paths, whose class tables are whole-program, no instance is ever
+	 * obsolete and the prelude function answers the class.
+	 */
+	public static final String MAKE_INSTANCES_OBSOLETE = "MAKE-INSTANCES-OBSOLETE";
+
+	/**
+	 * {@code update-instance-for-redefined-class}: the generic the interpreter calls on
+	 * an instance whose class was redefined, its system method calling
+	 * {@code shared-initialize} with the added slots.
+	 */
+	public static final String UPDATE_INSTANCE_FOR_REDEFINED_CLASS = "UPDATE-INSTANCE-FOR-REDEFINED-CLASS";
+
+	/**
 	 * The {@code compile-file} prelude function: exists and signals. There is no file
 	 * compiler -- a whole PROGRAM is compiled in one pass and a loaded file is spliced
 	 * into it -- which is the same reason {@link #COMPILE_FILE_PATHNAME_VAR} is
@@ -2366,6 +2381,25 @@ public final class LispNames {
 	 * idiom (see {@code CompileRuntime}).
 	 */
 	public static final String COMPILE = "COMPILE";
+
+	/**
+	 * The compiled programs' registration of a precompiled {@link #COMPILE} definition
+	 * ({@code CompiledTemplates}): {@code (%register-compiled-template 'pattern factory)}
+	 * runs before the top-level form whose macro-time evaluation compiled the definition.
+	 */
+	public static final String REGISTER_COMPILED_TEMPLATE = "%REGISTER-COMPILED-TEMPLATE";
+
+	/**
+	 * A {@link #REGISTER_COMPILED_TEMPLATE} pattern's hole: matches any datum, which the
+	 * factory receives.
+	 */
+	public static final String TEMPLATE_HOLE = "%TEMPLATE-HOLE%";
+
+	/**
+	 * A {@link #REGISTER_COMPILED_TEMPLATE} pattern's uninterned symbol: matches any
+	 * uninterned symbol (a gensym is a fresh one on every run).
+	 */
+	public static final String TEMPLATE_GENSYM = "%TEMPLATE-GENSYM%";
 
 	/**
 	 * The {@code slot-value} macro (static CLOS subset). Requires a literal quoted slot

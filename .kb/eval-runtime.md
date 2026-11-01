@@ -3,7 +3,9 @@
 Runtime tree-walking interpreter over the compiled value representation: `null`=nil, `Long`=int,
 `Double`=float, `String`=symbol or `"..."`-prefixed string, `Object[2]`=cons, `Object[]` with
 `Integer` head=function value; interpreted closures use sentinel `funcId == -1`. Supported forms and
-limitations are identical across WASM/JVM -- README "Compiled `eval` limitations".
+limitations are identical across WASM/JVM -- README "Compiled `eval` limitations". A
+`compile` call the program's own definitions make does not reach it: the macro-time replay
+precompiles those definitions (`.kb/clos.md`, "Precompiled definitions").
 
 ## Shape
 

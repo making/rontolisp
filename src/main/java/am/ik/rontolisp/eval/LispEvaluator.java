@@ -35,6 +35,7 @@ import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispLambda;
+import am.ik.rontolisp.macro.CompiledTemplates;
 import am.ik.rontolisp.macro.DynamicClasses;
 import am.ik.rontolisp.macro.FormatRenderer;
 import am.ik.rontolisp.macro.GenericFunctions;
@@ -1032,6 +1033,14 @@ public final class LispEvaluator {
 	@Nullable private List<LispVal> mopEvalSpliceSink;
 
 	/**
+	 * Where the {@code compile} built-in records a registration form for every other
+	 * definition it compiles when this evaluator is a compile path's MACRO-TIME evaluator
+	 * ({@link CompiledTemplates}): the compiled program's {@code compile} answers that
+	 * definition with compiled code. Null on a live interpreter.
+	 */
+	@Nullable private List<LispVal> compiledTemplateSink;
+
+	/**
 	 * The program's output stream, wrapped so expansion-time output can be silenced; see
 	 * {@link MutablePrintStream}.
 	 */
@@ -1160,6 +1169,15 @@ public final class LispEvaluator {
 	 */
 	public void setMopEvalSpliceSink(List<LispVal> sink) {
 		this.mopEvalSpliceSink = sink;
+	}
+
+	/**
+	 * Attaches the {@code compile} built-in's template target -- see
+	 * {@link #compiledTemplateSink}.
+	 * @param sink the list registration forms are appended to
+	 */
+	public void setCompiledTemplateSink(List<LispVal> sink) {
+		this.compiledTemplateSink = sink;
 	}
 
 	/** The package-stripped member of a possibly qualified name. */
@@ -1554,6 +1572,9 @@ public final class LispEvaluator {
 					return result;
 				});
 			}
+			if (this.compiledTemplateSink != null) {
+				this.compiledTemplateSink.add(CompiledTemplates.registration(args.get(1)));
+			}
 			LispVal fn = eval(defCons);
 			if (args.get(0) instanceof LispSymbol name && !name.isKeyword()) {
 				// (compile 'name def) also installs the function under the name and
@@ -1713,7 +1734,7 @@ public final class LispEvaluator {
 			for (int i = 0; i < slots.length; i++) {
 				slots[i] = i + 1 < args.size() ? args.get(i + 1) : LispNil.INSTANCE;
 			}
-			return new LispInstance(layout, slots);
+			return trackInstance(new LispInstance(layout, slots));
 		}));
 		this.globalEnv.defineFunction(LispNames.OBJ_BECOME, new LispFunction(LispNames.OBJ_BECOME, args -> {
 			if (args.size() != 2 || !(args.get(1) instanceof LispSymbol tag)) {
@@ -1913,7 +1934,27 @@ public final class LispEvaluator {
 						slots[i] = i < layout.slotCount() ? new LispInstance(unbound, new LispVal[0])
 								: LispNil.INSTANCE;
 					}
-					return new LispInstance(layout, slots);
+					return trackInstance(new LispInstance(layout, slots));
+				}));
+		// (make-instances-obsolete class): the instances of the class and its subclasses
+		// are updated when the class definition in progress completes (CLHS 4.3.6; the
+		// standard allows any time up to their next slot access), or now outside one.
+		this.globalEnv.defineFunction(LispNames.MAKE_INSTANCES_OBSOLETE,
+				new LispFunction(LispNames.MAKE_INSTANCES_OBSOLETE, args -> {
+					if (args.size() != 1) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.MAKE_INSTANCES_OBSOLETE + " expects 1 argument, got " + args.size());
+					}
+					LispVal designator = args.get(0);
+					LispVal metaobject = designator instanceof LispSymbol sym
+							? this.closRegistry.classMetaobject(sym.name()) : designator;
+					if (metaobject instanceof LispInstance classMetaobject) {
+						this.obsoleteClasses.add(classMetaobject);
+						if (this.classDefinitionDepth == 0) {
+							updateObsoleteInstances();
+						}
+					}
+					return designator;
 				}));
 		// (%mop-make-instance designator initargs...) -- the metaclass protocol's
 		// runtime-class make-instance: the designator (a class metaobject or a name
@@ -8456,8 +8497,26 @@ public final class LispEvaluator {
 			for (LispVal form : MopProtocol.forms()) {
 				eval(form, this.globalEnv);
 			}
+			// The interpreter's (re)finalization hook, (%mop-class-finalized class
+			// previous): the class precedence lists the run-time dispatch memoized are
+			// computed afresh; a redefinition updates the instances in evalDefclass. The
+			// compile paths generate their own
+			// (LispMacroExpander.mopClassFinalizedDefun).
+			this.globalEnv.defineFunction(MOP_CLASS_FINALIZED, new LispFunction(MOP_CLASS_FINALIZED, args -> {
+				if (this.closRegistry.dynamicClasses()) {
+					eval(new LispCons(new LispSymbol(LispNames.SETQ), new LispCons(new LispSymbol(DYNAMIC_CPLS),
+							new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))), this.globalEnv);
+				}
+				return LispNil.INSTANCE;
+			}));
 		}
 	}
+
+	/** The (re)finalization hook mop-protocol.lisp's finalize-inheritance calls. */
+	private static final String MOP_CLASS_FINALIZED = "%MOP-CLASS-FINALIZED";
+
+	/** dynamic-classes.lisp's memo of the class precedence lists. */
+	private static final String DYNAMIC_CPLS = "%DYNAMIC-CPLS%";
 
 	/**
 	 * Calls one function of the runtime of classes made at run time
@@ -8509,6 +8568,216 @@ public final class LispEvaluator {
 	 * specializer so it carries the arm consulting a dynamic instance's precedence list
 	 * (later dispatchers get it as they are generated).
 	 */
+	/**
+	 * The live instances of the classes defined with a {@code :metaclass}, by instance
+	 * tag: what a redefinition of such a class -- or a {@code make-instances-obsolete} of
+	 * it -- updates (CLHS 4.3.6). Held weakly; cleared references are dropped as the
+	 * lists are walked or grow. Guarded by itself: a program's threads make instances.
+	 */
+	private final Map<String, List<java.lang.ref.WeakReference<LispInstance>>> trackedInstances = new HashMap<>();
+
+	/** The class metaobjects made obsolete since the last update of their instances. */
+	private final List<LispInstance> obsoleteClasses = new ArrayList<>();
+
+	/** The tags whose layout a class redefinition replaced since the last update. */
+	private final Set<String> redefinedLayouts = new HashSet<>();
+
+	/** How many class definitions are in progress (a defclass inside a driver hook). */
+	private int classDefinitionDepth;
+
+	/**
+	 * Records an instance of a class defined with a {@code :metaclass}, the only ones a
+	 * class redefinition here updates.
+	 * @param instance the new instance
+	 * @return the instance
+	 */
+	private LispInstance trackInstance(LispInstance instance) {
+		if (this.closRegistry.hasMetaclassedClasses()) {
+			String className = LispLayout.printNameOfTag(instance.layout().tag());
+			if (className != null && this.closRegistry.isMetaclassed(className)) {
+				synchronized (this.trackedInstances) {
+					List<java.lang.ref.WeakReference<LispInstance>> live = this.trackedInstances
+						.computeIfAbsent(instance.layout().tag(), tag -> new ArrayList<>());
+					if (live.size() >= 64 && Integer.bitCount(live.size()) == 1) {
+						live.removeIf(ref -> ref.get() == null);
+					}
+					live.add(new java.lang.ref.WeakReference<>(instance));
+				}
+			}
+		}
+		return instance;
+	}
+
+	/**
+	 * Updates the instances a class redefinition made obsolete (CLHS 4.3.6): an instance
+	 * whose class's layout was replaced takes the new one -- a slot of the same name
+	 * keeps its value, an added slot starts unbound, a discarded one's value goes to the
+	 * property list -- and every instance of a class made obsolete or inheriting from one
+	 * (contextl's partial classes keep their slots in anonymous superclasses) is handed
+	 * to {@code update-instance-for-redefined-class}, whose system method calls
+	 * {@code shared-initialize} on the added slots (contextl turns a slot made special
+	 * into a special symbol there).
+	 */
+	private void updateObsoleteInstances() {
+		if (this.obsoleteClasses.isEmpty() && this.redefinedLayouts.isEmpty()) {
+			return;
+		}
+		List<LispInstance> obsolete = List.copyOf(this.obsoleteClasses);
+		Set<String> redefined = Set.copyOf(this.redefinedLayouts);
+		this.obsoleteClasses.clear();
+		this.redefinedLayouts.clear();
+		LispLayout unboundLayout = java.util.Objects
+			.requireNonNull(this.closRegistry.findLayoutByTag(ClosRegistry.UNBOUND_TAG));
+		List<Map.Entry<String, List<java.lang.ref.WeakReference<LispInstance>>>> entries;
+		synchronized (this.trackedInstances) {
+			entries = List.copyOf(this.trackedInstances.entrySet());
+		}
+		for (Map.Entry<String, List<java.lang.ref.WeakReference<LispInstance>>> entry : entries) {
+			String tag = entry.getKey();
+			LispLayout current = this.closRegistry.findLayoutByTag(tag);
+			String className = LispLayout.printNameOfTag(tag);
+			LispInstance classMetaobject = className == null ? null : this.closRegistry.classMetaobject(className);
+			boolean madeObsolete = classMetaobject != null && obsolete.stream()
+				.anyMatch(c -> inheritsFrom(classMetaobject, c,
+						java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>())));
+			if (current == null || (!madeObsolete && !redefined.contains(tag))) {
+				continue;
+			}
+			List<java.lang.ref.WeakReference<LispInstance>> live;
+			synchronized (this.trackedInstances) {
+				entry.getValue().removeIf(ref -> ref.get() == null);
+				live = List.copyOf(entry.getValue());
+			}
+			for (java.lang.ref.WeakReference<LispInstance> ref : live) {
+				LispInstance instance = ref.get();
+				// An instance made since the redefinition already has the new layout.
+				if (instance != null && (madeObsolete || instance.layout() != current)) {
+					updateObsoleteInstance(instance, current, unboundLayout);
+				}
+			}
+		}
+	}
+
+	/** Whether a class metaobject is {@code target} or inherits from it. */
+	private static boolean inheritsFrom(LispInstance classMetaobject, LispInstance target, Set<LispInstance> seen) {
+		if (classMetaobject == target) {
+			return true;
+		}
+		if (!seen.add(classMetaobject)) {
+			return false;
+		}
+		int supersAt = classMetaobject.layout().slotNames().indexOf("DIRECT-SUPERCLASSES");
+		LispVal supers = supersAt < 0 ? LispNil.INSTANCE : classMetaobject.slot(supersAt);
+		while (supers instanceof LispCons cons) {
+			if (cons.car() instanceof LispInstance superMetaobject && inheritsFrom(superMetaobject, target, seen)) {
+				return true;
+			}
+			supers = cons.cdr();
+		}
+		return false;
+	}
+
+	/** One instance's update; see {@link #updateObsoleteInstances}. */
+	private void updateObsoleteInstance(LispInstance instance, LispLayout current, LispLayout unboundLayout) {
+		List<String> oldNames = instance.layout().slotNames();
+		List<String> newNames = current.slotNames();
+		LispVal added = LispNil.INSTANCE;
+		LispVal discarded = LispNil.INSTANCE;
+		LispVal plist = LispNil.INSTANCE;
+		if (instance.layout() != current) {
+			LispVal[] declared = new LispVal[newNames.size()];
+			for (int i = newNames.size() - 1; i >= 0; i--) {
+				int old = oldNames.indexOf(newNames.get(i));
+				if (old >= 0) {
+					declared[i] = instance.slot(old);
+				}
+				else {
+					declared[i] = new LispInstance(unboundLayout, new LispVal[0]);
+					// CLHS 4.3.6.1: the added LOCAL slots; a shared one is the class's.
+					if (!isSharedSlot(current, i)) {
+						added = new LispCons(slotNameSymbol(current, i), added);
+					}
+				}
+			}
+			for (int i = oldNames.size() - 1; i >= 0; i--) {
+				if (!newNames.contains(oldNames.get(i))) {
+					LispSymbol name = slotNameSymbol(instance.layout(), i);
+					discarded = new LispCons(name, discarded);
+					LispVal value = instance.slot(i);
+					if (!(value instanceof LispInstance marker && marker.layout() == unboundLayout)) {
+						plist = new LispCons(name, new LispCons(value, plist));
+					}
+				}
+			}
+			instance.replaceStorage(current, declared);
+		}
+		apply(resolveFunction(LispNames.UPDATE_INSTANCE_FOR_REDEFINED_CLASS),
+				List.of(instance, added, discarded, plist), this.globalEnv);
+	}
+
+	/**
+	 * The symbol naming a layout's slot: the registered class's slot symbol (package and
+	 * all) when the class has one of that base name, the base name otherwise.
+	 */
+	private boolean isSharedSlot(LispLayout layout, int index) {
+		String baseName = layout.slotNames().get(index);
+		String className = LispLayout.printNameOfTag(layout.tag());
+		ClosRegistry.ClassInfo info = className == null ? null : this.closRegistry.findClass(className);
+		if (info != null) {
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				if (slot.baseName().equals(baseName)) {
+					return slot.sharedCellVar() != null;
+				}
+			}
+		}
+		return false;
+	}
+
+	private LispSymbol slotNameSymbol(LispLayout layout, int index) {
+		String baseName = layout.slotNames().get(index);
+		String className = LispLayout.printNameOfTag(layout.tag());
+		ClosRegistry.ClassInfo info = className == null ? null : this.closRegistry.findClass(className);
+		if (info != null) {
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				if (slot.baseName().equals(baseName)) {
+					return new LispSymbol(slot.name());
+				}
+			}
+		}
+		return new LispSymbol(baseName);
+	}
+
+	/**
+	 * The defmethod form with its body's user macros expanded when the body names
+	 * {@code call-next-method} or {@code next-method-p}: the method's expansion binds
+	 * them by rewriting their calls, and a macro can build such a call -- contextl's
+	 * figure-editor hands its {@code call-and-update} macro {@code call-next-method} by
+	 * name, and {@code with-inactive-layers} puts the call in a closure. The compile
+	 * paths expand every user macro before a method is registered.
+	 */
+	private LispCons withNextMethodMacrosExpanded(LispCons defmethod) {
+		if (!LispMacroExpander.defmethodMentionsNextMethod(defmethod)) {
+			return defmethod;
+		}
+		List<LispVal> parts = defmethod.toList();
+		int lambdaList = LispMacroExpander.defmethodLambdaListIndex(parts);
+		List<LispVal> expanded = new java.util.ArrayList<>(parts.subList(0, lambdaList + 1));
+		boolean changed = false;
+		for (LispVal form : parts.subList(lambdaList + 1, parts.size())) {
+			LispVal expansion = UserMacroExpander.expandAll(form, this);
+			changed = changed || expansion != form;
+			expanded.add(expansion);
+		}
+		if (!changed) {
+			return defmethod;
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = expanded.size() - 1; i >= 0; i--) {
+			result = new LispCons(expanded.get(i), result);
+		}
+		return (LispCons) result;
+	}
+
 	/** Whether an instance is a generic function metaobject of the protocol. */
 	private boolean isGenericFunctionMetaobject(LispInstance instance) {
 		if (!this.closRegistry.gfProtocol() || !instance.layout().funcallable()) {
@@ -10544,6 +10813,31 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalDefclass(LispCons cons, Environment env) {
+		// A redefinition replaces the class's layout; the instances it made obsolete are
+		// updated once the definition (and any class definition its hooks run) is done.
+		String definedName = cons.toList().size() > 1 && cons.toList().get(1) instanceof LispSymbol nameSym
+				? nameSym.name() : null;
+		LispLayout layoutBefore = definedName == null ? null : this.closRegistry.findClassLayout(definedName);
+		this.classDefinitionDepth++;
+		LispVal defined;
+		try {
+			defined = evalDefclassDefinition(cons, env);
+			LispLayout layoutAfter = definedName == null ? null : this.closRegistry.findClassLayout(definedName);
+			if (layoutBefore != null && layoutAfter != null
+					&& !layoutBefore.slotNames().equals(layoutAfter.slotNames())) {
+				this.redefinedLayouts.add(layoutAfter.tag());
+			}
+		}
+		finally {
+			this.classDefinitionDepth--;
+		}
+		if (this.classDefinitionDepth == 0) {
+			updateObsoleteInstances();
+		}
+		return defined;
+	}
+
+	private LispVal evalDefclassDefinition(LispCons cons, Environment env) {
 		// A defclass extending a seeded MOP base class (a metaclass definition, a
 		// slot-definition subclass) needs the seeding before the superclass lookup; one
 		// carrying (:metaclass M) additionally loads the metaclass protocol, whose
@@ -10585,7 +10879,7 @@ public final class LispEvaluator {
 		// accessors -- by re-registering the class with the metaobject's superclass
 		// list. The driver call itself is NOT re-run (its :arounds are user code).
 		if (driverMetaobject instanceof LispInstance metaobject) {
-			LispCons widened = LispMacroExpander.widenDefclassToMetaobjectSupers(cons, metaobject);
+			LispCons widened = LispMacroExpander.widenDefclassToMetaobjectSupers(cons, metaobject, this.closRegistry);
 			if (widened == null && registered != cons) {
 				// The carried allocations no longer hold: back to the form as written.
 				widened = cons;
@@ -10668,7 +10962,7 @@ public final class LispEvaluator {
 		if (metaobject == null) {
 			return null;
 		}
-		return LispMacroExpander.widenDefclassToMetaobjectSupers(defclass, metaobject);
+		return LispMacroExpander.widenDefclassToMetaobjectSupers(defclass, metaobject, this.closRegistry);
 	}
 
 	private LispVal evalDefgeneric(LispCons cons, Environment env) {
@@ -10723,6 +11017,7 @@ public final class LispEvaluator {
 		// A (defmethod (setf name) ...) rides the %setf- writer-generic convention, so
 		// it merges with any defclass :accessor writer methods on the same place.
 		cons = LispMacroExpander.normalizeSetfMethodForm(cons, this.structAccessors);
+		cons = withNextMethodMacrosExpanded(cons);
 		ensureGrayProtocolDeclared(cons);
 		if (SlotProtocol.isProtocolGenericName(cons.toList().get(1))) {
 			ensureSlotProtocolLoaded();

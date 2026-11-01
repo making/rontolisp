@@ -1,7 +1,17 @@
 package am.ik.rontolisp.e2e;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The REAL contextl sources (vendored unmodified under
@@ -32,7 +42,12 @@ import java.util.List;
  * "Classes made at run time"). The last line prints {@code contextl-user} symbols inside
  * a form that activates a layer, which the interpreter used to spell qualified
  * ({@code .kb/pretty-printer.md}, "The package qualifier follows `*package*`
- * accessibility").
+ * accessibility"). Then contextl's {@code test/demo3.lisp} and figure editor:
+ * {@code define-layered-class} with layered accessors, defined again {@code :in} a layer
+ * (partial classes, one gaining a superclass, one giving an existing instance a special
+ * slot), {@code slot-value-using-layer} over a {@code :layered} slot, and
+ * {@code call-next-method} a macro builds or a method passes as a value
+ * ({@code .kb/clos.md}, "Layered classes").
  */
 class ContextlE2eTest extends AsdfLibraryE2eSupport {
 
@@ -323,6 +338,50 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			(setf *removed* nil)
 			(remove-layer 'bar *new-context*)
 			(assert (not *removed*))
+			(define-layered-class person ()
+			  ((name :initarg :name :layered-accessor person-name)))
+			(define-layered-function display-object (object))
+			(define-layered-method display-object ((object person))
+			  (list 'person :name (person-name object)))
+			(define-layered-class employer :in employment-layer ()
+			  ((name :initarg :name :layered-accessor employer-name)))
+			(define-layered-method display-object :in employment-layer ((object employer))
+			  (list 'employer :name (employer-name object)))
+			(define-layered-class person :in employment-layer ()
+			  ((employer :initarg :employer :layered-accessor person-employer)))
+			(define-layered-method display-object :in employment-layer :around ((object person))
+			  (append (call-next-method) (list :employer (display-object (person-employer object)))))
+			(define-layered-class info-mixin :in info-layer ()
+			  ((city :initarg :city :layered-accessor city)))
+			(define-layered-method display-object :in info-layer :around ((object info-mixin))
+			  (append (call-next-method) (list :city (city object))))
+			(define-layered-class person :in info-layer (info-mixin) ())
+			(define-layered-class employer :in info-layer (info-mixin) ())
+			(defparameter *rob*
+			  (make-instance 'person :name 'rob :city 'ilm
+			                         :employer (make-instance 'employer :name 'doc :city 'muc)))
+			(print (display-object *rob*))
+			(print (with-active-layers (employment-layer info-layer) (display-object *rob*)))
+			(deflayer display-layer)
+			(define-layered-class displayed-slots-mixin :in display-layer ()
+			  ((displayed-slots :special t :initform '() :accessor displayed-slots)))
+			(define-layered-class person :in display-layer (displayed-slots-mixin) ())
+			(print (list (displayed-slots *rob*)
+			             (dletf (((displayed-slots *rob*) '(name city))) (displayed-slots *rob*))
+			             (displayed-slots *rob*)))
+			(deflayer slot-access-layer)
+			(define-layered-method slot-value-using-layer :in slot-access-layer (class (object person) slot reader)
+			  (declare (ignorable class slot reader))
+			  (list (call-next-method) :slot-access))
+			(define-layered-class person :in slot-access-layer () ((name :layered t)))
+			(print (list (person-name *rob*) (with-active-layers (slot-access-layer) (person-name *rob*))))
+			(defmacro call-twice (function) `(list (,function) (,function)))
+			(defun call-thunk (thunk) (list :thunk (funcall thunk)))
+			(define-layered-function twice (x))
+			(define-layered-method twice (x) x)
+			(define-layered-method twice :in info-layer :around (x) (call-twice call-next-method))
+			(define-layered-method twice :in employment-layer :around (x) (call-thunk #'call-next-method))
+			(print (list (with-active-layers (info-layer) (twice 1)) (with-active-layers (employment-layer) (twice 2))))
 			(print :done)
 			""";
 
@@ -334,7 +393,42 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			"((:OUTPUT) ((:PLAIN :OUTPUT) ((:HTML :OUTPUT) ((:XML :OUTPUT) (:PLAIN :OUTPUT)))))",
 			"(NIL (1 2) (2 3) (2 3) NIL)", "(10 (20 20) 10 NIL)", "\"#<LAYER NIL>\"",
 			"(INFO-LAYER INFO-LAYER (INFO-LAYER T))", "(FOO BAR (4711 BAR) FOO)", "(1 1)", "(2 2)", "3", "(4 5 5)",
-			"(FOO 6 6)", "(NIL LAYER3)", "1", "2", "3", "4", "5", "6", "7", "8", ":DONE");
+			"(FOO 6 6)", "(NIL LAYER3)", "1", "2", "3", "4", "5", "6", "7", "8", "(PERSON :NAME ROB)",
+			"(PERSON :NAME ROB :CITY ILM :EMPLOYER (EMPLOYER :NAME DOC :CITY MUC))", "(NIL (NAME CITY) NIL)",
+			"(ROB (ROB :SLOT-ACCESS))", "((1 1) (:THUNK 2))", ":DONE");
+
+	/**
+	 * A handler {@code eval}s a redefinition that makes the slot of an existing instance
+	 * special, and the {@code dletf} it continues then binds it, as contextl's
+	 * {@code test/special-slots-1.lisp} does: the redefinition makes the instance
+	 * obsolete and updates it ({@code .kb/clos.md}, "Instance updating"). Interpreter
+	 * only -- a compiled {@code eval} defines no class.
+	 */
+	@Test
+	void anEvaluatedRedefinitionMakesAnExistingInstancesSlotSpecial() {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		evaluator.setSystemPath(List.of(SYSTEM_DIR, LW_COMPAT_DIR));
+		for (LispVal expr : LispReader.readAllFromString("""
+				(asdf:load-system "contextl")
+				(in-package :contextl-user)
+				(define-layered-class person1 () ((name1 :initarg :name :accessor person-name1)))
+				(defparameter *p* (make-instance 'person1 :name "Dr. Jekyll"))
+				(defparameter *errors* 0)
+				(symbol-macrolet ((safe-special-symbol-progv t))
+				  (handler-bind ((error (lambda (error)
+				                          (incf *errors*)
+				                          (eval '(define-layered-class person1 ()
+				                                  ((name1 :initarg :name :special t :accessor person-name1))))
+				                          (continue error))))
+				    (print (dletf (((person-name1 *p*) "Mr. Hide")) (person-name1 *p*)))))
+				(print (list *errors* (person-name1 *p*)))
+				""")) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).trim().lines().map(String::trim))
+			.containsExactly("\"Mr. Hide\"", "(1 \"Dr. Jekyll\")");
+	}
 
 	@Override
 	protected String systemDir() {

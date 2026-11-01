@@ -78,7 +78,8 @@
         (let ((entries
                (%dynamic-applicable
                 (%gf-runtime-entries
-                 (%gf-runtime-methods (%gf-key (slot-value gf 'name))) args))))
+                 (%gf-runtime-methods (%gf-key (slot-value gf 'name))) args
+                 (%gf-precedence-indexes gf)))))
           (if entries
               (%dynamic-dispatch entries args)
               (error "There is no applicable method for the generic function ~S when called with arguments ~S."
@@ -204,14 +205,32 @@
 
 (defun %gf-method-function (lambda-expression)
   ;; The method function of a lambda expression (closer-mop's make-method-lambda
-  ;; shape): call-next-method and next-method-p are bound over the next methods.
-  (compile nil
-           (list 'lambda '(%gf-args %gf-next)
-                 (list 'flet
-                  (list (list 'call-next-method '(&rest %gf-cnm-args)
-                              '(%gf-call-next %gf-next %gf-args %gf-cnm-args))
-                        (list 'next-method-p nil '(if %gf-next t nil)))
-                  (list 'apply (list 'function lambda-expression) '%gf-args)))))
+  ;; shape): call-next-method and next-method-p are bound over the next methods
+  ;; where the lambda expression names them. Its own variables are gensyms and
+  ;; %gf-call-next goes in as a function object: the definition spells no symbol
+  ;; of this runtime, whose names the compile paths would read in the program's
+  ;; package where they precompile it (CompiledTemplates).
+  (let ((args (gensym "ARGS"))
+        (next (gensym "NEXT"))
+        (cnm-args (gensym "CNM-ARGS")))
+    (compile nil
+             (list 'lambda (list args next)
+                   (if (%gf-names-next-method-p lambda-expression)
+                       (list 'flet
+                        (list (list 'call-next-method (list '&rest cnm-args)
+                                    (list 'funcall #'%gf-call-next next args
+                                          cnm-args))
+                              (list 'next-method-p nil (list 'if next t nil)))
+                        (list 'apply (list 'function lambda-expression) args))
+                       (list 'apply (list 'function lambda-expression)
+                             args))))))
+
+(defun %gf-names-next-method-p (form)
+  (if (consp form)
+      (if (%gf-names-next-method-p (car form))
+          t
+          (%gf-names-next-method-p (cdr form)))
+      (if (member form '(call-next-method next-method-p)) t nil)))
 
 (defun %gf-static-method-function (function)
   ;; The method function of a method a defmethod defined: its compiled body
@@ -234,7 +253,16 @@
         (if (if (symbolp object) (equal arg object) (eql arg object)) 0 nil))
       (%class-key arg specializer)))
 
-(defun %gf-runtime-entry (method args)
+(defun %gf-precedence-indexes (gf)
+  ;; The required parameters' indexes in the generic's argument precedence order,
+  ;; nil for the leftmost-first order.
+  (let ((order (slot-value gf 'argument-precedence-order))
+        (required (%gf-required-args (slot-value gf 'lambda-list))))
+    (if (and order (= (length order) (length required)))
+        (mapcar (lambda (parameter) (position parameter required)) order)
+        nil)))
+
+(defun %gf-runtime-entry (method args order)
   (let ((keys nil) (applicable t) (rest args))
     (dolist (specializer (slot-value method 'specializers))
       (if applicable
@@ -247,14 +275,19 @@
               (cons (lambda (next &rest call-args)
                       (funcall (slot-value method 'function) call-args
                                (if next (list (%gf-next-method next)) nil)))
-                    (reverse keys)))
+                    (let ((keys (reverse keys)))
+                      ;; The order %dynamic-dispatch compares the keys in.
+                      (if order
+                          (mapcar (lambda (index) (nth index keys)) order)
+                          keys))))
         nil)))
 
-(defun %gf-runtime-entries (methods args)
-  ;; One entry per run-time method, nil for an inapplicable one.
+(defun %gf-runtime-entries (methods args order)
+  ;; One entry per run-time method, nil for an inapplicable one; ORDER is the
+  ;; generic's argument precedence order as indexes (nil: leftmost first).
   (let ((entries nil))
     (dolist (method methods)
-      (setq entries (cons (%gf-runtime-entry method args) entries)))
+      (setq entries (cons (%gf-runtime-entry method args order) entries)))
     (reverse entries)))
 
 (defun %gf-same-specializers-p (a b)

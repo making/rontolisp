@@ -3408,6 +3408,14 @@ public final class LispPreludeLibrary {
 				(defun invoke-debugger (%id-condition)
 				  (error %id-condition))
 				""");
+		// make-instances-obsolete: a compiled program's class tables are whole-program,
+		// so
+		// no instance is ever obsolete (the interpreter, which redefines classes form by
+		// form, binds its own that updates them); the class is the answer either way.
+		SOURCES.put(LispNames.MAKE_INSTANCES_OBSOLETE, """
+				(defun make-instances-obsolete (%mio-class)
+				  %mio-class)
+				""");
 		// compile-file / compile-file-pathname: there is no file compiler. The compile
 		// backends compile a whole PROGRAM in one pass and a loaded file is spliced into
 		// it, so no fasl is ever produced and no pathname names one -- which is also why

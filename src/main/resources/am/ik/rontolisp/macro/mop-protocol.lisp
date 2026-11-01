@@ -132,9 +132,23 @@
 ;; Forces the reinitialize-instance generic into existence (the redefinition
 ;; path below calls it whether or not user methods exist); same chain CL's
 ;; default runs -- shared-initialize with slot-names nil, so initforms do NOT
-;; refill on redefinition.
+;; refill on redefinition. A finalized class is finalized anew, and so is every
+;; class the protocol defined over it (AMOP): contextl's partial classes
+;; reinitialize the anonymous class holding a layer's slots, whose subclass must
+;; see them.
 (defmethod reinitialize-instance ((class standard-class) &rest initargs)
-  (apply #'shared-initialize class nil initargs))
+  (apply #'shared-initialize class nil initargs)
+  (if (and (slot-boundp class 'finalized-p) (slot-value class 'finalized-p))
+      (%mop-refinalize class)
+      nil)
+  class)
+
+(defun %mop-refinalize (class)
+  (closer-mop:finalize-inheritance class)
+  (dolist (pair %mop-ensured-classes%)
+    (if (member class (slot-value (cdr pair) 'direct-superclasses) :test #'eq)
+        (%mop-refinalize (cdr pair))
+        nil)))
 
 (defmethod closer-mop:compute-effective-slot-definition
     (class name direct-slot-definitions)
@@ -142,27 +156,67 @@
   ;; here, INSIDE the dynamic extent of a user override's call-next-method --
   ;; the contract postmodern's *direct-column-slot* binding (and the
   ;; :initform *direct-column-slot* of its effective slot class) relies on.
-  (let ((dsd (car direct-slot-definitions)))
+  ;; CLHS 7.5.3 over the definitions, most specific first: the initargs of all of
+  ;; them, the initform of the first that has one, the rest the first's.
+  (let ((dsd (car direct-slot-definitions)) (initargs nil) (initialized nil))
+    (dolist (d direct-slot-definitions)
+      (dolist (initarg (slot-value d 'initargs))
+        (if (member initarg initargs)
+            nil
+            (setq initargs (cons initarg initargs))))
+      (if (and (null initialized) (slot-value d 'initfunction))
+          (setq initialized d)
+          nil))
+    (if initialized nil (setq initialized dsd))
     (%mop-make-instance
      (closer-mop:effective-slot-definition-class class :name name)
      :name name
-     :initargs (slot-value dsd 'initargs)
-     :initform (slot-value dsd 'initform)
+     :initargs (reverse initargs)
+     :initform (slot-value initialized 'initform)
      :type (slot-value dsd 'type)
      :readers (slot-value dsd 'readers)
-     :initfunction (slot-value dsd 'initfunction)
+     :initfunction (slot-value initialized 'initfunction)
      :allocation (slot-value dsd 'allocation))))
 
 (defmethod closer-mop:finalize-inheritance (class)
+  ;; A superclass is finalized first (AMOP): one made at run time and never
+  ;; finalized -- contextl's partial classes put such a class, carrying the
+  ;; slots, ahead of the class's own superclasses -- has no effective slots yet.
+  ;; The effective slots are compute-slots' (a generic: contextl's special-class
+  ;; :before keeps the previous ones, which its finalize-inheritance :after
+  ;; compares to make the instances obsolete).
+  (dolist (super (slot-value class 'direct-superclasses))
+    (if (and (slot-boundp super 'finalized-p) (slot-value super 'finalized-p))
+        nil
+        (closer-mop:finalize-inheritance super)))
+  (let ((previous
+         (if (and (slot-boundp class 'finalized-p)
+                  (slot-value class 'finalized-p))
+             (slot-value class 'effective-slots)
+             nil)))
+    (setf (slot-value class 'effective-slots) (closer-mop:compute-slots class))
+    (setf (slot-value class 'finalized-p) t)
+    ;; What else a (re)finalization does depends on the program: the class
+    ;; precedence lists the run-time dispatch memoized (dynamic-classes.lisp) are
+    ;; computed afresh -- contextl's partial classes gain a superclass per layer --
+    ;; and a compiled program defining the class again updates the instances made
+    ;; before (LispMacroExpander.mopClassFinalizedDefun; the interpreter's
+    ;; built-in, whose class redefinition updates them itself).
+    (%mop-class-finalized class previous))
+  class)
+
+(defmethod closer-mop:compute-slots ((class standard-class))
   ;; Effective slots in static-layout order: the superclasses' effective slots
   ;; first -- each superclass in local precedence order, the first occurrence
-  ;; of a name keeping its place, like the static layout merge -- (recomputed
-  ;; through the protocol when an own direct slot shadows one, reused as-is
-  ;; otherwise -- a lite divergence: the direct-definition list handed to
-  ;; compute-effective-slot-definition is the shadowing definition alone),
-  ;; then the own slots that introduce new names.
+  ;; of a name keeping its place, like the static layout merge -- then the own
+  ;; slots that introduce new names. An inherited slot only one class of the
+  ;; precedence list defines is reused as-is; any other is computed through the
+  ;; protocol from every direct definition of its name, most specific first
+  ;; (contextl's partial classes define one slot in several anonymous
+  ;; superclasses, each layer adding options such as :layered).
   (let* ((supers (slot-value class 'direct-superclasses))
          (direct-slots (slot-value class 'direct-slots))
+         (cpl (%mop-class-precedence-list class))
          (inherited nil)
          (effective nil))
     (dolist (super supers)
@@ -172,12 +226,12 @@
             (setq inherited (cons eslot inherited)))))
     (setq inherited (reverse inherited))
     (dolist (eslot inherited)
-      (let ((own
-             (%mop-find-slot-definition (slot-value eslot 'name) direct-slots)))
+      (let ((definitions
+             (%mop-direct-slot-definitions cpl (slot-value eslot 'name))))
         (setq effective
-              (cons (if own
+              (cons (if (cdr definitions)
                         (closer-mop:compute-effective-slot-definition class
-                         (slot-value eslot 'name) (cons own nil))
+                         (slot-value eslot 'name) definitions)
                         eslot) effective))))
     (dolist (dsd direct-slots)
       (if (%mop-find-slot-definition (slot-value dsd 'name) inherited)
@@ -185,9 +239,61 @@
           (setq effective
                 (cons (closer-mop:compute-effective-slot-definition class
                        (slot-value dsd 'name) (cons dsd nil)) effective))))
-    (setf (slot-value class 'effective-slots) (reverse effective))
-    (setf (slot-value class 'finalized-p) t)
-    class))
+    (reverse effective)))
+
+(defun %mop-direct-slot-definitions (cpl name)
+  ;; Every direct definition of the slot NAME along the precedence list, most
+  ;; specific first.
+  (let ((definitions nil))
+    (dolist (c cpl)
+      (let ((dsd (%mop-find-slot-definition name (slot-value c 'direct-slots))))
+        (if dsd (setq definitions (cons dsd definitions)) nil)))
+    (reverse definitions)))
+
+(defun %mop-class-precedence-list (class)
+  ;; CLHS 4.3.5 over the metaobjects' direct superclasses: the topological sort
+  ;; of the class and its superclasses under every local precedence order, a tie
+  ;; going to the candidate with a direct subclass rightmost in the list so far.
+  (let ((classes nil) (pending (list class)) (pairs nil) (built nil))
+    (loop while pending
+          do
+            (let ((c (car pending)))
+              (setq pending (cdr pending))
+              (if (member c classes :test #'eq)
+                  nil
+                  (let ((prev c))
+                    (setq classes (cons c classes))
+                    (dolist (s (slot-value c 'direct-superclasses))
+                      (setq pairs (cons (cons prev s) pairs))
+                      (setq prev s)
+                      (setq pending (append pending (list s))))))))
+    (setq classes (reverse classes))
+    (loop while classes
+          do
+            (let ((candidates
+                   (remove-if (lambda (c) (find c pairs :key #'cdr :test #'eq))
+                              classes))
+                  (next nil))
+              (if (null candidates)
+                  (error "No consistent class precedence list for ~S" class)
+                  nil)
+              (if (cdr candidates)
+                  (dolist (b built)
+                    (if next
+                        nil
+                        (dolist (s (slot-value b 'direct-superclasses))
+                          (if (and (null next) (member s candidates :test #'eq))
+                              (setq next s)
+                              nil))))
+                  nil)
+              (if next nil (setq next (car candidates)))
+              (setq built (cons next built))
+              (setq classes (remove next classes :test #'eq))
+              (setq pairs (remove-if (lambda (p) (eq (car p) next)) pairs))))
+    (reverse built)))
+
+(defun closer-mop:class-precedence-list (class)
+  (%mop-class-precedence-list class))
 
 (defun %mop-find-slot-definition (name slot-definitions)
   (let ((hit nil))
@@ -204,10 +310,19 @@
   (let ((metaclass (car (%mop-initarg-tail initargs ':metaclass))))
     (if class
         (progn
-          (apply #'reinitialize-instance class ':name name initargs)
-          ;; Re-prime the memo: a redefinition invalidated the registry's view.
+          ;; Re-prime the memo first: the static re-registration invalidated the
+          ;; registry's view, and the finalization inside reinitialize-instance
+          ;; reaches the prototype through class-of (contextl's singleton :after
+          ;; writes a special slot, whose protocol the plain view would bypass).
           (%register-class-metaobject name class)
-          (closer-mop:finalize-inheritance class)
+          (apply #'reinitialize-instance class ':name name initargs)
+          (%register-class-metaobject name class)
+          ;; The system reinitialize-instance finalized it anew; one a user method
+          ;; left unfinalized is finalized here.
+          (if (and (slot-boundp class 'finalized-p)
+                   (slot-value class 'finalized-p))
+              nil
+              (closer-mop:finalize-inheritance class))
           class)
         (let ((new-class
                (apply #'%mop-make-instance metaclass ':name name initargs)))

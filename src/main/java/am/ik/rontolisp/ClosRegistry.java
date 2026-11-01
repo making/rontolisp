@@ -1659,6 +1659,37 @@ public final class ClosRegistry {
 
 		@Nullable private String lastMethodKey;
 
+		private List<String> precedenceOrder = List.of();
+
+		/**
+		 * The {@code :argument-precedence-order} of the generic's {@code defgeneric} as
+		 * required-parameter indexes, or null when it wrote none (or not a permutation of
+		 * the required parameters): leftmost-first.
+		 * @return the indexes in precedence order, or null
+		 */
+		public int @Nullable [] precedenceIndexes() {
+			if (this.precedenceOrder.isEmpty() || this.precedenceOrder.size() != this.paramNames.size()) {
+				return null;
+			}
+			int[] order = new int[this.precedenceOrder.size()];
+			for (int k = 0; k < order.length; k++) {
+				order[k] = this.paramNames.indexOf(this.precedenceOrder.get(k));
+				if (order[k] < 0) {
+					return null;
+				}
+			}
+			return order;
+		}
+
+		/**
+		 * Records the {@code :argument-precedence-order} of the generic's
+		 * {@code defgeneric}.
+		 * @param order the parameter names in precedence order (empty for none)
+		 */
+		public void precedenceOrder(List<String> order) {
+			this.precedenceOrder = List.copyOf(order);
+		}
+
 		/**
 		 * Each method's lambda list without its specializers (a method metaobject's
 		 * {@code method-lambda-list}), keyed like {@link #methods()}.
@@ -2089,6 +2120,65 @@ public final class ClosRegistry {
 		this.metaclassedClasses.add(normalize(className));
 	}
 
+	/**
+	 * Whether any class was defined with a {@code :metaclass} -- the instances the
+	 * interpreter's class redefinition may have to update exist only then.
+	 * @return true once one was
+	 */
+	public boolean hasMetaclassedClasses() {
+		return !this.metaclassedClasses.isEmpty();
+	}
+
+	/**
+	 * Whether the class was defined with a {@code (:metaclass M)} option.
+	 * @param className the class name as spelled
+	 * @return true for such a class
+	 */
+	public boolean isMetaclassed(String className) {
+		return this.metaclassedClasses.contains(normalize(className));
+	}
+
+	/**
+	 * The {@code :metaclass} classes a compiled program defines more than once at top
+	 * level, normalized: the compile paths track their instances (and their subclasses')
+	 * until the last definition has run, for the updating a redefinition does (CLHS
+	 * 4.3.6).
+	 */
+	private final Set<String> instanceTrackedClasses = new java.util.HashSet<>();
+
+	/**
+	 * Records that the instances of the class are tracked for redefinition updating.
+	 * @param className the class name as spelled
+	 */
+	public void trackInstancesOf(String className) {
+		this.instanceTrackedClasses.add(normalize(className));
+	}
+
+	/**
+	 * Whether the instances of the class are tracked: it, or one of its registered
+	 * ancestors, is a class {@link #trackInstancesOf} named.
+	 * @param className the class name as spelled
+	 * @return true when an allocation of the class records the instance
+	 */
+	public boolean tracksInstancesOf(String className) {
+		if (this.instanceTrackedClasses.isEmpty()) {
+			return false;
+		}
+		ClassInfo info = findClass(className);
+		if (info == null) {
+			return this.instanceTrackedClasses.contains(normalize(className));
+		}
+		if (this.instanceTrackedClasses.contains(normalize(info.name()))) {
+			return true;
+		}
+		for (String ancestor : info.ancestors()) {
+			if (this.instanceTrackedClasses.contains(normalize(ancestor))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** The classes a {@code defclass} gave {@code :default-initargs}, normalized. */
 	private final Set<String> defaultInitargClasses = new java.util.HashSet<>();
 
@@ -2098,6 +2188,45 @@ public final class ClosRegistry {
 	 */
 	public void markDefaultInitargs(String className) {
 		this.defaultInitargClasses.add(normalize(className));
+	}
+
+	/** Each class's own {@code :default-initargs}, initarg name to form, normalized. */
+	private final Map<String, Map<String, LispVal>> directDefaultInitargs = new java.util.HashMap<>();
+
+	/**
+	 * Records a class's own {@code (:default-initargs ...)} (empty for none), replacing
+	 * an earlier definition's.
+	 * @param className the class name as spelled
+	 * @param defaults initarg name to its default form, in written order
+	 */
+	public void directDefaultInitargs(String className, Map<String, LispVal> defaults) {
+		if (defaults.isEmpty()) {
+			this.directDefaultInitargs.remove(normalize(className));
+		}
+		else {
+			this.directDefaultInitargs.put(normalize(className), new java.util.LinkedHashMap<>(defaults));
+		}
+	}
+
+	/**
+	 * A class's default initargs (CLHS 7.1.3): its own and its superclasses' along the
+	 * class precedence list, the most specific default of an initarg winning, in that
+	 * order.
+	 * @param info the class
+	 * @return initarg name to default form, empty when none
+	 */
+	public Map<String, LispVal> defaultInitargs(ClassInfo info) {
+		if (this.directDefaultInitargs.isEmpty()) {
+			return Map.of();
+		}
+		Map<String, LispVal> merged = new java.util.LinkedHashMap<>();
+		for (String name : info.cpl()) {
+			Map<String, LispVal> own = this.directDefaultInitargs.get(normalize(name));
+			if (own != null) {
+				own.forEach(merged::putIfAbsent);
+			}
+		}
+		return merged;
 	}
 
 	/**

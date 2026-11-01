@@ -9,6 +9,7 @@ import java.util.Set;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.macro.CompiledTemplates;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.macro.MopEvalCapture;
 import am.ik.rontolisp.LispNames;
@@ -106,6 +107,14 @@ public final class UserMacroExpander {
 		// top-level forms the compilers expand statically.
 		private final List<LispVal> mopSplice = new ArrayList<>();
 
+		// Every other definition the macro-time evaluator compiles lands here as a
+		// registration form (CompiledTemplates); what a form's REPLAY compiled is
+		// emitted before the form, so the compiled program's compile answers the same
+		// definition with compiled code. One registration per pattern.
+		private final List<LispVal> templateCaptures = new ArrayList<>();
+
+		private final Set<String> templateKeys = new java.util.HashSet<>();
+
 		private final List<LispVal> result = new ArrayList<>();
 
 		// Every top-level form as this pass RESOLVED it (canonical spellings), whatever
@@ -147,6 +156,7 @@ public final class UserMacroExpander {
 		Session(boolean shallow) {
 			this.shallow = shallow;
 			this.macroEval.setMopEvalSpliceSink(this.mopSplice);
+			this.macroEval.setCompiledTemplateSink(this.templateCaptures);
 		}
 
 		/**
@@ -354,6 +364,9 @@ public final class UserMacroExpander {
 		private void acceptExpansion(LispVal form, LispVal resolved, LispVal expanded, boolean compileTime,
 				boolean member) {
 			LispEvaluator macroEval = this.macroEval;
+			// Only what the replay below compiles runs again in the program: a compile
+			// call a macro's expander made has run its course.
+			this.templateCaptures.clear();
 			if (isOperator(expanded, LispNames.EVAL_WHEN)) {
 				// A macro EXPANDED into an eval-when (source-level top-level eval-whens
 				// were flattened before the loop): honor the compile-file situations.
@@ -417,6 +430,7 @@ public final class UserMacroExpander {
 			// The walk is identity-preserving (see rebuild), so an untouched form is the
 			// SAME object and needs no printing to recognize; the print comparison stays
 			// for a walk that rebuilt an equal form (a macro that expands to itself).
+			emitCompiledTemplates(this.result);
 			if (!this.shallow) {
 				this.result.add(!member && (expanded == resolved || expanded.print().equals(resolved.print())) ? form
 						: requalifyShadowedClNames(expanded, macroEval));
@@ -527,10 +541,31 @@ public final class UserMacroExpander {
 				else {
 					registerMacroTimeDefinitions(member, macroEval);
 				}
+				if (loadTime) {
+					emitCompiledTemplates(result);
+				}
+				this.templateCaptures.clear();
 				if (loadTime && !this.shallow) {
 					result.add(requalifyShadowedClNames(foldMacroFboundp(member, macroEval), macroEval));
 				}
 			}
+		}
+
+		/**
+		 * Emits the registrations of the definitions the replay just compiled
+		 * ({@link #templateCaptures}), each pattern once, ahead of the form whose replay
+		 * compiled them: at run time that form compiles them again.
+		 */
+		private void emitCompiledTemplates(List<LispVal> result) {
+			List<LispVal> captured = List.copyOf(this.templateCaptures);
+			this.templateCaptures.clear();
+			for (LispVal registration : captured) {
+				if (!this.shallow && this.templateKeys.add(CompiledTemplates.key(registration))) {
+					result.add(requalifyShadowedClNames(expand(registration), this.macroEval));
+				}
+			}
+			// What expanding them compiled ran at expansion time only.
+			this.templateCaptures.clear();
 		}
 
 		/**

@@ -38,7 +38,7 @@
       (slot-value class 'effective-slots)
       (%class-slot-defs class)))
 
-(defun closer-mop:compute-slots (class)
+(defmethod closer-mop:compute-slots (class)
   ;; Finalization is eager here (finalize-inheritance runs at definition time),
   ;; so the effective slots ARE the stored class-slots answer -- trivia level2's
   ;; find-effective-slot walks these with slot-definition-initargs/-name.

@@ -67,7 +67,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [packages.md](packages.md) -- the `cl`/`cl-user`/`rontolisp` package system, `defpackage` over an existing package, `*package*` as dynamic
 - [defstruct.md](defstruct.md) -- `defstruct` as plain defuns, setf accessor registry, `:include`, `:type (vector ...)`
 - [instance-syntax.md](instance-syntax.md) -- the one instance value model behind defstruct/CLOS/conditions, `%obj-*`, `#S(...)`/`#<...>`
-- [clos.md](clos.md) -- static CLOS subset: registry, dispatcher generation, initialization protocol, runtime `typep`
+- [clos.md](clos.md) -- static CLOS subset: registry, dispatcher generation, initialization protocol, runtime `typep`; the MOP, contextl's layered classes, instance updating, precompiled `compile` definitions
 - [characters-code-points.md](characters-code-points.md) -- character = Unicode code point on every backend
 - [eq-numbers.md](eq-numbers.md) -- `eq` is `eql` on every backend: numbers and characters by type and value, never box identity
 - [string-index-cost.md](string-index-cost.md) -- a character index costs the same wherever it lands; the per-string cursor

@@ -988,6 +988,28 @@ where nested `defmethod`s carry the class METAOBJECT spliced as a literal specia
   calling it falls through to the default or to no-applicable-method (the nested-branch
   guard, todo 445) -- matching the interpreter, where the defmethod never runs.
 
+### Precompiled definitions (`CompiledTemplates`)
+A compiled program's `compile` evaluates, and the compiled `eval` binds a runtime lambda's
+parameters positionally (`.kb/eval-runtime.md`): contextl's layered-function caller,
+`(compile nil `(lambda (&rest rest) (declare ...) (apply (the function ,gf) ...)))`, answered
+NIL there. Since 2026-11-01 a definition the program's own definitions compile is compiled ahead:
+- The macro-time evaluator's `compile` built-in records every definition that defines no method
+  (`setCompiledTemplateSink`); `UserMacroExpander` keeps what a form's REPLAY compiled (not its
+  macros' expansion) and emits, ahead of that form, one
+  `(%register-compiled-template 'PATTERN #'(lambda (HOLE...) DEFINITION'))` per pattern. The
+  PATTERN is the definition with a hole for each datum that is no literal (an object, a quoted
+  list or uninterned symbol, a `(function <object>)`) and `(%template-gensym% k)` for each
+  other uninterned symbol, k numbering the distinct ones: a match binds each k to one run-time
+  uninterned symbol and no two k to the same one, so the definitions are alpha-equivalent. A
+  bare symbol is spelled `cl-user::` unless `cl` owns it, since the registration is read again
+  in the package where it stands.
+- compile-runtime.lisp's `compile` matches a definition against the patterns (`%template-match`,
+  a loop in the cdr direction) and calls the first match's factory on the hole values: compiled
+  code, closed over the run-time objects. Anything else is still evaluated. The template table
+  is a prepended global (`CompileRuntime.globals()`); the gate counts a registration.
+- Pinned by `ContextlE2eTest` on the three compile backends (every layered accessor goes
+  through it).
+
 ### Funcallable instances (`closer-mop:funcallable-standard-class`, djula's templates)
 An instance of a class descending from `closer-mop:funcallable-standard-object` IS a function:
 `functionp`, `(typep x 'function)` and a `function` specializer answer t (a class specializer still
@@ -1189,11 +1211,110 @@ methods merge), `find-method`, `method-qualifiers`, closer-mop's `ensure-method`
   compile paths its dispatcher, which `#'make-instance` reaches, defaults to
   `%mop-make-instance` (the run-time construction) when that is emitted; `make-instance` is
   `NOT_SHADOWABLE`, so nothing else gave it a default and every other class signalled.
+- **A method function from a lambda expression** (`ensure-method`, contextl's layered accessors):
+  `%gf-method-function` compiles `(lambda (args next) (apply #'<expression> args))`, inside an
+  `flet` of `call-next-method`/`next-method-p` only where the expression names one. Its own
+  variables are gensyms and `%gf-call-next` goes in as a function OBJECT: the definition spells
+  no symbol of this runtime, which a precompiled definition would read in the program's package
+  ("Precompiled definitions").
+- **`:argument-precedence-order`** (`GenericInfo.precedenceIndexes`): a generic's methods are
+  ordered by their specializers compared in that order, by the static dispatchers
+  (`specificityOrder`, `branchSpecificityOrder`) and in the run-time keys (`dynamicMethodEntry`,
+  `%gf-precedence-indexes`); contextl puts a layered function's layer argument LAST, so demo3's
+  `:around` ran in the wrong order before (2026-11-01). Pinned by ci-spec
+  `clos-defgeneric-defmethod-eql-dispatch` (`clos-apo`, SBCL agrees).
 - Residuals: `remove-method` of a `defmethod`'s method drops only the metaobject (the compiled
   dispatcher keeps it); a short-form method combination generic ignores run-time methods; a
-  standard generic's `generic-function-methods` lists only the methods added at run time.
+  standard generic's `generic-function-methods` lists only the methods added at run time. A
+  generic with run-time methods computes every applicable method's entry on every call (no
+  effective-method cache): the figure editor's 1000 runs do not finish in minutes.
 - Pinned by ci-spec standalone `generic-function-protocol` (SBCL 2.2.9 + closer-mop agrees) and
   `ContextlE2eTest` (contextl's `test/layer-gc.lisp` at top level).
+
+### Layered classes (contextl's `define-layered-class`)
+On all four backends since 2026-11-01 (h89 item 1): layered accessors, partial classes, special
+slots a later definition adds. What it took, besides the generic-function protocol:
+- **Partial classes**: each `define-layered-class C :in L` is a top-level `defclass` of C whose
+  driver, through contextl's `initialize-instance`/`reinitialize-instance :around`, makes an
+  ANONYMOUS slot-carrying class per layer (`make-instance defining-metaclass`) and puts it in
+  front of C's direct superclasses. `widenDefclassToMetaobjectSupers` reconciles the static side:
+  `%ABSORBED-SLOTS` (the anonymous classes' slots, static only, accessors generated) and
+  `%STATIC-SUPERCLASSES` (the named classes of the metaobject's precedence list, minimal; also
+  mito's injected superclasses). **The driver keeps the WRITTEN superclasses**: the compile paths
+  emit the widened form, and while it replaced them the run-time driver handed contextl
+  `(partial-object)` instead of `(info-mixin)`, losing the class a layer adds (demo3's `city`,
+  "no applicable method", 2026-11-01).
+- **The metaobject side** (mop-protocol.lisp): `finalize-inheritance` finalizes an unfinalized
+  superclass first (an anonymous one never was) and takes `compute-slots`, a generic
+  (contextl's `special-class :before` keeps the previous slots), which computes a slot two
+  classes define from every definition (CLHS 7.5.3; a layer adds `:layered` to a slot);
+  `reinitialize-instance` of a finalized class finalizes it and every class the protocol
+  defined over it (`%mop-refinalize`); `closer-mop:class-precedence-list`. A redefinition
+  re-primes the `find-class` memo BEFORE `reinitialize-instance`: the finalization inside it
+  reaches the prototype through `class-of`, which answered the plain `standard-class` view after
+  the static re-registration, so contextl's singleton `:after` wrote a special slot's cell
+  directly (spx's `layer3`, `SYMBOL-VALUE expects a symbol, got 2`).
+- **`:default-initargs`** (CLHS 7.1.3) along the precedence list (`ClosRegistry.defaultInitargs`)
+  in `expandMakeInstance` and `%mop-make-instance` (`%MMI-APPEND-DEFAULTS`): contextl's
+  `partial-class` defaults `:defining-metaclass`.
+- **`slot-definition-name` is the slot's own symbol** (the driver's `:name`,
+  `quoteOf(slot.name())`; every lookup folds it to the base name): it was the base name homed in
+  `cl-user` on all four, so a precompiled accessor's `'name2` read `contextl-user::name2` and
+  never matched. Pinned by ci-spec `slot-access-protocol-methods` (`sap-other::v`).
+- **Multiple-inheritance refinement over an exported class name**: `miBranchRep` keys
+  normalized names (the partial-class `:around` of a class `contextl` exports never ran).
+- **`call-next-method` a macro builds**: the figure editor's `(call-and-update call-next-method
+  object)` expands to the call, inside `with-inactive-layers`' closure. The compile paths expand
+  user macros before a method is registered; the interpreter expands the body's user macros
+  first when it names `call-next-method`/`next-method-p` (`withNextMethodMacrosExpanded`).
+  `#'call-next-method` as a VALUE is a closure (`rewriteNextMethod`): the next method over its
+  arguments, the method's own when it gets none.
+- Residuals: a layered class defined inside a function or an `eval` (no static side on the
+  compile paths); `fe`'s full run time (above).
+- Pinned by `ContextlE2eTest` (demo3's classes, a special slot added to an existing instance,
+  `slot-value-using-layer` over a `:layered` slot, the figure editors' `call-next-method`).
+
+### Instance updating (CLHS 4.3.6)
+A redefinition that changes a class's local slots, or `make-instances-obsolete`, updates the
+existing instances through `update-instance-for-redefined-class` (to `shared-initialize` with
+the added slots): contextl's `special-object` `shared-initialize` makes an added special slot
+special, and its `finalize-inheritance :after` makes the instances obsolete when a slot turns
+special.
+- **Interpreter**: its layouts change with a redefinition. `LispEvaluator.trackInstance` keeps
+  a weak reference to every instance of a `:metaclass` class; after the outermost `defclass`
+  (`classDefinitionDepth`) each instance of a class whose layout changed, or that a
+  `make-instances-obsolete` named (with its subclasses), moves to the new layout by slot name
+  (`LispInstance.replaceStorage`) and is updated. Added slots are the LOCAL ones.
+- **Compile paths** (2026-11-01): a class has its LAST definition's layout from the start (the
+  earlier constructors are dropped), so an instance made before a redefinition already has the
+  storage; what it lacks is the initialization. A `:metaclass` class defined more than once at
+  top level (`trackRedefinedClassInstances`) has its instances, and its subclasses', recorded at
+  allocation (`%track-instance` around every allocation site) until its last definition has run
+  (`%end-instance-tracking`, then nothing is retained); `%update-tracked-instances` compares the
+  effective slots before and after a refinalization (CLHS 4.3.6.1: added local slots, discarded
+  ones) and updates each instance of the class. Its property list is EMPTY: a slot the last
+  definition dropped never had storage in the instance (the plist read first went through
+  `%slot-value-runtime`, which such a program does not carry: "undefined function").
+- **`update-instance-for-redefined-class` is a system generic** (`CALLABLE_SYSTEM_GENERICS`,
+  `synthesizeUpdateInstanceDefault`): the default primary is `shared-initialize` of the added
+  slots, synthesized at the first user method or call. It was a prelude `defun`, which a user
+  `:before` method shadowed ("No applicable method", 2026-11-01).
+- **`%mop-class-finalized`** is the hook `finalize-inheritance` calls: the compile paths generate
+  it from what the program carries (`mopClassFinalizedDefun`), the interpreter defines its own.
+  A `(boundp '%dynamic-cpls%)` probe in mop-protocol.lisp put the eval runtime into every
+  `:metaclass` program (a `boundp` the injected runtime carries escapes `CompileTimeBoundp`,
+  which ran before the injection): measured on a two-slot `:metaclass` class, the JVM class
+  carried `_eval`/`_store`/`_genv` until the hook replaced it.
+- **Scoped out on the compile paths, by measurement**: `make-instances-obsolete` stays a no-op
+  there (the prelude's), and an `eval`'d `defclass` defines no class. Their one consumer is
+  contextl's `special-slots-1/2/3`, whose handler `eval`s the redefinition that makes a slot
+  special: on the JVM it produces no output in 120 s, the handler's `continue` re-entering the
+  `dletf`'s check (2026-11-01). A top-level redefinition making a slot special would need the
+  obsolescence; nothing in contextl or its tests does that.
+- Pinned by ci-spec standalone `instance-updating-of-a-redefined-metaclass-class` (a slot added
+  and one dropped, a user `:before` method; SBCL 2.2.9 agrees) and `ContextlE2eTest`: the shared
+  exercise's special slot added to an existing instance (all four),
+  `anEvaluatedRedefinitionMakesAnExistingInstancesSlotSpecial` (interpreter).
 
 ### Registry-growth lesson
 The RUNTIME-slot-name dispatch used to be inlined per call site and grows with every layout
@@ -1236,23 +1357,20 @@ chunk-loop wrapper).
   `cacheablep`), and the classes made at run time above. `--feature cx-disable-layer-gc` is the
   spelling of contextl's documented switch: a `(push :cx-disable-layer-gc *features*)` in the
   program reaches only that program's own `#+` (`.kb/reader-features.md`), never a loaded
-  system's component files. Its own `test/` (measured on the interpreter, in package `contextl`):
-  `demo3`, `special-slots-2` need layered ACCESSORS (`define-layered-class` makes generic
-  functions and methods at run time through `ensure-layered-function`/`ensure-method`) and
-  partial classes (anonymous slot-carrying superclasses); `special-slots-3` stops where the
-  `dletf` of a non-special slot `cerror`s and the handler `eval`s a redefinition making the slot
-  special: the instance keeps its raw value (`SYMBOL-VALUE expects a symbol, got "Dr. Jekyll"`),
-  since nothing makes instances obsolete (`special-slots-1` also needs layered classes); `spx`
-  passes on all four since 2026-11-01 (measured that day: the compile paths already passed it
-  whole -- the premise that they cannot follow its redefinitions was wrong -- and the interpreter
-  stopped at `class1`'s `:reinitialize t`, "Class REdefinition" above); `ContextlE2eTest` carries
-  its redefinitions and a `layer-makunbound`; `layer-gc` passes its
-  first four sections and stopped where `add-method :after` should clear the caches -- passes
-  on all four since 2026-11-01 ("The generic-function protocol"; the compile paths refuse its
-  `(loop repeat 2 do ...)` of definitions, so `ContextlE2eTest` runs its body once at top
-  level). `grouped-layers` (`slot-definition-allocation` and the
-  `:allocation` reconciliation above) and `dynenv` (the slot-access protocol) pass on all four
-  since 2026-11-01; `ContextlE2eTest` carries both. On the compile paths `dynenv` first needed
+  system's component files. Its own `test/` (measured 2026-11-01, in package `contextl`) passes
+  whole on the interpreter -- `demo3`, `special-slots-1/2/3`, `spx`, `layer-gc`,
+  `grouped-layers`, `dynenv`, `partial-initargs`, and the figure editors `fe`/`fe2` at 3 runs
+  instead of 1000 ("Layered classes", "Instance updating") -- and on the three compile backends
+  but for `special-slots-1/2/3`, whose handler `eval`s the class redefinition (a compiled `eval`
+  defines no class: measured on the JVM, no output in 120 s -- the handler's `continue` re-enters
+  the `dletf` check forever) and `layer-gc`'s `(loop repeat 2 do ...)` of definitions, which the
+  compile paths refuse ("DEFCLASS is only supported as a top-level form"; `ContextlE2eTest` runs
+  its body once at top level). The full 1000-run `fe` is a benchmark: on the JVM its untimed and
+  timed non-layered halves took 172 s each and the layered half did not finish in the rest of
+  500 s (layered functions dispatch their run-time methods afresh on every call).
+  `ContextlE2eTest` carries `grouped-layers` (`slot-definition-allocation` and the `:allocation`
+  reconciliation above), `dynenv` (the slot-access protocol), `spx`, `layer-gc`, `demo3` and the
+  figure editors' `call-next-method` shapes. On the compile paths `dynenv` first needed
   `assert`'s default message to double the tildes of the test it quotes: a test holding a
   `dletf`'s expansion carries contextl's `cerror` control string, whose `~S` failed the static
   format check (`.kb/pure-builtin-fold.md`). `contextl-user`/`cxcl` work on
@@ -1322,7 +1440,8 @@ computed `change-class`, `withSlots` write-only + nested capture, writer / class
 `slotExistsPAnswersDeclaredSlotsRegardlessOfBoundness`,
 `*PrintObjectMethodDefinedBelowItsFirstUse` /
 `*NestedDefmethodCallBeforeItsFormFallsThrough*` (todo 445). Plus `ShadowedBuiltinsTest`,
-`FastIoCircularStreamsE2eTest`, `JzonE2eTest`, the PostmodernE2eTest DAO leg.
+`FastIoCircularStreamsE2eTest`, `JzonE2eTest`, the PostmodernE2eTest DAO leg, `ContextlE2eTest`
+(the MOP protocols, layered classes, instance updating, precompiled definitions).
 
 ci-spec: `clos-defgeneric-defmethod-eql-dispatch`,
 `clos-defclass-slots-inheritance-and-dispatch`, `clos-method-qualifiers-and-call-next-method`,
@@ -1337,5 +1456,5 @@ ci-spec: `clos-defgeneric-defmethod-eql-dispatch`,
 `runtime-type-dispatch-residue`, `runtime-class-designator-spellings`,
 `with-slots-write-only-unbound-slot-and-missing-slot`,
 `array-operations-enablement-language-group`, `mito-core-enablement-language-group`, standalone
-`funcallable-instances-call-their-installed-function`, `classes-made-at-run-time`, `slot-access-protocol-methods` and `generic-function-protocol`. Plus the five `doc/*/reference/**` pages
+`funcallable-instances-call-their-installed-function`, `classes-made-at-run-time`, `slot-access-protocol-methods`, `generic-function-protocol` and `instance-updating-of-a-redefined-metaclass-class`. Plus the five `doc/*/reference/**` pages
 via `DocExamplesTest`.
