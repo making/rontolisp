@@ -2,9 +2,9 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**16,912 / 19,888 tests pass (85.0%)** -- 1,378 fail, 1,598 signal an error.
+**16,912 / 19,889 tests pass (85.0%)** -- 1,379 fail, 1,598 signal an error.
 
-7 top-level forms could not be read, 335 could not be evaluated, 3 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 335 could not be evaluated, 2 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
@@ -23,7 +23,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | objects | 846 | 476 | 192 | 178 | 56.3% | 34 |
 | packages | 500 | 431 | 38 | 31 | 86.2% | 10 |
 | pathnames | 215 | 144 | 27 | 44 | 67.0% | 10 |
-| printer | 724 | 460 | 150 | 114 | 63.5% | 48 |
+| printer | 725 | 460 | 151 | 114 | 63.4% | 47 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 11 |
 | reader | 669 | 491 | 98 | 80 | 73.4% | 12 |
 | sequences | 3,287 | 3,079 | 74 | 134 | 93.7% | 10 |
@@ -33,7 +33,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | symbols | 1,145 | 1,090 | 23 | 32 | 95.2% | 10 |
 | system-construction | 77 | 28 | 1 | 48 | 36.4% | 10 |
 | types-and-classes | 626 | 346 | 191 | 89 | 55.3% | 12 |
-| **total** | **19,888** | **16,912** | **1,378** | **1,598** | **85.0%** | **345** |
+| **total** | **19,889** | **16,912** | **1,379** | **1,598** | **85.0%** | **344** |
 
 ## Most frequent failure reasons
 
