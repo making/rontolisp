@@ -1,7 +1,7 @@
 {
-  "generated": "2026-11-01",
+  "generated": "2026-11-03",
   "rontolisp": "0.1.0-SNAPSHOT",
-  "commit": "602e3a6",
+  "commit": "9de626e",
   "wasmtime": "wasmtime 49.0.0 (17830bd3c 2026-09-21)",
   "artifacts": [
     {"family":"wasm","name":"hello_world_plain","flags":"--optimize=off","module":"core (command)","wasi":"Preview 1","bytes":274508},
@@ -38,6 +38,6 @@
     {"family":"workers","name":"btc-ticker","flags":"--no-wasi --host-fetch --optimize=size","bytes":937404,"gzip":247699},
     {"family":"workers","name":"btc-ticker (streaming boundary)","flags":"--no-wasi --host-fetch --host-boundary=streaming --optimize=size","bytes":939750,"gzip":248326},
     {"family":"workers","name":"httpbin-component (core module)","flags":"--component --no-wasi --optimize=size","bytes":189738,"gzip":62587},
-    {"family":"workers","name":"httpbin-component (jco glue, .js)","flags":"jco transpile","bytes":120292}
+    {"family":"workers","name":"httpbin-component (jco glue, .js)","flags":"jco transpile","bytes":122514}
   ]
 }
