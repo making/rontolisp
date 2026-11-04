@@ -74,7 +74,8 @@ function named `quote` is the cost. The directives are alike, consumed by member
 `(in-package :x)` works in such a package, where SBCL calls an undefined function.
 
 Consumers measured 2026-11-04: `vom` loads and logs on all four backends. `sento` loads on the
-interpreter and stops on `atomics:cas`, on the compile paths while it compiles.
+interpreter and stops on `atomics:cas`, on the compile paths while it compiles. `(ql:quickload :clim)`
+stops at `closer-mop:standard-instance-access` (`.todo/i27`).
 
 ## A package defining a name of `cl`'s implementation
 `PackageRegistry.CL_INTERNALS` are the names lowerings emit, read as `cl`'s in every package because
@@ -368,6 +369,16 @@ Pinned by ci-spec `uiop-add-package-local-nickname`, `package-local-nicknames-re
 `cl-user` makes it non-pristine for good (`clUserNicknamed`, the printer's slow path), so the corpus
 keeps its nicknames elsewhere. Measured on the real thing: cluffer loads and edits a buffer on all
 four backends.
+
+## `in-package` that is not a top-level form
+It switches when it runs, on every backend (2026-11-05; `The function IN-PACKAGE is undefined` before,
+in a function body or a macro's direct expansion, and ahead of that `No such package` on the compile
+paths for what the form after it read). Interpreter: `rareOperatorExpansion` sends it through `resolve`,
+like a nested `defpackage`, whose failure is a catchable `package-error` there. Compile paths:
+`resolveCons` leaves `(setq *package* (or (find-package "P") (%package-error ...)))` and changes nothing
+that reads, as a compile-file does. A package directive a macro expands to directly (`in-package`,
+`defpackage`, a literal nickname directive) is a top-level form, member by member like a `progn`'s
+(`UserMacroExpander.prognMembersWithPackageDirective`). ci-spec `a-package-directive-a-macro-expands-to`.
 
 ## Resolution order and imports
 - `resolveUnqualified` consults, in order: `current.imports()`, the shadow set, the `cl` table,

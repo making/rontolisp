@@ -114,6 +114,20 @@ class UserMacroExpanderTest {
 	}
 
 	@Test
+	void aPackageDirectiveAMacroExpandsToGovernsTheFormsAfterIt() {
+		List<LispVal> emitted = UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro define (name) `(defpackage ,name (:use :cl)))
+				(defmacro enter (name) `(in-package ,name))
+				(define :ume-directive)
+				(enter :ume-directive)
+				(defmacro here () ''x)
+				(print (here))
+				"""));
+		List<LispVal> resolved = new am.ik.rontolisp.PackageResolver().resolveProgram(emitted);
+		assertThat(resolved.stream().map(LispVal::print).toList()).contains("(PRINT 'UME-DIRECTIVE::X)");
+	}
+
+	@Test
 	void anExpansionKeepsClsWhileAfterThePackageTakesTheName() {
 		// The compilers' resolver re-reads the emitted forms after the %own-symbol claim:
 		// cl's while, quoted or not, must still read as cl's there.

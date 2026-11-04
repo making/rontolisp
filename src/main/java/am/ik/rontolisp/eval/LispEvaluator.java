@@ -10607,6 +10607,18 @@ public final class LispEvaluator {
 				// the "expansion" this form has. Its clause errors become the
 				// conditions CL names, which a handler around the form can catch.
 				return registerRuntimeDefpackage(cons);
+			case LispNames.IN_PACKAGE:
+				// An in-package that is NOT a top-level form, the same way: it switches
+				// when it runs. Its expansion is the assignment a top-level one leaves.
+				try {
+					return this.packageResolver.resolve(cons);
+				}
+				catch (am.ik.rontolisp.LispPackageException ex) {
+					return signalPackageError(
+							java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.IN_PACKAGE),
+							cons.cdr() instanceof LispCons args ? packageDesignator(LispNames.IN_PACKAGE, args.car())
+									: "");
+				}
 			case LispNames.DECLAIM:
 				// (declaim (special ...)) proclaims specialness before the form
 				// collapses to nil; other declarations remain no-ops.

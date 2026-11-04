@@ -17163,6 +17163,36 @@ cases:
     expected: |
       "a b"
       #d(1.0 2.0)
+  # A package directive a macro expands to is a top-level form like any other, and the
+  # forms after it read in what it leaves. An in-package inside a function switches when
+  # it runs; the next form then reads in a package only the interpreter has by then (a
+  # documented divergence), so it spells its symbols cl:.
+  - name: a-package-directive-a-macro-expands-to
+    source: |
+      (defpackage #:pln-dir-target (:use #:cl) (:export #:who))
+      (in-package #:pln-dir-target)
+      (defun who () "TARGET")
+      (in-package #:cl-user)
+      (defmacro pln-define (name)
+        `(defpackage ,name (:use #:cl) (:local-nicknames (#:pln-dir-n #:pln-dir-target))))
+      (defmacro pln-enter (name) `(in-package ,name))
+      (defmacro pln-nick (nick target) `(uiop:add-package-local-nickname ',nick ',target))
+      (pln-define #:pln-dir)
+      (pln-enter #:pln-dir)
+      (print (list (pln-dir-n:who) (package-name *package*)))
+      (cl-user::pln-nick #:pln-dir-m #:pln-dir-target)
+      (print (list (pln-dir-m:who) (package-name (find-package "PLN-DIR-M"))))
+      (defun pln-leave () (in-package #:cl-user))
+      (pln-leave)
+      (cl:print (cl:eq cl:*package* (cl:find-package :cl-user)))
+      (cl:print (cl:handler-case (cl:funcall (cl:lambda () (cl:in-package #:pln-no-such-package)))
+                  (cl:package-error () :no-package)))
+      (cl:in-package #:cl-user)
+    expected: |
+      ("TARGET" "PLN-DIR")
+      ("TARGET" "PLN-DIR-TARGET")
+      T
+      :NO-PACKAGE
   # The canonical spelling of a cl-user symbol is bare, which the compile path's second
   # read takes for a symbol of the package an expansion lands in.
   - name: an-expansion-keeps-a-cl-user-symbol-read-in-another-package

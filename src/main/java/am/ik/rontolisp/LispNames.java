@@ -10416,6 +10416,7 @@ public final class LispNames {
 	 * with nicknames ({@code LispMacroExpander.injectLocalNicknames}).
 	 */
 	public static final String PRINT_CASED_LOCAL_QUALIFIER_INTERNAL = "%PC-LOCAL-QUALIFIER";
+
 	/**
 	 * The internal {@code (%pc-instance-text text)} helper (prelude): the {@code prin1}
 	 * text of an instance with the type name it leads with, in {@code #<NAME ...>} or

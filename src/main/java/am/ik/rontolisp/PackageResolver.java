@@ -1447,10 +1447,26 @@ public final class PackageResolver {
 		}
 		return switch (datum) {
 			case LispString str -> str.value();
-			case LispSymbol sym -> sym.name().startsWith("#:") ? sym.name().substring(2)
-					: sym.name().startsWith(":") ? sym.name().substring(1) : datum == arg ? null : sym.name();
+			case LispSymbol sym -> sym.name().startsWith("#:") ? sym.name().substring(2) : sym.name().startsWith(":")
+					? sym.name().substring(1) : datum == arg ? null : LispSymbol.memberName(sym.name());
 			default -> null;
 		};
+	}
+
+	/**
+	 * Whether every argument of a form is a literal package designator: what makes a
+	 * {@code uiop:add-package-local-nickname} or
+	 * {@code uiop:remove-package-local-nickname} call a directive.
+	 * @param form the call
+	 * @return {@code true} when the resolver consumes the call at top level
+	 */
+	public static boolean hasLiteralDesignators(LispCons form) {
+		for (LispVal tail = form.cdr(); tail instanceof LispCons cell; tail = cell.cdr()) {
+			if (literalDesignator(cell.car()) == null) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -2707,6 +2723,27 @@ public final class PackageResolver {
 							: quotedSymbol(":" + found.toUpperCase(java.util.Locale.ROOT)));
 				}
 			}
+		}
+		if (this.inProgramResolution && cons.car() instanceof LispSymbol inPackageOp
+				&& LispNames.IN_PACKAGE.equals(operatorMember(inPackageOp))
+				&& cons.cdr() instanceof LispCons packageCell && packageCell.cdr() instanceof LispNil) {
+			// An in-package that is not a top-level form switches when it runs, and reads
+			// nothing differently: (setq *package* (or (find-package "P") <no such
+			// package>)).
+			String designator = designator(LispNames.IN_PACKAGE, "a package name", packageCell.car());
+			LispVal missing = new LispCons(new LispSymbol(LispNames.PACKAGE_ERROR_INTERNAL),
+					new LispCons(quotedSymbol(":" + designator.toUpperCase(java.util.Locale.ROOT)),
+							new LispCons(new LispString("No such package: " + designator), LispNil.INSTANCE)));
+			LispVal found = new LispCons(new LispSymbol(LispNames.FIND_PACKAGE),
+					new LispCons(new LispString(designator), LispNil.INSTANCE));
+			return SourceProvenance.inherit(cons,
+					new LispCons(new LispSymbol(LispNames.SETQ),
+							new LispCons(new LispSymbol(LispNames.PACKAGE_VAR),
+									new LispCons(
+											new LispCons(new LispSymbol(LispNames.OR),
+													new LispCons(resolveForm(found),
+															new LispCons(missing, LispNil.INSTANCE))),
+											LispNil.INSTANCE))));
 		}
 		if (this.inProgramResolution && cons != this.literalDesignatorArm && programHasLocalNicknames()
 				&& cons.car() instanceof LispSymbol designatorOp) {

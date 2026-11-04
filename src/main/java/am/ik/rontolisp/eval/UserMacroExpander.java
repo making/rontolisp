@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.reader.Features;
@@ -1523,6 +1524,12 @@ public final class UserMacroExpander {
 		String name = sym.name();
 		int colon = name.lastIndexOf(':');
 		String member = colon >= 0 ? name.substring(colon + 1) : name;
+		// A package's own nicknames change how the forms after them read. A computed
+		// call is an ordinary call, whose arguments this pass walks.
+		if (LispNames.ADD_PACKAGE_LOCAL_NICKNAME.equals(member)
+				|| LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME.equals(member)) {
+			return PackageResolver.hasLiteralDesignators(cons);
+		}
 		// The %push-package/%pop-package markers LoadInliner brackets a loaded file with
 		// are package directives too: the macro evaluator's resolver must track their
 		// save/restore so a defmacro after a load resolves in the caller's package, and
@@ -1536,9 +1543,13 @@ public final class UserMacroExpander {
 
 	/**
 	 * The members of a {@code progn}, nested ones flattened, when one of them is a
-	 * package directive; null for any other form.
+	 * package directive, or a package directive itself as its one member; null for any
+	 * other form.
 	 */
 	private static @Nullable List<LispVal> prognMembersWithPackageDirective(LispVal form) {
+		if (isPackageDirective(form)) {
+			return List.of(form);
+		}
 		if (!isOperator(form, LispNames.PROGN) || !((LispCons) form).isProperList()) {
 			return null;
 		}
