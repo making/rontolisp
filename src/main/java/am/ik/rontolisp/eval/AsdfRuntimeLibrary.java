@@ -369,7 +369,7 @@ public final class AsdfRuntimeLibrary {
 
 	/**
 	 * Whether {@code name} may be a definition of this runtime: the gate in front of
-	 * {@link #definitionNames}, so a compile that names no ASDF never reads it.
+	 * reading the definition names, so a compile that names no ASDF never reads it.
 	 * @param name the canonical name
 	 * @return {@code false} when no form of the runtime can define it
 	 */

@@ -46,7 +46,8 @@
    ;; system ever carries one here -- a component file has none).
    (asdf:version :initarg :version :initform nil :reader asdf:component-version)
    (asdf::description :initform nil :reader asdf::component-description)
-   (asdf::long-description :initform nil :reader asdf::component-long-description)
+   (asdf::long-description :initform nil
+                           :reader asdf::component-long-description)
    (asdf::properties :initform nil :accessor asdf::component-properties)
    (asdf::sideway-dependencies :initarg :sideway
                                :initform nil
@@ -65,21 +66,14 @@
 (defclass asdf::proto-system (asdf:component) ())
 
 (defclass asdf:system (asdf:module asdf::proto-system)
-  ((asdf::author :initform nil)
-   (asdf::maintainer :initform nil)
-   (asdf::licence :initform nil)
-   (asdf::homepage :initform nil)
-   (asdf::bug-tracker :initform nil)
-   (asdf::mailto :initform nil)
-   (asdf::long-name :initform nil)
-   (asdf::source-control :initform nil)
-   (asdf:source-file :initform nil)
-   (asdf::depends-on :initform nil)
+  ((asdf::author :initform nil) (asdf::maintainer :initform nil)
+   (asdf::licence :initform nil) (asdf::homepage :initform nil)
+   (asdf::bug-tracker :initform nil) (asdf::mailto :initform nil)
+   (asdf::long-name :initform nil) (asdf::source-control :initform nil)
+   (asdf:source-file :initform nil) (asdf::depends-on :initform nil)
    (asdf::weakly-depends-on :initform nil)
-   (asdf::defsystem-depends-on :initform nil)
-   (asdf::entry-point :initform nil)
-   (asdf::build-operation :initform nil)
-   (asdf::build-pathname :initform nil)))
+   (asdf::defsystem-depends-on :initform nil) (asdf::entry-point :initform nil)
+   (asdf::build-operation :initform nil) (asdf::build-pathname :initform nil)))
 
 (defclass asdf:package-inferred-system (asdf:system) ())
 
@@ -99,37 +93,43 @@
    (asdf::parent :initarg :parent :initform nil :reader asdf::missing-parent)
    ;; Where a load looked, which real ASDF does not say.
    (%detail :initarg :detail :initform nil :reader %asdf-missing-detail))
-  (:report (lambda (condition stream)
-             (format stream "Component ~s not found" (asdf::missing-requires condition))
-             (when (%asdf-missing-detail condition)
-               (format stream " ~a" (%asdf-missing-detail condition))))))
+  (:report
+   (lambda (condition stream)
+     (format stream "Component ~s not found" (asdf::missing-requires condition))
+     (when (%asdf-missing-detail condition)
+       (format stream " ~a" (%asdf-missing-detail condition))))))
 
 (define-condition asdf:missing-dependency (asdf:missing-component)
   ((asdf::required-by :initarg :required-by :reader asdf::missing-required-by))
-  (:report (lambda (condition stream)
-             (format stream "Component ~s not found, required by ~a"
-                     (asdf::missing-requires condition)
-                     (asdf:component-name (asdf::missing-required-by condition)))
-             (when (%asdf-missing-detail condition)
-               (format stream " ~a" (%asdf-missing-detail condition))))))
+  (:report
+   (lambda (condition stream)
+     (format stream "Component ~s not found, required by ~a"
+             (asdf::missing-requires condition)
+             (asdf:component-name (asdf::missing-required-by condition)))
+     (when (%asdf-missing-detail condition)
+       (format stream " ~a" (%asdf-missing-detail condition))))))
 
-(define-condition asdf:load-system-definition-error (asdf:system-definition-error)
+(define-condition asdf:load-system-definition-error
+    (asdf:system-definition-error)
   ((asdf::name :initarg :name :reader asdf:error-name)
    (asdf::pathname :initarg :pathname :reader asdf:error-pathname)
    (asdf::condition :initarg :condition :reader asdf::error-condition))
-  (:report (lambda (condition stream)
-             (format stream "Error while trying to load definition for system ~a from pathname ~a: ~a"
-                     (asdf:error-name condition) (asdf:error-pathname condition)
-                     (asdf::error-condition condition)))))
+  (:report
+   (lambda (condition stream)
+     (format stream
+      "Error while trying to load definition for system ~a from pathname ~a: ~a"
+      (asdf:error-name condition) (asdf:error-pathname condition)
+      (asdf::error-condition condition)))))
 
 ;; Loading a .asd on the interpreter, under real ASDF's handler: an error while
 ;; the file loads is a load-system-definition-error whose condition is the error.
 (defun %asdf-call-loading-definition (name pathname thunk)
-  (handler-bind ((error (lambda (condition)
-                          (error 'asdf:load-system-definition-error
-                                 :name name
-                                 :pathname pathname
-                                 :condition condition))))
+  (handler-bind ((error
+                  (lambda (condition)
+                    (error 'asdf:load-system-definition-error
+                           :name name
+                           :pathname pathname
+                           :condition condition))))
     (funcall thunk)))
 
 ;; A load that found no .asd, from the interpreter's loader: REQUIRED-BY is the
@@ -177,8 +177,7 @@
 
 ;; The .asd file a system is defined in: the name before the first slash.
 (defun asdf:primary-system-name (system)
-  (let* ((name (asdf:coerce-name system))
-         (slash (position #\/ name)))
+  (let* ((name (asdf:coerce-name system)) (slash (position #\/ name)))
     (if slash (subseq name 0 slash) name)))
 
 ;; The component name of a source file: its relative path minus the .lisp
@@ -233,7 +232,8 @@
   (setf (slot-value sys 'asdf::long-name) (getf meta :long-name))
   (setf (slot-value sys 'asdf::source-control) (getf meta :source-control))
   (setf (slot-value sys 'asdf:source-file) (getf meta :source-file))
-  (setf (slot-value sys 'asdf::weakly-depends-on) (getf meta :weakly-depends-on))
+  (setf (slot-value sys 'asdf::weakly-depends-on)
+        (getf meta :weakly-depends-on))
   (setf (slot-value sys 'asdf::defsystem-depends-on)
         (getf meta :defsystem-depends-on))
   (setf (slot-value sys 'asdf::entry-point) (getf meta :entry-point))
@@ -271,18 +271,18 @@
     t))
 
 (defun asdf:map-systems (fn)
-  (dolist (name (%asdf-system-names))
-    (funcall fn (asdf:find-system name))))
+  (dolist (name (%asdf-system-names)) (funcall fn (asdf:find-system name))))
 
 (defun asdf:component-system (component)
   (let ((parent (asdf:component-parent component)))
     (if parent (asdf:component-system parent) component)))
 
 (defun asdf:component-loaded-p (component)
-  (let ((rec (%asdf-system-record
-              (if (typep component 'asdf:component)
-                  (asdf:component-name (asdf:component-system component))
-                  (asdf:coerce-name component)))))
+  (let ((rec
+         (%asdf-system-record
+          (if (typep component 'asdf:component)
+              (asdf:component-name (asdf:component-system component))
+              (asdf:coerce-name component)))))
     (and rec (nth 4 rec) t)))
 
 (defun asdf:already-loaded-systems ()
@@ -290,8 +290,7 @@
 
 ;; Real ASDF's answer is the time it registered the system and the system.
 (defun asdf:system-registered-p (name)
-  (let ((system (asdf:registered-system name)))
-    (and system (cons 0 system))))
+  (let ((system (asdf:registered-system name))) (and system (cons 0 system))))
 
 ;; The children are flat here (see above), so a path of names is one name: the
 ;; child's relative path, matched whole or at a directory boundary.
@@ -323,7 +322,8 @@
         ((null base)
          (cond ((null path) nil)
                ((consp path)
-                (asdf:find-component (asdf:find-system (car path) nil) (cdr path)))
+                (asdf:find-component (asdf:find-system (car path) nil)
+                                     (cdr path)))
                (t (asdf:find-system path nil))))
         ((not (typep base 'asdf:component))
          (let ((system (asdf:find-system base nil)))
@@ -363,11 +363,9 @@
   (cdr (assoc property (asdf::component-properties component) :test #'equal)))
 
 (defun asdf:version-satisfies (component version)
-  (let ((current (if (stringp component)
-                     component
-                     (asdf:component-version component))))
-    (or (not (and version current))
-        (uiop/version:version<= version current))))
+  (let ((current
+         (if (stringp component) component (asdf:component-version component))))
+    (or (not (and version current)) (uiop/version:version<= version current))))
 
 ;; What the .asd declared, as written when it is a literal (nil otherwise: a #.
 ;; marker in these options is never evaluated, .kb/asdf.md).
@@ -377,8 +375,7 @@
 (defun asdf:system-definition-pathname (system)
   (asdf:system-source-file system))
 
-(defun asdf:system-description (system)
-  (asdf::component-description system))
+(defun asdf:system-description (system) (asdf::component-description system))
 
 (defun asdf:system-long-description (system)
   (asdf::component-long-description system))
@@ -477,19 +474,20 @@
 
 (defclass asdf:prepare-op (asdf:upward-operation asdf:sideway-operation) ())
 
-(defclass asdf:prepare-source-op (asdf:upward-operation asdf:sideway-operation) ())
+(defclass asdf:prepare-source-op (asdf:upward-operation asdf:sideway-operation)
+  ())
 
 (defclass asdf:compile-op
-          (asdf::basic-compile-op asdf:downward-operation asdf:selfward-operation)
+    (asdf::basic-compile-op asdf:downward-operation asdf:selfward-operation)
   ())
 
 (defclass asdf:load-op
-          (asdf::basic-load-op asdf:downward-operation asdf:selfward-operation)
+    (asdf::basic-load-op asdf:downward-operation asdf:selfward-operation)
   ())
 
 ;; load-op already loads source here, so the two load a component alike.
 (defclass asdf:load-source-op
-          (asdf::basic-load-op asdf:downward-operation asdf:selfward-operation)
+    (asdf::basic-load-op asdf:downward-operation asdf:selfward-operation)
   ())
 
 (defclass asdf:test-op (asdf:selfward-operation) ())
@@ -674,15 +672,13 @@
 (defmethod asdf:component-depends-on
     ((operation asdf:load-op) (component asdf:system))
   (list (cons operation (asdf:component-children component))
-        (list 'asdf:prepare-op component)
-        (list 'asdf:compile-op component)
+        (list 'asdf:prepare-op component) (list 'asdf:compile-op component)
         (%asdf-define-dependency component)))
 
 (defmethod asdf:component-depends-on
     ((operation asdf:compile-op) (component asdf:system))
   (list (cons operation (asdf:component-children component))
-        (list 'asdf:prepare-op component)
-        (%asdf-define-dependency component)))
+        (list 'asdf:prepare-op component) (%asdf-define-dependency component)))
 
 (defmethod asdf:component-depends-on
     ((operation asdf:load-source-op) (component asdf:system))
