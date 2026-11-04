@@ -14992,6 +14992,97 @@ cases:
       6
       (:NEW 5)
       T
+  - name: a-defun-the-program-replaces-by-name-answers-the-new-definition
+    source: |
+      ;; Every spelling of the name reads the current definition, after a compile or
+      ;; a setf of the literal name, in a caller compiled before the write too.
+      (defun crd-compiled (x) (list :old x))
+      (defun crd-caller () (crd-compiled 1))
+      (print (funcall 'crd-compiled 1))
+      (print (compile 'crd-compiled '(lambda (x) (list :new x))))
+      (print (funcall 'crd-compiled 1))
+      (print (apply 'crd-compiled (list 2)))
+      (print (funcall #'crd-compiled 3))
+      (print (funcall (symbol-function 'crd-compiled) 4))
+      (print (funcall (fdefinition 'crd-compiled) 5))
+      (print (mapcar 'crd-compiled '(6)))
+      (print (mapcar #'crd-compiled '(7)))
+      (print (funcall (intern "CRD-COMPILED") 8))
+      (print (crd-compiled 9))
+      (print (crd-caller))
+      (print (eval '(crd-compiled 10)))
+      (defun crd-setf (x) (list :old x))
+      (setf (fdefinition 'crd-setf) (lambda (x) (list :new x)))
+      (print (funcall 'crd-setf 1))
+      (print (crd-setf 2))
+      (defun crd-sym (x y) (list :old x y))
+      (print (handler-case (crd-sym 1) (program-error () :too-few)))
+      (setf (symbol-function 'crd-sym) (lambda (x) (list :new x)))
+      (print (crd-sym 1))
+      ;; A function value taken before the write keeps the definition it was.
+      (defun crd-wrapped (x) (list :inner x))
+      (let ((old #'crd-wrapped))
+        (setf (fdefinition 'crd-wrapped) (lambda (x) (list :outer (funcall old x)))))
+      (print (crd-wrapped 1))
+      ;; Each definition holds from where it stands, as a definition does in a load.
+      (print (handler-case (crd-later 1) (undefined-function (c) (cell-error-name c))))
+      (defun crd-later (x) (list :first x))
+      (print (crd-later 1))
+      (defun crd-later (x) (list :second x))
+      (print (crd-later 1))
+      (fmakunbound 'crd-later)
+      (print (fboundp 'crd-later))
+      (print (handler-case (crd-later 1) (undefined-function (c) (cell-error-name c))))
+      ;; A tail call through the name stays proper.
+      (defun crd-tail (n acc) (if (= n 0) acc (crd-tail (- n 1) (+ acc 1))))
+      (print (crd-tail 200000 0))
+      (setf (symbol-function 'crd-tail) (lambda (n acc) (list :new n acc)))
+      (print (crd-tail 1 2))
+      ;; A setf function, and the definitions a program does not write as a defun.
+      (defun (setf crd-place) (v l) (setf (car l) (list :old v)))
+      (setf (fdefinition '(setf crd-place)) (lambda (v l) (setf (car l) (list :new v))))
+      (let ((l (list 1))) (setf (crd-place l) 2) (print l))
+      (defgeneric crd-generic (x))
+      (defmethod crd-generic ((x integer)) (list :method x))
+      (let ((old #'crd-generic))
+        (setf (fdefinition 'crd-generic) (lambda (x) (list :wrapped (funcall old x)))))
+      (print (crd-generic 1))
+      (print (funcall 'crd-generic 2))
+      (defclass crd-class () ((v :accessor crd-v :initform 1)))
+      (print (crd-v (make-instance 'crd-class)))
+      (setf (fdefinition 'crd-v) (lambda (o) (list :new o)))
+      (print (crd-v 5))
+    expected: |
+      (:OLD 1)
+      CRD-COMPILED
+      (:NEW 1)
+      (:NEW 2)
+      (:NEW 3)
+      (:NEW 4)
+      (:NEW 5)
+      ((:NEW 6))
+      ((:NEW 7))
+      (:NEW 8)
+      (:NEW 9)
+      (:NEW 1)
+      (:NEW 10)
+      (:NEW 1)
+      (:NEW 2)
+      :TOO-FEW
+      (:NEW 1)
+      (:OUTER (:INNER 1))
+      CRD-LATER
+      (:FIRST 1)
+      (:SECOND 1)
+      NIL
+      CRD-LATER
+      200000
+      (:NEW 1 2)
+      ((:NEW 2))
+      (:WRAPPED (:METHOD 1))
+      (:WRAPPED (:METHOD 2))
+      1
+      (:NEW 5)
   - name: set-and-setf-symbol-value-for-computed-names
     source: |
       ;; set assigns a global by a computed name and creates the binding when

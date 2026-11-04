@@ -15,9 +15,11 @@ so a program NAMING `compile` selects `macro-function` by surface fact (`referen
 `LibraryDefunPruner.SYNTHESIZED_ENTRIES`, `UserMacroExpander.usesMacroIntrospection`), and one that
 only reaches the runtime through a coerce or a registration gets the variant without the test
 (`CompileRuntime.forms`), which it cannot call. `RuntimeFunctionNames` counts a `compile` site, a
-quoted name included, since its name is computed inside the runtime. A direct call of a name with
-a `defun` keeps the old function, the `.kb/symbol-runtime-api.md` divergence. A literal `(compile
-'name definition)` gets the setf-only forwarder of that file, so the name is no undefined
+quoted name included, since its name is computed inside the runtime. A literal `(compile 'name definition)` of a name with a `defun` moves the definition to the
+namespace (`compiler/RedefinedDefuns`, `.kb/symbol-runtime-api.md`), so every reference sees the
+new one; through a computed name, only a computed name does (that file's Divergences). A literal
+`(compile 'name definition)` of any other name gets the setf-only forwarder of that file, so the
+name is no undefined
 function to a warning or to `UndefinedWarnings`; every call already worked (2026-11-04, the
 `looked up when the call runs` arm). A computed name or `(funcall 'compile ...)` still warns.
 Pinned by ci-spec `character-and-compile-of-a-name`,

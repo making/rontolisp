@@ -58,6 +58,7 @@ import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.NestedDefunNamespace;
 import am.ik.rontolisp.compiler.NestedDefunRedefinition;
+import am.ik.rontolisp.compiler.RedefinedDefuns;
 import am.ik.rontolisp.compiler.ReadBeforeStore;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.compiler.LispCompiler;
@@ -3605,6 +3606,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The dispatch narrower drops generic-function branches no call site can select
 		// (compiler/GenericDispatchNarrowing); only an optimizing, early-bound compile
 		// may narrow -- under --dynamic any name resolves at run time.
+		// The program's own defuns it replaces or retires by a literal name, read before
+		// the expansion adds the definitions that are no defun of its own.
+		Set<String> redefinedDefuns = RedefinedDefuns.names(program);
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
 				packageResolver::internedSpelling, this.dynamic,
 				entryReportOnly ? SignalMessages.ENTRY_REPORT
@@ -3687,6 +3691,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> namespaceNestedDefuns = NestedDefunNamespace.heldNames(program);
 		fenvForwarders.addAll(namespaceNestedDefuns);
 		program = NestedDefunRedefinition.rewrite(program, namespaceNestedDefuns);
+		// A name the program itself replaces has the same one home: every reference reads
+		// what the namespace holds when it runs (compiler/RedefinedDefuns).
+		program = RedefinedDefuns.rewrite(program, redefinedDefuns);
+		fenvForwarders.addAll(LispMacroExpander.symbolFunctionForwarderNames(program));
 		// Every struct/class layout is registered by the pass above, so the instance gate
 		// can be decided here -- it must be, because the struct type index and the baked
 		// layout addresses are needed as constants before any body is compiled. Restart
@@ -3895,7 +3903,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// reader-only program's GLOBAL_FENV stays empty.
 		boolean writesFunctionNamespace = programUsesEval(program) || usesLoad || this.dynamic
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
-				|| LispMacroExpander.usesSymbolFunctionWrite(program) || !namespaceNestedDefuns.isEmpty();
+				|| LispMacroExpander.usesSymbolFunctionWrite(program) || !namespaceNestedDefuns.isEmpty()
+				|| !redefinedDefuns.isEmpty();
 		// Of those writers, the ones that can bind a name no definition in the program
 		// has: a call of such a name reads GLOBAL_FENV instead of compiling to the
 		// undefined-function signal alone (fmakunbound only retires, and a quoted

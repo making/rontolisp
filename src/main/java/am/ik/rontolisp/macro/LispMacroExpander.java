@@ -31828,8 +31828,14 @@ public final class LispMacroExpander {
 
 	private static final String SYMBOL_FUNCTION_FORWARDER_ARGS = "%SFW-ARGS";
 
-	/** The forwarder defuns of {@link #setfOnlyFunctionAliasNames}. */
-	private static List<LispVal> symbolFunctionForwarderDefuns(List<String> names) {
+	/**
+	 * The forwarder defuns of {@code names}: the {@link #setfOnlyFunctionAliasNames}, and
+	 * the program's own definitions {@code compiler.RedefinedDefuns} moves to the
+	 * namespace.
+	 * @param names the forwarded names
+	 * @return a defun per name
+	 */
+	public static List<LispVal> symbolFunctionForwarderDefuns(List<String> names) {
 		List<LispVal> defuns = new java.util.ArrayList<>();
 		LispSymbol argsVar = new LispSymbol(SYMBOL_FUNCTION_FORWARDER_ARGS);
 		for (String name : names) {

@@ -20,7 +20,7 @@ class LetBoundDesignatorsTest {
 
 	private static String propagate(String source, Set<String> specialVars) {
 		List<LispVal> forms = LispReader.readAllFromString(source);
-		return LetBoundDesignators.propagate((LispCons) forms.get(0), specialVars, KNOWN).print();
+		return LetBoundDesignators.propagate((LispCons) forms.get(0), specialVars, KNOWN::contains).print();
 	}
 
 	/**
@@ -29,7 +29,7 @@ class LetBoundDesignatorsTest {
 	private static boolean unchanged(String source) {
 		List<LispVal> forms = LispReader.readAllFromString(source);
 		LispCons letForm = (LispCons) forms.get(0);
-		return LetBoundDesignators.propagate(letForm, Set.of(), KNOWN) == letForm;
+		return LetBoundDesignators.propagate(letForm, Set.of(), KNOWN::contains) == letForm;
 	}
 
 	@Test
@@ -89,7 +89,7 @@ class LetBoundDesignatorsTest {
 		// away from everything the body calls.
 		List<LispVal> forms = LispReader.readAllFromString("(let ((*f* #'dbl)) (funcall *f* 1))");
 		LispCons letForm = (LispCons) forms.get(0);
-		assertThat(LetBoundDesignators.propagate(letForm, Set.of("*F*"), KNOWN)).isSameAs(letForm);
+		assertThat(LetBoundDesignators.propagate(letForm, Set.of("*F*"), KNOWN::contains)).isSameAs(letForm);
 		// A name no registry answers is not a plain funcId: #'cadr synthesizes a lambda
 		// per site, and --dynamic resolves at run time. Duplicating either costs more
 		// than the binding.

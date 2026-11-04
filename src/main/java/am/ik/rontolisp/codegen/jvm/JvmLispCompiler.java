@@ -55,6 +55,7 @@ import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.rontolisp.compiler.NestedDefunNamespace;
 import am.ik.rontolisp.compiler.NestedDefunRedefinition;
+import am.ik.rontolisp.compiler.RedefinedDefuns;
 import am.ik.rontolisp.compiler.ReadBeforeStore;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
@@ -1239,6 +1240,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The dispatch narrower drops generic-function branches no call site can select
 		// (compiler/GenericDispatchNarrowing); only an optimizing, early-bound compile
 		// may narrow -- under --dynamic any name resolves at run time.
+		// The program's own defuns it replaces or retires by a literal name, read before
+		// the expansion adds the definitions that are no defun of its own.
+		Set<String> redefinedDefuns = this.runTimeImage != null || this.fragment != null ? Set.of()
+				: RedefinedDefuns.names(program);
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
 				packageResolver::internedSpelling, this.dynamic, SignalMessages.RENDERED,
 				this.optimize.eliminatesDeadCode() && !this.dynamic
@@ -1292,6 +1297,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				: NestedDefunNamespace.heldNames(program);
 		fenvForwarders.addAll(namespaceNestedDefuns);
 		program = NestedDefunRedefinition.rewrite(program, namespaceNestedDefuns);
+		// A name the program itself replaces has the same one home: every reference reads
+		// what the namespace holds when it runs (compiler/RedefinedDefuns).
+		program = RedefinedDefuns.rewrite(program, redefinedDefuns);
+		fenvForwarders.addAll(LispMacroExpander.symbolFunctionForwarderNames(program));
 		// Whether an instance value can exist in this class at all. The predicates and
 		// _equal need the answer BEFORE any body is compiled (their shape changes), and
 		// with the gate off nothing they would guard against can be constructed -- so an
@@ -1988,7 +1997,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean writesFunctionNamespace = programUsesEval(program) || usesLoad || this.dynamic || usesJavaBridge
 				|| usesObjc || usesFfi || programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				|| LispMacroExpander.usesSymbolFunctionWrite(program) || !namespaceNestedDefuns.isEmpty()
-				|| forcedGroups.contains(GROUP_EVAL);
+				|| !redefinedDefuns.isEmpty() || forcedGroups.contains(GROUP_EVAL);
 		boolean usesEval = writesFunctionNamespace || boundpReadsMirror
 				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.SET)
 				|| programUsesSymbol(program, LispNames.FBOUNDP);

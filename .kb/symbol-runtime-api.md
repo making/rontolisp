@@ -305,10 +305,11 @@ emitted BEHIND the tombstone probe (`Ctx.usesFmakunbound`;
 `JvmSymbolApiCompiler.emitTombstoneGuard`, `WasmSymbolApiCompiler.emitTombstoneGuardedFold`).
 A program without `fmakunbound` is byte-identical to before.
 
-**The divergence**: a call site the compiler already bound directly keeps working after
-`fmakunbound` — eager compilation cannot be undone, so only LATE-bound references see the
-retirement. `symbol-function`/`fdefinition` of a LITERAL name are folded the same way and are
-likewise not tombstone-aware.
+**The divergence**: for a top-level `defun` a program retires through a COMPUTED name, a call
+site the compiler already bound directly keeps working after `fmakunbound` -- eager compilation
+cannot be undone, so only LATE-bound references see the retirement. `symbol-function`/`fdefinition`
+of a LITERAL name are folded the same way and are likewise not tombstone-aware. A literal
+`(fmakunbound 'n)` of a `defun` has no such divergence (`compiler/RedefinedDefuns`, below).
 **A SYMBOL reaching a dispatcher is one of those late-bound references**: the dispatcher's
 symbol arm probes the function namespace before `_lookup`, the order `symbol-function` and
 `_apply` use, and a binding decides on its own -- its function replaces the symbol (an
@@ -366,8 +367,40 @@ nil)` reported `The function NIL is undefined`. Pinned on all four backends by
 - **A nested defun a run-time name can reach takes the same path** (`Ctx.fenvForwarders` holds
   its name too, its definition is the `%set-symbol-function`): `.kb/core-representation.md`, "A
   nested defun a RUN-TIME name can reach".
-- **Divergences**: an eagerly-bound call site of a name that HAD a defun keeps the old function
-  after a re-setf; `--no-gc` has no eval runtime.
+- **A definition the program writes by a literal name has the same one home**
+  (`compiler/RedefinedDefuns`, both compilers right after `NestedDefunRedefinition`, 2026-11-05).
+  A name in `(setf (symbol-function 'n) ...)`, `(setf (fdefinition 'n) ...)` (`psetf`, `rotatef`,
+  `shiftf` too), `(compile 'n definition)` or `(fmakunbound 'n)` with a top-level `defun` -- also a
+  generated one: a generic's dispatcher, a slot accessor -- becomes
+  `(defun %top-defun$n ...)` + `(%set-symbol-function 'n #'%top-defun$n)` where the `defun` stood
+  (a later top-level `defun` of the name is `%top-defun$2$$n`, its own function) + the forwarder of
+  this section, so `Ctx.fenvForwarders` serves every reference. A call before the definition ran
+  is `undefined-function`, as in a load. `LetBoundDesignators` does not propagate a forwarded name:
+  the binding's value is what the namespace held when it ran, and propagated, a wrapper's
+  `(let ((old #'n)) (setf (fdefinition 'n) (lambda (x) (funcall old x))))` called itself. An
+  exported name is refused, as for a nested redefinition: an export binds one static definition.
+  `(fmakunbound 'n)` counts only for the program's own `defun`: `(fmakunbound 'g)
+  (defgeneric g ...)` keeps its dispatcher, which is one definition at the first `defgeneric` /
+  `defmethod`. Not in a JVM host or fragment (`Ctx.linked`; `JvmFunctionCell` serves those). The
+  cost is the forwarder's: a rest list and a namespace probe per direct call, of this name only.
+  Measured 2026-11-05 (SBCL 2.2.9 and the interpreter answered the new definition; JVM, P1,
+  component before): after a literal write, a direct call, `(funcall 'n)`, `(apply 'n)`,
+  `(mapcar 'n)`, `#'n`, a literal `symbol-function` and `fdefinition` all called the old one; only
+  `(funcall (intern "N"))` called the new one.
+  Pinned by ci-spec `a-defun-the-program-replaces-by-name-answers-the-new-definition`,
+  `RedefinedDefunsTest`.
+- **Interpreter, a generic's `#'name`** is late-bound through `genericDispatchers`, not the name:
+  a `#'g` taken before `(setf (fdefinition 'g) ...)` keeps reaching the generic (it overflowed the
+  stack wrapping itself), one taken after it is what the setf stored.
+- **Divergences**: a top-level `defun` written only through a computed name, `eval`'s `defun` or
+  `load` keeps its definition for every reference the compile resolves (a direct call, `#'n`,
+  `(funcall 'n)`, a literal `symbol-function`); only a name computed at run time reads the
+  namespace. Measured 2026-11-05: `(install 'n f)` over `(setf (fdefinition name) f)`, `(compile
+  name def)` and `(eval '(defun n ...))` answer the old definition on JVM, P1 and component.
+  Holding every name such a program spells as a value is not done: the corpus class and any
+  library with such a write would move most of its functions into an alist each reference walks.
+  `(fmakunbound 'solo)` of a generic leaves its dispatcher bound on the interpreter too (SBCL
+  retires it). `--no-gc` has no eval runtime.
 - Tests: `LispEvaluatorTest#setfSymbolFunction*`/`#setfFdefinition*`,
   `JvmLispCompilerTest#compileAndRunSetfSymbolFunction*`,
   `WasmLispCompilerIntegrationTest#setfSymbolFunctionAliasAndRedefinition`, ci-spec
