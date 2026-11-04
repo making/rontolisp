@@ -8378,6 +8378,12 @@ class LispEvaluatorTest {
 				(let ((first (db-run 1)))
 				  (defmacro db-call (f x) `(list :redefined (,f ,x)))
 				  (list first (db-run 2)))""").print()).isEqualTo("((:LOCAL 1) (:REDEFINED (:LOCAL 2)))");
+		// A local function shadows a macro of its name, where the walk sees the macro.
+		assertThat(evalMulti("""
+				(defmacro db-s (x) `(list :macro ,x))
+				(defmacro db-t (x) `(db-s ,x))
+				(flet ((db-s (x) (list :local x))) (list (db-s 1) (db-t 2)))""").print())
+			.isEqualTo("((:LOCAL 1) (:LOCAL 2))");
 	}
 
 	@Test

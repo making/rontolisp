@@ -14047,6 +14047,16 @@ cases:
       (defun ci-m-in-fn (n) (flet ((ci-m (x) (* x 2))) (ci-call-it ci-m n)))
       (print (list (ci-m-in-fn 1) (ci-m-in-fn 2)))
       (print (flet (((setf ci-cell) (v x) (list :wrote v x))) (ci-call-it setf (ci-cell 1) 2)))
+      ;; A local function shadows a macro of its name, and a macrolet shadows it in turn.
+      (defmacro ci-shadowed (x) `(list :macro ,x))
+      (print (flet ((ci-shadowed (x) (list :flet x))) (ci-shadowed 1)))
+      (print (labels ((ci-shadowed (n) (if (= n 0) :done (ci-shadowed (- n 1))))) (ci-shadowed 2)))
+      (print (flet ((ci-shadowed (x) (ci-shadowed (list :inner x)))) (ci-shadowed 3)))
+      (print (flet ((ci-shadowed (x) (list :outer x)))
+               (macrolet ((ci-shadowed (x) `(list :inner-macro ,x))) (ci-shadowed 4))))
+      (defmacro ci-mentions (y) `(ci-shadowed ,y))
+      (print (flet ((ci-shadowed (x) (list :flet x))) (ci-mentions 5)))
+      (print (flet ((ci-other (x) (ci-shadowed x))) (ci-other 6)))
     expected: |
       (1 4 9)
       42
@@ -14075,6 +14085,12 @@ cases:
       (:INNER (:OUTER 7))
       (2 4)
       (:WROTE 2 1)
+      (:FLET 1)
+      :DONE
+      (:MACRO (:INNER 3))
+      (:INNER-MACRO 4)
+      (:FLET 5)
+      (:MACRO 6)
   - name: macrolet-compiler-macro-restart-case
     source: |
       ;; macrolet: local macros expanded away (compile path via UserMacroExpander,

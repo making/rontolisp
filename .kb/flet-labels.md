@@ -43,6 +43,12 @@ lambdas; `labels` = letrec -- bind to nil, then `setq` each lambda, so
   (fast-http's `skip-while`, eclector's `token-state-machine`). A macro in a dead branch of the
   body now expands at entry, as on the compile path; one defined by the body itself still expands
   when reached. Pin: ci-spec `flet-and-labels-local-functions`, `LispEvaluatorTest#evalFletBasic`.
+- **A local function shadows a macro of its name in the walk too** (`LispEvaluator.shadowedMacros`,
+  `UserMacroExpander.isMacroInWalk`; a compiler macro likewise): the body, and for `labels` the
+  definitions, keep the call for the rewrite, an inner `macrolet` of the name shadows back, and a macro
+  body runs without the set, in the null lexical environment. Without it `expandAll` expanded the
+  macro: `(defmacro m ...) (flet ((m ...)) (m 1))` called the macro on JVM and both WASM until
+  2026-11-05, and the interpreter's new walk would have joined them.
 - `macrolet`/`symbol-macrolet` unimplemented (`.todo/034-local-function-definition.md`).
 - **wasm-GC fusion rides this lowering**: `WasmLetCompiler` registers a `__FLET*` binding whose
   init lambda has plain params and a closed integer-tree body, substituted at

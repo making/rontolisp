@@ -752,7 +752,7 @@ public final class UserMacroExpander {
 	// A macro call expanded until it is not one; any other form unchanged.
 	private static LispVal expandMacroCall(LispVal form, LispEvaluator macroEval) {
 		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
-				&& macroEval.isUserMacro(sym.name())) {
+				&& isMacroInWalk(sym.name(), macroEval)) {
 			form = foldNativeExpansion(SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons)));
 		}
 		return form;
@@ -2088,7 +2088,7 @@ public final class UserMacroExpander {
 		// Expand head-position user macros repeatedly; the expansion may itself be a
 		// macro call (or an atom, which needs no further walking).
 		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
-				&& macroEval.isUserMacro(sym.name())) {
+				&& isMacroInWalk(sym.name(), macroEval)) {
 			// The expansion stands where the call stood: it keeps the call's position
 			// (.kb/source-positions.md, "Phase 2"), so code a macro built still reports
 			// the line of the call that built it.
@@ -2104,12 +2104,12 @@ public final class UserMacroExpander {
 		// by returning the form itself; a user macro of the same name has already won
 		// above, as CL requires.
 		if (form instanceof LispCons call && call.car() instanceof LispSymbol op && call.isProperList()
-				&& macroEval.hasCompilerMacro(op.name())) {
+				&& macroEval.hasCompilerMacro(op.name()) && !macroEval.shadowedMacros().contains(op.name())) {
 			LispVal expansion = macroEval.expandCompilerMacro(call);
 			if (expansion != form) {
 				form = SourceProvenance.inherit(call, expansion);
 				while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
-						&& macroEval.isUserMacro(sym.name())) {
+						&& isMacroInWalk(sym.name(), macroEval)) {
 					form = SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons));
 				}
 			}
@@ -2263,28 +2263,40 @@ public final class UserMacroExpander {
 					}
 					List<LispVal> newDefs = new ArrayList<>();
 					java.util.Map<String, LispVal> scope = macroEval.symbolMacroScope();
-					for (LispVal def : defsCons.toList()) {
-						if (def instanceof LispCons defCons && defCons.isProperList() && defCons.toList().size() >= 2) {
-							List<LispVal> dp = defCons.toList();
-							List<LispVal> newDef = new ArrayList<>();
-							newDef.add(dp.get(0));
-							macroEval.symbolMacroScope(symbolMacrosWithoutParameters(scope, dp.get(1)));
-							try {
-								newDef.add(expandLambdaList(dp.get(1), false, macroEval));
-								for (int i = 2; i < dp.size(); i++) {
-									newDef.add(expandAll(dp.get(i), macroEval));
+					// A local function shadows a macro of its name in the body, and for
+					// labels in the definitions too.
+					java.util.Set<String> shadowed = macroEval.shadowedMacros();
+					java.util.Set<String> inner = withShadowedMacros(shadowed, defsCons, macroEval);
+					macroEval.shadowedMacros(LispNames.LABELS.equals(sym.name()) ? inner : shadowed);
+					try {
+						for (LispVal def : defsCons.toList()) {
+							if (def instanceof LispCons defCons && defCons.isProperList()
+									&& defCons.toList().size() >= 2) {
+								List<LispVal> dp = defCons.toList();
+								List<LispVal> newDef = new ArrayList<>();
+								newDef.add(dp.get(0));
+								macroEval.symbolMacroScope(symbolMacrosWithoutParameters(scope, dp.get(1)));
+								try {
+									newDef.add(expandLambdaList(dp.get(1), false, macroEval));
+									for (int i = 2; i < dp.size(); i++) {
+										newDef.add(expandAll(dp.get(i), macroEval));
+									}
 								}
+								finally {
+									macroEval.symbolMacroScope(scope);
+								}
+								newDefs.add(properList(newDef));
 							}
-							finally {
-								macroEval.symbolMacroScope(scope);
+							else {
+								newDefs.add(def);
 							}
-							newDefs.add(properList(newDef));
 						}
-						else {
-							newDefs.add(def);
-						}
+						macroEval.shadowedMacros(inner);
+						return rebuildBinder(cons, parts, properList(newDefs), macroEval, topLevel);
 					}
-					return rebuildBinder(cons, parts, properList(newDefs), macroEval, topLevel);
+					finally {
+						macroEval.shadowedMacros(shadowed);
+					}
 				}
 				case LispNames.MACROLET: {
 					// (macrolet ((name lambda-list body...)...) body...): register the
@@ -2726,6 +2738,13 @@ public final class UserMacroExpander {
 				}
 			}
 		}
+		// A local macro shadows the local function of its name in turn.
+		java.util.Set<String> shadowed = macroEval.shadowedMacros();
+		if (!shadowed.isEmpty()) {
+			java.util.Set<String> inner = new java.util.HashSet<>(shadowed);
+			inner.removeAll(saved.keySet());
+			macroEval.shadowedMacros(inner);
+		}
 		try {
 			List<LispVal> body = new ArrayList<>();
 			body.add(new LispSymbol(LispNames.PROGN));
@@ -2745,10 +2764,31 @@ public final class UserMacroExpander {
 			return properList(body);
 		}
 		finally {
+			macroEval.shadowedMacros(shadowed);
 			for (java.util.Map.Entry<String, Object> entry : saved.entrySet()) {
 				macroEval.popLocalMacro(entry.getKey(), entry.getValue());
 			}
 		}
+	}
+
+	// Whether the walk expands a call of this name: a macro no local function shadows.
+	private static boolean isMacroInWalk(String name, LispEvaluator macroEval) {
+		return macroEval.isUserMacro(name) && !macroEval.shadowedMacros().contains(name);
+	}
+
+	// The shadowed macros plus those the flet/labels definitions name, the same set when
+	// they name none: a compiler macro counts, and a (setf name) writer shadows nothing.
+	private static java.util.Set<String> withShadowedMacros(java.util.Set<String> shadowed, LispCons defs,
+			LispEvaluator macroEval) {
+		java.util.Set<String> names = null;
+		for (LispVal def : defs.toList()) {
+			if (def instanceof LispCons defCons && defCons.car() instanceof LispSymbol sym
+					&& (macroEval.isUserMacro(sym.name()) || macroEval.hasCompilerMacro(sym.name()))) {
+				names = names != null ? names : new java.util.HashSet<>(shadowed);
+				names.add(sym.name());
+			}
+		}
+		return names != null ? names : shadowed;
 	}
 
 	// A dotted tail is only meaningful as data (inside quote); rebuilding a call form

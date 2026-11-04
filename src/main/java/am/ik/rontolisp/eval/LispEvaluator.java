@@ -403,6 +403,13 @@ public final class LispEvaluator {
 	private final ThreadLocal<java.util.Map<String, LispVal>> symbolMacroWalkScope = new ThreadLocal<>();
 
 	/**
+	 * The macros a local function shadows where {@link UserMacroExpander#expandAll} is
+	 * walking on this thread, null where there are none. Like
+	 * {@link #symbolMacroWalkScope}, a macro body runs without it.
+	 */
+	private final ThreadLocal<java.util.Set<String>> shadowedMacroWalkScope = new ThreadLocal<>();
+
+	/**
 	 * Memo of {@link #expandUserMacro}, keyed by the CALL SITE's cons identity. CL
 	 * expands a macro call once, when the code containing it is processed; the
 	 * interpreter used to re-expand on EVERY evaluation, so a macro call in a loop body
@@ -13059,6 +13066,8 @@ public final class LispEvaluator {
 		if (callerScope != null) {
 			this.symbolMacroWalkScope.remove();
 		}
+		java.util.Set<String> callerShadowed = shadowedMacros();
+		shadowedMacros(java.util.Set.of());
 		try {
 			LispVal expansion = macro.expander() == null ? LispNil.INSTANCE
 					: applyGlobal(macro.expander(), List.of(form, expanderEnvironment));
@@ -13072,6 +13081,7 @@ public final class LispEvaluator {
 			if (callerScope != null) {
 				this.symbolMacroWalkScope.set(callerScope);
 			}
+			shadowedMacros(callerShadowed);
 			if (swapPackage) {
 				this.packageResolver.setCurrentPackage(callerPackage);
 			}
@@ -13205,6 +13215,30 @@ public final class LispEvaluator {
 		}
 		else {
 			this.symbolMacroWalkScope.set(scope);
+		}
+	}
+
+	/**
+	 * The macros a local function shadows where {@link UserMacroExpander#expandAll} is
+	 * walking.
+	 * @return the names, empty outside the scope of such a function
+	 */
+	java.util.Set<String> shadowedMacros() {
+		java.util.Set<String> names = this.shadowedMacroWalkScope.get();
+		return names != null ? names : java.util.Set.of();
+	}
+
+	/**
+	 * Sets what {@link #shadowedMacros()} answers; the caller restores the previous
+	 * answer the same way.
+	 * @param names the names
+	 */
+	void shadowedMacros(java.util.Set<String> names) {
+		if (names.isEmpty()) {
+			this.shadowedMacroWalkScope.remove();
+		}
+		else {
+			this.shadowedMacroWalkScope.set(names);
 		}
 	}
 
