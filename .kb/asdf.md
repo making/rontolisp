@@ -4,16 +4,80 @@ An API-compatible mini-ASDF, **not a port**. Shared core `eval/AsdfSystems.java`
 file as Lisp, form at a time, and parses each `defsystem` form in it **as plain data** (the
 recording operator) -- see "What a `.asd` may contain".
 
-Surface: `asdf:defsystem` + `asdf:load-system` + `asdf:test-system`, with component
+Surface: real ASDF's whole export list ("The surface is the inventory"), with component
 METAOBJECTS real at run time. `asdf:find-system` answers a memoized `asdf:system` CLOS instance
-per name (`eq` across calls); the classes (`component`, `child-component`/`parent-component`,
-`module`, `system`, `package-inferred-system`, `source-file`, `cl-source-file`, `static-file`)
-are real on every backend so `typecase`/`typep`/defmethod specializers work; the readers
-(`component-name`/`-pathname`/`-children`/`-sideway-dependencies`/`-parent`/`-system`,
-`registered-systems`, `*user-cache*` = nil) walk the model. The OPERATION PROTOCOL is real too
+per name (`eq` across calls); the classes are real on every backend so `typecase`/`typep`/defmethod
+specializers work; the readers walk the model. The OPERATION PROTOCOL is real too
 (`asdf:perform` over a fixed plan, see "The operation protocol"); there are no fasls and no
 output-translations. Docs: `doc/*/guides/asdf-systems.md`,
-`reference/functions/asdf-{defsystem,load-system,perform,operate}.md`.
+`reference/functions/asdf-{defsystem,load-system,perform,operate,...}.md`.
+
+## The surface is the inventory (h95, 2026-11-04)
+`src/main/resources/am/ik/rontolisp/asdf-exports.txt` (`AsdfExports`): every export of every
+`asdf/*` package in SBCL 2.2.9's ASDF 3.3.1, with home, kind, superclasses and a generic's lambda
+list. 230 externals of `asdf`, 448 rows of sub-packages. Measured before: 39 of the 230 external;
+an absent name stops the whole file at READ (`asdf:load-source-op`: prove; `asdf:*central-registry*`:
+cl-project, caveman2), even on a line never reached. prove, cl-project and caveman2 load since.
+- **One spelling per symbol** (`PackageRegistry`): `asdf` owns every member homed in an `asdf/*`
+  package, external only when `asdf/interface` exports it, so `asdf::relative-pathname` IS
+  `asdf/component:relative-pathname`; a sub-package redirects every member. A member homed in
+  `uiop/*` (`asdf:hostname`, `asdf:compile-file*`, 24 externals) IS uiop's symbol, so `asdf-user`
+  uses both without a shadow and `asdf:*user-cache*` is uiop's nil variable. The names cross-checked:
+  no `asdf`-homed name collides with a uiop export. `asdf.lisp` is not resolved on the interpreter,
+  so it must spell the canonical form: a slot named by an external is `asdf:version`, not
+  `asdf::version`. `*asdf-version*` is internal, as in real ASDF.
+- **Real definitions** are `asdf.lisp`; a public name it defines must be an inventory name
+  (`buildDefinitions` fails otherwise). **Everything else exported gets a stub** from its kind
+  (`AsdfRuntimeLibrary.stubForms`): a function or macro is a `defun` signalling
+  `uiop:not-implemented-error`; a generic is a `defgeneric` with upstream's lambda list and a
+  default method that signals, so a library's method works; a variable is nil; a class or condition
+  has upstream's superclasses. A flattened superclass list keeps only the most specific, as listing
+  a class ahead of its subclass has no linearization. A sub-package-only name reads but is defined
+  only if `asdf.lisp` needs it or a stub class inherits from it (`plan-traversal`). The bundle and
+  program ops stay refusals: classes `operate` signals on, by name.
+- **Who carries what**: the interpreter evaluates `asdf.lisp` and every stub on the first ASDF
+  name. A compile path splices `asdf.lisp`, the stubs the program names with their superclasses, and
+  the registry. It reads the names off a RESOLVED copy (`mentionedMembers`), so a bare
+  `component-name` under `(:use :asdf)` and `asdf/system:system-author` count; a program spelling
+  no ASDF package is not resolved. `asdf.lisp`'s defuns, variables and conditions are prunable
+  (`LibraryDefunPruner`, gated by `mayDefine`); `defclass`, `defgeneric` and `defmethod` are roots. The
+  three defuns a compiler's lowering calls after the pruner ran (`LOWERING_TARGETS`) are not prunable.
+- **Metadata**: `LispSystem.metadata` keeps the options as written and the `.asd` path
+  (`system-source-file`, inherited by a package-inferred sub-system). A `#.` in them is still never
+  evaluated, so the reader answers nil where real ASDF has the value: most of those in a real dist
+  read a README. The record's seventh field; a compile path bakes it only for a program naming a
+  reader or a slot (`METADATA_READERS`), so no other program carries a long description.
+- **`*central-registry*`** is searched first, as real ASDF searches it before the source registry.
+  Interpreter: read at each search, each entry evaluated (`centralRegistryDirs`). Compile path: a
+  top-level `push`/`pushnew` of a directory that folds (`centralRegistryPush`, the `load` path folder)
+  goes on `Ctx.centralRegistry`, and the form stays for the program to read the variable.
+  `*system-definition-search-functions*` is nil and nothing consults it (`.todo/i25`).
+- **`find-system` searches on the interpreter** (`locateSystem`): the `.asd` runs and registers; it
+  downloads nothing and loads no system. A refused name and a file already loading answer nil. The
+  primary's `.asd` is not read again for a sub-system. A compile path answers its baked table.
+- **Conditions**: a load with no `.asd` signals `missing-component`, or `missing-dependency` when a
+  system depends on it (`requiringSystem`), reporting where it looked. An error while a `.asd` loads on
+  the interpreter is a `load-system-definition-error` (`%asdf-call-loading-definition`, real ASDF's
+  `handler-bind`). A compile path's are `path: message` compile errors, as before. A handler naming an
+  ASDF class loads the runtime before it is expanded (`handlesAsdfCondition`: the clause heads only).
+- **Other load spellings at top level** (`loadSystemsNames`): `oos`/`operate` with quoted `load-op` or
+  `load-source-op`, `load-systems`, `load-systems*`, `require-system` splice and are consumed. `test-op`
+  through `oos`/`operate` splices like `test-system` and stays. `make` splices and stays, deciding at run
+  time from `:build-operation`. `load-asd` of a path that folds runs in the build image and is consumed.
+- **`clear-system`** on a compile path: the name leaves `registered-system`, `component-loaded-p` and
+  `registered-systems` until the next `find-system`, which answers a new instance of the baked record;
+  a load loads nothing, so `component-loaded-p` is `t` again from then. Interpreter: the registry forgets,
+  and the next load reruns the file.
+- **Flat model limits** (`.todo/i23`): a `:module` is no instance, so `find-component` matches a child's
+  relative path whole or from a directory boundary and a module itself is not found;
+  `component-name` is the relative path (`"src/m/two"`, real `"two"`).
+- **`component-depends-on`** answers real ASDF's shapes (measured), nothing here reads them.
+- Verified against SBCL 2.2.9's ASDF 3.3.1 with `AsdfMetaobjectsE2eTest`'s `registry/` systems: the
+  same answers on all four backends, the metadata `#.` and the printed package of a symbol aside.
+- Pinned by `AsdfMetaobjectsE2eTest` (every external named, so every stub compiled on all four),
+  `PackageResolverTest#shimPackagesExportEveryExternalOfTheRealLibrary` (every row resolves to its one
+  spelling), `LispEvaluatorAsdfTest` (search, conditions, `clear-system`, `load-asd`),
+  `LoadInlinerTest#aProgramCarriesOnlyTheStubsAndMetadataItNames`.
 
 ## What a `.asd` may contain: it RUNS (h35, 2026-10-30)
 `AsdfSystems.loadAsd` loads the file into an `AsdImage` FORM AT A TIME (`LispReader.readNextForm`,
@@ -26,8 +90,7 @@ the first `.asd` (never for built-in or inline systems), reading with the TARGET
 `find-system` in a file sees what the compile path registered, and a system the file loads is
 registered where the splice reads it. Nothing the build image does reaches the program except
 the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` = `asdf-user`
-(defined on the image's first `.asd`: uses `cl`/`asdf`/`uiop`, shadowing asdf's
-`*user-cache*`, which is a different symbol from uiop's here), `*load-pathname*`/`*load-truename*`
+(defined on the image's first `.asd`: uses `cl`/`asdf`/`uiop`), `*load-pathname*`/`*load-truename*`
 = the file, `*features*` BOUND to its current value, the asdf runtime loaded.
 - **Recognized by SHAPE, before anything runs** (the plan reads them; unchanged from the data
   parse): `defsystem` in any package spelling (the recording operator: `parseDefsystem` on the RAW
@@ -38,8 +101,8 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
   `(:compile-toplevel)`-only one is dropped (the interpreter's own `eval-when` runs every body,
   so this is decided here); a top-level `#.` marker of either kind is dropped (the ASDF version
   guard: evaluated, it refused bordeaux-threads, fiveam, in-nomine, split-sequence and
-  static-vectors in the h35 prototype -- there is no `asdf:asdf-version` here).
-- **`asdf:*asdf-version*` is `"3.3.7"`** (asdf.lisp, uiop's contract version; 2026-10-31). A
+  static-vectors in the h35 prototype, when `asdf:asdf-version` did not exist here).
+- **`asdf::*asdf-version*` is `"3.3.7"`** (asdf.lisp, uiop's contract version; 2026-10-31). A
   `.asd` evaluating a version gate finds a current ASDF: lisp-binary's computes the version through
   `find-symbol` and, below 3.1.5 (or "1.0" when unbound), pushes `:lisp-binary-upgrade-asdf` and
   loads its bundled 14k-line `asdf.lisp`, which refuses the implementation. Pin:
@@ -52,9 +115,9 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
 - **Everything else is EVALUATED** in the image (`AsdLoad.eval`, `#.` markers resolved first; one
   holding an unreadable `#.` fails the load naming it): the package header (a conditional
   `defpackage` included -- cl-csv, function-cache), `warn` (to `*error-output*`; cl-containers),
-  `find-system` (answers REGISTERED + built-in systems only, never searches -- so cl-containers'
-  optional `asdf-system-connections` probe answers nil and the warning runs, as on a fresh
-  Quicklisp), `defparameter`/`defun`/`defvar`, `error` (an implementation guard fails the load
+  `find-system` (searches like a load, downloading nothing -- so cl-containers' optional
+  `asdf-system-connections` probe answers nil and the warning runs unless the search path holds it,
+  as on a fresh Quicklisp), `defparameter`/`defun`/`defvar`, `error` (an implementation guard fails the load
   with the library's own message; the compile path wraps it with the `.asd` path), a feature push
   however computed.
 - **A push is the FILE's declaration**: `*features*` is bound for the load, so the push is undone
@@ -79,9 +142,8 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
   `evalDefsystem` hands it to the scope (`AsdImage.open`'s recorder), parsed with the same
   features/classes/earlier loads -- but from the RESOLVED form (its symbols already homed in the
   file's package).
-- Errors: interpreter -- the condition propagates unwrapped (a handler around `load-system` sees
-  the library's own); compile path -- `LoadInliner` wraps a non-parse exception as
-  `<asd path>: message`.
+- Errors: interpreter -- `load-system-definition-error` around the library's own, as real ASDF;
+  compile path -- `LoadInliner` wraps a non-parse exception as `<asd path>: message`.
 
 ### Options
 - `:components` in ASDF's PLAN order: definition order, each component after its `:depends-on`
@@ -129,9 +191,9 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
   :source-control :mailto :long-name :properties` (arnesi's free-form property list), plus
   `:in-order-to`/`:perform` and the `program-op` trio `:entry-point :build-operation
   :build-pathname`. It is the CLOSED list, so
-  an option added later is load-bearing by default. `:version` is on it even though
-  `asdf:component-version` reads it BACK: a plain STRING is recorded as written, every other
-  spelling answers nil.
+  an option added later is load-bearing by default. The metadata among them is recorded AS WRITTEN
+  for its readers (`LispSystem.metadata`), an option holding a marker being absent; `:version`
+  records a plain STRING, every other spelling answers nil.
 
 ### Options around the compile: `:around-compile` (h94, 2026-11-04)
 ASDF stores the form and calls it around `compile-file`, or around the source `load` for
@@ -272,7 +334,7 @@ iff declared) is the whole marker. All rules in `AsdfSystems`:
   (`AsdfSystems.checkIgnoredLoadOptions`): `:force`/`:verbose`/`:silent` have nothing to drive
   (no fasl cache, a second load is a no-op), and rejecting them would make lack's
   `find-package-or-load` unloadable. The SHAPE is still checked.
-- **Search order**: dir of the loading file, then `--system-path`, then
+- **Search order**: `asdf:*central-registry*`, dir of the loading file, then `--system-path`, then
   `RONTOLISP_SOURCE_REGISTRY`, plus a `ql:quickload`'s download cache ([dists.md](dists.md)).
   `RontoLispCli.systemPath()` parses the `File.pathSeparator`-joined lists. The `asdf` package is
   seeded in `PackageRegistry`.
@@ -315,8 +377,8 @@ Quoted data is opaque and a `let`/`lambda` rebinding never triggers substitution
 One Lisp source `eval/asdf.lisp` (`eval.AsdfRuntimeLibrary`) defines the class family +
 `find-system` + the readers + `system-source-directory`/`system-relative-pathname`/
 `component-pathname` (designator-accepting, answering NAMESTRINGS, `.kb/pathnames.md`) +
-`registered-systems` + `*user-cache*`. The one per-backend seam is
-`%asdf-system-record`/`%asdf-system-names`; a record is `(CLASS DIR FILES DEPS LOADED-P VERSION)`
+`registered-systems`. The one per-backend seam is
+`%asdf-system-record`/`%asdf-system-names`; a record is `(CLASS DIR FILES DEPS LOADED-P VERSION META)`
 with FILES `(RELATIVE . RESOLVED)` pairs.
 - **Interpreter**: Java built-ins over the live insertion-ordered `asdfSystems`/`loadedSystems`;
   a built-in shim system answers a record even before it loads. `asdf.lisp` loads lazily
@@ -330,7 +392,8 @@ with FILES `(RELATIVE . RESOLVED)` pairs.
   compile seam. The `Jvm/WasmExprCompiler` `ASDF_LOAD_SYSTEM`/`QL_QUICKLOAD`/`ASDF_FIND_SYSTEM`
   cases compile an ordinary call when the defun exists (`ctx.functions.containsKey`), keeping the
   stubs only as the no-pipeline fallback.
-- `asdf.lisp` needs its `resource-config.json` entry (`AsdfRuntimeLibrary` `typeReachable`).
+- `asdf.lisp` needs its `resource-config.json` entry (`AsdfRuntimeLibrary` `typeReachable`), and so
+  does `asdf-exports.txt` (`AsdfExports`).
 
 ### test-op
 - `parseDefsystem` records `:perform (test-op (o c) BODY...)` into `LispSystem.testOp` (body
@@ -354,13 +417,15 @@ with FILES `(RELATIVE . RESOLVED)` pairs.
   `AsdfSystemsTest`'s test-op group, `LoadInlinerTest.nestedLoadSystemOfASplicedSystemAnswersNilOnJvm`.
 
 ## The operation protocol
-`asdf.lisp` defines real ASDF's operation classes (`operation`; `prepare-op`, `compile-op`,
-`load-op`, `test-op` directly under it -- ASDF's `downward-operation` & co. are not modelled),
+`asdf.lisp` defines real ASDF's operation classes with their hierarchy (`operation`, the
+propagation mixins `downward-operation` & co., `prepare-op`, `compile-op`, `load-op`,
+`load-source-op`, `prepare-source-op`, `test-op`, `define-op`, `build-op`),
 `make-operation` (one instance per class), the generics `perform`, `input-files`,
 `output-files`, `source-file-type` and `operation-done-p` (default `t`; arnesi's `clean-op`
-adds a method), and `operate` (load-op -> `load-system`, test-op -> `test-system`, anything
-else SIGNALS: there is nothing for compile-op alone to produce). `compile-bundle-op` is a bare
-subclass of `operation` (arnesi's `make-single-fasl` names it; `operate` refuses it). Default
+adds a method), and `operate` (load-op and load-source-op -> `load-system`, test-op ->
+`test-system`, build-op -> `make`, anything else SIGNALS: there is nothing for compile-op alone
+to produce). `compile-bundle-op` is a stub class (arnesi's `make-single-fasl` names it; `operate`
+refuses it). Default
 methods are ASDF 3.3.1's for the classes the model has: load-op on a `cl-source-file` loads the
 source (`%asdf-load-component`, the seam), compile-op on a source file and everything on a
 parent component is a no-op, any other op on a source file signals, test-op on a system runs the
@@ -405,13 +470,11 @@ recorded body. A designator op (`'asdf:load-op`) dispatches through a `symbol` m
   component between two definitions sees both. A top-level `await` inside a group is refused on
   wasm (`WasmAsyncEmit`), and so is a top-level local read across a boundary
   (`WasmToplevelEmit`): a thunk cannot suspend the top level.
-- **Packages**: the protocol names are asdf externals; `asdf/interface` and `asdf-utilities` are
-  nicknames of `asdf` (they ARE that package in ASDF 3); the other ASDF 3.3.1 internal packages
-  (`asdf/component`, `asdf/action`, ... -- `PackageRegistry.ASDF_SUB_PACKAGES`) are packages whose
-  members are import redirects into `asdf`, listing only the members asdf exports here (the home
-  of each measured against SBCL 2.2.9's ASDF 3.3.1); `asdf/defsystem` nicknames
-  `asdf/parse-defsystem`. No `asdf/user`: its use list would make `*user-cache*` (asdf's own here,
-  uiop's in ASDF) a conflict.
+- **Packages**: `asdf/interface` and `asdf-utilities` are nicknames of `asdf` (they ARE that package
+  in ASDF 3); the other ASDF 3.3.1 internal packages (`asdf/component`, `asdf/action`, ...) are
+  packages whose members are import redirects ("The surface is the inventory"); `asdf/defsystem`
+  nicknames `asdf/parse-defsystem`, `asdf-action` `asdf/action`. No `asdf/user`: `asdf-user` is defined
+  on the image's first `.asd`.
 - **Measured consumers** (interpreter, 2026-10-30): `(ql:quickload "fiveam")` loads unpatched
   through the REAL asdf-flv, and `*suite*` is file-local exactly as on SBCL 2.2.9 (a test in a
   file with no `in-suite` lands in the global suite; the global `*suite*` is untouched after the

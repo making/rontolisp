@@ -1072,6 +1072,13 @@ categories:
       - { slug: asdf-test-system, name: "asdf:test-system" }
       - { slug: asdf-operate, name: "asdf:operate" }
       - { slug: asdf-perform, name: "asdf:perform" }
+      - { slug: asdf-oos, name: "asdf:oos" }
+      - { slug: asdf-load-asd, name: "asdf:load-asd" }
+      - { slug: asdf-clear-system, name: "asdf:clear-system" }
+      - { slug: asdf-map-systems, name: "asdf:map-systems" }
+      - { slug: asdf-find-component, name: "asdf:find-component" }
+      - { slug: asdf-system-description, name: "asdf:system-description" }
+      - { slug: asdf-central-registry, name: "asdf:*central-registry*" }
       - { slug: asdf-find-system, name: "asdf:find-system" }
       - { slug: asdf-registered-systems, name: "asdf:registered-systems" }
       - { slug: asdf-system-relative-pathname, name: "asdf:system-relative-pathname" }

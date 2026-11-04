@@ -1,0 +1,1 @@
+(defun late-fn () :late)

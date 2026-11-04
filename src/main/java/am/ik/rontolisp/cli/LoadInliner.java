@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.SplicedComponentGroups;
@@ -256,9 +257,9 @@ public final class LoadInliner {
 		// %asdf-registry% (AsdfRuntimeLibrary) is emitted from them, and the emitted
 		// program must be deterministic (.kb/emitted-output-determinism.md).
 		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new java.util.LinkedHashMap<>(), new HashMap<>(),
-				new java.util.LinkedHashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, dists,
-				new java.util.concurrent.atomic.AtomicInteger(), baseDir, standards, new BuildImage(features),
-				new Reading());
+				new java.util.LinkedHashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), new ArrayList<>(),
+				features, dists, new java.util.concurrent.atomic.AtomicInteger(), baseDir, standards,
+				new BuildImage(features), new Reading());
 		FormSource program = entry.open(ctx, result);
 		if (entryFile == null) {
 			expandInto(program, result, ctx, new Origin(baseDir, null, null));
@@ -289,24 +290,32 @@ public final class LoadInliner {
 	 * the {@code register-system-packages} package-to-system map (what a package-inferred
 	 * system reads when it derives a dependency), the already-loaded systems, the
 	 * in-progress system stack (cycle guard) and the (mutable) {@code .asd} search path,
-	 * which {@code ql:quickload} extends with the downloaded cache directories -- the
-	 * reader features for loaded files, the dist downloader and how many
-	 * {@code ql:quickload}s are splicing (while one is, a system no search directory
-	 * holds is downloaded where it is first needed), the entry source's directory (the
-	 * base every path in the spliced program is resolved against once this pass has
-	 * flattened it), and the build image {@code .asd} files are loaded into.
+	 * which {@code ql:quickload} extends with the downloaded cache directories, what the
+	 * program pushed on {@code asdf:*central-registry*}, searched first -- the reader
+	 * features for loaded files, the dist downloader and how many {@code ql:quickload}s
+	 * are splicing (while one is, a system no search directory holds is downloaded where
+	 * it is first needed), the entry source's directory (the base every path in the
+	 * spliced program is resolved against once this pass has flattened it), and the build
+	 * image {@code .asd} files are loaded into.
 	 */
 	private record Ctx(SourceLoader loader, Deque<String> loading, Set<String> provided,
 			Map<String, AsdfSystems.LispSystem> systems, Map<String, String> systemPackages, Set<String> loadedSystems,
-			Deque<String> loadingSystems, List<String> systemPath, Features features, DistClient dists,
-			java.util.concurrent.atomic.AtomicInteger quickloadDepth, @Nullable String entryBaseDir,
+			Deque<String> loadingSystems, List<String> systemPath, List<String> centralRegistry, Features features,
+			DistClient dists, java.util.concurrent.atomic.AtomicInteger quickloadDepth, @Nullable String entryBaseDir,
 			SourceStandards standards, BuildImage buildImage, Reading reading) {
 
 		/** This state, its registries shared, reading with {@code features}. */
 		Ctx readingWith(Features features) {
 			return new Ctx(this.loader, this.loading, this.provided, this.systems, this.systemPackages,
-					this.loadedSystems, this.loadingSystems, this.systemPath, features, this.dists, this.quickloadDepth,
-					this.entryBaseDir, this.standards, this.buildImage, this.reading);
+					this.loadedSystems, this.loadingSystems, this.systemPath, this.centralRegistry, features,
+					this.dists, this.quickloadDepth, this.entryBaseDir, this.standards, this.buildImage, this.reading);
+		}
+
+		/** Where a {@code .asd} is searched for, after a system's own directory. */
+		List<String> searchPath() {
+			List<String> path = new ArrayList<>(this.centralRegistry);
+			path.addAll(this.systemPath);
+			return path;
 		}
 	}
 
@@ -447,6 +456,24 @@ public final class LoadInliner {
 				out.add(quotedSymbol(systemName));
 				continue;
 			}
+			// The other spellings of a load: oos, operate with load-op, load-systems,
+			// require-system.
+			List<String> systemNames = AsdfSystems.loadSystemsNames(form);
+			if (systemNames != null) {
+				for (String name : systemNames) {
+					spliceSystem(name, out, ctx, baseDir);
+					out.add(quotedSymbol(name));
+				}
+				continue;
+			}
+			String madeSystem = AsdfSystems.makeSystemName(form);
+			if (madeSystem != null) {
+				// Spliced, and the call stays: at run time it answers what the system's
+				// :build-operation asks for.
+				spliceSystem(madeSystem, out, ctx, baseDir);
+				out.add(form);
+				continue;
+			}
 			String testSystemName = AsdfSystems.testSystemName(form);
 			if (testSystemName != null) {
 				// A top-level literal (asdf:test-system NAME) splices the system AND its
@@ -519,6 +546,25 @@ public final class LoadInliner {
 			// idiom builds it from this file's load context, which is known.
 			PathFolder folder = arg -> CompileTimePathnameFolder.foldLoadPath(arg, ctx.systems(), origin.pathname(),
 					origin.truename());
+			LispVal asdPath = AsdfSystems.loadAsdPath(form);
+			String foldedAsd = asdPath == null ? null : folder.fold(asdPath);
+			if (foldedAsd != null) {
+				// A definition file named here is read while splicing, as load-system
+				// reads
+				// one; any other path stays the call the run-time seam refuses.
+				loadAsdFile(SourceLoader.resolve(baseDir, foldedAsd), ctx);
+				out.add(LispTrue.INSTANCE);
+				continue;
+			}
+			LispVal pushedDir = AsdfSystems.centralRegistryPush(form);
+			String foldedDir = pushedDir == null ? null : folder.fold(pushedDir);
+			if (foldedDir != null && !ctx.centralRegistry().contains(foldedDir)) {
+				// What a compile path reads of the variable, a literal push as
+				// load-system
+				// reads a literal name. The form stays: the program can read the
+				// variable.
+				ctx.centralRegistry().add(0, foldedDir);
+			}
 			RequireForm require = requireForm(form, folder);
 			String rawPath = null;
 			if (require != null) {
@@ -745,7 +791,7 @@ public final class LoadInliner {
 		}
 		AsdfSystems.LispSystem located = ctx.systems().get(name);
 		if (located == null) {
-			List<String> searchDirs = new ArrayList<>();
+			List<String> searchDirs = new ArrayList<>(ctx.centralRegistry());
 			searchDirs.add(requestBaseDir == null ? "" : requestBaseDir);
 			searchDirs.addAll(ctx.systemPath());
 			AsdfSystems.LocatedAsd asd = locateAsd(name, searchDirs, ctx);
@@ -778,7 +824,7 @@ public final class LoadInliner {
 				throw new IllegalStateException(asd.path() + " does not define system '" + name + "'");
 			}
 		}
-		AsdfSystems.LispSystem system = AsdfSystems.resolveWeakDependencies(located, ctx.systems(), ctx.systemPath(),
+		AsdfSystems.LispSystem system = AsdfSystems.resolveWeakDependencies(located, ctx.systems(), ctx.searchPath(),
 				ctx.loader());
 		ctx.loadingSystems().addLast(name);
 		// A system that declares :rontolisp-features has its OWN component files read
@@ -855,6 +901,33 @@ public final class LoadInliner {
 			// have to be part of the program -- splicing it with clack is what puts
 			// them there.
 			spliceSystem(LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM, out, ctx, requestBaseDir);
+		}
+	}
+
+	/**
+	 * {@code asdf:load-asd} of a file named at compile time: its definitions run in the
+	 * build image and replace what the registry holds under their names. A file that
+	 * cannot be read defines nothing, as in real ASDF.
+	 */
+	private static void loadAsdFile(String path, Ctx ctx) {
+		AsdfSystems.LocatedAsd asd = AsdfSystems.readAsd(path, ctx.loader());
+		if (asd == null) {
+			return;
+		}
+		List<String> searchDirs = new ArrayList<>(ctx.centralRegistry());
+		String parent = SourceLoader.parentDir(path);
+		searchDirs.add(parent == null ? "" : parent);
+		searchDirs.addAll(ctx.systemPath());
+		try {
+			AsdfSystems.loadAsd(asd.source(), asd.path(), ctx.features(), ctx.systemPackages(),
+					ctx.buildImage().image(ctx, searchDirs).asdImage(),
+					defined -> ctx.systems().put(defined.name(), defined));
+		}
+		catch (IllegalStateException | LispReadException ex) {
+			throw ex;
+		}
+		catch (RuntimeException ex) {
+			throw new IllegalStateException(asd.path() + ": " + ex.getMessage(), ex);
 		}
 	}
 

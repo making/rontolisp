@@ -215,7 +215,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## Ecosystem and tooling
 
-- [asdf.md](asdf.md) -- the limited `asdf:defsystem`/`load-system`/`test-system` subset, a `.asd`
+- [asdf.md](asdf.md) -- real ASDF's whole export list over the limited `asdf:defsystem`/`load-system`/`test-system` subset, a `.asd`
   run as Lisp in an image (the compile paths' build image) with its `defsystem` forms parsed as
   data, the measured decision for that over a data-only parse, and the operation protocol
   (`asdf:perform` around every component load, the compile paths' thunks)

@@ -68,7 +68,7 @@ public final class BuiltinSystems {
 					features -> ShimLibraries.forms(LispNames.CLACK_HANDLER_REACTOR_DOTTED_SYSTEM, features)),
 			// The uiop package stub is seeded in PackageRegistry; the system contributes
 			// no forms (real libraries only name it so its symbols resolve).
-			Map.entry("uiop", features -> List.of()),
+			Map.entry("uiop", features -> List.of()), Map.entry("asdf", features -> List.of()),
 			// The objc and cocoa packages are seeded in PackageRegistry, and objc.lisp
 			// loads on the first use of one of their names (ObjcLibrary): a program
 			// written for LispWorks' Objective-C interface that asks for the system gets

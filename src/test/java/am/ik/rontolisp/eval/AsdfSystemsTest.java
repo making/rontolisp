@@ -1430,12 +1430,12 @@ class AsdfSystemsTest {
 		assertThatThrownBy(() -> loadAsd("""
 				(defsystem :lib
 				  :components ((:file "main")
-				               (:file "bundle" :if-feature (#.(if (version< "3.1.8" (asdf-version)) :or :and)))))""",
-				"proj/lib.asd", Features.INTERPRETER))
+				               (:file "bundle" :if-feature (#.(if (no-such-operator) :or :and)))))""", "proj/lib.asd",
+				Features.INTERPRETER))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("proj/lib.asd")
 			.hasMessageContaining(":components")
-			.hasMessageContaining("VERSION<");
+			.hasMessageContaining("NO-SUCH-OPERATOR");
 	}
 
 	@Test

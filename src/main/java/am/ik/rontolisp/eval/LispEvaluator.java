@@ -572,6 +572,14 @@ public final class LispEvaluator {
 	/** Whether the asdf runtime (asdf.lisp -- the component metaobjects) is loaded. */
 	private boolean asdfRuntimeLoaded;
 
+	/** The {@code .asd} files loading now, which a search must not load again. */
+	private final Set<String> asdFilesLoading = new java.util.HashSet<>();
+
+	/** The system whose dependency the next {@link #loadSystemNow} is, if any. */
+	@Nullable private String requiringSystem;
+
+	private static final String CENTRAL_REGISTRY = PackageRegistry.qualify(LispNames.ASDF_PKG, "*CENTRAL-REGISTRY*");
+
 	/** The systems currently being loaded, for {@code :depends-on} cycle detection. */
 	private final java.util.Deque<String> loadingSystems = new java.util.ArrayDeque<>();
 
@@ -4151,6 +4159,30 @@ public final class LispEvaluator {
 		// The interpreter's halves of the operation protocol's seams (asdf.lisp defines
 		// asdf:perform, asdf:operate and asdf:test-system over them): loading one
 		// component, and the test-op wiring a system's .asd recorded.
+		// And what moves the registry: a find-system search, clear-system, load-asd.
+		String locateSystemName = "%ASDF-LOCATE-SYSTEM";
+		this.globalEnv.defineFunction(locateSystemName, new LispFunction(locateSystemName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(locateSystemName + " expects a system name string");
+			}
+			return locateSystem(key.value());
+		}));
+		String clearSystemName = "%ASDF-CLEAR-SYSTEM";
+		this.globalEnv.defineFunction(clearSystemName, new LispFunction(clearSystemName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(clearSystemName + " expects a system name string");
+			}
+			this.asdfSystems.remove(key.value());
+			this.loadedSystems.remove(key.value());
+			return LispNil.INSTANCE;
+		}));
+		String loadAsdName = "%ASDF-LOAD-ASD";
+		this.globalEnv.defineFunction(loadAsdName, new LispFunction(loadAsdName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString path)) {
+				throw new LispEvalException(loadAsdName + " expects a namestring");
+			}
+			return loadAsdFile(path.value());
+		}));
 		String loadComponentName = "%ASDF-LOAD-COMPONENT";
 		this.globalEnv.defineFunction(loadComponentName, new LispFunction(loadComponentName, args -> {
 			if (args.size() != 2 || !(args.get(0) instanceof LispString system)
@@ -5789,7 +5821,7 @@ public final class LispEvaluator {
 				return;
 			}
 			this.asdfRuntimeLoaded = true;
-			for (LispVal form : AsdfRuntimeLibrary.classForms()) {
+			for (LispVal form : AsdfRuntimeLibrary.interpreterForms()) {
 				eval(form, this.globalEnv);
 			}
 		}
@@ -5804,6 +5836,151 @@ public final class LispEvaluator {
 		if (!this.asdfRuntimeLoaded && AsdfRuntimeLibrary.mentionsComponentClass(form)) {
 			ensureAsdfRuntimeLoaded();
 		}
+	}
+
+	/**
+	 * The handler half of the lazy trigger: a handler's type test is built from the
+	 * classes known when the form is expanded, so an ASDF condition it names has to exist
+	 * before its body loads anything.
+	 */
+	private void ensureAsdfConditionsFor(LispCons form) {
+		if (!this.asdfRuntimeLoaded && AsdfRuntimeLibrary.handlesAsdfCondition(form)) {
+			ensureAsdfRuntimeLoaded();
+		}
+	}
+
+	/**
+	 * What {@code asdf:*central-registry*} names, as directories. Each entry is evaluated
+	 * and its value is a pathname designator, as real ASDF's search takes it, so a
+	 * program may push {@code '*default-pathname-defaults*}.
+	 */
+	private List<String> centralRegistryDirs() {
+		if (!this.asdfRuntimeLoaded) {
+			return List.of();
+		}
+		LispVal registry = currentSpecialValue(CENTRAL_REGISTRY);
+		List<String> dirs = new java.util.ArrayList<>();
+		for (LispVal cell = registry; cell instanceof LispCons cons; cell = cons.cdr()) {
+			String dir = PathnameOps.designatorNamestring(eval(cons.car(), this.globalEnv));
+			if (dir != null) {
+				dirs.add(dir);
+			}
+		}
+		return dirs;
+	}
+
+	/** The search path behind a system's own directory: the program's first. */
+	private List<String> systemSearchPath() {
+		List<String> path = new java.util.ArrayList<>(centralRegistryDirs());
+		path.addAll(this.systemPath);
+		return path;
+	}
+
+	/**
+	 * {@code asdf:find-system} of a system nothing has registered: searches like a load,
+	 * downloading nothing, and registers what the {@code .asd} defines. A file already
+	 * loading asks about itself: it has not defined the system yet.
+	 * @return the system's record, or nil when no {@code .asd} defines it
+	 */
+	private LispVal locateSystem(String name) {
+		if (ShimLibraries.refusalReason(name) != null) {
+			return LispNil.INSTANCE;
+		}
+		int slash = name.indexOf('/');
+		String primary = slash < 0 ? name : name.substring(0, slash);
+		if (!this.asdfSystems.containsKey(primary)) {
+			List<String> searchDirs = new java.util.ArrayList<>(centralRegistryDirs());
+			String baseDir = this.loadDirStack.peekLast();
+			searchDirs.add(baseDir == null ? "" : baseDir);
+			searchDirs.addAll(this.systemPath);
+			AsdfSystems.LocatedAsd asd;
+			try {
+				asd = AsdfSystems.locate(name, searchDirs, this.sourceLoader);
+			}
+			catch (AsdfSystems.SystemNotFoundException ex) {
+				return LispNil.INSTANCE;
+			}
+			if (this.asdFilesLoading.contains(asd.path())) {
+				return LispNil.INSTANCE;
+			}
+			AsdLoadScope scope = this.asdLoads.peekLast();
+			if (scope != null && scope.isOwnForm()) {
+				scope.loadOutsideTheFile(() -> loadAsdDefinitions(primary, asd,
+						defined -> this.asdfSystems.putIfAbsent(defined.name(), defined)));
+			}
+			else {
+				loadAsdDefinitions(primary, asd, defined -> this.asdfSystems.putIfAbsent(defined.name(), defined));
+			}
+		}
+		AsdfSystems.LispSystem system = this.asdfSystems.get(name);
+		if (system == null && slash >= 0) {
+			try {
+				AsdfSystems.inferPackageInferredSystems(name, this.asdfSystems, this.asdfSystemPackages,
+						this.sourceLoader, this.features);
+			}
+			catch (IllegalStateException ex) {
+				// The name points at no file of the primary system: nothing defines it.
+				return LispNil.INSTANCE;
+			}
+			system = this.asdfSystems.get(name);
+		}
+		return system == null ? LispNil.INSTANCE
+				: AsdfRuntimeLibrary.recordFor(system, this.loadedSystems.contains(name));
+	}
+
+	/**
+	 * {@code asdf:load-asd}: loads the definitions of one file, replacing what the
+	 * registry holds under their names.
+	 * @return the names defined, nil for a file that cannot be read: it defines nothing
+	 */
+	private LispVal loadAsdFile(String path) {
+		String baseDir = this.loadDirStack.peekLast();
+		AsdfSystems.LocatedAsd asd = AsdfSystems.readAsd(SourceLoader.resolve(baseDir, path), this.sourceLoader);
+		if (asd == null) {
+			return LispNil.INSTANCE;
+		}
+		List<LispVal> defined = new java.util.ArrayList<>();
+		String name = asd.path().substring(asd.path().lastIndexOf('/') + 1).replaceFirst("\\.asd$", "");
+		loadAsdDefinitions(name, asd, system -> {
+			this.asdfSystems.put(system.name(), system);
+			defined.add(new LispString(system.name()));
+		});
+		return consList(defined);
+	}
+
+	/**
+	 * Loads a {@code .asd} into this image -- the program's own, as real ASDF loads it
+	 * into the image that then loads the system -- under real ASDF's handler, so an error
+	 * while the file loads is a {@code load-system-definition-error}.
+	 */
+	private void loadAsdDefinitions(String name, AsdfSystems.LocatedAsd asd,
+			java.util.function.Consumer<AsdfSystems.LispSystem> register) {
+		ensureAsdfRuntimeLoaded();
+		boolean added = this.asdFilesLoading.add(asd.path());
+		try {
+			LispFunction thunk = new LispFunction("%ASDF-LOAD-DEFINITION", args -> {
+				AsdfSystems.loadAsd(asd.source(), asd.path(), this.features, this.asdfSystemPackages, asdImage(),
+						register);
+				return LispNil.INSTANCE;
+			});
+			applyGlobally(this.globalEnv.lookupFunction("%ASDF-CALL-LOADING-DEFINITION"),
+					List.of(new LispString(name), new LispString(asd.path()), thunk));
+		}
+		finally {
+			if (added) {
+				this.asdFilesLoading.remove(asd.path());
+			}
+		}
+	}
+
+	/**
+	 * Signals what real ASDF signals for a system no {@code .asd} defines:
+	 * {@code missing-dependency} when a system depends on it, else
+	 * {@code missing-component}.
+	 */
+	private LispVal signalMissingSystem(String name, @Nullable String requiredBy, String detail) {
+		return applyGlobally(this.globalEnv.lookupFunction("%ASDF-SIGNAL-MISSING"), List.of(new LispString(name),
+				requiredBy == null ? LispNil.INSTANCE : new LispString(requiredBy), new LispString(detail)));
 	}
 
 	/**
@@ -6150,6 +6327,10 @@ public final class LispEvaluator {
 	}
 
 	private void loadSystemNow(String name) {
+		// Whose dependency this is, only for this very load: a file of the system that
+		// loads another system is not depending on it.
+		String requiredBy = this.requiringSystem;
+		this.requiringSystem = null;
 		if (this.loadedSystems.contains(name)) {
 			return;
 		}
@@ -6157,8 +6338,9 @@ public final class LispEvaluator {
 		// evaluate: a loaded file may defmethod on asdf:system (rove's run-system).
 		ensureAsdfRuntimeLoaded();
 		if (this.loadingSystems.contains(name)) {
-			throw new LispEvalException("Circular system :depends-on detected: "
-					+ String.join(" -> ", this.loadingSystems) + " -> " + name);
+			throw LispEvalException.ofClass(PackageRegistry.qualify(LispNames.ASDF_PKG, "CIRCULAR-DEPENDENCY"),
+					"Circular system :depends-on detected: " + String.join(" -> ", this.loadingSystems) + " -> "
+							+ name);
 		}
 		String refusal = ShimLibraries.refusalReason(name);
 		if (refusal != null) {
@@ -6199,17 +6381,23 @@ public final class LispEvaluator {
 		}
 		AsdfSystems.LispSystem located = this.asdfSystems.get(name);
 		if (located == null) {
-			List<String> searchDirs = new java.util.ArrayList<>();
+			List<String> searchDirs = new java.util.ArrayList<>(centralRegistryDirs());
 			String baseDir = this.loadDirStack.peekLast();
 			searchDirs.add(baseDir == null ? "" : baseDir);
 			searchDirs.addAll(this.systemPath);
-			AsdfSystems.LocatedAsd asd = locateAsd(name, searchDirs);
-			// The .asd runs in this image -- the program's own, as real ASDF loads it
-			// into the image that then loads the system -- and each system it defines is
-			// registered the moment it is defined. .asd forms read upcased like all
-			// source; AsdfSystems matches clause keywords case-insensitively and
-			// coerce-names (downcases) system designators.
-			AsdfSystems.loadAsd(asd.source(), asd.path(), this.features, this.asdfSystemPackages, asdImage(),
+			AsdfSystems.LocatedAsd asd = null;
+			try {
+				asd = locateAsd(name, searchDirs);
+			}
+			catch (AsdfSystems.SystemNotFoundException ex) {
+				signalMissingSystem(name, requiredBy, ex.detail());
+				return;
+			}
+			// Each system the .asd defines is registered the moment it is defined. .asd
+			// forms read upcased like all source; AsdfSystems matches clause keywords
+			// case-insensitively and coerce-names (downcases) system designators.
+			int slash = name.indexOf('/');
+			loadAsdDefinitions(slash < 0 ? name : name.substring(0, slash), asd,
 					defined -> this.asdfSystems.putIfAbsent(defined.name(), defined));
 			located = this.asdfSystems.get(name);
 			if (located == null) {
@@ -6223,8 +6411,8 @@ public final class LispEvaluator {
 				throw new LispEvalException(asd.path() + " does not define system '" + name + "'");
 			}
 		}
-		AsdfSystems.LispSystem system = AsdfSystems.resolveWeakDependencies(located, this.asdfSystems, this.systemPath,
-				this.sourceLoader);
+		AsdfSystems.LispSystem system = AsdfSystems.resolveWeakDependencies(located, this.asdfSystems,
+				systemSearchPath(), this.sourceLoader);
 		this.loadingSystems.addLast(name);
 		// A dependency's .asd lookup resolves against the system's base directory, not
 		// the caller's.
@@ -6234,9 +6422,11 @@ public final class LispEvaluator {
 			// so they precede the system's own dependencies (they are not sideway
 			// dependencies of it -- component-sideway-dependencies never lists them).
 			for (String dependency : system.defsystemDependsOn()) {
+				this.requiringSystem = name;
 				loadSystem(dependency);
 			}
 			for (String dependency : system.dependsOn()) {
+				this.requiringSystem = name;
 				loadSystem(dependency);
 			}
 			// Real ASDF's action order for a source tree, each action an asdf:perform
@@ -6339,10 +6529,7 @@ public final class LispEvaluator {
 			eval(consList(List.of(new LispSymbol(PackageRegistry.qualify("CL", LispNames.DEFPACKAGE)),
 					new LispSymbol("#:" + LispNames.ASDF_USER_PKG),
 					consList(List.of(new LispSymbol(":USE"), new LispSymbol("#:CL"),
-							new LispSymbol("#:" + LispNames.ASDF_PKG), new LispSymbol("#:UIOP"))),
-					consList(
-							List.of(new LispSymbol(":SHADOWING-IMPORT-FROM"), new LispSymbol("#:" + LispNames.ASDF_PKG),
-									new LispSymbol("#:" + LispNames.ASDF_USER_CACHE))))));
+							new LispSymbol("#:" + LispNames.ASDF_PKG), new LispSymbol("#:UIOP"))))));
 		}
 	}
 
@@ -8114,8 +8301,8 @@ public final class LispEvaluator {
 			value = this.globalEnv.lookupOrNull(name);
 		}
 		if (value == null && !this.asdfRuntimeLoaded && AsdfRuntimeLibrary.definesName(name)) {
-			// asdf:*user-cache* is a variable, so the asdf runtime's lazy load must be
-			// reachable from a variable read too.
+			// asdf:*central-registry* is a variable, so the asdf runtime's lazy load must
+			// be reachable from a variable read too.
 			ensureAsdfRuntimeLoaded();
 			value = this.globalEnv.lookupOrNull(name);
 		}
@@ -9349,6 +9536,7 @@ public final class LispEvaluator {
 									break dispatch;
 								case LispNames.HANDLER_CASE:
 									ensureWitLoadedForConditionClass(cons);
+									ensureAsdfConditionsFor(cons);
 									ensureConditionReportRuntimeLoaded();
 									if (cons.cdr() instanceof LispCons protectedForm) {
 										noteInterruptHandler(protectedForm.cdr());
@@ -9357,6 +9545,7 @@ public final class LispEvaluator {
 									break frame;
 								case LispNames.HANDLER_BIND:
 									ensureWitLoadedForConditionClass(cons);
+									ensureAsdfConditionsFor(cons);
 									ensureConditionReportRuntimeLoaded();
 									ensureRestartRuntimeLoaded();
 									if (cons.cdr() instanceof LispCons bindings) {

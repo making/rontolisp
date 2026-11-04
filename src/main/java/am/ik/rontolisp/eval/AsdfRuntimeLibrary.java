@@ -5,17 +5,25 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import am.ik.rontolisp.AsdfExports;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispPackageException;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
@@ -45,11 +53,18 @@ import org.jspecify.annotations.Nullable;
  * spliced component ({@code compiler.SplicedComponentGroups}).
  *
  * <p>
- * A record is {@code (CLASS DIR FILES DEPS LOADED-P VERSION)}: the component class
+ * A record is {@code (CLASS DIR FILES DEPS LOADED-P VERSION META)}: the component class
  * keyword ({@code :system} / {@code :package-inferred-system}), the source directory with
  * a trailing slash, the component files as {@code (RELATIVE . RESOLVED)} namestring pairs
- * in load order, the {@code :depends-on} names, whether the system is loaded, and the
- * declared {@code :version} string (nil when it declared none as a plain string).
+ * in load order, the {@code :depends-on} names, whether the system is loaded, the
+ * declared {@code :version} string (nil when it declared none as a plain string), and the
+ * plist of what the {@code .asd} declared besides.
+ *
+ * <p>
+ * The surface is the inventory ({@link AsdfExports}): an external {@code asdf.lisp} does
+ * not define is a signalling stub or an empty class synthesized here
+ * ({@link #stubForms}). The interpreter evaluates them all with the runtime; a compile
+ * path splices the ones the program names and the superclasses they need.
  */
 public final class AsdfRuntimeLibrary {
 
@@ -60,79 +75,240 @@ public final class AsdfRuntimeLibrary {
 
 	@Nullable private static volatile List<LispVal> seamForms;
 
-	/** The names {@code asdf.lisp} defines (functions plus the two variables). */
-	private static final Set<String> DEFINED_NAMES = Set.of(LispNames.ASDF_FIND_SYSTEM,
-			qualify(LispNames.REGISTERED_SYSTEMS), qualify(LispNames.COMPONENT_NAME),
-			qualify(LispNames.COMPONENT_VERSION), LispNames.ASDF_COMPONENT_PATHNAME,
-			qualify(LispNames.COMPONENT_CHILDREN), qualify(LispNames.COMPONENT_SIDEWAY_DEPENDENCIES),
-			qualify(LispNames.COMPONENT_PARENT), qualify(LispNames.COMPONENT_SYSTEM),
-			LispNames.ASDF_SYSTEM_SOURCE_DIRECTORY, LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME,
-			qualify(LispNames.ASDF_USER_CACHE), qualify(LispNames.ASDF_VERSION_VAR), LispNames.ASDF_TEST_SYSTEM,
-			qualify(LispNames.OPERATE), LispNames.ASDF_PERFORM, qualify(LispNames.MAKE_OPERATION),
-			qualify(LispNames.INPUT_FILES), qualify(LispNames.OUTPUT_FILES), qualify(LispNames.SOURCE_FILE_TYPE),
-			qualify(LispNames.OPERATION_DONE_P));
+	/**
+	 * What {@code asdf.lisp} and the stubs define, by canonical name: the externals'
+	 * stubs in inventory order, each with its forms, and the members with a definition of
+	 * any kind.
+	 *
+	 * @param stubs the synthesized forms per member name
+	 * @param functions the function, generic and variable members
+	 * @param classes the class and condition members
+	 * @param generics the generic members, which a method may extend
+	 */
+	private record Definitions(Map<String, List<LispVal>> stubs, Set<String> functions, Set<String> classes,
+			Set<String> generics) {
+	}
 
-	/** The component metaobject and operation class names {@code asdf.lisp} defines. */
-	private static final Set<String> CLASS_NAMES = Set.of(qualify(LispNames.COMPONENT),
-			qualify(LispNames.CHILD_COMPONENT), qualify(LispNames.PARENT_COMPONENT), qualify(LispNames.MODULE),
-			qualify("SYSTEM"), qualify(LispNames.PACKAGE_INFERRED_SYSTEM), qualify(LispNames.SOURCE_FILE),
-			qualify(LispNames.CL_SOURCE_FILE), qualify(LispNames.STATIC_FILE), qualify(LispNames.OPERATION),
-			qualify(LispNames.PREPARE_OP), qualify(LispNames.COMPILE_OP), qualify(LispNames.LOAD_OP),
-			qualify(LispNames.TEST_OP), qualify(LispNames.COMPILE_BUNDLE_OP));
+	@Nullable private static volatile Definitions definitions;
+
+	private static final String STUB_ARGS = "%ASDF-STUB-ARGS";
 
 	/**
-	 * What a {@code defmethod}/{@code typep}/... form has to mention for the interpreter
-	 * to seed {@code asdf.lisp} before evaluating it: a class name, or a generic a method
-	 * may be added to -- a method on {@code asdf:perform} specializing nothing names no
-	 * class, and the generic it extends must already be {@code asdf.lisp}'s.
+	 * The members a program reads a system's metadata through: a compile path bakes the
+	 * metadata into the registry only for a program naming one, so no other program
+	 * carries a long description.
 	 */
-	private static final Set<String> SEEDING_NAMES;
-	static {
-		Set<String> seeding = new java.util.HashSet<>(CLASS_NAMES);
-		seeding.add(LispNames.ASDF_PERFORM);
-		seeding.add(qualify(LispNames.INPUT_FILES));
-		seeding.add(qualify(LispNames.OUTPUT_FILES));
-		seeding.add(qualify(LispNames.SOURCE_FILE_TYPE));
-		seeding.add(qualify(LispNames.OPERATION_DONE_P));
-		SEEDING_NAMES = Set.copyOf(seeding);
+	private static final Set<String> METADATA_READERS = Set.of("SYSTEM-SOURCE-FILE", "SYSTEM-DEFINITION-PATHNAME",
+			"SYSTEM-DESCRIPTION", "SYSTEM-LONG-DESCRIPTION", "SYSTEM-AUTHOR", "SYSTEM-MAINTAINER", "SYSTEM-LICENSE",
+			"SYSTEM-LICENCE", "SYSTEM-HOMEPAGE", "SYSTEM-BUG-TRACKER", "SYSTEM-MAILTO", "SYSTEM-LONG-NAME",
+			"SYSTEM-SOURCE-CONTROL", "SYSTEM-WEAKLY-DEPENDS-ON", "SYSTEM-DEFSYSTEM-DEPENDS-ON", "COMPONENT-PROPERTY",
+			"COMPONENT-PROPERTIES", "COMPONENT-DESCRIPTION", "COMPONENT-LONG-DESCRIPTION", "COMPONENT-ENTRY-POINT",
+			"COMPONENT-BUILD-OPERATION", "COMPONENT-BUILD-PATHNAME", "MAKE", "BUILD-OP", "DESCRIPTION",
+			"LONG-DESCRIPTION", "PROPERTIES", "AUTHOR", "MAINTAINER", "LICENCE", "HOMEPAGE", "BUG-TRACKER", "MAILTO",
+			"LONG-NAME", "SOURCE-CONTROL", "SOURCE-FILE", "WEAKLY-DEPENDS-ON", "DEFSYSTEM-DEPENDS-ON", "ENTRY-POINT",
+			"BUILD-OPERATION", "BUILD-PATHNAME");
+
+	/** The operators {@link #stubForms} recognizes a definition by. */
+	private static final Set<String> FUNCTION_DEFINERS = Set.of(LispNames.DEFUN, LispNames.DEFGENERIC, LispNames.DEFVAR,
+			LispNames.DEFPARAMETER);
+
+	private static Definitions definitions() {
+		Definitions cached = definitions;
+		if (cached == null) {
+			synchronized (AsdfRuntimeLibrary.class) {
+				cached = definitions;
+				if (cached == null) {
+					cached = buildDefinitions();
+					definitions = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	private static Definitions buildDefinitions() {
+		Set<String> functions = new HashSet<>();
+		Set<String> classes = new HashSet<>();
+		Set<String> generics = new HashSet<>();
+		for (LispVal form : coreForms()) {
+			collectDefinition(form, functions, classes, generics);
+		}
+		// What the seam and the Java built-ins define on every path.
+		functions.add(LispNames.LOAD_SYSTEM);
+		Map<String, List<LispVal>> stubs = new LinkedHashMap<>();
+		Set<String> allFunctions = new HashSet<>(functions);
+		Set<String> allClasses = new HashSet<>(classes);
+		Set<String> allGenerics = new HashSet<>(generics);
+		List<AsdfExports.Entry> pending = new ArrayList<>(AsdfExports.externals().values());
+		Set<String> seen = new HashSet<>();
+		while (!pending.isEmpty()) {
+			AsdfExports.Entry entry = pending.removeFirst();
+			if (entry.isUiopHomed() || LispNames.DEFSYSTEM.equals(entry.symbol()) || !seen.add(entry.symbol())) {
+				continue;
+			}
+			List<LispVal> forms = stubForms(entry, functions, classes);
+			if (!forms.isEmpty()) {
+				stubs.put(entry.symbol(), forms);
+			}
+			if (entry.is("generic")) {
+				allGenerics.add(entry.symbol());
+			}
+			if (entry.is("generic") || entry.is("function") || entry.is("macro") || entry.is("variable")) {
+				allFunctions.add(entry.symbol());
+			}
+			if (entry.is("class") || entry.is("condition")) {
+				allClasses.add(entry.symbol());
+				// A superclass only a sub-package exports (asdf/plan:plan-traversal) has
+				// to
+				// exist for its subclass.
+				for (String superclass : entry.superclasses()) {
+					AsdfExports.Entry row = AsdfExports.entry(superclass);
+					if (row != null) {
+						pending.add(row);
+					}
+				}
+			}
+		}
+		return new Definitions(java.util.Collections.unmodifiableMap(stubs), Set.copyOf(allFunctions),
+				Set.copyOf(allClasses), Set.copyOf(allGenerics));
 	}
 
 	/**
-	 * The names whose presence in a compiled program splices the runtime: everything
-	 * {@code asdf.lisp} defines, the class names, and the runtime forms only the compile
-	 * seam provides (a NESTED {@code asdf:load-system}/{@code ql:quickload} -- the
-	 * top-level literal ones were consumed by {@code LoadInliner} -- and
-	 * {@code asdf:test-system}).
+	 * Records what one {@code asdf.lisp} form defines. A public name it defines has to be
+	 * an inventory name, so the surface cannot grow past real ASDF's unnoticed.
 	 */
-	private static final Set<String> TRIGGER_NAMES;
-	static {
-		java.util.Set<String> triggers = new java.util.HashSet<>(DEFINED_NAMES);
-		triggers.addAll(CLASS_NAMES);
-		triggers.add(LispNames.ASDF_LOAD_SYSTEM);
-		triggers.add(LispNames.QL_QUICKLOAD);
-		triggers.add(LispNames.ASDF_TEST_SYSTEM);
-		TRIGGER_NAMES = Set.copyOf(triggers);
+	private static void collectDefinition(LispVal form, Set<String> functions, Set<String> classes,
+			Set<String> generics) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| !(cons.cdr() instanceof LispCons rest) || !(rest.car() instanceof LispSymbol defined)) {
+			return;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(defined.name());
+		if (qn == null) {
+			return;
+		}
+		if (FUNCTION_DEFINERS.contains(op.name())) {
+			functions.add(qn.member());
+			if (LispNames.DEFGENERIC.equals(op.name())) {
+				generics.add(qn.member());
+			}
+		}
+		else if (LispNames.DEFCLASS.equals(op.name()) || LispNames.DEFINE_CONDITION.equals(op.name())) {
+			classes.add(qn.member());
+			collectSlotReaders(form, functions);
+		}
+		if (!AsdfExports.owned().contains(qn.member())) {
+			throw new IllegalStateException("asdf.lisp defines " + defined.name() + ", which no ASDF package exports");
+		}
+	}
+
+	private static void collectSlotReaders(LispVal definition, Set<String> functions) {
+		List<LispVal> items = ((LispCons) definition).toList();
+		if (items.size() < 4 || !(items.get(3) instanceof LispCons slots)) {
+			return;
+		}
+		for (LispVal slot : slots.toList()) {
+			if (!(slot instanceof LispCons slotCons) || !slotCons.isProperList()) {
+				continue;
+			}
+			List<LispVal> options = slotCons.toList();
+			for (int i = 1; i + 1 < options.size(); i += 2) {
+				if (options.get(i) instanceof LispSymbol key
+						&& (":READER".equals(key.name()) || ":ACCESSOR".equals(key.name()))
+						&& options.get(i + 1) instanceof LispSymbol reader) {
+					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(reader.name());
+					if (qn != null) {
+						functions.add(qn.member());
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * The forms standing in for the parts of an external {@code asdf.lisp} does not
+	 * define: upstream's shape, so a generic takes a library's method and a class a
+	 * library's subclass, and any call signals {@code uiop:not-implemented-error} naming
+	 * the operation.
+	 */
+	private static List<LispVal> stubForms(AsdfExports.Entry entry, Set<String> functions, Set<String> classes) {
+		String member = entry.symbol();
+		LispSymbol name = new LispSymbol(canonicalName(member));
+		List<LispVal> forms = new ArrayList<>();
+		if (entry.is("condition") && !classes.contains(member)) {
+			forms.add(list(new LispSymbol(LispNames.DEFINE_CONDITION), name, superclasses(entry), LispNil.INSTANCE));
+		}
+		if (entry.is("class") && !classes.contains(member)) {
+			forms.add(list(new LispSymbol(LispNames.DEFCLASS), name, superclasses(entry), LispNil.INSTANCE));
+		}
+		if (entry.is("variable") && !functions.contains(member)) {
+			forms.add(list(new LispSymbol(LispNames.DEFVAR), name, LispNil.INSTANCE));
+		}
+		if (functions.contains(member)) {
+			return forms;
+		}
+		LispVal refusal = list(new LispSymbol(UiopExports.qualified(LispNames.NOT_IMPLEMENTED_ERROR)),
+				new LispString(name.name()));
+		if (entry.is("generic") && !entry.lambdaList().isEmpty()) {
+			List<LispVal> parameters = new ArrayList<>();
+			List<LispVal> ignored = new ArrayList<>();
+			ignored.add(new LispSymbol("IGNORE"));
+			for (String parameter : entry.lambdaList()) {
+				LispSymbol symbol = new LispSymbol(parameter);
+				parameters.add(symbol);
+				if (!parameter.startsWith("&")) {
+					ignored.add(symbol);
+				}
+			}
+			LispVal lambdaList = list(parameters.toArray(LispVal[]::new));
+			forms.add(list(new LispSymbol(LispNames.DEFGENERIC), name, lambdaList));
+			forms.add(list(new LispSymbol(LispNames.DEFMETHOD), name, lambdaList,
+					list(new LispSymbol(LispNames.DECLARE), list(ignored.toArray(LispVal[]::new))), refusal));
+		}
+		else if (entry.is("function") || entry.is("macro") || entry.is("generic")) {
+			forms.add(list(new LispSymbol(LispNames.DEFUN), name,
+					list(new LispSymbol(LispNames.LAMBDA_REST), new LispSymbol(STUB_ARGS)), refusal));
+		}
+		return forms;
+	}
+
+	/** A stub's superclass list, each spelled where the inventory homes it. */
+	private static LispVal superclasses(AsdfExports.Entry entry) {
+		List<LispVal> supers = new ArrayList<>();
+		for (String superclass : entry.superclasses()) {
+			supers.add(new LispSymbol(canonicalName(superclass)));
+		}
+		return list(supers.toArray(LispVal[]::new));
+	}
+
+	private static String canonicalName(String member) {
+		AsdfExports.Entry external = AsdfExports.externals().get(member);
+		if (external != null) {
+			return external.isUiopHomed() ? UiopExports.qualified(member) : qualify(member);
+		}
+		return AsdfExports.owned().contains(member) ? PackageRegistry.qualifyInternal(LispNames.ASDF_PKG, member)
+				: member;
 	}
 
 	private static String qualify(String member) {
-		return am.ik.rontolisp.PackageRegistry.qualify(LispNames.ASDF_PKG, member);
+		return PackageRegistry.qualify(LispNames.ASDF_PKG, member);
 	}
 
 	/**
 	 * Whether the interpreter's lazy load should fire for a resolution of {@code name}
-	 * (function or variable -- {@code asdf:*user-cache*} is a variable read).
+	 * (function or variable -- {@code asdf:*central-registry*} is a variable read).
 	 * @param name the canonical qualified name being resolved
-	 * @return {@code true} when {@code asdf.lisp} defines it
+	 * @return {@code true} when the runtime defines it
 	 */
 	public static boolean definesName(String name) {
-		return DEFINED_NAMES.contains(name);
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn != null && LispNames.ASDF_PKG.equals(qn.pkg()) && definitions().functions().contains(qn.member());
 	}
 
 	/**
-	 * Whether {@code form} mentions an ASDF class name or a generic {@code asdf.lisp}
-	 * defines -- the trigger for the interpreter to seed the classes and generics before
-	 * a {@code defmethod} specializer / {@code typep} / {@code typecase} /
-	 * {@code make-instance} resolves one.
+	 * Whether {@code form} mentions an ASDF class name or a generic -- the trigger for
+	 * the interpreter to seed the runtime before a {@code defmethod} specializer /
+	 * {@code typep} / {@code typecase} / {@code make-instance} resolves one.
 	 * @param form the form about to be evaluated
 	 * @return {@code true} when such a name occurs anywhere in it
 	 */
@@ -141,7 +317,7 @@ public final class AsdfRuntimeLibrary {
 		// has reached, so it costs frames for the form's NESTING, never its length.
 		for (LispVal val = form;;) {
 			if (val instanceof LispSymbol sym) {
-				return SEEDING_NAMES.contains(sym.name());
+				return isSeedingName(sym.name());
 			}
 			if (val instanceof LispCons cons) {
 				if (mentionsComponentClass(cons.car())) {
@@ -154,12 +330,59 @@ public final class AsdfRuntimeLibrary {
 		}
 	}
 
+	private static boolean isSeedingName(String name) {
+		// A cheap test first: this runs over every class-resolving form until the
+		// runtime loads, and few of their symbols are asdf's.
+		if (!name.startsWith(LispNames.ASDF_PKG)) {
+			return false;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		if (qn == null || !LispNames.ASDF_PKG.equals(qn.pkg())) {
+			return false;
+		}
+		Definitions defined = definitions();
+		return defined.classes().contains(qn.member()) || defined.generics().contains(qn.member());
+	}
+
+	/**
+	 * Whether a {@code handler-case} or {@code handler-bind} names an ASDF condition: the
+	 * type test is built from the classes known when it is expanded, so a class first
+	 * defined while its body loads a system would never match. Only the clause heads are
+	 * read, which is what an evaluation of the form can afford.
+	 * @param form the handler form
+	 * @return {@code true} when a clause's type is an ASDF class
+	 */
+	public static boolean handlesAsdfCondition(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		boolean bind = cons.car() instanceof LispSymbol op && LispNames.HANDLER_BIND.equals(op.name());
+		LispVal clauses = bind && cons.cdr() instanceof LispCons rest ? rest.car()
+				: cons.cdr() instanceof LispCons rest ? rest.cdr() : LispNil.INSTANCE;
+		for (LispVal cell = clauses; cell instanceof LispCons clauseCell; cell = clauseCell.cdr()) {
+			if (clauseCell.car() instanceof LispCons clause && mentionsComponentClass(clause.car())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether {@code name} may be a definition of this runtime: the gate in front of
+	 * {@link #definitionNames}, so a compile that names no ASDF never reads it.
+	 * @param name the canonical name
+	 * @return {@code false} when no form of the runtime can define it
+	 */
+	public static boolean mayDefine(String name) {
+		return name.startsWith("ASDF") || name.startsWith("%ASDF");
+	}
+
 	/**
 	 * Returns the parsed {@code asdf.lisp} forms (canonical shape, no package resolution
 	 * needed). Parsed once and cached.
-	 * @return the class-family forms
+	 * @return the forms
 	 */
-	public static List<LispVal> classForms() {
+	public static List<LispVal> coreForms() {
 		List<LispVal> cached = classForms;
 		if (cached == null) {
 			synchronized (AsdfRuntimeLibrary.class) {
@@ -171,6 +394,82 @@ public final class AsdfRuntimeLibrary {
 			}
 		}
 		return cached;
+	}
+
+	/**
+	 * Returns what the interpreter evaluates as the runtime: {@code asdf.lisp} and every
+	 * stub, superclasses first.
+	 * @return the forms
+	 */
+	public static List<LispVal> interpreterForms() {
+		List<LispVal> forms = new ArrayList<>(coreForms());
+		forms.addAll(stubsFor(definitions().stubs().keySet()));
+		return List.copyOf(forms);
+	}
+
+	/**
+	 * The forms whose names {@code LibraryDefunPruner} may drop when nothing reaches
+	 * them. A stub is spliced only for a program naming it, so none is here.
+	 * @return the forms to collect the names of
+	 */
+	public static List<LispVal> prunableForms() {
+		List<LispVal> forms = new ArrayList<>();
+		for (LispVal form : coreForms()) {
+			if (!isLoweringTarget(form)) {
+				forms.add(form);
+			}
+		}
+		for (LispVal form : seamForms()) {
+			if (!isLoweringTarget(form)) {
+				forms.add(form);
+			}
+		}
+		return List.copyOf(forms);
+	}
+
+	/**
+	 * Whether a runtime form defines what a compiler's lowering of a component bracket
+	 * calls ({@code SplicedComponentGroups}), which happens after the pruner has run and
+	 * so is a reference it cannot see.
+	 */
+	private static boolean isLoweringTarget(LispVal form) {
+		return form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol defined
+				&& SplicedComponentGroups.LOWERING_TARGETS.contains(defined.name());
+	}
+
+	/**
+	 * The stub forms of {@code members} and of the stub superclasses they need,
+	 * superclasses first: a class is defined before anything naming it.
+	 */
+	private static List<LispVal> stubsFor(Set<String> members) {
+		Map<String, List<LispVal>> stubs = definitions().stubs();
+		Set<String> ordered = new LinkedHashSet<>();
+		for (String member : stubs.keySet()) {
+			if (members.contains(member)) {
+				placeStub(member, stubs, ordered);
+			}
+		}
+		List<LispVal> forms = new ArrayList<>();
+		for (String member : ordered) {
+			forms.addAll(stubs.get(member));
+		}
+		return forms;
+	}
+
+	private static void placeStub(String member, Map<String, List<LispVal>> stubs, Set<String> ordered) {
+		if (ordered.contains(member)) {
+			return;
+		}
+		AsdfExports.Entry entry = AsdfExports.entry(member);
+		if (entry != null) {
+			for (String superclass : entry.superclasses()) {
+				if (stubs.containsKey(superclass)) {
+					placeStub(superclass, stubs, ordered);
+				}
+			}
+		}
+		ordered.add(member);
 	}
 
 	/**
@@ -199,11 +498,17 @@ public final class AsdfRuntimeLibrary {
 		if (!performMethods) {
 			program = SplicedComponentGroups.stripComponentMarkers(program);
 		}
-		if (!performMethods && program.stream().noneMatch(AsdfRuntimeLibrary::referencesRuntime)) {
+		Set<String> mentioned = mentionedMembers(program);
+		Definitions defined = definitions();
+		boolean referenced = mentioned.stream()
+			.anyMatch(member -> defined.functions().contains(member) || defined.classes().contains(member));
+		if (!performMethods && !referenced) {
 			return program;
 		}
-		List<LispVal> out = new ArrayList<>(classForms());
-		out.add(registryDefvar(systems, loadedSystems));
+		boolean metadata = mentioned.stream().anyMatch(METADATA_READERS::contains);
+		List<LispVal> out = new ArrayList<>(coreForms());
+		out.addAll(stubsFor(mentioned));
+		out.add(registryDefvar(systems, loadedSystems, metadata));
 		out.addAll(seamForms());
 		out.add(testOpEdgesDefun(systems, loadedSystems));
 		out.add(recordedTestOpDefun(systems, loadedSystems));
@@ -211,27 +516,77 @@ public final class AsdfRuntimeLibrary {
 		return out;
 	}
 
-	private static boolean referencesRuntime(LispVal form) {
-		while (form instanceof LispCons cons) {
-			if (referencesRuntime(cons.car())) {
-				return true;
+	/**
+	 * The {@code asdf} members a program names, read off its resolved copy so a bare
+	 * {@code component-name} under {@code (:use :asdf)} and a sub-package's spelling
+	 * count as the symbol they denote. A program spelling no ASDF package anywhere is not
+	 * resolved at all.
+	 */
+	private static Set<String> mentionedMembers(List<LispVal> program) {
+		if (program.stream().noneMatch(AsdfRuntimeLibrary::spellsAsdf)) {
+			return Set.of();
+		}
+		List<LispVal> forms = program;
+		try {
+			forms = new PackageResolver().resolveProgram(program);
+		}
+		catch (LispPackageException ex) {
+			// Not this pass's error to report: the backends run the same resolution
+			// first thing. What is left is the spelling as written.
+		}
+		Set<String> members = new HashSet<>();
+		for (LispVal form : forms) {
+			collectMembers(form, members);
+		}
+		return members;
+	}
+
+	private static boolean spellsAsdf(LispVal form) {
+		for (LispVal val = form;;) {
+			if (val instanceof LispCons cons) {
+				if (spellsAsdf(cons.car())) {
+					return true;
+				}
+				val = cons.cdr();
+				continue;
 			}
-			form = cons.cdr();
+			if (val instanceof LispSymbol sym) {
+				return sym.name().contains(LispNames.ASDF_PKG) || sym.name().contains(LispNames.QL_PKG + ":");
+			}
+			return val instanceof LispString str && "asdf".equalsIgnoreCase(str.value());
 		}
-		if (form instanceof LispSymbol sym) {
-			return TRIGGER_NAMES.contains(sym.name());
+	}
+
+	private static void collectMembers(LispVal form, Set<String> members) {
+		for (LispVal val = form;;) {
+			if (val instanceof LispCons cons) {
+				collectMembers(cons.car(), members);
+				val = cons.cdr();
+				continue;
+			}
+			if (val instanceof LispSymbol sym) {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+				if (qn != null && (AsdfExports.isAsdfFamily(qn.pkg())
+						|| LispNames.QL_PKG.equals(qn.pkg()) && LispNames.QUICKLOAD.equals(qn.member()))) {
+					members.add(LispNames.QL_PKG.equals(qn.pkg()) ? LispNames.LOAD_SYSTEM : qn.member());
+				}
+			}
+			return;
 		}
-		return false;
 	}
 
 	/**
 	 * The record for one system, in the shape {@code asdf.lisp} reads:
-	 * {@code (CLASS DIR FILES DEPS LOADED-P)}.
+	 * {@code (CLASS DIR FILES DEPS LOADED-P VERSION META)}.
 	 * @param system the parsed system
 	 * @param loaded whether the system has been loaded/spliced
 	 * @return the record as Lisp data
 	 */
 	public static LispVal recordFor(AsdfSystems.LispSystem system, boolean loaded) {
+		return recordFor(system, loaded, true);
+	}
+
+	private static LispVal recordFor(AsdfSystems.LispSystem system, boolean loaded, boolean metadata) {
 		List<LispVal> files = new ArrayList<>();
 		for (String file : system.files()) {
 			files.add(new LispCons(new LispString(file),
@@ -244,7 +599,26 @@ public final class AsdfRuntimeLibrary {
 		return list(new LispSymbol(system.packageInferredClass() ? ":PACKAGE-INFERRED-SYSTEM" : ":SYSTEM"),
 				new LispString(normalizeDir(system.baseDir())), list(files.toArray(LispVal[]::new)),
 				list(deps.toArray(LispVal[]::new)), loaded ? LispTrue.INSTANCE : LispNil.INSTANCE,
-				system.version() == null ? LispNil.INSTANCE : new LispString(system.version()));
+				system.version() == null ? LispNil.INSTANCE : new LispString(system.version()),
+				metadata ? metadataPlist(system) : LispNil.INSTANCE);
+	}
+
+	private static LispVal metadataPlist(AsdfSystems.LispSystem system) {
+		List<LispVal> plist = new ArrayList<>();
+		AsdfSystems.Metadata metadata = system.metadata();
+		if (metadata.sourceFile() != null) {
+			plist.add(new LispSymbol(":SOURCE-FILE"));
+			plist.add(new LispString(metadata.sourceFile()));
+		}
+		metadata.options().forEach((option, value) -> {
+			plist.add(new LispSymbol(option));
+			plist.add(value);
+		});
+		if (!system.defsystemDependsOn().isEmpty()) {
+			plist.add(new LispSymbol(":DEFSYSTEM-DEPENDS-ON"));
+			plist.add(list(system.defsystemDependsOn().stream().map(LispString::new).toArray(LispVal[]::new)));
+		}
+		return list(plist.toArray(LispVal[]::new));
 	}
 
 	/**
@@ -255,7 +629,7 @@ public final class AsdfRuntimeLibrary {
 	 */
 	public static LispVal builtinRecord(boolean loaded) {
 		return list(new LispSymbol(":SYSTEM"), new LispString("./"), LispNil.INSTANCE, LispNil.INSTANCE,
-				loaded ? LispTrue.INSTANCE : LispNil.INSTANCE, LispNil.INSTANCE);
+				loaded ? LispTrue.INSTANCE : LispNil.INSTANCE, LispNil.INSTANCE, LispNil.INSTANCE);
 	}
 
 	/**
@@ -289,11 +663,12 @@ public final class AsdfRuntimeLibrary {
 	}
 
 	/** The baked registry: {@code (defvar %asdf-registry% '(("name" . RECORD) ...))}. */
-	private static LispVal registryDefvar(Map<String, AsdfSystems.LispSystem> systems, Set<String> loadedSystems) {
+	private static LispVal registryDefvar(Map<String, AsdfSystems.LispSystem> systems, Set<String> loadedSystems,
+			boolean metadata) {
 		List<LispVal> entries = new ArrayList<>();
 		for (AsdfSystems.LispSystem system : systems.values()) {
 			entries.add(new LispCons(new LispString(system.name()),
-					recordFor(system, loadedSystems.contains(system.name()))));
+					recordFor(system, loadedSystems.contains(system.name()), metadata)));
 		}
 		for (String loaded : loadedSystems) {
 			if (!systems.containsKey(loaded) && BuiltinSystems.isBuiltin(loaded)) {
@@ -377,20 +752,36 @@ public final class AsdfRuntimeLibrary {
 	// protocol (compiler.SplicedComponentGroups), and load-op's primary method runs that
 	// thunk. Any other component load is the error a run-time load-system is.
 	private static final String SEAM_SOURCE = """
-			(defun %asdf-system-record (key)
+			(defun %asdf-baked-record (key)
 			  (let ((found nil))
 			    (dolist (entry %asdf-registry%)
 			      (when (and (not found) (equal (car entry) key))
 			        (setq found (cdr entry))))
 			    found))
+			(defvar %asdf-cleared% nil)
+			(defun %asdf-system-record (key)
+			  (if (member key %asdf-cleared% :test #'equal)
+			      nil
+			      (%asdf-baked-record key)))
 			(defun %asdf-system-names ()
-			  (mapcar (lambda (entry) (car entry)) %asdf-registry%))
+			  (remove-if (lambda (name) (member name %asdf-cleared% :test #'equal))
+			             (mapcar (lambda (entry) (car entry)) %asdf-registry%)))
+			(defun %asdf-clear-system (key)
+			  (when (%asdf-baked-record key)
+			    (setq %asdf-cleared% (cons key %asdf-cleared%))))
+			(defun %asdf-locate-system (key)
+			  (when (member key %asdf-cleared% :test #'equal)
+			    (setq %asdf-cleared% (remove key %asdf-cleared% :test #'equal))
+			    (%asdf-baked-record key)))
+			(defun %asdf-load-asd (path)
+			  (error "ASDF:LOAD-ASD cannot load ~a at run time on the compiled backends (systems are spliced at compile time)"
+			         path))
 			(defun %asdf-runtime-load (operator name)
-			  (let ((rec (%asdf-system-record (%asdf-coerce-name name))))
+			  (let ((rec (%asdf-baked-record (asdf:coerce-name name))))
 			    (if (and rec (nth 4 rec))
 			        nil
 			        (error "~a cannot load a system at run time on the compiled backends (systems are spliced at compile time): ~a"
-			               operator (%asdf-coerce-name name)))))
+			               operator (asdf:coerce-name name)))))
 			(defun asdf:load-system (name &rest options)
 			  (%asdf-runtime-load "ASDF:LOAD-SYSTEM" name))
 			(defun ql:quickload (name &rest options)

@@ -1440,7 +1440,7 @@ chunk-loop wrapper).
 - **lisp-binary, 2026-10-31**: `(ql:quickload :lisp-binary)` LOADS on all four backends, the
   WASM pair with `--feature lisp-binary/no-cffi` (its cffi dependency needs `ffi:`, which no
   `.wasm` has). Cleared that day: the Gray `fundamental-binary-stream`/`-character-stream`
-  classes (`.kb/gray-streams.md`), `asdf:*asdf-version*` (`.kb/asdf.md`), `defclass`'s value
+  classes (`.kb/gray-streams.md`), `asdf::*asdf-version*` (`.kb/asdf.md`), `defclass`'s value
   (above), a user macro in a lambda-list default on the compile paths
   (`.kb/defmacro-backquote.md`) and the slot NAME below. A `defbinary` struct (a 16-bit unsigned
   and an 8-bit signed field) then round-trips through `write-binary`/`read-binary` over

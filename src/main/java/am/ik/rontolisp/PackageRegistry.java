@@ -892,50 +892,7 @@ public final class PackageRegistry {
 			// asdf and asdf-utilities as nicknames (lass defines a component class in
 			// asdf/interface:: so ASDF finds it by its keyword).
 			Map.entry("ASDF/INTERFACE", LispNames.ASDF_PKG), Map.entry("ASDF-UTILITIES", LispNames.ASDF_PKG),
-			Map.entry("ASDF/DEFSYSTEM", "ASDF/PARSE-DEFSYSTEM"));
-
-	/**
-	 * Real ASDF's internal packages (ASDF 3.3.1) with the asdf members each one is the
-	 * home of -- only the members the {@code asdf} package here exports. Each becomes a
-	 * package whose members are import redirects into {@code asdf}, so
-	 * {@code asdf/component:component-name} is {@code asdf:component-name}.
-	 */
-	private static final Map<String, List<String>> ASDF_SUB_PACKAGES = asdfSubPackages();
-
-	private static Map<String, List<String>> asdfSubPackages() {
-		Map<String, List<String>> map = new java.util.LinkedHashMap<>();
-		map.put("ASDF/UPGRADE", List.of());
-		map.put("ASDF/SESSION", List.of("RETRY"));
-		map.put("ASDF/COMPONENT",
-				List.of(LispNames.COMPONENT, LispNames.CHILD_COMPONENT, LispNames.PARENT_COMPONENT, LispNames.MODULE,
-						LispNames.SOURCE_FILE, LispNames.STATIC_FILE, LispNames.COMPONENT_NAME,
-						LispNames.COMPONENT_VERSION, LispNames.COMPONENT_CHILDREN,
-						LispNames.COMPONENT_SIDEWAY_DEPENDENCIES, LispNames.COMPONENT_PARENT,
-						LispNames.COMPONENT_SYSTEM, LispNames.COMPONENT_PATHNAME, LispNames.SOURCE_FILE_TYPE));
-		map.put("ASDF/OPERATION", List.of(LispNames.OPERATION, LispNames.MAKE_OPERATION));
-		map.put("ASDF/SYSTEM", List.of("SYSTEM", LispNames.FIND_SYSTEM, LispNames.SYSTEM_SOURCE_DIRECTORY,
-				LispNames.SYSTEM_RELATIVE_PATHNAME));
-		map.put("ASDF/SYSTEM-REGISTRY", List.of(LispNames.REGISTERED_SYSTEMS));
-		map.put("ASDF/ACTION",
-				List.of(LispNames.PERFORM, LispNames.INPUT_FILES, LispNames.OUTPUT_FILES, LispNames.OPERATION_DONE_P));
-		map.put("ASDF/LISP-ACTION", List.of(LispNames.CL_SOURCE_FILE, LispNames.PREPARE_OP, LispNames.COMPILE_OP,
-				LispNames.LOAD_OP, LispNames.TEST_OP));
-		map.put("ASDF/FIND-COMPONENT", List.of("MISSING-COMPONENT"));
-		map.put("ASDF/FORCING", List.of());
-		map.put("ASDF/PLAN", List.of());
-		map.put("ASDF/OPERATE", List.of(LispNames.OPERATE, LispNames.LOAD_SYSTEM, LispNames.TEST_SYSTEM));
-		map.put("ASDF/FIND-SYSTEM", List.of());
-		map.put("ASDF/PARSE-DEFSYSTEM", List.of(LispNames.DEFSYSTEM));
-		map.put("ASDF/BUNDLE", List.of(LispNames.COMPILE_BUNDLE_OP));
-		map.put("ASDF/CONCATENATE-SOURCE", List.of());
-		map.put("ASDF/PACKAGE-INFERRED-SYSTEM", List.of(LispNames.PACKAGE_INFERRED_SYSTEM));
-		map.put("ASDF/OUTPUT-TRANSLATIONS", List.of());
-		map.put("ASDF/SOURCE-REGISTRY", List.of());
-		map.put("ASDF/BACKWARD-INTERNALS", List.of());
-		map.put("ASDF/BACKWARD-INTERFACE", List.of());
-		map.put("ASDF/FOOTER", List.of());
-		return java.util.Collections.unmodifiableMap(map);
-	}
+			Map.entry("ASDF/DEFSYSTEM", "ASDF/PARSE-DEFSYSTEM"), Map.entry("ASDF-ACTION", "ASDF/ACTION"));
 
 	/**
 	 * Package nicknames, mapping each nickname to the canonical package name. Seeded with
@@ -1004,7 +961,7 @@ public final class PackageRegistry {
 			LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
 			LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG, LispNames.MGL_PAX_PKG,
 			LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG, LispNames.QL_DIST_PKG, "KEYWORD"),
-			union(Set.copyOf(UiopExports.subPackages()), ASDF_SUB_PACKAGES.keySet()));
+			union(Set.copyOf(UiopExports.subPackages()), AsdfExports.subPackages().keySet()));
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -1218,48 +1175,26 @@ public final class PackageRegistry {
 		// A limited, API-compatible subset of ASDF (.asd files run as Lisp, their
 		// defsystem forms parsed as data -- see eval.AsdfSystems; the runtime component
 		// metaobject family lives in Lisp source, eval.AsdfRuntimeLibrary / asdf.lisp).
-		// Does not use cl; every registered symbol is external.
-		define(new LispPackage(LispNames.ASDF_PKG, List.of(),
-				new HashSet<>(Set.of(LispNames.DEFSYSTEM, LispNames.LOAD_SYSTEM, LispNames.FIND_SYSTEM,
-						LispNames.TEST_SYSTEM, LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.SYSTEM_RELATIVE_PATHNAME,
-						LispNames.COMPONENT_PATHNAME, LispNames.REGISTERED_SYSTEMS, LispNames.ASDF_USER_CACHE,
-						LispNames.ASDF_VERSION_VAR,
-						// The component metaobject family (asdf.lisp): the classes and
-						// their readers, real CLOS classes on every backend so typecase /
-						// typep / defmethod specializers work (rove's run-system reads
-						// the whole component model).
-						LispNames.COMPONENT, LispNames.CHILD_COMPONENT, LispNames.PARENT_COMPONENT, LispNames.MODULE,
-						"SYSTEM", LispNames.PACKAGE_INFERRED_SYSTEM, LispNames.SOURCE_FILE, LispNames.CL_SOURCE_FILE,
-						LispNames.STATIC_FILE, LispNames.COMPONENT_NAME, LispNames.COMPONENT_VERSION,
-						LispNames.COMPONENT_CHILDREN, LispNames.COMPONENT_SIDEWAY_DEPENDENCIES,
-						LispNames.COMPONENT_PARENT, LispNames.COMPONENT_SYSTEM,
-						// The missing-component CONDITION name and the retry RESTART
-						// name, external in real ASDF and resolve-only here (never
-						// defined): dbi's with-autoload-on-missing handler-binds
-						// asdf:missing-component / invokes asdf:retry around its runtime
-						// load-system call -- dead code here, since a missing system is
-						// a hard error, never a signaled missing-component.
-						"MISSING-COMPONENT", "RETRY",
-						// The operation protocol (asdf.lisp): the operation classes,
-						// the perform generic load-system drives every component load
-						// through, operate, and the generics a library extends
-						// (asdf-flv's perform :around, lass's output-files, arnesi's
-						// operation-done-p and compile-bundle-op).
-						LispNames.OPERATE, LispNames.OPERATION, LispNames.PREPARE_OP, LispNames.COMPILE_OP,
-						LispNames.LOAD_OP, LispNames.TEST_OP, LispNames.PERFORM, LispNames.MAKE_OPERATION,
-						LispNames.INPUT_FILES, LispNames.OUTPUT_FILES, LispNames.SOURCE_FILE_TYPE,
-						LispNames.OPERATION_DONE_P, LispNames.COMPILE_BUNDLE_OP))));
-		// Real ASDF's internal packages, each exporting the members it is the home of
-		// (measured against ASDF 3.3.1) as import redirects into asdf, so
-		// asdf/component:component-name IS asdf:component-name. Only the members asdf
-		// above exports are listed; asdf/interface, the package real ASDF names asdf
-		// itself, is a nickname (BUILTIN_NICKNAMES).
-		ASDF_SUB_PACKAGES.forEach((subPackage, members) -> {
-			Map<String, String> redirects = new HashMap<>();
-			for (String member : members) {
-				redirects.put(member, LispNames.ASDF_PKG);
+		// Does not use cl. The surface is the inventory (AsdfExports, measured against
+		// SBCL 2.2.9's ASDF 3.3.1): asdf exports what asdf/interface exports and owns
+		// every member homed in an asdf/* package, so asdf::relative-pathname and
+		// asdf/component:relative-pathname are one symbol; a member homed in uiop/* is
+		// uiop's symbol. The sub-packages redirect every member they export.
+		Map<String, String> asdfImports = new HashMap<>();
+		Set<String> asdfSymbols = new HashSet<>(AsdfExports.owned());
+		AsdfExports.externals().forEach((name, entry) -> {
+			asdfSymbols.add(name);
+			if (entry.isUiopHomed()) {
+				asdfImports.put(name, entry.home());
 			}
-			define(new LispPackage(subPackage, List.of(), new HashSet<>(members), Set.copyOf(members),
+		});
+		define(new LispPackage(LispNames.ASDF_PKG, List.of(), asdfSymbols, Set.copyOf(AsdfExports.externals().keySet()),
+				Map.copyOf(asdfImports)));
+		AsdfExports.subPackages().forEach((subPackage, members) -> {
+			Map<String, String> redirects = new HashMap<>();
+			members
+				.forEach((name, entry) -> redirects.put(name, entry.isUiopHomed() ? entry.home() : LispNames.ASDF_PKG));
+			define(new LispPackage(subPackage, List.of(), new HashSet<>(members.keySet()), Set.copyOf(members.keySet()),
 					Map.copyOf(redirects)));
 		});
 		// A limited, API-compatible subset of Quicklisp: ql:quickload downloads a system

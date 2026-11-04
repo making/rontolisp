@@ -9,7 +9,7 @@
 ;; The file runs as Lisp. Its header is cl-csv.asd's (a defpackage guarded by
 ;; find-package) and cl-pdf.asd's (a feature computed from *features*, pushed,
 ;; and read by the #- below it and by src/one.lisp) and lisp-binary.asd's
-;; asdf:*asdf-version* gate; then the file loads
+;; asdf::*asdf-version* gate; then the file loads
 ;; meta-demo-tool itself, which every system defined after that call needs.
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (unless (find-package :meta-demo.system)
