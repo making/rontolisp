@@ -190,9 +190,10 @@ public final class PackageResolver {
 	 * Returns whether the CURRENT package (as tracked across the forms resolved so far)
 	 * reads the bare name of a {@code cl} symbol as some other symbol: one it shadows,
 	 * owns ({@link #claimDefinedClExtensionName}), imports or inherits from another used
-	 * package, or, using no {@code cl}, does not read at all. Used by {@code UserMacroExpander} to spell a bare canonical CL name
-	 * explicitly {@code cl:}-qualified in emitted expansions, so the compilers' own
-	 * resolution pass does not re-capture it as that other symbol.
+	 * package, or, using no {@code cl}, does not read at all. Used by
+	 * {@code UserMacroExpander} to spell a bare canonical CL name explicitly
+	 * {@code cl:}-qualified in emitted expansions, so the compilers' own resolution pass
+	 * does not re-capture it as that other symbol.
 	 * @param name the bare symbol name
 	 * @return {@code true} when the bare name no longer reads as {@code cl}'s here
 	 */

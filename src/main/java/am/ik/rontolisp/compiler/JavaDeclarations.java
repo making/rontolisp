@@ -8,6 +8,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
@@ -116,7 +117,7 @@ public final class JavaDeclarations {
 	 * @return the form with its typed {@code java:} receivers and arguments wrapped, or
 	 * {@code form} itself when nothing was
 	 */
-	public synchronized LispVal lower(LispVal form, LispMacroExpander.@Nullable UserMacroHook userMacros) {
+	public synchronized LispVal lower(LispVal form, @Nullable Function<LispCons, @Nullable LispVal> userMacros) {
 		Walk walk = new Walk(userMacros);
 		walk.topLevel(form);
 		if (walk.rewrites.isEmpty()) {
@@ -183,7 +184,7 @@ public final class JavaDeclarations {
 	/** One top-level form's walk. */
 	private final class Walk {
 
-		private final LispMacroExpander.@Nullable UserMacroHook userMacros;
+		private final @Nullable Function<LispCons, @Nullable LispVal> userMacros;
 
 		// Every site rewritten, by the identity of the original site cons.
 		private final IdentityHashMap<LispCons, LispCons> rewrites = new IdentityHashMap<>();
@@ -199,7 +200,7 @@ public final class JavaDeclarations {
 		// The expansions an initializer's typing walked, so each is walked once.
 		private final IdentityHashMap<LispVal, Boolean> walkedExpansions = new IdentityHashMap<>();
 
-		Walk(LispMacroExpander.@Nullable UserMacroHook userMacros) {
+		Walk(@Nullable Function<LispCons, @Nullable LispVal> userMacros) {
 			this.userMacros = userMacros;
 		}
 
@@ -373,8 +374,8 @@ public final class JavaDeclarations {
 			}
 			LispVal expansion = builtinExpansion(cons, name);
 			if (expansion == null) {
-				LispMacroExpander.UserMacroHook hook = this.userMacros;
-				LispVal user = hook == null ? null : hook.expandOneStep(cons);
+				Function<LispCons, @Nullable LispVal> hook = this.userMacros;
+				LispVal user = hook == null ? null : hook.apply(cons);
 				if (user != null && user != cons) {
 					expansion = user;
 				}

@@ -11,7 +11,7 @@ the [Language Reference](../reference/special-forms.md).
 | Feature | Status |
 | --- | --- |
 | restarts | available; no debugger integration (`break`, `*debugger-hook*`) and no condition-restart association |
-| `&environment` | accepted in a `defmacro` lambda list but always bound to `nil` (there is no macro-expansion environment object). `&whole` works, in `defmacro` and `destructuring-bind` alike |
+| `&environment` | accepted in a `defmacro` lambda list, holding the symbol macros in scope at the call for `macroexpand` to read. `macrolet` macros are found without it, also through a nil environment, and a `with-slots`/`with-accessors` name is not in it. `&whole` works, in `defmacro` and `destructuring-bind` alike |
 | `loop` (extended) | partial (see below) |
 | CLOS | partial (static subset + a definition-time MOP subset) |
 | `defstruct` `:include` | single inheritance only; slot-overrides `(:include parent (slot default) ...)` work |

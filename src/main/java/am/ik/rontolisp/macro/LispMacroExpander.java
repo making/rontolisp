@@ -25184,39 +25184,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * One-step expansion of a user ({@code defmacro}/{@code macrolet}) macro call,
-	 * supplied by the interpreter to
-	 * {@link #expandSymbolMacrolet(LispCons, UserMacroHook)} so the substitution walk can
-	 * expand a user macro it meets before substituting into its expansion (macro
-	 * arguments may be data, e.g. trivia {@code match} patterns; the expansion is code).
-	 * The compile path passes no hook: {@code UserMacroExpander} has already expanded
-	 * every user macro when the compilers run the substitution.
-	 */
-	@FunctionalInterface
-	public interface UserMacroHook {
-
-		/**
-		 * Expands the form one macro step.
-		 * @param form a proper-list form with a symbol head
-		 * @return the expansion, or {@code null} (or the form itself) when the head is
-		 * not a user macro
-		 */
-		@Nullable LispVal expandOneStep(LispCons form);
-
-	}
-
-	/**
-	 * Expands {@code (symbol-macrolet ((name expansion)...) body...)} without a
-	 * user-macro hook -- the compile path and {@code macroexpand-1} entry point. See
-	 * {@link #expandSymbolMacrolet(LispCons, UserMacroHook)}.
-	 * @param cons the symbol-macrolet expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandSymbolMacrolet(LispCons cons) {
-		return expandSymbolMacrolet(cons, null);
-	}
-
-	/**
 	 * Expands {@code (symbol-macrolet ((name expansion)...) body...)} by walking the body
 	 * and replacing each free reference to a bound name with its expansion -- the CL
 	 * symbol-macro semantics, shared by the evaluator and all compilers. Unlike the lite
@@ -25251,12 +25218,13 @@ public final class LispMacroExpander {
 	 * </ul>
 	 *
 	 * The global {@code define-symbol-macro} runs the SAME walk over the forms that
-	 * follow it -- see {@link #substituteGlobalSymbolMacros}.
+	 * follow it -- see {@link #substituteGlobalSymbolMacros}. The walk meets no user
+	 * macro: {@code UserMacroExpander.expandAll} has expanded them all on every path,
+	 * with the macro names in scope for an {@code &environment} parameter to read.
 	 * @param cons the symbol-macrolet expression
-	 * @param userMacros one-step user-macro expander, or {@code null} on the compile path
 	 * @return the expanded expression (a {@code progn} of the substituted body)
 	 */
-	public static LispVal expandSymbolMacrolet(LispCons cons, @Nullable UserMacroHook userMacros) {
+	public static LispVal expandSymbolMacrolet(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
 			throw new IllegalArgumentException(LispNames.SYMBOL_MACROLET
@@ -25268,7 +25236,7 @@ public final class LispMacroExpander {
 			if (isDeclareForm(parts.get(i))) {
 				continue;
 			}
-			body.add(substituteSymbolMacros(parts.get(i), macros, userMacros));
+			body.add(substituteSymbolMacros(parts.get(i), macros));
 		}
 		return prognOrNil(body);
 	}
@@ -25276,19 +25244,16 @@ public final class LispMacroExpander {
 	/**
 	 * Substitutes the GLOBAL symbol macros of {@code macros} through one form -- the
 	 * {@code define-symbol-macro} half of the same shadow-aware walk
-	 * {@link #expandSymbolMacrolet(LispCons, UserMacroHook)} runs over a lexical body, so
-	 * a global and a lexical symbol macro behave identically. The interpreter never calls
-	 * it (it consults its table at the reference itself); the compile path does, once per
-	 * top-level form, after {@code UserMacroExpander} has expanded every user macro --
-	 * which is why the hook is optional there.
+	 * {@link #expandSymbolMacrolet(LispCons)} runs over a lexical body, so a global and a
+	 * lexical symbol macro behave identically. The interpreter never calls it (it
+	 * consults its table at the reference itself); the compile path does, once per
+	 * top-level form, after {@code UserMacroExpander} has expanded every user macro.
 	 * @param form one top-level form, already macro-expanded
 	 * @param macros the active global name -> expansion table (empty is a no-op)
-	 * @param userMacros one-step user-macro expander, or {@code null}
 	 * @return the substituted form ({@code form} itself when nothing matched)
 	 */
-	public static LispVal substituteGlobalSymbolMacros(LispVal form, java.util.Map<String, LispVal> macros,
-			@Nullable UserMacroHook userMacros) {
-		return substituteSymbolMacros(form, macros, userMacros);
+	public static LispVal substituteGlobalSymbolMacros(LispVal form, java.util.Map<String, LispVal> macros) {
+		return substituteSymbolMacros(form, macros);
 	}
 
 	/**
@@ -25335,8 +25300,7 @@ public final class LispMacroExpander {
 	 * The shadow-aware substitution behind {@link #expandSymbolMacrolet}; see there for
 	 * the rules. {@code macros} maps each active symbol-macro name to its expansion.
 	 */
-	private static LispVal substituteSymbolMacros(LispVal form, java.util.Map<String, LispVal> macros,
-			@Nullable UserMacroHook userMacros) {
+	private static LispVal substituteSymbolMacros(LispVal form, java.util.Map<String, LispVal> macros) {
 		if (macros.isEmpty()) {
 			return form;
 		}
@@ -25345,7 +25309,7 @@ public final class LispMacroExpander {
 			if (expansion == null) {
 				return form;
 			}
-			return substituteSymbolMacros(expansion, symbolMacrosWithout(macros, sym.name()), userMacros);
+			return substituteSymbolMacros(expansion, symbolMacrosWithout(macros, sym.name()));
 		}
 		if (!(form instanceof LispCons cons)) {
 			return form;
@@ -25357,7 +25321,7 @@ public final class LispMacroExpander {
 		}
 		if (!(cons.car() instanceof LispSymbol head)) {
 			// ((lambda (x) ...) arg...): every element is an expression.
-			return substituteSymbolMacroTail(cons.toList(), 0, macros, userMacros);
+			return substituteSymbolMacroTail(cons.toList(), 0, macros);
 		}
 		List<LispVal> parts = cons.toList();
 		switch (head.name()) {
@@ -25371,19 +25335,19 @@ public final class LispMacroExpander {
 				return form;
 			}
 			case LispNames.LET: {
-				return substituteSymbolMacroLet(parts, macros, userMacros, false);
+				return substituteSymbolMacroLet(parts, macros, false);
 			}
 			case LispNames.LET_STAR: {
-				return substituteSymbolMacroLet(parts, macros, userMacros, true);
+				return substituteSymbolMacroLet(parts, macros, true);
 			}
 			case LispNames.DO, LispNames.DO_STAR: {
-				return substituteSymbolMacroDo(parts, macros, userMacros, LispNames.DO_STAR.equals(head.name()));
+				return substituteSymbolMacroDo(parts, macros, LispNames.DO_STAR.equals(head.name()));
 			}
 			case LispNames.LAMBDA, LispNames.ASYNC_LAMBDA: {
-				return parts.size() < 2 ? form : substituteSymbolMacroLambdaLike(parts, 1, macros, userMacros);
+				return parts.size() < 2 ? form : substituteSymbolMacroLambdaLike(parts, 1, macros);
 			}
 			case LispNames.DEFUN, LispNames.ASYNC_DEFUN: {
-				return parts.size() < 3 ? form : substituteSymbolMacroLambdaLike(parts, 2, macros, userMacros);
+				return parts.size() < 3 ? form : substituteSymbolMacroLambdaLike(parts, 2, macros);
 			}
 			case LispNames.DEFMETHOD: {
 				// (defmethod name [qualifier] (params...) body...): specializers are data
@@ -25393,19 +25357,18 @@ public final class LispMacroExpander {
 					return form;
 				}
 				int llIndex = parts.get(2) instanceof LispSymbol ? 3 : 2;
-				return parts.size() <= llIndex ? form
-						: substituteSymbolMacroLambdaLike(parts, llIndex, macros, userMacros);
+				return parts.size() <= llIndex ? form : substituteSymbolMacroLambdaLike(parts, llIndex, macros);
 			}
 			case LispNames.FLET, LispNames.LABELS: {
-				return substituteSymbolMacroFlet(parts, macros, userMacros);
+				return substituteSymbolMacroFlet(parts, macros);
 			}
 			case LispNames.MACROLET: {
 				// Local macro DEFINITIONS run at expansion time in the null lexical
 				// environment; only the body is expressions.
-				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, parts.get(1));
 			}
 			case LispNames.SYMBOL_MACROLET: {
-				return substituteNestedSymbolMacrolet(parts, macros, userMacros);
+				return substituteNestedSymbolMacrolet(parts, macros);
 			}
 			case LispNames.SETQ: {
 				// A target naming a symbol macro substitutes into a PLACE; the whole form
@@ -25414,7 +25377,7 @@ public final class LispMacroExpander {
 				List<LispVal> out = new java.util.ArrayList<>(parts.size());
 				out.add(parts.get(0));
 				for (int i = 1; i < parts.size(); i++) {
-					LispVal substituted = substituteSymbolMacros(parts.get(i), macros, userMacros);
+					LispVal substituted = substituteSymbolMacros(parts.get(i), macros);
 					if (i % 2 == 1 && substituted instanceof LispCons) {
 						placeTarget = true;
 					}
@@ -25431,19 +25394,19 @@ public final class LispMacroExpander {
 				if (parts.size() == 2 && parts.get(1) instanceof LispCons target
 						&& target.car() instanceof LispSymbol lam
 						&& (LispNames.LAMBDA.equals(lam.name()) || LispNames.ASYNC_LAMBDA.equals(lam.name()))) {
-					return substituteSymbolMacroTail(parts, 1, macros, userMacros);
+					return substituteSymbolMacroTail(parts, 1, macros);
 				}
 				return form;
 			}
 			case LispNames.BLOCK, LispNames.RETURN_FROM: {
-				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, parts.get(1));
 			}
 			case LispNames.TAGBODY: {
 				// Atoms in a tagbody body are go tags (data); conses are statements.
 				List<LispVal> out = new java.util.ArrayList<>(parts.size());
 				out.add(parts.get(0));
 				for (int i = 1; i < parts.size(); i++) {
-					out.add(parts.get(i) instanceof LispCons ? substituteSymbolMacros(parts.get(i), macros, userMacros)
+					out.add(parts.get(i) instanceof LispCons ? substituteSymbolMacros(parts.get(i), macros)
 							: parts.get(i));
 				}
 				return listToCons(out);
@@ -25455,7 +25418,7 @@ public final class LispMacroExpander {
 				out.add(parts.get(0));
 				for (int i = 1; i < parts.size(); i++) {
 					out.add(parts.get(i) instanceof LispCons clause && clause.isProperList()
-							? substituteSymbolMacroTail(clause.toList(), 0, macros, userMacros) : parts.get(i));
+							? substituteSymbolMacroTail(clause.toList(), 0, macros) : parts.get(i));
 				}
 				return listToCons(out);
 			}
@@ -25467,16 +25430,16 @@ public final class LispMacroExpander {
 				List<LispVal> out = new java.util.ArrayList<>(parts.size());
 				out.add(parts.get(0));
 				if (parts.size() > 1) {
-					out.add(substituteSymbolMacros(parts.get(1), macros, userMacros));
+					out.add(substituteSymbolMacros(parts.get(1), macros));
 				}
 				for (int i = 2; i < parts.size(); i++) {
 					out.add(parts.get(i) instanceof LispCons clause && clause.isProperList()
-							? substituteSymbolMacroTail(clause.toList(), 1, macros, userMacros) : parts.get(i));
+							? substituteSymbolMacroTail(clause.toList(), 1, macros) : parts.get(i));
 				}
 				return listToCons(out);
 			}
 			case LispNames.HANDLER_CASE, LispNames.RESTART_CASE: {
-				return substituteSymbolMacroHandlerClauses(parts, macros, userMacros);
+				return substituteSymbolMacroHandlerClauses(parts, macros);
 			}
 			case LispNames.HANDLER_BIND: {
 				// (handler-bind ((type handler)...) body...): types are data, handlers
@@ -25489,11 +25452,11 @@ public final class LispMacroExpander {
 					List<LispVal> newBindings = new java.util.ArrayList<>();
 					for (LispVal binding : bindingsCons.toList()) {
 						newBindings.add(binding instanceof LispCons pair && pair.isProperList()
-								? substituteSymbolMacroTail(pair.toList(), 1, macros, userMacros) : binding);
+								? substituteSymbolMacroTail(pair.toList(), 1, macros) : binding);
 					}
 					bindings = listToCons(newBindings);
 				}
-				return substituteSymbolMacroTail(parts, 2, macros, userMacros, bindings);
+				return substituteSymbolMacroTail(parts, 2, macros, bindings);
 			}
 			case LispNames.DOLIST, LispNames.DOTIMES: {
 				// (dolist (var listform result) body...): the listform is outer scope,
@@ -25507,9 +25470,9 @@ public final class LispMacroExpander {
 				List<LispVal> newSpec = new java.util.ArrayList<>(specParts.size());
 				newSpec.add(specParts.get(0));
 				for (int i = 1; i < specParts.size(); i++) {
-					newSpec.add(substituteSymbolMacros(specParts.get(i), i == 1 ? macros : inner, userMacros));
+					newSpec.add(substituteSymbolMacros(specParts.get(i), i == 1 ? macros : inner));
 				}
-				return substituteSymbolMacroTail(parts, 2, inner, userMacros, listToCons(newSpec));
+				return substituteSymbolMacroTail(parts, 2, inner, listToCons(newSpec));
 			}
 			case LispNames.WITH_OPEN_FILE, LispNames.WITH_OPEN_STREAM, LispNames.WITH_OUTPUT_TO_STRING,
 					LispNames.WITH_INPUT_FROM_STRING: {
@@ -25524,9 +25487,9 @@ public final class LispMacroExpander {
 				List<LispVal> newSpec = new java.util.ArrayList<>(specParts.size());
 				newSpec.add(specParts.get(0));
 				for (int i = 1; i < specParts.size(); i++) {
-					newSpec.add(substituteSymbolMacros(specParts.get(i), macros, userMacros));
+					newSpec.add(substituteSymbolMacros(specParts.get(i), macros));
 				}
-				return substituteSymbolMacroTail(parts, 2, inner, userMacros, listToCons(newSpec));
+				return substituteSymbolMacroTail(parts, 2, inner, listToCons(newSpec));
 			}
 			case LispNames.WITH_SLOTS, LispNames.WITH_ACCESSORS: {
 				// (with-slots (slot | (var slot)...) obj body...): the entry variables
@@ -25548,9 +25511,9 @@ public final class LispMacroExpander {
 				List<LispVal> out = new java.util.ArrayList<>(parts.size());
 				out.add(parts.get(0));
 				out.add(parts.get(1));
-				out.add(substituteSymbolMacros(parts.get(2), macros, userMacros));
+				out.add(substituteSymbolMacros(parts.get(2), macros));
 				for (int i = 3; i < parts.size(); i++) {
-					out.add(substituteSymbolMacros(parts.get(i), inner, userMacros));
+					out.add(substituteSymbolMacros(parts.get(i), inner));
 				}
 				return listToCons(out);
 			}
@@ -25571,9 +25534,9 @@ public final class LispMacroExpander {
 				List<LispVal> out = new java.util.ArrayList<>(parts.size());
 				out.add(parts.get(0));
 				out.add(parts.get(1));
-				out.add(substituteSymbolMacros(parts.get(2), macros, userMacros));
+				out.add(substituteSymbolMacros(parts.get(2), macros));
 				for (int i = 3; i < parts.size(); i++) {
-					out.add(substituteSymbolMacros(parts.get(i), inner, userMacros));
+					out.add(substituteSymbolMacros(parts.get(i), inner));
 				}
 				return listToCons(out);
 			}
@@ -25584,9 +25547,9 @@ public final class LispMacroExpander {
 						&& vars.toList()
 							.stream()
 							.anyMatch(v -> v instanceof LispSymbol s && macros.containsKey(s.name()))) {
-					return substituteSymbolMacros(expandMultipleValueSetq(cons), macros, userMacros);
+					return substituteSymbolMacros(expandMultipleValueSetq(cons), macros);
 				}
-				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, parts.get(1));
 			}
 			case LispNames.PSETQ: {
 				// (psetq a 1 b 2): a target naming a symbol macro needs the setf
@@ -25599,12 +25562,12 @@ public final class LispMacroExpander {
 					}
 				}
 				if (macroTarget) {
-					return substituteSymbolMacros(expandPsetq(cons), macros, userMacros);
+					return substituteSymbolMacros(expandPsetq(cons), macros);
 				}
 				List<LispVal> out = new java.util.ArrayList<>(parts.size());
 				out.add(parts.get(0));
 				for (int i = 1; i < parts.size(); i++) {
-					out.add(i % 2 == 0 ? substituteSymbolMacros(parts.get(i), macros, userMacros) : parts.get(i));
+					out.add(i % 2 == 0 ? substituteSymbolMacros(parts.get(i), macros) : parts.get(i));
 				}
 				return listToCons(out);
 			}
@@ -25621,14 +25584,14 @@ public final class LispMacroExpander {
 				List<LispVal> out = new java.util.ArrayList<>(parts.size());
 				out.add(parts.get(0));
 				out.add(parts.get(1));
-				out.add(substituteSymbolMacros(parts.get(2), macros, userMacros));
+				out.add(substituteSymbolMacros(parts.get(2), macros));
 				for (int i = 3; i < parts.size(); i++) {
-					out.add(substituteSymbolMacros(parts.get(i), inner, userMacros));
+					out.add(substituteSymbolMacros(parts.get(i), inner));
 				}
 				return listToCons(out);
 			}
 			case LispNames.THE: {
-				return parts.size() < 3 ? form : substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+				return parts.size() < 3 ? form : substituteSymbolMacroTail(parts, 2, macros, parts.get(1));
 			}
 			case LispNames.CHECK_TYPE, LispNames.ASSERT: {
 				// (check-type place type [string]) / (assert test ...): the type / the
@@ -25638,36 +25601,30 @@ public final class LispMacroExpander {
 					return form;
 				}
 				List<LispVal> out = new java.util.ArrayList<>(parts);
-				out.set(1, substituteSymbolMacros(parts.get(1), macros, userMacros));
+				out.set(1, substituteSymbolMacros(parts.get(1), macros));
 				return listToCons(out);
 			}
 			case LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT: {
-				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, parts.get(1));
 			}
 			case LispNames.EVAL_WHEN: {
-				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, parts.get(1));
 			}
 			case LispNames.LOOP: {
 				// No stable surface shape (clause keywords, destructuring patterns):
 				// lower one step and walk the expansion, like SpecialVarCollector.
-				return substituteSymbolMacros(expandLoop(cons), macros, userMacros);
+				return substituteSymbolMacros(expandLoop(cons), macros);
 			}
 			case LispNames.PROG: {
-				return substituteSymbolMacros(expandProg(cons, false), macros, userMacros);
+				return substituteSymbolMacros(expandProg(cons, false), macros);
 			}
 			case LispNames.PROG_STAR: {
-				return substituteSymbolMacros(expandProg(cons, true), macros, userMacros);
+				return substituteSymbolMacros(expandProg(cons, true), macros);
 			}
 			default: {
-				if (userMacros != null) {
-					LispVal expansion = userMacros.expandOneStep(cons);
-					if (expansion != null && expansion != cons) {
-						return substituteSymbolMacros(expansion, macros, userMacros);
-					}
-				}
 				// Ordinary call / all-expression form: the head is a function-namespace
 				// reference (Lisp-2), the arguments are expressions.
-				return substituteSymbolMacroTail(parts, 1, macros, userMacros);
+				return substituteSymbolMacroTail(parts, 1, macros);
 			}
 		}
 	}
@@ -25678,14 +25635,14 @@ public final class LispMacroExpander {
 	 * {@code parts[from..]} as expressions with the given (possibly narrowed) map.
 	 */
 	private static LispVal substituteSymbolMacroTail(List<LispVal> parts, int from,
-			java.util.Map<String, LispVal> macros, @Nullable UserMacroHook userMacros, LispVal... fixed) {
+			java.util.Map<String, LispVal> macros, LispVal... fixed) {
 		List<LispVal> out = new java.util.ArrayList<>(parts.size());
 		if (from > 0) {
 			out.add(parts.get(0));
 		}
 		out.addAll(List.of(fixed));
 		for (int i = from; i < parts.size(); i++) {
-			out.add(substituteSymbolMacros(parts.get(i), macros, userMacros));
+			out.add(substituteSymbolMacros(parts.get(i), macros));
 		}
 		return listToCons(out);
 	}
@@ -25696,7 +25653,7 @@ public final class LispMacroExpander {
 	 * {@code let}, in the incrementally narrowed scope for {@code let*}.
 	 */
 	private static LispVal substituteSymbolMacroLet(List<LispVal> parts, java.util.Map<String, LispVal> macros,
-			@Nullable UserMacroHook userMacros, boolean sequential) {
+			boolean sequential) {
 		if (parts.size() < 2) {
 			return listToCons(parts);
 		}
@@ -25711,8 +25668,7 @@ public final class LispMacroExpander {
 				}
 				else if (binding instanceof LispCons pair && pair.isProperList()
 						&& pair.car() instanceof LispSymbol name) {
-					newBindings
-						.add(substituteSymbolMacroTail(pair.toList(), 1, sequential ? inner : macros, userMacros));
+					newBindings.add(substituteSymbolMacroTail(pair.toList(), 1, sequential ? inner : macros));
 					inner = symbolMacrosWithout(inner, name.name());
 				}
 				else {
@@ -25721,7 +25677,7 @@ public final class LispMacroExpander {
 			}
 			bindingList = listToCons(newBindings);
 		}
-		return substituteSymbolMacroTail(parts, 2, inner, userMacros, bindingList);
+		return substituteSymbolMacroTail(parts, 2, inner, bindingList);
 	}
 
 	/**
@@ -25730,7 +25686,7 @@ public final class LispMacroExpander {
 	 * result forms, and the body all see every variable.
 	 */
 	private static LispVal substituteSymbolMacroDo(List<LispVal> parts, java.util.Map<String, LispVal> macros,
-			@Nullable UserMacroHook userMacros, boolean sequential) {
+			boolean sequential) {
 		if (parts.size() < 3) {
 			return listToCons(parts);
 		}
@@ -25754,11 +25710,11 @@ public final class LispMacroExpander {
 					List<LispVal> newPair = new java.util.ArrayList<>(pairParts.size());
 					newPair.add(name);
 					if (pairParts.size() > 1) {
-						newPair.add(substituteSymbolMacros(pairParts.get(1), initScope, userMacros));
+						newPair.add(substituteSymbolMacros(pairParts.get(1), initScope));
 					}
 					// The step form sees every do variable.
 					for (int i = 2; i < pairParts.size(); i++) {
-						newPair.add(substituteSymbolMacros(pairParts.get(i), inner, userMacros));
+						newPair.add(substituteSymbolMacros(pairParts.get(i), inner));
 					}
 					newBindings.add(listToCons(newPair));
 					if (sequential) {
@@ -25776,9 +25732,9 @@ public final class LispMacroExpander {
 		}
 		LispVal endClause = parts.get(2);
 		if (endClause instanceof LispCons endCons && endCons.isProperList()) {
-			endClause = substituteSymbolMacroTail(endCons.toList(), 0, inner, userMacros);
+			endClause = substituteSymbolMacroTail(endCons.toList(), 0, inner);
 		}
-		return substituteSymbolMacroTail(parts, 3, inner, userMacros, bindingList, endClause);
+		return substituteSymbolMacroTail(parts, 3, inner, bindingList, endClause);
 	}
 
 	/**
@@ -25788,7 +25744,7 @@ public final class LispMacroExpander {
 	 * keyword are walked (a cons before one is a defmethod specializer -- data).
 	 */
 	private static LispVal substituteSymbolMacroLambdaLike(List<LispVal> parts, int llIndex,
-			java.util.Map<String, LispVal> macros, @Nullable UserMacroHook userMacros) {
+			java.util.Map<String, LispVal> macros) {
 		java.util.Set<String> names = new java.util.HashSet<>();
 		collectLambdaListNames(parts.get(llIndex), names);
 		java.util.Map<String, LispVal> inner = symbolMacrosWithoutAll(macros, names);
@@ -25808,7 +25764,7 @@ public final class LispMacroExpander {
 					List<LispVal> specParts = spec.toList();
 					List<LispVal> newSpec = new java.util.ArrayList<>(specParts.size());
 					newSpec.add(specParts.get(0));
-					newSpec.add(substituteSymbolMacros(specParts.get(1), inner, userMacros));
+					newSpec.add(substituteSymbolMacros(specParts.get(1), inner));
 					for (int i = 2; i < specParts.size(); i++) {
 						newSpec.add(specParts.get(i));
 					}
@@ -25822,7 +25778,7 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> kept = new java.util.ArrayList<>(parts.subList(1, llIndex));
 		kept.add(lambdaList);
-		return substituteSymbolMacroTail(parts, llIndex + 1, inner, userMacros, kept.toArray(new LispVal[0]));
+		return substituteSymbolMacroTail(parts, llIndex + 1, inner, kept.toArray(new LispVal[0]));
 	}
 
 	/**
@@ -25830,22 +25786,20 @@ public final class LispMacroExpander {
 	 * function namespace (no variable shadowing); each definition body sees the macros
 	 * minus its own lambda-list names, the main body sees them all.
 	 */
-	private static LispVal substituteSymbolMacroFlet(List<LispVal> parts, java.util.Map<String, LispVal> macros,
-			@Nullable UserMacroHook userMacros) {
+	private static LispVal substituteSymbolMacroFlet(List<LispVal> parts, java.util.Map<String, LispVal> macros) {
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons defsCons) || !defsCons.isProperList()) {
-			return parts.size() < 2 ? listToCons(parts)
-					: substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+			return parts.size() < 2 ? listToCons(parts) : substituteSymbolMacroTail(parts, 2, macros, parts.get(1));
 		}
 		List<LispVal> newDefs = new java.util.ArrayList<>();
 		for (LispVal def : defsCons.toList()) {
 			if (def instanceof LispCons defCons && defCons.isProperList() && defCons.toList().size() >= 2) {
-				newDefs.add(substituteSymbolMacroLambdaLike(defCons.toList(), 1, macros, userMacros));
+				newDefs.add(substituteSymbolMacroLambdaLike(defCons.toList(), 1, macros));
 			}
 			else {
 				newDefs.add(def);
 			}
 		}
-		return substituteSymbolMacroTail(parts, 2, macros, userMacros, listToCons(newDefs));
+		return substituteSymbolMacroTail(parts, 2, macros, listToCons(newDefs));
 	}
 
 	/**
@@ -25855,20 +25809,20 @@ public final class LispMacroExpander {
 	 * lambda-list names.
 	 */
 	private static LispVal substituteSymbolMacroHandlerClauses(List<LispVal> parts,
-			java.util.Map<String, LispVal> macros, @Nullable UserMacroHook userMacros) {
+			java.util.Map<String, LispVal> macros) {
 		if (parts.size() < 2) {
 			return listToCons(parts);
 		}
 		List<LispVal> out = new java.util.ArrayList<>(parts.size());
 		out.add(parts.get(0));
-		out.add(substituteSymbolMacros(parts.get(1), macros, userMacros));
+		out.add(substituteSymbolMacros(parts.get(1), macros));
 		for (int i = 2; i < parts.size(); i++) {
 			if (parts.get(i) instanceof LispCons clause && clause.isProperList() && clause.toList().size() >= 2) {
 				List<LispVal> clauseParts = clause.toList();
 				java.util.Set<String> names = new java.util.HashSet<>();
 				collectLambdaListNames(clauseParts.get(1), names);
 				java.util.Map<String, LispVal> inner = symbolMacrosWithoutAll(macros, names);
-				out.add(substituteSymbolMacroTail(clauseParts, 2, inner, userMacros, clauseParts.get(1)));
+				out.add(substituteSymbolMacroTail(clauseParts, 2, inner, clauseParts.get(1)));
 			}
 			else {
 				out.add(parts.get(i));
@@ -25883,8 +25837,7 @@ public final class LispMacroExpander {
 	 * inner body is walked with the inner names shadowing the outer ones, and the form
 	 * itself is kept for the later expansion of the inner binding.
 	 */
-	private static LispVal substituteNestedSymbolMacrolet(List<LispVal> parts, java.util.Map<String, LispVal> macros,
-			@Nullable UserMacroHook userMacros) {
+	private static LispVal substituteNestedSymbolMacrolet(List<LispVal> parts, java.util.Map<String, LispVal> macros) {
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
 			return listToCons(parts);
 		}
@@ -25895,7 +25848,7 @@ public final class LispMacroExpander {
 			for (LispVal binding : bindingsCons.toList()) {
 				if (binding instanceof LispCons pair && pair.isProperList() && pair.toList().size() == 2
 						&& pair.car() instanceof LispSymbol name) {
-					newBindings.add(substituteSymbolMacroTail(pair.toList(), 1, macros, userMacros));
+					newBindings.add(substituteSymbolMacroTail(pair.toList(), 1, macros));
 					inner = symbolMacrosWithout(inner, name.name());
 				}
 				else {
@@ -25904,7 +25857,7 @@ public final class LispMacroExpander {
 			}
 			bindingList = listToCons(newBindings);
 		}
-		return substituteSymbolMacroTail(parts, 2, inner, userMacros, bindingList);
+		return substituteSymbolMacroTail(parts, 2, inner, bindingList);
 	}
 
 	/**
@@ -25912,7 +25865,7 @@ public final class LispMacroExpander {
 	 * keywords excluded), spec heads ({@code (name ...)} and the {@code ((:key name)
 	 * ...)} keyword form), and supplied-p names.
 	 */
-	private static void collectLambdaListNames(LispVal lambdaList, java.util.Set<String> names) {
+	public static void collectLambdaListNames(LispVal lambdaList, java.util.Set<String> names) {
 		if (!(lambdaList instanceof LispCons llCons) || !llCons.isProperList()) {
 			return;
 		}
@@ -25943,7 +25896,7 @@ public final class LispMacroExpander {
 	 * conservative: a nested spec's default expression symbols are collected as names
 	 * too, which can only over-shadow, never mis-substitute.
 	 */
-	private static void collectPatternNames(LispVal pattern, java.util.Set<String> names) {
+	public static void collectPatternNames(LispVal pattern, java.util.Set<String> names) {
 		while (pattern instanceof LispCons cons) {
 			collectPatternNames(cons.car(), names);
 			pattern = cons.cdr();
@@ -25965,7 +25918,7 @@ public final class LispMacroExpander {
 	}
 
 	/** The map minus a set of names; the map itself when none is present. */
-	private static java.util.Map<String, LispVal> symbolMacrosWithoutAll(java.util.Map<String, LispVal> macros,
+	public static java.util.Map<String, LispVal> symbolMacrosWithoutAll(java.util.Map<String, LispVal> macros,
 			java.util.Set<String> names) {
 		if (names.stream().noneMatch(macros::containsKey)) {
 			return macros;
