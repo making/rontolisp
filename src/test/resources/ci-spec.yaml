@@ -4671,8 +4671,9 @@ cases:
       (print (handler-case (delete-package :cl) (package-error (c) (package-error-package c))))
       (print (handler-case (rename-package :cl :cl2) (package-error (c) (package-error-package c))))
       (print (handler-case (package-nicknames :no-such-ci-pkg-zzz) (package-error (c) (package-error-package c))))
-      (print (length (find-all-symbols 'car)))
-      (print (member 'car (find-all-symbols 'car)))
+      ;; Other cases intern a CAR of their own in the shared universe, so ask for cl's.
+      (print (count 'car (find-all-symbols 'car)))
+      (print (find 'car (find-all-symbols 'car)))
       (print (apropos-list "CAR" :cl))
       (print (do-all-symbols (s nil) (when (eq s 'car) (return s))))
       (print (do-symbols (s :cl-user "ci-ds") (when (string= (symbol-name s) "CAR") (return :ci-found))))
@@ -4707,7 +4708,7 @@ cases:
       :CL
       :NO-SUCH-CI-PKG-ZZZ
       1
-      (CAR)
+      CAR
       (CAR MAPCAR)
       CAR
       :CI-FOUND
