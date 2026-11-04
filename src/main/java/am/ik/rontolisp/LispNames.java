@@ -9289,18 +9289,6 @@ public final class LispNames {
 	 */
 	public static final String PERFORM = "PERFORM";
 
-	/** The canonical qualified spelling of {@code asdf:perform}. */
-	public static final String ASDF_PERFORM = ASDF_PKG + ":" + PERFORM;
-
-	/** The {@code asdf:operation} base class of the operation classes. */
-	public static final String OPERATION = "OPERATION";
-
-	/** The {@code asdf:prepare-op} operation class. */
-	public static final String PREPARE_OP = "PREPARE-OP";
-
-	/** The {@code asdf:compile-op} operation class. */
-	public static final String COMPILE_OP = "COMPILE-OP";
-
 	/** The {@code asdf:load-op} operation class. */
 	public static final String LOAD_OP = "LOAD-OP";
 
@@ -9310,105 +9298,14 @@ public final class LispNames {
 	 */
 	public static final String OPERATE = "OPERATE";
 
-	/** {@code asdf:make-operation} -- the one cached instance of an operation class. */
-	public static final String MAKE_OPERATION = "MAKE-OPERATION";
-
-	/** {@code asdf:input-files} -- generic: the files an operation reads. */
-	public static final String INPUT_FILES = "INPUT-FILES";
-
-	/**
-	 * {@code asdf:output-files} -- generic: the files an operation writes (none here).
-	 */
-	public static final String OUTPUT_FILES = "OUTPUT-FILES";
-
-	/**
-	 * {@code asdf:source-file-type} -- generic: a component's file extension. Only the
-	 * {@code .asd} parse decides an extension here; the run-time generic exists so a
-	 * library may define methods on it (lass).
-	 */
-	public static final String SOURCE_FILE_TYPE = "SOURCE-FILE-TYPE";
-
-	/**
-	 * {@code asdf:operation-done-p} -- generic: whether an action needs no performing.
-	 * The default answers {@code t}; it exists so a library may define methods on it
-	 * (arnesi's {@code clean-op}).
-	 */
-	public static final String OPERATION_DONE_P = "OPERATION-DONE-P";
-
-	/**
-	 * The {@code asdf:compile-bundle-op} operation class -- a class only: {@code operate}
-	 * refuses it (there are no fasls to bundle).
-	 */
-	public static final String COMPILE_BUNDLE_OP = "COMPILE-BUNDLE-OP";
-
 	/** The canonical qualified spelling of {@code asdf:test-system}. */
 	public static final String ASDF_TEST_SYSTEM = ASDF_PKG + ":" + TEST_SYSTEM;
-
-	/**
-	 * {@code asdf:registered-systems} -- the downcased names of every registered system
-	 * (declared by a {@code .asd}/{@code defsystem}, derived package-inferred sub-systems
-	 * and loaded built-in shim systems), in registration order.
-	 */
-	public static final String REGISTERED_SYSTEMS = "REGISTERED-SYSTEMS";
-
-	/**
-	 * {@code asdf:*asdf-version*} -- the contract version {@code "3.3.7"} (uiop's), so an
-	 * {@code .asd} gating on it (lisp-binary's bundled-ASDF upgrade) finds a current one.
-	 */
-	public static final String ASDF_VERSION_VAR = "*ASDF-VERSION*";
-
-	/** {@code asdf:component-name} -- reader: the component's downcase-canonical name. */
-	public static final String COMPONENT_NAME = "COMPONENT-NAME";
-
-	/**
-	 * {@code asdf:component-version} -- reader: the {@code :version} string the system's
-	 * {@code defsystem} declared, or nil when it declared none as a plain string (an ASDF
-	 * {@code (:read-file-form ...)} indirection is never evaluated here, and a component
-	 * file has no version of its own). dexador builds its {@code User-Agent} from
-	 * {@code (asdf:component-version (asdf:find-system :dexador))}.
-	 */
-	public static final String COMPONENT_VERSION = "COMPONENT-VERSION";
-
-	/**
-	 * {@code asdf:component-children} -- reader: a parent component's children in load
-	 * order (a system's {@code cl-source-file}s, one per component file).
-	 */
-	public static final String COMPONENT_CHILDREN = "COMPONENT-CHILDREN";
-
-	/**
-	 * {@code asdf:component-sideway-dependencies} -- reader: a system's
-	 * {@code :depends-on} names (package-inferred sub-system names included).
-	 */
-	public static final String COMPONENT_SIDEWAY_DEPENDENCIES = "COMPONENT-SIDEWAY-DEPENDENCIES";
-
-	/** {@code asdf:component-parent} -- reader: the parent component, nil on a system. */
-	public static final String COMPONENT_PARENT = "COMPONENT-PARENT";
-
-	/**
-	 * {@code asdf:component-system} -- walks {@code component-parent} up to the system.
-	 */
-	public static final String COMPONENT_SYSTEM = "COMPONENT-SYSTEM";
 
 	/** The {@code asdf:component} base class of the component metaobject family. */
 	public static final String COMPONENT = "COMPONENT";
 
-	/** The {@code asdf:child-component} mixin (a component with a parent). */
-	public static final String CHILD_COMPONENT = "CHILD-COMPONENT";
-
-	/** The {@code asdf:parent-component} mixin (a component with children). */
-	public static final String PARENT_COMPONENT = "PARENT-COMPONENT";
-
 	/** The {@code asdf:module} component class (real ASDF's, {@code system}'s parent). */
 	public static final String MODULE = "MODULE";
-
-	/** The {@code asdf:source-file} component class. */
-	public static final String SOURCE_FILE = "SOURCE-FILE";
-
-	/** The {@code asdf:cl-source-file} component class (one per {@code :file}). */
-	public static final String CL_SOURCE_FILE = "CL-SOURCE-FILE";
-
-	/** The {@code asdf:static-file} component class (ordering-only entries). */
-	public static final String STATIC_FILE = "STATIC-FILE";
 
 	/**
 	 * {@code asdf:system-source-directory} -- returns the system's source directory (with
@@ -9437,17 +9334,8 @@ public final class LispNames {
 	 */
 	public static final String COMPONENT_PATHNAME = "COMPONENT-PATHNAME";
 
-	/** The canonical qualified spelling of {@code asdf:component-pathname}. */
-	public static final String ASDF_COMPONENT_PATHNAME = ASDF_PKG + ":" + COMPONENT_PATHNAME;
-
 	/** The canonical qualified spelling of {@code asdf:find-system}. */
 	public static final String ASDF_FIND_SYSTEM = ASDF_PKG + ":" + FIND_SYSTEM;
-
-	/** The canonical qualified spelling of {@code asdf:system-relative-pathname}. */
-	public static final String ASDF_SYSTEM_RELATIVE_PATHNAME = ASDF_PKG + ":" + SYSTEM_RELATIVE_PATHNAME;
-
-	/** The canonical qualified spelling of {@code asdf:system-source-directory}. */
-	public static final String ASDF_SYSTEM_SOURCE_DIRECTORY = ASDF_PKG + ":" + SYSTEM_SOURCE_DIRECTORY;
 
 	/**
 	 * {@code uiop:not-implemented-error} -- upstream's own name for "this implementation

@@ -51,7 +51,7 @@ cl-project, caveman2), even on a line never reached. prove, cl-project and cavem
   Interpreter: read at each search, each entry evaluated (`centralRegistryDirs`). Compile path: a
   top-level `push`/`pushnew` of a directory that folds (`centralRegistryPush`, the `load` path folder)
   goes on `Ctx.centralRegistry`, and the form stays for the program to read the variable.
-  `*system-definition-search-functions*` is nil and nothing consults it.
+  `*system-definition-search-functions*` is nil and nothing consults it (`.todo/i25`).
 - **`find-system` searches on the interpreter** (`locateSystem`): the `.asd` runs and registers; it
   downloads nothing and loads no system. A refused name and a file already loading answer nil. The
   primary's `.asd` is not read again for a sub-system. A compile path answers its baked table.
@@ -68,7 +68,7 @@ cl-project, caveman2), even on a line never reached. prove, cl-project and cavem
   `registered-systems` until the next `find-system`, which answers a new instance of the baked record;
   a load loads nothing, so `component-loaded-p` is `t` again from then. Interpreter: the registry forgets,
   and the next load reruns the file.
-- **Flat model limits** (`.todo`): a `:module` is no instance, so `find-component` matches a child's
+- **Flat model limits** (`.todo/i23`): a `:module` is no instance, so `find-component` matches a child's
   relative path whole or from a directory boundary and a module itself is not found;
   `component-name` is the relative path (`"src/m/two"`, real `"two"`).
 - **`component-depends-on`** answers real ASDF's shapes (measured), nothing here reads them.
@@ -334,7 +334,7 @@ iff declared) is the whole marker. All rules in `AsdfSystems`:
   (`AsdfSystems.checkIgnoredLoadOptions`): `:force`/`:verbose`/`:silent` have nothing to drive
   (no fasl cache, a second load is a no-op), and rejecting them would make lack's
   `find-package-or-load` unloadable. The SHAPE is still checked.
-- **Search order**: dir of the loading file, then `--system-path`, then
+- **Search order**: `asdf:*central-registry*`, dir of the loading file, then `--system-path`, then
   `RONTOLISP_SOURCE_REGISTRY`, plus a `ql:quickload`'s download cache ([dists.md](dists.md)).
   `RontoLispCli.systemPath()` parses the `File.pathSeparator`-joined lists. The `asdf` package is
   seeded in `PackageRegistry`.
