@@ -33157,6 +33157,78 @@ standalone:
       1
       "a"
       in
+  - name: map-and-coerce-build-the-vector-their-result-type-asks-for
+    source: |
+      ;; Standalone: the concatenated corpus names #'concatenate and every packed builder
+      ;; elsewhere, which hides the gates this pins.
+      (deftype mp-octets () '(simple-array (unsigned-byte 8) (*)))
+      (deftype mp-general () 'vector)
+      (deftype mp-pair () 'list)
+      (deftype mp-text () 'string)
+      (defun mp-line (v) (format t "~S~%" v))
+      (defun mp-show (v) (mp-line (list v (array-element-type v))))
+      ;; a literal result type
+      (mp-show (map '(simple-array (unsigned-byte 8) (*)) #'char-code "abc"))
+      (mp-show (map '(vector (unsigned-byte 16)) #'+ '(1 2 3) #(10 20)))
+      (mp-show (map '(vector single-float) #'identity '(1.5)))
+      (mp-show (map '(vector character) #'char-upcase "ab"))
+      (mp-show (map '(vector t) #'1+ '(1)))
+      (mp-show (map '(vector bit) #'identity '(1 0)))
+      (mp-show (map '(simple-vector 2) #'1+ '(1 2)))
+      ;; a deftype alias
+      (mp-show (map 'mp-octets #'char-code "xy"))
+      (mp-show (map 'mp-general #'1+ '(1)))
+      (mp-line (map 'mp-pair #'1+ #(1)))
+      (mp-line (map 'mp-text #'char-upcase "t"))
+      (mp-line (map 'cons #'1+ '(1)))
+      (mp-line (typep (map 'mp-octets #'1+ '(1)) 'mp-octets))
+      ;; a result type computed at run time
+      (let ((ty '(vector (unsigned-byte 16))))
+        (mp-show (coerce '(1 2) ty))
+        (mp-show (map ty #'1+ '(1))))
+      (let ((ty 'mp-octets))
+        (mp-show (coerce '(1 2) ty))
+        (mp-show (map ty #'1+ '(1))))
+      (let ((v (make-array 2 :element-type '(unsigned-byte 8) :initial-element 5)))
+        (mp-show (map (type-of v) #'1+ v))
+        (mp-show (coerce '(1 2) (type-of v))))
+      (let ((ty '(vector t)))
+        (mp-show (coerce '(1 2) ty))
+        (mp-show (map ty #'1+ '(1))))
+      (let ((ty '(vector character)))
+        (mp-show (coerce '(#\a) ty)))
+      ;; the operator as a value
+      (mp-show (funcall #'map '(vector (unsigned-byte 8)) #'1+ '(1)))
+      (mp-show (funcall #'coerce '(1) '(vector (unsigned-byte 8))))
+      (mp-show (apply #'map '(vector character) #'char-upcase '("a")))
+      (mp-show (funcall #'map 'vector #'1+ '(1)))
+    stdout: |
+      (#(97 98 99) (UNSIGNED-BYTE 8))
+      (#(11 22) (UNSIGNED-BYTE 16))
+      (#f(1.5) SINGLE-FLOAT)
+      ("AB" CHARACTER)
+      (#(2) T)
+      (#*10 BIT)
+      (#(2 3) T)
+      (#(120 121) (UNSIGNED-BYTE 8))
+      (#(2) T)
+      (2)
+      "T"
+      (2)
+      T
+      (#(1 2) (UNSIGNED-BYTE 16))
+      (#(2) (UNSIGNED-BYTE 16))
+      (#(1 2) (UNSIGNED-BYTE 8))
+      (#(2) (UNSIGNED-BYTE 8))
+      (#(6 6) (UNSIGNED-BYTE 8))
+      (#(1 2) (UNSIGNED-BYTE 8))
+      (#(1 2) T)
+      (#(2) T)
+      ("a" CHARACTER)
+      (#(2) (UNSIGNED-BYTE 8))
+      (#(1) (UNSIGNED-BYTE 8))
+      ("A" CHARACTER)
+      (#(2) T)
   - name: uncaught-defmethod-lambda-list-refusal
     source: |
       ;; A handler-case anywhere puts the wasm module in EH mode, where an uncaught

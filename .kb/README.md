@@ -84,7 +84,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 ## Sequences
 
 - [map-family.md](map-family.md) -- `mapcar`/`mapc`/`mapcan`/`maplist`/`mapcon`/`mapl` over any number of lists
-- [concatenate-result-families.md](concatenate-result-families.md) -- `concatenate`'s `string`/`list`/`vector` result families
+- [concatenate-result-families.md](concatenate-result-families.md) -- `concatenate`'s `string`/`list`/`vector` result families; `map`'s result type, a type `coerce` or `map` computes reaching the packed builders
 - [sort.md](sort.md) -- one merge sort shared by every backend and by `stable-sort`
 - [copy-list-runtime.md](copy-list-runtime.md) -- `copy-list` keeps a dotted tail; `map 'string` / `coerce` to string reject a non-character
 - [length-runtime.md](length-runtime.md) -- generic `length` dispatch as a shared callee

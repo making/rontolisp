@@ -693,6 +693,9 @@ public final class BuiltinFunctionWrappers {
 				if (gray != null && userDefinedNames.containsAll(gray.helpers())) {
 					chosen = gray.dispatching();
 				}
+				if (LispNames.MAP.equals(def.name) && excludedNames.contains(LispNames.CONCATENATE)) {
+					chosen = mapWrapper(false);
+				}
 				wrappers.add(chosen.toSetqLambda());
 			}
 		}
@@ -1368,7 +1371,7 @@ public final class BuiltinFunctionWrappers {
 	// (if (member __map_t '(string ...)) (coerce __map_r 'string)
 	// (if (member __map_t '(list cons)) (coerce __map_r 'list)
 	// (coerce __map_r 'vector)))))))
-	private static WrapperDef mapWrapper() {
+	private static WrapperDef mapWrapper(boolean concatenatePresent) {
 		LispSymbol seqs = new LispSymbol("__map_ss");
 		LispSymbol acc = new LispSymbol("__map_acc");
 		LispSymbol collected = new LispSymbol("__map_r");
@@ -1395,7 +1398,15 @@ public final class BuiltinFunctionWrappers {
 		LispSymbol head = new LispSymbol("__map_t");
 		LispVal headOf = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.CONSP, "type"),
 				callV(LispNames.CAR, new LispSymbol("type")), new LispSymbol("type")));
-		LispVal toVector = coerceTo(collected.name(), "VECTOR");
+		// A compound type carries an element type only the #'concatenate wrapper can
+		// dispatch over, where that wrapper is in the program (generate).
+		LispVal toGeneralVector = coerceTo(collected.name(), "VECTOR");
+		LispVal toVector = concatenatePresent ? listToCons(List.of(new LispSymbol(LispNames.IF),
+				call(LispNames.CONSP, "type"),
+				callV(LispNames.FUNCALL,
+						listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.CONCATENATE))),
+						new LispSymbol("type"), collected),
+				toGeneralVector)) : toGeneralVector;
 		LispVal toList = coerceTo(collected.name(), "LIST");
 		LispVal toString = coerceTo(collected.name(), "STRING");
 		LispVal byFamily = listToCons(List.of(new LispSymbol(LispNames.IF),
@@ -3190,7 +3201,7 @@ public final class BuiltinFunctionWrappers {
 					List.of(call(LispNames.CHANGE_CLASS_RUNTIME, "o", "c", "r"))),
 			unary(LispNames.ENDP), listStarWrapper(), binary(LispNames.REVAPPEND), binary(LispNames.NRECONC),
 			vectorWrapper(), binary(LispNames.SVREF), unary(LispNames.ARRAY_RANK), binary(LispNames.ARRAY_DIMENSION),
-			unary(LispNames.ARRAY_TOTAL_SIZE), arrayRowMajorIndexWrapper(), mapWrapper(), mapIntoWrapper(),
+			unary(LispNames.ARRAY_TOTAL_SIZE), arrayRowMajorIndexWrapper(), mapWrapper(true), mapIntoWrapper(),
 			boundedSequenceIo(LispNames.READ_SEQUENCE), boundedSequenceIo(LispNames.WRITE_SEQUENCE));
 
 	/** Backing set of {@link #names()}; initialized after {@code WRAPPER_DEFS}. */

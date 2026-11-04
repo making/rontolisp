@@ -1978,11 +1978,10 @@ final class JvmExprCompiler {
 				// shared %seq-int-vector helper, exactly as concatenate's does;
 				// everything else is expandCoerce as before.
 				LispVal packed = ConcatenateForms.packedVectorCoerce(cons, ctx.closRegistry);
-				JvmExprCompiler.compileExpr(packed != null ? packed
-						: LispMacroExpander.expandCoerce(cons, ctx.usesArrays,
-								ctx.functions.containsKey(LispNames.SEQ_TO_LIST),
-								ctx.functions.containsKey(LispNames.DEFTYPE_ALIAS_RUNTIME), null,
-								ctx.functions.containsKey(LispNames.COMPILE)),
+				JvmExprCompiler.compileExpr(packed != null ? packed : LispMacroExpander.expandCoerce(cons,
+						ctx.usesArrays, ctx.functions.containsKey(LispNames.SEQ_TO_LIST),
+						ctx.functions.containsKey(LispNames.DEFTYPE_ALIAS_RUNTIME), null,
+						ctx.functions.containsKey(LispNames.COMPILE), ctx.functions.containsKey(LispNames.CONCATENATE)),
 						ctx, className);
 			}
 			case LispNames.MAP_INTO -> JvmExprCompiler.compileExpr(
@@ -2057,13 +2056,19 @@ final class JvmExprCompiler {
 			case LispNames.FUNCTION -> JvmFunctionFormCompiler.compile(cons, ctx, className);
 			case LispNames.SYMBOL_FUNCTION -> JvmFunctionFormCompiler.compileSymbolFunction(cons, ctx, className);
 			case LispNames.MAP -> {
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandMap(cons, ctx.usesArrays), ctx, className);
-				// (map 'string ...) builds a fresh string, so its result carries a
-				// writable identity. (coerce seq 'string) reaches this through the
-				// same form, and a STRING input passes through un-built and so
-				// un-wrapped -- which is exactly what identity wants.
-				if (MutableStringProducers.isMapToString(cons)) {
-					JvmArrayCompiler.emitToMutStr(ctx, className);
+				LispVal resolved = ConcatenateForms.resolvedMap(cons, ctx.closRegistry);
+				if (resolved != cons) {
+					JvmExprCompiler.compileExpr(resolved, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMap(cons, ctx.usesArrays), ctx, className);
+					// (map 'string ...) builds a fresh string, so its result carries a
+					// writable identity. (coerce seq 'string) reaches this through the
+					// same form, and a STRING input passes through un-built and so
+					// un-wrapped -- which is exactly what identity wants.
+					if (MutableStringProducers.isMapToString(cons)) {
+						JvmArrayCompiler.emitToMutStr(ctx, className);
+					}
 				}
 			}
 			case LispNames.MAPCAR -> JvmMapcarCompiler.compile(cons, ctx, className);

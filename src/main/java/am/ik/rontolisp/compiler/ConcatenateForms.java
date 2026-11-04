@@ -485,6 +485,65 @@ public final class ConcatenateForms {
 	}
 
 	/**
+	 * Whether a {@code coerce} or {@code map} result type can ask for a packed vector
+	 * only when the program runs: a computed type at a call, or the operator taken as a
+	 * value, in a program spelling a packed element type somewhere for that type to name
+	 * (or for {@code type-of} to answer of a vector it builds). Those conversions then
+	 * reach the {@code #'concatenate} wrapper, which dispatches over the value; any other
+	 * program keeps its general-vector arm and carries none of the packed builders.
+	 * @param program the package-resolved top-level forms
+	 * @return whether the program needs the wrapper for its conversions
+	 */
+	static boolean convertsToPackedAtRunTime(List<LispVal> program) {
+		return program.stream().anyMatch(ConcatenateForms::convertsToComputedType)
+				&& program.stream().anyMatch(ConcatenateForms::spellsPackedElementType);
+	}
+
+	private static boolean convertsToComputedType(LispVal form) {
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op && cons.cdr() instanceof LispCons args) {
+				boolean computed = switch (op.name()) {
+					case LispNames.MAP -> isComputedDesignator(args.car());
+					case LispNames.COERCE -> args.cdr() instanceof LispCons type && isComputedDesignator(type.car());
+					case LispNames.FUNCTION -> args.car() instanceof LispSymbol name
+							&& (LispNames.MAP.equals(name.name()) || LispNames.COERCE.equals(name.name()));
+					default -> false;
+				};
+				if (computed) {
+					return true;
+				}
+			}
+			if (convertsToComputedType(cons.car())) {
+				return true;
+			}
+			node = cons.cdr();
+		}
+		return false;
+	}
+
+	private static boolean isComputedDesignator(LispVal typeForm) {
+		return isComputed(typeForm) && !(typeForm instanceof LispNil) && !(typeForm instanceof LispTrue);
+	}
+
+	private static boolean spellsPackedElementType(LispVal form) {
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (spellsPackedElementType(cons.car())) {
+				return true;
+			}
+			node = cons.cdr();
+		}
+		if (!(node instanceof LispSymbol sym)) {
+			return false;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+		String member = (qn == null) ? sym.name() : qn.member();
+		int code = ArrayElementTypes.codeOf(new LispSymbol(member));
+		return LispNames.UNSIGNED_BYTE.equals(member) || isPackedFloat(code) || code == ArrayElementTypes.CHARACTER;
+	}
+
+	/**
 	 * The packed-vector lowering of a {@code coerce} call, or {@code null} when the call
 	 * asks for anything else: {@code (coerce seq '(vector (unsigned-byte 8)))} is
 	 * {@code (%seq-int-vector seq 8)}, {@code (coerce seq '(vector single-float))} is
@@ -525,6 +584,47 @@ public final class ConcatenateForms {
 		// sequence is COERCE's type-error, checked here where the operator is known.
 		return packed ? packedVectorCall(LispMacroExpander.checkedSequenceOf(parts.get(1), LispNames.COERCE),
 				spec.elementType()) : null;
+	}
+
+	/**
+	 * {@code (map 'TYPE f seq...)} as what the designator asks for, the same reading
+	 * {@link #packedVectorCoerce} gives {@code coerce}: a packed element type collects a
+	 * list and builds through the packed helper, and a {@code deftype} alias becomes its
+	 * family's own spelling. Every other form -- a family spelled literally, a computed
+	 * or nil type -- answers {@code cons} itself, which {@code expandMap} lowers.
+	 * @param cons the map expression
+	 * @param closRegistry the registry whose {@code deftype} expansions resolve alias
+	 * designators, or null for the built-in members only
+	 * @return the form to lower instead, or {@code cons} when there is none
+	 */
+	public static LispVal resolvedMap(LispCons cons, @Nullable ClosRegistry closRegistry) {
+		if (!cons.isProperList()) {
+			return cons;
+		}
+		List<LispVal> parts = cons.toList();
+		ResultSpec spec = (parts.size() >= 4) ? literalResultSpec(parts.get(1), closRegistry) : null;
+		if (spec == null) {
+			return cons;
+		}
+		boolean packed = spec.family() == ResultFamily.VECTOR
+				&& (spec.intWidth() != 0 || spec.packedFloat() || spec.elementType() == ArrayElementTypes.CHARACTER);
+		if (packed) {
+			return packedVectorCall(mapTo(parts, "LIST"), spec.elementType());
+		}
+		if (literalResultSpec(parts.get(1), null) != null) {
+			return cons;
+		}
+		return mapTo(parts, switch (spec.family()) {
+			case STRING -> "STRING";
+			case LIST -> "LIST";
+			case VECTOR -> (spec.elementType() == ArrayElementTypes.BIT) ? "BIT-VECTOR" : "VECTOR";
+		});
+	}
+
+	private static LispVal mapTo(List<LispVal> parts, String type) {
+		List<LispVal> call = new java.util.ArrayList<>(parts);
+		call.set(1, listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(type))));
+		return listToCons(call);
 	}
 
 	// (quote X) -> X; anything else is not a literal designator.
@@ -643,13 +743,13 @@ public final class ConcatenateForms {
 			java.util.function.Predicate<ResultSpec> wanted) {
 		LispVal node = form;
 		while (node instanceof LispCons cons) {
-			// (concatenate 'TYPE ...) reads its designator at index 1, (coerce value
-			// 'TYPE) at index 2; both lower through a packed builder when it spells a
-			// packed element type.
-			if (cons.car() instanceof LispSymbol op
-					&& (LispNames.CONCATENATE.equals(op.name()) || LispNames.COERCE.equals(op.name()))) {
+			// (concatenate 'TYPE ...) and (map 'TYPE ...) read their designator at index
+			// 1, (coerce value 'TYPE) at index 2; each lowers through a packed builder
+			// when it spells a packed element type.
+			if (cons.car() instanceof LispSymbol op && (LispNames.CONCATENATE.equals(op.name())
+					|| LispNames.MAP.equals(op.name()) || LispNames.COERCE.equals(op.name()))) {
 				List<LispVal> parts = cons.toList();
-				int designator = LispNames.CONCATENATE.equals(op.name()) ? 1 : parts.size() == 3 ? 2 : -1;
+				int designator = !LispNames.COERCE.equals(op.name()) ? 1 : parts.size() == 3 ? 2 : -1;
 				if (parts.size() >= 2 && designator > 0) {
 					ResultSpec spec = literalResultSpec(parts.get(designator), closRegistry);
 					if (spec != null && wanted.test(spec)) {

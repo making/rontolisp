@@ -358,9 +358,15 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
   on JVM and component where checked): `prove-test` 22 tests, identical on all four but for how a
   `simple-error` prints; `proc-parse-test` 17, `xsubseq-test` 6 (all four), `myway-test` 15, `ningle-test`
   11, `cl-slug-test` 6, `smart-buffer-test` 2, each `All N files passed`; `http-body-test` `All 4 files
-  passed` (interpreter; SBCL lacks its dependencies here). `quri-test` `All 6 files passed` (2026-11-05,
+  passed` (SBCL too, 2026-11-05). `quri-test` `All 6 files passed` (2026-11-05,
   once `with-standard-io-syntax` bound `*print-base*`). `fast-http-test` fails 2 of 64 in
-  `t/parser.lisp` and aborts `t/fast-http.lisp` on CONNECT (2026-11-05, `.todo/i39`). `lass-file` with `:output`: the CSS SBCL writes,
+  `t/parser.lisp` and 1 of 39 in `t/fast-http.lisp` on all four, and SBCL 2.2.9 fails the same three with
+  every other check the same but for line breaks (2026-11-05): upstream's own. Its parser sets `upgrade-p` from an
+  `Upgrade` header only, so the bytes after a CONNECT's headers parse as a next request
+  (`INVALID-METHOD`); `Head response with Content-Length` expects a complete message without passing
+  `:head-request t`. SBCL runs these over the download cache with
+  `(asdf:initialize-source-registry '(:source-registry (:tree "~/.rontolisp/quicklisp/software/")
+  :ignore-inherited-configuration))`. `lass-file` with `:output`: the CSS SBCL writes,
   all four. `hu.dwim.def`: loads on all four, its class, `package-name` and license as on SBCL
   (`component-children` real since "The component tree"). coalton stops before any of this, as "Options around the
   compile" records.
