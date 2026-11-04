@@ -3224,6 +3224,31 @@ public final class LispEvaluator {
 					return spelling != null && this.packageResolver.printsBare(spelling) ? LispTrue.INSTANCE
 							: LispNil.INSTANCE;
 				}));
+		this.globalEnv.defineFunction(LispNames.HOME_SPELLING_INTERNAL,
+				new LispFunction(LispNames.HOME_SPELLING_INTERNAL, args -> {
+					requireSingleArg(LispNames.HOME_SPELLING_INTERNAL, args);
+					if (!(args.get(0) instanceof LispString text)) {
+						throw new LispEvalException(
+								LispNames.HOME_SPELLING_INTERNAL + " expects a string, got " + args.get(0).print());
+					}
+					return text.value().contains(":") ? text
+							: new LispString(PackageRegistry.qualifyInternal(LispNames.CL_USER_PKG, text.value()));
+				}));
+		// The same question of a symbol spelled bare, answering what it prints in front
+		// of its name.
+		this.globalEnv.defineFunction(LispNames.SYMBOL_PRINT_PREFIX_INTERNAL,
+				new LispFunction(LispNames.SYMBOL_PRINT_PREFIX_INTERNAL, args -> {
+					requireSingleArg(LispNames.SYMBOL_PRINT_PREFIX_INTERNAL, args);
+					String spelling = switch (args.get(0)) {
+						case LispSymbol sym -> sym.name();
+						case LispString text -> text.value();
+						case LispNil ignored -> "NIL";
+						case LispTrue ignored -> "T";
+						default -> null;
+					};
+					String prefix = spelling == null ? null : this.packageResolver.bareSymbolPrefix(spelling);
+					return prefix == null ? LispNil.INSTANCE : new LispString(prefix);
+				}));
 		// The walk's two leaf primitives: the interpreter loads the prelude lazily, so
 		// they simply call the leaf (the compile paths lower them to the leaf or to the
 		// bare text, LispMacroExpander.expandPrintCasedLeaf).
@@ -3355,7 +3380,7 @@ public final class LispEvaluator {
 					requireSingleArg(LispNames.PACKAGE_NICKNAMES, args);
 					String designator = packageDesignator(LispNames.PACKAGE_NICKNAMES, args.get(0));
 					try {
-						List<String> nicknames = this.packageResolver.runtimePackageNicknames(designator);
+						List<String> nicknames = this.packageResolver.standardPackageNicknames(designator);
 						LispVal out = LispNil.INSTANCE;
 						for (int i = nicknames.size() - 1; i >= 0; i--) {
 							out = new LispCons(new LispString(nicknames.get(i)), out);

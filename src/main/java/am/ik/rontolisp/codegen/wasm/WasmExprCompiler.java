@@ -1257,6 +1257,10 @@ final class WasmExprCompiler {
 			// table baked in at compile time (.kb/pretty-printer.md).
 			case LispNames.SYMBOL_PRINT_BARE_P_INTERNAL ->
 				compileExpansion(LispMacroExpander.expandSymbolPrintBareP(cons, ctx.symbolPrintTable), ctx, tail);
+			case LispNames.HOME_SPELLING_INTERNAL -> compileExpansion(((LispCons) cons.cdr()).car(), ctx, tail);
+			case LispNames.SYMBOL_PRINT_PREFIX_INTERNAL -> compileExpansion(
+					LispMacroExpander.expandSymbolPrintPrefix(cons, ctx.symbolPrintTable, ctx.functions::containsKey),
+					ctx, tail);
 			case LispNames.PRINT_PACKAGE_RAW_P_INTERNAL ->
 				compileExpansion(LispMacroExpander.expandPrintPackageRawP(ctx.symbolPrintTable), ctx, tail);
 			case LispNames.PRINT_CASED_QUALIFIER_INTERNAL ->

@@ -1113,6 +1113,44 @@ final class JvmReadRuntimeBuilder {
 		a.getstatic(this.localeRoot);
 		a.invokevirtual(this.stringToUpperCase);
 		a.astore(0);
+		// A canonical cl or cl-user symbol is spelled bare, whatever qualifier reads it:
+		// the printer spells COMMON-LISP:CAR where the package reads CAR as another.
+		MethodCode.Label noQualifier = a.newLabel();
+		MethodCode.Label standardQualifier = a.newLabel();
+		a.aload(0);
+		a.loadConstant((int) ':');
+		a.invokevirtual(this.stringIndexOf);
+		a.istore(11);
+		a.iload(11);
+		a.ifle(noQualifier);
+		a.aload(0);
+		a.loadConstant(0);
+		a.iload(11);
+		a.invokevirtual(this.stringSubstring);
+		a.astore(12);
+		for (String pkg : List.of("CL", "COMMON-LISP", "CL-USER", "COMMON-LISP-USER")) {
+			a.aload(12);
+			ldc(a, pkg);
+			a.invokevirtual(this.objectEquals);
+			a.ifne(standardQualifier);
+		}
+		a.goto_(noQualifier);
+		a.labelBinding(standardQualifier);
+		a.aload(0);
+		a.iload(11);
+		a.loadConstant(1);
+		a.iadd();
+		a.invokevirtual(this.stringSubstringFrom);
+		a.astore(0);
+		a.aload(0);
+		ldc(a, ":");
+		a.invokevirtual(this.stringStartsWith);
+		a.ifeq(noQualifier);
+		a.aload(0);
+		a.loadConstant(1);
+		a.invokevirtual(this.stringSubstringFrom);
+		a.astore(0);
+		a.labelBinding(noQualifier);
 		// nil?
 		a.aload(0);
 		ldc(a, "NIL");

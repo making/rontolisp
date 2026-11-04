@@ -297,6 +297,15 @@ library splice scanners (`JsonLibrary`/`LinalgLibrary`/`UrlLibrary`/`VecLibrary`
 `rl:json-parse` never triggered the json.lisp splice (interpreter unaffected -- it lazy-loads
 post-resolution). Pinned by `JvmLispCompilerTest.compileAndRunBuiltinNicknamesTriggerLibrarySplice`.
 
+**The registry's names of the two standard packages are the wrong way round, and only the surface
+says so** (i30, 2026-11-04): the canonical name stays `CL`/`CL-USER` (a package value is `:CL`,
+`*package*` prints `:CL-USER`, every pass matches the literal), but `package-name` answers
+`"COMMON-LISP"`/`"COMMON-LISP-USER"` and `package-nicknames` `("CL")`/`("CL-USER")`, as CLHS 11.1.2
+fixes them and SBCL does. `PackageResolver.standardPackageNicknames` on the interpreter, the prelude
+defuns elsewhere. `runtimePackageNicknames` keeps the registry's view for SWANK's shortest-nickname
+prompt, and a package row keeps `COMMON-LISP` as a designator `%baked-package-find` finds. So
+`uiop:package-definition-form` writes `(:USE "COMMON-LISP")`, which reads back.
+
 ## Package-local nicknames
 SBCL's extension, on all four backends (i05, 2026-11-04; they were global nicknames until then, and
 `(:local-nicknames (#:bt #:clump-binary-tree))` stopped cluffer with `Package already exists: BT`).
@@ -650,7 +659,8 @@ Reader-synthesized symbols (`quote`, the backquote operators, `ReaderSymbols`,
 [defmacro-backquote.md](defmacro-backquote.md)) and `#.` values are not tokens and
 are not homed; a token qualified by an unknown package keeps its spelling. The compiled
 backends' run-time reader stays package-blind
-(`.kb/symbol-runtime-api.md`, "1-arg `intern`"). Pinned by `LispEvaluatorTest#evalMacroCallInAFunctionBodyExpandsInThePackageTheBodyWasReadIn`,
+(`.kb/symbol-runtime-api.md`, "1-arg `intern`"), but for the qualifiers of `cl` and `cl-user`, which it
+drops (`.kb/pretty-printer.md`, "The package qualifier"). Pinned by `LispEvaluatorTest#evalMacroCallInAFunctionBodyExpandsInThePackageTheBodyWasReadIn`,
 ci-spec `expansion-time-read-homes-in-the-macro-package`,
 `LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions` (a `load` from a defun), `TriviaE2eTest`,
 `SxqlE2eTest`.

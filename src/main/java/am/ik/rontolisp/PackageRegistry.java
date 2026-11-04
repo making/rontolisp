@@ -380,7 +380,8 @@ public final class PackageRegistry {
 			LispNames.PRINT_CASED_ON_PATH_INTERNAL, LispNames.PRINT_CASED_CHAIN_STOP_INTERNAL,
 			LispNames.PRINT_RADIXED_INTERNAL, LispNames.PRINT_IN_BASE_INTERNAL,
 			LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL, LispNames.PRINT_CASED_INSTANCE_TEXT_INTERNAL,
-			LispNames.SYMBOL_PRINT_BARE_P_INTERNAL, LispNames.PRINT_PACKAGE_RAW_P_INTERNAL,
+			LispNames.SYMBOL_PRINT_BARE_P_INTERNAL, LispNames.SYMBOL_PRINT_PREFIX_INTERNAL,
+			LispNames.HOME_SPELLING_INTERNAL, LispNames.PRINT_PACKAGE_RAW_P_INTERNAL,
 			LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL,
 			LispNames.PRINT_CASED_QUALIFIER_INTERNAL, LispNames.PRINT_CASED_LOCAL_QUALIFIER_INTERNAL,
 			LispNames.LOCAL_NICKNAME_ADD_INTERNAL, LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL,
@@ -2066,6 +2067,19 @@ public final class PackageRegistry {
 	}
 
 	/**
+	 * Returns whether the name is {@code cl}'s whatever package reads it, one that uses
+	 * no {@code cl} included: an implementation-internal name, which expansions inject
+	 * into whatever package they run in; a lambda-list keyword, which their lambda lists
+	 * spell; and {@code quote}, the special form to the resolver in every package, so
+	 * that a variable named {@code quote} is one symbol with it.
+	 * @param name the bare symbol name
+	 * @return whether no package reads the name as a symbol of its own by default
+	 */
+	public static boolean readsClInEveryPackage(String name) {
+		return isClInternal(name) || isClLambdaListKeyword(name) || LispNames.QUOTE.equals(name);
+	}
+
+	/**
 	 * Returns whether the name is one {@code cl} exports that the standard does not:
 	 * rontolisp's own {@code while}. A portable library may own a symbol of that name
 	 * (parenscript, iterate, arnesi and for export one), so {@code cl}'s yields to it: a
@@ -2119,6 +2133,15 @@ public final class PackageRegistry {
 	 */
 	public static List<String> standardNames() {
 		return STANDARD_NAMES;
+	}
+
+	/**
+	 * Returns whether {@code cl} exports the name, what {@link #standardNames} lists.
+	 * @param name the symbol name
+	 * @return whether the name is exported from {@code cl}
+	 */
+	public static boolean isStandardName(String name) {
+		return isClMemberName(name) && !isClInternal(name);
 	}
 
 	/**

@@ -1415,6 +1415,41 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void aBareSymbolPrintsTheQualifierOfItsHomeWhereThePackageReadsAnother() {
+		// A bare spelling is a cl or a cl-user symbol. A package using cl inherits nil, t
+		// and the standard names without an operator; a package that uses no cl, or
+		// shadows a name, reads another symbol; a cl-user symbol is nobody else's.
+		PackageResolver resolver = new PackageResolver();
+		resolver.resolveProgram(LispReader.readAllFromString("""
+				(defpackage :bsp-none (:use) (:import-from :cl #:cons))
+				(defpackage :bsp-shadow (:use :cl) (:shadow #:car))
+				(defpackage :bsp-exporter (:use :cl) (:export #:car #:list))
+				(defpackage :bsp-via (:use :bsp-exporter))
+				"""));
+		String cl = SymbolPrintTable.CL_PREFIX;
+		String clUser = SymbolPrintTable.CL_USER_PREFIX;
+		resolver.setCurrentPackage("CL-USER");
+		assertThat(resolver.bareSymbolPrefix("CAR")).isNull();
+		assertThat(resolver.bareSymbolPrefix("FOO")).isNull();
+		resolver.setCurrentPackage("BSP-NONE");
+		assertThat(resolver.bareSymbolPrefix("CAR")).isEqualTo(cl);
+		assertThat(resolver.bareSymbolPrefix("NIL")).isEqualTo(cl);
+		assertThat(resolver.bareSymbolPrefix("FOO")).isEqualTo(clUser);
+		assertThat(resolver.bareSymbolPrefix("CONS")).isNull();
+		assertThat(resolver.bareSymbolPrefix("QUOTE")).isNull();
+		assertThat(resolver.bareSymbolPrefix("&OPTIONAL")).isNull();
+		resolver.setCurrentPackage("BSP-SHADOW");
+		assertThat(resolver.bareSymbolPrefix("CAR")).isEqualTo(cl);
+		assertThat(resolver.bareSymbolPrefix("CDR")).isNull();
+		assertThat(resolver.bareSymbolPrefix("NIL")).isNull();
+		assertThat(resolver.bareSymbolPrefix("FIND-METHOD")).isNull();
+		assertThat(resolver.bareSymbolPrefix("FOO")).isEqualTo(clUser);
+		resolver.setCurrentPackage("BSP-VIA");
+		assertThat(resolver.bareSymbolPrefix("CAR")).isNull();
+		assertThat(resolver.bareSymbolPrefix("CDR")).isEqualTo(cl);
+	}
+
+	@Test
 	void symbolPrintTableCarriesTheCorrectionsForTheSymbolsTheProgramSpells() {
 		// The compile paths bake the use lists and, per package, the symbols the
 		// structural rule (own, or used-and-external) gets wrong: an imported internal
@@ -1427,13 +1462,27 @@ class PackageResolverTest {
 				(defpackage :spa-mid (:use :cl :spa-lib) (:export #:fn))
 				(defpackage :spa-app (:use :cl :spa-lib :spa-lib2) (:import-from :spa-lib #:helper) (:shadow #:other))
 				(defpackage :spa-app2 (:use :cl :spa-mid))
+				(defpackage :spa-none (:use) (:import-from :cl #:cons))
+				(defpackage :spa-shadow (:use :cl) (:shadow #:car))
+				(defpackage :spa-exporter (:use :cl) (:export #:car))
+				(defpackage :spa-via (:use :spa-exporter))
 				(in-package :spa-app)
 				(print (list 'fn 'helper 'other 'spa-lib2:other 'spa-lib::internal))
 				(in-package :spa-app2)
 				(print 'spa-lib:fn)
 				(in-package :cl-user)
+				(defstruct spa-struct a)
+				(print (list 'spa-quoted 'car))
+				(defun spa-code (spa-variable) spa-variable)
 				"""));
 		SymbolPrintTable table = resolver.symbolPrintTable(resolved);
+		// The bare half: what the program can print of cl-user's, and per package what
+		// differs from the rule.
+		assertThat(table.clUserSymbols()).containsExactly("SPA-STRUCT", "SPA-QUOTED");
+		assertThat(table.noClPackages()).contains("SPA-NONE", "SPA-VIA").doesNotContain("SPA-SHADOW", "CL", "CL-USER");
+		assertThat(table.bareExtra()).containsEntry("SPA-NONE", List.of("CONS"))
+			.containsEntry("SPA-VIA", List.of("CAR"));
+		assertThat(table.bareExcluded()).containsEntry("SPA-SHADOW", List.of("CAR"));
 		assertThat(table.rows()).containsEntry("SPA-APP", List.of("SPA-APP", "SPA-LIB", "SPA-LIB2"))
 			.containsEntry("SPA-APP2", List.of("SPA-APP2", "SPA-MID"))
 			.containsEntry("CL-USER", List.of("CL-USER"));

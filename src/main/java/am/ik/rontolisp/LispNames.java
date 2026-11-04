@@ -10493,6 +10493,27 @@ public final class LispNames {
 	public static final String SYMBOL_PRINT_BARE_P_INTERNAL = "%SYMBOL-PRINT-BARE-P";
 
 	/**
+	 * The internal {@code (%symbol-print-prefix symbol)} primitive, the same question of
+	 * a symbol spelled bare: the qualifier of its home, {@code cl} or {@code cl-user},
+	 * where the current {@code *package*} reads the name as something else, nil where it
+	 * prints bare. The interpreter answers from the live registry
+	 * ({@code PackageResolver.bareSymbolPrefix}); the compile paths lower the call onto
+	 * the baked {@code SymbolPrintTable}
+	 * ({@code LispMacroExpander.expandSymbolPrintPrefix}).
+	 */
+	public static final String SYMBOL_PRINT_PREFIX_INTERNAL = "%SYMBOL-PRINT-PREFIX";
+
+	/**
+	 * The internal {@code (%home-spelling text)} primitive: what a one-argument
+	 * {@code intern} takes to answer the symbol whose canonical spelling is the text,
+	 * whatever package is current. The text itself on the compile paths, where that
+	 * {@code intern} builds it from the spelling; on the interpreter, which homes a bare
+	 * name in the current package, a bare spelling comes back qualified by
+	 * {@code cl-user}.
+	 */
+	public static final String HOME_SPELLING_INTERNAL = "%HOME-SPELLING";
+
+	/**
 	 * The internal {@code (%print-package-raw-p)} primitive: whether the current
 	 * {@code *package*} is the pristine {@code cl-user}, under which no qualified symbol
 	 * is accessible and the raw conversion is already exact -- the package half of

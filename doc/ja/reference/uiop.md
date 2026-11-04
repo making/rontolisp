@@ -93,7 +93,7 @@
 | `uiop:export*`、`uiop:import*` | `(uiop:export* "NAME" :my-pkg)` | インターンしてエクスポート、およびインポート — レジストリが変更可能な範囲で実装 (コンパイル済みバックエンドでは CL 自身の実行時操作と同様に引数の評価と `t` のみ) |
 | `uiop:make-symbol*` | `(uiop:make-symbol* "X")` | 文字列からはインターンされていないシンボル、シンボルからはコピー |
 | `uiop:home-package-p` | `(uiop:home-package-p s p)` | シンボルのホームパッケージがそのパッケージかどうか |
-| `uiop:symbol-package-name` | `(uiop:symbol-package-name 'car)` | `"CL"` (インターンされていないシンボルは nil) |
+| `uiop:symbol-package-name` | `(uiop:symbol-package-name 'car)` | `"COMMON-LISP"` (インターンされていないシンボルは nil) |
 | `uiop:standard-common-lisp-symbol-p` | `(uiop:standard-common-lisp-symbol-p 'car)` | エクスポートされた `cl` シンボルかどうか |
 | `uiop:symbol-shadowing-p` | `(uiop:symbol-shadowing-p s p)` | 常に nil — ここに実行時のシャドウイングは存在しません |
 | `uiop:package-names` | `(uiop:package-names :cl)` | 名前とニックネーム |
