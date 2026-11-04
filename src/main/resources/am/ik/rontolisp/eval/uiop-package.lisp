@@ -210,7 +210,7 @@
                        ;; the :use clause; the rest are interned -- except in
                        ;; cl itself, where everything bare is exported.
                        (when (not (%pdf-inherited-p %pdf-text %pdf-inherited))
-                         (if (string= %pdf-name "CL")
+                         (if (string= %pdf-name "COMMON-LISP")
                              (push %pdf-text %pdf-export)
                              (push %pdf-text %pdf-intern))))
                       ((and (< (1+ %pdf-idx) (length %pdf-text))

@@ -1156,8 +1156,11 @@ public final class Environment implements Scope {
 		// field, not a binding; the compilers inject a top-level (setq %mv-spill nil)
 		// global when needed.
 		// Informational (every float is the one double representation); predefined so
-		// library code reading it works. The compilers inject an equivalent setq.
+		// library code reading or binding it works. The compilers inject an equivalent
+		// defvar.
 		env.define(LispNames.READ_DEFAULT_FLOAT_FORMAT, new LispSymbol("DOUBLE-FLOAT"));
+		// No reader consults it yet: every integer reads in base 10.
+		env.define(LispNames.READ_BASE_VAR, new LispInteger(10));
 		// The standard constant variables (pi, the float-range names, the fixnum and
 		// array limits, char-code-limit, internal-time-units-per-second,
 		// lambda-list-keywords): bound as globals holding the interpreter's values,

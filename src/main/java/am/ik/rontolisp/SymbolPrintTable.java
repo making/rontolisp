@@ -23,6 +23,16 @@ import java.util.SequencedMap;
  * rule.
  *
  * <p>
+ * A bare spelling carries no home: it is a {@code cl} symbol or a {@code cl-user} one.
+ * The {@code cl-user} ones a program can print are {@link #clUserSymbols}; such a symbol
+ * prints {@link #CL_USER_PREFIX qualified} outside {@code cl-user}. Any other bare symbol
+ * prints bare, except a standard name under one of the {@link #noClPackages}, which
+ * prints {@link #CL_PREFIX qualified} unless the resolver reads the name as {@code cl}'s
+ * in every package ({@link PackageRegistry#readsClInEveryPackage}). {@link #bareExtra}
+ * and {@link #bareExcluded} correct that rule for the bare symbols the program spells and
+ * the standard names a package imports, shadows or inherits from another.
+ *
+ * <p>
  * Every map is insertion-ordered ({@code SequencedMap}) because the tables are emitted
  * ({@code .kb/emitted-output-determinism.md}).
  *
@@ -37,7 +47,29 @@ import java.util.SequencedMap;
  * @param clUserPristine whether {@code cl-user} still uses only {@code cl} and imports
  * nothing, so that under it no qualified symbol can print bare and the raw conversion is
  * exact
+ * @param noClPackages the upcased names of the packages that do not read the standard
+ * names as {@code cl}'s
+ * @param clUserSymbols the names of the {@code cl-user} symbols the program can print:
+ * spelled in quoted data, or naming a structure, class or condition
+ * @param bareExtra per upcased package name, the bare symbols that print bare there
+ * although the rule says otherwise
+ * @param bareExcluded per upcased package name, the bare symbols that print qualified
+ * there although the rule says otherwise
  */
 public record SymbolPrintTable(SequencedMap<String, List<String>> rows, SequencedMap<String, List<String>> extra,
-		SequencedMap<String, List<String>> excluded, boolean clUserPristine) {
+		SequencedMap<String, List<String>> excluded, boolean clUserPristine, List<String> noClPackages,
+		List<String> clUserSymbols, SequencedMap<String, List<String>> bareExtra,
+		SequencedMap<String, List<String>> bareExcluded) {
+
+	/**
+	 * What a {@code cl} symbol prints in front of its name where it needs a qualifier.
+	 */
+	public static final String CL_PREFIX = "COMMON-LISP:";
+
+	/**
+	 * What a {@code cl-user} symbol prints in front of its name where it needs a
+	 * qualifier.
+	 */
+	public static final String CL_USER_PREFIX = "COMMON-LISP-USER::";
+
 }

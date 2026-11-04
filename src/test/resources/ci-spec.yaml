@@ -4082,6 +4082,77 @@ cases:
       (18 NIL 20)
       (NIL T)
       ((:OWN 22) (:REST 23) 24 CI-NOCL::LIST)
+  - name: a-bare-symbol-prints-qualified-where-the-package-reads-another
+    source: |
+      ;; A cl symbol and a cl-user one under a package reading that name as something
+      ;; else: two different symbols never print alike, and what is printed reads back.
+      ;; A name no form spells goes by what the package reads (SYMBOL, CDR, NIL). SBCL
+      ;; prints all of this.
+      (defpackage :csq-none (:use) (:import-from :cl #:cons))
+      (defpackage :csq-shadow (:use :cl) (:shadow #:car))
+      (defpackage :csq-plain (:use :cl))
+      (defpackage :csq-reexport (:use :cl) (:export #:car #:list #:nil #:t #:print #:type-of #:cdr #:symbol))
+      (defpackage :csq-via (:use :csq-reexport))
+      (defpackage :csq-nick (:use) (:local-nicknames (#:c #:cl)))
+      (defun csq-symbol () 'csq-home-symbol)
+      (defstruct csq-home-struct a)
+      (print (list (package-name :cl) (package-name :cl-user) (package-name (symbol-package 'car))
+                   (package-nicknames :cl) (package-nicknames :cl-user)))
+      (print (list 'car 'cl:car nil t 'csq-home-symbol))
+      (cl:in-package :csq-none)
+      (cl:print (cl:list 'car 'cl:car cl:nil cl:t 'cons))
+      (cl:print cl:nil)
+      (cl:print 'cl-user::csq-home-symbol)
+      (cl:print (cl-user::csq-symbol))
+      (cl:print (cl:list (cl:find-symbol "CDR" :cl) (cl:type-of 'cl:car)))
+      (cl:print (cl:prin1-to-string 'cl:car))
+      (cl:print (cl:format cl:nil "~S ~A" 'cl:car 'cl:car))
+      (cl:print (cl:let ((cl:*print-case* :downcase)) (cl:prin1-to-string 'cl:car)))
+      (cl:print (cl:read-from-string (cl:prin1-to-string 'cl:car)))
+      (cl:print (cl:eq (cl:read-from-string (cl:prin1-to-string 'cl:car)) 'cl:car))
+      (cl:print (cl:let ((cl:*package* (cl:find-package :cl-user))) (cl:prin1-to-string (cl:list 'cl:car 'car))))
+      (cl:in-package :csq-shadow)
+      (print (list 'car 'cl:car 'cdr (find-symbol "CAR" :cl)))
+      (print 'cl-user::csq-home-symbol)
+      (print (cl-user::make-csq-home-struct :a 1))
+      (cl:in-package :csq-plain)
+      (print (list 'car 'cl:car 'plain 'cl-user::csq-home-symbol nil t))
+      (print (cl-user::make-csq-home-struct :a 1))
+      (print (type-of (cl-user::make-csq-home-struct :a 1)))
+      (print (eq (type-of (cl-user::make-csq-home-struct :a 1)) 'cl-user::csq-home-struct))
+      (cl:in-package :csq-via)
+      (print (list 'car 'cl:car 'cl:cdr nil t (type-of 'car)))
+      (cl:in-package :csq-nick)
+      (c:print (c:list 'c:car 'car 'cl-user::csq-home-symbol))
+      (c:in-package :cl-user)
+      (print (list 'car 'csq-none::car 'csq-home-symbol))
+      (print (list (eq (read-from-string "cl:car") 'car) (eq (read-from-string "common-lisp-user::csq-home-symbol") 'csq-home-symbol)
+                   (read-from-string "common-lisp:nil") (read-from-string "cl-user::t")))
+    expected: |
+      ("COMMON-LISP" "COMMON-LISP-USER" "COMMON-LISP" ("CL") ("CL-USER"))
+      (CAR CAR NIL T CSQ-HOME-SYMBOL)
+      (CAR COMMON-LISP:CAR COMMON-LISP:NIL COMMON-LISP:T CONS)
+      COMMON-LISP:NIL
+      COMMON-LISP-USER::CSQ-HOME-SYMBOL
+      COMMON-LISP-USER::CSQ-HOME-SYMBOL
+      (COMMON-LISP:CDR COMMON-LISP:SYMBOL)
+      "COMMON-LISP:CAR"
+      "COMMON-LISP:CAR CAR"
+      "common-lisp:car"
+      COMMON-LISP:CAR
+      COMMON-LISP:T
+      "(CAR CSQ-NONE::CAR)"
+      (CAR COMMON-LISP:CAR CDR COMMON-LISP:CAR)
+      COMMON-LISP-USER::CSQ-HOME-SYMBOL
+      #S(COMMON-LISP-USER::CSQ-HOME-STRUCT :A 1)
+      (CAR CAR PLAIN COMMON-LISP-USER::CSQ-HOME-SYMBOL NIL T)
+      #S(COMMON-LISP-USER::CSQ-HOME-STRUCT :A 1)
+      COMMON-LISP-USER::CSQ-HOME-STRUCT
+      T
+      (CAR CAR CDR NIL T SYMBOL)
+      (C:CAR CAR COMMON-LISP-USER::CSQ-HOME-SYMBOL)
+      (CAR CSQ-NONE::CAR CSQ-HOME-SYMBOL)
+      (T T NIL T)
   - name: expansion-time-read-homes-in-the-macro-package
     source: |
       ;; cl-pdf's AFM parser names each reader with read-from-string at EXPANSION
@@ -4634,7 +4705,7 @@ cases:
       NIL
       :CI-PQL
       (:CL)
-      ("CL" "CI-IMP-SRC")
+      ("COMMON-LISP" "CI-IMP-SRC")
       (:MINE 1)
       (LET)
   # The runtime-tier package API: make-package / delete-package /
@@ -17938,7 +18009,7 @@ cases:
       (:CI-UP :CL)
       T
       "CI-UP--3"
-      (DEFPACKAGE "CI-UP" (:USE "CL") (:EXPORT "UP-FOO"))
+      (DEFPACKAGE "CI-UP" (:USE "COMMON-LISP") (:EXPORT "UP-FOO"))
       (T T 42)
       (("CI-UP-NICK" . :CI-UP))
       (T T)
@@ -20891,7 +20962,7 @@ cases:
       (NIL M G)
       (2 3 4)
       (2 3 4)
-      "CL-USER"
+      "COMMON-LISP-USER"
       "KEYWORD"
       :FROM-OWNER
       (T T)
@@ -32500,7 +32571,7 @@ cases:
       T
       NIL
       NIL
-      ("CL" "COMMON-LISP")
+      ("COMMON-LISP" "CL")
       (:CL :CL-USER)
       T
       "WU--3"
@@ -32993,6 +33064,83 @@ cases:
       :ECASE-ERROR
       "[1,\"a\\tb\\\"\\u0001\",[2,3]]"
       :NO-CONTEXT
+  - name: with-standard-io-syntax-binds-the-standard-table
+    source: |
+      ;; CLHS 23.1.2: the whole table is bound, so a caller's settings do not reach the
+      ;; body, a function called in it reads the bindings, and they end with the form.
+      (print (let ((*print-base* 2)) (with-standard-io-syntax (write-to-string 5))))
+      (print (let ((*print-base* 2)) (with-standard-io-syntax *print-base*)))
+      (print (let ((*print-case* :downcase)) (with-standard-io-syntax (prin1-to-string 'foo))))
+      (print (let ((*read-base* 2)) (with-standard-io-syntax *read-base*)))
+      (print (let ((*print-pretty* t)) (with-standard-io-syntax *print-pretty*)))
+      (print (with-standard-io-syntax
+               (list *print-array* *print-base* *print-case* *print-circle* *print-escape* *print-gensym*
+                     *print-length* *print-level* *print-lines* *print-miser-width* *print-pretty* *print-radix*
+                     *print-readably* *print-right-margin* *read-base* *read-default-float-format* *read-eval*
+                     *read-suppress*)))
+      (defun wsis-show () (list *print-base* *print-case* *print-pretty* *read-default-float-format*))
+      (print (let ((*print-base* 8) (*print-case* :capitalize) (*print-pretty* t)
+                   (*read-default-float-format* 'long-float))
+               (list (wsis-show) (with-standard-io-syntax (wsis-show)) (wsis-show))))
+      (print (let ((*print-base* 8)) (funcall (with-standard-io-syntax (lambda () *print-base*)))))
+      (print (multiple-value-list (with-standard-io-syntax (values 1 2))))
+      (print (with-standard-io-syntax))
+      ;; The readtable is the standard one, whatever the caller's holds.
+      (let ((*readtable* (copy-readtable nil)))
+        (set-macro-character #\! (lambda (s c) (declare (ignore c)) (read s t nil t)))
+        (print (list (not (null (get-macro-character #\!)))
+                     (with-standard-io-syntax (get-macro-character #\!))
+                     (with-standard-io-syntax (readtable-case *readtable*)))))
+      ;; *print-readably* forces the prin1 conversion and overrides length, level and gensym;
+      ;; princ binds it to nil, around a print-object method too.
+      (print (with-standard-io-syntax (write-to-string "a" :escape nil)))
+      (print (with-standard-io-syntax (with-output-to-string (s) (write "a" :stream s :escape nil))))
+      (print (with-standard-io-syntax (let ((*print-readably* nil)) (write-to-string "a" :escape nil))))
+      (print (with-standard-io-syntax (let ((*print-length* 1)) (prin1-to-string '(1 2 3)))))
+      (print (with-standard-io-syntax (let ((*print-level* 1)) (prin1-to-string '(1 (2) 3)))))
+      (print (with-standard-io-syntax (let ((*print-gensym* nil)) (prin1-to-string (make-symbol "A")))))
+      (print (with-standard-io-syntax (let ((*print-length* 1)) (princ-to-string '(1 2 3)))))
+      (defclass wsis-k () ())
+      (defmethod print-object ((o wsis-k) s) (format s "~A/~A" *print-readably* *print-escape*))
+      (print (with-standard-io-syntax (list (princ-to-string (make-instance 'wsis-k))
+                                            (prin1-to-string (make-instance 'wsis-k))
+                                            (format nil "~A ~S" (make-instance 'wsis-k) (make-instance 'wsis-k)))))
+      (print (with-standard-io-syntax (let ((*print-length* 1)) (prin1-to-string (list 1 (make-instance 'wsis-k) 3)))))
+      ;; A one-argument write-to-string takes the conversion the two variables pick.
+      (print (let ((*print-escape* nil)) (list (write-to-string "a") (funcall #'write-to-string "a")
+                                               (mapcar #'write-to-string '("b"))
+                                               (funcall #'write-to-string "a" :escape t))))
+      (print (let ((*print-escape* nil)) (with-standard-io-syntax (write-to-string "a"))))
+      (print (with-standard-io-syntax (let ((*print-escape* nil)) (write-to-string "a"))))
+      ;; print-not-readable is a class a program can signal and handle.
+      (print (handler-case (error 'print-not-readable :object 1)
+               (print-not-readable (c) (list (print-not-readable-object c) (typep c 'error) (princ-to-string c)))))
+    expected: |
+      "5"
+      10
+      "FOO"
+      10
+      NIL
+      (T 10 :UPCASE NIL T T NIL NIL NIL NIL NIL NIL T NIL 10 SINGLE-FLOAT T NIL)
+      ((8 :CAPITALIZE T LONG-FLOAT) (10 :UPCASE NIL SINGLE-FLOAT) (8 :CAPITALIZE T LONG-FLOAT))
+      8
+      (1 2)
+      NIL
+      (T NIL :UPCASE)
+      "\"a\""
+      "\"a\""
+      "a"
+      "(1 2 3)"
+      "(1 (2) 3)"
+      "#:A"
+      "(1 ...)"
+      ("NIL/NIL" "T/T" "NIL/NIL T/T")
+      "(1 T/T 3)"
+      ("a" "a" ("b") "\"a\"")
+      "\"a\""
+      "\"a\""
+      (1 T "1 cannot be printed readably.")
+
 standalone:
   - name: pprint-logical-block-of-an-atom-in-a-program-not-naming-write
     source: |

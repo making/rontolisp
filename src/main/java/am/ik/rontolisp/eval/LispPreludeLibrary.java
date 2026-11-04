@@ -606,6 +606,9 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.UNBOUND_SLOT_INSTANCE, """
 				(defun unbound-slot-instance (condition) (slot-value condition 'instance))
 				""");
+		SOURCES.put(LispNames.PRINT_NOT_READABLE_OBJECT, """
+				(defun print-not-readable-object (condition) (slot-value condition 'object))
+				""");
 		SOURCES.put(LispNames.STREAM_ERROR_STREAM, """
 				(defun stream-error-stream (condition) (slot-value condition 'stream))
 				""");
@@ -704,9 +707,9 @@ public final class LispPreludeLibrary {
 				         (s (%unescaped-symbol-text (%prin1-to-string c)))
 				         (n (length s)))
 				    (cond ((and (> n 8) (string= (subseq s 0 8) "%struct-"))
-				           (let ((name (intern (subseq s 8)))) name))
+				           (let ((name (intern (%home-spelling (subseq s 8))))) name))
 				          ((and (> n 7) (string= (subseq s 0 7) "%class-"))
-				           (let ((name (intern (subseq s 7)))) name))
+				           (let ((name (intern (%home-spelling (subseq s 7))))) name))
 				          ((string= s "%PATHNAME") 'pathname)
 				          ((string= s "%READTABLE") 'readtable)
 				          ((and (string= s "T") (%arrayp object))
@@ -2060,11 +2063,16 @@ public final class LispPreludeLibrary {
 		// (.kb/symbol-runtime-api.md), so the name string is that keyword's string;
 		// resolving through find-package first honors designators and nicknames, and
 		// an unknown designator signals like CL's package-error. dbi's
-		// connection-driver-type is the driving consumer.
+		// connection-driver-type is the driving consumer. The standard names the two
+		// standard packages COMMON-LISP and COMMON-LISP-USER (CLHS 11.1.2), whatever
+		// the keyword spells.
 		SOURCES.put(LispNames.PACKAGE_NAME, """
 				(defun package-name (%pn-pkg)
-				  (string (or (find-package %pn-pkg)
-				              (error "PACKAGE-NAME: no package named ~A" %pn-pkg))))
+				  (let ((%pn-s (string (or (find-package %pn-pkg)
+				                           (error "PACKAGE-NAME: no package named ~A" %pn-pkg)))))
+				    (cond ((string= %pn-s "CL") "COMMON-LISP")
+				          ((string= %pn-s "CL-USER") "COMMON-LISP-USER")
+				          (t %pn-s))))
 				""");
 		// package-shadowing-symbols: a runtime package's shadowing members (its entry's
 		// fifth cell names them), a read/compile-time package's baked shadows (the
@@ -2472,7 +2480,10 @@ public final class LispPreludeLibrary {
 						    (setq %pn2-e (or (%runtime-package-find %pn2-s) (%baked-package-find %pn2-s)))
 						    (if (null %pn2-e)
 						        (error 'package-error :package (intern (string-upcase %pn2-s) :keyword) :format-control (concatenate 'string "PACKAGE-NICKNAMES: no such package: " %pn2-s))
-						        (copy-list (caddr %pn2-e)))))
+						        (let ((%pn2-n (string (car %pn2-e))))
+						          (if (or (string= %pn2-n "CL") (string= %pn2-n "CL-USER"))
+						              (list %pn2-n)
+						              (copy-list (caddr %pn2-e)))))))
 						""");
 		SOURCES.put(LispNames.FIND_ALL_SYMBOLS, """
 				(defun find-all-symbols (%fas-sym &optional %fas-pkg)
@@ -4334,11 +4345,15 @@ public final class LispPreludeLibrary {
 		// write byte-identical in OUTPUT to one that never mentions a variable.
 		SOURCES.put(LispNames.PRINT_CASED_INTERNAL, """
 				(defun %print-cased (%pc-x %pc-esc)
-				  (if (and (eq *print-case* :upcase) (null *print-length*) (null *print-level*)
-				           *print-gensym* (eql *print-base* 10) (null *print-radix*)
-				           (or (null %pc-esc) (%print-package-raw-p)))
-				      (if %pc-esc (%prin1-to-string %pc-x) (%princ-to-string %pc-x))
-				      (%pc-walk %pc-x %pc-esc nil 0 0)))
+				  (cond ((and %pc-esc *print-readably*
+				              (or *print-length* *print-level* (null *print-gensym*)))
+				         (let ((*print-length* nil) (*print-level* nil) (*print-gensym* t))
+				           (%print-cased %pc-x %pc-esc)))
+				        ((and (eq *print-case* :upcase) (null *print-length*) (null *print-level*)
+				              *print-gensym* (eql *print-base* 10) (null *print-radix*)
+				              (or (null %pc-esc) (%print-package-raw-p)))
+				         (if %pc-esc (%prin1-to-string %pc-x) (%princ-to-string %pc-x)))
+				        (t (%pc-walk %pc-x %pc-esc nil 0 0))))
 				""");
 		// The recursive half of %print-cased, carrying the cycle guard the raw
 		// renderers carry (RenderCycleGuard, .kb/pretty-printer.md): the rendering path
@@ -4465,20 +4480,28 @@ public final class LispPreludeLibrary {
 		// accessibility question goes to %symbol-print-bare-p: the live registry on the
 		// interpreter, the baked SymbolPrintTable on the compile paths
 		// (.kb/pretty-printer.md). The qualifier's colon count says whether the symbol
-		// is external, which is what the structural half of that answer reads.
+		// is external, which is what the structural half of that answer reads. A symbol
+		// spelled bare is a cl or a cl-user one, and the package may read its name as
+		// another symbol: %symbol-print-prefix answers what it needs in front.
 		SOURCES.put(LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL, """
 				(defun %pc-unqualified (%pu-x %pu-s)
 				  (let ((%pu-n (length %pu-s)) (%pu-i 0) (%pu-colon nil))
-				    (if (or (= %pu-n 0) (char= (char %pu-s 0) #\\:) (char= (char %pu-s 0) #\\#)
-				            (char= (char %pu-s 0) #\\|))
+				    (if (or (= %pu-n 0) (char= (char %pu-s 0) #\\:) (char= (char %pu-s 0) #\\#))
 				        %pu-s
 				        (progn
-				          (while (and (< %pu-i %pu-n) (null %pu-colon))
-				            (when (char= (char %pu-s %pu-i) #\\:)
-				              (setq %pu-colon %pu-i))
-				            (setq %pu-i (+ %pu-i 1)))
+				          (unless (char= (char %pu-s 0) #\\|)
+				            (while (and (< %pu-i %pu-n) (null %pu-colon))
+				              (when (char= (char %pu-s %pu-i) #\\:)
+				                (setq %pu-colon %pu-i))
+				              (setq %pu-i (+ %pu-i 1))))
 				          (if (null %pu-colon)
-				              %pu-s
+				              (let ((%pu-p (%symbol-print-prefix %pu-x)))
+				                (if %pu-p
+				                    (%pc-qualifier (concatenate 'string %pu-p %pu-s)
+				                                   (if (char= (char %pu-p (- (length %pu-p) 2)) #\\:)
+				                                       (- (length %pu-p) 2)
+				                                       (- (length %pu-p) 1)))
+				                    %pu-s))
 				              (let ((%pu-ext (if (and (< (+ %pu-colon 1) %pu-n)
 				                                      (char= (char %pu-s (+ %pu-colon 1)) #\\:))
 				                                 nil

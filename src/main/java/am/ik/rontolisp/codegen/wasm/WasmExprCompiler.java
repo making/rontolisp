@@ -1257,6 +1257,10 @@ final class WasmExprCompiler {
 			// table baked in at compile time (.kb/pretty-printer.md).
 			case LispNames.SYMBOL_PRINT_BARE_P_INTERNAL ->
 				compileExpansion(LispMacroExpander.expandSymbolPrintBareP(cons, ctx.symbolPrintTable), ctx, tail);
+			case LispNames.HOME_SPELLING_INTERNAL -> compileExpansion(((LispCons) cons.cdr()).car(), ctx, tail);
+			case LispNames.SYMBOL_PRINT_PREFIX_INTERNAL -> compileExpansion(
+					LispMacroExpander.expandSymbolPrintPrefix(cons, ctx.symbolPrintTable, ctx.functions::containsKey),
+					ctx, tail);
 			case LispNames.PRINT_PACKAGE_RAW_P_INTERNAL ->
 				compileExpansion(LispMacroExpander.expandPrintPackageRawP(ctx.symbolPrintTable), ctx, tail);
 			case LispNames.PRINT_CASED_QUALIFIER_INTERNAL ->
@@ -1507,8 +1511,13 @@ final class WasmExprCompiler {
 			case LispNames.WRITE_TO_STRING -> {
 				// A keyword tail binds the printer variables around the one-argument
 				// primitive (LispMacroExpander.expandWriteToStringKeywords).
+				LispVal conversion = cons.isProperList()
+						? LispMacroExpander.expandWriteToStringConversion(cons, ctx.specialVars) : null;
 				if (cons.isProperList() && cons.toList().size() > 2) {
 					compileExpr(LispMacroExpander.expandWriteToStringKeywords(cons), ctx);
+				}
+				else if (conversion != null) {
+					compileExpr(conversion, ctx);
 				}
 				else {
 					compilePrintOperator(cons, ctx, () -> WasmPrin1ToStringCompiler.compile(cons, ctx));
@@ -2736,7 +2745,7 @@ final class WasmExprCompiler {
 				compileExpansion(LispMacroExpander.expandWithCompilationUnit(cons), ctx, tail);
 			case LispNames.LOCALLY -> compileExpansion(LispMacroExpander.expandLocally(cons), ctx, tail);
 			case LispNames.WITH_STANDARD_IO_SYNTAX ->
-				compileExpansion(LispMacroExpander.expandWithStandardIoSyntax(cons), ctx, tail);
+				compileExpansion(LispMacroExpander.expandWithStandardIoSyntax(cons, ctx.specialVars), ctx, tail);
 			case LispNames.WRITE_CHAR -> compileExpansion(LispMacroExpander.expandWriteChar(cons), ctx, tail);
 			case LispNames.FLET -> compileExpansion(LispMacroExpander.expandFlet(cons), ctx, tail);
 			case LispNames.LABELS -> compileExpansion(LispMacroExpander.expandLabels(cons), ctx, tail);

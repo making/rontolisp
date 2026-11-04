@@ -265,7 +265,7 @@ class SwankServerTest {
 			// there
 			assertThat(client.rex("(swank:init-inspector \"(find-package :drv-pkg)\")", "CL-USER", "t").getLast())
 				.contains(":content ((\"\" \"Name: \" (:value \"\\\"DRV-PKG\\\"\" 1) \"\n\" \"Nicknames: \" \"\n\""
-						+ " \"Use list: \" (:value \"CL\" 2) \"\n\" \"Used by list: \" \"\n\" (:value \"2 present"
+						+ " \"Use list: \" (:value \"COMMON-LISP\" 2) \"\n\" \"Used by list: \" \"\n\" (:value \"2 present"
 						+ " symbols.\" 3) \"\n\" (:value \"1 external symbol.\" 4) \"\n\" (:value \"1 internal"
 						+ " symbol.\" 5) \"\n\"");
 			assertThat(client.rex("(swank:inspect-nth-part 3)", "CL-USER", "t").getLast())
@@ -511,7 +511,7 @@ class SwankServerTest {
 			assertThat(client.output()).isEqualTo("DRV-LOOP");
 			// ...while a worker reads and runs in the package its request names
 			assertThat(client.rex("(swank:interactive-eval \"(package-name *package*)\" 6 80)", "CL-USER", "t"))
-				.containsExactly("(:return (:ok \"=> \\\"CL-USER\\\"\") id)");
+				.containsExactly("(:return (:ok \"=> \\\"COMMON-LISP-USER\\\"\") id)");
 			// the interrupt stops the loop in SWANK's simple-break, whose continue goes
 			// on
 			String interrupted = "(:debug tid 1 (\"Interrupt from Emacs\" \"   [Condition of type SIMPLE-ERROR]\" nil)"
@@ -531,7 +531,7 @@ class SwankServerTest {
 					"(:return (:abort \"NIL\") id)", "(:debug-return tid 1 nil)", "(:return (:abort \"NIL\") id)");
 			// the REPL thread goes on, its package switch never announced
 			assertThat(client.repl("(list (package-name *package*) (+ 40 2))")).first()
-				.isEqualTo("(:write-string \"(\\\"CL-USER\\\" 42)\n\" :repl-result)");
+				.isEqualTo("(:write-string \"(\\\"COMMON-LISP-USER\\\" 42)\n\" :repl-result)");
 			// a sleep the interrupt woke sleeps on after the continue
 			long sleeping = client.send(
 					"(swank-repl:listener-eval \"(progn (princ 'zz) (finish-output) (sleep 1) :slept)\n\")", "CL-USER",

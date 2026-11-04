@@ -5833,11 +5833,9 @@ public final class LispNames {
 	public static final String WITH_INPUT_FROM_STRING = "WITH-INPUT-FROM-STRING";
 
 	/**
-	 * The {@code with-standard-io-syntax} macro. Expands to {@code progn} of its body:
-	 * every reader/printer control variable Common Lisp asks it to rebind is, in
-	 * rontolisp, either informational or resolved before run time -- see
-	 * {@code LispMacroExpander#expandWithStandardIoSyntax} for the per-variable audit and
-	 * for when this has to stop being an identity.
+	 * The {@code with-standard-io-syntax} macro: a {@code let} of the reader and printer
+	 * control variables to CLHS 23.1.2's table around its body
+	 * ({@code LispMacroExpander#expandWithStandardIoSyntax}).
 	 */
 	public static final String WITH_STANDARD_IO_SYNTAX = "WITH-STANDARD-IO-SYNTAX";
 
@@ -6289,10 +6287,15 @@ public final class LispNames {
 	/**
 	 * The {@code *read-default-float-format*} variable. Every float shares the one double
 	 * representation, so its value ({@code double-float}) is informational: it exists so
-	 * library code that reads it (or rebinds it through a keyword argument, lexically
-	 * here) loads and runs.
+	 * library code that reads or binds it loads and runs. Special on every backend.
 	 */
 	public static final String READ_DEFAULT_FLOAT_FORMAT = "*READ-DEFAULT-FLOAT-FORMAT*";
+
+	/**
+	 * The {@code *read-base*} variable: 10, special on every backend, and consulted by no
+	 * reader yet, which reads every integer in base 10.
+	 */
+	public static final String READ_BASE_VAR = "*READ-BASE*";
 
 	/**
 	 * The {@code values-list} built-in function (spread a list as multiple values through
@@ -10493,6 +10496,27 @@ public final class LispNames {
 	public static final String SYMBOL_PRINT_BARE_P_INTERNAL = "%SYMBOL-PRINT-BARE-P";
 
 	/**
+	 * The internal {@code (%symbol-print-prefix symbol)} primitive, the same question of
+	 * a symbol spelled bare: the qualifier of its home, {@code cl} or {@code cl-user},
+	 * where the current {@code *package*} reads the name as something else, nil where it
+	 * prints bare. The interpreter answers from the live registry
+	 * ({@code PackageResolver.bareSymbolPrefix}); the compile paths lower the call onto
+	 * the baked {@code SymbolPrintTable}
+	 * ({@code LispMacroExpander.expandSymbolPrintPrefix}).
+	 */
+	public static final String SYMBOL_PRINT_PREFIX_INTERNAL = "%SYMBOL-PRINT-PREFIX";
+
+	/**
+	 * The internal {@code (%home-spelling text)} primitive: what a one-argument
+	 * {@code intern} takes to answer the symbol whose canonical spelling is the text,
+	 * whatever package is current. The text itself on the compile paths, where that
+	 * {@code intern} builds it from the spelling; on the interpreter, which homes a bare
+	 * name in the current package, a bare spelling comes back qualified by
+	 * {@code cl-user}.
+	 */
+	public static final String HOME_SPELLING_INTERNAL = "%HOME-SPELLING";
+
+	/**
 	 * The internal {@code (%print-package-raw-p)} primitive: whether the current
 	 * {@code *package*} is the pristine {@code cl-user}, under which no qualified symbol
 	 * is accessible and the raw conversion is already exact -- the package half of
@@ -10559,6 +10583,12 @@ public final class LispNames {
 	 * unbound when {@code unbound-slot} was signalled.
 	 */
 	public static final String UNBOUND_SLOT_INSTANCE = "UNBOUND-SLOT-INSTANCE";
+
+	/**
+	 * The {@code print-not-readable-object} condition reader: the object that could not
+	 * be printed readably.
+	 */
+	public static final String PRINT_NOT_READABLE_OBJECT = "PRINT-NOT-READABLE-OBJECT";
 
 	/**
 	 * The {@code stream-error-stream} condition reader: the {@code stream} slot every
@@ -10694,9 +10724,10 @@ public final class LispNames {
 	public static final String PRINT_ESCAPE_VAR = "*PRINT-ESCAPE*";
 
 	/**
-	 * {@code *print-readably*} -- always nil: there is no print-read round-trip mode, so
-	 * nothing binds it. Defined because a portable {@code print-object} method tests it
-	 * alongside {@link #PRINT_ESCAPE_VAR}.
+	 * {@code *print-readably*} -- nil globally, t under {@code with-standard-io-syntax}.
+	 * True picks the {@code prin1} conversion where the printer chooses one
+	 * ({@code write}, a {@code write-to-string} keyword); a portable {@code print-object}
+	 * method tests it alongside {@link #PRINT_ESCAPE_VAR}.
 	 */
 	public static final String PRINT_READABLY_VAR = "*PRINT-READABLY*";
 

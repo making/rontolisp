@@ -143,7 +143,7 @@ spells a qualifier only when the symbol is NOT accessible in the current `*packa
   uses the home and the colon is single. Divergences for symbols OCCURRING in the program bake per
   package into `extra` (`:import-from`, re-export, late `export`) and `excluded` (`:shadow`, an
   earlier used package exporting the same name, `unexport`); a run-time intern follows the rule
-  alone.
+  alone. A bare spelling has its own lists, below.
 - Gate: `LispMacroExpander.printsUnderAPackage` — a top-level `in-package` leaving `cl-user`, or
   any other mention of `*package*`. The prelude pulls the renderer for such a program only when a
   `prin1`-style conversion is in reach from the surface (`reachesPrin1FromTheSurface`). **Keying
@@ -166,9 +166,49 @@ spells a qualifier only when the symbol is NOT accessible in the current `*packa
   `instance-type-name-follows-the-current-package`.
 - A qualifier it keeps is the current package's nickname for the home when it has one (`%pc-qualifier`,
   `.kb/packages.md`, "Package-local nicknames").
-- **Known gap:** the printer only DROPS a qualifier, never ADDS one — a symbol printed where it is
-  inaccessible prints bare, not `COMMON-LISP-USER::FOO`. Re-evaluate with a real intern table: the
-  question becomes a field read and the baked table unnecessary.
+- **A bare spelling gets a qualifier where the package reads that name as another symbol** (i30,
+  2026-11-04, SBCL 2.2.9 checked): `COMMON-LISP:CAR` under a package using no `cl` or shadowing `car`,
+  `COMMON-LISP-USER::FOO` outside `cl-user`. Two different symbols no longer print alike. The names are
+  the standard's, not this implementation's `cl`/`cl-user`, and `package-name` and `package-nicknames`
+  answer them too (`.kb/packages.md`, "Nicknames"). `%pc-unqualified` asks `%symbol-print-prefix`;
+  the prefix goes through `%pc-qualifier`, so a local nickname of `cl` prints `C:CAR`.
+  Interpreter: `PackageResolver.bareSymbolPrefix`, `printsBare`'s bare arm, the same resolution question.
+  `nil`, `t` and the 93 names `cl` exports without implementing are no `isClSymbol` names: the bare arm
+  answers them for a package using `cl`, so `cl:find-method` prints bare there although a read of
+  `find-method` is the package's own (`.kb/packages.md`, "The `cl` external list").
+- The compile path's half of the table (`noClPackages`, `clUserSymbols`, `bareExtra`, `bareExcluded`,
+  lowered by `LispMacroExpander.expandSymbolPrintPrefix`) is rule + corrections like the qualified half.
+  Rule: a name in `clUserSymbols` is qualified outside `cl-user`; any other prints bare, except a
+  standard name under a package of `noClPackages`, the eight lambda-list keywords and `quote` excepted
+  (`PackageRegistry.readsClInEveryPackage`). Corrections are asked of `printsBare` for the names that
+  can differ: what the program can print, a standard name the package imports or shadows, and every
+  standard name for a package using no `cl` with a non-empty use list.
+  - `clUserSymbols` holds what the printer can meet: bare names in QUOTED data and the names of
+    `defstruct`/`defclass`/`define-condition` (an instance's type name reaches it as a string, so these
+    lists are strings compared by `string=`). A walk of every position was not taken: a spliced prelude's
+    local variables are bare `cl-user` symbols too, and they would all travel.
+  - `noClPackages` is by majority: a package re-exporting most standard names (`closer-common-lisp`,
+    `clim-lisp`) reads as `cl`, and what it misses is `bareExcluded`.
+  - `%standard-name-p` tells a standard name from a run-time read's bare `FOO` under such a package:
+    `injectPrintStandardNames` splices its 7.4 K table only into a program that defines a package
+    in `noClPackages` or enters a built-in one at top level. Without it the arm answers bare, as before.
+- **What a compile path still prints bare:** a `cl-user` symbol interned under a computed name that no
+  form spells, under any package. Its name is all there is, and no intern table says it was `cl-user`'s.
+  The interpreter's answer is exact. `'nil` read under a package using no `cl` is `cl`'s `nil` on every
+  backend (the reader folds it ahead of the resolver), so it prints `COMMON-LISP:NIL` where SBCL prints
+  the package's own `NIL`.
+- **A printed qualifier reads back:** the compiled run-time readers drop `CL`, `COMMON-LISP`, `CL-USER`
+  and `COMMON-LISP-USER` qualifiers at the token (`JvmReadRuntimeBuilder.buildClassify`,
+  `WasmReadRuntimeBuilder.emitDropStandardQualifier`), one colon or two. Until then `(read-from-string
+  "cl:car")` was a symbol `CL:CAR` that was not `eq` to `car`.
+- `type-of` answers the type's own symbol under any package: the interpreter's one-argument `intern` homed
+  a bare `%struct-`/`%class-` name in the current package, a symbol `eq` to nothing the program spelled.
+  `%home-spelling` qualifies it for that `intern` by `cl-user`, and is the text itself on the compile
+  paths. It wraps the `intern` argument and does not replace the `intern`: the wasm `_intern` runtime
+  gate, `RuntimeNameProducers` and `PACKAGE_ERROR_SITES` all key on that name, and a replacement that
+  answered the first two still left nine programs with `no layout was baked for %class-PACKAGE-ERROR`.
+- Pinned by ci-spec `a-bare-symbol-prints-qualified-where-the-package-reads-another`,
+  `PackageResolverTest#{aBareSymbolPrintsTheQualifierOfItsHomeWhereThePackageReadsAnother,symbolPrintTableCarriesTheCorrectionsForTheSymbolsTheProgramSpells}`.
 
 ## A cyclic value prints finitely instead of overflowing the stack
 **Invariant: no default renderer runs without bound on a cycle.** One mechanism
@@ -230,7 +270,7 @@ per variable the program MENTIONS — run after `expandTopLevelDefinitions`; "me
 | variable | value | honored? |
 | --- | --- | --- |
 | `*print-escape*` | `t` | yes — picks prin1 vs princ; the `print-object` route binds it |
-| `*print-readably*` | `nil` | yes — forces escaping |
+| `*print-readably*` | `nil` | yes — forces escaping, overrides length/level/gensym; never signals (below) |
 | `*print-pretty*` | `t` | yes — gates the MANDATORY line break |
 | `*print-circle*` | `nil` | no labels — the guard prints a cycle as `#`/`" . #"` |
 | `*print-right-margin*` / `*print-miser-width*` / `*print-lines*` | `nil` | no (no column) |
@@ -247,6 +287,35 @@ binding an inert one to a non-default value is what has no effect. The four stan
 variables (`*trace-output*`, `*debug-io*`, `*query-io*`, `*terminal-io*`) ride the same table with
 the `t` designator `*standard-output*` holds — esrap's rule tracing formats to `*trace-output*`
 from inside a closure, and a captured free variable must be a declared global.
+`*read-eval*`, `*read-suppress*`, `*read-base*` and `*read-default-float-format*` ride it too, each
+special on all four since 2026-11-05 (the float format was a `setq`-seeded global, so a `let` of it
+was lexical, and `*read-base*` did not exist).
+
+## `with-standard-io-syntax`
+**Invariant: the body sees CLHS 23.1.2's table on all four backends** (2026-11-05, SBCL 2.2.9 agrees on
+ci-spec `with-standard-io-syntax-binds-the-standard-table`; quri's `*print-base*` pins made
+`quri-test` `All 6 files passed`).
+
+- One table, `LispMacroExpander.STANDARD_IO_VALUES`: only `*print-pretty*` nil, `*print-readably*` t,
+  `*read-default-float-format*` `single-float` and a fresh `*readtable*` differ from the globals.
+- The interpreter's `let` binds all of it. **A compile arm binds only the program's specials**
+  (`expandWithStandardIoSyntax(cons, ctx.specialVars)`): a name nothing mentions has no defvar and
+  nothing reads it, the printer included, so a program naming no control variable keeps its
+  `(let ((*package* :cl-user)) ...)`, its bytes and no case-fold tables. The renderer naming
+  `*print-readably*` is a mention, so a routed program binds it.
+- `*print-readably*` on: `prin1` ignores `*print-length*`/`*print-level*` and keeps `#:`
+  (`%print-cased`, `%print-object-str` as a binding at the entry, not a test in each walk); `princ`
+  binds it nil around a `print-object` method (`printObjectCall`, for a program naming the variable);
+  `write`, a `write-to-string` keyword and a one-argument `write-to-string`
+  (`expandWriteToStringConversion`; `(let ((*print-escape* nil)) (write-to-string "a"))` printed
+  the quotes until then) take `prin1` when it or `*print-escape*` is on.
+- **No printer signals `print-not-readable`** (measured 2026-11-05: `(with-standard-io-syntax
+  (prin1-to-string (lambda (x) x)))` answers `#<...>` on all four, SBCL signals). The class exists
+  (`ClosRegistry`, reader `print-not-readable-object`) because serapeum and coalton signal and handle
+  it themselves; `(error 'print-not-readable)` used to find no class, escaping `(error ...)` clauses.
+  The signal has traps of its own (`.todo/i47`).
+- Inert under it: `*read-default-float-format*` (`1.5d0` prints `1.5`, SBCL `1.5d0`), `*read-base*`
+  (no reader consults it, `.todo/i48`).
 
 ## Tests
 `LispEvaluatorTest.evalWriteAndPprintDispatch`/`evalPprintLogicalBlock`/`evalPrintCase`/

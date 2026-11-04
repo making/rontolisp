@@ -52,5 +52,4 @@ $ rontolisp keep.lisp -o keep.wasm && wasmtime run keep.wasm
 
 - コンパイル済みバックエンドの実行時 `read` と `read-from-string` は `*readtable*` を無視します。
 - ファイルストリームや標準入力からの `read` は標準の構文を使います。
-- `with-standard-io-syntax` は `*readtable*` を再束縛しません。
 - `(get-dispatch-macro-character #\# #\()` のような標準のディスパッチ関数は直接呼び出せません。比較と設定はできます。

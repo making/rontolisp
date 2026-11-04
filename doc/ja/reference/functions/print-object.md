@@ -18,7 +18,7 @@
 
 組み込み表示のうち `#S(...)`/`#<...>` でない唯一の例外がコンディションです: `princ`/`princ-to-string`/`~A` はその [`:report`](../macros/define-condition.md) を出力します。コンディションクラスに `print-object` メソッドがあれば、どちらのエスケープモードでもそのレポートより優先されます。
 
-`*print-escape*` は呼び出しの周りで束縛されます — `prin1`/`print`/`~S` では `t`、`princ`/`~A` では `nil` — ので、これを見て分岐する移植性のあるメソッド (可読形式か素の形式かを切り替える Common Lisp のイディオム) はここでも同じように動作します。`*print-readably*` は常に `nil` です。
+`*print-escape*` は呼び出しの周りで束縛されます — `prin1`/`print`/`~S` では `t`、`princ`/`~A` では `nil` — ので、これを見て分岐する移植性のあるメソッド (可読形式か素の形式かを切り替える Common Lisp のイディオム) はここでも同じように動作します。`*print-readably*` は `princ`/`~A` では `nil` です。`prin1`/`print`/`~S` では値を保ち、グローバルには `nil`、[`with-standard-io-syntax`](../macros/with-standard-io-syntax.md) の中では `t` です。
 
 ```lisp
 (defstruct po-uri text)

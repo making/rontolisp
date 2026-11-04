@@ -90,6 +90,7 @@ public final class ClosRegistry {
 		// message from Java without evaluating a report lambda.
 		registerConditionReport(END_OF_FILE_CLASS_NAME, new LispString(END_OF_FILE_MESSAGE));
 		registerConditionReport("UNBOUND-SLOT", unboundSlotReport());
+		registerConditionReport("PRINT-NOT-READABLE", printNotReadableReport());
 	}
 
 	/**
@@ -482,7 +483,9 @@ public final class ClosRegistry {
 			seed(UNDEFINED_FUNCTION_CLASS_NAME, "CELL-ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
 			// The condition a read of an unbound slot signals (CLHS 7.7.2): name = the
 			// slot, instance = the object it was read from.
-			seed("UNBOUND-SLOT", "CELL-ERROR", "INSTANCE"));
+			seed("UNBOUND-SLOT", "CELL-ERROR", "INSTANCE"),
+			// object = what a print-object method or a program refuses to print readably.
+			seed("PRINT-NOT-READABLE", "ERROR", "OBJECT"));
 
 	/**
 	 * The names of the built-in condition classes the constructor seeds, in seeding
@@ -837,6 +840,18 @@ public final class ClosRegistry {
 		LispVal format = list(new LispSymbol("FORMAT"), stream, new LispString("The slot ~S is unbound in ~S"),
 				list(new LispSymbol(LispNames.OBJ_REF), condition, new LispInteger(0)),
 				list(new LispSymbol(LispNames.OBJ_REF), condition, new LispInteger(1)));
+		return list(new LispSymbol(LispNames.LAMBDA), list(condition, stream), format);
+	}
+
+	/**
+	 * The {@code :report} of the seeded {@code print-not-readable}, built as
+	 * {@link #unboundSlotReport} is: the text SBCL prints.
+	 */
+	private static LispVal printNotReadableReport() {
+		LispSymbol condition = new LispSymbol("__c");
+		LispSymbol stream = new LispSymbol("__s");
+		LispVal format = list(new LispSymbol("FORMAT"), stream, new LispString("~S cannot be printed readably."),
+				list(new LispSymbol(LispNames.OBJ_REF), condition, new LispInteger(0)));
 		return list(new LispSymbol(LispNames.LAMBDA), list(condition, stream), format);
 	}
 

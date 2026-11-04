@@ -6810,7 +6810,7 @@ class WasmLispCompilerIntegrationTest {
 				(defun q (p) (package-use-list p))
 				(print (q (find-package "CL-USER")))
 				(print (mapcar #'package-name (funcall #'package-use-list :cl-user)))
-				""")).isEqualTo("(:CL :PQL-A)\n(:PQL-B)\nNIL\nNIL\n:PQL-A\n(:CL)\n(\"CL\")");
+				""")).isEqualTo("(:CL :PQL-A)\n(:PQL-B)\nNIL\nNIL\n:PQL-A\n(:CL)\n(\"COMMON-LISP\")");
 	}
 
 	@Test
@@ -15502,8 +15502,8 @@ class WasmLispCompilerIntegrationTest {
 				(print (uiop:package-definition-form :no-such-pkg :error nil))
 				""")).isEqualTo(
 				"(':UIOP/PACKAGE* :NICKNAMES 'NIL :DOCUMENTATION 'NIL :USE '(:UIOP/PACKAGE) :SHADOW 'NIL :SHADOWING-IMPORT-FROM 'NIL :IMPORT-FROM '((:UIOP/PACKAGE #:DEFINE-PACKAGE-STYLE-WARNING #:NO-SUCH-PACKAGE-ERROR #:PACKAGE-DESIGNATOR)) :EXPORT '(#:DEFINE-PACKAGE-STYLE-WARNING #:NO-SUCH-PACKAGE-ERROR #:PACKAGE-DESIGNATOR) :INTERN 'NIL :RECYCLE '(:UIOP/PACKAGE*) :MIX 'NIL :REEXPORT '(:UIOP/PACKAGE) :UNINTERN 'NIL)\n"
-						+ "(DEFPACKAGE \"WU-PDF\" (:USE \"CL\") (:EXPORT \"PDF-E1\" \"PDF-E2\"))\n"
-						+ "(DEFPACKAGE \"WU-PDF\" (:USE \"CL\"))\n" + "NIL");
+						+ "(DEFPACKAGE \"WU-PDF\" (:USE \"COMMON-LISP\") (:EXPORT \"PDF-E1\" \"PDF-E2\"))\n"
+						+ "(DEFPACKAGE \"WU-PDF\" (:USE \"COMMON-LISP\"))\n" + "NIL");
 	}
 
 	@Test

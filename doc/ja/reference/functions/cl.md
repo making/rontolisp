@@ -161,7 +161,7 @@
 | `find-package` | `(find-package :cl)` | `:cl` -- lite 版: 大文字化されたパッケージ名のキーワード(パッケージオブジェクトはありません)。未知なら `nil`(コンパイラは計算された指定子をコンパイル時に埋め込んだ表から解決します) |
 | `symbol-name` | `(symbol-name 'foo)` | `"FOO"` -- シンボルは CL 同様大文字化されて読まれるので `(symbol-name 'car)` も `"CAR"` |
 | `symbol-package` | `(symbol-package :foo)` | `:keyword` -- `find-package` と同じキーワード形式(標準シンボルは `t` と `nil` も含めて `:cl`、それ以外は `:cl-user`、`#:` シンボルと `unintern` がホームから取り除いたシンボルは `nil`) |
-| `package-name` | `(package-name (find-package :cl-user))` | `"CL-USER"` -- パッケージ指示子の名前文字列。`find-package` で解決され、未知の指示子はシグナルします |
+| `package-name` | `(package-name (find-package :cl-user))` | `"COMMON-LISP-USER"` -- パッケージ指示子の名前文字列。`find-package` で解決され、未知の指示子はシグナルします |
 | `package-use-list` | `(package-use-list :cl-user)` | `(:CL)` -- そのパッケージが use しているパッケージを `find-package` のキーワードで返します。未知の指示子はシグナルします |
 | `package-used-by-list` | `(package-used-by-list :cl)` | 逆向き: use リストにこのパッケージを含むすべてのパッケージ |
 | `package-shadowing-symbols` | `(package-shadowing-symbols :cl-user)` | `nil` -- パッケージのシャドーイングシンボル(`defpackage` の `:shadow` / `:shadowing-import-from` の名前に `shadow` / `shadowing-import` が加えたものを足したもの)を名前順に。指示子の検査は行います |
@@ -172,7 +172,7 @@
 | `delete-package` | `(delete-package :mypkg)` | `t` -- `make-package` の成果物を削除します。読込/compile 時パッケージや未知の指示子は `package-error` を signal します |
 | `rename-package` | `(rename-package :mypkg :new :nick)` | `make-package` の成果物の名前を変更し、ニックネームを置換します。同じ失敗は signal します |
 | `packagep` | `(packagep :cl)` | 登録済みパッケージを指す指示子なら `t`、そうでなければ `nil` -- signal しません |
-| `package-nicknames` | `(package-nicknames :cl)` | `("COMMON-LISP")` -- ニックネーム文字列をソート順で。未知の指示子は `package-error` を signal します |
+| `package-nicknames` | `(package-nicknames :cl)` | `("CL")` -- ニックネーム文字列をソート順で。未知の指示子は `package-error` を signal します |
 | `find-all-symbols` | `(find-all-symbols 'car)` | `(CAR)` -- その名前で到達可能な重複のない全シンボルを、コードが綴る形で |
 | `apropos-list` | `(apropos-list "CAR" :cl)` | `(CAR MAPCAR)` -- 同じ宇宙に対する部分文字列検索(大文字小文字を区別しない) |
 | `apropos` | `(apropos "CAR" :cl)` | 各一致を印字して `nil` を返します |
@@ -465,6 +465,7 @@
 | `type-error-expected-type` | `(type-error-expected-type c)` | `type-error` の `expected-type` スロット |
 | `cell-error-name` | `(cell-error-name c)` | `cell-error`(`unbound-variable`、`undefined-function`、`unbound-slot`)の `name` スロット |
 | `unbound-slot-instance` | `(unbound-slot-instance c)` | スロットが未束縛だったオブジェクト |
+| `print-not-readable-object` | `(print-not-readable-object c)` | `print-not-readable` がシグナルされた対象のオブジェクト |
 | `file-error-pathname` | `(file-error-pathname c)` | 失敗したファイル操作に渡されたパス名 |
 | `print-object` | `(print-object obj stream)` | プリンタが参照するジェネリック関数。メソッドを定義すると、その型のインスタンスの出力を制御できます |
 | `find-restart` | `(find-restart 'retry c)` | その名前を持つ最内のアクティブなリスタートを第一級オブジェクトとして返します。なければ `nil`。lite: コンディション引数は無視されます |

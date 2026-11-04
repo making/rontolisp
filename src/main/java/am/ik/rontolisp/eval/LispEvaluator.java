@@ -755,8 +755,8 @@ public final class LispEvaluator {
 	{
 		// Seeded: *print-escape* is proclaimed special without a defvar in user code,
 		// because the print-object route BINDS it around the method call so a method can
-		// tell prin1 from princ. *print-readably* joins it so a program may bind that
-		// too (nothing here does).
+		// tell prin1 from princ. *print-readably* joins it: with-standard-io-syntax binds
+		// it, and a program may too.
 		this.specialVars.add(LispNames.PRINT_ESCAPE_VAR);
 		this.specialVars.add(LispNames.PRINT_READABLY_VAR);
 		// The pretty-printer control variables join them: `write` BINDS all of them
@@ -793,6 +793,10 @@ public final class LispEvaluator {
 		// spelled (let ((*read-suppress* t)) (read ...)), which is a dynamic binding or
 		// nothing.
 		this.specialVars.add(LispNames.READ_SUPPRESS_VAR);
+		// The other two reader variables with-standard-io-syntax binds: a function
+		// called in its body reads the binding.
+		this.specialVars.add(LispNames.READ_BASE_VAR);
+		this.specialVars.add(LispNames.READ_DEFAULT_FLOAT_FORMAT);
 		// *readtable* joins them: load binds it around a file, and a reader macro's own
 		// read runs under a (let ((*readtable* ...)) ...) of its library's.
 		this.specialVars.add(LispNames.READTABLE_VAR);
@@ -3224,6 +3228,31 @@ public final class LispEvaluator {
 					return spelling != null && this.packageResolver.printsBare(spelling) ? LispTrue.INSTANCE
 							: LispNil.INSTANCE;
 				}));
+		this.globalEnv.defineFunction(LispNames.HOME_SPELLING_INTERNAL,
+				new LispFunction(LispNames.HOME_SPELLING_INTERNAL, args -> {
+					requireSingleArg(LispNames.HOME_SPELLING_INTERNAL, args);
+					if (!(args.get(0) instanceof LispString text)) {
+						throw new LispEvalException(
+								LispNames.HOME_SPELLING_INTERNAL + " expects a string, got " + args.get(0).print());
+					}
+					return text.value().contains(":") ? text
+							: new LispString(PackageRegistry.qualifyInternal(LispNames.CL_USER_PKG, text.value()));
+				}));
+		// The same question of a symbol spelled bare, answering what it prints in front
+		// of its name.
+		this.globalEnv.defineFunction(LispNames.SYMBOL_PRINT_PREFIX_INTERNAL,
+				new LispFunction(LispNames.SYMBOL_PRINT_PREFIX_INTERNAL, args -> {
+					requireSingleArg(LispNames.SYMBOL_PRINT_PREFIX_INTERNAL, args);
+					String spelling = switch (args.get(0)) {
+						case LispSymbol sym -> sym.name();
+						case LispString text -> text.value();
+						case LispNil ignored -> "NIL";
+						case LispTrue ignored -> "T";
+						default -> null;
+					};
+					String prefix = spelling == null ? null : this.packageResolver.bareSymbolPrefix(spelling);
+					return prefix == null ? LispNil.INSTANCE : new LispString(prefix);
+				}));
 		// The walk's two leaf primitives: the interpreter loads the prelude lazily, so
 		// they simply call the leaf (the compile paths lower them to the leaf or to the
 		// bare text, LispMacroExpander.expandPrintCasedLeaf).
@@ -3355,7 +3384,7 @@ public final class LispEvaluator {
 					requireSingleArg(LispNames.PACKAGE_NICKNAMES, args);
 					String designator = packageDesignator(LispNames.PACKAGE_NICKNAMES, args.get(0));
 					try {
-						List<String> nicknames = this.packageResolver.runtimePackageNicknames(designator);
+						List<String> nicknames = this.packageResolver.standardPackageNicknames(designator);
 						LispVal out = LispNil.INSTANCE;
 						for (int i = nicknames.size() - 1; i >= 0; i--) {
 							out = new LispCons(new LispString(nicknames.get(i)), out);
@@ -8584,6 +8613,15 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Whether both variables that pick the {@code prin1} conversion are off, which makes
+	 * a one-argument {@code write-to-string} the {@code princ} conversion.
+	 */
+	private boolean princConversionInEffect() {
+		return currentSpecialValue(LispNames.PRINT_ESCAPE_VAR) instanceof LispNil
+				&& currentSpecialValue(LispNames.PRINT_READABLY_VAR) instanceof LispNil;
+	}
+
+	/**
 	 * Whether a printer-control variable ({@code LispMacroExpander.PRINT_CONTROL_VARS})
 	 * currently holds a non-default value -- {@code *print-case*} other than
 	 * {@code :upcase}, a non-nil {@code *print-length*} / {@code *print-level*} /
@@ -9014,6 +9052,10 @@ public final class LispEvaluator {
 				}
 				LispVal form = new LispCons(new LispSymbol(name), new LispCons(quoteValue(args.get(0)), tail));
 				return eval(LispMacroExpander.expandWriteToStringKeywords((LispCons) form), this.globalEnv);
+			}
+			if (LispNames.WRITE_TO_STRING.equals(name) && args.size() == 1 && princConversionInEffect()) {
+				return eval(new LispCons(new LispSymbol(LispNames.PRINC_TO_STRING), quotedArguments(args)),
+						this.globalEnv);
 			}
 			if (!args.isEmpty() && args.size() <= 2 && printControlsInEffect()) {
 				LispVal form = new LispCons(new LispSymbol(name), quotedArguments(args));
@@ -10714,6 +10756,9 @@ public final class LispEvaluator {
 					// A keyword tail binds the printer variables around the one-argument
 					// primitive, the same lowering both compilers take.
 					return LispMacroExpander.expandWriteToStringKeywords(cons);
+				}
+				if (LispNames.WRITE_TO_STRING.equals(name) && princConversionInEffect()) {
+					return new LispCons(new LispSymbol(LispNames.PRINC_TO_STRING), cons.cdr());
 				}
 				if (this.closRegistry.routesConditionReports()) {
 					// Already routing: only the freshness check, so a condition class
@@ -14837,7 +14882,7 @@ public final class LispEvaluator {
 			// The interpreter always emits the vector arm: the gate the compile paths use
 			// exists to keep the array runtime out of an array-free ARTIFACT, and there
 			// is no artifact here.
-			for (LispVal form : LispMacroExpander.printObjectStrDefuns(this.closRegistry, controls, true)) {
+			for (LispVal form : LispMacroExpander.printObjectStrDefuns(this.closRegistry, controls, true, true)) {
 				eval(form, this.globalEnv);
 			}
 		}

@@ -86,7 +86,7 @@ class ThreadTest {
 				  (let ((seen (package-name *package*)))
 				    (setq tp-home::*resume* t)
 				    (list seen (rontolisp:join-thread th) (package-name *package*))))
-				""").print()).isEqualTo("(\"CL-USER\" :EXPANDED \"CL-USER\")");
+				""").print()).isEqualTo("(\"COMMON-LISP-USER\" :EXPANDED \"COMMON-LISP-USER\")");
 	}
 
 	@Test

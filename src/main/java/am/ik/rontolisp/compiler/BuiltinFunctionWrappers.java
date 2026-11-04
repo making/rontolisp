@@ -748,7 +748,7 @@ public final class BuiltinFunctionWrappers {
 				LispNames.WRITE_TO_STRING,
 				new HelperWrapper(LispNames.WRITE_TO_STRING_KEYED_INTERNAL,
 						new WrapperDef(LispNames.WRITE_TO_STRING, List.of("a"),
-								List.of(call(LispNames.PRIN1_TO_STRING, "a")))),
+								List.of(call(LispNames.WRITE_TO_STRING, "a")))),
 				LispNames.READ_FROM_STRING,
 				new HelperWrapper(LispNames.READ_FROM_STRING_FULL_INTERNAL, unary(LispNames.READ_FROM_STRING)));
 
@@ -965,13 +965,13 @@ public final class BuiltinFunctionWrappers {
 
 	/**
 	 * {@code #'write-to-string}: {@code (lambda (a &rest kw) (if kw
-	 * (%write-to-string-keyed a kw) (prin1-to-string a)))} -- a keyword tail binds the
+	 * (%write-to-string-keyed a kw) (write-to-string a)))} -- a keyword tail binds the
 	 * printer variables around the print, as the call-position lowering does with a
 	 * literal one.
 	 */
 	private static WrapperDef writeToStringWrapper() {
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("kw"),
-				call(LispNames.WRITE_TO_STRING_KEYED_INTERNAL, "a", "kw"), call(LispNames.PRIN1_TO_STRING, "a")));
+				call(LispNames.WRITE_TO_STRING_KEYED_INTERNAL, "a", "kw"), call(LispNames.WRITE_TO_STRING, "a")));
 		return new WrapperDef(LispNames.WRITE_TO_STRING, List.of("a", LispNames.LAMBDA_REST, "kw"), List.of(body));
 	}
 

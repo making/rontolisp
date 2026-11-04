@@ -1060,6 +1060,11 @@ final class JvmExprCompiler {
 			// table baked in at compile time (.kb/pretty-printer.md).
 			case LispNames.SYMBOL_PRINT_BARE_P_INTERNAL -> JvmExprCompiler
 				.compileExpr(LispMacroExpander.expandSymbolPrintBareP(cons, ctx.symbolPrintTable), ctx, className);
+			case LispNames.HOME_SPELLING_INTERNAL ->
+				JvmExprCompiler.compileExpr(((LispCons) cons.cdr()).car(), ctx, className);
+			case LispNames.SYMBOL_PRINT_PREFIX_INTERNAL -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.expandSymbolPrintPrefix(cons, ctx.symbolPrintTable, ctx.functions::containsKey),
+					ctx, className);
 			case LispNames.PRINT_PACKAGE_RAW_P_INTERNAL -> JvmExprCompiler
 				.compileExpr(LispMacroExpander.expandPrintPackageRawP(ctx.symbolPrintTable), ctx, className);
 			case LispNames.PRINT_CASED_QUALIFIER_INTERNAL -> JvmExprCompiler
@@ -1310,8 +1315,13 @@ final class JvmExprCompiler {
 			case LispNames.WRITE_TO_STRING -> {
 				// A keyword tail binds the printer variables around the one-argument
 				// primitive (LispMacroExpander.expandWriteToStringKeywords).
+				LispVal conversion = cons.isProperList()
+						? LispMacroExpander.expandWriteToStringConversion(cons, ctx.specialVars) : null;
 				if (cons.isProperList() && cons.toList().size() > 2) {
 					compileExpr(LispMacroExpander.expandWriteToStringKeywords(cons), ctx, className);
+				}
+				else if (conversion != null) {
+					compileExpr(conversion, ctx, className);
 				}
 				else {
 					compilePrintOperator(cons, ctx, className,
@@ -2430,8 +2440,8 @@ final class JvmExprCompiler {
 				ctx.tailBody = tail;
 				compileExpansion(cons, LispMacroExpander.expandLocally(cons), ctx, className);
 			}
-			case LispNames.WITH_STANDARD_IO_SYNTAX ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithStandardIoSyntax(cons), ctx, className);
+			case LispNames.WITH_STANDARD_IO_SYNTAX -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandWithStandardIoSyntax(cons, ctx.specialVars), ctx, className);
 			case LispNames.WRITE_CHAR ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandWriteChar(cons), ctx, className);
 			case LispNames.FLET -> {

@@ -297,6 +297,15 @@ library splice scanners (`JsonLibrary`/`LinalgLibrary`/`UrlLibrary`/`VecLibrary`
 `rl:json-parse` never triggered the json.lisp splice (interpreter unaffected -- it lazy-loads
 post-resolution). Pinned by `JvmLispCompilerTest.compileAndRunBuiltinNicknamesTriggerLibrarySplice`.
 
+**The registry's names of the two standard packages are the wrong way round, and only the surface
+says so** (i30, 2026-11-04): the canonical name stays `CL`/`CL-USER` (a package value is `:CL`,
+`*package*` prints `:CL-USER`, every pass matches the literal), but `package-name` answers
+`"COMMON-LISP"`/`"COMMON-LISP-USER"` and `package-nicknames` `("CL")`/`("CL-USER")`, as CLHS 11.1.2
+fixes them and SBCL does. `PackageResolver.standardPackageNicknames` on the interpreter, the prelude
+defuns elsewhere. `runtimePackageNicknames` keeps the registry's view for SWANK's shortest-nickname
+prompt, and a package row keeps `COMMON-LISP` as a designator `%baked-package-find` finds. So
+`uiop:package-definition-form` writes `(:USE "COMMON-LISP")`, which reads back.
+
 ## Package-local nicknames
 SBCL's extension, on all four backends (i05, 2026-11-04; they were global nicknames until then, and
 `(:local-nicknames (#:bt #:clump-binary-tree))` stopped cluffer with `Package already exists: BT`).
@@ -623,8 +632,9 @@ right at top level and wrong inside any defun that outlives its file.
   (`.kb/dynamic-special-variables.md`). A program that only SWITCHES packages never observes it, so
   its assignments are DROPPED and it stays byte-identical to one without `in-package` -- UNLESS its
   PRINTER observes it (`.kb/pretty-printer.md`).
-- **`with-standard-io-syntax`** expands to `(let ((*package* :cl-user)) body...)`;
-  `*print-escape*`/`*print-readably*`/`*print-pretty*` are honored but not rebound by it.
+- **`with-standard-io-syntax`** expands to a `let` binding `*package*` to `:cl-user` beside the rest of
+  CLHS 23.1.2's table (`.kb/pretty-printer.md`, "`with-standard-io-syntax`"), so a body's `*package*`
+  assignment ends with the form.
 
 **A user macro called from inside a FUNCTION BODY expands with the package that body was READ
 in current** (`LispLambda.readPackage`, recorded on a lambda created outside every function and
@@ -650,7 +660,8 @@ Reader-synthesized symbols (`quote`, the backquote operators, `ReaderSymbols`,
 [defmacro-backquote.md](defmacro-backquote.md)) and `#.` values are not tokens and
 are not homed; a token qualified by an unknown package keeps its spelling. The compiled
 backends' run-time reader stays package-blind
-(`.kb/symbol-runtime-api.md`, "1-arg `intern`"). Pinned by `LispEvaluatorTest#evalMacroCallInAFunctionBodyExpandsInThePackageTheBodyWasReadIn`,
+(`.kb/symbol-runtime-api.md`, "1-arg `intern`"), but for the qualifiers of `cl` and `cl-user`, which it
+drops (`.kb/pretty-printer.md`, "The package qualifier"). Pinned by `LispEvaluatorTest#evalMacroCallInAFunctionBodyExpandsInThePackageTheBodyWasReadIn`,
 ci-spec `expansion-time-read-homes-in-the-macro-package`,
 `LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions` (a `load` from a defun), `TriviaE2eTest`,
 `SxqlE2eTest`.
@@ -1095,7 +1106,7 @@ directive path -- the `eval` native had to route a `defpackage` datum to the sam
 ## Tests
 `PackageResolverTest` (the `::` cases, the defpackage clause/error cases, the json.lisp fixed-point
 pin, the `*package*` runtime-variable cases, the runtime-tier create/delete/rename/gate/baked-table
-cases), `LispEvaluatorTest#{packageDefaultsToClUser,packageVarIsReadWhenTheFormRunsNotWhenItIsResolved,setqOfPackageVarSwitchesTheCurrentPackage,withStandardIoSyntaxBindsPackageToClUser,runtimeMakeDeleteRenamePackage,runtimePackageFailuresSignalCatchablePackageErrors,runtimePackageEnumeration}`,
+cases), `LispEvaluatorTest#{packageDefaultsToClUser,packageVarIsReadWhenTheFormRunsNotWhenItIsResolved,setqOfPackageVarSwitchesTheCurrentPackage,withStandardIoSyntaxBindsTheStandardTable,runtimeMakeDeleteRenamePackage,runtimePackageFailuresSignalCatchablePackageErrors,runtimePackageEnumeration}`,
 `JvmLispCompilerTest#{compileAndRunPackageVarIsReadWhenTheFormRuns,compileAndRunRuntimePackageApi}`,
 `WasmLispCompilerIntegrationTest#{packageVarIsReadWhenTheFormRuns,runtimePackageApi}`,
 `PackageResolverTest#{unusePackageDirectiveNarrowsTheUseList,unusePackageAcceptsADesignatorListATargetAndRejectsUnknownNames,unusePackageWithAComputedDesignatorOrABadArityStaysARuntimeCall,defpackageNestedIsLeftVerbatimForTheRuntimeTier,defpackageInternClauseOwnsTheNamesWithoutExportingThem,defpackageDesignatorsAcceptCharacters,interpreterDefpackageProductsJoinTheRuntimeTier,defpackageClauseViolationsAreHardErrorsAtTopLevel}`,
