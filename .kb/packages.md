@@ -485,6 +485,10 @@ keeps reading the LIVE set. Consequence: a LATE-exported symbol prints `PKG::NAM
 (`tryConsumeExport`). The RUNTIME designator route works (`.kb/symbol-runtime-api.md`), so the gap
 is purely compile-time spelling; deliberately not widened, because the widening would accept ANY
 `pkg:x` and swallow typos.
+A library computing its exports from literal arguments gets them through a compiler macro over its
+own helpers instead (`.kb/asdf.md`, `eval/ClReexportForms`). `'()` names no symbol: it was read as the
+symbol `NIL` until 2026-11-04, so `(export '())` made `p:nil` readable
+(`PackageResolverTest#importOfAnUnqualifiedSymbolIsANoOp`).
 
 **A `progn` a macro expands into is top level member by member** (CLHS 3.2.3.1) when it holds a
 package directive: `UserMacroExpander.Session.accept` hands each directive member to the
