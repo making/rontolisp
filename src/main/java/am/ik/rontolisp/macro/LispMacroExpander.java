@@ -29703,11 +29703,14 @@ public final class LispMacroExpander {
 		// Same phase, same reason as the dispatchers: a struct predicate emitted before
 		// its :include children were registered tests too few tags.
 		refreshStructPredicates(out, closRegistry);
-		if (symbolFunctionWrite) {
-			// A name bound ONLY by (setf (symbol-function ...)) needs a forwarder defun
-			// so its direct call sites compile; appended once the registry is complete
-			// (a generic's dispatcher must not be shadowed by a forwarder).
-			out.addAll(symbolFunctionForwarderDefuns(setfOnlyFunctionAliasNames(program, closRegistry)));
+		if (symbolFunctionWrite || compileRuntime) {
+			// A name bound ONLY by (setf (symbol-function ...)) or (compile 'name
+			// definition)
+			// needs a forwarder defun so its direct call sites compile; appended once the
+			// registry is complete (a generic's dispatcher must not be shadowed by a
+			// forwarder).
+			out.addAll(
+					symbolFunctionForwarderDefuns(setfOnlyFunctionAliasNames(program, closRegistry, compileRuntime)));
 		}
 		if (metaobjectRuntime) {
 			// The metaobject runtime: the generated defuns are position-independent and
@@ -31174,12 +31177,15 @@ public final class LispMacroExpander {
 	 * forwarder applies {@code %fenv-function}, which probes the runtime function
 	 * namespace ONLY -- probing the compiled registry there would find the forwarder
 	 * itself -- and signals {@code The function X is undefined} when called before the
-	 * setf ran, which is what CL says for a call before the assignment.
+	 * setf ran, which is what CL says for a call before the assignment. A
+	 * {@code (compile 'n definition)} installs the same way, so where {@code compile} is
+	 * the standard one ({@code compileNames}) it counts too.
 	 */
-	private static List<String> setfOnlyFunctionAliasNames(List<LispVal> program, ClosRegistry closRegistry) {
+	private static List<String> setfOnlyFunctionAliasNames(List<LispVal> program, ClosRegistry closRegistry,
+			boolean compileNames) {
 		java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
 		for (LispVal form : program) {
-			collectSetfSymbolFunctionNames(form, names);
+			collectSetfSymbolFunctionNames(form, names, compileNames);
 		}
 		if (names.isEmpty()) {
 			return List.of();
@@ -31200,7 +31206,8 @@ public final class LispMacroExpander {
 		return List.copyOf(names);
 	}
 
-	private static void collectSetfSymbolFunctionNames(LispVal form, java.util.Set<String> names) {
+	private static void collectSetfSymbolFunctionNames(LispVal form, java.util.Set<String> names,
+			boolean compileNames) {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
@@ -31217,8 +31224,14 @@ public final class LispMacroExpander {
 						}
 					}
 				}
+				// Without a definition, compile installs nothing.
+				if (compileNames && LispNames.COMPILE.equals(member) && cons.cdr() instanceof LispCons nameCell
+						&& quotedSymbol(nameCell.car()) instanceof LispSymbol nameSym
+						&& nameCell.cdr() instanceof LispCons definition && definition.car() != LispNil.INSTANCE) {
+					names.add(nameSym.name());
+				}
 			}
-			collectSetfSymbolFunctionNames(cons.car(), names);
+			collectSetfSymbolFunctionNames(cons.car(), names, compileNames);
 			form = cons.cdr();
 		}
 	}

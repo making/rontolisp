@@ -923,12 +923,15 @@ class RontoLispCliStreamsTest {
 	void anUndefinedNameAProgramCanBindAtRunTimeWarnsThatItIsLookedUp() throws Exception {
 		// A program writing the function namespace through a computed name: a call or
 		// #' of a name no definition has reads the namespace when it runs, and says so.
+		// A name the program spells in (compile 'name definition) is not undefined.
 		Path file = this.tempDir.resolve("warn.lisp");
 		Files.writeString(file, """
 				(defun install (name fn) (setf (fdefinition name) fn))
 				(defun ref () #'no-such-ref)
 				(defun call (x) (no-such-call x))
 				(print (list (ignore-errors (ref)) (ignore-errors (call 1))))
+				(compile 'by-compile '(lambda (x) x))
+				(print (list (by-compile 1) (funcall 'by-compile 2) (funcall #'by-compile 3)))
 				""");
 		for (String output : new String[] { "Warn.class", "warn.wasm" }) {
 			PrintStream savedErr = System.err;
