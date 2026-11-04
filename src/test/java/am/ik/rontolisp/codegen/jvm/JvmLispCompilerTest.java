@@ -2651,8 +2651,11 @@ class JvmLispCompilerTest {
 	void compileAndRunDefineSymbolMacroEmittedByUserMacro() throws Exception {
 		// The cffi defcvar shape: a user macro expands into a progn whose eval-when
 		// carries the definition, and the accessor defun it generates is what the
-		// reference resolves to.
+		// reference resolves to. Under a package, as every binding defines it: a form
+		// the macro pass leaves alone still spells the reference bare.
 		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defpackage :binding (:use :cl))
+				(in-package :binding)
 				(defvar *cell* (list 1 2))
 				(defmacro defhead (name place)
 				  `(progn (defun ,(intern (concatenate 'string "%ACCESS-" (symbol-name name))) () ,place)

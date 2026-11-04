@@ -62,8 +62,14 @@ is never referenced, only stored into by one macro and read by a later one).
   `evalConsRareOperator`); `evalSymbolRef` consults it only after `env.lookupOrNull` is empty,
   `evalSetq` rewrites to `(setf expansion value)`. `symbol-value` does not see the name.
 - Compile paths: `UserMacroExpander.harvestSymbolMacros` runs per top-level form after `expandAll`,
-  registers and REMOVES definitions reachable through `progn`/`eval-when`, recording the activation
-  index; `substituteGlobalSymbolMacros` then substitutes. Activated by `usesDefineSymbolMacro`.
+  registers and REMOVES definitions reachable through `progn`/`eval-when`; `Session.emitted`
+  substitutes each form emitted after that. Activated by `usesDefineSymbolMacro`.
+- **The table holds RESOLVED names**, and the pass emits an untouched form in its original spelling.
+  A form mentioning a symbol macro therefore emits its resolved spelling: until 2026-11-04 the
+  substitution ran over the original one at the end of the pass, so a bare `SM` under
+  `(in-package P)` missed `P::SM` and every binding's `(cffi:defcvar errno :int)` refused to compile
+  (mmap's `check-posix`). The substitution comes before `requalifyShadowedClNames`: an expansion read
+  in one package may land in a form of another that shadows a CL name in it.
 - A non-top-level definition is refused with `must be a top-level form`
   (`nestedDefineSymbolMacro`); the interpreter just registers it.
 - **Trap**: `expandAll`'s `SETF` case must expand a user setf place FIRST and walk the expansion, or

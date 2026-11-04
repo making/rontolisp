@@ -13955,9 +13955,33 @@ cases:
         (incf (ci-aget d :a) 5)
         (print (list (ci-aget d :a) (ci-aget d :b))))
       (print (let ((b (list 1))) (setf (ci-ref b) 9) b))
+      ;; A macro's expansion is top-level forms in order (nibbles' define-storer): what
+      ;; it defines is there for its next member and for every form after it. The
+      ;; definition is not code: the lambda list below names a macro.
+      (defun ci-cdr-of (box) (cdr box))
+      (defun ci-plain (x) (+ x 1))
+      (defmacro ci-def-places ()
+        '(progn
+           (defsetf ci-cdr-of rplacd)
+           (define-setf-expander ci-first-of (x)
+             (let ((s (gensym)))
+               (values '() '() (list s) (list 'setf (list 'car x) s) (list 'car x))))
+           (define-modify-macro ci-appendf (&rest more) append)
+           (define-compiler-macro ci-plain (x) (list 'list :cm x))
+           (defmacro ci-inner () 1)
+           (print (list (ci-inner) (let ((b (list 1))) (setf (ci-cdr-of b) 9) b)))))
+      (ci-def-places)
+      (macrolet ((ci-m () '(defsetf ci-cadr-of (ci-inner) (v) (list 'setf (list 'cadr ci-inner) v)))) (ci-m))
+      (let ((c (list 1 2)))
+        (setf (ci-first-of c) 5)
+        (setf (ci-cadr-of c) 6)
+        (ci-appendf c (list 7))
+        (print (list c (ci-plain 1))))
     expected: |
       (105 2)
       (9)
+      (1 (1 . 9))
+      ((5 6 7) (:CM 1))
   - name: flet-and-labels-local-functions
     source: |
       (flet ((ci-sq (x) (* x x))
@@ -14595,7 +14619,9 @@ cases:
   # define-symbol-macro is the GLOBAL sibling: the definition is dropped on the
   # compile paths and every later top-level form substituted, while the interpreter
   # consults its table at the reference. Reads, setq/setf/incf write-through, a
-  # reference inside a defun, and a let of the name shadowing it.
+  # reference inside a defun, and a let of the name shadowing it. Under a package the
+  # name resolves to its qualified spelling, whichever spelling the form keeps; an
+  # expansion's CL names read as CL in a package that shadows them or uses no CL at all.
   - name: define-symbol-macro-read-and-write
     source: |
       (defvar *ci-dsm-buf* (make-array 3 :initial-element 0))
@@ -14606,9 +14632,34 @@ cases:
       (ci-dsm-bump)
       (print (list ci-dsm-slot0 *ci-dsm-buf*))
       (print (let ((ci-dsm-slot0 7)) ci-dsm-slot0))
+      (defpackage :ci-dsm-p (:use :cl))
+      (in-package :ci-dsm-p)
+      (defvar *cell* (list 1 2))
+      (define-symbol-macro head (car *cell*))
+      (defun both-heads () (list head head))
+      (setq head 5)
+      (print (both-heads))
+      (print (let ((head 7)) head))
+      (defpackage :ci-dsm-q (:use :cl) (:shadow #:car))
+      (in-package :ci-dsm-q)
+      (defun car (x) (list :q-car x))
+      (print (list (car 1) ci-dsm-p::head))
+      (defpackage :ci-dsm-n (:use))
+      (cl:in-package :ci-dsm-n)
+      (cl:define-symbol-macro bare (cl:list 1 2))
+      (cl:print bare)
+      (cl:print (cl:let ((bare 3)) bare))
+      (cl:print ci-dsm-p::head)
+      (cl:in-package :cl-user)
     expected: |
       (44 #(44 0 0))
       7
+      (5 5)
+      7
+      ((:Q-CAR 1) 5)
+      (1 2)
+      3
+      5
   # A macro's &environment holds the symbol macros in scope at its call: a binder
   # shadows one for exactly its scope, and macroexpand answers the expansion ITSELF, so
   # 3bz's state-machine idiom can write into it for a later macro to read. The null

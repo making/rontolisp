@@ -139,12 +139,12 @@ public final class UserMacroExpander {
 		// deftype are found in these (emitDeftypeInstances).
 		private final List<LispVal> canonicalForms = new ArrayList<>();
 
-		// The program's global symbol macros, each remembering the point in `result`
-		// from which it is active: define-symbol-macro is a COMPILE-TIME fact here (the
-		// backends have no symbol-macro table at run time), so the definition is dropped
-		// and every form from that point on is substituted through it in one pass at the
-		// end -- see substituteGlobalSymbolMacros below.
-		private final List<GlobalSymbolMacro> symbolMacros = new ArrayList<>();
+		// The program's global symbol macros so far, by resolved name:
+		// define-symbol-macro is a COMPILE-TIME fact here (the backends have no
+		// symbol-macro table at run time), so the definition is dropped and each form
+		// emitted after it is substituted through it (see emitted). A reference in an
+		// earlier form does not see it, the file-compilation order CL guarantees.
+		private final java.util.Map<String, LispVal> symbolMacros = new java.util.LinkedHashMap<>();
 
 		// Nesting depth of the (%begin-system "NAME") / (%end-system) provenance
 		// brackets LoadInliner puts around every spliced ASDF system. Inside them the
@@ -383,7 +383,7 @@ public final class UserMacroExpander {
 			// progn/eval-when a macro built around it (cffi's defcvar emits exactly
 			// that): register it, drop it, and refuse a nested one the way a nested
 			// defmacro is refused.
-			LispVal harvested = harvestSymbolMacros(expanded, this.symbolMacros, this.result.size(), macroEval);
+			LispVal harvested = harvestSymbolMacros(expanded, this.symbolMacros, macroEval);
 			if (harvested == null) {
 				return;
 			}
@@ -495,11 +495,14 @@ public final class UserMacroExpander {
 			// cl:defconstant under a package shadowing defconstant).
 			// The walk is identity-preserving (see rebuild), so an untouched form is the
 			// SAME object and needs no printing to recognize; the print comparison stays
-			// for a walk that rebuilt an equal form (a macro that expands to itself).
+			// for a walk that rebuilt an equal form (a macro that expands to itself). A
+			// form that mentions a symbol macro cannot keep it either: the definition
+			// registered the resolved name, which the original spelling need not be (a
+			// bare SM under (in-package P), registered P::SM).
 			emitCompiledTemplates(this.result);
 			if (!this.shallow) {
-				this.result.add(!member && (expanded == resolved || expanded.print().equals(resolved.print())) ? form
-						: requalifyShadowedClNames(expanded, macroEval));
+				boolean untouched = !member && (expanded == resolved || expanded.print().equals(resolved.print()));
+				this.result.add(untouched && !mentionsSymbolMacro(expanded) ? form : emitted(expanded));
 			}
 			// Drain the definition-time method constructions the form's macro-time
 			// evaluation captured (a :metaclass defclass whose finalize-inheritance hook
@@ -512,7 +515,7 @@ public final class UserMacroExpander {
 				for (LispVal spliced : new ArrayList<>(this.mopSplice)) {
 					LispVal splicedExpansion = expand(spliced);
 					if (!this.shallow) {
-						this.result.add(requalifyShadowedClNames(splicedExpansion, macroEval));
+						this.result.add(emitted(splicedExpansion));
 					}
 				}
 				this.mopSplice.clear();
@@ -526,7 +529,6 @@ public final class UserMacroExpander {
 		List<LispVal> finish() {
 			LispEvaluator macroEval = this.macroEval;
 			List<LispVal> result = this.result;
-			substituteGlobalSymbolMacros(result, this.symbolMacros);
 			// CLHS 3.2.4.4, over the WHOLE emitted program: a literal object a macro
 			// spliced into its expansion (cffi's parsed foreign type, in every defcfun
 			// body) is dumped through its own make-load-form method rather than by
@@ -548,6 +550,35 @@ public final class UserMacroExpander {
 			emitMacroFunctionTable(macroEval, result);
 			emitCompilerMacroFunctionTable(macroEval, result);
 			return result;
+		}
+
+		/**
+		 * A resolved form as the program holds it. The symbol macros are substituted
+		 * first: an expansion was resolved where it was defined, so a bare CL name in it
+		 * must survive the compilers' resolver in the package of the form it lands in.
+		 */
+		private LispVal emitted(LispVal form) {
+			LispVal substituted = form;
+			if (mentionsSymbolMacro(form)) {
+				substituted = LispMacroExpander.substituteGlobalSymbolMacros(form, this.symbolMacros);
+				if (form instanceof LispCons cons) {
+					substituted = SourceProvenance.inherit(cons, substituted);
+				}
+			}
+			return requalifyShadowedClNames(substituted, this.macroEval);
+		}
+
+		private boolean mentionsSymbolMacro(LispVal form) {
+			if (this.symbolMacros.isEmpty()) {
+				return false;
+			}
+			while (form instanceof LispCons cons) {
+				if (mentionsSymbolMacro(cons.car())) {
+					return true;
+				}
+				form = cons.cdr();
+			}
+			return form instanceof LispSymbol sym && this.symbolMacros.containsKey(sym.name());
 		}
 
 		// The whole walk, or -- shallow -- the top-level macro calls only.
@@ -612,7 +643,7 @@ public final class UserMacroExpander {
 				}
 				this.templateCaptures.clear();
 				if (loadTime && !this.shallow) {
-					result.add(requalifyShadowedClNames(foldMacroFboundp(member, macroEval), macroEval));
+					result.add(emitted(foldMacroFboundp(member, macroEval)));
 				}
 			}
 		}
@@ -627,7 +658,7 @@ public final class UserMacroExpander {
 			this.templateCaptures.clear();
 			for (LispVal registration : captured) {
 				if (!this.shallow && this.templateKeys.add(CompiledTemplates.key(registration))) {
-					result.add(requalifyShadowedClNames(expand(registration), this.macroEval));
+					result.add(emitted(expand(registration)));
 				}
 			}
 			// What expanding them compiled ran at expansion time only.
@@ -716,21 +747,48 @@ public final class UserMacroExpander {
 		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
 			return form;
 		}
+		int from = topLevelMembersFrom(head);
+		return from < 0 ? form : expandTopLevelMembers(cons, cons.toList(), from, macroEval, false);
+	}
+
+	// Where the members of a top-level form headed by this operator start, or -1 for an
+	// operator that has none.
+	private static int topLevelMembersFrom(LispSymbol head) {
 		String name = memberName(head.name());
-		int from = LispNames.PROGN.equals(name) || LispNames.LOCALLY.equals(name) ? 1
+		return LispNames.PROGN.equals(name) || LispNames.LOCALLY.equals(name) ? 1
 				: LispNames.EVAL_WHEN.equals(name) ? 2 : -1;
-		if (from < 0) {
-			return form;
+	}
+
+	/**
+	 * Expands the members of a top-level form in order, each a top-level form itself
+	 * (CLHS 3.2.3.1): what one defines is there for the macro calls of the next, as it is
+	 * for the interpreter, so {@code (progn (defmacro m ...) (m))} a macro expanded into
+	 * reaches {@code m}.
+	 * @param from the index of the first member
+	 * @param whole whether to walk a member whole, or only its top-level macro calls
+	 * @return the form, without the members that only defined something
+	 */
+	private static LispVal expandTopLevelMembers(LispCons cons, List<LispVal> parts, int from, LispEvaluator macroEval,
+			boolean whole) {
+		List<LispVal> expanded = new ArrayList<>(parts.subList(0, from));
+		for (int i = from; i < parts.size(); i++) {
+			LispVal member = expandTopLevelMember(parts.get(i), macroEval, whole);
+			if (member != null) {
+				expanded.add(member);
+			}
 		}
-		List<LispVal> parts = cons.toList();
-		List<LispVal> expanded = new ArrayList<>(parts.size());
-		boolean changed = false;
-		for (int i = 0; i < parts.size(); i++) {
-			LispVal part = i < from ? parts.get(i) : expandTopLevel(parts.get(i), macroEval);
-			changed |= part != parts.get(i);
-			expanded.add(part);
+		return LispCons.rebuiltList(cons, expanded);
+	}
+
+	@Nullable private static LispVal expandTopLevelMember(LispVal form, LispEvaluator macroEval, boolean whole) {
+		LispVal member = whole ? expandAll(form, macroEval, true) : expandTopLevel(form, macroEval);
+		if (isOperator(member, LispNames.DEFINE_SYMBOL_MACRO)) {
+			// The Session harvests it for the substitution; a macro in the next member
+			// reads it through its &environment.
+			macroEval.evalResolved(member);
+			return member;
 		}
-		return changed ? properList(expanded) : form;
+		return stripDefmacroDefinitions(member, macroEval);
 	}
 
 	/**
@@ -1595,18 +1653,6 @@ public final class UserMacroExpander {
 	}
 
 	/**
-	 * One {@code define-symbol-macro} the program made, and the index in the emitted form
-	 * list from which it is active -- a reference in a LATER top-level form sees it, one
-	 * in an earlier form does not, which is the file-compilation order CL guarantees.
-	 *
-	 * @param fromIndex the first index in the result list the substitution applies to
-	 * @param name the defined name
-	 * @param expansion the form every reference expands to
-	 */
-	private record GlobalSymbolMacro(int fromIndex, String name, LispVal expansion) {
-	}
-
-	/**
 	 * Registers every {@code (define-symbol-macro name expansion)} the form carries at
 	 * top level -- directly, or through the {@code progn}/{@code eval-when} nesting a
 	 * macro built around it -- and returns the form with those definitions REMOVED. The
@@ -1620,15 +1666,14 @@ public final class UserMacroExpander {
 	 * an error rather than a silent no-op: the reference it means to serve is elsewhere
 	 * in the program, and nothing here could scope the substitution to its body.
 	 * @param form the expanded top-level form
-	 * @param into the definition list to append to
-	 * @param fromIndex the result-list index the new definitions become active at
+	 * @param into the definitions, by resolved name, to add to
 	 * @param macroEval the macro-time evaluator
 	 * @return the form with the definitions removed, or {@code null} when the form WAS
 	 * the definition
 	 */
-	@Nullable private static LispVal harvestSymbolMacros(LispVal form, List<GlobalSymbolMacro> into, int fromIndex,
+	@Nullable private static LispVal harvestSymbolMacros(LispVal form, java.util.Map<String, LispVal> into,
 			LispEvaluator macroEval) {
-		LispVal stripped = stripSymbolMacroDefinitions(form, into, fromIndex, macroEval);
+		LispVal stripped = stripSymbolMacroDefinitions(form, into, macroEval);
 		if (nestedDefineSymbolMacro(stripped)) {
 			throw new IllegalArgumentException(
 					LispNames.DEFINE_SYMBOL_MACRO + " must be a top-level form: " + form.print());
@@ -1662,8 +1707,9 @@ public final class UserMacroExpander {
 			return form;
 		}
 		String name = memberName(head.name());
-		if (LispNames.DEFMACRO.equals(name)) {
-			macroEval.evalResolved(cons);
+		if (LispNames.DEFMACRO.equals(name) || isExpansionTimeDefinition(cons)) {
+			macroEval.evalResolved(isOperator(cons, LispNames.DEFINE_MODIFY_MACRO)
+					? LispMacroExpander.expandDefineModifyMacro(cons) : cons);
 			return null;
 		}
 		if (LispMacroExpander.isSetfMacroFunctionForm(cons)) {
@@ -1712,7 +1758,7 @@ public final class UserMacroExpander {
 				kept.add(member);
 			}
 		}
-		if (!changed) {
+		if (!changed && parts.size() > firstMember) {
 			return form;
 		}
 		return kept.size() > firstMember ? properList(kept) : null;
@@ -1753,8 +1799,15 @@ public final class UserMacroExpander {
 		return changed ? SourceProvenance.inherit(cons, properList(members)) : form;
 	}
 
+	// What only rewrites call sites and places here, so it does not exist in the
+	// program. nibbles' define-storer expands to (progn (defun ...) (defsetf ...)).
+	private static boolean isExpansionTimeDefinition(LispVal form) {
+		return isOperator(form, LispNames.DEFINE_COMPILER_MACRO) || isOperator(form, LispNames.DEFINE_MODIFY_MACRO)
+				|| isOperator(form, LispNames.DEFINE_SETF_EXPANDER) || isOperator(form, LispNames.DEFSETF);
+	}
+
 	private static boolean isMacroDefinition(LispVal form) {
-		return isOperator(form, LispNames.DEFMACRO)
+		return isOperator(form, LispNames.DEFMACRO) || isExpansionTimeDefinition(form)
 				|| (LispMacroExpander.isSetfMacroFunctionForm(form) && ((LispCons) form).toList().size() == 3);
 	}
 
@@ -1777,7 +1830,7 @@ public final class UserMacroExpander {
 	 * The removal half of {@link #harvestSymbolMacros}, recursing through
 	 * progn/eval-when.
 	 */
-	@Nullable private static LispVal stripSymbolMacroDefinitions(LispVal form, List<GlobalSymbolMacro> into, int fromIndex,
+	@Nullable private static LispVal stripSymbolMacroDefinitions(LispVal form, java.util.Map<String, LispVal> into,
 			LispEvaluator macroEval) {
 		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
 			return form;
@@ -1785,7 +1838,7 @@ public final class UserMacroExpander {
 		String name = memberName(head.name());
 		if (LispNames.DEFINE_SYMBOL_MACRO.equals(name)) {
 			LispSymbol defined = LispMacroExpander.defineSymbolMacroName(cons);
-			into.add(new GlobalSymbolMacro(fromIndex, defined.name(), cons.toList().get(2)));
+			into.put(defined.name(), cons.toList().get(2));
 			macroEval.evalResolved(cons);
 			return null;
 		}
@@ -1798,7 +1851,7 @@ public final class UserMacroExpander {
 		List<LispVal> kept = new ArrayList<>(parts.subList(0, Math.min(firstMember, parts.size())));
 		boolean changed = false;
 		for (int i = firstMember; i < parts.size(); i++) {
-			LispVal member = stripSymbolMacroDefinitions(parts.get(i), into, fromIndex, macroEval);
+			LispVal member = stripSymbolMacroDefinitions(parts.get(i), into, macroEval);
 			changed = changed || member != parts.get(i);
 			if (member != null) {
 				kept.add(member);
@@ -1831,32 +1884,6 @@ public final class UserMacroExpander {
 			}
 		}
 		return false;
-	}
-
-	/**
-	 * Substitutes the program's global symbol macros through the emitted forms, in place:
-	 * each definition applies from the form it was made in onwards, through the SAME
-	 * shadow-aware walk {@code symbol-macrolet} uses, so a global and a lexical symbol
-	 * macro behave identically on every backend. No user-macro hook is needed -- every
-	 * macro call was expanded above.
-	 * @param result the emitted top-level forms, mutated in place
-	 * @param symbolMacros the definitions with their activation indices
-	 */
-	private static void substituteGlobalSymbolMacros(List<LispVal> result, List<GlobalSymbolMacro> symbolMacros) {
-		if (symbolMacros.isEmpty()) {
-			return;
-		}
-		java.util.Map<String, LispVal> active = new java.util.LinkedHashMap<>();
-		int next = 0;
-		for (int i = 0; i < result.size(); i++) {
-			while (next < symbolMacros.size() && symbolMacros.get(next).fromIndex() <= i) {
-				active.put(symbolMacros.get(next).name(), symbolMacros.get(next).expansion());
-				next++;
-			}
-			if (!active.isEmpty()) {
-				result.set(i, LispMacroExpander.substituteGlobalSymbolMacros(result.get(i), active));
-			}
-		}
 	}
 
 	/** Whether the form mentions {@code define-symbol-macro} anywhere. */
@@ -1910,12 +1937,16 @@ public final class UserMacroExpander {
 	 * lists, case keys), so a macro name reused there is left alone.
 	 */
 	static LispVal expandAll(LispVal form, LispEvaluator macroEval) {
+		return expandAll(form, macroEval, false);
+	}
+
+	private static LispVal expandAll(LispVal form, LispEvaluator macroEval, boolean topLevel) {
 		// The innermost located form the walk is in: a warning a macro signals while it
 		// expands is placed -- and judged for --warnings-as-errors -- there, the macro
 		// call itself when it was read, the located form around it when a macro built it.
 		LispCons enclosing = form instanceof LispCons cons ? SourceProvenance.enterForm(cons) : null;
 		try {
-			return expandAllLocated(form, macroEval);
+			return expandAllLocated(form, macroEval, topLevel);
 		}
 		catch (RuntimeException ex) {
 			// A macro body that signals, or a malformed call the expansion casts and
@@ -1942,7 +1973,7 @@ public final class UserMacroExpander {
 	 */
 	private static LispVal expandCompiling(LispVal form, LispEvaluator macroEval) {
 		return macroEval.reportingWarningsTo(UserMacroExpander::reportMacroTimeWarning,
-				() -> expandAll(form, macroEval));
+				() -> expandAll(form, macroEval, true));
 	}
 
 	private static void reportMacroTimeWarning(String text, boolean styleWarning) {
@@ -1954,7 +1985,7 @@ public final class UserMacroExpander {
 		}
 	}
 
-	private static LispVal expandAllLocated(LispVal form, LispEvaluator macroEval) {
+	private static LispVal expandAllLocated(LispVal form, LispEvaluator macroEval, boolean topLevel) {
 		// Expand head-position user macros repeatedly; the expansion may itself be a
 		// macro call (or an atom, which needs no further walking).
 		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
@@ -1988,7 +2019,8 @@ public final class UserMacroExpander {
 			return form;
 		}
 		if (cons.car() instanceof LispSymbol sym) {
-			if (LispNames.isQuote(sym.name()) || LispNames.DEFMACRO.equals(sym.name())) {
+			if (LispNames.isQuote(sym.name()) || LispNames.DEFMACRO.equals(sym.name())
+					|| isExpansionTimeDefinition(cons)) {
 				return form;
 			}
 			if (!cons.isProperList()) {
@@ -2003,6 +2035,10 @@ public final class UserMacroExpander {
 				if (scoped != null) {
 					return scoped;
 				}
+			}
+			int members = topLevel ? topLevelMembersFrom(sym) : -1;
+			if (members >= 0) {
+				return expandTopLevelMembers(cons, parts, members, macroEval, true);
 			}
 			switch (sym.name()) {
 				case LispNames.LET, LispNames.LET_STAR, LispNames.DO, LispNames.DO_STAR:
@@ -2161,7 +2197,7 @@ public final class UserMacroExpander {
 						return form; // malformed; leave for the interpreter/compiler to
 										// report
 					}
-					return expandMacrolet(parts, macroEval);
+					return expandMacrolet(parts, macroEval, topLevel);
 				}
 				case LispNames.SYMBOL_MACROLET: {
 					// (symbol-macrolet ((name expansion)...) body...): the binding names
@@ -2524,7 +2560,7 @@ public final class UserMacroExpander {
 			return null;
 		}
 		macroEval.symbolMacroScope(inner);
-		return expandAllLocated(cons, macroEval);
+		return expandAllLocated(cons, macroEval, false);
 	}
 
 	private static java.util.Map<String, LispVal> symbolMacrosWithoutParameters(java.util.Map<String, LispVal> scope,
@@ -2565,8 +2601,9 @@ public final class UserMacroExpander {
 	// Expands a macrolet: installs each local macro into the macro-time evaluator, walks
 	// the body with them active (so calls to the locals expand), restores the previous
 	// bindings, and returns the expanded body as a (progn ...) so the macrolet wrapper is
-	// dropped. The compilers never see macrolet; the interpreter handles it natively.
-	private static LispVal expandMacrolet(List<LispVal> parts, LispEvaluator macroEval) {
+	// dropped. The compilers never see macrolet; the interpreter handles it natively. Its
+	// body at top level is top-level forms (CLHS 3.2.3.1).
+	private static LispVal expandMacrolet(List<LispVal> parts, LispEvaluator macroEval, boolean topLevel) {
 		List<LispVal> defs = parts.get(1) instanceof LispCons defsCons ? defsCons.toList() : List.of();
 		java.util.LinkedHashMap<String, Object> saved = new java.util.LinkedHashMap<>();
 		for (LispVal def : defs) {
@@ -2586,10 +2623,14 @@ public final class UserMacroExpander {
 			List<LispVal> body = new ArrayList<>();
 			body.add(new LispSymbol(LispNames.PROGN));
 			for (int i = 2; i < parts.size(); i++) {
-				body.add(expandAll(parts.get(i), macroEval));
+				LispVal member = topLevel ? expandTopLevelMember(parts.get(i), macroEval, true)
+						: expandAll(parts.get(i), macroEval);
+				if (member != null) {
+					body.add(member);
+				}
 			}
 			if (body.size() == 1) {
-				return LispNil.INSTANCE;
+				return parts.size() > 2 ? properList(body) : LispNil.INSTANCE;
 			}
 			if (body.size() == 2) {
 				return body.get(1);
