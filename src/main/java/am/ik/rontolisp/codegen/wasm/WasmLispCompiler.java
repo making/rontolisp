@@ -10983,6 +10983,38 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		boolean topLevelChunked;
 
+		/**
+		 * Whether this resume is one piece of a long top level: it stops at its size
+		 * budget and leaves the rest to the next piece, instead of sequencing the pieces
+		 * itself ({@code WasmAsyncEmit.compileTopLevelPieces}).
+		 */
+		boolean topLevelPiece;
+
+		/** How many statements of its body this top-level resume compiled. */
+		int statementsTaken;
+
+		/**
+		 * The locals no suspend site emitted from here on spills, because nothing after
+		 * it reads them: those of a finished statement of a guarded sequence, and an
+		 * await's own temporary once it has landed. Locals are never recycled, so a
+		 * statement's are read by its own code alone, and a back edge reaching that code
+		 * again rebinds them first.
+		 */
+		final java.util.BitSet deadSlots = new java.util.BitSet();
+
+		/**
+		 * The locals some suspend site spilled, the only ones (with the parameters the
+		 * entry stored) the prologue has to restore: any other holds the default, null,
+		 * in the spill array and in a fresh frame alike.
+		 */
+		final java.util.BitSet spilledSlots = new java.util.BitSet();
+
+		/**
+		 * The local a suspend site reads the spill array into, or -1 before the first
+		 * site. Written at each site before its spills, so it is itself never spilled.
+		 */
+		int spillArraySlot = -1;
+
 		AsyncResume(int resumeFuncId) {
 			this.resumeFuncId = resumeFuncId;
 		}

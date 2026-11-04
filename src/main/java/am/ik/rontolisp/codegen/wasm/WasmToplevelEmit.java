@@ -50,7 +50,7 @@ final class WasmToplevelEmit {
 	 * margin under the pinned 256 KiB, large enough that an ordinary program produces a
 	 * handful of chunks rather than hundreds of tiny ones.
 	 */
-	private static final int CHUNK_TARGET_BYTES = 48 * 1024;
+	static final int CHUNK_TARGET_BYTES = 48 * 1024;
 
 	/**
 	 * Compiles every top-level form into chunk functions and emits the calls to them into

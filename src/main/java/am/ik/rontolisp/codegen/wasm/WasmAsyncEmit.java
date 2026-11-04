@@ -38,8 +38,8 @@ import org.jspecify.annotations.Nullable;
  * settling future can wake it through a plain {@code TYPE_CLOSURE} waiter): parameter 0
  * is the frame, parameter 1 is unused (an await landing re-polls its spilled future),
  * local 2 is the {@code $rt} resume-target state (i32), and the original parameters and
- * temporaries follow from slot 3, mirrored one-to-one by the frame's spill array. The
- * prologue restores every local from the spill and jumps -- structurally, through
+ * temporaries follow from slot 3, each with its own index in the frame's spill array. The
+ * prologue restores every local a suspend site spills and jumps -- structurally, through
  * per-structure range guards emitted by the form compilers -- to the target state, so
  * every {@code try_table} on the path is re-entered from the top and the EH context is
  * re-established (the v1 requirement).</li>
@@ -63,8 +63,21 @@ final class WasmAsyncEmit {
 	/** First resume-function slot mirrored by the frame's spill array. */
 	static final int SPILL_BASE = 3;
 
-	/** The compiled resume half of an async function. */
-	record Resume(int funcId, int funcIndex, int localCount) {
+	/**
+	 * What restoring one local costs a resume's prologue, in bytes: its size counts
+	 * toward the budget of a top-level resume with what the body costs.
+	 */
+	private static final int RESTORE_BYTES = 20;
+
+	/**
+	 * The compiled resume half of an async function.
+	 *
+	 * @param funcId its funcId
+	 * @param funcIndex its function index
+	 * @param localCount its final local count, the entry's spill-array size
+	 * @param statementsTaken how many statements of its body a top-level piece compiled
+	 */
+	record Resume(int funcId, int funcIndex, int localCount, int statementsTaken) {
 	}
 
 	/**
@@ -83,6 +96,12 @@ final class WasmAsyncEmit {
 	 */
 	static Resume compileResume(WasmLispCompiler.Ctx proto, List<String> paramNames, List<LispVal> bodyExprs,
 			List<String> freeVarNames, boolean topLevel, WasmUncaughtLocations.@Nullable Spec frame) {
+		return compileResume(proto, paramNames, bodyExprs, freeVarNames, topLevel, false, frame);
+	}
+
+	private static Resume compileResume(WasmLispCompiler.Ctx proto, List<String> paramNames, List<LispVal> bodyExprs,
+			List<String> freeVarNames, boolean topLevel, boolean topLevelPiece,
+			WasmUncaughtLocations.@Nullable Spec frame) {
 		int funcId = proto.nextFuncId[0]++;
 		int funcIndex = proto.userFuncBase + proto.numDefuns + proto.lambdaDecls.size();
 		int lambdaIdx = proto.lambdaDecls.size();
@@ -95,7 +114,9 @@ final class WasmAsyncEmit {
 		ByteArrayOutputStream bodyBuf = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter bodyWriter = new WasmWriter(bodyBuf);
 		WasmLispCompiler.Ctx ctx = freshCtx(proto, bodyWriter, bodyBuf);
-		ctx.asyncResume = new WasmLispCompiler.AsyncResume(funcId);
+		WasmLispCompiler.AsyncResume asyncResume = new WasmLispCompiler.AsyncResume(funcId);
+		asyncResume.topLevelPiece = topLevelPiece;
+		ctx.asyncResume = asyncResume;
 		ctx.topLevel = topLevel;
 		for (int i = 0; i < paramNames.size(); i++) {
 			ctx.locals.put(paramNames.get(i), SPILL_BASE + i);
@@ -104,6 +125,8 @@ final class WasmAsyncEmit {
 		int envSlot = -1;
 		if (!freeVarNames.isEmpty()) {
 			envSlot = ctx.allocTemp();
+			// The prologue re-loads it from the frame.
+			asyncResume.deadSlots.set(envSlot);
 			ctx.closureEnvSlot = envSlot;
 			Map<String, Integer> captures = new HashMap<>();
 			for (int i = 0; i < freeVarNames.size(); i++) {
@@ -142,9 +165,9 @@ final class WasmAsyncEmit {
 		WasmUncaughtLocations.close(ctx);
 		bodyWriter.write(Instruction.END);
 
-		// Prologue, built now that the local count is final: $rt = frame.state, restore
-		// every mirrored local from the spill, re-load the closure environment, and box
-		// the captured parameters on the very first segment only.
+		// Prologue, built now that the suspend sites are known: $rt = frame.state,
+		// restore the parameters and every local a site spilled, re-load the closure
+		// environment, and box the captured parameters on the very first segment only.
 		ByteArrayOutputStream prologueBuf = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter p = new WasmWriter(prologueBuf);
 		WasmLispCompiler.Ctx prologueCtx = freshCtx(proto, p, prologueBuf);
@@ -152,6 +175,9 @@ final class WasmAsyncEmit {
 		p.write(Instruction.SET_LOCAL);
 		p.writeUnsignedLeb128(RT_SLOT);
 		for (int slot = SPILL_BASE; slot < ctx.nextLocal; slot++) {
+			if (slot >= SPILL_BASE + paramNames.size() && !asyncResume.spilledSlots.get(slot)) {
+				continue;
+			}
 			frameField(p, ctx, 1);
 			p.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 			p.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
@@ -211,7 +237,7 @@ final class WasmAsyncEmit {
 		byte[] bytes = WasmLandingPad.narrowCarries(out.toByteArray(), ctx, offset -> bodyAt + offset);
 		proto.lambdaDecls.set(lambdaIdx, new WasmLispCompiler.LambdaInfo(funcId, "_async_resume_" + funcId,
 				List.of("%resume-value"), false, List.of(), List.of(), funcIndex, bytes));
-		return new Resume(funcId, funcIndex, ctx.nextLocal);
+		return new Resume(funcId, funcIndex, ctx.nextLocal, asyncResume.statementsTaken);
 	}
 
 	/**
@@ -432,7 +458,9 @@ final class WasmAsyncEmit {
 	 * and the resume keeps only the await statements plus one guarded direct call per
 	 * chunk. Cutting only at the awaits does not bound anything by itself -- an
 	 * await-free run is as long as the program -- so the runs go through the same
-	 * size-bounded chunker the synchronous top level uses.
+	 * size-bounded chunker the synchronous top level uses. The await statements are
+	 * bounded the same way: past its budget the top level continues in resumes of its own
+	 * ({@link #compileTopLevelPieces}).
 	 * @param stmts the statements
 	 * @param ctx the resume compilation context
 	 */
@@ -473,12 +501,15 @@ final class WasmAsyncEmit {
 	// statement's value is dropped and the progn result is nil (the top-level
 	// future's value is unused).
 	private static void compileTopLevelChunkedProgn(List<LispVal> stmts, WasmLispCompiler.Ctx ctx) {
+		WasmLispCompiler.AsyncResume ar = java.util.Objects.requireNonNull(ctx.asyncResume);
 		List<LispVal> run = new ArrayList<>();
 		// A top-level group (compiler/SplicedComponentGroups) runs inside the thunk its
 		// asdf:perform call is handed, and a thunk cannot suspend the top level: an
 		// await inside one has nowhere to resume.
 		int groupDepth = 0;
-		for (LispVal stmt : stmts) {
+		int taken = 0;
+		for (; taken < stmts.size(); taken++) {
+			LispVal stmt = stmts.get(taken);
 			if (SplicedComponentGroups.groupOpened(stmt) != null) {
 				groupDepth++;
 			}
@@ -494,11 +525,56 @@ final class WasmAsyncEmit {
 						+ " an asdf:perform method wraps cannot be compiled: the component runs inside the method");
 			}
 			flushTopLevelChunk(run, ctx);
+			if (taken > 0 && overBudget(ctx, ar) && !WasmToplevelEmit.readsChunkLocal(stmts, taken - 1, ctx)) {
+				break;
+			}
 			compileGuardedStatement(stmt, ctx);
 		}
 		flushTopLevelChunk(run, ctx);
+		ar.statementsTaken = taken;
+		if (taken < stmts.size() && !ar.topLevelPiece) {
+			compileTopLevelPieces(stmts.subList(taken, stmts.size()), ctx);
+		}
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
+	}
+
+	// What the resume costs so far against the chunk budget: its body, and its prologue's
+	// restores.
+	private static boolean overBudget(WasmLispCompiler.Ctx ctx, WasmLispCompiler.AsyncResume ar) {
+		return ctx.bodyStream.size()
+				+ RESTORE_BYTES * ar.spilledSlots.cardinality() >= WasmToplevelEmit.CHUNK_TARGET_BYTES;
+	}
+
+	/**
+	 * Continues a top level past its resume's budget: each piece is a resume of its own,
+	 * with its own locals and spill array, and this one only awaits them in order. So the
+	 * top level's size lands in bodies its budget bounds, and a piece adds one await
+	 * here. An await runs a piece to its first suspension and no further, so the wasm
+	 * stack stays two resumes deep however many there are, and a condition leaving a
+	 * piece rejects its future and signals at that await. A piece only ever opens at a
+	 * statement holding an await, so {@code statements} is never an await-free tail,
+	 * which a resume would compile inline rather than chunked.
+	 * @param statements the statements left, the first of which holds an await
+	 * @param ctx the resume compilation context
+	 */
+	private static void compileTopLevelPieces(List<LispVal> statements, WasmLispCompiler.Ctx ctx) {
+		int from = 0;
+		while (from < statements.size()) {
+			Resume piece = compileResume(ctx, List.of(), statements.subList(from, statements.size()), List.of(), true,
+					true, WasmUncaughtLocations.topLevelSpec(ctx.uncaughtLocations));
+			from += piece.statementsTaken();
+			int entryId = ctx.nextFuncId[0]++;
+			int entryIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
+			ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(entryId, "_async_entry_" + entryId, List.of(), false,
+					List.of(), List.of(), entryIndex, buildEntryBody(ctx, 0, false, piece)));
+			guardedStatement(ctx, 1, () -> emitAwait(ctx, () -> {
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(Type.EQ.code());
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(entryIndex);
+			}));
+		}
 	}
 
 	// Outlines the gathered await-free run into size-bounded chunk functions, each
@@ -527,6 +603,7 @@ final class WasmAsyncEmit {
 		int n = WasmAwaitAnalysis.countAwaits(stmt);
 		WasmLispCompiler.AsyncResume ar = java.util.Objects.requireNonNull(ctx.asyncResume);
 		if (n == 0) {
+			int firstSlot = ctx.nextLocal;
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(RT_SLOT);
 			ctx.writer.write(Instruction.I32_EQZ);
@@ -536,19 +613,50 @@ final class WasmAsyncEmit {
 			ctx.writer.write(Instruction.DROP);
 			ctx.wasmCtrlDepth--;
 			ctx.writer.write(Instruction.END);
+			retireSlots(ctx, ar, firstSlot);
 			return;
 		}
+		int lo = ar.nextState;
+		guardedStatement(ctx, n, () -> spine(stmt, ctx));
+		assertStates(ctx, lo, n, stmt);
+	}
+
+	// A statement holding n suspend states, entered when executing normally or when the
+	// target is one of them, its value dropped and its locals retired.
+	private static void guardedStatement(WasmLispCompiler.Ctx ctx, int n, Runnable statement) {
+		WasmLispCompiler.AsyncResume ar = java.util.Objects.requireNonNull(ctx.asyncResume);
+		int firstSlot = ctx.nextLocal;
 		int lo = ar.nextState;
 		ctx.writer.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		ctx.wasmCtrlDepth++;
 		emitRangeGuard(ctx, lo, lo + n - 1);
 		ctx.writer.write(Instruction.I32_EQZ);
 		ctx.writer.write(Instruction.BR_IF, 0);
-		spine(stmt, ctx);
+		statement.run();
 		ctx.writer.write(Instruction.DROP);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END);
-		assertStates(ctx, lo, n, stmt);
+		retireSlots(ctx, ar, firstSlot);
+	}
+
+	/**
+	 * A statement is finished: the locals allocated since {@code firstSlot} are spilled
+	 * by no later suspend site. A {@code --report-locations} position local stays, since
+	 * it is allocated by the first form that needs it and read by every one after; so
+	 * does anything the statement left bound by name, which the cut rule of
+	 * {@link WasmToplevelEmit#readsChunkLocal} defends against the same way.
+	 */
+	private static void retireSlots(WasmLispCompiler.Ctx ctx, WasmLispCompiler.AsyncResume ar, int firstSlot) {
+		for (int slot = firstSlot; slot < ctx.nextLocal; slot++) {
+			if (!WasmUncaughtLocations.positionSlot(ctx, slot)) {
+				ar.deadSlots.set(slot);
+			}
+		}
+		for (int slot : ctx.locals.values()) {
+			if (slot >= firstSlot) {
+				ar.deadSlots.clear(slot);
+			}
+		}
 	}
 
 	/**
@@ -633,6 +741,12 @@ final class WasmAsyncEmit {
 					"rontolisp:await in this position is not supported on the --component backend;"
 							+ " bind the value first: (let ((v (rontolisp:await ...))) ...)");
 		}
+		emitAwait(ctx, () -> spine(args.get(1), ctx));
+	}
+
+	// The suspend point itself, over whatever pushes the awaited value (which may hold
+	// suspend states of its own).
+	private static void emitAwait(WasmLispCompiler.Ctx ctx, Runnable awaited) {
 		WasmLispCompiler.AsyncResume ar = java.util.Objects.requireNonNull(ctx.asyncResume);
 		WasmWriter w = ctx.writer;
 		int k = ar.nextState++;
@@ -655,7 +769,7 @@ final class WasmAsyncEmit {
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(futSlot);
 		w.write(Instruction.ELSE);
-		spine(args.get(1), ctx);
+		awaited.run();
 		ctx.wasmCtrlDepth--;
 		w.write(Instruction.END);
 		w.write(Instruction.SET_LOCAL);
@@ -674,15 +788,20 @@ final class WasmAsyncEmit {
 		w.writeHeapType(ctx.futureTypeIndex);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		ctx.wasmCtrlDepth++;
-		// Suspend: record the state, spill the mirrored locals, register this frame as
-		// a waiter, repair the handler-depth counter, and return the frame sentinel.
+		// Suspend: record the state, spill the locals still read after this site,
+		// register this frame as a waiter, repair the handler-depth counter, and return
+		// the frame sentinel.
 		frameCast(ctx);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(k);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
 		w.writeUnsignedLeb128(ctx.frameTypeIndex);
 		w.writeUnsignedLeb128(0);
-		int arrSlot = ctx.allocTemp();
+		if (ar.spillArraySlot < 0) {
+			ar.spillArraySlot = ctx.allocTemp();
+			ar.deadSlots.set(ar.spillArraySlot);
+		}
+		int arrSlot = ar.spillArraySlot;
 		int spillBound = ctx.nextLocal;
 		frameCast(ctx);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
@@ -692,7 +811,9 @@ final class WasmAsyncEmit {
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(arrSlot);
-		for (int slot = SPILL_BASE; slot < spillBound; slot++) {
+		for (int slot = ar.deadSlots.nextClearBit(SPILL_BASE); slot < spillBound; slot = ar.deadSlots
+			.nextClearBit(slot + 1)) {
+			ar.spilledSlots.set(slot);
 			w.write(Instruction.GET_LOCAL);
 			w.writeUnsignedLeb128(arrSlot);
 			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -731,6 +852,8 @@ final class WasmAsyncEmit {
 		w.write(Instruction.END);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(futSlot);
+		// Landed: only this site's own code reads it, and it writes it first.
+		ar.deadSlots.set(futSlot);
 	}
 
 	/**

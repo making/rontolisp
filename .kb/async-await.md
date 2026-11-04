@@ -93,12 +93,13 @@ and the `await-answers-every-value-of-the-async-body` ci-spec case -- plus its s
 - All of it is gated on the spill global: a program with no multiple-value consumer is
   byte-identical on the three compile targets (fib, fib + a consumer, an async program with no
   consumer). With one (2026-09-26), an `await` inside a consumer
-  now takes the channel round trip instead of the one-temporary path, which on `--component` is
-  dearer at TOP LEVEL, where every mirrored local is spilled at every suspend site.
+  now takes the channel round trip instead of the one-temporary path.
 
 ## `--component` (asyncMode)
 - Async bodies compile as ENTRY+RESUME state machines over first-class `TYPE_FUTURE`s
-  (`WasmAsyncEmit`); asyncMode FORCES EH mode.
+  (`WasmAsyncEmit`); asyncMode FORCES EH mode. A suspend site spills only what can still be read
+  after it, and a long top level continues in resumes of its own
+  (`.kb/wasm-function-body-size.md`, "Keeping the top level bounded").
 - **Trap**: an async-defun's rewritten plain defun is EXCLUDED from the fusion-inlinable set even
   when a one-form body qualifies textually (`.kb/wasm-int-fusion.md`).
 - **Trap**: a region's landing pad must not restore the resume target `$rt`; one that did skipped

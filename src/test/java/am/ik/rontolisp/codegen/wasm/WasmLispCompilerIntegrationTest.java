@@ -16093,6 +16093,59 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void componentTopLevelKeepsItsStateAcrossSuspensionsAndAcrossItsResumes() throws Exception {
+		// A suspend site spills only what can still be read after it, and past a size
+		// budget the top level continues in a resume of its own. So this suspends for
+		// real (a wait-for) with: a local of the statement in flight, one of an earlier
+		// statement of the same loop body (dead there, rebound on the back edge), a
+		// closure's cell, a global across the cut, and a rejection caught past it.
+		StringBuilder source = new StringBuilder("""
+				(defvar *sum* 0)
+				(defvar *g* (rontolisp::%future-new))
+				(rontolisp::%future-reject *g* "boom")
+				(rontolisp:async-defun later (n)
+				  (rontolisp:await (rontolisp:wait-for 0))
+				  n)
+				(let ((total 0))
+				  (dotimes (i 3)
+				    (let ((x (* i 10)))
+				      (rontolisp:await (later 0))
+				      (setq total (+ total x)))
+				    (let ((y (+ i 1)))
+				      (rontolisp:await (later 0))
+				      (setq total (+ total y))))
+				  (print total))
+				""");
+		int forms = 1500;
+		int expected = 0;
+		for (int i = 0; i < forms; i++) {
+			source.append("(let ((a (+ %d 1)) (b (* %d 2))) (setq *sum* (+ *sum* a b (rontolisp:await (later %d)))))\n"
+				.formatted(i, i, i));
+			expected += (i + 1) + (i * 2) + i;
+			if (i % 500 == 0) {
+				source.append(
+						"(print (handler-case (rontolisp:await *g*) (error (e) (list :caught %d))))\n".formatted(i));
+			}
+		}
+		source.append("""
+				(let* ((n 5) (bump (lambda () (setq n (+ n 1)))))
+				  (funcall bump)
+				  (rontolisp:await (later 0))
+				  (funcall bump)
+				  (print n))
+				(print *sum*)
+				""");
+
+		assertThat(compileAndRunComponent(source.toString())).isEqualTo("""
+				36
+				(:CAUGHT 0)
+				(:CAUGHT 500)
+				(:CAUGHT 1000)
+				7
+				%d""".formatted(expected));
+	}
+
+	@Test
 	void componentUnwindProtectSkipsAndReArmsCleanupAcrossSuspension() throws Exception {
 		// A suspension is a plain return out of the protected region -- the cleanup
 		// does NOT run at the suspend (the task is not exiting) and re-arms on

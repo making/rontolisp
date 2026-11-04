@@ -128,14 +128,19 @@ class WasmToplevelChunkingTest {
 		// program's, not a bounded number of bytes. The size bound has to hold there
 		// too: this is the shape every fetch/serve component and the --component leg of
 		// the ci-spec corpus compiles as.
-		String source = longToplevel() + "\n(print (rontolisp:await 42))\n";
+		String longRun = longToplevel() + "\n(print (rontolisp:await 42))\n";
+		// The forms the resume keeps inline: each adds locals and a suspend site. Spilled
+		// whole at every site this body grew quadratically, ~6.5 KB an await at the
+		// ci-spec corpus's size; inline without a cut it still grows with their number.
+		String manyAwaits = IntStream.range(0, 3000)
+			.mapToObj(i -> "(let ((a (+ %d 1)) (b (* %d 2))) (print (+ a b (rontolisp:await %d))))".formatted(i, i, i))
+			.collect(Collectors.joining("\n"));
 
-		int largest = WasmModuleInspector.largestFunctionBodySize(compileComponent(source));
-
-		assertThat(largest)
-			.as("largest emitted function body of the ASYNC top level; a run outlined whole "
-					+ "makes a cold wasmtime compile need memory superlinear in this number")
-			.isLessThanOrEqualTo(MAX_FUNCTION_BODY_BYTES);
+		assertThat(List.of(longRun, manyAwaits))
+			.allSatisfy(source -> assertThat(WasmModuleInspector.largestFunctionBodySize(compileComponent(source)))
+				.as("largest emitted function body of the ASYNC top level; a body that grows with the "
+						+ "program makes a cold wasmtime compile need memory superlinear in this number")
+				.isLessThanOrEqualTo(MAX_FUNCTION_BODY_BYTES));
 	}
 
 	/**

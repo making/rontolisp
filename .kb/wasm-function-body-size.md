@@ -26,9 +26,9 @@ on the smallest CI runner, updating these numbers in the same change.
   on WASM died there (2026-09-24). Bounded by outlining, below.
 - **Any body with a case per callable also grows with function count**: `_funcref`, until
   2026-11-04 (below).
-- **One still grows quadratically: the async top-level resume** (`.todo/i31`). It spills all of
-  its locals at every suspend site. Corpus 2026-11-04: 442 locals, 194,297 bytes, ~6.5 KB per
-  added top-level await, so ~10 more awaits reach the bound.
+- **The async top-level resume grew quadratically until 2026-11-04** ("Keeping the top level
+  bounded"): it spilled all of its locals at every suspend site, 442 locals and 194,297 bytes of
+  the corpus, ~10 more awaits from the bound.
 - **The guard must measure the `--component` build separately** — an async top level
   compiles as an entry+resume pair, so either build can be larger.
   `WasmModuleInspector.largestFunctionBodySize` walks a component's embedded core modules.
@@ -62,6 +62,34 @@ a defun that is one long RUN of statements stays whole. Pins
 guard) — **cutting at the awaits bounds nothing**, since an await-free run is as long as
 the program; one `boxedVars` set is computed over the whole run so where it is cut cannot
 change how a variable is stored.
+
+What stays inline in the resume is the await-bearing statements, bounded twice:
+
+- **A suspend site spills only what can still be read after it** (`AsyncResume.deadSlots`, every
+  async body, not only the top level). `compileGuardedStatement` retires the locals a finished
+  statement allocated, and `emitAwait` its own future once landed. `Ctx.allocTemp` never recycles,
+  so those are read by that code alone, and a back edge reaching it rebinds them first. Stale
+  values left in the spill array are harmless: every local is a nullable eqref, and the array is a
+  GC root. Two exceptions stay spilled: a
+  `--report-locations` position local, which the first form needing it allocates
+  (`Frame.ownerSlot`), and a name still in `ctx.locals`. The prologue restores only the parameters
+  and what some site spilled (`spilledSlots`); one spill-array local serves every site; the closure
+  environment comes back from the frame, not the spill. A liveness pass over the bytes
+  (`WasmCarriedLocals`' kind) cannot find this: it does not know `$rt`, so every guarded binder
+  reads as a conditional write and every local as live at the prologue.
+- **Past `CHUNK_TARGET_BYTES` the top level continues in resumes of its own**
+  (`WasmAsyncEmit.compileTopLevelPieces`): body plus prologue measured before each await-bearing
+  statement. The first resume then only awaits the pieces in order, ~200 bytes each, so the stack
+  stays two resumes deep (a chain of pieces would be one frame per piece against wasmtime's 512
+  KiB). A cut waits for `readsChunkLocal`. Awaiting a piece adds no hop to a `--report-locations`
+  report: a condition past the cut reports as it does on the uncut shape. **Gap:** one statement is
+  not cut, so one top-level form holding hundreds of awaits stays whole.
+
+Measured 2026-11-04, corpus on `--component`: the resume 194,486 -> 23,642 bytes (the largest body
+is `_dispatch_9` now, 128,545), the module 15,683,080 -> 15,504,544. Per added top-level await
+~211 bytes, not ~6.5 KB. A thousand added awaits: pieces of 48,155 bytes and a 41,002-byte first
+resume. Pins `WasmToplevelChunkingTest#aLongAsyncToplevelIsNotEmittedAsOneFunctionBody`,
+`WasmLispCompilerIntegrationTest#componentTopLevelKeepsItsStateAcrossSuspensionsAndAcrossItsResumes`.
 
 Why cuts are safe:
 - `WasmLetCompiler` saves and restores `ctx.locals`; block/branch targets, `tagbody`/`go`,
