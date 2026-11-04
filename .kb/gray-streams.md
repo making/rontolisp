@@ -55,7 +55,8 @@ default T; read/write-sequence's missing end -> `(length sequence)`).
   `LispPreludeLibrary.process`** (`referencedBySurfaceForm`, `LibraryDefunPruner` roots).
   A prelude ENTRY that is a Gray stream (the composite streams, `%broadcast-stream`) brings
   gray.lisp too, so the prelude's fixpoint selects `%stream-target` for a pulled entry that
-  uses the protocol. Until 2026-10-24 it asked the user program only, and a program whose one
+  uses the protocol, and `%check-sequence-bounds` for the bounded `write-string` dispatch (since
+  2026-11-05, pinned by the same fixture; clsql's `make-broadcast-stream` warned). Until 2026-10-24 it asked the user program only, and a program whose one
   stream was `(make-two-way-stream *standard-input* *standard-output*)` (or which merely took
   `#'make-two-way-stream`) compiled `%STREAM-TARGET is undefined` and failed at the first
   dispatch on the JVM, P1 and the component. Pinned by

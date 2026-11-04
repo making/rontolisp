@@ -74,7 +74,7 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
 (loop for x in '(1 nil 3 nil 5) when x collect it) ; => (1 3 5)
 ```
 
-`thereis` は式が最初に非 nil になった値を返します。`always`/`never` は最初の失敗で `nil` に短絡し、正常終了時には `t` を返します。これらによる早期脱出は `return` と同様に `finally` をスキップします。
+`thereis` は式が最初に非 nil になった値を返します。`always`/`never` は最初の失敗で `nil` に短絡し、正常終了時には `thereis` と併用した場合も `t` を返します。これらによる早期脱出は `return` と同様に `finally` をスキップします。
 
 ```lisp
 (loop for x in '(nil nil 7 9) thereis x) ; => 7

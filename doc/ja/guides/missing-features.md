@@ -11,7 +11,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 
 | 機能 | 状況 |
 | --- | --- |
-| リスタート | 利用可。デバッガ統合（`break`、`*debugger-hook*`）とコンディションとの関連付けはありません |
+| リスタート | 利用可。デバッガ統合（`break`。`*debugger-hook*` は `invoke-debugger` からのみ）とコンディションとの関連付けはありません |
 | `&environment` | `defmacro` のラムダリストで受け付け、呼び出し位置でスコープにあるシンボルマクロを保持して `macroexpand` から読めます。`macrolet` のマクロはこれを介さず nil の環境でも見つかり、`with-slots`/`with-accessors` の名前は含まれません。`&whole` は `defmacro`・`destructuring-bind` の双方で動作します |
 | `loop`（拡張版） | 一部対応（後述） |
 | CLOS | 一部対応（静的サブセット + 定義時 MOP サブセット） |
@@ -92,7 +92,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 [`abort`](../reference/functions/abort.md) /
 [`continue`](../reference/functions/continue.md) がそれらを駆動します。
 [`cerror`](../reference/macros/cerror.md) は継続可能です。欠けているのは
-プログラムの**対話的デバッガ**です: `break` と `*debugger-hook*` は存在しません
+プログラムの**対話的デバッガ**です: `break` は存在せず、`*debugger-hook*` を呼ぶのは
+[`invoke-debugger`](../reference/functions/invoke-debugger.md) だけです
 (デバッガを持つのは [`rontolisp --swank`](../getting-started/swank.md) だけで、その SLIME の
 デバッガがリスタートの `:report` を描画し、`:interactive` 関数を実行します)。
 またリスタートはコンディションと関連付けられません

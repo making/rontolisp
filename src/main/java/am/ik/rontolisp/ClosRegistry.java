@@ -526,15 +526,31 @@ public final class ClosRegistry {
 		seedClass(CLASS_NAME, null);
 		seedClass(STANDARD_CLASS_NAME, CLASS_NAME, "NAME", "DIRECT-SUPERCLASSES", "DIRECT-SLOTS", "EFFECTIVE-SLOTS",
 				"FINALIZED-P");
-		// The slot-definition hierarchy (AMOP 5.4, single-inheritance cut: the abstract
-		// standard-slot-definition mixin is left out): the root holds every slot, so
-		// both standard classes keep the same layout.
+		// The slot-definition hierarchy (AMOP 5.4): the root holds every slot, so both
+		// standard classes keep the same layout.
 		seedClass(SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS", "INITFUNCTION",
 				"WRITERS", "ALLOCATION");
 		seedClass(DIRECT_SLOT_DEFINITION_NAME, SLOT_DEFINITION_NAME);
 		seedClass(EFFECTIVE_SLOT_DEFINITION_NAME, SLOT_DEFINITION_NAME);
-		seedClass(STANDARD_DIRECT_SLOT_DEFINITION_NAME, DIRECT_SLOT_DEFINITION_NAME);
-		seedClass(STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME, EFFECTIVE_SLOT_DEFINITION_NAME);
+		seedClass(STANDARD_SLOT_DEFINITION_NAME, SLOT_DEFINITION_NAME);
+		seedStandardSlotDefinitionClass(STANDARD_DIRECT_SLOT_DEFINITION_NAME, DIRECT_SLOT_DEFINITION_NAME);
+		seedStandardSlotDefinitionClass(STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME, EFFECTIVE_SLOT_DEFINITION_NAME);
+	}
+
+	/**
+	 * Seeds a slot-less class under {@link #STANDARD_SLOT_DEFINITION_NAME} and the given
+	 * parent, in that precedence (AMOP 5.4). Both descend from the one root holding every
+	 * slot, so the layout is the root's.
+	 */
+	private void seedStandardSlotDefinitionClass(String name, String parent) {
+		this.seededClassNames.add(name);
+		ClassInfo parentInfo = java.util.Objects.requireNonNull(this.classes.get(parent));
+		java.util.Set<String> ancestors = new java.util.LinkedHashSet<>(parentInfo.ancestors());
+		ancestors.add(STANDARD_SLOT_DEFINITION_NAME);
+		ancestors.add(name);
+		registerClass(new ClassInfo(name, List.of(STANDARD_SLOT_DEFINITION_NAME, parent),
+				List.of(name, STANDARD_SLOT_DEFINITION_NAME, parent, SLOT_DEFINITION_NAME), List.of(),
+				parentInfo.slots(), java.util.Set.copyOf(ancestors)));
 	}
 
 	/**
@@ -1037,6 +1053,9 @@ public final class ClosRegistry {
 	/** The slot-less class every effective slot definition is a {@code typep} of. */
 	public static final String EFFECTIVE_SLOT_DEFINITION_NAME = "EFFECTIVE-SLOT-DEFINITION";
 
+	/** The slot-less class both standard slot definitions are a {@code typep} of. */
+	public static final String STANDARD_SLOT_DEFINITION_NAME = "STANDARD-SLOT-DEFINITION";
+
 	/**
 	 * The seeded direct-slot-definition class a user metaclass protocol subclasses
 	 * (postmodern's {@code direct-column-slot}), and what {@code class-direct-slots}
@@ -1198,7 +1217,8 @@ public final class ClosRegistry {
 	/** The classes {@link #ensureMopClassesSeeded()} registers, in seeding order. */
 	private static final List<String> MOP_BASE_CLASS_NAMES = List.of(CLASS_NAME, STANDARD_CLASS_NAME,
 			SLOT_DEFINITION_NAME, DIRECT_SLOT_DEFINITION_NAME, EFFECTIVE_SLOT_DEFINITION_NAME,
-			STANDARD_DIRECT_SLOT_DEFINITION_NAME, STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME);
+			STANDARD_SLOT_DEFINITION_NAME, STANDARD_DIRECT_SLOT_DEFINITION_NAME,
+			STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME);
 
 	/**
 	 * Whether the name (a package-stripped member spelling) is one of the seeded MOP base
@@ -1322,8 +1342,11 @@ public final class ClosRegistry {
 		java.util.List<SlotSpec> slots = new java.util.ArrayList<>(parentInfo == null ? List.of() : parentInfo.slots());
 		java.util.List<SlotSpec> directSlots = new java.util.ArrayList<>();
 		for (String slotName : slotNames) {
-			SlotSpec spec = new SlotSpec(slotName, slotName, LispNil.INSTANCE, true, List.of(":" + slotName), true,
-					List.of(), List.of(), "T");
+			// A slot definition no :type reached has type t (AMOP 5.4.2).
+			LispVal initform = SLOT_DEFINITION_NAME.equals(name) && "TYPE".equals(slotName) ? LispTrue.INSTANCE
+					: LispNil.INSTANCE;
+			SlotSpec spec = new SlotSpec(slotName, slotName, initform, true, List.of(":" + slotName), true, List.of(),
+					List.of(), "T");
 			slots.add(spec);
 			directSlots.add(spec);
 		}

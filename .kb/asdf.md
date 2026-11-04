@@ -684,6 +684,7 @@ PATH**, so component files still resolve against the real tree. One entry serves
 | `cffi.asd` | `cffi-rontolisp.asd` | opens with `(error "Sorry, this Lisp is not yet supported")`; names rontolisp's `cffi-sys` (`.kb/cffi.md`) |
 | `cl-unicode.asd` | `cl-unicode-built.asd` | drops the build system, `component-depends-on`, fiveam |
 | `uffi.asd` | `uffi-cffi.asd` | guards its whole `defsystem` per implementation; the replacement is cffi's own `uffi-compat/uffi.asd`, over `cffi-uffi-compat` (package nickname `uffi`). Interpreter and JVM; a `.wasm` refuses by naming `ffi:` |
+| `clsql.asd` | `clsql-closer-mop.asd` | loads uffi only for a `perform :after` reading `~/.clsql-init.lisp`, which does not run here, and names no MOP system; the replacement declares `closer-mop` and leaves uffi to the database backends, so the core reaches wasm |
 
 **Every bundled replacement `.asd` and every leaf-module shim `.lisp` also needs a
 `resource-config.json` entry** (`AsdOverrides` resp. `ShimLibraries` as `typeReachable`). A
@@ -797,6 +798,29 @@ on the interpreter, and a real SIGINT prints `Received SIGINT, exiting.` and exi
 compile paths clingon runs on all three when a program spells `clingon.command::`, but
 `clingon:getopt` does not read: `(cl-reexport:reexport-from ...)` is a top-level function call
 computing the exports at load.
+
+**`eval/ClsqlForms`** (pinned by `ClsqlE2eTest`, all four, SBCL 2.2.9's answers over the real
+`clsql.asd`). clsql 6.4's `sql/package.lisp` uses one MOP package per `#+impl` arm; the last arm's
+place gets `#:closer-mop`. `sql/metaclasses.lisp` probes three generics' lambda lists with
+`ensure-generic-function` to pick the AMOP method shapes: those probes become the `pushnew`s, so
+the compile paths need no generic-function protocol for clsql. And its `#+(or sbcl allegro)`
+`finalize-inheritance :after` is the arm that sets `key-slots` here: the `#-` arm in
+`register-metaclass` runs while the class initializes, before the effective slots exist, and leaves
+`key-slots` nil (no `where` clause, no `update-record-from-slot`). Measured 2026-11-05 against
+SBCL 2.2.9: a database type of the program's own (the test's) prints the same SQL on all four;
+`clsql-sqlite3` over `libsqlite3.so` (a directory on `clsql:*foreign-library-search-paths*` holding
+that name; the system ships only `.so.0`, which stops SBCL as well) and `clsql-postgresql-socket3`
+against `postgres:16-alpine` (`create-view-from-class`, `update-records-from-instance`, `select` of a
+class, a `sql-database-data-error`, `with-transaction`) answer as SBCL on the interpreter and the
+JVM; only the socket backends load no foreign library, the todo's premise overstated that. The
+`[...]` syntax reads in a source file on all four (`ReadTimeImage`); a compiled `read-from-string` at
+run time does not honor it ([readtables.md](readtables.md), "Not honored"). `make-weak-hash-table`'s
+`#-(or sbcl ...)` warning stays: it says what is true here. Other backends than these two: unmeasured.
+Prerequisites found on the way, each a general gap: `(do* () ...)`, a `loop` mixing
+`always`/`never` with `thereis`, `make-sequence` with a computed type on every path, a run-time
+`typep` of an external deftype name on the interpreter, `pkg::name` of a name inherited from a used
+package ([packages.md](packages.md)), `*debugger-hook*`, `%check-sequence-bounds` for a program whose
+only Gray stream is a composite one, the MOP names in [clos.md](clos.md).
 
 Retired from this tier: `eval.AlexandriaSymbols`, deleted once `*package*` became a genuine
 dynamic variable (`.kb/packages.md`).

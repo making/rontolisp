@@ -33,6 +33,12 @@
 
 (defun closer-mop:class-finalized-p (class) (slot-value class 'finalized-p))
 
+(defmethod closer-mop:finalize-inheritance (class)
+  ;; A class outside the metaclass protocol is finalized where it is defined, so
+  ;; there is nothing left to do. The protocol (macro/mop-protocol.lisp) has the
+  ;; method for a metaobject it builds.
+  class)
+
 (defun closer-mop:class-slots (class)
   (if (closer-mop:classp class)
       (slot-value class 'effective-slots)

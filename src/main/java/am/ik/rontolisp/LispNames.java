@@ -1326,6 +1326,12 @@ public final class LispNames {
 	public static final String LOAD_PRINT_VAR = "*LOAD-PRINT*";
 
 	/**
+	 * The {@code *debugger-hook*} standard variable: nil until a program binds it, and
+	 * what {@code invoke-debugger} calls when it does.
+	 */
+	public static final String DEBUGGER_HOOK_VAR = "*DEBUGGER-HOOK*";
+
+	/**
 	 * The {@code *compile-verbose*} standard variable -- nil on every backend, for the
 	 * same reason as {@link #LOAD_VERBOSE_VAR}: there is no {@code compile-file} here to
 	 * announce anything. Portable sources READ it to decide whether to narrate a long

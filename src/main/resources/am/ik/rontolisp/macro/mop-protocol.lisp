@@ -178,7 +178,7 @@
      :initfunction (slot-value initialized 'initfunction)
      :allocation (slot-value dsd 'allocation))))
 
-(defmethod closer-mop:finalize-inheritance (class)
+(defmethod closer-mop:finalize-inheritance ((class standard-class))
   ;; A superclass is finalized first (AMOP): one made at run time and never
   ;; finalized -- contextl's partial classes put such a class, carrying the
   ;; slots, ahead of the class's own superclasses -- has no effective slots yet.
@@ -293,6 +293,9 @@
     (reverse built)))
 
 (defun closer-mop:class-precedence-list (class)
+  (%mop-class-precedence-list class))
+
+(defun closer-mop:compute-class-precedence-list (class)
   (%mop-class-precedence-list class))
 
 (defun %mop-find-slot-definition (name slot-definitions)
