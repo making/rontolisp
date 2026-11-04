@@ -705,14 +705,16 @@ public final class LispFormatter {
 	 * Whether a {@code :key value} pair starts at the given index. A pair is laid out as
 	 * one unit -- it starts a line of its own even in a packed run, because a column of
 	 * options reads far better than a paragraph of them. A comment in either half
-	 * disables the grouping, since a comment ends its line.
+	 * disables the grouping, since a comment ends its line, and so does a blank line
+	 * before the value, which the layout has to keep.
 	 * @param items the enclosing listing's items
 	 * @param index the candidate key's index
 	 * @param to one past the last index being laid out
 	 * @return {@code true} if the two items should be written as one unit
 	 */
 	private static boolean pairStartsAt(List<CstNode> items, int index, int to) {
-		return index + 1 < to && isKeyword(items.get(index)) && !(items.get(index + 1) instanceof CstNode.LineComment);
+		return index + 1 < to && isKeyword(items.get(index)) && !(items.get(index + 1) instanceof CstNode.LineComment)
+				&& !items.get(index + 1).trivia().blankLineBefore();
 	}
 
 	/**
