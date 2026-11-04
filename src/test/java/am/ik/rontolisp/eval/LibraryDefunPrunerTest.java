@@ -284,6 +284,15 @@ class LibraryDefunPrunerTest {
 				""";
 		assertThat(systemDefinedNames("(asdf:load-system :demo) (print (demo:used))", demoSystem(live)))
 			.contains("USED", "HELPER", "%STREAM-TARGET");
+		// write, for pprint-logical-block's atom arm.
+		assertThat(systemDefinedNames("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
+				(defun used () 1)
+				(defun unused (o s) (pprint-logical-block (s o) (princ 1 s)))
+				"""))).doesNotContain("UNUSED", "WRITE");
+		assertThat(systemDefinedNames("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
+				(defun used () (helper 1 *standard-output*))
+				(defun helper (o s) (pprint-logical-block (s o) (princ 1 s)))
+				"""))).contains("USED", "HELPER", "WRITE");
 	}
 
 	@Test

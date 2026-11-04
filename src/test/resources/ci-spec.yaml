@@ -33218,6 +33218,21 @@ cases:
       (FF 10)
       (255 10)
 standalone:
+  - name: pprint-logical-block-of-an-atom-in-a-program-not-naming-write
+    source: |
+      ;; Standalone: the concatenated corpus names write elsewhere, which hides the
+      ;; splice this pins. An atom is printed with write and skips the body; nil is a list.
+      (defun plb-atom (o s) (pprint-logical-block (s o) (write-string "in" s)))
+      (plb-atom 1 *standard-output*)
+      (terpri)
+      (plb-atom "a" *standard-output*)
+      (terpri)
+      (plb-atom nil *standard-output*)
+      (terpri)
+    stdout: |
+      1
+      "a"
+      in
   - name: uncaught-defmethod-lambda-list-refusal
     source: |
       ;; A handler-case anywhere puts the wasm module in EH mode, where an uncaught
