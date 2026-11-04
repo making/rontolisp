@@ -435,6 +435,19 @@ that reads, as a compile-file does. A package directive a macro expands to direc
 it interns a quoted datum's symbols in `*package*`. Covers backquote templates, a lone quoted
 symbol, and a quoted DATA TABLE whose symbols name functions or macros.
 
+So does `resolveForm` with a literal in code position: a `#S(...)` (type name and slot values; slot
+names match by base name) and a `#(...)`/`#nA(...)` evaluate to themselves, so what they hold is data
+too. All of it is one walk, `LispTrees.rewriteDatumSymbols`, which `readThrough` (local nicknames)
+takes as well: a `#n=` label's sharing and circle survive, in a car, a tail or an array, and a datum
+that does not change comes back as the same object. Pinned by ci-spec
+`a-literal-holds-symbols-of-the-current-package`, `LispTreesTest#rewriteDatumSymbolsKeepsTheShapeOfTheDatum`.
+
+The walk cannot tell a `#.` value from source, since the value is spliced before resolution: a bare
+spelling in it (a `cl-user` symbol, a `cl` symbol where the package shadows it) reads as the current
+package's, in a list and in an array, whichever the value is (`'#.(vector 'cl-user::foo)` under `P` holds
+`P::FOO`, measured 2026-11-05 on all four). An array a `#.` computed with a fill pointer, displacement or
+`:adjustable` is left alone: the reader cannot write one. A real intern table removes the question.
+
 A `cl` symbol quoted in a package that does not use `cl` is that package's own symbol, as the same
 name in code is (`'(car x)` under `(in-package :rontolisp)` = `(RONTOLISP::CAR RONTOLISP::X)`), and a
 quoted `*package*` is the SYMBOL. ONE exemption, host-facing data (`inHostFacingData`): a

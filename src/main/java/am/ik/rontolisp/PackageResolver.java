@@ -2150,32 +2150,10 @@ public final class PackageResolver {
 	}
 
 	private static LispVal readThrough(LispVal form, Map<String, String> table) {
-		return switch (form) {
-			case LispSymbol sym -> {
-				String read = localNicknameSpelling(sym.name(), table);
-				yield read == null ? sym : new LispSymbol(read);
-			}
-			case LispCons cons -> LispTrees.rebuildSpine(cons,
-					node -> node instanceof LispCons ? null : readThrough(node, table), car -> readThrough(car, table),
-					(cell, car, cdr) -> SourceProvenance.inherit(cell, LispCons.rebuilt(cell, car, cdr)));
-			case LispStructLiteral literal -> {
-				String type = localNicknameSpelling(literal.typeName(), table);
-				List<LispVal> values = literal.slotValues().stream().map(value -> readThrough(value, table)).toList();
-				yield type == null && values.equals(literal.slotValues()) ? literal
-						: new LispStructLiteral(type == null ? literal.typeName() : type, literal.slotNames(), values);
-			}
-			case LispArray array when array.data() != null -> {
-				LispVal[] data = array.data();
-				LispVal[] read = new LispVal[data.length];
-				boolean changed = false;
-				for (int i = 0; i < data.length; i++) {
-					read[i] = readThrough(data[i], table);
-					changed |= read[i] != data[i];
-				}
-				yield changed ? new LispArray(array.dimensions(), read) : array;
-			}
-			default -> form;
-		};
+		return LispTrees.rewriteDatumSymbols(form, sym -> {
+			String read = localNicknameSpelling(sym.name(), table);
+			return read == null ? sym : new LispSymbol(read);
+		});
 	}
 
 	/** The spelling a qualified token reads as, or null when no nickname applies. */
@@ -2474,9 +2452,19 @@ public final class PackageResolver {
 				claimDefinedClExtensionName(cons);
 				yield withDefstructInternPackage(cons, resolveCons(cons));
 			}
-			case LispStructLiteral literal -> resolveStructLiteralType(literal);
+			// A literal evaluates to itself, so what it holds is data like a quote's,
+			// read
+			// in the current package: its type name (what makes #S(PT :X 1) in a package
+			// find that package's (defstruct pt ...)) and every symbol inside.
+			case LispStructLiteral literal -> resolvesQuotedData() ? resolveQuotedData(literal) : literal;
+			case LispArray array -> resolvesQuotedData() ? resolveQuotedData(array) : array;
 			default -> form;
 		};
+	}
+
+	/** Everything but the options of a wasm directive ({@link #inHostFacingData}). */
+	private boolean resolvesQuotedData() {
+		return this.inMacroDefinition || !this.inHostFacingData;
 	}
 
 	/**
@@ -2561,23 +2549,6 @@ public final class PackageResolver {
 	}
 
 	/**
-	 * Resolves the TYPE NAME of a {@code #S(...)} literal, and nothing else. The type
-	 * name sits in a genuine symbol position -- Common Lisp reads it in the current
-	 * package -- so resolving it here is what makes {@code #S(PT :X 1)} inside a package
-	 * find the {@code (defstruct pt ...)} of that same package: both spellings go through
-	 * this resolver exactly once and end up canonically equal. The slot names are matched
-	 * by base name and the slot values are DATA, so both are left untouched, exactly as
-	 * the datum of a {@code quote} is.
-	 */
-	private LispVal resolveStructLiteralType(LispStructLiteral literal) {
-		if (!(resolveSymbol(new LispSymbol(literal.typeName())) instanceof LispSymbol resolved)
-				|| resolved.name().equals(literal.typeName())) {
-			return literal;
-		}
-		return new LispStructLiteral(resolved.name(), literal.slotNames(), literal.slotValues());
-	}
-
-	/**
 	 * Resolves a {@code case}/{@code ecase}/{@code ccase} clause head: a lone symbol key
 	 * through {@link #resolveSymbol} and a key LIST element-wise the same way (non-symbol
 	 * keys -- numbers, characters, keywords -- stay as read).
@@ -2620,7 +2591,7 @@ public final class PackageResolver {
 			// expansion, so ALL-ROWS has to be the same POSTMODERN::ALL-ROWS the
 			// defmacro registers. The one exemption is host-facing data (a WIT type, an
 			// export field name), which never names a Lisp symbol.
-			if (this.inMacroDefinition || !this.inHostFacingData) {
+			if (resolvesQuotedData()) {
 				datum = resolveQuotedData(datum);
 			}
 			// Identity-preserving when neither the datum nor the operator's spelling
@@ -2906,20 +2877,12 @@ public final class PackageResolver {
 		}
 	}
 
-	// Resolves every symbol inside a quoted datum (recursively through conses);
-	// non-symbol atoms pass through.
+	// Resolves every symbol inside a quoted datum. A datum whose symbols all resolve to
+	// themselves is EVERY quoted list of an ordinary cl-user file, and it comes back as
+	// the same object: rebuilding one used to make its (quote ...) form -- and every
+	// ancestor of that -- a fresh cons the provenance table has never seen.
 	private LispVal resolveQuotedData(LispVal datum) {
-		return switch (datum) {
-			case LispSymbol sym -> resolveSymbol(sym);
-			// Identity-preserving, and inheriting when it is not. A datum whose symbols
-			// all resolve to themselves is EVERY quoted list of an ordinary cl-user
-			// file, and rebuilding one used to make its (quote ...) form -- and every
-			// ancestor of that -- a fresh cons the provenance table has never seen.
-			case LispCons c -> LispTrees.rebuildSpine(c,
-					node -> node instanceof LispCons ? null : resolveQuotedData(node), this::resolveQuotedData,
-					(cell, car, cdr) -> SourceProvenance.inherit(cell, LispCons.rebuilt(cell, car, cdr)));
-			default -> datum;
-		};
+		return LispTrees.rewriteDatumSymbols(datum, this::resolveSymbol);
 	}
 
 	private LispVal resolveSymbol(LispSymbol sym) {

@@ -2,6 +2,7 @@ package am.ik.rontolisp;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -59,6 +60,39 @@ class LispTreesTest {
 	void sharedStructureAndCarCyclesAreNotCircularSpines() {
 		assertThat(LispTrees.circularSpine(LispReader.readFromString("(#1=(a b) #1# . #1#)"))).isNull();
 		assertThat(LispTrees.circularSpine(LispReader.readFromString("#1=(a #1# b)"))).isNull();
+	}
+
+	@Test
+	void rewriteDatumSymbolsKeepsTheShapeOfTheDatum() {
+		Function<LispSymbol, LispVal> qualify = sym -> "FOO".equals(sym.name()) ? new LispSymbol("P::FOO") : sym;
+		LispVal untouched = LispReader.readFromString("(a #(b) #S(c :d e) #1=(f #1#))");
+		assertThat(LispTrees.rewriteDatumSymbols(untouched, qualify)).isSameAs(untouched);
+
+		// A label's sharing and its circle are the datum's: a rewrite that copies keeps
+		// both, a tail cycle included.
+		LispCons shared = (LispCons) LispTrees.rewriteDatumSymbols(LispReader.readFromString("(#1=(foo) #1#)"),
+				qualify);
+		assertThat(shared.car().print()).isEqualTo("(P::FOO)");
+		assertThat(((LispCons) shared.cdr()).car()).isSameAs(shared.car());
+		LispCons carCycle = (LispCons) LispTrees.rewriteDatumSymbols(LispReader.readFromString("#1=(foo #1#)"),
+				qualify);
+		assertThat(carCycle.car().print()).isEqualTo("P::FOO");
+		assertThat(((LispCons) carCycle.cdr()).car()).isSameAs(carCycle);
+		LispCons tailCycle = (LispCons) LispTrees.rewriteDatumSymbols(LispReader.readFromString("#1=(foo a . #1#)"),
+				qualify);
+		assertThat(((LispCons) tailCycle.cdr()).cdr()).isSameAs(tailCycle);
+		LispArray arrayCycle = (LispArray) LispTrees.rewriteDatumSymbols(LispReader.readFromString("#1=#(foo #1#)"),
+				qualify);
+		assertThat(arrayCycle.data()[0].print()).isEqualTo("P::FOO");
+		assertThat(arrayCycle.data()[1]).isSameAs(arrayCycle);
+		// A position survives, and an array the reader cannot write is a value, not a
+		// datum to walk.
+		LocatedCons located = new LocatedCons(new LispSymbol("FOO"), LispNil.INSTANCE, "f.lisp", 3);
+		assertThat(LispTrees.rewriteDatumSymbols(located, qualify)).isInstanceOfSatisfying(LocatedCons.class,
+				copy -> assertThat(copy.line()).isEqualTo(3));
+		LispArray live = new LispArray(new int[] { 2 }, new LispVal[] { new LispSymbol("FOO"), LispNil.INSTANCE }, 1,
+				true);
+		assertThat(LispTrees.rewriteDatumSymbols(live, qualify)).isSameAs(live);
 	}
 
 	@Test

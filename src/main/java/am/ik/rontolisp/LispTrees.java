@@ -2,10 +2,12 @@ package am.ik.rontolisp;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.function.UnaryOperator;
@@ -130,6 +132,136 @@ public final class LispTrees {
 			tail = rebuild.rebuild(cells.get(i), cars.get(i), tail);
 		}
 		return tail;
+	}
+
+	/**
+	 * Rewrites every symbol of a DATUM, however deep: through conses, array literals and
+	 * {@code #S(...)} literals (a literal's type name too, when the rewrite answers a
+	 * symbol for it; its slot names match by base name and stay as spelled).
+	 * <p>
+	 * A datum is a graph, since a {@code #n=} reader label may share a node or close a
+	 * circle through a car, a tail or an array, and the rewrite answers the same graph:
+	 * the datum itself when no symbol changes, else a copy with one new node per old one.
+	 * <p>
+	 * An array the reader cannot write -- displaced, adjustable, with a fill pointer --
+	 * is a value a {@code #.} computed, not a datum, and stands as it is.
+	 * @param datum the datum
+	 * @param rewrite what a symbol becomes, the symbol itself when it stays; asked twice
+	 * of a symbol in a datum that changes, so it has to answer the same both times
+	 * @return the rewritten datum
+	 */
+	public static LispVal rewriteDatumSymbols(LispVal datum, Function<LispSymbol, LispVal> rewrite) {
+		if (datum instanceof LispSymbol sym) {
+			return rewrite.apply(sym);
+		}
+		return datumChanges(datum, rewrite, Collections.newSetFromMap(new IdentityHashMap<>()))
+				? copyDatum(datum, rewrite, new IdentityHashMap<>()) : datum;
+	}
+
+	private static boolean datumChanges(LispVal datum, Function<LispSymbol, LispVal> rewrite, Set<LispVal> seen) {
+		LispVal node = datum;
+		while (node instanceof LispCons cell) {
+			if (!seen.add(cell)) {
+				return false;
+			}
+			if (datumChanges(cell.car(), rewrite, seen)) {
+				return true;
+			}
+			node = cell.cdr();
+		}
+		return switch (node) {
+			case LispSymbol sym -> rewrite.apply(sym) != sym;
+			case LispStructLiteral literal ->
+				seen.add(literal) && (!literal.typeName().equals(rewrittenTypeName(literal, rewrite))
+						|| anyDatumChanges(literal.slotValues(), rewrite, seen));
+			case LispArray array when isLiteralArray(array) ->
+				seen.add(array) && anyDatumChanges(Arrays.asList(array.data()), rewrite, seen);
+			default -> false;
+		};
+	}
+
+	private static boolean anyDatumChanges(List<LispVal> data, Function<LispSymbol, LispVal> rewrite,
+			Set<LispVal> seen) {
+		for (LispVal element : data) {
+			if (datumChanges(element, rewrite, seen)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static LispVal copyDatum(LispVal datum, Function<LispSymbol, LispVal> rewrite,
+			Map<LispVal, LispVal> copies) {
+		LispVal copied = copies.get(datum);
+		if (copied != null) {
+			return copied;
+		}
+		return switch (datum) {
+			case LispSymbol sym -> rewrite.apply(sym);
+			case LispCons head -> copyDatumSpine(head, rewrite, copies);
+			case LispStructLiteral literal -> {
+				// The reader closes no circle through a literal (patchLabel does not
+				// enter
+				// one), so its values can be copied before it exists.
+				LispVal[] values = new LispVal[literal.slotValues().size()];
+				for (int i = 0; i < values.length; i++) {
+					values[i] = copyDatum(literal.slotValues().get(i), rewrite, copies);
+				}
+				LispVal out = new LispStructLiteral(rewrittenTypeName(literal, rewrite), literal.slotNames(),
+						List.of(values));
+				copies.put(literal, out);
+				yield out;
+			}
+			case LispArray array when isLiteralArray(array) -> {
+				LispVal[] data = array.data().clone();
+				LispVal out = new LispArray(array.dimensions(), data, -1, false, array.elementTypeCode());
+				copies.put(array, out);
+				for (int i = 0; i < data.length; i++) {
+					data[i] = copyDatum(data[i], rewrite, copies);
+				}
+				yield out;
+			}
+			default -> datum;
+		};
+	}
+
+	/**
+	 * Each cell exists before its car is copied, so a circle finds the copy to close on.
+	 */
+	private static LispVal copyDatumSpine(LispCons head, Function<LispSymbol, LispVal> rewrite,
+			Map<LispVal, LispVal> copies) {
+		LispCons first = copyCell(head, copies);
+		LispCons last = first;
+		LispCons cell = head;
+		while (true) {
+			last.setCar(copyDatum(cell.car(), rewrite, copies));
+			if (!(cell.cdr() instanceof LispCons next) || copies.containsKey(next)) {
+				last.setCdr(copyDatum(cell.cdr(), rewrite, copies));
+				return first;
+			}
+			LispCons copy = copyCell(next, copies);
+			last.setCdr(copy);
+			last = copy;
+			cell = next;
+		}
+	}
+
+	private static LispCons copyCell(LispCons cell, Map<LispVal, LispVal> copies) {
+		LispCons fresh = cell instanceof LocatedCons located
+				? new LocatedCons(LispNil.INSTANCE, LispNil.INSTANCE, located.file(), located.line())
+				: new LispCons(LispNil.INSTANCE, LispNil.INSTANCE);
+		SourceProvenance.inherit(cell, fresh);
+		copies.put(cell, fresh);
+		return fresh;
+	}
+
+	private static String rewrittenTypeName(LispStructLiteral literal, Function<LispSymbol, LispVal> rewrite) {
+		return rewrite.apply(new LispSymbol(literal.typeName())) instanceof LispSymbol sym ? sym.name()
+				: literal.typeName();
+	}
+
+	private static boolean isLiteralArray(LispArray array) {
+		return array.displacedTo() == null && !array.hasFillPointer() && !array.adjustable();
 	}
 
 	/**

@@ -171,6 +171,8 @@ class PackageResolverTest {
 		resolve(resolver, "(in-package :gl)");
 		assertThat(resolve(resolver, "(rontolisp:wasm-export 'frame :as 'tick :params '(:float))"))
 			.isEqualTo("(RONTOLISP:WASM-EXPORT 'GL:FRAME :AS 'TICK :PARAMS '(:FLOAT))");
+		assertThat(resolve(resolver, "(rontolisp:wasm-export 'frame :as #(tick))"))
+			.isEqualTo("(RONTOLISP:WASM-EXPORT 'GL:FRAME :AS #(TICK))");
 	}
 
 	@Test
@@ -997,6 +999,15 @@ class PackageResolverTest {
 		assertThat(resolve(resolver, "(defmacro all-rows (form) form)")).startsWith("(DEFMACRO STYLES::ALL-ROWS");
 		// Keywords, t/nil and cl symbols keep their canonical spelling.
 		assertThat(resolve(resolver, "'(:a nil t car)")).isEqualTo("'(:A NIL T CAR)");
+		// Inside an instance or array literal too, quoted or not: a literal evaluates to
+		// itself, so its contents are data wherever it stands.
+		assertThat(resolve(resolver, "'#S(pt :x foo)")).isEqualTo("'#S(STYLES::PT :X STYLES::FOO)");
+		assertThat(resolve(resolver, "(f #S(pt :x (foo #S(pt :y bar))))"))
+			.isEqualTo("(STYLES::F #S(STYLES::PT :X (STYLES::FOO #S(STYLES::PT :Y STYLES::BAR))))");
+		assertThat(resolve(resolver, "'#(foo #(bar) #S(pt))"))
+			.isEqualTo("'#(STYLES::FOO #(STYLES::BAR) #S(STYLES::PT))");
+		assertThat(resolve(resolver, "(f #(:a nil car foo) #2A((bar)))"))
+			.isEqualTo("(STYLES::F #(:A NIL CAR STYLES::FOO) #2A((STYLES::BAR)))");
 	}
 
 	@Test

@@ -329,6 +329,11 @@ Traps:
   replaces every reference by identity afterwards, so `#1=(A B . #1#)` is the circular list it
   says. `StructLiteralFolder` therefore carries the aggregates on the CURRENT PATH and returns a
   back edge unwalked -- it rebuilds what it changes, and a circular datum cannot be rebuilt.
+  `PackageResolver` copies the graph (`LispTrees.rewriteDatumSymbols`), so a quoted `#1=(a #1#)` and
+  `'(#1=(a) #1#)` hold on the interpreter in any package. Measured 2026-11-05: JVM and wasm answer NIL
+  for `(eq (car x) (cadr x))` over the second and overflow the stack on a circle through a car or an array
+  (the quote compilers build a tree), and a `#n#` naming a label from inside a `#S(...)` of that label is
+  not patched (`patchLabel` does not enter a literal).
   In PROGRAM SOURCE a label that closes a list into its own TAIL is a read error
   (`SourceLanguage.read`): the passes loop down the cdr and would never finish on one
   ([interpreter-stack.md](interpreter-stack.md), "Depth is NESTING"). `read` at run time

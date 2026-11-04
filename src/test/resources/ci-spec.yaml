@@ -11721,6 +11721,40 @@ cases:
       (T NIL 7 T)
       (+ 1 2)
       (1 3)
+  - name: a-literal-holds-symbols-of-the-current-package
+    source: |
+      ;; An instance or array literal, quoted or not, is read in the current package:
+      ;; its type name and every symbol it holds.
+      (defpackage :ci-lit-pkg (:use :cl))
+      (in-package :ci-lit-pkg)
+      (defstruct lit-pt x)
+      (defmacro lit-m () `(lit-pt-x ,'#S(lit-pt :x 9)))
+      (defmacro lit-n () '(lit-pt-x #S(lit-pt :x 10)))
+      (defparameter *lit-table* '(1 #S(lit-pt :x 11)))
+      (print (list (lit-pt-x #S(lit-pt :x 4)) (lit-pt-x '#S(lit-pt :x 5))
+                   (lit-pt-x (car '(#S(lit-pt :x 6)))) (lit-pt-x (cadr `(a #S(lit-pt :x 7))))
+                   (lit-pt-x (lit-pt-x #S(lit-pt :x #S(lit-pt :x 8))))
+                   (lit-m) (lit-n) (lit-pt-x (cadr *lit-table*))
+                   (lit-pt-x (aref #(#S(lit-pt :x 12)) 0))
+                   (lit-pt-x (aref '#(#S(lit-pt :x 13)) 0))))
+      (print (list (eq (lit-pt-x #S(lit-pt :x lit-foo)) 'lit-foo)
+                   (eq (lit-pt-x '#S(lit-pt :x lit-foo)) 'lit-foo)
+                   (eq (car (lit-pt-x '#S(lit-pt :x (lit-foo)))) 'lit-foo)
+                   (eq (aref #(lit-foo) 0) 'lit-foo)
+                   (eq (aref '#(lit-foo) 0) 'lit-foo)
+                   (eq (aref (aref '#(#(lit-foo)) 0) 0) 'lit-foo)
+                   (eq (aref '#2a((lit-foo)) 0 0) 'lit-foo)
+                   (eq (aref `#(lit-foo ,1) 0) 'lit-foo)))
+      (print #(lit-foo :lit-baz car))
+      (in-package :cl-user)
+      (print (ci-lit-pkg::lit-pt-x '#S(ci-lit-pkg::lit-pt :x 14)))
+      (print '#S(ci-lit-pkg::lit-pt :x ci-lit-pkg::lit-foo))
+    expected: |
+      (4 5 6 7 8 9 10 11 12 13)
+      (T T T T T T T T)
+      #(LIT-FOO :LIT-BAZ CAR)
+      14
+      #S(CI-LIT-PKG::LIT-PT :X CI-LIT-PKG::LIT-FOO)
   - name: make-load-form-literal-object
     source: |
       ;; CLHS 3.2.4.4: an object a macro splices into its own expansion is dumped

@@ -60,6 +60,10 @@ knows nothing about `ClosRegistry`, so reading is split in two:
 - The carrier is a first-class `LispVal`, not a `(%read-struct ...)` marker cons: being neither
   symbol nor cons it rides through `quote`, backquote templates and `#(...)` literals with no special
   case. The fold walks conses AND `LispArray` storage for the same reason.
+- Before the fold, `PackageResolver` reads its type name and slot values in the current package, quoted
+  or not ([packages.md](packages.md), "Quoted data resolves against the current package"). A run-time
+  `read` on a compiled backend does not: its reader is package-blind, so `(read-from-string "#S(pt)")`
+  under `P` signals "not a defined structure type" there (`.kb/symbol-runtime-api.md`).
 - Fold-time rules (CLHS 2.4.8.13 -- a `#S` literal is the constructor called with
   the given slots as keywords): values are DATA, never evaluated; each slot
   designator is coerced with `(string slot), so a symbol, a string (`"A"`) and a
