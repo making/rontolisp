@@ -102,6 +102,18 @@ class WasmReentrantE2eTest {
 		// and the default is untouched after both -- the pre-guard measurement read
 		// the OTHER call's binding back and leaked the outer value.
 		assertThat(runNode(driver(SPECIALS_DRIVER), wasm).lines().toList()).containsExactly("1001 2002", "0");
+		// The emitted reader reads *read-base* through the task record too.
+		Path reader = compile("read-base.wasm", """
+				(rontolisp:wasm-import 'pause :from "env" :as "pause" :params '(:int) :returns :int :async t)
+				(rontolisp:async-defun work (n)
+				  (let ((*read-base* (+ n 7)))
+				    (rontolisp:await (pause n))
+				    (read-from-string "11")))
+				(rontolisp:wasm-export 'work :params '(:int) :returns :int)
+				(defun peek () (read-from-string "11"))
+				(rontolisp:wasm-export 'peek :params '() :returns :int)
+				""");
+		assertThat(runNode(driver(SPECIALS_DRIVER), reader).lines().toList()).containsExactly("9 10", "11");
 	}
 
 	// set inside a binding writes THIS call's task-record cell, like setq: the module

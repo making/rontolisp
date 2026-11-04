@@ -12799,6 +12799,13 @@ class LispEvaluatorTest {
 				          *print-readably* *print-right-margin* *read-base* *read-default-float-format* *read-eval*
 				          *read-suppress*)))
 				""").print()).isEqualTo("(T 10 :UPCASE NIL T T NIL NIL NIL NIL NIL NIL T NIL 10 SINGLE-FLOAT T NIL)");
+		// The reader reads the variable: a binding reaches read and read-from-string, and
+		// the macro binds it back.
+		assertThat(eval("""
+				(let ((*read-base* 2))
+				  (list (read-from-string "11") (read (make-string-input-stream "101"))
+				        (with-standard-io-syntax (read-from-string "11"))))
+				""").print()).isEqualTo("(3 5 11)");
 	}
 
 	@Test

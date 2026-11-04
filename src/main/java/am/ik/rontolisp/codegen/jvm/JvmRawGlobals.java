@@ -105,7 +105,8 @@ final class JvmRawGlobals {
 	 */
 	private static boolean reserved(String name) {
 		return LispNames.MV_SPILL.equals(name) || LispNames.STANDARD_OUTPUT_VAR.equals(name)
-				|| LispNames.STANDARD_INPUT_VAR.equals(name) || LispNames.ERROR_OUTPUT_VAR.equals(name);
+				|| LispNames.STANDARD_INPUT_VAR.equals(name) || LispNames.ERROR_OUTPUT_VAR.equals(name)
+				|| LispNames.READ_BASE_VAR.equals(name);
 	}
 
 	/**

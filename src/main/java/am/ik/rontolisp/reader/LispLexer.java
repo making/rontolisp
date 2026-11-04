@@ -736,6 +736,9 @@ public final class LispLexer {
 			else if (c == '#' && this.pos + 1 < this.input.length() && isRadixMarker(this.input.charAt(this.pos + 1))) {
 				add(tokens, readRadixNumber(), tokenStart);
 			}
+			else if (this.syntax != null && this.syntax.readBase() != 10 && lexRationalInReadBase(tokens)) {
+				return;
+			}
 			else if (c == '.') {
 				if (this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
 					// ".4" is the float 0.4 (CLHS 2.3.1), not a symbol: a decimal point
@@ -897,6 +900,71 @@ public final class LispLexer {
 		while (this.pos < this.input.length() && this.input.charAt(this.pos) != '\n') {
 			this.pos++;
 		}
+	}
+
+	// A token under a *read-base* other than 10, where the rule differs from the decimal
+	// one the dispatcher goes on to (CLHS 2.3.1): an integer or ratio in the base wins
+	// over
+	// everything (1e5 is 485 in base 16), and a token that would be a decimal integer or
+	// ratio but holds a digit past the base is a symbol (102 in base 2). A trailing dot,
+	// a
+	// float and every other token read as they do in base 10: false, nothing consumed. An
+	// escape makes a token no number.
+	private boolean lexRationalInReadBase(List<LocatedToken> tokens) {
+		int start = this.pos;
+		int end = start;
+		while (end < this.input.length() && isSymbolChar(this.input.charAt(end))) {
+			if (this.input.charAt(end) == '\\' || this.input.charAt(end) == '|') {
+				return false;
+			}
+			end++;
+		}
+		int base = java.util.Objects.requireNonNull(this.syntax).readBase();
+		if (isRational(start, end, base)) {
+			this.pos = end;
+			add(tokens, rationalInBase(this.input.substring(start, end), base), start);
+			return true;
+		}
+		if (isRational(start, end, 10)) {
+			add(tokens, readSymbol(), start);
+			return true;
+		}
+		return false;
+	}
+
+	// Whether [start, end) is [sign] digits [/ digits] in the radix.
+	private boolean isRational(int start, int end, int radix) {
+		int i = start;
+		if (i < end && (this.input.charAt(i) == '+' || this.input.charAt(i) == '-')) {
+			i++;
+		}
+		boolean slashed = false;
+		boolean digits = false;
+		for (; i < end; i++) {
+			char c = this.input.charAt(i);
+			if (c == '/' && !slashed && digits) {
+				slashed = true;
+				digits = false;
+			}
+			else if (c < 128 && Character.digit(c, radix) >= 0) {
+				digits = true;
+			}
+			else {
+				return false;
+			}
+		}
+		return digits;
+	}
+
+	private static Token rationalInBase(String text, int base) {
+		int slash = text.indexOf('/');
+		if (slash >= 0) {
+			return new Token.RatioToken(new java.math.BigInteger(text.substring(0, slash), base),
+					new java.math.BigInteger(text.substring(slash + 1), base));
+		}
+		java.math.BigInteger value = new java.math.BigInteger(text, base);
+		return value.bitLength() < Long.SIZE ? new Token.NumberToken(value.longValue())
+				: new Token.BigIntegerToken(value);
 	}
 
 	// sign is the explicit "+" the dispatcher already consumed, or "": a token that turns

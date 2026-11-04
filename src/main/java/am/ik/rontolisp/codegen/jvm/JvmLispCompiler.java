@@ -4013,10 +4013,16 @@ public final class JvmLispCompiler implements LispCompiler {
 				structTableClinit = JvmReadRuntimeBuilder.structTableClinit(cp, thisClass, mainCtx.layoutPool,
 						closRegistry, objectClass, objectArrayClass, stringClass);
 			}
+			FieldRefEntry readBaseGlobal = mainCtx.globalFields.get(LispNames.READ_BASE_VAR);
+			FieldRefEntry readBaseLocal = readBaseGlobal == null || dynVarRuntime == null ? null
+					: dynVarRuntime.fields().get(LispNames.READ_BASE_VAR);
 			readMethods = JvmReadRuntimeBuilder
 				.create(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf, doubleValueOf,
 						stringCharAt, stringLength, stringSubstring, objectEquals, usesLoad, readerInstances,
-						pathnameLayoutField != null ? pathnameLayoutField : null)
+						pathnameLayoutField != null ? pathnameLayoutField : null,
+						readBaseGlobal == null ? null
+								: new JvmReadRuntimeBuilder.ReadBaseVar(readBaseGlobal, readBaseLocal,
+										readBaseLocal == null ? null : Objects.requireNonNull(dynVarRuntime).dget()))
 				.methods();
 		}
 		final List<JvmReadRuntimeBuilder.ReadMethod> readMethodsFinal = readMethods;

@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispInstance;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
@@ -18,12 +19,12 @@ import am.ik.rontolisp.reader.ReadSyntax;
 
 /**
  * Reads a readtable VALUE ({@code LispLayout.READTABLE}, built and changed by the
- * prelude's readtable family) into the {@link ReadSyntax} the interpreter's reader reads
- * with ({@code .kb/readtables.md}). An entry is the prelude's list
- * {@code (KIND FN NON-TERMINATING-P SUBS STD)}; only what differs from the standard
- * syntax becomes an entry of the view, so a readtable equal to the standard one -- an
- * empty table, or one named-readtables refilled with the standard functions -- reads with
- * no view at all, which is the reader's own fast path.
+ * prelude's readtable family) and the {@code *read-base*} value into the
+ * {@link ReadSyntax} the interpreter's reader reads with ({@code .kb/readtables.md}). An
+ * entry is the prelude's list {@code (KIND FN NON-TERMINATING-P SUBS STD)}; only what
+ * differs from the standard syntax becomes an entry of the view, so a readtable equal to
+ * the standard one -- an empty table, or one named-readtables refilled with the standard
+ * functions -- reads in base 10 with no view at all, which is the reader's own fast path.
  */
 final class ReadtableSyntax {
 
@@ -31,15 +32,20 @@ final class ReadtableSyntax {
 	}
 
 	/**
-	 * The syntax a readtable reads with.
-	 * @param readtable the {@code *readtable*} value
+	 * The syntax a readtable and a read base read with.
+	 * @param readtable the {@code *readtable*} value, or {@code null} when it has none;
+	 * anything but a readtable reads as the standard one
+	 * @param readBase the {@code *read-base*} value, or {@code null} when it has none;
+	 * anything but an integer in 2..36 reads as 10
 	 * @param invoker calls a reader macro function
-	 * @return the syntax, or {@code null} when the readtable reads as the standard one
-	 * (or is not a readtable at all)
+	 * @return the syntax, or {@code null} when the read is the standard one
 	 */
-	static @Nullable ReadSyntax of(LispVal readtable, ReadSyntax.Invoker invoker) {
+	static @Nullable ReadSyntax of(@Nullable LispVal readtable, @Nullable LispVal readBase,
+			ReadSyntax.Invoker invoker) {
+		int base = readBase instanceof LispInteger integer && integer.value() >= Character.MIN_RADIX
+				&& integer.value() <= Character.MAX_RADIX ? (int) integer.value() : 10;
 		if (!(readtable instanceof LispInstance rt) || !rt.hasTag(LispLayout.READTABLE_TAG)) {
-			return null;
+			return base == 10 ? null : new ReadSyntax(ReadSyntax.Case.UPCASE, Map.of(), invoker, base);
 		}
 		ReadSyntax.Case caseMode = caseOf(rt.slot(0));
 		Map<Integer, ReadSyntax.Entry> entries = new HashMap<>();
@@ -53,10 +59,10 @@ final class ReadtableSyntax {
 				}
 			}
 		}
-		if (entries.isEmpty() && caseMode == ReadSyntax.Case.UPCASE) {
+		if (entries.isEmpty() && caseMode == ReadSyntax.Case.UPCASE && base == 10) {
 			return null;
 		}
-		return new ReadSyntax(caseMode, entries, invoker);
+		return new ReadSyntax(caseMode, entries, invoker, base);
 	}
 
 	private static ReadSyntax.Case caseOf(LispVal mode) {

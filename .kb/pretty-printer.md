@@ -307,8 +307,7 @@ ci-spec `with-standard-io-syntax-binds-the-standard-table`; quri's `*print-base*
   (`ClosRegistry`, reader `print-not-readable-object`) because serapeum and coalton signal and handle
   it themselves; `(error 'print-not-readable)` used to find no class, escaping `(error ...)` clauses.
   The signal has traps of its own (`.todo/i47`).
-- Inert under it: `*read-default-float-format*` (`1.5d0` prints `1.5`, SBCL `1.5d0`), `*read-base*`
-  (no reader consults it, `.todo/i48`).
+- Inert under it: `*read-default-float-format*` (`1.5d0` prints `1.5`, SBCL `1.5d0`).
 
 ## Tests
 `LispEvaluatorTest.evalWriteAndPprintDispatch`/`evalPprintLogicalBlock`/`evalPrintCase`/

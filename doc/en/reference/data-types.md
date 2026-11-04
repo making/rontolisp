@@ -34,7 +34,7 @@ exponent, e.g. `1d0`, `1e0`, `1.5d3` (`1500.0`), `-2e-3`, `6.02e23`. This works
 in all three backends (it is a reader-level feature). **Unlike Common Lisp,
 rontolisp has a single floating-point type, so every marker reads as the same
 64-bit double** -- the single/short/long-float distinction (`1d0` vs `1e0` vs
-`1f0`) is not preserved, and there is no `*read-default-float-format*`. A marker
+`1f0`) is not preserved, and `*read-default-float-format*` changes no read. A marker
 that is not followed by exponent digits is not a float: `1d` and `1d0x` read as
 symbols (like `1+`), not numbers.
 

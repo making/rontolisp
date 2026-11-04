@@ -21,7 +21,6 @@
 
 - 読み戻せる表記を持たないオブジェクトを `*print-readably*` の下で印字すると、[`print-not-readable`](../functions/print-not-readable-object.md) をシグナルせず `#<...>` 形式を印字します。
 - double は `d0` を付けずに印字します。すべての浮動小数点数が唯一の double 表現なので、`*read-default-float-format*` は情報提供用です。
-- `*read-base*` は値を保持しますが、どのリーダーも整数を 10 進で読みます。
 
 ```lisp
 (let ((*print-base* 2))

@@ -152,6 +152,38 @@ Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
 `WasmLispCompilerIntegrationTest#readFromStringStopIndex`, ci-spec
 `read-from-string-stop-index`.
 
+## `*read-base*`: every reader reads a rational token in it
+**Invariant: on all four backends, under a base other than 10, a token that is `[sign] digits [/
+digits]` in the base is that number, ahead of every other reading; one that would be that shape in
+decimal but holds a digit past the base is a symbol; every other token reads as in base 10** (a
+trailing dot, a float; so `1s0` is a float in base 16 where `1f0` is 496). Measured against SBCL 2.2.9,
+2026-11-05: a table of 100 tokens over bases 2 to 36 agrees on all four, but for a double's `d0` (one
+float type) and SBCL's `|102|` printing (`.kb/pretty-printer.md`). ci-spec
+`read-base-reads-rationals-in-its-radix`.
+- Interpreter and source reads: `LispLexer.lexRationalInReadBase`, in front of the dispatcher, over
+  the view (`.kb/readtables.md`). A token holding an escape is no number.
+- JVM: `_classify` calls `_readBaseNow` first (a `_g$` read, through `_dget` when the binding is
+  thread-scoped), then `_rdRational` / `_rdInBase`. `JvmRawGlobals.reserved` names the variable,
+  since the method reads the field directly.
+- WASM: `emitReadBaseArm` in `_read_expr`, ahead of the qualifier drop (`CL:FF` is a symbol, `NIL` in
+  base 36 a number); a `--reentrant` module reads the task slot (`ReadBaseVar`). No new function and
+  no new local: the arm reuses the classifiers' slots, and a function index would shift the
+  component blobs.
+- **Only a program naming the variable pays** (its `defvar`, `LispMacroExpander.PRINTER_MODE_VARS`,
+  is what makes the global): the arm is absent otherwise, and such a program's reader is byte-identical.
+  A base only a run-time string names is not honored: `(eval (read-from-string "(setq *read-base* 16)"))`
+  assigns a global the program does not have.
+- A value no radix is (outside 2..36, not an integer) reads as 10 on all four; SBCL's declared type
+  refuses the binding.
+- Limits: the compiled readers' token runs through a `,`, so `1,000` under another base is their decimal
+  grouping where the interpreter and SBCL read `1` and stop; `#S`'s type name, read by `_rd_token`,
+  stays a symbol where SBCL would read a number; `|ff|` and `\ff` are the compiled readers' usual gap
+  (the bars are part of the name), so a symbol either way.
+- A compile's own source: `changesSyntax` opens the image on an assignment of the variable, and
+  compile-file semantics apply ([readtables.md](readtables.md)), so a plain top-level `(setq *read-base* 16)`
+  changes the interpreter's read of the next form and only the run-time reads of a compiled program.
+- `load` does not bind the variable, in SBCL neither.
+
 ## The one-argument `read-from-string` refuses malformed text
 **Invariant: text holding no datum (empty, whitespace, comments) or ending inside one (a list, a
 string, a quote, a dotted tail, `#(`, `#S(`, `#|`, `#\`) is `end-of-file`; a `)` where a datum is

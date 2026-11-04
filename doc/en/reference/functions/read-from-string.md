@@ -16,6 +16,17 @@ Symbols are read with the reader's [upcasing](../../guides/reader-case.md), iden
 (read-from-string "foo") ; => FOO
 ```
 
+`*read-base*` (2 to 36, default 10) is the radix an integer or ratio token reads in, on every backend. Such a token is that number whatever else it could spell, and one holding a digit past the base is a symbol; a trailing dot and a float stay decimal. A dispatch such as `#x` has its own radix.
+
+```lisp
+(let ((*read-base* 16)) (read-from-string "ff"))  ; => 255
+(let ((*read-base* 16)) (read-from-string "1e5")) ; => 485
+(let ((*read-base* 16)) (read-from-string "10.")) ; => 10
+(let ((*read-base* 2)) (read-from-string "102"))  ; => the symbol named "102"
+```
+
+Deviation: a value outside 2 to 36, which SBCL refuses as a type error, reads base 10. A source file reads with the variable too: the interpreter reads each form with the value the forms before it left, the compile paths with the value an `eval-when` left at compile time.
+
 A symbol is interned in the current package as it is read, as in Common Lisp: under `(let ((*package* (find-package :p))) ...)` the text `"foo"` reads as `P::FOO`, so a macro that builds a name with `read-from-string` at expansion time names a symbol of the package it expands in. Deviation: at run time, the compiled backends keep the name as read (a `cl-user` symbol), like their one-argument [`intern`](intern.md). A read during macro expansion is not affected, because the compiler expands macros in the file's package.
 
 
