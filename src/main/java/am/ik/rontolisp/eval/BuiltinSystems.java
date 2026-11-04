@@ -43,9 +43,7 @@ public final class BuiltinSystems {
 			// library re-exports host-implementation members that do not exist here.
 			Map.entry("trivial-cltl2", features -> ShimLibraries.forms("trivial-cltl2", features)),
 			// The mgl-pax package stub (trivial-utf-8's hard dependency, on the uuid /
-			// mito path): real mgl-pax-bootstrap's .asd declares :around-compile, a
-			// compile hook the defsystem-as-data front-end cannot honor -- the swank
-			// precedent.
+			// mito path).
 			Map.entry("mgl-pax-bootstrap", features -> ShimLibraries.forms("mgl-pax-bootstrap", features)),
 			// GC finalizers as no-ops (dbd-postgres's dependency): the real library's
 			// .asd errors under rontolisp's features, and no backend has GC hooks.

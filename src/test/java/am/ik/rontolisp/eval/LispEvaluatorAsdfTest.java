@@ -185,6 +185,19 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void anAroundCompileHookThatNeverCallsItsThunkFailsTheLoad() {
+		// ASDF's perform-lisp-compilation refuses a compile that produced no output.
+		assertThatThrownBy(() -> run("""
+				(asdf:load-system "app")
+				""", Map.of("app.asd", """
+				(defsystem :app
+				  :around-compile (lambda (compile) (declare (ignore compile)) nil)
+				  :components ((:file "main")))""", //
+				"main.lisp", "(defun which () 1)"), List.of()))
+			.hasMessageContaining(":around-compile hook of system app component main.lisp never called its thunk");
+	}
+
+	@Test
 	void findSystemAnswersABuiltinSystemBeforeItIsLoaded() {
 		// lack's find-package-or-load probes (asdf:find-system name nil) and loads on
 		// a hit: this is the route by which (clackup app :server :rontolisp) resolves

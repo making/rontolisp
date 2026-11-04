@@ -39,14 +39,16 @@ import org.jspecify.annotations.Nullable;
  * (system names loaded first, through the same search path),
  * {@code :defsystem-depends-on} (the same, loaded ahead of them -- real ASDF loads those
  * while the {@code .asd} is READ, and a built-in one contributes its declared features to
- * this system's read), {@code :serial} (each component implicitly depends on the previous
- * one), {@code :pathname} (a path prefix for every component), and {@code :components}
- * with {@code (:file "name" [:depends-on (...)])},
- * {@code (:module "dir" :components (...))} (a path prefix) and
- * {@code (:static-file "name")} (ignored) entries. A component's CLASS decides only the
- * two things a data-only parse can honor -- whether the component contributes a source
- * file and which extension its name gets -- so ASDF's own classes, the ones a top-level
- * {@code defclass} in the same {@code .asd} declares, and
+ * this system's read), {@code :weakly-depends-on} (the ones of them a loader finds,
+ * {@link #resolveWeakDependencies}), {@code :around-compile} (a function called around a
+ * component's load), {@code :encoding} ({@code :utf-8} or {@code :default}, what source
+ * is read as), {@code :serial} (each component implicitly depends on the previous one),
+ * {@code :pathname} (a path prefix for every component), and {@code :components} with
+ * {@code (:file "name" [:depends-on (...)])}, {@code (:module "dir" :components (...))}
+ * (a path prefix) and {@code (:static-file "name")} (ignored) entries. A component's
+ * CLASS decides only the two things a data-only parse can honor -- whether the component
+ * contributes a source file and which extension its name gets -- so ASDF's own classes,
+ * the ones a top-level {@code defclass} in the same {@code .asd} declares, and
  * {@code :default-component-class} are all supported.
  *
  * <p>
@@ -110,11 +112,18 @@ public final class AsdfSystems {
 	 * unresolved {@code #.} marker -- the option stays in {@link #IGNORED_OPTIONS}, so
 	 * nothing here evaluates anything to find out). Read back by
 	 * {@code asdf:component-version}
+	 * @param weaklyDependsOn the {@code :weakly-depends-on} names no loader has looked
+	 * for yet ({@link #resolveWeakDependencies} moves the ones it finds to
+	 * {@link #dependsOn})
+	 * @param aroundCompile the {@code :around-compile} hook of each entry of
+	 * {@link #files} that has one, in what {@code LispEvaluator.callAroundCompile} takes:
+	 * a {@code .asd}'s lambda already a function of the image that loaded the file, and
+	 * its symbols homed in the file's package
 	 */
 	public record LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
 			List<String> features, @Nullable String packageInferredDir, boolean packageInferredClass,
 			@Nullable TestOp testOp, List<String> testOpEdges, List<String> defsystemDependsOn,
-			@Nullable String version) {
+			@Nullable String version, List<String> weaklyDependsOn, Map<String, LispVal> aroundCompile) {
 
 		/**
 		 * The old-shape constructor: no test-op wiring, package-inferred class iff the
@@ -130,7 +139,7 @@ public final class AsdfSystems {
 		public LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
 				List<String> features, @Nullable String packageInferredDir) {
 			this(name, dependsOn, files, baseDir, features, packageInferredDir, packageInferredDir != null, null,
-					List.of(), List.of(), null);
+					List.of(), List.of(), null, List.of(), Map.of());
 		}
 	}
 
@@ -534,7 +543,7 @@ public final class AsdfSystems {
 		}
 		return new LispSystem(system.name(), system.dependsOn(), system.files(), system.baseDir(), system.features(),
 				system.packageInferredDir(), system.packageInferredClass(), system.testOp(), system.testOpEdges(),
-				List.copyOf(merged), system.version());
+				List.copyOf(merged), system.version(), system.weaklyDependsOn(), system.aroundCompile());
 	}
 
 	/**
@@ -948,10 +957,14 @@ public final class AsdfSystems {
 	 * every other spelling answers nil. Resolving its markers instead would open a README
 	 * at parse time to fill a field a User-Agent string prints -- the {@code #.} rule is
 	 * that the consumer decides, and this consumer decides not to.
+	 * <p>
+	 * {@code :entry-point}, {@code :build-operation} and {@code :build-pathname} drive
+	 * {@code program-op}, which has no meaning here: an image is not dumped.
 	 */
 	private static final Set<String> IGNORED_OPTIONS = Set.of(":NAME", ":LONG-NAME", ":DESCRIPTION",
 			":LONG-DESCRIPTION", ":VERSION", ":AUTHOR", ":MAINTAINER", ":LICENSE", ":LICENCE", ":HOMEPAGE",
-			":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO", ":PROPERTIES", ":IN-ORDER-TO", ":PERFORM");
+			":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO", ":PROPERTIES", ":IN-ORDER-TO", ":PERFORM", ":ENTRY-POINT",
+			":BUILD-OPERATION", ":BUILD-PATHNAME");
 
 	/**
 	 * Parses a {@code defsystem} form with the component classes in scope in the
@@ -1006,6 +1019,10 @@ public final class AsdfSystems {
 		List<String> defsystemDependsOn = dependencyNames(":DEFSYSTEM-DEPENDS-ON", name, items, asd, preFeatures);
 		List<String> announcers = new ArrayList<>(defsystemDependsOn);
 		announcers.addAll(dependencyNames(":DEPENDS-ON", name, items, asd, preFeatures));
+		// A built-in system is always available, so a weak dependency on one is a
+		// dependency on it.
+		List<String> weaklyDependsOn = dependencyNames(":WEAKLY-DEPENDS-ON", name, items, asd, preFeatures);
+		announcers.addAll(weaklyDependsOn);
 		declaredFeatures = mergeFeatureNames(declaredFeatures,
 				BuiltinSystems.declaredFeatures(announcers, givenFeatures));
 		Features features = declaredFeatures.isEmpty() ? givenFeatures : givenFeatures.with(declaredFeatures);
@@ -1016,6 +1033,7 @@ public final class AsdfSystems {
 		LispVal components = null;
 		String pathname = null;
 		ComponentClass defaultComponentClass = null;
+		LispVal aroundCompile = null;
 		TestOp testOp = null;
 		List<String> testOpEdges = new ArrayList<>();
 		for (int i = 2; i < items.size(); i += 2) {
@@ -1034,7 +1052,8 @@ public final class AsdfSystems {
 				// (:properties is ASDF's free-form property list, arnesi's feature
 				// names).
 				case ":NAME", ":LONG-NAME", ":DESCRIPTION", ":LONG-DESCRIPTION", ":AUTHOR", ":MAINTAINER", ":LICENSE",
-						":LICENCE", ":HOMEPAGE", ":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO", ":PROPERTIES" ->
+						":LICENCE", ":HOMEPAGE", ":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO", ":PROPERTIES",
+						":ENTRY-POINT", ":BUILD-OPERATION", ":BUILD-PATHNAME" ->
 					{
 					}
 				// The one metadata option something reads back: asdf:component-version.
@@ -1047,9 +1066,11 @@ public final class AsdfSystems {
 						version = versionString.value();
 					}
 				}
-				// Already consumed by defsystemDependsOn above.
-				case ":DEFSYSTEM-DEPENDS-ON" -> {
+				// Already consumed by defsystemDependsOn and weaklyDependsOn above.
+				case ":DEFSYSTEM-DEPENDS-ON", ":WEAKLY-DEPENDS-ON" -> {
 				}
+				case ":AROUND-COMPILE" -> aroundCompile = aroundCompileHook(asd, value);
+				case ":ENCODING" -> checkEncoding(LispNames.ASDF_DEFSYSTEM + " " + name, value);
 				// Test-op wiring: the ONE op with machinery behind it
 				// (asdf:test-system). The test-op shapes are RECORDED -- a
 				// :perform (test-op (o c) BODY) body and the :in-order-to
@@ -1108,8 +1129,10 @@ public final class AsdfSystems {
 				default ->
 					throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name + ": unsupported option "
 							+ key.name() + " (supported: :name :long-name :description :long-description"
-							+ " :version :author :maintainer :license :depends-on :defsystem-depends-on :serial"
-							+ " :components :pathname :class :default-component-class" + " :rontolisp-features)");
+							+ " :version :author :maintainer :license :depends-on :defsystem-depends-on"
+							+ " :weakly-depends-on :around-compile :encoding :entry-point :build-operation"
+							+ " :build-pathname :serial :components :pathname :class :default-component-class"
+							+ " :rontolisp-features)");
 			}
 		}
 		String prefix = pathname == null || pathname.isEmpty() ? "" : pathname + "/";
@@ -1118,14 +1141,65 @@ public final class AsdfSystems {
 					+ ": a :package-inferred-system has no :components (its graph is derived from each file's"
 					+ " defpackage)");
 		}
+		Map<String, LispVal> aroundCompiles = new HashMap<>();
 		List<String> files = components == null ? List.of()
-				: orderComponents(name, components, serial, prefix, features, componentClasses, defaultComponentClass);
+				: orderComponents(name, components, serial, prefix, new ComponentScope(features, componentClasses,
+						defaultComponentClass, aroundCompile, aroundCompiles, asd));
 		// A package-inferred system's own :pathname is where its SUB-SYSTEM names
 		// resolve:
 		// array-operations says :pathname "src/" and then names array-operations/all.
 		return new LispSystem(name, List.copyOf(dependsOn), files, baseDir == null ? "" : baseDir, declaredFeatures,
 				packageInferred ? (pathname == null ? "" : pathname) : null, packageInferred, testOp,
-				List.copyOf(testOpEdges), defsystemDependsOn, version);
+				List.copyOf(testOpEdges), defsystemDependsOn, version, weaklyDependsOn, Map.copyOf(aroundCompiles));
+	}
+
+	/**
+	 * Reads a {@code :around-compile} value: what ASDF's {@code uiop:ensure-function}
+	 * will take, the symbols homed where the file reads them. ASDF keeps the form and
+	 * {@code eval}s it at the call, in symbols the read already homed; here a symbol is
+	 * homed by the image the file runs in, so a lambda becomes that image's function now
+	 * and any other form its resolved datum. A string is read when it is called, in
+	 * {@code cl}, and a {@code defsystem} of no {@code .asd} has no file to home anything
+	 * in: both stay as written.
+	 * @param asd the enclosing {@code .asd} context
+	 * @param value the option's value
+	 * @return the hook, or {@code null} for {@code nil}: no hook, whatever the parent has
+	 */
+	@Nullable private static LispVal aroundCompileHook(AsdContext asd, LispVal value) {
+		if (value instanceof LispNil) {
+			return null;
+		}
+		AsdLoad load = asd.load();
+		if (load == null || value instanceof LispString) {
+			return value;
+		}
+		String operator = isLambdaExpression(value) ? LispNames.FUNCTION : LispNames.QUOTE;
+		return load.readEval(new LispCons(new LispSymbol(PackageRegistry.qualify("CL", operator)),
+				new LispCons(value, LispNil.INSTANCE)));
+	}
+
+	/**
+	 * Whether {@code form} is a {@code (lambda ...)} expression.
+	 * @param form the form
+	 * @return {@code true} for a lambda expression, in any package spelling
+	 */
+	static boolean isLambdaExpression(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.LAMBDA.equals(memberName(op));
+	}
+
+	/**
+	 * Checks an {@code :encoding} value. Source is read as UTF-8 and nothing else, which
+	 * is what ASDF's two encodings without {@code asdf-encodings} mean here:
+	 * {@code :utf-8}, and {@code :default}. Anything else would be misread, so it is
+	 * refused by name.
+	 */
+	private static void checkEncoding(String context, LispVal value) {
+		if (!(value instanceof LispNil) && !(value instanceof LispSymbol encoding && encoding.isKeyword()
+				&& (":UTF-8".equals(encoding.name()) || ":DEFAULT".equals(encoding.name())))) {
+			throw new IllegalStateException(context + ": unsupported :encoding " + value.print()
+					+ " (source files are read as UTF-8; supported: :utf-8, :default)");
+		}
 	}
 
 	/**
@@ -1416,6 +1490,58 @@ public final class AsdfSystems {
 	}
 
 	/**
+	 * Answers {@code :weakly-depends-on} the way ASDF's {@code find-system NAME nil} at
+	 * the parse does: an entry that can be found joins {@code :depends-on} after what the
+	 * system lists, and the others are forgotten. Nothing is downloaded for one, as
+	 * Quicklisp downloads nothing for one, and a system refused by name is one this
+	 * implementation does not have. A loader asks when it is about to load the system,
+	 * which has a search path the parse does not.
+	 * @param system the system
+	 * @param systems the registry, whose entry the answer replaces
+	 * @param systemPath the search path, after the system's own directory
+	 * @param loader the loader {@code .asd} files are read through
+	 * @return the system with its weak dependencies decided, {@code system} when it has
+	 * none
+	 */
+	public static LispSystem resolveWeakDependencies(LispSystem system, Map<String, LispSystem> systems,
+			List<String> systemPath, SourceLoader loader) {
+		if (system.weaklyDependsOn().isEmpty()) {
+			return system;
+		}
+		List<String> searchDirs = new ArrayList<>();
+		searchDirs.add(system.baseDir());
+		searchDirs.addAll(systemPath);
+		List<String> dependsOn = new ArrayList<>(system.dependsOn());
+		for (String name : system.weaklyDependsOn()) {
+			if (!dependsOn.contains(name) && isAvailable(name, systems, searchDirs, loader)) {
+				dependsOn.add(name);
+			}
+		}
+		LispSystem resolved = new LispSystem(system.name(), List.copyOf(dependsOn), system.files(), system.baseDir(),
+				system.features(), system.packageInferredDir(), system.packageInferredClass(), system.testOp(),
+				system.testOpEdges(), system.defsystemDependsOn(), system.version(), List.of(), system.aroundCompile());
+		systems.put(system.name(), resolved);
+		return resolved;
+	}
+
+	private static boolean isAvailable(String name, Map<String, LispSystem> systems, List<String> searchDirs,
+			SourceLoader loader) {
+		if (ShimLibraries.refusalReason(name) != null) {
+			return false;
+		}
+		if (BuiltinSystems.isBuiltin(name) || systems.containsKey(name)) {
+			return true;
+		}
+		try {
+			locate(name, searchDirs, loader);
+			return true;
+		}
+		catch (SystemNotFoundException ex) {
+			return false;
+		}
+	}
+
+	/**
 	 * Locates {@code NAME.asd} on the search path by attempting to read it from each
 	 * directory in order (the {@link SourceLoader} abstraction has no existence check, so
 	 * a failed read means "not here"). For a secondary system name like
@@ -1538,7 +1664,8 @@ public final class AsdfSystems {
 		LispVal packageForm = LispReader.readFirstFormMatching(source, features, path,
 				AsdfSystems::isPackageDefinitionForm);
 		return new LispSystem(name, packageDependencies(packageForm, path, systemPackages), List.of(file),
-				primary.baseDir(), primary.features(), null, true, null, List.of(), primary.defsystemDependsOn(), null);
+				primary.baseDir(), primary.features(), null, true, null, List.of(), primary.defsystemDependsOn(), null,
+				List.of(), Map.of());
 	}
 
 	/**
@@ -1793,17 +1920,37 @@ public final class AsdfSystems {
 	}
 
 	/**
+	 * What a component inherits from the components around it, and where its hook is
+	 * recorded.
+	 *
+	 * @param features the features its {@code :if-feature} tests
+	 * @param classes the component classes in scope in the {@code .asd}
+	 * @param defaultClass the {@code :default-component-class} in force, or {@code null}
+	 * @param aroundCompile the {@code :around-compile} hook in force, or {@code null}
+	 * @param aroundCompiles the hook of each source file so far, by its path
+	 * @param asd the enclosing {@code .asd} context
+	 */
+	private record ComponentScope(Features features, ComponentClasses classes, @Nullable ComponentClass defaultClass,
+			@Nullable LispVal aroundCompile, Map<String, LispVal> aroundCompiles, AsdContext asd) {
+
+		ComponentScope forChildren(@Nullable ComponentClass moduleClass, @Nullable LispVal moduleHook) {
+			return new ComponentScope(this.features, this.classes,
+					moduleClass == null ? this.defaultClass : moduleClass, moduleHook, this.aroundCompiles, this.asd);
+		}
+	}
+
+	/**
 	 * Parses a {@code :components} list and returns the source files in load order: a
 	 * stable topological sort of the sibling components by {@code :depends-on} (original
 	 * order is preserved among unconstrained components), with {@code :serial} adding an
 	 * implicit dependency on the previous sibling; a module's files stay contiguous.
 	 */
 	private static List<String> orderComponents(String systemName, LispVal componentsVal, boolean serial, String prefix,
-			Features features, ComponentClasses classes, @Nullable ComponentClass defaultClass) {
+			ComponentScope scope) {
 		List<Component> components = new ArrayList<>();
 		String previous = null;
 		for (LispVal entry : properList(LispNames.ASDF_DEFSYSTEM + " " + systemName + " :components", componentsVal)) {
-			Component component = parseComponent(systemName, entry, prefix, features, classes, defaultClass);
+			Component component = parseComponent(systemName, entry, prefix, scope);
 			List<String> deps = new ArrayList<>(component.dependsOn());
 			if (serial && previous != null) {
 				deps.add(previous);
@@ -1885,8 +2032,7 @@ public final class AsdfSystems {
 				"system " + systemName + ": component name must be a string or symbol literal: " + entry.print());
 	}
 
-	private static Component parseComponent(String systemName, LispVal entry, String prefix, Features features,
-			ComponentClasses classes, @Nullable ComponentClass defaultClass) {
+	private static Component parseComponent(String systemName, LispVal entry, String prefix, ComponentScope scope) {
 		if (!(entry instanceof LispCons compCons) || !(compCons.car() instanceof LispSymbol type)
 				|| !type.isKeyword()) {
 			throw new IllegalStateException(
@@ -1909,6 +2055,7 @@ public final class AsdfSystems {
 		LispVal nested = null;
 		String pathname = null;
 		ComponentClass moduleDefaultClass = null;
+		LispVal aroundCompile = scope.aroundCompile();
 		for (int i = 2; i < parts.size(); i += 2) {
 			if (!(parts.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
 				throw new IllegalStateException("system " + systemName + ": component " + name
@@ -1919,13 +2066,16 @@ public final class AsdfSystems {
 			switch (key.name()) {
 				case ":DEPENDS-ON" -> {
 					for (LispVal dep : properList("component " + name + " :depends-on", value)) {
-						String resolved = componentDependency(systemName, name, dep, features);
+						String resolved = componentDependency(systemName, name, dep, scope.features());
 						if (resolved != null) {
 							dependsOn.add(resolved);
 						}
 					}
 				}
-				case ":IF-FEATURE" -> featureEnabled = features.isEnabled(value);
+				case ":IF-FEATURE" -> featureEnabled = scope.features().isEnabled(value);
+				// ASDF's around-compile-hook: the nearest component that says.
+				case ":AROUND-COMPILE" -> aroundCompile = aroundCompileHook(scope.asd(), value);
+				case ":ENCODING" -> checkEncoding("system " + systemName + ": component " + name, value);
 				// :pathname decouples a component's NAME (its identity in the sibling
 				// dependency graph) from the path it contributes. quri's uri-classes
 				// module is exactly this: named uri-classes, living in src/uri/.
@@ -1949,8 +2099,8 @@ public final class AsdfSystems {
 					if (!module) {
 						throw unsupportedComponentOption(systemName, type, name, key);
 					}
-					moduleDefaultClass = defaultComponentClass("system " + systemName + ": module " + name, classes,
-							value);
+					moduleDefaultClass = defaultComponentClass("system " + systemName + ": module " + name,
+							scope.classes(), value);
 				}
 				default -> throw unsupportedComponentOption(systemName, type, name, key);
 			}
@@ -1964,7 +2114,7 @@ public final class AsdfSystems {
 			// An empty :pathname is ASDF's "this module adds no directory level".
 			String dir = pathname == null ? name : pathname;
 			files = orderComponents(systemName, nested, moduleSerial, dir.isEmpty() ? prefix : prefix + dir + "/",
-					features, classes, moduleDefaultClass == null ? defaultClass : moduleDefaultClass);
+					scope.forChildren(moduleDefaultClass, aroundCompile));
 		}
 		else {
 			// (:file "x") means the enclosing :default-component-class, ASDF's
@@ -1974,10 +2124,10 @@ public final class AsdfSystems {
 			// :legacy-acl-source-file). An ordering-only class contributes no source.
 			ComponentClass componentClass;
 			if (":FILE".equals(type.name())) {
-				componentClass = defaultClass == null ? DEFAULT_COMPONENT_CLASS : defaultClass;
+				componentClass = scope.defaultClass() == null ? DEFAULT_COMPONENT_CLASS : scope.defaultClass();
 			}
 			else {
-				componentClass = classes.find(type.name().substring(1));
+				componentClass = scope.classes().find(type.name().substring(1));
 				if (componentClass == null) {
 					throw new IllegalStateException("system " + systemName + ": unsupported component type "
 							+ type.name() + " (supported: :file, :module, ASDF's own component classes and the"
@@ -1986,6 +2136,11 @@ public final class AsdfSystems {
 			}
 			files = componentClass.source()
 					? List.of(prefix + sourceFileName(name, pathname, componentClass.fileType())) : List.of();
+			if (aroundCompile != null) {
+				for (String file : files) {
+					scope.aroundCompiles().put(file, aroundCompile);
+				}
+			}
 		}
 		// A feature-disabled component keeps its place in the dependency graph (a
 		// sibling may :depends-on it) but contributes no source files.
@@ -2011,16 +2166,16 @@ public final class AsdfSystems {
 
 	/**
 	 * Reads a system-level or component-level {@code :pathname} value. Only a literal
-	 * namestring is accepted ({@code "src"}, or the {@code #P"src"} the reader hands over
-	 * as a string): a computed pathname would need the pathname machinery ASDF-as-data
-	 * deliberately does not have. A trailing slash is dropped so the caller composes
-	 * exactly one separator.
+	 * namestring is accepted ({@code "src"}, or the constant {@code #P"src"} the reader
+	 * hands over as a pathname value): a computed pathname would need the pathname
+	 * machinery ASDF-as-data deliberately does not have. A trailing slash is dropped so
+	 * the caller composes exactly one separator.
 	 */
 	private static String pathnamePrefix(String context, LispVal value) {
-		if (!(value instanceof LispString str)) {
+		String path = PathnameOps.designatorNamestring(value);
+		if (path == null) {
 			throw new IllegalStateException(context + " :pathname expects a namestring literal, got " + value.print());
 		}
-		String path = str.value();
 		return path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
 	}
 

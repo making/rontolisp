@@ -63,7 +63,8 @@ already in the set.
 
 ## Load context (`*load-pathname*` / `*load-truename*`)
 
-`spliceFile` brackets every spliced file with `(%begin-file PATHNAME TRUENAME)` / `(%end-file)`:
+`spliceFile` brackets every spliced file with `(%begin-file PATHNAME TRUENAME FEATURE...)` /
+`(%end-file)`, the features being what an `:around-compile` hook added ([asdf.md](asdf.md)):
 the spelling `load` was called with, and the resolved path. An ASDF COMPONENT is spliced under its
 RESOLVED path for both, making `*load-pathname*` equal `asdf:component-pathname` -- the correlation
 rove's suite-to-file map needs, so pin the two together.

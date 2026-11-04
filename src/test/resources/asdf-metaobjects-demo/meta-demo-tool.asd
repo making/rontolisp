@@ -3,3 +3,8 @@
 ;; load one the reading .asd defines (a circular dependency on its definition).
 (defsystem "meta-demo-tool"
   :components ((:file "tool")))
+
+;; The function meta-demo/hooked names as an :around-compile hook, from a system
+;; only its :defsystem-depends-on loads: on a compile path, into the build image.
+(defsystem "meta-demo-tool/hook"
+  :components ((:file "tool-hook")))

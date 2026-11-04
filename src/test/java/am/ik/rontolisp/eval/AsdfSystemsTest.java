@@ -182,20 +182,79 @@ class AsdfSystemsTest {
 	@Test
 	void longNameAndPropertiesAreToleratedMetadata() {
 		// array-operations.asd carries :long-name beside :homepage and :bug-tracker;
-		// arnesi.asd (djula's cl-locale dependency) a :properties list.
+		// arnesi.asd (djula's cl-locale dependency) a :properties list; clingon's demo
+		// the options that drive program-op, which has no meaning here.
 		AsdfSystems.LispSystem system = parse("""
 				(asdf:defsystem :lib
 				  :long-name "A library with a long name"
 				  :properties ((:features "v1.4.0" "cc-interpreter"))
+				  :entry-point "lib:main"
+				  :build-operation "program-op"
+				  :build-pathname "bin/lib"
 				  :depends-on ("alexandria"))""");
 		assertThat(system.dependsOn()).containsExactly("alexandria");
 	}
 
 	@Test
 	void unsupportedOptionIsAHardError() {
-		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :around-compile \"pax:compile-pax\")"))
+		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :output-files \"x\")"))
 			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("unsupported option :AROUND-COMPILE");
+			.hasMessageContaining("unsupported option :OUTPUT-FILES");
+	}
+
+	@Test
+	void anEncodingOtherThanTheOneTheReaderHonorsIsRefusedByName() {
+		// Source is read as UTF-8, which is what :utf-8 and :default mean here (pngload).
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :encoding :utf-8
+				  :components ((:file "a" :encoding :default)))""");
+		assertThat(system.files()).containsExactly("a.lisp");
+		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :encoding :latin-1)"))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("unsupported :encoding :LATIN-1");
+		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :components ((:file \"a\" :encoding :latin-1)))"))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("unsupported :encoding :LATIN-1");
+	}
+
+	@Test
+	void anAroundCompileHookIsInheritedByEveryComponentThatDoesNotSayOtherwise() {
+		// ASDF's around-compile-hook: the nearest component with the slot bound, nil
+		// binding it to no hook at all.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :components ((:file "inherits")
+				               (:file "off" :around-compile nil)
+				               (:file "own" :around-compile own-hook)
+				               (:module "m" :around-compile module-hook
+				                :components ((:file "from-module")
+				                             (:file "off-in-module" :around-compile nil))))
+				  :around-compile system-hook)""");
+		Map<String, String> hooks = new java.util.HashMap<>();
+		system.aroundCompile().forEach((file, hook) -> hooks.put(file, hook.print()));
+		assertThat(hooks).containsOnly(Map.entry("inherits.lisp", "SYSTEM-HOOK"), Map.entry("own.lisp", "OWN-HOOK"),
+				Map.entry("m/from-module.lisp", "MODULE-HOOK"));
+	}
+
+	@Test
+	void weaklyDependsOnIsKeptApartUntilALoaderAsksWhatIsAvailable() {
+		// The built-in shim and a sibling are available; nothing is downloaded for one
+		// that is not.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem :lib
+				  :depends-on ("alexandria")
+				  :weakly-depends-on ("trivial-features" "sibling" "absent"))""");
+		assertThat(system.dependsOn()).containsExactly("alexandria");
+		assertThat(system.features()).as("a built-in system announces, whatever option names it").contains("unix");
+		Map<String, AsdfSystems.LispSystem> systems = new java.util.HashMap<>();
+		systems.put("lib", system);
+		systems.put("sibling", parse("(asdf:defsystem :sibling)"));
+		AsdfSystems.LispSystem resolved = AsdfSystems.resolveWeakDependencies(system, systems, List.of(), path -> {
+			throw new java.io.FileNotFoundException(path);
+		});
+		assertThat(resolved.dependsOn()).containsExactly("alexandria", "trivial-features", "sibling");
+		assertThat(systems.get("lib")).isSameAs(resolved);
 	}
 
 	@Test
@@ -1413,6 +1472,13 @@ class AsdfSystemsTest {
 				               (:file "two" :pathname "other.lisp")
 				               (:module "sub" :components ((:file "three")))))""");
 		assertThat(system.files()).containsExactly("src/one.lisp", "src/other.lisp", "src/sub/three.lisp");
+		// A #P literal is constant data: read as the namestring (clingon's modules).
+		AsdfSystems.LispSystem literals = parse("""
+				(defsystem :lib
+				  :pathname #P"src/"
+				  :components ((:file "one" :pathname #P"other.lisp")
+				               (:module "sub" :pathname #P"dir/" :components ((:file "three")))))""");
+		assertThat(literals.files()).containsExactly("src/other.lisp", "src/dir/three.lisp");
 	}
 
 	@Test

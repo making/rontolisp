@@ -265,7 +265,7 @@ public final class LoadInliner {
 		}
 		else {
 			String truename = loader.canonicalPath(entryFile);
-			result.add(beginFile(entryFile, truename));
+			result.add(beginFile(entryFile, truename, List.of()));
 			expandInto(program, result, ctx, new Origin(baseDir, entryFile, truename));
 			result.add(marker(LispNames.END_FILE));
 		}
@@ -301,6 +301,13 @@ public final class LoadInliner {
 			Deque<String> loadingSystems, List<String> systemPath, Features features, DistClient dists,
 			java.util.concurrent.atomic.AtomicInteger quickloadDepth, @Nullable String entryBaseDir,
 			SourceStandards standards, BuildImage buildImage, Reading reading) {
+
+		/** This state, its registries shared, reading with {@code features}. */
+		Ctx readingWith(Features features) {
+			return new Ctx(this.loader, this.loading, this.provided, this.systems, this.systemPackages,
+					this.loadedSystems, this.loadingSystems, this.systemPath, features, this.dists, this.quickloadDepth,
+					this.entryBaseDir, this.standards, this.buildImage, this.reading);
+		}
 	}
 
 	/**
@@ -572,17 +579,19 @@ public final class LoadInliner {
 	 * {@code asdf:component-pathname})
 	 */
 	private static void spliceFile(String operator, String path, List<LispVal> out, Ctx ctx, String pathname) {
-		spliceFile(operator, path, out, ctx, pathname, null, null, null);
+		spliceFile(operator, path, out, ctx, pathname, null, null, null, List.of());
 	}
 
 	/**
 	 * Splices one file. When it is a COMPONENT of an ASDF system, the system's name, the
 	 * component's path within it and the system's base directory are given too, so
 	 * {@link ShimLibraries#rewriteComponentSource} can rewrite forms of the real source
-	 * (uax-15's table building).
+	 * (uax-15's table building), and the features its {@code :around-compile} hook added,
+	 * which {@code ctx} reads with and the macro-time pass binds around its forms.
 	 */
 	private static void spliceFile(String operator, String path, List<LispVal> out, Ctx ctx, String pathname,
-			@Nullable String systemName, @Nullable String componentFile, @Nullable String systemBaseDir) {
+			@Nullable String systemName, @Nullable String componentFile, @Nullable String systemBaseDir,
+			List<String> hookFeatures) {
 		if (ctx.loading().contains(path)) {
 			throw new IllegalStateException(
 					"Circular load detected: " + String.join(" -> ", ctx.loading()) + " -> " + path);
@@ -626,7 +635,7 @@ public final class LoadInliner {
 		// answers for it -- so a path merged onto it names the same file wherever the
 		// load runs from.
 		String truename = ctx.loader().canonicalPath(path);
-		out.add(beginFile(pathname, truename));
+		out.add(beginFile(pathname, truename, hookFeatures));
 		expandInto(forms, out, ctx, new Origin(SourceLoader.parentDir(path), pathname, truename), bracket);
 		if (bracket.pushed) {
 			out.add(marker(LispNames.POP_PACKAGE));
@@ -734,8 +743,8 @@ public final class LoadInliner {
 			ctx.loadedSystems().add(name);
 			return;
 		}
-		AsdfSystems.LispSystem system = ctx.systems().get(name);
-		if (system == null) {
+		AsdfSystems.LispSystem located = ctx.systems().get(name);
+		if (located == null) {
 			List<String> searchDirs = new ArrayList<>();
 			searchDirs.add(requestBaseDir == null ? "" : requestBaseDir);
 			searchDirs.addAll(ctx.systemPath());
@@ -757,29 +766,27 @@ public final class LoadInliner {
 				// as a defsystem the parse refuses does.
 				throw new IllegalStateException(asd.path() + ": " + ex.getMessage(), ex);
 			}
-			system = ctx.systems().get(name);
-			if (system == null) {
+			located = ctx.systems().get(name);
+			if (located == null) {
 				// A NAME/SUB of a :package-inferred-system: the .asd declares no
 				// components, so the name is answered from the file it points at.
 				AsdfSystems.inferPackageInferredSystems(name, ctx.systems(), ctx.systemPackages(), ctx.loader(),
 						ctx.features());
-				system = ctx.systems().get(name);
+				located = ctx.systems().get(name);
 			}
-			if (system == null) {
+			if (located == null) {
 				throw new IllegalStateException(asd.path() + " does not define system '" + name + "'");
 			}
 		}
+		AsdfSystems.LispSystem system = AsdfSystems.resolveWeakDependencies(located, ctx.systems(), ctx.systemPath(),
+				ctx.loader());
 		ctx.loadingSystems().addLast(name);
 		// A system that declares :rontolisp-features has its OWN component files read
 		// with the target backend's features widened by that declaration (the static
 		// encoding of the eval-when *features* push a real .asd would do). The record
 		// copy shares every mutable field, so the registries stay one set of state; a
 		// dependency keeps the outer ctx, since it declares its own.
-		Ctx systemCtx = system.features().isEmpty() ? ctx
-				: new Ctx(ctx.loader(), ctx.loading(), ctx.provided(), ctx.systems(), ctx.systemPackages(),
-						ctx.loadedSystems(), ctx.loadingSystems(), ctx.systemPath(),
-						ctx.features().with(system.features()), ctx.dists(), ctx.quickloadDepth(), ctx.entryBaseDir(),
-						ctx.standards(), ctx.buildImage(), ctx.reading());
+		Ctx systemCtx = system.features().isEmpty() ? ctx : ctx.readingWith(ctx.features().with(system.features()));
 		// Everything spliced from here on belongs to this system. A dependency opens its
 		// own bracket inside this one, so the pruner's innermost-wins rule attributes
 		// each
@@ -806,31 +813,21 @@ public final class LoadInliner {
 			for (int index = 0; index < files.size(); index++) {
 				String file = files.get(index);
 				out.add(SplicedComponentGroups.componentMarker(name, index));
-				List<LispVal> leafShim = ShimLibraries.leafModuleForms(name, file, system.baseDir(), ctx.loader());
-				if (leafShim != null) {
-					// A substituted leaf module: splice the shim forms in the file's
-					// place, bracketed exactly as spliceFile brackets a real component
-					// -- most shims carry the replaced file's defpackage and select no
-					// package, so their output is unchanged; the cffi backend, a
-					// near-verbatim analogue of upstream's own implementation file,
-					// does select one and the bracket confines it.
-					boolean shimBracket = selectsAPackage(leafShim);
-					if (shimBracket) {
-						out.add(marker(LispNames.PUSH_PACKAGE));
-					}
-					out.addAll(leafShim);
-					if (shimBracket) {
-						out.add(marker(LispNames.POP_PACKAGE));
-					}
+				LispVal hook = system.aroundCompile().get(file);
+				if (hook == null) {
+					spliceComponent(system, file, out, systemCtx, List.of());
 				}
 				else {
-					// A component is loaded by its RESOLVED path (real ASDF hands load
-					// the component pathname), so *load-pathname* equals
-					// *load-truename* equals asdf:component-pathname for it -- what
-					// rove's file-to-package map correlates by.
-					String resolved = SourceLoader.resolve(system.baseDir(), file);
-					spliceFile(LispNames.ASDF_LOAD_SYSTEM, resolved, out, systemCtx, resolved, name, file,
-							system.baseDir());
+					// The hook runs in the build image, around the read of the component,
+					// and of the program gets what it decided: the features it added
+					// (LispEvaluator.callAroundCompile).
+					List<String> searchDirs = new ArrayList<>();
+					searchDirs.add(system.baseDir());
+					searchDirs.addAll(ctx.systemPath());
+					ctx.buildImage()
+						.image(ctx, searchDirs)
+						.callAroundCompile("system " + name + " component " + file, hook, system.defsystemDependsOn(),
+								added -> spliceComponent(system, file, out, systemCtx, added));
 				}
 				out.add(SplicedComponentGroups.componentEndMarker());
 			}
@@ -859,6 +856,41 @@ public final class LoadInliner {
 			// them there.
 			spliceSystem(LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM, out, ctx, requestBaseDir);
 		}
+	}
+
+	/**
+	 * Splices one component of a system: a substituted leaf module's forms, or its file
+	 * read with the features its hook added.
+	 */
+	private static void spliceComponent(AsdfSystems.LispSystem system, String file, List<LispVal> out, Ctx systemCtx,
+			List<String> hookFeatures) {
+		List<LispVal> leafShim = ShimLibraries.leafModuleForms(system.name(), file, system.baseDir(),
+				systemCtx.loader());
+		if (leafShim != null) {
+			// A substituted leaf module: splice the shim forms in the file's
+			// place, bracketed exactly as spliceFile brackets a real component
+			// -- most shims carry the replaced file's defpackage and select no
+			// package, so their output is unchanged; the cffi backend, a
+			// near-verbatim analogue of upstream's own implementation file,
+			// does select one and the bracket confines it.
+			boolean shimBracket = selectsAPackage(leafShim);
+			if (shimBracket) {
+				out.add(marker(LispNames.PUSH_PACKAGE));
+			}
+			out.addAll(leafShim);
+			if (shimBracket) {
+				out.add(marker(LispNames.POP_PACKAGE));
+			}
+			return;
+		}
+		// A component is loaded by its RESOLVED path (real ASDF hands load
+		// the component pathname), so *load-pathname* equals
+		// *load-truename* equals asdf:component-pathname for it -- what
+		// rove's file-to-package map correlates by.
+		String resolved = SourceLoader.resolve(system.baseDir(), file);
+		Ctx ctx = hookFeatures.isEmpty() ? systemCtx : systemCtx.readingWith(systemCtx.features().with(hookFeatures));
+		spliceFile(LispNames.ASDF_LOAD_SYSTEM, resolved, out, ctx, resolved, system.name(), file, system.baseDir(),
+				hookFeatures);
 	}
 
 	/**
@@ -1177,13 +1209,18 @@ public final class LoadInliner {
 	}
 
 	/**
-	 * A {@code (%begin-file "PATHNAME" "TRUENAME")} load-context marker (see
+	 * A {@code (%begin-file "PATHNAME" "TRUENAME" "FEATURE"...)} load-context marker (see
 	 * {@link #spliceFile}), carrying the two values the interpreter binds around the same
-	 * file. Strings for the same reason {@link #beginSystem}'s name is one.
+	 * file and the feature names an {@code :around-compile} hook added around it. Strings
+	 * for the same reason {@link #beginSystem}'s name is one.
 	 */
-	private static LispVal beginFile(String pathname, String truename) {
+	private static LispVal beginFile(String pathname, String truename, List<String> hookFeatures) {
+		LispVal features = LispNil.INSTANCE;
+		for (int i = hookFeatures.size() - 1; i >= 0; i--) {
+			features = new LispCons(new LispString(hookFeatures.get(i)), features);
+		}
 		return new LispCons(new LispSymbol(LispNames.BEGIN_FILE),
-				new LispCons(new LispString(pathname), new LispCons(new LispString(truename), LispNil.INSTANCE)));
+				new LispCons(new LispString(pathname), new LispCons(new LispString(truename), features)));
 	}
 
 	private record RequireForm(String name, @Nullable String path) {

@@ -51221,6 +51221,24 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The feature names a {@code %begin-file} marker carries behind its load context:
+	 * what an {@code :around-compile} hook added around the file, in force while the
+	 * macro-time evaluator walks its forms.
+	 * @param form a {@code %begin-file} marker {@link #loadContextValues} answers for
+	 * @return the feature names, usually none
+	 */
+	public static List<String> loadContextFeatures(LispVal form) {
+		List<LispVal> parts = ((LispCons) form).toList();
+		List<String> names = new java.util.ArrayList<>();
+		for (LispVal part : parts.subList(3, parts.size())) {
+			if (part instanceof LispString name) {
+				names.add(name.value());
+			}
+		}
+		return names;
+	}
+
+	/**
 	 * Injects the top-level {@code (setq %mv-spill nil)} /
 	 * {@code (setq *read-default-float-format* ...)} /
 	 * {@code (defvar *package* :cl-user)} / {@code (defvar *features* '(...))} globals
