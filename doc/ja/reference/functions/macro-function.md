@@ -20,7 +20,17 @@
 
 **コンパイル済み**プログラムにはマクロテーブルが残っていない(バックエンドが見る前にマクロは完全展開される)ため、そこでの値はスタブです。上記の述語としての用途は 4 バックエンドすべてで正確ですが、呼び出すと `macro-function: a compiled program cannot expand a macro at run time` をシグナルします。
 
-`setf` の場所としては 1 つの形だけをサポートします。`(setf (macro-function 'new) (macro-function 'existing))` は既存のマクロに 2 つ目の名前を与え、以降、両方の名前は同一に展開されます。`defmacro` 定義マクロは展開器を共有し、`incf` などの組み込みマクロは呼び出しの書き換えで到達します。新しい名前はキーワードでも構いません（`(setf (macro-function :+) (macro-function 'incf))`）。それ以外 — 任意の展開器関数や、マクロでない名前 — はエラーをシグナルします。保存すべきマクロ関数オブジェクトが存在しないためです。
+`(setf (macro-function 'name) function)` は `function` を `name` の展開器にします。呼び出しは `(funcall function form nil)` の答えに展開されます。`form` は呼び出し全体です。以降 `macro-function` はその関数そのものを答えます。関数でない値やシンボルでない名前は `type-error` をシグナルします。
+
+```lisp
+(setf (macro-function 'twice)
+      (lambda (form env) (declare (ignore env)) `(* 2 ,(second form))))
+(twice 21) ; => 42
+```
+
+コンパイル済みプログラムにはマクロテーブルがないため、書き込みは `defmacro` と同じくコンパイル時に行われ、プログラムには何も残りません。値のフォームはコンパイル時に実行され、その時点で定義済みのものを参照できます。このフォームはトップレベル、`progn` や `eval-when` のメンバー(マクロが生成したものでも可)、またはそれを囲む `let` や `flet` の本体に置く必要があります。値のフォームが失敗するとフォームを示してコンパイルが止まります。関数本体など、それ以外の場所での書き込みも同様です。インタプリタはどこでも受け付けます。
+
+`(setf (macro-function 'new) (macro-function 'existing))` は既存のマクロに 2 つ目の名前を与え、以降、両方の名前は同一に展開されます。`defmacro` 定義マクロは展開器を共有し、`incf` などの組み込みマクロは呼び出しの書き換えで到達します。新しい名前はキーワードでも構いません（`(setf (macro-function :+) (macro-function 'incf))`）。マクロでない名前はエラーをシグナルします。
 
 ```lisp
 (defmacro greet2 (x) `(list :hello ,x))

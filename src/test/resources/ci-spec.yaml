@@ -11082,6 +11082,25 @@ cases:
       (setf (macro-function 'ci-when2) (macro-function 'ci-my-when))
       (print (ci-when2 (> 3 1) :aliased))
       (print (ci-my-when (> 3 1) :original))
+      ;; The value may be any function: the expander, called with the whole form and
+      ;; an environment. On the compile paths it runs in the macro-time evaluator, so
+      ;; it sees the program's own functions and the form is consumed like a defmacro,
+      ;; also where a macro built it (log4cl's forward-macro) or a let closes over it.
+      (defun ci-listing (form) (cons 'list (cdr form)))
+      (setf (macro-function 'ci-fn-macro)
+            (lambda (form env) (declare (ignore env)) (ci-listing form)))
+      (print (ci-fn-macro (+ 1 2) :expander))
+      (defmacro ci-forward (name from)
+        `(progn
+           (setf ci-p :forwarded)
+           (setf (macro-function ',name)
+                 (lambda (&rest args) (apply (macro-function ',from) args)))))
+      (ci-forward ci-forwarded ci-my-when)
+      (print (list ci-p (ci-forwarded (> 3 1) :through)))
+      (let ((tag :closed-over))
+        (setf (macro-function 'ci-closed)
+              (lambda (form env) (declare (ignore form env)) (list 'quote tag))))
+      (print (ci-closed))
     expected: |
       20
       NIL
@@ -11091,6 +11110,9 @@ cases:
       (A 3 3 4 B)
       :ALIASED
       :ORIGINAL
+      (3 :EXPANDER)
+      (:FORWARDED :THROUGH)
+      :CLOSED-OVER
   # gensym + macroexpand/macroexpand-1. Runtime gensym names print identically on
   # all four backends only while no earlier form runs gensym at macro-expansion
   # time: the interpreter shares one counter between expansion time and run time,

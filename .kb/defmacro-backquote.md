@@ -109,21 +109,38 @@ recurse through `__db<N>_g<i>`; a dotted tail normalizes to `&rest`.
   (`__macro_args`) with the body wrapped in `destructuring-bind`, validated by a dry-run
   expansion; simple ones keep the strict arity check.
 
-## `(setf (macro-function 'new) (macro-function 'existing))` — macro aliases
-**Invariant: a macro alias is a write to the MACRO TABLE, carried out by whichever pass owns
-that table; the form never reaches a backend.** Recognized SYNTACTICALLY before the value form
-would run: `LispMacroExpander.isSetfMacroFunctionForm` + `macroFunctionArgumentName`.
-Interpreter `evalCons`'s `SETF` case -> `aliasMacroFunction`; compile path
-`UserMacroExpander.expand` replays into the macro-time evaluator and DROPS it, with the
-predicate in the pass's activation list (an alias-only program must still activate it) and
-`expandAll`'s `SETF` case returning the shape verbatim. Reaching `expandSetf`'s
-`MACRO-FUNCTION` case means neither interception applied; it throws. Lookup is
-package-tolerant (`lookupUserMacro`: exact -> qualified member -> unique member). A BUILT-IN
-macro target (`runtimeMacroNames`) has no expander to share: the alias is a synthesized
-`(&rest args) (cons 'TARGET args)` user macro; the new name may be a keyword
-(`macroFunctionArgumentName`) -- rutils' `(abbr :+ incf)`, h58. Open: an
-arbitrary expander FUNCTION is rejected -- `macro-function` builds a `LispFunction` on demand
-rather than storing one, so supporting it means the macro table must hold callables.
+## `(setf (macro-function name) function)` — the macro table holds callables
+**Invariant: the write goes to the MACRO TABLE, carried out by whichever pass owns that table;
+the form never reaches a backend.** `LispMacroExpander.isSetfMacroFunctionForm` recognizes it
+syntactically before the value form would run (a setf of several pairs counts; `splitSetfPairs`
+makes it one-pair setfs first, so the other places stay ordinary).
+
+- Interpreter: `evalCons`'s `SETF` case -> `writeMacroFunction`. Name and value evaluate in the
+  form's environment, a `UserMacro` with `expander` set goes in the table, and
+  `expandMacroCall` calls it with the whole form and nil. `macro-function` answers that object
+  (`eq`, as SBCL). A non-function value or non-symbol name is a `type-error` (SBCL 2.2.9), a `cl`
+  name is refused like `defmacro`'s.
+- Compile path: `UserMacroExpander.stripDefmacroDefinitions` replays it into the macro-time
+  evaluator and DROPS it, like a `defmacro`: bare, a member of a `progn`/`eval-when` (a macro
+  built it: log4cl's `forward-macro`, lparallel's `alias-macro`), or the body of a
+  `let`/`flet` closing over it. `expandAll`'s `SETF` case returns it verbatim, so the value
+  expands as the macro-time evaluator runs it. `writesMacroFunction` activates the pass at any
+  depth. **A failed replay is a hard error naming the form** (`replayMacroDefinitions`): skipped
+  with a warning, every call site would compile to an undefined function.
+- Reaching `expandSetf`'s `MACRO-FUNCTION` case means a compiled program would have to run the
+  write (a function body, a `let` with other effects); it throws. The value form runs at macro
+  time only, so a closure over a run-time value is not reachable there.
+- **The function `macro-function` answers for a `defmacro` is the one it had when asked**: it
+  captures the `UserMacro`, not the name. Over the name, storing it back after a redefinition
+  (parachute's fixture restore) expanded through itself forever. Such a call runs the expander
+  each time and does not touch the per-site memo.
+
+The literal alias `(setf (macro-function 'new) (macro-function 'existing))`
+(`macroFunctionArgumentName`) stays its own path, because the function value could not reach
+two of its cases: lookup is package-tolerant (`lookupUserMacro`: exact -> qualified member ->
+unique member), and a BUILT-IN macro target (`runtimeMacroNames`) has no expander to share, so
+the alias is a synthesized `(&rest args) (cons 'TARGET args)` user macro; the new name may be a
+keyword -- rutils' `(abbr :+ incf)`, h58. An alias of a non-macro says `is not a macro`.
 Class-name twin: `(setf (find-class ...))`, [clos.md](clos.md).
 
 ## The macro-time evaluator is the "compiling image"
@@ -166,9 +183,10 @@ but lives in its own table ([compiler-macros.md](compiler-macros.md)).
 - `LispEvaluatorTest`: `evalCommaDotSplicesLikeCommaAt`, `defmacroNestedBackquoteOnceOnly`,
   `userMacroExpandsOncePerCallSite`, `redefiningAMacroReexpandsItsCallSites`,
   `macroletEnteringAndLeavingScopeInvalidatesTheExpansionMemo`,
-  `setfMacroFunction{AliasesAUserMacro,RejectsNonAliasShapes}`, plus the defmacro and
+  `setfMacroFunction{AliasesAUserMacro,InstallsAnExpanderFunction,RejectsWhatIsNotAnExpander}`,
+  plus the defmacro and
   destructuring-bind sections.
-- `UserMacroExpanderTest`; `JvmLispCompilerTest#compileAndRun{UserMacroAfterExpansionPass,
+- `UserMacroExpanderTest` (`setfMacroFunction*`); `JvmLispCompilerTest#compileAndRun{UserMacroAfterExpansionPass,
   DestructuringBind,UserMacroWithDestructuringLambdaList,NestedBackquoteOnceOnly,
   SetfMacroFunctionAliasAfterExpansionPass}` and `WasmLispCompilerIntegrationTest`'s twins;
   `TriviaE2eTest`.

@@ -474,10 +474,18 @@ public final class LispEvaluator {
 
 	/**
 	 * A user macro: required parameters, an optional {@code &rest}/{@code &body}
-	 * parameter, the body forms, and the environment captured at definition time.
+	 * parameter, the body forms, and the environment captured at definition time. A macro
+	 * a {@code (setf macro-function)} installed has none of those: it is the function,
+	 * called with the whole form and an environment.
 	 */
 	private record UserMacro(List<LispSymbol> required, @Nullable LispSymbol rest, List<LispVal> body, Environment env,
-			String definitionPackage) {
+			String definitionPackage, @Nullable LispVal expander) {
+
+		UserMacro(List<LispSymbol> required, @Nullable LispSymbol rest, List<LispVal> body, Environment env,
+				String definitionPackage) {
+			this(required, rest, body, env, definitionPackage, null);
+		}
+
 	}
 
 	private SourceLoader sourceLoader = SourceLoader.fileSystem();
@@ -1579,6 +1587,10 @@ public final class LispEvaluator {
 				return LispNil.INSTANCE;
 			}
 			String name = sym.name();
+			UserMacro macro = this.userMacros.get(name);
+			if (macro != null && macro.expander() != null) {
+				return macro.expander();
+			}
 			return new LispFunction(LispNames.MACRO_FUNCTION + " " + name, callArgs -> {
 				// CLHS 3.2.1: a macro function takes EXACTLY two arguments (the form and
 				// the environment) -- not "1 or 2" like macro-function itself, which
@@ -1588,7 +1600,12 @@ public final class LispEvaluator {
 					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 							"a macro function expects 2 arguments, got " + callArgs.size());
 				}
-				return macroexpand1(macroCallForm(name, callArgs.get(0)));
+				// A user macro's function is the one it had when asked, whatever the name
+				// holds by the time it runs: stored back under that name, it must not
+				// expand through itself.
+				LispVal form = macroCallForm(name, callArgs.get(0));
+				return macro != null && form instanceof LispCons call ? expandMacroCall(name, macro, call, null)
+						: macroexpand1(form);
 			});
 		}));
 		// compiler-macro-function: macro-function's twin over the define-compiler-macro
@@ -9296,14 +9313,19 @@ public final class LispEvaluator {
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandFourth);
 									break dispatch;
 								case LispNames.SETF: {
-									// (setf (macro-function 'new) (macro-function
-									// 'existing)) is a write to the MACRO table, which
-									// lives here and nowhere else -- the shared expander
-									// cannot lower it to a runtime form, so it is carried
-									// out during evaluation instead of being expanded.
-									LispVal macroAlias = aliasMacroFunction(cons);
-									if (macroAlias != null) {
-										result = singleValue(macroAlias);
+									// (setf (macro-function name) function) is a write to
+									// the MACRO table, which lives here and nowhere else
+									// --
+									// the shared expander cannot lower it to a runtime
+									// form, so it is carried out during evaluation
+									// instead
+									// of being expanded.
+									if (LispMacroExpander.isSetfMacroFunctionForm(cons)) {
+										if (properLength > 3) {
+											next = LispMacroExpander.splitSetfPairs(cons);
+											break dispatch;
+										}
+										result = singleValue(writeMacroFunction(cons, env));
 										break frame;
 									}
 									// A prelude-provided (setf PLACE) writer (the (defun
@@ -11701,34 +11723,58 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Carries out a one-pair {@code (setf (macro-function name) function)}: the name and
+	 * the value evaluate here, and the function is the macro's expander from now on, also
+	 * for the compile paths, whose macro table is this evaluator's
+	 * ({@link UserMacroExpander}).
+	 * @param cons the setf form
+	 * @param env the environment the form evaluates in
+	 * @return the value the setf answers
+	 */
+	private LispVal writeMacroFunction(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3 || ((LispCons) parts.get(1)).toList().size() < 2) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					"setf " + LispNames.MACRO_FUNCTION + " expects a name and a function: " + cons.print());
+		}
+		String alias = LispMacroExpander.macroFunctionArgumentName(parts.get(1));
+		String target = LispMacroExpander.macroFunctionArgumentName(parts.get(2));
+		if (alias != null && target != null) {
+			return aliasMacroFunction(alias, target);
+		}
+		LispVal name = eval(((LispCons) parts.get(1)).toList().get(1), env);
+		LispVal expander = eval(parts.get(2), env);
+		if (!(name instanceof LispSymbol sym)) {
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					"setf " + LispNames.MACRO_FUNCTION + " expects a symbol, got " + name.print());
+		}
+		if (!(expander instanceof LispFunction || expander instanceof LispLambda
+				|| (expander instanceof LispInstance instance && instance.layout().funcallable()))) {
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					"setf " + LispNames.MACRO_FUNCTION + " expects a function, got " + expander.print());
+		}
+		if (PackageRegistry.isClSymbol(sym.name())) {
+			throw new LispEvalException(
+					"setf " + LispNames.MACRO_FUNCTION + " cannot redefine the standard operator " + sym.name());
+		}
+		putUserMacro(sym.name(), new UserMacro(List.of(), null, List.of(), this.globalEnv,
+				this.packageResolver.currentPackageName(), expander));
+		return expander;
+	}
+
+	/**
 	 * Carries out {@code (setf (macro-function 'new) (macro-function 'existing))} -- a
 	 * macro ALIAS, the shape lisp-namespace uses to give {@code namespace-let} the short
 	 * name {@code nslet}. The new name is bound to the SAME expander, so the two names
 	 * expand identically forever after (a later redefinition of either name replaces only
-	 * that name's entry, as in CL, where the alias captured the function object).
-	 *
-	 * <p>
-	 * Only this shape is supported: the macro namespace has no runtime representation on
-	 * any backend (macros are gone before a backend sees the program), so there is no
-	 * macro FUNCTION object to store -- a value that is not literally
-	 * {@code (macro-function 'name)} of a {@code defmacro}-defined macro is rejected
-	 * rather than silently dropped. Returns {@code null} when the form is some other
-	 * {@code setf}, so the caller falls through to the ordinary place expansion.
-	 * @param cons the setf form
-	 * @return the alias name symbol, or {@code null} when the form is not a macro alias
+	 * that name's entry, as in CL, where the alias captured the function object). Unlike
+	 * a function value it may name a macro across packages and a built-in macro, which
+	 * has no expander object to share.
+	 * @param alias the new name
+	 * @param target the existing macro's name
+	 * @return the alias name symbol
 	 */
-	private @Nullable LispVal aliasMacroFunction(LispCons cons) {
-		if (!LispMacroExpander.isSetfMacroFunctionForm(cons)) {
-			return null;
-		}
-		List<LispVal> parts = cons.toList();
-		String alias = parts.size() == 3 ? LispMacroExpander.macroFunctionArgumentName(parts.get(1)) : null;
-		String target = alias == null ? null : LispMacroExpander.macroFunctionArgumentName(parts.get(2));
-		if (alias == null || target == null) {
-			throw new LispEvalException("setf " + LispNames.MACRO_FUNCTION
-					+ " only supports aliasing a user macro -- (setf (macro-function 'new) (macro-function 'existing)): "
-					+ cons.print());
-		}
+	private LispVal aliasMacroFunction(String alias, String target) {
 		java.util.Map.Entry<String, UserMacro> macro = lookupUserMacro(target);
 		if (macro != null) {
 			putUserMacro(alias, macro.getValue());
@@ -12273,7 +12319,8 @@ public final class LispEvaluator {
 	 * for a call site outside every function and macro body
 	 */
 	private LispVal expandMacroCall(String name, UserMacro macro, LispCons form, @Nullable String sitePackage) {
-		List<LispVal> args = form.cdr() instanceof LispCons argCons ? argCons.toList() : List.of();
+		List<LispVal> args = macro.expander() != null ? List.of()
+				: form.cdr() instanceof LispCons argCons ? argCons.toList() : List.of();
 		if (args.size() < macro.required().size() || (macro.rest() == null && args.size() > macro.required().size())) {
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 					"Macro " + name + " expects " + (macro.rest() == null ? String.valueOf(macro.required().size())
@@ -12320,7 +12367,8 @@ public final class LispEvaluator {
 			this.packageResolver.setCurrentPackage(expansionPackage);
 		}
 		try {
-			LispVal expansion = LispNil.INSTANCE;
+			LispVal expansion = macro.expander() == null ? LispNil.INSTANCE
+					: applyGlobal(macro.expander(), List.of(form, LispNil.INSTANCE));
 			for (LispVal bodyExpr : macro.body()) {
 				expansion = eval(bodyExpr, macroEnv);
 			}

@@ -13802,7 +13802,9 @@ class WasmLispCompilerIntegrationTest {
 				(setf (macro-function 'sfmf-hi) (macro-function 'sfmf-greet))
 				(print (sfmf-hi 1))
 				(print (sfmf-greet 2))
-				""")))).isEqualTo("(:HELLO 1)\n(:HELLO 2)");
+				(setf (macro-function 'sfmf-fn) (lambda (form env) (declare (ignore env)) `(list :fn ,@(cdr form))))
+				(print (sfmf-fn 3))
+				""")))).isEqualTo("(:HELLO 1)\n(:HELLO 2)\n(:FN 3)");
 	}
 
 	@Test

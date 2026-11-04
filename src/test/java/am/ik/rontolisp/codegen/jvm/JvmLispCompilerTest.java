@@ -2850,6 +2850,8 @@ class JvmLispCompilerTest {
 				(setf (macro-function 'sfmf-hi) (macro-function 'sfmf-greet))
 				(print (sfmf-hi 1))
 				(print (sfmf-greet 2))
+				(setf (macro-function 'sfmf-fn) (lambda (form env) (declare (ignore env)) `(list :fn ,@(cdr form))))
+				(print (sfmf-fn 3))
 				"""));
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		byte[] classBytes = compiler.compile(program);
@@ -2863,7 +2865,7 @@ class JvmLispCompilerTest {
 			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
 			}
-			assertThat(baos.toString().trim()).isEqualTo("(:HELLO 1)\n(:HELLO 2)");
+			assertThat(baos.toString().trim()).isEqualTo("(:HELLO 1)\n(:HELLO 2)\n(:FN 3)");
 		}
 	}
 

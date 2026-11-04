@@ -22,10 +22,10 @@ Consumers:
 - McCLIM: `clim-lisp` is `(:use)` with explicit imports, and `clim-internals` reaches CL only through
   it. The load stops with `Undefined symbol: WHILE` and no position, so the form is not located.
   What McCLIM needs after this is unmeasured.
-- log4cl: its `log` package is `(:import-from :cl #:in-package)` with no `:use`. After walking past
-  `.todo/i03` the load stops with `Undefined symbol: SECOND` and no position. The only `second` in
-  the files that load is in `forward-macro` (`src/package.lisp:133`), so confirm this root cause
-  after the fix. log4cl stops sento.
+- vom, and sento with it: `vom` is `(:use)` with explicit imports. `(ql:quickload "sento")` stops with
+  `Undefined symbol: SECOND`, on the compile paths at `vom.lisp:93`, where
+  `(multiple-value-bind (second minute hour) ...)` binds it. Measured 2026-11-04 after `.todo/i03`;
+  log4cl itself, which that item first suspected, loads and logs on the interpreter.
 - `.todo/h79`'s `asdf` package has the same symptom with a different cause (its use list).
 
 The rejection exists to report a likely typo. Keep the message for the case that really is one,

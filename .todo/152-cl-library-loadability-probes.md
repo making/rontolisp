@@ -117,7 +117,9 @@ verification against the actual Quicklisp dist at probe time)
     then runs. plump then needed a symbol that was only read (h34, done): it matches SBCL on
     the interpreter, and on the JVM through the home packages' names (`plump:` re-exports
     by a run-time `do-external-symbols` loop, 386); both WASM backends trap in `parse` (h63).
-  - `log4cl` -- `makunbound` (h32), then bt `thread-name` / semaphores (h37).
+  - `log4cl` -- `makunbound` (h32), then bt `thread-name` / semaphores (h37), then its deprecated
+    forwarders' `(setf (macro-function ...) (lambda ...))` (i03). It loads and logs on the
+    interpreter.
   - `lparallel` -- bt condition variables (h37).
   - `serapeum`, `spinneret` -- metaclass / class-object specializers (h33).
   - `cl-interpol`, `cl-csv` -- named-readtables: `:common-lisp` feature (h31), then the

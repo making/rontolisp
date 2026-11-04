@@ -167,6 +167,41 @@ class UserMacroExpanderTest {
 	}
 
 	@Test
+	void setfMacroFunctionIsAMacroDefinitionWhereverATopLevelFormLeavesIt() {
+		// Consumed like a defmacro: bare, among the members of a progn a macro built
+		// (log4cl's forward-macro, what is left of it stays), and closing over a let. A
+		// program with no defmacro activates the pass for it, however deep it sits.
+		assertThat(expand("""
+				(defun twice-form (form) (list '* 2 (second form)))
+				(setf (macro-function 'fn-twice) (lambda (form env) (declare (ignore env)) (twice-form form)))
+				(print (fn-twice 1))
+				(let ((n 3))
+				  (setf (macro-function 'closed) (lambda (form env) (declare (ignore form env)) n)))
+				(print (closed))
+				""")).isEqualTo("(DEFUN TWICE-FORM (FORM) (LIST '* 2 (SECOND FORM)))\n(PRINT (* 2 1))\n(PRINT 3)");
+		assertThat(expand("""
+				(defmacro forward (name from)
+				  `(progn (print :kept)
+				          (setf (macro-function ',name) (lambda (&rest args) (apply (macro-function ',from) args)))))
+				(defmacro target (x) `(list :target ,x))
+				(forward fwd target)
+				(setf (macro-function 'fwd2) (macro-function 'fwd) pair 1)
+				(print (fwd2 1))
+				""")).isEqualTo("(PROGN (PRINT :KEPT))\n(PROGN (SETF PAIR 1))\n(PRINT (LIST :TARGET 1))");
+	}
+
+	@Test
+	void setfMacroFunctionTheCompilePathCannotCarryOutIsAnError() {
+		// A value form the macro-time evaluator cannot run is named, not skipped: every
+		// call site of the macro would otherwise compile to an undefined function.
+		assertThatThrownBy(() -> expand("(setf (macro-function 'broken) (no-such-function-here))"))
+			.hasMessageContaining("(SETF (MACRO-FUNCTION 'BROKEN) (NO-SUCH-FUNCTION-HERE))")
+			.hasMessageContaining("NO-SUCH-FUNCTION-HERE");
+		assertThatThrownBy(() -> expand("(setf (macro-function 'broken) 42)"))
+			.hasMessageContaining("(SETF (MACRO-FUNCTION 'BROKEN) 42)");
+	}
+
+	@Test
 	void macroArgumentErrorsSurfaceAtCompileTime() {
 		assertThatThrownBy(() -> expand("""
 				(defmacro m (a b) `(+ ,a ,b))

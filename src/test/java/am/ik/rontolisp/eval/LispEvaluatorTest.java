@@ -8551,14 +8551,58 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void setfMacroFunctionRejectsNonAliasShapes() {
-		// There is no runtime macro table on any backend, so only aliasing an existing
-		// macro is supported -- an arbitrary expander function is rejected, as is an
-		// alias of a name that is not a macro.
-		assertThatThrownBy(() -> eval("(setf (macro-function 'sfmf-x) (lambda (form env) form))"))
-			.hasMessageContaining("only supports aliasing a user macro");
+	void setfMacroFunctionInstallsAnExpanderFunction() {
+		// The value is the expander itself, called with the whole form and an
+		// environment, and macro-function answers that very object.
+		assertThat(evalMulti("""
+				(defvar *sfmf-f* (lambda (form env) (list 'list :whole (list 'quote form) env)))
+				(defun sfmf-install (name f) (setf (macro-function name) f))
+				(list (eq *sfmf-f* (setf (macro-function 'sfmf-exp) *sfmf-f*))
+				      (eq *sfmf-f* (macro-function 'sfmf-exp))
+				      (macroexpand-1 '(sfmf-exp 1))
+				      (sfmf-exp 1)
+				      (eq *sfmf-f* (sfmf-install 'sfmf-computed *sfmf-f*))
+				      (sfmf-computed))
+				""").print()).isEqualTo(
+				"(T T (LIST :WHOLE '(SFMF-EXP 1) NIL) (:WHOLE (SFMF-EXP 1) NIL) T (:WHOLE (SFMF-COMPUTED) NIL))");
+		// log4cl's deprecated forwarder, and a macro function taken before its name was
+		// redefined: it stays the old expander, so storing it back restores the macro
+		// (parachute's fixtures) instead of expanding through itself forever.
+		assertThat(evalMulti("""
+				(defmacro sfmf-target (x) `(list :old ,x))
+				(setf (macro-function 'sfmf-forward)
+				      (lambda (&rest args) (apply (macro-function 'sfmf-target) args)))
+				(defvar *sfmf-saved* (macro-function 'sfmf-target))
+				(defmacro sfmf-target (x) `(list :new ,x))
+				(let ((new (sfmf-target 1)))
+				  (setf (macro-function 'sfmf-target) *sfmf-saved*)
+				  (list new (sfmf-target 2) (macroexpand-1 '(sfmf-forward 3))))
+				""").print()).isEqualTo("((:NEW 1) (:OLD 2) (LIST :OLD 3))");
+		// Every pair of a setf runs in order, whichever place it writes.
+		assertThat(evalMulti("""
+				(defvar *sfmf-pair* nil)
+				(setf *sfmf-pair* 1
+				      (macro-function 'sfmf-p) (lambda (form env) (declare (ignore form env)) *sfmf-pair*)
+				      *sfmf-pair* 2)
+				(sfmf-p)
+				""").print()).isEqualTo("2");
+	}
+
+	@Test
+	void setfMacroFunctionRejectsWhatIsNotAnExpander() {
+		// A type-error for a value that is no function or a name that is no symbol, as
+		// in SBCL. An alias of a name that is not a macro says so.
+		assertThat(evalMulti("""
+				(list (handler-case (setf (macro-function 'sfmf-v) 42) (type-error () :type-error))
+				      (handler-case (setf (macro-function 'sfmf-v) 'car) (type-error () :type-error))
+				      (handler-case (setf (macro-function 'sfmf-v) nil) (type-error () :type-error))
+				      (handler-case (setf (macro-function 42) #'car) (type-error () :type-error))
+				      (macro-function 'sfmf-v))
+				""").print()).isEqualTo("(:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR NIL)");
 		assertThatThrownBy(() -> eval("(setf (macro-function 'sfmf-y) (macro-function 'sfmf-no-such))"))
 			.hasMessageContaining("is not a macro");
+		assertThatThrownBy(() -> eval("(setf (macro-function 'car) (lambda (form env) form))"))
+			.hasMessageContaining("cannot redefine the standard operator CAR");
 	}
 
 	@Test

@@ -812,8 +812,9 @@ in `LispMacroExpander` (both compile paths at once) — never per backend.
 
 **The interpreter answers `macro-function` natively; the compile paths answer a name test.**
 `LispEvaluator.registerEval` defines it over the macro table it holds, and the value is the REAL
-expander: a `LispFunction` that macroexpand-1's the form after re-heading it with the macro's
-own name (`macroCallForm`). A compiled program has no macro table, so `macro-function` answers
+expander: a `LispFunction` that runs the macro after re-heading the form with the macro's own
+name (`macroCallForm`), or the function a `(setf macro-function)` stored. A compiled program has
+no macro table, so `macro-function` answers
 `#'%macro-expander-stub`: non-nil, and a signal when CALLED. The program's own macro names
 cannot be in a static table, so `UserMacroExpander.emitMacroFunctionTable` APPENDS
 `(defun macro-function (symbol &optional environment) (%macro-fn symbol '(names...)))` when the
@@ -850,10 +851,9 @@ forever. Because those bodies read `macro-function`, a surviving `macroexpand`/`
 call also triggers `emitMacroFunctionTable` (`usesMacroIntrospection`).
 Mechanics: `.kb/gensym-macroexpand.md`.
 
-The one shape that must NOT be walked as a call is
-`(setf (macro-function 'new) (macro-function 'existing))` — a write to the macro table,
-recognized syntactically (`.kb/defmacro-backquote.md`); `expandAll`'s `SETF` case returns it
-verbatim.
+The one shape that must NOT be walked as a call is `(setf (macro-function name) function)` — a
+write to the macro table, recognized syntactically (`.kb/defmacro-backquote.md`); `expandAll`'s
+`SETF` case returns it verbatim.
 
 Tests: `LispEvaluatorTest#macroFunctionAndSpecialOperatorPPartitionTheOperators` (incl. the
 `while` leg) / `#macroFunctionIsTheRealExpanderOnTheInterpreter` (incl. the arity probes) /

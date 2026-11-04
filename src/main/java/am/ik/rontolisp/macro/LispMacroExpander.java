@@ -4454,17 +4454,16 @@ public final class LispMacroExpander {
 				}
 				case LispNames.MACRO_FUNCTION ->
 					// The macro namespace has no runtime table on any backend (macros are
-					// fully expanded before a backend sees them), so the alias must be
-					// registered in the macro EXPANDER -- which this shared,
-					// evaluator-free
-					// pass has no access to. Both consumers therefore intercept the form
-					// before it gets here (LispEvaluator.evalCons for the interpreter,
-					// UserMacroExpander.expand for the compile paths); reaching this
-					// point
-					// means the shape is not an alias of a user macro.
+					// fully expanded before a backend sees them), so the write must reach
+					// the macro EXPANDER -- which this shared, evaluator-free pass has no
+					// access to. Both consumers therefore intercept the form before it
+					// gets here (LispEvaluator.evalCons for the interpreter,
+					// UserMacroExpander for the compile paths, which consumes it where a
+					// top-level form leaves it); reaching this point means a compiled
+					// program would have to run the write.
 					throw new UnsupportedOperationException("setf " + LispNames.MACRO_FUNCTION
-							+ " only supports aliasing a user macro -- (setf (macro-function 'new) (macro-function "
-							+ "'existing)): " + cons.print());
+							+ " must be a top-level form in a compiled program, which has no macro table at run time: "
+							+ cons.print());
 				default ->
 
 				{
@@ -31367,6 +31366,23 @@ public final class LispMacroExpander {
 			return parts.size() >= 2 ? quotedSymbolName(parts.get(1)) : null;
 		}
 		return null;
+	}
+
+	/**
+	 * A setf of several pairs as the {@code progn} of its one-pair setfs, in order.
+	 * @param cons the setf form
+	 * @return the progn
+	 */
+	public static LispVal splitSetfPairs(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() % 2 == 0) {
+			throw new IllegalArgumentException("setf: odd number of arguments: " + cons.print());
+		}
+		List<LispVal> forms = new java.util.ArrayList<>();
+		for (int i = 1; i < parts.size(); i += 2) {
+			forms.add(listToCons(List.of(parts.get(0), parts.get(i), parts.get(i + 1))));
+		}
+		return makeProgn(forms);
 	}
 
 	private static boolean isSetfFindClassForm(LispVal form) {

@@ -78,7 +78,7 @@ public final class UserMacroExpander {
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_MODIFY_MACRO))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_SETF_EXPANDER))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFSETF))
-				&& program.stream().noneMatch(LispMacroExpander::isSetfMacroFunctionForm)
+				&& program.stream().noneMatch(UserMacroExpander::writesMacroFunction)
 				&& program.stream().noneMatch(UserMacroExpander::usesMacroexpand)
 				&& program.stream().noneMatch(UserMacroExpander::usesMacrolet)
 				&& program.stream().noneMatch(UserMacroExpander::usesDefineSymbolMacro)
@@ -268,15 +268,6 @@ public final class UserMacroExpander {
 				if (ownSymbol != null) {
 					this.result.add(ownSymbol);
 				}
-				return;
-			}
-			if (LispMacroExpander.isSetfMacroFunctionForm(resolved)) {
-				// (setf (macro-function 'new) (macro-function 'existing)): a macro ALIAS
-				// is a fact about the macro table, and this evaluator holds the only
-				// macro
-				// table the compile paths have. Register it and drop the form, exactly
-				// like the defmacro it aliases -- the backends never see either.
-				macroEval.evalResolved(resolved);
 				return;
 			}
 			if (isOperator(resolved, LispNames.DEFINE_COMPILER_MACRO)) {
@@ -1594,10 +1585,11 @@ public final class UserMacroExpander {
 	}
 
 	/**
-	 * Consumes every {@code defmacro} a macro EXPANSION produced -- bare, or nested in
-	 * the {@code progn}/{@code eval-when} the macro wrapped around it -- into the
-	 * macro-time evaluator, and removes it from the form; null when nothing is left to
-	 * emit.
+	 * Consumes every macro definition of a top-level form -- a {@code defmacro} a macro
+	 * EXPANSION produced or a {@code (setf (macro-function ...) ...)}, bare or nested in
+	 * the {@code progn}/{@code eval-when} a macro wrapped around it -- into the
+	 * macro-time evaluator, the only macro table the compile paths have, and removes it
+	 * from the form; null when nothing is left to emit.
 	 *
 	 * <p>
 	 * A {@code progn} at top level processes its members as top-level forms (CLHS
@@ -1622,6 +1614,13 @@ public final class UserMacroExpander {
 			macroEval.evalResolved(cons);
 			return null;
 		}
+		if (LispMacroExpander.isSetfMacroFunctionForm(cons)) {
+			if (cons.toList().size() > 3) {
+				return stripDefmacroDefinitions(LispMacroExpander.splitSetfPairs(cons), macroEval);
+			}
+			replayMacroDefinitions(cons, macroEval);
+			return null;
+		}
 		// A top-level (let/let* (...) (defmacro ...)) defines a macro CLOSED OVER the
 		// bindings -- anaphora's (with-unique-names (s-indicator current-s-indicator)
 		// (defmacro symbolic ...)), the shape every let-plus and array-operations form
@@ -1635,15 +1634,15 @@ public final class UserMacroExpander {
 		if (LispNames.LET.equals(name) || LispNames.LET_STAR.equals(name) || LispNames.FLET.equals(name)
 				|| LispNames.LABELS.equals(name)) {
 			List<LispVal> letParts = cons.toList();
-			if (letParts.size() < 3 || !isOperator(letParts.get(2), LispNames.DEFMACRO)) {
+			if (letParts.size() < 3 || !isMacroDefinition(letParts.get(2))) {
 				return form;
 			}
 			for (int i = 3; i < letParts.size(); i++) {
-				if (!isOperator(letParts.get(i), LispNames.DEFMACRO) && !isOperator(letParts.get(i), LispNames.QUOTE)) {
+				if (!isMacroDefinition(letParts.get(i)) && !isOperator(letParts.get(i), LispNames.QUOTE)) {
 					return form;
 				}
 			}
-			macroEval.evalResolved(cons);
+			replayMacroDefinitions(cons, macroEval);
 			return null;
 		}
 		if (!LispNames.PROGN.equals(name) && !LispNames.EVAL_WHEN.equals(name)) {
@@ -1665,6 +1664,26 @@ public final class UserMacroExpander {
 			return form;
 		}
 		return kept.size() > firstMember ? properList(kept) : null;
+	}
+
+	private static boolean isMacroDefinition(LispVal form) {
+		return isOperator(form, LispNames.DEFMACRO)
+				|| (LispMacroExpander.isSetfMacroFunctionForm(form) && ((LispCons) form).toList().size() == 3);
+	}
+
+	/**
+	 * Replays a form that defines macros into the macro-time evaluator. A failure fails
+	 * the compile, naming the form: unlike the replay of a registry-building call, which
+	 * is skipped with a warning, the form is dropped and no run of the program can make
+	 * up for it, so every call site of its macro would compile to an undefined function.
+	 */
+	private static void replayMacroDefinitions(LispCons form, LispEvaluator macroEval) {
+		try {
+			macroEval.evalResolved(form);
+		}
+		catch (LispEvalException ex) {
+			throw new LispEvalException("cannot evaluate at compile time: " + form.print() + ": " + ex.getMessage());
+		}
 	}
 
 	/**
@@ -1771,6 +1790,18 @@ public final class UserMacroExpander {
 				}
 			}
 		}
+	}
+
+	// A (setf (macro-function ...) ...) anywhere: what closes over one at top level is
+	// consumed by this pass, and the compilers refuse the rest.
+	private static boolean writesMacroFunction(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (LispMacroExpander.isSetfMacroFunctionForm(cons) || writesMacroFunction(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
 	}
 
 	private static boolean usesMacrolet(LispVal form) {
@@ -2153,11 +2184,12 @@ public final class UserMacroExpander {
 				}
 				case LispNames.SETF: {
 					if (LispMacroExpander.isSetfMacroFunctionForm(cons)) {
-						// A macro ALIAS is a fact about the macro table, not an
-						// expression: leave it verbatim so the top-level interception
-						// above -- and the error every other shape gets -- still see the
-						// shape they key on.
-						return cons;
+						// A write to the macro table is a macro definition, not an
+						// expression: leave it verbatim for stripDefmacroDefinitions --
+						// and the error it gets where a top-level form does not leave it
+						// -- and for the macro-time evaluator, which expands its value
+						// as it runs. The other pairs of a setf are expressions.
+						return parts.size() > 3 ? expandAll(LispMacroExpander.splitSetfPairs(cons), macroEval) : cons;
 					}
 					if (hasUserSetfPlace(cons, macroEval)) {
 						// The place's accessor may ALSO carry a compiler macro, and
