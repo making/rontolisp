@@ -6544,21 +6544,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				: stringTable.appendReaderOwnedBlobUnaligned(funNameRows.toByteArray());
 		// _funcref: the canonical function-value box of a funcId, shared by every
 		// static (function name) site and every computed resolution of one
-		// definition. The ladder covers every funcId the registry can answer plus
-		// every static box Pass 2 already took; a static box's global is reused, so
-		// all three paths -- static, computed, eval -- answer the SAME object.
-		// Globals for covered ids without one are allocated here, ascending, before
-		// the global section is emitted. Bodies are all compiled by now, so the
-		// cover is complete, including for names a macro synthesized in Pass 2.
+		// definition, so all three paths -- static, computed, eval -- answer the SAME
+		// object. Its table covers every defun, the funcIds the registry and a
+		// static site can name; its global is allocated here, before the global
+		// section is emitted.
 		final byte[] funcrefBody;
 		if (this.emitsFuncref) {
-			java.util.TreeSet<Integer> coveredIds = new java.util.TreeSet<>(registryFuncIds);
-			coveredIds.addAll(quoteGlobals.boxedFuncIds());
-			Map<Integer, Integer> boxGlobals = new HashMap<>();
-			for (int id : coveredIds) {
-				boxGlobals.put(id, quoteGlobals.indexFor(quoteGlobals.funcBoxTokenFor(id)));
-			}
-			funcrefBody = WasmEvalRuntimeBuilder.buildFuncrefBody(new java.util.ArrayList<>(coveredIds), boxGlobals,
+			funcrefBody = WasmEvalRuntimeBuilder.buildFuncrefBody(defuns.size(), quoteGlobals.funcBoxTableIndex(),
 					this.usesIdentityHashTables);
 		}
 		else {
@@ -8520,13 +8512,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				// One (mut (ref null eq)) = null per quoted aggregate datum
 				// (.kb/quoted-data.md), filled lazily by its quote site's first
 				// evaluation (WasmQuoteCompiler.compile) -- and per canonical
-				// function-value box, filled lazily by its first (function name)
-				// site (WasmQuoteCompiler.compileSharedFunctionBox) or its first
-				// _funcref call, keyed by a
-				// token no quoted datum can be. Discovered during body
-				// compilation -- the _funcref ladder's share of them just after,
-				// before this section is written -- hence appended after every
-				// fixed-index global.
+				// function-value box of a module without _funcref, filled lazily by
+				// its first (function name) site
+				// (WasmQuoteCompiler.compileSharedFunctionBox), or the one box table
+				// of a module with it, each keyed by a token no quoted datum can be.
+				// Discovered during body compilation -- the table just after, before
+				// this section is written -- hence appended after every fixed-index
+				// global.
 				for (int i = 0; i < quoteGlobals.count(); i++) {
 					gs.add(g -> {
 						g.writeRefType(true, Type.EQ.code());
@@ -9392,8 +9384,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		List<am.ik.wasm.WasmTreeShaker.HostCellHook> hostCellHooks = List.of(
 				new am.ik.wasm.WasmTreeShaker.HostCellHook(HostGlueEmitter.SEED_RANDOM_EXPORT, RANDOM_STATE_ADDR),
 				new am.ik.wasm.WasmTreeShaker.HostCellHook(HostGlueEmitter.SET_TIME_EXPORT, HOST_TIME_ADDR));
-		@Nullable Map<Integer, String> funcSizeNames = debugFuncSizes()
-				? funcSizeNames(functions, lambdaDecls, dispatchPageFuncBase, dispatchPageBodies.size()) : null;
+		@Nullable Map<Integer, String> funcSizeNames = debugFuncSizes() ? funcSizeNames(functions, lambdaDecls,
+				dispatchPageFuncBase, dispatchPageBodies.size(), symfuncrefFuncIndex()) : null;
 		if (this.component) {
 			if (this.optimize.eliminatesDeadCode()) {
 				coreModule = shakeCore(coreModule, caseFoldSegments, stringRanges, hostCellHooks, funcSizeNames,
@@ -9634,8 +9626,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * chunk by its Lisp-derived name.
 	 */
 	private static Map<Integer, String> funcSizeNames(Map<String, WasmFunctionInfo> functions,
-			List<LambdaInfo> lambdaDecls, int dispatchPageFuncBase, int dispatchPageCount) {
+			List<LambdaInfo> lambdaDecls, int dispatchPageFuncBase, int dispatchPageCount, int funcrefFuncIndex) {
 		Map<Integer, String> names = new HashMap<>();
+		if (funcrefFuncIndex >= 0) {
+			names.put(funcrefFuncIndex, "_funcref");
+		}
 		for (java.lang.reflect.Field f : WasmLispCompiler.class.getDeclaredFields()) {
 			if (java.lang.reflect.Modifier.isStatic(f.getModifiers()) && f.getType() == int.class
 					&& f.getName().startsWith("FUNC_")) {
@@ -11202,6 +11197,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// so the box allocator below keys the same table the quoted data uses.
 		private final java.util.HashMap<Integer, LispVal> funcBoxTokens = new java.util.HashMap<>();
 
+		private final LispVal funcBoxTableToken = new am.ik.rontolisp.LispSymbol("#<function-box-table>");
+
 		QuoteGlobals(int base) {
 			this.base = base;
 		}
@@ -11240,13 +11237,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 
 		/**
-		 * The funcIds a static {@code (function name)} site already took a canonical box
-		 * for during body compilation: every token in the table above. A snapshot, in no
-		 * particular order.
-		 * @return the funcIds with a shared box global
+		 * The module global holding {@code _funcref}'s table of canonical function-value
+		 * boxes, allocating the next index on first sight.
+		 * @return the global index
 		 */
-		java.util.Set<Integer> boxedFuncIds() {
-			return new java.util.HashSet<>(this.funcBoxTokens.keySet());
+		int funcBoxTableIndex() {
+			return indexFor(this.funcBoxTableToken);
 		}
 
 		/**
