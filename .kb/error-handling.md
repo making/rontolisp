@@ -1039,6 +1039,35 @@ is a separate surface scan.**
 - **ci-spec `restart-system` puts the whole concatenated program into restart mode**, so a hook
   regression shows up as an unrelated case failing.
 
+### SIGINT
+`rontolisp:interactive-interrupt` (`ClosRegistry.ensureInteractiveInterruptSeeded`: a
+`serious-condition`, no `error`, as SBCL's `sb-sys:interactive-interrupt`; the interpreter seeds it
+always, a compile path where the program names it). No condition existed before it:
+`LispInterruptSignal` (nREPL, SWANK) is deliberately none.
+
+**Interpreter**: `cli/InterruptSignal` (the CLI's `interpret` only: not the REPL, the servers or an
+embedder) registers `sun.misc.Signal` when a `handler-case` / `handler-bind` clause first names the
+condition (`LispEvaluator.noteInterruptHandler`, clause heads only). `signalInterrupt` then rides
+`LispEvaluator.interrupt`'s poll: `stopIfInterrupted` runs `(signal 'rontolisp:interactive-interrupt)`
+on the thread that established that first handler, and past a declining handler throws
+`LispExitSignal(130)`, so no cleanups, as SBCL's unhandled one under `--disable-debugger`.
+- **Why opt-in, not always on** (SBCL's `serious-condition` clause also catches it): a request is
+  only taken at a poll, and `read-line` on stdin or `accept` never polls. Always-on would make the
+  first Ctrl-C of every blocked program do nothing, and it would move a server's Ctrl-C from the
+  shutdown hook to the interrupted join.
+- `Thread.interrupt` wakes `sleep` and `condition-wait` (`resumeAfterInterrupt`, also what keeps
+  their `was interrupted` error from reaching a clause for `error` first). `join-thread`'s
+  `CompletableFuture.join` does not wake. A SIGINT finding the last one still pending, or the target
+  dead, is `System.exit(130)`: the host's ending.
+- A process started with SIGINT ignored stays ignoring: HotSpot's `JVM_RegisterSignal` refuses, as
+  `nohup` asks. A non-interactive shell's `&` does that, so `InterruptSignalTest` assumes it away;
+  `-Xrs` throws `IllegalArgumentException`, taken as the host keeping it.
+
+**Compile paths**: the class exists and a program can signal it, SIGINT never does: measured
+2026-11-04, a sleeping program's `handler-case` does not run; JVM exits 130 (its shutdown hooks
+run), wasmtime dies of the signal. The interpreter and SBCL print the handler's output and exit 0.
+The JVM has no poll in compiled code and `Thread.stop` is gone; WASM has no signals.
+
 ### `signal` declines a handler-case no clause matches -- on every backend
 **Invariant: CLHS 9.1.4.1 -- `signal` transfers control only to a handler that will handle the
 condition. A `handler-case` whose clause types do not match is not applicable: the signal passes it

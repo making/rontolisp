@@ -305,6 +305,15 @@ public final class LispEvaluator {
 	 */
 	private final Set<Thread> interruptedThreads = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+	/** The threads among {@link #interruptedThreads} to signal rather than stop. */
+	private final Set<Thread> signalledInterrupts = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+	/** The process status SIGINT ends a process with: 128 + its number. */
+	private static final int SIGINT_STATUS = 130;
+
+	/** See {@link #onInterruptHandler}; null once told or where nothing listens. */
+	private volatile @Nullable Runnable interruptHandlerListener;
+
 	/**
 	 * Whether a debugger can be installed on a thread ({@link #enableDebugging}): every
 	 * function call keeps a frame on its thread's stack, and an error is offered to the
@@ -1534,6 +1543,7 @@ public final class LispEvaluator {
 		this.globalEnv.setTemplateDepthQuery(() -> this.readerMacroTemplateDepth);
 		// a sleep an interrupt woke asks whether a debugger went on with the evaluation
 		this.globalEnv.setInterruptResumed(this::resumeAfterInterrupt);
+		this.closRegistry.ensureInteractiveInterruptSeeded();
 		this.globalEnv.defineFunction(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
 			if (args.size() != 1) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
@@ -3534,6 +3544,9 @@ public final class LispEvaluator {
 				return value;
 			}
 			catch (InterruptedException ex) {
+				if (resumeAfterInterrupt()) {
+					return thread.result().join();
+				}
 				Thread.currentThread().interrupt();
 				throw new LispEvalException(LispNames.JOIN_THREAD + ": interrupted while joining the thread");
 			}
@@ -6892,6 +6905,59 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Asks the evaluation running on a thread to signal
+	 * {@code rontolisp:interactive-interrupt} at its next function call or loop step, as
+	 * SBCL signals SIGINT. Past a handler that declines, the process ends with SIGINT's
+	 * status. The thread is interrupted too, so a sleep or a wait wakes.
+	 * @param thread the thread
+	 * @return false when an earlier request has not been reached yet: the thread is
+	 * blocked in a call that does not wake
+	 */
+	public boolean signalInterrupt(Thread thread) {
+		this.signalledInterrupts.add(thread);
+		if (!this.interruptedThreads.add(thread)) {
+			return false;
+		}
+		this.pendingInterrupts.incrementAndGet();
+		thread.interrupt();
+		return true;
+	}
+
+	/**
+	 * Runs a listener the first time a {@code handler-case} or {@code handler-bind}
+	 * clause names {@code rontolisp:interactive-interrupt}: what asks SIGINT to be
+	 * signalled, on the thread establishing the handler. A program without one keeps the
+	 * host's own SIGINT, which ends the process wherever it is blocked.
+	 * @param listener the listener
+	 */
+	public void onInterruptHandler(Runnable listener) {
+		this.interruptHandlerListener = listener;
+	}
+
+	/** Tells the listener when one of the clauses names the interrupt condition. */
+	private void noteInterruptHandler(LispVal clauses) {
+		Runnable listener = this.interruptHandlerListener;
+		if (listener == null) {
+			return;
+		}
+		for (LispVal rest = clauses; rest instanceof LispCons cell; rest = cell.cdr()) {
+			if (cell.car() instanceof LispCons clause && namesInterruptCondition(clause.car())) {
+				this.interruptHandlerListener = null;
+				listener.run();
+				return;
+			}
+		}
+	}
+
+	/** Whether a clause's type specifier, an {@code (or ...)} included, names it. */
+	private static boolean namesInterruptCondition(LispVal type) {
+		if (type instanceof LispCons cell) {
+			return namesInterruptCondition(cell.car()) || namesInterruptCondition(cell.cdr());
+		}
+		return type instanceof LispSymbol symbol && LispNames.INTERACTIVE_INTERRUPT_QUALIFIED.equals(symbol.name());
+	}
+
+	/**
 	 * Drops an interrupt still pending for the calling thread -- one that came after its
 	 * evaluation took its last step -- and the thread's interrupt status with it.
 	 */
@@ -6968,6 +7034,13 @@ public final class LispEvaluator {
 		this.pendingInterrupts.decrementAndGet();
 		// the status only woke a blocked call: the cleanups on the way out may block
 		Thread.interrupted();
+		if (this.signalledInterrupts.remove(Thread.currentThread())) {
+			eval(new LispCons(new LispSymbol(LispNames.SIGNAL), new LispCons(
+					new LispCons(new LispSymbol(LispNames.QUOTE),
+							new LispCons(new LispSymbol(LispNames.INTERACTIVE_INTERRUPT_QUALIFIED), LispNil.INSTANCE)),
+					LispNil.INSTANCE)), this.globalEnv);
+			throw new LispExitSignal(SIGINT_STATUS);
+		}
 		Debugger debugger = this.debugging ? this.debuggers.get() : null;
 		if (debugger != null) {
 			int[] levels = this.debuggerLevels.get();
@@ -7054,8 +7127,9 @@ public final class LispEvaluator {
 	 * @return whether the call goes on
 	 */
 	private boolean resumeAfterInterrupt() {
-		if (!this.debugging || this.debuggers.get() == null
-				|| !this.interruptedThreads.contains(Thread.currentThread())) {
+		Thread thread = Thread.currentThread();
+		if (!this.interruptedThreads.contains(thread)
+				|| (!this.signalledInterrupts.contains(thread) && (!this.debugging || this.debuggers.get() == null))) {
 			return false;
 		}
 		stopIfInterrupted();
@@ -9276,12 +9350,18 @@ public final class LispEvaluator {
 								case LispNames.HANDLER_CASE:
 									ensureWitLoadedForConditionClass(cons);
 									ensureConditionReportRuntimeLoaded();
+									if (cons.cdr() instanceof LispCons protectedForm) {
+										noteInterruptHandler(protectedForm.cdr());
+									}
 									result = evalHandlerCase(cons, env);
 									break frame;
 								case LispNames.HANDLER_BIND:
 									ensureWitLoadedForConditionClass(cons);
 									ensureConditionReportRuntimeLoaded();
 									ensureRestartRuntimeLoaded();
+									if (cons.cdr() instanceof LispCons bindings) {
+										noteInterruptHandler(bindings.car());
+									}
 									next = LispMacroExpander.expandHandlerBind(cons, this.closRegistry);
 									break dispatch;
 								case LispNames.IGNORE_ERRORS:

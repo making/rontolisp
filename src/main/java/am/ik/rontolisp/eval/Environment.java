@@ -2855,6 +2855,11 @@ public final class Environment implements Scope {
 				throw new LispEvalException(String.valueOf(ex.getMessage()));
 			}
 			catch (InterruptedException ex) {
+				BooleanSupplier resumed = env.interruptResumed;
+				if (resumed != null && resumed.getAsBoolean()) {
+					// a spurious wakeup, which condition-wait's callers loop over
+					return LispNil.INSTANCE;
+				}
 				Thread.currentThread().interrupt();
 				throw new LispEvalException("CONDITION-WAIT: interrupted while waiting");
 			}

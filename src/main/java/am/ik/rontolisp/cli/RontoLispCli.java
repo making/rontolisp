@@ -1017,6 +1017,7 @@ public final class RontoLispCli {
 		SourceLanguage language = SourceLanguage.forFile(entryFile, sourceLanguage);
 		evaluator.setSourceStandards(standards);
 		serveSwankFromPrograms(evaluator);
+		InterruptSignal.listenFor(evaluator);
 		// a whole Clojure program: its library without the arms it can never take, or,
 		// where it lowers as it runs, every arm and its lowering kept for the run
 		// A Common Lisp program is read form at a time as it runs (evalSource), so a form

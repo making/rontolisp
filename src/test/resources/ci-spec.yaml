@@ -16161,6 +16161,20 @@ cases:
   # the same from a user package -- which is also what makes a RUNTIME type
   # specifier naming one match, since the runtime test compares the registry's
   # plain class name by spelling. A built-in error carries its class too.
+  - name: interactive-interrupt-condition
+    source: |
+      (print (list (subtypep 'rontolisp:interactive-interrupt 'serious-condition)
+                   (subtypep 'rontolisp:interactive-interrupt 'error)
+                   (handler-case (signal 'rontolisp:interactive-interrupt)
+                     (rontolisp:interactive-interrupt () :caught))
+                   (handler-case (error 'rontolisp:interactive-interrupt)
+                     (error () :an-error)
+                     (serious-condition () :serious))
+                   (type-of (make-condition 'rontolisp:interactive-interrupt))
+                   (eq (class-name (find-class 'rontolisp:interactive-interrupt))
+                       'rontolisp:interactive-interrupt)))
+    expected: |
+      (T NIL :CAUGHT :SERIOUS RONTOLISP:INTERACTIVE-INTERRUPT T)
   - name: condition-types
     source: |
       (defpackage :ci-cond (:use :cl) (:export :ci-cond-run))

@@ -73,7 +73,12 @@ public final class AsdOverrides {
 			// version-satisfies. The replacement declares the same components with
 			// rontolisp's cffi-sys backend as the implementation one, so upstream's
 			// portable source loads unmodified (.kb/cffi.md).
-			Map.entry("cffi.asd", "cffi-rontolisp.asd"));
+			Map.entry("cffi.asd", "cffi-rontolisp.asd"),
+			// Guards its whole defsystem with an implementation list, so here the file
+			// defines nothing. The replacement is cffi's own uffi-compat/uffi.asd: the
+			// same system name over cffi-uffi-compat, whose package has the nickname
+			// uffi.
+			Map.entry("uffi.asd", "uffi-cffi.asd"));
 
 	private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
 

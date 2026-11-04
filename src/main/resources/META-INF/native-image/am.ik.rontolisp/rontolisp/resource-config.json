@@ -623,6 +623,12 @@
         "condition": {
           "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
         },
+        "pattern": "am/ik/rontolisp/eval/uffi-cffi\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
         "pattern": "am/ik/rontolisp/eval/cl-postgres-deps\\.asd"
       },
       {

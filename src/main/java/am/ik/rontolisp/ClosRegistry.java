@@ -717,6 +717,19 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * Seeds {@code rontolisp:interactive-interrupt}, the condition a program's own
+	 * handler of it asks SIGINT to be signalled as: a {@code serious-condition} and no
+	 * {@code error}, as SBCL's {@code sb-sys:interactive-interrupt}. Idempotent, and like
+	 * {@link #ensureJavaExceptionSeeded} not run from the constructor: the interpreter
+	 * seeds it for every program, the compile path for a program naming it.
+	 */
+	public void ensureInteractiveInterruptSeeded() {
+		if (!this.classes.containsKey(normalize(LispNames.INTERACTIVE_INTERRUPT_QUALIFIED))) {
+			seedClass(LispNames.INTERACTIVE_INTERRUPT_QUALIFIED, "SERIOUS-CONDITION");
+		}
+	}
+
+	/**
 	 * The condition class {@link #ensureJavaExceptionSeeded} registers, as the registry
 	 * spells {@code java:java-exception}.
 	 */

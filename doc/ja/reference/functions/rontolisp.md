@@ -99,3 +99,18 @@
 [wit-provide](rontolisp-wit-provide.md) のリファレンスページ、および
 [WebAssemblyへのコンパイル](../../compiling/wasm.md) ガイドを参照してください。
 
+`rontolisp:interactive-interrupt` は、インタプリタで Ctrl-C (SIGINT) がシグナルされるときのコンディションです。SBCL の
+`sb-sys:interactive-interrupt` と同じく `serious-condition` であり、`error` ではありません。
+
+```lisp
+(handler-case (signal 'rontolisp:interactive-interrupt)
+  (rontolisp:interactive-interrupt () :interrupted)) ; => :INTERRUPTED
+```
+
+シグナルは、`handler-case` か `handler-bind` の節がこのコンディションを名指ししたときに始まります。名指しする節がない
+プログラムは、`serious-condition` を処理するだけのものも含めて、SIGINT でステータス 130 で終了します。シグナルは、最初の
+そのようなハンドラを確立したスレッドの、次の関数呼び出しかループのステップで届きます。`sleep` と `condition-wait` は
+起こされます。標準入力に対する `read-line` のように起こされない呼び出しの間は保留され、2 回目の SIGINT でプロセスが
+終了します。すべてのハンドラが辞退すると、`unwind-protect` のクリーンアップを実行せずステータス 130 で終了します。
+コンパイル済みプログラムでは SIGINT は常にプロセスを終了させ、ハンドラは実行されません。
+

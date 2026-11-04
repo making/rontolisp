@@ -29483,6 +29483,10 @@ public final class LispMacroExpander {
 		if (program.stream().anyMatch(f -> usesAnySymbol(f, JAVA_EXCEPTION_NAMES))) {
 			closRegistry.ensureJavaExceptionSeeded();
 		}
+		// rontolisp:interactive-interrupt likewise, only where the program names it.
+		if (program.stream().anyMatch(f -> usesAnySymbol(f, INTERACTIVE_INTERRUPT_NAMES))) {
+			closRegistry.ensureInteractiveInterruptSeeded();
+		}
 		// The funcallable MOP classes likewise, wherever the program names one (a
 		// funcallable-standard-class :metaclass, a superclass, a type test).
 		if (program.stream().anyMatch(f -> usesAnySymbol(f, FUNCALLABLE_CLASS_SPELLINGS))) {
@@ -51736,6 +51740,10 @@ public final class LispMacroExpander {
 	 */
 	private static final java.util.Set<String> JAVA_EXCEPTION_NAMES = java.util.Set
 		.of(LispNames.JAVA_EXCEPTION_QUALIFIED, LispNames.JAVA_EXCEPTION_CAUSE_QUALIFIED);
+
+	/** The name whose presence registers {@code rontolisp:interactive-interrupt}. */
+	private static final java.util.Set<String> INTERACTIVE_INTERRUPT_NAMES = java.util.Set
+		.of(LispNames.INTERACTIVE_INTERRUPT_QUALIFIED);
 
 	/**
 	 * Every spelling of the two funcallable MOP class names: closer-mop's, in both colon
