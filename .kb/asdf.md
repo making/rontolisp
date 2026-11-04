@@ -329,9 +329,10 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
   by then, spelled `cl-user::`/`cl:`), one literal `make-instance` per class a SPLICED system names, so
   `%mop-make-instance`'s computed-class gate stays off and the program's size is one fallback arm
   per seam otherwise. A record of a system not spliced falls back to a plain `system`, whatever its
-  class. A system is `reinitialize-instance`d after it is made, as `parse-defsystem` does (where
-  hu.dwim.system fills its slots). `%asdf-set-metadata` no longer overwrites what the class's initargs
-  set when the definition says nothing (`:license` from its `shared-initialize :around`).
+  class. A system is registered, then `reinitialize-instance`d (`%asdf-reinitialize-system`), as
+  `parse-defsystem` does: hu.dwim.asdf's `:after` methods fill `package-name` and `test-system-name`
+  there, and `system-with-target`'s calls `find-system`. `%asdf-set-metadata` no longer overwrites what
+  the class's initargs set when the definition says nothing (`:license` from its `shared-initialize :around`).
 - **A class the `.asd` itself defines**: only the image has it, and its methods are ignored, so the
   instance is of its nearest superclass outside the file (`programClass`, `noteEvaluated`).
   `(defclass ironclad-system (system))` with `:class ironclad-system` reads, and is a plain `system`.
@@ -360,12 +361,13 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
 - **Measured** (2026-11-04, `(asdf:test-system NAME)`, interpreter against SBCL 2.2.9; same summary line
   on JVM and component where checked): `prove-test` 22 tests, identical on all four but for how a
   `simple-error` prints; `proc-parse-test` 17, `xsubseq-test` 6 (all four), `myway-test` 15, `ningle-test`
-  11, `cl-slug-test` 6, `smart-buffer-test` 2, each `All N files passed`. `quri-test` fails 2 of 6 on
-  `with-standard-io-syntax` not binding `*print-base*` (`.todo`). `fast-http-test` and `http-body-test`
-  stop on a macro expanded lazily under the caller's `*package*` (`.todo`); SBCL lacks their dependencies
-  here. `lass-file` with `:output`: the CSS SBCL writes, all four. `hu.dwim.def`: loads on the interpreter
-  and the JVM, its class, `package-name` and license as on SBCL (`component-children` flat, `.todo/i23`).
-  coalton stops before any of this, as "Options around the compile" records.
+  11, `cl-slug-test` 6, `smart-buffer-test` 2, each `All N files passed`; `http-body-test` `All 4 files
+  passed` (interpreter; SBCL lacks its dependencies here). `quri-test` fails 2 of 6 on
+  `with-standard-io-syntax` not binding `*print-base*` (`.todo/i32`). `fast-http-test` stops on a `flet`
+  name reaching a call head through a macro (`.todo/i33`). `lass-file` with `:output`: the CSS SBCL writes,
+  all four. `hu.dwim.def`: loads on all four, its class, `package-name` and license as on SBCL
+  (`component-children` flat, `.todo/i23`). coalton stops before any of this, as "Options around the
+  compile" records.
 - **Refusal**: a name no image holds is `unsupported component type` / `unsupported :class`, naming it;
   an inline `defsystem` on a compile path cannot see a class the program's own `defclass` defines (the
   program has not run).
