@@ -6922,6 +6922,20 @@ public final class LispMacroExpander {
 	 * @return the lowered form
 	 */
 	public static LispVal expandReadFromStringFailure(LispCons cons, boolean typed) {
+		return expandReadFromStringFailure(cons, typed, name -> false);
+	}
+
+	/**
+	 * As {@link #expandReadFromStringFailure(LispCons, boolean)}, the datum read through
+	 * the current package's nicknames in a program that has them
+	 * ({@link #injectLocalNicknames}): every run-time read comes here.
+	 * @param cons the one-argument read-from-string call
+	 * @param typed whether the signal may carry an instance
+	 * @param definedFunction whether the program defines the named function
+	 * @return the lowered form
+	 */
+	public static LispVal expandReadFromStringFailure(LispCons cons, boolean typed,
+			java.util.function.Predicate<String> definedFunction) {
 		LispVal text = cons.cdr() instanceof LispCons rest ? rest.car() : LispNil.INSTANCE;
 		LispSymbol failure = new LispSymbol(RFS_FAILURE_VAR);
 		LispVal endOfFile = typed ? endOfFileSignal()
@@ -6936,8 +6950,11 @@ public final class LispMacroExpander {
 								readerError(ReadFailure.UNMATCHED_CLOSE_MESSAGE, typed)))));
 		LispVal inner = makeLet(RFS_FAILURE_VAR, listToCons(List.of(new LispSymbol(LispNames.READ_FAILURE_INTERNAL))),
 				dispatch);
-		return SourceProvenance.inherit(cons,
-				makeLet(RFS_VALUE_VAR, callOf(LispNames.READ_FROM_STRING_RAW_INTERNAL, text), inner));
+		LispVal read = callOf(LispNames.READ_FROM_STRING_RAW_INTERNAL, text);
+		if (definedFunction.test(LispNames.READ_THROUGH_LOCAL_NICKNAMES_INTERNAL)) {
+			read = callOf(LispNames.READ_THROUGH_LOCAL_NICKNAMES_INTERNAL, read);
+		}
+		return SourceProvenance.inherit(cons, makeLet(RFS_VALUE_VAR, read, inner));
 	}
 
 	/** The {@code reader-error} arm of {@link #expandReadFromStringFailure}. */
@@ -16195,6 +16212,21 @@ public final class LispMacroExpander {
 	 */
 	public static List<LispVal> injectFindPackageHelper(List<LispVal> program, java.util.Map<String, String> table,
 			boolean runtimeMutation) {
+		return injectFindPackageHelper(program, table, runtimeMutation, false);
+	}
+
+	/**
+	 * As {@link #injectFindPackageHelper(List, java.util.Map, boolean)}, in a program
+	 * that gives a package a nickname of its own: the helper asks the current package's
+	 * table first, and a helper the table's own definitions call goes past it.
+	 * @param program the resolved top-level forms
+	 * @param table the designator-to-package-name table
+	 * @param runtimeMutation whether the program can create packages at run time
+	 * @param localNicknames whether the program has local nicknames
+	 * @return the program with the helper prepended, or unchanged
+	 */
+	public static List<LispVal> injectFindPackageHelper(List<LispVal> program, java.util.Map<String, String> table,
+			boolean runtimeMutation, boolean localNicknames) {
 		boolean needed = false;
 		for (LispVal form : program) {
 			if (usesSymbol(form, LispNames.FIND_PACKAGE) || usesSymbol(form, LispNames.PACKAGE_USE_LIST)
@@ -16203,17 +16235,393 @@ public final class LispMacroExpander {
 				break;
 			}
 		}
-		if (!needed) {
+		if (!needed && !localNicknames) {
 			return program;
 		}
 		LispSymbol designatorVar = new LispSymbol("%FP-D");
-		LispVal defun = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
-				new LispSymbol(LispNames.FIND_PACKAGE_INTERNAL), listToCons(List.of(designatorVar)),
-				inlineRuntimeFindPackage(designatorVar, table, runtimeMutation)));
-		List<LispVal> out = new java.util.ArrayList<>(program.size() + 1);
-		out.add(defun);
+		LispVal lookup = inlineRuntimeFindPackage(designatorVar, table, runtimeMutation);
+		List<LispVal> out = new java.util.ArrayList<>(program.size() + 2);
+		if (localNicknames) {
+			out.add(listToCons(
+					List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.FIND_PACKAGE_GLOBAL_INTERNAL),
+							listToCons(List.of(designatorVar)), lookup)));
+			// (%find-package-global (or (%local-nickname-find (string d)) d))
+			lookup = callOf(LispNames.FIND_PACKAGE_GLOBAL_INTERNAL,
+					listToCons(List.of(new LispSymbol(LispNames.OR),
+							callOf(LispNames.LOCAL_NICKNAME_FIND_INTERNAL, callOf(LispNames.STRING, designatorVar)),
+							designatorVar)));
+		}
+		out.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.FIND_PACKAGE_INTERNAL),
+				listToCons(List.of(designatorVar)), lookup)));
 		out.addAll(program);
 		return out;
+	}
+
+	/**
+	 * The source of what a compiled program with package-local nicknames carries of them
+	 * ({@link #injectLocalNicknames}), over operators every backend lowers itself: it
+	 * goes in after the prelude has been selected. A package and a target are names,
+	 * since the compiled symbols of a keyword built at run time and of one spelled in the
+	 * program compare by name.
+	 */
+	private static final String LOCAL_NICKNAMES_SOURCE = """
+			(defvar %local-nicknames% nil)
+			(defun %local-nickname-put (%lnp-p %lnp-n %lnp-t)
+			  (setq %local-nicknames% (cons (cons %lnp-p (cons %lnp-n %lnp-t)) %local-nicknames%))
+			  nil)
+			(defun %local-nickname-define (%lnd-p %lnd-rows)
+			  (%local-nickname-put %lnd-p nil nil)
+			  (while %lnd-rows
+			    (%local-nickname-put %lnd-p (car (car %lnd-rows)) (cdr (car %lnd-rows)))
+			    (setq %lnd-rows (cdr %lnd-rows)))
+			  nil)
+			(defun %local-nickname-target (%lnt-p %lnt-n)
+			  (let ((%lnt-c %local-nicknames%) (%lnt-hit nil))
+			    (while %lnt-c
+			      (let ((%lnt-e (car %lnt-c)))
+			        (setq %lnt-c (cdr %lnt-c))
+			        (if (string= (car %lnt-e) %lnt-p)
+			            (if (null (car (cdr %lnt-e)))
+			                (setq %lnt-c nil)
+			                (if (string= (car (cdr %lnt-e)) %lnt-n)
+			                    (progn (setq %lnt-hit (cdr (cdr %lnt-e)))
+			                           (setq %lnt-c nil)))))))
+			    %lnt-hit))
+			(defun %local-nickname-find (%lnf-n)
+			  (%local-nickname-target (string *package*) %lnf-n))
+			(defun %package-local-nicknames (%pln-k)
+			  (let ((%pln-p (string %pln-k)) (%pln-c %local-nicknames%) (%pln-seen nil) (%pln-out nil))
+			    (while %pln-c
+			      (let ((%pln-e (car %pln-c)))
+			        (setq %pln-c (cdr %pln-c))
+			        (if (string= (car %pln-e) %pln-p)
+			            (if (null (car (cdr %pln-e)))
+			                (setq %pln-c nil)
+			                (if (not (member (car (cdr %pln-e)) %pln-seen :test #'string=))
+			                    (progn
+			                      (setq %pln-seen (cons (car (cdr %pln-e)) %pln-seen))
+			                      (if (cdr (cdr %pln-e))
+			                          (setq %pln-out (cons (cons (car (cdr %pln-e))
+			                                                     (intern (cdr (cdr %pln-e)) :keyword))
+			                                               %pln-out)))))))))
+			    %pln-out))
+			""";
+
+	/**
+	 * The run-time checks of a computed {@code uiop:add-package-local-nickname}, SBCL's
+	 * refusals as {@code PackageResolver.addLocalNickname} words them, and its undo. A
+	 * literal top-level call was checked as it was read.
+	 */
+	private static final String LOCAL_NICKNAME_ADD_SOURCE = """
+			(defun %local-nickname-add (%lna-n %lna-a %lna-s)
+			  (let* ((%lna-k (find-package %lna-s))
+			         (%lna-p (if %lna-k
+			                     (string %lna-k)
+			                     (%package-error (intern %lna-s :keyword)
+			                                     (concatenate 'string "No such package: " %lna-s))))
+			         (%lna-g (%find-package-global %lna-a))
+			         (%lna-t (if %lna-g
+			                     (string %lna-g)
+			                     (%package-error (intern %lna-a :keyword)
+			                                     (concatenate 'string "No such package: " %lna-a))))
+			         (%lna-old (%local-nickname-target %lna-p %lna-n)))
+			    (if (or (string= %lna-n "CL") (string= %lna-n "COMMON-LISP") (string= %lna-n "KEYWORD"))
+			        (%package-error %lna-g
+			                        (concatenate 'string "Attempt to use " %lna-n
+			                                     " as a package local nickname (for " %lna-t ").")))
+			    (if (string= %lna-n %lna-p)
+			        (%package-error %lna-k
+			                        (concatenate 'string "Attempt to use " %lna-n
+			                                     " as a package local nickname (for " %lna-t
+			                                     ") in package named globally " %lna-n ".")))
+			    (if (and %lna-old (not (string= %lna-old %lna-t)))
+			        (%package-error %lna-g
+			                        (concatenate 'string "Cannot add " %lna-n " as local nickname for " %lna-t
+			                                     " in " %lna-p ": already nickname for " %lna-old ".")))
+			    (%local-nickname-put %lna-p %lna-n %lna-t)
+			    %lna-k))
+			""";
+
+	private static final String LOCAL_NICKNAME_REMOVE_SOURCE = """
+			(defun %local-nickname-remove (%lnr-n %lnr-s)
+			  (let* ((%lnr-k (find-package %lnr-s))
+			         (%lnr-p (if %lnr-k
+			                     (string %lnr-k)
+			                     (%package-error (intern %lnr-s :keyword)
+			                                     (concatenate 'string "No such package: " %lnr-s)))))
+			    (if (%local-nickname-target %lnr-p %lnr-n)
+			        (progn (%local-nickname-put %lnr-p %lnr-n nil) t)
+			        nil)))
+			""";
+
+	/**
+	 * The printer's half: the {@code prin1} text of a symbol that keeps its qualifier,
+	 * with the current package's nickname for its home, the first in nickname order. The
+	 * table's walk answers a nickname's last entry only, as a lookup does.
+	 */
+	private static final String LOCAL_NICKNAME_QUALIFIER_SOURCE = """
+			(defun %pc-local-qualifier (%plq-s %plq-colon)
+			  (let ((%plq-p (string *package*)) (%plq-home (subseq %plq-s 0 %plq-colon))
+			        (%plq-c %local-nicknames%) (%plq-seen nil) (%plq-best nil))
+			    (while %plq-c
+			      (let ((%plq-e (car %plq-c)))
+			        (setq %plq-c (cdr %plq-c))
+			        (if (string= (car %plq-e) %plq-p)
+			            (if (null (car (cdr %plq-e)))
+			                (setq %plq-c nil)
+			                (if (not (member (car (cdr %plq-e)) %plq-seen :test #'string=))
+			                    (progn
+			                      (setq %plq-seen (cons (car (cdr %plq-e)) %plq-seen))
+			                      (if (and (cdr (cdr %plq-e))
+			                               (string= (cdr (cdr %plq-e)) %plq-home)
+			                               (or (null %plq-best)
+			                                   (%local-nickname-before (car (cdr %plq-e)) %plq-best)))
+			                          (setq %plq-best (car (cdr %plq-e))))))))))
+			    (if %plq-best
+			        (concatenate 'string (%prin1-to-string (intern %plq-best))
+			                     (subseq %plq-s %plq-colon))
+			        %plq-s)))
+			(defun %local-nickname-before (%lnb-a %lnb-b)
+			  (let ((%lnb-i 0) (%lnb-n (length %lnb-a)) (%lnb-m (length %lnb-b)) (%lnb-r :same))
+			    (while (eq %lnb-r :same)
+			      (cond ((>= %lnb-i %lnb-m) (setq %lnb-r nil))
+			            ((>= %lnb-i %lnb-n) (setq %lnb-r t))
+			            ((char= (char %lnb-a %lnb-i) (char %lnb-b %lnb-i)) (setq %lnb-i (+ %lnb-i 1)))
+			            (t (setq %lnb-r (< (char-code (char %lnb-a %lnb-i)) (char-code (char %lnb-b %lnb-i)))))))
+			    %lnb-r))
+			""";
+
+	/**
+	 * The reader's half: what a run-time read answers, with every qualified token's
+	 * qualifier read through the current package's nicknames. The emitted readers spell a
+	 * token as they read it, the current package unknown to them
+	 * ({@code .kb/symbol-runtime-api.md}), so this walks the datum after the read.
+	 */
+	private static final String LOCAL_NICKNAME_READ_SOURCE = """
+			(defun %local-nicknames-in-p (%lnq-p)
+			  (let ((%lnq-c %local-nicknames%) (%lnq-hit nil))
+			    (while %lnq-c
+			      (if (string= (car (car %lnq-c)) %lnq-p)
+			          (progn (setq %lnq-hit t) (setq %lnq-c nil))
+			          (setq %lnq-c (cdr %lnq-c))))
+			    %lnq-hit))
+			(defun %read-through-local-nicknames (%rtn-x)
+			  (if (%local-nicknames-in-p (string *package*))
+			      (%read-through-local-nickname-walk %rtn-x)
+			      %rtn-x))
+			(defun %read-through-local-nickname-walk (%rtw-x)
+			  (if (consp %rtw-x)
+			      (let ((%rtw-c %rtw-x))
+			        (while (consp %rtw-c)
+			          (rplaca %rtw-c (%read-through-local-nickname-walk (car %rtw-c)))
+			          (if (consp (cdr %rtw-c))
+			              (setq %rtw-c (cdr %rtw-c))
+			              (progn
+			                (rplacd %rtw-c (%read-through-local-nickname-walk (cdr %rtw-c)))
+			                (setq %rtw-c nil))))
+			        %rtw-x)
+			      (if (and (vectorp %rtw-x) (not (stringp %rtw-x)))
+			          (let ((%rtw-i 0))
+			            (while (< %rtw-i (length %rtw-x))
+			              (if (symbolp (aref %rtw-x %rtw-i))
+			                  (setf (aref %rtw-x %rtw-i) (%read-through-local-nickname-walk (aref %rtw-x %rtw-i))))
+			              (setq %rtw-i (+ %rtw-i 1)))
+			            %rtw-x)
+			          (if (and %rtw-x (symbolp %rtw-x))
+			              (let* ((%rtw-s (%prin1-to-string %rtw-x)) (%rtw-n (length %rtw-s)) (%rtw-j 0) (%rtw-colon nil))
+			                (if (or (= %rtw-n 0) (char= (char %rtw-s 0) #\\:) (char= (char %rtw-s 0) #\\#)
+			                        (char= (char %rtw-s 0) #\\|))
+			                    %rtw-x
+			                    (progn
+			                      (while (and (< %rtw-j %rtw-n) (null %rtw-colon))
+			                        (if (char= (char %rtw-s %rtw-j) #\\:)
+			                            (setq %rtw-colon %rtw-j))
+			                        (setq %rtw-j (+ %rtw-j 1)))
+			                      (let ((%rtw-t (if %rtw-colon
+			                                        (%local-nickname-find (subseq %rtw-s 0 %rtw-colon))
+			                                        nil)))
+			                        (if %rtw-t
+			                            (intern (concatenate 'string %rtw-t (subseq %rtw-s %rtw-colon)))
+			                            %rtw-x)))))
+			              %rtw-x))))
+			""";
+
+	/**
+	 * What follows a package's {@code rename-package} or {@code delete-package} in the
+	 * table: its own rows and the nicknames naming it, as the interpreter's registry does
+	 * (a nil new name turns such a nickname into a removal).
+	 */
+	private static final String LOCAL_NICKNAME_MOVING_SOURCE = """
+			(defun %local-nicknames-moving (%lnv-d %lnv-thunk %lnv-deleting)
+			  (let* ((%lnv-k (find-package %lnv-d)) (%lnv-r (funcall %lnv-thunk)) (%lnv-c %local-nicknames%))
+			    (if %lnv-k
+			        (let ((%lnv-old (string %lnv-k)))
+			          (while %lnv-c
+			            (let ((%lnv-e (car %lnv-c)))
+			              (if (and (cdr (cdr %lnv-e)) (string= (cdr (cdr %lnv-e)) %lnv-old))
+			                  (rplacd (cdr %lnv-e) (if %lnv-deleting nil (string %lnv-r))))
+			              (if (string= (car %lnv-e) %lnv-old)
+			                  (rplaca %lnv-e (if %lnv-deleting "" (string %lnv-r)))))
+			            (setq %lnv-c (cdr %lnv-c)))))
+			    %lnv-r))
+			""";
+
+	/** Whether the form is an entry a literal nickname directive left at top level. */
+	private static boolean isLocalNicknameEvent(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& (LispNames.LOCAL_NICKNAME_PUT_INTERNAL.equals(op.name())
+						|| LispNames.LOCAL_NICKNAME_DEFINE_INTERNAL.equals(op.name()));
+	}
+
+	/**
+	 * Drops the entries the literal nickname directives left: for a backend with no table
+	 * ({@code --no-gc}), and for a program no form of which asks the table anything.
+	 * @param program the resolved top-level forms
+	 * @return the program without the entries
+	 */
+	public static List<LispVal> dropLocalNicknameEvents(List<LispVal> program) {
+		return program.stream().filter(form -> !isLocalNicknameEvent(form)).toList();
+	}
+
+	/**
+	 * Whether a form of the program asks the run-time table of package-local nicknames
+	 * something: a {@code find-package} the resolver could not fold and what lowers onto
+	 * one, a library lookup by a designator's spelling, the operators under
+	 * {@code uiop:add-package-local-nickname} and friends, the printer's qualifier, a
+	 * run-time read.
+	 * @param program the resolved top-level forms
+	 * @return whether the program needs the table
+	 */
+	public static boolean readsLocalNicknames(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (isLocalNicknameEvent(form)) {
+				continue;
+			}
+			for (String name : LOCAL_NICKNAME_READERS) {
+				if (usesSymbol(form, name)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private static final List<String> LOCAL_NICKNAME_READERS = List.of(LispNames.FIND_PACKAGE,
+			LispNames.PACKAGE_USE_LIST, LispNames.PACKAGE_USED_BY_LIST, LispNames.SYMBOL_IN_PACKAGE_INTERNAL,
+			LispNames.BAKED_PACKAGE_FIND_INTERNAL, LispNames.RUNTIME_PACKAGE_FIND_INTERNAL,
+			LispNames.LOCAL_NICKNAME_ADD_INTERNAL, LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL,
+			LispNames.PACKAGE_LOCAL_NICKNAMES_INTERNAL, LispNames.PRINT_CASED_QUALIFIER_INTERNAL,
+			LispNames.READ_FROM_STRING, LispNames.READ_FROM_STRING_FULL_INTERNAL);
+
+	/**
+	 * The run-time half of package-local nicknames on the compile paths, after package
+	 * resolution. A program's forms all read before any of them runs, so what a form asks
+	 * when it runs -- {@code find-package} and what goes through it, the printer, a read
+	 * -- is answered from a table the program itself builds as it runs: each
+	 * {@code defpackage} and literal directive left an entry where it stood, in order,
+	 * and a computed call adds one like the interpreter's. A program no form of which
+	 * asks the table has its entries dropped and carries nothing.
+	 * @param program the resolved top-level forms
+	 * @param localNicknames whether the program names a local nickname
+	 * @param asked {@code localNicknames} and {@link #readsLocalNicknames}
+	 * @return the program with the table and its readers prepended, or without entries
+	 */
+	public static List<LispVal> injectLocalNicknames(List<LispVal> program, boolean localNicknames, boolean asked) {
+		if (!localNicknames) {
+			// Nobody has a nickname: the query answers nil, and nothing else asks.
+			for (LispVal form : program) {
+				if (usesSymbol(form, LispNames.PACKAGE_LOCAL_NICKNAMES_INTERNAL)) {
+					List<LispVal> out = new java.util.ArrayList<>(program.size() + 1);
+					out.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN),
+							new LispSymbol(LispNames.PACKAGE_LOCAL_NICKNAMES_INTERNAL),
+							listToCons(List.of(new LispSymbol("%PLN-K"))), LispNil.INSTANCE)));
+					out.addAll(program);
+					return out;
+				}
+			}
+			return program;
+		}
+		if (!asked) {
+			return dropLocalNicknameEvents(program);
+		}
+		StringBuilder source = new StringBuilder(LOCAL_NICKNAMES_SOURCE);
+		boolean add = false;
+		boolean remove = false;
+		boolean read = false;
+		for (LispVal form : program) {
+			add = add || usesSymbol(form, LispNames.LOCAL_NICKNAME_ADD_INTERNAL);
+			remove = remove || usesSymbol(form, LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL);
+			read = read || usesSymbol(form, LispNames.READ_FROM_STRING);
+		}
+		source.append(add ? LOCAL_NICKNAME_ADD_SOURCE : "").append(remove ? LOCAL_NICKNAME_REMOVE_SOURCE : "");
+		source.append(read ? LOCAL_NICKNAME_READ_SOURCE : "");
+		if (definesName(program, LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL)) {
+			source.append(LOCAL_NICKNAME_QUALIFIER_SOURCE);
+		}
+		if (definesName(program, LispNames.RENAME_PACKAGE) || definesName(program, LispNames.DELETE_PACKAGE)) {
+			source.append(LOCAL_NICKNAME_MOVING_SOURCE);
+		}
+		List<LispVal> out = new java.util.ArrayList<>(
+				LispReader.readAllFromString(source.toString(), Features.INTERPRETER));
+		for (LispVal form : program) {
+			out.add(readsDesignatorThroughLocalNicknames(form));
+		}
+		return out;
+	}
+
+	/**
+	 * The library definitions that take a designator by its spelling -- the two lookups,
+	 * the {@code %symbol-in-package} helper that builds a symbol from it, the two that
+	 * change a package -- take the package a nickname names in a program that has them:
+	 * everything else goes through {@code find-package}. And the two that change a
+	 * package tell the table.
+	 */
+	private static LispVal readsDesignatorThroughLocalNicknames(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| !LispNames.DEFUN.equals(op.name()) || !(cons.cdr() instanceof LispCons nameCell)
+				|| !(nameCell.car() instanceof LispSymbol defined) || !(nameCell.cdr() instanceof LispCons listCell)
+				|| !(listCell.car() instanceof LispCons lambdaList)) {
+			return form;
+		}
+		LispVal designator = switch (defined.name()) {
+			case LispNames.BAKED_PACKAGE_FIND_INTERNAL, LispNames.RUNTIME_PACKAGE_FIND_INTERNAL,
+					LispNames.RENAME_PACKAGE, LispNames.DELETE_PACKAGE ->
+				lambdaList.car();
+			case LispNames.SYMBOL_IN_PACKAGE_INTERNAL ->
+				lambdaList.cdr() instanceof LispCons second ? second.car() : null;
+			default -> null;
+		};
+		if (designator == null) {
+			return form;
+		}
+		LispVal definition = listCell.cdr();
+		if (LispNames.RENAME_PACKAGE.equals(defined.name()) || LispNames.DELETE_PACKAGE.equals(defined.name())) {
+			LispVal thunk = new LispCons(new LispSymbol(LispNames.LAMBDA), new LispCons(LispNil.INSTANCE, definition));
+			definition = new LispCons(
+					listToCons(List.of(new LispSymbol(LispNames.LOCAL_NICKNAMES_MOVING_INTERNAL), designator, thunk,
+							LispNames.DELETE_PACKAGE.equals(defined.name()) ? LispTrue.INSTANCE : LispNil.INSTANCE)),
+					LispNil.INSTANCE);
+		}
+		// (let ((d (or (%local-nickname-find (string d)) d))) body...)
+		LispVal rebinding = listToCons(List.of(listToCons(List.of(designator,
+				listToCons(List.of(new LispSymbol(LispNames.OR),
+						callOf(LispNames.LOCAL_NICKNAME_FIND_INTERNAL, callOf(LispNames.STRING, designator)),
+						designator))))));
+		LispVal body = new LispCons(new LispSymbol(LispNames.LET), new LispCons(rebinding, definition));
+		return new LispCons(op, new LispCons(defined, new LispCons(lambdaList, new LispCons(body, LispNil.INSTANCE))));
+	}
+
+	/**
+	 * The compiled backends' lowering of {@code (%pc-qualifier text colon)}: the text
+	 * itself in a program with no package-local nickname, which carries nothing of them.
+	 * @param cons the call
+	 * @param definedFunction whether the program defines the named function
+	 * @return the equivalent expression
+	 */
+	public static LispVal expandPrintQualifier(LispCons cons, java.util.function.Predicate<String> definedFunction) {
+		List<LispVal> parts = cons.toList();
+		return definedFunction.test(LispNames.PRINT_CASED_LOCAL_QUALIFIER_INTERNAL)
+				? callOf(LispNames.PRINT_CASED_LOCAL_QUALIFIER_INTERNAL, parts.get(1), parts.get(2)) : parts.get(1);
 	}
 
 	/**
@@ -41344,7 +41752,10 @@ public final class LispMacroExpander {
 					return true;
 				}
 			}
-			else if (usesSymbol(form, LispNames.PACKAGE_VAR) || usesSymbol(form, LispNames.WITH_STANDARD_IO_SYNTAX)) {
+			// A package's own nickname changes how a symbol prints in that package,
+			// cl-user included.
+			else if (isLocalNicknameEvent(form) || usesSymbol(form, LispNames.PACKAGE_VAR)
+					|| usesSymbol(form, LispNames.WITH_STANDARD_IO_SYNTAX)) {
 				return true;
 			}
 		}

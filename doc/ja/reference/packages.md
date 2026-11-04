@@ -127,7 +127,8 @@ Lisp との相違が1点あります: 最初に名前が現れた後で export �
 定義されます。サポートされる clause は `(:use package...)`、
 `(:export symbol...)`、`(:nicknames name...)`、
 `(:import-from package symbol...)`、`(:shadowing-import-from package symbol...)`、
-`(:shadow symbol...)`、`(:intern symbol...)`、および受理されるが
+`(:shadow symbol...)`、`(:intern symbol...)`、
+`(:local-nicknames (nick actual)...)`、および受理されるが
 無視される `(:documentation "...")`/`(:size n)` です。名前と clause の引数は
 キーワード、裸のシンボル、文字列、文字(`#\H` は `"H"` を指します)、または
 uninterned シンボル(`#:name`、
@@ -153,6 +154,8 @@ export している場合は、Common Lisp と同様にそのシンボルを継�
 既に存在するパッケージを名前に指定した `defpackage` は、そのパッケージを
 変更します(Common Lisp のルール) — clause は既存の内容にマージされ、これに
 より rontolisp が既に seed 済みのパッケージをライブラリ側が宣言できます。
+`:local-nicknames` だけは定義ごとにすべて指定し直すもので、この clause のない
+定義のパッケージはローカルニックネームを持ちません。
 他のパッケージの nickname を名前に指定した場合は依然としてエラーです。
 
 - `:use` は、使用するパッケージの **external** シンボルを修飾なしで見えるように
@@ -175,6 +178,14 @@ export している場合は、Common Lisp と同様にそのシンボルを継�
   ニックネームはエラーです — 組み込みニックネーム(`common-lisp`、
   `common-lisp-user`、`rl`、`la`、`quicklisp`)も組み込みパッケージ名と同様に
   予約されています。
+- `:local-nicknames` は、そのパッケージが別のパッケージを呼ぶための自分専用の
+  名前を定義します: そのパッケージがカレントのとき、`nick:symbol` は
+  `actual:symbol` として読まれ、パッケージ指示子 `nick` は `actual` を指し、
+  `actual` のシンボルは `nick:symbol` と印字されます。他のパッケージからは
+  見えないので、別のパッケージやニックネームと同じ名前(`bt`、`uiop`)でもよく、
+  そのパッケージの中ではニックネームが優先します。`defpackage` の外では
+  [`uiop:add-package-local-nickname`](functions/uiop-add-package-local-nickname.md)
+  で同じことができます。
 - `:import-from` は、パッケージ全体を use せずに、1 つのパッケージの指定シンボル
   だけを修飾なしで見えるようにします。解決はテキストベースです: import された
   名前はソースパッケージの正規表記に解決されるため、import して re-export した

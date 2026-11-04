@@ -149,6 +149,8 @@ spells a qualifier only when the symbol is NOT accessible in the current `*packa
   `strictStringDesignatorForm` now takes raw `%princ-to-string`; and a `write-to-string` keyword
   that was a program's ONLY binding of a printer variable failed the JVM compile because
   `SpecialVarCollector` never saw the Pass-2 `let`, which it now walks.
+- A qualifier it keeps is the current package's nickname for the home when it has one (`%pc-qualifier`,
+  `.kb/packages.md`, "Package-local nicknames").
 - **Known gap:** the printer only DROPS a qualifier, never ADDS one — a symbol printed where it is
   inaccessible prints bare, not `COMMON-LISP-USER::FOO`. Re-evaluate with a real intern table: the
   question becomes a field read and the baked table unnecessary.

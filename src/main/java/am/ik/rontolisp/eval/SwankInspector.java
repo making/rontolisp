@@ -1556,7 +1556,7 @@ public final class SwankInspector {
 	private void packagePage(List<Raw> out, LispSymbol pkg) {
 		List<LispVal> facts = elements(this.lisp
 			.helper("(lambda (p) (list (package-name p)" + " (sort (copy-list (package-nicknames p)) #'string<)"
-					+ " (ignore-errors (package-local-nicknames p)) (ignore-errors (documentation p t))"
+					+ " (%package-local-nicknames p) (ignore-errors (documentation p t))"
 					+ " (sort (copy-list (package-use-list p)) #'string< :key #'package-name)"
 					+ " (sort (copy-list (package-used-by-list p)) #'string< :key #'package-name)"
 					+ " (mapcar #'symbol-name (package-shadowing-symbols p))))", pkg));

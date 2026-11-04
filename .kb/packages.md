@@ -74,9 +74,7 @@ function named `quote` is the cost. The directives are alike, consumed by member
 `(in-package :x)` works in such a package, where SBCL calls an undefined function.
 
 Consumers measured 2026-11-04: `vom` loads and logs on all four backends. `sento` loads on the
-interpreter and stops on `atomics:cas`, on the compile paths while it compiles. McCLIM's first stop
-is `.todo/i05`, through cluffer; its Core files read by hand past that stop at
-`closer-mop:standard-instance-access`.
+interpreter and stops on `atomics:cas`, on the compile paths while it compiles.
 
 ## External vs internal (`:` / `::`)
 - `LispPackage` carries an `externals` set (3-arg constructor = everything exported);
@@ -271,20 +269,84 @@ library splice scanners (`JsonLibrary`/`LinalgLibrary`/`UrlLibrary`/`VecLibrary`
 `rl:json-parse` never triggered the json.lisp splice (interpreter unaffected -- it lazy-loads
 post-resolution). Pinned by `JvmLispCompilerTest.compileAndRunBuiltinNicknamesTriggerLibrarySplice`.
 
-**Package-local nicknames are GLOBAL nicknames**: `(:local-nicknames (nick actual)...)` and
-`uiop:add-package-local-nickname` both funnel into `PackageResolver.registerLocalNickname`; a
-literal top-level call is CONSUMED like a defpackage, so the idiom works on every backend, while a
-non-literal call stays a runtime call (interpreter only).
-`uiop:remove-package-local-nickname` is the undo both ways: a literal top-level call is
-consumed (`tryConsumeRemoveLocalNickname`, replaced by the t/nil the runtime answers) and a
-computed call runs the interpreter's `removeLocalNickname` (a scope package only guards: the
-nickname must point at it; removing a seeded built-in nickname is refused). The query
-`uiop:package-local-nicknames` is Lisp over `package-nicknames`, so it runs everywhere and
-answers every global nickname for the package. Residual, the frozen-registry rule applied to a
-directive: the baked listing tables are built AFTER the whole program resolves, so on the
-compiled backends they answer the END state -- a program that lists nicknames and then removes
-one disagrees with the interpreter's mid-program answer there (`.kb/uiop.md`). ci-spec
-`uiop-add-package-local-nickname`, `uiop-package-surgery`.
+## Package-local nicknames
+SBCL's extension, on all four backends (i05, 2026-11-04; they were global nicknames until then, and
+`(:local-nicknames (#:bt #:clump-binary-tree))` stopped cluffer with `Package already exists: BT`).
+`PackageRegistry.localNicknames`: per package, nickname to target, compared verbatim. SBCL 2.2.9
+checked; what follows it: the refusals (`CL`, `COMMON-LISP`, `KEYWORD`, the package's own NAME, a
+second target for one nickname) and their texts, a target read as a global name and a scope
+through the current package's nicknames, a `defpackage` over the package replacing them (one with
+no clause removes them: the one clause that does not merge, unlike a pre-seeded package's), rename
+and delete following them. Which nickname prints when a package has several for one home is left
+to a binary search in SBCL; here it is the first in nickname order.
+
+**Reading.** `PackageResolver.resolve` starts with `readLocalNicknames`: every qualified token
+whose raw qualifier is a nickname of the current package becomes a token of the target, and nothing
+downstream of it asks the table for a symbol (`resolveQualified` never did). Raw, because
+`splitQualified` normalizes a built-in nickname (`BT`, `LA`, `RL`) statically. A datum
+(`resolveDatum`) and the implementation's forms (`probing`) are not tokens. A run-time read:
+`readSpelling` on the interpreter. Every package designator goes through `findPackageName`, the
+current package's table first; `findGlobalPackageName` is the same past it, for what is a package's
+name already (a symbol's qualifier, `homeOf`, the backends' table builds, whose current package is
+merely the program's last).
+
+**The second read, and why a spelling carries a mark.** The compile path reads a symbol several
+times by its spelling: `UserMacroExpander` emits an expansion canonical, and the compilers' resolver
+reads it again in the same package, where `ALEXANDRIA:FOO` from a macro of another package would
+read through `(:local-nicknames (:alexandria :other))`. So `emittedSpelling`
+(`requalifyShadowedClNames`) puts `PackageRegistry.GLOBAL_QUALIFIER` (a private-use character no
+reader produces, which `splitQualified` reads past) in front of a qualifier that is a nickname
+there, and `readLocalNicknames` does the same when a target is itself a nickname
+(`(:local-nicknames (:a :b) (:b :a))`), so a read is idempotent. Rejected: a resolver that knows
+which pass it is (two nickname tables, one not read through) and brackets around a form (every pass
+in between would have to step over them). `emittedSpelling` also fixed what the same second read
+did to a `cl-user` symbol, bare in canonical form: a macro of `cl-user` expanded in another package
+compiled to `The function P::HELPER is undefined`. It is `CL-USER::HELPER` in the emitted form now.
+ci-spec `an-expansion-keeps-a-cl-user-symbol-read-in-another-package`.
+
+**The first pass of the pipeline** (`eval/LocalNicknameRead`, first in `CompileFrontend.expand`):
+the passes in front of the resolver recognize a library by the package a symbol spells, so
+`(:local-nicknames (:l :linalg))` has to reach them as `LINALG:`, and `(:local-nicknames (:ffi
+:mine))` must not read as `ffi:` (a refusal on wasm). It follows a program with a nickname top-level
+form by top-level form with a resolver of its own, over reduced `defpackage`s and made-up packages
+(a used package may not have been spliced yet). What only a macro expansion defines reaches the
+resolvers alone: they read correctly, a scanner just does not see it.
+
+**Run time on the compile paths.** The forms all read before any of them runs, so a form asking
+when it runs needs the state at that point, as the interpreter has it. `resolveProgram` leaves an
+entry where a literal directive stood (`%local-nickname-put`, `%local-nickname-define` for a
+`defpackage` with nicknames, or that had some), and `LispMacroExpander.injectLocalNicknames` adds
+`%local-nicknames%`, a list of `(PACKAGE NICKNAME . TARGET)` strings the program builds as it runs,
+newest first (a nil target removes, a nil nickname forgets what is behind it), with its readers:
+`%find-package` asks it under `*package*` (which keeps the variable, `injectMvSpillGlobal`), and so
+do the definitions taking a designator by its spelling (`%baked-package-find`,
+`%runtime-package-find`, `%symbol-in-package`, `rename-package`, `delete-package`, the last two
+updating it), the printer (`%pc-qualifier`, lowered to the text itself without nicknames) and every
+run-time read, through `expandReadFromStringFailure` (a walk over the datum: the emitted readers
+spell a token as they read it). A program whose forms ask nothing drops the entries and carries
+nothing; one with no nickname is unchanged. A designator literal that some package has as a nickname
+(`collectLocalNicknameNames`) does not fold: `find-package` stays a call, and `intern`, `find-symbol`,
+`package-use-list` and `package-used-by-list` become `(if (%local-nickname-find "N") (op ... (find-package
+"N")) (op ...  "N"))` (`localNicknameDesignatorSite`), the literal arm keeping what its fold knows. A
+computed add can name anything, so it un-folds every literal designator of the program, which is why
+ci-spec has none (`compileAndRunUiopRemovePackageLocalNickname` and its wasm twin pin it). The
+interpreter folds no `find-package` at all now. `--no-gc` drops the entries (no cons).
+
+**Residual, the model's.** A package value IS the keyword of its name, so a package object named like
+a nickname of the current package reads as the nickname: `(package-name (find-package "T1"))` under
+`(:local-nicknames (:t1 :t2) (:t2 :t1))` answers `"T1"` where SBCL answers `"T2"`, since the second
+lookup reads `:T2` as the nickname. It takes a nickname named like a real package AND a package value
+of that name in hand. Re-evaluate with package objects (`.kb/symbol-runtime-api.md`). A literal
+nested (not top-level) add is the computed one on the compile paths: the token after it does not
+read.
+
+Pinned by ci-spec `uiop-add-package-local-nickname`, `package-local-nicknames-read-in-the-package-that-has-them`,
+`package-local-nickname-of-a-library-spliced-by-name`, `uiop-package-surgery`,
+`PackageResolverTest#{aLocalNicknameReadsInThePackageThatHasIt,aReadThroughLocalNicknamesReadsTheSameAgainAndAResolvedSymbolIsSpelledToReadAsItself,aPackageCannotHaveEveryLocalNickname,aLiteralLocalNicknameDirectiveIsConsumedAndNamesThePackageThatHasIt,aCompiledProgramLeavesEntriesForItsNicknamesAndFoldsNoDesignatorThatMayBeOne}`,
+`UserMacroExpanderTest#anExpansionKeepsItsSymbolsInAPackageThatReadsThemAsOthers`. A nickname in
+`cl-user` makes it non-pristine for good (`clUserNicknamed`, the printer's slow path), so the corpus
+keeps its nicknames elsewhere. Measured on the real thing: cluffer loads and edits a buffer on all
+four backends.
 
 ## Resolution order and imports
 - `resolveUnqualified` consults, in order: `current.imports()`, the shadow set, the `cl` table,
@@ -357,8 +419,8 @@ computed call falls through to an interpreter-only runtime function using the SA
 | `unuse-package` (`LispNames.UNUSE_PACKAGE`) | `unusePackage` | the inverse, replaced by `T`; unusing what is not used is a no-op; the implied uses go with the package that implied them |
 | `export` / `unexport` | `exportSymbols` | export also records the same re-export redirect the `:export` clause does |
 | `import` | `importSymbols` | same `imports` redirect (member -> `trueHome`) as `:import-from`; the argument keeps its QUALIFIER; an UNQUALIFIED argument is a no-op, as in CL |
-| `uiop:add-package-local-nickname` | `registerLocalNickname` | see Nicknames |
-| `uiop:remove-package-local-nickname` | `removeLocalNickname` | see Nicknames; replaced by `T`/`NIL` |
+| `uiop:add-package-local-nickname` | `addLocalNickname` | see Package-local nicknames; replaced by the package, or an entry in a compiled program |
+| `uiop:remove-package-local-nickname` | `removeLocalNickname` | likewise; replaced by `T`/`NIL`, or an entry |
 
 All are CL FUNCTIONS, hence usable as function values. ci-spec `use-package`,
 `unuse-package`, `export-and-unexport`.

@@ -5,6 +5,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
 
 import org.jspecify.annotations.Nullable;
 
@@ -378,7 +380,15 @@ public final class PackageRegistry {
 			LispNames.PRINT_RADIXED_INTERNAL, LispNames.PRINT_IN_BASE_INTERNAL,
 			LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL, LispNames.SYMBOL_PRINT_BARE_P_INTERNAL,
 			LispNames.PRINT_PACKAGE_RAW_P_INTERNAL, LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL,
-			LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL, LispNames.HOST_GETENV, LispNames.HOST_GETCWD,
+			LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL, LispNames.PRINT_CASED_QUALIFIER_INTERNAL,
+			LispNames.PRINT_CASED_LOCAL_QUALIFIER_INTERNAL, LispNames.LOCAL_NICKNAME_ADD_INTERNAL,
+			LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL, LispNames.PACKAGE_LOCAL_NICKNAMES_INTERNAL,
+			LispNames.LOCAL_NICKNAMES_VAR_INTERNAL, LispNames.LOCAL_NICKNAME_PUT_INTERNAL,
+			LispNames.LOCAL_NICKNAME_DEFINE_INTERNAL, LispNames.LOCAL_NICKNAME_TARGET_INTERNAL,
+			LispNames.LOCAL_NICKNAME_FIND_INTERNAL, LispNames.FIND_PACKAGE_GLOBAL_INTERNAL,
+			LispNames.READ_THROUGH_LOCAL_NICKNAMES_INTERNAL, LispNames.READ_THROUGH_LOCAL_NICKNAME_WALK_INTERNAL,
+			LispNames.LOCAL_NICKNAMES_IN_P_INTERNAL, LispNames.LOCAL_NICKNAME_BEFORE_INTERNAL,
+			LispNames.LOCAL_NICKNAMES_MOVING_INTERNAL, LispNames.HOST_GETENV, LispNames.HOST_GETCWD,
 			LispNames.HOST_EXIT, LispNames.HOST_ARGV, LispNames.GETENV_OVERRIDE, LispNames.GETENV_OVERRIDE_SET,
 			LispNames.NSTRING_REPLACE, LispNames.TARGET_MACHINE_TYPE, LispNames.LOCAL_TIME_OFFSET,
 			LispNames.LOCAL_ZONE_INTERNAL, LispNames.RUNTIME_PACKAGES_INTERNAL, LispNames.BAKED_PACKAGES_INTERNAL,
@@ -899,6 +909,12 @@ public final class PackageRegistry {
 	 * {@link #BUILTIN_NICKNAMES}; {@code defpackage :nicknames} adds more.
 	 */
 	private final Map<String, String> nicknames = new HashMap<>(BUILTIN_NICKNAMES);
+
+	/** Each package's own nicknames ({@link #localNicknames(String)}). */
+	private final Map<String, SortedMap<String, String>> localNicknames = new HashMap<>();
+
+	private static final SortedMap<String, String> EMPTY_LOCAL_NICKNAMES = java.util.Collections
+		.unmodifiableSortedMap(new TreeMap<>());
 
 	/**
 	 * The canonical names of the runtime-tier packages (see
@@ -1709,19 +1725,39 @@ public final class PackageRegistry {
 	}
 
 	/**
-	 * Removes a nickname registration (the runtime
-	 * {@code uiop:remove-package-local-nickname}): the nickname mapping only, never a
-	 * package. Seeded built-in nicknames refuse to go -- they are reserved names, and
-	 * unseating one would orphan every canonical spelling the backends baked.
-	 * @param nickname the nickname as written
-	 * @return {@code true} when a mapping was removed
-	 * @throws LispPackageException when the nickname is a seeded built-in
+	 * A package's own nicknames (the SBCL package-local-nicknames extension), nickname to
+	 * target, in nickname order.
+	 * @param canonicalName the canonical package name
+	 * @return the nicknames, empty when the package has none
 	 */
-	public boolean removeNickname(String nickname) {
-		if (BUILTIN_NICKNAMES.containsKey(nickname)) {
-			throw new LispPackageException("Cannot remove the built-in nickname: " + nickname);
+	public SortedMap<String, String> localNicknames(String canonicalName) {
+		SortedMap<String, String> table = this.localNicknames.get(canonicalName);
+		return table == null ? EMPTY_LOCAL_NICKNAMES : table;
+	}
+
+	/**
+	 * Gives a package a nickname of its own, or takes it away.
+	 * @param canonicalName the canonical package name
+	 * @param nickname the nickname, compared verbatim
+	 * @param target the canonical name of the package it names, or {@code null} to remove
+	 * it
+	 * @return {@code true} when the package had the nickname before
+	 */
+	public boolean putLocalNickname(String canonicalName, String nickname, @Nullable String target) {
+		if (target == null) {
+			SortedMap<String, String> table = this.localNicknames.get(canonicalName);
+			return table != null && table.remove(nickname) != null;
 		}
-		return this.nicknames.remove(nickname) != null;
+		return this.localNicknames.computeIfAbsent(canonicalName, k -> new TreeMap<>()).put(nickname, target) != null;
+	}
+
+	/**
+	 * Forgets a package's own nicknames: a {@code defpackage} over the package states
+	 * them all.
+	 * @param canonicalName the canonical package name
+	 */
+	public void clearLocalNicknames(String canonicalName) {
+		this.localNicknames.remove(canonicalName);
 	}
 
 	/**
@@ -1791,6 +1827,8 @@ public final class PackageRegistry {
 			return false;
 		}
 		this.nicknames.entrySet().removeIf(entry -> entry.getValue().equals(canonicalName));
+		this.localNicknames.remove(canonicalName);
+		this.localNicknames.values().forEach(table -> table.values().removeIf(canonicalName::equals));
 		this.runtimePackages.remove(canonicalName);
 		this.unhomed.remove(canonicalName);
 		this.recorded.remove(canonicalName);
@@ -1917,6 +1955,11 @@ public final class PackageRegistry {
 		for (String nickname : newNicknames) {
 			this.nicknames.put(nickname, newName);
 		}
+		SortedMap<String, String> ownNicknames = this.localNicknames.remove(oldName);
+		if (ownNicknames != null) {
+			this.localNicknames.put(newName, ownNicknames);
+		}
+		this.localNicknames.values().forEach(table -> table.replaceAll((k, v) -> v.equals(oldName) ? newName : v));
 		if (runtime) {
 			this.runtimePackages.add(newName);
 		}
@@ -2182,12 +2225,22 @@ public final class PackageRegistry {
 			// No colon, or a leading colon (keyword): not package-qualified.
 			return null;
 		}
-		String pkg = canonicalBuiltinName(name.substring(0, idx));
+		String pkg = canonicalBuiltinName(name.substring(name.charAt(0) == GLOBAL_QUALIFIER ? 1 : 0, idx));
 		if (idx + 1 < name.length() && name.charAt(idx + 1) == ':') {
 			return new QualifiedName(pkg, name.substring(idx + 2), true);
 		}
 		return new QualifiedName(pkg, name.substring(idx + 1), false);
 	}
+
+	/**
+	 * The mark in front of a package-qualified spelling whose qualifier is a global
+	 * package name whatever nicknames the current package has: no reader produces it, and
+	 * {@link #splitQualified} reads past it. A symbol travels between the compile path's
+	 * passes as its spelling and each pass's resolver reads it again, which a package's
+	 * own nickname named like a real package would capture ({@code .kb/packages.md},
+	 * "Package-local nicknames").
+	 */
+	public static final char GLOBAL_QUALIFIER = '';
 
 	/**
 	 * A package-qualified symbol name split into its package and member parts.

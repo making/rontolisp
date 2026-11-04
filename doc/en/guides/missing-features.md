@@ -163,7 +163,7 @@ fixed at compile time. Methods made at run time join generic functions through
 
 [`defpackage`](../reference/special-forms/defpackage.md) is a read/compile-time
 directive supporting `:use`, `:export`, `:nicknames`, `:import-from`,
-`:shadowing-import-from`, `:shadow` and `:intern` (`:documentation`/`:size` are
+`:shadowing-import-from`, `:shadow`, `:intern` and `:local-nicknames` (`:documentation`/`:size` are
 accepted and ignored); a `defpackage` that is *not* top-level registers its
 package when the form around it runs, on the interpreter only.
 `use-package`, [`unuse-package`](../reference/functions/unuse-package.md),

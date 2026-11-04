@@ -16978,32 +16978,180 @@ cases:
     expected: |
       (T T T NIL NIL NIL)
       (0 0 1 :DEFAULT)
+  # A package's own nicknames, SBCL-checked through sb-ext's functions, which uiop
+  # re-exports (a package prints as its keyword here). Each directive stands where
+  # it stands, so a listing answers the state at that point, and every nickname
+  # stays out of cl-user: a program with one there prints every symbol the slow way.
   - name: uiop-add-package-local-nickname
     source: |
       (defpackage #:com.example.apn.deep (:use #:cl) (:export #:apn-answer))
       (in-package #:com.example.apn.deep)
       (defun apn-answer () 42)
-      (in-package #:cl-user)
+      (defpackage #:com.example.apn.user (:use #:cl))
+      (in-package #:com.example.apn.user)
       (uiop:add-package-local-nickname '#:apn '#:com.example.apn.deep)
-      (print (apn:apn-answer))
+      (print (list (apn:apn-answer) (package-name (find-package "APN")) (prin1-to-string 'apn:apn-answer)))
+      (print (uiop:package-local-nicknames *package*))
+      (print (uiop:package-local-nicknames '#:com.example.apn.deep))
+      (print (package-nicknames '#:com.example.apn.deep))
+      (uiop:add-package-local-nickname '#:apn2 '#:com.example.apn.deep)
+      (uiop:add-package-local-nickname '#:apn-there '#:com.example.apn.user '#:com.example.apn.deep)
+      (print (uiop:package-local-nicknames *package*))
+      (print (uiop:package-local-nicknames '#:com.example.apn.deep))
+      (uiop:remove-package-local-nickname '#:apn2)
+      (uiop:remove-package-local-nickname '#:apn-there '#:com.example.apn.deep)
+      (print (uiop:package-local-nicknames '#:com.example.apn.deep))
+      (uiop:remove-package-local-nickname '#:apn)
+      (print (list (find-package "APN") (uiop:package-local-nicknames *package*)))
+      (in-package #:cl-user)
     expected: |
-      42
+      (42 "COM.EXAMPLE.APN.DEEP" "APN:APN-ANSWER")
+      (("APN" . :COM.EXAMPLE.APN.DEEP))
+      NIL
+      NIL
+      (("APN" . :COM.EXAMPLE.APN.DEEP) ("APN2" . :COM.EXAMPLE.APN.DEEP))
+      (("APN-THERE" . :COM.EXAMPLE.APN.USER))
+      NIL
+      (NIL NIL)
+  # A nickname reads in the package that has it, what a reader does, whatever else the
+  # name means: a real package's name (pln-c's pln-one, whose name a macro's expansion
+  # still spells), a global nickname (bt, la), a package the compile path recognizes
+  # by name (uiop, ffi). Everything that takes a package designator asks the package
+  # current when it runs, a literal one in a function included. SBCL-checked, apart
+  # from its literal find-package, which caches its first answer.
+  - name: package-local-nicknames-read-in-the-package-that-has-them
+    source: |
+      (defpackage #:pln-one (:use #:cl) (:export #:who #:sym))
+      (defpackage #:pln-two (:use #:cl) (:export #:who #:sym))
+      (defpackage #:pln-other (:use #:cl) (:export #:who))
+      (in-package #:pln-one)
+      (defun who () "ONE")
+      (in-package #:pln-two)
+      (defun who () "TWO")
+      (in-package #:pln-other)
+      (defun who () "OTHER")
+      (in-package #:cl-user)
+      (defmacro pln-call-one () `(pln-one:who))
+      (defun pln-name (designator)
+        (let ((found (find-package designator))) (if found (package-name found) nil)))
+      (defun pln-literal () (let ((found (find-package "PLN-N"))) (if found (package-name found) nil)))
+      (defpackage #:pln-a (:use #:cl) (:local-nicknames (#:pln-n #:pln-one) (#:pln-m #:pln-two)))
+      (defpackage #:pln-b (:use #:cl) (:local-nicknames (#:pln-n #:pln-two)))
+      (defpackage #:pln-c (:use #:cl #:pln-two) (:shadow #:who)
+        (:local-nicknames (#:pln-one #:pln-other) (#:bt #:pln-other) (#:uiop #:pln-other) (#:la #:pln-other)
+                          (#:ffi #:pln-other) (#:pln-n #:pln-two)))
+      (defpackage #:pln-swap (:use #:cl) (:local-nicknames (#:pln-one #:pln-two) (#:pln-two #:pln-one)))
+      (print (list (pln-literal) (pln-name "PLN-N") (pln-name "PLN-ONE")))
+      (in-package #:pln-a)
+      (print (list (pln-n:who) (cl-user::pln-name "PLN-N") (cl-user::pln-name :pln-n) (cl-user::pln-literal)))
+      (print (list (prin1-to-string 'pln-one:sym) (prin1-to-string 'pln-two:sym) (prin1-to-string 'pln-n::hidden)
+                   (format nil "~S ~A" 'pln-m:who 'pln-m:who)))
+      (print (list (package-name "PLN-N") (multiple-value-list (find-symbol "WHO" "PLN-M"))
+                   (multiple-value-list (intern "SYM" :pln-m)) (length (package-use-list "PLN-N"))
+                   (eq 'pln-m::fresh (intern "FRESH" "PLN-M")) (package-name (symbol-package 'pln-m::fresh))
+                   (let ((names nil))
+                     (do-external-symbols (s "PLN-M") (push (symbol-name s) names))
+                     (sort names #'string<))))
+      (print (list (read-from-string "pln-m:sym") (svref #(pln-m:sym) 0)
+                   (package-name (symbol-package (svref #(pln-m:sym) 0)))))
+      (in-package #:pln-b)
+      (print (list (pln-n:who) (cl-user::pln-name "PLN-N") (cl-user::pln-literal) (prin1-to-string 'pln-two:sym)))
+      (in-package #:pln-c)
+      (print (list (pln-one:who) (bt:who) (uiop:who) (la:who) (ffi:who) (cl-user::pln-call-one)
+                   (cl-user::pln-name "UIOP") (prin1-to-string 'pln-n:sym) (prin1-to-string 'pln-two::hidden)))
+      (in-package #:pln-swap)
+      (print (list (pln-one:who) (pln-two:who) (cl-user::pln-call-one) (prin1-to-string 'pln-one:sym)))
+      (in-package #:pln-a)
+      (defpackage #:pln-using (:use #:pln-m))
+      (defpackage #:pln-importing (:import-from #:pln-m #:sym))
+      (print (list (mapcar #'package-name (package-use-list :pln-using)) (find-symbol "SYM" :pln-importing)))
+      (in-package #:pln-m)
+      (print (list (package-name *package*) (who)))
+      (in-package #:cl-user)
+      (print (list (pln-name "PLN-N") (pln-name "PLN-M")
+                   (handler-case (intern "X" "PLN-N") (package-error () :no-package))
+                   (let ((*package* (find-package :pln-b))) (list (pln-name "PLN-N") (read-from-string "pln-n:sym")))))
+      (print (with-standard-io-syntax (pln-name "PLN-N")))
+      (print (list 'pln-one:sym (pln-name "PLN-ONE")))
+      (defpackage #:pln-again (:use #:cl) (:local-nicknames (#:pln-x #:pln-one) (#:pln-y #:pln-two)))
+      (in-package #:pln-again)
+      (print (pln-x:who))
+      (in-package #:cl-user)
+      (defpackage #:pln-again (:use #:cl) (:local-nicknames (#:pln-x #:pln-two)))
+      (in-package #:pln-again)
+      (print (list (pln-x:who) (cl-user::pln-name "PLN-Y")))
+      (in-package #:cl-user)
+      (defpackage #:pln-again (:use #:cl))
+      (in-package #:pln-again)
+      (print (cl-user::pln-name "PLN-X"))
+      (in-package #:cl-user)
+      (defpackage #:pln-self (:use #:cl)
+        (:local-nicknames (#:pln-me #:pln-self) ("pln-lower" #:pln-one) (#\Q #:pln-two)))
+      (print (let ((*package* (find-package :pln-self)))
+               (list (pln-name "PLN-ME") (pln-name "pln-lower") (pln-name "PLN-LOWER") (pln-name "Q")
+                     (prin1-to-string 'pln-one:sym))))
+    expected: |
+      (NIL NIL "PLN-ONE")
+      ("ONE" "PLN-ONE" "PLN-ONE" "PLN-ONE")
+      ("PLN-N:SYM" "PLN-M:SYM" "PLN-N::HIDDEN" "PLN-M:WHO WHO")
+      ("PLN-ONE" (PLN-M:WHO :EXTERNAL) (PLN-M:SYM :EXTERNAL) 1 T "PLN-TWO" ("SYM" "WHO"))
+      (PLN-M:SYM PLN-M:SYM "PLN-TWO")
+      ("TWO" "PLN-TWO" "PLN-TWO" "PLN-N:SYM")
+      ("OTHER" "OTHER" "OTHER" "OTHER" "OTHER" "ONE" "PLN-OTHER" "SYM" "PLN-N::HIDDEN")
+      ("TWO" "ONE" "ONE" "PLN-ONE:SYM")
+      (("PLN-TWO") PLN-M:SYM)
+      ("PLN-TWO" "TWO")
+      (NIL NIL :NO-PACKAGE ("PLN-TWO" PLN-TWO:SYM))
+      NIL
+      (PLN-ONE:SYM "PLN-ONE")
+      "ONE"
+      ("TWO" NIL)
+      NIL
+      ("PLN-SELF" "PLN-ONE" NIL "PLN-TWO" "|pln-lower|:SYM")
+  # A library the compile path picks by the package a symbol spells, reached through a
+  # nickname.
+  - name: package-local-nickname-of-a-library-spliced-by-name
+    source: |
+      (defpackage #:pln-library-user (:use #:cl) (:local-nicknames (#:pln-rl #:rontolisp) (#:pln-la #:linalg)))
+      (in-package #:pln-library-user)
+      (print (pln-rl:url-decode "a%20b"))
+      (print (pln-la:diff #(1 2 4)))
+      (in-package #:cl-user)
+    expected: |
+      "a b"
+      #d(1.0 2.0)
+  # The canonical spelling of a cl-user symbol is bare, which the compile path's second
+  # read takes for a symbol of the package an expansion lands in.
+  - name: an-expansion-keeps-a-cl-user-symbol-read-in-another-package
+    source: |
+      (defun pln-helper () "CL-USER")
+      (defmacro pln-call-helper () `(pln-helper))
+      (defmacro pln-quoted-helper () `'pln-helper)
+      (defpackage #:pln-elsewhere (:use #:cl))
+      (in-package #:pln-elsewhere)
+      (print (cl-user::pln-call-helper))
+      (print (list (cl-user::pln-helper) (cl-user::pln-call-helper)))
+      (print (eq (cl-user::pln-quoted-helper) 'cl-user::pln-helper))
+      (in-package #:cl-user)
+    expected: |
+      "CL-USER"
+      ("CL-USER" "CL-USER")
+      T
   # The uiop/package surgery family: the name-level questions the
   # registry serves are real on all four backends, and the symbol-identity
   # surgery signals not-implemented-error naming the operation with the "no
   # image to upgrade" reason. Only cross-backend-agreeing answers are pinned
   # (the compiled find-symbol builds unknown spellings, and the WASM
   # symbol-package cannot tell cl from cl-user -- both documented divergences
-  # with twins in LispEvaluatorTest). The nickname is added AND removed by
-  # literal top-level calls (both are compile-time directives), so nothing
-  # leaks into later cases.
+  # with twins in LispEvaluatorTest).
   - name: uiop-package-surgery
     source: |
       (defpackage #:ci-up (:use #:cl) (:export #:up-foo))
       (in-package #:ci-up)
       (defun up-foo () 42)
       (in-package #:cl-user)
-      (uiop:add-package-local-nickname '#:ci-up-nick '#:ci-up)
+      (defpackage #:ci-up-user (:use #:cl))
+      (uiop:add-package-local-nickname '#:ci-up-nick '#:ci-up '#:ci-up-user)
       (print (uiop:find-package* :ci-up))
       (print (uiop:find-symbol* "UP-FOO" :ci-up))
       (print (multiple-value-list (uiop:find-symbol* "CAR" :cl)))
@@ -17026,8 +17174,8 @@ cases:
       (print (null (find-package (uiop:fresh-package-name))))
       (print (uiop:fresh-package-name :prefix "CI-UP-" :separator "-" :index 3))
       (print (uiop:package-definition-form :ci-up))
-      (print (list (uiop:export* "UP-BAR" :ci-up) (uiop:import* 'cl:car :ci-up) (ci-up-nick:up-foo)))
-      (print (uiop:package-local-nicknames :ci-up))
+      (print (list (uiop:export* "UP-BAR" :ci-up) (uiop:import* 'cl:car :ci-up) (ci-up:up-foo)))
+      (print (uiop:package-local-nicknames :ci-up-user))
       (defvar *ci-upa-renamed* (uiop:rename-package-away (make-package "CI-UPA" :use '(:cl))))
       (print (list (null (find-package "CI-UPA"))
                    (if (search "__CI-UPA__" (package-name *ci-upa-renamed*)) t nil)))
@@ -17053,11 +17201,11 @@ cases:
       T
       T
       NIL
-      ("CI-UP" "CI-UP-NICK")
+      ("CI-UP")
       (:CI-UP :CL)
       T
       "CI-UP--3"
-      (DEFPACKAGE "CI-UP" (:NICKNAMES "CI-UP-NICK") (:USE "CL") (:EXPORT "UP-FOO"))
+      (DEFPACKAGE "CI-UP" (:USE "CL") (:EXPORT "UP-FOO"))
       (T T 42)
       (("CI-UP-NICK" . :CI-UP))
       (T T)

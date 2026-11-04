@@ -281,9 +281,8 @@
 ;; is (KEYWORD . ARGS), :use-reexport/:mix-reexport fan out into :use/:mix plus
 ;; :reexport, and a missing :use defaults to (:common-lisp) while a missing
 ;; :recycle defaults to the package itself. One divergence: the
-;; :local-nicknames clause is always accepted -- rontolisp always carries the
-;; lite-global nickname machinery, so the feature test upstream gates it on
-;; could only ever refuse.
+;; :local-nicknames clause is always accepted -- rontolisp always has package-local
+;; nicknames, so the feature test upstream gates it on could only ever refuse.
 (defun uiop/package:parse-define-package-form (%pdp-package %pdp-clauses)
   (let ((%pdp-nicknames nil)
         (%pdp-documentation nil)
@@ -362,18 +361,24 @@
             (list (list :local-nicknames (list 'quote %pdp-local-nicknames)))
             nil))))
 
-;; The package-local nickname query. Nicknames are global here (no per-package
-;; scoping, .kb/packages.md), so this answers every global nickname pointing
-;; at the package, as (NICKNAME-STRING . PACKAGE-KEYWORD) pairs -- the shape
-;; upstream's per-package table has, over the scope that exists. The removal
-;; half is remove-package-local-nickname: a literal top-level call is consumed
-;; at resolve time like the add, and anything else is an interpreter runtime
-;; (it mutates the registry, like the computed add-package-local-nickname
-;; call).
+;; The package-local nicknames (.kb/packages.md). A literal top-level add or remove
+;; is also a directive the resolver consumes, since it changes how the forms after it
+;; read; what these three do is the run-time half, over the live registry on the
+;; interpreter and the program's own table on the compile paths. The nickname is a
+;; string designator, and a package value is a keyword, so (string ...) takes either.
+(defun uiop/package-local-nicknames:add-package-local-nickname
+    (%apl-nickname %apl-package &optional (%apl-scope *package*))
+  (%local-nickname-add (string %apl-nickname) (string %apl-package)
+                       (string %apl-scope)))
+
+(defun uiop/package-local-nicknames:remove-package-local-nickname
+    (%rpl-nickname &optional (%rpl-scope *package*))
+  (%local-nickname-remove (string %rpl-nickname) (string %rpl-scope)))
+
 (defun uiop/package-local-nicknames:package-local-nicknames (%pln-package)
-  (let ((%pln-found (uiop/package:find-package* %pln-package)) (%pln-acc nil))
-    (dolist (%pln-nick (package-nicknames %pln-found) (nreverse %pln-acc))
-      (push (cons %pln-nick %pln-found) %pln-acc))))
+  (sort (%package-local-nicknames (uiop/package:find-package* %pln-package))
+        #'string<
+        :key #'car))
 
 ;; The reify/unreify pair, the nuke pair, the rehome mover and the rest of the
 ;; load-time surgery -- delete-package*, ensure-package-unused,

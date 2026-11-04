@@ -1259,6 +1259,8 @@ final class WasmExprCompiler {
 				compileExpansion(LispMacroExpander.expandSymbolPrintBareP(cons, ctx.symbolPrintTable), ctx, tail);
 			case LispNames.PRINT_PACKAGE_RAW_P_INTERNAL ->
 				compileExpansion(LispMacroExpander.expandPrintPackageRawP(ctx.symbolPrintTable), ctx, tail);
+			case LispNames.PRINT_CASED_QUALIFIER_INTERNAL ->
+				compileExpansion(LispMacroExpander.expandPrintQualifier(cons, ctx.functions::containsKey), ctx, tail);
 			case LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL ->
 				compileExpansion(LispMacroExpander.expandPrintCasedLeaf(cons, ctx.printControlVariables), ctx, tail);
 			case LispNames.MAKE_SYMBOL -> WasmSymbolApiCompiler.compileMakeSymbol(cons, ctx);
@@ -1911,8 +1913,10 @@ final class WasmExprCompiler {
 				}
 				else {
 					// Malformed text signals (expandReadFromStringFailure).
-					compileExpansion(LispMacroExpander.expandReadFromStringFailure(cons,
-							ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx, tail);
+					compileExpansion(
+							LispMacroExpander.expandReadFromStringFailure(cons,
+									ctx.hasLandingPad && ctx.instanceTypeIndex >= 0, ctx.functions::containsKey),
+							ctx, tail);
 				}
 			}
 			case LispNames.READ_FROM_STRING_RAW_INTERNAL -> WasmReadFromStringCompiler.compile(cons, ctx);

@@ -52,11 +52,9 @@ import org.jspecify.annotations.Nullable;
  * a {@code uiop:} occurrence into and therefore what a definition of it must carry.
  *
  * <p>
- * Three groups of names are deliberately NOT stubbed, because something else already
+ * Two groups of names are deliberately NOT stubbed, because something else already
  * defines them:
  * <ul>
- * <li>{@link #JAVA_DEFINED} -- built-ins the interpreter defines in Java and the
- * compilers lower directly ({@code add-package-local-nickname});</li>
  * <li>{@code LispMacroExpander.hasUiopMacroExpansion} -- forms with a real expansion
  * ({@code if-let}, {@code with-temporary-file}, {@code with-deprecation},
  * {@code define-package});</li>
@@ -86,27 +84,6 @@ public final class UiopLibrary {
 			"uiop-filesystem.lisp", "UIOP/STREAM", "uiop-stream.lisp", "UIOP/IMAGE", "uiop-image.lisp",
 			"UIOP/LISP-BUILD", "uiop-lisp-build.lisp", "UIOP/VERSION", "uiop-version.lisp", "UIOP/BACKWARD-DRIVER",
 			"uiop-backward-driver.lisp");
-
-	/**
-	 * Members the interpreter defines in Java (and the compilers lower or wrap
-	 * themselves), so a stub would shadow a working built-in.
-	 * {@code add-package-local-nickname} reaches the package registry, at resolve time on
-	 * every backend. {@code remove-package-local-nickname} is its undo: a literal
-	 * top-level call is consumed at resolve time like the add, and anything else stays a
-	 * runtime call only the interpreter serves; the query {@code package-local-nicknames}
-	 * is a Lisp definition instead ({@code uiop-package.lisp}), so it runs everywhere.
-	 * {@code getenv} used to be here and is not: it is a Lisp definition now
-	 * ({@code uiop-os.lisp}) over the {@code %host-getenv} primitive, so that the
-	 * override map a {@code (setf (uiop:getenv ...))} writes is consulted on every
-	 * backend. {@code symbol-call} left for the same kind of reason: a Java-only member
-	 * has no value the compile paths can materialize, so {@code #'uiop:symbol-call} --
-	 * dexador's backend dispatch -- did not compile at all. It carries a Lisp definition
-	 * now ({@code uiop-package.lisp}) beside the call-position fold, exactly as
-	 * {@code native-namestring} does; the interpreter's Java built-in resolves first, so
-	 * the definition never loads there.
-	 */
-	private static final Set<String> JAVA_DEFINED = Set.of(LispNames.ADD_PACKAGE_LOCAL_NICKNAME,
-			LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME);
 
 	/** The {@code &rest} parameter of a synthesized stub; its arguments are ignored. */
 	private static final String STUB_ARGS = "%UIOP-STUB-ARGS";
@@ -533,7 +510,7 @@ public final class UiopLibrary {
 				out.put(qualified, List.copyOf(defined));
 				implemented.add(qualified);
 			}
-			else if (JAVA_DEFINED.contains(entry.symbol()) || LispMacroExpander.hasUiopMacroExpansion(entry.symbol())) {
+			else if (LispMacroExpander.hasUiopMacroExpansion(entry.symbol())) {
 				implemented.add(qualified);
 			}
 			else {

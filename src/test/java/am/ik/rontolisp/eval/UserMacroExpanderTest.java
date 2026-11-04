@@ -94,6 +94,26 @@ class UserMacroExpanderTest {
 	}
 
 	@Test
+	void anExpansionKeepsItsSymbolsInAPackageThatReadsThemAsOthers() {
+		// A macro of cl-user expanded elsewhere: the canonical spelling of its symbols is
+		// bare, and a qualifier it spells may be a nickname of the package it lands in.
+		// Only what a source form spells reads through the nickname.
+		List<LispVal> emitted = UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defpackage :ume-target (:use :cl) (:export #:run))
+				(defpackage :ume-other (:use :cl) (:export #:run))
+				(defun helper () 1)
+				(defmacro m () `(list (helper) (ume-target:run) 'helper))
+				(defpackage :ume-there (:use :cl) (:local-nicknames (:ume-target :ume-other)))
+				(in-package :ume-there)
+				(print (cl-user::m))
+				(print (ume-target:run))
+				"""));
+		List<LispVal> resolved = new am.ik.rontolisp.PackageResolver().resolveProgram(emitted);
+		assertThat(resolved.stream().map(LispVal::print).toList())
+			.contains("(PRINT (LIST (HELPER) (UME-TARGET:RUN) 'HELPER))", "(PRINT (UME-OTHER:RUN))");
+	}
+
+	@Test
 	void anExpansionKeepsClsWhileAfterThePackageTakesTheName() {
 		// The compilers' resolver re-reads the emitted forms after the %own-symbol claim:
 		// cl's while, quoted or not, must still read as cl's there.

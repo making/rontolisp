@@ -3192,7 +3192,7 @@ class JvmLispCompilerTest {
 				(uiop:add-package-local-nickname '#:ju-nick '#:ju-ei)
 				(print (list (uiop:export* "EI-BAR" :ju-ei) (uiop:import* 'cl:car :ju-ei)))
 				(print (ju-nick:ei-foo))
-				(print (uiop:package-local-nicknames :ju-ei))
+				(print (uiop:package-local-nicknames :cl-user))
 				(print (let ((renamed (uiop:rename-package-away
 				                        (make-package "JU-RPA" :use '(:cl)))))
 				         (list (null (find-package "JU-RPA"))
@@ -3211,13 +3211,9 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunUiopRemovePackageLocalNickname() throws Exception {
-		// A literal top-level remove is consumed like the add (so it works on every
-		// backend), and the baked tables answer the end state the directive leaves:
-		// the call through the nickname resolves (it precedes the remove), and every
-		// listing after it agrees the nickname is gone. A listing BEFORE the remove
-		// would still see the end state on the compiled backends while the
-		// interpreter answers the mid-program state, so the two are never mixed in
-		// one program (the frozen-registry rule, .kb/packages.md).
+		// A literal top-level add and remove stand where they stand in the program, so a
+		// listing answers the state at that point, and a symbol prints with the nickname
+		// while there is one. A computed call is the same function, with SBCL's refusals.
 		assertThat(compileAndRun("""
 				(defpackage #:ju-rm (:use #:cl) (:export #:rm-foo))
 				(in-package #:ju-rm)
@@ -3225,10 +3221,24 @@ class JvmLispCompilerTest {
 				(in-package #:cl-user)
 				(uiop:add-package-local-nickname '#:ju-rm-nick '#:ju-rm)
 				(print (ju-rm-nick:rm-foo))
+				(print 'ju-rm-nick:rm-foo)
+				(print (uiop:package-local-nicknames :cl-user))
 				(uiop:remove-package-local-nickname '#:ju-rm-nick)
-				(print (uiop:package-local-nicknames :ju-rm))
+				(print 'ju-rm:rm-foo)
+				(print (uiop:package-local-nicknames :cl-user))
 				(print (uiop:package-names :ju-rm))
-				""")).isEqualTo("9\nNIL\n(\"JU-RM\")");
+				(defun ju-rm-computed () "JU-RM-COMPUTED")
+				(print (uiop:add-package-local-nickname (ju-rm-computed) :ju-rm))
+				(print (list (find-package (ju-rm-computed)) (find-package "JU-RM-COMPUTED")))
+				(print (read-from-string "ju-rm-computed:rm-foo"))
+				(print (handler-case (uiop:add-package-local-nickname "CL" :ju-rm)
+				         (package-error (c) (princ-to-string c))))
+				(print (uiop:remove-package-local-nickname (ju-rm-computed)))
+				(print (find-package (ju-rm-computed)))
+				"""))
+			.isEqualTo("9\nJU-RM-NICK:RM-FOO\n((\"JU-RM-NICK\" . :JU-RM))\nJU-RM:RM-FOO\nNIL\n(\"JU-RM\")\n:CL-USER\n"
+					+ "(:JU-RM :JU-RM)\nJU-RM-COMPUTED:RM-FOO\n"
+					+ "\"Attempt to use CL as a package local nickname (for JU-RM).\"\nT\nNIL");
 	}
 
 	@Test

@@ -15435,7 +15435,7 @@ class WasmLispCompilerIntegrationTest {
 				(uiop:add-package-local-nickname '#:wu-nick '#:wu-ei)
 				(print (list (uiop:export* "EI-BAR" :wu-ei) (uiop:import* 'cl:car :wu-ei)))
 				(print (wu-nick:ei-foo))
-				(print (uiop:package-local-nicknames :wu-ei))
+				(print (uiop:package-local-nicknames :cl-user))
 				(print (let ((renamed (uiop:rename-package-away
 				                        (make-package "WU-RPA" :use '(:cl)))))
 				         (list (null (find-package "WU-RPA"))
@@ -15455,8 +15455,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void uiopRemovePackageLocalNickname() throws Exception {
 		// The WASM twin of
-		// JvmLispCompilerTest#compileAndRunUiopRemovePackageLocalNickname
-		// (see it for why the listings sit after the remove).
+		// JvmLispCompilerTest#compileAndRunUiopRemovePackageLocalNickname.
 		assertThat(compileAndRunPrelude("""
 				(defpackage #:wu-rm (:use #:cl) (:export #:rm-foo))
 				(in-package #:wu-rm)
@@ -15464,10 +15463,24 @@ class WasmLispCompilerIntegrationTest {
 				(in-package #:cl-user)
 				(uiop:add-package-local-nickname '#:wu-rm-nick '#:wu-rm)
 				(print (wu-rm-nick:rm-foo))
+				(print 'wu-rm-nick:rm-foo)
+				(print (uiop:package-local-nicknames :cl-user))
 				(uiop:remove-package-local-nickname '#:wu-rm-nick)
-				(print (uiop:package-local-nicknames :wu-rm))
+				(print 'wu-rm:rm-foo)
+				(print (uiop:package-local-nicknames :cl-user))
 				(print (uiop:package-names :wu-rm))
-				""")).isEqualTo("9\nNIL\n(\"WU-RM\")");
+				(defun wu-rm-computed () "WU-RM-COMPUTED")
+				(print (uiop:add-package-local-nickname (wu-rm-computed) :wu-rm))
+				(print (list (find-package (wu-rm-computed)) (find-package "WU-RM-COMPUTED")))
+				(print (read-from-string "wu-rm-computed:rm-foo"))
+				(print (handler-case (uiop:add-package-local-nickname "CL" :wu-rm)
+				         (package-error (c) (princ-to-string c))))
+				(print (uiop:remove-package-local-nickname (wu-rm-computed)))
+				(print (find-package (wu-rm-computed)))
+				"""))
+			.isEqualTo("9\nWU-RM-NICK:RM-FOO\n((\"WU-RM-NICK\" . :WU-RM))\nWU-RM:RM-FOO\nNIL\n(\"WU-RM\")\n:CL-USER\n"
+					+ "(:WU-RM :WU-RM)\nWU-RM-COMPUTED:RM-FOO\n"
+					+ "\"Attempt to use CL as a package local nickname (for WU-RM).\"\nT\nNIL");
 	}
 
 	@Test

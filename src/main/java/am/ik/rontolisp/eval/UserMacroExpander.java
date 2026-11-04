@@ -927,20 +927,24 @@ public final class UserMacroExpander {
 	}
 
 	/**
-	 * Re-spells every bare CL-symbol name that the resolver's current package reads as
-	 * some other symbol -- one it shadows, a {@code cl} extension name it has come to own
-	 * ({@code (defmacro while ...)}), its own where it uses no {@code cl} -- as the
-	 * explicit {@code cl:}-qualified form, recursively through the expansion. Only a
-	 * {@code cl} symbol the expansion resolved from a {@code cl:} spelling, or before the
-	 * package took the name, is spelled bare there. A quoted datum is walked too, since
-	 * the compilers' resolution pass resolves its symbols as well; an
-	 * {@code %unspelled-quote} datum is not.
+	 * Re-spells every symbol of an expansion that the compilers' resolution pass would
+	 * read as some other symbol in the resolver's current package, recursively through
+	 * the form ({@link PackageResolver#emittedSpelling}). A canonical bare name is
+	 * {@code cl}'s or {@code cl-user}'s, and the package may read it as one it shadows, a
+	 * {@code cl} extension name it has come to own ({@code (defmacro while ...)}), its
+	 * own where it uses no {@code cl} -- only a {@code cl} symbol the expansion resolved
+	 * from a {@code cl:} spelling, or before the package took the name, is spelled bare
+	 * there -- or, for a {@code cl-user} symbol a macro of that package names, its own
+	 * symbol of the name. A qualifier may be a nickname of the package's own. A quoted
+	 * datum is walked too, since the compilers' resolution pass resolves its symbols as
+	 * well; an {@code %unspelled-quote} datum is not.
 	 */
 	private static LispVal requalifyShadowedClNames(LispVal form, LispEvaluator macroEval) {
 		return LispTrees.rebuildSpine(form, node -> switch (node) {
-			case LispSymbol sym -> PackageRegistry.splitQualified(sym.name()) == null
-					&& PackageRegistry.isClSymbol(sym.name()) && macroEval.currentPackageRereadsClName(sym.name())
-							? new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, sym.name())) : sym;
+			case LispSymbol sym -> {
+				String emitted = macroEval.emittedSpelling(sym);
+				yield emitted.equals(sym.name()) ? sym : new LispSymbol(emitted);
+			}
 			case LispCons cons when cons.car() instanceof LispSymbol op && LispNames.isQuote(op.name())
 					&& !LispNames.QUOTE.equals(op.name()) ->
 				cons;

@@ -117,8 +117,9 @@ Like `in-package`, `defpackage` is a **literal, top-level directive consumed at
 read/compile time**, so packages are defined in source order, before any use.
 The supported clauses are `(:use package...)`, `(:export symbol...)`,
 `(:nicknames name...)`, `(:import-from package symbol...)`,
-`(:shadowing-import-from package symbol...)`, `(:shadow symbol...)` and
-`(:intern symbol...)`, plus `(:documentation "...")`/`(:size n)` which are
+`(:shadowing-import-from package symbol...)`, `(:shadow symbol...)`,
+`(:intern symbol...)` and `(:local-nicknames (nick actual)...)`, plus
+`(:documentation "...")`/`(:size n)` which are
 accepted and ignored; the name and the clause arguments are keywords, bare
 symbols, strings, characters (`#\H` names `"H"`), or uninterned symbols
 (`#:name`, the portable defpackage idiom). A `:shadow`ed name always resolves to
@@ -141,7 +142,8 @@ body, or through `eval`) signals these as conditions a handler can catch; a
 top-level one fails at read/compile time. A `defpackage` naming a package that already
 exists MODIFIES it (Common Lisp's rule): the clauses merge into what is there,
 which is what lets a library declare a package rontolisp has already seeded.
-A name that is another package's nickname stays an error.
+Only `:local-nicknames` is stated in full by each definition: without the clause
+the package has none. A name that is another package's nickname stays an error.
 
 - `:use` makes the **external** symbols of the used packages visible
   unqualified, as in Common Lisp — internal symbols of a used package still
@@ -162,6 +164,13 @@ A name that is another package's nickname stays an error.
   with an existing package or nickname is an error — the built-in nicknames
   (`common-lisp`, `common-lisp-user`, `rl`, `la`, `quicklisp`) are reserved the
   same way as the built-in package names.
+- `:local-nicknames` gives the package a name of its own for another package:
+  with the package current, `nick:symbol` reads as `actual:symbol`, the package
+  designator `nick` names `actual`, and a symbol of `actual` prints as
+  `nick:symbol`. No other package sees the nickname, so it may be named like
+  another package or nickname (`bt`, `uiop`), and inside the package it comes
+  first. [`uiop:add-package-local-nickname`](functions/uiop-add-package-local-nickname.md)
+  does the same outside a `defpackage`.
 - `:import-from` makes the named symbols of one package visible unqualified
   without using the whole package. Resolution is textual: an imported name
   resolves to the source package's canonical spelling, so importing and then

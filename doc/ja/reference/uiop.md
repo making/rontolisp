@@ -85,7 +85,7 @@
 | `uiop:file-stream-p`, `uiop:file-or-synonym-stream-p` | `(uiop:file-stream-p s)` | ストリーム値に対する厳密な種別判定で、同義ストリームを再帰的にたどります |
 | `uiop:compile-file-type` | `(uiop:compile-file-type)` | `nil` — コンパイル済みファイルが持つパス名の型。ここには `compile-file` が存在せずそのような型もないため、「このパスは fasl か?」を問う呼び出し側はソースパスに対して「いいえ」を得ます |
 | `uiop:default-temporary-directory` | `(uiop:default-temporary-directory)` | `$TMPDIR` をディレクトリ形式で。環境変数が空の場合 (`--env` なしの 2 つの WASM バックエンド) は `#P"/tmp/"` |
-| `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録 (lite: グローバル、パッケージごとのスコープなし)。リテラルなトップレベル呼び出しはコンパイル時ディレクティブなので、すべてのバックエンドで動作します |
+| `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ(省略時はカレントパッケージ)が別のパッケージを呼ぶための[自分専用の名前](functions/uiop-add-package-local-nickname.md)を定義。リテラルなトップレベルの呼び出しは、それ以降に読まれるフォームにも有効です |
 | `uiop:symbol-call` | `(uiop:symbol-call :cl :+ 1 2)` | 実行時にパッケージから名前を引いて適用します — 依存関係に持たないシステムを呼ぶための UIOP の遅延束縛呼び出しです |
 | `uiop:find-package*` | `(uiop:find-package* :cl)` | パッケージを返すか、存在しなければ `uiop:no-such-package-error` (第 2 引数 nil で nil) |
 | `uiop:find-symbol*` | `(uiop:find-symbol* "CAR" :cl)` | `find-symbol` と同様にシンボルと状態を返す (エラーなし指定で見つからなければ nil, nil) |
@@ -105,8 +105,8 @@
 | `uiop:package-designator` | `(typep x 'uiop:package-designator)` | デザイネータの型、および `uiop:no-such-package-error` の datum リーダー |
 | `uiop:no-such-package-error` | `(handler-case ... (uiop:no-such-package-error (c) ...))` | パッケージ欠番時に `find-package*` がシグナルする `type-error` コンディション |
 | `uiop:define-package-style-warning` | — | パッケージ再定義がシグナルするはずの `style-warning` |
-| `uiop:package-local-nicknames` | `(uiop:package-local-nicknames :my-pkg)` | そのパッケージを指すグローバルニックネームの一覧 (lite: ニックネームはグローバルでパッケージごとのスコープなし) |
-| `uiop:remove-package-local-nickname` | `(uiop:remove-package-local-nickname '#:nick)` | ニックネームの登録解除 (`t`)、なければ nil。リテラルなトップレベル呼び出しはすべてのバックエンドで動作します |
+| `uiop:package-local-nicknames` | `(uiop:package-local-nicknames :my-pkg)` | そのパッケージ自身のニックネームを `("NICKNAME" . package)` の組のリストとしてニックネーム順に返す |
+| `uiop:remove-package-local-nickname` | `(uiop:remove-package-local-nickname '#:nick)` | パッケージ(省略時はカレントパッケージ)からニックネームを取り除き `t` を返す。持っていなければ nil。リテラルなトップレベルの呼び出しは、それ以降に読まれるフォームにも有効です |
 
 完全実装済みサブパッケージ以外の 8 つのメンバは**マクロ**で、呼び出されるのではなく
 コンパイラが展開します: `uiop:with-temporary-file`、

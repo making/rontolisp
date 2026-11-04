@@ -86,7 +86,7 @@ cons cells, the six condition classes and the warnings-file plumbing. The rest:
 | `uiop:file-stream-p`, `uiop:file-or-synonym-stream-p` | `(uiop:file-stream-p s)` | exact kind tests over the stream value, recursing through synonym streams |
 | `uiop:compile-file-type` | `(uiop:compile-file-type)` | `nil` — the pathname type a compiled file carries. There is no `compile-file` here, so there is no such type, and a caller asking "is this path a fasl?" gets `no` for a source path |
 | `uiop:default-temporary-directory` | `(uiop:default-temporary-directory)` | `$TMPDIR` in directory form, or `#P"/tmp/"` when the environment is empty (both WASM backends without `--env`) |
-| `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping). A literal top-level call is a compile-time directive, so it works on every backend |
+| `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | give a package (the current one by default) a [name of its own](functions/uiop-add-package-local-nickname.md) for another package. A literal top-level call also takes effect for the forms read after it |
 | `uiop:symbol-call` | `(uiop:symbol-call :cl :+ 1 2)` | look the name up in the package at run time and apply it — UIOP's late-binding call into a system the caller does not depend on |
 | `uiop:find-package*` | `(uiop:find-package* :cl)` | the package, or `uiop:no-such-package-error` (nil for a missing package with a nil second argument) |
 | `uiop:find-symbol*` | `(uiop:find-symbol* "CAR" :cl)` | the symbol and its status, like `find-symbol` (nil, nil for a missing name with no error) |
@@ -106,8 +106,8 @@ cons cells, the six condition classes and the warnings-file plumbing. The rest:
 | `uiop:package-designator` | `(typep x 'uiop:package-designator)` | the designator type, and the datum reader of `uiop:no-such-package-error` |
 | `uiop:no-such-package-error` | `(handler-case ... (uiop:no-such-package-error (c) ...))` | the `type-error` condition `find-package*` signals for a missing package |
 | `uiop:define-package-style-warning` | — | the `style-warning` a package redefinition would signal |
-| `uiop:package-local-nicknames` | `(uiop:package-local-nicknames :my-pkg)` | every global nickname pointing at the package (lite: nicknames are global, no per-package scoping) |
-| `uiop:remove-package-local-nickname` | `(uiop:remove-package-local-nickname '#:nick)` | unregister the nickname (`t`) or answer nil; a literal top-level call works on every backend |
+| `uiop:package-local-nicknames` | `(uiop:package-local-nicknames :my-pkg)` | the package's own nicknames, as `("NICKNAME" . package)` pairs in nickname order |
+| `uiop:remove-package-local-nickname` | `(uiop:remove-package-local-nickname '#:nick)` | take a nickname from a package (the current one by default), answering `t`, or nil when it had none. A literal top-level call also takes effect for the forms read after it |
 
 Eight members outside the complete sub-packages are **macros**, expanded by the
 compiler rather than called: `uiop:with-temporary-file`,

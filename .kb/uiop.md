@@ -54,12 +54,13 @@ Definitions live in `uiop-<sub-package>.lisp` beside the class (`package`, `util
   `(define-condition NAME (error) ())`; `class` -> `(defclass NAME () ())`; `type` ->
   `(deftype NAME () t)`. Caveats: a `variable` stub is `nil`, not upstream's default; a `constant`
   gets a `defvar`; a `condition`/`class` stub is flat.
-- NOT stubbed (something else defines them): `JAVA_DEFINED` (`add-package-local-nickname`, consumed
-  at RESOLVE time by `PackageResolver`), `LispMacroExpander.hasUiopMacroExpansion` (`if-let`,
+- NOT stubbed (something else defines them): `LispMacroExpander.hasUiopMacroExpansion` (`if-let`,
   `with-temporary-file`, `with-deprecation`, `define-package`), and the fold-carrying members
   (`native-namestring`, `symbol-call`), which keep a Lisp definition so `#'name`
-  is a value. **A Java-only member has no VALUE the compile paths can materialize** — that is why
-  `symbol-call` left `JAVA_DEFINED`.
+  is a value. **A Java-only member has no VALUE the compile paths can materialize**: that is why
+  `symbol-call` and the nickname pair (`add-package-local-nickname`, `remove-package-local-nickname`)
+  are Lisp over internal primitives now, with a literal top-level call consumed at RESOLVE time as
+  well (`.kb/packages.md`, "Package-local nicknames").
 - **Resources are read with the TARGET backend's `Features`**: `UiopLibrary.process(program,
   features)` / `LispPreludeLibrary.process(program, features)`; one-argument overloads mean
   `Features.INTERPRETER`. `featurep` evaluates against `*features*` (`.kb/reader-features.md`) —
@@ -308,7 +309,7 @@ streams, distinct from `*standard-output*`: `*stdin*` = `*standard-input*`, `*st
 current standard streams.
 
 `uiop/package` (31/31), `uiop/package-local-nicknames` (3/3), `uiop/package*`
-(3/3) -- `uiop-package.lisp` plus two Java built-ins (`.todo/361`). A rontolisp
+(3/3) -- `uiop-package.lisp` (`.todo/361`). A rontolisp
 symbol is a string, so the family splits: the name-level questions are real,
 the surgery that moves a symbol between packages signals
 `not-implemented-error` naming the operation with the "no image to upgrade"
@@ -331,11 +332,8 @@ runtime shadowing are non-goals), `home-package-p`, `symbol-package-name`,
 `rename-package`, working wherever it works), `package-definition-form`,
 `parse-define-package-form` (a pure port, pinned against uiop 3.3.7's own
 `:uiop/package*` header), the `package-designator` type plus its reader, both
-conditions, the nickname query (Lisp over `package-nicknames`), and
-`remove-package-local-nickname` (an interpreter runtime with a literal
-top-level call consumed at resolve time like the add, so it works on every
-backend). `define-package` was already a resolver-level macro;
-`add-package-local-nickname` was already Java.
+conditions, and the three nickname functions (`.kb/packages.md`, "Package-local
+nicknames"). `define-package` was already a resolver-level macro.
 
 Where the string model shows through, pinned on all four backends.
 (`standard-common-lisp-symbol-p` was one: it walked the cl externals by
@@ -349,8 +347,8 @@ provides; it covers the DECLARED universe (a defun-defined name is not in the
 registry, so only declared members round-trip), and an inherited member of a
 merely-used package is skipped even when genuinely imported (the `:use`
 clause still provides it). The `:local-nicknames` clause of
-`parse-define-package-form` is always accepted: the lite-global machinery is
-always present, so upstream's feature gate could only ever refuse. Signals:
+`parse-define-package-form` is always accepted: the machinery is always present,
+so upstream's feature gate could only ever refuse. Signals:
 `rehome-symbol`, both nukes, all four reify/unreify members, `unintern*`,
 `shadow*`, `shadowing-import*`, `ensure-package-unused`, `delete-package*`
 and `ensure-package` (whose compile-time job the `define-package` macro

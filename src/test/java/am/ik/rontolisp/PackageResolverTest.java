@@ -1146,47 +1146,112 @@ class PackageResolverTest {
 	}
 
 	@Test
-	void defpackageLocalNicknamesRegistersGlobalNicknames() {
+	void aLocalNicknameReadsInThePackageThatHasIt() {
 		PackageResolver resolver = new PackageResolver();
-		resolve(resolver, "(defpackage #:com.example.long-name (:use #:cl) (:export #:run))");
-		resolve(resolver, "(defpackage #:my-app (:use #:cl) (:local-nicknames (#:short #:com.example.long-name)))");
-		resolve(resolver, "(in-package #:my-app)");
-		// Lite: the nickname is global, so the qualified call resolves through it.
-		assertThat(resolve(resolver, "(short:run)")).isEqualTo("(COM.EXAMPLE.LONG-NAME:RUN)");
+		resolve(resolver, "(defpackage #:t1 (:use #:cl) (:export #:run))");
+		resolve(resolver, "(defpackage #:t2 (:use #:cl) (:export #:run))");
+		resolve(resolver, "(defpackage #:a (:use #:cl) (:local-nicknames (#:n #:t1) (#:bt #:t1) (#:t2 #:t1)))");
+		resolve(resolver, "(defpackage #:b (:use #:cl) (:local-nicknames (#:n #:t2)))");
+		assertThatThrownBy(() -> resolve(resolver, "(n:run)")).isInstanceOf(LispPackageException.class);
+		assertThat(resolve(resolver, "(bt:make-lock)")).isEqualTo("(BORDEAUX-THREADS:MAKE-LOCK)");
+		resolve(resolver, "(in-package #:a)");
+		assertThat(resolve(resolver, "'(n:run bt:run t2:run t1:run)")).isEqualTo("'(T1:RUN T1:RUN T1:RUN T1:RUN)");
+		assertThat(resolver.findPackageName("N")).isEqualTo("T1");
+		assertThat(resolver.findGlobalPackageName("N")).isNull();
+		resolve(resolver, "(in-package #:b)");
+		assertThat(resolve(resolver, "(n:run)")).isEqualTo("(T2:RUN)");
+		assertThat(resolver.findGlobalPackageName("BT")).isEqualTo("BORDEAUX-THREADS");
 	}
 
 	@Test
-	void defpackageLocalNicknamesRequiresAnExistingTarget() {
+	void aReadThroughLocalNicknamesReadsTheSameAgainAndAResolvedSymbolIsSpelledToReadAsItself() {
 		PackageResolver resolver = new PackageResolver();
-		assertThatThrownBy(() -> resolve(resolver,
-				"(defpackage #:my-app (:use #:cl) (:local-nicknames (#:short #:no-such-package)))"))
-			.isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("No such package");
+		resolve(resolver, "(defpackage #:t1 (:use #:cl) (:export #:run))");
+		resolve(resolver, "(defpackage #:t2 (:use #:cl) (:export #:run))");
+		resolve(resolver, "(defpackage #:swap (:use #:cl) (:local-nicknames (#:t1 #:t2) (#:t2 #:t1)))");
+		resolve(resolver, "(in-package #:swap)");
+		LispVal once = resolver.readLocalNicknames(LispReader.readFromString("(t1:run t2::run)"));
+		assertThat(resolver.readLocalNicknames(once)).isSameAs(once);
+		assertThat(resolver.resolve(once).print()).isEqualTo("(T2:RUN T1:RUN)");
+		String emitted = resolver.emittedSpelling(new LispSymbol("T1:RUN"));
+		assertThat(emitted).isNotEqualTo("T1:RUN");
+		assertThat(resolver.resolve(new LispSymbol(emitted)).print()).isEqualTo("T1:RUN");
+		assertThat(resolver.emittedSpelling(new LispSymbol("OTHER:RUN"))).isEqualTo("OTHER:RUN");
+		assertThat(resolver.emittedSpelling(new LispSymbol("CAR"))).isEqualTo("CAR");
+		assertThat(resolver.emittedSpelling(new LispSymbol("FROM-CL-USER"))).isEqualTo("CL-USER::FROM-CL-USER");
+		assertThat(resolver.emittedSpelling(new LispSymbol(":KEY"))).isEqualTo(":KEY");
+		assertThat(resolver.emittedSpelling(new LispSymbol("#:UNINTERNED"))).isEqualTo("#:UNINTERNED");
 	}
 
 	@Test
-	void uiopRemovePackageLocalNicknameUnregistersALiteralNickname() {
-		// The mirror of the add consumption: a literal top-level remove unregisters
-		// here (so it works on every backend) and the call is replaced by the
-		// runtime function's t/nil answer.
+	void aPackageCannotHaveEveryLocalNickname() {
 		PackageResolver resolver = new PackageResolver();
-		resolve(resolver, "(defpackage #:com.example.long-name (:use #:cl) (:export #:run))");
-		resolve(resolver, "(uiop:add-package-local-nickname '#:short '#:com.example.long-name)");
-		assertThat(resolve(resolver, "(short:run)")).isEqualTo("(COM.EXAMPLE.LONG-NAME:RUN)");
-		assertThat(resolve(resolver, "(uiop:remove-package-local-nickname '#:short)")).isEqualTo("T");
-		assertThatThrownBy(() -> resolve(resolver, "(short:run)")).isInstanceOf(LispPackageException.class);
-		assertThat(resolve(resolver, "(uiop:remove-package-local-nickname '#:short)")).isEqualTo("NIL");
+		resolve(resolver, "(defpackage #:t1 (:use #:cl))");
+		resolve(resolver, "(defpackage #:t2 (:use #:cl))");
+		for (String clause : List.of("(#:short #:no-such-package)", "(#:cl #:t1)", "(#:common-lisp #:t1)",
+				"(#:keyword #:t1)", "(#:my-app #:t1)", "(#:x #:t1) (#:x #:t2)")) {
+			assertThatThrownBy(
+					() -> resolve(resolver, "(defpackage #:my-app (:use #:cl) (:local-nicknames " + clause + "))"))
+				.isInstanceOf(DefpackageException.class);
+		}
+		resolve(resolver, "(defpackage #:me (:use #:cl) (:local-nicknames (#:self #:me) (#:x #:t1) (#:x #:t1)))");
+		assertThat(resolver.localNicknames("ME")).containsOnly(Map.entry("SELF", "ME"), Map.entry("X", "T1"));
+		// A definition over the package states them all again.
+		resolve(resolver, "(defpackage #:me (:use #:cl) (:local-nicknames (#:y #:t2)))");
+		assertThat(resolver.localNicknames("ME")).containsOnly(Map.entry("Y", "T2"));
+		resolve(resolver, "(defpackage #:me (:use #:cl))");
+		assertThat(resolver.localNicknames("ME")).isEmpty();
 	}
 
 	@Test
-	void uiopRemovePackageLocalNicknameScopeGuardsTheRemoval() {
+	void aLiteralLocalNicknameDirectiveIsConsumedAndNamesThePackageThatHasIt() {
+		// A literal top-level add or remove takes effect for the forms after it, and is
+		// replaced by the function's answer. The second argument of a remove is the
+		// package that has the nickname, not the one it names.
 		PackageResolver resolver = new PackageResolver();
-		resolve(resolver, "(defpackage #:com.example.a (:use #:cl))");
+		resolve(resolver, "(defpackage #:com.example.a (:use #:cl) (:export #:run))");
 		resolve(resolver, "(defpackage #:com.example.b (:use #:cl))");
-		resolve(resolver, "(uiop:add-package-local-nickname '#:s '#:com.example.a)");
-		assertThat(resolve(resolver, "(uiop:remove-package-local-nickname '#:s '#:com.example.b)")).isEqualTo("NIL");
-		assertThat(resolve(resolver, "(s::run)")).contains("COM.EXAMPLE.A");
-		assertThat(resolve(resolver, "(uiop:remove-package-local-nickname '#:s '#:com.example.a)")).isEqualTo("T");
+		assertThat(resolve(resolver, "(uiop:add-package-local-nickname '#:s '#:com.example.a)")).isEqualTo("':CL-USER");
+		assertThat(resolve(resolver, "(s:run)")).isEqualTo("(COM.EXAMPLE.A:RUN)");
+		assertThat(resolve(resolver, "(uiop:remove-package-local-nickname '#:s '#:com.example.a)")).isEqualTo("NIL");
+		assertThat(resolve(resolver, "(uiop:remove-package-local-nickname '#:s)")).isEqualTo("T");
+		assertThatThrownBy(() -> resolve(resolver, "(s:run)")).isInstanceOf(LispPackageException.class);
+		assertThat(resolve(resolver, "(uiop:remove-package-local-nickname '#:s)")).isEqualTo("NIL");
+		assertThat(resolve(resolver, "(uiop:add-package-local-nickname '#:s '#:com.example.a '#:com.example.b)"))
+			.isEqualTo("':COM.EXAMPLE.B");
+		assertThat(resolver.localNicknames("COM.EXAMPLE.B")).containsOnly(Map.entry("S", "COM.EXAMPLE.A"));
+		assertThat(resolve(resolver, "(uiop:remove-package-local-nickname '#:s '#:com.example.b)")).isEqualTo("T");
+		assertThatThrownBy(() -> resolve(resolver, "(uiop:add-package-local-nickname \"CL\" '#:com.example.a)"))
+			.isInstanceOf(RuntimePackageException.class);
+	}
+
+	@Test
+	void aCompiledProgramLeavesEntriesForItsNicknamesAndFoldsNoDesignatorThatMayBeOne() {
+		List<LispVal> resolved = new PackageResolver().resolveProgram(LispReader.readAllFromString("""
+				(defpackage #:t1 (:use #:cl))
+				(defpackage #:a (:use #:cl) (:local-nicknames (#:n #:t1)))
+				(uiop:add-package-local-nickname '#:m '#:t1)
+				(uiop:remove-package-local-nickname '#:m)
+				(find-package "N")
+				(find-package "M")
+				(find-package :t1)
+				(intern "X" "N")
+				(intern "X" :t1)
+				""", Features.INTERPRETER));
+		assertThat(resolved.stream().map(LispVal::print)).containsExactly(":T1",
+				"(%LOCAL-NICKNAME-DEFINE \"A\" '((\"N\" . \"T1\")))", "(%LOCAL-NICKNAME-PUT \"CL-USER\" \"M\" \"T1\")",
+				"(%LOCAL-NICKNAME-PUT \"CL-USER\" \"M\" NIL)", "(FIND-PACKAGE \"N\")", "(FIND-PACKAGE \"M\")", "':T1",
+				"(IF (%LOCAL-NICKNAME-FIND \"N\") (INTERN \"X\" (FIND-PACKAGE \"N\")) (INTERN \"X\" \"N\"))",
+				"(INTERN \"X\" :T1)");
+		// A computed add can name anything but the three no package can have.
+		resolved = new PackageResolver().resolveProgram(LispReader.readAllFromString("""
+				(defpackage #:t1 (:use #:cl))
+				(uiop:add-package-local-nickname (car '("N")) '#:t1)
+				(find-package :t1)
+				(find-package :keyword)
+				""", Features.INTERPRETER));
+		assertThat(resolved.get(2).print()).isEqualTo("(FIND-PACKAGE :T1)");
+		assertThat(resolved.get(3).print()).isEqualTo("':KEYWORD");
 	}
 
 	@Test

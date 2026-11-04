@@ -1258,8 +1258,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		program = LispMacroExpander.injectBakedAccess(program, symbolAccess);
 		// The computed find-package lookup, once per program: its sites call it instead
 		// of building the baked table each (LispMacroExpander.injectFindPackageHelper).
+		// What the program asks of its package-local nicknames when it runs goes to a
+		// table it builds as it runs (LispMacroExpander.injectLocalNicknames).
+		boolean localNicknames = packageResolver.programHasLocalNicknames();
+		boolean localNicknamesAsked = localNicknames && LispMacroExpander.readsLocalNicknames(program);
 		program = LispMacroExpander.injectFindPackageHelper(program, packageResolver.runtimePackageTable(),
-				packageResolver.runtimePackagesMutable());
+				packageResolver.runtimePackagesMutable(), localNicknamesAsked);
+		program = LispMacroExpander.injectLocalNicknames(program, localNicknames, localNicknamesAsked);
 		if (System.getProperty("rontolisp.debug.dump-program") != null) {
 			for (LispVal form : program) {
 				System.err.println(form.print());

@@ -4451,7 +4451,7 @@ public final class LispPreludeLibrary {
 				                                 t)))
 				                (if (%symbol-print-bare-p %pu-x (subseq %pu-s 0 %pu-colon) %pu-ext)
 				                    (subseq %pu-s (if %pu-ext (+ %pu-colon 1) (+ %pu-colon 2)))
-				                    %pu-s)))))))
+				                    (%pc-qualifier %pu-s %pu-colon))))))))
 				""");
 		// An integer or ratio under *print-base* / *print-radix*, spelled as SBCL spells
 		// it: bare upper-case digits in the base, and with *print-radix* the #b / #o /

@@ -452,6 +452,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// Resolve packages first, like the other backends, so qualified names
 		// (rontolisp:wasm-export) and in-package directives are canonical.
 		program = new PackageResolver().resolveProgram(program);
+		// This backend has no run-time table of package-local nicknames to build (no
+		// cons), and nothing to ask one.
+		program = LispMacroExpander.dropLocalNicknameEvents(program);
 		// Splice top-level (progn ...)/(eval-when ...) so nested defuns are collected,
 		// like the other backends.
 		program = LispMacroExpander.flattenTopLevel(program);

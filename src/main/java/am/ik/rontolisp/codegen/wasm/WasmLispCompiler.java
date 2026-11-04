@@ -3626,8 +3626,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		program = LispMacroExpander.injectBakedAccess(program, symbolAccess);
 		// The computed find-package lookup, once per program: its sites call it instead
 		// of building the baked table each (LispMacroExpander.injectFindPackageHelper).
+		// What the program asks of its package-local nicknames when it runs goes to a
+		// table it builds as it runs (LispMacroExpander.injectLocalNicknames).
+		boolean localNicknames = packageResolver.programHasLocalNicknames();
+		boolean localNicknamesAsked = localNicknames && LispMacroExpander.readsLocalNicknames(program);
 		program = LispMacroExpander.injectFindPackageHelper(program, packageResolver.runtimePackageTable(),
-				packageResolver.runtimePackagesMutable());
+				packageResolver.runtimePackagesMutable(), localNicknamesAsked);
+		program = LispMacroExpander.injectLocalNicknames(program, localNicknames, localNicknamesAsked);
 		// Whether the PROGRAM itself needs the concatenate 'string argument normalizer
 		// (see Ctx.usesSeqString); computed before the wrappers so the lowering only
 		// calls a helper that is actually injected. AFTER expandTopLevelDefinitions --

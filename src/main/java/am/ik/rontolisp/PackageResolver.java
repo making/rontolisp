@@ -9,6 +9,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.SortedMap;
 import java.util.function.Predicate;
 
 import org.jspecify.annotations.Nullable;
@@ -151,6 +152,26 @@ public final class PackageResolver {
 	private final Map<String, Set<String>> declaredExternals = new HashMap<>();
 
 	/**
+	 * The nicknames the program being resolved gives a package in a {@code defpackage} or
+	 * a literal {@code uiop:add-package-local-nickname}, wherever they stand: a
+	 * designator spelling one of them means what the current package says when the form
+	 * RUNS, so {@link #resolveProgram} folds nothing over it.
+	 */
+	private Set<String> programLocalNicknames = Set.of();
+
+	/** Whether the program being resolved adds a nickname it computes at run time. */
+	private boolean programComputesLocalNicknames;
+
+	/** The lookup {@link #localNicknameDesignatorSite} is resolving as written. */
+	private @Nullable LispVal literalDesignatorArm;
+
+	/**
+	 * Whether {@code cl-user} ever had a nickname of its own
+	 * ({@link #addLocalNicknameIn}).
+	 */
+	private boolean clUserNicknamed;
+
+	/**
 	 * Creates a resolver with a fresh registry of the built-in packages.
 	 */
 	public PackageResolver() {
@@ -180,14 +201,13 @@ public final class PackageResolver {
 
 	/**
 	 * Returns whether the CURRENT package (as tracked across the forms resolved so far)
-	 * reads the bare name of a {@code cl} symbol as some other symbol: one it shadows,
-	 * owns ({@link #claimDefinedClExtensionName}), imports or inherits from another used
-	 * package, or, using no {@code cl}, takes for its own. Used by
-	 * {@code UserMacroExpander} to spell a bare canonical CL name explicitly
-	 * {@code cl:}-qualified in emitted expansions, so the compilers' own resolution pass
-	 * does not re-capture it as that other symbol.
+	 * reads the bare canonical name of a {@code cl} or {@code cl-user} symbol as some
+	 * other symbol: one it shadows, owns ({@link #claimDefinedClExtensionName}), imports
+	 * or inherits from another used package, or takes for its own. What
+	 * {@link #emittedSpelling} asks, so the compilers' own resolution pass does not
+	 * re-capture it as that other symbol.
 	 * @param name the bare symbol name
-	 * @return {@code true} when the bare name no longer reads as {@code cl}'s here
+	 * @return {@code true} when the bare name no longer reads as itself here
 	 */
 	public synchronized boolean currentPackageRereadsClName(String name) {
 		LispPackage current = this.registry.get(current());
@@ -215,6 +235,13 @@ public final class PackageResolver {
 	 */
 	public synchronized List<LispVal> resolveProgram(List<LispVal> program) {
 		this.runtimePackagesMutable = programUsesRuntimePackageMutation(program);
+		Set<String> nicknames = new HashSet<>();
+		boolean[] computed = new boolean[1];
+		for (LispVal form : program) {
+			collectLocalNicknameNames(form, nicknames, computed);
+		}
+		this.programLocalNicknames = nicknames;
+		this.programComputesLocalNicknames = computed[0];
 		this.inProgramResolution = true;
 		try {
 			List<LispVal> out = new ArrayList<>(program.size());
@@ -239,6 +266,98 @@ public final class PackageResolver {
 	 */
 	public boolean runtimePackagesMutable() {
 		return this.runtimePackagesMutable;
+	}
+
+	/**
+	 * Whether the program {@link #resolveProgram} last resolved can give a package a
+	 * nickname of its own, and so what it asks at run time may depend on them.
+	 * @return {@code true} when the last resolved program names a local nickname
+	 */
+	public boolean programHasLocalNicknames() {
+		return this.programComputesLocalNicknames || !this.programLocalNicknames.isEmpty();
+	}
+
+	/**
+	 * Whether a form gives a package a nickname of its own anywhere in it: what decides
+	 * whether a whole program has them to read through at all.
+	 * @param form the form
+	 * @return {@code true} when the form names a local nickname
+	 */
+	public static boolean namesLocalNicknames(LispVal form) {
+		Set<String> nicknames = new HashSet<>();
+		boolean[] computed = new boolean[1];
+		collectLocalNicknameNames(form, nicknames, computed);
+		return computed[0] || !nicknames.isEmpty();
+	}
+
+	/**
+	 * The nicknames a form gives a package: {@code literal} gains those it spells, and
+	 * {@code computed[0]} is set for an add whose nickname only the run time knows (a
+	 * computed argument, or the operator as a value).
+	 */
+	private static void collectLocalNicknameNames(LispVal form, Set<String> literal, boolean[] computed) {
+		if (form instanceof LispSymbol sym) {
+			computed[0] |= sym.name().endsWith(LispNames.ADD_PACKAGE_LOCAL_NICKNAME);
+			return;
+		}
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			String member = operatorMember(head);
+			if (LispNames.QUOTE.equals(member)) {
+				return;
+			}
+			if (LispNames.DEFPACKAGE.equals(member) || LispNames.DEFINE_PACKAGE.equals(member)) {
+				collectClauseNicknames(cons, literal);
+				return;
+			}
+			if (LispNames.ADD_PACKAGE_LOCAL_NICKNAME.equals(member)) {
+				String nickname = cons.cdr() instanceof LispCons args ? literalDesignator(args.car()) : null;
+				if (nickname == null) {
+					computed[0] = true;
+				}
+				else {
+					literal.add(nickname);
+				}
+				return;
+			}
+		}
+		else {
+			collectLocalNicknameNames(cons.car(), literal, computed);
+		}
+		for (LispVal tail = cons.cdr(); tail instanceof LispCons cell; tail = cell.cdr()) {
+			collectLocalNicknameNames(cell.car(), literal, computed);
+		}
+	}
+
+	/** The {@code :local-nicknames} nicknames of a {@code defpackage} form. */
+	private static void collectClauseNicknames(LispCons defpackage, Set<String> literal) {
+		for (LispVal tail = defpackage.cdr(); tail instanceof LispCons cell; tail = cell.cdr()) {
+			if (cell.car() instanceof LispCons clause && clause.car() instanceof LispSymbol keyword
+					&& LispNames.LOCAL_NICKNAMES_KEYWORD.equals(keyword.name())) {
+				for (LispVal rows = clause.cdr(); rows instanceof LispCons row; rows = row.cdr()) {
+					if (row.car() instanceof LispCons pair && isDesignator(pair.car())) {
+						literal.add(designator(LispNames.LOCAL_NICKNAMES_KEYWORD, "a package name", pair.car()));
+					}
+				}
+			}
+		}
+	}
+
+	/** Whether {@link #designator} accepts the value. */
+	private static boolean isDesignator(LispVal value) {
+		return value instanceof LispSymbol || value instanceof LispString || value instanceof LispChar
+				|| value instanceof LispNil || value instanceof LispTrue;
+	}
+
+	/**
+	 * Whether a literal designator may mean a package's own nickname when the form
+	 * holding it runs. {@code cl}, {@code common-lisp} and {@code keyword} never do.
+	 */
+	private boolean mayBeLocalNickname(String designator) {
+		return !isReservedNickname(designator)
+				&& (this.programComputesLocalNicknames || this.programLocalNicknames.contains(designator));
 	}
 
 	private boolean runtimePackagesMutable;
@@ -356,6 +475,13 @@ public final class PackageResolver {
 	 * @return the resolved form
 	 */
 	public synchronized LispVal resolve(LispVal form) {
+		// A token first reads through the current package's own nicknames, what the
+		// reader does before it looks anything else up. What is not a token stays as it
+		// is: a datum's symbols are symbols already, and the implementation's forms name
+		// the packages they mean.
+		if (!this.resolvingDatum && !this.probing) {
+			form = readLocalNicknames(form);
+		}
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op) {
 			String member = operatorMember(op);
 			if (LispNames.IN_PACKAGE.equals(member)) {
@@ -472,23 +598,19 @@ public final class PackageResolver {
 			if (LispNames.STRUCT_DEFINITION.equals(member) && cons.cdr() instanceof LispCons payloadCell) {
 				return new LispCons(cons.car(), new LispCons(resolve(payloadCell.car()), LispNil.INSTANCE));
 			}
-			// A literal top-level (uiop:add-package-local-nickname 'nick 'pkg) is
-			// consumed like a defpackage clause: the nickname registers here (so it
-			// works on every backend -- the compiled runtimes have no uiop function)
-			// and the call is replaced by its return value. A non-literal call stays a
-			// runtime call, which only the interpreter can serve.
+			// A literal top-level (uiop:add-package-local-nickname 'nick 'pkg [scope])
+			// is consumed like a defpackage clause: the forms after it read through the
+			// nickname, on THIS pass. The compile paths' forms all read before any of
+			// them runs, so the call also leaves the entry the run-time table gets when
+			// it would have run. A computed call stays a call.
 			if (LispNames.ADD_PACKAGE_LOCAL_NICKNAME.equals(member) && isUiopOperator(op)) {
 				LispVal consumed = tryConsumeAddLocalNickname(cons);
 				if (consumed != null) {
 					return consumed;
 				}
 			}
-			// A literal top-level (uiop:remove-package-local-nickname 'nick [scope])
-			// is consumed like the add: the nickname unregisters here (so it works on
-			// every backend -- the compiled runtimes have no uiop function) and the
-			// call is replaced by t/nil, the runtime function's return value. A
-			// non-literal call stays a runtime call, which only the interpreter can
-			// serve.
+			// (uiop:remove-package-local-nickname 'nick [scope]) is its undo, consumed
+			// the same way.
 			if (LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME.equals(member) && isUiopOperator(op)) {
 				LispVal consumed = tryConsumeRemoveLocalNickname(cons);
 				if (consumed != null) {
@@ -547,10 +669,11 @@ public final class PackageResolver {
 	}
 
 	/**
-	 * Consumes a literal {@code (uiop:add-package-local-nickname 'nick 'pkg)} call:
-	 * registers the (global, lite) nickname and returns the quoted target name -- the
-	 * runtime function's return value. Returns null when an argument is not a literal
-	 * designator (a runtime call the interpreter serves).
+	 * Consumes a literal {@code (uiop:add-package-local-nickname 'nick 'pkg [scope])}
+	 * call: the scope package (the current one by default) gets the nickname, and the
+	 * form becomes the scope package -- the function's return value -- or, in a compiled
+	 * program, the table entry that stands for the call. Returns null when an argument is
+	 * not a literal designator, or names a package only the run time can make: a call.
 	 */
 	private @Nullable LispVal tryConsumeAddLocalNickname(LispCons cons) {
 		List<LispVal> parts = cons.toList();
@@ -559,18 +682,27 @@ public final class PackageResolver {
 		}
 		String nickname = literalDesignator(parts.get(1));
 		String actual = literalDesignator(parts.get(2));
-		if (nickname == null || actual == null) {
+		String scope = parts.size() == 4 ? literalDesignator(parts.get(3)) : current();
+		if (nickname == null || actual == null || scope == null) {
 			return null;
 		}
-		registerLocalNickname(nickname, actual);
-		return quotedSymbol(this.registry.canonicalName(actual));
+		if (this.inProgramResolution && this.runtimePackagesMutable
+				&& (findPackageName(scope) == null || findPackageName(actual) == null)) {
+			return null;
+		}
+		String pkg = addLocalNickname(nickname, actual, scope);
+		if (this.inProgramResolution) {
+			return nicknameEntry(pkg, nickname, this.registry.localNicknames(pkg).get(nickname));
+		}
+		return quotedSymbol(":" + pkg.toUpperCase(java.util.Locale.ROOT));
 	}
 
 	/**
 	 * Consumes a literal {@code (uiop:remove-package-local-nickname 'nick [scope])} call:
-	 * unregisters the (global, lite) nickname and returns t/nil -- the runtime function's
-	 * return value. Returns null when an argument is not a literal designator (a runtime
-	 * call the interpreter serves).
+	 * the scope package (the current one by default) loses the nickname, and the form
+	 * becomes t or nil -- the function's return value -- or, in a compiled program, the
+	 * table entry that stands for the call. Returns null when an argument is not a
+	 * literal designator, or names a package only the run time can make: a call.
 	 */
 	private @Nullable LispVal tryConsumeRemoveLocalNickname(LispCons cons) {
 		List<LispVal> parts = cons.toList();
@@ -578,17 +710,53 @@ public final class PackageResolver {
 			return null;
 		}
 		String nickname = literalDesignator(parts.get(1));
-		if (nickname == null) {
+		String scope = parts.size() == 3 ? literalDesignator(parts.get(2)) : current();
+		if (nickname == null || scope == null) {
 			return null;
 		}
-		String scope = null;
-		if (parts.size() == 3) {
-			scope = literalDesignator(parts.get(2));
-			if (scope == null) {
-				return null;
-			}
+		String pkg = findPackageName(scope);
+		if (this.inProgramResolution && this.runtimePackagesMutable && pkg == null) {
+			return null;
 		}
-		return removeLocalNickname(nickname, scope) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		boolean removed = removeLocalNickname(nickname, scope);
+		if (this.inProgramResolution) {
+			return nicknameEntry(java.util.Objects.requireNonNull(pkg), nickname, null);
+		}
+		return removed ? LispTrue.INSTANCE : LispNil.INSTANCE;
+	}
+
+	/**
+	 * {@code (%local-nickname-put "PACKAGE" "NICKNAME" "TARGET")}, or with a nil target
+	 * the removal: what a literal directive leaves in a compiled program, for the table
+	 * its run-time lookups read.
+	 */
+	private static LispVal nicknameEntry(String pkg, String nickname, @Nullable String target) {
+		return new LispCons(new LispSymbol(LispNames.LOCAL_NICKNAME_PUT_INTERNAL),
+				new LispCons(new LispString(pkg.toUpperCase(java.util.Locale.ROOT)),
+						new LispCons(new LispString(nickname),
+								new LispCons(
+										target == null ? LispNil.INSTANCE
+												: new LispString(target.toUpperCase(java.util.Locale.ROOT)),
+										LispNil.INSTANCE))));
+	}
+
+	/**
+	 * {@code (%local-nickname-define "PACKAGE" '(("NICKNAME" . "TARGET") ...))}: what a
+	 * {@code defpackage} leaves in a compiled program whose package has nicknames, or had
+	 * some before this definition took them away.
+	 */
+	private static LispVal nicknameDefinition(String pkg, Map<String, String> table) {
+		LispVal rows = LispNil.INSTANCE;
+		List<Map.Entry<String, String>> entries = new ArrayList<>(table.entrySet());
+		for (int i = entries.size() - 1; i >= 0; i--) {
+			rows = new LispCons(new LispCons(new LispString(entries.get(i).getKey()),
+					new LispString(entries.get(i).getValue().toUpperCase(java.util.Locale.ROOT))), rows);
+		}
+		return new LispCons(new LispSymbol(LispNames.LOCAL_NICKNAME_DEFINE_INTERNAL),
+				new LispCons(new LispString(pkg.toUpperCase(java.util.Locale.ROOT)),
+						new LispCons(
+								new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(rows, LispNil.INSTANCE)),
+								LispNil.INSTANCE)));
 	}
 
 	/**
@@ -689,7 +857,7 @@ public final class PackageResolver {
 			return null;
 		}
 		List<LispVal> elements = datum instanceof LispCons list ? list.toList() : List.of(datum);
-		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		String target = designatedPackage(targetPackage);
 		List<String> spellings = new ArrayList<>(elements.size());
 		for (LispVal element : elements) {
 			switch (element) {
@@ -744,7 +912,7 @@ public final class PackageResolver {
 	 * the export creates a name conflict
 	 */
 	public synchronized void exportSymbols(List<String> names, String targetPackage, boolean export) {
-		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		String target = designatedPackage(targetPackage);
 		if (!this.registry.contains(target)) {
 			throw new LispPackageException("No such package: " + targetPackage);
 		}
@@ -850,14 +1018,14 @@ public final class PackageResolver {
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(spelling);
 		if (qn != null) {
-			String found = findPackageName(qn.pkg());
+			String found = findGlobalPackageName(qn.pkg());
 			return found != null ? found : qn.pkg();
 		}
 		if (PackageRegistry.isClMemberName(spelling)) {
-			String cl = findPackageName(LispNames.CL_PKG);
+			String cl = findGlobalPackageName(LispNames.CL_PKG);
 			return cl != null ? cl : LispNames.CL_PKG;
 		}
-		String clUser = findPackageName(LispNames.CL_USER_PKG);
+		String clUser = findGlobalPackageName(LispNames.CL_USER_PKG);
 		return clUser != null ? clUser : LispNames.CL_USER_PKG;
 	}
 
@@ -890,7 +1058,7 @@ public final class PackageResolver {
 	}
 
 	private void importInto(List<String> spellings, String targetPackage, boolean shadowing) {
-		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		String target = designatedPackage(targetPackage);
 		if (!this.registry.contains(target)) {
 			throw new LispPackageException("No such package: " + targetPackage);
 		}
@@ -955,7 +1123,7 @@ public final class PackageResolver {
 	 * @param targetPackage the package whose shadowing set grows
 	 */
 	public synchronized void shadowSymbols(List<String> names, String targetPackage) {
-		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		String target = designatedPackage(targetPackage);
 		if (!this.registry.contains(target)) {
 			throw new LispPackageException("No such package: " + targetPackage);
 		}
@@ -990,7 +1158,7 @@ public final class PackageResolver {
 	 * @throws RuntimePackageException when the removal would uncover a name conflict
 	 */
 	public synchronized boolean uninternSymbol(String spelling, String targetPackage) {
-		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		String target = designatedPackage(targetPackage);
 		if (!this.registry.contains(target)) {
 			throw new LispPackageException("No such package: " + targetPackage);
 		}
@@ -1057,6 +1225,10 @@ public final class PackageResolver {
 		if (pkg == null) {
 			throw new LispPackageException("No such package: " + packageDesignator);
 		}
+		return shadowingSymbolsOf(pkg);
+	}
+
+	private List<String> shadowingSymbolsOf(String pkg) {
 		if ("keyword".equals(pkg)) {
 			return List.of();
 		}
@@ -1138,14 +1310,14 @@ public final class PackageResolver {
 	 * @param targetPackage the package whose use list grows
 	 */
 	public synchronized void usePackage(List<String> used, String targetPackage) {
-		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		String target = designatedPackage(targetPackage);
 		if (!this.registry.contains(target)) {
 			throw new LispPackageException("No such package: " + targetPackage);
 		}
 		LispPackage pkg = this.registry.get(target);
 		List<String> useList = new ArrayList<>(pkg.useList());
 		for (String name : used) {
-			String canonical = registeredPackageName(this.registry.canonicalName(name));
+			String canonical = designatedPackage(name);
 			if (!this.registry.contains(canonical)) {
 				throw new LispPackageException("No such package: " + name);
 			}
@@ -1173,14 +1345,14 @@ public final class PackageResolver {
 	 * @param targetPackage the package whose use list shrinks
 	 */
 	public synchronized void unusePackage(List<String> used, String targetPackage) {
-		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		String target = designatedPackage(targetPackage);
 		if (!this.registry.contains(target)) {
 			throw new LispPackageException("No such package: " + targetPackage);
 		}
 		LispPackage pkg = this.registry.get(target);
 		List<String> useList = new ArrayList<>(pkg.useList());
 		for (String name : used) {
-			String canonical = registeredPackageName(this.registry.canonicalName(name));
+			String canonical = designatedPackage(name);
 			if (!this.registry.contains(canonical)) {
 				throw new LispPackageException("No such package: " + name);
 			}
@@ -1300,7 +1472,7 @@ public final class PackageResolver {
 	 * @throws LispPackageException when no such package exists
 	 */
 	public synchronized @Nullable Object bindThreadPackage(String name) {
-		String pkg = findPackageName(name);
+		String pkg = findGlobalPackageName(name);
 		if (pkg == null || "keyword".equals(pkg)) {
 			throw new LispPackageException("No such package: " + name);
 		}
@@ -1365,8 +1537,7 @@ public final class PackageResolver {
 		if (parts.size() != 2) {
 			throw new LispPackageException(LispNames.IN_PACKAGE + " expects exactly one argument");
 		}
-		String name = registeredPackageName(
-				this.registry.canonicalName(packageDesignator(LispNames.IN_PACKAGE, parts.get(1))));
+		String name = designatedPackage(packageDesignator(LispNames.IN_PACKAGE, parts.get(1)));
 		if (!this.registry.contains(name)) {
 			throw new LispPackageException("No such package: " + name);
 		}
@@ -1424,6 +1595,13 @@ public final class PackageResolver {
 		return name;
 	}
 
+	// The package a designator the program spelled names: the current package's own
+	// nickname first, as find-package reads one, else the registered spelling.
+	private String designatedPackage(String designator) {
+		String local = this.registry.localNicknames(current()).get(designator);
+		return local != null ? local : registeredPackageName(this.registry.canonicalName(designator));
+	}
+
 	// Whether the named package provides (owns or exports) the given symbol name --
 	// the :import-from fold's oracle. cl is answered by the static symbol set, so
 	// car/cdr compositions count too.
@@ -1474,6 +1652,7 @@ public final class PackageResolver {
 		Map<String, String> shadowingImports = new HashMap<>();
 		Set<String> shadows = existing == null ? new HashSet<>() : new HashSet<>(existing.shadows());
 		Set<String> interned = new HashSet<>();
+		List<List<LispVal>> localNicknames = new ArrayList<>();
 		for (LispVal clause : parts.subList(2, parts.size())) {
 			if (!(clause instanceof LispCons clauseCons) || !(clauseCons.car() instanceof LispSymbol keyword)
 					|| !keyword.isKeyword()) {
@@ -1484,8 +1663,7 @@ public final class PackageResolver {
 			switch (keyword.name()) {
 				case LispNames.USE_KEYWORD -> {
 					for (LispVal arg : args.subList(1, args.size())) {
-						String used = registeredPackageName(
-								this.registry.canonicalName(designator(LispNames.USE_KEYWORD, "a package name", arg)));
+						String used = designatedPackage(designator(LispNames.USE_KEYWORD, "a package name", arg));
 						if (!this.registry.contains(used)) {
 							throw DefpackageException.packageError("No such package: " + used, used);
 						}
@@ -1507,8 +1685,7 @@ public final class PackageResolver {
 					// import-redirect the export-of-an-inherited-name pass below records,
 					// so each re-exported name stays the used package's symbol.
 					for (LispVal arg : args.subList(1, args.size())) {
-						String used = registeredPackageName(
-								this.registry.canonicalName(designator(":use-reexport", "a package name", arg)));
+						String used = designatedPackage(designator(":use-reexport", "a package name", arg));
 						if (!this.registry.contains(used)) {
 							throw DefpackageException.packageError("No such package: " + used, used);
 						}
@@ -1533,17 +1710,14 @@ public final class PackageResolver {
 					}
 				}
 				case LispNames.LOCAL_NICKNAMES_KEYWORD -> {
-					// (:local-nicknames (nickname actual-package)...) -- lite: registered
-					// as a GLOBAL nickname (no per-package scoping), like
-					// uiop:add-package-local-nickname. The target must already exist.
+					// (:local-nicknames (nickname actual-package)...): they take effect
+					// once the package exists, since one may name the package itself.
 					for (LispVal arg : args.subList(1, args.size())) {
 						if (!(arg instanceof LispCons pair) || pair.toList().size() != 2) {
-							throw new LispPackageException(LispNames.LOCAL_NICKNAMES_KEYWORD
+							throw DefpackageException.programError(LispNames.LOCAL_NICKNAMES_KEYWORD
 									+ " expects (nickname actual-package) pairs, got " + arg.print());
 						}
-						registerLocalNickname(
-								designator(LispNames.LOCAL_NICKNAMES_KEYWORD, "a package name", pair.toList().get(0)),
-								designator(LispNames.LOCAL_NICKNAMES_KEYWORD, "a package name", pair.toList().get(1)));
+						localNicknames.add(pair.toList());
 					}
 				}
 				case LispNames.IMPORT_FROM_KEYWORD -> collectImportFrom(LispNames.IMPORT_FROM_KEYWORD, args, imports);
@@ -1639,6 +1813,20 @@ public final class PackageResolver {
 		for (String nickname : nicknames) {
 			this.registry.defineNickname(nickname, name);
 		}
+		// Unlike the rest of a definition over an existing package, its local nicknames
+		// replace the package's, a definition without the clause included (SBCL).
+		boolean hadLocalNicknames = !this.registry.localNicknames(name).isEmpty();
+		this.registry.clearLocalNicknames(name);
+		for (List<LispVal> pair : localNicknames) {
+			try {
+				addLocalNicknameIn(name, designator(LispNames.LOCAL_NICKNAMES_KEYWORD, "a package name", pair.get(0)),
+						designator(LispNames.LOCAL_NICKNAMES_KEYWORD, "a package name", pair.get(1)));
+			}
+			catch (RuntimePackageException ex) {
+				throw DefpackageException
+					.packageError(java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.DEFPACKAGE), name);
+			}
+		}
 		// Tier (see .kb/packages.md, "Runtime tier"): a defpackage the COMPILE path
 		// resolves mints a read/compile-time package, because the backends bake its
 		// spellings and deleting or renaming it would orphan them. The interpreter
@@ -1652,6 +1840,9 @@ public final class PackageResolver {
 		}
 		if (existing == null) {
 			this.registry.markSealed(name);
+		}
+		if (this.inProgramResolution && (hadLocalNicknames || !localNicknames.isEmpty())) {
+			return nicknameDefinition(name, this.registry.localNicknames(name));
 		}
 		// The value is the package, which at run time is its keyword -- the same object
 		// make-package and find-package answer, so the three compare eq.
@@ -1737,8 +1928,7 @@ public final class PackageResolver {
 		if (args.size() < 2) {
 			throw new LispPackageException(clauseName + " expects a package name");
 		}
-		String source = registeredPackageName(
-				this.registry.canonicalName(designator(clauseName, "a package name", args.get(1))));
+		String source = designatedPackage(designator(clauseName, "a package name", args.get(1)));
 		if (!this.registry.contains(source)) {
 			throw DefpackageException.packageError("No such package: " + source, source);
 		}
@@ -1763,57 +1953,276 @@ public final class PackageResolver {
 	}
 
 	/**
-	 * Registers a package nickname -- the shared machinery behind the {@code defpackage}
-	 * {@code :local-nicknames} clause and {@code uiop:add-package-local-nickname}. Lite:
-	 * the nickname is GLOBAL (rontolisp has no per-package nickname scoping), so a
-	 * nickname that names an existing package (or one already taken for a different
-	 * target) is rejected.
-	 * @param nickname the nickname as written (prefix already stripped)
-	 * @param actual the target package name as written
+	 * Gives a package a nickname of its own for another package: the {@code defpackage}
+	 * {@code :local-nicknames} clause and {@code uiop:add-package-local-nickname}. Inside
+	 * that package the nickname is the first thing a package designator or a qualified
+	 * token is read as, so it may be named like any other package.
+	 * @param nickname the nickname, compared verbatim
+	 * @param actual the target package as given
+	 * @param scope the package getting the nickname as given
+	 * @return the canonical name of the package that got it
+	 * @throws RuntimePackageException when a designator names no package or the package
+	 * cannot have that nickname
 	 */
-	public synchronized void registerLocalNickname(String nickname, String actual) {
-		String target = this.registry.canonicalName(actual);
-		if (!this.registry.contains(target)) {
-			throw new LispPackageException("No such package: " + actual);
+	public synchronized String addLocalNickname(String nickname, String actual, String scope) {
+		String pkg = findPackageName(scope);
+		if (pkg == null || "keyword".equals(pkg)) {
+			throw new RuntimePackageException("No such package: " + scope, scope);
 		}
-		String existing = this.registry.canonicalName(nickname);
-		if (this.registry.contains(nickname)) {
-			throw new LispPackageException("Package already exists: " + nickname);
-		}
-		if (!existing.equals(nickname) && !existing.equals(target)) {
-			throw new LispPackageException(
-					"Nickname " + nickname + " already names " + existing + "; cannot repoint it to " + target);
-		}
-		this.registry.defineNickname(nickname, target);
+		addLocalNicknameIn(pkg, nickname, actual);
+		return pkg;
 	}
 
 	/**
-	 * Removes a package nickname -- the runtime half of
-	 * {@code uiop:remove-package-local-nickname}. Lite: nicknames are GLOBAL (no
-	 * per-package scoping, see {@link #registerLocalNickname}), so the scope package only
-	 * guards the removal: when given, the nickname must point at it, otherwise nothing is
-	 * removed. The scope is canonicalized exactly like a registration target, so it
-	 * compares equal to what {@link #registerLocalNickname} stored.
-	 * @param nickname the nickname as written (prefix already stripped)
-	 * @param scopeDesignator the scope package as written, or null for no guard
-	 * @return {@code true} when a mapping was removed
-	 * @throws LispPackageException when the scope names no package
+	 * {@link #addLocalNickname} in a package given by its canonical name. A target is a
+	 * global name, read through nobody's nicknames, and the refusals are SBCL's.
 	 */
-	public synchronized boolean removeLocalNickname(String nickname, @Nullable String scopeDesignator) {
-		if (!this.registry.contains(nickname) || this.registry.canonicalName(nickname).equals(nickname)) {
-			// Not a nickname mapping at all (unknown, or a package's own name):
-			// nothing to remove.
-			return false;
+	private void addLocalNicknameIn(String pkg, String nickname, String actual) {
+		String target = findGlobalPackageName(actual);
+		if (target == null) {
+			throw new RuntimePackageException("No such package: " + actual, actual);
 		}
-		if (scopeDesignator != null) {
-			if (findPackageName(scopeDesignator) == null) {
-				throw new LispPackageException("No such package: " + scopeDesignator);
+		String targetName = target.toUpperCase(java.util.Locale.ROOT);
+		if (isReservedNickname(nickname)) {
+			throw new RuntimePackageException(
+					"Attempt to use " + nickname + " as a package local nickname (for " + targetName + ").",
+					targetName);
+		}
+		String pkgName = pkg.toUpperCase(java.util.Locale.ROOT);
+		if (nickname.equals(pkgName)) {
+			throw new RuntimePackageException("Attempt to use " + nickname + " as a package local nickname (for "
+					+ targetName + ") in package named globally " + nickname + ".", pkgName);
+		}
+		String existing = this.registry.localNicknames(pkg).get(nickname);
+		if (existing != null && !existing.equals(target)) {
+			throw new RuntimePackageException(
+					"Cannot add " + nickname + " as local nickname for " + targetName + " in " + pkgName
+							+ ": already nickname for " + existing.toUpperCase(java.util.Locale.ROOT) + ".",
+					targetName);
+		}
+		this.registry.putLocalNickname(pkg, nickname, target);
+		if (LispNames.CL_USER_PKG.equals(pkg)) {
+			this.clUserNicknamed = true;
+		}
+	}
+
+	/** The nicknames no package can have (SBCL's refusal). */
+	private static boolean isReservedNickname(String nickname) {
+		return LispNames.CL_PKG.equals(nickname) || "COMMON-LISP".equals(nickname) || "KEYWORD".equals(nickname);
+	}
+
+	/**
+	 * Takes a nickname of its own away from a package:
+	 * {@code uiop:remove-package-local-nickname}.
+	 * @param nickname the nickname, compared verbatim
+	 * @param scope the package as given
+	 * @return {@code true} when the package had the nickname
+	 * @throws RuntimePackageException when the scope names no package
+	 */
+	public synchronized boolean removeLocalNickname(String nickname, String scope) {
+		String pkg = findPackageName(scope);
+		if (pkg == null) {
+			throw new RuntimePackageException("No such package: " + scope, scope);
+		}
+		return this.registry.putLocalNickname(pkg, nickname, null);
+	}
+
+	/**
+	 * A package's own nicknames, in nickname order, each with the package it names as the
+	 * name of that package's keyword.
+	 * @param scope the package as given
+	 * @return nickname to upcased target name
+	 * @throws RuntimePackageException when the scope names no package
+	 */
+	public synchronized Map<String, String> localNicknames(String scope) {
+		String pkg = findPackageName(scope);
+		if (pkg == null) {
+			throw new RuntimePackageException("No such package: " + scope, scope);
+		}
+		Map<String, String> out = new java.util.LinkedHashMap<>();
+		this.registry.localNicknames(pkg)
+			.forEach((nick, target) -> out.put(nick, target.toUpperCase(java.util.Locale.ROOT)));
+		return out;
+	}
+
+	/**
+	 * Reads a form the way the reader reads source with the current package current:
+	 * every qualified token whose qualifier is one of the package's own nicknames comes
+	 * back qualified by the package it names. Nothing else changes, cons identity
+	 * included. A result that is read again reads the same, since a target that is itself
+	 * one of the nicknames takes {@link PackageRegistry#GLOBAL_QUALIFIER}.
+	 * @param form the form as read
+	 * @return the form with its qualifiers read
+	 */
+	public synchronized LispVal readLocalNicknames(LispVal form) {
+		Map<String, String> table = this.registry.localNicknames(current());
+		return table.isEmpty() ? form : readThrough(form, table);
+	}
+
+	private static LispVal readThrough(LispVal form, Map<String, String> table) {
+		return switch (form) {
+			case LispSymbol sym -> {
+				String read = localNicknameSpelling(sym.name(), table);
+				yield read == null ? sym : new LispSymbol(read);
 			}
-			if (!this.registry.canonicalName(nickname).equals(this.registry.canonicalName(scopeDesignator))) {
-				return false;
+			case LispCons cons -> LispTrees.rebuildSpine(cons,
+					node -> node instanceof LispCons ? null : readThrough(node, table), car -> readThrough(car, table),
+					(cell, car, cdr) -> SourceProvenance.inherit(cell, LispCons.rebuilt(cell, car, cdr)));
+			case LispStructLiteral literal -> {
+				String type = localNicknameSpelling(literal.typeName(), table);
+				List<LispVal> values = literal.slotValues().stream().map(value -> readThrough(value, table)).toList();
+				yield type == null && values.equals(literal.slotValues()) ? literal
+						: new LispStructLiteral(type == null ? literal.typeName() : type, literal.slotNames(), values);
+			}
+			case LispArray array when array.data() != null -> {
+				LispVal[] data = array.data();
+				LispVal[] read = new LispVal[data.length];
+				boolean changed = false;
+				for (int i = 0; i < data.length; i++) {
+					read[i] = readThrough(data[i], table);
+					changed |= read[i] != data[i];
+				}
+				yield changed ? new LispArray(array.dimensions(), read) : array;
+			}
+			default -> form;
+		};
+	}
+
+	/** The spelling a qualified token reads as, or null when no nickname applies. */
+	private static @Nullable String localNicknameSpelling(String name, Map<String, String> table) {
+		int colon = name.indexOf(':');
+		if (colon <= 0 || name.startsWith("#:")) {
+			return null;
+		}
+		String target = table.get(name.substring(0, colon));
+		if (target == null) {
+			return null;
+		}
+		if ("keyword".equals(target)) {
+			return ":" + LispSymbol.memberName(name);
+		}
+		String spelled = target + name.substring(colon);
+		return table.containsKey(target) ? PackageRegistry.GLOBAL_QUALIFIER + spelled : spelled;
+	}
+
+	/**
+	 * The spelling a resolved symbol takes in a form the next pass reads again in the
+	 * current package, so that it reads as the same symbol: a canonical bare name is
+	 * {@code cl}'s or {@code cl-user}'s, which the package may read as another (see
+	 * {@link #currentPackageRereadsClName}), and a qualifier may be one of the package's
+	 * own nicknames ({@link PackageRegistry#GLOBAL_QUALIFIER}).
+	 * @param symbol the resolved symbol
+	 * @return the spelling to emit
+	 */
+	public synchronized String emittedSpelling(LispSymbol symbol) {
+		String name = symbol.name();
+		if (symbol.isKeyword() || name.startsWith("#:") || ReaderSymbols.contains(symbol)
+				|| name.startsWith(LispLayout.STRUCT_TAG_PREFIX) || name.startsWith(LispLayout.CLASS_TAG_PREFIX)) {
+			return name;
+		}
+		int colon = name.indexOf(':');
+		if (colon > 0) {
+			return this.registry.localNicknames(current()).containsKey(name.substring(0, colon))
+					? PackageRegistry.GLOBAL_QUALIFIER + name : name;
+		}
+		if (!currentPackageRereadsClName(name)) {
+			return name;
+		}
+		return PackageRegistry.isClSymbol(name) ? PackageRegistry.qualify(LispNames.CL_PKG, name)
+				: PackageRegistry.qualifyInternal(LispNames.CL_USER_PKG, name);
+	}
+
+	/**
+	 * The text of a symbol that keeps its qualifier in the current package: SBCL prints
+	 * the package's own nickname for its home when it has one, the first in nickname
+	 * order, so that what is printed reads back.
+	 * @param text the {@code prin1} text, {@code HOME:NAME} or {@code HOME::NAME}
+	 * @param colon the index of the qualifier's first colon
+	 * @return the text to print
+	 */
+	public synchronized String printedQualifier(String text, int colon) {
+		SortedMap<String, String> table = this.registry.localNicknames(current());
+		if (table.isEmpty()) {
+			return text;
+		}
+		String home = findGlobalPackageName(text.substring(0, colon));
+		for (Map.Entry<String, String> entry : table.entrySet()) {
+			if (entry.getValue().equals(home)) {
+				return new LispSymbol(entry.getKey()).print() + text.substring(colon);
 			}
 		}
-		return this.registry.removeNickname(nickname);
+		return text;
+	}
+
+	/**
+	 * Follows a top-level form's effect on what a form after it reads as, in a resolver
+	 * that reads nothing but the qualifiers of a program whose other passes have not run:
+	 * the current package and the nicknames, with any package they name made up on the
+	 * spot, since what defines it may not have been spliced yet. A form it cannot follow
+	 * is left to the pass that reports it.
+	 * @param form the top-level form
+	 */
+	public synchronized void followLocalNicknameDirective(LispVal form) {
+		if (!(form instanceof LispCons cons && cons.car() instanceof LispSymbol op)) {
+			return;
+		}
+		String member = operatorMember(op);
+		try {
+			if (LispNames.IN_PACKAGE.equals(member) && cons.cdr() instanceof LispCons args) {
+				ensurePackage(designator(LispNames.IN_PACKAGE, "a package name", args.car()));
+				resolve(cons);
+			}
+			else if (LispNames.DEFPACKAGE.equals(member)
+					|| (LispNames.DEFINE_PACKAGE.equals(member) && isDefinePackageOperator(op))) {
+				resolve(namesOfDefpackage(cons));
+			}
+			else if (LispNames.PUSH_PACKAGE.equals(member) || LispNames.POP_PACKAGE.equals(member)
+					|| LispNames.ADD_PACKAGE_LOCAL_NICKNAME.equals(member)
+					|| LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME.equals(member)) {
+				resolve(cons);
+			}
+		}
+		catch (RuntimeException ignored) {
+			// The pass that reads the whole form reports what is wrong with it.
+		}
+	}
+
+	/** Makes up the package a designator names when nothing has defined it yet. */
+	private void ensurePackage(String designator) {
+		if (findPackageName(designator) == null) {
+			this.registry.define(new LispPackage(designator, List.of(), Set.of(), Set.of()));
+		}
+	}
+
+	/**
+	 * A {@code defpackage} form reduced to the clauses a
+	 * {@link #followLocalNicknameDirective reader of qualifiers} needs, with the packages
+	 * its nicknames name made up.
+	 */
+	private LispVal namesOfDefpackage(LispCons defpackage) {
+		List<LispVal> parts = defpackage.toList();
+		List<LispVal> reduced = new ArrayList<>(List.of(new LispSymbol(LispNames.DEFPACKAGE), parts.get(1)));
+		for (LispVal clause : parts.subList(2, parts.size())) {
+			if (clause instanceof LispCons cell && cell.car() instanceof LispSymbol keyword) {
+				if (LispNames.NICKNAMES_KEYWORD.equals(keyword.name())) {
+					reduced.add(clause);
+				}
+				if (LispNames.LOCAL_NICKNAMES_KEYWORD.equals(keyword.name())) {
+					reduced.add(clause);
+					for (LispVal row : cell.toList().subList(1, cell.toList().size())) {
+						if (row instanceof LispCons pair && pair.cdr() instanceof LispCons target) {
+							ensurePackage(
+									designator(LispNames.LOCAL_NICKNAMES_KEYWORD, "a package name", target.car()));
+						}
+					}
+				}
+			}
+		}
+		LispVal out = LispNil.INSTANCE;
+		for (int i = reduced.size() - 1; i >= 0; i--) {
+			out = new LispCons(reduced.get(i), out);
+		}
+		return out;
 	}
 
 	/**
@@ -2222,23 +2631,30 @@ public final class PackageResolver {
 			// compiled runtimes have no package registry. A computed designator stays a
 			// call, which only the interpreter can serve.
 			String designator = literalDesignator(argCell.car());
-			if (designator != null) {
-				String found = findPackageName(designator);
+			// A lone form resolved outside resolveProgram (the interpreter resolves each
+			// top-level form just before evaluating it) folds nothing: the call has the
+			// live registry and the package current when it runs. Nor does a name the
+			// program gives a package as its own nickname, which means what the package
+			// current when the call runs says.
+			if (designator != null && this.inProgramResolution && !mayBeLocalNickname(designator)) {
+				String found = findGlobalPackageName(designator);
 				// ... unless the program can create packages at run time: an unknown
 				// name may come into being later, so the call stays a call and the
 				// backends answer it from their baked table plus the runtime table.
 				// A KNOWN name still folds -- read/compile-time packages are
-				// immutable at run time, so the answer cannot change. A lone form
-				// resolved outside resolveProgram (the interpreter resolves each
-				// top-level form just before evaluating it) never folds an unknown
-				// name: a creation may run between this resolution and a later call
-				// through the form (a defun body), and only a call sees it.
-				boolean mutable = this.runtimePackagesMutable || !this.inProgramResolution
-						|| referencesRuntimePackageMutation(cons, false);
+				// immutable at run time, so the answer cannot change.
+				boolean mutable = this.runtimePackagesMutable || referencesRuntimePackageMutation(cons, false);
 				if (found != null || !mutable) {
 					return SourceProvenance.inherit(cons, found == null ? LispNil.INSTANCE
 							: quotedSymbol(":" + found.toUpperCase(java.util.Locale.ROOT)));
 				}
+			}
+		}
+		if (this.inProgramResolution && cons != this.literalDesignatorArm && programHasLocalNicknames()
+				&& cons.car() instanceof LispSymbol designatorOp) {
+			LispVal site = localNicknameDesignatorSite(cons, designatorOp);
+			if (site != null) {
+				return site;
 			}
 		}
 		LispVal car = resolveForm(cons.car());
@@ -2298,6 +2714,46 @@ public final class PackageResolver {
 		// that says (in-package :foo) and then names anything qualified -- the whole of
 		// every quickloaded library -- reports with no position at all.
 		return SourceProvenance.inherit(cons, new LispCons(car, result));
+	}
+
+	/**
+	 * A compiled lookup with a literal package designator folds over the package table,
+	 * which knows no package's own nicknames. So one whose designator may be such a
+	 * nickname asks the table of them when it runs, and takes the package value
+	 * {@code find-package} answers if it is one in the package current then:
+	 * {@code (if (%local-nickname-find "N") (op ... (find-package "N")) (op ... "N"))}.
+	 * Null for any other form.
+	 */
+	private @Nullable LispVal localNicknameDesignatorSite(LispCons cons, LispSymbol op) {
+		String member = operatorMember(op);
+		int position = LispNames.FIND_SYMBOL.equals(member) || LispNames.INTERN.equals(member) ? 2
+				: LispNames.PACKAGE_USE_LIST.equals(member) || LispNames.PACKAGE_USED_BY_LIST.equals(member) ? 1 : 0;
+		if (position == 0 || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = new ArrayList<>(cons.toList());
+		if (parts.size() <= position) {
+			return null;
+		}
+		LispVal arg = parts.get(position);
+		String designator = literalDesignator(arg);
+		if (designator == null || !mayBeLocalNickname(designator)) {
+			return null;
+		}
+		parts.set(position, new LispCons(new LispSymbol(LispNames.FIND_PACKAGE), new LispCons(arg, LispNil.INSTANCE)));
+		LispVal computed = resolveForm(LispCons.rebuiltList(cons, parts));
+		LispVal saved = this.literalDesignatorArm;
+		this.literalDesignatorArm = cons;
+		try {
+			LispVal literal = resolveCons(cons);
+			LispVal test = new LispCons(new LispSymbol(LispNames.LOCAL_NICKNAME_FIND_INTERNAL),
+					new LispCons(new LispString(designator), LispNil.INSTANCE));
+			return SourceProvenance.inherit(cons, new LispCons(new LispSymbol(LispNames.IF),
+					new LispCons(test, new LispCons(computed, new LispCons(literal, LispNil.INSTANCE)))));
+		}
+		finally {
+			this.literalDesignatorArm = saved;
+		}
 	}
 
 	/**
@@ -2795,6 +3251,10 @@ public final class PackageResolver {
 		if (name.startsWith(":") || name.startsWith("#:")) {
 			return name;
 		}
+		String read = localNicknameSpelling(name, this.registry.localNicknames(current()));
+		if (read != null) {
+			return read.startsWith(":") ? read : internSpelling(read, true);
+		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
 		if (qn != null && !this.registry.contains(registeredPackageName(this.registry.canonicalName(qn.pkg())))) {
 			return name;
@@ -3056,6 +3516,10 @@ public final class PackageResolver {
 		if (pkg == null) {
 			throw new LispPackageException("No such package: " + packageDesignator);
 		}
+		return accessibleEntriesOf(pkg);
+	}
+
+	private List<Accessible> accessibleEntriesOf(String pkg) {
 		LispPackage p;
 		try {
 			p = this.registry.get(pkg);
@@ -3175,7 +3639,7 @@ public final class PackageResolver {
 	 * @return the accessible symbol and its status, or null
 	 */
 	public synchronized @Nullable Accessible bakedAccessible(String pkgDesignator, String member) {
-		String pkg = findPackageName(pkgDesignator);
+		String pkg = findGlobalPackageName(pkgDesignator);
 		return pkg == null ? null : accessibleIn(pkg, member, s -> false);
 	}
 
@@ -3343,7 +3807,7 @@ public final class PackageResolver {
 	 * @return whether the package exists and uses {@code cl}
 	 */
 	public synchronized boolean usesCl(String pkgDesignator) {
-		String pkg = findPackageName(pkgDesignator);
+		String pkg = findGlobalPackageName(pkgDesignator);
 		return pkg != null && this.registry.contains(pkg)
 				&& this.registry.get(pkg).useList().contains(LispNames.CL_PKG);
 	}
@@ -3417,6 +3881,18 @@ public final class PackageResolver {
 	 * @return the canonical registered name, or null
 	 */
 	public synchronized @Nullable String findPackageName(String designator) {
+		String local = this.registry.localNicknames(current()).get(designator);
+		return local != null ? local : findGlobalPackageName(designator);
+	}
+
+	/**
+	 * {@link #findPackageName} past the current package's own nicknames: for a name that
+	 * is a package's name already, such as a symbol's qualifier, and for what the compile
+	 * paths ask when the current package is merely the program's last.
+	 * @param designator the package name as given (any case, global nickname allowed)
+	 * @return the canonical registered name, or null
+	 */
+	public synchronized @Nullable String findGlobalPackageName(String designator) {
 		if (designator.isEmpty()) {
 			return null;
 		}
@@ -3430,7 +3906,7 @@ public final class PackageResolver {
 		}
 		String lower = designator.toLowerCase(java.util.Locale.ROOT);
 		if (!lower.equals(designator)) {
-			return findPackageName(lower);
+			return findGlobalPackageName(lower);
 		}
 		return null;
 	}
@@ -3543,9 +4019,15 @@ public final class PackageResolver {
 			java.util.List<LispSymbol> externals;
 			java.util.List<LispSymbol> shadows = new java.util.ArrayList<>();
 			try {
-				accessible = accessibleSymbols(canonical);
-				externals = externalSymbols(canonical);
-				for (String spelling : shadowingSymbols(canonical)) {
+				accessible = new java.util.ArrayList<>();
+				externals = new java.util.ArrayList<>();
+				for (Accessible entry : accessibleEntriesOf(canonical)) {
+					accessible.add(new LispSymbol(entry.spelling()));
+					if (LispNames.STATUS_EXTERNAL.equals(entry.status())) {
+						externals.add(new LispSymbol(entry.spelling()));
+					}
+				}
+				for (String spelling : shadowingSymbolsOf(canonical)) {
 					shadows.add(new LispSymbol(spelling));
 				}
 			}
@@ -3693,7 +4175,7 @@ public final class PackageResolver {
 	private boolean clUserIsPristine() {
 		LispPackage clUser = this.registry.get(LispNames.CL_USER_PKG);
 		return clUser != null && clUser.useList().equals(List.of(LispNames.CL_PKG)) && clUser.imports().isEmpty()
-				&& clUser.shadows().isEmpty();
+				&& clUser.shadows().isEmpty() && !this.clUserNicknamed;
 	}
 
 	/**
