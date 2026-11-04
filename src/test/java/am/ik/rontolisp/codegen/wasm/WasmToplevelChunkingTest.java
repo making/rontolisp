@@ -82,34 +82,43 @@ class WasmToplevelChunkingTest {
 	}
 
 	/**
-	 * A program with a few thousand callables, every one of them reachable as a function
-	 * VALUE, plus the {@code apply} that makes the spread dispatcher real.
+	 * A program with thousands of callables, every one of them reachable as a function
+	 * VALUE, plus the {@code apply} that makes the spread dispatcher real and the
+	 * computed {@code symbol-function} that makes {@code _funcref} real.
 	 */
 	private static String manyCallables() {
 		StringBuilder sb = new StringBuilder("(defvar *fs* nil)\n");
-		for (int i = 0; i < 3000; i++) {
+		for (int i = 0; i < 9000; i++) {
 			sb.append("(defun f%d (a b c) (+ a b c %d))\n".formatted(i, i));
 			sb.append("(setq *fs* (cons #'f%d *fs*))\n".formatted(i));
 		}
 		sb.append("(print (apply (car *fs*) (list 1 2 3)))\n");
+		sb.append("(print (eq (symbol-function (car (list 'f8999))) (car *fs*)))\n");
 		return sb.toString();
 	}
 
 	@Test
-	void theDispatchLadderIsNotEmittedAsOneFunctionBody() {
-		// The SPREAD dispatcher (_apply's) is one br_table case per callable in the
-		// whole program -- ~110 bytes each, since a case walks its target's required
-		// parameters out of the argument list -- so it grows with the program's
-		// function count and with nothing a test author can see. Emitted as ONE body
-		// this program's is 417,675 bytes; the ci-spec corpus reached 258 KB of it
-		// against this same bound while every other body in the module was under 75 KB,
-		// which left three callables of headroom for whoever added the next case.
-		int largest = WasmModuleInspector.largestFunctionBodySize(compile(manyCallables()));
+	void noBodyGrowsWithTheProgramsCallableCount() {
+		// Two bodies have one case per callable in the whole program, so they grow with
+		// its function count and with nothing a test author can see.
+		//
+		// The SPREAD dispatcher (_apply's) spends ~110 bytes on a case, since a case
+		// walks
+		// its target's required parameters out of the argument list. Emitted as ONE body
+		// it reached 258 KB of the ci-spec corpus against this same bound, which left
+		// three callables of headroom for whoever added the next case.
+		//
+		// _funcref (funcId -> canonical box) once spent ~32 bytes on one: 262 KB at the
+		// corpus's 8099 covered funcIds, which is how both --component legs of the corpus
+		// went over the bound. Each build is measured: the component's body was the
+		// larger.
+		String source = manyCallables();
 
-		assertThat(largest)
-			.as("largest emitted function body of a program with 3000 callables; a dispatch "
-					+ "ladder emitted as one body grows with the program's function count")
-			.isLessThanOrEqualTo(MAX_FUNCTION_BODY_BYTES);
+		assertThat(List.of(compile(source), compileComponent(source)))
+			.allSatisfy(module -> assertThat(WasmModuleInspector.largestFunctionBodySize(module))
+				.as("largest emitted function body of a program with 9000 callables; a body with a "
+						+ "case per callable grows with the program's function count")
+				.isLessThanOrEqualTo(MAX_FUNCTION_BODY_BYTES));
 	}
 
 	@Test

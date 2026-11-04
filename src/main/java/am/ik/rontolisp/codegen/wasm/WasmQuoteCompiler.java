@@ -75,12 +75,20 @@ final class WasmQuoteCompiler {
 	 * below always found one object. Lazy (not start-seeded) for the same reason the
 	 * quoted constants are: the global count is only known once every body has compiled,
 	 * and wasm is single-threaded here, so the first evaluation wins with no race. A
-	 * lambda value never comes here: each evaluation of a lambda form stays a distinct
-	 * closure on every backend.
+	 * module carrying {@code _funcref} asks it instead, so a computed resolution and this
+	 * site answer one object. A lambda value never comes here: each evaluation of a
+	 * lambda form stays a distinct closure on every backend.
 	 * @param funcId the named function's funcId
 	 * @param ctx the compilation context
 	 */
 	static void compileSharedFunctionBox(int funcId, WasmLispCompiler.Ctx ctx) {
+		if (ctx.symfuncrefFuncIndex >= 0) {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(funcId);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(ctx.symfuncrefFuncIndex);
+			return;
+		}
 		emitSharedConstant(ctx.quoteGlobals.funcBoxTokenFor(funcId), ctx, () -> {
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(funcId);

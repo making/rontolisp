@@ -483,54 +483,73 @@ final class WasmEvalRuntimeBuilder {
 	/**
 	 * Builds {@code _funcref}: {@code (i32 funcId) -> (ref null eq)}. Answers the one
 	 * closure struct {@code {funcId, null env}} every site naming the definition shares
-	 * -- the static {@code (function name)} sites, which read it from the same module
-	 * global this ladders through, and every computed {@code (symbol-function x)} /
-	 * {@code (fdefinition x)} resolution and eval runtime registry hit, which call this.
-	 * A funcId outside the covered set (only a registry the gate mispredicted can produce
-	 * one) boxes fresh per call, as every resolution always did.
-	 * @param coveredIds the funcIds with a shared-box global, ascending
-	 * @param boxGlobal the module global holding each covered funcId's box
+	 * -- the static {@code (function name)} sites, every computed
+	 * {@code (symbol-function x)} / {@code (fdefinition x)} resolution and every eval
+	 * runtime registry hit call this.
+	 * <p>
+	 * The boxes live in one array indexed by funcId, allocated by the first call, so this
+	 * body has the same size whatever the program's function count: a per-funcId ladder
+	 * over module globals spent ~32 bytes a funcId and was the largest body of the
+	 * ci-spec corpus (.kb/wasm-function-body-size.md). A funcId past the array (only a
+	 * registry the gate mispredicted can produce one) boxes fresh per call.
+	 * @param tableSize the number of funcIds the array covers, from 0
+	 * @param tableGlobal the {@code (mut (ref null eq))} = null global holding the array
 	 * @param identityHash whether the module's closures carry the identity-hash slot
 	 * @return the encoded function body
 	 */
-	static byte[] buildFuncrefBody(List<Integer> coveredIds, Map<Integer, Integer> boxGlobal, boolean identityHash) {
+	static byte[] buildFuncrefBody(int tableSize, int tableGlobal, boolean identityHash) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		w.write(0); // no locals besides the funcId param
-		for (int funcId : coveredIds) {
-			// if (funcId == F) return <the shared box of F>;
-			getLocal(w, 0);
-			i32(w, funcId);
-			w.write(Instruction.I32_EQ);
-			w.write(Instruction.IF, 0x40);
-			int global = java.util.Objects.requireNonNull(boxGlobal.get(funcId));
-			w.write(Instruction.GET_GLOBAL);
-			w.writeUnsignedLeb128(global);
-			w.write(Instruction.REF_IS_NULL);
-			w.write(Instruction.IF, 0x40);
-			i32(w, funcId);
-			emitNull(w);
-			if (identityHash) {
-				i32(w, 0);
-			}
-			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
-			w.write(Instruction.SET_GLOBAL);
-			w.writeUnsignedLeb128(global);
-			w.write(Instruction.END);
-			w.write(Instruction.GET_GLOBAL);
-			w.writeUnsignedLeb128(global);
-			w.write(Instruction.RETURN);
-			w.write(Instruction.END);
-		}
-		// Uncovered: a fresh {funcId, null env} box, the old behavior.
-		getLocal(w, 0);
+		final int FUNC_ID = 0, BOX = 1;
+		w.write(1);
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		// if (funcId >=u tableSize) return <a fresh box>;
+		getLocal(w, FUNC_ID);
+		i32(w, tableSize);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, FUNC_ID);
 		emitNull(w);
-		if (identityHash) {
-			i32(w, 0);
-		}
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		WasmEmitHelper.emitNewClosure(w, identityHash);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// if (table == null) table = new array[tableSize];
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(tableGlobal);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		emitNull(w);
+		i32(w, tableSize);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(tableGlobal);
+		w.write(Instruction.END);
+		// box = table[funcId]; if (box == null) box = table[funcId] = new box;
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(tableGlobal);
+		refCast(w, WasmLispCompiler.TYPE_HASH_BUCKETS);
+		getLocal(w, FUNC_ID);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(BOX);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(tableGlobal);
+		refCast(w, WasmLispCompiler.TYPE_HASH_BUCKETS);
+		getLocal(w, FUNC_ID);
+		getLocal(w, FUNC_ID);
+		emitNull(w);
+		WasmEmitHelper.emitNewClosure(w, identityHash);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(BOX);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.END);
+		getLocal(w, BOX);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
 	}
