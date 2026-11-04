@@ -25,6 +25,7 @@ import org.junit.jupiter.api.DynamicNode;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.io.TempDir;
+import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.dataformat.yaml.YAMLMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -654,8 +655,13 @@ class CiSpecE2eTest {
 			// snakeyaml-engine
 			// 3.0.1 crashes when a high surrogate lands exactly on its internal buffer
 			// boundary -- an unrelated ci-spec edit can arm it. See YamlResources.
-			return new YAMLMapper().readValue(am.ik.rontolisp.testsupport.YamlResources
-				.safeReader(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)), Spec.class);
+			// An unknown key is a case that silently asserts less: a standalone case's
+			// `expected` instead of `stdout` used to pin an empty output.
+			return YAMLMapper.builder()
+				.enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+				.build()
+				.readValue(am.ik.rontolisp.testsupport.YamlResources
+					.safeReader(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)), Spec.class);
 		}
 	}
 

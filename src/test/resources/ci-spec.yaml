@@ -34107,7 +34107,7 @@ standalone:
       (print `#(a b))
       (defmacro bq-vector-macro (x) `(vector-push-extend ,x (make-array 1 :initial-contents `#(,,x) :fill-pointer 1 :adjustable t)))
       (print (bq-vector-macro 5))
-    expected: |
+    stdout: |
       #(1 2 3 4)
       T
       (A #(B 2) #(C) #(3))
@@ -34129,7 +34129,7 @@ standalone:
       (print (list (ci-si-a:g 1) h))
       (in-package :cl-user)
       (print (list (eq (find-symbol "G" :ci-si-b) 'ci-si-a:g) (eq 'ci-si-b::h 'ci-si-a:h)))
-    expected: |
+    stdout: |
       ((:INT 1) :A-H)
       (T T)
   - name: lone-shadowing-import
