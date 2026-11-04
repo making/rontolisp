@@ -83,6 +83,48 @@
   (let ((allocation (if (%obj-p slot) (slot-value slot 'allocation) nil)))
     (if allocation allocation :instance)))
 
+;; Where an instance slot lives, for standard-instance-access (AMOP): the slot's
+;; index in the instance, which a slot definition holds once its class has it among
+;; its effective slots. A class-allocated slot and a direct definition have none.
+(defun closer-mop:slot-definition-location (slot)
+  (if (and (%obj-p slot) (null (slot-value slot 'allocation)))
+      (slot-value slot '%location)
+      nil))
+
+(defun closer-mop::%instance-location (instance location)
+  ;; AMOP leaves a bad argument undefined: a type-error on every backend, ahead of
+  ;; what %obj-ref does with it on each. An index past the slots is not checked.
+  (if (%obj-p instance)
+      (if (and (integerp location) (>= location 0))
+          location
+          (error 'type-error
+                 :datum location
+                 :expected-type 'unsigned-byte
+                 :format-control
+                 "STANDARD-INSTANCE-ACCESS: The value ~S is not a slot location"
+                 :format-arguments (list location)))
+      (error 'type-error
+             :datum instance
+             :expected-type 'standard-object
+             :format-control
+             "STANDARD-INSTANCE-ACCESS: The value ~S is not an instance"
+             :format-arguments (list instance))))
+
+(defun closer-mop:standard-instance-access (instance location)
+  (let ((index (closer-mop::%instance-location instance location)))
+    (%obj-ref instance index)))
+
+(defun (setf closer-mop:standard-instance-access) (new-value instance location)
+  (let ((index (closer-mop::%instance-location instance location)))
+    (%obj-set instance index new-value)))
+
+(defun closer-mop:funcallable-standard-instance-access (instance location)
+  (closer-mop:standard-instance-access instance location))
+
+(defun (setf closer-mop:funcallable-standard-instance-access)
+    (new-value instance location)
+  (setf (closer-mop:standard-instance-access instance location) new-value))
+
 (defun closer-mop:slot-definition-initform (slot)
   (if (%obj-p slot) (slot-value slot 'initform) nil))
 
@@ -111,11 +153,43 @@
 ;; (class-prototype c)) holds -- contextl caches layer contexts by it.
 (defvar closer-mop::*class-prototypes* nil)
 
+;; A built-in class has no instances to allocate: its prototype is a value of it,
+;; SBCL's where the value is a constant.
+(defvar closer-mop::*built-in-prototype-classes*
+  '(t integer number real rational ratio float complex string character symbol
+      keyword null boolean cons list sequence vector array bit-vector hash-table
+      function stream pathname))
+
+(defun closer-mop::%built-in-prototype (name)
+  (case name
+    ((integer number real rational) 0)
+    (ratio 1/42)
+    (float 0.0)
+    (complex (complex 0 1))
+    (string "")
+    (character #\*)
+    (symbol '*)
+    (keyword :keyword)
+    ((null list) nil)
+    (cons (list nil))
+    ((sequence vector) (vector))
+    (array (make-array nil))
+    (bit-vector (make-array 0 :element-type 'bit))
+    (hash-table (make-hash-table))
+    (function #'identity)
+    (stream *standard-output*)
+    (pathname (pathname ""))
+    (t t)))
+
 (defun closer-mop:class-prototype (class)
   (let ((hit (assoc class closer-mop::*class-prototypes* :test #'eq)))
     (if hit
         (cdr hit)
-        (let ((prototype (allocate-instance class)))
+        (let ((prototype
+               (if (member (slot-value class 'name)
+                           closer-mop::*built-in-prototype-classes*)
+                   (closer-mop::%built-in-prototype (slot-value class 'name))
+                   (allocate-instance class))))
           (setq closer-mop::*class-prototypes*
                 (cons (cons class prototype) closer-mop::*class-prototypes*))
           prototype))))
@@ -129,6 +203,67 @@
           (return)
           (setq out (cons (funcall collector arg) out))))
     (reverse out)))
+
+(defun closer-mop::%ensure-class-form (name initargs)
+  ;; The defclass of ENSURE-CLASS's initargs: a superclass by name, a slot from its
+  ;; canonical plist, any other initarg as a class option whose tail is its value.
+  (let ((supers nil) (slots nil) (options nil) (cursor initargs))
+    (loop while cursor
+          do
+            (let ((key (car cursor)) (value (car (cdr cursor))))
+              (cond ((eq key :name) nil)
+                    ((eq key :direct-superclasses)
+                     (setq supers
+                           (mapcar (lambda (super)
+                                     (if (symbolp super)
+                                         super
+                                         (slot-value super 'name))) value)))
+                    ((eq key :direct-slots)
+                     (setq slots (mapcar #'closer-mop::%slot-spec-form value)))
+                    ((eq key :metaclass)
+                     (setq options (cons (list :metaclass value) options)))
+                    (t (setq options (cons (cons key value) options))))
+              (setq cursor (cdr (cdr cursor)))))
+    (append (list 'defclass name supers slots) (reverse options))))
+
+(defun closer-mop::%slot-spec-form (plist)
+  ;; AMOP's canonicalized slot specification back in defclass's spelling.
+  (let ((spec nil) (cursor plist))
+    (loop while cursor
+          do
+            (let ((key (car cursor)) (value (car (cdr cursor))))
+              (cond ((eq key :name) nil)
+                    ((eq key :initargs)
+                     (dolist (initarg value)
+                       (setq spec (cons initarg (cons :initarg spec)))))
+                    ((eq key :readers)
+                     (dolist (reader value)
+                       (setq spec (cons reader (cons :reader spec)))))
+                    ((eq key :writers)
+                     (dolist (writer value)
+                       (setq spec (cons writer (cons :writer spec)))))
+                    ((eq key :initfunction) nil)
+                    (t (setq spec (cons value (cons key spec)))))
+              (setq cursor (cdr (cdr cursor)))))
+    (cons (getf plist :name) (reverse spec))))
+
+(defun closer-mop:ensure-class (name &rest initargs)
+  ;; AMOP: defines the class, or defines it again. As a defclass, so that a method
+  ;; can specialize on it and make-instance find it by name.
+  (eval (closer-mop::%ensure-class-form name initargs))
+  (find-class name))
+
+(defun closer-mop:extract-specializer-names (specialized-lambda-list)
+  ;; AMOP: one name per required parameter, t for an unspecialized one.
+  (closer-mop:required-args specialized-lambda-list
+   (lambda (arg) (if (and (consp arg) (cdr arg)) (car (cdr arg)) t))))
+
+(defun closer-mop:extract-lambda-list (specialized-lambda-list)
+  ;; AMOP: the list with its required parameters' specializers removed.
+  (let ((required
+         (closer-mop:required-args specialized-lambda-list
+          (lambda (arg) (if (consp arg) (car arg) arg)))))
+    (append required (nthcdr (length required) specialized-lambda-list))))
 
 (defun closer-mop:set-funcallable-instance-function (instance function)
   ;; The function a funcallable instance calls lives in the cell its layout

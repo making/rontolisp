@@ -4,16 +4,16 @@
 
 総称関数 `name` にメソッドを追加し、名前シンボルを返します（先行する [`defgeneric`](defgeneric.md) がなければ総称関数を暗黙に作ります）。specializer は**任意の**必須引数に付けられ、`(var specializer)` と書きます:
 
-- `(var (eql literal))` — 引数がそのリテラル（キーワード、クォートされたシンボル、数値、文字）のときにマッチ。素の名前は先に定義された [`defconstant`](defconstant.md) として解決され、その値にマッチします。定数でない名前はシンボル自身を表します。`(eql (find-class 'name))` はそのクラスオブジェクト（`(find-class 't)` を含む）にマッチします。`(eql (compute-key 'x))` のようなそれ以外のフォームはメソッドの定義時に一度だけ評価され、メソッドはその値と `eql` な引数にマッチします。定義が実行されるまで、そのメソッドは適用されません
+- `(var (eql literal))` — 引数がそのリテラル（キーワード、クォートされたシンボル、数値、文字）のときにマッチ。素の名前は先に定義された [`defconstant`](defconstant.md) として解決され、その値にマッチします。それ以外の名前は変数で、下のフォームと同様に評価されます。`(eql (find-class 'name))` はそのクラスオブジェクト（`(find-class 't)` を含む）にマッチします。`(eql (compute-key 'x))` のようなそれ以外のフォームはメソッドの定義時に一度だけ評価され、メソッドはその値と `eql` な引数にマッチします。定義が実行されるまで、そのメソッドは適用されません
 - `(var class-name)` — [`defclass`](defclass.md) クラスとそのサブクラスのインスタンスにマッチ
 - `(var struct-name)` — [`defstruct`](defstruct.md) 型のインスタンスにマッチ（ディスパッチャは構造体述語と同じインスタンスタグをテストします）
-- `(var type-name)` — 組み込み型（`integer`、`float`、`number`、`string`、`symbol`、`keyword`、`character`、`cons`、`list`、`null`、`hash-table`、`function`、`bit-vector`、`vector`、`array`、`pathname`、`package` など）にマッチ。`function` は funcallable インスタンス（`closer-mop:funcallable-standard-class` のインスタンス）にもマッチします。`package` 引数は [`typep`](../macros/typep.md) がパッケージとみなすものにちょうどマッチし、`keyword`/`symbol` より先に判定されます。そのため「`package` メソッド + [`find-package`](../functions/find-package.md) を呼んで再帰する非特定化メソッド」という designator のイディオムが停止します
+- `(var type-name)` — 組み込み型（`integer`、`float`、`number`、`string`、`symbol`、`keyword`、`character`、`cons`、`list`、`null`、`hash-table`、`function`、`bit-vector`、`vector`、`array`、`pathname`、`package`、`stream` と `string-stream` などのそのサブタイプなど）にマッチ。`function` は funcallable インスタンス（`closer-mop:funcallable-standard-class` のインスタンス）にもマッチします。`package` 引数は [`typep`](../macros/typep.md) がパッケージとみなすものにちょうどマッチし、`keyword`/`symbol` より先に判定されます。そのため「`package` メソッド + [`find-package`](../functions/find-package.md) を呼んで再帰する非特定化メソッド」という designator のイディオムが停止します
 - `(var metaclass-name)` — `class` と `standard-class` はクラスオブジェクト（[`find-class`](../functions/find-class.md) と [`class-of`](../functions/class-of.md) が返すもの。組み込みクラスを含む）にマッチ。`structure-class` と `built-in-class` は受け付けますが何にもマッチしません（ここではすべてのクラスオブジェクトが `standard-class` です）
 - `(var method-metaobject-class)` — `generic-function`、`standard-generic-function`、`method`、`standard-method`、`method-combination` と closer-mop の `standard-accessor-method`、`standard-reader-method`、`standard-writer-method`、`eql-specializer` はクラスで、[`defclass`](defclass.md) のスーパークラス、型、[`find-class`](../functions/find-class.md) の名前としても使えます。これらのインスタンスは [`add-method`](../functions/add-method.md) とその仲間の総称関数・メソッドのメタオブジェクトです。それらを使わないプログラムでは総称関数の値は普通の関数でメソッドのオブジェクトは無く、そこではこれらのクラスの `make-instance` はエラーを通知します
 - 名前の代わりにクラスオブジェクト（`#.(class-of 1)`）を書くと、そのクラス名と同じ意味になります
 - `(var t)` または素の `var` — デフォルトメソッド
 
-呼び出しはマッチする最も特定的なメソッドを実行します: まず `eql` メソッド、次にクラスメソッド（サブクラスがスーパークラスより先）、次に組み込み型（`integer` のようなサブタイプが `number` のようなスーパータイプより先、`bit-vector` が `vector` より、`vector` が `array` より先）、最後にデフォルトメソッドの順で、マッチがなければエラーを通知します。同じ specializer を再定義すると以前のメソッドを置き換えます。ラムダリストは必須引数の後に `&optional`/`&rest`/`&key` を続けられます（ディスパッチャは末尾を `apply` で転送します）。本体はドキュメント文字列と `(declare ...)` で始められます（どちらも無視されます）。
+呼び出しはマッチする最も特定的なメソッドを実行します: まず `eql` メソッド、次にクラスメソッド（サブクラスがスーパークラスより先）、次に組み込み型（`integer` のようなサブタイプが `number` のようなスーパータイプより先、`bit-vector` が `vector` より、`vector` が `array` より、`string-stream` が `stream` より先）、最後にデフォルトメソッドの順で、マッチがなければエラーを通知します。同じ specializer を再定義すると以前のメソッドを置き換えます。ラムダリストは必須引数の後に `&optional`/`&rest`/`&key` を続けられます（ディスパッチャは末尾を `apply` で転送します）。本体はドキュメント文字列と `(declare ...)` で始められます（どちらも無視されます）。
 
 ```lisp
 (defclass animal () ())

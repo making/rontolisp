@@ -11666,7 +11666,14 @@ public final class LispEvaluator {
 		}
 		// A funcallable MOP class named as the metaclass or a superclass registers
 		// first, so the protocol below loads with its constructor.
+		int classesBefore = this.closRegistry.classes().size();
 		LispMacroExpander.seedMopClassesNamedBy(cons, this.closRegistry);
+		if (this.closRegistry.classes().size() != classesBefore) {
+			// What this class's metaclass protocol is about to call dispatches over the
+			// classes seeded just now: the first funcallable-standard-class instance is a
+			// standard-class one to shared-initialize.
+			regenerateClassDispatchers(env);
+		}
 		LispCons registered = cons;
 		if (LispMacroExpander.defclassUsesMetaclass(cons)) {
 			ensureMopProtocolLoaded();
@@ -11727,11 +11734,7 @@ public final class LispEvaluator {
 				}
 			}
 		}
-		for (ClosRegistry.GenericInfo generic : this.closRegistry.generics().values()) {
-			if (generic.hasClassMethod()) {
-				defineDispatcher(generic.name(), env);
-			}
-		}
+		regenerateClassDispatchers(env);
 		// CLHS: defclass answers the class object, find-class's (lisp-binary binds a
 		// defparameter to it and hands it to moptilities' slot-names).
 		LispVal name = cons.toList().get(1);
@@ -11741,6 +11744,14 @@ public final class LispEvaluator {
 		}
 		LispVal metaobject = name instanceof LispSymbol sym ? this.closRegistry.classMetaobject(sym.name()) : null;
 		return metaobject != null ? metaobject : name;
+	}
+
+	private void regenerateClassDispatchers(Environment env) {
+		for (ClosRegistry.GenericInfo generic : List.copyOf(this.closRegistry.generics().values())) {
+			if (generic.hasClassMethod()) {
+				defineDispatcher(generic.name(), env);
+			}
+		}
 	}
 
 	/**

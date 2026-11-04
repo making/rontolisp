@@ -51,7 +51,8 @@ final class MethodGenerations {
 	private static Map<String, List<String>> implicitCalls() {
 		Map<String, List<String>> calls = new HashMap<>();
 		List<String> init = List.of(LispNames.INITIALIZE_INSTANCE, LispNames.SHARED_INITIALIZE);
-		calls.put(LispNames.MAKE_INSTANCE, init);
+		calls.put(LispNames.MAKE_INSTANCE,
+				List.of(LispNames.INITIALIZE_INSTANCE, LispNames.SHARED_INITIALIZE, LispNames.ALLOCATE_INSTANCE));
 		calls.put(LispNames.CHANGE_CLASS, init);
 		List<String> slotProtocol = List.of(LispNames.SLOT_UNBOUND, LispNames.SLOT_MISSING);
 		calls.put(LispNames.SLOT_VALUE, slotProtocol);

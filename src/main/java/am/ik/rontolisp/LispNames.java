@@ -4837,6 +4837,12 @@ public final class LispNames {
 	public static final String SLOT_PROTOCOL_MAKUNBOUND = "%SLOT-PROTOCOL-MAKUNBOUND";
 
 	/**
+	 * The slot-access protocol's {@code (%slot-protocol-inherit-initfunctions name
+	 * pairs)}: the initforms a class inherits from a plain superclass, for its fill.
+	 */
+	public static final String SLOT_PROTOCOL_INHERIT_INITFUNCTIONS = "%SLOT-PROTOCOL-INHERIT-INITFUNCTIONS";
+
+	/**
 	 * {@code (%slot-protocol-fill obj initargs slot-names)}: CL's initarg and initform
 	 * fill (CLHS 7.1.4) through {@code (setf slot-value-using-class)}.
 	 */
@@ -11019,6 +11025,21 @@ public final class LispNames {
 	 * 2026-11-01): {@code :class} on a class-allocated slot, {@code :instance} otherwise.
 	 */
 	public static final String SLOT_DEFINITION_ALLOCATION = "SLOT-DEFINITION-ALLOCATION";
+
+	/**
+	 * {@code closer-mop:slot-definition-location}: an instance slot's index in the
+	 * instance, what {@link #STANDARD_INSTANCE_ACCESS} takes.
+	 */
+	public static final String SLOT_DEFINITION_LOCATION = "SLOT-DEFINITION-LOCATION";
+
+	/** {@code closer-mop:standard-instance-access} and its {@code setf} function. */
+	public static final String STANDARD_INSTANCE_ACCESS = "STANDARD-INSTANCE-ACCESS";
+
+	/**
+	 * {@code closer-mop:funcallable-standard-instance-access} and its {@code setf}
+	 * function.
+	 */
+	public static final String FUNCALLABLE_STANDARD_INSTANCE_ACCESS = "FUNCALLABLE-STANDARD-INSTANCE-ACCESS";
 
 	/**
 	 * {@code closer-mop:set-funcallable-instance-function}: installs the function a

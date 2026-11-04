@@ -195,6 +195,12 @@
              (slot-value class 'effective-slots)
              nil)))
     (setf (slot-value class 'effective-slots) (closer-mop:compute-slots class))
+    ;; An effective slot's location is its index in the instance: compute-slots
+    ;; answers them in layout order.
+    (let ((location 0))
+      (dolist (eslot (slot-value class 'effective-slots))
+        (setf (slot-value eslot '%location) location)
+        (setq location (+ location 1))))
     (setf (slot-value class 'finalized-p) t)
     ;; What else a (re)finalization does depends on the program: the class
     ;; precedence lists the run-time dispatch memoized (dynamic-classes.lisp) are
@@ -210,10 +216,10 @@
   ;; first -- each superclass in local precedence order, the first occurrence
   ;; of a name keeping its place, like the static layout merge -- then the own
   ;; slots that introduce new names. An inherited slot only one class of the
-  ;; precedence list defines is reused as-is; any other is computed through the
-  ;; protocol from every direct definition of its name, most specific first
-  ;; (contextl's partial classes define one slot in several anonymous
-  ;; superclasses, each layer adding options such as :layered).
+  ;; precedence list defines is reused as-is while its location holds here; any
+  ;; other is computed through the protocol from every direct definition of its
+  ;; name, most specific first (contextl's partial classes define one slot in
+  ;; several anonymous superclasses, each layer adding options such as :layered).
   (let* ((supers (slot-value class 'direct-superclasses))
          (direct-slots (slot-value class 'direct-slots))
          (cpl (%mop-class-precedence-list class))
@@ -229,10 +235,11 @@
       (let ((definitions
              (%mop-direct-slot-definitions cpl (slot-value eslot 'name))))
         (setq effective
-              (cons (if (cdr definitions)
+              (cons (if (and (null (cdr definitions))
+                         (eql (slot-value eslot '%location) (length effective)))
+                        eslot
                         (closer-mop:compute-effective-slot-definition class
-                         (slot-value eslot 'name) definitions)
-                        eslot) effective))))
+                         (slot-value eslot 'name) definitions)) effective))))
     (dolist (dsd direct-slots)
       (if (%mop-find-slot-definition (slot-value dsd 'name) inherited)
           nil

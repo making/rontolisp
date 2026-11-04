@@ -11945,11 +11945,18 @@ cases:
       (defmethod clos-eql-form ((x (eql (identity *clos-eql-s*)))) :that-string)
       (print (list (clos-eql-form 42) (clos-eql-form *clos-eql-s*) (clos-eql-form (copy-seq *clos-eql-s*))
                    (clos-eql-form '=def-alpha=) *clos-eql-count*))
+      ;; So is a bare variable (McCLIM's (eql *builtin-t-class*)).
+      (defvar *clos-eql-var* (list :the-list))
+      (defgeneric clos-eql-var (x))
+      (defmethod clos-eql-var (x) :other)
+      (defmethod clos-eql-var ((x (eql *clos-eql-var*))) :that-list)
+      (print (list (clos-eql-var *clos-eql-var*) (clos-eql-var (list :the-list))))
     expected: |
       ((:UTF8 1 12) (:TAG 1 :TAG) (:DEFAULT 1 99))
       (:ALPHA :CLASS-T (:OTHER BETA) 1)
       (:OTHER 42)
       (:FORTY-TWO :THAT-STRING (:OTHER "key") :ALPHA 1)
+      (:THAT-LIST :OTHER)
   - name: clos-methods-take-effect-where-their-forms-run
     source: |
       ;; A method exists from the moment its form runs (CLHS 7.6): a call that runs first
@@ -12152,9 +12159,21 @@ cases:
       (print (list (clos-bv-kind #*1011) (clos-bv-kind (make-array 3 :element-type 'bit :initial-element 1))
                    (clos-bv-kind #(1 0 1)) (clos-bv-kind (make-array '(2 2))) (clos-bv-kind 7)))
       (print (list (clos-sbv-kind #*10) (clos-sbv-kind (make-array 2 :element-type 'bit :adjustable t))))
+      ;; The stream subtypes specialize too (McCLIM's string-stream methods), ahead
+      ;; of stream.
+      (defgeneric clos-stream-kind (x))
+      (defmethod clos-stream-kind ((x stream)) :stream)
+      (defmethod clos-stream-kind ((x string-stream)) :string)
+      (defmethod clos-stream-kind ((x two-way-stream)) :two-way)
+      (defmethod clos-stream-kind (x) :other)
+      (print (let ((in (make-string-input-stream "a")) (out (make-string-output-stream)))
+               (list (clos-stream-kind in) (clos-stream-kind out)
+                     (clos-stream-kind (make-two-way-stream in out))
+                     (clos-stream-kind (make-broadcast-stream)) (clos-stream-kind 7))))
     expected: |
       ((:BITS 3) (:BITS 3) :VECTOR :ARRAY :OTHER)
       (:SIMPLE :BIT-VECTOR)
+      (:STRING :STRING :TWO-WAY :STREAM :OTHER)
   - name: clos-defmethod-lambda-list-congruence
     source: |
       ;; CLHS 7.6.4: a method whose lambda list is not congruent with its generic's
@@ -15117,12 +15136,21 @@ cases:
       (let ((ci-bq-args nil)) (print `(f ',@ci-bq-args)))
       (let ((ci-bq-args '(a b))) (print `(f ',@ci-bq-args)))
       (let ((ci-bq-fns '(g))) (print `(f #',@ci-bq-fns)))
+      ;; A reader label in a template (McCLIM's with-cursor-off): the labelled datum is
+      ;; template, its comma the template's; constant data stays data.
+      (let ((ci-bq-n 3))
+        (print `(#1=(p ,ci-bq-n) #1# ,@'(u) #2=(q) . #2#))
+        (print `#3=(p ,ci-bq-n)))
+      (print `(x #4=(a b) #4#))
     expected: |
       (A 'B)
       (EQUAL X 'V)
       (F (QUOTE))
       (F (QUOTE A B))
       (F #'G)
+      ((P 3) (P 3) U (Q) Q)
+      (P 3)
+      (X (A B) (A B))
   # What the reader writes on its own -- a template's list-building calls, the
   # quote and function of ' and #' -- is cl's, whatever the package reads those
   # names as. Only the symbols the source spells belong to the package.
@@ -34388,6 +34416,140 @@ standalone:
       (NIL (:UNBOUND X) 1 1)
       ((:READ X) (:READ Y) :BOUNDP (:WRITE X 3) (:WRITE Y 4) (:READ X) (:READ Y) :MAKUNBOUND :BOUNDP (:READ X))
       (50 T)
+  - name: slot-locations-and-allocate-instance-methods
+    source: |
+      ;; An effective slot's location addresses its storage through
+      ;; standard-instance-access, the second superclass's slot under multiple
+      ;; inheritance included; a class-allocated slot has none. A method on
+      ;; allocate-instance is called by make-instance of a :metaclass class, a computed
+      ;; class too, and its call-next-method reaches the system's; what it stores stays
+      ;; in the instance as make-instance fills it through the slot-access protocol: a
+      ;; miniature of McCLIM's class-with-dynamic-slots. Standalone: the method and the
+      ;; protocol join the construction and slot forms of their program. SBCL 2.2.9
+      ;; (sb-mop) agrees.
+      (asdf:load-system "closer-mop")
+      (defclass slc-a () ((a :initarg :a :initform 1)))
+      (defclass slc-b () ((b :initarg :b :initform 2)))
+      (defclass slc-c (slc-a slc-b)
+        ((c :initarg :c :initform 3) (shared :allocation :class :initform 9)))
+      (defun slc-slotd (class name)
+        (find name (closer-mop:class-slots class) :key #'closer-mop:slot-definition-name))
+      (closer-mop:finalize-inheritance (find-class 'slc-c))
+      (defun slc-read (object name)
+        (closer-mop:standard-instance-access
+         object (closer-mop:slot-definition-location (slc-slotd (class-of object) name))))
+      (let ((x (make-instance 'slc-c)))
+        (print (list (slc-read x 'a) (slc-read x 'b) (slc-read x 'c)))
+        (setf (closer-mop:standard-instance-access
+               x (closer-mop:slot-definition-location (slc-slotd (class-of x) 'b))) 20)
+        (print (slot-value x 'b))
+        (print (closer-mop:slot-definition-allocation (slc-slotd (class-of x) 'shared))))
+      (defclass slc-direct-slot (closer-mop:standard-direct-slot-definition)
+        ((cell :initarg :cell :initform nil)))
+      (defclass slc-effective-slot (closer-mop:standard-effective-slot-definition) ())
+      (defclass slc-class (standard-class) ())
+      (defmethod closer-mop:validate-superclass ((class slc-class) (super standard-class)) t)
+      (defvar *slc-allocations* nil)
+      (defmethod allocate-instance ((class slc-class) &rest initargs)
+        (let ((supplied (getf initargs :x)))
+          (when supplied (push supplied *slc-allocations*)))
+        (let ((object (call-next-method)))
+          (dolist (slotd (closer-mop:class-slots class))
+            (when (typep slotd 'slc-effective-slot)
+              (setf (closer-mop:standard-instance-access
+                     object (closer-mop:slot-definition-location slotd))
+                    (list :empty))))
+          object))
+      (defmethod closer-mop:direct-slot-definition-class ((class slc-class) &rest initargs)
+        (if (getf initargs :cell)
+            (find-class 'slc-direct-slot)
+            (call-next-method)))
+      (defvar *slc-cell-slot* nil)
+      (defmethod closer-mop:compute-effective-slot-definition ((class slc-class) name direct-slots)
+        (let ((*slc-cell-slot* (typep (first direct-slots) 'slc-direct-slot)))
+          (call-next-method)))
+      (defmethod closer-mop:effective-slot-definition-class ((class slc-class) &rest initargs)
+        (if *slc-cell-slot* (find-class 'slc-effective-slot) (call-next-method)))
+      (defun slc-cell (object slotd)
+        (closer-mop:standard-instance-access object (closer-mop:slot-definition-location slotd)))
+      (defmethod closer-mop:slot-value-using-class ((class standard-class) object (slotd slc-effective-slot))
+        (let ((value (car (slc-cell object slotd))))
+          (if (eq value :empty)
+              (slot-unbound class object (closer-mop:slot-definition-name slotd))
+              value)))
+      (defmethod (setf closer-mop:slot-value-using-class) (new (class standard-class) object (slotd slc-effective-slot))
+        (setf (car (slc-cell object slotd)) new))
+      (defmethod closer-mop:slot-boundp-using-class ((class standard-class) object (slotd slc-effective-slot))
+        (not (eq :empty (car (slc-cell object slotd)))))
+      (defmethod closer-mop:slot-makunbound-using-class ((class standard-class) object (slotd slc-effective-slot))
+        (setf (car (slc-cell object slotd)) :empty)
+        object)
+      (defclass slc-thing ()
+        ((x :initarg :x :accessor slc-x :cell t)
+         (y :initarg :y :initform 2 :accessor slc-y :cell t)
+         (z :initarg :z :initform 3 :accessor slc-z))
+        (:metaclass slc-class))
+      (let ((a (make-instance 'slc-thing :x 10))
+            (b (make-instance 'slc-thing :y 20)))
+        (print (list (slc-x a) (slc-y a) (slc-z a) (slc-y b) (slot-boundp b 'x)))
+        (print (slc-cell a (slc-slotd (class-of a) 'x)))
+        (setf (slc-x a) 11 (slc-z a) 33)
+        (print (list (slot-value a 'x) (slot-value a 'z)))
+        (slot-makunbound a 'y)
+        (print (slot-boundp a 'y))
+        (let ((computed (apply #'make-instance (find-class 'slc-thing) (list :x 7))))
+          (print (list (slc-x computed) (slc-y computed))))
+        (print (slot-value (make-instance 'slc-a) 'a))
+        (print (reverse *slc-allocations*)))
+      ;; A bad argument is a type-error, a specialized lambda list comes apart.
+      (print (handler-case (closer-mop:standard-instance-access 1 0)
+               (type-error () :type-error)))
+      (print (handler-case (closer-mop:standard-instance-access
+                            (make-instance 'slc-a) (closer-mop:slot-definition-location
+                                                    (slc-slotd (find-class 'slc-c) 'shared)))
+               (type-error () :type-error)))
+      (print (closer-mop:extract-specializer-names '((a integer) b (c (eql 1)) &optional d)))
+      (print (closer-mop:extract-lambda-list '((a integer) b (c (eql 1)) &optional d &key (e 1))))
+      ;; The fill runs the initform a plain superclass declares.
+      (defclass slc-plain () ((p :initarg :p :initform (+ 2 3) :accessor slc-p)))
+      (defclass slc-sub (slc-plain) ((q :initform 7 :accessor slc-q)) (:metaclass slc-class))
+      (let ((x (make-instance 'slc-sub)))
+        (print (list (slc-p x) (slc-q x) (slc-p (make-instance 'slc-sub :p 1)))))
+      ;; A generic-function class, the first funcallable class after a metaclass was in
+      ;; use: its class is a standard-class to shared-initialize, and its instance keeps
+      ;; the system's slots whatever the slot-access protocol does.
+      (defclass slc-gf (standard-generic-function) ()
+        (:metaclass closer-mop:funcallable-standard-class))
+      (defgeneric slc-g (a) (:generic-function-class slc-gf))
+      (defmethod slc-g (a) (list :default a))
+      (defmethod slc-g ((a integer)) (list :integer (call-next-method)))
+      (print (list (slc-g 1) (slc-g :a)))
+      ;; A built-in class's prototype is a value of it, pathname one of them.
+      (print (mapcar (lambda (name)
+                       (let ((prototype (closer-mop:class-prototype (find-class name))))
+                         (and (typep prototype name)
+                              (eq prototype (closer-mop:class-prototype (find-class name))))))
+                     '(integer ratio float complex number real rational string character symbol
+                       null cons list sequence vector array bit-vector hash-table function
+                       stream pathname)))
+    stdout: |
+      (1 2 3)
+      20
+      :CLASS
+      (10 2 3 20 NIL)
+      (10)
+      (11 33)
+      NIL
+      (7 2)
+      1
+      (10 7)
+      :TYPE-ERROR
+      :TYPE-ERROR
+      (INTEGER T (EQL 1))
+      (A B C &OPTIONAL D &KEY (E 1))
+      (5 7 1)
+      ((:INTEGER (:DEFAULT 1)) (:DEFAULT :A))
+      (T T T T T T T T T T T T T T T T T T T T T)
   # The generic-function protocol adds an arm consulting its generic's run-time
   # methods to every dispatcher, so it runs alone, not in the corpus.
   - name: generic-function-protocol

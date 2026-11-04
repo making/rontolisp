@@ -529,7 +529,7 @@ public final class ClosRegistry {
 		// The slot-definition hierarchy (AMOP 5.4): the root holds every slot, so both
 		// standard classes keep the same layout.
 		seedClass(SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS", "INITFUNCTION",
-				"WRITERS", "ALLOCATION");
+				"WRITERS", "ALLOCATION", "%LOCATION");
 		seedClass(DIRECT_SLOT_DEFINITION_NAME, SLOT_DEFINITION_NAME);
 		seedClass(EFFECTIVE_SLOT_DEFINITION_NAME, SLOT_DEFINITION_NAME);
 		seedClass(STANDARD_SLOT_DEFINITION_NAME, SLOT_DEFINITION_NAME);
@@ -603,6 +603,9 @@ public final class ClosRegistry {
 				if (FUNCALLABLE_STANDARD_OBJECT_NAME.equals(seed.parent())) {
 					// generic-function is a funcallable-standard-object (AMOP 5.2).
 					ensureFuncallableClassesSeeded();
+				}
+				if (STANDARD_CLASS_NAME.equals(seed.parent())) {
+					ensureMopClassesSeeded();
 				}
 				if (!this.classes.containsKey(normalize(seed.name()))) {
 					seedClass(seed.name(), seed.parent(), seed.slots().toArray(String[]::new));
@@ -1043,7 +1046,9 @@ public final class ClosRegistry {
 	 * The seeded root of the slot-definition metaobjects; it declares every slot the two
 	 * standard classes carry. Slot order: name, initargs, initform, type, readers,
 	 * initfunction (appended 2026-08-03; nil except on driver-built definitions), writers
-	 * (appended 2026-10-30; filled on direct slot definitions only).
+	 * (appended 2026-10-30; filled on direct slot definitions only), allocation (appended
+	 * 2026-11-01), %location (appended 2026-11-05; the slot's index in an instance,
+	 * filled on effective slot definitions only).
 	 */
 	public static final String SLOT_DEFINITION_NAME = "SLOT-DEFINITION";
 
@@ -1068,6 +1073,9 @@ public final class ClosRegistry {
 	 * {@code class-slots} entries from. Layout: {@link #SLOT_DEFINITION_NAME}'s.
 	 */
 	public static final String STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME = "STANDARD-EFFECTIVE-SLOT-DEFINITION";
+
+	/** The {@code %obj-ref} index of a slot definition's {@code %location}. */
+	private static final int SLOT_DEFINITION_LOCATION_INDEX = 8;
 
 	/** The {@code :allocation :class} keyword, as a slot definition's allocation. */
 	public static final String CLASS_ALLOCATION = ":CLASS";
@@ -1135,6 +1143,17 @@ public final class ClosRegistry {
 	/** AMOP's {@code eql-specializer}, under its {@code closer-mop} name. */
 	public static final String EQL_SPECIALIZER_NAME = LispNames.CLOSER_MOP_PKG + ":" + EQL_SPECIALIZER;
 
+	/** The {@code closer-mop} symbol naming {@link #FORWARD_REFERENCED_CLASS_NAME}. */
+	public static final String FORWARD_REFERENCED_CLASS = "FORWARD-REFERENCED-CLASS";
+
+	/**
+	 * AMOP's {@code forward-referenced-class}, under its {@code closer-mop} name: a
+	 * metaclass of the metaobject layout, so below {@code standard-class} where AMOP has
+	 * it beside.
+	 */
+	public static final String FORWARD_REFERENCED_CLASS_NAME = LispNames.CLOSER_MOP_PKG + ":"
+			+ FORWARD_REFERENCED_CLASS;
+
 	/**
 	 * One class a seeding family registers: its canonical name, its parent and its own
 	 * slots.
@@ -1199,7 +1218,8 @@ public final class ClosRegistry {
 					new MopSeed(STANDARD_READER_METHOD_NAME, STANDARD_ACCESSOR_METHOD_NAME),
 					new MopSeed(STANDARD_WRITER_METHOD_NAME, STANDARD_ACCESSOR_METHOD_NAME)),
 			List.of(new MopSeed("METHOD-COMBINATION", null)),
-			List.of(new MopSeed(EQL_SPECIALIZER_NAME, null, List.of("OBJECT"))));
+			List.of(new MopSeed(EQL_SPECIALIZER_NAME, null, List.of("OBJECT"))),
+			List.of(new MopSeed(FORWARD_REFERENCED_CLASS_NAME, STANDARD_CLASS_NAME)));
 
 	/** Each member name of {@link #METHOD_METAOBJECT_FAMILIES} to its family. */
 	private static final Map<String, List<MopSeed>> METHOD_METAOBJECT_FAMILY_BY_MEMBER = methodMetaobjectFamilyIndex();
@@ -1329,7 +1349,7 @@ public final class ClosRegistry {
 	 * specifier resolves through by name (`.kb/clos.md`).
 	 */
 	public static final List<String> FIND_CLASS_ONLY_CLASS_NAMES = List.of("STANDARD-OBJECT", "SEQUENCE", "LIST",
-			"NUMBER", "REAL", "RATIONAL", "STRUCTURE-OBJECT", "BUILT-IN-CLASS");
+			"NUMBER", "REAL", "RATIONAL", "STRUCTURE-OBJECT", "BUILT-IN-CLASS", "PATHNAME");
 
 	/**
 	 * Registers a built-in class (a condition of the seeded hierarchy, or one of the MOP
@@ -2401,12 +2421,17 @@ public final class ClosRegistry {
 	/** The classes a {@code defclass} defined with a {@code :metaclass}, normalized. */
 	private final Set<String> metaclassedClasses = new java.util.HashSet<>();
 
+	/** Each of {@link #metaclassedClasses} to its metaclass's name. */
+	private final Map<String, String> metaclassOf = new java.util.HashMap<>();
+
 	/**
 	 * Records that the class was defined with a {@code (:metaclass M)} option.
 	 * @param className the class name as spelled
+	 * @param metaclassName the metaclass's name
 	 */
-	public void markMetaclassed(String className) {
+	public void markMetaclassed(String className, String metaclassName) {
 		this.metaclassedClasses.add(normalize(className));
+		this.metaclassOf.put(normalize(className), metaclassName);
 	}
 
 	/**
@@ -2519,6 +2544,28 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * Whether {@code make-instance} of the class calls {@code allocate-instance}: the
+	 * class was defined with a {@code :metaclass} a method on the generic specializes.
+	 * @param className the class name as spelled
+	 * @return true for such a class
+	 */
+	public boolean allocatesThroughGeneric(String className) {
+		GenericInfo generic = findGeneric(LispNames.ALLOCATE_INSTANCE);
+		String metaclass = this.metaclassOf.get(normalize(className));
+		if (generic == null || metaclass == null) {
+			return false;
+		}
+		ClassInfo info = findClass(metaclass);
+		if (info == null) {
+			return false;
+		}
+		return generic.methods().values().stream().anyMatch(method -> {
+			Specializer first = method.specializers().isEmpty() ? Specializer.DEFAULT : method.specializers().get(0);
+			return first.kind() == SpecializerKind.CLASS && info.ancestors().contains(first.name());
+		});
+	}
+
+	/**
 	 * Whether {@code make-instance} of the class fills its slots through the slot-access
 	 * protocol: the protocol is on and the class was defined with a {@code :metaclass}
 	 * (its instances are the ones the protocol routes). A class whose precedence list
@@ -2532,7 +2579,10 @@ public final class ClosRegistry {
 			return false;
 		}
 		ClassInfo info = findClass(className);
-		return info != null && info.ancestors().stream().noneMatch(this.defaultInitargClasses::contains);
+		// A generic function's or method's slots are the system's, which initialize to
+		// nil with no initfunction to say so.
+		return info != null && info.ancestors().stream().noneMatch(this.defaultInitargClasses::contains)
+				&& !info.ancestors().contains("GENERIC-FUNCTION") && !info.ancestors().contains("METHOD");
 	}
 
 	/**
@@ -3594,7 +3644,9 @@ public final class ClosRegistry {
 		LispVal effectiveSlots = LispNil.INSTANCE;
 		List<SlotSpec> slots = info.slots();
 		for (int i = slots.size() - 1; i >= 0; i--) {
-			effectiveSlots = new LispCons(slotDefinitionInstance(slots.get(i), false), effectiveSlots);
+			LispInstance effective = slotDefinitionInstance(slots.get(i), false);
+			effective.setSlot(SLOT_DEFINITION_LOCATION_INDEX, new LispInteger(i));
+			effectiveSlots = new LispCons(effective, effectiveSlots);
 		}
 		LispVal directSlots = LispNil.INSTANCE;
 		for (int i = info.directSlots().size() - 1; i >= 0; i--) {
@@ -3796,6 +3848,7 @@ public final class ClosRegistry {
 					new LispSymbol(slotNames.get(i)),
 					new LispCons(new LispSymbol(":" + slotNames.get(i)), LispNil.INSTANCE), layout.initforms().get(i),
 					new LispSymbol("T"), LispNil.INSTANCE);
+			slotDefinition.setSlot(SLOT_DEFINITION_LOCATION_INDEX, new LispInteger(i));
 			effectiveSlots = new LispCons(slotDefinition, effectiveSlots);
 		}
 		LispInstance metaobject = newSeededInstance(STANDARD_CLASS_NAME, new LispSymbol(layout.printName()), supers,

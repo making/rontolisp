@@ -1797,6 +1797,18 @@ public final class LispReader {
 				this.rawNeedsFullProcessing |= holdsComma(datum.value());
 				return datum.value();
 			}
+			// A labelled datum is template too, a comma in it this template's. Each use
+			// of the label stands for that template: this path expands the datums, where
+			// the single-level path has only the tokens.
+			case Token.LabelDef def -> {
+				this.pos++;
+				this.rawNeedsFullProcessing = true;
+				return readRawLabel(def);
+			}
+			case Token.LabelRef ignored -> {
+				this.rawNeedsFullProcessing = true;
+				return readExpr();
+			}
 			// `#(a ,b) is `,(apply #'vector `(a ,b)) (CLHS 2.4.6.1), which needs the full
 			// processing; a vector holding no comma is constant data like an atom.
 			case Token.VectorOpen ignored when vectorHoldsComma() -> {
@@ -1812,6 +1824,31 @@ public final class LispReader {
 				return readExpr();
 			}
 		}
+	}
+
+	// The raw twin of readExpr's #n=. A template expands by being walked, so one holding
+	// itself has no expansion: a reference to the label inside its datum is refused.
+	private LispVal readRawLabel(Token.LabelDef def) {
+		LispCons placeholder = new LispCons(LispNil.INSTANCE, LispNil.INSTANCE);
+		this.labels.put(def.label(), placeholder);
+		LispVal datum = readRawTemplate();
+		if (datum == placeholder || holdsDatum(datum, placeholder,
+				java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()))) {
+			throw err("#" + def.label() + "= closes a circle in a backquote template");
+		}
+		this.labels.put(def.label(), datum);
+		return datum;
+	}
+
+	private static boolean holdsDatum(LispVal node, LispVal wanted, java.util.Set<LispCons> seen) {
+		LispVal rest = node;
+		while (rest instanceof LispCons cons && seen.add(cons)) {
+			if (cons.car() == wanted || cons.cdr() == wanted || holdsDatum(cons.car(), wanted, seen)) {
+				return true;
+			}
+			rest = cons.cdr();
+		}
+		return false;
 	}
 
 	// Whether the vector literal opening at the current token has a comma before its

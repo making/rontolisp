@@ -112,6 +112,18 @@
               (t nil))))
     object))
 
+(defun %slot-protocol-inherit-initfunctions (name pairs)
+  ;; PAIRS are (slot-name . thunk) for what the class NAME inherits: a slot a plain
+  ;; superclass declares has a definition with no initfunction for the fill above.
+  (let ((class (%mop-ensured-class name)))
+    (if class
+        (dolist (pair pairs)
+          (let ((slotd (%slot-protocol-slotd class (car pair))))
+            (if (and slotd (null (%slot-value-runtime slotd 'initfunction)))
+                (%slot-value-set-runtime slotd 'initfunction (cdr pair))
+                nil)))
+        nil)))
+
 (defun %slot-protocol-makunbound (object name)
   (let ((class (class-of object)))
     (closer-mop:slot-makunbound-using-class class object
