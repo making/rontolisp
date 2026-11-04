@@ -57,6 +57,29 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void aClassLoadedCodeDefinesDecidesHowItsComponentIsSpliced() {
+		// A primary load-op of its own defers the file, a :around does not, and a class
+		// that is no cl-source-file has its file read by nothing (c.dat does not exist).
+		Map<String, String> files = Map.of("tool.asd", "(defsystem :tool :components ((:file \"tool\")))", "tool.lisp",
+				"""
+						(defpackage :tool (:use :cl))
+						(in-package :tool)
+						(defclass later-file (asdf:cl-source-file) ())
+						(defmethod asdf:perform ((op asdf:load-op) (c later-file)) nil)
+						(defclass wrapped-file (asdf:cl-source-file) ())
+						(defmethod asdf:perform :around ((op asdf:load-op) (c wrapped-file)) (call-next-method))
+						(defclass data-file (asdf:source-file) () (:default-initargs :type "dat"))
+						(import '(later-file wrapped-file data-file) :asdf)""", "app.asd", """
+						(defsystem :app
+						  :defsystem-depends-on (:tool)
+						  :components ((:later-file "a") (:wrapped-file "b") (:data-file "c")))""", "a.lisp",
+				"(print :a)", "b.lisp", "(print :b)");
+		List<String> forms = inline("(asdf:load-system :app)", files).stream().map(LispVal::print).toList();
+		assertThat(forms).contains("(%ASDF-COMPONENT \"app\" 0 :DEFERRED)", "(%ASDF-COMPONENT \"app\" 1)",
+				"(%ASDF-COMPONENT \"app\" 2)", "(PRINT :A)", "(PRINT :B)");
+	}
+
+	@Test
 	void inlinesTopLevelLoadInPlace() {
 		List<LispVal> result = inline("(load \"core.lisp\") (print (f 5))",
 				Map.of("core.lisp", "(defun f (x) (* x x))"));

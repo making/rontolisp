@@ -74,6 +74,8 @@ public final class SplicedComponentGroups {
 	/** What a lowering calls: defined by the asdf runtime, referenced only here. */
 	public static final Set<String> LOWERING_TARGETS = Set.of(LOAD_SPLICED, PERFORM_SYSTEM, PERFORM_COMPONENT);
 
+	private static final String DEFERRED = ":DEFERRED";
+
 	/** The qualifiers a {@code perform} spelling may carry and still be ASDF's. */
 	private static final Set<String> PERFORM_PACKAGES = Set.of(LispNames.ASDF_PKG, "ASDF/ACTION");
 
@@ -292,14 +294,49 @@ public final class SplicedComponentGroups {
 	}
 
 	/**
-	 * The {@code (%asdf-component "SYSTEM" INDEX)} bracket {@code LoadInliner} opens a
-	 * spliced component with.
+	 * The {@code (%asdf-component "SYSTEM" INDEX [:DEFERRED])} bracket
+	 * {@code LoadInliner} opens a spliced component with.
 	 * @param system the system's name
 	 * @param index the component's position in the system's load order
+	 * @param deferred whether loading the system leaves the component's forms unrun
+	 * ({@link #isDeferredComponentMarker}), so they stay out of the macro-time image
 	 * @return the marker form
 	 */
-	public static LispVal componentMarker(String system, int index) {
-		return list(new LispSymbol(LispNames.ASDF_COMPONENT), new LispString(system), new LispInteger(index));
+	public static LispVal componentMarker(String system, int index, boolean deferred) {
+		LispSymbol op = new LispSymbol(LispNames.ASDF_COMPONENT);
+		return deferred ? list(op, new LispString(system), new LispInteger(index), new LispSymbol(DEFERRED))
+				: list(op, new LispString(system), new LispInteger(index));
+	}
+
+	/**
+	 * Whether {@code form} opens a component whose {@code load-op} leaves its file unread
+	 * -- {@code prove-asdf}'s {@code test-file}, whose forms run when a test asks. Such a
+	 * form is no part of the loaded system the macro-time pass replays.
+	 * @param form a top-level form
+	 * @return {@code true} for a deferred {@code %asdf-component} marker
+	 */
+	public static boolean isDeferredComponentMarker(LispVal form) {
+		return isComponentOpen(form) && ((LispCons) form).toList().size() == 4;
+	}
+
+	/**
+	 * Whether {@code form} is a {@code %asdf-component} marker.
+	 * @param form a top-level form
+	 * @return {@code true} when it opens a component
+	 */
+	public static boolean isComponentOpen(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.ASDF_COMPONENT.equals(op.name());
+	}
+
+	/**
+	 * Whether {@code form} is the {@code %asdf-component-end} marker.
+	 * @param form a top-level form
+	 * @return {@code true} when it closes a component
+	 */
+	public static boolean isComponentClose(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.ASDF_COMPONENT_END.equals(op.name());
 	}
 
 	/**

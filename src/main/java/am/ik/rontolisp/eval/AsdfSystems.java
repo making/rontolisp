@@ -47,10 +47,10 @@ import org.jspecify.annotations.Nullable;
  * {@code :pathname} (a path prefix for every component), and {@code :components} with
  * {@code (:file "name" [:depends-on (...)])}, {@code (:module "dir" :components (...))}
  * (a path prefix) and {@code (:static-file "name")} (ignored) entries. A component's
- * CLASS decides only the two things a data-only parse can honor -- whether the component
- * contributes a source file and which extension its name gets -- so ASDF's own classes,
- * the ones a top-level {@code defclass} in the same {@code .asd} declares, and
- * {@code :default-component-class} are all supported.
+ * CLASS is ASDF's own, one a top-level {@code defclass} in the same {@code .asd} declares
+ * -- for those the parse reads whether the component contributes a source file and which
+ * extension its name gets -- or one loaded code defines, which the image answers for
+ * ({@link LiveClass}) and the program instantiates ({@link LoadedClasses}).
  *
  * <p>
  * Consumers: the compile path splices systems in the {@code LoadInliner} pass (so the
@@ -121,12 +121,14 @@ public final class AsdfSystems {
 	 * a {@code .asd}'s lambda already a function of the image that loaded the file, and
 	 * its symbols homed in the file's package
 	 * @param metadata what the definition declared and no loader reads
+	 * @param loadedClasses the classes of this system and its components that loaded code
+	 * defines
 	 */
 	public record LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
 			List<String> features, @Nullable String packageInferredDir, boolean packageInferredClass,
 			@Nullable TestOp testOp, List<String> testOpEdges, List<String> defsystemDependsOn,
 			@Nullable String version, List<String> weaklyDependsOn, Map<String, LispVal> aroundCompile,
-			Metadata metadata) {
+			Metadata metadata, LoadedClasses loadedClasses) {
 
 		/**
 		 * The old-shape constructor: no test-op wiring, package-inferred class iff the
@@ -142,8 +144,95 @@ public final class AsdfSystems {
 		public LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
 				List<String> features, @Nullable String packageInferredDir) {
 			this(name, dependsOn, files, baseDir, features, packageInferredDir, packageInferredDir != null, null,
-					List.of(), List.of(), null, List.of(), Map.of(), Metadata.NONE);
+					List.of(), List.of(), null, List.of(), Map.of(), Metadata.NONE, LoadedClasses.NONE);
 		}
+	}
+
+	/**
+	 * What of a definition loaded code decides: the plan a program is built from. The
+	 * image that loaded the classes ({@link ClassResolver}) answers these names; the
+	 * instances are made where the class's methods act, in the program that loaded the
+	 * same code ({@code AsdfRuntimeLibrary}).
+	 *
+	 * @param system the name of the system's class, or {@code null} for ASDF's own
+	 * @param components the class of each entry of {@link LispSystem#files} that has one
+	 */
+	public record LoadedClasses(@Nullable String system, Map<String, LoadedClass> components) {
+
+		static final LoadedClasses NONE = new LoadedClasses(null, Map.of());
+
+	}
+
+	/**
+	 * The class of one component file, as a loader takes it.
+	 *
+	 * @param name the class name, as its symbol is spelled in the program
+	 * @param lispSource whether the file is Lisp a loader reads: a {@code cl-source-file}
+	 * of the class. Any other is the class's methods' business and no loader opens it
+	 * ({@code lass-file})
+	 * @param deferred whether {@code load-op} leaves the file unread: the class has a
+	 * primary method of its own there, so its forms run when something asks
+	 * ({@code prove-asdf}'s {@code test-file}), never as part of loading the system
+	 * @param initargs the options of the component the parse does not read, in pairs as
+	 * written: real ASDF hands them to {@code make-instance} ({@code lass-file}'s
+	 * {@code :output})
+	 */
+	public record LoadedClass(String name, boolean lispSource, boolean deferred, List<LispVal> initargs) {
+	}
+
+	/**
+	 * What an image answers about a class a definition names: real ASDF's
+	 * {@code class-for-type} over the classes live in the image.
+	 *
+	 * @param name the name of the class the program instantiates: the class itself, or
+	 * the nearest superclass when the {@code .asd} itself defined it, since the program
+	 * has no copy of a {@code .asd}'s forms
+	 * @param plain whether that class is the one a definition saying nothing gets
+	 * ({@code system}, {@code package-inferred-system}, {@code cl-source-file}), so no
+	 * instance needs its name
+	 * @param system whether the class is a {@code system}
+	 * @param packageInferred whether it is a {@code package-inferred-system}
+	 * @param module whether it is a {@code module}
+	 * @param file whether an instance names a file
+	 * @param lispSource whether it is a {@code cl-source-file}
+	 * @param deferred whether {@code load-op} leaves its file unread
+	 * ({@link LoadedClass#deferred})
+	 * @param fileType what {@code source-file-type} answers for an instance, or
+	 * {@code null}
+	 * @param defaultComponentClass the class of a {@code :file} below an instance, or
+	 * {@code null}
+	 * @param aroundCompile what {@code :around-compile} holds for an instance when the
+	 * definition says nothing, or {@code null}
+	 */
+	public record LiveClass(String name, boolean plain, boolean system, boolean packageInferred, boolean module,
+			boolean file, boolean lispSource, boolean deferred, @Nullable String fileType,
+			@Nullable LispVal defaultComponentClass, @Nullable LispVal aroundCompile) {
+	}
+
+	/**
+	 * Resolves a class designator of a definition in an image. Real ASDF loads
+	 * {@code :defsystem-depends-on} while it reads the definition, and only then looks
+	 * the class up -- so a class the dependency defines in its source is found.
+	 */
+	@FunctionalInterface
+	public interface ClassResolver {
+
+		/**
+		 * @param designator the {@code :class}, component type keyword or
+		 * {@code :default-component-class} as written: a keyword finds the symbol in
+		 * {@code asdf} or the current package, a string is read in {@code asdf}, any
+		 * other symbol names the class
+		 * @param definers the {@code :defsystem-depends-on} of the definition, which are
+		 * loaded first
+		 * @param ownClasses the member names of the classes the {@code .asd} itself
+		 * defined, which only the image has
+		 * @return the class, or {@code null} when no such component class exists
+		 */
+		@Nullable LiveClass resolve(LispVal designator, List<String> definers, Set<String> ownClasses);
+
+		/** Knows no class: the parse of a form no image is behind. */
+		ClassResolver NONE = (designator, definers, ownClasses) -> null;
+
 	}
 
 	/**
@@ -439,9 +528,10 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * One open {@code .asd} load ({@link AsdImage#open}).
+	 * One open {@code .asd} load ({@link AsdImage#open}). As a {@link ClassResolver} it
+	 * answers from the image the file runs in, reading a keyword in the file's package.
 	 */
-	public interface AsdLoad extends AutoCloseable {
+	public interface AsdLoad extends AutoCloseable, ClassResolver {
 
 		/**
 		 * Evaluates a top-level form of the file, its {@code #.} markers resolved first.
@@ -497,7 +587,8 @@ public final class AsdfSystems {
 	 * extension (a pre-pass, {@link #collectSourceFileTypes}); every other
 	 * {@code defmethod} is ignored -- it extends the operations of the image the file was
 	 * loaded into, which a compile path's program never meets, and the plan here is fixed
-	 * rather than computed by them.</li>
+	 * rather than computed by them. A class loaded code defines is another matter: its
+	 * methods are in the program too ({@link LoadedClasses}).</li>
 	 * <li>{@code progn}, and an {@code eval-when} whose situations fire on load, are
 	 * flattened, so each form inside meets these same rules; an {@code eval-when} that
 	 * does not fire is dropped. A top-level {@code #.} is ignored (the ASDF version
@@ -647,6 +738,9 @@ public final class AsdfSystems {
 			List<LispVal> items = ((LispCons) form).toList();
 			ComponentClass declared = componentClass(items, this.componentClasses);
 			if (declared == null) {
+				if (items.size() >= 2 && items.get(1) instanceof LispSymbol name) {
+					this.componentClasses.noteEvaluated(memberName(name));
+				}
 				return false;
 			}
 			this.componentClasses.declare(memberName((LispSymbol) items.get(1)), declared);
@@ -658,7 +752,7 @@ public final class AsdfSystems {
 			AsdLoad open = load();
 			this.loadedByFile.addAll(open.takeLoadedSystems());
 			LispSystem system = parseDefsystem(form, this.baseDir, this.features, open.pushedFeatures(),
-					this.componentClasses, new AsdContext(this.asdPath, open));
+					this.componentClasses, new AsdContext(this.asdPath, open, open));
 			system = withEarlierLoads(system, this.loadedByFile);
 			this.register.accept(system);
 			this.systems.add(system);
@@ -689,7 +783,7 @@ public final class AsdfSystems {
 		return new LispSystem(system.name(), system.dependsOn(), system.files(), system.baseDir(), system.features(),
 				system.packageInferredDir(), system.packageInferredClass(), system.testOp(), system.testOpEdges(),
 				List.copyOf(merged), system.version(), system.weaklyDependsOn(), system.aroundCompile(),
-				system.metadata());
+				system.metadata(), system.loadedClasses());
 	}
 
 	/**
@@ -727,20 +821,43 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * A component CLASS, as much of one as a data-only parse can hold. Only two things a
-	 * real subclass decides ever reach here: whether an instance contributes a SOURCE
-	 * file at all ({@code cl-source-file} and its subclasses do; {@code static-file} /
-	 * {@code doc-file} and theirs are ordering-only) and which file EXTENSION the
-	 * component's name gets (ASDF's {@code source-file-type}). Everything else the
-	 * upstream subclasses in the wild exist for -- muffling non-style warnings around
-	 * {@code compile-op}, mostly -- is about compile-file warnings, which do not exist
-	 * here at all, so ignoring it is exact rather than approximate.
+	 * A component CLASS, as much of one as the plan reads. For ASDF's own classes and the
+	 * ones a {@code .asd} declares, only two things a real subclass decides ever reach
+	 * here: whether an instance contributes a SOURCE file at all ({@code cl-source-file}
+	 * and its subclasses do; {@code static-file} / {@code doc-file} and theirs are
+	 * ordering-only) and which file EXTENSION the component's name gets (ASDF's
+	 * {@code source-file-type}). Everything else the upstream subclasses in the wild
+	 * exist for -- muffling non-style warnings around {@code compile-op}, mostly -- is
+	 * about compile-file warnings, which do not exist here at all, so ignoring it is
+	 * exact rather than approximate. A class loaded code defines also names the class the
+	 * program instantiates, and may say what its instances' {@code :around-compile} is.
 	 *
 	 * @param source whether a component of this class contributes its file
 	 * @param fileType the extension a component of this class gets, without the dot
-	 * (meaningless, and empty, for an ordering-only class)
+	 * (empty for an ordering-only class), or {@code null} when it adds none
+	 * @param module whether a component of this class holds components
+	 * @param loaded what the loaders take from a class loaded code defines, or
+	 * {@code null}
+	 * @param aroundCompile what {@code :around-compile} holds for an instance when the
+	 * definition says nothing, or {@code null}
 	 */
-	private record ComponentClass(boolean source, String fileType) {
+	private record ComponentClass(boolean source, @Nullable String fileType, boolean module,
+			@Nullable LoadedClass loaded, @Nullable LispVal aroundCompile) {
+
+		ComponentClass(boolean source, String fileType) {
+			this(source, fileType, false, null, null);
+		}
+
+		ComponentClass withFileType(String type) {
+			return new ComponentClass(this.source, type, this.module, this.loaded, this.aroundCompile);
+		}
+
+		static ComponentClass of(LiveClass live) {
+			LoadedClass loaded = live.file() && !live.plain()
+					? new LoadedClass(live.name(), live.lispSource(), live.deferred(), List.of()) : null;
+			return new ComponentClass(live.file(), live.fileType(), live.module(), loaded, live.aroundCompile());
+		}
+
 	}
 
 	/**
@@ -766,14 +883,19 @@ public final class AsdfSystems {
 	/**
 	 * The component classes in scope while one {@code .asd} file is loaded: ASDF's own,
 	 * the ones the file declared with a top-level {@code defclass}
-	 * ({@link #componentClass}), and the file-extension overrides its
-	 * {@code source-file-type} methods set ({@link #collectSourceFileTypes}).
+	 * ({@link #componentClass}), the file-extension overrides its
+	 * {@code source-file-type} methods set ({@link #collectSourceFileTypes}), and the
+	 * ones the image holds, asked for the first time one is named.
 	 */
 	private static final class ComponentClasses {
 
 		private final Map<String, ComponentClass> declared = new HashMap<>();
 
 		private final Map<String, String> fileTypeOverrides = new HashMap<>();
+
+		private final Map<String, LiveClass> live = new HashMap<>();
+
+		private final Set<String> evaluated = new HashSet<>();
 
 		/**
 		 * The class a component type or a superclass names, or {@code null} when no such
@@ -790,7 +912,7 @@ public final class AsdfSystems {
 				return null;
 			}
 			String override = this.fileTypeOverrides.get(member);
-			return override == null ? found : new ComponentClass(found.source(), override);
+			return override == null ? found : found.withFileType(override);
 		}
 
 		void declare(String member, ComponentClass componentClass) {
@@ -799,6 +921,40 @@ public final class AsdfSystems {
 
 		void overrideFileType(String member, String fileType) {
 			this.fileTypeOverrides.put(member, fileType);
+		}
+
+		/** Notes a class the file's own {@code defclass} defined in the image. */
+		void noteEvaluated(String member) {
+			this.evaluated.add(member);
+		}
+
+		/**
+		 * The class the image holds under a designator, or {@code null} when it holds
+		 * none. A name a loaded class answers for stays that class: asking again loads
+		 * nothing and makes no prototype.
+		 */
+		@Nullable LiveClass live(LispVal designator, List<String> definers, AsdContext asd) {
+			String key = designator.print();
+			LiveClass found = this.live.get(key);
+			if (found == null) {
+				found = asd.classes().resolve(designator, definers, this.evaluated);
+				if (found != null) {
+					this.live.put(key, found);
+				}
+			}
+			return found;
+		}
+
+		/**
+		 * The class of a component: what the file itself knows, else what the image does.
+		 */
+		@Nullable ComponentClass named(LispVal designator, List<String> definers, AsdContext asd) {
+			ComponentClass found = find(memberName(classDesignator("component class", designator)));
+			if (found != null) {
+				return found;
+			}
+			LiveClass answered = live(designator, definers, asd);
+			return answered == null || answered.system() ? null : ComponentClass.of(answered);
 		}
 
 	}
@@ -880,7 +1036,7 @@ public final class AsdfSystems {
 			}
 			if (resolved.source() && !source) {
 				source = true;
-				fileType = resolved.fileType();
+				fileType = java.util.Objects.requireNonNullElse(resolved.fileType(), "");
 			}
 		}
 		String initform = items.size() >= 4 ? slotTypeInitform(items.get(3)) : null;
@@ -972,14 +1128,15 @@ public final class AsdfSystems {
 	 * The enclosing {@code .asd} file's load context: its path (for error messages) and
 	 * the open load whose image a {@code #.} marker in a load-bearing option is evaluated
 	 * in. A {@code defsystem} written directly in a {@code .lisp} file has neither
-	 * ({@link #NONE}).
+	 * ({@link #NONE}), though its loader may know an image for its classes.
 	 *
 	 * @param path the {@code .asd} path, or {@code null} when the form is not from one
 	 * @param load the open load, or {@code null} when the form is not from one
+	 * @param classes the image's answers about a class the definition names
 	 */
-	private record AsdContext(@Nullable String path, @Nullable AsdLoad load) {
+	private record AsdContext(@Nullable String path, @Nullable AsdLoad load, ClassResolver classes) {
 
-		private static final AsdContext NONE = new AsdContext(null, null);
+		private static final AsdContext NONE = new AsdContext(null, null, ClassResolver.NONE);
 
 		/** The {@code "<path>: "} prefix every error from this file carries. */
 		private String prefix() {
@@ -1085,18 +1242,37 @@ public final class AsdfSystems {
 	 * @return the parsed system
 	 */
 	public static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features givenFeatures) {
-		return parseDefsystem(form, baseDir, givenFeatures, List.of(), new ComponentClasses(), AsdContext.NONE);
+		return parseDefsystem(form, baseDir, givenFeatures, ClassResolver.NONE);
 	}
 
 	/**
-	 * The {@code defsystem} options whose value is parsed and then thrown away: the
-	 * metadata, plus the test-op wiring there is no {@code operate} machinery to drive. A
-	 * {@code #.} read-time-eval marker inside one of these is never resolved and never
-	 * complained about -- nothing reads the value, so nothing may object to it. Every
-	 * OTHER option decides what gets loaded, so it resolves its markers and an
+	 * Parses a {@code defsystem} form no {@code .asd} holds, a class it names answered by
+	 * the image its loader knows.
+	 * @param form the {@code defsystem} form
+	 * @param baseDir the directory the component files resolve against, or {@code null}
+	 * for working-directory-relative
+	 * @param givenFeatures the features the {@code :if-feature} component option tests
+	 * @param classes what answers about a class the definition names
+	 * @return the parsed system
+	 */
+	public static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features givenFeatures,
+			ClassResolver classes) {
+		return parseDefsystem(form, baseDir, givenFeatures, List.of(), new ComponentClasses(),
+				new AsdContext(null, null, classes));
+	}
+
+	/**
+	 * The {@code defsystem} options no load depends on: the metadata and the test-op
+	 * wiring. A {@code #.} read-time-eval marker inside one of these never fails the
+	 * parse; what the option leaves unread may hold anything, so nothing may object to
+	 * it. Every OTHER option decides what gets loaded, so it resolves its markers and an
 	 * unresolvable one fails the parse ({@link #resolveReadEval}); the default direction
 	 * is deliberate, so a load-bearing option added later is covered without being
 	 * remembered here.
+	 * <p>
+	 * {@code :perform} reads the marker in a {@code test-op} body itself
+	 * ({@link #parseTestOpPerform}), since that body runs; one that cannot read drops the
+	 * clause, as the rest of the option's shapes do.
 	 * <p>
 	 * {@code :version} is on this list even though {@code asdf:component-version} reads
 	 * it back: what is recorded is the value AS WRITTEN when it is a plain string, and
@@ -1179,7 +1355,9 @@ public final class AsdfSystems {
 		LispVal components = null;
 		String pathname = null;
 		ComponentClass defaultComponentClass = null;
+		LiveClass systemClass = null;
 		LispVal aroundCompile = null;
+		boolean aroundCompileWritten = false;
 		TestOp testOp = null;
 		List<String> testOpEdges = new ArrayList<>();
 		Map<String, LispVal> metadata = new java.util.LinkedHashMap<>();
@@ -1221,18 +1399,21 @@ public final class AsdfSystems {
 				// Already consumed by defsystemDependsOn and weaklyDependsOn above.
 				case ":DEFSYSTEM-DEPENDS-ON", ":WEAKLY-DEPENDS-ON" -> {
 				}
-				case ":AROUND-COMPILE" -> aroundCompile = aroundCompileHook(asd, value);
+				case ":AROUND-COMPILE" -> {
+					aroundCompile = aroundCompileHook(asd, value);
+					aroundCompileWritten = true;
+				}
 				case ":ENCODING" -> checkEncoding(LispNames.ASDF_DEFSYSTEM + " " + name, value);
 				// Test-op wiring: the ONE op with machinery behind it
 				// (asdf:test-system). The test-op shapes are RECORDED -- a
 				// :perform (test-op (o c) BODY) body and the :in-order-to
 				// ((test-op (test-op ...))) chain -- and every other op stays
-				// tolerated-and-ignored. Still in IGNORED_OPTIONS: a #. marker inside is
-				// never resolved and never complained about at parse time (nothing here
-				// resolves the recorded data; an unresolvable marker surfaces only if
-				// asdf:test-system actually runs that body).
+				// tolerated-and-ignored. Still in IGNORED_OPTIONS, so no marker fails the
+				// parse: a test-op body reads its own in the image (parseTestOpPerform),
+				// one that cannot read drops the clause, and another op's body is never
+				// looked into.
 				case ":PERFORM" -> {
-					TestOp parsed = parseTestOpPerform(value);
+					TestOp parsed = parseTestOpPerform(value, asd);
 					if (parsed != null) {
 						testOp = parsed;
 					}
@@ -1254,18 +1435,21 @@ public final class AsdfSystems {
 				// :pathname and a :module prefix nest inside it), and an empty string
 				// adds no directory level, the same rule a module follows.
 				case ":PATHNAME" -> pathname = pathnamePrefix(LispNames.ASDF_DEFSYSTEM + " " + name, value);
-				// The only implemented component class: no :components at all, the graph
-				// derived from each file's own defpackage (inferPackageInferredSystems).
-				// Every other class picks a component TYPE that changes how sources load,
-				// which a data-only defsystem front end cannot honor, so it stays an
-				// error.
+				// :package-inferred-system has no :components at all, the graph derived
+				// from each file's own defpackage (inferPackageInferredSystems). Any
+				// other
+				// class the image answers for: real ASDF looks it up once
+				// :defsystem-depends-on has loaded, so loaded code may define it.
 				case ":CLASS" -> {
-					if (!LispNames.PACKAGE_INFERRED_SYSTEM.equals(
-							memberName(classDesignator(LispNames.ASDF_DEFSYSTEM + " " + name + " :class", value)))) {
-						throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name + ": unsupported :class "
-								+ value.print() + " (the only supported class is :package-inferred-system)");
+					String option = LispNames.ASDF_DEFSYSTEM + " " + name + " :class";
+					if (LispNames.PACKAGE_INFERRED_SYSTEM.equals(memberName(classDesignator(option, value)))) {
+						packageInferred = true;
 					}
-					packageInferred = true;
+					else {
+						systemClass = systemClass(LispNames.ASDF_DEFSYSTEM + " " + name, value, defsystemDependsOn,
+								componentClasses, asd);
+						packageInferred = systemClass.packageInferred();
+					}
 				}
 				// :default-component-class is the class of every (:file ...) entry below
 				// it -- portableaserve says cl-source-file.cl and then writes
@@ -1274,7 +1458,7 @@ public final class AsdfSystems {
 				// class keeps it.
 				case ":DEFAULT-COMPONENT-CLASS" ->
 					defaultComponentClass = defaultComponentClass(LispNames.ASDF_DEFSYSTEM + " " + name,
-							componentClasses, value);
+							componentClasses, value, defsystemDependsOn, asd);
 				// Already consumed by declaredFeatures above.
 				case ":RONTOLISP-FEATURES" -> {
 				}
@@ -1293,10 +1477,24 @@ public final class AsdfSystems {
 					+ ": a :package-inferred-system has no :components (its graph is derived from each file's"
 					+ " defpackage)");
 		}
+		// What the system's class says of the components below an instance, unless the
+		// definition itself said it: hu.dwim.system's default-component-class slot, an
+		// :around-compile default-initarg.
+		if (systemClass != null) {
+			if (defaultComponentClass == null && systemClass.defaultComponentClass() != null) {
+				defaultComponentClass = defaultComponentClass(LispNames.ASDF_DEFSYSTEM + " " + name, componentClasses,
+						systemClass.defaultComponentClass(), defsystemDependsOn, asd);
+			}
+			if (!aroundCompileWritten && systemClass.aroundCompile() != null) {
+				aroundCompile = systemClass.aroundCompile();
+			}
+		}
 		Map<String, LispVal> aroundCompiles = new HashMap<>();
+		Map<String, LoadedClass> loadedComponents = new HashMap<>();
 		List<String> files = components == null ? List.of()
-				: orderComponents(name, components, serial, prefix, new ComponentScope(features, componentClasses,
-						defaultComponentClass, aroundCompile, aroundCompiles, asd));
+				: orderComponents(name, components, serial, prefix,
+						new ComponentScope(features, componentClasses, defaultComponentClass, aroundCompile,
+								aroundCompiles, loadedComponents, defsystemDependsOn, asd));
 		if (!weaklyDependsOn.isEmpty()) {
 			LispVal names = LispNil.INSTANCE;
 			for (int i = weaklyDependsOn.size() - 1; i >= 0; i--) {
@@ -1310,7 +1508,28 @@ public final class AsdfSystems {
 		return new LispSystem(name, List.copyOf(dependsOn), files, baseDir == null ? "" : baseDir, declaredFeatures,
 				packageInferred ? (pathname == null ? "" : pathname) : null, packageInferred, testOp,
 				List.copyOf(testOpEdges), defsystemDependsOn, version, weaklyDependsOn, Map.copyOf(aroundCompiles),
-				new Metadata(asd.path(), java.util.Collections.unmodifiableMap(metadata)));
+				new Metadata(asd.path(), java.util.Collections.unmodifiableMap(metadata)),
+				new LoadedClasses(systemClass == null || systemClass.plain() ? null : systemClass.name(),
+						Map.copyOf(loadedComponents)));
+	}
+
+	/**
+	 * Resolves a {@code :class} value in the image, as real ASDF's
+	 * {@code parse-defsystem} does. A class it cannot find or that is no system is a hard
+	 * error naming it: the system would load as something its definition did not ask for.
+	 */
+	private static LiveClass systemClass(String context, LispVal value, List<String> definers, ComponentClasses classes,
+			AsdContext asd) {
+		LiveClass found = classes.live(value, definers, asd);
+		if (found == null) {
+			throw new IllegalStateException(context + ": unsupported :class " + value.print() + " (a system class is"
+					+ " :package-inferred-system or one the image defines by then: the .asd, or its"
+					+ " :defsystem-depends-on)");
+		}
+		if (!found.system()) {
+			throw new IllegalStateException(context + ": the :class " + value.print() + " is not a system class");
+		}
+		return found;
 	}
 
 	/** Whether a metadata value holds a {@code #.} marker, anywhere in it. */
@@ -1374,15 +1593,20 @@ public final class AsdfSystems {
 
 	/**
 	 * Parses a {@code :perform} value when it wires {@code test-op}:
-	 * {@code (test-op (o c) BODY...)}. Any other shape -- another operation, a malformed
-	 * clause -- answers {@code null} and stays tolerated-and-ignored (the closed-world
-	 * rule of {@link #IGNORED_OPTIONS}: nothing here may complain). The body's bare
-	 * {@code asdf}/{@code uiop} member symbols are pre-qualified
-	 * ({@link #normalizeAsdUserForm}); the parameter symbols are kept as written.
+	 * {@code (test-op (o c) BODY...)}, or {@code (test-op :after (o c) BODY...)} -- how
+	 * most of prove's consumers write it; ASDF's own method does nothing, so a qualifier
+	 * of {@code :after} or {@code :before} changes nothing about what runs. Any other
+	 * shape -- another operation, a malformed clause -- answers {@code null} and stays
+	 * tolerated-and-ignored (the closed-world rule of {@link #IGNORED_OPTIONS}: nothing
+	 * here may complain). The body's bare {@code asdf}/{@code uiop} member symbols are
+	 * pre-qualified ({@link #normalizeAsdUserForm}); the parameter symbols are kept as
+	 * written.
 	 * @param value the {@code :perform} option value
+	 * @param asd the enclosing {@code .asd} context, whose image reads a {@code #.} in
+	 * the body
 	 * @return the recorded test-op, or {@code null}
 	 */
-	@Nullable private static TestOp parseTestOpPerform(LispVal value) {
+	@Nullable private static TestOp parseTestOpPerform(LispVal value, AsdContext asd) {
 		if (!(value instanceof LispCons cons) || !cons.isProperList()) {
 			return null;
 		}
@@ -1390,7 +1614,10 @@ public final class AsdfSystems {
 		if (items.size() < 2 || !(items.get(0) instanceof LispSymbol op) || !LispNames.TEST_OP.equals(memberName(op))) {
 			return null;
 		}
-		if (!(items.get(1) instanceof LispCons paramsCons) || !paramsCons.isProperList()) {
+		int paramsAt = items.get(1) instanceof LispSymbol qualifier
+				&& (":AFTER".equals(qualifier.name()) || ":BEFORE".equals(qualifier.name())) ? 2 : 1;
+		if (items.size() <= paramsAt || !(items.get(paramsAt) instanceof LispCons paramsCons)
+				|| !paramsCons.isProperList()) {
 			return null;
 		}
 		List<LispVal> params = paramsCons.toList();
@@ -1402,16 +1629,26 @@ public final class AsdfSystems {
 			bound.add(paramSym.name());
 		}
 		List<LispVal> body = new ArrayList<>();
-		for (LispVal form : items.subList(2, items.size())) {
+		for (LispVal form : items.subList(paramsAt + 1, items.size())) {
+			LispVal read = form;
 			if (containsReadEvalMarker(form)) {
-				// A #. inside the body (the seven *-test.asd (intern #.(string ...))
-				// files): the IGNORED_OPTIONS rule says a marker here is never resolved
-				// and never complained about, and a recorded marker would fail the
-				// eager compile of the emitted test-op defun -- so the whole clause
-				// stays tolerated-and-ignored, as it always was.
-				return null;
+				// A #. inside the body (the prove consumers' (intern #.(string
+				// :run-test-system) :prove-asdf)) reads in the image the file runs in, as
+				// real ASDF read it. No image, or a datum it cannot read: a marker would
+				// fail the eager compile of the emitted test-op defun, and the option
+				// complains about nothing, so the whole clause stays
+				// tolerated-and-ignored.
+				if (asd.load() == null) {
+					return null;
+				}
+				try {
+					read = resolveReadEval(asd, LispNames.ASDF_DEFSYSTEM + " :perform", form);
+				}
+				catch (IllegalStateException ex) {
+					return null;
+				}
 			}
-			body.add(normalizeAsdUserForm(form, bound));
+			body.add(normalizeAsdUserForm(read, bound));
 		}
 		return new TestOp(List.copyOf(params), List.copyOf(body));
 	}
@@ -1579,12 +1816,15 @@ public final class AsdfSystems {
 	 * the same reason: the class is what decides which file on disk a bare
 	 * {@code (:file "name")} means.
 	 */
-	private static ComponentClass defaultComponentClass(String context, ComponentClasses classes, LispVal value) {
+	private static ComponentClass defaultComponentClass(String context, ComponentClasses classes, LispVal value,
+			List<String> definers, AsdContext asd) {
 		String option = context + " :default-component-class";
-		ComponentClass found = classes.find(memberName(classDesignator(option, value)));
+		classDesignator(option, value);
+		ComponentClass found = classes.named(value, definers, asd);
 		if (found == null) {
 			throw new IllegalStateException(option + " names an unknown component class " + value.print()
-					+ " (a component class is one of ASDF's own or one a defclass in the same .asd declares)");
+					+ " (a component class is one of ASDF's own, one a defclass in the same .asd declares or one"
+					+ " the .asd's :defsystem-depends-on defines)");
 		}
 		return found;
 	}
@@ -1689,7 +1929,7 @@ public final class AsdfSystems {
 		LispSystem resolved = new LispSystem(system.name(), List.copyOf(dependsOn), system.files(), system.baseDir(),
 				system.features(), system.packageInferredDir(), system.packageInferredClass(), system.testOp(),
 				system.testOpEdges(), system.defsystemDependsOn(), system.version(), List.of(), system.aroundCompile(),
-				system.metadata());
+				system.metadata(), system.loadedClasses());
 		systems.put(system.name(), resolved);
 		return resolved;
 	}
@@ -1857,7 +2097,7 @@ public final class AsdfSystems {
 				AsdfSystems::isPackageDefinitionForm);
 		return new LispSystem(name, packageDependencies(packageForm, path, systemPackages), List.of(file),
 				primary.baseDir(), primary.features(), null, true, null, List.of(), primary.defsystemDependsOn(), null,
-				List.of(), Map.of(), new Metadata(primary.metadata().sourceFile(), Map.of()));
+				List.of(), Map.of(), new Metadata(primary.metadata().sourceFile(), Map.of()), LoadedClasses.NONE);
 	}
 
 	/**
@@ -2120,14 +2360,20 @@ public final class AsdfSystems {
 	 * @param defaultClass the {@code :default-component-class} in force, or {@code null}
 	 * @param aroundCompile the {@code :around-compile} hook in force, or {@code null}
 	 * @param aroundCompiles the hook of each source file so far, by its path
+	 * @param loadedClasses the class of each file so far that loaded code defines, by its
+	 * path
+	 * @param definers the system's {@code :defsystem-depends-on}, loaded before a class
+	 * is looked up in the image
 	 * @param asd the enclosing {@code .asd} context
 	 */
 	private record ComponentScope(Features features, ComponentClasses classes, @Nullable ComponentClass defaultClass,
-			@Nullable LispVal aroundCompile, Map<String, LispVal> aroundCompiles, AsdContext asd) {
+			@Nullable LispVal aroundCompile, Map<String, LispVal> aroundCompiles,
+			Map<String, LoadedClass> loadedClasses, List<String> definers, AsdContext asd) {
 
 		ComponentScope forChildren(@Nullable ComponentClass moduleClass, @Nullable LispVal moduleHook) {
 			return new ComponentScope(this.features, this.classes,
-					moduleClass == null ? this.defaultClass : moduleClass, moduleHook, this.aroundCompiles, this.asd);
+					moduleClass == null ? this.defaultClass : moduleClass, moduleHook, this.aroundCompiles,
+					this.loadedClasses, this.definers, this.asd);
 		}
 	}
 
@@ -2241,20 +2487,39 @@ public final class AsdfSystems {
 			throw new IllegalStateException(
 					"system " + systemName + ": component " + name + " expects :option value pairs: " + entry.print());
 		}
+		// (:file "x") means the enclosing :default-component-class, ASDF's cl-source-file
+		// when there is none; every other type NAMES its class, be it one of ASDF's own
+		// (:static-file, :doc-file, :cl-source-file.cl), one a defclass in the same .asd
+		// declared (chipz's :txt-file, portableaserve's :legacy-acl-source-file) or one
+		// loaded code defines (prove-asdf's :test-file).
+		ComponentClass componentClass = null;
+		if (":FILE".equals(type.name())) {
+			componentClass = scope.defaultClass() == null ? DEFAULT_COMPONENT_CLASS : scope.defaultClass();
+		}
+		else if (!":MODULE".equals(type.name())) {
+			componentClass = scope.classes().named(type, scope.definers(), scope.asd());
+			if (componentClass == null) {
+				throw new IllegalStateException("system " + systemName + ": unsupported component type " + type.name()
+						+ " (supported: :file, :module, ASDF's own component classes, the classes a defclass in the"
+						+ " same .asd declares and the ones its :defsystem-depends-on defines)");
+			}
+		}
+		boolean module = componentClass == null || componentClass.module();
 		List<String> dependsOn = new ArrayList<>();
 		boolean moduleSerial = false;
 		boolean featureEnabled = true;
 		LispVal nested = null;
 		String pathname = null;
 		ComponentClass moduleDefaultClass = null;
-		LispVal aroundCompile = scope.aroundCompile();
+		LispVal aroundCompile = componentClass != null && componentClass.aroundCompile() != null
+				? componentClass.aroundCompile() : scope.aroundCompile();
+		List<LispVal> initargs = new ArrayList<>();
 		for (int i = 2; i < parts.size(); i += 2) {
 			if (!(parts.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
 				throw new IllegalStateException("system " + systemName + ": component " + name
 						+ " expects a keyword option, got " + parts.get(i).print());
 			}
 			LispVal value = parts.get(i + 1);
-			boolean module = ":MODULE".equals(type.name());
 			switch (key.name()) {
 				case ":DEPENDS-ON" -> {
 					for (LispVal dep : properList("component " + name + " :depends-on", value)) {
@@ -2292,13 +2557,19 @@ public final class AsdfSystems {
 						throw unsupportedComponentOption(systemName, type, name, key);
 					}
 					moduleDefaultClass = defaultComponentClass("system " + systemName + ": module " + name,
-							scope.classes(), value);
+							scope.classes(), value, scope.definers(), scope.asd());
 				}
-				default -> throw unsupportedComponentOption(systemName, type, name, key);
+				default -> {
+					if (componentClass == null || componentClass.loaded() == null) {
+						throw unsupportedComponentOption(systemName, type, name, key);
+					}
+					initargs.add(key);
+					initargs.add(value);
+				}
 			}
 		}
-		List<String> files;
-		if (":MODULE".equals(type.name())) {
+		List<String> files = List.of();
+		if (module) {
 			if (nested == null) {
 				throw new IllegalStateException(
 						"system " + systemName + ": module " + name + " expects a :components option");
@@ -2308,29 +2579,19 @@ public final class AsdfSystems {
 			files = orderComponents(systemName, nested, moduleSerial, dir.isEmpty() ? prefix : prefix + dir + "/",
 					scope.forChildren(moduleDefaultClass, aroundCompile));
 		}
-		else {
-			// (:file "x") means the enclosing :default-component-class, ASDF's
-			// cl-source-file when there is none; every other type NAMES its class, be it
-			// one of ASDF's own (:static-file, :doc-file, :cl-source-file.cl) or one a
-			// defclass in the same .asd declared (chipz's :txt-file, portableaserve's
-			// :legacy-acl-source-file). An ordering-only class contributes no source.
-			ComponentClass componentClass;
-			if (":FILE".equals(type.name())) {
-				componentClass = scope.defaultClass() == null ? DEFAULT_COMPONENT_CLASS : scope.defaultClass();
-			}
-			else {
-				componentClass = scope.classes().find(type.name().substring(1));
-				if (componentClass == null) {
-					throw new IllegalStateException("system " + systemName + ": unsupported component type "
-							+ type.name() + " (supported: :file, :module, ASDF's own component classes and the"
-							+ " classes a defclass in the same .asd declares)");
-				}
-			}
+		else if (componentClass != null) {
+			// An ordering-only class contributes no source.
 			files = componentClass.source()
 					? List.of(prefix + sourceFileName(name, pathname, componentClass.fileType())) : List.of();
-			if (aroundCompile != null) {
-				for (String file : files) {
+			for (String file : files) {
+				if (aroundCompile != null) {
 					scope.aroundCompiles().put(file, aroundCompile);
+				}
+				LoadedClass loaded = componentClass.loaded();
+				if (loaded != null) {
+					scope.loadedClasses()
+						.put(file, new LoadedClass(loaded.name(), loaded.lispSource(), loaded.deferred(),
+								List.copyOf(initargs)));
 				}
 			}
 		}
@@ -2343,13 +2604,14 @@ public final class AsdfSystems {
 	 * The file a source component names: its {@code :pathname} when it has one --
 	 * verbatim if that namestring already carries an extension, which is how a component
 	 * points at a file whose name differs from its own -- and otherwise the component
-	 * name plus its CLASS's extension.
+	 * name plus its CLASS's extension, if the class gives it one.
 	 */
-	private static String sourceFileName(String name, @Nullable String pathname, String fileType) {
-		if (pathname == null) {
-			return name + "." + fileType;
+	private static String sourceFileName(String name, @Nullable String pathname, @Nullable String fileType) {
+		String file = pathname == null ? name : pathname;
+		if (fileType == null || pathname != null && pathname.indexOf('.') >= 0) {
+			return file;
 		}
-		return pathname.indexOf('.') < 0 ? pathname + "." + fileType : pathname;
+		return file + "." + fileType;
 	}
 
 	private static String componentPathname(String systemName, String name, LispVal value) {

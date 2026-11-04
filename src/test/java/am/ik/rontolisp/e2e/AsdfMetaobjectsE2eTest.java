@@ -63,6 +63,14 @@ import am.ik.rontolisp.AsdfExports;
  * the metadata readers, {@code find-component}, {@code clear-system} and the conditions
  * answer what SBCL 2.2.9's ASDF 3.3.1 answers for the same file (where the model is flat,
  * a test of the class stands in for a name).
+ *
+ * <p>
+ * And the classes loaded code defines ({@code .kb/asdf.md}, "Classes loaded code
+ * defines"), one per consumer shape in {@code classes-tool.lisp}:
+ * {@code meta-demo-classes} names them from its {@code .asd}, its
+ * {@code :defsystem-depends-on} brings them in, and each instance acts as its class's
+ * methods say -- the same answers as SBCL 2.2.9's ASDF 3.3.1 for the same files, but for
+ * the symbol {@code asdf/interface::x} printing {@code asdf::x}.
  */
 class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 
@@ -104,7 +112,8 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			(print (list asdf:*user-cache* asdf::*asdf-version*))
 			;; A compile path registered what the surface below loads while it spliced.
 			(print (remove-if (lambda (name)
-			                    (or (search "central" name) (search "made" name) (search "late" name)))
+			                    (or (search "central" name) (search "made" name) (search "late" name)
+			                        (search "classes" name)))
 			                  (asdf:registered-systems)))
 			(defun nested-load () (asdf:load-system "meta-demo"))
 			(nested-load)
@@ -220,6 +229,23 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 				(asdf:load-system "meta-demo-late")
 				(print (late-fn))
 				(asdf:operate 'asdf:test-op "meta-demo")
+				(asdf:load-system "meta-demo-classes")
+				(let ((s (asdf:find-system "meta-demo-classes")))
+				  (print (list (class-name (class-of s)) (classes-tool::package-of s) (asdf:system-license s)))
+				  (print (mapcar (lambda (c)
+				                   (list (asdf:component-name c) (class-name (class-of c)) (asdf:file-type c)
+				                         (file-namestring (asdf:component-pathname c))))
+				                 (asdf:component-children s))))
+				(print (list *classes-plain* *classes-typed*))
+				(print (reverse classes-tool:*log*))
+				(let ((s (asdf:find-system "meta-demo-classes")))
+				  (asdf:load-system s))
+				(asdf:test-system "meta-demo-classes")
+				(print (car classes-tool:*log*))
+				(asdf:load-system "meta-demo-classes/own")
+				(let ((s (asdf:find-system "meta-demo-classes/own")))
+				  (print (list (typep s 'asdf:system)
+				               (typep (car (asdf:component-children s)) 'classes-tool:later-file))))
 				""".formatted(registry);
 	}
 
@@ -244,7 +270,17 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			"((ASDF:LOAD-OP \"meta-demo-central-dep\") (ASDF:DEFINE-OP \"meta-demo-central\"))", "(T NIL T)",
 			"(T NIL T NIL)", "T", "T", "(NIL NIL)", "NIL", "(\"foo\" \"Foo\" \"a\" \"a\")", "NIL", "NIL",
 			"\"meta-demo-nowhere\"", "(T T T T T T)", ":DEMO-PLAN", ":NOT-IMPLEMENTED", ":REFUSED", ":REFUSED", ":MADE",
-			":LATE", "\"testing meta-demo/tests\"", "T", "3");
+			":LATE", "\"testing meta-demo/tests\"", "T", "3",
+			"(CLASSES-TOOL:TOOL-SYSTEM \"META-DEMO-CLASSES\" \"From the class\")",
+			"((\"classes-plain\" CLASSES-TOOL::LOGGED-FILE \"lisp\" \"classes-plain.lisp\")"
+					+ " (\"classes-typed\" ASDF::TYPED-FILE \"tl\" \"classes-typed.tl\")"
+					+ " (\"classes-data\" ASDF::DATA-FILE \"dat\" \"classes-data.dat\")"
+					+ " (\"classes-later\" CLASSES-TOOL:LATER-FILE \"lisp\" \"classes-later.lisp\"))",
+			"(:READ-HOOKED :TYPED-LOADED)",
+			"((:LOGGED-LOAD \"classes-plain\") (:COMPILE-DATA \"classes-data\" \"classes-data.out\" \"classes-data.dat\")"
+					+ " (:LOAD-DATA \"classes-data\") (:COMPILE-LATER \"classes-later\")"
+					+ " (:REMEMBER-LATER \"classes-later\"))",
+			"(:LATER-FILE-RAN :READ-HOOKED)", "(T T)");
 
 	@Override
 	protected String systemDir() {

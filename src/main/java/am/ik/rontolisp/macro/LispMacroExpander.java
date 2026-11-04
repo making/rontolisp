@@ -25092,12 +25092,13 @@ public final class LispMacroExpander {
 	 *     (setf (slot-value __with_slots_obj 'a) (1+ (slot-value __with_slots_obj 'b))))
 	 * </pre>
 	 *
-	 * Lite: the substitution is textual over the body tree (quoted data is skipped); an
-	 * inner binding shadowing a slot variable is still substituted. The entry-time
-	 * fallback binding each variable also gets is boundness-guarded -- see
-	 * {@link #boundOrNil}. The instance temp's NAME is chosen by
-	 * {@link #freshObjVar(String, LispCons)} so a nested {@code with-slots} cannot
-	 * capture the enclosing one's.
+	 * The substitution is the shadow-aware walk behind {@code symbol-macrolet}, which is
+	 * what a slot variable is: an inner binding of the name stops it in its scope, a
+	 * nested {@code with-slots} of the same slot (prove's {@code with-additional-indent}
+	 * inside its own expansion) included. The entry-time fallback binding each variable
+	 * also gets is boundness-guarded -- see {@link #boundOrNil}. The instance temp's NAME
+	 * is chosen by {@link #freshObjVar(String, LispCons)} so a nested {@code with-slots}
+	 * cannot capture the enclosing one's.
 	 * @param cons the with-slots expression
 	 * @return the expanded expression
 	 */
@@ -25141,7 +25142,7 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> body = new java.util.ArrayList<>();
 		for (LispVal form : parts.subList(3, parts.size())) {
-			body.add(substituteSymbols(form, substitutions));
+			body.add(substituteSymbolMacros(form, substitutions));
 		}
 		// The substituted body no longer mentions the slot variables textually, but code
 		// GENERATED at run time inside the body (a macrolet template mentioning a slot
@@ -25260,7 +25261,7 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> body = new java.util.ArrayList<>();
 		for (LispVal form : parts.subList(3, parts.size())) {
-			body.add(substituteSymbols(form, substitutions));
+			body.add(substituteSymbolMacros(form, substitutions));
 		}
 		// Same fallback let as with-slots: code GENERATED at run time inside the body
 		// still resolves the variables, as entry-time reads.
@@ -25278,8 +25279,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Replaces every occurrence of the mapped symbols in a form with their replacement
-	 * expressions, skipping quoted data -- the lite symbol-macro substitution behind
-	 * {@code with-slots}.
+	 * expressions, skipping quoted data: for a generated template, whose symbols are its
+	 * own.
 	 */
 	private static LispVal substituteSymbols(LispVal form, java.util.Map<String, LispVal> substitutions) {
 		return LispTrees.rebuildSpine(form, node -> substitutedWhole(node, substitutions),
@@ -25301,38 +25302,18 @@ public final class LispMacroExpander {
 		if (cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name())) {
 			return form;
 		}
-		// A (setq slot-var value ...) whose target substitutes into a slot-value PLACE
-		// is no longer a legal setq; rewrite the operator to setf, which accepts both
-		// symbol and place targets (cl-ppcre's flatten setqs inside with-slots).
-		if (cons.car() instanceof LispSymbol head && LispNames.SETQ.equals(head.name()) && cons.isProperList()) {
-			List<LispVal> parts = cons.toList();
-			boolean placeTarget = false;
-			List<LispVal> out = new java.util.ArrayList<>(parts.size());
-			out.add(parts.get(0));
-			for (int i = 1; i < parts.size(); i++) {
-				LispVal substituted = substituteSymbols(parts.get(i), substitutions);
-				if (i % 2 == 1 && substituted instanceof LispCons) {
-					placeTarget = true;
-				}
-				out.add(substituted);
-			}
-			if (placeTarget) {
-				out.set(0, new LispSymbol(LispNames.SETF));
-			}
-			return listToCons(out);
-		}
 		return null;
 	}
 
 	/**
 	 * Expands {@code (symbol-macrolet ((name expansion)...) body...)} by walking the body
 	 * and replacing each free reference to a bound name with its expansion -- the CL
-	 * symbol-macro semantics, shared by the evaluator and all compilers. Unlike the lite
-	 * {@link #substituteSymbols} behind {@code with-slots}, this substitution is
-	 * SHADOW-AWARE: an inner {@code let}/{@code let*}/{@code lambda}/{@code do}/...
-	 * binding of the same name stops the substitution in its scope (trivia's
-	 * {@code match} expansions rely on a {@code let} rebinding a symbol-macro name).
-	 * Details:
+	 * symbol-macro semantics, shared by the evaluator and all compilers, and by
+	 * {@code with-slots}/{@code with-accessors}, whose variables are symbol macros. The
+	 * substitution is SHADOW-AWARE: an inner
+	 * {@code let}/{@code let*}/{@code lambda}/{@code do}/... binding of the same name
+	 * stops the substitution in its scope (trivia's {@code match} expansions rely on a
+	 * {@code let} rebinding a symbol-macro name). Details:
 	 *
 	 * <ul>
 	 * <li>Quoted data, {@code declare} specifiers, function-namespace positions

@@ -176,7 +176,8 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
 - **`:defsystem-depends-on`** parsed and recorded on `LispSystem.defsystemDependsOn`; resolved
   BEFORE `:depends-on`. Deliberately NOT merged into `dependsOn` — `component-sideway-dependencies`
   must not list it (pinned on all four backends).
-- `:class :package-inferred-system` — the ONE `:class` value implemented.
+- `:class :package-inferred-system` needs no image; any other `:class` is looked up in it
+  ("Classes loaded code defines").
 - **`:weakly-depends-on`** (`LispSystem.weaklyDependsOn`): ASDF asks `find-system NAME nil` in the
   parse and appends what it finds to `:depends-on`. Here the parse has no search path, so a loader
   asks just before it loads the system (`resolveWeakDependencies`: registered, built in, or a
@@ -266,18 +267,18 @@ ASDF stores the form and calls it around `compile-file`, or around the source `l
   clauses").
 
 ### The component-class surface
-Only two things reach the plan from a component class: whether an instance contributes a SOURCE
-file, and which file EXTENSION its name gets. Model: `AsdfSystems.ComponentClass(source,
-fileType)` + a per-`.asd` `ComponentClasses` scope, read from the classes' SHAPE (a live CLOS
-query would need ASDF's own `source-file` `type` slot and `class-for-type`, which the runtime
-classes in `asdf.lisp` do not model).
+For ASDF's own classes and the ones a `.asd` declares, only two things reach the plan from a
+component class: whether an instance contributes a SOURCE file, and which file EXTENSION its name
+gets. Model: `AsdfSystems.ComponentClass` + a per-`.asd` `ComponentClasses` scope, read from the
+classes' SHAPE. A name that scope does not hold is a class the image answers for ("Classes loaded
+code defines").
 - **ASDF's own classes are component types and superclasses without a defclass**
   (`BUILTIN_COMPONENT_CLASSES`): `cl-source-file` (`.lisp`, `DEFAULT_COMPONENT_CLASS`),
   `cl-source-file.cl`, `cl-source-file.lsp`, `static-file`, `doc-file`, `html-file`.
 - **A top-level `defclass` declares a component class** (`componentClass`) when every superclass
   resolves in that scope: `source`/`fileType` inherit from the first source superclass, a
-  `(type :initform "cl")` slot overrides the extension. Any other `defclass` RUNS (it is no
-  component type, so naming it as one still fails by name).
+  `(type :initform "cl")` slot overrides the extension. Any other `defclass` RUNS, and the image
+  answers for it.
 - **`(defmethod source-file-type ((c CLASS) (s module)) "ext")` sets that class's extension**,
   collected in a PRE-PASS (`collectSourceFileTypes` over `LispReader.scanForms`, descending into
   `progn` and a firing `eval-when`) so its position does not matter. **The CLASS still has to
@@ -295,9 +296,85 @@ classes in `asdf.lisp` do not model).
   AND on a module. NOT in `IGNORED_OPTIONS`: its `#.` resolves and an unknown class is an error.
 - Driving library: **portableaserve** (`aserve.asd`, `htmlgen.asd`, `webactions.asd` all load).
 
+### Classes loaded code defines (h93, 2026-11-04)
+A `:class`, a component type keyword or a `:default-component-class` the scope above does not hold.
+**The split**: the IMAGE answers what the plan needs, the PROGRAM holds the instances. `.asd` methods
+stay ignored because they would act only in the build image; a class from a dependency's SOURCE has
+its methods in the program too, since `:defsystem-depends-on` splices that source ahead of the system.
+- **Lookup** (`ClassResolver`; `LispEvaluator.classResolver`, `%asdf-class-facts`, the image-only forms
+  in `AsdfRuntimeLibrary.IMAGE_SOURCE`): ASDF 3.3.1's `class-for-type` over `coerce-class`, measured
+  on SBCL 2.2.9. A keyword finds its symbol in `asdf`, then the current package; a string reads in
+  `asdf`; any other symbol names the class; it must be a `component`. It runs only on a miss, loading
+  the definition's `:defsystem-depends-on` first (through `loadSystem`, so a later system in the file
+  has them as earlier loads). A compile path's build image has none of what the program spliced
+  before the definition, so a class still missing is looked for by loading those (`setProgramSystems`:
+  lass's documented "load it separately" path). A compile whose classes need no lookup loads nothing
+  more into the image, so coalton's compiler stays out of it.
+- **The answers**, off a prototype instance: which class the program makes, whether it is a
+  `system`/`package-inferred-system`/`module`/`file-component`/`cl-source-file`, `source-file-type`,
+  `module-default-component-class`, the `around-compile` slot, and (Java, off `perform`'s method
+  table: a primary on `load-op` more specific than `cl-source-file`'s) whether `load-op` leaves the
+  file unread. These made `file-type`, `default-component-class` and `around-compile` real slots, and
+  `around-compile-hook` real. `STUB_FILE_TYPES` gives the stub classes their upstream `type`.
+- **The plan**: `LispSystem.loadedClasses`. A record's CLASS is the name as a STRING and its eighth
+  field `(RELATIVE CLASS . INITARGS)` entries: strings because the table stands ahead of the packages
+  they name. Options the grammar does not read are initargs (`lass-file`'s `:output`), on a loaded
+  class only; `.asd`-shape classes keep refusing them.
+- **What the loaders do with a file**: a `cl-source-file` subclass is read as Lisp. Any other class's
+  file (`lass-file`) is opened by no loader: the compile path keeps the component bracket, without
+  forms, so its actions are performed. The file need not be readable as Lisp, and need not exist at
+  compile time.
+- **Instances**: `%asdf-make-system` / `%asdf-make-component`, a seam. Interpreter: `make-instance` of the
+  name read back. Compile path: defuns generated BEHIND the program (`classDispatch`; its packages exist
+  by then, spelled `cl-user::`/`cl:`), one literal `make-instance` per class a SPLICED system names, so
+  `%mop-make-instance`'s computed-class gate stays off and the program's size is one fallback arm
+  per seam otherwise. A record of a system not spliced falls back to a plain `system`, whatever its
+  class. A system is `reinitialize-instance`d after it is made, as `parse-defsystem` does (where
+  hu.dwim.system fills its slots). `%asdf-set-metadata` no longer overwrites what the class's initargs
+  set when the definition says nothing (`:license` from its `shared-initialize :around`).
+- **A class the `.asd` itself defines**: only the image has it, and its methods are ignored, so the
+  instance is of its nearest superclass outside the file (`programClass`, `noteEvaluated`).
+  `(defclass ironclad-system (system))` with `:class ironclad-system` reads, and is a plain `system`.
+- **A deferred file** (`LoadedClass.deferred`, `:DEFERRED` on the `%asdf-component` marker): real ASDF
+  never compiles or loads a test file while it loads the system, so the macro-time pass treats its forms
+  as a user file's (`Session.openComponents`): definitions register, a plain top-level form is not
+  replayed. Before this a test suite would run at compile time, output discarded. A primary method
+  that loads the file through `call-next-method` is deferred too and loses only the replay.
+- **Thunks stay callable**: `%asdf-load-spliced` records `(SYSTEM INDEX THUNK)` in `%asdf-spliced-thunks%`
+  and `%asdf-load-component` runs the one it finds, for `load-source-op` at any later time. A second
+  perform runs the forms again, as on the interpreter. One spliced before the first `perform` method
+  has no thunk and still signals.
+- **Compile-op methods run in the program**, at its start (`lass-file` writes its CSS then, measured on
+  all four with the file reachable): the plan's order is one on every backend, and the build image's
+  run of a method would leave the program without what a `load-op` method records.
+- **`:perform (test-op :after (o c) ...)`** is recorded like the plain spelling (`:before` too; ASDF's
+  own method does nothing), and a `#.` in the body reads in the image; one that cannot read drops the
+  clause silently. This is how 17 of the cached `.asd` files spell it, and before this
+  `(asdf:test-system :xsubseq-test)` printed nothing and answered `t`.
+- **Prerequisites found on the way**: `asdf` uses `cl` as real ASDF's does (coalton-asdf's `(in-package
+  :asdf)`); the ASDF version features in every `Features` set ([reader-features.md](reader-features.md),
+  hu.dwim.def's `#+asdf3` guard stopped its `.asd` before the `:class`); `with-slots` over the shadow-aware
+  walk ([clos.md](clos.md)); a macro-expanded top-level `locally` ([defmacro-backquote.md](defmacro-backquote.md));
+  an instance's type name under `*package*` ([pretty-printer.md](pretty-printer.md)); the interpreter's
+  stream specials seeded ([standard-output-redirect.md](standard-output-redirect.md)).
+- **Measured** (2026-11-04, `(asdf:test-system NAME)`, interpreter against SBCL 2.2.9; same summary line
+  on JVM and component where checked): `prove-test` 22 tests, identical on all four but for how a
+  `simple-error` prints; `proc-parse-test` 17, `xsubseq-test` 6 (all four), `myway-test` 15, `ningle-test`
+  11, `cl-slug-test` 6, `smart-buffer-test` 2, each `All N files passed`. `quri-test` fails 2 of 6 on
+  `with-standard-io-syntax` not binding `*print-base*` (`.todo`). `fast-http-test` and `http-body-test`
+  stop on a macro expanded lazily under the caller's `*package*` (`.todo`); SBCL lacks their dependencies
+  here. `lass-file` with `:output`: the CSS SBCL writes, all four. `hu.dwim.def`: loads on the interpreter
+  and the JVM, its class, `package-name` and license as on SBCL (`component-children` flat, `.todo/i23`).
+  coalton stops before any of this, as "Options around the compile" records.
+- **Refusal**: a name no image holds is `unsupported component type` / `unsupported :class`, naming it;
+  an inline `defsystem` on a compile path cannot see a class the program's own `defclass` defines (the
+  program has not run).
+- Pinned by `ProveE2eTest` (vendored prove, `prove-test.expected` from SBCL), `AsdfMetaobjectsE2eTest`
+  (`classes-tool.lisp`, one class per consumer shape, all four), `UserMacroExpanderTest` (the deferred
+  replay), `AsdfSystemsTest#aPerformBodyReadEvalReadsInTheImage`.
+
 ## `:class :package-inferred-system`
-Consumers: ningle, rove, array-operations, jose. Every other `:class` value is a hard error
-naming the clause. Such a system has NO `:components`; `LispSystem.packageInferredDir` (non-null
+Consumers: ningle, rove, array-operations, jose. Such a system has NO `:components`; `LispSystem.packageInferredDir` (non-null
 iff declared) is the whole marker. All rules in `AsdfSystems`:
 - **A sub-system name is a FILE PATH.** `x/a/b` -> `a/b.lisp` under the PRIMARY system's
   directory + `packageInferredDir`; the primary is the part before the FIRST slash whatever the
@@ -399,8 +476,8 @@ with FILES `(RELATIVE . RESOLVED)` pairs.
 - `parseDefsystem` records `:perform (test-op (o c) BODY...)` into `LispSystem.testOp` (body
   pre-qualified by `normalizeAsdUserForm` — bare uiop members to their home spelling, bare asdf
   FUNCTION members to `asdf:`, and a uiop member the `.asd` qualified ITSELF to that same home
-  spelling) and `:in-order-to` into `testOpEdges`. A body with an unresolved `#.`, or a qualified
-  `test-op :after` method, stays tolerated-and-ignored.
+  spelling) and `:in-order-to` into `testOpEdges`. `test-op :after` and `:before` record alike, and a
+  `#.` in the body reads in the image; one that cannot read stays tolerated-and-ignored.
 - `LispSystem.packageInferredClass` marks which systems instantiate
   `asdf:package-inferred-system` (the branch rove's `run-system` typecase takes).
 - `asdf:test-system` is `asdf.lisp`'s, on every backend: `(operate 'test-op s)` -> load, follow
@@ -462,9 +539,9 @@ recorded body. A designator op (`'asdf:load-op`) dispatches through a `symbol` m
   boundary, never call a group's chunks from `main`/`_start`, and record them in
   `topGroupChunks`; `%run-top-group` (a special form of both expression compilers, compiled in
   Pass 2c after every chunk exists) calls them. Groups NEST (a component file that calls
-  `load-system` splices that system inside its own group). The seam's `%asdf-load-spliced` binds
-  `%asdf-pending-load%` and performs; load-op's method funcalls the pending thunk and signals for
-  any other component.
+  `load-system` splices that system inside its own group). The seam's `%asdf-load-spliced` records
+  the thunk and performs; load-op's method runs the component's thunk, then or at any later perform,
+  and signals for a component that has none.
 - **Divergence: compiled method dispatch is static** (`.kb/clos.md`), so a perform method applies
   from program start; the lowering only wraps components AFTER the first definition, but a
   component between two definitions sees both. A top-level `await` inside a group is refused on
@@ -483,9 +560,7 @@ recorded body. A designator op (`'asdf:load-op`) dispatches through a `symbol` m
   `(setf (gethash nil h) ...)` NPE in an `eql` table (h56). lass loads (its `asdf.lisp`
   defines `asdf/interface::lass-file` and perform/output-files methods); its rendering differs
   from SBCL through h46 (`loop until ... for`) and `.todo/001` (`~&` inside `~@[`). A lass-file
-  COMPONENT in a consumer's `.asd` is still unknown: component classes are read from the `.asd`'s
-  own shape ("The component-class surface"), and lass defines the class in its SOURCE -- the gap
-  prove-asdf's `:test-file` leaves in 12 cached test systems.
+  COMPONENT in a consumer's `.asd` works ("Classes loaded code defines").
 - Pinned by `AsdfMetaobjectsE2eTest` (all four: `hooks.lisp` defines asdf-flv's `:around` plus
   `:before`/`:after` loggers; `a`/`b`/`c` -- `c` loaded from inside `b` -- pin the order, the
   file-local binding and nesting), `LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions`

@@ -2,7 +2,7 @@
 
 `(with-slots (slot-or-pair...) instance body...)`
 
-CLOS サブセットインスタンス([`defclass`](../special-forms/defclass.md) / [`define-condition`](define-condition.md))のスロット名を、本体のためのシンボルマクロ的な「場所」として束縛します: 各エントリはスロット名、または `var` をスロット `slot` に束縛する `(var slot)` ペアです。インスタンスフォームは一度だけ評価されます。読み取りはスロットを参照し、束縛名への [`setf`](setf.md)/`push`/`incf` はスロットへ書き戻されます(置換は本体のテキストに対して行われるため、スロット変数をシャドウする内側の束縛も置換されます)。
+CLOS サブセットインスタンス([`defclass`](../special-forms/defclass.md) / [`define-condition`](define-condition.md))のスロット名を、本体のためのシンボルマクロ的な「場所」として束縛します: 各エントリはスロット名、または `var` をスロット `slot` に束縛する `(var slot)` ペアです。インスタンスフォームは一度だけ評価されます。読み取りはスロットを参照し、束縛名への [`setf`](setf.md)/`push`/`incf` はスロットへ書き戻されます。同じ名前を束縛する内側のフォーム(同じスロットの `with-slots` も含みます)のスコープでは、[`symbol-macrolet`](symbol-macrolet.md) と同じく、その束縛が優先します。
 
 lite: 本体の中で実行時に「生成される」コード(スロット名に言及する `macrolet` テンプレートなど)は、エントリ時点のスロット値を保持するフォールバック束縛を通じて名前を解決します — 読み取りは機能しますが、そのような生成コードからの書き込みはローカルコピーのみを更新します。
 

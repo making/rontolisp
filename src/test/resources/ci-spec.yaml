@@ -13609,25 +13609,29 @@ cases:
       (print (length *features*))
       (print (car *features*))
       (print (list #+unicode :unicode #-unicode :octets #+common-lisp :common-lisp))
+      (print (list #+asdf3 :asdf3 (and (find :asdf3.3 *features*) t)))
     expected: |
-      5
+      12
       :RONTOLISP
       (:UNICODE :COMMON-LISP)
+      (:ASDF3 T)
     expectedByBackend:
       # The WASM backends are single-threaded by construction, so :thread-support
       # (declared statically on the interpreter and the JVM, see reader.Features)
       # is absent there.
       wasm: |
-        4
+        11
         :RONTOLISP
         (:UNICODE :COMMON-LISP)
+        (:ASDF3 T)
       # ... and a component carries one MORE than Preview 1: :rontolisp-component,
       # the boundary feature a source guards a core wasm-import with (the reactor
       # features cannot say "not a component" -- a reactor component has them too).
       wasm_component: |
-        5
+        12
         :RONTOLISP
         (:UNICODE :COMMON-LISP)
+        (:ASDF3 T)
   - name: reader-features-own-push-is-visible
     # A source announces a feature about ITSELF -- push in the header, #+ on it
     # below -- and real CL sees it because load/compile-file both go form at a
@@ -30479,6 +30483,78 @@ cases:
       ((:X :EX) (:YY :Y :WHY))
       (8 9)
       (:BARE 3)
+  - name: with-slots-variable-is-shadowed-by-an-inner-binding
+    # A slot variable is a symbol macro: what binds the name again stops it, and what
+    # is no variable (an operator, a case key) never was one. On the compile paths an
+    # inner macro's with-slots of the same slot reached the outer substitution
+    # expanded, and its slot list took the substitution (prove's
+    # with-additional-indent). Agrees with SBCL 2.2.9.
+    source: |
+      (defclass wsv-box () ((x :initarg :x :accessor wsv-x) (count :initarg :count)))
+      (defmacro wsv-inner (box) `(with-slots (x) ,box (list :inner x)))
+      (defmacro wsv-quoted (form) `',form)
+      (let ((a (make-instance 'wsv-box :x 1 :count 2))
+            (b (make-instance 'wsv-box :x 10 :count 20)))
+        (print (with-slots (x) a (list x (with-slots (x) b x) x)))
+        (print (with-slots (x) a (list x (wsv-inner b))))
+        (print (with-slots (x) a (wsv-quoted x)))
+        (print (with-slots (x) a (let ((x 5)) x)))
+        (print (with-slots (x) a (funcall (lambda (x) (+ x 1)) 6)))
+        (print (with-slots (x) a (let ((seen nil)) (dolist (x '(7 8)) (push x seen)) (list x seen))))
+        (print (with-slots (count) a (list count (count 1 '(1 2 1)))))
+        (print (with-slots (x) a (case 'x (x :key) (t :other))))
+        (print (with-accessors ((x wsv-x)) a (list x (with-accessors ((x wsv-x)) b x) (let ((x 9)) x))))
+        (print (with-slots (x) a (setf x 3) (setq x (+ x 1)) x))
+        (print (wsv-x a)))
+    expected: |
+      (1 10 1)
+      (1 (:INNER 10))
+      X
+      5
+      7
+      (1 (8 7))
+      (2 2)
+      :KEY
+      (1 10 9)
+      4
+      4
+  - name: defmacro-inside-a-macro-expanded-locally
+    # hu.dwim.def's (def macro ...): the members of a top-level locally are top-level
+    # forms whoever wrote it.
+    source: |
+      (defmacro dml-define (name)
+        `(locally (declare (optimize speed))
+           (export ',name)
+           (defmacro ,name (x) (list '+ x 1))))
+      (dml-define dml-inc)
+      (print (dml-inc 41))
+    expected: |
+      42
+  - name: instance-type-name-follows-the-current-package
+    # The name an instance leads with is a symbol under prin1 (SBCL 2.2.9 prints the
+    # same names, and no slots in #<...>): prove's own suite matches #<MY-CONDITION
+    # against what its package prints.
+    source: |
+      (defpackage :itn-home (:use :cl) (:export :itn-exported :itn-report))
+      (in-package :itn-home)
+      (defclass itn-own () ())
+      (defclass itn-exported () ())
+      (defstruct itn-struct a)
+      (define-condition itn-cond (error) ())
+      (defun itn-report ()
+        (list (make-instance 'itn-own) (make-instance 'itn-exported) (make-itn-struct :a 1)))
+      (print (itn-report))
+      (print (prin1-to-string (make-condition 'itn-cond)))
+      (defpackage :itn-user (:use :cl :itn-home))
+      (in-package :itn-user)
+      (print (itn-report))
+      (in-package :cl-user)
+      (print (itn-home:itn-report))
+    expected: |
+      (#<ITN-OWN> #<ITN-EXPORTED> #S(ITN-STRUCT :A 1))
+      "#<ITN-COND>"
+      (#<ITN-HOME::ITN-OWN> #<ITN-EXPORTED> #S(ITN-HOME::ITN-STRUCT :A 1))
+      (#<ITN-HOME::ITN-OWN> #<ITN-HOME:ITN-EXPORTED> #S(ITN-HOME::ITN-STRUCT :A 1))
   - name: with-slots-write-through
     source: |
       (defclass ws-pt () ((x :initarg :x) (y :initarg :y)))

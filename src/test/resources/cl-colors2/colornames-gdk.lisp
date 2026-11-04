@@ -1,0 +1,1405 @@
+(in-package :cl-colors2.gdk)
+
+;; Parsed with the help of GDK (cl-cffi-gtk):
+;; (cons 'progn
+;;       (alexandria:mappend
+;;        (lambda (color)
+;;          (let ((rgba (gdk:gdk-rgba-parse color))
+;;                (proper-color-name (string-downcase (ppcre:regex-replace-all "(\\w)([A-Z])" color "\\1-\\2"))))
+;;            `((push (cons ,proper-color-name
+;;                          (define-rgb-color ,proper-color-name
+;;                              ,(gdk:gdk-rgba-red rgba)
+;;                            ,(gdk:gdk-rgba-green rgba)
+;;                            ,(gdk:gdk-rgba-blue rgba)))
+;;                    *gdk-colors-list*)
+;;              (push (cons ,color
+;;                          (define-rgb-color ,color
+;;                              ,(gdk:gdk-rgba-red rgba)
+;;                            ,(gdk:gdk-rgba-green rgba)
+;;                            ,(gdk:gdk-rgba-blue rgba)))
+;;                    *gdk-colors-list*))))
+;;        '("YellowGreen" "Yellow" "WhiteSmoke" "White" "Wheat" "Violet" "Turquoise"
+;;          "Tomato" "Thistle" "Teal" "Tan" "SteelBlue" "SpringGreen" "Snow" "SlateGrey"
+;;          "SlateGray" "SlateBlue" "SkyBlue" "Silver" "Sienna" "SeaShell" "SeaGreen"
+;;          "SandyBrown" "Salmon" "SaddleBrown" "RoyalBlue" "RosyBrown" "Red"
+;;          "RebeccaPurple" "Purple" "PowderBlue" "Plum" "Pink" "Peru" "PeachPuff"
+;;          "PapayaWhip" "PaleVioletRed" "PaleTurquoise" "PaleGreen" "PaleGoldenRod"
+;;          "Orchid" "OrangeRed" "Orange" "OliveDrab" "Olive" "OldLace" "Navy"
+;;          "NavajoWhite" "Moccasin" "MistyRose" "MintCream" "MidnightBlue"
+;;          "MediumVioletRed" "MediumTurquoise" "MediumSpringGreen" "MediumSlateBlue"
+;;          "MediumSeaGreen" "MediumPurple" "MediumOrchid" "MediumBlue" "MediumAquaMarine"
+;;          "Maroon" "Magenta" "Linen" "LimeGreen" "Lime" "LightYellow" "LightSteelBlue"
+;;          "LightSlateGrey" "LightSlateGray" "LightSkyBlue" "LightSeaGreen" "LightSalmon"
+;;          "LightPink" "LightGreen" "LightGrey" "LightGray" "LightGoldenRodYellow"
+;;          "LightCyan" "LightCoral" "LightBlue" "LemonChiffon" "LawnGreen"
+;;          "LavenderBlush" "Lavender" "Khaki" "Ivory" "Indigo" "IndianRed" "HotPink"
+;;          "HoneyDew" "GreenYellow" "Green" "Grey" "Gray" "GoldenRod" "Gold" "GhostWhite"
+;;          "Gainsboro" "Fuchsia" "ForestGreen" "FloralWhite" "FireBrick" "DodgerBlue"
+;;          "DimGrey" "DimGray" "DeepSkyBlue" "DeepPink" "DarkViolet" "DarkTurquoise"
+;;          "DarkSlateGrey" "DarkSlateGray" "DarkSlateBlue" "DarkSeaGreen" "DarkSalmon"
+;;          "DarkRed" "DarkOrchid" "DarkOrange" "DarkOliveGreen" "DarkMagenta" "DarkKhaki"
+;;          "DarkGreen" "DarkGrey" "DarkGray" "DarkGoldenRod" "DarkCyan" "DarkBlue" "Cyan"
+;;          "Crimson" "Cornsilk" "CornflowerBlue" "Coral" "Chocolate" "Chartreuse"
+;;          "CadetBlue" "BurlyWood" "Brown" "BlueViolet" "Blue" "BlanchedAlmond" "Black"
+;;          "Bisque" "Beige" "Azure" "Aquamarine" "Aqua" "AntiqueWhite" "AliceBlue")))
+(PROGN
+ (PUSH
+  (CONS "yellow-green"
+        (DEFINE-RGB-COLOR "yellow-green" 0.6039215686274509d0
+         0.803921568627451d0 0.19607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "YellowGreen"
+        (DEFINE-RGB-COLOR "YellowGreen" 0.6039215686274509d0
+         0.803921568627451d0 0.19607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH (CONS "yellow" (DEFINE-RGB-COLOR "yellow" 1.0d0 1.0d0 0.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH (CONS "Yellow" (DEFINE-RGB-COLOR "Yellow" 1.0d0 1.0d0 0.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "white-smoke"
+        (DEFINE-RGB-COLOR "white-smoke" 0.9607843137254902d0
+         0.9607843137254902d0 0.9607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "WhiteSmoke"
+        (DEFINE-RGB-COLOR "WhiteSmoke" 0.9607843137254902d0
+         0.9607843137254902d0 0.9607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH (CONS "white" (DEFINE-RGB-COLOR "white" 1.0d0 1.0d0 1.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH (CONS "White" (DEFINE-RGB-COLOR "White" 1.0d0 1.0d0 1.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "wheat"
+        (DEFINE-RGB-COLOR "wheat" 0.9607843137254902d0 0.8705882352941177d0
+         0.7019607843137254d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Wheat"
+        (DEFINE-RGB-COLOR "Wheat" 0.9607843137254902d0 0.8705882352941177d0
+         0.7019607843137254d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "violet"
+        (DEFINE-RGB-COLOR "violet" 0.9333333333333333d0 0.5098039215686274d0
+         0.9333333333333333d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Violet"
+        (DEFINE-RGB-COLOR "Violet" 0.9333333333333333d0 0.5098039215686274d0
+         0.9333333333333333d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "turquoise"
+        (DEFINE-RGB-COLOR "turquoise" 0.25098039215686274d0
+         0.8784313725490196d0 0.8156862745098039d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Turquoise"
+        (DEFINE-RGB-COLOR "Turquoise" 0.25098039215686274d0
+         0.8784313725490196d0 0.8156862745098039d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "tomato"
+        (DEFINE-RGB-COLOR "tomato" 1.0d0 0.38823529411764707d0
+         0.2784313725490196d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Tomato"
+        (DEFINE-RGB-COLOR "Tomato" 1.0d0 0.38823529411764707d0
+         0.2784313725490196d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "thistle"
+        (DEFINE-RGB-COLOR "thistle" 0.8470588235294118d0 0.7490196078431373d0
+         0.8470588235294118d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Thistle"
+        (DEFINE-RGB-COLOR "Thistle" 0.8470588235294118d0 0.7490196078431373d0
+         0.8470588235294118d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "teal"
+        (DEFINE-RGB-COLOR "teal" 0.0d0 0.5019607843137255d0
+         0.5019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Teal"
+        (DEFINE-RGB-COLOR "Teal" 0.0d0 0.5019607843137255d0
+         0.5019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "tan"
+        (DEFINE-RGB-COLOR "tan" 0.8235294117647058d0 0.7058823529411765d0
+         0.5490196078431373d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Tan"
+        (DEFINE-RGB-COLOR "Tan" 0.8235294117647058d0 0.7058823529411765d0
+         0.5490196078431373d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "steel-blue"
+        (DEFINE-RGB-COLOR "steel-blue" 0.27450980392156865d0
+         0.5098039215686274d0 0.7058823529411765d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "SteelBlue"
+        (DEFINE-RGB-COLOR "SteelBlue" 0.27450980392156865d0
+         0.5098039215686274d0 0.7058823529411765d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "spring-green"
+        (DEFINE-RGB-COLOR "spring-green" 0.0d0 1.0d0 0.4980392156862745d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "SpringGreen"
+        (DEFINE-RGB-COLOR "SpringGreen" 0.0d0 1.0d0 0.4980392156862745d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "snow"
+        (DEFINE-RGB-COLOR "snow" 1.0d0 0.9803921568627451d0
+         0.9803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Snow"
+        (DEFINE-RGB-COLOR "Snow" 1.0d0 0.9803921568627451d0
+         0.9803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "slate-grey"
+        (DEFINE-RGB-COLOR "slate-grey" 0.4392156862745098d0
+         0.5019607843137255d0 0.5647058823529412d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "SlateGrey"
+        (DEFINE-RGB-COLOR "SlateGrey" 0.4392156862745098d0 0.5019607843137255d0
+         0.5647058823529412d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "slate-gray"
+        (DEFINE-RGB-COLOR "slate-gray" 0.4392156862745098d0
+         0.5019607843137255d0 0.5647058823529412d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "SlateGray"
+        (DEFINE-RGB-COLOR "SlateGray" 0.4392156862745098d0 0.5019607843137255d0
+         0.5647058823529412d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "slate-blue"
+        (DEFINE-RGB-COLOR "slate-blue" 0.41568627450980394d0
+         0.35294117647058826d0 0.803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "SlateBlue"
+        (DEFINE-RGB-COLOR "SlateBlue" 0.41568627450980394d0
+         0.35294117647058826d0 0.803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "sky-blue"
+        (DEFINE-RGB-COLOR "sky-blue" 0.5294117647058824d0 0.807843137254902d0
+         0.9215686274509803d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "SkyBlue"
+        (DEFINE-RGB-COLOR "SkyBlue" 0.5294117647058824d0 0.807843137254902d0
+         0.9215686274509803d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "silver"
+        (DEFINE-RGB-COLOR "silver" 0.7529411764705882d0 0.7529411764705882d0
+         0.7529411764705882d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Silver"
+        (DEFINE-RGB-COLOR "Silver" 0.7529411764705882d0 0.7529411764705882d0
+         0.7529411764705882d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "sienna"
+        (DEFINE-RGB-COLOR "sienna" 0.6274509803921569d0 0.3215686274509804d0
+         0.17647058823529413d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Sienna"
+        (DEFINE-RGB-COLOR "Sienna" 0.6274509803921569d0 0.3215686274509804d0
+         0.17647058823529413d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "sea-shell"
+        (DEFINE-RGB-COLOR "sea-shell" 1.0d0 0.9607843137254902d0
+         0.9333333333333333d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "SeaShell"
+        (DEFINE-RGB-COLOR "SeaShell" 1.0d0 0.9607843137254902d0
+         0.9333333333333333d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "sea-green"
+        (DEFINE-RGB-COLOR "sea-green" 0.1803921568627451d0 0.5450980392156862d0
+         0.3411764705882353d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "SeaGreen"
+        (DEFINE-RGB-COLOR "SeaGreen" 0.1803921568627451d0 0.5450980392156862d0
+         0.3411764705882353d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "sandy-brown"
+        (DEFINE-RGB-COLOR "sandy-brown" 0.9568627450980393d0
+         0.6431372549019608d0 0.3764705882352941d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "SandyBrown"
+        (DEFINE-RGB-COLOR "SandyBrown" 0.9568627450980393d0
+         0.6431372549019608d0 0.3764705882352941d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "salmon"
+        (DEFINE-RGB-COLOR "salmon" 0.9803921568627451d0 0.5019607843137255d0
+         0.4470588235294118d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Salmon"
+        (DEFINE-RGB-COLOR "Salmon" 0.9803921568627451d0 0.5019607843137255d0
+         0.4470588235294118d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "saddle-brown"
+        (DEFINE-RGB-COLOR "saddle-brown" 0.5450980392156862d0
+         0.27058823529411763d0 0.07450980392156863d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "SaddleBrown"
+        (DEFINE-RGB-COLOR "SaddleBrown" 0.5450980392156862d0
+         0.27058823529411763d0 0.07450980392156863d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "royal-blue"
+        (DEFINE-RGB-COLOR "royal-blue" 0.2549019607843137d0
+         0.4117647058823529d0 0.8823529411764706d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "RoyalBlue"
+        (DEFINE-RGB-COLOR "RoyalBlue" 0.2549019607843137d0 0.4117647058823529d0
+         0.8823529411764706d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "rosy-brown"
+        (DEFINE-RGB-COLOR "rosy-brown" 0.7372549019607844d0
+         0.5607843137254902d0 0.5607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "RosyBrown"
+        (DEFINE-RGB-COLOR "RosyBrown" 0.7372549019607844d0 0.5607843137254902d0
+         0.5607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH (CONS "red" (DEFINE-RGB-COLOR "red" 1.0d0 0.0d0 0.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH (CONS "Red" (DEFINE-RGB-COLOR "Red" 1.0d0 0.0d0 0.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "rebecca-purple" (DEFINE-RGB-COLOR "rebecca-purple" 0.4d0 0.2d0 0.6d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "RebeccaPurple" (DEFINE-RGB-COLOR "RebeccaPurple" 0.4d0 0.2d0 0.6d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "purple"
+        (DEFINE-RGB-COLOR "purple" 0.5019607843137255d0 0.0d0
+         0.5019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Purple"
+        (DEFINE-RGB-COLOR "Purple" 0.5019607843137255d0 0.0d0
+         0.5019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "powder-blue"
+        (DEFINE-RGB-COLOR "powder-blue" 0.6901960784313725d0
+         0.8784313725490196d0 0.9019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "PowderBlue"
+        (DEFINE-RGB-COLOR "PowderBlue" 0.6901960784313725d0
+         0.8784313725490196d0 0.9019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "plum"
+        (DEFINE-RGB-COLOR "plum" 0.8666666666666667d0 0.6274509803921569d0
+         0.8666666666666667d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Plum"
+        (DEFINE-RGB-COLOR "Plum" 0.8666666666666667d0 0.6274509803921569d0
+         0.8666666666666667d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "pink"
+        (DEFINE-RGB-COLOR "pink" 1.0d0 0.7529411764705882d0
+         0.796078431372549d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Pink"
+        (DEFINE-RGB-COLOR "Pink" 1.0d0 0.7529411764705882d0
+         0.796078431372549d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "peru"
+        (DEFINE-RGB-COLOR "peru" 0.803921568627451d0 0.5215686274509804d0
+         0.24705882352941178d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Peru"
+        (DEFINE-RGB-COLOR "Peru" 0.803921568627451d0 0.5215686274509804d0
+         0.24705882352941178d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "peach-puff"
+        (DEFINE-RGB-COLOR "peach-puff" 1.0d0 0.8549019607843137d0
+         0.7254901960784313d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "PeachPuff"
+        (DEFINE-RGB-COLOR "PeachPuff" 1.0d0 0.8549019607843137d0
+         0.7254901960784313d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "papaya-whip"
+        (DEFINE-RGB-COLOR "papaya-whip" 1.0d0 0.9372549019607843d0
+         0.8352941176470589d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "PapayaWhip"
+        (DEFINE-RGB-COLOR "PapayaWhip" 1.0d0 0.9372549019607843d0
+         0.8352941176470589d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "pale-violet-red"
+        (DEFINE-RGB-COLOR "pale-violet-red" 0.8588235294117647d0
+         0.4392156862745098d0 0.5764705882352941d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "PaleVioletRed"
+        (DEFINE-RGB-COLOR "PaleVioletRed" 0.8588235294117647d0
+         0.4392156862745098d0 0.5764705882352941d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "pale-turquoise"
+        (DEFINE-RGB-COLOR "pale-turquoise" 0.6862745098039216d0
+         0.9333333333333333d0 0.9333333333333333d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "PaleTurquoise"
+        (DEFINE-RGB-COLOR "PaleTurquoise" 0.6862745098039216d0
+         0.9333333333333333d0 0.9333333333333333d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "pale-green"
+        (DEFINE-RGB-COLOR "pale-green" 0.596078431372549d0 0.984313725490196d0
+         0.596078431372549d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "PaleGreen"
+        (DEFINE-RGB-COLOR "PaleGreen" 0.596078431372549d0 0.984313725490196d0
+         0.596078431372549d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "pale-golden-rod"
+        (DEFINE-RGB-COLOR "pale-golden-rod" 0.9333333333333333d0
+         0.9098039215686274d0 0.6666666666666666d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "PaleGoldenRod"
+        (DEFINE-RGB-COLOR "PaleGoldenRod" 0.9333333333333333d0
+         0.9098039215686274d0 0.6666666666666666d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "orchid"
+        (DEFINE-RGB-COLOR "orchid" 0.8549019607843137d0 0.4392156862745098d0
+         0.8392156862745098d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Orchid"
+        (DEFINE-RGB-COLOR "Orchid" 0.8549019607843137d0 0.4392156862745098d0
+         0.8392156862745098d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "orange-red"
+        (DEFINE-RGB-COLOR "orange-red" 1.0d0 0.27058823529411763d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "OrangeRed"
+        (DEFINE-RGB-COLOR "OrangeRed" 1.0d0 0.27058823529411763d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "orange" (DEFINE-RGB-COLOR "orange" 1.0d0 0.6470588235294118d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Orange" (DEFINE-RGB-COLOR "Orange" 1.0d0 0.6470588235294118d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "olive-drab"
+        (DEFINE-RGB-COLOR "olive-drab" 0.4196078431372549d0
+         0.5568627450980392d0 0.13725490196078433d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "OliveDrab"
+        (DEFINE-RGB-COLOR "OliveDrab" 0.4196078431372549d0 0.5568627450980392d0
+         0.13725490196078433d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "olive"
+        (DEFINE-RGB-COLOR "olive" 0.5019607843137255d0 0.5019607843137255d0
+         0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Olive"
+        (DEFINE-RGB-COLOR "Olive" 0.5019607843137255d0 0.5019607843137255d0
+         0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "old-lace"
+        (DEFINE-RGB-COLOR "old-lace" 0.9921568627450981d0 0.9607843137254902d0
+         0.9019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "OldLace"
+        (DEFINE-RGB-COLOR "OldLace" 0.9921568627450981d0 0.9607843137254902d0
+         0.9019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH (CONS "navy" (DEFINE-RGB-COLOR "navy" 0.0d0 0.0d0 0.5019607843137255d0))
+       *GDK-COLORS-LIST*)
+ (PUSH (CONS "Navy" (DEFINE-RGB-COLOR "Navy" 0.0d0 0.0d0 0.5019607843137255d0))
+       *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "navajo-white"
+        (DEFINE-RGB-COLOR "navajo-white" 1.0d0 0.8705882352941177d0
+         0.6784313725490196d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "NavajoWhite"
+        (DEFINE-RGB-COLOR "NavajoWhite" 1.0d0 0.8705882352941177d0
+         0.6784313725490196d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "moccasin"
+        (DEFINE-RGB-COLOR "moccasin" 1.0d0 0.8941176470588236d0
+         0.7098039215686275d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Moccasin"
+        (DEFINE-RGB-COLOR "Moccasin" 1.0d0 0.8941176470588236d0
+         0.7098039215686275d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "misty-rose"
+        (DEFINE-RGB-COLOR "misty-rose" 1.0d0 0.8941176470588236d0
+         0.8823529411764706d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "MistyRose"
+        (DEFINE-RGB-COLOR "MistyRose" 1.0d0 0.8941176470588236d0
+         0.8823529411764706d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "mint-cream"
+        (DEFINE-RGB-COLOR "mint-cream" 0.9607843137254902d0 1.0d0
+         0.9803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "MintCream"
+        (DEFINE-RGB-COLOR "MintCream" 0.9607843137254902d0 1.0d0
+         0.9803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "midnight-blue"
+        (DEFINE-RGB-COLOR "midnight-blue" 0.09803921568627451d0
+         0.09803921568627451d0 0.4392156862745098d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "MidnightBlue"
+        (DEFINE-RGB-COLOR "MidnightBlue" 0.09803921568627451d0
+         0.09803921568627451d0 0.4392156862745098d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "medium-violet-red"
+        (DEFINE-RGB-COLOR "medium-violet-red" 0.7803921568627451d0
+         0.08235294117647059d0 0.5215686274509804d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "MediumVioletRed"
+        (DEFINE-RGB-COLOR "MediumVioletRed" 0.7803921568627451d0
+         0.08235294117647059d0 0.5215686274509804d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "medium-turquoise"
+        (DEFINE-RGB-COLOR "medium-turquoise" 0.2823529411764706d0
+         0.8196078431372549d0 0.8d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "MediumTurquoise"
+        (DEFINE-RGB-COLOR "MediumTurquoise" 0.2823529411764706d0
+         0.8196078431372549d0 0.8d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "medium-spring-green"
+        (DEFINE-RGB-COLOR "medium-spring-green" 0.0d0 0.9803921568627451d0
+         0.6039215686274509d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "MediumSpringGreen"
+        (DEFINE-RGB-COLOR "MediumSpringGreen" 0.0d0 0.9803921568627451d0
+         0.6039215686274509d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "medium-slate-blue"
+        (DEFINE-RGB-COLOR "medium-slate-blue" 0.4823529411764706d0
+         0.40784313725490196d0 0.9333333333333333d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "MediumSlateBlue"
+        (DEFINE-RGB-COLOR "MediumSlateBlue" 0.4823529411764706d0
+         0.40784313725490196d0 0.9333333333333333d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "medium-sea-green"
+        (DEFINE-RGB-COLOR "medium-sea-green" 0.23529411764705882d0
+         0.7019607843137254d0 0.44313725490196076d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "MediumSeaGreen"
+        (DEFINE-RGB-COLOR "MediumSeaGreen" 0.23529411764705882d0
+         0.7019607843137254d0 0.44313725490196076d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "medium-purple"
+        (DEFINE-RGB-COLOR "medium-purple" 0.5764705882352941d0
+         0.4392156862745098d0 0.8588235294117647d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "MediumPurple"
+        (DEFINE-RGB-COLOR "MediumPurple" 0.5764705882352941d0
+         0.4392156862745098d0 0.8588235294117647d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "medium-orchid"
+        (DEFINE-RGB-COLOR "medium-orchid" 0.7294117647058823d0
+         0.3333333333333333d0 0.8274509803921568d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "MediumOrchid"
+        (DEFINE-RGB-COLOR "MediumOrchid" 0.7294117647058823d0
+         0.3333333333333333d0 0.8274509803921568d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "medium-blue"
+        (DEFINE-RGB-COLOR "medium-blue" 0.0d0 0.0d0 0.803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "MediumBlue"
+        (DEFINE-RGB-COLOR "MediumBlue" 0.0d0 0.0d0 0.803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "medium-aqua-marine"
+        (DEFINE-RGB-COLOR "medium-aqua-marine" 0.4d0 0.803921568627451d0
+         0.6666666666666666d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "MediumAquaMarine"
+        (DEFINE-RGB-COLOR "MediumAquaMarine" 0.4d0 0.803921568627451d0
+         0.6666666666666666d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "maroon" (DEFINE-RGB-COLOR "maroon" 0.5019607843137255d0 0.0d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Maroon" (DEFINE-RGB-COLOR "Maroon" 0.5019607843137255d0 0.0d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH (CONS "magenta" (DEFINE-RGB-COLOR "magenta" 1.0d0 0.0d0 1.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH (CONS "Magenta" (DEFINE-RGB-COLOR "Magenta" 1.0d0 0.0d0 1.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "linen"
+        (DEFINE-RGB-COLOR "linen" 0.9803921568627451d0 0.9411764705882353d0
+         0.9019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Linen"
+        (DEFINE-RGB-COLOR "Linen" 0.9803921568627451d0 0.9411764705882353d0
+         0.9019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "lime-green"
+        (DEFINE-RGB-COLOR "lime-green" 0.19607843137254902d0
+         0.803921568627451d0 0.19607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LimeGreen"
+        (DEFINE-RGB-COLOR "LimeGreen" 0.19607843137254902d0 0.803921568627451d0
+         0.19607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH (CONS "lime" (DEFINE-RGB-COLOR "lime" 0.0d0 1.0d0 0.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH (CONS "Lime" (DEFINE-RGB-COLOR "Lime" 0.0d0 1.0d0 0.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-yellow"
+        (DEFINE-RGB-COLOR "light-yellow" 1.0d0 1.0d0 0.8784313725490196d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightYellow"
+        (DEFINE-RGB-COLOR "LightYellow" 1.0d0 1.0d0 0.8784313725490196d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-steel-blue"
+        (DEFINE-RGB-COLOR "light-steel-blue" 0.6901960784313725d0
+         0.7686274509803922d0 0.8705882352941177d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightSteelBlue"
+        (DEFINE-RGB-COLOR "LightSteelBlue" 0.6901960784313725d0
+         0.7686274509803922d0 0.8705882352941177d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-slate-grey"
+        (DEFINE-RGB-COLOR "light-slate-grey" 0.4666666666666667d0
+         0.5333333333333333d0 0.6d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightSlateGrey"
+        (DEFINE-RGB-COLOR "LightSlateGrey" 0.4666666666666667d0
+         0.5333333333333333d0 0.6d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-slate-gray"
+        (DEFINE-RGB-COLOR "light-slate-gray" 0.4666666666666667d0
+         0.5333333333333333d0 0.6d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightSlateGray"
+        (DEFINE-RGB-COLOR "LightSlateGray" 0.4666666666666667d0
+         0.5333333333333333d0 0.6d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-sky-blue"
+        (DEFINE-RGB-COLOR "light-sky-blue" 0.5294117647058824d0
+         0.807843137254902d0 0.9803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightSkyBlue"
+        (DEFINE-RGB-COLOR "LightSkyBlue" 0.5294117647058824d0
+         0.807843137254902d0 0.9803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-sea-green"
+        (DEFINE-RGB-COLOR "light-sea-green" 0.12549019607843137d0
+         0.6980392156862745d0 0.6666666666666666d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightSeaGreen"
+        (DEFINE-RGB-COLOR "LightSeaGreen" 0.12549019607843137d0
+         0.6980392156862745d0 0.6666666666666666d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-salmon"
+        (DEFINE-RGB-COLOR "light-salmon" 1.0d0 0.6274509803921569d0
+         0.47843137254901963d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightSalmon"
+        (DEFINE-RGB-COLOR "LightSalmon" 1.0d0 0.6274509803921569d0
+         0.47843137254901963d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-pink"
+        (DEFINE-RGB-COLOR "light-pink" 1.0d0 0.7137254901960784d0
+         0.7568627450980392d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightPink"
+        (DEFINE-RGB-COLOR "LightPink" 1.0d0 0.7137254901960784d0
+         0.7568627450980392d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-green"
+        (DEFINE-RGB-COLOR "light-green" 0.5647058823529412d0
+         0.9333333333333333d0 0.5647058823529412d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightGreen"
+        (DEFINE-RGB-COLOR "LightGreen" 0.5647058823529412d0
+         0.9333333333333333d0 0.5647058823529412d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-grey"
+        (DEFINE-RGB-COLOR "light-grey" 0.8274509803921568d0
+         0.8274509803921568d0 0.8274509803921568d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightGrey"
+        (DEFINE-RGB-COLOR "LightGrey" 0.8274509803921568d0 0.8274509803921568d0
+         0.8274509803921568d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-gray"
+        (DEFINE-RGB-COLOR "light-gray" 0.8274509803921568d0
+         0.8274509803921568d0 0.8274509803921568d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightGray"
+        (DEFINE-RGB-COLOR "LightGray" 0.8274509803921568d0 0.8274509803921568d0
+         0.8274509803921568d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-golden-rod-yellow"
+        (DEFINE-RGB-COLOR "light-golden-rod-yellow" 0.9803921568627451d0
+         0.9803921568627451d0 0.8235294117647058d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightGoldenRodYellow"
+        (DEFINE-RGB-COLOR "LightGoldenRodYellow" 0.9803921568627451d0
+         0.9803921568627451d0 0.8235294117647058d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-cyan"
+        (DEFINE-RGB-COLOR "light-cyan" 0.8784313725490196d0 1.0d0 1.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightCyan"
+        (DEFINE-RGB-COLOR "LightCyan" 0.8784313725490196d0 1.0d0 1.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-coral"
+        (DEFINE-RGB-COLOR "light-coral" 0.9411764705882353d0
+         0.5019607843137255d0 0.5019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightCoral"
+        (DEFINE-RGB-COLOR "LightCoral" 0.9411764705882353d0
+         0.5019607843137255d0 0.5019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "light-blue"
+        (DEFINE-RGB-COLOR "light-blue" 0.6784313725490196d0
+         0.8470588235294118d0 0.9019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LightBlue"
+        (DEFINE-RGB-COLOR "LightBlue" 0.6784313725490196d0 0.8470588235294118d0
+         0.9019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "lemon-chiffon"
+        (DEFINE-RGB-COLOR "lemon-chiffon" 1.0d0 0.9803921568627451d0
+         0.803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LemonChiffon"
+        (DEFINE-RGB-COLOR "LemonChiffon" 1.0d0 0.9803921568627451d0
+         0.803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "lawn-green"
+        (DEFINE-RGB-COLOR "lawn-green" 0.48627450980392156d0
+         0.9882352941176471d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LawnGreen"
+        (DEFINE-RGB-COLOR "LawnGreen" 0.48627450980392156d0
+         0.9882352941176471d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "lavender-blush"
+        (DEFINE-RGB-COLOR "lavender-blush" 1.0d0 0.9411764705882353d0
+         0.9607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "LavenderBlush"
+        (DEFINE-RGB-COLOR "LavenderBlush" 1.0d0 0.9411764705882353d0
+         0.9607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "lavender"
+        (DEFINE-RGB-COLOR "lavender" 0.9019607843137255d0 0.9019607843137255d0
+         0.9803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Lavender"
+        (DEFINE-RGB-COLOR "Lavender" 0.9019607843137255d0 0.9019607843137255d0
+         0.9803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "khaki"
+        (DEFINE-RGB-COLOR "khaki" 0.9411764705882353d0 0.9019607843137255d0
+         0.5490196078431373d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Khaki"
+        (DEFINE-RGB-COLOR "Khaki" 0.9411764705882353d0 0.9019607843137255d0
+         0.5490196078431373d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "ivory" (DEFINE-RGB-COLOR "ivory" 1.0d0 1.0d0 0.9411764705882353d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Ivory" (DEFINE-RGB-COLOR "Ivory" 1.0d0 1.0d0 0.9411764705882353d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "indigo"
+        (DEFINE-RGB-COLOR "indigo" 0.29411764705882354d0 0.0d0
+         0.5098039215686274d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Indigo"
+        (DEFINE-RGB-COLOR "Indigo" 0.29411764705882354d0 0.0d0
+         0.5098039215686274d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "indian-red"
+        (DEFINE-RGB-COLOR "indian-red" 0.803921568627451d0 0.3607843137254902d0
+         0.3607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "IndianRed"
+        (DEFINE-RGB-COLOR "IndianRed" 0.803921568627451d0 0.3607843137254902d0
+         0.3607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "hot-pink"
+        (DEFINE-RGB-COLOR "hot-pink" 1.0d0 0.4117647058823529d0
+         0.7058823529411765d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "HotPink"
+        (DEFINE-RGB-COLOR "HotPink" 1.0d0 0.4117647058823529d0
+         0.7058823529411765d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "honey-dew"
+        (DEFINE-RGB-COLOR "honey-dew" 0.9411764705882353d0 1.0d0
+         0.9411764705882353d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "HoneyDew"
+        (DEFINE-RGB-COLOR "HoneyDew" 0.9411764705882353d0 1.0d0
+         0.9411764705882353d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "green-yellow"
+        (DEFINE-RGB-COLOR "green-yellow" 0.6784313725490196d0 1.0d0
+         0.1843137254901961d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "GreenYellow"
+        (DEFINE-RGB-COLOR "GreenYellow" 0.6784313725490196d0 1.0d0
+         0.1843137254901961d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "green" (DEFINE-RGB-COLOR "green" 0.0d0 0.5019607843137255d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Green" (DEFINE-RGB-COLOR "Green" 0.0d0 0.5019607843137255d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "grey"
+        (DEFINE-RGB-COLOR "grey" 0.5019607843137255d0 0.5019607843137255d0
+         0.5019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Grey"
+        (DEFINE-RGB-COLOR "Grey" 0.5019607843137255d0 0.5019607843137255d0
+         0.5019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "gray"
+        (DEFINE-RGB-COLOR "gray" 0.5019607843137255d0 0.5019607843137255d0
+         0.5019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Gray"
+        (DEFINE-RGB-COLOR "Gray" 0.5019607843137255d0 0.5019607843137255d0
+         0.5019607843137255d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "golden-rod"
+        (DEFINE-RGB-COLOR "golden-rod" 0.8549019607843137d0
+         0.6470588235294118d0 0.12549019607843137d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "GoldenRod"
+        (DEFINE-RGB-COLOR "GoldenRod" 0.8549019607843137d0 0.6470588235294118d0
+         0.12549019607843137d0))
+  *GDK-COLORS-LIST*)
+ (PUSH (CONS "gold" (DEFINE-RGB-COLOR "gold" 1.0d0 0.8431372549019608d0 0.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH (CONS "Gold" (DEFINE-RGB-COLOR "Gold" 1.0d0 0.8431372549019608d0 0.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "ghost-white"
+        (DEFINE-RGB-COLOR "ghost-white" 0.9725490196078431d0
+         0.9725490196078431d0 1.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "GhostWhite"
+        (DEFINE-RGB-COLOR "GhostWhite" 0.9725490196078431d0
+         0.9725490196078431d0 1.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "gainsboro"
+        (DEFINE-RGB-COLOR "gainsboro" 0.8627450980392157d0 0.8627450980392157d0
+         0.8627450980392157d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Gainsboro"
+        (DEFINE-RGB-COLOR "Gainsboro" 0.8627450980392157d0 0.8627450980392157d0
+         0.8627450980392157d0))
+  *GDK-COLORS-LIST*)
+ (PUSH (CONS "fuchsia" (DEFINE-RGB-COLOR "fuchsia" 1.0d0 0.0d0 1.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH (CONS "Fuchsia" (DEFINE-RGB-COLOR "Fuchsia" 1.0d0 0.0d0 1.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "forest-green"
+        (DEFINE-RGB-COLOR "forest-green" 0.13333333333333333d0
+         0.5450980392156862d0 0.13333333333333333d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "ForestGreen"
+        (DEFINE-RGB-COLOR "ForestGreen" 0.13333333333333333d0
+         0.5450980392156862d0 0.13333333333333333d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "floral-white"
+        (DEFINE-RGB-COLOR "floral-white" 1.0d0 0.9803921568627451d0
+         0.9411764705882353d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "FloralWhite"
+        (DEFINE-RGB-COLOR "FloralWhite" 1.0d0 0.9803921568627451d0
+         0.9411764705882353d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "fire-brick"
+        (DEFINE-RGB-COLOR "fire-brick" 0.6980392156862745d0
+         0.13333333333333333d0 0.13333333333333333d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "FireBrick"
+        (DEFINE-RGB-COLOR "FireBrick" 0.6980392156862745d0
+         0.13333333333333333d0 0.13333333333333333d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dodger-blue"
+        (DEFINE-RGB-COLOR "dodger-blue" 0.11764705882352941d0
+         0.5647058823529412d0 1.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DodgerBlue"
+        (DEFINE-RGB-COLOR "DodgerBlue" 0.11764705882352941d0
+         0.5647058823529412d0 1.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dim-grey"
+        (DEFINE-RGB-COLOR "dim-grey" 0.4117647058823529d0 0.4117647058823529d0
+         0.4117647058823529d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DimGrey"
+        (DEFINE-RGB-COLOR "DimGrey" 0.4117647058823529d0 0.4117647058823529d0
+         0.4117647058823529d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dim-gray"
+        (DEFINE-RGB-COLOR "dim-gray" 0.4117647058823529d0 0.4117647058823529d0
+         0.4117647058823529d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DimGray"
+        (DEFINE-RGB-COLOR "DimGray" 0.4117647058823529d0 0.4117647058823529d0
+         0.4117647058823529d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "deep-sky-blue"
+        (DEFINE-RGB-COLOR "deep-sky-blue" 0.0d0 0.7490196078431373d0 1.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DeepSkyBlue"
+        (DEFINE-RGB-COLOR "DeepSkyBlue" 0.0d0 0.7490196078431373d0 1.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "deep-pink"
+        (DEFINE-RGB-COLOR "deep-pink" 1.0d0 0.0784313725490196d0
+         0.5764705882352941d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DeepPink"
+        (DEFINE-RGB-COLOR "DeepPink" 1.0d0 0.0784313725490196d0
+         0.5764705882352941d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-violet"
+        (DEFINE-RGB-COLOR "dark-violet" 0.5803921568627451d0 0.0d0
+         0.8274509803921568d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkViolet"
+        (DEFINE-RGB-COLOR "DarkViolet" 0.5803921568627451d0 0.0d0
+         0.8274509803921568d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-turquoise"
+        (DEFINE-RGB-COLOR "dark-turquoise" 0.0d0 0.807843137254902d0
+         0.8196078431372549d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkTurquoise"
+        (DEFINE-RGB-COLOR "DarkTurquoise" 0.0d0 0.807843137254902d0
+         0.8196078431372549d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-slate-grey"
+        (DEFINE-RGB-COLOR "dark-slate-grey" 0.1843137254901961d0
+         0.30980392156862746d0 0.30980392156862746d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkSlateGrey"
+        (DEFINE-RGB-COLOR "DarkSlateGrey" 0.1843137254901961d0
+         0.30980392156862746d0 0.30980392156862746d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-slate-gray"
+        (DEFINE-RGB-COLOR "dark-slate-gray" 0.1843137254901961d0
+         0.30980392156862746d0 0.30980392156862746d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkSlateGray"
+        (DEFINE-RGB-COLOR "DarkSlateGray" 0.1843137254901961d0
+         0.30980392156862746d0 0.30980392156862746d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-slate-blue"
+        (DEFINE-RGB-COLOR "dark-slate-blue" 0.2823529411764706d0
+         0.23921568627450981d0 0.5450980392156862d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkSlateBlue"
+        (DEFINE-RGB-COLOR "DarkSlateBlue" 0.2823529411764706d0
+         0.23921568627450981d0 0.5450980392156862d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-sea-green"
+        (DEFINE-RGB-COLOR "dark-sea-green" 0.5607843137254902d0
+         0.7372549019607844d0 0.5607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkSeaGreen"
+        (DEFINE-RGB-COLOR "DarkSeaGreen" 0.5607843137254902d0
+         0.7372549019607844d0 0.5607843137254902d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-salmon"
+        (DEFINE-RGB-COLOR "dark-salmon" 0.9137254901960784d0
+         0.5882352941176471d0 0.47843137254901963d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkSalmon"
+        (DEFINE-RGB-COLOR "DarkSalmon" 0.9137254901960784d0
+         0.5882352941176471d0 0.47843137254901963d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-red"
+        (DEFINE-RGB-COLOR "dark-red" 0.5450980392156862d0 0.0d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkRed"
+        (DEFINE-RGB-COLOR "DarkRed" 0.5450980392156862d0 0.0d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-orchid"
+        (DEFINE-RGB-COLOR "dark-orchid" 0.6d0 0.19607843137254902d0 0.8d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkOrchid"
+        (DEFINE-RGB-COLOR "DarkOrchid" 0.6d0 0.19607843137254902d0 0.8d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-orange"
+        (DEFINE-RGB-COLOR "dark-orange" 1.0d0 0.5490196078431373d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkOrange"
+        (DEFINE-RGB-COLOR "DarkOrange" 1.0d0 0.5490196078431373d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-olive-green"
+        (DEFINE-RGB-COLOR "dark-olive-green" 0.3333333333333333d0
+         0.4196078431372549d0 0.1843137254901961d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkOliveGreen"
+        (DEFINE-RGB-COLOR "DarkOliveGreen" 0.3333333333333333d0
+         0.4196078431372549d0 0.1843137254901961d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-magenta"
+        (DEFINE-RGB-COLOR "dark-magenta" 0.5450980392156862d0 0.0d0
+         0.5450980392156862d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkMagenta"
+        (DEFINE-RGB-COLOR "DarkMagenta" 0.5450980392156862d0 0.0d0
+         0.5450980392156862d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-khaki"
+        (DEFINE-RGB-COLOR "dark-khaki" 0.7411764705882353d0
+         0.7176470588235294d0 0.4196078431372549d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkKhaki"
+        (DEFINE-RGB-COLOR "DarkKhaki" 0.7411764705882353d0 0.7176470588235294d0
+         0.4196078431372549d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-green"
+        (DEFINE-RGB-COLOR "dark-green" 0.0d0 0.39215686274509803d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkGreen"
+        (DEFINE-RGB-COLOR "DarkGreen" 0.0d0 0.39215686274509803d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-grey"
+        (DEFINE-RGB-COLOR "dark-grey" 0.6627450980392157d0 0.6627450980392157d0
+         0.6627450980392157d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkGrey"
+        (DEFINE-RGB-COLOR "DarkGrey" 0.6627450980392157d0 0.6627450980392157d0
+         0.6627450980392157d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-gray"
+        (DEFINE-RGB-COLOR "dark-gray" 0.6627450980392157d0 0.6627450980392157d0
+         0.6627450980392157d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkGray"
+        (DEFINE-RGB-COLOR "DarkGray" 0.6627450980392157d0 0.6627450980392157d0
+         0.6627450980392157d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-golden-rod"
+        (DEFINE-RGB-COLOR "dark-golden-rod" 0.7215686274509804d0
+         0.5254901960784314d0 0.043137254901960784d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkGoldenRod"
+        (DEFINE-RGB-COLOR "DarkGoldenRod" 0.7215686274509804d0
+         0.5254901960784314d0 0.043137254901960784d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-cyan"
+        (DEFINE-RGB-COLOR "dark-cyan" 0.0d0 0.5450980392156862d0
+         0.5450980392156862d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkCyan"
+        (DEFINE-RGB-COLOR "DarkCyan" 0.0d0 0.5450980392156862d0
+         0.5450980392156862d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "dark-blue"
+        (DEFINE-RGB-COLOR "dark-blue" 0.0d0 0.0d0 0.5450980392156862d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "DarkBlue"
+        (DEFINE-RGB-COLOR "DarkBlue" 0.0d0 0.0d0 0.5450980392156862d0))
+  *GDK-COLORS-LIST*)
+ (PUSH (CONS "cyan" (DEFINE-RGB-COLOR "cyan" 0.0d0 1.0d0 1.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH (CONS "Cyan" (DEFINE-RGB-COLOR "Cyan" 0.0d0 1.0d0 1.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "crimson"
+        (DEFINE-RGB-COLOR "crimson" 0.8627450980392157d0 0.0784313725490196d0
+         0.23529411764705882d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Crimson"
+        (DEFINE-RGB-COLOR "Crimson" 0.8627450980392157d0 0.0784313725490196d0
+         0.23529411764705882d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "cornsilk"
+        (DEFINE-RGB-COLOR "cornsilk" 1.0d0 0.9725490196078431d0
+         0.8627450980392157d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Cornsilk"
+        (DEFINE-RGB-COLOR "Cornsilk" 1.0d0 0.9725490196078431d0
+         0.8627450980392157d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "cornflower-blue"
+        (DEFINE-RGB-COLOR "cornflower-blue" 0.39215686274509803d0
+         0.5843137254901961d0 0.9294117647058824d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "CornflowerBlue"
+        (DEFINE-RGB-COLOR "CornflowerBlue" 0.39215686274509803d0
+         0.5843137254901961d0 0.9294117647058824d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "coral"
+        (DEFINE-RGB-COLOR "coral" 1.0d0 0.4980392156862745d0
+         0.3137254901960784d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Coral"
+        (DEFINE-RGB-COLOR "Coral" 1.0d0 0.4980392156862745d0
+         0.3137254901960784d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "chocolate"
+        (DEFINE-RGB-COLOR "chocolate" 0.8235294117647058d0 0.4117647058823529d0
+         0.11764705882352941d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Chocolate"
+        (DEFINE-RGB-COLOR "Chocolate" 0.8235294117647058d0 0.4117647058823529d0
+         0.11764705882352941d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "chartreuse"
+        (DEFINE-RGB-COLOR "chartreuse" 0.4980392156862745d0 1.0d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Chartreuse"
+        (DEFINE-RGB-COLOR "Chartreuse" 0.4980392156862745d0 1.0d0 0.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "cadet-blue"
+        (DEFINE-RGB-COLOR "cadet-blue" 0.37254901960784315d0
+         0.6196078431372549d0 0.6274509803921569d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "CadetBlue"
+        (DEFINE-RGB-COLOR "CadetBlue" 0.37254901960784315d0
+         0.6196078431372549d0 0.6274509803921569d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "burly-wood"
+        (DEFINE-RGB-COLOR "burly-wood" 0.8705882352941177d0
+         0.7215686274509804d0 0.5294117647058824d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "BurlyWood"
+        (DEFINE-RGB-COLOR "BurlyWood" 0.8705882352941177d0 0.7215686274509804d0
+         0.5294117647058824d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "brown"
+        (DEFINE-RGB-COLOR "brown" 0.6470588235294118d0 0.16470588235294117d0
+         0.16470588235294117d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Brown"
+        (DEFINE-RGB-COLOR "Brown" 0.6470588235294118d0 0.16470588235294117d0
+         0.16470588235294117d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "blue-violet"
+        (DEFINE-RGB-COLOR "blue-violet" 0.5411764705882353d0
+         0.16862745098039217d0 0.8862745098039215d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "BlueViolet"
+        (DEFINE-RGB-COLOR "BlueViolet" 0.5411764705882353d0
+         0.16862745098039217d0 0.8862745098039215d0))
+  *GDK-COLORS-LIST*)
+ (PUSH (CONS "blue" (DEFINE-RGB-COLOR "blue" 0.0d0 0.0d0 1.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH (CONS "Blue" (DEFINE-RGB-COLOR "Blue" 0.0d0 0.0d0 1.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "blanched-almond"
+        (DEFINE-RGB-COLOR "blanched-almond" 1.0d0 0.9215686274509803d0
+         0.803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "BlanchedAlmond"
+        (DEFINE-RGB-COLOR "BlanchedAlmond" 1.0d0 0.9215686274509803d0
+         0.803921568627451d0))
+  *GDK-COLORS-LIST*)
+ (PUSH (CONS "black" (DEFINE-RGB-COLOR "black" 0.0d0 0.0d0 0.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH (CONS "Black" (DEFINE-RGB-COLOR "Black" 0.0d0 0.0d0 0.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "bisque"
+        (DEFINE-RGB-COLOR "bisque" 1.0d0 0.8941176470588236d0
+         0.7686274509803922d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Bisque"
+        (DEFINE-RGB-COLOR "Bisque" 1.0d0 0.8941176470588236d0
+         0.7686274509803922d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "beige"
+        (DEFINE-RGB-COLOR "beige" 0.9607843137254902d0 0.9607843137254902d0
+         0.8627450980392157d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Beige"
+        (DEFINE-RGB-COLOR "Beige" 0.9607843137254902d0 0.9607843137254902d0
+         0.8627450980392157d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "azure" (DEFINE-RGB-COLOR "azure" 0.9411764705882353d0 1.0d0 1.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Azure" (DEFINE-RGB-COLOR "Azure" 0.9411764705882353d0 1.0d0 1.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "aquamarine"
+        (DEFINE-RGB-COLOR "aquamarine" 0.4980392156862745d0 1.0d0
+         0.8313725490196079d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "Aquamarine"
+        (DEFINE-RGB-COLOR "Aquamarine" 0.4980392156862745d0 1.0d0
+         0.8313725490196079d0))
+  *GDK-COLORS-LIST*)
+ (PUSH (CONS "aqua" (DEFINE-RGB-COLOR "aqua" 0.0d0 1.0d0 1.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH (CONS "Aqua" (DEFINE-RGB-COLOR "Aqua" 0.0d0 1.0d0 1.0d0))
+       *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "antique-white"
+        (DEFINE-RGB-COLOR "antique-white" 0.9803921568627451d0
+         0.9215686274509803d0 0.8431372549019608d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "AntiqueWhite"
+        (DEFINE-RGB-COLOR "AntiqueWhite" 0.9803921568627451d0
+         0.9215686274509803d0 0.8431372549019608d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "alice-blue"
+        (DEFINE-RGB-COLOR "alice-blue" 0.9411764705882353d0
+         0.9725490196078431d0 1.0d0))
+  *GDK-COLORS-LIST*)
+ (PUSH
+  (CONS "AliceBlue"
+        (DEFINE-RGB-COLOR "AliceBlue" 0.9411764705882353d0 0.9725490196078431d0
+         1.0d0))
+  *GDK-COLORS-LIST*))

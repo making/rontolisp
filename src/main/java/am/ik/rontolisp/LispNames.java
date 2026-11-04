@@ -10404,6 +10404,14 @@ public final class LispNames {
 	public static final String PRINT_CASED_UNQUALIFIED_INTERNAL = "%PC-UNQUALIFIED";
 
 	/**
+	 * The internal {@code (%pc-instance-text text)} helper (prelude): the {@code prin1}
+	 * text of an instance with the type name it leads with, in {@code #<NAME ...>} or
+	 * {@code #S(NAME ...)}, spelled as {@link #PRINT_CASED_UNQUALIFIED_INTERNAL} spells a
+	 * symbol. The instance leaf of {@link #PRINT_CASED_WALK_INTERNAL}.
+	 */
+	public static final String PRINT_CASED_INSTANCE_TEXT_INTERNAL = "%PC-INSTANCE-TEXT";
+
+	/**
 	 * The internal {@code (%symbol-print-bare-p symbol package-spelling external-p)}
 	 * primitive: whether a package-qualified symbol prints without its qualifier in the
 	 * current {@code *package*}. The interpreter answers from the live registry

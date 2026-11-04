@@ -1035,6 +1035,16 @@ class LispEvaluatorTest {
 				    (format t "~a" 42)))"""));
 		assertThat(result).isEqualTo(new LispString("foo.bar42"));
 		assertThat(baos.toString()).isEmpty();
+		// A binding only a macro's expansion holds (prove's is-print), in an evaluator
+		// that has seen no form spelling one: the scan of a top-level form cannot find
+		// it, and it is dynamic all the same.
+		ByteArrayOutputStream macroBaos = new ByteArrayOutputStream();
+		LispEvaluator macroEvaluator = new LispEvaluator(new PrintStream(macroBaos));
+		macroEvaluator.eval(LispReader
+			.readFromString("(defmacro capture (&body body) `(with-output-to-string (*standard-output*) ,@body))"));
+		assertThat(macroEvaluator.eval(LispReader.readFromString("(capture (princ \"captured\"))")))
+			.isEqualTo(new LispString("captured"));
+		assertThat(macroBaos.toString()).isEmpty();
 	}
 
 	@Test

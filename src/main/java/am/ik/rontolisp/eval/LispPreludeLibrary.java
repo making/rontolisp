@@ -4391,6 +4391,7 @@ public final class LispPreludeLibrary {
 						               (concatenate 'string %pc-acc ")"))))
 						        ((and (rationalp %pc-x) (or (not (eql *print-base* 10)) *print-radix*))
 						         (%pc-radixed %pc-x))
+						        ((and %pc-esc (%obj-p %pc-x)) (%pc-instance-text (%prin1-to-string %pc-x)))
 						        (%pc-esc (%prin1-to-string %pc-x))
 						        (t (%princ-to-string %pc-x))))
 						""");
@@ -4452,6 +4453,27 @@ public final class LispPreludeLibrary {
 				                (if (%symbol-print-bare-p %pu-x (subseq %pu-s 0 %pu-colon) %pu-ext)
 				                    (subseq %pu-s (if %pu-ext (+ %pu-colon 1) (+ %pu-colon 2)))
 				                    %pu-s)))))))
+				""");
+		// An instance's rendering is a runtime form of its own, but the type name it
+		// leads with is a symbol under prin1: #<K> in K's package, as SBCL prints it. The
+		// name is taken off the text, so it reaches %pc-unqualified as a string: the
+		// accessibility answer is then the structural rule, the correction lists holding
+		// only symbols.
+		SOURCES.put(LispNames.PRINT_CASED_INSTANCE_TEXT_INTERNAL, """
+				(defun %pc-instance-text (%pi-s)
+				  (let ((%pi-from (cond ((char= (char %pi-s 1) #\\<) 2)
+				                        ((char= (char %pi-s 1) #\\S) 3)
+				                        (t nil))))
+				    (if (null %pi-from)
+				        %pi-s
+				        (let ((%pi-i %pi-from) (%pi-n (length %pi-s)))
+				          (while (and (< %pi-i %pi-n) (not (char= (char %pi-s %pi-i) #\\Space))
+				                      (not (char= (char %pi-s %pi-i) #\\>)) (not (char= (char %pi-s %pi-i) #\\))))
+				            (setq %pi-i (+ %pi-i 1)))
+				          (let ((%pi-name (subseq %pi-s %pi-from %pi-i)))
+				            (concatenate 'string (subseq %pi-s 0 %pi-from)
+				                         (%pc-unqualified %pi-name %pi-name)
+				                         (subseq %pi-s %pi-i)))))))
 				""");
 		// An integer or ratio under *print-base* / *print-radix*, spelled as SBCL spells
 		// it: bare upper-case digits in the base, and with *print-radix* the #b / #o /

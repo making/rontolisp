@@ -42,8 +42,23 @@ import am.ik.rontolisp.LispVal;
  * every rontolisp backend. A library that branches on it selects its UTF-8 string path --
  * cl-postgres, whose non-unicode branch would talk {@code SQL_ASCII} to the server and
  * send one octet per code point.
+ * <p>
+ * {@code :asdf} and its version family ({@link #ASDF}) are what real ASDF pushes when it
+ * loads, and here it is always loaded: a library's guard ({@code hu.dwim.def.asd}'s
+ * {@code #+asdf3}, {@code fare-quasiquote.asd}'s {@code #-asdf3 (error ...)}) reads them,
+ * and prove picks the {@code uiop:} spellings by them.
  */
 public final class Features {
+
+	/** What ASDF 3.3 announces, as SBCL 2.2.9's {@code (require :asdf)} leaves them. */
+	private static final List<String> ASDF = List.of("asdf", "asdf2", "asdf3", "asdf3.1", "asdf3.2", "asdf3.3",
+			"asdf-unicode");
+
+	private static List<String> withAsdf(String... names) {
+		List<String> all = new java.util.ArrayList<>(List.of(names));
+		all.addAll(ASDF);
+		return List.copyOf(all);
+	}
 
 	/**
 	 * The features active when interpreting (and in the REPL). {@code :thread-support} is
@@ -57,11 +72,11 @@ public final class Features {
 	 * to t here and to nil there.
 	 */
 	public static final Features INTERPRETER = new Features(
-			List.of("rontolisp", "rontolisp-interpreter", "unicode", "thread-support", "common-lisp"));
+			withAsdf("rontolisp", "rontolisp-interpreter", "unicode", "thread-support", "common-lisp"));
 
 	/** The features active when compiling to JVM bytecode. */
 	public static final Features JVM = new Features(
-			List.of("rontolisp", "rontolisp-jvm", "unicode", "thread-support", "common-lisp"));
+			withAsdf("rontolisp", "rontolisp-jvm", "unicode", "thread-support", "common-lisp"));
 
 	/**
 	 * The features active when compiling to JVM bytecode in SERVLET mode -- a
@@ -74,10 +89,10 @@ public final class Features {
 	 * ({@code .kb/clack.md}).
 	 */
 	public static final Features JVM_SERVLET = new Features(
-			List.of("rontolisp", "rontolisp-jvm", "unicode", "thread-support", "common-lisp", "rontolisp-servlet"));
+			withAsdf("rontolisp", "rontolisp-jvm", "unicode", "thread-support", "common-lisp", "rontolisp-servlet"));
 
 	/** The features active when compiling to WASM (Preview 1, component and no-gc). */
-	public static final Features WASM = new Features(List.of("rontolisp", "rontolisp-wasm", "unicode", "common-lisp"));
+	public static final Features WASM = new Features(withAsdf("rontolisp", "rontolisp-wasm", "unicode", "common-lisp"));
 
 	/**
 	 * The features active when compiling to WASM in REACTOR mode -- {@code --no-wasi}
@@ -93,7 +108,7 @@ public final class Features {
 	 * {@code clackup} source run on every host ({@code .kb/clack.md}).
 	 */
 	public static final Features WASM_REACTOR = new Features(
-			List.of("rontolisp", "rontolisp-wasm", "unicode", "common-lisp", "rontolisp-reactor"));
+			withAsdf("rontolisp", "rontolisp-wasm", "unicode", "common-lisp", "rontolisp-reactor"));
 
 	/**
 	 * The feature naming the component BOUNDARY, added to whichever WASM set is in force

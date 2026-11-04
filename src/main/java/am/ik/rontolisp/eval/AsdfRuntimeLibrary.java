@@ -53,12 +53,15 @@ import org.jspecify.annotations.Nullable;
  * spliced component ({@code compiler.SplicedComponentGroups}).
  *
  * <p>
- * A record is {@code (CLASS DIR FILES DEPS LOADED-P VERSION META)}: the component class
- * keyword ({@code :system} / {@code :package-inferred-system}), the source directory with
- * a trailing slash, the component files as {@code (RELATIVE . RESOLVED)} namestring pairs
- * in load order, the {@code :depends-on} names, whether the system is loaded, the
- * declared {@code :version} string (nil when it declared none as a plain string), and the
- * plist of what the {@code .asd} declared besides.
+ * A record is {@code (CLASS DIR FILES DEPS LOADED-P VERSION META COMPONENT-CLASSES)}: the
+ * system's class ({@code :system} / {@code :package-inferred-system}, or the name of a
+ * class loaded code defines as a string), the source directory with a trailing slash, the
+ * component files as {@code (RELATIVE . RESOLVED)} namestring pairs in load order, the
+ * {@code :depends-on} names, whether the system is loaded, the declared {@code :version}
+ * string (nil when it declared none as a plain string), the plist of what the
+ * {@code .asd} declared besides, and {@code (RELATIVE CLASS . INITARGS)} entries for the
+ * files whose class loaded code defines. A name stays a string in the record: a compile
+ * path's table stands ahead of the packages those classes live in.
  *
  * <p>
  * The surface is the inventory ({@link AsdfExports}): an external {@code asdf.lisp} does
@@ -74,6 +77,8 @@ public final class AsdfRuntimeLibrary {
 	@Nullable private static volatile List<LispVal> classForms;
 
 	@Nullable private static volatile List<LispVal> seamForms;
+
+	@Nullable private static volatile List<LispVal> imageForms;
 
 	/**
 	 * What {@code asdf.lisp} and the stubs define, by canonical name: the externals'
@@ -92,6 +97,32 @@ public final class AsdfRuntimeLibrary {
 	@Nullable private static volatile Definitions definitions;
 
 	private static final String STUB_ARGS = "%ASDF-STUB-ARGS";
+
+	private static final String CLASS_VAR = "%ASDF-CLASS";
+
+	/**
+	 * The file type upstream's classes without a definition in {@code asdf.lisp} hold,
+	 * which a subclass inherits ({@code source-file-type}).
+	 */
+	private static final Map<String, String> STUB_FILE_TYPES = Map.of("CL-SOURCE-FILE.CL", "cl", "CL-SOURCE-FILE.LSP",
+			"lsp", "C-SOURCE-FILE", "c", "JAVA-SOURCE-FILE", "java", "HTML-FILE", "html");
+
+	/**
+	 * The classes a definition saying nothing gets: an instance needs no class name in
+	 * its record.
+	 */
+	private static final Set<String> PLAIN_CLASSES = Set.of(qualify("SYSTEM"),
+			qualify(LispNames.PACKAGE_INFERRED_SYSTEM), qualify("CL-SOURCE-FILE"));
+
+	/**
+	 * Whether a class a definition names is one it gets anyway.
+	 * @param name the class's name
+	 * @return {@code true} for {@code system}, {@code package-inferred-system} and
+	 * {@code cl-source-file}
+	 */
+	static boolean isPlainClass(String name) {
+		return PLAIN_CLASSES.contains(name);
+	}
 
 	/**
 	 * The members a program reads a system's metadata through: a compile path bakes the
@@ -239,7 +270,10 @@ public final class AsdfRuntimeLibrary {
 			forms.add(list(new LispSymbol(LispNames.DEFINE_CONDITION), name, superclasses(entry), LispNil.INSTANCE));
 		}
 		if (entry.is("class") && !classes.contains(member)) {
-			forms.add(list(new LispSymbol(LispNames.DEFCLASS), name, superclasses(entry), LispNil.INSTANCE));
+			String fileType = STUB_FILE_TYPES.get(member);
+			forms.add(list(new LispSymbol(LispNames.DEFCLASS), name, superclasses(entry), fileType == null
+					? LispNil.INSTANCE
+					: list(list(new LispSymbol("TYPE"), new LispSymbol(":INITFORM"), new LispString(fileType)))));
 		}
 		if (entry.is("variable") && !functions.contains(member)) {
 			forms.add(list(new LispSymbol(LispNames.DEFVAR), name, LispNil.INSTANCE));
@@ -402,9 +436,20 @@ public final class AsdfRuntimeLibrary {
 	 * @return the forms
 	 */
 	public static List<LispVal> interpreterForms() {
-		List<LispVal> forms = new ArrayList<>(coreForms());
-		forms.addAll(stubsFor(definitions().stubs().keySet()));
-		return List.copyOf(forms);
+		List<LispVal> cached = imageForms;
+		if (cached == null) {
+			synchronized (AsdfRuntimeLibrary.class) {
+				cached = imageForms;
+				if (cached == null) {
+					List<LispVal> forms = new ArrayList<>(coreForms());
+					forms.addAll(stubsFor(definitions().stubs().keySet()));
+					forms.addAll(LispReader.readAllFromString(IMAGE_SOURCE, Features.INTERPRETER));
+					cached = List.copyOf(forms);
+					imageForms = cached;
+				}
+			}
+		}
+		return cached;
 	}
 
 	/**
@@ -506,14 +551,173 @@ public final class AsdfRuntimeLibrary {
 			return program;
 		}
 		boolean metadata = mentioned.stream().anyMatch(METADATA_READERS::contains);
+		LoadedNames loaded = loadedClassNames(systems, loadedSystems);
 		List<LispVal> out = new ArrayList<>(coreForms());
-		out.addAll(stubsFor(mentioned));
+		Set<String> stubs = new HashSet<>(mentioned);
+		stubs.addAll(loaded.asdfMembers());
+		out.addAll(stubsFor(stubs));
 		out.add(registryDefvar(systems, loadedSystems, metadata));
 		out.addAll(seamForms());
 		out.add(testOpEdgesDefun(systems, loadedSystems));
 		out.add(recordedTestOpDefun(systems, loadedSystems));
 		out.addAll(program);
+		// Behind the program: they name classes its packages define.
+		out.add(makeSystemDefun(loaded.systems()));
+		out.add(reinitializeSystemDefun(loaded.systems()));
+		out.add(makeComponentDefun(loaded.components()));
 		return out;
+	}
+
+	/**
+	 * The classes the spliced systems' definitions name, in splice order.
+	 *
+	 * @param systems the system classes
+	 * @param components the component classes
+	 */
+	private record LoadedNames(Set<String> systems, Set<AsdfSystems.LoadedClass> components) {
+
+		/** The members of the classes homed in {@code asdf}: stubs the program needs. */
+		Set<String> asdfMembers() {
+			Set<String> members = new HashSet<>();
+			for (AsdfSystems.LoadedClass loaded : this.components) {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(loaded.name());
+				if (qn != null && LispNames.ASDF_PKG.equals(qn.pkg())) {
+					members.add(qn.member());
+				}
+			}
+			return members;
+		}
+
+	}
+
+	private static LoadedNames loadedClassNames(Map<String, AsdfSystems.LispSystem> systems,
+			Set<String> loadedSystems) {
+		Set<String> systemClasses = new LinkedHashSet<>();
+		Set<AsdfSystems.LoadedClass> componentClasses = new LinkedHashSet<>();
+		for (AsdfSystems.LispSystem system : systems.values()) {
+			if (!loadedSystems.contains(system.name())) {
+				continue;
+			}
+			if (system.loadedClasses().system() != null) {
+				systemClasses.add(system.loadedClasses().system());
+			}
+			for (String file : system.files()) {
+				AsdfSystems.LoadedClass loaded = system.loadedClasses().components().get(file);
+				if (loaded != null) {
+					componentClasses.add(loaded);
+				}
+			}
+		}
+		return new LoadedNames(systemClasses, componentClasses);
+	}
+
+	/**
+	 * The generated {@code %asdf-make-system} seam: an instance of a class a spliced
+	 * system's definition names. A literal {@code make-instance} per class, so a program
+	 * without one flips no computed-class gate; any other record is a system only the
+	 * build image loaded the class of, and is a plain one.
+	 */
+	private static LispVal makeSystemDefun(Set<String> classes) {
+		LispSymbol name = clUser("%ASDF-MAKE-SYSTEM-NAME");
+		LispSymbol dir = clUser("%ASDF-MAKE-SYSTEM-DIR");
+		LispSymbol version = clUser("%ASDF-MAKE-SYSTEM-VERSION");
+		LispSymbol deps = clUser("%ASDF-MAKE-SYSTEM-DEPS");
+		java.util.function.Function<String, LispVal> make = className -> list(cl(LispNames.MAKE_INSTANCE),
+				quoted(new LispSymbol(className)), new LispSymbol(":NAME"), name, new LispSymbol(":PATHNAME"), dir,
+				new LispSymbol(":ABSOLUTE-PATHNAME"), dir, new LispSymbol(":VERSION"), version,
+				new LispSymbol(":SIDEWAY"), deps);
+		List<LispVal> clauses = new ArrayList<>();
+		for (String className : classes) {
+			clauses.add(list(classIs(className), make.apply(className)));
+		}
+		return classDispatch("%ASDF-MAKE-SYSTEM", List.of(name, dir, version, deps), clauses,
+				make.apply(qualify("SYSTEM")));
+	}
+
+	/**
+	 * The generated {@code %asdf-reinitialize-system} seam: what real ASDF's
+	 * {@code parse-defsystem} does to the system it registered, and where
+	 * {@code hu.dwim.system} fills its slots. Nothing in a program no definition of which
+	 * names a class, so that none carries the protocol for it.
+	 */
+	private static LispVal reinitializeSystemDefun(Set<String> classes) {
+		LispSymbol system = clUser("%ASDF-REINITIALIZED-SYSTEM");
+		return list(cl(LispNames.DEFUN), clUser("%ASDF-REINITIALIZE-SYSTEM"), list(system),
+				classes.isEmpty() ? system : list(cl("REINITIALIZE-INSTANCE"), system));
+	}
+
+	/**
+	 * The generated {@code %asdf-make-component} seam: an instance of a class a spliced
+	 * system's definition names for a component, with the options the definition wrote
+	 * for it, and a {@code cl-source-file} otherwise.
+	 */
+	private static LispVal makeComponentDefun(Set<AsdfSystems.LoadedClass> classes) {
+		LispSymbol initargs = clUser("%ASDF-MAKE-COMPONENT-INITARGS");
+		LispSymbol name = clUser("%ASDF-MAKE-COMPONENT-NAME");
+		LispSymbol relative = clUser("%ASDF-MAKE-COMPONENT-RELATIVE");
+		LispSymbol resolved = clUser("%ASDF-MAKE-COMPONENT-RESOLVED");
+		LispSymbol parent = clUser("%ASDF-MAKE-COMPONENT-PARENT");
+		java.util.function.BiFunction<String, List<LispVal>, LispVal> make = (className, options) -> {
+			List<LispVal> call = new ArrayList<>(List.of(cl(LispNames.MAKE_INSTANCE), quoted(new LispSymbol(className)),
+					new LispSymbol(":NAME"), name, new LispSymbol(":PATHNAME"), relative,
+					new LispSymbol(":ABSOLUTE-PATHNAME"), resolved, new LispSymbol(":PARENT"), parent));
+			for (int i = 0; i < options.size(); i += 2) {
+				call.add(options.get(i));
+				call.add(quoted(options.get(i + 1)));
+			}
+			return list(call.toArray(LispVal[]::new));
+		};
+		List<LispVal> clauses = new ArrayList<>();
+		for (AsdfSystems.LoadedClass loaded : classes) {
+			if (!loaded.initargs().isEmpty()) {
+				clauses.add(list(
+						list(cl("AND"), classIs(loaded.name()),
+								list(cl(LispNames.EQUAL), initargs,
+										quoted(list(loaded.initargs().toArray(LispVal[]::new))))),
+						make.apply(loaded.name(), loaded.initargs())));
+			}
+		}
+		for (AsdfSystems.LoadedClass loaded : classes) {
+			if (loaded.initargs().isEmpty()) {
+				clauses.add(list(classIs(loaded.name()), make.apply(loaded.name(), List.of())));
+			}
+		}
+		return classDispatch("%ASDF-MAKE-COMPONENT", List.of(initargs, name, relative, resolved, parent), clauses,
+				make.apply(qualify("CL-SOURCE-FILE"), List.of()));
+	}
+
+	/**
+	 * {@code (defun NAME (%asdf-class PARAMS...) (cond CLAUSES... (t FALLBACK)))}, with
+	 * every name spelled so it resolves to its canonical form whatever package the
+	 * program ends in.
+	 */
+	private static LispVal classDispatch(String function, List<LispVal> params, List<LispVal> clauses,
+			LispVal fallback) {
+		List<LispVal> cond = new ArrayList<>();
+		cond.add(cl(LispNames.COND));
+		cond.addAll(clauses);
+		cond.add(list(LispTrue.INSTANCE, fallback));
+		List<LispVal> parameters = new ArrayList<>();
+		parameters.add(clUser(CLASS_VAR));
+		parameters.addAll(params);
+		return list(cl(LispNames.DEFUN), clUser(function), list(parameters.toArray(LispVal[]::new)),
+				list(cond.toArray(LispVal[]::new)));
+	}
+
+	private static LispVal classIs(String className) {
+		return list(cl(LispNames.EQUAL), clUser(CLASS_VAR), new LispString(className));
+	}
+
+	private static LispVal quoted(LispVal datum) {
+		return list(cl(LispNames.QUOTE), datum);
+	}
+
+	private static LispSymbol cl(String member) {
+		return new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, member));
+	}
+
+	private static LispSymbol clUser(String member) {
+		return new LispSymbol(PackageRegistry.qualifyInternal(LispNames.CL_USER_PKG, member));
 	}
 
 	/**
@@ -588,19 +792,27 @@ public final class AsdfRuntimeLibrary {
 
 	private static LispVal recordFor(AsdfSystems.LispSystem system, boolean loaded, boolean metadata) {
 		List<LispVal> files = new ArrayList<>();
+		List<LispVal> classes = new ArrayList<>();
 		for (String file : system.files()) {
 			files.add(new LispCons(new LispString(file),
 					new LispString(SourceLoader.resolve(emptyToNull(system.baseDir()), file))));
+			AsdfSystems.LoadedClass loadedClass = system.loadedClasses().components().get(file);
+			if (loadedClass != null) {
+				classes.add(new LispCons(new LispString(file), new LispCons(new LispString(loadedClass.name()),
+						list(loadedClass.initargs().toArray(LispVal[]::new)))));
+			}
 		}
 		List<LispVal> deps = new ArrayList<>();
 		for (String dependency : system.dependsOn()) {
 			deps.add(new LispString(dependency));
 		}
-		return list(new LispSymbol(system.packageInferredClass() ? ":PACKAGE-INFERRED-SYSTEM" : ":SYSTEM"),
-				new LispString(normalizeDir(system.baseDir())), list(files.toArray(LispVal[]::new)),
+		String systemClass = system.loadedClasses().system();
+		LispVal classOf = systemClass != null ? new LispString(systemClass)
+				: new LispSymbol(system.packageInferredClass() ? ":PACKAGE-INFERRED-SYSTEM" : ":SYSTEM");
+		return list(classOf, new LispString(normalizeDir(system.baseDir())), list(files.toArray(LispVal[]::new)),
 				list(deps.toArray(LispVal[]::new)), loaded ? LispTrue.INSTANCE : LispNil.INSTANCE,
 				system.version() == null ? LispNil.INSTANCE : new LispString(system.version()),
-				metadata ? metadataPlist(system) : LispNil.INSTANCE);
+				metadata ? metadataPlist(system) : LispNil.INSTANCE, list(classes.toArray(LispVal[]::new)));
 	}
 
 	private static LispVal metadataPlist(AsdfSystems.LispSystem system) {
@@ -790,17 +1002,70 @@ public final class AsdfRuntimeLibrary {
 			        (%asdf-runtime-load "QL:QUICKLOAD" entry))
 			      (%asdf-runtime-load "QL:QUICKLOAD" name))
 			  name)
-			(defvar %asdf-pending-load% nil)
+			(defvar %asdf-spliced-thunks% nil)
 			(defun %asdf-load-spliced (system index thunk)
-			  (let ((%asdf-pending-load% (list system index thunk)))
-			    (%asdf-perform-component system index)))
+			  (setq %asdf-spliced-thunks% (cons (list system index thunk) %asdf-spliced-thunks%))
+			  (%asdf-perform-component system index))
 			(defun %asdf-load-component (system index)
-			  (let ((pending %asdf-pending-load%))
-			    (if (and pending (equal (car pending) system) (eql (car (cdr pending)) index))
-			        (funcall (car (cdr (cdr pending))))
+			  (let ((thunk nil))
+			    (dolist (entry %asdf-spliced-thunks%)
+			      (when (and (not thunk) (equal (car entry) system) (eql (car (cdr entry)) index))
+			        (setq thunk (car (cdr (cdr entry))))))
+			    (if thunk
+			        (funcall thunk)
 			        (error "ASDF:PERFORM cannot load ~a of system ~a at run time on the compiled backends (systems are spliced at compile time)"
 			               (asdf:component-name (nth index (asdf:component-children (asdf:find-system system))))
 			               system))))
+			""";
+
+	// What only an image asks or does, the interpreter's half of the seams above: what a
+	// definition's class designator means (real ASDF's class-for-type, over a prototype
+	// of
+	// the class; a keyword finds its symbol in asdf or the current package, a string
+	// reads
+	// in asdf), and an instance of a class named at run time. A compile path generates
+	// the
+	// second over the classes it spliced, and runs the first in its build image.
+	private static final String IMAGE_SOURCE = """
+			(defun %asdf-class-named (designator)
+			  (let* ((name (cond ((keywordp designator)
+			                      (or (find-symbol (symbol-name designator) :asdf)
+			                          (find-symbol (symbol-name designator) *package*)))
+			                     ((stringp designator)
+			                      (handler-case
+			                          (let ((*package* (find-package :asdf)))
+			                            (read-from-string designator))
+			                        (error () nil)))
+			                     (t designator)))
+			         (class (and name (symbolp name) (not (keywordp name)) (find-class name nil))))
+			    (and class (subtypep name 'asdf:component) class)))
+			(defun %asdf-class-facts (designator)
+			  (let ((class (%asdf-class-named designator)))
+			    (when class
+			      (let* ((prototype (make-instance (class-name class) :name "%asdf-prototype"))
+			             (file (typep prototype 'asdf:file-component))
+			             (hooked (slot-boundp prototype 'asdf::around-compile)))
+			        (list (class-name class)
+			              (typep prototype 'asdf:system)
+			              (typep prototype 'asdf:package-inferred-system)
+			              (typep prototype 'asdf:module)
+			              file
+			              (typep prototype 'asdf:cl-source-file)
+			              (and file
+			                   (asdf:source-file-type prototype
+			                                          (make-instance 'asdf:system :name "%asdf-prototype")))
+			              (and (typep prototype 'asdf:parent-component)
+			                   (asdf::module-default-component-class prototype))
+			              hooked
+			              (and hooked (slot-value prototype 'asdf::around-compile)))))))
+			(defun %asdf-make-system (class name dir version deps)
+			  (make-instance (read-from-string class) :name name :pathname dir
+			                 :absolute-pathname dir :version version :sideway deps))
+			(defun %asdf-reinitialize-system (system)
+			  (reinitialize-instance system))
+			(defun %asdf-make-component (class initargs name relative resolved parent)
+			  (apply #'make-instance (read-from-string class) :name name :pathname relative
+			         :absolute-pathname resolved :parent parent initargs))
 			""";
 
 	private static String readSource(String resource) {

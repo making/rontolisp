@@ -31,9 +31,10 @@
 
 本体は `.asd` の解析時にデータとして記録されます。裸のシンボルは `asdf-user` が
 解決するのと同じように解決されます（`symbol-call` は `uiop:symbol-call`、
-`component-name` は `asdf:component-name`）。メソッド修飾子つきの `:perform`
-（`test-op :after (o c)`）、ほかの operation についての `:perform`、本体中の `#.`
-リーダーマクロは、許容されて無視されます。
+`component-name` は `asdf:component-name`）。本体中の `#.` リーダーマクロは `.asd` を
+実行しているイメージで読みます。`test-op :after (o c)` も同じように記録します。ASDF
+自身のメソッドは何もしないからです。ほかの operation についての `:perform` と、
+イメージで読めない `#.` は、許容されて無視されます。
 
 ## バックエンドサポート
 

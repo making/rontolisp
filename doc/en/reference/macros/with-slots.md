@@ -2,7 +2,7 @@
 
 `(with-slots (slot-or-pair...) instance body...)`
 
-Binds the slot names of a CLOS-subset instance ([`defclass`](../special-forms/defclass.md) / [`define-condition`](define-condition.md)) as symbol-macro-style places for the body: each entry is a slot name, or a `(var slot)` pair binding `var` to slot `slot`. The instance form is evaluated once. Reads see the slots, and [`setf`](setf.md)/`push`/`incf` of a bound name writes back to the slot (the substitution is textual over the body; an inner binding shadowing a slot variable is still substituted).
+Binds the slot names of a CLOS-subset instance ([`defclass`](../special-forms/defclass.md) / [`define-condition`](define-condition.md)) as symbol-macro-style places for the body: each entry is a slot name, or a `(var slot)` pair binding `var` to slot `slot`. The instance form is evaluated once. Reads see the slots, and [`setf`](setf.md)/`push`/`incf` of a bound name writes back to the slot. An inner binding of the name, a nested `with-slots` of the same slot included, stops it in its scope, as for [`symbol-macrolet`](symbol-macrolet.md).
 
 Lite: code GENERATED at run time inside the body (e.g. a `macrolet` template mentioning a slot name) resolves the name through a fallback binding holding the slot's value at entry -- reads work, but a write from such generated code updates that local copy only.
 

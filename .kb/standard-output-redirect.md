@@ -113,6 +113,11 @@ compiles BYTE-IDENTICALLY to before: a bare read compiles to the constant `t`.
 eval runtime's global-environment mirror is seeded when the program merely NAMES the variable
 -- naming is weaker than binding.
 
+The compile paths collect after macro expansion. The interpreter collects a top-level form as read,
+so a binding only a macro's expansion holds was lexical until some form spelled one, and captured
+nothing (prove's `is-print`, measured 2026-11-04). The three are seeded in its `specialVars`, where
+nothing is byte-counted. `LispEvaluatorTest#evalWithOutputToStringBindingStandardOutputCapturesStreamlessPrints`.
+
 ## Per backend, and the two derived rules
 - Interpreter `Environment.defaultOutput` (set by `LispEvaluator.registerEval`) reads
   `DynamicBindings` first, then the global cell; JVM

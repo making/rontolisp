@@ -180,8 +180,8 @@ library still has to stay inside the supported subset below.
     `:legacy-acl-source-file` whose components load `NAME.cl`. Any other
     `defclass` runs.
   - `defmethod`: ignored — the plan a system loads by is fixed, not computed by
-    ASDF's generic functions (a library's `asdf:perform` method in its own
-    sources does run, see below) — except
+    ASDF's generic functions (a method in a library's own sources does run, see
+    below) — except
     `(defmethod source-file-type ((c CLASS) (s module)) "ext")`, which sets that
     class's file extension wherever in the file it sits.
 
@@ -206,8 +206,8 @@ library still has to stay inside the supported subset below.
   **used**: in a clause that decides what gets loaded it is evaluated in the
   image the file runs in (the `(:file #.*string-file*)` idiom reads a
   `defparameter` above it), and one that fails is an error naming the file and
-  the clause; in ignored metadata (`:long-description`, `:version`,
-  `:perform`, …) it is dropped unevaluated and unremarked. A `:depends-on`
+  the clause; in ignored metadata (`:long-description`, `:version`, …) it is
+  dropped unevaluated and unremarked. A `:depends-on`
   entry may be `(:feature EXPR DEP)`, contributing its dependency only when the
   feature expression holds, or `(:version NAME "1.2.3")`, resolving to the
   plain dependency (the version constraint is not checked — the `:version`
@@ -234,10 +234,10 @@ library still has to stay inside the supported subset below.
   files behind `(:or :sbcl ...)`) while keeping its place in the dependency
   order. The test-op wiring options are recorded:
   `:in-order-to ((test-op (test-op ...)))` and
-  `:perform (test-op (o c) ...)` are driven by
-  [`asdf:test-system`](../reference/functions/asdf-test-system.md) (a
-  `:perform` for any other operation, a qualified `test-op :after` method, or a
-  `#.` in the body stays tolerated and ignored). A
+  `:perform (test-op (o c) ...)`, also written `(test-op :after (o c) ...)`, are
+  driven by [`asdf:test-system`](../reference/functions/asdf-test-system.md) (a
+  `#.` in the body reads in the image the file runs in; one it cannot read, and
+  a `:perform` for any other operation, stay tolerated and ignored). A
   `:version` value may be any literal form including ASDF's
   `(:read-file-form ...)` indirection (never inspected — only a plain string is
   recorded). `:around-compile`, `:encoding :utf-8`/`:default` and
@@ -257,8 +257,38 @@ library still has to stay inside the supported subset below.
   downcased package name itself (`cl` and friends drop out). Only the forms up
   to the first package definition form of each file are read, so the common
   `(in-package #:cl-user)` header before the `defpackage` is fine; a file with
-  no `defpackage`/`uiop:define-package` at all is an error. No other `:class` is supported, and a
-  package-inferred system that also lists `:components` is an error.
+  no `defpackage`/`uiop:define-package` at all is an error. A package-inferred
+  system that also lists `:components` is an error.
+- **A class that loaded code defines** works as that class. Once
+  `:defsystem-depends-on` has loaded, a `:class`, a component type and a
+  `:default-component-class` are looked up among the live classes: a keyword
+  finds its symbol in `asdf` or the current package (`(:test-file "t1")` after
+  prove-asdf imports the name), a string is read in `asdf`
+  (`:class "hu.dwim.asdf:hu.dwim.system"`), any other symbol names the class. The
+  class answers for its instances:
+  - which file: what `source-file-type` answers for an instance, by a method, a
+    `(type :initform "coal")` slot or a `:type` default-initarg;
+  - whether a loader reads it: a `cl-source-file` subclass is Lisp, any other
+    class's file (`:lass-file`) is only its methods' business;
+  - what `asdf:perform` does: `find-system` and `component-children` answer
+    instances of the class, so its methods run. prove-asdf's `load-op` only
+    remembers a test file, and `load-source-op` runs it when a test asks;
+  - what a system class says of its components: the `default-component-class`
+    slot, and a default-initarg's `:around-compile`, unless the definition says.
+
+  A system instance is reinitialized once made, as real ASDF does, and a
+  component's options the definition grammar does not read are its initargs
+  (`(:lass-file "style" :output "style.css")`). A class the `.asd` itself defines
+  has its methods ignored like any other there: an instance is of the nearest
+  superclass outside the file.
+
+  On a compile path the class is looked up where the `.asd` runs, at compile
+  time, and the program carries the same code through its own
+  `:defsystem-depends-on` splice, so the methods run in the program. A method on
+  `compile-op` therefore runs when the program starts, and needs its file then.
+  The forms of a component whose `load-op` leaves it unread are compiled but do
+  not run at compile time, and run each time something performs `load-source-op`
+  on it.
 - Loading a system twice is a no-op; circular `:depends-on` chains are
   detected and reported — including one written as a cycle between two
   sub-systems' `defpackage` forms.
@@ -424,6 +454,7 @@ what does not work.
 | [cl-dbi](https://github.com/fukamachi/cl-dbi) 0.11.1 (`dbd-postgres` only) | interpreter, JVM, WASM component | Database-independent interface from its verbatim sources via `(ql:quickload "dbd-postgres")`: `dbi:connect` (the driver resolves over the already-loaded system — a compiled program must contain the `ql:quickload` itself, since it cannot load a system at run time), `dbi:do-sql`, `dbi:prepare`/`execute`/`fetch`/`fetch-all`, `dbi:with-transaction` (commit and rollback), `dbi:connect-cached` and `dbi:disconnect`. The `:mysql` and `:sqlite3` drivers need FFI and are absent. On the thread-capable backends the connection cache is per-thread (`cache/thread.lisp` over the `bt2` shim's real locks and [`rontolisp:current-thread`](../reference/functions/rontolisp-current-thread.md)); the single-threaded WASM backends use upstream's own threadless cache. Its `trivial-garbage` dependency resolves to the no-op finalizer shim above, so call `dbi:disconnect` explicitly. Same socket constraints as postmodern: Preview 1 WASM is out, a component needs `-S tcp=y -S inherit-network=y` |
 | [mito](https://github.com/fukamachi/mito) 0.2.0 | interpreter, JVM, WASM component | O/R mapper from its verbatim sources via `(ql:quickload "mito")` — the **full** system (`mito-core` + `mito-migration` + `lack-middleware-mito`), covered by the [O/R mapping guide](mito.md). The DAO layer: `connect-toplevel`/`disconnect-toplevel`, `deftable` (the `dao-table-class` metaclass over the static metaobject protocol — auto-pk `:serial` and `:uuid`, `record-timestamps-mixin`'s `created-at`/`updated-at`), `table-definition`, `ensure-table-exists`, `create-dao`/`insert-dao`/`save-dao`/`delete-dao`, `find-dao`, `select-dao` with sxql clauses, `object-id`, `retrieve-by-sql` and `execute-sql`. The migration layer: `migration-expressions` and `migrate-table` diff a class against the live schema on all three backends, while `generate-migrations` / `migrate` over migration FILES are interpreter + JVM (the WASM backends import no directory-creation or file-removal call, so they signal at the call); `migrate` re-reads the generated `.sql` with esrap, and the advisory lock rides a CRC32-only slice of chipz. PostgreSQL only (`dbd-postgres`, which must be quickloaded explicitly); like every metaclass consumer, `deftable` forms must be top level with literal options. Known gaps, all in the guide: the `:conc-name` accessors are not generated (`slot-value` works), and sxql's SQL FUNCTION operators — `(:count ...)` and therefore `mito:count-dao` — are interpreter-only. Two shapes fail identically on SBCL and are upstream defects, not gaps: a bare `:references` without a `:col-type`, and adding a NOT NULL column with an `:initform`. The uuid dependency loads (its v1/v4 generation draws the backend's own entropy) and `dissect`'s stack introspection is the no-op interface. Same socket constraints as cl-dbi: Preview 1 WASM is out, a component needs `-S tcp=y -S inherit-network=y` |
 | [rove](https://github.com/fukamachi/rove) v0.10.0 | all four | Testing framework from its verbatim sources via `(ql:quickload "rove")`, covered by the [testing guide](testing.md) — `deftest`/`testing`/`ok`/`ng`/`signals`/`outputs`/`expands`/`pass`/`fail`/`skip`/`failing`/`setup`/`teardown`/`defhook`/`diag` with the `:spec` (default) and `:dot` reporters, and every entry point: `rove:run` over a `:package-inferred-system` or a plain `defsystem` test system, `run-test`/`run-tests`, and `run-suite` at the end of a test file. A test body that signals becomes a recorded failure instead of ending the run (on the WASM backends a raw trap — `(car 1)`, `(/ 1 0)` — still ends it), and `rontolisp test TARGET` (or `(uiop:quit (if (rove:run ...) 0 1))` inside your own runner) turns the result into a CI exit code on every backend. Its dissect dependency loads from its real sources with the stack introspection empty, so failure reports carry no backtraces, and assertion descriptions print symbols package-qualified where SBCL prints them bare — details and the run commands are in the guide |
+| [prove](https://github.com/fukamachi/prove) (Quicklisp 2020-02-18) | all four | Testing framework from its verbatim sources: `(asdf:test-system :prove-test)` runs prove's own suite through its `:test-file` component class and prints what SBCL prints, and `proc-parse-test`, `xsubseq-test`, `myway-test` and the like run the same way |
 | [jose](https://github.com/fukamachi/jose) | all four | JSON Object Signing and Encryption (JWS/JWT) from its verbatim sources via `(ql:quickload "jose")` — `encode`/`decode`/`inspect-token` over HS256/384/512, RS256/384/512, PS256/384/512 and the unsecured `none`, with the registered claim checks (`iat`/`nbf`/`exp`/`jti`, plus the `:issuer`/`:audience`/`:subject` keywords). The tokens are byte-identical to SBCL's on the same sources and to Python's `hmac`/`hashlib` — the HS256 one is the token jose's own README publishes. RSA keys are ironclad objects, so `ironclad:generate-key-pair :rsa` (or any parser that produces one) supplies them; PS512 needs a modulus of at least 1040 bits, which is ironclad's own assertion, not a limit here. An expired `exp`, an `nbf` in the future and a failed signature all signal through `cerror`, so a `handler-bind` that `continue`s decodes anyway — and any program handling them compiles in EH mode on both WASM backends. Upstream's own `jose/tests/jwt` suite runs green under `rontolisp test` on all four backends; its `jose/tests/jws` sibling runs nowhere, on any implementation — it `(:use #:pem)`, and `pem` is not in the Quicklisp distribution. Loading from vendored sources instead of the Quicklisp cache needs **eight directories** in `--system-path`: jose, cl-json, ironclad, cl-base64, split-sequence, assoc-utils, alexandria and trivial-utf-8 |
 | [cffi](https://cffi.common-lisp.dev/) | interpreter, JVM | The Common Foreign Function Interface — the library every C binding in the ecosystem is written against — from its verbatim sources via `(ql:quickload "cffi")`, covered by the [C libraries guide](cffi.md). `defcfun`, `foreign-funcall` (variadic included), `define-foreign-library`/`use-foreign-library`, `with-foreign-object` + `mem-ref`/`mem-aref`, `defctype`, `defcstruct` + `foreign-slot-value`, `defcallback`, `defcvar` and the whole foreign-string family all work; structures **by value** work with no `cffi-libffi`, because the foreign function API lays them out itself. What rontolisp supplies is the `cffi-sys` backend, a replacement `cffi.asd` and a substitute for `src/strings.lisp`; the other eleven files are upstream's, byte for byte. `cffi-grovel` and `cffi-libffi` are **refused with the reason** rather than half-loaded. Runs under `java -jar`, in the native binary (against a registered call-shape grid; an outlying shape signals the one metadata entry that would register it) and in a compiled `.class`/`.jar`, which carry the binding beside the class; neither WASM backend has a foreign function API at all, so those refuse to compile it, permanently |
 | [uffi](http://uffi.b9.com/) | interpreter, JVM | `(ql:quickload "uffi")` loads `cffi-uffi-compat`, the same API and package over cffi, as cffi's own `uffi-compat/uffi.asd` does; upstream's sources are not read. Backends as for cffi |

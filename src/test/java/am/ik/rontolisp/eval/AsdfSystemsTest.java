@@ -1332,22 +1332,24 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void aPerformBodyReadEvalIsSilent() {
-		// The other ignored-option shape, from the seven *-test.asd files on the same
-		// graph: a #. inside the :perform test-op wiring, which has no operate machinery
-		// to run and is dropped whole.
+	void aPerformBodyReadEvalReadsInTheImage() {
+		// Prove's consumers: test-op's :after spelling (ASDF's own method does nothing,
+		// so it is the body that runs) and a #. the image reads. One the image cannot
+		// read drops the clause, silently: the option complains about nothing.
 		List<AsdfSystems.LispSystem> systems = loadCapturingStderr("""
 				(defsystem "lib-test"
 				  :depends-on ("lib")
 				  :components ((:file "main"))
 				  :perform (test-op :after (op c)
-				                    (funcall (intern #.(string :run-test-system) :prove-asdf) c)))""", "lib-test.asd");
+				                    (funcall (intern #.(string :run-test-system) :prove-asdf) c)))
+				(defsystem "lib-test/unread"
+				  :perform (test-op (op c) #.(error "unreadable")))""", "lib-test.asd");
 		assertThat(systems.get(0).files()).containsExactly("main.lisp");
 		assertThat(stderr).isEmpty();
-		// The qualified (:after) method shape has no machinery behind it, so nothing is
-		// recorded either -- and neither is a plain test-op body carrying a #. marker
-		// (recording it would fail the eager compile of the emitted test-op defun).
-		assertThat(systems.get(0).testOp()).isNull();
+		AsdfSystems.TestOp testOp = systems.get(0).testOp();
+		assertThat(testOp).isNotNull();
+		assertThat(testOp.body().get(0).print()).isEqualTo("(FUNCALL (INTERN \"RUN-TEST-SYSTEM\" :PROVE-ASDF) C)");
+		assertThat(systems.get(1).testOp()).isNull();
 	}
 
 	@Test

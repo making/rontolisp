@@ -638,8 +638,16 @@ what the program signals without the generic, so an uncovered read is unchanged.
   needing no registry. **`with-slots` resolves `defstruct` slots too**: `expandSlotValueRaw`
   picks the index out of the LAYOUT registry (`uniqueLayoutSlotIndex`), falling back to the
   tag dispatch when types disagree.
+- **A slot variable is a symbol macro** (2026-11-04): `with-slots`/`with-accessors` run
+  `substituteSymbolMacros`, the shadow-aware walk of `symbol-macrolet` ([symbol-macrolet.md](symbol-macrolet.md)), so
+  what binds the name stops it and an operator or a `case` key is no variable. The textual walk they
+  replaced stopped the compile paths on prove's `with-additional-indent`: a macro's inner
+  `(with-slots (indent-space) ...)` reached the outer substitution already expanded, its slot list took
+  the substitution, and the expansion refused `(slot-value ...)` as a slot name. Each path expands the
+  body's macros first (the interpreter once per call site, `expandSlotVariables`), so a macro sees the
+  name, not `(slot-value ...)`. ci-spec `with-slots-variable-is-shadowed-by-an-inner-binding`.
 - **`with-slots`' entry-time fallback binding is BOUNDNESS-GUARDED**: besides substituting each
-  slot variable textually, `expandWithSlots` `let`-binds it to
+  slot variable, `expandWithSlots` `let`-binds it to
   `(if (slot-boundp obj 'slot) (slot-value obj 'slot) nil)` (`boundOrNil`) so code GENERATED
   inside the body still resolves. **Not cosmetic**: `with-slots` BINDS, never reads, so a body
   that only ASSIGNS an initform-less slot must not signal on entry (fast-io's

@@ -21,6 +21,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.CompileWarnings;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -158,6 +159,14 @@ public final class UserMacroExpander {
 		// eval-when evaluates at compile time runs; nothing else does.
 		private int systemDepth;
 
+		// The open (%asdf-component ...) brackets, innermost last: each holds the
+		// systemDepth to restore when it closes. A component whose load-op leaves it
+		// unread
+		// (a test file) is no part of the loaded system: real ASDF never runs its forms
+		// while it loads the system, so here they keep compile-file semantics, as a
+		// user file's do, and systemDepth is 0 inside it.
+		private final java.util.Deque<Integer> openComponents = new java.util.ArrayDeque<>();
+
 		// The program's own first form, as CompileFrontend saw it before any library
 		// splice (the entry file's (%begin-file ...) marker when there is one), or null.
 		@Nullable private LispVal programHead;
@@ -219,6 +228,15 @@ public final class UserMacroExpander {
 			}
 			else if (isProvenanceMarker(rawForm, LispNames.END_SYSTEM)) {
 				this.systemDepth = Math.max(0, this.systemDepth - 1);
+			}
+			else if (SplicedComponentGroups.isComponentOpen(rawForm)) {
+				this.openComponents.addLast(this.systemDepth);
+				if (SplicedComponentGroups.isDeferredComponentMarker(rawForm)) {
+					this.systemDepth = 0;
+				}
+			}
+			else if (SplicedComponentGroups.isComponentClose(rawForm) && !this.openComponents.isEmpty()) {
+				this.systemDepth = this.openComponents.removeLast();
 			}
 			// The load context of the spliced file the following forms came from.
 			// Establishing it HERE is the point: the bracket lowers to top-level
@@ -337,6 +355,7 @@ public final class UserMacroExpander {
 			// library pruner) see the canonical async-defun/async-lambda forms, exactly
 			// as they would for code the CLI rewrote before macro expansion.
 			expanded = LispMacroExpander.rewriteAsyncSugarForm(expanded);
+			expanded = topLevelLocallyAsProgn(expanded);
 			// (fboundp 'name) over a name the macro-time evaluator has DEFINED AS A
 			// MACRO is a compile-time t: macros do not exist in the compiled program,
 			// so the runtime probe would answer nil and take the wrong branch. cffi's
@@ -1674,6 +1693,41 @@ public final class UserMacroExpander {
 			return form;
 		}
 		return kept.size() > firstMember ? properList(kept) : null;
+	}
+
+	/**
+	 * A macro's expansion with each {@code locally} in a top-level position as the
+	 * {@code progn} it is there (CLHS 3.2.3.1): its members are top-level forms, its
+	 * declarations no-ops downstream, as {@code flattenTopLevel} treats one the source
+	 * wrote. hu.dwim.def's {@code (def macro ...)} expands to
+	 * {@code (locally (declare ...) (defmacro ...))}.
+	 */
+	private static LispVal topLevelLocallyAsProgn(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
+			return form;
+		}
+		String name = memberName(head.name());
+		boolean locally = LispNames.LOCALLY.equals(name);
+		boolean evalWhen = LispNames.EVAL_WHEN.equals(name);
+		if (!locally && !evalWhen && !LispNames.PROGN.equals(name)) {
+			return form;
+		}
+		List<LispVal> parts = cons.toList();
+		int firstMember = evalWhen ? 2 : 1;
+		List<LispVal> members = new ArrayList<>(parts.subList(0, Math.min(firstMember, parts.size())));
+		boolean changed = locally;
+		if (locally) {
+			members.set(0, new LispSymbol(LispNames.PROGN));
+		}
+		for (int i = firstMember; i < parts.size(); i++) {
+			if (locally && isOperator(parts.get(i), LispNames.DECLARE)) {
+				continue;
+			}
+			LispVal member = topLevelLocallyAsProgn(parts.get(i));
+			changed = changed || member != parts.get(i);
+			members.add(member);
+		}
+		return changed ? SourceProvenance.inherit(cons, properList(members)) : form;
 	}
 
 	private static boolean isMacroDefinition(LispVal form) {

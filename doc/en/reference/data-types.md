@@ -107,7 +107,9 @@ per-backend code, and `:unicode`, the portable spelling of "characters are
 Unicode code points" (true on every backend, so a library that branches on it
 takes its UTF-8 path), and `:common-lisp`, the feature of the language
 family that portable code writes `#+common-lisp` fallbacks against
-(`:ansi-cl`, the conformance claim, is absent). The interpreter and the JVM also have
+(`:ansi-cl`, the conformance claim, is absent), and what ASDF pushes when it loads,
+since it is always loaded here (`:asdf`, `:asdf2`, `:asdf3`, `:asdf3.1`, `:asdf3.2`,
+`:asdf3.3`, `:asdf-unicode`). The interpreter and the JVM also have
 `:thread-support` (they really spawn threads — see
 [`rontolisp:make-thread`](functions/rontolisp-make-thread.md)); a WASM compile
 in reactor mode (`--no-wasi`, or `--no-gc`) additionally has

@@ -558,6 +558,12 @@ public final class LispEvaluator {
 	private java.util.Map<String, String> asdfSystemPackages = new java.util.HashMap<>();
 
 	/**
+	 * What a compile path's program has loaded, which this BUILD image has not
+	 * ({@link #classResolver}); empty on every other evaluator.
+	 */
+	private java.util.Collection<String> programSystems = List.of();
+
+	/**
 	 * The {@code .asd} loads open on this evaluator, innermost last: a {@code .asd} that
 	 * loads a system can make the loader read that system's {@code .asd} too.
 	 */
@@ -761,6 +767,13 @@ public final class LispEvaluator {
 		this.specialVars.add(LispNames.DEBUG_IO_VAR);
 		this.specialVars.add(LispNames.QUERY_IO_VAR);
 		this.specialVars.add(LispNames.TERMINAL_IO_VAR);
+		// The three stream specials too: the scan over each top-level form cannot see a
+		// binding only a macro's expansion holds (prove's is-print over
+		// with-output-to-string), and bound lexically it captures nothing. The compile
+		// paths collect after expansion.
+		this.specialVars.add(LispNames.STANDARD_OUTPUT_VAR);
+		this.specialVars.add(LispNames.STANDARD_INPUT_VAR);
+		this.specialVars.add(LispNames.ERROR_OUTPUT_VAR);
 		// *read-eval* joins them: (let ((*read-eval* nil)) (read ...)) must bind
 		// dynamically for the #. check in resolveReadTimeEval to see it.
 		this.specialVars.add(LispNames.READ_EVAL_VAR);
@@ -3146,8 +3159,11 @@ public final class LispEvaluator {
 						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 								LispNames.SYMBOL_PRINT_BARE_P_INTERNAL + " expects 3 arguments, got " + args.size());
 					}
-					return args.get(0) instanceof LispSymbol sym && this.packageResolver.printsBare(sym.name())
-							? LispTrue.INSTANCE : LispNil.INSTANCE;
+					// A string is the spelling of an instance's type name.
+					String spelling = args.get(0) instanceof LispSymbol sym ? sym.name()
+							: args.get(0) instanceof LispString text ? text.value() : null;
+					return spelling != null && this.packageResolver.printsBare(spelling) ? LispTrue.INSTANCE
+							: LispNil.INSTANCE;
 				}));
 		// The walk's two leaf primitives: the interpreter loads the prelude lazily, so
 		// they simply call the leaf (the compile paths lower them to the leaf or to the
@@ -6153,15 +6169,21 @@ public final class LispEvaluator {
 	/**
 	 * A runtime system designator that also accepts the component METAOBJECT
 	 * {@code asdf:find-system} answers (rove passes the object straight back into
-	 * {@code load-system}): an asdf component instance answers its name slot, anything
-	 * else goes through {@link AsdfSystems#designator}.
+	 * {@code load-system}), of a class loaded code defines too (prove's
+	 * {@code run-test-system}): a component instance answers its name, anything else goes
+	 * through {@link AsdfSystems#designator}.
 	 */
-	private static String asdfDesignator(String context, LispVal val) {
+	private String asdfDesignator(String context, LispVal val) {
 		if (val instanceof am.ik.rontolisp.LispInstance inst
-				&& inst.layout().kind() == am.ik.rontolisp.LispLayout.Kind.CLASS
-				&& inst.layout().printName().startsWith(LispNames.ASDF_PKG + ":") && inst.slotCount() > 0
-				&& inst.slot(0) instanceof LispString nameSlot) {
-			return nameSlot.value();
+				&& inst.layout().kind() == am.ik.rontolisp.LispLayout.Kind.CLASS) {
+			ClosRegistry.ClassInfo info = this.closRegistry.findClass(inst.layout().printName());
+			if (info != null && info.ancestors().contains(asdfClassKey("COMPONENT"))
+					&& applyGlobally(
+							this.globalEnv
+								.lookupFunction(PackageRegistry.qualify(LispNames.ASDF_PKG, "COMPONENT-NAME")),
+							List.of(val)) instanceof LispString name) {
+				return name.value();
+			}
 		}
 		return AsdfSystems.designator(context, val);
 	}
@@ -6478,7 +6500,8 @@ public final class LispEvaluator {
 			return new LispSymbol(asd.defineNested(cons).name());
 		}
 		String baseDir = this.loadDirStack.peekLast();
-		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir, this.features);
+		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir, this.features,
+				classResolver());
 		this.asdfSystems.put(system.name(), system);
 		return new LispSymbol(system.name());
 	}
@@ -6490,6 +6513,135 @@ public final class LispEvaluator {
 	 */
 	public AsdfSystems.AsdImage asdImage() {
 		return AsdLoadScope::new;
+	}
+
+	/**
+	 * This evaluator as what answers about a class a definition names: real ASDF's
+	 * {@code class-for-type} over the classes live here, once the definition's
+	 * {@code :defsystem-depends-on} has loaded. A compile path's build image has also
+	 * loaded nothing the program spliced before the definition, though the program's
+	 * image has, so a class still missing is looked for there
+	 * ({@link #setProgramSystems}).
+	 * @return the resolver
+	 */
+	public AsdfSystems.ClassResolver classResolver() {
+		return (designator, definers, ownClasses) -> {
+			ensureAsdfRuntimeLoaded();
+			for (String definer : definers) {
+				loadSystem(definer);
+			}
+			AsdfSystems.LiveClass found = liveClass(designator, ownClasses);
+			for (String spliced : List.copyOf(this.programSystems)) {
+				if (found != null) {
+					break;
+				}
+				try {
+					loadSystem(spliced);
+				}
+				catch (LispEvalException | IllegalStateException ex) {
+					// It is here only in case it defines the class, and what the
+					// definition
+					// fails on then is the class it names.
+					continue;
+				}
+				found = liveClass(designator, ownClasses);
+			}
+			return found;
+		};
+	}
+
+	/**
+	 * Names the systems a compile path's program has loaded by the time this build image
+	 * answers about a class.
+	 * @param systems the compile path's loaded systems, in order, shared
+	 */
+	public void setProgramSystems(java.util.Collection<String> systems) {
+		this.programSystems = systems;
+	}
+
+	/**
+	 * Makes a {@code .asd}'s load in this build image download what it does not find, as
+	 * the compile path's own search does while a {@code ql:quickload} splices.
+	 * @param dists the compile path's dist client
+	 * @param quickloading whether a {@code ql:quickload} is splicing
+	 */
+	public void setQuickloading(DistClient dists, boolean quickloading) {
+		this.distClient = dists;
+		this.quickloadDepth = quickloading ? 1 : 0;
+	}
+
+	/**
+	 * Asks the image about a class a definition names ({@code %asdf-class-facts}, the
+	 * image half of {@code AsdfRuntimeLibrary}); the designator is homed where the
+	 * definition reads it.
+	 */
+	private AsdfSystems.@Nullable LiveClass liveClass(LispVal designator, Set<String> ownClasses) {
+		LispVal homed = eval(clCall(LispNames.QUOTE, designator));
+		LispVal facts = applyGlobally(this.globalEnv.lookupFunction("%ASDF-CLASS-FACTS"), List.of(homed));
+		if (!(facts instanceof LispCons answer)) {
+			return null;
+		}
+		List<LispVal> items = answer.toList();
+		String name = ((LispSymbol) items.get(0)).name();
+		String programClass = programClass(name, ownClasses);
+		boolean lispSource = isTruthy(items.get(5));
+		return new AsdfSystems.LiveClass(programClass, AsdfRuntimeLibrary.isPlainClass(programClass),
+				isTruthy(items.get(1)), isTruthy(items.get(2)), isTruthy(items.get(3)), isTruthy(items.get(4)),
+				lispSource, lispSource && leavesFileUnread(name),
+				items.get(6) instanceof LispString type ? type.value() : null,
+				items.get(7) instanceof LispSymbol defaultClass ? defaultClass : null,
+				isTruthy(items.get(8)) ? items.get(9) : null);
+	}
+
+	/**
+	 * The class an instance is made of in the program: the named one, or its nearest
+	 * superclass when the {@code .asd} itself defined it, which only the image has.
+	 */
+	private String programClass(String name, Set<String> ownClasses) {
+		String current = name;
+		while (ownClasses.contains(memberName(current))) {
+			ClosRegistry.ClassInfo info = this.closRegistry.findClass(current);
+			if (info == null || info.superclasses().isEmpty()) {
+				break;
+			}
+			current = info.superclasses().get(0);
+		}
+		return current;
+	}
+
+	/**
+	 * Whether a {@code cl-source-file} class has a primary {@code perform} method of its
+	 * own for {@code load-op}, more specific than the one that loads the file. One
+	 * specialized on an ancestor of {@code load-op} does not count: the first argument
+	 * outranks the second, so ASDF's own method still comes first.
+	 */
+	private boolean leavesFileUnread(String className) {
+		ClosRegistry.ClassInfo info = this.closRegistry.findClass(className);
+		ClosRegistry.GenericInfo perform = this.closRegistry
+			.findGeneric(PackageRegistry.qualify(LispNames.ASDF_PKG, LispNames.PERFORM));
+		if (info == null || perform == null) {
+			return false;
+		}
+		List<String> cpl = info.cpl().stream().map(ClosRegistry::normalize).toList();
+		int loads = cpl.indexOf(asdfClassKey("CL-SOURCE-FILE"));
+		String loadOp = asdfClassKey(LispNames.LOAD_OP);
+		for (ClosRegistry.MethodInfo method : perform.methods().values()) {
+			if (method.isPrimary() && method.specializers().size() == 2
+					&& method.specializers().get(0).name() instanceof String first
+					&& loadOp.equals(ClosRegistry.normalize(first))
+					&& method.specializers().get(1).name() instanceof String second) {
+				int at = cpl.indexOf(ClosRegistry.normalize(second));
+				if (at >= 0 && at < loads) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/** The registry key of a class of ASDF's. */
+	private static String asdfClassKey(String member) {
+		return ClosRegistry.normalize(PackageRegistry.qualify(LispNames.ASDF_PKG, member));
 	}
 
 	/**
@@ -6700,6 +6852,12 @@ public final class LispEvaluator {
 			List<String> taken = List.copyOf(this.loaded);
 			this.loaded.clear();
 			return taken;
+		}
+
+		@Override
+		public AsdfSystems.@Nullable LiveClass resolve(LispVal designator, List<String> definers,
+				Set<String> ownClasses) {
+			return classResolver().resolve(designator, definers, ownClasses);
 		}
 
 		@Override
@@ -9455,10 +9613,10 @@ public final class LispEvaluator {
 									result = singleValue(evalSlotValue(cons, env));
 									break frame;
 								case LispNames.WITH_SLOTS:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithSlots);
+									next = expandSlotVariables(cons, env, LispMacroExpander::expandWithSlots);
 									break dispatch;
 								case LispNames.WITH_ACCESSORS:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithAccessors);
+									next = expandSlotVariables(cons, env, LispMacroExpander::expandWithAccessors);
 									break dispatch;
 								case LispNames.FUNCTION:
 									result = singleValue(evalFunction(cons, env));
@@ -13001,6 +13159,22 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * The expansion of a {@code with-slots} or {@code with-accessors} the interpreter is
+	 * about to run: a slot variable is a symbol macro, so it takes what
+	 * {@link #expandSymbolMacrolet} does.
+	 */
+	private LispVal expandSlotVariables(LispCons cons, Environment env,
+			java.util.function.Function<LispCons, LispVal> substitution) {
+		LispVal wrongCount = cons.car() instanceof LispSymbol head
+				? wrongCountCall(cons, head.name(), cons.properLength()) : null;
+		return wrongCount != null ? wrongCount : expandSymbolMacrolet(cons, env, substitution);
+	}
+
+	private LispVal expandSymbolMacrolet(LispCons cons, Environment env) {
+		return expandSymbolMacrolet(cons, env, LispMacroExpander::expandSymbolMacrolet);
+	}
+
+	/**
 	 * The expansion of a {@code symbol-macrolet} the interpreter is about to run: its
 	 * user macros expanded with the names in scope, then the substitution every backend
 	 * shares, once per call site like {@link #expandUserMacro}, whose memo drops with the
@@ -13008,7 +13182,8 @@ public final class LispEvaluator {
 	 * code was read in, as {@link #expandMacroCall} does for a call it reaches in a
 	 * function.
 	 */
-	private LispVal expandSymbolMacrolet(LispCons cons, Environment env) {
+	private LispVal expandSymbolMacrolet(LispCons cons, Environment env,
+			java.util.function.Function<LispCons, LispVal> substitution) {
 		synchronized (this.userMacroExpansions) {
 			LispVal cached = this.userMacroExpansions.get(cons);
 			if (cached != null) {
@@ -13024,7 +13199,7 @@ public final class LispEvaluator {
 		}
 		LispVal expansion;
 		try {
-			expansion = LispMacroExpander.expandSymbolMacrolet((LispCons) UserMacroExpander.expandAll(cons, this));
+			expansion = substitution.apply((LispCons) UserMacroExpander.expandAll(cons, this));
 		}
 		finally {
 			if (swapPackage) {
