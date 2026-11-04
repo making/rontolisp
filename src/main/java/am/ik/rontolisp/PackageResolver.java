@@ -190,7 +190,7 @@ public final class PackageResolver {
 	 * Returns whether the CURRENT package (as tracked across the forms resolved so far)
 	 * reads the bare name of a {@code cl} symbol as some other symbol: one it shadows,
 	 * owns ({@link #claimDefinedClExtensionName}), imports or inherits from another used
-	 * package. Used by {@code UserMacroExpander} to spell a bare canonical CL name
+	 * package, or, using no {@code cl}, does not read at all. Used by {@code UserMacroExpander} to spell a bare canonical CL name
 	 * explicitly {@code cl:}-qualified in emitted expansions, so the compilers' own
 	 * resolution pass does not re-capture it as that other symbol.
 	 * @param name the bare symbol name
@@ -204,8 +204,13 @@ public final class PackageResolver {
 		if (current.shadows(name)) {
 			return true;
 		}
-		return currentUsesCl()
-				&& !(resolveUnqualified(name) instanceof LispSymbol resolved && resolved.name().equals(name));
+		try {
+			return !(resolveUnqualified(name) instanceof LispSymbol resolved && resolved.name().equals(name));
+		}
+		catch (LispPackageException ex) {
+			// A package using no cl has no bare spelling of the name at all.
+			return true;
+		}
 	}
 
 	/**
@@ -2359,7 +2364,7 @@ public final class PackageResolver {
 	}
 
 	private LispVal resolveSymbolName(LispSymbol sym) {
-		if (sym.isKeyword()) {
+		if (sym.isKeyword() || ReaderSymbols.contains(sym)) {
 			return sym;
 		}
 		// An uninterned symbol (#:foo, or a gensym-produced #:g1) belongs to no

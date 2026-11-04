@@ -29,6 +29,7 @@ import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.ReaderSymbols;
 import am.ik.rontolisp.LocatedCons;
 import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.SourceProvenance;
@@ -1281,12 +1282,12 @@ public final class LispReader {
 
 	private LispVal readQuote() {
 		LispVal quoted = readExpr();
-		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(quoted, LispNil.INSTANCE));
+		return new LispCons(ReaderSymbols.QUOTE, new LispCons(quoted, LispNil.INSTANCE));
 	}
 
 	private LispVal readFunctionQuote() {
 		LispVal quoted = readExpr();
-		return new LispCons(new LispSymbol(LispNames.FUNCTION), new LispCons(quoted, LispNil.INSTANCE));
+		return new LispCons(ReaderSymbols.FUNCTION, new LispCons(quoted, LispNil.INSTANCE));
 	}
 
 	/**
@@ -1347,8 +1348,8 @@ public final class LispReader {
 		collectBangVars(datum, mentioned);
 		LispVal params = sharpLParams(sharpLArity(declared, mentioned));
 		LispVal body = isListOfForms(datum) ? datum : new LispCons(datum, LispNil.INSTANCE);
-		LispVal lambda = new LispCons(new LispSymbol(LispNames.LAMBDA), new LispCons(params, body));
-		return list2(new LispSymbol(LispNames.FUNCTION), lambda);
+		LispVal lambda = new LispCons(ReaderSymbols.LAMBDA, new LispCons(params, body));
+		return list2(ReaderSymbols.FUNCTION, lambda);
 	}
 
 	/**
@@ -1374,14 +1375,13 @@ public final class LispReader {
 		}
 		java.util.TreeSet<Integer> mentioned = new java.util.TreeSet<>();
 		collectBangVars(raw, mentioned);
-		LispVal params = list2(new LispSymbol(LispNames.QUOTE), sharpLParams(sharpLArity(declared, mentioned)));
-		LispVal lambdaHead = list2(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.LAMBDA));
+		LispVal params = list2(ReaderSymbols.QUOTE, sharpLParams(sharpLArity(declared, mentioned)));
+		LispVal lambdaHead = list2(ReaderSymbols.QUOTE, ReaderSymbols.LAMBDA);
 		// A body that is a LIST of forms splices into the lambda (list*), a single form
 		// becomes its one body form (list).
-		LispVal lambda = new LispCons(new LispSymbol(isListOfForms(raw) ? LispNames.LIST_STAR : LispNames.LIST),
+		LispVal lambda = new LispCons((isListOfForms(raw) ? ReaderSymbols.LIST_STAR : ReaderSymbols.LIST),
 				listOf3(lambdaHead, params, body.form()));
-		return listOf3(new LispSymbol(LispNames.LIST),
-				list2(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.FUNCTION)), lambda);
+		return listOf3(ReaderSymbols.LIST, list2(ReaderSymbols.QUOTE, ReaderSymbols.FUNCTION), lambda);
 	}
 
 	/**
@@ -1558,18 +1558,18 @@ public final class LispReader {
 			}
 			case Token.Quote ignored -> {
 				this.pos++;
-				yield new TemplateElement(readWrappedTemplate(LispNames.QUOTE), false);
+				yield new TemplateElement(readWrappedTemplate(ReaderSymbols.QUOTE), false);
 			}
 			case Token.FunctionQuote ignored -> {
 				this.pos++;
-				yield new TemplateElement(readWrappedTemplate(LispNames.FUNCTION), false);
+				yield new TemplateElement(readWrappedTemplate(ReaderSymbols.FUNCTION), false);
 			}
 			// A reader macro's datum is template DATA whatever it is -- a list it
 			// answered is a constant of the template, not code that builds one.
 			case Token.Datum datum -> {
 				this.pos++;
 				yield new TemplateElement(datum.value() instanceof LispSymbol || datum.value() instanceof LispCons
-						? new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum.value(), LispNil.INSTANCE))
+						? new LispCons(ReaderSymbols.QUOTE, new LispCons(datum.value(), LispNil.INSTANCE))
 						: datum.value(), false);
 			}
 			// Any other token is constant template data: read it normally and quote
@@ -1594,8 +1594,7 @@ public final class LispReader {
 		LispVal segment = LispNil.INSTANCE;
 		if (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
 			TemplateElement guarded = readTemplateElement();
-			segment = guarded.splicing() ? guarded.form()
-					: properList(new LispSymbol(LispNames.LIST), List.of(guarded.form()));
+			segment = guarded.splicing() ? guarded.form() : properList(ReaderSymbols.LIST, List.of(guarded.form()));
 		}
 		if (this.pos >= this.tokens.size()) {
 			throw eofAtToken(open, "Unexpected end of input, expected ')'");
@@ -1617,19 +1616,17 @@ public final class LispReader {
 		return node instanceof LispSymbol sym && name.equals(sym.name());
 	}
 
-	private LispVal readWrappedTemplate(String operator) {
+	private LispVal readWrappedTemplate(LispSymbol operator) {
 		TemplateElement inner = readTemplateElement();
-		LispVal quoteSym = new LispCons(new LispSymbol(LispNames.QUOTE),
-				new LispCons(new LispSymbol(operator), LispNil.INSTANCE));
+		LispVal quoteSym = new LispCons(ReaderSymbols.QUOTE, new LispCons(operator, LispNil.INSTANCE));
 		if (inner.splicing()) {
 			// ',@xs is the template (quote ,@xs), i.e. construction code
 			// (cons 'quote xs): with the customary single-element splice the result
 			// reads back as 'x (trivia level0's `(equal ,*what* ',@args)).
-			return new LispCons(new LispSymbol(LispNames.CONS),
+			return new LispCons(ReaderSymbols.CONS,
 					new LispCons(quoteSym, new LispCons(inner.form(), LispNil.INSTANCE)));
 		}
-		return new LispCons(new LispSymbol(LispNames.LIST),
-				new LispCons(quoteSym, new LispCons(inner.form(), LispNil.INSTANCE)));
+		return new LispCons(ReaderSymbols.LIST, new LispCons(quoteSym, new LispCons(inner.form(), LispNil.INSTANCE)));
 	}
 
 	private LispVal readTemplateList() {
@@ -1667,7 +1664,7 @@ public final class LispReader {
 			// (cons f1 (cons f2 ... tail))
 			LispVal result = tail.form();
 			for (int i = elements.size() - 1; i >= 0; i--) {
-				result = properList(new LispSymbol(LispNames.CONS), List.of(elements.get(i).form(), result));
+				result = properList(ReaderSymbols.CONS, List.of(elements.get(i).form(), result));
 			}
 			return result;
 		}
@@ -1676,7 +1673,7 @@ public final class LispReader {
 		}
 		if (!anySplicing) {
 			// (list f1 ... fn)
-			return properList(new LispSymbol(LispNames.LIST), elements.stream().map(TemplateElement::form).toList());
+			return properList(ReaderSymbols.LIST, elements.stream().map(TemplateElement::form).toList());
 		}
 		// (append seg1 ... segk [tail]): each splicing element is its own segment, runs
 		// of non-splicing elements collapse into (list f...) segments, and a dotted
@@ -1688,7 +1685,7 @@ public final class LispReader {
 		for (TemplateElement element : elements) {
 			if (element.splicing()) {
 				if (!run.isEmpty()) {
-					segments.add(properList(new LispSymbol(LispNames.LIST), run));
+					segments.add(properList(ReaderSymbols.LIST, run));
 					run = new ArrayList<>();
 				}
 				segments.add(element.form());
@@ -1698,12 +1695,12 @@ public final class LispReader {
 			}
 		}
 		if (!run.isEmpty()) {
-			segments.add(properList(new LispSymbol(LispNames.LIST), run));
+			segments.add(properList(ReaderSymbols.LIST, run));
 		}
 		if (tail != null) {
 			segments.add(tail.form());
 		}
-		return properList(new LispSymbol(LispNames.APPEND), segments);
+		return properList(ReaderSymbols.APPEND, segments);
 	}
 
 	private static LispVal properList(LispVal head, List<LispVal> elements) {
@@ -1716,7 +1713,7 @@ public final class LispReader {
 
 	private static LispVal quoteIfSymbol(LispVal value) {
 		if (value instanceof LispSymbol) {
-			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
+			return new LispCons(ReaderSymbols.QUOTE, new LispCons(value, LispNil.INSTANCE));
 		}
 		return value;
 	}
@@ -1787,11 +1784,11 @@ public final class LispReader {
 			}
 			case Token.Quote ignored -> {
 				this.pos++;
-				return list2(new LispSymbol(LispNames.QUOTE), readRawTemplate());
+				return list2(ReaderSymbols.QUOTE, readRawTemplate());
 			}
 			case Token.FunctionQuote ignored -> {
 				this.pos++;
-				return list2(new LispSymbol(LispNames.FUNCTION), readRawTemplate());
+				return list2(ReaderSymbols.FUNCTION, readRawTemplate());
 			}
 			// A reader macro function's datum is constant template data, unless its
 			// recursive read met a comma of this template (readOuterComma).
@@ -2059,19 +2056,19 @@ public final class LispReader {
 	// (list/append/nconc/list*/quote), turning a 2-argument list* into cons.
 	private LispVal bqRemoveTokens(LispVal x) {
 		if (x == BQ_LIST) {
-			return new LispSymbol(LispNames.LIST);
+			return ReaderSymbols.LIST;
 		}
 		if (x == BQ_APPEND) {
-			return new LispSymbol(LispNames.APPEND);
+			return ReaderSymbols.APPEND;
 		}
 		if (x == BQ_NCONC) {
-			return new LispSymbol(LispNames.NCONC);
+			return ReaderSymbols.NCONC;
 		}
 		if (x == BQ_LIST_STAR) {
-			return new LispSymbol(LispNames.LIST_STAR);
+			return ReaderSymbols.LIST_STAR;
 		}
 		if (x == BQ_QUOTE) {
-			return new LispSymbol(LispNames.QUOTE);
+			return ReaderSymbols.QUOTE;
 		}
 		if (!(x instanceof LispCons)) {
 			return x;
@@ -2081,7 +2078,7 @@ public final class LispReader {
 		}
 		if (car(x) == BQ_LIST_STAR && cddr(x) instanceof LispCons && cdr(cddr(x)) instanceof LispNil) {
 			// (list* a b) -> (cons a b)
-			return cons(new LispSymbol(LispNames.CONS), bqMaptreeRemove(cdr(x)));
+			return cons(ReaderSymbols.CONS, bqMaptreeRemove(cdr(x)));
 		}
 		return bqMaptreeRemove(x);
 	}
