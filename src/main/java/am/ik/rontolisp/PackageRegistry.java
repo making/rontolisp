@@ -393,11 +393,18 @@ public final class PackageRegistry {
 			LispNames.REGISTER_COMPILED_TEMPLATE, LispNames.TEMPLATE_HOLE, LispNames.TEMPLATE_GENSYM);
 
 	/**
+	 * The standard lambda-list keywords: {@code cl}'s symbols, read as such in every
+	 * package that does not shadow them. Any other {@code &name} is an ordinary symbol of
+	 * the package it is read in.
+	 */
+	private static final Set<String> CL_LAMBDA_LIST_KEYWORDS = Set.copyOf(ClConstants.LAMBDA_LIST_KEYWORD_NAMES);
+
+	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of
 	 * the categorized sets above.
 	 */
 	private static final Set<String> CL_SYMBOLS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
-			CL_INTERNALS, CL_TYPES, CL_CONDITION_TYPES);
+			CL_INTERNALS, CL_TYPES, CL_CONDITION_TYPES, CL_LAMBDA_LIST_KEYWORDS);
 
 	/**
 	 * The standard names the {@code cl} package EXPORTS without implementing: CLHS
@@ -417,10 +424,9 @@ public final class PackageRegistry {
 	 * category above. {@code PackageRegistryTest} pins the whole external set against the
 	 * standard's own list, so neither direction can drift.
 	 */
-	private static final Set<String> CL_EXPORTED_ONLY = Set.of("&ALLOW-OTHER-KEYS", "&AUX", "&BODY", "&ENVIRONMENT",
-			"&KEY", "&OPTIONAL", "&REST", "&WHOLE", "*BREAK-ON-SIGNALS*", "*DEBUGGER-HOOK*", "*MACROEXPAND-HOOK*",
-			"*READ-BASE*", "ARITHMETIC-ERROR-OPERANDS", "ARITHMETIC-ERROR-OPERATION", "BREAK", "CALL-METHOD",
-			"CALL-NEXT-METHOD", "COMPILATION-SPEED", "COMPILED-FUNCTION", "COMPILER-MACRO",
+	private static final Set<String> CL_EXPORTED_ONLY = Set.of("*BREAK-ON-SIGNALS*", "*DEBUGGER-HOOK*",
+			"*MACROEXPAND-HOOK*", "*READ-BASE*", "ARITHMETIC-ERROR-OPERANDS", "ARITHMETIC-ERROR-OPERATION", "BREAK",
+			"CALL-METHOD", "CALL-NEXT-METHOD", "COMPILATION-SPEED", "COMPILED-FUNCTION", "COMPILER-MACRO",
 			"COMPUTE-APPLICABLE-METHODS", "DEBUG", "DECLARATION", "DEFINE-METHOD-COMBINATION", "DESCRIBE",
 			"DESCRIBE-OBJECT", "DISASSEMBLE", "DRIBBLE", "DYNAMIC-EXTENT", "ED", "EXTENDED-CHAR", "FILE-AUTHOR",
 			"FLOAT-PRECISION", "FLOATING-POINT-INEXACT", "FLOATING-POINT-INVALID-OPERATION", "FLOATING-POINT-OVERFLOW",
@@ -465,7 +471,7 @@ public final class PackageRegistry {
 	 * exports without implementing.
 	 */
 	private static final Set<String> CL_EXTERNALS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
-			CL_TYPES, CL_CONDITION_TYPES, CL_EXPORTED_ONLY, CL_COMPOSITIONS);
+			CL_TYPES, CL_CONDITION_TYPES, CL_LAMBDA_LIST_KEYWORDS, CL_EXPORTED_ONLY, CL_COMPOSITIONS);
 
 	/**
 	 * The functions exported by the {@code linalg} package (numpy-style vector/matrix
@@ -2038,6 +2044,15 @@ public final class PackageRegistry {
 	 */
 	public static boolean isClInternal(String name) {
 		return CL_INTERNALS.contains(name);
+	}
+
+	/**
+	 * Returns whether the name is a standard lambda-list keyword.
+	 * @param name the symbol name
+	 * @return true for one of the names in {@code lambda-list-keywords}
+	 */
+	public static boolean isClLambdaListKeyword(String name) {
+		return CL_LAMBDA_LIST_KEYWORDS.contains(name);
 	}
 
 	/**

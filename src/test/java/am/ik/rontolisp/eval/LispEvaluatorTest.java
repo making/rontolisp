@@ -27129,12 +27129,12 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage() {
+	void evalMacroCallInAFunctionBodyExpandsInThePackageTheBodyWasReadIn() {
 		// fast-http's callback-data shape: a macro that COMPUTES a symbol name, used
 		// inside a function body of its OWN file and called from another package. The
-		// interpreter expands it lazily, at call time, so without the definition-package
-		// swap the (intern "SECRET") landed in the caller's package. A TOP-LEVEL macro
-		// call keeps the current package (trivia's lispn:define-namespace needs that).
+		// interpreter expands it lazily, at call time, so without the package swap the
+		// (intern "SECRET") landed in the caller's package. A TOP-LEVEL macro call keeps
+		// the current package (trivia's lispn:define-namespace needs that).
 		// A name READ at expansion time (cl-pdf's AFM parser) is homed as it is read,
 		// so it lands in the same package: the runtime reader interns like intern does,
 		// read and read-from-string with a standard or a custom readtable alike.
@@ -27156,6 +27156,36 @@ class LispEvaluatorTest {
 				(in-package :cl-user)
 				(mp-lib:call-it 21)
 				""").print()).isEqualTo("(42 42 42 42 42 NIL (A B MP-LIB::C :D #:E))");
+		// let-plus's &structure shape: the macro comes from ANOTHER package than the
+		// function body calling it, and the name lands in the package of that body, at
+		// any depth of the body (a closure, a place, a symbol-macrolet) and through a
+		// macro its expansion names. A macro call written in a macro's own body is that
+		// macro package's text.
+		assertThat(evalMulti("""
+				(defpackage :mq-lib (:use :cl)
+				  (:export :named :named-via :place :in-own-body :direct))
+				(in-package :mq-lib)
+				(defmacro named (x) (list (intern "HELPER") x))
+				(defmacro named-via (x) (list 'named x))
+				(defmacro place (x) (list (intern "SLOT") x))
+				(defun helper (x) (list :lib x))
+				(defmacro inner-name () (list 'quote (intern "HELPER")))
+				(defmacro in-own-body () (list 'quote (inner-name)))
+				(defpackage :mq-app (:use :cl :mq-lib))
+				(in-package :mq-app)
+				(defun helper (x) (list :app x))
+				(defun slot (x) (car x))
+				(defun (setf slot) (v x) (setf (car x) v))
+				(defun direct-call (x) (named x))
+				(defun via-call (x) (named-via x))
+				(defun closure-call (x) (funcall (lambda () (flet ((f () (named x))) (f)))))
+				(defun place-call (x) (let ((cell (list 0))) (setf (place cell) x) cell))
+				(defun symbol-macro-call (x) (symbol-macrolet ((v x)) (named v)))
+				(defun own-body-call () (in-own-body))
+				(in-package :cl-user)
+				(list (mq-app::direct-call 1) (mq-app::via-call 2) (mq-app::closure-call 3) (mq-app::place-call 4)
+				      (mq-app::symbol-macro-call 5) (symbol-package (mq-app::own-body-call)))
+				""").print()).isEqualTo("((:APP 1) (:APP 2) (:APP 3) (4) (:APP 5) :MQ-LIB)");
 	}
 
 	@Test

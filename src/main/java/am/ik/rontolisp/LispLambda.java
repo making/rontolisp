@@ -23,9 +23,12 @@ import org.jspecify.annotations.Nullable;
  * named file -- the program's own code, which the uncaught-condition report names for the
  * forms written in it, its lambdas' included. A function a library defines is not, so it
  * is never the one named, as on every compiled backend
+ * @param readPackage the package this lambda's code was read in, when it was created
+ * outside every function and macro body. {@code null} for one created inside such a body,
+ * whose closure already says
  */
 public record LispLambda(List<LispSymbol> params, @Nullable LispSymbol rest, List<LispVal> body, Scope closure,
-		@Nullable String name, boolean sourced) implements LispVal {
+		@Nullable String name, boolean sourced, @Nullable String readPackage) implements LispVal {
 	/**
 	 * Creates an anonymous fixed-arity lambda (no {@code &rest} parameter, no name).
 	 * @param params the required parameter symbols
@@ -33,7 +36,7 @@ public record LispLambda(List<LispSymbol> params, @Nullable LispSymbol rest, Lis
 	 * @param closure the captured lexical scope
 	 */
 	public LispLambda(List<LispSymbol> params, List<LispVal> body, Scope closure) {
-		this(params, null, body, closure, null, false);
+		this(params, null, body, closure, null, false, null);
 	}
 
 	/**
@@ -44,7 +47,7 @@ public record LispLambda(List<LispSymbol> params, @Nullable LispSymbol rest, Lis
 	 * @param closure the captured lexical scope
 	 */
 	public LispLambda(List<LispSymbol> params, @Nullable LispSymbol rest, List<LispVal> body, Scope closure) {
-		this(params, rest, body, closure, null, false);
+		this(params, rest, body, closure, null, false, null);
 	}
 
 	@Override

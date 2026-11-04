@@ -4025,6 +4025,48 @@ cases:
       (print (ci-etr::use-it))
     expected: |
       ((:X 1) (:X 2) (:X 3) (:X 4))
+  - name: an-ampersand-name-is-an-ordinary-symbol-of-the-current-package
+    # Only the names in lambda-list-keywords are cl's; let-plus's &pt, built by symbolicate
+    # and read by its caller, is one symbol of the package reading it. The accessor name
+    # its expansion interns lands in the package of the function calling the macro.
+    source: |
+      (defpackage :ci-amp (:use :cl) (:shadow #:&aux) (:export #:&exported #:expand-for #:define-for))
+      (in-package :ci-amp)
+      (print (package-name (symbol-package '&a)))
+      (print (eq '&a (intern "&A")))
+      (print (package-name (symbol-package '&aux)))
+      (print (every (lambda (k)
+                      (and (eq (symbol-package k) (find-package :cl)) (member k lambda-list-keywords)
+                           (eq k (intern (symbol-name k)))))
+                    '(&optional &rest &key &allow-other-keys &body &whole &environment)))
+      (defun ordinary-parameter (&a &optional (&b 2) &rest &c) (list &a &b &c))
+      (print (ordinary-parameter 1))
+      (defgeneric expand-for (first))
+      (defmacro define-for (name)
+        `(defmethod expand-for ((first (eql ',(intern (concatenate 'string "&" (symbol-name name))))))
+           ',(intern (concatenate 'string (symbol-name name) "-SLOT"))))
+      (defmacro call-slot (object)
+        (list (intern "PT-SLOT") object))
+      (defpackage :ci-amp-user (:use :cl :ci-amp) (:import-from :ci-amp #:call-slot))
+      (in-package :ci-amp-user)
+      (print (list (eq '&exported 'ci-amp:&exported) (eq '&a 'ci-amp::&a)))
+      (define-for pt)
+      (print (package-name (symbol-package (expand-for '&pt))))
+      (defun pt-slot (x) (list :slot x))
+      (defun call-it (x) (call-slot x))
+      (in-package :cl-user)
+      (print (ci-amp-user::call-it 1))
+      (print (list (eq 'ci-amp::&rest '&rest) '(ci-amp::&a ci-amp:&exported)))
+    expected: |
+      "CI-AMP"
+      T
+      "CI-AMP"
+      T
+      (1 2 NIL)
+      (T NIL)
+      "CI-AMP-USER"
+      (:SLOT 1)
+      (T (CI-AMP::&A CI-AMP:&EXPORTED))
   - name: lisp-2-function-namespace-via-function
     source: |
       (cl:in-package cl-user)

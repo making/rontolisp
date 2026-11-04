@@ -71,7 +71,7 @@ PROGRAM's, so a ceiling inherited from the platform is a different product on ea
   left `*level*` bound to 1 at the next prompt in one run of three (2026-09-17) -- the
   outermost value, because every pop above the lost one removed its neighbour's binding.
   The leak depends on where the overflow lands, so no test can force it. The state is what binding forms push and pop -- special
-  binding depths, `handler-case` frames, `functionBodyDepth`, the load package stack and
+  binding depths, `handler-case` frames, the load package stack and
   current package, the load directory and system stacks, the mute flag. Nothing a program
   ASSIGNED is rolled back, as after any error.
 - Non-daemon threads a program started (the embedded HTTP server) still hold the JVM open

@@ -319,10 +319,10 @@ recorded body. A designator op (`'asdf:load-op`) dispatches through a `symbol` m
 - **Interpreter**: `loadSystem` evaluates those driver calls; load-op's method reaches the Java
   built-in `%asdf-load-component` -> `loadComponent` (leaf shim or `loadFile` with the system's
   features and base dir; self-contained, so a program performing load-op on a component reloads
-  it). **`loadFile` zeroes `functionBodyDepth` for the file's forms** -- they are top-level forms
-  wherever `load` is called from, and every component is now loaded from inside `perform`'s
-  method; without it a top-level macro call expanded in the MACRO's package
-  (`.kb/packages.md`), and lisp-namespace's `define-namespace` interned trivia's
+  it). **A loaded file's forms are top-level forms** wherever `load` is called from, and every
+  component is loaded from inside `perform`'s method: they run in the global scope, which has no
+  `lexicalPackage` (`.kb/packages.md`), so a macro they call expands in the file's package;
+  otherwise lisp-namespace's `define-namespace` interned trivia's
   `symbol-optimizer` in `lisp-namespace` (`TriviaE2eTest` caught it).
 - **Compile paths -- the component as a thunk.** `LoadInliner.spliceSystem` brackets every
   spliced component (file or leaf shim) with `(%asdf-component "SYSTEM" I)` /
@@ -371,7 +371,7 @@ recorded body. A designator op (`'asdf:load-op`) dispatches through a `symbol` m
 - Pinned by `AsdfMetaobjectsE2eTest` (all four: `hooks.lisp` defines asdf-flv's `:around` plus
   `:before`/`:after` loggers; `a`/`b`/`c` -- `c` loaded from inside `b` -- pin the order, the
   file-local binding and nesting), `LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions`
-  (the `functionBodyDepth` reset), `UserMacroExpanderTest#macroExpandingToDefmacroIsConsumedToo`
+  (a macro call in a loaded file), `UserMacroExpanderTest#macroExpandingToDefmacroIsConsumedToo`
   (fiveam's `(flet () (defmacro ...) 'name)`, `.kb/defmacro-backquote.md`).
 
 ## The substitution ladder (five tiers, widest first)
