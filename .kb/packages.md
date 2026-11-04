@@ -79,7 +79,7 @@ function named `quote` is the cost. The directives are alike, consumed by member
 
 Consumers measured 2026-11-04: `vom` loads and logs on all four backends. `sento`: `.kb/asdf.md`,
 "Libraries that load". `(ql:quickload :clim)`
-stops at `closer-mop:standard-instance-access` (`.todo/i27`).
+stops in its presentation types (`.todo/i44`).
 
 ## A package defining a name of `cl`'s implementation
 `PackageRegistry.CL_INTERNALS` are the names lowerings emit, read as `cl`'s in every package because
