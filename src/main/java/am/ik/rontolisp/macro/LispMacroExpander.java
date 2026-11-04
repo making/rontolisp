@@ -20307,16 +20307,28 @@ public final class LispMacroExpander {
 	 */
 	public static List<LispVal> expandDefclass(LispCons cons, ClosRegistry closRegistry,
 			java.util.Map<String, Integer> structAccessors) {
+		return expandDefclass(cons, closRegistry, structAccessors, false);
+	}
+
+	/**
+	 * As {@link #expandDefclass(LispCons, ClosRegistry, java.util.Map)}, with
+	 * {@code named} for the class of a name only a superclass list has written so far.
+	 */
+	private static List<LispVal> expandDefclass(LispCons cons, ClosRegistry closRegistry,
+			java.util.Map<String, Integer> structAccessors, boolean named) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol nameSym)) {
 			throw new IllegalArgumentException(
 					LispNames.DEFCLASS + " expects a class name and a superclass list: " + cons.print());
 		}
 		String className = nameSym.name();
-		// Superclass list: every named superclass must already be registered. The
-		// FIRST superclass provides the layout prefix; the others contribute their
-		// remaining slots after it (see the merge below).
+		// Superclass list. The FIRST superclass provides the layout prefix; the others
+		// contribute their remaining slots after it (see the merge below). A superclass
+		// that is not registered yet is a forward reference (ANSI allows it): the name
+		// becomes a class of its own that waits for its definition, and so does this one.
 		List<ClosRegistry.ClassInfo> superInfos = new java.util.ArrayList<>();
+		List<LispVal> namedSuperclassForms = new java.util.ArrayList<>();
+		List<String> waitingFor = new java.util.ArrayList<>();
 		if (parts.get(2) instanceof LispCons superCons) {
 			boolean standardObjectWritten = false;
 			for (LispVal superVal : superCons.toList()) {
@@ -20344,20 +20356,47 @@ public final class LispMacroExpander {
 				}
 				// A funcallable MOP class registers when a program first names one.
 				closRegistry.ensureMopClassesSeededFor(superSym.name());
+				if (ClosRegistry.normalize(superSym.name()).equals(ClosRegistry.normalize(className))) {
+					throw new IllegalArgumentException(
+							LispNames.DEFCLASS + ": the class " + className + " is specified as its own superclass");
+				}
 				ClosRegistry.ClassInfo found = closRegistry.findClass(superSym.name());
 				if (found == null) {
-					throw new IllegalArgumentException(LispNames.DEFCLASS + ": unknown superclass " + superSym.name()
-							+ " (a superclass must be defined by defclass first)");
+					if (closRegistry.findStructTag(superSym.name()) != null
+							|| isSupportedTypeSpecializer(plainTypeName(superSym))) {
+						throw new IllegalArgumentException(
+								LispNames.DEFCLASS + ": the type " + superSym.name() + " cannot be a superclass");
+					}
+					closRegistry.deferClass(superSym.name(), null, List.of());
+					namedSuperclassForms.addAll(expandDefclass(
+							listToCons(List.of(parts.get(0), superSym, LispNil.INSTANCE, LispNil.INSTANCE)),
+							closRegistry, structAccessors, true));
+					found = java.util.Objects.requireNonNull(closRegistry.findClass(superSym.name()));
 				}
 				if (superInfos.contains(found)) {
 					throw new IllegalArgumentException(
 							LispNames.DEFCLASS + ": duplicate superclass " + superSym.name() + ": " + cons.print());
+				}
+				if (found.ancestors().contains(ClosRegistry.normalize(className))) {
+					throw new IllegalArgumentException(LispNames.DEFCLASS + ": the class " + className
+							+ " is specified as a superclass of itself through " + superSym.name());
+				}
+				if (closRegistry.isUnfinalized(found.name())) {
+					waitingFor.add(found.name());
 				}
 				superInfos.add(found);
 			}
 		}
 		else if (!(parts.get(2) instanceof LispNil)) {
 			throw new IllegalArgumentException(LispNames.DEFCLASS + " expects a superclass list: " + cons.print());
+		}
+		boolean waiting = named || !waitingFor.isEmpty();
+		ClosRegistry.ForwardClass finalized = null;
+		if (!waiting) {
+			finalized = closRegistry.finalizeClass(className);
+		}
+		else if (!named) {
+			closRegistry.deferClass(className, cons, waitingFor);
 		}
 		// What the class inherits from ANONYMOUS superclasses its metaclass protocol
 		// gave it (contextl's partial classes), spelled by
@@ -20560,8 +20599,10 @@ public final class LispMacroExpander {
 		closRegistry.registerClass(
 				new ClosRegistry.ClassInfo(className, superInfos.stream().map(ClosRegistry.ClassInfo::name).toList(),
 						cpl, directSlots, List.copyOf(slots), java.util.Set.copyOf(ancestors)));
-		for (int i = 0; i < slots.size(); i++) {
-			closRegistry.registerSlotPosition(slots.get(i).baseName(), i + 1);
+		if (!waiting) {
+			for (int i = 0; i < slots.size(); i++) {
+				closRegistry.registerSlotPosition(slots.get(i).baseName(), i + 1);
+			}
 		}
 		// (defun %make-<base> (&key ((:initarg slot) initform)...) (%obj-new
 		// '%class-<name>
@@ -20744,7 +20785,75 @@ public final class LispMacroExpander {
 			// own definitions already in place.
 			forms.add(ensureClassWithMetaclassCall(className, metaclassName, driverSupers, ownSlots, classInitargs));
 		}
-		return forms;
+		if (waiting) {
+			return waitingClassForms(className, namedSuperclassForms, forms);
+		}
+		return finalized == null ? forms : finalizedClassForms(cons, className, finalized, forms, closRegistry);
+	}
+
+	/**
+	 * What a class waiting for a superclass defines where its {@code defclass} stands:
+	 * the class-allocated cells CLHS evaluates once, and a constructor whose allocation
+	 * refuses ({@link #tracked}). Its accessors bake a layout that is not known yet, and
+	 * its metaclass protocol needs the superclasses, so both wait with the class.
+	 */
+	private static List<LispVal> waitingClassForms(String className, List<LispVal> namedSuperclassForms,
+			List<LispVal> forms) {
+		List<LispVal> out = new java.util.ArrayList<>(namedSuperclassForms);
+		out.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(unfinalizedClassFlag(className)),
+				LispTrue.INSTANCE)));
+		for (LispVal form : forms) {
+			if (isNamedForm(form, LispNames.DEFVAR) || isNamedForm(form, LispNames.DEFUN)) {
+				out.add(form);
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * The definition of a class that has stopped waiting: allocating is allowed from here
+	 * on. When this is the {@code defclass} that waited, its cells already exist, and a
+	 * primary method defined since stays ahead of the generated reader with its key: in
+	 * program order the reader came first.
+	 */
+	private static List<LispVal> finalizedClassForms(LispCons cons, String className,
+			ClosRegistry.ForwardClass finalized, List<LispVal> forms, ClosRegistry closRegistry) {
+		List<LispVal> out = new java.util.ArrayList<>();
+		out.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(unfinalizedClassFlag(className)),
+				LispNil.INSTANCE)));
+		boolean sameDefinition = finalized.form() == cons;
+		for (LispVal form : forms) {
+			boolean alreadyDone = sameDefinition && (isNamedForm(form, LispNames.DEFVAR)
+					|| (isNamedForm(form, LispNames.DEFMETHOD) && form instanceof LispCons method
+							&& replacedByALaterMethod(method, finalized, closRegistry)));
+			if (!alreadyDone) {
+				out.add(form);
+			}
+		}
+		return out;
+	}
+
+	/** Whether a method on the waiting class has the generated method's key. */
+	private static boolean replacedByALaterMethod(LispCons method, ClosRegistry.ForwardClass finalized,
+			ClosRegistry closRegistry) {
+		List<LispVal> parts = method.toList();
+		List<ClosRegistry.Specializer> specializers = new java.util.ArrayList<>();
+		for (LispVal param : ((LispCons) parts.get(2)).toList()) {
+			specializers.add(param instanceof LispCons specialized
+					? parseSpecializer(specialized.toList().get(1), method, closRegistry)
+					: ClosRegistry.Specializer.DEFAULT);
+		}
+		return finalized.primaryMethods()
+			.contains(ClosRegistry.normalize(((LispSymbol) parts.get(1)).name()) + " " + specKeyText(specializers));
+	}
+
+	/**
+	 * The global saying that a class waits for a superclass. A class never forward
+	 * referenced has none; on the compile paths, where a class has its last definition's
+	 * layout from the start, it is what keeps the allocation refused in program order.
+	 */
+	private static String unfinalizedClassFlag(String className) {
+		return "%CLASS-UNFINALIZED-" + className.replace(":", "-") + "%";
 	}
 
 	/**
@@ -23661,7 +23770,14 @@ public final class LispMacroExpander {
 	 * class's instances are tracked ({@link ClosRegistry#tracksInstancesOf}).
 	 */
 	private static LispVal tracked(String className, LispVal allocation, ClosRegistry closRegistry) {
-		return closRegistry.tracksInstancesOf(className) ? mvCall(TRACK_INSTANCE, allocation) : allocation;
+		LispVal recorded = closRegistry.tracksInstancesOf(className) ? mvCall(TRACK_INSTANCE, allocation) : allocation;
+		if (!closRegistry.isForwardReferenced(className)) {
+			return recorded;
+		}
+		// A class that waited for a superclass has no instances while it waits.
+		return makeIf(new LispSymbol(unfinalizedClassFlag(className)), listToCons(
+				List.of(new LispSymbol(LispNames.ERROR), textDatum(ClosRegistry.unfinalizedClassMessage(className)))),
+				recorded);
 	}
 
 	/** The instance tracking's recording call (instanceTrackingDefuns). */
@@ -26441,6 +26557,14 @@ public final class LispMacroExpander {
 		// primary dog method coexist while redefining the same qualifier+specializers
 		// replaces (CL semantics).
 		String key = qualifier.isEmpty() ? specKey : qualifier + " " + specKey;
+		if (qualifier.isEmpty()) {
+			for (ClosRegistry.Specializer specializer : specializers) {
+				if (specializer.kind() == ClosRegistry.SpecializerKind.CLASS) {
+					closRegistry.noteMethodOnWaitingClass(java.util.Objects.requireNonNull(specializer.name()),
+							generic.name(), specKey);
+				}
+			}
+		}
 		List<LispVal> body = methodBody;
 		generic.methods()
 			.put(key, new ClosRegistry.MethodInfo(List.copyOf(specializers), functionName, qualifier, usesNext));
@@ -29546,16 +29670,8 @@ public final class LispMacroExpander {
 				// The expansion mixes plain defuns (constructor) with synthesized
 				// reader/writer defmethods; the methods go through the same
 				// expansion + dispatcher placement as a top-level defmethod.
-				for (LispVal generated : expandDefclass((LispCons) form, closRegistry, structAccessors)) {
-					String defunName = topLevelDefunName(generated);
-					if (defunName != null) {
-						Integer earlier = classDefunSlots.put(defunName, out.size());
-						if (earlier != null) {
-							out.set(earlier, LispNil.INSTANCE);
-						}
-					}
-					addExpandedDefinition(generated, out, closRegistry, dispatcherSlots, placedDispatchers);
-				}
+				addExpandedClass(expandDefclass((LispCons) form, closRegistry, structAccessors), out, closRegistry,
+						structAccessors, classDefunSlots, dispatcherSlots, placedDispatchers);
 				if (findClassOverrides && ((LispCons) form).cdr() instanceof LispCons named
 						&& named.car() instanceof LispSymbol className) {
 					// A class defined again after it was forgotten is found again.
@@ -29571,11 +29687,10 @@ public final class LispMacroExpander {
 				// A condition type is an ordinary CLOS-subset class over the built-in
 				// condition hierarchy; the :report form is registered for the
 				// error/signal/warn message building.
-				for (LispVal generated : expandDefclass(
-						(LispCons) defineConditionToDefclass((LispCons) form, closRegistry), closRegistry,
-						structAccessors)) {
-					addExpandedDefinition(generated, out, closRegistry, dispatcherSlots, placedDispatchers);
-				}
+				addExpandedClass(
+						expandDefclass((LispCons) defineConditionToDefclass((LispCons) form, closRegistry),
+								closRegistry, structAccessors),
+						out, closRegistry, structAccessors, classDefunSlots, dispatcherSlots, placedDispatchers);
 			}
 			else if (isNamedForm(form, LispNames.DEFGENERIC)) {
 				List<LispVal> methodDefuns = new java.util.ArrayList<>();
@@ -29652,6 +29767,7 @@ public final class LispMacroExpander {
 				out.add(form);
 			}
 		}
+		warnAboutNeverDefinedSuperclasses(out, closRegistry);
 		// A standard generic the program CALLS (or takes as a value) without defining a
 		// method on it (upstream ASDF applies reinitialize-instance as a matter of
 		// course) still needs its system default and a dispatcher: CL supplies both.
@@ -29699,6 +29815,15 @@ public final class LispMacroExpander {
 			}
 		}
 		out.addAll(0, eqlCells);
+		// Same reason: an allocation may run ahead of the class's defclass, and until
+		// then
+		// the class has its final layout and nothing to wait for.
+		List<LispVal> unfinalizedFlags = new java.util.ArrayList<>();
+		for (String forwardReferenced : closRegistry.forwardReferencedClasses()) {
+			unfinalizedFlags.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR),
+					new LispSymbol(unfinalizedClassFlag(forwardReferenced)), LispNil.INSTANCE)));
+		}
+		out.addAll(0, unfinalizedFlags);
 		// Same phase, same reason as the dispatchers: a struct predicate emitted before
 		// its :include children were registered tests too few tags.
 		refreshStructPredicates(out, closRegistry);
@@ -30614,6 +30739,60 @@ public final class LispMacroExpander {
 		return program.stream()
 			.anyMatch(f -> usesSymbol(f, LispNames.SLOT_VALUE) || usesSymbol(f, LispNames.WITH_SLOTS)
 					|| usesSymbol(f, LispNames.SLOT_BOUNDP));
+	}
+
+	/**
+	 * Adds a class definition's forms to the compile-path output, then the definitions of
+	 * the classes it was the last thing they waited for. A class defined again has its
+	 * earlier constructor dropped: two defuns of one name are a JVM ClassFormatError.
+	 */
+	private static void addExpandedClass(List<LispVal> generatedForms, List<LispVal> out, ClosRegistry closRegistry,
+			java.util.Map<String, Integer> structAccessors, java.util.Map<String, Integer> classDefunSlots,
+			java.util.Map<Integer, String> dispatcherSlots, java.util.Set<String> placedDispatchers) {
+		for (LispVal generated : generatedForms) {
+			String defunName = topLevelDefunName(generated);
+			if (defunName != null) {
+				Integer earlier = classDefunSlots.put(defunName, out.size());
+				if (earlier != null) {
+					out.set(earlier, LispNil.INSTANCE);
+				}
+			}
+			addExpandedDefinition(generated, out, closRegistry, dispatcherSlots, placedDispatchers);
+		}
+		LispCons finalizable = closRegistry.nextFinalizableClass();
+		if (finalizable != null) {
+			addExpandedClass(expandDefclass(finalizable, closRegistry, structAccessors), out, closRegistry,
+					structAccessors, classDefunSlots, dispatcherSlots, placedDispatchers);
+		}
+	}
+
+	/**
+	 * Marks where a class still waits at the end of the program for a superclass nothing
+	 * defines: an interpreter only refuses its instances, and so does the compiled
+	 * program, but a whole-program compile can also say so.
+	 */
+	private static void warnAboutNeverDefinedSuperclasses(List<LispVal> out, ClosRegistry closRegistry) {
+		for (ClosRegistry.ForwardClass waiting : closRegistry.unfinalizedClasses()) {
+			LispCons defclass = waiting.form();
+			List<String> undefined = closRegistry.undefinedSuperclasses(waiting);
+			if (defclass == null || undefined.isEmpty()) {
+				continue;
+			}
+			String flag = unfinalizedClassFlag(waiting.name());
+			for (int i = out.size() - 1; i >= 0; i--) {
+				if (out.get(i) instanceof LispCons setq && isNamedForm(setq, LispNames.SETQ)
+						&& setq.cdr() instanceof LispCons assigned && assigned.car() instanceof LispSymbol variable
+						&& flag.equals(variable.name())) {
+					LispVal marker = listToCons(List.of(new LispSymbol(LispNames.COMPILE_WARNING_INTERNAL),
+							new LispString(LispNames.DEFCLASS + " " + waiting.name() + ": the superclass "
+									+ String.join(", ", undefined)
+									+ " is never defined, so the class has no instances"),
+							setq));
+					out.set(i, SourceProvenance.inherit(defclass, (LispCons) marker));
+					break;
+				}
+			}
+		}
 	}
 
 	/**
@@ -40109,7 +40288,14 @@ public final class LispMacroExpander {
 				}
 				if (known.isEmpty() && unknown.isEmpty()) {
 					// The FIRST parent stays a real superclass unconditionally, keeping
-					// the pre-MI "unknown superclass" error for a bad first parent.
+					// the pre-MI "unknown superclass" error for a bad first parent: a
+					// condition type has no forward reference (SBCL: "Class not yet
+					// defined"), unlike a defclass.
+					closRegistry.ensureMopClassesSeededFor(parentSym.name());
+					if (closRegistry.findClass(parentSym.name()) == null) {
+						throw new IllegalArgumentException(
+								LispNames.DEFINE_CONDITION + ": unknown parent type " + parentSym.name());
+					}
 					known.add(parent);
 				}
 				else if (closRegistry.findClass(parentSym.name()) != null) {

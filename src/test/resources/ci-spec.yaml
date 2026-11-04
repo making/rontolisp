@@ -30224,6 +30224,81 @@ cases:
     expected: |
       (:SUB (1 2))
       (:BASE (3))
+  - name: defclass-of-a-forward-referenced-superclass
+    source: |
+      ;; Methods and subclasses may name a class whose superclass does not exist yet, or
+      ;; that superclass itself; only an instance has to wait.
+      (defclass fwd-a (fwd-b) ((y :initform 1 :reader fwd-y)))
+      (defmethod fwd-who ((o fwd-a)) :a)
+      (defmethod fwd-base ((o fwd-b)) :from-b)
+      (defclass fwd-c (fwd-a) ((z :initarg :z :initform 3 :accessor fwd-z)))
+      (defclass fwd-mi (fwd-m1 fwd-m2) ((own :initform :own :reader fwd-own)))
+      (defclass fwd-m1 () ((p :initform :p1 :reader fwd-p)))
+      (defun fwd-try (designator)
+        (handler-case (progn (make-instance designator) :made)
+          (error () :refused)))
+      (print (list (fwd-try 'fwd-a) (fwd-try 'fwd-c) (fwd-try 'fwd-b) (fwd-try 'fwd-mi)
+                   (fwd-try (find-class 'fwd-a))))
+      (print (handler-case (make-instance 'fwd-a) (error () :refused)))
+      (print (handler-case (allocate-instance (find-class 'fwd-a)) (error () :refused)))
+      ;; A method written after the class stays ahead of its generated reader, and a
+      ;; class-allocated initform runs once, where the class is defined.
+      (defvar *fwd-log* nil)
+      (defclass fwd-rd (fwd-rd2)
+        ((u :initform 1 :reader fwd-ru)
+         (cell :allocation :class :initform (progn (push :cell *fwd-log*) :shared) :reader fwd-cell)))
+      (defmethod fwd-ru ((o fwd-rd)) :user)
+      (defmethod initialize-instance :after ((o fwd-rd) &key) (push :init *fwd-log*))
+      (push :before-super *fwd-log*)
+      (defclass fwd-rd2 () ((w :initform :w :reader fwd-w)))
+      (let ((r (make-instance 'fwd-rd)))
+        (print (list (fwd-ru r) (fwd-cell r) (fwd-w r) (reverse *fwd-log*))))
+      ;; The last superclass finalizes what waited for it, with its layout.
+      (defclass fwd-b () ((x :initform 7 :reader fwd-x)))
+      (defclass fwd-m2 () ((q :initform :q2 :reader fwd-q)))
+      (print (fwd-x (make-instance 'fwd-a)))
+      (let ((a (make-instance 'fwd-a))
+            (c (make-instance 'fwd-c :z 4))
+            (m (make-instance 'fwd-mi)))
+        (print (list (fwd-y a) (fwd-who a) (fwd-base a)))
+        (print (list (fwd-x c) (fwd-y c) (fwd-z c) (fwd-who c) (fwd-base c)))
+        (setf (fwd-z c) 5)
+        (print (list (fwd-z c) (slot-value c 'x) (slot-value a 'y)))
+        (print (list (fwd-p m) (fwd-q m) (fwd-own m)))
+        (print (list (typep a 'fwd-b) (typep c 'fwd-b) (typep m 'fwd-m2) (subtypep 'fwd-c 'fwd-b)))
+        (print (list (fwd-try (find-class 'fwd-c)) (typep (allocate-instance (find-class 'fwd-c)) 'fwd-b))))
+      ;; A chain written backwards; a definition that stops waiting by itself; a metaclass.
+      (defclass fwd-ch3 (fwd-ch2) ((c3 :initform 3 :reader fwd-c3)))
+      (defclass fwd-ch2 (fwd-ch1) ((c2 :initform 2 :reader fwd-c2)))
+      (defclass fwd-ch1 () ((c1 :initform 1 :reader fwd-c1)))
+      (let ((c (make-instance 'fwd-ch3)))
+        (print (list (fwd-c1 c) (fwd-c2 c) (fwd-c3 c))))
+      (defclass fwd-rw (fwd-never) ((x :initform 1 :reader fwd-rw-x)))
+      (defclass fwd-rw () ((x :initform 2 :reader fwd-rw-x)))
+      (print (fwd-rw-x (make-instance 'fwd-rw)))
+      (defclass fwd-mc-meta (standard-class) ())
+      (defmethod closer-mop:validate-superclass ((c fwd-mc-meta) (s standard-class)) t)
+      (defclass fwd-mc (fwd-mc-super) ((x :initform 1 :reader fwd-mc-x)) (:metaclass fwd-mc-meta))
+      (print (fwd-try 'fwd-mc))
+      (defclass fwd-mc-super () ((y :initform 2 :reader fwd-mc-y)))
+      (let ((m (make-instance 'fwd-mc)))
+        (print (list (fwd-mc-x m) (fwd-mc-y m) (typep m 'fwd-mc-super))))
+    expected: |
+      (:REFUSED :REFUSED :REFUSED :REFUSED :REFUSED)
+      :REFUSED
+      :REFUSED
+      (:USER :SHARED :W (:CELL :BEFORE-SUPER :INIT))
+      7
+      (1 :A :FROM-B)
+      (7 1 4 :A :FROM-B)
+      (5 7 1)
+      (:P1 :Q2 :OWN)
+      (T T T T)
+      (:MADE T)
+      (1 2 3)
+      2
+      :REFUSED
+      (1 2 T)
   - name: defclass-default-initargs
     source: |
       (defclass di-conf () ((host :initarg :host) (port :initarg :port))
