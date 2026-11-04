@@ -13,7 +13,7 @@ upstream or one of the substitution tiers (`.kb/asdf.md`).
   Check for an existing interrupt condition first.
 - **`uffi`**: `uffi.asd` guards its whole `defsystem` with `#+(or allegro ... sbcl scl)`, so here the
   file defines nothing: `uffi.asd does not define system 'uffi'`. Consumer: clsql (`clsql.asd:32`).
-  clsql has its own alternative: `--feature clsql-cffi` routes it to `cffi-uffi-compat`, which then
-  stops on `.todo/i06`'s `babel` name. Make `uffi` a Tier 2 override
-  that depends on `cffi-uffi-compat`, or announce the feature; decide after i06, as clsql's own
-  `.asd` is unmeasured past that point. Its SQL backends also load foreign libraries.
+  clsql has its own alternative: `--feature clsql-cffi` routes it to `cffi-uffi-compat`, which
+  loads on the interpreter since 2026-11-04. Make `uffi` a Tier 2 override
+  that depends on `cffi-uffi-compat`, or announce the feature; measure clsql's own `.asd` first,
+  as it is unmeasured past that point. Its SQL backends also load foreign libraries.

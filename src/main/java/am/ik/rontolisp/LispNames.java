@@ -12668,6 +12668,9 @@ public final class LispNames {
 	/** {@code rontolisp:stream-clear-output} -- the {@code clear-output} Gray generic. */
 	public static final String GRAY_STREAM_CLEAR_OUTPUT = "STREAM-CLEAR-OUTPUT";
 
+	/** {@code rontolisp:stream-clear-input} -- the {@code clear-input} Gray generic. */
+	public static final String GRAY_STREAM_CLEAR_INPUT = "STREAM-CLEAR-INPUT";
+
 	/**
 	 * The {@code *standard-output*} variable -- bound to the stream designator {@code t}
 	 * (standard output), which every print-family function accepts.

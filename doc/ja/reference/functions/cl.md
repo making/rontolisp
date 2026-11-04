@@ -82,7 +82,7 @@
 | `force-output` | `(force-output stream)` | 出力ストリームを書き出す (引数なしは標準出力)。nil を返す |
 | `finish-output` | `(finish-output stream)` | `force-output` と同じ操作。ここでは書き出し後の書き込みはすべて同期的 |
 | `clear-output` | `(clear-output stream)` | 出力ストリームの未書き込みバッファを捨てる。ここではその形でバッファしないため、指定子を検証して nil を返す |
-| `clear-input` | `(clear-input stream)` | 入力ストリームの未処理バッファを捨てます。ここではそのようなバッファを持たないため、指定子を検証して nil を返すだけです |
+| `clear-input` | `(clear-input stream)` | 入力ストリームの未処理バッファを捨てます。ここではそのようなバッファを持たないため、指定子を検証して nil を返すだけです。Gray ストリームでは `stream-clear-input` メソッドが動きます |
 | `listen` | `(listen stream)` | ブロックせずに入力を読めるなら `t`。Preview 1 の WASM にはこの問い合わせ手段がない |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | 文字列と改行を出力ストリーム(または標準出力)に書き込みます。文字列を返します |
 | `write-char` | `(write-char #\a stream)`, `(write-char #\a)` | 出力ストリーム(省略時は標準出力)に 1 文字を書き込み、その文字を返します。Gray ストリームのインスタンスには `rontolisp:stream-write-char` を呼びます |

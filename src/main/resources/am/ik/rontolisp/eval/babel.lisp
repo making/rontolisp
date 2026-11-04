@@ -32,7 +32,11 @@
 ;; - *string-vector-mappings* is therefore the SET of encoding names that have a
 ;;   mapping rather than a hash table of mapping objects. It is the same list
 ;;   list-character-encodings answers, so the implemented encodings are named
-;;   once in this file.
+;;   once in this file. The enc-* readers answer what upstream's objects hold.
+;;
+;; Two features stop at their exported names, which signal when used:
+;; instantiate-concrete-mappings generates codecs over a caller's own accessors, and
+;; this file has one codec over aref; and the #\uXXXX reader syntax.
 ;;
 ;; Everything else follows upstream branch for branch: which condition each
 ;; malformed shape signals, that *suppress-character-coding-errors* replaces the
@@ -52,22 +56,41 @@
 
 ;; The encodings that have a mapping -- upstream's *string-vector-mappings*
 ;; table with the objects left out (see the header).
-(defvar babel:*string-vector-mappings* '(:utf-8 :latin-1 :us-ascii))
+(defvar babel:*string-vector-mappings* '(:utf-8 :iso-8859-1 :ascii))
 
 (defun babel:list-character-encodings ()
   (copy-list babel:*string-vector-mappings*))
 
-;; A caller's :encoding is normalized to one of the three names above. Anything
-;; else is an error at the call: mis-coding silently is worse than not coding.
+;; Upstream's external-format, a class there. Nothing here dispatches on it, and a
+;; structure leaves a program that never makes one free of make-instance.
+(defstruct (babel:external-format (:conc-name nil) (:copier nil)
+                                  (:predicate babel::%external-format-p)
+                                  (:constructor babel::%make-external-format
+                                   (babel:external-format-encoding
+                                    babel:external-format-eol-style)))
+  babel:external-format-encoding
+  babel:external-format-eol-style)
+
+;; A caller's :encoding is normalized to one of the three names above, upstream's
+;; canonical names. Anything else is an error at the call: mis-coding silently is
+;; worse than not coding.
+(defun babel::%encoding-name (encoding)
+  (cond ((member encoding '(:utf-8 :utf8 :|utf-8|)) :utf-8)
+   ((member encoding '(:iso-8859-1 :latin-1 :latin1 :iso8859-1)) :iso-8859-1)
+   ((member encoding '(:ascii :us-ascii :usascii)) :ascii)
+   ((babel::%external-format-p encoding)
+    (babel::%encoding-name (babel:external-format-encoding encoding)))
+   (t
+    (error "babel: unsupported character encoding ~S (this build implements ~S)"
+           encoding (babel:list-character-encodings)))))
+
+;; No :encoding at all, like upstream's :default, is whatever
+;; *default-character-encoding* holds when the call runs.
 (defun babel::normalize-encoding (encoding)
-  (cond ((null encoding) :utf-8)
-        ((member encoding '(:utf-8 :utf8 :|utf-8| :default)) :utf-8)
-        ((member encoding '(:latin-1 :latin1 :iso-8859-1 :iso8859-1)) :latin-1)
-        ((member encoding '(:us-ascii :ascii :usascii)) :us-ascii)
-        (t
-         (error
-          "babel: unsupported character encoding ~S (this build implements ~S)"
-          encoding (babel:list-character-encodings)))))
+  (babel::%encoding-name
+   (if (or (null encoding) (eq encoding :default))
+       babel-encodings:*default-character-encoding*
+       encoding)))
 
 ;; Upstream answers a character-encoding OBJECT; here the name IS the object, so
 ;; this is the normalizer under its babel name -- and it keeps upstream's
@@ -75,10 +98,112 @@
 (defun babel-encodings:get-character-encoding (encoding)
   (babel::normalize-encoding encoding))
 
+(deftype babel-encodings:character-encoding ()
+  '(member :utf-8 :iso-8859-1 :ascii))
+
 ;; The buffer-sizing bound an incremental decoder reads before it refills: the
 ;; longest octet sequence one character can take.
 (defun babel-encodings:enc-max-units-per-char (encoding)
   (if (eq (babel::normalize-encoding encoding) :utf-8) 4 1))
+
+;; Upstream's other readers, each over its own slot of the object the name stands for
+;; here. A name is what closure-common's and cxml's writers read off an encoding.
+
+(defun babel-encodings:enc-name (encoding) (babel::normalize-encoding encoding))
+
+(defun babel-encodings:enc-aliases (encoding)
+  (case (babel::normalize-encoding encoding)
+    (:iso-8859-1 '(:latin-1 :latin1))
+    (:ascii '(:us-ascii))))
+
+(defun babel-encodings:enc-code-unit-size (encoding)
+  (babel::normalize-encoding encoding)
+  8)
+
+;; Upstream's ranges, the iso-8859-1 end past the last code included.
+(defun babel-encodings:enc-codespace (encoding)
+  (case (babel::normalize-encoding encoding)
+    (:utf-8 '((0 #x10ffff)))
+    (:iso-8859-1 '((0 256)))
+    (t '((0 127)))))
+
+(defun babel-encodings:enc-native-endianness (encoding)
+  (babel::normalize-encoding encoding)
+  t)
+
+(defun babel-encodings:enc-decode-literal-code-unit-limit (encoding)
+  (case (babel::normalize-encoding encoding)
+    (:utf-8 #x80)
+    (:iso-8859-1 256)
+    (t 128)))
+
+(defun babel-encodings:enc-encode-literal-code-unit-limit (encoding)
+  (babel-encodings:enc-decode-literal-code-unit-limit encoding))
+
+(defun babel-encodings:enc-use-bom (encoding)
+  (babel::normalize-encoding encoding)
+  nil)
+
+(defun babel-encodings:enc-bom-encoding (encoding)
+  (if (eq (babel::normalize-encoding encoding) :utf-8)
+      (vector #xef #xbb #xbf)
+      nil))
+
+(defun babel-encodings:enc-nul-encoding (encoding)
+  (babel::normalize-encoding encoding)
+  (vector 0))
+
+(defun babel-encodings:enc-default-replacement (encoding)
+  (if (eq (babel::normalize-encoding encoding) :utf-8) #xfffd #x1a))
+
+(defun babel-encodings:ambiguous-encoding-p (encoding)
+  (babel::normalize-encoding encoding)
+  nil)
+
+(defun babel-encodings:encodable-code-point-p (encoding code)
+  (let ((range (car (babel-encodings:enc-codespace encoding))))
+    (and (<= (car range) code) (<= code (cadr range)))))
+
+(defun babel:encodable-character-p (character &key encoding)
+  (babel-encodings:encodable-code-point-p encoding (char-code character)))
+
+(defun babel:encodable-string-p (string &key encoding (start 0) end)
+  (let ((limit (or end (length string))))
+    (do ((i start (+ i 1)))
+        ((>= i limit) t)
+      (unless (babel-encodings:encodable-code-point-p encoding
+               (char-code (char string i)))
+        (return (values nil i))))))
+
+;; Upstream makes mappings at macro-expansion time from a caller's own sequence
+;; accessors. The name exists so a defpackage reads; a use signals where the program
+;; is expanded rather than coding through the wrong accessors.
+(defmacro babel-encodings:instantiate-concrete-mappings (&rest options)
+  (declare (ignore options))
+  (error
+   "babel: instantiate-concrete-mappings is not implemented; this build has one codec, over aref"))
+
+;;; External formats, upstream's "still somewhat sketchy" interface: an encoding and an
+;;; end-of-line style nothing here reads.
+
+(defvar babel:*default-eol-style* :lf)
+
+(defun babel:make-external-format
+    (encoding &key (eol-style babel:*default-eol-style*))
+  (check-type eol-style (member :cr :lf :crlf))
+  (babel::%make-external-format (babel::normalize-encoding encoding) eol-style))
+
+(defun babel:ensure-external-format (thing)
+  (etypecase thing
+    (babel:external-format thing)
+    (symbol (babel:make-external-format thing))
+    (list (apply #'babel:make-external-format thing))))
+
+(defun babel:external-format-equal (ef1 ef2)
+  (and (eq (babel:external-format-encoding ef1)
+           (babel:external-format-encoding ef2))
+       (eq (babel:external-format-eol-style ef1)
+           (babel:external-format-eol-style ef2))))
 
 ;; A character IS a Unicode code point here, so babel's unicode-char -- the
 ;; :element-type an incremental decoder builds its one-character buffer with,
@@ -93,6 +218,36 @@
 ;; (the seam this shim exists for) reads both by these exact names.
 (deftype babel:unicode-string () 'string)
 (deftype babel:simple-unicode-string () 'simple-string)
+
+(defconstant babel:unicode-char-code-limit char-code-limit)
+
+;; Upstream's #\uXXXX reader hands every other character back to the standard #\
+;; reader, which is not a function here. Only babel's own tests spell it.
+(defun babel:set-sharp-backslash-syntax-in-readtable ()
+  (error "babel: the #\\uXXXX reader syntax is not implemented"))
+
+(defmacro babel:enable-sharp-backslash-syntax ()
+  (error "babel: the #\\uXXXX reader syntax is not implemented"))
+
+;; What upstream's bound checks signal, and the two macros it binds a vector's data
+;; with. An array here has no separate data vector to reach, so the vector and its
+;; bounds are bound as they are: AREF reads a displaced one through its displacement.
+(defun babel::%check-vector-bounds (vector start end)
+  (unless (and (<= 0 start) (<= start end) (<= end (length vector)))
+    (error "Invalid start (~A) and end (~A) values for vector of length ~A."
+           start end (length vector))))
+
+(defmacro babel-encodings:with-simple-vector
+    (((v vector) (s start) (e end)) &body body)
+  `(let ((,v ,vector) (,s ,start) (,e ,end)) ,@body))
+
+(defmacro babel-encodings:with-checked-simple-vector
+    (((v vector) (s start) (e end)) &body body)
+  (let ((checked (gensym)) (from (gensym)) (to (gensym)))
+    `(let* ((,checked ,vector) (,from ,start) (,to (or ,end (length ,checked))))
+       (babel::%check-vector-bounds ,checked ,from ,to)
+       (babel-encodings:with-simple-vector ((,v ,checked) (,s ,from) (,e ,to))
+         ,@body))))
 
 ;; Upstream's code-point accessor pair over a simple-unicode-string --
 ;; instantiate-concrete-mappings drives generated codecs through these two
@@ -425,7 +580,7 @@
                (setf (aref dest di) (code-char code))
                (setq i next)))
             (t (let ((octet (aref src i)))
-                 (when (and (eq encoding :us-ascii) (> octet #x7F))
+                 (when (and (eq encoding :ascii) (> octet #x7F))
                    (setq octet
                          (babel::%decoding-error
                           'babel-encodings:character-decoding-error (list octet)
@@ -440,7 +595,7 @@
         ((>= i end) (- di dest-start))
       (let ((code (char-code (char src i))))
         (cond ((not (eq encoding :utf-8))
-               (when (>= code (if (eq encoding :us-ascii) 128 256))
+               (when (>= code (if (eq encoding :ascii) 128 256))
                  (setq code (babel::%encoding-error code encoding src i)))
                (setf (aref dest di) code)
                (setq di (+ di 1)))
@@ -470,37 +625,68 @@
 ;;; :errorp exactly as upstream does, so the codec above is the only place that
 ;;; decides what a malformed sequence costs.
 
+;; A :use-bom of t prepends the encoding's byte-order mark; the :default a caller
+;; leaves it at asks for none in the three encodings here, as upstream's enc-use-bom.
 (defun babel:string-to-octets (string &key encoding (start 0) end
+                                      (use-bom :default)
                                       (errorp
                                        (not
                                         babel-encodings:*suppress-character-coding-errors*)))
-  (let ((enc (babel::normalize-encoding encoding))
-        (limit (or end (length string)))
-        (babel-encodings:*suppress-character-coding-errors* (not errorp)))
-    (multiple-value-bind (size new-end)
-        (babel::%count-octets enc string start limit -1)
-      ;; A PACKED (unsigned-byte 8) array, like real babel's simple-array
-      ;; result: an adjustable array does not carry its declared element type
-      ;; here, and a caller's (typep x 'simple-byte-vector) tests exactly that.
-      (let ((out (make-array size :element-type '(unsigned-byte 8))))
-        (babel::%encode-into enc string start new-end out 0)
-        out))))
+  (babel-encodings:with-checked-simple-vector ((string string) (start start)
+                                               (end end))
+    (let* ((enc (babel::normalize-encoding encoding))
+           (babel-encodings:*suppress-character-coding-errors* (not errorp))
+           (bom (if (eq use-bom t) (babel-encodings:enc-bom-encoding enc) nil))
+           (bom-length (length bom)))
+      (multiple-value-bind (size new-end)
+          (babel::%count-octets enc string start end -1)
+        ;; A PACKED (unsigned-byte 8) array, like real babel's simple-array
+        ;; result: an adjustable array does not carry its declared element type
+        ;; here, and a caller's (typep x 'simple-byte-vector) tests exactly that.
+        (let ((out
+               (make-array (+ bom-length size)
+                           :element-type '(unsigned-byte 8))))
+          (dotimes (i bom-length) (setf (aref out i) (aref bom i)))
+          (babel::%encode-into enc string start new-end out bom-length)
+          out)))))
 
-;; Upstream answers the octet counter's TWO values (the count and the index it
-;; stopped at); this answers the count alone, because rontolisp carries a
-;; secondary value in a global channel and no consumer has ever wanted the
-;; index (see the multiple-values notes in .kb). :max is upstream's -- stop
-;; counting before exceeding that many octets.
-(defun babel:string-size-in-octets (string &key encoding (start 0) end (max -1)
+(defun babel:concatenate-strings-to-octets (encoding &rest strings)
+  (let ((enc (babel::normalize-encoding encoding)) (size 0) (at 0))
+    (dolist (string strings)
+      (check-type string string)
+      (setq size
+            (+ size (babel::%count-octets enc string 0 (length string) -1))))
+    (let ((out (make-array size :element-type '(unsigned-byte 8))))
+      (dolist (string strings)
+        (setq at
+              (+ at (babel::%encode-into enc string 0 (length string) out at))))
+      out)))
+
+;; Both answer the counter's two values, the count and the index it stopped at. :max
+;; stops counting before exceeding that many octets, or characters.
+(defun babel:string-size-in-octets (string &key encoding (start 0) end
+                                           (max -1 maxp)
                                            (errorp
                                             (not
                                              babel-encodings:*suppress-character-coding-errors*)))
-  (let ((enc (babel::normalize-encoding encoding))
-        (limit (or end (length string)))
-        (babel-encodings:*suppress-character-coding-errors* (not errorp)))
-    (multiple-value-bind (size new-end)
-        (babel::%count-octets enc string start limit max)
-      size)))
+  (babel-encodings:with-checked-simple-vector ((string string) (start start)
+                                               (end end))
+    (let ((enc (babel::normalize-encoding encoding))
+          (babel-encodings:*suppress-character-coding-errors* (not errorp)))
+      (when maxp (assert (plusp max)))
+      (babel::%count-octets enc string start end max))))
+
+(defun babel:vector-size-in-chars (vector &key encoding (start 0) end
+                                          (max -1 maxp)
+                                          (errorp
+                                           (not
+                                            babel-encodings:*suppress-character-coding-errors*)))
+  (babel-encodings:with-checked-simple-vector ((vector vector) (start start)
+                                               (end end))
+    (let ((enc (babel::normalize-encoding encoding))
+          (babel-encodings:*suppress-character-coding-errors* (not errorp)))
+      (when maxp (assert (plusp max)))
+      (babel::%count-code-points enc vector start end max))))
 
 ;; :errorp defaults to (not *suppress-character-coding-errors*) like upstream's.
 ;; When it is nil a malformed sequence yields the substitution character instead
@@ -509,11 +695,12 @@
                                       (errorp
                                        (not
                                         babel-encodings:*suppress-character-coding-errors*)))
-  (let ((enc (babel::normalize-encoding encoding))
-        (limit (or end (length octets)))
-        (babel-encodings:*suppress-character-coding-errors* (not errorp)))
-    (multiple-value-bind (size new-end)
-        (babel::%count-code-points enc octets start limit -1)
-      (let ((string (make-string size :element-type 'babel:unicode-char)))
-        (babel::%decode-into enc octets start new-end string 0)
-        string))))
+  (babel-encodings:with-checked-simple-vector ((octets octets) (start start)
+                                               (end end))
+    (let ((enc (babel::normalize-encoding encoding))
+          (babel-encodings:*suppress-character-coding-errors* (not errorp)))
+      (multiple-value-bind (size new-end)
+          (babel::%count-code-points enc octets start end -1)
+        (let ((string (make-string size :element-type 'babel:unicode-char)))
+          (babel::%decode-into enc octets start new-end string 0)
+          string)))))

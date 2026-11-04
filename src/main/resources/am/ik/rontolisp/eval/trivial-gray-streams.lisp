@@ -83,11 +83,17 @@
 
 (defgeneric trivial-gray-streams:stream-read-char (stream))
 
+(defgeneric trivial-gray-streams:stream-read-char-no-hang (stream))
+
+(defgeneric trivial-gray-streams:stream-peek-char (stream))
+
 (defgeneric trivial-gray-streams:stream-unread-char (stream character))
 
 (defgeneric trivial-gray-streams:stream-read-line (stream))
 
 (defgeneric trivial-gray-streams:stream-listen (stream))
+
+(defgeneric trivial-gray-streams:stream-clear-input (stream))
 
 (defgeneric trivial-gray-streams:stream-read-sequence
     (stream sequence start end &key))
@@ -158,11 +164,13 @@
     ((stream trivial-gray-streams:fundamental-input-stream) character)
   (trivial-gray-streams:stream-unread-char stream character))
 
-;; stream-peek-char / stream-read-char-no-hang are NOT part of upstream
-;; trivial-gray-streams' exported set (sb-gray has them, the portability layer
-;; does not), so there is no portable generic to delegate to: rontolisp's own
-;; defaults over stream-read-char are what an adapter class inherits, and the
-;; delegating stream-read-char above is what they reach.
+(defmethod rontolisp:stream-read-char-no-hang
+    ((stream trivial-gray-streams:fundamental-input-stream))
+  (trivial-gray-streams:stream-read-char-no-hang stream))
+
+(defmethod rontolisp:stream-peek-char
+    ((stream trivial-gray-streams:fundamental-input-stream))
+  (trivial-gray-streams:stream-peek-char stream))
 
 (defmethod rontolisp:stream-read-line
     ((stream trivial-gray-streams:fundamental-input-stream))
@@ -171,6 +179,10 @@
 (defmethod rontolisp:stream-listen
     ((stream trivial-gray-streams:fundamental-input-stream))
   (trivial-gray-streams:stream-listen stream))
+
+(defmethod rontolisp:stream-clear-input
+    ((stream trivial-gray-streams:fundamental-input-stream))
+  (trivial-gray-streams:stream-clear-input stream))
 
 (defmethod rontolisp:stream-read-sequence
     ((stream trivial-gray-streams:fundamental-input-stream) sequence start end)
@@ -243,8 +255,20 @@
     ((stream trivial-gray-streams:fundamental-input-stream) character)
   (rontolisp::%gray-default-unread-char stream character))
 
+(defmethod trivial-gray-streams:stream-read-char-no-hang
+    ((stream trivial-gray-streams:fundamental-input-stream))
+  (rontolisp::%gray-read-char-1 stream))
+
+(defmethod trivial-gray-streams:stream-peek-char
+    ((stream trivial-gray-streams:fundamental-input-stream))
+  (rontolisp::%gray-default-peek-char stream))
+
 (defmethod trivial-gray-streams:stream-listen
     ((stream trivial-gray-streams:fundamental-input-stream))
+  nil)
+
+(defmethod trivial-gray-streams:stream-clear-input
+    ((stream trivial-gray-streams:fundamental-character-input-stream))
   nil)
 
 (defmethod trivial-gray-streams:stream-read-sequence ((stream

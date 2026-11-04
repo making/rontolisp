@@ -98,10 +98,46 @@ class FastIoCircularStreamsE2eTest extends AsdfLibraryE2eSupport {
 			(with-open-file (fio-in "target/fio-roundtrip-%%WORK%%.tmp")
 			  (format t "~a~%" (open-stream-p fio-in))
 			  (format t "~a~%" (read-line fio-in)))
+
+			;; The three input generics the portable package names beside the rest: the
+			;; defaults over the element methods, then a class's own methods.
+			(defclass char-source (trivial-gray-streams:fundamental-character-input-stream)
+			  ((chars :initarg :chars)))
+
+			(defmethod trivial-gray-streams:stream-read-char ((s char-source))
+			  (with-slots (chars) s
+			    (if chars (pop chars) :eof)))
+
+			(defmethod trivial-gray-streams:stream-unread-char ((s char-source) c)
+			  (with-slots (chars) s (push c chars))
+			  nil)
+
+			(defclass own-source (char-source) ((calls :initform nil)))
+
+			(defmethod trivial-gray-streams:stream-read-char-no-hang ((s own-source))
+			  (push :no-hang (slot-value s 'calls))
+			  nil)
+
+			(defmethod trivial-gray-streams:stream-peek-char ((s own-source))
+			  (push :peek (slot-value s 'calls))
+			  #\\p)
+
+			(defmethod trivial-gray-streams:stream-clear-input ((s own-source))
+			  (push :clear (slot-value s 'calls))
+			  :ignored)
+
+			(let ((s (make-instance 'char-source :chars (list #\\a #\\b))))
+			  (format t "~s~%" (list (peek-char nil s) (read-char-no-hang s) (read-char s)
+			                         (read-char-no-hang s nil :end) (peek-char nil s nil :end)
+			                         (clear-input s))))
+			(let ((s (make-instance 'own-source :chars (list #\\a))))
+			  (format t "~s~%" (list (read-char-no-hang s) (peek-char nil s) (clear-input s)
+			                         (reverse (slot-value s 'calls)))))
 			""";
 
 	private static final List<String> EXPECTED = List.of("(1 2)", "(10 20 30)", "3", "(10 20 30 EOF 10 20 30)", "3",
-			"1", "(20 30)", "T", "roundtrip");
+			"1", "(20 30)", "T", "roundtrip", "(#\\a #\\a #\\b :END :END NIL)",
+			"(NIL #\\p NIL (:NO-HANG :PEEK :CLEAR))");
 
 	@Override
 	protected String systemDir() {

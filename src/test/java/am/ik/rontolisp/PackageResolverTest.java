@@ -1,6 +1,7 @@
 package am.ik.rontolisp;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.reader.Features;
@@ -493,6 +494,49 @@ class PackageResolverTest {
 		// defpackage :import-from resolves through the external list).
 		assertThat(resolve("babel:*string-vector-mappings*")).isEqualTo("BABEL:*STRING-VECTOR-MAPPINGS*");
 		assertThat(resolve("'babel:unicode-char")).isEqualTo("'BABEL:UNICODE-CHAR");
+	}
+
+	@Test
+	void shimPackagesExportEveryExternalOfTheRealLibrary() {
+		// The real packages' lists (babel 20260101, trivial-gray-streams 20241012): a
+		// missing name is a load that stops at a defpackage or a qualified symbol.
+		Map.of("babel-encodings", """
+				list-character-encodings character-encoding *default-character-encoding* get-character-encoding
+				enc-name enc-aliases enc-code-unit-size enc-codespace enc-max-units-per-char enc-native-endianness
+				enc-decode-literal-code-unit-limit enc-encode-literal-code-unit-limit enc-use-bom enc-bom-encoding
+				enc-nul-encoding enc-default-replacement encodable-code-point-p ambiguous-encoding-p
+				instantiate-concrete-mappings encoder decoder octet-counter code-point-counter lookup-mapping
+				with-simple-vector with-checked-simple-vector *suppress-character-coding-errors*
+				character-coding-error character-coding-error-encoding character-coding-error-buffer
+				character-coding-error-position character-decoding-error character-decoding-error-octets
+				character-encoding-error character-encoding-error-code end-of-input-in-character
+				character-out-of-range invalid-utf8-starter-byte invalid-utf8-continuation-byte
+				overlong-utf8-sequence""", "babel", """
+				unicode-char unicode-char-code-limit unicode-string simple-unicode-string
+				enable-sharp-backslash-syntax set-sharp-backslash-syntax-in-readtable external-format
+				make-external-format ensure-external-format external-format-encoding external-format-eol-style
+				external-format-equal *default-eol-style* *default-character-encoding* encodable-character-p
+				encodable-string-p list-character-encodings string-to-octets octets-to-string
+				concatenate-strings-to-octets string-size-in-octets vector-size-in-chars character-coding-error
+				character-coding-error-encoding character-coding-error-buffer character-coding-error-position
+				character-decoding-error character-decoding-error-octets character-encoding-error
+				character-encoding-error-code end-of-input-in-character character-out-of-range
+				invalid-utf8-starter-byte invalid-utf8-continuation-byte overlong-utf8-sequence""",
+				"trivial-gray-streams", """
+						fundamental-stream fundamental-input-stream fundamental-output-stream
+						fundamental-character-stream fundamental-binary-stream fundamental-character-input-stream
+						fundamental-character-output-stream fundamental-binary-input-stream
+						fundamental-binary-output-stream stream-read-char stream-unread-char stream-read-char-no-hang
+						stream-peek-char stream-listen stream-read-line stream-clear-input stream-write-char
+						stream-line-column stream-start-line-p stream-write-string stream-terpri stream-fresh-line
+						stream-finish-output stream-force-output stream-clear-output stream-advance-to-column
+						stream-read-byte stream-write-byte stream-read-sequence stream-write-sequence
+						stream-file-position trivial-gray-stream-mixin""")
+			.forEach((pkg, members) -> {
+				for (String member : members.trim().split("\\s+")) {
+					assertThat(resolve(pkg + ":" + member)).endsWith(":" + member.toUpperCase());
+				}
+			});
 	}
 
 	@Test

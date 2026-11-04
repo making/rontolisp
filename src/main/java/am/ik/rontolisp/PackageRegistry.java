@@ -1086,7 +1086,7 @@ public final class PackageRegistry {
 				LispNames.GRAY_STREAM_START_LINE_P, LispNames.GRAY_STREAM_TERPRI, LispNames.GRAY_STREAM_FRESH_LINE,
 				LispNames.GRAY_STREAM_ADVANCE_TO_COLUMN, LispNames.GRAY_STREAM_FORCE_OUTPUT,
 				LispNames.GRAY_STREAM_FINISH_OUTPUT, LispNames.GRAY_STREAM_CLEAR_OUTPUT,
-				LispNames.GRAY_STREAM_FILE_POSITION,
+				LispNames.GRAY_STREAM_CLEAR_INPUT, LispNames.GRAY_STREAM_FILE_POSITION,
 				// The IEEE binary16 scalar pair and the bulk widen/narrow over packed
 				// float arrays (eval.FloatBitsWidening).
 				LispNames.FLOAT16_BITS, LispNames.BITS_FLOAT16, LispNames.WIDEN_FLOAT_BITS, LispNames.NARROW_FLOAT_BITS,
@@ -1373,18 +1373,22 @@ public final class PackageRegistry {
 		define(new LispPackage(LispNames.FLOAT_FEATURES_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.BITS_DOUBLE_FLOAT, LispNames.DOUBLE_FLOAT_BITS,
 						LispNames.SINGLE_FLOAT_BITS, LispNames.BITS_SINGLE_FLOAT))));
-		define(new LispPackage(LispNames.TRIVIAL_GRAY_STREAMS_PKG, List.of(), new HashSet<>(Set.of(
-				LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_STREAM_WRITE_CHAR,
-				LispNames.GRAY_STREAM_WRITE_STRING, LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM,
-				LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM,
-				LispNames.GRAY_CHARACTER_STREAM, LispNames.GRAY_BINARY_STREAM, LispNames.GRAY_STREAM_MIXIN,
-				LispNames.GRAY_STREAM_WRITE_BYTE, LispNames.GRAY_STREAM_READ_BYTE, LispNames.GRAY_STREAM_READ_CHAR,
-				LispNames.GRAY_STREAM_UNREAD_CHAR, LispNames.GRAY_STREAM_READ_LINE, LispNames.GRAY_STREAM_LISTEN,
-				LispNames.GRAY_STREAM_READ_SEQUENCE, LispNames.GRAY_STREAM_WRITE_SEQUENCE,
-				LispNames.GRAY_STREAM_LINE_COLUMN, LispNames.GRAY_STREAM_START_LINE_P, LispNames.GRAY_STREAM_TERPRI,
-				LispNames.GRAY_STREAM_FRESH_LINE, LispNames.GRAY_STREAM_ADVANCE_TO_COLUMN,
-				LispNames.GRAY_STREAM_FORCE_OUTPUT, LispNames.GRAY_STREAM_FINISH_OUTPUT,
-				LispNames.GRAY_STREAM_CLEAR_OUTPUT, LispNames.GRAY_STREAM_FILE_POSITION))));
+		define(new LispPackage(LispNames.TRIVIAL_GRAY_STREAMS_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM,
+						LispNames.GRAY_STREAM_WRITE_CHAR, LispNames.GRAY_STREAM_WRITE_STRING,
+						LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM, LispNames.GRAY_OUTPUT_STREAM,
+						LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM,
+						LispNames.GRAY_CHARACTER_STREAM, LispNames.GRAY_BINARY_STREAM, LispNames.GRAY_STREAM_MIXIN,
+						LispNames.GRAY_STREAM_WRITE_BYTE, LispNames.GRAY_STREAM_READ_BYTE,
+						LispNames.GRAY_STREAM_READ_CHAR, LispNames.GRAY_STREAM_UNREAD_CHAR,
+						LispNames.GRAY_STREAM_READ_LINE, LispNames.GRAY_STREAM_LISTEN,
+						LispNames.GRAY_STREAM_READ_CHAR_NO_HANG, LispNames.GRAY_STREAM_PEEK_CHAR,
+						LispNames.GRAY_STREAM_CLEAR_INPUT, LispNames.GRAY_STREAM_READ_SEQUENCE,
+						LispNames.GRAY_STREAM_WRITE_SEQUENCE, LispNames.GRAY_STREAM_LINE_COLUMN,
+						LispNames.GRAY_STREAM_START_LINE_P, LispNames.GRAY_STREAM_TERPRI,
+						LispNames.GRAY_STREAM_FRESH_LINE, LispNames.GRAY_STREAM_ADVANCE_TO_COLUMN,
+						LispNames.GRAY_STREAM_FORCE_OUTPUT, LispNames.GRAY_STREAM_FINISH_OUTPUT,
+						LispNames.GRAY_STREAM_CLEAR_OUTPUT, LispNames.GRAY_STREAM_FILE_POSITION))));
 		// bordeaux-threads (nickname bt) + bt2 (nickname bordeaux-threads-2, mirroring
 		// upstream's apiv2/pkgdcl.lisp): one shim system (bordeaux-threads.lisp,
 		// eval.ShimLibraries) providing both API namespaces. The locking subset rides the
@@ -1454,22 +1458,30 @@ public final class PackageRegistry {
 				"CHARACTER-CODING-ERROR-ENCODING", "CHARACTER-DECODING-ERROR", "CHARACTER-DECODING-ERROR-OCTETS",
 				"CHARACTER-ENCODING-ERROR", "CHARACTER-ENCODING-ERROR-CODE", "END-OF-INPUT-IN-CHARACTER",
 				"CHARACTER-OUT-OF-RANGE", "INVALID-UTF8-STARTER-BYTE", "INVALID-UTF8-CONTINUATION-BYTE",
-				"OVERLONG-UTF8-SEQUENCE"));
+				"OVERLONG-UTF8-SEQUENCE", "CHARACTER-ENCODING", "ENC-NAME", "ENC-ALIASES", "ENC-CODE-UNIT-SIZE",
+				"ENC-CODESPACE", "ENC-NATIVE-ENDIANNESS", "ENC-DECODE-LITERAL-CODE-UNIT-LIMIT",
+				"ENC-ENCODE-LITERAL-CODE-UNIT-LIMIT", "ENC-USE-BOM", "ENC-BOM-ENCODING", "ENC-NUL-ENCODING",
+				"ENC-DEFAULT-REPLACEMENT", "ENCODABLE-CODE-POINT-P", "AMBIGUOUS-ENCODING-P",
+				"INSTANTIATE-CONCRETE-MAPPINGS", "WITH-SIMPLE-VECTOR", "WITH-CHECKED-SIMPLE-VECTOR"));
 		define(new LispPackage(LispNames.BABEL_ENCODINGS_PKG, List.of(), babelEncodingsExternals));
-		Set<String> babelExternals = new HashSet<>(
-				Set.of(LispNames.STRING_TO_OCTETS, LispNames.OCTETS_TO_STRING, LispNames.STRING_SIZE_IN_OCTETS,
-						// The mapping TABLE and the character type live in babel proper
-						// upstream, not in babel-encodings. *string-vector-mappings* is
-						// INTERNAL upstream -- a defpackage :import-from reads it anyway
-						// --
-						// but a rontolisp :import-from resolves through the external
-						// list, so
-						// the shim exports it.
-						// unicode-string / simple-unicode-string are upstream's
-						// degenerate
-						// aliases (unicode-char above is exactly character) -- external
-						// upstream, and cffi's strings.lisp reads them by that spelling.
-						"*STRING-VECTOR-MAPPINGS*", "UNICODE-CHAR", "UNICODE-STRING", "SIMPLE-UNICODE-STRING"));
+		Set<String> babelExternals = new HashSet<>(Set.of(LispNames.STRING_TO_OCTETS, LispNames.OCTETS_TO_STRING,
+				LispNames.STRING_SIZE_IN_OCTETS,
+				// The mapping TABLE and the character type live in babel proper
+				// upstream, not in babel-encodings. *string-vector-mappings* is
+				// INTERNAL upstream -- a defpackage :import-from reads it anyway
+				// --
+				// but a rontolisp :import-from resolves through the external
+				// list, so
+				// the shim exports it.
+				// unicode-string / simple-unicode-string are upstream's
+				// degenerate
+				// aliases (unicode-char above is exactly character) -- external
+				// upstream, and cffi's strings.lisp reads them by that spelling.
+				"*STRING-VECTOR-MAPPINGS*", "UNICODE-CHAR", "UNICODE-STRING", "SIMPLE-UNICODE-STRING",
+				"UNICODE-CHAR-CODE-LIMIT", "ENABLE-SHARP-BACKSLASH-SYNTAX", "SET-SHARP-BACKSLASH-SYNTAX-IN-READTABLE",
+				"EXTERNAL-FORMAT", "MAKE-EXTERNAL-FORMAT", "ENSURE-EXTERNAL-FORMAT", "EXTERNAL-FORMAT-ENCODING",
+				"EXTERNAL-FORMAT-EOL-STYLE", "EXTERNAL-FORMAT-EQUAL", "*DEFAULT-EOL-STYLE*", "ENCODABLE-CHARACTER-P",
+				"ENCODABLE-STRING-P", "CONCATENATE-STRINGS-TO-OCTETS", "VECTOR-SIZE-IN-CHARS"));
 		// Real babel :uses babel-encodings and re-exports it, so every babel-encodings
 		// external must also answer to the babel: spelling -- as an IMPORT REDIRECT,
 		// not an owned symbol, so babel:X and babel-encodings:X canonicalize to the
@@ -1490,7 +1502,8 @@ public final class PackageRegistry {
 		// decode and its two octet predicates), spelled babel::name by their call
 		// sites. Owned by the package rather than left to the resolver's tolerance for
 		// an unknown :: member.
-		babelSymbols.addAll(Set.of(LispNames.NORMALIZE_ENCODING, "%DECODING-ERROR", "%ENCODING-ERROR",
+		babelSymbols.addAll(Set.of(LispNames.NORMALIZE_ENCODING, "%ENCODING-NAME", "%MAKE-EXTERNAL-FORMAT",
+				"%EXTERNAL-FORMAT-P", "%CHECK-VECTOR-BOUNDS", "%DECODING-ERROR", "%ENCODING-ERROR",
 				"%COUNT-CODE-POINTS", "%COUNT-OCTETS", "%DECODE-INTO", "%ENCODE-INTO", "%UTF-8-DECODE-1",
 				"%CONTINUATION-P", "%INVALID-CB-P", "STRING-GET", "STRING-SET"));
 		define(new LispPackage(LispNames.BABEL_PKG, List.of(), babelSymbols, babelExternals, babelImports));

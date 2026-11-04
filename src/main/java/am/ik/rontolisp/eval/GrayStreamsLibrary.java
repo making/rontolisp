@@ -76,10 +76,10 @@ public final class GrayStreamsLibrary {
 			LispNames.GRAY_STREAM_FILE_POSITION, LispNames.GRAY_STREAM_LINE_COLUMN, LispNames.GRAY_STREAM_START_LINE_P,
 			LispNames.GRAY_STREAM_TERPRI, LispNames.GRAY_STREAM_FRESH_LINE, LispNames.GRAY_STREAM_ADVANCE_TO_COLUMN,
 			LispNames.GRAY_STREAM_FORCE_OUTPUT, LispNames.GRAY_STREAM_FINISH_OUTPUT, LispNames.GRAY_STREAM_CLEAR_OUTPUT,
-			LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_FUNDAMENTAL_STREAM,
-			LispNames.GRAY_INPUT_STREAM, LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM,
-			LispNames.GRAY_BINARY_OUTPUT_STREAM, LispNames.GRAY_CHARACTER_STREAM, LispNames.GRAY_BINARY_STREAM,
-			LispNames.GRAY_STREAM_MIXIN);
+			LispNames.GRAY_STREAM_CLEAR_INPUT, LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM,
+			LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM, LispNames.GRAY_OUTPUT_STREAM,
+			LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM, LispNames.GRAY_CHARACTER_STREAM,
+			LispNames.GRAY_BINARY_STREAM, LispNames.GRAY_STREAM_MIXIN);
 
 	/** The protocol's base classes, by member name (UPPERCASE, like the set above). */
 	private static final java.util.Set<String> BASE_CLASS_NAMES = java.util.Set.of(LispNames.GRAY_CHAR_OUTPUT_STREAM,
@@ -166,10 +166,11 @@ public final class GrayStreamsLibrary {
 			WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH, FILE_POSITION_SET_DISPATCH, BROADCAST_FILE_LENGTH_DISPATCH,
 			TERPRI_DISPATCH, FRESH_LINE_DISPATCH, WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH,
 			CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH, PRINT_DISPATCH, CLOSE_DISPATCH,
-			"%GRAY-DEFAULT-READ-LINE", "%GRAY-DEFAULT-READ-SEQUENCE", "%GRAY-DEFAULT-WRITE-SEQUENCE",
-			"%GRAY-DEFAULT-WRITE-STRING", "%GRAY-DEFAULT-WRITE-CHAR", "%GRAY-DEFAULT-TERPRI",
-			"%GRAY-DEFAULT-START-LINE-P", "%GRAY-DEFAULT-FRESH-LINE", "%GRAY-DEFAULT-ADVANCE-TO-COLUMN",
-			"%GRAY-DEFAULT-UNREAD-CHAR", "%GRAY-DEFAULT-PEEK-CHAR", "%GRAY-READ-CHAR-1", "%GRAY-WHITESPACE-CHAR-P");
+			LispNames.CLEAR_INPUT, "%GRAY-DEFAULT-READ-LINE", "%GRAY-DEFAULT-READ-SEQUENCE",
+			"%GRAY-DEFAULT-WRITE-SEQUENCE", "%GRAY-DEFAULT-WRITE-STRING", "%GRAY-DEFAULT-WRITE-CHAR",
+			"%GRAY-DEFAULT-TERPRI", "%GRAY-DEFAULT-START-LINE-P", "%GRAY-DEFAULT-FRESH-LINE",
+			"%GRAY-DEFAULT-ADVANCE-TO-COLUMN", "%GRAY-DEFAULT-UNREAD-CHAR", "%GRAY-DEFAULT-PEEK-CHAR",
+			"%GRAY-READ-CHAR-1", "%GRAY-WHITESPACE-CHAR-P");
 
 	/**
 	 * The dispatch defuns spliced only when a rewrite references them (see
@@ -184,7 +185,8 @@ public final class GrayStreamsLibrary {
 			STREAM_ELEMENT_TYPE_DISPATCH, READ_LINE_DISPATCH, LISTEN_DISPATCH, READ_SEQUENCE_DISPATCH,
 			WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH, FILE_POSITION_SET_DISPATCH, BROADCAST_FILE_LENGTH_DISPATCH,
 			TERPRI_DISPATCH, FRESH_LINE_DISPATCH, WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH,
-			CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH, PRINT_DISPATCH, CLOSE_DISPATCH);
+			CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH, PRINT_DISPATCH, CLOSE_DISPATCH,
+			LispNames.CLEAR_INPUT);
 
 	/**
 	 * The compile-path pre-pass (the usocket {@code process()} pattern): when the program
@@ -236,6 +238,7 @@ public final class GrayStreamsLibrary {
 		}
 		RewriteContext ctx = new RewriteContext(new java.util.LinkedHashSet<>(), ownedOperators(program),
 				hostProtocol || binds(program, STANDARD_OUTPUT), hostProtocol || binds(program, STANDARD_INPUT));
+		program = takeOverClearInput(program, ctx);
 		java.util.List<LispVal> rewritten = new java.util.ArrayList<>();
 		for (LispVal form : program) {
 			rewritten.add(rewrite(form, ctx));
@@ -292,6 +295,23 @@ public final class GrayStreamsLibrary {
 			out.addAll(body.subList(defaultsAt, body.size()));
 		}
 		return out;
+	}
+
+	/**
+	 * Replaces the prelude's {@code clear-input}, where this program carries it, with
+	 * gray.lisp's, which reaches {@code stream-clear-input}. The operator is an ordinary
+	 * defun rather than a lowered call, so its one definition is what a call and a
+	 * function value both reach: no call site is rewritten and no wrapper is involved.
+	 * The prelude's own stays free of the protocol, so a program that calls
+	 * {@code clear-input} and names no Gray stream does not carry it.
+	 */
+	private static List<LispVal> takeOverClearInput(List<LispVal> program, RewriteContext ctx) {
+		java.util.List<LispVal> kept = new java.util.ArrayList<>(program);
+		if (!kept.removeAll(LispPreludeLibrary.formsFor(LispNames.CLEAR_INPUT))) {
+			return program;
+		}
+		ctx.used().add(LispNames.CLEAR_INPUT);
+		return kept;
 	}
 
 	/**
