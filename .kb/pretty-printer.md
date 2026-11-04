@@ -122,7 +122,7 @@ escapes. Abbreviation applies under BOTH
   `(intern "")` built an empty byte array that `_print_val`'s unguarded byte 0 test trapped on;
   `buildInternSym` now keeps one byte behind the zero length. On the JVM a bare `""` remains a symbol
   no first-character test survives (about 30 `charAt(0)` sites): `(symbolp (intern ""))` throws
-  `StringIndexOutOfBoundsException`, a `simple-error`, measured 2026-11-05. So ci-spec spells only
+  `StringIndexOutOfBoundsException`, a `simple-error`, measured 2026-11-05 (`.todo/i49`). So ci-spec spells only
   `(make-symbol "")` and `(intern "" :keyword)`.
 - `%print-case-fold` converts only what stands ahead of the first `|`: the escaped member is never
   recased (`|Foo|` under `:downcase`, `pkg::|1E5|`). Until 2026-11-05 it folded the whole text.
