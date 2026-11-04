@@ -70,7 +70,11 @@ The one operator that reaches the protocol through its DEFINITION: it is a prelu
 every backend, not a lowered call, so a call and a function value reach one function and
 there is no call site or `GRAY_WRAPPERS` entry to route. gray.lisp defines a whole `clear-input`
 (in `SPLICE_ON_USE`, so `protocolForms` leaves it out); `GrayStreamsLibrary.takeOverClearInput`
-removes the prelude's form from the program (`List.removeAll`, by value) and splices gray.lisp's.
+removes the prelude's form from the program and splices gray.lisp's. It tells that form by the
+lambda list both spell (`(&optional %ci-s)`), so a program's own `defun` stays; asking
+`LispPreludeLibrary` would close a class cycle, since the prelude's selection asks
+`GrayStreamsLibrary.usesProtocol` (`PackageCycleTest`). Keep the two lambda lists equal
+(`GrayStreamsLibraryTest#aProtocolProgramReplacesThePreludesClearInputOnly`).
 The interpreter gets it by evaluating gray.lisp, which overwrites the prelude's whether or not
 that had loaded yet. The prelude's stays free of the protocol, so a program calling
 `clear-input` and naming no Gray stream carries none. The non-Gray half is two copies of the

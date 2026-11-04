@@ -304,14 +304,30 @@ public final class GrayStreamsLibrary {
 	 * function value both reach: no call site is rewritten and no wrapper is involved.
 	 * The prelude's own stays free of the protocol, so a program that calls
 	 * {@code clear-input} and names no Gray stream does not carry it.
+	 *
+	 * <p>
+	 * The prelude's form is told by the lambda list both definitions spell: its
+	 * {@code %}-prefixed parameter is no program's own, so a {@code defun} a program
+	 * wrote stays. Asking the prelude instead would close a cycle, since the prelude's
+	 * selection already asks this class ({@link #usesProtocol}).
 	 */
 	private static List<LispVal> takeOverClearInput(List<LispVal> program, RewriteContext ctx) {
+		LispVal lambdaList = defunLambdaList(dispatchDefun(LispNames.CLEAR_INPUT));
 		java.util.List<LispVal> kept = new java.util.ArrayList<>(program);
-		if (!kept.removeAll(LispPreludeLibrary.formsFor(LispNames.CLEAR_INPUT))) {
+		if (!kept.removeIf(form -> LispNames.CLEAR_INPUT.equals(dispatchDefunName(form))
+				&& java.util.Objects.equals(lambdaList, defunLambdaList(form)))) {
 			return program;
 		}
 		ctx.used().add(LispNames.CLEAR_INPUT);
 		return kept;
+	}
+
+	/**
+	 * A {@code defun}'s lambda list, or {@code null} for a form too short to have one.
+	 */
+	private static @Nullable LispVal defunLambdaList(LispVal defun) {
+		return defun instanceof am.ik.rontolisp.LispCons form && form.cdr() instanceof am.ik.rontolisp.LispCons named
+				&& named.cdr() instanceof am.ik.rontolisp.LispCons rest ? rest.car() : null;
 	}
 
 	/**
