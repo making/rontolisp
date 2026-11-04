@@ -159,9 +159,8 @@ as part of a symbol on all four instead of signalling (CLHS 2.4.8; measured 2026
   `return-from`'s value form (`.kb/interpreter-tail-calls.md`), the `ratio` type test
   (`.kb/declarations-type-checks.md`). rutils loads since h71 (its `iter` `:unioning`
   reads `` #`(member % var :test ,test) `` in a template, 2026-10-31); cl-redis then stops
-  in its own `connection.lisp`: `TRIVIAL-GRAY-STREAMS:STREAM-CLEAR-INPUT` is not external
-  (`.todo/h77`), and past it the same file names `sb-sys:fd-stream` with no feature guard
-  (cl-redis 20250622 loads on SBCL only).
+  in its own `connection.lisp`, which names `sb-sys:fd-stream` with no feature guard
+  (`No such package: SB-SYS`, measured 2026-11-04; cl-redis 20250622 loads on SBCL only).
 - Compile paths (h57, 2026-10-31): named-readtables runs on all four (its `defpackage` sits
   under `(handler-bind () ...)` -- the SBCL binding is `#+sbcl` -- in an `eval-when`, which
   `flattenTopLevel` now splices like `progn`). Through `ql:quickload`, output = the

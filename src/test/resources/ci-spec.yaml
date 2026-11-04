@@ -16760,6 +16760,25 @@ cases:
         (read-char gip-h2))
       (print (list (input-stream-p (make-string-input-stream "z"))
                    (output-stream-p (make-string-input-stream "z"))))
+      ; clear-input reaches stream-clear-input by a call, as a function value, through
+      ; a standard stream and through a composite's input side, and answers nil
+      ; whatever the method does. A stream with no character input side has no method.
+      (defclass gip-clear (gip-source) ((gip-log :initform nil)))
+      (defmethod rontolisp:stream-clear-input ((gip-s gip-clear))
+        (push :clear (slot-value gip-s 'gip-log))
+        :ignored)
+      (let ((gip-c (make-instance 'gip-clear :gip-text "x")))
+        (print (list (clear-input gip-c)
+                     (funcall #'clear-input gip-c)
+                     (let ((*standard-input* gip-c)) (clear-input))
+                     (clear-input (make-two-way-stream gip-c *standard-output*))
+                     (clear-input (make-echo-stream gip-c *standard-output*))
+                     (clear-input (make-concatenated-stream gip-c))
+                     (clear-input (make-concatenated-stream))
+                     (clear-input (make-broadcast-stream))
+                     (clear-input (make-instance 'gip-source :gip-text "x"))
+                     (handler-case (clear-input (make-instance 'gip-bytes)) (error () :no-method))
+                     (slot-value gip-c 'gip-log))))
     expected: |
       #\a
       #\a
@@ -16784,6 +16803,7 @@ cases:
       "cd"
       "UNREAD-CHAR without an intervening READ-CHAR"
       (T NIL)
+      (NIL NIL NIL NIL NIL NIL NIL NIL NIL :NO-METHOD (:CLEAR :CLEAR :CLEAR :CLEAR :CLEAR :CLEAR))
   - name: gray-stream-is-a-stream
     source: |
       ; A Gray stream IS a stream in Common Lisp, so streamp and

@@ -16,7 +16,7 @@ Lisp in `src/main/resources/am/ik/rontolisp/eval/gray.lisp`, served by
   `stream-write-byte`; `stream-line-column`, `stream-start-line-p`, `stream-terpri`,
   `stream-fresh-line`, `stream-advance-to-column`; `stream-force-output`/`-finish-output`/
   `-clear-output`; `stream-read-byte`, `stream-read-char`, `-read-char-no-hang`,
-  `-peek-char`, `-unread-char`, `-read-line`, `stream-listen`;
+  `-peek-char`, `-unread-char`, `-read-line`, `stream-listen`, `stream-clear-input`;
   `stream-read-sequence`/`-write-sequence (stream sequence start end)` (end always an integer
   by method time); `stream-file-position` + its `(setf ...)` writer.
 - **ONE of `stream-write-char`/`stream-write-string` required** (wider than full Gray);
@@ -64,6 +64,25 @@ default T; read/write-sequence's missing end -> `(length sequence)`).
   ahead of `%obj-p`; predicate dispatchers pass the ORIGINAL designator to the built-in.
 - `%gray-fresh-line-dispatch` answers **nil** like the handle-based `fresh-line`, not
   `stream-fresh-line`'s t/nil: an operator's value must not depend on stream kind.
+
+## `clear-input` (2026-11-04)
+The one operator that reaches the protocol through its DEFINITION: it is a prelude defun on
+every backend, not a lowered call, so a call and a function value reach one function and
+there is no call site or `GRAY_WRAPPERS` entry to route. gray.lisp defines a whole `clear-input`
+(in `SPLICE_ON_USE`, so `protocolForms` leaves it out); `GrayStreamsLibrary.takeOverClearInput`
+removes the prelude's form from the program (`List.removeAll`, by value) and splices gray.lisp's.
+The interpreter gets it by evaluating gray.lisp, which overwrites the prelude's whether or not
+that had loaded yet. The prelude's stays free of the protocol, so a program calling
+`clear-input` and naming no Gray stream carries none. The non-Gray half is two copies of the
+designator check, one in each definition.
+- Answers nil whatever the method answers. Default method on
+  `fundamental-character-input-stream` only, as sb-gray: a binary or output-only Gray stream
+  has no applicable method (SBCL 2.2.9 errors too). `%broadcast-stream` answers nil;
+  `%two-way-stream`, `%echo-stream` and `%concatenated-stream` (its current component) forward
+  to their input side, as SBCL's do, which makes each of those prelude entries pull
+  `clear-input`.
+- Pinned by ci-spec `gray-stream-input-protocol-widening`; `FastIoCircularStreamsE2eTest` on the
+  shim.
 
 ## Stream-less calls on a Gray `*standard-output*` / `*standard-input*`
 A nil (or omitted) stream designates the CURRENT standard stream, which may hold a Gray instance:
@@ -289,7 +308,9 @@ trivial-gray-streams parent AND its rontolisp twin, so ONE delegating method per
 every adapter subclass; plus `trivial-gray-stream-mixin` (empty) and the portable generics
 (`stream-read/write-sequence` spelled `(stream sequence start end &key)`), whose DEFAULT
 methods reuse the `%gray-default-*` loops. Package seeding in `PackageRegistry`; `LispNames`
-`GRAY_*` constants.
+`GRAY_*` constants. The export list equals the real package's (audited 2026-11-04 against
+trivial-gray-streams 20241012, which lacked `stream-read-char-no-hang`, `stream-peek-char`,
+`stream-clear-input` until then; `PackageResolverTest#shimPackagesExportEveryExternalOfTheRealLibrary`).
 
 ## The `format` rewrite
 `(format STREAM ctrl args...)` with a possibly-instance destination becomes:

@@ -81,7 +81,7 @@ page.
 | `open-stream-p` | `(open-stream-p stream)` | `t` while the stream is open, `nil` after `close` |
 | `force-output` | `(force-output stream)` | Flush an output stream (no argument = standard output). Returns nil |
 | `finish-output` | `(finish-output stream)` | The same operation as `force-output` -- every write here is synchronous once flushed |
-| `clear-output` | `(clear-output stream)` | Discard an output stream's unwritten buffer. Nothing is buffered that way here, so it validates the designator and returns nil |
+| `clear-output` | `(clear-output stream)` | Discard an output stream's unwritten buffer. Nothing is buffered that way here, so it validates the designator and returns nil; a Gray stream's `stream-clear-input` method runs |
 | `clear-input` | `(clear-input stream)` | Discard an input stream's undelivered buffer. Nothing is buffered that way here, so it validates the designator and returns nil |
 | `listen` | `(listen stream)` | `t` when input is immediately available without blocking; Preview 1 WASM has no such probe |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | Write the string plus a newline to an output stream (or to standard output). Returns the string |

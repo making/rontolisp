@@ -31,6 +31,12 @@ import java.util.List;
  * {@code babel:character-decoding-error}, which is what a consumer's fall-back-to-binary
  * handler names. The suppression special is read by the codec itself rather than by the
  * drivers, so binding it makes the mapping layer answer substitution characters too.
+ *
+ * <p>
+ * The rest of the exercise covers the externals past that protocol, with the answers real
+ * babel gives on SBCL 2.2.9: the {@code enc-*} readers, the size and encodability
+ * functions, the bounds drivers check, external formats, and that
+ * {@code *default-character-encoding*} is read when a call runs.
  */
 class BabelMappingE2eTest extends AsdfLibraryE2eSupport {
 
@@ -111,16 +117,83 @@ class BabelMappingE2eTest extends AsdfLibraryE2eSupport {
 			             (babel:string-size-in-octets "aあb" :start 1 :end 2)))
 			(print (handler-case (babel:string-to-octets "x" :encoding :cp932)
 			         (error (e) (format nil "~A" e))))
+			(defun lst (v) (map 'list #'identity v))
+			(dolist (name '(:utf-8 :latin-1 :us-ascii))
+			  (let ((e (babel-encodings:get-character-encoding name)))
+			    (print (list (babel-encodings:enc-name e)
+			                 (babel-encodings:enc-aliases e)
+			                 (babel-encodings:enc-code-unit-size e)
+			                 (babel-encodings:enc-codespace e)
+			                 (babel-encodings:enc-native-endianness e)
+			                 (babel-encodings:enc-decode-literal-code-unit-limit e)
+			                 (babel-encodings:enc-encode-literal-code-unit-limit e)
+			                 (babel-encodings:enc-use-bom e)
+			                 (and (babel-encodings:enc-bom-encoding e)
+			                      (lst (babel-encodings:enc-bom-encoding e)))
+			                 (lst (babel-encodings:enc-nul-encoding e))
+			                 (babel-encodings:enc-default-replacement e)
+			                 (babel-encodings:ambiguous-encoding-p e)
+			                 (typep e 'babel-encodings:character-encoding)
+			                 (babel-encodings:encodable-code-point-p e 128)
+			                 (babel-encodings:encodable-code-point-p e 257)))))
+			(print (lst (babel:concatenate-strings-to-octets :utf-8 "a" "あ" "")))
+			(print (lst (babel:concatenate-strings-to-octets :latin-1 "é" "z")))
+			(print (list (multiple-value-list (babel:vector-size-in-chars (octs '(97 227 129 130 98))))
+			             (multiple-value-list (babel:vector-size-in-chars (octs '(97 227 129 130 98)) :max 2))
+			             (multiple-value-list (babel:string-size-in-octets "aあb"))
+			             (multiple-value-list (babel:string-size-in-octets "aあb" :max 3))))
+			(print (list (handler-case (babel:string-to-octets "a" :start 2) (error (e) (format nil "~A" e)))
+			             (handler-case (babel:octets-to-string (octs '(97)) :end 3) (error (e) (format nil "~A" e)))))
+			(print (list (lst (babel:string-to-octets "a" :use-bom t)) (lst (babel:string-to-octets "a" :use-bom nil))))
+			(print (list (babel:encodable-character-p #\\a)
+			             (babel:encodable-character-p (code-char 233) :encoding :ascii)
+			             (babel:encodable-string-p "abc" :encoding :ascii)
+			             (multiple-value-list (babel:encodable-string-p "aéc" :encoding :ascii))
+			             (babel:encodable-string-p "aéc" :encoding :ascii :end 1)
+			             (= babel:unicode-char-code-limit char-code-limit)))
+			(print (let ((babel:*default-character-encoding* :latin-1))
+			         (list (lst (babel:string-to-octets "é"))
+			               (babel:octets-to-string (octs '(233)))
+			               (babel:encodable-character-p (code-char 300))
+			               (babel-encodings:enc-name (babel-encodings:get-character-encoding :default)))))
+			(let ((ef (babel:make-external-format :latin-1 :eol-style :crlf)))
+			  (print (list (babel-encodings:enc-name (babel:external-format-encoding ef))
+			               (babel:external-format-eol-style ef)
+			               (babel:external-format-eol-style (babel:make-external-format :utf-8))
+			               (typep ef 'babel:external-format)
+			               (eq ef (babel:ensure-external-format ef))
+			               (babel:external-format-equal ef (babel:ensure-external-format '(:latin1 :eol-style :crlf)))
+			               (babel:external-format-equal ef (babel:ensure-external-format :latin-1))
+			               (lst (babel:string-to-octets "é" :encoding ef)))))
+			(print (handler-case (babel:make-external-format :utf-8 :eol-style :nope)
+			         (type-error (e) (type-error-datum e))))
+			(print (babel-encodings:with-checked-simple-vector ((v (octs '(1 2 3))) (s 1) (e nil))
+			         (list (aref v s) e)))
+			(print (handler-case (babel-encodings:with-checked-simple-vector ((v (octs '(1 2 3))) (s 2) (e 9))
+			                       (list v s e))
+			         (error (c) (format nil "~A" c))))
+			;; rontolisp's own: the reader syntax it does not implement refuses by name
+			(print (handler-case (babel:set-sharp-backslash-syntax-in-readtable)
+			         (error (c) (format nil "~A" c))))
 			""";
 
 	private static final List<String> EXPECTED = List.of("\"aあ🎉zé\"",
 			"((1 0 1 #\\a) (1 1 4 #\\あ) (1 4 8 #\\🎉) (1 8 9 #\\z) (1 9 11 #\\é))",
-			"((1 0 1 #\\a) (1 1 2 #\\é) (1 2 3 #\\z))", "(4 1 1)", "(:UTF-8 :LATIN-1 (:UTF-8 :LATIN-1 :US-ASCII) T)",
+			"((1 0 1 #\\a) (1 1 2 #\\é) (1 2 3 #\\z))", "(4 1 1)", "(:UTF-8 :ISO-8859-1 (:UTF-8 :ISO-8859-1 :ASCII) T)",
 			"(:END-OF-INPUT \"Illegal :UTF-8 character starting at position 0.\")",
 			"(:BAD-CONTINUATION \"Illegal :UTF-8 character starting at position 0.\" 0 (255))",
-			"(:NOT-ENCODABLE \"Unable to encode character code point 12354 as :US-ASCII.\" 12354)",
+			"(:NOT-ENCODABLE \"Unable to encode character code point 12354 as :ASCII.\" 12354)",
 			"((65533) (65533 65) #(97 26))", "(65533 65)", "(5 3 5 #(97 227 129 130 98))", "(1 1)", "(5 1 3)",
-			"\"babel: unsupported character encoding :CP932 (this build implements (:UTF-8 :LATIN-1 :US-ASCII))\"");
+			"\"babel: unsupported character encoding :CP932 (this build implements (:UTF-8 :ISO-8859-1 :ASCII))\"",
+			"(:UTF-8 NIL 8 ((0 1114111)) T 128 128 NIL (239 187 191) (0) 65533 NIL T T T)",
+			"(:ISO-8859-1 (:LATIN-1 :LATIN1) 8 ((0 256)) T 256 256 NIL NIL (0) 26 NIL T T NIL)",
+			"(:ASCII (:US-ASCII) 8 ((0 127)) T 128 128 NIL NIL (0) 26 NIL T NIL NIL)", "(97 227 129 130)", "(233 122)",
+			"((3 5) (2 4) (5 3) (1 1))",
+			"(\"Invalid start (2) and end (1) values for vector of length 1.\" \"Invalid start (0) and end (3) values for vector of length 1.\")",
+			"((239 187 191 97) (97))", "(T NIL T (NIL 1) T T)", "((233) \"é\" NIL :ISO-8859-1)",
+			"(:ISO-8859-1 :CRLF :LF T T T NIL (233))", ":NOPE", "(2 3)",
+			"\"Invalid start (2) and end (9) values for vector of length 3.\"",
+			"\"babel: the #\\\\uXXXX reader syntax is not implemented\"");
 
 	@Override
 	protected String systemDir() {

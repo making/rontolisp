@@ -483,9 +483,17 @@ downloading. `BuiltinSystems.DEPENDENCIES` records edges between shims; one exis
   6-octet UTF-8 forms are consumed WHOLE by both. Errors are upstream's
   (`character-coding-error` hierarchy, `*suppress-character-coding-errors*` substituting U+FFFD /
   U+001A). **Both packages are Java-seeded, so a `.lisp`-only widening publishes nothing** — a
-  new name needs its `PackageRegistry` entry. Stops at three encodings (`:utf-8`,
-  `:latin-1`/`:us-ascii`); `string-size-in-octets` answers ONE value where upstream answers two
-  (`.kb/multiple-values.md`). Pinned by `BabelMappingE2eTest`.
+  new name needs its `PackageRegistry` entry. Stops at three encodings, under upstream's
+  canonical names (`:utf-8`, `:iso-8859-1`, `:ascii`, so `enc-name` and a condition's encoding
+  answer as on SBCL; the aliases still read). Every external of babel 20260101 is exported
+  (audited 2026-11-04, `PackageResolverTest#shimPackagesExportEveryExternalOfTheRealLibrary`;
+  output = SBCL 2.2.9 with real babel, `BabelMappingE2eTest`). What that audit left: only babel's
+  own tests spell `enable-sharp-backslash-syntax` (the standard `#\` reader is no function here
+  for its fallback to call), and `instantiate-concrete-mappings` is cffi's `strings.lisp` alone,
+  which `cffi-strings.lisp` replaces; both signal by name. `external-format` is a structure, so
+  a program that makes none carries no `make-instance`. The audit also found `:encoding` ignoring
+  `*default-character-encoding*` and the drivers ignoring a bad `:start`/`:end` (an empty answer
+  where upstream signals), both fixed. cxml and `cffi-uffi-compat` load on the interpreter since.
 - **`uiop`** — a package stub whose definitions arrive through `eval.UiopLibrary`
   (`.kb/uiop.md`; 15 sub-packages, every unimplemented member a `not-implemented-error` stub).
   Real members: `add-package-local-nickname`, `file-exists-p`, `merge-pathnames*`, the LISTING

@@ -1464,6 +1464,8 @@ public final class LispPreludeLibrary {
 				    (if %bs-cs
 				        (fresh-line (car (last %bs-cs)))
 				        nil)))
+				(defmethod rontolisp:stream-clear-input ((%bs-s %broadcast-stream))
+				  nil)
 				(defun %make-broadcast-stream (%mbs-components)
 				  (make-instance '%broadcast-stream :components %mbs-components))
 				""");
@@ -1497,6 +1499,8 @@ public final class LispPreludeLibrary {
 				(defmethod rontolisp:stream-write-byte ((%tw %two-way-stream) %tw-b)
 				  (write-byte %tw-b (%two-way-output %tw))
 				  %tw-b)
+				(defmethod rontolisp:stream-clear-input ((%tw %two-way-stream))
+				  (clear-input (%two-way-input %tw)))
 				(defun make-two-way-stream (input-stream output-stream)
 				  (if (input-stream-p input-stream)
 				      nil
@@ -1555,6 +1559,8 @@ public final class LispPreludeLibrary {
 				(defmethod rontolisp:stream-write-byte ((%es %echo-stream) %es-b)
 				  (write-byte %es-b (%echo-output %es))
 				  %es-b)
+				(defmethod rontolisp:stream-clear-input ((%es %echo-stream))
+				  (clear-input (%echo-input %es)))
 				(defmethod rontolisp:stream-peek-char ((%es %echo-stream))
 				  ;; Only what is READ echoes: a peek looks at the input component
 				  ;; without writing, so the output stream's position does not move.
@@ -1612,6 +1618,9 @@ public final class LispPreludeLibrary {
 				                   (progn
 				                     (setq %cs-r %cs-b)
 				                     (setq %cs-done t)))))))))
+				(defmethod rontolisp:stream-clear-input ((%cs %concatenated-stream))
+				  (let ((%cs-st (%concatenated-stream-streams %cs)))
+				    (if %cs-st (clear-input (car %cs-st)) nil)))
 				(defun make-concatenated-stream (&rest %mcs-streams)
 				  (dolist (%mcs-s %mcs-streams)
 				    (if (input-stream-p %mcs-s)
@@ -1736,7 +1745,8 @@ public final class LispPreludeLibrary {
 				""");
 		// clear-input: the read-side twin of clear-output. Nothing on any backend
 		// buffers input a program could throw away, so the operation validates its
-		// stream DESIGNATOR (nil and t are the standard input stream) and answers nil.
+		// stream DESIGNATOR (nil and t are the standard input stream) and answers nil. A
+		// program using the Gray protocol gets gray.lisp's definition in place of this one.
 		SOURCES.put(LispNames.CLEAR_INPUT, """
 				(defun clear-input (&optional %ci-s)
 				  (if (or (null %ci-s) (eq %ci-s t) (streamp %ci-s))

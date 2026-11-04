@@ -33,6 +33,7 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 | `unread-char` | `rontolisp:stream-unread-char` (デフォルトメソッドは文字をインスタンス自身に保管) |
 | `read-line` | `rontolisp:stream-read-line` (デフォルトメソッドは `stream-read-char` をループ) |
 | `listen` | `rontolisp:stream-listen` (デフォルトメソッドは `nil` を返す) |
+| `clear-input` | `rontolisp:stream-clear-input`。メソッドの返す値によらず `nil` を返します (デフォルトメソッドは `fundamental-character-input-stream` にあり `nil` を返す) |
 | `open-stream-p` | `t` を返します -- `close` と同じく、プログラムが所有できる名前です |
 | `streamp`, `(typep x 'stream)` | `t` を返します -- Gray ストリームはストリームそのものなので、型で分岐するライブラリは Lisp ストリーム側の枝を選びます |
 | `stream-element-type` | `character`、`fundamental-binary-stream` の下なら `(unsigned-byte 8)`。両方を継承したクラス (バイバレントなストリーム) は `character` を返します。この答えはどちらのバッファを確保すべきかを示すものだからです。プログラムが所有できる名前です |
@@ -192,7 +193,8 @@ Gray ストリームを閉じると `t` を返し、他には何もしません 
 `trivial-gray-streams` ASDF システムを同梱しています
 ([システム](asdf-systems.md#built-in-shim-systems)を参照):
 `trivial-gray-streams` パッケージはすべての基底クラス
-(`trivial-gray-stream-mixin` も含む) とすべての総称関数をミラーします。
+(`trivial-gray-stream-mixin` も含む) と本物のパッケージのすべての総称関数をミラーします。
+`stream-read-char-no-hang` / `stream-peek-char` / `stream-clear-input`、
 `stream-read-sequence` / `stream-write-sequence` `(stream sequence start end
 &key)`、`stream-file-position` とその `(setf ...)` ライタ、そして出力系の
 `stream-line-column` / `stream-start-line-p` / `stream-terpri` /

@@ -427,7 +427,7 @@ must stay in step, and the cross-backend pin is ci-spec
 ## Five stream operators that are prelude Lisp over what exists
 
 `clear-input` (the read-side `clear-output`: nothing here buffers input a program could
-throw away), `interactive-stream-p` (over `%terminal-p`, below),
+throw away; a Gray stream's method runs, [gray-streams.md](gray-streams.md)), `interactive-stream-p` (over `%terminal-p`, below),
 `stream-external-format` (always `:utf-8`), `file-string-length` (the UTF-8 byte length) and
 `broadcast-stream-streams`. All five validate a stream and answer; none needed a primitive,
 a per-backend compiler or a wrapper entry. The composite constructors gained the BYTE half

@@ -118,6 +118,8 @@
 
 (defgeneric rontolisp:stream-listen (stream))
 
+(defgeneric rontolisp:stream-clear-input (stream))
+
 ;; Sequence generics: start/end are always integers by the time a method
 ;; runs -- the dispatch helpers below normalize a missing end to
 ;; (length sequence), mirroring the built-in read-sequence/write-sequence.
@@ -342,6 +344,11 @@
   (rontolisp::%gray-default-unread-char stream character))
 
 (defmethod rontolisp:stream-listen ((stream rontolisp:fundamental-input-stream))
+  nil)
+
+;; sb-gray's default too: clear-input of any other Gray stream has no method.
+(defmethod rontolisp:stream-clear-input
+    ((stream rontolisp:fundamental-character-input-stream))
   nil)
 
 (defmethod rontolisp:stream-read-sequence
@@ -675,6 +682,20 @@
               (%quiet-values (if eof-error-p (error 'end-of-file) eof-value) t)
               (%quiet-values l missing)))
         (read-line stream eof-error-p eof-value))))
+
+;; clear-input is prelude Lisp on every backend, one definition a call and a function
+;; value both reach, so a protocol program REPLACES it with this one rather than
+;; rewriting its calls (GrayStreamsLibrary.takeOverClearInput; on the interpreter, by
+;; evaluating this file). The non-Gray half is the prelude's definition.
+(defun clear-input (&optional %ci-s)
+  (let ((%ci-target (%stream-target (or %ci-s *standard-input*))))
+    (if (typep %ci-target 'rontolisp:fundamental-stream)
+        (progn
+          (rontolisp:stream-clear-input %ci-target)
+          nil)
+        (if (or (null %ci-s) (eq %ci-s t) (streamp %ci-s))
+            nil
+            (error 'type-error :datum %ci-s :expected-type 'stream)))))
 
 (defun rontolisp::%gray-listen-dispatch (stream)
   (let ((target (%stream-target (or stream *standard-input*))))

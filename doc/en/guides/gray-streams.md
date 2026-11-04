@@ -35,6 +35,7 @@ element class itself.
 | `unread-char` | `rontolisp:stream-unread-char` (default method parks the character on the instance) |
 | `read-line` | `rontolisp:stream-read-line` (default method loops `stream-read-char`) |
 | `listen` | `rontolisp:stream-listen` (default method answers `nil`) |
+| `clear-input` | `rontolisp:stream-clear-input`, and answers `nil` whatever the method does (default method on `fundamental-character-input-stream` answers `nil`) |
 | `open-stream-p` | answers `t` -- like `close`, a name a program may own |
 | `streamp`, `(typep x 'stream)` | answer `t` -- a Gray stream IS a stream, so a library that dispatches on the type routes it to its Lisp-stream arm |
 | `stream-element-type` | `character`, or `(unsigned-byte 8)` below `fundamental-binary-stream` -- a class subclassing BOTH (a bivalent stream) answers `character`, because the answer is which buffer to allocate. A name a program may own |
@@ -198,7 +199,8 @@ rather than an implementation's own protocol. rontolisp bundles a built-in
 `trivial-gray-streams` ASDF system adapting the portable API onto the protocol
 above (see [Systems](asdf-systems.md#built-in-shim-systems)): the
 `trivial-gray-streams` package mirrors every base class (plus
-`trivial-gray-stream-mixin`) and every generic, including
+`trivial-gray-stream-mixin`) and every generic of the real package, including
+`stream-read-char-no-hang` / `stream-peek-char` / `stream-clear-input`,
 `stream-read-sequence` / `stream-write-sequence` `(stream sequence start end
 &key)`, `stream-file-position` with its `(setf ...)` writer, and the output
 family `stream-line-column` / `stream-start-line-p` / `stream-terpri` /
