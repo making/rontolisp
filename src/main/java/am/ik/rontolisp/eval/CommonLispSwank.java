@@ -1897,7 +1897,8 @@ public final class CommonLispSwank implements SwankLisp {
 		LispVal rest = null;
 		String mode = "";
 		for (LispVal item = arglist; item instanceof LispCons cell; item = cell.cdr()) {
-			if (cell.car() instanceof LispSymbol symbol && LispSymbol.memberName(symbol.name()).startsWith("&")) {
+			if (cell.car() instanceof LispSymbol symbol && PackageRegistry
+				.isClLambdaListKeyword(LispSymbol.memberName(symbol.name()).toUpperCase(Locale.ROOT))) {
 				mode = LispSymbol.memberName(symbol.name()).toUpperCase(Locale.ROOT);
 				continue;
 			}

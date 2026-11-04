@@ -246,9 +246,8 @@ one disagrees with the interpreter's mid-program answer there (`.kb/uiop.md`). c
   and bare in a package using no `cl` too: expansions spell them wherever they run; a `:shadow`
   still wins). Any other `&name` is an ordinary symbol of the package reading it, so `'&pt`
   and `(intern "&PT")` are one symbol (let-plus's `define-structure-let+`, cl-colors'
-  `&rgb`), and a homed one is an ordinary parameter name, no longer a marker: every
-  `startsWith("&")` test downstream reads the spelling. In `cl-user` the name stays bare, so
-  `(defun f (&a) ...)` there still answers `Unsupported lambda-list keyword` where SBCL takes it.
+  `&rgb`), and an ordinary parameter name, homed or (in `cl-user`) bare: a marker is what
+  `LispSymbol.isLambdaListKeyword` answers, not a `&` prefix.
   Pinned by ci-spec `an-ampersand-name-is-an-ordinary-symbol-of-the-current-package`.
 - **An `:export` of an INHERITED name re-exports the used package's symbol**: `resolveDefpackage`
   records every exported name the package does not shadow and does not `:import-from`, and that

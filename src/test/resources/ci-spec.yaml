@@ -4028,8 +4028,14 @@ cases:
   - name: an-ampersand-name-is-an-ordinary-symbol-of-the-current-package
     # Only the names in lambda-list-keywords are cl's; let-plus's &pt, built by symbolicate
     # and read by its caller, is one symbol of the package reading it. The accessor name
-    # its expansion interns lands in the package of the function calling the macro.
+    # its expansion interns lands in the package of the function calling the macro. In cl-user
+    # the name stays bare and is an ordinary parameter all the same, its count checked by
+    # the runtime eval's own lambda too.
     source: |
+      (cl:in-package cl-user)
+      (defun bare-parameter (&a) (list &a))
+      (print (bare-parameter 1))
+      (print (handler-case (eval '(funcall (lambda (&a) &a) 9 10)) (program-error () :count)))
       (defpackage :ci-amp (:use :cl) (:shadow #:&aux) (:export #:&exported #:expand-for #:define-for))
       (in-package :ci-amp)
       (print (package-name (symbol-package '&a)))
@@ -4058,6 +4064,8 @@ cases:
       (print (ci-amp-user::call-it 1))
       (print (list (eq 'ci-amp::&rest '&rest) '(ci-amp::&a ci-amp:&exported)))
     expected: |
+      (1)
+      :COUNT
       "CI-AMP"
       T
       "CI-AMP"

@@ -199,7 +199,7 @@ public final class LambdaLists {
 			return false;
 		}
 		for (LispVal p : cons.toList()) {
-			if (p instanceof LispSymbol sym && sym.name().startsWith("&")) {
+			if (p instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 				return true;
 			}
 		}
@@ -1251,7 +1251,7 @@ public final class LambdaLists {
 		int i = 0;
 		while (i < params.size()) {
 			LispVal p = params.get(i);
-			if (p instanceof LispSymbol sym && sym.name().startsWith("&")) {
+			if (p instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 				int next = switch (sym.name()) {
 					case LispNames.LAMBDA_OPTIONAL -> 1;
 					case LispNames.LAMBDA_REST, LispNames.LAMBDA_BODY -> 2;
@@ -1266,7 +1266,7 @@ public final class LambdaLists {
 				section = next;
 				if (section == 2) {
 					if (i + 1 >= params.size() || !(params.get(i + 1) instanceof LispSymbol restSym)
-							|| restSym.name().startsWith("&")) {
+							|| restSym.isLambdaListKeyword()) {
 						throw new IllegalArgumentException(
 								sym.name() + " must be followed by exactly one parameter symbol");
 					}
@@ -1355,7 +1355,7 @@ public final class LambdaLists {
 	}
 
 	private static LispSymbol asParamSymbol(LispVal p) {
-		if (p instanceof LispSymbol sym && !sym.name().startsWith("&") && !sym.isKeyword()) {
+		if (p instanceof LispSymbol sym && !sym.isLambdaListKeyword() && !sym.isKeyword()) {
 			return sym;
 		}
 		throw new IllegalArgumentException("Parameter must be a symbol: " + p.print());

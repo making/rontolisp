@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.SourceProvenance;
@@ -565,7 +566,7 @@ final class WasmIntFusionCompiler {
 				return null;
 			}
 			for (LispVal p : paramCons.toList()) {
-				if (!(p instanceof LispSymbol ps) || ps.name().startsWith("&")) {
+				if (!(p instanceof LispSymbol ps) || ps.isLambdaListKeyword()) {
 					return null;
 				}
 				params.add(ps.name());
@@ -826,7 +827,7 @@ final class WasmIntFusionCompiler {
 			return false;
 		}
 		for (String param : defun.paramNames()) {
-			if (param.startsWith("&")) {
+			if (PackageRegistry.isClLambdaListKeyword(param)) {
 				return false;
 			}
 		}

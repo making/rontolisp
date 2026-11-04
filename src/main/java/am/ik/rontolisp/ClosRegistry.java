@@ -1508,7 +1508,7 @@ public final class ClosRegistry {
 			while (cursor instanceof LispCons cell) {
 				LispVal param = cell.car();
 				cursor = cell.cdr();
-				if (param instanceof LispSymbol sym && sym.name().startsWith("&")) {
+				if (param instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 					switch (sym.name()) {
 						case LispNames.LAMBDA_REST, LispNames.LAMBDA_BODY -> rest = true;
 						case LispNames.LAMBDA_KEY -> key = true;

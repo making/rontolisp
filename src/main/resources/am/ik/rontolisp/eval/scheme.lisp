@@ -29,8 +29,7 @@
       (if (and (char>= c #\a) (char<= c #\z)) (return t)))))
 
 (defun rontolisp::%scheme-needs-escape (name)
-  (or (rontolisp::%scheme-escaped-p name)
-      (and (> (length name) 0) (char= (char name 0) #\&)) (string= name "#f")
+  (or (rontolisp::%scheme-escaped-p name) (string= name "#f")
       (string= name "#!unspecific") (find #\: name)
       (not (rontolisp::%scheme-has-lowercase name))))
 

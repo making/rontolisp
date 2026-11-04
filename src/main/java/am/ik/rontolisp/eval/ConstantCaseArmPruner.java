@@ -422,7 +422,7 @@ final class ConstantCaseArmPruner {
 						LispVal rest = ctor.boaLambdaList();
 						while (rest instanceof LispCons cell) {
 							if (cell.car() instanceof LispSymbol param) {
-								if (param.name().startsWith("&")) {
+								if (param.isLambdaListKeyword()) {
 									markers = true;
 									break;
 								}
@@ -630,7 +630,7 @@ final class ConstantCaseArmPruner {
 			List<String> params = new ArrayList<>();
 			for (LispVal element : cons.toList()) {
 				if (element instanceof LispSymbol sym) {
-					if (sym.name().startsWith("&")) {
+					if (sym.isLambdaListKeyword()) {
 						break;
 					}
 					params.add(sym.name());

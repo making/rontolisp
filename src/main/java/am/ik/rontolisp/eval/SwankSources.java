@@ -611,7 +611,7 @@ public final class SwankSources implements LispEvaluator.LoadRecorder {
 		private List<LispVal> specializers(LispVal lambdaList) {
 			List<LispVal> out = new ArrayList<>();
 			for (LispVal rest = lambdaList; rest instanceof LispCons cell; rest = cell.cdr()) {
-				if (cell.car() instanceof LispSymbol symbol && symbol.name().startsWith("&")) {
+				if (cell.car() instanceof LispSymbol symbol && symbol.isLambdaListKeyword()) {
 					break;
 				}
 				out.add(cell.car() instanceof LispCons pair && pair.cdr() instanceof LispCons type ? type.car()

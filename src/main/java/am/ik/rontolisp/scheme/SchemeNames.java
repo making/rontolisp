@@ -200,8 +200,8 @@ final class SchemeNames {
 	}
 
 	private static boolean needsEscape(String identifier) {
-		if (identifier.startsWith(PREFIX) || identifier.startsWith("&") || identifier.equals("#f")
-				|| identifier.equals(UNSPECIFIED_NAME) || identifier.indexOf(':') >= 0) {
+		if (identifier.startsWith(PREFIX) || identifier.equals("#f") || identifier.equals(UNSPECIFIED_NAME)
+				|| identifier.indexOf(':') >= 0) {
 			return true;
 		}
 		for (int i = 0; i < identifier.length(); i++) {

@@ -884,7 +884,7 @@ public final class JavaDeclarations {
 
 	private static void collectBoundElement(LispVal element, Set<String> bound) {
 		if (element instanceof LispSymbol sym) {
-			if (!sym.name().startsWith("&") && !sym.isKeyword()) {
+			if (!sym.isLambdaListKeyword() && !sym.isKeyword()) {
 				bound.add(sym.name());
 			}
 		}

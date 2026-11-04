@@ -940,7 +940,7 @@ public final class LispEvaluator {
 		while (cur instanceof LispCons c) {
 			LispVal item = c.car();
 			cur = c.cdr();
-			if (item instanceof LispSymbol marker && marker.name().startsWith("&")) {
+			if (item instanceof LispSymbol marker && marker.isLambdaListKeyword()) {
 				if (LispNames.LAMBDA_ENVIRONMENT.equals(marker.name()) && cur instanceof LispCons skipped) {
 					cur = skipped.cdr();
 					continue;
@@ -11667,7 +11667,7 @@ public final class LispEvaluator {
 		}
 		if (envIndex >= 0) {
 			if (envIndex + 1 >= paramList.size() || !(paramList.get(envIndex + 1) instanceof LispSymbol envVar)
-					|| envVar.name().startsWith("&")) {
+					|| envVar.isLambdaListKeyword()) {
 				throw new LispEvalException(op + " " + name.name() + ": " + LispNames.LAMBDA_ENVIRONMENT
 						+ " must be followed by exactly one parameter symbol");
 			}
@@ -11688,7 +11688,7 @@ public final class LispEvaluator {
 		if (!paramList.isEmpty() && paramList.get(0) instanceof LispSymbol wholeKw
 				&& LispNames.LAMBDA_WHOLE.equals(wholeKw.name())) {
 			if (paramList.size() < 2 || !(paramList.get(1) instanceof LispSymbol wholeVar)
-					|| wholeVar.name().startsWith("&")) {
+					|| wholeVar.isLambdaListKeyword()) {
 				throw new LispEvalException(op + " " + name.name() + ": " + LispNames.LAMBDA_WHOLE
 						+ " must be followed by exactly one parameter symbol");
 			}
@@ -11831,10 +11831,10 @@ public final class LispEvaluator {
 			if (!(paramList.get(i) instanceof LispSymbol param)) {
 				return false;
 			}
-			if (param.name().startsWith("&")) {
+			if (param.isLambdaListKeyword()) {
 				return (LispNames.LAMBDA_REST.equals(param.name()) || LispNames.LAMBDA_BODY.equals(param.name()))
 						&& i + 2 == paramList.size() && paramList.get(i + 1) instanceof LispSymbol restParam
-						&& !restParam.name().startsWith("&");
+						&& !restParam.isLambdaListKeyword();
 			}
 		}
 		return true;
@@ -14370,7 +14370,7 @@ public final class LispEvaluator {
 			LispVal cur = parts.get(2);
 			while (cur instanceof LispCons c) {
 				LispVal item = c.car();
-				if (item instanceof LispSymbol p && !p.name().startsWith("&")) {
+				if (item instanceof LispSymbol p && !p.isLambdaListKeyword()) {
 					bindings.add(consListOf(List.of(p, quotedStar)));
 				}
 				else if (item instanceof LispCons pc && pc.car() instanceof LispSymbol p) {

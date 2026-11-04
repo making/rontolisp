@@ -2571,7 +2571,7 @@ public final class UserMacroExpander {
 		for (; cell instanceof LispCons c; cell = c.cdr()) {
 			LispVal element = c.car();
 			LispVal next = element;
-			if (element instanceof LispSymbol sym && sym.name().startsWith("&")) {
+			if (element instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 				defaults = LispNames.LAMBDA_OPTIONAL.equals(sym.name()) || LispNames.LAMBDA_KEY.equals(sym.name())
 						|| LispNames.LAMBDA_AUX.equals(sym.name());
 			}

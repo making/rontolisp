@@ -563,7 +563,7 @@ public final class WitExportDirective {
 					"export '" + name + "' has no matching (defun " + name + " ...) in the program");
 		}
 		for (String parameter : lambdaList) {
-			if (parameter.startsWith("&")) {
+			if (PackageRegistry.isClLambdaListKeyword(parameter)) {
 				throw error(witPath, locations, item, "export '" + name + "' maps to (defun " + name + " (" + parameter
 						+ " ...)): an exported function takes required parameters only");
 			}

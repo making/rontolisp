@@ -337,7 +337,7 @@ public final class SpecialDeclarationScoping {
 				cells.add(c);
 				LispVal element = c.car();
 				LispVal walked = element;
-				if (element instanceof LispSymbol sym && sym.name().startsWith("&")) {
+				if (element instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 					section = sym.name();
 				}
 				else if (LispNames.LAMBDA_OPTIONAL.equals(section)) {

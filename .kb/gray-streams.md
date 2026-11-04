@@ -332,7 +332,7 @@ over the WHOLE program once ANY part uses the protocol. Walker rules -- the walk
 `compiler.CallSiteWalk`, shared with `ShadowedBuiltins` and `WasmSocketsRewrite` (one walk since
 2026-10-24; three copies had drifted, see [lisp2-namespaces.md](lisp2-namespaces.md), "A lexical
 variable named like a function"):
-- A lambda-list keyword is never a stream arg (`streamArgMayBeInstance` rejects `&`-prefixed).
+- A lambda-list keyword is never a stream arg (`streamArgMayBeInstance` rejects it).
 - Rewrite list ELEMENTS, never a cdr TAIL as a call (`CallSiteWalk.arguments`).
 - **A BINDING form's structural position is not a call**: a lambda list, the variable half of a
   binding, a `case` key; else a parameter named `format` fails with "Parameter must be a symbol"

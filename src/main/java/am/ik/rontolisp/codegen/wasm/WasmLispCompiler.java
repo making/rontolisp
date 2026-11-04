@@ -20,6 +20,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.Set;
 
+import am.ik.rontolisp.ClConstants;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.DeclaredArityReport;
 import am.ik.rontolisp.LambdaLists;
@@ -6563,7 +6564,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		else {
 			funcrefBody = new byte[0];
 		}
+		List<Integer> lambdaListKeywordOffsets = new ArrayList<>();
 		if (usesEval) {
+			for (String keyword : ClConstants.LAMBDA_LIST_KEYWORD_NAMES) {
+				lambdaListKeywordOffsets.add(stringTable.addString(keyword).offset());
+			}
 			WasmEvalRuntimeBuilder.SpecialFormOffsets.Builder offsetsBuilder = WasmEvalRuntimeBuilder.SpecialFormOffsets
 				.builder()
 				.add(stringTable, LispNames.QUOTE)
@@ -6644,9 +6649,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// _apply exists whenever the apply runtime does; without the _eval interpreter
 		// its body skips the $fenv and interpreted-closure arms (nothing can create
 		// either without _eval/_store).
-		applyBody = usesApplyRuntime
-				? WasmEvalRuntimeBuilder.buildApplyBody(usesEval, arityChkIndex, this.usesIdentityHashTables)
-				: WasmEvalRuntimeBuilder.buildApplyStub();
+		applyBody = usesApplyRuntime ? WasmEvalRuntimeBuilder.buildApplyBody(usesEval, arityChkIndex,
+				lambdaListKeywordOffsets, this.usesIdentityHashTables) : WasmEvalRuntimeBuilder.buildApplyStub();
 
 		// The symbol-API helper bodies (always emitted) embed the offset of the symbol
 		// T; intern it before the runtime intern blob below is snapshotted so a runtime

@@ -16,6 +16,16 @@ public record LispSymbol(String name) implements LispVal {
 	}
 
 	/**
+	 * Returns whether this symbol is one of the eight names in
+	 * {@code lambda-list-keywords}. Any other {@code &name} is an ordinary parameter
+	 * name.
+	 * @return {@code true} for a lambda-list keyword
+	 */
+	public boolean isLambdaListKeyword() {
+		return PackageRegistry.isClLambdaListKeyword(this.name);
+	}
+
+	/**
 	 * Returns the symbol name without the leading package marker: a keyword's {@code :}
 	 * and an uninterned symbol's {@code #:} are markers, not part of the name. This is
 	 * what {@code symbol-name}, {@code princ} and {@code ~A} yield (matching CL apart

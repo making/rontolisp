@@ -19655,7 +19655,7 @@ public final class LispMacroExpander {
 		while (cur instanceof LispCons c) {
 			LispVal item = c.car();
 			LispSymbol var = null;
-			if (item instanceof LispSymbol s && !s.name().startsWith("&")) {
+			if (item instanceof LispSymbol s && !s.isLambdaListKeyword()) {
 				var = s;
 			}
 			else if (item instanceof LispCons pc && pc.car() instanceof LispSymbol s) {
@@ -20133,7 +20133,7 @@ public final class LispMacroExpander {
 				continue;
 			}
 			for (LispVal param : lambdaList.toList()) {
-				if (param instanceof LispSymbol marker && marker.name().startsWith("&")) {
+				if (param instanceof LispSymbol marker && marker.isLambdaListKeyword()) {
 					break;
 				}
 				if (param instanceof LispCons paramCons && paramCons.cdr() instanceof LispCons specCell
@@ -25037,7 +25037,7 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> lambdaParts = lambda.toList();
 			if (lambdaParts.size() < 2 || !(lambdaParts.get(1) instanceof LispCons params)
-					|| !(params.car() instanceof LispSymbol var) || var.name().startsWith("&")) {
+					|| !(params.car() instanceof LispSymbol var) || var.isLambdaListKeyword()) {
 				return true;
 			}
 			for (LispVal bodyForm : lambdaParts.subList(2, lambdaParts.size())) {
@@ -25894,7 +25894,7 @@ public final class LispMacroExpander {
 			List<LispVal> out = new java.util.ArrayList<>();
 			boolean afterKeyword = false;
 			for (LispVal param : llCons.toList()) {
-				if (param instanceof LispSymbol sym && sym.name().startsWith("&")) {
+				if (param instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 					afterKeyword = true;
 					out.add(param);
 				}
@@ -26012,7 +26012,7 @@ public final class LispMacroExpander {
 		}
 		for (LispVal param : llCons.toList()) {
 			if (param instanceof LispSymbol sym) {
-				if (!sym.name().startsWith("&")) {
+				if (!sym.isLambdaListKeyword()) {
 					names.add(sym.name());
 				}
 			}
@@ -26042,7 +26042,7 @@ public final class LispMacroExpander {
 			collectPatternNames(cons.car(), names);
 			pattern = cons.cdr();
 		}
-		if (pattern instanceof LispSymbol sym && !sym.name().startsWith("&")) {
+		if (pattern instanceof LispSymbol sym && !sym.isLambdaListKeyword()) {
 			names.add(sym.name());
 		}
 	}
@@ -26279,7 +26279,7 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(operator + " expects a lambda list: " + form.print());
 		}
 		for (LispVal param : paramsCons.toList()) {
-			if (param instanceof LispSymbol sym && sym.name().startsWith("&")) {
+			if (param instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 				return new GfLambdaList(names, true);
 			}
 			if (!(param instanceof LispSymbol sym)) {
@@ -26423,7 +26423,7 @@ public final class LispMacroExpander {
 			List<LispVal> params = paramsCons.toList();
 			for (int i = 0; i < params.size(); i++) {
 				LispVal param = params.get(i);
-				if (param instanceof LispSymbol sym && sym.name().startsWith("&")) {
+				if (param instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 					tail.addAll(params.subList(i, params.size()));
 					break;
 				}
@@ -26667,7 +26667,7 @@ public final class LispMacroExpander {
 		List<LispVal> out = new java.util.ArrayList<>();
 		boolean required = true;
 		for (LispVal param : cons.toList()) {
-			if (param instanceof LispSymbol sym && sym.name().startsWith("&")) {
+			if (param instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 				required = false;
 			}
 			out.add(required && param instanceof LispCons specialized ? specialized.car() : param);
@@ -27422,7 +27422,7 @@ public final class LispMacroExpander {
 		List<OptionalForward> forwards = new java.util.ArrayList<>();
 		boolean inOptional = false;
 		for (int i = 0; i < tail.size(); i++) {
-			if (tail.get(i) instanceof LispSymbol marker && marker.name().startsWith("&")) {
+			if (tail.get(i) instanceof LispSymbol marker && marker.isLambdaListKeyword()) {
 				inOptional = LispNames.LAMBDA_OPTIONAL.equals(marker.name());
 				continue;
 			}
@@ -44108,7 +44108,7 @@ public final class LispMacroExpander {
 		boolean specSection = false;
 		List<LispVal> newElements = new java.util.ArrayList<>();
 		for (LispVal e : patternCons.toList()) {
-			if (e instanceof LispSymbol sym && sym.name().startsWith("&")) {
+			if (e instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 				// &rest/&body take a plain variable; the other keywords start spec
 				// sections whose cons elements are (var default [supplied-p]).
 				specSection = !LispNames.LAMBDA_REST.equals(sym.name()) && !LispNames.LAMBDA_BODY.equals(sym.name());
@@ -50968,7 +50968,7 @@ public final class LispMacroExpander {
 				normalized.add(tailCons.car());
 				tail = tailCons.cdr();
 			}
-			if (tail instanceof LispSymbol tailVar && !tailVar.name().startsWith("&")) {
+			if (tail instanceof LispSymbol tailVar && !tailVar.isLambdaListKeyword()) {
 				normalized.add(new LispSymbol(LispNames.LAMBDA_REST));
 				normalized.add(tailVar);
 				destructuringBindings(listToCons(normalized), source, prefix, counter, out);
@@ -50985,13 +50985,13 @@ public final class LispMacroExpander {
 		// chain is side-effect-free, so evaluating it twice is safe.
 		if (elements.size() >= 2 && elements.get(0) instanceof LispSymbol wholeKw
 				&& LispNames.LAMBDA_WHOLE.equals(wholeKw.name()) && elements.get(1) instanceof LispSymbol wholeVar
-				&& !wholeVar.name().startsWith("&")) {
+				&& !wholeVar.isLambdaListKeyword()) {
 			out.add(listToCons(List.of(wholeVar, source)));
 			elements = elements.subList(2, elements.size());
 		}
 		int firstKeyword = 0;
 		while (firstKeyword < elements.size()
-				&& !(elements.get(firstKeyword) instanceof LispSymbol sym && sym.name().startsWith("&"))) {
+				&& !(elements.get(firstKeyword) instanceof LispSymbol sym && sym.isLambdaListKeyword())) {
 			firstKeyword++;
 		}
 		LispVal cursor = source;
@@ -51093,7 +51093,7 @@ public final class LispMacroExpander {
 			}
 			pattern = cons.cdr();
 		}
-		return pattern instanceof LispSymbol sym && sym.name().startsWith("&");
+		return pattern instanceof LispSymbol sym && sym.isLambdaListKeyword();
 	}
 
 	/**
