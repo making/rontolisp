@@ -12015,7 +12015,8 @@ public final class LispEvaluator {
 		}
 		List<LispVal> parts = cons.toList();
 		for (int i = 1; i + 1 < parts.size(); i += 2) {
-			if (parts.get(i) instanceof LispCons place && place.car() instanceof LispSymbol accessor
+			if (parts.get(i) instanceof LispCons place
+					&& LispMacroExpander.setfPlaceFunction(place) instanceof LispSymbol accessor
 					&& !this.structAccessors.containsKey(accessor.name()) && UiopLibrary.definesName(accessor.name())) {
 				loadUiopDefinition(accessor.name());
 			}
@@ -12036,7 +12037,8 @@ public final class LispEvaluator {
 		}
 		List<LispVal> parts = cons.toList();
 		for (int i = 1; i + 1 < parts.size(); i += 2) {
-			if (parts.get(i) instanceof LispCons place && place.car() instanceof LispSymbol accessor
+			if (parts.get(i) instanceof LispCons place
+					&& LispMacroExpander.setfPlaceFunction(place) instanceof LispSymbol accessor
 					&& !this.structAccessors.containsKey(accessor.name())
 					&& UsocketLibrary.isUsocketQualified(accessor.name())) {
 				ensureUsocketLoaded();
@@ -13875,7 +13877,8 @@ public final class LispEvaluator {
 	private void ensurePreludeSetfPlacesLoaded(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		for (int i = 1; i + 1 < parts.size(); i += 2) {
-			if (parts.get(i) instanceof LispCons placeCons && placeCons.car() instanceof LispSymbol head
+			if (parts.get(i) instanceof LispCons placeCons
+					&& LispMacroExpander.setfPlaceFunction(placeCons) instanceof LispSymbol head
 					&& LispPreludeLibrary.isPreludeFunction(head.name()) && this.loadedPreludeNames.add(head.name())) {
 				loadPreludeDefinition(head.name());
 			}

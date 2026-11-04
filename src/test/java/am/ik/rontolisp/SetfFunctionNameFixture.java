@@ -125,11 +125,17 @@ public final class SetfFunctionNameFixture {
 			(setf (fdefinition '(setf sfu-dyn)) (lambda (v x) (list :dyn v x)))
 			(print (setf (sfu-dyn 1) 2))
 			(print (funcall (lambda (k) (setf (sfu-dyn k) (* k 10))) 3))
+			(let ((log nil))
+			  (print (handler-case (setf (apply #'sfu-nope (progn (push :args log) '(3))) (progn (push :value log) 5))
+			           (undefined-function (c) (list (cell-error-name c) (reverse log))))))
+			(defstruct sfu-ro (x 1 :read-only t))
+			(print (handler-case (setf (apply #'sfu-ro-x (list (make-sfu-ro))) 2)
+			         (undefined-function (c) (cell-error-name c))))
 			""";
 
 	/** What {@link #UNKNOWN_PLACE} prints, one value per line. */
 	public static final String UNKNOWN_PLACE_EXPECTED = String.join("\n", "(:LATE 2 1)", "(SETF SFU-NOPE)",
-			"(SETF SFU-R)", "(:DYN 2 1)", "(:DYN 30 3)");
+			"(SETF SFU-R)", "(:DYN 2 1)", "(:DYN 30 3)", "((SETF SFU-NOPE) (:ARGS :VALUE))", "(SETF SFU-RO-X)");
 
 	/**
 	 * The {@code (setf name)} function of {@code defstruct} slot accessors: taken with

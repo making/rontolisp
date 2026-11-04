@@ -4126,30 +4126,27 @@ public final class LispMacroExpander {
 							placeParts.size() > 3 && !isEffectFreeRead(placeParts.get(3))
 									? makeProgn(List.of(placeParts.get(3), value)) : value));
 				case LispNames.APPLY -> {
-					// (setf (apply #'aref array sub... tail-list) val) -- CLHS 5.1.2.5,
-					// the spelling cffi's foreign-array-to-lisp uses for a rank decided
-					// at run time. No spread-at-runtime setter exists, so the place is
-					// lowered through the row-major one:
-					// (let ((%a array))
-					// (%row-major-aset %a (apply #'array-row-major-index %a
-					// (list* sub... tail-list)) val)).
-					String applied = setfApplyArrayPlaceFunction(placeParts);
-					if (!LispNames.AREF.equals(applied) && !LispNames.SVREF.equals(applied)) {
+					// (setf (apply #'name arg...) val) -- CLHS 5.1.2.5: the setf function
+					// of name, the value ahead of the spread arguments. aref and svref
+					// have no such function: they go through the row-major place.
+					LispSymbol applied = appliedFunctionSymbol(placeParts);
+					if (applied == null) {
 						throw new UnsupportedOperationException(
-								"setf does not support place: APPLY (only (setf (apply #'aref ...)) is supported)");
+								"setf does not support place: APPLY (expects (apply #'name arg...)): " + cons.print());
 					}
-					LispSymbol arrayVar = new LispSymbol("__setf_apply_arr");
-					List<LispVal> subscripts = new java.util.ArrayList<>();
-					subscripts.add(new LispSymbol(LispNames.LIST_STAR));
-					for (int i = 3; i < placeParts.size(); i++) {
-						subscripts.add(placeParts.get(i));
+					if (LispNames.AREF.equals(applied.name()) || LispNames.SVREF.equals(applied.name())) {
+						yield setfApplyArrayPlace(placeParts, value);
 					}
-					LispVal rowMajorIndex = listToCons(List.of(new LispSymbol(LispNames.APPLY),
-							listToCons(List.of(new LispSymbol(LispNames.FUNCTION),
-									new LispSymbol(LispNames.ARRAY_ROW_MAJOR_INDEX))),
-							arrayVar, listToCons(subscripts)));
-					yield makeLet(arrayVar.name(), placeParts.get(2), listToCons(
-							List.of(new LispSymbol(LispNames.ROW_MAJOR_ASET), arrayVar, rowMajorIndex, value)));
+					Integer slot = structAccessors.get(applied.name());
+					boolean defined = slot != null && slot <= SETF_FUNCTION_MARKER;
+					if (!setfFunctions || (!defined && PackageRegistry.isClMemberName(applied.name()))) {
+						throw new UnsupportedOperationException(
+								"setf does not support place: APPLY of " + applied.name());
+					}
+					yield setfFunctionCall(cons, LispNames.APPLY,
+							defined ? new LispSymbol(setfFunctionName(applied.name()))
+									: listToCons(List.of(new LispSymbol(LispNames.SETF), applied)),
+							placeParts.subList(2, placeParts.size()), value, !defined);
 				}
 				case LispNames.AREF, LispNames.SVREF -> {
 					// (setf (aref array sub...) val) -> (%aset array sub... val);
@@ -4491,7 +4488,7 @@ public final class LispMacroExpander {
 							// value as the first argument (it is the last required param
 							// of the setf lambda list). A definition makes the writer, so
 							// the call is bound to it directly.
-							yield setfFunctionCall(cons, new LispSymbol(setfFunctionName(accessor)),
+							yield setfFunctionCall(cons, LispNames.FUNCALL, new LispSymbol(setfFunctionName(accessor)),
 									placeParts.subList(1, placeParts.size()), value, false);
 						}
 						// (setf (point-x p) val) -> (%obj-set p <index> val), checked
@@ -4514,7 +4511,8 @@ public final class LispMacroExpander {
 					// looked up when the form runs -- a writer defined later, installed
 					// by (setf fdefinition), or undefined, which signals there. A
 					// read-only defstruct slot lands here too: it has no writer.
-					yield setfFunctionCall(cons, listToCons(List.of(new LispSymbol(LispNames.SETF), placeParts.get(0))),
+					yield setfFunctionCall(cons, LispNames.FUNCALL,
+							listToCons(List.of(new LispSymbol(LispNames.SETF), placeParts.get(0))),
 							placeParts.subList(1, placeParts.size()), value, true);
 				}
 			};
@@ -4525,8 +4523,9 @@ public final class LispMacroExpander {
 	private static final String SETF_ARG_VAR = "__setf_arg";
 
 	/**
-	 * The call of a setf function, {@code (funcall #'name value arg...)}, evaluating as
-	 * CLHS 5.1.2.9 has it: the place's arguments left to right, then the value, then the
+	 * The call of a setf function, {@code (funcall #'name value arg...)} or
+	 * {@code (apply #'name value arg...)} for an {@code apply} place, evaluating as CLHS
+	 * 5.1.2.9 has it: the place's arguments left to right, then the value, then the
 	 * function. The call itself evaluates the value first, so where that is observable
 	 * the arguments are bound to temporaries ahead of it. It is not observable when the
 	 * value is a constant, when every argument is, or when every subform is a constant or
@@ -4542,6 +4541,7 @@ public final class LispMacroExpander {
 	 * called directly on the compile paths, and the interpreter's lookup can differ only
 	 * if the place's own subforms redefine it.
 	 * @param setfForm the whole setf form, which the temporaries' names must not capture
+	 * @param caller the calling operator, {@code funcall} or {@code apply}
 	 * @param name the function's name: the {@code %setf-} writer or the
 	 * {@code (setf name)} list
 	 * @param args the place's argument forms
@@ -4549,8 +4549,8 @@ public final class LispMacroExpander {
 	 * @param lookedUpWhenRun whether the function is looked up when the form runs
 	 * @return the call, in a {@code let*} of the temporaries when it needs them
 	 */
-	private static LispVal setfFunctionCall(LispCons setfForm, LispVal name, List<LispVal> args, LispVal value,
-			boolean lookedUpWhenRun) {
+	private static LispVal setfFunctionCall(LispCons setfForm, String caller, LispVal name, List<LispVal> args,
+			LispVal value, boolean lookedUpWhenRun) {
 		boolean argsConstant = args.stream().allMatch(LispMacroExpander::isOrderFreeConstant);
 		boolean quiet = args.stream().allMatch(LispMacroExpander::isEffectFreeRead) && isEffectFreeRead(value);
 		boolean ordered = quiet || (!lookedUpWhenRun && (argsConstant || isOrderFreeConstant(value)));
@@ -4563,7 +4563,7 @@ public final class LispMacroExpander {
 		LispVal callValue = ordered || !lookedUpWhenRun || isOrderFreeConstant(value) ? value
 				: bind(temps.get(), value, bindings);
 		List<LispVal> call = new ArrayList<>(args.size() + 3);
-		call.add(new LispSymbol(LispNames.FUNCALL));
+		call.add(new LispSymbol(caller));
 		call.add(listToCons(List.of(new LispSymbol(LispNames.FUNCTION), name)));
 		call.add(callValue);
 		call.addAll(callArgs);
@@ -4717,64 +4717,105 @@ public final class LispMacroExpander {
 		return ClosRegistry.SETF_FUNCTION_PREFIX + placeName;
 	}
 
-	// Recognizes a (setf (apply #'aref array sub... tail-list) val) / #'svref place --
-	// the AREF/SVREF designator expandSetf's APPLY case requires -- and answers the
-	// applied name, or null when the place is not this shape (placeParts is the place's
-	// OWN parts: (apply #'name array sub...), so placeParts.get(0) is APPLY itself).
-	// Shared with usesSetfApplyArrayRowMajorIndex below so the two can never drift apart
-	// on what counts as this place: expandSetf runs LAZILY, from
-	// JvmExprCompiler/WasmExprCompiler's SETF case, at actual codegen time -- after the
-	// REFERENCE_GATED_FUNCTIONS wrapper gate has already scanned the surface program for
-	// every #'name it needs to see, so the (function array-row-major-index) this case
-	// injects is invisible to that scan unless something else tells it to expect one.
-	private static @Nullable String setfApplyArrayPlaceFunction(List<LispVal> placeParts) {
-		return placeParts.size() >= 4 && placeParts.get(1) instanceof LispCons fnCons
+	/**
+	 * The {@code name} of an {@code (apply #'name arg...)} place's own parts, or
+	 * {@code null} when the place is not that shape: {@code apply} needs an argument, and
+	 * CLHS 5.1.2.5 defines the place only for a function name spelled {@code #'name}.
+	 */
+	private static @Nullable LispSymbol appliedFunctionSymbol(List<LispVal> placeParts) {
+		return placeParts.size() >= 3 && placeParts.get(1) instanceof LispCons fnCons
 				&& fnCons.car() instanceof LispSymbol fnHead && LispNames.FUNCTION.equals(fnHead.name())
-				&& fnCons.cdr() instanceof LispCons fnCell && fnCell.car() instanceof LispSymbol fnSym ? fnSym.name()
-						: null;
+				&& fnCons.cdr() instanceof LispCons fnCell && fnCell.car() instanceof LispSymbol fnSym ? fnSym : null;
 	}
 
 	/**
-	 * Whether the program contains a {@code (setf (apply #'aref ...) ...)} or
-	 * {@code (setf (apply #'svref ...) ...)} place -- the shape whose lazy expansion (see
-	 * {@link #setfApplyArrayPlaceFunction}) injects a {@code (function
+	 * {@link #appliedFunctionSymbol} of a form anywhere in a program: the same, or
+	 * {@code null} when the form is not a proper {@code apply} call.
+	 */
+	private static @Nullable LispSymbol appliedFunctionSymbol(LispCons form) {
+		return form.car() instanceof LispSymbol op && LispNames.APPLY.equals(op.name()) && form.isProperList()
+				? appliedFunctionSymbol(form.toList()) : null;
+	}
+
+	/**
+	 * The function whose setf function a place may write through: the {@code name} of an
+	 * {@code (apply #'name ...)} place, otherwise the place's head. A definition loaded
+	 * on demand registers its place under that name.
+	 * @param place the place form
+	 * @return the name, or {@code null} when the head is not a symbol
+	 */
+	public static @Nullable LispSymbol setfPlaceFunction(LispCons place) {
+		LispSymbol applied = appliedFunctionSymbol(place);
+		return applied != null ? applied : place.car() instanceof LispSymbol head ? head : null;
+	}
+
+	/**
+	 * {@code (setf (apply #'aref array sub... tail-list) val)}, the spelling cffi's
+	 * foreign-array-to-lisp uses for a rank decided at run time. No spread-at-run-time
+	 * setter exists, so the place is lowered through the row-major one:
+	 *
+	 * <pre>
+	 * (let ((%a array))
+	 *   (%row-major-aset %a (apply #'array-row-major-index %a (list* sub... tail-list)) val))
+	 * </pre>
+	 *
+	 * With the array itself inside the one list, {@code (apply #'aref list)}, the list is
+	 * bound first and supplies both.
+	 */
+	private static LispVal setfApplyArrayPlace(List<LispVal> placeParts, LispVal value) {
+		LispSymbol arrayVar = new LispSymbol("__setf_apply_arr");
+		boolean spreadOnly = placeParts.size() == 3;
+		LispSymbol listVar = new LispSymbol("__setf_apply_args");
+		List<LispVal> subscripts = new java.util.ArrayList<>();
+		subscripts.add(new LispSymbol(LispNames.LIST_STAR));
+		if (spreadOnly) {
+			subscripts.add(callOf(LispNames.CDR, listVar));
+		}
+		else {
+			subscripts.addAll(placeParts.subList(3, placeParts.size()));
+		}
+		LispVal rowMajorIndex = listToCons(List.of(new LispSymbol(LispNames.APPLY),
+				listToCons(
+						List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.ARRAY_ROW_MAJOR_INDEX))),
+				arrayVar, listToCons(subscripts)));
+		LispVal store = makeLet(arrayVar.name(), spreadOnly ? callOf(LispNames.CAR, listVar) : placeParts.get(2),
+				listToCons(List.of(new LispSymbol(LispNames.ROW_MAJOR_ASET), arrayVar, rowMajorIndex, value)));
+		return spreadOnly ? makeLet(listVar.name(), placeParts.get(2), store) : store;
+	}
+
+	/**
+	 * Whether the program applies {@code #'aref} or {@code #'svref} -- the spelling of
+	 * the place whose lazy expansion ({@link #setfApplyArrayPlace}, run from
+	 * {@code Jvm/WasmExprCompiler}'s SETF case at codegen time) injects a
+	 * {@code (function
 	 * array-row-major-index)} reference no scan of the SURFACE program can see. The
 	 * REFERENCE_GATED_FUNCTIONS wrapper gate in {@code Jvm/WasmLispCompiler} calls this
 	 * alongside its ordinary {@code (function name)} scan so the array-row-major-index
 	 * wrapper is injected whenever codegen is about to need it, the same way
 	 * {@code usesRestartSystem}/{@code mayCreateInstances} already see their own lazy
-	 * Pass-2 products coming.
+	 * Pass-2 products coming. It does not look at which position the {@code apply} form
+	 * holds: {@code incf}, {@code push}, {@code rotatef} and {@code the} reach the place
+	 * too, and a mere read leaves a wrapper the shakers remove.
 	 * @param program the program to scan
-	 * @return {@code true} when such a place occurs anywhere in the program
+	 * @return {@code true} when such a form occurs anywhere in the program
 	 */
-	public static boolean usesSetfApplyArrayRowMajorIndex(List<? extends LispVal> program) {
+	public static boolean appliesArrayAccessor(List<? extends LispVal> program) {
 		for (LispVal form : program) {
-			if (usesSetfApplyArrayRowMajorIndex(form)) {
+			if (appliesArrayAccessor(form)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	private static boolean usesSetfApplyArrayRowMajorIndex(LispVal expr) {
+	private static boolean appliesArrayAccessor(LispVal expr) {
+		if (expr instanceof LispCons form && appliedFunctionSymbol(form) instanceof LispSymbol applied
+				&& (LispNames.AREF.equals(applied.name()) || LispNames.SVREF.equals(applied.name()))) {
+			return true;
+		}
 		LispVal x = expr;
 		while (x instanceof LispCons cons) {
-			if (cons.car() instanceof LispSymbol head && LispNames.SETF.equals(head.name())) {
-				List<LispVal> parts = cons.toList();
-				for (int i = 1; i + 1 < parts.size(); i += 2) {
-					if (parts.get(i) instanceof LispCons placeCons) {
-						List<LispVal> placeParts = placeCons.toList();
-						if (!placeParts.isEmpty() && placeParts.get(0) instanceof LispSymbol op
-								&& LispNames.APPLY.equals(op.name())) {
-							String applied = setfApplyArrayPlaceFunction(placeParts);
-							if (LispNames.AREF.equals(applied) || LispNames.SVREF.equals(applied)) {
-								return true;
-							}
-						}
-					}
-				}
-			}
-			if (usesSetfApplyArrayRowMajorIndex(cons.car())) {
+			if (appliesArrayAccessor(cons.car())) {
 				return true;
 			}
 			x = cons.cdr();
@@ -6058,12 +6099,13 @@ public final class LispMacroExpander {
 
 	/**
 	 * The place operators whose arguments {@link PlaceTemps} never hoists: their
-	 * non-atomic argument is a type specifier, a byte specifier or an argument list that
-	 * the {@code setf} expanders below read STRUCTURALLY, so replacing it with a variable
-	 * reference would hide what they match on.
+	 * non-atomic argument is a type specifier or a byte specifier that the {@code setf}
+	 * expanders below read STRUCTURALLY, so replacing it with a variable reference would
+	 * hide what they match on. An {@code apply} place is not one: the {@code #'name} it
+	 * is read by stays written out like any {@code #'} subform.
 	 */
 	private static final java.util.Set<String> PLACE_OPS_WITHOUT_HOISTABLE_ARGS = java.util.Set.of(LispNames.THE,
-			LispNames.VALUES, LispNames.APPLY, LispNames.LDB, LispNames.MASK_FIELD);
+			LispNames.VALUES, LispNames.LDB, LispNames.MASK_FIELD);
 
 	/**
 	 * The once-only rewriting the read-modify-write macros ({@code incf}/{@code decf},
@@ -19519,11 +19561,12 @@ public final class LispMacroExpander {
 	/**
 	 * The {@link #structWriterDefun}s a program takes: one per writable slot accessor
 	 * whose {@code (setf accessor)} function the forms name -- {@code #'(setf accessor)},
-	 * a quoted {@code (setf accessor)}, or the {@code %setf-accessor} a designator was
-	 * rewritten to; every one in a program that maps a {@code (setf place)} list built at
-	 * run time ({@code compiler.RuntimeFunctionNames}) -- and that no defun of the
-	 * program already defines. A place of the accessor is the inline store, so a program
-	 * that only writes through places gets none.
+	 * a quoted {@code (setf accessor)}, the {@code %setf-accessor} a designator was
+	 * rewritten to, or an {@code (apply #'accessor ...)} that may be a place; every one
+	 * in a program that maps a {@code (setf place)} list built at run time
+	 * ({@code compiler.RuntimeFunctionNames}) -- and that no defun of the program already
+	 * defines. A place of the accessor is the inline store, so a program that only writes
+	 * through those places gets none.
 	 * @param program the expanded top-level forms
 	 * @param structAccessors the complete place registry
 	 * @param closRegistry the complete registry
@@ -19569,7 +19612,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * Adds the place of every {@code (setf place)} function name {@code form} spells -- a
-	 * {@code (setf place)} list in any element position, or a {@code %setf-place} symbol.
+	 * {@code (setf place)} list in any element position, a {@code %setf-place} symbol, or
+	 * the {@code #'place} of an {@code apply} call, whose place lowers to the function.
 	 */
 	private static void collectSetfFunctionNames(LispVal form, java.util.Set<String> out) {
 		if (form instanceof LispSymbol sym) {
@@ -19586,6 +19630,10 @@ public final class LispMacroExpander {
 		if (setfPlace != null) {
 			out.add(setfPlace.name());
 			return;
+		}
+		LispSymbol applied = appliedFunctionSymbol(cons);
+		if (applied != null) {
+			out.add(applied.name());
 		}
 		LispVal rest = cons;
 		while (rest instanceof LispCons cell) {
@@ -37094,11 +37142,17 @@ public final class LispMacroExpander {
 			LispVal val = parts.get(i + 1);
 			if (place instanceof LispCons placeCons && placeCons.isProperList()) {
 				// Accessor place: hoist each argument subform into a temp so it is
-				// evaluated before ANY assignment of this psetf.
+				// evaluated before ANY assignment of this psetf. A #'name stays written
+				// out: no assignment changes it, and an apply place is read by it.
 				List<LispVal> placeParts = placeCons.toList();
 				List<LispVal> newPlace = new java.util.ArrayList<>();
 				newPlace.add(placeParts.get(0));
 				for (int j = 1; j < placeParts.size(); j++) {
+					if (placeParts.get(j) instanceof LispCons arg && arg.car() instanceof LispSymbol argHead
+							&& LispNames.FUNCTION.equals(argHead.name())) {
+						newPlace.add(arg);
+						continue;
+					}
 					LispSymbol argTemp = new LispSymbol("__psetf_" + temp++);
 					bindings.add(listToCons(List.of(argTemp, placeParts.get(j))));
 					newPlace.add(argTemp);

@@ -488,6 +488,24 @@ class LispMacroExpanderTest {
 				"(LET* ((|__setf_arg1| X) (|__setf_arg2| (BAR))) (FUNCALL #'(SETF FOO) |__setf_arg2| |__setf_arg1|))");
 		assertThat(expandedSetf("(setf (foo |__setf_arg1|) (bar))", writers)).isEqualTo(
 				"(LET* ((|__setf_arg2| |__setf_arg1|) (|__setf_arg3| (BAR))) (FUNCALL #'(SETF FOO) |__setf_arg3| |__setf_arg2|))");
+		// CLHS 5.1.2.5: an apply place is the same call with the value ahead of the
+		// spread arguments.
+		assertThat(expandedSetf("(setf (apply #'acc args) v)", writers)).isEqualTo("(APPLY #'|%setf-ACC| V ARGS)");
+		assertThat(expandedSetf("(setf (apply #'acc o (f)) (g))", writers)).isEqualTo(
+				"(LET* ((|__setf_arg1| O) (|__setf_arg2| (F))) (APPLY #'|%setf-ACC| (G) |__setf_arg1| |__setf_arg2|))");
+		assertThat(expandedSetf("(setf (apply #'foo 1 '(2)) (bar))", writers))
+			.isEqualTo("(LET* ((|__setf_arg1| (BAR))) (APPLY #'(SETF FOO) |__setf_arg1| 1 '(2)))");
+		// What no (setf name) function can answer stays a refusal.
+		for (String place : List.of("(apply #'foo)", "(apply 'foo args)", "(apply #'(lambda (x) x) args)",
+				"(apply #'length args)")) {
+			org.assertj.core.api.Assertions.assertThatThrownBy(() -> expandedSetf("(setf " + place + " 1)", writers))
+				.isInstanceOf(UnsupportedOperationException.class)
+				.hasMessageStartingWith("setf does not support place: APPLY");
+		}
+		LispCons noFunctionValues = (LispCons) LispReader.readAllFromString("(setf (apply #'foo args) 1)").get(0);
+		org.assertj.core.api.Assertions.assertThatThrownBy(() -> LispMacroExpander.expandScalarSetf(noFunctionValues))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessage("setf does not support place: APPLY of FOO");
 	}
 
 	@Test
