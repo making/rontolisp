@@ -26643,7 +26643,7 @@ public final class LispMacroExpander {
 				}
 			}
 			for (String inlineKey : existing.inlineMethodKeys()) {
-				existing.methods().remove(inlineKey);
+				closRegistry.changeMethod(existing, inlineKey, null);
 				existing.methodShapes().remove(inlineKey);
 			}
 			existing.inlineMethodKeys().clear();
@@ -26665,6 +26665,9 @@ public final class LispMacroExpander {
 		info.precedenceOrder(precedenceOrder);
 		if (ll.variadic()) {
 			info.markVariadic();
+		}
+		if (info.methods().isEmpty()) {
+			closRegistry.genericDeclared(info);
 		}
 		for (LispCons method : inlineMethods) {
 			java.util.Set<String> before = info.methods()
@@ -26966,8 +26969,8 @@ public final class LispMacroExpander {
 			}
 		}
 		List<LispVal> body = methodBody;
-		generic.methods()
-			.put(key, new ClosRegistry.MethodInfo(List.copyOf(specializers), functionName, qualifier, usesNext));
+		closRegistry.changeMethod(generic, key,
+				new ClosRegistry.MethodInfo(List.copyOf(specializers), functionName, qualifier, usesNext));
 		generic.methodShapes().put(key, methodShape);
 		generic.inlineMethodKeys().remove(key);
 		generic.methodDefined(key, unspecializedLambdaList(parts.get(llIndex)));
@@ -27284,7 +27287,7 @@ public final class LispMacroExpander {
 			defaults.add(ClosRegistry.Specializer.DEFAULT);
 		}
 		String defaultName = methodFunctionName(generic);
-		generic.methods().put(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
+		generic.putSystemDefault(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
 		generic.markVariadic();
 		List<LispVal> params = new java.util.ArrayList<>();
 		params.add(new LispSymbol(NEXT_METHOD_VAR));
@@ -27319,7 +27322,7 @@ public final class LispMacroExpander {
 			defaults.add(ClosRegistry.Specializer.DEFAULT);
 		}
 		String defaultName = methodFunctionName(generic);
-		generic.methods().put(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
+		generic.putSystemDefault(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
 		List<LispVal> params = new java.util.ArrayList<>();
 		params.add(new LispSymbol(NEXT_METHOD_VAR));
 		generic.paramNames().stream().<LispVal>map(LispSymbol::new).forEach(params::add);
@@ -27465,7 +27468,7 @@ public final class LispMacroExpander {
 			defaults.add(ClosRegistry.Specializer.DEFAULT);
 		}
 		String defaultName = methodFunctionName(generic);
-		generic.methods().put(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
+		generic.putSystemDefault(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
 		List<LispVal> params = new java.util.ArrayList<>();
 		params.add(new LispSymbol(NEXT_METHOD_VAR));
 		generic.paramNames().stream().<LispVal>map(LispSymbol::new).forEach(params::add);
@@ -27498,7 +27501,7 @@ public final class LispMacroExpander {
 			defaults.add(ClosRegistry.Specializer.DEFAULT);
 		}
 		String defaultName = methodFunctionName(generic);
-		generic.methods().put(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
+		generic.putSystemDefault(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
 		generic.markVariadic();
 		List<LispVal> params = new java.util.ArrayList<>();
 		params.add(new LispSymbol(NEXT_METHOD_VAR));
@@ -27539,7 +27542,7 @@ public final class LispMacroExpander {
 			defaults.add(ClosRegistry.Specializer.DEFAULT);
 		}
 		String defaultName = methodFunctionName(generic);
-		generic.methods().put(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
+		generic.putSystemDefault(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
 		generic.markVariadic();
 		List<LispVal> defaultParams = new java.util.ArrayList<>();
 		defaultParams.add(new LispSymbol(NEXT_METHOD_VAR));
@@ -28170,14 +28173,19 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> params = generic.paramNames().stream().<LispVal>map(LispSymbol::new).toList();
 		boolean variadic = generic.variadic();
-		// The combined (standard method combination) body is generated only when a
-		// qualifier or call-next-method is present; otherwise the historical single-call
-		// dispatcher is emitted unchanged.
-		boolean combined = generic.methods().values().stream().anyMatch(m -> !m.isPrimary() || m.usesNext());
-		LispVal chain = combined ? combinedDispatchBody(generic, params, closRegistry, builtinFallback, narrower)
-				: simpleDispatchBody(generic, params, closRegistry, builtinFallback, narrower);
-		if ((closRegistry.dynamicClasses() || closRegistry.gfProtocol()) && generic.methodCombination() == null) {
-			chain = withDynamicDispatchArm(generic, params, variadic, closRegistry, chain);
+		LispVal chain = dispatchBody(generic, params, closRegistry, builtinFallback, narrower);
+		// A call that runs before a later method's form sees the table of its time; the
+		// newest flag is tested first, so a call after the last form tests one global.
+		List<ClosRegistry.MethodGeneration> generations = generic.generations();
+		if (!generations.isEmpty()) {
+			LispVal older = generationBody(generations.get(0), generic, params, closRegistry, builtinFallback,
+					narrower);
+			for (int i = 0; i < generations.size(); i++) {
+				LispVal newer = i + 1 == generations.size() ? chain : generationBody(generations.get(i + 1), generic,
+						params, closRegistry, builtinFallback, narrower);
+				older = makeIf(new LispSymbol(generations.get(i).flag()), newer, older);
+			}
+			chain = older;
 		}
 		List<LispVal> defun = new java.util.ArrayList<>();
 		defun.add(new LispSymbol(LispNames.DEFUN));
@@ -28190,6 +28198,42 @@ public final class LispMacroExpander {
 		defun.add(defunParams.isEmpty() ? LispNil.INSTANCE : listToCons(defunParams));
 		defun.add(chain);
 		return listToCons(defun);
+	}
+
+	/**
+	 * The dispatcher body over the generic's method table. The combined (standard method
+	 * combination) body is generated only when a qualifier or call-next-method is
+	 * present; otherwise the historical single-call dispatcher is emitted unchanged.
+	 */
+	private static LispVal dispatchBody(ClosRegistry.GenericInfo generic, List<LispVal> params,
+			ClosRegistry closRegistry, @Nullable String builtinFallback, @Nullable DispatchNarrower narrower) {
+		boolean combined = generic.methods().values().stream().anyMatch(m -> !m.isPrimary() || m.usesNext());
+		LispVal chain = combined ? combinedDispatchBody(generic, params, closRegistry, builtinFallback, narrower)
+				: simpleDispatchBody(generic, params, closRegistry, builtinFallback, narrower);
+		if ((closRegistry.dynamicClasses() || closRegistry.gfProtocol()) && generic.methodCombination() == null) {
+			chain = withDynamicDispatchArm(generic, params, generic.variadic(), closRegistry, chain);
+		}
+		return chain;
+	}
+
+	/**
+	 * The dispatcher body over one earlier method table. Before anything made the generic
+	 * exist, a call is a call of an undefined function; a built-in the generic shadows
+	 * answers it instead, as its default method.
+	 */
+	private static LispVal generationBody(ClosRegistry.MethodGeneration generation, ClosRegistry.GenericInfo generic,
+			List<LispVal> params, ClosRegistry closRegistry, @Nullable String builtinFallback,
+			@Nullable DispatchNarrower narrower) {
+		if (generation.methods().isEmpty() && !generation.declared() && builtinFallback == null) {
+			return listToCons(List.of(new LispSymbol(LispNames.ERROR),
+					quotedData(new LispSymbol(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME)), new LispSymbol(":NAME"),
+					quotedData(new LispSymbol(generic.name())), new LispSymbol(":FORMAT-CONTROL"),
+					new LispString((ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX
+							+ ClosRegistry.functionNameForReport(generic.name())
+							+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX)
+						.replace("~", "~~"))));
+		}
+		return dispatchBody(generic.withMethods(generation.methods()), params, closRegistry, builtinFallback, narrower);
 	}
 
 	/**
@@ -30039,6 +30083,7 @@ public final class LispMacroExpander {
 		int formIndex = -1;
 		for (LispVal rawForm : program) {
 			formIndex++;
+			closRegistry.definitionPosition(out.size());
 			// Fold this form's #S(...) literals against the registry as it stands BEFORE
 			// the form is processed, so the defstruct must precede the literal -- CL's
 			// read-time rule, which a whole-program fold after the walk would silently
@@ -30171,6 +30216,7 @@ public final class LispMacroExpander {
 				out.add(form);
 			}
 		}
+		closRegistry.definitionPosition(-1);
 		warnAboutNeverDefinedSuperclasses(out, closRegistry);
 		// A standard generic the program CALLS (or takes as a value) without defining a
 		// method on it (upstream ASDF applies reinitialize-instance as a matter of
@@ -30199,6 +30245,8 @@ public final class LispMacroExpander {
 		if (activeNarrower != null) {
 			activeNarrower.analyze(out, closRegistry, structAccessors);
 		}
+		List<ClosRegistry.GenericInfo> generational = MethodGenerations.assign(out, closRegistry,
+				LispMacroExpander::isCallableSystemGenericName);
 		for (java.util.Map.Entry<Integer, String> slot : dispatcherSlots.entrySet()) {
 			// A method on make-instance (contextl's refusal for a singleton class) keeps
 			// the system's for every other class: #'make-instance reaches this
@@ -30207,6 +30255,7 @@ public final class LispMacroExpander {
 					&& LispNames.MAKE_INSTANCE.equals(plainName(slot.getValue())) ? LispNames.MOP_MAKE_INSTANCE : null;
 			out.set(slot.getKey(), generateDispatcher(slot.getValue(), closRegistry, fallback, activeNarrower));
 		}
+		MethodGenerations.placeFlags(out, generational);
 		// A computed (eql form) specializer's cell is assigned where its defmethod runs,
 		// but a dispatcher placed earlier may run first: each cell starts out holding a
 		// fresh cons no argument can be eql to, so the method stays inapplicable until

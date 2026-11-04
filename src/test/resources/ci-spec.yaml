@@ -4671,8 +4671,9 @@ cases:
       (print (handler-case (delete-package :cl) (package-error (c) (package-error-package c))))
       (print (handler-case (rename-package :cl :cl2) (package-error (c) (package-error-package c))))
       (print (handler-case (package-nicknames :no-such-ci-pkg-zzz) (package-error (c) (package-error-package c))))
-      (print (length (find-all-symbols 'car)))
-      (print (member 'car (find-all-symbols 'car)))
+      ;; Other cases intern a CAR of their own in the shared universe, so ask for cl's.
+      (print (count 'car (find-all-symbols 'car)))
+      (print (find 'car (find-all-symbols 'car)))
       (print (apropos-list "CAR" :cl))
       (print (do-all-symbols (s nil) (when (eq s 'car) (return s))))
       (print (do-symbols (s :cl-user "ci-ds") (when (string= (symbol-name s) "CAR") (return :ci-found))))
@@ -4707,7 +4708,7 @@ cases:
       :CL
       :NO-SUCH-CI-PKG-ZZZ
       1
-      (CAR)
+      CAR
       (CAR MAPCAR)
       CAR
       :CI-FOUND
@@ -11915,6 +11916,191 @@ cases:
       (:ALPHA :CLASS-T (:OTHER BETA) 1)
       (:OTHER 42)
       (:FORTY-TWO :THAT-STRING (:OTHER "key") :ALPHA 1)
+  - name: clos-methods-take-effect-where-their-forms-run
+    source: |
+      ;; A method exists from the moment its form runs (CLHS 7.6): a call that runs first
+      ;; does not see it, on a compile path too, where the dispatcher is generated from the
+      ;; whole program. The call may come through a function, a function value, or an
+      ;; operator that calls the generic without naming it.
+      (defclass pord-a () ())
+      (defclass pord-b (pord-a) ())
+      (defclass pord-h () ())
+      (make-instance 'pord-h)
+      (defmethod initialize-instance :after ((x pord-h) &key) (print :pord-init))
+      (make-instance 'pord-h)
+      (print :pord-subclass)
+      (defmethod pord-g ((x pord-a)) :a)
+      (print (pord-g (make-instance 'pord-b)))
+      (defmethod pord-g ((x pord-b)) :b)
+      (print (pord-g (make-instance 'pord-b)))
+      (print :pord-redefined)
+      (defmethod pord-r ((x pord-a)) :one)
+      (print (pord-r (make-instance 'pord-a)))
+      (defmethod pord-r ((x pord-a)) :two)
+      (print (pord-r (make-instance 'pord-a)))
+      (print :pord-combination)
+      (defgeneric pord-c (x))
+      (defmethod pord-c ((x pord-b)) (print :primary) 1)
+      (defmethod pord-c :before ((x pord-a)) (print :before))
+      (print (pord-c (make-instance 'pord-b)))
+      (defmethod pord-c :after ((x pord-b)) (print :after))
+      (print (pord-c (make-instance 'pord-b)))
+      (defmethod pord-c :around ((x pord-a)) (print :around) (list (call-next-method)))
+      (print (pord-c (make-instance 'pord-b)))
+      (print :pord-next-method)
+      (defgeneric pord-n (x))
+      (defmethod pord-n ((x pord-b)) (if (next-method-p) (list :next (call-next-method)) :no-next))
+      (print (pord-n (make-instance 'pord-b)))
+      (defmethod pord-n ((x pord-a)) :a)
+      (print (pord-n (make-instance 'pord-b)))
+      (print :pord-function-value)
+      (defgeneric pord-f (x))
+      (defmethod pord-f ((x integer)) :int)
+      (defvar *pord-f* #'pord-f)
+      (print (funcall *pord-f* 1))
+      (print (handler-case (funcall *pord-f* "s") (error () :none)))
+      (defmethod pord-f ((x string)) :str)
+      (print (funcall *pord-f* "s"))
+      (defmethod pord-f ((x string)) :str2)
+      (print (mapcar *pord-f* '(1 "s")))
+      (print :pord-through-a-function)
+      (defun pord-caller (x) (pord-l x))
+      (defgeneric pord-l (x))
+      (print (handler-case (pord-caller 1) (error () :none)))
+      (defmethod pord-l ((x integer)) :int)
+      (print (pord-caller 1))
+      (print :pord-defgeneric-again)
+      (defgeneric pord-i (x) (:method ((x integer)) :inline))
+      (print (pord-i 1))
+      (defgeneric pord-i (x))
+      (print (handler-case (pord-i 1) (error () :none)))
+      (defmethod pord-i ((x integer)) :plain)
+      (print (pord-i 1))
+      (print :pord-under-a-let)
+      (defmethod pord-t ((x integer)) :top)
+      (print (pord-t 1))
+      (let ((v :nested)) (defmethod pord-t ((x integer)) v))
+      (print (pord-t 1))
+      (print :pord-setf)
+      (defclass pord-s () ((v :initform 0 :accessor pord-s-v)))
+      (defvar *pord-s* (make-instance 'pord-s))
+      (setf (pord-s-v *pord-s*) 1)
+      (defmethod (setf pord-s-v) :after (new (o pord-s)) (print (list :set new)))
+      (setf (pord-s-v *pord-s*) 2)
+      (print (pord-s-v *pord-s*))
+      (print :pord-printer)
+      (defclass pord-p () ())
+      (defvar *pord-p* (make-instance 'pord-p))
+      (print (string= (princ-to-string *pord-p*) "#<P!>"))
+      (defmethod print-object ((x pord-p) stream) (write-string "#<P!>" stream))
+      (print (string= (princ-to-string *pord-p*) "#<P!>"))
+      (print :pord-slot-protocol)
+      (defclass pord-u () ((s)))
+      (defvar *pord-u* (make-instance 'pord-u))
+      (print (handler-case (slot-value *pord-u* 's) (unbound-slot () :unbound)))
+      (defmethod slot-unbound (c (o pord-u) n) (declare (ignore c n)) :from-method)
+      (print (slot-value *pord-u* 's))
+      (print :pord-shared-initialize)
+      (defclass pord-v () ((a :initarg :a :accessor pord-v-a)))
+      (print (pord-v-a (make-instance 'pord-v :a 1)))
+      (defmethod shared-initialize :after ((o pord-v) names &rest args) (declare (ignore names args)) (setf (pord-v-a o) 99))
+      (print (pord-v-a (make-instance 'pord-v :a 1)))
+      (print :pord-struct)
+      (defstruct pord-st a)
+      (defvar *pord-st* (make-pord-st :a 1))
+      (defgeneric pord-sg (x))
+      (print (handler-case (pord-sg *pord-st*) (error () :none)))
+      (defmethod pord-sg ((x pord-st)) :st)
+      (print (pord-sg *pord-st*))
+      (print :pord-default)
+      (defgeneric pord-d (x))
+      (print (handler-case (pord-d 1) (error () :none)))
+      (defmethod pord-d (x) (list :default x))
+      (print (pord-d 1))
+      (print :pord-undefined)
+      (print (handler-case (pord-u1 1) (undefined-function (c) (list :undefined (cell-error-name c)))))
+      (print (handler-case (pord-u1 1) (error (c) (not (null (search "undefined" (princ-to-string c)))))))
+      (defmethod pord-u1 ((x integer)) :defined)
+      (print (pord-u1 1))
+      (print :pord-eql)
+      (defgeneric pord-e (x))
+      (defmethod pord-e ((x integer)) :int)
+      (print (pord-e 3))
+      (defmethod pord-e ((x (eql 3))) :three)
+      (print (pord-e 3))
+      (print :pord-builtin)
+      (defclass pord-closable () ())
+      (defvar *pord-closable* (make-instance 'pord-closable))
+      (print (handler-case (close 1) (error () :not-a-stream)))
+      (defmethod close ((x pord-closable) &key abort) (declare (ignore abort)) :closed)
+      (print (close *pord-closable*))
+    expected: |
+      :PORD-INIT
+      :PORD-SUBCLASS
+      :A
+      :B
+      :PORD-REDEFINED
+      :ONE
+      :TWO
+      :PORD-COMBINATION
+      :BEFORE
+      :PRIMARY
+      1
+      :BEFORE
+      :PRIMARY
+      :AFTER
+      1
+      :AROUND
+      :BEFORE
+      :PRIMARY
+      :AFTER
+      (1)
+      :PORD-NEXT-METHOD
+      :NO-NEXT
+      (:NEXT :A)
+      :PORD-FUNCTION-VALUE
+      :INT
+      :NONE
+      :STR
+      (:INT :STR2)
+      :PORD-THROUGH-A-FUNCTION
+      :NONE
+      :INT
+      :PORD-DEFGENERIC-AGAIN
+      :INLINE
+      :NONE
+      :PLAIN
+      :PORD-UNDER-A-LET
+      :TOP
+      :NESTED
+      :PORD-SETF
+      (:SET 2)
+      2
+      :PORD-PRINTER
+      NIL
+      T
+      :PORD-SLOT-PROTOCOL
+      :UNBOUND
+      :FROM-METHOD
+      :PORD-SHARED-INITIALIZE
+      1
+      99
+      :PORD-STRUCT
+      :NONE
+      :ST
+      :PORD-DEFAULT
+      :NONE
+      (:DEFAULT 1)
+      :PORD-UNDEFINED
+      (:UNDEFINED PORD-U1)
+      T
+      :DEFINED
+      :PORD-EQL
+      :INT
+      :THREE
+      :PORD-BUILTIN
+      :NOT-A-STREAM
+      :CLOSED
   - name: clos-defmethod-bit-vector-specializer
     source: |
       ;; A bit-vector specializer (cl-slice's canonical-representation pairs it with

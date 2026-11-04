@@ -203,6 +203,50 @@ so `#'name`/`funcall`/`mapcar` work with no `BuiltinFunctionWrappers` entry.
   `(lambda (params) (%m next params))` literals — NO free-variable capture; base next = `nil`
   for the innermost primary, the `coreThunk` for the innermost around.
 
+## Method definitions take effect in program order
+`macro/MethodGenerations`, since 2026-11-05. A dispatcher is generated after the whole walk, so
+until then a compiled program answered every call with its LAST method table: a call running
+before a `defmethod` form saw that method, and a redefined method's first body never ran
+(measured on JVM, P1 and the component; the interpreter and SBCL 2.2.9 agree with each other).
+The interpreter needs nothing, it regenerates at each form.
+- **A generation** (`ClosRegistry.MethodGeneration`) is an earlier table a call can observe. The
+  dispatcher tests its flags newest first: `(if %g--gen1 LAST (if %g--gen0 T1 T0))`. A flag is a
+  hoisted `(defvar %g--genN nil)` plus a `(setq %g--genN t)` right ahead of the defining form, so
+  that form's value stays the top level's. Every table goes through `dispatchBody`, so combination,
+  `call-next-method`, the dynamic arm and the narrower need nothing per generation, and a call after
+  the last form pays one global read.
+- **The log**: the walk tells the registry its output index (`definitionPosition`) and every table
+  write records a `MethodChange`, a removal by a second `defgeneric` included
+  (`ClosRegistry.changeMethod`). `methodsBefore(p)` replays it. A method under a top-level `let` is
+  an ordinary change at the let's position, and its assignment guard covers the let's own body. A
+  redefinition already mints a new `%g--mN`, so the old body stays callable.
+- **A system default is no definition** (`putSystemDefault`): it is in every table, wherever the
+  form that synthesized it stands. A program's own default primary on a system generic with no
+  synthesized one stays visible from the start (residual: no generation is made before it).
+- **Which changes split** (`generationsOf`), so that every other generic stays byte-identical: a
+  running form (anything but `defun`/`defmacro`) must be able to reach the generic since the last
+  split, and the method must be able to apply to that call. A method specializing on a type whose
+  first definition comes after the last such form cannot (`cannotApplyBefore`,
+  `ClosRegistry.typeFirstDefined`), which keeps the usual class-then-methods-then-use shape in one
+  table however many `print-object` methods a program has.
+- **The reach is by mention**, on package-less names: forward through `defun` bodies and from a
+  generic to its methods' bodies; `IMPLICIT_CALLS` for operators lowered later (`make-instance` to
+  the init generics, the printers to `print-object`, slot reads to `slot-unbound`/`slot-missing`); a
+  class name to its constructor (its initforms); a place to its `%setf-` writer. A form reaching
+  `funcall`/`apply`/`mapcar`/... counts for every generic an earlier form mentioned, which may have
+  been captured. Wider than the truth costs a generation and nothing else.
+- **Before anything made the generic exist** (no method, no `defgeneric`), a generation signals
+  `undefined-function`, as the interpreter does, unless a built-in it shadows answers.
+- Residuals, each keeping the last table as every call had before: a call by a name computed at
+  run time that no form mentions, an operator calling a generic not in `IMPLICIT_CALLS` (a Gray
+  generic behind `write-char`, a `reader` behind a position-ambiguous `slot-value`), an instance
+  made before its class's `defclass` form (an error on the interpreter), the literal `fboundp` of a
+  generic. A plain `defun` keeps its own whole-program rule (`.kb/core-representation.md`).
+- Size, measured 2026-11-05 on the ci-spec corpus as one program: 49 generics of its method-heavy
+  cases split, `print-object` with 3 generations over 19 methods.
+- Pinned by ci-spec `clos-methods-take-effect-where-their-forms-run` (agrees with SBCL 2.2.9) and
+  `LispMacroExpanderTest.aGenericKeepsOneMethodTableUnlessAnEarlierFormCanCallIt`.
+
 ## Multiple inheritance
 `ClassInfo` carries `superclasses` (local precedence order), `cpl` (CLHS 4.3.5 topological
 sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException`) and
@@ -237,7 +281,8 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
   `LambdaLists.desugarProgram` — the constructors use `&key`). It walks the whole program
   collecting classes/methods, splices defuns in place, and inserts each generic's dispatcher
   at its defgeneric's position (or the first defmethod's) AFTER the walk, so descendant and
-  method sets are complete regardless of definition order. Non-top-level
+  method sets are complete regardless of definition order (a call that runs earlier still sees
+  the earlier table: "Method definitions take effect in program order"). Non-top-level
   defclass/defgeneric/defmethod -> "only supported as a top-level form", with ONE
   exception: a `defmethod` or `defgeneric` anywhere in a top-level `let`/`let*` body (the
   closure-over-let idiom) is registered statically by
