@@ -197,6 +197,11 @@ spells a qualifier only when the symbol is NOT accessible in the current `*packa
   The interpreter's answer is exact. `'nil` read under a package using no `cl` is `cl`'s `nil` on every
   backend (the reader folds it ahead of the resolver), so it prints `COMMON-LISP:NIL` where SBCL prints
   the package's own `NIL`.
+- **`print-unreadable-object :type t` does not follow the package** (measured 2026-11-05, all four
+  backends): `typeNameOf` peels the tag, so a `cl-user` class prints `#<HF-C>` under another package and a
+  class of the current package prints `#<HF-P::D>`, where SBCL prints `#<COMMON-LISP-USER::HF-C>` and
+  `#<D>`. The tag itself never takes a prefix (`bareSymbolPrefix`); with one the peel found nothing, and
+  the interpreter printed `#<COMMON-LISP-USER::|%class-GEOM:SOLID|>` under a `cl-user` that uses a package.
 - **A printed qualifier reads back:** the compiled run-time readers drop `CL`, `COMMON-LISP`, `CL-USER`
   and `COMMON-LISP-USER` qualifiers at the token (`JvmReadRuntimeBuilder.buildClassify`,
   `WasmReadRuntimeBuilder.emitDropStandardQualifier`), one colon or two. Until then `(read-from-string

@@ -1438,6 +1438,12 @@ class PackageResolverTest {
 		assertThat(resolver.bareSymbolPrefix("CONS")).isNull();
 		assertThat(resolver.bareSymbolPrefix("QUOTE")).isNull();
 		assertThat(resolver.bareSymbolPrefix("&OPTIONAL")).isNull();
+		// An instance's tag is what the type name is peeled off of, no symbol of a home,
+		// and a spelling holding a qualifier is not a bare one.
+		assertThat(resolver.bareSymbolPrefix("%class-FOO")).isNull();
+		assertThat(resolver.bareSymbolPrefix("%struct-FOO")).isNull();
+		assertThat(resolver.bareSymbolPrefix("%class-GEOM:SOLID")).isNull();
+		assertThat(resolver.bareSymbolPrefix("a:b")).isNull();
 		resolver.setCurrentPackage("BSP-SHADOW");
 		assertThat(resolver.bareSymbolPrefix("CAR")).isEqualTo(cl);
 		assertThat(resolver.bareSymbolPrefix("CDR")).isNull();

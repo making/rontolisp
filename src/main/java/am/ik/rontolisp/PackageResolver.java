@@ -4267,12 +4267,15 @@ public final class PackageResolver {
 	/**
 	 * What the symbol spelled bare prints in front of its name in the current package:
 	 * nothing where the package reads the name as this symbol, else the qualifier of its
-	 * home, {@code cl} or {@code cl-user}. SBCL's spellings, the packages' names.
+	 * home, {@code cl} or {@code cl-user}. SBCL's spellings, the packages' names. An
+	 * instance's tag has no home: {@code print-unreadable-object} peels the type name off
+	 * its printed text, so it stays as it is, like a spelling holding a colon.
 	 * @param bareName the stored symbol name, carrying no qualifier
 	 * @return the prefix, or {@code null} when it prints bare
 	 */
 	public synchronized @Nullable String bareSymbolPrefix(String bareName) {
-		if (printsBare(bareName)) {
+		if (bareName.startsWith(LispLayout.CLASS_TAG_PREFIX) || bareName.startsWith(LispLayout.STRUCT_TAG_PREFIX)
+				|| PackageRegistry.splitQualified(bareName) != null || printsBare(bareName)) {
 			return null;
 		}
 		return PackageRegistry.isClMemberName(bareName) ? SymbolPrintTable.CL_PREFIX : SymbolPrintTable.CL_USER_PREFIX;
