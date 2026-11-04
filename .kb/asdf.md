@@ -51,7 +51,6 @@ cl-project, caveman2), even on a line never reached. prove, cl-project and cavem
   Interpreter: read at each search, each entry evaluated (`centralRegistryDirs`). Compile path: a
   top-level `push`/`pushnew` of a directory that folds (`centralRegistryPush`, the `load` path folder)
   goes on `Ctx.centralRegistry`, and the form stays for the program to read the variable.
-  `*system-definition-search-functions*` is nil and nothing consults it (`.todo/i25`).
 - **`find-system` searches on the interpreter** (`locateSystem`): the `.asd` runs and registers; it
   downloads nothing and loads no system. A refused name and a file already loading answer nil. The
   primary's `.asd` is not read again for a sub-system. A compile path answers its baked table.
@@ -372,6 +371,54 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
   (`classes-tool.lisp`, one class per consumer shape, all four), `UserMacroExpanderTest` (the deferred
   replay), `AsdfSystemsTest#aPerformBodyReadEvalReadsInTheImage`.
 
+## The search (i25, 2026-11-05)
+`asdf-search.lisp`, ported from ASDF 3.3.1 (`~/.rontolisp/quicklisp/software/lisp-binary-*/asdf.lisp`);
+`uiop-configuration.lisp` holds the configuration DSL it stands on (`.kb/uiop.md`). Order:
+`*system-definition-search-functions*` (real ASDF's three names), then the download cache.
+- **Interpreter**: `locateAsd`/`locateSystem` -> `searchSystemDefinition` -> `%asdf-search-file` -> the
+  walk. A function answers a pathname (a string is a `type-error`, as there), or a system, adopted with
+  an empty record (`%asdf-adopt-system`, `emptySystem`): a load of it does nothing, as real ASDF's plan
+  over no children (measured). A search runs at each lookup, in Lisp, so a `let` of either variable counts.
+- **What it inherits is the search path**, not `~/common-lisp`, `~/.config` or `CL_SOURCE_REGISTRY`:
+  `*default-source-registries*` is one function (`%asdf-inherited-search-path`), so the machine reaches a
+  search only through `--system-path` and `RONTOLISP_SOURCE_REGISTRY` (`:default-registry` still names
+  real ASDF's). `LispEvaluator.searchPathDirs`: the directory of the file asking, then `systemPath`.
+  **Probed at each search, never scanned**: a `.asd` written after the program started counts, and the
+  playground's loader cannot list. So it stands in the flattened entries as a mark (`%asdf-flattened-entries%`),
+  and what a configuration names sits in two tables, `*source-registry*` ahead of it and
+  `%asdf-registry-behind%` behind (`flatten-source-registry` shows its directories to a program).
+  `:ignore-inherited-configuration` drops it and leaves the download cache (`distDirs`, split from
+  `systemPath` for this), which is Quicklisp's own search function in real ASDF.
+- **Compile path**: `AsdfSystems.sourceRegistryCall` recognizes a top-level `initialize-source-registry`
+  with a quoted, string or nil parameter and `clear-source-registry`. `LoadInliner.readSourceRegistry`
+  runs it in the build image (`%asdf-read-source-registry`, the one implementation of the DSL, let-bound
+  so the image's own search is untouched; the file's load context is `:here`), and
+  `Ctx.searchDirs` gives every search central registry, the `.asd` chosen for the name, the rest ahead,
+  then what it inherits, then what is behind, then `distDirs`. The form stays. **A pushed function is
+  not called while splicing**: the program has not run.
+- **At run time on a compile path** (`searchAtRunTimeDefun`): only a program naming a member of the
+  file carries it (`AsdfRuntimeLibrary.process`, `searchMembers`), since `process-source-registry`'s
+  methods would be pruner roots. Its `find-system` of an unspliced name walks: an answered system is
+  adopted, a pathname reaches `%asdf-load-asd`'s refusal. So `(asdf:find-system "x" nil)` of a `.asd`
+  on disk signals where such a program answered nil before, and an adopted system is in
+  `registered-system` but not `registered-systems`. A literal `(setq *s-d-s-f* nil)` is not read.
+- **Divergences**: a `.asd` configuring the registry does it in the build image only, on a compile
+  path. `find-system-if-being-defined` and the immutable search are not in the walk
+  (`asdFilesLoading` answers the first). A central-registry entry may lack its trailing slash; real
+  ASDF signals.
+- **`(require :asdf)`, `(require :uiop)`** load nothing (`AsdfSystems.isImplementationModule`), on all
+  four. Every measured script opens with one, and it stopped each before `initialize-source-registry`:
+  the premise "each is a script's first line" had this line ahead of it. A nested `require` stays refused
+  on a compile path.
+- **Measured** (2026-11-05, interpreter; `source-registry/exercise.lisp` also on SBCL 2.2.9's ASDF 3.3.1):
+  fiveam's `build.lisp` succeeds and `test.lisp` runs 57 of 57 checks. cl-json's `test-cl-json.lisp`
+  succeeds with fiveam and its dependencies on `RONTOLISP_SOURCE_REGISTRY`; `compile-cl-json.lisp` stops
+  at its `(asdf:operate 'asdf:compile-op ...)`, the refusal "The operation protocol" describes.
+- Pinned by `AsdfMetaobjectsE2eTest` (`source-registry/exercise.lisp`, `source-registry.expected`, all
+  four), `LispEvaluatorAsdfTest` (the walk; a real directory for the inherited position),
+  `LoadInlinerTest#aLiteralSourceRegistryCallDecidesTheSearchWhileSplicing`,
+  `#aProgramCarriesOnlyTheStubsAndMetadataItNames` (who carries the file).
+
 ## `:class :package-inferred-system`
 Consumers: ningle, rove, array-operations, jose. Such a system has NO `:components`; `LispSystem.packageInferredDir` (non-null
 iff declared) is the whole marker. All rules in `AsdfSystems`:
@@ -410,10 +457,8 @@ iff declared) is the whole marker. All rules in `AsdfSystems`:
   (`AsdfSystems.checkIgnoredLoadOptions`): `:force`/`:verbose`/`:silent` have nothing to drive
   (no fasl cache, a second load is a no-op), and rejecting them would make lack's
   `find-package-or-load` unloadable. The SHAPE is still checked.
-- **Search order**: `asdf:*central-registry*`, dir of the loading file, then `--system-path`, then
-  `RONTOLISP_SOURCE_REGISTRY`, plus a `ql:quickload`'s download cache ([dists.md](dists.md)).
-  `RontoLispCli.systemPath()` parses the `File.pathSeparator`-joined lists. The `asdf` package is
-  seeded in `PackageRegistry`.
+- **Search order**: "The search". `RontoLispCli.systemPath()` parses the
+  `File.pathSeparator`-joined lists. The `asdf` package is seeded in `PackageRegistry`.
 - **No ci-spec case is possible**: the compile path needs the `.asd` on disk at compile time,
   which the concatenated ci-spec driver cannot provide. Coverage is `AsdfSystemsTest` +
   `LispEvaluatorAsdfTest` + `LoadInlinerTest` + the per-library E2Es.

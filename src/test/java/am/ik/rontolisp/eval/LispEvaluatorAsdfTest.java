@@ -1,14 +1,18 @@
 package am.ik.rontolisp.eval;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -713,6 +717,89 @@ class LispEvaluatorAsdfTest {
 			.contains("(\"broken\" \"broken.asd\" \"the file refuses\")")
 			.contains(":FIND-SYSTEM")
 			.contains(":LOAD-ASD");
+	}
+
+	@Test
+	void aSearchIsTheWalkOfTheSearchFunctions() {
+		// A pushed function is called with the name and answers a file, which loads, or a
+		// system, whose load has nothing to do; anything else is refused, as in real
+		// ASDF. Without the list nothing finds what the search path holds, and a function
+		// taking its place answers for it.
+		Map<String, String> files = Map.of(//
+				"elsewhere/pushed.asd", "(defsystem :pushed :components ((:file \"pushed\")))", //
+				"elsewhere/pushed.lisp", "(defun pushed-fn () :pushed)", //
+				"path/on-path.asd", "(defsystem :on-path)");
+		assertThat(run("""
+				(defvar *asked* nil)
+				(defun search-for-pushed (name)
+				  (push name *asked*)
+				  (cond ((equal name "pushed") #P"elsewhere/pushed.asd")
+				        ((equal name "made") (make-instance 'asdf:system :name "made"))
+				        ((equal name "wrong") "elsewhere/pushed.asd")))
+				(push 'search-for-pushed asdf:*system-definition-search-functions*)
+				(asdf:load-system "pushed")
+				(print (list (pushed-fn) *asked*))
+				(asdf:load-system "made")
+				(print (asdf:component-name (asdf:find-system "made")))
+				(print (asdf:component-loaded-p "made"))
+				(print (handler-case (asdf:find-system "wrong") (type-error () :refused)))
+				(print (multiple-value-list (asdf:locate-system "on-path")))
+				(let ((asdf:*system-definition-search-functions* nil))
+				  (print (asdf:find-system "on-path" nil))
+				  (print (handler-case (asdf:load-system "on-path")
+				           (asdf:missing-component () :missing))))
+				(print (asdf:component-name (asdf:find-system "on-path")))""", files, List.of("path")))
+			.contains("(:PUSHED (\"pushed\"))")
+			.contains("\"made\"")
+			.contains(":REFUSED")
+			.contains("(T NIL #P\"path/on-path.asd\" NIL NIL)")
+			.contains(":MISSING")
+			.contains("\"on-path\"");
+	}
+
+	@Test
+	void theSourceRegistryOrdersItselfAroundTheSearchPathItInherits(@TempDir Path dir) throws IOException {
+		// The search path stands where :inherit-configuration does, and is gone with
+		// :ignore-inherited-configuration; a download's directory is not configuration.
+		// A string is a configuration too, and clearing it brings the search path back.
+		Path ahead = Files.createDirectories(dir.resolve("ahead"));
+		Path path = Files.createDirectories(dir.resolve("path"));
+		Path behind = Files.createDirectories(dir.resolve("behind"));
+		Path tree = Files.createDirectories(dir.resolve("tree/below"));
+		Files.writeString(ahead.resolve("first.asd"), "(defsystem :first :description \"ahead\")");
+		Files.writeString(path.resolve("first.asd"), "(defsystem :first :description \"path\")");
+		Files.writeString(path.resolve("second.asd"), "(defsystem :second :description \"path\")");
+		Files.writeString(behind.resolve("second.asd"), "(defsystem :second :description \"behind\")");
+		Files.writeString(behind.resolve("third.asd"), "(defsystem :third :description \"behind\")");
+		Files.writeString(tree.resolve("in-tree.asd"), "(defsystem :in-tree :description \"tree\")");
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		evaluator.setSourceLoader(SourceLoader.fileSystem());
+		evaluator.setSystemPath(List.of(path.toString()));
+		for (LispVal expr : LispReader.readAllFromString("""
+				(defun description (name)
+				  (let ((system (asdf:find-system name nil)))
+				    (and system (asdf:system-description system))))
+				(defun forget ()
+				  (dolist (name '("first" "second" "third" "in-tree")) (asdf:clear-system name)))
+				(asdf:initialize-source-registry
+				 '(:source-registry (:directory "%1$s/") :inherit-configuration (:directory "%3$s/")))
+				(print (list (description "first") (description "second") (description "third")))
+				(print (mapcar #'cadr (mapcar (lambda (e) (list (pathname-name (car e)) (getf (cdr e) :recurse)))
+				                              (asdf/source-registry:flatten-source-registry))))
+				(forget)
+				(asdf:initialize-source-registry "%1$s/:%4$s//")
+				(print (list (description "first") (description "second") (description "in-tree")))
+				(print (asdf/source-registry:flatten-source-registry "%1$s/"))
+				(forget)
+				(asdf:clear-source-registry)
+				(print (list (description "first") (description "in-tree")))""".formatted(ahead, path, behind,
+				dir.resolve("tree")))) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).trim().lines().toList()).containsExactly(
+				"(\"ahead\" \"path\" \"behind\")", "(NIL NIL NIL NIL)", "(\"ahead\" NIL \"tree\")",
+				"((#P\"" + ahead + "/\" :RECURSE NIL :EXCLUDE NIL))", "(\"path\" NIL)");
 	}
 
 	@Test

@@ -250,9 +250,7 @@ class AsdfSystemsTest {
 		Map<String, AsdfSystems.LispSystem> systems = new java.util.HashMap<>();
 		systems.put("lib", system);
 		systems.put("sibling", parse("(asdf:defsystem :sibling)"));
-		AsdfSystems.LispSystem resolved = AsdfSystems.resolveWeakDependencies(system, systems, List.of(), path -> {
-			throw new java.io.FileNotFoundException(path);
-		});
+		AsdfSystems.LispSystem resolved = AsdfSystems.resolveWeakDependencies(system, systems, name -> false);
 		assertThat(resolved.dependsOn()).containsExactly("alexandria", "trivial-features", "sibling");
 		assertThat(systems.get("lib")).isSameAs(resolved);
 	}

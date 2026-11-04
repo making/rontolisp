@@ -20,6 +20,8 @@ layout and the search-path details.
 | `asdf:find-component` | `(asdf:find-component :my-lib "main")` | a component by name or by a list of names down the tree, or nil. `module-components` is `component-children` |
 | `asdf:system-description` | `(asdf:system-description (asdf:find-system :my-lib))` | what the `defsystem` declared, with the other `system-` readers, `component-property` and `system-source-file` |
 | `asdf:*central-registry*` | `(push "vendor/my-lib/" asdf:*central-registry*)` | directories searched for `NAME.asd` ahead of the search path |
+| `asdf:initialize-source-registry` | `(asdf:initialize-source-registry '(:source-registry (:tree :here) :inherit-configuration))` | configure the search: `:directory`, `:tree`, `:here`, what it inherits. `clear-source-registry` undoes it |
+| `asdf:*system-definition-search-functions*` | `(push 'vendor-search asdf:*system-definition-search-functions*)` | the functions a search calls in order, with the name, until one answers a pathname or a system |
 | `asdf:find-system` | `(asdf:find-system :my-lib nil)` | the system's metaobject, a real `asdf:system` CLOS instance memoized per name (`eq` across calls); nil for an unknown name when `error-p` is nil |
 | `asdf:registered-systems` | `(asdf:registered-systems)` | the downcased names of every registered system, in registration order |
 | `asdf:system-relative-pathname` | `(asdf:system-relative-pathname :my-lib "data/tlds.dat")` | the namestring of a path resolved against the system's source directory (folded to a literal on the compile path) |

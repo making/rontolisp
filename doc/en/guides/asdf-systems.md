@@ -65,14 +65,21 @@ the compile-time `load` include, so the JVM and WASM compilers see every
 
 ## The system search path
 
-`asdf:load-system` looks for `NAME.asd` in, in order:
+`asdf:load-system` calls the functions on
+[`asdf:*system-definition-search-functions*`](../reference/functions/asdf-system-definition-search-functions.md),
+which at the start look for `NAME.asd` in, in order:
 
 1. the directories on [`asdf:*central-registry*`](../reference/functions/asdf-central-registry.md),
-2. the directory of the file doing the `load-system` (like `load`),
-3. the directories given with `--system-path` (several can be joined with the
+2. what [`asdf:initialize-source-registry`](../reference/functions/asdf-initialize-source-registry.md)
+   configured,
+3. the directory of the file doing the `load-system` (like `load`),
+4. the directories given with `--system-path` (several can be joined with the
    platform path separator, like `PATH`),
-4. the directories in the `RONTOLISP_SOURCE_REGISTRY` environment variable
+5. the directories in the `RONTOLISP_SOURCE_REGISTRY` environment variable
    (same format).
+
+The last three are the configuration it inherits, so `:inherit-configuration` places them and
+`:ignore-inherited-configuration` drops them.
 
 A dependency system's `.asd` is searched starting from the depending system's
 directory, so sibling systems in one registry directory find each other.
@@ -335,8 +342,7 @@ library still has to stay inside the supported subset below.
   `load-source-op`, the slot names and the conditions a load signals
   (`missing-component`, `missing-dependency`, `load-system-definition-error`). The rest
   are real ASDF's classes and generics standing empty: calling one signals
-  `uiop:not-implemented-error` naming it, and the source-registry and plan families are
-  among them.
+  `uiop:not-implemented-error` naming it, and the plan family is among them.
 - **So is the operation protocol.** Every action of a load is an
   [`asdf:perform`](../reference/functions/asdf-perform.md) call on an
   operation instance (`asdf:prepare-op`, `asdf:compile-op`, `asdf:load-op`,

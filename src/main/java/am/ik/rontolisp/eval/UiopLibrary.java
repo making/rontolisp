@@ -79,11 +79,13 @@ public final class UiopLibrary {
 	 * absent here has no Lisp-source implementation yet, so every one of its exports is
 	 * stubbed.
 	 */
-	private static final Map<String, String> RESOURCES = Map.of("UIOP/PACKAGE", "uiop-package.lisp", "UIOP/UTILITY",
-			"uiop-utility.lisp", "UIOP/OS", "uiop-os.lisp", "UIOP/PATHNAME", "uiop-pathname.lisp", "UIOP/FILESYSTEM",
-			"uiop-filesystem.lisp", "UIOP/STREAM", "uiop-stream.lisp", "UIOP/IMAGE", "uiop-image.lisp",
-			"UIOP/LISP-BUILD", "uiop-lisp-build.lisp", "UIOP/VERSION", "uiop-version.lisp", "UIOP/BACKWARD-DRIVER",
-			"uiop-backward-driver.lisp");
+	private static final Map<String, String> RESOURCES = Map.ofEntries(Map.entry("UIOP/PACKAGE", "uiop-package.lisp"),
+			Map.entry("UIOP/UTILITY", "uiop-utility.lisp"), Map.entry("UIOP/OS", "uiop-os.lisp"),
+			Map.entry("UIOP/PATHNAME", "uiop-pathname.lisp"), Map.entry("UIOP/FILESYSTEM", "uiop-filesystem.lisp"),
+			Map.entry("UIOP/STREAM", "uiop-stream.lisp"), Map.entry("UIOP/IMAGE", "uiop-image.lisp"),
+			Map.entry("UIOP/LISP-BUILD", "uiop-lisp-build.lisp"), Map.entry("UIOP/VERSION", "uiop-version.lisp"),
+			Map.entry("UIOP/BACKWARD-DRIVER", "uiop-backward-driver.lisp"),
+			Map.entry("UIOP/CONFIGURATION", "uiop-configuration.lisp"));
 
 	/** The {@code &rest} parameter of a synthesized stub; its arguments are ignored. */
 	private static final String STUB_ARGS = "%UIOP-STUB-ARGS";

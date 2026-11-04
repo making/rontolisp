@@ -259,8 +259,9 @@ public final class LoadInliner {
 		// program must be deterministic (.kb/emitted-output-determinism.md).
 		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new java.util.LinkedHashMap<>(), new HashMap<>(),
 				new java.util.LinkedHashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), new ArrayList<>(),
-				features, dists, new java.util.concurrent.atomic.AtomicInteger(), baseDir, standards,
-				new BuildImage(features), new Reading());
+				new ArrayList<>(), new SourceRegistryConfig(), features, dists,
+				new java.util.concurrent.atomic.AtomicInteger(), baseDir, standards, new BuildImage(features),
+				new Reading());
 		FormSource program = entry.open(ctx, result);
 		if (entryFile == null) {
 			expandInto(program, result, ctx, new Origin(baseDir, null, null));
@@ -301,23 +302,61 @@ public final class LoadInliner {
 	 */
 	private record Ctx(SourceLoader loader, Deque<String> loading, Set<String> provided,
 			Map<String, AsdfSystems.LispSystem> systems, Map<String, String> systemPackages, Set<String> loadedSystems,
-			Deque<String> loadingSystems, List<String> systemPath, List<String> centralRegistry, Features features,
-			DistClient dists, java.util.concurrent.atomic.AtomicInteger quickloadDepth, @Nullable String entryBaseDir,
+			Deque<String> loadingSystems, List<String> systemPath, List<String> distDirs, List<String> centralRegistry,
+			SourceRegistryConfig sourceRegistry, Features features, DistClient dists,
+			java.util.concurrent.atomic.AtomicInteger quickloadDepth, @Nullable String entryBaseDir,
 			SourceStandards standards, BuildImage buildImage, Reading reading) {
 
 		/** This state, its registries shared, reading with {@code features}. */
 		Ctx readingWith(Features features) {
 			return new Ctx(this.loader, this.loading, this.provided, this.systems, this.systemPackages,
-					this.loadedSystems, this.loadingSystems, this.systemPath, this.centralRegistry, features,
-					this.dists, this.quickloadDepth, this.entryBaseDir, this.standards, this.buildImage, this.reading);
+					this.loadedSystems, this.loadingSystems, this.systemPath, this.distDirs, this.centralRegistry,
+					this.sourceRegistry, features, this.dists, this.quickloadDepth, this.entryBaseDir, this.standards,
+					this.buildImage, this.reading);
 		}
 
-		/** Where a {@code .asd} is searched for, after a system's own directory. */
-		List<String> searchPath() {
-			List<String> path = new ArrayList<>(this.centralRegistry);
-			path.addAll(this.systemPath);
-			return path;
+		/**
+		 * Where a {@code .asd} is searched for, as real ASDF's search functions order it:
+		 * the central registry, then the source registry, with this pass's search path
+		 * standing for the configuration it inherits. Each file of the registry is the
+		 * one its configuration chose, so the directory of the name asked for goes first.
+		 * @param name the system asked for, or {@code null} for no one system
+		 * @param baseDir the directory of the file asking, on the search path
+		 */
+		List<String> searchDirs(@Nullable String name, @Nullable String baseDir) {
+			AsdfSystems.SourceRegistry registry = this.sourceRegistry.registry;
+			String primary = name == null ? null : AsdfSystems.primarySystemName(name);
+			List<String> dirs = new ArrayList<>(this.centralRegistry);
+			addRegistryDirs(dirs, registry.ahead(), primary);
+			if (registry.inherits()) {
+				dirs.add(baseDir == null ? "" : baseDir);
+				dirs.addAll(this.systemPath);
+			}
+			addRegistryDirs(dirs, registry.behind(), primary);
+			dirs.addAll(this.distDirs);
+			return dirs;
 		}
+
+		private static void addRegistryDirs(List<String> dirs, Map<String, String> files, @Nullable String primary) {
+			String own = primary == null ? null : files.get(primary);
+			if (own != null) {
+				dirs.add(Objects.requireNonNull(SourceLoader.parentDir(own)));
+			}
+			for (String file : files.values()) {
+				dirs.add(Objects.requireNonNull(SourceLoader.parentDir(file)));
+			}
+		}
+	}
+
+	/**
+	 * The source registry a compile path reads, as the program's literal calls leave it.
+	 */
+	private static final class SourceRegistryConfig {
+
+		private AsdfSystems.SourceRegistry registry = AsdfSystems.SourceRegistry.DEFAULT;
+
+		private LispVal parameter = LispNil.INSTANCE;
+
 	}
 
 	/**
@@ -453,11 +492,8 @@ public final class LoadInliner {
 				// image, created only for that.
 				AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(form, baseDir, ctx.features(),
 						(designator, definers, ownClasses) -> {
-							List<String> searchDirs = new ArrayList<>(ctx.centralRegistry());
-							searchDirs.add(baseDir == null ? "" : baseDir);
-							searchDirs.addAll(ctx.systemPath());
 							return ctx.buildImage()
-								.image(ctx, searchDirs)
+								.image(ctx, ctx.searchDirs(null, baseDir))
 								.classResolver()
 								.resolve(designator, definers, ownClasses);
 						});
@@ -580,10 +616,16 @@ public final class LoadInliner {
 				// variable.
 				ctx.centralRegistry().add(0, foldedDir);
 			}
+			AsdfSystems.SourceRegistryCall registryCall = AsdfSystems.sourceRegistryCall(form);
+			if (registryCall != null) {
+				// The same: what a compile path reads of the source registry. The form
+				// stays for the program to read the variables and search at run time.
+				readSourceRegistry(registryCall, ctx, origin);
+			}
 			RequireForm require = requireForm(form, folder);
 			String rawPath = null;
 			if (require != null) {
-				if (ctx.provided().contains(require.name())) {
+				if (ctx.provided().contains(require.name()) || AsdfSystems.isImplementationModule(require.name())) {
 					// Already provided: consume without loading (this is the whole point
 					// of require over load).
 					out.add(quotedSymbol(require.name()));
@@ -806,9 +848,7 @@ public final class LoadInliner {
 		}
 		AsdfSystems.LispSystem located = ctx.systems().get(name);
 		if (located == null) {
-			List<String> searchDirs = new ArrayList<>(ctx.centralRegistry());
-			searchDirs.add(requestBaseDir == null ? "" : requestBaseDir);
-			searchDirs.addAll(ctx.systemPath());
+			List<String> searchDirs = ctx.searchDirs(name, requestBaseDir);
 			AsdfSystems.LocatedAsd asd = locateAsd(name, searchDirs, ctx);
 			// The .asd runs in the build image, and each system it defines is registered
 			// the moment it is defined. .asd forms read upcased like all source;
@@ -839,8 +879,9 @@ public final class LoadInliner {
 				throw new IllegalStateException(asd.path() + " does not define system '" + name + "'");
 			}
 		}
-		AsdfSystems.LispSystem system = AsdfSystems.resolveWeakDependencies(located, ctx.systems(), ctx.searchPath(),
-				ctx.loader());
+		AsdfSystems.LispSystem definition = located;
+		AsdfSystems.LispSystem system = AsdfSystems.resolveWeakDependencies(located, ctx.systems(),
+				weakName -> searchFinds(weakName, definition, ctx));
 		ctx.loadingSystems().addLast(name);
 		// A system that declares :rontolisp-features has its OWN component files read
 		// with the target backend's features widened by that declaration (the static
@@ -926,6 +967,43 @@ public final class LoadInliner {
 	}
 
 	/**
+	 * Runs a literal {@code initialize-source-registry} in the build image, which holds
+	 * the one implementation of the configuration DSL, and keeps what it found. Its file
+	 * is the load context, what {@code :here} names.
+	 */
+	private static void readSourceRegistry(AsdfSystems.SourceRegistryCall call, Ctx ctx, Origin origin) {
+		SourceRegistryConfig config = ctx.sourceRegistry();
+		if (call.clear()) {
+			config.registry = AsdfSystems.SourceRegistry.DEFAULT;
+			config.parameter = LispNil.INSTANCE;
+			return;
+		}
+		LispVal parameter = call.parameter() != null ? call.parameter() : config.parameter;
+		LispEvaluator image = ctx.buildImage().image(ctx, ctx.searchDirs(null, origin.baseDir()));
+		try {
+			config.registry = image.readSourceRegistry(parameter, origin.pathname(), origin.truename());
+		}
+		catch (RuntimeException ex) {
+			throw new IllegalStateException("asdf:initialize-source-registry: " + ex.getMessage(), ex);
+		}
+		config.parameter = parameter;
+	}
+
+	/**
+	 * Whether a {@code NAME.asd} is on the search path, from a system's own directory
+	 * first: the answer to its {@code :weakly-depends-on}.
+	 */
+	private static boolean searchFinds(String name, AsdfSystems.LispSystem system, Ctx ctx) {
+		try {
+			AsdfSystems.locate(name, ctx.searchDirs(name, system.baseDir()), ctx.loader());
+			return true;
+		}
+		catch (AsdfSystems.SystemNotFoundException ex) {
+			return false;
+		}
+	}
+
+	/**
 	 * {@code asdf:load-asd} of a file named at compile time: its definitions run in the
 	 * build image and replace what the registry holds under their names. A file that
 	 * cannot be read defines nothing, as in real ASDF.
@@ -935,13 +1013,9 @@ public final class LoadInliner {
 		if (asd == null) {
 			return;
 		}
-		List<String> searchDirs = new ArrayList<>(ctx.centralRegistry());
-		String parent = SourceLoader.parentDir(path);
-		searchDirs.add(parent == null ? "" : parent);
-		searchDirs.addAll(ctx.systemPath());
 		try {
 			AsdfSystems.loadAsd(asd.source(), asd.path(), ctx.features(), ctx.systemPackages(),
-					ctx.buildImage().image(ctx, searchDirs).asdImage(),
+					ctx.buildImage().image(ctx, ctx.searchDirs(null, SourceLoader.parentDir(path))).asdImage(),
 					defined -> ctx.systems().put(defined.name(), defined));
 		}
 		catch (IllegalStateException | LispReadException ex) {
@@ -1063,8 +1137,8 @@ public final class LoadInliner {
 			throw new IllegalStateException(LispNames.QL_QUICKLOAD + ": " + ex.getMessage(), ex);
 		}
 		for (String dir : asdDirs) {
-			if (!ctx.systemPath().contains(dir)) {
-				ctx.systemPath().add(dir);
+			if (!ctx.distDirs().contains(dir)) {
+				ctx.distDirs().add(dir);
 			}
 		}
 		return asdDirs;

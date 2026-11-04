@@ -69,6 +69,11 @@ import org.jspecify.annotations.Nullable;
  * not define is a signalling stub or an empty class synthesized here
  * ({@link #stubForms}). The interpreter evaluates them all with the runtime; a compile
  * path splices the ones the program names and the superclasses they need.
+ *
+ * <p>
+ * How a system definition is found ({@code asdf-search.lisp}) goes the same way: the
+ * interpreter's loader walks it, and a compile path, whose search ran while it spliced,
+ * carries it only for a program naming one of its members.
  */
 public final class AsdfRuntimeLibrary {
 
@@ -76,6 +81,8 @@ public final class AsdfRuntimeLibrary {
 	}
 
 	@Nullable private static volatile List<LispVal> classForms;
+
+	@Nullable private static volatile List<LispVal> searchForms;
 
 	@Nullable private static volatile List<LispVal> seamForms;
 
@@ -162,6 +169,9 @@ public final class AsdfRuntimeLibrary {
 		Set<String> classes = new HashSet<>();
 		Set<String> generics = new HashSet<>();
 		for (LispVal form : coreForms()) {
+			collectDefinition(form, functions, classes, generics);
+		}
+		for (LispVal form : searchForms()) {
 			collectDefinition(form, functions, classes, generics);
 		}
 		// What the seam and the Java built-ins define on every path.
@@ -431,8 +441,40 @@ public final class AsdfRuntimeLibrary {
 	}
 
 	/**
-	 * Returns what the interpreter evaluates as the runtime: {@code asdf.lisp} and every
-	 * stub, superclasses first.
+	 * Returns the parsed {@code asdf-search.lisp} forms, parsed once and cached: the
+	 * search for a system definition and the source registry.
+	 * @return the forms
+	 */
+	private static List<LispVal> searchForms() {
+		List<LispVal> cached = searchForms;
+		if (cached == null) {
+			synchronized (AsdfRuntimeLibrary.class) {
+				cached = searchForms;
+				if (cached == null) {
+					cached = List
+						.copyOf(LispReader.readAllFromString(readSource("asdf-search.lisp"), Features.INTERPRETER));
+					searchForms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	/** The members {@code asdf-search.lisp} defines, each naming the whole file. */
+	private static Set<String> searchMembers() {
+		Set<String> members = new HashSet<>();
+		Set<String> classes = new HashSet<>();
+		Set<String> generics = new HashSet<>();
+		for (LispVal form : searchForms()) {
+			collectDefinition(form, members, classes, generics);
+		}
+		members.addAll(classes);
+		return members;
+	}
+
+	/**
+	 * Returns what the interpreter evaluates as the runtime: {@code asdf.lisp}, the
+	 * search and every stub, superclasses first.
 	 * @return the forms
 	 */
 	public static List<LispVal> interpreterForms() {
@@ -442,6 +484,7 @@ public final class AsdfRuntimeLibrary {
 				cached = imageForms;
 				if (cached == null) {
 					List<LispVal> forms = new ArrayList<>(coreForms());
+					forms.addAll(searchForms());
 					forms.addAll(stubsFor(definitions().stubs().keySet()));
 					forms.addAll(LispReader.readAllFromString(IMAGE_SOURCE, Features.INTERPRETER));
 					cached = List.copyOf(forms);
@@ -464,6 +507,7 @@ public final class AsdfRuntimeLibrary {
 				forms.add(form);
 			}
 		}
+		forms.addAll(searchForms());
 		for (LispVal form : seamForms()) {
 			if (!isLoweringTarget(form)) {
 				forms.add(form);
@@ -553,11 +597,16 @@ public final class AsdfRuntimeLibrary {
 		boolean metadata = mentioned.stream().anyMatch(METADATA_READERS::contains);
 		LoadedNames loaded = loadedClassNames(systems, loadedSystems);
 		List<LispVal> out = new ArrayList<>(coreForms());
+		boolean searches = mentioned.stream().anyMatch(searchMembers()::contains);
+		if (searches) {
+			out.addAll(searchForms());
+		}
 		Set<String> stubs = new HashSet<>(mentioned);
 		stubs.addAll(loaded.asdfMembers());
 		out.addAll(stubsFor(stubs));
 		out.add(registryDefvar(systems, loadedSystems, metadata));
 		out.addAll(seamForms());
+		out.add(searchAtRunTimeDefun(searches));
 		out.add(testOpEdgesDefun(systems, loadedSystems));
 		out.add(recordedTestOpDefun(systems, loadedSystems));
 		out.addAll(program);
@@ -941,6 +990,16 @@ public final class AsdfRuntimeLibrary {
 	}
 
 	/**
+	 * The generated {@code %asdf-search-at-run-time} seam: what {@code asdf:find-system}
+	 * asks about a name the baked table does not hold. A program that names none of the
+	 * search cannot have widened it, so it asks nothing and carries none of it.
+	 */
+	private static LispVal searchAtRunTimeDefun(boolean searches) {
+		return LispReader.readAllFromString(searches ? SEARCH_AT_RUN_TIME : NO_SEARCH_AT_RUN_TIME, Features.INTERPRETER)
+			.getFirst();
+	}
+
+	/**
 	 * The generated {@code %asdf-test-op-edges} seam: the {@code :in-order-to} test-op
 	 * edges of each spliced system that records any, which {@code asdf.lisp}'s test-op
 	 * walks before performing test-op on the system itself.
@@ -1031,9 +1090,13 @@ public final class AsdfRuntimeLibrary {
 			  (when (%asdf-baked-record key)
 			    (setq %asdf-cleared% (cons key %asdf-cleared%))))
 			(defun %asdf-locate-system (key)
-			  (when (member key %asdf-cleared% :test #'equal)
-			    (setq %asdf-cleared% (remove key %asdf-cleared% :test #'equal))
-			    (%asdf-baked-record key)))
+			  (if (member key %asdf-cleared% :test #'equal)
+			      (setq %asdf-cleared% (remove key %asdf-cleared% :test #'equal))
+			      (%asdf-search-at-run-time key)))
+			(defun %asdf-note-found-system (key) key)
+			(defun %asdf-derive-system (key) (%asdf-registered-instance key))
+			(defun %asdf-search-path () nil)
+			(defun %asdf-search-path-locate (name inherits) nil)
 			(defun %asdf-load-asd (path)
 			  (error "ASDF:LOAD-ASD cannot load ~a at run time on the compiled backends (systems are spliced at compile time)"
 			         path))
@@ -1065,6 +1128,20 @@ public final class AsdfRuntimeLibrary {
 			        (error "ASDF:PERFORM cannot load ~a of system ~a at run time on the compiled backends (systems are spliced at compile time)"
 			               (asdf:component-name (%asdf-planned-component system index))
 			               system))))
+			""";
+
+	// A pushed search function runs here, as the program's own function it is. A system
+	// it
+	// answers is registered; a file cannot be loaded at run time.
+	private static final String SEARCH_AT_RUN_TIME = """
+			(defun %asdf-search-at-run-time (key)
+			  (let ((found (%asdf-check-found (asdf:search-for-system-definition key))))
+			    (cond ((typep found 'asdf:system) (%asdf-adopt-system key found))
+			          (found (%asdf-load-asd found)))))
+			""";
+
+	private static final String NO_SEARCH_AT_RUN_TIME = """
+			(defun %asdf-search-at-run-time (key) key nil)
 			""";
 
 	// What only an image asks or does, the interpreter's half of the seams above: what a
@@ -1107,6 +1184,27 @@ public final class AsdfRuntimeLibrary {
 			                   (asdf::module-default-component-class prototype))
 			              hooked
 			              (and hooked (slot-value prototype 'asdf::around-compile)))))))
+			(defun %asdf-search-file (key)
+			  (let ((found (%asdf-check-found (asdf:search-for-system-definition key))))
+			    (cond ((typep found 'asdf:system) (%asdf-adopt-system key found) t)
+			          (found (namestring found)))))
+			(defun %asdf-derive-system (key)
+			  (and (%asdf-infer-system key) (%asdf-registered-instance key)))
+			(defun %asdf-read-source-registry (parameter)
+			  (let ((asdf:*source-registry-parameter* nil)
+			        (asdf::*source-registry* nil)
+			        (%asdf-registry-behind% nil)
+			        (%asdf-registry-inherits% t))
+			    (asdf:initialize-source-registry parameter)
+			    (flet ((entries (table)
+			             (let ((alist nil))
+			               (maphash (lambda (name asd)
+			                          (setq alist (cons (cons name (namestring asd)) alist)))
+			                        table)
+			               alist)))
+			      (list (entries asdf::*source-registry*)
+			            %asdf-registry-inherits%
+			            (entries %asdf-registry-behind%)))))
 			(defun %asdf-make-system (class name dir version deps)
 			  (make-instance (read-from-string class) :name name :pathname dir
 			                 :absolute-pathname dir :version version :sideway deps))

@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 import am.ik.rontolisp.AsdfExports;
 import am.ik.rontolisp.LispCons;
@@ -1976,22 +1977,19 @@ public final class AsdfSystems {
 	 * which has a search path the parse does not.
 	 * @param system the system
 	 * @param systems the registry, whose entry the answer replaces
-	 * @param systemPath the search path, after the system's own directory
-	 * @param loader the loader {@code .asd} files are read through
+	 * @param searchFinds whether the loader's search, from the system's own directory,
+	 * finds a name
 	 * @return the system with its weak dependencies decided, {@code system} when it has
 	 * none
 	 */
 	public static LispSystem resolveWeakDependencies(LispSystem system, Map<String, LispSystem> systems,
-			List<String> systemPath, SourceLoader loader) {
+			Predicate<String> searchFinds) {
 		if (system.weaklyDependsOn().isEmpty()) {
 			return system;
 		}
-		List<String> searchDirs = new ArrayList<>();
-		searchDirs.add(system.baseDir());
-		searchDirs.addAll(systemPath);
 		List<String> dependsOn = new ArrayList<>(system.dependsOn());
 		for (String name : system.weaklyDependsOn()) {
-			if (!dependsOn.contains(name) && isAvailable(name, systems, searchDirs, loader)) {
+			if (!dependsOn.contains(name) && isAvailable(name, systems, searchFinds)) {
 				dependsOn.add(name);
 			}
 		}
@@ -2003,21 +2001,11 @@ public final class AsdfSystems {
 		return resolved;
 	}
 
-	private static boolean isAvailable(String name, Map<String, LispSystem> systems, List<String> searchDirs,
-			SourceLoader loader) {
+	private static boolean isAvailable(String name, Map<String, LispSystem> systems, Predicate<String> searchFinds) {
 		if (ShimLibraries.refusalReason(name) != null) {
 			return false;
 		}
-		if (BuiltinSystems.isBuiltin(name) || systems.containsKey(name)) {
-			return true;
-		}
-		try {
-			locate(name, searchDirs, loader);
-			return true;
-		}
-		catch (SystemNotFoundException ex) {
-			return false;
-		}
+		return BuiltinSystems.isBuiltin(name) || systems.containsKey(name) || searchFinds.test(name);
 	}
 
 	/**
@@ -2033,8 +2021,7 @@ public final class AsdfSystems {
 	 * @throws SystemNotFoundException if no directory holds it
 	 */
 	public static LocatedAsd locate(String name, List<String> searchDirs, SourceLoader loader) {
-		int slash = name.indexOf('/');
-		String fileName = (slash < 0 ? name : name.substring(0, slash)) + ".asd";
+		String fileName = primarySystemName(name) + ".asd";
 		List<String> tried = new ArrayList<>();
 		for (String dir : searchDirs) {
 			String path = SourceLoader.resolve(dir == null ? "" : dir, fileName);
@@ -2054,10 +2041,99 @@ public final class AsdfSystems {
 				tried.add(path);
 			}
 		}
+		throw notFound(name, tried);
+	}
+
+	/**
+	 * Whether a {@code require} of this module is answered by the implementation, as
+	 * {@code (require :asdf)} is on any Lisp that ships ASDF: it is how a script opens,
+	 * and here there is no file to load.
+	 * @param name the module name, in any case
+	 * @return {@code true} for {@code asdf} and {@code uiop}
+	 */
+	public static boolean isImplementationModule(String name) {
+		return "asdf".equalsIgnoreCase(name) || "uiop".equalsIgnoreCase(name);
+	}
+
+	/**
+	 * The failure of a search, naming where it looked.
+	 * @param name the system name
+	 * @param tried the {@code .asd} paths it tried
+	 * @return the exception to throw
+	 */
+	static SystemNotFoundException notFound(String name, List<String> tried) {
 		String detail = "(tried: " + String.join(", ", tried)
 				+ "); add its directory to --system-path or RONTOLISP_SOURCE_REGISTRY";
-		throw new SystemNotFoundException(LispNames.ASDF_LOAD_SYSTEM + ": system '" + name + "' not found " + detail,
+		return new SystemNotFoundException(LispNames.ASDF_LOAD_SYSTEM + ": system '" + name + "' not found " + detail,
 				detail);
+	}
+
+	/**
+	 * The name before the first slash, whose {@code .asd} defines a system.
+	 * @param name the system name
+	 * @return the primary system's name
+	 */
+	public static String primarySystemName(String name) {
+		int slash = name.indexOf('/');
+		return slash < 0 ? name : name.substring(0, slash);
+	}
+
+	/**
+	 * What a source registry configuration found, which a compile path searches: the
+	 * {@code .asd} per system name ahead of the inherited search path and behind it, and
+	 * whether it inherits that path at all.
+	 *
+	 * @param ahead the files ahead of the search path, by system name
+	 * @param inherits whether the configuration reached {@code :inherit-configuration}
+	 * @param behind the files behind the search path, by system name
+	 */
+	public record SourceRegistry(Map<String, String> ahead, boolean inherits, Map<String, String> behind) {
+
+		/** No configuration: only the search path. */
+		public static final SourceRegistry DEFAULT = new SourceRegistry(Map.of(), true, Map.of());
+
+	}
+
+	/**
+	 * A top-level call a compile path can read of the source registry family.
+	 *
+	 * @param clear whether it is {@code clear-source-registry}
+	 * @param parameter the literal configuration, or {@code null} when the call passes
+	 * none: {@code initialize-source-registry} then reads the last one
+	 */
+	public record SourceRegistryCall(boolean clear, @Nullable LispVal parameter) {
+	}
+
+	/**
+	 * If {@code form} is a top-level {@code (asdf:clear-source-registry)} or an
+	 * {@code (asdf:initialize-source-registry [PARAMETER])} whose parameter is literal:
+	 * quoted, a string or nil. Anything computed is the program's alone.
+	 * @param form the form to inspect
+	 * @return the call, or {@code null}
+	 */
+	@Nullable public static SourceRegistryCall sourceRegistryCall(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> items = cons.toList();
+		if (isAsdfMember(op, "CLEAR-SOURCE-REGISTRY")) {
+			return items.size() == 1 ? new SourceRegistryCall(true, null) : null;
+		}
+		if (!isAsdfMember(op, "INITIALIZE-SOURCE-REGISTRY") || items.size() > 2) {
+			return null;
+		}
+		if (items.size() == 1) {
+			return new SourceRegistryCall(false, null);
+		}
+		LispVal parameter = items.get(1);
+		if (parameter instanceof LispString || parameter instanceof LispNil) {
+			return new SourceRegistryCall(false, parameter);
+		}
+		if (parameter instanceof LispCons quoted && quoted.car() instanceof LispSymbol quote
+				&& LispNames.QUOTE.equals(memberName(quote)) && quoted.cdr() instanceof LispCons datum) {
+			return new SourceRegistryCall(false, datum.car());
+		}
+		return null;
 	}
 
 	/**

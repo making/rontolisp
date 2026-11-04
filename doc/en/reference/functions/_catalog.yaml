@@ -1079,6 +1079,8 @@ categories:
       - { slug: asdf-find-component, name: "asdf:find-component" }
       - { slug: asdf-system-description, name: "asdf:system-description" }
       - { slug: asdf-central-registry, name: "asdf:*central-registry*" }
+      - { slug: asdf-initialize-source-registry, name: "asdf:initialize-source-registry" }
+      - { slug: asdf-system-definition-search-functions, name: "asdf:*system-definition-search-functions*" }
       - { slug: asdf-find-system, name: "asdf:find-system" }
       - { slug: asdf-registered-systems, name: "asdf:registered-systems" }
       - { slug: asdf-system-relative-pathname, name: "asdf:system-relative-pathname" }

@@ -2,8 +2,8 @@
 ;;;; here. coerce-pathname is the DEPRECATED alias of parse-unix-namestring
 ;;;; (.kb/uiop.md), and version-compatible-p is the ASDF 1-to-2.32 version check
 ;;;; written over parse-version and lexicographic<=. The other five members (the
-;;;; configuration-directory search) stay not-implemented-error stubs: they need
-;;;; uiop/configuration, which nothing implements yet. See .kb/uiop.md.
+;;;; configuration-directory search) are homed in uiop-configuration.lisp by the
+;;;; inventory. See .kb/uiop.md.
 
 (defun uiop/backward-driver:coerce-pathname
     (%cp-name &key ((:type %cp-type)) ((:defaults %cp-defaults)))

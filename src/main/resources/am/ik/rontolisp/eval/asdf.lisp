@@ -192,8 +192,8 @@
              :detail detail)
       (error 'asdf:missing-component :requires name :detail detail)))
 
-;; The directories asdf:*central-registry* names. A push is the program's, so the
-;; interpreter's search reads this first, as real ASDF does; each entry is
+;; The directories asdf:*central-registry* names. A push is the program's, so a
+;; search reads this first, as real ASDF does (asdf-search.lisp); each entry is
 ;; evaluated there, its value a pathname designator.
 (defvar asdf:*central-registry* nil)
 
@@ -360,9 +360,17 @@
       name
       (let ((key (asdf:coerce-name name)))
         (or (%asdf-registered-instance key)
-            (let ((rec (%asdf-locate-system key)))
-              (and rec (%asdf-build-system key rec)))
+            (progn
+              (%asdf-locate-system key)
+              (%asdf-registered-instance key))
             (when error-p (error 'asdf:missing-component :requires key))))))
+
+;; A system a search function answered, already built: a load of it has no files.
+(defun %asdf-adopt-system (key system)
+  (%asdf-note-found-system key)
+  (unless %asdf-instances%
+    (setq %asdf-instances% (make-hash-table :test 'equal)))
+  (setf (gethash key %asdf-instances%) system))
 
 (defun asdf:registered-systems () (%asdf-system-names))
 

@@ -19,6 +19,8 @@
 | `asdf:find-component` | `(asdf:find-component :my-lib "main")` | コンポーネントを名前、または木をたどる名前のリストで探す。なければ nil。`module-components` は `component-children` と同じ |
 | `asdf:system-description` | `(asdf:system-description (asdf:find-system :my-lib))` | `defsystem` の宣言を読む。他の `system-` リーダー、`component-property`、`system-source-file` も同様 |
 | `asdf:*central-registry*` | `(push "vendor/my-lib/" asdf:*central-registry*)` | 探索パスより先に `NAME.asd` を探すディレクトリ |
+| `asdf:initialize-source-registry` | `(asdf:initialize-source-registry '(:source-registry (:tree :here) :inherit-configuration))` | 探索先を設定する (`:directory`、`:tree`、`:here`、継承する設定)。`clear-source-registry` で取り消す |
+| `asdf:*system-definition-search-functions*` | `(push 'vendor-search asdf:*system-definition-search-functions*)` | 探索で順に呼ぶ関数。名前を受け取り、パス名かシステムを返す |
 | `asdf:find-system` | `(asdf:find-system :my-lib nil)` | システムのメタオブジェクト。名前ごとにメモ化された本物の `asdf:system` CLOS インスタンス (呼び出し間で `eq`)。`error-p` が nil なら未知の名前に nil |
 | `asdf:registered-systems` | `(asdf:registered-systems)` | 登録済みのすべてのシステムの小文字化された名前 (登録順) |
 | `asdf:system-relative-pathname` | `(asdf:system-relative-pathname :my-lib "data/tlds.dat")` | システムのソースディレクトリを基準に解決した名前文字列 (コンパイルパスではリテラルへ畳み込まれる) |
