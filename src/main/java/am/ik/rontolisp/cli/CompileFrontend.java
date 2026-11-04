@@ -21,6 +21,7 @@ import am.ik.rontolisp.eval.GeomLibrary;
 import am.ik.rontolisp.eval.GgufLibrary;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
 import am.ik.rontolisp.eval.HostFetchLibrary;
+import am.ik.rontolisp.eval.LocalNicknameRead;
 import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.HttpReactorInliner;
 import am.ik.rontolisp.eval.HttpReactorLibrary;
@@ -615,6 +616,10 @@ final class CompileFrontend {
 		boolean reentrant = options.reentrant();
 		boolean noPrune = options.noPrune();
 		WitExportDirective.Backend witBackend = witBackend(wasm, noGc, component);
+		// A package's own nicknames read first of all, what a reader does: every pass
+		// below that scans the program for a package's name sees that name, and none
+		// takes a package's nickname for the package of that name elsewhere.
+		loaded = LocalNicknameRead.read(loaded);
 		// Expand the (rontolisp:async (defun ...)) wrapper before anything scans for
 		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun
 		// checks and the library pruner all recognize async-defun, never the sugar.

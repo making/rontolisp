@@ -2642,40 +2642,54 @@ public final class LispEvaluator {
 			}
 			return argv;
 		}));
-		// uiop:add-package-local-nickname -- lite: registers a GLOBAL nickname (no
-		// per-package scoping); the mechanism libraries recommend for shortening long
-		// package names (jzon's README: (uiop:add-package-local-nickname '#:jzon
-		// '#:com.inuoe.jzon)). The optional third argument (the package to scope the
-		// nickname to) is accepted and ignored.
-		String addNicknameName = UiopExports.qualified(LispNames.ADD_PACKAGE_LOCAL_NICKNAME);
-		this.globalEnv.defineFunction(addNicknameName, new LispFunction(addNicknameName, args -> {
-			if (args.size() < 2 || args.size() > 3) {
-				throw new LispEvalException(
-						LispNames.ADD_PACKAGE_LOCAL_NICKNAME + " expects a nickname and a package, got " + args.size());
-			}
-			String nickname = packageNameDesignator(LispNames.ADD_PACKAGE_LOCAL_NICKNAME, args.get(0));
-			String actual = packageNameDesignator(LispNames.ADD_PACKAGE_LOCAL_NICKNAME, args.get(1));
-			this.packageResolver.registerLocalNickname(nickname, actual);
-			return new LispSymbol(actual);
-		}));
-		// uiop:remove-package-local-nickname -- unregisters a GLOBAL nickname (no
-		// per-package scoping, like the add above); a non-literal call stays a runtime
-		// call only the interpreter serves. The optional scope package only guards the
-		// removal: the nickname must point at it. Answers t when a mapping was
-		// removed, nil when there was none (or it points elsewhere).
-		String removeNicknameName = UiopExports.qualified(LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME);
-		this.globalEnv.defineFunction(removeNicknameName, new LispFunction(removeNicknameName, args -> {
-			if (args.isEmpty() || args.size() > 2) {
-				throw new LispEvalException(LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME
-						+ " expects a nickname and an optional package, got " + args.size());
-			}
-			String nickname = packageNameDesignator(LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME, args.get(0));
-			String scope = null;
-			if (args.size() == 2) {
-				scope = packageNameDesignator(LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME, args.get(1));
-			}
-			return this.packageResolver.removeLocalNickname(nickname, scope) ? LispTrue.INSTANCE : LispNil.INSTANCE;
-		}));
+		// The run-time half of the package-local nicknames, under the uiop functions of
+		// uiop-package.lisp. The compile paths define the same three over the program's
+		// own table (LispMacroExpander.injectLocalNicknames).
+		this.globalEnv.defineFunction(LispNames.LOCAL_NICKNAME_ADD_INTERNAL,
+				new LispFunction(LispNames.LOCAL_NICKNAME_ADD_INTERNAL, args -> {
+					try {
+						return packageKeyword(this.packageResolver.addLocalNickname(
+								packageDesignator(LispNames.LOCAL_NICKNAME_ADD_INTERNAL, args.get(0)),
+								packageDesignator(LispNames.LOCAL_NICKNAME_ADD_INTERNAL, args.get(1)),
+								packageDesignator(LispNames.LOCAL_NICKNAME_ADD_INTERNAL, args.get(2))));
+					}
+					catch (am.ik.rontolisp.RuntimePackageException ex) {
+						return signalPackageError(java.util.Objects.requireNonNullElse(ex.getMessage(),
+								LispNames.ADD_PACKAGE_LOCAL_NICKNAME), ex.designator());
+					}
+				}));
+		this.globalEnv.defineFunction(LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL,
+				new LispFunction(LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL, args -> {
+					try {
+						return this.packageResolver.removeLocalNickname(
+								packageDesignator(LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL, args.get(0)),
+								packageDesignator(LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL, args.get(1)))
+										? LispTrue.INSTANCE : LispNil.INSTANCE;
+					}
+					catch (am.ik.rontolisp.RuntimePackageException ex) {
+						return signalPackageError(java.util.Objects.requireNonNullElse(ex.getMessage(),
+								LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME), ex.designator());
+					}
+				}));
+		this.globalEnv.defineFunction(LispNames.PACKAGE_LOCAL_NICKNAMES_INTERNAL,
+				new LispFunction(LispNames.PACKAGE_LOCAL_NICKNAMES_INTERNAL, args -> {
+					List<LispVal> rows = new ArrayList<>();
+					try {
+						this.packageResolver
+							.localNicknames(packageDesignator(LispNames.PACKAGE_LOCAL_NICKNAMES_INTERNAL, args.get(0)))
+							.forEach((nickname, target) -> rows
+								.add(new LispCons(new LispString(nickname), packageKeyword(target))));
+					}
+					catch (am.ik.rontolisp.RuntimePackageException ex) {
+						return signalPackageError(java.util.Objects.requireNonNullElse(ex.getMessage(),
+								LispNames.PACKAGE_LOCAL_NICKNAMES), ex.designator());
+					}
+					LispVal out = LispNil.INSTANCE;
+					for (int i = rows.size() - 1; i >= 0; i--) {
+						out = new LispCons(rows.get(i), out);
+					}
+					return out;
+				}));
 		// use-package: a literal top-level call is consumed by the PackageResolver (so it
 		// works on every backend); this runtime binding serves the computed calls only
 		// the
@@ -3148,6 +3162,17 @@ public final class LispEvaluator {
 			String found = this.packageResolver.findPackageName(packageDesignator(LispNames.FIND_PACKAGE, args.get(0)));
 			return found == null ? LispNil.INSTANCE : packageKeyword(found);
 		}));
+		// The qualifier a symbol the printer does not print bare keeps: the current
+		// package's own nickname for its home, when it has one (.kb/packages.md).
+		this.globalEnv.defineFunction(LispNames.PRINT_CASED_QUALIFIER_INTERNAL,
+				new LispFunction(LispNames.PRINT_CASED_QUALIFIER_INTERNAL, args -> {
+					if (args.size() != 2 || !(args.get(0) instanceof LispString text)
+							|| !(args.get(1) instanceof LispInteger colon)) {
+						throw new LispEvalException(
+								LispNames.PRINT_CASED_QUALIFIER_INTERNAL + " expects text and an index");
+					}
+					return new LispString(this.packageResolver.printedQualifier(text.value(), (int) colon.value()));
+				}));
 		// The printer's accessibility question (CLHS 22.1.3.3.1, .kb/pretty-printer.md):
 		// whether a package-qualified symbol prints without its qualifier in the
 		// current package, over the LIVE registry; the compile paths lower the same
@@ -3365,7 +3390,7 @@ public final class LispEvaluator {
 					if (qualified == null || qualified.internal()) {
 						return sym;
 					}
-					String home = this.packageResolver.findPackageName(qualified.pkg());
+					String home = this.packageResolver.findGlobalPackageName(qualified.pkg());
 					if (home == null) {
 						return sym;
 					}
@@ -7933,6 +7958,16 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * The spelling a resolved symbol takes in a form the compilers' own resolution pass
+	 * reads again ({@link PackageResolver#emittedSpelling}).
+	 * @param symbol the resolved symbol
+	 * @return the spelling to emit
+	 */
+	public String emittedSpelling(LispSymbol symbol) {
+		return this.packageResolver.emittedSpelling(symbol);
+	}
+
+	/**
 	 * Resolves an implementation form against the current package state, recording
 	 * nothing it reads (see {@link PackageResolver#resolveUnrecorded}).
 	 * @param form the form to resolve
@@ -7940,17 +7975,6 @@ public final class LispEvaluator {
 	 */
 	public LispVal resolveImplementationPackages(LispVal form) {
 		return this.packageResolver.resolveUnrecorded(form);
-	}
-
-	/**
-	 * Returns whether the resolver's CURRENT package reads the bare name of a {@code cl}
-	 * symbol as some other symbol (see
-	 * {@link PackageResolver#currentPackageRereadsClName}).
-	 * @param name the bare symbol name
-	 * @return {@code true} when the bare name no longer reads as {@code cl}'s here
-	 */
-	public boolean currentPackageRereadsClName(String name) {
-		return this.packageResolver.currentPackageRereadsClName(name);
 	}
 
 	/**

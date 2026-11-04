@@ -2,10 +2,8 @@
 
 Difficulty: Medium
 
-Measured 2026-11-04 after `.todo/h97`, interpreter. `.todo/i05` is the first stop of `(ql:quickload
-"mcclim")`, through cluffer. Loading `Core/system` by hand past that (its dependencies, then `patch`,
-`packages`, `singleprocessing`, `setf-star`, `dynamic-vars`), `clim-lisp` and its users read fine and
-`dynamic-vars.lisp:374` stops:
+Measured 2026-11-05, interpreter: `(ql:quickload :clim)` reads cluffer and its package-local
+nicknames, `clim-lisp` and its users, and `Core/system/dynamic-vars.lisp:374` stops:
 
 ```
 error: The symbol STANDARD-INSTANCE-ACCESS is not external in the CLOSER-MOP package

@@ -4452,7 +4452,7 @@ public final class LispPreludeLibrary {
 				                                 t)))
 				                (if (%symbol-print-bare-p %pu-x (subseq %pu-s 0 %pu-colon) %pu-ext)
 				                    (subseq %pu-s (if %pu-ext (+ %pu-colon 1) (+ %pu-colon 2)))
-				                    %pu-s)))))))
+				                    (%pc-qualifier %pu-s %pu-colon))))))))
 				""");
 		// An instance's rendering is a runtime form of its own, but the type name it
 		// leads with is a symbol under prin1: #<K> in K's package, as SBCL prints it. The

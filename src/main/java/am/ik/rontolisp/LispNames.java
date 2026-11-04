@@ -10404,6 +10404,20 @@ public final class LispNames {
 	public static final String PRINT_CASED_UNQUALIFIED_INTERNAL = "%PC-UNQUALIFIED";
 
 	/**
+	 * The internal {@code (%pc-qualifier text colon)} primitive: the {@code prin1} text
+	 * of a symbol that keeps its qualifier, spelled with the current package's nickname
+	 * for its home when it has one. The compile paths lower the call to the text itself
+	 * for a program with no nicknames.
+	 */
+	public static final String PRINT_CASED_QUALIFIER_INTERNAL = "%PC-QUALIFIER";
+
+	/**
+	 * The definition behind {@link #PRINT_CASED_QUALIFIER_INTERNAL} in a compiled program
+	 * with nicknames ({@code LispMacroExpander.injectLocalNicknames}).
+	 */
+	public static final String PRINT_CASED_LOCAL_QUALIFIER_INTERNAL = "%PC-LOCAL-QUALIFIER";
+
+	/**
 	 * The internal {@code (%pc-instance-text text)} helper (prelude): the {@code prin1}
 	 * text of an instance with the type name it leads with, in {@code #<NAME ...>} or
 	 * {@code #S(NAME ...)}, spelled as {@link #PRINT_CASED_UNQUALIFIED_INTERNAL} spells a
@@ -11652,28 +11666,106 @@ public final class LispNames {
 	public static final String OS_COND = "OS-COND";
 
 	/**
-	 * {@code uiop:add-package-local-nickname} -- lite: registers a GLOBAL nickname (no
-	 * per-package scoping), the mechanism jzon's README recommends for shortening
-	 * {@code com.inuoe.jzon} to {@code jzon}.
+	 * {@code uiop:add-package-local-nickname} -- gives a package a nickname of its own
+	 * for another package, the mechanism jzon's README recommends for shortening
+	 * {@code com.inuoe.jzon} to {@code jzon}. A literal top-level call is a directive the
+	 * resolver consumes as well, since it changes how the forms after it read.
 	 */
 	public static final String ADD_PACKAGE_LOCAL_NICKNAME = "ADD-PACKAGE-LOCAL-NICKNAME";
 
 	/**
-	 * {@code uiop:package-local-nicknames} -- lite: nicknames are GLOBAL (no per-package
-	 * scoping), so this answers every global nickname pointing at the package, as
-	 * {@code (NICKNAME-STRING . PACKAGE-KEYWORD)} pairs. A Lisp definition over
-	 * {@code package-nicknames} ({@code uiop-package.lisp}), so it runs on every backend.
+	 * {@code uiop:package-local-nicknames}: a package's own nicknames, as
+	 * {@code (NICKNAME-STRING . PACKAGE-KEYWORD)} pairs in nickname order.
 	 */
 	public static final String PACKAGE_LOCAL_NICKNAMES = "PACKAGE-LOCAL-NICKNAMES";
 
 	/**
-	 * {@code uiop:remove-package-local-nickname} -- removes a GLOBAL nickname (no
-	 * per-package scoping, like {@link #ADD_PACKAGE_LOCAL_NICKNAME}); a non-literal call
-	 * is a runtime call only the interpreter serves. Answers {@code t} when a nickname
-	 * was removed, nil when there was none (or, with a scope package, when it points
-	 * elsewhere).
+	 * {@code uiop:remove-package-local-nickname}: answers {@code t} when the package had
+	 * the nickname, nil otherwise. A literal top-level call is consumed like the add.
 	 */
 	public static final String REMOVE_PACKAGE_LOCAL_NICKNAME = "REMOVE-PACKAGE-LOCAL-NICKNAME";
+
+	/**
+	 * The internal {@code (%local-nickname-add nickname package scope)} under
+	 * {@link #ADD_PACKAGE_LOCAL_NICKNAME}: checks the nickname and answers the scope
+	 * package. A native on the interpreter; on the compile paths a definition
+	 * {@code LispMacroExpander.injectLocalNicknames} adds over the run-time table.
+	 */
+	public static final String LOCAL_NICKNAME_ADD_INTERNAL = "%LOCAL-NICKNAME-ADD";
+
+	/**
+	 * The internal {@code (%local-nickname-remove nickname scope)} under
+	 * {@link #REMOVE_PACKAGE_LOCAL_NICKNAME}, placed like
+	 * {@link #LOCAL_NICKNAME_ADD_INTERNAL}.
+	 */
+	public static final String LOCAL_NICKNAME_REMOVE_INTERNAL = "%LOCAL-NICKNAME-REMOVE";
+
+	/**
+	 * The internal {@code (%package-local-nicknames package)} under
+	 * {@link #PACKAGE_LOCAL_NICKNAMES}, placed like {@link #LOCAL_NICKNAME_ADD_INTERNAL}.
+	 */
+	public static final String PACKAGE_LOCAL_NICKNAMES_INTERNAL = "%PACKAGE-LOCAL-NICKNAMES";
+
+	/**
+	 * The compile paths' run-time nickname table, a global list of
+	 * {@code (PACKAGE NICKNAME . TARGET)} entries, newest first, every cell a string: a
+	 * nil target removes a nickname and a nil nickname forgets the entries behind it
+	 * ({@code LispMacroExpander.injectLocalNicknames}).
+	 */
+	public static final String LOCAL_NICKNAMES_VAR_INTERNAL = "%LOCAL-NICKNAMES%";
+
+	/**
+	 * {@code (%local-nickname-put package nickname target)}: one table entry, the event a
+	 * literal top-level add or remove leaves in a compiled program.
+	 */
+	public static final String LOCAL_NICKNAME_PUT_INTERNAL = "%LOCAL-NICKNAME-PUT";
+
+	/**
+	 * {@code (%local-nickname-define package rows)}: the event a {@code defpackage}
+	 * leaves in a compiled program, its {@code :local-nicknames} replacing the package's.
+	 */
+	public static final String LOCAL_NICKNAME_DEFINE_INTERNAL = "%LOCAL-NICKNAME-DEFINE";
+
+	/**
+	 * {@code (%local-nickname-target package nickname)}: the table's answer for a package
+	 * given by name, a target name or nil.
+	 */
+	public static final String LOCAL_NICKNAME_TARGET_INTERNAL = "%LOCAL-NICKNAME-TARGET";
+
+	/**
+	 * {@code (%local-nickname-find nickname)}: {@link #LOCAL_NICKNAME_TARGET_INTERNAL} in
+	 * the current {@code *package*}.
+	 */
+	public static final String LOCAL_NICKNAME_FIND_INTERNAL = "%LOCAL-NICKNAME-FIND";
+
+	/**
+	 * {@code (%find-package-global designator)}: {@link #FIND_PACKAGE_INTERNAL} past the
+	 * current package's nicknames, in a program that has any.
+	 */
+	public static final String FIND_PACKAGE_GLOBAL_INTERNAL = "%FIND-PACKAGE-GLOBAL";
+
+	/**
+	 * {@code (%read-through-local-nicknames datum)}: a datum a compiled program's reader
+	 * answered, its qualified tokens read through the current package's nicknames.
+	 */
+	public static final String READ_THROUGH_LOCAL_NICKNAMES_INTERNAL = "%READ-THROUGH-LOCAL-NICKNAMES";
+
+	/** {@code (%read-through-local-nickname-walk datum)}: its walk. */
+	public static final String READ_THROUGH_LOCAL_NICKNAME_WALK_INTERNAL = "%READ-THROUGH-LOCAL-NICKNAME-WALK";
+
+	/**
+	 * {@code (%local-nicknames-in-p package)}: whether the table has a row for a name.
+	 */
+	public static final String LOCAL_NICKNAMES_IN_P_INTERNAL = "%LOCAL-NICKNAMES-IN-P";
+
+	/**
+	 * {@code (%local-nicknames-moving designator thunk deleting)}: runs the body of a
+	 * {@code rename-package} or {@code delete-package} and tells the table.
+	 */
+	public static final String LOCAL_NICKNAMES_MOVING_INTERNAL = "%LOCAL-NICKNAMES-MOVING";
+
+	/** {@code (%local-nickname-before a b)}: {@code string<} over two nicknames. */
+	public static final String LOCAL_NICKNAME_BEFORE_INTERNAL = "%LOCAL-NICKNAME-BEFORE";
 
 	/**
 	 * {@code uiop:merge-pathnames*} -- the safer defaults-aware merge, portable across
@@ -12422,8 +12514,8 @@ public final class LispNames {
 	public static final String CLACK_HANDLER_REACTOR_DOTTED_SYSTEM = "clack.handler.reactor";
 
 	/**
-	 * The {@code defpackage} {@code :local-nicknames} clause keyword -- lite: each
-	 * {@code (nickname actual-package)} pair registers a GLOBAL nickname.
+	 * The {@code defpackage} {@code :local-nicknames} clause keyword: each
+	 * {@code (nickname actual-package)} pair is a nickname the package has for itself.
 	 */
 	public static final String LOCAL_NICKNAMES_KEYWORD = ":LOCAL-NICKNAMES";
 

@@ -755,6 +755,12 @@ final class CompileTimePathnameFolder {
 		}
 		try {
 			LispVal parsed = LispReader.readFromString(text.value());
+			// A quoted datum holds nothing to fold, and its tokens read in the package
+			// current when the read runs, which only the run time knows.
+			if (parsed instanceof LispCons datum && datum.car() instanceof LispSymbol head
+					&& LispNames.QUOTE.equals(head.name())) {
+				return null;
+			}
 			return reduce(parsed, systems, parameters, locals, loadPath);
 		}
 		catch (RuntimeException ex) {

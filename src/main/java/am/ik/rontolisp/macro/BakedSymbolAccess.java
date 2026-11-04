@@ -60,7 +60,7 @@ public final class BakedSymbolAccess {
 	 * @return the upcased canonical name, or null
 	 */
 	@Nullable String rowName(String pkg) {
-		String canonical = this.resolver == null ? null : this.resolver.findPackageName(pkg);
+		String canonical = this.resolver == null ? null : this.resolver.findGlobalPackageName(pkg);
 		return canonical == null ? null : canonical.toUpperCase(java.util.Locale.ROOT);
 	}
 
@@ -73,7 +73,7 @@ public final class BakedSymbolAccess {
 	 * @return the upcased canonical name, or null
 	 */
 	@Nullable String programPackage(String pkg) {
-		String canonical = this.resolver == null ? null : this.resolver.findPackageName(pkg);
+		String canonical = this.resolver == null ? null : this.resolver.findGlobalPackageName(pkg);
 		return canonical == null || am.ik.rontolisp.PackageRegistry.isBuiltinPackageName(canonical) ? null
 				: canonical.toUpperCase(java.util.Locale.ROOT);
 	}

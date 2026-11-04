@@ -229,10 +229,9 @@ class UiopCoverageTest {
 				.as(qualified + " has neither an implementation nor a stub")
 				.isTrue();
 		}
-		// A member the interpreter defines in Java carries no library form at all, so
-		// nothing can shadow the built-in; a member implemented in Lisp carries its own.
-		assertThat(UiopLibrary.formsFor(UiopExports.qualified(LispNames.ADD_PACKAGE_LOCAL_NICKNAME))).isEmpty();
-		assertThat(UiopLibrary.formsFor(UiopExports.qualified(LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME))).isEmpty();
+		// A member implemented in Lisp carries its own form.
+		assertThat(UiopLibrary.formsFor(UiopExports.qualified(LispNames.ADD_PACKAGE_LOCAL_NICKNAME))).hasSize(1);
+		assertThat(UiopLibrary.formsFor(UiopExports.qualified(LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME))).hasSize(1);
 		// symbol-call is BOTH: the interpreter's Java built-in resolves first and this
 		// definition never loads there, while the compile paths need it as the value a
 		// first-class #'uiop:symbol-call denotes (the call position is folded away).

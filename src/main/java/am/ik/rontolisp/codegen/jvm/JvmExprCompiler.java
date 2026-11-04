@@ -1057,6 +1057,8 @@ final class JvmExprCompiler {
 				.compileExpr(LispMacroExpander.expandSymbolPrintBareP(cons, ctx.symbolPrintTable), ctx, className);
 			case LispNames.PRINT_PACKAGE_RAW_P_INTERNAL -> JvmExprCompiler
 				.compileExpr(LispMacroExpander.expandPrintPackageRawP(ctx.symbolPrintTable), ctx, className);
+			case LispNames.PRINT_CASED_QUALIFIER_INTERNAL -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandPrintQualifier(cons, ctx.functions::containsKey), ctx, className);
 			case LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintCasedLeaf(cons, ctx.printControlVariables),
 						ctx, className);
@@ -1589,8 +1591,10 @@ final class JvmExprCompiler {
 				}
 				else {
 					// Malformed text signals (expandReadFromStringFailure).
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandReadFromStringFailure(cons,
-							ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
+					JvmExprCompiler.compileExpr(
+							LispMacroExpander.expandReadFromStringFailure(cons,
+									ctx.hasLandingPad && ctx.mayUseInstances, ctx.functions::containsKey),
+							ctx, className);
 				}
 			}
 			case LispNames.READ_FROM_STRING_RAW_INTERNAL -> JvmReadFromStringCompiler.compile(cons, ctx, className);

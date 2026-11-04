@@ -162,7 +162,7 @@ CLOS は**静的なサブセット**です
 ## ユーザー定義パッケージ
 
 [`defpackage`](../reference/special-forms/defpackage.md) は `:use`、`:export`、
-`:nicknames`、`:import-from`、`:shadowing-import-from`、`:shadow`、`:intern` を
+`:nicknames`、`:import-from`、`:shadowing-import-from`、`:shadow`、`:intern`、`:local-nicknames` を
 サポートする read/コンパイル時ディレクティブです（`:documentation`/`:size` は
 受理されるが無視されます）。トップレベルでない `defpackage` は、それを囲む
 フォームが実行されたときにパッケージを登録します（インタープリタのみ）。

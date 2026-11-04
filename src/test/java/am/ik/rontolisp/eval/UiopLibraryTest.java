@@ -146,11 +146,14 @@ class UiopLibraryTest {
 
 	@Test
 	void theBuiltInMacrosAndJavaBuiltinsAreNeverSpliced() {
-		// A member with a real LispMacroExpander expansion or a Java built-in carries no
-		// library form at all, so nothing can shadow it.
+		// A member with a real LispMacroExpander expansion carries no library form at
+		// all, so nothing can shadow it. A literal top-level nickname directive is the
+		// resolver's: only a computed one calls the function.
 		assertThat(splicedNames("(uiop:if-let ((x 1)) x)")).isEmpty();
 		assertThat(splicedNames("(uiop:add-package-local-nickname \"A\" \"CL\")")).isEmpty();
 		assertThat(splicedNames("(uiop:remove-package-local-nickname \"A\")")).isEmpty();
+		assertThat(splicedNames("(uiop:remove-package-local-nickname (car x))"))
+			.containsExactly("UIOP/PACKAGE-LOCAL-NICKNAMES:REMOVE-PACKAGE-LOCAL-NICKNAME");
 	}
 
 	@Test

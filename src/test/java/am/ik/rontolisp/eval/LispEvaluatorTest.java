@@ -24854,21 +24854,22 @@ class LispEvaluatorTest {
 				                (make-package "IU-RPA" :use '(:cl)))))
 				  (list (null (find-package "IU-RPA")) (package-name renamed)))
 				""").print()).startsWith("(T \"__IU-RPA__");
-		// The nickname query lists every global nickname for the package (the
-		// scope is global, .kb/packages.md); removal answers t once, then nil,
-		// and a scope the nickname does not point at removes nothing.
+		// The nickname query lists the package's own nicknames; removal answers t once,
+		// then nil, and a package that does not have the nickname removes nothing. A
+		// computed call is the same function, and SBCL's refusals signal package-errors.
 		assertThat(evalMulti("""
 				(defpackage #:iu-np (:use #:cl) (:export #:np-foo))
 				(in-package #:iu-np)
 				(defun np-foo () 7)
 				(in-package #:cl-user)
 				(uiop:add-package-local-nickname '#:iu-nick '#:iu-np)
-				(list (uiop:package-local-nicknames :iu-np)
+				(list (uiop:package-local-nicknames :cl-user)
+				      (uiop:package-local-nicknames :iu-np)
 				      (iu-nick:np-foo)
 				      (uiop:remove-package-local-nickname '#:iu-nick '#:iu-np)
 				      (uiop:remove-package-local-nickname '#:iu-nick)
-				      (uiop:package-local-nicknames :iu-np))
-				""").print()).isEqualTo("(((\"IU-NICK\" . :IU-NP)) 7 T NIL NIL)");
+				      (uiop:package-local-nicknames :cl-user))
+				""").print()).isEqualTo("(((\"IU-NICK\" . :IU-NP)) NIL 7 NIL T NIL)");
 		assertThat(evalMulti("""
 				(defpackage #:iu-np2 (:use #:cl))
 				(defpackage #:iu-np3 (:use #:cl))
