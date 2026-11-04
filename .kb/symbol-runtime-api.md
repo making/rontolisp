@@ -337,7 +337,8 @@ nil)` reported `The function NIL is undefined`. Pinned on all four backends by
   lowering happens per expression, after the gates.
 - **The alias idiom needs a defun to call**: a name bound ONLY by the setf has no compiled
   function, so `expandTopLevelDefinitions` injects one FORWARDER defun per such name
-  (`setfOnlyFunctionAliasNames` + `symbolFunctionForwarderDefuns`):
+  (`setfOnlyFunctionAliasNames`, which counts a literal `(compile 'NAME definition)` too, +
+  `symbolFunctionForwarderDefuns`):
   `(defun NAME (&rest args) (apply (%fenv-function 'NAME) args))`. **`%fenv-function` probes the
   function NAMESPACE ONLY** — probing the compiled registry would find the forwarder itself and
   loop — and a miss (no binding, or the tombstone) signals the undefined-function a direct call

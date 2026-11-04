@@ -19494,8 +19494,12 @@ cases:
       (print (multiple-value-list (compile 'cocn-mac)))
       (print (cocn-mac 1))
       (print (multiple-value-list (compile '(setf cocn-place))))
+      (print (fboundp 'cocn-named))
+      (print (handler-case (cocn-named 1)
+               (undefined-function (c) (list :undefined (cell-error-name c)))))
       (print (multiple-value-list (compile 'cocn-named '(lambda (x) (+ x 2)))))
       (print (funcall 'cocn-named 1))
+      (print (list (cocn-named 1) (funcall #'cocn-named 1) (and (fboundp 'cocn-named) t)))
       (print (multiple-value-list (compile 'cocn-copy #'cocn-inc)))
       (print (funcall 'cocn-copy 1))
       (let ((vals (multiple-value-list (compile nil '(lambda (x) (* x x))))))
@@ -19525,8 +19529,11 @@ cases:
       (COCN-MAC NIL NIL)
       (1)
       ((SETF COCN-PLACE) NIL NIL)
+      NIL
+      (:UNDEFINED COCN-NAMED)
       (COCN-NAMED NIL NIL)
       3
+      (3 3 T)
       (COCN-COPY NIL NIL)
       2
       (49 (NIL NIL))

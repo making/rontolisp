@@ -308,9 +308,21 @@ stream (a string, sticky), `(%inflate-finish decoder)` -> nil, 1 (a gzip header 
 trailer cut short) or 2 (the data cut short). The semantics are `java.util.zip`'s, which
 the oracle reads through: zlib's messages, `GZIPInputStream`'s header (`Not in GZIP
 format`, `Unsupported compression method`, `Corrupt GZIP header` for FHCRC) and trailer
-(`Corrupt GZIP trailer`), JDK 25's concatenated members (a next header that is absent or
-malformed ends the stream), a zlib preset dictionary read as the end (`InflaterInputStream`
-answers -1).
+(`Corrupt GZIP trailer`), concatenated members (a next header that is absent or malformed
+ends the stream; a whole one starts a member, cut short or not), a zlib preset dictionary read
+as the end (`InflaterInputStream` answers -1).
+- **`GZIPInputStream` after a trailer is not one rule across JDKs** (measured 2026-11-04). A
+  member followed by 10-18 octets of a next member reads as `Unexpected end of ZLIB input
+  stream` on GraalVM 25.0.4 and OpenJDK 21.0.12, and as the first member's octets on GraalVM
+  25.0.5.0.3, whose `readTrailer` tries a next member only when `in.available() > 0 || n > 26`.
+  There the answer is the 512-octet buffer's: the same 12-octet tail reads `ok` behind a
+  510-octet member and EOF behind a 511-octet one, and through a stream answering
+  `available()` 0, split at the first member's end, it stopped after the first of two WHOLE
+  members (12 of 60 octets). The sources disagree the same way: jdk25u's `jdk-25.0.5-ga` tag
+  always tries, jdk master has the check by default (`jdk.util.gzip.tryReadAheadAfterTrailer`
+  turns it off). The decoders stay with always-try: it is the only one of the two that is a
+  function of the octets, so it keeps the chunk rule below, and it reports a cut reply instead
+  of dropping it. `InflateCases.oracle` answers `available()` 1 so every JDK reads that way.
 - **Two implementations, unit for unit**: `runtime/RontoInflate` (pure Java, not
   `Inflater`: native zlib is not in the playground's Web Image) is the interpreter's
   native (`Environment.defineInflate`, a `LispJavaObject` decoder) and the JVM's
