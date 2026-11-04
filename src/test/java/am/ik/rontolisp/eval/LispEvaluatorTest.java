@@ -12751,10 +12751,18 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void unqualifiedStandardSymbolInRontolispIsRejected() {
+	void aStandardNameTheCurrentPackageDoesNotReadAsClsIsUndefinedUntilItDefinesIt() {
+		// Not the image's bare function of that name: a package using no cl, and one
+		// shadowing the name, read their own symbol.
 		assertThatThrownBy(() -> evalMulti("(in-package :rontolisp) (car '(1 2))"))
-			.isInstanceOf(am.ik.rontolisp.LispPackageException.class)
-			.hasMessageContaining("use CL:CAR");
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("The function RONTOLISP::CAR is undefined");
+		assertThatThrownBy(() -> evalMulti(
+				"(defpackage :eshad (:use :cl) (:shadow #:car)) (in-package :eshad)" + " (funcall 'car '(1 2))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("The function ESHAD::CAR is undefined");
+		assertThat(evalMulti("(defpackage :enocl (:use)) (in-package :enocl) (cl:defun car (x) (cl:list x)) (car 1)")
+			.print()).isEqualTo("(1)");
 	}
 
 	@Test

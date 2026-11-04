@@ -497,7 +497,7 @@ public final class FunctionDesignators {
 		LispVal normalized = normalize(fnForm);
 		if (normalized != fnForm && normalized instanceof LispCons function && function.cdr() instanceof LispCons rest
 				&& rest.car() instanceof LispSymbol sym && !defined.test(sym.name())) {
-			CompileWarnings.warn(fnForm, "the function " + sym.name() + " is undefined; looked up when the call runs");
+			CompileWarnings.warnUndefinedFunction(fnForm, sym.name(), "looked up when the call runs");
 			return fnForm;
 		}
 		return normalized;

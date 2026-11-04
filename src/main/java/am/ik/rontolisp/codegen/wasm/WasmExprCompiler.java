@@ -320,7 +320,8 @@ final class WasmExprCompiler {
 		}
 		// Lisp-2: a bare symbol is a variable reference only; functions must be
 		// referenced via (function name) / #'name.
-		throw new UnsupportedOperationException("Cannot compile symbol: " + name);
+		throw new UnsupportedOperationException(
+				"Cannot compile symbol: " + name + PackageRegistry.standardNameAdvice(name));
 	}
 
 	/**

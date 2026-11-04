@@ -32,6 +32,7 @@ import am.ik.rontolisp.eval.ShimLibraries;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
@@ -1098,7 +1099,8 @@ public final class LoadInliner {
 			return null;
 		}
 		List<LispVal> items = cons.toList();
-		if (items.size() < 2 || !(items.get(0) instanceof LispSymbol op) || !LispNames.LOAD.equals(op.name())) {
+		if (items.size() < 2 || !(items.get(0) instanceof LispSymbol op)
+				|| !LispNames.LOAD.equals(LispMacroExpander.clOperatorSpelling(op.name()))) {
 			return null;
 		}
 		// A literal path is a string or a #P"..." pathname value; a computed one counts
@@ -1186,7 +1188,8 @@ public final class LoadInliner {
 	}
 
 	@Nullable private static List<LispVal> operatorForm(LispVal form, String operator) {
-		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !operator.equals(op.name())) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| !operator.equals(LispMacroExpander.clOperatorSpelling(op.name()))) {
 			return null;
 		}
 		return cons.toList();

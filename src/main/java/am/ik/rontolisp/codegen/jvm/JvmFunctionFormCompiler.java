@@ -215,16 +215,14 @@ final class JvmFunctionFormCompiler {
 		else if (undefined(name, ctx) && ctx.bindsRuntimeFunctionNames) {
 			// ... and in a program that can bind the name at run time, what _fenv holds
 			// when the reference runs, the same signal on a miss.
-			CompileWarnings.warn(null, "the function " + ClosRegistry.functionNameForReport(name)
-					+ " is undefined; looked up when the reference runs");
+			CompileWarnings.warnUndefinedFunction(null, name, "looked up when the reference runs");
 			JvmSymbolApiCompiler.compileFenvFunction(name, ctx, className);
 		}
 		else if (undefined(name, ctx)) {
 			// A name no definition has: the interpreter's late binding, as for a direct
 			// call (JvmFunctionCallCompiler) -- the undefined-function is signalled where
 			// the reference is EVALUATED, so a branch never taken still compiles.
-			CompileWarnings.warn(null, "the function " + ClosRegistry.functionNameForReport(name)
-					+ " is undefined; compiled as a run-time error");
+			CompileWarnings.warnUndefinedFunction(null, name, "compiled as a run-time error");
 			emitUndefinedFunctionThrow(name, ctx);
 		}
 		else {

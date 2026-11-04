@@ -6,6 +6,8 @@ import java.util.stream.Collectors;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -54,6 +56,41 @@ class UserMacroExpanderTest {
 				(defmacro my-when2 (test &body body) `(if ,test (progn ,@body) nil))
 				(print (my-when2 (> 3 1) 10 20))
 				""")).isEqualTo("(PRINT (IF (> 3 1) (PROGN 10 20) NIL))");
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "(cl:defmacro m (x) x)", "(common-lisp:defmacro m (x) x)",
+			"(cl:progn (cl:defmacro m (x) x))", "(cl:eval-when (:execute) (cl:defmacro m (x) x))",
+			"(cl:defsetf m set-m)", "(cl:define-modify-macro m () cl:1+)", "(cl:define-compiler-macro m (x) x)",
+			"(cl:define-setf-expander m (x) x)" })
+	void aDefinitionSpelledClActivatesThePass(String definition) {
+		// A package using no cl spells them so: until the pass ran the definition reached
+		// a backend, whose call of DEFMACRO was an undefined function.
+		assertThat(UserMacroExpander.expand(LispReader.readAllFromString(definition))).isEmpty();
+	}
+
+	@Test
+	void aMacrosFormsSpelledClAreExpandedAndEmittedForTheCompilersRead() {
+		// Everything spelled cl:, under a package using no cl, in the shapes the pass
+		// emits and appends: its own forms must re-read as cl's through the compilers'
+		// resolver. The tables land under the trailing in-package.
+		List<LispVal> emitted = UserMacroExpander.expand(LispReader.readAllFromString("""
+				(cl:defpackage :ume-nocl (:use))
+				(cl:in-package :ume-nocl)
+				(cl:deftype pair (x) (cl:list 'cl:cons x x))
+				(cl:defmacro m (x) `(cl:car ,x))
+				(cl:print (cl:list (m '(1)) (cl:macrolet ((n (y) `(cl:cdr ,y))) (n '(2)))))
+				(cl:print (cl:list (cl:typep 1 '(pair cl:integer)) (cl:macro-function 'm)))
+				"""));
+		List<LispVal> resolved = new am.ik.rontolisp.PackageResolver().resolveProgram(emitted);
+		assertThat(resolved.stream().map(LispVal::print).collect(Collectors.joining("\n")))
+			.contains("(PRINT (LIST (CAR '(1)) (CDR '(2))))")
+			.contains("(DEFTYPE UME-NOCL::PAIR NIL '")
+			.contains("(DEFUN MACRO-FUNCTION (")
+			.contains("(DECLAIM (")
+			.doesNotContain("UME-NOCL::DEFUN")
+			.doesNotContain("UME-NOCL::DEFTYPE")
+			.doesNotContain("UME-NOCL::DECLAIM");
 	}
 
 	@Test

@@ -11,6 +11,7 @@ import java.util.Set;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.DefinedCallArity;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
@@ -108,7 +109,8 @@ final class JvmLambdaCompiler {
 				ctx.body.aaload();
 			}
 			else {
-				throw new UnsupportedOperationException("Cannot capture variable: " + freeVar);
+				throw new UnsupportedOperationException(
+						"Cannot capture variable: " + freeVar + PackageRegistry.standardNameAdvice(freeVar));
 			}
 			ctx.body.aastore();
 			captureIdx++;

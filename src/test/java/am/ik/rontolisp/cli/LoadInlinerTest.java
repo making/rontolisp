@@ -65,6 +65,14 @@ class LoadInlinerTest {
 		// original (print (F 5)).
 		assertThat(result.stream().map(LispVal::print)).containsExactly("(%BEGIN-FILE \"core.lisp\" \"core.lisp\")",
 				"(DEFUN F (X) (* X X))", "(%END-FILE)", "(PRINT (F 5))");
+		// The spelling a package using no cl has, of the load and of the variable the
+		// lowering's gate looks for.
+		assertThat(am.ik.rontolisp.macro.LispMacroExpander
+			.lowerLoadContextMarkers(
+					inline("(cl:load \"core.lisp\")", Map.of("core.lisp", "(defvar *from* cl:*load-truename*)")))
+			.stream()
+			.map(LispVal::print)).containsExactly("(CL:SETQ CL:*LOAD-TRUENAME* \"core.lisp\")",
+					"(DEFVAR *FROM* CL:*LOAD-TRUENAME*)", "(CL:SETQ CL:*LOAD-TRUENAME* NIL)");
 	}
 
 	@Test

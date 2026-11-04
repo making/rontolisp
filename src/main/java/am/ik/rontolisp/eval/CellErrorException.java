@@ -1,6 +1,7 @@
 package am.ik.rontolisp.eval;
 
 import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.PackageRegistry;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -65,6 +66,11 @@ final class CellErrorException extends LispEvalException {
 	 */
 	@Nullable String setfPlace() {
 		return this.setfPlace;
+	}
+
+	@Override
+	public String advice() {
+		return PackageRegistry.standardNameAdvice(this.spelling);
 	}
 
 }

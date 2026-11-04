@@ -305,8 +305,9 @@ public final class UserMacroExpander {
 				// simple-octet-vector in an etypecase) resolves on every backend.
 				LispVal folded = macroEval.foldDeftype(deftype);
 				if (folded != null && deftype.toList().get(1) instanceof LispSymbol typeName) {
-					this.result.add(properList(List.of(new LispSymbol(LispNames.DEFTYPE), typeName, LispNil.INSTANCE,
-							properList(List.of(new LispSymbol(LispNames.QUOTE), folded)))));
+					this.result.add(requalifyShadowedClNames(properList(List.of(new LispSymbol(LispNames.DEFTYPE),
+							typeName, LispNil.INSTANCE, properList(List.of(new LispSymbol(LispNames.QUOTE), folded)))),
+							macroEval));
 					return;
 				}
 				this.result.add(form);
@@ -453,12 +454,12 @@ public final class UserMacroExpander {
 			}
 			// A form the walk did not touch keeps its ORIGINAL spelling: the resolved
 			// canonical form is not always re-resolvable by the compilers' own pass
-			// (a cl: symbol canonicalizes to a bare name, which is an error to spell
-			// under a package that does not use cl). An emitted expansion conversely
-			// must survive that pass: a bare canonical CL name the current package
-			// SHADOWS would re-resolve to the shadowing package's own symbol, so it is
-			// re-spelled explicitly cl:-qualified (cl-ppcre's defconstant macro expands
-			// to cl:defconstant under a package shadowing defconstant).
+			// (a cl: symbol canonicalizes to a bare name, which a package that does not
+			// use cl reads as its own). An emitted expansion conversely must survive
+			// that pass: a bare canonical CL name the current package SHADOWS would
+			// re-resolve to the shadowing package's own symbol, so it is re-spelled
+			// explicitly cl:-qualified (cl-ppcre's defconstant macro expands to
+			// cl:defconstant under a package shadowing defconstant).
 			// The walk is identity-preserving (see rebuild), so an untouched form is the
 			// SAME object and needs no printing to recognize; the print comparison stays
 			// for a walk that rebuilt an equal form (a macro that expands to itself).
@@ -728,10 +729,12 @@ public final class UserMacroExpander {
 			table.append(table.isEmpty() ? "" : " ")
 				.append(PackageRegistry.splitQualified(name) == null ? LispNames.CL_USER_PKG + "::" + name : name);
 		}
-		result.addAll(LispReader.readAllFromString(
+		for (LispVal form : LispReader.readAllFromString(
 				"(defun " + LispNames.COMPILER_MACRO_FUNCTION + " (name &optional environment) (if (member name '("
 						+ table + ")) #'" + LispNames.MACRO_EXPANDER_STUB + " nil))",
-				Features.INTERPRETER));
+				Features.INTERPRETER)) {
+			result.add(requalifyShadowedClNames(form, macroEval));
+		}
 	}
 
 	/** Whether the form names {@code name} anywhere (a call, {@code #'} it). */
@@ -787,9 +790,11 @@ public final class UserMacroExpander {
 			table.append(table.isEmpty() ? "" : " ")
 				.append(PackageRegistry.splitQualified(name) == null ? LispNames.CL_USER_PKG + "::" + name : name);
 		}
-		result.addAll(
-				LispReader.readAllFromString("(defun " + LispNames.MACRO_FUNCTION + " (symbol &optional environment) ("
-						+ LispNames.MACRO_FN_INTERNAL + " symbol '(" + table + ")))", Features.INTERPRETER));
+		for (LispVal form : LispReader.readAllFromString("(defun " + LispNames.MACRO_FUNCTION
+				+ " (symbol &optional environment) (" + LispNames.MACRO_FN_INTERNAL + " symbol '(" + table + ")))",
+				Features.INTERPRETER)) {
+			result.add(requalifyShadowedClNames(form, macroEval));
+		}
 	}
 
 	/**
@@ -839,8 +844,11 @@ public final class UserMacroExpander {
 		for (String name : macroEval.deftypeNames()) {
 			LispVal expansion = macroEval.findDeftype(name);
 			if (expansion != null && alreadyEmitted.add(name)) {
-				result.add(properList(List.of(new LispSymbol(LispNames.DEFTYPE), new LispSymbol(name), LispNil.INSTANCE,
-						properList(List.of(new LispSymbol(LispNames.QUOTE), expansion)))));
+				result
+					.add(requalifyShadowedClNames(
+							properList(List.of(new LispSymbol(LispNames.DEFTYPE), new LispSymbol(name),
+									LispNil.INSTANCE, properList(List.of(new LispSymbol(LispNames.QUOTE), expansion)))),
+							macroEval));
 			}
 		}
 	}
@@ -887,8 +895,8 @@ public final class UserMacroExpander {
 					&& macroEval.namesParameterizedDeftype(head.name()) && seen.add(cons.print())) {
 				LispVal expansion = macroEval.expandDeftypeSpecifier(cons);
 				if (expansion != null) {
-					result.add(LispMacroExpander.deftypeInstanceDeclamation((LispCons) contextFreeSpelling(cons),
-							contextFreeSpelling(expansion)));
+					result.add(requalifyShadowedClNames(LispMacroExpander.deftypeInstanceDeclamation(
+							(LispCons) contextFreeSpelling(cons), contextFreeSpelling(expansion)), macroEval));
 					pending.push(expansion);
 				}
 			}
@@ -920,12 +928,13 @@ public final class UserMacroExpander {
 
 	/**
 	 * Re-spells every bare CL-symbol name that the resolver's current package reads as
-	 * some other symbol -- one it shadows, or a {@code cl} extension name it has come to
-	 * own ({@code (defmacro while ...)}) -- as the explicit {@code cl:}-qualified form,
-	 * recursively through the expansion. Only a {@code cl} symbol the expansion resolved
-	 * from a {@code cl:} spelling, or before the package took the name, is spelled bare
-	 * there. A quoted datum is walked too, since the compilers' resolution pass resolves
-	 * its symbols as well; an {@code %unspelled-quote} datum is not.
+	 * some other symbol -- one it shadows, a {@code cl} extension name it has come to own
+	 * ({@code (defmacro while ...)}), its own where it uses no {@code cl} -- as the
+	 * explicit {@code cl:}-qualified form, recursively through the expansion. Only a
+	 * {@code cl} symbol the expansion resolved from a {@code cl:} spelling, or before the
+	 * package took the name, is spelled bare there. A quoted datum is walked too, since
+	 * the compilers' resolution pass resolves its symbols as well; an
+	 * {@code %unspelled-quote} datum is not.
 	 */
 	private static LispVal requalifyShadowedClNames(LispVal form, LispEvaluator macroEval) {
 		return LispTrees.rebuildSpine(form, node -> switch (node) {
@@ -1027,7 +1036,8 @@ public final class UserMacroExpander {
 	}
 
 	private static boolean isOperator(LispVal form, String name) {
-		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && name.equals(sym.name());
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
+				&& LispMacroExpander.spellsClName(sym.name(), name);
 	}
 
 	/**
@@ -1527,8 +1537,7 @@ public final class UserMacroExpander {
 
 	private static boolean usesMacroexpand(LispVal form) {
 		while (form instanceof LispCons cons) {
-			if (cons.car() instanceof LispSymbol sym
-					&& (LispNames.MACROEXPAND.equals(sym.name()) || LispNames.MACROEXPAND_1.equals(sym.name()))) {
+			if (isOperator(cons, LispNames.MACROEXPAND) || isOperator(cons, LispNames.MACROEXPAND_1)) {
 				return true;
 			}
 			if (usesMacroexpand(cons.car())) {
@@ -1816,7 +1825,7 @@ public final class UserMacroExpander {
 
 	private static boolean usesMacrolet(LispVal form) {
 		while (form instanceof LispCons cons) {
-			if (cons.car() instanceof LispSymbol sym && LispNames.MACROLET.equals(sym.name())) {
+			if (isOperator(cons, LispNames.MACROLET)) {
 				return true;
 			}
 			if (usesMacrolet(cons.car())) {

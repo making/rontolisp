@@ -101,17 +101,6 @@ public final class PackageResolver {
 	private boolean inHostFacingData = false;
 
 	/**
-	 * Whether resolution is inside a quoted datum. Data position is more permissive than
-	 * code position: Common Lisp's reader interns whatever it reads in the current
-	 * package, so {@code '(car x)} under a package that does not use {@code cl} is the
-	 * pair of that package's own symbols -- not the error the same names would be in
-	 * operator position -- and a quoted {@code *package*} is the SYMBOL, not the current
-	 * package's name -- and so, since {@code *package*} is a runtime variable read, is an
-	 * evaluated one (see {@link #resolveUnqualified}).
-	 */
-	private boolean inQuotedData = false;
-
-	/**
 	 * Whether resolution is on behalf of the runtime {@code intern}, whose name is
 	 * VERBATIM: the reader's case-fold retries in {@link #resolveQualified} and
 	 * {@link #resolveUnqualified} (an upcased source spelling reaching a lower-kebab
@@ -128,6 +117,9 @@ public final class PackageResolver {
 	 * {@link #mint}).
 	 */
 	private boolean probing = false;
+
+	/** Whether the form being resolved is data, not source ({@link #resolveDatum}). */
+	private boolean resolvingDatum = false;
 
 	/**
 	 * Whether a name this resolver mints while reading source joins the member table of
@@ -190,7 +182,7 @@ public final class PackageResolver {
 	 * Returns whether the CURRENT package (as tracked across the forms resolved so far)
 	 * reads the bare name of a {@code cl} symbol as some other symbol: one it shadows,
 	 * owns ({@link #claimDefinedClExtensionName}), imports or inherits from another used
-	 * package, or, using no {@code cl}, does not read at all. Used by
+	 * package, or, using no {@code cl}, takes for its own. Used by
 	 * {@code UserMacroExpander} to spell a bare canonical CL name explicitly
 	 * {@code cl:}-qualified in emitted expansions, so the compilers' own resolution pass
 	 * does not re-capture it as that other symbol.
@@ -205,12 +197,13 @@ public final class PackageResolver {
 		if (current.shadows(name)) {
 			return true;
 		}
+		boolean savedProbing = this.probing;
+		this.probing = true;
 		try {
-			return !(resolveUnqualified(name) instanceof LispSymbol resolved && resolved.name().equals(name));
+			return !resolveUnqualified(name).name().equals(name);
 		}
-		catch (LispPackageException ex) {
-			// A package using no cl has no bare spelling of the name at all.
-			return true;
+		finally {
+			this.probing = savedProbing;
 		}
 	}
 
@@ -313,6 +306,28 @@ public final class PackageResolver {
 		}
 		finally {
 			unbindThreadPackage(previous);
+		}
+	}
+
+	/**
+	 * Resolves a form the program holds as data -- what {@code eval} and {@code compile}
+	 * are handed -- rather than source just read. Its symbols are symbols already, in the
+	 * canonical shape: a bare one names {@code cl}'s or {@code cl-user}'s symbol under
+	 * ANY current package, which a read would take for the current package's own wherever
+	 * it does not read the name as that symbol ({@code (eval '(cl:car x))} under a
+	 * package that uses no {@code cl} or shadows {@code car}). What it is a directive of
+	 * still takes effect.
+	 * @param form the form
+	 * @return the resolved form
+	 */
+	public synchronized LispVal resolveDatum(LispVal form) {
+		boolean saved = this.resolvingDatum;
+		this.resolvingDatum = true;
+		try {
+			return resolve(form);
+		}
+		finally {
+			this.resolvingDatum = saved;
 		}
 	}
 
@@ -1994,7 +2009,7 @@ public final class PackageResolver {
 		// symbol of the name, nor one the package owns already.
 		if (!PackageRegistry.isClExtensionName(name) || LispNames.CL_PKG.equals(pkg)
 				|| LispNames.CL_USER_PKG.equals(pkg) || !currentUsesCl()
-				|| !(resolveUnqualified(name) instanceof LispSymbol resolved) || !resolved.name().equals(name)) {
+				|| !resolveUnqualified(name).name().equals(name)) {
 			return;
 		}
 		this.registry.get(pkg).addSymbol(name);
@@ -2325,22 +2340,8 @@ public final class PackageResolver {
 	}
 
 	// Resolves every symbol inside a quoted datum (recursively through conses);
-	// non-symbol atoms pass through. Data position is more permissive than code
-	// position -- Common Lisp's reader simply INTERNS what it reads, so a name that
-	// would be an error to call here is still a perfectly good symbol (see
-	// this.inQuotedData).
+	// non-symbol atoms pass through.
 	private LispVal resolveQuotedData(LispVal datum) {
-		boolean saved = this.inQuotedData;
-		this.inQuotedData = true;
-		try {
-			return resolveQuotedDatum(datum);
-		}
-		finally {
-			this.inQuotedData = saved;
-		}
-	}
-
-	private LispVal resolveQuotedDatum(LispVal datum) {
 		return switch (datum) {
 			case LispSymbol sym -> resolveSymbol(sym);
 			// Identity-preserving, and inheriting when it is not. A datum whose symbols
@@ -2348,7 +2349,7 @@ public final class PackageResolver {
 			// file, and rebuilding one used to make its (quote ...) form -- and every
 			// ancestor of that -- a fresh cons the provenance table has never seen.
 			case LispCons c -> LispTrees.rebuildSpine(c,
-					node -> node instanceof LispCons ? null : resolveQuotedDatum(node), this::resolveQuotedDatum,
+					node -> node instanceof LispCons ? null : resolveQuotedData(node), this::resolveQuotedData,
 					(cell, car, cdr) -> SourceProvenance.inherit(cell, LispCons.rebuilt(cell, car, cdr)));
 			default -> datum;
 		};
@@ -2385,6 +2386,11 @@ public final class PackageResolver {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
 		if (qn != null) {
 			return resolveQualified(qn);
+		}
+		// A definition in the datum can make a package own cl's while, which stands for
+		// the package's symbol from there on (claimDefinedClExtensionName).
+		if (this.resolvingDatum && !PackageRegistry.isClExtensionName(name)) {
+			return sym;
 		}
 		return resolveUnqualified(name);
 	}
@@ -2481,14 +2487,10 @@ public final class PackageResolver {
 		boolean savedProbing = this.probing;
 		this.probing = true;
 		try {
-			LispVal resolved = resolveUnqualified(member);
-			if (resolved instanceof LispSymbol sym
-					&& (LispNames.CL_USER_PKG.equals(pkg) || PackageRegistry.splitQualified(sym.name()) != null)) {
-				return sym.name();
+			String resolved = resolveUnqualified(member).name();
+			if (LispNames.CL_USER_PKG.equals(pkg) || PackageRegistry.splitQualified(resolved) != null) {
+				return resolved;
 			}
-		}
-		catch (LispPackageException ex) {
-			// No bare reference to the name resolves in this package; keep its own.
 		}
 		finally {
 			this.probing = savedProbing;
@@ -2497,11 +2499,11 @@ public final class PackageResolver {
 		return canonical(pkg, member).name();
 	}
 
-	private LispVal resolveUnqualified(String name) {
+	private LispSymbol resolveUnqualified(String name) {
 		// *package* is an ordinary cl variable here -- read at RUN time, never folded to
 		// the package this pass has current (see packageAssignment) -- so it takes the
-		// generic cl-symbol path below: bare when the current package uses cl, else the
-		// undefined-symbol error every unqualified cl name gets there.
+		// generic cl-symbol path below: bare when the current package uses cl, else that
+		// package's own symbol, as every unqualified cl name is there.
 		LispPackage current = this.registry.get(current());
 		// A symbol imported via :import-from resolves to its source package's canonical
 		// spelling. Checked before the cl branch so (:import-from :cl :car) works in a
@@ -2536,8 +2538,11 @@ public final class PackageResolver {
 			// An implementation-internal name is never written by a program: expansions
 			// inject it into whatever package they run in, a package using no cl
 			// included (the macro-function table appended under contextl-user). So do
-			// the lambda-list keywords, which the expansions' own lambda lists spell.
-			if (currentUsesCl() || PackageRegistry.isClInternal(name) || PackageRegistry.isClLambdaListKeyword(name)) {
+			// the lambda-list keywords, which the expansions' own lambda lists spell, and
+			// quote: (quote x) is the special form to this pass whatever package reads
+			// it, so a variable named quote has to stay one symbol with it.
+			if (currentUsesCl() || PackageRegistry.isClInternal(name) || PackageRegistry.isClLambdaListKeyword(name)
+					|| LispNames.QUOTE.equals(name)) {
 				return new LispSymbol(name);
 			}
 			// A package that does not use cl may still inherit a symbol of this name
@@ -2548,14 +2553,13 @@ public final class PackageResolver {
 					return viaUsed;
 				}
 			}
-			// In DATA position the name is not a call, so there is nothing to reject:
-			// the reader interns it in the current package, exactly like any other
-			// unknown name below.
-			if (this.inQuotedData) {
-				return mint(current(), name);
-			}
-			throw new LispPackageException(
-					"Undefined symbol: " + name + " (use " + PackageRegistry.qualify(LispNames.CL_PKG, name) + ")");
+			// Otherwise the name is not cl's here: the reader interns it in the current
+			// package, like any other unknown name below. This pass cannot tell a typo
+			// from a parameter, a package's own definition or a loop keyword: which
+			// position a form is in is only known once its macros are expanded, and this
+			// pass runs ahead of that. Where the name turns out to name nothing, its
+			// report says what to write (PackageRegistry.standardNameAdvice).
+			return mint(current(), name);
 		}
 		if (current.owns(name)) {
 			return canonical(current(), name);
@@ -2838,16 +2842,7 @@ public final class PackageResolver {
 				return name;
 			}
 		}
-		try {
-			if (resolveUnqualified(name) instanceof LispSymbol sym) {
-				return sym.name();
-			}
-		}
-		catch (LispPackageException ignored) {
-			// An inaccessible cl symbol in a non-cl-using package: intern it into the
-			// current package like CL would.
-		}
-		return canonical(current(), name).name();
+		return resolveUnqualified(name).name();
 	}
 
 	/**
@@ -3671,18 +3666,15 @@ public final class PackageResolver {
 		if (home.equals(current())) {
 			return true;
 		}
-		boolean savedQuoted = this.inQuotedData;
 		boolean savedProbing = this.probing;
-		this.inQuotedData = true;
 		this.probing = true;
 		try {
-			return resolveUnqualified(qn.member()) instanceof LispSymbol sym && sym.name().equals(symbolName);
+			return resolveUnqualified(qn.member()).name().equals(symbolName);
 		}
 		catch (LispPackageException ex) {
 			return false;
 		}
 		finally {
-			this.inQuotedData = savedQuoted;
 			this.probing = savedProbing;
 		}
 	}

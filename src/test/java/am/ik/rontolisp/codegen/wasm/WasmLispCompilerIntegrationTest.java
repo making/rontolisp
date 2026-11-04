@@ -10611,6 +10611,16 @@ class WasmLispCompilerIntegrationTest {
 		assertThatThrownBy(() -> new WasmLispCompiler().compile(LispReader.readAllFromString("(print car)")))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("Cannot compile symbol: CAR");
+		// Under a package using no cl it is the package's own variable, and the refusal
+		// says what to write -- as a read and as a capture.
+		assertThatThrownBy(() -> new WasmLispCompiler()
+			.compile(LispReader.readAllFromString("(defpackage :rv-nocl (:use)) (in-package :rv-nocl) (cl:print car)")))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("Cannot compile symbol: RV-NOCL::CAR (use CL:CAR)");
+		assertThatThrownBy(() -> new WasmLispCompiler().compile(LispReader.readAllFromString(
+				"(defpackage :rv-nocl (:use)) (in-package :rv-nocl) (cl:print (cl:funcall (cl:lambda () pi)))")))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("Cannot find variable for closure: RV-NOCL::PI (use CL:PI)");
 	}
 
 	// read-line tests. The pre-passes are the CLI pipeline's: read is prelude

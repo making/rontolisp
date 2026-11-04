@@ -64,7 +64,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 ## Data types
 
 - [symbol-runtime-api.md](symbol-runtime-api.md) -- symbol/package runtime API, accessibility second value, the string-designator contract
-- [packages.md](packages.md) -- the `cl`/`cl-user`/`rontolisp` package system, `defpackage` over an existing package, `*package*` as dynamic
+- [packages.md](packages.md) -- the `cl`/`cl-user`/`rontolisp` package system, a standard name in a package not reading it as `cl`'s (its own symbol; the report that keeps the advice), `defpackage` over an existing package, `*package*` as dynamic
 - [defstruct.md](defstruct.md) -- `defstruct` as plain defuns, setf accessor registry, `:include`, `:type (vector ...)`
 - [instance-syntax.md](instance-syntax.md) -- the one instance value model behind defstruct/CLOS/conditions, `%obj-*`, `#S(...)`/`#<...>`
 - [clos.md](clos.md) -- static CLOS subset: registry, dispatcher generation, initialization protocol, runtime `typep`; a forward-referenced superclass; the MOP, contextl's layered classes, instance updating, precompiled `compile` definitions

@@ -408,7 +408,8 @@ final class JvmExprCompiler {
 		else {
 			// Lisp-2: a bare symbol is a variable reference only; functions must be
 			// referenced via (function name) / #'name.
-			throw new UnsupportedOperationException("Cannot compile symbol reference: " + name);
+			throw new UnsupportedOperationException(
+					"Cannot compile symbol reference: " + name + PackageRegistry.standardNameAdvice(name));
 		}
 	}
 

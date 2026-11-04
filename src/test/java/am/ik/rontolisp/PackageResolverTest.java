@@ -212,26 +212,39 @@ class PackageResolverTest {
 	// error to CALL in a package that does not use cl (the test below), but reading them
 	// quoted just interns them in that package, as Common Lisp's reader does.
 	@Test
-	void quoteDatumInRontolispInternsInRontolisp() {
+	void aStandardNameReadInAPackageUsingNoClIsItsOwnWhereverItStands() {
+		// This pass runs ahead of the expansion that tells a call from a binding or a
+		// loop keyword, so none of the positions is special: every one is the reader
+		// interning in the current package, the undefined call (.kb/packages.md)
+		// included.
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(in-package :rontolisp)");
 		assertThat(resolve(resolver, "'(car x)")).isEqualTo("'(RONTOLISP::CAR RONTOLISP::X)");
+		assertThat(resolve(resolver, "(car x)")).isEqualTo("(RONTOLISP::CAR RONTOLISP::X)");
+		assertThat(resolve(resolver, "*package*")).isEqualTo("RONTOLISP::*PACKAGE*");
+		assertThat(resolve(resolver, "(cl:let ((car 1)) car)")).isEqualTo("(LET ((RONTOLISP::CAR 1)) RONTOLISP::CAR)");
+		assertThat(resolve(resolver, "(cl:defun second (first) first)"))
+			.isEqualTo("(DEFUN RONTOLISP::SECOND (RONTOLISP::FIRST) RONTOLISP::FIRST)");
+		assertThat(resolve(resolver, "(cl:loop while x)")).isEqualTo("(LOOP RONTOLISP::WHILE RONTOLISP::X)");
+		// The one exception: (quote x) is the special form here in any package, so a
+		// variable of that name has to be one symbol with it.
+		assertThat(resolve(resolver, "(cl:let ((quote 1)) quote)")).isEqualTo("(LET ('1) QUOTE)");
 	}
 
 	@Test
-	void unqualifiedClSymbolInRontolispIsRejected() {
+	void aDatumKeepsItsBareSymbolsAndItsDirectivesTakeEffect() {
+		// What eval and compile are handed has been read: a bare symbol is cl's or
+		// cl-user's under any current package, not a token for that package to read.
 		PackageResolver resolver = new PackageResolver();
-		resolve(resolver, "(in-package :rontolisp)");
-		assertThatThrownBy(() -> resolve(resolver, "(car x)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("use CL:CAR");
-	}
-
-	@Test
-	void unqualifiedPackageVarInRontolispIsRejected() {
-		PackageResolver resolver = new PackageResolver();
-		resolve(resolver, "(in-package :rontolisp)");
-		assertThatThrownBy(() -> resolve(resolver, "*package*")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("use CL:*PACKAGE*");
+		resolve(resolver, "(defpackage :dnc (:use))");
+		resolve(resolver, "(defpackage :dsh (:use :cl) (:shadow #:car))");
+		resolve(resolver, "(in-package :dnc)");
+		assertThat(resolver.resolveDatum(LispReader.readFromString("(car '(mine dnc::x))")).print())
+			.isEqualTo("(CAR '(MINE DNC::X))");
+		resolver.resolveDatum(LispReader.readFromString("(in-package :dsh)"));
+		assertThat(resolver.currentPackageName()).isEqualTo("DSH");
+		assertThat(resolver.resolveDatum(LispReader.readFromString("(car x)")).print()).isEqualTo("(CAR X)");
+		assertThat(resolve(resolver, "(car x)")).isEqualTo("(DSH::CAR DSH::X)");
 	}
 
 	@Test
@@ -440,12 +453,12 @@ class PackageResolverTest {
 	}
 
 	@Test
-	void defpackageWithoutUseClauseRequiresQualifiedCl() {
+	void defpackageWithoutUseClauseReachesClOnlyByQualification() {
 		PackageResolver resolver = new PackageResolver();
-		resolve(resolver, "(defpackage :bare (:export :f))");
+		resolve(resolver, "(defpackage :bare (:export :f :second))");
 		resolve(resolver, "(in-package :bare)");
-		assertThatThrownBy(() -> resolve(resolver, "(car x)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("use CL:CAR");
+		assertThat(resolve(resolver, "(car x)")).isEqualTo("(BARE::CAR BARE::X)");
+		assertThat(resolve(resolver, "(second x)")).isEqualTo("(BARE:SECOND BARE::X)");
 		assertThat(resolve(resolver, "(cl:car cl:*package*)")).isEqualTo("(CAR *PACKAGE*)");
 	}
 
@@ -654,14 +667,13 @@ class PackageResolverTest {
 	@Test
 	void aStandardNameInAPackageWithoutClResolvesThroughItsUseList() {
 		// A package that does not use cl inherits a used package's own symbol of a
-		// standard name; only a name nothing provides is the undefined-symbol error.
+		// standard name; a name nothing provides is its own.
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage :lin (:use) (:export :sin))");
 		resolve(resolver, "(defpackage :lu (:use :lin))");
 		resolve(resolver, "(in-package :lu)");
 		assertThat(resolve(resolver, "(sin x)")).isEqualTo("(LIN:SIN LU::X)");
-		assertThatThrownBy(() -> resolve(resolver, "(cos x)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("Undefined symbol: COS");
+		assertThat(resolve(resolver, "(cos x)")).isEqualTo("(LU::COS LU::X)");
 		// An implementation-internal cl name is injected by expansions wherever they run
 		// -- the macro-function table appended under contextl-user, which uses only
 		// cxcl -- so it resolves in every package.
@@ -989,8 +1001,7 @@ class PackageResolverTest {
 		resolve(resolver, "(defpackage :bare (:import-from #:common-lisp #:car #:defun))");
 		resolve(resolver, "(in-package :bare)");
 		assertThat(resolve(resolver, "(car x)")).isEqualTo("(CAR BARE::X)");
-		assertThatThrownBy(() -> resolve(resolver, "(cdr x)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("Undefined symbol: CDR");
+		assertThat(resolve(resolver, "(cdr x)")).isEqualTo("(BARE::CDR BARE::X)");
 	}
 
 	@Test

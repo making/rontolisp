@@ -1564,7 +1564,7 @@ public final class LispEvaluator {
 					&& LispNames.DEFPACKAGE.equals(LispSymbol.memberName(head.name()))) {
 				return registerRuntimeDefpackage(form);
 			}
-			return eval(args.get(0));
+			return evalDatum(args.get(0));
 		}, true));
 		// compile answers the name, or with no name the function, and neither failure
 		// value: nothing here warns.
@@ -7969,6 +7969,17 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Evaluates a form the program holds as data -- what {@code eval} and {@code compile}
+	 * are handed -- rather than source just read: its symbols are symbols already, so the
+	 * current package does not read them again ({@link PackageResolver#resolveDatum}).
+	 * @param datum the form
+	 * @return the result
+	 */
+	private LispVal evalDatum(LispVal datum) {
+		return evalResolved(this.packageResolver.resolveDatum(datum));
+	}
+
+	/**
 	 * Registers an already-resolved top-level
 	 * {@code defvar}/{@code defparameter}/{@code defconstant} into this evaluator WITHOUT
 	 * running its value expression: the expression is parked as a thunk in the global
@@ -13106,7 +13117,7 @@ public final class LispEvaluator {
 			return new LispFunction("compiled-definition", callArgs -> {
 				LispVal result = LispNil.INSTANCE;
 				for (LispVal bodyForm : body) {
-					result = eval(bodyForm);
+					result = evalDatum(bodyForm);
 				}
 				return result;
 			});
@@ -13114,7 +13125,7 @@ public final class LispEvaluator {
 		if (this.compiledTemplateSink != null) {
 			this.compiledTemplateSink.add(CompiledTemplates.registration(lambdaExpression));
 		}
-		return eval(defCons);
+		return evalDatum(defCons);
 	}
 
 	/**
@@ -13813,9 +13824,10 @@ public final class LispEvaluator {
 		// have all declined. The user defuns this fallback could shadow live
 		// under their own qualified keys, which the lookup at the top already missed.
 		// fbound does not take this step: a package's own symbol that only falls back
-		// to an image function is no definition of that symbol.
+		// to an image function is no definition of that symbol. Neither does a name cl
+		// owns: a package's own CAR (one that uses no cl, or shadows it) is not cl's.
 		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
-		if (qualified != null) {
+		if (qualified != null && !PackageRegistry.isClSymbol(qualified.member())) {
 			LispVal bare = this.globalEnv.lookupFunctionOrNull(qualified.member());
 			if (bare != null) {
 				return bare;
