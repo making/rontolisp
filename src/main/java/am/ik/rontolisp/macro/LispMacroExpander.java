@@ -50637,6 +50637,10 @@ public final class LispMacroExpander {
 		if (closRegistry.funcallableClassesSeeded()) {
 			names.add(ClosRegistry.FUNCALLABLE_STANDARD_CLASS_NAME);
 		}
+		// A metaclass once seeded, so the computed make-instance has an arm for it.
+		if (closRegistry.findClass(ClosRegistry.FORWARD_REFERENCED_CLASS_NAME) != null) {
+			names.add(ClosRegistry.FORWARD_REFERENCED_CLASS_NAME);
+		}
 		if (closRegistry.gfProtocol()) {
 			// The metaobjects the generic-function protocol makes
 			// (generic-functions.lisp).
