@@ -22,6 +22,16 @@ so all backends get it for free.
   takes the CLtL2 path too (`holdsComma`).
 - Template symbols are package-resolved against the DEFINING package (backquote quotes them
   before `PackageResolver` runs, [packages.md](packages.md)).
+- The operators the reader writes itself are `cl`'s in any package: the instances in
+  `ReaderSymbols` (`list`, `list*`, `cons`, `append`, `nconc`, `quote`, `function`, `lambda`),
+  which `PackageResolver.resolveSymbolName` leaves alone. Identity decides, so the spelling stays
+  bare for the passes ahead of the resolver and a copy of the symbol is a token again; a `cl:`
+  spelling, which every such pass would see, was not tried. Measured 2026-11-04:
+  every template shape called a shadowing definition, not only a dotted tail (`` `(:a ,x) `` called
+  a shadowing `list`), `#'car` under a shadowed `function` was undefined, and a template in a
+  package using no `cl` failed on the compile paths. Pin: ci-spec
+  `reader-written-operators-ignore-the-package`. concrete-syntax-tree shadows `cons` and `list`,
+  and loads on the interpreter since.
 
 ## `defmacro` per path
 `CL_SPECIAL_FORMS`; cannot redefine a cl symbol; no function value.

@@ -462,7 +462,8 @@ view's read -- whose `LispReader.symbolHome` (`Environment.setReadSymbolHome` ->
 `PackageResolver.readSpelling`, recording like `intern`) homes each symbol TOKEN as it is read.
 Until then a read answered a bare spelling, resolved later in the caller's package: cl-pdf's AFM
 parser (`(read-from-string (format nil "get-afm-~A" ...))`) called `CL-USER::GET-AFM-STRING`.
-Reader-synthesized symbols (`quote`, the backquote operators) and `#.` values are not tokens and
+Reader-synthesized symbols (`quote`, the backquote operators, `ReaderSymbols`,
+[defmacro-backquote.md](defmacro-backquote.md)) and `#.` values are not tokens and
 are not homed; a token qualified by an unknown package keeps its spelling. The compiled
 backends' run-time reader stays package-blind
 (`.kb/symbol-runtime-api.md`, "1-arg `intern`"). Pinned by `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,

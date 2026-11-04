@@ -14287,6 +14287,67 @@ cases:
       (F (QUOTE))
       (F (QUOTE A B))
       (F #'G)
+  # What the reader writes on its own -- a template's list-building calls, the
+  # quote and function of ' and #' -- is cl's, whatever the package reads those
+  # names as. Only the symbols the source spells belong to the package.
+  - name: reader-written-operators-ignore-the-package
+    source: |
+      (defpackage :ci-rw (:use :cl)
+        (:shadow #:cons #:list #:list* #:append #:nconc #:quote #:function))
+      (in-package :ci-rw)
+      (defun cons (a b) (cl:list :mine a b))
+      (defun list (&rest a) (cl:cons :mine a))
+      (defun list* (&rest a) (cl:cons :mine a))
+      (defun append (&rest a) (cl:cons :mine a))
+      (defun nconc (&rest a) (cl:cons :mine a))
+      (defun ci-rw-dotted (x) `(:a ,x . :b))
+      (defun ci-rw-proper (x) `(:a ,x))
+      (defun ci-rw-spliced (x) `(:a ,@x :c))
+      (defun ci-rw-spliced-tail (x y) `(:a ,@x . ,y))
+      (defun ci-rw-quoted-splice (x) `(:a ',@x))
+      (defun ci-rw-spelled (x) `(list ,x))
+      (print (ci-rw-dotted 3))
+      (print (ci-rw-proper 3))
+      (print (ci-rw-spliced '(3)))
+      (print (ci-rw-spliced-tail '(3) 4))
+      (print (eq (car (second (ci-rw-quoted-splice '(3)))) 'cl:quote))
+      (print (eq (car (ci-rw-spelled 3)) 'list))
+      (print (list 3 4))
+      (defmacro ci-rw-mac (x) `(cl:quote (:a ,x . :b)))
+      (print (ci-rw-mac 3))
+      (defmacro ci-rw-def (name) `(defun ,name (x) `(:a ,x . :b)))
+      (ci-rw-def ci-rw-generated)
+      (print (ci-rw-generated 3))
+      (defmacro ci-rw-call (f x) `(funcall #',f ,x))
+      (print (ci-rw-call car '(1 2)))
+      (print (funcall #'car '(1 2)))
+      (print (mapcar #'(lambda (x) (* x x)) '(2 3)))
+      (print 'x)
+      (in-package :cl-user)
+      (defpackage :ci-rw-bare (:use))
+      (in-package :ci-rw-bare)
+      (cl:defun ci-rw-bare-template (x) `(:a ,x . :b))
+      (cl:print (ci-rw-bare-template 3))
+      (cl:defmacro ci-rw-bare-def (name) `(cl:defun ,name (x) `(:a ,x . :b)))
+      (ci-rw-bare-def ci-rw-bare-generated)
+      (cl:print (ci-rw-bare-generated 3))
+      (cl:in-package :cl-user)
+    expected: |
+      (:A 3 . :B)
+      (:A 3)
+      (:A 3 :C)
+      (:A 3 . 4)
+      T
+      T
+      (:MINE 3 4)
+      (:A 3 . :B)
+      (:A 3 . :B)
+      1
+      1
+      (4 9)
+      X
+      (:A 3 . :B)
+      (:A 3 . :B)
   # Nested backquote (once-only): three levels of read-time backquote, expanded
   # entirely by the reader. Prints only integers, so gensym names never surface
   # (the expansion-time gensym runs after every counter-printing case above).

@@ -1,0 +1,46 @@
+package am.ik.rontolisp;
+
+/**
+ * The {@code cl} symbols the reader writes on its own account: a backquote template's
+ * list-building calls, the {@code quote} of {@code 'x}, the {@code function} of
+ * {@code #'x}. The source spells none of them, so no package's view of those names
+ * applies -- CL's reader builds them from the symbols themselves, and {@code `(a . b)}
+ * under a package shadowing {@code cons} still calls {@code cl:cons}.
+ * <p>
+ * Forms keep their bare spelling ({@code LIST}) through every pass ahead of the resolver,
+ * which matches on it; what tells one of these from a token of the same name is identity,
+ * and {@link PackageResolver} leaves these instances alone. A copy of the symbol is a
+ * token again, resolved in the current package.
+ */
+public final class ReaderSymbols {
+
+	public static final LispSymbol QUOTE = new LispSymbol(LispNames.QUOTE);
+
+	public static final LispSymbol FUNCTION = new LispSymbol(LispNames.FUNCTION);
+
+	public static final LispSymbol LAMBDA = new LispSymbol(LispNames.LAMBDA);
+
+	public static final LispSymbol LIST = new LispSymbol(LispNames.LIST);
+
+	public static final LispSymbol LIST_STAR = new LispSymbol(LispNames.LIST_STAR);
+
+	public static final LispSymbol CONS = new LispSymbol(LispNames.CONS);
+
+	public static final LispSymbol APPEND = new LispSymbol(LispNames.APPEND);
+
+	public static final LispSymbol NCONC = new LispSymbol(LispNames.NCONC);
+
+	private ReaderSymbols() {
+	}
+
+	/**
+	 * Returns whether the symbol is one the reader wrote rather than a token it read.
+	 * @param symbol the symbol
+	 * @return {@code true} for one of this class's instances
+	 */
+	static boolean contains(LispSymbol symbol) {
+		return symbol == QUOTE || symbol == FUNCTION || symbol == LIST || symbol == CONS || symbol == APPEND
+				|| symbol == LIST_STAR || symbol == NCONC || symbol == LAMBDA;
+	}
+
+}
