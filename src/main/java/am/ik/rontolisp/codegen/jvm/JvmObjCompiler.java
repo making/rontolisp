@@ -169,7 +169,7 @@ final class JvmObjCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		if (failure == null) {
 			ctx.body.checkcast(ctx.objectArrayClass);
-			emitCellIndex(ctx, literalIndex(args.get(2)));
+			emitCellIndex(ctx, className, args.get(2));
 			ctx.body.aaload();
 			return;
 		}
@@ -188,6 +188,17 @@ final class JvmObjCompiler {
 	 * back from the array's end ({@link am.ik.rontolisp.LispLayout#TAIL_CELL}). Leaves
 	 * {@code [array, index]}.
 	 */
+	private static void emitCellIndex(JvmLispCompiler.Ctx ctx, String className, LispVal k) {
+		if (k instanceof LispInteger) {
+			emitCellIndex(ctx, literalIndex(k));
+			return;
+		}
+		// A computed index (standard-instance-access) counts from the front only.
+		JvmExprCompiler.compileExpr(k, ctx, className);
+		JvmEmitHelper.unboxLong(ctx);
+		ctx.body.l2i().iconst_1().iadd();
+	}
+
 	private static void emitCellIndex(JvmLispCompiler.Ctx ctx, int k) {
 		if (k >= 0) {
 			JvmEmitHelper.emitIntConst(ctx, 1 + k);
@@ -286,7 +297,7 @@ final class JvmObjCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		ctx.body.checkcast(ctx.objectArrayClass);
-		emitCellIndex(ctx, literalIndex(args.get(2)));
+		emitCellIndex(ctx, className, args.get(2));
 		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
 		// [arr, idx, v] -> [v, arr, idx, v]: keeps left-to-right evaluation without a
 		// temp, so the object is evaluated before the value as in the interpreter.

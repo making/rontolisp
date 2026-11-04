@@ -333,6 +333,13 @@ Traps:
   (`SourceLanguage.read`): the passes loop down the cdr and would never finish on one
   ([interpreter-stack.md](interpreter-stack.md), "Depth is NESTING"). `read` at run time
   still returns it.
+- **In a backquote template a labelled datum is template** (2026-11-05, McCLIM's
+  `` `(letf ((#1=(cursor-visibility ,cursor) #1#) ...)) ``): `readRawTemplate` reads it (`readRawLabel`)
+  and sends the template down the CLtL2 path, each use of the label expanding the same raw datum.
+  Before, the label's datum went to `readExpr`: a comma in it was `Comma is illegal outside of
+  backquote`, and without one the single-level path left the datum unquoted, a form to evaluate. A
+  template holding itself has no expansion and is a read error. A template referencing a label
+  still open OUTSIDE it reads the placeholder (residual). ci-spec `backquote-quoted-splice`.
 
 ## Tests
 ci-spec `reader-block-comments`, `reader-feature-conditionals`, `reader-per-backend-features`

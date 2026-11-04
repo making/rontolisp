@@ -931,7 +931,8 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   writers (6, 2026-10-30), allocation (7, 2026-11-01: `:class`, or nil, which
   `closer-mop:slot-definition-allocation` answers as `:instance`; a materialized plain view
   carries `:class` for a `SlotSpec.sharedCellVar` slot -- the compile paths' meta-table row as
-  an optional sixth element, so a table without class slots keeps its size).
+  an optional sixth element, so a table without class slots keeps its size), `%location` (8,
+  2026-11-05, spelled apart from a user slot-definition class's own slots: "Slot locations").
 - **Slot-definition classes** (seeded with the MOP trio): `slot-definition` declares every
   slot; `direct-slot-definition` / `effective-slot-definition` are slot-less children and the
   two `standard-*` classes slot-less grandchildren, so the layout is unchanged. Slot-less too,
@@ -965,6 +966,38 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   one arm per registered class, chunked into `%ALLOC-INST-<n>`, plus the public defun over an
   `or`-chain. It does NOT seed the MOP classes; built-in and struct classes signal.
 - `closer-common-lisp` is a resolver-level flat re-export (`.kb/packages.md`).
+
+### Slot locations and methods on `allocate-instance` (McCLIM's dynamic slots)
+Since 2026-11-05 on all four backends. McCLIM's `class-with-dynamic-slots` keeps a dynamic variable
+in each slot's storage, reached past its own `slot-value-using-class`, and pins the shape.
+- **`slot-definition-location`** answers the effective definition's `%location`, the index
+  `%obj-ref` takes: a plain view's is its row's position (`classMetaobject`, the struct half,
+  `(length %fc_slots)` in the materializer), a driver-built one's is written by
+  `finalize-inheritance`, over `compute-slots`' answer in layout order. A class-allocated slot and
+  a direct definition answer nil. `compute-slots` no longer reuses an inherited definition whose
+  location differs here, the second superclass's slot under multiple inheritance: it computes a
+  new one (AMOP makes one per class anyway; one definition held the first class's index). Residual:
+  a superclass added at run time (contextl's partial classes) changes `compute-slots`' order and
+  not the static layout, so the location stops matching the storage.
+- **`standard-instance-access`** is `%obj-ref` with a computed index (`.kb/instance-syntax.md`),
+  behind `%instance-location`: AMOP leaves a bad argument undefined, and without the check a
+  non-instance traps on WASM. The check comes ahead of `%obj-ref`, whose object is cast first. An
+  index past the slots stays unchecked (the interpreter signals, the JVM `ArrayIndexOutOfBounds`,
+  WASM traps).
+- **A method on `allocate-instance`**: the interpreter's dispatcher stashes the built-in like any
+  other. The compile paths' generated defun moves to the stash's name
+  (`builtinDefaultMethodName`) when the generic exists, and the dispatcher gets it as fallback,
+  where before the generated defun, appended later, overrode the dispatcher and no method ran.
+- **`make-instance`** (`ClosRegistry.allocatesThroughGeneric`: such a generic exists and the class
+  was defined with a `:metaclass`) calls `(allocate-instance (find-class 'C) initargs...)`, then the
+  chain fill, or `%mop-fill-slots` directly without an initialization generic; `%mop-make-instance`'s
+  arm does the same. Tracking stays in the default method. Census 2026-11-05: of the cached
+  Quicklisp systems, McCLIM's and serapeum's `abstract-standard-class` are the two such methods, both
+  on a user metaclass. Residual: a method on `standard-class` or on an `eql` class is not reached
+  from `make-instance` of a class without a `:metaclass`; `class-prototype` calls the generic (a
+  refusing method refuses it, where SBCL's prototype needs no allocation).
+- Pinned by ci-spec standalone `slot-locations-and-allocate-instance-methods` (SBCL 2.2.9 `sb-mop`
+  agrees).
 
 ### The metaclass protocol (Phase B) and the MOP widening
 A `defclass` carrying `(:metaclass M)` — `M` registered and descending from `standard-class` —

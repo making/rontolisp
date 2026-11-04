@@ -103,8 +103,8 @@ knows nothing about `ClosRegistry`, so reading is split in two:
 | primitive | meaning |
 | --- | --- |
 | `(%obj-new '<tag> v...)` | build an instance of the registered layout; values past its `capacity` are evaluated and dropped, missing ones are nil |
-| `(%obj-ref obj <k>)` | read slot `k` (0-based); a negative `k` counts back from the END of the storage (`LispLayout.TAIL_CELL`, the Gray pushback) |
-| `(%obj-set obj <k> v)` | write slot `k`, returning `v`; negative `k` as for `%obj-ref` |
+| `(%obj-ref obj <k>)` | read slot `k` (0-based); a negative `k` counts back from the END of the storage (`LispLayout.TAIL_CELL`, the Gray pushback). `k` may be a COMPUTED fixnum, which counts from the front only and which the caller checks: closer-mop's `standard-instance-access` is the one user |
+| `(%obj-set obj <k> v)` | write slot `k`, returning `v`; `k` as for `%obj-ref` (object, index, value in that order). The checked forms (a trailing failure) take a literal `k` |
 | `(%obj-is obj '<tag>...)` | t when `obj` is an instance of any of the tags |
 | `(%obj-tag obj)` | the instance tag symbol, nil for a non-instance |
 | `(%obj-p obj)` | t for any instance |

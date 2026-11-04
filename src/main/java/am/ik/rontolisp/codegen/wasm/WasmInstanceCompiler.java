@@ -135,14 +135,21 @@ final class WasmInstanceCompiler {
 			return;
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		int index = literalIndex(args.get(2), LispNames.OBJ_REF);
 		if (failure == null) {
 			pushSlots(ctx);
-			pushCellIndex(ctx, index);
+			if (args.get(2) instanceof LispInteger literal) {
+				pushCellIndex(ctx, (int) literal.value());
+			}
+			else {
+				// A computed index (standard-instance-access) counts from the front only.
+				WasmExprCompiler.compileExpr(args.get(2), ctx);
+				WasmEmitHelper.castI31GetS(ctx);
+			}
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 			return;
 		}
+		int index = literalIndex(args.get(2), LispNames.OBJ_REF);
 		emitChecked(ctx, failure, () -> {
 			pushCellIndex(ctx, index);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
@@ -315,17 +322,30 @@ final class WasmInstanceCompiler {
 		}
 		requireGate(ctx, LispNames.OBJ_SET);
 		LispVal failure = checkedFailure(args, 4, ctx);
-		// The object is evaluated before the value, as in the interpreter.
+		// The object is evaluated before the index and the value, as in the interpreter.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int objSlot = ctx.allocTemp();
 		setLocal(ctx, objSlot);
+		boolean computedIndex = !(args.get(2) instanceof LispInteger) && failure == null;
+		int indexSlot = -1;
+		if (computedIndex) {
+			WasmExprCompiler.compileExpr(args.get(2), ctx);
+			indexSlot = ctx.allocTemp();
+			setLocal(ctx, indexSlot);
+		}
 		WasmExprCompiler.compileExpr(args.get(3), ctx);
 		int valSlot = ctx.allocTemp();
 		setLocal(ctx, valSlot);
 		getLocal(ctx, objSlot);
-		int index = literalIndex(args.get(2), LispNames.OBJ_SET);
+		int computedSlot = indexSlot;
 		Runnable store = () -> {
-			pushCellIndex(ctx, index);
+			if (computedIndex) {
+				getLocal(ctx, computedSlot);
+				WasmEmitHelper.castI31GetS(ctx);
+			}
+			else {
+				pushCellIndex(ctx, literalIndex(args.get(2), LispNames.OBJ_SET));
+			}
 			getLocal(ctx, valSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);

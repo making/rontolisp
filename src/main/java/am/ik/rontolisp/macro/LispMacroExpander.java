@@ -22483,25 +22483,32 @@ public final class LispMacroExpander {
 		// the chain fill below, or -- with no initialization generic in the program --
 		// the protocol's own fill right after the unbound allocation.
 		boolean protocolFill = closRegistry.fillsThroughSlotProtocol(info.name());
-		if (init == null && protocolFill) {
+		// A method on allocate-instance (CLHS 7.1) makes the instance of a class defined
+		// with a :metaclass, which the chain fill below then fills.
+		boolean allocateGeneric = closRegistry.allocatesThroughGeneric(info.name());
+		if (init == null && (protocolFill || allocateGeneric)) {
 			String prefix = "__mi" + MV_COUNTER.getAndIncrement();
 			LispSymbol objVar = new LispSymbol(prefix + "_obj");
 			List<LispVal> bindings = new java.util.ArrayList<>();
 			List<LispVal> initargs = new java.util.ArrayList<>();
 			initargs.add(new LispSymbol(LispNames.LIST));
+			List<LispVal> temps = new java.util.ArrayList<>();
 			for (int i = 2; i < parts.size(); i++) {
 				LispSymbol temp = new LispSymbol(prefix + "_a" + (i - 2));
 				bindings.add(listToCons(List.of(temp, parts.get(i))));
 				initargs.add(temp);
+				temps.add(temp);
 			}
 			List<LispVal> unbound = new java.util.ArrayList<>();
 			for (int i = 0; i < info.slots().size(); i++) {
 				unbound.add(unboundMarker());
 			}
-			bindings.add(listToCons(List.of(objVar,
-					tracked(info.name(), objNew(LispLayout.CLASS_TAG_PREFIX + info.name(), unbound), closRegistry))));
+			bindings.add(listToCons(List.of(objVar, allocateGeneric ? allocateInstanceCall(info, temps)
+					: tracked(info.name(), objNew(LispLayout.CLASS_TAG_PREFIX + info.name(), unbound), closRegistry))));
 			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings),
-					mvCall(LispNames.SLOT_PROTOCOL_FILL, objVar, listToCons(initargs), LispTrue.INSTANCE), objVar));
+					mvCall(allocateGeneric ? LispNames.MOP_FILL_SLOTS : LispNames.SLOT_PROTOCOL_FILL, objVar,
+							listToCons(initargs), LispTrue.INSTANCE),
+					objVar));
 		}
 		if (init == null) {
 			List<LispVal> call = new java.util.ArrayList<>();
@@ -22517,7 +22524,8 @@ public final class LispMacroExpander {
 		// initialize-instance :around's munged initargs (mito's :direct-superclasses /
 		// :direct-slots rewrites) take effect. CL's ordering (:before -> fill) holds
 		// natively here, so the refill replay below is skipped.
-		boolean chainFill = closRegistry.isMopProtocolActive() && (isMetaobjectClass(info) || protocolFill);
+		boolean chainFill = closRegistry.isMopProtocolActive()
+				&& (isMetaobjectClass(info) || protocolFill || allocateGeneric);
 		// A user initialize-instance method exists (an :after in practice; make-instance
 		// runs it on the fresh instance with the initargs, like CL). Each initarg
 		// expression is hoisted into a let* temp so the constructor call and the
@@ -22535,20 +22543,21 @@ public final class LispMacroExpander {
 			initCall.add(LispTrue.INSTANCE);
 		}
 		List<LispVal> bindings = new java.util.ArrayList<>();
+		List<LispVal> temps = new java.util.ArrayList<>();
 		for (int i = 2; i < parts.size(); i++) {
 			LispSymbol temp = new LispSymbol(prefix + "_a" + (i - 2));
 			bindings.add(listToCons(List.of(temp, parts.get(i))));
 			ctorCall.add(temp);
 			initCall.add(temp);
+			temps.add(temp);
 		}
 		List<LispVal> unbound = new java.util.ArrayList<>();
 		for (int i = 0; i < info.slots().size(); i++) {
 			unbound.add(unboundMarker());
 		}
-		bindings.add(listToCons(List.of(objVar,
-				chainFill
-						? tracked(info.name(), objNew(LispLayout.CLASS_TAG_PREFIX + info.name(), unbound), closRegistry)
-						: listToCons(ctorCall))));
+		LispVal allocation = !chainFill ? listToCons(ctorCall) : allocateGeneric ? allocateInstanceCall(info, temps)
+				: tracked(info.name(), objNew(LispLayout.CLASS_TAG_PREFIX + info.name(), unbound), closRegistry);
+		bindings.add(listToCons(List.of(objVar, allocation)));
 		List<LispVal> letParts = new java.util.ArrayList<>();
 		letParts.add(new LispSymbol(LispNames.LET_STAR));
 		letParts.add(listToCons(bindings));
@@ -22580,6 +22589,18 @@ public final class LispMacroExpander {
 		}
 		letParts.add(objVar);
 		return listToCons(letParts);
+	}
+
+	/**
+	 * {@code (allocate-instance (find-class 'name) initargs...)}: the generic's default
+	 * method does what a make-instance's own allocation would, tracking included.
+	 */
+	private static LispVal allocateInstanceCall(ClosRegistry.ClassInfo info, List<LispVal> initargs) {
+		List<LispVal> call = new java.util.ArrayList<>();
+		call.add(new LispSymbol(LispNames.ALLOCATE_INSTANCE));
+		call.add(mvCall(LispNames.FIND_CLASS, quoteOf(info.name())));
+		call.addAll(initargs);
+		return listToCons(call);
 	}
 
 	/**
@@ -28109,13 +28130,15 @@ public final class LispMacroExpander {
 	 * the same "a keyword naming a registered package" predicate.
 	 */
 	private static boolean isSupportedTypeSpecializer(String plainName) {
-		return atomicTypePredicate(plainName) != null || switch (plainName) {
-			case "BOOLEAN", "BIT", "UNSIGNED-BYTE", "SIGNED-BYTE", "VECTOR", "SIMPLE-VECTOR", "BIT-VECTOR",
-					"SIMPLE-BIT-VECTOR", "ARRAY", "SIMPLE-ARRAY", "SEQUENCE", "STANDARD-OBJECT", "STRUCTURE-OBJECT",
-					"PATHNAME", "PACKAGE", "STRUCTURE-CLASS", "BUILT-IN-CLASS", "READTABLE" ->
-				true;
-			default -> false;
-		};
+		return atomicTypePredicate(plainName) != null || ClosRegistry.STREAM_CLASS_NAMES.contains(plainName)
+				|| switch (plainName) {
+					case "BOOLEAN", "BIT", "UNSIGNED-BYTE", "SIGNED-BYTE", "VECTOR", "SIMPLE-VECTOR", "BIT-VECTOR",
+							"SIMPLE-BIT-VECTOR", "ARRAY", "SIMPLE-ARRAY", "SEQUENCE", "STANDARD-OBJECT",
+							"STRUCTURE-OBJECT", "PATHNAME", "PACKAGE", "STRUCTURE-CLASS", "BUILT-IN-CLASS",
+							"READTABLE" ->
+						true;
+					default -> false;
+				};
 	}
 
 	/**
@@ -29520,6 +29543,12 @@ public final class LispMacroExpander {
 		for (String name : List.of("DOUBLE-FLOAT", "SINGLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT")) {
 			ranks.put(name, 218);
 		}
+		// The stream subtypes, ahead of the default rank STREAM has.
+		for (String name : ClosRegistry.STREAM_CLASS_NAMES) {
+			if (!"STREAM".equals(name)) {
+				ranks.put(name, 219);
+			}
+		}
 		ranks.put("RATIONAL", 225);
 		ranks.put("SIMPLE-BIT-VECTOR", 226);
 		ranks.put("BIT-VECTOR", 228);
@@ -30253,6 +30282,11 @@ public final class LispMacroExpander {
 			// dispatcher, whose default is the run-time construction.
 			String fallback = (metaclassProtocol || makeInstanceFunction)
 					&& LispNames.MAKE_INSTANCE.equals(plainName(slot.getValue())) ? LispNames.MOP_MAKE_INSTANCE : null;
+			// A method on allocate-instance keeps the system's for every other class: the
+			// generated allocation, under the name of a stashed built-in.
+			if (LispNames.ALLOCATE_INSTANCE.equals(slot.getValue())) {
+				fallback = builtinDefaultMethodName(LispNames.ALLOCATE_INSTANCE);
+			}
 			out.set(slot.getKey(), generateDispatcher(slot.getValue(), closRegistry, fallback, activeNarrower));
 		}
 		MethodGenerations.placeFlags(out, generational);
@@ -50245,12 +50279,14 @@ public final class LispMacroExpander {
 		// The 6th slot (initfunction, appended 2026-08-03) stays nil on materialized
 		// plain views: the table is quoted data and cannot carry a live thunk; only
 		// driver-built definitions fill it. The 7th (writers) is nil on an effective
-		// slot; the 8th is the allocation (appended 2026-11-01).
+		// slot; the 8th is the allocation (appended 2026-11-01); the 9th the slot's index
+		// in an instance, which is how many rows came before it.
 		LispVal slotBuild = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
 				listToCons(List.of(slotDef, slotData, LispNil.INSTANCE)),
 				listToCons(List.of(new LispSymbol(LispNames.SETQ), slots, mvCall(LispNames.CONS,
 						objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
-								List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, LispNil.INSTANCE, s5)),
+								List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, LispNil.INSTANCE, s5,
+										mvCall(LispNames.LENGTH, slots))),
 						slots)))));
 		// The direct slots: each table element is (writers . data), the data either a
 		// full row or (name) naming the effective row it equals (see the table
@@ -50264,7 +50300,7 @@ public final class LispMacroExpander {
 				mvCall(LispNames.ASSOC, mvCall(LispNames.CAR, mvCall(LispNames.CDR, directDef)), slotData));
 		// The row binds the same %fc_s variable, so s0..s4 read it.
 		LispVal directInstance = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME,
-				List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, mvCall(LispNames.CAR, directDef), s5));
+				List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE, mvCall(LispNames.CAR, directDef), s5, LispNil.INSTANCE));
 		LispVal pushDirect = listToCons(List.of(new LispSymbol(LispNames.SETQ), directSlots,
 				mvCall(LispNames.CONS, directInstance, directSlots)));
 		LispVal directBuild = listToCons(
@@ -50406,12 +50442,14 @@ public final class LispMacroExpander {
 		LispVal body = makeLet(name.name(), designator,
 				makeLet(result.name(), chain, makeIf(result, result, listToCons(List.of(new LispSymbol(LispNames.ERROR),
 						new LispString(LispNames.ALLOCATE_INSTANCE + ": not an allocatable class: ~A"), name)))));
+		String publicName = closRegistry.findGeneric(LispNames.ALLOCATE_INSTANCE) != null
+				? builtinDefaultMethodName(LispNames.ALLOCATE_INSTANCE) : LispNames.ALLOCATE_INSTANCE;
 		if (closRegistry.dynamicClasses()) {
 			// A class made at run time has no arm (no tag): its instance is a
 			// dynamic object carrying the class (dynamic-classes.lisp).
 			body = makeIf(mvCall("%DYNAMIC-CLASS-P", cls), mvCall("%DYNAMIC-ALLOCATE", cls), body);
 		}
-		defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.ALLOCATE_INSTANCE),
+		defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(publicName),
 				listToCons(List.of(cls, new LispSymbol(LispNames.LAMBDA_REST), initargs)), body)));
 		return defuns;
 	}
@@ -50672,9 +50710,9 @@ public final class LispMacroExpander {
 			// UNBOUND and the initialization generic -- whose system shared-initialize
 			// primary performs the fill -- runs on it like on any other construction.
 			// CL's ordering holds natively there, so the refill replay is skipped.
-			boolean chainFill = closRegistry.isMopProtocolActive()
-					&& (isMetaobjectClass(info) || closRegistry.fillsThroughSlotProtocol(info.name()))
-					&& initCallOnObj != null;
+			boolean allocateGeneric = closRegistry.allocatesThroughGeneric(info.name());
+			boolean chainFill = closRegistry.isMopProtocolActive() && (isMetaobjectClass(info)
+					|| closRegistry.fillsThroughSlotProtocol(info.name()) || allocateGeneric) && initCallOnObj != null;
 			LispVal refillForms = !chainFill && info.ancestors().stream().anyMatch(refillTargets::contains)
 					? initRefillFormsFor(info, obj, args) : null;
 			if (refillForms != null) {
@@ -50684,7 +50722,17 @@ public final class LispMacroExpander {
 			String ctor = qn == null ? affixFor("%make-", info.name()) + info.name()
 					: qn.pkg() + "::" + affixFor("%make-", qn.member()) + qn.member();
 			LispVal construct;
-			if (chainFill) {
+			if (allocateGeneric) {
+				// With no initialization generic to fill it, the arm does.
+				LispVal allocated = listToCons(
+						List.of(new LispSymbol(LispNames.APPLY), functionRef(LispNames.ALLOCATE_INSTANCE),
+								mvCall(LispNames.FIND_CLASS, quoteOf(info.name())), args));
+				construct = initCallOnObj != null ? allocated
+						: listToCons(List.of(new LispSymbol(LispNames.LET),
+								listToCons(List.of(listToCons(List.of(obj, allocated)))),
+								mvCall(LispNames.MOP_FILL_SLOTS, obj, args, LispTrue.INSTANCE), obj));
+			}
+			else if (chainFill) {
 				List<LispVal> unbound = new java.util.ArrayList<>();
 				for (int i = 0; i < info.slots().size(); i++) {
 					unbound.add(unboundMarker());

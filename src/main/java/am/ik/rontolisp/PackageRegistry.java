@@ -770,6 +770,9 @@ public final class PackageRegistry {
 			ClosRegistry.SLOT_DEFINITION_NAME, ClosRegistry.DIRECT_SLOT_DEFINITION_NAME,
 			ClosRegistry.EFFECTIVE_SLOT_DEFINITION_NAME, ClosRegistry.STANDARD_SLOT_DEFINITION_NAME,
 			LispNames.SLOT_DEFINITION_WRITERS, LispNames.SLOT_DEFINITION_INITFORM, LispNames.SLOT_DEFINITION_ALLOCATION,
+			// Direct slot storage (McCLIM's dynamic slots).
+			LispNames.SLOT_DEFINITION_LOCATION, LispNames.STANDARD_INSTANCE_ACCESS,
+			LispNames.FUNCALLABLE_STANDARD_INSTANCE_ACCESS,
 			// Funcallable instances (djula's compiled templates): the metaclass, the
 			// class its instances descend from, and the installer.
 			ClosRegistry.FUNCALLABLE_STANDARD_CLASS, ClosRegistry.FUNCALLABLE_STANDARD_OBJECT,
@@ -787,6 +790,8 @@ public final class PackageRegistry {
 			"METHOD-LAMBDA-LIST", "METHOD-FUNCTION", "METHOD-GENERIC-FUNCTION", "ENSURE-METHOD",
 			// contextl's class utilities.
 			"SUBCLASSP", "CLASS-PROTOTYPE", "REQUIRED-ARGS", "CLASS-PRECEDENCE-LIST", "COMPUTE-CLASS-PRECEDENCE-LIST",
+			// McCLIM's define-protocol-class walks a specialized lambda list.
+			"EXTRACT-SPECIALIZER-NAMES", "EXTRACT-LAMBDA-LIST",
 			// The slot-access protocol (macro/slot-protocol.lisp): contextl's special
 			// slots are methods on these.
 			"SLOT-VALUE-USING-CLASS", "SLOT-BOUNDP-USING-CLASS", "SLOT-MAKUNBOUND-USING-CLASS");

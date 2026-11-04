@@ -83,6 +83,48 @@
   (let ((allocation (if (%obj-p slot) (slot-value slot 'allocation) nil)))
     (if allocation allocation :instance)))
 
+;; Where an instance slot lives, for standard-instance-access (AMOP): the slot's
+;; index in the instance, which a slot definition holds once its class has it among
+;; its effective slots. A class-allocated slot and a direct definition have none.
+(defun closer-mop:slot-definition-location (slot)
+  (if (and (%obj-p slot) (null (slot-value slot 'allocation)))
+      (slot-value slot '%location)
+      nil))
+
+(defun closer-mop::%instance-location (instance location)
+  ;; AMOP leaves a bad argument undefined: a type-error on every backend, ahead of
+  ;; what %obj-ref does with it on each. An index past the slots is not checked.
+  (if (%obj-p instance)
+      (if (and (integerp location) (>= location 0))
+          location
+          (error 'type-error
+                 :datum location
+                 :expected-type 'unsigned-byte
+                 :format-control
+                 "STANDARD-INSTANCE-ACCESS: The value ~S is not a slot location"
+                 :format-arguments (list location)))
+      (error 'type-error
+             :datum instance
+             :expected-type 'standard-object
+             :format-control
+             "STANDARD-INSTANCE-ACCESS: The value ~S is not an instance"
+             :format-arguments (list instance))))
+
+(defun closer-mop:standard-instance-access (instance location)
+  (let ((index (closer-mop::%instance-location instance location)))
+    (%obj-ref instance index)))
+
+(defun (setf closer-mop:standard-instance-access) (new-value instance location)
+  (let ((index (closer-mop::%instance-location instance location)))
+    (%obj-set instance index new-value)))
+
+(defun closer-mop:funcallable-standard-instance-access (instance location)
+  (closer-mop:standard-instance-access instance location))
+
+(defun (setf closer-mop:funcallable-standard-instance-access)
+    (new-value instance location)
+  (setf (closer-mop:standard-instance-access instance location) new-value))
+
 (defun closer-mop:slot-definition-initform (slot)
   (if (%obj-p slot) (slot-value slot 'initform) nil))
 
@@ -129,6 +171,18 @@
           (return)
           (setq out (cons (funcall collector arg) out))))
     (reverse out)))
+
+(defun closer-mop:extract-specializer-names (specialized-lambda-list)
+  ;; AMOP: one name per required parameter, t for an unspecialized one.
+  (closer-mop:required-args specialized-lambda-list
+   (lambda (arg) (if (and (consp arg) (cdr arg)) (car (cdr arg)) t))))
+
+(defun closer-mop:extract-lambda-list (specialized-lambda-list)
+  ;; AMOP: the list with its required parameters' specializers removed.
+  (let ((required
+         (closer-mop:required-args specialized-lambda-list
+          (lambda (arg) (if (consp arg) (car arg) arg)))))
+    (append required (nthcdr (length required) specialized-lambda-list))))
 
 (defun closer-mop:set-funcallable-instance-function (instance function)
   ;; The function a funcallable instance calls lives in the cell its layout

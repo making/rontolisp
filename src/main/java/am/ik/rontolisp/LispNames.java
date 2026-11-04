@@ -11003,6 +11003,21 @@ public final class LispNames {
 	public static final String SLOT_DEFINITION_ALLOCATION = "SLOT-DEFINITION-ALLOCATION";
 
 	/**
+	 * {@code closer-mop:slot-definition-location}: an instance slot's index in the
+	 * instance, what {@link #STANDARD_INSTANCE_ACCESS} takes.
+	 */
+	public static final String SLOT_DEFINITION_LOCATION = "SLOT-DEFINITION-LOCATION";
+
+	/** {@code closer-mop:standard-instance-access} and its {@code setf} function. */
+	public static final String STANDARD_INSTANCE_ACCESS = "STANDARD-INSTANCE-ACCESS";
+
+	/**
+	 * {@code closer-mop:funcallable-standard-instance-access} and its {@code setf}
+	 * function.
+	 */
+	public static final String FUNCALLABLE_STANDARD_INSTANCE_ACCESS = "FUNCALLABLE-STANDARD-INSTANCE-ACCESS";
+
+	/**
 	 * {@code closer-mop:set-funcallable-instance-function}: installs the function a
 	 * funcallable instance calls ({@code LispLayout.FUNCALLABLE_CELL}).
 	 */
