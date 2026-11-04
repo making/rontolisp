@@ -2307,7 +2307,8 @@ final class WasmExprCompiler {
 				WasmExprCompiler.compileExpr(packed != null ? packed
 						: LispMacroExpander.expandCoerce(cons, true, ctx.functions.containsKey(LispNames.SEQ_TO_LIST),
 								ctx.functions.containsKey(LispNames.DEFTYPE_ALIAS_RUNTIME), null,
-								ctx.functions.containsKey(LispNames.COMPILE)),
+								ctx.functions.containsKey(LispNames.COMPILE),
+								ctx.functions.containsKey(LispNames.CONCATENATE)),
 						ctx);
 			}
 			case LispNames.MAP_INTO -> compileExpansion(LispMacroExpander.expandMapInto(cons,
@@ -2337,13 +2338,19 @@ final class WasmExprCompiler {
 			case LispNames.FUNCTION -> WasmFunctionFormCompiler.compile(cons, ctx);
 			case LispNames.SYMBOL_FUNCTION -> WasmFunctionFormCompiler.compileSymbolFunction(cons, ctx);
 			case LispNames.MAP -> {
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandMap(cons), ctx);
-				// (map 'string ...) builds a fresh string, so its result carries a
-				// writable identity. (coerce seq 'string) reaches this through the
-				// same form, and a STRING input passes through un-built and so
-				// un-wrapped -- which is exactly what identity wants.
-				if (MutableStringProducers.isMapToString(cons)) {
-					WasmEmitHelper.emitToMutStrCall(ctx);
+				LispVal resolved = ConcatenateForms.resolvedMap(cons, ctx.closRegistry);
+				if (resolved != cons) {
+					WasmExprCompiler.compileExpr(resolved, ctx);
+				}
+				else {
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandMap(cons), ctx);
+					// (map 'string ...) builds a fresh string, so its result carries a
+					// writable identity. (coerce seq 'string) reaches this through the
+					// same form, and a STRING input passes through un-built and so
+					// un-wrapped -- which is exactly what identity wants.
+					if (MutableStringProducers.isMapToString(cons)) {
+						WasmEmitHelper.emitToMutStrCall(ctx);
+					}
 				}
 			}
 			case LispNames.MAPCAR -> WasmMapcarCompiler.compile(cons, ctx);

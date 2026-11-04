@@ -129,16 +129,18 @@ public final class FunctionDesignators {
 	 * The program with a top-level {@code (function name)} appended for every
 	 * reference-gated built-in only quoted data names ({@link #dataCalledNames}), and for
 	 * {@code concatenate} when a call computes its result type (the lowering calls the
-	 * wrapper, {@link ConcatenateForms#expand}): the wrapper gates, and every scan
-	 * pairing a runtime with a wrapper body, read that spelling, so these reach the same
-	 * wrapper {@code #'name} does. A {@code car}/{@code cdr} composition needs no runtime
-	 * of its own and gets no reference: its wrapper is injected from
-	 * {@link #dataCalledNames} itself, so a program spelling {@code #'cadr} keeps the
-	 * inline lambda it always had.
+	 * wrapper, {@link ConcatenateForms#expand}) or a conversion can ask for a packed
+	 * vector at run time ({@link ConcatenateForms#convertsToPackedAtRunTime}): the
+	 * wrapper gates, and every scan pairing a runtime with a wrapper body, read that
+	 * spelling, so these reach the same wrapper {@code #'name} does. A
+	 * {@code car}/{@code cdr} composition needs no runtime of its own and gets no
+	 * reference: its wrapper is injected from {@link #dataCalledNames} itself, so a
+	 * program spelling {@code #'cadr} keeps the inline lambda it always had.
 	 */
 	private static List<LispVal> withDataCalledReferences(List<LispVal> program) {
 		Set<String> wanted = new HashSet<>(dataCalledNames(program));
-		if (program.stream().anyMatch(ConcatenateForms::callsWithComputedResultType)) {
+		if (program.stream().anyMatch(ConcatenateForms::callsWithComputedResultType)
+				|| ConcatenateForms.convertsToPackedAtRunTime(program)) {
 			wanted.add(LispNames.CONCATENATE);
 		}
 		if (wanted.isEmpty()) {

@@ -34,7 +34,11 @@ self-consistently, exactly like Common Lisp:
 ```
 
 An escaped name keeps its case and is therefore a *distinct* symbol from the
-upcased one, as in Common Lisp: `|car|` is not `CAR`.
+upcased one, as in Common Lisp: `|car|` is not `CAR`. `prin1` escapes a name the
+same way when a bare token would not read back as it: a lower case letter, the
+empty name, dots alone, or a name that could read as a number -- `(intern "10")`
+prints `|10|`, `(intern "1E5")` prints `|1E5|`, and `1+` stays bare. The digits it
+tests are decimal, whatever `*print-base*` holds.
 
 Built-in keyword parameters match case-insensitively (`:TEST` works where
 `:test` does), and `(intern "TIME")` names the standard `TIME`, so the

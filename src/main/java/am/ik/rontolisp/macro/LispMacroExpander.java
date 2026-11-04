@@ -36060,7 +36060,7 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandCoerce(LispCons cons, boolean arraysExist, boolean helpersPresent) {
-		return expandCoerce(cons, arraysExist, helpersPresent, false, null, false);
+		return expandCoerce(cons, arraysExist, helpersPresent, false, null, false, false);
 	}
 
 	/**
@@ -36082,10 +36082,16 @@ public final class LispMacroExpander {
 	 * interpreter, and on a compile path only when the program carries the
 	 * {@code compile} runtime ({@code CompileRuntime}). It decides whether a COMPUTED
 	 * {@code 'function} coercion of a cons answers {@code (compile nil x)} or signals.
+	 * @param concatenatePresent whether {@code #'concatenate} is callable: always on the
+	 * interpreter, and on a compile path only when a program can ask for a packed vector
+	 * at run time ({@code ConcatenateForms.convertsToPackedAtRunTime}). It decides
+	 * whether a COMPUTED compound vector type reaches that wrapper or builds a general
+	 * vector.
 	 * @return the expanded expression
 	 */
 	public static LispVal expandCoerce(LispCons cons, boolean arraysExist, boolean helpersPresent,
-			boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry, boolean compilePresent) {
+			boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry, boolean compilePresent,
+			boolean concatenatePresent) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			throw new UnsupportedOperationException("coerce expects a value and a result type");
@@ -36163,7 +36169,7 @@ public final class LispMacroExpander {
 		}
 		if (type == null && !(parts.get(2) instanceof LispString)) {
 			return expandComputedCoerce(parts.get(1), parts.get(2), arraysExist, helpersPresent, aliasResolverPresent,
-					closRegistry, compilePresent);
+					closRegistry, compilePresent, concatenatePresent);
 		}
 		if (helpersPresent) {
 			// The trio member is a one-argument function, so the call IS the one-shot
@@ -36273,7 +36279,7 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal expandComputedCoerce(LispVal valueForm, LispVal typeForm, boolean arraysExist,
 			boolean helpersPresent, boolean aliasResolverPresent, @Nullable ClosRegistry closRegistry,
-			boolean compilePresent) {
+			boolean compilePresent, boolean concatenatePresent) {
 		LispSymbol x = new LispSymbol("__coerce_x");
 		LispSymbol spec = new LispSymbol("__coerce_spec");
 		LispSymbol t = new LispSymbol("__coerce_t");
@@ -36292,8 +36298,20 @@ public final class LispMacroExpander {
 		// 'function arm does; anything else falls through to the identity/typep tail.
 		LispVal functionArm = makeIf(memberOfTypeNames(t, "FUNCTION"), coerceTempToFunction(x, compilePresent),
 				identity);
-		LispVal toVector = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_VECTOR), x))
+		LispVal toGeneralVector = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_VECTOR), x))
 				: coerceToVectorBody(x, true);
+		// A compound spec carries an element type only the value can tell: the
+		// #'concatenate wrapper dispatches over it, packed or general. Where the wrapper
+		// is absent no packed vector can be asked for
+		// (ConcatenateForms.convertsToPackedAtRunTime).
+		LispVal toVector = concatenatePresent
+				? makeIf(callOf(LispNames.CONSP, spec),
+						listToCons(List.of(new LispSymbol(LispNames.FUNCALL),
+								listToCons(List.of(new LispSymbol(LispNames.FUNCTION),
+										new LispSymbol(LispNames.CONCATENATE))),
+								spec, x)),
+						toGeneralVector)
+				: toGeneralVector;
 		LispVal toString = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_STRING), x))
 				: coerceToStringBody(x, arraysExist);
 		LispVal toList = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_LIST), x))
@@ -37708,6 +37726,9 @@ public final class LispMacroExpander {
 					|| LispNames.SEQ_STRING_RESULT.equals(resultType)) {
 				resultType = "STRING";
 			}
+			else if ("CONS".equals(resultType)) {
+				resultType = "LIST";
+			}
 		}
 		boolean nilResult = isNilForm(resultTypeForm);
 		// A bit-vector result builds the stamped array, not the T vector the family
@@ -37724,9 +37745,9 @@ public final class LispMacroExpander {
 				&& quoteCons.car() instanceof LispSymbol quoteSym && LispNames.QUOTE.equals(quoteSym.name())
 				&& quoteCons.cdr() instanceof LispCons datumCons && datumCons.car() instanceof LispCons typeCons
 				&& typeCons.car() instanceof LispSymbol typeHead) {
-			// A compound vector designator -- (simple-array (unsigned-byte 8) (*)),
-			// (vector t), ... -- collapses to the generic vector family: rontolisp
-			// arrays are untyped (cl-postgres's md5 path maps into a byte vector).
+			// A compound vector designator with no packed representation -- (vector t),
+			// (simple-vector 3), ... -- collapses to the generic vector family. A packed
+			// one never gets here: each caller asks ConcatenateForms.resolvedMap first.
 			PackageRegistry.QualifiedName typeQn = PackageRegistry.splitQualified(typeHead.name());
 			String typeMember = typeQn == null ? typeHead.name() : typeQn.member();
 			if ("SIMPLE-ARRAY".equals(typeMember) || "ARRAY".equals(typeMember) || "VECTOR".equals(typeMember)

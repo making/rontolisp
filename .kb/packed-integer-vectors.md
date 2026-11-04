@@ -93,7 +93,7 @@ registry, the `concatenateBuiltin` arrangement); `JvmArrayCompiler.compileMake` 
   `#(...)` is never a `(vector (unsigned-byte 8))` (s-sql's `sql-escape` dispatches on it).
 - `subseq`/`copy-seq` are TYPE-PRESERVING via `%array-alike` (`LispNames.ARRAY_ALIKE`, in
   `CL_INTERNALS`); `replace` mask-stores element-wise, a self-overlapping region read out first
-  (fixed on every backend 2026-09-19, `.todo/872`); `coerce`/`concatenate` pack when the
+  (fixed on every backend 2026-09-19, `.todo/872`); `coerce`/`concatenate`/`map` pack when the
   RESULT TYPE asks ([concatenate-result-families.md](concatenate-result-families.md));
   `reverse`, `remove`, `map 'vector` and printing return GENERAL everywhere, the interpreter's
   `seqResult` deliberately rebuilding general to match the compilers.

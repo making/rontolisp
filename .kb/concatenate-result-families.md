@@ -47,6 +47,22 @@ ANSI requires the result to BE the requested type, so these build the PACKED rep
   it while `(simple-vector SIZE)` carries a SIZE, so reading position 1 unconditionally makes
   `(simple-vector 41)` a specialized request. Unsupported widths stay general vectors.
 
+## `map` and a type known only at run time
+- **`(map 'TYPE ...)`** reads the same `resultSpec`: `ConcatenateForms.resolvedMap`, asked first by the
+  interpreter and both compilers, lowers a packed code to the helper over `(map 'list ...)`, and a `deftype`
+  alias to its family's spelling (`map` refused an alias until 2026-11-05 and answered a general vector for
+  `'(simple-array (unsigned-byte 8) (*))`; on wasm that vector then trapped in a function declaring the
+  type, measured on fast-http's parser). `needsPackedVector` reads `map`'s designator too.
+- **A computed `coerce` or `map` type, `#'coerce`, `#'map`** reach the `#'concatenate` wrapper for a compound
+  spec. Only where the wrapper is in the program: `ConcatenateForms.convertsToPackedAtRunTime` appends the
+  reference for a computed conversion in a program spelling `unsigned-byte`, a packed float or a character
+  type somewhere (`FunctionDesignators.withDataCalledReferences`), and `expandCoerce`'s `concatenatePresent`
+  and `BuiltinFunctionWrappers.generate`'s narrow `mapWrapper(false)` keep the general arm elsewhere. A miss
+  is a general vector, not an error: a type built with no such spelling in the source, `type-of` of a string
+  in a program spelling no `character`. `#'map` of an alias stays general.
+- Pinned by ci-spec `map-and-coerce-build-the-vector-their-result-type-asks-for`, standalone because the
+  concatenated corpus names every builder.
+
 ## Packed FLOAT vector results
 `single-float` / `double-float` / `bfloat16` are members of the same code space, so the same
 designator rule builds a packed float array (`.kb/vec.md`) -- landed 2026-09-06 (`.todo/707`);

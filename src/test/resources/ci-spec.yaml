@@ -33217,6 +33217,90 @@ cases:
       17
       (FF 10)
       (255 10)
+  - name: prin1-escapes-a-name-that-reads-as-no-symbol
+    source: |
+      ;; CLHS 22.1.3.3.1: a symbol whose name a bare token could read as a number (2.3.1.1's
+      ;; potential number), or a token of dots alone, prints escaped; every other name bare.
+      (defpackage :pns-p (:use) (:export "10"))
+      (defun pns-show (name)
+        (format t "~s ~s ~s~%" (make-symbol name) (intern name) (intern name :keyword)))
+      (dolist (name '("10" "-10" "+10" "1.5" "1/2" "1E5" "1+" "+" "-" "1-" ".5" "10." "1A" "1AB" "+1A" "A/B" "/1" "1/2/3" "1+2"
+                      "..." "." ".." ".A" "F" "FF" "1_2" "1^2" "^" "_" "^1" "_1" "-.5" "1.2.3" "1E" "E1" "1E+5" "A1" "+." "-A"
+                      "-1A" "--1" "1--" "1.+" "%1" "1%"))
+        (pns-show name))
+      ;; The empty name, nothing to scan.
+      (format t "~s ~s~%" (make-symbol "") (intern "" :keyword))
+      ;; A case conversion leaves the escaped spelling alone, and princ never escapes.
+      (print (let ((*print-case* :downcase))
+               (prin1-to-string (list (intern "10") (intern "AB") (intern "1E5") (intern "Foo") (intern "A B") (intern "X" :pns-p)
+                                      (intern "1E5" :pns-p) (intern "Y" :keyword) (intern "1E5" :keyword)))))
+      (print (let ((*print-case* :capitalize))
+               (prin1-to-string (list (intern "AB") (intern "A B") (intern "1E5") (intern "1E5" :pns-p)))))
+      (print (let ((*print-case* :capitalize)) (prin1-to-string (intern "10"))))
+      (print (list (princ-to-string (intern "10")) (format nil "~a ~s" (intern "10") (intern "10"))
+                   (write-to-string (intern "10")) (write-to-string (intern "10") :escape nil)))
+      ;; Inside a qualifier and a container.
+      (print (list (intern "20" :pns-p) (find-symbol "10" :pns-p)))
+      (defstruct pns-box v)
+      (print (make-pns-box :v (intern "10")))
+      (print (vector (intern "10")))
+      (print (cons (intern "10") (intern "1.5")))
+    expected: |
+      #:|10| |10| :|10|
+      #:|-10| |-10| :|-10|
+      #:|+10| |+10| :|+10|
+      #:|1.5| |1.5| :|1.5|
+      #:|1/2| |1/2| :|1/2|
+      #:|1E5| |1E5| :|1E5|
+      #:1+ 1+ :1+
+      #:+ + :+
+      #:- - :-
+      #:1- 1- :1-
+      #:|.5| |.5| :|.5|
+      #:|10.| |10.| :|10.|
+      #:|1A| |1A| :|1A|
+      #:1AB 1AB :1AB
+      #:|+1A| |+1A| :|+1A|
+      #:A/B A/B :A/B
+      #:/1 /1 :/1
+      #:|1/2/3| |1/2/3| :|1/2/3|
+      #:|1+2| |1+2| :|1+2|
+      #:|...| |...| :|...|
+      #:|.| |.| :|.|
+      #:|..| |..| :|..|
+      #:.A .A :.A
+      #:F F :F
+      #:FF FF :FF
+      #:|1_2| |1_2| :|1_2|
+      #:|1^2| |1^2| :|1^2|
+      #:^ ^ :^
+      #:_ _ :_
+      #:|^1| |^1| :|^1|
+      #:|_1| |_1| :|_1|
+      #:|-.5| |-.5| :|-.5|
+      #:|1.2.3| |1.2.3| :|1.2.3|
+      #:|1E| |1E| :|1E|
+      #:E1 E1 :E1
+      #:|1E+5| |1E+5| :|1E+5|
+      #:A1 A1 :A1
+      #:+. +. :+.
+      #:-A -A :-A
+      #:|-1A| |-1A| :|-1A|
+      #:|--1| |--1| :|--1|
+      #:1-- 1-- :1--
+      #:1.+ 1.+ :1.+
+      #:%1 %1 :%1
+      #:1% 1% :1%
+      #:|| :||
+      "(|10| ab |1E5| |Foo| |A B| pns-p::x pns-p::|1E5| :y :|1E5|)"
+      "(Ab |A B| |1E5| Pns-P::|1E5|)"
+      "|10|"
+      ("10" "10 |10|" "|10|" "10")
+      (PNS-P::|20| PNS-P:|10|)
+      #S(PNS-BOX :V |10|)
+      #(|10|)
+      (|10| . |1.5|)
+      
 standalone:
   - name: pprint-logical-block-of-an-atom-in-a-program-not-naming-write
     source: |
@@ -33233,6 +33317,78 @@ standalone:
       1
       "a"
       in
+  - name: map-and-coerce-build-the-vector-their-result-type-asks-for
+    source: |
+      ;; Standalone: the concatenated corpus names #'concatenate and every packed builder
+      ;; elsewhere, which hides the gates this pins.
+      (deftype mp-octets () '(simple-array (unsigned-byte 8) (*)))
+      (deftype mp-general () 'vector)
+      (deftype mp-pair () 'list)
+      (deftype mp-text () 'string)
+      (defun mp-line (v) (format t "~S~%" v))
+      (defun mp-show (v) (mp-line (list v (array-element-type v))))
+      ;; a literal result type
+      (mp-show (map '(simple-array (unsigned-byte 8) (*)) #'char-code "abc"))
+      (mp-show (map '(vector (unsigned-byte 16)) #'+ '(1 2 3) #(10 20)))
+      (mp-show (map '(vector single-float) #'identity '(1.5)))
+      (mp-show (map '(vector character) #'char-upcase "ab"))
+      (mp-show (map '(vector t) #'1+ '(1)))
+      (mp-show (map '(vector bit) #'identity '(1 0)))
+      (mp-show (map '(simple-vector 2) #'1+ '(1 2)))
+      ;; a deftype alias
+      (mp-show (map 'mp-octets #'char-code "xy"))
+      (mp-show (map 'mp-general #'1+ '(1)))
+      (mp-line (map 'mp-pair #'1+ #(1)))
+      (mp-line (map 'mp-text #'char-upcase "t"))
+      (mp-line (map 'cons #'1+ '(1)))
+      (mp-line (typep (map 'mp-octets #'1+ '(1)) 'mp-octets))
+      ;; a result type computed at run time
+      (let ((ty '(vector (unsigned-byte 16))))
+        (mp-show (coerce '(1 2) ty))
+        (mp-show (map ty #'1+ '(1))))
+      (let ((ty 'mp-octets))
+        (mp-show (coerce '(1 2) ty))
+        (mp-show (map ty #'1+ '(1))))
+      (let ((v (make-array 2 :element-type '(unsigned-byte 8) :initial-element 5)))
+        (mp-show (map (type-of v) #'1+ v))
+        (mp-show (coerce '(1 2) (type-of v))))
+      (let ((ty '(vector t)))
+        (mp-show (coerce '(1 2) ty))
+        (mp-show (map ty #'1+ '(1))))
+      (let ((ty '(vector character)))
+        (mp-show (coerce '(#\a) ty)))
+      ;; the operator as a value
+      (mp-show (funcall #'map '(vector (unsigned-byte 8)) #'1+ '(1)))
+      (mp-show (funcall #'coerce '(1) '(vector (unsigned-byte 8))))
+      (mp-show (apply #'map '(vector character) #'char-upcase '("a")))
+      (mp-show (funcall #'map 'vector #'1+ '(1)))
+    stdout: |
+      (#(97 98 99) (UNSIGNED-BYTE 8))
+      (#(11 22) (UNSIGNED-BYTE 16))
+      (#f(1.5) SINGLE-FLOAT)
+      ("AB" CHARACTER)
+      (#(2) T)
+      (#*10 BIT)
+      (#(2 3) T)
+      (#(120 121) (UNSIGNED-BYTE 8))
+      (#(2) T)
+      (2)
+      "T"
+      (2)
+      T
+      (#(1 2) (UNSIGNED-BYTE 16))
+      (#(2) (UNSIGNED-BYTE 16))
+      (#(1 2) (UNSIGNED-BYTE 8))
+      (#(2) (UNSIGNED-BYTE 8))
+      (#(6 6) (UNSIGNED-BYTE 8))
+      (#(1 2) (UNSIGNED-BYTE 8))
+      (#(1 2) T)
+      (#(2) T)
+      ("a" CHARACTER)
+      (#(2) (UNSIGNED-BYTE 8))
+      (#(1) (UNSIGNED-BYTE 8))
+      ("A" CHARACTER)
+      (#(2) T)
   - name: uncaught-defmethod-lambda-list-refusal
     source: |
       ;; A handler-case anywhere puts the wasm module in EH mode, where an uncaught

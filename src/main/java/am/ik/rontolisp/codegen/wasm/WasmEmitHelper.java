@@ -1216,7 +1216,7 @@ final class WasmEmitHelper {
 	/**
 	 * Emits {@code call FUNC_SYM_ESC_GC}: {@code _print_val}'s bare-symbol arm calls this
 	 * instead of {@link #emitWriteStrGcCall} so a symbol name that is not
-	 * upcase-invariant, or that holds a non-constituent byte, prints
+	 * upcase-invariant, holds a non-constituent byte or would read as no symbol prints
 	 * {@code |...|}-framed. Same {@code (str, from, to, unused)} stack shape as
 	 * {@link #emitWriteStrGcCall}.
 	 */
