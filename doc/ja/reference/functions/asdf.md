@@ -12,6 +12,13 @@
 | `asdf:test-system` | `(asdf:test-system "my-app")` | システムをロードし、`:in-order-to` の test-op 連鎖をたどって、記録された `:perform (test-op ...)` 本体を実行する — `.asd` の標準テストエントリポイント |
 | `asdf:operate` | `(asdf:operate 'asdf:load-op :my-lib)` | システムに operation を perform する: `load-op` は `load-system`、`test-op` は `test-system` と同じ。それ以外の operation はエラーを通知する |
 | `asdf:perform` | `(defmethod asdf:perform :around ((o asdf:load-op) (c asdf:cl-source-file)) ...)` | 総称関数: システムのロードを構成する各動作 (各ファイルとシステムへの `prepare-op`・`compile-op`・`load-op`)。ライブラリのメソッドはコンポーネントのロードごとにその周りで実行される |
+| `asdf:oos` | `(asdf:oos 'asdf:load-op :my-lib)` | `operate` の旧名。`load-systems`、`load-systems*`、`require-system`、`make` もロードの別の書き方 |
+| `asdf:load-asd` | `(asdf:load-asd "vendor/old/my-lib.asd")` | 1 つの `.asd` ファイルの定義をロードする |
+| `asdf:clear-system` | `(asdf:clear-system :my-lib)` | システムを忘れる。次の `find-system` は探索し直す |
+| `asdf:map-systems` | `(asdf:map-systems #'print)` | 登録済みの各システムを引数に関数を呼ぶ。`already-loaded-systems`、`component-loaded-p`、`registered-system` で状態を問い合わせる |
+| `asdf:find-component` | `(asdf:find-component :my-lib "main")` | システムのコンポーネントを名前で探す。なければ nil。`module-components` は `component-children` と同じ |
+| `asdf:system-description` | `(asdf:system-description (asdf:find-system :my-lib))` | `defsystem` の宣言を読む。他の `system-` リーダー、`component-property`、`system-source-file` も同様 |
+| `asdf:*central-registry*` | `(push "vendor/my-lib/" asdf:*central-registry*)` | 探索パスより先に `NAME.asd` を探すディレクトリ |
 | `asdf:find-system` | `(asdf:find-system :my-lib nil)` | システムのメタオブジェクト。名前ごとにメモ化された本物の `asdf:system` CLOS インスタンス (呼び出し間で `eq`)。`error-p` が nil なら未知の名前に nil |
 | `asdf:registered-systems` | `(asdf:registered-systems)` | 登録済みのすべてのシステムの小文字化された名前 (登録順) |
 | `asdf:system-relative-pathname` | `(asdf:system-relative-pathname :my-lib "data/tlds.dat")` | システムのソースディレクトリを基準に解決した名前文字列 (コンパイルパスではリテラルへ畳み込まれる) |
@@ -23,3 +30,7 @@
 | `asdf:component-parent` | `(asdf:component-parent child)` | リーダー: 親コンポーネント — ソースファイルではシステム、システムでは nil |
 | `asdf:component-system` | `(asdf:component-system child)` | コンポーネントが属するシステム (`component-parent` をたどる) |
 
+本物の ASDF 3.3.1 がエクスポートする他の名前も、すべて読み込めてどのバックエンドにも定義があるので、
+それを書いたライブラリはロードできます。クラスはクラスとして、総称関数はメソッドを受け付け、変数は
+`nil` で、関数の呼び出しはその名前を示す `uiop:not-implemented-error` を通知します。バンドルと
+プログラムの operation はクラスで、`asdf:operate` が名前を示して拒否します。

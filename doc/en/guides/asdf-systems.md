@@ -67,10 +67,11 @@ the compile-time `load` include, so the JVM and WASM compilers see every
 
 `asdf:load-system` looks for `NAME.asd` in, in order:
 
-1. the directory of the file doing the `load-system` (like `load`),
-2. the directories given with `--system-path` (several can be joined with the
+1. the directories on [`asdf:*central-registry*`](../reference/functions/asdf-central-registry.md),
+2. the directory of the file doing the `load-system` (like `load`),
+3. the directories given with `--system-path` (several can be joined with the
    platform path separator, like `PATH`),
-3. the directories in the `RONTOLISP_SOURCE_REGISTRY` environment variable
+4. the directories in the `RONTOLISP_SOURCE_REGISTRY` environment variable
    (same format).
 
 A dependency system's `.asd` is searched starting from the depending system's
@@ -155,7 +156,7 @@ library still has to stay inside the supported subset below.
 - A `.asd` file **runs as Lisp**, form at a time, in the `asdf-user` package
   (which uses `cl`, `asdf` and `uiop`): a conditional `defpackage`, a `warn`, a
   `find-system` probe (it answers the systems registered so far and the
-  built-in ones; it does not search for a `.asd`), a `defparameter`, a feature
+  built-in ones and searches for a `.asd`, as a load does), a `defparameter`, a feature
   computed and pushed, an `asdf:load-system` of another system — which then
   loads ahead of every system the file defines after the call. On a compile
   path the file runs at compile time in an interpreter of its own, so what
@@ -287,10 +288,24 @@ library still has to stay inside the supported subset below.
   walk the model;
   [`asdf:registered-systems`](../reference/functions/asdf-registered-systems.md)
   lists every registered name, and `asdf:*user-cache*` is external and `nil`
-  (there is no fasl cache), and `asdf:*asdf-version*` is `"3.3.7"`, the
+  (there is no fasl cache), and `asdf:asdf-version` answers `"3.3.7"`, the
   release whose API this subset follows (a `.asd` that loads its own bundled
   ASDF when the version is older, as lisp-binary's does, keeps it unloaded).
   This is the component model rove's system-driven test runner reads.
+- **Every name real ASDF exports is here.** All 230 externals of ASDF 3.3.1, and the
+  members of its `asdf/*` packages, read on every backend, so a file naming one in code
+  that never runs still loads. What programs do is implemented: the
+  [metadata readers](../reference/functions/asdf-system-description.md),
+  [`asdf:oos`](../reference/functions/asdf-oos.md),
+  [`asdf:load-asd`](../reference/functions/asdf-load-asd.md),
+  [`asdf:clear-system`](../reference/functions/asdf-clear-system.md),
+  [`asdf:map-systems`](../reference/functions/asdf-map-systems.md),
+  [`asdf:find-component`](../reference/functions/asdf-find-component.md),
+  `load-source-op`, the slot names and the conditions a load signals
+  (`missing-component`, `missing-dependency`, `load-system-definition-error`). The rest
+  are real ASDF's classes and generics standing empty: calling one signals
+  `uiop:not-implemented-error` naming it, and the source-registry and plan families are
+  among them.
 - **So is the operation protocol.** Every action of a load is an
   [`asdf:perform`](../reference/functions/asdf-perform.md) call on an
   operation instance (`asdf:prepare-op`, `asdf:compile-op`, `asdf:load-op`,

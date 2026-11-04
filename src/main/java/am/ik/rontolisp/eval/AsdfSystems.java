@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 
+import am.ik.rontolisp.AsdfExports;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -119,11 +120,13 @@ public final class AsdfSystems {
 	 * {@link #files} that has one, in what {@code LispEvaluator.callAroundCompile} takes:
 	 * a {@code .asd}'s lambda already a function of the image that loaded the file, and
 	 * its symbols homed in the file's package
+	 * @param metadata what the definition declared and no loader reads
 	 */
 	public record LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
 			List<String> features, @Nullable String packageInferredDir, boolean packageInferredClass,
 			@Nullable TestOp testOp, List<String> testOpEdges, List<String> defsystemDependsOn,
-			@Nullable String version, List<String> weaklyDependsOn, Map<String, LispVal> aroundCompile) {
+			@Nullable String version, List<String> weaklyDependsOn, Map<String, LispVal> aroundCompile,
+			Metadata metadata) {
 
 		/**
 		 * The old-shape constructor: no test-op wiring, package-inferred class iff the
@@ -139,8 +142,24 @@ public final class AsdfSystems {
 		public LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
 				List<String> features, @Nullable String packageInferredDir) {
 			this(name, dependsOn, files, baseDir, features, packageInferredDir, packageInferredDir != null, null,
-					List.of(), List.of(), null, List.of(), Map.of());
+					List.of(), List.of(), null, List.of(), Map.of(), Metadata.NONE);
 		}
+	}
+
+	/**
+	 * What a definition declared for {@code asdf:system-description} and its fellows to
+	 * read back: the {@code .asd} it came from, and each option written as a literal, by
+	 * keyword spelling and in the order written. A {@code #.} marker in these options is
+	 * never evaluated ({@link #IGNORED_OPTIONS}), so such an option is simply absent.
+	 *
+	 * @param sourceFile the path of the defining {@code .asd}, or {@code null} for an
+	 * inline {@code defsystem}
+	 * @param options the recorded option values
+	 */
+	public record Metadata(@Nullable String sourceFile, Map<String, LispVal> options) {
+
+		static final Metadata NONE = new Metadata(null, Map.of());
+
 	}
 
 	/**
@@ -173,8 +192,20 @@ public final class AsdfSystems {
 
 		private static final long serialVersionUID = 1L;
 
-		SystemNotFoundException(String message) {
+		private final String detail;
+
+		SystemNotFoundException(String message, String detail) {
 			super(message);
+			this.detail = detail;
+		}
+
+		/**
+		 * Where the search looked and how to widen it, for a report that names the system
+		 * itself.
+		 * @return the text
+		 */
+		public String detail() {
+			return this.detail;
 		}
 
 	}
@@ -217,17 +248,85 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * If {@code form} is a top-level literal {@code (asdf:test-system NAME)} call,
-	 * returns the system name; otherwise {@code null}. Like
-	 * {@link #loadSystemName(LispVal)}, a non-literal name is a hard error at inline
-	 * time: the compile path must splice the system (and its test-op chain) to have
-	 * anything to run.
+	 * The systems a top-level form that is one more way of saying {@code load-system}
+	 * asks for: {@code (asdf:oos 'asdf:load-op NAME)} and {@code asdf:operate} with
+	 * {@code load-op} or {@code load-source-op}, {@code asdf:load-systems},
+	 * {@code asdf:load-systems*} over a quoted list, and {@code asdf:require-system}. The
+	 * compile path consumes these like {@link #loadSystemName}, with the same rule for a
+	 * name that is not a literal.
+	 * @param form the form to inspect
+	 * @return the literal system names, or {@code null} for any other form
+	 */
+	@Nullable public static List<String> loadSystemsNames(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> items = cons.toList();
+		if (isAsdfMember(op, "OOS") || isAsdfMember(op, LispNames.OPERATE)) {
+			if (items.size() < 3) {
+				return null;
+			}
+			String operation = quotedOperation(items.get(1));
+			if (!LispNames.LOAD_OP.equals(operation) && !"LOAD-SOURCE-OP".equals(operation)) {
+				return null;
+			}
+			return List.of(designator(LispNames.ASDF_LOAD_SYSTEM, items.get(2)));
+		}
+		if (isAsdfMember(op, "REQUIRE-SYSTEM") && items.size() >= 2) {
+			return List.of(designator(LispNames.ASDF_LOAD_SYSTEM, items.get(1)));
+		}
+		if (isAsdfMember(op, "LOAD-SYSTEMS")) {
+			List<String> names = new ArrayList<>();
+			for (LispVal item : items.subList(1, items.size())) {
+				names.add(designator(LispNames.ASDF_LOAD_SYSTEM, item));
+			}
+			return names;
+		}
+		if (isAsdfMember(op, "LOAD-SYSTEMS*") && items.size() >= 2 && items.get(1) instanceof LispCons quoted
+				&& quoted.car() instanceof LispSymbol quote && LispNames.QUOTE.equals(quote.name())
+				&& quoted.cdr() instanceof LispCons datum && datum.car() instanceof LispCons list
+				&& list.isProperList()) {
+			List<String> names = new ArrayList<>();
+			for (LispVal item : list.toList()) {
+				names.add(designator(LispNames.ASDF_LOAD_SYSTEM, item));
+			}
+			return names;
+		}
+		return null;
+	}
+
+	/**
+	 * The member name of a quoted operation designator, {@code 'asdf:load-op} in any
+	 * package spelling of ASDF's; {@code null} for anything else.
+	 */
+	@Nullable private static String quotedOperation(LispVal form) {
+		if (form instanceof LispCons quoted && quoted.car() instanceof LispSymbol quote
+				&& LispNames.QUOTE.equals(quote.name()) && quoted.cdr() instanceof LispCons datum
+				&& datum.car() instanceof LispSymbol operation) {
+			return memberName(operation);
+		}
+		return null;
+	}
+
+	/**
+	 * If {@code form} is a top-level literal {@code (asdf:test-system NAME)} call, or
+	 * {@code asdf:oos}/{@code asdf:operate} with {@code test-op}, returns the system
+	 * name; otherwise {@code null}. Like {@link #loadSystemName(LispVal)}, a non-literal
+	 * name is a hard error at inline time: the compile path must splice the system (and
+	 * its test-op chain) to have anything to run.
 	 * @param form the form to inspect
 	 * @return the literal system name, or {@code null}
 	 */
 	@Nullable public static String testSystemName(LispVal form) {
-		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
-				|| !isAsdfMember(op, LispNames.TEST_SYSTEM)) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)) {
+			return null;
+		}
+		if ((isAsdfMember(op, "OOS") || isAsdfMember(op, LispNames.OPERATE)) && cons.isProperList()) {
+			List<LispVal> items = cons.toList();
+			return items.size() >= 3 && LispNames.TEST_OP.equals(quotedOperation(items.get(1)))
+					? designator(LispNames.ASDF_TEST_SYSTEM, items.get(2)) : null;
+		}
+		if (!isAsdfMember(op, LispNames.TEST_SYSTEM)) {
 			return null;
 		}
 		List<LispVal> items = cons.toList();
@@ -236,6 +335,52 @@ public final class AsdfSystems {
 					LispNames.ASDF_TEST_SYSTEM + " expects exactly one system name: " + form.print());
 		}
 		return designator(LispNames.ASDF_TEST_SYSTEM, items.get(1));
+	}
+
+	/**
+	 * If {@code form} is a top-level literal {@code (asdf:make NAME)}, returns the name:
+	 * the compile path splices the system and keeps the call, which decides at run time
+	 * what the system's {@code :build-operation} asks for.
+	 * @param form the form to inspect
+	 * @return the literal system name, or {@code null}
+	 */
+	@Nullable public static String makeSystemName(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !isAsdfMember(op, "MAKE")) {
+			return null;
+		}
+		List<LispVal> items = cons.toList();
+		return items.size() < 2 ? null : designator(LispNames.ASDF_LOAD_SYSTEM, items.get(1));
+	}
+
+	/**
+	 * If {@code form} is a top-level {@code (asdf:load-asd PATH ...)}, returns the path
+	 * form.
+	 * @param form the form to inspect
+	 * @return the path form, or {@code null}
+	 */
+	@Nullable public static LispVal loadAsdPath(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && isAsdfMember(op, "LOAD-ASD")
+				&& cons.cdr() instanceof LispCons rest ? rest.car() : null;
+	}
+
+	/**
+	 * If {@code form} is a top-level {@code (push DIR asdf:*central-registry*)} or
+	 * {@code (pushnew DIR asdf:*central-registry* ...)}, returns the {@code DIR} form:
+	 * what a compile path can read of the variable.
+	 * @param form the form to inspect
+	 * @return the directory form, or {@code null}
+	 */
+	@Nullable public static LispVal centralRegistryPush(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return null;
+		}
+		String operator = memberName(op);
+		if (!LispNames.PUSH.equals(operator) && !LispNames.PUSHNEW.equals(operator)) {
+			return null;
+		}
+		List<LispVal> items = cons.toList();
+		return items.size() >= 3 && items.get(2) instanceof LispSymbol place
+				&& isAsdfMember(place, "*CENTRAL-REGISTRY*") ? items.get(1) : null;
 	}
 
 	/**
@@ -543,7 +688,8 @@ public final class AsdfSystems {
 		}
 		return new LispSystem(system.name(), system.dependsOn(), system.files(), system.baseDir(), system.features(),
 				system.packageInferredDir(), system.packageInferredClass(), system.testOp(), system.testOpEdges(),
-				List.copyOf(merged), system.version(), system.weaklyDependsOn(), system.aroundCompile());
+				List.copyOf(merged), system.version(), system.weaklyDependsOn(), system.aroundCompile(),
+				system.metadata());
 	}
 
 	/**
@@ -1036,6 +1182,7 @@ public final class AsdfSystems {
 		LispVal aroundCompile = null;
 		TestOp testOp = null;
 		List<String> testOpEdges = new ArrayList<>();
+		Map<String, LispVal> metadata = new java.util.LinkedHashMap<>();
 		for (int i = 2; i < items.size(); i += 2) {
 			if (!(items.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
 				throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name
@@ -1048,14 +1195,19 @@ public final class AsdfSystems {
 			LispVal value = IGNORED_OPTIONS.contains(key.name()) ? items.get(i + 1) : resolveReadEval(asd,
 					LispNames.ASDF_DEFSYSTEM + " " + name + " " + lower(key.name()), items.get(i + 1));
 			switch (key.name()) {
-				// Metadata: accepted for .asd compatibility, not recorded anywhere
-				// (:properties is ASDF's free-form property list, arnesi's feature
-				// names).
-				case ":NAME", ":LONG-NAME", ":DESCRIPTION", ":LONG-DESCRIPTION", ":AUTHOR", ":MAINTAINER", ":LICENSE",
+				case ":NAME" -> {
+				}
+				// Metadata: nothing here loads by it, and asdf:system-description and
+				// its fellows read it back as written (:properties is ASDF's free-form
+				// property list, arnesi's feature names). Nothing is evaluated to find
+				// it, so an option holding a #. marker is absent.
+				case ":LONG-NAME", ":DESCRIPTION", ":LONG-DESCRIPTION", ":AUTHOR", ":MAINTAINER", ":LICENSE",
 						":LICENCE", ":HOMEPAGE", ":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO", ":PROPERTIES",
-						":ENTRY-POINT", ":BUILD-OPERATION", ":BUILD-PATHNAME" ->
-					{
+						":ENTRY-POINT", ":BUILD-OPERATION", ":BUILD-PATHNAME" -> {
+					if (!holdsReadEval(value)) {
+						metadata.put(key.name(), value);
 					}
+				}
 				// The one metadata option something reads back: asdf:component-version.
 				// It stays in IGNORED_OPTIONS -- nothing is evaluated to find the value,
 				// so a plain string literal is recorded and every other spelling (ASDF's
@@ -1145,12 +1297,30 @@ public final class AsdfSystems {
 		List<String> files = components == null ? List.of()
 				: orderComponents(name, components, serial, prefix, new ComponentScope(features, componentClasses,
 						defaultComponentClass, aroundCompile, aroundCompiles, asd));
+		if (!weaklyDependsOn.isEmpty()) {
+			LispVal names = LispNil.INSTANCE;
+			for (int i = weaklyDependsOn.size() - 1; i >= 0; i--) {
+				names = new LispCons(new LispString(weaklyDependsOn.get(i)), names);
+			}
+			metadata.put(":WEAKLY-DEPENDS-ON", names);
+		}
 		// A package-inferred system's own :pathname is where its SUB-SYSTEM names
 		// resolve:
 		// array-operations says :pathname "src/" and then names array-operations/all.
 		return new LispSystem(name, List.copyOf(dependsOn), files, baseDir == null ? "" : baseDir, declaredFeatures,
 				packageInferred ? (pathname == null ? "" : pathname) : null, packageInferred, testOp,
-				List.copyOf(testOpEdges), defsystemDependsOn, version, weaklyDependsOn, Map.copyOf(aroundCompiles));
+				List.copyOf(testOpEdges), defsystemDependsOn, version, weaklyDependsOn, Map.copyOf(aroundCompiles),
+				new Metadata(asd.path(), java.util.Collections.unmodifiableMap(metadata)));
+	}
+
+	/** Whether a metadata value holds a {@code #.} marker, anywhere in it. */
+	private static boolean holdsReadEval(LispVal value) {
+		for (LispVal val = value; val instanceof LispCons cons; val = cons.cdr()) {
+			if (isReadEvalMarker(val) || isUnreadableReadEvalMarker(val) || holdsReadEval(cons.car())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -1340,15 +1510,14 @@ public final class AsdfSystems {
 	 * @return the form with {@code asdf}/{@code uiop} members qualified
 	 */
 	/**
-	 * The {@code asdf} externals a bare symbol in a recorded {@code .asd} form may name:
-	 * the runtime FUNCTIONS (a bare class-name symbol is far more likely a variable, so
-	 * class names are deliberately absent).
+	 * Whether a bare symbol in a recorded {@code .asd} form names an {@code asdf}
+	 * external: the runtime FUNCTIONS (a bare class-name symbol is far more likely a
+	 * variable, so class names are deliberately absent).
 	 */
-	private static final Set<String> ASDF_USER_FUNCTION_MEMBERS = Set.of(LispNames.TEST_SYSTEM, LispNames.LOAD_SYSTEM,
-			LispNames.FIND_SYSTEM, LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.SYSTEM_RELATIVE_PATHNAME,
-			LispNames.COMPONENT_PATHNAME, LispNames.REGISTERED_SYSTEMS, LispNames.COMPONENT_NAME,
-			LispNames.COMPONENT_VERSION, LispNames.COMPONENT_CHILDREN, LispNames.COMPONENT_SIDEWAY_DEPENDENCIES,
-			LispNames.COMPONENT_PARENT, LispNames.COMPONENT_SYSTEM);
+	private static boolean isAsdfUserFunction(String name) {
+		AsdfExports.Entry entry = AsdfExports.externals().get(name);
+		return entry != null && (entry.is("function") || entry.is("generic"));
+	}
 
 	static LispVal normalizeAsdUserForm(LispVal form, Set<String> bound) {
 		if (form instanceof LispSymbol sym) {
@@ -1373,7 +1542,7 @@ public final class AsdfSystems {
 			if (am.ik.rontolisp.UiopExports.homePackage(symName) != null) {
 				return new LispSymbol(am.ik.rontolisp.UiopExports.qualified(symName));
 			}
-			if (ASDF_USER_FUNCTION_MEMBERS.contains(symName)) {
+			if (isAsdfUserFunction(symName)) {
 				return new LispSymbol(PackageRegistry.qualify(LispNames.ASDF_PKG, symName));
 			}
 			return form;
@@ -1519,7 +1688,8 @@ public final class AsdfSystems {
 		}
 		LispSystem resolved = new LispSystem(system.name(), List.copyOf(dependsOn), system.files(), system.baseDir(),
 				system.features(), system.packageInferredDir(), system.packageInferredClass(), system.testOp(),
-				system.testOpEdges(), system.defsystemDependsOn(), system.version(), List.of(), system.aroundCompile());
+				system.testOpEdges(), system.defsystemDependsOn(), system.version(), List.of(), system.aroundCompile(),
+				system.metadata());
 		systems.put(system.name(), resolved);
 		return resolved;
 	}
@@ -1575,8 +1745,30 @@ public final class AsdfSystems {
 				tried.add(path);
 			}
 		}
-		throw new SystemNotFoundException(LispNames.ASDF_LOAD_SYSTEM + ": system '" + name + "' not found (tried: "
-				+ String.join(", ", tried) + "); add its directory to --system-path or RONTOLISP_SOURCE_REGISTRY");
+		String detail = "(tried: " + String.join(", ", tried)
+				+ "); add its directory to --system-path or RONTOLISP_SOURCE_REGISTRY";
+		throw new SystemNotFoundException(LispNames.ASDF_LOAD_SYSTEM + ": system '" + name + "' not found " + detail,
+				detail);
+	}
+
+	/**
+	 * Reads one {@code .asd} file by its path, for {@code asdf:load-asd}, with the
+	 * replacement {@link #locate} substitutes.
+	 * @param path the resolved path
+	 * @param loader the loader
+	 * @return the file, or {@code null} when it cannot be read: such a file defines
+	 * nothing
+	 */
+	@Nullable public static LocatedAsd readAsd(String path, SourceLoader loader) {
+		try {
+			String source = loader.load(path);
+			int slash = path.lastIndexOf('/');
+			String replacement = AsdOverrides.replacementSource(path.substring(slash + 1));
+			return new LocatedAsd(path, replacement != null ? replacement : source);
+		}
+		catch (IOException ex) {
+			return null;
+		}
 	}
 
 	/**
@@ -1665,7 +1857,7 @@ public final class AsdfSystems {
 				AsdfSystems::isPackageDefinitionForm);
 		return new LispSystem(name, packageDependencies(packageForm, path, systemPackages), List.of(file),
 				primary.baseDir(), primary.features(), null, true, null, List.of(), primary.defsystemDependsOn(), null,
-				List.of(), Map.of());
+				List.of(), Map.of(), new Metadata(primary.metadata().sourceFile(), Map.of()));
 	}
 
 	/**
@@ -2205,7 +2397,7 @@ public final class AsdfSystems {
 
 	private static boolean isAsdfMember(LispSymbol op, String member) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
-		return qn != null && LispNames.ASDF_PKG.equals(qn.pkg()) && member.equals(qn.member());
+		return qn != null && AsdfExports.isAsdfFamily(qn.pkg()) && member.equals(qn.member());
 	}
 
 }

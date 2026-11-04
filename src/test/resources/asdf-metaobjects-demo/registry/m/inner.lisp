@@ -1,0 +1,1 @@
+(defun inner-fn () :inner)

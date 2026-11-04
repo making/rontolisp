@@ -38,6 +38,25 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void aProgramCarriesOnlyTheStubsAndMetadataItNames() {
+		Map<String, String> files = Map.of("sq.asd", "(defsystem :sq :description \"Squares\")");
+		String plain = inline("(asdf:load-system :sq) (print (asdf:find-system :sq))", files).stream()
+			.map(LispVal::print)
+			.collect(java.util.stream.Collectors.joining(" "));
+		assertThat(plain).contains("ASDF:FIND-SYSTEM").doesNotContain("ASDF:TRAVERSE").doesNotContain("Squares");
+		// The name, in the spelling of a package using asdf; the superclass it needs.
+		String naming = inline("""
+				(asdf:load-system :sq)
+				(defpackage :user-of-asdf (:use :cl :asdf))
+				(in-package :user-of-asdf)
+				(print (system-description (find-system :sq)))
+				(print (traverse 'program-op "sq"))""", files).stream()
+			.map(LispVal::print)
+			.collect(java.util.stream.Collectors.joining(" "));
+		assertThat(naming).contains("Squares").contains("DEFMETHOD ASDF:TRAVERSE").contains("ASDF:IMAGE-OP");
+	}
+
+	@Test
 	void inlinesTopLevelLoadInPlace() {
 		List<LispVal> result = inline("(load \"core.lisp\") (print (f 5))",
 				Map.of("core.lisp", "(defun f (x) (* x x))"));

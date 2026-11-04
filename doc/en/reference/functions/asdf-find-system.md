@@ -9,18 +9,19 @@ name — repeated calls answer the **same object** (`eq`), like real ASDF — an
 passing a component object back in answers it unchanged. `name` is a string,
 keyword or symbol designator (a symbol downcases, a string stays verbatim).
 
-A name that is not registered signals an error, unless `error-p` is nil — then
-the answer is `nil`, the probe shape libraries use
-(`(asdf:find-system name nil)` guarding a `load-system`). Registered means:
-defined by a prior [`asdf:defsystem`](asdf-defsystem.md) or a loaded `.asd`,
-derived as a package-inferred sub-system, or one of the built-in shim systems.
-`find-system` never searches the filesystem itself.
+A name nothing registered is searched for, on the interpreter, as a load searches
+([`asdf:*central-registry*`](asdf-central-registry.md), then the search path): the `.asd`
+runs and registers what it defines, and nothing is downloaded or loaded. A name still
+unknown signals `asdf:missing-component`, unless `error-p` is nil — then the answer is
+`nil`, the probe shape libraries use (`(asdf:find-system name nil)` guarding a
+`load-system`). An error while the `.asd` loads is an
+`asdf:load-system-definition-error`.
 
 The component model behind the instance is real ASDF's: the classes
 `asdf:component`, `asdf:child-component` / `asdf:parent-component`,
 `asdf:module`, `asdf:system`, `asdf:package-inferred-system`,
-`asdf:source-file`, `asdf:cl-source-file` and `asdf:static-file` are real CLOS
-classes on every backend, so `typep`, `typecase` and `defmethod` specializers
+`asdf:source-file`, `asdf:cl-source-file` and `asdf:static-file`, with real ASDF's slot
+names, are real CLOS classes on every backend, so `typep`, `typecase` and `defmethod` specializers
 over them all work.
 
 ```lisp

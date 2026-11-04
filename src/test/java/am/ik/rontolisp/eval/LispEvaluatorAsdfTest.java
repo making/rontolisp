@@ -679,11 +679,92 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
-	void missingSystemNamesTheTriedPathsAndTheRegistryOptions() {
+	void missingSystemIsASignalledConditionNamingTheTriedPathsAndTheRegistryOptions() {
 		assertThatThrownBy(() -> run("(asdf:load-system :nope)", Map.of(), List.of("registry")))
-			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("system 'nope' not found")
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("Component \"nope\" not found")
 			.hasMessageContaining("--system-path");
+		// Real ASDF's two classes, the handler naming one before anything loaded it.
+		assertThat(run("""
+				(print (handler-case (asdf:load-system :nope)
+				         (asdf:missing-dependency () :dependency)
+				         (asdf:missing-component (c) (asdf/find-component:missing-requires c))))
+				(print (handler-case (asdf:load-system :app)
+				         (asdf:missing-dependency (c)
+				           (list (asdf/find-component:missing-requires c)
+				                 (asdf:component-name (asdf/find-component:missing-required-by c))))))""",
+				Map.of("app.asd", "(defsystem :app :depends-on (:nope))"), List.of()))
+			.contains("\"nope\"")
+			.contains("(\"nope\" \"app\")");
+	}
+
+	@Test
+	void anErrorWhileAnAsdLoadsIsALoadSystemDefinitionError() {
+		String broken = "(error \"the file refuses\")";
+		assertThat(run("""
+				(print (handler-case (asdf:load-system :broken)
+				         (asdf:load-system-definition-error (c)
+				           (list (asdf:error-name c) (asdf:error-pathname c)
+				                 (princ-to-string (asdf/find-system:error-condition c))))))
+				(print (handler-case (asdf:find-system :broken)
+				         (asdf:system-definition-error () :find-system)))
+				(print (handler-case (asdf:load-asd "broken.asd") (error () :load-asd)))""",
+				Map.of("broken.asd", broken), List.of()))
+			.contains("(\"broken\" \"broken.asd\" \"the file refuses\")")
+			.contains(":FIND-SYSTEM")
+			.contains(":LOAD-ASD");
+	}
+
+	@Test
+	void aPushedCentralRegistryDirectoryFindsSystems() {
+		// Each entry is evaluated, its value a directory, as real ASDF's search takes it.
+		// find-system searches too, with a let binding honored, and registers without
+		// loading; a directory wins over the search path.
+		Map<String, String> files = Map.of(//
+				"reg/lib.asd", "(defsystem :lib :components ((:file \"lib\")))", //
+				"reg/lib.lisp", "(defun lib-fn () :from-registry)", //
+				"path/lib.asd", "(defsystem :lib :components ((:file \"other\")))", //
+				"path/other.lisp", "(defun lib-fn () :from-path)", //
+				"reg2/quoted.asd", "(defsystem :quoted)");
+		assertThat(run("""
+				(defvar *where* "reg2/")
+				(print (asdf:find-system :quoted nil))
+				(print (let ((asdf:*central-registry* '(*where*)))
+				         (asdf:component-name (asdf:find-system :quoted))))
+				(print (asdf:find-system :absent nil))
+				(push "reg/" asdf:*central-registry*)
+				(print (asdf:component-loaded-p (asdf:find-system :lib)))
+				(asdf:load-system :lib)
+				(print (lib-fn))""", files, List.of("path"))).contains("NIL")
+			.contains("\"quoted\"")
+			.contains(":FROM-REGISTRY")
+			.doesNotContain(":FROM-PATH");
+	}
+
+	@Test
+	void clearSystemForgetsAndLoadAsdReadsAndLoadSourceOpReloads() {
+		// clear-system: the next find-system reads the .asd again and a load runs again.
+		// load-asd of a file that defines another name. load-source-op on a component,
+		// the call prove's run-test-system makes: a reload, nothing cached.
+		Map<String, String> files = Map.of(//
+				"lib.asd", "(print :read-asd) (defsystem :lib :components ((:file \"lib\")))", //
+				"lib.lisp", "(print :loaded-lib)", //
+				"elsewhere.asd", "(defsystem :named-otherwise)");
+		String output = run("""
+				(asdf:load-system :lib)
+				(asdf:load-system :lib)
+				(let ((before (asdf:find-system :lib)))
+				  (asdf:clear-system :lib)
+				  (print (list :after-clear (asdf:registered-system :lib) (asdf:component-loaded-p :lib)))
+				  (print (list :fresh (eq before (asdf:find-system :lib)))))
+				(asdf:load-system :lib)
+				(asdf:perform 'asdf:load-source-op (asdf:find-component :lib "lib"))
+				(print (list :define-op (typep (asdf:load-asd "elsewhere.asd") 'asdf:define-op)))
+				(print (asdf:component-name (asdf:find-system :named-otherwise)))
+				(print (list :absent (typep (asdf:load-asd "absent.asd") 'asdf:define-op)))""", files, List.of());
+		assertThat(output.lines().map(String::trim).filter(line -> !line.isEmpty())).containsExactly(":READ-ASD",
+				":LOADED-LIB", "(:AFTER-CLEAR NIL NIL)", ":READ-ASD", "(:FRESH NIL)", ":LOADED-LIB", ":LOADED-LIB",
+				"(:DEFINE-OP T)", "\"named-otherwise\"", "(:ABSENT T)");
 	}
 
 	@Test

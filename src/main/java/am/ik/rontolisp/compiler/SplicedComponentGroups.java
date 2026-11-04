@@ -71,6 +71,9 @@ public final class SplicedComponentGroups {
 	/** The asdf.lisp defun whose presence proves the runtime was spliced. */
 	private static final String PERFORM_COMPONENT = "%ASDF-PERFORM-COMPONENT";
 
+	/** What a lowering calls: defined by the asdf runtime, referenced only here. */
+	public static final Set<String> LOWERING_TARGETS = Set.of(LOAD_SPLICED, PERFORM_SYSTEM, PERFORM_COMPONENT);
+
 	/** The qualifiers a {@code perform} spelling may carry and still be ASDF's. */
 	private static final Set<String> PERFORM_PACKAGES = Set.of(LispNames.ASDF_PKG, "ASDF/ACTION");
 

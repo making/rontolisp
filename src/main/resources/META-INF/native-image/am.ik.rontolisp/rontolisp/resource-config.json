@@ -681,6 +681,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.AsdfExports"
+        },
+        "pattern": "am/ik/rontolisp/asdf-exports\\.txt"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.UiopLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/uiop-.*\\.lisp"

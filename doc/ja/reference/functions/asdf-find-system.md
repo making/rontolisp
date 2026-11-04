@@ -11,18 +11,18 @@
 `name` は文字列・キーワード・シンボルの指示子です（シンボルは小文字化され、文字列は
 そのまま使われます）。
 
-登録されていない名前はエラーを通知しますが、`error-p` が nil のときは `nil` を
-返します。これはライブラリが使うプローブの形（`load-system` を
-`(asdf:find-system name nil)` でガードする形）です。「登録済み」とは、事前の
-[`asdf:defsystem`](asdf-defsystem.md) または読み込まれた `.asd` で定義された、
-package-inferred のサブシステムとして導出された、あるいは組み込みのシムシステムで
-あることを指します。`find-system` 自身はファイルシステムを探索しません。
+どこにも登録されていない名前は、インタプリタではロードと同じ順で探索します
+([`asdf:*central-registry*`](asdf-central-registry.md)、次に探索パス)。`.asd` を実行して、
+そこで定義されたものを登録します。ダウンロードもシステムのロードもしません。それでも不明な名前は
+`asdf:missing-component` を通知しますが、`error-p` が nil のときは `nil` を返します。これはライブラリが
+使うプローブの形 (`load-system` を `(asdf:find-system name nil)` でガードする形) です。`.asd` の
+ロード中のエラーは `asdf:load-system-definition-error` になります。
 
 インスタンスの背後にあるコンポーネントモデルは本物の ASDF のものです。
 `asdf:component`、`asdf:child-component` / `asdf:parent-component`、
 `asdf:module`、`asdf:system`、`asdf:package-inferred-system`、
-`asdf:source-file`、`asdf:cl-source-file`、`asdf:static-file` はどのバックエンドでも
-本物の CLOS クラスなので、それらに対する `typep`、`typecase`、`defmethod` の
+`asdf:source-file`、`asdf:cl-source-file`、`asdf:static-file` はスロット名も本物の ASDF と
+同じで、どのバックエンドでも本物の CLOS クラスなので、それらに対する `typep`、`typecase`、`defmethod` の
 特定化子はすべて動作します。
 
 ```lisp

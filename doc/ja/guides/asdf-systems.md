@@ -66,9 +66,10 @@ rontolisp app/run.lisp --system-path registry/base -o app.wasm     # WASM
 
 `asdf:load-system` は `NAME.asd` を次の順で探します:
 
-1. `load-system` を実行しているファイルのディレクトリ (`load` と同様)、
-2. `--system-path` で指定したディレクトリ (`PATH` のようにプラットフォームのパス区切り文字で複数連結可)、
-3. 環境変数 `RONTOLISP_SOURCE_REGISTRY` のディレクトリ (同じ形式)。
+1. [`asdf:*central-registry*`](../reference/functions/asdf-central-registry.md) のディレクトリ、
+2. `load-system` を実行しているファイルのディレクトリ (`load` と同様)、
+3. `--system-path` で指定したディレクトリ (`PATH` のようにプラットフォームのパス区切り文字で複数連結可)、
+4. 環境変数 `RONTOLISP_SOURCE_REGISTRY` のディレクトリ (同じ形式)。
 
 依存システムの `.asd` は、依存する側のシステムのディレクトリから探索が始まるため、
 1 つのレジストリディレクトリに並んだ兄弟システムは互いを見つけられます。
@@ -150,7 +151,7 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
 - `.asd` ファイルは **Lisp として実行されます**。フォームを 1 つずつ、`asdf-user`
   パッケージ (`cl`、`asdf`、`uiop` を use します) で評価するので、条件付きの
   `defpackage`、`warn`、`find-system` による存在確認 (登録済みのシステムと組み込み
-  システムを返し、`.asd` を探しには行きません)、`defparameter`、計算して push する
+  システムを返し、ロードと同じく `.asd` も探します)、`defparameter`、計算して push する
   フィーチャー、別システムの `asdf:load-system` が書けます。ロードされたシステムは、
   ファイル内でその呼び出しより後に定義される全システムより先にロードされます。
   コンパイルパスでは、ファイルはコンパイル時に専用のインタプリタで実行されるので、
@@ -277,10 +278,23 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   がモデルをたどり、
   [`asdf:registered-systems`](../reference/functions/asdf-registered-systems.md)
   が登録済みの全名前を列挙します。`asdf:*user-cache*` は external で `nil` です
-  (fasl キャッシュはありません)。`asdf:*asdf-version*` は `"3.3.7"` で、このサブセットが
+  (fasl キャッシュはありません)。`asdf:asdf-version` は `"3.3.7"` を返します。これはこのサブセットが
   従う API のリリースです (lisp-binary のように、バージョンが古ければ同梱の ASDF を
   ロードする `.asd` はそれをロードしません)。これは rove のシステム駆動テストランナーが読む
   コンポーネントモデルです。
+- **本物の ASDF がエクスポートする名前はすべてあります。** ASDF 3.3.1 の外部シンボル 230 個と
+  `asdf/*` パッケージのメンバーは、どのバックエンドでも読み込めます。実行されないコードでそれらの
+  名前を書いたファイルもロードできます。プログラムが実際に使うものは実装済みです。
+  [メタデータのリーダー](../reference/functions/asdf-system-description.md)、
+  [`asdf:oos`](../reference/functions/asdf-oos.md)、
+  [`asdf:load-asd`](../reference/functions/asdf-load-asd.md)、
+  [`asdf:clear-system`](../reference/functions/asdf-clear-system.md)、
+  [`asdf:map-systems`](../reference/functions/asdf-map-systems.md)、
+  [`asdf:find-component`](../reference/functions/asdf-find-component.md)、
+  `load-source-op`、スロット名、ロードが通知するコンディション (`missing-component`、
+  `missing-dependency`、`load-system-definition-error`) です。残りは本物の ASDF のクラスと総称関数を
+  空のまま置いたもので、呼び出すとその名前を示す `uiop:not-implemented-error` を通知します。
+  source-registry と plan の一群もここに含まれます。
 - **operation プロトコルも本物です。** ロードを構成する各動作は、operation の
   インスタンス (`asdf:prepare-op`・`asdf:compile-op`・`asdf:load-op`・`asdf:test-op`。
   いずれも `asdf:operation`) とコンポーネントに対する

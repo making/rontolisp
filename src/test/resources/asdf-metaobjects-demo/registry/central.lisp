@@ -1,0 +1,1 @@
+(defun central-fn () :central)

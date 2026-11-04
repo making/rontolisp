@@ -9352,13 +9352,6 @@ public final class LispNames {
 	public static final String REGISTERED_SYSTEMS = "REGISTERED-SYSTEMS";
 
 	/**
-	 * {@code asdf:*user-cache*} -- real ASDF's fasl output-translation cache directory.
-	 * There is no fasl cache here, so it is external and {@code nil} (rove's
-	 * {@code resolve-file} returns early on it).
-	 */
-	public static final String ASDF_USER_CACHE = "*USER-CACHE*";
-
-	/**
 	 * {@code asdf:*asdf-version*} -- the contract version {@code "3.3.7"} (uiop's), so an
 	 * {@code .asd} gating on it (lisp-binary's bundled-ASDF upgrade) finds a current one.
 	 */

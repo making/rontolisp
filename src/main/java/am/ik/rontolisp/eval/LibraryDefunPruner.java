@@ -93,6 +93,8 @@ public final class LibraryDefunPruner {
 
 	@Nullable private static volatile Set<String> prunableNames;
 
+	@Nullable private static volatile Set<String> asdfDefinitionNames;
+
 	@Nullable private static volatile Set<String> schemeDefinitionNames;
 
 	@Nullable private static volatile Set<String> clojureDefinitionNames;
@@ -1282,9 +1284,22 @@ public final class LibraryDefunPruner {
 	 * macro-time expansion as well as a run-time one.
 	 */
 	private static boolean isBundledName(String name) {
-		return prunableNames().contains(name) || SchemeLibrary.mayDefine(name) && schemeDefinitionNames().contains(name)
+		return prunableNames().contains(name)
+				|| AsdfRuntimeLibrary.mayDefine(name) && asdfDefinitionNames().contains(name)
+				|| SchemeLibrary.mayDefine(name) && schemeDefinitionNames().contains(name)
 				|| ClojureLibrary.mayDefine(name) && clojureDefinitionNames().contains(name)
 				|| ClojureLowering.isCoreMacroDefinition(name);
+	}
+
+	private static Set<String> asdfDefinitionNames() {
+		Set<String> cached = asdfDefinitionNames;
+		if (cached == null) {
+			Set<String> names = new HashSet<>();
+			collectDefinitionNames(AsdfRuntimeLibrary.prunableForms(), names);
+			cached = Set.copyOf(names);
+			asdfDefinitionNames = cached;
+		}
+		return cached;
 	}
 
 	private static Set<String> schemeDefinitionNames() {

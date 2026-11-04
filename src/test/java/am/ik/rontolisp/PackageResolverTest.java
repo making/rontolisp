@@ -537,6 +537,15 @@ class PackageResolverTest {
 					assertThat(resolve(pkg + ":" + member)).endsWith(":" + member.toUpperCase());
 				}
 			});
+		// ASDF's inventory, the same: asdf exports what real asdf/interface does, and a
+		// sub-package's member, internal in asdf or not, is one symbol with asdf's.
+		assertThat(AsdfExports.externals()).hasSize(230);
+		for (AsdfExports.Entry entry : AsdfExports.entries()) {
+			String expected = entry.isUiopHomed() ? entry.home() + ":" + entry.symbol()
+					: AsdfExports.externals().containsKey(entry.symbol()) ? "ASDF:" + entry.symbol()
+							: "ASDF::" + entry.symbol();
+			assertThat(resolve(entry.exporter() + ":" + entry.symbol())).isEqualTo(expected);
+		}
 	}
 
 	@Test
