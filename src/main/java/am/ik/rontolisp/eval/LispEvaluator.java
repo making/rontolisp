@@ -43,6 +43,7 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.macro.MopEvalCapture;
 import am.ik.rontolisp.macro.MopProtocol;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispPackageException;
 import am.ik.rontolisp.LispFuture;
 import am.ik.rontolisp.LocatedCons;
 import am.ik.rontolisp.LispThread;
@@ -7160,6 +7161,23 @@ public final class LispEvaluator {
 	 * @return the result
 	 */
 	LispVal evalTopLevel(LispVal expr, @Nullable Consumer<LispVal> resolvedForm) {
+		List<LispVal> members = membersAroundInPackage(expr);
+		if (members != null) {
+			// One read form hands on one resolved form: the load recorder pairs them.
+			List<LispVal> resolvedMembers = new ArrayList<>(List.of(new LispSymbol(LispNames.PROGN)));
+			try {
+				LispVal value = LispNil.INSTANCE;
+				for (LispVal member : members) {
+					value = evalTopLevel(member, resolvedMembers::add);
+				}
+				return value;
+			}
+			finally {
+				if (resolvedForm != null) {
+					resolvedForm.accept(consList(resolvedMembers));
+				}
+			}
+		}
 		// Resolve packages at the top-level entry only; nested evaluation and macro
 		// expansion operate on the already-resolved canonical form.
 		LispVal resolved = prepareJavaSites(resolveStructLiterals(this.packageResolver.resolve(expr)));
@@ -7188,6 +7206,27 @@ public final class LispEvaluator {
 			}
 			throw new LispEvalException(unmatchedThrowMessage(signal));
 		}
+	}
+
+	/**
+	 * The members of a top-level {@code progn} or {@code eval-when} holding a literal
+	 * {@code in-package}, or null for any other form. Such a form is taken member by
+	 * member (CLHS 3.2.3.1), so the members after the directive resolve against the
+	 * package it selects, as on the compile paths, which splice every such form.
+	 */
+	private static @Nullable List<LispVal> membersAroundInPackage(LispVal form) {
+		List<LispVal> whole = List.of(form);
+		List<LispVal> members = LispMacroExpander.flattenTopLevel(whole);
+		if (members == whole) {
+			return null;
+		}
+		for (LispVal member : members) {
+			if (member instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& LispMacroExpander.spellsClName(head.name(), LispNames.IN_PACKAGE)) {
+				return members;
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -7221,6 +7260,14 @@ public final class LispEvaluator {
 	 * @return the form's values, primary first (empty for {@code (values)})
 	 */
 	List<LispVal> evalValues(LispVal expr, @Nullable Consumer<LispVal> resolvedForm) {
+		List<LispVal> members = membersAroundInPackage(expr);
+		if (members != null) {
+			List<LispVal> values = List.of(LispNil.INSTANCE);
+			for (LispVal member : members) {
+				values = evalValues(member, resolvedForm);
+			}
+			return values;
+		}
 		// Resolution is not idempotent under a :shadow package (see evalResolved), so the
 		// form is resolved once here and evaluated through evalResolved.
 		LispVal resolved = this.packageResolver.resolve(expr);
@@ -10608,16 +10655,16 @@ public final class LispEvaluator {
 				// conditions CL names, which a handler around the form can catch.
 				return registerRuntimeDefpackage(cons);
 			case LispNames.IN_PACKAGE:
-				// An in-package that is NOT a top-level form, the same way: it switches
-				// when it runs. Its expansion is the assignment a top-level one leaves.
+				// Likewise: inside an (eval-when ...) or a macro expansion. It selects
+				// the
+				// package the forms after it resolve against, and expands to the
+				// assignment the top-level directive leaves.
 				try {
 					return this.packageResolver.resolve(cons);
 				}
-				catch (am.ik.rontolisp.LispPackageException ex) {
-					return signalPackageError(
-							java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.IN_PACKAGE),
-							cons.cdr() instanceof LispCons args ? packageDesignator(LispNames.IN_PACKAGE, args.car())
-									: "");
+				catch (LispPackageException ex) {
+					return signalPackageError(String.valueOf(ex.getMessage()), cons.cdr() instanceof LispCons argument
+							? packageDesignator(LispNames.IN_PACKAGE, argument.car()) : "");
 				}
 			case LispNames.DECLAIM:
 				// (declaim (special ...)) proclaims specialness before the form

@@ -52333,6 +52333,19 @@ public final class LispMacroExpander {
 	 * @return the flattened top-level forms
 	 */
 	public static List<LispVal> flattenTopLevel(List<LispVal> program, @Nullable Set<LispVal> compileTime) {
+		return flattenTopLevel(program, compileTime, false);
+	}
+
+	/**
+	 * {@link #flattenTopLevel(List, Set)} for forms an enclosing {@code eval-when} may
+	 * already evaluate at compile time.
+	 * @param program the top-level forms
+	 * @param compileTime collects the forms evaluated at compile time, or {@code null}
+	 * @param compileTimeToo whether the forms are inside compile-time-too processing
+	 * @return the flattened top-level forms
+	 */
+	public static List<LispVal> flattenTopLevel(List<LispVal> program, @Nullable Set<LispVal> compileTime,
+			boolean compileTimeToo) {
 		// Keep the identity of a program with nothing to splice (callers may rely on
 		// "returned unchanged", e.g. UserMacroExpander's no-macro early return).
 		if (program.stream().noneMatch(LispMacroExpander::isTopLevelSpliceForm)) {
@@ -52340,13 +52353,13 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> out = new java.util.ArrayList<>();
 		for (LispVal form : program) {
-			flattenTopLevelInto(form, out, false, compileTime);
+			flattenTopLevelInto(form, out, compileTimeToo, compileTime);
 		}
 		return out;
 	}
 
 	private static boolean isTopLevelSpliceForm(LispVal form) {
-		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol sym) || !cons.isProperList()) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol sym) || !isSpliceableSpine(cons)) {
 			return false;
 		}
 		String operator = clOperatorSpelling(sym.name());
@@ -52378,6 +52391,25 @@ public final class LispMacroExpander {
 	 */
 	public static boolean spellsClName(String spelling, String name) {
 		return name.equals(spelling) || (spelling.endsWith(name) && name.equals(clOperatorSpelling(spelling)));
+	}
+
+	/**
+	 * Whether the form's cells are its members: a proper list whose tail no reader marker
+	 * stands for. {@code (progn . #.x)} reads as {@code (progn %read-eval x)}, proper but
+	 * with its members unknown until the marker resolves, so splicing it here would turn
+	 * the marker's two halves into top-level forms. {@code UserMacroExpander} flattens
+	 * what the resolution leaves.
+	 */
+	private static boolean isSpliceableSpine(LispCons form) {
+		if (!form.isProperList()) {
+			return false;
+		}
+		for (LispVal cell = form.cdr(); cell instanceof LispCons c; cell = c.cdr()) {
+			if (c.car() instanceof LispSymbol sym && LispNames.READ_EVAL.equals(sym.name())) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -52418,7 +52450,7 @@ public final class LispMacroExpander {
 
 	private static void flattenTopLevelInto(LispVal form, List<LispVal> out, boolean compileTimeToo,
 			@Nullable Set<LispVal> compileTime) {
-		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && isSpliceableSpine(cons)) {
 			String operator = clOperatorSpelling(sym.name());
 			// locally splices like progn: its declarations are no-ops downstream, and
 			// libraries wrap top-level defstruct/defun groups in (locally (declare ...)).

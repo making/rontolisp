@@ -277,6 +277,20 @@ public final class UserMacroExpander {
 			// the macro-time evaluator, so it sees the defuns/defvars registered by the
 			// preceding forms.
 			LispVal form = usesReadEvalMarker(rawForm) ? macroEval.resolveReadTimeEvalInCode(rawForm) : rawForm;
+			// What the markers made is the form as CL reads it, and only now can it be
+			// seen to be a progn or eval-when: its members are top-level forms, like
+			// those of one spelled out, which were flattened before this loop.
+			if (form != rawForm) {
+				Set<LispVal> memberCompileTime = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+				List<LispVal> whole = List.of(form);
+				List<LispVal> members = LispMacroExpander.flattenTopLevel(whole, memberCompileTime, compileTime);
+				if (members != whole) {
+					for (LispVal member : members) {
+						accept(member, memberCompileTime.contains(member));
+					}
+					return;
+				}
+			}
 			// A package directive updates the macro evaluator's resolver state (so a
 			// defmacro under (in-package P) registers its canonical qualified name and
 			// its template symbols resolve against P) and is kept verbatim for the

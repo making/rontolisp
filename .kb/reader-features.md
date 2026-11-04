@@ -238,6 +238,14 @@ Traps:
   site, which cl-ppcre's ~200 `(declare #.*standard-optimize-settings*)` sites reach only this way.
 - A marker split into code position by a backquote template resolves through the `%read-eval`
   identity (an Environment function; a 1-arg identity emit in the compilers).
+- **A form a marker completes is flattened after it resolves.** `(progn . #.x)` reads as
+  `(progn %read-eval x)`, a proper list, so `flattenTopLevel` leaves a form with `%read-eval` on
+  its own spine alone (`isSpliceableSpine`), and `Session.accept` flattens what any resolution
+  made: the members are top-level forms as if spelled out, with the enclosing `eval-when`'s
+  compile-time-too mode. That covers `#.'(progn (defmacro m ...) (m))` and `#.'(eval-when ...)`,
+  which went on as the expansion of a macro call (a member defmacro unseen by the next member, a
+  `:compile-toplevel`-only member dropped where a spelled-out one runs). Consumer:
+  concrete-syntax-tree's `declarations.lisp`. A `#+#.` guard after the dot is refused by the read.
 - `*read-eval*` (`LispNames.READ_EVAL_VAR`, `CL_VARIABLES`) is seeded `t`, proclaimed special, and
   checked dynamically by `resolveReadTimeEval` before any marker evaluates. INTERPRETER only --
   the compiled runtime readers signal on `#.` unconditionally ([[read-load-streams]]).

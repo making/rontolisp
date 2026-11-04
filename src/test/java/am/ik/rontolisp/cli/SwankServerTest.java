@@ -146,8 +146,10 @@ class SwankServerTest {
 					+ " '((:position 2) (:line 2 1)) " + string(nav2.toString()) + " 'nil)", "CL-USER", "t");
 			Path loaded = this.tempDir.resolve("drv-load.lisp");
 			Files.writeString(loaded,
-					"(defvar *unused*)\n\n#+(or) (defun drv-never () 0)\n  (defun drv-loaded () (drv-callee 1))\n");
-			client.rex("(swank:load-file " + string(loaded.toString()) + ")", "CL-USER", "t");
+					"(defvar *unused*)\n\n#+(or) (defun drv-never () 0)\n  (defun drv-loaded () (drv-callee 1))\n"
+							+ "(progn (in-package :cl-user) (defun drv-loaded-member () 1))\n");
+			assertThat(client.rex("(swank:load-file " + string(loaded.toString()) + ")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"T\") id)");
 			client.repl("(defun drv-repl-fn () (drv-callee 3))");
 			assertThat(client.rex("(swank:find-definitions-for-emacs \"drv-callee\")", "CL-USER", "t"))
 				.containsExactly("(:return (:ok ((\"(DEFUN DRV-CALLEE)\" (:location (:file " + navFile
