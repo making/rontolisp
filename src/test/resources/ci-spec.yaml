@@ -4671,8 +4671,9 @@ cases:
       (print (handler-case (delete-package :cl) (package-error (c) (package-error-package c))))
       (print (handler-case (rename-package :cl :cl2) (package-error (c) (package-error-package c))))
       (print (handler-case (package-nicknames :no-such-ci-pkg-zzz) (package-error (c) (package-error-package c))))
-      (print (length (find-all-symbols 'car)))
-      (print (member 'car (find-all-symbols 'car)))
+      ;; Other cases intern a CAR of their own in the shared universe, so ask for cl's.
+      (print (count 'car (find-all-symbols 'car)))
+      (print (find 'car (find-all-symbols 'car)))
       (print (apropos-list "CAR" :cl))
       (print (do-all-symbols (s nil) (when (eq s 'car) (return s))))
       (print (do-symbols (s :cl-user "ci-ds") (when (string= (symbol-name s) "CAR") (return :ci-found))))
@@ -4707,7 +4708,7 @@ cases:
       :CL
       :NO-SUCH-CI-PKG-ZZZ
       1
-      (CAR)
+      CAR
       (CAR MAPCAR)
       CAR
       :CI-FOUND
@@ -14206,6 +14207,52 @@ cases:
         (labels ((ci-go-down (i acc) (if (= i 0) acc (ci-go-down (- i 1) (cons i acc)))))
           (ci-go-down n nil)))
       (print (ci-count-down 4))
+      ;; A local (setf name) function: the place reaches it, and #'(setf name) names it.
+      (print (flet (((setf ci-cell) (v x) (list :wrote v x))) (setf (ci-cell 1) 2)))
+      (print (let ((ci-tr nil))
+               (flet (((setf ci-cell) (v x) (setq ci-tr (cons (list v x) ci-tr)) v))
+                 (setf (ci-cell 1) 2 (ci-cell 3) 4))
+               (reverse ci-tr)))
+      (print (let ((ci-tr nil))
+               (flet (((setf ci-cell) (v x) (setq ci-tr (cons :call (cons v (cons x ci-tr)))) v))
+                 (setf (ci-cell (progn (setq ci-tr (cons :arg ci-tr)) 1)) (progn (setq ci-tr (cons :val ci-tr)) 2)))
+               (reverse ci-tr)))
+      (print (flet (((setf ci-cell) (v x) (list v x))) (funcall #'(setf ci-cell) 1 2)))
+      (print (let ((ci-store (list 1)))
+               (flet ((ci-cell (x) (declare (ignore x)) (car ci-store))
+                      ((setf ci-cell) (v x) (declare (ignore x)) (setf (car ci-store) v)))
+                 (incf (ci-cell 0) 10)
+                 (push 7 (ci-cell 0))
+                 (ci-cell 0))))
+      (print (labels (((setf ci-cell) (v x) (if (> x 0) (setf (ci-cell (- x 1)) (+ v 1)) v))) (setf (ci-cell 3) 1)))
+      (print (flet (((setf ci-cell) (v) (return-from ci-cell (list :early v)) :late)) (setf (ci-cell) 1)))
+      (print (flet (((setf ci-cell) (v) (list :outer v)))
+               (flet (((setf ci-cell) (v) (setf (ci-cell) (list :inner v))))
+                 (setf (ci-cell) 1))))
+      (print (flet (((setf ci-cell) (v x) (list v x)))
+               (loop for i in '(1 2) collect (setf (ci-cell i) (* i 2)))))
+      (defun (setf ci-global-cell) (v x) (list :global v x))
+      (print (flet (((setf ci-global-cell) (v x) (list :local v x))) (setf (ci-global-cell 1) 2)))
+      (print (flet ((ci-global-cell (x) (list :reader x))) (setf (ci-global-cell 1) 2)))
+      ;; A call only a macro's expansion spells reaches the local function.
+      (defmacro ci-call-it (f &rest args) `(,f ,@args))
+      (print (flet ((ci-m (x) (list :flet x))) (ci-call-it ci-m 1)))
+      (print (labels ((ci-m (n) (if (= n 0) :done (ci-call-it ci-m (- n 1))))) (ci-m 3)))
+      (print (flet ((ci-m (x) (list :outer x)))
+               (flet ((ci-m (x) (list :inner (ci-call-it ci-m x)))) (ci-call-it ci-m 7))))
+      (defun ci-m-in-fn (n) (flet ((ci-m (x) (* x 2))) (ci-call-it ci-m n)))
+      (print (list (ci-m-in-fn 1) (ci-m-in-fn 2)))
+      (print (flet (((setf ci-cell) (v x) (list :wrote v x))) (ci-call-it setf (ci-cell 1) 2)))
+      ;; A local function shadows a macro of its name, and a macrolet shadows it in turn.
+      (defmacro ci-shadowed (x) `(list :macro ,x))
+      (print (flet ((ci-shadowed (x) (list :flet x))) (ci-shadowed 1)))
+      (print (labels ((ci-shadowed (n) (if (= n 0) :done (ci-shadowed (- n 1))))) (ci-shadowed 2)))
+      (print (flet ((ci-shadowed (x) (ci-shadowed (list :inner x)))) (ci-shadowed 3)))
+      (print (flet ((ci-shadowed (x) (list :outer x)))
+               (macrolet ((ci-shadowed (x) `(list :inner-macro ,x))) (ci-shadowed 4))))
+      (defmacro ci-mentions (y) `(ci-shadowed ,y))
+      (print (flet ((ci-shadowed (x) (list :flet x))) (ci-mentions 5)))
+      (print (flet ((ci-other (x) (ci-shadowed x))) (ci-other 6)))
     expected: |
       (1 4 9)
       42
@@ -14218,6 +14265,28 @@ cases:
       720
       (T NIL)
       (1 2 3 4)
+      (:WROTE 2 1)
+      ((2 1) (4 3))
+      (:ARG :VAL 1 2 :CALL)
+      (1 2)
+      (7 . 11)
+      4
+      (:EARLY 1)
+      (:OUTER (:INNER 1))
+      ((2 1) (4 2))
+      (:LOCAL 2 1)
+      (:GLOBAL 2 1)
+      (:FLET 1)
+      :DONE
+      (:INNER (:OUTER 7))
+      (2 4)
+      (:WROTE 2 1)
+      (:FLET 1)
+      :DONE
+      (:MACRO (:INNER 3))
+      (:INNER-MACRO 4)
+      (:FLET 5)
+      (:MACRO 6)
   - name: macrolet-compiler-macro-restart-case
     source: |
       ;; macrolet: local macros expanded away (compile path via UserMacroExpander,
@@ -14745,6 +14814,18 @@ cases:
       (print (ci-db-scaled 5 :by 3))
       (defmacro ci-db-defaulted (a &optional (b 10)) `(+ ,a ,b))
       (print (list (ci-db-defaulted 1) (ci-db-defaulted 1 2)))
+      (print (destructuring-bind (a &optional ((b c) '(1 2) sp)) '(0) (list a b c sp)))
+      (print (destructuring-bind (a &optional ((b c) '(1 2) sp)) '(0 (3 4)) (list a b c sp)))
+      (print (destructuring-bind (&optional ((b &optional (c b)) '(1)) (d c)) '() (list b c d)))
+      (print (destructuring-bind (&optional ((b . c) '(1 2 3))) '() (list b c)))
+      (print (destructuring-bind (&key ((:k (a b)) '(1 2) sp) (c a)) '(:k (3 4)) (list a b sp c)))
+      (print (destructuring-bind (&rest (a b) &aux (c a)) '(1 2) (list a b c)))
+      (print (destructuring-bind (&optional () b) '((1) 2) b))
+      (print (let ((n 0)) (destructuring-bind (&optional ((a b) (progn (incf n) '(1 2)))) '() (list a b n))))
+      (print (flet ((f () 7)) (destructuring-bind (&optional ((a &optional (b (f))) '(1))) '() (list a b))))
+      (defmacro ci-db-fixup (a (() &body normal) &optional ((() &body circular) '(())))
+        `(list ,a ,@normal ,@circular))
+      (print (list (ci-db-fixup 1 (() 2)) (ci-db-fixup 1 (() 2) (() 3 4))))
     expected: |
       10
       (1 10 NIL)
@@ -14757,6 +14838,16 @@ cases:
       3
       15
       (11 3)
+      (0 1 2 NIL)
+      (0 3 4 T)
+      (1 1 1)
+      (1 (2 3))
+      (3 4 T 3)
+      (1 2 1)
+      2
+      (1 2 1)
+      (1 7)
+      ((1 2) (1 2 3 4))
   # An element past a destructuring pattern is the surplus-argument program-error
   # (LispMacroExpander.destructuringBindings, LambdaLists.destructuringSurplusCheck).
   - name: destructuring-bind-surplus-elements-signal-program-error
@@ -14765,11 +14856,27 @@ cases:
       (print (handler-case (destructuring-bind (a (b c)) '(1 (2 3 4)) (list a b c)) (program-error () :pe)))
       (print (handler-case (destructuring-bind (a &optional b) '(1 2 3 4) a) (error (e) (princ-to-string e))))
       (print (destructuring-bind (a . b) '(1 2 3) (list a b)))
+      (print (handler-case (destructuring-bind (&optional ((a) '(1 2))) '() a) (program-error () :pe)))
+      (print (handler-case (destructuring-bind (() b) '((1) 2) b) (program-error () :pe)))
+      (print (handler-case (destructuring-bind ((()) &optional b) '(((1))) b) (program-error () :pe)))
+      (print (handler-case (destructuring-bind (&optional (() nil)) '((1)) :ok) (program-error () :pe)))
+      (print (handler-case (destructuring-bind (&rest ()) '(1) :ok) (program-error () :pe)))
+      (print (handler-case (destructuring-bind (&key ((:k ()))) '(:k (1)) :ok) (program-error () :pe)))
+      (print (handler-case (destructuring-bind (() &rest r) '(5) r) (error () :e)))
+      (print (destructuring-bind (() &optional (()) &rest ()) '(())  :ok))
     expected: |
       :PE
       :PE
       "Function expects at most 2 arguments, got 4"
       (1 (2 3))
+      :PE
+      :PE
+      :PE
+      :PE
+      :PE
+      :PE
+      :E
+      :OK
   # A required element the list runs out before is the arity program-error as a
   # lower bound (LambdaLists.destructuringMissingCheck).
   - name: destructuring-bind-missing-elements-signal-program-error
@@ -14779,12 +14886,18 @@ cases:
       (print (handler-case (destructuring-bind (a b) '(1) a) (error (e) (princ-to-string e))))
       (print (destructuring-bind (a &optional (b 7)) '(1) (list a b)))
       (print (destructuring-bind (a &rest r) '(1 2 3) (list a r)))
+      (print (handler-case (destructuring-bind (a &optional ((b c))) '(0) (list a b c)) (program-error () :pe)))
+      (print (handler-case (destructuring-bind (&key ((:k (a b)) '(1))) '() (list a b)) (program-error () :pe)))
+      (print (handler-case (destructuring-bind (&rest (a b)) '(1) (list a b)) (program-error () :pe)))
     expected: |
       :PE
       :PE
       "Function expects at least 2 arguments, got 1"
       (1 7)
       (1 (2 3))
+      :PE
+      :PE
+      :PE
   # symbol-macrolet: shadow-aware substitution shared by every backend
   # (LispMacroExpander.expandSymbolMacrolet) -- substitution, let-shadowing,
   # nesting, setq write-through, the dbi setf-through-slot-value shape, and a

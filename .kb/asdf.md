@@ -235,9 +235,8 @@ ASDF stores the form and calls it around `compile-file`, or around the source `l
   on the interpreter and the JVM, its hook a real call with `mgl-pax.asdf` in the build image;
   the sources of `mgl-pax-bootstrap` load on the interpreter under another system name, so the
   option no longer keeps that shim. clingon passes its `#P` modules and loads
-  (`eval/WithUserAbortForms`, tier 4). coalton stops before any hooked component, on
-  eclector's `fixup-case`: `defmacro`'s `&optional ((() &body forms) '(()))`, a destructuring
-  pattern as an optional's variable.
+  (`eval/WithUserAbortForms`, tier 4). coalton stops before any hooked component, on fset's
+  `make-lock` (`Code/port.lisp` has no rontolisp arm; measured 2026-11-05, past eclector).
 - Pinned by `AsdfMetaobjectsE2eTest` (all four: lambda, symbol, string, nil; the read, the
   expansion, none of it in the program's `*features*`), `AsdfSystemsTest`, `LispEvaluatorAsdfTest`.
 
@@ -363,8 +362,8 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
   `simple-error` prints; `proc-parse-test` 17, `xsubseq-test` 6 (all four), `myway-test` 15, `ningle-test`
   11, `cl-slug-test` 6, `smart-buffer-test` 2, each `All N files passed`; `http-body-test` `All 4 files
   passed` (interpreter; SBCL lacks its dependencies here). `quri-test` fails 2 of 6 on
-  `with-standard-io-syntax` not binding `*print-base*` (`.todo/i32`). `fast-http-test` stops on a `flet`
-  name reaching a call head through a macro (`.todo/i33`). `lass-file` with `:output`: the CSS SBCL writes,
+  `with-standard-io-syntax` not binding `*print-base*` (`.todo/i32`). `fast-http-test` fails 2 of 64 in
+  `t/parser.lisp` and aborts `t/fast-http.lisp` on CONNECT (2026-11-05, `.todo/i39`). `lass-file` with `:output`: the CSS SBCL writes,
   all four. `hu.dwim.def`: loads on all four, its class, `package-name` and license as on SBCL
   (`component-children` flat, `.todo/i23`). coalton stops before any of this, as "Options around the
   compile" records.

@@ -44147,15 +44147,16 @@ public final class LispMacroExpander {
 						op + " definition must be (name lambda-list body...): " + def.print());
 			}
 			List<LispVal> dp = defCons.toList();
-			if (dp.size() < 2 || !(dp.get(0) instanceof LispSymbol name) || name.isKeyword()) {
+			if (dp.size() < 2 || dp.get(0) instanceof LispSymbol keyword && keyword.isKeyword()
+					|| !(localFunctionKey(dp.get(0)) instanceof String name)) {
 				throw new IllegalArgumentException(
 						op + " definition must be (name lambda-list body...): " + def.print());
 			}
-			if (PackageRegistry.specialOperatorNames().contains(name.name())) {
-				throw new IllegalArgumentException(op + " cannot bind the special operator " + name.name());
+			if (PackageRegistry.specialOperatorNames().contains(name)) {
+				throw new IllegalArgumentException(op + " cannot bind the special operator " + name);
 			}
-			if (fnVars.put(name.name(), new LispSymbol(localFunctionVariable(op, id, name.name()))) != null) {
-				throw new IllegalArgumentException(op + " defines " + name.name() + " more than once");
+			if (fnVars.put(name, new LispSymbol(localFunctionVariable(op, id, name))) != null) {
+				throw new IllegalArgumentException(op + " defines " + name + " more than once");
 			}
 			defParts.add(dp);
 		}
@@ -44196,7 +44197,8 @@ public final class LispMacroExpander {
 			lambdaParts.add(paramParts.isEmpty() ? LispNil.INSTANCE : listToCons(paramParts));
 			List<LispVal> blockParts = new java.util.ArrayList<>();
 			blockParts.add(new LispSymbol(LispNames.BLOCK));
-			blockParts.add(new LispSymbol(entry.getKey()));
+			// The block of (setf name) is name's (CLHS 5.3.1).
+			blockParts.add(dp.get(0) instanceof LispCons setfName ? setfName.toList().get(1) : dp.get(0));
 			blockParts.addAll(e.body());
 			lambdaParts.add(listToCons(blockParts));
 			// The local function stands for its definition, so a compiled program's
@@ -44274,6 +44276,69 @@ public final class LispMacroExpander {
 		// The expansion stands where the flet/labels form stood (.kb/source-positions.md,
 		// "Phase 2").
 		return inheriting(cons, listToCons(letParts));
+	}
+
+	/**
+	 * The name a local function goes by in {@link #rewriteLocalCalls}'s map: a symbol's
+	 * own, and for a {@code (setf name)} the {@code %setf-} writer's, which no call of
+	 * {@code name} spells, so a reader and a writer of one name are two functions.
+	 * @param name the function name, as a definition or {@code #'} spells it
+	 * @return the key, or {@code null} when it is no function name
+	 */
+	private static @Nullable String localFunctionKey(LispVal name) {
+		if (name instanceof LispSymbol sym) {
+			return sym.name();
+		}
+		return name instanceof LispCons cons && cons.isProperList() && cons.toList().size() == 2
+				&& cons.car() instanceof LispSymbol head && LispNames.SETF.equals(plainTypeName(head))
+				&& cons.toList().get(1) instanceof LispSymbol place && !place.isKeyword()
+						? setfFunctionName(place.name()) : null;
+	}
+
+	/**
+	 * The {@code %setf-} name of a local function that writes this place, or {@code null}
+	 * when the place's writer is not one of {@code fns}.
+	 */
+	private static @Nullable String localWriterOf(LispVal place, java.util.Map<String, LispSymbol> fns) {
+		if (place instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
+				&& fns.containsKey(setfFunctionName(head.name()))) {
+			return setfFunctionName(head.name());
+		}
+		return null;
+	}
+
+	/**
+	 * Rewrites a {@code (setf place value ...)} whose place names a local function. A
+	 * local {@code (setf name)} is called, as {@link #expandSetf} calls a global one. A
+	 * local {@code name} alone reads, and the place still writes through the global
+	 * {@code (setf name)}, so its head stays. Pairs split apart only in those cases.
+	 */
+	private static LispVal rewriteSetfOfLocal(LispCons cons, List<LispVal> parts,
+			java.util.Map<String, LispSymbol> fns) {
+		boolean named = false;
+		for (int i = 1; i < parts.size(); i += 2) {
+			named |= localWriterOf(parts.get(i), fns) != null || parts.get(i) instanceof LispCons place
+					&& place.car() instanceof LispSymbol head && fns.containsKey(head.name());
+		}
+		if (!named) {
+			return rewriteTail(cons, parts, 1, fns);
+		}
+		List<LispVal> forms = new java.util.ArrayList<>();
+		for (int i = 1; i < parts.size(); i += 2) {
+			LispVal place = parts.get(i);
+			LispVal value = parts.get(i + 1);
+			if (localWriterOf(place, fns) instanceof String writer) {
+				List<LispVal> placeParts = ((LispCons) place).toList();
+				forms.add(rewriteLocalCalls(setfFunctionCall(cons, LispNames.FUNCALL, new LispSymbol(writer),
+						placeParts.subList(1, placeParts.size()), value, false), fns));
+				continue;
+			}
+			LispVal newPlace = place instanceof LispCons placeCons && placeCons.isProperList()
+					&& placeCons.car() instanceof LispSymbol head && fns.containsKey(head.name())
+							? rewriteTail(placeCons, placeCons.toList(), 1, fns) : rewriteLocalCalls(place, fns);
+			forms.add(listToCons(List.of(new LispSymbol(LispNames.SETF), newPlace, rewriteLocalCalls(value, fns))));
+		}
+		return inheriting(cons, forms.size() == 1 ? forms.get(0) : makeProgn(forms));
 	}
 
 	/**
@@ -44385,14 +44450,26 @@ public final class LispMacroExpander {
 		}
 		switch (name) {
 			case LispNames.FUNCTION: {
-				if (parts.size() == 2 && parts.get(1) instanceof LispSymbol fnName && fns.containsKey(fnName.name())) {
-					return fns.get(fnName.name());
+				if (parts.size() == 2 && localFunctionKey(parts.get(1)) instanceof String fnName
+						&& fns.containsKey(fnName)) {
+					return fns.get(fnName);
 				}
 				if (parts.size() == 2 && parts.get(1) instanceof LispCons) {
 					// (function (lambda ...)): walk the lambda expression.
 					return rewriteTail(cons, parts, 1, fns);
 				}
 				return form;
+			}
+			case LispNames.SETF:
+				return parts.size() % 2 == 1 ? rewriteSetfOfLocal(cons, parts, fns) : rewriteTail(cons, parts, 1, fns);
+			case LispNames.INCF, LispNames.DECF, LispNames.PUSH, LispNames.PUSHNEW, LispNames.POP, LispNames.REMF,
+					LispNames.PSETF, LispNames.ROTATEF, LispNames.SHIFTF: {
+				// Written through a local (setf name): the expansion's setf reaches it.
+				if (parts.stream().anyMatch(part -> localWriterOf(part, fns) != null)
+						&& expandBuiltinMacro(cons) instanceof LispVal expansion) {
+					return rewriteLocalCalls(expansion, fns);
+				}
+				return rewriteTail(cons, parts, 1, fns);
 			}
 			case LispNames.LAMBDA:
 				return rewriteKeeping(cons, parts, 2, fns, rewriteLambdaList(parts.get(1), fns));
@@ -44503,8 +44580,8 @@ public final class LispMacroExpander {
 						? defsCons.toList() : List.of();
 				java.util.Map<String, LispSymbol> shadowed = new java.util.LinkedHashMap<>(fns);
 				for (LispVal def : nestedDefs) {
-					if (def instanceof LispCons defCons && defCons.car() instanceof LispSymbol defName) {
-						shadowed.remove(defName.name());
+					if (def instanceof LispCons defCons && localFunctionKey(defCons.car()) instanceof String defName) {
+						shadowed.remove(defName);
 					}
 				}
 				java.util.Map<String, LispSymbol> defScope = nestedRecursive ? shadowed : fns;
@@ -44614,6 +44691,9 @@ public final class LispMacroExpander {
 			else if (specSection && e instanceof LispCons specCons && specCons.isProperList()) {
 				List<LispVal> sp = specCons.toList();
 				List<LispVal> newSpec = new java.util.ArrayList<>(sp);
+				// A spec's head may hold a pattern of its own: (pattern default) or
+				// ((keyword pattern) default).
+				newSpec.set(0, rewriteDestructuringPattern(sp.get(0), fns));
 				for (int i = 1; i < sp.size(); i++) {
 					newSpec.set(i, rewriteLocalCalls(sp.get(i), fns));
 				}
@@ -51414,10 +51494,6 @@ public final class LispMacroExpander {
 		LispSymbol whole = new LispSymbol(prefix + "_whole");
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		bindings.add(listToCons(List.of(whole, parts.get(2))));
-		if (parts.get(1) instanceof LispNil) {
-			// The empty pattern binds nothing and takes nothing.
-			bindings.add(LambdaLists.destructuringSurplusCheck(whole, 0));
-		}
 		destructuringBindings(parts.get(1), whole, prefix, new int[] { 0 }, bindings);
 		List<LispVal> letParts = new java.util.ArrayList<>();
 		letParts.add(new LispSymbol(LispNames.LET_STAR));
@@ -51436,11 +51512,12 @@ public final class LispMacroExpander {
 	 * keywords binds its required prefix positionally and delegates the tail to
 	 * {@link LambdaLists#appendTailBindings}. Nested sub-patterns recurse; a
 	 * keyword-using sub-pattern goes through its own temporary because the tail machinery
-	 * rebinds its rest variable.
+	 * rebinds its rest variable. The empty pattern binds nothing and takes nothing.
 	 */
 	private static void destructuringBindings(LispVal pattern, LispVal source, String prefix, int[] counter,
 			List<LispVal> out) {
 		if (pattern instanceof LispNil) {
+			out.add(LambdaLists.destructuringSurplusCheck(source, 0));
 			return;
 		}
 		if (!containsLambdaListKeyword(pattern)) {
@@ -51500,10 +51577,10 @@ public final class LispMacroExpander {
 				out.add(listToCons(List.of(tmp, acc)));
 				destructuringBindings(nested, tmp, prefix, counter, out);
 			}
-			else if (e instanceof LispCons nested) {
-				destructuringBindings(nested, acc, prefix, counter, out);
+			else if (isDestructuringPattern(e)) {
+				destructuringBindings(e, acc, prefix, counter, out);
 			}
-			else if (!(e instanceof LispNil)) {
+			else {
 				throw new IllegalArgumentException("invalid destructuring pattern: " + pattern.print());
 			}
 			cursor = mvCall(LispNames.CDR, cursor);
@@ -51523,46 +51600,103 @@ public final class LispMacroExpander {
 			// The keyword may also sit only inside a nested sub-pattern (handled above).
 			LispSymbol restTmp = new LispSymbol(prefix + "_r" + counter[0]++);
 			out.add(listToCons(List.of(restTmp, cursor)));
-			// &rest/&body may be followed by a destructuring PATTERN instead of a
-			// variable (macro lambda lists; alexandria's if-let is
-			// (bindings &body (then-form &optional else-form))): route the rest list
-			// through a temporary and recurse the pattern over it.
-			List<LispVal> tail = new java.util.ArrayList<>(elements.subList(firstKeyword, elements.size()));
-			LispVal restPattern = null;
-			LispSymbol restPatternTmp = null;
-			for (int i = 0; i + 1 < tail.size(); i++) {
-				if (tail.get(i) instanceof LispSymbol s
-						&& (LispNames.LAMBDA_REST.equals(s.name()) || LispNames.LAMBDA_BODY.equals(s.name()))
-						&& tail.get(i + 1) instanceof LispCons pat) {
-					restPattern = pat;
-					restPatternTmp = new LispSymbol(prefix + "_g" + counter[0]++);
-					tail.set(i + 1, restPatternTmp);
-					break;
+			java.util.Map<String, LispVal> patterns = new java.util.HashMap<>();
+			List<LispVal> tail = tailPatternsAsTemporaries(elements.subList(firstKeyword, elements.size()), prefix,
+					counter, patterns);
+			List<LispVal> tailBindings = new java.util.ArrayList<>();
+			LambdaLists.appendTailBindings(tail, firstKeyword, restTmp, tailBindings);
+			for (LispVal binding : tailBindings) {
+				out.add(binding);
+				// Right behind its temporary: a later default reads a pattern's variable.
+				if (binding instanceof LispCons bound && bound.car() instanceof LispSymbol temporary
+						&& patterns.containsKey(temporary.name())) {
+					destructuringBindings(patterns.get(temporary.name()), temporary, prefix, counter, out);
 				}
-			}
-			LambdaLists.appendTailBindings(tail, firstKeyword, restTmp, out);
-			if (restPattern != null && restPatternTmp != null) {
-				destructuringBindings(restPattern, restPatternTmp, prefix, counter, out);
 			}
 		}
 	}
 
 	/**
+	 * A lambda-list tail whose patterns are replaced by temporaries for
+	 * {@link LambdaLists#appendTailBindings}, which knows a parameter as a symbol. A
+	 * pattern stands wherever ordinary syntax has a parameter name and no list of its own
+	 * (CLHS 3.4.4.1): after {@code &rest}/{@code &body} (alexandria's {@code if-let} is
+	 * {@code (bindings &body (then-form &optional else-form))}), heading an
+	 * {@code &optional} spec (eclector's {@code fixup-case}), and as the variable of a
+	 * {@code ((keyword var) ...)} spec. {@code &aux} takes none, as SBCL's does not. A
+	 * bare {@code ()} under {@code &optional} ignores its position, as SBCL's does.
+	 * @param tail the tail elements, starting with a lambda-list keyword
+	 * @param patterns receives each temporary's name and the pattern it stands for
+	 * @return the tail holding the temporaries
+	 */
+	private static List<LispVal> tailPatternsAsTemporaries(List<LispVal> tail, String prefix, int[] counter,
+			java.util.Map<String, LispVal> patterns) {
+		List<LispVal> out = new java.util.ArrayList<>(tail.size());
+		String section = "";
+		for (LispVal e : tail) {
+			if (e instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
+				section = sym.name();
+				out.add(e);
+				continue;
+			}
+			LispVal spec = e;
+			switch (section) {
+				case LispNames.LAMBDA_REST, LispNames.LAMBDA_BODY -> {
+					if (isDestructuringPattern(e)) {
+						spec = patternTemporary(e, prefix, counter, patterns);
+					}
+				}
+				case LispNames.LAMBDA_OPTIONAL -> {
+					if (e instanceof LispNil) {
+						spec = new LispSymbol(prefix + "_g" + counter[0]++);
+					}
+					else if (e instanceof LispCons c && c.isProperList() && isDestructuringPattern(c.car())) {
+						spec = new LispCons(patternTemporary(c.car(), prefix, counter, patterns), c.cdr());
+					}
+				}
+				case LispNames.LAMBDA_KEY -> {
+					if (e instanceof LispCons c && c.isProperList() && c.car() instanceof LispCons keyed
+							&& keyed.isProperList() && keyed.toList().size() == 2
+							&& isDestructuringPattern(keyed.toList().get(1))) {
+						LispVal temporary = patternTemporary(keyed.toList().get(1), prefix, counter, patterns);
+						spec = new LispCons(listToCons(List.of(keyed.car(), temporary)), c.cdr());
+					}
+				}
+				default -> {
+				}
+			}
+			out.add(spec);
+		}
+		return out;
+	}
+
+	private static LispSymbol patternTemporary(LispVal pattern, String prefix, int[] counter,
+			java.util.Map<String, LispVal> patterns) {
+		LispSymbol temporary = new LispSymbol(prefix + "_g" + counter[0]++);
+		patterns.put(temporary.name(), pattern);
+		return temporary;
+	}
+
+	private static boolean isDestructuringPattern(LispVal element) {
+		return element instanceof LispCons || element instanceof LispNil;
+	}
+
+	/**
 	 * Appends a surplus-element check for every level of a keyword-free pattern that ends
 	 * in nil (a dotted tail consumes the rest of its list): the list at that level must
-	 * be exhausted by the pattern's elements. Every level with an element also gets a
-	 * missing-element check first -- a dotted tail excuses only what follows it, never
-	 * the elements before it. Kept apart from {@link #destructurePairs}, which
-	 * {@code loop}'s destructuring shares -- there a surplus value is discarded (CLHS
-	 * 6.1.1.7) and a short list still binds nil.
+	 * be exhausted by the pattern's elements, an empty one by none. Every level with an
+	 * element also gets a missing-element check first -- a dotted tail excuses only what
+	 * follows it, never the elements before it. Kept apart from
+	 * {@link #destructurePairs}, which {@code loop}'s destructuring shares -- there a
+	 * surplus value is discarded (CLHS 6.1.1.7) and a short list still binds nil.
 	 */
 	private static void appendSurplusChecks(LispVal pattern, LispVal source, List<LispVal> out) {
 		int count = 0;
 		LispVal cursor = source;
 		LispVal tail = pattern;
 		while (tail instanceof LispCons c) {
-			if (c.car() instanceof LispCons nested) {
-				appendSurplusChecks(nested, mvCall(LispNames.CAR, cursor), out);
+			if (isDestructuringPattern(c.car())) {
+				appendSurplusChecks(c.car(), mvCall(LispNames.CAR, cursor), out);
 			}
 			cursor = mvCall(LispNames.CDR, cursor);
 			count++;

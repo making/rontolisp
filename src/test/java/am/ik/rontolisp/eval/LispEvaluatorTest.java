@@ -8359,6 +8359,31 @@ class LispEvaluatorTest {
 		assertThat(eval("(flet ((sq (x) (* x x))) (mapcar #'sq '(1 2 3)))").print()).isEqualTo("(1 4 9)");
 		assertThat(eval("(flet ((dbl (x) (* 2 x))) (funcall #'dbl 21))")).isEqualTo(new LispInteger(42));
 		assertThat(eval("(flet () 'ok)").print()).isEqualTo("OK");
+		// A local (setf name) function: the place reaches it, in every pair of a setf,
+		// through a modify macro and as #'(setf name); a reader alone is not one.
+		assertThat(eval("(flet (((setf c) (v x) (list v x))) (list (setf (c 1) 2) (funcall #'(setf c) 3 4)))").print())
+			.isEqualTo("((2 1) (3 4))");
+		assertThat(eval("(let (r) (flet (((setf c) (v) (push v r))) (setf (c) 1 (c) 2) r))").print())
+			.isEqualTo("(2 1)");
+		assertThat(eval("(let ((s 1)) (flet ((c () s) ((setf c) (v) (setq s v))) (incf (c) 2) s))").print())
+			.isEqualTo("3");
+		assertThat(evalMulti("""
+				(defun (setf db-c) (v x) (list :global v x))
+				(flet ((db-c (x) x)) (setf (db-c 1) 2))""").print()).isEqualTo("(:GLOBAL 2 1)");
+		// A call only a macro's expansion spells reaches the local function, and a
+		// redefinition of the macro reaches a site that already ran.
+		assertThat(evalMulti("""
+				(defmacro db-call (f x) `(,f ,x))
+				(defun db-run (n) (flet ((db-l (x) (list :local x))) (db-call db-l n)))
+				(let ((first (db-run 1)))
+				  (defmacro db-call (f x) `(list :redefined (,f ,x)))
+				  (list first (db-run 2)))""").print()).isEqualTo("((:LOCAL 1) (:REDEFINED (:LOCAL 2)))");
+		// A local function shadows a macro of its name, where the walk sees the macro.
+		assertThat(evalMulti("""
+				(defmacro db-s (x) `(list :macro ,x))
+				(defmacro db-t (x) `(db-s ,x))
+				(flet ((db-s (x) (list :local x))) (list (db-s 1) (db-t 2)))""").print())
+			.isEqualTo("((:LOCAL 1) (:LOCAL 2))");
 	}
 
 	@Test
@@ -9037,6 +9062,29 @@ class LispEvaluatorTest {
 		assertThat(eval("(destructuring-bind ((a &key k) b) '((1 :k 2) 3) (list a k b))").print()).isEqualTo("(1 2 3)");
 		assertThat(eval("(destructuring-bind (x (y &optional (z 9))) '(1 (2)) (list x y z))").print())
 			.isEqualTo("(1 2 9)");
+		// A pattern stands where a parameter name would (CLHS 3.4.4.1): under &optional
+		// and &key too, its default destructured like a supplied value, once, and its
+		// variables visible to the parameters after it.
+		assertThat(eval("(destructuring-bind (&optional ((a b) '(1 2) sp) (c a)) '() (list a b sp c))").print())
+			.isEqualTo("(1 2 NIL 1)");
+		assertThat(eval("(destructuring-bind (&optional ((a b) '(1 2) sp)) '((3 4)) (list a b sp))").print())
+			.isEqualTo("(3 4 T)");
+		assertThat(eval("(destructuring-bind (&key ((:k (a b)) '(1 2)) (c a)) '(:k (3 4)) (list a b c))").print())
+			.isEqualTo("(3 4 3)");
+		assertThat(eval("(destructuring-bind (&rest (a b) &aux (c a)) '(1 2) (list a b c))").print())
+			.isEqualTo("(1 2 1)");
+		// A default destructures against the pattern, and the empty pattern takes
+		// nothing.
+		String pe = "(program-error () :pe)";
+		assertThat(eval("(handler-case (destructuring-bind (&optional ((a b))) '() (list a b)) " + pe + ")").print())
+			.isEqualTo(":PE");
+		assertThat(eval("(handler-case (destructuring-bind (() b) '((1) 2) b) " + pe + ")").print()).isEqualTo(":PE");
+		assertThat(eval("(destructuring-bind (&optional () b) '((1) 2) b)").print()).isEqualTo("2");
+		// A function's lambda list has no patterns (CLHS 3.4.1), and neither has &aux.
+		assertThatThrownBy(() -> eval("(defun db-f (&optional ((a b) nil)) a)"))
+			.hasMessageContaining("Parameter must be a symbol");
+		assertThatThrownBy(() -> eval("(destructuring-bind (&aux ((a b) '(1 2))) '() a)"))
+			.hasMessageContaining("Parameter must be a symbol");
 	}
 
 	@Test
@@ -16851,6 +16899,10 @@ class LispEvaluatorTest {
 				(with-pair (p q) (+ p q))
 				""");
 		assertThat(result).isEqualTo(new LispInteger(3));
+		// eclector's fixup-case: a pattern under &optional, its default a list of ().
+		assertThat(evalMulti("""
+				(defmacro db-fixup (a &optional ((() &body forms) '(()))) `'(,a ,forms))
+				(list (db-fixup 1) (db-fixup 1 (() 2 3)))""").print()).isEqualTo("((1 NIL) (1 (2 3)))");
 	}
 
 	@Test

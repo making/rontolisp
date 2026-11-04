@@ -403,6 +403,13 @@ public final class LispEvaluator {
 	private final ThreadLocal<java.util.Map<String, LispVal>> symbolMacroWalkScope = new ThreadLocal<>();
 
 	/**
+	 * The macros a local function shadows where {@link UserMacroExpander#expandAll} is
+	 * walking on this thread, null where there are none. Like
+	 * {@link #symbolMacroWalkScope}, a macro body runs without it.
+	 */
+	private final ThreadLocal<java.util.Set<String>> shadowedMacroWalkScope = new ThreadLocal<>();
+
+	/**
 	 * Memo of {@link #expandUserMacro}, keyed by the CALL SITE's cons identity. CL
 	 * expands a macro call once, when the code containing it is processed; the
 	 * interpreter used to re-expand on EVERY evaluation, so a macro call in a loop body
@@ -10692,9 +10699,9 @@ public final class LispEvaluator {
 			case LispNames.WITH_STANDARD_IO_SYNTAX:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandWithStandardIoSyntax);
 			case LispNames.FLET:
-				return LispMacroExpander.expandFlet(preExpandLocalMacros(cons, env));
+				return expandedPerSite(cons, () -> LispMacroExpander.expandFlet(preExpandLocalMacros(cons, env)));
 			case LispNames.LABELS:
-				return LispMacroExpander.expandLabels(preExpandLocalMacros(cons, env));
+				return expandedPerSite(cons, () -> LispMacroExpander.expandLabels(preExpandLocalMacros(cons, env)));
 			case LispNames.MULTIPLE_VALUE_BIND:
 				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueBind);
 			case LispNames.MULTIPLE_VALUE_LIST:
@@ -13059,6 +13066,8 @@ public final class LispEvaluator {
 		if (callerScope != null) {
 			this.symbolMacroWalkScope.remove();
 		}
+		java.util.Set<String> callerShadowed = shadowedMacros();
+		shadowedMacros(java.util.Set.of());
 		try {
 			LispVal expansion = macro.expander() == null ? LispNil.INSTANCE
 					: applyGlobal(macro.expander(), List.of(form, expanderEnvironment));
@@ -13072,6 +13081,7 @@ public final class LispEvaluator {
 			if (callerScope != null) {
 				this.symbolMacroWalkScope.set(callerScope);
 			}
+			shadowedMacros(callerShadowed);
 			if (swapPackage) {
 				this.packageResolver.setCurrentPackage(callerPackage);
 			}
@@ -13209,6 +13219,30 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * The macros a local function shadows where {@link UserMacroExpander#expandAll} is
+	 * walking.
+	 * @return the names, empty outside the scope of such a function
+	 */
+	java.util.Set<String> shadowedMacros() {
+		java.util.Set<String> names = this.shadowedMacroWalkScope.get();
+		return names != null ? names : java.util.Set.of();
+	}
+
+	/**
+	 * Sets what {@link #shadowedMacros()} answers; the caller restores the previous
+	 * answer the same way.
+	 * @param names the names
+	 */
+	void shadowedMacros(java.util.Set<String> names) {
+		if (names.isEmpty()) {
+			this.shadowedMacroWalkScope.remove();
+		}
+		else {
+			this.shadowedMacroWalkScope.set(names);
+		}
+	}
+
+	/**
 	 * Whether a call of the macro must be expanded every time it is reached: its
 	 * {@code &environment}, or the environment argument of its function, reads the walk's
 	 * scope, which may differ between two walks over one cons a macro spliced twice, so
@@ -13288,13 +13322,22 @@ public final class LispEvaluator {
 	 */
 	private LispVal expandSymbolMacrolet(LispCons cons, Environment env,
 			java.util.function.Function<LispCons, LispVal> substitution) {
+		return expandedPerSite(cons, () -> substitution.apply((LispCons) expandAllAtSite(cons, env)));
+	}
+
+	/**
+	 * The expansion of a form that depends on the macro table, once per call site: it
+	 * shares {@link #userMacroExpansions}, which drops with that table. Computed outside
+	 * the monitor, as a macro body is a whole program.
+	 */
+	private LispVal expandedPerSite(LispCons cons, java.util.function.Supplier<LispVal> expander) {
 		synchronized (this.userMacroExpansions) {
 			LispVal cached = this.userMacroExpansions.get(cons);
 			if (cached != null) {
 				return cached;
 			}
 		}
-		LispVal expansion = substitution.apply((LispCons) expandAllAtSite(cons, env));
+		LispVal expansion = expander.get();
 		synchronized (this.userMacroExpansions) {
 			if (this.userMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
 				this.userMacroExpansions.put(cons, expansion);
@@ -14949,14 +14992,14 @@ public final class LispEvaluator {
 
 	/**
 	 * Pre-expands user macros (macrolet included) inside an {@code flet}/{@code labels}
-	 * form when its body contains a {@code macrolet}: the flet expansion rewrites its
-	 * local-function CALL SITES textually, so a call site that only appears after a
-	 * nested macrolet expands (ironclad's {@code sha256-round} calling the flet-bound
-	 * {@code sigma1}) must be materialized first or it misses the rewrite. The common
-	 * macrolet-free case skips the walk.
+	 * form: the flet expansion rewrites its local-function CALL SITES textually, so a
+	 * call site that only appears after a macro expands (ironclad's {@code sha256-round}
+	 * calling the flet-bound {@code sigma1} through a macrolet, eclector's
+	 * {@code token-state-machine} calling the local it is handed) must be materialized
+	 * first or it misses the rewrite. A form naming no macro skips the walk.
 	 */
 	private LispCons preExpandLocalMacros(LispCons cons, Environment env) {
-		if (!treeContainsMacrolet(cons)) {
+		if (!treeHasHead(cons, name -> LispNames.MACROLET.equals(name) || isUserMacro(name))) {
 			return cons;
 		}
 		return expandAllAtSite(cons, env) instanceof LispCons expanded ? expanded : cons;
@@ -14984,12 +15027,16 @@ public final class LispEvaluator {
 		}
 	}
 
+	private static boolean treeContainsMacrolet(LispVal form) {
+		return treeHasHead(form, LispNames.MACROLET::equals);
+	}
+
 	// Iterative on purpose: a Java-recursive walk adds a frame per cons visited, and this
-	// runs on every flet/labels entry -- inside a recursive Lisp function, that overhead
+	// runs on an flet/labels entry -- inside a recursive Lisp function, that overhead
 	// compounds once per recursion level and can exhaust the JVM stack well before the
 	// interpreter's own recursion would (cl-mustache's recursive renderer hit this).
 	// An explicit, heap-backed stack keeps this check's own footprint at O(1) frames.
-	private static boolean treeContainsMacrolet(LispVal form) {
+	private static boolean treeHasHead(LispVal form, java.util.function.Predicate<String> head) {
 		ArrayDeque<LispVal> pending = new ArrayDeque<>();
 		pending.push(form);
 		while (!pending.isEmpty()) {
@@ -14997,7 +15044,7 @@ public final class LispEvaluator {
 			if (!(current instanceof LispCons cons)) {
 				continue;
 			}
-			if (cons.car() instanceof LispSymbol sym && LispNames.MACROLET.equals(sym.name())) {
+			if (cons.car() instanceof LispSymbol sym && head.test(sym.name())) {
 				return true;
 			}
 			pending.push(cons.car());

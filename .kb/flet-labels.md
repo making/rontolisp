@@ -26,8 +26,29 @@ lambdas; `labels` = letrec -- bind to nil, then `setq` each lambda, so
   `PackageRegistry.specialOperatorNames()` are `IllegalArgumentException`; shadowing `list` is not.
 - Wiring: `expandBuiltinMacro` + evaluator + Jvm/WasmExprCompiler + `NoGcWasmCompiler.expandMacro`
   + `FreeVarAnalyzer` (both walks) + a `UserMacroExpander.expandAll` case.
-- Interpreter-only: the rewrite precedes user-macro expansion, so a user macro in an flet body
-  receives already-rewritten argument forms. Compile path unaffected.
+- **A `(setf place)` local** (`localFunctionKey`) is keyed `%setf-PLACE`, its block named `PLACE`.
+  `rewriteSetfOfLocal` turns a `(setf (place args) v)` naming it into `setfFunctionCall` with the
+  writer's `#'`, so the order is the global one's, and a modify macro on such a place walks through
+  its expansion. A place whose head is only a local READER keeps its head: it writes through the
+  global `(setf place)`, as SBCL's does (before 2026-11-05 it became a `funcall` place). Consumers:
+  eclector's `set-standard-syntax-types`, pngload's `decode.lisp`. Pin: ci-spec
+  `flet-and-labels-local-functions`.
+- **A call only a macro's expansion spells is rewritten too, on every backend.** The compile
+  path expands user macros first. The interpreter's `flet`/`labels` arm does the same walk
+  (`preExpandLocalMacros`) when the tree heads a form with a user macro or `macrolet`, and
+  memoizes the expansion per site in `userMacroExpansions` (`expandedPerSite`, as `symbol-macrolet`),
+  so the walk costs once and not per entry, which is why a recursive `flet` keeps the stack it had
+  (`treeHasHead` stays iterative: cl-mustache). Until 2026-11-05 only a tree naming a `macrolet` was
+  walked, and `(flet ((f ...)) (call-it f))` was `F is undefined` on the interpreter alone
+  (fast-http's `skip-while`, eclector's `token-state-machine`). A macro in a dead branch of the
+  body now expands at entry, as on the compile path; one defined by the body itself still expands
+  when reached. Pin: ci-spec `flet-and-labels-local-functions`, `LispEvaluatorTest#evalFletBasic`.
+- **A local function shadows a macro of its name in the walk too** (`LispEvaluator.shadowedMacros`,
+  `UserMacroExpander.isMacroInWalk`; a compiler macro likewise): the body, and for `labels` the
+  definitions, keep the call for the rewrite, an inner `macrolet` of the name shadows back, and a macro
+  body runs without the set, in the null lexical environment. Without it `expandAll` expanded the
+  macro: `(defmacro m ...) (flet ((m ...)) (m 1))` called the macro on JVM and both WASM until
+  2026-11-05, and the interpreter's new walk would have joined them.
 - `macrolet`/`symbol-macrolet` unimplemented (`.todo/034-local-function-definition.md`).
 - **wasm-GC fusion rides this lowering**: `WasmLetCompiler` registers a `__FLET*` binding whose
   init lambda has plain params and a closed integer-tree body, substituted at

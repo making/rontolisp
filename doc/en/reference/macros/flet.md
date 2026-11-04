@@ -2,7 +2,7 @@
 
 `(flet ((name lambda-list body...)...) body...)`
 
-Binds local functions for the body. Lisp-2: each name lives in the function namespace only, so it is reached from call position (`(name args...)`) and via `#'name`, while a bare `name` remains a variable reference. The definitions are NOT visible to each other or to themselves -- a definition body sees the outer function of the same name (use [`labels`](labels.md) for recursion). Lambda lists support the same extensions as `defun` (`&optional`/`&rest`/`&key`/`&aux`).
+Binds local functions for the body. Lisp-2: each name lives in the function namespace only, so it is reached from call position (`(name args...)`) and via `#'name`, while a bare `name` remains a variable reference. The definitions are NOT visible to each other or to themselves -- a definition body sees the outer function of the same name (use [`labels`](labels.md) for recursion). Lambda lists support the same extensions as `defun` (`&optional`/`&rest`/`&key`/`&aux`). A `name` may be `(setf place)`, a local writer: `(setf (place args...) value)` calls it with the value first, as does a modify macro (`incf`, `push`, ...) on that place, and `#'(setf place)` names it. A local `place` alone reads and leaves the place's writer the global one.
 
 Expands into `let`-bound lambdas plus a body rewrite, so a local function is an ordinary closure: it can capture surrounding variables and be passed to `mapcar`/`funcall`/`apply` via `#'name`.
 
