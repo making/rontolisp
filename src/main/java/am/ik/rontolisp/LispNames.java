@@ -4837,6 +4837,12 @@ public final class LispNames {
 	public static final String SLOT_PROTOCOL_MAKUNBOUND = "%SLOT-PROTOCOL-MAKUNBOUND";
 
 	/**
+	 * The slot-access protocol's {@code (%slot-protocol-inherit-initfunctions name
+	 * pairs)}: the initforms a class inherits from a plain superclass, for its fill.
+	 */
+	public static final String SLOT_PROTOCOL_INHERIT_INITFUNCTIONS = "%SLOT-PROTOCOL-INHERIT-INITFUNCTIONS";
+
+	/**
 	 * {@code (%slot-protocol-fill obj initargs slot-names)}: CL's initarg and initform
 	 * fill (CLHS 7.1.4) through {@code (setf slot-value-using-class)}.
 	 */

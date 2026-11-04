@@ -156,7 +156,10 @@ so `#'name`/`funcall`/`mapcar` work with no `BuiltinFunctionWrappers` entry.
   such form a static walk can evaluate is a constant name, so `ClosRegistry` carries a
   `defconstant` name -> literal value table (`registerConstant`/`findConstant`) filled in
   DEFINITION ORDER. `parseEqlSpecializerValue` consults it for a BARE symbol only; `(eql 'x)`
-  is the symbol, and a bare symbol naming no constant stands for itself.
+  is the symbol. A bare symbol naming no constant stood for itself until 2026-11-05; it is a variable
+  now, an evaluated form like the ones below (McCLIM's `(eql *builtin-t-class*)`). A keyword stays literal.
+  Census 2026-11-05 of the cached Quicklisp systems: every bare name in such a specializer is a
+  variable or a constant (SBCL signals `unbound-variable` for any other).
   `(eql (find-class 'c))` (and `(eql #<class>)`) stays the `(find-class 'c)` form and
   `makeEqlSpecializerTest` emits `(eq arg (find-class 'c))` -- find-class is memoized, so
   re-evaluating it per call compares against the definition-time object. `c` must resolve at
@@ -996,8 +999,24 @@ in each slot's storage, reached past its own `slot-value-using-class`, and pins 
   on a user metaclass. Residual: a method on `standard-class` or on an `eql` class is not reached
   from `make-instance` of a class without a `:metaclass`; `class-prototype` calls the generic (a
   refusing method refuses it, where SBCL's prototype needs no allocation).
+- **What else that load needed**, pinned by the same case: `class-prototype` of a built-in class is a
+  value of it (SBCL's where it is a constant), not an allocation; `extract-lambda-list`,
+  `extract-specializer-names`; `(find-class 'pathname)` (`FIND_CLASS_ONLY_CLASS_NAMES`). A defclass
+  whose form seeds a class (the first `funcallable-standard-class`) regenerates the class dispatchers
+  BEFORE its driver runs: `shared-initialize` had no arm for the seeded metaclass, so such a class
+  kept raw initargs and stayed unfinalized, on the interpreter when a metaclass was in use before.
+  A generic function or method instance never fills through the slot-access protocol
+  (`fillsThroughSlotProtocol`): its seeded slots start nil with no initfunction to say so.
+- **`closer-mop:ensure-class`** is `(eval (defclass ...))` of its initargs, so on the interpreter a
+  method can specialize on the class and `make-instance` find it by name, what McCLIM's presentation
+  types want. On the compile paths the `eval` defines no class, so `find-class` signals: the class
+  set is fixed there (`doc/**/find-class.md`). `forward-referenced-class` is a seeded metaclass BELOW
+  `standard-class` (AMOP: beside it), since every metaobject test goes through that tag. The readable
+  exports with no operator yet: `class-default-initargs`, `compute-effective-method`,
+  `specializer-direct-methods`, `specializer-direct-generic-functions`,
+  `compute-applicable-methods-using-classes` (a generic with what a program defines, never called).
 - Pinned by ci-spec standalone `slot-locations-and-allocate-instance-methods` (SBCL 2.2.9 `sb-mop`
-  agrees).
+  agrees) and `LispEvaluatorTest.closerMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators`.
 
 ### The metaclass protocol (Phase B) and the MOP widening
 A `defclass` carrying `(:metaclass M)` — `M` registered and descending from `standard-class` —
@@ -1293,6 +1312,10 @@ the four generics with the class metaobject, the instance and the effective slot
   so a user `shared-initialize` that never calls the next method (contextl's on
   `special-object`) is the only fill, as in CL; with none, the unbound allocation is followed
   by `%slot-protocol-fill` directly.
+- **An inherited initform** (2026-11-05): the definition of a slot a plain superclass declares is
+  a plain view with no initfunction, so the fill left that slot unbound on all four backends. A class
+  filling through the protocol runs `%slot-protocol-inherit-initfunctions` after its driver with a
+  thunk per such slot. SBCL 2.2.9 agrees.
 - Residuals: a class whose precedence list carries `:default-initargs` keeps the constructor
   fill (`markDefaultInitargs`: the protocol fill reads the driver-built initfunctions, which
   know no default initargs) and then re-fills through the protocol inside `shared-initialize`

@@ -153,11 +153,43 @@
 ;; (class-prototype c)) holds -- contextl caches layer contexts by it.
 (defvar closer-mop::*class-prototypes* nil)
 
+;; A built-in class has no instances to allocate: its prototype is a value of it,
+;; SBCL's where the value is a constant.
+(defvar closer-mop::*built-in-prototype-classes*
+  '(t integer number real rational ratio float complex string character symbol
+      keyword null boolean cons list sequence vector array bit-vector hash-table
+      function stream pathname))
+
+(defun closer-mop::%built-in-prototype (name)
+  (case name
+    ((integer number real rational) 0)
+    (ratio 1/42)
+    (float 0.0)
+    (complex (complex 0 1))
+    (string "")
+    (character #\*)
+    (symbol '*)
+    (keyword :keyword)
+    ((null list) nil)
+    (cons (list nil))
+    ((sequence vector) (vector))
+    (array (make-array nil))
+    (bit-vector (make-array 0 :element-type 'bit))
+    (hash-table (make-hash-table))
+    (function #'identity)
+    (stream *standard-output*)
+    (pathname (pathname ""))
+    (t t)))
+
 (defun closer-mop:class-prototype (class)
   (let ((hit (assoc class closer-mop::*class-prototypes* :test #'eq)))
     (if hit
         (cdr hit)
-        (let ((prototype (allocate-instance class)))
+        (let ((prototype
+               (if (member (slot-value class 'name)
+                           closer-mop::*built-in-prototype-classes*)
+                   (closer-mop::%built-in-prototype (slot-value class 'name))
+                   (allocate-instance class))))
           (setq closer-mop::*class-prototypes*
                 (cons (cons class prototype) closer-mop::*class-prototypes*))
           prototype))))
@@ -171,6 +203,55 @@
           (return)
           (setq out (cons (funcall collector arg) out))))
     (reverse out)))
+
+(defun closer-mop::%ensure-class-form (name initargs)
+  ;; The defclass of ENSURE-CLASS's initargs: a superclass by name, a slot from its
+  ;; canonical plist, any other initarg as a class option whose tail is its value.
+  (let ((supers nil) (slots nil) (options nil) (cursor initargs))
+    (loop while cursor
+          do
+            (let ((key (car cursor)) (value (car (cdr cursor))))
+              (cond ((eq key :name) nil)
+                    ((eq key :direct-superclasses)
+                     (setq supers
+                           (mapcar (lambda (super)
+                                     (if (symbolp super)
+                                         super
+                                         (slot-value super 'name))) value)))
+                    ((eq key :direct-slots)
+                     (setq slots (mapcar #'closer-mop::%slot-spec-form value)))
+                    ((eq key :metaclass)
+                     (setq options (cons (list :metaclass value) options)))
+                    (t (setq options (cons (cons key value) options))))
+              (setq cursor (cdr (cdr cursor)))))
+    (append (list 'defclass name supers slots) (reverse options))))
+
+(defun closer-mop::%slot-spec-form (plist)
+  ;; AMOP's canonicalized slot specification back in defclass's spelling.
+  (let ((spec nil) (cursor plist))
+    (loop while cursor
+          do
+            (let ((key (car cursor)) (value (car (cdr cursor))))
+              (cond ((eq key :name) nil)
+                    ((eq key :initargs)
+                     (dolist (initarg value)
+                       (setq spec (cons initarg (cons :initarg spec)))))
+                    ((eq key :readers)
+                     (dolist (reader value)
+                       (setq spec (cons reader (cons :reader spec)))))
+                    ((eq key :writers)
+                     (dolist (writer value)
+                       (setq spec (cons writer (cons :writer spec)))))
+                    ((eq key :initfunction) nil)
+                    (t (setq spec (cons value (cons key spec)))))
+              (setq cursor (cdr (cdr cursor)))))
+    (cons (getf plist :name) (reverse spec))))
+
+(defun closer-mop:ensure-class (name &rest initargs)
+  ;; AMOP: defines the class, or defines it again. As a defclass, so that a method
+  ;; can specialize on it and make-instance find it by name.
+  (eval (closer-mop::%ensure-class-form name initargs))
+  (find-class name))
 
 (defun closer-mop:extract-specializer-names (specialized-lambda-list)
   ;; AMOP: one name per required parameter, t for an unspecialized one.

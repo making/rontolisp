@@ -792,6 +792,10 @@ public final class PackageRegistry {
 			"SUBCLASSP", "CLASS-PROTOTYPE", "REQUIRED-ARGS", "CLASS-PRECEDENCE-LIST", "COMPUTE-CLASS-PRECEDENCE-LIST",
 			// McCLIM's define-protocol-class walks a specialized lambda list.
 			"EXTRACT-SPECIALIZER-NAMES", "EXTRACT-LAMBDA-LIST",
+			// McCLIM's presentation types: a class per type, made by ensure-class.
+			"ENSURE-CLASS", ClosRegistry.FORWARD_REFERENCED_CLASS, "CLASS-DEFAULT-INITARGS",
+			"COMPUTE-APPLICABLE-METHODS-USING-CLASSES", "COMPUTE-EFFECTIVE-METHOD", "SPECIALIZER-DIRECT-METHODS",
+			"SPECIALIZER-DIRECT-GENERIC-FUNCTIONS",
 			// The slot-access protocol (macro/slot-protocol.lisp): contextl's special
 			// slots are methods on these.
 			"SLOT-VALUE-USING-CLASS", "SLOT-BOUNDP-USING-CLASS", "SLOT-MAKUNBOUND-USING-CLASS");

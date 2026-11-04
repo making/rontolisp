@@ -19624,16 +19624,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void defmethodEqlSpecializerNamingNoConstantStaysTheSymbol() {
-		assertThat(evalMulti("""
-				(defgeneric name-it (x))
-				(defmethod name-it (x) :default)
-				(defmethod name-it ((x (eql not-a-constant))) :symbol)
-				(list (name-it 'not-a-constant) (name-it 1))
-				""").print()).isEqualTo("(:SYMBOL :DEFAULT)");
-	}
-
-	@Test
 	void defclassSlotsAccessorsInheritanceAndClassDispatch() {
 		assertThat(evalMulti("""
 				(defclass animal () ((name :initarg :name :accessor animal-name)))
@@ -19723,6 +19713,22 @@ class LispEvaluatorTest {
 			.print())
 			.isEqualTo("(T NIL CMM-P T (NAME AGE) (T INTEGER) ((:NAME) (:AGE)) (NAME AGE) "
 					+ "((AGE ZIP) (3 NIL) (NIL ((SETF Q-ZIP) SET-ZIP)) (NIL NIL NIL) ((:NAME) (:AGE)) (T NIL T NIL T T NIL) ((:CLASS :INSTANCE) (:CLASS :INSTANCE) :INSTANCE)))");
+		// ensure-class defines a class a method can specialize on (the compile paths'
+		// class set is fixed): SBCL 2.2.9 agrees.
+		assertThat(evalMulti("""
+				(asdf:load-system "closer-mop")
+				(defclass ec-meta (standard-class) ((tag :initarg :tag :reader ec-tag)))
+				(defmethod closer-mop:validate-superclass ((c ec-meta) (s standard-class)) t)
+				(defclass ec-base () ((a :initarg :a :initform 1 :reader ec-a)))
+				(let ((c (closer-mop:ensure-class 'ec-sub :metaclass 'ec-meta
+				           :direct-superclasses (list (find-class 'ec-base))
+				           :direct-slots (list (list :name 'b :initargs '(:b) :readers '(ec-b)))
+				           :tag :hello)))
+				  (defmethod ec-what ((x ec-sub)) :sub)
+				  (list (eq c (find-class 'ec-sub)) (class-name c) (ec-tag c)
+				        (ec-a (make-instance 'ec-sub)) (ec-b (make-instance 'ec-sub :b 2))
+				        (ec-what (make-instance 'ec-sub))))
+				""").print()).isEqualTo("(T EC-SUB :HELLO 1 2 :SUB)");
 	}
 
 	@Test

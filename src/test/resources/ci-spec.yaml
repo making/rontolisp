@@ -11911,11 +11911,18 @@ cases:
       (defmethod clos-eql-form ((x (eql (identity *clos-eql-s*)))) :that-string)
       (print (list (clos-eql-form 42) (clos-eql-form *clos-eql-s*) (clos-eql-form (copy-seq *clos-eql-s*))
                    (clos-eql-form '=def-alpha=) *clos-eql-count*))
+      ;; So is a bare variable (McCLIM's (eql *builtin-t-class*)).
+      (defvar *clos-eql-var* (list :the-list))
+      (defgeneric clos-eql-var (x))
+      (defmethod clos-eql-var (x) :other)
+      (defmethod clos-eql-var ((x (eql *clos-eql-var*))) :that-list)
+      (print (list (clos-eql-var *clos-eql-var*) (clos-eql-var (list :the-list))))
     expected: |
       ((:UTF8 1 12) (:TAG 1 :TAG) (:DEFAULT 1 99))
       (:ALPHA :CLASS-T (:OTHER BETA) 1)
       (:OTHER 42)
       (:FORTY-TWO :THAT-STRING (:OTHER "key") :ALPHA 1)
+      (:THAT-LIST :OTHER)
   - name: clos-methods-take-effect-where-their-forms-run
     source: |
       ;; A method exists from the moment its form runs (CLHS 7.6): a call that runs first
@@ -34395,6 +34402,28 @@ standalone:
                (type-error () :type-error)))
       (print (closer-mop:extract-specializer-names '((a integer) b (c (eql 1)) &optional d)))
       (print (closer-mop:extract-lambda-list '((a integer) b (c (eql 1)) &optional d &key (e 1))))
+      ;; The fill runs the initform a plain superclass declares.
+      (defclass slc-plain () ((p :initarg :p :initform (+ 2 3) :accessor slc-p)))
+      (defclass slc-sub (slc-plain) ((q :initform 7 :accessor slc-q)) (:metaclass slc-class))
+      (let ((x (make-instance 'slc-sub)))
+        (print (list (slc-p x) (slc-q x) (slc-p (make-instance 'slc-sub :p 1)))))
+      ;; A generic-function class, the first funcallable class after a metaclass was in
+      ;; use: its class is a standard-class to shared-initialize, and its instance keeps
+      ;; the system's slots whatever the slot-access protocol does.
+      (defclass slc-gf (standard-generic-function) ()
+        (:metaclass closer-mop:funcallable-standard-class))
+      (defgeneric slc-g (a) (:generic-function-class slc-gf))
+      (defmethod slc-g (a) (list :default a))
+      (defmethod slc-g ((a integer)) (list :integer (call-next-method)))
+      (print (list (slc-g 1) (slc-g :a)))
+      ;; A built-in class's prototype is a value of it, pathname one of them.
+      (print (mapcar (lambda (name)
+                       (let ((prototype (closer-mop:class-prototype (find-class name))))
+                         (and (typep prototype name)
+                              (eq prototype (closer-mop:class-prototype (find-class name))))))
+                     '(integer ratio float complex number real rational string character symbol
+                       null cons list sequence vector array bit-vector hash-table function
+                       stream pathname)))
     stdout: |
       (1 2 3)
       20
@@ -34410,6 +34439,9 @@ standalone:
       :TYPE-ERROR
       (INTEGER T (EQL 1))
       (A B C &OPTIONAL D &KEY (E 1))
+      (5 7 1)
+      ((:INTEGER (:DEFAULT 1)) (:DEFAULT :A))
+      (T T T T T T T T T T T T T T T T T T T T T)
   # The generic-function protocol adds an arm consulting its generic's run-time
   # methods to every dispatcher, so it runs alone, not in the corpus.
   - name: generic-function-protocol

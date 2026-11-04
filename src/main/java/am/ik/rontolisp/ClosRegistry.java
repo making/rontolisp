@@ -604,6 +604,9 @@ public final class ClosRegistry {
 					// generic-function is a funcallable-standard-object (AMOP 5.2).
 					ensureFuncallableClassesSeeded();
 				}
+				if (STANDARD_CLASS_NAME.equals(seed.parent())) {
+					ensureMopClassesSeeded();
+				}
 				if (!this.classes.containsKey(normalize(seed.name()))) {
 					seedClass(seed.name(), seed.parent(), seed.slots().toArray(String[]::new));
 				}
@@ -1140,6 +1143,17 @@ public final class ClosRegistry {
 	/** AMOP's {@code eql-specializer}, under its {@code closer-mop} name. */
 	public static final String EQL_SPECIALIZER_NAME = LispNames.CLOSER_MOP_PKG + ":" + EQL_SPECIALIZER;
 
+	/** The {@code closer-mop} symbol naming {@link #FORWARD_REFERENCED_CLASS_NAME}. */
+	public static final String FORWARD_REFERENCED_CLASS = "FORWARD-REFERENCED-CLASS";
+
+	/**
+	 * AMOP's {@code forward-referenced-class}, under its {@code closer-mop} name: a
+	 * metaclass of the metaobject layout, so below {@code standard-class} where AMOP has
+	 * it beside.
+	 */
+	public static final String FORWARD_REFERENCED_CLASS_NAME = LispNames.CLOSER_MOP_PKG + ":"
+			+ FORWARD_REFERENCED_CLASS;
+
 	/**
 	 * One class a seeding family registers: its canonical name, its parent and its own
 	 * slots.
@@ -1204,7 +1218,8 @@ public final class ClosRegistry {
 					new MopSeed(STANDARD_READER_METHOD_NAME, STANDARD_ACCESSOR_METHOD_NAME),
 					new MopSeed(STANDARD_WRITER_METHOD_NAME, STANDARD_ACCESSOR_METHOD_NAME)),
 			List.of(new MopSeed("METHOD-COMBINATION", null)),
-			List.of(new MopSeed(EQL_SPECIALIZER_NAME, null, List.of("OBJECT"))));
+			List.of(new MopSeed(EQL_SPECIALIZER_NAME, null, List.of("OBJECT"))),
+			List.of(new MopSeed(FORWARD_REFERENCED_CLASS_NAME, STANDARD_CLASS_NAME)));
 
 	/** Each member name of {@link #METHOD_METAOBJECT_FAMILIES} to its family. */
 	private static final Map<String, List<MopSeed>> METHOD_METAOBJECT_FAMILY_BY_MEMBER = methodMetaobjectFamilyIndex();
@@ -1334,7 +1349,7 @@ public final class ClosRegistry {
 	 * specifier resolves through by name (`.kb/clos.md`).
 	 */
 	public static final List<String> FIND_CLASS_ONLY_CLASS_NAMES = List.of("STANDARD-OBJECT", "SEQUENCE", "LIST",
-			"NUMBER", "REAL", "RATIONAL", "STRUCTURE-OBJECT", "BUILT-IN-CLASS");
+			"NUMBER", "REAL", "RATIONAL", "STRUCTURE-OBJECT", "BUILT-IN-CLASS", "PATHNAME");
 
 	/**
 	 * Registers a built-in class (a condition of the seeded hierarchy, or one of the MOP
@@ -2406,12 +2421,17 @@ public final class ClosRegistry {
 	/** The classes a {@code defclass} defined with a {@code :metaclass}, normalized. */
 	private final Set<String> metaclassedClasses = new java.util.HashSet<>();
 
+	/** Each of {@link #metaclassedClasses} to its metaclass's name. */
+	private final Map<String, String> metaclassOf = new java.util.HashMap<>();
+
 	/**
 	 * Records that the class was defined with a {@code (:metaclass M)} option.
 	 * @param className the class name as spelled
+	 * @param metaclassName the metaclass's name
 	 */
-	public void markMetaclassed(String className) {
+	public void markMetaclassed(String className, String metaclassName) {
 		this.metaclassedClasses.add(normalize(className));
+		this.metaclassOf.put(normalize(className), metaclassName);
 	}
 
 	/**
@@ -2525,14 +2545,24 @@ public final class ClosRegistry {
 
 	/**
 	 * Whether {@code make-instance} of the class calls {@code allocate-instance}: the
-	 * program has a method on it and the class was defined with a {@code :metaclass},
-	 * which is what such a method specializes on.
+	 * class was defined with a {@code :metaclass} a method on the generic specializes.
 	 * @param className the class name as spelled
 	 * @return true for such a class
 	 */
 	public boolean allocatesThroughGeneric(String className) {
-		return this.metaclassedClasses.contains(normalize(className))
-				&& findGeneric(LispNames.ALLOCATE_INSTANCE) != null;
+		GenericInfo generic = findGeneric(LispNames.ALLOCATE_INSTANCE);
+		String metaclass = this.metaclassOf.get(normalize(className));
+		if (generic == null || metaclass == null) {
+			return false;
+		}
+		ClassInfo info = findClass(metaclass);
+		if (info == null) {
+			return false;
+		}
+		return generic.methods().values().stream().anyMatch(method -> {
+			Specializer first = method.specializers().isEmpty() ? Specializer.DEFAULT : method.specializers().get(0);
+			return first.kind() == SpecializerKind.CLASS && info.ancestors().contains(first.name());
+		});
 	}
 
 	/**
@@ -2549,7 +2579,10 @@ public final class ClosRegistry {
 			return false;
 		}
 		ClassInfo info = findClass(className);
-		return info != null && info.ancestors().stream().noneMatch(this.defaultInitargClasses::contains);
+		// A generic function's or method's slots are the system's, which initialize to
+		// nil with no initfunction to say so.
+		return info != null && info.ancestors().stream().noneMatch(this.defaultInitargClasses::contains)
+				&& !info.ancestors().contains("GENERIC-FUNCTION") && !info.ancestors().contains("METHOD");
 	}
 
 	/**

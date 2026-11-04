@@ -20857,7 +20857,7 @@ public final class LispMacroExpander {
 							+ "standard-class, defined before its first use: " + metaclassSym.name());
 				}
 				metaclassName = metaclassInfo.name();
-				closRegistry.markMetaclassed(className);
+				closRegistry.markMetaclassed(className, metaclassInfo.name());
 				if (metaclassInfo.ancestors().contains(ClosRegistry.FUNCALLABLE_STANDARD_CLASS_NAME)
 						&& superInfos.stream()
 							.noneMatch(s -> s.ancestors().contains(ClosRegistry.FUNCALLABLE_STANDARD_OBJECT_NAME))) {
@@ -21193,6 +21193,11 @@ public final class LispMacroExpander {
 			// (the compiled program), so the metaclass protocol runs with the class's
 			// own definitions already in place.
 			forms.add(ensureClassWithMetaclassCall(className, metaclassName, driverSupers, ownSlots, classInitargs));
+			LispVal inherited = closRegistry.fillsThroughSlotProtocol(className)
+					? inheritedInitfunctionsCall(className, ownSlots, closRegistry) : null;
+			if (inherited != null) {
+				forms.add(inherited);
+			}
 		}
 		if (waiting) {
 			return waitingClassForms(className, namedSuperclassForms, forms);
@@ -21458,6 +21463,32 @@ public final class LispMacroExpander {
 				quoteOf(metaclassName), quotedData(supers),
 				slotSpecs.isEmpty() ? LispNil.INSTANCE : listToCons(specsCall),
 				classInitargs.isEmpty() ? LispNil.INSTANCE : listToCons(initargsCall)));
+	}
+
+	/**
+	 * {@code (%slot-protocol-inherit-initfunctions 'name (list (cons 'slot (lambda ()
+	 * initform))...))} over the slots with an initform the class inherits, or null with
+	 * none. The protocol's fill runs initfunctions, and the definition of a slot a plain
+	 * superclass declares has none: the compile paths' metaobject table is quoted data.
+	 */
+	private static @Nullable LispVal inheritedInitfunctionsCall(String className, List<ParsedSlot> ownSlots,
+			ClosRegistry closRegistry) {
+		ClosRegistry.ClassInfo info = closRegistry.findClass(className);
+		if (info == null) {
+			return null;
+		}
+		java.util.Set<String> own = new java.util.HashSet<>();
+		ownSlots.forEach(parsed -> own.add(parsed.spec().name()));
+		List<LispVal> pairs = new java.util.ArrayList<>();
+		pairs.add(new LispSymbol(LispNames.LIST));
+		for (ClosRegistry.SlotSpec slot : info.slots()) {
+			if (slot.initformSupplied() && slot.sharedCellVar() == null && !own.contains(slot.name())) {
+				pairs.add(mvCall(LispNames.CONS, quoteOf(slot.name()),
+						listToCons(List.of(new LispSymbol(LispNames.LAMBDA), LispNil.INSTANCE, slot.initform()))));
+			}
+		}
+		return pairs.size() == 1 ? null
+				: mvCall(LispNames.SLOT_PROTOCOL_INHERIT_INITFUNCTIONS, quoteOf(className), listToCons(pairs));
 	}
 
 	/** Builds a {@code (quote datum)} form around an arbitrary value. */
@@ -27976,9 +28007,13 @@ public final class LispMacroExpander {
 				&& closRegistry.findConstant(bare.name()) instanceof LispVal constant) {
 			// (eql +k+) where +k+ is a defconstant: CLHS 7.6.2 evaluates the specializer
 			// form when the method is defined, so the method dispatches on the CONSTANT'S
-			// VALUE. A bare symbol naming no constant keeps standing for itself -- not
-			// CL, but what existing sources spelling (eql foo) already get.
+			// VALUE.
 			value = constant;
+		}
+		else if (value instanceof LispSymbol bare && !bare.isKeyword()) {
+			// Any other variable (McCLIM's (eql *builtin-t-class*)) is a form like the
+			// ones below.
+			return listToCons(List.of(new LispSymbol(EQL_SPECIALIZER_FORM), value));
 		}
 		if (isEqlSpecializerLiteral(value)) {
 			return value;
