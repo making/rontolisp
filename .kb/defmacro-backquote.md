@@ -122,10 +122,11 @@ recurse through `__db<N>_g<i>`; a dotted tail normalizes to `&rest`.
   expansion; simple ones keep the strict arity check.
 
 ## `(setf (macro-function name) function)` — the macro table holds callables
-**Invariant: the write goes to the MACRO TABLE, carried out by whichever pass owns that table;
-the form never reaches a backend.** `LispMacroExpander.isSetfMacroFunctionForm` recognizes it
-syntactically before the value form would run (a setf of several pairs counts; `splitSetfPairs`
-makes it one-pair setfs first, so the other places stay ordinary).
+**Invariant: a write that defines a macro goes to the MACRO TABLE, carried out by whichever pass
+owns that table; only a write the program runs reaches a backend.**
+`LispMacroExpander.isSetfMacroFunctionForm` recognizes it syntactically before the value form would
+run (a setf of several pairs counts; `splitSetfPairs` makes it one-pair setfs first, so the other
+places stay ordinary).
 
 - Interpreter: `evalCons`'s `SETF` case -> `writeMacroFunction`. Name and value evaluate in the
   form's environment, a `UserMacro` with `expander` set goes in the table, and
@@ -135,14 +136,35 @@ makes it one-pair setfs first, so the other places stay ordinary).
   name is refused like `defmacro`'s.
 - Compile path: `UserMacroExpander.stripDefmacroDefinitions` replays it into the macro-time
   evaluator and DROPS it, like a `defmacro`: bare, a member of a `progn`/`eval-when` (a macro
-  built it: log4cl's `forward-macro`, lparallel's `alias-macro`), or the body of a
-  `let`/`flet` closing over it. `expandAll`'s `SETF` case returns it verbatim, so the value
-  expands as the macro-time evaluator runs it. `writesMacroFunction` activates the pass at any
-  depth. **A failed replay is a hard error naming the form** (`replayMacroDefinitions`): skipped
-  with a warning, every call site would compile to an undefined function.
-- Reaching `expandSetf`'s `MACRO-FUNCTION` case means a compiled program would have to run the
-  write (a function body, a `let` with other effects); it throws. The value form runs at macro
-  time only, so a closure over a run-time value is not reachable there.
+  built it: log4cl's `forward-macro`, lparallel's `alias-macro`), or the body of a top-level
+  `let`/`flet` of nothing but macro definitions (`bodyOnlyDefinesMacros`). At those positions
+  `expandAll` (`topLevel`, `rebuildBinder`) returns it verbatim, so the value expands as the
+  macro-time evaluator runs it: a walked `(macroexpand 'lit env)` would have folded without `env`.
+  `writesMacroFunction` activates the pass at any depth. **A failed replay is a hard error naming
+  the form** (`replayMacroDefinitions`): skipped with a warning, every call site would compile to
+  an undefined function.
+- **Anywhere else the program runs the write** (2026-11-04, all four backends; a compile error
+  until then, parachute's `fixture.lisp:31` restore). `expandAll` walks its subforms where a
+  `macrolet` is in scope, keeping the `setf` shape: a form that also replays
+  (rutils' `abbr`, an `eval-when` around a `cond`) still reaches `writeMacroFunction` and its alias
+  path. `expandSetf`'s `MACRO-FUNCTION` case lowers it to `(%set-macro-function name value)`,
+  a prelude entry selected by surface (`usesRuntimeSetfMacroFunction`, also a pruner root): the
+  interpreter's type-errors and `cl`-name refusal in its words, then a `%macro-function-writes%`
+  alist. In such a program `emitMacroFunctionTable` emits a `macro-function` that reads the alist
+  first and, where named, a `macroexpand`/`macroexpand-1` that run what it holds, so read-back is
+  `eq` and a stored stub round-trips. Rejected: signalling at the call (breaks `abbr`'s kept
+  form); evaluating and dropping the value (`macro-function` silently answers the old value).
+  The `find-class` twin is `usesRuntimeSetfFindClass`, `.kb/clos.md`. `--no-gc` refuses it at the
+  `defvar`.
+- **A call does not see a run-time write on the compile paths**, as under SBCL's `compile-file`:
+  every call was expanded when compiled, so a name only such a write defines compiles to an
+  undefined function, with the warning. A literal `(macroexpand-1 '(name))` folds at compile time
+  the same way. On the interpreter the call expands. Lite, compile paths: `fboundp` answers nil for
+  a name only a run-time write defines, and `fmakunbound` leaves `macro-function` answering for a
+  macro, written or defined (and `(fboundp 'macro)` is the compile-time `t` of `foldMacroFboundp`);
+  SBCL 2.2.9 answers `t` and `nil`.
+- `(setf (macro-function 'a) (macro-function 'b))` answers the function, also through the alias path
+  (it answered the name until 2026-11-04), as SBCL does.
 - **The function `macro-function` answers for a `defmacro` is the one it had when asked**: it
   captures the `UserMacro`, not the name. Over the name, storing it back after a redefinition
   (parachute's fixture restore) expanded through itself forever. Such a call runs the expander

@@ -15125,6 +15125,103 @@ cases:
       "boom"
       (1 2)
       (8 :BIG 5 T)
+  # A (setf (macro-function ...)) no top-level form leaves is a write the program runs.
+  # The compile paths have expanded every call by then, so this reads the write through
+  # macro-function and macroexpand, never by a call. SBCL 2.2.9 agrees but for the words
+  # of the refusals.
+  - name: setf-macro-function-at-run-time
+    source: |
+      (defun cw-install (name value) (setf (macro-function name) value))
+      (defun cw-listing (form env) (declare (ignore env)) (cons 'list (cdr form)))
+      (print (macro-function 'cw-written))
+      (let* ((expander #'cw-listing)
+             (answer (cw-install 'cw-written expander)))
+        (print (list (eq answer expander) (eq (macro-function 'cw-written) expander))))
+      (print (funcall (macro-function 'cw-written) '(cw-written 1 2) nil))
+      (print (multiple-value-list (macroexpand-1 (list 'cw-written 3))))
+      (print (multiple-value-list (macroexpand (list 'cw-written 4))))
+      (print (multiple-value-list (macroexpand-1 (list 'cw-plain 5))))
+      ;; A later write replaces the earlier one; a keyword may name a macro.
+      (cw-install 'cw-written (lambda (form env) (declare (ignore env)) (list 'second-write form)))
+      (print (funcall (macro-function 'cw-written) 'f nil))
+      (let ((expander #'cw-listing))
+        (cw-install :cw-key expander)
+        (print (eq (macro-function :cw-key) expander)))
+      ;; The value is an expression of the code around it: a macro in it expands, also a
+      ;; macrolet's, and it closes over what that code binds.
+      (defmacro cw-twice (x) `(* 2 ,x))
+      (macrolet ((cw-local (x) `(+ 1 ,x)))
+        (defun cw-install-walked (n)
+          (setf (macro-function 'cw-walked)
+                (lambda (form env) (declare (ignore form env)) (cw-local (cw-twice n))))))
+      (cw-install-walked 20)
+      (print (funcall (macro-function 'cw-walked) nil nil))
+      ;; Several pairs, an if, a let that does more than define macros, a table of
+      ;; closures as parachute's fixture restores are.
+      (defun cw-two-writes ()
+        (setf (macro-function 'cw-one) #'cw-listing
+              (macro-function 'cw-two) #'cw-listing)
+        (list (and (macro-function 'cw-one) t) (and (macro-function 'cw-two) t)))
+      (print (cw-two-writes))
+      (print (functionp (if t (setf (macro-function 'cw-in-if) #'cw-listing) nil)))
+      (let ((seen nil))
+        (setf (macro-function 'cw-in-let) #'cw-listing)
+        (setq seen (and (macro-function 'cw-in-let) t))
+        (print seen))
+      (defvar *cw-restores* (list (lambda (symbol value) (setf (macro-function symbol) value))))
+      (defmacro cw-restored (x) `(list ,x))
+      (let ((saved (macro-function 'cw-restored)))
+        (funcall (first *cw-restores*) 'cw-restored saved)
+        (print (eq saved (macro-function 'cw-restored))))
+      ;; A form that runs at compile time and stays in the program, as rutils' abbr does:
+      ;; the macro is there for the forms after it, the kept form runs.
+      (defmacro cw-long (x) `(list :long ,x))
+      (defmacro cw-abbr (short long)
+        `(eval-when (:compile-toplevel :load-toplevel :execute)
+           (handler-bind ((warning #'muffle-warning))
+             (cond ((macro-function ',long)
+                    (setf (macro-function ',short) (macro-function ',long)))))))
+      (cw-abbr cw-short cw-long)
+      (cw-abbr cw-add1 incf)
+      (cw-abbr :cw-add2 incf)
+      (print (cw-short 1))
+      (print (let ((n 1)) (cw-add1 n) (:cw-add2 n 5) n))
+      (print (functionp (macro-function 'cw-short)))
+      (defun cw-alias () (setf (macro-function 'cw-aliased) (macro-function 'cw-long)))
+      (print (functionp (cw-alias)))
+      ;; What the write refuses.
+      (defun cw-refusal (name value)
+        (handler-case (cw-install name value)
+          (type-error (c) (list :type-error (format nil "~A" c)))
+          (error (c) (list :error (format nil "~A" c)))))
+      (print (cw-refusal 'cw-bad 5))
+      (print (cw-refusal 5 #'cw-listing))
+      (print (cw-refusal 'car #'cw-listing))
+      (print (cw-refusal 'when #'cw-listing))
+      (print (macro-function 'cw-bad))
+    expected: |
+      NIL
+      (T T)
+      (LIST 1 2)
+      ((LIST 3) T)
+      ((LIST 4) T)
+      ((CW-PLAIN 5) NIL)
+      (SECOND-WRITE F)
+      T
+      41
+      (T T)
+      T
+      T
+      T
+      (:LONG 1)
+      7
+      T
+      T
+      (:TYPE-ERROR "setf MACRO-FUNCTION expects a function, got 5")
+      (:TYPE-ERROR "setf MACRO-FUNCTION expects a symbol, got 5")
+      (:ERROR "setf MACRO-FUNCTION cannot redefine the standard operator CAR")
+      (:ERROR "setf MACRO-FUNCTION cannot redefine the standard operator WHEN")
+      NIL
   - name: setf-symbol-function-and-fdefinition
     source: |
       (defun csf-orig (x) (* x 2))

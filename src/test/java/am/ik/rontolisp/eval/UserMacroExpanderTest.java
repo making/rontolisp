@@ -318,6 +318,15 @@ class UserMacroExpanderTest {
 				(setf (macro-function 'fwd2) (macro-function 'fwd) pair 1)
 				(print (fwd2 1))
 				""")).isEqualTo("(PROGN (PRINT :KEPT))\n(PROGN (SETF PAIR 1))\n(PRINT (LIST :TARGET 1))");
+		// Anywhere else the program runs it, its subforms walked with the code around
+		// them.
+		assertThat(expand("""
+				(defmacro one () 1)
+				(defun install (f) (setf (macro-function f) (lambda (form env) (one))))
+				(let ((n 2)) (setf (macro-function 'mixed) (lambda (form env) n)) (print n))
+				""")).contains("(DEFUN INSTALL (F) (SETF (MACRO-FUNCTION F) (LAMBDA (FORM ENV) 1)))")
+			.contains("(LET ((N 2)) (SETF (MACRO-FUNCTION 'MIXED) (LAMBDA (FORM ENV) N)) (PRINT N))")
+			.contains("(%MACRO-FN SYMBOL '(CL-USER::ONE))");
 	}
 
 	@Test

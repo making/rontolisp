@@ -509,6 +509,32 @@ public final class LispPreludeLibrary {
 				(defun macro-function (symbol &optional environment)
 				  (%macro-fn symbol nil))
 				""");
+		// The write of a (setf macro-function) the program runs: an alist macro-function
+		// reads first (UserMacroExpander.emitMacroFunctionTable). Same refusals, in the
+		// same order and words, as LispEvaluator.writeMacroFunction.
+		SOURCES.put(LispNames.SET_MACRO_FUNCTION, """
+				(defvar %macro-function-writes% nil)
+				(defun %set-macro-function (symbol function)
+				  (if (symbolp symbol)
+				      nil
+				      (error 'simple-type-error :datum symbol :expected-type 'symbol
+				             :format-control "setf MACRO-FUNCTION expects a symbol, got ~S"
+				             :format-arguments (list symbol)))
+				  (if (functionp function)
+				      nil
+				      (error 'simple-type-error :datum function :expected-type 'function
+				             :format-control "setf MACRO-FUNCTION expects a function, got ~S"
+				             :format-arguments (list function)))
+				  (if (eq (symbol-package symbol) (find-package "COMMON-LISP"))
+				      (error "setf MACRO-FUNCTION cannot redefine the standard operator ~A" symbol)
+				      nil)
+				  (let ((written (assoc symbol %macro-function-writes%)))
+				    (if written
+				        (rplacd written function)
+				        (setq %macro-function-writes%
+				              (cons (cons symbol function) %macro-function-writes%))))
+				  function)
+				""");
 		// compiler-macro-function: nil for every name in a program without a compiler
 		// macro; UserMacroExpander overrides it with the program's own table, answering
 		// the expander stub below. The interpreter defines the real one eagerly.
@@ -5423,6 +5449,11 @@ public final class LispPreludeLibrary {
 		// name (compile 'name) hands it.
 		if (LispNames.MACRO_FUNCTION.equals(entry)) {
 			return referencesName(program, LispNames.COMPILE, canonical);
+		}
+		// %set-macro-function: LispMacroExpander.expandSetf produces the call, inside the
+		// expression compilers.
+		if (LispNames.SET_MACRO_FUNCTION.equals(entry)) {
+			return am.ik.rontolisp.macro.LispMacroExpander.usesRuntimeSetfMacroFunction(program);
 		}
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
 			return referencesName(program, LispNames.MAKE_BROADCAST_STREAM, canonical)

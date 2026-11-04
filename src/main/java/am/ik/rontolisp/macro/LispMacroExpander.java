@@ -4453,18 +4453,23 @@ public final class LispMacroExpander {
 					// metaobject, so the setf still answers what CL says it answers.
 					yield expandSetfFindClass(cons, placeParts, value, closRegistry);
 				}
-				case LispNames.MACRO_FUNCTION ->
-					// The macro namespace has no runtime table on any backend (macros are
-					// fully expanded before a backend sees them), so the write must reach
-					// the macro EXPANDER -- which this shared, evaluator-free pass has no
-					// access to. Both consumers therefore intercept the form before it
-					// gets here (LispEvaluator.evalCons for the interpreter,
-					// UserMacroExpander for the compile paths, which consumes it where a
-					// top-level form leaves it); reaching this point means a compiled
-					// program would have to run the write.
-					throw new UnsupportedOperationException("setf " + LispNames.MACRO_FUNCTION
-							+ " must be a top-level form in a compiled program, which has no macro table at run time: "
-							+ cons.print());
+				case LispNames.MACRO_FUNCTION -> {
+					// A write that defines a macro has to reach the macro EXPANDER, which
+					// this shared, evaluator-free pass has no access to, so both
+					// consumers
+					// intercept it before it gets here (LispEvaluator.evalCons for the
+					// interpreter, UserMacroExpander for the compile paths, which
+					// consumes
+					// it where a top-level form leaves it). Reaching this point means the
+					// compiled program runs the write: every call site is expanded by
+					// then,
+					// so what it changes is what macro-function answers.
+					if (placeParts.size() < 2) {
+						throw new IllegalArgumentException(
+								"setf " + LispNames.MACRO_FUNCTION + " expects a name and a function: " + cons.print());
+					}
+					yield listToCons(List.of(new LispSymbol(LispNames.SET_MACRO_FUNCTION), placeParts.get(1), value));
+				}
 				default ->
 
 				{
@@ -31865,12 +31870,46 @@ public final class LispMacroExpander {
 	 * Whether the form is a {@code (setf (macro-function ...) ...)} -- a write to the
 	 * MACRO table, which only a macro-expanding consumer can carry out: the interpreter
 	 * does it as it evaluates the form, and the compile paths do it in
-	 * {@code UserMacroExpander} (their only macro table), dropping the form afterwards.
+	 * {@code UserMacroExpander} (their only macro table), dropping the form afterwards
+	 * where it is a definition.
 	 * @param form the form
 	 * @return true when the form writes a {@code macro-function} place
 	 */
 	public static boolean isSetfMacroFunctionForm(LispVal form) {
 		return isSetfPlaceForm(form, LispNames.MACRO_FUNCTION);
+	}
+
+	/**
+	 * Whether the program carries a {@code (setf (macro-function ...) ...)} outside
+	 * quoted data. Asked once user macros are expanded, where the pass consumed every
+	 * write that defines a macro: what is left runs when the program does
+	 * ({@link LispNames#SET_MACRO_FUNCTION}).
+	 * @param program the program
+	 * @return whether it can write macro-function at run time
+	 */
+	public static boolean usesRuntimeSetfMacroFunction(List<LispVal> program) {
+		return program.stream().anyMatch(LispMacroExpander::containsSetfMacroFunction);
+	}
+
+	private static boolean containsSetfMacroFunction(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.isQuote(member)) {
+					return false;
+				}
+				if (LispNames.SETF.equals(member) && cons.cdr() instanceof LispCons pair
+						&& pair.car() instanceof LispCons place && place.car() instanceof LispSymbol accessor
+						&& LispNames.MACRO_FUNCTION.equals(plainTypeName(accessor))) {
+					return true;
+				}
+			}
+			if (containsSetfMacroFunction(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
 	}
 
 	/**

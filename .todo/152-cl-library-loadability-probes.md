@@ -121,11 +121,8 @@ verification against the actual Quicklisp dist at probe time)
     forwarders' `(setf (macro-function ...) (lambda ...))` (i03). It loads and logs on the
     interpreter. Compiled to a class, it stops on a closure over a `handler-case` clause variable
     (i35). Measured 2026-11-04.
-  - `parachute` compiled stops on `fixture.lisp:31`, `(setf (macro-function symbol) value)` in a
-    function body: `setf MACRO-FUNCTION must be a top-level form in a compiled program`. Measured
-    2026-11-04. A run-time write has nothing to write to. Signalling at the call would break a
-    library form that is replayed and also kept (rutils' `abbr` writes inside a `cond`), so decide
-    between that and evaluating the value and answering it.
+  - `parachute` runs compiled on all four backends, `with-fixtures` and `define-test` (i16,
+    measured 2026-11-05).
   - `lparallel` -- bt condition variables (h37).
   - `serapeum`, `spinneret` -- metaclass / class-object specializers (h33).
   - `cl-interpol`, `cl-csv` -- named-readtables: `:common-lisp` feature (h31), then the
