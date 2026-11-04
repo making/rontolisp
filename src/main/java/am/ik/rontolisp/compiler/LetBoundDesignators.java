@@ -6,6 +6,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 import org.jspecify.annotations.Nullable;
 
@@ -56,14 +57,15 @@ public final class LetBoundDesignators {
 	 * @param letForm the {@code (let bindings body...)} form
 	 * @param specialVars the dynamically bound names: a {@code let} of one of those is a
 	 * binding a CALLEE can read, so it is never dropped
-	 * @param knownFunctions the names the backend's function registry answers -- a
-	 * designator naming anything else is left bound, because the value it stands for is
-	 * then not a plain funcId (a car/cdr composition synthesizes a fresh lambda per site,
-	 * {@code --dynamic} resolves the name at run time) and duplicating it would cost more
-	 * than the binding
+	 * @param knownFunctions whether the backend's function registry answers a name with a
+	 * function of its own -- a designator naming anything else is left bound, because the
+	 * value it stands for is then not a plain funcId (a car/cdr composition synthesizes a
+	 * fresh lambda per site, {@code --dynamic} and the run-time function namespace
+	 * resolve the name when the binding runs) and duplicating it would cost more than the
+	 * binding, or read a later definition
 	 * @return the rewritten form, or {@code letForm} itself when no binding qualifies
 	 */
-	public static LispCons propagate(LispCons letForm, Set<String> specialVars, Set<String> knownFunctions) {
+	public static LispCons propagate(LispCons letForm, Set<String> specialVars, Predicate<String> knownFunctions) {
 		if (!letForm.isProperList()) {
 			return letForm;
 		}
@@ -98,7 +100,7 @@ public final class LetBoundDesignators {
 
 	/** The bindings that hold a literal designator this pass may propagate. */
 	private static Map<String, LispVal> candidates(LispCons bindings, Set<String> specialVars,
-			Set<String> knownFunctions) {
+			Predicate<String> knownFunctions) {
 		Set<String> bound = new LinkedHashSet<>();
 		Set<String> duplicated = new LinkedHashSet<>();
 		for (LispVal binding : bindings.toList()) {
@@ -121,7 +123,7 @@ public final class LetBoundDesignators {
 			String name = nameSym.name();
 			String function = FunctionDesignators.literalName(spec.get(1));
 			if (function == null || duplicated.contains(name) || specialVars.contains(name)
-					|| !knownFunctions.contains(function)) {
+					|| !knownFunctions.test(function)) {
 				continue;
 			}
 			found.put(name, FunctionDesignators.normalize(spec.get(1)));

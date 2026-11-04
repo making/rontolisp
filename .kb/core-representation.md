@@ -188,7 +188,9 @@ family, Wasm twins, second half of ci-spec `closure-binders-share-one-cell`.
 ## A redefined defun binds every call to its LAST definition
 
 Call sites resolve through the per-NAME map built in Pass 1, where a later `put` wins -- unlike
-the interpreter's sequential redefinition. Only a NON-top-level redefinition is late-bound.
+the interpreter's sequential redefinition. Only a NON-top-level redefinition, and a name the
+program also writes by a literal name (`compiler/RedefinedDefuns`,
+`.kb/symbol-runtime-api.md`), is late-bound.
 
 - JVM: a class may not hold two methods of one name+descriptor (`ClassFormatError: Duplicate
   method name` at LOAD time), so `JvmLispCompiler` drops non-last duplicates from the defuns

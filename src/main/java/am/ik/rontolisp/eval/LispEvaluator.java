@@ -1038,6 +1038,13 @@ public final class LispEvaluator {
 	private volatile Map<String, String> methodedProducerDispatch = Map.of();
 
 	/**
+	 * The dispatcher each generic function's name last got ({@code defineDispatcher}):
+	 * what a {@code #'name} taken from a generic calls, whatever the name is bound to by
+	 * then.
+	 */
+	private final Map<String, LispVal> genericDispatchers = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
 	 * Every function-body tail a multiple-value producer was lowered into when its
 	 * function was DEFINED ({@code evalDefun}, {@link #settledLambdaTail}): the lowering
 	 * spells the built-in's values by name, so a {@code defmethod} on the producer that
@@ -11740,6 +11747,10 @@ public final class LispEvaluator {
 			}
 		}
 		installGrayOwnableDefault(genericName);
+		LispVal installed = this.globalEnv.lookupFunctionOrNull(genericName);
+		if (installed != null) {
+			this.genericDispatchers.put(genericName, installed);
+		}
 		String alias = this.methodedProducerDispatch.get(genericName);
 		if (alias != null) {
 			LispVal dispatcher = this.globalEnv.lookupFunctionOrNull(genericName);
@@ -13468,10 +13479,20 @@ public final class LispEvaluator {
 			// defines its method afterwards. The wrapper resolves the CURRENT binding
 			// at call time (real CL semantics: #'name IS the generic object methods
 			// join). Non-generic names keep the direct value. It hands on every value
-			// the dispatcher answers.
+			// the dispatcher answers. What it resolves is the GENERIC's current
+			// dispatcher, not the name: a (setf (fdefinition 'name) ...) wrapping a
+			// #'name
+			// taken before it must still reach the generic, and a #'name taken after it
+			// is what the setf stored.
 			if (this.closRegistry.findGeneric(sym.name()) != null) {
 				String name = sym.name();
-				return new LispFunction(name, args -> apply(resolveFunction(name), args, this.globalEnv), true);
+				LispVal dispatcher = this.genericDispatchers.get(name);
+				if (dispatcher == null || dispatcher == this.globalEnv.lookupFunctionOrNull(name)) {
+					return new LispFunction(name, args -> {
+						LispVal current = this.genericDispatchers.get(name);
+						return apply(current != null ? current : resolveFunction(name), args, this.globalEnv);
+					}, true);
+				}
 			}
 			return resolveFunction(sym.name());
 		}

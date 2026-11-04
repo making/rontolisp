@@ -24,4 +24,4 @@
   l) ; => (1 9)
 ```
 
-`fdefinition` は [`symbol-function`](symbol-function.md) と同じ `setf` の place です: `(setf (fdefinition 'name) fn)` は `fn` をそのシンボルのグローバルな関数定義としてインストールし、`(setf (fdefinition '(setf name)) fn)` は `(setf name)` 関数をインストールします。名前は実行時に組み立てたもの (`(list 'setf p)`、`(intern s)`) でもかまいません: そうした書き込み (または `eval` の `defun`) だけが束縛する名前の直接呼び出し、`setf` の place、`#'name`、`fboundp` は、全バックエンドで実行時にその名前を引きます。
+`fdefinition` は [`symbol-function`](symbol-function.md) と同じ `setf` の place です: `(setf (fdefinition 'name) fn)` は `fn` をそのシンボルのグローバルな関数定義としてインストールし、`(setf (fdefinition '(setf name)) fn)` は `(setf name)` 関数をインストールします。クォートした名前に書き込むと、書き込みより前にコンパイルされたコードからの参照も含め、その名前へのすべての参照が全バックエンドで `fn` を呼びます。名前は実行時に組み立てたもの (`(list 'setf p)`、`(intern s)`) でもかまいません: そうした書き込み (または `eval` の `defun`) だけが束縛する名前の直接呼び出し、`setf` の place、`#'name`、`fboundp` は、全バックエンドで実行時にその名前を引きます。`defun` でも定義している名前に、実行時に組み立てた名前、`eval`、`load` 経由でのみ書き込んだ場合、コンパイルバックエンドでは、実行時に計算した名前経由の呼び出し以外はその定義を呼び続けます。

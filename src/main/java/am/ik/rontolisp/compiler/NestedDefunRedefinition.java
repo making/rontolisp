@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
@@ -57,6 +58,12 @@ public final class NestedDefunRedefinition {
 	 */
 	private static final String INTERNAL_PREFIX = "%top-defun$";
 
+	/**
+	 * What follows the prefix in the internal name of a name's second or later top-level
+	 * {@code defun} ({@link #renameAndInstall}).
+	 */
+	private static final Pattern LATER_DEFINITION = Pattern.compile("^\\d+\\$\\$");
+
 	private NestedDefunRedefinition() {
 	}
 
@@ -68,7 +75,8 @@ public final class NestedDefunRedefinition {
 	 * @return the name the program wrote
 	 */
 	public static String originalName(String name) {
-		return name.startsWith(INTERNAL_PREFIX) ? name.substring(INTERNAL_PREFIX.length()) : name;
+		return name.startsWith(INTERNAL_PREFIX)
+				? LATER_DEFINITION.matcher(name.substring(INTERNAL_PREFIX.length())).replaceFirst("") : name;
 	}
 
 	/**
@@ -107,7 +115,7 @@ public final class NestedDefunRedefinition {
 		LinkedHashSet<String> variableHeld = new LinkedHashSet<>(redefined);
 		variableHeld.removeAll(namespaceHeld);
 		rejectVariableCollision(program, variableHeld);
-		rejectExportCollision(program, redefined);
+		rejectExportCollision(program, redefined, "redefined by a nested defun");
 		Set<String> forwarders = LispMacroExpander.symbolFunctionForwarderNames(program);
 		List<LispVal> rewritten = new ArrayList<>(program.size() + redefined.size());
 		for (LispVal expr : program) {
@@ -120,15 +128,37 @@ public final class NestedDefunRedefinition {
 			if (inNamespace && forwarders.contains(name)) {
 				continue;
 			}
+			if (inNamespace) {
+				renameAndInstall((LispCons) expr, name, 1, rewritten);
+				continue;
+			}
 			LispCons defun = (LispCons) expr;
-			LispCons nameCell = (LispCons) defun.cdr();
-			String internal = INTERNAL_PREFIX + name;
-			rewritten.add(SourceProvenance.inherit(defun,
-					new LispCons(defun.car(), new LispCons(new LispSymbol(internal), nameCell.cdr()))));
-			rewritten.add(SourceProvenance.inherit(defun,
-					inNamespace ? installFunctionValue(name, internal) : assignFunctionValue(name, internal)));
+			rewritten.add(renamed(defun, INTERNAL_PREFIX + name));
+			rewritten.add(SourceProvenance.inherit(defun, assignFunctionValue(name, INTERNAL_PREFIX + name)));
 		}
 		return rewritten;
+	}
+
+	/**
+	 * Adds to {@code out} the definition of an internal name a top-level {@code defun}
+	 * becomes, and the form that installs it as {@code name}'s function in the run-time
+	 * function namespace, where the {@code defun} stood.
+	 * @param defun the definition
+	 * @param name its name
+	 * @param ordinal which top-level definition of the name it is, from 1: each has a
+	 * name of its own, since each installs its own function when it runs
+	 * @param out the program being built
+	 */
+	static void renameAndInstall(LispCons defun, String name, int ordinal, List<LispVal> out) {
+		String internal = INTERNAL_PREFIX + (ordinal > 1 ? ordinal + "$$" : "") + name;
+		out.add(renamed(defun, internal));
+		out.add(SourceProvenance.inherit(defun, installFunctionValue(name, internal)));
+	}
+
+	private static LispVal renamed(LispCons defun, String internal) {
+		LispCons nameCell = (LispCons) defun.cdr();
+		return SourceProvenance.inherit(defun,
+				new LispCons(defun.car(), new LispCons(new LispSymbol(internal), nameCell.cdr())));
 	}
 
 	/**
@@ -166,7 +196,7 @@ public final class NestedDefunRedefinition {
 	 * unknown function (must be a top-level defun)" about a name that IS one, which is
 	 * exactly the kind of misdirection this item was closing.
 	 */
-	private static void rejectExportCollision(List<LispVal> program, Set<String> redefined) {
+	static void rejectExportCollision(List<LispVal> program, Set<String> redefined, String how) {
 		for (LispVal expr : program) {
 			if (!(expr instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)
 					|| !(cons.cdr() instanceof LispCons argCell)) {
@@ -181,7 +211,7 @@ public final class NestedDefunRedefinition {
 					&& LispNames.QUOTE.equals(quote.name()) && quoted.cdr() instanceof LispCons nameCell
 					&& nameCell.car() instanceof LispSymbol name && redefined.contains(name.name())) {
 				throw new UnsupportedOperationException(SourceProvenance.prefix(cons) + "the function " + name.name()
-						+ " is exported (" + head.name() + ") and also redefined by a nested defun. An export binds "
+						+ " is exported (" + head.name() + ") and also " + how + ". An export binds "
 						+ "one static definition, which a redefinable name does not have. Rename one of the two.");
 			}
 		}
