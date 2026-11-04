@@ -42066,6 +42066,38 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Whether a {@code handler-case} or {@code handler-bind} clause's type specifier, an
+	 * {@code (or ...)} included, names {@code rontolisp:interactive-interrupt}: what asks
+	 * SIGINT to be signalled ({@code .kb/error-handling.md}, "SIGINT").
+	 * @param type the type specifier
+	 * @return whether it names the condition
+	 */
+	public static boolean namesInterruptCondition(LispVal type) {
+		if (type instanceof LispCons cell) {
+			return namesInterruptCondition(cell.car()) || namesInterruptCondition(cell.cdr());
+		}
+		return type instanceof LispSymbol symbol && LispNames.INTERACTIVE_INTERRUPT_QUALIFIED.equals(symbol.name());
+	}
+
+	/**
+	 * What a poll of a compiled program runs: past a pending SIGINT's handlers the
+	 * process ends with its status, without cleanups, as on the interpreter: <pre>
+	 * (defun %interrupt-poll ()
+	 *   (if (%interrupt-take)
+	 *       (progn (signal 'rontolisp:interactive-interrupt) (%host-exit 130))))
+	 * </pre>
+	 * @return the defun
+	 */
+	public static LispVal interruptPollDefun() {
+		LispVal signal = callOf(LispNames.SIGNAL, listToCons(
+				List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.INTERACTIVE_INTERRUPT_QUALIFIED))));
+		LispVal exit = callOf(LispNames.HOST_EXIT, new LispInteger(SIGINT_STATUS));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.INTERRUPT_POLL_INTERNAL),
+				LispNil.INSTANCE, makeIf(listToCons(List.of(new LispSymbol(LispNames.INTERRUPT_TAKE_INTERNAL))),
+						listToCons(List.of(new LispSymbol(LispNames.PROGN), signal, exit)), LispNil.INSTANCE)));
+	}
+
+	/**
 	 * Whether the form contains, in operator position of an evaluated sub-form, either
 	 * the {@code signal} operator / a {@code #'signal} reference ({@code signal} true) or
 	 * a {@code handler-case}/{@code ignore-errors} head ({@code signal} false).
@@ -52370,6 +52402,9 @@ public final class LispMacroExpander {
 		.of(LispNames.JAVA_EXCEPTION_QUALIFIED, LispNames.JAVA_EXCEPTION_CAUSE_QUALIFIED);
 
 	/** The name whose presence registers {@code rontolisp:interactive-interrupt}. */
+	/** The process status SIGINT ends a process with: 128 + its number. */
+	private static final int SIGINT_STATUS = 130;
+
 	private static final java.util.Set<String> INTERACTIVE_INTERRUPT_NAMES = java.util.Set
 		.of(LispNames.INTERACTIVE_INTERRUPT_QUALIFIED);
 

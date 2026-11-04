@@ -134,8 +134,8 @@ arm signals the `rontolisp:wit-error` condition, whose payload is read with
 [Compiling to WebAssembly](../../compiling/wasm.md) guide.
 
 `rontolisp:interactive-interrupt` is the condition Ctrl-C (SIGINT) is signalled as
-on the interpreter, a `serious-condition` and not an `error`, like SBCL's
-`sb-sys:interactive-interrupt`:
+on the interpreter and in a compiled JVM program, a `serious-condition` and not an
+`error`, like SBCL's `sb-sys:interactive-interrupt`:
 
 ```lisp
 (handler-case (signal 'rontolisp:interactive-interrupt)
@@ -149,5 +149,7 @@ thread that established the first such handler, and it wakes `sleep` and
 `condition-wait`. A call that does not wake, such as `read-line` on standard input,
 leaves it pending, and a second SIGINT then ends the process. If every handler
 declines, the process ends with status 130 without running `unwind-protect`
-cleanups. In a compiled program SIGINT always ends the process and no handler runs.
+cleanups. In a WebAssembly program SIGINT always ends the process and no handler
+runs, and the same goes for a JVM class a host calls or deploys (`rontolisp:jvm-export`,
+`--no-main`, a `.war`), whose SIGINT belongs to the host.
 

@@ -61,6 +61,7 @@ final class JvmHandlerCaseCompiler {
 				errorClauses.add(clauseParts);
 			}
 		}
+		JvmInterruptPoll.emitListen(errorClauses.stream().map(clauseParts -> clauseParts.get(0)).toList(), ctx);
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		// In restart mode what a landing takes may be a record saying the handler-bind
 		// handlers ran (JvmThrowableRecords.COND_RAN): the clauses dispatch on the

@@ -8485,13 +8485,27 @@ public final class LispNames {
 
 	/**
 	 * The {@code interactive-interrupt} condition of the {@code rontolisp} package: what
-	 * SIGINT is signalled as on the interpreter, for a program with a handler naming it
-	 * ({@code .kb/error-handling.md}, "SIGINT"). Seeded by {@code ClosRegistry}.
+	 * SIGINT is signalled as on the interpreter and the JVM backend, for a program with a
+	 * handler naming it ({@code .kb/error-handling.md}, "SIGINT"). Seeded by
+	 * {@code ClosRegistry}.
 	 */
 	public static final String INTERACTIVE_INTERRUPT = "INTERACTIVE-INTERRUPT";
 
 	/** {@link #INTERACTIVE_INTERRUPT}, qualified. */
 	public static final String INTERACTIVE_INTERRUPT_QUALIFIED = RONTOLISP_PKG + ":" + INTERACTIVE_INTERRUPT;
+
+	/**
+	 * The defun the JVM backend injects into a program naming
+	 * {@link #INTERACTIVE_INTERRUPT} and calls at every poll
+	 * ({@code LispMacroExpander.interruptPollDefun}).
+	 */
+	public static final String INTERRUPT_POLL_INTERNAL = "%INTERRUPT-POLL";
+
+	/**
+	 * The JVM backend's primitive under {@link #INTERRUPT_POLL_INTERNAL}: whether a
+	 * SIGINT is pending for the calling thread, taking it.
+	 */
+	public static final String INTERRUPT_TAKE_INTERNAL = "%INTERRUPT-TAKE";
 
 	/**
 	 * The reader of {@link #WIT_ERROR}'s {@code payload} slot: the mapped {@code E} value

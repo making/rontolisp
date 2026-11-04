@@ -1430,6 +1430,7 @@ final class JvmTypedLoopCompiler {
 			expr(count);
 			this.ctx.body.lstore(limSlot).lconst_0().lstore(ctr.slot);
 			MethodCode.Label loopStart = this.ctx.body.newBoundLabel();
+			JvmInterruptPoll.emit(this.ctx, this.className);
 			MethodCode.Label exit = this.ctx.body.newLabel();
 			this.ctx.body.lload(ctr.slot).lload(limSlot).lcmp().ifge(exit);
 			for (Node n : body) {

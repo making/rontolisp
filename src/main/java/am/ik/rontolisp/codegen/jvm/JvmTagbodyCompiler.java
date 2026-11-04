@@ -84,6 +84,7 @@ final class JvmTagbodyCompiler {
 					labels.put(label, target);
 				}
 				ctx.body.labelBinding(target);
+				JvmInterruptPoll.emit(ctx, className);
 			}
 			else {
 				ctx.exitMark = exits ? part : null;

@@ -1071,10 +1071,29 @@ on the thread that established that first handler, and past a declining handler 
   `nohup` asks. A non-interactive shell's `&` does that, so `InterruptSignalTest` assumes it away;
   `-Xrs` throws `IllegalArgumentException`, taken as the host keeping it.
 
-**Compile paths**: the class exists and a program can signal it, SIGINT never does: measured
-2026-11-04, a sleeping program's `handler-case` does not run; JVM exits 130 (its shutdown hooks
-run), wasmtime dies of the signal. The interpreter and SBCL print the handler's output and exit 0.
-The JVM has no poll in compiled code and `Thread.stop` is gone; WASM has no signals.
+**JVM**: the same contract, pinned by `InterruptSignalTest` on both. `Thread.stop` is gone, so compiled
+code polls: `codegen/jvm/JvmInterruptPoll` calls the injected `%interrupt-poll` defun
+(`LispMacroExpander.interruptPollDefun`) at every function entry (past the self-tail head, so a tail
+loop polls; a tail group's member bodies carry theirs), tagbody label, `while` head and typed `dotimes`
+head. A built-in's own inline loop does not poll, as on the interpreter.
+- **The gate** (`JvmLispCompiler.takesInterrupts`) is the program naming the condition and this class's
+  `main` running it: a `jvm-export`, `--no-main` or `.war` class leaves the host's SIGINT alone, as an
+  embedded interpreter does, and a run-time fragment or its host class stays out. Off, no emitter writes
+  a byte. A WASM compile never reads the gate. The injection precedes the surface scans, so its `signal`
+  opens `signalClauseMatch` for any `handler-case`.
+- `runtime/RontoInterruptSignal` is `cli/InterruptSignal` plus the evaluator's request: `listen` at a
+  `handler-case`/`handler-bind` clause naming it (`LispMacroExpander.namesInterruptCondition`, shared with
+  the interpreter), `take` under the poll. `sleep` and `%condition-wait` go through its wrappers, which
+  return early for a request and poll. `join-thread` does not wake here either.
+- **The request's interrupt must land before a take**, or the status outlives the request and wakes the
+  next blocked call with its `was interrupted` error. Measured 2026-11-04: a program interrupting a hot
+  `(loop)` and then sleeping 2000 times hit it once on the interpreter; a compiled typed `dotimes` followed
+  by one `%condition-wait` hit it in both runs tried. Both now hold one lock over request and take
+  (`RontoInterruptSignal.class`, `interruptedThreads`): 0 in 2000 on each.
+- ci-spec's `interactive-interrupt-condition` names the condition, so the concatenated JVM leg always
+  compiles with polls, the way `restart-system` puts it in restart mode.
+
+**WASM** has no signals: wasmtime dies of SIGINT and no handler runs.
 
 ### `signal` declines a handler-case no clause matches -- on every backend
 **Invariant: CLHS 9.1.4.1 -- `signal` transfers control only to a handler that will handle the

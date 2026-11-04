@@ -201,6 +201,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	private boolean needsConditionVariableRuntime;
 
 	/**
+	 * Whether the last {@link #compile} polls for SIGINT, i.e. whether the emitted class
+	 * needs {@code RontoInterruptSignal} beside it.
+	 */
+	private boolean needsInterruptRuntime;
+
+	/**
 	 * The terminal probe behind {@code %terminal-p} ({@code interactive-stream-p}), in
 	 * internal form: the class {@code JvmExprCompiler} calls it on, which travels with
 	 * the output.
@@ -966,10 +972,10 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsInflateRuntime
-				&& !this.needsConditionVariableRuntime && !this.needsTerminalRuntime && !this.needsHashTableRuntime
-				&& !this.needsComplexRuntime && !this.needsQuantizedRuntime && !this.needsIoStreamRuntime
-				&& !this.needsCharFileRuntime && !this.needsStringInputRuntime && !this.needsJavaValueRuntime
-				&& this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
+				&& !this.needsConditionVariableRuntime && !this.needsInterruptRuntime && !this.needsTerminalRuntime
+				&& !this.needsHashTableRuntime && !this.needsComplexRuntime && !this.needsQuantizedRuntime
+				&& !this.needsIoStreamRuntime && !this.needsCharFileRuntime && !this.needsStringInputRuntime
+				&& !this.needsJavaValueRuntime && this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
 		// A program too large for one class brings its $PartN classes, and a bridged
@@ -1012,6 +1018,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsConditionVariableRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(CONDITION_VARIABLE_RUNTIME_CLASS_FILES));
+		}
+		if (this.needsInterruptRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmInterruptPoll.RUNTIME_CLASS_FILES));
 		}
 		if (this.needsTerminalRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(TERMINAL_RUNTIME_CLASS_FILES));
@@ -1215,6 +1224,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// (.kb/jvm-run-time-lowering.md, "Run time: the fragments").
 		if (this.fragment != null) {
 			seedLinkedClasses(closRegistry, this.fragment.linked().classes());
+		}
+		// Whether a SIGINT reaches the program as the condition it names
+		// (JvmInterruptPoll).
+		// Ahead of the scans below: the injected defun's signal is theirs to see.
+		boolean interruptPolls = takesInterrupts(program);
+		this.needsInterruptRuntime = interruptPolls;
+		if (interruptPolls) {
+			program = new ArrayList<>(program);
+			program.add(LispMacroExpander.interruptPollDefun());
 		}
 		// Whether the program uses the restart system (handler-bind / restart-case /
 		// invoke-restart & friends). Decided on the SURFACE program -- the expansions
@@ -3003,6 +3021,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.blockExitChannel(blockExitChannel)
 			.restartMode(restartMode)
 			.signalClauseMatch(signalClauseMatch)
+			.interruptPolls(interruptPolls)
 			.printControls(printControls)
 			.printControlVariables(printControlVariables)
 			.usesFloatArray(usesFloatArray)
@@ -3099,6 +3118,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			// round boxes its own cells; it costs nothing unless one does
 			// (JvmSelfTailCall).
 			funcCtx.selfLoop = JvmSelfTailCall.defun(funcCtx, Objects.requireNonNull(functions.get(defun.name)));
+			// After the head, so each round of a tail-recursive loop polls.
+			JvmInterruptPoll.emitAtEntry(defun.name, funcCtx, this.className);
 			// A member of a tail group: its tail calls to the other members jump
 			// (JvmTailGroup).
 			JvmTailGroup.Member tailMember = defunMembers.get(defun.name);
@@ -3427,6 +3448,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				// (JvmSelfTailCall).
 				lambdaCtx.selfLoop = JvmSelfTailCall.labels(lambdaCtx, lambda);
 			}
+			JvmInterruptPoll.emit(lambdaCtx, this.className);
 			// A labels function in a tail group: its tail calls to the other members
 			// jump (JvmTailGroup).
 			JvmTailGroup.Member tailMember = lambda.tailMember();
@@ -6659,6 +6681,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		code.ldc(java.util.Objects.requireNonNull(tDesignator));
 	}
 
+	/**
+	 * Whether SIGINT reaches a program as {@code rontolisp:interactive-interrupt}: one
+	 * naming it that this class's {@code main} runs. A class a host calls or a container
+	 * deploys leaves the host's SIGINT alone, as an embedded interpreter does.
+	 */
+	private boolean takesInterrupts(List<LispVal> program) {
+		return !this.noMain && !this.servletMode && this.fragment == null && this.runTimeImage == null
+				&& programUsesSymbol(program, LispNames.INTERACTIVE_INTERRUPT_QUALIFIED)
+				&& program.stream().noneMatch(JvmExportDirective::isExportForm);
+	}
+
 	private static boolean programUsesSymbol(List<LispVal> program, String name) {
 		for (LispVal expr : program) {
 			if (usesSymbol(expr, name)) {
@@ -8435,6 +8468,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean signalClauseMatch = false;
 
 		/**
+		 * True when a SIGINT reaches the program as the condition it names: every poll
+		 * site of {@link JvmInterruptPoll} emits its poll. Off, none has a byte.
+		 */
+		boolean interruptPolls = false;
+
+		/**
 		 * True when the program MENTIONS a printer-control variable
 		 * ({@code LispMacroExpander.usesPrintControls}: {@code *print-case*},
 		 * {@code *print-length*}, {@code *print-level*}, {@code *print-gensym*},
@@ -9097,6 +9136,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.blockExitChannel = builder.blockExitChannel;
 			this.restartMode = builder.restartMode;
 			this.signalClauseMatch = builder.signalClauseMatch;
+			this.interruptPolls = builder.interruptPolls;
 			this.printControls = builder.printControls;
 			this.printControlVariables = builder.printControlVariables;
 			this.usesFloatArray = builder.usesFloatArray;
@@ -9640,6 +9680,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			private boolean signalClauseMatch = false;
 
+			private boolean interruptPolls = false;
+
 			private boolean printControls = false;
 
 			private boolean printControlVariables = false;
@@ -10134,6 +10176,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder signalClauseMatch(boolean signalClauseMatch) {
 				this.signalClauseMatch = signalClauseMatch;
+				return this;
+			}
+
+			Builder interruptPolls(boolean interruptPolls) {
+				this.interruptPolls = interruptPolls;
 				return this;
 			}
 

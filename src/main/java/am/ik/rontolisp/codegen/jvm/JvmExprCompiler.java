@@ -2180,8 +2180,12 @@ final class JvmExprCompiler {
 					LispMacroExpander.expandSignalMacro(cons, ctx.closRegistry, ctx.restartMode), ctx, className);
 			case LispNames.SIGNAL_COND_INTERNAL -> JvmSignalCondCompiler.compile(cons, ctx, className);
 			case LispNames.HANDLER_CASE -> JvmHandlerCaseCompiler.compile(cons, ctx, className);
-			case LispNames.HANDLER_BIND -> JvmExprCompiler
-				.compileExpr(LispMacroExpander.expandHandlerBind(cons, ctx.closRegistry), ctx, className);
+			case LispNames.HANDLER_BIND -> {
+				JvmInterruptPoll.emitListen(cons, ctx);
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandHandlerBind(cons, ctx.closRegistry), ctx,
+						className);
+			}
+			case LispNames.INTERRUPT_TAKE_INTERNAL -> JvmInterruptPoll.compileTake(ctx);
 			case LispNames.IGNORE_ERRORS ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandIgnoreErrors(cons), ctx, className);
 			case LispNames.HC_DEPTH_DEC_INTERNAL -> JvmHandlerCaseCompiler.compileDepthDec(ctx, className);
@@ -2560,9 +2564,14 @@ final class JvmExprCompiler {
 		for (int i = 1; i <= arity; i++) {
 			compileExpr(items.get(i), ctx, className);
 		}
+		String desc = "(" + "Ljava/lang/Object;".repeat(arity) + ")Ljava/lang/Object;";
+		if (ctx.interruptPolls && LispNames.CONDITION_WAIT_INTERNAL.equals(member)) {
+			ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmInterruptPoll.CLASS), "waitOn", desc));
+			JvmInterruptPoll.emit(ctx, className);
+			return;
+		}
 		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.CONDITION_VARIABLE_CLASS),
-				java.util.Objects.requireNonNull(JvmLispCompiler.CONDITION_VARIABLE_METHODS.get(member)),
-				"(" + "Ljava/lang/Object;".repeat(arity) + ")Ljava/lang/Object;"));
+				java.util.Objects.requireNonNull(JvmLispCompiler.CONDITION_VARIABLE_METHODS.get(member)), desc));
 	}
 
 	/**

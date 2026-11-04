@@ -7329,10 +7329,12 @@ public final class LispEvaluator {
 	 * @param thread the thread
 	 */
 	public void interrupt(Thread thread) {
-		if (this.interruptedThreads.add(thread)) {
-			this.pendingInterrupts.incrementAndGet();
+		synchronized (this.interruptedThreads) {
+			if (this.interruptedThreads.add(thread)) {
+				this.pendingInterrupts.incrementAndGet();
+			}
+			thread.interrupt();
 		}
-		thread.interrupt();
 	}
 
 	/**
@@ -7345,13 +7347,15 @@ public final class LispEvaluator {
 	 * blocked in a call that does not wake
 	 */
 	public boolean signalInterrupt(Thread thread) {
-		this.signalledInterrupts.add(thread);
-		if (!this.interruptedThreads.add(thread)) {
-			return false;
+		synchronized (this.interruptedThreads) {
+			this.signalledInterrupts.add(thread);
+			if (!this.interruptedThreads.add(thread)) {
+				return false;
+			}
+			this.pendingInterrupts.incrementAndGet();
+			thread.interrupt();
+			return true;
 		}
-		this.pendingInterrupts.incrementAndGet();
-		thread.interrupt();
-		return true;
 	}
 
 	/**
@@ -7372,7 +7376,7 @@ public final class LispEvaluator {
 			return;
 		}
 		for (LispVal rest = clauses; rest instanceof LispCons cell; rest = cell.cdr()) {
-			if (cell.car() instanceof LispCons clause && namesInterruptCondition(clause.car())) {
+			if (cell.car() instanceof LispCons clause && LispMacroExpander.namesInterruptCondition(clause.car())) {
 				this.interruptHandlerListener = null;
 				listener.run();
 				return;
@@ -7380,23 +7384,17 @@ public final class LispEvaluator {
 		}
 	}
 
-	/** Whether a clause's type specifier, an {@code (or ...)} included, names it. */
-	private static boolean namesInterruptCondition(LispVal type) {
-		if (type instanceof LispCons cell) {
-			return namesInterruptCondition(cell.car()) || namesInterruptCondition(cell.cdr());
-		}
-		return type instanceof LispSymbol symbol && LispNames.INTERACTIVE_INTERRUPT_QUALIFIED.equals(symbol.name());
-	}
-
 	/**
 	 * Drops an interrupt still pending for the calling thread -- one that came after its
 	 * evaluation took its last step -- and the thread's interrupt status with it.
 	 */
 	public void clearInterrupt() {
-		if (this.interruptedThreads.remove(Thread.currentThread())) {
-			this.pendingInterrupts.decrementAndGet();
+		synchronized (this.interruptedThreads) {
+			if (this.interruptedThreads.remove(Thread.currentThread())) {
+				this.pendingInterrupts.decrementAndGet();
+			}
+			Thread.interrupted();
 		}
-		Thread.interrupted();
 	}
 
 	/**
@@ -7459,12 +7457,17 @@ public final class LispEvaluator {
 	}
 
 	private void stopIfInterrupted() {
-		if (!this.interruptedThreads.remove(Thread.currentThread())) {
+		if (!this.interruptedThreads.contains(Thread.currentThread())) {
 			return;
 		}
-		this.pendingInterrupts.decrementAndGet();
-		// the status only woke a blocked call: the cleanups on the way out may block
-		Thread.interrupted();
+		// The lock waits for the requester's interrupt, or it would outlive the request
+		// and wake the next blocked call. The status only woke a blocked call: the
+		// cleanups on the way out may block.
+		synchronized (this.interruptedThreads) {
+			this.interruptedThreads.remove(Thread.currentThread());
+			this.pendingInterrupts.decrementAndGet();
+			Thread.interrupted();
+		}
 		if (this.signalledInterrupts.remove(Thread.currentThread())) {
 			eval(new LispCons(new LispSymbol(LispNames.SIGNAL), new LispCons(
 					new LispCons(new LispSymbol(LispNames.QUOTE),
