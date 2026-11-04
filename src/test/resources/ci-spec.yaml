@@ -4460,11 +4460,21 @@ cases:
   - name: no-applicable-method-report
     source: |
       (defclass ci-nam-box () ((v :initarg :v :reader ci-nam-box-v)))
+      (defclass ci-nam-other () ())
+      (defstruct ci-nam-st a)
+      (defun ci-nam-report (x)
+        (print (handler-case (ci-nam-box-v x) (error (e) (princ-to-string e)))))
       (print (ci-nam-box-v (make-instance 'ci-nam-box :v 41)))
-      (print (handler-case (ci-nam-box-v 42) (error (e) (princ-to-string e))))
+      (ci-nam-report 42)
+      (ci-nam-report (make-instance 'ci-nam-other))
+      (ci-nam-report (make-ci-nam-st :a 1))
+      (ci-nam-report (make-array 1))
     expected: |
       41
       "No applicable method: CI-NAM-BOX-V on INTEGER"
+      "No applicable method: CI-NAM-BOX-V on CI-NAM-OTHER"
+      "No applicable method: CI-NAM-BOX-V on CI-NAM-ST"
+      "No applicable method: CI-NAM-BOX-V on T"
   - name: defpackage-use-export
     source: |
       (defpackage :ci-pkg (:use :cl) (:export :ci-greet :ci-twice))
@@ -28863,12 +28873,6 @@ cases:
                (hc-err (e) (list :caught (hc-err-v e)))))
     expected: |
       (:CAUGHT 7)
-  - name: no-applicable-method-is-catchable-and-reports-the-same-text
-    source: |
-      (defclass nam-box () ((v :initarg :v :reader nam-box-v)))
-      (print (handler-case (nam-box-v 42) (error (e) (princ-to-string e))))
-    expected: |
-      "No applicable method: NAM-BOX-V on INTEGER"
   - name: operand-type-error-answers-its-datum-and-expected-type
     source: |
       (defun te-slots (thunk)

@@ -1540,8 +1540,8 @@ final class WasmExprCompiler {
 			// is only false for internally-generated occurrences (a :report lambda's
 			// with-output-to-string) inside a non-EH module, which keep the
 			// close-after-body shape so they still compile without the tag section.
-			case LispNames.WITH_OUTPUT_TO_STRING ->
-				compileExpansion(LispMacroExpander.expandWithOutputToString(cons, ctx.ehMode), ctx, tail);
+			case LispNames.WITH_OUTPUT_TO_STRING -> compileExpansion(
+					LispMacroExpander.expandWithOutputToString(cons, ctx.ehMode, ctx.usesStreamValues), ctx, tail);
 			case LispNames.PPRINT_LOGICAL_BLOCK ->
 				compileExpansion(LispMacroExpander.expandPprintLogicalBlock(cons), ctx, tail);
 			case LispNames.WITH_INPUT_FROM_STRING ->

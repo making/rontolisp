@@ -11260,6 +11260,23 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandWithOutputToString(LispCons cons, boolean unwindProtect) {
+		return expandWithOutputToString(cons, unwindProtect, true);
+	}
+
+	/**
+	 * The expansion for a backend that knows whether the program has stream VALUES. A
+	 * program without them can still reach this: the {@code with-output-to-string} that
+	 * renders a seeded condition's {@code :report} is written by
+	 * {@link #expandTypedSignal} while the body compiles, after
+	 * {@link #mayCreateStreamValues} looked. Its stream is then a raw handle, as every
+	 * consumer in that program expects, and the close is the raw one: {@code close}
+	 * refuses a raw handle, the non-stream it is there.
+	 * @param cons the with-output-to-string expression
+	 * @param unwindProtect whether the expansion may use {@code unwind-protect}
+	 * @param streamValues whether the program can build an open stream value
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithOutputToString(LispCons cons, boolean unwindProtect, boolean streamValues) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || !(spec.car() instanceof LispSymbol var)) {
 			throw new IllegalArgumentException(
@@ -11291,6 +11308,7 @@ public final class LispMacroExpander {
 			openCall = listToCons(List.of(new LispSymbol(LispNames.PROGN), elementType, openCall));
 		}
 		LispVal bindings = new LispCons(listToCons(List.of(var, openCall)), LispNil.INSTANCE);
+		LispVal close = callOf(streamValues ? LispNames.CLOSE : LispNames.CLOSE_INTERNAL, var);
 		if (unwindProtect) {
 			// (let ((var (%make-string-output-stream)))
 			// (unwind-protect (progn body... (%string-stream-contents var)) (close var)))
@@ -11299,15 +11317,14 @@ public final class LispMacroExpander {
 			protectedParts.addAll(parts.subList(2, parts.size()));
 			protectedParts.add(callOf(LispNames.STRING_STREAM_CONTENTS_INTERNAL, var));
 			return listToCons(List.of(new LispSymbol(LispNames.LET), bindings,
-					unwindProtectAround(listToCons(protectedParts), callOf(LispNames.CLOSE, var))));
+					unwindProtectAround(listToCons(protectedParts), close)));
 		}
 		LispVal bodyExpr = prognOrNil(parts.subList(2, parts.size()));
 		LispSymbol result = new LispSymbol(WOTS_RESULT_VAR);
 		// (let ((__wots_result (%string-stream-contents var))) (close var) __wots_result)
 		LispVal innerBindings = new LispCons(
 				listToCons(List.of(result, callOf(LispNames.STRING_STREAM_CONTENTS_INTERNAL, var))), LispNil.INSTANCE);
-		LispVal innerLet = listToCons(
-				List.of(new LispSymbol(LispNames.LET), innerBindings, callOf(LispNames.CLOSE, var), result));
+		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, close, result));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, bodyExpr, innerLet));
 	}
 
@@ -39100,18 +39117,6 @@ public final class LispMacroExpander {
 		LispSymbol raw = new LispSymbol(prefix + "_r");
 		LispSymbol text = new LispSymbol(prefix + "_s");
 		LispSymbol size = new LispSymbol(prefix + "_n");
-		List<LispVal> clauses = new java.util.ArrayList<>();
-		clauses.add(new LispSymbol(LispNames.COND));
-		for (String tagPrefix : List.of(LispLayout.STRUCT_TAG_PREFIX, LispLayout.CLASS_TAG_PREFIX)) {
-			int length = tagPrefix.length();
-			LispVal test = listToCons(
-					List.of(new LispSymbol(LispNames.AND), fmtCall(LispNames.GT, size, new LispInteger(length)),
-							fmtCall(LispNames.STRING_EQ,
-									fmtCall(LispNames.SUBSEQ, text, new LispInteger(0), new LispInteger(length)),
-									new LispString(tagPrefix))));
-			clauses.add(listToCons(List.of(test, fmtCall(LispNames.SUBSEQ, text, new LispInteger(length)))));
-		}
-		clauses.add(listToCons(List.of(LispTrue.INSTANCE, text)));
 		LispVal spelled = makeIf(new LispSymbol(LispNames.PRINT_ESCAPE_VAR),
 				fmtCall(LispNames.PRIN1_PIECE_INTERNAL, designator),
 				fmtCall(LispNames.PRINC_PIECE_INTERNAL, designator));
@@ -39127,7 +39132,8 @@ public final class LispMacroExpander {
 				List.of(listToCons(List.of(designator, fmtCall(LispNames.CLASS_DESIGNATOR_INTERNAL, obj))),
 						listToCons(List.of(raw, spelled)), listToCons(List.of(text, unpiped)),
 						listToCons(List.of(size, fmtCall(LispNames.LENGTH, text)))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, listToCons(clauses)));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET_STAR), bindings, ClosRegistry.tagStrippedText(text, size)));
 	}
 
 	private static final String PUO_OBJ_VAR = "__puo_obj";

@@ -1528,6 +1528,15 @@ answer.
   answers `Ctx.usesStreamValues`, gating the WRAP a
   producer emits AND the UNWRAP a consumer emits, so the two can never disagree. It also forces
   `mayCreateInstances` on.
+- **A `with-output-to-string` the gate never saw**: a seeded condition's `:report`
+  (`no-applicable-method-error`, `unbound-slot`) renders through one `expandTypedSignal` writes while
+  the body compiles, in a program the gate answered no for. Its stream is a raw handle, consistent
+  with every consumer there except `close`, which refuses a raw handle as the non-stream it is, so
+  the backends pass `usesStreamValues` and that close is `%close`. Turning the gate on instead would
+  move every program with a generic function to stream values for a line only a failure prints.
+  Until 2026-11-04 the report of an uncaught one was `CLOSE: The value 0 is not of type STREAM` on
+  the JVM and in a wasm-GC EH module (`UncaughtReportParityTest` /
+  `WasmReportLocationsTest#aConditionOnlyTheRuntimeSignalsRendersItsReport`).
 - **Producers wrap in the BACKEND, not in an expansion** (`JvmObjCompiler.emitWrapStream`,
   `WasmInstanceCompiler.emitWrapStream`), so the I/O runtime helpers keep their exact bodies — which
   matters on wasm, where their `FUNC_*` indices are fixed and the `--component` adapter blobs depend
