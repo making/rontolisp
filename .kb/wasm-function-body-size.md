@@ -24,6 +24,11 @@ on the smallest CI runner, updating these numbers in the same change.
   wasmtime's default 512 KiB stack: `wasm trap: call stack exhausted` NINE frames deep
   (between 512 KiB and 700 KiB of `-W max-wasm-stack` ran it). Every lack-request body parse
   on WASM died there (2026-09-24). Bounded by outlining, below.
+- **Any body with a case per callable also grows with function count**: `_funcref`, until
+  2026-11-04 (below).
+- **One still grows quadratically: the async top-level resume** (`.todo/i31`). It spills all of
+  its locals at every suspend site. Corpus 2026-11-04: 442 locals, 194,297 bytes, ~6.5 KB per
+  added top-level await, so ~10 more awaits reach the bound.
 - **The guard must measure the `--component` build separately** — an async top level
   compiles as an entry+resume pair, so either build can be larger.
   `WasmModuleInspector.largestFunctionBodySize` walks a component's embedded core modules.
@@ -260,9 +265,28 @@ numbers are what to take by hand.
 Ask of any new outlining path what the async top level failed: *is the piece it cuts
 bounded in BYTES, or only by where some syntactic marker falls?*
 
+## Keeping `_funcref` bounded
+`_funcref` (funcId -> canonical function-value box, in a module that uses `eval` or a computed
+function designator) was an `if` ladder, ~32 bytes per covered funcId, each case reading its own
+module global. At the corpus's 8,099 ids (2026-11-04, unnamed `_func_341` then): 262,860 bytes on
+the component, 261,672 on Preview 1, so `requireRunnableModule` refused both `--component` legs and
+~2,600 cases never ran. The JVM's `_funcrefs` was already a table.
+
+It is now one array indexed by funcId, allocated by its first call and held in one quoted-data
+global (`QuoteGlobals.funcBoxTableIndex`): 82 bytes at any function count, O(1) at run time, and the
+per-box globals are gone. A static `#'f` site in such a module calls it, so a static site and a
+computed one still answer one object; a module without `_funcref` keeps one global per box, with no
+body that grows. Pin: `WasmToplevelChunkingTest#noBodyGrowsWithTheProgramsCallableCount`.
+
+After it, same corpus: largest body 194,297 (component), 192,401 (component `--simd`), 123,212
+(Preview 1). All 1,331 cases match on both components. A cold `wasmtime run` of each peaks at
+7.4 GB RSS (wasmtime 49.0.0, 64 cores), well above the 2.7 GB for 261 KB in "The invariant"
+(wasmtime 47, 4 cores); these runs do not separate core count from wasmtime version or module size.
+
 ## Measuring
 `-Drontolisp.wasm.debug-func-sizes` (any value), twin of
 `rontolisp.jvm.debug-method-sizes`: one stderr line per SHIPPED function, largest first,
 `[func-size] <bytes>\t<final index>\t<name>`, plus a total. Post-shake code-entry bytes;
-lambdas and chunks as `_lambda_<id>`/`_toplevel_chunk_<id>`. Component path: the CORE
+lambdas and chunks as `_lambda_<id>`/`_toplevel_chunk_<id>`; a helper with no `FUNC_*` constant
+or label prints as `_func_<pre-shake index>`. Component path: the CORE
 module. `--no-gc` not covered.
