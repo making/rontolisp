@@ -115,13 +115,68 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
   BEFORE `:depends-on`. Deliberately NOT merged into `dependsOn` — `component-sideway-dependencies`
   must not list it (pinned on all four backends).
 - `:class :package-inferred-system` — the ONE `:class` value implemented.
+- **`:weakly-depends-on`** (`LispSystem.weaklyDependsOn`): ASDF asks `find-system NAME nil` in the
+  parse and appends what it finds to `:depends-on`. Here the parse has no search path, so a loader
+  asks just before it loads the system (`resolveWeakDependencies`: registered, built in, or a
+  `NAME.asd` on the search path; a refused system is not available; the registry entry is
+  replaced). Never downloads. A missing `lib/sub` of a found `lib.asd` is a hard error, not a skip.
+  Component-level stays refused (ASDF reads the name as a system, then looks for a sibling of it).
+- **`:encoding`**: `:utf-8`, `:default` and nil, on a system or component; anything else is refused
+  by name, as source is only read as UTF-8 (`SourceLoader`).
+- **`:pathname #P"src/"`**: the literal is a pathname value in the raw form; read as its namestring.
 - **`IGNORED_OPTIONS` — never resolved, never mentioned**: `:name :description
   :long-description :version :author :maintainer :license :licence :homepage :bug-tracker
   :source-control :mailto :long-name :properties` (arnesi's free-form property list), plus
-  `:in-order-to`/`:perform`. It is the CLOSED list, so
+  `:in-order-to`/`:perform` and the `program-op` trio `:entry-point :build-operation
+  :build-pathname`. It is the CLOSED list, so
   an option added later is load-bearing by default. `:version` is on it even though
   `asdf:component-version` reads it BACK: a plain STRING is recorded as written, every other
   spelling answers nil.
+
+### Options around the compile: `:around-compile` (h94, 2026-11-04)
+ASDF stores the form and calls it around `compile-file`, or around the source `load` for
+`load-source-op` (`call-with-around-compile-hook`). The slot is on every component and inherits
+(`around-compile-hook`: the nearest with the slot bound, so nil on a child means no hook);
+`uiop:ensure-function` reads the value.
+- **Parse** (`aroundCompileHook`, `ComponentScope`): `LispSystem.aroundCompile`, one hook per file
+  path. A `.asd` runs in an image, which homes the symbols where the file reads them: a lambda
+  becomes the image's function at the parse, a symbol or `(FN ARG...)` its resolved datum. A
+  string stays, read at the call in `cl`. An inline `defsystem` keeps the form (no file to home it
+  in) and is evaluated at the call in the image's current package.
+- **The call** (`LispEvaluator.callAroundCompile`, one implementation): always in an INTERPRETER:
+  the program's own, or a compile path's build image, inside `LoadInliner.spliceSystem`. The thunk
+  ignores `compile-file`'s flags and hands its body the features `*features*` holds beyond those
+  at the call; a hook that never calls it fails the load (ASDF: no compile output). A hook naming a
+  function first loads the system's `:defsystem-depends-on` there, which on a compile path are
+  otherwise only spliced (a lambda does not, so coalton's image never loads its compiler).
+- **What reaches a compile path's program**: the hook's added features, twice. `spliceComponent`
+  reads the file with them, and `%begin-file` carries them behind its load context
+  (`LispMacroExpander.loadContextFeatures`), where `UserMacroExpander.Session` binds them in the
+  macro-time evaluator until `%end-file` (`pushFeaturesBinding`), so what the component pushes at
+  compile time goes with the binding. Strings in a marker every lowering already drops, so a
+  program whose hook adds nothing compiles as it did. Nothing else of the hook's dynamic state
+  crosses (a bound `*package*` or `*readtable*`), and a REMOVED feature does not: `Features` is
+  additive on purpose.
+- **The premise was half wrong**: coalton's hook was taken to decide how forms READ. Measured in
+  coalton-20260101-git, nothing tests `#+coalton-lisp-toplevel`; its parser asks
+  `(alexandria:featurep :coalton-lisp-toplevel)` while `coalton-toplevel` EXPANDS
+  (`src/parser/toplevel.lisp:1046`). A hook honored only at the read would have passed a read test
+  and failed coalton, hence the macro-time binding; the fixture pins both.
+- **Divergences**: the interpreter runs the component's top-level forms inside the hook (ASDF's
+  `load-source-op`); a compile path's run after it (ASDF's `load-op` of a fasl), so a top-level form
+  reading `*features*` at load differs between them. The interpreter expands a macro inside a
+  `defun` when the defun first runs ([interpreter-expansion-memo.md](interpreter-expansion-memo.md)),
+  past the hook; a top-level macro call is inside it. What a hook prints goes to standard error on a
+  compile path. A hook's leaf-shim component gets no macro-time binding (no `%begin-file`).
+- **Measured** (2026-11-04): `autoload` (real `:around-compile "mgl-pax.asdf:compile-pax"`) loads
+  on the interpreter and the JVM, its hook a real call with `mgl-pax.asdf` in the build image;
+  the sources of `mgl-pax-bootstrap` load on the interpreter under another system name, so the
+  option no longer keeps that shim. clingon passes its `#P` modules and stops on
+  `with-user-abort`'s implementation gate. coalton stops before any hooked component, on
+  eclector's `fixup-case`: `defmacro`'s `&optional ((() &body forms) '(()))`, a destructuring
+  pattern as an optional's variable.
+- Pinned by `AsdfMetaobjectsE2eTest` (all four: lambda, symbol, string, nil; the read, the
+  expansion, none of it in the program's `*features*`), `AsdfSystemsTest`, `LispEvaluatorAsdfTest`.
 
 ### `#.` in a `defsystem` — the CONSUMER decides
 - The tolerant lexer (`ReadEvalMode.SKIP_UNREADABLE`, used by `readNextForm`/`scanForms` and
@@ -402,8 +457,8 @@ downloading. `BuiltinSystems.DEPENDENCIES` records edges between shims; one exis
   nothing — consequence: a leaked prepared statement lives until the connection closes);
   `trivial-cltl2` (nickname `cltl2`; `declaration-information` always nil, routing trivia's
   match2*+ onto `:trivial`); `cl+ssl` (over `rontolisp:tls-upgrade`, `.kb/tcp-sockets.md`);
-  `mgl-pax-bootstrap` (package `mgl-pax`, nickname `pax`; `defsection` -> `(defvar NAME nil)`;
-  its real `.asd` declares `:around-compile`, which is why the shim stays); `swank`
+  `mgl-pax-bootstrap` (package `mgl-pax`, nickname `pax`; `defsection` -> `(defvar NAME nil)`);
+  `swank`
   (`create-server` starts the command line's server on the interpreter, `.kb/swank.md`, and
   SIGNALS in a compiled program — clack's `.asd` hard-depends on it).
 - **`trivial-features`** — whose whole content IS the announcement

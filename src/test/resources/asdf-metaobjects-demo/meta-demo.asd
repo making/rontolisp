@@ -61,3 +61,37 @@
 
 (defsystem "meta-demo/nested"
   :components ((:file "c")))
+
+;; The options around a component's compile. :around-compile is coalton's lambda on
+;; the system, nil on a component (no hook, what a child of a hooked system says to
+;; opt out), a symbol of this file's package on a module (uiop's) and a string naming
+;; a function of a :defsystem-depends-on system on a file (mgl-pax's); each decides how
+;; the component reads and what its macros see, and none reaches the program. The
+;; rest: pngload's :encoding, clingon's #P :pathname, the program-op trio, and
+;; :weakly-depends-on, of which meta-demo-absent exists nowhere.
+(defun call-with-named-feature (compile)
+  (let ((*features* (cons :meta-demo-named-hook *features*)))
+    (funcall compile)))
+
+(defsystem "meta-demo/weak"
+  :components ((:file "weak")))
+
+(defsystem "meta-demo/hooked"
+  :encoding :utf-8
+  :entry-point "meta-demo:main"
+  :build-operation "program-op"
+  :build-pathname "bin/meta-demo"
+  :defsystem-depends-on ("meta-demo-tool/hook")
+  :weakly-depends-on ("meta-demo-absent" "meta-demo/weak")
+  :around-compile (lambda (compile)
+                    (let ((*features* (cons :meta-demo-hooked *features*)))
+                      (funcall compile)))
+  :serial t
+  :components ((:file "hooked")
+               (:file "unhooked" :around-compile nil :encoding :default)
+               (:module "named"
+                :pathname #P"hooked/"
+                :around-compile call-with-named-feature
+                :components ((:file "named")
+                             (:file "by-string"
+                              :around-compile "meta-demo-tool-hook:call-with-tool-feature")))))

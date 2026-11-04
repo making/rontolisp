@@ -4862,6 +4862,25 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Binds {@code *features*} to its current value plus the given names, for a file
+	 * whose forms this evaluator is about to process under an {@code :around-compile}
+	 * hook that ran elsewhere ({@link #callAroundCompile}).
+	 * @param names the feature names, without the leading colon
+	 */
+	void pushFeaturesBinding(List<String> names) {
+		LispVal features = currentFeatures();
+		for (int i = names.size() - 1; i >= 0; i--) {
+			features = new LispCons(new LispSymbol(":" + names.get(i).toUpperCase(java.util.Locale.ROOT)), features);
+		}
+		this.dynamicBindings.push(LispNames.FEATURES_VAR, features);
+	}
+
+	/** Undoes one {@link #pushFeaturesBinding}. */
+	void popFeaturesBinding() {
+		this.dynamicBindings.pop(LispNames.FEATURES_VAR);
+	}
+
+	/**
 	 * Replaces every {@code (%read-eval datum)} marker in a form with the value of
 	 * evaluating the datum in the global environment -- the {@code #.} read-time-eval
 	 * semantics. The value is substituted raw (not quoted), matching CL: a
@@ -5979,6 +5998,18 @@ public final class LispEvaluator {
 			throw new LispEvalException("ASDF:PERFORM: no component " + index + " in system '" + name + "'");
 		}
 		String file = system.files().get(index);
+		LispVal hook = system.aroundCompile().get(file);
+		if (hook == null) {
+			loadComponent(system, file, List.of());
+		}
+		else {
+			callAroundCompile("system " + name + " component " + file, hook, system.defsystemDependsOn(),
+					added -> loadComponent(system, file, added));
+		}
+	}
+
+	private void loadComponent(AsdfSystems.LispSystem system, String file, List<String> hookFeatures) {
+		String name = system.name();
 		this.loadDirStack.addLast(system.baseDir());
 		try {
 			List<LispVal> leafShim = ShimLibraries.leafModuleForms(name, file, system.baseDir(), this.sourceLoader);
@@ -6003,12 +6034,92 @@ public final class LispEvaluator {
 			}
 			// A system that declares :rontolisp-features has its own component files
 			// read with the interpreter's features widened by that declaration -- the
-			// static encoding of the eval-when *features* push a real .asd would do.
-			loadFile(LispNames.ASDF_LOAD_SYSTEM, file, name, this.features.with(system.features()));
+			// static encoding of the eval-when *features* push a real .asd would do. What
+			// an :around-compile hook added holds for the read as well.
+			loadFile(LispNames.ASDF_LOAD_SYSTEM, file, name, this.features.with(system.features()).with(hookFeatures));
 		}
 		finally {
 			this.loadDirStack.removeLast();
 		}
+	}
+
+	/**
+	 * Calls a component's {@code :around-compile} hook with a thunk that loads the
+	 * component ({@code uiop:call-around-hook}). The thunk takes and ignores
+	 * {@code compile-file}'s flags, and a hook that never calls it fails like the compile
+	 * that produced no output in ASDF.
+	 * <p>
+	 * This evaluator is where the hook runs on every backend: the program's own on the
+	 * interpreter, the compile path's build image otherwise, where {@code body} reads the
+	 * component into the program. So what {@code body} is handed is the part of the
+	 * hook's dynamic state a read made here can take: the features {@code *features*}
+	 * holds in the thunk beyond those it held at the call.
+	 * @param component the system and component, for errors
+	 * @param hook the {@link AsdfSystems.LispSystem#aroundCompile} entry
+	 * @param definers the systems a hook NAMING a function may need for it, which are
+	 * loaded here: the {@code :defsystem-depends-on} of the system, loaded already on the
+	 * interpreter and only spliced into the program on a compile path
+	 * @param body loads the component, given the feature names the hook added
+	 */
+	public void callAroundCompile(String component, LispVal hook, List<String> definers,
+			java.util.function.Consumer<List<String>> body) {
+		LispVal function = aroundCompileFunction(component, hook, definers);
+		Set<String> before = printedFeatures(currentFeatures());
+		boolean[] called = { false };
+		applyGlobal(function, List.of(new LispFunction("AROUND-COMPILE-THUNK", args -> {
+			called[0] = true;
+			body.accept(featuresAddedSince(before));
+			return LispTrue.INSTANCE;
+		})));
+		if (!called[0]) {
+			throw new LispEvalException(":around-compile hook of " + component + " never called its thunk");
+		}
+	}
+
+	/**
+	 * The function an {@code :around-compile} value designates
+	 * ({@code uiop:ensure-function}): a function, a symbol naming one, a lambda
+	 * expression, {@code (FN ARG...)} calling {@code FN} with the arguments first, or a
+	 * string reading in {@code cl} as a name or a lambda expression.
+	 */
+	private LispVal aroundCompileFunction(String component, LispVal hook, List<String> definers) {
+		if (hook instanceof LispFunction || hook instanceof LispLambda) {
+			return hook;
+		}
+		if (hook instanceof LispCons call && !AsdfSystems.isLambdaExpression(call)) {
+			LispVal function = aroundCompileFunction(component, call.car(), definers);
+			List<LispVal> given = call.cdr() instanceof LispCons rest ? rest.toList() : List.of();
+			return new LispFunction("AROUND-COMPILE-HOOK", args -> {
+				List<LispVal> all = new ArrayList<>(given);
+				all.addAll(args);
+				return applyGlobal(function, all);
+			});
+		}
+		if (!(hook instanceof LispSymbol) && !(hook instanceof LispString) && !(hook instanceof LispCons)) {
+			throw new LispEvalException(":around-compile hook of " + component + " is no function: " + hook.print());
+		}
+		if (!(hook instanceof LispCons)) {
+			for (String definer : definers) {
+				loadSystem(definer);
+			}
+		}
+		this.packageResolver.pushPackage();
+		try {
+			LispVal form = hook;
+			if (hook instanceof LispString) {
+				this.packageResolver.setCurrentPackage("CL");
+				form = eval(clCall(LispNames.READ_FROM_STRING, hook));
+			}
+			return eval(clCall(LispNames.FUNCTION, form));
+		}
+		finally {
+			this.packageResolver.popPackage();
+		}
+	}
+
+	private static LispVal clCall(String operator, LispVal argument) {
+		return new LispCons(new LispSymbol(PackageRegistry.qualify("CL", operator)),
+				new LispCons(argument, LispNil.INSTANCE));
 	}
 
 	private void loadSystem(String name) {
@@ -6073,8 +6184,8 @@ public final class LispEvaluator {
 			this.loadedSystems.add(name);
 			return;
 		}
-		AsdfSystems.LispSystem system = this.asdfSystems.get(name);
-		if (system == null) {
+		AsdfSystems.LispSystem located = this.asdfSystems.get(name);
+		if (located == null) {
 			List<String> searchDirs = new java.util.ArrayList<>();
 			String baseDir = this.loadDirStack.peekLast();
 			searchDirs.add(baseDir == null ? "" : baseDir);
@@ -6087,18 +6198,20 @@ public final class LispEvaluator {
 			// coerce-names (downcases) system designators.
 			AsdfSystems.loadAsd(asd.source(), asd.path(), this.features, this.asdfSystemPackages, asdImage(),
 					defined -> this.asdfSystems.putIfAbsent(defined.name(), defined));
-			system = this.asdfSystems.get(name);
-			if (system == null) {
+			located = this.asdfSystems.get(name);
+			if (located == null) {
 				// A NAME/SUB of a :package-inferred-system: the .asd declares no
 				// components, so the name is answered from the file it points at.
 				AsdfSystems.inferPackageInferredSystems(name, this.asdfSystems, this.asdfSystemPackages,
 						this.sourceLoader, this.features);
-				system = this.asdfSystems.get(name);
+				located = this.asdfSystems.get(name);
 			}
-			if (system == null) {
+			if (located == null) {
 				throw new LispEvalException(asd.path() + " does not define system '" + name + "'");
 			}
 		}
+		AsdfSystems.LispSystem system = AsdfSystems.resolveWeakDependencies(located, this.asdfSystems, this.systemPath,
+				this.sourceLoader);
 		this.loadingSystems.addLast(name);
 		// A dependency's .asd lookup resolves against the system's base directory, not
 		// the caller's.
@@ -6226,6 +6339,33 @@ public final class LispEvaluator {
 		return value == null ? LispNil.INSTANCE : value;
 	}
 
+	private static Set<String> printedFeatures(LispVal features) {
+		Set<String> printed = new HashSet<>();
+		for (LispVal cell = features; cell instanceof LispCons cons; cell = cons.cdr()) {
+			printed.add(cons.car().print());
+		}
+		return printed;
+	}
+
+	/**
+	 * The feature names {@code *features*} holds beyond {@code before}
+	 * ({@link #printedFeatures}), oldest first, downcased as {@code Features} spells
+	 * them.
+	 */
+	private List<String> featuresAddedSince(Set<String> before) {
+		List<String> added = new ArrayList<>();
+		for (LispVal cell = currentFeatures(); cell instanceof LispCons cons; cell = cons.cdr()) {
+			if (cons.car() instanceof LispSymbol feature && !before.contains(feature.print())) {
+				String name = feature.isKeyword() ? feature.name().substring(1) : feature.name();
+				String spelled = name.toLowerCase(java.util.Locale.ROOT);
+				if (!added.contains(spelled)) {
+					added.add(0, spelled);
+				}
+			}
+		}
+		return added;
+	}
+
 	/**
 	 * One {@code .asd} file being loaded into this evaluator ({@link #asdImage}): the
 	 * bindings it runs under, the features it has pushed, and the systems its own forms
@@ -6244,7 +6384,7 @@ public final class LispEvaluator {
 		private final int depth;
 
 		/** The printed elements of {@code *features*} when the file opened. */
-		private final Set<String> featuresAtOpen = new HashSet<>();
+		private final Set<String> featuresAtOpen;
 
 		/** The package current when the file opened. */
 		private final String packageAtOpen;
@@ -6265,9 +6405,7 @@ public final class LispEvaluator {
 			this.packageAtOpen = LispEvaluator.this.packageResolver.currentPackageName();
 			String truename = LispEvaluator.this.sourceLoader.canonicalPath(asdPath);
 			LispVal features = currentFeatures();
-			for (LispVal cell = features; cell instanceof LispCons cons; cell = cons.cdr()) {
-				this.featuresAtOpen.add(cons.car().print());
-			}
+			this.featuresAtOpen = printedFeatures(features);
 			// Nothing below throws, so close() undoes exactly what is pushed here.
 			// Relative to the file, like a loaded source: a (load "x") in it, and the
 			// first search directory of a system it loads.
@@ -6354,17 +6492,7 @@ public final class LispEvaluator {
 
 		@Override
 		public List<String> pushedFeatures() {
-			List<String> pushed = new ArrayList<>();
-			for (LispVal cell = currentFeatures(); cell instanceof LispCons cons; cell = cons.cdr()) {
-				if (cons.car() instanceof LispSymbol feature && !this.featuresAtOpen.contains(feature.print())) {
-					String name = feature.isKeyword() ? feature.name().substring(1) : feature.name();
-					String spelled = name.toLowerCase(java.util.Locale.ROOT);
-					if (!pushed.contains(spelled)) {
-						pushed.add(0, spelled);
-					}
-				}
-			}
-			return pushed;
+			return featuresAddedSince(this.featuresAtOpen);
 		}
 
 		@Override

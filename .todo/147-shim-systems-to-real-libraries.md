@@ -50,11 +50,10 @@ Current built-in systems (`eval.BuiltinSystems` + `eval.ShimLibraries`):
   reviewable only if the string model ever grows a second external
   encoding; until then "real babel" would be cost with no capability.
 
-- `mgl-pax-bootstrap` -- REPLACE candidate: what keeps it a shim is the real
-  `.asd`'s `:around-compile`, still an error naming the clause. The operation
-  protocol exists now (`.kb/asdf.md`), so the option has a place to run:
-  around the source load in load-op's primary method, on the interpreter and
-  in the compiled thunk alike. Then try the real mgl-pax.
+- `mgl-pax-bootstrap` -- REPLACE candidate: the real `.asd`'s `:around-compile`
+  runs now (`.kb/asdf.md`), and its sources load on the interpreter under another
+  system name (2026-11-04). What is left is the package `PackageRegistry` seeds
+  and the shim's consumers on the compile paths. Then try the real mgl-pax.
 
 Also: the shim `.lisp` sources live next to the core libraries in
 `src/main/resources/am/ik/rontolisp/eval/`; if the shim set grows, consider

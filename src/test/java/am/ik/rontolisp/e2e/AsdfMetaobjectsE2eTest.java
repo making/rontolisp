@@ -44,6 +44,13 @@ import java.util.List;
  * made it, a nested {@code load-system} from inside a component included -- in the same
  * order on every backend, the compile paths running each spliced component as the thunk
  * its load-op is performed with.
+ *
+ * <p>
+ * And the options around a component's compile ({@code .kb/asdf.md}, "Options around the
+ * compile"): {@code :around-compile} as a lambda, a symbol and a string, inherited and
+ * switched off by {@code nil}, deciding the {@code #+} and the macro expansions of its
+ * component and nothing of the program; {@code :encoding}; {@code #P} pathnames; the
+ * {@code program-op} options; {@code :weakly-depends-on}.
  */
 class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 
@@ -105,18 +112,29 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			  (print (list (asdf:operation-done-p 'asdf:load-op sys)
 			               (asdf:operation-done-p (make-instance 'meta-hooks::clean-op) sys)
 			               (handler-case (meta-hooks::make-single-fasl "meta-demo") (error () :refused)))))
+			(asdf:load-system "meta-demo/hooked")
+			(print *hooked*)
+			(print *unhooked*)
+			(print *named-hook*)
+			(print *string-hook*)
+			(print (find :meta-demo-hooked *features*))
+			(print (weak-fn))
+			(print (asdf:component-sideway-dependencies (asdf:find-system "meta-demo/hooked")))
 			""";
 
 	private static final List<String> EXPECTED = List.of("T", "T", "NIL", "T", "\"meta-demo\"",
 			"(\"src/one\" \"src/m/two\")", "NIL", "T", "NIL", "T", "T", "(\"meta-demo\")", "\"1.2.3\"", "NIL", ":UNIX",
 			":SMALL", ":TOOL", ":RELATIVE-OK", ":SYSTEM", ":FILE", "NIL", "(NIL \"3.3.7\")",
-			"(\"meta-demo-tool\" \"meta-demo\" \"meta-demo/tests\" \"meta-demo/hooks\" \"meta-demo/perform\""
-					+ " \"meta-demo/nested\" \"trivial-features\")",
+			"(\"meta-demo-tool\" \"meta-demo-tool/hook\" \"meta-demo\" \"meta-demo/tests\" \"meta-demo/hooks\""
+					+ " \"meta-demo/perform\" \"meta-demo/nested\" \"meta-demo/weak\" \"meta-demo/hooked\""
+					+ " \"trivial-features\")",
 			":NESTED-LOAD-OK", "\"testing meta-demo/tests\"", "T", "3", "1", "T", "T", "T", "NIL", "1", "T", ":REFUSED",
 			"(:A :GLOBAL :B :GLOBAL)",
 			"((:SYSTEM \"meta-demo/hooks\") (:COMPILE \"a\") (:LOAD \"a\") (:COMPILE \"b\") (:LOAD \"b\")"
 					+ " (:COMPILE \"c\") (:LOAD \"c\") (:SYSTEM \"meta-demo/nested\") (:SYSTEM \"meta-demo/perform\"))",
-			"(T :CLEAN :REFUSED)");
+			"(T :CLEAN :REFUSED)", "(:READ-WITH (:META-DEMO-HOOKED))", "(:READ-WITHOUT NIL)",
+			"(:READ-WITH (:META-DEMO-NAMED-HOOK))", "(:READ-WITH (:META-DEMO-TOOL-HOOKED))", "NIL", ":WEAK",
+			"(\"meta-demo/weak\")");
 
 	@Override
 	protected String systemDir() {

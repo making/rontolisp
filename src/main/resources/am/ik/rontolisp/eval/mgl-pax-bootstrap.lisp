@@ -1,10 +1,8 @@
 ;; The mgl-pax package stub: satisfies the built-in ASDF system
 ;; "mgl-pax-bootstrap". Upstream mgl-pax is a full documentation system;
 ;; mgl-pax-bootstrap is its package-definition core, which trivial-utf-8 (a
-;; uuid dependency, hence on the mito path) hard-depends on -- and whose own
-;; .asd declares :around-compile, a compile hook outside the defsystem-as-data
-;; subset (.kb/asdf.md). The swank precedent: without the stub, (ql:quickload "uuid")
-;; dies parsing mgl-pax's system definition.
+;; uuid dependency, hence on the mito path) hard-depends on. The stub stands for
+;; it and the autoload system behind it, so a program using uuid carries neither.
 ;;
 ;; Written in canonical shape; the mgl-pax package (nickname pax) is seeded in
 ;; PackageRegistry. Only what trivial-utf-8's source actually calls is defined:

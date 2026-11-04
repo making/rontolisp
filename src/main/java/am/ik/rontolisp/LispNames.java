@@ -6158,7 +6158,9 @@ public final class LispNames {
 	 * {@link #END_FILE}) when the program reads either one, and drops it otherwise, so a
 	 * program that never mentions them is byte-identical. Brackets nest with a nested
 	 * {@code load}; the payload is a string rather than a symbol for the same reason
-	 * {@link #BEGIN_SYSTEM}'s is. Paired with {@link #END_FILE}.
+	 * {@link #BEGIN_SYSTEM}'s is. Behind the two values, the names of the features an
+	 * {@code :around-compile} hook added around the file, which the macro-time pass binds
+	 * for it. Paired with {@link #END_FILE}.
 	 */
 	public static final String BEGIN_FILE = "%BEGIN-FILE";
 
@@ -12401,10 +12403,7 @@ public final class LispNames {
 	 * The {@code mgl-pax} stub package (nickname {@code pax}) behind the built-in ASDF
 	 * system {@code mgl-pax-bootstrap}. Real mgl-pax is a documentation system;
 	 * mgl-pax-bootstrap is its tiny package-definition core, which trivial-utf-8 (a uuid
-	 * dependency) hard-depends on -- and whose own {@code .asd} declares
-	 * {@code :around-compile "mgl-pax.asdf:compile-pax"}, a compile hook outside the
-	 * defsystem-as-data subset (its {@code :defsystem-depends-on} is readable now; the
-	 * hook is what still stops it). The stub defines only what trivial-utf-8's source
+	 * dependency) hard-depends on. The stub defines only what trivial-utf-8's source
 	 * calls: {@code define-package} (consumed by the resolver as {@code defpackage}),
 	 * {@code defsection} (defines the section name as a nil variable), and nil no-ops for
 	 * the PAX-World registration helpers.

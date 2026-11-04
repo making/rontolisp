@@ -169,11 +169,12 @@ public final class UserMacroExpander {
 		// would shadow the symbol a later (use-package :rove) lends.
 		private boolean implementationPrefix;
 
-		// Nesting depth of the (%begin-file P T) / (%end-file) load-context brackets
-		// LoadInliner puts around every spliced file, so the closing marker knows whether
-		// it has a binding to undo. The values themselves live in the macro-time
-		// evaluator's dynamic bindings, which restore the enclosing file's pair for free.
-		private int fileDepth;
+		// The open (%begin-file P T ...) / (%end-file) load-context brackets LoadInliner
+		// puts around every spliced file, innermost last, so the closing marker knows
+		// whether it has a binding to undo: each holds whether the file binds *features*
+		// too. The values themselves live in the macro-time evaluator's dynamic bindings,
+		// which restore the enclosing file's for free.
+		private final java.util.Deque<Boolean> openFiles = new java.util.ArrayDeque<>();
 
 		/**
 		 * A session.
@@ -236,12 +237,21 @@ public final class UserMacroExpander {
 					&& loadContext[1] instanceof LispString truename) {
 				macroEval.pushLoadContext(pathname.value(), truename.value());
 				macroEval.pushReadtableBinding();
-				this.fileDepth++;
+				// What an :around-compile hook added around the file: a macro asks here
+				// (coalton's parser), where the hook's own binding, in the build image,
+				// cannot reach it.
+				List<String> hookFeatures = LispMacroExpander.loadContextFeatures(rawForm);
+				if (!hookFeatures.isEmpty()) {
+					macroEval.pushFeaturesBinding(hookFeatures);
+				}
+				this.openFiles.addLast(!hookFeatures.isEmpty());
 			}
-			else if (isProvenanceMarker(rawForm, LispNames.END_FILE) && this.fileDepth > 0) {
+			else if (isProvenanceMarker(rawForm, LispNames.END_FILE) && !this.openFiles.isEmpty()) {
+				if (this.openFiles.removeLast()) {
+					macroEval.popFeaturesBinding();
+				}
 				macroEval.popReadtableBinding();
 				macroEval.popLoadContext();
-				this.fileDepth--;
 			}
 			// Resolve #. markers first (before package resolution, like the interpreter
 			// resolves them just before its top-level form evaluates): each datum runs in

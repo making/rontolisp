@@ -1516,10 +1516,9 @@ public final class PackageRegistry {
 						"VARIABLE-INFORMATION", "FUNCTION-INFORMATION", "AUGMENT-ENVIRONMENT", "PARSE-MACRO",
 						"ENCLOSE"))));
 		// mgl-pax (nickname pax): the STUB behind the built-in ASDF system
-		// "mgl-pax-bootstrap" (mgl-pax-bootstrap.lisp, eval.ShimLibraries). Real
-		// mgl-pax-bootstrap's own .asd declares :around-compile, a compile hook outside
-		// the defsystem-as-data subset; trivial-utf-8 (a uuid dependency) hard-depends on
-		// it and its source calls exactly these members. define-package is consumed by
+		// "mgl-pax-bootstrap" (mgl-pax-bootstrap.lisp, eval.ShimLibraries). trivial-utf-8
+		// (a uuid dependency) hard-depends on it and its source calls exactly these
+		// members. define-package is consumed by
 		// PackageResolver.resolve like defpackage; section and macro appear only as data
 		// inside defsection bodies (unevaluated, so they need to resolve but never to be
 		// defined) -- macro is the locative named-readtables' reference section spells.
