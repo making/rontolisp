@@ -80,6 +80,7 @@ import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.reader.ReadSyntax;
 import am.ik.rontolisp.runtime.RontoHttpClack;
+import am.ik.rontolisp.compiler.HandlerCaseClauses;
 import am.ik.rontolisp.runtime.RontoHttpServer;
 import org.jspecify.annotations.Nullable;
 
@@ -1143,7 +1144,8 @@ public final class LispEvaluator {
 	 * {@code partition} compiler macros {@code warn} before declining) are a property of
 	 * the expansion, not program output. The compile path already swallows them -- the
 	 * macro-time evaluator there writes to a null stream -- so muting here is what keeps
-	 * the interpreter's output identical to the compiled backends'.
+	 * the interpreter's output identical to the compiled backends'. The switch is the
+	 * expanding thread's: another thread printing meanwhile is program output.
 	 *
 	 * <p>
 	 * {@code PrintStream} funnels every {@code print}/{@code println} through its own
@@ -1152,22 +1154,35 @@ public final class LispEvaluator {
 	 */
 	private static final class MutablePrintStream extends PrintStream {
 
-		private boolean muted;
+		private final ThreadLocal<@Nullable Boolean> muted = new ThreadLocal<>();
 
 		private MutablePrintStream(PrintStream delegate) {
 			super(delegate, true);
 		}
 
+		private boolean muted() {
+			return this.muted.get() != null;
+		}
+
+		private void muted(boolean muted) {
+			if (muted) {
+				this.muted.set(Boolean.TRUE);
+			}
+			else {
+				this.muted.remove();
+			}
+		}
+
 		@Override
 		public void write(int b) {
-			if (!this.muted) {
+			if (!muted()) {
 				super.write(b);
 			}
 		}
 
 		@Override
 		public void write(byte[] buf, int off, int len) {
-			if (!this.muted) {
+			if (!muted()) {
 				super.write(buf, off, len);
 			}
 		}
@@ -3590,11 +3605,12 @@ public final class LispEvaluator {
 				// consult the dynamic store even when specialVars is empty.
 				this.progvUsed = true;
 			}
+			String spawnerPackage = this.packageResolver.currentPackageName();
 			return AsyncRuntime.spawnThread(() -> {
 				for (int i = 0; i < bindingNames.size(); i++) {
 					this.dynamicBindings.push(bindingNames.get(i), bindingValues.get(i));
 				}
-				return apply(fn, List.of(), this.globalEnv);
+				return onOwnThread(spawnerPackage, () -> apply(fn, List.of(), this.globalEnv));
 			}, args.size() == 3 ? args.get(2) : LispNil.INSTANCE);
 		}));
 		String joinThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JOIN_THREAD);
@@ -3680,7 +3696,9 @@ public final class LispEvaluator {
 			final LispVal handler = args.get(0);
 			ensureHttpServerLoaded();
 			try {
-				RontoHttpServer.serve(port, request -> invokeHttpHandler(handler, request, bufferBody));
+				String servingPackage = this.packageResolver.currentPackageName();
+				RontoHttpServer.serve(port,
+						request -> onOwnThread(servingPackage, () -> invokeHttpHandler(handler, request, bufferBody)));
 			}
 			catch (RontoHttpServer.ServerException ex) {
 				// The server lives in the TRAVELLING runtime package, which carries no
@@ -3721,9 +3739,10 @@ public final class LispEvaluator {
 			};
 			ensureHttpServerLoaded();
 			final long handle;
+			String servingPackage = this.packageResolver.currentPackageName();
 			try {
 				handle = RontoHttpServer.startServer((int) portArg.value(), address,
-						request -> invokeHttpHandler(handler, request, bufferBody));
+						request -> onOwnThread(servingPackage, () -> invokeHttpHandler(handler, request, bufferBody)));
 			}
 			catch (RontoHttpServer.ServerException ex) {
 				throw new LispEvalException(ex.reason());
@@ -7834,7 +7853,7 @@ public final class LispEvaluator {
 	public ControlState controlState() {
 		return new ControlState(this.dynamicBindings.depths(), this.handlerCaseTypes.get().size(),
 				this.packageResolver.packageStackDepth(), this.packageResolver.currentPackageName(),
-				this.loadDirStack.size(), this.loadingSystems.size(), this.out.muted,
+				this.loadDirStack.size(), this.loadingSystems.size(), this.out.muted(),
 				this.debugging ? topFrame() : null);
 	}
 
@@ -7888,7 +7907,7 @@ public final class LispEvaluator {
 			while (evaluator.loadingSystems.size() > this.loadingSystemsDepth) {
 				evaluator.loadingSystems.removeLast();
 			}
-			evaluator.out.muted = this.muted;
+			evaluator.out.muted(this.muted);
 			if (evaluator.debugging) {
 				evaluator.frameTops.get()[0] = this.topFrame;
 			}
@@ -12076,8 +12095,8 @@ public final class LispEvaluator {
 		if (macro == null) {
 			return form;
 		}
-		boolean savedMute = this.out.muted;
-		this.out.muted = true;
+		boolean savedMute = this.out.muted();
+		this.out.muted(true);
 		try {
 			LispVal expansion = withoutDebugger(() -> expandMacroCall(op.name(), macro, form, site));
 			return expansion.print().equals(form.print()) ? form : expansion;
@@ -12086,7 +12105,7 @@ public final class LispEvaluator {
 			return form;
 		}
 		finally {
-			this.out.muted = savedMute;
+			this.out.muted(savedMute);
 		}
 	}
 
@@ -15762,19 +15781,21 @@ public final class LispEvaluator {
 				if (eval(test, clauseEnv) == LispNil.INSTANCE) {
 					continue;
 				}
-				if (clauseParts.get(1) instanceof LispCons varList && varList.car() instanceof LispSymbol var) {
+				List<LispVal> bound = HandlerCaseClauses.letBound(clauseParts, this.specialVars, names -> false);
+				if (bound.get(1) instanceof LispCons varList && varList.car() instanceof LispSymbol var) {
 					clauseEnv.define(var.name(), condition);
 				}
 				LispVal result = LispNil.INSTANCE;
-				for (int i = 2; i < clauseParts.size(); i++) {
-					result = eval(clauseParts.get(i), clauseEnv);
+				for (int i = 2; i < bound.size(); i++) {
+					result = eval(bound.get(i), clauseEnv);
 				}
-				return clauseParts.size() > 2 ? result : singleValue(result);
+				return bound.size() > 2 ? result : singleValue(result);
 			}
 			throw e;
 		}
 		if (noErrorClause != null) {
-			List<LispVal> clauseParts = noErrorClause.toList();
+			List<LispVal> clauseParts = HandlerCaseClauses.letBound(noErrorClause.toList(), this.specialVars,
+					names -> false);
 			Environment clauseEnv = new Environment(env);
 			// Bind the protected form's full value list to the :no-error variable list,
 			// missing values as nil and surplus values dropped -- the same shape
@@ -17005,10 +17026,11 @@ public final class LispEvaluator {
 		// extra values the moment the thunk returns, on the thread that ran it, and
 		// they travel in the future -- the awaiter publishes them from there, never
 		// from the channel it shares with every other thread.
+		String spawnerPackage = this.packageResolver.currentPackageName();
 		return AsyncRuntime.run(future -> {
 			LispVal primary;
 			try {
-				primary = apply(thunk, List.of(), this.globalEnv);
+				primary = withOwnPackage(spawnerPackage, () -> apply(thunk, List.of(), this.globalEnv));
 			}
 			catch (LispEvalException e) {
 				e.trace().crossedAsync(asyncFunction, future.future());
@@ -17017,6 +17039,38 @@ public final class LispEvaluator {
 			future.settleExtras(this.globalEnv.spill());
 			return primary;
 		});
+	}
+
+	/**
+	 * Runs what a thread or a served request runs under what no other thread may move:
+	 * its current package, and the handler and restart stacks, which start empty. A
+	 * thread leaving its {@code handler-bind} restores the stack it saved, and through
+	 * one global that drops whatever another thread pushed since.
+	 */
+	private <T> T onOwnThread(String pkg, java.util.function.Supplier<T> body) {
+		Map<String, LispVal> stacks = new HashMap<>();
+		stacks.put(LispNames.HANDLER_CLUSTERS_VAR, LispNil.INSTANCE);
+		stacks.put(LispNames.RESTART_CLUSTERS_VAR, LispNil.INSTANCE);
+		List<T> result = new ArrayList<>(1);
+		withThreadBindings(stacks, () -> result.add(withOwnPackage(pkg, body)));
+		return result.getFirst();
+	}
+
+	/**
+	 * Runs a thread's Lisp code under a current package of its own, starting from the one
+	 * its spawner had: a macro expanding at its first call moves the current package for
+	 * the expansion, and through the one shared state that move reaches what another
+	 * thread reads meanwhile, and two overlapping moves restore the wrong package for
+	 * good.
+	 */
+	private <T> T withOwnPackage(String pkg, java.util.function.Supplier<T> body) {
+		Object previous = this.packageResolver.bindThreadPackage(pkg);
+		try {
+			return body.get();
+		}
+		finally {
+			this.packageResolver.unbindThreadPackage(previous);
+		}
 	}
 
 	/**

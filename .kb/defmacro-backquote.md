@@ -12,6 +12,9 @@ so all backends get it for free.
   (`buildTemplateList`). `,@` directly after the dot stays an error.
 - `,.` is `,@` -- one `Token.UnquoteSplicing` for both spellings. Without it `,.init-code`
   read as an unquote of `.init-code` and `,.(if ...)` was `Unexpected '.'`.
+- `` `#(a ,b) `` is `` `,(apply #'vector `(a ,b)) `` (CLHS 2.4.6.1): `readRawTemplate` builds that when the
+  literal holds a comma (`vectorHoldsComma`), and the flag sends it through the full processing, which takes
+  any depth. One with no comma stays a literal, reused by every evaluation.
 - Nested backquote: `readBackquote` raw-reads first (`readRawTemplate`) to detect an inner
   `` ` ``; non-nested keeps the optimized single-level expander, nested goes through the
   CLtL2/Steele Appendix C port (`bqCompletelyProcess` = `bqProcess` + `bqSimplify` +

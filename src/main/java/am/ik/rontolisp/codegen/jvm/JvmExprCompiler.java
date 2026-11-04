@@ -629,6 +629,11 @@ final class JvmExprCompiler {
 							JvmAsyncRuntimeBuilder.OCTETS_PACKED_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC));
 					return;
 				}
+				if (LispNames.CONS_CAS_CAR_INTERNAL.equals(qn.member())
+						|| LispNames.CONS_CAS_CDR_INTERNAL.equals(qn.member())) {
+					compileConsCas(qn.member(), cons, ctx, className);
+					return;
+				}
 				if (JvmLispCompiler.CONDITION_VARIABLE_METHODS.containsKey(qn.member())) {
 					compileConditionVariable(qn.member(), cons, ctx, className);
 					return;
@@ -2572,6 +2577,24 @@ final class JvmExprCompiler {
 		}
 		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.CONDITION_VARIABLE_CLASS),
 				java.util.Objects.requireNonNull(JvmLispCompiler.CONDITION_VARIABLE_METHODS.get(member)), desc));
+	}
+
+	/**
+	 * Compiles {@code %cons-cas-car} or {@code %cons-cas-cdr} onto its
+	 * {@code runtime/RontoConsCas} method, which travels with the class.
+	 */
+	private static void compileConsCas(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> items = cons.toList();
+		if (items.size() != 4) {
+			throw new UnsupportedOperationException(
+					member.toLowerCase(java.util.Locale.ROOT) + " expects 3 arguments, got " + (items.size() - 1));
+		}
+		for (int i = 1; i <= 3; i++) {
+			compileExpr(items.get(i), ctx, className);
+		}
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.CONS_CAS_CLASS),
+				LispNames.CONS_CAS_CAR_INTERNAL.equals(member) ? "car" : "cdr",
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
 	}
 
 	/**

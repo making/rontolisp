@@ -1102,6 +1102,10 @@ public final class PackageRegistry {
 		rontolispSymbols.add(LispNames.CONDITION_VARIABLE_NEW_INTERNAL);
 		rontolispSymbols.add(LispNames.CONDITION_WAIT_INTERNAL);
 		rontolispSymbols.add(LispNames.CONDITION_NOTIFY_INTERNAL);
+		// Internal: the compare-and-swap behind the atomics arm, spelled rontolisp::%...
+		// by its call sites.
+		rontolispSymbols.add(LispNames.CONS_CAS_CAR_INTERNAL);
+		rontolispSymbols.add(LispNames.CONS_CAS_CDR_INTERNAL);
 		// Internal: the interpreter's SWANK server hook behind the swank shim's
 		// create-server / stop-server, spelled rontolisp::%swank-* by its call sites.
 		rontolispSymbols.add(LispNames.SWANK_LISTEN);
@@ -1496,9 +1500,11 @@ public final class PackageRegistry {
 		// trivial-garbage (nickname tg): the no-op GC-finalizer shim behind the
 		// built-in ASDF system of the same name (trivial-garbage.lisp,
 		// eval.ShimLibraries) -- dbd-postgres imports the finalizer pair, and the
-		// weak-table pair is what a CFFI binding keeps its per-thread state in.
-		define(new LispPackage(LispNames.TRIVIAL_GARBAGE_PKG, List.of(), new HashSet<>(
-				Set.of("FINALIZE", "CANCEL-FINALIZATION", "MAKE-WEAK-HASH-TABLE", "HASH-TABLE-WEAKNESS"))));
+		// weak-table pair is what a CFFI binding keeps its per-thread state in;
+		// serapeum's static-let holds a weak pointer.
+		define(new LispPackage(LispNames.TRIVIAL_GARBAGE_PKG, List.of(),
+				new HashSet<>(Set.of("FINALIZE", "CANCEL-FINALIZATION", "MAKE-WEAK-HASH-TABLE", "HASH-TABLE-WEAKNESS",
+						"MAKE-WEAK-POINTER", "WEAK-POINTER-P", "WEAK-POINTER-VALUE"))));
 		// cl+ssl: the CLIENT-side TLS shim behind the built-in ASDF system of the same
 		// name (cl-ssl.lisp, eval.ShimLibraries), over the rontolisp:tls-upgrade
 		// primitive. The externals are the surface dexador (and the other

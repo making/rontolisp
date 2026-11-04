@@ -130,6 +130,27 @@ class JvmThreadTest {
 	}
 
 	@Test
+	void aThreadsHandlersAreItsOwn() throws Exception {
+		// The handler stack was one static: a thread leaving its handler-bind restored
+		// what it had saved over a handler the main thread pushed since.
+		assertThat(compileAndRun("""
+				(defvar *phase* 0)
+				(define-condition own-stack (error) ())
+				(defun worker ()
+				  (handler-bind ((own-stack #'identity))
+				    (setq *phase* 1)
+				    (loop until (= *phase* 2) do (sleep 0.01))))
+				(let ((th (rontolisp:make-thread #'worker)))
+				  (loop until (= *phase* 1) do (sleep 0.01))
+				  (print (handler-bind ((own-stack (lambda (e) (declare (ignore e)) (invoke-restart 'go-on))))
+				           (setq *phase* 2)
+				           (rontolisp:join-thread th)
+				           (with-simple-restart (go-on "Go on.") (error 'own-stack))
+				           :handled)))
+				""", "ThreadHandlersProg")).isEqualTo(":HANDLED");
+	}
+
+	@Test
 	void aBuiltInsTypeErrorStaysOneAcrossTheJoin() throws Exception {
 		// The datum and type of a built-in's type-error are recorded on the thread that
 		// raised it; the payload carries the record to the joiner, whose pad read the

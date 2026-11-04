@@ -543,6 +543,18 @@ final class JvmThreadRuntimeBuilder {
 			a.astore(1);
 			a.goto_(loop);
 			a.labelBinding(loopEnd);
+			// The handler and restart stacks are this thread's, starting empty: a thread
+			// leaving its handler-bind restores the stack it saved, and through one
+			// static that drops whatever another thread pushed since.
+			for (String stack : List.of(LispNames.HANDLER_CLUSTERS_VAR, LispNames.RESTART_CLUSTERS_VAR)) {
+				FieldRefEntry stackField = dynVarRuntime.fields().get(stack);
+				if (stackField != null) {
+					a.getstatic(stackField);
+					a.aconst_null();
+					a.invokestatic(dbind);
+					a.pop();
+				}
+			}
 			a.aload(0);
 			a.getfield(fnField);
 			a.iconst_0();

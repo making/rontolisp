@@ -77,8 +77,8 @@ bare wherever they run, so a variable named `quote` has to be one symbol with it
 function named `quote` is the cost. The directives are alike, consumed by member name: a bare
 `(in-package :x)` works in such a package, where SBCL calls an undefined function.
 
-Consumers measured 2026-11-04: `vom` loads and logs on all four backends. `sento` loads on the
-interpreter and stops on `atomics:cas`, on the compile paths while it compiles. `(ql:quickload :clim)`
+Consumers measured 2026-11-04: `vom` loads and logs on all four backends. `sento`: `.kb/asdf.md`,
+"Libraries that load". `(ql:quickload :clim)`
 stops at `closer-mop:standard-instance-access` (`.todo/i27`).
 
 ## A package defining a name of `cl`'s implementation
@@ -456,7 +456,7 @@ computed call falls through to an interpreter-only runtime function using the SA
 | `use-package` (`LispNames.USE_PACKAGE`) | `usePackage` | replaced by `T`; only EXTERNAL symbols inherited; using a package in itself is an error |
 | `unuse-package` (`LispNames.UNUSE_PACKAGE`) | `unusePackage` | the inverse, replaced by `T`; unusing what is not used is a no-op; the implied uses go with the package that implied them |
 | `export` / `unexport` | `exportSymbols` | export also records the same re-export redirect the `:export` clause does |
-| `import` | `importSymbols` | same `imports` redirect (member -> `trueHome`) as `:import-from`; the argument keeps its QUALIFIER; an UNQUALIFIED argument is a no-op, as in CL |
+| `import` / `shadowing-import` | `importInto` | same `imports` redirect (member -> `trueHome`) as `:import-from`; the argument keeps its QUALIFIER; an UNQUALIFIED argument is a no-op, as in CL. `UserMacroExpander.isPackageDirective` takes a `shadowing-import` with quoted symbols and a literal package only, so a computed one still replays at macro time. `(eval-when (:compile-toplevel) (shadowing-import ...))` is sento's every file: the backends' resolver had not seen it, so its `defmethod actor-of` defined the package's own generic (`No applicable method`, 2026-11-05) |
 | `uiop:add-package-local-nickname` | `addLocalNickname` | see Package-local nicknames; replaced by the package, or an entry in a compiled program |
 | `uiop:remove-package-local-nickname` | `removeLocalNickname` | likewise; replaced by `T`/`NIL`, or an entry |
 

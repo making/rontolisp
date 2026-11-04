@@ -797,6 +797,20 @@ it: `make-command`, `print-usage`, `parse-command-line`, `getopt` and `run` prin
 on the interpreter, and a real SIGINT prints `Received SIGINT, exiting.` and exits 130, there and
 compiled to the JVM (measured 2026-11-04, the handler's `unwind-protect` cleanup first).
 
+**`eval/AtomicsForms`** (pinned by `AtomicsE2eTest`, all four). atomics picks `cas` with `#+` per
+implementation and ends in `(no-support 'CAS)`, and `atomic-incf`/`atomic-decf` likewise; a macro that
+signals as it expands, so sento stopped at its first `ask` on the interpreter and while compiling on the
+compile paths. The three calls become expansions, with helpers ahead of `cas` and the `:atomics-cas-*`
+features pushed. `cas` macroexpands the place first (sento's `atomic-place`). A `car`/`cdr` is
+`rontolisp::%cons-cas-car`/`-cdr` on the interpreter and the JVM: `LispCons`' `VarHandle` and
+`runtime/RontoConsCas`'s over the `Object[]`. The primitive compares by reference, so `cas-car` reads the
+cell, compares by `eq`, and swaps with the object it read, retrying when another thread got there: a fixnum
+re-boxed anywhere would otherwise never match. Every other place, and every place on wasm (the features
+read per target), takes `get-setf-expansion` under one lock, subforms and `old`/`new` first, as
+`clojure.lisp`'s atoms do (`.kb/concurrent-served-requests.md`): atomic against `cas`, not against a plain
+`setf`. A slot CAS on each representation was weighed and not made: the JVM's general vector widens in
+place and nothing measured wants it.
+
 **`eval/ClReexportForms`** (pinned by `ClReexportE2eTest`, all four, SBCL 2.2.9's answers). clingon's
 `src/package.lisp` is `(defpackage :clingon (:use :cl))` plus top-level
 `(cl-reexport:reexport-from :clingon.command)` calls: a function computing `import` and `export` at
@@ -864,6 +878,19 @@ Every entry loads VERBATIM upstream sources unless a substitution is named.
 `AsdfLibraryE2eSupport` hosts the four-backend E2Es and needs a VENDORED tree per system; a
 library living only in the quicklisp cache is verified MANUALLY on all four.
 
+- **sento 3.4.2** — from the Quicklisp cache, verified manually (measured 2026-11-05, interpreter and JVM):
+  `make-actor-system`, `actor-of`, `ask-s`, `ask` with `fcompleted`, a `:time-out`, `*state*`, agents,
+  8 threads x 200 `tell`s counted to 1600. On wasm it compiles and `make-actor-system` signals at the first
+  `bt2:make-thread`. What it took, each a general fix: atomics' arm (tier 4 above); `bt:acquire-lock`
+  taking v2's `:wait` (the dispatcher's every message); the clause binding of `handler-case`
+  (`.kb/error-handling.md`, log4cl); `assert`'s datum under a symbol macro (`act:*self*`,
+  `.kb/symbol-macrolet.md`); a literal `shadowing-import` (`.kb/packages.md`); a thread's own handler stacks,
+  package and mute (`.kb/threads.md`). `ask` with a `:time-out` on an actor outside a system is
+  `bt2:with-timeout`, which signals. Its own `tests/` run on the interpreter past the 10000-message
+  `actor-mp-test`s, with serapeum stubbed (`.todo/i38`): a backquoted `#(,x)` (`fsm-test`, `.kb/defmacro-backquote.md`)
+  and lparallel over `with-lock-held` and a second worker were the gaps. Those tests are slow here, each
+  `assert-cond`'s 3 seconds being short for 20008 `ask-s` on the interpreter; not a lost message (8 threads x 200
+  `tell`s reach 1600 a second later).
 - **cl-who 1.1.5** — `ClWhoE2eTest` (interpreter + JVM). `with-html-output` expands at
   MACRO-EXPANSION time, so backends see baked string constants. The macro-time config replay is a
   **static purity judgment, not a data file**: `UserMacroExpander.isPureConfigSetf`/`isPure`

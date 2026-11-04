@@ -11,6 +11,8 @@ import java.util.Objects;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.rontolisp.compiler.HandlerCaseClauses;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -440,8 +442,9 @@ final class JvmHandlerCaseCompiler {
 	 * {@code valueSlot} through a pseudo-local, and stores the body's value into
 	 * {@code resultSlot}.
 	 */
-	private static void compileClauseBody(List<LispVal> clauseParts, int valueSlot, int resultSlot,
+	private static void compileClauseBody(List<LispVal> sourceClause, int valueSlot, int resultSlot,
 			JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> clauseParts = letBound(sourceClause, ctx);
 		String varName = null;
 		Integer shadowedSlot = null;
 		JvmIntFusionCompiler.RawLocal shadowedRaw = null;
@@ -494,6 +497,14 @@ final class JvmHandlerCaseCompiler {
 		}
 	}
 
+	private static List<LispVal> letBound(List<LispVal> clauseParts, JvmLispCompiler.Ctx ctx) {
+		return HandlerCaseClauses.letBound(clauseParts, ctx.specialVars,
+				names -> !FreeVarAnalyzer
+					.findCapturedVars(clauseParts.subList(2, clauseParts.size()), names, ctx.functions.keySet(),
+							ctx.captureMemo)
+					.isEmpty());
+	}
+
 	/**
 	 * Compiles a {@code :no-error} clause body -- {@code (:no-error ([var...]) body...)}
 	 * -- binding each variable to the protected form's VALUES, the same shape
@@ -515,8 +526,9 @@ final class JvmHandlerCaseCompiler {
 	 * The spill global is cleared after the snapshot so the clause body runs on a clean
 	 * channel (a clause that itself publishes through the spill starts fresh).
 	 */
-	private static void compileNoErrorClauseBody(List<LispVal> clauseParts, int valueSlot, int resultSlot,
+	private static void compileNoErrorClauseBody(List<LispVal> sourceClause, int valueSlot, int resultSlot,
 			JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> clauseParts = letBound(sourceClause, ctx);
 		List<LispVal> varVals = clauseParts.get(1) instanceof LispCons varList ? varList.toList() : List.of();
 		// The spill snapshot: the protected form's secondary values list. Allocated
 		// unconditionally so the (nth N spill) form below has a real local to read;

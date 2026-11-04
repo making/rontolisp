@@ -18,6 +18,9 @@ variable's global value. Binding `*standard-output*` this way routes the new thr
 print family into a stream of your choice — the shape the `bordeaux-threads`/`bt2`
 libraries (and Clack's handler) use.
 
+The new thread's current package starts as its spawner's and is its own from there: an
+`in-package` it runs, or a binding of `*package*`, does not reach another thread.
+
 `name` (default `nil`) rides the handle; `bt:thread-name` answers it, and inside the new
 thread [`rontolisp:current-thread`](rontolisp-current-thread.md) is this same handle.
 

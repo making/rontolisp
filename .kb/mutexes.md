@@ -32,7 +32,9 @@ Tier-1 shim (`ShimLibraries` + `BuiltinSystems` + a `PackageRegistry` package): 
 - `with-lock-held` / `with-recursive-lock-held` are `expandWithMutex`, not shim macros; for a
   `BORDEAUX-THREADS` head the expansion calls `bt:acquire-lock` / `bt:release-lock` (which
   unwrap), for `rontolisp:with-mutex` the mutex primitives.
-- Supersets: `make-lock` REENTRANT and `&rest` (name ignored); `:wait-p` ignored.
+- Supersets: `make-lock` REENTRANT and `&rest` (name ignored); `acquire-lock` takes `&rest`, v1's `wait-p`
+  and v2's `:wait`/`:timeout` all ignored. A caller of `(acquire-lock l nil)` (lparallel's
+  `with-lock-predicate/no-wait`) waits where it would have moved on.
 - Condition variables: `bt::condition-variable` structure over `rontolisp::%condition-variable-new`
   / `%condition-wait` (variable, mutex, nanoseconds or nil -> t / nil on timeout) /
   `%condition-notify` (variable, all). Both backends run `runtime/RontoConditionVariable`: a

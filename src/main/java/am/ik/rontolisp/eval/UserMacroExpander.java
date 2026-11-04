@@ -1647,6 +1647,9 @@ public final class UserMacroExpander {
 		// are package directives too: the macro evaluator's resolver must track their
 		// save/restore so a defmacro after a load resolves in the caller's package, and
 		// they are kept verbatim for the compilers' own resolution pass.
+		if (LispNames.SHADOWING_IMPORT.equals(member)) {
+			return PackageResolver.hasLiteralImportArguments(cons);
+		}
 		return LispNames.IN_PACKAGE.equals(member) || LispNames.DEFPACKAGE.equals(member)
 				|| LispNames.USE_PACKAGE.equals(member) || LispNames.UNUSE_PACKAGE.equals(member)
 				|| LispNames.EXPORT.equals(member) || LispNames.UNEXPORT.equals(member)

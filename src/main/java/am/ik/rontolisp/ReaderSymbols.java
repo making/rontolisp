@@ -32,6 +32,10 @@ public final class ReaderSymbols {
 
 	public static final LispSymbol NCONC = new LispSymbol(LispNames.NCONC);
 
+	public static final LispSymbol APPLY = new LispSymbol(LispNames.APPLY);
+
+	public static final LispSymbol VECTOR = new LispSymbol(LispNames.VECTOR);
+
 	/**
 	 * What a top-level {@code (defparameter NAME (defclass C ...))} assigns once
 	 * {@code LispMacroExpander.flattenTopLevel} has split the definer off.
@@ -48,7 +52,8 @@ public final class ReaderSymbols {
 	 */
 	static boolean contains(LispSymbol symbol) {
 		return symbol == QUOTE || symbol == FUNCTION || symbol == LIST || symbol == CONS || symbol == APPEND
-				|| symbol == LIST_STAR || symbol == NCONC || symbol == LAMBDA || symbol == FIND_CLASS;
+				|| symbol == LIST_STAR || symbol == NCONC || symbol == LAMBDA || symbol == FIND_CLASS || symbol == APPLY
+				|| symbol == VECTOR;
 	}
 
 }

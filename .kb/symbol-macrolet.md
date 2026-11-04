@@ -70,6 +70,9 @@ is never referenced, only stored into by one macro and read by a later one).
   `(in-package P)` missed `P::SM` and every binding's `(cffi:defcvar errno :int)` refused to compile
   (mmap's `check-posix`). The substitution comes before `requalifyShadowedClNames`: an expansion read
   in one package may land in a form of another that shadows a CL name in it.
+- The walk knows a form that holds an expression where a call's head would be: `assert`'s places, datum and
+  arguments and `check-type`'s string (sento's `(assert ... (format t "~a" (name act:*self*)))`, `Cannot
+  compile symbol`), a `with-lock-held`/`with-mutex` spec (lparallel's lock slot, `#:LOCK530 is unbound`).
 - A non-top-level definition is refused with `must be a top-level form`
   (`nestedDefineSymbolMacro`); the interpreter just registers it.
 - **Trap**: `expandAll`'s `SETF` case must expand a user setf place FIRST and walk the expansion, or

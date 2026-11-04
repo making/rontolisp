@@ -300,6 +300,9 @@ public final class ShimLibraries {
 		else if (ClReexportForms.SYSTEM.equals(systemName)) {
 			rewritten = ClReexportForms.rewrite(componentFile, source);
 		}
+		else if (AtomicsForms.SYSTEM.equals(systemName)) {
+			rewritten = AtomicsForms.rewrite(componentFile, source);
+		}
 		return rewritten == null ? source : rewritten;
 	}
 

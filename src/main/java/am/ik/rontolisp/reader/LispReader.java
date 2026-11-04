@@ -1797,13 +1797,52 @@ public final class LispReader {
 				this.rawNeedsFullProcessing |= holdsComma(datum.value());
 				return datum.value();
 			}
-			// Any other token (atoms, vectors, arrays) is constant template data:
-			// read it with the ordinary reader. Commas inside a vector literal are
-			// therefore unsupported, matching the single-level path.
+			// `#(a ,b) is `,(apply #'vector `(a ,b)) (CLHS 2.4.6.1), which needs the full
+			// processing; a vector holding no comma is constant data like an atom.
+			case Token.VectorOpen ignored when vectorHoldsComma() -> {
+				this.pos++;
+				this.rawNeedsFullProcessing = true;
+				return list2(BQ_COMMA,
+						new LispCons(ReaderSymbols.APPLY, list2(list2(ReaderSymbols.FUNCTION, ReaderSymbols.VECTOR),
+								list2(BQ_BACKQUOTE, readRawList()))));
+			}
+			// Any other token (atoms, vectors, arrays) is constant template data: read it
+			// with the ordinary reader.
 			default -> {
 				return readExpr();
 			}
 		}
+	}
+
+	// Whether the vector literal opening at the current token has a comma before its
+	// closing paren. Every token that opens a group brings its own paren except a
+	// plain one and these.
+	private boolean vectorHoldsComma() {
+		int depth = 0;
+		for (int i = this.pos; i < this.tokens.size(); i++) {
+			switch (this.tokens.get(i)) {
+				case Token.Unquote ignored -> {
+					return true;
+				}
+				case Token.UnquoteSplicing ignored -> {
+					return true;
+				}
+				case Token.LeftParen ignored -> depth++;
+				case Token.VectorOpen ignored -> depth++;
+				case Token.StructOpen ignored -> depth++;
+				case Token.SharpC ignored -> depth++;
+				case Token.FloatArrayOpen ignored -> depth++;
+				case Token.IntVectorOpen ignored -> depth++;
+				case Token.RightParen ignored -> {
+					if (--depth == 0) {
+						return false;
+					}
+				}
+				default -> {
+				}
+			}
+		}
+		return false;
 	}
 
 	// Whether a reader macro function's datum holds a raw comma marker: the walk is

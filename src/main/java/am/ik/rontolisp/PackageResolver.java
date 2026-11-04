@@ -46,9 +46,10 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * A thread may hold a current package of its own ({@link #bindThreadPackage}): an
  * editor's request names the package it reads and runs in, and two requests run at once
- * in two packages. Every other thread shares the one state. The instance is a monitor: a
- * resolution walk keeps transient state in fields, so two threads resolving at once take
- * turns.
+ * in two packages; a {@code make-thread} body, an async body and a served request start
+ * from the package of what spawned them. The thread reading the program shares the one
+ * state. The instance is a monitor: a resolution walk keeps transient state in fields, so
+ * two threads resolving at once take turns.
  */
 public final class PackageResolver {
 
@@ -604,8 +605,8 @@ public final class PackageResolver {
 			// notion here, so the directive has to take effect on THIS pass for the
 			// forms that follow. It is the runtime spelling of defpackage's
 			// :import-from clause and records the same import redirect.
-			if (LispNames.IMPORT.equals(member)) {
-				LispVal consumed = tryConsumeImport(cons);
+			if (LispNames.IMPORT.equals(member) || LispNames.SHADOWING_IMPORT.equals(member)) {
+				LispVal consumed = tryConsumeImport(cons, LispNames.SHADOWING_IMPORT.equals(member));
 				if (consumed != null) {
 					return consumed;
 				}
@@ -1309,7 +1310,7 @@ public final class PackageResolver {
 	 * function's return value. Returns null when an argument is not literal (a runtime
 	 * call only the interpreter can serve).
 	 */
-	private @Nullable LispVal tryConsumeImport(LispCons cons) {
+	private @Nullable LispVal tryConsumeImport(LispCons cons, boolean shadowing) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || parts.size() > 3) {
 			return null;
@@ -1325,7 +1326,7 @@ public final class PackageResolver {
 		if (names == null) {
 			return null;
 		}
-		importSymbols(names, target);
+		importInto(names, target, shadowing);
 		return LispTrue.INSTANCE;
 	}
 
@@ -1453,6 +1454,19 @@ public final class PackageResolver {
 					? sym.name().substring(1) : datum == arg ? null : LispSymbol.memberName(sym.name());
 			default -> null;
 		};
+	}
+
+	/**
+	 * Whether an {@code import}-shaped call names quoted symbols and a literal package,
+	 * if any.
+	 * @param form the call
+	 * @return {@code true} when the resolver consumes the call at top level
+	 */
+	public static boolean hasLiteralImportArguments(LispCons form) {
+		return form.cdr() instanceof LispCons symbols && symbols.car() instanceof LispCons quoted
+				&& quoted.car() instanceof LispSymbol quote && LispNames.QUOTE.equals(quote.name())
+				&& (symbols.cdr() instanceof LispNil
+						|| (symbols.cdr() instanceof LispCons pkg && literalDesignator(pkg.car()) != null));
 	}
 
 	/**

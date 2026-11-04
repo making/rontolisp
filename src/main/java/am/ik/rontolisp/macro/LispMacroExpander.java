@@ -26157,14 +26157,22 @@ public final class LispMacroExpander {
 				return parts.size() < 3 ? form : substituteSymbolMacroTail(parts, 2, macros, parts.get(1));
 			}
 			case LispNames.CHECK_TYPE, LispNames.ASSERT: {
-				// (check-type place type [string]) / (assert test ...): the type / the
-				// trailing places-and-datum are data-bearing; only the first argument is
-				// walked.
+				// (check-type place type [string]) / (assert test [(place...) [datum
+				// arg...]]): the type is data, the list of places is no call, and every
+				// other argument is an expression.
 				if (parts.size() < 2) {
 					return form;
 				}
 				List<LispVal> out = new java.util.ArrayList<>(parts);
-				out.set(1, substituteSymbolMacros(parts.get(1), macros));
+				for (int i = 1; i < parts.size(); i++) {
+					if (i != 2) {
+						out.set(i, substituteSymbolMacros(parts.get(i), macros));
+					}
+				}
+				if (LispNames.ASSERT.equals(head.name()) && parts.size() > 2 && parts.get(2) instanceof LispCons places
+						&& places.isProperList()) {
+					out.set(2, substituteSymbolMacroTail(places.toList(), 0, macros));
+				}
 				return listToCons(out);
 			}
 			case LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT: {
@@ -26183,6 +26191,14 @@ public final class LispMacroExpander {
 			}
 			case LispNames.PROG_STAR: {
 				return substituteSymbolMacros(expandProg(cons, true), macros);
+			}
+			case LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED,
+					LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED: {
+				// (with-mutex (mutex-form) body...): the lock spec's one element is an
+				// expression, the head a call's walk would keep.
+				return parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || !spec.isProperList() ? form
+						: substituteSymbolMacroTail(parts, 2, macros,
+								substituteSymbolMacroTail(spec.toList(), 0, macros));
 			}
 			default: {
 				// Ordinary call / all-expression form: the head is a function-namespace
