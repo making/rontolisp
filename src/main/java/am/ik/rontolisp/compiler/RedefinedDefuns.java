@@ -39,7 +39,7 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * A name written only through a computed name, by {@code eval} or by {@code load} is not
  * found here: holding every name a run-time value might spell would move much of such a
  * program into a namespace each reference walks ({@code .kb/symbol-runtime-api.md},
- * "Divergences").
+ * "Runtime (COMPUTED) package/symbol operations").
  */
 public final class RedefinedDefuns {
 
