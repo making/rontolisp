@@ -5648,6 +5648,9 @@ public final class LispNames {
 	/** The {@code character} type specifier symbol used in {@code :element-type}. */
 	public static final String CHARACTER_TYPE = "CHARACTER";
 
+	/** The {@code character} function: the character a character designator names. */
+	public static final String CHARACTER = "CHARACTER";
+
 	/**
 	 * The {@code double-float} type specifier symbol. As the {@code :element-type} of
 	 * {@code make-array} (and the element type of a {@code #d(...)} literal) it selects

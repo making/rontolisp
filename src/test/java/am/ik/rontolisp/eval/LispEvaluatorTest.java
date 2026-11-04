@@ -22256,12 +22256,15 @@ class LispEvaluatorTest {
 	@Test
 	void compileCoercesALambdaExpressionToAFunction() {
 		// (compile nil '(lambda ...)) answers the function (null lexical environment);
-		// (compile 'name '(lambda ...)) also installs it and answers the name, per CL.
+		// (compile 'name '(lambda ...)) also installs it and answers the name, per CL;
+		// (compile 'name) leaves the definition and answers the name and no failure.
 		assertThat(evalMulti("""
 				(list (funcall (compile nil '(lambda (x) (* x x))) 7)
 				      (compile 'cmp-inc '(lambda (x) (+ x 1)))
+				      (cmp-inc 41)
+				      (multiple-value-list (compile 'cmp-inc))
 				      (cmp-inc 41))
-				""").print()).isEqualTo("(49 CMP-INC 42)");
+				""").print()).isEqualTo("(49 CMP-INC 42 (CMP-INC NIL NIL) 42)");
 	}
 
 	@Test

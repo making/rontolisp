@@ -1536,54 +1536,16 @@ public final class LispEvaluator {
 			}
 			return eval(args.get(0));
 		}, true));
-		// compile: coerce a literal (lambda ...) definition to a function in the null
-		// lexical environment. A no-argument definition that DEFINES METHODS over class
-		// metaobjects -- postmodern's build-dao-methods (funcall (compile nil `(lambda ()
-		// ,code))) idiom -- is intercepted instead: the metaobject literals fold to
-		// static references (MopEvalCapture) and the body is either evaluated in place
-		// (live interpreter) or recorded through the splice sink UserMacroExpander
-		// attaches so it joins the compiled program as top-level forms.
+		// compile answers the name, or with no name the function, and neither failure
+		// value: nothing here warns.
 		this.globalEnv.defineFunction(LispNames.COMPILE, new LispFunction(LispNames.COMPILE, args -> {
-			if (args.size() != 2) {
-				throw new LispEvalException(
-						LispNames.COMPILE + " expects (compile name definition), got " + args.size() + " argument(s)");
-			}
-			LispVal definition = MopEvalCapture.foldClassMetaobjects(args.get(1), this.closRegistry);
-			if (!(definition instanceof LispCons defCons) || !(defCons.car() instanceof LispSymbol head)
-					|| !LispNames.LAMBDA.equals(memberName(head.name())) || !defCons.isProperList()) {
-				throw new LispEvalException(
-						LispNames.COMPILE + " expects a (lambda ...) definition, got " + args.get(1).print());
-			}
-			List<LispVal> defParts = defCons.toList();
-			if (defParts.size() >= 2 && defParts.get(1) instanceof LispNil && MopEvalCapture.definesMethods(defCons)) {
-				// Definition-time method construction ("expand and splice"): the folded
-				// body forms are the definition's whole effect, so they run (or splice)
-				// as top-level forms and the returned function is a no-op.
-				List<LispVal> body = List.copyOf(defParts.subList(2, defParts.size()));
-				if (this.mopEvalSpliceSink != null) {
-					this.mopEvalSpliceSink.addAll(body);
-					return new LispFunction("compiled-definition", callArgs -> LispNil.INSTANCE);
-				}
-				return new LispFunction("compiled-definition", callArgs -> {
-					LispVal result = LispNil.INSTANCE;
-					for (LispVal bodyForm : body) {
-						result = eval(bodyForm);
-					}
-					return result;
-				});
-			}
-			if (this.compiledTemplateSink != null) {
-				this.compiledTemplateSink.add(CompiledTemplates.registration(args.get(1)));
-			}
-			LispVal fn = eval(defCons);
-			if (args.get(0) instanceof LispSymbol name && !name.isKeyword()) {
-				// (compile 'name def) also installs the function under the name and
-				// returns the name, per CL.
-				this.globalEnv.defineFunction(name.name(), fn);
-				return name;
-			}
-			return fn;
-		}));
+			Environment.requireCallShape(LispNames.COMPILE, args);
+			LispVal answer = args.size() == 1 ? compileCurrentDefinition(args.get(0))
+					: compileDefinition(args.get(0), args.get(1));
+			this.globalEnv
+				.publishSpill(new LispCons(LispNil.INSTANCE, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)));
+			return answer;
+		}, true));
 		// macroexpand-1/macroexpand live on the evaluator (not Environment) because they
 		// need the user macro table. On the compile path, calls with a literal quoted
 		// argument are folded to their expansion by UserMacroExpander.
@@ -12471,6 +12433,84 @@ public final class LispEvaluator {
 			expanded = macroexpand1(form);
 		}
 		return form;
+	}
+
+	/**
+	 * {@code (compile name)}: the name's current definition is already what compiling it
+	 * would answer, so only a name with no definition signals, as {@code fdefinition}
+	 * does. A macro's name has one.
+	 * @param name the function name
+	 * @return the name
+	 */
+	private LispVal compileCurrentDefinition(LispVal name) {
+		String functionName = functionName(name);
+		if (functionName == null) {
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					LispNames.COMPILE + " expects a function name, got " + name.print());
+		}
+		if (!isMacroName(functionName)) {
+			resolveFunction(functionName);
+		}
+		return name;
+	}
+
+	/**
+	 * {@code (compile name definition)}: with a name, installs the function under it and
+	 * answers the name, per CL; with nil, answers the function.
+	 * @param name the function name, or nil
+	 * @param definition a lambda expression or a function
+	 * @return the name, or the function
+	 */
+	private LispVal compileDefinition(LispVal name, LispVal definition) {
+		LispVal fn = definition instanceof LispFunction || definition instanceof LispLambda
+				|| (definition instanceof LispInstance instance && instance.layout().funcallable()) ? definition
+						: compileLambdaExpression(definition);
+		String functionName = name instanceof LispNil ? null : functionName(name);
+		if (functionName == null) {
+			return fn;
+		}
+		this.globalEnv.defineFunction(functionName, fn);
+		return name;
+	}
+
+	/**
+	 * Coerces a {@code (lambda ...)} definition to a function in the null lexical
+	 * environment. A no-argument definition that DEFINES METHODS over class metaobjects
+	 * -- postmodern's build-dao-methods
+	 * {@code (funcall (compile nil `(lambda () ,code)))} idiom -- is intercepted instead:
+	 * the metaobject literals fold to static references (MopEvalCapture) and the body is
+	 * either evaluated in place (live interpreter) or recorded through the splice sink
+	 * UserMacroExpander attaches so it joins the compiled program as top-level forms.
+	 */
+	private LispVal compileLambdaExpression(LispVal lambdaExpression) {
+		LispVal definition = MopEvalCapture.foldClassMetaobjects(lambdaExpression, this.closRegistry);
+		if (!(definition instanceof LispCons defCons) || !(defCons.car() instanceof LispSymbol head)
+				|| !LispNames.LAMBDA.equals(memberName(head.name())) || !defCons.isProperList()) {
+			throw new LispEvalException(
+					LispNames.COMPILE + " expects a (lambda ...) definition, got " + lambdaExpression.print());
+		}
+		List<LispVal> defParts = defCons.toList();
+		if (defParts.size() >= 2 && defParts.get(1) instanceof LispNil && MopEvalCapture.definesMethods(defCons)) {
+			// Definition-time method construction ("expand and splice"): the folded
+			// body forms are the definition's whole effect, so they run (or splice)
+			// as top-level forms and the returned function is a no-op.
+			List<LispVal> body = List.copyOf(defParts.subList(2, defParts.size()));
+			if (this.mopEvalSpliceSink != null) {
+				this.mopEvalSpliceSink.addAll(body);
+				return new LispFunction("compiled-definition", callArgs -> LispNil.INSTANCE);
+			}
+			return new LispFunction("compiled-definition", callArgs -> {
+				LispVal result = LispNil.INSTANCE;
+				for (LispVal bodyForm : body) {
+					result = eval(bodyForm);
+				}
+				return result;
+			});
+		}
+		if (this.compiledTemplateSink != null) {
+			this.compiledTemplateSink.add(CompiledTemplates.registration(lambdaExpression));
+		}
+		return eval(defCons);
 	}
 
 	/**

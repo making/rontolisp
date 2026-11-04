@@ -22,7 +22,7 @@ import am.ik.rontolisp.PackageRegistry;
  * the prelude helpers {@code %function-name}, {@code %fdefinition} and
  * {@code %fmakunbound}, which the expression compilers of both backends call in place of
  * the operator ({@link #functionNameArgument}, {@link #fdefinitionCall},
- * {@link #fmakunboundCall}).
+ * {@link #fmakunboundCall}). {@code compile} hands such a name on to two of them.
  *
  * <p>
  * The helpers ride only in a program where such a list can reach such an operator
@@ -187,15 +187,23 @@ public final class RuntimeFunctionNames {
 			String op = head.name();
 			if (LispNames.QUOTE.equals(op) || LispNames.FUNCTION.equals(op)) {
 				// 'fboundp / #'fboundp: the operator as a function value.
-				if (cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol named
-						&& FUNCTION_NAME_OPERATORS.contains(named.name())) {
-					mark(named.name(), found);
+				if (cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol named) {
+					if (FUNCTION_NAME_OPERATORS.contains(named.name())) {
+						mark(named.name(), found);
+					}
+					else if (LispNames.COMPILE.equals(named.name())) {
+						markCompile(found);
+					}
 				}
 				return;
 			}
 			if (FUNCTION_NAME_OPERATORS.contains(op) && cons.cdr() instanceof LispCons arg
 					&& mayBeComputedName(arg.car())) {
 				mark(op, found);
+			}
+			// Even a quoted name is computed to compile-runtime.lisp's fdefinition calls.
+			if (LispNames.COMPILE.equals(op) && cons.cdr() instanceof LispCons arg && arg.car() != LispNil.INSTANCE) {
+				markCompile(found);
 			}
 		}
 		LispVal rest = cons;
@@ -207,6 +215,11 @@ public final class RuntimeFunctionNames {
 
 	private static void mark(String op, boolean[] found) {
 		found[LispNames.FDEFINITION.equals(op) ? 1 : LispNames.FMAKUNBOUND.equals(op) ? 2 : 0] = true;
+	}
+
+	private static void markCompile(boolean[] found) {
+		found[0] = true;
+		found[1] = true;
 	}
 
 	/**

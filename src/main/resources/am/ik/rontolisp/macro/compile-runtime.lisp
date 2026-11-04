@@ -40,11 +40,35 @@
 ;; gensym markers to: (k . symbol).
 (defvar %template-gensyms% nil)
 
-(defun compile (name definition)
-  (if (%compile-defines-methods-p definition)
-      (lambda () nil)
-      (let ((compiled (%compiled-template definition)))
-        (if compiled compiled (eval definition)))))
+;; The name, or with no name the function, and neither failure value: nothing here
+;; warns. With no definition the name's current one is already the answer, so only a
+;; name with no definition signals.
+(defun compile (name &optional (definition nil definition-p))
+  (if definition-p
+      (let ((compiled (%compile-definition definition)))
+        (if name
+            (progn
+              (setf (fdefinition name) compiled)
+              (values name nil nil))
+            (values compiled nil nil)))
+      (progn
+        (%compile-check-name name)
+        (values name nil nil))))
+
+;; A macro's name has a definition. Replaced by CompileRuntime where the program does
+;; not carry macro-function: a program that does not name compile (the runtime is
+;; here for a coerce, or a precompiled definition) never gets this far, and the
+;; reference would only warn.
+(defun %compile-check-name (name)
+  (if (and (symbolp name) (macro-function name)) nil (fdefinition name)))
+
+(defun %compile-definition (definition)
+  (cond ((functionp definition) definition)
+        ((not (and (consp definition) (eq (car definition) 'lambda)))
+         (error "COMPILE expects a (lambda ...) definition, got ~S" definition))
+        ((%compile-defines-methods-p definition) (lambda () nil))
+        (t (let ((compiled (%compiled-template definition)))
+             (if compiled compiled (eval definition))))))
 
 ;; The CDR direction is a LOOP, not a recursion: the definition of a function
 ;; with a long body is an ordinary flat list of body forms, and one frame per

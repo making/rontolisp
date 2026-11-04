@@ -19112,6 +19112,68 @@ cases:
     expected: |
       (0 (MT-DAO-CLASS) ("users") (ID) 2 ((:EXTRA :ID) (:EXTRA :NAME)) (:NONE "anon") (:SERIAL :TEXT) (MT-USER))
       (1 ("users2") (ID EMAIL) 2 1)
+  # character takes all three designators; compile takes a name alone and answers its
+  # three values. Output matches SBCL 2.2.9. A function is a definition too, a coerce
+  # answers one value, and a wrong name signals what fdefinition does.
+  - name: character-and-compile-of-a-name
+    source: |
+      (print (list (character "a") (character #\b) (character 'c) (funcall 'character :d)
+                   (mapcar #'character (list "x" #\y 'z))))
+      (dolist (bad (list "ab" "" 1 'abc nil))
+        (print (handler-case (character bad)
+                 (type-error (c) (list :type-error (type-error-datum c))))))
+      (defun cocn-inc (x) (+ x 1))
+      (defmacro cocn-mac (x) `(list ,x))
+      (defun (setf cocn-place) (v x) (list v x))
+      (print (multiple-value-list (compile 'cocn-inc)))
+      (print (cocn-inc 1))
+      (print (multiple-value-list (funcall 'compile 'cocn-inc)))
+      (print (multiple-value-list (apply #'compile '(cocn-inc))))
+      (print (multiple-value-list (compile 'cocn-mac)))
+      (print (cocn-mac 1))
+      (print (multiple-value-list (compile '(setf cocn-place))))
+      (print (multiple-value-list (compile 'cocn-named '(lambda (x) (+ x 2)))))
+      (print (funcall 'cocn-named 1))
+      (print (multiple-value-list (compile 'cocn-copy #'cocn-inc)))
+      (print (funcall 'cocn-copy 1))
+      (let ((vals (multiple-value-list (compile nil '(lambda (x) (* x x))))))
+        (print (list (funcall (first vals) 7) (cdr vals))))
+      (let ((vals (multiple-value-list (compile nil #'cocn-inc))))
+        (print (list (funcall (first vals) 7) (cdr vals))))
+      (print (handler-case (compile 'cocn-nosuch)
+               (undefined-function (c) (list :undefined (cell-error-name c)))))
+      (print (handler-case (compile nil)
+               (undefined-function (c) (list :undefined (cell-error-name c)))))
+      (print (handler-case (compile 1)
+               (type-error () :type-error)))
+      (print (handler-case (compile nil 1)
+               (error () :error)))
+      (print (length (multiple-value-list (coerce (list 'lambda '(x) 'x) 'function))))
+    expected: |
+      (#\a #\b #\C #\D (#\x #\y #\Z))
+      (:TYPE-ERROR "ab")
+      (:TYPE-ERROR "")
+      (:TYPE-ERROR 1)
+      (:TYPE-ERROR ABC)
+      (:TYPE-ERROR NIL)
+      (COCN-INC NIL NIL)
+      2
+      (COCN-INC NIL NIL)
+      (COCN-INC NIL NIL)
+      (COCN-MAC NIL NIL)
+      (1)
+      ((SETF COCN-PLACE) NIL NIL)
+      (COCN-NAMED NIL NIL)
+      3
+      (COCN-COPY NIL NIL)
+      2
+      (49 (NIL NIL))
+      (8 (NIL NIL))
+      (:UNDEFINED COCN-NOSUCH)
+      (:UNDEFINED NIL)
+      :TYPE-ERROR
+      :ERROR
+      1
   - name: compile-definition-time-method-construction
     source: |
       ;; The build-dao-methods idiom (postmodern table.lisp): a

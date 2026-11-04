@@ -104,6 +104,7 @@
 | `char-code` | `(char-code #\A)` | `65` -- 文字のコードポイント |
 | `char-int` | `(char-int #\A)` | `65` -- 文字を表す非負整数。実装固有の属性を持たないため、`char-code` と同じ値になります |
 | `code-char` | `(code-char 66)` | `#\B` -- 指定したコードポイントの文字 |
+| `character` | `(character "a")` | `#\a` -- 文字指定子(文字、1 文字の文字列またはシンボル)が表す文字 |
 | `char=` `char<` `char<=` | `(char< #\a #\b #\c)` | `t`(コードポイントによる可変長引数比較) |
 | `char-lessp` `char-greaterp` `char-not-lessp` `char-not-greaterp` `char-not-equal` | `(char-lessp #\a #\B)` | `t`(大文字・小文字を区別しない比較の一群) |
 | `char-upcase` `char-downcase` | `(char-upcase #\a)` | `#\A`(すべてのバックエンドで全 Unicode 対応の大小文字変換) |
@@ -147,7 +148,7 @@
 | `digit-char-p` | `(digit-char-p #\7)`, `(digit-char-p #\f 16)` | `7`, `15` -- 指定した基数(デフォルト10)での桁の重み、またはnil |
 | `digit-char` | `(digit-char 11 16)` | `#\B` -- 基数 (既定 10) における重みを表す文字、範囲外なら nil |
 | `eval` | `(eval '(+ 1 2))` | 式を評価します(3つのバックエンドすべて)。結果を返します |
-| `compile` | `(compile nil '(lambda (x) (* x x)))` | lambda 式を関数に変換します(空のレキシカル環境)。コンパイル済みプログラムでは定義時のメソッド構築イディオムのみサポート |
+| `compile` | `(compile nil '(lambda (x) (* x x)))` | lambda 式を関数に変換します(空のレキシカル環境)。`(compile 'name)` は定義を残して名前を返します。コンパイル済みプログラムは定義を `eval` ランタイムまたは事前コンパイルした定義で処理します |
 | `load` | `(load "bar.lisp")` | ファイル内のすべてのトップレベルフォームをグローバル環境で読み込んで評価します(3つのバックエンドすべて)。`t` を返します |
 | `require` | `(require :util)`, `(require :util "lib/util.lisp")` | モジュールのファイル(require するファイルの隣の `<name>.lisp`、または明示パス)を、まだ `provide` されていなければロードします。モジュール名を返します。コンパイルパスではリテラルなトップレベルフォームである必要があります |
 | `provide` | `(provide :util)` | モジュールをロード済みとして登録し、以後の `require` を no-op にします。モジュール名を返します。コンパイルパスではリテラルなトップレベルフォームである必要があります |

@@ -102,14 +102,13 @@ final class NativeCallShapes {
 				LispNames.GET_UNIVERSAL_TIME }) {
 			add(rows, name, 0, 0);
 		}
-		for (String name : new String[] { LispNames.EXPORT, LispNames.IMPORT, LispNames.MACRO_FUNCTION,
-				LispNames.MACROEXPAND, LispNames.MACROEXPAND_1, LispNames.REQUIRE, LispNames.SHADOW,
-				LispNames.SHADOWING_IMPORT, LispNames.UNEXPORT, LispNames.UNINTERN, LispNames.UNUSE_PACKAGE,
-				LispNames.USE_PACKAGE }) {
+		for (String name : new String[] { LispNames.COMPILE, LispNames.EXPORT, LispNames.IMPORT,
+				LispNames.MACRO_FUNCTION, LispNames.MACROEXPAND, LispNames.MACROEXPAND_1, LispNames.REQUIRE,
+				LispNames.SHADOW, LispNames.SHADOWING_IMPORT, LispNames.UNEXPORT, LispNames.UNINTERN,
+				LispNames.UNUSE_PACKAGE, LispNames.USE_PACKAGE }) {
 			add(rows, name, 1, 2);
 		}
 		add(rows, LispNames.ALLOCATE_INSTANCE, 1, UNBOUNDED);
-		add(rows, LispNames.COMPILE, 2, 2);
 		add(rows, LispNames.FIND_CLASS, 1, 3);
 		add(rows, LispNames.LOAD, 1, UNBOUNDED);
 		add(rows, LispNames.MAKE_PACKAGE, 1, UNBOUNDED);

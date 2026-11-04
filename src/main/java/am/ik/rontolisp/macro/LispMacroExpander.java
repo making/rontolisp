@@ -29757,7 +29757,8 @@ public final class LispMacroExpander {
 			// the program, a precompiled definition's factory, and an eval of anything
 			// else (see CompileRuntime). Its template table is a global the
 			// registrations, at their own positions, push onto: first.
-			out.addAll(CompileRuntime.forms());
+			out.addAll(
+					CompileRuntime.forms(program.stream().anyMatch(f -> definesFunction(f, LispNames.MACRO_FUNCTION))));
 			out.addAll(0, CompileRuntime.globals());
 		}
 		if (metaclassProtocol || makeInstanceFunction) {
@@ -35362,8 +35363,12 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal coerceTempToFunction(LispSymbol x, boolean compilePresent) {
 		LispVal viaName = listToCons(List.of(new LispSymbol(LispNames.SYMBOL_FUNCTION), x));
-		LispVal notFunction = compilePresent ? makeIf(callOf(LispNames.CONSP, x),
-				listToCons(List.of(new LispSymbol(LispNames.COMPILE), LispNil.INSTANCE, x)), viaName) : viaName;
+		LispVal notFunction = compilePresent
+				? makeIf(callOf(LispNames.CONSP, x),
+						callOf(LispNames.VALUES,
+								listToCons(List.of(new LispSymbol(LispNames.COMPILE), LispNil.INSTANCE, x))),
+						viaName)
+				: viaName;
 		return makeIf(callOf(LispNames.FUNCTIONP, x), x, notFunction);
 	}
 
@@ -44847,7 +44852,7 @@ public final class LispMacroExpander {
 					LispNames.INTEGER_DECODE_FLOAT, LispNames.DECODE_UNIVERSAL_TIME, LispNames.GET_DECODED_TIME,
 					LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.GET_PROPERTIES, LispNames.GET_SETF_EXPANSION,
 					LispNames.PARSE_NAMESTRING, LispNames.PPRINT_DISPATCH, LispNames.PPRINT,
-					LispNames.GET_MACRO_CHARACTER ->
+					LispNames.GET_MACRO_CHARACTER, LispNames.COMPILE ->
 				true;
 			default -> false;
 		};

@@ -181,6 +181,7 @@ categories:
       - { slug: char-code, name: "char-code" }
       - { slug: char-int, name: "char-int" }
       - { slug: code-char, name: "code-char" }
+      - { slug: character, name: "character" }
       - { slug: char-compare, name: "char= char< char<= char> char>= char/= char-equal" }
       - { slug: char-compare-ci, name: "char-lessp char-greaterp char-not-lessp char-not-greaterp char-not-equal" }
       - { slug: char-case, name: "char-upcase char-downcase" }

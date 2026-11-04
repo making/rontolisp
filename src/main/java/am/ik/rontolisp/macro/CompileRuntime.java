@@ -33,6 +33,8 @@ public final class CompileRuntime {
 
 	@Nullable private static volatile List<LispVal> forms;
 
+	@Nullable private static volatile List<LispVal> formsWithoutMacroTest;
+
 	@Nullable private static volatile List<LispVal> globals;
 
 	private CompileRuntime() {
@@ -42,11 +44,14 @@ public final class CompileRuntime {
 	 * The runtime's function definitions, in definition order: position-independent.
 	 * Parsed once and cached; the list is immutable, so callers may splice it into a
 	 * program directly.
+	 * @param macroFunctionPresent whether the program carries {@code macro-function},
+	 * which the prelude splices for a program naming {@code compile}; without it nothing
+	 * can reach the runtime's macro test, whose reference would only warn
 	 * @return the runtime defuns
 	 */
-	public static List<LispVal> forms() {
+	public static List<LispVal> forms(boolean macroFunctionPresent) {
 		load();
-		return Objects.requireNonNull(forms);
+		return Objects.requireNonNull(macroFunctionPresent ? forms : formsWithoutMacroTest);
 	}
 
 	/**
@@ -64,17 +69,29 @@ public final class CompileRuntime {
 			synchronized (CompileRuntime.class) {
 				if (forms == null) {
 					List<LispVal> defuns = new ArrayList<>();
+					List<LispVal> defunsWithoutMacroTest = new ArrayList<>();
 					List<LispVal> defvars = new ArrayList<>();
 					for (LispVal form : LispReader.readAllFromString(readSource())) {
 						boolean defvar = form instanceof LispCons cons && cons.car() instanceof LispSymbol head
 								&& LispNames.DEFVAR.equals(head.name());
 						(defvar ? defvars : defuns).add(form);
+						if (!defvar) {
+							defunsWithoutMacroTest.add(checkNameDefun(form) ? LispReader
+								.readAllFromString("(defun %compile-check-name (name) (fdefinition name))")
+								.get(0) : form);
+						}
 					}
 					globals = List.copyOf(defvars);
+					formsWithoutMacroTest = List.copyOf(defunsWithoutMacroTest);
 					forms = List.copyOf(defuns);
 				}
 			}
 		}
+	}
+
+	private static boolean checkNameDefun(LispVal form) {
+		return form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol name && "%COMPILE-CHECK-NAME".equals(name.name());
 	}
 
 	private static String readSource() {
