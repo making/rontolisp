@@ -15350,8 +15350,8 @@ class WasmLispCompilerIntegrationTest {
 		// a literal and env lookups (symbol-value below) both work
 		assertThat(compileAndRun("(print (intern \"hello\")) (print (eq (intern \"FOO\") 'foo))"
 				+ "(print (symbolp (intern \"hello\"))) (print (intern (symbol-name 'round-trip)))"
-				+ "(print (funcall #'intern \"abc\"))"))
-			.isEqualTo("|hello|\nT\nT\nROUND-TRIP\n|abc|");
+				+ "(print (funcall #'intern \"abc\")) (print (intern \"\"))"))
+			.isEqualTo("|hello|\nT\nT\nROUND-TRIP\n|abc|\n||");
 	}
 
 	@Test

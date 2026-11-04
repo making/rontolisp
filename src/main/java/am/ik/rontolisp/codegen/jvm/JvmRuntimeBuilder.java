@@ -2090,8 +2090,9 @@ final class JvmRuntimeBuilder {
 	 * they never trigger escaping here on their own). Wraps the name in {@code |...|},
 	 * doubling every embedded {@code |} and {@code \}, when CLHS 22.1.3.3 says the bare
 	 * spelling would not read back as itself: the empty name, a name holding a character
-	 * the reader would not accept inside a bare symbol token, or a name holding an ASCII
-	 * lowercase letter.
+	 * the reader would not accept inside a bare symbol token, a name holding an ASCII
+	 * lowercase letter, or a name a bare token would not read as a symbol
+	 * ({@code LispSymbol.readsAsNoSymbol}'s mirror).
 	 *
 	 * <p>
 	 * The lowercase check is scoped to ASCII {@code a}-{@code z} rather than the
@@ -2108,8 +2109,10 @@ final class JvmRuntimeBuilder {
 			MethodRefEntry stringConcat) {
 		MethodCode a = new MethodCode();
 		// locals: s = 0 (param), n = 1, prefixEnd = 2, i = 3, c = 4, idx = 5 (int),
-		// tmp = 6 (String, the substring/concat scratch).
-		int slotS = 0, slotN = 1, slotPrefixEnd = 2, slotI = 3, slotC = 4, slotIdx = 5, slotTmp = 6;
+		// tmp = 6 (String, the substring/concat scratch), and the shape of the member:
+		// letterBefore = 7, digit = 8, dots = 9, potential = 10 (int).
+		int slotS = 0, slotN = 1, slotPrefixEnd = 2, slotI = 3, slotC = 4, slotIdx = 5, slotTmp = 6,
+				slotLetterBefore = 7, slotDigit = 8, slotDots = 9, slotPotential = 10;
 		MethodCode.Label checkSharpColon = a.newLabel();
 		MethodCode.Label scanQualifier = a.newLabel();
 		MethodCode.Label havePrefix = a.newLabel();
@@ -2190,14 +2193,27 @@ final class JvmRuntimeBuilder {
 		a.loadConstant(0);
 		a.istore(slotPrefixEnd);
 		a.labelBinding(havePrefix);
-		// needsPipes: the empty member (prefixEnd == n), or a member byte that is
-		// ASCII lowercase or non-constituent (LispSymbol.needsEscape's mirror).
+		// needsPipes: the empty member (prefixEnd == n), a member byte that is ASCII
+		// lowercase or non-constituent (LispSymbol.needsEscape's mirror), or the member's
+		// shape once the scan has seen all of it (LispSymbol.readsAsNoSymbol's).
+		a.iload(slotPrefixEnd);
+		a.iload(slotN);
+		a.if_icmpeq(doEscape);
+		a.loadConstant(0);
+		a.istore(slotLetterBefore);
+		a.loadConstant(0);
+		a.istore(slotDigit);
+		a.loadConstant(1);
+		a.istore(slotDots);
+		a.loadConstant(1);
+		a.istore(slotPotential);
+		MethodCode.Label scanned = a.newLabel();
 		a.iload(slotPrefixEnd);
 		a.istore(slotI);
 		a.labelBinding(loopTop);
 		a.iload(slotI);
 		a.iload(slotN);
-		a.if_icmpge(returnAsIs);
+		a.if_icmpge(scanned);
 		a.aload(slotS);
 		a.iload(slotI);
 		a.invokevirtual(stringCharAt);
@@ -2219,8 +2235,87 @@ final class JvmRuntimeBuilder {
 			a.loadConstant(forbidden);
 			a.if_icmpeq(doEscape);
 		}
+		MethodCode.Label next = a.newLabel();
+		MethodCode.Label notLetter = a.newLabel();
+		MethodCode.Label notDigit = a.newLabel();
+		MethodCode.Label noNumber = a.newLabel();
+		a.iload(slotC);
+		a.loadConstant('A');
+		a.if_icmplt(notLetter);
+		a.iload(slotC);
+		a.loadConstant('Z');
+		a.if_icmpgt(notLetter);
+		a.loadConstant(0);
+		a.istore(slotDots);
+		a.iload(slotLetterBefore);
+		a.ifne(noNumber);
+		a.loadConstant(1);
+		a.istore(slotLetterBefore);
+		a.goto_(next);
+		a.labelBinding(notLetter);
+		a.loadConstant(0);
+		a.istore(slotLetterBefore);
+		a.iload(slotC);
+		a.loadConstant('.');
+		a.if_icmpeq(next);
+		a.loadConstant(0);
+		a.istore(slotDots);
+		a.iload(slotC);
+		a.loadConstant('0');
+		a.if_icmplt(notDigit);
+		a.iload(slotC);
+		a.loadConstant('9');
+		a.if_icmpgt(notDigit);
+		a.loadConstant(1);
+		a.istore(slotDigit);
+		a.goto_(next);
+		a.labelBinding(notDigit);
+		for (char marker : new char[] { '+', '-', '/', '^', '_' }) {
+			a.iload(slotC);
+			a.loadConstant(marker);
+			a.if_icmpeq(next);
+		}
+		a.labelBinding(noNumber);
+		a.loadConstant(0);
+		a.istore(slotPotential);
+		a.labelBinding(next);
 		a.iinc(slotI, 1);
 		a.goto_(loopTop);
+		a.labelBinding(scanned);
+		a.iload(slotDots);
+		a.ifne(doEscape);
+		a.iload(slotPotential);
+		a.ifeq(returnAsIs);
+		a.iload(slotDigit);
+		a.ifeq(returnAsIs);
+		// Begins with neither a letter nor a ratio marker, and does not end in a sign.
+		a.aload(slotS);
+		a.iload(slotPrefixEnd);
+		a.invokevirtual(stringCharAt);
+		a.istore(slotC);
+		a.iload(slotC);
+		a.loadConstant('/');
+		a.if_icmpeq(returnAsIs);
+		MethodCode.Label firstNotLetter = a.newLabel();
+		a.iload(slotC);
+		a.loadConstant('A');
+		a.if_icmplt(firstNotLetter);
+		a.iload(slotC);
+		a.loadConstant('Z');
+		a.if_icmple(returnAsIs);
+		a.labelBinding(firstNotLetter);
+		a.aload(slotS);
+		a.iload(slotN);
+		a.loadConstant(1);
+		a.isub();
+		a.invokevirtual(stringCharAt);
+		a.istore(slotC);
+		a.iload(slotC);
+		a.loadConstant('+');
+		a.if_icmpeq(returnAsIs);
+		a.iload(slotC);
+		a.loadConstant('-');
+		a.if_icmpne(doEscape);
 		a.labelBinding(returnAsIs);
 		a.aload(slotS);
 		a.areturn();

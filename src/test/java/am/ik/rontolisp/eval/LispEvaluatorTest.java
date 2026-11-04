@@ -18210,6 +18210,9 @@ class LispEvaluatorTest {
 	void symbolApiFunctionsAreFirstClassValues() {
 		assertThat(evalMulti("(funcall #'symbol-name 'foo)").print()).isEqualTo("\"FOO\"");
 		assertThat(evalMulti("(funcall #'intern \"foo\")").print()).isEqualTo("|foo|");
+		// A name a bare token would read as a number, or dots alone, is escaped too.
+		assertThat(evalMulti("(mapcar #'intern '(\"10\" \"1E5\" \"...\" \"1+\" \"1AB\" \"E1\"))").print())
+			.isEqualTo("(|10| |1E5| |...| 1+ 1AB E1)");
 		assertThat(evalMulti("(mapcar #'symbol-name '(a b))").print()).isEqualTo("(\"A\" \"B\")");
 		assertThat(evalMulti("(defvar *fc-var* 1) (funcall #'boundp '*fc-var*)")).isEqualTo(LispTrue.INSTANCE);
 	}

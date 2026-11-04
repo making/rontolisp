@@ -158,7 +158,7 @@ digits]` in the base is that number, ahead of every other reading; one that woul
 decimal but holds a digit past the base is a symbol; every other token reads as in base 10** (a
 trailing dot, a float; so `1s0` is a float in base 16 where `1f0` is 496). Measured against SBCL 2.2.9,
 2026-11-05: a table of 100 tokens over bases 2 to 36 agrees on all four, but for a double's `d0` (one
-float type) and SBCL's `|102|` printing (`.kb/pretty-printer.md`). ci-spec
+float type). ci-spec
 `read-base-reads-rationals-in-its-radix`.
 - Interpreter and source reads: `LispLexer.lexRationalInReadBase`, in front of the dispatcher, over
   the view (`.kb/readtables.md`). A token holding an escape is no number.

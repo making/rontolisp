@@ -476,10 +476,11 @@ final class WasmStringRuntimeBuilder {
 	 * triggers escaping on its own), {@code |...|}-framed with every embedded {@code |} /
 	 * {@code \} doubled, when CLHS 22.1.3.3 says the bare bytes would not read back as
 	 * themselves: the empty range, a byte the reader would not accept inside a bare
-	 * symbol token, or an ASCII lowercase byte ({@code a}-{@code z}). Falls through to a
-	 * verbatim {@code _write_str_gc(str, from, to, esc=0)} call -- this function's OWN
-	 * old body -- when none of that fires, so the common case costs one scan and no
-	 * allocation. Reuses {@code TYPE_WRITE_STR_GC}'s
+	 * symbol token, an ASCII lowercase byte ({@code a}-{@code z}), or a name a bare token
+	 * would not read as a symbol ({@code LispSymbol.readsAsNoSymbol}'s mirror). Falls
+	 * through to a verbatim {@code _write_str_gc(str, from, to, esc=0)} call -- this
+	 * function's OWN old body -- when none of that fires, so the common case costs one
+	 * scan and no allocation. Reuses {@code TYPE_WRITE_STR_GC}'s
 	 * {@code ((ref null eq),i32,i32,i32)->()} shape; the fourth parameter is unused.
 	 *
 	 * <p>
@@ -497,14 +498,16 @@ final class WasmStringRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 		// params: str = 0, from = 1, to = 2, unused = 3. locals: arr = 4 ($str_bytes,
 		// ref), dst = 5, i = 6, n = 7, b = 8, needsPipes = 9, prefixEnd = 10, idx = 11,
-		// found = 12 (i32).
+		// found = 12, and the shape of the member: letterBefore = 13, digit = 14, dots =
+		// 15,
+		// potential = 16 (i32).
 		w.write(2);
 		w.write(1);
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
-		w.write(8);
+		w.write(12);
 		w.write(Type.I32);
 		int str = 0, from = 1, to = 2, arr = 4, dst = 5, i = 6, n = 7, b = 8, needsPipes = 9, prefixEnd = 10, idx = 11,
-				found = 12;
+				found = 12, letterBefore = 13, digit = 14, dots = 15, potential = 16;
 		// arr = str.data
 		get(w, str);
 		WasmEmitHelper.emitStrBytesArray(w);
@@ -647,6 +650,10 @@ final class WasmStringRuntimeBuilder {
 		get(w, to);
 		w.write(Instruction.I32_EQ);
 		set(w, needsPipes);
+		i32(w, 1);
+		set(w, dots);
+		i32(w, 1);
+		set(w, potential);
 		get(w, prefixEnd);
 		set(w, i);
 		w.write(Instruction.BLOCK, 0x40);
@@ -679,6 +686,55 @@ final class WasmStringRuntimeBuilder {
 			w.write(Instruction.BR, 2);
 			w.write(Instruction.END);
 		}
+		// The member's shape (LispSymbol.readsAsNoSymbol's mirror).
+		get(w, b);
+		i32(w, 'A');
+		w.write(Instruction.I32_SUB);
+		i32(w, 26);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		set(w, dots);
+		get(w, letterBefore);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		set(w, potential);
+		w.write(Instruction.END);
+		i32(w, 1);
+		set(w, letterBefore);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		set(w, letterBefore);
+		get(w, b);
+		i32(w, '.');
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		set(w, dots);
+		get(w, b);
+		i32(w, '0');
+		w.write(Instruction.I32_SUB);
+		i32(w, 10);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 1);
+		set(w, digit);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		for (int marker : new int[] { '+', '-', '/', '^', '_' }) {
+			get(w, b);
+			i32(w, marker);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.I32_OR);
+		}
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		set(w, potential);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 		get(w, i);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
@@ -686,6 +742,45 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
+		// Dots alone, or a potential number: a digit, beginning with neither a letter nor
+		// a ratio marker, not ending in a sign.
+		get(w, needsPipes);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, dots);
+		set(w, needsPipes);
+		get(w, potential);
+		get(w, digit);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		arrGetLocal(w, arr, prefixEnd);
+		set(w, b);
+		get(w, b);
+		i32(w, 'A');
+		w.write(Instruction.I32_SUB);
+		i32(w, 26);
+		w.write(Instruction.I32_GE_U);
+		get(w, b);
+		i32(w, '/');
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_AND);
+		get(w, to);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		set(w, i);
+		arrGetLocal(w, arr, i);
+		set(w, b);
+		get(w, b);
+		i32(w, '+');
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_AND);
+		get(w, b);
+		i32(w, '-');
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_AND);
+		set(w, needsPipes);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 		get(w, needsPipes);
 		w.write(Instruction.IF, 0x40);
 		// Escape: n = (to - prefixEnd) * 2 + 2; dst = scratch; grow; write '|', the
