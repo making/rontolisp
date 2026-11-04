@@ -173,7 +173,8 @@ ASDF stores the form and calls it around `compile-file`, or around the source `l
   the sources of `mgl-pax-bootstrap` load on the interpreter under another system name, so the
   option no longer keeps that shim. clingon passes its `#P` modules and stops on
   `with-user-abort`'s implementation gate. coalton stops before any hooked component, on
-  eclector's `(() &body ...)`, an empty nested lambda list in `defmacro`.
+  eclector's `fixup-case`: `defmacro`'s `&optional ((() &body forms) '(()))`, a destructuring
+  pattern as an optional's variable.
 - Pinned by `AsdfMetaobjectsE2eTest` (all four: lambda, symbol, string, nil; the read, the
   expansion, none of it in the program's `*features*`), `AsdfSystemsTest`, `LispEvaluatorAsdfTest`.
 
