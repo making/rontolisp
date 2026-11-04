@@ -5,7 +5,9 @@ package am.ik.rontolisp;
  * list-building calls, the {@code quote} of {@code 'x}, the {@code function} of
  * {@code #'x}. The source spells none of them, so no package's view of those names
  * applies -- CL's reader builds them from the symbols themselves, and {@code `(a . b)}
- * under a package shadowing {@code cons} still calls {@code cl:cons}.
+ * under a package shadowing {@code cons} still calls {@code cl:cons}. A pass ahead of the
+ * resolver that writes one the source does not spell takes it from here for the same
+ * reason ({@link #FIND_CLASS}).
  * <p>
  * Forms keep their bare spelling ({@code LIST}) through every pass ahead of the resolver,
  * which matches on it; what tells one of these from a token of the same name is identity,
@@ -30,6 +32,12 @@ public final class ReaderSymbols {
 
 	public static final LispSymbol NCONC = new LispSymbol(LispNames.NCONC);
 
+	/**
+	 * What a top-level {@code (defparameter NAME (defclass C ...))} assigns once
+	 * {@code LispMacroExpander.flattenTopLevel} has split the definer off.
+	 */
+	public static final LispSymbol FIND_CLASS = new LispSymbol(LispNames.FIND_CLASS);
+
 	private ReaderSymbols() {
 	}
 
@@ -40,7 +48,7 @@ public final class ReaderSymbols {
 	 */
 	static boolean contains(LispSymbol symbol) {
 		return symbol == QUOTE || symbol == FUNCTION || symbol == LIST || symbol == CONS || symbol == APPEND
-				|| symbol == LIST_STAR || symbol == NCONC || symbol == LAMBDA;
+				|| symbol == LIST_STAR || symbol == NCONC || symbol == LAMBDA || symbol == FIND_CLASS;
 	}
 
 }

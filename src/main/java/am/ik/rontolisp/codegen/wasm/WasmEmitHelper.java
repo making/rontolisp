@@ -1022,7 +1022,8 @@ final class WasmEmitHelper {
 			WasmEmitHelper.emitNewCell(ctx);
 			return;
 		}
-		throw new UnsupportedOperationException("Cannot find variable for closure: " + varName);
+		throw new UnsupportedOperationException("Cannot find variable for closure: " + varName
+				+ am.ik.rontolisp.PackageRegistry.standardNameAdvice(varName));
 	}
 
 	/**

@@ -36,7 +36,14 @@ Because the `rontolisp` package does not use `cl`, standard symbols must be qual
 (in-package rontolisp)
 (cl:print (version))           ; the rontolisp package owns version
 (cl:print (cl:car '(1 2)))     ; standard symbols need the cl: prefix here
-;; (car '(1 2)) would be an error: Undefined symbol: car (use cl:car)
+```
+
+In a package that does not use `cl`, a standard name without the prefix is an ordinary symbol of that package, as in ANSI Common Lisp: it can be a parameter, a variable, a `loop` keyword or the package's own definition. Calling one the package does not define signals `undefined-function`, and the report says what was probably meant. The interpreter prints it under the report, and a compile puts it in its warning:
+
+```console
+Unhandled condition: The function RONTOLISP::CAR is undefined
+  at app.lisp:2
+  (use CL:CAR)
 ```
 
 The default package `cl-user` is empty and uses `cl`, so ordinary programs do not need any qualifiers.

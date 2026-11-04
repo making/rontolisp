@@ -201,7 +201,7 @@ public final class BuiltinCallArity {
 		boolean inOptional = false;
 		LispVal rest = lambdaList;
 		for (; rest instanceof LispCons cell; rest = cell.cdr()) {
-			if (cell.car() instanceof LispSymbol marker && marker.name().startsWith("&")) {
+			if (cell.car() instanceof LispSymbol marker && marker.isLambdaListKeyword()) {
 				switch (marker.name()) {
 					case LispNames.LAMBDA_OPTIONAL -> inOptional = true;
 					case LispNames.LAMBDA_REST, LispNames.LAMBDA_BODY, LispNames.LAMBDA_KEY -> {

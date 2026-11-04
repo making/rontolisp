@@ -1086,7 +1086,7 @@ public final class GrayStreamsLibrary {
 	 * &rest args) ...)}).
 	 */
 	private static boolean streamArgMayBeInstance(LispVal streamArg) {
-		if (streamArg instanceof am.ik.rontolisp.LispSymbol sym && sym.name().startsWith("&")) {
+		if (streamArg instanceof am.ik.rontolisp.LispSymbol sym && sym.isLambdaListKeyword()) {
 			return false;
 		}
 		return !(streamArg instanceof am.ik.rontolisp.LispTrue) && !(streamArg instanceof am.ik.rontolisp.LispNil)

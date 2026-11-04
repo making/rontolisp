@@ -85,7 +85,7 @@ evaluator and both compilers, so no per-compiler class is needed.
 3. `Jvm`/`WasmExprCompiler` case -> `compileExpr(LispMacroExpander.expand<Name>(cons), ...)`.
 4. To pass it to `map`/`reduce`/`funcall`: register as a `LispFunction` in `Environment` AND
    add a `BuiltinFunctionWrappers` entry. Both -- omitting `Environment` causes
-   `Undefined symbol` in interpreter / native-image mode.
+   `The function X is undefined` in interpreter / native-image mode.
 
 ## Adding a Special Form
 

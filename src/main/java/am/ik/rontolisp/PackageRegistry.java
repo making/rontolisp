@@ -2033,6 +2033,22 @@ public final class PackageRegistry {
 		return isClSymbol(name) || CL_EXPORTED_ONLY.contains(name);
 	}
 
+	/**
+	 * What the report of a name that named nothing adds when the name is a package's own
+	 * internal symbol spelled like a standard one. A package that uses no {@code cl} or
+	 * shadows the name reads {@code car} as its own symbol, a legitimate parameter or
+	 * definition, so only the report of a call or a read that found nothing can say it
+	 * was probably meant as {@code cl}'s. An exported symbol is the package's on purpose,
+	 * and a name {@code cl} has no definition of would not help.
+	 * @param spelling the name's canonical spelling
+	 * @return {@code " (use CL:CAR)"}, or the empty string for any other name
+	 */
+	public static String standardNameAdvice(String spelling) {
+		QualifiedName qn = splitQualified(spelling);
+		return qn != null && qn.internal() && isClSymbol(qn.member()) && !isClInternal(qn.member())
+				? " (use " + qualify(LispNames.CL_PKG, qn.member()) + ")" : "";
+	}
+
 	/** The names {@code cl} exports, sorted. */
 	private static final List<String> STANDARD_NAMES = List.copyOf(new java.util.TreeSet<>(CL_EXTERNALS));
 

@@ -961,7 +961,7 @@ public final class LispEvaluator {
 		while (cur instanceof LispCons c) {
 			LispVal item = c.car();
 			cur = c.cdr();
-			if (item instanceof LispSymbol marker && marker.name().startsWith("&")) {
+			if (item instanceof LispSymbol marker && marker.isLambdaListKeyword()) {
 				if (LispNames.LAMBDA_ENVIRONMENT.equals(marker.name()) && cur instanceof LispCons skipped) {
 					cur = skipped.cdr();
 					continue;
@@ -1577,7 +1577,7 @@ public final class LispEvaluator {
 					&& LispNames.DEFPACKAGE.equals(LispSymbol.memberName(head.name()))) {
 				return registerRuntimeDefpackage(form);
 			}
-			return eval(args.get(0));
+			return evalDatum(args.get(0));
 		}, true));
 		// compile answers the name, or with no name the function, and neither failure
 		// value: nothing here warns.
@@ -8127,6 +8127,17 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Evaluates a form the program holds as data -- what {@code eval} and {@code compile}
+	 * are handed -- rather than source just read: its symbols are symbols already, so the
+	 * current package does not read them again ({@link PackageResolver#resolveDatum}).
+	 * @param datum the form
+	 * @return the result
+	 */
+	private LispVal evalDatum(LispVal datum) {
+		return evalResolved(this.packageResolver.resolveDatum(datum));
+	}
+
+	/**
 	 * Registers an already-resolved top-level
 	 * {@code defvar}/{@code defparameter}/{@code defconstant} into this evaluator WITHOUT
 	 * running its value expression: the expression is parked as a thunk in the global
@@ -12014,7 +12025,7 @@ public final class LispEvaluator {
 		}
 		if (envIndex >= 0) {
 			if (envIndex + 1 >= paramList.size() || !(paramList.get(envIndex + 1) instanceof LispSymbol envVar)
-					|| envVar.name().startsWith("&")) {
+					|| envVar.isLambdaListKeyword()) {
 				throw new LispEvalException(op + " " + name.name() + ": " + LispNames.LAMBDA_ENVIRONMENT
 						+ " must be followed by exactly one parameter symbol");
 			}
@@ -12035,7 +12046,7 @@ public final class LispEvaluator {
 		if (!paramList.isEmpty() && paramList.get(0) instanceof LispSymbol wholeKw
 				&& LispNames.LAMBDA_WHOLE.equals(wholeKw.name())) {
 			if (paramList.size() < 2 || !(paramList.get(1) instanceof LispSymbol wholeVar)
-					|| wholeVar.name().startsWith("&")) {
+					|| wholeVar.isLambdaListKeyword()) {
 				throw new LispEvalException(op + " " + name.name() + ": " + LispNames.LAMBDA_WHOLE
 						+ " must be followed by exactly one parameter symbol");
 			}
@@ -12178,10 +12189,10 @@ public final class LispEvaluator {
 			if (!(paramList.get(i) instanceof LispSymbol param)) {
 				return false;
 			}
-			if (param.name().startsWith("&")) {
+			if (param.isLambdaListKeyword()) {
 				return (LispNames.LAMBDA_REST.equals(param.name()) || LispNames.LAMBDA_BODY.equals(param.name()))
 						&& i + 2 == paramList.size() && paramList.get(i + 1) instanceof LispSymbol restParam
-						&& !restParam.name().startsWith("&");
+						&& !restParam.isLambdaListKeyword();
 			}
 		}
 		return true;
@@ -13281,7 +13292,7 @@ public final class LispEvaluator {
 			return new LispFunction("compiled-definition", callArgs -> {
 				LispVal result = LispNil.INSTANCE;
 				for (LispVal bodyForm : body) {
-					result = eval(bodyForm);
+					result = evalDatum(bodyForm);
 				}
 				return result;
 			});
@@ -13289,7 +13300,7 @@ public final class LispEvaluator {
 		if (this.compiledTemplateSink != null) {
 			this.compiledTemplateSink.add(CompiledTemplates.registration(lambdaExpression));
 		}
-		return eval(defCons);
+		return evalDatum(defCons);
 	}
 
 	/**
@@ -13988,9 +13999,10 @@ public final class LispEvaluator {
 		// have all declined. The user defuns this fallback could shadow live
 		// under their own qualified keys, which the lookup at the top already missed.
 		// fbound does not take this step: a package's own symbol that only falls back
-		// to an image function is no definition of that symbol.
+		// to an image function is no definition of that symbol. Neither does a name cl
+		// owns: a package's own CAR (one that uses no cl, or shadows it) is not cl's.
 		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
-		if (qualified != null) {
+		if (qualified != null && !PackageRegistry.isClSymbol(qualified.member())) {
 			LispVal bare = this.globalEnv.lookupFunctionOrNull(qualified.member());
 			if (bare != null) {
 				return bare;
@@ -14734,7 +14746,7 @@ public final class LispEvaluator {
 			LispVal cur = parts.get(2);
 			while (cur instanceof LispCons c) {
 				LispVal item = c.car();
-				if (item instanceof LispSymbol p && !p.name().startsWith("&")) {
+				if (item instanceof LispSymbol p && !p.isLambdaListKeyword()) {
 					bindings.add(consListOf(List.of(p, quotedStar)));
 				}
 				else if (item instanceof LispCons pc && pc.car() instanceof LispSymbol p) {

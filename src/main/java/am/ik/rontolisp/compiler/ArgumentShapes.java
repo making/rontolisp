@@ -745,7 +745,7 @@ public final class ArgumentShapes {
 		LispVal rest = lambdaList;
 		while (rest instanceof LispCons cons) {
 			LispVal element = cons.car();
-			if (element instanceof LispSymbol sym && sym.name().startsWith("&")) {
+			if (element instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 				// &optional keeps consuming positions; every other keyword ends them.
 				positionalSection = "&OPTIONAL".equals(sym.name());
 			}

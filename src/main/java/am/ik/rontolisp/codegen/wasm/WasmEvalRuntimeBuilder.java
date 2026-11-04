@@ -1769,10 +1769,13 @@ final class WasmEvalRuntimeBuilder {
 	 * {@code $fenv} and interpreted-closure arms)
 	 * @param arityChkIndex the {@code _arity_chk} function index an interpreted closure's
 	 * wrong count is reported (or trapped) through, or -1 where the module carries none
+	 * @param lambdaListKeywordOffsets the string-table offsets of the names in
+	 * {@code lambda-list-keywords}, a parameter the closure's count check must recognize
 	 * @param identityHash whether conses and closures carry an identity hash
 	 * @return the encoded function body
 	 */
-	static byte[] buildApplyBody(boolean usesEval, int arityChkIndex, boolean identityHash) {
+	static byte[] buildApplyBody(boolean usesEval, int arityChkIndex, List<Integer> lambdaListKeywordOffsets,
+			boolean identityHash) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -1889,7 +1892,7 @@ final class WasmEvalRuntimeBuilder {
 			emitCdrOf(w, PAIR);
 			setLocal(w, BODY); // (body...)
 			if (arityChkIndex >= 0) {
-				emitClosureArityCheck(w, PARAMS, ARGLIST, ARGCUR, ARG0, LEN, arityChkIndex);
+				emitClosureArityCheck(w, PARAMS, ARGLIST, ARGCUR, ARG0, LEN, arityChkIndex, lambdaListKeywordOffsets);
 			}
 			// bind params to args
 			getLocal(w, ARGLIST);
@@ -1949,14 +1952,14 @@ final class WasmEvalRuntimeBuilder {
 	/**
 	 * Emits the wrong-count check of an interpreted closure: {@code _arity_chk(argList,
 	 * 2 * params)}, reported as {@code Function expects N argument(s), got M} like any
-	 * anonymous callee. A lambda list with a {@code &}-marker has no count checked: the
-	 * runtime {@code lambda} binds such a list positionally (a documented limitation), so
-	 * its parameter count is no count the call has to match. Its list is still walked
-	 * with the shape {@code (0, variadic)}, which only an {@code apply}'s improper last
-	 * argument can fail. Clobbers the cursor, element and count locals.
+	 * anonymous callee. A lambda list with a lambda-list keyword has no count checked:
+	 * the runtime {@code lambda} binds such a list positionally (a documented
+	 * limitation), so its parameter count is no count the call has to match. Its list is
+	 * still walked with the shape {@code (0, variadic)}, which only an {@code apply}'s
+	 * improper last argument can fail. Clobbers the cursor, element and count locals.
 	 */
 	private static void emitClosureArityCheck(WasmWriter w, int paramsSlot, int argListSlot, int cursorSlot,
-			int elemSlot, int countSlot, int arityChkIndex) {
+			int elemSlot, int countSlot, int arityChkIndex, List<Integer> lambdaListKeywordOffsets) {
 		i32(w, 0);
 		setLocal(w, countSlot);
 		getLocal(w, paramsSlot);
@@ -1973,15 +1976,14 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, elemSlot);
 		refTest(w, WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.IF, 0x40);
-		getLocal(w, elemSlot);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
-		w.write(Instruction.IF, 0x40);
-		strByteAt(w, elemSlot, () -> i32(w, 0));
-		i32(w, '&');
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.BR_IF, 4); // if, if, loop, counted -> unchecked
-		w.write(Instruction.END);
+		for (int keywordOffset : lambdaListKeywordOffsets) {
+			getLocal(w, elemSlot);
+			refCast(w, WasmLispCompiler.TYPE_STRING);
+			structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+			i32(w, keywordOffset);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.BR_IF, 3); // if, loop, counted -> unchecked
+		}
 		w.write(Instruction.END);
 		getLocal(w, countSlot);
 		i32(w, 1);

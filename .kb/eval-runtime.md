@@ -119,7 +119,7 @@ with its text, on both backends** (2026-09-26). Pinned by ci-spec
   2 arguments`; it also made `#'apply` compile. It refuses a last argument that is no proper list
   with the interpreter's `APPLY: last argument must be a list`. `apply` was unknown inside `eval`
   before, which is why `(eval '(apply #'car '(1 2)))` answered nil.
-- **An interpreted closure checks its count only without a `&` marker** in its lambda list: the
+- **An interpreted closure checks its count only without a lambda-list keyword** in its list: the
   runtime `lambda` binds such a list positionally (documented), so its parameter count is no
   count a call must match. The check is `_arityChk(argList, 2 * params)` in `_apply`'s closure
   arm; on wasm `_arity_chk` is in every module with `eval`, trapping where no `program-error`

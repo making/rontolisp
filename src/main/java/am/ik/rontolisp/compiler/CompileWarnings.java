@@ -5,9 +5,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -121,6 +123,19 @@ public final class CompileWarnings {
 	 */
 	public static void note(String line) {
 		emit(line, false);
+	}
+
+	/**
+	 * Warns about a function name no definition has, which the backend compiles to signal
+	 * when it runs.
+	 * @param subject the form the warning is about, or {@code null} when it is about no
+	 * one form
+	 * @param name the function-namespace name
+	 * @param consequence what the backend compiled it as
+	 */
+	public static void warnUndefinedFunction(@Nullable LispVal subject, String name, String consequence) {
+		warn(subject, "the function " + ClosRegistry.functionNameForReport(name) + " is undefined; " + consequence
+				+ PackageRegistry.standardNameAdvice(name));
 	}
 
 	/**

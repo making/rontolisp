@@ -10841,6 +10841,15 @@ class JvmLispCompilerTest {
 	void compileBareFunctionNameInValuePositionThrows() {
 		assertThatThrownBy(() -> compileAndRun("(print car)")).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("Cannot compile symbol reference: CAR");
+		// Under a package using no cl it is the package's own variable, and the refusal
+		// says what to write -- as a read and as a capture.
+		assertThatThrownBy(() -> compileAndRun("(defpackage :rv-nocl (:use)) (in-package :rv-nocl) (cl:print car)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("Cannot compile symbol reference: RV-NOCL::CAR (use CL:CAR)");
+		assertThatThrownBy(() -> compileAndRun(
+				"(defpackage :rv-nocl (:use)) (in-package :rv-nocl) (cl:print (cl:funcall (cl:lambda () pi)))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("Cannot capture variable: RV-NOCL::PI (use CL:PI)");
 	}
 
 	@Test

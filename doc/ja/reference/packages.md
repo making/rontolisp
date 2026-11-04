@@ -44,7 +44,14 @@ Common Lisp と同じシングル/ダブルコロンの区別です([external �
 (in-package rontolisp)
 (cl:print (version))           ; the rontolisp package owns version
 (cl:print (cl:car '(1 2)))     ; standard symbols need the cl: prefix here
-;; (car '(1 2)) would be an error: Undefined symbol: car (use cl:car)
+```
+
+`cl` を使用しないパッケージでは、接頭辞のない標準名は ANSI Common Lisp と同じくそのパッケージの普通のシンボルです。仮引数、変数、`loop` のキーワード、そのパッケージ自身の定義のいずれにもなれます。そのパッケージが定義していない名前を呼び出すと `undefined-function` が通知され、レポートは意図されたと思われる綴りを示します。インタプリタはレポートの下に、コンパイルは警告の中に示します:
+
+```console
+Unhandled condition: The function RONTOLISP::CAR is undefined
+  at app.lisp:2
+  (use CL:CAR)
 ```
 
 デフォルトパッケージ `cl-user` は空で `cl` を使用するため、通常のプログラムでは修飾子は不要です。

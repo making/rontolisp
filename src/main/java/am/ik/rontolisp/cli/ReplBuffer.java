@@ -4,6 +4,8 @@ import java.io.PrintStream;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.UncaughtReport;
+import am.ik.rontolisp.eval.LispEvalException;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.SourceLanguage;
@@ -167,6 +169,9 @@ final class ReplBuffer {
 			// The condition's own text, which file mode and every compiled backend
 			// report too: a language does not reword a failure at its REPL.
 			fail(String.valueOf(ex.getMessage()));
+			if (ex instanceof LispEvalException condition && !condition.advice().isEmpty()) {
+				this.errors.println(UncaughtReport.adviceLine(condition.advice()));
+			}
 		}
 		catch (StackOverflowError ex) {
 			// Unwound to here, the stack is shallow again: what the overflow could not

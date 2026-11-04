@@ -38,8 +38,8 @@ Common Lisp の [`catch`](../special-forms/catch.md) /
 `rl:` 接頭辞が必要で、タグベースの特殊形式を得るには明示的な `cl:`
 接頭辞 (または `cl-user` 内での裸の名前) が必要です。
 `(in-package :rontolisp)` 内での裸の `catch` はそのどちらでもありません:
-この名前は `cl` に属し、当該パッケージは `cl` を `:use` していないため、
-修飾するまで "Undefined symbol: CATCH (use CL:CATCH)" エラーになります。
+当該パッケージは `cl` を `:use` していないため、この名前を自身のシンボル
+`rontolisp::catch` として読み、それを定義する関数はありません。修飾してください。
 
 ## バックエンドのサポート
 

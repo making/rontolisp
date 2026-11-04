@@ -100,7 +100,7 @@ final class WasmArityBundler {
 	}
 
 	private static boolean isPlainParam(LispVal param) {
-		return param instanceof LispSymbol sym && !sym.name().startsWith("&");
+		return param instanceof LispSymbol sym && !sym.isLambdaListKeyword();
 	}
 
 	/**

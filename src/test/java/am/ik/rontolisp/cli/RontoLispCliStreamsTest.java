@@ -872,6 +872,11 @@ class RontoLispCliStreamsTest {
 				  (funcall 'no-such-call x))
 				(print (list (ignore-errors (ref)) (ignore-errors (call 1))))
 				(defclass waits (never-defined) ())
+				(defpackage :warn-nocl (:use))
+				(cl:in-package :warn-nocl)
+				(cl:defun ref () (cl:list (car 1) #'cdr))
+				(cl:defun call (x) (cl:funcall 'cadr x))
+				(cl:print (cl:list (cl:ignore-errors (ref)) (cl:ignore-errors (call 1))))
 				""");
 		for (String output : new String[] { "Warn.class", "warn.wasm" }) {
 			PrintStream savedErr = System.err;
@@ -891,8 +896,44 @@ class RontoLispCliStreamsTest {
 				.containsExactly(
 						"warn.lisp:1:15: warning: the function NO-SUCH-REF is undefined; compiled as a run-time error",
 						"warn.lisp:3:12: warning: the function NO-SUCH-CALL is undefined; looked up when the call runs",
+						// A package's own symbol spelled like a standard name says what
+						// to write.
+						"warn.lisp:8:27: warning: the function WARN-NOCL::CAR is undefined; compiled as a call-time error (use CL:CAR)",
+						"warn.lisp:8:35: warning: the function WARN-NOCL::CDR is undefined; compiled as a run-time error (use CL:CDR)",
+						"warn.lisp:9:32: warning: the function WARN-NOCL::CADR is undefined; looked up when the call runs (use CL:CADR)",
 						"warn.lisp:5:1: warning: DEFCLASS WAITS: the superclass NEVER-DEFINED is never defined, so the class has no instances");
 		}
+	}
+
+	@Test
+	void anUndefinedStandardNameIsReportedWithTheSpellingToUse() throws Exception {
+		// The condition's own text is the one every backend reports; a run of the
+		// interpreter has no compile to warn in, so it says it under the report.
+		Path file = this.tempDir.resolve("nocl.lisp");
+		Files.writeString(file, """
+				(defpackage :report-nocl (:use))
+				(cl:in-package :report-nocl)
+				(car '(1))
+				""");
+		assertThat(runReporting(file.toString())[2].lines()).containsExactly(
+				UncaughtReport.line("The function REPORT-NOCL::CAR is undefined"),
+				UncaughtReport.AT_PREFIX + file + ":3", "  (use CL:CAR)");
+		// The REPL's, and an unbound variable's.
+		String[] session = runSession(false, "(in-package :rontolisp)\ncadr\n(cl:princ 1)\n");
+		assertThat(session[2].lines()).contains("Error: The variable RONTOLISP::CADR is unbound", "  (use CL:CADR)");
+		// A name cl does not have, and a package's export, have nothing to advise.
+		Files.writeString(file, """
+				(defpackage :report-nocl (:use) (:export #:second))
+				(cl:in-package :report-nocl)
+				(frobnicate)
+				""");
+		assertThat(runReporting(file.toString())[2]).doesNotContain("(use ");
+		Files.writeString(file, """
+				(defpackage :report-nocl (:use) (:export #:second))
+				(cl:in-package :report-nocl)
+				(second)
+				""");
+		assertThat(runReporting(file.toString())[2]).doesNotContain("(use ");
 	}
 
 	@Test

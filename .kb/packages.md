@@ -17,11 +17,66 @@ read at RUN time. `(in-package P)` is consumed and replaced by `(setq *package* 
 internal -- so canonical forms re-resolve to themselves. `*package*` stays the bare cl variable,
 read at RUN time. `(in-package P)` is consumed and replaced by `(setq *package* :P)`.
 
-Hard errors (`LispPackageException`): an unqualified `cl` symbol in a package that does not use
-`cl` and inherits no symbol of that name through its use list; a single-colon reference to a
-non-external member. Adding a package is a registry change, not
+Hard errors (`LispPackageException`): a single-colon reference to a non-external member, an unknown
+package. Adding a package is a registry change, not
 a resolver change; the registry is per-resolver-instance, and the backends only ever see canonical
 strings, so no per-backend codegen exists.
+
+## A package that does not read a standard name as `cl`'s
+**The resolver is the reader's half, so `car` in a package that does not use `cl` and inherits no
+symbol of that name is that package's own symbol, in every position** (h97, 2026-11-04;
+`resolveUnqualified`, ANSI). It used to be `Undefined symbol: CAR (use CL:CAR)` outside quoted data,
+which stopped `vom` at `(multiple-value-bind (second minute hour) ...)` and every `clim-lisp` user at
+`(loop while ...)`, `WHILE` not being a standard name at all. Keeping the error for a "code position"
+was weighed and not made: the resolver runs ahead of the macro expansion that tells a call from a
+binding, a `case` key or a slot, so `(car 1)` under `(cl:let ...)` and in code look alike, and any
+user macro can bind anything; a reference ahead of the package's own `(defun car ...)` is legal too.
+LOOP needs nothing of it: `loopKeyword` has always compared by name, as CL does. The form then
+behaves as a `:shadow`ed name does, which the backends already took. Pinned by ci-spec
+`a-standard-name-read-in-a-package-using-no-cl-is-its-own` (SBCL agrees),
+`PackageResolverTest#aStandardNameReadInAPackageUsingNoClIsItsOwnWhereverItStands`.
+
+**The report keeps the advice, where it is known to be a mistake.** `PackageRegistry.standardNameAdvice`
+answers ` (use CL:CAR)` for an internal `PKG::CAR` of an implemented `cl` name (not an exported one,
+the package's on purpose). `CompileWarnings.warnUndefinedFunction` ends every undefined-function
+warning with it, the free-variable refusals (`Cannot compile symbol`, `Cannot capture variable`) too;
+the interpreter, with no compile to warn in, prints it under the location lines of an uncaught report
+and at the REPL (`LispEvalException.advice`, `UncaughtReport.adviceLine`). The condition's text is
+untouched: the JVM's landing pad recovers the class from it, and `princ` is pinned across backends. A
+misspelled `let` inside a `lambda` is the one report that does not name it: `FreeVarAnalyzer` walks
+`(NOCL::LET ((NOCL::X 1)) ...)` as a call, so the compile says `Cannot capture variable: NOCL::X`,
+what any undefined macro around a binding has always said. Pinned by
+`RontoLispCliStreamsTest#{aReferenceToAnUndefinedFunctionWarnsAtTheReferenceOnEveryBackend,anUndefinedStandardNameIsReportedWithTheSpellingToUse}`.
+
+**What this had been hiding, each fixed with it:**
+- `resolveFunction`'s last resort (a shared image function spelled from another package) answered
+  `(NOCL::CAR x)` with `cl:car`, and `(P::CAR x)` under `(:shadow #:car)` too. A name `cl` owns is out
+  of it now: it is what ANSI and the compiled backends say.
+- **`eval` and `compile` read their datum again** in the current package, and a canonical bare `CAR`
+  is not re-readable under a package that uses no `cl` or shadows it (`CL_USER::X` under any package
+  other than `cl-user` went the same way). `PackageResolver.resolveDatum` leaves a bare symbol alone,
+  and takes directives as before; a bare `while` still re-reads, since a definition in the datum may
+  claim it. Pinned by `PackageResolverTest#aDatumKeepsItsBareSymbolsAndItsDirectivesTakeEffect`.
+- **The compile path's raw-spelling gates saw `defmacro` and not `cl:defmacro`**, the only spelling a
+  package using no `cl` has without an import, in any program: `UserMacroExpander.expand`'s gate
+  (a program whose definitions were all so spelled compiled to `The function DEFMACRO is undefined`),
+  `flattenTopLevel`, `LoadInliner`'s `load`/`require`/`provide`, the load-context gate. They ask
+  `LispMacroExpander.clOperatorSpelling`. Pinned by `UserMacroExpanderTest#aDefinitionSpelledClActivatesThePass`.
+- **What the macro pass emits is re-read by the backend's resolver**: the folded `deftype`, the
+  macro-generated ones, the deftype instances and both macro tables go through
+  `requalifyShadowedClNames` now, and the load-context `setq` is spelled `cl:`. Pinned by
+  `UserMacroExpanderTest#aMacrosFormsSpelledClAreExpandedAndEmittedForTheCompilersRead`.
+
+**`quote` is the one name that stays `cl`'s** in such a package (a `:shadow` still wins): `(quote x)` is
+the special form to the resolver whatever package reads it, because the passes ahead of it spell it
+bare wherever they run, so a variable named `quote` has to be one symbol with it. A package's own
+function named `quote` is the cost. The directives are alike, consumed by member name: a bare
+`(in-package :x)` works in such a package, where SBCL calls an undefined function.
+
+Consumers measured 2026-11-04: `vom` loads and logs on all four backends. `sento` loads on the
+interpreter and stops on `atomics:cas`, on the compile paths while it compiles. McCLIM's first stop
+is `.todo/i05`, through cluffer; its Core files read by hand past that stop at
+`closer-mop:standard-instance-access`.
 
 ## External vs internal (`:` / `::`)
 - `LispPackage` carries an `externals` set (3-arg constructor = everything exported);
@@ -235,7 +290,7 @@ one disagrees with the interpreter's mid-program answer there (`.kb/uiop.md`). c
 - `resolveUnqualified` consults, in order: `current.imports()`, the shadow set, the `cl` table,
   `current.owns()`, then the use list. In a package that does not use `cl`, a `cl`-table name
   first tries the use list (a re-exported standard symbol, or a used package's own `sin`) before
-  the undefined-symbol error -- except an implementation-internal one (`CL_INTERNALS`,
+  being the package's own -- except an implementation-internal one (`CL_INTERNALS`,
   `PackageRegistry.isClInternal`), which resolves to `cl`'s in every package: expansions inject
   it wherever they run (the macro-function table `UserMacroExpander` appends under the trailing
   `in-package`, which for contextl-user is a package using only cxcl).
@@ -246,9 +301,8 @@ one disagrees with the interpreter's mid-program answer there (`.kb/uiop.md`). c
   and bare in a package using no `cl` too: expansions spell them wherever they run; a `:shadow`
   still wins). Any other `&name` is an ordinary symbol of the package reading it, so `'&pt`
   and `(intern "&PT")` are one symbol (let-plus's `define-structure-let+`, cl-colors'
-  `&rgb`), and a homed one is an ordinary parameter name, no longer a marker: every
-  `startsWith("&")` test downstream reads the spelling. In `cl-user` the name stays bare, so
-  `(defun f (&a) ...)` there still answers `Unsupported lambda-list keyword` where SBCL takes it.
+  `&rgb`), and an ordinary parameter name, homed or (in `cl-user`) bare: a marker is what
+  `LispSymbol.isLambdaListKeyword` answers, not a `&` prefix.
   Pinned by ci-spec `an-ampersand-name-is-an-ordinary-symbol-of-the-current-package`.
 - **An `:export` of an INHERITED name re-exports the used package's symbol**: `resolveDefpackage`
   records every exported name the package does not shadow and does not `:import-from`, and that
@@ -281,10 +335,9 @@ one disagrees with the interpreter's mid-program answer there (`.kb/uiop.md`). c
 it interns a quoted datum's symbols in `*package*`. Covers backquote templates, a lone quoted
 symbol, and a quoted DATA TABLE whose symbols name functions or macros.
 
-**Data position is more permissive than code position** (`inQuotedData`): a `cl` symbol quoted in a
-package that does not use `cl` is that package's own symbol (`'(car x)` under `(in-package
-:rontolisp)` = `(RONTOLISP::CAR RONTOLISP::X)`) rather than a hard error, and a quoted `*package*`
-is the SYMBOL. ONE exemption, host-facing data (`inHostFacingData`): a
+A `cl` symbol quoted in a package that does not use `cl` is that package's own symbol, as the same
+name in code is (`'(car x)` under `(in-package :rontolisp)` = `(RONTOLISP::CAR RONTOLISP::X)`), and a
+quoted `*package*` is the SYMBOL. ONE exemption, host-facing data (`inHostFacingData`): a
 `rontolisp:wasm-import`/`wasm-export` directive's options are export field names or WIT types, but
 its quoted NAME argument does name a function, so `resolveWasmDirective` resolves it like a defun
 name (`.kb/wasm-import.md`).
@@ -413,8 +466,8 @@ matching, so a `defmacro` under `(in-package P)` registers its canonical qualifi
 `in-package`/`defpackage` directives (any spelling) update the macro evaluator's state but are kept
 VERBATIM for the compilers' own pass. **A form the walk did not change keeps its ORIGINAL
 spelling** (compared by `print()`), because a canonical form is not always re-resolvable -- a `cl:`
-symbol canonicalizes to a bare name, an error under a package that does not use `cl`. Known
-residue: a macro EXPANSION spliced into a non-cl-using package region hits the same error.
+symbol canonicalizes to a bare name, which a package that does not use `cl` reads as its own. A
+macro EXPANSION emitted there is re-spelled `cl:` for the same reason (`requalifyShadowedClNames`).
 
 ## `load`/`load-system` scope `*package*`
 `PackageResolver` has a package stack (`pushPackage`/`popPackage`). Interpreter:

@@ -2,7 +2,6 @@ package am.ik.rontolisp.codegen.wasm;
 
 import java.util.List;
 
-import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -321,8 +320,7 @@ final class WasmFunctionFormCompiler {
 		else if (undefined(name, ctx) && ctx.bindsRuntimeFunctionNames) {
 			// ... and in a program that can bind the name at run time, what GLOBAL_FENV
 			// holds when the reference runs, the same signal on a miss.
-			CompileWarnings.warn(null, "the function " + ClosRegistry.functionNameForReport(name)
-					+ " is undefined; looked up when the reference runs");
+			CompileWarnings.warnUndefinedFunction(null, name, "looked up when the reference runs");
 			emitFenvRead(name, ctx);
 		}
 		else if (undefined(name, ctx)) {
@@ -330,8 +328,7 @@ final class WasmFunctionFormCompiler {
 			// call (WasmFunctionCallCompiler) -- the undefined-function is signalled
 			// where
 			// the reference is EVALUATED, so a branch never taken still compiles.
-			CompileWarnings.warn(null, "the function " + ClosRegistry.functionNameForReport(name)
-					+ " is undefined; compiled as a run-time error");
+			CompileWarnings.warnUndefinedFunction(null, name, "compiled as a run-time error");
 			WasmFunctionCallCompiler.emitUndefinedFunctionSignal(name, ctx);
 		}
 		else {

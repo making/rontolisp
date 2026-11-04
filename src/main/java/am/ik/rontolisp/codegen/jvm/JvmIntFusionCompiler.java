@@ -19,6 +19,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.ArgumentOrder;
@@ -1025,7 +1026,7 @@ final class JvmIntFusionCompiler {
 			return false;
 		}
 		for (String param : defun.paramNames()) {
-			if (param.startsWith("&")) {
+			if (PackageRegistry.isClLambdaListKeyword(param)) {
 				return false;
 			}
 		}
@@ -1053,7 +1054,7 @@ final class JvmIntFusionCompiler {
 				return null;
 			}
 			for (LispVal p : paramCons.toList()) {
-				if (!(p instanceof LispSymbol ps) || ps.name().startsWith("&")) {
+				if (!(p instanceof LispSymbol ps) || ps.isLambdaListKeyword()) {
 					return null;
 				}
 				params.add(ps.name());

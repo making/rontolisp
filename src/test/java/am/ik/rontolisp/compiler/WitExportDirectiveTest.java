@@ -202,7 +202,7 @@ class WitExportDirectiveTest {
 	void reportsALambdaListMarkerAgainstTheWitLine() {
 		// The component boundary passes a fixed parameter list; an exported defun cannot
 		// have &optional / &rest / &key parameters.
-		for (String marker : new String[] { "&optional", "&rest", "&key" }) {
+		for (String marker : new String[] { "&OPTIONAL", "&REST", "&KEY" }) {
 			assertThatThrownBy(() -> lower(world("  export count-vowels: func(s: string) -> s32;"), Backend.WASM_GC,
 					Map.of("count-vowels", List.of("s", marker, "extra"))))
 				.as(marker)

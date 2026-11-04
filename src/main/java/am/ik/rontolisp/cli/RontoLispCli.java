@@ -2268,6 +2268,9 @@ public final class RontoLispCli {
 		for (String location : condition.locationLines()) {
 			report.append(System.lineSeparator()).append(location);
 		}
+		if (!condition.advice().isEmpty()) {
+			report.append(System.lineSeparator()).append(UncaughtReport.adviceLine(condition.advice()));
+		}
 		return report.toString();
 	}
 

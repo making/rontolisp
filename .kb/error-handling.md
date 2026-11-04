@@ -517,7 +517,10 @@ through and the PROGRAM'S named function that form is written in -- then one
 `  in NAME (async), awaited at FILE:LINE` per async boundary crossed. Nothing known (a `-e`
 program, only macro-built forms) prints none. **The interpreter and the JVM backend print the same
 lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints them only under
-`--report-locations` (below, "Location lines on wasm-GC").
+`--report-locations` (below, "Location lines on wasm-GC"). The interpreter alone ends with
+`  (use CL:CAR)` under the report of a name a package read as its own
+([packages.md](packages.md), "A package that does not read a standard name as `cl`'s"), having no
+compile whose warning could say it.
 - **Which function: LEXICAL** (every backend) -- the named function whose text holds the form. A
   form in an anonymous lambda (a callback, an `flet`/`labels` helper, a `handler-bind` handler, a
   sort predicate) belongs to the function the lambda is written in, whoever calls it; one at the

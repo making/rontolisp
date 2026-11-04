@@ -4007,6 +4007,57 @@ cases:
     expected: |
       (3 (:OWN 1 2) "CI-OWN-WHILE" NIL)
       2
+  - name: a-standard-name-read-in-a-package-using-no-cl-is-its-own
+    source: |
+      ;; Whatever the name turns out to be there: a parameter (vom's SECOND), a LOOP
+      ;; keyword, which compares by name, a definition, a call ahead of it. Data spelled
+      ;; cl: stays cl's under eval and compile, and a name the package never defines is
+      ;; undefined, not cl's. SBCL agrees, printing under cl-user where it would qualify
+      ;; COMMON-LISP:NIL.
+      (defpackage :ci-nocl (:use) (:export #:rest))
+      (cl:in-package :ci-nocl)
+      (cl:print (cl:let ((car 1)) car))
+      (cl:defun ci-parameter (second) second)
+      (cl:print (ci-parameter 2))
+      (cl:print (cl:multiple-value-bind (second minute hour) (cl:values 3 4 5) (cl:list hour minute second)))
+      (cl:print (cl:let ((quote 6) (function 7)) (cl:list quote function)))
+      (cl:defparameter *loops* (cl:list (cl:loop while cl:nil) (cl:loop for x in '(8) when x collect x)
+                                        (cl:loop for i from 1 to 3 if (cl:oddp i) count i)))
+      (cl:defun ci-ahead (x) (second x))
+      (cl:defun second (x) (cl:list :own x))
+      (cl:print (cl:list (ci-ahead 9) (cl:funcall #'second 10) (cl:funcall 'second 11) (cl:second '(12 13))))
+      (cl:defparameter *identity* (cl:list (cl:eq 'second 'cl:second) (cl:package-name (cl:symbol-package 'second))))
+      (cl:defvar list 14)
+      (cl:defmacro when (x) (cl:list 'cl:quote x))
+      (cl:defstruct car a)
+      (cl:defgeneric min (x))
+      (cl:defmethod min ((x cl:integer)) (cl:list :min x))
+      (cl:defun rest (x) (cl:list :rest x))
+      (cl:print (cl:list list (when y) (car-a (make-car :a 15)) (min 16) (rest 17)))
+      (cl:defparameter *data* (cl:list (cl:eval '(cl:car '(18))) (cl:eval (cl:list 'cl:cdr ''(19)))
+                                       (cl:funcall (cl:compile cl:nil '(cl:lambda (x) (cl:car x))) '(20))))
+      (cl:defparameter *undefined*
+        (cl:list (cl:fboundp 'first)
+                 (cl:handler-case (cl:funcall (cl:intern "FIRST") '(21))
+                   (cl:undefined-function (c) (cl:eq (cl:cell-error-name c) 'first)))))
+      (cl:in-package :cl-user)
+      (print ci-nocl::*loops*)
+      (print ci-nocl::*identity*)
+      (print ci-nocl::*data*)
+      (print ci-nocl::*undefined*)
+      (print (list (ci-nocl::second 22) (ci-nocl:rest 23) (first '(24)) 'ci-nocl::list))
+    expected: |
+      1
+      2
+      (5 4 3)
+      (6 7)
+      ((:OWN 9) (:OWN 10) (:OWN 11) 13)
+      (14 Y 15 (:MIN 16) (:REST 17))
+      (NIL (8) 2)
+      (NIL "CI-NOCL")
+      (18 NIL 20)
+      (NIL T)
+      ((:OWN 22) (:REST 23) 24 CI-NOCL::LIST)
   - name: expansion-time-read-homes-in-the-macro-package
     source: |
       ;; cl-pdf's AFM parser names each reader with read-from-string at EXPANSION
@@ -4028,8 +4079,14 @@ cases:
   - name: an-ampersand-name-is-an-ordinary-symbol-of-the-current-package
     # Only the names in lambda-list-keywords are cl's; let-plus's &pt, built by symbolicate
     # and read by its caller, is one symbol of the package reading it. The accessor name
-    # its expansion interns lands in the package of the function calling the macro.
+    # its expansion interns lands in the package of the function calling the macro. In cl-user
+    # the name stays bare and is an ordinary parameter all the same, its count checked by
+    # the runtime eval's own lambda too.
     source: |
+      (cl:in-package cl-user)
+      (defun bare-parameter (&a) (list &a))
+      (print (bare-parameter 1))
+      (print (handler-case (eval '(funcall (lambda (&a) &a) 9 10)) (program-error () :count)))
       (defpackage :ci-amp (:use :cl) (:shadow #:&aux) (:export #:&exported #:expand-for #:define-for))
       (in-package :ci-amp)
       (print (package-name (symbol-package '&a)))
@@ -4058,6 +4115,8 @@ cases:
       (print (ci-amp-user::call-it 1))
       (print (list (eq 'ci-amp::&rest '&rest) '(ci-amp::&a ci-amp:&exported)))
     expected: |
+      (1)
+      :COUNT
       "CI-AMP"
       T
       "CI-AMP"

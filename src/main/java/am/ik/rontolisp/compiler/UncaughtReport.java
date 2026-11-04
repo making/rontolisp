@@ -91,6 +91,17 @@ public final class UncaughtReport {
 	}
 
 	/**
+	 * The line under the report of a name that named nothing but reads like a standard
+	 * name ({@code PackageRegistry.standardNameAdvice}), last under it. The interpreter's
+	 * alone: a compile says the same in its warning, ahead of the run.
+	 * @param advice the advice
+	 * @return the line, without its newline
+	 */
+	public static String adviceLine(String advice) {
+		return LOCATION_INDENT + advice.strip();
+	}
+
+	/**
 	 * The location line naming where the condition was signaled: the innermost form read
 	 * from a named file that the condition passed through, and the innermost named
 	 * function enclosing it.

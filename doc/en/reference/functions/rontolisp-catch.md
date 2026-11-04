@@ -38,8 +38,8 @@ names never collide (`cl:catch` still names the CL special form). A user in
 `rontolisp:` / `rl:` prefix to get this operator, and the explicit `cl:`
 prefix (or an unqualified bare name in `cl-user`) to get the tag-based
 special form. Inside `(in-package :rontolisp)` a bare `catch` is neither:
-the name belongs to `cl`, which that package does not `:use`, so it is an
-"Undefined symbol: CATCH (use CL:CATCH)" error until you qualify it.
+that package does not `:use` `cl`, so it reads the name as its own symbol
+`rontolisp::catch`, which no function defines. Qualify it.
 
 ## Backend support
 

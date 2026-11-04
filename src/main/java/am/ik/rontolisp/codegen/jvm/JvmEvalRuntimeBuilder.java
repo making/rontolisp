@@ -12,6 +12,7 @@ import java.util.Objects;
 import java.util.Set;
 
 import am.ik.jvm.MethodCode;
+import am.ik.rontolisp.ClConstants;
 import am.ik.rontolisp.LispNames;
 import am.ik.jvm.ConstantPool;
 import org.jspecify.annotations.Nullable;
@@ -1405,11 +1406,11 @@ final class JvmEvalRuntimeBuilder {
 	/**
 	 * Emits the wrong-count check of an interpreted closure: {@code _arityChk(argList,
 	 * 2 * params)}, reported as {@code Function expects N argument(s), got M} like any
-	 * anonymous callee. A lambda list with a {@code &}-marker has no count checked: the
-	 * runtime {@code lambda} binds such a list positionally (a documented limitation), so
-	 * its parameter count is no count the call has to match. Its list is still walked
-	 * with the shape {@code (0, variadic)}, which only an {@code apply}'s improper last
-	 * argument can fail.
+	 * anonymous callee. A lambda list with a lambda-list keyword has no count checked:
+	 * the runtime {@code lambda} binds such a list positionally (a documented
+	 * limitation), so its parameter count is no count the call has to match. Its list is
+	 * still walked with the shape {@code (0, variadic)}, which only an {@code apply}'s
+	 * improper last argument can fail.
 	 */
 	private void emitClosureArityCheck(MethodCode a, int paramsSlot, int argListSlot, int cursorSlot, int countSlot) {
 		MethodCode.Label loop = a.newLabel();
@@ -1435,7 +1436,13 @@ final class JvmEvalRuntimeBuilder {
 		a.loadConstant(0);
 		a.invokevirtual(this.k.stringCharAt());
 		a.loadConstant('&');
-		a.if_icmpeq(unchecked);
+		a.if_icmpne(nextParam);
+		for (String keyword : ClConstants.LAMBDA_LIST_KEYWORD_NAMES) {
+			car(a, cursorSlot);
+			ldcStr(a, keyword);
+			a.invokevirtual(this.k.objectEquals());
+			a.ifne(unchecked);
+		}
 		a.labelBinding(nextParam);
 		a.iinc(countSlot, 1);
 		cdr(a, cursorSlot);

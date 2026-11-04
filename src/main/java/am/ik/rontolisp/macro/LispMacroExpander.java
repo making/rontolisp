@@ -26,6 +26,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.ReadFailure;
+import am.ik.rontolisp.ReaderSymbols;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.SpecialDeclarations;
 import am.ik.rontolisp.StructLiteralFolder;
@@ -19655,7 +19656,7 @@ public final class LispMacroExpander {
 		while (cur instanceof LispCons c) {
 			LispVal item = c.car();
 			LispSymbol var = null;
-			if (item instanceof LispSymbol s && !s.name().startsWith("&")) {
+			if (item instanceof LispSymbol s && !s.isLambdaListKeyword()) {
 				var = s;
 			}
 			else if (item instanceof LispCons pc && pc.car() instanceof LispSymbol s) {
@@ -20133,7 +20134,7 @@ public final class LispMacroExpander {
 				continue;
 			}
 			for (LispVal param : lambdaList.toList()) {
-				if (param instanceof LispSymbol marker && marker.name().startsWith("&")) {
+				if (param instanceof LispSymbol marker && marker.isLambdaListKeyword()) {
 					break;
 				}
 				if (param instanceof LispCons paramCons && paramCons.cdr() instanceof LispCons specCell
@@ -25037,7 +25038,7 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> lambdaParts = lambda.toList();
 			if (lambdaParts.size() < 2 || !(lambdaParts.get(1) instanceof LispCons params)
-					|| !(params.car() instanceof LispSymbol var) || var.name().startsWith("&")) {
+					|| !(params.car() instanceof LispSymbol var) || var.isLambdaListKeyword()) {
 				return true;
 			}
 			for (LispVal bodyForm : lambdaParts.subList(2, lambdaParts.size())) {
@@ -25875,7 +25876,7 @@ public final class LispMacroExpander {
 			List<LispVal> out = new java.util.ArrayList<>();
 			boolean afterKeyword = false;
 			for (LispVal param : llCons.toList()) {
-				if (param instanceof LispSymbol sym && sym.name().startsWith("&")) {
+				if (param instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 					afterKeyword = true;
 					out.add(param);
 				}
@@ -25993,7 +25994,7 @@ public final class LispMacroExpander {
 		}
 		for (LispVal param : llCons.toList()) {
 			if (param instanceof LispSymbol sym) {
-				if (!sym.name().startsWith("&")) {
+				if (!sym.isLambdaListKeyword()) {
 					names.add(sym.name());
 				}
 			}
@@ -26023,7 +26024,7 @@ public final class LispMacroExpander {
 			collectPatternNames(cons.car(), names);
 			pattern = cons.cdr();
 		}
-		if (pattern instanceof LispSymbol sym && !sym.name().startsWith("&")) {
+		if (pattern instanceof LispSymbol sym && !sym.isLambdaListKeyword()) {
 			names.add(sym.name());
 		}
 	}
@@ -26260,7 +26261,7 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(operator + " expects a lambda list: " + form.print());
 		}
 		for (LispVal param : paramsCons.toList()) {
-			if (param instanceof LispSymbol sym && sym.name().startsWith("&")) {
+			if (param instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 				return new GfLambdaList(names, true);
 			}
 			if (!(param instanceof LispSymbol sym)) {
@@ -26404,7 +26405,7 @@ public final class LispMacroExpander {
 			List<LispVal> params = paramsCons.toList();
 			for (int i = 0; i < params.size(); i++) {
 				LispVal param = params.get(i);
-				if (param instanceof LispSymbol sym && sym.name().startsWith("&")) {
+				if (param instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 					tail.addAll(params.subList(i, params.size()));
 					break;
 				}
@@ -26648,7 +26649,7 @@ public final class LispMacroExpander {
 		List<LispVal> out = new java.util.ArrayList<>();
 		boolean required = true;
 		for (LispVal param : cons.toList()) {
-			if (param instanceof LispSymbol sym && sym.name().startsWith("&")) {
+			if (param instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 				required = false;
 			}
 			out.add(required && param instanceof LispCons specialized ? specialized.car() : param);
@@ -27403,7 +27404,7 @@ public final class LispMacroExpander {
 		List<OptionalForward> forwards = new java.util.ArrayList<>();
 		boolean inOptional = false;
 		for (int i = 0; i < tail.size(); i++) {
-			if (tail.get(i) instanceof LispSymbol marker && marker.name().startsWith("&")) {
+			if (tail.get(i) instanceof LispSymbol marker && marker.isLambdaListKeyword()) {
 				inOptional = LispNames.LAMBDA_OPTIONAL.equals(marker.name());
 				continue;
 			}
@@ -44089,7 +44090,7 @@ public final class LispMacroExpander {
 		boolean specSection = false;
 		List<LispVal> newElements = new java.util.ArrayList<>();
 		for (LispVal e : patternCons.toList()) {
-			if (e instanceof LispSymbol sym && sym.name().startsWith("&")) {
+			if (e instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
 				// &rest/&body take a plain variable; the other keywords start spec
 				// sections whose cons elements are (var default [supplied-p]).
 				specSection = !LispNames.LAMBDA_REST.equals(sym.name()) && !LispNames.LAMBDA_BODY.equals(sym.name());
@@ -50949,7 +50950,7 @@ public final class LispMacroExpander {
 				normalized.add(tailCons.car());
 				tail = tailCons.cdr();
 			}
-			if (tail instanceof LispSymbol tailVar && !tailVar.name().startsWith("&")) {
+			if (tail instanceof LispSymbol tailVar && !tailVar.isLambdaListKeyword()) {
 				normalized.add(new LispSymbol(LispNames.LAMBDA_REST));
 				normalized.add(tailVar);
 				destructuringBindings(listToCons(normalized), source, prefix, counter, out);
@@ -50966,13 +50967,13 @@ public final class LispMacroExpander {
 		// chain is side-effect-free, so evaluating it twice is safe.
 		if (elements.size() >= 2 && elements.get(0) instanceof LispSymbol wholeKw
 				&& LispNames.LAMBDA_WHOLE.equals(wholeKw.name()) && elements.get(1) instanceof LispSymbol wholeVar
-				&& !wholeVar.name().startsWith("&")) {
+				&& !wholeVar.isLambdaListKeyword()) {
 			out.add(listToCons(List.of(wholeVar, source)));
 			elements = elements.subList(2, elements.size());
 		}
 		int firstKeyword = 0;
 		while (firstKeyword < elements.size()
-				&& !(elements.get(firstKeyword) instanceof LispSymbol sym && sym.name().startsWith("&"))) {
+				&& !(elements.get(firstKeyword) instanceof LispSymbol sym && sym.isLambdaListKeyword())) {
 			firstKeyword++;
 		}
 		LispVal cursor = source;
@@ -51074,7 +51075,7 @@ public final class LispMacroExpander {
 			}
 			pattern = cons.cdr();
 		}
-		return pattern instanceof LispSymbol sym && sym.name().startsWith("&");
+		return pattern instanceof LispSymbol sym && sym.isLambdaListKeyword();
 	}
 
 	/**
@@ -51350,7 +51351,7 @@ public final class LispMacroExpander {
 			if (!assigned.contains(name)) {
 				continue;
 			}
-			out.add(listToCons(List.of(new LispSymbol(LispNames.SETQ),
+			out.add(listToCons(List.of(new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, LispNames.SETQ)),
 					new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, name)),
 					values == null ? LispNil.INSTANCE : values[i])));
 		}
@@ -51802,7 +51803,7 @@ public final class LispMacroExpander {
 
 	private static boolean usesSymbol(LispVal form, String name) {
 		if (form instanceof LispSymbol sym) {
-			return name.equals(sym.name());
+			return spellsClName(sym.name(), name);
 		}
 		if (form instanceof LispCons cons) {
 			for (LispVal cur = cons; cur instanceof LispCons cell; cur = cell.cdr()) {
@@ -51934,11 +51935,38 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean isTopLevelSpliceForm(LispVal form) {
-		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()
-				&& (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())
-						|| classDefinerInitializer(cons) != null || isHandlerlessHandlerBind(cons)
-						|| ((LispNames.EVAL_WHEN.equals(sym.name()) || isUiopWithDeprecationWrapper(sym.name())
-								|| isUiopWithUpgradabilityWrapper(sym.name())) && cons.toList().size() >= 2));
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol sym) || !cons.isProperList()) {
+			return false;
+		}
+		String operator = clOperatorSpelling(sym.name());
+		return LispNames.PROGN.equals(operator) || LispNames.LOCALLY.equals(operator)
+				|| classDefinerInitializer(cons) != null || isHandlerlessHandlerBind(cons)
+				|| ((LispNames.EVAL_WHEN.equals(operator) || isUiopWithDeprecationWrapper(operator)
+						|| isUiopWithUpgradabilityWrapper(operator)) && cons.toList().size() >= 2);
+	}
+
+	/**
+	 * The operator a form's head names as a pass ahead of the resolver matches it: the
+	 * bare spelling of a {@code cl:}-qualified head, which is how a package using no
+	 * {@code cl} writes {@code cl:defmacro}. Any other spelling comes back as it is.
+	 * @param spelling the head's name as read
+	 * @return the name to match
+	 */
+	public static String clOperatorSpelling(String spelling) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(spelling);
+		return qn != null && LispNames.CL_PKG.equals(qn.pkg()) ? qn.member() : spelling;
+	}
+
+	/**
+	 * Whether a symbol as read spells the {@code cl} name, for a walk over a whole
+	 * program: nearly every symbol it meets is neither spelling, and answers without
+	 * splitting. Past the resolver the name is bare.
+	 * @param spelling the symbol's name as read
+	 * @param name the bare name
+	 * @return {@code true} for the bare spelling and a {@code cl:}-qualified one
+	 */
+	public static boolean spellsClName(String spelling, String name) {
+		return name.equals(spelling) || (spelling.endsWith(name) && name.equals(clOperatorSpelling(spelling)));
 	}
 
 	/**
@@ -51948,7 +51976,7 @@ public final class LispMacroExpander {
 	 * and the compile path's package resolver must see the package.
 	 */
 	private static boolean isHandlerlessHandlerBind(LispCons cons) {
-		return cons.car() instanceof LispSymbol sym && LispNames.HANDLER_BIND.equals(sym.name())
+		return cons.car() instanceof LispSymbol sym && LispNames.HANDLER_BIND.equals(clOperatorSpelling(sym.name()))
 				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispNil;
 	}
 
@@ -51980,13 +52008,14 @@ public final class LispMacroExpander {
 	private static void flattenTopLevelInto(LispVal form, List<LispVal> out, boolean compileTimeToo,
 			@Nullable Set<LispVal> compileTime) {
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()) {
+			String operator = clOperatorSpelling(sym.name());
 			// locally splices like progn: its declarations are no-ops downstream, and
 			// libraries wrap top-level defstruct/defun groups in (locally (declare ...)).
 			// So does a handler-bind that binds no handler.
-			if (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())
+			if (LispNames.PROGN.equals(operator) || LispNames.LOCALLY.equals(operator)
 					|| isHandlerlessHandlerBind(cons)) {
 				List<LispVal> parts = cons.toList();
-				int from = LispNames.HANDLER_BIND.equals(sym.name()) ? 2 : 1;
+				int from = LispNames.HANDLER_BIND.equals(operator) ? 2 : 1;
 				for (int i = from; i < parts.size(); i++) {
 					flattenTopLevelInto(splicedPart(cons, parts.get(i)), out, compileTimeToo, compileTime);
 				}
@@ -51997,10 +52026,10 @@ public final class LispMacroExpander {
 			// response.lisp does with-deprecation, inside an eval-when; upstream uiop
 			// puts with-upgradability around every one of its own), and burying those in
 			// an expression would stop them being definitions at all.
-			if (LispNames.EVAL_WHEN.equals(sym.name()) || isUiopWithUpgradabilityWrapper(sym.name())) {
+			if (LispNames.EVAL_WHEN.equals(operator) || isUiopWithUpgradabilityWrapper(operator)) {
 				List<LispVal> parts = cons.toList();
 				if (parts.size() >= 2) {
-					boolean memberCompileTime = LispNames.EVAL_WHEN.equals(sym.name())
+					boolean memberCompileTime = LispNames.EVAL_WHEN.equals(operator)
 							? evaluatesAtCompileTime(parts.get(1), compileTimeToo) : compileTimeToo;
 					for (int i = 2; i < parts.size(); i++) {
 						flattenTopLevelInto(splicedPart(cons, parts.get(i)), out, memberCompileTime, compileTime);
@@ -52030,8 +52059,8 @@ public final class LispMacroExpander {
 				flattenTopLevelInto(splicedPart(cons, definer), out, compileTimeToo, compileTime);
 				LispVal quotedName = listToCons(List.of(new LispSymbol(LispNames.QUOTE), definer.toList().get(1)));
 				List<LispVal> parts = new java.util.ArrayList<>(cons.toList());
-				parts.set(2, LispNames.DEFCLASS.equals(((LispSymbol) definer.car()).name())
-						? listToCons(List.of(new LispSymbol(LispNames.FIND_CLASS), quotedName)) : quotedName);
+				parts.set(2, LispNames.DEFCLASS.equals(clOperatorSpelling(((LispSymbol) definer.car()).name()))
+						? listToCons(List.of(ReaderSymbols.FIND_CLASS, quotedName)) : quotedName);
 				flattenTopLevelInto(splicedPart(cons, listToCons(parts)), out, compileTimeToo, compileTime);
 				return;
 			}
@@ -52048,13 +52077,14 @@ public final class LispMacroExpander {
 	 * variable with, or null.
 	 */
 	private static @Nullable LispCons classDefinerInitializer(LispCons form) {
-		if (!(form.car() instanceof LispSymbol op)
-				|| !(LispNames.DEFPARAMETER.equals(op.name()) || LispNames.DEFVAR.equals(op.name()))) {
+		if (!(form.car() instanceof LispSymbol op) || !(LispNames.DEFPARAMETER.equals(clOperatorSpelling(op.name()))
+				|| LispNames.DEFVAR.equals(clOperatorSpelling(op.name())))) {
 			return null;
 		}
 		List<LispVal> parts = form.toList();
 		return parts.size() >= 3 && parts.get(2) instanceof LispCons init && init.car() instanceof LispSymbol head
-				&& (LispNames.DEFCLASS.equals(head.name()) || LispNames.DEFINE_CONDITION.equals(head.name()))
+				&& (LispNames.DEFCLASS.equals(clOperatorSpelling(head.name()))
+						|| LispNames.DEFINE_CONDITION.equals(clOperatorSpelling(head.name())))
 				&& init.isProperList() && init.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol ? init
 						: null;
 	}

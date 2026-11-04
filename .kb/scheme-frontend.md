@@ -40,7 +40,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | Scheme | lowers to | why |
 |---|---|---|
 | identifier `foo` | symbol `foo`, verbatim | canonical names are upcased, so a name with an ASCII lowercase letter can never hit a `LispNames` case label |
-| `CAR`, `X`, `T`, `+` (no lowercase), `a:b`, `&rest`, `s%...`, `#f` | escaped: `s%` + name, `%`->`%%`, `:`->`%c` | `(defun \|CAR\| ...)` REPLACES the built-in; `a:b` is "symbol b of package a" to the resolver ("No such package: a"); `&rest` is a lambda-list keyword; the prefix and `#f` keep the map injective and the false value unforgeable. The rule is spelled twice (`SchemeNames.mangle`, `%scheme-needs-escape` in `scheme.lisp`) -- change both |
+| `CAR`, `X`, `T`, `+`, `&REST` (no lowercase), `a:b`, `s%...`, `#f` | escaped: `s%` + name, `%`->`%%`, `:`->`%c` | `(defun \|CAR\| ...)` REPLACES the built-in; `a:b` is "symbol b of package a" to the resolver ("No such package: a"); `&REST` is a lambda-list keyword (`&rest` is not); the prefix and `#f` keep the map injective and the false value unforgeable. The rule is spelled twice (`SchemeNames.mangle`, `%scheme-needs-escape` in `scheme.lisp`) -- change both |
 | `'()` | `NIL` | `&rest` lists, `apply` and every list primitive end in it |
 | `#t` | `T` | |
 | `\|foo bar\|`, `\|\|`, `\|#t\|` | an identifier of that spelling, mangled like any other (`\|#f\|` -> `s%#f`) | "Vertical-line identifiers and the infinities" below; the reader's booleans are compared by IDENTITY, so `\|#t\|` is no boolean |

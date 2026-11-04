@@ -175,4 +175,15 @@ public class LispEvalException extends RuntimeException {
 		return this.trace == null ? List.of() : this.trace.lines();
 	}
 
+	/**
+	 * What a report of this error adds for the person reading it, apart from the
+	 * condition's own text, which {@code princ} and a handler read
+	 * ({@code UncaughtReport.adviceLine}). The compile paths say the same in their
+	 * warning; a run of the interpreter has no compile to warn in.
+	 * @return the advice, or the empty string
+	 */
+	public String advice() {
+		return "";
+	}
+
 }
