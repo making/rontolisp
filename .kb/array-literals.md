@@ -29,6 +29,24 @@ BARE `(array (mut i8|i16|i32))` and every emitted type is `sub final`,
   eval arm also carries live instances spliced back through `(quote <value>)` and cannot
   tell the two apart, so the compile side meets it instead.
 
+## A long literal
+Measured 2026-11-04 on cxml's `(sbit '#*... rune)` name tables: 55,296 elements each, a store per
+element, 497,828 bytes of method on the JVM, past the format's limit, and two bodies of that order
+on wasm.
+
+- **Runs** (`compiler/LiteralArrayRuns`, both compile backends): a general array's run of 8 or more
+  equal immediates (integer, character, nil) is one build: `addAll(Collections.nCopies(n, v))` /
+  `array.fill`. They stay separate elements; the array is as mutable as ever. A shorter run keeps
+  its stores, so a literal without one is emitted as before. cxml's module went from 4,188,375 to
+  2,465,116 bytes.
+- **Builders, JVM only** (`JvmQuoteCompiler.emitBuilderCall`, the `_ql$N` a long list's spine already
+  used): past twice `QUOTE_CHUNK_BUDGET` a literal of ANY family, general or packed, is filled by a
+  chain of methods taking the array and answering it, so nothing bounds a literal by the method
+  limit and the method holding one stays under HotSpot's HugeMethodLimit. wasm has no such limit and
+  keeps one body (`.kb/quoted-data.md`, "Long data is NOT split"; 30,000 floats ran).
+- Pinned by `JvmLispCompilerTest#anArrayLiteralOfAnyFamilyIsHeldToNoMethodLimit` and ci-spec
+  `array-literal-freshness-cross-backend`.
+
 ## The RANK-0 array, and why `#0A` carries no parens
 `(make-array nil)` is legal on all four backends: no dimensions, total size 1, one element
 `aref` / `(setf (aref ...))` reach with **no subscripts**. Needed beyond conformance:

@@ -4367,8 +4367,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// names them as a designator.
 		Set<String> designatedProducers = BuiltinFunctionWrappers.designatedValueProducers(program,
 				closRegistry.conditionReports().values());
-		List<LispVal> wrappers = am.ik.rontolisp.compiler.FunctionValueWrappers.generate(userDefinedNames,
-				wrapperExcludes, dataCalledNames);
+		List<LispVal> wrappers = ConcatenateForms.wrappersReadingAliases(am.ik.rontolisp.compiler.FunctionValueWrappers
+			.generate(userDefinedNames, wrapperExcludes, dataCalledNames), closRegistry);
 		if (LispMacroExpander.declaresMvSpill(program)) {
 			// A wrapper is a function body like any other: its tail settles the
 			// multiple-value channel (the defuns' tails were settled by

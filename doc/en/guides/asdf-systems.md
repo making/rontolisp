@@ -385,7 +385,10 @@ library still has to stay inside the supported subset below.
   their own sources. **That works at read time too**: a `#.` form — the way
   that idiom is normally spelled, so the file is read while the source is being
   read — sees its own file's load context on every backend, so a library can
-  bake in a data file that ships next to it.
+  bake in a data file that ships next to it. **A form that reads the file when it
+  runs reads it when the compiled program starts**, at the path it was compiled
+  against: cxml's `catalog.dtd`, for one, so a `.wasm` holding cxml needs that
+  directory preopened (`wasmtime run --dir DIR::DIR`).
 
 ## Built-in shim systems
 

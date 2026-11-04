@@ -634,6 +634,10 @@ downloading. `BuiltinSystems.DEPENDENCIES` records edges between shims; one exis
   a program that makes none carries no `make-instance`. The audit also found `:encoding` ignoring
   `*default-character-encoding*` and the drivers ignoring a bad `:start`/`:end` (an empty answer
   where upstream signals), both fixed. cxml and `cffi-uffi-compat` load on the interpreter since.
+  cxml's smoke (xmls parse, DOM, string sink, a well-formedness error) runs on all four backends
+  since 2026-11-04. Its `*catalog-dtd*` reads `catalog.dtd` when the form runs, so a compiled program
+  reads it at start-up from the compile-time path: a `.wasm` without that directory preopened stops
+  on `OPEN: cannot open file`, which is what the `unreachable` trap of the first measurement was.
 - **`uiop`** — a package stub whose definitions arrive through `eval.UiopLibrary`
   (`.kb/uiop.md`; 15 sub-packages, every unimplemented member a `not-implemented-error` stub).
   Real members: `add-package-local-nickname`, `file-exists-p`, `merge-pathnames*`, the LISTING

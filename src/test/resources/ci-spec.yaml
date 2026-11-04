@@ -4007,6 +4007,30 @@ cases:
     expected: |
       (3 (:OWN 1 2) "CI-OWN-WHILE" NIL)
       2
+  # cxml's (defun %error (class stream message) ...): cl's %ERROR is the operator every
+  # built-in signal lowers to, so read as cl's the calls reached the operator and never
+  # the definition.
+  - name: a-package-defining-an-implementation-internal-name-keeps-its-own-function
+    source: |
+      (defpackage :ci-own-internal (:use :cl))
+      (in-package :ci-own-internal)
+      (define-condition ci-oi-condition (simple-error) ())
+      (defun ci-oi-ahead (message) (%error 'ci-oi-condition nil message))
+      (defun %error (class stream message)
+        (declare (ignorable stream))
+        (error class :format-control "~A" :format-arguments (list message)))
+      (print (handler-case (ci-oi-ahead "ahead") (error (e) (list (type-of e) (format nil "~A" e)))))
+      (print (handler-case (funcall #'%error 'ci-oi-condition nil "value")
+               (error (e) (list (type-of e) (format nil "~A" e)))))
+      ;; The operator itself stays cl's for what the built-ins lower to, here too.
+      (print (handler-case (error "plain ~A" 1) (error (e) (format nil "~A" e))))
+      (print (handler-case (parse-integer "x") (parse-error () :parse-error)))
+      (in-package :cl-user)
+    expected: |
+      (CI-OI-CONDITION "ahead")
+      (CI-OI-CONDITION "value")
+      "plain 1"
+      :PARSE-ERROR
   - name: a-standard-name-read-in-a-package-using-no-cl-is-its-own
     source: |
       ;; Whatever the name turns out to be there: a parameter (vom's SECOND), a LOOP
@@ -8527,7 +8551,17 @@ cases:
         (let ((d (ci-alit-double))) (setf (aref d 0) 99) (print d))
         (print (ci-alit-double))
         (let ((o (ci-alit-octets))) (setf (aref o 0) 99) (print o))
-        (print (ci-alit-octets)))
+        (print (ci-alit-octets))
+        ;; Runs of equal immediates are built by one fill, and stay separate elements.
+        (let ((r (ci-alit-runs))) (setf (aref r 1) 99) (setf (aref r 12) 98) (setf (aref r 20) 97) (print r))
+        (print (ci-alit-runs))
+        (let ((b (ci-alit-bit-runs)))
+          (print (list b (bit-vector-p b) (length b) (array-element-type b) (eq b (ci-alit-bit-runs)))))
+        (let ((m (ci-alit-rank2-runs))) (setf (aref m 1 1) 7) (print m))
+        (print (ci-alit-rank2-runs)))
+      (defun ci-alit-runs () #(0 0 0 0 0 0 0 0 0 0 1 nil nil nil nil nil nil nil nil #\a #\a #\a #\a #\a #\a #\a #\a 0 0))
+      (defun ci-alit-bit-runs () '#*00000000001111111111011111111)
+      (defun ci-alit-rank2-runs () #2A((0 0 0 0 0) (0 0 0 0 0)))
       (ci-array-literal-freshness)
     expected: |
       (NIL NIL NIL NIL NIL NIL)
@@ -8543,6 +8577,11 @@ cases:
       #d(1.0 2.0)
       #(99 2 3)
       #(1 2 3)
+      #(0 99 0 0 0 0 0 0 0 0 1 NIL 98 NIL NIL NIL NIL NIL NIL #\a 97 #\a #\a #\a #\a #\a #\a 0 0)
+      #(0 0 0 0 0 0 0 0 0 0 1 NIL NIL NIL NIL NIL NIL NIL NIL #\a #\a #\a #\a #\a #\a #\a #\a 0 0)
+      (#*00000000001111111111011111111 T 29 BIT T)
+      #2A((0 0 0 0 0) (0 7 0 0 0))
+      #2A((0 0 0 0 0) (0 0 0 0 0))
   - name: string-literal-write-cross-backend
     source: |
       (defun ci-slit () "abc")
@@ -29326,11 +29365,41 @@ cases:
       (print (funcall #'concatenate '(vector (unsigned-byte 8)) '(1 260)))
       (print (array-element-type (funcall #'concatenate 'vector '(1))))
       (print (array-element-type (funcall #'concatenate '(simple-vector 1) '(1))))
+      ;; A result type known only when the call runs reads as the literal spelling would
+      ;; (cxml's `(vector ,(array-element-type prev))), deftype aliases included.
+      (defun ci-cc-join (type a b) (concatenate type a b))
+      (defmacro ci-cc-join-string (a b) `(concatenate (if (stringp ,a) 'string 'list) ,a ,b))
+      (deftype ci-cc-octets () '(vector (unsigned-byte 8)))
+      (deftype ci-cc-octets-too () 'ci-cc-octets)
+      (print (ci-cc-join 'string "a" '(#\b)))
+      (print (ci-cc-join 'list "a" #(1)))
+      (print (ci-cc-join-string "x" "y"))
+      (print (array-element-type (ci-cc-join '(vector (unsigned-byte 8)) '(1) #(2))))
+      (print (ci-cc-join `(vector ,(array-element-type "x")) "h" "i"))
+      (print (array-element-type (ci-cc-join 'ci-cc-octets '(1) #(2))))
+      (print (array-element-type (ci-cc-join 'ci-cc-octets-too '(1) #(2))))
+      (print (array-element-type (apply #'concatenate 'ci-cc-octets (list #(1)))))
+      (print (handler-case (ci-cc-join 'integer "a" "b") (error () :refused)))
+      ;; Spelled like such a call, and neither is one.
+      (defun ci-cc-parameter (concatenate x) (list concatenate x))
+      (print (ci-cc-parameter 1 2))
+      (print (let ((concatenate 3)) concatenate))
     expected: |
       (UNSIGNED-BYTE 8)
       #(1 4)
       T
       T
+      "ab"
+      (#\a 1)
+      "xy"
+      (UNSIGNED-BYTE 8)
+      "hi"
+      (UNSIGNED-BYTE 8)
+      (UNSIGNED-BYTE 8)
+      (UNSIGNED-BYTE 8)
+      :REFUSED
+      (1 2)
+      3
   - name: write-sequence-string
     source: |
       (princ (with-output-to-string (s) (write-sequence "abcd" s :start 1 :end 3)))

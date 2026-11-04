@@ -78,6 +78,27 @@ interpreter and stops on `atomics:cas`, on the compile paths while it compiles. 
 is `.todo/i05`, through cluffer; its Core files read by hand past that stop at
 `closer-mop:standard-instance-access`.
 
+## A package defining a name of `cl`'s implementation
+`PackageRegistry.CL_INTERNALS` are the names lowerings emit, read as `cl`'s in every package because
+an expansion may land in any. A program can spell one too: cxml's `(defun %error (class stream
+message) ...)`. Read as `cl`'s, its calls compiled to the `%ERROR` operator with the class name as the
+message (`(SIMPLE-ERROR "XML:WELL-FORMEDNESS-VIOLATIO")`, the name less its frame), and the definition
+was never reached. `resolveProgram` now first lists the top-level `defun`/`defmacro`/`defgeneric`/
+`defmethod` of such a name per `in-package` (`definedClInternals`), and in those packages the name is
+the package's own, references ahead of the definition included. Census 2026-11-04: of the 226 cached
+Quicklisp systems, cxml's `%error` is the only one of 245 internals defined.
+
+Two places stay as they were, both on purpose:
+- **The interpreter** resolves form by form, so it cannot see a definition ahead. There the `defun`
+  replaces the global `%ERROR`, which works because no interpreter path calls it by symbol (every
+  emitter of it is a compile-path lowering).
+- **`cl-user`**: its canonical shape is the bare name, so `(defun %error ...)` there is still `cl`'s
+  on the compile paths, and the prelude's own definitions look exactly like it. A program in
+  `cl-user` defining an internal name calls the operator. Not worth a rename pass: the census has
+  none.
+
+Pinned by ci-spec `a-package-defining-an-implementation-internal-name-keeps-its-own-function`.
+
 ## External vs internal (`:` / `::`)
 - `LispPackage` carries an `externals` set (3-arg constructor = everything exported);
   `PackageRegistry.QualifiedName` carries an `internal` flag parsed from the double colon.

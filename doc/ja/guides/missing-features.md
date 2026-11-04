@@ -17,7 +17,8 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | CLOS | 一部対応（静的サブセット + 定義時 MOP サブセット） |
 | `defstruct` の `:include` | 単一継承のみ。スロットのデフォルトを上書きする `(:include parent (slot default) ...)` は利用可能 |
 | `declare` / `declaim` / `proclaim` / `the` | 結果は変えない。WASM では配列の `type` 宣言が要素アクセサのエミットを誘導（モジュールが小さく速くなる）、それ以外では解析されるだけの no-op |
-| `typep` / `subtypep` / `coerce` / `concatenate` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string`（または浮動小数点型）、`concatenate` はこの 3 つのシーケンス系統を構築 |
+| `typep` / `subtypep` / `coerce` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string`（または浮動小数点型） |
+| `concatenate` | `'list` / `'vector` / `'string` のシーケンス系統を構築 |
 | `make-package` / `rename-package` / `delete-package` / `unintern` / `shadow`（ランタイム） | `make-package`、`rename-package`、`delete-package`、`packagep`、`package-nicknames`、`find-all-symbols`、`do-all-symbols`、`apropos`/`apropos-list` は利用可能（後述の二層）。`shadow` / `shadowing-import` / `unintern` はパッケージのメンバーテーブルを変更する。コンパイル済みバックエンドでメンバーテーブルを持つのはプログラム自身が作ったパッケージだけ |
 | `eval-when` | `progn` として扱う（フェーズの区別なし） |
 | `#:name` | 普通のシンボルとして読まれ、gensym 的な新規性はない |

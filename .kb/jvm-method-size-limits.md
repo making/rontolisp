@@ -221,6 +221,9 @@ conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
   The shared walker's new plain-call arguments also reach oversized defuns (and the
   WASM twin's), byte-identical where no budget fires.
 
+- An array literal of any family is filled by `_ql$N` builders past a budget, and a run of equal
+  immediates costs one `addAll` ([array-literals.md](array-literals.md), "A long literal").
+
 ## Generated data must not become pool entries
 - **Read the text back; do not scan it** (`ClUnicodeTables`): a scanned table cost ~208,000 pool
   entries, so each travels as PRINTED TEXT in ~230 string literals (570 entries) read by the
@@ -271,3 +274,4 @@ is never reused.
   `RontoLispCliTest#aProgramPastOneClassesPoolTravelsWithItsPartsInEveryOutputShape`, and the
   three JVM legs of `MitoE2eTest`
 - `Uax15E2eTest`, `ClUnicodeTablesTest`; ci-spec `runtime-type-dispatch-and-symbol-designators`
+- `JvmLispCompilerTest#anArrayLiteralOfAnyFamilyIsHeldToNoMethodLimit`

@@ -150,6 +150,9 @@ public final class PackageResolver {
 	 */
 	private final Map<String, Set<String>> declaredExternals = new HashMap<>();
 
+	/** See {@link #definedClInternals}. */
+	private Map<String, Set<String>> definedClInternals = Map.of();
+
 	/**
 	 * Creates a resolver with a fresh registry of the built-in packages.
 	 */
@@ -215,6 +218,7 @@ public final class PackageResolver {
 	 */
 	public synchronized List<LispVal> resolveProgram(List<LispVal> program) {
 		this.runtimePackagesMutable = programUsesRuntimePackageMutation(program);
+		this.definedClInternals = definedClInternals(program);
 		this.inProgramResolution = true;
 		try {
 			List<LispVal> out = new ArrayList<>(program.size());
@@ -226,6 +230,60 @@ public final class PackageResolver {
 		finally {
 			this.inProgramResolution = false;
 		}
+	}
+
+	/**
+	 * The {@code cl} implementation-internal names the program defines at top level as a
+	 * function or macro, each with the packages (as {@code in-package} spells them) it
+	 * does so in. The operator of that name is one a built-in lowering emits, and cxml's
+	 * {@code (defun %error ...)} is the package's own function: read as {@code cl}'s, its
+	 * calls compile to the operator and the definition is never reached.
+	 */
+	private Map<String, Set<String>> definedClInternals(List<LispVal> program) {
+		Map<String, Set<String>> defined = new HashMap<>();
+		String[] current = { current() };
+		for (LispVal form : program) {
+			collectDefinedClInternals(form, current, defined);
+		}
+		return defined;
+	}
+
+	private static void collectDefinedClInternals(LispVal form, String[] current, Map<String, Set<String>> defined) {
+		if (!(form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& cons.cdr() instanceof LispCons rest)) {
+			return;
+		}
+		String member = operatorMember(op);
+		switch (member) {
+			case LispNames.IN_PACKAGE -> {
+				if (rest.car() instanceof LispSymbol || rest.car() instanceof LispString) {
+					current[0] = packageDesignator(LispNames.IN_PACKAGE, rest.car());
+				}
+			}
+			case LispNames.PROGN, LispNames.EVAL_WHEN -> {
+				for (LispVal node = rest; node instanceof LispCons cell; node = cell.cdr()) {
+					collectDefinedClInternals(cell.car(), current, defined);
+				}
+			}
+			case LispNames.DEFUN, LispNames.DEFMACRO, LispNames.DEFGENERIC, LispNames.DEFMETHOD -> {
+				if (rest.car() instanceof LispSymbol name && PackageRegistry.isClInternal(name.name())) {
+					defined.computeIfAbsent(name.name(), key -> new HashSet<>()).add(current[0]);
+				}
+			}
+			default -> {
+			}
+		}
+	}
+
+	/** Whether the current package defines the {@code cl} internal name itself. */
+	private boolean currentDefinesClInternal(String name) {
+		Set<String> packages = this.definedClInternals.get(name);
+		if (packages == null) {
+			return false;
+		}
+		String pkg = current();
+		return packages.stream()
+			.anyMatch(spelled -> registeredPackageName(this.registry.canonicalName(spelled)).equals(pkg));
 	}
 
 	/**
@@ -2521,6 +2579,9 @@ public final class PackageResolver {
 		if (current.shadows(name)) {
 			return canonical(current(), name);
 		}
+		if (currentDefinesClInternal(name)) {
+			return mint(current(), name);
+		}
 		if (PackageRegistry.isClSymbol(name)) {
 			if (PackageRegistry.isClExtensionName(name)) {
 				// cl's while yields to the package's own symbol and to another used
@@ -2535,7 +2596,8 @@ public final class PackageResolver {
 					}
 				}
 			}
-			// An implementation-internal name is never written by a program: expansions
+			// An implementation-internal name a package does not define itself
+			// (currentDefinesClInternal) is the implementation's: expansions
 			// inject it into whatever package they run in, a package using no cl
 			// included (the macro-function table appended under contextl-user). So do
 			// the lambda-list keywords, which the expansions' own lambda lists spell, and

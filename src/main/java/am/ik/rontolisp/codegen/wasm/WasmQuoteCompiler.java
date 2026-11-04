@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.LiteralArrayRuns;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -608,11 +609,20 @@ final class WasmQuoteCompiler {
 		arrayNew(ctx);
 		int dataSlot = ctx.allocTemp();
 		setLocal(ctx, dataSlot);
-		for (int i = 0; i < data.length; i++) {
+		int run;
+		for (int i = 0; i < data.length; i += run) {
+			run = LiteralArrayRuns.length(data, i);
 			getBuckets(ctx, dataSlot);
 			i32Const(ctx, i);
-			compileQuotedVal(data[i] == null ? LispNil.INSTANCE : data[i], ctx);
-			arraySet(ctx);
+			compileQuotedVal(LiteralArrayRuns.element(data, i), ctx);
+			if (run == 1) {
+				arraySet(ctx);
+			}
+			else {
+				i32Const(ctx, run);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_FILL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			}
 		}
 		// dims array: array.new TYPE_HASH_BUCKETS (null, dims.length), then fill with
 		// i31s.

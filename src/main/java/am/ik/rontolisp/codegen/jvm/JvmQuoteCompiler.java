@@ -8,7 +8,9 @@ import java.lang.classfile.constantpool.LongEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.function.Consumer;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
@@ -23,6 +25,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.LiteralArrayRuns;
 
 /**
  * Compiles the {@code quote} special form.
@@ -164,19 +167,80 @@ final class JvmQuoteCompiler {
 		if (iv.width() == JvmIntArrayRuntimeBuilder.OCTET_WIDTH) {
 			JvmEmitHelper.emitIntConst(ctx, data.length);
 			ctx.body.newarray(TypeKind.BYTE);
-			for (int i = 0; i < data.length; i++) {
+			emitStores("[B", data.length, 7, ctx, (c, i) -> {
 				if (data[i] != 0) {
-					emitRawByteStore(ctx, i, (int) data[i]);
+					emitRawByteStore(c, i, (int) data[i]);
 				}
-			}
+			});
 			return;
 		}
 		JvmEmitHelper.emitIntConst(ctx, 1 + data.length);
 		ctx.body.newarray(TypeKind.LONG);
 		emitRawLongStore(ctx, 0, iv.width());
-		for (int i = 0; i < data.length; i++) {
-			emitRawLongStore(ctx, 1 + i, data[i]);
+		emitStores("[J", data.length, 8, ctx, (c, i) -> emitRawLongStore(c, 1 + i, data[i]));
+	}
+
+	/** Emits one element's store, the array staying on top of the stack. */
+	private interface ElementStore {
+
+		void emit(JvmLispCompiler.Ctx ctx, int index);
+
+	}
+
+	/**
+	 * Emits a packed literal's element stores: inline up to twice
+	 * {@link #QUOTE_CHUNK_BUDGET}, else in a builder per budget, so a long table is held
+	 * neither to the method limit nor past HotSpot's HugeMethodLimit.
+	 * @param arrayDescriptor the array's type descriptor
+	 * @param count how many elements there are
+	 * @param storeBytes the most bytes one store takes
+	 * @param ctx the compilation context
+	 * @param store emits the store of element {@code index}
+	 */
+	private static void emitStores(String arrayDescriptor, int count, int storeBytes, JvmLispCompiler.Ctx ctx,
+			ElementStore store) {
+		if ((long) count * storeBytes <= 2 * QUOTE_CHUNK_BUDGET) {
+			for (int i = 0; i < count; i++) {
+				store.emit(ctx, i);
+			}
+			return;
 		}
+		int perBuilder = QUOTE_CHUNK_BUDGET / storeBytes;
+		for (int start = 0; start < count; start += perBuilder) {
+			int from = start;
+			int to = Math.min(count, start + perBuilder);
+			emitBuilderCall(arrayDescriptor, ctx, ctx.className, builder -> {
+				for (int i = from; i < to; i++) {
+					store.emit(builder, i);
+				}
+			});
+		}
+	}
+
+	/**
+	 * Moves a piece of a literal's build into a {@code _ql$N} method of its own, taking
+	 * the value on top of the stack and answering what the piece leaves in its place.
+	 * @param operandDescriptor the value's type descriptor
+	 * @param ctx the compilation context
+	 * @param className the class being emitted
+	 * @param piece emits the piece, over the context of the new method
+	 */
+	private static void emitBuilderCall(String operandDescriptor, JvmLispCompiler.Ctx ctx, String className,
+			Consumer<JvmLispCompiler.Ctx> piece) {
+		String methodName = "_ql$" + ctx.nextOutlinedBodyId[0]++;
+		String desc = "(" + operandDescriptor + ")" + operandDescriptor;
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(methodName);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc);
+		MethodRefEntry ref = JvmEmitHelper.selfMethod(ctx, className, methodName, desc);
+		JvmLispCompiler.Ctx builder = ctx.ctxBuilder.build();
+		builder.evalStoreRef = ctx.evalStoreRef;
+		builder.nextLocal = 1;
+		builder.maxLocals = 1;
+		builder.body.aload(0);
+		piece.accept(builder);
+		builder.body.areturn();
+		ctx.outlinedBodies.add(new JvmBodyOutliner.OutlinedBody(methodName, nameUtf8, descUtf8, builder));
+		ctx.body.invokestatic(ref);
 	}
 
 	// Assumes the byte[] is on top of the stack; stores the octet at index (DUP; index;
@@ -231,9 +295,7 @@ final class JvmQuoteCompiler {
 		for (int d = 0; d < rank; d++) {
 			emitRawDoubleStore(ctx, 1 + d, dims[d]);
 		}
-		for (int f = 0; f < data.length; f++) {
-			emitRawDoubleStore(ctx, off + f, data[f]);
-		}
+		emitStores("[D", data.length, 8, ctx, (c, f) -> emitRawDoubleStore(c, off + f, data[f]));
 	}
 
 	// Assumes the double[] is on top of the stack; stores value at index (DUP; index;
@@ -270,9 +332,7 @@ final class JvmQuoteCompiler {
 		for (int d = 0; d < rank; d++) {
 			emitRawFloatHeaderStore(ctx, 1 + d, dims[d]);
 		}
-		for (int f = 0; f < data.length; f++) {
-			emitRawFloatDataStore(ctx, off + f, data[f]);
-		}
+		emitStores("[F", data.length, 9, ctx, (c, f) -> emitRawFloatDataStore(c, off + f, data[f]));
 	}
 
 	// Stores an int header value (rank/dim) as a float at index into the float[] on top
@@ -317,9 +377,7 @@ final class JvmQuoteCompiler {
 		for (int h = 0; h < off; h++) {
 			emitRawShortStore(ctx, h, (short) header[h]);
 		}
-		for (int f = 0; f < data.length; f++) {
-			emitRawShortStore(ctx, off + f, data[f]);
-		}
+		emitStores("[S", data.length, 8, ctx, (c, f) -> emitRawShortStore(c, off + f, data[f]));
 	}
 
 	// Stores a short at index into the short[] on top of the stack (DUP; index; value;
@@ -467,9 +525,45 @@ final class JvmQuoteCompiler {
 				ctx.body.aastore();
 			}
 		});
-		for (LispVal element : array.data()) {
-			LispVal value = (element == null) ? LispNil.INSTANCE : element;
-			addElement(ctx, alAdd, () -> compileQuotedVal(value, ctx, className));
+		LispVal[] data = array.data();
+		List<int[]> chunks = arrayChunks(data);
+		if (chunks.size() == 1) {
+			emitArrayElements(data, 0, data.length, ctx, className);
+			return;
+		}
+		// As a long list's spine: a builder per chunk, so no literal is held to the
+		// method limit and the method holding one stays small enough to be compiled.
+		for (int[] chunk : chunks) {
+			emitBuilderCall("Ljava/util/ArrayList;", ctx, className,
+					builder -> emitArrayElements(data, chunk[0], chunk[1], builder, className));
+		}
+	}
+
+	/**
+	 * Appends {@code data[from, to)} to the ArrayList on top of the stack and leaves it
+	 * there, a run of equal immediates ({@link LiteralArrayRuns}) as one {@code addAll}
+	 * of {@code Collections.nCopies}.
+	 */
+	private static void emitArrayElements(LispVal[] data, int from, int to, JvmLispCompiler.Ctx ctx, String className) {
+		ClassEntry arrayListClass = ctx.cp.classEntry("java/util/ArrayList");
+		MethodRefEntry add = ctx.cp.methodRef(arrayListClass, "add", "(Ljava/lang/Object;)Z");
+		int run;
+		for (int i = from; i < to; i += run) {
+			run = LiteralArrayRuns.length(data, i);
+			LispVal value = LiteralArrayRuns.element(data, i);
+			if (run == 1) {
+				addElement(ctx, add, () -> compileQuotedVal(value, ctx, className));
+			}
+			else {
+				ctx.body.dup();
+				JvmEmitHelper.emitIntConst(ctx, run);
+				compileQuotedVal(value, ctx, className);
+				ctx.body
+					.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry("java/util/Collections"), "nCopies",
+							"(ILjava/lang/Object;)Ljava/util/List;"))
+					.invokevirtual(ctx.cp.methodRef(arrayListClass, "addAll", "(Ljava/util/Collection;)Z"))
+					.pop();
+			}
 		}
 	}
 
@@ -491,6 +585,12 @@ final class JvmQuoteCompiler {
 
 	/** Bytes one spine cell costs, without its car. */
 	private static final int CELL_BYTES = 15;
+
+	/** Bytes one array element's {@code add} costs, without the element. */
+	private static final int ADD_BYTES = 5;
+
+	/** Bytes one run's {@code addAll} costs, without the element. */
+	private static final int RUN_BYTES = 11;
 
 	private static void compileQuotedCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// Walk the cdr spine and build the list tail-first through a temp slot, like
@@ -518,20 +618,8 @@ final class JvmQuoteCompiler {
 		// it does not memoize it.
 		for (int c = chunks.size() - 1; c >= 0; c--) {
 			int[] chunk = chunks.get(c);
-			String methodName = "_ql$" + ctx.nextOutlinedBodyId[0]++;
-			String desc = "(Ljava/lang/Object;)Ljava/lang/Object;";
-			Utf8Entry nameUtf8 = ctx.cp.utf8Entry(methodName);
-			Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc);
-			MethodRefEntry ref = JvmEmitHelper.selfMethod(ctx, className, methodName, desc);
-			JvmLispCompiler.Ctx builder = ctx.ctxBuilder.build();
-			builder.evalStoreRef = ctx.evalStoreRef;
-			builder.nextLocal = 1;
-			builder.maxLocals = 1;
-			builder.body.aload(0);
-			emitSpineCells(cars, chunk[0], chunk[1], builder, className);
-			builder.body.areturn();
-			ctx.outlinedBodies.add(new JvmBodyOutliner.OutlinedBody(methodName, nameUtf8, descUtf8, builder));
-			ctx.body.invokestatic(ref);
+			emitBuilderCall("Ljava/lang/Object;", ctx, className,
+					builder -> emitSpineCells(cars, chunk[0], chunk[1], builder, className));
 		}
 	}
 
@@ -565,29 +653,51 @@ final class JvmQuoteCompiler {
 	 * in a method changes.
 	 */
 	private static List<int[]> spineChunks(List<LispVal> cars) {
-		int total = 0;
+		int[] starts = new int[cars.size()];
 		int[] sizes = new int[cars.size()];
 		for (int i = 0; i < cars.size(); i++) {
+			starts[i] = i;
 			sizes[i] = CELL_BYTES + estimateQuoted(cars.get(i));
-			total += sizes[i];
 		}
-		if (total <= 2 * QUOTE_CHUNK_BUDGET) {
-			return List.of(new int[] { 0, cars.size() });
+		return chunks(starts, sizes, cars.size());
+	}
+
+	/**
+	 * {@return the {@code [from, to)} ranges of an array's elements, one per builder
+	 * method} A run stays whole: the cuts fall between {@link LiteralArrayRuns} builds.
+	 */
+	private static List<int[]> arrayChunks(LispVal[] data) {
+		int[] starts = new int[data.length];
+		int[] sizes = new int[data.length];
+		int builds = 0;
+		int run;
+		for (int i = 0; i < data.length; i += run) {
+			run = LiteralArrayRuns.length(data, i);
+			starts[builds] = i;
+			sizes[builds++] = ((run == 1) ? ADD_BYTES : RUN_BYTES) + estimateQuoted(LiteralArrayRuns.element(data, i));
+		}
+		return chunks(Arrays.copyOf(starts, builds), sizes, data.length);
+	}
+
+	// starts[i] is where the i-th piece begins and sizes[i] what it costs.
+	private static List<int[]> chunks(int[] starts, int[] sizes, int end) {
+		if (Arrays.stream(sizes).limit(starts.length).sum() <= 2 * QUOTE_CHUNK_BUDGET) {
+			return List.of(new int[] { 0, end });
 		}
 		List<int[]> chunks = new ArrayList<>();
 		int start = 0;
 		int running = 0;
-		for (int i = 0; i < cars.size(); i++) {
+		for (int i = 0; i < starts.length; i++) {
 			running += sizes[i];
-			// Cut AFTER the element that crossed, so a single oversized car (a nested
+			// Cut AFTER the piece that crossed, so a single oversized car (a nested
 			// literal, which chunks itself) still lands in a chunk of its own.
-			if (running >= QUOTE_CHUNK_BUDGET && i + 1 < cars.size()) {
-				chunks.add(new int[] { start, i + 1 });
-				start = i + 1;
+			if (running >= QUOTE_CHUNK_BUDGET && i + 1 < starts.length) {
+				chunks.add(new int[] { start, starts[i + 1] });
+				start = starts[i + 1];
 				running = 0;
 			}
 		}
-		chunks.add(new int[] { start, cars.size() });
+		chunks.add(new int[] { start, end });
 		return chunks;
 	}
 
@@ -608,9 +718,12 @@ final class JvmQuoteCompiler {
 			return size + estimateQuoted(rest);
 		}
 		if (val instanceof LispArray array) {
+			LispVal[] data = array.data();
 			int size = 16;
-			for (LispVal element : array.data()) {
-				size += 8 + estimateQuoted(element);
+			int run;
+			for (int i = 0; i < data.length; i += run) {
+				run = LiteralArrayRuns.length(data, i);
+				size += 8 + estimateQuoted(LiteralArrayRuns.element(data, i));
 			}
 			return size;
 		}
