@@ -4675,6 +4675,21 @@ public final class LispNames {
 	public static final String MACRO_EXPANDER_STUB = "%MACRO-EXPANDER-STUB";
 
 	/**
+	 * The run-time {@code (setf macro-function)} of the compile paths:
+	 * {@code (%set-macro-function name function)} makes {@link #MACRO_FUNCTION} answer
+	 * {@code function} for {@code name} from then on. What was compiled is already
+	 * expanded, so no call site changes. A write the expansion pass consumed never gets
+	 * here.
+	 */
+	public static final String SET_MACRO_FUNCTION = "%SET-MACRO-FUNCTION";
+
+	/**
+	 * The compile paths' alist of {@link #SET_MACRO_FUNCTION} writes, name to function,
+	 * consulted by {@link #MACRO_FUNCTION} first.
+	 */
+	public static final String MACRO_FUNCTION_WRITES = "%MACRO-FUNCTION-WRITES%";
+
+	/**
 	 * The {@code compiled-function-p} standard function: a lite prelude stub returning
 	 * nil.
 	 */

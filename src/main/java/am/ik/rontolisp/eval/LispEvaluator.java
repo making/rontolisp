@@ -12439,7 +12439,7 @@ public final class LispEvaluator {
 	 * has no expander object to share.
 	 * @param alias the new name
 	 * @param target the existing macro's name
-	 * @return the alias name symbol
+	 * @return the function the new name now answers, what a setf of it answers
 	 */
 	private LispVal aliasMacroFunction(String alias, String target) {
 		java.util.Map.Entry<String, UserMacro> macro = lookupUserMacro(target);
@@ -12462,7 +12462,8 @@ public final class LispEvaluator {
 			throw new LispEvalException("setf " + LispNames.MACRO_FUNCTION + ": " + target
 					+ " is not a macro (only a macro can be aliased)");
 		}
-		return new LispSymbol(alias);
+		return apply(this.globalEnv.lookupFunction(LispNames.MACRO_FUNCTION), List.of(new LispSymbol(alias)),
+				this.globalEnv);
 	}
 
 	/**

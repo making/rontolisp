@@ -819,7 +819,8 @@ no macro table, so `macro-function` answers
 `#'%macro-expander-stub`: non-nil, and a signal when CALLED. The program's own macro names
 cannot be in a static table, so `UserMacroExpander.emitMacroFunctionTable` APPENDS
 `(defun macro-function (symbol &optional environment) (%macro-fn symbol '(names...)))` when the
-program names `macro-function` at all, suppressing the prelude entry.
+program names `macro-function` at all, suppressing the prelude entry. A program that runs a
+`(setf macro-function)` gets one reading the writes first (`.kb/defmacro-backquote.md`).
 
 **The VALUE `macro-function` answers is a function of EXACTLY two arguments** (CLHS 3.2.1: the
 form and the environment) — `macro-function` itself takes an optional environment for the

@@ -741,15 +741,21 @@ public final class UserMacroExpander {
 	 * {@code progn}, {@code locally} or {@code eval-when} it became.
 	 */
 	private static LispVal expandTopLevel(LispVal form, LispEvaluator macroEval) {
-		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
-				&& macroEval.isUserMacro(sym.name())) {
-			form = foldNativeExpansion(SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons)));
-		}
+		form = expandMacroCall(form, macroEval);
 		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
 			return form;
 		}
 		int from = topLevelMembersFrom(head);
 		return from < 0 ? form : expandTopLevelMembers(cons, cons.toList(), from, macroEval, false);
+	}
+
+	// A macro call expanded until it is not one; any other form unchanged.
+	private static LispVal expandMacroCall(LispVal form, LispEvaluator macroEval) {
+		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
+				&& macroEval.isUserMacro(sym.name())) {
+			form = foldNativeExpansion(SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons)));
+		}
+		return form;
 	}
 
 	// Where the members of a top-level form headed by this operator start, or -1 for an
@@ -873,7 +879,8 @@ public final class UserMacroExpander {
 	 */
 	private static void emitMacroFunctionTable(LispEvaluator macroEval, List<LispVal> result) {
 		List<String> macroNames = macroEval.userMacroNames();
-		if (macroNames.isEmpty() || result.stream().noneMatch(UserMacroExpander::usesMacroIntrospection)
+		boolean writes = LispMacroExpander.usesRuntimeSetfMacroFunction(result);
+		if ((macroNames.isEmpty() && !writes) || result.stream().noneMatch(UserMacroExpander::usesMacroIntrospection)
 				|| result.stream().anyMatch(UserMacroExpander::definesMacroFunction)) {
 			return;
 		}
@@ -882,12 +889,46 @@ public final class UserMacroExpander {
 			table.append(table.isEmpty() ? "" : " ")
 				.append(PackageRegistry.splitQualified(name) == null ? LispNames.CL_USER_PKG + "::" + name : name);
 		}
-		for (LispVal form : LispReader.readAllFromString("(defun " + LispNames.MACRO_FUNCTION
-				+ " (symbol &optional environment) (" + LispNames.MACRO_FN_INTERNAL + " symbol '(" + table + ")))",
-				Features.INTERPRETER)) {
+		String lookup = "(" + LispNames.MACRO_FN_INTERNAL + " symbol '(" + table + "))";
+		StringBuilder source = new StringBuilder("(defun " + LispNames.MACRO_FUNCTION
+				+ " (symbol &optional environment) " + (writes ? "(let ((written (assoc symbol "
+						+ LispNames.MACRO_FUNCTION_WRITES + "))) (if written (cdr written) " + lookup + "))" : lookup)
+				+ ")");
+		if (writes) {
+			// A function the program wrote exists, so these two can run it.
+			if (result.stream().anyMatch(form -> mentions(form, LispNames.MACROEXPAND_1))
+					&& result.stream().noneMatch(form -> definesFunction(form, LispNames.MACROEXPAND_1))) {
+				source.append(MACROEXPAND_1_WITH_WRITES);
+			}
+			if (result.stream().anyMatch(form -> mentions(form, LispNames.MACROEXPAND))
+					&& result.stream().noneMatch(form -> definesFunction(form, LispNames.MACROEXPAND))) {
+				source.append(MACROEXPAND_WITH_WRITES);
+			}
+		}
+		for (LispVal form : LispReader.readAllFromString(source.toString(), Features.INTERPRETER)) {
 			result.add(requalifyShadowedClNames(form, macroEval));
 		}
 	}
+
+	/** The prelude's {@code macroexpand-1}, for a program writing macro functions. */
+	private static final String MACROEXPAND_1_WITH_WRITES = """
+			(defun macroexpand-1 (form &optional environment)
+			  (let ((written (if (consp form) (assoc (car form) %macro-function-writes%) nil)))
+			    (cond (written (values (funcall (cdr written) form environment) t))
+			          ((and (consp form) (macro-function (car form)))
+			           (error "macroexpand-1: a compiled program cannot expand a macro at run time"))
+			          (t (values form nil)))))
+			""";
+
+	/** The prelude's {@code macroexpand}, for a program writing macro functions. */
+	private static final String MACROEXPAND_WITH_WRITES = """
+			(defun macroexpand (form &optional environment)
+			  (let ((written (if (consp form) (assoc (car form) %macro-function-writes%) nil)))
+			    (cond (written (values (macroexpand (funcall (cdr written) form environment) environment) t))
+			          ((and (consp form) (macro-function (car form)))
+			           (error "macroexpand: a compiled program cannot expand a macro at run time"))
+			          (t (values form nil)))))
+			""";
 
 	/**
 	 * Whether the form names one of the run-time macro-table readers anywhere (a call,
@@ -1746,14 +1787,8 @@ public final class UserMacroExpander {
 		// (flet () (defmacro ...) ... 'name).
 		if (LispNames.LET.equals(name) || LispNames.LET_STAR.equals(name) || LispNames.FLET.equals(name)
 				|| LispNames.LABELS.equals(name)) {
-			List<LispVal> letParts = cons.toList();
-			if (letParts.size() < 3 || !isMacroDefinition(letParts.get(2))) {
+			if (!bodyOnlyDefinesMacros(cons.toList())) {
 				return form;
-			}
-			for (int i = 3; i < letParts.size(); i++) {
-				if (!isMacroDefinition(letParts.get(i)) && !isOperator(letParts.get(i), LispNames.QUOTE)) {
-					return form;
-				}
 			}
 			replayMacroDefinitions(cons, macroEval);
 			return null;
@@ -1824,6 +1859,55 @@ public final class UserMacroExpander {
 	private static boolean isMacroDefinition(LispVal form) {
 		return isOperator(form, LispNames.DEFMACRO) || isExpansionTimeDefinition(form)
 				|| (LispMacroExpander.isSetfMacroFunctionForm(form) && ((LispCons) form).toList().size() == 3);
+	}
+
+	// Whether the body of a let or flet is macro definitions and nothing else that has an
+	// effect: the form is consumed whole, closures and all.
+	private static boolean bodyOnlyDefinesMacros(List<LispVal> binderParts) {
+		if (binderParts.size() < 3 || !isMacroDefinition(binderParts.get(2))) {
+			return false;
+		}
+		for (int i = 3; i < binderParts.size(); i++) {
+			if (!isMacroDefinition(binderParts.get(i)) && !isOperator(binderParts.get(i), LispNames.QUOTE)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Rebuilds a let or flet around its bound part, walking the body. At top level a body
+	 * of macro definitions stays as it is, because {@link #stripDefmacroDefinitions}
+	 * replays the form and the macro-time evaluator expands it as it runs; any other body
+	 * is ordinary code, a {@code (setf (macro-function ...))} in it included.
+	 */
+	private static LispVal rebuildBinder(LispCons cons, List<LispVal> parts, LispVal bound, LispEvaluator macroEval,
+			boolean topLevel) {
+		if (!topLevel) {
+			return rebuild(cons, parts, 2, macroEval, bound);
+		}
+		List<LispVal> expanded = new ArrayList<>(parts);
+		for (int i = 2; i < expanded.size(); i++) {
+			if (expanded.get(i) instanceof LispCons member) {
+				// What expandAll keeps track of: the macro call is where a warning or a
+				// failure of its expansion is placed.
+				LispCons enclosing = SourceProvenance.enterForm(member);
+				try {
+					expanded.set(i, expandMacroCall(member, macroEval));
+				}
+				catch (RuntimeException ex) {
+					throw SourceProvenance.noteFailure(member, ex);
+				}
+				finally {
+					SourceProvenance.leaveForm(enclosing);
+				}
+			}
+		}
+		if (!bodyOnlyDefinesMacros(expanded)) {
+			return rebuild(cons, expanded, 2, macroEval, bound);
+		}
+		expanded.set(1, bound);
+		return LispCons.rebuiltList(cons, expanded);
 	}
 
 	/**
@@ -1922,7 +2006,7 @@ public final class UserMacroExpander {
 	}
 
 	// A (setf (macro-function ...) ...) anywhere: what closes over one at top level is
-	// consumed by this pass, and the compilers refuse the rest.
+	// consumed by this pass, and its value form walks with the code around it elsewhere.
 	private static boolean writesMacroFunction(LispVal form) {
 		while (form instanceof LispCons cons) {
 			if (LispMacroExpander.isSetfMacroFunctionForm(cons) || writesMacroFunction(cons.car())) {
@@ -2056,7 +2140,9 @@ public final class UserMacroExpander {
 				return expandTopLevelMembers(cons, parts, members, macroEval, true);
 			}
 			switch (sym.name()) {
-				case LispNames.LET, LispNames.LET_STAR, LispNames.DO, LispNames.DO_STAR:
+				case LispNames.LET, LispNames.LET_STAR:
+					return rebuildBinder(cons, parts, expandBindings(parts.get(1), macroEval), macroEval, topLevel);
+				case LispNames.DO, LispNames.DO_STAR:
 					// (let ((name init)...) body...) / (do ((var init step)...) (end
 					// result...) body...): binding names stay, init/step/end/result and
 					// the body are expressions.
@@ -2198,7 +2284,7 @@ public final class UserMacroExpander {
 							newDefs.add(def);
 						}
 					}
-					return rebuild(cons, parts, 2, macroEval, properList(newDefs));
+					return rebuildBinder(cons, parts, properList(newDefs), macroEval, topLevel);
 				}
 				case LispNames.MACROLET: {
 					// (macrolet ((name lambda-list body...)...) body...): register the
@@ -2347,12 +2433,18 @@ public final class UserMacroExpander {
 				}
 				case LispNames.SETF: {
 					if (LispMacroExpander.isSetfMacroFunctionForm(cons)) {
-						// A write to the macro table is a macro definition, not an
-						// expression: leave it verbatim for stripDefmacroDefinitions --
-						// and the error it gets where a top-level form does not leave it
-						// -- and for the macro-time evaluator, which expands its value
-						// as it runs. The other pairs of a setf are expressions.
-						return parts.size() > 3 ? expandAll(LispMacroExpander.splitSetfPairs(cons), macroEval) : cons;
+						// A write at top level is a macro definition, not an expression:
+						// leave it verbatim for stripDefmacroDefinitions and for the
+						// macro-time evaluator, which expands its value as it runs.
+						// Anywhere else the program runs it, and the macro-time evaluator
+						// only if the form replays (a compile-time eval-when), so its
+						// subforms are expressions of the code around them, and so are
+						// the
+						// other pairs of a setf.
+						if (parts.size() > 3) {
+							return expandAll(LispMacroExpander.splitSetfPairs(cons), macroEval, topLevel);
+						}
+						return topLevel ? cons : rebuild(cons, parts, 1, macroEval);
 					}
 					if (hasUserSetfPlace(cons, macroEval)) {
 						// The place's accessor may ALSO carry a compiler macro, and

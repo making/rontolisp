@@ -28,7 +28,9 @@ A COMPILED program has no macro table left (macros are fully expanded before the
 (twice 21) ; => 42
 ```
 
-A compiled program has no macro table, so there the write happens at compile time and leaves nothing in the program, like a `defmacro`. The value form runs at compile time and sees what is defined by then. The form must be at top level, as a member of a `progn` or `eval-when` (a macro may build it), or the body of a `let` or `flet` around it. A value form that fails stops the compile, naming the form, and so does a write anywhere else, such as in a function body. The interpreter accepts it anywhere.
+A compiled program has no macro table, so at top level, as a member of a `progn` or `eval-when` (a macro may build it), or as the body of a `let` or `flet` around it, the write happens at compile time and leaves nothing in the program, like a `defmacro`. The value form runs at compile time and sees what is defined by then, and a value form that fails stops the compile, naming the form.
+
+A write anywhere else, such as in a function body, runs when the program does, with the refusals above plus one for a `cl` name. Every call a compiled program makes was expanded when it was compiled, as under `compile-file`, so the calls do not change: `macro-function` answers the function from then on, `macroexpand` and `macroexpand-1` run it, and a call of a name only such a write defines is an undefined function. On the interpreter the call expands. Lite: on a compiled program `fboundp` does not answer for such a name, and `fmakunbound` does not take a macro from `macro-function`.
 
 `(setf (macro-function 'new) (macro-function 'existing))` gives an existing macro a second name, so both names expand identically from then on: a `defmacro`-defined macro shares its expander, and a built-in macro such as `incf` is reached by rewriting the call. The new name may be a keyword (`(setf (macro-function :+) (macro-function 'incf))`). A name that is not a macro signals an error.
 
