@@ -11417,7 +11417,8 @@ public final class LispMacroExpander {
 	 * {@code pprint-newline}'s business, not this macro's: see
 	 * {@code .kb/pretty-printer.md}. {@code :per-line-prefix} is accepted as a synonym of
 	 * {@code :prefix} (no line ever gets a prefix, because the block never breaks a line
-	 * by itself).
+	 * by itself). An object spelled as a literal list has no atom arm, so it does not
+	 * reach {@code write}: {@link #mayPprintLogicalBlockOfAnAtom}.
 	 * @param cons the pprint-logical-block expression
 	 * @return the expanded expression
 	 */
@@ -11458,11 +11459,46 @@ public final class LispMacroExpander {
 			listArm.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), suffix, stream)));
 		}
 		listArm.add(LispNil.INSTANCE);
+		if (isLiteralList(object)) {
+			return listToCons(listArm);
+		}
 		LispVal atomArm = listToCons(List.of(new LispSymbol(LispNames.PROGN), listToCons(
 				List.of(new LispSymbol(LispNames.WRITE), objectVar, new LispSymbol(LispNames.STREAM_KEYWORD), stream)),
 				LispNil.INSTANCE));
 		return makeLet(PLB_OBJECT_VAR, object,
 				makeIf(callOf(LispNames.LISTP, objectVar), listToCons(listArm), atomArm));
+	}
+
+	private static boolean isLiteralList(LispVal form) {
+		LispVal datum = quotedDatum(form);
+		return form instanceof LispNil || datum instanceof LispNil || datum instanceof LispCons;
+	}
+
+	/**
+	 * Whether the program holds a {@code pprint-logical-block} whose object may be an
+	 * atom, the shape {@link #expandPprintLogicalBlock} expands to a {@code write} call.
+	 * That expansion runs inside the expression compilers, so the prelude selects
+	 * {@code write} on this surface fact.
+	 * @param program the top-level forms
+	 * @return whether a block can print its object with {@code write}
+	 */
+	public static boolean mayPprintLogicalBlockOfAnAtom(List<LispVal> program) {
+		return program.stream().anyMatch(LispMacroExpander::mayPprintLogicalBlockOfAnAtom);
+	}
+
+	private static boolean mayPprintLogicalBlockOfAnAtom(LispVal val) {
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.PPRINT_LOGICAL_BLOCK.equals(memberName(head.name()))
+					&& cons.cdr() instanceof LispCons args && args.car() instanceof LispCons spec
+					&& spec.cdr() instanceof LispCons object && !isLiteralList(object.car())) {
+				return true;
+			}
+			if (mayPprintLogicalBlockOfAnAtom(cons.car())) {
+				return true;
+			}
+			val = cons.cdr();
+		}
+		return false;
 	}
 
 	/**

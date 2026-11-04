@@ -32,6 +32,13 @@ conversion runs), `*print-pretty*` (mandatory break), and the seven the `%print-
   handed to it (esrap's idiom); `pprint-dispatch` -> `#'%pprint-dispatch-default`, else nil.
 - `pprint-logical-block`: `LispMacroExpander.expandPprintLogicalBlock` in `CL_MACROS`, wired into
   evaluator + both compilers + `FreeVarAnalyzer`; an ATOM prints with `write` and skips the body.
+  The compilers build that call after the prelude splice, so a block whose object may be an atom selects
+  `write` and roots it in the pruner (`LispMacroExpander.mayPprintLogicalBlockOfAnAtom`,
+  `LispPreludeLibrary.referencedBySurfaceForm`, `SYNTHESIZED_ENTRIES`), and the program pays for the
+  renderer below like any `write` user. An object spelled as a list (`nil`, `'(...)`, lisp-namespace's
+  `print-object`) expands without the arm and pays nothing. ci-spec
+  `pprint-logical-block-of-an-atom-in-a-program-not-naming-write`, standalone because the concatenated
+  corpus names `write`.
 - `pprint-newline :mandatory` and `~:@_`: real breaks, gated on `*print-pretty*`.
 - `~<...~>` / `~<...~:>` (`.kb/format.md`): SECTION rules real.
 

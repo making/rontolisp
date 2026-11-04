@@ -5465,6 +5465,12 @@ public final class LispPreludeLibrary {
 		if (LispNames.SET_MACRO_FUNCTION.equals(entry)) {
 			return am.ik.rontolisp.macro.LispMacroExpander.usesRuntimeSetfMacroFunction(program);
 		}
+		// write: LispMacroExpander.expandPprintLogicalBlock's atom arm calls it, inside
+		// the expression compilers. The arm exists unless the object is spelled as a
+		// list.
+		if (LispNames.WRITE.equals(entry)) {
+			return am.ik.rontolisp.macro.LispMacroExpander.mayPprintLogicalBlockOfAnAtom(program);
+		}
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
 			return referencesName(program, LispNames.MAKE_BROADCAST_STREAM, canonical)
 					|| referencesName(program, LispNames.BROADCAST_STREAM_STREAMS, canonical);

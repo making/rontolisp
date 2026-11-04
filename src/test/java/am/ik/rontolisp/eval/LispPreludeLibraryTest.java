@@ -232,6 +232,15 @@ class LispPreludeLibraryTest {
 		assertThat(splicedNames("(print (cl:equalp \"a\" \"A\"))")).contains("EQUALP");
 		// A prelude defun pulled in only by ANOTHER prelude defun rides along.
 		assertThat(splicedNames("(print (string< \"a\" \"b\"))")).contains("STRING<", "%STRING-COMPARE");
+		// The atom arm of pprint-logical-block calls write from inside the expression
+		// compilers, so the surface form is the only reference this pass can see.
+		assertThat(splicedNames("(defun f (o s) (pprint-logical-block (s o) (princ 1 s)))")).contains("WRITE",
+				"%PRINT-CASED");
+		// An object spelled as a list has no atom arm, and carries no renderer.
+		for (String list : List.of("nil", "'nil", "'(1 2)")) {
+			assertThat(splicedNames("(defun f (s) (pprint-logical-block (s " + list + ") (princ 1 s)))")).as(list)
+				.doesNotContain("WRITE", "%PRINT-CASED");
+		}
 	}
 
 	@Test
