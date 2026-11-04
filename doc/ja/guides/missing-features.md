@@ -12,7 +12,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | 機能 | 状況 |
 | --- | --- |
 | リスタート | 利用可。デバッガ統合（`break`、`*debugger-hook*`）とコンディションとの関連付けはありません |
-| `&environment` | `defmacro` のラムダリストで受け付けますが、常に `nil` に束縛されます（マクロ展開環境オブジェクトは存在しません）。`&whole` は `defmacro`・`destructuring-bind` の双方で動作します |
+| `&environment` | `defmacro` のラムダリストで受け付け、呼び出し位置でスコープにあるシンボルマクロを保持して `macroexpand` から読めます。`macrolet` のマクロはこれを介さず nil の環境でも見つかり、`with-slots`/`with-accessors` の名前は含まれません。`&whole` は `defmacro`・`destructuring-bind` の双方で動作します |
 | `loop`（拡張版） | 一部対応（後述） |
 | CLOS | 一部対応（静的サブセット + 定義時 MOP サブセット） |
 | `defstruct` の `:include` | 単一継承のみ。スロットのデフォルトを上書きする `(:include parent (slot default) ...)` は利用可能 |

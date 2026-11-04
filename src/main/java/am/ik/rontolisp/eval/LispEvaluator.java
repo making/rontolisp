@@ -385,17 +385,12 @@ public final class LispEvaluator {
 	private final java.util.Map<String, UserMacro> compilerMacros = new java.util.HashMap<>();
 
 	/**
-	 * One-step user-macro expander handed to
-	 * {@link LispMacroExpander#expandSymbolMacrolet(LispCons, LispMacroExpander.UserMacroHook)}:
-	 * the substitution walk must expand a user macro it meets before substituting into
-	 * its expansion (a nested trivia {@code match} inside a symbol-macrolet body
-	 * references the macro names only through its own expansion). Consults the live
-	 * table, so {@code macrolet}-local macros active at evaluation time are seen too.
+	 * The symbol macros in scope where {@link UserMacroExpander#expandAll} is walking on
+	 * this thread, null outside a scope it narrowed or extended -- when the only ones are
+	 * {@link #globalSymbolMacros}. A macro's {@code &environment} parameter reads it; a
+	 * macro body runs without one, in the null lexical environment it has in CL.
 	 */
-	private LispMacroExpander.UserMacroHook symbolMacroUserMacroHook(Environment env) {
-		return form -> form.car() instanceof LispSymbol op && this.userMacros.containsKey(op.name())
-				? expandUserMacro(form, env) : null;
-	}
+	private final ThreadLocal<java.util.Map<String, LispVal>> symbolMacroWalkScope = new ThreadLocal<>();
 
 	/**
 	 * Memo of {@link #expandUserMacro}, keyed by the CALL SITE's cons identity. CL
@@ -474,18 +469,33 @@ public final class LispEvaluator {
 
 	/**
 	 * A user macro: required parameters, an optional {@code &rest}/{@code &body}
-	 * parameter, the body forms, and the environment captured at definition time. A macro
-	 * a {@code (setf macro-function)} installed has none of those: it is the function,
+	 * parameter, the body forms, the environment captured at definition time, and the
+	 * {@code &environment} parameter when it has one. A macro a
+	 * {@code (setf macro-function)} installed has none of those: it is the function,
 	 * called with the whole form and an environment.
 	 */
 	private record UserMacro(List<LispSymbol> required, @Nullable LispSymbol rest, List<LispVal> body, Environment env,
-			String definitionPackage, @Nullable LispVal expander) {
+			String definitionPackage, @Nullable LispSymbol environment, @Nullable LispVal expander) {
 
 		UserMacro(List<LispSymbol> required, @Nullable LispSymbol rest, List<LispVal> body, Environment env,
 				String definitionPackage) {
-			this(required, rest, body, env, definitionPackage, null);
+			this(required, rest, body, env, definitionPackage, null, null);
 		}
 
+		UserMacro withEnvironment(LispSymbol parameter) {
+			return new UserMacro(this.required, this.rest, this.body, this.env, this.definitionPackage, parameter,
+					this.expander);
+		}
+
+	}
+
+	/**
+	 * What an {@code &environment} parameter holds where a symbol macro is in scope (nil
+	 * elsewhere): the name -> expansion table {@code macroexpand} answers from. The
+	 * expansions are the objects the bindings hold, never copies: a macro may write into
+	 * one for a later macro to read (3bz's {@code state-machine}).
+	 */
+	private record SymbolMacroEnvironment(java.util.Map<String, LispVal> macros) {
 	}
 
 	private SourceLoader sourceLoader = SourceLoader.fileSystem();
@@ -1551,23 +1561,23 @@ public final class LispEvaluator {
 		// macroexpand-1/macroexpand live on the evaluator (not Environment) because they
 		// need the user macro table. On the compile path, calls with a literal quoted
 		// argument are folded to their expansion by UserMacroExpander.
-		// The optional second argument is CL's macro-expansion environment; there is no
-		// lexical macro environment to consult (macrolet is expanded away before any
-		// body runs), so it is accepted and ignored -- which is what lets a portable
-		// code walker's (macroexpand form env) load on every backend.
+		// The optional second argument is CL's macro-expansion environment: nil, or what
+		// an &environment parameter was bound to (SymbolMacroEnvironment).
 		this.globalEnv.defineFunction(LispNames.MACROEXPAND_1, new LispFunction(LispNames.MACROEXPAND_1, args -> {
 			if (args.isEmpty() || args.size() > 2) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.MACROEXPAND_1 + " expects 1 or 2 arguments, got " + args.size());
 			}
-			return expandedWithFlag(args.get(0), macroexpand1(args.get(0)));
+			return expandedWithFlag(args.get(0),
+					macroexpand1(args.get(0), args.size() == 2 ? args.get(1) : LispNil.INSTANCE));
 		}, true));
 		this.globalEnv.defineFunction(LispNames.MACROEXPAND, new LispFunction(LispNames.MACROEXPAND, args -> {
 			if (args.isEmpty() || args.size() > 2) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.MACROEXPAND + " expects 1 or 2 arguments, got " + args.size());
 			}
-			return expandedWithFlag(args.get(0), macroexpand(args.get(0)));
+			return expandedWithFlag(args.get(0),
+					macroexpand(args.get(0), args.size() == 2 ? args.get(1) : LispNil.INSTANCE));
 		}, true));
 		// macro-function: the expander of a macro NAME, or nil for a function, a special
 		// operator and an unknown name -- what a caller asking "can I apply this" reads.
@@ -1575,9 +1585,7 @@ public final class LispEvaluator {
 		// the answer is the macro table this evaluator holds: a user defmacro, a macrolet
 		// body's local macro, and the built-in expander LispMacroExpander dispatches on.
 		// The returned function is the real single-step expander, callable as
-		// (funcall f form env) like CL's; env is accepted and ignored (there is no
-		// lexical macro environment to consult -- macrolet is expanded away before any
-		// body runs, so the global answer is the only one).
+		// (funcall f form env) like CL's, env reaching the macro's &environment.
 		this.globalEnv.defineFunction(LispNames.MACRO_FUNCTION, new LispFunction(LispNames.MACRO_FUNCTION, args -> {
 			if (args.isEmpty() || args.size() > 2) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
@@ -1604,8 +1612,9 @@ public final class LispEvaluator {
 				// holds by the time it runs: stored back under that name, it must not
 				// expand through itself.
 				LispVal form = macroCallForm(name, callArgs.get(0));
-				return macro != null && form instanceof LispCons call ? expandMacroCall(name, macro, call, null)
-						: macroexpand1(form);
+				return macro != null && form instanceof LispCons call
+						? inSymbolMacroEnvironment(callArgs.get(1), () -> expandMacroCall(name, macro, call, null))
+						: macroexpand1(form, callArgs.get(1));
 			});
 		}));
 		// compiler-macro-function: macro-function's twin over the define-compiler-macro
@@ -1629,7 +1638,8 @@ public final class LispEvaluator {
 						if (macro == null || !(macroCallForm(name, callArgs.get(0)) instanceof LispCons form)) {
 							return callArgs.get(0);
 						}
-						return expandMacroCall(name, macro, form, null);
+						return inSymbolMacroEnvironment(callArgs.get(1),
+								() -> expandMacroCall(name, macro, form, null));
 					});
 				}));
 		this.globalEnv.defineFunction(LispNames.SYMBOL_FUNCTION, new LispFunction(LispNames.SYMBOL_FUNCTION, args -> {
@@ -10069,11 +10079,7 @@ public final class LispEvaluator {
 			case LispNames.PROG_STAR:
 				return builtinMacroExpansion(cons, c -> LispMacroExpander.expandProg(c, true));
 			case LispNames.SYMBOL_MACROLET:
-				// The substitution walk expands a user macro it meets before substituting
-				// into its expansion (macro arguments may be data, the expansion is
-				// code),
-				// so it gets this evaluator's one-step expander as the hook.
-				return LispMacroExpander.expandSymbolMacrolet(cons, symbolMacroUserMacroHook(env));
+				return expandSymbolMacrolet(cons, env);
 			case LispNames.BYTE:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandByte);
 			case LispNames.BYTE_SIZE:
@@ -11357,6 +11363,9 @@ public final class LispEvaluator {
 	}
 
 	private LispVal expandCompilerMacro(LispCons form, @Nullable Environment site) {
+		if (form.car() instanceof LispSymbol op && expandsPerScope(this.compilerMacros.get(op.name()))) {
+			return computeCompilerMacroExpansion(form, site);
+		}
 		LispVal cached = this.compilerMacroExpansions.get(form);
 		if (cached != null) {
 			return cached;
@@ -11379,8 +11388,7 @@ public final class LispEvaluator {
 		boolean savedMute = this.out.muted;
 		this.out.muted = true;
 		try {
-			LispVal expansion = withoutDebugger(
-					() -> expandMacroCall(op.name(), macro, form, site == null ? null : site.lexicalPackage()));
+			LispVal expansion = withoutDebugger(() -> expandMacroCall(op.name(), macro, form, site));
 			return expansion.print().equals(form.print()) ? form : expansion;
 		}
 		catch (RuntimeException | StackOverflowError ex) {
@@ -11417,8 +11425,7 @@ public final class LispEvaluator {
 	 * wrapped in a {@code destructuring-bind} over an internal rest parameter (validated
 	 * eagerly by a dry-run expansion) so both macro-expansion consumers destructure
 	 * identically. An {@code &environment} parameter (legal anywhere at the top level of
-	 * a macro lambda list) is stripped first and bound to nil around the body -- there is
-	 * no environment object (see {@link LispNames#LAMBDA_ENVIRONMENT}).
+	 * a macro lambda list) is stripped first; {@link #expandMacroCall} binds it.
 	 */
 	private UserMacro makeUserMacro(String op, LispSymbol name, LispVal paramForm, List<LispVal> body,
 			Environment env) {
@@ -11443,16 +11450,7 @@ public final class LispEvaluator {
 			for (int i = stripped.size() - 1; i >= 0; i--) {
 				strippedForm = new LispCons(stripped.get(i), strippedForm);
 			}
-			List<LispVal> letParts = new ArrayList<>();
-			letParts.add(new LispSymbol(LispNames.LET));
-			letParts.add(new LispCons(new LispCons(envVar, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)),
-					LispNil.INSTANCE));
-			letParts.addAll(body);
-			LispVal wrappedBody = LispNil.INSTANCE;
-			for (int i = letParts.size() - 1; i >= 0; i--) {
-				wrappedBody = new LispCons(letParts.get(i), wrappedBody);
-			}
-			return makeUserMacro(op, name, strippedForm, List.of(wrappedBody), env);
+			return makeUserMacro(op, name, strippedForm, body, env).withEnvironment(envVar);
 		}
 		// &whole var (first element, per CL; after the &environment strip so the two
 		// compose): bind var to the whole macro call form, (cons 'name args), and
@@ -11758,7 +11756,7 @@ public final class LispEvaluator {
 					"setf " + LispNames.MACRO_FUNCTION + " cannot redefine the standard operator " + sym.name());
 		}
 		putUserMacro(sym.name(), new UserMacro(List.of(), null, List.of(), this.globalEnv,
-				this.packageResolver.currentPackageName(), expander));
+				this.packageResolver.currentPackageName(), null, expander));
 		return expander;
 	}
 
@@ -12289,6 +12287,10 @@ public final class LispEvaluator {
 	}
 
 	private LispVal expandUserMacro(LispCons form, @Nullable Environment site) {
+		if (form.car() instanceof LispSymbol op && this.userMacros.get(op.name()) instanceof UserMacro scoped
+				&& expandsPerScope(scoped)) {
+			return expandMacroCall(op.name(), scoped, form, site);
+		}
 		synchronized (this.userMacroExpansions) {
 			LispVal cached = this.userMacroExpansions.get(form);
 			if (cached != null) {
@@ -12302,7 +12304,7 @@ public final class LispEvaluator {
 		}
 		// Outside the monitor: a macro body is a whole program, it re-enters this method
 		// for the macro calls inside it, and it may take the library load lock.
-		LispVal expansion = expandMacroCall(name, macro, form, site == null ? null : site.lexicalPackage());
+		LispVal expansion = expandMacroCall(name, macro, form, site);
 		synchronized (this.userMacroExpansions) {
 			if (this.userMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
 				this.userMacroExpansions.put(form, expansion);
@@ -12315,10 +12317,10 @@ public final class LispEvaluator {
 	 * Runs one macro expansion: binds the unevaluated argument forms to the macro's
 	 * parameters and evaluates its body. Shared by {@code defmacro} expansion and
 	 * {@link #expandCompilerMacro}, which differ only in which table the macro came from.
-	 * @param sitePackage the package the call site's code was read in, or {@code null}
-	 * for a call site outside every function and macro body
+	 * @param site the environment the interpreter is expanding the call in, or
+	 * {@code null} when it is walking the form rather than running it
 	 */
-	private LispVal expandMacroCall(String name, UserMacro macro, LispCons form, @Nullable String sitePackage) {
+	private LispVal expandMacroCall(String name, UserMacro macro, LispCons form, @Nullable Environment site) {
 		List<LispVal> args = macro.expander() != null ? List.of()
 				: form.cdr() instanceof LispCons argCons ? argCons.toList() : List.of();
 		if (args.size() < macro.required().size() || (macro.rest() == null && args.size() > macro.required().size())) {
@@ -12349,6 +12351,10 @@ public final class LispEvaluator {
 			}
 			dynamicParams = bindParameter(macro.rest().name(), restList, declared, macroEnv, dynamicParams);
 		}
+		if (macro.environment() != null) {
+			dynamicParams = bindParameter(macro.environment().name(), environmentAt(site), declared, macroEnv,
+					dynamicParams);
+		}
 		markDeclaredSpecials(declared, macroEnv);
 		// Common Lisp expands a macro while COMPILING the calling file, so *package* is
 		// that file's. The interpreter expands lazily instead, at call time, and only a
@@ -12361,14 +12367,20 @@ public final class LispEvaluator {
 		// call
 		// site keeps the current package (trivia's lispn:define-namespace).
 		String callerPackage = this.packageResolver.currentPackageName();
+		String sitePackage = site == null ? null : site.lexicalPackage();
 		String expansionPackage = sitePackage != null ? sitePackage : callerPackage;
 		boolean swapPackage = !callerPackage.equals(expansionPackage);
 		if (swapPackage) {
 			this.packageResolver.setCurrentPackage(expansionPackage);
 		}
+		LispVal expanderEnvironment = macro.expander() == null ? LispNil.INSTANCE : environmentAt(site);
+		java.util.Map<String, LispVal> callerScope = this.symbolMacroWalkScope.get();
+		if (callerScope != null) {
+			this.symbolMacroWalkScope.remove();
+		}
 		try {
 			LispVal expansion = macro.expander() == null ? LispNil.INSTANCE
-					: applyGlobal(macro.expander(), List.of(form, LispNil.INSTANCE));
+					: applyGlobal(macro.expander(), List.of(form, expanderEnvironment));
 			for (LispVal bodyExpr : macro.body()) {
 				expansion = eval(bodyExpr, macroEnv);
 			}
@@ -12376,6 +12388,9 @@ public final class LispEvaluator {
 			return expansion;
 		}
 		finally {
+			if (callerScope != null) {
+				this.symbolMacroWalkScope.set(callerScope);
+			}
 			if (swapPackage) {
 				this.packageResolver.setCurrentPackage(callerPackage);
 			}
@@ -12433,9 +12448,26 @@ public final class LispEvaluator {
 	 * @return the expansion, or {@code form} unchanged
 	 */
 	public LispVal macroexpand1(LispVal form) {
+		return macroexpand1(form, LispNil.INSTANCE);
+	}
+
+	/**
+	 * {@link #macroexpand1(LispVal)} in the environment a macro's {@code &environment}
+	 * parameter holds: a symbol naming a symbol macro there answers the expansion object
+	 * itself, and a macro call sees it through its own {@code &environment}. The null
+	 * environment holds the global symbol macros only.
+	 * @param form the form to expand
+	 * @param environment nil or the value of an {@code &environment} parameter
+	 * @return the expansion, or {@code form} unchanged
+	 */
+	private LispVal macroexpand1(LispVal form, LispVal environment) {
+		if (form instanceof LispSymbol sym) {
+			LispVal expansion = symbolMacrosOf(environment).get(sym.name());
+			return expansion != null ? expansion : form;
+		}
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym) {
 			if (isUserMacro(sym.name())) {
-				return expandUserMacro(cons);
+				return inSymbolMacroEnvironment(environment, () -> expandUserMacro(cons));
 			}
 			if (!isMacroName(sym.name())) {
 				return form;
@@ -12458,12 +12490,136 @@ public final class LispEvaluator {
 	 * @return the full expansion of the top-level form
 	 */
 	public LispVal macroexpand(LispVal form) {
-		LispVal expanded = macroexpand1(form);
+		return macroexpand(form, LispNil.INSTANCE);
+	}
+
+	private LispVal macroexpand(LispVal form, LispVal environment) {
+		LispVal expanded = macroexpand1(form, environment);
 		while (expanded != form) {
 			form = expanded;
-			expanded = macroexpand1(form);
+			expanded = macroexpand1(form, environment);
 		}
 		return form;
+	}
+
+	/**
+	 * The symbol macros in scope at the form {@link UserMacroExpander#expandAll} is
+	 * walking.
+	 * @return the table, the global one outside a narrowed or extended scope; never to be
+	 * written
+	 */
+	java.util.Map<String, LispVal> symbolMacroScope() {
+		java.util.Map<String, LispVal> scope = this.symbolMacroWalkScope.get();
+		return scope != null ? scope : this.globalSymbolMacros;
+	}
+
+	/**
+	 * Sets what {@link #symbolMacroScope()} answers; the caller restores the previous
+	 * answer the same way.
+	 * @param scope the table
+	 */
+	void symbolMacroScope(java.util.Map<String, LispVal> scope) {
+		if (scope == this.globalSymbolMacros) {
+			this.symbolMacroWalkScope.remove();
+		}
+		else {
+			this.symbolMacroWalkScope.set(scope);
+		}
+	}
+
+	/**
+	 * Whether a call of the macro must be expanded every time it is reached: its
+	 * {@code &environment}, or the environment argument of its function, reads the walk's
+	 * scope, which may differ between two walks over one cons a macro spliced twice, so
+	 * the per-call-site memos neither read nor keep its answer there.
+	 */
+	private boolean expandsPerScope(@Nullable UserMacro macro) {
+		return macro != null && (macro.environment() != null || macro.expander() != null)
+				&& this.symbolMacroWalkScope.get() != null;
+	}
+
+	/**
+	 * What a macro's {@code &environment} parameter is bound to: nil where no symbol
+	 * macro exists, so a program without any sees exactly nil. A binder may have shadowed
+	 * every name in scope while a global one exists: that is an empty table, not nil,
+	 * which would mean the global ones.
+	 * @param site the environment the interpreter is expanding the call in, whose lexical
+	 * variables shadow the global symbol macros; {@code null} when the walk's scope
+	 * already says what is shadowed
+	 */
+	private LispVal environmentAt(@Nullable Environment site) {
+		java.util.Map<String, LispVal> macros = symbolMacroScope();
+		if (macros.isEmpty() && this.globalSymbolMacros.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		if (site != null) {
+			java.util.Set<String> shadowed = new java.util.HashSet<>();
+			for (String name : macros.keySet()) {
+				if (site.lookupOrNull(name) != null) {
+					shadowed.add(name);
+				}
+			}
+			macros = LispMacroExpander.symbolMacrosWithoutAll(macros, shadowed);
+		}
+		return new LispJavaObject(new SymbolMacroEnvironment(macros));
+	}
+
+	private java.util.Map<String, LispVal> symbolMacrosOf(LispVal environment) {
+		return environment instanceof LispJavaObject(Object ref) && ref instanceof SymbolMacroEnvironment given
+				? given.macros() : this.globalSymbolMacros;
+	}
+
+	/**
+	 * Runs an expansion with the macro's {@code &environment} seeing {@code environment}.
+	 */
+	private LispVal inSymbolMacroEnvironment(LispVal environment, java.util.function.Supplier<LispVal> expansion) {
+		java.util.Map<String, LispVal> caller = symbolMacroScope();
+		symbolMacroScope(symbolMacrosOf(environment));
+		try {
+			return expansion.get();
+		}
+		finally {
+			symbolMacroScope(caller);
+		}
+	}
+
+	/**
+	 * The expansion of a {@code symbol-macrolet} the interpreter is about to run: its
+	 * user macros expanded with the names in scope, then the substitution every backend
+	 * shares, once per call site like {@link #expandUserMacro}, whose memo drops with the
+	 * macro table the answer depends on. The body's calls are expanded in the package its
+	 * code was read in, as {@link #expandMacroCall} does for a call it reaches in a
+	 * function.
+	 */
+	private LispVal expandSymbolMacrolet(LispCons cons, Environment env) {
+		synchronized (this.userMacroExpansions) {
+			LispVal cached = this.userMacroExpansions.get(cons);
+			if (cached != null) {
+				return cached;
+			}
+		}
+		String callerPackage = this.packageResolver.currentPackageName();
+		String sitePackage = env.lexicalPackage();
+		boolean swapPackage = false;
+		if (sitePackage != null && !callerPackage.equals(sitePackage)) {
+			swapPackage = true;
+			this.packageResolver.setCurrentPackage(sitePackage);
+		}
+		LispVal expansion;
+		try {
+			expansion = LispMacroExpander.expandSymbolMacrolet((LispCons) UserMacroExpander.expandAll(cons, this));
+		}
+		finally {
+			if (swapPackage) {
+				this.packageResolver.setCurrentPackage(callerPackage);
+			}
+		}
+		synchronized (this.userMacroExpansions) {
+			if (this.userMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
+				this.userMacroExpansions.put(cons, expansion);
+			}
+		}
+		return expansion;
 	}
 
 	/**

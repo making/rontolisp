@@ -102,9 +102,10 @@ recurse through `__db<N>_g<i>`; a dotted tail normalizes to `&rest`.
 - **`&whole` works in BOTH forms**: first pattern element binds the whole source list and the
   rest destructures it again; in a `defmacro` lambda list `evalDefmacro` binds
   `(cons 'name args)` and forces the destructuring path.
-- **`&environment` in a MACRO lambda list is stripped and bound to nil** by `makeUserMacro`,
-  so a macro that merely PASSES it on works and one expecting a real environment does not;
-  still an error inside `destructuring-bind` itself.
+- **`&environment` in a MACRO lambda list is stripped by `makeUserMacro`** and bound by
+  `expandMacroCall`: nil, or the symbol macros in scope for `macroexpand` to read
+  (`.kb/symbol-macrolet.md`); still an error inside `destructuring-bind` itself. A
+  `define-setf-expander`'s is its own, always nil.
 - A non-simple `defmacro` lambda list (`isSimpleMacroLambdaList`) is stored rest-only
   (`__macro_args`) with the body wrapped in `destructuring-bind`, validated by a dry-run
   expansion; simple ones keep the strict arity check.
@@ -117,7 +118,8 @@ makes it one-pair setfs first, so the other places stay ordinary).
 
 - Interpreter: `evalCons`'s `SETF` case -> `writeMacroFunction`. Name and value evaluate in the
   form's environment, a `UserMacro` with `expander` set goes in the table, and
-  `expandMacroCall` calls it with the whole form and nil. `macro-function` answers that object
+  `expandMacroCall` calls it with the whole form and what an `&environment` parameter would hold
+  (nil, or the symbol macros in scope, `.kb/symbol-macrolet.md`). `macro-function` answers that object
   (`eq`, as SBCL). A non-function value or non-symbol name is a `type-error` (SBCL 2.2.9), a `cl`
   name is refused like `defmacro`'s.
 - Compile path: `UserMacroExpander.stripDefmacroDefinitions` replays it into the macro-time

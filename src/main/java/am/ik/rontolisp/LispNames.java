@@ -2429,10 +2429,11 @@ public final class LispNames {
 
 	/**
 	 * The {@code &environment} lambda-list keyword, accepted in macro lambda lists only
-	 * (defmacro/macrolet). Lite: rontolisp macro expansion has no environment object, so
-	 * the parameter is stripped from the lambda list and bound to nil around the body --
-	 * enough for the portable idiom of threading it into {@code get-setf-expansion} /
-	 * {@code constantp}, which ignore a nil environment.
+	 * (defmacro/macrolet). The parameter is stripped from the lambda list and bound by
+	 * the expansion itself: to nil where no symbol macro is in scope, otherwise to an
+	 * object {@code macroexpand} reads them from ({@code .kb/symbol-macrolet.md}).
+	 * Everything else taking an environment ({@code get-setf-expansion},
+	 * {@code constantp}) ignores it.
 	 */
 	public static final String LAMBDA_ENVIRONMENT = "&ENVIRONMENT";
 

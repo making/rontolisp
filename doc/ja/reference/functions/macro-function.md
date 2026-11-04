@@ -4,7 +4,7 @@
 
 `symbol` のマクロ展開器を返します。名前が関数、25 個の[特殊オペレータ](special-operator-p.md)のいずれか、または未知の場合は `nil` です。[`defmacro`](../special-forms/defmacro.md) で定義したユーザマクロ、すべての組み込みマクロ、そして rontolisp が独自に特殊形式として実装している Common Lisp のマクロ(`defun`、`handler-case`、`dolist` など)に対して非 nil を返します — 合わせて「`apply` してはいけない名前」のすべてです。rontolisp がインライン展開しているだけの Common Lisp の**関数**(`typep`、`format`、`error`、`make-instance` など)と `declare` には `nil` を返します。
 
-`environment` 引数は受け取って無視します。`macrolet` の本体は実行前に展開され尽くすため、参照できるのはグローバルな答えだけです。
+`environment` 引数は受け取りますが、名前の検索では無視します。`macrolet` の本体は実行前に展開され尽くすため、参照できるのはグローバルな答えだけです。
 
 ```lisp
 (defmacro greet (x) `(list :hello ,x))
@@ -20,7 +20,7 @@
 
 **コンパイル済み**プログラムにはマクロテーブルが残っていない(バックエンドが見る前にマクロは完全展開される)ため、そこでの値はスタブです。上記の述語としての用途は 4 バックエンドすべてで正確ですが、呼び出すと `macro-function: a compiled program cannot expand a macro at run time` をシグナルします。
 
-`(setf (macro-function 'name) function)` は `function` を `name` の展開器にします。呼び出しは `(funcall function form nil)` の答えに展開されます。`form` は呼び出し全体です。以降 `macro-function` はその関数そのものを答えます。関数でない値やシンボルでない名前は `type-error` をシグナルします。
+`(setf (macro-function 'name) function)` は `function` を `name` の展開器にします。呼び出しは `(funcall function form environment)` の答えに展開されます。`form` は呼び出し全体、`environment` は `&environment` パラメータが受け取るものと同じ値です。以降 `macro-function` はその関数そのものを答えます。関数でない値やシンボルでない名前は `type-error` をシグナルします。
 
 ```lisp
 (setf (macro-function 'twice)

@@ -4,7 +4,7 @@
 
 The macro expander of `symbol`, or `nil` when the name is a function, one of the 25 [special operators](special-operator-p.md), or unknown. It answers non-nil for a user macro defined with [`defmacro`](../special-forms/defmacro.md), for every built-in macro, and for the Common Lisp macros rontolisp implements as special forms of its own (`defun`, `handler-case`, `dolist`, ...) -- together, every name a caller may not `apply`. A Common Lisp FUNCTION rontolisp happens to expand inline (`typep`, `format`, `error`, `make-instance`, ...) answers `nil`, as does `declare`.
 
-The `environment` argument is accepted and ignored: `macrolet` bodies are expanded away before any body runs, so the global answer is the only one there is.
+The `environment` argument is accepted and ignored for the lookup: `macrolet` bodies are expanded away before any body runs, so the global answer is the only one there is.
 
 ```lisp
 (defmacro greet (x) `(list :hello ,x))
@@ -20,7 +20,7 @@ On the interpreter the value is the real expander -- a single-step expansion cal
 
 A COMPILED program has no macro table left (macros are fully expanded before the backends see the program), so there the value is a stub: the predicate above is exact on all four backends, but calling it signals `macro-function: a compiled program cannot expand a macro at run time`.
 
-`(setf (macro-function 'name) function)` makes `function` the expander of `name`: a call expands to what `(funcall function form nil)` answers, `form` being the whole call. `macro-function` then answers that same function. A value that is not a function, or a name that is not a symbol, signals a `type-error`.
+`(setf (macro-function 'name) function)` makes `function` the expander of `name`: a call expands to what `(funcall function form environment)` answers, `form` being the whole call and `environment` what an `&environment` parameter would hold. `macro-function` then answers that same function. A value that is not a function, or a name that is not a symbol, signals a `type-error`.
 
 ```lisp
 (setf (macro-function 'twice)
