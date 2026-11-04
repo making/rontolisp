@@ -7,6 +7,7 @@ and metaprogramming.
 
 | Operator | Note |
 |----------|------|
+| `compile` | both arities and all three values on all four backends; a compiled program evaluates the definition (`.kb/eval-runtime.md`) |
 | `macroexpand` | `LispEvaluator.macroexpand` (see below); answers CL's `expanded-p` second value since 2026-08-15 (`.todo/378`) |
 | `macroexpand-1` | `LispEvaluator.macroexpand1` (see below); same second value |
 | `macro-function` | `.todo/378` (2026-08-15): the real expander on the interpreter, a signalling stub in compiled output, non-nil on all four backends for every macro name |
@@ -26,7 +27,6 @@ and metaprogramming.
 
 | Operator | Purpose |
 |----------|---------|
-| `compile` | Compile a function at runtime: `(compile 'f (lambda (x) (+ x 1)))` |
 | `compile-file` | Compile file to fasl |
 | `load-time-value` | Evaluate at load time only |
 
@@ -63,7 +63,7 @@ and metaprogramming.
 3. `macro-function` / `special-operator-p` — `.kb/symbol-runtime-api.md`.
 
 **Compilation**:
-4. `compile` — runtime compilation (use the same compiler pipeline).
+4. `compile` — generating code at runtime (use the same compiler pipeline); it evaluates today.
 5. `load-time-value` — evaluate at load time, embed result.
 
 **Implementation introspection**:

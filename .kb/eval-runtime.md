@@ -7,6 +7,18 @@ limitations are identical across WASM/JVM -- README "Compiled `eval` limitations
 `compile` call the program's own definitions make does not reach it: the macro-time replay
 precompiles those definitions (`.kb/clos.md`, "Precompiled definitions").
 
+**`compile` on all four backends (2026-11-04, agrees with SBCL 2.2.9):** `(compile name
+[definition])` answers the name or the function plus `nil nil` (`passesMultipleValues` lists it).
+`(compile 'name)` keeps the definition and signals what `fdefinition` does; compile-runtime.lisp's
+`%compile-check-name` asks `macro-function` first. compile-runtime is injected after the prelude,
+so a program NAMING `compile` selects `macro-function` by surface fact (`referencedBySurfaceForm`,
+`LibraryDefunPruner.SYNTHESIZED_ENTRIES`, `UserMacroExpander.usesMacroIntrospection`), and one that
+only reaches the runtime through a coerce or a registration gets the variant without the test
+(`CompileRuntime.forms`), which it cannot call. `RuntimeFunctionNames` counts a `compile` site, a
+quoted name included, since its name is computed inside the runtime. A direct call of a name with
+a `defun` keeps the old function, the `.kb/symbol-runtime-api.md` divergence. Pinned by ci-spec
+`character-and-compile-of-a-name`.
+
 ## Shape
 
 Interpreter: a `LispFunction` registered in `LispEvaluator`'s constructor (avoids a circular dep).

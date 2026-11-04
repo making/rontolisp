@@ -792,8 +792,9 @@ public final class UserMacroExpander {
 	}
 
 	/**
-	 * Whether the form names one of the three run-time macro-table readers anywhere (a
-	 * call, {@code #'} it) -- they share the one answer, so they share the trigger.
+	 * Whether the form names one of the run-time macro-table readers anywhere (a call,
+	 * {@code #'} it) -- they share the one answer, so they share the trigger. Among them
+	 * is {@code compile}, whose runtime asks {@code macro-function} of a name.
 	 */
 	private static boolean usesMacroIntrospection(LispVal form) {
 		while (form instanceof LispCons cons) {
@@ -805,7 +806,7 @@ public final class UserMacroExpander {
 		if (form instanceof LispSymbol sym) {
 			String name = member(sym.name());
 			return LispNames.MACRO_FUNCTION.equals(name) || LispNames.MACROEXPAND.equals(name)
-					|| LispNames.MACROEXPAND_1.equals(name);
+					|| LispNames.MACROEXPAND_1.equals(name) || LispNames.COMPILE.equals(name);
 		}
 		return false;
 	}

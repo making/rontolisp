@@ -247,6 +247,15 @@ public final class LispPreludeLibrary {
 				(defun alphanumericp (c)
 				  (or (alpha-char-p (%check-character c 'alphanumericp)) (digit-char-p c)))
 				""");
+		SOURCES.put(LispNames.CHARACTER, """
+				(defun character (designator)
+				  (let ((name (cond ((stringp designator) designator)
+				                    ((symbolp designator) (symbol-name designator))
+				                    (t nil))))
+				    (if (and name (= (length name) 1))
+				        (char name 0)
+				        (%check-character designator 'character))))
+				""");
 		SOURCES.put(LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, """
 				(defun make-load-form-saving-slots (object &key slot-names environment)
 				  (declare (ignore slot-names environment))
@@ -5377,6 +5386,11 @@ public final class LispPreludeLibrary {
 	 * @return whether the entry must be spliced
 	 */
 	static boolean referencedBySurfaceForm(String entry, List<LispVal> program, boolean canonical) {
+		// macro-function: compile-runtime.lisp, injected after this pass, asks it of the
+		// name (compile 'name) hands it.
+		if (LispNames.MACRO_FUNCTION.equals(entry)) {
+			return referencesName(program, LispNames.COMPILE, canonical);
+		}
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
 			return referencesName(program, LispNames.MAKE_BROADCAST_STREAM, canonical)
 					|| referencesName(program, LispNames.BROADCAST_STREAM_STREAMS, canonical);
