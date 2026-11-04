@@ -4542,10 +4542,31 @@ cases:
       (ci-mexp-exporting ci-mexp-greet)
       (in-package :cl-user)
       (print (ci-mexp:ci-mexp-greet))
+      ;; So does an in-package inside an eval-when, a progn or an expansion.
+      (defpackage :ci-mexp-in (:use :cl))
+      (eval-when (:compile-toplevel :load-toplevel :execute) (in-package :ci-mexp-in))
+      (defun ci-mexp-a () :by-eval-when)
+      (in-package :cl-user)
+      (print (ci-mexp-in::ci-mexp-a))
+      (progn (in-package :ci-mexp-in) (defun ci-mexp-b () :by-progn))
+      (in-package :cl-user)
+      (print (ci-mexp-in::ci-mexp-b))
+      (progn . #.(list '(in-package :ci-mexp-in) '(defun ci-mexp-c () :by-a-read-time-tail)))
+      (in-package :cl-user)
+      (print (ci-mexp-in::ci-mexp-c))
+      (defmacro ci-mexp-select () '(in-package :ci-mexp-in))
+      (ci-mexp-select)
+      (defun ci-mexp-d () :by-an-expansion)
+      (cl:in-package :cl-user)
+      (print (ci-mexp-in::ci-mexp-d))
     expected: |
       42
       3
       :EXPORTED
+      :BY-EVAL-WHEN
+      :BY-PROGN
+      :BY-A-READ-TIME-TAIL
+      :BY-AN-EXPANSION
   # export grants ACCESSIBILITY and never re-keys the symbol: a defun/defvar/setf-function
   # made BEFORE the export is reachable through the external spelling afterwards. The
   # everyday CL file shape -- define, then export at the end.
@@ -16679,11 +16700,32 @@ cases:
       (print '(rte-a #.(+ 1 2) rte-c))
       (defmacro rte-stamp (&rest rte-body) `(list #.(* 7 6) ,@rte-body))
       (print (rte-stamp 1 2))
+      ;; A form a #. made is processed as if spelled out: the members of a top-level
+      ;; progn it completes are top-level forms, so a macro one defines reaches the
+      ;; next. (progn . #.x) reads as (progn %read-eval x) (concrete-syntax-tree's
+      ;; declarations.lisp generates methods this way).
+      (progn . #.(list '(print :rte-tail-1) '(print :rte-tail-2)))
+      (defmacro rte-def (name) `(defun ,name () ',name))
+      (progn . #.(loop for n in '(rte-g1 rte-g2) collect `(rte-def ,n)))
+      (print (list (rte-g1) (rte-g2)))
+      (progn (print :rte-head) . #.(list '(defmacro rte-m1 () :rte-m1) '(print (rte-m1))))
+      (locally . #.(list '(print :rte-locally)))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        . #.(list '(defmacro rte-m2 () :rte-m2) '(print (rte-m2))))
+      #.'(progn (defmacro rte-m3 () :rte-m3) (print (rte-m3)))
     expected: |
       6
       42
       (RTE-A 3 RTE-C)
       (42 1 2)
+      :RTE-TAIL-1
+      :RTE-TAIL-2
+      (RTE-G1 RTE-G2)
+      :RTE-HEAD
+      :RTE-M1
+      :RTE-LOCALLY
+      :RTE-M2
+      :RTE-M3
   - name: clos-multi-dispatch-and-defstruct-options
     source: |
       (defclass cmd-animal () ())

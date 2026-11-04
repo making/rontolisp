@@ -12785,6 +12785,12 @@ class LispEvaluatorTest {
 	void inPackageUnknownPackageThrows() {
 		assertThatThrownBy(() -> eval("(in-package foo)")).isInstanceOf(am.ik.rontolisp.LispPackageException.class)
 			.hasMessageContaining("No such package: FOO");
+		// Not a top-level form to the resolver, it signals as it runs, where a handler
+		// can catch it (CLHS).
+		assertThat(evalMulti("""
+				(handler-case (in-package :ipe-nopkg)
+				  (package-error (e) (list (package-error-package e) (princ-to-string e))))
+				""").print()).isEqualTo("(:IPE-NOPKG \"No such package: IPE-NOPKG\")");
 	}
 
 	@Test

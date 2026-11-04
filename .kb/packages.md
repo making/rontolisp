@@ -13,9 +13,13 @@ its mechanics are the "Runtime tier" section below.
 internal -- so canonical forms re-resolve to themselves. `*package*` stays the bare cl variable,
 read at RUN time. `(in-package P)` is consumed and replaced by `(setq *package* :P)`.
 
-**Canonical shape**: bare names for `cl`/`cl-user` symbols; `pkg:name` external, `pkg::name`
-internal -- so canonical forms re-resolve to themselves. `*package*` stays the bare cl variable,
-read at RUN time. `(in-package P)` is consumed and replaced by `(setq *package* :P)`.
+An `in-package` the resolver does not see at top level (a macro expansion, a function body) stays
+for the interpreter's `rareOperatorExpansion`, which resolves it as it runs, a missing package
+being a catchable `package-error`. `LispEvaluator.evalTopLevel` takes a literal `progn`/`eval-when`
+holding one member by member (`membersAroundInPackage`), so the members after it resolve against
+the package it selects, as on the compile paths (which SBCL does not: the whole form is read
+first). Both were `The function IN-PACKAGE is undefined` on the interpreter until 2026-11-04. The
+compile paths still warn and fail at the call for one the top-level walk cannot reach.
 
 Hard errors (`LispPackageException`): a single-colon reference to a non-external member, an unknown
 package. Adding a package is a registry change, not

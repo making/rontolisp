@@ -29,14 +29,17 @@ class UserMacroExpanderTest {
 
 	@Test
 	void readEvalMarkersResolveAgainstTheMacroTimeEvaluator() {
-		// The marker read wraps #. datums; expand() resolves them per top-level form.
-		String expanded = UserMacroExpander
-			.expand(LispReader.readAllWithReadEvalMarkers("(print #.(+ 40 2)) (print '(a #.(* 2 3) c))",
-					am.ik.rontolisp.reader.Features.JVM))
+		// The marker read wraps #. datums; expand() resolves them per top-level form. A
+		// progn one completes is spliced after that, so a macro its member defines
+		// reaches the next.
+		String expanded = UserMacroExpander.expand(LispReader.readAllWithReadEvalMarkers("""
+				(print #.(+ 40 2)) (print '(a #.(* 2 3) c))
+				(progn . #.(list '(defmacro re-m () 1) '(print (re-m))))
+				""", am.ik.rontolisp.reader.Features.JVM))
 			.stream()
 			.map(LispVal::print)
 			.collect(Collectors.joining("\n"));
-		assertThat(expanded).isEqualTo("(PRINT 42)\n(PRINT '(A 6 C))");
+		assertThat(expanded).isEqualTo("(PRINT 42)\n(PRINT '(A 6 C))\n(PRINT 1)");
 	}
 
 	@Test
