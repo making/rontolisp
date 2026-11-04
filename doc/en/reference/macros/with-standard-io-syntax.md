@@ -2,11 +2,30 @@
 
 `(with-standard-io-syntax form...)`
 
-Binds `*package*` to `cl-user` and evaluates the body as a `progn`. In Common Lisp this macro dynamically rebinds the whole reader/printer control set to standard values so that a body reads and prints independently of the caller's settings; in rontolisp `*package*` is the one variable of that set with a run-time value to rebind (a body's `intern`/`read` homes in `cl-user`, as in Common Lisp). `*read-default-float-format*` is informational (every float shares the one double representation), `*print-circle*` exists so library code that reads it loads, `*readtable*` is not rebound (the caller's readtable stays current, [readtables](../../guides/readtables.md)), and `*print-escape*`/`*print-readably*` exist and hold their standard values (`t`/`nil`) — `*print-escape*` is the one printer variable rontolisp really binds, around a [`print-object`](../functions/print-object.md) method call, so the method can tell [`prin1`](../functions/prin1.md) from [`princ`](../functions/princ.md). The remaining printer-mode variables (`*print-base*`, ...) hold their standard values, and the reader variables (`*read-base*` and friends) do not exist at all, which amounts to being permanently standard.
+Binds the reader and printer control variables to the standard values of CLHS 23.1.2 and evaluates the body as a `progn`, so a body reads and prints independently of the caller's settings.
 
-Deviation: `*print-escape*`/`*print-readably*`/`*print-pretty*`, which the printer does honor, are not rebound here, so a non-standard binding of one of them around this form leaks into the body.
+| Variable | Value |
+| --- | --- |
+| `*package*` | `cl-user` |
+| `*print-array*`, `*print-escape*`, `*print-gensym*`, `*print-readably*`, `*read-eval*` | `t` |
+| `*print-base*`, `*read-base*` | `10` |
+| `*print-case*` | `:upcase` |
+| `*print-circle*`, `*print-length*`, `*print-level*`, `*print-lines*`, `*print-miser-width*`, `*print-pretty*`, `*print-radix*`, `*print-right-margin*`, `*read-suppress*` | `nil` |
+| `*print-pprint-dispatch*` | a fresh empty table |
+| `*read-default-float-format*` | `single-float` |
+| `*readtable*` | a fresh standard [readtable](../../guides/readtables.md) |
+
+Under `*print-readably*` the printer's `prin1` conversion ignores `*print-length*` and `*print-level*` and keeps `#:`. `princ` and `~A` bind it to `nil`, so a [`print-object`](../functions/print-object.md) method sees `nil` under them.
+
+Deviations:
+
+- Printing an object with no readable syntax under `*print-readably*` prints its `#<...>` form instead of signalling [`print-not-readable`](../functions/print-not-readable-object.md).
+- A double prints without its `d0`: `*read-default-float-format*` is informational, because every float is the one double representation.
+- `*read-base*` holds its value, but every reader reads integers in base 10.
 
 ```lisp
+(let ((*print-base* 2))
+  (with-standard-io-syntax (write-to-string 5))) ; => "5"
 (with-standard-io-syntax
   (prin1-to-string (list 1 2 3))) ; => "(1 2 3)"
 (with-standard-io-syntax *package*) ; => :CL-USER

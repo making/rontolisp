@@ -29,7 +29,8 @@ as part of a symbol on all four instead of signalling (CLHS 2.4.8; measured 2026
 - `*readtable*` seeds a fresh standard readtable: interpreter `Environment.newStandardReadtable`,
   compile paths `injectMvSpillGlobal` (`(%obj-new '%READTABLE :upcase (make-hash-table))`, the
   instance gate answered by the variable's name in `mayCreateInstance`). Special on the
-  interpreter (`specialVars`).
+  interpreter (`specialVars`). `with-standard-io-syntax` binds it to another fresh one on the
+  interpreter and in a compiled program naming the variable (since 2026-11-05).
 - `typep`/specializer `readtable` = `%obj-is` (`makeTypeTest`, `isSupportedTypeSpecializer`);
   `type-of` a prelude clause. `get-macro-character` is in `passesMultipleValues`.
 - Gone: the call-position stubs (`expandCopyReadtable` & co.), their wrappers,
@@ -86,8 +87,7 @@ as part of a symbol on all four instead of signalling (CLHS 2.4.8; measured 2026
   same hook every interpreter runtime read uses -- `.kb/packages.md`): cl-annot looks an
   annotation's arity up on the symbol it read, and a bare spelling names cl-user's.
 - Not honored: escape syntax under another character (a constituent there), `read` from a
-  file stream or standard input, `with-standard-io-syntax` (does not rebind `*readtable*`),
-  the REPL / playground (whole-buffer reads), `*read-suppress*` around a reader macro
+  file stream or standard input, the REPL / playground (whole-buffer reads), `*read-suppress*` around a reader macro
   (`.todo/h77`).
 
 ## The compile paths' read (`eval/ReadTimeImage`, since h57)

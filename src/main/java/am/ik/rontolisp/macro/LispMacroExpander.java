@@ -82,9 +82,11 @@ public final class LispMacroExpander {
 		PRINTER_MODE_VARS.put(LispNames.TERMINAL_IO_VAR, () -> LispTrue.INSTANCE);
 		// The reader-control variables the interpreter seeds, for the same reason: a
 		// program binds one around a read, and a reader macro tests *read-suppress*
-		// (puri's #u). The emitted readers consult neither (.kb/read-load-streams.md).
+		// (puri's #u). The emitted readers consult none (.kb/read-load-streams.md).
 		PRINTER_MODE_VARS.put(LispNames.READ_EVAL_VAR, () -> LispTrue.INSTANCE);
 		PRINTER_MODE_VARS.put(LispNames.READ_SUPPRESS_VAR, () -> LispNil.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.READ_BASE_VAR, () -> new LispInteger(10));
+		PRINTER_MODE_VARS.put(LispNames.READ_DEFAULT_FLOAT_FORMAT, () -> quoteOf("DOUBLE-FLOAT"));
 		// (list nil): the one-element list a pprint dispatch table is, built at run time
 		// so
 		// the table the program mutates is its own.
@@ -98,6 +100,29 @@ public final class LispMacroExpander {
 		// injection runs after the gate is computed.
 		PRINTER_MODE_VARS.put(LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR,
 				() -> new LispInstance(LispLayout.PATHNAME, new LispVal[] { new LispString("") }));
+	}
+
+	/**
+	 * CLHS 23.1.2's table without {@code *package*}, in the table's order: what
+	 * {@link #expandWithStandardIoSyntax(LispCons)} binds each variable to. Only three
+	 * standard values are not the global one, and {@code *readtable*} has no entry in
+	 * {@link #PRINTER_MODE_VARS}.
+	 */
+	private static final java.util.Map<String, java.util.function.Supplier<LispVal>> STANDARD_IO_VALUES = new java.util.LinkedHashMap<>();
+
+	static {
+		for (String global : List.of(LispNames.PRINT_ARRAY_VAR, LispNames.PRINT_BASE_VAR, LispNames.PRINT_CASE_VAR,
+				LispNames.PRINT_CIRCLE_VAR, LispNames.PRINT_ESCAPE_VAR, LispNames.PRINT_GENSYM_VAR,
+				LispNames.PRINT_LENGTH_VAR, LispNames.PRINT_LEVEL_VAR, LispNames.PRINT_LINES_VAR,
+				LispNames.PRINT_MISER_WIDTH_VAR, LispNames.PRINT_PPRINT_DISPATCH_VAR, LispNames.PRINT_RADIX_VAR,
+				LispNames.PRINT_RIGHT_MARGIN_VAR, LispNames.READ_BASE_VAR, LispNames.READ_EVAL_VAR,
+				LispNames.READ_SUPPRESS_VAR)) {
+			STANDARD_IO_VALUES.put(global, PRINTER_MODE_VARS.get(global));
+		}
+		STANDARD_IO_VALUES.put(LispNames.PRINT_PRETTY_VAR, () -> LispNil.INSTANCE);
+		STANDARD_IO_VALUES.put(LispNames.PRINT_READABLY_VAR, () -> LispTrue.INSTANCE);
+		STANDARD_IO_VALUES.put(LispNames.READ_DEFAULT_FLOAT_FORMAT, () -> quoteOf("SINGLE-FLOAT"));
+		STANDARD_IO_VALUES.put(LispNames.READTABLE_VAR, LispMacroExpander::freshStandardReadtable);
 	}
 
 	private LispMacroExpander() {
@@ -30619,7 +30644,10 @@ public final class LispMacroExpander {
 		// or routes condition reports. Emitted here so the tag list is the COMPLETE
 		// method set, whatever order the defmethods came in.
 		if (!printObjectTags(closRegistry).isEmpty() || closRegistry.printsConditionReports()) {
-			out.addAll(printObjectStrDefuns(closRegistry, usesPrintControls(program), programUsesGeneralArrayOp(out)));
+			boolean printReadably = program.stream()
+				.anyMatch(form -> mentionsPrinterVariable(form, LispNames.PRINT_READABLY_VAR));
+			out.addAll(printObjectStrDefuns(closRegistry, usesPrintControls(program), programUsesGeneralArrayOp(out),
+					printReadably));
 		}
 		// The runtime format renderer, once per program that can reach it. Emitted here
 		// so the scan sees the definitions injected above (the condition report renders a
@@ -38205,11 +38233,17 @@ public final class LispMacroExpander {
 	 * {@code %print-cased} renderer instead of the raw conversion
 	 * @param walkVectors whether to emit the vector arm; false for a program that can
 	 * hold no general array, which then pulls no array runtime in
+	 * @param printReadably whether the program can read {@code *print-readably*}: the
+	 * variable then overrides {@code *print-length*} and {@code *print-level*} under
+	 * {@code prin1}, and a {@code princ} of an instance binds it to nil around the method
 	 * @return the {@code %print-object-str} and {@code %print-object-leaf} defuns
 	 */
 	public static List<LispVal> printObjectStrDefuns(ClosRegistry closRegistry, boolean printControls,
-			boolean walkVectors) {
-		String source = "(defun %print-object-str (%pos-x %pos-esc) (%pos-walk %pos-x %pos-esc nil 0 0))\n"
+			boolean walkVectors, boolean printReadably) {
+		String walk = "(%pos-walk %pos-x %pos-esc nil 0 0)";
+		String entry = printReadably ? "(if (and %pos-esc *print-readably* (or *print-length* *print-level*))"
+				+ " (let ((*print-length* nil) (*print-level* nil)) " + walk + ") " + walk + ")" : walk;
+		String source = "(defun %print-object-str (%pos-x %pos-esc) " + entry + ")\n"
 				+ "(defun %pos-walk (%pos-x %pos-esc %pos-path %pos-depth %pos-lvl) (cond " + PRINT_OBJECT_CONS_ARM
 				+ (walkVectors ? printObjectVectorArm() : "") + "(t (%print-object-leaf %pos-x %pos-esc))))\n"
 				+ PRINT_OBJECT_GUARD_HELPERS;
@@ -38218,7 +38252,7 @@ public final class LispMacroExpander {
 		LispSymbol escape = new LispSymbol("__poe");
 		LispVal fallback = makeIf(escape, rawRendering(value, true, printControls),
 				princRendering(value, closRegistry.printsConditionReports(), printControls));
-		LispVal body = printObjectRouting(value, fallback, closRegistry, escape);
+		LispVal body = printObjectRouting(value, fallback, closRegistry, escape, printReadably);
 		LispVal leaf = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
 				new LispSymbol(LispNames.PRINT_OBJECT_LEAF_INTERNAL), listToCons(List.of(value, escape)), body));
 		List<LispVal> out = new java.util.ArrayList<>(walker);
@@ -38234,9 +38268,10 @@ public final class LispMacroExpander {
 	 * reports has no such generic at all.
 	 */
 	private static LispVal printObjectRouting(LispVal value, LispVal fallback, ClosRegistry closRegistry,
-			LispVal escapeArg) {
+			LispVal escapeArg, boolean printReadably) {
 		List<String> tags = printObjectTags(closRegistry);
-		return tags.isEmpty() ? fallback : makeIf(objIs(value, tags), printObjectCall(value, escapeArg), fallback);
+		return tags.isEmpty() ? fallback
+				: makeIf(objIs(value, tags), printObjectCall(value, escapeArg, printReadably), fallback);
 	}
 
 	/**
@@ -38259,13 +38294,19 @@ public final class LispMacroExpander {
 	}
 
 	/** Builds {@code (with-output-to-string (s) (print-object value s))}. */
-	private static LispVal printObjectCall(LispVal value, LispVal escapeArg) {
+	private static LispVal printObjectCall(LispVal value, LispVal escapeArg, boolean printReadably) {
 		LispSymbol stream = new LispSymbol("__pos");
 		// *print-escape* is bound around the method call, so a portable print-object
 		// method sees which of prin1/princ is rendering -- CL binds it the same way, and
-		// a method that branches on it (quri's uri) is otherwise stuck in one mode.
-		LispVal call = listToCons(List.of(new LispSymbol(LispNames.LET),
-				listToCons(List.of(listToCons(List.of(new LispSymbol(LispNames.PRINT_ESCAPE_VAR), escapeArg)))),
+		// a method that branches on it (quri's uri) is otherwise stuck in one mode. princ
+		// binds *print-readably* to nil as well.
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		bindings.add(listToCons(List.of(new LispSymbol(LispNames.PRINT_ESCAPE_VAR), escapeArg)));
+		if (printReadably) {
+			bindings.add(listToCons(List.of(new LispSymbol(LispNames.PRINT_READABLY_VAR), listToCons(
+					List.of(new LispSymbol(LispNames.AND), escapeArg, new LispSymbol(LispNames.PRINT_READABLY_VAR))))));
+		}
+		LispVal call = listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings),
 				listToCons(List.of(new LispSymbol(LispNames.PRINT_OBJECT), value, stream))));
 		return listToCons(List.of(new LispSymbol(LispNames.WITH_OUTPUT_TO_STRING), listToCons(List.of(stream)), call));
 	}
@@ -42094,6 +42135,33 @@ public final class LispMacroExpander {
 		return makeLet(objectVar.name(), parts.get(1), bound);
 	}
 
+	/**
+	 * Lowers a one-argument {@code write-to-string} where a printer variable can pick the
+	 * conversion: {@code (let ((#:x x)) (if (or *print-escape* *print-readably*)
+	 * (prin1-to-string #:x) (princ-to-string #:x)))}, the choice {@code write} takes. A
+	 * variable the program does not proclaim holds its global value, so it is left out.
+	 * @param cons the {@code (write-to-string object)} form
+	 * @param specials the program's special variables
+	 * @return the lowered form, or null when neither variable is special: the
+	 * {@code prin1} conversion is then the only one
+	 */
+	@Nullable public static LispVal expandWriteToStringConversion(LispCons cons, java.util.Collection<String> specials) {
+		List<LispVal> tests = new java.util.ArrayList<>();
+		tests.add(new LispSymbol(LispNames.OR));
+		for (String name : List.of(LispNames.PRINT_ESCAPE_VAR, LispNames.PRINT_READABLY_VAR)) {
+			if (specials.contains(name)) {
+				tests.add(new LispSymbol(name));
+			}
+		}
+		if (tests.size() == 1 || cons.toList().size() != 2) {
+			return null;
+		}
+		LispSymbol objectVar = new LispSymbol("__wts" + MV_COUNTER.getAndIncrement());
+		return makeLet(objectVar.name(), cons.toList().get(1),
+				makeIf(listToCons(tests), listToCons(List.of(new LispSymbol(LispNames.PRIN1_TO_STRING), objectVar)),
+						listToCons(List.of(new LispSymbol(LispNames.PRINC_TO_STRING), objectVar))));
+	}
+
 	/** The surface operators that flip a program into restart mode. */
 	private static final java.util.Set<String> RESTART_SYSTEM_MACROS = java.util.Set.of(LispNames.HANDLER_BIND,
 			LispNames.RESTART_CASE, LispNames.RESTART_BIND, LispNames.WITH_SIMPLE_RESTART);
@@ -44123,41 +44191,54 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (with-standard-io-syntax body...)} to
-	 * {@code (let ((*package* :cl-user)) body...)}.
-	 *
-	 * <p>
-	 * Common Lisp defines this as a dynamic binding of the whole reader/printer control
-	 * set to standard values. {@code *package*} is the one variable of that set whose
-	 * run-time value can differ from its standard one here -- it is a genuine dynamic
-	 * variable on every backend, and {@code (in-package P)} assigns it -- so it is bound
-	 * to {@code CL-USER}, exactly as CL does; a body's {@code intern}/{@code read} homes
-	 * there. The rest still has nothing to bind: {@code *read-default-float-format*} is
-	 * informational (every float shares the one double representation, see
-	 * {@link LispNames#READ_DEFAULT_FLOAT_FORMAT}); {@code *print-circle*} and
-	 * {@code *readtable*} are predefined so library code reading them loads, and no
-	 * printer or reader consults them; the printer-mode variables
-	 * ({@code PRINTER_MODE_VARS}) hold their standard values, and the three the printer
-	 * honors ({@code *print-escape*}/{@code *print-readably*}/{@code *print-pretty*}) are
-	 * NOT rebound here -- a caller that bound one of them to a non-standard value around
-	 * this form leaks it into the body, the one remaining deviation (revisit if a program
-	 * depends on it); the remaining standard variables ({@code *read-base*}, ...) do not
-	 * exist, which is the same as being permanently standard.
+	 * Expands {@code (with-standard-io-syntax body...)} to a {@code let} of CLHS 23.1.2's
+	 * whole table around the body, the interpreter's form: every variable of the table is
+	 * special there ({@code .kb/pretty-printer.md}).
 	 * @param cons the with-standard-io-syntax expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandWithStandardIoSyntax(LispCons cons) {
+		return expandWithStandardIoSyntax(cons, STANDARD_IO_VALUES.keySet());
+	}
+
+	/**
+	 * The compile paths' {@code with-standard-io-syntax}: the table cut to the program's
+	 * special variables. A compiled program proclaims a variable only when it names it
+	 * ({@link #injectMvSpillGlobal}), and a variable nothing names is read by nothing,
+	 * printer included, so its binding could not be observed. {@code *package*} is always
+	 * bound: the form itself makes the program read it.
+	 * @param cons the with-standard-io-syntax expression
+	 * @param specials the program's special variables
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWithStandardIoSyntax(LispCons cons, java.util.Collection<String> specials) {
 		List<LispVal> parts = cons.toList();
 		List<LispVal> body = parts.subList(1, parts.size());
 		if (body.isEmpty()) {
 			return LispNil.INSTANCE;
 		}
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		bindings.add(listToCons(
+				List.of(new LispSymbol(LispNames.PACKAGE_VAR), new LispSymbol(":" + LispNames.CL_USER_PKG))));
+		STANDARD_IO_VALUES.forEach((name, value) -> {
+			if (specials.contains(name)) {
+				bindings.add(listToCons(List.of(new LispSymbol(name), value.get())));
+			}
+		});
 		List<LispVal> let = new java.util.ArrayList<>(body.size() + 2);
 		let.add(new LispSymbol(LispNames.LET));
-		let.add(listToCons(List.of(listToCons(
-				List.of(new LispSymbol(LispNames.PACKAGE_VAR), new LispSymbol(":" + LispNames.CL_USER_PKG))))));
+		let.add(listToCons(bindings));
 		let.addAll(body);
 		return listToCons(let);
+	}
+
+	/**
+	 * {@code (%obj-new '%readtable :upcase (make-hash-table))}: a fresh standard
+	 * readtable, what {@code *readtable*} starts as on the compile paths.
+	 */
+	private static LispVal freshStandardReadtable() {
+		return listToCons(List.of(new LispSymbol(LispNames.OBJ_NEW), quoteOf(LispLayout.READTABLE_TAG),
+				new LispSymbol(":UPCASE"), listToCons(List.of(new LispSymbol(LispNames.MAKE_HASH_TABLE)))));
 	}
 
 	/**
@@ -52258,7 +52339,6 @@ public final class LispMacroExpander {
 	 */
 	public static List<LispVal> injectMvSpillGlobal(List<LispVal> program, List<String> runtimeFeatures) {
 		boolean usesMv = false;
-		boolean usesFloatFormat = false;
 		// The printer-mode variables the program actually mentions, in PRINTER_MODE_VARS
 		// order so the emitted program stays deterministic
 		// (.kb/emitted-output-determinism.md).
@@ -52276,7 +52356,6 @@ public final class LispMacroExpander {
 		boolean quiet = false;
 		for (LispVal form : program) {
 			usesMv = usesMv || usesMvOperator(form);
-			usesFloatFormat = usesFloatFormat || usesSymbol(form, LispNames.READ_DEFAULT_FLOAT_FORMAT);
 			quiet = quiet || usesAnySymbol(form, QUIET_MV_OPERATORS);
 		}
 		if (quiet) {
@@ -52423,9 +52502,8 @@ public final class LispMacroExpander {
 			}
 			program = kept;
 		}
-		if (!usesMv && !usesFloatFormat && printerVars.isEmpty() && loadContextVars.isEmpty() && !readsPackage
-				&& !usesFeatures && constantNames.isEmpty() && !usesGensymCounter && !usesRandomState
-				&& !usesJavaWarnVar) {
+		if (!usesMv && printerVars.isEmpty() && loadContextVars.isEmpty() && !readsPackage && !usesFeatures
+				&& constantNames.isEmpty() && !usesGensymCounter && !usesRandomState && !usesJavaWarnVar) {
 			return program;
 		}
 		List<LispVal> out = new java.util.ArrayList<>(
@@ -52458,10 +52536,7 @@ public final class LispMacroExpander {
 		for (String name : loadContextVars) {
 			// *readtable* holds a readtable VALUE on every backend (.kb/readtables.md): a
 			// fresh standard one, the instance mayCreateInstance answers for by name.
-			LispVal init = LispNames.READTABLE_VAR.equals(name)
-					? listToCons(List.of(new LispSymbol(LispNames.OBJ_NEW), quoteOf(LispLayout.READTABLE_TAG),
-							new LispSymbol(":UPCASE"), listToCons(List.of(new LispSymbol(LispNames.MAKE_HASH_TABLE)))))
-					: LispNil.INSTANCE;
+			LispVal init = LispNames.READTABLE_VAR.equals(name) ? freshStandardReadtable() : LispNil.INSTANCE;
 			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(name), init)));
 		}
 		// The printer-mode variables: declared with defvar (not setq) because they are
@@ -52478,14 +52553,6 @@ public final class LispMacroExpander {
 		if (usesMv) {
 			out.add(listToCons(
 					List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.MV_SPILL), LispNil.INSTANCE)));
-		}
-		if (usesFloatFormat) {
-			// The standard reader-control variable: informational here (every float is
-			// the one double representation), predefined so library code reading it
-			// works. See LispNames.READ_DEFAULT_FLOAT_FORMAT.
-			out.add(listToCons(
-					List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.READ_DEFAULT_FLOAT_FORMAT),
-							listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("DOUBLE-FLOAT"))))));
 		}
 		out.addAll(program);
 		return out;

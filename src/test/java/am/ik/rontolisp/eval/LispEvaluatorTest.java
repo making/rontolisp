@@ -12784,12 +12784,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void withStandardIoSyntaxBindsPackageToClUser() {
+	void withStandardIoSyntaxBindsTheStandardTable() {
 		assertThat(evalMulti("""
 				(defpackage :wsios (:use :cl))
 				(in-package :wsios)
 				(list (with-standard-io-syntax *package*) *package*)
 				""").print()).isEqualTo("(:CL-USER :WSIOS)");
+		assertThat(eval("""
+				(let ((*print-base* 2) (*print-case* :downcase) (*read-base* 2) (*print-readably* nil))
+				  (with-standard-io-syntax
+				    (list *print-array* *print-base* *print-case* *print-circle* *print-escape* *print-gensym*
+				          *print-length* *print-level* *print-lines* *print-miser-width* *print-pretty* *print-radix*
+				          *print-readably* *print-right-margin* *read-base* *read-default-float-format* *read-eval*
+				          *read-suppress*)))
+				""").print()).isEqualTo("(T 10 :UPCASE NIL T T NIL NIL NIL NIL NIL NIL T NIL 10 SINGLE-FLOAT T NIL)");
 	}
 
 	@Test

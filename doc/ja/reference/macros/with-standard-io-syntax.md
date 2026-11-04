@@ -2,11 +2,30 @@
 
 `(with-standard-io-syntax form...)`
 
-`*package*` を `cl-user` に束縛し、本体を `progn` として評価します。Common Lisp ではこのマクロはリーダー/プリンター制御変数一式を標準値に動的に再束縛し、呼び出し側の設定に依存せず本体が読み書きできるようにします。rontolisp でその一式のうち実行時の値を持ち再束縛の対象になるのは `*package*` だけです(本体の `intern`/`read` は Common Lisp と同様 `cl-user` に intern します)。`*read-default-float-format*` は情報提供用(すべての浮動小数点数は唯一の double 表現を共有します)、`*print-circle*` はそれを読むライブラリコードがロードできるように存在するだけです。`*readtable*` は再束縛しません(呼び出し側のリードテーブルが有効なままです。[リードテーブル](../../guides/readtables.md))。`*print-escape*`/`*print-readably*` は存在し標準値 (`t`/`nil`) を保持します — `*print-escape*` は rontolisp が実際に束縛する唯一のプリンター変数で、[`print-object`](../functions/print-object.md) メソッド呼び出しの周りで束縛されるため、メソッドは [`prin1`](../functions/prin1.md) と [`princ`](../functions/princ.md) を区別できます。残りのプリンターモード変数(`*print-base*` など)は標準値を保持し、リーダー変数(`*read-base*` など)はそもそも存在しません。これは常に標準値であることと同じです。
+リーダーとプリンターの制御変数を CLHS 23.1.2 の標準値に束縛し、本体を `progn` として評価します。これにより本体は呼び出し側の設定に依存せず読み書きできます。
 
-相違点: プリンターが実際に参照する `*print-escape*`/`*print-readably*`/`*print-pretty*` はここでは再束縛されないため、このフォームの外側でそれらを非標準値に束縛していると本体に漏れます。
+| 変数 | 値 |
+| --- | --- |
+| `*package*` | `cl-user` |
+| `*print-array*`、`*print-escape*`、`*print-gensym*`、`*print-readably*`、`*read-eval*` | `t` |
+| `*print-base*`、`*read-base*` | `10` |
+| `*print-case*` | `:upcase` |
+| `*print-circle*`、`*print-length*`、`*print-level*`、`*print-lines*`、`*print-miser-width*`、`*print-pretty*`、`*print-radix*`、`*print-right-margin*`、`*read-suppress*` | `nil` |
+| `*print-pprint-dispatch*` | 新しい空のテーブル |
+| `*read-default-float-format*` | `single-float` |
+| `*readtable*` | 新しい標準の[リードテーブル](../../guides/readtables.md) |
+
+`*print-readably*` が真のとき、プリンターの `prin1` 変換は `*print-length*` と `*print-level*` を無視し、`#:` を残します。`princ` と `~A` はこの変数を `nil` に束縛するので、その下の [`print-object`](../functions/print-object.md) メソッドには `nil` が見えます。
+
+相違点:
+
+- 読み戻せる表記を持たないオブジェクトを `*print-readably*` の下で印字すると、[`print-not-readable`](../functions/print-not-readable-object.md) をシグナルせず `#<...>` 形式を印字します。
+- double は `d0` を付けずに印字します。すべての浮動小数点数が唯一の double 表現なので、`*read-default-float-format*` は情報提供用です。
+- `*read-base*` は値を保持しますが、どのリーダーも整数を 10 進で読みます。
 
 ```lisp
+(let ((*print-base* 2))
+  (with-standard-io-syntax (write-to-string 5))) ; => "5"
 (with-standard-io-syntax
   (prin1-to-string (list 1 2 3))) ; => "(1 2 3)"
 (with-standard-io-syntax *package*) ; => :CL-USER

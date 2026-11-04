@@ -18,7 +18,7 @@ A [`defstruct`](../special-forms/defstruct.md) `(:print-object fn)` / `(:print-f
 
 The one built-in rendering that is not `#S(...)`/`#<...>` is a CONDITION's: `princ`/`princ-to-string`/`~A` write its [`:report`](../macros/define-condition.md) instead. A `print-object` method on a condition class wins over that report, in both escape modes.
 
-`*print-escape*` is bound around the call — `t` for `prin1`/`print`/`~S`, `nil` for `princ`/`~A` — so a portable method that branches on it (the Common Lisp idiom for rendering readably or bare) behaves the same way here. `*print-readably*` is always `nil`.
+`*print-escape*` is bound around the call — `t` for `prin1`/`print`/`~S`, `nil` for `princ`/`~A` — so a portable method that branches on it (the Common Lisp idiom for rendering readably or bare) behaves the same way here. `*print-readably*` is `nil` under `princ`/`~A`; under `prin1`/`print`/`~S` it keeps its value, `nil` globally and `t` inside [`with-standard-io-syntax`](../macros/with-standard-io-syntax.md).
 
 ```lisp
 (defstruct po-uri text)

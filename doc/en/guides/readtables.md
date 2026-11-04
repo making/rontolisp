@@ -52,5 +52,4 @@ So libraries that read their own source through a readtable load: named-readtabl
 
 - The compiled backends' run-time `read` and `read-from-string` ignore `*readtable*`.
 - `read` from a file stream or standard input uses the standard syntax.
-- `with-standard-io-syntax` does not rebind `*readtable*`.
 - A standard dispatch function, such as `(get-dispatch-macro-character #\# #\()`, cannot be called directly; it can be compared and installed.

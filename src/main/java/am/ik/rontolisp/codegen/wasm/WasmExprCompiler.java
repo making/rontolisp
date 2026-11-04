@@ -1507,8 +1507,13 @@ final class WasmExprCompiler {
 			case LispNames.WRITE_TO_STRING -> {
 				// A keyword tail binds the printer variables around the one-argument
 				// primitive (LispMacroExpander.expandWriteToStringKeywords).
+				LispVal conversion = cons.isProperList()
+						? LispMacroExpander.expandWriteToStringConversion(cons, ctx.specialVars) : null;
 				if (cons.isProperList() && cons.toList().size() > 2) {
 					compileExpr(LispMacroExpander.expandWriteToStringKeywords(cons), ctx);
+				}
+				else if (conversion != null) {
+					compileExpr(conversion, ctx);
 				}
 				else {
 					compilePrintOperator(cons, ctx, () -> WasmPrin1ToStringCompiler.compile(cons, ctx));
@@ -2736,7 +2741,7 @@ final class WasmExprCompiler {
 				compileExpansion(LispMacroExpander.expandWithCompilationUnit(cons), ctx, tail);
 			case LispNames.LOCALLY -> compileExpansion(LispMacroExpander.expandLocally(cons), ctx, tail);
 			case LispNames.WITH_STANDARD_IO_SYNTAX ->
-				compileExpansion(LispMacroExpander.expandWithStandardIoSyntax(cons), ctx, tail);
+				compileExpansion(LispMacroExpander.expandWithStandardIoSyntax(cons, ctx.specialVars), ctx, tail);
 			case LispNames.WRITE_CHAR -> compileExpansion(LispMacroExpander.expandWriteChar(cons), ctx, tail);
 			case LispNames.FLET -> compileExpansion(LispMacroExpander.expandFlet(cons), ctx, tail);
 			case LispNames.LABELS -> compileExpansion(LispMacroExpander.expandLabels(cons), ctx, tail);

@@ -32993,6 +32993,83 @@ cases:
       :ECASE-ERROR
       "[1,\"a\\tb\\\"\\u0001\",[2,3]]"
       :NO-CONTEXT
+  - name: with-standard-io-syntax-binds-the-standard-table
+    source: |
+      ;; CLHS 23.1.2: the whole table is bound, so a caller's settings do not reach the
+      ;; body, a function called in it reads the bindings, and they end with the form.
+      (print (let ((*print-base* 2)) (with-standard-io-syntax (write-to-string 5))))
+      (print (let ((*print-base* 2)) (with-standard-io-syntax *print-base*)))
+      (print (let ((*print-case* :downcase)) (with-standard-io-syntax (prin1-to-string 'foo))))
+      (print (let ((*read-base* 2)) (with-standard-io-syntax *read-base*)))
+      (print (let ((*print-pretty* t)) (with-standard-io-syntax *print-pretty*)))
+      (print (with-standard-io-syntax
+               (list *print-array* *print-base* *print-case* *print-circle* *print-escape* *print-gensym*
+                     *print-length* *print-level* *print-lines* *print-miser-width* *print-pretty* *print-radix*
+                     *print-readably* *print-right-margin* *read-base* *read-default-float-format* *read-eval*
+                     *read-suppress*)))
+      (defun wsis-show () (list *print-base* *print-case* *print-pretty* *read-default-float-format*))
+      (print (let ((*print-base* 8) (*print-case* :capitalize) (*print-pretty* t)
+                   (*read-default-float-format* 'long-float))
+               (list (wsis-show) (with-standard-io-syntax (wsis-show)) (wsis-show))))
+      (print (let ((*print-base* 8)) (funcall (with-standard-io-syntax (lambda () *print-base*)))))
+      (print (multiple-value-list (with-standard-io-syntax (values 1 2))))
+      (print (with-standard-io-syntax))
+      ;; The readtable is the standard one, whatever the caller's holds.
+      (let ((*readtable* (copy-readtable nil)))
+        (set-macro-character #\! (lambda (s c) (declare (ignore c)) (read s t nil t)))
+        (print (list (not (null (get-macro-character #\!)))
+                     (with-standard-io-syntax (get-macro-character #\!))
+                     (with-standard-io-syntax (readtable-case *readtable*)))))
+      ;; *print-readably* forces the prin1 conversion and overrides length, level and gensym;
+      ;; princ binds it to nil, around a print-object method too.
+      (print (with-standard-io-syntax (write-to-string "a" :escape nil)))
+      (print (with-standard-io-syntax (with-output-to-string (s) (write "a" :stream s :escape nil))))
+      (print (with-standard-io-syntax (let ((*print-readably* nil)) (write-to-string "a" :escape nil))))
+      (print (with-standard-io-syntax (let ((*print-length* 1)) (prin1-to-string '(1 2 3)))))
+      (print (with-standard-io-syntax (let ((*print-level* 1)) (prin1-to-string '(1 (2) 3)))))
+      (print (with-standard-io-syntax (let ((*print-gensym* nil)) (prin1-to-string (make-symbol "A")))))
+      (print (with-standard-io-syntax (let ((*print-length* 1)) (princ-to-string '(1 2 3)))))
+      (defclass wsis-k () ())
+      (defmethod print-object ((o wsis-k) s) (format s "~A/~A" *print-readably* *print-escape*))
+      (print (with-standard-io-syntax (list (princ-to-string (make-instance 'wsis-k))
+                                            (prin1-to-string (make-instance 'wsis-k))
+                                            (format nil "~A ~S" (make-instance 'wsis-k) (make-instance 'wsis-k)))))
+      (print (with-standard-io-syntax (let ((*print-length* 1)) (prin1-to-string (list 1 (make-instance 'wsis-k) 3)))))
+      ;; A one-argument write-to-string takes the conversion the two variables pick.
+      (print (let ((*print-escape* nil)) (list (write-to-string "a") (funcall #'write-to-string "a")
+                                               (mapcar #'write-to-string '("b"))
+                                               (funcall #'write-to-string "a" :escape t))))
+      (print (let ((*print-escape* nil)) (with-standard-io-syntax (write-to-string "a"))))
+      (print (with-standard-io-syntax (let ((*print-escape* nil)) (write-to-string "a"))))
+      ;; print-not-readable is a class a program can signal and handle.
+      (print (handler-case (error 'print-not-readable :object 1)
+               (print-not-readable (c) (list (print-not-readable-object c) (typep c 'error) (princ-to-string c)))))
+    expected: |
+      "5"
+      10
+      "FOO"
+      10
+      NIL
+      (T 10 :UPCASE NIL T T NIL NIL NIL NIL NIL NIL T NIL 10 SINGLE-FLOAT T NIL)
+      ((8 :CAPITALIZE T LONG-FLOAT) (10 :UPCASE NIL SINGLE-FLOAT) (8 :CAPITALIZE T LONG-FLOAT))
+      8
+      (1 2)
+      NIL
+      (T NIL :UPCASE)
+      "\"a\""
+      "\"a\""
+      "a"
+      "(1 2 3)"
+      "(1 (2) 3)"
+      "#:A"
+      "(1 ...)"
+      ("NIL/NIL" "T/T" "NIL/NIL T/T")
+      "(1 T/T 3)"
+      ("a" "a" ("b") "\"a\"")
+      "\"a\""
+      "\"a\""
+      (1 T "1 cannot be printed readably.")
+
 standalone:
   - name: uncaught-defmethod-lambda-list-refusal
     source: |

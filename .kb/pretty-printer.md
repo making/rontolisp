@@ -223,7 +223,7 @@ per variable the program MENTIONS — run after `expandTopLevelDefinitions`; "me
 | variable | value | honored? |
 | --- | --- | --- |
 | `*print-escape*` | `t` | yes — picks prin1 vs princ; the `print-object` route binds it |
-| `*print-readably*` | `nil` | yes — forces escaping |
+| `*print-readably*` | `nil` | yes — forces escaping, overrides length/level/gensym; never signals (below) |
 | `*print-pretty*` | `t` | yes — gates the MANDATORY line break |
 | `*print-circle*` | `nil` | no labels — the guard prints a cycle as `#`/`" . #"` |
 | `*print-right-margin*` / `*print-miser-width*` / `*print-lines*` | `nil` | no (no column) |
@@ -240,6 +240,35 @@ binding an inert one to a non-default value is what has no effect. The four stan
 variables (`*trace-output*`, `*debug-io*`, `*query-io*`, `*terminal-io*`) ride the same table with
 the `t` designator `*standard-output*` holds — esrap's rule tracing formats to `*trace-output*`
 from inside a closure, and a captured free variable must be a declared global.
+`*read-eval*`, `*read-suppress*`, `*read-base*` and `*read-default-float-format*` ride it too, each
+special on all four since 2026-11-05 (the float format was a `setq`-seeded global, so a `let` of it
+was lexical, and `*read-base*` did not exist).
+
+## `with-standard-io-syntax`
+**Invariant: the body sees CLHS 23.1.2's table on all four backends** (2026-11-05, SBCL 2.2.9 agrees on
+ci-spec `with-standard-io-syntax-binds-the-standard-table`; quri's `*print-base*` pins made
+`quri-test` `All 6 files passed`).
+
+- One table, `LispMacroExpander.STANDARD_IO_VALUES`: only `*print-pretty*` nil, `*print-readably*` t,
+  `*read-default-float-format*` `single-float` and a fresh `*readtable*` differ from the globals.
+- The interpreter's `let` binds all of it. **A compile arm binds only the program's specials**
+  (`expandWithStandardIoSyntax(cons, ctx.specialVars)`): a name nothing mentions has no defvar and
+  nothing reads it, the printer included, so a program naming no control variable keeps its
+  `(let ((*package* :cl-user)) ...)`, its bytes and no case-fold tables. The renderer naming
+  `*print-readably*` is a mention, so a routed program binds it.
+- `*print-readably*` on: `prin1` ignores `*print-length*`/`*print-level*` and keeps `#:`
+  (`%print-cased`, `%print-object-str` as a binding at the entry, not a test in each walk); `princ`
+  binds it nil around a `print-object` method (`printObjectCall`, for a program naming the variable);
+  `write`, a `write-to-string` keyword and a one-argument `write-to-string`
+  (`expandWriteToStringConversion`; `(let ((*print-escape* nil)) (write-to-string "a"))` printed
+  the quotes until then) take `prin1` when it or `*print-escape*` is on.
+- **No printer signals `print-not-readable`** (measured 2026-11-05: `(with-standard-io-syntax
+  (prin1-to-string (lambda (x) x)))` answers `#<...>` on all four, SBCL signals). The class exists
+  (`ClosRegistry`, reader `print-not-readable-object`) because serapeum and coalton signal and handle
+  it themselves; `(error 'print-not-readable)` used to find no class, escaping `(error ...)` clauses.
+  The signal has traps of its own (`.todo/i47`).
+- Inert under it: `*read-default-float-format*` (`1.5d0` prints `1.5`, SBCL `1.5d0`), `*read-base*`
+  (no reader consults it, `.todo/i48`).
 
 ## Tests
 `LispEvaluatorTest.evalWriteAndPprintDispatch`/`evalPprintLogicalBlock`/`evalPrintCase`/

@@ -623,8 +623,9 @@ right at top level and wrong inside any defun that outlives its file.
   (`.kb/dynamic-special-variables.md`). A program that only SWITCHES packages never observes it, so
   its assignments are DROPPED and it stays byte-identical to one without `in-package` -- UNLESS its
   PRINTER observes it (`.kb/pretty-printer.md`).
-- **`with-standard-io-syntax`** expands to `(let ((*package* :cl-user)) body...)`;
-  `*print-escape*`/`*print-readably*`/`*print-pretty*` are honored but not rebound by it.
+- **`with-standard-io-syntax`** expands to a `let` binding `*package*` to `:cl-user` beside the rest of
+  CLHS 23.1.2's table (`.kb/pretty-printer.md`, "`with-standard-io-syntax`"), so a body's `*package*`
+  assignment ends with the form.
 
 **A user macro called from inside a FUNCTION BODY expands with the package that body was READ
 in current** (`LispLambda.readPackage`, recorded on a lambda created outside every function and
@@ -1095,7 +1096,7 @@ directive path -- the `eval` native had to route a `defpackage` datum to the sam
 ## Tests
 `PackageResolverTest` (the `::` cases, the defpackage clause/error cases, the json.lisp fixed-point
 pin, the `*package*` runtime-variable cases, the runtime-tier create/delete/rename/gate/baked-table
-cases), `LispEvaluatorTest#{packageDefaultsToClUser,packageVarIsReadWhenTheFormRunsNotWhenItIsResolved,setqOfPackageVarSwitchesTheCurrentPackage,withStandardIoSyntaxBindsPackageToClUser,runtimeMakeDeleteRenamePackage,runtimePackageFailuresSignalCatchablePackageErrors,runtimePackageEnumeration}`,
+cases), `LispEvaluatorTest#{packageDefaultsToClUser,packageVarIsReadWhenTheFormRunsNotWhenItIsResolved,setqOfPackageVarSwitchesTheCurrentPackage,withStandardIoSyntaxBindsTheStandardTable,runtimeMakeDeleteRenamePackage,runtimePackageFailuresSignalCatchablePackageErrors,runtimePackageEnumeration}`,
 `JvmLispCompilerTest#{compileAndRunPackageVarIsReadWhenTheFormRuns,compileAndRunRuntimePackageApi}`,
 `WasmLispCompilerIntegrationTest#{packageVarIsReadWhenTheFormRuns,runtimePackageApi}`,
 `PackageResolverTest#{unusePackageDirectiveNarrowsTheUseList,unusePackageAcceptsADesignatorListATargetAndRejectsUnknownNames,unusePackageWithAComputedDesignatorOrABadArityStaysARuntimeCall,defpackageNestedIsLeftVerbatimForTheRuntimeTier,defpackageInternClauseOwnsTheNamesWithoutExportingThem,defpackageDesignatorsAcceptCharacters,interpreterDefpackageProductsJoinTheRuntimeTier,defpackageClauseViolationsAreHardErrorsAtTopLevel}`,

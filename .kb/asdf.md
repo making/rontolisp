@@ -358,8 +358,8 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
   on JVM and component where checked): `prove-test` 22 tests, identical on all four but for how a
   `simple-error` prints; `proc-parse-test` 17, `xsubseq-test` 6 (all four), `myway-test` 15, `ningle-test`
   11, `cl-slug-test` 6, `smart-buffer-test` 2, each `All N files passed`; `http-body-test` `All 4 files
-  passed` (interpreter; SBCL lacks its dependencies here). `quri-test` fails 2 of 6 on
-  `with-standard-io-syntax` not binding `*print-base*` (`.todo/i32`). `fast-http-test` fails 2 of 64 in
+  passed` (interpreter; SBCL lacks its dependencies here). `quri-test` `All 6 files passed` (2026-11-05,
+  once `with-standard-io-syntax` bound `*print-base*`). `fast-http-test` fails 2 of 64 in
   `t/parser.lisp` and aborts `t/fast-http.lisp` on CONNECT (2026-11-05, `.todo/i39`). `lass-file` with `:output`: the CSS SBCL writes,
   all four. `hu.dwim.def`: loads on all four, its class, `package-name` and license as on SBCL
   (`component-children` real since "The component tree"). coalton stops before any of this, as "Options around the

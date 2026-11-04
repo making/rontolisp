@@ -606,6 +606,9 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.UNBOUND_SLOT_INSTANCE, """
 				(defun unbound-slot-instance (condition) (slot-value condition 'instance))
 				""");
+		SOURCES.put(LispNames.PRINT_NOT_READABLE_OBJECT, """
+				(defun print-not-readable-object (condition) (slot-value condition 'object))
+				""");
 		SOURCES.put(LispNames.STREAM_ERROR_STREAM, """
 				(defun stream-error-stream (condition) (slot-value condition 'stream))
 				""");
@@ -4334,11 +4337,15 @@ public final class LispPreludeLibrary {
 		// write byte-identical in OUTPUT to one that never mentions a variable.
 		SOURCES.put(LispNames.PRINT_CASED_INTERNAL, """
 				(defun %print-cased (%pc-x %pc-esc)
-				  (if (and (eq *print-case* :upcase) (null *print-length*) (null *print-level*)
-				           *print-gensym* (eql *print-base* 10) (null *print-radix*)
-				           (or (null %pc-esc) (%print-package-raw-p)))
-				      (if %pc-esc (%prin1-to-string %pc-x) (%princ-to-string %pc-x))
-				      (%pc-walk %pc-x %pc-esc nil 0 0)))
+				  (cond ((and %pc-esc *print-readably*
+				              (or *print-length* *print-level* (null *print-gensym*)))
+				         (let ((*print-length* nil) (*print-level* nil) (*print-gensym* t))
+				           (%print-cased %pc-x %pc-esc)))
+				        ((and (eq *print-case* :upcase) (null *print-length*) (null *print-level*)
+				              *print-gensym* (eql *print-base* 10) (null *print-radix*)
+				              (or (null %pc-esc) (%print-package-raw-p)))
+				         (if %pc-esc (%prin1-to-string %pc-x) (%princ-to-string %pc-x)))
+				        (t (%pc-walk %pc-x %pc-esc nil 0 0))))
 				""");
 		// The recursive half of %print-cased, carrying the cycle guard the raw
 		// renderers carry (RenderCycleGuard, .kb/pretty-printer.md): the rendering path
