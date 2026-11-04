@@ -79,6 +79,7 @@ lists (`JvmRuntimeClassFilesTest` names them all):
 | `JvmFetchRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:fetch` | `RontoFetch` -- the whole transport -- and `RontoFetch$BodyPump`, the subscriber filling a reply's body stream as it arrives (`.kb/fetch-http.md`) |
 | `JvmLispCompiler.INFLATE_RUNTIME_CLASS_FILES` | `rontolisp::%inflate-new` (the Clojure HTTP client) | `RontoInflate` and its `$Code`/`$Stop` -- the decoder of a compressed reply (`.kb/fetch-http.md`, "Decompression") |
 | `JvmLispCompiler.CONDITION_VARIABLE_RUNTIME_CLASS_FILES` | `rontolisp::%condition-variable-new` (the `bordeaux-threads` shim) | `RontoConditionVariable` -- the interpreter runs the same class (`.kb/mutexes.md`) |
+| `JvmLispCompiler.CONS_CAS_RUNTIME_CLASS_FILES` | `rontolisp::%cons-cas-car` / `-cdr` (the atomics arm) | `RontoConsCas` (`.kb/asdf.md`, `eval/AtomicsForms`) |
 | `JvmInterruptPoll.RUNTIME_CLASS_FILES` | a program naming `rontolisp:interactive-interrupt` that its own `main` runs (`JvmLispCompiler.takesInterrupts`) | `RontoInterruptSignal` -- SIGINT as that condition (`.kb/error-handling.md`, "SIGINT") |
 | `JvmComplexRuntimeBuilder.RUNTIME_CLASS_FILES` | a program that may observe a complex (`ComplexCapability`) | `RontoComplex` -- the complex holder (`.kb/jvm-complex.md`) |
 | `JvmQuantizedMatrixRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:quantize` / `make-quantized-matrix` (`usesQuantized`) | `RontoQuantizedMatrix` -- the quantized matrix's holder (`.kb/quantized-matrix.md`) |

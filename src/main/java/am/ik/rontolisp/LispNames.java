@@ -8216,6 +8216,24 @@ public final class LispNames {
 	public static final String THREAD_NAME_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + THREAD_NAME_INTERNAL;
 
 	/**
+	 * The internal {@code rontolisp::%cons-cas-car} primitive:
+	 * {@code (%cons-cas-car cell expected new)} stores {@code new} in the car of the cons
+	 * {@code cell} if the car is the very object {@code expected}, as one atomic step,
+	 * and answers whether it did. Interpreter and JVM only; a comparison by {@code eq} is
+	 * the caller's, who retries with the object it read ({@code atomics:cas}).
+	 */
+	public static final String CONS_CAS_CAR_INTERNAL = "%CONS-CAS-CAR";
+
+	/** The canonical spelling of {@code rontolisp::%cons-cas-car}. */
+	public static final String CONS_CAS_CAR_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONS_CAS_CAR_INTERNAL;
+
+	/** {@link #CONS_CAS_CAR_INTERNAL} on the cdr. */
+	public static final String CONS_CAS_CDR_INTERNAL = "%CONS-CAS-CDR";
+
+	/** The canonical spelling of {@code rontolisp::%cons-cas-cdr}. */
+	public static final String CONS_CAS_CDR_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONS_CAS_CDR_INTERNAL;
+
+	/**
 	 * The internal {@code rontolisp::%condition-variable-new} primitive: a fresh
 	 * condition variable ({@code runtime/RontoConditionVariable}), behind
 	 * {@code bordeaux-threads:make-condition-variable}. Interpreter and JVM only.

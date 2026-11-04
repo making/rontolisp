@@ -1,5 +1,7 @@
 package am.ik.rontolisp;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -11,6 +13,21 @@ import org.jspecify.annotations.Nullable;
  * named file is a {@link LocatedCons}, which is otherwise the same cell.
  */
 public sealed class LispCons implements LispVal permits LocatedCons {
+
+	private static final VarHandle CAR;
+
+	private static final VarHandle CDR;
+
+	static {
+		try {
+			MethodHandles.Lookup lookup = MethodHandles.lookup();
+			CAR = lookup.findVarHandle(LispCons.class, "car", LispVal.class);
+			CDR = lookup.findVarHandle(LispCons.class, "cdr", LispVal.class);
+		}
+		catch (ReflectiveOperationException ex) {
+			throw new ExceptionInInitializerError(ex);
+		}
+	}
 
 	private LispVal car;
 
@@ -56,6 +73,26 @@ public sealed class LispCons implements LispVal permits LocatedCons {
 	 */
 	public void setCdr(LispVal cdr) {
 		this.cdr = cdr;
+	}
+
+	/**
+	 * Atomically replaces the car if it is the very object {@code expected}.
+	 * @param expected the object the car must be
+	 * @param car the new car value
+	 * @return whether the car was replaced
+	 */
+	public boolean compareAndSetCar(LispVal expected, LispVal car) {
+		return CAR.compareAndSet(this, expected, car);
+	}
+
+	/**
+	 * Atomically replaces the cdr if it is the very object {@code expected}.
+	 * @param expected the object the cdr must be
+	 * @param cdr the new cdr value
+	 * @return whether the cdr was replaced
+	 */
+	public boolean compareAndSetCdr(LispVal expected, LispVal cdr) {
+		return CDR.compareAndSet(this, expected, cdr);
 	}
 
 	/**

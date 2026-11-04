@@ -1151,6 +1151,7 @@ public final class Environment implements Scope {
 		registerArrays(env);
 		registerPackages(env);
 		registerMutexes(env);
+		registerConsCas(env);
 		// The multiple-value spill channel (see LispNames.MV_SPILL) is the mvSpill
 		// field, not a binding; the compilers inject a top-level (setq %mv-spill nil)
 		// global when needed.
@@ -2809,6 +2810,28 @@ public final class Environment implements Scope {
 	 * proceeds here).
 	 * @param env the global environment
 	 */
+	private static void registerConsCas(Environment env) {
+		String car = LispNames.CONS_CAS_CAR_INTERNAL_QUALIFIED;
+		env.defineFunction(car, new LispFunction(car, args -> {
+			requireArgCount(LispNames.CONS_CAS_CAR_INTERNAL, args, 3);
+			return requireCasCell(LispNames.CONS_CAS_CAR_INTERNAL, args.get(0)).compareAndSetCar(args.get(1),
+					args.get(2)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		String cdr = LispNames.CONS_CAS_CDR_INTERNAL_QUALIFIED;
+		env.defineFunction(cdr, new LispFunction(cdr, args -> {
+			requireArgCount(LispNames.CONS_CAS_CDR_INTERNAL, args, 3);
+			return requireCasCell(LispNames.CONS_CAS_CDR_INTERNAL, args.get(0)).compareAndSetCdr(args.get(1),
+					args.get(2)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+	}
+
+	private static LispCons requireCasCell(String name, LispVal cell) {
+		if (cell instanceof LispCons cons) {
+			return cons;
+		}
+		throw new LispEvalException(name + ": not a cons: " + cell.print());
+	}
+
 	private static void registerMutexes(Environment env) {
 		Map<Long, ReentrantLock> mutexes = new ConcurrentHashMap<>();
 		AtomicLong nextHandle = new AtomicLong(1);

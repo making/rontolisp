@@ -140,6 +140,11 @@ A condition is a CLOS-subset instance ([instance-syntax.md](instance-syntax.md))
   on the car -- WASM content-safe). `with-slots` is read-only; assignment does NOT write back.
 
 ## Phase 3 -- handler-case / ignore-errors
+**A clause variable a slot cannot serve goes through a `let`** (`compiler/HandlerCaseClauses.letBound`, all
+three binders): a closure in the body capturing it, a special. The JVM refused the closure (`closure over C
+whose binding left it unboxed`, log4cl's `log-error` in a clause), wasm's wrote its own copy, and no backend
+bound a special. Pinned by ci-spec `a-closure-over-a-handler-case-clause-variable`.
+
 Surface: `(handler-case expr (type ([var]) body...)... [(:no-error ([var]) body...)])`; clause types
 are `makeHandlerTypeTest` = `makeTypeTest` + an exact-tag fallback for unknown names. A
 condition-less throw is caught as a synthesized `simple-error` with the message in slot 1. No match

@@ -49,9 +49,10 @@
 ;;   the mutex handle, so it has a class of its own (serapeum specializes a
 ;;   method on (class-of (bt:make-recursive-lock))).
 ;; - The lock name is accepted and ignored (it is a debugging label upstream).
-;; - acquire-lock's :wait-p is accepted and ignored: the acquisition always
-;;   blocks, so a (acquire-lock l nil) caller that expects an immediate nil on
-;;   contention instead waits. No caller in the loadable corpus passes it.
+;; - acquire-lock's wait-p, :wait and :timeout are accepted and ignored: the
+;;   acquisition always blocks, so a (acquire-lock l nil) caller that expects an
+;;   immediate nil on contention instead waits (lparallel moves on where it
+;;   finds a lock taken; it waits here).
 
 (defparameter bordeaux-threads:*supports-threads-p*
   ;; A claim libraries act on, so it is per-backend and not decoration: the
@@ -88,7 +89,10 @@
 (defun bordeaux-threads:recursive-lock-p (object)
   (bordeaux-threads:lock-p object))
 
-(defun bordeaux-threads:acquire-lock (lock &optional (wait-p t))
+;; &rest: the v1 spelling passes a positional wait-p, the v2 one :wait and
+;; :timeout. Both block (see the note above).
+(defun bordeaux-threads:acquire-lock (lock &rest options)
+  (declare (ignore options))
   (rontolisp:mutex-acquire (bordeaux-threads::%lock-mutex lock))
   t)
 

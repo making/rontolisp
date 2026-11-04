@@ -14963,6 +14963,9 @@ cases:
       (defun ci-dsm-bump () (incf ci-dsm-slot0))
       (ci-dsm-bump)
       (print (list ci-dsm-slot0 *ci-dsm-buf*))
+      ;; An assert's places, datum and arguments and a check-type's string are expressions.
+      (print (handler-case (assert nil (ci-dsm-slot0) "at ~A" ci-dsm-slot0)
+               (error (c) (princ-to-string c))))
       (print (let ((ci-dsm-slot0 7)) ci-dsm-slot0))
       (defpackage :ci-dsm-p (:use :cl))
       (in-package :ci-dsm-p)
@@ -14985,6 +14988,7 @@ cases:
       (cl:in-package :cl-user)
     expected: |
       (44 #(44 0 0))
+      "at 44"
       7
       (5 5)
       7
@@ -29266,6 +29270,40 @@ cases:
                (warning (w) :outer)))
     expected: |
       :OUTER
+  - name: a-closure-over-a-handler-case-clause-variable
+    source: |
+      ;; A closure shares the clause variable's binding: the JVM refused to compile one
+      ;; (log4cl's log-error in a clause), and wasm's closure wrote its own copy. A
+      ;; :no-error clause's alike, and a special binds dynamically, which no backend did.
+      ;; type-of answers one value (the interpreter's leaked intern's second). SBCL agrees.
+      (define-condition hc-capture (error) ())
+      (defun hc-closure-reads ()
+        (handler-case (error 'hc-capture)
+          (hc-capture (c) (funcall (lambda () (type-of c))))))
+      (print (multiple-value-list (hc-closure-reads)))
+      (defun hc-closure-writes ()
+        (handler-case (error 'hc-capture)
+          (hc-capture (c)
+            (funcall (lambda (x) (setq c x)) 1)
+            c)))
+      (print (hc-closure-writes))
+      (defun hc-no-error (x)
+        (handler-case (values x (1+ x))
+          (:no-error (a b)
+            (funcall (lambda () (setq b (list a b))))
+            b)))
+      (print (hc-no-error 1))
+      (defvar *hc-c* :global)
+      (defun hc-read-special () *hc-c*)
+      (defun hc-special ()
+        (handler-case (error 'hc-capture)
+          (hc-capture (*hc-c*) (type-of (hc-read-special)))))
+      (print (list (hc-special) *hc-c*))
+    expected: |
+      (HC-CAPTURE)
+      1
+      (1 2)
+      (HC-CAPTURE :GLOBAL)
   - name: handler-case-no-error-clause-receives-all-values
     source: |
       (print (handler-case (values 1 2 3) (:no-error (a b c) (list a b c))))
@@ -34024,6 +34062,42 @@ standalone:
     stdout: |
       T
       (:CI-LONE-NOPE "SHADOW: no such package: CI-LONE-NOPE")
+  - name: a-comma-in-a-backquoted-vector
+    source: |
+      ;; CLHS 2.4.6.1: `#(a ,b) is (apply #'vector `(a ,b)), at any depth, splicing too. A
+      ;; vector with no comma stays one literal. SBCL agrees.
+      (defun bq-vector (x xs) `#(1 ,x ,@xs))
+      (print (bq-vector 2 '(3 4)))
+      (print (vectorp (bq-vector 2 nil)))
+      (print `(a #(b ,(+ 1 1)) #(c) ,@(list `#(,(+ 2 1)))))
+      (print `#(a b))
+      (defmacro bq-vector-macro (x) `(vector-push-extend ,x (make-array 1 :initial-contents `#(,,x) :fill-pointer 1 :adjustable t)))
+      (print (bq-vector-macro 5))
+    expected: |
+      #(1 2 3 4)
+      T
+      (A #(B 2) #(C) #(3))
+      #(A B)
+      1
+  - name: a-literal-shadowing-import-changes-how-the-next-forms-read
+    source: |
+      ;; Like import, consumed where it stands: sento shadowing-imports a generic and
+      ;; defines methods on its bare name. A compile path read them as a function of
+      ;; the package's own. SBCL agrees.
+      (defpackage :ci-si-a (:use :cl) (:export #:g #:h))
+      (defgeneric ci-si-a:g (x))
+      (defvar ci-si-a:h :a-h)
+      (defpackage :ci-si-b (:use :cl))
+      (in-package :ci-si-b)
+      (defun h () :own)
+      (shadowing-import '(ci-si-a:g ci-si-a:h))
+      (defmethod g ((x integer)) (list :int x))
+      (print (list (ci-si-a:g 1) h))
+      (in-package :cl-user)
+      (print (list (eq (find-symbol "G" :ci-si-b) 'ci-si-a:g) (eq 'ci-si-b::h 'ci-si-a:h)))
+    expected: |
+      ((:INT 1) :A-H)
+      (T T)
   - name: lone-shadowing-import
     source: |
       (print (shadowing-import 'ci-lone-foo))

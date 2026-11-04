@@ -65,6 +65,79 @@ class ThreadTest {
 	}
 
 	@Test
+	void aMacroExpandingOnAThreadLeavesItsPackageToThatThread() {
+		// The interpreter expands at the first call, in the package the body was read
+		// in. Through the one shared current package the spawner read its next forms
+		// there, and two threads' overlapping save and restore left it there for good
+		// (sento's workers: "The variable SENTO.ACTOR::*F* is unbound" in the program).
+		assertThat(evalAll(evaluator(), """
+				(defpackage :tp-home (:use :cl))
+				(in-package :tp-home)
+				(defvar *expanding* nil)
+				(defvar *resume* nil)
+				(defmacro expands-slowly ()
+				  (setq *expanding* t)
+				  (loop until *resume* do (sleep 0.01))
+				  :expanded)
+				(defun call-it () (expands-slowly))
+				(in-package :cl-user)
+				(let ((th (rontolisp:make-thread (lambda () (tp-home::call-it)))))
+				  (loop until tp-home::*expanding* do (sleep 0.01))
+				  (let ((seen (package-name *package*)))
+				    (setq tp-home::*resume* t)
+				    (list seen (rontolisp:join-thread th) (package-name *package*))))
+				""").print()).isEqualTo("(\"CL-USER\" :EXPANDED \"CL-USER\")");
+	}
+
+	@Test
+	void aCompilerMacroExpandingOnAThreadMutesOnlyThatThread() {
+		// The mute around the expansion was one flag: what another thread printed
+		// meanwhile was lost, and two threads' overlapping save and restore left it set
+		// for good (a second lparallel worker: nothing the program printed afterwards).
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		evalAll(new LispEvaluator(new PrintStream(out, true, java.nio.charset.StandardCharsets.UTF_8)), """
+				(defvar *expanding* nil)
+				(defvar *resume* nil)
+				(defun slow () :slow)
+				(define-compiler-macro slow (&whole form)
+				  (setq *expanding* t)
+				  (loop until *resume* do (sleep 0.01))
+				  form)
+				(defun call-slow () (slow))
+				(let ((th (rontolisp:make-thread #'call-slow)))
+				  (loop until *expanding* do (sleep 0.01))
+				  (print :meanwhile)
+				  (setq *resume* t)
+				  (rontolisp:join-thread th))
+				""");
+		assertThat(out.toString(java.nio.charset.StandardCharsets.UTF_8).trim()).isEqualTo(":MEANWHILE");
+	}
+
+	@Test
+	void aThreadsHandlersAreItsOwn() {
+		// The handler stack was one global: a thread leaving its handler-bind restored
+		// what it had saved over a handler the main thread pushed since, and the main
+		// thread's condition found none (sento's test suite: "Unhandled condition").
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		evalAll(new LispEvaluator(new PrintStream(out, true, java.nio.charset.StandardCharsets.UTF_8)), """
+				(defvar *phase* 0)
+				(define-condition own-stack (error) ())
+				(defun worker ()
+				  (handler-bind ((own-stack #'identity))
+				    (setq *phase* 1)
+				    (loop until (= *phase* 2) do (sleep 0.01))))
+				(let ((th (rontolisp:make-thread #'worker)))
+				  (loop until (= *phase* 1) do (sleep 0.01))
+				  (print (handler-bind ((own-stack (lambda (e) (declare (ignore e)) (invoke-restart 'go-on))))
+				           (setq *phase* 2)
+				           (rontolisp:join-thread th)
+				           (with-simple-restart (go-on "Go on.") (error 'own-stack))
+				           :handled)))
+				""");
+		assertThat(out.toString(java.nio.charset.StandardCharsets.UTF_8).trim()).isEqualTo(":HANDLED");
+	}
+
+	@Test
 	void threadpIsNilOnANonThread() {
 		assertThat(evalAll(evaluator(), "(rontolisp:threadp 42)")).isEqualTo(LispNil.INSTANCE);
 	}

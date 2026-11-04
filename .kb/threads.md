@@ -11,7 +11,8 @@ round-trip are portable.
 ## Backends
 - Interpreter: `LispThread` record (thread, result, name) from `AsyncRuntime.spawnThread` — the ONLY
   LispEvaluator-reachable class touching threads, so the browser playground substitutes it
-  wholesale (`Target_AsyncRuntime.spawnThread` runs the body synchronously).
+  wholesale (`Target_AsyncRuntime.spawnThread` runs the body synchronously, and hands back the current
+  thread: `join-thread` skips the `Thread.join`, which hung the page until 2026-11-05).
 - JVM: `{TMARKER, Thread, FutureTask, name}` marker-headed `Object[]`; `JvmThreadRuntimeBuilder`'s
   class `implements Callable`, `_thread_spawn` builds the handle on an UNSTARTED virtual thread,
   stores it in the runner's `_threadHandle`, then starts it.
@@ -56,6 +57,32 @@ non-function first argument still spawns on both and fails at the join. Pinned b
   because an upstream `.asd` push reaches only that file's own conditionals
   (`.kb/reader-features.md`). Consumer: `clack:clackup` (`.kb/clack.md`). Pinned by ci-spec
   `reader-features-variable` (feature count 4 vs 3).
+
+## What a thread keeps of its own
+**The handler and restart stacks** (`%handler-clusters%`, `%restart-clusters%`), interpreter and JVM: a thread
+starts them empty (`LispEvaluator.onOwnThread`, `JvmThreadRuntimeBuilder`'s `call()`). They were one global: a
+thread leaving its `handler-bind` restored what it had saved over what another thread pushed since, and that
+thread's condition found no handler (sento's `tell` across threads, fiveam's `is` on the main one: `Unhandled
+condition`, measured 2026-11-05 on both). An editor's request bound them already (`CommonLispSwank.serve`). A
+served request on the interpreter too; on the JVM a served request and on both an async body still share them
+(`.todo/i42`). Pinned by `ThreadTest` and `JvmThreadTest#aThreadsHandlersAreItsOwn`, deterministic: the main
+thread pushes between the worker's push and its restore.
+
+The rest of this section is the interpreter's.
+
+**The current package** (`LispEvaluator.withOwnPackage`, `PackageResolver.bindThreadPackage`): a `make-thread`
+body, an async body and a served request run under one starting from their spawner's. A macro's first
+expansion moves the current package to where the body was read, by save, set and restore; through the one
+shared state that move reached what the program read meanwhile (2026-11-05: `(print (future:fresult *f*))`
+read `SENTO.ACTOR::*F*`), and two overlapping moves restored the other's package for good. The cost: an
+`in-package` on the main thread does not reach a running thread, where SBCL's global value would. Making only
+the swaps per thread keeps that, at nine sites, and leaves the main thread's own swaps visible to the
+others. Pinned by `ThreadTest#aMacroExpandingOnAThreadLeavesItsPackageToThatThread`.
+
+**The mute around a compiler macro's expansion** (`MutablePrintStream`): a thread local. As one flag it lost
+what another thread printed meanwhile, and two overlapping expansions left it set: with two lparallel workers
+nothing the program printed afterwards appeared, exit status 0. Pinned by
+`ThreadTest#aCompilerMacroExpandingOnAThreadMutesOnlyThatThread`.
 
 ## bt2 shim
 `bordeaux-threads.lisp` (ShimLibraries) provides BOTH namespaces of the one built-in

@@ -18,6 +18,9 @@
 新しいスレッドの print ファミリが指定したストリームに向かいます —
 `bordeaux-threads`/`bt2` ライブラリ(および Clack のハンドラ)が使う形です。
 
+新しいスレッドのカレントパッケージは生成元のものから始まり、以後はそのスレッド固有です。
+スレッド内の `in-package` や `*package*` の束縛は他のスレッドに及びません。
+
 `name` (既定値 `nil`) はハンドルに保持され、`bt:thread-name` がそれを返します。新しい
 スレッド内の [`rontolisp:current-thread`](rontolisp-current-thread.md) はこれと同じハンドルです。
 

@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.rontolisp.compiler.HandlerCaseClauses;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLayout;
@@ -403,6 +405,14 @@ final class WasmHandlerCaseCompiler {
 		ctx.writer.write(Instruction.END); // block $done
 	}
 
+	private static List<LispVal> letBound(List<LispVal> clauseParts, WasmLispCompiler.Ctx ctx) {
+		return HandlerCaseClauses.letBound(clauseParts, ctx.specialVars,
+				names -> !FreeVarAnalyzer
+					.findCapturedVars(clauseParts.subList(2, clauseParts.size()), names, ctx.functions.keySet(),
+							ctx.captureMemo)
+					.isEmpty());
+	}
+
 	/**
 	 * Compiles a {@code :no-error} clause body -- {@code (:no-error ([var...]) body...)}
 	 * -- binding each variable to the protected form's VALUES, the same shape
@@ -425,8 +435,9 @@ final class WasmHandlerCaseCompiler {
 	 * The spill global is cleared after the snapshot so the clause body runs on a clean
 	 * channel (a clause that itself publishes through the spill starts fresh).
 	 */
-	private static void compileNoErrorClauseBody(List<LispVal> clauseParts, int valueSlot, int resultSlot,
+	private static void compileNoErrorClauseBody(List<LispVal> sourceClause, int valueSlot, int resultSlot,
 			WasmLispCompiler.Ctx ctx) {
+		List<LispVal> clauseParts = letBound(sourceClause, ctx);
 		List<LispVal> varVals = clauseParts.get(1) instanceof LispCons varList ? varList.toList() : List.of();
 		int spillSlot = ctx.allocTemp();
 		Integer spillGlobal = ctx.globalIndices.get(LispNames.MV_SPILL);
@@ -509,8 +520,9 @@ final class WasmHandlerCaseCompiler {
 	 * {@code valueSlot} through a pseudo-local, and stores the body's value into
 	 * {@code resultSlot}.
 	 */
-	private static void compileClauseBody(List<LispVal> clauseParts, int valueSlot, int resultSlot,
+	private static void compileClauseBody(List<LispVal> sourceClause, int valueSlot, int resultSlot,
 			WasmLispCompiler.Ctx ctx) {
+		List<LispVal> clauseParts = letBound(sourceClause, ctx);
 		String varName = null;
 		Integer shadowedSlot = null;
 		if (clauseParts.get(1) instanceof LispCons varList && varList.car() instanceof LispSymbol var) {
