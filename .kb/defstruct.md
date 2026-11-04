@@ -167,6 +167,22 @@ Pinned by `SetfFunctionNameFixture.UNKNOWN_PLACE`
 (`aPlaceNoDefinitionMakesCallsTheSetfFunctionWhenTheFormRuns` in the three backend suites) and
 `LispMacroExpanderTest#aPlaceNoDefinitionMakesIsTheSetfFunctionCall`.
 
+**`(setf (apply #'name arg...) val)` is that call through `apply`** (CLHS 5.1.2.5):
+`(apply #'%setf-name val arg...)` for a writer a definition makes, `(apply #'(setf name) val arg...)`
+otherwise, the arguments ahead of the value as above. Refused at expansion: a designator that is not
+`#'symbol` (SBCL refuses too), a `cl` name with no writer (`#'length`; CLHS names only `aref`, `bit`,
+`sbit` for standard functions, SBCL also takes the ones it has a `(setf name)` function for, such as
+`#'car`), and every `apply` place on `--no-gc`. `aref`/`svref` have no `(setf name)` function and go
+through the row-major place (`setfApplyArrayPlace`), whose lazily injected
+`#'array-row-major-index` the wrapper gate is told about by `appliesArrayAccessor`. The writer's
+on-demand sources see the applied name: `referencedStructWriterDefuns` (the `(apply #'acc ...)` itself,
+position-blind, because `incf`/`push`/`the` reach the place too), and the interpreter's
+`ensurePreludeSetfPlacesLoaded` and its uiop/usocket twins (`setfPlaceFunction`). Measured 2026-11-04
+against SBCL 2.2.9, ci-spec `setf-apply-place-of-any-function` and `SetfFunctionNameFixture.UNKNOWN_PLACE`
+(an undefined `(setf name)` warns at compile time, which the corpus tests forbid); ningle's `(defmethod (setf route) ...)`
+in the shapes caveman2's `defroute` expands to answers `(200 NIL ("hi bob"))` and the 404 on the
+interpreter and the JVM.
+
 **A writable slot's accessor has a `(setf accessor)` function; a `:read-only` one has none.**
 `structWriterDefun` is `(defun %setf-ACC (new obj) <the place's checked store>)`, so it reports a
 non-instance as `(SETF ACC): ...` like the place. NOT in `expandDefstruct`'s output: the

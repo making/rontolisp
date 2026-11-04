@@ -2084,12 +2084,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// only in the registry, but the error/signal expansions inject it back).
 		Set<String> takenAsValues = BuiltinFunctionWrappers.functionValueNames(program);
 		takenAsValues.addAll(BuiltinFunctionWrappers.functionValueNames(closRegistry.conditionReports().values()));
-		// (setf (apply #'aref ...) ...) / (setf (apply #'svref ...) ...) lowers lazily,
-		// during codegen (JvmExprCompiler's SETF case), to a (function
-		// array-row-major-index) reference no scan of the surface program above can see
-		// coming -- the scan has to be told, the same way restartMode and
-		// mayCreateInstances are told about their own lazy Pass-2 products.
-		if (LispMacroExpander.usesSetfApplyArrayRowMajorIndex(program)) {
+		// A place (apply #'aref ...) / (apply #'svref ...) lowers lazily, during codegen
+		// (JvmExprCompiler's SETF case), to a (function array-row-major-index) reference
+		// no scan of the surface program above can see coming -- the scan has to be told,
+		// the same way restartMode and mayCreateInstances are told about their own lazy
+		// Pass-2 products.
+		if (LispMacroExpander.appliesArrayAccessor(program)) {
 			takenAsValues.add(LispNames.ARRAY_ROW_MAJOR_INDEX);
 		}
 		for (String op : BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS) {

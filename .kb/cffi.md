@@ -59,11 +59,11 @@ its type. The correct spelling is `foreign-funcall-varargs`.
   (`.kb/ffi.md`); `%call-symbol` re-signals a miss with the function's name in front. A struct
   returned BY VALUE is inside the grid. The JVM class output embeds the whole binding
   (`JvmFfiRuntimeBuilder`).
-- Three compile-path facts the cffi source forced, pinned in `JvmFfiInteropCompilerTest`:
-  `%call-address` calls internal `ffi:%apply-call` (arguments as ONE list, since compiled backends
-  give `ffi:` no first-class function values); `(fboundp 'name)` over a macro-time-defined MACRO
-  folds to `t` in `UserMacroExpander`; `(setf (apply #'aref ...))` lowers through the row-major
-  place in `LispMacroExpander.expandSetf`.
+- Three compile-path facts the cffi source forced, the first two pinned in
+  `JvmFfiInteropCompilerTest`: `%call-address` calls internal `ffi:%apply-call` (arguments as ONE
+  list, since compiled backends give `ffi:` no first-class function values); `(fboundp 'name)` over
+  a macro-time-defined MACRO folds to `t` in `UserMacroExpander`; `(setf (apply #'aref ...))` lowers
+  through the row-major place (`.kb/defstruct.md`, "setf on accessors").
 - `cffi:defcvar` works via `define-symbol-macro` (`.kb/symbol-macrolet.md`); its `(setf (mem-ref
   ...))` setter forced `UserMacroExpander`'s setf case to expand before it walks. A `defcfun` over
   a `translatable-foreign-type` expands to a form containing the type OBJECT, so the compile paths

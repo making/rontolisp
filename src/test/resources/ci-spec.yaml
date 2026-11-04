@@ -11547,6 +11547,112 @@ cases:
     expected: |
       :HTML5
       :SGML
+  - name: setf-apply-place-of-any-function
+    source: |
+      (defvar *sap-log* nil)
+      (defun sap-tr (x) (push x *sap-log*) x)
+      (defun sap-log () (prog1 (reverse *sap-log*) (setq *sap-log* nil)))
+      ;; A setf function with no reader; the new value goes ahead of the spread arguments.
+      (defun (setf sap-fa) (v a b &key k) (list :set v a b k))
+      (print (setf (apply #'sap-fa '(1 2 :k 3)) 9))
+      (print (setf (apply #'sap-fa 1 '(2 :k 3)) 9))
+      ;; The arguments evaluate before the value.
+      (print (setf (apply #'sap-fa (sap-tr 1) (sap-tr 2) (sap-tr '(:k 3))) (sap-tr 9)))
+      (print (sap-log))
+      ;; Defined after its use: looked up when the form runs.
+      (defun sap-use-later (args) (setf (apply #'sap-later args) :v))
+      (defun (setf sap-later) (v a) (list :later v a))
+      (print (sap-use-later '(1)))
+      ;; A generic setf function, a CLOS accessor, defstruct accessors.
+      (defgeneric (setf sap-gp) (v o k))
+      (defmethod (setf sap-gp) (v (o integer) k) (list :int v o k))
+      (defmethod (setf sap-gp) (v (o string) k) (list :str v o k))
+      (print (setf (apply #'sap-gp (list 1 2)) 3))
+      (print (setf (apply #'sap-gp "s" (list 2)) 3))
+      (defclass sap-c () ((s :accessor sap-c-s :initform 0)))
+      (let ((o (make-instance 'sap-c))) (print (setf (apply #'sap-c-s (list o)) 5)) (print (sap-c-s o)))
+      (defstruct sap-pt x)
+      (let ((p (make-sap-pt :x 1)))
+        (print (setf (apply #'sap-pt-x (list p)) 5))
+        (print (sap-pt-x p)))
+      (defstruct (sap-tv (:type vector)) a)
+      (let ((p (make-sap-tv :a 1))) (print (setf (apply #'sap-tv-a (list p)) 5)) (print (sap-tv-a p)))
+      ;; A package-qualified name, the shape caveman2's defroute expands to.
+      (defpackage :sap-pkg (:use :cl) (:export #:route))
+      (in-package :sap-pkg)
+      (defgeneric (setf route) (fn app path &key method))
+      (defmethod (setf route) (fn app path &key method) (list :route fn app path method))
+      (in-package :cl-user)
+      (print (setf (apply #'sap-pkg:route (append (list 'app "/") (list :method :get))) :fn))
+      ;; The standard array places, the subscripts spread or the whole list applied.
+      (let ((a (make-array '(2 3) :initial-element 0)))
+        (setf (apply #'aref a (list 1 2)) 42)
+        (setf (apply #'aref a 0 (list 1)) 7)
+        (print (list (aref a 1 2) (aref a 0 1) (setf (apply #'aref (list a 0 0)) 9) (aref a 0 0))))
+      (let ((v (make-array 2 :initial-element 0))) (print (setf (apply #'svref (list v 1)) 7)) (print v))
+      (let ((v (make-array 2 :element-type 'bit :initial-element 0))) (print (setf (apply #'bit v '(1)) 1)) (print v))
+      (let ((v (make-array 2 :element-type 'bit :initial-element 0))) (print (setf (apply #'sbit (list v 1)) 1)) (print v))
+      ;; Every place-writing macro evaluates the place's subforms once.
+      (defun sap-ff (a) (car a))
+      (defun (setf sap-ff) (v a) (rplaca a v) v)
+      (let ((l (list 1)))
+        (print (incf (apply #'sap-ff (sap-tr (list l))) 2))
+        (print (sap-log))
+        (push 3 (apply #'sap-ff (sap-tr (list l))))
+        (print (sap-log))
+        (print l))
+      (let ((a (list 1)) (b (list 2)))
+        (rotatef (apply #'sap-ff (list a)) (apply #'sap-ff (list b)))
+        (print (list a b))
+        (psetf (apply #'sap-ff (list a)) 5 (apply #'sap-ff (list b)) (sap-ff a))
+        (print (list a b))
+        (print (shiftf (apply #'sap-ff (list a)) 8))
+        (print a)
+        (setf (apply #'sap-ff (list a)) 1 (apply #'sap-ff (list b)) 2)
+        (print (list a b))
+        (setf (the integer (apply #'sap-ff (list a))) 3)
+        (print a))
+      (defmacro sap-ff-of (x) `(apply #'sap-ff (list ,x)))
+      (let ((a (list 0))) (setf (sap-ff-of a) 4) (print a))
+      (let ((v (vector 1 2)))
+        (incf (apply #'aref v (sap-tr (list 1))) 10)
+        (print (sap-log))
+        (print v))
+    expected: |
+      (:SET 9 1 2 3)
+      (:SET 9 1 2 3)
+      (:SET 9 1 2 3)
+      (1 2 (:K 3) 9)
+      (:LATER :V 1)
+      (:INT 3 1 2)
+      (:STR 3 "s" 2)
+      5
+      5
+      5
+      5
+      5
+      5
+      (:ROUTE :FN APP "/" :GET)
+      (42 7 9 9)
+      7
+      #(0 7)
+      1
+      #*01
+      1
+      #*01
+      3
+      (((3)))
+      ((((3 . 3))))
+      ((3 . 3))
+      ((2) (1))
+      ((5) (2))
+      5
+      (8)
+      ((1) (2))
+      (3)
+      (4)
+      ((1))
+      #(1 12)
   - name: clos-defgeneric-defmethod-eql-dispatch
     source: |
       (defgeneric clos-describe-it (x))

@@ -22,8 +22,9 @@ argument of the place bound to a temp in a `let*` in front of the expansion; tem
 `freshObjVar`, `.kb/clos.md`).
 
 - A symbol, literal, `(quote ...)` or `#'...` subform stays written out.
-- **`the`/`values`/`apply`/`ldb`/`mask-field` places hoist nothing** -- their non-atomic
-  argument is read STRUCTURALLY by the `setf` expanders.
+- **`the`/`values`/`ldb`/`mask-field` places hoist nothing** -- their non-atomic argument is
+  read STRUCTURALLY by the `setf` expanders. An `apply` place hoists like a call: its `#'name`
+  stays written out, in `psetf` too.
 
 ## Sibling: a setf-function place evaluates its arguments before the value
 
@@ -31,7 +32,8 @@ argument of the place bound to a temp in a `let*` in front of the expansion; tem
 looks the function up (CLHS 5.1.2.9), on every backend**, though the call passes the value
 first. `LispMacroExpander.setfFunctionCall` builds both arms of `expandSetf`'s default
 branch (a `%setf-` writer a definition makes -- `defun (setf ...)`, `defmethod (setf ...)`,
-a CLOS `:accessor`, the prelude's `bit`/`sbit`/`get` -- and the late-bound `#'(setf name)`).
+a CLOS `:accessor`, the prelude's `bit`/`sbit`/`get` -- and the late-bound `#'(setf name)`), and
+of an `apply` place, where the call is `apply` rather than `funcall`.
 
 - No temporaries where the order is unobservable: every subform a constant or a read (a
   variable, `#'name`), a constant value, or (a writer a definition makes) every argument a
