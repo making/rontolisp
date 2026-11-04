@@ -392,8 +392,10 @@ public final class LispEvaluator {
 	 * references the macro names only through its own expansion). Consults the live
 	 * table, so {@code macrolet}-local macros active at evaluation time are seen too.
 	 */
-	private final LispMacroExpander.UserMacroHook symbolMacroUserMacroHook = form -> form.car() instanceof LispSymbol op
-			&& this.userMacros.containsKey(op.name()) ? expandUserMacro(form) : null;
+	private LispMacroExpander.UserMacroHook symbolMacroUserMacroHook(Environment env) {
+		return form -> form.car() instanceof LispSymbol op && this.userMacros.containsKey(op.name())
+				? expandUserMacro(form, env) : null;
+	}
 
 	/**
 	 * Memo of {@link #expandUserMacro}, keyed by the CALL SITE's cons identity. CL
@@ -477,14 +479,6 @@ public final class LispEvaluator {
 	private record UserMacro(List<LispSymbol> required, @Nullable LispSymbol rest, List<LispVal> body, Environment env,
 			String definitionPackage) {
 	}
-
-	/**
-	 * How many user-defined function bodies are currently on the stack. Zero means the
-	 * form being evaluated is a TOP-LEVEL one, whose file's package the resolver still
-	 * has current -- which is what decides the package a user macro expands in (see
-	 * {@code expandMacroCall}).
-	 */
-	private int functionBodyDepth;
 
 	private SourceLoader sourceLoader = SourceLoader.fileSystem();
 
@@ -1656,7 +1650,7 @@ public final class LispEvaluator {
 						if (macro == null || !(macroCallForm(name, callArgs.get(0)) instanceof LispCons form)) {
 							return callArgs.get(0);
 						}
-						return expandMacroCall(name, macro, form);
+						return expandMacroCall(name, macro, form, null);
 					});
 				}));
 		this.globalEnv.defineFunction(LispNames.SYMBOL_FUNCTION, new LispFunction(LispNames.SYMBOL_FUNCTION, args -> {
@@ -4555,11 +4549,6 @@ public final class LispEvaluator {
 		// *readtable* too (CLHS load): an in-readtable inside the file is the file's.
 		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
 		this.dynamicBindings.push(LispNames.READTABLE_VAR, readtable == null ? LispNil.INSTANCE : readtable);
-		// The file's forms are TOP-LEVEL forms whoever called load -- a function, or
-		// asdf:perform's load-op method, which is where every ASDF component load runs
-		// -- so a macro they call expands in the file's package (expandMacroCall).
-		int callerFunctionBodyDepth = this.functionBodyDepth;
-		this.functionBodyDepth = 0;
 		try {
 			// Only a file that textually contains #. pays for the marker read + the
 			// per-form substitution walk; every other file keeps the plain read.
@@ -4592,7 +4581,6 @@ public final class LispEvaluator {
 			}
 		}
 		finally {
-			this.functionBodyDepth = callerFunctionBodyDepth;
 			this.dynamicBindings.pop(LispNames.READTABLE_VAR);
 			this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
 			this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
@@ -6010,9 +5998,6 @@ public final class LispEvaluator {
 				// (in-package ...) -- the cffi backend does, being a near-verbatim
 				// analogue of upstream's own implementation file -- confines it to
 				// itself.
-				// Top-level forms, like a loaded file's (see loadFile).
-				int callerFunctionBodyDepth = this.functionBodyDepth;
-				this.functionBodyDepth = 0;
 				this.packageResolver.pushPackage();
 				try {
 					for (LispVal form : leafShim) {
@@ -6021,7 +6006,6 @@ public final class LispEvaluator {
 				}
 				finally {
 					this.packageResolver.popPackage();
-					this.functionBodyDepth = callerFunctionBodyDepth;
 				}
 				return;
 			}
@@ -6270,8 +6254,6 @@ public final class LispEvaluator {
 		/** The printed elements of {@code *features*} when the file opened. */
 		private final Set<String> featuresAtOpen = new HashSet<>();
 
-		private final int callerFunctionBodyDepth;
-
 		/** The package current when the file opened. */
 		private final String packageAtOpen;
 
@@ -6306,8 +6288,6 @@ public final class LispEvaluator {
 			LispEvaluator.this.dynamicBindings.push(LispNames.LOAD_PATHNAME_VAR, new LispString(asdPath));
 			LispEvaluator.this.dynamicBindings.push(LispNames.LOAD_TRUENAME_VAR, new LispString(truename));
 			LispEvaluator.this.dynamicBindings.push(LispNames.FEATURES_VAR, features);
-			this.callerFunctionBodyDepth = LispEvaluator.this.functionBodyDepth;
-			LispEvaluator.this.functionBodyDepth = 0;
 			LispEvaluator.this.asdLoads.addLast(this);
 		}
 
@@ -6405,7 +6385,6 @@ public final class LispEvaluator {
 		@Override
 		public void close() {
 			LispEvaluator.this.asdLoads.removeLastOccurrence(this);
-			LispEvaluator.this.functionBodyDepth = this.callerFunctionBodyDepth;
 			LispEvaluator.this.dynamicBindings.pop(LispNames.FEATURES_VAR);
 			LispEvaluator.this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
 			LispEvaluator.this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
@@ -6628,7 +6607,7 @@ public final class LispEvaluator {
 				return null;
 			}
 			UserMacro macro = this.userMacros.get(op.name());
-			return macro == null ? null : expandMacroCall(op.name(), macro, call);
+			return macro == null ? null : expandMacroCall(op.name(), macro, call, null);
 		});
 		if (!(currentSpecialValue(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED) instanceof LispNil)) {
 			// A form read from a file carries its first line: the report names the
@@ -7225,9 +7204,9 @@ public final class LispEvaluator {
 	 */
 	public ControlState controlState() {
 		return new ControlState(this.dynamicBindings.depths(), this.handlerCaseTypes.get().size(),
-				this.functionBodyDepth, this.packageResolver.packageStackDepth(),
-				this.packageResolver.currentPackageName(), this.loadDirStack.size(), this.loadingSystems.size(),
-				this.out.muted, this.debugging ? topFrame() : null);
+				this.packageResolver.packageStackDepth(), this.packageResolver.currentPackageName(),
+				this.loadDirStack.size(), this.loadingSystems.size(), this.out.muted,
+				this.debugging ? topFrame() : null);
 	}
 
 	/**
@@ -7239,8 +7218,6 @@ public final class LispEvaluator {
 		private final Map<String, Integer> bindingDepths;
 
 		private final int handlerCaseFrames;
-
-		private final int functionBodyDepth;
 
 		private final int packageStackDepth;
 
@@ -7254,12 +7231,11 @@ public final class LispEvaluator {
 
 		private final @Nullable CallFrame topFrame;
 
-		private ControlState(Map<String, Integer> bindingDepths, int handlerCaseFrames, int functionBodyDepth,
-				int packageStackDepth, String currentPackage, int loadDirDepth, int loadingSystemsDepth, boolean muted,
+		private ControlState(Map<String, Integer> bindingDepths, int handlerCaseFrames, int packageStackDepth,
+				String currentPackage, int loadDirDepth, int loadingSystemsDepth, boolean muted,
 				@Nullable CallFrame topFrame) {
 			this.bindingDepths = bindingDepths;
 			this.handlerCaseFrames = handlerCaseFrames;
-			this.functionBodyDepth = functionBodyDepth;
 			this.packageStackDepth = packageStackDepth;
 			this.currentPackage = currentPackage;
 			this.loadDirDepth = loadDirDepth;
@@ -7276,7 +7252,6 @@ public final class LispEvaluator {
 			while (frames.size() > this.handlerCaseFrames) {
 				frames.removeLast();
 			}
-			evaluator.functionBodyDepth = this.functionBodyDepth;
 			evaluator.packageResolver.restorePackageState(this.packageStackDepth, this.currentPackage);
 			while (evaluator.loadDirStack.size() > this.loadDirDepth) {
 				evaluator.loadDirStack.removeLast();
@@ -8958,10 +8933,8 @@ public final class LispEvaluator {
 	 * What the frame carries for the forms it absorbed: {@code owner}, the exit target of
 	 * every block entered in this frame (the first block's scope; a {@code return-from}
 	 * aimed at any of them ends the frame with the exit's value, since each of those
-	 * blocks IS the frame's continuation); {@code inBody}, whether the frame entered a
-	 * function body, so {@link #functionBodyDepth} is raised once per frame however many
-	 * bodies tail calls replace, and lowered on every exit; {@code funcallSeam}, whether
-	 * a {@code (funcall closure ..)} or {@code (apply closure ..)} was absorbed, so what
+	 * blocks IS the frame's continuation); {@code funcallSeam}, whether a
+	 * {@code (funcall closure ..)} or {@code (apply closure ..)} was absorbed, so what
 	 * the closure raises still runs the handler-bind handlers the built-in seam would
 	 * have run. With {@code labels} (a tagbody statement's, else null) a tail {@code (go
 	 * L)} to one of them answers the label's jump token instead of throwing
@@ -8989,7 +8962,6 @@ public final class LispEvaluator {
 			@Nullable Environment exitTo) {
 		Environment owner = null;
 		Environment deferTo = exitTo;
-		boolean inBody = false;
 		boolean funcallSeam = false;
 		// Where a condition leaving this frame was (ConditionTrace): the innermost form
 		// read from a named file the loop has stepped onto and the program function its
@@ -9378,7 +9350,7 @@ public final class LispEvaluator {
 									// place reference must trigger that load the same way
 									// a function call would.
 									ensurePreludeSetfPlacesLoaded(cons);
-									next = expandSetfMaybeUserExpander(expandUserMacroPlaces(cons));
+									next = expandSetfMaybeUserExpander(expandUserMacroPlaces(cons, env));
 									break dispatch;
 								}
 								case LispNames.SCHAR_SET:
@@ -9511,7 +9483,7 @@ public final class LispEvaluator {
 								ensureObjcLoaded();
 							}
 							if (this.userMacros.containsKey(sym.name())) {
-								next = expandUserMacro(cons);
+								next = expandUserMacro(cons, env);
 								break dispatch;
 							}
 							// Compiler macros: applied last, so a defmacro and every
@@ -9519,7 +9491,7 @@ public final class LispEvaluator {
 							// the expansion (and the load-time-value slot inside it) is
 							// built once for this occurrence.
 							if (!this.compilerMacros.isEmpty() && this.compilerMacros.containsKey(sym.name())) {
-								LispVal compilerExpansion = expandCompilerMacro(cons);
+								LispVal compilerExpansion = expandCompilerMacro(cons, env);
 								if (compilerExpansion != cons) {
 									next = compilerExpansion;
 									break dispatch;
@@ -9582,15 +9554,7 @@ public final class LispEvaluator {
 								// this one: an exit from it evaluates its value form
 								// here.
 								deferTo = null;
-								// The body runs in this frame. See expandMacroCall: the
-								// depth tells a macro expansion whether its call site is
-								// a TOP-LEVEL form (whose file's package is still
-								// current) or one buried in a function body evaluated
-								// long after its file was read.
-								if (!inBody) {
-									this.functionBodyDepth++;
-									inBody = true;
-								}
+								// The body runs in this frame.
 								List<LispVal> body = lambda.body();
 								if (body.size() == 1 && body.get(0) instanceof LispCons form
 										&& form.car() instanceof LispSymbol blockHead
@@ -9679,9 +9643,6 @@ public final class LispEvaluator {
 			throw funcallSeam || debuggerHere() ? signalPoint(failure, env, null) : failure;
 		}
 		finally {
-			if (inBody) {
-				this.functionBodyDepth--;
-			}
 			if (callFrame != null) {
 				callFrame.exit();
 			}
@@ -9760,12 +9721,16 @@ public final class LispEvaluator {
 	 * A fresh scope for one call of {@code lambda}, under the scope it closed over. A
 	 * program function's own ({@link LispLambda#sourced}) starts its code
 	 * ({@link Environment#lexicalFunction}); any other lambda's code is the code of the
-	 * function it was written in, which its closure already says.
+	 * function it was written in, which its closure already says. So for the package its
+	 * code was read in ({@link Environment#lexicalPackage}).
 	 */
 	private static Environment callScope(LispLambda lambda) {
 		Environment scope = new Environment((Environment) lambda.closure());
 		if (lambda.sourced() && lambda.name() != null) {
 			scope.lexicalFunction(lambda.name());
+		}
+		if (lambda.readPackage() != null) {
+			scope.lexicalPackage(lambda.readPackage());
 		}
 		return scope;
 	}
@@ -10124,7 +10089,7 @@ public final class LispEvaluator {
 				// into its expansion (macro arguments may be data, the expansion is
 				// code),
 				// so it gets this evaluator's one-step expander as the hook.
-				return LispMacroExpander.expandSymbolMacrolet(cons, this.symbolMacroUserMacroHook);
+				return LispMacroExpander.expandSymbolMacrolet(cons, symbolMacroUserMacroHook(env));
 			case LispNames.BYTE:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandByte);
 			case LispNames.BYTE_SIZE:
@@ -10721,8 +10686,8 @@ public final class LispEvaluator {
 		// Whether its body was read from a named file decides whether the uncaught
 		// report may name it (ConditionTrace): a library's function never does.
 		boolean sourced = LispTrees.anyCons(blockForm, form -> form instanceof LocatedCons);
-		this.globalEnv.defineFunction(funcName,
-				new LispLambda(expanded.required(), expanded.rest(), List.of(blockForm), env, funcName, sourced));
+		this.globalEnv.defineFunction(funcName, new LispLambda(expanded.required(), expanded.rest(), List.of(blockForm),
+				env, funcName, sourced, readPackageOf(env)));
 		recordDefinition(funcName, source, parts);
 		return singleValue(nameForm);
 	}
@@ -11402,18 +11367,22 @@ public final class LispEvaluator {
 	 * @return the expansion, or {@code form} when the macro does not apply
 	 */
 	public LispVal expandCompilerMacro(LispCons form) {
+		return expandCompilerMacro(form, null);
+	}
+
+	private LispVal expandCompilerMacro(LispCons form, @Nullable Environment site) {
 		LispVal cached = this.compilerMacroExpansions.get(form);
 		if (cached != null) {
 			return cached;
 		}
-		LispVal expansion = computeCompilerMacroExpansion(form);
+		LispVal expansion = computeCompilerMacroExpansion(form, site);
 		if (this.compilerMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
 			this.compilerMacroExpansions.put(form, expansion);
 		}
 		return expansion;
 	}
 
-	private LispVal computeCompilerMacroExpansion(LispCons form) {
+	private LispVal computeCompilerMacroExpansion(LispCons form, @Nullable Environment site) {
 		if (!(form.car() instanceof LispSymbol op)) {
 			return form;
 		}
@@ -11424,7 +11393,8 @@ public final class LispEvaluator {
 		boolean savedMute = this.out.muted;
 		this.out.muted = true;
 		try {
-			LispVal expansion = withoutDebugger(() -> expandMacroCall(op.name(), macro, form));
+			LispVal expansion = withoutDebugger(
+					() -> expandMacroCall(op.name(), macro, form, site == null ? null : site.lexicalPackage()));
 			return expansion.print().equals(form.print()) ? form : expansion;
 		}
 		catch (RuntimeException | StackOverflowError ex) {
@@ -11916,16 +11886,17 @@ public final class LispEvaluator {
 	 * limited to user macros; the compile path gets this for free from
 	 * {@link UserMacroExpander} expanding the whole tree first).
 	 * @param cons the setf form
+	 * @param env the scope the setf form runs in
 	 * @return the setf form with macro places expanded
 	 */
-	private LispCons expandUserMacroPlaces(LispCons cons) {
+	private LispCons expandUserMacroPlaces(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
 		boolean changed = false;
 		for (int i = 1; i + 1 < parts.size(); i += 2) {
 			LispVal place = parts.get(i);
 			while (place instanceof LispCons placeCons && placeCons.car() instanceof LispSymbol placeSym
 					&& this.userMacros.containsKey(placeSym.name())) {
-				place = expandUserMacro(placeCons);
+				place = expandUserMacro(placeCons, env);
 				changed = true;
 			}
 			parts.set(i, place);
@@ -12302,6 +12273,10 @@ public final class LispEvaluator {
 	 * @return the expansion
 	 */
 	public LispVal expandUserMacro(LispCons form) {
+		return expandUserMacro(form, null);
+	}
+
+	private LispVal expandUserMacro(LispCons form, @Nullable Environment site) {
 		synchronized (this.userMacroExpansions) {
 			LispVal cached = this.userMacroExpansions.get(form);
 			if (cached != null) {
@@ -12315,7 +12290,7 @@ public final class LispEvaluator {
 		}
 		// Outside the monitor: a macro body is a whole program, it re-enters this method
 		// for the macro calls inside it, and it may take the library load lock.
-		LispVal expansion = expandMacroCall(name, macro, form);
+		LispVal expansion = expandMacroCall(name, macro, form, site == null ? null : site.lexicalPackage());
 		synchronized (this.userMacroExpansions) {
 			if (this.userMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
 				this.userMacroExpansions.put(form, expansion);
@@ -12328,8 +12303,10 @@ public final class LispEvaluator {
 	 * Runs one macro expansion: binds the unevaluated argument forms to the macro's
 	 * parameters and evaluates its body. Shared by {@code defmacro} expansion and
 	 * {@link #expandCompilerMacro}, which differ only in which table the macro came from.
+	 * @param sitePackage the package the call site's code was read in, or {@code null}
+	 * for a call site outside every function and macro body
 	 */
-	private LispVal expandMacroCall(String name, UserMacro macro, LispCons form) {
+	private LispVal expandMacroCall(String name, UserMacro macro, LispCons form, @Nullable String sitePackage) {
 		List<LispVal> args = form.cdr() instanceof LispCons argCons ? argCons.toList() : List.of();
 		if (args.size() < macro.required().size() || (macro.rest() == null && args.size() > macro.required().size())) {
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
@@ -12338,6 +12315,9 @@ public final class LispEvaluator {
 		}
 		Environment macroEnv = new Environment(macro.env());
 		macroEnv.lexicalFunction(name);
+		if (macroEnv.lexicalPackage() == null) {
+			macroEnv.lexicalPackage(macro.definitionPackage());
+		}
 		// A macro parameter binds like a function's (bindParameter): dynamically when
 		// its name is proclaimed or declared special, lexically otherwise -- and a
 		// lexical one is what the body reads even while a dynamic binding of the name
@@ -12359,20 +12339,19 @@ public final class LispEvaluator {
 		markDeclaredSpecials(declared, macroEnv);
 		// Common Lisp expands a macro while COMPILING the calling file, so *package* is
 		// that file's. The interpreter expands lazily instead, at call time, and only a
-		// TOP-LEVEL call site still has its file's package current -- a call buried in a
-		// function body is expanded long after the file was read, with whatever package
-		// the caller happens to be in. For those the macro's own DEFINING package is the
-		// closest available answer (and the exact one for the overwhelmingly common case
-		// of a macro used in the file that defines it): fast-http's callback-data
-		// expands (alexandria:format-symbol t "~A-~A" :callbacks name) into an accessor
-		// call, and a cl-user caller got a bare CALLBACKS-HEADER-FIELD instead of the
-		// fast-http.parser one. A top-level call site KEEPS the current package, which
-		// is both correct and what a macro generating names for the file that calls it
-		// needs (trivia's lispn:define-namespace).
+		// call site outside every function body still has its file's package current: one
+		// buried in a function body is expanded long after the file was read, with
+		// whatever package the caller happens to be in, so it gets the package the body
+		// was read in. let-plus's &structure interns an accessor name while its
+		// expansion is built, in the package of the function naming the let+; fast-http's
+		// callback-data does it through (alexandria:format-symbol t ...). A top-level
+		// call
+		// site keeps the current package (trivia's lispn:define-namespace).
 		String callerPackage = this.packageResolver.currentPackageName();
-		boolean swapPackage = this.functionBodyDepth > 0 && !callerPackage.equals(macro.definitionPackage());
+		String expansionPackage = sitePackage != null ? sitePackage : callerPackage;
+		boolean swapPackage = !callerPackage.equals(expansionPackage);
 		if (swapPackage) {
-			this.packageResolver.setCurrentPackage(macro.definitionPackage());
+			this.packageResolver.setCurrentPackage(expansionPackage);
 		}
 		try {
 			LispVal expansion = LispNil.INSTANCE;
@@ -13151,9 +13130,8 @@ public final class LispEvaluator {
 		LispVal wrapper = BuiltinFunctionWrappers.lambdaFor(name);
 		if (wrapper != null) {
 			LispVal value = evalLambdaForm((LispCons) wrapper, this.globalEnv, name);
-			return value instanceof LispLambda lambda
-					? new LispLambda(lambda.params(), lambda.rest(), lambda.body(), lambda.closure(), name, false)
-					: value;
+			return value instanceof LispLambda lambda ? new LispLambda(lambda.params(), lambda.rest(), lambda.body(),
+					lambda.closure(), name, false, lambda.readPackage()) : value;
 		}
 		if (SPECIAL_OPERATORS.contains(name)) {
 			throw CellErrorException.undefinedFunction(name);
@@ -15196,7 +15174,17 @@ public final class LispEvaluator {
 			}
 		}
 		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(1), body, false, functionName);
-		return singleValue(new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env));
+		return singleValue(new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env, null, false,
+				readPackageOf(env)));
+	}
+
+	/**
+	 * What a lambda created in {@code env} records as {@link LispLambda#readPackage}: the
+	 * current package outside every function and macro body, where it is still the
+	 * file's; nothing inside one, whose scope already says.
+	 */
+	private @Nullable String readPackageOf(Environment env) {
+		return env.lexicalPackage() == null ? this.packageResolver.currentPackageName() : null;
 	}
 
 	/**
@@ -16025,7 +16013,8 @@ public final class LispEvaluator {
 	private static LispLambda asyncBody(LispLambda thunk) {
 		Environment scope = new Environment((Environment) thunk.closure());
 		scope.lexicalFunction(null);
-		return new LispLambda(thunk.params(), thunk.rest(), thunk.body(), scope, thunk.name(), thunk.sourced());
+		return new LispLambda(thunk.params(), thunk.rest(), thunk.body(), scope, thunk.name(), thunk.sourced(),
+				thunk.readPackage());
 	}
 
 	// The rontolisp:await special form: evaluates its one operand and resolves it.
@@ -16681,10 +16670,6 @@ public final class LispEvaluator {
 				dynamicParams = bindParameter(lambda.rest().name(), restList, declared, lambdaEnv, dynamicParams);
 			}
 			markDeclaredSpecials(declared, lambdaEnv);
-			// See expandMacroCall: the depth tells a macro expansion whether its call
-			// site is a TOP-LEVEL form (whose file's package is still current) or one
-			// buried in a function body evaluated long after its file was read.
-			this.functionBodyDepth++;
 			CallFrame callFrame = this.debugging ? CallFrame.enter(this.frameTops.get(), lambda, args, lambdaEnv, env)
 					: null;
 			Supplier<LispVal> resume;
@@ -16712,7 +16697,6 @@ public final class LispEvaluator {
 				resume = signal.action();
 			}
 			finally {
-				this.functionBodyDepth--;
 				if (callFrame != null) {
 					callFrame.exit();
 				}

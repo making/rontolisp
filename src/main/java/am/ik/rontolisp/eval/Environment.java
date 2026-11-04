@@ -644,6 +644,14 @@ public final class Environment implements Scope {
 	@Nullable private String lexicalFunction;
 
 	/**
+	 * The package this scope's code was read in, or {@code null} at the top level, whose
+	 * forms run with their file's package still current. Lexical like
+	 * {@link #lexicalFunction}: a child scope inherits it, and the call scope of a lambda
+	 * created at the top level and a macro expander's scope set their own.
+	 */
+	@Nullable private String lexicalPackage;
+
+	/**
 	 * Create a new environment with the given parent scope.
 	 * @param parent the parent environment, or {@code null} for a top-level scope
 	 */
@@ -651,6 +659,23 @@ public final class Environment implements Scope {
 		this.parent = parent;
 		this.mvSpill = parent == null ? new ValueCountRegister() : parent.mvSpill;
 		this.lexicalFunction = parent == null ? null : parent.lexicalFunction;
+		this.lexicalPackage = parent == null ? null : parent.lexicalPackage;
+	}
+
+	/**
+	 * The package this scope's code was read in; see {@link #lexicalPackage}.
+	 * @return the package name, or {@code null} at the top level
+	 */
+	@Nullable String lexicalPackage() {
+		return this.lexicalPackage;
+	}
+
+	/**
+	 * Sets the package this scope's code was read in; see {@link #lexicalPackage}.
+	 * @param name the package name
+	 */
+	void lexicalPackage(@Nullable String name) {
+		this.lexicalPackage = name;
 	}
 
 	/**

@@ -47,8 +47,8 @@ parameters"). User docs: `doc/en/reference/special-forms/defun.md`, `lambda.md`.
   `name` was coerced to its keyword.
 - **Trap**: `&key` with NO key params still switches the tail to keyword convention
   (`Parsed.sawKey`); losing that marker makes the function fixed-arity.
-- Helpers use the `__ll_` prefix; `PackageResolver` passes `&`-prefixed symbols through
-  unresolved so markers survive in any package.
+- Helpers use the `__ll_` prefix; the eight standard keywords resolve to `cl`'s bare spelling in
+  any package (`.kb/packages.md`), so markers survive; any other `&name` homes like a plain name.
 - **Interpreter**: `LispEvaluator.evalDefun`/`evalLambdaForm` call `expand` at
   lambda-creation time, so runtime-generated lambdas work; `LispLambda.rest` is nullable.
 - **Compilers**: `Jvm/WasmLispCompiler.compile` run `LambdaLists.desugarProgram` right

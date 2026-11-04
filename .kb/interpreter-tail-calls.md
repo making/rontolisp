@@ -45,15 +45,9 @@ Lisp call enters fewer Java frames. Landed 2026-09-19 (`.todo/912`).
   gone (`(block b (tagbody (return-from b (progn (go :eof) 1)) :eof ...))` escaped as a
   `GoSignal`: jonathan's `parse` through proc-parse's `(go :eof)`, h58). A label-less one
   (`prog`, the 100,000-deep pin) still hands its owner on. Entering a function body drops `deferTo`: an exit
-  there evaluates its value form inside the call (its `funcallSeam`, its
-  `functionBodyDepth`). An exit to a block of a frame further out than the innermost owner
+  there evaluates its value form inside the call (its `funcallSeam`). An exit to a block of a frame further out than the innermost owner
   still evaluates and throws. Not a `BlockReturnSignal`, whose other catchers
   (`runBlockIn`, `apply`) take its value as is.
-- `inBody` -- whether the frame entered a function body: `functionBodyDepth` (what tells a
-  macro expansion whether its call site is top level, `expandUserMacro`) is raised once per
-  frame however many bodies tail calls replace, and lowered in the frame's `finally` -- so
-  the REPL's `controlState()`/`restore()` after a `StackOverflowError`
-  (`.kb/interpreter-stack.md`) has the same stacks to put back.
 - `funcallSeam` -- whether a `(funcall closure ..)` or `(apply closure ..)` was absorbed:
   the frame's `catch (LispEvalException)` then runs `withHandlerBindHandlersRun`, the
   signal-point seam the `funcall`/`apply` built-ins give what the closure raises. Wider

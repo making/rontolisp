@@ -2362,11 +2362,6 @@ public final class PackageResolver {
 		if (sym.isKeyword()) {
 			return sym;
 		}
-		// Lambda-list keywords (&rest, &optional, &key, ...) are structural markers,
-		// not package-scoped symbols; they pass through like keywords.
-		if (sym.name().startsWith("&")) {
-			return sym;
-		}
 		// An uninterned symbol (#:foo, or a gensym-produced #:g1) belongs to no
 		// package; it passes through like a keyword.
 		if (sym.name().startsWith("#:")) {
@@ -2534,8 +2529,9 @@ public final class PackageResolver {
 			}
 			// An implementation-internal name is never written by a program: expansions
 			// inject it into whatever package they run in, a package using no cl
-			// included (the macro-function table appended under contextl-user).
-			if (currentUsesCl() || PackageRegistry.isClInternal(name)) {
+			// included (the macro-function table appended under contextl-user). So do
+			// the lambda-list keywords, which the expansions' own lambda lists spell.
+			if (currentUsesCl() || PackageRegistry.isClInternal(name) || PackageRegistry.isClLambdaListKeyword(name)) {
 				return new LispSymbol(name);
 			}
 			// A package that does not use cl may still inherit a symbol of this name
@@ -2778,15 +2774,15 @@ public final class PackageResolver {
 	/**
 	 * The spelling a runtime read gives a symbol token: the token interned in the current
 	 * package, recorded like {@code intern}'s ({@link #internSpelling(String, boolean)})
-	 * -- CL's reader interns in {@code *package*} as it reads. A keyword, a lambda-list
-	 * marker and an uninterned {@code #:name} pass through as {@link #resolve} passes
-	 * them, and so does a token qualified by a package the registry does not know, which
-	 * the runtime read keeps as written.
+	 * -- CL's reader interns in {@code *package*} as it reads. A keyword and an
+	 * uninterned {@code #:name} pass through as {@link #resolve} passes them, and so does
+	 * a token qualified by a package the registry does not know, which the runtime read
+	 * keeps as written.
 	 * @param name the token's name as read
 	 * @return the canonical spelling for the current package
 	 */
 	public synchronized String readSpelling(String name) {
-		if (name.startsWith(":") || name.startsWith("&") || name.startsWith("#:")) {
+		if (name.startsWith(":") || name.startsWith("#:")) {
 			return name;
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);

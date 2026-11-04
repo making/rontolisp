@@ -241,7 +241,15 @@ one disagrees with the interpreter's mid-program answer there (`.kb/uiop.md`). c
   `in-package`, which for contextl-user is a package using only cxcl).
 - **Use-list visibility checks `exports`, not `owns`.** Conflicts resolve first-wins in `:use`
   order (real CL signals). `resolveQualified` redirects through `imports` after the externality
-  check. Uninterned `#:g1` symbols pass through unresolved, like keywords and `&`-markers.
+  check. Uninterned `#:g1` symbols pass through unresolved, like keywords.
+- **Only the eight names of `lambda-list-keywords` are `cl`'s** (`PackageRegistry.isClSymbol`,
+  and bare in a package using no `cl` too: expansions spell them wherever they run; a `:shadow`
+  still wins). Any other `&name` is an ordinary symbol of the package reading it, so `'&pt`
+  and `(intern "&PT")` are one symbol (let-plus's `define-structure-let+`, cl-colors'
+  `&rgb`), and a homed one is an ordinary parameter name, no longer a marker: every
+  `startsWith("&")` test downstream reads the spelling. In `cl-user` the name stays bare, so
+  `(defun f (&a) ...)` there still answers `Unsupported lambda-list keyword` where SBCL takes it.
+  Pinned by ci-spec `an-ampersand-name-is-an-ordinary-symbol-of-the-current-package`.
 - **An `:export` of an INHERITED name re-exports the used package's symbol**: `resolveDefpackage`
   records every exported name the package does not shadow and does not `:import-from`, and that
   some used package exports, as an `imports` entry -- `cl` first when the package uses it (the
@@ -448,15 +456,18 @@ right at top level and wrong inside any defun that outlives its file.
 - **`with-standard-io-syntax`** expands to `(let ((*package* :cl-user)) body...)`;
   `*print-escape*`/`*print-readably*`/`*print-pretty*` are honored but not rebound by it.
 
-**A user macro called from inside a FUNCTION BODY expands with the macro's DEFINING package
-current** (`LispEvaluator.UserMacro.definitionPackage`, swapped in `expandMacroCall`, restored in
-the `finally`); a TOP-LEVEL macro call keeps the current package. `functionBodyDepth` (incremented
-around every user-lambda body in `apply`) tells them apart, and `loadFile` ZEROES it for the
-file's forms: a loaded file's forms are top-level wherever `load` was called from (every ASDF
-component is loaded from inside `asdf:perform`'s method, `.kb/asdf.md`). Both halves are
-load-bearing (fast-http's `callback-data` vs trivia's top-level `lispn:define-namespace`). Known
-approximation: a macro defined in P and called inside a function of a DIFFERENT file Q gets P
-where CL uses Q. **The swap only reaches what is homed DURING the expansion**: `intern`, and
+**A user macro called from inside a FUNCTION BODY expands with the package that body was READ
+in current** (`LispLambda.readPackage`, recorded on a lambda created outside every function and
+macro body; `Environment.lexicalPackage`, set on its call scope and inherited down the scope chain
+as `lexicalFunction` is; swapped in `expandMacroCall`, restored in the `finally`), as CL expands it
+while compiling that file. A macro body's own text is its defining package's
+(`UserMacro.definitionPackage` on the expander scope). A form outside every body keeps the current
+package, whoever called `load`: its scope has no `lexicalPackage`, and neither does an `eval` from
+a function, nor `macroexpand`. Both halves are load-bearing (let-plus's `&structure` interning its
+accessor in cl-colors' package, fast-http's `callback-data` vs trivia's top-level
+`lispn:define-namespace`). A macro's defining package answered here until h96 (2026-11-04), which
+sent `(let+ (((&rgb ..) ..)))` in cl-colors to `LET-PLUS::RGB-RED`. **The swap only reaches what is
+homed DURING the expansion**: `intern`, and
 (h62, 2026-10-31) every interpreter runtime read -- `read-from-string`, `read`, a readtable
 view's read -- whose `LispReader.symbolHome` (`Environment.setReadSymbolHome` ->
 `PackageResolver.readSpelling`, recording like `intern`) homes each symbol TOKEN as it is read.
@@ -465,7 +476,7 @@ parser (`(read-from-string (format nil "get-afm-~A" ...))`) called `CL-USER::GET
 Reader-synthesized symbols (`quote`, the backquote operators) and `#.` values are not tokens and
 are not homed; a token qualified by an unknown package keeps its spelling. The compiled
 backends' run-time reader stays package-blind
-(`.kb/symbol-runtime-api.md`, "1-arg `intern`"). Pinned by `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,
+(`.kb/symbol-runtime-api.md`, "1-arg `intern`"). Pinned by `LispEvaluatorTest#evalMacroCallInAFunctionBodyExpandsInThePackageTheBodyWasReadIn`,
 ci-spec `expansion-time-read-homes-in-the-macro-package`,
 `LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions` (a `load` from a defun), `TriviaE2eTest`,
 `SxqlE2eTest`.
