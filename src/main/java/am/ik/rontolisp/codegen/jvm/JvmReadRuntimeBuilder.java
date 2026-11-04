@@ -255,12 +255,32 @@ final class JvmReadRuntimeBuilder {
 	 */
 	private final @Nullable FieldRefEntry pathnameLayout;
 
+	/**
+	 * Where the program holds {@code *read-base*}: present exactly when it names the
+	 * variable, which is what makes {@code _classify} consult it.
+	 *
+	 * @param global the {@code _g$} field
+	 * @param threadLocal the {@code _d$} field of a thread-scoped binding, or null
+	 * @param dget the helper reading {@code threadLocal} over {@code global}, or null
+	 */
+	record ReadBaseVar(FieldRefEntry global, @Nullable FieldRefEntry threadLocal, @Nullable MethodRefEntry dget) {
+	}
+
+	private final @Nullable ReadBaseVar readBaseVar;
+
+	private final @Nullable MethodRefEntry readBaseNow;
+
+	private final @Nullable MethodRefEntry rdRational;
+
+	private final @Nullable MethodRefEntry rdInBase;
+
 	private JvmReadRuntimeBuilder(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
 			ClassEntry objectArrayClass, ClassEntry stringClass, MethodRefEntry longValueOf,
 			MethodRefEntry doubleValueOf, MethodRefEntry stringCharAt, MethodRefEntry stringLength,
 			MethodRefEntry stringSubstring, MethodRefEntry objectEquals, boolean emitLoad, boolean instances,
-			@Nullable FieldRefEntry pathnameLayout) {
+			@Nullable FieldRefEntry pathnameLayout, @Nullable ReadBaseVar readBaseVar) {
 		this.pathnameLayout = pathnameLayout;
+		this.readBaseVar = readBaseVar;
 		this.cp = cp;
 		this.thisClass = thisClass;
 		this.objectClass = objectClass;
@@ -299,6 +319,9 @@ final class JvmReadRuntimeBuilder {
 		this.readAtom = methodref("_readAtom", "()Ljava/lang/Object;");
 		this.readStr = methodref("_readStr", "()Ljava/lang/Object;");
 		this.classify = methodref("_classify", "(Ljava/lang/String;)Ljava/lang/Object;");
+		this.readBaseNow = readBaseVar == null ? null : methodref("_readBaseNow", "()I");
+		this.rdRational = readBaseVar == null ? null : methodref("_rdRational", "(Ljava/lang/String;I)Z");
+		this.rdInBase = readBaseVar == null ? null : methodref("_rdInBase", "(Ljava/lang/String;I)Ljava/lang/Object;");
 		ClassEntry localeClass = cp.classEntry("java/util/Locale");
 		this.localeRoot = cp.fieldRef(localeClass, "ROOT", "Ljava/util/Locale;");
 		this.stringToUpperCase = cp.methodRef(stringClass, "toUpperCase", "(Ljava/util/Locale;)Ljava/lang/String;");
@@ -378,10 +401,10 @@ final class JvmReadRuntimeBuilder {
 			ClassEntry objectArrayClass, ClassEntry stringClass, MethodRefEntry longValueOf,
 			MethodRefEntry doubleValueOf, MethodRefEntry stringCharAt, MethodRefEntry stringLength,
 			MethodRefEntry stringSubstring, MethodRefEntry objectEquals, boolean emitLoad, boolean instances,
-			@Nullable FieldRefEntry pathnameLayout) {
+			@Nullable FieldRefEntry pathnameLayout, @Nullable ReadBaseVar readBaseVar) {
 		return new JvmReadRuntimeBuilder(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf,
 				doubleValueOf, stringCharAt, stringLength, stringSubstring, objectEquals, emitLoad, instances,
-				pathnameLayout);
+				pathnameLayout, readBaseVar);
 	}
 
 	private MethodRefEntry methodref(String name, String desc) {
@@ -522,6 +545,13 @@ final class JvmReadRuntimeBuilder {
 		ms.add(new ReadMethod(this.cp.utf8Entry("_rdF"), this.cp.utf8Entry("(Ljava/lang/Object;)D"), buildRdF()));
 		ms.add(new ReadMethod(this.cp.utf8Entry("_rdInferRank"), this.cp.utf8Entry("(Ljava/lang/Object;)I"),
 				buildRdInferRank()));
+		if (this.readBaseVar != null) {
+			ms.add(new ReadMethod(this.cp.utf8Entry("_readBaseNow"), this.cp.utf8Entry("()I"), buildReadBaseNow()));
+			ms.add(new ReadMethod(this.cp.utf8Entry("_rdRational"), this.cp.utf8Entry("(Ljava/lang/String;I)Z"),
+					buildRdRational()));
+			ms.add(new ReadMethod(this.cp.utf8Entry("_rdInBase"),
+					this.cp.utf8Entry("(Ljava/lang/String;I)Ljava/lang/Object;"), buildRdInBase()));
+		}
 		if (this.emitLoad) {
 			ms.add(new ReadMethod(this.cp.utf8Entry("_load"),
 					this.cp.utf8Entry("(Ljava/lang/Object;)Ljava/lang/Object;"), buildLoad()));
@@ -1082,6 +1112,222 @@ final class JvmReadRuntimeBuilder {
 		a.pop();
 	}
 
+	// A *read-base* other than 10 (CLHS 2.3.1): a rational in the base is that number,
+	// whatever else it spells (1E5 in base 16, NIL in base 36), and one that would be a
+	// decimal rational but holds a digit past the base is a symbol (102 in base 2). Every
+	// other token goes on to the decimal classifier, which reads its floats and trailing
+	// dots. Slot 13 holds the base.
+	private void emitReadBaseArm(MethodCode a) {
+		MethodRefEntry rational = java.util.Objects.requireNonNull(this.rdRational);
+		MethodCode.Label decimal = a.newLabel();
+		MethodCode.Label notInBase = a.newLabel();
+		a.invokestatic(java.util.Objects.requireNonNull(this.readBaseNow));
+		a.istore(13);
+		a.iload(13);
+		a.loadConstant(10);
+		a.if_icmpeq(decimal);
+		a.aload(0);
+		a.iload(13);
+		a.invokestatic(rational);
+		a.ifeq(notInBase);
+		a.aload(0);
+		a.iload(13);
+		a.invokestatic(java.util.Objects.requireNonNull(this.rdInBase));
+		a.areturn();
+		a.labelBinding(notInBase);
+		a.aload(0);
+		a.loadConstant(10);
+		a.invokestatic(rational);
+		a.ifeq(decimal);
+		a.aload(0);
+		a.areturn();
+		a.labelBinding(decimal);
+	}
+
+	// _readBaseNow(): the radix a token reads in. A value no radix is reads as 10.
+	private MethodCode buildReadBaseNow() {
+		ReadBaseVar variable = java.util.Objects.requireNonNull(this.readBaseVar);
+		MethodCode a = new MethodCode();
+		MethodCode.Label ten = a.newLabel();
+		if (variable.threadLocal() != null) {
+			a.getstatic(variable.threadLocal());
+			a.getstatic(variable.global());
+			a.invokestatic(java.util.Objects.requireNonNull(variable.dget()));
+		}
+		else {
+			a.getstatic(variable.global());
+		}
+		a.astore(0);
+		a.aload(0);
+		a.instanceOf(this.longClass);
+		a.ifeq(ten);
+		a.aload(0);
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longLongValue);
+		a.lstore(1);
+		a.lload(1);
+		a.l2i();
+		a.istore(3);
+		// A value past an int is no radix, and must not narrow into one.
+		a.iload(3);
+		a.i2l();
+		a.lload(1);
+		a.lcmp();
+		a.ifne(ten);
+		a.iload(3);
+		a.loadConstant(Character.MIN_RADIX);
+		a.if_icmplt(ten);
+		a.iload(3);
+		a.loadConstant(Character.MAX_RADIX);
+		a.if_icmpgt(ten);
+		a.iload(3);
+		a.ireturn();
+		a.labelBinding(ten);
+		a.loadConstant(10);
+		a.ireturn();
+		return a;
+	}
+
+	// _rdRational(token, radix): whether the token is [sign] digits [/ digits] in the
+	// radix.
+	private MethodCode buildRdRational() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label noSign = a.newLabel();
+		MethodCode.Label sign = a.newLabel();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label notSlash = a.newLabel();
+		MethodCode.Label next = a.newLabel();
+		MethodCode.Label end = a.newLabel();
+		MethodCode.Label no = a.newLabel();
+		a.aload(0);
+		a.invokevirtual(this.stringLength);
+		a.istore(2); // n
+		a.loadConstant(0);
+		a.istore(3); // i
+		a.loadConstant(0);
+		a.istore(4); // slashed
+		a.loadConstant(0);
+		a.istore(5); // digits
+		a.iload(2);
+		a.ifeq(no);
+		a.aload(0);
+		a.loadConstant(0);
+		a.invokevirtual(this.stringCharAt);
+		a.istore(6);
+		a.iload(6);
+		a.loadConstant('+');
+		a.if_icmpeq(sign);
+		a.iload(6);
+		a.loadConstant('-');
+		a.if_icmpne(noSign);
+		a.labelBinding(sign);
+		a.loadConstant(1);
+		a.istore(3);
+		a.labelBinding(noSign);
+		a.labelBinding(loop);
+		a.iload(3);
+		a.iload(2);
+		a.if_icmpge(end);
+		a.aload(0);
+		a.iload(3);
+		a.invokevirtual(this.stringCharAt);
+		a.istore(6);
+		a.iload(6);
+		a.loadConstant('/');
+		a.if_icmpne(notSlash);
+		a.iload(4);
+		a.ifne(no);
+		a.iload(5);
+		a.ifeq(no);
+		a.loadConstant(1);
+		a.istore(4);
+		a.loadConstant(0);
+		a.istore(5);
+		a.goto_(next);
+		a.labelBinding(notSlash);
+		// ASCII digits only: Character.digit also takes every other script's.
+		a.iload(6);
+		a.loadConstant(128);
+		a.if_icmpge(no);
+		a.iload(6);
+		a.iload(1);
+		a.invokestatic(this.charDigit);
+		a.iflt(no);
+		a.loadConstant(1);
+		a.istore(5);
+		a.labelBinding(next);
+		a.iinc(3, 1);
+		a.goto_(loop);
+		a.labelBinding(end);
+		a.iload(5);
+		a.ireturn();
+		a.labelBinding(no);
+		a.loadConstant(0);
+		a.ireturn();
+		return a;
+	}
+
+	// _rdInBase(token, radix): the number a token _rdRational accepted spells.
+	private MethodCode buildRdInBase() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label ratio = a.newLabel();
+		MethodCode.Label big = a.newLabel();
+		MethodCode.Label divZero = a.newLabel();
+		a.aload(0);
+		a.loadConstant('/');
+		a.invokevirtual(this.stringIndexOf);
+		a.istore(2);
+		a.iload(2);
+		a.ifge(ratio);
+		a.new_(this.bigIntegerClass);
+		a.dup();
+		a.aload(0);
+		a.iload(1);
+		a.invokespecial(this.bigIntegerInitRadix);
+		a.dup();
+		a.invokevirtual(this.bigIntegerBitLength);
+		a.loadConstant(64);
+		a.if_icmpge(big);
+		a.invokevirtual(this.bigIntegerLongValue);
+		a.invokestatic(this.longValueOf);
+		a.areturn();
+		a.labelBinding(big);
+		a.areturn();
+		a.labelBinding(ratio);
+		a.new_(this.bigIntegerClass);
+		a.dup();
+		a.aload(0);
+		a.loadConstant(0);
+		a.iload(2);
+		a.invokevirtual(this.stringSubstring);
+		a.iload(1);
+		a.invokespecial(this.bigIntegerInitRadix);
+		a.new_(this.bigIntegerClass);
+		a.dup();
+		a.aload(0);
+		a.iload(2);
+		a.loadConstant(1);
+		a.iadd();
+		a.invokevirtual(this.stringSubstringFrom);
+		a.iload(1);
+		a.invokespecial(this.bigIntegerInitRadix);
+		a.dup();
+		a.invokevirtual(this.bigIntegerSignum);
+		a.ifeq(divZero);
+		a.invokestatic(this.ratMethod);
+		a.areturn();
+		a.labelBinding(divZero);
+		a.pop();
+		a.pop();
+		sbNew(a, "Division by zero in ratio literal: ");
+		a.aload(0);
+		a.invokevirtual(this.sbAppendStr);
+		sbThrow(a);
+		a.aconst_null();
+		a.areturn();
+		return a;
+	}
+
 	private MethodCode buildClassify() {
 		MethodCode a = new MethodCode();
 		MethodCode.Label notNil = a.newLabel();
@@ -1113,6 +1359,9 @@ final class JvmReadRuntimeBuilder {
 		a.getstatic(this.localeRoot);
 		a.invokevirtual(this.stringToUpperCase);
 		a.astore(0);
+		if (this.readBaseVar != null) {
+			emitReadBaseArm(a);
+		}
 		// A canonical cl or cl-user symbol is spelled bare, whatever qualifier reads it:
 		// the printer spells COMMON-LISP:CAR where the package reads CAR as another.
 		MethodCode.Label noQualifier = a.newLabel();

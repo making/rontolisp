@@ -185,6 +185,23 @@ final class WasmSymbolApiRuntimeBuilder {
 			w.write(Instruction.END);
 			get(w, OFF);
 		}
+		set(w, OFF);
+		// The empty name keeps one byte behind its length: a string and a symbol are told
+		// apart by byte 0 (its quote), which every such test reads unguarded.
+		get(w, LEN);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, OFF);
+		i32(w, 0);
+		i32(w, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		WasmStringRuntimeBuilder.emitSeedCursor(w);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		get(w, OFF);
 		get(w, LEN);
 		WasmEmitHelper.emitStrBuildCall(w);
 		w.write(Instruction.END);

@@ -33141,6 +33141,166 @@ cases:
       "\"a\""
       (1 T "1 cannot be printed readably.")
 
+  - name: read-base-reads-rationals-in-its-radix
+    source: |
+      ;; CLHS 2.3.1: a rational token reads in *read-base*, ahead of every other reading; a
+      ;; trailing dot and a float stay decimal, and a digit past the base makes a symbol.
+      (defun rbs-read (base text) (let ((*read-base* base)) (read-from-string text)))
+      (defun rbs-show (value) (if (symbolp value) (symbol-name value) value))
+      (print (mapcar (lambda (text) (rbs-show (rbs-read 16 text)))
+                     '("ff" "FF" "-ff" "+ff" "ff/a" "1/ff" "10/2" "1e5" "1d0" "1f" "ffffffffffffffff" "-8000000000000000")))
+      (print (mapcar (lambda (text) (rbs-show (rbs-read 16 text)))
+                     '("ff." "10." "1e5." "1.5" "1.5e3" "1.e3" ".5" ".e" "1s0" "fg" "1+" "+" "-" "#xff")))
+      (print (mapcar (lambda (text) (rbs-show (rbs-read 2 text)))
+                     '("101" "-11" "+11" "1/10" "102" "2" "-2" "+2" "1/3" "3/1" "102." "101." "1e3" "12e3" "2.5" "101x")))
+      (print (list (rbs-read 8 "77") (rbs-show (rbs-read 8 "78")) (rbs-read 11 "a") (rbs-show (rbs-read 11 "b"))
+                   (rbs-read 11 "1e2") (rbs-read 14 "1d2") (rbs-read 14 "1e2") (rbs-read 15 "1e2") (rbs-read 15 "1f2")
+                   (rbs-read 16 "1f2") (rbs-read 36 "nil") (rbs-read 36 "t") (rbs-show (rbs-read 36 "z."))
+                   (rbs-show (rbs-read 10 "ff")) (rbs-read 10 "10")))
+      ;; A datum's tokens, whatever reads them; a dispatch's own radix and argument are its own.
+      (print (rbs-read 16 "(ff 10 g #(a #b11 #o7 #xa \"a\" #\\a) (a . b) 'c)"))
+      (print (let ((*read-base* 16)) (multiple-value-list (read-from-string "ff 10"))))
+      (print (let ((*read-base* 16)) (with-input-from-string (s "ff (a 10) x") (list (read s) (read s) (read s)))))
+      (print (let ((*read-base* 16)) (read-from-string "ff" nil nil :start 0)))
+      (print (let ((*read-base* 16)) (read-delimited-list #\) (make-string-input-stream "a b 10)"))))
+      (defstruct rbs-pt x)
+      (print (rbs-pt-x (rbs-read 16 "#S(rbs-pt :x ff)")))
+      (print (handler-case (rbs-read 16 "a/0") (error () :division-by-zero)))
+      ;; The variable is read as the read runs, however it got its value, and with-standard-io-syntax
+      ;; binds it; parse-integer has a radix of its own.
+      (defun rbs-eleven () (read-from-string "11"))
+      (print (list (rbs-eleven) (let ((*read-base* 2)) (rbs-eleven)) (let ((*read-base* 2)) (with-standard-io-syntax (rbs-eleven)))))
+      (print (progv '(*read-base*) '(8) (rbs-eleven)))
+      (setq *read-base* 16)
+      (print (rbs-eleven))
+      (setf (symbol-value '*read-base*) 8)
+      (print (rbs-eleven))
+      (setq *read-base* 10.)
+      (print (let ((*read-base* 8)) (parse-integer "11")))
+      ;; A source read: only what the compile evaluates changes it, and a reader macro function
+      ;; reads in a base of its own (babel's #\ shape).
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (setq *read-base* 16))
+      (print '(ff 10 1.5 10. g))
+      (print (rbs-eleven))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (setq *read-base* a))
+      (print '(ff 10))
+      (eval-when (:compile-toplevel :execute)
+        (defvar *rbs-table* *readtable*)
+        (setq *readtable* (copy-readtable nil))
+        (set-dispatch-macro-character #\# #\y
+          (lambda (stream char arg)
+            (declare (ignore char arg))
+            (let ((*read-base* 16)) (read stream t nil t)))))
+      (print '(#yff 10))
+      (eval-when (:compile-toplevel :execute)
+        (setq *readtable* *rbs-table*))
+    expected: |
+      (255 255 -255 255 51/2 1/255 8 485 464 31 18446744073709551615 -9223372036854775808)
+      ("FF." 10 "1E5." 1.5 1500.0 1000.0 0.5 ".E" 1.0 "FG" "1+" "+" "-" 255)
+      (5 -3 3 1/2 "102" "2" "-2" "+2" "1/3" "3/1" 102 101 1000.0 12000.0 2.5 "101X")
+      (63 "78" 10 "B" 100.0 380 100.0 437 100.0 498 30477 29 "Z." "FF" 10)
+      (255 16 G #(10 3 7 10 "a" #\a) (10 . 11) '12)
+      (255 3)
+      (255 (10 16) X)
+      255
+      (10 11 16)
+      255
+      :DIVISION-BY-ZERO
+      (11 3 11)
+      9
+      17
+      9
+      11
+      (255 16 1.5 10 G)
+      17
+      (FF 10)
+      (255 10)
+  - name: prin1-escapes-a-name-that-reads-as-no-symbol
+    source: |
+      ;; CLHS 22.1.3.3.1: a symbol whose name a bare token could read as a number (2.3.1.1's
+      ;; potential number), or a token of dots alone, prints escaped; every other name bare.
+      (defpackage :pns-p (:use) (:export "10"))
+      (defun pns-show (name)
+        (format t "~s ~s ~s~%" (make-symbol name) (intern name) (intern name :keyword)))
+      (dolist (name '("10" "-10" "+10" "1.5" "1/2" "1E5" "1+" "+" "-" "1-" ".5" "10." "1A" "1AB" "+1A" "A/B" "/1" "1/2/3" "1+2"
+                      "..." "." ".." ".A" "F" "FF" "1_2" "1^2" "^" "_" "^1" "_1" "-.5" "1.2.3" "1E" "E1" "1E+5" "A1" "+." "-A"
+                      "-1A" "--1" "1--" "1.+" "%1" "1%"))
+        (pns-show name))
+      ;; The empty name, nothing to scan.
+      (format t "~s ~s~%" (make-symbol "") (intern "" :keyword))
+      ;; A case conversion leaves the escaped spelling alone, and princ never escapes.
+      (print (let ((*print-case* :downcase))
+               (prin1-to-string (list (intern "10") (intern "AB") (intern "1E5") (intern "Foo") (intern "A B") (intern "X" :pns-p)
+                                      (intern "1E5" :pns-p) (intern "Y" :keyword) (intern "1E5" :keyword)))))
+      (print (let ((*print-case* :capitalize))
+               (prin1-to-string (list (intern "AB") (intern "A B") (intern "1E5") (intern "1E5" :pns-p)))))
+      (print (let ((*print-case* :capitalize)) (prin1-to-string (intern "10"))))
+      (print (list (princ-to-string (intern "10")) (format nil "~a ~s" (intern "10") (intern "10"))
+                   (write-to-string (intern "10")) (write-to-string (intern "10") :escape nil)))
+      ;; Inside a qualifier and a container.
+      (print (list (intern "20" :pns-p) (find-symbol "10" :pns-p)))
+      (defstruct pns-box v)
+      (print (make-pns-box :v (intern "10")))
+      (print (vector (intern "10")))
+      (print (cons (intern "10") (intern "1.5")))
+    expected: |
+      #:|10| |10| :|10|
+      #:|-10| |-10| :|-10|
+      #:|+10| |+10| :|+10|
+      #:|1.5| |1.5| :|1.5|
+      #:|1/2| |1/2| :|1/2|
+      #:|1E5| |1E5| :|1E5|
+      #:1+ 1+ :1+
+      #:+ + :+
+      #:- - :-
+      #:1- 1- :1-
+      #:|.5| |.5| :|.5|
+      #:|10.| |10.| :|10.|
+      #:|1A| |1A| :|1A|
+      #:1AB 1AB :1AB
+      #:|+1A| |+1A| :|+1A|
+      #:A/B A/B :A/B
+      #:/1 /1 :/1
+      #:|1/2/3| |1/2/3| :|1/2/3|
+      #:|1+2| |1+2| :|1+2|
+      #:|...| |...| :|...|
+      #:|.| |.| :|.|
+      #:|..| |..| :|..|
+      #:.A .A :.A
+      #:F F :F
+      #:FF FF :FF
+      #:|1_2| |1_2| :|1_2|
+      #:|1^2| |1^2| :|1^2|
+      #:^ ^ :^
+      #:_ _ :_
+      #:|^1| |^1| :|^1|
+      #:|_1| |_1| :|_1|
+      #:|-.5| |-.5| :|-.5|
+      #:|1.2.3| |1.2.3| :|1.2.3|
+      #:|1E| |1E| :|1E|
+      #:E1 E1 :E1
+      #:|1E+5| |1E+5| :|1E+5|
+      #:A1 A1 :A1
+      #:+. +. :+.
+      #:-A -A :-A
+      #:|-1A| |-1A| :|-1A|
+      #:|--1| |--1| :|--1|
+      #:1-- 1-- :1--
+      #:1.+ 1.+ :1.+
+      #:%1 %1 :%1
+      #:1% 1% :1%
+      #:|| :||
+      "(|10| ab |1E5| |Foo| |A B| pns-p::x pns-p::|1E5| :y :|1E5|)"
+      "(Ab |A B| |1E5| Pns-P::|1E5|)"
+      "|10|"
+      ("10" "10 |10|" "|10|" "10")
+      (PNS-P::|20| PNS-P:|10|)
+      #S(PNS-BOX :V |10|)
+      #(|10|)
+      (|10| . |1.5|)
+      
 standalone:
   - name: pprint-logical-block-of-an-atom-in-a-program-not-naming-write
     source: |

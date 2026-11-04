@@ -21,7 +21,6 @@ Deviations:
 
 - Printing an object with no readable syntax under `*print-readably*` prints its `#<...>` form instead of signalling [`print-not-readable`](../functions/print-not-readable-object.md).
 - A double prints without its `d0`: `*read-default-float-format*` is informational, because every float is the one double representation.
-- `*read-base*` holds its value, but every reader reads integers in base 10.
 
 ```lisp
 (let ((*print-base* 2))

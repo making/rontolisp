@@ -90,8 +90,9 @@ is never live in the same program — read them together. Also inert: `*print-ar
 ## Quote/function abbreviation and `|...|` symbol escaping
 **Invariant:** a two-element list headed by `quote`/`function` prints `'x`/`#'x` (CLHS 22.1.3.7,
 unconditional); three or more elements, or an improper tail, print in full. A symbol whose name is
-not upcase-invariant, or holds a character the reader rejects in a bare token, prints `|...|`-framed
-under `prin1` with embedded `|`/`\` doubled; `princ` never escapes. Abbreviation applies under BOTH
+empty, not upcase-invariant, holds a character the reader rejects in a bare token, or would not read
+as a symbol (below) prints `|...|`-framed under `prin1` with embedded `|`/`\` doubled; `princ` never
+escapes. Abbreviation applies under BOTH
 `prin1` and `princ` (ECL behavior); the two gate independently.
 
 - Five copies of the shape check: `LispCons.render` (inline inside the same `RenderCycleGuard`
@@ -108,6 +109,23 @@ under `prin1` with embedded `|`/`\` doubled; `princ` never escapes. Abbreviation
   range table reachable from EVERY symbol-printing program). **Narrow gap:** a symbol whose only
   non-constituent characters are non-ASCII lowercase letters prints unescaped on all four backends
   and mis-reads — matched everywhere, not a divergence.
+- **A name a bare token would not read as a symbol** (`LispSymbol.readsAsNoSymbol`, inline in the two
+  compiled twins): dots alone, or CLHS 2.3.1.1's potential number -- digits, signs, `/`, `.`, `^`, `_`
+  and letters no two of which are adjacent, a digit, beginning with neither a letter nor `/`, not ending
+  in a sign. `|10|`, `|1E5|`, `|1/2/3|`, `|...|`; `1+`, `E1`, `1AB`, `%1` stay bare. 45 names agree with
+  SBCL 2.2.9 on all four (ci-spec `prin1-escapes-a-name-that-reads-as-no-symbol`), and the rule costs
+  the bytes of those two functions in every program printing a symbol. Limit: the digits are decimal,
+  where SBCL also escapes `FF` under `*print-base*` 16 (the twins read no variable). An emitted reader
+  has no `|...|` syntax, so `(read-from-string (prin1-to-string (intern "10")))` is a symbol named with
+  its bars there, where it was the number 10 before.
+- The empty name: until 2026-11-05 the JVM twin answered it verbatim (`#:`, an empty line) and the wasm
+  `(intern "")` built an empty byte array that `_print_val`'s unguarded byte 0 test trapped on;
+  `buildInternSym` now keeps one byte behind the zero length. On the JVM a bare `""` remains a symbol
+  no first-character test survives (about 30 `charAt(0)` sites): `(symbolp (intern ""))` throws
+  `StringIndexOutOfBoundsException`, a `simple-error`, measured 2026-11-05 (`.todo/i49`). So ci-spec spells only
+  `(make-symbol "")` and `(intern "" :keyword)`.
+- `%print-case-fold` converts only what stands ahead of the first `|`: the escaped member is never
+  recased (`|Foo|` under `:downcase`, `pkg::|1E5|`). Until 2026-11-05 it folded the whole text.
 - Non-constituent set (space, tab, newline, CR, form feed, `(`, `)`, `'`, `"`, `;`, `,`, `` ` ``,
   `|`, `\`) is enumerated identically in `LispSymbol.isBareConstituent`, `buildSymEscBody` and
   `SYM_ESC_FORBIDDEN` — change one, change all three.
@@ -314,8 +332,7 @@ ci-spec `with-standard-io-syntax-binds-the-standard-table`; quri's `*print-base*
   (`ClosRegistry`, reader `print-not-readable-object`) because serapeum and coalton signal and handle
   it themselves; `(error 'print-not-readable)` used to find no class, escaping `(error ...)` clauses.
   The signal has traps of its own (`.todo/i47`).
-- Inert under it: `*read-default-float-format*` (`1.5d0` prints `1.5`, SBCL `1.5d0`), `*read-base*`
-  (no reader consults it, `.todo/i48`).
+- Inert under it: `*read-default-float-format*` (`1.5d0` prints `1.5`, SBCL `1.5d0`).
 
 ## Tests
 `LispEvaluatorTest.evalWriteAndPprintDispatch`/`evalPprintLogicalBlock`/`evalPrintCase`/

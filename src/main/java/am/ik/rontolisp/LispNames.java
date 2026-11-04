@@ -6292,8 +6292,8 @@ public final class LispNames {
 	public static final String READ_DEFAULT_FLOAT_FORMAT = "*READ-DEFAULT-FLOAT-FORMAT*";
 
 	/**
-	 * The {@code *read-base*} variable: 10, special on every backend, and consulted by no
-	 * reader yet, which reads every integer in base 10.
+	 * The {@code *read-base*} variable: 10, special on every backend, the radix every
+	 * reader reads a rational token in ({@code .kb/read-load-streams.md}).
 	 */
 	public static final String READ_BASE_VAR = "*READ-BASE*";
 

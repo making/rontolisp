@@ -11,11 +11,12 @@ import am.ik.rontolisp.LispVal;
 /**
  * A readtable as the lexer reads with it ({@code .kb/readtables.md}): the case a token's
  * unescaped letters are converted by, and the characters whose syntax differs from the
- * standard one, with the evaluator that calls a reader macro function. The interpreter
- * builds one per read from the current {@code *readtable*}, and the compile path's
- * read-time image from the one its compile-time evaluator holds
+ * standard one, with the evaluator that calls a reader macro function -- and the
+ * {@code *read-base*} its rational tokens read in. The interpreter builds one per read
+ * from the current {@code *readtable*} and {@code *read-base*}, and the compile path's
+ * read-time image from the ones its compile-time evaluator holds
  * ({@code eval/ReadtableSyntax}, {@code eval/ReadTimeImage}); a read without one -- under
- * the standard readtable -- reads the standard syntax.
+ * the standard readtable and base 10 -- reads the standard syntax.
  */
 public final class ReadSyntax {
 
@@ -194,15 +195,19 @@ public final class ReadSyntax {
 
 	private final Invoker invoker;
 
+	private final int readBase;
+
 	/**
 	 * A syntax.
 	 * @param caseMode the case conversion
 	 * @param entries the characters whose syntax differs from the standard one
 	 * @param invoker calls a reader macro function
+	 * @param readBase the radix a rational token reads in
 	 */
-	public ReadSyntax(Case caseMode, Map<Integer, Entry> entries, Invoker invoker) {
+	public ReadSyntax(Case caseMode, Map<Integer, Entry> entries, Invoker invoker, int readBase) {
 		this.caseMode = caseMode;
 		this.invoker = invoker;
+		this.readBase = readBase;
 		for (Map.Entry<Integer, Entry> entry : entries.entrySet()) {
 			int c = entry.getKey();
 			if (c >= 0 && c < this.ascii.length) {
@@ -220,6 +225,14 @@ public final class ReadSyntax {
 	 */
 	public Case caseMode() {
 		return this.caseMode;
+	}
+
+	/**
+	 * The radix a rational token reads in: {@code *read-base*}.
+	 * @return the radix
+	 */
+	public int readBase() {
+		return this.readBase;
 	}
 
 	/**

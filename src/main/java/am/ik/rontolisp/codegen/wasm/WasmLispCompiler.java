@@ -6728,7 +6728,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (usesRead) {
 				WasmReadRuntimeBuilder.ReadCtx readCtx = WasmReadRuntimeBuilder.buildReadCtx(stringTable, nilOffset,
 						quoteOffset, functionOffset, ehMode, this.simd, this.usesInstances ? instanceTypeBase() : -1,
-						this.usesIdentityHashTables, closRegistry, layoutAddresses);
+						this.usesIdentityHashTables, closRegistry, layoutAddresses,
+						new WasmReadRuntimeBuilder.ReadBaseVar(globalIndices.getOrDefault(LispNames.READ_BASE_VAR, -1),
+								reentrantTaskGlobalIndex >= 0 && dynSlots.containsKey(LispNames.READ_BASE_VAR)
+										? reentrantTaskGlobalIndex : -1,
+								dynSlots.getOrDefault(LispNames.READ_BASE_VAR, -1)));
 				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(readCtx);
 				readListBody = WasmReadRuntimeBuilder.buildReadListBody(readCtx);
 				// FUNC_READ is a RETIRED index: read is prelude rontolisp over read-char

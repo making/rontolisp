@@ -4570,20 +4570,25 @@ public final class LispPreludeLibrary {
 		// capitalizes to *Foo* and A1B2-C3 to A1b2-C3.
 		SOURCES.put(LispNames.PRINT_CASE_FOLD_INTERNAL, """
 				(defun %print-case-fold (%pcf-s)
-				  (cond ((eq *print-case* :downcase) (string-downcase %pcf-s))
-				        ((eq *print-case* :capitalize)
-				         (let ((%pcf-acc "") (%pcf-i 0) (%pcf-n (length %pcf-s)) (%pcf-word nil))
-				           (while (< %pcf-i %pcf-n)
-				             (let* ((%pcf-c (char %pcf-s %pcf-i))
-				                    (%pcf-a (if (or (alpha-char-p %pcf-c) (digit-char-p %pcf-c)) t nil)))
-				               (setq %pcf-acc (concatenate 'string %pcf-acc
-				                                           (string (if (and %pcf-a %pcf-word)
-				                                                       (char-downcase %pcf-c)
-				                                                       %pcf-c))))
-				               (setq %pcf-word %pcf-a))
-				             (setq %pcf-i (+ %pcf-i 1)))
-				           %pcf-acc))
-				        (t %pcf-s)))
+				  (let ((%pcf-bar 0) (%pcf-end (length %pcf-s)))
+				    (while (and (< %pcf-bar %pcf-end) (char/= (char %pcf-s %pcf-bar) #\\|))
+				      (setq %pcf-bar (+ %pcf-bar 1)))
+				    (if (< %pcf-bar %pcf-end)
+				        (concatenate 'string (%print-case-fold (subseq %pcf-s 0 %pcf-bar)) (subseq %pcf-s %pcf-bar))
+				        (cond ((eq *print-case* :downcase) (string-downcase %pcf-s))
+				              ((eq *print-case* :capitalize)
+				               (let ((%pcf-acc "") (%pcf-i 0) (%pcf-n (length %pcf-s)) (%pcf-word nil))
+				                 (while (< %pcf-i %pcf-n)
+				                   (let* ((%pcf-c (char %pcf-s %pcf-i))
+				                          (%pcf-a (if (or (alpha-char-p %pcf-c) (digit-char-p %pcf-c)) t nil)))
+				                     (setq %pcf-acc (concatenate 'string %pcf-acc
+				                                                 (string (if (and %pcf-a %pcf-word)
+				                                                             (char-downcase %pcf-c)
+				                                                             %pcf-c))))
+				                     (setq %pcf-word %pcf-a))
+				                   (setq %pcf-i (+ %pcf-i 1)))
+				                 %pcf-acc))
+				              (t %pcf-s)))))
 				""");
 		// The printer entry point: CL specifies write's keywords as BINDINGS of the
 		// printer control variables around one print, so that is literally what this

@@ -209,6 +209,12 @@ class JvmThreadTest {
 				               (rontolisp:join-thread (rontolisp:make-thread #'who-reader))
 				               (rontolisp:join-thread (rontolisp:make-thread (lambda () *who*))))))
 				""", "ThreadScopeProg")).isEqualTo("(SPAWNER GLOBAL GLOBAL)");
+		// The emitted reader reads *read-base* as the program's own reads do.
+		assertThat(compileAndRun("""
+				(defun read-ten () (read-from-string "10"))
+				(let ((*read-base* 16))
+				  (print (list (read-ten) (rontolisp:join-thread (rontolisp:make-thread #'read-ten)))))
+				""", "ThreadReadBaseProg")).isEqualTo("(16 10)");
 	}
 
 	@Test

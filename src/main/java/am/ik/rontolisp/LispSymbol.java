@@ -188,7 +188,42 @@ public record LispSymbol(String name) implements LispVal {
 				return true;
 			}
 		}
-		return false;
+		return readsAsNoSymbol(member);
+	}
+
+	/**
+	 * Whether a bare token of these characters would not read as a symbol (CLHS
+	 * 22.1.3.3.1, 2.3.1.1, measured against SBCL 2.2.9): dots alone, or a potential
+	 * number -- digits, signs, ratio markers, decimal points, extension characters and
+	 * letters no two of which are adjacent, at least one digit, beginning with neither a
+	 * letter nor a ratio marker and not ending in a sign. {@code 1E5} and {@code 1/2/3}
+	 * qualify, {@code 1+}, {@code E1} and {@code 1AB} do not. The digits are decimal,
+	 * whatever {@code *print-base*} says: the compiled twins read no variable. Mirrored
+	 * by {@code JvmRuntimeBuilder.buildSymEscBody} and
+	 * {@code WasmStringRuntimeBuilder.buildSymEscGcBody}.
+	 * @param member the name component to test, a non-empty one with no lower case letter
+	 * @return {@code true} when it must be escaped
+	 */
+	private static boolean readsAsNoSymbol(String member) {
+		boolean digit = false;
+		boolean dots = true;
+		boolean letterBefore = false;
+		for (int i = 0; i < member.length(); i++) {
+			char c = member.charAt(i);
+			boolean letter = c >= 'A' && c <= 'Z';
+			if (letter && letterBefore) {
+				return false;
+			}
+			letterBefore = letter;
+			digit |= c >= '0' && c <= '9';
+			dots &= c == '.';
+			if (!letter && !(c >= '0' && c <= '9') && ".+-/^_".indexOf(c) < 0) {
+				return false;
+			}
+		}
+		char first = member.charAt(0);
+		char last = member.charAt(member.length() - 1);
+		return dots || digit && !(first >= 'A' && first <= 'Z') && first != '/' && last != '+' && last != '-';
 	}
 
 	// Mirrors LispLexer.isSymbolChar's terminating-character set (reader pkg, which

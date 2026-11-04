@@ -72,7 +72,20 @@ final class WasmReadRuntimeBuilder {
 			Msg msgNothingBeforeDot, Msg msgMoreThanOneAfterDot, Msg msgCharName, Msg msgRadix, Msg msgRank,
 			Msg msgRagged, Msg msgNested, Msg msgProper, Msg msgPackedNum, Msg msgReadEval, Msg msgFeature,
 			Msg msgLabels, Msg msgStructType, Msg msgStructClassHint, Msg msgStructName, Msg msgStructEmpty,
-			Msg msgStructOdd, Msg msgStructNoSlot, Msg msgStructInit, Msg msgDivZero, Msg msgPathname) {
+			Msg msgStructOdd, Msg msgStructNoSlot, Msg msgStructInit, Msg msgDivZero, Msg msgPathname,
+			ReadBaseVar readBase) {
+	}
+
+	/**
+	 * Where the module holds {@code *read-base*}.
+	 *
+	 * @param global its module global, or -1 when the program does not name the variable
+	 * (the reader then reads base 10 and has no code for any other)
+	 * @param taskGlobal the {@code --reentrant} task record's global when the variable
+	 * has a per-task slot ({@code WasmDynVars}), else -1
+	 * @param taskSlot that slot
+	 */
+	record ReadBaseVar(int global, int taskGlobal, int taskSlot) {
 	}
 
 	/**
@@ -102,7 +115,7 @@ final class WasmReadRuntimeBuilder {
 	 */
 	static ReadCtx buildReadCtx(WasmLispCompiler.StringTable st, int nilOffset, int quoteOffset, int functionOffset,
 			boolean ehMode, boolean simd, int instanceTypeIndex, boolean identityHash, ClosRegistry registry,
-			Map<String, Integer> layoutAddresses) {
+			Map<String, Integer> layoutAddresses, ReadBaseVar readBase) {
 		// character-name table: {nameOff, nameLen, code} triples
 		int[][] nameRefs = new int[CHAR_NAMES.length][3];
 		for (int i = 0; i < CHAR_NAMES.length; i++) {
@@ -208,7 +221,8 @@ final class WasmReadRuntimeBuilder {
 				msg(st, "#S: no slot with that name"),
 				msg(st, "#S: an omitted slot's initform is not readable at run time"),
 				msg(st, "Division by zero in ratio literal"),
-				msg(st, "#P pathname literals need the instance runtime, which this artifact was compiled without"));
+				msg(st, "#P pathname literals need the instance runtime, which this artifact was compiled without"),
+				readBase);
 	}
 
 	private static Msg msg(WasmLispCompiler.StringTable st, String text) {
@@ -1077,6 +1091,14 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, START);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, LEN);
+		// A program naming *read-base* (byte-identical otherwise): the block the arm
+		// leaves for a symbol ends ahead of the symbol path below.
+		boolean readBase = ctx.readBase().global() >= 0;
+		if (readBase) {
+			block(w);
+			emitReadBaseArm(w, ctx,
+					new ReadBaseSlots(BYTE, START, LEN, POS, NEG, ACC64, VALID, ESC, HP, C2, EXPVAL, CAR, CDR));
+		}
 		emitDropStandardQualifier(w, START, LEN, OFF, POS);
 
 		// Leading '+': an explicitly positive number literal (+347, +2.5, +.5, +1/3)
@@ -1142,6 +1164,9 @@ final class WasmReadRuntimeBuilder {
 		// integer parser)
 		emitTryFloat(w, new FloatSlots(BYTE, START, LEN, POS, NEG, VALID, ESC, SAWDOT, SAWE, EXPVAL, EXPSGN, EXPDIGIT,
 				C2, HP, ACC, OFF, ACC64, CAR, CDR, MV, FVAL, FPOW));
+		if (readBase) {
+			end(w);
+		}
 
 		// symbol: put back a '+' the number attempts skipped, then off = _intern(start,
 		// len)
@@ -1606,6 +1631,246 @@ final class WasmReadRuntimeBuilder {
 		i32(w, ch);
 		w.write(Instruction.I32_EQ);
 		brIf(w, 1);
+	}
+
+	/**
+	 * The {@code _read_expr} locals the {@code *read-base*} arm works in: the token, the
+	 * scan, the accumulator, whether every digit is in the base, whether the digit run
+	 * holds one, the slash's offset, one digit's value, the base and two references (the
+	 * numerator, and the variable's value while it is read). The classifiers reuse their
+	 * slots freely between attempts, and each starts by assigning them.
+	 */
+	private record ReadBaseSlots(int b, int start, int len, int pos, int neg, int acc, int inBase, int digits,
+			int slash, int digit, int base, int numerator, int value) {
+	}
+
+	/**
+	 * A {@code *read-base*} other than 10 (CLHS 2.3.1), over the upcased token: a
+	 * rational in the base is that number, whatever else it spells ({@code 1E5} in base
+	 * 16, {@code NIL} in base 36), and one that would be a decimal rational but holds a
+	 * digit past the base leaves the enclosing block for the symbol path ({@code 102} in
+	 * base 2). Every other token falls through to the decimal classifiers, which read its
+	 * floats and trailing dots. A value no radix is reads as 10.
+	 */
+	private static void emitReadBaseArm(WasmWriter w, ReadCtx ctx, ReadBaseSlots s) {
+		emitReadBaseValue(w, ctx.readBase(), s.value());
+		setLocal(w, s.value());
+		i32(w, 10);
+		setLocal(w, s.base());
+		getLocal(w, s.value());
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		ifVoid(w);
+		getLocal(w, s.value());
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, s.digit());
+		getLocal(w, s.digit());
+		i32(w, Character.MIN_RADIX);
+		w.write(Instruction.I32_GE_S);
+		getLocal(w, s.digit());
+		i32(w, Character.MAX_RADIX);
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		getLocal(w, s.digit());
+		setLocal(w, s.base());
+		end(w);
+		end(w);
+		getLocal(w, s.base());
+		i32(w, 10);
+		w.write(Instruction.I32_NE);
+		ifVoid(w);
+		block(w); // not a rational: on to the decimal classifiers
+		getLocal(w, s.start());
+		setLocal(w, s.pos());
+		i32(w, 0);
+		setLocal(w, s.neg());
+		i32(w, 1);
+		setLocal(w, s.inBase());
+		i32(w, 0);
+		setLocal(w, s.digits());
+		i32(w, -1);
+		setLocal(w, s.slash());
+		i32(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		setLocal(w, s.acc());
+		emitNull(w);
+		setLocal(w, s.numerator());
+		// [sign]; an empty token cannot arrive, and a sign alone holds no digit
+		getLocal(w, s.start());
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, s.b());
+		getLocal(w, s.b());
+		i32(w, '-');
+		w.write(Instruction.I32_EQ);
+		setLocal(w, s.neg());
+		getLocal(w, s.neg());
+		getLocal(w, s.b());
+		i32(w, '+');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		ifVoid(w);
+		getLocal(w, s.pos());
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, s.pos());
+		end(w);
+		block(w);
+		loop(w);
+		getLocal(w, s.pos());
+		getLocal(w, s.start());
+		getLocal(w, s.len());
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_GE_S);
+		brIf(w, 1);
+		getLocal(w, s.pos());
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, s.b());
+		getLocal(w, s.b());
+		i32(w, '/');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		// a second '/', or none of the numerator's digits ahead of it
+		getLocal(w, s.slash());
+		i32(w, 0);
+		w.write(Instruction.I32_GE_S);
+		getLocal(w, s.digits());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.I32_OR);
+		brIf(w, 3);
+		getLocal(w, s.pos());
+		setLocal(w, s.slash());
+		i32(w, 0);
+		setLocal(w, s.digits());
+		getLocal(w, s.acc());
+		setLocal(w, s.numerator());
+		i32(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		setLocal(w, s.acc());
+		w.write(Instruction.ELSE);
+		// the digit's value: 0-9, or A-Z (the token is upcased); nothing else is a digit
+		// in any base
+		getLocal(w, s.b());
+		i32(w, '0');
+		w.write(Instruction.I32_SUB);
+		setLocal(w, s.digit());
+		getLocal(w, s.digit());
+		i32(w, 9);
+		w.write(Instruction.I32_GT_U);
+		ifVoid(w);
+		getLocal(w, s.b());
+		i32(w, 'A');
+		w.write(Instruction.I32_SUB);
+		setLocal(w, s.digit());
+		getLocal(w, s.digit());
+		i32(w, 25);
+		w.write(Instruction.I32_GT_U);
+		brIf(w, 4);
+		getLocal(w, s.digit());
+		i32(w, 10);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, s.digit());
+		end(w);
+		getLocal(w, s.digit());
+		getLocal(w, s.base());
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		// past the base: only a decimal digit can still make the token a decimal shape
+		getLocal(w, s.digit());
+		i32(w, 10);
+		w.write(Instruction.I32_GE_S);
+		brIf(w, 4);
+		i32(w, 0);
+		setLocal(w, s.inBase());
+		w.write(Instruction.ELSE);
+		getLocal(w, s.acc());
+		getLocal(w, s.base());
+		getLocal(w, s.digit());
+		call(w, WasmLispCompiler.FUNC_BIG_GROW);
+		setLocal(w, s.acc());
+		end(w);
+		i32(w, 1);
+		setLocal(w, s.digits());
+		end(w);
+		getLocal(w, s.pos());
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, s.pos());
+		br(w, 0);
+		end(w); // loop
+		end(w); // block
+		getLocal(w, s.digits());
+		w.write(Instruction.I32_EQZ);
+		brIf(w, 0);
+		// the decimal shape, with a digit past the base: a symbol
+		getLocal(w, s.inBase());
+		w.write(Instruction.I32_EQZ);
+		brIf(w, 2);
+		getLocal(w, s.slash());
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		ifVoid(w);
+		getLocal(w, s.neg());
+		ifVoid(w);
+		getLocal(w, s.acc());
+		call(w, WasmLispCompiler.FUNC_BIG_NEG);
+		setLocal(w, s.acc());
+		end(w);
+		getLocal(w, s.acc());
+		w.write(Instruction.RETURN);
+		end(w);
+		getLocal(w, s.acc());
+		i32(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.REF_EQ);
+		ifVoid(w);
+		emitErr(w, ctx, ctx.msgDivZero());
+		end(w);
+		getLocal(w, s.neg());
+		ifVoid(w);
+		getLocal(w, s.numerator());
+		call(w, WasmLispCompiler.FUNC_BIG_NEG);
+		setLocal(w, s.numerator());
+		end(w);
+		getLocal(w, s.numerator());
+		getLocal(w, s.acc());
+		call(w, WasmLispCompiler.FUNC_RAT_NEW);
+		w.write(Instruction.RETURN);
+		end(w); // not a rational
+		end(w); // base != 10
+	}
+
+	// Pushes the variable's current value: the task's binding when it has one, the module
+	// global otherwise (WasmDynVars.emitRead, over a local of this function).
+	private static void emitReadBaseValue(WasmWriter w, ReadBaseVar variable, int cell) {
+		if (variable.taskGlobal() < 0) {
+			w.write(Instruction.GET_GLOBAL);
+			w.writeUnsignedLeb128(variable.global());
+			return;
+		}
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(variable.taskGlobal());
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		i32(w, variable.taskSlot());
+		arrayGet(w, WasmLispCompiler.TYPE_HASH_BUCKETS);
+		setLocal(w, cell);
+		getLocal(w, cell);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(variable.global());
+		w.write(Instruction.ELSE);
+		getLocal(w, cell);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		end(w);
 	}
 
 	/**

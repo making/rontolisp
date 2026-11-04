@@ -4835,13 +4835,13 @@ public final class LispEvaluator {
 
 	/**
 	 * The syntax the reader reads with now: the current -- dynamic binding first --
-	 * {@code *readtable*}, or {@code null} while it reads as the standard readtable
-	 * ({@code .kb/readtables.md}).
+	 * {@code *readtable*} and {@code *read-base*}, or {@code null} while they read as the
+	 * standard readtable in base 10 ({@code .kb/readtables.md}).
 	 * @return the syntax
 	 */
 	@Nullable ReadSyntax currentReadSyntax() {
-		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
-		return readtable == null ? null : ReadtableSyntax.of(readtable, this::callReaderMacro);
+		return ReadtableSyntax.of(currentSpecialValue(LispNames.READTABLE_VAR),
+				currentSpecialValue(LispNames.READ_BASE_VAR), this::callReaderMacro);
 	}
 
 	/**
@@ -4854,9 +4854,8 @@ public final class LispEvaluator {
 	 * @return the syntax, or {@code null} for the standard one
 	 */
 	@Nullable ReadSyntax currentReadSyntax(java.util.function.UnaryOperator<ReadSyntax.Result> check) {
-		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
-		return readtable == null ? null
-				: ReadtableSyntax.of(readtable, (function, input, offset, arguments, templateDepth) -> {
+		return ReadtableSyntax.of(currentSpecialValue(LispNames.READTABLE_VAR),
+				currentSpecialValue(LispNames.READ_BASE_VAR), (function, input, offset, arguments, templateDepth) -> {
 					ReadSyntax.Result result;
 					try {
 						result = callReaderMacro(function, input, offset, arguments, templateDepth);

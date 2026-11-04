@@ -40,9 +40,9 @@ import am.ik.rontolisp.reader.ReadSyntax;
  * {@code eval-when} -- an {@code in-readtable}, an {@code enable-...-syntax} -- installs
  * at compile time would never reach the read of the forms after it. This image runs each
  * form through a shallow {@link UserMacroExpander.Session} as the read produces it, and
- * the readtable its evaluator then holds is what the next form reads with; a reader macro
- * function runs in it, and what the function answers must be a value a compiled program
- * can carry as a literal.
+ * the readtable and read base its evaluator then holds are what the next form reads with;
+ * a reader macro function runs in it, and what the function answers must be a value a
+ * compiled program can carry as a literal.
  *
  * <p>
  * The image is thrown away once the program is read: the pass pipeline between the read
@@ -56,10 +56,12 @@ import am.ik.rontolisp.reader.ReadSyntax;
 public final class ReadTimeImage {
 
 	// What changes how a source reads: a macro character's function, a dispatch
-	// character, another character's syntax, the case. Assigning *readtable* changes
-	// nothing a mutation through one of these did not build first.
+	// character, another character's syntax, the case, an assignment of the read base (a
+	// binding of it ends before the next form). Assigning *readtable* changes nothing a
+	// mutation through one of these did not build first.
 	private static final Pattern CHANGES_SYNTAX = Pattern.compile(
-			"(?i)set-macro-character|make-dispatch-macro-character|set-syntax-from-char|\\(\\s*setf\\s+\\(\\s*readtable-case\\b");
+			"(?i)set-macro-character|make-dispatch-macro-character|set-syntax-from-char|\\(\\s*setf\\s+\\(\\s*readtable-case\\b"
+					+ "|\\(\\s*(?:p?set[qf]|set)\\s+'?\\*read-base\\*");
 
 	// A set-dispatch-macro-character, with its sub-character when it is spelled
 	// #\# #\X.
@@ -73,9 +75,10 @@ public final class ReadTimeImage {
 
 	/**
 	 * Whether a Common Lisp source can change how source reads: it sets a macro or
-	 * dispatch character, another character's syntax, or the case. Installing
-	 * {@code #\# #\@} or {@code #\# #\L} does not count -- this reader keeps reading
-	 * those two natively whatever function a readtable holds (ironclad's and iterate's).
+	 * dispatch character, another character's syntax, the case or the read base.
+	 * Installing {@code #\# #\@} or {@code #\# #\L} does not count -- this reader keeps
+	 * reading those two natively whatever function a readtable holds (ironclad's and
+	 * iterate's).
 	 * @param source the source text
 	 * @return whether reading it calls for an image
 	 */

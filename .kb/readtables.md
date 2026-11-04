@@ -86,6 +86,10 @@ as part of a symbol on all four instead of signalling (CLHS 2.4.8; measured 2026
   token is read (`LispReader.Forms.homingSymbols` over `PackageResolver.readSpelling`, the
   same hook every interpreter runtime read uses -- `.kb/packages.md`): cl-annot looks an
   annotation's arity up on the symbol it read, and a bare spelling names cl-user's.
+- **`*read-base*` rides the same view** (`ReadSyntax.readBase`, `ReadtableSyntax.of`): a base
+  other than 10 makes a view of an empty table, so every path above reads with it, the source
+  reads and the image's included (`LispLexer.lexRationalInReadBase`,
+  [read-load-streams.md](read-load-streams.md) "`*read-base*`").
 - Not honored: escape syntax under another character (a constituent there), `read` from a
   file stream or standard input, the REPL / playground (whole-buffer reads), `*read-suppress*` around a reader macro
   (`.todo/h77`).
@@ -103,7 +107,8 @@ as part of a symbol on all four instead of signalling (CLHS 2.4.8; measured 2026
   `currentReadSyntax(check)`. Lazy: the first file whose text can change the syntax
   (`changesSyntax`: `set-macro-character`, `make-dispatch-macro-character`,
   `set-syntax-from-char`, `(setf (readtable-case`, a `set-dispatch-macro-character` other
-  than `#\# #\@` / `#\# #\L`) opens the image, which catches up on all of `out`; before it
+  than `#\# #\@` / `#\# #\L`, an assignment of `*read-base*`: `setq`, `setf`, `psetq`, `psetf`,
+  `set`, a binding ending before the next form) opens the image, which catches up on all of `out`; before it
   every form reads with the standard syntax. ironclad (`#@`) and iterate (`#L`) do not open
   one. The package bracket's push now lands in front of the first `in-package`
   ([packages.md](packages.md)).
