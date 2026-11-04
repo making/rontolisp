@@ -279,6 +279,19 @@ class UserMacroExpanderTest {
 				(def-in-locally)
 				(print (quadruple 5))
 				""")).isEqualTo("(EXPORT 'QUADRUPLE)\n(PRINT (* 4 5))");
+		// The members of an expansion are top-level forms in order: the next one reaches
+		// the macro, under a macrolet too. One a definition empties emits nothing.
+		assertThat(expand("""
+				(defmacro def-and-use () '(progn (defmacro five () 5) (print (five))))
+				(def-and-use)
+				(macrolet ((local () '(defmacro six () 6))) (local) (print (six)))
+				(macrolet ((local () '(defmacro seven () 7))) (local))
+				(print (seven))
+				""")).isEqualTo("(PROGN (PRINT 5))\n(PRINT 6)\n(PRINT 7)");
+		assertThat(expand("""
+				(macrolet ((local () '(defsetf place set-place))) (local))
+				(setf (place) 8)
+				""")).contains("(SET-PLACE ").doesNotContain("DEFSETF");
 	}
 
 	@Test

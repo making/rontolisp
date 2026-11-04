@@ -77,6 +77,9 @@ its type. The correct spelling is `foreign-funcall-varargs`.
   `examples/jvm/cffi-sqlite.lisp`, also compiles to a `.class`.
 - **static-vectors** -- does not load, and cannot: a SECOND implementation seam needing a vector
   in non-moving memory, which rontolisp has no array type for. Use `cffi:foreign-alloc`.
+  pngload requires it on every path, so pngload stops at its `.asd` (measured 2026-11-04).
+- **mmap, 3bz** -- load and run on the interpreter and a compiled class: a deflate stream
+  decompresses, a file maps, and a failing `mmap` reads `errno` into an `mmap-error` (2026-11-04).
 - **cl+ssl** (the real one) -- LOADS, completes a real TLS handshake through its LISP BIO (OpenSSL
   calling back into Lisp through FFM upcalls) and round-trips a real HTTPS request on `java -jar`
   and the native binary. A probe, never a migration. Not one blocker was in cffi -- all were

@@ -25779,9 +25779,10 @@ public final class LispMacroExpander {
 	 * lexical symbol macro behave identically. The interpreter never calls it (it
 	 * consults its table at the reference itself); the compile path does, once per
 	 * top-level form, after {@code UserMacroExpander} has expanded every user macro.
-	 * @param form one top-level form, already macro-expanded
+	 * @param form one top-level form, already macro-expanded and resolved: a key of
+	 * {@code macros} is the name as the resolver spells it
 	 * @param macros the active global name -> expansion table (empty is a no-op)
-	 * @return the substituted form ({@code form} itself when nothing matched)
+	 * @return the substituted form
 	 */
 	public static LispVal substituteGlobalSymbolMacros(LispVal form, java.util.Map<String, LispVal> macros) {
 		return substituteSymbolMacros(form, macros);

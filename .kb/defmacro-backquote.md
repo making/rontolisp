@@ -166,6 +166,15 @@ registry with plain top-level CALLS was invisible (trivia's `(set-vector-matcher
   whose situations evaluate at compile time has its members recorded by
   `flattenTopLevel(program, compileTime)` and evaluated (`Session.evalAtCompileTime`, a defvar
   eagerly) -- before h57 only their definitions registered ([readtables.md](readtables.md)).
+- **The members of an expansion are top-level forms, in order** (`expandTopLevelMembers`, CLHS
+  3.2.3.1, through `progn`/`locally`/`eval-when`/`macrolet`): each is walked once the one before it
+  has registered its definitions, so `(progn (defmacro m ...) (m))` reaches `m`. Lite: the
+  compile-time half of an expanded `eval-when` still runs after the whole walk, so a macro in a later
+  member cannot call a function that member defines.
+- **`defsetf`, `define-setf-expander`, `define-compiler-macro` and `define-modify-macro` a macro
+  expands to are consumed like a `defmacro`**, and the walk keeps them verbatim
+  (`isExpansionTimeDefinition`): nibbles' `define-storer` is `(progn (defun ...) (defsetf ...))`,
+  which compiled to a call of `DEFSETF`.
 - **A `defmacro` a macro EXPANDS to is consumed wherever it lands**
   (`stripDefmacroDefinitions`): directly, inside the `progn` the macro wrapped around it
   (recursing through `progn`/`eval-when`, dropping an emptied wrapper, mirroring

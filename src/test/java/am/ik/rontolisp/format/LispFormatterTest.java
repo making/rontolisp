@@ -754,6 +754,21 @@ class LispFormatterTest {
 
 				  (two))
 				""");
+		// A keyword and the value a blank line parts it from are no pair, or the blank
+		// line would go and the next pass would lay the form out differently.
+		assertThat(LispFormatter.format("""
+				(defpackage p
+				  (:export :a
+				           :b
+				           :c
+
+				           :d))
+				""")).isEqualTo("""
+				(defpackage p
+				  (:export :a :b :c
+
+				           :d))
+				""");
 	}
 
 	@Test
