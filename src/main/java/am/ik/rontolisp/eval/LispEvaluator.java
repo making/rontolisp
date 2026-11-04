@@ -10602,9 +10602,9 @@ public final class LispEvaluator {
 			case LispNames.WITH_STANDARD_IO_SYNTAX:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandWithStandardIoSyntax);
 			case LispNames.FLET:
-				return LispMacroExpander.expandFlet(preExpandLocalMacros(cons));
+				return LispMacroExpander.expandFlet(preExpandLocalMacros(cons, env));
 			case LispNames.LABELS:
-				return LispMacroExpander.expandLabels(preExpandLocalMacros(cons));
+				return LispMacroExpander.expandLabels(preExpandLocalMacros(cons, env));
 			case LispNames.MULTIPLE_VALUE_BIND:
 				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueBind);
 			case LispNames.MULTIPLE_VALUE_LIST:
@@ -12162,7 +12162,7 @@ public final class LispEvaluator {
 				// expansion in now -- by the time the captured body runs, the local
 				// macros are gone and the call would resolve as an undefined function
 				// (jzon's %coerced-fields-slots inside its coerced-fields defgeneric).
-				result = eval(UserMacroExpander.expandAll(bodyForm, this), env);
+				result = eval(expandAllAtSite(bodyForm, env), env);
 			}
 			return result;
 		}
@@ -13189,9 +13189,7 @@ public final class LispEvaluator {
 	 * The expansion of a {@code symbol-macrolet} the interpreter is about to run: its
 	 * user macros expanded with the names in scope, then the substitution every backend
 	 * shares, once per call site like {@link #expandUserMacro}, whose memo drops with the
-	 * macro table the answer depends on. The body's calls are expanded in the package its
-	 * code was read in, as {@link #expandMacroCall} does for a call it reaches in a
-	 * function.
+	 * macro table the answer depends on.
 	 */
 	private LispVal expandSymbolMacrolet(LispCons cons, Environment env,
 			java.util.function.Function<LispCons, LispVal> substitution) {
@@ -13201,22 +13199,7 @@ public final class LispEvaluator {
 				return cached;
 			}
 		}
-		String callerPackage = this.packageResolver.currentPackageName();
-		String sitePackage = env.lexicalPackage();
-		boolean swapPackage = false;
-		if (sitePackage != null && !callerPackage.equals(sitePackage)) {
-			swapPackage = true;
-			this.packageResolver.setCurrentPackage(sitePackage);
-		}
-		LispVal expansion;
-		try {
-			expansion = substitution.apply((LispCons) UserMacroExpander.expandAll(cons, this));
-		}
-		finally {
-			if (swapPackage) {
-				this.packageResolver.setCurrentPackage(callerPackage);
-			}
-		}
+		LispVal expansion = substitution.apply((LispCons) expandAllAtSite(cons, env));
 		synchronized (this.userMacroExpansions) {
 			if (this.userMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
 				this.userMacroExpansions.put(cons, expansion);
@@ -14867,11 +14850,33 @@ public final class LispEvaluator {
 	 * {@code sigma1}) must be materialized first or it misses the rewrite. The common
 	 * macrolet-free case skips the walk.
 	 */
-	private LispCons preExpandLocalMacros(LispCons cons) {
+	private LispCons preExpandLocalMacros(LispCons cons, Environment env) {
 		if (!treeContainsMacrolet(cons)) {
 			return cons;
 		}
-		return UserMacroExpander.expandAll(cons, this) instanceof LispCons expanded ? expanded : cons;
+		return expandAllAtSite(cons, env) instanceof LispCons expanded ? expanded : cons;
+	}
+
+	/**
+	 * {@link UserMacroExpander#expandAll} of a form the interpreter is about to run in
+	 * {@code env}. The walk expands the calls with no site, so it runs in the package the
+	 * code was read in, which {@link #expandMacroCall} gives a call it reaches in a
+	 * function: a {@code macrolet} a macro expanded to is walked when the function runs,
+	 * under whatever package its caller is in.
+	 */
+	private LispVal expandAllAtSite(LispVal form, Environment env) {
+		String callerPackage = this.packageResolver.currentPackageName();
+		String sitePackage = env.lexicalPackage();
+		if (sitePackage == null || callerPackage.equals(sitePackage)) {
+			return UserMacroExpander.expandAll(form, this);
+		}
+		this.packageResolver.setCurrentPackage(sitePackage);
+		try {
+			return UserMacroExpander.expandAll(form, this);
+		}
+		finally {
+			this.packageResolver.setCurrentPackage(callerPackage);
+		}
 	}
 
 	// Iterative on purpose: a Java-recursive walk adds a frame per cons visited, and this

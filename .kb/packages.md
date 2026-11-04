@@ -519,7 +519,10 @@ package, whoever called `load`: its scope has no `lexicalPackage`, and neither d
 a function, nor `macroexpand`. Both halves are load-bearing (let-plus's `&structure` interning its
 accessor in cl-colors' package, fast-http's `callback-data` vs trivia's top-level
 `lispn:define-namespace`). A macro's defining package answered here until h96 (2026-11-04), which
-sent `(let+ (((&rgb ..) ..)))` in cl-colors to `LET-PLUS::RGB-RED`. **The swap only reaches what is
+sent `(let+ (((&rgb ..) ..)))` in cl-colors to `LET-PLUS::RGB-RED`. A walk the interpreter runs when the
+code runs takes the same package (`expandAllAtSite`): the `macrolet` a macro expands to, a `flet` holding
+one, `symbol-macrolet` and `with-slots` (proc-parse's `with-octets-parsing` around fast-http's
+`callback-notify`). **The swap only reaches what is
 homed DURING the expansion**: `intern`, and
 (h62, 2026-10-31) every interpreter runtime read -- `read-from-string`, `read`, a readtable
 view's read -- whose `LispReader.symbolHome` (`Environment.setReadSymbolHome` ->
