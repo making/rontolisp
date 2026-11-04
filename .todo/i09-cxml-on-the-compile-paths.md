@@ -13,5 +13,5 @@ patched), program `(ql:quickload "cxml") (print :loaded)`.
 - **WASM preview 1**: compiles, then traps `unreachable` during start-up before `:loaded` prints
   (`<wasm function 8>`). Unattributed; build with names and find the first failing top-level form.
 
-The interpreter loads and stops on `.todo/i01`, so nothing has run end to end yet. Measure after
-i01 whether the compile paths need more than the two items here.
+The interpreter runs the whole smoke since 2026-11-04 (xmls parse, DOM, sink, well-formedness error,
+all as SBCL). Measure whether the compile paths need more than the two items here.

@@ -17,7 +17,9 @@ slot-wise (deliberate CL deviation); `#S(...)` source reads back via `StructLite
   parameter (`boaParameterSymbols`) reads it, others evaluate their initform.
 - A struct name is a valid `defmethod` specializer (`ClosRegistry.registerStruct` /
   `findStructTag`; `structAncestorCount` ranks it, band 100-199, deeper first).
-- `:conc-name` takes a STRING DESIGNATOR, colon stripped. **Trap: keeping the colon yields
+- `:conc-name` takes a STRING DESIGNATOR (`structConcName`, one parser for the expander and both
+  walkers): a symbol's name with its package, `:` or `#:` stripped (cxml's `#:entdef-`), a string, a
+  character. A bare `:conc-name` option outside a list stays refused. **Trap: keeping the colon yields
   accessors no call site can name, surfacing as `The function X is undefined` (a place: `(SETF
   X)`, at run time, with a compile-time warning on the compile paths).**
 

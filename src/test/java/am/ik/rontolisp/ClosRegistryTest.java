@@ -39,6 +39,15 @@ class ClosRegistryTest {
 			.isEqualTo(Set.of("PA::GADGET"));
 		registry.registerClass(redefined);
 		assertThat(registry.findClass("GADGET")).isSameAs(redefined);
+		// A struct of exactly the spelled name is the type it designates, however unique
+		// the member is among the classes.
+		registry.registerClass(classNamed("PA::MIXED"));
+		assertThat(registry.findClass("PB::MIXED")).extracting(ClosRegistry.ClassInfo::name).isEqualTo("PA::MIXED");
+		registry.registerStruct("PB::MIXED", List.of(), List.of());
+		assertThat(registry.findClass("PB::MIXED")).isNull();
+		assertThat(registry.findClass("PA::MIXED")).extracting(ClosRegistry.ClassInfo::name).isEqualTo("PA::MIXED");
+		assertThat(registry.findStructTag("PB:MIXED")).isEqualTo("%struct-PB::MIXED");
+		assertThat(registry.findStructTag("PA::MIXED")).isNull();
 	}
 
 	@Test
@@ -65,6 +74,15 @@ class ClosRegistryTest {
 		registry.registerStruct("DERIVED", "BASE", List.of("A", "B"), List.of(LispNil.INSTANCE, LispNil.INSTANCE));
 		assertThat(registry.descendantStructTags("BASE")).containsExactly("%struct-BASE", "%struct-DERIVED");
 		assertThat(registry.descendantStructTags("DERIVED")).containsExactly("%struct-DERIVED");
+		// A qualified spelling reaches the plain struct until a class holds that
+		// spelling.
+		assertThat(registry.descendantStructTags("PA::DERIVED")).containsExactly("%struct-DERIVED");
+		assertThat(registry.structAncestorCount("PA::DERIVED")).isEqualTo(2);
+		registry.registerClass(classNamed("PA::DERIVED"));
+		assertThat(registry.descendantStructTags("PA::DERIVED")).isEmpty();
+		assertThat(registry.structAncestorCount("PA::DERIVED")).isEqualTo(1);
+		assertThat(registry.findStructTag("PA::DERIVED")).isNull();
+		assertThat(registry.findStructTag("PB::DERIVED")).isEqualTo("%struct-DERIVED");
 	}
 
 }
