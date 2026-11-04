@@ -100,6 +100,28 @@ class GrayStreamsLibraryTest {
 	}
 
 	/**
+	 * A protocol program carries gray.lisp's {@code clear-input} in place of the
+	 * prelude's, which it tells by their shared lambda list, and keeps a {@code defun} of
+	 * its own.
+	 */
+	@Test
+	void aProtocolProgramReplacesThePreludesClearInputOnly() {
+		String protocol = "(defclass c (rontolisp:fundamental-character-input-stream) ())";
+		List<LispVal> program = new ArrayList<>(LispReader.readAllFromString(protocol));
+		program.addAll(LispPreludeLibrary.formsFor("CLEAR-INPUT"));
+		assertThat(GrayStreamsLibrary.process(program)
+			.stream()
+			.map(LispVal::print)
+			.filter(form -> form.startsWith("(DEFUN CLEAR-INPUT "))).singleElement()
+			.satisfies(form -> assertThat(form).contains("RONTOLISP:STREAM-CLEAR-INPUT"));
+		String own = "(defun clear-input (s) s)";
+		assertThat(GrayStreamsLibrary.process(LispReader.readAllFromString(protocol + own))
+			.stream()
+			.map(LispVal::print)
+			.filter(form -> form.startsWith("(DEFUN CLEAR-INPUT "))).containsExactly("(DEFUN CLEAR-INPUT (S) S)");
+	}
+
+	/**
 	 * A stream-less read or print reaches a Gray instance only through the current value
 	 * of the standard stream, which a program that never binds the variable cannot
 	 * change: its stream-less calls are left exactly as written. So is a list where no

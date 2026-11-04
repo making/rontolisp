@@ -8469,6 +8469,16 @@ public final class LispNames {
 	public static final String WIT_ERROR = "WIT-ERROR";
 
 	/**
+	 * The {@code interactive-interrupt} condition of the {@code rontolisp} package: what
+	 * SIGINT is signalled as on the interpreter, for a program with a handler naming it
+	 * ({@code .kb/error-handling.md}, "SIGINT"). Seeded by {@code ClosRegistry}.
+	 */
+	public static final String INTERACTIVE_INTERRUPT = "INTERACTIVE-INTERRUPT";
+
+	/** {@link #INTERACTIVE_INTERRUPT}, qualified. */
+	public static final String INTERACTIVE_INTERRUPT_QUALIFIED = RONTOLISP_PKG + ":" + INTERACTIVE_INTERRUPT;
+
+	/**
 	 * The reader of {@link #WIT_ERROR}'s {@code payload} slot: the mapped {@code E} value
 	 * of the WIT {@code result} whose error arm signaled.
 	 */

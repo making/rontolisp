@@ -547,6 +547,17 @@ class AsdfSystemsTest {
 	}
 
 	@Test
+	void uffiIsTheSameSystemNameOverCffisCompatibilityLayer() {
+		String source = AsdOverrides.replacementSource("uffi.asd");
+		assertThat(source).isNotNull();
+		List<AsdfSystems.LispSystem> systems = loadAsd(source, "sw/uffi.asd", Features.INTERPRETER);
+		assertThat(systems).hasSize(1);
+		assertThat(systems.get(0).name()).isEqualTo("uffi");
+		assertThat(systems.get(0).dependsOn()).containsExactly("cffi-uffi-compat");
+		assertThat(systems.get(0).files()).isEmpty();
+	}
+
+	@Test
 	void parsesTheBundledClUnicodeReplacementAsd() {
 		// Upstream's cl-unicode.asd declares four systems, two of which are outside the
 		// defsystem-as-data subset: cl-unicode/build declares :output-files and performs

@@ -133,3 +133,21 @@ arm signals the `rontolisp:wit-error` condition, whose payload is read with
 [wit-provide](rontolisp-wit-provide.md) reference pages and the
 [Compiling to WebAssembly](../../compiling/wasm.md) guide.
 
+`rontolisp:interactive-interrupt` is the condition Ctrl-C (SIGINT) is signalled as
+on the interpreter, a `serious-condition` and not an `error`, like SBCL's
+`sb-sys:interactive-interrupt`:
+
+```lisp
+(handler-case (signal 'rontolisp:interactive-interrupt)
+  (rontolisp:interactive-interrupt () :interrupted)) ; => :INTERRUPTED
+```
+
+The signal starts once a `handler-case` or `handler-bind` clause names this
+condition; a program with none, or one that only handles `serious-condition`, ends
+at SIGINT with status 130. It arrives at the next function call or loop step of the
+thread that established the first such handler, and it wakes `sleep` and
+`condition-wait`. A call that does not wake, such as `read-line` on standard input,
+leaves it pending, and a second SIGINT then ends the process. If every handler
+declines, the process ends with status 130 without running `unwind-protect`
+cleanups. In a compiled program SIGINT always ends the process and no handler runs.
+

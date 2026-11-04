@@ -233,8 +233,8 @@ ASDF stores the form and calls it around `compile-file`, or around the source `l
 - **Measured** (2026-11-04): `autoload` (real `:around-compile "mgl-pax.asdf:compile-pax"`) loads
   on the interpreter and the JVM, its hook a real call with `mgl-pax.asdf` in the build image;
   the sources of `mgl-pax-bootstrap` load on the interpreter under another system name, so the
-  option no longer keeps that shim. clingon passes its `#P` modules and stops on
-  `with-user-abort`'s implementation gate. coalton stops before any hooked component, on
+  option no longer keeps that shim. clingon passes its `#P` modules and loads
+  (`eval/WithUserAbortForms`, tier 4). coalton stops before any hooked component, on
   eclector's `fixup-case`: `defmacro`'s `&optional ((() &body forms) '(()))`, a destructuring
   pattern as an optional's variable.
 - Pinned by `AsdfMetaobjectsE2eTest` (all four: lambda, symbol, string, nil; the read, the
@@ -603,6 +603,7 @@ PATH**, so component files still resolve against the real tree. One entry serves
 | `tiny-routes.asd` | `tiny-routes-lite.asd` | parseable; replaced only to ADD the opt-in `tiny-routes/lite` |
 | `cffi.asd` | `cffi-rontolisp.asd` | opens with `(error "Sorry, this Lisp is not yet supported")`; names rontolisp's `cffi-sys` (`.kb/cffi.md`) |
 | `cl-unicode.asd` | `cl-unicode-built.asd` | drops the build system, `component-depends-on`, fiveam |
+| `uffi.asd` | `uffi-cffi.asd` | guards its whole `defsystem` per implementation; the replacement is cffi's own `uffi-compat/uffi.asd`, over `cffi-uffi-compat` (package nickname `uffi`). Interpreter and JVM; a `.wasm` refuses by naming `ffi:` |
 
 **Every bundled replacement `.asd` and every leaf-module shim `.lisp` also needs a
 `resource-config.json` entry** (`AsdOverrides` resp. `ShimLibraries` as `typeReachable`). A
@@ -706,6 +707,16 @@ truename in directory form), and `delete-directory-and-files`' portable walk get
 shim: the rest of cl-fad is portable CL; `with-output-to-temporary-file` /
 `with-open-temporary-file` run on `(pathname stream)` (`.kb/pathnames.md`). hunchentoot (2026-10-31, interpreter)
 now stops at `HUNCHENTOOT::MAKE-EXTERNAL-FORMAT` (`specials.lisp:283`, flexi-streams shim, h52).
+
+**`eval/WithUserAbortForms`** (pinned by `WithUserAbortE2eTest`, all four, SBCL 2.2.9's answers).
+with-user-abort 0.1 names its condition per `#+impl` arm of a `quote` with no generic arm, so here
+the `quote` had no datum. One span: the last arm -> `rontolisp:interactive-interrupt`
+([error-handling.md](error-handling.md), "SIGINT"). Measured 2026-11-04 with clingon 0.5.0 over
+it: `make-command`, `print-usage`, `parse-command-line`, `getopt` and `run` print what SBCL prints
+on the interpreter, and a real SIGINT prints `Received SIGINT, exiting.` and exits 130. On the
+compile paths clingon runs on all three when a program spells `clingon.command::`, but
+`clingon:getopt` does not read: `(cl-reexport:reexport-from ...)` is a top-level function call
+computing the exports at load.
 
 Retired from this tier: `eval.AlexandriaSymbols`, deleted once `*package*` became a genuine
 dynamic variable (`.kb/packages.md`).
