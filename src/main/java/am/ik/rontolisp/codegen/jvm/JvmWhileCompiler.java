@@ -30,6 +30,7 @@ final class JvmWhileCompiler {
 		List<LispVal> parts = cons.toList();
 		JvmLispCompiler.Ctx.Spill spill = JvmEmitHelper.enterLoopScope(ctx);
 		MethodCode.Label loopStart = ctx.body.newBoundLabel();
+		JvmInterruptPoll.emit(ctx, className);
 		// Evaluate the test; if false, branch out of the loop. A fusable binary
 		// comparison leaves a RAW int truth value (no boxed t/nil per iteration,
 		// .kb/jvm-int-fusion.md); any other test compiles boxed as before.

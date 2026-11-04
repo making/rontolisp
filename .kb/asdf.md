@@ -834,7 +834,8 @@ with-user-abort 0.1 names its condition per `#+impl` arm of a `quote` with no ge
 the `quote` had no datum. One span: the last arm -> `rontolisp:interactive-interrupt`
 ([error-handling.md](error-handling.md), "SIGINT"). Measured 2026-11-04 with clingon 0.5.0 over
 it: `make-command`, `print-usage`, `parse-command-line`, `getopt` and `run` print what SBCL prints
-on the interpreter, and a real SIGINT prints `Received SIGINT, exiting.` and exits 130.
+on the interpreter, and a real SIGINT prints `Received SIGINT, exiting.` and exits 130, there and
+compiled to the JVM (measured 2026-11-04, the handler's `unwind-protect` cleanup first).
 
 **`eval/ClReexportForms`** (pinned by `ClReexportE2eTest`, all four, SBCL 2.2.9's answers). clingon's
 `src/package.lisp` is `(defpackage :clingon (:use :cl))` plus top-level

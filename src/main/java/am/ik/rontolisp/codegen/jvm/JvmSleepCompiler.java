@@ -36,6 +36,12 @@ final class JvmSleepCompiler {
 		// anybody wants out of (sleep <huge>).
 		MethodRefEntry longValue = ctx.cp.methodRef(ctx.numberClass, "longValue", "()J");
 		ctx.body.checkcast(ctx.numberClass).invokevirtual(longValue);
+		if (ctx.interruptPolls) {
+			ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmInterruptPoll.CLASS), "sleep", "(J)V"));
+			JvmInterruptPoll.emit(ctx, className);
+			ctx.body.aconst_null();
+			return;
+		}
 		ClassEntry threadClass = ctx.cp.classEntry("java/lang/Thread");
 		MethodRefEntry sleep = ctx.cp.methodRef(threadClass, "sleep", "(J)V");
 		ctx.body.invokestatic(sleep).aconst_null();
