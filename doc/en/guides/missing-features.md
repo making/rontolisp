@@ -234,11 +234,8 @@ constructor is a compile error there.
 
 ## Other omissions
 
-- lambda lists: an extended `defmacro` lambda list (`&whole`, `&optional`,
-  `&key`, `&aux`, nested destructuring patterns) routes through
-  `destructuring-bind`, which is deliberately lenient -- a missing argument is
-  `nil` and a surplus one is ignored rather than signalling; and a function is
-  limited to 10 physical parameters on the funcall/apply path.
+- lambda lists: a function is limited to 10 physical parameters on the
+  funcall/apply path.
 - user macros are unknown to the runtime `eval` of compiled programs, and a
   `lambda` built at runtime by that `eval` does not parse lambda-list keywords
   (see [Compiled eval Limitations](eval-limitations.md)).

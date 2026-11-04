@@ -2710,14 +2710,14 @@ public final class UserMacroExpander {
 			}
 			else if (element instanceof LispCons entry && entry.isProperList()) {
 				if (defaults) {
-					List<LispVal> entryParts = entry.toList();
-					if (entryParts.size() >= 2) {
-						List<LispVal> newEntry = new ArrayList<>(entryParts);
-						newEntry.set(0, destructuring ? expandLambdaList(entryParts.get(0), true, macroEval)
-								: entryParts.get(0));
-						newEntry.set(1, expandAll(entryParts.get(1), macroEval));
-						next = LispCons.rebuiltList(entry, newEntry);
+					List<LispVal> newEntry = entry.toList();
+					if (destructuring) {
+						newEntry.set(0, expandLambdaList(newEntry.get(0), true, macroEval));
 					}
+					if (newEntry.size() >= 2) {
+						newEntry.set(1, expandAll(newEntry.get(1), macroEval));
+					}
+					next = LispCons.rebuiltList(entry, newEntry);
 				}
 				else if (destructuring) {
 					next = expandLambdaList(entry, true, macroEval);

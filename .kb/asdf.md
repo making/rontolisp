@@ -235,9 +235,8 @@ ASDF stores the form and calls it around `compile-file`, or around the source `l
   on the interpreter and the JVM, its hook a real call with `mgl-pax.asdf` in the build image;
   the sources of `mgl-pax-bootstrap` load on the interpreter under another system name, so the
   option no longer keeps that shim. clingon passes its `#P` modules and loads
-  (`eval/WithUserAbortForms`, tier 4). coalton stops before any hooked component, on
-  eclector's `fixup-case`: `defmacro`'s `&optional ((() &body forms) '(()))`, a destructuring
-  pattern as an optional's variable.
+  (`eval/WithUserAbortForms`, tier 4). coalton stops before any hooked component, on fset's
+  `make-lock` (`Code/port.lisp` has no rontolisp arm; measured 2026-11-05, past eclector).
 - Pinned by `AsdfMetaobjectsE2eTest` (all four: lambda, symbol, string, nil; the read, the
   expansion, none of it in the program's `*features*`), `AsdfSystemsTest`, `LispEvaluatorAsdfTest`.
 

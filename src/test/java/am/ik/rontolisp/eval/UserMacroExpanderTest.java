@@ -199,11 +199,13 @@ class UserMacroExpanderTest {
 				  (funcall (lambda (m &optional (p (m 4))) m) m))
 				(flet ((g (&key (q (m 5))) q)) (g))
 				(destructuring-bind (a (b &optional (c (m 6)))) (list 1 (list 2)) (list a b c))
+				(destructuring-bind (&optional ((a &optional (b (m 7))))) (list (list 1)) (list a b))
 				""")).isEqualTo("""
 				(DEFUN F (M &OPTIONAL (O (+ 1 1) O-P) &KEY ((:K M) (+ 2 1)) &AUX (A (+ 3 1))) \
 				(FUNCALL (LAMBDA (M &OPTIONAL (P (+ 4 1))) M) M))
 				(FLET ((G (&KEY (Q (+ 5 1))) Q)) (G))
-				(DESTRUCTURING-BIND (A (B &OPTIONAL (C (+ 6 1)))) (LIST 1 (LIST 2)) (LIST A B C))""");
+				(DESTRUCTURING-BIND (A (B &OPTIONAL (C (+ 6 1)))) (LIST 1 (LIST 2)) (LIST A B C))
+				(DESTRUCTURING-BIND (&OPTIONAL ((A &OPTIONAL (B (+ 7 1))))) (LIST (LIST 1)) (LIST A B))""");
 	}
 
 	@Test

@@ -95,6 +95,17 @@ binds the required prefix positionally then calls `LambdaLists.appendTailBinding
 unknown-`&key` check as a `__ll_check` throwaway) over `__db<N>_r<i>`. Nested sub-patterns
 recurse through `__db<N>_g<i>`; a dotted tail normalizes to `&rest`.
 
+- **A pattern stands where ordinary syntax has a parameter name and no list of its own** (CLHS
+  3.4.4.1): required, after `&rest`/`&body`, heading an `&optional` spec, the variable of
+  `((keyword var) ...)`. `tailPatternsAsTemporaries` hands `appendTailBindings` a `__db<N>_g<i>` for
+  each, and the pattern's bindings follow that temporary's, so a later default reads its variables
+  (`(&rest (a b) &aux (c a))` read an unbound `a` until 2026-11-05) and a default destructures once,
+  like a supplied value. A function's lambda list stays symbols (`LambdaLists.parse`). SBCL 2.2.9 is
+  the reference for what CLHS leaves loose: `&aux` takes no pattern, a bare `()` under `&optional`
+  ignores its position. `(&key ())`, which SBCL takes, is refused here. Consumer: eclector's
+  `fixup-case`. `()` anywhere else is the pattern taking nothing, checked like any level
+  (`(() b)` over `((1) 2)` bound 2 until then). Pin: ci-spec
+  `destructuring-bind-and-defmacro-lambda-lists`, `LispEvaluatorTest#evalDestructuringBindNestedPatternWithKeywords`.
 - **A surplus element signals; so does a missing one.** Both halves are the function
   lambda lists' `program-error` on the same message rail ([lambda-lists.md](lambda-lists.md),
   "A surplus element in a destructuring pattern" and "A missing element in a
