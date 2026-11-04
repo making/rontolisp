@@ -17,10 +17,35 @@ Six ways into `(%fmt-render control arguments)`: a computed control expression; 
 value (`BuiltinFunctionWrappers.formatWrapper`, or the interpreter's `format` `LispFunction`);
 `~?`/`~@?`; a literal control the static parser DECLINES (`UnsupportedOperationException` --
 justification `~<`, an argument-divergent `~[` nested in a composite (clauses ending at different
-positions; without `~:;` the no-clause outcome is one more, consuming nothing), `~t`, `~p` -- so
-`expandFormat` falls back rather than failing the compile); a condition's `format-control` slot
-via `%format-condition` ([error-handling.md](error-handling.md)); and
+positions; without `~:;` the no-clause outcome is one more, consuming nothing), `~t`, `~p`, or a
+read past the call's own arguments (below) -- so `expandFormat` falls back rather than failing the
+compile); a condition's `format-control` slot via `%format-condition`
+([error-handling.md](error-handling.md)); and
 `(error/warn/signal/cerror <computed datum> args...)` with a run-time STRING datum.
+
+## A literal control that cannot render never fails a compile
+Two exceptions out of `FmtParser`, the same answer from `expandFormat` and `formatMessagePieces`
+(`error`/`warn`/`signal`/`cerror`), so on all four backends, and each wrapped in
+`(%compile-warning "text; checked when the call runs" form)`, which only JVM and WASM read
+(`CompileWarnings.warnedForm`: placed at the located form around it, counted by
+`--warnings-as-errors`; only compiled code warns, so a dropped branch says nothing):
+
+- **`FmtShortOfArguments`** (`FmtArgs.next`/`move` past a static source; extends the declining
+  exception) -> the renderer answers at the call. It has to: the parser walks every clause, so
+  `(format nil "~[~a~;b~]" 1)` is short only on a clause the selector skips (SBCL 2.2.9: `"b"`), and
+  the text is the renderer's. The gate needs nothing new, its `catch` already answers true. A
+  divergent `~[` whose remainder is short on SOME clauses still folds those clauses to a signal
+  (`clauseExprs`), the others static.
+- **`IllegalArgumentException`** (ends with `~`, misplaced `~;`, missing close, `~:[` clause count,
+  `~e` precision) -> `(error <the text, tilde escaped>)` after the arguments, no renderer: it would
+  render this as text (below). SBCL signals at the call too and compiles the file (2026-11-04).
+
+Before 2026-11-04 the literal path threw at expansion: the compilers refused the program (clingon's
+`~:*` before any argument, on a branch only command aliases reach), the interpreter signalled at
+the call without evaluating the arguments, and a short clause the selector skips signalled there
+too. A clause's fold spelled `(error "...~a")`, so the signal was itself refused. Pinned by ci-spec
+`format-runtime-control-signals-a-missing-argument` and
+`RontoLispCliStreamsTest.warningsAsErrorsPrintsEveryWarningExitsOneAndWritesNothingOnEveryCompileBackend`.
 
 ## What the LITERAL path lowers to
 A `t` destination lowers to print calls, a `nil` one to `%string-concat` pieces
@@ -163,9 +188,10 @@ cursor cannot serve it -- `~*`, `~:*`, `~n@*` and `~?`/`~{` recursion make the a
 
 ## Deliberate divergences
 - **A malformed control renders as text**: an unknown directive, an unterminated `~{`, a trailing
-  `~`; the literal path signals the same at EXPANSION time. Exceptions: the absent `~/name/` arm,
+  `~`; a literal control the static parser rejects signals at the call instead (above; an unknown
+  directive it declines, so it renders there too). Exceptions: the absent `~/name/` arm,
   a missing capability rather than bad input, and the range errors of the no-radix `~r` below.
-- **A read past the argument list SIGNALS** a `simple-error` with the literal path's text (`format:
+- **A read past the argument list SIGNALS** a `simple-error` (`format:
   not enough arguments for directive ~a`, `format: ~* moves outside the argument list`) -- every
   directive SBCL 2.2.9 rejects with `No more arguments` / `No previous argument` / `Index out of
   bounds`, measured directive by directive 2026-10-30: the argument directives, `v`, `~[` (all three

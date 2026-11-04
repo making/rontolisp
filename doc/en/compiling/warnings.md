@@ -10,6 +10,8 @@ line on standard error, at the position of the form:
   quoted name passed as a function, as in `(funcall 'name ...)`)
 - a `defun` of a `COMMON-LISP` function whose call sites compile to the standard
   operator anyway
+- a `format`, `error`, `warn` or `signal` whose literal control string is malformed or
+  reads past the call's arguments, which signals an error if the call gets that far
 - a primitive a `--no-wasi` module reaches while it loads, an `http-handler` port a war
   ignores, and, with `--warn-java-reflection`, a `java:` call left to run-time reflection
 - a `(warn ...)` a macro calls while it expands, placed at the macro call. A

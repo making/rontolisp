@@ -2042,6 +2042,8 @@ final class WasmExprCompiler {
 				WasmExprCompiler.compileExpr(LispMacroExpander.lowerProgramError(cons, ctx.closRegistry,
 						ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx);
 			}
+			case LispNames.COMPILE_WARNING_INTERNAL ->
+				WasmExprCompiler.compileExpr(CompileWarnings.warnedForm(cons), ctx);
 			case LispNames.PARSE_ERROR_INTERNAL -> WasmExprCompiler.compileExpr(
 					LispMacroExpander.lowerParseError(cons, ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx);
 			case LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL ->

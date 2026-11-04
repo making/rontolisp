@@ -10284,6 +10284,8 @@ public final class LispEvaluator {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						message instanceof LispString s ? s.value() : message.display());
 			}
+			case LispNames.COMPILE_WARNING_INTERNAL:
+				return eval(cons.toList().get(2), env);
 			case LispNames.PARSE_ERROR_INTERNAL: {
 				// parse-integer's signal over a string that is no integer: the same
 				// class-named error the first-class built-in throws, its handler-bind
