@@ -4357,6 +4357,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (LispMacroExpander.appliesArrayAccessor(program)) {
 			takenAsValues.add(LispNames.ARRAY_ROW_MAJOR_INDEX);
 		}
+		if (LispMacroExpander.computesMakeSequenceType(program)) {
+			takenAsValues.add(LispNames.MAKE_SEQUENCE);
+		}
 		for (String op : BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS) {
 			if (!takenAsValues.contains(op)) {
 				wrapperExcludes.add(op);

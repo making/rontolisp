@@ -10,7 +10,7 @@ the [Language Reference](../reference/special-forms.md).
 
 | Feature | Status |
 | --- | --- |
-| restarts | available; no debugger integration (`break`, `*debugger-hook*`) and no condition-restart association |
+| restarts | available; no debugger integration (`break`; `*debugger-hook*` only through `invoke-debugger`) and no condition-restart association |
 | `&environment` | accepted in a `defmacro` lambda list, holding the symbol macros in scope at the call for `macroexpand` to read. `macrolet` macros are found without it, also through a nil environment, and a `with-slots`/`with-accessors` name is not in it. `&whole` works, in `defmacro` and `destructuring-bind` alike |
 | `loop` (extended) | partial (see below) |
 | CLOS | partial (static subset + a definition-time MOP subset) |
@@ -93,7 +93,8 @@ restarts, and [`find-restart`](../reference/functions/find-restart.md) /
 [`abort`](../reference/functions/abort.md) /
 [`continue`](../reference/functions/continue.md) drive them;
 [`cerror`](../reference/macros/cerror.md) is continuable. What is missing is the
-**interactive debugger** of a program: `break` and `*debugger-hook*` do not exist
+**interactive debugger** of a program: `break` does not exist, `*debugger-hook*` is
+called only by [`invoke-debugger`](../reference/functions/invoke-debugger.md)
 (only [`rontolisp --swank`](../getting-started/swank.md) has a debugger, SLIME's,
 which renders a restart's `:report` and runs its `:interactive` function), and
 restarts are not associated with conditions (the optional condition argument of

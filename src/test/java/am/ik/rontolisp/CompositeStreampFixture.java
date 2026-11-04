@@ -34,11 +34,13 @@ public final class CompositeStreampFixture {
 	 * A composite stream over the standard streams, in a program that builds no other
 	 * stream: the composite class is a Gray stream, whose dispatch helpers resolve
 	 * through the prelude's {@code %stream-target}, and nothing else here selects it. The
-	 * compiled backends called it undefined. Its own program, since any string stream
-	 * beside it selects the helper.
+	 * compiled backends called it undefined, and {@code %check-sequence-bounds} behind a
+	 * bounded {@code write-string} too. Its own program, since any string stream beside
+	 * it selects the helper.
 	 */
 	public static final String STANDARD_STREAMS_PROGRAM = """
 			(let ((s (make-two-way-stream *standard-input* *standard-output*)))
+			  (write-string "xabcx" (make-broadcast-stream) :start 1 :end 4)
 			  (print (list (streamp s) (typep s 'stream) (input-stream-p s) (output-stream-p s))))
 			""";
 

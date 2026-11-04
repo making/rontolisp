@@ -1240,6 +1240,7 @@ public final class Environment implements Scope {
 		// accepted and ignored for the same reason (see LispNames.LOAD_VERBOSE_VAR).
 		env.define(LispNames.LOAD_VERBOSE_VAR, LispNil.INSTANCE);
 		env.define(LispNames.LOAD_PRINT_VAR, LispNil.INSTANCE);
+		env.define(LispNames.DEBUGGER_HOOK_VAR, LispNil.INSTANCE);
 		env.define(LispNames.COMPILE_VERBOSE_VAR, LispNil.INSTANCE);
 		env.define(LispNames.COMPILE_PRINT_VAR, LispNil.INSTANCE);
 		// *features*: an ordinary special holding the interpreter's feature list. The

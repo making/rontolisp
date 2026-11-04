@@ -934,10 +934,23 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   an optional sixth element, so a table without class slots keeps its size).
 - **Slot-definition classes** (seeded with the MOP trio): `slot-definition` declares every
   slot; `direct-slot-definition` / `effective-slot-definition` are slot-less children and the
-  two `standard-*` classes slot-less grandchildren, so the layout is unchanged. AMOP's
-  `standard-slot-definition` mixin is left out (`seedClass` takes one parent). All five are
-  `closer-mop` externals except that mixin; access dispatches on `closer-mop:slot-definition`
-  and `direct-slot-definition`.
+  two `standard-*` classes slot-less grandchildren, so the layout is unchanged. Slot-less too,
+  `standard-slot-definition` is a child of the root and the first superclass of both
+  (`seedStandardSlotDefinitionClass`, AMOP's precedence; clsql's `slotdef-for-slot-with-class`
+  typecases on it, and a compile path refuses a specifier it does not know). All six are `closer-mop`
+  externals; access dispatches on `closer-mop:slot-definition` and `direct-slot-definition`.
+- **`:type`** reaches a driver-built definition as WRITTEN (`ParsedSlot.writtenType`), a compound
+  specifier included, where the static `SlotSpec` keeps t: clsql's `(string 30)` chooses a column
+  type. No `:type` written means no initarg, so a slot-definition class's `:around` reads nil as on
+  SBCL (clsql's `specified-type`), and the slot's initform gives `slot-definition-type` t. A plain
+  view keeps the static name.
+- **`:initarg nil`** is accepted (clsql's `sql-database-data-error` writes it), and names no usable
+  initarg: `(make-instance 'c nil 9)` leaves the slot unbound where SBCL fills it, and
+  `&key ((nil v))` is refused (`LambdaLists.parseKey`; `%ll-key-cell` takes a nil twin for "none").
+- **`closer-mop:finalize-inheritance`** of a class outside the protocol is the shim's method on `t`,
+  which answers the class: `defclass` finalized it. The protocol's method is on `standard-class`, so
+  it wins for every metaobject once the protocol is in the program, the same split as `compute-slots`.
+  `compute-class-precedence-list` is `%mop-class-precedence-list` under its AMOP name.
 - **A plain view carries direct slots too** (`class-direct-slots`; it used to be nil): the
   interpreter builds them from `ClassInfo.directSlots()`, the compile paths from a 4th
   `%class-meta-table%` column whose element is `(writers . row)` -- or `(writers name)`, a

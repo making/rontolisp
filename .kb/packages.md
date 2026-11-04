@@ -239,8 +239,10 @@ once); `:documentation`/`:size` ignored.
   being defined, as SBCL).
 - **`:intern` of an INHERITED name finds it** (CLHS: `:intern` runs after `:use`, "found or
   created"): a name some used package exports is dropped from the owned set after the clause
-  loop, whatever the clause order. `pkg::name` still mints `PKG::NAME` for any inherited non-cl
-  name (the pre-existing `resolveQualified` rule); `find-symbol` answers the inherited one.
+  loop, whatever the clause order. `pkg::name` of an inherited name IS the inherited symbol
+  (`resolveQualified`, after the same step for a cl name; it minted `PKG::NAME` until 2026-11-05, so
+  `(pb::f)` of a used package's `f` was undefined), as `find-symbol` answers. Pin: ci-spec
+  `find-symbol-of-an-inherited-name`.
 - **An `:import-from`/`:shadowing-import-from` of a name the source lacks is refused only for a
   SEALED source** (`PackageRegistry.sealed`): made by `defpackage`/`make-package` and never read
   into since. Once source minted a name in a package (`PackageResolver.mint`:
@@ -650,7 +652,8 @@ by `RontoLispCliTest#{replEchoesEveryValueOnItsOwnLine,replPromptNamesTheCurrent
 - CL FUNCTIONS `user-homedir-pathname`, `copy-symbol`, `invoke-debugger`, `remove-method`,
   `compile-file`, `compile-file-pathname` (`LispPreludeLibrary` defuns, the last three signalling);
   CL MACROS `do-symbols`, `with-compilation-unit`; CL VARIABLES `*load-verbose*`/`*load-print*`
-  (nil); constants `most-positive-fixnum`/`most-negative-fixnum`; CL TYPES `file-stream`,
+  (nil), `*debugger-hook*` (nil; `invoke-debugger` calls a hook under a nil binding, an uncaught error
+  does not, so a hook is not a way to observe one); constants `most-positive-fixnum`/`most-negative-fixnum`; CL TYPES `file-stream`,
   `synonym-stream`, `readtable`.
 - `do-symbols` / `do-external-symbols` read `PackageResolver.accessibleSymbols` /
   `externalSymbols` on the interpreter -- two views of `accessibleEntries`: the PRESENT

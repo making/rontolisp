@@ -3449,9 +3449,14 @@ public final class LispPreludeLibrary {
 		// invoke-debugger never returns, so the honest implementation is to signal the
 		// condition unhandled -- which is what entering a debugger that the user then
 		// aborts amounts to here. Handlers established OUTSIDE the caller still see it,
-		// which is CL's behaviour for a condition the debugger is entered on.
+		// which is CL's behaviour for a condition the debugger is entered on. A hook runs
+		// first, with the variable bound to nil (CLHS).
 		SOURCES.put(LispNames.INVOKE_DEBUGGER, """
 				(defun invoke-debugger (%id-condition)
+				  (let ((%id-hook *debugger-hook*))
+				    (when %id-hook
+				      (let ((*debugger-hook* nil))
+				        (funcall %id-hook %id-condition %id-hook))))
 				  (error %id-condition))
 				""");
 		// make-instances-obsolete: a compiled program's class tables are whole-program,
@@ -5385,11 +5390,14 @@ public final class LispPreludeLibrary {
 					// they carry no package ambiguity to resolve. An entry that is a
 					// Gray stream (the composite streams) brings gray.lisp, spliced
 					// after this pass, whose every dispatch helper resolves through
-					// %stream-target: that edge is the protocol, not a spelling.
+					// %stream-target and whose bounded write-string checks through
+					// %check-sequence-bounds: those edges are the protocol, not a
+					// spelling.
 					used = used || entryMemberNames(pulled).contains(member(name))
 							|| (PULLED_SURFACE_ENTRIES.contains(name)
 									&& referencedBySurfaceForm(name, formsFor(pulled), false))
-							|| (LispNames.STREAM_TARGET.equals(name)
+							|| ((LispNames.STREAM_TARGET.equals(name)
+									|| LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL.equals(name))
 									&& GrayStreamsLibrary.usesProtocol(formsFor(pulled)));
 				}
 				if (used) {

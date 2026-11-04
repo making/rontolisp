@@ -74,7 +74,7 @@ Inside a `when`/`if`/`unless`, the anaphoric `it` names the value the test produ
 (loop for x in '(1 nil 3 nil 5) when x collect it) ; => (1 3 5)
 ```
 
-`thereis` returns the first non-nil value of its expression; `always`/`never` short-circuit to `nil` on the first failure and return `t` on normal completion. Like `return`, an early exit from these skips `finally`:
+`thereis` returns the first non-nil value of its expression; `always`/`never` short-circuit to `nil` on the first failure and return `t` on normal completion, also beside a `thereis`. Like `return`, an early exit from these skips `finally`:
 
 ```lisp
 (loop for x in '(nil nil 7 9) thereis x) ; => 7

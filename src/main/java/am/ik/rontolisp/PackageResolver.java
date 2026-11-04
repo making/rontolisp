@@ -2985,6 +2985,16 @@ public final class PackageResolver {
 					&& PackageRegistry.isClSymbol(member)) {
 				return new LispSymbol(member);
 			}
+			// Likewise one inherited from another used package: clsql-sys::class-slots IS
+			// the closer-mop symbol the package uses.
+			if (!providesMember(pkg, member) && !p.shadows(member)) {
+				for (String used : p.useList()) {
+					LispSymbol viaUsed = LispNames.CL_PKG.equals(used) ? null : usedExport(used, member);
+					if (viaUsed != null) {
+						return viaUsed;
+					}
+				}
+			}
 		}
 		// cl and cl-user are normalized to bare names; other packages keep the qualified
 		// canonical name.

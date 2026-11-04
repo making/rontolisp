@@ -6353,8 +6353,10 @@ cases:
   - name: do-sequential-bindings-and-steps
     source: |
       (print (do* ((i 1 (+ i 1)) (acc i (* acc i))) ((> i 5) acc)))
+      (print (let ((x 0)) (do* () ((> x 3) x) (incf x))))
     expected: |
       720
+      4
   - name: loop-macro-stepping-and-accumulation
     source: |
       (print (loop for i from 1 to 5 collect i))
@@ -6373,6 +6375,8 @@ cases:
       (print (loop for x in '(1 2 3 9 4) while (< x 4) collect x))
       (print (loop for x in '(nil nil 7 9) thereis x))
       (print (loop for x in '(1 2 3) always (< x 5)))
+      (print (list (loop for x in '(1 2) always x thereis nil) (loop for x in '(1 2) thereis nil never (null x))
+                   (loop for x in '(1 nil) always x thereis nil) (loop for x in '(1 2) always x thereis (and (= x 2) :two))))
       (print (loop for x in '(1 nil 3 nil 5) when x collect it))
       (print (loop for i from 1 collect i into xs do (when (>= i 3) (loop-finish)) finally (return (length xs))))
       (print (loop for a = 0 then b and b = 1 then (+ a b) repeat 8 collect b))
@@ -6385,6 +6389,7 @@ cases:
       (1 2 3)
       7
       T
+      (T T NIL :TWO)
       (1 3 5)
       3
       (1 1 2 3 5 8 13 21)
@@ -20290,11 +20295,29 @@ cases:
       (defclass mcp-named () () (:metaclass mcp-layer-class) (original-name . named) (:extra . "x"))
       (print (list (mcp-layer-name (find-class 'mcp-root)) (mcp-layer-name (find-class 'mcp-named))
                    (mcp-extra (find-class 'mcp-named)) (mcp-extra (find-class 'mcp-root))))
+      ;; A slot definition has its :type as written, t where none is, and is a
+      ;; standard-slot-definition; a plain class finalizes too (clsql's kmr-mop.lisp).
+      (defclass mcp-typed () ((a :type (string 30)) (b :type integer) (c)) (:metaclass mcp-layer-class))
+      (print (mapcar (lambda (s) (slot-value s 'type)) (slot-value (find-class 'mcp-typed) 'direct-slots)))
+      (print (mapcar (lambda (s) (typep s 'closer-mop:standard-slot-definition))
+                     (slot-value (find-class 'mcp-typed) 'direct-slots)))
+      (print (list (subtypep 'closer-mop:standard-direct-slot-definition 'closer-mop:standard-slot-definition)
+                   (subtypep 'closer-mop:standard-effective-slot-definition 'closer-mop:standard-slot-definition)
+                   (subtypep 'closer-mop:standard-slot-definition 'closer-mop:direct-slot-definition)))
+      (print (class-name (first (closer-mop:compute-class-precedence-list (find-class 'mcp-typed)))))
+      (defclass mcp-plain () ((a)))
+      (closer-mop:finalize-inheritance (find-class 'mcp-plain))
+      (print (mapcar (lambda (s) (slot-value s 'name)) (slot-value (find-class 'mcp-plain) 'effective-slots)))
     expected: |
       (MCP-USER T T "users" (ID) (MCP-USER) T)
       (7 "n/a" T)
       ((ID INTEGER) (NOTE :PLAIN))
       (T NAMED "x" NIL)
+      ((STRING 30) INTEGER T)
+      (T T T)
+      (T T NIL)
+      MCP-TYPED
+      (A)
   - name: mop-widening-for-mito
     source: |
       ;; The mito metaclass shape WITHOUT mito: the defclass driver
@@ -22553,6 +22576,12 @@ cases:
       ;; and without a user method on the object.
       (print (with-compilation-unit (:override nil) 1 2))
       (print (list *load-verbose* *load-print*))
+      (print *debugger-hook*)
+      (print (block dh
+               (let ((*debugger-hook*
+                      (lambda (c hook)
+                        (return-from dh (list (simple-condition-format-control c) (functionp hook) *debugger-hook*)))))
+                 (invoke-debugger (make-condition 'simple-error :format-control "boom")))))
       (print (> cl:most-positive-fixnum 1000000))
       (print (list (typep (make-synonym-stream '*standard-output*) 'synonym-stream)
                    (typep *readtable* 'readtable)
@@ -22576,6 +22605,8 @@ cases:
     expected: |
       2
       (NIL NIL)
+      NIL
+      ("boom" T NIL)
       T
       (T T NIL NIL)
       (NIL T T)
@@ -25535,6 +25566,7 @@ cases:
       (print (multiple-value-list (intern "B1" :ci-fsi-all)))
       (print (package-name (symbol-package (find-symbol "B1" :ci-fsi-all))))
       (print (eq (find-symbol "B1" :ci-fsi-all) 'ci-fsi-u1:b1))
+      (print (list (eq 'ci-fsi-all::b1 'ci-fsi-u1:b1) (eq 'ci-fsi-cl::b2 'ci-fsi-u1:b2) (eq 'ci-fsi-all::c1 'ci-fsi-u2:c1)))
       (defun ci-fsi-show (n p) (print (multiple-value-list (find-symbol n p))))
       (defun ci-fsi-intern (n p) (print (multiple-value-list (intern n p))))
       (dolist (p (list :ci-fsi-all "CI-FSI-CL" (find-package :ci-fsi-imp) 'ci-fsi-rex))
@@ -25561,6 +25593,7 @@ cases:
       (CI-FSI-U1:B1 :INHERITED)
       "CI-FSI-U1"
       T
+      (T T NIL)
       (CI-FSI-U1:B1 :INHERITED)
       (CI-FSI-U1:B1 :INHERITED)
       (CI-FSI-U1:B1 :INHERITED)
@@ -31335,6 +31368,8 @@ cases:
       (print (di-rz (change-class (make-instance 'di-arc 'rx 3) 'di-arc2 'rz 4)))
       (define-condition di-cond (error) ((what :initarg what :reader di-what)))
       (print (handler-case (error 'di-cond 'what 7) (di-cond (c) (di-what c))))
+      (define-condition di-nil-cond (error) ((what :initarg :what :initarg nil :reader di-what)))
+      (print (handler-case (error 'di-nil-cond :what 8) (di-nil-cond (c) (di-what c))))
       (defun di-f (&key ((rx v) 0)) v)
       (print (list (di-f 'rx 3) (di-f) (handler-case (di-f :rx 1) (program-error () :refused))))
       (defclass di-multi () ((x :initarg :x :initarg :ex :reader di-mx)
@@ -31366,6 +31401,7 @@ cases:
       9
       4
       7
+      8
       (3 0 :REFUSED)
       (1 2 5 3 0)
       (1 2 7 9 4)
@@ -33498,13 +33534,18 @@ standalone:
                     (bit-vector-p (make-sequence 'bit-vector 3))
                     (array-element-type (make-sequence 'bit-vector 3))
                     (aref (make-sequence 'bit-vector 2 :initial-element 1) 1))
+              (let ((types (list 'list 'string '(vector bit) 'simple-vector)))
+                (list (make-sequence (first types) 2 :initial-element 7)
+                      (make-sequence (second types) 2 :initial-element #\x)
+                      (bit-vector-p (make-sequence (third types) 2))
+                      (length (make-sequence (fourth types) 3))))
               (list (prin1-to-string #*101)
                     (bit-vector-p (read-from-string (prin1-to-string #*101)))
                     (prin1-to-string (make-sequence 'bit-vector 0)))
               (list (eq (class-of #*01) (find-class 'bit-vector))
                     (class-name (class-of #*01)))))
     stdout: |
-      ((T BIT 1 0 T 2) (T BIT 0) (T BIT T T BIT 1) ("#*101" T "#*") (T BIT-VECTOR))
+      ((T BIT 1 0 T 2) (T BIT 0) (T BIT T T BIT 1) ((7 7) "xx" T 3) ("#*101" T "#*") (T BIT-VECTOR))
   - name: simple-type-name-typep-simplicity
     source: |
       (defvar *tps-sv* (make-array 4))
@@ -33694,9 +33735,14 @@ standalone:
                    (typep 3 'rtta-octet) (rtta-tp 3 'rtta-unregistered)))
       (print (list (coerce 3 (car (list 'rtta-octet)))
                    (coerce (list #\a #\b) (car (list 'rtta-str)))))
+      (defpackage :rtta-pkg (:use :cl) (:export #:ext))
+      (deftype rtta-pkg:ext () 'string)
+      (deftype rtta-pkg::int () 'integer)
+      (print (list (rtta-tp "a" 'rtta-pkg:ext) (rtta-tp 1 'rtta-pkg:ext) (rtta-tp 1 'rtta-pkg::int)))
     stdout: |
       (T NIL T T NIL T NIL T NIL)
       (3 "ab")
+      (T NIL T)
   # A compound specifier headed by a parameterized deftype is what the deftype's body
   # computes for its arguments -- literal or held in a value, inside an or, through a
   # chain (ptd-alist expands to a ptd-list instance). trivial-types' shapes; every

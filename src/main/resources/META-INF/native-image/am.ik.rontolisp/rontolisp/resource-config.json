@@ -629,6 +629,12 @@
         "condition": {
           "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
         },
+        "pattern": "am/ik/rontolisp/eval/clsql-closer-mop\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
         "pattern": "am/ik/rontolisp/eval/cl-postgres-deps\\.asd"
       },
       {

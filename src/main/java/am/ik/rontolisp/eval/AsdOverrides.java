@@ -78,7 +78,12 @@ public final class AsdOverrides {
 			// defines nothing. The replacement is cffi's own uffi-compat/uffi.asd: the
 			// same system name over cffi-uffi-compat, whose package has the nickname
 			// uffi.
-			Map.entry("uffi.asd", "uffi-cffi.asd"));
+			Map.entry("uffi.asd", "uffi-cffi.asd"),
+			// Not unparseable but MIS-DECLARED here: it loads uffi for a perform method
+			// that does not run, and names no MOP system because its package.lisp uses
+			// one MOP package per implementation (ClsqlForms). The replacement declares
+			// closer-mop and leaves uffi to the database backends.
+			Map.entry("clsql.asd", "clsql-closer-mop.asd"));
 
 	private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
 

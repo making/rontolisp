@@ -1220,7 +1220,7 @@ public final class LispMacroExpander {
 		else {
 			resultExpr = makeProgn(resultForms);
 		}
-		LispVal bindings = listToCons(letBindings);
+		LispVal bindings = letBindings.isEmpty() ? LispNil.INSTANCE : listToCons(letBindings);
 		List<LispVal> letParts = new java.util.ArrayList<>();
 		letParts.add(new LispSymbol(LispNames.LET_STAR));
 		letParts.add(bindings);
@@ -2367,10 +2367,10 @@ public final class LispMacroExpander {
 				throw new IllegalArgumentException(
 						"loop: cannot combine always/never/thereis with accumulation (use into)");
 			}
-			if (terminationT != null && terminationT != t) {
-				throw new IllegalArgumentException("loop: cannot mix always/never with thereis");
-			}
-			terminationT = t;
+			// always/never and thereis mix (clsql's connection pool): each exits on its
+			// own test, and t is the value of a loop that ran through, wherever the
+			// always/never stands (SBCL 2.2.9).
+			terminationT = t || Boolean.TRUE.equals(terminationT);
 		}
 
 		/**
@@ -21421,8 +21421,10 @@ public final class LispMacroExpander {
 				spec.add(new LispSymbol(":ALLOCATION"));
 				spec.add(new LispSymbol(parsed.allocation()));
 			}
-			spec.add(new LispSymbol(":TYPE"));
-			spec.add(quoteOf(slot.type()));
+			if (parsed.writtenType() != null) {
+				spec.add(new LispSymbol(":TYPE"));
+				spec.add(quotedData(parsed.writtenType()));
+			}
 			spec.add(new LispSymbol(":READERS"));
 			List<String> readerNames = new java.util.ArrayList<>(slot.readers());
 			readerNames.addAll(slot.accessors());
@@ -21946,10 +21948,12 @@ public final class LispMacroExpander {
 	 * {@code cellInitform} is a class-allocated slot's WRITTEN initform (the unbound
 	 * marker when none), {@code allocation} the {@code :allocation} keyword as written
 	 * (null when omitted, so a slot-definition class may default it, contextl's singleton
-	 * slots to {@code :class}).
+	 * slots to {@code :class}), {@code writtenType} the {@code :type} as written (null
+	 * when omitted, so a slot-definition class sees no {@code :type} initarg, clsql's
+	 * {@code (string 30)} choosing a column type and nil choosing none).
 	 */
 	private record ParsedSlot(ClosRegistry.SlotSpec spec, boolean initargSupplied, List<LispVal> extras,
-			@Nullable LispVal cellInitform, @Nullable String allocation) {
+			@Nullable LispVal cellInitform, @Nullable String allocation, @Nullable LispVal writtenType) {
 	}
 
 	/**
@@ -22236,6 +22240,7 @@ public final class LispMacroExpander {
 		boolean classAllocated = false;
 		String allocation = null;
 		List<LispVal> extras = new java.util.ArrayList<>();
+		LispVal writtenType = null;
 		if (spec instanceof LispSymbol s) {
 			slotSym = s;
 		}
@@ -22255,14 +22260,17 @@ public final class LispMacroExpander {
 				switch (keySym.name()) {
 					case ":INITARG" -> {
 						// Any symbol names an initarg (CLHS 7.1.1), not only a keyword:
-						// cl-vectors' (rx :initarg rx). The option may repeat; every
-						// initarg it names fills the slot.
-						if (!(optValue instanceof LispSymbol initargSym)) {
+						// cl-vectors' (rx :initarg rx), clsql's (expression :initarg
+						// nil).
+						// The option may repeat; every initarg it names fills the slot.
+						String initargName = optValue instanceof LispSymbol initargSym ? initargSym.name()
+								: optValue instanceof LispNil ? "NIL" : null;
+						if (initargName == null) {
 							throw new IllegalArgumentException(
 									LispNames.DEFCLASS + " :initarg expects a symbol: " + spec.print());
 						}
-						if (!initargs.contains(initargSym.name())) {
-							initargs.add(initargSym.name());
+						if (!initargs.contains(initargName)) {
+							initargs.add(initargName);
 						}
 					}
 					case ":INITFORM" -> {
@@ -22292,10 +22300,11 @@ public final class LispMacroExpander {
 						// Recorded for introspection only (%class-slot-defs; JSON
 						// serializers disambiguate a nil value by declared type); still a
 						// no-op for checking, like declare/the. A compound specifier is
-						// kept as t (lite).
+						// kept as t (lite) there; a driver call carries it as written.
 						if (optValue instanceof LispSymbol typeSym) {
 							type = plainTypeName(typeSym);
 						}
+						writtenType = optValue;
 					}
 					default -> {
 						if (!metaclassPresent) {
@@ -22340,7 +22349,7 @@ public final class LispMacroExpander {
 				new ClosRegistry.SlotSpec(slotSym.name(), baseName, initform, initformSupplied,
 						initargs.isEmpty() ? List.of(":" + baseName) : List.copyOf(initargs), !initargs.isEmpty(),
 						List.copyOf(readers), List.copyOf(accessors), type, List.copyOf(writers), cellVar),
-				!initargs.isEmpty(), List.copyOf(extras), cellInitform, allocation);
+				!initargs.isEmpty(), List.copyOf(extras), cellInitform, allocation, writtenType);
 	}
 
 	/** The global cell variable of one class's {@code :allocation :class} slot. */
@@ -46313,12 +46322,20 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandMakeSequence(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		if (parts.size() < 3 || !(parts.get(1) instanceof LispCons quoted)
-				|| !(quoted.car() instanceof LispSymbol quoteOp) || !LispNames.QUOTE.equals(plainTypeName(quoteOp))
-				|| !(quoted.cdr() instanceof LispCons datumCell)) {
-			throw new IllegalArgumentException("make-sequence expects a literal quoted result type: " + cons.print());
+		if (parts.size() < 3) {
+			throw new IllegalArgumentException("make-sequence expects a result type and a size: " + cons.print());
 		}
-		LispVal typeSpec = datumCell.car();
+		if (computesSequenceType(cons)) {
+			// A result type known only at run time goes through the first-class function,
+			// which reads it (computesMakeSequenceType tells the compilers' gate).
+			List<LispVal> call = new java.util.ArrayList<>();
+			call.add(new LispSymbol(LispNames.FUNCALL));
+			call.add(listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.MAKE_SEQUENCE))));
+			call.addAll(parts.subList(1, parts.size()));
+			return listToCons(call);
+		}
+		LispCons quoted = (LispCons) parts.get(1);
+		LispVal typeSpec = ((LispCons) quoted.cdr()).car();
 		String typeName = switch (typeSpec) {
 			case LispSymbol s -> plainTypeName(s);
 			case LispCons c when c.car() instanceof LispSymbol s -> plainTypeName(s);
@@ -46346,6 +46363,44 @@ public final class LispMacroExpander {
 		call.add(new LispSymbol(constructor));
 		call.addAll(parts.subList(2, parts.size()));
 		return listToCons(call);
+	}
+
+	private static boolean computesSequenceType(LispCons call) {
+		return !(call.cdr() instanceof LispCons args && args.car() instanceof LispCons quoted
+				&& quoted.car() instanceof LispSymbol quoteOp && LispNames.QUOTE.equals(plainTypeName(quoteOp))
+				&& quoted.cdr() instanceof LispCons);
+	}
+
+	/**
+	 * Whether the program calls {@code make-sequence} with a computed result type:
+	 * {@link #expandMakeSequence} lowers it, during codegen, to a
+	 * {@code (function make-sequence)} no scan of the surface program sees coming, so the
+	 * compilers' wrapper gate is told, like {@link #appliesArrayAccessor}.
+	 * @param program the program to scan
+	 * @return {@code true} when such a form occurs anywhere in the program
+	 */
+	public static boolean computesMakeSequenceType(List<? extends LispVal> program) {
+		for (LispVal form : program) {
+			if (computesMakeSequenceType(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean computesMakeSequenceType(LispVal expr) {
+		if (expr instanceof LispCons form && form.car() instanceof LispSymbol op
+				&& LispNames.MAKE_SEQUENCE.equals(op.name()) && computesSequenceType(form)) {
+			return true;
+		}
+		LispVal x = expr;
+		while (x instanceof LispCons cons) {
+			if (computesMakeSequenceType(cons.car())) {
+				return true;
+			}
+			x = cons.cdr();
+		}
+		return false;
 	}
 
 	/**
@@ -48613,7 +48668,12 @@ public final class LispMacroExpander {
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
 		for (java.util.Map.Entry<String, LispVal> alias : aliases.entrySet()) {
-			condParts.add(listToCons(List.of(nameMatchTest(var, alias.getKey()), quotedValue(alias.getValue()))));
+			List<LispVal> test = new java.util.ArrayList<>();
+			test.add(new LispSymbol(LispNames.OR));
+			for (String spelling : deftypeAliasSpellings(alias.getKey())) {
+				test.add(listToCons(List.of(new LispSymbol(LispNames.EQUAL), var, quoteOf(spelling))));
+			}
+			condParts.add(listToCons(List.of(listToCons(test), quotedValue(alias.getValue()))));
 		}
 		condParts.add(listToCons(List.of(LispTrue.INSTANCE, var)));
 		return listToCons(condParts);
@@ -52183,7 +52243,7 @@ public final class LispMacroExpander {
 		for (String name : List.of(LispNames.LOAD_PATHNAME_VAR, LispNames.LOAD_TRUENAME_VAR,
 				LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR, LispNames.READTABLE_VAR,
 				LispNames.MODULES_VAR, LispNames.LOAD_VERBOSE_VAR, LispNames.LOAD_PRINT_VAR,
-				LispNames.COMPILE_VERBOSE_VAR, LispNames.COMPILE_PRINT_VAR)) {
+				LispNames.DEBUGGER_HOOK_VAR, LispNames.COMPILE_VERBOSE_VAR, LispNames.COMPILE_PRINT_VAR)) {
 			if (mentioned.contains(name)) {
 				loadContextVars.add(name);
 			}

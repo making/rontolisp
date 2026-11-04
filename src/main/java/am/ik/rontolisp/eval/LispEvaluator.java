@@ -808,6 +808,7 @@ public final class LispEvaluator {
 		// The compile paths get the same proclamation from the injected defvar.
 		this.specialVars.add(LispNames.LOAD_VERBOSE_VAR);
 		this.specialVars.add(LispNames.LOAD_PRINT_VAR);
+		this.specialVars.add(LispNames.DEBUGGER_HOOK_VAR);
 		this.specialVars.add(LispNames.COMPILE_VERBOSE_VAR);
 		this.specialVars.add(LispNames.COMPILE_PRINT_VAR);
 		// java:*warn-on-reflection*: a program binds it around the code it wants reports

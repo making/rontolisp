@@ -375,8 +375,10 @@ suite `ca06bd9`, interpreter, 2026-09-12): 2,933 / 3,287 before and after, and a
 name-by-name diff of the FAIL/ERROR sets shows **zero fixed and zero regressed** -- the
 only row that moves is `REMOVE-IF-RANDOM`, which is bad in both runs and merely trips over
 a different random parameter set first. The two tests that would exercise this,
-`random-remove-duplicates` / `random-delete-duplicates`, still stop at `make-sequence`
-with a computed result type long before the first-class call. The gap was worth closing
+`random-remove-duplicates` / `random-delete-duplicates`, still stopped at `make-sequence`
+with a computed result type long before the first-class call (it reads one since 2026-11-05:
+`expandMakeSequence` over the `#'make-sequence` wrapper, `computesMakeSequenceType` telling the
+compilers' gate; not remeasured). The gap was worth closing
 for the surface agreement, not for a number.
 
 **What it costs** (bytes, JVM `.class` / WASM, measured 2026-09-12 on the same jar):
