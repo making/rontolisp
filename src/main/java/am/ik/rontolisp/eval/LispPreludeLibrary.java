@@ -1746,7 +1746,8 @@ public final class LispPreludeLibrary {
 		// clear-input: the read-side twin of clear-output. Nothing on any backend
 		// buffers input a program could throw away, so the operation validates its
 		// stream DESIGNATOR (nil and t are the standard input stream) and answers nil. A
-		// program using the Gray protocol gets gray.lisp's definition in place of this one.
+		// program using the Gray protocol gets gray.lisp's definition in place of this
+		// one.
 		SOURCES.put(LispNames.CLEAR_INPUT, """
 				(defun clear-input (&optional %ci-s)
 				  (if (or (null %ci-s) (eq %ci-s t) (streamp %ci-s))
