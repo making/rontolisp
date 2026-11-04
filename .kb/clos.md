@@ -295,6 +295,15 @@ name in `(make-instance 'dog)` is NOT. `ClosRegistry.findClass` falls back from 
 normalized key to a UNIQUE base-name match across packages; two packages defining the same
 class name make the bare spelling unresolvable (qualify it). `slot-value` matches by slot base
 name likewise. `defmethod` stores the specializer as the FOUND class's canonical name.
+**A type of exactly the spelled name beats every tolerance, in both directions**: `lookupClass`
+answers null for a name a `defstruct` holds exactly (before, `a2::sa` found `a1:sa`'s class, the two
+methods of one specializer replaced each other and a struct instance had no applicable method;
+cxml's `sax::standard-attribute` and `hax:standard-attribute`), and `structKey` -- behind
+`findStructTag`, `descendantStructTags`, `structAncestorCount`, `structAncestorNames` -- takes the
+qualified spelling's member only when no class holds the exact spelling. `subtypep`'s same-member
+shortcut (`SubtypepName.namesAnotherTypeThan`) reads the same: two registered types of one member
+are unrelated, a two-class or two-struct pair included. ci-spec
+`defclass-and-defstruct-of-one-name-in-two-packages`, `ClosRegistryTest`.
 A miss consults `classMissLoader` before answering null, then repeats the lookup once: the
 interpreter installs one loading gray.lisp for a Gray base-class member name
 (`.kb/gray-streams.md`, "Interpreter dispatch"); the compile paths install none. A probe

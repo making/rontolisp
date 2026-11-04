@@ -2337,9 +2337,10 @@ public final class ClosRegistry {
 
 	/**
 	 * {@link #descendantStructTags}'s answers by the name as spelled, cleared by every
-	 * {@link #registerStruct}. Each answer is a scan of every struct, and the generic
-	 * dispatch builders ask it once per (method specializer, dispatch branch) pair -- 15%
-	 * of mito's JVM compile before it was kept.
+	 * {@link #registerStruct} and {@link #registerClass} ({@link #structKey} reads the
+	 * classes). Each answer is a scan of every struct, and the generic dispatch builders
+	 * ask it once per (method specializer, dispatch branch) pair -- 15% of mito's JVM
+	 * compile before it was kept.
 	 */
 	private final Map<String, List<String>> descendantStructTagsMemo = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -2910,11 +2911,7 @@ public final class ClosRegistry {
 	 * @return the ancestor names
 	 */
 	public Set<String> structAncestorNames(String structName) {
-		Set<String> ancestors = this.structAncestors.get(normalize(structName));
-		if (ancestors == null
-				&& PackageRegistry.splitQualified(structName) instanceof PackageRegistry.QualifiedName qn) {
-			ancestors = this.structAncestors.get(qn.member());
-		}
+		Set<String> ancestors = structAncestorsOf(structName);
 		return ancestors == null ? Set.of() : ancestors;
 	}
 
@@ -2936,13 +2933,11 @@ public final class ClosRegistry {
 	}
 
 	private List<String> computeDescendantStructTags(String structName) {
-		String key = normalize(structName);
-		if (!this.structAncestors.containsKey(key)
-				&& PackageRegistry.splitQualified(structName) instanceof PackageRegistry.QualifiedName qn
-				&& this.structAncestors.containsKey(qn.member())) {
-			key = qn.member();
-		}
+		String key = structKey(structName);
 		List<String> tags = new java.util.ArrayList<>();
+		if (key == null) {
+			return tags;
+		}
 		for (Map.Entry<String, Set<String>> entry : this.structAncestors.entrySet()) {
 			if (entry.getValue().contains(key)) {
 				tags.add(this.structTags.get(entry.getKey()));
@@ -2959,11 +2954,7 @@ public final class ClosRegistry {
 	 * @return the ancestor count
 	 */
 	public int structAncestorCount(String structName) {
-		Set<String> ancestors = this.structAncestors.get(normalize(structName));
-		if (ancestors == null
-				&& PackageRegistry.splitQualified(structName) instanceof PackageRegistry.QualifiedName qn) {
-			ancestors = this.structAncestors.get(qn.member());
-		}
+		Set<String> ancestors = structAncestorsOf(structName);
 		return ancestors == null ? 1 : ancestors.size();
 	}
 
@@ -2974,12 +2965,28 @@ public final class ClosRegistry {
 	 * @return the {@code %struct-<name>} tag, or null when no such struct is registered
 	 */
 	@Nullable public String findStructTag(String name) {
-		String exact = this.structTags.get(normalize(name));
-		if (exact != null) {
-			return exact;
+		String key = structKey(name);
+		return key == null ? null : this.structTags.get(key);
+	}
+
+	@Nullable private Set<String> structAncestorsOf(String name) {
+		String key = structKey(name);
+		return key == null ? null : this.structAncestors.get(key);
+	}
+
+	// The registry key of the struct a name designates: its exact key, else the qualified
+	// spelling's member when a struct holds that plain key and no class holds the exact
+	// one. A class of exactly this name is the type the name designates, like the struct
+	// lookupClass gives way to.
+	@Nullable private String structKey(String name) {
+		String key = normalize(name);
+		if (this.structTags.containsKey(key)) {
+			return key;
 		}
-		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
-			return this.structTags.get(qn.member());
+		if (!this.classes.containsKey(key)
+				&& PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn
+				&& this.structTags.containsKey(qn.member())) {
+			return qn.member();
 		}
 		return null;
 	}
@@ -3161,6 +3168,13 @@ public final class ClosRegistry {
 		ClassInfo exact = this.classes.get(normalize(name));
 		if (exact != null) {
 			return exact;
+		}
+		// A defstruct of exactly this name is the type the name designates: the tolerant
+		// fallbacks below are for a name nothing registered answers, and would hand a
+		// struct name another package's class of the same member.
+		String key = normalize(name);
+		if (this.structTags.containsKey(key) && !this.classAliases.containsKey(key)) {
+			return null;
 		}
 		// A (setf find-class) alias resolves to its target's class -- checked before the
 		// package-tolerant fallbacks below, so an alias never loses to an unrelated
@@ -3761,6 +3775,7 @@ public final class ClosRegistry {
 		}
 		this.classes.put(key, info);
 		this.classesByMember = null;
+		this.descendantStructTagsMemo.clear();
 		// A redefinition invalidates the memoized metaobject; descendants keep theirs
 		// (their slot lists are unchanged -- redefinition does not propagate in the
 		// static subset).

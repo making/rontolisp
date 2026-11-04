@@ -16562,6 +16562,21 @@ public final class LispMacroExpander {
 		return null;
 	}
 
+	/**
+	 * The accessor prefix of a defstruct's {@code :conc-name}: a string designator (a
+	 * symbol's name without its package, keyword or uninterned marker -- fast-http's
+	 * {@code :http-} defines {@code http-state}, cxml's {@code #:entdef-} defines
+	 * {@code entdef-value} -- a string, a character), or none for nil.
+	 */
+	private static String structConcName(LispVal value) {
+		return switch (value) {
+			case LispSymbol sym -> constantSymbolMember(sym);
+			case LispString str -> str.value();
+			case LispChar ch -> Character.toString(ch.codePoint());
+			default -> "";
+		};
+	}
+
 	private static String constantSymbolMember(LispSymbol sym) {
 		return sym.name().startsWith("#:") ? sym.name().substring(2) : LispSymbol.memberName(sym.name());
 	}
@@ -19003,24 +19018,7 @@ public final class LispMacroExpander {
 					}
 					case ":CONC-NAME" -> {
 						concNameGiven = true;
-						if (optValue instanceof LispSymbol s) {
-							PackageRegistry.QualifiedName cqn = PackageRegistry.splitQualified(s.name());
-							String raw = cqn == null ? s.name() : cqn.member();
-							// :conc-name takes a STRING DESIGNATOR, and a keyword
-							// designates its name WITHOUT the colon -- fast-http's
-							// (defstruct (http (:conc-name :http-)) ... state) must
-							// define http-state, not :http-state. Keeping the colon
-							// produced accessors no call site could name, and the
-							// failure surfaced far away as "setf does not support
-							// place: FAST-HTTP.HTTP:HTTP-STATE".
-							concNameOverride = raw.startsWith(":") ? raw.substring(1) : raw;
-						}
-						else if (optValue instanceof LispString s) {
-							concNameOverride = s.value();
-						}
-						else {
-							concNameOverride = "";
-						}
+						concNameOverride = structConcName(optValue);
 					}
 					case ":PREDICATE" -> {
 						if (optValue instanceof LispSymbol s) {
@@ -19734,17 +19732,7 @@ public final class LispMacroExpander {
 					}
 					case ":CONC-NAME" -> {
 						concNameGiven = true;
-						if (optValue instanceof LispSymbol s) {
-							PackageRegistry.QualifiedName cqn = PackageRegistry.splitQualified(s.name());
-							String raw = cqn == null ? s.name() : cqn.member();
-							concNameOverride = raw.startsWith(":") ? raw.substring(1) : raw;
-						}
-						else if (optValue instanceof LispString s) {
-							concNameOverride = s.value();
-						}
-						else {
-							concNameOverride = "";
-						}
+						concNameOverride = structConcName(optValue);
 					}
 					case ":PREDICATE" -> {
 						if (optValue instanceof LispSymbol s) {
@@ -19915,17 +19903,7 @@ public final class LispMacroExpander {
 					}
 					case ":CONC-NAME" -> {
 						concNameGiven = true;
-						if (optValue instanceof LispSymbol s) {
-							PackageRegistry.QualifiedName cqn = PackageRegistry.splitQualified(s.name());
-							String raw = cqn == null ? s.name() : cqn.member();
-							concNameOverride = raw.startsWith(":") ? raw.substring(1) : raw;
-						}
-						else if (optValue instanceof LispString s) {
-							concNameOverride = s.value();
-						}
-						else {
-							concNameOverride = "";
-						}
+						concNameOverride = structConcName(optValue);
 					}
 					case ":PREDICATE", ":COPIER", ":PRINT-OBJECT", ":PRINT-FUNCTION" -> {
 						// Readers only: neither defines a slot writer.
@@ -47424,7 +47402,7 @@ public final class LispMacroExpander {
 	 */
 	private static boolean namedSubtypep(SubtypepName sub, SubtypepName sup, ClosRegistry closRegistry,
 			java.util.Set<String> expanding) {
-		if ("T".equals(sup.canonical) || sub.canonical.equals(sup.canonical)) {
+		if ("T".equals(sup.canonical) || (sub.canonical.equals(sup.canonical) && !sub.namesAnotherTypeThan(sup))) {
 			return true;
 		}
 		ClosRegistry.ClassInfo subClass = sub.classInfo();
@@ -47547,6 +47525,23 @@ public final class LispMacroExpander {
 				this.descendantStructTags = tags;
 			}
 			return tags;
+		}
+
+		/**
+		 * Whether this name and another of the same member, spelled differently, resolve
+		 * to two registered types: the same member in two packages is two types.
+		 */
+		boolean namesAnotherTypeThan(SubtypepName other) {
+			if (key().equals(other.key())) {
+				return false;
+			}
+			String mine = registeredType();
+			String theirs = other.registeredType();
+			return mine != null && theirs != null && !mine.equals(theirs);
+		}
+
+		private @Nullable String registeredType() {
+			return classInfo() != null ? classKey() : structTag();
 		}
 
 		String key() {
