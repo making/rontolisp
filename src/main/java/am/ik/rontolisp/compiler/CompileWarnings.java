@@ -1,10 +1,12 @@
 package am.ik.rontolisp.compiler;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.SourceProvenance;
@@ -134,6 +136,18 @@ public final class CompileWarnings {
 		if (message != null) {
 			warn(form, message + "; compiled as a call-time program-error");
 		}
+	}
+
+	/**
+	 * Warns as a {@code (%compile-warning "text" form)} says, and answers the form to
+	 * compile in its place. Its position is the located form around it.
+	 * @param marker the {@code %compile-warning} form
+	 * @return its {@code form}
+	 */
+	public static LispVal warnedForm(LispCons marker) {
+		List<LispVal> parts = marker.toList();
+		warn(marker, ((LispString) parts.get(1)).value());
+		return parts.get(2);
 	}
 
 	private static boolean counts(@Nullable LispVal subject) {

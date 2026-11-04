@@ -30509,8 +30509,8 @@ public final class LispMacroExpander {
 		try {
 			return FormatRenderer.isUsed(formatMessagePieces(control, argSyms));
 		}
-		catch (RuntimeException malformed) {
-			// A control the parser rejects outright: the expansion signals the same way.
+		catch (RuntimeException refused) {
+			// A control the message builder itself refuses: no message, no renderer.
 			return false;
 		}
 	}
@@ -30552,7 +30552,7 @@ public final class LispMacroExpander {
 			return true;
 		}
 		catch (RuntimeException malformed) {
-			// A control the parser rejects outright: the expansion signals the same way.
+			// A control the parser rejects outright: the expansion signals without it.
 			return false;
 		}
 		for (FmtOp op : parsed) {
@@ -31427,12 +31427,18 @@ public final class LispMacroExpander {
 		try {
 			parsed = truncateAtCut(new FmtParser(control.value()).parseTop(FmtArgs.forTemps(argExprs)));
 		}
+		catch (FmtShortOfArguments shortOfArguments) {
+			return compileWarning(shortOfArguments, runtimeRenderFallback(parts, toString, streamDest));
+		}
 		catch (UnsupportedOperationException unsupportedDirective) {
 			// A directive shape the static expansion cannot lower (an uneven ~[
 			// conditional, ~@? ...) falls back to the runtime renderer like a computed
 			// control, so a library carrying it on a cold branch still compiles
 			// (cl-ppcre's print-symbol-info); the renderer's directive subset applies.
 			return runtimeRenderFallback(parts, toString, streamDest);
+		}
+		catch (IllegalArgumentException malformed) {
+			parsed = List.of(new FmtString(controlSignal(malformed)));
 		}
 		List<LispVal> forms = toString ? opsToPieces(parsed) : formatOutputForms(parsed);
 		if (toString) {
@@ -31487,6 +31493,46 @@ public final class LispMacroExpander {
 			return rendered;
 		}
 		return makeProgn(List.of(callOf(LispNames.PRINC, rendered), LispNil.INSTANCE));
+	}
+
+	/**
+	 * A literal control reads or moves past the arguments of its call, on the path the
+	 * static parser took. Whether the call really does depends on the values (a
+	 * {@code ~[} clause the selector may skip), so the parser declines, as for a
+	 * directive it cannot lower, and the renderer answers when the call runs -- with the
+	 * same text ({@code .kb/format.md}, "Deliberate divergences").
+	 */
+	private static final class FmtShortOfArguments extends UnsupportedOperationException {
+
+		FmtShortOfArguments(String message) {
+			super(message);
+		}
+
+	}
+
+	/**
+	 * {@code form}, about which a compiled backend warns that the literal control behind
+	 * {@code problem} is checked when the call runs.
+	 */
+	private static LispVal compileWarning(RuntimeException problem, LispVal form) {
+		return fmtCall(LispNames.COMPILE_WARNING_INTERNAL,
+				new LispString(problem.getMessage() + "; checked when the call runs"), form);
+	}
+
+	/**
+	 * The call-time signal of a literal control that cannot render: the rejection's text,
+	 * and a warning where the backend compiles it. SBCL refuses such a call the same way
+	 * and still compiles the file.
+	 */
+	private static LispVal controlSignal(RuntimeException problem) {
+		return compileWarning(problem, formatErrorCall(String.valueOf(problem.getMessage())));
+	}
+
+	/**
+	 * {@code (error message)}: the message is its control string, so a tilde is escaped.
+	 */
+	private static LispVal formatErrorCall(String message) {
+		return fmtCall(LispNames.ERROR, new LispString(message.replace("~", "~~")));
 	}
 
 	// Rebuilds a (format dest control args...) call with a different control expression,
@@ -31741,7 +31787,7 @@ public final class LispMacroExpander {
 					// emitted, it only keeps the syntax-parse of the remainder alive.
 					return new LispSymbol("__fmtcut_dropped");
 				}
-				throw new IllegalArgumentException("format: not enough arguments for directive ~" + directive);
+				throw new FmtShortOfArguments("format: not enough arguments for directive ~" + directive);
 			}
 			require(this.index + 1, "format: not enough arguments for directive ~" + directive);
 			while (this.syms.size() <= this.index) {
@@ -31757,7 +31803,7 @@ public final class LispMacroExpander {
 		void move(int delta, char directive) {
 			int to = this.index + delta;
 			if (to < 0 || (this.runtimePrefix == null && to > this.syms.size())) {
-				throw new IllegalArgumentException("format: ~" + directive + " moves outside the argument list");
+				throw new FmtShortOfArguments("format: ~" + directive + " moves outside the argument list");
 			}
 			require(to, "format: ~" + directive + " moves outside the argument list");
 			this.index = to;
@@ -32266,7 +32312,7 @@ public final class LispMacroExpander {
 			char tailStop = 0;
 			boolean tailStopColon = false;
 			boolean tailDiverges = false;
-			IllegalArgumentException lastFailure = null;
+			FmtShortOfArguments lastFailure = null;
 			for (FmtClause clause : clauses) {
 				this.pos = remainderStart;
 				FmtArgs branch = args.branchAt(clause.end());
@@ -32274,14 +32320,12 @@ public final class LispMacroExpander {
 				try {
 					whole.addAll(parseOps(branch, stoppers));
 				}
-				catch (IllegalArgumentException shortOfArguments) {
+				catch (FmtShortOfArguments shortOfArguments) {
 					// This branch consumes more arguments than were supplied. CL only
 					// notices when the branch actually RUNS, so the clause folds to a
 					// call that signals then, and the others still expand statically.
 					lastFailure = shortOfArguments;
-					String message = shortOfArguments.getMessage();
-					exprs.add(fmtCall(LispNames.ERROR,
-							new LispString(message == null ? "format: bad control string" : message)));
+					exprs.add(controlSignal(shortOfArguments));
 					continue;
 				}
 				exprs.add(opsToExpr(whole));
@@ -32292,8 +32336,7 @@ public final class LispMacroExpander {
 				tailStopColon = this.stopColon;
 			}
 			if (tailPos < 0) {
-				// No clause parsed: the control string itself is bad, not the argument
-				// count of one branch.
+				// Every branch is short: nothing is left to expand statically.
 				throw lastFailure;
 			}
 			if (tailDiverges && !stoppers.isEmpty()) {
@@ -32986,9 +33029,7 @@ public final class LispMacroExpander {
 			int k = need.count() - 1;
 			LispVal tail = (k == 0) ? need.base() : (k == 1) ? fmtCall(LispNames.CDR, need.base())
 					: fmtCall(LispNames.NTHCDR, new LispInteger(k), need.base());
-			// The message is the control string of the error form: its tilde is escaped.
-			guarded = makeIf(tail, guarded,
-					fmtCall(LispNames.ERROR, new LispString(need.message().replace("~", "~~"))));
+			guarded = makeIf(tail, guarded, formatErrorCall(need.message()));
 		}
 		needs.clear();
 		pieces.add(guarded);
@@ -34300,17 +34341,20 @@ public final class LispMacroExpander {
 	private static LispVal formatMessagePieces(String controlText, List<LispVal> argSyms) {
 		List<FmtOp> parsed;
 		try {
-			parsed = new FmtParser(controlText).parseTop(FmtArgs.forTemps(argSyms));
+			parsed = truncateAtCut(new FmtParser(controlText).parseTop(FmtArgs.forTemps(argSyms)));
+		}
+		catch (FmtShortOfArguments shortOfArguments) {
+			return compileWarning(shortOfArguments, renderedMessage(controlText, argSyms));
 		}
 		catch (UnsupportedOperationException unsupportedDirective) {
 			// A directive the static expansion cannot lower (justification ~<, ~@?, an
 			// uneven ~[) falls back to the runtime renderer, exactly as expandFormat
 			// does -- a condition message must never be the reason a library fails to
 			// COMPILE (cl-ppcre's hyperdoc printer carries ~< on a cold branch).
-			List<LispVal> renderArgs = new java.util.ArrayList<>();
-			renderArgs.add(new LispSymbol(LispNames.LIST));
-			renderArgs.addAll(argSyms);
-			return FormatRenderer.call(new LispString(controlText), listToCons(renderArgs));
+			return renderedMessage(controlText, argSyms);
+		}
+		catch (IllegalArgumentException malformed) {
+			return controlSignal(malformed);
 		}
 		List<LispVal> pieces = opsToPieces(parsed);
 		LispVal message = pieces.isEmpty() ? new LispString("") : pieces.get(0);
@@ -34318,6 +34362,13 @@ public final class LispMacroExpander {
 			message = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), message, pieces.get(i)));
 		}
 		return message;
+	}
+
+	private static LispVal renderedMessage(String controlText, List<LispVal> argSyms) {
+		List<LispVal> renderArgs = new java.util.ArrayList<>();
+		renderArgs.add(new LispSymbol(LispNames.LIST));
+		renderArgs.addAll(argSyms);
+		return FormatRenderer.call(new LispString(controlText), listToCons(renderArgs));
 	}
 
 	/**

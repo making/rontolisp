@@ -5393,7 +5393,10 @@ cases:
   # A run-time control signals where a directive reads past the argument list, as
   # the literal path does and SBCL does; ~@{, ~^, ~# and a forced pass reading
   # nothing still render. ci-fmt-both runs a ~{ body through both paths and prints
-  # one line when they agree; a ~^ ends only the current pass of a ~:{.
+  # one line when they agree; a ~^ ends only the current pass of a ~:{. A literal
+  # control short of its arguments compiles and answers at the call, as SBCL does: its
+  # arguments evaluate first, a clause the selector skips reads nothing, and a signal's
+  # literal control is no different. A malformed literal control signals at the call.
   - name: format-runtime-control-signals-a-missing-argument
     source: |
       (defun ci-fmt-missing (c &rest args)
@@ -5423,6 +5426,32 @@ cases:
       (terpri)
       (princ (ci-fmt-missing "~a~:*~a~{x~:}~@{~a~}~#[ end~]" 1 nil))
       (terpri)
+      (ci-fmt-both "~:*~a" 1)
+      (ci-fmt-both "~a")
+      (ci-fmt-both "~a ~a" 1)
+      (ci-fmt-both "~:*~[es~;~:;es~]: ~{~(~A~)~^, ~}" 2 '(x y))
+      (ci-fmt-both "~[~a~;b~]" 1)
+      (ci-fmt-both "~[~a~;b~]" 0)
+      (ci-fmt-both "~:[~a~;~]" t)
+      (ci-fmt-both "~:[a~;~a~]~a" nil 1)
+      (ci-fmt-both "~:[a~;~a~]~a" t 1)
+      (defmacro ci-fmt-caught (form)
+        `(progn
+           (princ (handler-case ,form (error (e) (princ-to-string e))))
+           (terpri)))
+      (ci-fmt-caught (format nil "~:*~a" (progn (princ "evaluated: ") 1)))
+      (ci-fmt-caught (format t "abc~a"))
+      (ci-fmt-caught (let ((s (make-string-output-stream))) (format s "~a") s))
+      (ci-fmt-caught (error "~a"))
+      (ci-fmt-caught (error "x~2:*" 1))
+      (ci-fmt-caught (error "~a~^b" 1))
+      (ci-fmt-caught (warn "~a"))
+      (ci-fmt-caught (signal "~a"))
+      (ci-fmt-caught (format nil "abc~"))
+      (ci-fmt-caught (format nil "~;" (progn (princ "evaluated: ") 1)))
+      (ci-fmt-caught (format nil "~(~a" 1))
+      (ci-fmt-caught (format nil "~:[a~]" 1))
+      (ci-fmt-caught (error "abc~"))
     expected: |
       format: not enough arguments for directive ~a
       format: not enough arguments for directive ~s
@@ -5457,6 +5486,28 @@ cases:
       format: ~* moves outside the argument list
       format: not enough arguments for directive ~a
       11x end
+      format: ~* moves outside the argument list
+      format: not enough arguments for directive ~a
+      format: not enough arguments for directive ~a
+      format: ~* moves outside the argument list
+      b
+      format: not enough arguments for directive ~a
+
+      a1
+      format: not enough arguments for directive ~a
+      evaluated: format: ~* moves outside the argument list
+      format: not enough arguments for directive ~a
+      format: not enough arguments for directive ~a
+      format: not enough arguments for directive ~a
+      format: ~* moves outside the argument list
+      1
+      format: not enough arguments for directive ~a
+      format: not enough arguments for directive ~a
+      format: control string ends with ~
+      evaluated: format: misplaced ~;
+      format: missing ~) in control string
+      format: ~:[ requires exactly two clauses
+      format: control string ends with ~
   # ~W writes its argument as `write` does (prin1 under the printer control
   # variables) and consumes exactly one -- rove's assertion description ends in
   # ~:[...~], which reads the wrong argument if ~W is copied out verbatim.

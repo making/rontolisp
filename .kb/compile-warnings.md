@@ -17,7 +17,8 @@ none). User doc: `doc/*/compiling/warnings.md`. Pinned by `CompileWarningsTest`,
   build or the host, printed verbatim, never counted: the `:async t` / `--host-fetch` host
   obligations and `warning: no JDK found` (environment, nothing in the source to change).
   Everything else is `warn`: undefined function, static program-error (`warnStaticProgramError`),
-  CL redefinition, `--warn-java-reflection` sites, the `--no-wasi` load-path lines
+  a form an expander marked `(%compile-warning "text" form)` (`warnedForm`: `macro` cannot reach this
+  class; a literal format control, [format.md](format.md)), CL redefinition, `--warn-java-reflection` sites, the `--no-wasi` load-path lines
   (`NoWasiLoadPathRefusals.warn`), a war-ignored `http-handler` port.
 - **Attempt buffering is where discarded warnings are dropped**: an entry is `line -> counts`; only
   `flushAttempt` (and the unbuffered print) increments the count, `discardAttempt` drops both.

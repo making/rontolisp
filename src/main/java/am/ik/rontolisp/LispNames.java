@@ -3038,6 +3038,16 @@ public final class LispNames {
 	public static final String PROGRAM_ERROR_INTERNAL = "%PROGRAM-ERROR";
 
 	/**
+	 * Internal form {@code (%compile-warning "text" form)}: {@code form}, about which a
+	 * compiled backend prints the warning {@code text} when it compiles this occurrence
+	 * ({@code CompileWarnings.warnedForm}). The interpreter emits no compile warnings and
+	 * only evaluates {@code form}. What an expander leaves behind when it knows at
+	 * expansion time that a call may fail when it runs, since {@code macro} cannot reach
+	 * {@code CompileWarnings} and only a compiled form may warn.
+	 */
+	public static final String COMPILE_WARNING_INTERNAL = "%COMPILE-WARNING";
+
+	/**
 	 * Internal one-argument primitive {@code (%parse-error message)} that signals a
 	 * {@code parse-error} reporting the message: what {@code parse-integer}'s expansion
 	 * signals for a string that is no integer syntax

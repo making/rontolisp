@@ -87,6 +87,10 @@ class RontoLispCliStreamsTest {
 			  (list (add x)
 			        (car x 2)))
 			(print (handler-case (f '(1)) (program-error () :caught)))
+			(defun g (x)
+			  (list (format nil "~:*~a" x)
+			        (error "~a")
+			        (format nil "abc~")))
 			""";
 
 	@Test
@@ -97,19 +101,23 @@ class RontoLispCliStreamsTest {
 			Path output = this.tempDir.resolve(name);
 			String[] failed = runReporting(file.toString(), "-o", output.toString(), "--warnings-as-errors");
 			assertThat(failed[0]).as(name).isEqualTo("1");
-			// Both warnings, a user function's and a built-in's, then the failure.
+			// Every warning, a user function's, a built-in's and a literal format
+			// control's, then the failure.
 			assertThat(failed[2].lines().toList()).as(name)
 				.containsExactly(file
 						+ ":3:9: warning: Function expects 2 arguments, got 1; compiled as a call-time program-error",
 						file + ":4:9: warning: CAR expects 1 argument, got 2; compiled as a call-time program-error",
-						"error: 2 warnings about the program's source, treated as errors (--warnings-as-errors)");
+						file + ":7:9: warning: format: ~* moves outside the argument list; checked when the call runs",
+						file + ":8:9: warning: format: not enough arguments for directive ~a; checked when the call runs",
+						file + ":9:9: warning: format: control string ends with ~; checked when the call runs",
+						"error: 5 warnings about the program's source, treated as errors (--warnings-as-errors)");
 			assertThat(output).as(name).doesNotExist();
 
-			// Without the option the same program compiles: each call is a run-time
-			// program-error, and the warnings are only printed.
+			// Without the option the same program compiles: each call signals when it
+			// runs, and the warnings are only printed.
 			String[] compiled = runReporting(file.toString(), "-o", output.toString());
 			assertThat(compiled[0]).as(name).isEqualTo("0");
-			assertThat(compiled[2].lines().filter(line -> line.contains("warning:")).count()).as(name).isEqualTo(2);
+			assertThat(compiled[2].lines().filter(line -> line.contains("warning:")).count()).as(name).isEqualTo(5);
 			assertThat(output).as(name).exists();
 		}
 	}
