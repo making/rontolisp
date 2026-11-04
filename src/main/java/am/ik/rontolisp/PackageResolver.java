@@ -914,7 +914,9 @@ public final class PackageResolver {
 		else if (!(arg instanceof LispString)) {
 			return null;
 		}
-		List<LispVal> elements = datum instanceof LispCons list ? list.toList() : List.of(datum);
+		// NIL here is the empty list of symbols; only as an element is it the symbol.
+		List<LispVal> elements = datum instanceof LispNil ? List.of()
+				: datum instanceof LispCons list ? list.toList() : List.of(datum);
 		String target = designatedPackage(targetPackage);
 		List<String> spellings = new ArrayList<>(elements.size());
 		for (LispVal element : elements) {

@@ -847,6 +847,11 @@ class PackageResolverTest {
 		PackageResolver resolver = new PackageResolver();
 		assertThat(resolve(resolver, "(import 'plain)")).isEqualTo("T");
 		assertThat(resolve(resolver, "(plain)")).isEqualTo("(PLAIN)");
+		// '() is the empty list of symbols, not the symbol NIL: NIL stays unexported.
+		resolve(resolver, "(defpackage :rsd (:use :cl))");
+		resolve(resolver, "(in-package :rsd)");
+		assertThat(resolve(resolver, "(export '())")).isEqualTo("T");
+		assertThatThrownBy(() -> resolve(resolver, "rsd:nil")).isInstanceOf(LispPackageException.class);
 	}
 
 	@Test

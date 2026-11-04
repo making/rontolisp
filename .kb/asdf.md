@@ -793,10 +793,23 @@ with-user-abort 0.1 names its condition per `#+impl` arm of a `quote` with no ge
 the `quote` had no datum. One span: the last arm -> `rontolisp:interactive-interrupt`
 ([error-handling.md](error-handling.md), "SIGINT"). Measured 2026-11-04 with clingon 0.5.0 over
 it: `make-command`, `print-usage`, `parse-command-line`, `getopt` and `run` print what SBCL prints
-on the interpreter, and a real SIGINT prints `Received SIGINT, exiting.` and exits 130. On the
-compile paths clingon runs on all three when a program spells `clingon.command::`, but
-`clingon:getopt` does not read: `(cl-reexport:reexport-from ...)` is a top-level function call
-computing the exports at load.
+on the interpreter, and a real SIGINT prints `Received SIGINT, exiting.` and exits 130.
+
+**`eval/ClReexportForms`** (pinned by `ClReexportE2eTest`, all four, SBCL 2.2.9's answers). clingon's
+`src/package.lisp` is `(defpackage :clingon (:use :cl))` plus top-level
+`(cl-reexport:reexport-from :clingon.command)` calls: a function computing `import` and `export` at
+load, and the compile paths read `clingon:getopt` before running any of it (`is not external`). One
+insertion ahead of the `defun`: a `define-compiler-macro` that runs the library's own helpers where the
+call stands and expands to `(progn (import '(...)) (export '(...)))`, which `UserMacroExpander` hands
+member by member to both resolvers (`.kb/packages.md`, "Directives consumed at read/compile time"). It
+declines a computed argument, a package not defined yet and `:include` with `:exclude`, leaving the
+function: on the compile paths that call answers `t` and changes nothing, the registry being frozen at
+run time (`expandRuntimeExport`). Why not a `PackageResolver` rule: `tryConsumeExport`'s shape would
+restate `:include`/`:exclude` in Java and put a library's name in the always-on core for one consumer
+(census 2026-11-04, 226 cached systems: clingon's four calls; log4cl's `reexport-from` is its own
+`labels`). Measured 2026-11-04 with clingon 0.5.0 from the Quicklisp cache: `make-command`,
+`make-option`, `parse-command-line`, `getopt`, `print-usage`, `run`, a sub-command, `unknown-option`
+and the 136 externals print what SBCL prints on all four.
 
 Retired from this tier: `eval.AlexandriaSymbols`, deleted once `*package*` became a genuine
 dynamic variable (`.kb/packages.md`).
