@@ -3609,6 +3609,135 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * A class that cannot have instances yet: its {@code defclass} named a superclass no
+	 * definition has finalized (ANSI allows it), or a program named it only as such a
+	 * superclass. It stays registered, so methods and subclasses can name it, and its
+	 * definition is expanded again once nothing it waits for is left.
+	 *
+	 * @param name the class name as defined
+	 * @param form the {@code defclass} to expand then, null for a name no definition has
+	 * given a form yet
+	 * @param superclasses the direct superclasses it waits for
+	 * @param primaryMethods the primary methods defined on it after its {@code defclass}
+	 * ({@code <generic> <specializer key>}), which its generated readers must not replace
+	 */
+	public record ForwardClass(String name, @Nullable LispCons form, List<String> superclasses,
+			Set<String> primaryMethods) {
+	}
+
+	/** The classes waiting to be finalized, by normalized name, oldest first. */
+	private final Map<String, ForwardClass> forwardClasses = new LinkedHashMap<>();
+
+	/** Every class that ever waited, in definition order, by normalized name. */
+	private final Map<String, String> forwardReferencedClasses = new LinkedHashMap<>();
+
+	/**
+	 * Records that a class waits for its superclasses. A later {@code defclass} of the
+	 * name replaces the record.
+	 * @param name the class name as defined
+	 * @param form the {@code defclass}, null when the class is only named so far
+	 * @param superclasses the direct superclasses it waits for
+	 */
+	public void deferClass(String name, @Nullable LispCons form, List<String> superclasses) {
+		String key = normalize(name);
+		this.forwardReferencedClasses.put(key, name);
+		this.forwardClasses.put(key,
+				new ForwardClass(name, form, List.copyOf(superclasses), new java.util.HashSet<>()));
+	}
+
+	/**
+	 * Takes the class off the waiting list: its definition is complete.
+	 * @param name the class name
+	 * @return what it waited as, or null when it was not waiting
+	 */
+	@Nullable public ForwardClass finalizeClass(String name) {
+		return this.forwardClasses.isEmpty() ? null : this.forwardClasses.remove(normalize(name));
+	}
+
+	/**
+	 * Whether the class waits for a superclass, so it cannot have instances.
+	 * @param name the class name
+	 * @return true while it waits
+	 */
+	public boolean isUnfinalized(String name) {
+		return !this.forwardClasses.isEmpty() && this.forwardClasses.containsKey(normalize(name));
+	}
+
+	/**
+	 * Whether the class ever waited for a superclass, which is what makes its allocations
+	 * test for it.
+	 * @param name the class name
+	 * @return true when it did
+	 */
+	public boolean isForwardReferenced(String name) {
+		return !this.forwardReferencedClasses.isEmpty() && this.forwardReferencedClasses.containsKey(normalize(name));
+	}
+
+	/**
+	 * The classes that ever waited for a superclass.
+	 * @return their names as defined, in definition order
+	 */
+	public Collection<String> forwardReferencedClasses() {
+		return this.forwardReferencedClasses.values();
+	}
+
+	/**
+	 * The classes still waiting.
+	 * @return their records, oldest first
+	 */
+	public Collection<ForwardClass> unfinalizedClasses() {
+		return this.forwardClasses.values();
+	}
+
+	/**
+	 * The direct superclasses of a waiting class no {@code defclass} has defined.
+	 * @param waiting the waiting class
+	 * @return their names
+	 */
+	public List<String> undefinedSuperclasses(ForwardClass waiting) {
+		return waiting.superclasses().stream().filter(name -> {
+			ForwardClass superclass = this.forwardClasses.get(normalize(name));
+			return superclass != null && superclass.form() == null;
+		}).toList();
+	}
+
+	/**
+	 * The oldest waiting {@code defclass} nothing holds back any more.
+	 * @return the form to expand again, or null when there is none
+	 */
+	@Nullable public LispCons nextFinalizableClass() {
+		for (ForwardClass waiting : this.forwardClasses.values()) {
+			if (waiting.form() != null && waiting.superclasses().stream().noneMatch(this::isUnfinalized)) {
+				return waiting.form();
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Records a primary method on a waiting class: it was defined after the class, so it
+	 * replaces the class's generated reader of the same key, which is only emitted later.
+	 * @param className the specializer's class
+	 * @param generic the generic function's name
+	 * @param specializerKey the method's specializer key
+	 */
+	public void noteMethodOnWaitingClass(String className, String generic, String specializerKey) {
+		ForwardClass waiting = this.forwardClasses.isEmpty() ? null : this.forwardClasses.get(normalize(className));
+		if (waiting != null) {
+			waiting.primaryMethods().add(normalize(generic) + " " + specializerKey);
+		}
+	}
+
+	/**
+	 * The text of the refusal to allocate an instance of a waiting class.
+	 * @param name the class name
+	 * @return the condition's report
+	 */
+	public static String unfinalizedClassMessage(String name) {
+		return "The class " + name + " is not finalized: it or a superclass is a forward referenced class";
+	}
+
+	/**
 	 * Registers a class definition.
 	 * @param info the class record
 	 */

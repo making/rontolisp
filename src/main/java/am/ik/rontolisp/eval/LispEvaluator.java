@@ -1910,6 +1910,9 @@ public final class LispEvaluator {
 						throw new LispEvalException(LispNames.ALLOCATE_INSTANCE + ": not an allocatable class: "
 								+ (designator instanceof LispSymbol s ? s.name() : args.get(0).print()));
 					}
+					if (designator instanceof LispSymbol waiting && this.closRegistry.isUnfinalized(waiting.name())) {
+						throw new LispEvalException(ClosRegistry.unfinalizedClassMessage(waiting.name()));
+					}
 					LispLayout unbound = java.util.Objects
 						.requireNonNull(this.closRegistry.findLayoutByTag(ClosRegistry.UNBOUND_TAG));
 					LispVal[] slots = new LispVal[layout.capacity()];
@@ -10779,6 +10782,12 @@ public final class LispEvaluator {
 		return (form instanceof LispSymbol sym) ? sym.name() : null;
 	}
 
+	/**
+	 * Where each class waiting for a superclass was defined: its initforms close over
+	 * that environment once the last superclass finalizes it.
+	 */
+	private final Map<String, Environment> waitingClassEnvs = new HashMap<>();
+
 	private LispVal evalDefclass(LispCons cons, Environment env) {
 		// A redefinition replaces the class's layout; the instances it made obsolete are
 		// updated once the definition (and any class definition its hooks run) is done.
@@ -10793,6 +10802,16 @@ public final class LispEvaluator {
 			if (layoutBefore != null && layoutAfter != null
 					&& !layoutBefore.slotNames().equals(layoutAfter.slotNames())) {
 				this.redefinedLayouts.add(layoutAfter.tag());
+			}
+			if (definedName != null && this.closRegistry.isUnfinalized(definedName)) {
+				this.waitingClassEnvs.put(ClosRegistry.normalize(definedName), env);
+			}
+			// A class that waited for this one is defined now, where it was written.
+			for (LispCons finalizable = this.closRegistry
+				.nextFinalizableClass(); finalizable != null; finalizable = this.closRegistry.nextFinalizableClass()) {
+				String waitingName = ((LispSymbol) finalizable.toList().get(1)).name();
+				Environment waitingEnv = this.waitingClassEnvs.remove(ClosRegistry.normalize(waitingName));
+				evalDefclass(finalizable, waitingEnv != null ? waitingEnv : env);
 			}
 		}
 		finally {
@@ -10925,7 +10944,8 @@ public final class LispEvaluator {
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispSymbol nameSym)) {
 			return null;
 		}
-		LispInstance metaobject = this.closRegistry.classMetaobject(nameSym.name());
+		LispInstance metaobject = this.closRegistry.isUnfinalized(nameSym.name()) ? null
+				: this.closRegistry.classMetaobject(nameSym.name());
 		if (metaobject == null) {
 			return null;
 		}

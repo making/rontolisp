@@ -871,6 +871,7 @@ class RontoLispCliStreamsTest {
 				(defun call (x)
 				  (funcall 'no-such-call x))
 				(print (list (ignore-errors (ref)) (ignore-errors (call 1))))
+				(defclass waits (never-defined) ())
 				""");
 		for (String output : new String[] { "Warn.class", "warn.wasm" }) {
 			PrintStream savedErr = System.err;
@@ -889,7 +890,8 @@ class RontoLispCliStreamsTest {
 				.map(line -> line.substring(line.lastIndexOf('/') + 1))).as(output)
 				.containsExactly(
 						"warn.lisp:1:15: warning: the function NO-SUCH-REF is undefined; compiled as a run-time error",
-						"warn.lisp:3:12: warning: the function NO-SUCH-CALL is undefined; looked up when the call runs");
+						"warn.lisp:3:12: warning: the function NO-SUCH-CALL is undefined; looked up when the call runs",
+						"warn.lisp:5:1: warning: DEFCLASS WAITS: the superclass NEVER-DEFINED is never defined, so the class has no instances");
 		}
 	}
 

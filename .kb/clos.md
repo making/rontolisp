@@ -75,6 +75,52 @@ method's (CLHS 7.6.5: `&key` without names), else `standardGenericShape` for the
   violation outside the pins (the hits were same-named generics in different packages and
   usocket's iolib-only backend).
 
+## A forward-referenced superclass
+`(defclass a (b) ...)` before `b` exists (ANSI allows it; cxml's `xmlns-normalizer` before `sax-proxy`).
+Both paths run the same `expandDefclass`; `ClosRegistry.ForwardClass` is what waits.
+- **The name becomes a class that waits**: an unregistered superclass name is expanded as
+  `(defclass b () ())` with `named` set and no form (the name was only written), so `find-class`,
+  a `defmethod` on `b`, `subtypep 'a 'b` and `typep` have a class to read. `a` then waits too, and
+  so does a subclass of a waiting class. A later `(defclass b ...)` replaces the record.
+- **What a waiting class emits** (`waitingClassForms`): `(setq %CLASS-UNFINALIZED-a% t)`, its
+  class-allocated cells (CLHS: once, where the class is defined) and a constructor that refuses. No
+  accessors, no metaclass driver: an accessor bakes an index the layout does not have yet, and a
+  provisional shifted-slot method could survive into the final layout with a wrong one. Its layout
+  takes no `registerSlotPosition`, which would mark the name position-ambiguous.
+- **Finalizing** (`ClosRegistry.nextFinalizableClass`, oldest first, once nothing it waits for is
+  left) expands the stored form again: the redefinition path, so the constructor replaces the
+  refusing one (`addExpandedClass` drops the earlier defun; a `define-condition` goes through it
+  too, since it may be the last superclass). `finalizedClassForms` puts `(setq flag nil)` first, as
+  the metaclass driver allocates, and drops the cells and every generated method a primary method
+  defined since has the key of (`noteMethodOnWaitingClass`; SBCL: the reader came first, and
+  `:USER-RU` wins). The interpreter finalizes from `evalDefclass`, in the environment the waiting
+  class was defined in (`waitingClassEnvs`); the compile walk from `addExpandedClass`.
+- **The refusal is at the allocation seam** (`tracked`, so the constructor, the chain fill and
+  `%ALLOC-INST`): only a class that ever waited tests its flag, so every other program is
+  byte-identical. The interpreter's native `allocate-instance` asks `isUnfinalized`. The compile
+  paths hoist one `defvar` per such class, as a class has its last layout from the start and only
+  the flag keeps the refusal in program order. `unfinalizedClassMessage` differs from SBCL's text; the
+  ci-spec pins `:refused`. An `&key` default runs before the refusal.
+- **Refused at the form**: its own superclass (`self`), a cycle through a waiting class (the check
+  reads the `ancestors` a placeholder gives), a `defstruct` or built-in type name (SBCL's
+  `INVALID-SUPERCLASS`; `findStructTag`/`isSupportedTypeSpecializer`). As for an inconsistent
+  precedence, on the compile paths that fails the compile. `define-condition` keeps refusing an
+  unknown first parent (SBCL: `Class not yet defined`): `defineConditionToDefclass` checks it.
+- **Never defined**: the compile walk marks the waiting class's flag `(%compile-warning ...)`
+  located at its defclass (`warnAboutNeverDefinedSuperclasses`), so a typo'd superclass, once a
+  failed compile, is a counted warning and a class that refuses instances.
+- Residuals, all of them in the window before the last superclass: `find-class` of `b` answers a
+  `standard-class`, not `forward-referenced-class`; its metaobject's `finalized-p` slot says `t`
+  and SBCL's `class-precedence-list` error is an answer; a reader is not yet `fboundp` on the interpreter; a
+  `find-class` object taken in the window is not `eq` to the finalized class (a redefinition makes
+  a new one); a class finalized before and then redefined over a forward reference leaves its
+  subclasses alone (redefinition does not propagate); a `:metaclass` class that waited is not
+  widened to what its protocol injects (`widenedMetaclassDefclassOrNull`); an `(setf find-class)`
+  alias does not stand in for the name.
+- Pinned by ci-spec `defclass-of-a-forward-referenced-superclass` (agrees with SBCL 2.2.9),
+  `LispEvaluatorTest.aForwardReferenceCannotCloseACycleOrNameANonClass` and the warning in
+  `RontoLispCliStreamsTest.aReferenceToAnUndefinedFunctionWarnsAtTheReferenceOnEveryBackend`.
+
 ## `generateDispatcher(name, registry[, builtinFallback])`
 ONE dispatcher defun per generic: a nested-if chain, most specific first. An ordinary defun,
 so `#'name`/`funcall`/`mapcar` work with no `BuiltinFunctionWrappers` entry.

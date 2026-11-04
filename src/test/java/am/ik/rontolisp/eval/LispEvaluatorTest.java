@@ -10648,6 +10648,22 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aForwardReferenceCannotCloseACycleOrNameANonClass() {
+		// Refused where the form is expanded, on every backend. A condition type has no
+		// forward reference (SBCL: "Class not yet defined").
+		assertThatThrownBy(() -> evalPrinted("(defclass fr-s (fr-s) ())"))
+			.hasMessageContaining("FR-S is specified as its own superclass");
+		assertThatThrownBy(() -> evalPrinted("(defclass fr-p (fr-q) ()) (defclass fr-q (fr-p) ())"))
+			.hasMessageContaining("FR-Q is specified as a superclass of itself");
+		assertThatThrownBy(() -> evalPrinted("(defstruct fr-st a) (defclass fr-c (fr-st) ())"))
+			.hasMessageContaining("FR-ST cannot be a superclass");
+		assertThatThrownBy(() -> evalPrinted("(defclass fr-i (integer) ())"))
+			.hasMessageContaining("INTEGER cannot be a superclass");
+		assertThatThrownBy(() -> evalPrinted("(define-condition fr-e (fr-later) ())"))
+			.hasMessageContaining("unknown parent type FR-LATER");
+	}
+
+	@Test
 	void streampOfACompositeStreamBuiltInTheSameForm() {
 		// The composite class loads while the predicate's argument runs, after the call
 		// form was reached; the answer still counts it. Pinned on all four backends.
