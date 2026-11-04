@@ -46,6 +46,39 @@ class LispMacroExpanderTest {
 		return names;
 	}
 
+	@Test
+	void aGenericKeepsOneMethodTableUnlessAnEarlierFormCanCallIt() {
+		String laterMethod = "(defmethod g ((x string)) 2) ";
+		// Nothing runs first, what runs first reaches no generic, or the method's class
+		// does not exist yet when the last earlier call runs.
+		assertThat(generationFlags("(defmethod g ((x integer)) 1) " + laterMethod + "(print (g 1))")).isEmpty();
+		assertThat(generationFlags("(defmethod g ((x integer)) 1) (defvar *x* (list 1)) " + laterMethod)).isEmpty();
+		assertThat(generationFlags("(defmethod g ((x integer)) 1) (print (g 1)) (defclass c () ()) "
+				+ "(defmethod g ((x c)) 2) (print (g (make-instance 'c)))"))
+			.isEmpty();
+		// A call by name, through a function, through an operator naming no generic.
+		assertThat(generationFlags("(defmethod g ((x integer)) 1) (print (g 1)) " + laterMethod))
+			.containsExactly("%G--gen0");
+		assertThat(generationFlags("(defun f (x) (g x)) (defmethod g ((x integer)) 1) (f 1) " + laterMethod))
+			.containsExactly("%G--gen0");
+		assertThat(generationFlags(
+				"(defclass c () ()) (make-instance 'c) (defmethod initialize-instance :after ((x c) &key) nil)"))
+			.containsExactly("%INITIALIZE-INSTANCE--gen0");
+	}
+
+	private static List<String> generationFlags(String source) {
+		List<String> flags = new ArrayList<>();
+		for (LispVal form : LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
+				new HashMap<>(), new ClosRegistry())) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& LispNames.DEFVAR.equals(op.name()) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol flag && flag.name().contains("--gen")) {
+				flags.add(flag.name());
+			}
+		}
+		return flags;
+	}
+
 	private static void collectSymbols(LispVal form, List<String> out) {
 		switch (form) {
 			case LispSymbol sym -> out.add(sym.name());

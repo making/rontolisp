@@ -1632,6 +1632,29 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * One step of a generic function's history on a compile path: the top-level form at
+	 * {@code position} set a method, removed one, or made the generic exist.
+	 *
+	 * @param position the form's index in the compile walk's output
+	 * @param key the method's key, or null for a {@code defgeneric} with no method yet
+	 * @param method the method, or null for a removal
+	 */
+	public record MethodChange(int position, @Nullable String key, @Nullable MethodInfo method) {
+	}
+
+	/**
+	 * The method table a compiled generic dispatches over until a flag is set: its
+	 * dispatcher reads the flag and picks the table's body while the flag is nil.
+	 *
+	 * @param flag the global the defining form sets
+	 * @param position the defining form's index in the compile walk's output
+	 * @param methods the methods defined before that form
+	 * @param declared whether the generic exists by then, with no method if need be
+	 */
+	public record MethodGeneration(String flag, int position, Map<String, MethodInfo> methods, boolean declared) {
+	}
+
+	/**
 	 * One generic function: its canonical name, required parameter names (from the
 	 * {@code defgeneric} or the first {@code defmethod}), optional documentation, and its
 	 * methods keyed by a canonical specializer key so redefining the same specializer
@@ -1670,6 +1693,153 @@ public final class ClosRegistry {
 		@Nullable private LispVal methodClass;
 
 		@Nullable private LispVal declaredLambdaList;
+
+		private final List<MethodChange> methodChanges = new java.util.ArrayList<>();
+
+		@Nullable private LinkedHashMap<String, MethodInfo> methodsBeforeChanges;
+
+		private final LinkedHashMap<String, MethodInfo> systemDefaults = new LinkedHashMap<>();
+
+		private List<MethodGeneration> generations = List.of();
+
+		/**
+		 * Sets or removes a method, recording the change when a compile walk is at a
+		 * top-level form.
+		 * @param position the form's index in the walk's output, negative off the walk
+		 * @param key the method's key
+		 * @param method the method, or null to remove it
+		 */
+		void changeMethod(int position, String key, @Nullable MethodInfo method) {
+			if (position >= 0) {
+				if (this.methodsBeforeChanges == null) {
+					this.methodsBeforeChanges = new LinkedHashMap<>(this.methods);
+				}
+				this.methodChanges.add(new MethodChange(position, key, method));
+			}
+			if (method == null) {
+				this.methods.remove(key);
+			}
+			else {
+				this.methods.put(key, method);
+			}
+		}
+
+		/**
+		 * Records that a {@code defgeneric} made this generic exist with no method yet.
+		 * @param position the form's index in the walk's output, negative off the walk
+		 */
+		void declaredAt(int position) {
+			if (position >= 0) {
+				if (this.methodsBeforeChanges == null) {
+					this.methodsBeforeChanges = new LinkedHashMap<>(this.methods);
+				}
+				this.methodChanges.add(new MethodChange(position, null, null));
+			}
+		}
+
+		/**
+		 * Sets the method the system supplies. It is no definition of the program: it
+		 * applies from the start, wherever the form that synthesized it stands.
+		 * @param key the method's key
+		 * @param method the method
+		 */
+		public void putSystemDefault(String key, MethodInfo method) {
+			this.systemDefaults.put(key, method);
+			this.methods.put(key, method);
+		}
+
+		/**
+		 * The recorded changes, in definition order.
+		 * @return the changes
+		 */
+		public List<MethodChange> methodChanges() {
+			return this.methodChanges;
+		}
+
+		/**
+		 * The method table as the top-level forms before {@code position} left it.
+		 * @param position an index in the compile walk's output
+		 * @return the methods, in definition order
+		 */
+		public Map<String, MethodInfo> methodsBefore(int position) {
+			LinkedHashMap<String, MethodInfo> table = this.methodsBeforeChanges == null ? new LinkedHashMap<>()
+					: new LinkedHashMap<>(this.methodsBeforeChanges);
+			table.putAll(this.systemDefaults);
+			for (MethodChange change : this.methodChanges) {
+				if (change.position() >= position) {
+					break;
+				}
+				if (change.key() != null) {
+					if (change.method() == null) {
+						table.remove(change.key());
+					}
+					else {
+						table.put(change.key(), change.method());
+					}
+				}
+			}
+			return table;
+		}
+
+		/**
+		 * Whether a {@code defgeneric} or a method made this generic exist before
+		 * {@code position}.
+		 * @param position an index in the compile walk's output
+		 * @return true when it existed by then
+		 */
+		public boolean existsBefore(int position) {
+			return this.methodsBeforeChanges != null && !this.methodsBeforeChanges.isEmpty()
+					|| this.methodChanges.stream().anyMatch(change -> change.position() < position);
+		}
+
+		/**
+		 * The earlier method tables calls can observe, oldest first; empty when every
+		 * call of the program sees the last one.
+		 * @return the generations
+		 */
+		public List<MethodGeneration> generations() {
+			return this.generations;
+		}
+
+		/**
+		 * Records the earlier method tables calls can observe.
+		 * @param generations the generations, oldest first
+		 */
+		public void generations(List<MethodGeneration> generations) {
+			this.generations = List.copyOf(generations);
+		}
+
+		/**
+		 * The global a generation's flag lives in: {@code %NAME--genN}, the {@code %}
+		 * after the package qualifier when there is one.
+		 * @param index the generation's index
+		 * @return the variable's name
+		 */
+		public String generationFlag(int index) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(this.name);
+			return (qn == null ? "%" + this.name : qn.pkg() + "::%" + qn.member()) + "--gen" + index;
+		}
+
+		/**
+		 * This generic function with another method table, which is what a dispatcher
+		 * body generated for one generation reads.
+		 * @param table the methods
+		 * @return the view
+		 */
+		public GenericInfo withMethods(Map<String, MethodInfo> table) {
+			GenericInfo view = new GenericInfo(this.name, this.paramNames);
+			view.methods.putAll(table);
+			view.variadic = this.variadic;
+			view.methodCombination = this.methodCombination;
+			view.mostSpecificLast = this.mostSpecificLast;
+			view.precedenceOrder = this.precedenceOrder;
+			view.lambdaListShape = this.lambdaListShape;
+			view.keywordsDeclared = this.keywordsDeclared;
+			view.genericFunctionClass = this.genericFunctionClass;
+			view.methodClass = this.methodClass;
+			view.declaredLambdaList = this.declaredLambdaList;
+			return view;
+		}
 
 		/**
 		 * The {@code (:generic-function-class C)} option of the generic's
@@ -2010,6 +2180,60 @@ public final class ClosRegistry {
 	private final LinkedHashMap<String, ClassInfo> classes = new LinkedHashMap<>();
 
 	private final LinkedHashMap<String, GenericInfo> generics = new LinkedHashMap<>();
+
+	/**
+	 * The index in the compile walk's output of the top-level form being walked; negative
+	 * off the walk.
+	 */
+	private int definitionPosition = -1;
+
+	/**
+	 * The index in the compile walk's output of the form that first defined a class or
+	 * structure type, by normalized name.
+	 */
+	private final Map<String, Integer> typeFirstDefined = new java.util.HashMap<>();
+
+	/**
+	 * Tells the registry which top-level form the compile walk is at.
+	 * @param position the form's index in the walk's output, negative off the walk
+	 */
+	public void definitionPosition(int position) {
+		this.definitionPosition = position;
+	}
+
+	private void noteTypeDefined(String key) {
+		if (this.definitionPosition >= 0) {
+			this.typeFirstDefined.putIfAbsent(key, this.definitionPosition);
+		}
+	}
+
+	/**
+	 * Where the compile walk first defined a class or structure type.
+	 * @param name the type's name
+	 * @return the form's index in the walk's output, or -1 for a type the program did not
+	 * define
+	 */
+	public int typeFirstDefined(String name) {
+		return isSeededClass(name) ? -1 : this.typeFirstDefined.getOrDefault(normalize(name), -1);
+	}
+
+	/**
+	 * Sets or removes a method of a generic function, in program order on a compile walk.
+	 * @param generic the generic function
+	 * @param key the method's key
+	 * @param method the method, or null to remove it
+	 */
+	public void changeMethod(GenericInfo generic, String key, @Nullable MethodInfo method) {
+		generic.changeMethod(this.definitionPosition, key, method);
+	}
+
+	/**
+	 * Records that a {@code defgeneric} made a generic function exist with no method yet.
+	 * @param generic the generic function
+	 */
+	public void genericDeclared(GenericInfo generic) {
+		generic.declaredAt(this.definitionPosition);
+	}
 
 	/**
 	 * Slot base name to its 1-based position, or {@code -1} when two classes disagree on
@@ -2902,6 +3126,7 @@ public final class ClosRegistry {
 			List<LispVal> initforms) {
 		this.hierarchyVersion++;
 		String key = normalize(structName);
+		noteTypeDefined(key);
 		this.structTags.put(key, LispLayout.STRUCT_TAG_PREFIX + structName);
 		// A redefinition invalidates the memoized metaobject, like registerClass.
 		this.classMetaobjects.remove(key);
@@ -3800,6 +4025,7 @@ public final class ClosRegistry {
 	public void registerClass(ClassInfo info) {
 		this.hierarchyVersion++;
 		String key = normalize(info.name());
+		noteTypeDefined(key);
 		Set<String> extras = this.pendingExtraAncestors.get(key);
 		if (extras != null) {
 			Set<String> merged = new java.util.LinkedHashSet<>(info.ancestors());
