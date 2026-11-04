@@ -78,6 +78,22 @@ class WasmReportLocationsTest {
 
 	@Test
 	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aConditionOnlyTheRuntimeSignalsRendersItsReport() throws Exception {
+		// No stream in the program, so the report renders over a raw handle, which close
+		// used to refuse: CLOSE: The value -40032 is not of type STREAM.
+		Path program = write("no-applicable.lisp", """
+				(defstruct rpt-st a)
+				(defgeneric rpt-g (x) (:method ((x integer)) 1))
+				(print (ignore-errors nil))
+				(rpt-g (make-rpt-st :a 1))
+				""");
+		List<String> expected = List.of("Unhandled condition: No applicable method: RPT-G on RPT-ST");
+		assertThat(wasmReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program, "--component")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
 	void functionGranularityNamesTheFunctionAndTheLineItsDefinitionStartsOn() throws Exception {
 		Path program = write("app.lisp", """
 				(defun parse (s)

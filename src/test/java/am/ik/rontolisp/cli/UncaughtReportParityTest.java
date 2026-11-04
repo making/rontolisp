@@ -493,6 +493,30 @@ class UncaughtReportParityTest {
 	}
 
 	@Test
+	void aConditionOnlyTheRuntimeSignalsRendersItsReport() throws Exception {
+		// No program here builds a stream, so the JVM renders the report over a raw
+		// handle,
+		// which close used to refuse: CLOSE: The value 0 is not of type STREAM.
+		Path string = write("no-applicable-string.lisp", """
+				(defgeneric rpt-g (x) (:method ((x integer)) 1))
+				(rpt-g "s")
+				""");
+		assertSameReport(string, "Unhandled condition: No applicable method: RPT-G on STRING", "  at " + string + ":2");
+		Path struct = write("no-applicable-struct.lisp", """
+				(defstruct rpt-st a)
+				(defgeneric rpt-g (x) (:method ((x integer)) 1))
+				(rpt-g (make-rpt-st :a 1))
+				""");
+		assertSameReport(struct, "Unhandled condition: No applicable method: RPT-G on RPT-ST", "  at " + struct + ":3");
+		Path slot = write("unbound-slot.lisp", """
+				(defclass rpt-kl () ((a :initarg :a)))
+				(slot-value (make-instance 'rpt-kl) 'a)
+				""");
+		assertSameReport(slot, "Unhandled condition: The slot A is unbound in #<RPT-KL :A #<%UNBOUND%>>",
+				"  at " + slot + ":2");
+	}
+
+	@Test
 	void aComputedConditionTypeReportsTheInitargsTheCallPassed() throws Exception {
 		// The compile path reaches the class through the %error-runtime dispatch, whose
 		// helper reads every initarg slot; the interpreter rebuilds the literal call.

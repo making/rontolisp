@@ -760,18 +760,47 @@ public final class ClosRegistry {
 
 	/**
 	 * The {@code :report} of the seeded {@code no-applicable-method-error}:
-	 * {@code (lambda (c s) (format s "No applicable method: ~a~a" (%obj-ref c 0) (%obj-ref c 1)))}
-	 * -- the exact text the defun used to render eagerly into its signal message, now
-	 * produced only when the condition is reported. Baked {@code %obj-ref} indexes for
-	 * the same reason as {@link #unboundSlotReport}.
+	 * {@code (lambda (c s) (format s "No applicable method: ~a~a" (%obj-ref c 0) NAME))},
+	 * NAME being slot 1's class designator with an instance's tag taken off, so the
+	 * message names the class the program wrote. The strip is here and not in the defun
+	 * so a signal nothing reports pays for no string operation. Baked {@code %obj-ref}
+	 * indexes for the same reason as {@link #unboundSlotReport}.
 	 */
 	private static LispVal noApplicableErrorReport() {
 		LispSymbol condition = new LispSymbol("__c");
 		LispSymbol stream = new LispSymbol("__s");
+		LispSymbol text = new LispSymbol("__t");
+		LispSymbol size = new LispSymbol("__n");
+		LispVal bindings = list(
+				list(text,
+						list(new LispSymbol(LispNames.PRINC_PIECE_INTERNAL),
+								list(new LispSymbol(LispNames.OBJ_REF), condition, new LispInteger(1)))),
+				list(size, list(new LispSymbol(LispNames.LENGTH), text)));
 		LispVal format = list(new LispSymbol("FORMAT"), stream, new LispString("No applicable method: ~a~a"),
-				list(new LispSymbol(LispNames.OBJ_REF), condition, new LispInteger(0)),
-				list(new LispSymbol(LispNames.OBJ_REF), condition, new LispInteger(1)));
-		return list(new LispSymbol(LispNames.LAMBDA), list(condition, stream), format);
+				list(new LispSymbol(LispNames.OBJ_REF), condition, new LispInteger(0)), tagStrippedText(text, size));
+		return list(new LispSymbol(LispNames.LAMBDA), list(condition, stream),
+				list(new LispSymbol(LispNames.LET_STAR), bindings, format));
+	}
+
+	/**
+	 * The form answering a printed class designator without an instance's
+	 * {@code %struct-}/{@code %class-} tag: a type's name as the program wrote it. A
+	 * package-qualified type needs no strip, the tag being on its package half.
+	 * @param text the variable holding the designator's text
+	 * @param size the variable holding its length
+	 * @return the {@code cond} form
+	 */
+	public static LispVal tagStrippedText(LispSymbol text, LispSymbol size) {
+		LispVal clauses = list(list(LispTrue.INSTANCE, text));
+		for (String tagPrefix : List.of(LispLayout.CLASS_TAG_PREFIX, LispLayout.STRUCT_TAG_PREFIX)) {
+			LispInteger length = new LispInteger(tagPrefix.length());
+			LispVal test = list(new LispSymbol(LispNames.AND), list(new LispSymbol(LispNames.GT), size, length),
+					list(new LispSymbol(LispNames.STRING_EQ),
+							list(new LispSymbol(LispNames.SUBSEQ), text, new LispInteger(0), length),
+							new LispString(tagPrefix)));
+			clauses = new LispCons(list(test, list(new LispSymbol(LispNames.SUBSEQ), text, length)), clauses);
+		}
+		return new LispCons(new LispSymbol(LispNames.COND), clauses);
 	}
 
 	/**

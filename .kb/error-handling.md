@@ -495,7 +495,12 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
   (`ClosRegistry.ensureNoApplicableErrorSeeded`; slot names %-fenced so `registerSlotPosition` cannot
   make a user slot ambiguous). Injection moved BEFORE the report-renderer injection (its tag must be
   in `conditionNarrowing`'s set) and AFTER the routing answer (a dispatcher alone must not flip
-  routing on). Deliberate narrowing: a `(simple-error ...)` clause no longer matches it.
+  routing on). Deliberate narrowing: a `(simple-error ...)` clause no longer matches it. The slot holds
+  the designator; the `:report` takes an instance's `%struct-`/`%class-` tag off
+  (`ClosRegistry.tagStrippedText`, `print-unreadable-object`'s strip), so the message says `on ST` and
+  a signal nothing reports pays for no string operation. With no stream in the program the report
+  renders over a raw handle ([read-load-streams.md](read-load-streams.md), "A `with-output-to-string`
+  the gate never saw").
 - zlib `--optimize=size`: P1 and component shrink, output
   byte-identical. **The remaining floor is a floor**: zlib still carries the value printers
   because the entry edge is `%SEQ-TO-STRING`, reachable through `%FILL-RUNTIME`/`%REPLACE-RUNTIME`,
