@@ -3,6 +3,7 @@ package am.ik.rontolisp.testsupport;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -104,7 +105,11 @@ public final class InflateCases {
 
 	/**
 	 * What {@code java.util.zip} reads the case as: {@code GZIPInputStream} for gzip,
-	 * {@code InflaterInputStream} over a zlib or a raw (nowrap) {@code Inflater}.
+	 * {@code InflaterInputStream} over a zlib or a raw (nowrap) {@code Inflater}. The
+	 * gzip stream is told that more may follow: a build of {@code GZIPInputStream} that
+	 * asks {@code available()} after a trailer would otherwise answer from where its
+	 * 512-octet buffer happened to end, and only its answer for a stream that may go on
+	 * is one the decoders can hold whatever their chunks.
 	 * @param c the case
 	 * @return the outcome
 	 */
@@ -128,7 +133,12 @@ public final class InflateCases {
 	private static InputStream open(Case c) throws IOException {
 		ByteArrayInputStream bytes = new ByteArrayInputStream(c.input());
 		return switch (c.kind()) {
-			case GZIP -> new GZIPInputStream(bytes);
+			case GZIP -> new GZIPInputStream(new FilterInputStream(bytes) {
+				@Override
+				public int available() {
+					return 1;
+				}
+			});
 			case ZLIB -> new InflaterInputStream(bytes);
 			default -> new InflaterInputStream(bytes, new Inflater(true));
 		};
