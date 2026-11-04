@@ -4007,6 +4007,30 @@ cases:
     expected: |
       (3 (:OWN 1 2) "CI-OWN-WHILE" NIL)
       2
+  # cxml's (defun %error (class stream message) ...): cl's %ERROR is the operator every
+  # built-in signal lowers to, so read as cl's the calls reached the operator and never
+  # the definition.
+  - name: a-package-defining-an-implementation-internal-name-keeps-its-own-function
+    source: |
+      (defpackage :ci-own-internal (:use :cl))
+      (in-package :ci-own-internal)
+      (define-condition ci-oi-condition (simple-error) ())
+      (defun ci-oi-ahead (message) (%error 'ci-oi-condition nil message))
+      (defun %error (class stream message)
+        (declare (ignorable stream))
+        (error class :format-control "~A" :format-arguments (list message)))
+      (print (handler-case (ci-oi-ahead "ahead") (error (e) (list (type-of e) (format nil "~A" e)))))
+      (print (handler-case (funcall #'%error 'ci-oi-condition nil "value")
+               (error (e) (list (type-of e) (format nil "~A" e)))))
+      ;; The operator itself stays cl's for what the built-ins lower to, here too.
+      (print (handler-case (error "plain ~A" 1) (error (e) (format nil "~A" e))))
+      (print (handler-case (parse-integer "x") (parse-error () :parse-error)))
+      (in-package :cl-user)
+    expected: |
+      (CI-OI-CONDITION "ahead")
+      (CI-OI-CONDITION "value")
+      "plain 1"
+      :PARSE-ERROR
   - name: a-standard-name-read-in-a-package-using-no-cl-is-its-own
     source: |
       ;; Whatever the name turns out to be there: a parameter (vom's SECOND), a LOOP
@@ -4016,7 +4040,7 @@ cases:
       ;; COMMON-LISP:NIL.
       (defpackage :ci-nocl (:use) (:export #:rest))
       (cl:in-package :ci-nocl)
-      (cl:print (cl:let ((car 1)) car))
+      (cl:print (cl:let ((caar 1)) caar))
       (cl:defun ci-parameter (second) second)
       (cl:print (ci-parameter 2))
       (cl:print (cl:multiple-value-bind (second minute hour) (cl:values 3 4 5) (cl:list hour minute second)))
@@ -4029,11 +4053,11 @@ cases:
       (cl:defparameter *identity* (cl:list (cl:eq 'second 'cl:second) (cl:package-name (cl:symbol-package 'second))))
       (cl:defvar list 14)
       (cl:defmacro when (x) (cl:list 'cl:quote x))
-      (cl:defstruct car a)
+      (cl:defstruct caar a)
       (cl:defgeneric min (x))
       (cl:defmethod min ((x cl:integer)) (cl:list :min x))
       (cl:defun rest (x) (cl:list :rest x))
-      (cl:print (cl:list list (when y) (car-a (make-car :a 15)) (min 16) (rest 17)))
+      (cl:print (cl:list list (when y) (caar-a (make-caar :a 15)) (min 16) (rest 17)))
       (cl:defparameter *data* (cl:list (cl:eval '(cl:car '(18))) (cl:eval (cl:list 'cl:cdr ''(19)))
                                        (cl:funcall (cl:compile cl:nil '(cl:lambda (x) (cl:car x))) '(20))))
       (cl:defparameter *undefined*
@@ -8527,7 +8551,17 @@ cases:
         (let ((d (ci-alit-double))) (setf (aref d 0) 99) (print d))
         (print (ci-alit-double))
         (let ((o (ci-alit-octets))) (setf (aref o 0) 99) (print o))
-        (print (ci-alit-octets)))
+        (print (ci-alit-octets))
+        ;; Runs of equal immediates are built by one fill, and stay separate elements.
+        (let ((r (ci-alit-runs))) (setf (aref r 1) 99) (setf (aref r 12) 98) (setf (aref r 20) 97) (print r))
+        (print (ci-alit-runs))
+        (let ((b (ci-alit-bit-runs)))
+          (print (list b (bit-vector-p b) (length b) (array-element-type b) (eq b (ci-alit-bit-runs)))))
+        (let ((m (ci-alit-rank2-runs))) (setf (aref m 1 1) 7) (print m))
+        (print (ci-alit-rank2-runs)))
+      (defun ci-alit-runs () #(0 0 0 0 0 0 0 0 0 0 1 nil nil nil nil nil nil nil nil #\a #\a #\a #\a #\a #\a #\a #\a 0 0))
+      (defun ci-alit-bit-runs () '#*00000000001111111111011111111)
+      (defun ci-alit-rank2-runs () #2A((0 0 0 0 0) (0 0 0 0 0)))
       (ci-array-literal-freshness)
     expected: |
       (NIL NIL NIL NIL NIL NIL)
@@ -8543,6 +8577,11 @@ cases:
       #d(1.0 2.0)
       #(99 2 3)
       #(1 2 3)
+      #(0 99 0 0 0 0 0 0 0 0 1 NIL 98 NIL NIL NIL NIL NIL NIL #\a 97 #\a #\a #\a #\a #\a #\a 0 0)
+      #(0 0 0 0 0 0 0 0 0 0 1 NIL NIL NIL NIL NIL NIL NIL NIL #\a #\a #\a #\a #\a #\a #\a #\a 0 0)
+      (#*00000000001111111111011111111 T 29 BIT T)
+      #2A((0 0 0 0 0) (0 7 0 0 0))
+      #2A((0 0 0 0 0) (0 0 0 0 0))
   - name: string-literal-write-cross-backend
     source: |
       (defun ci-slit () "abc")
@@ -13668,25 +13707,29 @@ cases:
       (print (length *features*))
       (print (car *features*))
       (print (list #+unicode :unicode #-unicode :octets #+common-lisp :common-lisp))
+      (print (list #+asdf3 :asdf3 (and (find :asdf3.3 *features*) t)))
     expected: |
-      5
+      12
       :RONTOLISP
       (:UNICODE :COMMON-LISP)
+      (:ASDF3 T)
     expectedByBackend:
       # The WASM backends are single-threaded by construction, so :thread-support
       # (declared statically on the interpreter and the JVM, see reader.Features)
       # is absent there.
       wasm: |
-        4
+        11
         :RONTOLISP
         (:UNICODE :COMMON-LISP)
+        (:ASDF3 T)
       # ... and a component carries one MORE than Preview 1: :rontolisp-component,
       # the boundary feature a source guards a core wasm-import with (the reactor
       # features cannot say "not a component" -- a reactor component has them too).
       wasm_component: |
-        5
+        12
         :RONTOLISP
         (:UNICODE :COMMON-LISP)
+        (:ASDF3 T)
   - name: reader-features-own-push-is-visible
     # A source announces a feature about ITSELF -- push in the header, #+ on it
     # below -- and real CL sees it because load/compile-file both go form at a
@@ -29470,11 +29513,41 @@ cases:
       (print (funcall #'concatenate '(vector (unsigned-byte 8)) '(1 260)))
       (print (array-element-type (funcall #'concatenate 'vector '(1))))
       (print (array-element-type (funcall #'concatenate '(simple-vector 1) '(1))))
+      ;; A result type known only when the call runs reads as the literal spelling would
+      ;; (cxml's `(vector ,(array-element-type prev))), deftype aliases included.
+      (defun ci-cc-join (type a b) (concatenate type a b))
+      (defmacro ci-cc-join-string (a b) `(concatenate (if (stringp ,a) 'string 'list) ,a ,b))
+      (deftype ci-cc-octets () '(vector (unsigned-byte 8)))
+      (deftype ci-cc-octets-too () 'ci-cc-octets)
+      (print (ci-cc-join 'string "a" '(#\b)))
+      (print (ci-cc-join 'list "a" #(1)))
+      (print (ci-cc-join-string "x" "y"))
+      (print (array-element-type (ci-cc-join '(vector (unsigned-byte 8)) '(1) #(2))))
+      (print (ci-cc-join `(vector ,(array-element-type "x")) "h" "i"))
+      (print (array-element-type (ci-cc-join 'ci-cc-octets '(1) #(2))))
+      (print (array-element-type (ci-cc-join 'ci-cc-octets-too '(1) #(2))))
+      (print (array-element-type (apply #'concatenate 'ci-cc-octets (list #(1)))))
+      (print (handler-case (ci-cc-join 'integer "a" "b") (error () :refused)))
+      ;; Spelled like such a call, and neither is one.
+      (defun ci-cc-parameter (concatenate x) (list concatenate x))
+      (print (ci-cc-parameter 1 2))
+      (print (let ((concatenate 3)) concatenate))
     expected: |
       (UNSIGNED-BYTE 8)
       #(1 4)
       T
       T
+      "ab"
+      (#\a 1)
+      "xy"
+      (UNSIGNED-BYTE 8)
+      "hi"
+      (UNSIGNED-BYTE 8)
+      (UNSIGNED-BYTE 8)
+      (UNSIGNED-BYTE 8)
+      :REFUSED
+      (1 2)
+      3
   - name: write-sequence-string
     source: |
       (princ (with-output-to-string (s) (write-sequence "abcd" s :start 1 :end 3)))
@@ -30686,6 +30759,78 @@ cases:
       ((:X :EX) (:YY :Y :WHY))
       (8 9)
       (:BARE 3)
+  - name: with-slots-variable-is-shadowed-by-an-inner-binding
+    # A slot variable is a symbol macro: what binds the name again stops it, and what
+    # is no variable (an operator, a case key) never was one. On the compile paths an
+    # inner macro's with-slots of the same slot reached the outer substitution
+    # expanded, and its slot list took the substitution (prove's
+    # with-additional-indent). Agrees with SBCL 2.2.9.
+    source: |
+      (defclass wsv-box () ((x :initarg :x :accessor wsv-x) (count :initarg :count)))
+      (defmacro wsv-inner (box) `(with-slots (x) ,box (list :inner x)))
+      (defmacro wsv-quoted (form) `',form)
+      (let ((a (make-instance 'wsv-box :x 1 :count 2))
+            (b (make-instance 'wsv-box :x 10 :count 20)))
+        (print (with-slots (x) a (list x (with-slots (x) b x) x)))
+        (print (with-slots (x) a (list x (wsv-inner b))))
+        (print (with-slots (x) a (wsv-quoted x)))
+        (print (with-slots (x) a (let ((x 5)) x)))
+        (print (with-slots (x) a (funcall (lambda (x) (+ x 1)) 6)))
+        (print (with-slots (x) a (let ((seen nil)) (dolist (x '(7 8)) (push x seen)) (list x seen))))
+        (print (with-slots (count) a (list count (count 1 '(1 2 1)))))
+        (print (with-slots (x) a (case 'x (x :key) (t :other))))
+        (print (with-accessors ((x wsv-x)) a (list x (with-accessors ((x wsv-x)) b x) (let ((x 9)) x))))
+        (print (with-slots (x) a (setf x 3) (setq x (+ x 1)) x))
+        (print (wsv-x a)))
+    expected: |
+      (1 10 1)
+      (1 (:INNER 10))
+      X
+      5
+      7
+      (1 (8 7))
+      (2 2)
+      :KEY
+      (1 10 9)
+      4
+      4
+  - name: defmacro-inside-a-macro-expanded-locally
+    # hu.dwim.def's (def macro ...): the members of a top-level locally are top-level
+    # forms whoever wrote it.
+    source: |
+      (defmacro dml-define (name)
+        `(locally (declare (optimize speed))
+           (export ',name)
+           (defmacro ,name (x) (list '+ x 1))))
+      (dml-define dml-inc)
+      (print (dml-inc 41))
+    expected: |
+      42
+  - name: instance-type-name-follows-the-current-package
+    # The name an instance leads with is a symbol under prin1 (SBCL 2.2.9 prints the
+    # same names, and no slots in #<...>): prove's own suite matches #<MY-CONDITION
+    # against what its package prints.
+    source: |
+      (defpackage :itn-home (:use :cl) (:export :itn-exported :itn-report))
+      (in-package :itn-home)
+      (defclass itn-own () ())
+      (defclass itn-exported () ())
+      (defstruct itn-struct a)
+      (define-condition itn-cond (error) ())
+      (defun itn-report ()
+        (list (make-instance 'itn-own) (make-instance 'itn-exported) (make-itn-struct :a 1)))
+      (print (itn-report))
+      (print (prin1-to-string (make-condition 'itn-cond)))
+      (defpackage :itn-user (:use :cl :itn-home))
+      (in-package :itn-user)
+      (print (itn-report))
+      (in-package :cl-user)
+      (print (itn-home:itn-report))
+    expected: |
+      (#<ITN-OWN> #<ITN-EXPORTED> #S(ITN-STRUCT :A 1))
+      "#<ITN-COND>"
+      (#<ITN-HOME::ITN-OWN> #<ITN-EXPORTED> #S(ITN-HOME::ITN-STRUCT :A 1))
+      (#<ITN-HOME::ITN-OWN> #<ITN-HOME:ITN-EXPORTED> #S(ITN-HOME::ITN-STRUCT :A 1))
   - name: with-slots-write-through
     source: |
       (defclass ws-pt () ((x :initarg :x) (y :initarg :y)))

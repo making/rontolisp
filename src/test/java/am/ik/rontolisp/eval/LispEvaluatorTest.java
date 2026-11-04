@@ -1035,6 +1035,16 @@ class LispEvaluatorTest {
 				    (format t "~a" 42)))"""));
 		assertThat(result).isEqualTo(new LispString("foo.bar42"));
 		assertThat(baos.toString()).isEmpty();
+		// A binding only a macro's expansion holds (prove's is-print), in an evaluator
+		// that has seen no form spelling one: the scan of a top-level form cannot find
+		// it, and it is dynamic all the same.
+		ByteArrayOutputStream macroBaos = new ByteArrayOutputStream();
+		LispEvaluator macroEvaluator = new LispEvaluator(new PrintStream(macroBaos));
+		macroEvaluator.eval(LispReader
+			.readFromString("(defmacro capture (&body body) `(with-output-to-string (*standard-output*) ,@body))"));
+		assertThat(macroEvaluator.eval(LispReader.readFromString("(capture (princ \"captured\"))")))
+			.isEqualTo(new LispString("captured"));
+		assertThat(macroBaos.toString()).isEmpty();
 	}
 
 	@Test
@@ -27215,12 +27225,13 @@ class LispEvaluatorTest {
 				""").print()).isEqualTo("(42 42 42 42 42 NIL (A B MP-LIB::C :D #:E))");
 		// let-plus's &structure shape: the macro comes from ANOTHER package than the
 		// function body calling it, and the name lands in the package of that body, at
-		// any depth of the body (a closure, a place, a symbol-macrolet) and through a
-		// macro its expansion names. A macro call written in a macro's own body is that
-		// macro package's text.
+		// any depth of the body (a closure, a place, a symbol-macrolet, the macrolet a
+		// macro expands to, walked when it runs: proc-parse's with-octets-parsing around
+		// fast-http's callback-notify) and through a macro its expansion names. A macro
+		// call written in a macro's own body is that macro package's text.
 		assertThat(evalMulti("""
 				(defpackage :mq-lib (:use :cl)
-				  (:export :named :named-via :place :in-own-body :direct))
+				  (:export :named :named-via :place :in-own-body :direct :with-local :with-flet-local))
 				(in-package :mq-lib)
 				(defmacro named (x) (list (intern "HELPER") x))
 				(defmacro named-via (x) (list 'named x))
@@ -27228,6 +27239,9 @@ class LispEvaluatorTest {
 				(defun helper (x) (list :lib x))
 				(defmacro inner-name () (list 'quote (intern "HELPER")))
 				(defmacro in-own-body () (list 'quote (inner-name)))
+				(defmacro with-local (&body body) (list* 'macrolet '((local () 1)) body))
+				(defmacro with-flet-local (&body body)
+				  (list 'flet '((f () 1)) (list* 'macrolet '((local () 1)) body)))
 				(defpackage :mq-app (:use :cl :mq-lib))
 				(in-package :mq-app)
 				(defun helper (x) (list :app x))
@@ -27239,10 +27253,13 @@ class LispEvaluatorTest {
 				(defun place-call (x) (let ((cell (list 0))) (setf (place cell) x) cell))
 				(defun symbol-macro-call (x) (symbol-macrolet ((v x)) (named v)))
 				(defun own-body-call () (in-own-body))
+				(defun local-macro-call (x) (with-local (named x)))
+				(defun flet-local-macro-call (x) (with-flet-local (named x)))
 				(in-package :cl-user)
 				(list (mq-app::direct-call 1) (mq-app::via-call 2) (mq-app::closure-call 3) (mq-app::place-call 4)
-				      (mq-app::symbol-macro-call 5) (symbol-package (mq-app::own-body-call)))
-				""").print()).isEqualTo("((:APP 1) (:APP 2) (:APP 3) (4) (:APP 5) :MQ-LIB)");
+				      (mq-app::symbol-macro-call 5) (symbol-package (mq-app::own-body-call))
+				      (mq-app::local-macro-call 6) (mq-app::flet-local-macro-call 7))
+				""").print()).isEqualTo("((:APP 1) (:APP 2) (:APP 3) (4) (:APP 5) :MQ-LIB (:APP 6) (:APP 7))");
 	}
 
 	@Test

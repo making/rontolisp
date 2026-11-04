@@ -127,20 +127,25 @@ public final class FunctionDesignators {
 
 	/**
 	 * The program with a top-level {@code (function name)} appended for every
-	 * reference-gated built-in only quoted data names ({@link #dataCalledNames}): the
-	 * wrapper gates, and every scan pairing a runtime with a wrapper body, read that
-	 * spelling, so the data symbol reaches the same wrapper {@code #'name} does. A
-	 * {@code car}/{@code cdr} composition needs no runtime of its own and gets no
-	 * reference: its wrapper is injected from {@link #dataCalledNames} itself, so a
-	 * program spelling {@code #'cadr} keeps the inline lambda it always had.
+	 * reference-gated built-in only quoted data names ({@link #dataCalledNames}), and for
+	 * {@code concatenate} when a call computes its result type (the lowering calls the
+	 * wrapper, {@link ConcatenateForms#expand}): the wrapper gates, and every scan
+	 * pairing a runtime with a wrapper body, read that spelling, so these reach the same
+	 * wrapper {@code #'name} does. A {@code car}/{@code cdr} composition needs no runtime
+	 * of its own and gets no reference: its wrapper is injected from
+	 * {@link #dataCalledNames} itself, so a program spelling {@code #'cadr} keeps the
+	 * inline lambda it always had.
 	 */
 	private static List<LispVal> withDataCalledReferences(List<LispVal> program) {
-		Set<String> dataCalled = dataCalledNames(program);
-		if (dataCalled.isEmpty()) {
+		Set<String> wanted = new HashSet<>(dataCalledNames(program));
+		if (program.stream().anyMatch(ConcatenateForms::callsWithComputedResultType)) {
+			wanted.add(LispNames.CONCATENATE);
+		}
+		if (wanted.isEmpty()) {
 			return program;
 		}
 		Set<String> spelled = BuiltinFunctionWrappers.functionValueNames(program);
-		List<String> missing = dataCalled.stream()
+		List<String> missing = wanted.stream()
 			.filter(name -> !LispNames.isCarCdrComposition(name) && !spelled.contains(name))
 			.sorted()
 			.toList();

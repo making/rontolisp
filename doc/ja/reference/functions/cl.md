@@ -31,7 +31,7 @@
 | `write` | `(write "hi" :escape nil)` | `hi` を印字します。各キーワードはその 1 回の出力のあいだ対応する印字制御変数を束縛します |
 | `pprint` `pprint-newline` `pprint-indent` `pprint-tab` | `(pprint-newline :mandatory s)` | 改行するのは `:mandatory` のときだけです。ストリームが桁位置を持たないため折り返しは起きません |
 | `copy-pprint-dispatch` `set-pprint-dispatch` `pprint-dispatch` | `(pprint-dispatch 21 table)` | プリティプリント・ディスパッチテーブル(エントリと検索は実装済み。通常の印字操作は参照しません) |
-| `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"`(`'string` / `'list` / `'vector` の 3 系統。コンパイラはリテラルの引用指定子を要求します) |
+| `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"`(`'string` / `'list` / `'vector` の 3 系統) |
 | `string-upcase` | `(string-upcase "abc")` | `"ABC"`(全 Unicode 対応。各文字に `char-upcase` を適用するため長さは保存されます) |
 | `string-downcase` | `(string-downcase "ABC")` | `"abc"` |
 | `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"`(各単語の最初の文字) |

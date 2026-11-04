@@ -206,6 +206,37 @@ class UserMacroExpanderTest {
 	}
 
 	@Test
+	void aSplicedSystemReplaysAtMacroTimeButNotAComponentItsLoadLeavesUnrun() {
+		// A test file (prove-asdf's load-op only remembers it) is no part of the loaded
+		// system: its forms run when a test asks, never while the program compiles.
+		assertThat(expand("""
+				(%begin-system "lib")
+				(defvar *seen* nil)
+				(setq *seen* (cons :loaded *seen*))
+				(%asdf-component "lib" 0 :deferred)
+				(setq *seen* (cons :deferred *seen*))
+				(%asdf-component-end)
+				(%asdf-component "lib" 1)
+				(setq *seen* (cons :component *seen*))
+				(%asdf-component-end)
+				(%end-system)
+				(defmacro seen () (list 'quote *seen*))
+				(print (seen))
+				""")).isEqualTo("""
+				(%BEGIN-SYSTEM "lib")
+				(DEFVAR *SEEN* NIL)
+				(SETQ *SEEN* (CONS :LOADED *SEEN*))
+				(%ASDF-COMPONENT "lib" 0 :DEFERRED)
+				(SETQ *SEEN* (CONS :DEFERRED *SEEN*))
+				(%ASDF-COMPONENT-END)
+				(%ASDF-COMPONENT "lib" 1)
+				(SETQ *SEEN* (CONS :COMPONENT *SEEN*))
+				(%ASDF-COMPONENT-END)
+				(%END-SYSTEM)
+				(PRINT '(:COMPONENT :LOADED))""");
+	}
+
+	@Test
 	void macroExpandingToDefmacroIsConsumedToo() {
 		// Nested backquote is unsupported, so the generated defmacro is built with
 		// list/quote instead. The second shape is fiveam's def-special-environment: the
@@ -221,6 +252,16 @@ class UserMacroExpanderTest {
 				(def-thrice)
 				(print (thrice 7))
 				""")).isEqualTo("(PRINT (* 2 21))\n(PRINT (* 3 7))");
+		// hu.dwim.def's (def macro ...): the definition inside a locally, the package
+		// directive beside it a top-level form all the same.
+		assertThat(expand("""
+				(defmacro def-in-locally ()
+				  '(locally (declare (optimize speed))
+				     (export 'quadruple)
+				     (defmacro quadruple (x) (list '* 4 x))))
+				(def-in-locally)
+				(print (quadruple 5))
+				""")).isEqualTo("(EXPORT 'QUADRUPLE)\n(PRINT (* 4 5))");
 	}
 
 	@Test

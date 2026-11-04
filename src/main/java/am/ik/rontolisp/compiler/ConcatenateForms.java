@@ -1,6 +1,9 @@
 package am.ik.rontolisp.compiler;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
@@ -13,6 +16,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.PackageRegistry;
@@ -45,9 +49,9 @@ import am.ik.rontolisp.PackageRegistry;
  * cl-postgres' md5 authentication depends on it.
  *
  * <p>
- * The compilers additionally require the result type to be written as a literal quoted
- * designator: the interpreter evaluates it at runtime, a compiler has to resolve it
- * statically.
+ * A result type not written as a literal quoted designator is resolved when the call
+ * runs: the compilers call the {@code #'concatenate} wrapper, which dispatches over the
+ * value, and the interpreter's builtin reads it as it reads any.
  *
  * <p>
  * <b>{@code coerce} shares the packed arms.</b> A result-type designator means the same
@@ -354,9 +358,15 @@ public final class ConcatenateForms {
 		List<LispVal> parts = cons.toList();
 		ResultSpec spec = (parts.size() >= 2) ? literalResultSpec(parts.get(1), closRegistry) : null;
 		if (spec == null) {
+			if (parts.size() >= 2 && isComputed(parts.get(1))) {
+				return new LispCons(new LispSymbol(LispNames.FUNCALL),
+						new LispCons(
+								new LispCons(new LispSymbol(LispNames.FUNCTION),
+										new LispCons(new LispSymbol(LispNames.CONCATENATE), LispNil.INSTANCE)),
+								cons.cdr()));
+			}
 			throw new UnsupportedOperationException(
-					"Cannot compile concatenate: the result type must be a literal quoted 'list, 'vector or 'string "
-							+ "designator");
+					"Cannot compile concatenate: the result type must be a list, vector or string designator");
 		}
 		List<LispVal> args = parts.subList(2, parts.size());
 		return switch (spec.family()) {
@@ -364,6 +374,114 @@ public final class ConcatenateForms {
 			case LIST -> appendedElements(args);
 			case VECTOR -> packedVectorCall(appendedElements(args), spec.elementType());
 		};
+	}
+
+	/**
+	 * The injected wrappers with {@code #'concatenate} reading the program's
+	 * {@code deftype} aliases of a result family: it dispatches over its result type at
+	 * run time, with no registry to ask, so the type first passes through one arm per
+	 * alias, answering the type the alias names. A program with no such alias keeps the
+	 * wrappers as they are.
+	 * @param wrappers the {@code (setq name (lambda ...))} wrapper forms
+	 * @param closRegistry the registry holding the aliases
+	 * @return the wrappers
+	 */
+	public static List<LispVal> wrappersReadingAliases(List<LispVal> wrappers, ClosRegistry closRegistry) {
+		Map<String, LispVal> aliases = new LinkedHashMap<>();
+		for (String name : closRegistry.deftypeNames()) {
+			LispVal expansion = aliasExpansion(name, closRegistry);
+			if (expansion != null) {
+				aliases.put(name, expansion);
+			}
+		}
+		if (aliases.isEmpty()) {
+			return wrappers;
+		}
+		List<LispVal> out = new ArrayList<>(wrappers.size());
+		for (LispVal wrapper : wrappers) {
+			List<LispVal> setq = ((LispCons) wrapper).toList();
+			out.add((setq.size() == 3 && setq.get(1) instanceof LispSymbol name
+					&& LispNames.CONCATENATE.equals(name.name())) ? readingAliases(setq, aliases) : wrapper);
+		}
+		return out;
+	}
+
+	// (setq concatenate (lambda (type . rest) . body)) with the body under
+	// (let ((type (cond ((member type '(SPELLINGS)) 'EXPANSION)... (t type)))) . body).
+	private static LispVal readingAliases(List<LispVal> setq, Map<String, LispVal> aliases) {
+		List<LispVal> lambda = ((LispCons) setq.get(2)).toList();
+		LispVal type = ((LispCons) lambda.get(1)).car();
+		List<LispVal> cond = new ArrayList<>();
+		cond.add(new LispSymbol(LispNames.COND));
+		aliases.forEach((name, expansion) -> cond
+			.add(list(list(new LispSymbol(LispNames.MEMBER), type, quoted(spellings(name))), quoted(expansion))));
+		cond.add(list(LispTrue.INSTANCE, type));
+		List<LispVal> let = new ArrayList<>();
+		let.add(new LispSymbol(LispNames.LET));
+		let.add(list(list(type, list(cond.toArray(LispVal[]::new)))));
+		let.addAll(lambda.subList(2, lambda.size()));
+		return list(setq.get(0), setq.get(1), list(lambda.get(0), lambda.get(1), list(let.toArray(LispVal[]::new))));
+	}
+
+	/** The type an alias finally names, or null when that is no result family. */
+	private static @Nullable LispVal aliasExpansion(String name, ClosRegistry closRegistry) {
+		LispVal current = closRegistry.findDeftype(name);
+		for (int depth = 0; depth < 8 && current != null; depth++) {
+			LispVal head = (current instanceof LispCons spec) ? spec.car() : current;
+			LispVal next = (head instanceof LispSymbol sym) ? closRegistry.findDeftype(sym.name()) : null;
+			if (next == null) {
+				return resultSpec(current, null) != null ? current : null;
+			}
+			current = next;
+		}
+		return null;
+	}
+
+	// A registered name, and the single-colon spelling the run-time intern assembles.
+	private static LispVal spellings(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return (qn != null && qn.internal()) ? list(new LispSymbol(name), new LispSymbol(qn.pkg() + ":" + qn.member()))
+				: list(new LispSymbol(name));
+	}
+
+	private static LispVal quoted(LispVal datum) {
+		return list(new LispSymbol(LispNames.QUOTE), datum);
+	}
+
+	private static LispVal list(LispVal... items) {
+		LispVal out = LispNil.INSTANCE;
+		for (int i = items.length - 1; i >= 0; i--) {
+			out = new LispCons(items[i], out);
+		}
+		return out;
+	}
+
+	/**
+	 * Whether a form holds a {@code concatenate} call whose result type is not written as
+	 * a quoted literal, the case {@link #expand} hands to the {@code #'concatenate}
+	 * wrapper. Reads every cons reachable through car and cdr, so quoted data and a
+	 * binding of that name count: the answer gates a wrapper in, and the shakers remove
+	 * one nothing calls.
+	 * @param form the form to scan
+	 * @return {@code true} when such a call occurs
+	 */
+	static boolean callsWithComputedResultType(LispVal form) {
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op && LispNames.CONCATENATE.equals(op.name())
+					&& cons.cdr() instanceof LispCons args && isComputed(args.car())) {
+				return true;
+			}
+			if (callsWithComputedResultType(cons.car())) {
+				return true;
+			}
+			node = cons.cdr();
+		}
+		return false;
+	}
+
+	private static boolean isComputed(LispVal typeForm) {
+		return unquoted(typeForm) == null;
 	}
 
 	/**

@@ -173,8 +173,8 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
     `NAME.cl` をロードする `:legacy-acl-source-file` を与えます。それ以外の
     `defclass` は実行されます。
   - `defmethod`: 無視されます。システムをロードする手順は固定で、ASDF の総称関数に
-    よって計算されないからです (ライブラリが自身のソースで定義した `asdf:perform`
-    メソッドは実行されます。後述)。ただし
+    よって計算されないからです (ライブラリが自身のソースで定義したメソッドは
+    実行されます。後述)。ただし
     `(defmethod source-file-type ((c CLASS) (s module)) "ext")` だけは例外で、
     ファイル内のどこに書かれていてもそのクラスのファイル拡張子を設定します。
 
@@ -200,7 +200,7 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   ロード対象を決める句では、ファイルを実行しているイメージで評価され
   (`(:file #.*string-file*)` の慣用形は、その上の `defparameter` を読みます)、
   評価に失敗するとファイルと句を名指しするエラーになります。無視されるメタデータ
-  (`:long-description`、`:version`、`:perform` など) では、評価されず、警告もなく
+  (`:long-description`、`:version` など) では、評価されず、警告もなく
   捨てられます。また `:depends-on` のエントリには
   `(:feature EXPR DEP)` を書け (フィーチャ式が成立するときだけ依存が追加されます)、
   `(:version NAME "1.2.3")` も書けます (素の依存として解決されます。バージョン制約は
@@ -225,10 +225,11 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   場合、そのコンポーネントのファイルは除外されますが (ライブラリが CLOS 専用
   ファイルを `(:or :sbcl ...)` の後ろにゲートする方法)、依存順序内の位置は
   維持されます。test-op 配線用のオプションは記録されます:
-  `:in-order-to ((test-op (test-op ...)))` と `:perform (test-op (o c) ...)` は
+  `:in-order-to ((test-op (test-op ...)))` と、`(test-op :after (o c) ...)` とも
+  書ける `:perform (test-op (o c) ...)` は
   [`asdf:test-system`](../reference/functions/asdf-test-system.md) が駆動します
-  (ほかの operation についての `:perform`、修飾子つきの `test-op :after` メソッド、
-  本体中の `#.` は許容されて無視されます)。`:version` の値は ASDF の
+  (本体中の `#.` はファイルを実行しているイメージで読みます。読めない `#.` と、
+  ほかの operation についての `:perform` は許容されて無視されます)。`:version` の値は ASDF の
   `(:read-file-form ...)` 間接参照を含む任意のリテラルフォームで構いません
   (検査されません — 記録されるのは素の文字列だけです)。`:around-compile`、
   `:encoding :utf-8`/`:default`、`:weakly-depends-on` は有効で、`program-op` 用の
@@ -247,8 +248,37 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   その名前、なければパッケージ名を小文字化したものです (`cl` などは除外されます)。
   各ファイルは最初のパッケージ定義フォームまでしか読まれないので、`defpackage` の前に
   よくある `(in-package #:cl-user)` ヘッダがあっても問題ありません。
-  `defpackage`/`uiop:define-package` が 1 つも無いファイルはエラーです。これ以外の `:class` はサポートせず、
+  `defpackage`/`uiop:define-package` が 1 つも無いファイルはエラーです。
   `:components` も併記した package-inferred-system はエラーです。
+- **ロードしたコードが定義するクラス** は、そのクラスとして動作します。
+  `:defsystem-depends-on` のロード後に、`:class`、コンポーネント型、
+  `:default-component-class` を、その時点で存在するクラスから探します。キーワードは
+  `asdf` か現在のパッケージにある同名のシンボルを指し (prove-asdf が名前を import した
+  あとの `(:test-file "t1")`)、文字列は `asdf` の中で読み
+  (`:class "hu.dwim.asdf:hu.dwim.system"`)、それ以外のシンボルはクラス名そのものです。
+  インスタンスについて次のことをクラスが決めます:
+  - どのファイルを指すか: インスタンスに対する `source-file-type` の答えです。メソッド、
+    `(type :initform "coal")` スロット、`:type` の default-initarg のいずれでも指定できます。
+  - ローダーがファイルを読むか: `cl-source-file` のサブクラスは Lisp として読みます。
+    それ以外のクラスのファイル (`:lass-file`) は読まず、クラスのメソッドに任せます。
+  - `asdf:perform` が何をするか: `find-system` と `component-children` はこのクラスの
+    インスタンスを返すので、クラスのメソッドが実行されます。prove-asdf の `load-op` は
+    テストファイルを記憶するだけで、テストが求めたときに `load-source-op` が実行します。
+  - システムのクラスがコンポーネントに与えるもの: `default-component-class` スロットと、
+    default-initarg の `:around-compile` です。定義に書かれていれば定義が優先します。
+
+  システムのインスタンスは、本物の ASDF と同じく作成後に reinitialize されます。
+  定義の文法にないコンポーネントのオプションは initarg になります
+  (`(:lass-file "style" :output "style.css")`)。`.asd` 自身が定義するクラスのメソッドは、
+  ファイル内のほかのメソッドと同じく無視され、インスタンスはファイルの外にある最も近い
+  スーパークラスのものになります。
+
+  コンパイルパスでは、`.asd` を実行するコンパイル時のインタプリタでクラスを探し、
+  同じコードを `:defsystem-depends-on` のスプライスでプログラムにも取り込みます。
+  メソッドが実行されるのはプログラムの中です。そのため `compile-op` のメソッドは
+  プログラムの開始時に実行され、その時点でファイルを読める必要があります。`load-op` が
+  ファイルを読まないコンポーネントのフォームは、コンパイルされますがコンパイル時には
+  実行されず、`load-source-op` を perform するたびに実行されます。
 - 同じシステムの 2 回目のロードは no-op です。循環する `:depends-on` は検出して報告されます
   — 2 つのサブシステムの `defpackage` が互いを指す形で書かれた循環も含みます。
 - コンパイルパスはリテラルなトップレベルの `(asdf:load-system NAME)` を要求します。
@@ -345,7 +375,10 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   という定型句を使います。**これは読み取り時にも働きます**: この定型句が通常書かれる
   形である `#.` フォーム — ソースの読み取り中にファイルを読むもの — は、全バックエンド
   で自分のファイルのロードコンテキストを見ます。ライブラリは隣に同梱したデータファイルを
-  そのまま焼き込めます。
+  そのまま焼き込めます。**実行時にファイルを読むフォームは、コンパイル済みプログラムの
+  起動時に**コンパイル時のパスから読みます。たとえば cxml の `catalog.dtd` がそうで、
+  cxml を含む `.wasm` にはそのディレクトリの事前オープンが必要です
+  (`wasmtime run --dir DIR::DIR`)。
 
 ## 組み込みシムシステム
 
@@ -413,6 +446,7 @@ Preview 1、`--component` を意味します。**特筆事項**列はロード�
 | [cl-dbi](https://github.com/fukamachi/cl-dbi) 0.11.1 (`dbd-postgres` のみ) | インタプリタ、JVM、WASM コンポーネント | データベース非依存インターフェイスを無改変ソースから `(ql:quickload "dbd-postgres")` でロードします: `dbi:connect` (ドライバはロード済みシステム上で解決されます — コンパイルされたプログラムは実行時にシステムをロードできないため、プログラム自身に `ql:quickload` を含める必要があります)、`dbi:do-sql`、`dbi:prepare`/`execute`/`fetch`/`fetch-all`、`dbi:with-transaction` (commit と rollback)、`dbi:connect-cached`、`dbi:disconnect`。`:mysql` と `:sqlite3` ドライバは FFI を要するため存在しません。スレッド対応バックエンドではコネクションキャッシュはスレッド別です (`bt2` シムの実ロックと [`rontolisp:current-thread`](../reference/functions/rontolisp-current-thread.md) 上の `cache/thread.lisp`)。シングルスレッドの WASM バックエンドは upstream 自身のスレッドなしキャッシュを使います。依存の `trivial-garbage` は上記の no-op ファイナライザシムに解決されるので、`dbi:disconnect` を明示的に呼んでください。ソケット制約は postmodern と同じです: Preview 1 WASM は対象外、コンポーネントは `-S tcp=y -S inherit-network=y` が必要です |
 | [mito](https://github.com/fukamachi/mito) 0.2.0 | インタプリタ、JVM、WASM コンポーネント | O/R マッパーを無改変ソースから `(ql:quickload "mito")` でロードします — **システム全体** (`mito-core` + `mito-migration` + `lack-middleware-mito`) が入ります。詳細は[O/R マッピングガイド](mito.md)を参照してください。DAO 層: `connect-toplevel`/`disconnect-toplevel`、`deftable` (静的メタオブジェクトプロトコル上の `dao-table-class` メタクラス — auto-pk `:serial` と `:uuid`、`record-timestamps-mixin` の `created-at`/`updated-at`)、`table-definition`、`ensure-table-exists`、`create-dao`/`insert-dao`/`save-dao`/`delete-dao`、`find-dao`、sxql 句付きの `select-dao`、`object-id`、`retrieve-by-sql`、`execute-sql`。マイグレーション層: `migration-expressions` と `migrate-table` によるクラスと実スキーマの差分は 3 バックエンドすべてで動作し、マイグレーション**ファイル**を扱う `generate-migrations` / `migrate` はインタプリタ + JVM です (WASM バックエンドはディレクトリ作成とファイル削除の呼び出しをインポートしていないため、呼び出し時にエラーになります)。`migrate` は生成された `.sql` を esrap で読み直し、アドバイザリロックは chipz の CRC32 だけを切り出したスライスに乗ります。PostgreSQL のみ (`dbd-postgres` を明示的に quickload する必要があります)。他のメタクラス利用ライブラリと同様、`deftable` はリテラルオプションのトップレベルフォームである必要があります。既知のギャップ (いずれもガイドに記載): `:conc-name` アクセサは生成されません (`slot-value` は動作します)。sxql の SQL 関数オペレータ — `(:count ...)`、したがって `mito:count-dao` — はインタプリタ限定です。次の 2 つは SBCL でも同一に失敗する上流の不具合であり、ギャップではありません: `:col-type` のない `:references` 単独、および `:initform` を持つ NOT NULL カラムの追加。依存の uuid もロードされます (v1/v4 の生成はバックエンド自身のエントロピーを使います)。`dissect` のスタック内省は no-op インターフェイスです。ソケット制約は cl-dbi と同じです: Preview 1 WASM は対象外、コンポーネントは `-S tcp=y -S inherit-network=y` が必要です |
 | [rove](https://github.com/fukamachi/rove) v0.10.0 | 4 つ全て | テスティングフレームワークを無改変ソースから `(ql:quickload "rove")` でロードします。詳細は[テストガイド](testing.md)を参照してください — `deftest`/`testing`/`ok`/`ng`/`signals`/`outputs`/`expands`/`pass`/`fail`/`skip`/`failing`/`setup`/`teardown`/`defhook`/`diag` が `:spec` (デフォルト) と `:dot` レポーターで動作し、エントリポイントも一式動作します: `:package-inferred-system` と素の `defsystem` テストシステムの両方に対する `rove:run`、`run-test`/`run-tests`、テストファイル末尾の `run-suite`。エラーを送出したテスト本体は実行を終わらせず記録された失敗になります (WASM バックエンドでは生トラップ — `(car 1)`、`(/ 1 0)` — は依然として実行を終わらせます)。`rontolisp test TARGET` (あるいは自前ランナー内の `(uiop:quit (if (rove:run ...) 0 1))`) は、どのバックエンドでも結果を CI の終了コードにします。依存の dissect は実ソースからロードされますが、スタック内省は空なので失敗レポートにバックトレースは出ません。またアサーション記述内のシンボルは、SBCL が裸で印字するところをパッケージ修飾付きで印字します — 詳細と実行コマンドはガイドを参照してください |
+| [prove](https://github.com/fukamachi/prove) (Quicklisp 2020-02-18) | 4 つ全て | テスティングフレームワークを無改変ソースからロードします。`(asdf:test-system :prove-test)` は `:test-file` コンポーネントクラスを通じて prove 自身のテストを実行し、SBCL と同じ内容を印字します。`proc-parse-test`、`xsubseq-test`、`myway-test` なども同じように実行できます |
 | [jose](https://github.com/fukamachi/jose) | 4 つ全て | JSON Object Signing and Encryption (JWS/JWT) を無改変ソースから `(ql:quickload "jose")` でロードします — HS256/384/512、RS256/384/512、PS256/384/512、および署名なしの `none` に対する `encode`/`decode`/`inspect-token` と、登録済みクレームの検査 (`iat`/`nbf`/`exp`/`jti` および `:issuer`/`:audience`/`:subject` キーワード)。生成されるトークンは同一ソースでの SBCL とも、Python の `hmac`/`hashlib` ともバイト単位で一致します — HS256 のものは jose の README が掲載しているトークンそのものです。RSA 鍵は ironclad のオブジェクトなので、`ironclad:generate-key-pair :rsa` (あるいは同等のものを返す任意のパーサ) から供給できます。PS512 には 1040 ビット以上の法が必要ですが、これは ironclad 自身のアサーションであり本実装の制約ではありません。期限切れの `exp`、未来の `nbf`、署名検証の失敗はいずれも `cerror` 経由で通知されるため、`continue` する `handler-bind` を置けばそのままデコードできます — そしてこれらを処理するプログラムは WASM 両バックエンドで EH モードでコンパイルされます。上流自身の `jose/tests/jwt` スイートは `rontolisp test` で 4 バックエンドすべて green です。姉妹の `jose/tests/jws` はどの処理系でも実行できません — `(:use #:pem)` しており、`pem` は Quicklisp ディストリビューションに存在しないためです。Quicklisp キャッシュではなく vendored ソースからロードする場合、`--system-path` には**8 つのディレクトリ**が必要です: jose、cl-json、ironclad、cl-base64、split-sequence、assoc-utils、alexandria、trivial-utf-8 |
 | [cffi](https://cffi.common-lisp.dev/) | インタプリタ, JVM | Common Foreign Function Interface — エコシステムのCバインディングがすべて前提にしているライブラリ — を `(ql:quickload "cffi")` で本家のソースそのままロードします。[Cライブラリガイド](cffi.md)を参照。`defcfun`、`foreign-funcall`（可変長引数を含む）、`define-foreign-library`/`use-foreign-library`、`with-foreign-object` + `mem-ref`/`mem-aref`、`defctype`、`defcstruct` + `foreign-slot-value`、`defcallback`、`defcvar`、外部文字列まわり一式が動きます。構造体の**値渡し**は `cffi-libffi` なしで動きます — foreign function API が自分でレイアウトを組むためです。rontolisp が用意するのは `cffi-sys` バックエンド、`cffi.asd` の差し替え、`src/strings.lisp` の代替の3つで、残り11ファイルは本家のソースそのものです。`cffi-grovel` と `cffi-libffi` は中途半端にロードせず**理由を述べて拒否**されます。`java -jar` と、ネイティブバイナリ（登録済みの呼び出しシェイプのグリッドに対して動き、グリッド外のシェイプは登録に必要なメタデータエントリをひとつ名指ししてシグナルします）と、バインディングをクラスの隣に持ち運ぶコンパイル済み `.class`/`.jar` で動きます。どちらの WASM バックエンドにも foreign function API はないため、そちらへのコンパイルは恒久的に拒否されます |
 | [uffi](http://uffi.b9.com/) | インタプリタ, JVM | `(ql:quickload "uffi")` は、cffi 上で同じ API とパッケージを提供する `cffi-uffi-compat` をロードします。cffi 自身の `uffi-compat/uffi.asd` と同じ定義で、本家のソースは読みません。対応バックエンドは cffi と同じです |

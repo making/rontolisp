@@ -10416,6 +10416,13 @@ public final class LispNames {
 	 * with nicknames ({@code LispMacroExpander.injectLocalNicknames}).
 	 */
 	public static final String PRINT_CASED_LOCAL_QUALIFIER_INTERNAL = "%PC-LOCAL-QUALIFIER";
+	/**
+	 * The internal {@code (%pc-instance-text text)} helper (prelude): the {@code prin1}
+	 * text of an instance with the type name it leads with, in {@code #<NAME ...>} or
+	 * {@code #S(NAME ...)}, spelled as {@link #PRINT_CASED_UNQUALIFIED_INTERNAL} spells a
+	 * symbol. The instance leaf of {@link #PRINT_CASED_WALK_INTERNAL}.
+	 */
+	public static final String PRINT_CASED_INSTANCE_TEXT_INTERNAL = "%PC-INSTANCE-TEXT";
 
 	/**
 	 * The internal {@code (%symbol-print-bare-p symbol package-spelling external-p)}

@@ -15,4 +15,4 @@ it, decompresses a deflate stream correctly.
 
 `CffiSystemTest#defcvarReadsAndWritesARealCGlobal` covers the string-named shape. Find whether a
 bare symbol name, or the file order under `asdf`, loses the `define-symbol-macro`
-(`.kb/symbol-macrolet.md`, `.kb/cffi.md`). Consumer: 3bz and pngload on a compiled class, after i12.
+(`.kb/symbol-macrolet.md`, `.kb/cffi.md`). Consumer: 3bz and pngload on a compiled class.

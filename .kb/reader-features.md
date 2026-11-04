@@ -23,6 +23,18 @@ a separate ordinary special seeded from it.
   `src/cruft.lisp`, all `#+ :common-lisp` portable fallbacks of `define-cruft` (without them every
   body was empty and the load died in `(assert (not (null alternatives)))`); no `#-common-lisp`
   anywhere. Pinned by ci-spec `reader-features-variable`.
+- **The ASDF family** (`asdf`, `asdf2`, `asdf3`, `asdf3.1`, `asdf3.2`, `asdf3.3`, `asdf-unicode`,
+  `Features.ASDF`) is in every base set since 2026-11-04: what SBCL 2.2.9's `(require :asdf)` pushes
+  (measured), and ASDF is always loaded here. Measured over the cached Quicklisp tree: hu.dwim.def.asd's
+  `(unless (or #+asdf3 (uiop:version<= ...)) (error ...))` stopped its load, fare-quasiquote.asd and
+  cffi-toolchain.asd have a `#-asdf3 (error ...)`, and prove picks `uiop:` over `asdf::` spellings
+  with it (without it two compile warnings naming undefined functions). `#+asdf` in usocket's real
+  source is not reached (the shim). Guards in the 197 cached releases, for the record: `#+asdf3` 14,
+  `#-asdf3` 13, `#+asdf` 12, `#-asdf` 9, `#+asdf3.1` 7, `#+asdf2` 2. What the features promise was
+  the question: a `#+asdf3` branch may reach a name this ASDF answers with a signalling stub, where
+  `#-asdf3` ran before. Checked: `prove:run` over a directory works with them, and trivial-mimes'
+  `#+(and unix asdf3)` `uiop:run-program` is reachable only where `:unix` is announced. Pinned by the
+  same case, whose counts went up by seven.
 
 ## Target-shape features beside the backend one
 - `WASM_REACTOR` -> `rontolisp-reactor` (`--no-wasi` or `--no-gc`; [[clack]]).

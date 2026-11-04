@@ -22,8 +22,15 @@
   `(%seq-int-vector ... width)` for a packed integer code, `(%seq-float-vector ... code)`
   for a packed float one, `(%seq-string ...)` for CHARACTER, `(coerce ... 'vector)` for
   everything else.
-- The interpreter keeps its Java builtin over the same `resultSpec` and therefore also
-  accepts a COMPUTED result type -- the one deliberate interpreter-only extra.
+- The interpreter keeps its Java builtin over the same `resultSpec`.
+- **A COMPUTED result type** (cxml's `` `(vector ,(array-element-type prev)) ``; refused on the
+  compile paths until 2026-11-04) lowers to `(funcall #'concatenate TYPE ...)`, in `expand`, where
+  the form is known to be a call. The gate is
+  `FunctionDesignators.withDataCalledReferences`, which appends a top-level `#'concatenate` for any
+  cons spelled `(concatenate NOT-A-QUOTE ...)`: a false positive (a parameter of that name) only
+  brings a wrapper the shakers remove. Rewriting the call in that walk instead is not an option, it
+  walks lists without knowing their position. A quoted designator naming no family is still refused
+  at compile time.
 
 ## Packed `(unsigned-byte 8|16|32)` vector results
 ANSI requires the result to BE the requested type, so these build the PACKED representation
@@ -117,8 +124,10 @@ the same calls, because a `(vector character)` result IS a string in CL.
 `'simple-byte-vector`); registry-carrying entry points are `literalResultFamily`, `expand`,
 `needsSeqString`. **Ordering**: the WASM compiler runs that scan AFTER
 `expandTopLevelDefinitions` so the registry is populated. The interpreter builtin is
-re-registered with the evaluator's registry (`Environment.concatenateBuiltin`); the
-`#'concatenate` wrapper is deliberately NOT alias-aware (no registry at run time).
+re-registered with the evaluator's registry (`Environment.concatenateBuiltin`). The
+`#'concatenate` wrapper has no registry at run time, so `wrappersReadingAliases` puts one arm per
+alias of a result family at the head of its lambda; a program with no such alias keeps the wrapper's
+bytes.
 
 ## String family takes any character sequence (`%seq-string`)
 `(concatenate 'string "a" '(#\b #\c) #(#\d) nil "e")` = `"abcde"` on every backend; a
@@ -165,8 +174,8 @@ the scan, and wrapping those would call a helper the gate did not inject.
   `#evalCoerceKeepsThePackedElementType`,
   `#evalCoerceAndConcatenateKeepThePackedFloatElementType`,
   `#evalConcatenateAndCoerceToVectorCharacterBuildAString`.
-- ci-spec `concatenate`; `JvmLispCompilerTest#compileAndRunConcatenate*`,
-  `#compileConcatenateWithComputedResultTypeFails`,
+- ci-spec `concatenate`, `concatenate-as-a-function-value-keeps-the-packed-element-type` (the
+  computed type and its aliases too); `JvmLispCompilerTest#compileAndRunConcatenate*`,
   `#compileAndRunCoerceKeepsThePackedElementType`,
   `#compileAndRunCoerceAndConcatenateKeepThePackedFloatElementType`,
   `#compileAndRunCoerceAndConcatenateToVectorCharacterBuildAString`.

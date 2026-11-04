@@ -31,7 +31,7 @@ page.
 | `write` | `(write "hi" :escape nil)` | Prints `hi`; each keyword binds the matching printer control variable around the one print |
 | `pprint` `pprint-newline` `pprint-indent` `pprint-tab` | `(pprint-newline :mandatory s)` | A newline for `:mandatory` only -- no stream carries a column, so nothing wraps |
 | `copy-pprint-dispatch` `set-pprint-dispatch` `pprint-dispatch` | `(pprint-dispatch 21 table)` | The pretty-print dispatch table (real entries + lookup; the ordinary printing operators do not consult it) |
-| `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"` (`'string` / `'list` / `'vector` result families; the compilers require a literal quoted designator) |
+| `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"` (`'string` / `'list` / `'vector` result families) |
 | `string-upcase` | `(string-upcase "abc")` | `"ABC"` (full-Unicode, and length-preserving: `char-upcase` per character) |
 | `string-downcase` | `(string-downcase "ABC")` | `"abc"` |
 | `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"` (first letter of each word) |

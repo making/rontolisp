@@ -149,6 +149,14 @@ spells a qualifier only when the symbol is NOT accessible in the current `*packa
   `strictStringDesignatorForm` now takes raw `%princ-to-string`; and a `write-to-string` keyword
   that was a program's ONLY binding of a printer variable failed the JVM compile because
   `SpecialVarCollector` never saw the Pass-2 `let`, which it now walks.
+- **An instance's type name is a symbol under `prin1`** (2026-11-04, `%pc-instance-text`, the walk's
+  instance leaf): `#<K>`, `#S(K :A 1)` in `K`'s package, `#<PKG::K>` outside it, as SBCL prints them
+  (no `{address}`; a raw `#<NAME :SLOT value>` otherwise). The name comes off the raw text, so it
+  reaches `%symbol-print-bare-p` as a STRING: the compile paths' correction lists hold only symbols and
+  answer no, leaving the rule, so a class imported into the current package keeps its qualifier there
+  while the interpreter's live answer drops it. prove's own suite matches `#<MY-CONDITION` against this.
+  `princ` stays raw, and slot values inside stay the known gap above. ci-spec
+  `instance-type-name-follows-the-current-package`.
 - A qualifier it keeps is the current package's nickname for the home when it has one (`%pc-qualifier`,
   `.kb/packages.md`, "Package-local nicknames").
 - **Known gap:** the printer only DROPS a qualifier, never ADDS one — a symbol printed where it is

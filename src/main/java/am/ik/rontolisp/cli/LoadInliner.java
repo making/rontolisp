@@ -397,10 +397,13 @@ public final class LoadInliner {
 			if (built == null) {
 				built = LispEvaluator.buildImage(System.err, this.target, ctx.loader(), ctx.systems(),
 						ctx.systemPackages());
+				built.setProgramSystems(ctx.loadedSystems());
 				this.image = built;
 			}
-			// A system a .asd loads is searched for where the compile path searches.
+			// A system a .asd loads is searched for where the compile path searches, and
+			// the way it does.
 			built.setSystemPath(searchDirs);
+			built.setQuickloading(ctx.dists(), ctx.quickloadDepth().get() > 0);
 			return built;
 		}
 
@@ -446,7 +449,18 @@ public final class LoadInliner {
 			if (AsdfSystems.isDefsystemForm(form)) {
 				// Register the system for a later load-system and consume the directive
 				// (like provide). Component paths resolve against this file's directory.
-				AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(form, baseDir, ctx.features());
+				// A class it names, which loaded code defines, is looked up in the build
+				// image, created only for that.
+				AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(form, baseDir, ctx.features(),
+						(designator, definers, ownClasses) -> {
+							List<String> searchDirs = new ArrayList<>(ctx.centralRegistry());
+							searchDirs.add(baseDir == null ? "" : baseDir);
+							searchDirs.addAll(ctx.systemPath());
+							return ctx.buildImage()
+								.image(ctx, searchDirs)
+								.classResolver()
+								.resolve(designator, definers, ownClasses);
+						});
 				ctx.systems().put(system.name(), system);
 				out.add(quotedSymbol(system.name()));
 				continue;
@@ -859,9 +873,15 @@ public final class LoadInliner {
 			List<String> files = system.files();
 			for (int index = 0; index < files.size(); index++) {
 				String file = files.get(index);
-				out.add(SplicedComponentGroups.componentMarker(name, index));
+				AsdfSystems.LoadedClass loaded = system.loadedClasses().components().get(file);
+				out.add(SplicedComponentGroups.componentMarker(name, index, loaded != null && loaded.deferred()));
 				LispVal hook = system.aroundCompile().get(file);
-				if (hook == null) {
+				if (loaded != null && !loaded.lispSource()) {
+					// The class's methods act on this file; no loader reads it. The
+					// bracket
+					// stays, for its actions to be performed.
+				}
+				else if (hook == null) {
 					spliceComponent(system, file, out, systemCtx, List.of());
 				}
 				else {

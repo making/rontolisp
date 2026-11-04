@@ -175,6 +175,8 @@ registry with plain top-level CALLS was invisible (trivia's `(set-vector-matcher
   the first one is allowed: fiveam's `def-special-environment` ends its `(flet () ...)` with
   `',name`). **Trap: a definition left in place compiles to a call of the undefined function
   `DEFMACRO`, and every call site of the macro it should have defined fails at run time.**
+  An expanded top-level `locally` is the `progn` it is (`topLevelLocallyAsProgn`, hu.dwim.def's
+  `(def macro ...)`), as `flattenTopLevel` treats a source's.
   Pinned by `UserMacroExpanderTest#macroExpandingToDefmacroIsConsumedToo`.
 
 `define-compiler-macro` reuses `makeUserMacro`, `&whole`/`&environment` and `expandMacroCall`

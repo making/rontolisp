@@ -13,7 +13,8 @@ render it with one fixed loop.
 
 - `defstruct`: `#S(NAME :SLOT value ...)`. `defclass`/`define-condition`: `#<NAME :SLOT value ...>`.
   Slot-less: `#S(EMPTY)` / `#<EMPTY>`. `NAME` is the type name as spelled, keeping a package
-  qualifier (`GEO::PT`).
+  qualifier (`GEO::PT`), which `prin1` drops where the name is accessible
+  ([pretty-printer.md](pretty-printer.md), "The package qualifier").
 - A third layout kind `PATHNAME` is the ONE fixed layout of the pathname value (`.kb/pathnames.md`):
   `#P"namestring"` under `prin1`, bare namestring under `princ` — a per-kind arm in all three printer
   loops, never the slot-name syntax. Seeded layout-only (never in `classes()`, never a struct tag,

@@ -5,8 +5,8 @@ into a `progn` with every FREE reference replaced -- one walk (`substituteSymbol
 the interpreter, the JVM and both WASM backends. **Do NOT add per-backend symbol-macro handling.**
 Consumers: trivia `match`, dbi `driver.lisp`, mito `core/type.lisp`.
 
-- **Shadow-aware**, unlike the lite `substituteSymbols` behind `with-slots` (do not merge that
-  behavior in). Every binder removes its names for its scope.
+- **Shadow-aware**: every binder removes its names for its scope. `with-slots`/`with-accessors` run
+  the same walk when they expand ([clos.md](clos.md)).
 - **Data positions kept verbatim**: quote, declares, `#'name`, call heads, `case`/`typecase` keys,
   `go` tags, `block` names, `tagbody` atom tags, type tails, `eval-when` situations,
   `defmacro`/`macrolet` bodies, and the `defclass`/`defstruct`/`defgeneric`/`deftype`/
@@ -19,6 +19,8 @@ Consumers: trivia `match`, dbi `driver.lisp`, mito `core/type.lisp`.
   from `rareOperatorExpansion`, out of `evalCons`'s hot table, `LispEvaluatorHotMethodSizeTest`) does
   it once per call site, in the memo of `expandUserMacro`, in the package the code was read in.
   A macrolet in the body so expands before the walk (a local macro's `'s` used to stay unbound).
+  `with-slots`/`with-accessors` take the same arm (`expandSlotVariables`), so a macro in the body sees
+  the slot name, not the substituted `(slot-value ...)`.
 - Wiring: evaluator case, `Jvm/WasmExprCompiler.compileCons`, `FreeVarAnalyzer`,
   `rewriteLocalCalls`, `expandBuiltinMacro`.
 - Lite: `defmethod` `&optional`/`&key` defaults are unwalked; a special-variable name is substituted
@@ -50,8 +52,8 @@ is never referenced, only stored into by one macro and read by a later one).
   helper a macro calls before the macro-time evaluator sees it. It stays a call, and the prelude
   defun answers the symbol at run time.
 - Lite: `macrolet` macros stay a dynamic table, visible through a nil environment too; a
-  `with-slots`/`with-accessors` name is shadowed by nothing and not in the table (they run
-  `substituteSymbols`); `get-setf-expansion` ignores the environment; `JavaDeclarations`' pre-pass
+  `with-slots`/`with-accessors` name is not in the table (they expand after `expandAll` has walked
+  past them); `get-setf-expansion` ignores the environment; `JavaDeclarations`' pre-pass
   over a `java:` program expands macros with a nil environment.
 
 ## `define-symbol-macro` (global)

@@ -119,9 +119,8 @@ verification against the actual Quicklisp dist at probe time)
     by a run-time `do-external-symbols` loop, 386); both WASM backends trap in `parse` (h63).
   - `log4cl` -- `makunbound` (h32), then bt `thread-name` / semaphores (h37), then its deprecated
     forwarders' `(setf (macro-function ...) (lambda ...))` (i03). It loads and logs on the
-    interpreter. Compiled, it stops on a `with-slots` nested in one of the same slot name, which
-    fails on all four backends (the inner binding list is substituted, `WITH-SLOTS expects slot
-    names or (var slot) pairs`): `(with-slots (x) p (with-slots (x) q x))`. Measured 2026-11-04.
+    interpreter. Compiled to a class, it stops on a closure over a `handler-case` clause variable
+    (i35). Measured 2026-11-04.
   - `parachute` compiled stops on `fixture.lisp:31`, `(setf (macro-function symbol) value)` in a
     function body: `setf MACRO-FUNCTION must be a top-level form in a compiled program`. Measured
     2026-11-04. A run-time write has nothing to write to. Signalling at the call would break a

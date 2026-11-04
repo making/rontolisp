@@ -38,6 +38,9 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.IntStream;
+
+import static java.util.stream.Collectors.joining;
 
 import am.ik.rontolisp.FastPathEvaluationOrderFixture;
 import am.ik.rontolisp.LispVal;
@@ -2334,6 +2337,31 @@ class JvmLispCompilerTest {
 		String source = "(print (length '(%s))) (print (car '(%s))) (print (nth 399 '(%s)))".formatted(items, items,
 				items);
 		assertThat(compileAndRun(source)).isEqualTo("400\n0\n399");
+	}
+
+	@Test
+	void anArrayLiteralOfAnyFamilyIsHeldToNoMethodLimit() throws Exception {
+		// One store per element put a table past 65535 bytes at around 8,000 elements:
+		// cxml's two 55,296-bit name tables were 497,828 bytes each. The numbers change
+		// at every element, so no run shortens them; the bit table is mostly runs.
+		String numbers = IntStream.range(0, 12000).mapToObj(i -> Integer.toString(i % 100)).collect(joining(" "));
+		String floats = IntStream.range(0, 12000).mapToObj(i -> (i % 100) + ".5").collect(joining(" "));
+		String bits = "01".repeat(6000) + "0".repeat(21000) + "1".repeat(22296);
+		String source = """
+				(defun show (a) (print (list (length a) (aref a 11999))))
+				(defun general () '#(%1$s))
+				(print (eq (general) (general)))
+				(show (general))
+				(show #(%1$s))
+				(show '#*%2$s)
+				(show '#8@(%1$s))
+				(show #32@(%1$s))
+				(show #f(%3$s))
+				(show #d(%3$s))
+				(show #bf16(%3$s))
+				""".formatted(numbers, bits, floats);
+		assertThat(compileAndRun(source).lines().toList()).containsExactly("T", "(12000 99)", "(12000 99)", "(55296 1)",
+				"(12000 99)", "(12000 99)", "(12000 99.5)", "(12000 99.5)", "(12000 99.5)");
 	}
 
 	@Test
@@ -7126,13 +7154,6 @@ class JvmLispCompilerTest {
 		// interpreter answers. Each of these used to be "The function NAME is
 		// undefined" on all four backends.
 		assertThat(compileAndRun(LoweredBuiltinValues.PROGRAM)).isEqualTo(LoweredBuiltinValues.OUTPUT);
-	}
-
-	@Test
-	void compileConcatenateWithComputedResultTypeFails() {
-		assertThatThrownBy(() -> compileAndRun("(let ((ty 'string)) (princ (concatenate ty \"a\" \"b\")))"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("literal quoted");
 	}
 
 	@Test

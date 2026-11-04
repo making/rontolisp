@@ -31,9 +31,10 @@ This is the standard entry point fukamachi-style `.asd`s ship:
 
 The body is recorded as data when the `.asd` is parsed; its bare symbols
 resolve the way `asdf-user` would resolve them (`symbol-call` is
-`uiop:symbol-call`, `component-name` is `asdf:component-name`). A `:perform`
-with a method qualifier (`test-op :after (o c)`), one for another operation, or
-a `#.` reader macro in its body is tolerated and ignored.
+`uiop:symbol-call`, `component-name` is `asdf:component-name`), and a `#.`
+reader macro in it reads in the image the `.asd` runs in. `test-op :after (o c)`
+is recorded the same way, since ASDF's own method does nothing. A `:perform` for
+another operation, or a `#.` the image cannot read, is tolerated and ignored.
 
 ## Backend support
 

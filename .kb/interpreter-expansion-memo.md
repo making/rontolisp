@@ -14,7 +14,8 @@ compile-time-constant flags.**
 - `setf` — user `defsetf`/`define-setf-expander`, user macro places, `(setf (macro-function ...))`
 - `print`, `princ`, `prin1`, `princ-to-string`, `prin1-to-string`, `write-to-string`,
   `%princ-piece`, `%prin1-piece` — `print-object` routing, live `*print-case*`
-- `flet`, `labels` (`preExpandLocalMacros`), `symbol-macrolet` — live user-macro table
+- `flet`, `labels` (`preExpandLocalMacros`), `symbol-macrolet`, `with-slots`, `with-accessors` — live
+  user-macro table (the last three memoize in `userMacroExpansions`, which drops with it)
 - `read`, `floor`/`ceiling`/`round`/`truncate`, `reduce`, `sort` — partial (nullable) lowerings
 - the multiple-value consumers (`multiple-value-bind`/`-list`/`-call`/`-setq`/`-prog1`,
   `nth-value`) and lambda tails, ONLY once the program methods a producer — the methoded set

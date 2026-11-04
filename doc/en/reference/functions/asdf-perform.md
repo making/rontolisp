@@ -53,5 +53,7 @@ definition, and in a program that defines no method, a component's forms run
 in sequence as they always do. A method on a compiled backend applies from
 program start (method dispatch is static there), so a component loaded between
 two method definitions sees both. `--no-gc` refuses a program that would need
-such a unit. Performing `load-op` on a component at run time anywhere else
-signals on the compiled backends, like a run-time `load-system`.
+such a unit. Such a component can be performed again at run time, with `load-op`
+or `load-source-op`, and its forms run again; performing either on a component
+spliced before the first method definition signals on the compiled backends,
+like a run-time `load-system`.

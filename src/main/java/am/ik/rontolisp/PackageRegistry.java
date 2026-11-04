@@ -378,29 +378,30 @@ public final class PackageRegistry {
 			LispNames.UNESCAPED_SYMBOL_TEXT_INTERNAL, LispNames.PRINT_CASED_WALK_INTERNAL,
 			LispNames.PRINT_CASED_ON_PATH_INTERNAL, LispNames.PRINT_CASED_CHAIN_STOP_INTERNAL,
 			LispNames.PRINT_RADIXED_INTERNAL, LispNames.PRINT_IN_BASE_INTERNAL,
-			LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL, LispNames.SYMBOL_PRINT_BARE_P_INTERNAL,
-			LispNames.PRINT_PACKAGE_RAW_P_INTERNAL, LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL,
-			LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL, LispNames.PRINT_CASED_QUALIFIER_INTERNAL,
-			LispNames.PRINT_CASED_LOCAL_QUALIFIER_INTERNAL, LispNames.LOCAL_NICKNAME_ADD_INTERNAL,
-			LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL, LispNames.PACKAGE_LOCAL_NICKNAMES_INTERNAL,
-			LispNames.LOCAL_NICKNAMES_VAR_INTERNAL, LispNames.LOCAL_NICKNAME_PUT_INTERNAL,
-			LispNames.LOCAL_NICKNAME_DEFINE_INTERNAL, LispNames.LOCAL_NICKNAME_TARGET_INTERNAL,
-			LispNames.LOCAL_NICKNAME_FIND_INTERNAL, LispNames.FIND_PACKAGE_GLOBAL_INTERNAL,
-			LispNames.READ_THROUGH_LOCAL_NICKNAMES_INTERNAL, LispNames.READ_THROUGH_LOCAL_NICKNAME_WALK_INTERNAL,
-			LispNames.LOCAL_NICKNAMES_IN_P_INTERNAL, LispNames.LOCAL_NICKNAME_BEFORE_INTERNAL,
-			LispNames.LOCAL_NICKNAMES_MOVING_INTERNAL, LispNames.HOST_GETENV, LispNames.HOST_GETCWD,
-			LispNames.HOST_EXIT, LispNames.HOST_ARGV, LispNames.GETENV_OVERRIDE, LispNames.GETENV_OVERRIDE_SET,
-			LispNames.NSTRING_REPLACE, LispNames.TARGET_MACHINE_TYPE, LispNames.LOCAL_TIME_OFFSET,
-			LispNames.LOCAL_ZONE_INTERNAL, LispNames.RUNTIME_PACKAGES_INTERNAL, LispNames.BAKED_PACKAGES_INTERNAL,
-			LispNames.DO_SYMBOLS_LIST_INTERNAL, LispNames.BAKED_PACKAGE_FIND_INTERNAL,
-			LispNames.RUNTIME_PACKAGE_FIND_INTERNAL, LispNames.PACKAGE_SYMBOLS_WHERE_INTERNAL,
-			LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL, LispNames.BAKED_IMPORT_REDIRECT_INTERNAL,
-			LispNames.SPLIT_PACKED_INTERNAL, LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL,
-			LispNames.RUNTIME_MEMBER_FIND_INTERNAL, LispNames.RUNTIME_MEMBER_STATUS_INTERNAL,
-			LispNames.RUNTIME_MEMBER_INTERN_INTERNAL, LispNames.RUNTIME_EXTERNAL_FIND_INTERNAL,
-			LispNames.RUNTIME_PACKAGE_OP_INTERNAL, LispNames.CHECK_BOUNDS_INTERNAL, LispNames.PRINC_PIECE_INTERNAL,
-			LispNames.PRIN1_PIECE_INTERNAL, LispNames.FMT_RENDER, LispNames.STRICT_MATH_INTERNAL,
-			LispNames.REGISTER_COMPILED_TEMPLATE, LispNames.TEMPLATE_HOLE, LispNames.TEMPLATE_GENSYM);
+			LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL, LispNames.PRINT_CASED_INSTANCE_TEXT_INTERNAL,
+			LispNames.SYMBOL_PRINT_BARE_P_INTERNAL, LispNames.PRINT_PACKAGE_RAW_P_INTERNAL,
+			LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL,
+			LispNames.PRINT_CASED_QUALIFIER_INTERNAL, LispNames.PRINT_CASED_LOCAL_QUALIFIER_INTERNAL,
+			LispNames.LOCAL_NICKNAME_ADD_INTERNAL, LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL,
+			LispNames.PACKAGE_LOCAL_NICKNAMES_INTERNAL, LispNames.LOCAL_NICKNAMES_VAR_INTERNAL,
+			LispNames.LOCAL_NICKNAME_PUT_INTERNAL, LispNames.LOCAL_NICKNAME_DEFINE_INTERNAL,
+			LispNames.LOCAL_NICKNAME_TARGET_INTERNAL, LispNames.LOCAL_NICKNAME_FIND_INTERNAL,
+			LispNames.FIND_PACKAGE_GLOBAL_INTERNAL, LispNames.READ_THROUGH_LOCAL_NICKNAMES_INTERNAL,
+			LispNames.READ_THROUGH_LOCAL_NICKNAME_WALK_INTERNAL, LispNames.LOCAL_NICKNAMES_IN_P_INTERNAL,
+			LispNames.LOCAL_NICKNAME_BEFORE_INTERNAL, LispNames.LOCAL_NICKNAMES_MOVING_INTERNAL,
+			LispNames.HOST_GETENV, LispNames.HOST_GETCWD, LispNames.HOST_EXIT, LispNames.HOST_ARGV,
+			LispNames.GETENV_OVERRIDE, LispNames.GETENV_OVERRIDE_SET, LispNames.NSTRING_REPLACE,
+			LispNames.TARGET_MACHINE_TYPE, LispNames.LOCAL_TIME_OFFSET, LispNames.LOCAL_ZONE_INTERNAL,
+			LispNames.RUNTIME_PACKAGES_INTERNAL, LispNames.BAKED_PACKAGES_INTERNAL, LispNames.DO_SYMBOLS_LIST_INTERNAL,
+			LispNames.BAKED_PACKAGE_FIND_INTERNAL, LispNames.RUNTIME_PACKAGE_FIND_INTERNAL,
+			LispNames.PACKAGE_SYMBOLS_WHERE_INTERNAL, LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL,
+			LispNames.BAKED_IMPORT_REDIRECT_INTERNAL, LispNames.SPLIT_PACKED_INTERNAL,
+			LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL, LispNames.RUNTIME_MEMBER_FIND_INTERNAL,
+			LispNames.RUNTIME_MEMBER_STATUS_INTERNAL, LispNames.RUNTIME_MEMBER_INTERN_INTERNAL,
+			LispNames.RUNTIME_EXTERNAL_FIND_INTERNAL, LispNames.RUNTIME_PACKAGE_OP_INTERNAL,
+			LispNames.CHECK_BOUNDS_INTERNAL, LispNames.PRINC_PIECE_INTERNAL, LispNames.PRIN1_PIECE_INTERNAL,
+			LispNames.FMT_RENDER, LispNames.STRICT_MATH_INTERNAL, LispNames.REGISTER_COMPILED_TEMPLATE,
+			LispNames.TEMPLATE_HOLE, LispNames.TEMPLATE_GENSYM);
 
 	/**
 	 * The standard lambda-list keywords: {@code cl}'s symbols, read as such in every
@@ -1191,11 +1192,13 @@ public final class PackageRegistry {
 		// A limited, API-compatible subset of ASDF (.asd files run as Lisp, their
 		// defsystem forms parsed as data -- see eval.AsdfSystems; the runtime component
 		// metaobject family lives in Lisp source, eval.AsdfRuntimeLibrary / asdf.lisp).
-		// Does not use cl. The surface is the inventory (AsdfExports, measured against
-		// SBCL 2.2.9's ASDF 3.3.1): asdf exports what asdf/interface exports and owns
-		// every member homed in an asdf/* package, so asdf::relative-pathname and
-		// asdf/component:relative-pathname are one symbol; a member homed in uiop/* is
-		// uiop's symbol. The sub-packages redirect every member they export.
+		// It uses cl, as real ASDF's does: a library extends ASDF from (in-package :asdf)
+		// (coalton-asdf's classes, so its keyword finds them). The surface is the
+		// inventory (AsdfExports, measured against SBCL 2.2.9's ASDF 3.3.1): asdf exports
+		// what asdf/interface exports and owns every member homed in an asdf/* package,
+		// so asdf::relative-pathname and asdf/component:relative-pathname are one symbol;
+		// a member homed in uiop/* is uiop's symbol. The sub-packages redirect every
+		// member they export.
 		Map<String, String> asdfImports = new HashMap<>();
 		Set<String> asdfSymbols = new HashSet<>(AsdfExports.owned());
 		AsdfExports.externals().forEach((name, entry) -> {
@@ -1204,8 +1207,8 @@ public final class PackageRegistry {
 				asdfImports.put(name, entry.home());
 			}
 		});
-		define(new LispPackage(LispNames.ASDF_PKG, List.of(), asdfSymbols, Set.copyOf(AsdfExports.externals().keySet()),
-				Map.copyOf(asdfImports)));
+		define(new LispPackage(LispNames.ASDF_PKG, List.of(LispNames.CL_PKG), asdfSymbols,
+				Set.copyOf(AsdfExports.externals().keySet()), Map.copyOf(asdfImports)));
 		AsdfExports.subPackages().forEach((subPackage, members) -> {
 			Map<String, String> redirects = new HashMap<>();
 			members

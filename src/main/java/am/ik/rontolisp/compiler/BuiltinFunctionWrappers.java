@@ -2390,7 +2390,8 @@ public final class BuiltinFunctionWrappers {
 	// spec like '(vector (unsigned-byte 8))). Every family accepts any sequence argument,
 	// exactly like the call-position lowering: the string family normalizes each argument
 	// before the %string-concat fold, the list / vector families walk elements through
-	// (coerce x 'list). An unsupported designator signals, matching the interpreter.
+	// (coerce x 'list). An unsupported designator signals, matching the interpreter. A
+	// deftype alias reaches here resolved (ConcatenateForms.wrappersReadingAliases).
 	private static WrapperDef concatenateWrapper() {
 		LispSymbol head = new LispSymbol("__cc_head");
 		LispVal headOfSpec = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.CONSP, "type"),
