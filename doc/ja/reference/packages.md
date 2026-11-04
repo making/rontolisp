@@ -104,9 +104,11 @@ Lisp との相違が1点あります: 最初に名前が現れた後で export �
 したシンボル — には修飾子を付けず、それ以外は `pkg:name` / `pkg::name` と
 印字します。`princ`/`~A` は修飾子を印字しません。したがって下の `helper` は
 `(in-package :mypkg)` の下では `HELPER`、`cl-user` からは `MYPKG::HELPER` と
-印字されます。未対応が1点あります: `cl-user` のシンボルや標準シンボルを、
-アクセスできないパッケージから印字しても `COMMON-LISP-USER::name` /
-`COMMON-LISP:name` ではなく修飾子なしで印字されます。
+印字されます。標準シンボルは、その名前を別のシンボルとして読むパッケージからは
+`COMMON-LISP:name` と、`cl-user` のシンボルは `cl-user` の外からは
+`COMMON-LISP-USER::name` と印字されます。コンパイルパスには未対応が1点あります:
+計算された名前で intern した `cl-user` のシンボルのうちプログラムのどのフォームにも
+現れないものは、修飾子なしで印字されます。
 
 ## ユーザー定義パッケージ(defpackage)
 

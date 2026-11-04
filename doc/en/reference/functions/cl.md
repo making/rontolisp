@@ -161,7 +161,7 @@ page.
 | `find-package` | `(find-package :cl)` | `:cl` -- lite: the upcased package name as a keyword (no package objects), `nil` when unknown (the compilers answer a computed designator from a table baked in at compile time) |
 | `symbol-name` | `(symbol-name 'foo)` | `"FOO"` -- symbols read upcased like CL, so `(symbol-name 'car)` is `"CAR"` too |
 | `symbol-package` | `(symbol-package :foo)` | `:keyword` -- the same keyword shape `find-package` returns (`:cl` for standard symbols, `t` and `nil` included, `:cl-user` otherwise, `nil` for `#:` symbols and for a symbol `unintern` removed from its home) |
-| `package-name` | `(package-name (find-package :cl-user))` | `"CL-USER"` -- the name string of a package designator, resolved through `find-package`; an unknown designator signals |
+| `package-name` | `(package-name (find-package :cl-user))` | `"COMMON-LISP-USER"` -- the name string of a package designator, resolved through `find-package`; an unknown designator signals |
 | `package-use-list` | `(package-use-list :cl-user)` | `(:CL)` -- the packages a package uses, as `find-package` keywords; an unknown designator signals |
 | `package-used-by-list` | `(package-used-by-list :cl)` | The inverse: every package whose use list names this one |
 | `package-shadowing-symbols` | `(package-shadowing-symbols :cl-user)` | `nil` -- the package's shadowing symbols (the `defpackage` `:shadow` / `:shadowing-import-from` names plus what `shadow` / `shadowing-import` added), in name order; the designator is validated |
@@ -172,7 +172,7 @@ page.
 | `delete-package` | `(delete-package :mypkg)` | `t` -- drop a `make-package` product; a read/compile-time package or unknown designator signals a `package-error` |
 | `rename-package` | `(rename-package :mypkg :new :nick)` | Rename a `make-package` product, replacing its nicknames; the same failures signal |
 | `packagep` | `(packagep :cl)` | `t` for a designator naming a registered package, `nil` otherwise -- never signals |
-| `package-nicknames` | `(package-nicknames :cl)` | `("COMMON-LISP")` -- the nickname strings, sorted; an unknown designator signals a `package-error` |
+| `package-nicknames` | `(package-nicknames :cl)` | `("CL")` -- the nickname strings, sorted; an unknown designator signals a `package-error` |
 | `find-all-symbols` | `(find-all-symbols 'car)` | `(CAR)` -- every distinct symbol of that name accessible anywhere, spelled the way code spells it |
 | `apropos-list` | `(apropos-list "CAR" :cl)` | `(CAR MAPCAR)` -- substring search (case-insensitive) over the same universe |
 | `apropos` | `(apropos "CAR" :cl)` | Print each match and return `nil` |

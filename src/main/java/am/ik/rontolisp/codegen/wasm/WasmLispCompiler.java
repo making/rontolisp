@@ -3628,6 +3628,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		am.ik.rontolisp.macro.BakedSymbolAccess symbolAccess = am.ik.rontolisp.macro.BakedSymbolAccess
 			.of(packageResolver);
 		program = LispMacroExpander.injectBakedAccess(program, symbolAccess);
+		program = LispMacroExpander.injectPrintStandardNames(program, symbolPrintTable);
 		// The computed find-package lookup, once per program: its sites call it instead
 		// of building the baked table each (LispMacroExpander.injectFindPackageHelper).
 		// What the program asks of its package-local nicknames when it runs goes to a

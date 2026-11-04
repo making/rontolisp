@@ -4082,6 +4082,77 @@ cases:
       (18 NIL 20)
       (NIL T)
       ((:OWN 22) (:REST 23) 24 CI-NOCL::LIST)
+  - name: a-bare-symbol-prints-qualified-where-the-package-reads-another
+    source: |
+      ;; A cl symbol and a cl-user one under a package reading that name as something
+      ;; else: two different symbols never print alike, and what is printed reads back.
+      ;; A name no form spells goes by what the package reads (SYMBOL, CDR, NIL). SBCL
+      ;; prints all of this.
+      (defpackage :csq-none (:use) (:import-from :cl #:cons))
+      (defpackage :csq-shadow (:use :cl) (:shadow #:car))
+      (defpackage :csq-plain (:use :cl))
+      (defpackage :csq-reexport (:use :cl) (:export #:car #:list #:nil #:t #:print #:type-of #:cdr #:symbol))
+      (defpackage :csq-via (:use :csq-reexport))
+      (defpackage :csq-nick (:use) (:local-nicknames (#:c #:cl)))
+      (defun csq-symbol () 'csq-home-symbol)
+      (defstruct csq-home-struct a)
+      (print (list (package-name :cl) (package-name :cl-user) (package-name (symbol-package 'car))
+                   (package-nicknames :cl) (package-nicknames :cl-user)))
+      (print (list 'car 'cl:car nil t 'csq-home-symbol))
+      (cl:in-package :csq-none)
+      (cl:print (cl:list 'car 'cl:car cl:nil cl:t 'cons))
+      (cl:print cl:nil)
+      (cl:print 'cl-user::csq-home-symbol)
+      (cl:print (cl-user::csq-symbol))
+      (cl:print (cl:list (cl:find-symbol "CDR" :cl) (cl:type-of 'cl:car)))
+      (cl:print (cl:prin1-to-string 'cl:car))
+      (cl:print (cl:format cl:nil "~S ~A" 'cl:car 'cl:car))
+      (cl:print (cl:let ((cl:*print-case* :downcase)) (cl:prin1-to-string 'cl:car)))
+      (cl:print (cl:read-from-string (cl:prin1-to-string 'cl:car)))
+      (cl:print (cl:eq (cl:read-from-string (cl:prin1-to-string 'cl:car)) 'cl:car))
+      (cl:print (cl:let ((cl:*package* (cl:find-package :cl-user))) (cl:prin1-to-string (cl:list 'cl:car 'car))))
+      (cl:in-package :csq-shadow)
+      (print (list 'car 'cl:car 'cdr (find-symbol "CAR" :cl)))
+      (print 'cl-user::csq-home-symbol)
+      (print (cl-user::make-csq-home-struct :a 1))
+      (cl:in-package :csq-plain)
+      (print (list 'car 'cl:car 'plain 'cl-user::csq-home-symbol nil t))
+      (print (cl-user::make-csq-home-struct :a 1))
+      (print (type-of (cl-user::make-csq-home-struct :a 1)))
+      (print (eq (type-of (cl-user::make-csq-home-struct :a 1)) 'cl-user::csq-home-struct))
+      (cl:in-package :csq-via)
+      (print (list 'car 'cl:car 'cl:cdr nil t (type-of 'car)))
+      (cl:in-package :csq-nick)
+      (c:print (c:list 'c:car 'car 'cl-user::csq-home-symbol))
+      (c:in-package :cl-user)
+      (print (list 'car 'csq-none::car 'csq-home-symbol))
+      (print (list (eq (read-from-string "cl:car") 'car) (eq (read-from-string "common-lisp-user::csq-home-symbol") 'csq-home-symbol)
+                   (read-from-string "common-lisp:nil") (read-from-string "cl-user::t")))
+    expected: |
+      ("COMMON-LISP" "COMMON-LISP-USER" "COMMON-LISP" ("CL") ("CL-USER"))
+      (CAR CAR NIL T CSQ-HOME-SYMBOL)
+      (CAR COMMON-LISP:CAR COMMON-LISP:NIL COMMON-LISP:T CONS)
+      COMMON-LISP:NIL
+      COMMON-LISP-USER::CSQ-HOME-SYMBOL
+      COMMON-LISP-USER::CSQ-HOME-SYMBOL
+      (COMMON-LISP:CDR COMMON-LISP:SYMBOL)
+      "COMMON-LISP:CAR"
+      "COMMON-LISP:CAR CAR"
+      "common-lisp:car"
+      COMMON-LISP:CAR
+      COMMON-LISP:T
+      "(CAR CSQ-NONE::CAR)"
+      (CAR COMMON-LISP:CAR CDR COMMON-LISP:CAR)
+      COMMON-LISP-USER::CSQ-HOME-SYMBOL
+      #S(COMMON-LISP-USER::CSQ-HOME-STRUCT :A 1)
+      (CAR CAR PLAIN COMMON-LISP-USER::CSQ-HOME-SYMBOL NIL T)
+      #S(COMMON-LISP-USER::CSQ-HOME-STRUCT :A 1)
+      COMMON-LISP-USER::CSQ-HOME-STRUCT
+      T
+      (CAR CAR CDR NIL T SYMBOL)
+      (C:CAR CAR COMMON-LISP-USER::CSQ-HOME-SYMBOL)
+      (CAR CSQ-NONE::CAR CSQ-HOME-SYMBOL)
+      (T T NIL T)
   - name: expansion-time-read-homes-in-the-macro-package
     source: |
       ;; cl-pdf's AFM parser names each reader with read-from-string at EXPANSION
@@ -4634,7 +4705,7 @@ cases:
       NIL
       :CI-PQL
       (:CL)
-      ("CL" "CI-IMP-SRC")
+      ("COMMON-LISP" "CI-IMP-SRC")
       (:MINE 1)
       (LET)
   # The runtime-tier package API: make-package / delete-package /
@@ -17938,7 +18009,7 @@ cases:
       (:CI-UP :CL)
       T
       "CI-UP--3"
-      (DEFPACKAGE "CI-UP" (:USE "CL") (:EXPORT "UP-FOO"))
+      (DEFPACKAGE "CI-UP" (:USE "COMMON-LISP") (:EXPORT "UP-FOO"))
       (T T 42)
       (("CI-UP-NICK" . :CI-UP))
       (T T)
@@ -20891,7 +20962,7 @@ cases:
       (NIL M G)
       (2 3 4)
       (2 3 4)
-      "CL-USER"
+      "COMMON-LISP-USER"
       "KEYWORD"
       :FROM-OWNER
       (T T)
@@ -32500,7 +32571,7 @@ cases:
       T
       NIL
       NIL
-      ("CL" "COMMON-LISP")
+      ("COMMON-LISP" "CL")
       (:CL :CL-USER)
       T
       "WU--3"

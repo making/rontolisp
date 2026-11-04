@@ -10949,7 +10949,8 @@ class LispEvaluatorTest {
 		// A designator is anything find-package accepts, and the answer is the same
 		// keyword shape find-package returns.
 		assertThat(evalMulti("(package-use-list (find-package \"CL-USER\"))").print()).isEqualTo("(:CL)");
-		assertThat(evalMulti("(mapcar #'package-name (package-use-list :cl-user))").print()).isEqualTo("(\"CL\")");
+		assertThat(evalMulti("(mapcar #'package-name (package-use-list :cl-user))").print())
+			.isEqualTo("(\"COMMON-LISP\")");
 		assertThatThrownBy(() -> evalMulti("(package-use-list :no-such-package)"))
 			.hasMessageContaining("no package named");
 	}
@@ -24875,7 +24876,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalUiopPackageNamePredicatesReadTheRegistry() {
-		assertThat(eval("(uiop:symbol-package-name 'car)").print()).isEqualTo("\"CL\"");
+		assertThat(eval("(uiop:symbol-package-name 'car)").print()).isEqualTo("\"COMMON-LISP\"");
 		assertThat(eval("(uiop:symbol-package-name '#:iu-u)").print()).isEqualTo("NIL");
 		assertThat(eval("(uiop:standard-common-lisp-symbol-p 'car)").print()).isEqualTo("T");
 		assertThat(eval("(uiop:standard-common-lisp-symbol-p 'iu-definitely-not-cl)").print()).isEqualTo("NIL");
@@ -24888,7 +24889,7 @@ class LispEvaluatorTest {
 		// Nothing shadows anything: the runtime shadowing operators are documented
 		// non-goals, so the predicate is real and always nil.
 		assertThat(eval("(uiop:symbol-shadowing-p 'car :cl)").print()).isEqualTo("NIL");
-		assertThat(eval("(uiop:package-names :cl)").print()).isEqualTo("(\"CL\" \"COMMON-LISP\")");
+		assertThat(eval("(uiop:package-names :cl)").print()).isEqualTo("(\"COMMON-LISP\" \"CL\")");
 		assertThat(eval("(uiop:packages-from-names '(:cl :cl :cl-user :no-such-pkg))").print())
 			.isEqualTo("(:CL :CL-USER)");
 		// fresh-package-name answers a name no package has; the default prefix is
@@ -24989,11 +24990,12 @@ class LispEvaluatorTest {
 				(defun pdf-hidden () 1)
 				(in-package #:cl-user)
 				(uiop:package-definition-form :iu-pdf)
-				""").print()).isEqualTo("(DEFPACKAGE \"IU-PDF\" (:USE \"CL\") (:EXPORT \"PDF-E1\" \"PDF-E2\"))");
+				""").print())
+			.isEqualTo("(DEFPACKAGE \"IU-PDF\" (:USE \"COMMON-LISP\") (:EXPORT \"PDF-E1\" \"PDF-E2\"))");
 		assertThat(evalMulti("""
 				(defpackage #:iu-pdf2 (:use #:cl) (:export #:pdf-e))
 				(uiop:package-definition-form :iu-pdf2 :exportp nil :internp t)
-				""").print()).isEqualTo("(DEFPACKAGE \"IU-PDF2\" (:USE \"CL\"))");
+				""").print()).isEqualTo("(DEFPACKAGE \"IU-PDF2\" (:USE \"COMMON-LISP\"))");
 		assertThat(eval("(uiop:package-definition-form :no-such-pkg :error nil)").print()).isEqualTo("NIL");
 		assertThat(eval("""
 				(handler-case (uiop:package-definition-form :no-such-pkg)

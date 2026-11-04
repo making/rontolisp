@@ -1077,6 +1077,7 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, START);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, LEN);
+		emitDropStandardQualifier(w, START, LEN, OFF, POS);
 
 		// Leading '+': an explicitly positive number literal (+347, +2.5, +.5, +1/3)
 		// drops
@@ -1175,6 +1176,103 @@ final class WasmReadRuntimeBuilder {
 		WasmEmitHelper.emitStrBuildCall(w);
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/**
+	 * A canonical {@code cl} or {@code cl-user} symbol is spelled bare, whatever
+	 * qualifier reads it: the printer spells {@code COMMON-LISP:CAR} where the package
+	 * reads {@code CAR} as another. Narrows the token (START, LEN) past one of the four
+	 * qualifiers and its colons. Every byte compared before a length check is a
+	 * constituent of the matched run, so a match stays inside the token.
+	 */
+	private static void emitDropStandardQualifier(WasmWriter w, int START, int LEN, int MATCHED, int AT) {
+		i32(w, 0);
+		setLocal(w, MATCHED);
+		getLocal(w, LEN);
+		i32(w, 3);
+		w.write(Instruction.I32_GT_S);
+		ifVoid(w);
+		emitTokenMatches(w, START, "CL");
+		ifVoid(w);
+		i32(w, 2);
+		setLocal(w, MATCHED);
+		end(w);
+		getLocal(w, LEN);
+		i32(w, 12);
+		w.write(Instruction.I32_GT_S);
+		ifVoid(w);
+		emitTokenMatches(w, START, "COMMON-LISP");
+		ifVoid(w);
+		i32(w, 11);
+		setLocal(w, MATCHED);
+		end(w);
+		end(w);
+		end(w);
+		getLocal(w, MATCHED);
+		ifVoid(w);
+		// AT = START + MATCHED, past "-USER" when it follows
+		getLocal(w, START);
+		getLocal(w, MATCHED);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, AT);
+		getLocal(w, LEN);
+		getLocal(w, MATCHED);
+		i32(w, 6);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_GT_S);
+		ifVoid(w);
+		emitTokenMatches(w, AT, "-USER");
+		ifVoid(w);
+		getLocal(w, AT);
+		i32(w, 5);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, AT);
+		end(w);
+		end(w);
+		// One or two colons, then the rest is the token
+		getLocal(w, AT);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, ':');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		getLocal(w, AT);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, ':');
+		w.write(Instruction.I32_EQ);
+		getLocal(w, AT);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, AT);
+		// LEN -= AT - START ; START = AT
+		getLocal(w, LEN);
+		getLocal(w, AT);
+		getLocal(w, START);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, LEN);
+		getLocal(w, AT);
+		setLocal(w, START);
+		end(w);
+		end(w);
+	}
+
+	/**
+	 * Pushes 1 when the bytes at the address in {@code base} are {@code text}, else 0.
+	 */
+	private static void emitTokenMatches(WasmWriter w, int base, String text) {
+		i32(w, 1);
+		for (int i = 0; i < text.length(); i++) {
+			getLocal(w, base);
+			i32(w, i);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+			i32(w, text.charAt(i));
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.I32_AND);
+		}
 	}
 
 	/** Pushes 1 when the byte in local {@code byteLocal} is an ASCII digit, else 0. */

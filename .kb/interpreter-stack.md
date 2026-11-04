@@ -153,9 +153,11 @@ A list whose tail closes into itself would now loop where it overflowed:
 - A `#n=` label that does so in PROGRAM SOURCE is refused at the read
   (`SourceLanguage.read`, only when the text contains `#<digits>=`; `LispTrees.circularSpine`).
   A shared label and a cycle through a car stay legal (the latter still overflows).
-- At run time (`eval`, `compile`, a macro expansion of a circular constant) `rebuildSpine`
-  and `equal` run Brent's check and throw `LispTrees.CircularListException`, a program-error
-  a `handler-case` catches -- the overflow before was not catchable.
+- At run time (`compile`, a macro expansion of a circular constant) `rebuildSpine` and `equal`
+  run Brent's check and throw `LispTrees.CircularListException`, a program-error a
+  `handler-case` catches -- the overflow before was not catchable. `(eval (list 'quote x))` of a
+  circular `x` answers `x`, as SBCL does (measured 2026-11-05): the quoted datum walk keeps
+  sharing and cycles (`LispTrees.rewriteDatumSymbols`).
 
 What still recurses per element, by design: `LispEquality.equalpKey`/`hash` (capped at depth
 64), the fdlibm tables, `JvmRuntimeBuilder`'s halving dispatch trees. Nesting still costs a

@@ -94,7 +94,7 @@ cons cells, the six condition classes and the warnings-file plumbing. The rest:
 | `uiop:export*`, `uiop:import*` | `(uiop:export* "NAME" :my-pkg)` | intern-then-export, and import — real where the registry can mutate (the compiled backends answer what CL's own runtime operators answer: arguments for effect plus `t`) |
 | `uiop:make-symbol*` | `(uiop:make-symbol* "X")` | an uninterned symbol from a string, a copy from a symbol |
 | `uiop:home-package-p` | `(uiop:home-package-p s p)` | whether the symbol's home package is the package |
-| `uiop:symbol-package-name` | `(uiop:symbol-package-name 'car)` | `"CL"` (nil for an uninterned symbol) |
+| `uiop:symbol-package-name` | `(uiop:symbol-package-name 'car)` | `"COMMON-LISP"` (nil for an uninterned symbol) |
 | `uiop:standard-common-lisp-symbol-p` | `(uiop:standard-common-lisp-symbol-p 'car)` | whether the symbol is an exported `cl` symbol |
 | `uiop:symbol-shadowing-p` | `(uiop:symbol-shadowing-p s p)` | always nil — runtime shadowing does not exist here |
 | `uiop:package-names` | `(uiop:package-names :cl)` | the name plus the nicknames |

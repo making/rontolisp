@@ -1060,6 +1060,11 @@ final class JvmExprCompiler {
 			// table baked in at compile time (.kb/pretty-printer.md).
 			case LispNames.SYMBOL_PRINT_BARE_P_INTERNAL -> JvmExprCompiler
 				.compileExpr(LispMacroExpander.expandSymbolPrintBareP(cons, ctx.symbolPrintTable), ctx, className);
+			case LispNames.HOME_SPELLING_INTERNAL ->
+				JvmExprCompiler.compileExpr(((LispCons) cons.cdr()).car(), ctx, className);
+			case LispNames.SYMBOL_PRINT_PREFIX_INTERNAL -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.expandSymbolPrintPrefix(cons, ctx.symbolPrintTable, ctx.functions::containsKey),
+					ctx, className);
 			case LispNames.PRINT_PACKAGE_RAW_P_INTERNAL -> JvmExprCompiler
 				.compileExpr(LispMacroExpander.expandPrintPackageRawP(ctx.symbolPrintTable), ctx, className);
 			case LispNames.PRINT_CASED_QUALIFIER_INTERNAL -> JvmExprCompiler

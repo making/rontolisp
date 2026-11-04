@@ -95,9 +95,11 @@ Whether a qualifier is printed at all follows Common Lisp's accessibility rule:
 current `*package*` — the package's own symbol, one inherited through `:use` as
 an external, or an imported one — and `pkg:name` / `pkg::name` otherwise;
 `princ`/`~A` never print one. So under `(in-package :mypkg)` the `helper` below
-prints as `HELPER`, and from `cl-user` as `MYPKG::HELPER`. One gap: a `cl-user`
-symbol or a standard symbol printed from a package where it is not accessible
-prints bare rather than as `COMMON-LISP-USER::name` / `COMMON-LISP:name`.
+prints as `HELPER`, and from `cl-user` as `MYPKG::HELPER`. A standard symbol
+printed from a package that reads its name as another symbol prints as
+`COMMON-LISP:name`, a `cl-user` symbol outside `cl-user` as
+`COMMON-LISP-USER::name`. One gap on the compile paths: a `cl-user` symbol interned
+under a computed name, which no form of the program spells, prints bare.
 
 ## User-defined packages (`defpackage`)
 

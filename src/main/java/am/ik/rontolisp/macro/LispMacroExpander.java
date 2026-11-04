@@ -16410,6 +16410,8 @@ public final class LispMacroExpander {
 			(defun %pc-local-qualifier (%plq-s %plq-colon)
 			  (let ((%plq-p (string *package*)) (%plq-home (subseq %plq-s 0 %plq-colon))
 			        (%plq-c %local-nicknames%) (%plq-seen nil) (%plq-best nil))
+			    (cond ((string= %plq-home "COMMON-LISP") (setq %plq-home "CL"))
+			          ((string= %plq-home "COMMON-LISP-USER") (setq %plq-home "CL-USER")))
 			    (while %plq-c
 			      (let ((%plq-e (car %plq-c)))
 			        (setq %plq-c (cdr %plq-c))
@@ -17698,6 +17700,146 @@ public final class LispMacroExpander {
 						listToCons(List.of(extVar, parts.get(3))), listToCons(List.of(curVar, current)),
 						listToCons(List.of(rowVar, rowLookup)))),
 				body));
+	}
+
+	/**
+	 * The compiled backends' lowering of {@code (%symbol-print-prefix symbol)} -- what a
+	 * symbol spelled bare prints in front of its name in the current {@code *package*} --
+	 * onto the {@link am.ik.rontolisp.SymbolPrintTable}: the corrections, then the rule
+	 * its class comment states. The argument may be a string, the type name an instance's
+	 * rendering leads with. Without a table the raw spelling is already exact. The
+	 * standard-name half of the rule is there only where
+	 * {@link #injectPrintStandardNames} put its table in.
+	 * @param cons the call
+	 * @param table the baked table, or null when the program never leaves cl-user
+	 * @param definedFunction whether the program defines the named function
+	 * @return the equivalent expression
+	 */
+	public static LispVal expandSymbolPrintPrefix(LispCons cons,
+			am.ik.rontolisp.@org.jspecify.annotations.Nullable SymbolPrintTable table,
+			java.util.function.Predicate<String> definedFunction) {
+		List<LispVal> parts = cons.toList();
+		if (table == null || parts.size() != 2) {
+			return LispNil.INSTANCE;
+		}
+		LispSymbol argVar = new LispSymbol("%SQ-X");
+		LispSymbol nameVar = new LispSymbol("%SQ-N");
+		LispSymbol curVar = new LispSymbol("%SQ-C");
+		LispSymbol userVar = new LispSymbol("%SQ-U");
+		LispVal stringEq = listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.STRING_EQ)));
+		LispVal prefix = makeIf(userVar, new LispString(am.ik.rontolisp.SymbolPrintTable.CL_USER_PREFIX),
+				new LispString(am.ik.rontolisp.SymbolPrintTable.CL_PREFIX));
+		LispVal readsCl = LispNil.INSTANCE;
+		if (definedFunction.test(LispNames.STANDARD_NAME_P_INTERNAL)) {
+			// (if (%standard-name-p n) (if (member n '(QUOTE &OPTIONAL ...)) nil PREFIX)
+			// nil)
+			List<String> everywhere = new java.util.ArrayList<>(am.ik.rontolisp.ClConstants.LAMBDA_LIST_KEYWORD_NAMES);
+			everywhere.add(LispNames.QUOTE);
+			readsCl = makeIf(callOf(LispNames.STANDARD_NAME_P_INTERNAL, nameVar),
+					makeIf(stringMember(nameVar, quotedStrings(everywhere), stringEq), LispNil.INSTANCE, prefix),
+					LispNil.INSTANCE);
+		}
+		// (if (member c 'NO-CL) READS-CL nil)
+		LispVal byCl = table.noClPackages().isEmpty() ? LispNil.INSTANCE : makeIf(
+				stringMember(curVar, quotedStrings(table.noClPackages()), stringEq), readsCl, LispNil.INSTANCE);
+		// (if u (if (string= c "CL-USER") nil PREFIX) BY-CL)
+		LispVal body = makeIf(userVar,
+				makeIf(listToCons(
+						List.of(new LispSymbol(LispNames.STRING_EQ), curVar, new LispString(LispNames.CL_USER_PKG))),
+						LispNil.INSTANCE, prefix),
+				byCl);
+		if (!table.bareExcluded().isEmpty()) {
+			body = makeIf(bareListLookup(nameVar, curVar, table.bareExcluded(), stringEq), prefix, body);
+		}
+		if (!table.bareExtra().isEmpty()) {
+			body = makeIf(bareListLookup(nameVar, curVar, table.bareExtra(), stringEq), LispNil.INSTANCE, body);
+		}
+		LispVal name = makeIf(listToCons(List.of(new LispSymbol(LispNames.STRINGP), argVar)), argVar,
+				listToCons(List.of(new LispSymbol(LispNames.SYMBOL_NAME), argVar)));
+		LispVal current = listToCons(
+				List.of(new LispSymbol(LispNames.PRINC_TO_STRING_RAW), new LispSymbol(LispNames.PACKAGE_VAR)));
+		LispVal user = table.clUserSymbols().isEmpty() ? LispNil.INSTANCE
+				: stringMember(nameVar, quotedStrings(table.clUserSymbols()), stringEq);
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(listToCons(List.of(argVar, parts.get(1))), listToCons(List.of(nameVar, name)),
+						listToCons(List.of(curVar, current)), listToCons(List.of(userVar, user)))),
+				body));
+	}
+
+	/**
+	 * Prepends the {@code %standard-name-p} table for the printer of a program that can
+	 * print under a package that does not read the standard names as {@code cl}'s: a
+	 * package it defines, or a built-in one it enters. A name no form spells is told from
+	 * that package's own there ({@link #expandSymbolPrintPrefix}). Every other program
+	 * carries nothing.
+	 * @param program the resolved top-level forms
+	 * @param table the baked table, or null when the program never leaves cl-user
+	 * @return the program, with the table when it needs one
+	 */
+	public static List<LispVal> injectPrintStandardNames(List<LispVal> program,
+			am.ik.rontolisp.@org.jspecify.annotations.Nullable SymbolPrintTable table) {
+		if (table == null || !definesName(program, LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL)
+				|| definesName(program, LispNames.STANDARD_NAME_P_INTERNAL)) {
+			return program;
+		}
+		boolean reachesNoCl = table.noClPackages()
+			.stream()
+			.anyMatch(pkg -> !PackageRegistry.isBuiltinPackageName(pkg) || assignedAtTopLevel(program, pkg));
+		if (!reachesNoCl) {
+			return program;
+		}
+		List<LispVal> out = new java.util.ArrayList<>(
+				LispReader.readAllFromString(standardNameDefinition(), Features.INTERPRETER));
+		out.addAll(program);
+		return out;
+	}
+
+	/** Whether a top-level form of the program makes the package current. */
+	private static boolean assignedAtTopLevel(List<LispVal> program, String pkg) {
+		for (LispVal form : program) {
+			if (isTopLevelPackageAssignment(form) && ((LispCons) form).toList().get(2) instanceof LispSymbol value
+					&& (":" + pkg).equalsIgnoreCase(value.name())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** {@code (member NAME 'STRINGS :test #'string=)}. */
+	private static LispVal stringMember(LispSymbol name, LispVal strings, LispVal stringEq) {
+		return listToCons(List.of(new LispSymbol(LispNames.MEMBER), name, strings, new LispSymbol(":TEST"), stringEq));
+	}
+
+	/** A quoted list of strings. */
+	private static LispVal quotedStrings(List<String> strings) {
+		List<LispVal> cells = new java.util.ArrayList<>(strings.size());
+		for (String text : strings) {
+			cells.add(new LispString(text));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(cells)));
+	}
+
+	/**
+	 * {@code (member NAME (cdr (assoc CUR 'TABLE :test #'string=)) :test #'string=)} over
+	 * a per-package name list of the {@link am.ik.rontolisp.SymbolPrintTable}.
+	 */
+	private static LispVal bareListLookup(LispSymbol name, LispSymbol curVar,
+			java.util.SequencedMap<String, List<String>> lists, LispVal stringEq) {
+		List<LispVal> rows = new java.util.ArrayList<>(lists.size());
+		lists.forEach((pkg, names) -> {
+			List<LispVal> cells = new java.util.ArrayList<>(names.size() + 1);
+			cells.add(new LispString(pkg));
+			for (String text : names) {
+				cells.add(new LispString(text));
+			}
+			rows.add(listToCons(cells));
+		});
+		return listToCons(List.of(new LispSymbol(LispNames.MEMBER), name,
+				listToCons(List.of(new LispSymbol(LispNames.CDR),
+						listToCons(List.of(new LispSymbol(LispNames.ASSOC), curVar,
+								listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(rows))),
+								new LispSymbol(":TEST"), stringEq)))),
+				new LispSymbol(":TEST"), stringEq));
 	}
 
 	/**
@@ -50717,6 +50859,10 @@ public final class LispMacroExpander {
 						ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME));
 		if (closRegistry.funcallableClassesSeeded()) {
 			names.add(ClosRegistry.FUNCALLABLE_STANDARD_CLASS_NAME);
+		}
+		// A metaclass once seeded, so the computed make-instance has an arm for it.
+		if (closRegistry.findClass(ClosRegistry.FORWARD_REFERENCED_CLASS_NAME) != null) {
+			names.add(ClosRegistry.FORWARD_REFERENCED_CLASS_NAME);
 		}
 		if (closRegistry.gfProtocol()) {
 			// The metaobjects the generic-function protocol makes

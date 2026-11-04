@@ -2426,6 +2426,19 @@ public final class PackageResolver {
 		return this.registry.nicknamesFor(registeredPackageName(pkg));
 	}
 
+	/**
+	 * What {@code package-nicknames} answers: the registry's nicknames, except for the
+	 * two standard packages. The standard's nickname of each is what the registry calls
+	 * its name ({@code .kb/packages.md}).
+	 * @param designator a package name or nickname
+	 * @return the nicknames
+	 */
+	public synchronized java.util.List<String> standardPackageNicknames(String designator) {
+		java.util.List<String> nicknames = runtimePackageNicknames(designator);
+		String pkg = findPackageName(designator);
+		return LispNames.CL_PKG.equals(pkg) || LispNames.CL_USER_PKG.equals(pkg) ? java.util.List.of(pkg) : nicknames;
+	}
+
 	private static String designator(String context, String kind, LispVal designator) {
 		return switch (designator) {
 			// A symbol designates its symbol-name: a keyword (:cl-user), an uninterned
@@ -3079,14 +3092,10 @@ public final class PackageResolver {
 				}
 			}
 			// An implementation-internal name a package does not define itself
-			// (currentDefinesClInternal) is the implementation's: expansions
-			// inject it into whatever package they run in, a package using no cl
-			// included (the macro-function table appended under contextl-user). So do
-			// the lambda-list keywords, which the expansions' own lambda lists spell, and
-			// quote: (quote x) is the special form to this pass whatever package reads
-			// it, so a variable named quote has to stay one symbol with it.
-			if (currentUsesCl() || PackageRegistry.isClInternal(name) || PackageRegistry.isClLambdaListKeyword(name)
-					|| LispNames.QUOTE.equals(name)) {
+			// (currentDefinesClInternal) stays cl's, as do the others no package reads as
+			// its own by default: the macro-function table appended under contextl-user
+			// runs in a package using no cl.
+			if (currentUsesCl() || PackageRegistry.readsClInEveryPackage(name)) {
 				return new LispSymbol(name);
 			}
 			// A package that does not use cl may still inherit a symbol of this name
@@ -4219,27 +4228,33 @@ public final class PackageResolver {
 	 * reference to its name in the current package resolves to it. The interpreter's
 	 * printer asks this against the LIVE registry ({@code LispEvaluator},
 	 * {@code %symbol-print-bare-p}); the compile paths bake the same answers into a
-	 * {@link SymbolPrintTable}.
+	 * {@link SymbolPrintTable}. A bare spelling asks the same question of a {@code cl} or
+	 * {@code cl-user} symbol: the package may read that name as something else.
 	 * @param symbolName the stored (canonical) symbol name
-	 * @return {@code true} when the qualifier is dropped; also for a name that carries
-	 * none (a bare, keyword or uninterned symbol prints as it is)
+	 * @return {@code true} when the symbol prints without a qualifier; also for a keyword
+	 * or an uninterned symbol, which prints as it is
 	 */
 	public synchronized boolean printsBare(String symbolName) {
 		if (symbolName.startsWith(":") || symbolName.startsWith("#:")) {
 			return true;
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(symbolName);
-		if (qn == null) {
-			return true;
-		}
-		String home = this.registry.canonicalName(qn.pkg());
-		if (home.equals(current())) {
+		if (qn != null && this.registry.canonicalName(qn.pkg()).equals(current())) {
 			return true;
 		}
 		boolean savedProbing = this.probing;
 		this.probing = true;
 		try {
-			return resolveUnqualified(qn.member()).name().equals(symbolName);
+			if (resolveUnqualified(qn == null ? symbolName : qn.member()).name().equals(symbolName)) {
+				return true;
+			}
+			// A standard name with no operator behind it, nil and t among them, is no cl
+			// symbol to the resolver but still the one a package using cl inherits. A
+			// shadow or an import has already answered above.
+			LispPackage here = this.registry.get(current());
+			return qn == null && currentUsesCl() && PackageRegistry.isClMemberName(symbolName)
+					&& !PackageRegistry.isClSymbol(symbolName) && !here.shadows(symbolName)
+					&& !here.imports().containsKey(symbolName);
 		}
 		catch (LispPackageException ex) {
 			return false;
@@ -4247,6 +4262,20 @@ public final class PackageResolver {
 		finally {
 			this.probing = savedProbing;
 		}
+	}
+
+	/**
+	 * What the symbol spelled bare prints in front of its name in the current package:
+	 * nothing where the package reads the name as this symbol, else the qualifier of its
+	 * home, {@code cl} or {@code cl-user}. SBCL's spellings, the packages' names.
+	 * @param bareName the stored symbol name, carrying no qualifier
+	 * @return the prefix, or {@code null} when it prints bare
+	 */
+	public synchronized @Nullable String bareSymbolPrefix(String bareName) {
+		if (printsBare(bareName)) {
+			return null;
+		}
+		return PackageRegistry.isClMemberName(bareName) ? SymbolPrintTable.CL_PREFIX : SymbolPrintTable.CL_USER_PREFIX;
 	}
 
 	/**
@@ -4282,9 +4311,18 @@ public final class PackageResolver {
 		java.util.SequencedMap<String, List<String>> extra = new java.util.LinkedHashMap<>();
 		java.util.SequencedMap<String, List<String>> excluded = new java.util.LinkedHashMap<>();
 		java.util.Set<String> occurring = new java.util.LinkedHashSet<>();
+		// Nil and t reach the printer from anywhere, spelled or not.
+		java.util.Set<String> printableBare = new java.util.LinkedHashSet<>(List.of("NIL", "T"));
 		for (LispVal form : resolvedProgram) {
 			collectQualifiedSymbols(form, occurring);
+			collectPrintableBareSymbols(form, printableBare);
 		}
+		List<String> clUserSymbols = printableBare.stream()
+			.filter(name -> !PackageRegistry.isClMemberName(name))
+			.toList();
+		List<String> noClPackages = new ArrayList<>();
+		java.util.SequencedMap<String, List<String>> bareExtra = new java.util.LinkedHashMap<>();
+		java.util.SequencedMap<String, List<String>> bareExcluded = new java.util.LinkedHashMap<>();
 		String savedPackage = current();
 		try {
 			for (String pkg : new java.util.TreeSet<>(this.registry.designatorTable().values())) {
@@ -4325,12 +4363,109 @@ public final class PackageResolver {
 				if (!excludedHere.isEmpty()) {
 					excluded.put(key, List.copyOf(excludedHere));
 				}
+				boolean readsCl = readsStandardNames(pkg, registered);
+				if (!readsCl) {
+					noClPackages.add(key);
+				}
+				// What a package may read differently from the rule: a spelled symbol, a
+				// standard name it imports or shadows, and, past cl's own users, any
+				// standard name another package hands it.
+				java.util.Set<String> candidates = new java.util.LinkedHashSet<>(printableBare);
+				java.util.stream.Stream.concat(registered.imports().keySet().stream(), registered.shadows().stream())
+					.filter(PackageRegistry::isClMemberName)
+					.sorted()
+					.forEach(candidates::add);
+				if (!packageUsesCl(pkg) && !registered.useList().isEmpty()) {
+					candidates.addAll(PackageRegistry.standardNames());
+				}
+				List<String> bareExtraHere = new ArrayList<>();
+				List<String> bareExcludedHere = new ArrayList<>();
+				for (String name : candidates) {
+					boolean rule = clUserSymbols.contains(name) ? LispNames.CL_USER_PKG.equals(pkg)
+							: readsCl || !PackageRegistry.isStandardName(name)
+									|| PackageRegistry.isClLambdaListKeyword(name) || LispNames.QUOTE.equals(name);
+					boolean truth = printsBare(name);
+					if (truth && !rule) {
+						bareExtraHere.add(name);
+					}
+					else if (rule && !truth) {
+						bareExcludedHere.add(name);
+					}
+				}
+				if (!bareExtraHere.isEmpty()) {
+					bareExtra.put(key, List.copyOf(bareExtraHere));
+				}
+				if (!bareExcludedHere.isEmpty()) {
+					bareExcluded.put(key, List.copyOf(bareExcludedHere));
+				}
 			}
 		}
 		finally {
 			setCurrent(savedPackage);
 		}
-		return new SymbolPrintTable(rows, extra, excluded, clUserIsPristine());
+		return new SymbolPrintTable(rows, extra, excluded, clUserIsPristine(), List.copyOf(noClPackages), clUserSymbols,
+				bareExtra, bareExcluded);
+	}
+
+	/**
+	 * Whether the current package, {@code pkg}, reads the standard names as {@code cl}'s:
+	 * it uses {@code cl}, or a package that re-exports most of them
+	 * ({@code closer-common-lisp}, {@code clim-lisp}). The name a package reads otherwise
+	 * is a correction, if the program can print it.
+	 */
+	private boolean readsStandardNames(String pkg, LispPackage registered) {
+		if (packageUsesCl(pkg)) {
+			return true;
+		}
+		if (registered.useList().isEmpty()) {
+			return false;
+		}
+		List<String> names = PackageRegistry.standardNames();
+		return names.stream().filter(this::printsBare).count() * 2 > names.size();
+	}
+
+	/**
+	 * Every bare symbol the printer can meet from this form: spelled in quoted data, or
+	 * naming a structure, class or condition, whose instances print the name.
+	 */
+	private static void collectPrintableBareSymbols(LispVal form, java.util.Set<String> into) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol op && cons.cdr() instanceof LispCons rest) {
+			switch (op.name()) {
+				case LispNames.QUOTE -> {
+					collectBareSymbols(rest.car(), into);
+					return;
+				}
+				case LispNames.DEFSTRUCT, LispNames.DEFCLASS, LispNames.DEFINE_CONDITION -> {
+					LispVal named = rest.car() instanceof LispCons options ? options.car() : rest.car();
+					collectBareSymbols(named, into);
+				}
+				default -> {
+				}
+			}
+		}
+		for (LispVal cur = form; cur instanceof LispCons cell; cur = cell.cdr()) {
+			collectPrintableBareSymbols(cell.car(), into);
+		}
+	}
+
+	private static void collectBareSymbols(LispVal datum, java.util.Set<String> into) {
+		if (datum instanceof LispSymbol sym) {
+			String name = sym.name();
+			if (!sym.isKeyword() && !name.startsWith("#:") && !PackageRegistry.isClInternal(name)
+					&& PackageRegistry.splitQualified(name) == null) {
+				into.add(name);
+			}
+			return;
+		}
+		for (LispVal cur = datum; cur instanceof LispCons cell; cur = cell.cdr()) {
+			collectBareSymbols(cell.car(), into);
+			if (!(cell.cdr() instanceof LispCons) && !(cell.cdr() instanceof LispNil)) {
+				collectBareSymbols(cell.cdr(), into);
+			}
+		}
 	}
 
 	/**

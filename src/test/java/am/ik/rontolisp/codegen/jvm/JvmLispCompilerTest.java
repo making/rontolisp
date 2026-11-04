@@ -3205,7 +3205,7 @@ class JvmLispCompilerTest {
 				(print (null (find-package (uiop:fresh-package-name))))
 				(print (uiop:fresh-package-name :prefix "JU-" :separator "-" :index 3))
 				"""))
-			.isEqualTo("NIL\nT\nNIL\nNIL\nT\nT\nNIL\nNIL\n(\"CL\" \"COMMON-LISP\")\n(:CL :CL-USER)\nT\n\"JU--3\"");
+			.isEqualTo("NIL\nT\nNIL\nNIL\nT\nT\nNIL\nNIL\n(\"COMMON-LISP\" \"CL\")\n(:CL :CL-USER)\nT\n\"JU--3\"");
 	}
 
 	@Test
@@ -3291,8 +3291,8 @@ class JvmLispCompilerTest {
 				(print (uiop:package-definition-form :no-such-pkg :error nil))
 				""")).isEqualTo(
 				"(':UIOP/PACKAGE* :NICKNAMES 'NIL :DOCUMENTATION 'NIL :USE '(:UIOP/PACKAGE) :SHADOW 'NIL :SHADOWING-IMPORT-FROM 'NIL :IMPORT-FROM '((:UIOP/PACKAGE #:DEFINE-PACKAGE-STYLE-WARNING #:NO-SUCH-PACKAGE-ERROR #:PACKAGE-DESIGNATOR)) :EXPORT '(#:DEFINE-PACKAGE-STYLE-WARNING #:NO-SUCH-PACKAGE-ERROR #:PACKAGE-DESIGNATOR) :INTERN 'NIL :RECYCLE '(:UIOP/PACKAGE*) :MIX 'NIL :REEXPORT '(:UIOP/PACKAGE) :UNINTERN 'NIL)\n"
-						+ "(DEFPACKAGE \"JU-PDF\" (:USE \"CL\") (:EXPORT \"PDF-E1\" \"PDF-E2\"))\n"
-						+ "(DEFPACKAGE \"JU-PDF\" (:USE \"CL\"))\n" + "NIL");
+						+ "(DEFPACKAGE \"JU-PDF\" (:USE \"COMMON-LISP\") (:EXPORT \"PDF-E1\" \"PDF-E2\"))\n"
+						+ "(DEFPACKAGE \"JU-PDF\" (:USE \"COMMON-LISP\"))\n" + "NIL");
 	}
 
 	@Test
@@ -5473,7 +5473,7 @@ class JvmLispCompilerTest {
 				(print (q (find-package "CL-USER")))
 				(print (mapcar #'package-name (funcall #'package-use-list :cl-user)))
 				(print (handler-case (package-use-list :no-such-package) (error (e) :signalled)))
-				""")).isEqualTo("(:CL :PQL-A)\n(:PQL-B)\nNIL\nNIL\n:PQL-A\n(:CL)\n(\"CL\")\n:SIGNALLED");
+				""")).isEqualTo("(:CL :PQL-A)\n(:PQL-B)\nNIL\nNIL\n:PQL-A\n(:CL)\n(\"COMMON-LISP\")\n:SIGNALLED");
 	}
 
 	@Test
@@ -11350,7 +11350,7 @@ class JvmLispCompilerTest {
 					(:SUITE TEST-B TEST-A "MY-APP/TESTS")
 					T
 					:CL-USER
-					"CL-USER\"""");
+					"COMMON-LISP-USER\"""");
 	}
 
 	@Test
