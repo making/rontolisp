@@ -304,14 +304,15 @@ library still has to stay inside the supported subset below.
   memoized CLOS instance per system (`eq` across calls) over real classes —
   `asdf:component`, `asdf:child-component`/`asdf:parent-component`,
   `asdf:module`, `asdf:system`, `asdf:package-inferred-system`,
-  `asdf:source-file`, `asdf:cl-source-file`, `asdf:static-file` — so `typep`,
+  `asdf:source-file`, `asdf:cl-source-file`, `asdf:static-file`, `asdf:doc-file` — so `typep`,
   `typecase` and `defmethod` specializers over them work on every backend. The
   readers [`asdf:component-name`](../reference/functions/asdf-component-name.md),
   [`asdf:component-version`](../reference/functions/asdf-component-version.md)
   (the declared `:version` string, when it was written as a plain string),
   [`asdf:component-pathname`](../reference/functions/asdf-component-pathname.md),
   [`asdf:component-children`](../reference/functions/asdf-component-children.md)
-  (one `cl-source-file` per component file, in load order),
+  (the instances the definition writes, in its order: a `:module` is an `asdf:module`
+  holding its own children, a `:static-file` an `asdf:static-file`),
   [`asdf:component-sideway-dependencies`](../reference/functions/asdf-component-sideway-dependencies.md),
   [`asdf:component-parent`](../reference/functions/asdf-component-parent.md) and
   [`asdf:component-system`](../reference/functions/asdf-component-system.md)

@@ -68,9 +68,6 @@ cl-project, caveman2), even on a line never reached. prove, cl-project and cavem
   `registered-systems` until the next `find-system`, which answers a new instance of the baked record;
   a load loads nothing, so `component-loaded-p` is `t` again from then. Interpreter: the registry forgets,
   and the next load reruns the file.
-- **Flat model limits** (`.todo/i23`): a `:module` is no instance, so `find-component` matches a child's
-  relative path whole or from a directory boundary and a module itself is not found;
-  `component-name` is the relative path (`"src/m/two"`, real `"two"`).
 - **`component-depends-on`** answers real ASDF's shapes (measured), nothing here reads them.
 - Verified against SBCL 2.2.9's ASDF 3.3.1 with `AsdfMetaobjectsE2eTest`'s `registry/` systems: the
   same answers on all four backends, the metadata `#.` and the printed package of a symbol aside.
@@ -146,7 +143,8 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
   compile path -- `LoadInliner` wraps a non-parse exception as `<asd path>: message`.
 
 ### Options
-- `:components` in ASDF's PLAN order: definition order, each component after its `:depends-on`
+- `:components` in ASDF's PLAN order (`LispSystem.files`; the definition's order is the tree, "The
+  component tree"): definition order, each component after its `:depends-on`
   siblings, depth first (`placeComponent`); `:serial` = implicit dep on the previous sibling;
   `:module` = path prefix with files kept contiguous; `:static-file` = ordering-only. Until
   2026-10-31 it was a pass-wise topological sort that placed every dependency-free component
@@ -315,10 +313,10 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
   table: a primary on `load-op` more specific than `cl-source-file`'s) whether `load-op` leaves the
   file unread. These made `file-type`, `default-component-class` and `around-compile` real slots, and
   `around-compile-hook` real. `STUB_FILE_TYPES` gives the stub classes their upstream `type`.
-- **The plan**: `LispSystem.loadedClasses`. A record's CLASS is the name as a STRING and its eighth
-  field `(RELATIVE CLASS . INITARGS)` entries: strings because the table stands ahead of the packages
-  they name. Options the grammar does not read are initargs (`lass-file`'s `:output`), on a loaded
-  class only; `.asd`-shape classes keep refusing them.
+- **The plan**: `LispSystem.loadedClasses`. A record's CLASS and a component node's KIND are the name
+  as a STRING: strings because the table stands ahead of the packages they name. Options the grammar
+  does not read are initargs (`lass-file`'s `:output`), on a loaded class only; `.asd`-shape classes
+  keep refusing them.
 - **What the loaders do with a file**: a `cl-source-file` subclass is read as Lisp. Any other class's
   file (`lass-file`) is opened by no loader: the compile path keeps the component bracket, without
   forms, so its actions are performed. The file need not be readable as Lisp, and need not exist at
@@ -365,7 +363,7 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
   `with-standard-io-syntax` not binding `*print-base*` (`.todo/i32`). `fast-http-test` fails 2 of 64 in
   `t/parser.lisp` and aborts `t/fast-http.lisp` on CONNECT (2026-11-05, `.todo/i39`). `lass-file` with `:output`: the CSS SBCL writes,
   all four. `hu.dwim.def`: loads on all four, its class, `package-name` and license as on SBCL
-  (`component-children` flat, `.todo/i23`). coalton stops before any of this, as "Options around the
+  (`component-children` real since "The component tree"). coalton stops before any of this, as "Options around the
   compile" records.
 - **Refusal**: a name no image holds is `unsupported component type` / `unsupported :class`, naming it;
   an inline `defsystem` on a compile path cannot see a class the program's own `defclass` defines (the
@@ -456,8 +454,8 @@ One Lisp source `eval/asdf.lisp` (`eval.AsdfRuntimeLibrary`) defines the class f
 `find-system` + the readers + `system-source-directory`/`system-relative-pathname`/
 `component-pathname` (designator-accepting, answering NAMESTRINGS, `.kb/pathnames.md`) +
 `registered-systems`. The one per-backend seam is
-`%asdf-system-record`/`%asdf-system-names`; a record is `(CLASS DIR FILES DEPS LOADED-P VERSION META)`
-with FILES `(RELATIVE . RESOLVED)` pairs.
+`%asdf-system-record`/`%asdf-system-names`; a record is `(CLASS DIR COMPONENTS DEPS LOADED-P VERSION META
+ROOT)`, COMPONENTS as "The component tree" says.
 - **Interpreter**: Java built-ins over the live insertion-ordered `asdfSystems`/`loadedSystems`;
   a built-in shim system answers a record even before it loads. `asdf.lisp` loads lazily
   (`ensureAsdfRuntimeLoaded`) on resolution of any name it defines,
@@ -472,6 +470,48 @@ with FILES `(RELATIVE . RESOLVED)` pairs.
   stubs only as the no-pipeline fallback.
 - `asdf.lisp` needs its `resource-config.json` entry (`AsdfRuntimeLibrary` `typeReachable`), and so
   does `asdf-exports.txt` (`AsdfExports`).
+
+### The component tree (i23, 2026-11-05)
+A system's and a module's children are real instances in definition order; the fixed plan is a table
+of its own. Before this a system's children were its source files, flat and in plan order, so a
+program walking the real tree got something else (djula's `list-asdf-system-templates`, cl-dejavu's
+`find-component` with `:registered`, mcclim's static images, swank-asdf, serapeum's `docs.lisp`,
+eclector's tests).
+- **The model**: `AsdfSystems.ComponentTree` on `LispSystem.tree`, built in `parseComponent`:
+  `children` in definition order, `plan` the same `ComponentNode` objects `files` lists, in plan
+  order. So a record gives a node its plan index by identity (`AsdfRuntimeLibrary.nodeRecords`), which a
+  file two components name does not confuse.
+- **The record**: `(KIND NAME RELATIVE RESOLVED PLAN-INDEX . OPTIONS)`, with what few components say
+  (`:pathname`, `:type`, `:sideway`, `:if-feature`, `:disabled`, `:initargs`, `:children`) in the plist,
+  so a plain file carries five fields. KIND is a keyword for ASDF's own classes (one literal
+  `make-instance` each in `%asdf-new-component`, as `%mop-make-instance`'s gate wants) and a string for a
+  loaded class, a module's included.
+- **The plan is unchanged**: `%asdf-perform-component` and `%asdf-load-source` go through the system's
+  `%plan` table and a component's `%plan-index`. **Divergence**: real ASDF's plan also has actions on a
+  module and a static file (`make-plan`, measured), so a `perform` method on either runs there and not
+  here. A disabled `:if-feature` component is in the tree, as in real ASDF, with no plan index: performing
+  load-op on it signals, where real ASDF would load the file.
+- **Paths**: `component-pathname` of a system is now its `:pathname` directory (`.../src/`, what the
+  fold answers too), `system-source-directory` stays the `.asd`'s (`%source-directory`). A file below it
+  is `RELATIVE` from its parent. All namestrings (`.kb/pathnames.md`); a designator is accepted, where
+  real ASDF signals.
+- **`find-component`, `component-pathname`** are generics with real ASDF's methods (`find-component` from
+  3.3.1's source, `&key registered` included), so a library's method works (swank-asdf's `:around`) and
+  a name below a file signals. Consequence of the tree: `"m/two"` no longer finds anything, as there.
+- **What moved**: a `.asd`-declared class's instance is its nearest ASDF superclass (`ComponentClass.kind`,
+  file type from the class). `doc-file`, `html-file` and the `cl-source-file.*` pair are real definitions.
+  `html-file` names `NAME.html`. A package-inferred sub-system's child is named `"lisp"` at the name below the
+  primary's directory, as real ASDF's is. `sub-components`, `component-parent-pathname`,
+  `component-children-by-name`, `compute-children-by-name` and `component-if-feature` are real; a
+  `:static-file` answers `input-files` on load-op. A system's `component-depends-on` for prepare-op keeps
+  real's empty `(LOAD-OP)`.
+- **Measured** (2026-11-05, against SBCL 2.2.9's ASDF 3.3.1): `registry/tree-exercise.lisp` prints
+  `meta-demo-tree.expected` there and on all four; re-derive it by running that file on SBCL. On real
+  libraries: cl-dejavu's `list-fonts` and `font-pathname` (interpreter, JVM, wasm Preview 1); `hu.dwim.def`'s
+  children (`("source")`) and `(find-component "hu.dwim.def" "source")`, `xsubseq-test` through prove's `:module`
+  (interpreter). djula itself stops earlier, on arnesi's `define-method-combination`, so its
+  `list-asdf-system-templates` was run verbatim over a `:module` of `:static-file`s.
+- Pinned by `AsdfMetaobjectsE2eTest` (all four), `PackageInferredSystemE2eTest` (`"lisp"`).
 
 ### test-op
 - `parseDefsystem` records `:perform (test-op (o c) BODY...)` into `LispSystem.testOp` (body
@@ -510,7 +550,7 @@ parent component is a no-op, any other op on a source file signals, test-op on a
 recorded body. A designator op (`'asdf:load-op`) dispatches through a `symbol` method.
 - **The plan is fixed**: `%asdf-perform-system NAME :before` (prepare-op on the system, after its
   dependencies), then `%asdf-perform-component NAME I` per file in load order (prepare-op,
-  compile-op, load-op on the I-th child), then `:after` (compile-op, load-op on the system) --
+  compile-op, load-op on the I-th of the plan), then `:after` (compile-op, load-op on the system) --
   real ASDF's action order for a source tree with a fresh cache. Compile-op does run each time
   (rontolisp compiles a source file BY loading it); the plan never consults
   `operation-done-p`.

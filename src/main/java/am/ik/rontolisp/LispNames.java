@@ -9356,11 +9356,10 @@ public final class LispNames {
 	public static final String SYSTEM_RELATIVE_PATHNAME = "SYSTEM-RELATIVE-PATHNAME";
 
 	/**
-	 * {@code asdf:component-pathname} -- in real ASDF the base pathname of ANY component
-	 * (system, module or file); rontolisp only ever materializes a SYSTEM as a component
-	 * object (its downcase-canonical name, a string), so here it is
-	 * {@link #SYSTEM_SOURCE_DIRECTORY} under the name a library actually calls.
-	 * local-time locates its bundled {@code zoneinfo/} repository with
+	 * {@code asdf:component-pathname} -- the base pathname of any component (system,
+	 * module or file); of a system, the directory its {@code :pathname} names below
+	 * {@link #SYSTEM_SOURCE_DIRECTORY}. local-time locates its bundled {@code zoneinfo/}
+	 * repository with
 	 * {@code (asdf:component-pathname (asdf:find-system :local-time nil))}.
 	 */
 	public static final String COMPONENT_PATHNAME = "COMPONENT-PATHNAME";

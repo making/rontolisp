@@ -2,8 +2,8 @@
 
 `(asdf:component-parent component)`
 
-Reader: the component's parent component — the system for a source file, `nil`
-for a system itself.
+Reader: the component's parent component — the system or module that holds it,
+`nil` for a system itself.
 
 ```lisp
 (asdf:defsystem :demo-par :components ((:file "main")))

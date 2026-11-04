@@ -15,6 +15,7 @@ import java.util.Set;
 import am.ik.rontolisp.AsdfExports;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispPackageException;
 import am.ik.rontolisp.LispString;
@@ -104,8 +105,7 @@ public final class AsdfRuntimeLibrary {
 	 * The file type upstream's classes without a definition in {@code asdf.lisp} hold,
 	 * which a subclass inherits ({@code source-file-type}).
 	 */
-	private static final Map<String, String> STUB_FILE_TYPES = Map.of("CL-SOURCE-FILE.CL", "cl", "CL-SOURCE-FILE.LSP",
-			"lsp", "C-SOURCE-FILE", "c", "JAVA-SOURCE-FILE", "java", "HTML-FILE", "html");
+	private static final Map<String, String> STUB_FILE_TYPES = Map.of("C-SOURCE-FILE", "c", "JAVA-SOURCE-FILE", "java");
 
 	/**
 	 * The classes a definition saying nothing gets: an instance needs no class name in
@@ -601,14 +601,19 @@ public final class AsdfRuntimeLibrary {
 			if (system.loadedClasses().system() != null) {
 				systemClasses.add(system.loadedClasses().system());
 			}
-			for (String file : system.files()) {
-				AsdfSystems.LoadedClass loaded = system.loadedClasses().components().get(file);
-				if (loaded != null) {
-					componentClasses.add(loaded);
-				}
-			}
+			collectLoadedClasses(system.tree().children(), componentClasses);
 		}
 		return new LoadedNames(systemClasses, componentClasses);
+	}
+
+	private static void collectLoadedClasses(List<AsdfSystems.ComponentNode> nodes,
+			Set<AsdfSystems.LoadedClass> classes) {
+		for (AsdfSystems.ComponentNode node : nodes) {
+			if (node.loaded() != null) {
+				classes.add(node.loaded());
+			}
+			collectLoadedClasses(node.children(), classes);
+		}
 	}
 
 	/**
@@ -781,7 +786,7 @@ public final class AsdfRuntimeLibrary {
 
 	/**
 	 * The record for one system, in the shape {@code asdf.lisp} reads:
-	 * {@code (CLASS DIR FILES DEPS LOADED-P VERSION META)}.
+	 * {@code (CLASS DIR COMPONENTS DEPS LOADED-P VERSION META ROOT)}.
 	 * @param system the parsed system
 	 * @param loaded whether the system has been loaded/spliced
 	 * @return the record as Lisp data
@@ -791,16 +796,10 @@ public final class AsdfRuntimeLibrary {
 	}
 
 	private static LispVal recordFor(AsdfSystems.LispSystem system, boolean loaded, boolean metadata) {
-		List<LispVal> files = new ArrayList<>();
-		List<LispVal> classes = new ArrayList<>();
-		for (String file : system.files()) {
-			files.add(new LispCons(new LispString(file),
-					new LispString(SourceLoader.resolve(emptyToNull(system.baseDir()), file))));
-			AsdfSystems.LoadedClass loadedClass = system.loadedClasses().components().get(file);
-			if (loadedClass != null) {
-				classes.add(new LispCons(new LispString(file), new LispCons(new LispString(loadedClass.name()),
-						list(loadedClass.initargs().toArray(LispVal[]::new)))));
-			}
+		Map<AsdfSystems.ComponentNode, Integer> planIndexes = new java.util.IdentityHashMap<>();
+		List<AsdfSystems.ComponentNode> plan = system.tree().plan();
+		for (int index = 0; index < plan.size(); index++) {
+			planIndexes.put(plan.get(index), index);
 		}
 		List<LispVal> deps = new ArrayList<>();
 		for (String dependency : system.dependsOn()) {
@@ -809,10 +808,60 @@ public final class AsdfRuntimeLibrary {
 		String systemClass = system.loadedClasses().system();
 		LispVal classOf = systemClass != null ? new LispString(systemClass)
 				: new LispSymbol(system.packageInferredClass() ? ":PACKAGE-INFERRED-SYSTEM" : ":SYSTEM");
-		return list(classOf, new LispString(normalizeDir(system.baseDir())), list(files.toArray(LispVal[]::new)),
-				list(deps.toArray(LispVal[]::new)), loaded ? LispTrue.INSTANCE : LispNil.INSTANCE,
+		return list(classOf, new LispString(normalizeDir(system.baseDir())),
+				nodeRecords(system, system.tree().children(), planIndexes), list(deps.toArray(LispVal[]::new)),
+				loaded ? LispTrue.INSTANCE : LispNil.INSTANCE,
 				system.version() == null ? LispNil.INSTANCE : new LispString(system.version()),
-				metadata ? metadataPlist(system) : LispNil.INSTANCE, list(classes.toArray(LispVal[]::new)));
+				metadata ? metadataPlist(system) : LispNil.INSTANCE, new LispString(system.pathname()));
+	}
+
+	/**
+	 * Components as {@code asdf.lisp} reads them:
+	 * {@code (KIND NAME RELATIVE RESOLVED PLAN-INDEX . OPTIONS)}. {@code KIND} is a
+	 * keyword for one of ASDF's own classes and a string for a class loaded code defines;
+	 * what few components say goes in the {@code OPTIONS} plist, so that none carries it
+	 * for nothing.
+	 */
+	private static LispVal nodeRecords(AsdfSystems.LispSystem system, List<AsdfSystems.ComponentNode> nodes,
+			Map<AsdfSystems.ComponentNode, Integer> planIndexes) {
+		List<LispVal> records = new ArrayList<>();
+		for (AsdfSystems.ComponentNode node : nodes) {
+			AsdfSystems.LoadedClass loaded = node.loaded();
+			Integer index = planIndexes.get(node);
+			List<LispVal> items = new ArrayList<>(
+					List.of(loaded != null ? new LispString(loaded.name()) : new LispSymbol(":" + node.kind()),
+							new LispString(node.name()), new LispString(node.relative()),
+							new LispString(system.resolved(node.path())),
+							index == null ? LispNil.INSTANCE : new LispInteger(index)));
+			if (node.written() != null) {
+				option(items, ":PATHNAME", new LispString(node.written()));
+			}
+			if (node.fileType() != null) {
+				option(items, ":TYPE", new LispString(node.fileType()));
+			}
+			if (!node.sideway().isEmpty()) {
+				option(items, ":SIDEWAY", list(node.sideway().stream().map(LispString::new).toArray(LispVal[]::new)));
+			}
+			if (node.ifFeature() != null) {
+				option(items, ":IF-FEATURE", node.ifFeature());
+			}
+			if (!node.enabled()) {
+				option(items, ":DISABLED", LispTrue.INSTANCE);
+			}
+			if (loaded != null && !loaded.initargs().isEmpty()) {
+				option(items, ":INITARGS", list(loaded.initargs().toArray(LispVal[]::new)));
+			}
+			if (!node.children().isEmpty()) {
+				option(items, ":CHILDREN", nodeRecords(system, node.children(), planIndexes));
+			}
+			records.add(list(items.toArray(LispVal[]::new)));
+		}
+		return list(records.toArray(LispVal[]::new));
+	}
+
+	private static void option(List<LispVal> items, String key, LispVal value) {
+		items.add(new LispSymbol(key));
+		items.add(value);
 	}
 
 	private static LispVal metadataPlist(AsdfSystems.LispSystem system) {
@@ -1014,7 +1063,7 @@ public final class AsdfRuntimeLibrary {
 			    (if thunk
 			        (funcall thunk)
 			        (error "ASDF:PERFORM cannot load ~a of system ~a at run time on the compiled backends (systems are spliced at compile time)"
-			               (asdf:component-name (nth index (asdf:component-children (asdf:find-system system))))
+			               (asdf:component-name (%asdf-planned-component system index))
 			               system))))
 			""";
 
@@ -1091,10 +1140,6 @@ public final class AsdfRuntimeLibrary {
 			return "./";
 		}
 		return baseDir.endsWith("/") ? baseDir : baseDir + "/";
-	}
-
-	@Nullable private static String emptyToNull(@Nullable String dir) {
-		return dir == null || dir.isEmpty() ? null : dir;
 	}
 
 	private static LispVal list(LispVal... items) {

@@ -293,7 +293,7 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   メモ化された CLOS インスタンス (呼び出し間で `eq`) を返します。クラスは本物です —
   `asdf:component`、`asdf:child-component`/`asdf:parent-component`、
   `asdf:module`、`asdf:system`、`asdf:package-inferred-system`、
-  `asdf:source-file`、`asdf:cl-source-file`、`asdf:static-file` — ので、これらに
+  `asdf:source-file`、`asdf:cl-source-file`、`asdf:static-file`、`asdf:doc-file` — ので、これらに
   対する `typep`、`typecase`、`defmethod` の特定化子はすべてのバックエンドで
   動作します。リーダー
   [`asdf:component-name`](../reference/functions/asdf-component-name.md)、
@@ -301,7 +301,8 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   (素の文字列で書かれていた場合の `:version` 文字列)、
   [`asdf:component-pathname`](../reference/functions/asdf-component-pathname.md)、
   [`asdf:component-children`](../reference/functions/asdf-component-children.md)
-  (コンポーネントファイルごとに 1 つの `cl-source-file`、ロード順)、
+  (定義に書かれたインスタンスを定義順で返します。`:module` は自身の子を持つ
+  `asdf:module`、`:static-file` は `asdf:static-file` です)、
   [`asdf:component-sideway-dependencies`](../reference/functions/asdf-component-sideway-dependencies.md)、
   [`asdf:component-parent`](../reference/functions/asdf-component-parent.md)、
   [`asdf:component-system`](../reference/functions/asdf-component-system.md)
