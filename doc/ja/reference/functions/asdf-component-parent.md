@@ -2,8 +2,8 @@
 
 `(asdf:component-parent component)`
 
-リーダー: コンポーネントの親コンポーネントを返します。ソースファイルではシステム、
-システム自身では `nil` です。
+リーダー: コンポーネントの親コンポーネントを返します。その子を持つシステムまたは
+モジュールで、システム自身では `nil` です。
 
 ```lisp
 (asdf:defsystem :demo-par :components ((:file "main")))

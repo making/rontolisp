@@ -672,11 +672,13 @@ final class CompileTimePathnameFolder {
 			return reduceSubpathname(args, systems, parameters, locals, loadPath);
 		}
 		if (LispNames.ASDF_PKG.equals(qn.pkg())) {
-			if (LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member())
-					|| LispNames.COMPONENT_PATHNAME.equals(qn.member())) {
-				// component-pathname of a SYSTEM is its source directory, and a system is
-				// the only component object rontolisp materializes.
-				return reduceSystemSourceDirectory(args, systems, parameters, locals, loadPath);
+			if (LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member())) {
+				return reduceSystemDirectory(args, systems, parameters, locals, false);
+			}
+			if (LispNames.COMPONENT_PATHNAME.equals(qn.member())) {
+				// The argument folds only to a system designator, and a system's pathname
+				// is its :pathname directory.
+				return reduceSystemDirectory(args, systems, parameters, locals, true);
 			}
 			if (LispNames.SYSTEM_RELATIVE_PATHNAME.equals(qn.member())) {
 				return reduceSystemRelativePathname(args, systems, parameters, locals, loadPath);
@@ -1020,9 +1022,9 @@ final class CompileTimePathnameFolder {
 		return new LispString(PathnameOps.mergePathnames(relativeNs, base.endsWith("/") ? base : base + "/"));
 	}
 
-	private static @Nullable LispVal reduceSystemSourceDirectory(List<LispVal> args,
+	private static @Nullable LispVal reduceSystemDirectory(List<LispVal> args,
 			Map<String, AsdfSystems.LispSystem> systems, Map<String, LispVal> parameters, Map<String, LispVal> locals,
-			boolean loadPath) {
+			boolean ownPathname) {
 		if (args.size() != 1) {
 			return null;
 		}
@@ -1033,6 +1035,9 @@ final class CompileTimePathnameFolder {
 		AsdfSystems.LispSystem system = systems.get(name);
 		if (system == null) {
 			return null;
+		}
+		if (ownPathname) {
+			return new LispString(system.pathname());
 		}
 		String base = system.baseDir();
 		if (base == null || base.isEmpty()) {

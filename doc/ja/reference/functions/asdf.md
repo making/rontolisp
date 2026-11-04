@@ -16,18 +16,20 @@
 | `asdf:load-asd` | `(asdf:load-asd "vendor/old/my-lib.asd")` | 1 つの `.asd` ファイルの定義をロードする |
 | `asdf:clear-system` | `(asdf:clear-system :my-lib)` | システムを忘れる。次の `find-system` は探索し直す |
 | `asdf:map-systems` | `(asdf:map-systems #'print)` | 登録済みの各システムを引数に関数を呼ぶ。`already-loaded-systems`、`component-loaded-p`、`registered-system` で状態を問い合わせる |
-| `asdf:find-component` | `(asdf:find-component :my-lib "main")` | システムのコンポーネントを名前で探す。なければ nil。`module-components` は `component-children` と同じ |
+| `asdf:find-component` | `(asdf:find-component :my-lib "main")` | コンポーネントを名前、または木をたどる名前のリストで探す。なければ nil。`module-components` は `component-children` と同じ |
 | `asdf:system-description` | `(asdf:system-description (asdf:find-system :my-lib))` | `defsystem` の宣言を読む。他の `system-` リーダー、`component-property`、`system-source-file` も同様 |
 | `asdf:*central-registry*` | `(push "vendor/my-lib/" asdf:*central-registry*)` | 探索パスより先に `NAME.asd` を探すディレクトリ |
+| `asdf:initialize-source-registry` | `(asdf:initialize-source-registry '(:source-registry (:tree :here) :inherit-configuration))` | 探索先を設定する (`:directory`、`:tree`、`:here`、継承する設定)。`clear-source-registry` で取り消す |
+| `asdf:*system-definition-search-functions*` | `(push 'vendor-search asdf:*system-definition-search-functions*)` | 探索で順に呼ぶ関数。名前を受け取り、パス名かシステムを返す |
 | `asdf:find-system` | `(asdf:find-system :my-lib nil)` | システムのメタオブジェクト。名前ごとにメモ化された本物の `asdf:system` CLOS インスタンス (呼び出し間で `eq`)。`error-p` が nil なら未知の名前に nil |
 | `asdf:registered-systems` | `(asdf:registered-systems)` | 登録済みのすべてのシステムの小文字化された名前 (登録順) |
 | `asdf:system-relative-pathname` | `(asdf:system-relative-pathname :my-lib "data/tlds.dat")` | システムのソースディレクトリを基準に解決した名前文字列 (コンパイルパスではリテラルへ畳み込まれる) |
-| `asdf:component-pathname` | `(asdf:component-pathname (asdf:find-system :my-lib))` | システムのソースディレクトリ (末尾に `/`)、またはソースファイルの子の解決済みパス。メタオブジェクトも名前指示子も受け付ける |
-| `asdf:component-name` | `(asdf:component-name (asdf:find-system :my-lib))` | リーダー: コンポーネントの小文字正規形の名前 |
+| `asdf:component-pathname` | `(asdf:component-pathname (asdf:find-system :my-lib))` | システムまたはモジュールのディレクトリ (末尾に `/`)、またはファイルの解決済みパス。メタオブジェクトも名前指示子も受け付ける |
+| `asdf:component-name` | `(asdf:component-name (asdf:find-system :my-lib))` | リーダー: 定義に書かれたコンポーネントの名前 (シンボルは小文字化) |
 | `asdf:component-version` | `(asdf:component-version (asdf:find-system :my-lib))` | リーダー: 宣言された `:version` 文字列。素の文字列で宣言されていなければ nil (計算された書き方は評価されません) |
-| `asdf:component-children` | `(asdf:component-children (asdf:find-system :my-lib))` | リーダー: システムのコンポーネントファイル (ロード順、ファイルごとに 1 つの `asdf:cl-source-file`) |
+| `asdf:component-children` | `(asdf:component-children (asdf:find-system :my-lib))` | リーダー: システムまたはモジュールの子 (定義順)。`asdf:module`、`asdf:cl-source-file`、`asdf:static-file` などのインスタンス |
 | `asdf:component-sideway-dependencies` | `(asdf:component-sideway-dependencies (asdf:find-system :my-lib))` | リーダー: システムの `:depends-on` の名前 (package-inferred のサブシステム名を含む) |
-| `asdf:component-parent` | `(asdf:component-parent child)` | リーダー: 親コンポーネント — ソースファイルではシステム、システムでは nil |
+| `asdf:component-parent` | `(asdf:component-parent child)` | リーダー: 親コンポーネント — その子を持つシステムまたはモジュール、システムでは nil |
 | `asdf:component-system` | `(asdf:component-system child)` | コンポーネントが属するシステム (`component-parent` をたどる) |
 
 本物の ASDF 3.3.1 がエクスポートする他の名前も、すべて読み込めてどのバックエンドにも定義があるので、

@@ -113,8 +113,16 @@ with each start defaulting to the `next-version` of the lower level.
 `uiop/backward-driver` (2/7, `uiop-backward-driver.lisp`) — `coerce-pathname` is the one-line
 DEPRECATED alias of `parse-unix-namestring` (`.todo/357`), and `version-compatible-p` is the ASDF
 1-to-2.32 check over `parse-version` + `lexicographic<=`. The other five (the configuration
--directory search) stay `not-implemented-error` stubs: they need `uiop/configuration`, which
-nothing implements yet.
+-directory search) are homed in `uiop/configuration` by the inventory.
+
+`uiop/configuration` (`uiop-configuration.lisp`, 2026-11-05) — upstream's bodies, which the source
+registry stands on ([asdf.md](asdf.md), "The search"): the location DSL, the validators, the XDG
+directories, the clear-configuration hook. `get-folder-path`, `uiop-directory` and
+`*user-cache*`'s computation stay stubs. `:here` without `*here-directory*` is the directory of
+`*load-truename*`, since `*load-pathname*` is a spelling here and upstream wants it absolute.
+`report-invalid-form` calls `error` directly on a made condition: a funcalled `#'error` is a raw trap
+on wasm. `uiop:load-pathname` and `current-lisp-file-pathname` spelled `cl:*load-pathname*`, which the
+interpreter does not resolve in a resource (unbound variable there until 2026-11-05).
 
 `uiop/utility` — `with-upgradability` -> `progn`; one character type (`+character-types+` =
 `#(character)`, `+non-base-chars-exist-p+` NIL, `base-string-p` always t);

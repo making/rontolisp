@@ -1,8 +1,12 @@
 package am.ik.rontolisp.e2e;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import am.ik.rontolisp.AsdfExports;
 
@@ -10,13 +14,13 @@ import am.ik.rontolisp.AsdfExports;
  * The ASDF component metaobjects at run time ({@code .kb/asdf.md},
  * {@code AsdfRuntimeLibrary}): on all four backends, {@code asdf:find-system} answers a
  * memoized {@code asdf:system} instance ({@code eq} across calls), the component readers
- * walk a {@code :components} system with a {@code :module} (flattened to one
- * {@code cl-source-file} per file), a {@code defmethod} specialized on
- * {@code asdf:system}/{@code asdf:cl-source-file} dispatches, {@code typep} and
- * {@code asdf:registered-systems} answer, a NESTED {@code asdf:load-system} of the
- * already-spliced system is a no-op, and {@code (asdf:test-system "meta-demo")} follows
- * the {@code :in-order-to} test-op chain into the tests system's recorded
- * {@code :perform} body. Fixture: {@code src/test/resources/asdf-metaobjects-demo}.
+ * walk a {@code :components} system with a {@code :module}, a {@code defmethod}
+ * specialized on {@code asdf:system}/{@code asdf:cl-source-file} dispatches,
+ * {@code typep} and {@code asdf:registered-systems} answer, a NESTED
+ * {@code asdf:load-system} of the already-spliced system is a no-op, and
+ * {@code (asdf:test-system "meta-demo")} follows the {@code :in-order-to} test-op chain
+ * into the tests system's recorded {@code :perform} body. Fixture:
+ * {@code src/test/resources/asdf-metaobjects-demo}.
  *
  * <p>
  * It also pins three ASDF gaps: {@code asdf:component-version} answers the declared
@@ -61,8 +65,7 @@ import am.ik.rontolisp.AsdfExports;
  * library's method; {@code asdf:*central-registry*} finds a system no search path names;
  * {@code oos}, {@code operate}, {@code make} and {@code load-asd} at top level splice;
  * the metadata readers, {@code find-component}, {@code clear-system} and the conditions
- * answer what SBCL 2.2.9's ASDF 3.3.1 answers for the same file (where the model is flat,
- * a test of the class stands in for a name).
+ * answer what SBCL 2.2.9's ASDF 3.3.1 answers for the same file.
  *
  * <p>
  * And the classes loaded code defines ({@code .kb/asdf.md}, "Classes loaded code
@@ -71,6 +74,18 @@ import am.ik.rontolisp.AsdfExports;
  * {@code :defsystem-depends-on} brings them in, and each instance acts as its class's
  * methods say -- the same answers as SBCL 2.2.9's ASDF 3.3.1 for the same files, but for
  * the symbol {@code asdf/interface::x} printing {@code asdf::x}.
+ *
+ * <p>
+ * And the component tree ({@code .kb/asdf.md}, "The component tree"):
+ * {@code registry/tree-exercise.lisp} walks {@code meta-demo-tree}, and
+ * {@code registry/meta-demo-tree.expected} is what SBCL 2.2.9's ASDF 3.3.1 prints for it.
+ *
+ * <p>
+ * And the search ({@code .kb/asdf.md}, "The search"):
+ * {@code source-registry/exercise.lisp} configures the source registry with
+ * {@code :here}, {@code :directory} and {@code :tree}, loads what it finds, and pushes a
+ * search function; {@code source-registry.expected} is what SBCL 2.2.9's ASDF 3.3.1
+ * prints for it.
  */
 class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 
@@ -113,7 +128,7 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			;; A compile path registered what the surface below loads while it spliced.
 			(print (remove-if (lambda (name)
 			                    (or (search "central" name) (search "made" name) (search "late" name)
-			                        (search "classes" name)))
+			                        (search "classes" name) (search "tree" name) (search "registry" name)))
 			                  (asdf:registered-systems)))
 			(defun nested-load () (asdf:load-system "meta-demo"))
 			(nested-load)
@@ -144,7 +159,8 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			(print (find :meta-demo-hooked *features*))
 			(print (weak-fn))
 			(print (asdf:component-sideway-dependencies (asdf:find-system "meta-demo/hooked")))
-			""" + surface();
+			""" + surface() + read("tree-exercise.lisp") + "(load \"" + SYSTEM_DIR
+			+ "/source-registry/exercise.lisp\")\n";
 
 	/**
 	 * The whole surface: naming every external here is what splices every stub.
@@ -249,9 +265,27 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 				""".formatted(registry);
 	}
 
-	private static final List<String> EXPECTED = List.of("T", "T", "NIL", "T", "\"meta-demo\"",
-			"(\"src/one\" \"src/m/two\")", "NIL", "T", "NIL", "T", "T", "(\"meta-demo\")", "\"1.2.3\"", "NIL", ":UNIX",
-			":SMALL", ":TOOL", ":RELATIVE-OK", ":SYSTEM", ":FILE", "NIL", "(NIL \"3.3.7\")",
+	private static String read(String registryFile) {
+		try {
+			return Files.readString(Path.of(SYSTEM_DIR, "registry", registryFile));
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+	}
+
+	private static String readSourceRegistryExpected() {
+		try {
+			return Files.readString(Path.of(SYSTEM_DIR, "source-registry", "source-registry.expected"));
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+	}
+
+	private static final List<String> EXPECTED = Stream.concat(Stream.of("T", "T", "NIL", "T", "\"meta-demo\"",
+			"(\"one\" \"m\")", "NIL", "T", "NIL", "T", "T", "(\"meta-demo\")", "\"1.2.3\"", "NIL", ":UNIX", ":SMALL",
+			":TOOL", ":RELATIVE-OK", ":SYSTEM", ":FILE", "NIL", "(NIL \"3.3.7\")",
 			"(\"meta-demo-tool\" \"meta-demo-tool/hook\" \"meta-demo\" \"meta-demo/tests\" \"meta-demo/hooks\""
 					+ " \"meta-demo/perform\" \"meta-demo/nested\" \"meta-demo/weak\" \"meta-demo/hooked\""
 					+ " \"trivial-features\")",
@@ -280,7 +314,10 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			"((:LOGGED-LOAD \"classes-plain\") (:COMPILE-DATA \"classes-data\" \"classes-data.out\" \"classes-data.dat\")"
 					+ " (:LOAD-DATA \"classes-data\") (:COMPILE-LATER \"classes-later\")"
 					+ " (:REMEMBER-LATER \"classes-later\"))",
-			"(:LATER-FILE-RAN :READ-HOOKED)", "(T T)");
+			"(:LATER-FILE-RAN :READ-HOOKED)", "(T T)"),
+			Stream.concat(read("meta-demo-tree.expected").lines(), //
+					readSourceRegistryExpected().lines()))
+		.toList();
 
 	@Override
 	protected String systemDir() {

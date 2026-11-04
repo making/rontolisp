@@ -1,5 +1,6 @@
 package am.ik.rontolisp.cli;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -43,7 +44,13 @@ class LoadInlinerTest {
 		String plain = inline("(asdf:load-system :sq) (print (asdf:find-system :sq))", files).stream()
 			.map(LispVal::print)
 			.collect(java.util.stream.Collectors.joining(" "));
-		assertThat(plain).contains("ASDF:FIND-SYSTEM").doesNotContain("ASDF:TRAVERSE").doesNotContain("Squares");
+		assertThat(plain).contains("ASDF:FIND-SYSTEM")
+			.doesNotContain("ASDF:TRAVERSE")
+			.doesNotContain("Squares")
+			.doesNotContain("SYSTEM-DEFINITION-SEARCH-FUNCTIONS");
+		assertThat(inline("(print asdf:*system-definition-search-functions*)", files).stream()
+			.map(LispVal::print)
+			.collect(java.util.stream.Collectors.joining(" "))).contains("SYSDEF-SOURCE-REGISTRY-SEARCH");
 		// The name, in the spelling of a package using asdf; the superclass it needs.
 		String naming = inline("""
 				(asdf:load-system :sq)
@@ -54,6 +61,52 @@ class LoadInlinerTest {
 			.map(LispVal::print)
 			.collect(java.util.stream.Collectors.joining(" "));
 		assertThat(naming).contains("Squares").contains("DEFMETHOD ASDF:TRAVERSE").contains("ASDF:IMAGE-OP");
+	}
+
+	@Test
+	void aLiteralSourceRegistryCallDecidesTheSearchWhileSplicing(@TempDir Path dir) throws Exception {
+		// Ahead of and behind what it inherits, nothing of that once it ignores it, and
+		// the search path again once cleared. A computed call is the program's alone.
+		Path ahead = Files.createDirectories(dir.resolve("ahead"));
+		Path path = Files.createDirectories(dir.resolve("path"));
+		Path behind = Files.createDirectories(dir.resolve("behind"));
+		Files.writeString(ahead.resolve("first.asd"), "(defsystem :first :description \"from ahead\")");
+		Files.writeString(path.resolve("first.asd"), "(defsystem :first :description \"from the path\")");
+		Files.writeString(path.resolve("second.asd"), "(defsystem :second :description \"from the path\")");
+		Files.writeString(behind.resolve("second.asd"), "(defsystem :second :description \"from behind\")");
+		Files.writeString(behind.resolve("third.asd"), "(defsystem :third :description \"from behind\")");
+		SourceLoader loader = SourceLoader.fileSystem();
+		List<String> systemPath = List.of(path.toString());
+		String configured = """
+				(asdf:initialize-source-registry
+				 '(:source-registry (:directory "%s/") :inherit-configuration (:directory "%s/")))
+				(asdf:load-system :first)
+				(asdf:load-system :second)
+				(asdf:load-system :third)
+				(print (asdf:system-description (asdf:find-system :first)))""".formatted(ahead, behind);
+		String printed = LoadInliner.inline(LispReader.readAllFromString(configured), loader, null, systemPath)
+			.stream()
+			.map(LispVal::print)
+			.collect(java.util.stream.Collectors.joining(" "));
+		assertThat(printed).contains("\"first\" :SYSTEM")
+			.contains("from ahead")
+			.contains("from the path")
+			.contains("from behind");
+		assertThat(printed).doesNotContain("\"second\" :DESCRIPTION \"from behind\"");
+		assertThatThrownBy(() -> LoadInliner.inline(LispReader.readAllFromString("""
+				(asdf:initialize-source-registry '(:source-registry :ignore-inherited-configuration))
+				(asdf:load-system :first)"""), loader, null, systemPath))
+			.hasMessageContaining("system 'first' not found");
+		assertThat(LoadInliner.inline(LispReader.readAllFromString("""
+				(asdf:initialize-source-registry '(:source-registry :ignore-inherited-configuration))
+				(asdf:clear-source-registry)
+				(asdf:load-system :first)"""), loader, null, systemPath)).isNotEmpty();
+		assertThatThrownBy(() -> LoadInliner.inline(LispReader.readAllFromString("""
+				(defvar *where* "%s/")
+				(asdf:initialize-source-registry
+				 (list :source-registry (list :directory *where*) :inherit-configuration))
+				(asdf:load-system :third)""".formatted(behind)), loader, null, systemPath))
+			.hasMessageContaining("system 'third' not found");
 	}
 
 	@Test

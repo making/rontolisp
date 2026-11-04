@@ -2,8 +2,9 @@
 
 `(asdf:component-name component)`
 
-リーダー: コンポーネントの小文字正規形の名前を返します。システムではシステム名、
-ソースファイルではシステムからの相対パスから `.lisp` 拡張子を除いたものです。
+リーダー: 定義に書かれたコンポーネントの名前を返します。シンボルは小文字化します。
+コンポーネントの `:pathname` も、囲むモジュールも名前を変えません。
+`(:module "m" :components ((:file "two")))` の子の名前は `"two"` です。
 
 ```lisp
 (asdf:defsystem :demo-cn :components ((:file "main")))

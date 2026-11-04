@@ -51,7 +51,6 @@ cl-project, caveman2), even on a line never reached. prove, cl-project and cavem
   Interpreter: read at each search, each entry evaluated (`centralRegistryDirs`). Compile path: a
   top-level `push`/`pushnew` of a directory that folds (`centralRegistryPush`, the `load` path folder)
   goes on `Ctx.centralRegistry`, and the form stays for the program to read the variable.
-  `*system-definition-search-functions*` is nil and nothing consults it (`.todo/i25`).
 - **`find-system` searches on the interpreter** (`locateSystem`): the `.asd` runs and registers; it
   downloads nothing and loads no system. A refused name and a file already loading answer nil. The
   primary's `.asd` is not read again for a sub-system. A compile path answers its baked table.
@@ -68,9 +67,6 @@ cl-project, caveman2), even on a line never reached. prove, cl-project and cavem
   `registered-systems` until the next `find-system`, which answers a new instance of the baked record;
   a load loads nothing, so `component-loaded-p` is `t` again from then. Interpreter: the registry forgets,
   and the next load reruns the file.
-- **Flat model limits** (`.todo/i23`): a `:module` is no instance, so `find-component` matches a child's
-  relative path whole or from a directory boundary and a module itself is not found;
-  `component-name` is the relative path (`"src/m/two"`, real `"two"`).
 - **`component-depends-on`** answers real ASDF's shapes (measured), nothing here reads them.
 - Verified against SBCL 2.2.9's ASDF 3.3.1 with `AsdfMetaobjectsE2eTest`'s `registry/` systems: the
   same answers on all four backends, the metadata `#.` and the printed package of a symbol aside.
@@ -146,7 +142,8 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
   compile path -- `LoadInliner` wraps a non-parse exception as `<asd path>: message`.
 
 ### Options
-- `:components` in ASDF's PLAN order: definition order, each component after its `:depends-on`
+- `:components` in ASDF's PLAN order (`LispSystem.files`; the definition's order is the tree, "The
+  component tree"): definition order, each component after its `:depends-on`
   siblings, depth first (`placeComponent`); `:serial` = implicit dep on the previous sibling;
   `:module` = path prefix with files kept contiguous; `:static-file` = ordering-only. Until
   2026-10-31 it was a pass-wise topological sort that placed every dependency-free component
@@ -315,10 +312,10 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
   table: a primary on `load-op` more specific than `cl-source-file`'s) whether `load-op` leaves the
   file unread. These made `file-type`, `default-component-class` and `around-compile` real slots, and
   `around-compile-hook` real. `STUB_FILE_TYPES` gives the stub classes their upstream `type`.
-- **The plan**: `LispSystem.loadedClasses`. A record's CLASS is the name as a STRING and its eighth
-  field `(RELATIVE CLASS . INITARGS)` entries: strings because the table stands ahead of the packages
-  they name. Options the grammar does not read are initargs (`lass-file`'s `:output`), on a loaded
-  class only; `.asd`-shape classes keep refusing them.
+- **The plan**: `LispSystem.loadedClasses`. A record's CLASS and a component node's KIND are the name
+  as a STRING: strings because the table stands ahead of the packages they name. Options the grammar
+  does not read are initargs (`lass-file`'s `:output`), on a loaded class only; `.asd`-shape classes
+  keep refusing them.
 - **What the loaders do with a file**: a `cl-source-file` subclass is read as Lisp. Any other class's
   file (`lass-file`) is opened by no loader: the compile path keeps the component bracket, without
   forms, so its actions are performed. The file need not be readable as Lisp, and need not exist at
@@ -365,7 +362,7 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
   `with-standard-io-syntax` not binding `*print-base*` (`.todo/i32`). `fast-http-test` fails 2 of 64 in
   `t/parser.lisp` and aborts `t/fast-http.lisp` on CONNECT (2026-11-05, `.todo/i39`). `lass-file` with `:output`: the CSS SBCL writes,
   all four. `hu.dwim.def`: loads on all four, its class, `package-name` and license as on SBCL
-  (`component-children` flat, `.todo/i23`). coalton stops before any of this, as "Options around the
+  (`component-children` real since "The component tree"). coalton stops before any of this, as "Options around the
   compile" records.
 - **Refusal**: a name no image holds is `unsupported component type` / `unsupported :class`, naming it;
   an inline `defsystem` on a compile path cannot see a class the program's own `defclass` defines (the
@@ -373,6 +370,54 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
 - Pinned by `ProveE2eTest` (vendored prove, `prove-test.expected` from SBCL), `AsdfMetaobjectsE2eTest`
   (`classes-tool.lisp`, one class per consumer shape, all four), `UserMacroExpanderTest` (the deferred
   replay), `AsdfSystemsTest#aPerformBodyReadEvalReadsInTheImage`.
+
+## The search (i25, 2026-11-05)
+`asdf-search.lisp`, ported from ASDF 3.3.1 (`~/.rontolisp/quicklisp/software/lisp-binary-*/asdf.lisp`);
+`uiop-configuration.lisp` holds the configuration DSL it stands on (`.kb/uiop.md`). Order:
+`*system-definition-search-functions*` (real ASDF's three names), then the download cache.
+- **Interpreter**: `locateAsd`/`locateSystem` -> `searchSystemDefinition` -> `%asdf-search-file` -> the
+  walk. A function answers a pathname (a string is a `type-error`, as there), or a system, adopted with
+  an empty record (`%asdf-adopt-system`, `emptySystem`): a load of it does nothing, as real ASDF's plan
+  over no children (measured). A search runs at each lookup, in Lisp, so a `let` of either variable counts.
+- **What it inherits is the search path**, not `~/common-lisp`, `~/.config` or `CL_SOURCE_REGISTRY`:
+  `*default-source-registries*` is one function (`%asdf-inherited-search-path`), so the machine reaches a
+  search only through `--system-path` and `RONTOLISP_SOURCE_REGISTRY` (`:default-registry` still names
+  real ASDF's). `LispEvaluator.searchPathDirs`: the directory of the file asking, then `systemPath`.
+  **Probed at each search, never scanned**: a `.asd` written after the program started counts, and the
+  playground's loader cannot list. So it stands in the flattened entries as a mark (`%asdf-flattened-entries%`),
+  and what a configuration names sits in two tables, `*source-registry*` ahead of it and
+  `%asdf-registry-behind%` behind (`flatten-source-registry` shows its directories to a program).
+  `:ignore-inherited-configuration` drops it and leaves the download cache (`distDirs`, split from
+  `systemPath` for this), which is Quicklisp's own search function in real ASDF.
+- **Compile path**: `AsdfSystems.sourceRegistryCall` recognizes a top-level `initialize-source-registry`
+  with a quoted, string or nil parameter and `clear-source-registry`. `LoadInliner.readSourceRegistry`
+  runs it in the build image (`%asdf-read-source-registry`, the one implementation of the DSL, let-bound
+  so the image's own search is untouched; the file's load context is `:here`), and
+  `Ctx.searchDirs` gives every search central registry, the `.asd` chosen for the name, the rest ahead,
+  then what it inherits, then what is behind, then `distDirs`. The form stays. **A pushed function is
+  not called while splicing**: the program has not run.
+- **At run time on a compile path** (`searchAtRunTimeDefun`): only a program naming a member of the
+  file carries it (`AsdfRuntimeLibrary.process`, `searchMembers`), since `process-source-registry`'s
+  methods would be pruner roots. Its `find-system` of an unspliced name walks: an answered system is
+  adopted, a pathname reaches `%asdf-load-asd`'s refusal. So `(asdf:find-system "x" nil)` of a `.asd`
+  on disk signals where such a program answered nil before, and an adopted system is in
+  `registered-system` but not `registered-systems`. A literal `(setq *s-d-s-f* nil)` is not read.
+- **Divergences**: a `.asd` configuring the registry does it in the build image only, on a compile
+  path. `find-system-if-being-defined` and the immutable search are not in the walk
+  (`asdFilesLoading` answers the first). A central-registry entry may lack its trailing slash; real
+  ASDF signals.
+- **`(require :asdf)`, `(require :uiop)`** load nothing (`AsdfSystems.isImplementationModule`), on all
+  four. Every measured script opens with one, and it stopped each before `initialize-source-registry`:
+  the premise "each is a script's first line" had this line ahead of it. A nested `require` stays refused
+  on a compile path.
+- **Measured** (2026-11-05, interpreter; `source-registry/exercise.lisp` also on SBCL 2.2.9's ASDF 3.3.1):
+  fiveam's `build.lisp` succeeds and `test.lisp` runs 57 of 57 checks. cl-json's `test-cl-json.lisp`
+  succeeds with fiveam and its dependencies on `RONTOLISP_SOURCE_REGISTRY`; `compile-cl-json.lisp` stops
+  at its `(asdf:operate 'asdf:compile-op ...)`, the refusal "The operation protocol" describes.
+- Pinned by `AsdfMetaobjectsE2eTest` (`source-registry/exercise.lisp`, `source-registry.expected`, all
+  four), `LispEvaluatorAsdfTest` (the walk; a real directory for the inherited position),
+  `LoadInlinerTest#aLiteralSourceRegistryCallDecidesTheSearchWhileSplicing`,
+  `#aProgramCarriesOnlyTheStubsAndMetadataItNames` (who carries the file).
 
 ## `:class :package-inferred-system`
 Consumers: ningle, rove, array-operations, jose. Such a system has NO `:components`; `LispSystem.packageInferredDir` (non-null
@@ -412,10 +457,8 @@ iff declared) is the whole marker. All rules in `AsdfSystems`:
   (`AsdfSystems.checkIgnoredLoadOptions`): `:force`/`:verbose`/`:silent` have nothing to drive
   (no fasl cache, a second load is a no-op), and rejecting them would make lack's
   `find-package-or-load` unloadable. The SHAPE is still checked.
-- **Search order**: `asdf:*central-registry*`, dir of the loading file, then `--system-path`, then
-  `RONTOLISP_SOURCE_REGISTRY`, plus a `ql:quickload`'s download cache ([dists.md](dists.md)).
-  `RontoLispCli.systemPath()` parses the `File.pathSeparator`-joined lists. The `asdf` package is
-  seeded in `PackageRegistry`.
+- **Search order**: "The search". `RontoLispCli.systemPath()` parses the
+  `File.pathSeparator`-joined lists. The `asdf` package is seeded in `PackageRegistry`.
 - **No ci-spec case is possible**: the compile path needs the `.asd` on disk at compile time,
   which the concatenated ci-spec driver cannot provide. Coverage is `AsdfSystemsTest` +
   `LispEvaluatorAsdfTest` + `LoadInlinerTest` + the per-library E2Es.
@@ -456,8 +499,8 @@ One Lisp source `eval/asdf.lisp` (`eval.AsdfRuntimeLibrary`) defines the class f
 `find-system` + the readers + `system-source-directory`/`system-relative-pathname`/
 `component-pathname` (designator-accepting, answering NAMESTRINGS, `.kb/pathnames.md`) +
 `registered-systems`. The one per-backend seam is
-`%asdf-system-record`/`%asdf-system-names`; a record is `(CLASS DIR FILES DEPS LOADED-P VERSION META)`
-with FILES `(RELATIVE . RESOLVED)` pairs.
+`%asdf-system-record`/`%asdf-system-names`; a record is `(CLASS DIR COMPONENTS DEPS LOADED-P VERSION META
+ROOT)`, COMPONENTS as "The component tree" says.
 - **Interpreter**: Java built-ins over the live insertion-ordered `asdfSystems`/`loadedSystems`;
   a built-in shim system answers a record even before it loads. `asdf.lisp` loads lazily
   (`ensureAsdfRuntimeLoaded`) on resolution of any name it defines,
@@ -472,6 +515,48 @@ with FILES `(RELATIVE . RESOLVED)` pairs.
   stubs only as the no-pipeline fallback.
 - `asdf.lisp` needs its `resource-config.json` entry (`AsdfRuntimeLibrary` `typeReachable`), and so
   does `asdf-exports.txt` (`AsdfExports`).
+
+### The component tree (i23, 2026-11-05)
+A system's and a module's children are real instances in definition order; the fixed plan is a table
+of its own. Before this a system's children were its source files, flat and in plan order, so a
+program walking the real tree got something else (djula's `list-asdf-system-templates`, cl-dejavu's
+`find-component` with `:registered`, mcclim's static images, swank-asdf, serapeum's `docs.lisp`,
+eclector's tests).
+- **The model**: `AsdfSystems.ComponentTree` on `LispSystem.tree`, built in `parseComponent`:
+  `children` in definition order, `plan` the same `ComponentNode` objects `files` lists, in plan
+  order. So a record gives a node its plan index by identity (`AsdfRuntimeLibrary.nodeRecords`), which a
+  file two components name does not confuse.
+- **The record**: `(KIND NAME RELATIVE RESOLVED PLAN-INDEX . OPTIONS)`, with what few components say
+  (`:pathname`, `:type`, `:sideway`, `:if-feature`, `:disabled`, `:initargs`, `:children`) in the plist,
+  so a plain file carries five fields. KIND is a keyword for ASDF's own classes (one literal
+  `make-instance` each in `%asdf-new-component`, as `%mop-make-instance`'s gate wants) and a string for a
+  loaded class, a module's included.
+- **The plan is unchanged**: `%asdf-perform-component` and `%asdf-load-source` go through the system's
+  `%plan` table and a component's `%plan-index`. **Divergence**: real ASDF's plan also has actions on a
+  module and a static file (`make-plan`, measured), so a `perform` method on either runs there and not
+  here. A disabled `:if-feature` component is in the tree, as in real ASDF, with no plan index: performing
+  load-op on it signals, where real ASDF would load the file.
+- **Paths**: `component-pathname` of a system is now its `:pathname` directory (`.../src/`, what the
+  fold answers too), `system-source-directory` stays the `.asd`'s (`%source-directory`). A file below it
+  is `RELATIVE` from its parent. All namestrings (`.kb/pathnames.md`); a designator is accepted, where
+  real ASDF signals.
+- **`find-component`, `component-pathname`** are generics with real ASDF's methods (`find-component` from
+  3.3.1's source, `&key registered` included), so a library's method works (swank-asdf's `:around`) and
+  a name below a file signals. Consequence of the tree: `"m/two"` no longer finds anything, as there.
+- **What moved**: a `.asd`-declared class's instance is its nearest ASDF superclass (`ComponentClass.kind`,
+  file type from the class). `doc-file`, `html-file` and the `cl-source-file.*` pair are real definitions.
+  `html-file` names `NAME.html`. A package-inferred sub-system's child is named `"lisp"` at the name below the
+  primary's directory, as real ASDF's is. `sub-components`, `component-parent-pathname`,
+  `component-children-by-name`, `compute-children-by-name` and `component-if-feature` are real; a
+  `:static-file` answers `input-files` on load-op. A system's `component-depends-on` for prepare-op keeps
+  real's empty `(LOAD-OP)`.
+- **Measured** (2026-11-05, against SBCL 2.2.9's ASDF 3.3.1): `registry/tree-exercise.lisp` prints
+  `meta-demo-tree.expected` there and on all four; re-derive it by running that file on SBCL. On real
+  libraries: cl-dejavu's `list-fonts` and `font-pathname` (interpreter, JVM, wasm Preview 1); `hu.dwim.def`'s
+  children (`("source")`) and `(find-component "hu.dwim.def" "source")`, `xsubseq-test` through prove's `:module`
+  (interpreter). djula itself stops earlier, on arnesi's `define-method-combination`, so its
+  `list-asdf-system-templates` was run verbatim over a `:module` of `:static-file`s.
+- Pinned by `AsdfMetaobjectsE2eTest` (all four), `PackageInferredSystemE2eTest` (`"lisp"`).
 
 ### test-op
 - `parseDefsystem` records `:perform (test-op (o c) BODY...)` into `LispSystem.testOp` (body
@@ -510,7 +595,7 @@ parent component is a no-op, any other op on a source file signals, test-op on a
 recorded body. A designator op (`'asdf:load-op`) dispatches through a `symbol` method.
 - **The plan is fixed**: `%asdf-perform-system NAME :before` (prepare-op on the system, after its
   dependencies), then `%asdf-perform-component NAME I` per file in load order (prepare-op,
-  compile-op, load-op on the I-th child), then `:after` (compile-op, load-op on the system) --
+  compile-op, load-op on the I-th of the plan), then `:after` (compile-op, load-op on the system) --
   real ASDF's action order for a source tree with a fresh cache. Compile-op does run each time
   (rontolisp compiles a source file BY loading it); the plan never consults
   `operation-done-p`.

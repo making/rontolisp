@@ -15,6 +15,7 @@ import java.util.Set;
 import am.ik.rontolisp.AsdfExports;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispPackageException;
 import am.ik.rontolisp.LispString;
@@ -68,6 +69,11 @@ import org.jspecify.annotations.Nullable;
  * not define is a signalling stub or an empty class synthesized here
  * ({@link #stubForms}). The interpreter evaluates them all with the runtime; a compile
  * path splices the ones the program names and the superclasses they need.
+ *
+ * <p>
+ * How a system definition is found ({@code asdf-search.lisp}) goes the same way: the
+ * interpreter's loader walks it, and a compile path, whose search ran while it spliced,
+ * carries it only for a program naming one of its members.
  */
 public final class AsdfRuntimeLibrary {
 
@@ -75,6 +81,8 @@ public final class AsdfRuntimeLibrary {
 	}
 
 	@Nullable private static volatile List<LispVal> classForms;
+
+	@Nullable private static volatile List<LispVal> searchForms;
 
 	@Nullable private static volatile List<LispVal> seamForms;
 
@@ -104,8 +112,7 @@ public final class AsdfRuntimeLibrary {
 	 * The file type upstream's classes without a definition in {@code asdf.lisp} hold,
 	 * which a subclass inherits ({@code source-file-type}).
 	 */
-	private static final Map<String, String> STUB_FILE_TYPES = Map.of("CL-SOURCE-FILE.CL", "cl", "CL-SOURCE-FILE.LSP",
-			"lsp", "C-SOURCE-FILE", "c", "JAVA-SOURCE-FILE", "java", "HTML-FILE", "html");
+	private static final Map<String, String> STUB_FILE_TYPES = Map.of("C-SOURCE-FILE", "c", "JAVA-SOURCE-FILE", "java");
 
 	/**
 	 * The classes a definition saying nothing gets: an instance needs no class name in
@@ -162,6 +169,9 @@ public final class AsdfRuntimeLibrary {
 		Set<String> classes = new HashSet<>();
 		Set<String> generics = new HashSet<>();
 		for (LispVal form : coreForms()) {
+			collectDefinition(form, functions, classes, generics);
+		}
+		for (LispVal form : searchForms()) {
 			collectDefinition(form, functions, classes, generics);
 		}
 		// What the seam and the Java built-ins define on every path.
@@ -431,8 +441,40 @@ public final class AsdfRuntimeLibrary {
 	}
 
 	/**
-	 * Returns what the interpreter evaluates as the runtime: {@code asdf.lisp} and every
-	 * stub, superclasses first.
+	 * Returns the parsed {@code asdf-search.lisp} forms, parsed once and cached: the
+	 * search for a system definition and the source registry.
+	 * @return the forms
+	 */
+	private static List<LispVal> searchForms() {
+		List<LispVal> cached = searchForms;
+		if (cached == null) {
+			synchronized (AsdfRuntimeLibrary.class) {
+				cached = searchForms;
+				if (cached == null) {
+					cached = List
+						.copyOf(LispReader.readAllFromString(readSource("asdf-search.lisp"), Features.INTERPRETER));
+					searchForms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	/** The members {@code asdf-search.lisp} defines, each naming the whole file. */
+	private static Set<String> searchMembers() {
+		Set<String> members = new HashSet<>();
+		Set<String> classes = new HashSet<>();
+		Set<String> generics = new HashSet<>();
+		for (LispVal form : searchForms()) {
+			collectDefinition(form, members, classes, generics);
+		}
+		members.addAll(classes);
+		return members;
+	}
+
+	/**
+	 * Returns what the interpreter evaluates as the runtime: {@code asdf.lisp}, the
+	 * search and every stub, superclasses first.
 	 * @return the forms
 	 */
 	public static List<LispVal> interpreterForms() {
@@ -442,6 +484,7 @@ public final class AsdfRuntimeLibrary {
 				cached = imageForms;
 				if (cached == null) {
 					List<LispVal> forms = new ArrayList<>(coreForms());
+					forms.addAll(searchForms());
 					forms.addAll(stubsFor(definitions().stubs().keySet()));
 					forms.addAll(LispReader.readAllFromString(IMAGE_SOURCE, Features.INTERPRETER));
 					cached = List.copyOf(forms);
@@ -464,6 +507,7 @@ public final class AsdfRuntimeLibrary {
 				forms.add(form);
 			}
 		}
+		forms.addAll(searchForms());
 		for (LispVal form : seamForms()) {
 			if (!isLoweringTarget(form)) {
 				forms.add(form);
@@ -553,11 +597,16 @@ public final class AsdfRuntimeLibrary {
 		boolean metadata = mentioned.stream().anyMatch(METADATA_READERS::contains);
 		LoadedNames loaded = loadedClassNames(systems, loadedSystems);
 		List<LispVal> out = new ArrayList<>(coreForms());
+		boolean searches = mentioned.stream().anyMatch(searchMembers()::contains);
+		if (searches) {
+			out.addAll(searchForms());
+		}
 		Set<String> stubs = new HashSet<>(mentioned);
 		stubs.addAll(loaded.asdfMembers());
 		out.addAll(stubsFor(stubs));
 		out.add(registryDefvar(systems, loadedSystems, metadata));
 		out.addAll(seamForms());
+		out.add(searchAtRunTimeDefun(searches));
 		out.add(testOpEdgesDefun(systems, loadedSystems));
 		out.add(recordedTestOpDefun(systems, loadedSystems));
 		out.addAll(program);
@@ -601,14 +650,19 @@ public final class AsdfRuntimeLibrary {
 			if (system.loadedClasses().system() != null) {
 				systemClasses.add(system.loadedClasses().system());
 			}
-			for (String file : system.files()) {
-				AsdfSystems.LoadedClass loaded = system.loadedClasses().components().get(file);
-				if (loaded != null) {
-					componentClasses.add(loaded);
-				}
-			}
+			collectLoadedClasses(system.tree().children(), componentClasses);
 		}
 		return new LoadedNames(systemClasses, componentClasses);
+	}
+
+	private static void collectLoadedClasses(List<AsdfSystems.ComponentNode> nodes,
+			Set<AsdfSystems.LoadedClass> classes) {
+		for (AsdfSystems.ComponentNode node : nodes) {
+			if (node.loaded() != null) {
+				classes.add(node.loaded());
+			}
+			collectLoadedClasses(node.children(), classes);
+		}
 	}
 
 	/**
@@ -781,7 +835,7 @@ public final class AsdfRuntimeLibrary {
 
 	/**
 	 * The record for one system, in the shape {@code asdf.lisp} reads:
-	 * {@code (CLASS DIR FILES DEPS LOADED-P VERSION META)}.
+	 * {@code (CLASS DIR COMPONENTS DEPS LOADED-P VERSION META ROOT)}.
 	 * @param system the parsed system
 	 * @param loaded whether the system has been loaded/spliced
 	 * @return the record as Lisp data
@@ -791,16 +845,10 @@ public final class AsdfRuntimeLibrary {
 	}
 
 	private static LispVal recordFor(AsdfSystems.LispSystem system, boolean loaded, boolean metadata) {
-		List<LispVal> files = new ArrayList<>();
-		List<LispVal> classes = new ArrayList<>();
-		for (String file : system.files()) {
-			files.add(new LispCons(new LispString(file),
-					new LispString(SourceLoader.resolve(emptyToNull(system.baseDir()), file))));
-			AsdfSystems.LoadedClass loadedClass = system.loadedClasses().components().get(file);
-			if (loadedClass != null) {
-				classes.add(new LispCons(new LispString(file), new LispCons(new LispString(loadedClass.name()),
-						list(loadedClass.initargs().toArray(LispVal[]::new)))));
-			}
+		Map<AsdfSystems.ComponentNode, Integer> planIndexes = new java.util.IdentityHashMap<>();
+		List<AsdfSystems.ComponentNode> plan = system.tree().plan();
+		for (int index = 0; index < plan.size(); index++) {
+			planIndexes.put(plan.get(index), index);
 		}
 		List<LispVal> deps = new ArrayList<>();
 		for (String dependency : system.dependsOn()) {
@@ -809,10 +857,60 @@ public final class AsdfRuntimeLibrary {
 		String systemClass = system.loadedClasses().system();
 		LispVal classOf = systemClass != null ? new LispString(systemClass)
 				: new LispSymbol(system.packageInferredClass() ? ":PACKAGE-INFERRED-SYSTEM" : ":SYSTEM");
-		return list(classOf, new LispString(normalizeDir(system.baseDir())), list(files.toArray(LispVal[]::new)),
-				list(deps.toArray(LispVal[]::new)), loaded ? LispTrue.INSTANCE : LispNil.INSTANCE,
+		return list(classOf, new LispString(normalizeDir(system.baseDir())),
+				nodeRecords(system, system.tree().children(), planIndexes), list(deps.toArray(LispVal[]::new)),
+				loaded ? LispTrue.INSTANCE : LispNil.INSTANCE,
 				system.version() == null ? LispNil.INSTANCE : new LispString(system.version()),
-				metadata ? metadataPlist(system) : LispNil.INSTANCE, list(classes.toArray(LispVal[]::new)));
+				metadata ? metadataPlist(system) : LispNil.INSTANCE, new LispString(system.pathname()));
+	}
+
+	/**
+	 * Components as {@code asdf.lisp} reads them:
+	 * {@code (KIND NAME RELATIVE RESOLVED PLAN-INDEX . OPTIONS)}. {@code KIND} is a
+	 * keyword for one of ASDF's own classes and a string for a class loaded code defines;
+	 * what few components say goes in the {@code OPTIONS} plist, so that none carries it
+	 * for nothing.
+	 */
+	private static LispVal nodeRecords(AsdfSystems.LispSystem system, List<AsdfSystems.ComponentNode> nodes,
+			Map<AsdfSystems.ComponentNode, Integer> planIndexes) {
+		List<LispVal> records = new ArrayList<>();
+		for (AsdfSystems.ComponentNode node : nodes) {
+			AsdfSystems.LoadedClass loaded = node.loaded();
+			Integer index = planIndexes.get(node);
+			List<LispVal> items = new ArrayList<>(
+					List.of(loaded != null ? new LispString(loaded.name()) : new LispSymbol(":" + node.kind()),
+							new LispString(node.name()), new LispString(node.relative()),
+							new LispString(system.resolved(node.path())),
+							index == null ? LispNil.INSTANCE : new LispInteger(index)));
+			if (node.written() != null) {
+				option(items, ":PATHNAME", new LispString(node.written()));
+			}
+			if (node.fileType() != null) {
+				option(items, ":TYPE", new LispString(node.fileType()));
+			}
+			if (!node.sideway().isEmpty()) {
+				option(items, ":SIDEWAY", list(node.sideway().stream().map(LispString::new).toArray(LispVal[]::new)));
+			}
+			if (node.ifFeature() != null) {
+				option(items, ":IF-FEATURE", node.ifFeature());
+			}
+			if (!node.enabled()) {
+				option(items, ":DISABLED", LispTrue.INSTANCE);
+			}
+			if (loaded != null && !loaded.initargs().isEmpty()) {
+				option(items, ":INITARGS", list(loaded.initargs().toArray(LispVal[]::new)));
+			}
+			if (!node.children().isEmpty()) {
+				option(items, ":CHILDREN", nodeRecords(system, node.children(), planIndexes));
+			}
+			records.add(list(items.toArray(LispVal[]::new)));
+		}
+		return list(records.toArray(LispVal[]::new));
+	}
+
+	private static void option(List<LispVal> items, String key, LispVal value) {
+		items.add(new LispSymbol(key));
+		items.add(value);
 	}
 
 	private static LispVal metadataPlist(AsdfSystems.LispSystem system) {
@@ -889,6 +987,16 @@ public final class AsdfRuntimeLibrary {
 		}
 		return list(new LispSymbol(LispNames.DEFVAR), new LispSymbol("%ASDF-REGISTRY%"),
 				list(new LispSymbol(LispNames.QUOTE), list(entries.toArray(LispVal[]::new))));
+	}
+
+	/**
+	 * The generated {@code %asdf-search-at-run-time} seam: what {@code asdf:find-system}
+	 * asks about a name the baked table does not hold. A program that names none of the
+	 * search cannot have widened it, so it asks nothing and carries none of it.
+	 */
+	private static LispVal searchAtRunTimeDefun(boolean searches) {
+		return LispReader.readAllFromString(searches ? SEARCH_AT_RUN_TIME : NO_SEARCH_AT_RUN_TIME, Features.INTERPRETER)
+			.getFirst();
 	}
 
 	/**
@@ -982,9 +1090,13 @@ public final class AsdfRuntimeLibrary {
 			  (when (%asdf-baked-record key)
 			    (setq %asdf-cleared% (cons key %asdf-cleared%))))
 			(defun %asdf-locate-system (key)
-			  (when (member key %asdf-cleared% :test #'equal)
-			    (setq %asdf-cleared% (remove key %asdf-cleared% :test #'equal))
-			    (%asdf-baked-record key)))
+			  (if (member key %asdf-cleared% :test #'equal)
+			      (setq %asdf-cleared% (remove key %asdf-cleared% :test #'equal))
+			      (%asdf-search-at-run-time key)))
+			(defun %asdf-note-found-system (key) key)
+			(defun %asdf-derive-system (key) (%asdf-registered-instance key))
+			(defun %asdf-search-path () nil)
+			(defun %asdf-search-path-locate (name inherits) nil)
 			(defun %asdf-load-asd (path)
 			  (error "ASDF:LOAD-ASD cannot load ~a at run time on the compiled backends (systems are spliced at compile time)"
 			         path))
@@ -1014,8 +1126,22 @@ public final class AsdfRuntimeLibrary {
 			    (if thunk
 			        (funcall thunk)
 			        (error "ASDF:PERFORM cannot load ~a of system ~a at run time on the compiled backends (systems are spliced at compile time)"
-			               (asdf:component-name (nth index (asdf:component-children (asdf:find-system system))))
+			               (asdf:component-name (%asdf-planned-component system index))
 			               system))))
+			""";
+
+	// A pushed search function runs here, as the program's own function it is. A system
+	// it
+	// answers is registered; a file cannot be loaded at run time.
+	private static final String SEARCH_AT_RUN_TIME = """
+			(defun %asdf-search-at-run-time (key)
+			  (let ((found (%asdf-check-found (asdf:search-for-system-definition key))))
+			    (cond ((typep found 'asdf:system) (%asdf-adopt-system key found))
+			          (found (%asdf-load-asd found)))))
+			""";
+
+	private static final String NO_SEARCH_AT_RUN_TIME = """
+			(defun %asdf-search-at-run-time (key) key nil)
 			""";
 
 	// What only an image asks or does, the interpreter's half of the seams above: what a
@@ -1058,6 +1184,27 @@ public final class AsdfRuntimeLibrary {
 			                   (asdf::module-default-component-class prototype))
 			              hooked
 			              (and hooked (slot-value prototype 'asdf::around-compile)))))))
+			(defun %asdf-search-file (key)
+			  (let ((found (%asdf-check-found (asdf:search-for-system-definition key))))
+			    (cond ((typep found 'asdf:system) (%asdf-adopt-system key found) t)
+			          (found (namestring found)))))
+			(defun %asdf-derive-system (key)
+			  (and (%asdf-infer-system key) (%asdf-registered-instance key)))
+			(defun %asdf-read-source-registry (parameter)
+			  (let ((asdf:*source-registry-parameter* nil)
+			        (asdf::*source-registry* nil)
+			        (%asdf-registry-behind% nil)
+			        (%asdf-registry-inherits% t))
+			    (asdf:initialize-source-registry parameter)
+			    (flet ((entries (table)
+			             (let ((alist nil))
+			               (maphash (lambda (name asd)
+			                          (setq alist (cons (cons name (namestring asd)) alist)))
+			                        table)
+			               alist)))
+			      (list (entries asdf::*source-registry*)
+			            %asdf-registry-inherits%
+			            (entries %asdf-registry-behind%)))))
 			(defun %asdf-make-system (class name dir version deps)
 			  (make-instance (read-from-string class) :name name :pathname dir
 			                 :absolute-pathname dir :version version :sideway deps))
@@ -1091,10 +1238,6 @@ public final class AsdfRuntimeLibrary {
 			return "./";
 		}
 		return baseDir.endsWith("/") ? baseDir : baseDir + "/";
-	}
-
-	@Nullable private static String emptyToNull(@Nullable String dir) {
-		return dir == null || dir.isEmpty() ? null : dir;
 	}
 
 	private static LispVal list(LispVal... items) {

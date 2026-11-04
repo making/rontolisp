@@ -605,6 +605,9 @@ public final class LispEvaluator {
 	 */
 	private List<String> systemPath = List.of();
 
+	/** The directories a {@code ql:quickload} download brought in. */
+	private final List<String> distDirs = new java.util.ArrayList<>();
+
 	/**
 	 * The READ-TIME feature set every source this evaluator reads is read with:
 	 * {@link Features#INTERPRETER}, widened by whatever the user declared on the command
@@ -4148,7 +4151,7 @@ public final class LispEvaluator {
 						LispNames.REQUIRE + " expects 1 or 2 arguments, got " + args.size());
 			}
 			String name = moduleDesignator(LispNames.REQUIRE, args.get(0));
-			if (!providedModules().contains(name)) {
+			if (!providedModules().contains(name) && !AsdfSystems.isImplementationModule(name)) {
 				String path;
 				if (args.size() == 2) {
 					if (!(args.get(1) instanceof LispString str)) {
@@ -4236,6 +4239,44 @@ public final class LispEvaluator {
 		// asdf:perform, asdf:operate and asdf:test-system over them): loading one
 		// component, and the test-op wiring a system's .asd recorded.
 		// And what moves the registry: a find-system search, clear-system, load-asd.
+		String searchPathName = "%ASDF-SEARCH-PATH";
+		this.globalEnv.defineFunction(searchPathName, new LispFunction(searchPathName, args -> {
+			LispVal dirs = LispNil.INSTANCE;
+			List<String> path = searchPathDirs(true);
+			for (int i = path.size() - 1; i >= 0; i--) {
+				dirs = new LispCons(new LispString(path.get(i)), dirs);
+			}
+			return dirs;
+		}));
+		String searchPathLocateName = "%ASDF-SEARCH-PATH-LOCATE";
+		this.globalEnv.defineFunction(searchPathLocateName, new LispFunction(searchPathLocateName, args -> {
+			if (args.size() != 2 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(searchPathLocateName + " expects a system name string and a flag");
+			}
+			try {
+				return new LispString(
+						AsdfSystems.locate(key.value(), searchPathDirs(isTruthy(args.get(1))), this.sourceLoader)
+							.path());
+			}
+			catch (AsdfSystems.SystemNotFoundException ex) {
+				return LispNil.INSTANCE;
+			}
+		}));
+		String inferSystemName = "%ASDF-INFER-SYSTEM";
+		this.globalEnv.defineFunction(inferSystemName, new LispFunction(inferSystemName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(inferSystemName + " expects a system name string");
+			}
+			return inferSystem(key.value());
+		}));
+		String noteFoundSystemName = "%ASDF-NOTE-FOUND-SYSTEM";
+		this.globalEnv.defineFunction(noteFoundSystemName, new LispFunction(noteFoundSystemName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(noteFoundSystemName + " expects a system name string");
+			}
+			this.asdfSystems.computeIfAbsent(key.value(), this::emptySystem);
+			return LispNil.INSTANCE;
+		}));
 		String locateSystemName = "%ASDF-LOCATE-SYSTEM";
 		this.globalEnv.defineFunction(locateSystemName, new LispFunction(locateSystemName, args -> {
 			if (args.size() != 1 || !(args.get(0) instanceof LispString key)) {
@@ -5833,36 +5874,136 @@ public final class LispEvaluator {
 		catch (IOException ex) {
 			throw new LispEvalException(LispNames.QL_QUICKLOAD + ": " + ex.getMessage());
 		}
-		List<String> merged = new java.util.ArrayList<>(this.systemPath);
 		for (String dir : asdDirs) {
-			if (!merged.contains(dir)) {
-				merged.add(dir);
+			if (!this.distDirs.contains(dir)) {
+				this.distDirs.add(dir);
 			}
 		}
-		this.systemPath = List.copyOf(merged);
 		return asdDirs;
 	}
 
 	/**
-	 * Locates a system's {@code .asd}; under {@code ql:quickload}, one no search
-	 * directory holds is downloaded first. Quicklisp's index lists a dependency by its
-	 * PRIMARY name only (cl-smtp's {@code frugal-uuid/non-frugal} is indexed as
+	 * Locates a system's {@code .asd}; under {@code ql:quickload}, one the search does
+	 * not find is downloaded first. Quicklisp's index lists a dependency by its PRIMARY
+	 * name only (cl-smtp's {@code frugal-uuid/non-frugal} is indexed as
 	 * {@code frugal-uuid}), so the download in front of the load misses what a secondary
 	 * system needs ({@code ironclad/prngs}); Quicklisp's client installs such a system
 	 * when ASDF reports it missing, and this is that step.
-	 * @param searchDirs the search directories, widened in place by a download
+	 * @return the file, or {@code null} when the search registered the system itself
 	 */
-	private AsdfSystems.LocatedAsd locateAsd(String name, List<String> searchDirs) {
+	private AsdfSystems.@Nullable LocatedAsd locateAsd(String name) {
+		AsdfSystems.LocatedAsd asd = searchSystemDefinition(name);
+		if (asd == null && !this.asdfSystems.containsKey(name) && this.quickloadDepth > 0) {
+			downloadQuicklisp(name);
+			asd = searchSystemDefinition(name);
+		}
+		if (asd == null && !this.asdfSystems.containsKey(name)) {
+			throw AsdfSystems.notFound(name, triedPaths(name));
+		}
+		return asd;
+	}
+
+	/**
+	 * Walks {@code asdf:*system-definition-search-functions*}.
+	 * @return the file a function found, or {@code null} when none did or one answered a
+	 * system, which is registered by then
+	 */
+	private AsdfSystems.@Nullable LocatedAsd searchSystemDefinition(String name) {
+		ensureAsdfRuntimeLoaded();
+		LispVal found = applyGlobally(this.globalEnv.lookupFunction("%ASDF-SEARCH-FILE"),
+				List.of(new LispString(name)));
+		if (!(found instanceof LispString path)) {
+			return null;
+		}
+		AsdfSystems.LocatedAsd asd = AsdfSystems.readAsd(path.value(), this.sourceLoader);
+		if (asd == null) {
+			throw new LispEvalException(
+					"The search for system '" + name + "' found " + path.value() + ", which cannot be read");
+		}
+		return asd;
+	}
+
+	/** The {@code .asd} paths a failed search reports having looked at. */
+	private List<String> triedPaths(String name) {
+		String fileName = AsdfSystems.primarySystemName(name) + ".asd";
+		List<String> tried = new java.util.ArrayList<>();
+		for (String dir : centralRegistryDirs()) {
+			tried.add(SourceLoader.resolve(dir, fileName));
+		}
+		for (String dir : searchPathDirs(true)) {
+			tried.add(SourceLoader.resolve(dir, fileName));
+		}
+		return tried.stream().distinct().toList();
+	}
+
+	/**
+	 * What the source registry inherits on the interpreter, which is probed at each
+	 * search: the directory of the file asking and the system path. What a download
+	 * brought in counts whatever a configuration says, as Quicklisp's own search function
+	 * does.
+	 */
+	private List<String> searchPathDirs(boolean inherits) {
+		List<String> dirs = new java.util.ArrayList<>();
+		if (inherits) {
+			String baseDir = this.loadDirStack.peekLast();
+			dirs.add(baseDir == null ? "" : baseDir);
+			dirs.addAll(this.systemPath);
+		}
+		dirs.addAll(this.distDirs);
+		return dirs;
+	}
+
+	/**
+	 * Whether the search finds {@code name}, looking from {@code baseDir} first: the
+	 * answer to a {@code :weakly-depends-on}.
+	 */
+	private boolean searchFinds(String name, String baseDir) {
+		this.loadDirStack.addLast(baseDir);
 		try {
-			return AsdfSystems.locate(name, searchDirs, this.sourceLoader);
+			return searchSystemDefinition(name) != null || this.asdfSystems.containsKey(name);
 		}
-		catch (AsdfSystems.SystemNotFoundException ex) {
-			if (this.quickloadDepth == 0) {
-				throw ex;
-			}
-			searchDirs.addAll(downloadQuicklisp(name));
-			return AsdfSystems.locate(name, searchDirs, this.sourceLoader);
+		finally {
+			this.loadDirStack.removeLast();
 		}
+	}
+
+	/**
+	 * Reads a source registry configuration without keeping it: a compile path's literal
+	 * call, the program's own, answered from this build image.
+	 * @param parameter the configuration, what {@code initialize-source-registry} takes
+	 * @param pathname the file holding the call, or {@code null} outside every file
+	 * @param truename its resolved path
+	 * @return what the configuration found
+	 */
+	public AsdfSystems.SourceRegistry readSourceRegistry(LispVal parameter, @Nullable String pathname,
+			@Nullable String truename) {
+		ensureAsdfRuntimeLoaded();
+		this.specialVars.add(LispNames.LOAD_PATHNAME_VAR);
+		this.specialVars.add(LispNames.LOAD_TRUENAME_VAR);
+		this.dynamicBindings.push(LispNames.LOAD_PATHNAME_VAR,
+				pathname == null ? LispNil.INSTANCE : new LispString(pathname));
+		this.dynamicBindings.push(LispNames.LOAD_TRUENAME_VAR,
+				truename == null ? LispNil.INSTANCE : new LispString(truename));
+		try {
+			List<LispVal> found = ((LispCons) applyGlobally(this.globalEnv.lookupFunction("%ASDF-READ-SOURCE-REGISTRY"),
+					List.of(parameter)))
+				.toList();
+			return new AsdfSystems.SourceRegistry(registryFiles(found.get(0)), isTruthy(found.get(1)),
+					registryFiles(found.get(2)));
+		}
+		finally {
+			this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
+			this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
+		}
+	}
+
+	private static Map<String, String> registryFiles(LispVal alist) {
+		Map<String, String> files = new java.util.TreeMap<>();
+		for (LispVal cell = alist; cell instanceof LispCons cons; cell = cons.cdr()) {
+			LispCons entry = (LispCons) cons.car();
+			files.put(((LispString) entry.car()).value(), ((LispString) entry.cdr()).value());
+		}
+		return files;
 	}
 
 	/**
@@ -5945,51 +6086,44 @@ public final class LispEvaluator {
 		return dirs;
 	}
 
-	/** The search path behind a system's own directory: the program's first. */
-	private List<String> systemSearchPath() {
-		List<String> path = new java.util.ArrayList<>(centralRegistryDirs());
-		path.addAll(this.systemPath);
-		return path;
-	}
-
 	/**
 	 * {@code asdf:find-system} of a system nothing has registered: searches like a load,
 	 * downloading nothing, and registers what the {@code .asd} defines. A file already
 	 * loading asks about itself: it has not defined the system yet.
-	 * @return the system's record, or nil when no {@code .asd} defines it
+	 * @return nil: the caller reads the registry
 	 */
 	private LispVal locateSystem(String name) {
 		if (ShimLibraries.refusalReason(name) != null) {
 			return LispNil.INSTANCE;
 		}
-		int slash = name.indexOf('/');
-		String primary = slash < 0 ? name : name.substring(0, slash);
+		String primary = AsdfSystems.primarySystemName(name);
 		if (!this.asdfSystems.containsKey(primary)) {
-			List<String> searchDirs = new java.util.ArrayList<>(centralRegistryDirs());
-			String baseDir = this.loadDirStack.peekLast();
-			searchDirs.add(baseDir == null ? "" : baseDir);
-			searchDirs.addAll(this.systemPath);
-			AsdfSystems.LocatedAsd asd;
-			try {
-				asd = AsdfSystems.locate(name, searchDirs, this.sourceLoader);
-			}
-			catch (AsdfSystems.SystemNotFoundException ex) {
-				return LispNil.INSTANCE;
-			}
-			if (this.asdFilesLoading.contains(asd.path())) {
-				return LispNil.INSTANCE;
-			}
-			AsdLoadScope scope = this.asdLoads.peekLast();
-			if (scope != null && scope.isOwnForm()) {
-				scope.loadOutsideTheFile(() -> loadAsdDefinitions(primary, asd,
-						defined -> this.asdfSystems.putIfAbsent(defined.name(), defined)));
-			}
-			else {
-				loadAsdDefinitions(primary, asd, defined -> this.asdfSystems.putIfAbsent(defined.name(), defined));
+			AsdfSystems.LocatedAsd asd = searchSystemDefinition(name);
+			if (asd != null && !this.asdfSystems.containsKey(name)) {
+				if (this.asdFilesLoading.contains(asd.path())) {
+					return LispNil.INSTANCE;
+				}
+				AsdLoadScope scope = this.asdLoads.peekLast();
+				if (scope != null && scope.isOwnForm()) {
+					scope.loadOutsideTheFile(() -> loadAsdDefinitions(primary, asd,
+							defined -> this.asdfSystems.putIfAbsent(defined.name(), defined)));
+				}
+				else {
+					loadAsdDefinitions(primary, asd, defined -> this.asdfSystems.putIfAbsent(defined.name(), defined));
+				}
 			}
 		}
-		AsdfSystems.LispSystem system = this.asdfSystems.get(name);
-		if (system == null && slash >= 0) {
+		inferSystem(name);
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Answers whether {@code name} is registered, deriving a file of a package-inferred
+	 * system if it has to.
+	 * @return nil when no file of the primary system answers the name
+	 */
+	private LispVal inferSystem(String name) {
+		if (!this.asdfSystems.containsKey(name) && name.indexOf('/') >= 0) {
 			try {
 				AsdfSystems.inferPackageInferredSystems(name, this.asdfSystems, this.asdfSystemPackages,
 						this.sourceLoader, this.features);
@@ -5998,10 +6132,16 @@ public final class LispEvaluator {
 				// The name points at no file of the primary system: nothing defines it.
 				return LispNil.INSTANCE;
 			}
-			system = this.asdfSystems.get(name);
 		}
-		return system == null ? LispNil.INSTANCE
-				: AsdfRuntimeLibrary.recordFor(system, this.loadedSystems.contains(name));
+		return this.asdfSystems.containsKey(name) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+	}
+
+	/**
+	 * The record of a system a search function answered as an object: it has no files.
+	 */
+	private AsdfSystems.LispSystem emptySystem(String name) {
+		return AsdfSystems.parseDefsystem(new LispCons(new LispSymbol(LispNames.ASDF_DEFSYSTEM),
+				new LispCons(new LispString(name), LispNil.INSTANCE)), "", this.features);
 	}
 
 	/**
@@ -6463,38 +6603,41 @@ public final class LispEvaluator {
 		}
 		AsdfSystems.LispSystem located = this.asdfSystems.get(name);
 		if (located == null) {
-			List<String> searchDirs = new java.util.ArrayList<>(centralRegistryDirs());
-			String baseDir = this.loadDirStack.peekLast();
-			searchDirs.add(baseDir == null ? "" : baseDir);
-			searchDirs.addAll(this.systemPath);
 			AsdfSystems.LocatedAsd asd = null;
 			try {
-				asd = locateAsd(name, searchDirs);
+				asd = locateAsd(name);
 			}
 			catch (AsdfSystems.SystemNotFoundException ex) {
 				signalMissingSystem(name, requiredBy, ex.detail());
 				return;
 			}
-			// Each system the .asd defines is registered the moment it is defined. .asd
-			// forms read upcased like all source; AsdfSystems matches clause keywords
-			// case-insensitively and coerce-names (downcases) system designators.
-			int slash = name.indexOf('/');
-			loadAsdDefinitions(slash < 0 ? name : name.substring(0, slash), asd,
-					defined -> this.asdfSystems.putIfAbsent(defined.name(), defined));
 			located = this.asdfSystems.get(name);
-			if (located == null) {
-				// A NAME/SUB of a :package-inferred-system: the .asd declares no
-				// components, so the name is answered from the file it points at.
-				AsdfSystems.inferPackageInferredSystems(name, this.asdfSystems, this.asdfSystemPackages,
-						this.sourceLoader, this.features);
+			if (located == null && asd != null) {
+				// Each system the .asd defines is registered the moment it is defined.
+				// .asd forms read upcased like all source; AsdfSystems matches clause
+				// keywords case-insensitively and coerce-names (downcases) system
+				// designators.
+				loadAsdDefinitions(AsdfSystems.primarySystemName(name), asd,
+						defined -> this.asdfSystems.putIfAbsent(defined.name(), defined));
 				located = this.asdfSystems.get(name);
+				if (located == null) {
+					// A NAME/SUB of a :package-inferred-system: the .asd declares no
+					// components, so the name is answered from the file it points at.
+					AsdfSystems.inferPackageInferredSystems(name, this.asdfSystems, this.asdfSystemPackages,
+							this.sourceLoader, this.features);
+					located = this.asdfSystems.get(name);
+				}
+				if (located == null) {
+					throw new LispEvalException(asd.path() + " does not define system '" + name + "'");
+				}
 			}
 			if (located == null) {
-				throw new LispEvalException(asd.path() + " does not define system '" + name + "'");
+				throw new LispEvalException("The search for system '" + name + "' registered no system");
 			}
 		}
+		String systemDir = located.baseDir();
 		AsdfSystems.LispSystem system = AsdfSystems.resolveWeakDependencies(located, this.asdfSystems,
-				systemSearchPath(), this.sourceLoader);
+				weakName -> searchFinds(weakName, systemDir));
 		this.loadingSystems.addLast(name);
 		// A dependency's .asd lookup resolves against the system's base directory, not
 		// the caller's.

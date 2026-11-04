@@ -148,10 +148,10 @@
 ;;; pathname/string, and over uiop/stream:eval-input for a stream (rontolisp's
 ;;; load cannot load from a string-input-stream, so the stream arm is the one
 ;;; upstream picks for the implementations that cannot either).
-(defun uiop/lisp-build:load-pathname () cl:*load-pathname*)
+(defun uiop/lisp-build:load-pathname () *load-pathname*)
 
 (defun uiop/lisp-build:current-lisp-file-pathname ()
-  (or cl:*compile-file-pathname* cl:*load-pathname*))
+  (or *compile-file-pathname* *load-pathname*))
 
 (defun uiop/lisp-build:load* (%ld-x &rest %ld-keys &key &allow-other-keys)
   (uiop/lisp-build:call-with-muffled-loader-conditions

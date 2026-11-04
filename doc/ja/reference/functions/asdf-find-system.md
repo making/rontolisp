@@ -12,7 +12,7 @@
 そのまま使われます）。
 
 どこにも登録されていない名前は、インタプリタではロードと同じ順で探索します
-([`asdf:*central-registry*`](asdf-central-registry.md)、次に探索パス)。`.asd` を実行して、
+([`asdf:*system-definition-search-functions*`](asdf-system-definition-search-functions.md))。`.asd` を実行して、
 そこで定義されたものを登録します。ダウンロードもシステムのロードもしません。それでも不明な名前は
 `asdf:missing-component` を通知しますが、`error-p` が nil のときは `nil` を返します。これはライブラリが
 使うプローブの形 (`load-system` を `(asdf:find-system name nil)` でガードする形) です。`.asd` の

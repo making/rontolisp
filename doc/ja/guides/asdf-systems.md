@@ -64,12 +64,17 @@ rontolisp app/run.lisp --system-path registry/base -o app.wasm     # WASM
 
 ## システム探索パス
 
-`asdf:load-system` は `NAME.asd` を次の順で探します:
+`asdf:load-system` は [`asdf:*system-definition-search-functions*`](../reference/functions/asdf-system-definition-search-functions.md)
+の関数を呼びます。初期状態では `NAME.asd` を次の順で探します:
 
 1. [`asdf:*central-registry*`](../reference/functions/asdf-central-registry.md) のディレクトリ、
-2. `load-system` を実行しているファイルのディレクトリ (`load` と同様)、
-3. `--system-path` で指定したディレクトリ (`PATH` のようにプラットフォームのパス区切り文字で複数連結可)、
-4. 環境変数 `RONTOLISP_SOURCE_REGISTRY` のディレクトリ (同じ形式)。
+2. [`asdf:initialize-source-registry`](../reference/functions/asdf-initialize-source-registry.md) で設定した場所、
+3. `load-system` を実行しているファイルのディレクトリ (`load` と同様)、
+4. `--system-path` で指定したディレクトリ (`PATH` のようにプラットフォームのパス区切り文字で複数連結可)、
+5. 環境変数 `RONTOLISP_SOURCE_REGISTRY` のディレクトリ (同じ形式)。
+
+最後の 3 つが継承する設定です。`:inherit-configuration` はこれらの位置を決め、
+`:ignore-inherited-configuration` はこれらを探索から外します。
 
 依存システムの `.asd` は、依存する側のシステムのディレクトリから探索が始まるため、
 1 つのレジストリディレクトリに並んだ兄弟システムは互いを見つけられます。
@@ -293,7 +298,7 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   メモ化された CLOS インスタンス (呼び出し間で `eq`) を返します。クラスは本物です —
   `asdf:component`、`asdf:child-component`/`asdf:parent-component`、
   `asdf:module`、`asdf:system`、`asdf:package-inferred-system`、
-  `asdf:source-file`、`asdf:cl-source-file`、`asdf:static-file` — ので、これらに
+  `asdf:source-file`、`asdf:cl-source-file`、`asdf:static-file`、`asdf:doc-file` — ので、これらに
   対する `typep`、`typecase`、`defmethod` の特定化子はすべてのバックエンドで
   動作します。リーダー
   [`asdf:component-name`](../reference/functions/asdf-component-name.md)、
@@ -301,7 +306,8 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   (素の文字列で書かれていた場合の `:version` 文字列)、
   [`asdf:component-pathname`](../reference/functions/asdf-component-pathname.md)、
   [`asdf:component-children`](../reference/functions/asdf-component-children.md)
-  (コンポーネントファイルごとに 1 つの `cl-source-file`、ロード順)、
+  (定義に書かれたインスタンスを定義順で返します。`:module` は自身の子を持つ
+  `asdf:module`、`:static-file` は `asdf:static-file` です)、
   [`asdf:component-sideway-dependencies`](../reference/functions/asdf-component-sideway-dependencies.md)、
   [`asdf:component-parent`](../reference/functions/asdf-component-parent.md)、
   [`asdf:component-system`](../reference/functions/asdf-component-system.md)
@@ -324,7 +330,7 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   `load-source-op`、スロット名、ロードが通知するコンディション (`missing-component`、
   `missing-dependency`、`load-system-definition-error`) です。残りは本物の ASDF のクラスと総称関数を
   空のまま置いたもので、呼び出すとその名前を示す `uiop:not-implemented-error` を通知します。
-  source-registry と plan の一群もここに含まれます。
+  plan の一群もここに含まれます。
 - **operation プロトコルも本物です。** ロードを構成する各動作は、operation の
   インスタンス (`asdf:prepare-op`・`asdf:compile-op`・`asdf:load-op`・`asdf:test-op`。
   いずれも `asdf:operation`) とコンポーネントに対する

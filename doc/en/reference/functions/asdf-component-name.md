@@ -2,9 +2,9 @@
 
 `(asdf:component-name component)`
 
-Reader: the component's downcase-canonical name. For a system that is the
-system name; for a source file it is the file's path relative to the system,
-minus the `.lisp` extension.
+Reader: the component's name as its definition gives it, a symbol downcased.
+A component's `:pathname` does not change it, and neither does the module around
+it: `(:module "m" :components ((:file "two")))` holds a child named `"two"`.
 
 ```lisp
 (asdf:defsystem :demo-cn :components ((:file "main")))

@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 import am.ik.rontolisp.AsdfExports;
 import am.ik.rontolisp.LispCons;
@@ -123,29 +124,74 @@ public final class AsdfSystems {
 	 * @param metadata what the definition declared and no loader reads
 	 * @param loadedClasses the classes of this system and its components that loaded code
 	 * defines
+	 * @param tree the components as the definition writes them
 	 */
 	public record LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
 			List<String> features, @Nullable String packageInferredDir, boolean packageInferredClass,
 			@Nullable TestOp testOp, List<String> testOpEdges, List<String> defsystemDependsOn,
 			@Nullable String version, List<String> weaklyDependsOn, Map<String, LispVal> aroundCompile,
-			Metadata metadata, LoadedClasses loadedClasses) {
+			Metadata metadata, LoadedClasses loadedClasses, ComponentTree tree) {
 
 		/**
-		 * The old-shape constructor: no test-op wiring, package-inferred class iff the
-		 * directory marker is present. Keeps the parse-only construction sites (and the
-		 * tests) readable.
-		 * @param name the system name
-		 * @param dependsOn the names of the systems to load first, in order
-		 * @param files the component source files in load order
-		 * @param baseDir the directory the component files resolve against
-		 * @param features the feature names this system declares
-		 * @param packageInferredDir the sub-system resolution directory, or {@code null}
+		 * What {@code asdf:component-pathname} answers for the system: its directory
+		 * below the {@code .asd}'s, by its {@code :pathname}.
+		 * @return the directory namestring, with a trailing slash
 		 */
-		public LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
-				List<String> features, @Nullable String packageInferredDir) {
-			this(name, dependsOn, files, baseDir, features, packageInferredDir, packageInferredDir != null, null,
-					List.of(), List.of(), null, List.of(), Map.of(), Metadata.NONE, LoadedClasses.NONE);
+		public String pathname() {
+			return resolved(this.tree.root());
 		}
+
+		/**
+		 * Resolves a {@link ComponentNode#path} against the {@code .asd}'s directory.
+		 * @param path the path below it
+		 * @return what {@code asdf:component-pathname} answers: a directory keeps its
+		 * trailing slash
+		 */
+		String resolved(String path) {
+			if (path.isEmpty()) {
+				return AsdfRuntimeLibrary.normalizeDir(this.baseDir);
+			}
+			String resolved = SourceLoader.resolve(this.baseDir, path);
+			return path.endsWith("/") ? AsdfRuntimeLibrary.normalizeDir(resolved) : resolved;
+		}
+	}
+
+	/**
+	 * A system's components as its definition writes them, which is what a program walks;
+	 * the loaders read the plan.
+	 *
+	 * @param root the system's {@code :pathname} directory below the {@code .asd}'s,
+	 * empty or with a trailing slash
+	 * @param children the system's children, in definition order
+	 * @param plan the nodes of {@link LispSystem#files}, one each in the same order:
+	 * every source file, in plan order
+	 */
+	public record ComponentTree(String root, List<ComponentNode> children, List<ComponentNode> plan) {
+	}
+
+	/**
+	 * One component below a system.
+	 *
+	 * @param kind ASDF's class of the instance, as an upper-case member name of
+	 * {@code asdf}, when no loaded code defines it ({@link #loaded})
+	 * @param name the name, as real ASDF's {@code coerce-name} makes it
+	 * @param written the {@code :pathname} as written, or {@code null}
+	 * @param relative what {@code asdf:component-relative-pathname} answers: the path
+	 * below the parent's, a directory's with a trailing slash
+	 * @param path the path below the {@code .asd}'s directory, a directory's empty or
+	 * with a trailing slash
+	 * @param fileType the {@code type} slot of an instance whose class's says something
+	 * else, or {@code null}
+	 * @param sideway the sibling names it depends on, a {@code :serial} predecessor first
+	 * @param ifFeature the {@code :if-feature} as written, or {@code null}
+	 * @param enabled whether that feature expression held in the parse: a disabled
+	 * component is no source of the plan, and {@code sub-components} skips it
+	 * @param loaded the class loaded code defines for it, or {@code null}
+	 * @param children a module's children, in definition order
+	 */
+	public record ComponentNode(String kind, String name, @Nullable String written, String relative, String path,
+			@Nullable String fileType, List<String> sideway, @Nullable LispVal ifFeature, boolean enabled,
+			@Nullable LoadedClass loaded, List<ComponentNode> children) {
 	}
 
 	/**
@@ -783,7 +829,7 @@ public final class AsdfSystems {
 		return new LispSystem(system.name(), system.dependsOn(), system.files(), system.baseDir(), system.features(),
 				system.packageInferredDir(), system.packageInferredClass(), system.testOp(), system.testOpEdges(),
 				List.copyOf(merged), system.version(), system.weaklyDependsOn(), system.aroundCompile(),
-				system.metadata(), system.loadedClasses());
+				system.metadata(), system.loadedClasses(), system.tree());
 	}
 
 	/**
@@ -842,29 +888,34 @@ public final class AsdfSystems {
 	 * definition says nothing, or {@code null}
 	 */
 	private record ComponentClass(boolean source, @Nullable String fileType, boolean module,
-			@Nullable LoadedClass loaded, @Nullable LispVal aroundCompile) {
+			@Nullable LoadedClass loaded, @Nullable LispVal aroundCompile, String kind) {
 
-		ComponentClass(boolean source, String fileType) {
-			this(source, fileType, false, null, null);
+		ComponentClass(boolean source, String fileType, String kind) {
+			this(source, fileType, false, null, null, kind);
 		}
 
 		ComponentClass withFileType(String type) {
-			return new ComponentClass(this.source, type, this.module, this.loaded, this.aroundCompile);
+			return new ComponentClass(this.source, type, this.module, this.loaded, this.aroundCompile, this.kind);
 		}
 
 		static ComponentClass of(LiveClass live) {
-			LoadedClass loaded = live.file() && !live.plain()
-					? new LoadedClass(live.name(), live.lispSource(), live.deferred(), List.of()) : null;
-			return new ComponentClass(live.file(), live.fileType(), live.module(), loaded, live.aroundCompile());
+			LoadedClass loaded = live.plain() ? null
+					: new LoadedClass(live.name(), live.lispSource(), live.deferred(), List.of());
+			return new ComponentClass(live.file(), live.fileType(), live.module(), loaded, live.aroundCompile(),
+					CL_SOURCE_FILE);
 		}
 
 	}
+
+	private static final String CL_SOURCE_FILE = "CL-SOURCE-FILE";
+
+	private static final String MODULE = "MODULE";
 
 	/**
 	 * The class {@code (:file "name")} means when no {@code :default-component-class}
 	 * does -- ASDF's {@code *default-component-class*}.
 	 */
-	private static final ComponentClass DEFAULT_COMPONENT_CLASS = new ComponentClass(true, "lisp");
+	private static final ComponentClass DEFAULT_COMPONENT_CLASS = new ComponentClass(true, "lisp", CL_SOURCE_FILE);
 
 	/**
 	 * ASDF's own component classes: usable as a component type and as a superclass
@@ -873,10 +924,22 @@ public final class AsdfSystems {
 	 * -- portableaserve's {@code :default-component-class cl-source-file.cl} is exactly
 	 * what they exist for.
 	 */
-	private static final Map<String, ComponentClass> BUILTIN_COMPONENT_CLASSES = Map.of("CL-SOURCE-FILE",
-			DEFAULT_COMPONENT_CLASS, "CL-SOURCE-FILE.CL", new ComponentClass(true, "cl"), "CL-SOURCE-FILE.LSP",
-			new ComponentClass(true, "lsp"), "STATIC-FILE", new ComponentClass(false, ""), "DOC-FILE",
-			new ComponentClass(false, ""), "HTML-FILE", new ComponentClass(false, ""));
+	private static final Map<String, ComponentClass> BUILTIN_COMPONENT_CLASSES = Map.of(CL_SOURCE_FILE,
+			DEFAULT_COMPONENT_CLASS, "CL-SOURCE-FILE.CL", new ComponentClass(true, "cl", "CL-SOURCE-FILE.CL"),
+			"CL-SOURCE-FILE.LSP", new ComponentClass(true, "lsp", "CL-SOURCE-FILE.LSP"), "STATIC-FILE",
+			new ComponentClass(false, "", "STATIC-FILE"), "DOC-FILE", new ComponentClass(false, "", "DOC-FILE"),
+			"HTML-FILE", new ComponentClass(false, "html", "HTML-FILE"));
+
+	/** What the {@code type} slot of an instance of each of ASDF's own classes holds. */
+	private static @Nullable String classFileType(String kind) {
+		return switch (kind) {
+			case CL_SOURCE_FILE -> "lisp";
+			case "CL-SOURCE-FILE.CL" -> "cl";
+			case "CL-SOURCE-FILE.LSP" -> "lsp";
+			case "HTML-FILE" -> "html";
+			default -> null;
+		};
+	}
 
 	private static final String SOURCE_FILE_TYPE = "SOURCE-FILE-TYPE";
 
@@ -1028,19 +1091,24 @@ public final class AsdfSystems {
 		}
 		boolean source = false;
 		String fileType = "";
+		String kind = null;
 		for (LispVal superClass : supers.toList()) {
 			ComponentClass resolved = superClass instanceof LispSymbol superSym ? classes.find(memberName(superSym))
 					: null;
 			if (resolved == null) {
 				return null;
 			}
-			if (resolved.source() && !source) {
-				source = true;
+			if (kind == null || resolved.source() && !source) {
+				source = resolved.source();
+				kind = resolved.kind();
 				fileType = java.util.Objects.requireNonNullElse(resolved.fileType(), "");
 			}
 		}
+		if (kind == null) {
+			return null;
+		}
 		String initform = items.size() >= 4 ? slotTypeInitform(items.get(3)) : null;
-		return new ComponentClass(source, initform == null ? fileType : initform);
+		return new ComponentClass(source, initform == null ? fileType : initform, kind);
 	}
 
 	/**
@@ -1491,7 +1559,7 @@ public final class AsdfSystems {
 		}
 		Map<String, LispVal> aroundCompiles = new HashMap<>();
 		Map<String, LoadedClass> loadedComponents = new HashMap<>();
-		List<String> files = components == null ? List.of()
+		ComponentList parsed = components == null ? new ComponentList(List.of(), List.of())
 				: orderComponents(name, components, serial, prefix,
 						new ComponentScope(features, componentClasses, defaultComponentClass, aroundCompile,
 								aroundCompiles, loadedComponents, defsystemDependsOn, asd));
@@ -1505,12 +1573,14 @@ public final class AsdfSystems {
 		// A package-inferred system's own :pathname is where its SUB-SYSTEM names
 		// resolve:
 		// array-operations says :pathname "src/" and then names array-operations/all.
-		return new LispSystem(name, List.copyOf(dependsOn), files, baseDir == null ? "" : baseDir, declaredFeatures,
+		return new LispSystem(name, List.copyOf(dependsOn), parsed.plan().stream().map(ComponentNode::path).toList(),
+				baseDir == null ? "" : baseDir, declaredFeatures,
 				packageInferred ? (pathname == null ? "" : pathname) : null, packageInferred, testOp,
 				List.copyOf(testOpEdges), defsystemDependsOn, version, weaklyDependsOn, Map.copyOf(aroundCompiles),
 				new Metadata(asd.path(), java.util.Collections.unmodifiableMap(metadata)),
 				new LoadedClasses(systemClass == null || systemClass.plain() ? null : systemClass.name(),
-						Map.copyOf(loadedComponents)));
+						Map.copyOf(loadedComponents)),
+				new ComponentTree(prefix, parsed.children(), parsed.plan()));
 	}
 
 	/**
@@ -1907,48 +1977,35 @@ public final class AsdfSystems {
 	 * which has a search path the parse does not.
 	 * @param system the system
 	 * @param systems the registry, whose entry the answer replaces
-	 * @param systemPath the search path, after the system's own directory
-	 * @param loader the loader {@code .asd} files are read through
+	 * @param searchFinds whether the loader's search, from the system's own directory,
+	 * finds a name
 	 * @return the system with its weak dependencies decided, {@code system} when it has
 	 * none
 	 */
 	public static LispSystem resolveWeakDependencies(LispSystem system, Map<String, LispSystem> systems,
-			List<String> systemPath, SourceLoader loader) {
+			Predicate<String> searchFinds) {
 		if (system.weaklyDependsOn().isEmpty()) {
 			return system;
 		}
-		List<String> searchDirs = new ArrayList<>();
-		searchDirs.add(system.baseDir());
-		searchDirs.addAll(systemPath);
 		List<String> dependsOn = new ArrayList<>(system.dependsOn());
 		for (String name : system.weaklyDependsOn()) {
-			if (!dependsOn.contains(name) && isAvailable(name, systems, searchDirs, loader)) {
+			if (!dependsOn.contains(name) && isAvailable(name, systems, searchFinds)) {
 				dependsOn.add(name);
 			}
 		}
 		LispSystem resolved = new LispSystem(system.name(), List.copyOf(dependsOn), system.files(), system.baseDir(),
 				system.features(), system.packageInferredDir(), system.packageInferredClass(), system.testOp(),
 				system.testOpEdges(), system.defsystemDependsOn(), system.version(), List.of(), system.aroundCompile(),
-				system.metadata(), system.loadedClasses());
+				system.metadata(), system.loadedClasses(), system.tree());
 		systems.put(system.name(), resolved);
 		return resolved;
 	}
 
-	private static boolean isAvailable(String name, Map<String, LispSystem> systems, List<String> searchDirs,
-			SourceLoader loader) {
+	private static boolean isAvailable(String name, Map<String, LispSystem> systems, Predicate<String> searchFinds) {
 		if (ShimLibraries.refusalReason(name) != null) {
 			return false;
 		}
-		if (BuiltinSystems.isBuiltin(name) || systems.containsKey(name)) {
-			return true;
-		}
-		try {
-			locate(name, searchDirs, loader);
-			return true;
-		}
-		catch (SystemNotFoundException ex) {
-			return false;
-		}
+		return BuiltinSystems.isBuiltin(name) || systems.containsKey(name) || searchFinds.test(name);
 	}
 
 	/**
@@ -1964,8 +2021,7 @@ public final class AsdfSystems {
 	 * @throws SystemNotFoundException if no directory holds it
 	 */
 	public static LocatedAsd locate(String name, List<String> searchDirs, SourceLoader loader) {
-		int slash = name.indexOf('/');
-		String fileName = (slash < 0 ? name : name.substring(0, slash)) + ".asd";
+		String fileName = primarySystemName(name) + ".asd";
 		List<String> tried = new ArrayList<>();
 		for (String dir : searchDirs) {
 			String path = SourceLoader.resolve(dir == null ? "" : dir, fileName);
@@ -1985,10 +2041,99 @@ public final class AsdfSystems {
 				tried.add(path);
 			}
 		}
+		throw notFound(name, tried);
+	}
+
+	/**
+	 * Whether a {@code require} of this module is answered by the implementation, as
+	 * {@code (require :asdf)} is on any Lisp that ships ASDF: it is how a script opens,
+	 * and here there is no file to load.
+	 * @param name the module name, in any case
+	 * @return {@code true} for {@code asdf} and {@code uiop}
+	 */
+	public static boolean isImplementationModule(String name) {
+		return "asdf".equalsIgnoreCase(name) || "uiop".equalsIgnoreCase(name);
+	}
+
+	/**
+	 * The failure of a search, naming where it looked.
+	 * @param name the system name
+	 * @param tried the {@code .asd} paths it tried
+	 * @return the exception to throw
+	 */
+	static SystemNotFoundException notFound(String name, List<String> tried) {
 		String detail = "(tried: " + String.join(", ", tried)
 				+ "); add its directory to --system-path or RONTOLISP_SOURCE_REGISTRY";
-		throw new SystemNotFoundException(LispNames.ASDF_LOAD_SYSTEM + ": system '" + name + "' not found " + detail,
+		return new SystemNotFoundException(LispNames.ASDF_LOAD_SYSTEM + ": system '" + name + "' not found " + detail,
 				detail);
+	}
+
+	/**
+	 * The name before the first slash, whose {@code .asd} defines a system.
+	 * @param name the system name
+	 * @return the primary system's name
+	 */
+	public static String primarySystemName(String name) {
+		int slash = name.indexOf('/');
+		return slash < 0 ? name : name.substring(0, slash);
+	}
+
+	/**
+	 * What a source registry configuration found, which a compile path searches: the
+	 * {@code .asd} per system name ahead of the inherited search path and behind it, and
+	 * whether it inherits that path at all.
+	 *
+	 * @param ahead the files ahead of the search path, by system name
+	 * @param inherits whether the configuration reached {@code :inherit-configuration}
+	 * @param behind the files behind the search path, by system name
+	 */
+	public record SourceRegistry(Map<String, String> ahead, boolean inherits, Map<String, String> behind) {
+
+		/** No configuration: only the search path. */
+		public static final SourceRegistry DEFAULT = new SourceRegistry(Map.of(), true, Map.of());
+
+	}
+
+	/**
+	 * A top-level call a compile path can read of the source registry family.
+	 *
+	 * @param clear whether it is {@code clear-source-registry}
+	 * @param parameter the literal configuration, or {@code null} when the call passes
+	 * none: {@code initialize-source-registry} then reads the last one
+	 */
+	public record SourceRegistryCall(boolean clear, @Nullable LispVal parameter) {
+	}
+
+	/**
+	 * If {@code form} is a top-level {@code (asdf:clear-source-registry)} or an
+	 * {@code (asdf:initialize-source-registry [PARAMETER])} whose parameter is literal:
+	 * quoted, a string or nil. Anything computed is the program's alone.
+	 * @param form the form to inspect
+	 * @return the call, or {@code null}
+	 */
+	@Nullable public static SourceRegistryCall sourceRegistryCall(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> items = cons.toList();
+		if (isAsdfMember(op, "CLEAR-SOURCE-REGISTRY")) {
+			return items.size() == 1 ? new SourceRegistryCall(true, null) : null;
+		}
+		if (!isAsdfMember(op, "INITIALIZE-SOURCE-REGISTRY") || items.size() > 2) {
+			return null;
+		}
+		if (items.size() == 1) {
+			return new SourceRegistryCall(false, null);
+		}
+		LispVal parameter = items.get(1);
+		if (parameter instanceof LispString || parameter instanceof LispNil) {
+			return new SourceRegistryCall(false, parameter);
+		}
+		if (parameter instanceof LispCons quoted && quoted.car() instanceof LispSymbol quote
+				&& LispNames.QUOTE.equals(memberName(quote)) && quoted.cdr() instanceof LispCons datum) {
+			return new SourceRegistryCall(false, datum.car());
+		}
+		return null;
 	}
 
 	/**
@@ -2078,8 +2223,10 @@ public final class AsdfSystems {
 	private static LispSystem deriveSubSystem(String name, LispSystem primary, Map<String, String> systemPackages,
 			SourceLoader loader, Features features) {
 		String dir = primary.packageInferredDir();
-		String file = (dir == null || dir.isEmpty() ? "" : dir + "/") + name.substring(primary.name().length() + 1)
-				+ SourceLanguage.COMMON_LISP.defaultExtension();
+		String root = dir == null || dir.isEmpty() ? "" : dir + "/";
+		String sub = name.substring(primary.name().length() + 1);
+		String relative = sub + SourceLanguage.COMMON_LISP.defaultExtension();
+		String file = root + relative;
 		String path = SourceLoader.resolve(primary.baseDir(), file);
 		String source;
 		try {
@@ -2095,9 +2242,15 @@ public final class AsdfSystems {
 		// graph's.
 		LispVal packageForm = LispReader.readFirstFormMatching(source, features, path,
 				AsdfSystems::isPackageDefinitionForm);
+		// Real ASDF's shape for it: one cl-source-file named "lisp", at the name below
+		// the
+		// primary's directory.
+		ComponentNode node = new ComponentNode(CL_SOURCE_FILE, "lisp", sub, relative, file, null, List.of(), null, true,
+				null, List.of());
 		return new LispSystem(name, packageDependencies(packageForm, path, systemPackages), List.of(file),
 				primary.baseDir(), primary.features(), null, true, null, List.of(), primary.defsystemDependsOn(), null,
-				List.of(), Map.of(), new Metadata(primary.metadata().sourceFile(), Map.of()), LoadedClasses.NONE);
+				List.of(), Map.of(), new Metadata(primary.metadata().sourceFile(), Map.of()), LoadedClasses.NONE,
+				new ComponentTree(root, List.of(node), List.of(node)));
 	}
 
 	/**
@@ -2345,10 +2498,19 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * A parsed component: its sibling-scoped name, the sibling names it depends on, and
-	 * the source files it contributes (already ordered for a module).
+	 * A parsed component: its sibling-scoped name, the sibling names it depends on, the
+	 * source files it contributes (already ordered for a module) and its node.
 	 */
-	private record Component(String name, List<String> dependsOn, List<String> files) {
+	private record Component(String name, List<String> dependsOn, List<ComponentNode> plan, ComponentNode node) {
+	}
+
+	/**
+	 * A parsed {@code :components} list.
+	 *
+	 * @param children the components in definition order
+	 * @param plan their source files in plan order
+	 */
+	private record ComponentList(List<ComponentNode> children, List<ComponentNode> plan) {
 	}
 
 	/**
@@ -2378,22 +2540,19 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * Parses a {@code :components} list and returns the source files in load order: a
-	 * stable topological sort of the sibling components by {@code :depends-on} (original
-	 * order is preserved among unconstrained components), with {@code :serial} adding an
-	 * implicit dependency on the previous sibling; a module's files stay contiguous.
+	 * Parses a {@code :components} list. Its children stay in definition order, and its
+	 * source files come in load order: a stable topological sort of the sibling
+	 * components by {@code :depends-on} (original order is preserved among unconstrained
+	 * components), with {@code :serial} adding an implicit dependency on the previous
+	 * sibling; a module's files stay contiguous.
 	 */
-	private static List<String> orderComponents(String systemName, LispVal componentsVal, boolean serial, String prefix,
-			ComponentScope scope) {
+	private static ComponentList orderComponents(String systemName, LispVal componentsVal, boolean serial,
+			String prefix, ComponentScope scope) {
 		List<Component> components = new ArrayList<>();
 		String previous = null;
 		for (LispVal entry : properList(LispNames.ASDF_DEFSYSTEM + " " + systemName + " :components", componentsVal)) {
-			Component component = parseComponent(systemName, entry, prefix, scope);
-			List<String> deps = new ArrayList<>(component.dependsOn());
-			if (serial && previous != null) {
-				deps.add(previous);
-			}
-			components.add(new Component(component.name(), deps, component.files()));
+			Component component = parseComponent(systemName, entry, prefix, scope, serial ? previous : null);
+			components.add(component);
 			previous = component.name();
 		}
 		Set<String> names = new HashSet<>();
@@ -2419,12 +2578,12 @@ public final class AsdfSystems {
 		for (Component component : components) {
 			byName.put(component.name(), component);
 		}
-		List<String> files = new ArrayList<>();
+		List<ComponentNode> plan = new ArrayList<>();
 		Set<String> placed = new HashSet<>();
 		for (Component component : components) {
-			placeComponent(systemName, component, byName, placed, new java.util.LinkedHashSet<>(), files);
+			placeComponent(systemName, component, byName, placed, new java.util.LinkedHashSet<>(), plan);
 		}
-		return List.copyOf(files);
+		return new ComponentList(components.stream().map(Component::node).toList(), List.copyOf(plan));
 	}
 
 	/**
@@ -2433,7 +2592,7 @@ public final class AsdfSystems {
 	 * returns to.
 	 */
 	private static void placeComponent(String systemName, Component component, Map<String, Component> byName,
-			Set<String> placed, Set<String> visiting, List<String> files) {
+			Set<String> placed, Set<String> visiting, List<ComponentNode> plan) {
 		if (placed.contains(component.name())) {
 			return;
 		}
@@ -2444,10 +2603,10 @@ public final class AsdfSystems {
 		for (String dep : component.dependsOn()) {
 			// Every name was checked against the siblings above.
 			placeComponent(systemName, java.util.Objects.requireNonNull(byName.get(dep)), byName, placed, visiting,
-					files);
+					plan);
 		}
 		visiting.remove(component.name());
-		files.addAll(component.files());
+		plan.addAll(component.plan());
 		placed.add(component.name());
 	}
 
@@ -2470,7 +2629,8 @@ public final class AsdfSystems {
 				"system " + systemName + ": component name must be a string or symbol literal: " + entry.print());
 	}
 
-	private static Component parseComponent(String systemName, LispVal entry, String prefix, ComponentScope scope) {
+	private static Component parseComponent(String systemName, LispVal entry, String prefix, ComponentScope scope,
+			@Nullable String serialPrevious) {
 		if (!(entry instanceof LispCons compCons) || !(compCons.car() instanceof LispSymbol type)
 				|| !type.isKeyword()) {
 			throw new IllegalStateException(
@@ -2508,6 +2668,7 @@ public final class AsdfSystems {
 		List<String> dependsOn = new ArrayList<>();
 		boolean moduleSerial = false;
 		boolean featureEnabled = true;
+		LispVal ifFeature = null;
 		LispVal nested = null;
 		String pathname = null;
 		ComponentClass moduleDefaultClass = null;
@@ -2529,7 +2690,10 @@ public final class AsdfSystems {
 						}
 					}
 				}
-				case ":IF-FEATURE" -> featureEnabled = scope.features().isEnabled(value);
+				case ":IF-FEATURE" -> {
+					featureEnabled = scope.features().isEnabled(value);
+					ifFeature = value;
+				}
 				// ASDF's around-compile-hook: the nearest component that says.
 				case ":AROUND-COMPILE" -> aroundCompile = aroundCompileHook(scope.asd(), value);
 				case ":ENCODING" -> checkEncoding("system " + systemName + ": component " + name, value);
@@ -2568,7 +2732,23 @@ public final class AsdfSystems {
 				}
 			}
 		}
-		List<String> files = List.of();
+		// Real ASDF's slot holds the predecessor ahead of what the definition wrote; the
+		// plan visits what it wrote first.
+		List<String> sideway = new ArrayList<>();
+		if (serialPrevious != null) {
+			sideway.add(serialPrevious);
+		}
+		sideway.addAll(dependsOn);
+		if (serialPrevious != null) {
+			dependsOn.add(serialPrevious);
+		}
+		LoadedClass loaded = null;
+		if (componentClass != null && componentClass.loaded() != null) {
+			LoadedClass named = componentClass.loaded();
+			loaded = new LoadedClass(named.name(), named.lispSource(), named.deferred(), List.copyOf(initargs));
+		}
+		ComponentNode node;
+		List<ComponentNode> plan = List.of();
 		if (module) {
 			if (nested == null) {
 				throw new IllegalStateException(
@@ -2576,28 +2756,52 @@ public final class AsdfSystems {
 			}
 			// An empty :pathname is ASDF's "this module adds no directory level".
 			String dir = pathname == null ? name : pathname;
-			files = orderComponents(systemName, nested, moduleSerial, dir.isEmpty() ? prefix : prefix + dir + "/",
+			String childPrefix = dir.isEmpty() ? prefix : prefix + dir + "/";
+			ComponentList parsed = orderComponents(systemName, nested, moduleSerial, childPrefix,
 					scope.forChildren(moduleDefaultClass, aroundCompile));
+			node = new ComponentNode(MODULE, name, pathname, dir.isEmpty() ? "" : dir + "/", childPrefix, null,
+					List.copyOf(sideway), ifFeature, featureEnabled, loaded, parsed.children());
+			plan = parsed.plan();
 		}
-		else if (componentClass != null) {
+		else {
+			ComponentClass fileClass = java.util.Objects.requireNonNull(componentClass);
+			String relative = sourceFileName(name, pathname, fileClass.fileType());
+			String file = prefix + relative;
+			node = new ComponentNode(fileClass.kind(), name, pathname, relative, file,
+					fileTypeOverride(fileClass, relative), List.copyOf(sideway), ifFeature, featureEnabled, loaded,
+					List.of());
 			// An ordering-only class contributes no source.
-			files = componentClass.source()
-					? List.of(prefix + sourceFileName(name, pathname, componentClass.fileType())) : List.of();
-			for (String file : files) {
+			if (fileClass.source()) {
+				plan = List.of(node);
 				if (aroundCompile != null) {
 					scope.aroundCompiles().put(file, aroundCompile);
 				}
-				LoadedClass loaded = componentClass.loaded();
 				if (loaded != null) {
-					scope.loadedClasses()
-						.put(file, new LoadedClass(loaded.name(), loaded.lispSource(), loaded.deferred(),
-								List.copyOf(initargs)));
+					scope.loadedClasses().put(file, loaded);
 				}
 			}
 		}
 		// A feature-disabled component keeps its place in the dependency graph (a
-		// sibling may :depends-on it) but contributes no source files.
-		return new Component(name, dependsOn, featureEnabled ? files : List.of());
+		// sibling may :depends-on it) and in the tree, but contributes no source files.
+		return new Component(name, dependsOn, featureEnabled ? plan : List.of(), node);
+	}
+
+	/**
+	 * The {@code type} slot of an instance, when its class's does not hold it: a source
+	 * file's is the extension the plan named the file by, whichever class said it, and
+	 * any other file's is what a class a {@code .asd} declares says.
+	 */
+	private static @Nullable String fileTypeOverride(ComponentClass fileClass, String relative) {
+		String fileType;
+		if (fileClass.source()) {
+			int dot = relative.lastIndexOf('.');
+			fileType = dot > relative.lastIndexOf('/') ? relative.substring(dot + 1) : null;
+		}
+		else {
+			fileType = fileClass.fileType();
+		}
+		return fileType == null || fileType.isEmpty() || fileType.equals(classFileType(fileClass.kind())) ? null
+				: fileType;
 	}
 
 	/**
@@ -2608,7 +2812,7 @@ public final class AsdfSystems {
 	 */
 	private static String sourceFileName(String name, @Nullable String pathname, @Nullable String fileType) {
 		String file = pathname == null ? name : pathname;
-		if (fileType == null || pathname != null && pathname.indexOf('.') >= 0) {
+		if (fileType == null || fileType.isEmpty() || pathname != null && pathname.indexOf('.') >= 0) {
 			return file;
 		}
 		return file + "." + fileType;

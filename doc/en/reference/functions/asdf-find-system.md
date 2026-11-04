@@ -10,7 +10,7 @@ passing a component object back in answers it unchanged. `name` is a string,
 keyword or symbol designator (a symbol downcases, a string stays verbatim).
 
 A name nothing registered is searched for, on the interpreter, as a load searches
-([`asdf:*central-registry*`](asdf-central-registry.md), then the search path): the `.asd`
+([`asdf:*system-definition-search-functions*`](asdf-system-definition-search-functions.md)): the `.asd`
 runs and registers what it defines, and nothing is downloaded or loaded. A name still
 unknown signals `asdf:missing-component`, unless `error-p` is nil — then the answer is
 `nil`, the probe shape libraries use (`(asdf:find-system name nil)` guarding a

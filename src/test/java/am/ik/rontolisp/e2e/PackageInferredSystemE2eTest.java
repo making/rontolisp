@@ -46,7 +46,7 @@ class PackageInferredSystemE2eTest extends AsdfLibraryE2eSupport {
 			""";
 
 	private static final List<String> EXPECTED = List.of("\"HELLO, world! [tag]\"", "\"REEXPORTED\"", "\"tag\"", "T",
-			"T", "(\"package-inferred-demo/util/text\" \"package-inferred-demo-tag\")", "(\"main\")");
+			"T", "(\"package-inferred-demo/util/text\" \"package-inferred-demo-tag\")", "(\"lisp\")");
 
 	@Override
 	protected String systemDir() {

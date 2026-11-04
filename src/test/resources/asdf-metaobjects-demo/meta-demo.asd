@@ -1,5 +1,5 @@
-;; The AsdfMetaobjectsE2eTest fixture: a plain defsystem with a :module (the
-;; flattened-children shape), a tests system chained through :in-order-to, and
+;; The AsdfMetaobjectsE2eTest fixture: a plain defsystem with a :module, a tests
+;; system chained through :in-order-to, and
 ;; a :perform (test-op ...) body -- fukamachi's .asd shape, reduced. It also
 ;; carries dexador.asd's two openers: a :version (read back by
 ;; asdf:component-version) and a :defsystem-depends-on on the built-in
