@@ -29247,12 +29247,12 @@ cases:
       ;; A closure shares the clause variable's binding: the JVM refused to compile one
       ;; (log4cl's log-error in a clause), and wasm's closure wrote its own copy. A
       ;; :no-error clause's alike, and a special binds dynamically, which no backend did.
-      ;; SBCL agrees.
+      ;; type-of answers one value (the interpreter's leaked intern's second). SBCL agrees.
       (define-condition hc-capture (error) ())
       (defun hc-closure-reads ()
         (handler-case (error 'hc-capture)
           (hc-capture (c) (funcall (lambda () (type-of c))))))
-      (print (hc-closure-reads))
+      (print (multiple-value-list (hc-closure-reads)))
       (defun hc-closure-writes ()
         (handler-case (error 'hc-capture)
           (hc-capture (c)
@@ -29272,7 +29272,7 @@ cases:
           (hc-capture (*hc-c*) (type-of (hc-read-special)))))
       (print (list (hc-special) *hc-c*))
     expected: |
-      HC-CAPTURE
+      (HC-CAPTURE)
       1
       (1 2)
       (HC-CAPTURE :GLOBAL)

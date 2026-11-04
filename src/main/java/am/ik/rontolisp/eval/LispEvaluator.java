@@ -3623,8 +3623,12 @@ public final class LispEvaluator {
 				LispVal value = thread.result().join();
 				// Also wait for the thread itself to die, so thread-alive-p answers nil
 				// deterministically after a join (the result settles inside the body,
-				// a beat before the thread's teardown).
-				thread.thread().join();
+				// a beat before the thread's teardown). The playground ran the body on
+				// this
+				// very thread, which no join would see die.
+				if (thread.thread() != Thread.currentThread()) {
+					thread.thread().join();
+				}
 				return value;
 			}
 			catch (InterruptedException ex) {

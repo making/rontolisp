@@ -11,7 +11,8 @@ round-trip are portable.
 ## Backends
 - Interpreter: `LispThread` record (thread, result, name) from `AsyncRuntime.spawnThread` — the ONLY
   LispEvaluator-reachable class touching threads, so the browser playground substitutes it
-  wholesale (`Target_AsyncRuntime.spawnThread` runs the body synchronously).
+  wholesale (`Target_AsyncRuntime.spawnThread` runs the body synchronously, and hands back the current
+  thread: `join-thread` skips the `Thread.join`, which hung the page until 2026-11-05).
 - JVM: `{TMARKER, Thread, FutureTask, name}` marker-headed `Object[]`; `JvmThreadRuntimeBuilder`'s
   class `implements Callable`, `_thread_spawn` builds the handle on an UNSTARTED virtual thread,
   stores it in the runner's `_threadHandle`, then starts it.
