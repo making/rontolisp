@@ -2,8 +2,8 @@
 
 `(compiled-function-p object)`
 
-ライト版スタブ: 常に `nil` を返します(コンパイル済み/インタープリタ実行の区別は記録されません)。
+どの関数に対しても真を返します。`(typep object 'compiled-function)` の答えも同じです。コンパイル済み/インタープリタ実行の区別は記録されず、SBCL も同じ答えを返します。
 
 ```lisp
-(compiled-function-p #'car) ; => NIL
+(list (compiled-function-p #'car) (compiled-function-p 'car)) ; => (T NIL)
 ```

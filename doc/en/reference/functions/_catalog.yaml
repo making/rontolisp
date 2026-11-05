@@ -60,6 +60,7 @@ categories:
       - { slug: sinh-cosh-tanh, name: "sinh cosh tanh" }
       - { slug: random, name: "random" }
       - { slug: make-random-state, name: "make-random-state" }
+      - { slug: random-state-p, name: "random-state-p" }
       - { slug: scale-float, name: "scale-float" }
       - { slug: float-radix, name: "float-radix" }
       - { slug: float-sign, name: "float-sign" }

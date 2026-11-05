@@ -6830,11 +6830,12 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void gensymCounterAndRandomStateAnswerTheInterpreterBindings() throws Exception {
 		// *gensym-counter* and *random-state* are bound by the compile-path defvar
-		// seeding with the interpreter's initial values, so a reference answers 0 / NIL
-		// and a setq updates the global (the operations they name use internal state).
+		// seeding with the interpreter's initial values, so a reference answers 0 / a
+		// random-state and a setq updates the global (the operations they name use
+		// internal state).
 		assertThat(compileAndRun("(print *gensym-counter*) (print *random-state*)"
 				+ " (setq *gensym-counter* 5) (print *gensym-counter*)"))
-			.isEqualTo("0\nNIL\n5");
+			.isEqualTo("0\n#<RANDOM-STATE>\n5");
 	}
 
 	@Test

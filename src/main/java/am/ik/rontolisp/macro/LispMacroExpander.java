@@ -14282,11 +14282,11 @@ public final class LispMacroExpander {
 
 	/**
 	 * Normalizes {@code (random limit state)} -- CL's optional random-state argument --
-	 * onto the 1-argument {@code random} the backends implement: no random-state objects
-	 * exist here ({@code make-random-state} answers nil), so the state is evaluated for
-	 * effect after the limit (left to right, like any argument list) and dropped; the
-	 * backend's own entropy draws. uuid's
-	 * {@code (random #xffffffffffff *uuid-random-state*)} is the driving consumer.
+	 * onto the 1-argument {@code random} the backends implement: a random-state carries
+	 * no generator here (.kb/random.md), so the state is evaluated for effect after the
+	 * limit (left to right, like any argument list) and dropped; the backend's own
+	 * entropy draws. uuid's {@code (random #xffffffffffff *uuid-random-state*)} is the
+	 * driving consumer.
 	 * @param cons the 2-argument random expression
 	 * @return the expanded expression
 	 */
@@ -23732,11 +23732,13 @@ public final class LispMacroExpander {
 	 * {@link #expandTopLevelDefinitions} inject the metaobject runtime.
 	 *
 	 * <p>
-	 * ONE narrowing sits between the two views: the lite designator answers {@code t} for
+	 * TWO narrowings sit between the two views. The lite designator answers {@code t} for
 	 * every ARRAY, while {@code class-of} answers the {@code vector} / {@code array}
 	 * built-in classes. The test is {@code %arrayp} -- the array representations WITHOUT
 	 * strings -- so a string keeps the narrower {@code string} the designator already
-	 * gives. The interpreter's {@code classOfTypeName} is the same dispatch, and
+	 * gives. And it answers an instance tag for a value of a fixed layout, while
+	 * {@code class-of} answers {@code ClosRegistry.VALUE_LAYOUT_CLASS_NAMES}'s built-in
+	 * class. The interpreter's {@code classOfTypeName} is the same dispatch, and
 	 * {@code ClosRegistry.BUILTIN_CLASS_NAMES} is the result set of both.
 	 * @param cons the class-of expression
 	 * @param hashTablesExist see
@@ -23765,6 +23767,9 @@ public final class LispMacroExpander {
 		LispVal vectorOrBit = makeIf(isBit, unspelledQuoteOf("BIT-VECTOR"), unspelledQuoteOf("VECTOR"));
 		LispVal narrowed = makeIf(callOf(LispNames.ARRAYP_INTERNAL, v),
 				makeIf(rankOne, vectorOrBit, unspelledQuoteOf("ARRAY")), designator);
+		for (java.util.Map.Entry<String, String> value : ClosRegistry.VALUE_LAYOUT_CLASS_NAMES.entrySet()) {
+			narrowed = makeIf(objIs(v, List.of(value.getKey())), unspelledQuoteOf(value.getValue()), narrowed);
+		}
 		LispVal answer = mvCall(LispNames.FIND_CLASS_INTERNAL, narrowed, LispTrue.INSTANCE);
 		if (closRegistry.dynamicClasses()) {
 			// An instance of a class made at run time carries its class in slot 0.
@@ -25039,12 +25044,12 @@ public final class LispMacroExpander {
 			return true;
 		}
 		if (form instanceof LispSymbol sym && (LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR.equals(sym.name())
-				|| LispNames.READTABLE_VAR.equals(sym.name()))) {
+				|| LispNames.READTABLE_VAR.equals(sym.name()) || LispNames.RANDOM_STATE_VAR.equals(sym.name()))) {
 			// Mentioning the variable is what makes injectMvSpillGlobal put its #P""
 			// initial value into the program -- an instance literal added AFTER this
 			// scan, so the mention has to stand in for it. Same rule as a #P in source
 			// flipping the gate by itself (.kb/pathnames.md), and for *readtable*'s
-			// readtable value (.kb/readtables.md).
+			// readtable value (.kb/readtables.md) and *random-state*'s (.kb/random.md).
 			return true;
 		}
 		if (form instanceof LispArray array) {
@@ -40047,6 +40052,10 @@ public final class LispMacroExpander {
 				// (structure-class ...) (built-in-class ...) (t ...)) to its t branch
 				// -- the slot-value accessor form, which works on struct instances.
 				return LispNil.INSTANCE;
+			case "LOGICAL-PATHNAME", "EXTENDED-CHAR":
+				// No such value: a logical pathname is the flat pathname
+				// (.kb/pathnames.md) and base-char is every character.
+				return LispNil.INSTANCE;
 			case "SYNONYM-STREAM":
 				// The one stream kind that is a VALUE rather than an opaque handle
 				// (LispLayout.SYNONYM_STREAM), so the type has an exact test on every
@@ -40112,8 +40121,22 @@ public final class LispMacroExpander {
 				return listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.RATIONALP, value),
 						listToCons(List.of(new LispSymbol(LispNames.NOT), callOf(LispNames.INTEGERP, value)))));
 			case "SEQUENCE":
-				return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, value),
-						callOf(LispNames.STRINGP, value), callOf(LispNames.ARRAYP_INTERNAL, value)));
+				// A list or a vector: a rank-2 array is no sequence.
+				return listToCons(
+						List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, value), vectorTypeTest(value)));
+			case "STANDARD-CHAR":
+				// The 96 standard characters, standard-char-p's set spelled out: a type
+				// test reaches no prelude defun, which only a spelled call splices.
+				LispVal code = callOf(LispNames.CHAR_CODE, value);
+				return listToCons(List
+					.of(new LispSymbol(LispNames.AND), callOf(LispNames.CHARACTERP, value), listToCons(List.of(
+							new LispSymbol(LispNames.OR),
+							listToCons(List.of(new LispSymbol(LispNames.EQ), code, new LispInteger(10))),
+							listToCons(List.of(new LispSymbol(LispNames.AND),
+									listToCons(List.of(new LispSymbol(LispNames.GE), code, new LispInteger(32))),
+									listToCons(List.of(new LispSymbol(LispNames.LE), code, new LispInteger(126)))))))));
+			case "RANDOM-STATE":
+				return objIs(value, List.of(LispLayout.RANDOM_STATE_TAG));
 			default:
 		}
 		String pred = atomicTypePredicate(name);
@@ -40268,7 +40291,9 @@ public final class LispMacroExpander {
 			case "ATOM" -> LispNames.ATOM;
 			case "CHARACTER", "BASE-CHAR", "STANDARD-CHAR" -> LispNames.CHARACTERP;
 			case "HASH-TABLE" -> LispNames.HASH_TABLE_P;
-			case "FUNCTION" -> LispNames.FUNCTIONP;
+			// Every function is compiled on a compile path, and CLHS lets the interpreter
+			// call its own so (SBCL answers t for all of them too).
+			case "FUNCTION", "COMPILED-FUNCTION" -> LispNames.FUNCTIONP;
 			case "STREAM" -> LispNames.STREAMP;
 			// The block-quantized weight matrix, its own type (.kb/quantized-matrix.md).
 			case LispNames.QUANTIZED_MATRIX ->
@@ -40626,6 +40651,16 @@ public final class LispMacroExpander {
 				}
 				return listToCons(tests);
 			}
+			case "MOD": {
+				// (mod N) = (integer 0 (N)).
+				if (parts.size() != 2
+						|| !(parts.get(1) instanceof LispInteger || parts.get(1) instanceof LispBigInteger)) {
+					throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
+				}
+				return listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.INTEGERP, value),
+						listToCons(List.of(new LispSymbol(LispNames.GE), value, new LispInteger(0))),
+						listToCons(List.of(new LispSymbol(LispNames.LT), value, parts.get(1)))));
+			}
 			case "SIGNED-BYTE": {
 				// (signed-byte N) = (integer -2^(N-1) (2^(N-1) - 1)).
 				List<LispVal> tests = new java.util.ArrayList<>();
@@ -40726,15 +40761,27 @@ public final class LispMacroExpander {
 	 * specifier) when the value does not match. Lite version of Common Lisp's
 	 * {@code check-type}: no restarts, so the place cannot be re-stored; the report names
 	 * the place, the offending value, and the expected type (or the given description
-	 * string). Type specifiers are the ones {@code makeTypeTest} supports; a user
-	 * {@code deftype} name (or any other unsupported specifier) makes the check a no-op
-	 * -- the place is still evaluated, but the assertion is skipped rather than
-	 * signalling a compile error, since there is no {@code deftype} registry to resolve
-	 * the name here. {@code typecase}/{@code etypecase} stay strict.
+	 * string). Without a registry no class or {@code deftype} is known, so this is the
+	 * shape for a caller reading the expansion's variables and signal rather than running
+	 * its test; see {@link #expandCheckType(LispCons, ClosRegistry)}.
 	 * @param cons the check-type expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandCheckType(LispCons cons) {
+		return expandCheckType(cons, EMPTY_CLOS_REGISTRY);
+	}
+
+	/**
+	 * Expands {@code (check-type ...)} with a class registry: the test is the literal
+	 * {@code typep}'s, so a class, a condition, a struct, a {@code deftype} and a
+	 * compound holding one are checked. A specifier the registry cannot resolve makes the
+	 * check a no-op -- the place is still evaluated -- rather than refusing the program;
+	 * {@code typecase}/{@code etypecase} stay strict.
+	 * @param cons the check-type expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCheckType(LispCons cons, ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || parts.size() > 4) {
 			throw new IllegalArgumentException("check-type expects a place and a type specifier, got: " + cons.print());
@@ -40752,15 +40799,49 @@ public final class LispMacroExpander {
 						new LispSymbol(":FORMAT-ARGUMENTS"), listToCons(List.of(new LispSymbol(LispNames.LIST), var))));
 		LispVal test;
 		try {
-			test = makeTypeTest(var, typeSpec);
+			test = makeTypeTest(var, closRegistry == EMPTY_CLOS_REGISTRY ? typeSpec : checkableTypeSpec(typeSpec),
+					closRegistry);
 		}
 		catch (IllegalArgumentException unsupportedType) {
-			// A user deftype / unsupported specifier: skip the assertion (lite) rather
-			// than
-			// failing to compile the whole program.
+			// A specifier nothing defines: skip the assertion rather than failing to
+			// compile the whole program.
 			test = LispTrue.INSTANCE;
 		}
 		return makeLet(CHECK_TYPE_VAR, place, makeIf(test, LispNil.INSTANCE, errorCall));
+	}
+
+	/**
+	 * Widens the types {@code typep} deliberately answers as empty, so a correct
+	 * {@code check-type} is not refused: a {@code defgeneric}'s dispatcher is a plain
+	 * function, a struct's or built-in type's class is a standard class, a logical
+	 * pathname is a pathname and a character outside {@code base-char} is a character.
+	 * The empty tests keep {@code typecase} on the arms trivia relies on
+	 * (.kb/declarations-type-checks.md, "makeTypeTest"). Only a positive position is
+	 * widened: under a {@code not} the empty test already passes everything.
+	 * @param spec the type specifier
+	 * @return the specifier to test
+	 */
+	private static LispVal checkableTypeSpec(LispVal spec) {
+		if (spec instanceof LispSymbol sym) {
+			return switch (plainTypeName(sym)) {
+				case "GENERIC-FUNCTION", "STANDARD-GENERIC-FUNCTION" ->
+					listToCons(List.of(new LispSymbol(LispNames.OR), new LispSymbol("FUNCTION"), sym));
+				case "STRUCTURE-CLASS", "BUILT-IN-CLASS" -> new LispSymbol("CLASS");
+				case "LOGICAL-PATHNAME" -> new LispSymbol("PATHNAME");
+				case "EXTENDED-CHAR" -> new LispSymbol("CHARACTER");
+				default -> spec;
+			};
+		}
+		if (spec instanceof LispCons compound && compound.isProperList() && compound.car() instanceof LispSymbol head
+				&& (LispNames.OR.equals(plainTypeName(head)) || LispNames.AND.equals(plainTypeName(head)))) {
+			List<LispVal> widened = new java.util.ArrayList<>();
+			widened.add(head);
+			for (LispVal branch : compound.toList().subList(1, compound.toList().size())) {
+				widened.add(checkableTypeSpec(branch));
+			}
+			return listToCons(widened);
+		}
+		return spec;
 	}
 
 	/**
@@ -47787,8 +47868,9 @@ public final class LispMacroExpander {
 			"INTEGER", "FIXNUM", "BIGNUM", "BIT", "RATIONAL", "RATIO", "FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT",
 			"SHORT-FLOAT", "LONG-FLOAT", "REAL", "NUMBER", "COMPLEX", "CHARACTER", "STRING", "SIMPLE-STRING", "CONS",
 			"LIST", "ATOM", "VECTOR", "SIMPLE-VECTOR", "BIT-VECTOR", "SIMPLE-BIT-VECTOR", "ARRAY", "SIMPLE-ARRAY",
-			"SEQUENCE", "HASH-TABLE", "FUNCTION", "STANDARD-OBJECT", "STRUCTURE-OBJECT", "UNSIGNED-BYTE", "PACKAGE",
-			"STREAM", "T");
+			"SEQUENCE", "HASH-TABLE", "FUNCTION", "COMPILED-FUNCTION", "STANDARD-OBJECT", "STRUCTURE-OBJECT",
+			"UNSIGNED-BYTE", "SIGNED-BYTE", "BASE-CHAR", "STANDARD-CHAR", "BASE-STRING", "SIMPLE-BASE-STRING",
+			"PACKAGE", "STREAM", "T");
 
 	/**
 	 * The stream SUBTYPE names a runtime {@code typep} specifier can hold, each tested by
@@ -47898,6 +47980,8 @@ public final class LispMacroExpander {
 			              (or (null %tpc-a) %tpc-xw (<= %tpc-value (- (ash 1 %tpc-x) 1))))
 			         t
 			         nil))
+			    ((string= %tpc-n "MOD")
+			     (if (and (integerp %tpc-value) (>= %tpc-value 0) (< %tpc-value %tpc-x)) t nil))
 			    ((string= %tpc-n "SIGNED-BYTE")
 			     (if (and (integerp %tpc-value)
 			              (or (null %tpc-a) %tpc-xw
@@ -47919,7 +48003,7 @@ public final class LispMacroExpander {
 			     (let* ((%tpc-sv (string= %tpc-n "SIMPLE-VECTOR"))
 			            (%tpc-sbv (string= %tpc-n "SIMPLE-BIT-VECTOR"))
 			            (%tpc-bv (or (string= %tpc-n "BIT-VECTOR") %tpc-sbv))
-			            (%tpc-sp (if (or %tpc-sv %tpc-sbv)
+			            (%tpc-sp (if (or %tpc-sv %tpc-sbv (string= %tpc-n "SIMPLE-ARRAY"))
 			                         (%simple-array-p %tpc-value)
 			                         t))
 			            (%tpc-et (if %tpc-bv 'bit (if %tpc-sv t (if (null %tpc-a) '* %tpc-x))))
@@ -48206,6 +48290,7 @@ public final class LispMacroExpander {
 			java.util.Map.entry("RATIO", List.of("RATIONAL")), java.util.Map.entry("RATIONAL", List.of("REAL")),
 			java.util.Map.entry("BFLOAT16", List.of("FLOAT")), java.util.Map.entry("FLOAT", List.of("REAL")),
 			java.util.Map.entry("REAL", List.of("NUMBER")), java.util.Map.entry("COMPLEX", List.of("NUMBER")),
+			java.util.Map.entry("COMPILED-FUNCTION", List.of("FUNCTION")),
 			java.util.Map.entry("KEYWORD", List.of("SYMBOL")), java.util.Map.entry("BOOLEAN", List.of("SYMBOL")),
 			java.util.Map.entry("NULL", List.of("SYMBOL", "LIST")), java.util.Map.entry("CONS", List.of("LIST")),
 			java.util.Map.entry("LIST", List.of("SEQUENCE")), java.util.Map.entry("STRING", List.of("VECTOR")),
@@ -50022,6 +50107,10 @@ public final class LispMacroExpander {
 		// branch needs no PATHNAME case because no other value is one.
 		namesByTags.computeIfAbsent(List.of(LispLayout.PATHNAME_TAG), k -> new java.util.LinkedHashSet<>())
 			.add("PATHNAME");
+		namesByTags.computeIfAbsent(List.of(LispLayout.READTABLE_TAG), k -> new java.util.LinkedHashSet<>())
+			.add("READTABLE");
+		namesByTags.computeIfAbsent(List.of(LispLayout.RANDOM_STATE_TAG), k -> new java.util.LinkedHashSet<>())
+			.add("RANDOM-STATE");
 		// Every stream is an INSTANCE now -- an open stream, a synonym stream and a Gray
 		// stream alike -- so a runtime (typep x 'stream) answers through this table for
 		// all three. The non-instance branch still carries a STREAM case in
@@ -51787,7 +51876,7 @@ public final class LispMacroExpander {
 		// through SUBTYPEP_PARENTS, which is where they are edges.
 		names.addAll(List.of("SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "BASE-CHAR", "STANDARD-CHAR",
 				"EXTENDED-CHAR", "BASE-STRING", "SIMPLE-BASE-STRING", "CHARACTER", "STANDARD-OBJECT", "CONDITION",
-				"ERROR", "SIMPLE-ERROR", "SIMPLE-CONDITION"));
+				"ERROR", "SIMPLE-ERROR", "SIMPLE-CONDITION", "PATHNAME", "READTABLE", "RANDOM-STATE"));
 		// Every atomic name a runtime TYPEP specifier can hold is a runtime SUBTYPEP name
 		// too: a leaf of the lattice (hash-table, function, package, stream, atom) has no
 		// SUBTYPEP_PARENTS entry, so without this it had no row at all and answered nil
@@ -52752,7 +52841,7 @@ public final class LispMacroExpander {
 		}
 		if (usesRandomState) {
 			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.RANDOM_STATE_VAR),
-					LispNil.INSTANCE)));
+					objNew(LispLayout.RANDOM_STATE_TAG, List.of()))));
 		}
 		if (usesJavaWarnVar) {
 			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR),

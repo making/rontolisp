@@ -841,7 +841,9 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   message, `%json-out-instance`) — they drag no metaobject runtime in.
 - **The built-in class set is TWO lists and ONE narrowing.** `BUILTIN_CLASS_NAMES` is what
   `class-of` can answer (the eight standard stream classes included, which the designator
-  answers for a built-in stream instance, `.kb/gray-streams.md`); `FIND_CLASS_ONLY_CLASS_NAMES` is the rest of the CL built-in lattice,
+  answers for a built-in stream instance, `.kb/gray-streams.md`, and `pathname`/`readtable`/`random-state`,
+  the fixed layouts of `VALUE_LAYOUT_CLASS_NAMES`, which `class-of` used to refuse on the compile paths and
+  answer `t` for on the interpreter); `FIND_CLASS_ONLY_CLASS_NAMES` is the rest of the CL built-in lattice,
   reachable by NAME only because every value it covers has a narrower answer
   (`number`/`real`/`rational` under `integer`/`ratio`/`float`/`complex`, `sequence`/`list`
   under `cons`/`null`, `bit-vector` under the general `vector` — a bit vector IS the general
@@ -1003,7 +1005,7 @@ in each slot's storage, reached past its own `slot-value-using-class`, and pins 
   refusing method refuses it, where SBCL's prototype needs no allocation).
 - **What else that load needed**, pinned by the same case: `class-prototype` of a built-in class is a
   value of it (SBCL's where it is a constant), not an allocation; `extract-lambda-list`,
-  `extract-specializer-names`; `(find-class 'pathname)` (`FIND_CLASS_ONLY_CLASS_NAMES`). A defclass
+  `extract-specializer-names`; `(find-class 'pathname)` (`BUILTIN_CLASS_NAMES`). A defclass
   whose form seeds a class (the first `funcallable-standard-class`) regenerates the class dispatchers
   BEFORE its driver runs: `shared-initialize` had no arm for the seeded metaclass, so such a class
   kept raw initargs and stayed unfinalized, on the interpreter when a metaclass was in use before.

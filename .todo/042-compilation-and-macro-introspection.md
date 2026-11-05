@@ -49,9 +49,9 @@ and metaprogramming.
 
 | Operator | Purpose |
 |----------|---------|
-| `make-random-state` | Create random state: `(make-random-state t)` |
-| `random-state-p` | Random state predicate |
-| `random` (done) | Already implemented (but doesn't accept state arg) |
+| `make-random-state` (value done) | Answers a random-state with no generator in it |
+| `random-state-p` (done) | Random state predicate |
+| `random` (done) | Already implemented (accepts a state argument and ignores it) |
 
 ### Implementation approach
 
@@ -73,8 +73,9 @@ and metaprogramming.
 8. `features` -> feature list (e.g., `:rontolisp`, `:lisp`, `:ansi-cl`).
 
 **Random state**:
-9. `make-random-state` — create a seeded random state.
-10. Extend `random` to accept a state argument.
+9. Give a random-state a generator (`.kb/random.md`): `(make-random-state s)` copies it, so
+   the copy repeats the draws of `s`.
+10. Make `random` draw from its state argument and from a bound `*random-state*`.
 
 ### Related
 

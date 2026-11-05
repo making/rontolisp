@@ -1861,6 +1861,10 @@ public final class LispEvaluator {
 				if (streamClass != null) {
 					return java.util.Objects.requireNonNull(this.closRegistry.builtinClassMetaobject(streamClass));
 				}
+				String valueClass = ClosRegistry.VALUE_LAYOUT_CLASS_NAMES.get(inst.layout().tag());
+				if (valueClass != null) {
+					return java.util.Objects.requireNonNull(this.closRegistry.builtinClassMetaobject(valueClass));
+				}
 				LispVal metaobject = this.closRegistry.classMetaobject(inst.layout().tag());
 				if (metaobject != null) {
 					return metaobject;
@@ -10876,7 +10880,11 @@ public final class LispEvaluator {
 				ensureUiopTypesFor(cons);
 				return LispMacroExpander.expandCtypecase(cons, this.closRegistry);
 			case LispNames.CHECK_TYPE:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandCheckType);
+				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
+				ensureUiopTypesFor(cons);
+				return LispMacroExpander.expandCheckType(cons, this.closRegistry);
 			case LispNames.ASSERT:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandAssert);
 			case LispNames.DECLARE:

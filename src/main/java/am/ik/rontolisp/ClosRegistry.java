@@ -72,6 +72,7 @@ public final class ClosRegistry {
 		// And for the readtable layout: a readtable is a VALUE (LispLayout.READTABLE)
 		// built and read by prelude Lisp on every backend.
 		this.layoutsByTag.put(LispLayout.READTABLE_TAG, LispLayout.READTABLE);
+		this.layoutsByTag.put(LispLayout.RANDOM_STATE_TAG, LispLayout.RANDOM_STATE);
 		// reader-error inherits from BOTH parse-error and stream-error (CLHS 9.1.2):
 		// parse-error provides the slot layout, stream-error joins the ancestor set
 		// (the define-condition multiple-parents rule).
@@ -81,6 +82,10 @@ public final class ClosRegistry {
 		// provides the layout (it carries the format pair), simple-condition joins the
 		// ancestor set.
 		registerExtraAncestors("SIMPLE-TYPE-ERROR", List.of("SIMPLE-CONDITION"));
+		// simple-error and simple-warning too (CLHS): each carries the format pair
+		// itself.
+		registerExtraAncestors("SIMPLE-ERROR", List.of("SIMPLE-CONDITION"));
+		registerExtraAncestors("SIMPLE-WARNING", List.of("SIMPLE-CONDITION"));
 		for (ConditionSeed seed : CONDITION_SEEDS) {
 			seedClass(seed.name(), seed.parent(), seed.slots().toArray(new String[0]));
 		}
@@ -475,7 +480,12 @@ public final class ClosRegistry {
 			// built-in-signaled classes.
 			seed(FILE_ERROR_CLASS_NAME, "ERROR", "PATHNAME", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
 			seed(ARITHMETIC_ERROR_CLASS_NAME, "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
-			seed(DIVISION_BY_ZERO_CLASS_NAME, ARITHMETIC_ERROR_CLASS_NAME), seed("CONTROL-ERROR", "ERROR"),
+			seed(DIVISION_BY_ZERO_CLASS_NAME, ARITHMETIC_ERROR_CLASS_NAME),
+			seed("FLOATING-POINT-INEXACT", ARITHMETIC_ERROR_CLASS_NAME),
+			seed("FLOATING-POINT-INVALID-OPERATION", ARITHMETIC_ERROR_CLASS_NAME),
+			seed("FLOATING-POINT-OVERFLOW", ARITHMETIC_ERROR_CLASS_NAME),
+			seed("FLOATING-POINT-UNDERFLOW", ARITHMETIC_ERROR_CLASS_NAME),
+			seed("STORAGE-CONDITION", "SERIOUS-CONDITION"), seed("CONTROL-ERROR", "ERROR"),
 			seed(PROGRAM_ERROR_CLASS_NAME, "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
 			seed(PACKAGE_ERROR_CLASS_NAME, "ERROR", "PACKAGE", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
 			seed("CELL-ERROR", "ERROR", "NAME"),
@@ -1273,13 +1283,16 @@ public final class ClosRegistry {
 	 * view name the same classes on every backend. That set is the
 	 * {@code %class-designator} result set plus the array narrowing {@code class-of}
 	 * alone performs: the lite designator answers {@code T} for every array, while
-	 * {@code class-of} answers {@code VECTOR} / {@code ARRAY}. {@code find-class}
-	 * resolves these names too ({@link #builtinClassMetaobject}).
+	 * {@code class-of} answers {@code VECTOR} / {@code ARRAY}, and an instance tag for a
+	 * value of a fixed layout, while {@code class-of} answers the name
+	 * {@link #VALUE_LAYOUT_CLASS_NAMES} gives it. {@code find-class} resolves these names
+	 * too ({@link #builtinClassMetaobject}).
 	 */
 	public static final List<String> BUILTIN_CLASS_NAMES = List.of("T", "NULL", "BOOLEAN", "INTEGER", "RATIO", "FLOAT",
 			"COMPLEX", "STRING", "CHARACTER", "KEYWORD", "SYMBOL", "HASH-TABLE", "FUNCTION", "CONS", "ARRAY", "VECTOR",
-			"BIT-VECTOR", "QUANTIZED-MATRIX", "STREAM", "FILE-STREAM", "STRING-STREAM", "SYNONYM-STREAM",
-			"TWO-WAY-STREAM", "BROADCAST-STREAM", "ECHO-STREAM", "CONCATENATED-STREAM");
+			"BIT-VECTOR", "QUANTIZED-MATRIX", "PATHNAME", "READTABLE", "RANDOM-STATE", "STREAM", "FILE-STREAM",
+			"STRING-STREAM", "SYNONYM-STREAM", "TWO-WAY-STREAM", "BROADCAST-STREAM", "ECHO-STREAM",
+			"CONCATENATED-STREAM");
 
 	/**
 	 * The standard stream classes, {@code stream} first and then the subtypes ANSI places
@@ -1364,7 +1377,15 @@ public final class ClosRegistry {
 	 * specifier resolves through by name (`.kb/clos.md`).
 	 */
 	public static final List<String> FIND_CLASS_ONLY_CLASS_NAMES = List.of("STANDARD-OBJECT", "SEQUENCE", "LIST",
-			"NUMBER", "REAL", "RATIONAL", "STRUCTURE-OBJECT", "BUILT-IN-CLASS", "PATHNAME");
+			"NUMBER", "REAL", "RATIONAL", "STRUCTURE-OBJECT", "BUILT-IN-CLASS");
+
+	/**
+	 * The fixed layouts whose instances are values of a built-in class rather than of a
+	 * registered one: the instance tag to the {@link #BUILTIN_CLASS_NAMES} name
+	 * {@code class-of} answers.
+	 */
+	public static final Map<String, String> VALUE_LAYOUT_CLASS_NAMES = Map.of(LispLayout.PATHNAME_TAG, "PATHNAME",
+			LispLayout.READTABLE_TAG, "READTABLE", LispLayout.RANDOM_STATE_TAG, "RANDOM-STATE");
 
 	/**
 	 * Registers a built-in class (a condition of the seeded hierarchy, or one of the MOP

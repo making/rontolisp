@@ -14239,6 +14239,131 @@ cases:
       "The assertion (STRING= \"~S\" \"x\") failed."
       :DIGIT
       :ABC
+  # check-type tests what the literal typep tests, through the registry the compilers
+  # hold: a class, a condition, a struct, a deftype, a compound holding one. A correct
+  # program is not refused where typep answers an empty type deliberately (a defgeneric's
+  # dispatcher, a struct's class), and a name nothing defines stays a no-op. A class
+  # defined after the function, or a subclass after its first call, is seen: the
+  # interpreter's arm re-expands.
+  - name: check-type-tests-what-typep-tests
+    source: |
+      (defclass ci-ct-foo () ())
+      (defclass ci-ct-sub (ci-ct-foo) ())
+      (defclass ci-ct-never-made () ())
+      (defstruct ci-ct-st a)
+      (define-condition ci-ct-cnd (simple-error) ())
+      (defgeneric ci-ct-gf (x))
+      (defmethod ci-ct-gf ((x t)) x)
+      (deftype ci-ct-alias () 'ci-ct-foo)
+      (deftype ci-ct-range (n) `(integer 0 ,n))
+      (defun ci-ct-even-p (x) (and (integerp x) (evenp x)))
+      (deftype ci-ct-even () '(satisfies ci-ct-even-p))
+      (defmacro ci-ct-try (v spec)
+        `(let ((a ,v))
+           (handler-case (progn (check-type a ,spec) :ok)
+             (type-error (c) (list (type-error-datum c) (type-error-expected-type c))))))
+      (print (list (ci-ct-try "x" ci-ct-foo) (ci-ct-try (make-instance 'ci-ct-sub) ci-ct-foo)
+                   (ci-ct-try "x" ci-ct-never-made)))
+      (print (list (ci-ct-try "x" (or null ci-ct-foo)) (ci-ct-try nil (or null ci-ct-foo))
+                   (ci-ct-try (make-instance 'ci-ct-sub) (or null ci-ct-foo))))
+      (print (list (ci-ct-try "x" ci-ct-st) (ci-ct-try (make-ci-ct-st) ci-ct-st)
+                   (ci-ct-try 1 ci-ct-cnd) (ci-ct-try (make-condition 'ci-ct-cnd) error)))
+      (print (list (ci-ct-try "x" ci-ct-alias) (ci-ct-try (make-instance 'ci-ct-foo) ci-ct-alias)
+                   (ci-ct-try 3 (ci-ct-range 5)) (ci-ct-try 9 (ci-ct-range 5))
+                   (ci-ct-try 2 ci-ct-even) (ci-ct-try 3 ci-ct-even)))
+      (print (list (ci-ct-try 1 (mod 5)) (ci-ct-try 5 (mod 5)) (ci-ct-try "x" (mod 5))
+                   (ci-ct-try (make-random-state) random-state) (ci-ct-try nil random-state)
+                   (ci-ct-try #'car compiled-function) (ci-ct-try 1 compiled-function)))
+      (print (list (ci-ct-try (make-condition 'simple-error) simple-condition)
+                   (ci-ct-try (make-condition 'simple-warning) simple-condition)
+                   (ci-ct-try 1 simple-condition)))
+      (print (list (ci-ct-try #'ci-ct-gf generic-function) (ci-ct-try 1 generic-function)
+                   (ci-ct-try (find-class 'ci-ct-st) structure-class) (ci-ct-try (find-class 'integer) built-in-class)
+                   (ci-ct-try (code-char 955) extended-char) (ci-ct-try 1 extended-char)
+                   (ci-ct-try #p"/x" logical-pathname)))
+      (print (list (ci-ct-try #\a standard-char) (ci-ct-try #\Tab standard-char)
+                   (ci-ct-try (make-array '(1 1) :initial-element 0) sequence) (ci-ct-try (make-array 1) sequence)))
+      (print (list (ci-ct-try 1 ci-ct-no-such-type) (ci-ct-try 1 (or null ci-ct-no-such-type))))
+      (print (handler-case (let ((a "x")) (check-type a ci-ct-foo "a foo")) (error (c) (princ-to-string c))))
+      (defun ci-ct-late-check (x) (check-type x ci-ct-late) :ok)
+      (defclass ci-ct-late () ())
+      (print (ci-ct-late-check (make-instance 'ci-ct-late)))
+      (defclass ci-ct-late-sub (ci-ct-late) ())
+      (print (ci-ct-late-check (make-instance 'ci-ct-late-sub)))
+      (print (handler-case (ci-ct-late-check 1) (type-error () :refused)))
+    expected: |
+      (("x" CI-CT-FOO) :OK ("x" CI-CT-NEVER-MADE))
+      (("x" (OR NULL CI-CT-FOO)) :OK :OK)
+      (("x" CI-CT-ST) :OK (1 CI-CT-CND) :OK)
+      (("x" CI-CT-ALIAS) :OK :OK (9 (CI-CT-RANGE 5)) :OK (3 CI-CT-EVEN))
+      (:OK (5 (MOD 5)) ("x" (MOD 5)) :OK (NIL RANDOM-STATE) :OK (1 COMPILED-FUNCTION))
+      (:OK :OK (1 SIMPLE-CONDITION))
+      (:OK (1 GENERIC-FUNCTION) :OK :OK :OK (1 EXTENDED-CHAR) :OK)
+      (:OK (#\Tab STANDARD-CHAR) (#2A((0)) SEQUENCE) :OK)
+      (:OK :OK)
+      "The value of A is \"x\", which is not a foo."
+      :OK
+      :OK
+      :REFUSED
+  # What the standard type names answer, literal and computed: the two dispatches take the
+  # same set. A random-state is a value of its own; the condition lattice joins
+  # simple-error and simple-warning to simple-condition; every function is compiled.
+  - name: standard-type-names-answer-literal-and-computed
+    source: |
+      (defun ci-stn-computed (value specs) (mapcar (lambda (spec) (typep value spec)) specs))
+      (print (list (typep 1 '(mod 5)) (typep 5 '(mod 5)) (typep -1 '(mod 5))
+                   (ci-stn-computed 1 '((mod 5) (mod 1) signed-byte compiled-function random-state))))
+      (print (list (typep #\Tab 'standard-char) (typep #\a 'standard-char) (typep #\Newline 'standard-char)
+                   (ci-stn-computed #\Tab '(base-char standard-char extended-char character))))
+      (print (list (typep (make-array '(1 1)) 'sequence) (typep (make-array 1) 'sequence)
+                   (ci-stn-computed (make-array '(1 1)) '(sequence array))
+                   (ci-stn-computed "x" '(base-string simple-base-string string))
+                   (ci-stn-computed (make-array 3 :fill-pointer 1) '((simple-array t (3)) (vector t 3)))))
+      (print (let ((s (make-random-state)))
+               (list (random-state-p s) (random-state-p *random-state*) (random-state-p nil) (eq s (make-random-state))
+                     (random-state-p (make-random-state s)) (random-state-p (funcall 'make-random-state t))
+                     (type-of s) (typep s 'random-state) (typep s 'list) (typep nil 'random-state)
+                     (ci-stn-computed s '(random-state null))
+                     (< (random 10 s) 10))))
+      (print (handler-case (make-random-state 3) (type-error (c) (type-error-datum c))))
+      (print (ci-stn-computed *readtable* '(readtable random-state)))
+      (print (mapcar #'class-name (list (class-of (make-random-state)) (class-of *readtable*) (class-of #p"/x"))))
+      (print (mapcar #'class-name (list (find-class 'random-state) (find-class 'readtable) (find-class 'pathname))))
+      (print (list (eq (class-of (make-random-state)) (find-class 'random-state))
+                   (typep (make-random-state) (class-of (make-random-state)))
+                   (typep #p"/x" (class-of #p"/x"))))
+      (print (list (compiled-function-p #'car) (compiled-function-p (lambda (x) x)) (compiled-function-p 'car)
+                   (typep #'car 'compiled-function) (typep 1 'compiled-function)))
+      (print (let ((a 'compiled-function) (b 'function) (c 'random-state) (d 'pathname) (e 'readtable))
+               (list (subtypep a b) (subtypep b a) (subtypep c c) (subtypep d d) (subtypep e e)
+                     (subtypep 'compiled-function 'function) (subtypep 'function 'compiled-function))))
+      (print (list (typep (make-condition 'simple-error) 'simple-condition)
+                   (typep (make-condition 'simple-warning) 'simple-condition)
+                   (typep (make-condition 'type-error) 'simple-condition)
+                   (subtypep 'simple-error 'simple-condition) (subtypep 'simple-warning 'simple-condition)
+                   (handler-case (error "a ~a" 1) (simple-condition (c) (princ-to-string c)))))
+      (print (list (handler-case (error 'floating-point-overflow) (arithmetic-error () :arithmetic))
+                   (handler-case (error 'floating-point-underflow) (arithmetic-error () :arithmetic))
+                   (handler-case (error 'floating-point-inexact) (arithmetic-error () :arithmetic))
+                   (handler-case (error 'floating-point-invalid-operation) (arithmetic-error () :arithmetic))
+                   (handler-case (error 'storage-condition) (serious-condition () :serious))
+                   (typep (make-condition 'storage-condition) 'error)))
+      (print (typecase (code-char 955) (extended-char :extended) (logical-pathname :logical) (t :other)))
+    expected: |
+      (T NIL NIL (T NIL T NIL NIL))
+      (NIL T T (T NIL NIL T))
+      (NIL T (NIL T) (T T T) (NIL T))
+      (T T NIL NIL T T RANDOM-STATE T NIL NIL (T NIL) T)
+      3
+      (T NIL)
+      (RANDOM-STATE READTABLE PATHNAME)
+      (RANDOM-STATE READTABLE PATHNAME)
+      (T T T)
+      (T T NIL T NIL)
+      (T NIL T T T T NIL)
+      (T T NIL T T "a 1")
+      (:ARITHMETIC :ARITHMETIC :ARITHMETIC :ARITHMETIC :SERIOUS NIL)
+      :OTHER
   - name: declared-array-types-single-arm-access
     source: |
       (deftype ci-octet-vec (&optional length)
@@ -20961,7 +21086,6 @@ cases:
       (defun ci-mc-stack ())
       (defun ci-mc-restarts (&optional condition))
       (print (list (ci-mc-stack) (ci-mc-restarts) (ci-mc-restarts 1)))
-      ;; make-random-state answers nil (no random-state objects exist) and
       ;; random accepts-and-ignores the optional state argument, drawing from
       ;; the backend's own entropy (uuid's *uuid-random-state* seeding)
       (print (make-random-state t))
@@ -21019,7 +21143,7 @@ cases:
     expected: |
       (T T NIL NIL T)
       (NIL NIL NIL)
-      NIL
+      #<RANDOM-STATE>
       T
       (NIL M G)
       (2 3 4)
@@ -24377,9 +24501,9 @@ cases:
   # A DIRECT call of a native built-in OUTSIDE the wrapper catalog with a wrong count
   # is the same run-time program-error, judged by its shape in
   # compiler/NativeCallShapes: the compiled lowerings failed the compile ((boundp),
-  # (get-universal-time 1)), answered ((make-random-state nil 2) was NIL), or -- for a
-  # prelude defun (char-name, find-class) -- said Function, the surplus past an
-  # &optional tail from inside the callee.
+  # (get-universal-time 1)), answered, or -- for a prelude defun (make-random-state,
+  # char-name, find-class) -- said Function, the surplus past an &optional tail from
+  # inside the callee.
   - name: direct-native-builtin-call-wrong-count-signals-program-error
     source: |
       (defun ci-nb-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
@@ -25059,7 +25183,7 @@ cases:
       15
       16
       0
-      NIL
+      #<RANDOM-STATE>
     expectedByBackend:
       wasm: |
         32
@@ -25083,7 +25207,7 @@ cases:
         15
         16
         0
-        NIL
+        #<RANDOM-STATE>
 
   # The REPL history variables (* ** *** / // /// + ++ +++) are cl variables, nil
   # outside a REPL: a compiled read of one never assigned answers nil, and a

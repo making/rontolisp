@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import am.ik.rontolisp.LispCons;
@@ -607,17 +608,57 @@ class WasmImportCompilerTest {
 				(rontolisp:wasm-export 'add10 :params '(:long) :returns :long)
 				""");
 		assertThat(new NoGcWasmCompiler().compile(program)).isNotEmpty();
-		// The GC backend carries :s64 (:long) too, through its boxed exact integer, but
-		// not the narrow unsigned family the house integer cannot range-check here.
+		// The GC backend carries :s64 (:long) and :u32 too, through its boxed exact
+		// integer, but not the rest of the narrow family.
 		assertThat(WasmLispCompiler.builder().noWasi(true).build().compile(program)).isNotEmpty();
-		List<LispVal> unsigned = LispReader.readAllFromString("""
+		assertThat(WasmLispCompiler.builder().noWasi(true).build().compile(LispReader.readAllFromString("""
 				(rontolisp:wasm-import 'add :params '(:u32 :u32) :returns :u32)
 				(defun add10 (n) (add n 10))
 				(rontolisp:wasm-export 'add10 :params '(:long) :returns :long)
+				"""))).isNotEmpty();
+		List<LispVal> narrow = LispReader.readAllFromString("""
+				(rontolisp:wasm-import 'add :params '(:u16 :u16) :returns :u16)
+				(defun add10 (n) (add n 10))
+				(rontolisp:wasm-export 'add10 :params '(:long) :returns :long)
 				""");
-		assertThat(new NoGcWasmCompiler().compile(unsigned)).isNotEmpty();
-		assertThatThrownBy(() -> WasmLispCompiler.builder().noWasi(true).build().compile(unsigned))
-			.hasMessageContaining("type designator :U32 is not supported");
+		assertThat(new NoGcWasmCompiler().compile(narrow)).isNotEmpty();
+		assertThatThrownBy(() -> WasmLispCompiler.builder().noWasi(true).build().compile(narrow))
+			.hasMessageContaining("type designator :U16 is not supported");
+	}
+
+	@Test
+	void theMemoryModuleIsTheFixedSetOfFieldsNotAHostModule() {
+		// A declaration binds no host function, so its signature has to be the field's:
+		// the stub's arity and the emitted body cannot disagree. Every backend refuses
+		// alike, and a component, whose core memory the host owns, has no such module.
+		WasmImportCompiler.Decl load = parse(
+				"(rontolisp:wasm-import 'load :from \"rontolisp:memory\" :as \"load32\" :params '(:u32) :returns :u32)");
+		assertThat(WasmMemoryIntrinsic.of(load)).isEqualTo(WasmMemoryIntrinsic.LOAD32);
+		for (var refused : List.of(Map.entry(
+				"(rontolisp:wasm-import 'f :from \"rontolisp:memory\" :as \"peek\" :params '(:u32) :returns :u32)",
+				"names unknown field \"peek\""),
+				Map.entry(
+						"(rontolisp:wasm-import 'f :from \"rontolisp:memory\" :as \"load32\" :params '(:s32) :returns :u32)",
+						"but it is :params [:U32] :returns :U32"),
+				Map.entry(
+						"(rontolisp:wasm-import 'f :from \"rontolisp:memory\" :as \"load32\" :params '(:u32) :returns :u32 :async t)",
+						"cannot suspend"))) {
+			assertThatThrownBy(() -> parse(refused.getKey())).hasMessageContaining(refused.getValue());
+		}
+		List<LispVal> octets = LispReader.readAllFromString("""
+				(rontolisp:wasm-import 'f :from "rontolisp:memory" :as "octets" :params '(:u32 :u32) :returns :octets)
+				(defun g () (f 0 0))
+				(rontolisp:wasm-export 'g)
+				""");
+		assertThatThrownBy(() -> new NoGcWasmCompiler().compile(octets))
+			.hasMessageContaining("type designator :OCTETS is not supported with --no-gc");
+		List<LispVal> load8 = LispReader.readAllFromString("""
+				(rontolisp:wasm-import 'f :from "rontolisp:memory" :as "load8" :params '(:u32) :returns :u32)
+				(defun g () (f 0))
+				(rontolisp:wasm-export 'g :params '() :returns :u32)
+				""");
+		assertThatThrownBy(() -> NoGcWasmCompiler.builder().component(true).build().compile(load8))
+			.hasMessageContaining("rontolisp:memory");
 	}
 
 	@Test

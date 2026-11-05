@@ -9,9 +9,8 @@ package am.ik.rontolisp;
  * component refused every such program ({@code Cannot compile: ARRAYP as a function
  * value}); {@code (symbol-function 'format)} of a wrapper injected only for a
  * {@code #'format} reference compiled to {@code The function FORMAT is undefined}. The
- * expected text is the interpreter's, SBCL's apart from rontolisp's wrong-count reports
- * and {@code make-random-state}'s NIL ({@code .kb/random.md}). Shared by the backend
- * suites, so every backend is held to one expected text.
+ * expected text is the interpreter's, SBCL's apart from rontolisp's wrong-count reports.
+ * Shared by the backend suites, so every backend is held to one expected text.
  */
 public final class StandardFunctionValueFixture {
 
@@ -60,7 +59,7 @@ public final class StandardFunctionValueFixture {
 			             (integerp (funcall #'get-universal-time))
 			             (integerp (funcall #'get-internal-real-time))
 			             (integerp (funcall 'get-internal-run-time))
-			             (funcall #'make-random-state)
+			             (random-state-p (funcall #'make-random-state))
 			             (funcall #'load "sfv-no-such-file.lisp" :if-does-not-exist nil)))
 			(defun sfv-gone () 3)
 			(print (list (funcall #'fmakunbound 'sfv-gone) (fboundp 'sfv-gone)))
@@ -95,7 +94,7 @@ public final class StandardFunctionValueFixture {
 	/** What {@link #PROGRAM} prints, one value per line. */
 	public static final String EXPECTED = String.join("\n", "(1 1 1 (1 2) SFV-NOPE \"1\" \"2\")",
 			"((NIL T T) NIL T (2 3) (4) 4 (T T NIL) T)", "(EQUAL T 1.5 1.0)",
-			"(\"out\" T T NIL T \"bc\" \"xyz\" \"syn\")", "(3 T T T NIL NIL)", "(SFV-GONE NIL)", "(T T T T T)",
+			"(\"out\" T T NIL T \"bc\" \"xyz\" \"syn\")", "(3 T T T T NIL)", "(SFV-GONE NIL)", "(T T T T T)",
 			"(\"ARRAYP expects 1 argument, got 0\" \"EXPORT expects at most 2 arguments, got 3\""
 					+ " \"CLOSE expects 1 or 3 arguments, got 2\" \"CLOSE expects 1 or 3 arguments, got 4\""
 					+ " \"MAKE-STRING-INPUT-STREAM expects at least 1 argument, got 0\""

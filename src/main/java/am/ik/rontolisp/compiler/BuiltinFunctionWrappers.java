@@ -145,9 +145,9 @@ public final class BuiltinFunctionWrappers {
 			LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME, LispNames.GET_OUTPUT_STREAM_STRING,
 			LispNames.GET_UNIVERSAL_TIME, LispNames.HASH_TABLE_REHASH_SIZE, LispNames.HASH_TABLE_REHASH_THRESHOLD,
 			LispNames.HASH_TABLE_SIZE, LispNames.HASH_TABLE_TEST, LispNames.IMPORT, LispNames.LOAD,
-			LispNames.MAKE_RANDOM_STATE, LispNames.MAKE_STRING_INPUT_STREAM, LispNames.MAKE_STRING_OUTPUT_STREAM,
-			LispNames.MAKE_SYNONYM_STREAM, LispNames.OPEN_STREAM_P, LispNames.RATIONALP, LispNames.ROW_MAJOR_AREF,
-			LispNames.SYMBOL_FUNCTION, LispNames.UNEXPORT, LispNames.UNUSE_PACKAGE, LispNames.USE_PACKAGE,
+			LispNames.MAKE_STRING_INPUT_STREAM, LispNames.MAKE_STRING_OUTPUT_STREAM, LispNames.MAKE_SYNONYM_STREAM,
+			LispNames.OPEN_STREAM_P, LispNames.RATIONALP, LispNames.ROW_MAJOR_AREF, LispNames.SYMBOL_FUNCTION,
+			LispNames.UNEXPORT, LispNames.UNUSE_PACKAGE, LispNames.USE_PACKAGE,
 			// The rontolisp: natives. Each body is the call position, so it reaches the
 			// backend's lowering and the runtime whose gate scans for the operator's name
 			// -- which the #' reference is. Where a call refuses the program (on a wasm

@@ -1173,7 +1173,7 @@ public final class Environment implements Scope {
 		// *gensym-counter* and *random-state* special variables, bound so they are not
 		// unbound.
 		env.define(LispNames.GENSYM_COUNTER_VAR, new LispInteger(0));
-		env.define(LispNames.RANDOM_STATE_VAR, LispNil.INSTANCE);
+		env.define(LispNames.RANDOM_STATE_VAR, new LispInstance(LispLayout.RANDOM_STATE, new LispVal[0]));
 		// The pathname operators' default `defaults`. #P"" -- the empty pathname, SBCL's
 		// initial value too -- is the only honest one here: rontolisp absolutizes
 		// nothing and names no working directory
@@ -3625,20 +3625,10 @@ public final class Environment implements Scope {
 		// process's entropy); the WASM backends draw from a module-local SplitMix64
 		// generator seeded once from the host. All three are plain PRNGs, which is what
 		// CL's random is -- the entropy API is %random-byte below (.kb/random.md).
-		// make-random-state: nil, always -- no random-state objects exist (random
-		// ignores its optional state argument), and nil is what a caller stores and
-		// passes back. The argument (nil / t / a state) is accepted and ignored.
-		env.defineFunction(LispNames.MAKE_RANDOM_STATE, new LispFunction(LispNames.MAKE_RANDOM_STATE, args -> {
-			if (args.size() > 1) {
-				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-						LispNames.MAKE_RANDOM_STATE + " expects 0 or 1 arguments, got " + args.size());
-			}
-			return LispNil.INSTANCE;
-		}));
 		env.defineFunction(LispNames.RANDOM, new LispFunction(LispNames.RANDOM, args -> {
-			// CL's optional second argument is a random-state; no random-state
-			// objects exist here (make-random-state answers nil), so it is accepted
-			// and ignored -- the backend's own entropy draws (uuid's
+			// CL's optional second argument is a random-state, which carries no
+			// generator here (.kb/random.md), so it is accepted and ignored -- the
+			// backend's own entropy draws (uuid's
 			// (random #xffffffffffff *uuid-random-state*)).
 			if (args.size() != 1 && args.size() != 2) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,

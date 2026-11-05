@@ -34,6 +34,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * and nothing to alias;</li>
  * <li>a pull loop over a {@code :string}-returning import keeps linear memory flat (the
  * export wrapper's heap reset covers everything the call allocated);</li>
+ * <li>the reserved {@code rontolisp:memory} module reads what a host answered through
+ * out-pointers, and adds no import entry;</li>
  * <li>none of it depends on the optimize level.</li>
  * </ul>
  */
@@ -195,6 +197,77 @@ class NoGcWasmImportE2eTest {
 				""";
 		assertThat(run(module, driver, OptimizeLevel.SIZE, "guards").lines().toList()).containsExactly("42", "trap",
 				"4611686018427387904", "trap");
+	}
+
+	@Test
+	void theMemoryModuleReadsWhatAHostAnsweredThroughOutPointers() throws Exception {
+		// The rontolisp:memory fields over this backend's own bump heap. A :string lifted
+		// out of memory is a fresh block, and :u32 keeps its exact-or-trap guard here
+		// too.
+		String module = """
+				(rontolisp:wasm-import 'mem-alloc :from "rontolisp:memory" :as "alloc" :params '(:u32) :returns :u32)
+				(rontolisp:wasm-import 'mem-mark :from "rontolisp:memory" :as "mark" :returns :u32)
+				(rontolisp:wasm-import 'mem-reset :from "rontolisp:memory" :as "reset" :params '(:u32))
+				(rontolisp:wasm-import 'load8 :from "rontolisp:memory" :as "load8" :params '(:u32) :returns :u32)
+				(rontolisp:wasm-import 'load32 :from "rontolisp:memory" :as "load32" :params '(:u32) :returns :u32)
+				(rontolisp:wasm-import 'load64 :from "rontolisp:memory" :as "load64" :params '(:u32) :returns :s64)
+				(rontolisp:wasm-import 'store8 :from "rontolisp:memory" :as "store8" :params '(:u32 :u32))
+				(rontolisp:wasm-import 'store32 :from "rontolisp:memory" :as "store32" :params '(:u32 :u32))
+				(rontolisp:wasm-import 'store64 :from "rontolisp:memory" :as "store64" :params '(:u32 :s64))
+				(rontolisp:wasm-import 'mem-string :from "rontolisp:memory" :as "string" :params '(:u32 :u32) :returns :string)
+				(rontolisp:wasm-import 'answer :from "env" :as "answer" :params '(:u32 :u32))
+
+				(defun read-answer ()
+				  (let* ((cells (mem-alloc 8)))
+				    (answer cells (+ cells 4))
+				    (length (mem-string (load32 cells) (load32 (+ cells 4))))))
+				(rontolisp:wasm-export 'read-answer :params '() :returns :s64)
+
+				(defun round-trips (at)
+				  (store8 at 200)
+				  (store32 (+ at 4) 4000000000)
+				  (store64 (+ at 8) 1099511627776)
+				  (+ (load8 at) (load32 (+ at 4)) (load64 (+ at 8))))
+				(rontolisp:wasm-export 'round-trips :params '(:s64) :returns :s64)
+
+				(defun flat ()
+				  (let ((mark (mem-mark)))
+				    (mem-alloc 4096)
+				    (mem-reset mark)
+				    (if (= mark (mem-mark)) 1 0)))
+				(rontolisp:wasm-export 'flat :params '() :returns :s64)
+
+				(defun peek (address) (load8 address))
+				(rontolisp:wasm-export 'peek :params '(:s64) :returns :s64)
+				""";
+		String driver = """
+				const fs = require('fs');
+				let inst;
+				const env = {
+				  answer: (pointerCell, sizeCell) => {
+				    const text = new TextEncoder().encode('hello');
+				    const ptr = inst.exports.__ronto_alloc(text.length);
+				    new Uint8Array(inst.exports.memory.buffer).set(text, ptr);
+				    const view = new DataView(inst.exports.memory.buffer);
+				    view.setUint32(pointerCell, ptr, true);
+				    view.setUint32(sizeCell, text.length, true);
+				  },
+				};
+				const mod = new WebAssembly.Module(fs.readFileSync(process.argv[2]));
+				inst = new WebAssembly.Instance(mod, { env });
+				const attempt = (f) => { try { return String(f()); } catch (e) { return 'trap'; } };
+				console.log(attempt(() => inst.exports['read-answer']()));
+				const at = inst.exports.__ronto_alloc(16);
+				console.log(attempt(() => inst.exports['round-trips'](BigInt(at))));
+				console.log(attempt(() => inst.exports.flat()));
+				console.log(attempt(() => inst.exports.peek(1n << 32n)));
+				console.log(WebAssembly.Module.imports(mod).map((i) => i.module + '.' + i.name).join(' '));
+				""";
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.SIZE)) {
+			assertThat(run(module, driver, level, "memory-" + level.spelling()).lines().toList())
+				.as("optimize=%s", level.spelling())
+				.containsExactly("5", String.valueOf(200L + 4000000000L + 1099511627776L), "1", "trap", "env.answer");
+		}
 	}
 
 	@Test

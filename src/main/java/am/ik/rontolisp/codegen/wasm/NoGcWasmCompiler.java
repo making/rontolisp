@@ -644,9 +644,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// never enqueued, so it costs the module neither an import entry nor a byte --
 		// the same "only what the exports reach" rule every other function here follows.
 		LinkedHashMap<String, Integer> importOrdinals = new LinkedHashMap<>();
-		for (String name : importDecls.keySet()) {
-			if (index.containsKey(name)) {
-				importOrdinals.put(name, importOrdinals.size());
+		for (Map.Entry<String, WasmImportCompiler.Decl> entry : importDecls.entrySet()) {
+			if (index.containsKey(entry.getKey()) && !WasmMemoryIntrinsic.isIntrinsic(entry.getValue())) {
+				importOrdinals.put(entry.getKey(), importOrdinals.size());
 			}
 		}
 
@@ -740,9 +740,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		List<byte[]> internalBodies = new ArrayList<>();
 		for (String name : emitted) {
 			WasmImportCompiler.Decl imported = importDecls.get(name);
-			internalBodies.add(imported != null
-					? compileImportWrapperBody(imported, Objects.requireNonNull(importOrdinals.get(name)), mem)
-					: compileDefunBody(Objects.requireNonNull(defuns.get(name)), name, types, index, mem));
+			if (imported == null) {
+				internalBodies.add(compileDefunBody(Objects.requireNonNull(defuns.get(name)), name, types, index, mem));
+			}
+			else if (WasmMemoryIntrinsic.isIntrinsic(imported)) {
+				internalBodies.add(compileIntrinsicBody(imported, mem));
+			}
+			else {
+				internalBodies
+					.add(compileImportWrapperBody(imported, Objects.requireNonNull(importOrdinals.get(name)), mem));
+			}
 		}
 		List<byte[]> wrapperBodies = new ArrayList<>();
 		for (int j = 0; j < exportDecls.size(); j++) {
@@ -840,6 +847,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param decl the parsed declaration
 	 */
 	private void validateImport(WasmImportCompiler.Decl decl) {
+		if (this.component && WasmMemoryIntrinsic.isIntrinsic(decl)) {
+			throw new UnsupportedOperationException("rontolisp:wasm-import '" + decl.name() + "' binds \""
+					+ WasmMemoryIntrinsic.MODULE + "\", which is a core-module boundary: a component's memory is"
+					+ " crossed through the canonical ABI, not by address");
+		}
 		if (this.component) {
 			validateComponentImport(decl);
 		}
@@ -2002,6 +2014,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				boundaryString = true;
 				hostArena |= decl.returnType() == BoundaryType.STRING;
 				allocates |= decl.returnType() == BoundaryType.STRING;
+			}
+			// A binding of the module's own memory needs that memory. The arena family
+			// is the host's allocator family, read from Lisp, and it moves the heap a
+			// scalar export's wrapper would otherwise never have to restore.
+			if (decl != null && WasmMemoryIntrinsic.isIntrinsic(decl)) {
+				boundaryString = true;
+				hostArena |= WasmMemoryIntrinsic.needsArena(decl);
+				allocates |= WasmMemoryIntrinsic.needsArena(decl);
 			}
 		}
 		// A body can produce a string without any literal or :string boundary (e.g.
@@ -3653,6 +3673,74 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					return scratch[0]++;
 				});
 				nextLocal = scratch[0];
+			}
+		}
+		w.write(Instruction.END);
+		return withLocals(bodyStream.toByteArray(), locals);
+	}
+
+	/**
+	 * The body of a {@value WasmMemoryIntrinsic#MODULE} binding over the unboxed value
+	 * model: each parameter is already the house {@code i64}, and an address is the
+	 * unsigned reading of its low 32 bits. The {@code string} field's result is the
+	 * {@code :string} import shape, a fresh {@code [len][bytes]} block, since the block a
+	 * host wrote has no header in front of it.
+	 * @param decl the parsed declaration
+	 * @param mem the memory plan
+	 * @return the code entry bytes
+	 */
+	private byte[] compileIntrinsicBody(WasmImportCompiler.Decl decl, Mem mem) {
+		WasmMemoryIntrinsic intrinsic = WasmMemoryIntrinsic.of(decl);
+		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(bodyStream);
+		List<Ty> locals = new ArrayList<>();
+		List<BoundaryType> params = intrinsic.params();
+		int[] nextLocal = { params.size() };
+		java.util.function.IntSupplier scratch = () -> {
+			locals.add(Ty.INT);
+			return nextLocal[0]++;
+		};
+		if (intrinsic == WasmMemoryIntrinsic.STRING) {
+			int dst = nextLocal[0]++;
+			locals.add(Ty.STRING);
+			for (int p = 0; p < params.size(); p++) {
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(p);
+				emitImportArgUnbox(w, params.get(p), scratch);
+				w.write(Instruction.DROP);
+			}
+			// dst = __alloc(4 + len); [dst] = len; copy len bytes to dst + 4
+			w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1).write(Instruction.I32_WRAP_I64);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.CALL).writeUnsignedLeb128(mem.allocIndex());
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(dst);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1).write(Instruction.I32_WRAP_I64);
+			w.write(Instruction.I32_STORE, 0x02, 0x00);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
+			w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0).write(Instruction.I32_WRAP_I64);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1).write(Instruction.I32_WRAP_I64);
+			w.write(Instruction.CALL).writeUnsignedLeb128(mem.memcpyIndex());
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
+		}
+		else {
+			for (int p = 0; p < params.size(); p++) {
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(p);
+				emitImportArgUnbox(w, params.get(p), scratch);
+			}
+			if (!intrinsic.emitAccess(w)) {
+				int helper = switch (intrinsic) {
+					case ALLOC -> mem.rontoAllocIndex();
+					case MARK -> mem.markIndex();
+					case RESET -> mem.resetIndex();
+					default -> throw new IllegalStateException("not a helper call: " + intrinsic);
+				};
+				w.write(Instruction.CALL).writeUnsignedLeb128(helper);
+			}
+			if (intrinsic.result() == BoundaryType.U32) {
+				w.write(Instruction.I64_EXTEND_U_I32);
 			}
 		}
 		w.write(Instruction.END);

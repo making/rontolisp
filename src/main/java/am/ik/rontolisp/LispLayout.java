@@ -200,6 +200,20 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 			List.of("CASE", "CHARS"), List.of(LispNil.INSTANCE, LispNil.INSTANCE), 2);
 
 	/**
+	 * The instance tag of the built-in random-state type, spelled in upper case for the
+	 * same reason as {@link #PATHNAME_TAG}.
+	 */
+	public static final String RANDOM_STATE_TAG = "%RANDOM-STATE";
+
+	/**
+	 * The layout of every random-state value ({@code .kb/random.md}): no slot, because
+	 * the generator is the backend's own and a state only has to be told from every other
+	 * value. {@link Kind#OPAQUE} and a LAYOUT ONLY like {@link #READTABLE}.
+	 */
+	public static final LispLayout RANDOM_STATE = new LispLayout(RANDOM_STATE_TAG, "RANDOM-STATE", Kind.OPAQUE,
+			List.of(), List.of(), 0);
+
+	/**
 	 * The reserved {@link #STREAM} cell the wasm backends' {@code close} sets to t, and
 	 * that their {@code open-stream-p} and a second {@code close} read
 	 * ({@code .kb/read-load-streams.md}, "A stream is a VALUE, not a handle"). The
