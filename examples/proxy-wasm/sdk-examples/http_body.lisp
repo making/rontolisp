@@ -2,6 +2,9 @@
 ;;;;
 ;;;; Holds a response body until it is complete, and replaces it if it says "secret".
 
+;; A failure takes the VM down, as an `unwrap` in the Rust SDK does.
+(eval-when (:compile-toplevel) (pushnew :proxy-wasm-trap *features*))
+
 (require :proxy-wasm "../proxy-wasm.lisp")
 
 (defpackage :http-body (:use :cl))

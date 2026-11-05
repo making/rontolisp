@@ -81,17 +81,52 @@ buffers, local responses, outgoing HTTP calls, shared data, metrics and
 properties. It does not cover gRPC calls, shared queues, foreign functions or the
 TCP (network filter) callbacks.
 
-An error signaled in a callback is logged and the callback answers its default
-instead of trapping, because a trap would take the VM down. A filter that wants the
-trap sets `proxy-wasm:*trap-on-error*`, and `proxy-wasm:panic` traps from anywhere.
-A host call answering anything but OK signals, except that a read of something absent
-answers `nil`. Each callback also pops the bump heap on its way out; everything the
-SDK answers is a Lisp object, so it can be kept in a slot across callbacks.
+A host call answering anything but OK logs the call's name and the status and signals,
+except that a read of something absent answers `nil` and `proxy-wasm:http-call` answers
+`nil` when the host refuses the call. An error signaled in a callback is logged and the
+callback answers its default instead of trapping, because a trap would take the VM down.
+`proxy-wasm:panic` traps from anywhere. Each callback also pops the bump heap on its way
+out; everything the SDK answers is a Lisp object, so it can be kept in a slot across
+callbacks.
+
+## What a choice costs a filter
+
+Measured at `--no-wasi --optimize=size`, gzip in parentheses. `test_plugin` is built without
+`--no-wasi`.
+
+| Filter | With a handler | With `:proxy-wasm-trap` |
+| --- | ---: | ---: |
+| `http_body` | 74,421 (27,352) | 58,957 (22,877) |
+| `http_headers` | 77,321 (28,353) | 61,394 (23,771) |
+| `test_plugin` | 87,800 (32,201) | 70,824 (27,004) |
+
+- **Errors trap, or are handled.** The handler in every callback costs 15-17KB raw and
+  4.5-5.2KB gzip. A filter gives it up by declaring the feature `:proxy-wasm-trap` while it
+  compiles, either on the command line (`--feature proxy-wasm-trap`) or ahead of its `require`:
+
+  ```lisp
+  (eval-when (:compile-toplevel) (pushnew :proxy-wasm-trap *features*))
+  (require :proxy-wasm "proxy-wasm.lisp")
+  ```
+
+  Then an error traps, as an `unwrap` in the Rust SDK panics, and no callback answers its default.
+  The VM is gone: Envoy answers 503 to that request and to every one after it. All of
+  `sdk-examples/` but `error_log.lisp` do this.
+- **The log gives the reason for a failed host call, not for any other error.** Printing a
+  condition would cost every filter about 10KB raw. A filter that wants the report catches the
+  error itself and prints it, and pays for that: `(handler-case ... (error (c) (proxy-wasm:log-error "~a" c)))`.
+  A failed call is logged where it fails, also when a filter goes on to handle the error.
+- **A `log-*` control string is compiled when it is a literal.** One call with a computed control
+  string, or one `#'proxy-wasm:log-info`, brings the run-time `format` interpreter into the
+  module, which is about 60KB raw and 20KB gzip.
+- **Contexts live in a table of 64 buckets**, 4KB raw smaller than a hash table. A lookup walks
+  1/64 of the live streams of its VM.
 
 ## Smaller filters on the same SDK
 
-`sdk-examples/` holds three more filters: `http_body.lisp` holds a response body and
-redacts it, `http_headers.lisp` logs both heads and answers `/hello` itself, and
+`sdk-examples/` holds four more filters: `http_body.lisp` holds a response body and
+redacts it, `http_headers.lisp` logs both heads and answers `/hello` itself,
+`error_log.lisp` shows what an error does under the SDK's default, and
 `test_plugin.lisp` does what the request's path says, for testing a host. It is built
 without `--no-wasi`, because one of its paths writes to stdout: the SDK works either way,
 and a `--no-wasi` module drops what it writes there.
@@ -99,7 +134,8 @@ and a `--no-wasi` module drops what it writes there.
 
 ## What Envoy does that the ABI does not say
 
-Both were found by running this filter, and reproduce on Envoy v1.39.3 and v1.40.2.
+All were found by running these filters. The first two reproduce on Envoy v1.39.3 and v1.40.2,
+the third was seen on v1.40.2.
 
 - `proxy_on_http_call_response` arrives with the **plugin's** context id, whichever
   stream made the call. The SDK records which context made each call, and calls
@@ -109,6 +145,11 @@ Both were found by running this filter, and reproduce on Envoy v1.39.3 and v1.40
   headers and `:pause` from `on-request-body` until the body is complete, as
   `gateway.lisp` does. The upstream has the headers by then, so a refusal at that
   point resets that request.
+
+- During `on-response-headers` the request's header map answers status 2 and the properties
+  read from it (`request.path`) are absent, though `on-log` reads them again. A filter that
+  needs the request there keeps what it read in `on-request-headers`, as `test_plugin.lisp`
+  does.
 
 ## How the SDK reaches the host
 

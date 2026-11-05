@@ -1,5 +1,8 @@
 # Size of a Proxy-Wasm filter, measured
 
+The SDK levers below are applied, so `variants.py` and `dropdead.py` no longer patch the SDK. Current numbers:
+`.kb/proxy-wasm-sdk.md`. What follows is the state i52 and i53 started from.
+
 Everything here is `--no-wasi --optimize=size` unless it says otherwise, but for `test_plugin`, which writes
 to stdout and is built without `--no-wasi` (its `_start` and two WASI imports are about 20 bytes more). gzip is `gzip -9 -c < file`.
 Measured 2026-11-05 on `6f8a7628f`, except where a table says otherwise. Behaviour: each row marked "tested" ran through a 16-test plugin suite of a host
