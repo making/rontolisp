@@ -30074,6 +30074,52 @@ cases:
       ((1 2 3) (2 3) (3))
       (#\h #\e #\l #\l #\o)
       2
+  # A name the program only reads is a symbol of the package that read it, wherever it was
+  # read: every enumeration and the literal one-argument find-symbol answer it. A compile
+  # path carries the names only in a program that asks (.kb/packages.md, "What a program
+  # read"), and the implementation's own names are not among them.
+  - name: an-enumeration-sees-a-symbol-the-program-only-read
+    source: |
+      (defpackage :ci-eor (:use :cl))
+      (defmacro ci-eor-unused () (list 'quote 'ci-eor-in-a-macro-body))
+      (defun ci-eor-count (name package)
+        (let ((n 0))
+          (do-symbols (s package n) (when (string= (symbol-name s) name) (incf n)))))
+      (print (find-all-symbols 'ci-eor-quoted))
+      (print (find-all-symbols "CI-EOR-IN-A-MACRO-BODY"))
+      (print (find-all-symbols 'ci-eor::ci-eor-there))
+      (print (apropos-list "CI-EOR-IN-A"))
+      (print (apropos-list "CI-EOR-THERE" :ci-eor))
+      (print (ci-eor-count "CI-EOR-QUOTED" :cl-user))
+      (print (ci-eor-count "CI-EOR-THERE" :ci-eor))
+      (print (let ((n 0)) (do-all-symbols (s n) (when (eq s 'ci-eor::ci-eor-there) (incf n)))))
+      (print (with-package-iterator (next :ci-eor :internal)
+               (loop (multiple-value-bind (more s status) (next)
+                       (unless more (return nil))
+                       (when (string= (symbol-name s) "CI-EOR-THERE") (return (list s status)))))))
+      (print (loop for s being each present-symbol in :ci-eor
+                   when (string= (symbol-name s) "CI-EOR-THERE") collect s))
+      (print (multiple-value-list (find-symbol "CI-EOR-QUOTED")))
+      (print (multiple-value-list (find-symbol "CI-EOR-NEVER-READ")))
+      (print (apropos-list "%PSW-PAT"))
+      (print '|ci-eor-𝒳|)
+      (print (find-all-symbols "ci-eor-𝒳"))
+    expected: |
+      (CI-EOR-QUOTED)
+      (CI-EOR-IN-A-MACRO-BODY)
+      (CI-EOR::CI-EOR-THERE)
+      (CI-EOR-IN-A-MACRO-BODY)
+      (CI-EOR::CI-EOR-THERE)
+      1
+      1
+      1
+      (CI-EOR::CI-EOR-THERE :INTERNAL)
+      (CI-EOR::CI-EOR-THERE)
+      (CI-EOR-QUOTED :INTERNAL)
+      (NIL NIL)
+      NIL
+      |ci-eor-𝒳|
+      (|ci-eor-𝒳|)
   # What a package holds depends on what the program read and compiled before (on SBCL
   # the reader interns every symbol into cl-user), so the walk pins properties, not a list:
   # every external of cl is :external there, and every present symbol of cl-user is

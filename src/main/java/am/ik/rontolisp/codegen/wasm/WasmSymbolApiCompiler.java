@@ -232,7 +232,7 @@ final class WasmSymbolApiCompiler {
 			WasmExprCompiler.compileExpr(LispMacroExpander.computedFindSymbol(parts.get(1)), ctx);
 			return;
 		}
-		LispVal found = LispMacroExpander.foldLiteralFindSymbol(str.value(), ctx.userDefunNames);
+		LispVal found = LispMacroExpander.foldLiteralFindSymbol(str.value(), ctx.userDefunNames, ctx.bakedSymbolAccess);
 		if (found instanceof LispSymbol sym) {
 			WasmEmitHelper.compileStringLiteral(sym.name(), ctx);
 		}

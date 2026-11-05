@@ -252,7 +252,9 @@ is 3.2e9 row compares).
 **Compile-path folds and limits**: `find-symbol` requires a literal string and matches its
 VERBATIM name against `isClMemberName` (every name cl exports, implemented or not -- `T`,
 `NIL`, `DEBUG` included, as the interpreter answers) + keyword + Pass-1 `userDefunNames`
-(`LispMacroExpander.foldLiteralFindSymbol`, the same arms as its status); a literal `(fboundp 'x)`
+(`LispMacroExpander.foldLiteralFindSymbol`, the same arms as its status) + what the registry says
+`cl-user` holds, a read name there since a `(find-symbol "NAME")` carries what the program read
+(`.kb/packages.md`, "What a program read"); a literal `(fboundp 'x)`
 folds with full knowledge, a computed one sees functions only. `#'symbol-name`/`#'intern`/
 `#'make-symbol` have wrappers; find-symbol/boundp/fboundp/symbol-value/set have reference-gated ones (`#'boundp` / `#'fboundp`: `unary`, injected only for a program that names them, so the wrapper body is the computed probe and counts as one for `boundpProbes`); fmakunbound has none.
 

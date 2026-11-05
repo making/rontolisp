@@ -25,6 +25,41 @@ class UserMacroExpanderTest {
 	void programWithoutDefmacroIsReturnedUnchanged() {
 		List<LispVal> program = LispReader.readAllFromString("(print (+ 1 2))");
 		assertThat(UserMacroExpander.expand(program)).isSameAs(program);
+		// Nothing asks what a package holds beyond its externals, or by a name the fold
+		// would have to know.
+		for (String asksNothing : List.of("(do-external-symbols (s :cl) (print s))", "(print (find-symbol name))",
+				"(print (find-symbol \"A\" :p))", "(print 'do-external-symbols)")) {
+			List<LispVal> forms = LispReader.readAllFromString(asksNothing);
+			assertThat(UserMacroExpander.expand(forms)).isSameAs(forms);
+		}
+		assertThat(expand("(defmacro m () 'only-read) (print (find-symbol name))")).doesNotContain("%READ-SYMBOLS");
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "(do-symbols (s :p) (print s))", "(do-all-symbols (s) (print s))",
+			"(print (find-all-symbols 'a))", "(print (apropos-list \"A\"))", "(apropos \"A\")",
+			"(with-package-iterator (next :p :internal) (print (next)))", "(print (find-symbol \"A\"))",
+			"(print (loop for s being each symbol in :p collect s))",
+			"(print (loop for s being each present-symbol in :p collect s))",
+			"(print (uiop:package-definition-form :p))" })
+	void aProgramAskingWhatAPackageHoldsCarriesWhatItRead(String asks) {
+		// Read in a macro body the backends never see, in a package, by the form that
+		// asks; what the compile path spliced in front of the program is no reading.
+		List<LispVal> spliced = LispReader.readAllFromString("(print 'implementation-name)");
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defpackage :p (:use :cl))
+				(defmacro m () 'in-a-macro-body)
+				(print 'p::in-p)
+				""" + asks);
+		List<LispVal> forms = new java.util.ArrayList<>(spliced);
+		forms.addAll(program);
+		LispVal marker = UserMacroExpander.expand(forms, program.get(0)).getLast();
+		assertThat(marker.print()).startsWith("(%READ-SYMBOLS ")
+			.contains("\"IN-A-MACRO-BODY\"")
+			.contains("(\"P\" ")
+			.contains("\"IN-P\"")
+			.doesNotContain("IMPLEMENTATION-NAME")
+			.doesNotContain("\"PRINT\"");
 	}
 
 	@Test

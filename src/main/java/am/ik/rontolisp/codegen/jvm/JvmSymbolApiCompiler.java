@@ -215,7 +215,7 @@ final class JvmSymbolApiCompiler {
 			JvmExprCompiler.compileExpr(LispMacroExpander.computedFindSymbol(parts.get(1)), ctx, className);
 			return;
 		}
-		LispVal found = LispMacroExpander.foldLiteralFindSymbol(str.value(), ctx.userDefunNames);
+		LispVal found = LispMacroExpander.foldLiteralFindSymbol(str.value(), ctx.userDefunNames, ctx.bakedSymbolAccess);
 		if (found instanceof LispSymbol sym) {
 			JvmEmitHelper.compileStringLiteral(sym.name(), ctx);
 		}

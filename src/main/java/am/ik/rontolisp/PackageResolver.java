@@ -130,7 +130,8 @@ public final class PackageResolver {
 	 * and the compile paths' macro-time evaluator. A backend's whole-program resolution
 	 * records nothing it reads: its registry becomes the tables a compiled program
 	 * carries, whose run-time lookups still build a symbol for any name
-	 * ({@code .kb/symbol-runtime-api.md}).
+	 * ({@code .kb/symbol-runtime-api.md}); what a program that asks read reaches it from
+	 * the macro-time evaluator ({@link #readSymbolsMarker}).
 	 */
 	private boolean recordsReadSymbols = false;
 
@@ -614,6 +615,10 @@ public final class PackageResolver {
 			if (LispNames.OWN_SYMBOL.equals(member) && cons.cdr() instanceof LispCons nameCell
 					&& nameCell.car() instanceof LispString name) {
 				claimClExtensionName(name.value());
+				return quotedSymbol(current());
+			}
+			if (LispNames.READ_SYMBOLS.equals(member)) {
+				recordReadSymbols(cons);
 				return quotedSymbol(current());
 			}
 			if (LispNames.PUSH_PACKAGE.equals(member)) {
@@ -3426,7 +3431,10 @@ public final class PackageResolver {
 		if (!this.registry.contains(pkg)) {
 			return;
 		}
-		String member = LispSymbol.memberName(spelling);
+		recordMember(pkg, LispSymbol.memberName(spelling));
+	}
+
+	private void recordMember(String pkg, String member) {
 		LispPackage p = this.registry.get(pkg);
 		if (p.imports().containsKey(member)) {
 			return;
@@ -3437,6 +3445,52 @@ public final class PackageResolver {
 		p.addSymbol(member);
 		this.registry.rehome(pkg, member);
 		this.registry.markRecorded(pkg, member);
+	}
+
+	/**
+	 * What this resolver has recorded so far, as the
+	 * {@code (%read-symbols (PACKAGE MEMBER...)...)} marker
+	 * ({@link LispNames#READ_SYMBOLS}) another resolver takes it in from: how a compile
+	 * path's macro-time reader hands the names it read to the compilers' resolution pass.
+	 * The members are named apart from the package, because a spelling need not parse
+	 * back ({@code |A:b|}), and as strings, because the passes in between scan symbols.
+	 * @return the marker, or null when nothing was recorded
+	 */
+	public synchronized @Nullable LispVal readSymbolsMarker() {
+		List<LispVal> marker = new ArrayList<>();
+		marker.add(new LispSymbol(LispNames.READ_SYMBOLS));
+		this.registry.recordedMembers().forEach((pkg, members) -> {
+			List<LispVal> row = new ArrayList<>();
+			row.add(new LispString(pkg));
+			members.forEach(member -> row.add(new LispString(member)));
+			marker.add(properList(row));
+		});
+		return marker.size() == 1 ? null : properList(marker);
+	}
+
+	private static LispVal properList(List<LispVal> elements) {
+		LispVal list = LispNil.INSTANCE;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			list = new LispCons(elements.get(i), list);
+		}
+		return list;
+	}
+
+	/**
+	 * Takes in a {@link #readSymbolsMarker}. A package this resolver does not have (one
+	 * only the macro-time evaluator made) contributes nothing.
+	 */
+	private void recordReadSymbols(LispCons marker) {
+		List<LispVal> rows = marker.toList();
+		for (LispVal row : rows.subList(1, rows.size())) {
+			List<LispVal> cells = ((LispCons) row).toList();
+			String pkg = ((LispString) cells.get(0)).value();
+			if (this.registry.contains(pkg)) {
+				for (LispVal member : cells.subList(1, cells.size())) {
+					recordMember(pkg, ((LispString) member).value());
+				}
+			}
+		}
 	}
 
 	/**
