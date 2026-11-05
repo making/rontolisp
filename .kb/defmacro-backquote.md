@@ -207,7 +207,10 @@ registry with plain top-level CALLS was invisible (trivia's `(set-vector-matcher
   `:load-toplevel`/`:execute` member replays like a plain form. **A SOURCE-level `eval-when`**
   whose situations evaluate at compile time has its members recorded by
   `flattenTopLevel(program, compileTime)` and evaluated (`Session.evalAtCompileTime`, a defvar
-  eagerly) -- before h57 only their definitions registered ([readtables.md](readtables.md)).
+  eagerly) -- before h57 only their definitions registered ([readtables.md](readtables.md)). A `progn`
+  a macro left around an `eval-when` is spliced the same way (`Session.accept`, 2026-11-05), which keeps
+  every member in the program as a `progn` of a source does, while the expanded `eval-when` itself does
+  not ([declarations-type-checks.md](declarations-type-checks.md), "An eval-when's position").
 - **The members of an expansion are top-level forms, in order** (`expandTopLevelMembers`, CLHS
   3.2.3.1, through `progn`/`locally`/`eval-when`/`macrolet`): each is walked once the one before it
   has registered its definitions, so `(progn (defmacro m ...) (m))` reaches `m`. Lite: the

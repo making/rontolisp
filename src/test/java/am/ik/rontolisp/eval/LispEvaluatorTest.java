@@ -8307,6 +8307,11 @@ class LispEvaluatorTest {
 			.isEqualTo(new LispInteger(3));
 		assertThat(eval("(eval-when (:execute))")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(eval-when (:execute) (defun ew-fn (x) (* x 2)) (ew-fn 21))")).isEqualTo(new LispInteger(42));
+		// Any situation runs it at top level, none but :execute elsewhere.
+		assertThat(eval("(eval-when (:load-toplevel) (+ 1 2))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(eval-when () (+ 1 2))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let () (eval-when (:compile-toplevel :load-toplevel) (+ 1 2)))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let () (eval-when (:execute) (+ 1 2)))")).isEqualTo(new LispInteger(3));
 	}
 
 	@Test

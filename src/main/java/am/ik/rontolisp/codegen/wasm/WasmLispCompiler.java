@@ -3341,7 +3341,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Splice top-level (progn ...)/(eval-when ...) so Pass 1 collects the defuns
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
-		program = LispMacroExpander.flattenTopLevel(program);
+		program = LispMacroExpander.flattenCompiledTopLevel(program);
 		// rontolisp:wasm-import :async t declares that the host function may SUSPEND
 		// (WebAssembly.Suspending / JSPI). The wrapper only wraps the result in a
 		// settled future -- the suspension itself is the host's business -- so the

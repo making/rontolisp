@@ -14570,6 +14570,156 @@ cases:
       "The assertion (STRING= \"~S\" \"x\") failed."
       :DIGIT
       :ABC
+  # An eval-when at no top level runs its body for :execute and nothing else (CLHS 3.2.3.1):
+  # a progn, locally, macrolet or symbol-macrolet there keeps it at none, and a body that does
+  # not run defines nothing and publishes no value. SBCL 2.2.9's answers, loaded or compiled.
+  - name: eval-when-at-no-top-level-asks-for-execute
+    source: |
+      (defun ci-ewn-f () (eval-when (:compile-toplevel) 1))
+      (print (ci-ewn-f))
+      (print (let () (eval-when (:load-toplevel) 2)))
+      (print (funcall (lambda () (eval-when (:compile-toplevel :load-toplevel) 3))))
+      (print (if t (eval-when (load) 4) 0))
+      (print (let () (eval-when (compile load) 5)))
+      (print (let () (eval-when () 6)))
+      (print (let () (eval-when (:execute) 7)))
+      (print (let () (eval-when (:compile-toplevel :execute) 8)))
+      (print (let () (eval-when (eval) 9)))
+      (print (let () (eval-when (cl:eval) 10)))
+      (print (let () (progn (eval-when (:load-toplevel) 11))))
+      (print (let () (locally (eval-when (:load-toplevel) 12))))
+      (print (let () (macrolet ((ci-ewn-l () 13)) (eval-when (:load-toplevel) (ci-ewn-l)))))
+      (print (let () (macrolet ((ci-ewn-l () 14)) (eval-when (:execute) (ci-ewn-l)))))
+      (print (let () (symbol-macrolet ((ci-ewn-s 15)) (eval-when (:load-toplevel) ci-ewn-s))))
+      (print (let () (symbol-macrolet ((ci-ewn-s 16)) (eval-when (:execute) ci-ewn-s))))
+      (print (let () (handler-bind () (eval-when (:load-toplevel) 17))))
+      (print (let () (eval-when (:execute) (eval-when (:load-toplevel) 18))))
+      (defmacro ci-ewn-m (situations form) `(eval-when ,situations ,form))
+      (print (let () (ci-ewn-m (:load-toplevel) 19)))
+      (print (let () (ci-ewn-m (:execute) 20)))
+      (defun ci-ewn-mv () (eval-when (:load-toplevel) (values 1 2)))
+      (print (multiple-value-list (progn (floor 7 2) (ci-ewn-mv))))
+      (print (multiple-value-list (let () (eval-when (:execute) (values 1 2)))))
+      (print (multiple-value-list (progn (floor 7 2) (let () (eval-when (:load-toplevel) (values 1 2))))))
+      (let () (eval-when (:load-toplevel) (defun ci-ewn-g () 1)))
+      (print (fboundp 'ci-ewn-g))
+      (let () (eval-when (:execute) (defun ci-ewn-h () 21)))
+      (print (ci-ewn-h))
+      (print '#.(eval-when (:load-toplevel) 22))
+      (print (funcall (compile nil '(lambda () (eval-when (:load-toplevel) 23)))))
+      (print (block ci-ewn-b (eval-when (:load-toplevel) (return-from ci-ewn-b 24)) 25))
+    expected: |
+      NIL
+      NIL
+      NIL
+      NIL
+      NIL
+      NIL
+      7
+      8
+      9
+      10
+      NIL
+      NIL
+      NIL
+      14
+      NIL
+      16
+      NIL
+      NIL
+      NIL
+      20
+      (NIL)
+      (1 2)
+      (NIL)
+      NIL
+      21
+      NIL
+      NIL
+      25
+  # At top level the body runs under any situation, and what keeps its body at top level keeps
+  # an eval-when there, a macro's expansion included; an empty list names no situation. What
+  # one evaluates at compile time is there for the macros after it.
+  - name: eval-when-at-top-level-stays-there
+    source: |
+      (eval-when (:load-toplevel) (print 1))
+      (progn (eval-when (:load-toplevel) (print 2)))
+      (locally (declare (special *ci-ewt-x*)) (eval-when (:load-toplevel) (print 3)))
+      (eval-when (:load-toplevel) (eval-when (:load-toplevel) (print 4)))
+      (macrolet ((ci-ewt-l () 5)) (eval-when (:load-toplevel) (print (ci-ewt-l))))
+      (symbol-macrolet ((ci-ewt-s 6)) (eval-when (:load-toplevel) (print ci-ewt-s)))
+      (macrolet () (symbol-macrolet () (locally (progn (eval-when (:load-toplevel) (print 7))))))
+      (handler-bind () (eval-when (:load-toplevel) (print 8)))
+      (macrolet () (handler-bind () (eval-when (:load-toplevel) (print 9))))
+      (defmacro ci-ewt-m (form) `(eval-when (:load-toplevel) ,form))
+      (ci-ewt-m (print 10))
+      (progn (ci-ewt-m (print 11)))
+      (locally (ci-ewt-m (print 12)))
+      (macrolet () (ci-ewt-m (print 13)))
+      (symbol-macrolet () (ci-ewt-m (print 14)))
+      (eval-when (:load-toplevel) (ci-ewt-m (print 15)))
+      (defmacro ci-ewt-p (form) `(progn (eval-when (:load-toplevel) ,form)))
+      (ci-ewt-p (print 16))
+      (defmacro ci-ewt-lo (form) `(locally (eval-when (:load-toplevel) ,form)))
+      (ci-ewt-lo (print 17))
+      (defmacro ci-ewt-ml (form) `(macrolet () (eval-when (:load-toplevel) ,form)))
+      (ci-ewt-ml (print 18))
+      (defmacro ci-ewt-sm (form) `(symbol-macrolet () (eval-when (:load-toplevel) ,form)))
+      (ci-ewt-sm (print 19))
+      (uiop:with-upgradability () (eval-when (:load-toplevel) (print :upgradable)))
+      (eval-when () (print :never))
+      (symbol-macrolet () (eval-when () (print :never)))
+      (macrolet () (eval-when () (print :never)))
+      (ci-ewt-p (eval-when () (print :never)))
+      (defmacro ci-ewt-reg () `',*ci-ewt-reg*)
+      (eval-when (:compile-toplevel :load-toplevel :execute) (defvar *ci-ewt-reg* :none))
+      (defmacro ci-ewt-set (value)
+        `(progn (eval-when (:compile-toplevel :load-toplevel :execute) (setq *ci-ewt-reg* ,value))))
+      (ci-ewt-set :by-progn)
+      (print (ci-ewt-reg))
+      (symbol-macrolet ((ci-ewt-s :by-symbol-macrolet))
+        (eval-when (:compile-toplevel :load-toplevel :execute) (setq *ci-ewt-reg* ci-ewt-s)))
+      (print (ci-ewt-reg))
+      (symbol-macrolet ((ci-ewt-s 20))
+        (eval-when (:compile-toplevel :load-toplevel :execute) (defun ci-ewt-f () ci-ewt-s))
+        (defun ci-ewt-f2 () (1+ ci-ewt-s))
+        (defmacro ci-ewt-m2 () 22)
+        (defstruct ci-ewt-st (x 23))
+        (defclass ci-ewt-c () ((y :initform 24 :reader ci-ewt-y))))
+      (defmacro ci-ewt-call () (ci-ewt-f))
+      (print (ci-ewt-call))
+      (print (ci-ewt-f2))
+      (print (ci-ewt-m2))
+      (print (ci-ewt-st-x (make-ci-ewt-st)))
+      (print (ci-ewt-y (make-instance 'ci-ewt-c)))
+    expected: |
+      1
+      2
+      3
+      4
+      5
+      6
+      7
+      8
+      9
+      10
+      11
+      12
+      13
+      14
+      15
+      16
+      17
+      18
+      19
+      :UPGRADABLE
+      :BY-PROGN
+      :BY-SYMBOL-MACROLET
+      20
+      21
+      22
+      23
+      24
   # check-type tests what the literal typep tests, through the registry the compilers
   # hold: a class, a condition, a struct, a deftype, a compound holding one. A correct
   # program is not refused where typep answers an empty type deliberately (a defgeneric's

@@ -380,7 +380,7 @@ sub-form: a `(values ...)` tail reaches the consumer behind any number of return
   `let` initform, a `progn` body form and a callback's publish to leak.
 
 ## Through `eval`
-The interpreter's `eval` settles its form's tail as a function return does (`.kb/eval-runtime.md`, `evalFunctionForm`).
+The interpreter's `eval` settles its form's tail as a function return does (`.kb/eval-runtime.md`, `evalDatum`).
 `_eval` keeps the channel exact itself (`.kb/eval-runtime.md`, "The built-in macros", Values): it is emptied on entry and after
 what answers one value, and a call or a tail form publishes for itself. Only in a program that runs forms through eval. The
 consumers there are compiled helpers over a closure (`%eval-values-of`), so `multiple-value-bind` and its family need no

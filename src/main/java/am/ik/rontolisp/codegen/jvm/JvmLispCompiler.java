@@ -1212,7 +1212,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Splice top-level (progn ...)/(eval-when ...) so Pass 1 collects the defuns
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
-		program = LispMacroExpander.flattenTopLevel(program);
+		program = LispMacroExpander.flattenCompiledTopLevel(program);
 		if (this.optimize.eliminatesDeadCode()) {
 			// A typecase clause whose type no call site's argument can have is dead code
 			// the class shaker cannot see, because its reachability is by NAME

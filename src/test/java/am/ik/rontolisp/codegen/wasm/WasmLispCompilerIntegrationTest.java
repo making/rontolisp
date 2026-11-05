@@ -8808,8 +8808,10 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(declaim (optimize (speed 3))) (proclaim '(special *x*))"
 				+ " (defun decl-fn (x) (declare (ignore x)) 42) (print (decl-fn 1))" + " (print (the integer (+ 1 2)))"
 				+ " (eval-when (:compile-toplevel :load-toplevel :execute) (defun ew-fn (x) (* x 2)))"
-				+ " (print (ew-fn 21))"))
-			.isEqualTo("42\n3\n42");
+				+ " (print (ew-fn 21))"
+				+ " (print (let () (eval-when (:load-toplevel) 1))) (print (let () (eval-when (:execute) 2)))"
+				+ " (symbol-macrolet ((ew-s 3)) (eval-when (:load-toplevel) (print ew-s)))"))
+			.isEqualTo("42\n3\n42\nNIL\n2\n3");
 	}
 
 	@Test

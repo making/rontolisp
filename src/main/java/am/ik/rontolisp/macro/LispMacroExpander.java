@@ -44207,15 +44207,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (eval-when (situations...) body...)} to {@code (progn body...)}:
-	 * every situation is treated as "evaluate now". The compile path's
-	 * expand-before-codegen pipeline already approximates {@code :compile-toplevel} for
-	 * macros; top-level forms are additionally spliced by {@link #flattenTopLevel} so
-	 * nested {@code defun}/{@code defmacro} definitions are collected.
-	 * @param cons the eval-when expression
-	 * @return the expanded expression
-	 */
-	/**
 	 * Lowers {@code (make-array dims ... :initial-contents list)} for the compiled
 	 * backends to the equivalent allocation plus an element-wise fill: the inner
 	 * {@code make-array} keeps every other keyword. Every level's length is checked
@@ -45687,20 +45678,21 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (eval-when (situations...) body...)} to the body wrapped in a
-	 * {@code progn} (nil for an empty body). The situation list is validated but not
-	 * consulted here -- the compile-time situations are handled where the form is read,
-	 * not where it is expanded.
+	 * Expands an {@code (eval-when (situations...) body...)} at no top level, where only
+	 * {@code :execute} runs the body (CLHS 3.2.3.1): the body wrapped in a {@code progn},
+	 * or nil when it does not run. A top-level one never comes here: a compile path
+	 * splices it ({@link #flattenTopLevel}), the interpreter runs its members
+	 * ({@link #evalWhenMembers}).
 	 * @param cons the eval-when expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandEvalWhen(LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+		if (!hasSituationList(cons)) {
 			throw new IllegalArgumentException("eval-when expects a situation list, got: " + cons.print());
 		}
+		List<LispVal> parts = cons.toList();
 		List<LispVal> body = parts.subList(2, parts.size());
-		if (body.isEmpty()) {
+		if (body.isEmpty() || !evalWhenExecutes(cons)) {
 			return LispNil.INSTANCE;
 		}
 		if (body.size() == 1) {
@@ -45710,18 +45702,34 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * What a well-formed {@code eval-when} runs in a top-level position, where a program
+	 * stands for both its compile and its load: its whole body under any situation, and
+	 * nothing under an empty list, which names none.
+	 * @param cons the eval-when expression
+	 * @return the members that run, or null for a malformed form
+	 */
+	public static @Nullable List<LispVal> evalWhenMembers(LispCons cons) {
+		if (!hasSituationList(cons) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		return parts.get(1) instanceof LispNil ? List.of() : parts.subList(2, parts.size());
+	}
+
+	private static boolean hasSituationList(LispCons cons) {
+		return cons.cdr() instanceof LispCons rest && (rest.car() instanceof LispCons || rest.car() instanceof LispNil);
+	}
+
+	/**
 	 * Whether an {@code eval-when} outside any top-level position runs its body: its
 	 * situations name {@code :execute} or the old {@code eval}. A malformed form answers
 	 * true, so {@link #expandEvalWhen} reports it.
-	 * @param cons the eval-when expression
-	 * @return whether the body runs
 	 */
-	public static boolean evalWhenExecutes(LispCons cons) {
-		if (!(cons.cdr() instanceof LispCons rest)
-				|| !(rest.car() instanceof LispCons || rest.car() instanceof LispNil)) {
+	private static boolean evalWhenExecutes(LispCons cons) {
+		if (!hasSituationList(cons)) {
 			return true;
 		}
-		for (LispVal cell = rest.car(); cell instanceof LispCons list; cell = list.cdr()) {
+		for (LispVal cell = ((LispCons) cons.cdr()).car(); cell instanceof LispCons list; cell = list.cdr()) {
 			if (list.car() instanceof LispSymbol situation && (":EXECUTE".equals(situation.name())
 					|| ":EVAL".equals(situation.name()) || LispNames.EVAL.equals(memberOf(situation.name())))) {
 				return true;
@@ -45732,7 +45740,7 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands {@code (with-compilation-unit (options...) body...)} to the body wrapped in
-	 * a {@code progn}, exactly like {@link #expandEvalWhen}.
+	 * a {@code progn}.
 	 *
 	 * <p>
 	 * A {@code progn} is the whole implementation, and a legitimate one: the option list
@@ -47208,8 +47216,11 @@ public final class LispMacroExpander {
 			case LispNames.DOTIMES -> settleDotimes(cons, parts, mode);
 			case LispNames.PROGN, LispNames.LOCALLY, LispNames.WITH_STANDARD_IO_SYNTAX ->
 				settleLast(cons, parts, 1, mode);
+			// One that does not run leaves its nil, and nothing on the channel.
+			case LispNames.EVAL_WHEN ->
+				evalWhenExecutes(cons) ? settleLast(cons, parts, 2, mode) : settleTail(LispNil.INSTANCE, mode);
 			case LispNames.LET, LispNames.LET_STAR, LispNames.FLET, LispNames.LABELS, LispNames.MACROLET,
-					LispNames.SYMBOL_MACROLET, LispNames.HANDLER_BIND, LispNames.EVAL_WHEN, LispNames.WITH_OPEN_FILE,
+					LispNames.SYMBOL_MACROLET, LispNames.HANDLER_BIND, LispNames.WITH_OPEN_FILE,
 					LispNames.WITH_INPUT_FROM_STRING, LispNames.WITH_OPEN_STREAM, LispNames.WITH_HASH_TABLE_ITERATOR,
 					LispNames.WITH_PACKAGE_ITERATOR, LispNames.WITH_COMPILATION_UNIT, LispNames.WITH_SIMPLE_RESTART,
 					LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED,
@@ -53688,16 +53699,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Splices top-level {@code (progn ...)} and {@code (eval-when (situations) ...)}
-	 * forms into the top-level form list (recursively), preserving evaluation order. Used
-	 * on the compile path (and by {@code UserMacroExpander}) so Pass 1 defun collection
-	 * and the compile-time defmacro scan see definitions nested in the
-	 * {@code (eval-when (:compile-toplevel ...) (defmacro ...))} idiom. The interpreter
-	 * needs no flattening: it evaluates {@code eval-when} as {@code progn} natively.
-	 * @param program the top-level forms
-	 * @return the flattened top-level forms
-	 */
-	/**
 	 * Prepends the top-level {@code (setq %mv-spill nil)} creating the multiple-value
 	 * spill global (see {@link LispNames#MV_SPILL}) when the program uses any
 	 * multiple-value operator; returns the program unchanged otherwise. Both compilers
@@ -54410,6 +54411,41 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * {@link #flattenTopLevel(List)} for what a backend compiles, past the macro pass: a
+	 * top-level {@code symbol-macrolet} can substitute there, and the forms of its body
+	 * are top-level forms too (CLHS 3.2.3.1). {@code UserMacroExpander} has done the same
+	 * to a program with macros, whose expansion has to see them.
+	 * @param program the top-level forms
+	 * @return the flattened top-level forms
+	 */
+	public static List<LispVal> flattenCompiledTopLevel(List<LispVal> program) {
+		List<LispVal> flat = flattenTopLevel(program);
+		if (flat.stream().noneMatch(LispMacroExpander::isSymbolMacroletForm)) {
+			return flat;
+		}
+		List<LispVal> out = new java.util.ArrayList<>();
+		for (LispVal form : flat) {
+			if (form instanceof LispCons cons && isSymbolMacroletForm(cons)) {
+				try {
+					out.addAll(flattenCompiledTopLevel(List.of(splicedPart(cons, expandSymbolMacrolet(cons)))));
+				}
+				catch (IllegalArgumentException ex) {
+					throw SourceProvenance.noteFailure(cons, ex);
+				}
+			}
+			else {
+				out.add(form);
+			}
+		}
+		return out;
+	}
+
+	private static boolean isSymbolMacroletForm(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head && cons.isProperList()
+				&& LispNames.SYMBOL_MACROLET.equals(clOperatorSpelling(head.name()));
+	}
+
+	/**
 	 * {@link #flattenTopLevel(List)}, also collecting -- by identity -- every spliced
 	 * form an {@code eval-when} evaluates at COMPILE time (CLHS 3.2.3.1: under
 	 * {@code :compile-toplevel}, or under {@code :execute} inside compile-time-too
@@ -54453,8 +54489,9 @@ public final class LispMacroExpander {
 		String operator = clOperatorSpelling(sym.name());
 		return LispNames.PROGN.equals(operator) || LispNames.LOCALLY.equals(operator)
 				|| classDefinerInitializer(cons) != null || isHandlerlessHandlerBind(cons)
-				|| ((LispNames.EVAL_WHEN.equals(operator) || isUiopWithDeprecationWrapper(operator)
-						|| isUiopWithUpgradabilityWrapper(operator)) && cons.toList().size() >= 2);
+				|| (LispNames.EVAL_WHEN.equals(operator) && hasSituationList(cons))
+				|| ((isUiopWithDeprecationWrapper(operator) || isUiopWithUpgradabilityWrapper(operator))
+						&& cons.toList().size() >= 2);
 	}
 
 	/**
@@ -54536,6 +54573,25 @@ public final class LispMacroExpander {
 				&& UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_UPGRADABILITY);
 	}
 
+	/**
+	 * What a form {@link #flattenTopLevel} opens beyond the special forms becomes: a uiop
+	 * wrapper around top-level definitions and a {@code handler-bind} binding nothing,
+	 * whose members stay top-level forms (SBCL's too).
+	 * @param cons a proper-list top-level form
+	 * @return the {@code progn} or nil it stands for, or null for any other form
+	 */
+	public static @Nullable LispVal topLevelWrapperExpansion(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		if (isHandlerlessHandlerBind(cons)) {
+			List<LispVal> parts = cons.toList();
+			return prognOrNil(parts.subList(2, parts.size()));
+		}
+		return isUiopWithUpgradabilityWrapper(head.name()) ? expandUiopWithUpgradability(cons)
+				: isUiopWithDeprecationWrapper(head.name()) ? expandUiopWithDeprecation(cons) : null;
+	}
+
 	private static void flattenTopLevelInto(LispVal form, List<LispVal> out, boolean compileTimeToo,
 			@Nullable Set<LispVal> compileTime) {
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && isSpliceableSpine(cons)) {
@@ -54557,13 +54613,19 @@ public final class LispMacroExpander {
 			// response.lisp does with-deprecation, inside an eval-when; upstream uiop
 			// puts with-upgradability around every one of its own), and burying those in
 			// an expression would stop them being definitions at all.
-			if (LispNames.EVAL_WHEN.equals(operator) || isUiopWithUpgradabilityWrapper(operator)) {
+			List<LispVal> members = LispNames.EVAL_WHEN.equals(operator) ? evalWhenMembers(cons) : null;
+			if (members != null) {
+				boolean memberCompileTime = evaluatesAtCompileTime(cons.toList().get(1), compileTimeToo);
+				for (LispVal member : members) {
+					flattenTopLevelInto(splicedPart(cons, member), out, memberCompileTime, compileTime);
+				}
+				return;
+			}
+			if (isUiopWithUpgradabilityWrapper(operator)) {
 				List<LispVal> parts = cons.toList();
 				if (parts.size() >= 2) {
-					boolean memberCompileTime = LispNames.EVAL_WHEN.equals(operator)
-							? evaluatesAtCompileTime(parts.get(1), compileTimeToo) : compileTimeToo;
 					for (int i = 2; i < parts.size(); i++) {
-						flattenTopLevelInto(splicedPart(cons, parts.get(i)), out, memberCompileTime, compileTime);
+						flattenTopLevelInto(splicedPart(cons, parts.get(i)), out, compileTimeToo, compileTime);
 					}
 					return;
 				}

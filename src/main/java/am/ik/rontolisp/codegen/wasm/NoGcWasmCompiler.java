@@ -457,7 +457,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		program = LispMacroExpander.dropLocalNicknameEvents(program);
 		// Splice top-level (progn ...)/(eval-when ...) so nested defuns are collected,
 		// like the other backends.
-		program = LispMacroExpander.flattenTopLevel(program);
+		program = LispMacroExpander.flattenCompiledTopLevel(program);
 
 		// The async/await surface never: this backend has no futures, no suspension
 		// and no boxed values to represent them, so each name gets the clear error.

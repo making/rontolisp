@@ -2985,9 +2985,10 @@ public final class LispNames {
 	public static final String PUSHNEW = "PUSHNEW";
 
 	/**
-	 * The {@code eval-when} operator. Expands to {@code progn} of its body; at top level
-	 * the compile path additionally splices the body into top-level forms (see
-	 * {@code LispMacroExpander.flattenTopLevel}).
+	 * The {@code eval-when} operator. At top level its body runs under any situation (the
+	 * compile path splices it into top-level forms, see
+	 * {@code LispMacroExpander.flattenTopLevel}); elsewhere only {@code :execute} runs
+	 * it.
 	 */
 	public static final String EVAL_WHEN = "EVAL-WHEN";
 
