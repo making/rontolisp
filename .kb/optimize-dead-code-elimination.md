@@ -1133,8 +1133,8 @@ several roots held the same helpers, so each fix alone showed little. In the ord
 | `gateway` | 105,198 / 39,453 | 73,789 / 28,692 |
 | `handler-case` around a `funcall` | 11,375 / 4,904 | 1,003 / 690 |
 | a bare `funcall` | 1,105 / 771 | 906 / 644 |
-| `zlib` | 176,603 / 58,763 | 85,839 / 29,461 |
-| `zlib`, no flags | 229,564 / 74,572 | 225,464 / 73,625 |
+| `zlib` | 176,603 / 58,763 | 86,038 / 29,531 |
+| `zlib`, no flags | 229,564 / 74,572 | 226,134 / 73,818 |
 | `hello_world`, `pi_approx`, `dom_reactor`, `webgl-cube` | | within 50 bytes |
 
 `test_plugin`, without `--no-wasi`, 49,489 / 20,741 to 31,340 / 13,012. Instructions per exchange
