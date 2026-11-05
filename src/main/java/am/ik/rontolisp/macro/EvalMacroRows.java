@@ -22,6 +22,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The run-time half of the built-in macros for a compiled {@code eval}
@@ -45,7 +46,26 @@ public final class EvalMacroRows {
 
 	private static final Set<String> PLACE_OPERATORS = operatorsOf(PLACE_PREFIX);
 
+	/**
+	 * The rows a word of a {@code loop} needs, which its clause parser does not bring: a
+	 * package walk reaches the whole package table, so only a program spelling one
+	 * carries it.
+	 */
+	private static final Map<String, String> LOOP_WORD_ROWS = Map.of("SYMBOL", LispNames.DO_SYMBOLS, "SYMBOLS",
+			LispNames.DO_SYMBOLS, "EXTERNAL-SYMBOL", LispNames.DO_EXTERNAL_SYMBOLS, "EXTERNAL-SYMBOLS",
+			LispNames.DO_EXTERNAL_SYMBOLS, "PRESENT-SYMBOL", LispNames.WITH_PACKAGE_ITERATOR, "PRESENT-SYMBOLS",
+			LispNames.WITH_PACKAGE_ITERATOR);
+
 	private EvalMacroRows() {
+	}
+
+	/**
+	 * The operator whose row a word among a {@code loop}'s clauses needs.
+	 * @param word the word's name, without a package
+	 * @return the operator, or null for a word that needs none
+	 */
+	public static @Nullable String loopWordRow(String word) {
+		return LOOP_WORD_ROWS.get(word);
 	}
 
 	/**

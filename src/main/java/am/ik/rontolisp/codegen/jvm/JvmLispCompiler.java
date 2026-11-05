@@ -2394,6 +2394,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			inject(LispMacroExpander.compiledSpecialRuntime(specialVars), defuns, injectedForms, specialVars);
 			callOnlyRuntimes.add(defuns.getLast().name);
 		}
+		LispVal evalSetfRuntime = usesEval ? LispMacroExpander.evalSetfRuntime(userDefinedNames) : null;
+		if (evalSetfRuntime != null) {
+			inject(evalSetfRuntime, defuns, injectedForms, specialVars);
+		}
 		Map<String, FieldRefEntry> globalFields = new HashMap<>();
 		List<Utf8Entry> globalFieldNameUtfs = new ArrayList<>();
 		Utf8Entry globalFieldDescUtf = cp.utf8Entry("Ljava/lang/Object;");

@@ -4583,6 +4583,10 @@ public final class WasmLispCompiler implements LispCompiler {
 					specialVars);
 			callOnlyRuntimes.add(defuns.getLast().name);
 		}
+		LispVal evalSetfRuntime = evalRunsForms ? LispMacroExpander.evalSetfRuntime(userDefinedNames) : null;
+		if (evalSetfRuntime != null) {
+			inject(evalSetfRuntime, defuns, injectedRuntimeDefuns, injectedForms, specialVars);
+		}
 		// The specials only a binding or an assignment gives a value
 		// (SpecialVarCollector.collectValueless): _start seeds their module global with
 		// the UNBOUND marker, a store overwrites it, a binding saves and restores it like
@@ -6693,7 +6697,23 @@ public final class WasmLispCompiler implements LispCompiler {
 					functions.containsKey(LispNames.EVAL_EXPANSION),
 					functions.containsKey(LispNames.EVAL_PLACE_EXPANSION),
 					functions.containsKey(LispNames.EVAL_SPECIAL_LET),
-					functions.containsKey(LispNames.EVAL_ROW_FLET) || functions.containsKey(LispNames.EVAL_ROW_LABELS));
+					functions.containsKey(LispNames.EVAL_ROW_FLET) || functions.containsKey(LispNames.EVAL_ROW_LABELS),
+					functions.containsKey(LispNames.EVAL_ROW_MACROLET),
+					functions.containsKey(LispNames.EVAL_ROW_SYMBOL_MACROLET),
+					functions.containsKey(LispNames.EVAL_ROW_DEFINE_SYMBOL_MACRO),
+					functions.containsKey(LispNames.EVAL_SETF_FORM));
+			if (evalHooks.localMacros()) {
+				offsetsBuilder.add(stringTable, LispNames.EVAL_LOCAL_MACROS);
+			}
+			if (evalHooks.symbolMacros()) {
+				offsetsBuilder.add(stringTable, LispNames.EVAL_SYMBOL_MACRO);
+			}
+			if (evalHooks.globalSymbolMacros()) {
+				offsetsBuilder.add(stringTable, LispNames.EVAL_GLOBAL_SYMBOL_MACROS);
+			}
+			if (evalHooks.setfForms()) {
+				offsetsBuilder.add(stringTable, LispNames.EVAL_SETF_FORM);
+			}
 			if (evalHooks.expansion()) {
 				offsetsBuilder.add(stringTable, LispNames.EVAL_EXPANSION);
 			}

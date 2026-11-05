@@ -271,7 +271,7 @@ reach for. Cost on this box: unchanged.
 The slowest classes were each one long method, so neither fork could overlap their work.
 What changed, measured alone on this box (64 cores, shared with other builds):
 
-- `WasmTreeShakerCorpusTest`: a parameterized method per WASI mode, concurrent; the three levels compile side by side (`COMPILE_THREADS`, a quarter of the cores, 1..3) and every `wasm-tools` check is its own child process
+- `WasmTreeShakerCorpusTest`: a parameterized method per WASI mode, concurrent; the three levels compile side by side (`COMPILE_THREADS`, a quarter of the cores, 1..2) and every `wasm-tools` check is its own child process. The bound is the heap's too: one corpus compile peaks near 1.5 GB live in the 6 GB fork (measured 2026-11-05, SerialGC at `-Xmx3g`). At 1..3, six in flight, 4% more corpus was `OutOfMemoryError` on every run, in whichever compile asked next, with no assertion failing
 - `JvmDeadMethodEliminationCorpusTest` + `JvmOsrBackedgeCorpusTest`: merged -- the OSR guard compiled the identical program at the identical two levels; one front end, the two compiles side by side, the two runs side by side (each owns its directory)
 - `DocExamplesTest`: `scheme/eval.md` looped 100,000 times inside Scheme `eval` on the interpreter (`scheme-spec.yaml` pins the 100,000 on all four backends); plus `PackageRegistry` below
 - `cli/RontoLispCliTest`: concurrent; the 30 methods that capture `System.err`/`System.out` moved to `cli/RontoLispCliStreamsTest`, which stays sequential

@@ -242,6 +242,7 @@ public final class EvalReferences {
 		void datum(LispVal datum) {
 			if (datum instanceof LispSymbol symbol) {
 				spell(symbol);
+				loopWord(symbol);
 			}
 			else if (datum instanceof LispCons list) {
 				if (list.car() instanceof LispSymbol head) {
@@ -250,6 +251,9 @@ public final class EvalReferences {
 					if ((LispNames.LET.equals(name) || LispNames.LET_STAR.equals(name))
 							&& list.cdr() instanceof LispCons rest) {
 						boundNames(rest.car());
+					}
+					if (LispNames.LOOP.equals(name)) {
+						loopWords(list.cdr());
 					}
 				}
 				LispVal cursor = list;
@@ -264,6 +268,28 @@ public final class EvalReferences {
 				for (LispVal element : array.data()) {
 					datum(element);
 				}
+			}
+		}
+
+		/**
+		 * A word among a quoted {@code loop}'s clauses, or quoted alone as a program
+		 * building one with {@code list} spells it, names the row it needs.
+		 */
+		private void loopWord(LispSymbol word) {
+			PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(word.name());
+			String row = EvalMacroRows.loopWordRow(qualified != null ? qualified.member() : word.name());
+			if (row != null) {
+				this.spelled.add(row);
+			}
+		}
+
+		private void loopWords(LispVal clauses) {
+			LispVal cursor = clauses;
+			while (cursor instanceof LispCons cons) {
+				if (cons.car() instanceof LispSymbol word) {
+					loopWord(word);
+				}
+				cursor = cons.cdr();
 			}
 		}
 

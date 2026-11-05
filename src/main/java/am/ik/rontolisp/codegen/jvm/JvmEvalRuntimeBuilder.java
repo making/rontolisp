@@ -973,12 +973,52 @@ final class JvmEvalRuntimeBuilder {
 	}
 
 	/**
-	 * Leaves in {@code fnSlot} the local function {@code flet} or {@code labels} bound
-	 * {@code nameSlot} to in the environment, jumping to {@code none} when none did.
+	 * Jumps to {@code none} unless the slot holds what a binding of a symbol macro holds,
+	 * {@code (mark . expansion)}.
 	 */
-	private void localFunction(MethodCode a, int nameSlot, int envSlot, int tmpSlot, int fnSlot,
+	private void symbolMacroTest(MethodCode a, int valueSlot, MethodCode.Label none) {
+		a.aload(valueSlot);
+		a.instanceOf(this.k.objectArrayClass());
+		a.ifeq(none);
+		arrLen(a, valueSlot);
+		a.loadConstant(2);
+		a.if_icmpne(none);
+		ldcStr(a, LispNames.EVAL_SYMBOL_MACRO);
+		car(a, valueSlot);
+		a.invokevirtual(this.k.objectEquals());
+		a.ifeq(none);
+	}
+
+	/**
+	 * Leaves in {@code tmpSlot} the binding of {@code nameSlot} in the alist of the
+	 * global symbol macros, jumping to {@code none} when it has none. The alist is read
+	 * through the mirror: a global's first mirrored store comes here, before the alist's
+	 * defvar has run.
+	 */
+	private void globalSymbolMacro(MethodCode a, int nameSlot, int tmpSlot, MethodCode.Label none) {
+		ldcStr(a, LispNames.EVAL_GLOBAL_SYMBOL_MACROS);
+		a.getstatic(this.k.genvField());
+		a.invokestatic(this.k.envLookupRef());
+		a.astore(tmpSlot);
+		a.aload(tmpSlot);
+		a.ifnull(none);
+		a.aload(nameSlot);
+		cdr(a, tmpSlot);
+		a.invokestatic(this.k.envLookupRef());
+		a.astore(tmpSlot);
+		a.aload(tmpSlot);
+		a.ifnull(none);
+	}
+
+	/**
+	 * Leaves in {@code fnSlot} the function the alist {@code alistName} of the
+	 * environment binds {@code nameSlot} to -- a local function of {@code flet} or
+	 * {@code labels}, or an expander of {@code macrolet} -- jumping to {@code none} when
+	 * none did.
+	 */
+	private void localFunction(MethodCode a, String alistName, int nameSlot, int envSlot, int tmpSlot, int fnSlot,
 			MethodCode.Label none) {
-		ldcStr(a, LispNames.EVAL_LOCAL_FUNCTIONS);
+		ldcStr(a, alistName);
 		a.aload(envSlot);
 		a.invokestatic(this.k.envLookupRef());
 		a.astore(tmpSlot);
@@ -1595,8 +1635,38 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(PLACE);
 		a.instanceOf(this.k.stringClass());
 		a.ifeq(notSym);
+		// A symbol macro's binding assigns its expansion, a place like any other.
+		if (carries(LispNames.EVAL_ROW_SYMBOL_MACROLET)) {
+			MethodCode.Label noMacro = a.newLabel();
+			a.aload(PLACE);
+			a.aload(ENV);
+			a.invokestatic(this.k.envLookupRef());
+			a.astore(TMP);
+			a.aload(TMP);
+			a.ifnull(noMacro);
+			cdr(a, TMP);
+			a.astore(TARGET);
+			symbolMacroTest(a, TARGET, noMacro);
+			cdr(a, TARGET);
+			a.aload(VALUE);
+			a.aload(ENV);
+			a.invokestatic(this.k.storeRef());
+			a.areturn();
+			a.labelBinding(noMacro);
+		}
 		storeSymbolBinding(a, PLACE, ENV, VALUE, TMP, false);
 		storeSymbolBinding(a, PLACE, ENV, VALUE, TMP, true);
+		// A global symbol macro: what no variable holds.
+		if (carries(LispNames.EVAL_ROW_DEFINE_SYMBOL_MACRO)) {
+			MethodCode.Label noMacro = a.newLabel();
+			globalSymbolMacro(a, PLACE, TMP, noMacro);
+			cdr(a, TMP);
+			a.aload(VALUE);
+			a.aload(ENV);
+			a.invokestatic(this.k.storeRef());
+			a.areturn();
+			a.labelBinding(noMacro);
+		}
 		// not bound anywhere: prepend a new binding to the global environment
 		consFromSlots(a, PLACE, VALUE);
 		a.astore(TMP);
@@ -1676,21 +1746,24 @@ final class JvmEvalRuntimeBuilder {
 		a.labelBinding(skipCarCdr);
 
 		// A place with no arm above: the run-time expansion, when the program spelled one
-		// a form can reach, answers the form that stores it.
-		if (carries(LispNames.EVAL_PLACE_EXPANSION)) {
-			MethodCode.Label knownPlace = a.newLabel();
-			a.iload(FIELD);
-			a.loadConstant(-1);
-			a.if_icmpne(knownPlace);
-			callRegistered(a, LispNames.EVAL_PLACE_EXPANSION, TMP, OP, ARGS, VALUE);
-			a.astore(TMP);
-			a.aload(TMP);
-			a.ifnull(knownPlace);
-			a.aload(TMP);
-			a.aload(ENV);
-			a.invokestatic(this.k.evalRef());
-			a.areturn();
-			a.labelBinding(knownPlace);
+		// a form can reach, answers the form that stores it; then the place's (setf name)
+		// function, when the program defines one.
+		for (String placeForm : List.of(LispNames.EVAL_PLACE_EXPANSION, LispNames.EVAL_SETF_FORM)) {
+			if (carries(placeForm)) {
+				MethodCode.Label knownPlace = a.newLabel();
+				a.iload(FIELD);
+				a.loadConstant(-1);
+				a.if_icmpne(knownPlace);
+				callRegistered(a, placeForm, TMP, OP, ARGS, VALUE);
+				a.astore(TMP);
+				a.aload(TMP);
+				a.ifnull(knownPlace);
+				a.aload(TMP);
+				a.aload(ENV);
+				a.invokestatic(this.k.evalRef());
+				a.areturn();
+				a.labelBinding(knownPlace);
+			}
 		}
 
 		// store: if a target was resolved and is a cons, set car (FIELD 0) or cdr (FIELD
@@ -1941,6 +2014,18 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(TMP);
 		a.aload(TMP);
 		a.ifnull(global);
+		// A symbol macro's binding answers its expansion, evaluated here.
+		if (carries(LispNames.EVAL_ROW_SYMBOL_MACROLET)) {
+			MethodCode.Label plainBinding = a.newLabel();
+			cdr(a, TMP);
+			a.astore(ACC);
+			symbolMacroTest(a, ACC, plainBinding);
+			cdr(a, ACC);
+			a.aload(ENV);
+			a.invokestatic(this.k.evalRef());
+			a.areturn();
+			a.labelBinding(plainBinding);
+		}
 		a.aload(TMP);
 		a.checkcast(this.k.objectArrayClass());
 		a.loadConstant(1);
@@ -2024,6 +2109,16 @@ final class JvmEvalRuntimeBuilder {
 		a.aaload();
 		a.areturn();
 		a.labelBinding(unbound);
+		// A global symbol macro: what no variable holds.
+		if (carries(LispNames.EVAL_ROW_DEFINE_SYMBOL_MACRO)) {
+			MethodCode.Label noMacro = a.newLabel();
+			globalSymbolMacro(a, VAL, TMP, noMacro);
+			cdr(a, TMP);
+			a.aload(ENV);
+			a.invokestatic(this.k.evalRef());
+			a.areturn();
+			a.labelBinding(noMacro);
+		}
 		emitUnboundThrow(a, VAL);
 		a.labelBinding(notStr);
 
@@ -2267,7 +2362,7 @@ final class JvmEvalRuntimeBuilder {
 		a.labelBinding(fnSym);
 		if (carries(LispNames.EVAL_ROW_FLET) || carries(LispNames.EVAL_ROW_LABELS)) {
 			MethodCode.Label notLocal = a.newLabel();
-			localFunction(a, ACC, ENV, TMP, FN, notLocal);
+			localFunction(a, LispNames.EVAL_LOCAL_FUNCTIONS, ACC, ENV, TMP, FN, notLocal);
 			a.aload(FN);
 			a.areturn();
 			a.labelBinding(notLocal);
@@ -2692,10 +2787,23 @@ final class JvmEvalRuntimeBuilder {
 		MethodRefEntry applyToLowerCase = stringCaseRef("toLowerCase");
 		MethodRefEntry applyToUpperCase = stringCaseRef("toUpperCase");
 		a.labelBinding(registryApply);
-		// A local function of flet or labels comes before every global one.
+		// A local function of flet or labels comes before every global one, and a local
+		// macro before those: flet and labels take a name they bind out of the macros'
+		// alist.
+		if (carries(LispNames.EVAL_ROW_MACROLET)) {
+			MethodCode.Label noMacro = a.newLabel();
+			localFunction(a, LispNames.EVAL_LOCAL_MACROS, OP, ENV, TMP, FN, noMacro);
+			a.aload(FN);
+			listOfSlots(a, new int[] { VAL }, 0);
+			a.invokestatic(this.k.applyRef());
+			a.aload(ENV);
+			a.invokestatic(this.k.evalRef());
+			a.areturn();
+			a.labelBinding(noMacro);
+		}
 		if (carries(LispNames.EVAL_ROW_FLET) || carries(LispNames.EVAL_ROW_LABELS)) {
 			MethodCode.Label noLocal = a.newLabel();
-			localFunction(a, OP, ENV, TMP, FN, noLocal);
+			localFunction(a, LispNames.EVAL_LOCAL_FUNCTIONS, OP, ENV, TMP, FN, noLocal);
 			buildArgList(a, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
 			a.aload(FN);
 			a.aload(ARGHEAD);

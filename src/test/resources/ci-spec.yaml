@@ -34789,6 +34789,347 @@ cases:
       1
       1
       (:ERROR "The function EM-NO-SUCH-MACRO is undefined")
+  - name: eval-runs-the-keyword-clauses-of-loop
+    source: |
+      (defun el-report (form)
+        (handler-case (eval form)
+          (error () :error)))
+      (print (eval '(loop for i from 0 to 3 collect i)))
+      (print (eval '(loop for i from 1 below 4 by 2 collect i)))
+      (print (eval '(loop for i downfrom 3 downto 1 collect i)))
+      (print (eval '(loop for i from 3 above 0 sum i)))
+      (print (eval '(let ((n 2)) (loop for i from 0 below n by (- n 1) collect i))))
+      (print (eval '(loop for x in '(1 2 3) collect (* x x))))
+      (print (eval '(loop for x in '(1 2 3 4) by #'cddr collect x)))
+      (print (eval '(loop for x in '(1 2 3 4) by 'cddr collect x)))
+      (print (eval '(loop for (a b) in '((1 2) (3 4)) collect (+ a b))))
+      (print (eval '(loop for (a . b) on '(1 2 3) collect (list a b))))
+      (print (eval '(loop for x on '(1 2 3) collect x)))
+      (print (eval '(loop for c across "abc" collect c)))
+      (print (eval '(loop for e across (vector 1 2) collect e)))
+      (print (eval '(loop repeat 3 collect 1)))
+      (print (eval '(let ((n 0)) (loop while (< n 3) do (setq n (+ n 1))) n)))
+      (print (eval '(let ((n 0)) (loop until (> n 3) do (setq n (+ n 1))) n)))
+      (print (eval '(loop for x = 1 then (* x 2) repeat 4 collect x)))
+      (print (eval '(loop for x from 0 for y = (* x 2) repeat 3 collect y)))
+      (print (eval '(loop for (a b) = '(1 2) then (list b a) repeat 2 collect a)))
+      (print (eval '(loop with a = 1 with b = (+ a 1) return (list a b))))
+      (print (eval '(let ((a 5)) (loop with a = 1 and b = a return (list a b)))))
+      (print (eval '(loop with (a b) = '(1 2) return (list a b))))
+      (print (eval '(loop for x in '(1 2 3) sum x)))
+      (print (eval '(loop for x in '(1 2 3) count (> x 1))))
+      (print (eval '(loop for x in '(1 2 3) maximize x)))
+      (print (eval '(loop for x in '(1 2 3) minimize x)))
+      (print (eval '(loop for x in '((1) (2)) append x)))
+      (print (eval '(loop for x in (list (list 1) (list 2)) nconc x)))
+      (print (eval '(loop for x in '(1 2) collect x into xs finally (return (reverse xs)))))
+      (print (eval '(loop for x in '(1 2) collect x into xs do (if (= x 1) (return xs)))))
+      (print (eval '(loop for x in '(1 2) sum x into s count x into c finally (return (list s c)))))
+      (print (eval '(loop for x in '(1 2 3) when (> x 1) collect x)))
+      (print (eval '(loop for x in '(1 2 3) unless (> x 1) collect x)))
+      (print (eval '(loop for x in '(1 2 3) when (> x 1) collect x and collect (* x x) else collect 0 end)))
+      (print (eval '(loop for x in '(1 2 3) when (and (> x 1) x) collect it)))
+      (print (eval '(loop for x in '(1 2 3) always (> x 0))))
+      (print (eval '(loop for x in '(1 2 3) never (> x 2))))
+      (print (eval '(loop for x in '(1 2 3) thereis (and (> x 1) x))))
+      (print (eval '(loop for x in '(1 2 3) do (if (= x 2) (return x)))))
+      (print (eval '(loop for x in '(1 2 3) if (= x 2) return (* x 10))))
+      (print (eval '(loop named el for x in '(1 2 3) do (if (= x 2) (return-from el :out)))))
+      (print (eval '(block nil (loop named el do (return :outer)) :after)))
+      (print (eval '(let ((acc nil)) (loop initially (push :i acc) for x in '(1) do (push x acc) finally (push :f acc)) acc)))
+      (print (eval '(loop for x in '(1 2 3) finally (return x))))
+      (print (eval '(loop for x from 0 do (if (= x 2) (loop-finish)) finally (return x))))
+      (print (eval '(let ((n 0)) (loop do (setq n (+ n 1)) until (= n 2)) n)))
+      (print (eval '(loop for x in '(1 2 3) for y in '(a b) collect (list x y))))
+      (print (eval '(loop for x in '(1 2 3) and y = 0 then x collect (list x y))))
+      (print (eval '(loop for a = 0 then b and b = 1 then (+ a b) repeat 5 collect a)))
+      (print (eval '(loop for pos = 0 then (+ pos (length arg)) for arg in '("a" "bc" "d") collect pos)))
+      (print (eval '(loop for x of-type fixnum in '(1 2) collect x)))
+      (print (eval '(loop for x fixnum in '(1 2) collect x)))
+      (print (eval '(loop :for x :in '(1 2) :collect x)))
+      (print (eval '(let ((h (make-hash-table))) (setf (gethash 1 h) 2) (loop for k being the hash-keys of h using (hash-value v) collect (list k v)))))
+      (print (eval '(let ((h (make-hash-table))) (setf (gethash 1 h) 2) (loop for v being each hash-value in h collect v))))
+      (print (eval '(loop for s being the external-symbols of "COMMON-LISP" thereis (eq s 'car))))
+      (print (eval '(loop for s being the symbols of "COMMON-LISP" thereis (eq s 'car))))
+      (print (eval '(let ((fs nil)) (loop for x in '(1 2) do (push (lambda () x) fs)) (mapcar #'funcall fs))))
+      (print (eval '(loop for i from 0 to 1 append (loop for j from 0 to 1 collect (list i j)))))
+      (print (eval '(loop for nil from 0 to 1 collect 1)))
+      (print (eval '(loop repeat 2 for x = 1 then (+ x 1) collect x)))
+      (print (multiple-value-list (eval '(loop return (values 1 2)))))
+      (print (el-report '(loop for x in 1 collect x)))
+      (print (el-report '(loop for x from 1 from 2)))
+      (print (el-report '(loop collect 1 thereis 2)))
+    expected: |
+      (0 1 2 3)
+      (1 3)
+      (3 2 1)
+      6
+      (0 1)
+      (1 4 9)
+      (1 3)
+      (1 3)
+      (3 7)
+      ((1 (2 3)) (2 (3)) (3 NIL))
+      ((1 2 3) (2 3) (3))
+      (#\a #\b #\c)
+      (1 2)
+      (1 1 1)
+      3
+      4
+      (1 2 4 8)
+      (0 2 4)
+      (1 2)
+      (1 2)
+      (1 5)
+      (1 2)
+      6
+      2
+      3
+      1
+      (1 2)
+      (1 2)
+      (2 1)
+      (1)
+      (3 2)
+      (2 3)
+      (1)
+      (0 2 4 3 9)
+      (2 3)
+      T
+      NIL
+      2
+      2
+      20
+      :OUT
+      :OUTER
+      (:F 1 :I)
+      3
+      2
+      2
+      ((1 A) (2 B))
+      ((1 0) (2 1) (3 2))
+      (0 1 1 2 3)
+      (0 1 3)
+      (1 2)
+      (1 2)
+      (1 2)
+      ((1 2))
+      (2)
+      T
+      T
+      (2 2)
+      ((0 0) (0 1) (1 0) (1 1))
+      (1 1)
+      (1 2)
+      (1 2)
+      :ERROR
+      :ERROR
+      :ERROR
+  - name: eval-binds-macros-in-its-environment
+    source: |
+      (defun eb-report (form)
+        (handler-case (eval form)
+          (error () :error)))
+      (defclass eb-point () ((x :initarg :x :accessor eb-point-x) (y :initarg :y :accessor eb-point-y)))
+      (defun (setf eb-first) (value cell) (setf (car cell) value))
+      (defun eb-first (cell) (car cell))
+      (defun eb-show (&rest args) args)
+      (setq eb-p (make-instance 'eb-point :x 1 :y 2))
+      (setq eb-q (make-instance 'eb-point :x 10 :y 20))
+      (setq eb-cell (list 1 2))
+      (defmacro eb-early (x) (return-from eb-early (list '+ x 1)))
+      (print (eb-early 1))
+      (print (macrolet ((m (x) (return-from m (list '+ x 2)))) (m 1)))
+      (print (eval '(macrolet ((m () 1)) (m))))
+      (print (eval '(macrolet () 1)))
+      (print (eval '(macrolet ((m (x) `(+ ,x 1))) (m 2))))
+      (print (eval '(macrolet ((m (&optional (x 5) &rest r) `(list ,x ',r))) (list (m) (m 1 2 3)))))
+      (print (eval '(macrolet ((m (a (b c) &key d) `(list ,a ,b ,c ,d))) (m 1 (2 3) :d 4))))
+      (print (eval '(macrolet ((m (&whole w x) `(list ',w ,x))) (m 1))))
+      (print (eval '(macrolet ((m (x) (return-from m (list '+ x 1)))) (m 2))))
+      (print (eval '(macrolet ((m (x) (declare (ignore x)) "doc" 1)) (m 2))))
+      (print (eval '(macrolet ((outer () '(inner)) (inner () 1)) (macrolet ((inner () 2)) (outer)))))
+      (print (eval '(macrolet ((a () 1)) (macrolet ((b () '(a))) (b)))))
+      (print (eval '(macrolet ((m () 1)) (flet ((m () 2)) (m)))))
+      (print (eval '(flet ((m () 2)) (macrolet ((m () 1)) (m)))))
+      (print (eval '(macrolet ((m () 1)) (labels ((m () 2)) (m)))))
+      (print (eval '(macrolet ((m (x) `(setf ,x 5))) (let ((y 1)) (m y) y))))
+      (print (eval '(let ((y 2)) (macrolet ((m () 'y)) (let ((y 3)) (m))))))
+      (print (multiple-value-list (eval '(macrolet ((m () '(values 1 2))) (m)))))
+      (print (eval '(macrolet ((eb-show (x) (list 'quote x))) (eb-show a))))
+      (print (eb-report '(macrolet ((m (x) x)) (m))))
+      (print (eb-report '(macrolet ((m (x) x)) (m 1 2))))
+      (print (eval '(symbol-macrolet ((m 1)) m)))
+      (print (eval '(symbol-macrolet () 1)))
+      (print (eval '(symbol-macrolet ((m (+ 1 2))) (list m m))))
+      (print (eval '(symbol-macrolet ((m 1)) (let ((m 2)) m))))
+      (print (eval '(let ((m 2)) (symbol-macrolet ((m 1)) m))))
+      (print (eval '(let ((c (list 1 2))) (symbol-macrolet ((a (car c))) (setq a 5) (setf a (+ a 1)) (incf a) c))))
+      (print (eval '(let ((c (list 1 2))) (symbol-macrolet ((a (car c))) (push 0 a) c))))
+      (print (eval '(let ((x 1) (y 2)) (symbol-macrolet ((a x) (b y)) (rotatef a b) (list x y)))))
+      (print (eval '(symbol-macrolet ((a x)) (let ((x 3)) a))))
+      (print (eval '(symbol-macrolet ((a 1)) (symbol-macrolet ((b a)) b))))
+      (print (eval '(symbol-macrolet ((a 1)) (funcall (lambda () a)))))
+      (print (eval '(symbol-macrolet ((a (values 1 2))) (multiple-value-list a))))
+      (print (eval '(symbol-macrolet ((a 1)) 'a)))
+      (print (eval '(define-symbol-macro eb-gs (car eb-cell))))
+      (print (eval 'eb-gs))
+      (print (eval '(setq eb-gs 7)))
+      (print eb-cell)
+      (print (eval '(incf eb-gs)))
+      (print eb-cell)
+      (print (eval '(let ((eb-gs 3)) eb-gs)))
+      (print (eval '(symbol-macrolet ((eb-gs 4)) eb-gs)))
+      (print (eval '(boundp 'eb-gs)))
+      (print (eval '(define-symbol-macro eb-gs (cadr eb-cell))))
+      (print (eval 'eb-gs))
+      (print (eval '(with-slots (x y) eb-p (list x y))))
+      (print (eval '(with-slots ((a x) (b y)) eb-p (list a b))))
+      (print (eval '(with-slots (x) eb-p (setf x 5) x)))
+      (print (eval '(slot-value eb-p 'x)))
+      (print (eval '(with-slots (x) eb-p (incf x) x)))
+      (print (eval '(with-slots (x) eb-p (with-slots ((z x)) eb-q (list x z)))))
+      (print (eval '(with-slots (x) eb-p (let ((x 0)) x))))
+      (print (eval '(with-accessors ((a eb-point-x) (b eb-point-y)) eb-p (list a b))))
+      (print (eval '(with-accessors ((a eb-point-x)) eb-p (setf a 9) a)))
+      (print (eval '(eb-point-x eb-p)))
+      (print (eval '(with-accessors ((a eb-point-x)) eb-p (incf a) a)))
+      (print (eval '(with-accessors ((a eb-point-x)) eb-p (with-accessors ((b eb-point-x)) eb-q (list a b)))))
+      (print (eval '(setf (eb-point-y eb-q) 21)))
+      (print (eb-point-y eb-q))
+      (print (eval '(let ((c (list 1))) (setf (eb-first c) 3) c)))
+      (print (eval '(let ((c (list 1))) (incf (eb-first c)) c)))
+      (print (eval '(with-package-iterator (next (find-package "KEYWORD") :external) (multiple-value-list (next)) :ok)))
+      (print (car (eval '(with-package-iterator (next '() :external) (multiple-value-list (next))))))
+      (print (eval '(loop for s being each present-symbol of "COMMON-LISP" thereis (eq s 'car))))
+    expected: |
+      2
+      3
+      1
+      1
+      3
+      ((5 NIL) (1 (2 3)))
+      (1 2 3 4)
+      ((M 1) 1)
+      3
+      1
+      2
+      1
+      2
+      1
+      2
+      5
+      3
+      (1 2)
+      A
+      :ERROR
+      :ERROR
+      1
+      1
+      (3 3)
+      2
+      1
+      (7 2)
+      ((0 . 1) 2)
+      (2 1)
+      3
+      1
+      1
+      (1 2)
+      A
+      EB-GS
+      1
+      7
+      (7 2)
+      8
+      (8 2)
+      3
+      4
+      NIL
+      EB-GS
+      2
+      (1 2)
+      (1 2)
+      5
+      5
+      6
+      (6 10)
+      0
+      (6 2)
+      9
+      9
+      10
+      (10 10)
+      21
+      21
+      (3)
+      (2)
+      :OK
+      NIL
+      T
+  - name: eval-establishes-restarts
+    source: |
+      (defun er-values (form) (multiple-value-list (eval form)))
+      (defun er-report (form)
+        (handler-case (eval form)
+          (error () :error)))
+      (print (eval '(restart-case (invoke-restart 'r) (r () 1))))
+      (print (eval '(restart-case (+ 1 2))))
+      (print (eval '(restart-case (+ 1 2) (r () 1))))
+      (print (er-values '(restart-case (values 1 2) (r () 1))))
+      (print (er-values '(restart-case (invoke-restart 'r 1 2) (r (a b) (values b a)))))
+      (print (eval '(restart-case (invoke-restart 'r 1) (r (a &optional b) (list a b)))))
+      (print (eval '(restart-case (invoke-restart 'r 1 2 3) (r (a &rest b) (list a b)))))
+      (print (eval '(restart-case (invoke-restart 's) (r () 1) (s () 2))))
+      (print (eval '(restart-case (restart-case (invoke-restart 'r) (s () 1)) (r () 2))))
+      (print (eval '(let ((x 1)) (restart-case (invoke-restart 'r) (r () (setq x 2))) x)))
+      (print (eval '(handler-bind ((error (lambda (c) (invoke-restart 'r 7)))) (restart-case (error "boom") (r (v) (+ v 1))))))
+      (print (eval '(handler-bind ((error (lambda (c) (invoke-restart 'r)))) (restart-case (progn (error "boom") 1) (r () :report "go on" 2)))))
+      (print (eval '(progn (restart-case 1 (gone () nil)) (find-restart 'gone))))
+      (print (eval '(restart-case (restart-name (find-restart 'r)) (r () 1))))
+      (print (er-report '(invoke-restart 'gone)))
+      (print (eval '(let ((hit nil)) (restart-bind ((p (lambda (v) (setq hit v) 5))) (list (invoke-restart 'p 9) hit)))))
+      (print (eval '(restart-bind ((p (lambda () 1) :report-function (lambda (s) (princ "rep" s)))) (restart-name (find-restart 'p)))))
+      (print (eval '(progn (restart-bind ((p (lambda () 1))) 1) (find-restart 'p))))
+      (print (er-values '(with-simple-restart (w "x") (invoke-restart 'w) 1)))
+      (print (er-values '(with-simple-restart (w "x") 1)))
+      (print (er-values '(with-simple-restart (w "x ~a" 1) (invoke-restart 'w))))
+      (print (er-values '(handler-bind ((error (lambda (c) (invoke-restart 'w)))) (with-simple-restart (w "x") (error "boom") 1))))
+      (print (eval '(block b (restart-case (return-from b 1) (r () 2)))))
+      (print (eval '(catch 'a (restart-case (throw 'a 1) (r () 2)))))
+      (print (eval '(let ((n 0)) (restart-case (unwind-protect (invoke-restart 'r) (setq n 1)) (r () (list :r n))))))
+      (print (eval '(macrolet ((rr (x) `(restart-case (invoke-restart 'r ,x) (r (v) v)))) (rr 3))))
+      (print (eval '(symbol-macrolet ((s 3)) (restart-case (invoke-restart 'r s) (r (v) (+ v s))))))
+      (print (eval '(loop for i in '(1 2) collect (restart-case (invoke-restart 'r i) (r (v) (* v 2))))))
+    expected: |
+      1
+      3
+      3
+      (1 2)
+      (2 1)
+      (1 NIL)
+      (1 (2 3))
+      2
+      2
+      2
+      8
+      2
+      NIL
+      R
+      :ERROR
+      (5 9)
+      P
+      NIL
+      (NIL T)
+      (1)
+      (NIL T)
+      (NIL T)
+      1
+      1
+      (:R 1)
+      3
+      6
+      (2 4)
   - name: eval-binds-specials-by-name-and-answers-its-own-values
     source: |
       (defvar *em-s* 1)
@@ -35034,12 +35375,32 @@ standalone:
       (print (eval '(let ((h (make-hash-table))) (incf (gethash 1 h 0)) (gethash 1 h))))
       (print (eval `(block b (return-from b ,(+ 1 1)))))
       (print (funcall (compile nil '(lambda () (let* ((a 1) (b a)) (dotimes (i 2 b)))))))
+      (print (eval '(loop for x across (vector 1 2) collect x)))
+      (print (eval '(loop for s being the external-symbols of "COMMON-LISP" thereis (eq s 'car))))
+      (print (eval '(loop for s being the present-symbols of "COMMON-LISP" thereis (eq s 'car))))
+      (print (eval (list 'loop 'for 'x 'in ''(1 2) 'collect 'x)))
+      (print (eval '(restart-case (invoke-restart 'r) (r () 1))))
+      (print (multiple-value-list (eval '(with-simple-restart (w "x ~a" 1) (invoke-restart 'w)))))
+      (defclass em-wa () ((x :initform 1 :accessor em-wa-x)))
+      (setq em-wa (make-instance 'em-wa))
+      (print (eval '(with-slots (x) em-wa (setf x 2) x)))
+      (print (eval '(with-accessors ((a em-wa-x)) em-wa (setf a 3) a)))
+      (print (eval '(macrolet ((m () 1)) (m))))
     stdout: |
       1
       I
       1
       1
       2
+      1
+      (1 2)
+      T
+      T
+      (1 2)
+      1
+      (NIL T)
+      2
+      3
       1
   - name: eval-reaches-every-standard-name-from-a-form-read-at-run-time
     source: |
@@ -35059,6 +35420,10 @@ standalone:
       (print (rd "*package*"))
       (print (handler-case (rd "ev-no-such-var") (unbound-variable (c) (cell-error-name c))))
       (print (handler-case (rd "(no-such-fn)") (undefined-function (c) (cell-error-name c))))
+      (print (rd "(loop for x in '(1 2) collect x)"))
+      (print (rd "(macrolet ((m () 1)) (m))"))
+      (print (rd "(symbol-macrolet ((m 1)) m)"))
+      (print (rd "(restart-case (invoke-restart 'r 1) (r (v) v))"))
     stdout: |
       T
       1.0
@@ -35074,6 +35439,10 @@ standalone:
       :CL-USER
       EV-NO-SUCH-VAR
       NO-SUCH-FN
+      (1 2)
+      1
+      1
+      1
   - name: a-standard-condition-a-program-signals-reports-with-no-control
     source: |
       ;; Standalone: the corpus's computed datums turn off the narrowing that decides,

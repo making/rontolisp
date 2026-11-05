@@ -12598,6 +12598,31 @@ public final class LispEvaluator {
 	 * identically. An {@code &environment} parameter (legal anywhere at the top level of
 	 * a macro lambda list) is stripped first; {@link #expandMacroCall} binds it.
 	 */
+	private static boolean spellsReturnFrom(List<LispVal> forms, LispSymbol name) {
+		for (LispVal form : forms) {
+			if (spellsReturnFrom(form, name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean spellsReturnFrom(LispVal form, LispSymbol name) {
+		if (form instanceof LispCons head && head.car() instanceof LispSymbol operator
+				&& LispNames.RETURN_FROM.equals(operator.name()) && head.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol target && target.name().equals(name.name())) {
+			return true;
+		}
+		LispVal cursor = form;
+		while (cursor instanceof LispCons cons) {
+			if (spellsReturnFrom(cons.car(), name)) {
+				return true;
+			}
+			cursor = cons.cdr();
+		}
+		return false;
+	}
+
 	private UserMacro makeUserMacro(String op, LispSymbol name, LispVal paramForm, List<LispVal> body,
 			Environment env) {
 		List<LispVal> paramList = paramForm instanceof LispCons paramCons ? paramCons.toList() : List.of();
@@ -12622,6 +12647,19 @@ public final class LispEvaluator {
 				strippedForm = new LispCons(stripped.get(i), strippedForm);
 			}
 			return makeUserMacro(op, name, strippedForm, body, env).withEnvironment(envVar);
+		}
+		// The body's implicit block, only for a body that leaves it: a block is a catch
+		// per expansion.
+		if (spellsReturnFrom(body, name)) {
+			List<LispVal> block = new ArrayList<>();
+			block.add(new LispSymbol(LispNames.BLOCK));
+			block.add(name);
+			block.addAll(body);
+			LispVal blockForm = LispNil.INSTANCE;
+			for (int i = block.size() - 1; i >= 0; i--) {
+				blockForm = new LispCons(block.get(i), blockForm);
+			}
+			body = List.of(blockForm);
 		}
 		// &whole var (first element, per CL; after the &environment strip so the two
 		// compose): bind var to the whole macro call form, (cons 'name args), and
