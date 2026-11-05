@@ -1870,6 +1870,12 @@ public final class LispEvaluator {
 			requireSingleArg(LispNames.OBJ_P, args);
 			return args.get(0) instanceof LispInstance ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
+		this.globalEnv.defineFunction(LispNames.PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL_QUALIFIED,
+				new LispFunction(LispNames.PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL_QUALIFIED, args -> {
+					requireSingleArg(LispNames.PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL, args);
+					return am.ik.rontolisp.FloatText.keepingDoubleSpelling(
+							() -> apply(resolveFunction(LispNames.PRIN1_TO_STRING), args, this.globalEnv));
+				}));
 		this.globalEnv.defineFunction(LispNames.EQUALP, new LispFunction(LispNames.EQUALP, args -> {
 			if (args.size() != 2) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, ClosRegistry

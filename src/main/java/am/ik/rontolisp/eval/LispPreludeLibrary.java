@@ -180,6 +180,9 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.DOUBLE_SPELLED_P_INTERNAL, """
 				(defun rontolisp::%double-spelled-p (value) (declare (ignore value)) nil)
 				""");
+		SOURCES.put(LispNames.PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL, """
+				(defun rontolisp::%prin1-keeping-float-spelling (object) (prin1-to-string object))
+				""");
 		// ldiff / sublis / gentemp -- the three list-and-symbol functions iterate's own
 		// source needs at LOAD time (expand-iterate splits a body's declarations with
 		// ldiff, defmacro-clause substitutes its template parameters with sublis, and a

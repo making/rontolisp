@@ -9,7 +9,8 @@ import org.jspecify.annotations.Nullable;
  * non-negative fixnum, and the combination masks a 64-bit mix back to one. Its compiler
  * types a float literal by whether it is a single or a double, and here every float is
  * both, so the literal's spelling decides: its reader keeps a {@code d} marker
- * ({@code interpret-token}, on its own client) and its typechecker asks first.
+ * ({@code interpret-token}, on its own client), its macros print it back
+ * ({@code print-form}), and its typechecker asks first.
  */
 final class CoaltonForms {
 
@@ -24,6 +25,8 @@ final class CoaltonForms {
 	private static final String HASH = "library/hash.lisp";
 
 	private static final String READER = "src/parser/reader.lisp";
+
+	private static final String MACRO_READER = "src/reader.lisp";
 
 	private static final String DEFINE = "src/typechecker/define.lisp";
 
@@ -66,6 +69,10 @@ final class CoaltonForms {
 			case HASH -> replace(componentFile, source, "#+ccl (cl:logand (cl:logxor lhs",
 					"#+(or ccl rontolisp) (cl:logand (cl:logxor lhs");
 			case READER -> replace(componentFile, source, CLIENT, CLIENT_AND_METHOD);
+			// Its macros print their forms and read the text again: the print keeps the
+			// spelling the read types a literal by.
+			case MACRO_READER -> replace(componentFile, source, "(prin1-to-string form)",
+					"(rontolisp::%prin1-keeping-float-spelling form)");
 			case DEFINE -> {
 				String expression = replace(componentFile, source, "(ratio        tc:*fraction-type*)" + SINGLE_ARM,
 						"(ratio        tc:*fraction-type*)" + SPELLED_ARM + SINGLE_ARM);

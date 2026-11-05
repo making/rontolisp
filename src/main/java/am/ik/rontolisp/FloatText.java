@@ -30,6 +30,47 @@ public final class FloatText {
 	}
 
 	/**
+	 * How many prints on this thread spell a float the reader marked as a double
+	 * ({@link LispDouble#doubleSpelled}) with its {@code d} marker: coalton prints a
+	 * macro's forms to read them again with its own reader, which types a literal by that
+	 * spelling (the interpreter's {@code rontolisp::%prin1-keeping-float-spelling}).
+	 */
+	private static final ThreadLocal<int[]> KEEPING_SPELLING = ThreadLocal.withInitial(() -> new int[1]);
+
+	/**
+	 * Runs a print that keeps the double spelling of the floats it prints.
+	 * @param <T> what the print answers
+	 * @param print the print
+	 * @return what it answered
+	 */
+	public static <T> T keepingDoubleSpelling(java.util.function.Supplier<T> print) {
+		int[] depth = KEEPING_SPELLING.get();
+		depth[0]++;
+		try {
+			return print.get();
+		}
+		finally {
+			depth[0]--;
+		}
+	}
+
+	/**
+	 * The text of a float as {@code prin1} prints it: {@link #doubleText}, with a
+	 * {@code d} exponent marker when it was spelled so and a print asked to keep that
+	 * ({@link #keepingDoubleSpelling}).
+	 * @param value the float
+	 * @return the printed text
+	 */
+	public static String text(LispDouble value) {
+		String text = doubleText(value.value());
+		if (!value.doubleSpelled() || KEEPING_SPELLING.get()[0] == 0 || !Double.isFinite(value.value())) {
+			return text;
+		}
+		int exponent = text.indexOf('e');
+		return exponent < 0 ? text + "d0" : text.substring(0, exponent) + "d" + text.substring(exponent + 1);
+	}
+
+	/**
 	 * The text of a single-float value (a packed single-float array element): shortest
 	 * round-trip digits for the f32 width, lowercase exponent marker.
 	 * @param value the value

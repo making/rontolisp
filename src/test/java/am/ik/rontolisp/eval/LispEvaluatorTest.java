@@ -133,6 +133,15 @@ class LispEvaluatorTest {
 				      (rontolisp::%double-spelled-p (rontolisp::%double-spelled 1.0))
 				      (eql 1.0 1d0) (equalp 1.0 1d0) (typep 1d0 'single-float))
 				""").print()).isEqualTo("((NIL T NIL T NIL T) T T T T)");
+		// coalton's macros print their forms and read them again: that print keeps the
+		// spelling, every other prints the one float.
+		assertThat(eval("""
+				(let ((form '(f 2.0d0 3.0 1.5d10 (x . 4.0d0) #(1d0))))
+				  (list (rontolisp::%prin1-keeping-float-spelling form) (prin1-to-string form)
+				        (rontolisp::%double-spelled-p
+				          (second (read-from-string (rontolisp::%prin1-keeping-float-spelling form))))))
+				""").print())
+			.isEqualTo("(\"(F 2.0d0 3.0 1.5d10 (X . 4.0d0) #(1.0d0))\" \"(F 2.0 3.0 1.5e10 (X . 4.0) #(1.0))\" T)");
 	}
 
 	@Test

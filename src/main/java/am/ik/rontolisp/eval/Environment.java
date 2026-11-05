@@ -9597,7 +9597,7 @@ public final class Environment implements Scope {
 			return Long.toString(i.value());
 		}
 		if (val instanceof LispDouble d) {
-			return FloatText.doubleText(d.value());
+			return FloatText.text(d);
 		}
 		return val.display();
 	}
@@ -9611,7 +9611,7 @@ public final class Environment implements Scope {
 			return Long.toString(i.value());
 		}
 		if (val instanceof LispDouble d) {
-			return FloatText.doubleText(d.value());
+			return FloatText.text(d);
 		}
 		return val.print();
 	}

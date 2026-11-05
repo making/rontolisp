@@ -8413,6 +8413,18 @@ public final class LispNames {
 	/** The canonical spelling of {@code rontolisp::%double-spelled}. */
 	public static final String DOUBLE_SPELLED_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + DOUBLE_SPELLED_INTERNAL;
 
+	/**
+	 * The internal {@code rontolisp::%prin1-keeping-float-spelling}:
+	 * {@code prin1-to-string} spelling a float a {@code d} marker spelled with one
+	 * ({@code FloatText.text}), so a read of the text answers the same spelling; the
+	 * compile paths' definition is {@code prin1-to-string}.
+	 */
+	public static final String PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL = "%PRIN1-KEEPING-FLOAT-SPELLING";
+
+	/** The canonical spelling of {@code rontolisp::%prin1-keeping-float-spelling}. */
+	public static final String PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
+			+ PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL;
+
 	/** The internal {@code rontolisp::%double-spelled-p} predicate over any value. */
 	public static final String DOUBLE_SPELLED_P_INTERNAL = "%DOUBLE-SPELLED-P";
 

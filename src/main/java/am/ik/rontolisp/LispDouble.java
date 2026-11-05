@@ -23,7 +23,7 @@ public record LispDouble(double value, boolean doubleSpelled) implements LispVal
 
 	@Override
 	public String print() {
-		return FloatText.doubleText(this.value);
+		return FloatText.text(this);
 	}
 
 	/**

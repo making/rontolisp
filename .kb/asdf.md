@@ -926,9 +926,12 @@ and the 64-bit mix is masked back to one. In `coalton-compiler`, a float literal
 `F32` for every literal here, where every float is both, so `(* 3.0d0 r)` over an `F64` was a type mismatch. The
 spelling decides instead, as SBCL's two float types do: the reader keeps a `d`/`l` marker on the value
 (`LispDouble.doubleSpelled`, `LispLexer` for the host reader, an `interpret-token :around` method on coalton's own
-eclector client for its reader), and an arm ahead of the two asks `rontolisp::%double-spelled-p`. Nothing else
-reads the mark: `eql`, printing and every backend's arithmetic see one float; the compile paths' prelude
-definitions answer nil. Rejected: typing a literal by its expected type (wrong for `(+ 1.0d0 x)` with the
+eclector client for its reader), and an arm ahead of the two asks `rontolisp::%double-spelled-p`. coalton's
+`coalton`/`coalton-toplevel` MACROS print their forms and read the text again (`print-form` in `src/reader.lisp`,
+for source positions), so that print is `rontolisp::%prin1-keeping-float-spelling`: `prin1-to-string` with a
+marked float spelled `2.0d0` (`FloatText.keepingDoubleSpelling`). Nothing else reads the mark: `eql`, every other
+print and every backend's arithmetic see one float; the compile paths' prelude definitions answer nil and plain
+`prin1-to-string`. Rejected: typing a literal by its expected type (wrong for `(+ 1.0d0 x)` with the
 literal first) and making F32 and F64 unify (an instance on one would be found for the other).
 
 **`eval/ClReexportForms`** (pinned by `ClReexportE2eTest`, all four, SBCL 2.2.9's answers). clingon's

@@ -1,11 +1,11 @@
 # i74. `t` and `nil` read in a package that does not use `cl` are `cl`'s
 
-Difficulty: Medium
+Difficulty: High
 
-Found 2026-11-05 running a coalton program (`.todo/i58`): `(let t = (hashtable:new))` in a package using coalton and
-not `cl` stops on `unknown pattern literal`. SBCL 2.2.9 reads a bare `t` or `nil` there as the package's own symbol,
-as it reads `car` (`.kb/packages.md`, "A package that does not read a standard name as `cl`'s"); here
-`LispReader.readSymbol` answers `LispTrue`/`LispNil` for the names before the resolver sees them.
+Found 2026-11-05 running coalton programs (`.todo/i58`). SBCL 2.2.9 reads a bare `t` or `nil` in a package that
+does not inherit `cl`'s as that package's own symbol (or the one it inherits), as it reads `car` (`.kb/packages.md`,
+"A package that does not read a standard name as `cl`'s"); here `LispReader.readSymbol` answers `LispTrue`/`LispNil`
+for the names before any package is consulted.
 
 ```lisp
 (defpackage :tnil-c (:use))
@@ -16,8 +16,11 @@ as it reads `car` (`.kb/packages.md`, "A package that does not read a standard n
 (cl:let ((t 1)) (cl:print t))   ; SBCL 1, here a type error
 ```
 
-- A package exporting its own `nil` (coalton's `Nil` constructor) is the same case: a bare `Nil` reads as
-  `cl:nil` and `coalton:Nil` as `COALTON:NIL`, two values for one symbol. coalton's library loads because it
-  only ever spells it bare.
-- Reads before the resolver (a `.asd`'s data parse, `FeaturePushes`) rely on `nil` being `LispNil`.
+- What it breaks: a coalton program read without coalton's readtable (its docs call the `in-readtable`
+  optional). `Nil` is `coalton:Nil`, the list constructor, and reads as `cl:nil`: `unexpected nil or ()` from
+  coalton's parser; `(let t = ...)` is `unknown pattern literal`. Under `(named-readtables:in-readtable
+  coalton:coalton)` eclector finds the symbols itself and both work; the library always reads that way.
+- The decision needs the package the token is read in. The interpreter knows it form by form; the compile paths
+  resolve packages in a pass after the read, and passes before that pass test raw `nil`s as `LispNil`
+  (`.asd` data, `FeaturePushes`, the top-level scans). `()` stays `cl:nil` everywhere.
 - Verified means coalton's load again (an hour, `.kb/asdf.md`) beside the four backends.

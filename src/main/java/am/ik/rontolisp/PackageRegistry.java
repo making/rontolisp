@@ -1137,6 +1137,7 @@ public final class PackageRegistry {
 		// Internal: a float's spelling, spelled rontolisp::%... by coalton's rewrite.
 		rontolispSymbols.add(LispNames.DOUBLE_SPELLED_INTERNAL);
 		rontolispSymbols.add(LispNames.DOUBLE_SPELLED_P_INTERNAL);
+		rontolispSymbols.add(LispNames.PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL);
 		// Internal: the interpreter's SWANK server hook behind the swank shim's
 		// create-server / stop-server, spelled rontolisp::%swank-* by its call sites.
 		rontolispSymbols.add(LispNames.SWANK_LISTEN);
