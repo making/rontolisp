@@ -31,6 +31,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.SplicedComponentGroups;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.ReadSyntax;
 
 /**
@@ -69,10 +70,18 @@ public final class ReadTimeImage {
 	private static final Pattern SET_DISPATCH = Pattern
 		.compile("(?i)set-dispatch-macro-character(?:\\s+#\\\\#\\s+#\\\\([^\\s()]+))?");
 
-	private final UserMacroExpander.Session session = new UserMacroExpander.Session(true);
+	private final UserMacroExpander.Session session;
 
 	/** How many forms of the program being read the session has processed. */
 	private int fed;
+
+	/**
+	 * An image for one program's read.
+	 * @param features the feature set the program is read with
+	 */
+	public ReadTimeImage(Features features) {
+		this.session = new UserMacroExpander.Session(true, features);
+	}
 
 	/**
 	 * Whether a Common Lisp source can change how source reads: it sets a macro or

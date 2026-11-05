@@ -1901,22 +1901,35 @@ class RontoLispCliTest {
 		// The read is the frontend's, which every backend shares, so the flag selects
 		// the same branch in a compiled artifact -- and the program's *features* is
 		// seeded from the set it was READ with, target features and declared ones alike.
+		// A macro asks the compile-time *features*, as it does on the interpreter, and so
+		// does a push the program computes, which decides the read of the form after it.
 		Path program = this.tempDir.resolve("app.lisp");
 		Files.writeString(program, """
 				(princ #+sbcl "sbcl-branch" #-sbcl "portable-branch")
 				(terpri)
 				(princ (if (member :sbcl *features*) "declared" "absent"))
 				(terpri)
+				(defmacro asks-features ()
+				  (if (member :sbcl *features*) "macro-declared" "macro-absent"))
+				(princ (asks-features))
+				(terpri)
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (when (member :sbcl *features*) (pushnew :computed *features*)))
+				(princ #+computed "pushed-branch" #-computed "unpushed-branch")
+				(terpri)
 				""");
+		String expected = "sbcl-branch\ndeclared\nmacro-declared\npushed-branch\n";
+		assertThat(runCli("", program.toString(), "--feature", "sbcl")).isEqualTo(expected);
 		Path jar = this.tempDir.resolve("app.jar");
 		runCli("", program.toString(), "-o", jar.toString(), "--feature", "sbcl");
-		assertThat(runJar(jar)).isEqualTo("sbcl-branch\ndeclared\n");
+		assertThat(runJar(jar)).isEqualTo(expected);
 		// And on the WASM backend, which no test here runs: the branch it kept is the
 		// one whose string constant travels.
 		Path wasm = this.tempDir.resolve("app.wasm");
 		runCli("", program.toString(), "-o", wasm.toString(), "--feature", "sbcl");
 		String bytes = new String(Files.readAllBytes(wasm), StandardCharsets.ISO_8859_1);
-		assertThat(bytes).contains("sbcl-branch").doesNotContain("portable-branch");
+		assertThat(bytes).contains("sbcl-branch", "macro-declared", "pushed-branch")
+			.doesNotContain("portable-branch", "macro-absent", "unpushed-branch");
 	}
 
 	@Test

@@ -246,6 +246,20 @@ public final class Features {
 	}
 
 	/**
+	 * Returns the names no target claims: what {@code --feature} added over a target's
+	 * set. The target's own are the interpreter's names and its {@code rontolisp-*} ones,
+	 * which that option refuses. The compile-time evaluator's {@code *features*} starts
+	 * at the interpreter's set plus these, whatever the target.
+	 * @return the declared feature names
+	 */
+	public List<String> declaredNames() {
+		return this.names.stream()
+			.filter(name -> !INTERPRETER.contains(name)
+					&& !name.toLowerCase(java.util.Locale.ROOT).startsWith("rontolisp"))
+			.toList();
+	}
+
+	/**
 	 * Spells this set as strings, for a {@code %read-time-feature} marker to carry the
 	 * set its deferred guard is tested against; {@link #decode} reads it back.
 	 * @return the kind of set, then its names

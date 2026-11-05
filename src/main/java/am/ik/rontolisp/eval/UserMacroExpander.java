@@ -64,6 +64,18 @@ public final class UserMacroExpander {
 	 * @return the program with macro definitions consumed and macro calls expanded
 	 */
 	public static List<LispVal> expand(List<LispVal> program, @Nullable LispVal programHead) {
+		return expand(program, programHead, Features.INTERPRETER);
+	}
+
+	/**
+	 * Expands user macros like {@link #expand(List, LispVal)}, with what the command line
+	 * declared in the macro-time {@code *features*}, as on the interpreter.
+	 * @param program the top-level forms
+	 * @param programHead the program's own first form before any splice, or null
+	 * @param features the feature set the program was read with
+	 * @return the program with macro definitions consumed and macro calls expanded
+	 */
+	public static List<LispVal> expand(List<LispVal> program, @Nullable LispVal programHead, Features features) {
 		// Splice top-level (progn ...)/(eval-when ...) first so a defmacro nested in
 		// the (eval-when (:compile-toplevel ...) (defmacro ...)) idiom is seen (and
 		// nested defuns become top-level for the compilers' Pass 1). The members an
@@ -94,7 +106,7 @@ public final class UserMacroExpander {
 				&& program.stream().noneMatch(UserMacroExpander::isMetaclassDefclass) && !asksWhatWasRead) {
 			return program;
 		}
-		Session session = new Session(false);
+		Session session = new Session(false, features);
 		// The walk resolves a flattened form at a time: one program to the labels in it.
 		session.macroEval.holdResolverDatumCopies();
 		// The forms in front of the program's own first form are the libraries the
@@ -209,8 +221,9 @@ public final class UserMacroExpander {
 		 * @param shallow whether it expands top-level macro calls only and emits and
 		 * prints nothing ({@link ReadTimeImage})
 		 */
-		Session(boolean shallow) {
+		Session(boolean shallow, Features features) {
 			this.shallow = shallow;
+			this.macroEval.setDeclaredFeatures(features.declaredNames());
 			this.macroEval.setMopEvalSpliceSink(this.mopSplice);
 			this.macroEval.setCompiledTemplateSink(this.templateCaptures);
 		}

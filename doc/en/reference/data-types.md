@@ -148,7 +148,8 @@ And **you** may declare features on the command line: `--feature NAME`
 (comma-separated, repeatable) widens the set every source of the run is read
 with — the entry file, the files it `load`s, the ASDF systems loaded under it —
 and seeds `*features*` with the same names, so a `(member :sbcl *features*)`
-and the `#+sbcl` beside it cannot disagree.
+and the `#+sbcl` beside it cannot disagree. That holds for a macro asking while
+the program compiles, too.
 
 ```bash
 rontolisp app.lisp --feature sbcl

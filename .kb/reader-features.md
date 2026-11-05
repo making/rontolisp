@@ -88,7 +88,10 @@ Three callers; nothing may switch a backend feature off and claim to be that bac
    `JvmSourceCompiler.features(...)`. Pinned by
    `RontoLispCliTest.declaredFeaturesAreParsedLikeDistsAndRefuseTheBuildsOwnNames`,
    `.aDeclaredFeatureReachesTheReadTheLoadedFileAndTheRuntimeFeaturesList`,
-   `.aDeclaredFeatureReachesTheCompiledBackendsToo`.
+   `.aDeclaredFeatureReachesTheCompiledBackendsToo`. On a compile path the macro-time evaluator holds the names too
+  (`Features.declaredNames`, `UserMacroExpander.Session`), so a macro's `(member :F *features*)` and a computed push answer
+  as on the interpreter; both answered "absent" until 2026-11-05. Only the declared names: its `*features*` otherwise stays
+  the interpreter's set, whatever the target.
 3. A source's own feature push -- `FeaturePushes`, below.
 
 ## A RUNTIME read tests the live `*features*` (interpreter)
