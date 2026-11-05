@@ -141,6 +141,16 @@ final class WasmExportCompiler {
 	}
 
 	/**
+	 * {@return whether this export is the one a Proxy-Wasm host tells a module's ABI by}
+	 * Every version of the ABI names it
+	 * {@code proxy_abi_version_<major>_<minor>_<patch>}.
+	 * @param decl the export
+	 */
+	static boolean isProxyWasmAbiVersion(Decl decl) {
+		return decl.exportName().startsWith("proxy_abi_version_");
+	}
+
+	/**
 	 * Parses a {@code (rontolisp:wasm-export 'name :as "alias" :params '(...) :returns
 	 * ...)} directive (in the canonical post-resolution shape
 	 * {@code (rontolisp:wasm-export (quote name) :as "alias" :params (quote (...))

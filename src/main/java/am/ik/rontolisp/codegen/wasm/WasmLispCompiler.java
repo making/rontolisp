@@ -5322,12 +5322,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// loaded. The heap never shrinks, so this single allocation permanently buys
 		// headroom instead. A SERVE component pays this per INSTANCE, not per process
 		// (the host retires an instance every N requests), so it pre-grows a smaller
-		// heap. See .kb/wasm-gc-heap-pregrow.md.
-		startWriter.write(Instruction.I32_CONST);
-		startWriter.writeSignedLeb128(gcHeapPregrowBytes(userFunctionBodies));
-		startWriter.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		startWriter.writeUnsignedLeb128(TYPE_STR_BYTES);
-		startWriter.write(Instruction.DROP);
+		// heap. A Proxy-Wasm filter pre-grows nothing: its hosts do not run that
+		// collector, and the array costs them memory. See .kb/wasm-gc-heap-pregrow.md.
+		if (exportDecls.stream().noneMatch(WasmExportCompiler::isProxyWasmAbiVersion)) {
+			startWriter.write(Instruction.I32_CONST);
+			startWriter.writeSignedLeb128(gcHeapPregrowBytes(userFunctionBodies));
+			startWriter.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+			startWriter.writeUnsignedLeb128(TYPE_STR_BYTES);
+			startWriter.write(Instruction.DROP);
+		}
 
 		// --reentrant with dynamically-bound specials: the LOAD PATH binds against a
 		// task record too (a top-level let of a special), so seed one before any user
