@@ -122,10 +122,9 @@ body), but its `~:^`/`~@^` variants and prefix parameters are not. Further notes
 - The repeat count of `~%`/`~&`/`~~` must be a literal or `#` (a runtime `v` count
   there is not supported). `~&` decides whether to emit a newline from the actual
   output column for destination `t` and, where it opens the control string, for
-  a string stream or a string with a fill pointer too. Elsewhere it decides from
+  any other stream and a string with a fill pointer too. Elsewhere it decides from
   the surrounding literal text (a static approximation), and so inside composite
-  (`~(`/`~[`/`~{`) bodies: a file stream and `*error-output*` have no column to
-  read, so a `~&` that opens the control writes nothing to them.
+  (`~(`/`~[`/`~{`) bodies.
 - Composite directives nest freely: a `~[` conditional may hold another `~[` (or
   a `~{ ... ~}` iteration) in any of its clauses. When a runtime-selected `~[`
   has clauses that consume DIFFERENT numbers of arguments, the rest of the

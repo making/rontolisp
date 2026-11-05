@@ -25,7 +25,7 @@
 | `prin1` | `(prin1 42)` | `print` と同様ですが改行なし |
 | `princ` | `(princ "hello")` | 引用符なし・改行なしで印字します |
 | `terpri` | `(terpri)` | 改行のみを印字します |
-| `fresh-line` | `(fresh-line)` | 標準出力がまだ行頭にない場合のみ改行を印字します。nilを返します |
+| `fresh-line` | `(fresh-line)` | ストリーム (省略時は標準出力) がまだ行頭にない場合のみ改行を印字します。印字したときは `t` を、それ以外は nil を返します |
 | `princ-to-string` | `(princ-to-string '(1 "x"))` | `"(1 x)"` -- `princ` が印字する文字列 |
 | `prin1-to-string` | `(prin1-to-string "abc")` | `"\"abc\""` -- `prin1` が印字する文字列(読み戻し可能な形式) |
 | `write` | `(write "hi" :escape nil)` | `hi` を印字します。各キーワードはその 1 回の出力のあいだ対応する印字制御変数を束縛します |
@@ -410,6 +410,7 @@
 | `array-has-fill-pointer-p` | `(array-has-fill-pointer-p a)` | 配列がフィルポインタを持てば `t`、そうでなければ `nil` |
 | `adjustable-array-p` | `(adjustable-array-p a)` | 配列が `:adjustable` で作成されていれば `t`、そうでなければ `nil` |
 | `array-element-type` | `(array-element-type a)` | アップグレード後の要素型。アップグレード先がなければ `t` |
+| `upgraded-array-element-type` | `(upgraded-array-element-type 'bit)` | その `:element-type` で作った配列の要素型 |
 | `vector-push` | `(vector-push x v)` | フィルポインタの位置に `x` を格納しインデックスを返す。満杯なら `nil` |
 | `vector-pop` | `(vector-pop v)` | フィルポインタをデクリメントし、通過した要素を返す |
 | `vector-push-extend` | `(vector-push-extend x v &optional ext)` | `vector-push` と同様だが満杯時にベクタを拡張する |
@@ -477,6 +478,8 @@
 | `compute-restarts` | `(compute-restarts)` | アクティブなすべてのリスタートレコードを最内から順に返します |
 | `restart-name` | `(restart-name r)` | リスタートオブジェクトの名前 |
 | `muffle-warning` | `(muffle-warning w)` | `warn` が確立する `muffle-warning` リスタートを起動し、印字される前に警告を中止します |
+| `invalid-method-error` | `(invalid-method-error method "bad ~A" x)` | メソッドコンビネーションの form から、メソッドを拒むエラーをシグナルします |
+| `method-combination-error` | `(method-combination-error "bad ~A" x)` | メソッドコンビネーションの form から、メソッド全体を拒むエラーをシグナルします |
 | `abort` | `(abort)` | 最内の `abort` リスタートを起動します。アクティブなものがなければエラー |
 | `continue` | `(continue)` | 最内の `continue` リスタート(`cerror` のもの)を起動します。アクティブなものがなければ `nil` |
 | `use-value` | `(use-value v)` | 最内の `use-value` リスタートを値を渡して起動します。アクティブなものがなければ `nil` |

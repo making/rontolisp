@@ -20,9 +20,12 @@
   (declare (ignore lambda-list body))
   `(quote ,decl-name))
 
-;; Always nil: declaim/proclaim are no-ops, so no declaration is ever in
-;; effect. trivia level2's match2*+ falls back to its *optimizer* special on
-;; the nil answer -- exactly the trivia.trivial (:trivial optimizer) route.
+;; Nil but for optimize: declaim/proclaim are no-ops, so no declaration is ever
+;; in effect and every quality has its default. trivia level2's match2*+ falls
+;; back to its *optimizer* special on the nil answer -- exactly the
+;; trivia.trivial (:trivial optimizer) route.
 (defun trivial-cltl2:declaration-information (decl-name &optional env)
-  (declare (ignore decl-name env))
-  nil)
+  (declare (ignore env))
+  (if (eq decl-name 'optimize)
+      '((speed 1) (safety 1) (debug 1) (space 1) (compilation-speed 1))
+      nil))

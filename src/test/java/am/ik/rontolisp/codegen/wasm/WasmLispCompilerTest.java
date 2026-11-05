@@ -1103,6 +1103,28 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void onlyAModuleThatCanAskALineStartKeepsThem() {
+		// A compiled _fresh_line_stream call allocates the table's global, and that is
+		// what gives the writes their bookkeeping. Standard output's own flag needs none,
+		// and a statement's answer keeps nothing of the symbol t.
+		int writes = globalCount(compileUnshaken("(defun f (s) (format s \"x\")) (print #'f)"));
+		assertThat(globalCount(compileUnshaken("(defun f (s) (format s \"~&x\")) (print #'f)"))).isEqualTo(writes + 1);
+		assertThat(globalCount(compileUnshaken("(defun f (s) (format s \"x\") (fresh-line s)) (print #'f)")))
+			.isEqualTo(writes + 1);
+		assertThat(globalCount(compileUnshaken("(defun f (s) (format s \"x\") (fresh-line)) (print #'f)")))
+			.isEqualTo(writes);
+		assertThat(functionCount(compile("(princ \"x\") (fresh-line)")))
+			.isEqualTo(functionCount(compile("(princ \"x\")")));
+		assertThat(functionCount(compile("(princ \"x\") (print (fresh-line))")))
+			.isGreaterThan(functionCount(compile("(princ \"x\") (print nil)")));
+	}
+
+	// The number of entries in the global section (id 6).
+	private static int globalCount(byte[] module) {
+		return readUleb(section(module, 6), new int[] { 0 });
+	}
+
+	@Test
 	void theP1StreamBlockRidesOnlyAStreamCreatingModule() {
 		// TYPE_P1_STREAM and the two _p1_stream_* runtime functions are emitted exactly
 		// when the program names rontolisp::%stream-new -- their one producer -- so every

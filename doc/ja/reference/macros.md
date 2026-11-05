@@ -78,6 +78,7 @@
 | `prog*` | `(prog* ((v init)...) tag-or-form...)` | `prog` と同様で束縛が逐次的(`let*` 方式) |
 | `shiftf` | `(shiftf a b 9)` | 場所の値を左へシフトし、最後の場所に新しい値を格納し、最初の場所の古い値を返します |
 | `load-time-value` | `(load-time-value form)` | `form` をソース中の出現ごとに一度だけ評価します(初回使用時に遅延評価)。使用のたびではありません |
+| `define-method-combination` | `(define-method-combination name lambda-list (group...) form...)`, `(define-method-combination name :operator op)` | `(:method-combination name ...)` で選ぶメソッドコンビネーションを、実効メソッドを計算する form か、メソッドに適用する演算子で定義します |
 | `define-compiler-macro` | `(define-compiler-macro name (params...) body...)` | `name` の呼び出しをコンパイル時に書き換えます。`&whole` フォームを返すと辞退します。ヒントであり、本体がシグナルした場合・`name` が標準演算子の場合・`apply`/`funcall` 経由の場合は無視されます |
 | `typep` | `(typep x '(unsigned-byte 8))` | `typecase` の指定子集合に対する型判定。指定子はリテラル(クオートされた)型に限られます |
 | `slot-boundp` | `(slot-boundp obj 'slot)` | スロットが値を保持しているか: 未知のスロット、`:initform` なしで書かれ値も与えられていないスロット、`slot-makunbound` で空にしたスロットは `nil` |

@@ -88,8 +88,8 @@ class PackageRegistryTest {
 		// the library pruner's reference scan does not see it as resolvable.
 		assertThat(PackageRegistry.clExportedOnlyNames()).isNotEmpty()
 			.allSatisfy(name -> assertThat(PackageRegistry.isClSymbol(name)).isFalse());
-		assertThat(PackageRegistry.isClMemberName("INVALID-METHOD-ERROR")).isTrue();
-		assertThat(PackageRegistry.isClSymbol("INVALID-METHOD-ERROR")).isFalse();
+		assertThat(PackageRegistry.isClMemberName("FUNCTION-KEYWORDS")).isTrue();
+		assertThat(PackageRegistry.isClSymbol("FUNCTION-KEYWORDS")).isFalse();
 		assertThat(PackageRegistry.isClMemberName("CAR")).isTrue();
 		assertThat(PackageRegistry.isClMemberName("NO-SUCH-NAME")).isFalse();
 	}

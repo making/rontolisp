@@ -16104,6 +16104,27 @@ cases:
       (T T T T (NIL :INHERITED))
       NIL
       (A 1)
+  - name: macroexpand-of-iteration-answers-standard-operators
+    source: |
+      ;; A code walker (arnesi's) knows block and tagbody and has to meet the block a
+      ;; return leaves. What it emits runs. SBCL 2.2.9 has the same operators at those
+      ;; positions.
+      (defmacro meso-emit (form) (macroexpand-1 form))
+      (print (list (car (macroexpand-1 '(dolist (x '(1)) x)))
+                   (car (macroexpand-1 '(do ((x 0 (1+ x))) ((> x 0)) x)))
+                   (car (macroexpand-1 '(do* ((x 0 (1+ x))) ((> x 0)) x)))
+                   (car (macroexpand-1 '(prog ((x 1)) (return x))))))
+      (print (list (meso-emit (dolist (x '(1 2 3) :end) (when (= x 2) (return x))))
+                   (meso-emit (dolist (x '(1 2 3) :end) x))
+                   (meso-emit (dotimes (x 3 x) x))
+                   (meso-emit (do ((x 0 (1+ x)) (sum 0 (+ sum x))) ((> x 2) sum)))
+                   (meso-emit (do* ((x 0 (1+ x))) ((> x 2) x) (when (= x 1) (return :one))))
+                   (meso-emit (loop for x in '(1 2 3) when (= x 2) do (return x)))
+                   (meso-emit (loop for x in '(1 2 3) collect (* x x)))
+                   (meso-emit (prog ((x 1)) (setq x 2) (return x)))))
+    expected: |
+      (BLOCK BLOCK BLOCK BLOCK)
+      (2 :END 3 3 :ONE 2 (1 4 9) 2)
   - name: macro-function-and-special-operator-p
     source: |
       ;; Every operator with no function value is EITHER a special operator OR a
@@ -18456,8 +18477,7 @@ cases:
         (clear-output gow-s)
         (print (slot-value gow-s 'gow-acc)))
       ; A broadcast stream is prelude Lisp over the same protocol, so it gained
-      ; the line operators for free. It tracks no column, so fresh-line on one
-      ; always breaks the line.
+      ; the line operators for free, and fresh-line on one asks its component.
       (print (with-output-to-string (gow-o)
                (let ((gow-b (make-broadcast-stream gow-o)))
                  (princ "a" gow-b)
@@ -20410,14 +20430,14 @@ cases:
       ;; princ after a write-byte may not overtake it on any backend.
       (princ "|")
       (write-byte 10 t)
-      ;; A raw octet moves the standard-output COLUMN exactly like a character
-      ;; does, so fresh-line after a written newline adds nothing -- the one
-      ;; place the byte path has to agree with the character path's bookkeeping.
+      ;; A raw octet moves no column, as on every stream of SBCL 2.2.9: the line the
+      ;; princ left open is open, so fresh-line writes past the octet's newline.
       (fresh-line)
       ;; The value is the byte, as CL says (so "A" from the write, then 65).
       (print (write-byte 65 t))
     expected: |
       >>binary<|
+
       A65
 
   - name: first-class-print-family-stream-argument
@@ -21319,6 +21339,19 @@ cases:
       NIL
       (FCM-AGAIN 2)
       NIL
+  - name: upgraded-array-element-type-answers-what-make-array-holds
+    source: |
+      ;; Over the types whose answer agrees with SBCL 2.2.9, whose answer for the others
+      ;; (fixnum, single-float) keeps more than this array model does.
+      (print (mapcar #'upgraded-array-element-type
+                     '(character bit t (unsigned-byte 8) (unsigned-byte 16) (unsigned-byte 32))))
+      (print (mapcar (lambda (type)
+                       (equal (upgraded-array-element-type type)
+                              (array-element-type (make-array 1 :element-type type))))
+                     '(fixnum double-float single-float symbol (integer 0 3) (signed-byte 8) string)))
+    expected: |
+      (CHARACTER BIT T (UNSIGNED-BYTE 8) (UNSIGNED-BYTE 16) (UNSIGNED-BYTE 32))
+      (T T T T T T T)
   - name: read-preserving-whitespace-leaves-the-terminator
     source: |
       ;; read takes the whitespace ending a datum, read-preserving-whitespace leaves it,
@@ -21338,6 +21371,164 @@ cases:
       (12 #\3 4)
       (AB #\Space CD)
       (:EOF :SIGNALED)
+  - name: define-method-combination-long-and-short-forms
+    source: |
+      ;; define-method-combination: McCLIM's values-max-min with :around, :before and
+      ;; :after around the primaries, a required group left empty as the call's error,
+      ;; a predicate selecting integer qualifiers with method-qualifiers ordering them,
+      ;; several qualifiers and a * pattern, :arguments, the short form, and standard
+      ;; written out. SBCL 2.2.9 agrees.
+      (define-method-combination dmc-values-max-min (&optional (order ':most-specific-first))
+        ((around (:around))
+         (before (:before))
+         (after (:after))
+         (primary (dmc-values-max-min) :order order :required t))
+        (flet ((call-methods (methods)
+                 (mapcar (lambda (m) `(call-method ,m)) methods))
+               (call-vmm-methods (methods)
+                 `(multiple-value-bind (max min)
+                      (call-method ,(first methods))
+                    (progn
+                      ,@(loop for m in (rest methods)
+                              collect `(multiple-value-bind (mmax mmin)
+                                           (call-method ,m)
+                                         (setq max (max max mmax)
+                                               min (min min mmin)))))
+                    (values max min))))
+          (let ((form (if (or around before after (rest primary))
+                          `(multiple-value-prog1
+                               (progn ,@(call-methods before)
+                                      ,(call-vmm-methods primary))
+                             (progn ,@(call-methods (reverse after))))
+                          `(call-method ,(first primary)))))
+            (if around
+                `(call-method ,(first around) (,@(rest around) (make-method ,form)))
+                form))))
+      (defclass dmc-a () ())
+      (defclass dmc-b (dmc-a) ())
+      (defclass dmc-c (dmc-b) ())
+      (defvar *dmc-trace* nil)
+      (defgeneric dmc-g (x y)
+        (:method-combination dmc-values-max-min :most-specific-last))
+      (defmethod dmc-g dmc-values-max-min ((x dmc-a) y) (push :a *dmc-trace*) (values (+ y 1) (- y 1)))
+      (defmethod dmc-g dmc-values-max-min ((x dmc-b) y) (push :b *dmc-trace*) (values (+ y 5) (- y 5)))
+      (defmethod dmc-g :before ((x dmc-b) y) (push :before-b *dmc-trace*))
+      (defmethod dmc-g :after ((x dmc-a) y) (push :after-a *dmc-trace*))
+      (defmethod dmc-g :after ((x dmc-b) y) (push :after-b *dmc-trace*))
+      (defmethod dmc-g :around ((x dmc-a) y)
+        (push :around-a *dmc-trace*)
+        (multiple-value-bind (max min) (call-next-method)
+          (values (* 2 max) min)))
+      (defmethod dmc-g :around ((x dmc-c) y)
+        (push :around-c *dmc-trace*)
+        (call-next-method x (+ y 100)))
+      (defun dmc-run (object)
+        (setq *dmc-trace* nil)
+        (let ((values (multiple-value-list (dmc-g object 10))))
+          (list values (reverse *dmc-trace*))))
+      (print (dmc-run (make-instance 'dmc-a)))
+      (print (dmc-run (make-instance 'dmc-c)))
+      (defgeneric dmc-h (x) (:method-combination dmc-values-max-min))
+      (defmethod dmc-h :before ((x integer)) x)
+      (print (handler-case (dmc-h 1) (error () :refused)))
+      (print (handler-case (dmc-h "s") (error () :refused)))
+      (defun dmc-positive-integer-qualifier-p (method-qualifiers)
+        (and (= (length method-qualifiers) 1)
+             (typep (first method-qualifiers) '(integer 0 *))))
+      (define-method-combination dmc-example ()
+        ((methods dmc-positive-integer-qualifier-p))
+        `(progn ,@(mapcar #'(lambda (method) `(call-method ,method))
+                          (stable-sort methods #'<
+                                       :key #'(lambda (method)
+                                                (first (method-qualifiers method)))))))
+      (defgeneric dmc-e (x) (:method-combination dmc-example))
+      (defmethod dmc-e 3 (x) (push (list 3 x) *dmc-trace*))
+      (defmethod dmc-e 1 ((x number)) (push (list 1 x) *dmc-trace*))
+      (defmethod dmc-e 2 ((x integer)) (push (list 2 x) *dmc-trace*))
+      (setq *dmc-trace* nil)
+      (dmc-e 7)
+      (print (reverse *dmc-trace*))
+      (define-method-combination dmc-args (&key (twice nil))
+        ((first-group (:a . *))
+         (others *))
+        (:arguments object extra)
+        (:generic-function gf)
+        (declare (ignorable gf))
+        "Documentation."
+        (let ((form `(list ,object ,extra
+                           ,@(mapcar (lambda (m) `(call-method ,m)) first-group)
+                           (length (list ,@(mapcar (lambda (m) `(call-method ,m)) others))))))
+          (if twice `(list ,form ,form) form)))
+      (defgeneric dmc-f (object extra) (:method-combination dmc-args :twice t))
+      (defmethod dmc-f :a :x (object extra) :ax)
+      (defmethod dmc-f :a :y ((object integer) extra) :ay)
+      (defmethod dmc-f :b ((object string) extra) :b)
+      (defmethod dmc-f ((object number) extra) :plain)
+      (print (dmc-f 1 2))
+      (print (dmc-f "s" 2))
+      (define-method-combination dmc-sum :operator + :identity-with-one-argument t)
+      (defgeneric dmc-s (x) (:method-combination dmc-sum))
+      (defmethod dmc-s dmc-sum ((x integer)) (* x 10))
+      (defmethod dmc-s dmc-sum ((x number)) x)
+      (defmethod dmc-s :around ((x integer)) (list (call-next-method)))
+      (print (list (dmc-s 2) (dmc-s 2.5)))
+      (define-method-combination dmc-collect :operator list)
+      (defgeneric dmc-t (x) (:method-combination dmc-collect :most-specific-last))
+      (defmethod dmc-t dmc-collect ((x integer)) :integer)
+      (defmethod dmc-t dmc-collect ((x number)) :number)
+      (print (dmc-t 2))
+      (defgeneric dmc-std (x) (:method-combination standard))
+      (defmethod dmc-std (x) (list :primary x))
+      (defmethod dmc-std :around (x) (list :around (call-next-method)))
+      (print (dmc-std 1))
+      (print (handler-case (invalid-method-error 1 "bad ~A" 2) (error () :signaled)))
+      (print (handler-case (method-combination-error "bad ~A" 2) (error () :signaled)))
+      ;; The next method and the combination reach the built-in types above the argument's.
+      (defgeneric dmc-n (x))
+      (defmethod dmc-n ((x number)) :number)
+      (defmethod dmc-n ((x integer)) (list :integer (call-next-method)))
+      (defmethod dmc-n (x) :t)
+      (defmethod dmc-n ((x real)) (list :real (call-next-method)))
+      (print (list (dmc-n 1) (dmc-n 1.5) (dmc-n #c(1 2)) (dmc-n :k)))
+      (defgeneric dmc-l (x))
+      (defmethod dmc-l ((x sequence)) :sequence)
+      (defmethod dmc-l ((x list)) (list :list (call-next-method)))
+      (defmethod dmc-l ((x vector)) (list :vector (call-next-method)))
+      (defmethod dmc-l ((x string)) (list :string (call-next-method)))
+      (print (list (dmc-l nil) (dmc-l "s") (dmc-l #(1))))
+      (defgeneric dmc-y (x))
+      (defmethod dmc-y ((x symbol)) :symbol)
+      (defmethod dmc-y ((x null)) (list :null (call-next-method)))
+      (print (list (dmc-y nil) (dmc-y 'b)))
+      (defgeneric dmc-b4 (x))
+      (defmethod dmc-b4 :before ((x number)) (setq *dmc-trace* :before-number))
+      (defmethod dmc-b4 ((x integer)) (list :integer *dmc-trace*))
+      (print (dmc-b4 1))
+      (defstruct dmc-st)
+      (defgeneric dmc-o (x))
+      (defmethod dmc-o ((x standard-object)) :standard-object)
+      (defmethod dmc-o ((x structure-object)) :structure-object)
+      (defmethod dmc-o ((x dmc-a)) (list :a (call-next-method)))
+      (defmethod dmc-o ((x dmc-st)) (list :st (call-next-method)))
+      (print (list (dmc-o (make-instance 'dmc-a)) (dmc-o (make-dmc-st))))
+    expected: |
+      ((22 9) (:AROUND-A :A :AFTER-A))
+      ((230 105) (:AROUND-C :AROUND-A :BEFORE-B :A :B :AFTER-A :AFTER-B))
+      :REFUSED
+      :REFUSED
+      ((1 7) (2 7) (3 7))
+      ((1 2 :AY :AX 1) (1 2 :AY :AX 1))
+      (("s" 2 :AX 1) ("s" 2 :AX 1))
+      ((22) 2.5)
+      (:NUMBER :INTEGER)
+      (:AROUND (:PRIMARY 1))
+      :SIGNALED
+      :SIGNALED
+      ((:INTEGER (:REAL :NUMBER)) (:REAL :NUMBER) :NUMBER :T)
+      ((:LIST :SEQUENCE) (:STRING (:VECTOR :SEQUENCE)) (:VECTOR :SEQUENCE))
+      ((:NULL :SYMBOL) :SYMBOL)
+      (:INTEGER :BEFORE-NUMBER)
+      ((:A :STANDARD-OBJECT) (:ST :STRUCTURE-OBJECT))
   - name: built-in-class-is-a-metaclass
     source: |
       ;; built-in-class stands beside standard-class under class: what class-of and
@@ -23761,10 +23952,23 @@ cases:
         (print (list (slot-value o 'tag) (slot-value o 'extra) (slot-value o 'n) (slot-boundp o 'fresh)))
         (change-class o cls)
         (print (list (class-name (class-of o)) (slot-value o 'n) (slot-value o 'extra))))
+      ;; A slot an initarg supplies takes no initform, literal or computed.
+      (defclass clsurf-plain () ((p :initform 0)))
+      (defclass clsurf-narrow (clsurf-plain)
+        ((low :initarg :low :initform (error "A low must be provided"))))
+      (defvar *clsurf-a* (make-instance 'clsurf-plain))
+      (change-class *clsurf-a* 'clsurf-narrow :low 3)
+      (defvar *clsurf-b* (make-instance 'clsurf-plain))
+      (let ((class 'clsurf-narrow))
+        (change-class *clsurf-b* class :low 4)
+        (print (list (slot-value *clsurf-a* 'low) (slot-value *clsurf-b* 'low)
+                     (handler-case (change-class (make-instance 'clsurf-plain) class)
+                       (error () :initform-ran)))))
     expected: |
       (CLSURF-SUB 1 42 7)
       (:T 42 1 NIL)
       (CLSURF-SUB 1 42)
+      (3 4 :INITFORM-RAN)
   - name: clos-slot-options-and-metaobject-types
     source: |
       ;; The rest of that CLOS surface: :writer in both spellings, the
@@ -28041,14 +28245,19 @@ cases:
       (let ((log nil))
         (format (progn (push :d log) nil) (if (progn (push :c log) t) "a" "b"))
         (print (reverse log)))
-      ;; A file stream has no column to ask: a line it was at the start of stays one line.
+      ;; A file stream answers too: a line it was at the start of stays one line.
       (with-open-file (o "ffl-file.txt" :direction :output :if-exists :supersede)
         (write-line "ab" o)
         (format o "~&cd~%")
         (let ((c "~&ef~%")) (format o c))
-        (funcall #'format o "~&gh~%"))
+        (funcall #'format o "~&gh~%")
+        (write-string "ij" o)
+        (format o "~&kl")
+        (let ((c "~&mn")) (format o c))
+        (funcall #'format o "~&op"))
       (with-open-file (i "ffl-file.txt")
-        (print (list (read-line i) (read-line i) (read-line i) (read-line i))))
+        (print (list (read-line i) (read-line i) (read-line i) (read-line i) (read-line i) (read-line i)
+                     (read-line i) (read-line i))))
       (delete-file "ffl-file.txt")
       ;; Standard output, under a variable, a computed control and the function value.
       (terpri)
@@ -28093,7 +28302,7 @@ cases:
       cd"
       ("cd" "cd" "cd")
       (:D :C)
-      ("ab" "cd" "ef" "gh")
+      ("ab" "cd" "ef" "gh" "ij" "kl" "mn" "op")
 
       a
       bc
@@ -28101,6 +28310,155 @@ cases:
       fg
       hi
       j
+  - name: fresh-line-asks-the-stream-it-is-given
+    source: |
+      ;; SBCL 2.2.9, row by row. A stream starts at column 0 whatever it is opened on,
+      ;; a write of characters moves its line, and an octet, a read and file-position
+      ;; do not; fresh-line answers whether it wrote.
+      (defun fla-lines ()
+        (with-open-file (i "fla-file.txt")
+          (let ((lines nil) (line nil))
+            (loop
+              (setq line (read-line i nil nil))
+              (if line (push line lines) (return (reverse lines)))))))
+      (defun fla-new (f)
+        (let ((v (with-open-file (s "fla-file.txt" :direction :output :if-exists :supersede)
+                   (funcall f s))))
+          (list v (fla-lines))))
+      (print (fla-new (lambda (s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (list (fresh-line s) (fresh-line s)))))
+      (print (fla-new (lambda (s) (write-char #\x s) (list (fresh-line s) (write-char #\Newline s) (fresh-line s)))))
+      (print (fla-new (lambda (s) (write-line "x" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (terpri s) (fresh-line s))))
+      (print (fla-new (lambda (s) (print 1 s) (fresh-line s))))
+      (print (fla-new (lambda (s) (princ 1 s) (fresh-line s))))
+      (print (fla-new (lambda (s) (prin1 "a" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (write-string "" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-line "x" s) (write-string "" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string (format nil "ab~%c") s :end 3) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string (format nil "ab~%c") s :start 3) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-sequence "x" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-sequence (format nil "x~%") s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (force-output s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (list (funcall #'fresh-line s) (funcall #'fresh-line s)))))
+      ;; A descriptor handed out again starts at column 0, and two streams keep two lines.
+      (print (fla-new (lambda (s) (fresh-line s))))
+      (with-open-file (a "fla-file.txt" :direction :output :if-exists :supersede)
+        (with-open-file (b "fla-other.txt" :direction :output :if-exists :supersede)
+          (write-string "a" a)
+          (print (list (fresh-line b) (fresh-line a) (fresh-line a)))))
+      ;; Opened on a line left open, a stream is still at column 0.
+      (with-open-file (s "fla-file.txt" :direction :output :if-exists :supersede) (write-string "abcdef" s))
+      (with-open-file (s "fla-file.txt" :direction :output :if-exists :append) (print (fresh-line s)))
+      (print (fla-lines))
+      (with-open-file (s "fla-file.txt" :direction :output :if-exists :overwrite)
+        (print (list (fresh-line s) (write-string "x" s) (fresh-line s))))
+      (print (fla-lines))
+      ;; A read moves nothing, nor does file-position.
+      (with-open-file (s "fla-file.txt" :direction :output :if-exists :supersede) (write-string "abc" s))
+      (with-open-file (s "fla-file.txt" :direction :io :if-exists :overwrite)
+        (print (list (read-char s) (fresh-line s) (file-position s) (write-string "x" s) (fresh-line s)))
+        (file-position s 0)
+        (print (list (read-char s) (fresh-line s))))
+      (print (fla-lines))
+      (print (fla-new (lambda (s) (write-string "abc" s) (file-position s 0) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-line "abc" s) (file-position s 1) (fresh-line s))))
+      ;; An octet moves nothing either: a binary stream stays at column 0.
+      (with-open-file (b "fla-file.txt" :direction :output :if-exists :supersede :element-type '(unsigned-byte 8))
+        (write-byte 65 b)
+        (write-sequence (make-array 2 :element-type '(unsigned-byte 8) :initial-contents '(66 67)) b)
+        (print (fresh-line b)))
+      (print (fla-lines))
+      ;; A string stream's contents answer, the ones get-output-stream-string leaves too.
+      (let ((s (make-string-output-stream)))
+        (print (list (fresh-line s) (write-string "x" s) (fresh-line s) (fresh-line s) (write-string "y" s)
+                     (get-output-stream-string s) (fresh-line s) (get-output-stream-string s))))
+      ;; A composite stream asks its output, a broadcast stream its first component.
+      (print (fla-new (lambda (s)
+                        (let ((y (make-two-way-stream (make-string-input-stream "") s)))
+                          (list (fresh-line y) (write-string "x" y) (fresh-line y) (write-string "y" s) (fresh-line y))))))
+      (print (fla-new (lambda (s)
+                        (let ((y (make-echo-stream (make-string-input-stream "z") s)))
+                          (list (fresh-line y) (write-string "x" y) (fresh-line y) (read-char y) (fresh-line y))))))
+      (defvar *fla-syn* nil)
+      (print (fla-new (lambda (s)
+                        (setq *fla-syn* s)
+                        (let ((y (make-synonym-stream '*fla-syn*)))
+                          (list (fresh-line y) (write-string "x" s) (fresh-line y))))))
+      (print (fla-new (lambda (a)
+                        (let* ((b (make-string-output-stream)) (y (make-broadcast-stream a b)))
+                          (write-string "x" a)
+                          (list (fresh-line y) (fresh-line y) (get-output-stream-string b))))))
+      (print (fla-new (lambda (a)
+                        (let* ((b (make-string-output-stream)) (y (make-broadcast-stream b a)))
+                          (write-string "x" a)
+                          (list (fresh-line y) (get-output-stream-string b))))))
+      (print (fla-new (lambda (a)
+                        (let* ((b (make-string-output-stream)) (y (make-broadcast-stream b a)))
+                          (write-string "x" b)
+                          (list (fresh-line y) (get-output-stream-string b))))))
+      (print (fresh-line (make-broadcast-stream)))
+      ;; Standard output under the binding the corpus holds, and what the file bound to it says.
+      (fresh-line)
+      (princ "a")
+      (write-line "b")
+      (fresh-line)
+      (write-string "c")
+      (write-line "")
+      (fresh-line)
+      (print (list (fresh-line) (progn (princ "d") (fresh-line)) (fresh-line)))
+      (print (fla-new (lambda (s)
+                        (let ((*standard-output* s))
+                          (list (fresh-line) (write-string "x") (fresh-line) (write-line "y") (fresh-line)
+                                (format t "~&z") (format t "~&w~%") (fresh-line))))))
+      (delete-file "fla-file.txt")
+      (delete-file "fla-other.txt")
+    expected: |
+      (NIL NIL)
+      ((T NIL) ("x"))
+      ((T #\Newline NIL) ("x" ""))
+      (NIL ("x"))
+      (NIL ("x"))
+      (NIL ("1"))
+      (T ("1"))
+      (T ("\"a\""))
+      (T ("x"))
+      (NIL ("x"))
+      (NIL ("ab"))
+      (T ("c"))
+      (T ("x"))
+      (NIL ("x"))
+      (T ("x"))
+      ((T NIL) ("x"))
+      (NIL NIL)
+      (NIL T NIL)
+      NIL
+      ("abcdef")
+      (NIL "x" T)
+      ("x" "cdef")
+      (#\a NIL 1 "x" T)
+      (#\a NIL)
+      ("ax")
+      (T ("" "bc"))
+      (NIL ("abc"))
+      NIL
+      ("ABC")
+      (NIL "x" T NIL "y" "x
+      y" NIL "")
+      ((NIL "x" T "y" T) ("x" "y"))
+      ((NIL "x" T #\z T) ("x" "z"))
+      ((NIL "x" T) ("x"))
+      ((T NIL "
+      ") ("x"))
+      ((NIL "") ("x"))
+      ((T "x
+      ") (""))
+      NIL
+      ab
+      c
+      d
+      (NIL T NIL)
+      ((NIL "x" T "y" NIL NIL NIL NIL) ("x" "y" "z" "w"))
   - name: format-to-a-string-with-a-fill-pointer-beside-the-gray-dispatch
     source: |
       ;; The corpus holds the Gray protocol, so these sites go through its dispatch.
@@ -33010,6 +33368,12 @@ cases:
         (print (with-accessors ((x wsv-x)) a (list x (with-accessors ((x wsv-x)) b x) (let ((x 9)) x))))
         (print (with-slots (x) a (setf x 3) (setq x (+ x 1)) x))
         (print (wsv-x a)))
+      ;; A body that only writes an unbound slot reads nothing on entry.
+      (defclass wsv-unbound () ((top :accessor wsv-top) (bot :accessor wsv-bot)))
+      (let ((u (make-instance 'wsv-unbound)))
+        (with-accessors ((top wsv-top) (bot wsv-bot)) u
+          (setf top 1 bot (+ top 1)))
+        (print (list (wsv-top u) (wsv-bot u))))
     expected: |
       (1 10 1)
       (1 (:INNER 10))
@@ -33022,6 +33386,40 @@ cases:
       (1 10 9)
       4
       4
+      (1 2)
+  - name: optimize-qualities-are-cl-symbols
+    source: |
+      ;; A quality reads as cl's symbol in any package using cl, and
+      ;; declaration-information answers each, as serapeum's policy-quality asks it.
+      ;; SBCL 2.2.9 (sb-cltl2) agrees.
+      (asdf:load-system "trivial-cltl2")
+      (defpackage :oqc (:use :cl))
+      (print (list (eq 'oqc::space 'cl:space) (eq 'oqc::speed 'speed) (eq 'oqc::optimize 'cl:optimize)
+                   (eq (symbol-package 'oqc::debug) (find-package :cl))))
+      (print (every (lambda (quality)
+                      (integerp (second (assoc quality (trivial-cltl2:declaration-information 'oqc::optimize)))))
+                    '(oqc::speed oqc::safety oqc::space oqc::debug oqc::compilation-speed)))
+    expected: |
+      (T T T T)
+      T
+  - name: type-specifier-of-a-declaration-is-no-macro-call
+    source: |
+      ;; serapeum's -> is a type and a macro, and declaims in a labels: the walk over a
+      ;; local function's scope leaves a declaration alone. SBCL 2.2.9 agrees.
+      (deftype tsd-> (args &optional values)
+        `(function ,args ,@(when values (list values))))
+      (defmacro tsd-> (function (&rest args) &optional values)
+        `(declaim (ftype (tsd-> (,@args) ,@(when values (list values))) ,function)))
+      (labels ((tsd-f (x) x))
+        (tsd-> tsd-g (t))
+        (print (tsd-f 1)))
+      (flet ((tsd-f (fn)
+               (declare (type (tsd-> (t)) fn))
+               (funcall fn '(2))))
+        (print (tsd-f #'car)))
+    expected: |
+      1
+      2
   - name: defmacro-inside-a-macro-expanded-locally
     # hu.dwim.def's (def macro ...): the members of a top-level locally are top-level
     # forms whoever wrote it.
@@ -33107,9 +33505,22 @@ cases:
         (let ((k2 (so-clone k)))
           (setf (so-get-val k2) 99)
           (print (list (so-get-val k) (so-get-val k2)))))
+      ;; A keyword alone, and an option with no argument, is the option's default: no
+      ;; conc-name, the default constructor, copier and predicate. nil suppresses them.
+      (defstruct (so-bare :conc-name :constructor :copier :predicate) so-bare-x)
+      (let ((b (make-so-bare :so-bare-x 1)))
+        (print (list (so-bare-x b) (so-bare-x (copy-so-bare b)) (so-bare-p b))))
+      (defstruct (so-args (:conc-name) (:constructor) (:copier) (:predicate)) so-args-x)
+      (let ((a (make-so-args :so-args-x 2)))
+        (print (list (so-args-x a) (so-args-x (copy-so-args a)) (so-args-p a))))
+      (defstruct (so-none (:constructor nil) (:copier nil) (:predicate nil)) x)
+      (print (list (fboundp 'make-so-none) (fboundp 'copy-so-none) (fboundp 'so-none-p)))
     expected: |
       (A T NIL)
       (1 99)
+      (1 1 T)
+      (2 2 T)
+      (NIL NIL NIL)
   - name: generics-defined-in-a-top-level-let-close-over-it
     source: |
       ;; cl-qrencode's rs-ecc shape: defgeneric beside defmethod in a top-level let.
@@ -38263,6 +38674,113 @@ standalone:
     fails: true
   # A program that never BINDS *error-output* (the shared corpus does): every
   # read answers the one seeded stream value, and symbol-value answers it too.
+  - name: fresh-line-on-standard-output-with-no-binding-of-it
+    source: |
+      ;; Standalone: the corpus binds *standard-output*, and an unbound one is the
+      ;; compilers' own path, as a statement and for its answer.
+      (fresh-line)
+      (princ "a")
+      (fresh-line)
+      (fresh-line)
+      (princ "b")
+      (write-line "c")
+      (fresh-line)
+      (write-string "d")
+      (write-line "")
+      (fresh-line)
+      (print (fresh-line))
+      (princ "e")
+      (print (fresh-line))
+      (defun flo-f () (princ "f") (fresh-line) (let ((v (fresh-line))) v))
+      (print (flo-f))
+      (princ "g")
+      (print (if (fresh-line) :wrote :did-not))
+      (print (if (fresh-line) :wrote :did-not))
+      (format t "h~&i~&")
+      (format t "~&j~%")
+      (format t "~&k")
+      (format t "~&l~%")
+      (princ "m")
+      (print (funcall #'fresh-line))
+      (print (funcall 'fresh-line))
+      (princ "n")
+      (print (apply #'fresh-line nil))
+      ;; An octet moves no column here either.
+      (write-byte 65 t)
+      (print (fresh-line))
+      (terpri)
+      (write-byte 66 t)
+      (terpri)
+      (print (fresh-line))
+    stdout: |
+      a
+      bc
+      d
+      NIL
+      e
+      T
+      f
+      NIL
+      g
+      :WROTE
+      :DID-NOT
+      h
+      i
+      j
+      k
+      l
+      m
+      T
+      NIL
+      n
+      T
+      ANIL
+
+      B
+      NIL
+  - name: fresh-line-and-format-on-standard-error
+    source: |
+      ;; Standalone: a run's standard error is compared here, each line on its own.
+      (let ((e *error-output*))
+        (print (fresh-line e))
+        (write-string "fle-1" e)
+        (print (fresh-line e))
+        (write-string "fle-2" e)
+        (terpri e)
+        (print (fresh-line e))
+        (write-string "fle-3" e)
+        (format e "~&fle-4")
+        (format e "~&fle-5~%")
+        (format e "~&fle-6~%")
+        (write-line "fle-7" e)
+        (format e "~&fle-8~%")
+        (princ "fle-9" e)
+        (let ((c "~&fle-10~%")) (format e c) (format e c))
+        (funcall #'format e "~&fle-11~%")
+        (print (funcall #'fresh-line e))
+        (write-char #\z e)
+        (print (fresh-line e))
+        (force-output e))
+    stdout: |
+      NIL
+      T
+      NIL
+      NIL
+      T
+    stderr: |
+      fle-1
+      fle-2
+      fle-3
+      fle-4
+      fle-5
+      fle-6
+      fle-7
+      fle-8
+      fle-9
+      fle-10
+      fle-10
+      fle-11
+      z
   - name: error-output-is-one-value-without-a-binding
     source: |
       (print (list (eq *error-output* *error-output*)
@@ -38494,6 +39012,40 @@ standalone:
       (NIL (:UNBOUND X) 1 1)
       ((:READ X) (:READ Y) :BOUNDP (:WRITE X 3) (:WRITE Y 4) (:READ X) (:READ Y) :MAKUNBOUND :BOUNDP (:READ X))
       (50 T)
+  - name: slot-access-generics-called-with-no-method
+    source: |
+      ;; A program calling the slot-access protocol's generics has them with their system
+      ;; methods, as Drei's circle-subst does over an instance or a structure. SBCL 2.2.9
+      ;; (sb-mop) agrees.
+      (asdf:load-system "closer-mop")
+      (defclass sagc-a () ((a :initarg :a :accessor sagc-a) (b)))
+      (defstruct sagc-s x)
+      (let* ((x (make-instance 'sagc-a :a 1))
+             (class (class-of x)))
+        (dolist (slotd (closer-mop:class-slots class))
+          (print (list (closer-mop:slot-definition-name slotd)
+                       (closer-mop:slot-boundp-using-class class x slotd)
+                       (if (closer-mop:slot-boundp-using-class class x slotd)
+                           (closer-mop:slot-value-using-class class x slotd)
+                           :unbound))))
+        (setf (closer-mop:slot-value-using-class class x (first (closer-mop:class-slots class))) 5)
+        (print (sagc-a x))
+        (closer-mop:slot-makunbound-using-class class x (first (closer-mop:class-slots class)))
+        (print (slot-boundp x 'a)))
+      (let* ((s (make-sagc-s :x 1))
+             (class (class-of s))
+             (slotd (first (closer-mop:class-slots class))))
+        (print (list (closer-mop:slot-boundp-using-class class s slotd)
+                     (closer-mop:slot-value-using-class class s slotd)))
+        (setf (closer-mop:slot-value-using-class class s slotd) 2)
+        (print (sagc-s-x s)))
+    stdout: |
+      (A T 1)
+      (B NIL :UNBOUND)
+      5
+      NIL
+      (T 1)
+      2
   - name: slot-locations-and-allocate-instance-methods
     source: |
       ;; An effective slot's location addresses its storage through
@@ -38644,6 +39196,52 @@ standalone:
       ((:A (+ 1 1) 2) (:B :FROM-A :FROM-A))
       ((:A (+ 1 1) 2) (:B :FROM-B :FROM-B) (:C 3 3))
       NIL
+  - name: compute-slots-and-make-instance-methods-of-a-metaclass
+    source: |
+      ;; ESA's modual-class: a method on compute-slots adds a slot no definition declares,
+      ;; which has storage in the instances, and a method on make-instance sees a literal
+      ;; and a computed class of the metaclass, and keeps the system's for the others.
+      ;; Standalone: the method joins the make-instance calls of its program. SBCL 2.2.9
+      ;; (sb-mop) agrees.
+      (asdf:load-system "closer-mop")
+      (defclass cs-mixin () ((m :initform :m :reader cs-m)))
+      (defclass cs-meta (standard-class) ())
+      (defmethod closer-mop:validate-superclass ((c cs-meta) (s standard-class)) t)
+      (defmethod closer-mop:compute-slots ((c cs-meta))
+        (append (call-next-method)
+                (list (make-instance 'closer-mop:standard-effective-slot-definition
+                       :name '%original-class-name
+                       :allocation :instance
+                       :documentation "The original name."))))
+      (defclass cs-foo (cs-mixin) ((a :initform 1 :accessor cs-a)) (:metaclass cs-meta))
+      (defmethod make-instance ((class cs-meta) &rest initargs)
+        (declare (ignore initargs))
+        (let ((instance (call-next-method)))
+          (setf (slot-value instance '%original-class-name) (class-name class))
+          instance))
+      (let ((x (make-instance 'cs-foo)))
+        (print (list (cs-a x) (cs-m x) (slot-value x '%original-class-name)
+                     (mapcar #'closer-mop:slot-definition-name (closer-mop:class-slots (class-of x))))))
+      (defclass cs-bar (cs-foo) ((b :initform 2 :reader cs-b)) (:metaclass cs-meta))
+      (let ((x (make-instance 'cs-bar)))
+        (print (list (cs-a x) (cs-b x) (cs-m x) (slot-value x '%original-class-name))))
+      (let ((c (find-class 'cs-foo)))
+        (print (list (typep (make-instance c) 'cs-foo)
+                     (slot-value (apply #'make-instance c nil) '%original-class-name)
+                     (slot-value (make-instance 'cs-bar) '%original-class-name))))
+      (defclass cs-plain () ((p :initarg :p :reader cs-p)))
+      (print (cs-p (make-instance 'cs-plain :p 1)))
+      (defclass cs-baz (cs-plain cs-foo) () (:metaclass cs-meta))
+      (let ((x (make-instance 'cs-baz :p 2)))
+        (print (list (cs-p x) (cs-a x) (cs-m x) (slot-value x '%original-class-name)
+                     (sort (mapcar #'closer-mop:slot-definition-name (closer-mop:class-slots (class-of x)))
+                           #'string< :key #'symbol-name))))
+    stdout: |
+      (1 :M CS-FOO (M A %ORIGINAL-CLASS-NAME))
+      (1 2 :M CS-BAR)
+      (T CS-FOO CS-BAR)
+      1
+      (2 1 :M CS-BAZ (%ORIGINAL-CLASS-NAME A M P))
   # The generic-function protocol adds an arm consulting its generic's run-time
   # methods to every dispatcher, so it runs alone, not in the corpus.
   - name: generic-function-protocol
@@ -38706,11 +39304,68 @@ standalone:
       (defmethod gfp-volume :before ((s (eql 0))) nil)
       (print (list (gfp-volume 2) (reverse *gfp-added*)
                    (class-name (class-of (ensure-generic-function 'gfp-volume :generic-function-class 'gfp-logged)))))
+      ;; compute-applicable-methods: what only a dispatcher knows, most specific first, one
+      ;; metaobject per method, and over a metaobject a method on it changes the answer.
+      (defclass gfp-cam-a () ())
+      (defclass gfp-cam-b (gfp-cam-a) ())
+      (defgeneric gfp-cam (x y))
+      (defmethod gfp-cam ((x gfp-cam-a) y) :a)
+      (defmethod gfp-cam :around ((x gfp-cam-b) y) (call-next-method))
+      (defmethod gfp-cam ((x integer) (y (eql :k))) :integer)
+      (defmethod gfp-cam (x y) :t)
+      (defun gfp-cam-names (fn &rest args)
+        (mapcar (lambda (method)
+                  (list (method-qualifiers method)
+                        (mapcar (lambda (s) (if (typep s 'class) (class-name s) :eql))
+                                (closer-mop:method-specializers method))))
+                (compute-applicable-methods fn args)))
+      (print (gfp-cam-names #'gfp-cam (make-instance 'gfp-cam-b) 1))
+      (print (gfp-cam-names #'gfp-cam 1 :k))
+      (print (gfp-cam-names #'gfp-cam 1 :other))
+      (print (eq (car (compute-applicable-methods #'gfp-cam (list 1 2)))
+                 (car (compute-applicable-methods #'gfp-cam (list 1 2)))))
+      (defgeneric (setf gfp-cam) (v x))
+      (defmethod (setf gfp-cam) (v (x integer)) v)
+      (print (list (gfp-cam-names #'(setf gfp-cam) 1 2) (gfp-cam-names #'(setf gfp-cam) 1 "s")
+                   (eq #'(setf gfp-cam) (fdefinition '(setf gfp-cam)))))
+      (defclass gfp-cam-gf (standard-generic-function) () (:metaclass closer-mop:funcallable-standard-class))
+      (defgeneric gfp-cam-2 (x) (:generic-function-class gfp-cam-gf))
+      (defmethod gfp-cam-2 ((x number)) :number)
+      (defmethod gfp-cam-2 ((x integer)) :integer)
+      (print (gfp-cam-names (ensure-generic-function 'gfp-cam-2 :generic-function-class 'gfp-cam-gf) 1))
+      (defmethod compute-applicable-methods :around ((gf gfp-cam-gf) arguments)
+        (remove-if (lambda (method)
+                     (eq (car (closer-mop:method-specializers method)) (find-class 'integer)))
+                   (call-next-method)))
+      (print (gfp-cam-names (ensure-generic-function 'gfp-cam-2 :generic-function-class 'gfp-cam-gf) 1))
+      ;; find-method and remove-method take the generic's function.
+      (defgeneric gfp-fn (x))
+      (defmethod gfp-fn ((x integer)) :integer)
+      (print (list (find-method #'gfp-fn nil (list (find-class 'string)) nil)
+                   (handler-case (find-method #'gfp-fn nil (list (find-class 'string)))
+                     (error () :signaled))))
+      (let ((m (make-instance 'standard-method :lambda-list '(x) :specializers (list (find-class 'string))
+                              :function (lambda (args next) (declare (ignore next)) (list :string (car args))))))
+        (add-method (ensure-generic-function 'gfp-fn) m)
+        (print (list (gfp-fn "s") (eq (find-method #'gfp-fn nil '(string)) m)))
+        (remove-method #'gfp-fn m)
+        (print (list (find-method #'gfp-fn nil '(string) nil)
+                     (handler-case (gfp-fn "s") (error () :no-method)) (gfp-fn 1))))
     stdout: |
       ((:DOG :ANIMAL "rex") (:ANIMAL "cat"))
       (9 16 :ZERO GFP-AREA 2 T T)
       (:ZERO :NO-METHOD NIL)
       (8 ((GFP-VOLUME NIL (INTEGER)) (GFP-VOLUME (:BEFORE) ((EQL 0)))) GFP-LOGGED)
+      (((:AROUND) (GFP-CAM-B T)) (NIL (GFP-CAM-A T)) (NIL (T T)))
+      ((NIL (INTEGER :EQL)) (NIL (T T)))
+      ((NIL (T T)))
+      T
+      (((NIL (T INTEGER))) NIL T)
+      ((NIL (INTEGER)) (NIL (NUMBER)))
+      ((NIL (NUMBER)))
+      (NIL :SIGNALED)
+      ((:STRING "s") T)
+      (NIL :NO-METHOD :INTEGER)
   # Alone: what cl-user reaches is one answer for the whole compile, and the corpus keeps
   # it pristine. A program that never leaves cl-user reads through it all the same.
   - name: a-run-time-read-in-a-cl-user-that-uses-a-package

@@ -13087,6 +13087,8 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("""
 				(format *error-output* "diag~%")
 				(princ "on-stdout")""")).isEqualTo("on-stdout");
+		assertThat(compileAndRunStderr(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_EXPECTED);
 	}
 
 	@Test
@@ -15588,11 +15590,11 @@ class WasmLispCompilerIntegrationTest {
 	void findSymbolAnswersForTheExportedOnlyStandardNames() throws Exception {
 		// The cl package exports every standard name (CLHS 11.1.2.1) whether or not an
 		// operator stands behind it; the same fold the JVM backend uses.
-		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"INVALID-METHOD-ERROR\" 'common-lisp)))"
+		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"FUNCTION-KEYWORDS\" 'common-lisp)))"
 				+ "(print (multiple-value-list (find-symbol \"&AUX\" :cl)))"
 				+ "(print (multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp)))"
-				+ "(print (fboundp 'invalid-method-error))"))
-			.isEqualTo("(INVALID-METHOD-ERROR :EXTERNAL)\n(&AUX :EXTERNAL)\n(NIL NIL)\nNIL");
+				+ "(print (fboundp 'function-keywords))"))
+			.isEqualTo("(FUNCTION-KEYWORDS :EXTERNAL)\n(&AUX :EXTERNAL)\n(NIL NIL)\nNIL");
 	}
 
 	@Test
@@ -16337,6 +16339,9 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(
 				compileAndRunFrontEnd(RontolispNativeValueFixture.SOCKET_PROGRAM, true, "tcp=y", "inherit-network=y"))
 			.isEqualTo(RontolispNativeValueFixture.SOCKET_EXPECTED);
+		assertThat(compileAndRunFrontEnd(am.ik.rontolisp.LineStartFixture.SOCKET_PROGRAM, true, "tcp=y",
+				"inherit-network=y"))
+			.isEqualTo(am.ik.rontolisp.LineStartFixture.SOCKET_EXPECTED);
 		assertThat(compileAndRunFrontEnd(RontolispNativeValueFixture.ASYNC_PROGRAM, true, "http=y"))
 			.isEqualTo(RontolispNativeValueFixture.ASYNC_EXPECTED);
 	}

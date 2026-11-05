@@ -73,6 +73,7 @@ categories:
       - { slug: define-condition, name: define-condition }
       - { slug: define-compiler-macro, name: define-compiler-macro }
       - { slug: define-modify-macro, name: define-modify-macro }
+      - { slug: define-method-combination, name: define-method-combination }
       - { slug: define-setf-expander, name: define-setf-expander }
       - { slug: defsetf, name: defsetf }
       - { slug: restart-case, name: restart-case }

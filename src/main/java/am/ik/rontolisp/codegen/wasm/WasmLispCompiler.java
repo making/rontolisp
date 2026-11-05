@@ -1768,8 +1768,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	// _fresh_line_stream ((ref null eq) dest) -> (ref null eq): fresh-line for an
 	// explicit or redirected (*standard-output*) destination -- nil/t = stdout via the
 	// LINE_START tracking, a negative i31 inspects the string-stream record's last
-	// byte, a non-negative i31 (WASI fd) always writes a newline. Returns nil.
+	// byte, a non-negative i31 (WASI fd) asks the descriptor's byte in the module's line
+	// table. Answers t when it wrote the newline, nil when it did not. A stub in a module
+	// that never calls it.
 	static final int FUNC_FRESH_LINE_STREAM = FUNC_PROBE_FILE + 1;
+
+	// _line_mark (i32 fd, i32 mid) -> (): the line table's write, what a character write
+	// to a descriptor owes _fresh_line_stream. A stub where nothing calls that.
+	static final int FUNC_LINE_MARK = FUNC_FRESH_LINE_STREAM + 1;
 
 	// _peek_char ((ref null eq) stream, eof-error-p, eof-value) -> (ref null eq): the
 	// next character LEFT IN PLACE. A string input record simply decodes at its cursor
@@ -1778,7 +1784,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// PUSHBACK_BYTES_ADDR) that every character read takes its bytes from first.
 	// Appended before FUNC_USER_BASE like the mod/rem helpers, so no import/FUNC_START
 	// index shifts and the component adapter blobs are unaffected.
-	static final int FUNC_PEEK_CHAR = FUNC_FRESH_LINE_STREAM + 1;
+	static final int FUNC_PEEK_CHAR = FUNC_LINE_MARK + 1;
 
 	// _list_directory ((ref null eq) path) -> (ref null eq): (t . names) for a readable
 	// directory, null otherwise -- the ONE directory-listing primitive (everything
@@ -4361,6 +4367,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		if (!usesRead) {
 			wrapperExcludes.add(LispNames.READ_FROM_STRING);
+		}
+		// fresh-line's wrapper would compile a _fresh_line_stream call, and with it the
+		// line start every character write owes it, in a module that cannot reach the
+		// wrapper.
+		if (!(this.dynamic || usesEval || anyNameResolvable(program, usesRead, usesLoad)
+				|| BuiltinFunctionWrappers.reachesFreshLineValue(program, closRegistry.conditionReports().values()))) {
+			wrapperExcludes.add(LispNames.FRESH_LINE);
 		}
 		// The intern wrapper body calls _intern_sym -> _intern, which is a stub unless
 		// the program itself calls intern (usesIntern), so gate the wrapper the same way
@@ -8167,6 +8180,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_T_SYM); // _t_sym
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _probe_file
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _fresh_line_stream
+				fnDef.addFunction(TYPE_WRITE_STR); // _line_mark (fd, mid)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _peek_char (stream,
 															// eof-error-p, eof-value) ->
 															// (ref null eq)
@@ -8917,6 +8931,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		mainWriter
 			// Code section
 			.writeCode(code -> {
+				// Every call is compiled by now, or the global section just written would
+				// have no slot for it.
+				final int lineStartTable = quoteGlobals.lineStartTableIfAsked();
 				// No-wasi mode: bodies for the fifteen stubs at indices 0-14. TWO are
 				// `unreachable; end` (no locals) -- fd_read and clock_time_get;
 				// unreachable is stack-polymorphic so one shape satisfies every WASI
@@ -9025,8 +9042,10 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(true, stringTable))
 					.addFunction(WasmStringRuntimeBuilder.buildTrimBody())
 					.addFunction(WasmIoRuntimeBuilder.buildOpenBody(usesBidirectionalOpen))
-					.addFunction(WasmIoRuntimeBuilder.buildCloseBody(stringTable, ostreamTableGlobalIndex))
-					.addFunction(WasmIoRuntimeBuilder.buildWriteLineBody(stringTable, this.charvecPossible))
+					.addFunction(WasmIoRuntimeBuilder.buildCloseBody(stringTable, ostreamTableGlobalIndex,
+							lineStartTable >= 0))
+					.addFunction(WasmIoRuntimeBuilder.buildWriteLineBody(stringTable, this.charvecPossible,
+							lineStartTable >= 0))
 					.addFunction(WasmRuntimeBuilder.buildEqualBody(this.usesInstances ? instanceTypeBase() : -1,
 							this.addressKeyedLayout, this.charvecPossible))
 					.addFunction(WasmGetenvRuntimeBuilder.build(scratchBase));
@@ -9058,7 +9077,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmIoRuntimeBuilder.buildWriteByteBody());
 				// string-stream runtime helper bodies (FUNC_WRITE_STREAM_STR,
 				// FUNC_MAKE_STR_OSTREAM, FUNC_MAKE_STR_ISTREAM, FUNC_STR_STREAM_CONTENTS)
-				code.addFunction(WasmStringStreamRuntimeBuilder.buildWriteStreamStrBody(this.charvecPossible));
+				code.addFunction(WasmStringStreamRuntimeBuilder.buildWriteStreamStrBody(this.charvecPossible,
+						lineStartTable >= 0));
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeOutputStreamBody(ostreamTableGlobalIndex));
 				// A program that asks file-position keeps each input record's START,
 				// which a character position counts from.
@@ -9188,8 +9208,12 @@ public final class WasmLispCompiler implements LispCompiler {
 						WasmFxRuntimeBuilder.buildTSymBody(tSymEntry.offset(), tSymEntry.length(), tSymGlobalIndex));
 				// probe-file runtime helper body (FUNC_PROBE_FILE)
 				code.addFunction(WasmIoRuntimeBuilder.buildProbeFileBody());
-				// fresh-line stream helper body (FUNC_FRESH_LINE_STREAM)
-				code.addFunction(WasmStringStreamRuntimeBuilder.buildFreshLineStreamBody(stringTable.newline.offset()));
+				// FUNC_FRESH_LINE_STREAM and FUNC_LINE_MARK, only where a call was
+				// compiled
+				code.addFunction(lineStartTable >= 0 ? WasmStringStreamRuntimeBuilder
+					.buildFreshLineStreamBody(stringTable.newline.offset(), lineStartTable) : UNREACHABLE_BODY);
+				code.addFunction(lineStartTable >= 0 ? WasmStringStreamRuntimeBuilder.buildLineMarkBody(lineStartTable)
+						: UNREACHABLE_BODY);
 				// peek-char runtime helper body (FUNC_PEEK_CHAR)
 				code.addFunction(WasmIoRuntimeBuilder.buildPeekCharBody());
 				// %list-directory runtime helper body (FUNC_LIST_DIRECTORY)
@@ -11519,6 +11543,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		private final LispVal literalTableToken = new am.ik.rontolisp.LispSymbol("#<literal-table>");
 
+		private final LispVal lineStartTableToken = new am.ik.rontolisp.LispSymbol("#<line-start-table>");
+
 		private boolean literalSites;
 
 		private boolean literalSitesSealed;
@@ -11607,6 +11633,26 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		int literalTableIndex() {
 			return indexFor(this.literalTableToken);
+		}
+
+		/**
+		 * The module global holding a byte per descriptor past column 0 of its line, a
+		 * {@code $str_bytes} array {@code _line_mark} creates and grows, allocating the
+		 * next index on first sight: a compiled {@code _fresh_line_stream} call asks for
+		 * it, and that is what gives the writes their bookkeeping.
+		 * @return the global index
+		 */
+		int lineStartTable() {
+			return indexFor(this.lineStartTableToken);
+		}
+
+		/**
+		 * {@return the line table's global, -1 where no {@code _fresh_line_stream} call
+		 * compiled}
+		 */
+		int lineStartTableIfAsked() {
+			Integer index = this.byDatum.get(this.lineStartTableToken);
+			return (index != null) ? index : -1;
 		}
 
 		/**
@@ -12289,18 +12335,18 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean unbindsSpecials = false;
 
 		/**
-		 * The one top-level form whose returned NAME the emitter is dropping, or
-		 * {@code null}. Set by {@link WasmToplevelEmit} immediately before it compiles a
-		 * {@code defvar}/{@code defparameter}/{@code defconstant} in statement position;
-		 * {@link WasmDefvarCompiler} clears it when it takes the offer and emits no name
-		 * (see {@code compiler/ToplevelStatements},
+		 * The one statement whose value the emitter is dropping, or {@code null}. Set
+		 * immediately before a {@code defvar}/{@code defparameter}/{@code defconstant} at
+		 * the top level, or a {@code fresh-line} in any statement position, is compiled;
+		 * {@link WasmDefvarCompiler} and {@link WasmFreshLineCompiler} clear it when they
+		 * take the offer and leave no value (see {@code compiler/ToplevelStatements},
 		 * {@code .kb/toplevel-statement-values.md}). Keyed by the cons IDENTITY, and
 		 * cleared on acceptance, so the emitter can tell whether the offer was taken --
-		 * an offer the dispatch did not route to the defvar compiler leaves a value on
-		 * the stack and still gets its drop -- and so a nested definer compiled while
-		 * this one's init expression is being emitted cannot take it.
+		 * an offer the dispatch did not route to those compilers leaves a value on the
+		 * stack and still gets its drop -- and so a form nested in this one's arguments
+		 * cannot take it.
 		 */
-		@Nullable LispVal definerNameDropped;
+		@Nullable LispVal valueDropped;
 
 		Set<String> userDefunNames = Set.of();
 

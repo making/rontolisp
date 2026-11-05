@@ -1512,8 +1512,7 @@ public final class LispPreludeLibrary {
 				         (write-string %fw-text)
 				         nil)
 				        (t
-				         (if (and %fw-fresh (if (%obj-is %fw-d '%STREAM) (typep %fw-d 'string-stream) t))
-				             (fresh-line %fw-d))
+				         (if %fw-fresh (fresh-line %fw-d))
 				         (write-string %fw-text %fw-d)
 				         nil)))
 				""");
@@ -1536,8 +1535,11 @@ public final class LispPreludeLibrary {
 				  %bs-b)
 				(defmethod rontolisp:stream-fresh-line ((%bs-s %broadcast-stream))
 				  (let ((%bs-cs (%broadcast-stream-components %bs-s)))
-				    (if %bs-cs
-				        (fresh-line (car (last %bs-cs)))
+				    (if (if %bs-cs (fresh-line (car %bs-cs)) nil)
+				        (progn
+				          (dolist (%bs-x (cdr %bs-cs))
+				            (terpri %bs-x))
+				          t)
 				        nil)))
 				(defmethod rontolisp:stream-clear-input ((%bs-s %broadcast-stream))
 				  nil)
@@ -1573,6 +1575,8 @@ public final class LispPreludeLibrary {
 				  (write-string (subseq %tw-str %tw-start (or %tw-end (length %tw-str)))
 				                (%two-way-output %tw))
 				  %tw-str)
+				(defmethod rontolisp:stream-fresh-line ((%tw %two-way-stream))
+				  (fresh-line (%two-way-output %tw)))
 				(defmethod rontolisp:stream-read-byte ((%tw %two-way-stream))
 				  (read-byte (%two-way-input %tw) nil :eof))
 				(defmethod rontolisp:stream-write-byte ((%tw %two-way-stream) %tw-b)
@@ -1628,6 +1632,8 @@ public final class LispPreludeLibrary {
 				  (write-string (subseq %es-str %es-start (or %es-end (length %es-str)))
 				                (%echo-output %es))
 				  %es-str)
+				(defmethod rontolisp:stream-fresh-line ((%es %echo-stream))
+				  (fresh-line (%echo-output %es)))
 				(defmethod rontolisp:stream-read-byte ((%es %echo-stream))
 				  (let ((%es-b (read-byte (%echo-input %es) nil :eof)))
 				    (if (eq %es-b :eof)
@@ -5164,6 +5170,21 @@ public final class LispPreludeLibrary {
 				        (progn
 				          (close %rd-out)
 				          (if eof-error-p (error 'end-of-file :stream (or stream *standard-input*)) eof-value)))))
+				""");
+		// What an array made with the element type holds: one definition of what upgrades
+		// to what, make-array's.
+		SOURCES.put(LispNames.UPGRADED_ARRAY_ELEMENT_TYPE, """
+				(defun upgraded-array-element-type (typespec &optional environment)
+				  (array-element-type (make-array 0 :element-type typespec)))
+				""");
+		// What a define-method-combination body refuses a method or a generic with.
+		SOURCES.put(LispNames.INVALID_METHOD_ERROR, """
+				(defun invalid-method-error (method format-control &rest args)
+				  (error "Invalid method ~S: ~A" method (apply #'format nil format-control args)))
+				""");
+		SOURCES.put(LispNames.METHOD_COMBINATION_ERROR, """
+				(defun method-combination-error (format-control &rest args)
+				  (error "Invalid method combination: ~A" (apply #'format nil format-control args)))
 				""");
 		SOURCES.put(LispNames.RD_DATUM, """
 				(defun %rd-datum (%rd-s %rd-out)

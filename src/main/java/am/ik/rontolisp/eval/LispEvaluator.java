@@ -42,6 +42,7 @@ import am.ik.rontolisp.macro.DynamicClasses;
 import am.ik.rontolisp.macro.FormatRenderer;
 import am.ik.rontolisp.macro.GenericFunctions;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.MethodCombinations;
 import am.ik.rontolisp.macro.MopEvalCapture;
 import am.ik.rontolisp.macro.MopProtocol;
 import am.ik.rontolisp.LispNames;
@@ -1972,6 +1973,13 @@ public final class LispEvaluator {
 				return apply(resolveFunction(name), args, this.globalEnv);
 			}));
 		}
+		// The slot-access protocol's generics likewise.
+		for (String name : SlotProtocol.ENTRY_NAMES) {
+			this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+				ensureSlotProtocolLoaded();
+				return apply(resolveFunction(name), args, this.globalEnv);
+			}));
+		}
 		// (setf (find-class name) class): find-class answers class for name from now on,
 		// nil forgetting it (contextl's layer-makunbound); see LispNames.SET_FIND_CLASS.
 		this.globalEnv.defineFunction(LispNames.SET_FIND_CLASS, new LispFunction(LispNames.SET_FIND_CLASS, args -> {
@@ -2071,7 +2079,8 @@ public final class LispEvaluator {
 			for (int i = args.size() - 1; i >= 1; i--) {
 				call = new LispCons(quoteForm(args.get(i)), call);
 			}
-			call = new LispCons(new LispSymbol(LispNames.MAKE_INSTANCE), new LispCons(quoteForm(classSym), call));
+			call = new LispCons(new LispSymbol(LispNames.SYSTEM_MAKE_INSTANCE),
+					new LispCons(quoteForm(classSym), call));
 			return eval(call, this.globalEnv);
 		};
 		this.globalEnv.defineFunction(LispNames.MOP_MAKE_INSTANCE,
@@ -2227,6 +2236,10 @@ public final class LispEvaluator {
 					});
 					return valueList(rows);
 				}));
+		this.globalEnv.defineFunction(MethodCombinations.QUALIFIERS_MATCH,
+				new LispFunction(MethodCombinations.QUALIFIERS_MATCH,
+						args -> MethodCombinations.qualifiersMatch(args.get(0), args.get(1)) ? LispTrue.INSTANCE
+								: LispNil.INSTANCE));
 		this.globalEnv.defineFunction(LispNames.REGISTER_CLASS_METAOBJECT,
 				new LispFunction(LispNames.REGISTER_CLASS_METAOBJECT, args -> {
 					// (%register-class-metaobject name metaobject) -- primes the registry
@@ -9692,6 +9705,9 @@ public final class LispEvaluator {
 	/** The (re)finalization hook mop-protocol.lisp's finalize-inheritance calls. */
 	private static final String MOP_CLASS_FINALIZED = "%MOP-CLASS-FINALIZED";
 
+	/** The hook generic-functions.lisp's compute-applicable-methods asks. */
+	private static final String GF_STATIC_METHODS = "%GF-STATIC-METHODS";
+
 	/** The hook mop-protocol.lisp's ensure-class-using-class changes a metaclass by. */
 	private static final String MOP_CHANGE_METACLASS = "%MOP-CHANGE-METACLASS";
 
@@ -9716,9 +9732,9 @@ public final class LispEvaluator {
 
 	/**
 	 * Loads the slot-access protocol runtime ({@code SlotProtocol}) once, at the first
-	 * method a program defines on one of its generics: from then on the slot forms and
-	 * the accessors of a {@code :metaclass} class route an instance of such a class
-	 * through {@code slot-value-using-class} and its siblings.
+	 * method a program defines on one of its generics or call of one: from then on the
+	 * slot forms and the accessors of a {@code :metaclass} class route an instance of
+	 * such a class through {@code slot-value-using-class} and its siblings.
 	 */
 	private void ensureSlotProtocolLoaded() {
 		synchronized (this.libraryLoadLock) {
@@ -9726,6 +9742,11 @@ public final class LispEvaluator {
 				return;
 			}
 			this.closRegistry.enableSlotProtocol();
+			// The loading stubs go first: a stub left bound would be stashed as a default
+			// method.
+			for (String name : SlotProtocol.ENTRY_NAMES) {
+				this.globalEnv.undefineFunction(name);
+			}
 			for (LispVal form : SlotProtocol.forms()) {
 				eval(form, this.globalEnv);
 			}
@@ -9994,6 +10015,16 @@ public final class LispEvaluator {
 			for (LispVal form : GenericFunctions.forms()) {
 				eval(form, this.globalEnv);
 			}
+			// The methods only a dispatcher knows; the compile paths generate this
+			// (LispMacroExpander.staticMethodsForm).
+			this.globalEnv.defineFunction(GF_STATIC_METHODS, new LispFunction(GF_STATIC_METHODS, args -> {
+				String name = args.get(0) instanceof LispFunction function ? function.name()
+						: args.get(0) instanceof LispLambda lambda ? lambda.name()
+								: args.get(0) instanceof LispSymbol symbol ? symbol.name() : null;
+				ClosRegistry.GenericInfo generic = name == null ? null : this.closRegistry.findGeneric(name);
+				return generic == null ? LispNil.INSTANCE
+						: eval(LispMacroExpander.staticMethodsForm(generic, this.closRegistry), this.globalEnv);
+			}));
 			eval(LispMacroExpander.classKeyRanksForm(), this.globalEnv);
 			for (ClosRegistry.GenericInfo generic : List.copyOf(this.closRegistry.generics().values())) {
 				regenerateDispatcher(generic.name(), this.globalEnv);
@@ -10254,6 +10285,7 @@ public final class LispEvaluator {
 									break dispatch;
 								}
 								case LispNames.MAKE_INSTANCE:
+								case LispNames.SYSTEM_MAKE_INSTANCE:
 									if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
 										break dispatch;
 									}
@@ -11551,6 +11583,8 @@ public final class LispEvaluator {
 				return singleValue(registerDefsetf(cons));
 			case LispNames.DEFINE_COMPILER_MACRO:
 				return singleValue(evalDefineCompilerMacro(cons, env));
+			case LispNames.DEFINE_METHOD_COMBINATION:
+				return singleValue(evalDefineMethodCombination(cons));
 			case LispNames.MACROLET:
 				return evalMacrolet(cons, env, cons == this.topLevelForm.get());
 			case LispNames.SYMBOL_MACROLET:
@@ -12091,6 +12125,8 @@ public final class LispEvaluator {
 		if (LispMacroExpander.defclassNamesMopBaseSuperclass(cons)) {
 			this.closRegistry.ensureMopClassesSeeded();
 		}
+		String newClassName = cons.toList().size() > 1 && cons.toList().get(1) instanceof LispSymbol written
+				&& this.closRegistry.findClass(written.name()) == null ? written.name() : null;
 		// A funcallable MOP class named as the metaclass or a superclass registers
 		// first, so the protocol below loads with its constructor.
 		int classesBefore = this.closRegistry.classes().size();
@@ -12107,6 +12143,7 @@ public final class LispEvaluator {
 			ensureMopProtocolLoaded();
 			if (cons.toList().get(1) instanceof LispSymbol defined) {
 				movedFrom = this.closRegistry.classMovedTo(defined.name());
+				newClassName = movedFrom == null ? newClassName : null;
 			}
 			// A REdefinition starts from what the previous driver-built metaobject knew
 			// about slot allocations: the static side below is registered before this
@@ -12169,7 +12206,14 @@ public final class LispEvaluator {
 				}
 			}
 		}
-		regenerateClassDispatchers(env);
+		// Every dispatcher when the class was known before, as its ancestors may have
+		// changed, only those it can reach when it is new.
+		ClosRegistry.ClassInfo newClass = newClassName == null ? null : this.closRegistry.findClass(newClassName);
+		for (ClosRegistry.GenericInfo generic : List.copyOf(this.closRegistry.generics().values())) {
+			if (newClass == null ? generic.hasClassMethod() : generic.dispatchesOverNewClass(newClass)) {
+				defineDispatcher(generic.name(), env);
+			}
+		}
 		// CLHS: defclass answers the class object, find-class's (lisp-binary binds a
 		// defparameter to it and hands it to moptilities' slot-names).
 		LispVal name = cons.toList().get(1);
@@ -12953,6 +12997,49 @@ public final class LispEvaluator {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Keeps the function of a {@code define-method-combination}. A dispatcher runs it for
+	 * each of its branches ({@code macro/MethodCombinations.java}): over method objects,
+	 * as the form's body expects, whose places in the answer become the names of their
+	 * method-body defuns, and with the answer's macros expanded here, as a compile path
+	 * generates its dispatchers past its macro-time pass.
+	 */
+	private LispVal evalDefineMethodCombination(LispCons cons) {
+		if (!(cons.cdr() instanceof LispCons rest) || !(rest.car() instanceof LispSymbol name)) {
+			throw new LispEvalException(LispNames.DEFINE_METHOD_COMBINATION + " expects a name: " + cons.print());
+		}
+		LispVal function = eval(MethodCombinations.expanderLambda(cons), this.globalEnv);
+		this.closRegistry.registerMethodCombination(name.name(),
+				new LispFunction(name.name(), args -> effectiveMethodForm(function, args)));
+		return name;
+	}
+
+	private LispVal effectiveMethodForm(LispVal function, List<LispVal> args) {
+		java.util.Map<LispVal, LispVal> defuns = new java.util.IdentityHashMap<>();
+		List<LispVal> methods = new java.util.ArrayList<>();
+		for (LispVal entry : ((LispCons) args.get(2)).toList()) {
+			LispCons pair = (LispCons) entry;
+			LispVal method = this.closRegistry.methodObject(pair.cdr());
+			defuns.put(method, pair.car());
+			methods.add(new LispCons(method, pair.cdr()));
+		}
+		LispVal form = apply(function, List.of(args.get(0), args.get(1), valueList(methods), args.get(3)),
+				this.globalEnv);
+		return UserMacroExpander.expandAll(MethodCombinations.replaced(form, defuns), this);
+	}
+
+	/**
+	 * What the macro-time pass leaves of a {@code define-method-combination} it ran.
+	 * @param cons the form
+	 * @return the form for the backend's registry ({@link MethodCombinations#MARKER})
+	 */
+	LispVal methodCombinationMarker(LispCons cons) {
+		LispVal name = ((LispCons) cons.cdr()).car();
+		return consList(
+				List.of(new LispSymbol(MethodCombinations.MARKER), quotedValue(name), quotedValue(java.util.Objects
+					.requireNonNull(this.closRegistry.findMethodCombination(((LispSymbol) name).name())))));
 	}
 
 	/**
@@ -13898,7 +13985,7 @@ public final class LispEvaluator {
 				expanded = LispMacroExpander.expandNativeMacro(cons);
 			}
 			if (expanded != null) {
-				return expanded;
+				return LispMacroExpander.withStandardIteration(expanded, cons);
 			}
 		}
 		return form;
@@ -14242,7 +14329,7 @@ public final class LispEvaluator {
 		// #'(setf name): the writer function installed by (defun (setf name) ...).
 		LispSymbol setfPlace = LambdaLists.setfFunctionPlaceName(designator);
 		if (setfPlace != null) {
-			return resolveFunction(LispMacroExpander.setfFunctionName(setfPlace.name()));
+			return functionValue(LispMacroExpander.setfFunctionName(setfPlace.name()));
 		}
 		if (designator instanceof LispSymbol sym) {
 			return functionValue(sym.name());
@@ -14268,6 +14355,12 @@ public final class LispEvaluator {
 	private LispVal functionValue(String name) {
 		if (this.closRegistry.findGeneric(name) != null) {
 			LispVal dispatcher = this.genericDispatchers.get(name);
+			if (dispatcher instanceof LispInstance metaobject && isGenericFunctionMetaobject(metaobject)) {
+				// Its metaobject calls the current dispatcher, and is what find-method
+				// and
+				// remove-method take.
+				return metaobject;
+			}
 			if (dispatcher == null || dispatcher == this.globalEnv.lookupFunctionOrNull(name)) {
 				return this.genericFunctionValues.computeIfAbsent(name, generic -> new LispFunction(generic, args -> {
 					LispVal current = this.genericDispatchers.get(generic);

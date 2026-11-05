@@ -2583,7 +2583,7 @@ final class WasmIoRuntimeBuilder {
 	 * table
 	 * @return the function body bytes
 	 */
-	static byte[] buildCloseBody(WasmLispCompiler.StringTable st, int ostreamTableGlobal) {
+	static byte[] buildCloseBody(WasmLispCompiler.StringTable st, int ostreamTableGlobal, boolean lineStarts) {
 		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
@@ -2624,6 +2624,13 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.DROP);
 		// Bytes its pushback holds die with it: the next open may be handed its number.
 		WasmUtf8StreamDecoder.emitDropHeld(w, FD);
+		// So does its line: a stream starts at column 0, whatever it is opened on.
+		if (lineStarts) {
+			getLocal(w, FD);
+			i32(w, 0);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LINE_MARK);
+		}
 		w.write(Instruction.END);
 		// return t
 		i32(w, t.offset());
@@ -2638,9 +2645,11 @@ final class WasmIoRuntimeBuilder {
 	 * (without the surrounding quotes) plus a newline to the stream's file descriptor (1
 	 * = stdout when the stream is nil) via fd_write, and returns the string.
 	 * @param st the string table (for the newline byte)
+	 * @param lineStarts whether a descriptor's line start is kept for
+	 * {@code _fresh_line_stream}
 	 * @return the function body bytes
 	 */
-	static byte[] buildWriteLineBody(WasmLispCompiler.StringTable st, boolean charvecPossible) {
+	static byte[] buildWriteLineBody(WasmLispCompiler.StringTable st, boolean charvecPossible, boolean lineStarts) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: STR=0 (ref), FD_VAL=1 (ref) ; i32 locals: OFF=2, LEN=3, FD=4, REC=5
@@ -2753,6 +2762,21 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
 		w.write(Instruction.DROP);
+		// The line is over: standard output's flag, or the descriptor's.
+		getLocal(w, FD);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, WasmLispCompiler.LINE_START_ADDR);
+		i32(w, 0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.END);
+		if (lineStarts) {
+			getLocal(w, FD);
+			i32(w, 0);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LINE_MARK);
+		}
 		// return the string
 		getLocal(w, STR);
 		w.write(Instruction.END);
@@ -3286,11 +3310,9 @@ final class WasmIoRuntimeBuilder {
 	static byte[] buildWriteByteBody() {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// params: BYTE=0 (ref), STREAM=1 (ref) ; i32 local: FD=2
-		w.write(1);
-		w.write(1);
-		w.write(Type.I32);
-		final int BYTE = 0, STREAM = 1, FD = 2;
+		// params: BYTE=0 (ref), STREAM=1 (ref)
+		w.write(0);
+		final int BYTE = 0, STREAM = 1;
 		final int IOV = WasmLispCompiler.IOV_OFFSET;
 		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
 		final int SCRATCH = WasmLispCompiler.BYTE_SCRATCH_ADDR;
@@ -3320,29 +3342,13 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.ELSE);
 		i32(w, 1);
 		w.write(Instruction.END);
-		setLocal(w, FD);
 		// fd_write(fd, IOV, 1, NWRITTEN) ; drop errno
-		getLocal(w, FD);
 		i32(w, IOV);
 		i32(w, 1);
 		i32(w, NWRITTEN);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
 		w.write(Instruction.DROP);
-		// A raw octet moves the standard-output column exactly like a character does:
-		// if (fd == 1) LINE_START = (byte != '\n'), the same flag _write_str keeps. Any
-		// other descriptor leaves it alone -- a file write must not disturb stdout's.
-		getLocal(w, FD);
-		i32(w, 1);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.IF, 0x40);
-		i32(w, WasmLispCompiler.LINE_START_ADDR);
-		i32(w, SCRATCH);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		i32(w, 10);
-		w.write(Instruction.I32_NE);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		w.write(Instruction.END);
 		// return the byte
 		getLocal(w, BYTE);
 		w.write(Instruction.END);

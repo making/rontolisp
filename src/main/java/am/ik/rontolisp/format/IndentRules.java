@@ -129,6 +129,7 @@ public final class IndentRules {
 		for (String name : List.of("defclass", "define-condition", "defgeneric")) {
 			rules.put(name, Style.operands(2, 2));
 		}
+		rules.put("define-method-combination", Style.operands(3, 2));
 		// (if test then else): the branches line up under the test, not under the body
 		// indent, so a two-armed if never reads as a three-form body.
 		rules.put("if", Style.operands(1, 4));

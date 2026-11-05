@@ -283,12 +283,12 @@ cutoff is deliberately label-free.
 ## What a stream with no column cannot do
 **Every conditional line break is a no-op** — `pprint-newline` `:linear`/`:fill`/`:miser`,
 `~_`/`~:_`/`~@_`, `pprint-indent`, `pprint-tab`, `~i`. Each needs the stream's column; a rontolisp
-stream is an opaque integer handle with none (`.kb/standard-output-redirect.md`), and `format`'s
-`~&`/`~t` only approximate it by scanning the string built SO FAR. So `*print-right-margin*`,
-`*print-miser-width*` and `*print-lines*` are accepted and ignored, and a justification never pads
-to `:mincol`. **Re-evaluate when a stream gains a column**: one field plus a write-through update
-in every writing primitive, and `pprint-newline` and the `~_` family become one shared
-"does the rest fit" test.
+stream keeps one bit, whether it is at a line start (`.kb/standard-output-redirect.md`, "A stream's
+line start"), and `format`'s `~t` and an inner `~&` only approximate the column by scanning the string
+built SO FAR. So `*print-right-margin*`, `*print-miser-width*` and `*print-lines*` are accepted and
+ignored, and a justification never pads to `:mincol`. **Re-evaluate when a stream gains a column**: a
+count where that bit is kept, in the write paths that keep it, and `pprint-newline` and the `~_` family
+become one shared "does the rest fit" test.
 
 **The ordinary printing operators do NOT consult `*print-pprint-dispatch*`.** `princ`/`prin1`/
 `print`/`~A`/`~S` are a per-backend primitive on the hottest path; the one hook above them,

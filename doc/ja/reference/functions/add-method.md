@@ -5,6 +5,7 @@
 `(remove-method generic-function method)`
 `(find-method generic-function qualifiers specializers &optional (errorp t))`
 `(method-qualifiers method)`
+`(compute-applicable-methods generic-function arguments)`
 
 総称関数とメソッドの**メタオブジェクト**(AMOP 5.3–5.4)です。`ensure-generic-function` は名前の総称関数メタオブジェクトを返します。これは `standard-generic-function` のファンカラブルなインスタンスで、`:generic-function-class` が指すクラス、またはその名前の [`defgeneric`](../special-forms/defgeneric.md) が `(:generic-function-class c)` で指すクラスがあればそのインスタンスです。最初の要求で作られて保持され、呼び出すと総称関数を呼び出し、以後は計算された名前の `fdefinition` がこれを返します。総称関数を持たない名前には新しい総称関数が作られ、プログラムは実行時に定義された関数と同じくその名前で呼び出します。
 
@@ -26,6 +27,18 @@
                                        (list :dog (animal-name (first args))))))
 (list (speak (make-instance 'dog :name "rex"))
       (speak (make-instance 'animal :name "cat"))) ; => ((:DOG "rex") (:ANIMAL "cat"))
+```
+
+`compute-applicable-methods` は、引数リストに適用できる総称関数のメソッドをメタオブジェクトで返します。もっとも特定的なものが先頭で、同じメソッドにはいつも同じオブジェクトを返します。`defmethod` が定義したメソッドも `add-method` が加えたメソッドも含みます。受け取るのは総称関数のメタオブジェクトかその `#'name` で、総称関数でない関数には `nil` を返します。これも総称関数なのでプログラムはメソッドを定義できますが、総称関数の呼び出しはこれを参照しません。そのようなメソッドが変えるのは `compute-applicable-methods` の呼び出し側に見える結果だけです。コンパイルされたプログラムがこれらのメタオブジェクトを持つのは、`compute-applicable-methods` に言及する場合です。
+
+```lisp
+(defgeneric size (x))
+(defmethod size ((x number)) :number)
+(defmethod size :around ((x integer)) (call-next-method))
+(defmethod size (x) :anything)
+(mapcar #'method-qualifiers (compute-applicable-methods #'size (list 1))) ; => ((:AROUND) NIL NIL)
+(mapcar (lambda (method) (class-name (first (closer-mop:method-specializers method))))
+        (compute-applicable-methods #'size (list "s"))) ; => (T)
 ```
 
 ## バックエンドサポート

@@ -442,6 +442,26 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
+	 * Whether a program can reach {@code fresh-line}'s wrapper through a name it spells:
+	 * {@code #'fresh-line}, the symbol in quoted data, or a symbol builder over a string
+	 * ({@link RuntimeNameProducers}). The wrapper's body asks a stream, and a compiled
+	 * ask is what has every character write of the program keep a line start
+	 * ({@code .kb/standard-output-redirect.md}, "A stream's line start"); a program that
+	 * only calls the operator cannot reach it. The caller adds what lets a program name
+	 * anything.
+	 * @param program the top-level forms
+	 * @param extraForms further forms that count as the program's (a condition's
+	 * {@code :report} lambdas)
+	 * @return whether it can
+	 */
+	public static boolean reachesFreshLineValue(List<LispVal> program, java.util.Collection<LispVal> extraForms) {
+		Set<String> names = Set.of(LispNames.FRESH_LINE);
+		return RuntimeNameProducers.anySymbolBuilder(program)
+				|| program.stream().anyMatch(form -> spellsSymbolConstant(form, names))
+				|| extraForms.stream().anyMatch(form -> spellsSymbolConstant(form, names));
+	}
+
+	/**
 	 * Whether the expression names the operator as a function DESIGNATOR -- either the
 	 * {@code #'name} shape {@link #referencesFunctionValue} scans for or the
 	 * {@code 'name} one, which {@code compiler.FunctionDesignators.normalize} turns into
@@ -939,10 +959,9 @@ public final class BuiltinFunctionWrappers {
 								List.of(listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("b"),
 										call(positionSet, "a", "b"), call(position, "a")))))));
 		String writeString = rontolispInternal("%GRAY-WRITE-STRING-DISPATCH");
-		String freshLine = rontolispInternal("%GRAY-FORMAT-FRESH-LINE");
+		String freshLine = rontolispInternal("%GRAY-FRESH-LINE-DISPATCH");
 		table.put(LispNames.FORMAT,
-				new DispatchWrapper(List.of(writeString, freshLine, rontolispInternal("%GRAY-FRESH-LINE-DISPATCH")),
-						formatWrapper(writeString, call(freshLine, "dest"))));
+				new DispatchWrapper(List.of(writeString, freshLine), formatWrapper(writeString, freshLine)));
 		return java.util.Collections.unmodifiableMap(table);
 	}
 
@@ -2467,19 +2486,18 @@ public final class BuiltinFunctionWrappers {
 	// string, anything else (the t designator or a stream handle) gets one write-string
 	// call and nil.
 	private static WrapperDef formatWrapper() {
-		return formatWrapper(LispNames.WRITE_STRING,
-				LispMacroExpander.freshLineWhereTheColumnIsKnown(new LispSymbol("dest")));
+		return formatWrapper(LispNames.WRITE_STRING, LispNames.FRESH_LINE);
 	}
 
 	// writer: the (writer string destination) call that writes the rendered text.
-	// freshLine: what a ~& opening the control does.
-	private static WrapperDef formatWrapper(String writer, LispVal freshLine) {
+	// freshLine: the (freshLine destination) call a ~& opening the control makes.
+	private static WrapperDef formatWrapper(String writer, String freshLine) {
 		LispSymbol strVar = new LispSymbol("__fmt_str");
 		LispVal rendered = am.ik.rontolisp.macro.FormatRenderer.call(new LispSymbol("ctrl"), new LispSymbol("r"));
 		LispVal bindings = listToCons(List.of((LispVal) listToCons(List.of(strVar, rendered))));
-		LispVal writeForm = listToCons(List.of(
-				new LispSymbol(LispNames.PROGN), listToCons(List.of(new LispSymbol(LispNames.IF),
-						call(LispNames.FMT_STARTS_FRESH, "ctrl"), freshLine, LispNil.INSTANCE)),
+		LispVal writeForm = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+				listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.FMT_STARTS_FRESH, "ctrl"),
+						call(freshLine, "dest"), LispNil.INSTANCE)),
 				callV(writer, strVar, new LispSymbol("dest")), LispNil.INSTANCE));
 		LispVal ifForm = listToCons(
 				List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "dest"), strVar, writeForm));

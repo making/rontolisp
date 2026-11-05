@@ -73,15 +73,12 @@ A `t` destination lowers to print calls, a `nil` one to `%string-concat` pieces
   piece keeps building its string.
 
 A `~&` that opens the control asks the destination, whichever path renders it (SBCL 2.2.9,
-2026-11-05, every row of ci-spec `format-opening-fresh-line-asks-the-destination` but the file's): the
+2026-11-05, every row of ci-spec `format-opening-fresh-line-asks-the-destination`): the
 text is built from column 0, so `~&` is silent in it, and `(fresh-line d)` runs after the arguments and
-before the write (`LispMacroExpander.formatStartsFresh`: `~&`, `~n&` with a nonzero `n`). **Only a
-destination with a column is asked** (`freshLineWhereTheColumnIsKnown`, gray.lisp's
-`%gray-format-fresh-line`, `%format-write`): `t`, a string stream, a Gray instance, a string with a fill
-pointer. A file, a socket and standard error keep none, so `fresh-line` always writes there
-([standard-output-redirect.md](standard-output-redirect.md)), and `(format *error-output* "~&x~%")`, the
-usual spelling, would open every message with a blank line (uiop's fatal report did); SBCL writes a
-newline only past column 0, here never. A literal control decides
+before the write (`LispMacroExpander.formatStartsFresh`: `~&`, `~n&` with a nonzero `n`). Every destination
+has a line start to ask ([standard-output-redirect.md](standard-output-redirect.md), "A stream's line start");
+until it did, a `%STREAM` that was no string stream was not asked, or `(format *error-output* "~&x~%")`, the usual
+spelling, would have opened every message with a blank line (uiop's fatal report did). A literal control decides
 at expansion, so one with no such `~&` lowers as it did; a computed one is held in a temp and asks
 `%fmt-starts-fresh-p` (`format-render.lisp`, there because a computed control means the renderer is),
 at each write site: `formatDestinationDispatch`, `runtimeRenderFallback`'s `t`, the Gray rewrite, the

@@ -906,10 +906,9 @@ mean `read-byte` on a text-opened stream "works" there while interpreter/JVM sig
   on the source naming `write-byte`/`write-sequence`; **any new path to `_writeByte`'s
   standard-output branch must join that gate** or its output truncates silently. The interpreter's
   twin is `out.flush()` at the end of `RontoLispCli.interpret`.
-- **A raw octet moves the standard-output COLUMN like a character does** on all four backends
-  (`LINE_START_ADDR`, `_col = b ^ 10`, `atLineStart`); without it `(write-byte 10 t)` + `fresh-line`
-  emitted a second newline on three backends and none on the interpreter (ci-spec
-  `binary-standard-output`).
+- **A raw octet moves no column**, on standard output or anywhere (SBCL 2.2.9, measured 2026-11-05,
+  [standard-output-redirect.md](standard-output-redirect.md), "A stream's line start"), so `(write-byte 10 t)` +
+  `fresh-line` past column 0 writes a second newline (ci-spec `binary-standard-output`).
 - `--component`: a NON-async component reads fd 0 / writes fd 1 through the preview1 adapter; in an
   ASYNC one `%stdin-read-byte-or-raw-f` is a raw passthrough, so octets come from the adapter's
   stdin, not the chunk buffer. Documented limit: an async program reading stdin BOTH as bytes and as

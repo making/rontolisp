@@ -87,7 +87,8 @@
 ;; index in the instance, which a slot definition holds once its class has it among
 ;; its effective slots. A class-allocated slot and a direct definition have none.
 (defun closer-mop:slot-definition-location (slot)
-  (if (and (%obj-p slot) (null (slot-value slot 'allocation)))
+  (if (and (%obj-p slot)
+           (member (slot-value slot 'allocation) '(nil :instance)))
       (slot-value slot '%location)
       nil))
 

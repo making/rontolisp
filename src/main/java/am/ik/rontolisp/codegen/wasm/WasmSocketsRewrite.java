@@ -59,7 +59,8 @@ final class WasmSocketsRewrite {
 	private static final Map<String, String> SYNC_DISPATCH = Map.of(LispNames.READ_LINE, "%IO-READ-LINE",
 			LispNames.READ_CHAR, "%IO-READ-CHAR", LispNames.READ_BYTE, "%IO-READ-BYTE", LispNames.WRITE_LINE,
 			"%IO-WRITE-LINE", LispNames.WRITE_BYTE, "%IO-WRITE-BYTE", LispNames.WRITE_STRING, "%IO-WRITE-STRING",
-			LispNames.CLOSE, "%IO-CLOSE", LispNames.LISTEN, "%IO-LISTEN", LispNames.OPEN_STREAM_P, "%IO-OPEN-STREAM-P");
+			LispNames.FRESH_LINE, "%IO-FRESH-LINE", LispNames.CLOSE, "%IO-CLOSE", LispNames.LISTEN, "%IO-LISTEN",
+			LispNames.OPEN_STREAM_P, "%IO-OPEN-STREAM-P");
 
 	// Async-context read promotions: native name -> the future-returning async internal.
 	private static final Map<String, String> ASYNC_FUTURES = Map.of(LispNames.READ_LINE, "%READ-LINE-FUTURE",
@@ -76,8 +77,9 @@ final class WasmSocketsRewrite {
 	private static final Map<String, int[]> ARITIES = Map.ofEntries(Map.entry(LispNames.READ_LINE, new int[] { 0, 1 }),
 			Map.entry(LispNames.READ_CHAR, new int[] { 0, 1 }), Map.entry(LispNames.READ_BYTE, new int[] { 0, 1 }),
 			Map.entry(LispNames.WRITE_LINE, new int[] { 1, 2 }), Map.entry(LispNames.WRITE_BYTE, new int[] { 2, 2 }),
-			Map.entry(LispNames.WRITE_STRING, new int[] { 1, 2 }), Map.entry(LispNames.CLOSE, new int[] { 1, 1 }),
-			Map.entry(LispNames.LISTEN, new int[] { 0, 1 }), Map.entry(LispNames.OPEN_STREAM_P, new int[] { 1, 1 }),
+			Map.entry(LispNames.WRITE_STRING, new int[] { 1, 2 }), Map.entry(LispNames.FRESH_LINE, new int[] { 0, 1 }),
+			Map.entry(LispNames.CLOSE, new int[] { 1, 1 }), Map.entry(LispNames.LISTEN, new int[] { 0, 1 }),
+			Map.entry(LispNames.OPEN_STREAM_P, new int[] { 1, 1 }),
 			Map.entry(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT), new int[] { 2, 2 }),
 			Map.entry(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT), new int[] { 1, 1 }));
 
@@ -351,7 +353,8 @@ final class WasmSocketsRewrite {
 			// safe. An EXPLICIT nil needs nothing here: it flows through the dispatch
 			// defun's non-socket arm into %write-string-raw / %write-line-raw, whose
 			// compilers apply the same designator rule (StreamDesignators).
-			if ((LispNames.WRITE_STRING.equals(head) || LispNames.WRITE_LINE.equals(head)) && parts.size() == 2) {
+			if (((LispNames.WRITE_STRING.equals(head) || LispNames.WRITE_LINE.equals(head)) && parts.size() == 2)
+					|| (LispNames.FRESH_LINE.equals(head) && parts.size() == 1)) {
 				List<LispVal> withDefault = new java.util.ArrayList<>(parts);
 				withDefault.add(new LispSymbol(LispNames.STANDARD_OUTPUT_VAR));
 				parts = withDefault;

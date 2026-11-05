@@ -939,6 +939,11 @@ every backend already lowers it to (`prog`, `psetf`, `shiftf`, `with-open-stream
 `do-symbols`, ...) or CL's own (`return` -> `(return-from nil ...)`, `lambda` -> `#'(lambda
 ...)`). It is kept out of `expandBuiltinMacro`, which also feeds compile passes that keep these
 forms native. A walker EMITS what it gets, so the expansion must run on every backend.
+**A walker also has to read it**: the lowerings' `%block` and `while` answer as `(block nil ...)` and
+`(tagbody top (if test (progn ... (go top))))` (`LispMacroExpander.withStandardIteration`, cons cells the
+call itself wrote left alone, 2026-11-05), since arnesi's walker met a `dolist`'s `return` with no
+block around it and refused (`redefun/cc assoc`, its load). Ci-spec
+`macroexpand-of-iteration-answers-standard-operators`.
 `handler-case` and the definers have no lowering, so they expand to an internal form that
 `LispMacroExpander.foldNativeExpansion` turns back into the native one:
 `(%handler-case form 'type #'(lambda ll . body)...)`, `(%defun 'name #'(lambda ll [doc] [decls]
