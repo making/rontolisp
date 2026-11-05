@@ -101,8 +101,7 @@ arm per macro** (2026-11-05, ci-spec `eval-expands-the-built-in-macros`, agrees 
 - `setq` and `setf` are one arm: `(setf a 1 b 2)` assigned the first pair and dropped the rest. `let` takes `(x)` and a bare
   `x`, which threw and trapped. A `throw` and a `return-from` carry their value's values as a list (`%eval-throw-values`).
 - **Left out:** `loop`'s keyword clauses (a row refuses them), `macrolet`, `symbol-macrolet`, `with-slots`, `restart-case`
-  (`.todo/i63`) and the definers; the doc page lists them. A form's `close` in a program with a method on it misses the registry
-  (`.todo/i64`), which `%eval-close` works around for the stream macros. `%eval-handler-case` is over `handler-bind`, so an eval'd
+  (`.todo/i63`) and the definers; the doc page lists them. `%eval-handler-case` is over `handler-bind`, so an eval'd
   one catches a `warn` a compiled one does not yet (`.todo/i65`).
 
 ## What a form can reach (`compiler/EvalReferences`)

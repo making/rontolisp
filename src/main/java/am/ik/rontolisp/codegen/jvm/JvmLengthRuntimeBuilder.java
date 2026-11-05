@@ -61,10 +61,12 @@ final class JvmLengthRuntimeBuilder {
 	 * @param lispArray in a {@code java:} program, the shared {@code _jlarr} test
 	 * ({@code JvmJavaDirectSites#lispArray}); null elsewhere, where the class alone
 	 * decides
+	 * @param consShape what tells a cons from the other {@code Object[]}-shaped values
 	 * @return the method
 	 */
 	static LengthMethod build(ConstantPool cp, ClassEntry objectArrayClass, ClassEntry stringClass,
-			MethodRefEntry longValueOf, ClassEntry selfClass, @Nullable MethodRefEntry lispArray) {
+			MethodRefEntry longValueOf, ClassEntry selfClass, @Nullable MethodRefEntry lispArray,
+			JvmOperandTypeRuntime.ConsShape consShape) {
 		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
 		ClassEntry rtExClass = cp.classEntry("java/lang/RuntimeException");
 		// _scount(s) returns the CHARACTER-visible length of the content inside the
@@ -79,7 +81,7 @@ final class JvmLengthRuntimeBuilder {
 		MethodRefEntry rtExInit = cp.methodRef(rtExClass, "<init>", "(Ljava/lang/String;)V");
 
 		// Slots: 0 = v, 1/2 = count (long accumulator for the list case), 3 = the
-		// array's slot-0 header (Object[]).
+		// array's slot-0 header (Object[]) or the walk's cell, 4 = the cell's car.
 		MethodCode a = new MethodCode();
 		MethodCode.Label notString = a.newLabel();
 		MethodCode.Label notArray = a.newLabel();
@@ -160,28 +162,27 @@ final class JvmLengthRuntimeBuilder {
 		a.areturn();
 		a.labelBinding(notArray);
 
-		// List: count cons cells (Object[]) until the value is no longer a cons. The walk
-		// must end at nil: anything else -- a non-list, a dotted list's tail -- is no
-		// sequence.
+		// List: count cons cells until the value is no longer a cons. The walk must end
+		// at
+		// nil: anything else -- a non-list, a dotted list's tail, an instance or a
+		// function
+		// value, which are Object[] too -- is no sequence.
 		a.lconst_0();
 		a.lstore(1);
 		a.labelBinding(loop);
 		a.aload(0);
-		a.instanceOf(objectArrayClass);
-		a.ifeq(done);
+		a.ifnull(done);
+		consShape.emitTest(a, 0, 3, 4, notSequence);
 		a.lload(1);
 		a.lconst_1();
 		a.ladd();
 		a.lstore(1);
-		a.aload(0);
-		a.checkcast(objectArrayClass);
+		a.aload(3);
 		a.loadConstant(1);
 		a.aaload();
 		a.astore(0);
 		a.goto_(loop);
 		a.labelBinding(done);
-		a.aload(0);
-		a.ifnonnull(notSequence);
 		a.lload(1);
 		a.invokestatic(longValueOf);
 		a.areturn();

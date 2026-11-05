@@ -6237,8 +6237,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// with. Without the second half every (reduce #'+ l) would pull the registry in
 		// -- its expansion binds the function to a temp, so the funcall dispatches --
 		// for a module in which no symbol naming a defun exists.
-		boolean designatorSymbolArrives = runtimeDesignatorDispatch[0]
-				&& (nameResolvable || anyDefunNameSpelled(defuns, userSpelledLiterals, symbolBuilders));
+		Map<String, WasmFunctionInfo> runTimeDispatchers = ShadowedBuiltins.runTimeNames(closRegistry, functions::get);
+		boolean designatorSymbolArrives = runtimeDesignatorDispatch[0] && (nameResolvable
+				|| anyDefunNameSpelled(defuns, runTimeDispatchers.keySet(), userSpelledLiterals, symbolBuilders));
 		// A computed (symbol-function x) / (fdefinition x) boxes the resolved funcId
 		// as a function VALUE, and a (coerce v 'function) over a literal function
 		// designator (or a computed result type, which can name FUNCTION at run
@@ -6250,8 +6251,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The registry's rows are the names a runtime designator can carry; the ladders
 		// take those plus every funcId materialized as a value. Computed together, so a
 		// row always has its case.
-		Set<Integer> registryFuncIds = registryFuncIds(defuns, valueFuncIds, spelledLiterals, registryLive,
-				nameResolvable, symbolBuilders, callOnlyRuntimes);
+		Set<Integer> registryFuncIds = registryFuncIds(defuns, runTimeDispatchers, valueFuncIds, spelledLiterals,
+				registryLive, nameResolvable, symbolBuilders, callOnlyRuntimes);
 		Set<Integer> dispatchableFuncIds = new HashSet<>(valueFuncIds);
 		dispatchableFuncIds.addAll(registryFuncIds);
 		// An injected wrapper body's fdlibm calls count once the wrapper can be
@@ -6523,6 +6524,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (!registryFuncIds.contains(i)) {
 					continue;
 				}
+				if (runTimeDispatchers.containsKey(defun.name)) {
+					continue;
+				}
 				int nameOffset = stringTable.addString(defun.name).offset();
 				writeLittleEndian32(registry, nameOffset);
 				writeLittleEndian32(registry, i); // funcId == defun index
@@ -6530,6 +6534,18 @@ public final class WasmLispCompiler implements LispCompiler {
 				// eval call path evaluates every argument instead of exactly arity
 				writeLittleEndian32(registry, defun.variadic ? -defun.paramNames.size() : defun.paramNames.size());
 				registryCount++;
+			}
+			// A built-in's name a program defines a method on answers the dispatcher
+			// (ShadowedBuiltins.runTimeNames).
+			for (Map.Entry<String, WasmFunctionInfo> row : runTimeDispatchers.entrySet()) {
+				int dispatcher = row.getValue().funcId();
+				if (registryFuncIds.contains(dispatcher)) {
+					DefunDecl defun = defuns.get(dispatcher);
+					writeLittleEndian32(registry, stringTable.addString(row.getKey()).offset());
+					writeLittleEndian32(registry, dispatcher);
+					writeLittleEndian32(registry, defun.variadic ? -defun.paramNames.size() : defun.paramNames.size());
+					registryCount++;
+				}
 			}
 			// Alias rows for INTERNAL names : a runtime-interned symbol
 			// carries the single-colon external spelling (the 2-arg intern/find-symbol
@@ -6600,7 +6616,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (!funNameIds.contains(i)) {
 				continue;
 			}
-			StringTable.StringEntry funName = stringTable.addFunName(defuns.get(i).name);
+			StringTable.StringEntry funName = stringTable
+				.addFunName(BuiltinFunctionWrappers.printedName(defuns.get(i).name));
 			writeLittleEndian32(funNameRows, i); // funcId == defun index
 			writeLittleEndian32(funNameRows, funName.offset());
 			writeLittleEndian32(funNameRows, funName.length());
@@ -6693,7 +6710,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					functions.containsKey(LispNames.EVAL_EXPANSION),
 					functions.containsKey(LispNames.EVAL_PLACE_EXPANSION),
 					functions.containsKey(LispNames.EVAL_SPECIAL_LET),
-					functions.containsKey(LispNames.EVAL_ROW_FLET) || functions.containsKey(LispNames.EVAL_ROW_LABELS));
+					functions.containsKey(LispNames.EVAL_ROW_FLET) || functions.containsKey(LispNames.EVAL_ROW_LABELS),
+					runTimeDispatchers.keySet());
 			if (evalHooks.expansion()) {
 				offsetsBuilder.add(stringTable, LispNames.EVAL_EXPANSION);
 			}
@@ -10033,15 +10051,22 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * designators Pass 2 dispatched. Uses the probe {@link #registryFuncIds} uses for the
 	 * rows themselves, so the gate and the rows agree by construction.
 	 * @param defuns the program's top-level functions
+	 * @param dispatchedNames the names answering a dispatcher
+	 * ({@link ShadowedBuiltins#runTimeNames}), which no defun carries
 	 * @param spelledLiterals every literal spelling Pass 2 emitted as a runtime value
 	 * @param symbolBuilders whether the program contains a symbol builder
 	 * @return {@code true} when at least one defun name is reachable as a designator
 	 */
-	private static boolean anyDefunNameSpelled(List<DefunDecl> defuns, Set<String> spelledLiterals,
-			boolean symbolBuilders) {
+	private static boolean anyDefunNameSpelled(List<DefunDecl> defuns, Set<String> dispatchedNames,
+			Set<String> spelledLiterals, boolean symbolBuilders) {
 		boolean setfNamesBuilt = definesSetfNameMapper(defuns);
 		for (DefunDecl defun : defuns) {
 			if (DesignatorSpellings.anySpelled(defun.name, spelledLiterals, symbolBuilders, setfNamesBuilt)) {
+				return true;
+			}
+		}
+		for (String name : dispatchedNames) {
+			if (DesignatorSpellings.anySpelled(name, spelledLiterals, symbolBuilders, setfNamesBuilt)) {
 				return true;
 			}
 		}
@@ -10281,6 +10306,8 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * with {@code --dynamic} -- which turns this gate off entirely, since late binding
 	 * resolves any name at run time -- to keep every function dispatchable.
 	 * @param defuns the program's defuns, index = funcId
+	 * @param runTimeDispatchers {@link ShadowedBuiltins#runTimeNames}: a name it holds
+	 * arms its dispatcher, not a defun of its own
 	 * @param valueFuncIds the funcIds Pass 2 materialized as closures
 	 * @param spelledLiterals the literal spellings Pass 2 emitted as runtime values
 	 * @param registryLive whether a real {@code _lookup} registry is emitted at all
@@ -10293,8 +10320,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * lowered onto them -- never a designator's target, however names resolve
 	 * @return the funcIds that get a registry row (and a ladder case)
 	 */
-	private Set<Integer> registryFuncIds(List<DefunDecl> defuns, Set<Integer> valueFuncIds, Set<String> spelledLiterals,
-			boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders, Set<String> callOnly) {
+	private Set<Integer> registryFuncIds(List<DefunDecl> defuns, Map<String, WasmFunctionInfo> runTimeDispatchers,
+			Set<Integer> valueFuncIds, Set<String> spelledLiterals, boolean registryLive, boolean anyNameResolvable,
+			boolean symbolBuilders, Set<String> callOnly) {
 		if (this.dynamic || anyNameResolvable) {
 			// Late binding, or an operator that can produce a name this compile never
 			// sees spelled: any name can be resolved at run time, so nothing is provably
@@ -10302,7 +10330,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			// sites lowered onto them call.
 			Set<Integer> all = new HashSet<>(valueFuncIds);
 			for (int i = 0; i < defuns.size(); i++) {
-				if (!callOnly.contains(defuns.get(i).name)) {
+				String name = defuns.get(i).name;
+				if (!callOnly.contains(name) && !runTimeDispatchers.containsKey(name)) {
 					all.add(i);
 				}
 			}
@@ -10311,8 +10340,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<Integer> rows = new HashSet<>();
 		boolean setfNamesBuilt = definesSetfNameMapper(defuns);
 		if (registryLive) {
+			for (Map.Entry<String, WasmFunctionInfo> row : runTimeDispatchers.entrySet()) {
+				if (DesignatorSpellings.anySpelled(row.getKey(), spelledLiterals, symbolBuilders, setfNamesBuilt)) {
+					rows.add(row.getValue().funcId());
+				}
+			}
 			for (int i = 0; i < defuns.size(); i++) {
-				if (callOnly.contains(defuns.get(i).name)) {
+				String name = defuns.get(i).name;
+				if (callOnly.contains(name) || runTimeDispatchers.containsKey(name)) {
 					continue;
 				}
 				// Every spelling a runtime designator can carry for the name --
@@ -10320,8 +10355,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// BUILDER present) the framed string literal and the two package-less
 				// symbol spellings. The list is shared with the JVM twin
 				// (compiler.DesignatorSpellings) so the two cannot drift.
-				if (DesignatorSpellings.anySpelled(defuns.get(i).name, spelledLiterals, symbolBuilders,
-						setfNamesBuilt)) {
+				if (DesignatorSpellings.anySpelled(name, spelledLiterals, symbolBuilders, setfNamesBuilt)) {
 					rows.add(i);
 				}
 			}

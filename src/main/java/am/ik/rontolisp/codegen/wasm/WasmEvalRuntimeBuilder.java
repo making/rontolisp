@@ -101,11 +101,23 @@ final class WasmEvalRuntimeBuilder {
 	 * {@code _store} has no arm for
 	 * @param specialLet whether an eval'd {@code let} asks if it binds a special
 	 * @param localFunctions whether {@code flet} or {@code labels} can bind a name
+	 * @param dispatched the built-ins the program defines a method on
+	 * ({@code ShadowedBuiltins.runTimeNames}): a call of one reaches the registry, past
+	 * any arm of its name
 	 */
 	record EvalHooks(int valueChannel, boolean expansion, boolean placeExpansion, boolean specialLet,
-			boolean localFunctions) {
+			boolean localFunctions, java.util.Set<String> dispatched) {
 
-		static final EvalHooks NONE = new EvalHooks(-1, false, false, false, false);
+		static final EvalHooks NONE = new EvalHooks(-1, false, false, false, false, java.util.Set.of());
+
+		/**
+		 * What the arm answering {@code op} without asking the registry compares the
+		 * operator with: its offset, or -1, no offset at all, where the program defines a
+		 * method on it.
+		 */
+		int armOffset(SpecialFormOffsets off, String op) {
+			return this.dispatched.contains(op) ? -1 : off.of(op);
+		}
 
 	}
 
@@ -1399,7 +1411,7 @@ final class WasmEvalRuntimeBuilder {
 		// argument and trapped on (first nil).
 
 		// ---- list (variadic) ----
-		openSpecial(w, OFF, off.of(LispNames.LIST));
+		openSpecial(w, OFF, hooks.armOffset(off, LispNames.LIST));
 		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
 		emitClearValues(w, CHANNEL);
 		getLocal(w, ARGHEAD);
@@ -1408,18 +1420,18 @@ final class WasmEvalRuntimeBuilder {
 
 		// ---- variadic + - * / : left-fold through the wrapper's two-argument call ----
 		getLocal(w, OFF);
-		i32(w, off.of(LispNames.ADD));
+		i32(w, hooks.armOffset(off, LispNames.ADD));
 		w.write(Instruction.I32_EQ);
 		getLocal(w, OFF);
-		i32(w, off.of(LispNames.SUB));
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.I32_OR);
-		getLocal(w, OFF);
-		i32(w, off.of(LispNames.MUL));
+		i32(w, hooks.armOffset(off, LispNames.SUB));
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.I32_OR);
 		getLocal(w, OFF);
-		i32(w, off.of(LispNames.DIV));
+		i32(w, hooks.armOffset(off, LispNames.MUL));
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		getLocal(w, OFF);
+		i32(w, hooks.armOffset(off, LispNames.DIV));
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.I32_OR);
 		// no argument: the wrapper answers the identity ((+) is 0) or reports the count
