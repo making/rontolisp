@@ -12,6 +12,8 @@ rontolisp. No other language or SDK is involved: the module is the output of
 | `gateway.lisp` | The filter |
 | `envoy.yaml` | An Envoy running the filter in front of a small upstream |
 | `check.sh` | Builds the filter, runs it in Envoy under Docker and checks it with curl |
+| `sdk-examples/` | Three smaller filters on the same SDK |
+| `no-gc/` | A second SDK, for `--no-gc`, and the same three filters on it |
 
 ## Running it
 
@@ -101,6 +103,56 @@ redacts it, `http_headers.lisp` logs both heads and answers `/hello` itself, and
 without `--no-wasi`, because one of its paths writes to stdout: the SDK works either way,
 and a `--no-wasi` module drops what it writes there.
 `sdk-examples/check.sh` builds each one and checks it in a real Envoy.
+
+## Filters of 2KB: `no-gc/`
+
+`no-gc/proxy-wasm.lisp` is the same ABI for the `--no-gc` backend, which also runs on
+a host without wasm-GC. A filter is one form, and the macro writes the exports:
+
+```lisp
+(require :proxy-wasm "proxy-wasm.lisp")
+
+(defpackage :my-filter (:use :cl))
+(in-package :my-filter)
+
+(proxy-wasm:define-filter
+  (:state (path 256))
+  (:on-request-headers (stream num-headers end-of-stream)
+    (setf (path stream) (or (proxy-wasm:get-header :request ":path") ""))
+    (cond ((string= (path stream) "/teapot")
+           (proxy-wasm:send-local-response 418 :body "short and stout")
+           :pause)
+          (t :continue))))
+```
+
+Compile with `--no-gc --no-wasi`, and `--optimize=size` for the sizes below. `no-gc/check.sh`
+builds the filters there and runs on them the checks of `sdk-examples/check.sh`.
+
+| Filter, at `--optimize=size` | On this SDK: raw / gzip | On `proxy-wasm.lisp`: raw / gzip |
+| --- | ---: | ---: |
+| `http_body` | 2,064 / 1,152 | 89,595 / 31,888 |
+| `http_headers` | 2,583 / 1,388 | 154,268 / 53,759 |
+| `test_plugin` | 6,541 / 3,124 | 103,131 / 36,964 |
+
+What it gives up, for a filter's author:
+
+| | `proxy-wasm.lisp` | `no-gc/proxy-wasm.lisp` |
+| --- | --- | --- |
+| A context | An object of a class you define | Its id, an integer |
+| A callback | A method | A clause of `define-filter`; a body answers `:continue` or `:pause` |
+| State | Slots holding anything | `(:state ...)`: integers, and strings of a size fixed in advance. Every context has all the fields. Setting a string that does not fit answers `nil` and keeps the old one |
+| A string | Lives as long as it is reachable | Gone when the callback returns, unless a field holds a copy |
+| A body | A string or a byte vector | An address and a size, with `load8` and `search-bytes`, and it can be changed in place. As a string, `char` would walk from the start at each index |
+| Headers | An alist | `do-headers`, and `make-pairs` to build a map. A quoted alist of at most 127 bytes per name or value is serialized at compile time |
+| Other values | Everything Lisp has | Numbers, strings, a keyword spelled in the SDK's call. No lists, no closures, no `defvar` |
+| A failed host call | Signals; logged and the callback answers its default, or traps | Answers `nil` and the callback goes on, after a log line, or traps under `(:on-failure :trap)`. `http-call` always answers `nil` |
+| `format` | All of it | To `t` or `nil`, a literal control of `~a`, `~d`, `~%`, `~~` |
+| Not covered | gRPC, queues, foreign functions, TCP | Those, and the clock, ticks, shared data, setting a property, continuing a paused stream, and finding the stream that made an outgoing call |
+
+Nothing here reaches a filter that does not call it. A callback a filter leaves out is exported
+with the answer a filter would give, because Sluice refuses a module without it; the trailers and
+`on_http_call_response` are exported only when given. State costs 395 bytes raw and 199 gzip the
+first time, and each context's block is linear to find in the contexts alive, which are few per VM.
 
 ## What Envoy does that the ABI does not say
 

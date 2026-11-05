@@ -98,6 +98,8 @@ test of these two filters, and answer the same `curl`s as the wasm-GC ones in En
 
 `no-gc/host.mjs` drives `http_headers` from Node: `node host.mjs http_headers.wasm /hello`.
 
+`examples/proxy-wasm/no-gc/` is the SDK these led to, at about the same sizes (`.kb/proxy-wasm-no-gc.md`).
+
 ## Reproducing
 
 ```bash

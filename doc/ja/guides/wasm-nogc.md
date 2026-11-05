@@ -19,7 +19,7 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, ~108 bytes, no wasm-GC run
 - 制御と束縛: `if`/`when`/`unless`/`cond`/`progn`/`let`/`let*`、再帰、他の対象関数の呼び出し;
 - 反復とローカルな変更: `dotimes`/`do`/`do*` とその基盤の `while`/`setq`/`return`。let/`do` 束縛変数は自由に再代入できます。`loop` は非 cons 化節(数値 `for`、`sum`/`count`/`maximize`/`minimize`、`repeat`/`while`/`until`/`do`/`return`)に限り対象です — `collect`/`append`/`nconc` と `for ... in`/`on` の節はリストを確保するため対象外です;
 - 浮動小数点/整数変換: `float truncate floor ceiling round`;
-- 文字列と文字: 文字列リテラル、文字リテラル、`(concatenate 'string ...)`、`length`、`subseq`、`string=`、`char`、`char-code`/`code-char`、`char=`、および(整数・浮動小数点数・文字列の)`princ-to-string`。独立した文字型はありません: 文字はそのコードポイントで表現されるため、移植性のあるイディオム `(char= (char s i) #\x)` と `(char-code (char s i))` は他のバックエンドとまったく同じように振る舞い、素の `(char s i)` が `:int` 境界を越えるとコードが見えます;
+- 文字列と文字: 文字列リテラル、文字リテラル、`(concatenate 'string ...)`、`length`、`subseq`、`string=`、`char`、`char-code`/`code-char`、`char=`、(整数・浮動小数点数・文字列の)`princ-to-string`、および `t` か `nil` へ出力し、制御文字列が `~a`・`~d`・`~%`・`~~` だけのリテラルである `format`。独立した文字型はありません: 文字はそのコードポイントで表現されるため、移植性のあるイディオム `(char= (char s i) #\x)` と `(char-code (char s i))` は他のバックエンドとまったく同じように振る舞い、素の `(char s i)` が `:int` 境界を越えるとコードが見えます;
 - 印字: `print`、`princ`、`terpri`(省略可能なストリーム引数なし) — [後述](#printing-print--princ--terpri)を参照;
 - メモリ回収: [`rontolisp:with-arena`](#reclaiming-from-lisp-rontolispwith-arena)。
 
@@ -84,6 +84,8 @@ $ node -e '(async () => {
 
 エクスポートの型は、この Lisp ファイルにはまったく書かれていません: チェックインされた world([`mandelbrot_component.wit`](https://github.com/making/rontolisp/blob/develop/examples/console/mandelbrot_component.wit))が `export mandelbrot: func(x0: f64, ..., max-iter: s32) -> string;` を宣言し、[`rontolisp:wit-export`](wit-contracts.md#implementing-a-wit-world-wit-export) が「このプログラムはそれを実装する」と言います。1 つのディレクティブが両方のビルドに効きます: 上のコアモジュールは、それが置き換えた手書きの `wasm-export` とバイト単位で同一であり、同じソースがコンポーネントとしてもコンパイルされ、そちらでは `wasmtime run --invoke 'mandelbrot(-2.5, 1.0, -1.2, 1.2, 70, 30, 30)'` がホスト側のメモリ操作コードもランタイムフラグもなしに文字列を返します。
 
+メモリの 4 バイト目から 7 バイト目まではプログラムのものです。ここを読み書きするものは他にありません。`"rontolisp:memory"` を通して見ると、教えられなくてもプログラムが知っている唯一のアドレスなので、グローバル変数のないこのバックエンドで呼び出しをまたいでポインタを保持する場所になります。
+
 ## 印字(`print` / `princ` / `terpri`)
 
 エクスポートされた関数は印字できます: `print`(読み取り可能な形 + 末尾の改行。文字列は引用符付きで出力)、`princ`(表示形、改行なし)、`terpri`(改行)が対象サブセット内で動作し、出力はインタプリタとバイト単位で一致します:
@@ -121,7 +123,7 @@ $ wasmtime run --invoke show show.wasm 4
 | `__ronto_alloc_mark` | `() -> i32` | snapshot the current bump-heap top |
 | `__ronto_alloc_reset` | `(i32 mark) -> ()` | restore the top to a saved mark |
 
-この 2 つと `__ronto_alloc` 自身は、宣言された境界がホストにヒープの扱いを求めるときにだけエクスポートされます: エクスポートが `:string` を受け取る(ホストが入力バッファを確保する)、エクスポートが `:string` を返す(結果は生きたポインタで、ホストだけがポップできる)、インポートしたホスト関数が `:string` を返す(ホストが結果のバイト列をこのメモリに書き込む)。テキストが*外向き*にしか渡らないモジュール — 文字列リテラルを `(ptr, len)` としてホストインポートに渡すだけのモジュール — は 3 つともエクスポートせず、必要ともしません: 外から確保するものはなく、内側でヒープが動くこともなく、エクスポートのラッパーにもリセットは入りません。
+この 2 つと `__ronto_alloc` 自身は、宣言された境界がホストにヒープの扱いを求めるときにだけエクスポートされます: エクスポートが `:string` を受け取る(ホストが入力バッファを確保する)、エクスポートが `:string` を返す(結果は生きたポインタで、ホストだけがポップできる)、インポートしたホスト関数が `:string` を返す(ホストが結果のバイト列をこのメモリに書き込む)、プログラムがホストの書き込んだものを [`"rontolisp:memory"`](../reference/functions/rontolisp-wasm-import.md#rontolispmemory--the-modules-own-linear-memory) で読み、自前のアロケータをエクスポートしていない。テキストが*外向き*にしか渡らないモジュール — 文字列リテラルを `(ptr, len)` としてホストインポートに渡すだけのモジュール — は 3 つともエクスポートせず、必要ともしません: 外から確保するものはなく、内側でヒープが動くこともなく、エクスポートのラッパーにもリセットは入りません。
 
 入力を確保する**前**にスナップショットを取り、結果を読み出した**後**に復元すれば、常駐インスタンスは何回呼び出されても完全に平坦なままです:
 

@@ -659,6 +659,12 @@ class WasmImportCompilerTest {
 				""");
 		assertThatThrownBy(() -> NoGcWasmCompiler.builder().component(true).build().compile(load8))
 			.hasMessageContaining("rontolisp:memory");
+		List<LispVal> address = LispReader.readAllFromString("""
+				(rontolisp:wasm-import 'f :from "rontolisp:memory" :as "address" :params '(:string) :returns :u32)
+				(defun g () (f "x"))
+				(rontolisp:wasm-export 'g :params '() :returns :u32)
+				""");
+		assertThatThrownBy(() -> new WasmLispCompiler().compile(address)).hasMessageContaining("needs --no-gc");
 	}
 
 	@Test

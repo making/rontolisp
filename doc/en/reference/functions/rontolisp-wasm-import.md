@@ -140,6 +140,8 @@ section gains nothing. On the interpreter and JVM the name is the usual stub.
 | `"load64"` / `"store64"` | `(:u32)` / `(:u32 :s64)` | `:s64` / none | Little-endian, any alignment |
 | `"string"` | `(:u32 :u32)` | `:string` | A new string from `(ptr, len)`, as UTF-8 |
 | `"octets"` | `(:u32 :u32)` | `:octets` | A new byte vector from `(ptr, len)`; not under `--no-gc` |
+| `"address"` | `(:string)` | `:u32` | Where a string's UTF-8 bytes are, to read and not to write; only under `--no-gc` |
+| `"size"` | `(:string)` | `:u32` | How many bytes those are, where `length` counts characters; only under `--no-gc` |
 
 The Lisp name is yours; the field and its exact signature are not, and a
 declaration that differs is a compile error. `:async t` and
@@ -151,7 +153,10 @@ A program declaring `"alloc"`, `"mark"` or `"reset"` owns the heap: what it
 reserves stays reserved until it calls `"reset"`, across calls from the host. So
 an export can answer an address for the host to write into, and a long-lived
 instance has to pop its own scratch. Under `--no-gc` this also turns off the
-reset an export otherwise does when it returns a scalar.
+reset an export otherwise does when it returns a scalar. If the program exports
+its own allocator, a function handing its one parameter to `"alloc"`, and has no
+`:string` at an export or a host import, `--no-gc` leaves out the `__ronto_alloc`
+exports: the host has that allocator instead.
 
 ```lisp
 (rontolisp:wasm-import '%alloc :from "rontolisp:memory" :as "alloc"

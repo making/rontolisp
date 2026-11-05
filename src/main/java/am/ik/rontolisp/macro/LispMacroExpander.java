@@ -486,10 +486,30 @@ public final class LispMacroExpander {
 		if (parts.size() == 1) {
 			return LispNil.INSTANCE;
 		}
-		return expandCondClauses(parts.subList(1, parts.size()));
+		return expandCondClauses(parts.subList(1, parts.size()), test -> COND_VAR);
 	}
 
-	private static LispVal expandCondClauses(List<LispVal> clauses) {
+	/**
+	 * {@link #expandCond} for a backend that types a local by its name within a function
+	 * ({@code --no-gc}), where one temporary shared by a boolean and a string test would
+	 * be a type error. Each distinct test has its own, and a re-expansion names it the
+	 * same.
+	 * @param cons the cond form
+	 * @return the expansion
+	 */
+	public static LispVal expandCondPerTest(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() == 1) {
+			return LispNil.INSTANCE;
+		}
+		return expandCondClauses(parts.subList(1, parts.size()), LispMacroExpander::condVarPerTest);
+	}
+
+	private static String condVarPerTest(LispVal test) {
+		return COND_VAR + "-" + Integer.toHexString(test.print().hashCode());
+	}
+
+	private static LispVal expandCondClauses(List<LispVal> clauses, java.util.function.Function<LispVal, String> var) {
 		if (clauses.isEmpty()) {
 			return LispNil.INSTANCE;
 		}
@@ -504,13 +524,14 @@ public final class LispMacroExpander {
 		}
 		if (test instanceof LispNil) {
 			// A constant-false clause is never selected.
-			return expandCondClauses(clauses.subList(1, clauses.size()));
+			return expandCondClauses(clauses.subList(1, clauses.size()), var);
 		}
-		LispVal elseExpr = expandCondClauses(clauses.subList(1, clauses.size()));
+		LispVal elseExpr = expandCondClauses(clauses.subList(1, clauses.size()), var);
 		if (body.isEmpty()) {
 			// Bodyless clause: (cond (test) ...) -> (let ((__cond test)) (if __cond
 			// __cond (cond rest...)))
-			return makeLet(COND_VAR, test, makeIf(new LispSymbol(COND_VAR), new LispSymbol(COND_VAR), elseExpr));
+			String name = var.apply(test);
+			return makeLet(name, test, makeIf(new LispSymbol(name), new LispSymbol(name), elseExpr));
 		}
 		else if (body.size() == 1) {
 			// Single body: (cond (test body) ...) -> (if test body (cond rest...))
@@ -751,6 +772,19 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandOr(LispCons cons) {
+		return expandOr(cons, LispMacroExpander::expandCond);
+	}
+
+	/**
+	 * {@link #expandOr} through {@link #expandCondPerTest}.
+	 * @param cons the or form
+	 * @return the expansion
+	 */
+	public static LispVal expandOrPerTest(LispCons cons) {
+		return expandOr(cons, LispMacroExpander::expandCondPerTest);
+	}
+
+	private static LispVal expandOr(LispCons cons, java.util.function.Function<LispCons, LispVal> cond) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() == 1) {
 			// (or) -> nil
@@ -770,8 +804,7 @@ public final class LispMacroExpander {
 			LispVal clause = new LispCons(parts.get(i), LispNil.INSTANCE);
 			clauses = new LispCons(clause, clauses);
 		}
-		LispCons condExpr = new LispCons(new LispSymbol(LispNames.COND), clauses);
-		return expandCond(condExpr);
+		return cond.apply(new LispCons(new LispSymbol(LispNames.COND), clauses));
 	}
 
 	/**

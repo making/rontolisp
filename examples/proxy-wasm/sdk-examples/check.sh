@@ -2,11 +2,13 @@
 # Build each filter here, run it in a real Envoy under Docker, and check it from the
 # outside with curl. Exits 0 only if every check passed.
 #
-# Environment: ENVOY_IMAGE (default below), GATEWAY_PORT, ADMIN_PORT.
+# Environment: ENVOY_IMAGE (default below), GATEWAY_PORT, ADMIN_PORT. ../no-gc/check.sh
+# runs the same checks on its filters through FILTERS_DIR and COMPILE_FLAGS.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$here/../../.." && pwd)"
+here="${FILTERS_DIR:-$here}"
 jar="$repo_root/target/rontolisp-0.1.0-SNAPSHOT-exec.jar"
 image="${ENVOY_IMAGE:-envoyproxy/envoy:v1.40.2}"
 port="${GATEWAY_PORT:-18080}"
@@ -26,7 +28,8 @@ trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
 # same configuration.
 start() {
   docker rm -f "$container" >/dev/null 2>&1 || true
-  java -jar "$jar" "$here/$1.lisp" -o "$here/$1.wasm" --optimize=size "${@:2}"
+  # shellcheck disable=SC2086
+  java -jar "$jar" "$here/$1.lisp" -o "$here/$1.wasm" --optimize=size ${COMPILE_FLAGS:-} "${@:2}"
   docker run -d --name "$container" -p "$port:8080" -p "$admin:9901" \
     -v "$here/../envoy.yaml:/etc/envoy/envoy.yaml:ro" \
     -v "$here/$1.wasm:/etc/envoy/gateway.wasm:ro" \

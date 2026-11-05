@@ -157,6 +157,21 @@ the padding that used to 4-align each block bought nothing and is gone (2026-09-
 Schubfach tables after the literals DO keep their alignment: those are i64/f64 table reads
 in the float renderer's inner loop.
 
+**Bytes 4 to 7 of the memory are the program's**, and documented as such: the literals start at 8,
+and the empty string at 0 reads its length from 0 to 3. Through `"rontolisp:memory"` it is the one
+address a program knows without being told, since there are no globals
+(`NoGcWasmImportE2eTest.theMemoryModuleReadsWhatAHostAnsweredThroughOutPointers`).
+
+**A string in test position is its pointer**: `emitTruthy` and `emitFalsy` take the i32, and `(not s)`,
+`(null s)` and `(if s ...)` on one used to fail validation (i64 ops on an i32). Address 0 is nil, and
+every other string, the empty ones included, is true.
+
+**`cond` and `or` take a temporary per test** (`expandCondPerTest`). `Types.locals` types a local by
+its NAME within a function, so one `__cond` shared by a boolean `or` and a string `or` was "incompatible
+types BOOL and STRING". The name comes from the test's printed form, so a re-expansion agrees with
+itself, and it is never emitted, so nothing changes in a module that compiled. Two user `let`s of one
+name and different types in one function are still refused.
+
 **A literal only folded import sites use has no header.** A folded site (below) pushes the
 content address and byte length as constants, so a spelling whose EVERY occurrence is a
 folded site's `:string` argument is laid out as its bytes alone (`MemLayout.regions` holds
@@ -325,6 +340,11 @@ takes a wrapper, whose whole content is the `drop`. Two documented divergences (
   mark BEFORE the host's `__ronto_alloc` input buffer, reset AFTER reading the result.
   Caveats: reset only to a mark taken BEFORE live data, and a `:string`-RETURNING export's
   bytes must be read out BEFORE the reset. Example: `examples/count-vowels/`.
+  A program reading what a host wrote through `"rontolisp:memory"` keeps them for that host's
+  allocator, unless it exports its own, a defun that hands its one parameter to `alloc`
+  (`exportsItsOwnAllocator`), which is a Proxy-Wasm filter's `proxy_on_memory_allocate`. The bodies
+  stay for its own calls (`arenaHelpers`) and the export entries go: 59 bytes raw, 40 gzip, on
+  `examples/proxy-wasm/no-gc/http_body.lisp`, 2026-11-05.
 - **`rontolisp:with-arena`** closes the intra-call hole. Cross-backend it is
   `LispMacroExpander.expandWithArena` lowering to `progn` (ci-spec
   `with-arena-is-observationally-a-progn`); here `compileWithArena` resets to the mark, and
@@ -471,7 +491,8 @@ forwarder redirect are GC-side only; the move subsumes the second here, since a 
 once is a body with one call site.
 
 ## Print / stdout
-`print`/`princ`/`terpri` (no stream argument) work inside exported functions, byte-identical
+`format` to `t` or `nil` with a literal control of `~a`, `~d`, `~%`, `~~` lowers to these and to
+`concatenate` (`.kb/format.md`). `print`/`princ`/`terpri` (no stream argument) work inside exported functions, byte-identical
 to the interpreter (`.kb/core-representation.md`) -- including a COMPUTED boolean, which
 writes `T`/`NIL` by name (`.todo/817`). `emitWriteStringEscaped` writes an escaped
 string as RUNS, so nothing is allocated — a print must not move the bump heap.

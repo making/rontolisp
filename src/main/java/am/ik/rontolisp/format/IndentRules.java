@@ -152,6 +152,10 @@ public final class IndentRules {
 		for (String name : List.of("handler-case", "restart-case")) {
 			rules.put(name, Style.clauses(1, DEFINITION));
 		}
+		// examples/proxy-wasm/no-gc: each clause of a filter is (callback (params)
+		// body...),
+		// and the def* guess would keep the first one on the operator's line.
+		rules.put("define-filter", Style.clauses(0, DEFINITION));
 		rules.put("do", Style.iteration());
 		rules.put("do*", Style.iteration());
 		rules.put("loop", Style.loop());
