@@ -4,11 +4,13 @@ import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.ConstantPoolBuilder;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.InterfaceMethodRefEntry;
+import java.lang.classfile.constantpool.MethodHandleEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.NameAndTypeEntry;
 import java.lang.classfile.constantpool.PoolEntry;
 import java.lang.classfile.constantpool.StringEntry;
 import java.lang.classfile.constantpool.Utf8Entry;
+import java.lang.constant.DirectMethodHandleDesc;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -206,6 +208,14 @@ public final class ConstantPool {
 	 */
 	public MethodRefEntry methodRef(String owner, String name, String descriptor) {
 		return this.methodRef(this.classEntry(owner), name, descriptor);
+	}
+
+	/**
+	 * @param method a static method
+	 * @return the {@code MethodHandle} constant an {@code ldc} of it loads
+	 */
+	public MethodHandleEntry staticMethodHandle(MethodRefEntry method) {
+		return this.entries.methodHandleEntry(DirectMethodHandleDesc.Kind.STATIC.refKind, method);
 	}
 
 	/**

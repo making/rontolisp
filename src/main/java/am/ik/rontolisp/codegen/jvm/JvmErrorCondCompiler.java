@@ -8,9 +8,10 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 
 /**
  * Compiles the internal {@code (%error-cond condition message)} primitive: it throws a
- * {@link RuntimeException} with the message and records the condition object (a
- * CLOS-subset tagged-list instance) under that exception on the per-thread
- * {@code _condTl} channel ({@link JvmThrowableRecords}), so an enclosing
+ * {@link RuntimeException} with the message, or the {@code RontoSignal} that renders the
+ * instance's report when the message is read ({@link JvmSignalThrow}), and records the
+ * condition object (a CLOS-subset tagged-list instance) under that exception on the
+ * per-thread {@code _condTl} channel ({@link JvmThrowableRecords}), so an enclosing
  * {@code handler-case} that catches THIS exception reads the typed condition while an
  * uncaught error prints exactly like a plain {@code %error}. The condition is evaluated
  * first, into a local, and recorded only once the exception exists. Using the channel
@@ -40,7 +41,12 @@ final class JvmErrorCondCompiler {
 		ctx.body.astore(condSlot);
 		// throw _condPut(new RuntimeException(strip(message)), condition) -- _condRan
 		// for the signal hook's terminal
-		JvmErrorCompiler.compileThrowRuntimeException(args.get(2), ctx, className, condSlot, handlersRan);
+		if (LispMacroExpander.conditionReportFallback(args.get(2)) instanceof LispVal fallback) {
+			JvmSignalThrow.compile(fallback, ctx, className, condSlot, handlersRan);
+		}
+		else {
+			JvmErrorCompiler.compileThrowRuntimeException(args.get(2), ctx, className, condSlot, handlersRan);
+		}
 		ctx.nextLocal = savedNextLocal;
 	}
 

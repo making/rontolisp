@@ -377,8 +377,8 @@ spelling of a table with entries). Consumer: serapeum's `same-literal-p`, where 
   the variable alone without the case-fold tables (`mentionsPrintControlVariable` still gates those).
   Interpreter: `printControlsInEffect` is true while the variable is, and the leaves are functions calling the defuns.
 - **Messages bind it nil** (`%pc-without-readably`): `error`, `warn`, `signal`, `cerror`, `assert`, `check-type` render
-  at the signal here and at report time on SBCL, under `princ`. Around `formatMessagePieces`, the object arm's
-  `FormatRenderer.call`, the typed arm's inlined report and the body of `%condition-report-str`, which covers a
+  under `princ`. Around `formatMessagePieces`, the object arm's
+  `FormatRenderer.call`, a `warn`'s inlined report and the body of `%condition-report-str`, which covers a
   report printed by `~A` and an uncaught one. A handler still sees the variable as bound: only the text is wrapped.
   The let appears in Pass 2, so `SpecialVarCollector` counts the `%pc-not-readable` defun as a binding (a program
   may name the variable only in data; the JVM then refused the let, ci-spec `print-readably-named-only-in-data`).

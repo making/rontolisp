@@ -272,22 +272,25 @@ class JvmLispCompilerTest {
 		// The generated main's last exception-table entry: one line on standard error
 		// (the same one the interpreter and the wasm-GC landing pad write), then the
 		// SAME exception rethrown with an emptied trace, so the launcher's echo is one
-		// line and an in-process caller still observes the failure.
+		// line and an in-process caller still observes the failure. Every reader sees the
+		// one rendering: a report is program code, and this one counts its runs.
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
 		Throwable cause;
 		try (var _ = ThreadStdio.err(err)) {
 			cause = catchThrowable(() -> compileAndRun("""
+					(defvar *uc-runs* 0)
 					(define-condition uc-db (error) ((text :initarg :text :reader uc-db-text))
-					  (:report (lambda (c s) (format s "database error: ~a" (uc-db-text c)))))
+					  (:report (lambda (c s) (format s "database error ~a: ~a" (incf *uc-runs*) (uc-db-text c)))))
 					(error 'uc-db :text "password authentication failed")
 					"""));
 		}
 		assertThat(err.toString().trim())
-			.isEqualTo("Unhandled condition: database error: password authentication failed");
+			.isEqualTo("Unhandled condition: database error 1: password authentication failed");
 		assertThat(cause).isInstanceOf(InvocationTargetException.class);
 		Throwable signaled = ((InvocationTargetException) cause).getTargetException();
 		assertThat(signaled).isInstanceOf(RuntimeException.class)
-			.hasMessage("database error: password authentication failed");
+			.hasMessage("database error 1: password authentication failed")
+			.hasToString("java.lang.RuntimeException: database error 1: password authentication failed");
 		assertThat(signaled.getStackTrace()).isEmpty();
 	}
 

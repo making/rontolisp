@@ -6,6 +6,7 @@ import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.ConstantPoolBuilder;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MemberRefEntry;
+import java.lang.classfile.constantpool.MethodHandleEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.NameAndTypeEntry;
 import java.lang.classfile.constantpool.PoolEntry;
@@ -376,6 +377,10 @@ public final class JvmClassSplitter {
 					owner = pool.classEntry(pool.utf8Entry(this.parts.get(moved).name));
 					partClasses[moved] = owner;
 				}
+				if (entry instanceof MethodHandleEntry handle) {
+					return pool.methodHandleEntry(handle.kind(),
+							pool.methodRefEntry(owner, handle.reference().nameAndType()));
+				}
 				return pool.methodRefEntry(owner, ((MethodRefEntry) entry).nameAndType());
 			};
 			try {
@@ -514,6 +519,9 @@ public final class JvmClassSplitter {
 		 * reference to the definition's own class.
 		 */
 		OwnCallGraph.@Nullable Member ownMethod(PoolEntry entry) {
+			if (entry instanceof MethodHandleEntry handle) {
+				return this.ownMethod(handle.reference());
+			}
 			if (entry instanceof MemberRefEntry ref && !(entry instanceof FieldRefEntry)
 					&& this.isThisClass(ref.owner())) {
 				return member(ref.name(), ref.type());
@@ -659,6 +667,7 @@ public final class JvmClassSplitter {
 					this.close(ref.owner(), into);
 					this.close(ref.nameAndType(), into);
 				}
+				case MethodHandleEntry handle -> this.close(handle.reference(), into);
 				default -> {
 					if (entry.width() == 2) {
 						this.wide.set(index);

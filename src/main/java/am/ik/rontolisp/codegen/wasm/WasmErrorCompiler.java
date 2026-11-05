@@ -51,18 +51,17 @@ final class WasmErrorCompiler {
 	}
 
 	/**
-	 * Compiles {@code (%error-cond condition message)}. The payload cdr carries only the
-	 * text the entry landing pad cannot rebuild from the instance: the handler-case
-	 * landing reads the cdr only to synthesize a {@code simple-error} when the instance
-	 * (car) is nil -- and every {@code %error-cond} site passes a real instance -- so the
-	 * cdr's one reader here is that pad ({@link WasmUncaughtReportCompiler}), which
-	 * renders the instance's report through {@code %condition-report-str} itself. A
-	 * message that IS the report (a class with its own {@code :report}) therefore
-	 * compiles to nil, and so does the report half of a routed message
-	 * ({@link LispMacroExpander#conditionReportFallback}); its fallback -- what a
-	 * report-less class prints, {@code Condition (TYPE :INITARG v) was signalled.}, built
-	 * from the initargs as written and gone once the instance is built -- compiles, and
-	 * the pad prints it when the renderer answers nil. A program with NO report renderer
+	 * Compiles {@code (%error-cond condition message)}. The payload cdr carries only what
+	 * the entry landing pad cannot rebuild from the instance: the handler-case landing
+	 * reads the cdr only to synthesize a {@code simple-error} when the instance (car) is
+	 * nil -- and every {@code %error-cond} site passes a real instance -- so the cdr's
+	 * one reader here is that pad ({@link WasmUncaughtReportCompiler}), which renders the
+	 * text through {@code %signal-text} itself. A message that IS the report (a class
+	 * with its own {@code :report}) therefore compiles to nil; of a message
+	 * {@link LispMacroExpander#conditionReportFallback} recognizes only the fallback
+	 * compiles -- what a report-less class says of itself, its {@code (TYPE :INITARG v)}
+	 * as written, gone once the instance is built -- which {@code %signal-text} renders
+	 * when the instance reports nothing. A program with NO report renderer
 	 * ({@code routesConditionReports} off) constructs no condition at a source site, so
 	 * the only {@code %error-cond} is the {@code %program-error} lowering's, whose
 	 * message rides the cdr exactly as a plain {@code %error}'s does.
@@ -102,10 +101,10 @@ final class WasmErrorCompiler {
 	 * Emits the payload construction and throw over the instance on the stack, the
 	 * message being what {@code message} pushes -- in the payload saying the
 	 * {@code handler-bind} handlers already ran for the instance when
-	 * {@code handlersRan}: {@code (instance . (nil . message))}. Its cdr is then a cons,
-	 * which no message is (a string, a character vector or nil), so a {@code %hb-guard}
-	 * pad tells the two shapes apart with one {@code ref.test} and passes such a payload
-	 * on untouched, and the entry pad reads the message out of it
+	 * {@code handlersRan}: {@code (instance . (nil . message))}. Its cdr is then a cons
+	 * opening on nil, which no message is (a string, a character vector or nil), so a
+	 * {@code %hb-guard} pad tells the two shapes apart ({@link #emitSaysHandlersRan}) and
+	 * passes such a payload on untouched, and the entry pad reads the message out of it
 	 * ({@link #emitUnwrapMessage}). The message rides a CDR, as in every other payload:
 	 * in a car it would be a string where the module's type-test fold
 	 * ({@code .kb/wasm-ref-type-fold.md}) proved no cons car holds one, and the string
@@ -140,10 +139,7 @@ final class WasmErrorCompiler {
 	 * @param messageSlot the local holding the payload's cdr
 	 */
 	static void emitUnwrapMessage(WasmLispCompiler.Ctx ctx, int messageSlot) {
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(messageSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		emitSaysHandlersRan(ctx, messageSlot);
 		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		ctx.wasmCtrlDepth++;
 		ctx.writer.write(Instruction.GET_LOCAL);
@@ -155,6 +151,35 @@ final class WasmErrorCompiler {
 		ctx.writer.writeUnsignedLeb128(1);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(messageSlot);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * Pushes whether a payload's cdr, in a local, says the handlers ran: a cons whose car
+	 * is nil. A site's {@code (type initarg value ...)} is a cons too, but opens on its
+	 * type.
+	 * @param ctx the compilation context
+	 * @param slot the local holding the payload's cdr
+	 */
+	static void emitSaysHandlersRan(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		ctx.wasmCtrlDepth++;
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END);
 	}

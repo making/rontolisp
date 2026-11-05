@@ -10555,6 +10555,15 @@ public final class LispNames {
 	public static final String CONDITION_REPORT_STR_INTERNAL = "%CONDITION-REPORT-STR";
 
 	/**
+	 * The internal {@code (%signal-text c fallback)}: the text a signal of {@code c}
+	 * reports, a failing report's text included. A signal's message operand, which no
+	 * backend evaluates at the signal: each runs it where the text is read
+	 * ({@code LispMacroExpander.conditionReportFallback}). Generated beside
+	 * {@link #CONDITION_REPORT_STR_INTERNAL}.
+	 */
+	public static final String SIGNAL_TEXT_INTERNAL = "%SIGNAL-TEXT";
+
+	/**
 	 * The internal {@code (%format-condition control arguments)} helper: the
 	 * {@code simple-condition} family's specified report, i.e. {@code format} applied to
 	 * the condition's {@code format-control} over its {@code format-arguments}. A control

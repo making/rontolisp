@@ -213,6 +213,9 @@ public final class JvmLispCompiler implements LispCompiler {
 	/** Whether the output needs {@link #CONS_CAS_RUNTIME_CLASS_FILES}. */
 	private boolean needsConsCasRuntime;
 
+	/** Whether the output needs {@link JvmSignalThrow#RUNTIME_CLASS_FILES}. */
+	private boolean needsSignalRuntime;
+
 	/**
 	 * Whether the last {@link #compile} polls for SIGINT, i.e. whether the emitted class
 	 * needs {@code RontoInterruptSignal} beside it.
@@ -1004,11 +1007,11 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsInflateRuntime
-				&& !this.needsConditionVariableRuntime && !this.needsConsCasRuntime && !this.needsInterruptRuntime
-				&& !this.needsTerminalRuntime && !this.needsHashTableRuntime && !this.needsComplexRuntime
-				&& !this.needsQuantizedRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime
-				&& !this.needsStringInputRuntime && !this.needsJavaValueRuntime && this.partClassFiles.isEmpty()
-				&& this.bridgeClassFiles.isEmpty()) {
+				&& !this.needsConditionVariableRuntime && !this.needsConsCasRuntime && !this.needsSignalRuntime
+				&& !this.needsInterruptRuntime && !this.needsTerminalRuntime && !this.needsHashTableRuntime
+				&& !this.needsComplexRuntime && !this.needsQuantizedRuntime && !this.needsIoStreamRuntime
+				&& !this.needsCharFileRuntime && !this.needsStringInputRuntime && !this.needsJavaValueRuntime
+				&& this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
 		// A program too large for one class brings its $PartN classes, and a bridged
@@ -1054,6 +1057,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsConsCasRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(CONS_CAS_RUNTIME_CLASS_FILES));
+		}
+		if (this.needsSignalRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmSignalThrow.RUNTIME_CLASS_FILES));
 		}
 		if (this.needsInterruptRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmInterruptPoll.RUNTIME_CLASS_FILES));
@@ -5083,6 +5089,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// The runtime struct-layout directory for #S(...) read at run time.
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rdStructsName, rdStructsDesc);
 		}
+		this.needsSignalRuntime = mainCtx.conditionChannel.signalNew != null;
 		if (mainCtx.conditionChannel.used) {
 			// The per-thread condition carrier from a %error-cond throw site to a
 			// handler-case catch handler; initialized in <clinit>.
@@ -7726,6 +7733,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * two shapes it has. Minted with {@link #condRan}.
 		 */
 		@Nullable MethodRefEntry condOf;
+
+		/**
+		 * {@code _signalNew(Object, Object)Throwable}: a throw site's
+		 * {@code RontoSignal}, built on the first site that renders where it is read
+		 * ({@link JvmSignalThrow}); its class then travels with the output.
+		 */
+		@Nullable MethodRefEntry signalNew;
 
 		@Nullable Utf8Entry fieldName;
 

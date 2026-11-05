@@ -360,7 +360,7 @@ mvn install:install-file -Dfile=acme-kernels-1.0.0.jar
 | --- | --- |
 | `META-INF/MANIFEST.MF` | 常に。`Main-Class` はクラスが `main` を持つときだけなので、`java -jar` はプログラムの jar を実行でき、`--no-main` のライブラリ jar は持ちません |
 | `com/example/Kernels.class` | 常に |
-| `am/ik/rontolisp/runtime/*.class` | `:float-vector` / `:float-matrix` のエクスポートがハンドル型を宣言したとき |
+| `am/ik/rontolisp/runtime/*.class` | `:float-vector` / `:float-matrix` のエクスポートがハンドル型を宣言したとき、またはシグナルのテキストがコンディションのレポートで、`getMessage` が読むときに描画するとき |
 | `META-INF/maven/.../pom.xml`, `pom.properties` | `--maven-coordinates` があるとき |
 
 ハンドルクラスはあなたのパッケージへリネームされず、正準名のままアーティファクトの

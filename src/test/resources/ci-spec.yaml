@@ -36815,6 +36815,57 @@ cases:
       (6 2 NIL 7)
       (1 2 NIL 3)
       REFUSED
+  - name: a-signal-renders-no-report
+    source: |
+      ;; SBCL's answers: a report runs where its text is read, so what it signals cannot
+      ;; replace the condition, and what it does happens only for a condition printed.
+      (define-condition srn-c (error) ((v :reader srn-c-v :initarg :v))
+        (:report (lambda (x s) (format s "c ~a" (+ 1 (srn-c-v x))))))
+      (define-condition srn-e (error) ((a :initarg :a)))
+      (defvar *srn-n* 0)
+      (define-condition srn-d (error) ()
+        (:report (lambda (x s) (declare (ignore x)) (incf *srn-n*) (format s "d"))))
+      (defun srn-id (x) x)
+      (print (handler-case (error 'srn-c) (error (x) (type-of x))))
+      (print (handler-case (error (srn-id 'srn-c)) (error (x) (type-of x))))
+      (print (handler-case (error 'srn-c :v 1) (error (x) (princ-to-string x))))
+      (print (handler-case (error (make-condition 'srn-c)) (error (x) (type-of x))))
+      (print (handler-case (signal 'srn-c) (error (x) (type-of x))))
+      (print (handler-case (signal (make-condition 'srn-c)) (error (x) (type-of x))))
+      (print (handler-case (cerror "go" 'srn-c) (error (x) (type-of x))))
+      (print (handler-case (handler-bind ((srn-c (lambda (x) (declare (ignore x)) nil))) (error 'srn-c))
+               (srn-c (x) (type-of x))))
+      (print (handler-case (error 'srn-d) (error (x) (type-of x))))
+      (print (signal 'srn-d))
+      (print *srn-n*)
+      (print (handler-case (error 'srn-d) (error (x) (princ-to-string x))))
+      (print *srn-n*)
+      ;; A class that reports nothing says what it was signalled with only when asked:
+      ;; printing a value runs its print-object.
+      (defclass srn-o () ())
+      (defmethod print-object ((x srn-o) s) (declare (ignore x s)) (error "srn-boom"))
+      (print (handler-case (error 'srn-e :a (make-instance 'srn-o)) (error (x) (type-of x))))
+      (print (signal 'srn-e :a (make-instance 'srn-o)))
+      (print (handler-case (handler-bind ((srn-e (lambda (x) (declare (ignore x)) nil)))
+                             (error 'srn-e :a (make-instance 'srn-o)))
+               (srn-e (x) (type-of x))))
+    expected: |
+      SRN-C
+      SRN-C
+      "c 2"
+      SRN-C
+      SRN-C
+      SRN-C
+      SRN-C
+      SRN-C
+      SRN-D
+      NIL
+      0
+      "d"
+      1
+      SRN-E
+      NIL
+      SRN-E
 standalone:
   - name: a-format-of-tilde-a-under-a-package-spells-no-qualifier
     source: |
@@ -37827,6 +37878,35 @@ standalone:
       :OK
     stderr: |
       Unhandled condition: NIL
+    fails: true
+  - name: uncaught-failing-report-is-the-report
+    source: |
+      ;; The line stays one line: a failing report is the text, in SBCL's words.
+      (define-condition ufr-c (error) ((v :reader ufr-c-v :initarg :v))
+        (:report (lambda (x s) (format s "c ~a" (+ 1 (ufr-c-v x))))))
+      (print (handler-case (error "caught") (error (e) :ok)))
+      (error 'ufr-c)
+    stdout: |
+      :OK
+    stderr: |
+      Unhandled condition: #<error printing a UFR-C: The slot V is unbound in #<UFR-C :V #<%UNBOUND%>>>
+    fails: true
+  - name: uncaught-initargs-past-the-handler-bind-handlers
+    source: |
+      ;; handler-bind makes this a restart-mode program, whose payload says the handlers
+      ;; ran by a cons of its own: the initargs a class that reports nothing carries are
+      ;; a cons too.
+      (define-condition urr-e (error) ((a :initarg :a)))
+      (print (handler-case (handler-bind ((urr-e (lambda (x) (print (type-of x)) nil))) (error 'urr-e :a 1))
+               (urr-e () :caught)))
+      (handler-bind ((urr-e (lambda (x) (print (type-of x)) nil)))
+        (error 'urr-e :a (list 1 "two")))
+    stdout: |
+      URR-E
+      :CAUGHT
+      URR-E
+    stderr: |
+      Unhandled condition: Condition (URR-E :A (1 "two")) was signalled.
     fails: true
   - name: uncaught-computed-condition-type-report
     source: |

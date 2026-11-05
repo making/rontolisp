@@ -318,15 +318,17 @@ final class WasmHandlerCaseCompiler {
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // block $h
 		// Landing pad: stash the payload, pop the kept locals back, pass on a payload
-		// saying the handlers ran -- its cdr is a cons -- as it came, split any other,
+		// saying the handlers ran -- its cdr opens on nil -- as it came, split any other,
 		// synthesize when the instance is nil.
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		WasmLandingPad.refresh(ctx, kept);
 		WasmUncaughtLocations.notePad(ctx, payloadSlot);
+		int messageSlot = ctx.allocTemp();
 		emitPayloadHalf(payloadSlot, 1, ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(messageSlot);
+		WasmErrorCompiler.emitSaysHandlersRan(ctx, messageSlot);
 		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		ctx.wasmCtrlDepth++;
 		ctx.writer.write(Instruction.GET_LOCAL);

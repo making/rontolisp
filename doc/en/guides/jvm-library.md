@@ -348,7 +348,7 @@ overwrite a pom it did not write itself.
 | --- | --- |
 | `META-INF/MANIFEST.MF` | always — with a `Main-Class` only when the class has a `main`, so `java -jar` runs a program jar and a `--no-main` library jar carries none |
 | `com/example/Kernels.class` | always |
-| `am/ik/rontolisp/runtime/*.class` | when a `:float-vector` / `:float-matrix` export declares the handle type |
+| `am/ik/rontolisp/runtime/*.class` | when a `:float-vector` / `:float-matrix` export declares the handle type, or a signal's text is its condition's report, rendered when `getMessage` asks |
 | `META-INF/maven/.../pom.xml`, `pom.properties` | with `--maven-coordinates` |
 
 The handle classes travel inside the artifact at their canonical names rather
