@@ -1005,16 +1005,37 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   ([defstruct.md](defstruct.md)); a slot's `:initform` under a symbol macro and a condition slot named like
   a macro ([symbol-macrolet.md](symbol-macrolet.md)). A `:report` that is a symbol is that function
   (`defineConditionToDefclass`; coalton's `source-condition`).
-- **coalton** (coalton-20260101-git) — from the Quicklisp cache, interpreter, measured 2026-11-05. The whole
-  `coalton-compiler` loads, and its macros compile `coalton/library` file by file through eclector and the
-  real typechecker and codegen: 24 files with no error in 55 minutes, the run stopped inside
-  `library/math/complex.lisp` (`.todo/i58`). What it took past fset, each general but the tier 4 hash arm: a `:mix-reexport` clause
+- **coalton** (coalton-20260101-git) — from the Quicklisp cache, interpreter, measured 2026-11-05.
+  `(ql:quickload "coalton")` loads `coalton-compiler` and all of `coalton/library` (prelude included), its macros
+  compiling file by file through eclector and the real typechecker and codegen: 67 minutes on a box under load 4-8
+  with a flight recording on (SBCL 2.2.9 compiles and loads the same tree in 61 s). What it took past fset, each
+  general but the tier 4 arms: a `:mix-reexport` clause
   ([packages.md](packages.md)); a `:report` naming a function; a `.asd`'s `(:read-file-form ...)` `:version`;
   a computed `*features*` push ([reader-features.md](reader-features.md)); a reader macro's value respelled for
   the resolver and a `cl:` constant keeping its prefix ([readtables.md](readtables.md),
   [read-time-constants.md](read-time-constants.md)); `gentemp` in the keyword package; a struct copier handed an
   `:include` child ([defstruct.md](defstruct.md)); the float-features constants; `fixnum` and an `(and ...)` as
-  `subtypep` intervals, and a lattice name staying that type beside `coalton:bit`, a class. The compile paths are unmeasured: a `coalton-toplevel` needs the compiler in the macro-time image.
+  `subtypep` intervals, and a lattice name staying that type beside `coalton:bit`, a class. Then, past
+  `math/complex.lisp`: `trivial-garbage:gc` (the shim's eighth external, `system.lisp`), the float literal's
+  spelling (tier 4 above), `(find-class 'package)` ([clos.md](clos.md)) -- and speed, as one attempt of the old
+  build ran out its hour inside `math/complex.lisp`:
+  - the dispatcher chain memo ([clos.md](clos.md), "The interpreter's chain memo"): fset's `compare` chain was 74%
+    of `math/num.lisp` (11 minutes, then 1.5). coalton's `derive` asks `compute-applicable-methods`, which turns
+    the generic-function protocol on from `iterator.lisp` onward; until the memo reached under the dynamic arm
+    that file took 18 minutes and the compare chain 84% of the samples;
+  - the per-site memos without their 20,000-entry bound, a walk of a `macrolet` no longer dropping every site's
+    expansion ([interpreter-expansion-memo.md](interpreter-expansion-memo.md)); a new struct regenerating only
+    the dispatchers it can reach; a native `equalp` (20% while it was Lisp: coalton's substitutions compare type
+    variables with it); no call frames in a run that starts no SWANK server ([swank.md](swank.md)).
+  - Where the time goes now: coalton's `reduce-context` maps the whole value environment through `fset:image` for
+    every binding group, so a file costs more the later it comes (`seq.lisp` 503 s, `hashmap.lisp` 425 s,
+    `list.lisp` 333 s); otherwise the interpreter itself, no frame above `evalCons` over 11% (JFR).
+  - The float traps: `/` over a float is IEEE on every backend ([error-handling.md](error-handling.md),
+    "Per operator"), which is what SBCL answers with coalton's traps off, so the shim's `with-float-traps-masked`
+    needs nothing: `(/ 1.0d0 0.0d0)` under coalton is an infinity here too.
+  - Not measured: coalton's own tests (`coalton/tests`, through fiasco), `coalton/library/big-float`. A bare
+    `t` in a package not using `cl` is `cl:t` here (`.todo/i74`). The compile paths stop before the library
+    (`.todo/i73`).
 - **sento 3.4.2** — from the Quicklisp cache, verified manually (measured 2026-11-05, interpreter and JVM):
   `make-actor-system`, `actor-of`, `ask-s`, `ask` with `fcompleted`, a `:time-out`, `*state*`, agents,
   8 threads x 200 `tell`s counted to 1600. On wasm it compiles and `make-actor-system` signals at the first
