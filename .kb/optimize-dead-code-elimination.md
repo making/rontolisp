@@ -45,6 +45,7 @@ the locals alone.
 
 ## Before the wasm shaker: the type-test fold and the forwarder redirect
 `am.ik.wasm.WasmRefTypeFolder.fold`, then `WasmCallForwarding.redirect`, then
+`WasmWriteOnlyGlobals.rewrite` ("The write-only globals" below), then
 `WasmPeephole.rewrite` ("The adjacent-instruction peepholes" below, which also picks up the
 `i32.const; drop` / `ref.null; drop` debris the fold leaves) run in
 `WasmLispCompiler.shakeCore` ahead of `WasmTreeShaker.shake` at every level but `off`: a
@@ -1038,12 +1039,13 @@ noted outside every unit (import/export wrappers) is `UNATTRIBUTED` = always mad
 `WasmLispCompiler.narrowLadders` runs on the assembled core module BEFORE
 `WasmImportInjector.inject` (a ladder rebuilt after it would miss the renumbering -- the first
 cut did, and every host-importing example failed in `WasmRefTypeFolder`), at every
-`eliminatesDeadCode()` level. It asks `am.ik.wasm.WasmTreeShaker.madeValues` (`ValueCalls`:
+`eliminatesDeadCode()` level. It asks `am.ik.wasm.WasmTreeShaker.valueReach` (`ValueCalls`:
 the ladder roots and page slots as dispatchers, funcIndex -> funcId for every arm target, the
 makers, the always-made): reach from exports/start where a dispatcher's call to a valued target
-is followed only once a reached function makes that value. Makers beyond the credits:
-`FUNC_LOOKUP` makes every registry row's funcId (`registryFuncIds` when `registryLive`; the blob's
-one reader); a dispatchable defun with neither a row nor a credit (`--dynamic` /
+is followed only once a reached function makes that value. Makers beyond the credits: a registry
+row's funcId is made by each function spelling its name ("A registry row lives while a kept function
+spells its name"), and by `FUNC_LOOKUP` where a run can produce any name; a dispatchable defun with
+neither a row nor a credit (`--dynamic` /
 `anyNameResolvable` without the registry) is always made. When some dispatchable funcId is
 not made, the ladders are rebuilt over the rest (`LadderBuilder`, the same
 `WasmRuntimeBuilder.buildDispatch` call over the same page slots; a slot a smaller ladder leaves
@@ -1061,6 +1063,110 @@ and clojure-spec shrink a fraction of a percent (outputs identical). Compile tim
 within noise. Pins: `WasmTreeShakerTest#aClosureWhoseEveryCreatorIsShakenTakesItsLadderArmAlong`
 (P1, component, a host import), `#aValueCallIsFollowedOnlyOnceAReachedFunctionMakesTheValue`,
 the four ladder programs in `WasmLispCompilerIntegrationTest#optimizedModulesPrintExactlyWhatTheUnoptimizedOnesDo`.
+
+### A registry row lives while a kept function spells its name
+A name is what a symbol at `_lookup` can carry, and a symbol is a literal some function holds ("A
+registry row is a name, not a value", below). `registryFuncIds` reads `Ctx.spelledLiterals`, which
+every compiled body fills, so a `defmacro`'s helper defun that backquotes a name armed a row, and
+`_lookup`, reached from any dispatcher, made that row's value: `%pairs-form` kept `%serialize-pairs` and
+with it `replace` in a filter whose headers are literals. `WasmValueMakers` now credits each spelling
+to the unit emitting it, as it credits a closure, and `narrowLadders` makes a row's funcId from the
+units holding one of its spellings (`DesignatorSpellings.all`), or from `_lookup` where a run can
+produce any name (`--dynamic`, `anyNameResolvable`). A spelling with no unit (a package walk's) is
+always held.
+
+A row no reached unit spells is dead with its arm: `narrowLadders` hands it to `shakeCore` as a range no
+function reads, and `_lookup` is the stub when every row is. The hole reads as a name no symbol has, so
+a name forged from computed pieces misses, as the docs say it does. Under `!usesIntern` the row's name
+is a body string (`addBodyString`): a row compares offsets and reads no bytes. With `_intern` the name
+stays pinned, since `(intern "FOO")` finds `FOO` only through the table. The JVM is not narrowed this
+way: a forged name spelled only in dead code resolves there and misses on WASM, both inside the
+documented carve-out, and a dead row on the JVM costs class bytes no host pays for by the kilobyte.
+
+Debug: `-Drontolisp.debug.dispatchgate=true` adds `made <value> by [<functions>]` per arm. Pins:
+`WasmTreeShakerTest#aNameOnlyAFunctionNothingReachesSpellsHasNoCaseAndNoRow`, ci-spec
+`what-a-kept-function-can-name-and-what-a-fold-may-assume`.
+
+### What a `funcall` brought into a small module (2026-11-05)
+A filter with `get-buffer`, `search` and `~a` of an integer was 9,093 / 4,550 at `--no-wasi
+--optimize=size`, and 40,793 / 17,486 with one `funcall` of a function in a `defvar`. No single cause:
+several roots held the same helpers, so each fix alone showed little. In the order they let go:
+
+- **A top-level `#'concatenate`.** `FunctionDesignators.withDataCalledReferences` appends a `(function
+  name)` to open a wrapper's gate, and `_start` evaluated it, which made the value. Its trigger was a
+  false positive the scan's comment allows, since "the shakers remove one nothing calls": `(ecase map
+  (:request 0) ...)` reads as `(map <computed type> ...)`. Its lambdas made `IDENTITY` and `%SEQ-STRING`.
+  `ToplevelStatements.pruneFunctionReferences` drops such a form once the gates have read it, on both
+  backends: a plain function's reference cannot fail, and a dropped value is no value
+  (`toplevel-statement-values.md`).
+- **The registry's rows**, above: `STRING`, `VECTOR`, `LIST`, `EQL` and the SDK's own names, each spelled
+  by a dead body. A dead `(funcall enumeration form)` also set `runtimeDesignatorDispatch`, so a filter
+  with no `funcall` at all carried the names in data, 1,194 bytes to 358.
+- **The generic sequence family.** `(nreverse acc)` is a string-and-vector dispatch around the list
+  loop, whose arms call `replace` and the conversions. The fold should decide them over a list the
+  program built, and two things stopped it (`wasm-ref-type-fold.md`): a decided `if`'s value was
+  opaque, so `stringp`'s nested tests left a constant nothing read, and a local's set took every value
+  of any cdr through the previous-cell read. With both fixed, `(nreverse acc)` is its loop: 14,013 to 1,210.
+- **`_charvec_to_str` as an identity.** It answers what it does not convert, so `_princ_val`'s
+  `x = _charvec_to_str(x)` handed `~a` every value any caller passes it. `emitCharvecToStrLocal` tests
+  `TYPE_CELL` first, and a printer keeps the arms of what reaches it: `FUNC_PRINC_VAL` 2,884 to 174
+  here, which is `~a` of an integer on `p07-format-a`'s path without narrowing `~a` itself. `%forget`'s
+  `(setf aref)` had kept every arm in any filter with contexts: 12,851 to 10,083.
+- **Reports nothing reads** (`--no-wasi`; `error-handling.md`, "A module with nowhere to report"): the
+  default handler's 8KB. `FUNC_TILDE`, `FUNC_PRIN1_TO_STR` and `FUNC_PRINC_TO_STR` under `_dispatch_1`
+  in a `handler-case` around a `funcall` were no arms and no report function as a value (`made` lists
+  the lambda alone): they are the not-a-function and arity reports the dispatcher itself builds. A
+  class's `:report` is another: `%no-applicable-method` and `%slot-read` ran theirs at the signal, and
+  made its lambda a value, for any filter with an accessor under a handler.
+- **Writes nothing reads** (`WasmWriteOnlyGlobals`, below).
+
+| raw / gzip, `--no-wasi --optimize=size` | before | after |
+| --- | ---: | ---: |
+| `http_body`, `(:on-failure :trap)` | 6,086 / 3,165 | 4,872 / 2,563 |
+| `http_body`, the default handler | 14,506 / 6,230 | 5,172 / 2,662 |
+| + `get-buffer`, `search`, `~a` | 9,093 / 4,550 | 7,535 / 3,788 |
+| + a `funcall` | 40,793 / 17,486 | 7,994 / 4,032 |
+| the same under the default handler | 56,373 / 22,089 | 8,761 / 4,338 |
+| `http_headers` | 20,311 / 8,701 | 7,114 / 3,433 |
+| `error_log` | 54,715 / 21,530 | 20,351 / 8,778 |
+| `gateway` | 105,198 / 39,453 | 79,802 / 30,367 |
+| `handler-case` around a `funcall` | 11,375 / 4,904 | 1,003 / 690 |
+| a bare `funcall` | 1,105 / 771 | 906 / 644 |
+| `zlib` | 176,603 / 58,763 | 98,242 / 32,331 |
+| `zlib`, no flags | 229,564 / 74,572 | 225,464 / 73,625 |
+| `hello_world`, `pi_approx`, `dom_reactor`, `webgl-cube` | | within 50 bytes |
+
+`test_plugin`, without `--no-wasi`, 49,489 / 20,741 to 31,340 / 13,012. Instructions per exchange
+moved little, as they should: `http_body` 1,145 to 1,116, and 1,219 to 1,160 under the handler. A
+second fold round behind the inliner was tried and rejected, about 150 bytes.
+
+What was weighed and left:
+
+- **Specializing `%pc-walk` on a constant `escape`** buys nothing now. `~a` alone reaches no walk
+  (`pretty-printer.md`), and a `~s` beside any `~a` under a package passes both values, 27,018 / 10,673:
+  `%PC-UNQUALIFIED` 4,167, the two printers 2,619 and 2,541, `%PC-WALK` 2,368. A symbol and a framed
+  string are one struct, so the fold cannot retire the symbol arm while a string reaches `%print-cased`.
+- **Both walks in one module** (`%pos-walk` -> `%print-object-leaf` -> `%print-cased` -> `%pc-walk`) takes
+  a `print-object` route and a print control in one program: without the control the leaf renders raw
+  and no `%PC-*` is there. With it, 44,670 / 16,187 holding `%POS-WALK` 3,495 and `%PC-WALK` 2,783. A leaf
+  hands the walk only atoms, so a split would save the list and vector arms, under 2KB of that shape.
+- **What holds `test_plugin` and `gateway` now** is what they call: `%serialize-pairs`' `replace` over
+  `(car pair)`, whose element is every value a cons holds, and `~a` of what a cons holds. The fold's
+  field sets are per type, so a cons of strings and a cons of anything read alike.
+- **`(setf aref)` of a general vector** reaches `%SCHAR-SET-RUNTIME`: `_charvec_p` is no type question,
+  so the fold cannot retire it.
+
+### The write-only globals
+`am.ik.wasm.WasmWriteOnlyGlobals.rewrite`, behind the fold and in front of the peepholes in `shakeCore`.
+A global no reachable body reads: its writes become `drop`s, and an update `global.get G; i32.const K;
+i32.add|sub; global.set G` goes whole, its read feeding only that write. The shake then drops the
+global. Exported and imported globals stay. It finds the operator register where no report reads it,
+the handler depth where nothing signals, `%mv-spill` where no form reads a second value (a `ref.null;
+global.set` per function), and a `defvar` nothing reads. A `(defvar *x* (f))` keeps its call.
+Two peepholes behind it: `call <pure>; drop` goes for what `peepholePureNonNullCalls` vouches for, and
+a literal boxed for a parameter that unboxes it, `i32.const K; ref.i31; ref.cast (ref i31); i31.get_s`,
+is `i32.const K` where K fits 31 bits. Pins: `WasmWriteOnlyGlobalsTest`,
+`WasmPeepholeTest#foldsALiteralBoxedForAParameterThatUnboxesIt`.
 
 ## cl-ppcre, decided
 Adding tiny-routes to a Clack reactor nearly triples the module, and the extra is **cl-ppcre, its
@@ -1174,8 +1280,8 @@ Pins: `JvmClassSplitterTest#aCallThroughAValueKeepsItsTargetOnlyWhileAKeptBodyMa
 `#valuesThroughEveryDispatcherShapeAnswerAsUnoptimized`.
 
 ### A registry row is a name, not a value
-Both backends. Every row is a maker of its funcId's value (JVM `makesValueOf`, WASM `FUNC_LOOKUP`
-in `madeValues`), so while the rows covered every dispatchable funcId, a `#'name` compiled only in
+Both backends. Every row is a maker of its funcId's value (JVM `makesValueOf`, WASM the functions
+spelling the row), so while the rows covered every dispatchable funcId, a `#'name` compiled only in
 dead code kept its function and dispatch case whenever any dispatcher (hence the registry) was
 emitted. The rows are now `registryFuncIds` -- the name-armed set alone (all non-call-only defuns
 under `--dynamic` / `anyNameResolvable`, unchanged) -- and a value-only funcId's case lives only

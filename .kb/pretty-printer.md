@@ -105,8 +105,9 @@ having slots at all, and `:|A|` under a `*print-base*` reading `A` as a digit, d
 `instances-follow-the-printer-controls-in-a-program-with-no-method`.
 
 **Known gap (all seven):** a symbol inside a hash table, array of rank != 1 or packed float vector is
-neither cased nor truncated. `%print-object-str`'s walk (`.kb/clos.md`) has the SAME guard and gap and
-is never live in the same program — read them together. Also inert: `*print-array*` nil,
+neither cased nor truncated. `%print-object-str`'s walk (`.kb/clos.md`) has the SAME guard and gap — read
+them together. A structure goes through one of the two: a program with a `print-object` route and a
+print control holds both, and its `%print-object-leaf` hands `%pc-walk` only atoms. Also inert: `*print-array*` nil,
 `*print-circle*` t, `~@W`.
 
 ## Quote/function abbreviation and `|...|` symbol escaping

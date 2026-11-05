@@ -92,8 +92,23 @@ off for that module** -- silently, by design; the loss is size, never an answer.
 - **Refinement**: an `if` on a `Bool` narrows the local inside the arm it selects (and
   after an arm that never falls through; after a not-taken `br_if`; after a
   `br_on_cast`/`br_on_cast_fail` over a `local.get`, which leaves the local outside / inside the
-  cast's type), only across a range the local is never assigned in -- so `_int_val`'s innermost `else` sees `x ∈ {bigint}`,
-  its `ref.test bigint` folds to 1 and the `_type_err_int` landing goes.
+  cast's type), up to the local's next assignment -- so `_int_val`'s innermost `else` sees `x ∈ {bigint}`,
+  its `ref.test bigint` folds to 1 and the `_type_err_int` landing goes. **Up to, not across** (2026-11-05,
+  `Walk.heldUntil`): every path into the range runs through its start, a label being the end of a block
+  that encloses its branch, so what ends a refinement is the next assignment, or the head of a loop that
+  opens in the range and holds it, whose back edge carries the assigned value. Refused over the whole
+  range, a list walk's guard said nothing about the cursor's read before `(setq x (cdr x))`, and
+  `nreverse`'s previous cell held everything any cdr holds.
+- **A spliced-in arm hands on what it knows** (2026-11-05, `Walk.stepEnd`): a decided `if` no branch
+  targets leaves the arm's own stack entries, a constant or a test of a local among them, where a block's
+  end rebuilds entries from its carried sets with no symbol. `stringp` is a test inside a test, and the
+  boolean box its caller tests is one more: all of it needs the first decision to reach the next. Without
+  this the rewrite left `i32.const 0; if` for a second run to fold, and two more runs of the whole pass
+  gave what this does in one (`(nreverse acc)` 14,013 / 1,658 / 1,224 bytes, here 1,210).
+- **An identity in a runtime body fills the set** (2026-11-05): `_charvec_to_str` answers what it does not
+  convert, so `x = _charvec_to_str(x)` at the head of `_princ_val` gave `x` every value any caller of it
+  passes. `WasmEmitHelper.emitCharvecToStrLocal` tests `TYPE_CELL` first: where no caller hands a cell, the
+  fold decides the test, and the arms below read the parameter's own set.
 
 ## The rewrite
 
@@ -210,6 +225,8 @@ under wasmtime: the one-question merge, the undecidable half kept, the arm refin
 bare splice with reindexed branches, the targeted arm keeping its block, the always-failing
 cast, the cast branch never taken / always taken / undecided with its refinement / reindexed
 across a spliced arm, the declined boundary, the reactor's float tests gone and the fold's idempotence;
+an `if` behind a spliced arm, a guard up to the next assignment and not across a loop holding it, `nreverse`
+of a list the program built leaving no sequence function;
 the identity test against a singleton global decided both ways and refining its arms, a type
 test still admitting the singleton, and the unpassed optional no larger than its
 two-required twin),

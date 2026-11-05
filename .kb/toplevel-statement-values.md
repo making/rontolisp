@@ -13,6 +13,11 @@ backends:
   nothing reads `*package*` -- [[packages]].)
 - **name-valued definer** -- `defvar`/`defparameter`/`defconstant`: the top-level emitter OFFERS
   the form the chance to emit no name; the defvar compiler takes it.
+- **a reference that cannot fail** -- `(function name)` of a registered function with no cell and
+  no namespace read: `ToplevelStatements.pruneFunctionReferences`, once the last gate has read the
+  spelling, since the wrapper gates are what these are appended for
+  (`FunctionDesignators.withDataCalledReferences`, `EvalReferences`). Evaluated, it made a value for a
+  dispatcher arm (`optimize-dead-code-elimination.md`, "What a `funcall` brought into a small module").
 
 ## The offer protocol
 - The definer still compiles through the ordinary `compileExpr`, keeping source-position

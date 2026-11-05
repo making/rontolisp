@@ -2,7 +2,9 @@
 
 `examples/proxy-wasm/proxy-wasm.lisp`. Everything here is `--no-wasi --optimize=size`, raw / gzip, measured
 2026-11-05 (`test_plugin` is built without `--no-wasi`). What a filter's author chooses is in the example's README; this is
-why the SDK is shaped as it is, and what was weighed and left. What a `funcall` still brings into a filter is `.todo` i52.
+why the SDK is shaped as it is, and what was weighed and left. A `funcall` no longer brings the sequence family or the printer
+(`optimize-dead-code-elimination.md`, "What a `funcall` brought into a small module"), and that work is in the "wasm-GC" column below;
+the times are from before it.
 
 ## What an exchange runs
 
@@ -12,15 +14,15 @@ nothing is 13 instructions. "Before" is `7d24bc53b`.
 
 | Filter | Rust | wasm-GC before | wasm-GC | `--no-gc` before | `--no-gc` |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `http_body`, 5-byte body: instructions | 2,342 | 13,967 | 1,145 | 475 | 491 |
-| Same: function calls | 28 | 441 | 91 | 25 | 25 |
-| `http_headers`: instructions | 28,124 | 118,699 | 19,936 | 10,997 | 10,997 |
-| Same: function calls | 465 | 3,039 | 1,126 | 248 | 248 |
-| `http_body`, 64KiB body: instructions | 462,207 | 3,227,624 | 223,013 | 5,636,321 | 221,979 |
-| Same: function calls | 37 | 553 | 143 | 196,630 | 37 |
-| `http_body`: bytes | 92,163 | 59,634 / 23,071 | 6,086 / 3,165 | 2,064 / 1,152 | 2,166 / 1,246 |
-| `http_headers`: bytes | 94,189 | 61,382 / 23,762 | 20,311 / 8,702 | 2,583 / 1,388 | same |
-| `gateway`: bytes | | 125,898 / 45,243 | 105,200 / 39,439 | | |
+| `http_body`, 5-byte body: instructions | 2,342 | 13,967 | 1,116 | 475 | 491 |
+| Same: function calls | 28 | 441 | 89 | 25 | 25 |
+| `http_headers`: instructions | 28,124 | 118,699 | 18,408 | 10,997 | 10,997 |
+| Same: function calls | 465 | 3,039 | 853 | 248 | 248 |
+| `http_body`, 64KiB body: instructions | 462,207 | 3,227,624 | 222,976 | 5,636,321 | 221,979 |
+| Same: function calls | 37 | 553 | 141 | 196,630 | 37 |
+| `http_body`: bytes | 92,163 | 59,634 / 23,071 | 4,872 / 2,563 | 2,064 / 1,152 | 2,166 / 1,246 |
+| `http_headers`: bytes | 94,189 | 61,382 / 23,762 | 7,114 / 3,433 | 2,583 / 1,388 | same |
+| `gateway`: bytes | | 125,898 / 45,243 | 79,802 / 30,367 | | |
 
 Warm p50 per exchange, load 14-30, against 445-487us for that plugin that does nothing: `http_body` Rust 621-723us, wasm-GC before
 1000-1468us and now 715-733us, `--no-gc` 512-639us; `http_headers` Rust 1532us, wasm-GC now 1332us, `--no-gc` 1527us, one round.
@@ -43,7 +45,7 @@ what a GC module's call costs Endive beside its instructions was not separated.
 
 Where the keywords were: `(eq action :pause)` and the `:continue` a method answers on each callback, an `ecase` building each
 key up to the one that matched, `make-instance`'s and `search`'s keyword scans, and `%check`'s operation name, a string evaluated
-for a failure that never came. Under the default error mode `handler-case` adds about 25 instructions per callback.
+for a failure that never came. Under the default error mode `handler-case` adds about 22 instructions per callback.
 
 ## The API: one form, not methods
 
@@ -63,8 +65,8 @@ and a mistyped clause fails the compile where a mistyped `defmethod` made a new 
 parameter count and an `:on-failure` that is neither mode. It is also the `--no-gc` SDK's form.
 
 **A context is its id unless `:root` or `:stream` says otherwise.** Then it is an object of any kind in `%context`'s table, which
-is what state costs: `(:stream (id root) (make-instance 's))` 2,357 instructions and 14,063 bytes, a `defstruct` 2,379, a cons
-2,349, so the object's kind is not the cost. The table is: create 696, delete 442. A hit on the last context is 17 instructions; a
+is what state costs: `(:stream (id root) (make-instance 's))` 2,294 instructions and 10,249 bytes, a `defstruct` 2,314, a cons
+2,286, so the object's kind is not the cost. The table is: create 675, delete 434. A hit on the last context is 17 instructions; a
 miss, every callback under interleaved streams, is 201 more. `:on-done`, `:on-log` and `:on-delete` get a root's context too (`gateway`'s `typep`).
 A context goes outside `:on-delete`'s handler: inside it, as on the old SDK, a clause that signaled kept its context for good.
 
@@ -96,13 +98,19 @@ instructions per byte; `get-buffer` and `search` are 30, and a `get-buffer-octet
 | the same with a `:reader` | 90,498 | 32,251 |
 | `format nil` of the name and status, in a global the handler reads | 79,843 | 29,143 |
 
-A computed `error` datum bails `conditionNarrowing` (`error-handling.md`); a typed signal carries the report renderer.
+A computed `error` datum bails `conditionNarrowing` (`error-handling.md`); a typed signal carries the report renderer. On this SDK
+a filter that traps is 4,872 / 2,563, one with the default handler 5,172 / 2,662, and one that catches `error` and logs `~a` of it
+26,625 / 10,368: holding a condition is what brings the reports (`error-handling.md`, "A module with nowhere to report").
 
 **`http-call` answers NIL when refused, in both modes**, because a trap cannot be handled. Before, a refused call under the
 default made `gateway.lisp` answer its callback's fallback, `:continue`: the request passed without its authorization.
 
-**Contexts are in 64 buckets of an alist, not a hash table.** 4,036 / 1,567 smaller on `http_body`; a plain alist saves
-another 782 / 301, and walks every live stream per callback in a VM that may hold thousands.
+**Contexts are in 64 buckets of an alist, not a hash table.** Measured again at this tree, a hash table is 442 / 213 more on
+`http_body` with `:stream`, where the fold keeps `_hash` to its integer arm, 812 / 276 on `gateway`, and 4,070 / 1,709 on `test_plugin` and
+4,482 / 1,666 on `error_log`, where `_equal` stays. It runs 390 fewer of that exchange's 2,287 instructions (the bucket's `aref`, below) and
+walks nothing. The bytes decide for now: a filter's author sees them in every build. A plain alist saves another 782 / 301, and walks every
+live stream per callback in a VM that may hold thousands. `define-filter` makes a table only for a filter that uses it: a `defvar`
+nothing reads goes, and its `(%table)` is a call that stays.
 
 ## What the compiler gained for it
 
@@ -124,7 +132,7 @@ Beside them, programs that are no filter, base and tree: `hello_world` 484 / 387
 
 ## Left as they are
 
-- Each export wrapper boxes every parameter, used or not: 18 boxes and 216 of `http_body`'s 1,145. A wrapper could ask whether the
+- Each export wrapper boxes every parameter, used or not: 18 boxes and about 216 of `http_body`'s instructions. A wrapper could ask whether the
   defun mentions the parameter, for 6us of a 400us exchange.
 - `%mark` and `%reset`, 49 per callback given: a let of a raw i32 would need unboxed locals at `--optimize=size`.
 - `proxy_on_memory_allocate`, 98 per value the host answers: wrapper to defun to wrapper.
