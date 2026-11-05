@@ -25,7 +25,7 @@
 | `prin1` | `(prin1 42)` | `print` と同様ですが改行なし |
 | `princ` | `(princ "hello")` | 引用符なし・改行なしで印字します |
 | `terpri` | `(terpri)` | 改行のみを印字します |
-| `fresh-line` | `(fresh-line)` | 標準出力がまだ行頭にない場合のみ改行を印字します。nilを返します |
+| `fresh-line` | `(fresh-line)` | ストリーム (省略時は標準出力) がまだ行頭にない場合のみ改行を印字します。印字したときは `t` を、それ以外は nil を返します |
 | `princ-to-string` | `(princ-to-string '(1 "x"))` | `"(1 x)"` -- `princ` が印字する文字列 |
 | `prin1-to-string` | `(prin1-to-string "abc")` | `"\"abc\""` -- `prin1` が印字する文字列(読み戻し可能な形式) |
 | `write` | `(write "hi" :escape nil)` | `hi` を印字します。各キーワードはその 1 回の出力のあいだ対応する印字制御変数を束縛します |

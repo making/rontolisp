@@ -1512,8 +1512,7 @@ public final class LispPreludeLibrary {
 				         (write-string %fw-text)
 				         nil)
 				        (t
-				         (if (and %fw-fresh (if (%obj-is %fw-d '%STREAM) (typep %fw-d 'string-stream) t))
-				             (fresh-line %fw-d))
+				         (if %fw-fresh (fresh-line %fw-d))
 				         (write-string %fw-text %fw-d)
 				         nil)))
 				""");
@@ -1536,8 +1535,11 @@ public final class LispPreludeLibrary {
 				  %bs-b)
 				(defmethod rontolisp:stream-fresh-line ((%bs-s %broadcast-stream))
 				  (let ((%bs-cs (%broadcast-stream-components %bs-s)))
-				    (if %bs-cs
-				        (fresh-line (car (last %bs-cs)))
+				    (if (if %bs-cs (fresh-line (car %bs-cs)) nil)
+				        (progn
+				          (dolist (%bs-x (cdr %bs-cs))
+				            (terpri %bs-x))
+				          t)
 				        nil)))
 				(defmethod rontolisp:stream-clear-input ((%bs-s %broadcast-stream))
 				  nil)
@@ -1573,6 +1575,8 @@ public final class LispPreludeLibrary {
 				  (write-string (subseq %tw-str %tw-start (or %tw-end (length %tw-str)))
 				                (%two-way-output %tw))
 				  %tw-str)
+				(defmethod rontolisp:stream-fresh-line ((%tw %two-way-stream))
+				  (fresh-line (%two-way-output %tw)))
 				(defmethod rontolisp:stream-read-byte ((%tw %two-way-stream))
 				  (read-byte (%two-way-input %tw) nil :eof))
 				(defmethod rontolisp:stream-write-byte ((%tw %two-way-stream) %tw-b)
@@ -1628,6 +1632,8 @@ public final class LispPreludeLibrary {
 				  (write-string (subseq %es-str %es-start (or %es-end (length %es-str)))
 				                (%echo-output %es))
 				  %es-str)
+				(defmethod rontolisp:stream-fresh-line ((%es %echo-stream))
+				  (fresh-line (%echo-output %es)))
 				(defmethod rontolisp:stream-read-byte ((%es %echo-stream))
 				  (let ((%es-b (read-byte (%echo-input %es) nil :eof)))
 				    (if (eq %es-b :eof)

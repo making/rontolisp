@@ -27,7 +27,8 @@ Seven `LispMacroExpander` expansions (no per-backend codegen), in `PackageRegist
 `expandBuiltinMacro` cases so `macroexpand-1` works:
 
 - `declare`/`declaim`/`proclaim` -> `nil`, arguments never evaluated or validated (`proclaim`
-  deviates from CL); `the` -> its value form; `eval-when` -> `progn` of the body.
+  deviates from CL); `the` -> its value form; `eval-when` -> `progn` of the body for `:execute`,
+  `nil` otherwise ("An eval-when's position" below).
 - `check-type` -> `(let ((__check-type place)) (if <type-test> nil (error 'simple-type-error :datum
   __check-type :expected-type 'spec :format-control "...~s..." :format-arguments (list
   __check-type))))` (2026-10-30; was a plain `simple-error`, so `(type-error (c) ...)` missed it),
@@ -482,14 +483,55 @@ not be: every call site is inside a string arm `stringp` has already gated. Impl
 `(eval-when (sits) ...)` into top-level forms. Called at `UserMacroExpander.expand` entry (so an
 `eval-when`-wrapped `defmacro` registers at compile time) and at
 `Jvm`/`Wasm`/`NoGcWasmCompiler.compile` right before `expandTopLevelDefstructs` (so Pass 1 collects
-nested defuns in direct compiler invocations). The interpreter does NOT flatten: it evaluates
-`eval-when` natively as `progn`, except under the `eval` function, where only `:execute` runs the
-body as under `_eval` (`.kb/eval-runtime.md`). A malformed `(eval-when)` without a situation list is left
-unspliced so the expander's validation error surfaces.
+nested defuns in direct compiler invocations). A malformed `eval-when`, without a situation list, is
+left unspliced so the expander's validation error surfaces.
 
 **Known gap:** `LoadInliner` runs BEFORE `UserMacroExpander`, so a top-level
 `(load ...)`/`(require ...)`/`(asdf:load-system ...)` wrapped in `eval-when` is NOT inlined on the
 compile path. Unwrapped directives are unaffected.
+
+## An eval-when's position (CLHS 3.2.3.1)
+2026-11-05, all four against SBCL 2.2.9 (ci-spec `eval-when-at-no-top-level-asks-for-execute`,
+`eval-when-at-top-level-stays-there`, which fail before this).
+
+- **At no top level** only `:execute` or `eval` runs the body, the form answering nil otherwise:
+  `expandEvalWhen` (the expression compilers, `FreeVarAnalyzer`, the interpreter's arm, `--dump-ir`'s
+  lowering), `%eval-row-eval-when` under `_eval`. Nothing is on the channel past one that does not run
+  (`settleTail`). `SpecialVarCollector.collectBoundForm` walks the body regardless: it does not know
+  the position, and a needless binding costs nothing.
+- **At top level** any situation runs it, an empty list none (`evalWhenMembers`): a program stands for
+  both its compile and its load, so all four print a `(eval-when (:compile-toplevel) (print 1))` a
+  source spelled, and macro time runs it as well. What a macro expanded to is read as `compile-file`
+  reads it where it IS an `eval-when` ([defmacro-backquote.md](defmacro-backquote.md)).
+- **What keeps its body at top level:** `progn`, `locally`, `eval-when`, `macrolet`, `symbol-macrolet`,
+  a macro's expansion. Past those, what `flattenTopLevel` opens: `uiop:with-upgradability`,
+  `with-deprecation`, and a `handler-bind` binding nothing (SBCL's expands to its body too; its
+  `with-compilation-unit`, `handler-case`, `prog1`, `when`, `cond`, `let`, `flet`, `block`, `the` do not,
+  measured). `uiop:nest` does not here.
+- **Compile paths:** nothing at top level reaches `expandEvalWhen`. `flattenTopLevel` opens what the
+  source spelled. `UserMacroExpander` walks a top-level `symbol-macrolet`'s members as top-level forms
+  and substitutes there, leaving a `progn` (such a form activates the pass), and splices a `progn` a macro
+  or that substitution left around an `eval-when`, compile-time members evaluated (before: `The function
+  X is undefined`, for a macro calling what such a member defined). `processExpandedEvalWhen` opens a
+  `progn` member, so no program leaves the pass with a top-level `eval-when` or `symbol-macrolet`:
+  `--dump-ir` relies on it. The playground and a direct compiler call never enter the pass, so the backends
+  flatten with `flattenCompiledTopLevel`, which substitutes a top-level `symbol-macrolet` itself.
+- **Interpreter:** the entries running a top-level form end in `evalAtTopLevel` (`evalTopLevel`,
+  so `eval(LispVal)`, `loadForms` and `evalSource`; `evalResolved`, so `evalValues` and the macro-time
+  evaluator). It opens `progn`, `locally`, `eval-when` and the wrappers and marks any other form
+  (`topLevelForm`, per thread, by identity); only the arms that make a top-level form of one ask the mark,
+  the macro call, `macrolet` and `symbol-macrolet` (`evalMacroletForm`'s `topLevel`), so `evalCons`'s hot
+  `progn` asks nothing. A `#.` datum (`evalReadTimeDatum`), `eval` and `compile` (`evalDatum`) and
+  `eval(LispVal, Environment)` are at no top level.
+- **Libraries sized** (a walk over `src/`, `examples/` and the 229 releases in the quicklisp cache): of
+  1185 `eval-when` forms 95 name no `:execute` at a syntactic top level and 20 inside another form, every
+  one of those a macro's body or template that the library uses at top level, or a test. Each of the 383
+  non-test systems there loaded on the interpreter and compiled to a class, against the build before, with
+  `expandEvalWhen` logging what it dropped: nothing, in 766 legs, of which 625 load before and after (one
+  more after, a 200 s timeout before) with the same output.
+- Lite: a macro call in a body that does not run still expands on a compile path, since the walk does
+  not know the interpreter's position. A compiled run-time `load` goes through `_eval`, so only `:execute`
+  runs there (a form the interpreter's `load` runs for every situation).
 
 ## Wiring points
 `LispNames` constants; `LispEvaluator.evalCons` cases; `Jvm/WasmExprCompiler` compileCons cases;

@@ -210,6 +210,19 @@ final class WasmExprCompiler {
 				return;
 			}
 		}
+		// A fresh-line's answer is built only for a site that reads it, and the offer is
+		// read back: a call the dispatch routes elsewhere leaves its value for the drop.
+		if (am.ik.rontolisp.compiler.ToplevelStatements.isFreshLine(expr)) {
+			LispVal outer = ctx.valueDropped;
+			ctx.valueDropped = expr;
+			compileExpr(expr, ctx);
+			boolean taken = ctx.valueDropped == null;
+			ctx.valueDropped = outer;
+			if (!taken) {
+				ctx.writer.write(Instruction.DROP);
+			}
+			return;
+		}
 		compileExpr(expr, ctx);
 		ctx.writer.write(Instruction.DROP);
 	}
@@ -623,6 +636,7 @@ final class WasmExprCompiler {
 						|| LispNames.WRITE_LINE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.WRITE_BYTE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.WRITE_STRING_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.FRESH_LINE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.READ_SEQUENCE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.WRITE_SEQUENCE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.CLOSE_RAW_INTERNAL.equals(qn.member())
@@ -687,6 +701,7 @@ final class WasmExprCompiler {
 						case LispNames.WRITE_BYTE_RAW_INTERNAL -> WasmWriteByteCompiler.compile(cons, ctx);
 						case LispNames.WRITE_STRING_RAW_INTERNAL ->
 							WasmWriteStringCompiler.compileWriteString(cons, ctx);
+						case LispNames.FRESH_LINE_RAW_INTERNAL -> WasmFreshLineCompiler.compile(cons, ctx);
 						case LispNames.READ_SEQUENCE_RAW_INTERNAL ->
 							compileExpansion(guardPackedForWideStreams(LispMacroExpander.expandReadSequence(cons, false,
 									characterStreams(ctx), boundsCheck(ctx)), ctx), ctx, tail);

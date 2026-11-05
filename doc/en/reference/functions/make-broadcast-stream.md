@@ -30,4 +30,4 @@ so it takes the whole output protocol: [`format`](../macros/format.md),
 [`fresh-line`](fresh-line.md), [`write-line`](write-line.md),
 [`force-output`](force-output.md), [`finish-output`](finish-output.md),
 [`clear-output`](clear-output.md) and [`close`](close.md).
-`fresh-line` answers the last component, or nil with no components.
+`fresh-line` asks the first component: when that is past column 0, every component gets the newline and the answer is `t`; otherwise, and with no components, nothing is written and the answer is nil.

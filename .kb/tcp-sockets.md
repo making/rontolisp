@@ -7,7 +7,7 @@ ALREADY-CONNECTED handle — the cl+ssl shim's substrate), `tls-listen` (keystor
 
 They return bidirectional stream VALUES in the same handle space as file streams
 (`LispLayout.Kinds.SOCKET` / `:SOCKET-SERVER`, `.kb/read-load-streams.md`), so
-`read-line`/`write-line`/`write-string`/`write-char`/`read-char`/`read-byte`/`write-byte`/`close`/`terpri`
+`read-line`/`write-line`/`write-string`/`write-char`/`read-char`/`read-byte`/`write-byte`/`close`/`terpri`/`fresh-line`
 work on sockets on every backend. The print family to a socket is deliberately NOT part of that
 surface anywhere. Blocking and synchronous, except that on `--component` a read inside an ASYNC body
 is promoted to a real suspension point. Reads are byte-at-a-time on interpreter/JVM; the component
@@ -288,6 +288,11 @@ so fetch+tcp and serve+tcp compose in one component.
   through `_writeString` (`JvmTerpriCompiler` — NOT `_writeStr`, the print-family sink),
   and the component lowers onto `%io-write-string`. It answers nil and puts one `0a` on
   the wire; bounded `write-line`'s lowering (write-string + terpri) needs both halves.
+- **`fresh-line` on a socket** (2026-11-05, was a `simple-error`, a `type-error` and a trap): the
+  interpreter's and `_freshLine`'s socket arm, `%io-fresh-line` on `--component` and `--native`, over the line
+  start each write keeps ([standard-output-redirect.md](standard-output-redirect.md), "A stream's line start"). The
+  native `_fresh_line_stream` holds no row for a socket fd, so `#'fresh-line` applied to one there, a first-class
+  use like the others out of contract, answers nil.
 - **`write-string`/`write-char`/`read-char` on a socket are real on all four backends**, all
   treating socket I/O as BYTES — never through a `Reader`/decoder that would buffer ahead and swallow
   bytes a following `read-byte`/`read-line` owes the caller; an invalid lead byte stands alone as

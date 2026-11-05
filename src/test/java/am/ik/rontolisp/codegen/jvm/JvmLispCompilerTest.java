@@ -6103,6 +6103,34 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("""
 				(format *error-output* "diag~%")
 				(princ "on-stdout")""")).isEqualTo("on-stdout");
+		assertThat(compileAndRunCapturingErr(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_EXPECTED);
+	}
+
+	@Test
+	void onlyAProgramThatCanAskALineStartKeepsThem() {
+		// What a write owes fresh-line rides the census, and a call it missed comes back
+		// as a forced re-run: the class never calls a _freshLine it does not declare.
+		String keeps = JvmIoRuntimeBuilder.MID_LINE_FIELD;
+		String writes = "(let ((s (make-string-output-stream))) (write-string \"x\" s) (print s))";
+		assertThat(classText(writes)).doesNotContain(keeps);
+		assertThat(classText("(let ((c \"~&x\")) (print (format nil c)))")).doesNotContain(keeps);
+		assertThat(classText("(princ \"x\") (fresh-line)")).doesNotContain(keeps);
+		assertThat(classText("(defun f (s) (fresh-line s)) (print #'f)")).contains(keeps);
+		assertThat(classText("(defun f (s) (format s \"~&x\")) (print #'f)")).contains(keeps);
+		assertThat(classText("(defun f (s c) (format s c)) (print #'f)")).contains(keeps);
+		assertThat(classText("(print #'format)")).contains(keeps);
+		assertThat(classText("(defun f (s) (funcall (read-from-string \"fresh-line\") s)) (print #'f)"))
+			.contains(keeps);
+		// A report's body lives in the class registry, out of the census's sight.
+		assertThat(classText("""
+				(define-condition als-c (error) () (:report (lambda (c s) (declare (ignore c)) (format s "~&x"))))
+				(print (handler-case (error 'als-c) (error (e) (princ-to-string e))))""")).contains(keeps);
+	}
+
+	private static String classText(String source) {
+		return new String(new JvmLispCompiler("Test").compile(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
+				am.ik.rontolisp.reader.Features.JVM, false, false)), StandardCharsets.ISO_8859_1);
 	}
 
 	@Test
@@ -9074,8 +9102,10 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunEvalWhen() throws Exception {
 		assertThat(compileAndRun("(eval-when (:compile-toplevel :load-toplevel :execute)"
-				+ " (defun ew-fn (x) (* x 2))) (print (ew-fn 21))"))
-			.isEqualTo("42");
+				+ " (defun ew-fn (x) (* x 2))) (print (ew-fn 21))"
+				+ " (print (let () (eval-when (:load-toplevel) 1))) (print (let () (eval-when (:execute) 2)))"
+				+ " (symbol-macrolet ((ew-s 3)) (eval-when (:load-toplevel) (print ew-s)))"))
+			.isEqualTo("42\nNIL\n2\n3");
 	}
 
 	@Test
@@ -12284,6 +12314,9 @@ class JvmLispCompilerTest {
 						am.ik.rontolisp.RontolispNativeValueFixture.THREAD_EXPECTED },
 				{ am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_PROGRAM,
 						am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_EXPECTED },
+				{ am.ik.rontolisp.LineStartFixture.SOCKET_PROGRAM, am.ik.rontolisp.LineStartFixture.SOCKET_EXPECTED },
+				{ am.ik.rontolisp.LineStartFixture.SOCKET_FORMAT_PROGRAM,
+						am.ik.rontolisp.LineStartFixture.SOCKET_FORMAT_EXPECTED },
 				{ am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_PROGRAM,
 						am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_EXPECTED },
 				{ am.ik.rontolisp.RontolispNativeValueFixture.TLS_PROGRAM,

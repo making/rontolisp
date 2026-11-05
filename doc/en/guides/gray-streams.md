@@ -72,8 +72,9 @@ operators consult: `rontolisp:stream-line-column` answers the stream's current
 column, or `nil` (the default) for a stream that tracks none, and
 `rontolisp:stream-start-line-p` answers from it. A stream with no column cannot
 tell whether it is at the start of a line, so `fresh-line` on it always writes
-the newline. `rontolisp:stream-advance-to-column` rounds out the protocol for a
-program that calls it directly.
+the newline, and answers what `rontolisp:stream-fresh-line` answers: by default
+`t` when it wrote, nil when it did not. `rontolisp:stream-advance-to-column` rounds
+out the protocol for a program that calls it directly.
 
 Closing a Gray stream answers `t` and does nothing else -- there is nothing to
 release. A stream that DOES hold something writes CL's own spelling, a method on

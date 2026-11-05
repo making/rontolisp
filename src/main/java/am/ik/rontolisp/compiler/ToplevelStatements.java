@@ -131,6 +131,18 @@ public final class ToplevelStatements {
 	}
 
 	/**
+	 * Whether the form is a {@code fresh-line}, the one operator a statement offers to
+	 * answer nothing: its {@code t} costs a branch and the symbol at every {@code ~&}
+	 * whose answer no one reads.
+	 * @param form a form in statement position
+	 * @return {@code true} for {@code (fresh-line ...)}
+	 */
+	public static boolean isFreshLine(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.FRESH_LINE.equals(op.name());
+	}
+
+	/**
 	 * Whether a {@link #isNameValuedDefiner(LispVal) name-valued definer} rebinds
 	 * unconditionally ({@code defparameter}/{@code defconstant}) rather than only when
 	 * unbound ({@code defvar}) -- the {@code force} flag both backends' defvar compilers

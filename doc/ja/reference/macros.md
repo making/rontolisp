@@ -52,7 +52,7 @@
 | `declaim` | `(declaim declaration...)` | `declare` と同様の no-op（ファイルレベルの宣言用） |
 | `proclaim` | `(proclaim declaration)` | `declaim` と同様の no-op（CL からの逸脱: マクロとして分類され、引数は評価されません） |
 | `the` | `(the type form)` | `form` の値をそのまま返します。型はチェックされません |
-| `eval-when` | `(eval-when (situation...) body...)` | 本体を `progn` として評価します。すべての状況指定は「今評価する」として扱われます。ただし `eval` が実行するフォームでは `:execute` だけがそう扱われます。トップレベルの本体はスプライスされ、ネストした `defun`/`defmacro` 定義も収集されます |
+| `eval-when` | `(eval-when (situation...) body...)` | トップレベルではどの状況指定でも本体を `progn` として実行し、本体はスプライスされてネストした `defun`/`defmacro` 定義も収集されます。それ以外の位置では `:execute` のときだけ実行し、それ以外では `nil` を返します |
 | `locally` | `(locally declaration... form...)` | 本体を `progn` として評価します。先頭の `declare` フォームは取り除かれます(宣言はパースされるだけの no-op) |
 | `with-standard-io-syntax` | `(with-standard-io-syntax form...)` | リーダーとプリンターの制御変数を CLHS 23.1.2 の標準値に束縛し、本体を `progn` として評価します |
 | `flet` | `(flet ((name lambda-list body...)...) body...)` | 局所的な非再帰の関数束縛（Lisp-2: 呼び出し位置と `#'name`）。定義本体は同名の外側の関数を参照し、兄弟定義は見えません。ラムダリストは `defun` の拡張をサポートします |

@@ -3017,9 +3017,10 @@ public final class LispNames {
 	public static final String PUSHNEW = "PUSHNEW";
 
 	/**
-	 * The {@code eval-when} operator. Expands to {@code progn} of its body; at top level
-	 * the compile path additionally splices the body into top-level forms (see
-	 * {@code LispMacroExpander.flattenTopLevel}).
+	 * The {@code eval-when} operator. At top level its body runs under any situation (the
+	 * compile path splices it into top-level forms, see
+	 * {@code LispMacroExpander.flattenTopLevel}); elsewhere only {@code :execute} runs
+	 * it.
 	 */
 	public static final String EVAL_WHEN = "EVAL-WHEN";
 
@@ -6935,6 +6936,9 @@ public final class LispNames {
 
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */
 	public static final String WRITE_STRING_RAW_INTERNAL = "%WRITE-STRING-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String FRESH_LINE_RAW_INTERNAL = "%FRESH-LINE-RAW";
 
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */
 	public static final String CLOSE_RAW_INTERNAL = "%CLOSE-RAW";

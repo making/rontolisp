@@ -21,6 +21,10 @@ Consumers: trivia `match`, dbi `driver.lisp`, mito `core/type.lisp`.
   A macrolet in the body so expands before the walk (a local macro's `'s` used to stay unbound).
   `with-slots`/`with-accessors` take the same arm (`expandSlotVariables`), so a macro in the body sees
   the slot name, not the substituted `(slot-value ...)`.
+- **At top level the body's forms are top-level forms** (CLHS 3.2.3.1, 2026-11-05): the compile path
+  substitutes in `UserMacroExpander`'s walk, so a definition in the body is a top-level definition and a
+  macro in a later form reaches it; the interpreter runs the expansion through `evalAtTopLevel`
+  ([declarations-type-checks.md](declarations-type-checks.md), "An eval-when's position").
 - Wiring: evaluator case, `Jvm/WasmExprCompiler.compileCons`, `FreeVarAnalyzer`,
   `rewriteLocalCalls`, `expandBuiltinMacro`.
 - Lite: `defmethod` `&optional`/`&key` defaults are unwalked; a special-variable name is substituted

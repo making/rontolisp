@@ -402,9 +402,9 @@ public final class JvmLinkage {
 	private static final String CELL_PREFIX = "_fc$";
 
 	private static final Set<String> SHARED_STATE = Set.of("_stdinReader", "_streams", "_streamCount", "_streamPaths",
-			"_streamPositions", "_col", "_gensymCtr", "_condTl", "_hcDepthTl", "_nleTl", "_teTl", "_jexMap", "_jsigTl",
-			"_unbound", "_unsupplied", "_mvTl", "_mvOwner", "_mvBox", "_curThreadTl", "_handoffTl", "_renderPath",
-			"_renderDepth");
+			"_streamPositions", "_col", "_midLine", "_gensymCtr", "_condTl", "_hcDepthTl", "_nleTl", "_teTl", "_jexMap",
+			"_jsigTl", "_unbound", "_unsupplied", "_mvTl", "_mvOwner", "_mvBox", "_curThreadTl", "_handoffTl",
+			"_renderPath", "_renderDepth");
 
 	/**
 	 * What a fragment compile links against.

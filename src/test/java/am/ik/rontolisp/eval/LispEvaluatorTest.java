@@ -996,6 +996,17 @@ class LispEvaluatorTest {
 				  (%string-stream-contents str))"""));
 		assertThat(result).isEqualTo(new LispString("WARNING: captured\ndiag\n"));
 		assertThat(baos.toString()).isEqualTo("out");
+		// It keeps its line start, so a ~& opens no blank line.
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(err));
+		try {
+			evaluator.eval(LispReader.readFromString(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_PROGRAM));
+		}
+		finally {
+			System.setErr(oldErr);
+		}
+		assertThat(err.toString()).contains(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_EXPECTED);
 	}
 
 	@Test
@@ -8304,6 +8315,11 @@ class LispEvaluatorTest {
 			.isEqualTo(new LispInteger(3));
 		assertThat(eval("(eval-when (:execute))")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(eval-when (:execute) (defun ew-fn (x) (* x 2)) (ew-fn 21))")).isEqualTo(new LispInteger(42));
+		// Any situation runs it at top level, none but :execute elsewhere.
+		assertThat(eval("(eval-when (:load-toplevel) (+ 1 2))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(eval-when () (+ 1 2))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let () (eval-when (:compile-toplevel :load-toplevel) (+ 1 2)))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let () (eval-when (:execute) (+ 1 2)))")).isEqualTo(new LispInteger(3));
 	}
 
 	@Test
@@ -20689,6 +20705,10 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.THREAD_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.LineStartFixture.SOCKET_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.LineStartFixture.SOCKET_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.LineStartFixture.SOCKET_FORMAT_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.LineStartFixture.SOCKET_FORMAT_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.TLS_PROGRAM))

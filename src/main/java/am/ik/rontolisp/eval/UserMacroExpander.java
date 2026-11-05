@@ -101,6 +101,7 @@ public final class UserMacroExpander {
 				&& program.stream().noneMatch(UserMacroExpander::writesMacroFunction)
 				&& program.stream().noneMatch(UserMacroExpander::usesMacroexpand)
 				&& program.stream().noneMatch(UserMacroExpander::usesMacrolet)
+				&& program.stream().noneMatch(form -> isOperator(form, LispNames.SYMBOL_MACROLET))
 				&& program.stream().noneMatch(UserMacroExpander::usesDefineSymbolMacro)
 				&& program.stream().noneMatch(UserMacroExpander::usesReadEvalMarker)
 				&& program.stream().noneMatch(UserMacroExpander::isParameterizedDeftype)
@@ -446,19 +447,33 @@ public final class UserMacroExpander {
 			List<LispVal> members = expanded == resolved ? null : prognMembersWithPackageDirective(expanded);
 			if (members != null) {
 				for (LispVal member : members) {
-					if (isPackageDirective(member)) {
-						macroEval.resolvePackages(member);
-						if (!this.shallow) {
-							this.result.add(requalifyShadowedClNames(member, macroEval));
-						}
-					}
-					else {
-						acceptExpansion(member, member, member, compileTime, true);
-					}
+					acceptExpansionMember(member, compileTime);
+				}
+				return;
+			}
+			// So are those of a progn a macro or a symbol-macrolet left around an
+			// eval-when, spliced as the source's are: what the eval-when evaluates at
+			// compile time runs now, for the macros after it.
+			if (expanded != resolved && holdsEvalWhenMember(expanded)) {
+				Set<LispVal> evaluated = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+				for (LispVal member : LispMacroExpander.flattenTopLevel(List.of(expanded), evaluated, compileTime)) {
+					acceptExpansionMember(member, evaluated.contains(member));
 				}
 				return;
 			}
 			acceptExpansion(form, resolved, expanded, compileTime, false);
+		}
+
+		private void acceptExpansionMember(LispVal member, boolean compileTime) {
+			if (isPackageDirective(member)) {
+				this.macroEval.resolvePackages(member);
+				if (!this.shallow) {
+					this.result.add(requalifyShadowedClNames(member, this.macroEval));
+				}
+			}
+			else {
+				acceptExpansion(member, member, member, compileTime, true);
+			}
 		}
 
 		/**
@@ -660,8 +675,16 @@ public final class UserMacroExpander {
 			}
 			boolean evaluated = compileTime || execute && compileTimeToo;
 			boolean replayed = !evaluated && this.systemDepth > 0 && (loadTime || execute);
+			List<LispVal> members = new ArrayList<>();
 			for (int i = 2; i < parts.size(); i++) {
-				LispVal member = parts.get(i);
+				if (isOperator(parts.get(i), LispNames.PROGN) && ((LispCons) parts.get(i)).isProperList()) {
+					flattenProgn((LispCons) parts.get(i), members);
+				}
+				else {
+					members.add(parts.get(i));
+				}
+			}
+			for (LispVal member : members) {
 				if (isOperator(member, LispNames.EVAL_WHEN) && member instanceof LispCons nested) {
 					processExpandedEvalWhen(nested, result, evaluated);
 					continue;
@@ -1728,6 +1751,15 @@ public final class UserMacroExpander {
 		return members.stream().anyMatch(UserMacroExpander::isPackageDirective) ? members : null;
 	}
 
+	private static boolean holdsEvalWhenMember(LispVal form) {
+		if (!isOperator(form, LispNames.PROGN) || !((LispCons) form).isProperList()) {
+			return false;
+		}
+		List<LispVal> members = new ArrayList<>();
+		flattenProgn((LispCons) form, members);
+		return members.stream().anyMatch(member -> isOperator(member, LispNames.EVAL_WHEN));
+	}
+
 	private static void flattenProgn(LispCons progn, List<LispVal> into) {
 		for (LispVal member = progn.cdr(); member instanceof LispCons cell; member = cell.cdr()) {
 			if (isOperator(cell.car(), LispNames.PROGN) && ((LispCons) cell.car()).isProperList()) {
@@ -2381,18 +2413,32 @@ public final class UserMacroExpander {
 					// (the compilers have no macro table to expand a call the
 					// substitution
 					// splices in). A macro in either sees the names through its
-					// &environment.
+					// &environment. At top level the body's forms are top-level forms
+					// (CLHS 3.2.3.1): the substitution runs here, leaving the progn the
+					// flattening splices.
 					if (parts.size() < 2) {
 						return form; // malformed; the expansion reports it
 					}
 					java.util.Map<String, LispVal> outer = macroEval.symbolMacroScope();
 					macroEval.symbolMacroScope(symbolMacrosWith(outer, parts.get(1)));
 					try {
-						return rebuild(cons, parts, 2, macroEval, expandBindings(parts.get(1), macroEval));
+						LispVal bindings = expandBindings(parts.get(1), macroEval);
+						if (!topLevel) {
+							return rebuild(cons, parts, 2, macroEval, bindings);
+						}
+						List<LispVal> bound = new ArrayList<>(parts);
+						bound.set(1, bindings);
+						return SourceProvenance.inherit(cons, LispMacroExpander
+							.expandSymbolMacrolet((LispCons) expandTopLevelMembers(cons, bound, 2, macroEval, true)));
 					}
 					finally {
 						macroEval.symbolMacroScope(outer);
 					}
+				}
+				case LispNames.EVAL_WHEN: {
+					// The situation list is data, a member named like a macro included.
+					// One at top level took its members above.
+					return parts.size() < 2 ? form : rebuild(cons, parts, 2, macroEval, parts.get(1));
 				}
 				case LispNames.MULTIPLE_VALUE_BIND: {
 					// (multiple-value-bind (vars...) values-form body...): the variable

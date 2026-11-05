@@ -61,7 +61,10 @@ public final class OwnHandlerStacksPrograms {
 	 * What an async body keeps across a suspension, on the backends where it can suspend
 	 * (the interpreter, the JVM, the component; Preview 1 has no {@code wait-for}): the
 	 * stacks and {@code handler-case}s its call saw, what it pushes out of anyone else's
-	 * reach, and a handler's exit reaching a frame its awaiter is in.
+	 * reach, and a handler's exit reaching a frame its awaiter is in. A holder signals on
+	 * the turn its caller hands out, not after a timer: on the interpreter and the JVM it
+	 * resumes in parallel with its caller, so a timer raced the caller's read and the
+	 * other holder's {@code push}.
 	 */
 	public static final String SUSPENDING = """
 			(define-condition own-c (error) ())
@@ -79,22 +82,28 @@ public final class OwnHandlerStacksPrograms {
 			                   (own-late-signal))))
 			         (list (rontolisp:await f) seen)))
 			(defvar *own-seen* nil)
+			(defvar *own-turn* 0)
 			(rontolisp:async-defun own-holder (n)
 			  (handler-bind ((own-c (lambda (e) (declare (ignore e)) (push n *own-seen*))))
-			    (rontolisp:await (rontolisp:wait-for n))
+			    (loop until (= *own-turn* n) do (rontolisp:await (rontolisp:wait-for 1)))
 			    (signal 'own-c)
+			    (setq *own-turn* (1+ n))
 			    (rontolisp:await (rontolisp:wait-for n))
 			    n))
 			(let ((a (own-holder 2)) (b (own-holder 3)))
+			  (setq *own-turn* 2)
 			  (print (list (rontolisp:await a) (rontolisp:await b) (sort (copy-list *own-seen*) #'<))))
-			(setq *own-seen* nil)
+			(setq *own-seen* nil *own-turn* 0)
 			(let ((f (own-holder 2)))
 			  (signal 'own-c)
 			  (print *own-seen*)
+			  (setq *own-turn* 2)
 			  (rontolisp:await f)
 			  (print *own-seen*))
+			(setq *own-turn* 0)
 			(let ((f (own-holder 2)))
 			  (print (handler-bind ((own-c (lambda (e) (declare (ignore e)) (invoke-restart 'own-r))))
+			           (setq *own-turn* 2)
 			           (rontolisp:await f)
 			           (with-simple-restart (own-r "R.") (error 'own-c))
 			           :handled)))
