@@ -2476,6 +2476,7 @@ public final class PackageResolver {
 			// find that package's (defstruct pt ...)) and every symbol inside.
 			case LispStructLiteral literal -> resolvesQuotedData() ? resolveQuotedData(literal) : literal;
 			case LispArray array -> resolvesQuotedData() ? resolveQuotedData(array) : array;
+			case LispCircularLiteral literal -> resolvesQuotedData() ? resolveQuotedData(literal) : literal;
 			default -> form;
 		};
 	}

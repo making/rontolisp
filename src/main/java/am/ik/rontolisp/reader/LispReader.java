@@ -891,6 +891,17 @@ public final class LispReader {
 				}
 			}
 		}
+		if (cur instanceof am.ik.rontolisp.LispStructLiteral literal && seen.add(literal)) {
+			java.util.List<LispVal> values = literal.slotValues();
+			for (int i = 0; i < values.size(); i++) {
+				if (values.get(i) == placeholder) {
+					literal.setSlotValue(i, value);
+				}
+				else {
+					patchLabel(values.get(i), placeholder, value, seen);
+				}
+			}
+		}
 	}
 
 	private LispVal readRatio(Token.RatioToken ratio) {

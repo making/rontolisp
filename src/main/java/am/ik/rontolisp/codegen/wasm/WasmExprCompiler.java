@@ -100,6 +100,7 @@ final class WasmExprCompiler {
 			}
 			case LispCons cons -> compileCons(cons, ctx, tail);
 			case am.ik.rontolisp.LispArray array -> WasmQuoteCompiler.compileLiteralArray(array, ctx);
+			case am.ik.rontolisp.LispCircularLiteral literal -> WasmQuoteCompiler.compileCircularLiteral(literal, ctx);
 			// An instance is self-evaluating (CLHS 3.1.2.1.3: neither a symbol nor a
 			// cons), so a #S(...) literal in code position builds the same TYPE_INSTANCE
 			// struct %obj-new does.

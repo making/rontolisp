@@ -13468,6 +13468,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 
 		/**
+		 * The graph of the quoted datum being built, when its nodes have to be named
+		 * ({@code WasmQuoteCompiler.compileDatum}); the local of the bucket array that
+		 * holds them is {@link #quotedNames}.
+		 */
+		am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedGraph quotedGraph;
+
+		/** The local of the named nodes of {@link #quotedGraph}. */
+		int quotedNames;
+
+		/**
 		 * Count of i64 scratch locals live in the CURRENT fused site (the fusion compiler
 		 * unboxes each expression leaf ONCE into an i64 local and re-reads it, instead of
 		 * re-running the guard at every occurrence). Sites save/restore this watermark so

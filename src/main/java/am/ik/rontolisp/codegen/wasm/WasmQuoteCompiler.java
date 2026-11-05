@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.LiteralArrayRuns;
+import am.ik.rontolisp.compiler.QuotedGraph;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -25,7 +26,7 @@ final class WasmQuoteCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		LispVal quoted = ((LispCons) cons.cdr()).car();
+		LispVal quoted = am.ik.rontolisp.LispCircularLiteral.unwrapped(((LispCons) cons.cdr()).car());
 		// A quoted AGGREGATE is one shared constant (.kb/quoted-data.md): the site
 		// caches its build in a dedicated module global -- global.get; build and
 		// global.set when still null; global.get -- so every evaluation answers the
@@ -39,10 +40,108 @@ final class WasmQuoteCompiler {
 		// constructor (.kb/array-literals.md), which is what PureBuiltinFolder's
 		// packed-table fold rests on.
 		if (isSharedAggregate(quoted)) {
-			emitSharedConstant(quoted, ctx, () -> compileQuotedVal(quoted, ctx));
+			emitSharedConstant(quoted, ctx, () -> compileDatum(quoted, ctx));
 			return;
 		}
 		compileQuotedVal(quoted, ctx);
+	}
+
+	/**
+	 * Compiles a literal holding a circle in code position: as what it holds would
+	 * compile there, an array a constructor and anything else one shared constant.
+	 * @param literal the literal
+	 * @param ctx the compilation context
+	 */
+	static void compileCircularLiteral(am.ik.rontolisp.LispCircularLiteral literal, WasmLispCompiler.Ctx ctx) {
+		LispVal datum = literal.datum();
+		if (datum instanceof LispArray array) {
+			compileLiteralArray(array, ctx);
+		}
+		else {
+			emitSharedConstant(datum, ctx, () -> compileDatum(datum, ctx));
+		}
+	}
+
+	/**
+	 * Emits the build of a whole datum. A tree is built where it stands. A datum whose
+	 * nodes are shared or closed into a circle ({@link QuotedGraph}) keeps its named
+	 * nodes in a bucket array for the length of the build: every one made empty, then
+	 * every one filled, so a named node inside a filling answers the one object.
+	 */
+	private static void compileDatum(LispVal datum, WasmLispCompiler.Ctx ctx) {
+		QuotedGraph graph = QuotedGraph.of(datum);
+		if (graph == null) {
+			compileQuotedVal(datum, ctx);
+			return;
+		}
+		List<LispVal> named = graph.named();
+		ctx.quotedGraph = graph;
+		ctx.quotedNames = ctx.allocTemp();
+		refNull(ctx);
+		i32Const(ctx, named.size());
+		arrayNew(ctx);
+		setLocal(ctx, ctx.quotedNames);
+		// The storage of a named array or instance: its filling writes there.
+		int[] storage = new int[named.size()];
+		for (int name = 0; name < named.size(); name++) {
+			LispVal node = named.get(name);
+			if (node instanceof LispArray array) {
+				storage[name] = emitArrayData(array, ctx);
+			}
+			else if (node instanceof am.ik.rontolisp.LispInstance inst) {
+				storage[name] = emitInstanceSlots(inst, ctx);
+			}
+			getBuckets(ctx, ctx.quotedNames);
+			i32Const(ctx, name);
+			switch (node) {
+				case LispCons ignored -> {
+					refNull(ctx);
+					refNull(ctx);
+					WasmEmitHelper.emitNewCons(ctx);
+				}
+				case LispArray array -> emitArrayCell(array, storage[name], ctx);
+				case am.ik.rontolisp.LispInstance inst -> emitInstanceStruct(inst, storage[name], ctx);
+				// A packed array holds no reference: it is finished here.
+				default -> buildQuotedVal(node, ctx);
+			}
+			arraySet(ctx);
+		}
+		for (int name = 0; name < named.size(); name++) {
+			switch (named.get(name)) {
+				case LispCons cell -> {
+					emitConsFieldSet(name, 0, cell.car(), ctx);
+					emitConsFieldSet(name, 1, cell.cdr(), ctx);
+				}
+				case LispArray array -> emitArrayFilling(array, storage[name], ctx);
+				case am.ik.rontolisp.LispInstance inst -> emitInstanceFilling(inst, storage[name], ctx);
+				default -> {
+				}
+			}
+		}
+		compileQuotedVal(datum, ctx);
+		ctx.quotedGraph = null;
+	}
+
+	private static void emitConsFieldSet(int name, int field, LispVal value, WasmLispCompiler.Ctx ctx) {
+		emitNamedNode(name, ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		compileQuotedVal(value, ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(field);
+	}
+
+	private static void emitNamedNode(int name, WasmLispCompiler.Ctx ctx) {
+		getBuckets(ctx, ctx.quotedNames);
+		i32Const(ctx, name);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	private static boolean isNamed(LispVal val, WasmLispCompiler.Ctx ctx) {
+		QuotedGraph graph = ctx.quotedGraph;
+		return graph != null && graph.nameOf(val) >= 0;
 	}
 
 	/**
@@ -119,7 +218,7 @@ final class WasmQuoteCompiler {
 	 * @param ctx the compilation context
 	 */
 	static void compileLiteralArray(LispArray array, WasmLispCompiler.Ctx ctx) {
-		compileQuotedArray(array, ctx);
+		compileDatum(array, ctx);
 	}
 
 	/**
@@ -502,6 +601,16 @@ final class WasmQuoteCompiler {
 	}
 
 	private static void compileQuotedVal(LispVal val, WasmLispCompiler.Ctx ctx) {
+		QuotedGraph graph = ctx.quotedGraph;
+		int name = (graph != null) ? graph.nameOf(val) : -1;
+		if (name >= 0) {
+			emitNamedNode(name, ctx);
+			return;
+		}
+		buildQuotedVal(val, ctx);
+	}
+
+	private static void buildQuotedVal(LispVal val, WasmLispCompiler.Ctx ctx) {
 		switch (val) {
 			case LispInteger i -> WasmEmitHelper.compileIntegerLiteral(i.value(), ctx);
 			case am.ik.rontolisp.LispBigInteger bi -> WasmEmitHelper.compileBigIntegerLiteral(bi.value(), ctx);
@@ -530,6 +639,7 @@ final class WasmQuoteCompiler {
 			}
 			case LispSymbol sym -> WasmEmitHelper.compileStringLiteral(sym.name(), ctx);
 			case LispCons cons -> compileQuotedCons(cons, ctx);
+			case am.ik.rontolisp.LispCircularLiteral literal -> compileQuotedVal(literal.datum(), ctx);
 			case LispArray array -> compileQuotedArray(array, ctx);
 			case am.ik.rontolisp.LispDoubleFloatArray fa -> compilePackedLiteral(fa, ctx);
 			case am.ik.rontolisp.LispSingleFloatArray fa -> compileSinglePackedLiteral(fa, ctx);
@@ -560,7 +670,8 @@ final class WasmQuoteCompiler {
 	private static void compileQuotedCons(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> cars = new ArrayList<>();
 		LispVal rest = cons;
-		while (rest instanceof LispCons cell) {
+		// A named cell is the tail of the spine that reaches it.
+		while (rest instanceof LispCons cell && !isNamed(cell, ctx)) {
 			cars.add(cell.car());
 			rest = cell.cdr();
 		}
@@ -600,15 +711,23 @@ final class WasmQuoteCompiler {
 	// meta fields stay null with a 0 offset. This mirrors the layout produced by
 	// WasmArrayCompiler.compileMake.
 	private static void compileQuotedArray(LispArray array, WasmLispCompiler.Ctx ctx) {
-		int[] dims = array.dimensions();
-		LispVal[] data = array.data();
-		// data array: array.new TYPE_HASH_BUCKETS (null, data.length), then fill each
-		// slot.
+		int dataSlot = emitArrayData(array, ctx);
+		emitArrayFilling(array, dataSlot, ctx);
+		emitArrayCell(array, dataSlot, ctx);
+	}
+
+	// data array: array.new TYPE_HASH_BUCKETS (null, data.length), in a local of its own.
+	private static int emitArrayData(LispArray array, WasmLispCompiler.Ctx ctx) {
 		refNull(ctx);
-		i32Const(ctx, data.length);
+		i32Const(ctx, array.data().length);
 		arrayNew(ctx);
 		int dataSlot = ctx.allocTemp();
 		setLocal(ctx, dataSlot);
+		return dataSlot;
+	}
+
+	private static void emitArrayFilling(LispArray array, int dataSlot, WasmLispCompiler.Ctx ctx) {
+		LispVal[] data = array.data();
 		int run;
 		for (int i = 0; i < data.length; i += run) {
 			run = LiteralArrayRuns.length(data, i);
@@ -624,6 +743,11 @@ final class WasmQuoteCompiler {
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 			}
 		}
+	}
+
+	// The TYPE_CELL over the data array in dataSlot, left on the stack.
+	private static void emitArrayCell(LispArray array, int dataSlot, WasmLispCompiler.Ctx ctx) {
+		int[] dims = array.dimensions();
 		// dims array: array.new TYPE_HASH_BUCKETS (null, dims.length), then fill with
 		// i31s.
 		refNull(ctx);
@@ -671,30 +795,45 @@ final class WasmQuoteCompiler {
 	 * @param ctx the compilation context
 	 */
 	static void compileLiteralInstance(am.ik.rontolisp.LispInstance inst, WasmLispCompiler.Ctx ctx) {
-		emitSharedConstant(inst, ctx, () -> compileQuotedInstance(inst, ctx));
+		emitSharedConstant(inst, ctx, () -> compileDatum(inst, ctx));
 	}
 
 	// Builds a TYPE_INSTANCE over the layout the value already carries: the slots array
 	// first, then the baked layout address, then struct.new.
 	private static void compileQuotedInstance(am.ik.rontolisp.LispInstance inst, WasmLispCompiler.Ctx ctx) {
-		Integer address = ctx.layoutAddresses.get(inst.layout().tag());
-		if (address == null || ctx.instanceTypeIndex < 0) {
+		int slotsSlot = emitInstanceSlots(inst, ctx);
+		emitInstanceFilling(inst, slotsSlot, ctx);
+		emitInstanceStruct(inst, slotsSlot, ctx);
+	}
+
+	// The slots array, in a local of its own.
+	private static int emitInstanceSlots(am.ik.rontolisp.LispInstance inst, WasmLispCompiler.Ctx ctx) {
+		if (ctx.layoutAddresses.get(inst.layout().tag()) == null || ctx.instanceTypeIndex < 0) {
 			throw new UnsupportedOperationException(
 					"Cannot quote an instance of an unregistered type: " + inst.layout().tag());
 		}
-		int slotCount = inst.slotCount();
 		refNull(ctx);
-		i32Const(ctx, slotCount);
+		i32Const(ctx, inst.slotCount());
 		arrayNew(ctx);
 		int slotsSlot = ctx.allocTemp();
 		setLocal(ctx, slotsSlot);
-		for (int i = 0; i < slotCount; i++) {
+		return slotsSlot;
+	}
+
+	private static void emitInstanceFilling(am.ik.rontolisp.LispInstance inst, int slotsSlot,
+			WasmLispCompiler.Ctx ctx) {
+		for (int i = 0; i < inst.slotCount(); i++) {
 			getBuckets(ctx, slotsSlot);
 			i32Const(ctx, i);
 			compileQuotedVal(inst.slot(i), ctx);
 			arraySet(ctx);
 		}
-		i32Const(ctx, address);
+	}
+
+	// The TYPE_INSTANCE over the baked layout address and the slots array, left on the
+	// stack.
+	private static void emitInstanceStruct(am.ik.rontolisp.LispInstance inst, int slotsSlot, WasmLispCompiler.Ctx ctx) {
+		i32Const(ctx, java.util.Objects.requireNonNull(ctx.layoutAddresses.get(inst.layout().tag())));
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slotsSlot);
 		WasmEmitHelper.emitNewInstance(ctx);

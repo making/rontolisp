@@ -150,10 +150,10 @@ ran) and a 400,000-form `progn` overflowed the compile path. After: 50,000 eleme
 1 MiB, every backend (`WideListStackTest`).
 
 A list whose tail closes into itself would now loop where it overflowed:
-- A `#n=` label that does so in PROGRAM SOURCE is refused at the read
-  (`SourceLanguage.read`, only when the text contains `#<digits>=`; `LispTrees.circularSpine`).
-  A shared label and a cycle through a car stay legal (the latter still overflows).
-- At run time (`compile`, a macro expansion of a circular constant) `rebuildSpine` and `equal`
+- A `#n=` circle in PROGRAM SOURCE, through a tail, a car, an array or a `#S`, reaches the passes as
+  one atom (`LispTrees.shieldProgramForm`, [reader-features.md](reader-features.md)), as does one a
+  macro's expansion holds.
+- At run time (`compile` of a circular constant) `rebuildSpine` and `equal`
   run Brent's check and throw `LispTrees.CircularListException`, a program-error a
   `handler-case` catches -- the overflow before was not catchable. `(eval (list 'quote x))` of a
   circular `x` answers `x`, as SBCL does (measured 2026-11-05): the quoted datum walk keeps

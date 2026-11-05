@@ -8894,6 +8894,78 @@ cases:
       (T T T T T T)
       (99 2 3)
       #(99 2 3)
+  # What a #n= label shares or closes reaches the compiled constant, through every
+  # aggregate. Nothing here prints a circle.
+  - name: reader-label-sharing-and-circles-in-a-constant
+    source: |
+      (defstruct ci-lbl-pt x y)
+      (defstruct ci-lbl-holder (x '#27=(a #27#)))
+      (defun ci-lbl-called () :called)
+      (defmacro ci-lbl-as-is (x) `',x)
+      (defmacro ci-lbl-car-of (x) `',(car x))
+      (defmacro ci-lbl-made () (let ((x (list 1 2))) (setf (cadr x) x) `',x))
+      (defconstant +ci-lbl-constant+ '#1=(a #1#))
+      (defun ci-lbl-tail () '#2=(p q . #2#))
+      (defun ci-lbl-bare-array () #3=#(x #3#))
+      (defun ci-lbl-bare-struct () #4=#S(ci-lbl-pt :x (y #4#)))
+      ;; sharing
+      (print (let ((a '(#5=(x) #5#))) (eq (car a) (cadr a))))
+      (print (let ((a '(#6=#(x) #6#))) (eq (car a) (cadr a))))
+      (print (let ((a '(#7=#S(ci-lbl-pt :x 1) #7#))) (eq (car a) (cadr a))))
+      (print (let ((a '(#8=#d(1.0 2.0) #8#))) (eq (car a) (cadr a))))
+      (print (let ((a '((x . #9=(u v)) (y . #9#)))) (eq (cdar a) (cdadr a))))
+      (print (let ((a '(#10=(#11=(n) #11#) #10# #11#))) (list (eq (car a) (cadr a)) (eq (caar a) (caddr a)))))
+      (print (let ((a '(#12=(v) #12#))) (setf (car (car a)) 'w) (cadr a)))
+      (print (let ((a #(#13=(v) #13#))) (eq (aref a 0) (aref a 1))))
+      (print (let ((a #(#14=#(v) #14#))) (eq (aref a 0) (aref a 1))))
+      ;; a circle through a car, a tail, an array and an instance
+      (print (let ((a '#15=(x #15#))) (eq a (cadr a))))
+      (print (let ((a '#16=#(x #16#))) (eq a (aref a 1))))
+      (print (let ((a '#17=#S(ci-lbl-pt :x (y #17#)))) (eq a (cadr (ci-lbl-pt-x a)))))
+      (print (let ((a '#18=#S(ci-lbl-pt :x #18# :y #(#18#)))) (list (eq a (ci-lbl-pt-x a)) (eq a (aref (ci-lbl-pt-y a) 0)))))
+      (print (let ((a '#19=#2A((1 #19#) (3 4)))) (list (eq a (aref a 0 1)) (aref a 1 1))))
+      (print (list (eq (ci-lbl-tail) (ci-lbl-tail)) (eq (ci-lbl-tail) (cddr (ci-lbl-tail))) (nth 5 (ci-lbl-tail))))
+      ;; a bare array stays a constructor, a bare instance a constant
+      (print (list (eq (ci-lbl-bare-array) (ci-lbl-bare-array)) (let ((a (ci-lbl-bare-array))) (eq a (aref a 1)))))
+      (print (list (eq (ci-lbl-bare-struct) (ci-lbl-bare-struct)) (let ((a (ci-lbl-bare-struct))) (eq a (cadr (ci-lbl-pt-x a))))))
+      ;; what holds a circle is an ordinary value to the code around it
+      (print (list (consp '#20=(a #20#)) (listp '#20#) (vectorp '#21=#(a #21#)) (symbolp '#20#) (car '#20#)
+                   (aref '#21# 0) (length '#21#) (length '#22=(a (b #22#) c)) (eq '#20# '#20#)))
+      (print (member 'c '#23=(a (b #23#) c)))
+      (print (funcall (car '#24=(ci-lbl-called #24#))))
+      (print (eq +ci-lbl-constant+ (cadr +ci-lbl-constant+)))
+      (print (let ((a (ci-lbl-as-is #25=(m #25#)))) (eq a (cadr a))))
+      (print (ci-lbl-car-of #26=(m #26#)))
+      (print (let ((a (ci-lbl-made))) (eq a (cadr a))))
+      (print (let ((a '#.(let ((x (list 1 2))) (setf (cddr x) x) x))) (eq a (cddr a))))
+      (print (let ((h #S(ci-lbl-holder))) (eq (ci-lbl-holder-x h) (cadr (ci-lbl-holder-x h)))))
+    expected: |
+      T
+      T
+      T
+      T
+      T
+      (T T)
+      (W)
+      T
+      T
+      T
+      T
+      T
+      (T T)
+      (T 4)
+      (T T Q)
+      (NIL T)
+      (T T)
+      (T T T NIL A A 2 3 T)
+      (C)
+      :CALLED
+      T
+      T
+      M
+      T
+      T
+      T
   - name: vector-svref-and-array-introspection-cross-backend
     source: |
       (defun ci-array-intro ()

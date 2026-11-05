@@ -12,6 +12,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
 
+import org.jspecify.annotations.Nullable;
+
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispArray;
@@ -26,6 +28,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.LiteralArrayRuns;
+import am.ik.rontolisp.compiler.QuotedGraph;
 
 /**
  * Compiles the {@code quote} special form.
@@ -36,7 +39,7 @@ final class JvmQuoteCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		LispVal quoted = ((LispCons) cons.cdr()).car();
+		LispVal quoted = am.ik.rontolisp.LispCircularLiteral.unwrapped(((LispCons) cons.cdr()).car());
 		// A quoted AGGREGATE is one shared constant (.kb/quoted-data.md): the site
 		// caches its build in a slot of the class's quoted-datum table -- read it; on
 		// null build and fill it -- so every evaluation answers the SAME object, like
@@ -52,10 +55,154 @@ final class JvmQuoteCompiler {
 		// emission below; a BARE array literal never comes here and stays a constructor
 		// (.kb/array-literals.md).
 		if (isSharedAggregate(quoted)) {
-			emitSharedConstant(quoted, ctx, className, () -> compileQuotedVal(quoted, ctx, className));
+			emitSharedConstant(quoted, ctx, className, () -> compileDatum(quoted, ctx, className));
 			return;
 		}
 		compileQuotedVal(quoted, ctx, className);
+	}
+
+	/**
+	 * Compiles a literal holding a circle in code position: as what it holds would
+	 * compile there, an array a constructor and anything else one shared constant.
+	 * @param literal the literal
+	 * @param ctx the compilation context
+	 * @param className the class being emitted
+	 */
+	static void compileCircularLiteral(am.ik.rontolisp.LispCircularLiteral literal, JvmLispCompiler.Ctx ctx,
+			String className) {
+		LispVal datum = literal.datum();
+		if (datum instanceof LispArray array) {
+			compileLiteralArray(array, ctx, className);
+		}
+		else {
+			emitSharedConstant(datum, ctx, className, () -> compileDatum(datum, ctx, className));
+		}
+	}
+
+	/**
+	 * Emits the build of a whole datum. A tree is built where it stands. A datum whose
+	 * nodes are shared or closed into a circle ({@link QuotedGraph}) keeps its named
+	 * nodes in an {@code Object[]} for the length of the build: every one made empty,
+	 * then every one filled, so a named node inside a filling answers the one object. The
+	 * fill never publishes: a table slot still takes the finished root, and the final
+	 * field behind it covers everything the root reaches.
+	 */
+	private static void compileDatum(LispVal datum, JvmLispCompiler.Ctx ctx, String className) {
+		QuotedGraph graph = QuotedGraph.of(datum);
+		if (graph == null) {
+			compileQuotedVal(datum, ctx, className);
+			return;
+		}
+		int savedNextLocal = ctx.nextLocal;
+		ctx.quotedGraph = graph;
+		ctx.quotedNames = ctx.allocTemp();
+		List<LispVal> named = graph.named();
+		JvmEmitHelper.emitIntConst(ctx, named.size());
+		ctx.body.anewarray(ctx.objectClass).astore(ctx.quotedNames);
+		int steps = named.size() * 2;
+		int[] starts = new int[steps];
+		int[] sizes = new int[steps];
+		for (int i = 0; i < steps; i++) {
+			starts[i] = i;
+			sizes[i] = (i < named.size()) ? estimateEmpty(named.get(i))
+					: estimateFilling(named.get(i - named.size()), graph);
+		}
+		List<int[]> chunks = chunks(starts, sizes, steps);
+		if (chunks.size() == 1) {
+			emitNamedSteps(named, 0, steps, ctx, className);
+		}
+		else {
+			for (int[] chunk : chunks) {
+				ctx.body.aload(ctx.quotedNames);
+				emitBuilderCall(NAMES_DESCRIPTOR, ctx, className,
+						builder -> emitNamedSteps(named, chunk[0], chunk[1], builder, className));
+				ctx.body.pop();
+			}
+		}
+		compileQuotedVal(datum, ctx, className);
+		ctx.quotedGraph = null;
+		ctx.nextLocal = savedNextLocal;
+	}
+
+	/**
+	 * Emits the steps {@code [from, to)} of a named build: step {@code i} below the name
+	 * count makes node {@code i} empty, and past it fills the node it counts to.
+	 */
+	private static void emitNamedSteps(List<LispVal> named, int from, int to, JvmLispCompiler.Ctx ctx,
+			String className) {
+		for (int step = from; step < to; step++) {
+			if (step < named.size()) {
+				ctx.body.aload(ctx.quotedNames);
+				JvmEmitHelper.emitIntConst(ctx, step);
+				emitEmptyNode(named.get(step), ctx, className);
+				ctx.body.aastore();
+			}
+			else {
+				emitFilling(named.get(step - named.size()), step - named.size(), ctx, className);
+			}
+		}
+	}
+
+	private static void emitEmptyNode(LispVal node, JvmLispCompiler.Ctx ctx, String className) {
+		switch (node) {
+			case LispCons ignored -> ctx.body.iconst_2().anewarray(ctx.objectClass);
+			case LispArray array -> emitEmptyArray(array, ctx);
+			case am.ik.rontolisp.LispInstance inst -> emitEmptyInstance(inst, ctx, className);
+			// A packed array holds no reference: it is finished here.
+			default -> buildQuotedVal(node, ctx, className);
+		}
+	}
+
+	private static void emitFilling(LispVal node, int name, JvmLispCompiler.Ctx ctx, String className) {
+		switch (node) {
+			case LispCons cell -> {
+				emitNamedNode(name, ctx);
+				ctx.body.checkcast(ctx.cp.classEntry(NAMES_DESCRIPTOR)).dup().iconst_0();
+				compileQuotedVal(cell.car(), ctx, className);
+				ctx.body.aastore().iconst_1();
+				compileQuotedVal(cell.cdr(), ctx, className);
+				ctx.body.aastore();
+			}
+			case LispArray array -> {
+				emitNamedNode(name, ctx);
+				ctx.body.checkcast(ctx.cp.classEntry("java/util/ArrayList"));
+				emitArrayFilling(array, ctx, className);
+				ctx.body.pop();
+			}
+			case am.ik.rontolisp.LispInstance inst -> {
+				emitNamedNode(name, ctx);
+				ctx.body.checkcast(ctx.cp.classEntry(NAMES_DESCRIPTOR));
+				emitInstanceFilling(inst, ctx, className);
+				ctx.body.pop();
+			}
+			default -> {
+			}
+		}
+	}
+
+	private static void emitNamedNode(int name, JvmLispCompiler.Ctx ctx) {
+		ctx.body.aload(ctx.quotedNames);
+		JvmEmitHelper.emitIntConst(ctx, name);
+		ctx.body.aaload();
+	}
+
+	private static int estimateEmpty(LispVal node) {
+		return (node instanceof LispCons) ? CELL_BYTES : EMPTY_NODE_BYTES;
+	}
+
+	private static int estimateFilling(LispVal node, QuotedGraph graph) {
+		return switch (node) {
+			case LispCons cell -> CELL_BYTES + estimateQuoted(cell.car(), graph) + estimateQuoted(cell.cdr(), graph);
+			case LispArray array -> estimateElements(array, graph);
+			case am.ik.rontolisp.LispInstance inst -> {
+				int size = 0;
+				for (int i = 0; i < inst.slotCount(); i++) {
+					size += ADD_BYTES + estimateQuoted(inst.slot(i), graph);
+				}
+				yield size;
+			}
+			default -> 0;
+		};
 	}
 
 	/**
@@ -147,7 +294,7 @@ final class JvmQuoteCompiler {
 	 * @param className the enclosing class name
 	 */
 	static void compileLiteralArray(LispArray array, JvmLispCompiler.Ctx ctx, String className) {
-		compileQuotedArray(array, ctx, className);
+		compileDatum(array, ctx, className);
 	}
 
 	/**
@@ -228,7 +375,9 @@ final class JvmQuoteCompiler {
 	private static void emitBuilderCall(String operandDescriptor, JvmLispCompiler.Ctx ctx, String className,
 			Consumer<JvmLispCompiler.Ctx> piece) {
 		String methodName = "_ql$" + ctx.nextOutlinedBodyId[0]++;
-		String desc = "(" + operandDescriptor + ")" + operandDescriptor;
+		// A piece of a named build takes the names as well: they live in a local.
+		String desc = "(" + operandDescriptor + ((ctx.quotedGraph != null) ? NAMES_DESCRIPTOR : "") + ")"
+				+ operandDescriptor;
 		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(methodName);
 		Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc);
 		MethodRefEntry ref = JvmEmitHelper.selfMethod(ctx, className, methodName, desc);
@@ -236,6 +385,13 @@ final class JvmQuoteCompiler {
 		builder.evalStoreRef = ctx.evalStoreRef;
 		builder.nextLocal = 1;
 		builder.maxLocals = 1;
+		if (ctx.quotedGraph != null) {
+			builder.quotedGraph = ctx.quotedGraph;
+			builder.quotedNames = 1;
+			builder.nextLocal = 2;
+			builder.maxLocals = 2;
+			ctx.body.aload(ctx.quotedNames);
+		}
 		builder.body.aload(0);
 		piece.accept(builder);
 		builder.body.areturn();
@@ -405,6 +561,20 @@ final class JvmQuoteCompiler {
 	}
 
 	private static void compileQuotedVal(LispVal val, JvmLispCompiler.Ctx ctx, String className) {
+		QuotedGraph graph = ctx.quotedGraph;
+		int name = (graph != null) ? graph.nameOf(val) : -1;
+		if (name >= 0) {
+			emitNamedNode(name, ctx);
+			return;
+		}
+		buildQuotedVal(val, ctx, className);
+	}
+
+	private static boolean isNamed(LispVal val, @Nullable QuotedGraph graph) {
+		return graph != null && graph.nameOf(val) >= 0;
+	}
+
+	private static void buildQuotedVal(LispVal val, JvmLispCompiler.Ctx ctx, String className) {
 		switch (val) {
 			case LispInteger i -> JvmEmitHelper.compileLong(i.value(), ctx);
 			case LispBigInteger b -> JvmEmitHelper.compileBigInteger(b.value(), ctx);
@@ -417,6 +587,7 @@ final class JvmQuoteCompiler {
 			case am.ik.rontolisp.LispChar c -> JvmEmitHelper.compileCharLiteral(c.codePoint(), ctx);
 			case LispSymbol sym -> JvmEmitHelper.compileStringLiteral(sym.name(), ctx);
 			case LispCons cons -> compileQuotedCons(cons, ctx, className);
+			case am.ik.rontolisp.LispCircularLiteral literal -> compileQuotedVal(literal.datum(), ctx, className);
 			case LispArray array -> compileQuotedArray(array, ctx, className);
 			// An instance inside quoted data (a #S(...) literal) builds the same
 			// Object[]{layout, slots...} %obj-new does; the layout constant is interned
@@ -458,13 +629,20 @@ final class JvmQuoteCompiler {
 	 * @param className the class being emitted
 	 */
 	static void compileLiteralInstance(am.ik.rontolisp.LispInstance inst, JvmLispCompiler.Ctx ctx, String className) {
-		emitSharedConstant(inst, ctx, className, () -> compileQuotedInstance(inst, ctx, className));
+		emitSharedConstant(inst, ctx, className, () -> compileDatum(inst, ctx, className));
 	}
 
 	// Builds Object[]{String[] layout, v1, ..., vn} -- the same shape %obj-new emits.
 	// The layout is taken from the VALUE, because a #S(...) literal carries the layout
 	// the reader already resolved against the same registry the compiler uses.
 	private static void compileQuotedInstance(am.ik.rontolisp.LispInstance inst, JvmLispCompiler.Ctx ctx,
+			String className) {
+		emitEmptyInstance(inst, ctx, className);
+		emitInstanceFilling(inst, ctx, className);
+	}
+
+	// The Object[] with its layout and no slot value yet, left on the stack.
+	private static void emitEmptyInstance(am.ik.rontolisp.LispInstance inst, JvmLispCompiler.Ctx ctx,
 			String className) {
 		if (!ctx.mayUseInstances) {
 			// The gate is decided before any body compiles, so a literal that only
@@ -474,11 +652,15 @@ final class JvmQuoteCompiler {
 					"an instance literal of type " + inst.layout().tag() + " appeared after the instance gate closed");
 		}
 		FieldRefEntry lf = ctx.layoutPool.intern(ctx.cp, className, inst.layout());
-		int slots = inst.slotCount();
-		JvmEmitHelper.emitIntConst(ctx, 1 + slots);
+		JvmEmitHelper.emitIntConst(ctx, 1 + inst.slotCount());
 		ctx.body.anewarray(ctx.objectClass).dup().iconst_0().getstatic(lf);
 		ctx.body.aastore();
-		for (int i = 0; i < slots; i++) {
+	}
+
+	// Stores the slot values into the Object[] on top of the stack, leaving it there.
+	private static void emitInstanceFilling(am.ik.rontolisp.LispInstance inst, JvmLispCompiler.Ctx ctx,
+			String className) {
+		for (int i = 0; i < inst.slotCount(); i++) {
 			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, 1 + i);
 			compileQuotedVal(inst.slot(i), ctx, className);
@@ -493,6 +675,12 @@ final class JvmQuoteCompiler {
 	// reference is kept on the stack and DUPed for each add, so the operand stack stays
 	// shallow regardless of the element count.
 	private static void compileQuotedArray(LispArray array, JvmLispCompiler.Ctx ctx, String className) {
+		emitEmptyArray(array, ctx);
+		emitArrayFilling(array, ctx, className);
+	}
+
+	// The ArrayList with its header and no element yet, left on the stack.
+	private static void emitEmptyArray(LispArray array, JvmLispCompiler.Ctx ctx) {
 		int[] dims = array.dimensions();
 		ClassEntry arrayListClass = ctx.cp.classEntry("java/util/ArrayList");
 		MethodRefEntry alInit = ctx.cp.methodRef(arrayListClass, "<init>", "()V");
@@ -525,8 +713,12 @@ final class JvmQuoteCompiler {
 				ctx.body.aastore();
 			}
 		});
+	}
+
+	// Appends the elements to the ArrayList on top of the stack, leaving it there.
+	private static void emitArrayFilling(LispArray array, JvmLispCompiler.Ctx ctx, String className) {
 		LispVal[] data = array.data();
-		List<int[]> chunks = arrayChunks(data);
+		List<int[]> chunks = arrayChunks(data, ctx.quotedGraph);
 		if (chunks.size() == 1) {
 			emitArrayElements(data, 0, data.length, ctx, className);
 			return;
@@ -592,6 +784,12 @@ final class JvmQuoteCompiler {
 	/** Bytes one run's {@code addAll} costs, without the element. */
 	private static final int RUN_BYTES = 11;
 
+	/** Bytes a named array or instance costs before it holds anything. */
+	private static final int EMPTY_NODE_BYTES = 40;
+
+	/** The type of a cons, of an instance, and of the array of a build's named nodes. */
+	private static final String NAMES_DESCRIPTOR = "[Ljava/lang/Object;";
+
 	private static void compileQuotedCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// Walk the cdr spine and build the list tail-first through a temp slot, like
 		// JvmListCompiler: recursing through the cdr would grow the operand stack
@@ -600,12 +798,13 @@ final class JvmQuoteCompiler {
 		// depth, not the list length.
 		List<LispVal> cars = new ArrayList<>();
 		LispVal tail = cons;
-		while (tail instanceof LispCons cell) {
+		// A named cell is the tail of the spine that reaches it.
+		while (tail instanceof LispCons cell && !isNamed(cell, ctx.quotedGraph)) {
 			cars.add(cell.car());
 			tail = cell.cdr();
 		}
 		compileQuotedVal(tail, ctx, className);
-		List<int[]> chunks = spineChunks(cars);
+		List<int[]> chunks = spineChunks(cars, ctx.quotedGraph);
 		if (chunks.size() == 1) {
 			emitSpineCells(cars, 0, cars.size(), ctx, className);
 			return;
@@ -652,12 +851,12 @@ final class JvmQuoteCompiler {
 	 * literal under twice {@link #QUOTE_CHUNK_BUDGET} gets, so nothing that already fits
 	 * in a method changes.
 	 */
-	private static List<int[]> spineChunks(List<LispVal> cars) {
+	private static List<int[]> spineChunks(List<LispVal> cars, @Nullable QuotedGraph graph) {
 		int[] starts = new int[cars.size()];
 		int[] sizes = new int[cars.size()];
 		for (int i = 0; i < cars.size(); i++) {
 			starts[i] = i;
-			sizes[i] = CELL_BYTES + estimateQuoted(cars.get(i));
+			sizes[i] = CELL_BYTES + estimateQuoted(cars.get(i), graph);
 		}
 		return chunks(starts, sizes, cars.size());
 	}
@@ -666,7 +865,7 @@ final class JvmQuoteCompiler {
 	 * {@return the {@code [from, to)} ranges of an array's elements, one per builder
 	 * method} A run stays whole: the cuts fall between {@link LiteralArrayRuns} builds.
 	 */
-	private static List<int[]> arrayChunks(LispVal[] data) {
+	private static List<int[]> arrayChunks(LispVal[] data, @Nullable QuotedGraph graph) {
 		int[] starts = new int[data.length];
 		int[] sizes = new int[data.length];
 		int builds = 0;
@@ -674,7 +873,8 @@ final class JvmQuoteCompiler {
 		for (int i = 0; i < data.length; i += run) {
 			run = LiteralArrayRuns.length(data, i);
 			starts[builds] = i;
-			sizes[builds++] = ((run == 1) ? ADD_BYTES : RUN_BYTES) + estimateQuoted(LiteralArrayRuns.element(data, i));
+			sizes[builds++] = ((run == 1) ? ADD_BYTES : RUN_BYTES)
+					+ estimateQuoted(LiteralArrayRuns.element(data, i), graph);
 		}
 		return chunks(Arrays.copyOf(starts, builds), sizes, data.length);
 	}
@@ -705,29 +905,37 @@ final class JvmQuoteCompiler {
 	 * {@return a rough count of the bytes {@link #compileQuotedVal} emits for a value}
 	 *
 	 * Only ever compared against {@link #QUOTE_CHUNK_BUDGET}, so every leaf is charged
-	 * the width of the widest constant load and no emitter is consulted.
+	 * the width of the widest constant load and no emitter is consulted. A named node is
+	 * such a load, which is also what ends the walk on a circle.
 	 */
-	private static int estimateQuoted(LispVal val) {
+	private static int estimateQuoted(LispVal val, @Nullable QuotedGraph graph) {
+		if (isNamed(val, graph)) {
+			return 6;
+		}
 		if (val instanceof LispCons cons) {
 			int size = 0;
 			LispVal rest = cons;
-			while (rest instanceof LispCons cell) {
-				size += CELL_BYTES + estimateQuoted(cell.car());
+			while (rest instanceof LispCons cell && !isNamed(cell, graph)) {
+				size += CELL_BYTES + estimateQuoted(cell.car(), graph);
 				rest = cell.cdr();
 			}
-			return size + estimateQuoted(rest);
+			return size + estimateQuoted(rest, graph);
 		}
 		if (val instanceof LispArray array) {
-			LispVal[] data = array.data();
-			int size = 16;
-			int run;
-			for (int i = 0; i < data.length; i += run) {
-				run = LiteralArrayRuns.length(data, i);
-				size += 8 + estimateQuoted(LiteralArrayRuns.element(data, i));
-			}
-			return size;
+			return estimateElements(array, graph);
 		}
 		return 6;
+	}
+
+	private static int estimateElements(LispArray array, @Nullable QuotedGraph graph) {
+		LispVal[] data = array.data();
+		int size = 16;
+		int run;
+		for (int i = 0; i < data.length; i += run) {
+			run = LiteralArrayRuns.length(data, i);
+			size += 8 + estimateQuoted(LiteralArrayRuns.element(data, i), graph);
+		}
+		return size;
 	}
 
 }

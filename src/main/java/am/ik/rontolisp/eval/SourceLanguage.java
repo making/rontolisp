@@ -158,8 +158,8 @@ public enum SourceLanguage {
 		// What the seam reads is the PROGRAM's source; a library a splice reads goes to
 		// the reader directly. The compile path tells the two apart by this mark
 		// (CompileWarnings counts only the program's warnings).
-		return SourceProvenance.readingProgramSource(
-				() -> refuseCircularLists(readProgram(source, features, file, standards, loader), source, file));
+		return SourceProvenance
+			.readingProgramSource(() -> shieldCircles(readProgram(source, features, file, standards, loader), source));
 	}
 
 	private LispReader.ReadPrefix readProgram(String source, Features features, @Nullable String file,
@@ -236,27 +236,16 @@ public enum SourceLanguage {
 	}
 
 	/**
-	 * Refuses a program whose source closes a list back into its own tail with a reader
-	 * label ({@code '#1=(a b . #1#)}): the first such form is a read error, and the forms
-	 * before it stand. The passes walk a list's spine in a loop ({@link LispTrees}),
-	 * which on such a list would never end; a label that only shares structure, or closes
-	 * a cycle through a car, is left alone. Only a source that defines a label pays for
-	 * the check.
+	 * Hides every circle a {@code #n=} label closed in the source from the passes that
+	 * follow ({@link LispTrees#shieldProgramForm}). Only a source that defines a label
+	 * pays for the walk.
 	 */
-	private static LispReader.ReadPrefix refuseCircularLists(LispReader.ReadPrefix read, String source,
-			@Nullable String file) {
+	private static LispReader.ReadPrefix shieldCircles(LispReader.ReadPrefix read, String source) {
 		if (!LABEL_DEFINITION.matcher(source).find()) {
 			return read;
 		}
-		List<LispVal> forms = read.forms();
-		for (int i = 0; i < forms.size(); i++) {
-			if (LispTrees.circularSpine(forms.get(i)) != null) {
-				return new LispReader.ReadPrefix(forms.subList(0, i), new LispReadException((file == null ? ""
-						: file + ": ")
-						+ "a circular list literal (a #n= label referenced in its own tail) is not supported in program source"));
-			}
-		}
-		return read;
+		return new LispReader.ReadPrefix(read.forms().stream().map(LispTrees::shieldProgramForm).toList(),
+				read.error());
 	}
 
 	private static final Pattern LABEL_DEFINITION = Pattern.compile("#[0-9]+=");
@@ -457,7 +446,7 @@ public enum SourceLanguage {
 	 * ran, so an {@code in-readtable} or a {@code set-macro-character} changes how the
 	 * rest of the file reads and a reader macro function runs in source order. The rules
 	 * of {@link #read} hold per form: the {@code #.} decision (marker mode when the text
-	 * holds one) and the refusal of a list closed into its own tail.
+	 * holds one) and the wrapping of a circle in a literal.
 	 * @param source the program text
 	 * @param features the active reader features
 	 * @param file the origin file, or {@code null} when unknown
@@ -466,7 +455,7 @@ public enum SourceLanguage {
 	public static Forms readForms(String source, Features features, @Nullable String file) {
 		LispReader.Forms forms = SourceProvenance.readingProgramSource(
 				() -> LispReader.forms(source, features, usesReadEvalMarkers(source), file, null, 0, true));
-		return new Forms(forms, LABEL_DEFINITION.matcher(source).find(), file);
+		return new Forms(forms, LABEL_DEFINITION.matcher(source).find());
 	}
 
 	/** A form-at-a-time read of Common Lisp source ({@link #readForms}). */
@@ -476,12 +465,9 @@ public enum SourceLanguage {
 
 		private final boolean labels;
 
-		private final @Nullable String file;
-
-		private Forms(LispReader.Forms forms, boolean labels, @Nullable String file) {
+		private Forms(LispReader.Forms forms, boolean labels) {
 			this.forms = forms;
 			this.labels = labels;
-			this.file = file;
 		}
 
 		/**
@@ -493,11 +479,7 @@ public enum SourceLanguage {
 		 */
 		public @Nullable LispVal next(am.ik.rontolisp.reader.@Nullable ReadSyntax syntax) {
 			LispVal form = this.forms.next(syntax);
-			if (form != null && this.labels && LispTrees.circularSpine(form) != null) {
-				throw new LispReadException((this.file == null ? "" : this.file + ": ")
-						+ "a circular list literal (a #n= label referenced in its own tail) is not supported in program source");
-			}
-			return form;
+			return (form != null && this.labels) ? LispTrees.shieldProgramForm(form) : form;
 		}
 
 	}

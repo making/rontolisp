@@ -5724,7 +5724,8 @@ public final class LispEvaluator {
 	 * @return the form with every read-time-eval marker resolved
 	 */
 	public LispVal resolveReadTimeEvalInCode(LispVal form) {
-		return resolveReadTimeEval(form, true);
+		// A #. value is a datum the read never saw, and may hold a circle.
+		return LispTrees.shieldProgramForm(resolveReadTimeEval(form, true));
 	}
 
 	private LispVal resolveReadTimeEval(LispVal form, boolean inCode) {
@@ -8575,6 +8576,7 @@ public final class LispEvaluator {
 			// runtime read, say) is folded here, so evaluating it always yields the
 			// instance rather than a carrier leaking into user data.
 			case LispStructLiteral literal -> singleValue(StructLiteralFolder.fold(literal, this.closRegistry));
+			case am.ik.rontolisp.LispCircularLiteral literal -> singleValue(LiteralArrays.materialize(literal.datum()));
 			// Every other value -- a number, a string, a character, nil and t, a
 			// function or closure, a stream, an instance, a quantized matrix a
 			// macro-time form handed back -- is self-evaluating.
@@ -13256,7 +13258,7 @@ public final class LispEvaluator {
 	 */
 	private LispVal expandMacroCall(String name, UserMacro macro, LispCons form, @Nullable Environment site) {
 		List<LispVal> args = macro.expander() != null ? List.of()
-				: form.cdr() instanceof LispCons argCons ? argCons.toList() : List.of();
+				: LispTrees.exposeCircles(form.cdr()) instanceof LispCons argCons ? argCons.toList() : List.of();
 		if (args.size() < macro.required().size() || (macro.rest() == null && args.size() > macro.required().size())) {
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 					"Macro " + name + " expects " + (macro.rest() == null ? String.valueOf(macro.required().size())
@@ -13316,10 +13318,11 @@ public final class LispEvaluator {
 		shadowedMacros(java.util.Set.of());
 		try {
 			LispVal expansion = macro.expander() == null ? LispNil.INSTANCE
-					: applyGlobal(macro.expander(), List.of(form, expanderEnvironment));
+					: applyGlobal(macro.expander(), List.of(LispTrees.exposeCircles(form), expanderEnvironment));
 			for (LispVal bodyExpr : macro.body()) {
 				expansion = eval(bodyExpr, macroEnv);
 			}
+			expansion = LispTrees.shieldCircles(expansion);
 			markExpansionConstants(expansion, new java.util.IdentityHashMap<>());
 			return expansion;
 		}
@@ -14991,7 +14994,7 @@ public final class LispEvaluator {
 		// memoize a quoted datum to the same effect, so '#(1 2 3) is one
 		// shared constant everywhere while a bare #(1 2 3) is fresh everywhere --
 		// .kb/quoted-data.md.
-		return singleValue(rest.car());
+		return singleValue(am.ik.rontolisp.LispCircularLiteral.unwrapped(rest.car()));
 	}
 
 	/**

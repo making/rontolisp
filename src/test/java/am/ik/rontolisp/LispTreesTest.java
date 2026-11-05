@@ -52,14 +52,41 @@ class LispTreesTest {
 		LispVal circular = LispReader.readFromString("#1=(a b c . #1#)");
 		assertThatThrownBy(() -> LispTrees.rebuildSpine(circular, node -> null, car -> car))
 			.isInstanceOf(LispTrees.CircularListException.class);
-		assertThat(LispTrees.circularSpine(circular)).isNotNull();
-		assertThat(LispTrees.circularSpine(LispReader.readFromString("(x #(1 #1=(a . #1#)))"))).isNotNull();
 	}
 
 	@Test
-	void sharedStructureAndCarCyclesAreNotCircularSpines() {
-		assertThat(LispTrees.circularSpine(LispReader.readFromString("(#1=(a b) #1# . #1#)"))).isNull();
-		assertThat(LispTrees.circularSpine(LispReader.readFromString("#1=(a #1# b)"))).isNull();
+	void shieldCirclesLeavesATreeToWalk() {
+		// Sharing is no circle: the form is untouched and nothing is wrapped.
+		LispVal shared = LispReader.readFromString("(#1=(a b) #1# . #1#)");
+		assertThat(LispTrees.shieldCircles(shared)).isSameAs(shared);
+		assertThat(shared.print()).isEqualTo("((A B) (A B) A B)");
+
+		// On a circle itself, by a car and by a tail.
+		assertThat(LispTrees.shieldCircles(LispReader.readFromString("#1=(a #1# b)")))
+			.isInstanceOf(LispCircularLiteral.class);
+		assertThat(LispTrees.shieldCircles(LispReader.readFromString("#1=(a b . #1#)")))
+			.isInstanceOf(LispCircularLiteral.class);
+
+		// A quoted datum and an array go whole, a list in code from the circle on, and
+		// one label reached twice is one wrapper.
+		LispCons form = (LispCons) LispTrees.shieldCircles(
+				LispReader.readFromString("(f '(a #1=(b #1#)) #(c #2=(d #2#)) (e . #3=(g . #3#)) '#4=(h #4#) '#4#)"));
+		assertThat(form.print()).isEqualTo(
+				"(F '#<circular literal> #<circular literal> (E . #<circular literal>) '#<circular literal> '#<circular literal>)");
+		List<LispVal> args = form.toList();
+		LispCircularLiteral quoted = (LispCircularLiteral) ((LispCons) ((LispCons) args.get(1)).cdr()).car();
+		LispCons datum = (LispCons) quoted.datum();
+		assertThat(datum.car().print()).isEqualTo("A");
+		LispCons labelled = (LispCons) ((LispCons) datum.cdr()).car();
+		assertThat(((LispCons) labelled.cdr()).car()).isSameAs(labelled);
+		assertThat(((LispCircularLiteral) args.get(2)).datum()).isInstanceOf(LispArray.class);
+		assertThat(((LispCons) ((LispCons) args.get(4)).cdr()).car())
+			.isSameAs(((LispCons) ((LispCons) args.get(5)).cdr()).car());
+
+		// A program's form names what its wrappers hide; a form with no circle stays.
+		assertThat(LispTrees.shieldProgramForm(LispReader.readFromString("(f '#1=(p::g :k #S(h) #(i) #1#))")).print())
+			.isEqualTo("(PROGN '(I H P::G) (F '#<circular literal>))");
+		assertThat(LispTrees.shieldProgramForm(shared)).isSameAs(shared);
 	}
 
 	@Test
@@ -85,6 +112,13 @@ class LispTreesTest {
 				qualify);
 		assertThat(arrayCycle.data()[0].print()).isEqualTo("P::FOO");
 		assertThat(arrayCycle.data()[1]).isSameAs(arrayCycle);
+		LispCircularLiteral wrapped = (LispCircularLiteral) LispTrees
+			.rewriteDatumSymbols(new LispCircularLiteral(LispReader.readFromString("#1=(foo #1#)")), qualify);
+		assertThat(((LispCons) wrapped.datum()).car().print()).isEqualTo("P::FOO");
+		LispStructLiteral literalCycle = (LispStructLiteral) LispTrees
+			.rewriteDatumSymbols(LispReader.readFromString("#1=#S(foo :x (foo #1#))"), qualify);
+		assertThat(literalCycle.typeName()).isEqualTo("P::FOO");
+		assertThat(((LispCons) ((LispCons) literalCycle.slotValues().get(0)).cdr()).car()).isSameAs(literalCycle);
 		// A position survives, and an array the reader cannot write is a value, not a
 		// datum to walk.
 		LocatedCons located = new LocatedCons(new LispSymbol("FOO"), LispNil.INSTANCE, "f.lisp", 3);

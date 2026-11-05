@@ -11,6 +11,7 @@ import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispStructLiteral;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
@@ -1181,6 +1182,9 @@ class LispReaderTest {
 		assertThat(((LispCons) circular.cdr()).cdr()).isSameAs(circular);
 		LispArray vector = (LispArray) LispReader.readFromString("#1=#(A B #1#)");
 		assertThat(vector.data()[2]).isSameAs(vector);
+		LispStructLiteral literal = (LispStructLiteral) LispReader.readFromString("#1=#S(P :X #1# :Y (Z #1#))");
+		assertThat(literal.slotValues().get(0)).isSameAs(literal);
+		assertThat(((LispCons) ((LispCons) literal.slotValues().get(1)).cdr()).car()).isSameAs(literal);
 		// A label that stands for nothing but itself has no datum to record.
 		assertThatThrownBy(() -> LispReader.readFromString("#1=#1#")).isInstanceOf(LispReadException.class);
 	}
