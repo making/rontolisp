@@ -423,7 +423,7 @@ every narrowing is IMPOSSIBILITY-based.
   `--dynamic`, an embedded eval runtime, subclass enumeration,
   `find-class`/`change-class`/`allocate-instance`/`symbol-function`/`fdefinition`. The JVM already
   interned per referenced tag (`LayoutPool`).
-- **`needsRuntimeErrorDispatch` no longer misreads handler clauses**: `(handler-case b (error (e)
+- **`runtimeSignalSites` does not misread handler clauses**: `(handler-case b (error (e)
   ...))` used to parse as `(error <computed> ...)` and bake the whole per-class construction runtime
   into EVERY handler-case artifact. With clause heads skipped, the 89,138 B probe is **23,341 B**.
 
@@ -462,7 +462,7 @@ fails. What decides the gate is whether program code can ever HOLD that instance
   fetch program aside).
 - **A clause HEAD is not a call, and that skip is shared.** `evaluatedClauseForms` is the one helper
   answering "which sub-forms of this clause-bearing operator are EVALUATED", used by this scan and by
-  `needsRuntimeErrorDispatch`. **A new scan that walks a program as code goes through it** -- the
+  `runtimeSignalSites`. **A new scan that walks a program as code goes through it** -- the
   same misread has cost three times (a tagbody-tag `CONTINUE`, the dispatch runtime, this).
 - At `--optimize=size`: `(print (handler-case (+ 1 2) (error () 0)))` 23,216 -> 5,713 B,
   `(print (ignore-errors (+ 1 2)))` 22,782 -> 5,638 B. Gating the renderer's defun on a pre-Pass-2
@@ -494,12 +494,11 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
 - **`reportsUncaught` is a PRE-SCAN, not the definitive `ehMode`**: it runs before the passes that
   finish deciding EH mode, so `WasmLispCompiler` scans for triggers that can accompany a signal
   (`programUsesEhForm`, `catch`/`throw`, restart mode, async mode, and
-  `LispMacroExpander.runtimeErrorDispatchCatches` -- the `with-output-to-string` the injected
-  `%error-runtime` helper of a lambda-`:report` class renders through; the seeded `UNBOUND-SLOT` is
-  one, so every `(error <computed> initargs...)` program is in EH mode. Until 2026-09-27 the scan
-  missed it and such a program with no catching form of its own printed `Unhandled condition: ` and
-  nothing else. The computed-typed-error EH gate costs what the same program with a
-  `handler-case` already paid; a program with a catching form is byte-identical.
+  `LispMacroExpander.runtimeErrorDispatchReports` -- a computed `error` with arguments, or whose
+  dispatch can name a class, has the entry pad whatever else the module holds (`ehMode` takes the same
+  answer). Until 2026-09-27 the scan missed the dispatch and such a program with no catching form of its
+  own printed `Unhandled condition: ` and nothing else. The computed-typed-error EH gate costs what the
+  same program with a `handler-case` already paid; a program with a catching form is byte-identical.
 - **What the pre-scan cannot see costs a second attempt, never a wrong report**: a cross-lambda
   `return-from` is lowered by `CrossLambdaExitLowering` after the expansion (it must run after, or a
   GENERATED dispatcher's `return-from` would go unlowered), and reaches `ehMode` through
@@ -859,31 +858,66 @@ the same cost as `function`.
   as written for the static signal dispatch (binding it to a variable sent a `make-condition` datum
   to `%error-runtime`). A form without arguments keeps the string report. Until then the arguments
   were dropped and SLDB listed `Skip ~a.`.
-- `needsRuntimeErrorDispatch` reads `cerror`'s datum one place later: restart mode lowers
-  `cerror` in the backend, after the scan, so `(cerror "c" ty :code 7)` with a computed `ty` called
-  an uninjected `%error-runtime` on the JVM and both wasm-GC (until 2026-10-30).
-- `error`/`signal`/`warn`/`cerror` also have FUNCTION values. Interpreter: `registerEval` defines
-  real functions that rebuild the literal call from evaluated arguments (`rebuildSignalForm`) and
-  re-enter `eval`, `resolveFunction` checking the function namespace BEFORE the
-  macro/special-operator guard; a NON-literal `error` datum evaluating to a SYMBOL re-dispatches as a
-  condition-type designator (`expandError`'s `runtimeTypeDispatch`). Compiled:
-  `BuiltinFunctionWrappers.SIGNAL_FUNCTIONS` wrappers injected ONLY under a literal `(function op)`
-  reference (`referencesFunctionValue`), forwarding the datum only.
-- **A NON-literal `(error TYPE args...)` datum WITH initargs dispatches on the COMPILED backends
-  too** (jzon's `%raise`, cl-postgres' `(error (get-error-type code) :code ...)`). NOT inlined at the
-  call site -- at scale the per-class expansion overflowed one method, past
-  the JVM's 64 KB limit. The site lowers to `(%error-runtime datum (list args...))` and
-  `expandTopLevelDefinitions` injects one construction helper defun per registered CONDITION class
-  (`%ERROR-RT-n`, the same `expandTypedSignal` a literal call gets, over `getf` reads with each
-  slot's `:initform` as the default) plus the `%error-runtime` dispatch defun matching against both
-  the qualified and (when unambiguous) plain spelling.
-- **The dispatch is CHAINED** (`%error-runtime` -> `%ER-1` -> ..., the `chainedDispatchDefuns` shape,
-  ~600 cons nodes per segment): one `cond` lowers to nested `if`s on the JVM, so past ~140 condition
-  classes the outermost arm's else-branch overflowed the signed-16-bit branch encoding. One shared
+- `runtimeSignalSites` reads `cerror`'s datum one place later, and `assert`'s two: restart mode and
+  the `assert` expansion lower to `error` after the scan, so `(cerror "c" ty :code 7)` with a computed
+  `ty` called an uninjected `%error-runtime` on the JVM and both wasm-GC (until 2026-10-30).
+- **What a computed datum is, on all four (2026-11-05, ci-spec `run-time-condition-designators-of-the-signal-family`,
+  agrees with SBCL 2.2.9):** a string is a control, a symbol names a class and the arguments after it are
+  initargs, a condition is signalled, and anything else, or a symbol no class of the operator holds, is the
+  `type-error` of a designator. Until then a compiled datum-only symbol signalled a `simple-condition`
+  naming it, `signal` and `warn` never dispatched, and `5` reached no `error` clause.
+- **Interpreter: `error`/`signal`/`warn`/`cerror` have FUNCTION values** that rebuild the literal call from
+  evaluated arguments (`rebuildSignalForm`) and re-enter `eval`, `resolveFunction` checking the function
+  namespace BEFORE the macro/special-operator guard; a computed datum evaluating to a symbol other than nil
+  and t re-dispatches through them (`expandSignalDesignator`'s `runtimeTypeDispatch`, passed by the
+  interpreter for all three). A keyword datum stays quoted there, or it would re-dispatch for ever. A
+  computed `make-condition` goes through `%make-condition-runtime` the same way.
+- **Compiled: one defun per operator, `%error-runtime` / `%signal-runtime` / `%warn-runtime`
+  (`runtimeSignalDefuns`), and `%make-condition-runtime`.** Every computed datum lowers to `(%op-runtime datum
+  (list args...))`, the object arms sitting in its fallback, once per program: inlined per class at each site
+  it overflowed one method (cl-postgres, past the JVM's 64 KB). One construction helper per class (`%ERROR-RT-n`,
+  the same `expandTypedSignal` a literal call gets, over `getf` reads with each slot's `:initform` as the default),
+  matched against both the qualified and (when unambiguous) plain spelling. `warn` holds only `warning`'s
+  classes. The site asks `ClosRegistry.dispatchesRuntimeDatum`, set from the scan, so a form the scan cannot see
+  takes the inline object arm and never an undefined function. `#'error`/`#'signal`/`#'warn` forward the datum
+  and the arguments to the same defun, `#'cerror` to `%cerror-runtime`, its `%error-runtime` under the real
+  `continue` restart in restart mode. Compiled `eval` reaches them through the wrappers.
+- **The dispatch is narrowed to the classes a datum can name (`runtimeDesignatedClasses`)**, so a program that
+  only computes control strings carries none: symbols spelled outside operator position (keeping an operator's
+  name and a clause head out, the `usedLayoutTags` over-approximation) and quoted data, minus a `define-condition`'s
+  own name and a literal signal's quoted datum. A program calling `intern`, `find-symbol`, `read`,
+  `read-from-string`, `type-of` or `class-name` reaches all its own classes; a seeded one it builds from a
+  string and never spells is a `type-error` (the deviation that buys this: a seeded class is 66 KB of helpers
+  over the set, `89,138 -> 23,341 B` above). `--dynamic` keeps every class.
+- **`(format nil ...)` and `(concatenate 'string ...)` take no dispatch** (`isKnownStringDatum`): the string arm is
+  the whole signal, no test, no instance. A wasm-GC `error` outside EH mode with no class to name stays inline
+  (`ObjectDatum.UNCHECKED`): it traps whatever the datum is, so nothing reads the check.
+- **Where the check sits**: the fallback's `%obj-is` over `condition`'s tags, once per operator, and a
+  `type-error` whose report is rendered into a variable (`renderedDesignatorTypeError`, the `%struct-type-error`
+  shape, so `signalsItsTextControl` keeps the renderer out). A chained dispatch segment is the
+  `chainedDispatchDefuns` shape, ~600 cons nodes: one `cond` lowers to nested `if`s on the JVM, so past ~140
+  condition classes the outermost arm's else-branch overflowed the signed-16-bit branch encoding. One shared
   shape on all four backends.
-- A NON-condition class name and any non-symbol fall to the `expandObjectSignal` arm; the
-  interpreter's inline dispatch still constructs ANY class. A DATUM-ONLY non-literal call keeps the
-  object-designator path (constructing a slot-less instance would run its `:report` over nil slots).
+- **A quoted name no class holds is that `type-error` too, at run time (`namesNoSignalledClass`)**, for
+  `error`/`signal`/`warn`/`cerror`/`make-condition`, as is a class outside `condition`. It still compiles: the
+  degradation it replaces existed for a library's cold branch naming a sibling package's condition unqualified
+  (cl-postgres' `'protocol-error`), and a run-time signal keeps that. It was a `simple-condition` no `error`
+  clause took. An expansion with no registry (`EMPTY_CLOS_REGISTRY`, `macroexpand-1`) keeps the degradation
+  in `buildTypedConstruct`.
+- **Deviations kept.** A plain `type-error` reporting `The value X is not of type CONDITION`, where SBCL has a
+  `simple-type-error` saying `X does not designate a condition class.` and expects its internal `condition-class`.
+  A function datum, a format control in the standard, signals as a string holding its printed self: calling it
+  needs a string stream in every program with a computed datum.
+- **Measured 2026-11-05, against the commit before, wasm-GC / component / class bytes.** `(error m)`: 559 / 1,713 /
+  11,465 -> 525 / 1,679 / 30,156 (the JVM holds the check, wasm-GC traps). `(error (format nil ...))`: 4,119 / 5,270 /
+  27,045 -> 3,750 / 4,899 / 12,811. `(handler-case (f "x") (error () 1))` over `(error m)`: 4,774 / 6,118 / 32,708 ->
+  6,946 / 8,313 / 33,760. `(error ty :code 42)` with `'parse-error`: 147,634 / 151,655 / 141,665 -> 124,479 / 128,313 /
+  110,815. `(signal m)`: 3,537 / 4,702 / 108,430 -> 5,014 / 6,179 / 109,781. `(funcall #'error m)`: 16,941 / 18,191 /
+  108,517 -> 101,532 / 102,948 / 109,939: the wrapper now hands its arguments over, so a string datum renders them.
+- **The reason a datum-only call stayed off the dispatch, re-measured: it stands, and it is the literal call's.** A
+  class whose `:report` reads a slot the call left out: `(handler-case (error 'c) (error (x) (type-of x)))` answers
+  `C` in SBCL and on wasm-GC, whose message is lazy, and `UNBOUND-SLOT` on the interpreter and the JVM, which render
+  the report at the signal; `(error (id 'c))` now answers what `(error 'c)` does on each. `.todo/i72`.
 
 ## Phase 4 -- handler-bind + the restart stack
 **Invariant: the restart system is ONE shared Lisp-level lowering in `LispMacroExpander`, identical
@@ -1175,27 +1209,24 @@ and went on: `(handler-case (progn (warn "w") 1) (warning () 'wrn))` answered 1,
 expected type `warning`, before any signal, restart or write, on all four.** SBCL 2.2.9's answers on
 ci-spec `warn-of-what-is-no-warning-is-a-type-error`; until 2026-11-05 all four signalled the datum
 and wrote it.
-- **A quoted name of a registered class outside `warning`** is known at expansion
-  (`namesNoWarning`): the initargs run and the `type-error` holds the symbol, as SBCL's does. A
+- **A quoted name of a class outside `warning`, or of no class,** is known at expansion
+  (`namesNoSignalledClass`): the initargs run and the `type-error` holds the symbol, as SBCL's does. A
   `make-condition` of such a class takes the object path, so it holds the instance.
 - **The object path tests at run time**, ahead of the `muffle-warning` restart, so a handler of the
   `type-error` finds none (`find-restart` nil, SBCL's): what passes is a string, a symbol, a function
-  (a control the standard allows; it still prints as a value) or `%obj-is` over `warning`'s
-  descendant tags. The registry is complete on the compile paths, since `define-condition` does not
+  (a control the standard allows, signalled as its printed self: "cerror, signal-operator function
+  values, runtime type dispatch") or `%obj-is` over `warning`'s descendant tags. The registry is complete on the compile paths, since `define-condition` does not
   run in compiled `eval`, and the interpreter re-expands `warn` per evaluation.
 - **It is the backend's own `error` lowering** of `(error 'type-error ...)`, so restart mode and
   handler-bind need nothing. That lowering comes after the scans, so three read the site:
   `conditionNarrowing` adds the tag for a quoted name (a computed datum bails; without the tag the
   control-free report arm is missing and a caught one prints `#<TYPE-ERROR ...>`), `usedLayoutTags`
-  bakes it on `warnCanSignalTypeError` (without a pad, `no layout was baked` fails the compile), and
-  `constructsInstance` counts a computed `warn`.
+  bakes it on `signalCanSignalTypeError` for a literal call (without a pad, `no layout was baked` fails the
+  compile; a computed datum's is in the injected `%warn-runtime`), and `constructsInstance` counts a computed
+  `warn`.
 - **Deviations kept.** `simple-type-error` with `X does not designate a WARNING class` in SBCL, a
   plain `type-error` reporting from its slots here: a control with directives pulls the renderer in.
   A value that is no condition expects `warning` here, SBCL's internal `condition-class` there.
-- **A run-time SYMBOL stays on the symbol arm**, the signal family's datum-only shape (`(warn (id
-  'simple-error))` and a compiled `#'warn`/`eval` write a `simple-warning` naming it; SBCL
-  `type-error`), and an undefined name on the typed path's degradation (`buildTypedConstruct`):
-  `.todo/i70`.
 
 ## A built-in error carries its CONDITION CLASS
 `(handler-case (car 1) (type-error ...))` matches, and so does rove's `(ok (signals (car 1)

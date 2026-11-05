@@ -182,6 +182,9 @@ public final class ClosRegistry {
 	/** The class every datum {@code warn} signals descends from. */
 	public static final String WARNING_CLASS_NAME = "WARNING";
 
+	/** The root of the condition classes. */
+	public static final String CONDITION_CLASS_NAME = "CONDITION";
+
 	/**
 	 * The warning class a compile never fails on: a macro-time {@code warn} of one is
 	 * reported and not counted by {@code --warnings-as-errors}, as SBCL's
@@ -2527,6 +2530,8 @@ public final class ClosRegistry {
 	 */
 	private boolean routesConditionReports;
 
+	private Set<String> runtimeSignalOperators = Set.of();
+
 	/**
 	 * Whether the printing operators route a condition through the renderer (see
 	 * {@link #printsConditionReports()}).
@@ -3646,6 +3651,26 @@ public final class ClosRegistry {
 	 */
 	public Map<String, LispVal> conditionReports() {
 		return this.conditionReports;
+	}
+
+	/**
+	 * Whether a computed datum of the operator ({@code error}, {@code signal},
+	 * {@code warn} or {@code make-condition}) goes through the run-time dispatch the
+	 * compile path injected for it; the interpreter resolves a computed datum where it
+	 * evaluates it.
+	 * @param operator the operator
+	 * @return whether the dispatch is in the program
+	 */
+	public boolean dispatchesRuntimeDatum(String operator) {
+		return this.runtimeSignalOperators.contains(operator);
+	}
+
+	/**
+	 * Records the operators {@link #dispatchesRuntimeDatum(String)} answers for.
+	 * @param operators the operators
+	 */
+	public void setRuntimeSignalOperators(Set<String> operators) {
+		this.runtimeSignalOperators = Set.copyOf(operators);
 	}
 
 	/**

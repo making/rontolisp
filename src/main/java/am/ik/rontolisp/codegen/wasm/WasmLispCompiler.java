@@ -3612,20 +3612,20 @@ public final class WasmLispCompiler implements LispCompiler {
 		// it (WasmUncaughtReportCompiler) -- which is exactly EH mode, decided below on
 		// the post-expansion program but needed here, because the report-routing gate is
 		// part of the expansion. The scan covers every trigger that can accompany a
-		// signal: a catching/cleanup form, catch/throw, restart mode, asyncMode, and the
-		// with-output-to-string the injected %error-runtime dispatch renders a lambda
-		// :report through (LispMacroExpander.runtimeErrorDispatchCatches) -- without it
-		// every computed-type (error ty initargs...) program was in EH mode with the
-		// narrow gate and reported `Unhandled condition: ` and nothing else. What it
+		// signal: a catching/cleanup form, catch/throw, restart mode, asyncMode, and a
+		// computed error whose dispatch can name a class or carries arguments
+		// (LispMacroExpander.runtimeErrorDispatchReports), which such a module reports as
+		// the literal call's text says it should. What it
 		// cannot see -- a cross-lambda return-from, which reaches ehMode through
 		// blockExitTag and is lowered only after this pass (it has to run after it, or a
 		// generated dispatcher's return-from would not be lowered at all), or any other
 		// trigger only the expansion produces -- is caught where ehMode is decided: the
 		// attempt is abandoned and the next one runs with reportsUncaughtUnforeseen, so
 		// every EH-mode module carries every signal's message.
+		boolean runtimeDispatchReports = LispMacroExpander.runtimeErrorDispatchReports(program, closRegistry);
 		boolean ehFormReport = reportsUncaughtUnforeseen || programUsesEhForm(program) || this.asyncMode || restartMode
 				|| programUsesSymbol(program, LispNames.CATCH) || programUsesSymbol(program, LispNames.THROW)
-				|| LispMacroExpander.runtimeErrorDispatchCatches(program, closRegistry);
+				|| runtimeDispatchReports;
 		// --report-locations gives the report to a program with none of those, too: EH
 		// mode for the throw path and the landing pad, with nothing else in the module
 		// able to catch (SignalMessages.ENTRY_REPORT). Only where a form was read from a
@@ -4030,7 +4030,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// a
 		// catching form. A program without one stays byte-identical and flag-free.
 		// --report-locations outside it turns it on as well (entryReportOnly above).
-		boolean ehMode = programUsesEhForm(program) || this.asyncMode || blockExitTag || entryReportOnly;
+		boolean ehMode = programUsesEhForm(program) || this.asyncMode || blockExitTag || entryReportOnly
+				|| runtimeDispatchReports;
 		if (ehMode && !reportsUncaught) {
 			// The pad below reads every escaping condition, but the expansion above ran
 			// for a module that has none: its signals carry no message.
@@ -13993,8 +13994,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (symbols.contains(LispNames.CHECK_TYPE)) {
 			used.add(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-TYPE-ERROR");
 		}
-		// So does a warn of something other than a warning its type-error.
-		if (LispMacroExpander.warnCanSignalTypeError(program, closRegistry)) {
+		// So does a literal signal of a name it cannot signal its type-error.
+		if (LispMacroExpander.signalCanSignalTypeError(program, closRegistry)) {
 			used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.TYPE_ERROR_CLASS_NAME);
 		}
 		// #'aref / #'array-row-major-index construct a type-error instance in

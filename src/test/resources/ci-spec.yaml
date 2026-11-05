@@ -2283,7 +2283,7 @@ cases:
       2
       2
       NIL
-      0
+      1
       4
       2
       0
@@ -24007,11 +24007,31 @@ cases:
         (print (list (slot-value *clsurf-a* 'low) (slot-value *clsurf-b* 'low)
                      (handler-case (change-class (make-instance 'clsurf-plain) class)
                        (error () :initform-ran)))))
+      ;; Classes mapping onto a target alike share one arm of the dispatch, and those
+      ;; that do not keep their own: nothing in common, a slot moving to another index,
+      ;; a slot staying at its index, a slot leaving a shared cell.
+      (defclass clsurf-to () ((a :initarg :a :initform 1) (b :initform 2) (c)))
+      (defclass clsurf-none-1 () ((x :initform :x)))
+      (defclass clsurf-none-2 () ((y :initform :y) (z :initform :z)))
+      (defclass clsurf-moved () ((b :initform :moved)))
+      (defclass clsurf-kept () ((a :initform :kept)))
+      (defclass clsurf-cell () ((b :allocation :class :initform :cell)))
+      (defun clsurf-to-values (o) (list (slot-value o 'a) (slot-value o 'b) (slot-boundp o 'c)))
+      (let ((class 'clsurf-to))
+        (dolist (from '(clsurf-none-1 clsurf-none-2 clsurf-moved clsurf-kept clsurf-cell))
+          (print (clsurf-to-values (change-class (make-instance from) class))))
+        (print (clsurf-to-values (change-class (make-instance 'clsurf-none-2) class :a :given))))
     expected: |
       (CLSURF-SUB 1 42 7)
       (:T 42 1 NIL)
       (CLSURF-SUB 1 42)
       (3 4 :INITFORM-RAN)
+      (1 2 NIL)
+      (1 2 NIL)
+      (1 :MOVED NIL)
+      (:KEPT 2 NIL)
+      (1 :CELL NIL)
+      (:GIVEN 2 NIL)
   - name: clos-slot-options-and-metaobject-types
     source: |
       ;; The rest of that CLOS surface: :writer in both spellings, the
@@ -36478,6 +36498,165 @@ cases:
       TE
       MUFFLED
       T
+  - name: run-time-condition-designators-of-the-signal-family
+    source: |
+      (define-condition ci-rcd-e (error) ((v :initarg :v :initform 41 :reader ci-rcd-v)))
+      (define-condition ci-rcd-c (condition) ())
+      (define-condition ci-rcd-w (warning) ((v :initarg :v :reader ci-rcd-wv))
+        (:report (lambda (c s) (format s "ci-rcd-w ~a" (ci-rcd-wv c)))))
+      (define-condition ci-rcd-noinit (error) ((x :initform 3 :reader ci-rcd-x)))
+      (defclass ci-rcd-plain () ())
+      (defstruct ci-rcd-st a)
+      (defun ci-rcd-id (x) x)
+      (defun ci-rcd-class (thunk)
+        (handler-case (progn (funcall thunk) :none)
+          (type-error (c) (list :te (type-error-datum c)))
+          (condition (c) (type-of c))))
+      (dolist (thunk (list (lambda () (error (ci-rcd-id 'ci-rcd-e)))
+                           (lambda () (funcall #'error 'ci-rcd-e))
+                           (lambda () (signal (ci-rcd-id 'ci-rcd-c)))
+                           (lambda () (funcall #'signal 'ci-rcd-c))
+                           (lambda () (warn (ci-rcd-id 'ci-rcd-w) :v 1))
+                           (lambda () (funcall #'warn 'ci-rcd-w :v 1))
+                           (lambda () (eval '(warn 'ci-rcd-w :v 1)))
+                           (lambda () (error (ci-rcd-id 'ci-rcd-noinit)))
+                           (lambda () (error (ci-rcd-id 'condition)))
+                           (lambda () (assert nil () (ci-rcd-id 'ci-rcd-e)))
+                           (lambda () (cerror "go" (ci-rcd-id 'ci-rcd-e)))
+                           (lambda () (funcall #'cerror "go" 'ci-rcd-e))
+                           (lambda () (error (intern "CI-RCD-E")))
+                           (lambda () (error (lambda (s) s)))))
+        (print (ci-rcd-class thunk)))
+      (dolist (thunk (list (lambda () (warn (ci-rcd-id 'simple-error)))
+                           (lambda () (funcall #'warn 'simple-error))
+                           (lambda () (eval '(warn 'simple-error)))
+                           (lambda () (warn (ci-rcd-id nil)))
+                           (lambda () (warn t))
+                           (lambda () (warn :k))
+                           (lambda () (error (ci-rcd-id nil)))
+                           (lambda () (error t))
+                           (lambda () (error :k))
+                           (lambda () (signal (ci-rcd-id :k)))
+                           (lambda () (error 'ci-rcd-undefined))
+                           (lambda () (signal 'ci-rcd-undefined))
+                           (lambda () (warn 'ci-rcd-undefined))
+                           (lambda () (cerror "go" 'ci-rcd-undefined))
+                           (lambda () (make-condition 'ci-rcd-undefined))
+                           (lambda () (error (make-condition 'ci-rcd-undefined)))
+                           (lambda () (error (ci-rcd-id 'ci-rcd-undefined)))
+                           (lambda () (make-condition (ci-rcd-id 'ci-rcd-undefined)))
+                           (lambda () (eval '(signal 'ci-rcd-undefined)))
+                           (lambda () (error 5))
+                           (lambda () (error (ci-rcd-id 5)))
+                           (lambda () (signal (ci-rcd-id 5)))
+                           (lambda () (warn (ci-rcd-id 5)))
+                           (lambda () (cerror "go" (ci-rcd-id 5)))
+                           (lambda () (make-condition (ci-rcd-id 5)))
+                           (lambda () (error 'ci-rcd-plain))
+                           (lambda () (error (ci-rcd-id 'ci-rcd-plain)))
+                           (lambda () (make-condition 'ci-rcd-plain))
+                           (lambda () (error 'ci-rcd-st))))
+        (print (ci-rcd-class thunk)))
+      (print (handler-case (error (ci-rcd-id 5)) (error (c) (princ-to-string c))))
+      (print (handler-case (error 'ci-rcd-undefined) (error (c) (princ-to-string c))))
+      (print (handler-case (signal (ci-rcd-id (make-instance 'ci-rcd-plain)))
+               (type-error (c) (type-of (type-error-datum c)))))
+      (print (handler-case (error (ci-rcd-id (make-ci-rcd-st :a 1)))
+               (type-error (c) (ci-rcd-st-a (type-error-datum c)))))
+      (print (list (handler-case (error (ci-rcd-id 'ci-rcd-e)) (error (c) (ci-rcd-v c)))
+                   (handler-case (error (ci-rcd-id 'ci-rcd-e) :v 7) (error (c) (ci-rcd-v c)))
+                   (handler-case (funcall #'error 'ci-rcd-e :v 8) (error (c) (ci-rcd-v c)))
+                   (handler-case (apply #'error 'ci-rcd-e (list :v 9)) (error (c) (ci-rcd-v c)))
+                   (handler-case (eval '(error 'ci-rcd-e :v 10)) (error (c) (ci-rcd-v c)))
+                   (handler-case (signal (ci-rcd-id 'ci-rcd-e) :v 11) (error (c) (ci-rcd-v c)))
+                   (ci-rcd-v (make-condition (ci-rcd-id 'ci-rcd-e) :v 12))
+                   (ci-rcd-v (funcall #'make-condition 'ci-rcd-e :v 13))))
+      (print (signal (ci-rcd-id 'ci-rcd-c)))
+      (print (list (handler-case (funcall #'error "x ~a" 1) (error (c) (princ-to-string c)))
+                   (handler-case (funcall #'signal "x ~a" 2) (condition (c) (princ-to-string c)))
+                   (handler-case (signal (ci-rcd-id "x ~a") 3) (condition (c) (princ-to-string c)))
+                   (handler-case (warn (ci-rcd-id "x ~a") 4) (warning (c) (princ-to-string c)))
+                   (handler-case (error (format nil "~~a ~a" 5) 6) (error (c) (princ-to-string c)))
+                   (handler-case (error (concatenate 'string "a" "b")) (simple-error (c) (princ-to-string c)))))
+      (print (handler-case (warn (ci-rcd-id 'ci-rcd-w) :v 2) (warning (c) (princ-to-string c))))
+      (print (with-output-to-string (*error-output*) (warn (ci-rcd-id 'ci-rcd-w) :v 3)))
+      (print (with-output-to-string (*error-output*) (apply #'warn (list "ctl ~a" 4))))
+      (print (with-output-to-string (*error-output*) (warn (format nil "fmt ~a" 5))))
+      (print (handler-bind ((warning (lambda (c) (declare (ignorable c)) (muffle-warning))))
+               (warn (ci-rcd-id 'ci-rcd-w) :v 1)
+               :muffled))
+      (print (handler-bind ((ci-rcd-e (lambda (c) (print (ci-rcd-v c)) (invoke-restart 'ci-rcd-skip))))
+               (restart-case (error (ci-rcd-id 'ci-rcd-e) :v 14)
+                 (ci-rcd-skip () :skipped))))
+      (print (handler-bind ((ci-rcd-c (lambda (c) (declare (ignorable c)) (print :seen))))
+               (signal (ci-rcd-id 'ci-rcd-c))
+               :after))
+      (print (handler-bind ((error (lambda (c) (declare (ignorable c)) (continue))))
+               (list (funcall #'cerror "go" 'ci-rcd-e) (cerror "go" (ci-rcd-id 'ci-rcd-e)) :went-on)))
+    expected: |
+      CI-RCD-E
+      CI-RCD-E
+      CI-RCD-C
+      CI-RCD-C
+      CI-RCD-W
+      CI-RCD-W
+      CI-RCD-W
+      CI-RCD-NOINIT
+      CONDITION
+      CI-RCD-E
+      CI-RCD-E
+      CI-RCD-E
+      CI-RCD-E
+      SIMPLE-ERROR
+      (:TE SIMPLE-ERROR)
+      (:TE SIMPLE-ERROR)
+      (:TE SIMPLE-ERROR)
+      (:TE NIL)
+      (:TE T)
+      (:TE :K)
+      (:TE NIL)
+      (:TE T)
+      (:TE :K)
+      (:TE :K)
+      (:TE CI-RCD-UNDEFINED)
+      (:TE CI-RCD-UNDEFINED)
+      (:TE CI-RCD-UNDEFINED)
+      (:TE CI-RCD-UNDEFINED)
+      (:TE CI-RCD-UNDEFINED)
+      (:TE CI-RCD-UNDEFINED)
+      (:TE CI-RCD-UNDEFINED)
+      (:TE CI-RCD-UNDEFINED)
+      (:TE CI-RCD-UNDEFINED)
+      (:TE 5)
+      (:TE 5)
+      (:TE 5)
+      (:TE 5)
+      (:TE 5)
+      (:TE 5)
+      (:TE CI-RCD-PLAIN)
+      (:TE CI-RCD-PLAIN)
+      (:TE CI-RCD-PLAIN)
+      (:TE CI-RCD-ST)
+      "The value 5 is not of type CONDITION"
+      "The value CI-RCD-UNDEFINED is not of type CONDITION"
+      CI-RCD-PLAIN
+      1
+      (41 7 8 9 10 11 12 13)
+      NIL
+      ("x 1" "x 2" "x 3" "x 4" "6 5" "ab")
+      "ci-rcd-w 2"
+      "WARNING: ci-rcd-w 3
+      "
+      "WARNING: ctl 4
+      "
+      "WARNING: fmt 5
+      "
+      :MUFFLED
+      14
+      :SKIPPED
+      :SEEN
+      :AFTER
+      (NIL NIL :WENT-ON)
   - name: iteration-bodies-are-implicit-tagbodies
     source: |
       (let ((acc nil))

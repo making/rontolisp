@@ -619,9 +619,17 @@ stored, the instance is the value.
   (`let`) before any store, missing slots get the target's initform (unbound without one), NOT
   when an initarg supplies the slot (`changeClassInitformFill`'s `supplied`: Drei's narrowed marks
   have `:initform (error ...)`, ci-spec `clos-computed-change-class`) ->
-  the initarg stores. **The tag is captured BEFORE the swap.** Arms are sources x targets, so
-  the computed path's dispatch is quadratic in user classes (fine for change-class programs
-  measured so far; a runtime layout-driven remap would make it linear).
+  the initarg stores. **The tag is captured BEFORE the swap.** Sources mapping alike share one arm
+  (`ChangeClassSlotOrigin`): most share nothing with the target, and an arm each repeated one fill
+  per source. The computed path's dispatch is quadratic in user classes in its tag tests alone (a
+  runtime layout-driven remap would make it linear). Measured 2026-11-05 on
+  `AsdfMetaobjectsE2eTest`'s program, 103 classes, cold `wasmtime compile` on 4 CPUs: arms 1.33 MB
+  of a 3.32 MB module, 0.89 GB; an inline initarg scan per slot per source took them to 4.69 MB of
+  7.09 MB, 21 bodies of 165-203 KB side by side, and the peak to 7.2 GB, which killed a `test-e2e`
+  runner ([test-execution.md](test-execution.md), "CI shards"); merged, with a `getf` for a slot of
+  one initarg, 0.82 MB of 2.80 MB, largest arm 52 KB, 0.71 GB. Pins
+  `WasmToplevelChunkingTest#aComputedChangeClassFillsASlotOncePerWayAClassMapsOntoIt`, ci-spec
+  `clos-computed-change-class`.
 - **`LispLayout.capacity()` is why this works on the JVM**, where an instance IS its
   `Object[]`: every class an instance can be changed from (the target's ancestors and every
   non-seeded class) reserves the target's slot count at construction. Before 2026-10-31 only
