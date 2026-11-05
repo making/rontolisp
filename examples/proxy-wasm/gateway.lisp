@@ -18,11 +18,11 @@
 
 (require :proxy-wasm "proxy-wasm.lisp")
 
-(defpackage :gateway (:use :cl :proxy-wasm))
+(defpackage :gateway (:use :cl))
 
 (in-package :gateway)
 
-(defclass gateway-root (root-context)
+(defclass gateway-root (proxy-wasm:root-context)
   ((blocked-prefixes :initform '() :accessor blocked-prefixes)
    (forbidden-word :initform nil :accessor forbidden-word)
    (authz-cluster :initform nil :accessor authz-cluster)
@@ -31,7 +31,7 @@
    (requests-gauge :initform nil :accessor requests-gauge)
    (heap-gauge :initform nil :accessor heap-gauge)))
 
-(defclass gateway-stream (http-context)
+(defclass gateway-stream (proxy-wasm:http-context)
   ((path :initform "" :accessor stream-path)
    (method :initform "" :accessor stream-method)
    (status :initform "-" :accessor stream-status)
@@ -44,28 +44,34 @@
 
 ;;; --- configuration -------------------------------------------------------
 
-(defmethod on-configure ((root gateway-root) configuration-size)
+(defmethod proxy-wasm:on-configure ((root gateway-root) configuration-size)
   (when (plusp configuration-size)
-    (let ((config (rontolisp:json-parse (get-buffer :plugin-configuration))))
+    (let ((config
+           (rontolisp:json-parse
+            (proxy-wasm:get-buffer :plugin-configuration))))
       (setf (blocked-prefixes root)
             (coerce (gethash "blocked_prefixes" config #()) 'list)
             (forbidden-word root) (gethash "forbidden_word" config)
             (authz-cluster root) (gethash "authz_cluster" config) (banner root)
             (gethash "banner" config "rontolisp"))
-      (set-tick-period (gethash "tick_milliseconds" config 1000))))
-  (setf (blocked-counter root) (define-metric :counter "gateway.blocked")
-        (requests-gauge root) (define-metric :gauge "gateway.requests_seen")
-        (heap-gauge root) (define-metric :gauge "gateway.heap_top"))
-  (log-info "gateway: plugin ~a configured, blocking ~a"
-            (get-property "plugin_name") (blocked-prefixes root))
+      (proxy-wasm:set-tick-period (gethash "tick_milliseconds" config 1000))))
+  (setf (blocked-counter root)
+        (proxy-wasm:define-metric :counter "gateway.blocked")
+        (requests-gauge root)
+        (proxy-wasm:define-metric :gauge "gateway.requests_seen")
+        (heap-gauge root) (proxy-wasm:define-metric :gauge "gateway.heap_top"))
+  (proxy-wasm:log-info "gateway: plugin ~a configured, blocking ~a"
+                       (proxy-wasm:get-property "plugin_name")
+                       (blocked-prefixes root))
   t)
 
-(defmethod on-tick ((root gateway-root))
-  (record-metric (heap-gauge root) (heap-top))
-  (let ((count (shared-data "gateway.requests")))
-    (when count (record-metric (requests-gauge root) (parse-integer count)))))
+(defmethod proxy-wasm:on-tick ((root gateway-root))
+  (proxy-wasm:record-metric (heap-gauge root) (proxy-wasm:heap-top))
+  (let ((count (proxy-wasm:shared-data "gateway.requests")))
+    (when count
+      (proxy-wasm:record-metric (requests-gauge root) (parse-integer count)))))
 
-(defmethod make-http-context ((root gateway-root) id)
+(defmethod proxy-wasm:make-http-context ((root gateway-root) id)
   (make-instance 'gateway-stream :id id :root root))
 
 ;;; --- the request ---------------------------------------------------------
@@ -74,35 +80,38 @@
 ;; one number they share. A version that moved underneath means someone else won.
 (defun next-request-number ()
   (loop
-    (multiple-value-bind (value version) (shared-data "gateway.requests")
+    (multiple-value-bind (value version)
+        (proxy-wasm:shared-data "gateway.requests")
       (let ((next (1+ (if value (parse-integer value) 0))))
-        (when (set-shared-data "gateway.requests" (princ-to-string next)
-                               version)
+        (when (proxy-wasm:set-shared-data "gateway.requests"
+                                          (princ-to-string next) version)
           (return next))))))
 
 (defun refuse (status reason &optional headers)
-  (send-local-response status
+  (proxy-wasm:send-local-response status
    :details "gateway"
    :body (format nil "{\"refused\":\"~a\"}~%" reason)
    :headers (append '(("content-type" . "application/json")) headers))
   :pause)
 
-(defmethod on-request-headers
+(defmethod proxy-wasm:on-request-headers
     ((stream gateway-stream) num-headers end-of-stream)
   (declare (ignore num-headers end-of-stream))
-  (let* ((root (context-root stream))
-         (path (or (get-header :request ":path") ""))
+  (let* ((root (proxy-wasm:context-root stream))
+         (path (or (proxy-wasm:get-header :request ":path") ""))
          (blocked
           (find-if (lambda (prefix) (prefix-p prefix path))
                    (blocked-prefixes root))))
     (setf (stream-path stream) path (stream-method stream)
-          (or (get-header :request ":method") "") (started-at stream)
-          (current-time-nanos) (shout-p stream) (prefix-p "/shout" path))
-    (set-header :request "x-gateway-request"
-                (princ-to-string (next-request-number)))
+          (or (proxy-wasm:get-header :request ":method") "") (started-at stream)
+          (proxy-wasm:current-time-nanos) (shout-p stream)
+          (prefix-p "/shout" path))
+    (proxy-wasm:set-header :request "x-gateway-request"
+                           (princ-to-string (next-request-number)))
     (cond (blocked
-           (increment-metric (blocked-counter root))
-           (log-warn "gateway: ~a is under blocked prefix ~a" path blocked)
+           (proxy-wasm:increment-metric (blocked-counter root))
+           (proxy-wasm:log-warn "gateway: ~a is under blocked prefix ~a" path
+                                blocked)
            (refuse 403 "blocked path" '(("x-blocked-by" . "gateway"))))
           ((prefix-p "/guarded" path) (ask-authorization stream root))
           ;; Not :pause, even for a body about to be inspected: a pause here stops the
@@ -110,61 +119,67 @@
           (t :continue))))
 
 (defun ask-authorization (stream root)
-  (let ((user (get-header :request "x-user")))
+  (let ((user (proxy-wasm:get-header :request "x-user")))
     (cond (user
-           (http-call (authz-cluster root)
-                      (list (cons ":method" "GET")
-                            (cons ":path" (format nil "/authz/~a" user))
-                            (cons ":authority" "authz"))
-                      :timeout 2000)
+           (proxy-wasm:http-call (authz-cluster root)
+                                 (list (cons ":method" "GET")
+                                  (cons ":path" (format nil "/authz/~a" user))
+                                  (cons ":authority" "authz"))
+                                 :timeout 2000)
            :pause)
           (t (refuse 401 "no x-user")))))
 
-(defmethod on-http-call-response
+(defmethod proxy-wasm:on-http-call-response
     ((stream gateway-stream) token num-headers body-size num-trailers)
   (declare (ignore token num-headers body-size num-trailers))
-  (cond ((equal (get-header :call-response ":status") "200")
-         (set-header :request "x-authorized-by"
-                     (or (get-buffer :call-response-body) "authz"))
-         (continue-request))
+  (cond ((equal (proxy-wasm:get-header :call-response ":status") "200")
+         (proxy-wasm:set-header :request "x-authorized-by"
+          (or (proxy-wasm:get-buffer :call-response-body) "authz"))
+         (proxy-wasm:continue-request))
         (t (refuse 403 "not authorized"))))
 
-(defmethod on-request-body ((stream gateway-stream) body-size end-of-stream)
+(defmethod proxy-wasm:on-request-body
+    ((stream gateway-stream) body-size end-of-stream)
   (declare (ignore body-size))
-  (let ((word (forbidden-word (context-root stream))))
+  (let ((word (forbidden-word (proxy-wasm:context-root stream))))
     (cond ((null word) :continue)
           ((not end-of-stream) :pause)
-          ((search word (or (get-buffer :request-body) ""))
+          ((search word (or (proxy-wasm:get-buffer :request-body) ""))
            (refuse 422 "forbidden word"))
           (t :continue))))
 
 ;;; --- the response --------------------------------------------------------
 
-(defmethod on-response-headers
+(defmethod proxy-wasm:on-response-headers
     ((stream gateway-stream) num-headers end-of-stream)
   (declare (ignore num-headers end-of-stream))
-  (setf (stream-status stream) (or (get-header :response ":status") "-"))
-  (add-header :response "x-powered-by" (banner (context-root stream)))
-  (remove-header :response "x-internal-secret")
-  (set-header :response "x-header-count"
-              (princ-to-string (length (get-headers :response))))
+  (setf (stream-status stream)
+        (or (proxy-wasm:get-header :response ":status") "-"))
+  (proxy-wasm:add-header :response "x-powered-by"
+                         (banner (proxy-wasm:context-root stream)))
+  (proxy-wasm:remove-header :response "x-internal-secret")
+  (proxy-wasm:set-header :response "x-header-count"
+   (princ-to-string (length (proxy-wasm:get-headers :response))))
   (when (shout-p stream)
     ;; The body is about to be rewritten, so the length the upstream stated is stale.
-    (remove-header :response "content-length"))
+    (proxy-wasm:remove-header :response "content-length"))
   :continue)
 
-(defmethod on-response-body ((stream gateway-stream) body-size end-of-stream)
+(defmethod proxy-wasm:on-response-body
+    ((stream gateway-stream) body-size end-of-stream)
   (declare (ignore body-size))
   (cond ((not (shout-p stream)) :continue)
         ((not end-of-stream) :pause)
         (t
-         (set-buffer
-          :response-body (string-upcase (or (get-buffer :response-body) "")))
+         (proxy-wasm:set-buffer :response-body
+                                (string-upcase
+                                 (or (proxy-wasm:get-buffer :response-body)
+                                     "")))
          :continue)))
 
-(defmethod on-log ((stream gateway-stream))
-  (log-info "gateway: ~a ~a -> ~a in ~a us" (stream-method stream)
-            (stream-path stream) (stream-status stream)
-            (floor (- (current-time-nanos) (started-at stream)) 1000)))
+(defmethod proxy-wasm:on-log ((stream gateway-stream))
+  (proxy-wasm:log-info "gateway: ~a ~a -> ~a in ~a us" (stream-method stream)
+   (stream-path stream) (stream-status stream)
+   (floor (- (proxy-wasm:current-time-nanos) (started-at stream)) 1000)))
 
-(set-root-context (lambda (id) (make-instance 'gateway-root :id id)))
+(proxy-wasm:set-root-context (lambda (id) (make-instance 'gateway-root :id id)))

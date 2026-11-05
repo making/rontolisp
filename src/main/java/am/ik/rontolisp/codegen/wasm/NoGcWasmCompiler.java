@@ -1557,13 +1557,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param hostArena whether the arena API (the {@code __ronto_alloc} family of exports
 	 * and the mark/reset bodies behind two of them) is emitted at all
 	 * @param allocates whether anything in the module can bump the heap during a call
+	 * @param programOwnsHeap whether the program declares the arena fields of
+	 * {@value WasmMemoryIntrinsic#MODULE}, so no export wrapper restores the heap for it
 	 */
 	private record Mem(Map<String, Integer> literals, Map<String, Integer> regions, byte[] data, int dataBase,
 			int heapBase, int iovAddr, int funcBase, int allocIndex, int memcpyIndex, int streqIndex, int itoaIndex,
 			int strlenIndex, int byteOffsetIndex, int charAtIndex, int markIndex, int resetIndex, int rontoAllocIndex,
 			int ftoaIndex, int schubBase, int fdlibmBase, List<WasmFdlibmRuntimeBuilder.Fn> fdlibmFns,
 			int fdlibmTablesBase, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed,
-			boolean hostArena, boolean allocates) {
+			boolean hostArena, boolean allocates, boolean programOwnsHeap) {
 
 		/**
 		 * The function index of an fdlibm function this module carries: its position in
@@ -1664,11 +1666,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * {@code __ronto_alloc_reset} exports and the mark/reset bodies are for
 	 * @param allocates whether anything in the module can bump the heap during a call,
 	 * which is what an export wrapper's save/restore bracket exists to undo
+	 * @param programOwnsHeap whether the program declares the arena fields of
+	 * {@value WasmMemoryIntrinsic#MODULE}, so no export wrapper restores the heap for it
 	 */
 	private record MemLayout(Map<String, Integer> literals, Map<String, Integer> regions, byte[] data, int heapBase,
 			int iovAddr, int schubBase, int fdlibmTablesBase, List<WasmFdlibmRuntimeBuilder.Fn> fdlibmFns, boolean used,
 			boolean printUsed, boolean ftoaUsed, boolean strlenUsed, boolean byteOffsetUsed, boolean charAtUsed,
-			boolean hostArena, boolean allocates) {
+			boolean hostArena, boolean allocates, boolean programOwnsHeap) {
 
 		/**
 		 * The same plan with the given literals laid out header-free, in the same order.
@@ -1684,7 +1688,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					this.fdlibmTablesBase != 0);
 			return new MemLayout(plan.literals(), plan.regions(), plan.data(), plan.heapBase(), plan.iovAddr(),
 					plan.schubBase(), plan.fdlibmTablesBase(), this.fdlibmFns, this.used, this.printUsed, this.ftoaUsed,
-					this.strlenUsed, this.byteOffsetUsed, this.charAtUsed, this.hostArena, this.allocates);
+					this.strlenUsed, this.byteOffsetUsed, this.charAtUsed, this.hostArena, this.allocates,
+					this.programOwnsHeap);
 		}
 	}
 
@@ -1983,6 +1988,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// nothing to reclaim. A :string ARGUMENT to an import is not on this list: it
 		// hands the host the (ptr,len) of a block this module already owns.
 		boolean hostArena = false;
+		boolean programOwnsHeap = false;
 		// Whether anything can bump the heap DURING a call, which is what the export
 		// wrappers' auto-reset bracket exists to undo. Every __alloc call site in the
 		// emitted code is one of: a :string import result copied in (below), a
@@ -2022,6 +2028,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				boundaryString = true;
 				hostArena |= WasmMemoryIntrinsic.needsArena(decl);
 				allocates |= WasmMemoryIntrinsic.needsArena(decl);
+				programOwnsHeap |= WasmMemoryIntrinsic.needsArena(decl);
 			}
 		}
 		// A body can produce a string without any literal or :string boundary (e.g.
@@ -2083,7 +2090,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		boolean strlenUsed = usesStringLength(reachable, defuns, imports, types);
 		return new MemLayout(plan.literals(), plan.regions(), plan.data(), plan.heapBase(), plan.iovAddr(),
 				plan.schubBase(), plan.fdlibmTablesBase(), fdlibmFns, used, printUsed, ftoaUsed, strlenUsed,
-				byteOffsetUsed, charAtUsed, hostArena, allocates);
+				byteOffsetUsed, charAtUsed, hostArena, allocates, programOwnsHeap);
 	}
 
 	/**
@@ -2143,7 +2150,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				layout.iovAddr(), funcBase, allocIndex, memcpyIndex, streqIndex, itoaIndex, strlenIndex,
 				byteOffsetIndex, charAtIndex, markIndex, resetIndex, rontoAllocIndex, ftoaIndex, layout.schubBase(),
 				fdlibmBase, layout.fdlibmFns(), layout.fdlibmTablesBase(), writeStdoutIndex, layout.used(),
-				layout.printUsed(), layout.ftoaUsed(), layout.hostArena(), layout.allocates());
+				layout.printUsed(), layout.ftoaUsed(), layout.hostArena(), layout.allocates(),
+				layout.programOwnsHeap());
 	}
 
 	/** The printing operators that gate the fd_write import. */
@@ -4156,9 +4164,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// mem.allocates() -- a module that only reads its own literals (or only takes
 		// :string parameters, whose blocks the host already allocated) has no call
 		// site that can move the pointer, and the bracket would restore what never
-		// changed.
-		boolean resetHeap = mem.used() && mem.allocates() && decl.returnType() != BoundaryType.STRING
-				&& decl.returnType() != BoundaryType.S_EXPR;
+		// changed. A program holding the arena fields decides for itself what lives past
+		// a call: the address its allocator export answers is the host's to write into,
+		// and popping it here would hand the same bytes out twice.
+		boolean resetHeap = mem.used() && mem.allocates() && !mem.programOwnsHeap()
+				&& decl.returnType() != BoundaryType.STRING && decl.returnType() != BoundaryType.S_EXPR;
 		int mark = -1;
 		if (resetHeap) {
 			mark = nextLocal++;

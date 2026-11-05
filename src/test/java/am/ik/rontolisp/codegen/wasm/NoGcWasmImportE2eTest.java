@@ -239,6 +239,9 @@ class NoGcWasmImportE2eTest {
 
 				(defun peek (address) (load8 address))
 				(rontolisp:wasm-export 'peek :params '(:s64) :returns :s64)
+
+				(defun reserve (size) (mem-alloc size))
+				(rontolisp:wasm-export 'reserve :params '(:u32) :returns :u32)
 				""";
 		String driver = """
 				const fs = require('fs');
@@ -262,11 +265,14 @@ class NoGcWasmImportE2eTest {
 				console.log(attempt(() => inst.exports.flat()));
 				console.log(attempt(() => inst.exports.peek(1n << 32n)));
 				console.log(WebAssembly.Module.imports(mod).map((i) => i.module + '.' + i.name).join(' '));
+				const reserved = inst.exports.reserve(8);
+				console.log(inst.exports.reserve(8) >= reserved + 8 ? 'stays reserved' : 'handed out twice');
 				""";
 		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.SIZE)) {
 			assertThat(run(module, driver, level, "memory-" + level.spelling()).lines().toList())
 				.as("optimize=%s", level.spelling())
-				.containsExactly("5", String.valueOf(200L + 4000000000L + 1099511627776L), "1", "trap", "env.answer");
+				.containsExactly("5", String.valueOf(200L + 4000000000L + 1099511627776L), "1", "trap", "env.answer",
+						"stays reserved");
 		}
 	}
 
