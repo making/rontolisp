@@ -10598,6 +10598,83 @@ public final class LispNames {
 	public static final String PRINT_CASED_RADIXED_LEAF_INTERNAL = "%PC-RADIXED";
 
 	/**
+	 * The internal {@code (%pc-raw x)} leaf of {@link #PRINT_CASED_INTERNAL}'s fast path:
+	 * {@link #PRINT_READABLE_RAW_INTERNAL} when the program can print readably, the raw
+	 * {@code prin1} conversion otherwise. Lowered by the compile paths
+	 * ({@code LispMacroExpander.expandPrintReadableLeaf}), as is every leaf below.
+	 */
+	public static final String PRINT_CASED_RAW_LEAF_INTERNAL = "%PC-RAW";
+
+	/**
+	 * The internal {@code (%pc-leaf x)} leaf of {@link #PRINT_CASED_WALK_INTERNAL}:
+	 * {@link #PRINT_READABLE_LEAF_INTERNAL} when the program can print readably, the raw
+	 * {@code prin1} conversion otherwise.
+	 */
+	public static final String PRINT_CASED_TEXT_LEAF_INTERNAL = "%PC-LEAF";
+
+	/**
+	 * The internal {@code (%pc-instance-check x escape)} leaf of the walks' instance
+	 * arms: {@link #PRINT_READABLE_INSTANCE_INTERNAL} when the program can print readably
+	 * and nil otherwise.
+	 */
+	public static final String PRINT_CASED_INSTANCE_CHECK_INTERNAL = "%PC-INSTANCE-CHECK";
+
+	/**
+	 * The internal {@code (%pc-without-readably form)} form around text a signal or a
+	 * report renders: {@code form} with {@code *print-readably*} bound to nil where the
+	 * program can print readably, and {@code form} alone otherwise. SBCL formats a
+	 * condition's message when it reports, under {@code princ}; here a message is
+	 * rendered at the signal, which must not raise {@code print-not-readable} in its
+	 * place.
+	 */
+	public static final String PRINT_WITHOUT_READABLY_INTERNAL = "%PC-WITHOUT-READABLY";
+
+	/**
+	 * The internal {@code (%pc-not-readable x)} prelude defun: signals
+	 * {@code print-not-readable} for {@code x} under {@code *print-readably*}. Spliced
+	 * only for a program that can print readably, so its being defined is what the leaves
+	 * above lower on.
+	 */
+	public static final String PRINT_NOT_READABLE_INTERNAL = "%PC-NOT-READABLE";
+
+	/**
+	 * The internal {@code (%pc-readable-raw x)} prelude defun: the raw {@code prin1}
+	 * text, or the walk when {@code *print-readably*} is on and that text holds
+	 * {@code #<}.
+	 */
+	public static final String PRINT_READABLE_RAW_INTERNAL = "%PC-READABLE-RAW";
+
+	/**
+	 * The internal {@code (%pc-readable-leaf x)} prelude defun: the {@code prin1} text of
+	 * a value the walk does not take apart, under {@code *print-readably*} signalling for
+	 * an unreadable one and spelling a hash table or an array of rank other than 1
+	 * itself.
+	 */
+	public static final String PRINT_READABLE_LEAF_INTERNAL = "%PC-READABLE-LEAF";
+
+	/**
+	 * The internal {@code (%pc-readable-instance x escape)} prelude defun: signals for an
+	 * instance that prints as {@code #<...>} under {@code prin1}.
+	 */
+	public static final String PRINT_READABLE_INSTANCE_INTERNAL = "%PC-READABLE-INSTANCE";
+
+	/**
+	 * The internal {@code (%pc-readable-nested x)} prelude defun: spells a hash table or
+	 * an array of rank other than 1 from the {@code prin1} text of its elements, refusing
+	 * one that holds itself.
+	 */
+	public static final String PRINT_READABLE_NESTED_INTERNAL = "%PC-READABLE-NESTED";
+
+	/** The internal {@code (%pc-holds-unreadable text)} prelude defun. */
+	public static final String PRINT_HOLDS_UNREADABLE_INTERNAL = "%PC-HOLDS-UNREADABLE";
+
+	/** The internal {@code (%pc-readable-table table)} prelude defun. */
+	public static final String PRINT_READABLE_TABLE_INTERNAL = "%PC-READABLE-TABLE";
+
+	/** The internal {@code (%pc-readable-rows a dims start size)} prelude defun. */
+	public static final String PRINT_READABLE_ROWS_INTERNAL = "%PC-READABLE-ROWS";
+
+	/**
 	 * The internal {@code (%print-radixed n)} helper: an integer or ratio spelled under
 	 * the current {@link #PRINT_BASE_VAR} and {@link #PRINT_RADIX_VAR} -- {@code FF},
 	 * {@code #xFF}, {@code 255.}, {@code #3r100110}, {@code #x1/FF} -- the leaf

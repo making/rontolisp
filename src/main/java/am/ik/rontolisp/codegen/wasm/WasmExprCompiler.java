@@ -1267,6 +1267,10 @@ final class WasmExprCompiler {
 				compileExpansion(LispMacroExpander.expandPrintQualifier(cons, ctx.functions::containsKey), ctx, tail);
 			case LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL ->
 				compileExpansion(LispMacroExpander.expandPrintCasedLeaf(cons, ctx.printControlVariables), ctx, tail);
+			case LispNames.PRINT_CASED_RAW_LEAF_INTERNAL, LispNames.PRINT_CASED_TEXT_LEAF_INTERNAL,
+					LispNames.PRINT_CASED_INSTANCE_CHECK_INTERNAL, LispNames.PRINT_WITHOUT_READABLY_INTERNAL ->
+				compileExpansion(LispMacroExpander.expandPrintReadableLeaf(cons,
+						ctx.functions.containsKey(LispNames.PRINT_NOT_READABLE_INTERNAL)), ctx, tail);
 			case LispNames.PRINT_CASED_TYPE_NAME_INTERNAL ->
 				compileExpansion(
 						LispMacroExpander.expandPrintedTypeName(cons.toList().get(1),
@@ -2085,7 +2089,8 @@ final class WasmExprCompiler {
 			case LispNames.TAGBODY -> WasmTagbodyCompiler.compile(cons, ctx);
 			case LispNames.GO -> WasmTagbodyCompiler.compileGo(cons, ctx);
 			case LispNames.PRINT_UNREADABLE_OBJECT ->
-				compileExpansion(LispMacroExpander.expandPrintUnreadableObject(cons), ctx, tail);
+				compileExpansion(LispMacroExpander.expandPrintUnreadableObject(cons,
+						ctx.functions.containsKey(LispNames.PRINT_NOT_READABLE_INTERNAL)), ctx, tail);
 			case LispNames.DO_EXTERNAL_SYMBOLS ->
 				compileExpansion(LispMacroExpander.expandDoSymbols(cons, true), ctx, tail);
 			case LispNames.DO_SYMBOLS -> compileExpansion(LispMacroExpander.expandDoSymbols(cons, false), ctx, tail);

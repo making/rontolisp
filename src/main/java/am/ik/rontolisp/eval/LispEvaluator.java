@@ -3286,6 +3286,18 @@ public final class LispEvaluator {
 					return eval(new LispCons(new LispSymbol(LispNames.PRINT_RADIXED_INTERNAL),
 							new LispCons(quoteValue(args.get(0)), LispNil.INSTANCE)), this.globalEnv);
 				}));
+		// The readable leaves, likewise: the prelude defun behind each.
+		java.util.Map
+			.of(LispNames.PRINT_CASED_RAW_LEAF_INTERNAL, LispNames.PRINT_READABLE_RAW_INTERNAL,
+					LispNames.PRINT_CASED_TEXT_LEAF_INTERNAL, LispNames.PRINT_READABLE_LEAF_INTERNAL,
+					LispNames.PRINT_CASED_INSTANCE_CHECK_INTERNAL, LispNames.PRINT_READABLE_INSTANCE_INTERNAL)
+			.forEach((leaf, defun) -> this.globalEnv.defineFunction(leaf, new LispFunction(leaf, args -> {
+				LispVal arguments = LispNil.INSTANCE;
+				for (int i = args.size() - 1; i >= 0; i--) {
+					arguments = new LispCons(quoteValue(args.get(i)), arguments);
+				}
+				return eval(new LispCons(new LispSymbol(defun), arguments), this.globalEnv);
+			})));
 		this.globalEnv.defineFunction(LispNames.PRINT_OBJECT_DEFAULT_INTERNAL,
 				new LispFunction(LispNames.PRINT_OBJECT_DEFAULT_INTERNAL, args -> {
 					requireSingleArg(LispNames.PRINT_OBJECT_DEFAULT_INTERNAL, args);
@@ -8695,12 +8707,13 @@ public final class LispEvaluator {
 	 * Whether a printer-control variable ({@code LispMacroExpander.PRINT_CONTROL_VARS})
 	 * currently holds a non-default value -- {@code *print-case*} other than
 	 * {@code :upcase}, a non-nil {@code *print-length*} / {@code *print-level*} /
-	 * {@code *print-radix*}, a nil {@code *print-gensym*}, a {@code *print-base*} other
-	 * than 10 -- i.e. whether a printing operator has to route through the
-	 * {@code %print-cased} renderer. Read dynamic-first, like any special: the value a
-	 * {@code let} binding established on this thread wins over the global default. This
-	 * is the interpreter's twin of the compile paths' "the program mentions the variable"
-	 * scan; the two agree because the renderer re-reads the variables itself.
+	 * {@code *print-radix*} / {@code *print-readably*}, a nil {@code *print-gensym*}, a
+	 * {@code *print-base*} other than 10 -- i.e. whether a printing operator has to route
+	 * through the {@code %print-cased} renderer. Read dynamic-first, like any special:
+	 * the value a {@code let} binding established on this thread wins over the global
+	 * default. This is the interpreter's twin of the compile paths' "the program mentions
+	 * the variable" scan; the two agree because the renderer re-reads the variables
+	 * itself.
 	 * @return true when the printer must apply a printer-control variable
 	 */
 	private boolean printControlsInEffect() {
@@ -8709,6 +8722,10 @@ public final class LispEvaluator {
 		// %print-cased walk decides (LispMacroExpander.printsUnderAPackage is the
 		// compile paths' twin).
 		if (!this.packageResolver.currentPackageIsPristineClUser()) {
+			return true;
+		}
+		// *print-readably* is one for the signal, which only the renderer's leaves raise.
+		if (!(currentSpecialValue(LispNames.PRINT_READABLY_VAR) instanceof LispNil)) {
 			return true;
 		}
 		LispVal printControls = currentSpecialValue(LispNames.PRINT_CASE_VAR);
@@ -11024,7 +11041,9 @@ public final class LispEvaluator {
 			case LispNames.UPGRADED_COMPLEX_PART_TYPE:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandUpgradedComplexPartType);
 			case LispNames.PRINT_UNREADABLE_OBJECT:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandPrintUnreadableObject);
+				return builtinMacroExpansion(cons, c -> LispMacroExpander.expandPrintUnreadableObject(c, true));
+			case LispNames.PRINT_WITHOUT_READABLY_INTERNAL:
+				return builtinMacroExpansion(cons, c -> LispMacroExpander.expandPrintReadableLeaf(c, true));
 			case LispNames.WITH_OPEN_STREAM:
 				return builtinMacroExpansion(cons, c -> LispMacroExpander.expandWithOpenStream(c, true));
 			case LispNames.WITH_PACKAGE_ITERATOR:

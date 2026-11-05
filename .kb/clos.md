@@ -645,7 +645,7 @@ stored, the instance is the value.
   `%obj-ref` indexes rather than `slot-value`). `type-error-datum`,
   `type-error-expected-type`, `cell-error-name`, `unbound-slot-instance` are prelude defuns.
   `print-not-readable` is seeded the same way (`object` slot, SBCL's report text,
-  `print-not-readable-object`); nothing built in signals it (`.kb/pretty-printer.md`).
+  `print-not-readable-object`); the printer signals it (`.kb/pretty-printer.md`).
 
 ## `slot-unbound` / `slot-missing`
 CL generics (`CL_FUNCTIONS`, `isCallableSystemGenericName`, `standardGenericShape` 3 / 4+1

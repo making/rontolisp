@@ -526,6 +526,15 @@ public final class SpecialVarCollector {
 				if ((lambda || LispNames.DEFUN.equals(h)) && cons.isProperList()) {
 					List<LispVal> parts = cons.toList();
 					int listIndex = lambda ? 1 : 2;
+					// A program carrying the printer's readable half binds
+					// *print-readably*
+					// around every message: %pc-without-readably lowers to that let in
+					// Pass
+					// 2, and a program may have named the variable only in data.
+					if (!lambda && parts.size() > 1 && parts.get(1) instanceof LispSymbol defined
+							&& LispNames.PRINT_NOT_READABLE_INTERNAL.equals(defined.name())) {
+						addIfSpecial(new LispSymbol(LispNames.PRINT_READABLY_VAR), specials, out);
+					}
 					if (parts.size() > listIndex) {
 						collectParameters(parts.get(listIndex), specials, out);
 						for (int i = listIndex + 1; i < parts.size(); i++) {

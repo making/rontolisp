@@ -549,7 +549,20 @@ class LispPreludeLibraryTest {
 				(print 'x)
 				""");
 		assertThat(names).contains("%PRINT-CASED", "%PC-UNQUALIFIED")
+			.doesNotContain("%PRINT-CASE-FOLD", "%PRINT-RADIXED", "%PC-NOT-READABLE");
+		// Only a program that can bind *print-readably* and print under prin1 carries the
+		// signal and the condition class it reaches, and it pulls no case fold for it.
+		assertThat(splicedNames("(let ((*print-readably* t)) (print 'x))"))
+			.contains("%PRINT-CASED", "%PC-NOT-READABLE", "%PC-READABLE-RAW", "%PC-READABLE-LEAF",
+					"%PC-READABLE-INSTANCE")
 			.doesNotContain("%PRINT-CASE-FOLD", "%PRINT-RADIXED");
+		assertThat(splicedNames("(with-standard-io-syntax (prin1-to-string 'x))")).contains("%PC-NOT-READABLE");
+		assertThat(splicedNames("(write 'x :readably t)")).contains("%PC-NOT-READABLE");
+		assertThat(splicedNames("(write 'x)")).doesNotContain("%PC-NOT-READABLE");
+		assertThat(splicedNames("(with-standard-io-syntax (error \"~S\" 'x))")).doesNotContain("%PC-NOT-READABLE");
+		assertThat(splicedNames("(let ((*print-case* :downcase)) (print 'x))")).doesNotContain("%PC-NOT-READABLE");
+		// macro-function's table of standard names is no such mention.
+		assertThat(splicedNames("(print (macro-function 'when))")).doesNotContain("%PC-NOT-READABLE");
 		// princ never spells a qualifier, so a program that only princs routes nothing.
 		assertThat(splicedNames("""
 				(defpackage :spa-app (:use :cl))
