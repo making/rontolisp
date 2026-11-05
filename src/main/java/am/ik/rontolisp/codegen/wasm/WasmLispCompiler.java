@@ -3621,6 +3621,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The (setf (symbol-function 'n) ...) forwarders: no definition of their name, so
 		// out of the registry, and #'n / fboundp read the runtime function namespace.
 		Set<String> fenvForwarders = new HashSet<>(LispMacroExpander.symbolFunctionForwarderNames(program));
+		// What the run-time reader asks of the current package, where it can be another
+		// than the pristine cl-user (LispMacroExpander.injectReadHome).
+		program = LispMacroExpander.injectReadHome(program, packageResolver);
 		// The read/compile-time package table for the runtime package API (see
 		// .kb/packages.md): injected after package resolution, from the resolver's
 		// final registry, only when the program can need it at run time.
@@ -6779,7 +6782,9 @@ public final class WasmLispCompiler implements LispCompiler {
 						new WasmReadRuntimeBuilder.ReadBaseVar(globalIndices.getOrDefault(LispNames.READ_BASE_VAR, -1),
 								reentrantTaskGlobalIndex >= 0 && dynSlots.containsKey(LispNames.READ_BASE_VAR)
 										? reentrantTaskGlobalIndex : -1,
-								dynSlots.getOrDefault(LispNames.READ_BASE_VAR, -1)));
+								dynSlots.getOrDefault(LispNames.READ_BASE_VAR, -1)),
+						functions.containsKey(LispNames.READ_HOME_INTERNAL)
+								? functions.get(LispNames.READ_HOME_INTERNAL).funcIndex() : -1);
 				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(readCtx);
 				readListBody = WasmReadRuntimeBuilder.buildReadListBody(readCtx);
 				// FUNC_READ is a RETIRED index: read is prelude rontolisp over read-char

@@ -1566,6 +1566,30 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void onlyAProgramThatCanReadUnderAnotherPackageCarriesTheReadersHome() {
+		// A token of a program that stays in cl-user, which no package of its own can
+		// qualify, is its spelling: the reader asks nothing. Nor does a program that does
+		// not read.
+		for (String stays : List.of("(print (read-from-string \"foo\"))",
+				"(print (with-standard-io-syntax (read-from-string \"foo\")))", "(in-package :cl-user) (read)",
+				"(defpackage :rh-p (:use :cl)) (in-package :rh-p) (print 'foo)")) {
+			am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+			List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString(stays));
+			assertThat(LispMacroExpander.injectReadHome(program, resolver)).as(stays).isSameAs(program);
+		}
+		for (String reads : List.of(
+				"(defpackage :rh-p (:use :cl)) (in-package :rh-p) (print (read-from-string \"foo\"))",
+				"(defpackage :rh-p (:use :cl)) (print (read-from-string \"rh-p::foo\"))",
+				"(print (let ((*package* (find-package :rontolisp))) (read-from-string \"foo\")))",
+				"(in-package :rontolisp) (cl:load (cl:concatenate 'cl:string \"a\" \".lisp\"))")) {
+			am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+			List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString(reads));
+			assertThat(LispMacroExpander.injectReadHome(program, resolver).get(0).print()).as(reads)
+				.startsWith("(DEFUN %READ-HOME ");
+		}
+	}
+
+	@Test
 	void injectBakedAccessLeavesAProgramNoRowServesUnchanged() {
 		// The package a computed name is looked up in answers through cl or its own
 		// members only, and exports nothing -- every name it does not answer is built

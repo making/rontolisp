@@ -12001,18 +12001,13 @@ public final class LispNames {
 	public static final String FIND_PACKAGE_GLOBAL_INTERNAL = "%FIND-PACKAGE-GLOBAL";
 
 	/**
-	 * {@code (%read-through-local-nicknames datum)}: a datum a compiled program's reader
-	 * answered, its qualified tokens read through the current package's nicknames.
+	 * {@code (%read-home symbol qualifier)}: the symbol a token a compiled program's
+	 * run-time reader read names in the current package, or, with a qualifier, in the
+	 * package the qualifier names ({@code LispMacroExpander.injectReadHome}). The emitted
+	 * readers call it, and only a program that can read under a package other than the
+	 * pristine {@code cl-user} defines it.
 	 */
-	public static final String READ_THROUGH_LOCAL_NICKNAMES_INTERNAL = "%READ-THROUGH-LOCAL-NICKNAMES";
-
-	/** {@code (%read-through-local-nickname-walk datum)}: its walk. */
-	public static final String READ_THROUGH_LOCAL_NICKNAME_WALK_INTERNAL = "%READ-THROUGH-LOCAL-NICKNAME-WALK";
-
-	/**
-	 * {@code (%local-nicknames-in-p package)}: whether the table has a row for a name.
-	 */
-	public static final String LOCAL_NICKNAMES_IN_P_INTERNAL = "%LOCAL-NICKNAMES-IN-P";
+	public static final String READ_HOME_INTERNAL = "%READ-HOME";
 
 	/**
 	 * {@code (%local-nicknames-moving designator thunk deleting)}: runs the body of a
