@@ -1,7 +1,9 @@
 package am.ik.rontolisp;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 
 import am.ik.rontolisp.reader.LispReader;
@@ -127,6 +129,31 @@ class LispTreesTest {
 		LispArray live = new LispArray(new int[] { 2 }, new LispVal[] { new LispSymbol("FOO"), LispNil.INSTANCE }, 1,
 				true);
 		assertThat(LispTrees.rewriteDatumSymbols(live, qualify)).isSameAs(live);
+		// A node stands or takes its copy by what it reaches, so two data sharing it
+		// agree
+		// whichever comes first, and whether or not the other changes at all.
+		LispCons two = (LispCons) LispReader.readFromString("((#1=(n) (foo #1#)) ((foo #1#) #1#) #2=(foo) (a #2#))");
+		Map<LispVal, LispVal> copies = new IdentityHashMap<>();
+		LispCons plain = (LispCons) two.car();
+		LispVal rewritten = LispTrees.rewriteDatumSymbols(plain, qualify, copies);
+		assertThat(((LispCons) rewritten).car()).isSameAs(plain.car());
+		LispCons third = (LispCons) ((LispCons) ((LispCons) two.cdr()).cdr()).car();
+		LispCons fourth = (LispCons) ((LispCons) ((LispCons) ((LispCons) two.cdr()).cdr()).cdr()).car();
+		assertThat(((LispCons) LispTrees.rewriteDatumSymbols(fourth, qualify, copies)).cdr()).isInstanceOfSatisfying(
+				LispCons.class,
+				cell -> assertThat(cell.car()).isSameAs(LispTrees.rewriteDatumSymbols(third, qualify, copies)));
+	}
+
+	@Test
+	void aHiddenNamesListNeverReadsAsAReadTimeMarker() {
+		// (%READ-EVAL X) as a tail of the list would evaluate X, a name of the datum.
+		LispCons marker = new LispCons(new LispSymbol(LispNames.READ_EVAL),
+				new LispCons(new LispSymbol("BACK"), LispNil.INSTANCE));
+		LispVal circle = LispReader.readFromString("#1=(x #1#)");
+		((LispCons) circle).setCar(marker);
+		LispCons shielded = (LispCons) LispTrees.shieldProgramForm(circle);
+		LispCons names = (LispCons) ((LispCons) ((LispCons) shielded.cdr()).car()).cdr();
+		assertThat(names.car().print()).isEqualTo("(BACK)");
 	}
 
 	@Test

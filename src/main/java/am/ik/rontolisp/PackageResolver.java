@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -122,6 +123,19 @@ public final class PackageResolver {
 
 	/** Whether the form being resolved is data, not source ({@link #resolveDatum}). */
 	private boolean resolvingDatum = false;
+
+	/**
+	 * What the quoted nodes resolved so far became, under {@link #datumCopiesPackage}: a
+	 * {@code #n=} label is one object in every quote of its form, and a macro's constant
+	 * in every quote of its program (CLHS 2.4.8.15, 3.2.4.4). It lives while
+	 * {@link #datumCopiesHeld} is above zero: a call of {@link #resolve}, or a whole
+	 * program, since the compile path has flattened a top-level {@code progn} by then.
+	 */
+	private final Map<LispVal, LispVal> datumCopies = new IdentityHashMap<>();
+
+	private @Nullable String datumCopiesPackage;
+
+	private int datumCopiesHeld;
 
 	/**
 	 * Whether a name this resolver mints while reading source joins the member table of
@@ -249,6 +263,7 @@ public final class PackageResolver {
 		this.programLocalNicknames = nicknames;
 		this.programComputesLocalNicknames = computed[0];
 		this.inProgramResolution = true;
+		this.datumCopiesHeld++;
 		try {
 			List<LispVal> out = new ArrayList<>(program.size());
 			for (LispVal form : program) {
@@ -258,6 +273,7 @@ public final class PackageResolver {
 		}
 		finally {
 			this.inProgramResolution = false;
+			releaseDatumCopies();
 		}
 	}
 
@@ -326,6 +342,20 @@ public final class PackageResolver {
 	 */
 	public boolean runtimePackagesMutable() {
 		return this.runtimePackagesMutable;
+	}
+
+	/**
+	 * Whether the registry holds a package no compile starts with: one a
+	 * {@code defpackage} of the program made.
+	 * @return {@code true} when a package is the program's own
+	 */
+	public synchronized boolean definesPackages() {
+		for (String name : this.registry.designatorTable().values()) {
+			if (!PackageRegistry.isBuiltinPackageName(name)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -535,6 +565,30 @@ public final class PackageResolver {
 	 * @return the resolved form
 	 */
 	public synchronized LispVal resolve(LispVal form) {
+		this.datumCopiesHeld++;
+		try {
+			return resolveTopLevelForm(form);
+		}
+		finally {
+			releaseDatumCopies();
+		}
+	}
+
+	/**
+	 * Keeps what the quoted nodes became across every later call, for a caller resolving
+	 * one program a form at a time on a resolver of its own.
+	 */
+	public synchronized void holdDatumCopies() {
+		this.datumCopiesHeld++;
+	}
+
+	private void releaseDatumCopies() {
+		if (--this.datumCopiesHeld == 0 && !this.datumCopies.isEmpty()) {
+			this.datumCopies.clear();
+		}
+	}
+
+	private LispVal resolveTopLevelForm(LispVal form) {
 		// A token first reads through the current package's own nicknames, what the
 		// reader does before it looks anything else up. What is not a token stays as it
 		// is: a datum's symbols are symbols already, and the implementation's forms name
@@ -2955,7 +3009,17 @@ public final class PackageResolver {
 	// the same object: rebuilding one used to make its (quote ...) form -- and every
 	// ancestor of that -- a fresh cons the provenance table has never seen.
 	private LispVal resolveQuotedData(LispVal datum) {
-		return LispTrees.rewriteDatumSymbols(datum, this::resolveSymbol);
+		if (this.datumCopiesHeld == 0) {
+			return LispTrees.rewriteDatumSymbols(datum, this::resolveSymbol);
+		}
+		// A name reads as another symbol under another package: a copy is good for the
+		// package it was made under.
+		String current = current();
+		if (!current.equals(this.datumCopiesPackage)) {
+			this.datumCopies.clear();
+			this.datumCopiesPackage = current;
+		}
+		return LispTrees.rewriteDatumSymbols(datum, this::resolveSymbol, this.datumCopies);
 	}
 
 	private LispVal resolveSymbol(LispSymbol sym) {
@@ -3449,6 +3513,11 @@ public final class PackageResolver {
 				}
 				return canonical(pkg, qn.member()).name();
 			}
+		}
+		if ("keyword".equals(current())) {
+			// (let ((*package* (find-package :keyword))) (read-from-string "foo")): the
+			// package keeps no table, and every name in it is its keyword.
+			return ":" + name;
 		}
 		if (("T".equals(name) || "NIL".equals(name)) && currentUsesCl()) {
 			// The reader never mints PKG::T -- t and nil read as the singletons in every
@@ -4408,7 +4477,12 @@ public final class PackageResolver {
 		return LispNames.CL_USER_PKG.equals(current()) && clUserIsPristine();
 	}
 
-	private boolean clUserIsPristine() {
+	/**
+	 * Whether {@code cl-user} is as the registry seeded it: using only {@code cl},
+	 * importing and shadowing nothing, with no nickname of its own.
+	 * @return {@code true} when no qualified symbol can be accessible in it
+	 */
+	public synchronized boolean clUserIsPristine() {
 		LispPackage clUser = this.registry.get(LispNames.CL_USER_PKG);
 		return clUser != null && clUser.useList().equals(List.of(LispNames.CL_PKG)) && clUser.imports().isEmpty()
 				&& clUser.shadows().isEmpty() && !this.clUserNicknamed;

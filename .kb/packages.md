@@ -325,7 +325,7 @@ whose raw qualifier is a nickname of the current package becomes a token of the 
 downstream of it asks the table for a symbol (`resolveQualified` never did). Raw, because
 `splitQualified` normalizes a built-in nickname (`BT`, `LA`, `RL`) statically. A datum
 (`resolveDatum`) and the implementation's forms (`probing`) are not tokens. A run-time read:
-`readSpelling` on the interpreter. Every package designator goes through `findPackageName`, the
+`readSpelling` on the interpreter, `%read-home` on the compile paths. Every package designator goes through `findPackageName`, the
 current package's table first; `findGlobalPackageName` is the same past it, for what is a package's
 name already (a symbol's qualifier, `homeOf`, the backends' table builds, whose current package is
 merely the program's last).
@@ -362,8 +362,8 @@ newest first (a nil target removes, a nil nickname forgets what is behind it), w
 do the definitions taking a designator by its spelling (`%baked-package-find`,
 `%runtime-package-find`, `%symbol-in-package`, `rename-package`, `delete-package`, the last two
 updating it), the printer (`%pc-qualifier`, lowered to the text itself without nicknames) and every
-run-time read, through `expandReadFromStringFailure` (a walk over the datum: the emitted readers
-spell a token as they read it). A program whose forms ask nothing drops the entries and carries
+run-time read, through `%read-home` (`.kb/read-load-streams.md`, "A symbol token reads in the current
+package"). A program whose forms ask nothing drops the entries and carries
 nothing; one with no nickname is unchanged. A designator literal that some package has as a nickname
 (`collectLocalNicknameNames`) does not fold: `find-package` stays a call, and `intern`, `find-symbol`,
 `package-use-list` and `package-used-by-list` become `(if (%local-nickname-find "N") (op ... (find-package
@@ -451,7 +451,10 @@ So does `resolveForm` with a literal in code position: a `#S(...)` (type name an
 names match by base name) and a `#(...)`/`#nA(...)` evaluate to themselves, so what they hold is data
 too. All of it is one walk, `LispTrees.rewriteDatumSymbols`, which `readThrough` (local nicknames)
 takes as well: a `#n=` label's sharing and circle survive, in a car, a tail, an array or a `#S`, and a datum
-that does not change comes back as the same object. Pinned by ci-spec
+that does not change comes back as the same object. Only a node with a path to a symbol that changes is
+copied, so a node reads the same from every datum holding it; `PackageResolver` keeps the copies for a form
+(`resolve`) or a program (`resolveProgram`, `holdDatumCopies`, since the compile path has flattened a top-level
+`progn`), under one current package, which is what makes a label one object across two quotes. Pinned by ci-spec
 `a-literal-holds-symbols-of-the-current-package`, `LispTreesTest#rewriteDatumSymbolsKeepsTheShapeOfTheDatum`.
 
 The walk cannot tell a `#.` value from source, since the value is spliced before resolution: a bare
@@ -662,9 +665,8 @@ parser (`(read-from-string (format nil "get-afm-~A" ...))`) called `CL-USER::GET
 Reader-synthesized symbols (`quote`, the backquote operators, `ReaderSymbols`,
 [defmacro-backquote.md](defmacro-backquote.md)) and `#.` values are not tokens and
 are not homed; a token qualified by an unknown package keeps its spelling. The compiled
-backends' run-time reader stays package-blind
-(`.kb/symbol-runtime-api.md`, "1-arg `intern`"), but for the qualifiers of `cl` and `cl-user`, which it
-drops (`.kb/pretty-printer.md`, "The package qualifier"). Pinned by `LispEvaluatorTest#evalMacroCallInAFunctionBodyExpandsInThePackageTheBodyWasReadIn`,
+backends' run-time reader does the same (`.kb/read-load-streams.md`, "A symbol token reads in the
+current package"). Pinned by `LispEvaluatorTest#evalMacroCallInAFunctionBodyExpandsInThePackageTheBodyWasReadIn`,
 ci-spec `expansion-time-read-homes-in-the-macro-package`,
 `LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions` (a `load` from a defun), `TriviaE2eTest`,
 `SxqlE2eTest`.

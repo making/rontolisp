@@ -1936,10 +1936,8 @@ final class WasmExprCompiler {
 				}
 				else {
 					// Malformed text signals (expandReadFromStringFailure).
-					compileExpansion(
-							LispMacroExpander.expandReadFromStringFailure(cons,
-									ctx.hasLandingPad && ctx.instanceTypeIndex >= 0, ctx.functions::containsKey),
-							ctx, tail);
+					compileExpansion(LispMacroExpander.expandReadFromStringFailure(cons,
+							ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx, tail);
 				}
 			}
 			case LispNames.READ_FROM_STRING_RAW_INTERNAL -> WasmReadFromStringCompiler.compile(cons, ctx);

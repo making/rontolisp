@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.LiteralArrayRuns;
 import am.ik.rontolisp.compiler.QuotedGraph;
+import am.ik.rontolisp.compiler.QuotedSharing;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -69,11 +70,50 @@ final class WasmQuoteCompiler {
 	 * every one filled, so a named node inside a filling answers the one object.
 	 */
 	private static void compileDatum(LispVal datum, WasmLispCompiler.Ctx ctx) {
-		QuotedGraph graph = QuotedGraph.of(datum);
+		QuotedGraph graph = ctx.quoteGlobals.graphOf(datum);
 		if (graph == null) {
-			compileQuotedVal(datum, ctx);
+			buildQuotedVal(datum, ctx);
 			return;
 		}
+		QuotedGraph savedGraph = ctx.quotedGraph;
+		int savedNames = ctx.quotedNames;
+		emitNamedNodes(graph, ctx);
+		if (graph.nameOf(datum) >= 0) {
+			emitNamedNode(graph.nameOf(datum), ctx);
+		}
+		else {
+			buildQuotedVal(datum, ctx);
+		}
+		ctx.quotedGraph = savedGraph;
+		ctx.quotedNames = savedNames;
+	}
+
+	/**
+	 * Reads a node from the unit it is an entry of ({@link QuotedSharing}): the unit's
+	 * global holds the bucket array of its named nodes, built whole by whichever site
+	 * runs first.
+	 */
+	private static void emitUnitRead(LispVal node, QuotedGraph unit, WasmLispCompiler.Ctx ctx) {
+		emitSlot(unit.named().getFirst(), ctx, () -> {
+			QuotedGraph savedGraph = ctx.quotedGraph;
+			int savedNames = ctx.quotedNames;
+			emitNamedNodes(unit, ctx);
+			getLocal(ctx, ctx.quotedNames);
+			ctx.quotedGraph = savedGraph;
+			ctx.quotedNames = savedNames;
+		});
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		i32Const(ctx, unit.nameOf(node));
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	/**
+	 * Makes a graph current, with its named nodes in a new local: every one made empty,
+	 * then every one filled.
+	 */
+	private static void emitNamedNodes(QuotedGraph graph, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> named = graph.named();
 		ctx.quotedGraph = graph;
 		ctx.quotedNames = ctx.allocTemp();
@@ -118,8 +158,6 @@ final class WasmQuoteCompiler {
 				}
 			}
 		}
-		compileQuotedVal(datum, ctx);
-		ctx.quotedGraph = null;
 	}
 
 	private static void emitConsFieldSet(int name, int field, LispVal value, WasmLispCompiler.Ctx ctx) {
@@ -141,7 +179,7 @@ final class WasmQuoteCompiler {
 
 	private static boolean isNamed(LispVal val, WasmLispCompiler.Ctx ctx) {
 		QuotedGraph graph = ctx.quotedGraph;
-		return graph != null && graph.nameOf(val) >= 0;
+		return graph != null && graph.stopsAt(val);
 	}
 
 	/**
@@ -154,7 +192,16 @@ final class WasmQuoteCompiler {
 	 * @param build emits the construction, leaving exactly one value on the stack
 	 */
 	private static void emitSharedConstant(LispVal datum, WasmLispCompiler.Ctx ctx, Runnable build) {
-		int global = ctx.quoteGlobals.indexFor(datum);
+		QuotedGraph unit = ctx.quoteGlobals.unitOf(datum);
+		if (unit != null) {
+			emitUnitRead(datum, unit, ctx);
+			return;
+		}
+		emitSlot(datum, ctx, build);
+	}
+
+	private static void emitSlot(LispVal key, WasmLispCompiler.Ctx ctx, Runnable build) {
+		int global = ctx.quoteGlobals.indexFor(key);
 		ctx.writer.write(Instruction.GET_GLOBAL);
 		ctx.writer.writeUnsignedLeb128(global);
 		ctx.writer.write(Instruction.REF_IS_NULL);
@@ -602,10 +649,17 @@ final class WasmQuoteCompiler {
 
 	private static void compileQuotedVal(LispVal val, WasmLispCompiler.Ctx ctx) {
 		QuotedGraph graph = ctx.quotedGraph;
-		int name = (graph != null) ? graph.nameOf(val) : -1;
-		if (name >= 0) {
-			emitNamedNode(name, ctx);
-			return;
+		if (graph != null) {
+			int name = graph.nameOf(val);
+			if (name >= 0) {
+				emitNamedNode(name, ctx);
+				return;
+			}
+			QuotedGraph unit = graph.unitOf(val);
+			if (unit != null) {
+				emitUnitRead(val, unit, ctx);
+				return;
+			}
 		}
 		buildQuotedVal(val, ctx);
 	}

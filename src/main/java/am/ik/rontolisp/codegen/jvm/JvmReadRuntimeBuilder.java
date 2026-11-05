@@ -275,6 +275,21 @@ final class JvmReadRuntimeBuilder {
 
 	private final @Nullable ReadBaseVar readBaseVar;
 
+	/**
+	 * The {@code %read-home} defun a program that can read under a package other than the
+	 * pristine {@code cl-user} carries ({@code LispMacroExpander.injectReadHome}).
+	 *
+	 * @param method its static method
+	 * @param bounces whether that method may answer a trampoline bounce, and so takes the
+	 * value-tail depth too ({@link JvmTailBounce})
+	 */
+	record ReadHome(MethodRefEntry method, boolean bounces) {
+	}
+
+	private final @Nullable ReadHome readHome;
+
+	private final @Nullable MethodRefEntry rdHome;
+
 	private final @Nullable MethodRefEntry readBaseNow;
 
 	private final @Nullable MethodRefEntry rdRational;
@@ -285,9 +300,10 @@ final class JvmReadRuntimeBuilder {
 			ClassEntry objectArrayClass, ClassEntry stringClass, MethodRefEntry longValueOf,
 			MethodRefEntry doubleValueOf, MethodRefEntry stringCharAt, MethodRefEntry stringLength,
 			MethodRefEntry stringSubstring, MethodRefEntry objectEquals, boolean emitLoad, boolean instances,
-			@Nullable FieldRefEntry pathnameLayout, @Nullable ReadBaseVar readBaseVar) {
+			@Nullable FieldRefEntry pathnameLayout, @Nullable ReadBaseVar readBaseVar, @Nullable ReadHome readHome) {
 		this.pathnameLayout = pathnameLayout;
 		this.readBaseVar = readBaseVar;
+		this.readHome = readHome;
 		this.cp = cp;
 		this.thisClass = thisClass;
 		this.objectClass = objectClass;
@@ -328,6 +344,8 @@ final class JvmReadRuntimeBuilder {
 		this.classify = methodref("_classify", "(Ljava/lang/String;)Ljava/lang/Object;");
 		this.rdEscaped = methodref("_rdEscaped", "(Ljava/lang/String;)Ljava/lang/Object;");
 		this.rdStandardSpelling = methodref("_rdStandardSpelling", "(Ljava/lang/String;)Ljava/lang/String;");
+		this.rdHome = readHome == null ? null
+				: methodref("_rdHome", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;");
 		this.characterToUpperCase = cp.methodRef(characterClass, "toUpperCase", "(C)C");
 		this.readBaseNow = readBaseVar == null ? null : methodref("_readBaseNow", "()I");
 		this.rdRational = readBaseVar == null ? null : methodref("_rdRational", "(Ljava/lang/String;I)Z");
@@ -411,10 +429,10 @@ final class JvmReadRuntimeBuilder {
 			ClassEntry objectArrayClass, ClassEntry stringClass, MethodRefEntry longValueOf,
 			MethodRefEntry doubleValueOf, MethodRefEntry stringCharAt, MethodRefEntry stringLength,
 			MethodRefEntry stringSubstring, MethodRefEntry objectEquals, boolean emitLoad, boolean instances,
-			@Nullable FieldRefEntry pathnameLayout, @Nullable ReadBaseVar readBaseVar) {
+			@Nullable FieldRefEntry pathnameLayout, @Nullable ReadBaseVar readBaseVar, @Nullable ReadHome readHome) {
 		return new JvmReadRuntimeBuilder(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf,
 				doubleValueOf, stringCharAt, stringLength, stringSubstring, objectEquals, emitLoad, instances,
-				pathnameLayout, readBaseVar);
+				pathnameLayout, readBaseVar, readHome);
 	}
 
 	private MethodRefEntry methodref(String name, String desc) {
@@ -434,10 +452,12 @@ final class JvmReadRuntimeBuilder {
 	 * @param objectClass {@code java/lang/Object}
 	 * @param objectArrayClass {@code [Ljava/lang/Object;}
 	 * @param stringClass {@code java/lang/String}
+	 * @param homing whether the reader asks {@code %read-home} for a symbol token
 	 * @return the code chunk (no trailing RETURN)
 	 */
 	static MethodCode structTableClinit(ConstantPool cp, ClassEntry thisClass, JvmLispCompiler.LayoutPool pool,
-			ClosRegistry registry, ClassEntry objectClass, ClassEntry objectArrayClass, ClassEntry stringClass) {
+			ClosRegistry registry, ClassEntry objectClass, ClassEntry objectArrayClass, ClassEntry stringClass,
+			boolean homing) {
 		FieldRefEntry field = cp.fieldRef(thisClass, STRUCT_TABLE_FIELD, STRUCT_TABLE_DESC);
 		// The PATHNAME layout is not a #S-readable type (its literal syntax is #P,
 		// which resolves through the fixed layout, never through this directory) --
@@ -478,7 +498,7 @@ final class JvmReadRuntimeBuilder {
 				a.loadConstant(2);
 				a.getstatic(layoutField);
 				a.aastore();
-				@Nullable String[] inits = EmittedReaderInitforms.initTexts(layout, false);
+				@Nullable String[] inits = EmittedReaderInitforms.initTexts(layout, false, homing);
 				a.dup();
 				a.loadConstant(3);
 				a.loadConstant(inits.length);
@@ -559,6 +579,10 @@ final class JvmReadRuntimeBuilder {
 		ms.add(new ReadMethod(this.cp.utf8Entry("_rdF"), this.cp.utf8Entry("(Ljava/lang/Object;)D"), buildRdF()));
 		ms.add(new ReadMethod(this.cp.utf8Entry("_rdInferRank"), this.cp.utf8Entry("(Ljava/lang/Object;)I"),
 				buildRdInferRank()));
+		if (this.readHome != null) {
+			ms.add(new ReadMethod(this.cp.utf8Entry("_rdHome"),
+					this.cp.utf8Entry("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;"), buildRdHome()));
+		}
 		if (this.readBaseVar != null) {
 			ms.add(new ReadMethod(this.cp.utf8Entry("_readBaseNow"), this.cp.utf8Entry("()I"), buildReadBaseNow()));
 			ms.add(new ReadMethod(this.cp.utf8Entry("_rdRational"), this.cp.utf8Entry("(Ljava/lang/String;I)Z"),
@@ -886,45 +910,53 @@ final class JvmReadRuntimeBuilder {
 		a.goto_(notDot);
 	}
 
+	// _readList: cursor just past "(". A loop over the elements, so a list's length costs
+	// no stack: only its nesting does.
 	private MethodCode buildReadList() {
 		MethodCode a = new MethodCode();
-		MethodCode.Label retNull = a.newLabel();
+		MethodCode.Label loop = a.newLabel();
 		MethodCode.Label cont = a.newLabel();
-		MethodCode.Label firstIsDot = a.newLabel();
-		MethodCode.Label firstNotDot = a.newLabel();
-		MethodCode.Label notDot = a.newLabel();
 		MethodCode.Label isDot = a.newLabel();
+		MethodCode.Label notDot = a.newLabel();
+		MethodCode.Label hasCar = a.newLabel();
 		MethodCode.Label tailEof = a.newLabel();
 		MethodCode.Label tooMany = a.newLabel();
-		MethodCode.Label build = a.newLabel();
+		MethodCode.Label answer = a.newLabel();
+		MethodCode.Label link = a.newLabel();
+		MethodCode.Label linked = a.newLabel();
+		MethodCode.Label eof = a.newLabel();
+		a.aconst_null();
+		a.astore(2); // head
+		a.aconst_null();
+		a.astore(3); // the last cell
+		a.labelBinding(loop);
 		a.invokestatic(this.readSkipWs);
 		pos(a);
 		srcLen(a);
-		a.if_icmpge(retNull);
+		a.if_icmpge(eof);
 		charAtPos(a);
 		a.loadConstant(')');
 		a.if_icmpne(cont);
 		advance(a);
-		a.aconst_null();
-		a.areturn();
+		a.goto_(answer);
 		a.labelBinding(cont);
+		emitDotTokenTest(a, isDot, notDot);
+		a.labelBinding(isDot);
 		// A '.' token ahead of every element has no car to be the cdr of.
-		emitDotTokenTest(a, firstIsDot, firstNotDot);
-		a.labelBinding(firstIsDot);
+		a.aload(3);
+		a.ifnonnull(hasCar);
 		recordError(a, ReadFailure.NOTHING_BEFORE_DOT);
 		a.aconst_null();
 		a.areturn();
-		a.labelBinding(firstNotDot);
-		a.invokestatic(this.readExpr);
-		a.astore(0); // car
+		a.labelBinding(hasCar);
 		// Dotted pair: a standalone '.' token puts the next datum directly in the
 		// final cdr, mirroring the compile-time reader: (a . b).
-		a.invokestatic(this.readSkipWs);
-		emitDotTokenTest(a, isDot, notDot);
-		a.labelBinding(isDot);
 		advance(a); // consume '.'
+		a.aload(3);
+		a.checkcast(this.objectArrayClass);
+		a.loadConstant(1);
 		a.invokestatic(this.readExpr);
-		a.astore(1); // cdr = the dotted tail
+		a.aastore();
 		a.invokestatic(this.readSkipWs);
 		pos(a);
 		srcLen(a);
@@ -933,34 +965,46 @@ final class JvmReadRuntimeBuilder {
 		a.loadConstant(')');
 		a.if_icmpne(tooMany);
 		advance(a); // consume ')'
-		a.goto_(build);
+		a.goto_(answer);
 		a.labelBinding(tooMany);
 		// a second object where the dotted list's ')' was due
 		recordError(a, ReadFailure.MORE_THAN_ONE_AFTER_DOT);
-		a.goto_(build);
+		a.goto_(answer);
 		a.labelBinding(tailEof);
 		// the text ends before the dotted list's ')'
 		markEof(a);
-		a.goto_(build);
+		a.labelBinding(answer);
+		a.aload(2);
+		a.areturn();
 		a.labelBinding(notDot);
-		a.invokestatic(this.readList);
-		a.astore(1); // cdr
-		a.labelBinding(build);
+		a.invokestatic(this.readExpr);
+		a.astore(0); // car
 		a.loadConstant(2);
 		a.anewarray(this.objectClass);
-		a.dup();
+		a.astore(4); // the new cell
+		a.aload(4);
 		a.loadConstant(0);
 		a.aload(0);
 		a.aastore();
-		a.dup();
+		a.aload(3);
+		a.ifnonnull(link);
+		a.aload(4);
+		a.astore(2);
+		a.goto_(linked);
+		a.labelBinding(link);
+		a.aload(3);
+		a.checkcast(this.objectArrayClass);
 		a.loadConstant(1);
-		a.aload(1);
+		a.aload(4);
 		a.aastore();
-		a.areturn();
-		a.labelBinding(retNull);
+		a.labelBinding(linked);
+		a.aload(4);
+		a.astore(3);
+		a.goto_(loop);
+		a.labelBinding(eof);
 		// the text ends before the list's ')'
 		markEof(a);
-		a.aconst_null();
+		a.aload(2);
 		a.areturn();
 		return a;
 	}
@@ -1115,6 +1159,10 @@ final class JvmReadRuntimeBuilder {
 		a.labelBinding(done);
 		a.aload(1);
 		a.invokevirtual(this.sbToString);
+		if (this.rdHome != null) {
+			a.astore(1); // the token, for _rdHome
+			a.aload(1);
+		}
 		a.invokestatic(this.rdStandardSpelling);
 		a.astore(0);
 		a.aload(0);
@@ -1125,6 +1173,68 @@ final class JvmReadRuntimeBuilder {
 		a.areturn();
 		a.labelBinding(notNil);
 		a.aload(0);
+		if (this.rdHome != null) {
+			a.aload(1);
+			a.invokestatic(this.rdHome);
+		}
+		a.areturn();
+		return a;
+	}
+
+	// _rdHome(String spelled, String token): the symbol a token names, from what
+	// _rdStandardSpelling made of it: a token a standard qualifier named is spelled
+	// already, a keyword is its own, and a colon past a qualifier's names nothing of any
+	// package. Any other asks %read-home, a qualified one with its qualifier as a symbol.
+	// An empty token is cl-user's empty name by its spelling alone, and homes like any
+	// bare one.
+	private MethodCode buildRdHome() {
+		ReadHome home = java.util.Objects.requireNonNull(this.readHome);
+		MethodCode a = new MethodCode();
+		MethodCode.Label ask = a.newLabel();
+		MethodCode.Label asIs = a.newLabel();
+		MethodCode.Label bare = a.newLabel();
+		MethodCode.Label call = a.newLabel();
+		a.aload(0);
+		a.aload(1);
+		a.if_acmpeq(ask);
+		a.aload(1);
+		a.invokevirtual(this.stringLength);
+		a.ifeq(ask);
+		a.labelBinding(asIs);
+		a.aload(0);
+		a.areturn();
+		a.labelBinding(ask);
+		a.aload(1);
+		a.loadConstant((int) ':');
+		a.invokevirtual(this.stringIndexOf);
+		a.istore(2);
+		a.iload(2);
+		a.ifeq(asIs);
+		a.aload(1);
+		a.loadConstant((int) ':');
+		a.invokevirtual(this.stringLastIndexOf);
+		a.iload(2);
+		a.loadConstant(1);
+		a.iadd();
+		a.if_icmpgt(asIs);
+		a.aload(0);
+		a.iload(2);
+		a.iflt(bare);
+		a.aload(1);
+		a.loadConstant(0);
+		a.iload(2);
+		a.invokevirtual(this.stringSubstring);
+		a.goto_(call);
+		a.labelBinding(bare);
+		a.aconst_null();
+		a.labelBinding(call);
+		if (home.bounces()) {
+			a.loadConstant(0);
+		}
+		a.invokestatic(home.method());
+		if (home.bounces()) {
+			JvmTailBounce.unwrapRaw(a, this.cp, this.thisClass);
+		}
 		a.areturn();
 		return a;
 	}
@@ -1586,6 +1696,10 @@ final class JvmReadRuntimeBuilder {
 		if (this.readBaseVar != null) {
 			emitReadBaseArm(a);
 		}
+		if (this.rdHome != null) {
+			a.aload(0);
+			a.astore(11); // the token, for _rdHome
+		}
 		a.aload(0);
 		a.invokestatic(this.rdStandardSpelling);
 		a.astore(0);
@@ -2015,6 +2129,10 @@ final class JvmReadRuntimeBuilder {
 		a.areturn(); // bi (BigInteger) still on stack
 		a.labelBinding(sym);
 		a.aload(10);
+		if (this.rdHome != null) {
+			a.aload(11);
+			a.invokestatic(this.rdHome);
+		}
 		a.areturn();
 		return a;
 	}

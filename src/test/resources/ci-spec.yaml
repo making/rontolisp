@@ -7248,6 +7248,25 @@ cases:
       (0.5 5 5 1/2 5.0)
   # read-from-string answers the FIRST datum and never looks past it: a token ended by a
   # ')' that closes nothing, and text after the datum that would not read, are not errors.
+  # A list's length costs a run-time reader no stack, only its nesting does: a reader
+  # recursing on the tail overflowed at 12,000 elements under wasmtime, and at 100,000 on a
+  # JVM. SBCL agrees.
+  - name: runtime-read-of-a-long-list
+    source: |
+      (let* ((text (with-output-to-string (s)
+                     (write-string "(" s)
+                     (dotimes (i 100000) (write-string "a " s))
+                     (write-string ". b)" s)))
+             (dotted (read-from-string text))
+             (proper (read-from-string (concatenate 'string (subseq text 0 (- (length text) 4)) ")")))
+             (vec (read-from-string (concatenate 'string "#" (subseq text 0 (- (length text) 4)) ")"))))
+        (print (list (length proper) (car dotted) (cdr (last dotted)) (length vec)
+                     (handler-case (read-from-string (subseq text 0 (- (length text) 4))) (end-of-file () :eof))
+                     (handler-case (read-from-string "( . a)") (reader-error () :before-dot))
+                     (handler-case (read-from-string "(a . b c)") (reader-error () :after-dot))
+                     (read-from-string "()") (read-from-string "(a (b (c) . d) e . f)"))))
+    expected: |
+      (100000 A B 100000 :EOF :BEFORE-DOT :AFTER-DOT NIL (A (B (C) . D) E . F))
   - name: runtime-read-stops-after-the-first-datum
     source: |
       (print (read-from-string "5.)"))
@@ -8969,6 +8988,144 @@ cases:
       T
       T
       M
+      T
+      T
+      T
+  - name: reader-label-shared-between-quote-sites
+    source: |
+      (defstruct ci-lbs-pt x)
+      (defmacro ci-lbs-two (x) `(list ',x ',(list x)))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (defparameter *ci-lbs-shared* (list 'shared)))
+      (defmacro ci-lbs-const-1 () (list 'quote (list *ci-lbs-shared*)))
+      (defmacro ci-lbs-const-2 () (list 'quote (list 1 *ci-lbs-shared*)))
+      (print (let ((a '(#1=(x))) (b '(#1#))) (eq (car a) (car b))))
+      (print (let ((a '(#2=(x))) (b '#2#)) (eq (car a) b)))
+      (print (eq '#3=(x) '#3#))
+      ;; across functions, a write through one site seen from the other
+      (progn
+        (defun ci-lbs-f () '(#4=(s) 1))
+        (defun ci-lbs-g () '(2 #4#)))
+      (print (eq (car (ci-lbs-f)) (cadr (ci-lbs-g))))
+      (print (progn (setf (car (car (ci-lbs-f))) 'w) (cadr (ci-lbs-g))))
+      ;; a tail, a whole datum inside another, whichever runs first
+      (progn
+        (defun ci-lbs-h () '(a . #5=(u v)))
+        (defun ci-lbs-i () '(b . #5#))
+        (defun ci-lbs-j () '#5#))
+      (print (list (eq (cdr (ci-lbs-i)) (ci-lbs-j)) (eq (cdr (ci-lbs-h)) (cdr (ci-lbs-i)))))
+      ;; an array, an instance, a packed array
+      (print (let ((a '(#6=#(x y))) (b '#(#6#))) (eq (car a) (aref b 0))))
+      (print (let ((a '(#7=#S(ci-lbs-pt :x 1))) (b '#7#)) (eq (car a) b)))
+      (print (let ((a '(#8=#d(1.0d0))) (b '(#8#))) (eq (car a) (car b))))
+      ;; a circle between two sites, entered from either
+      (progn
+        (defun ci-lbs-k () '#9=(a #10=(b #9#)))
+        (defun ci-lbs-l () '#10#))
+      (print (list (eq (cadr (ci-lbs-l)) (ci-lbs-k)) (eq (cadr (ci-lbs-k)) (ci-lbs-l))))
+      (print (let ((a '(z #11=(c . #11#))) (b '#11#)) (list (eq (cadr a) b) (eq (cdr b) b))))
+      (print (let ((a '#12=#S(ci-lbs-pt :x (y #12#))) (b '(#12#))) (eq a (car b))))
+      (print (let ((a '#13=#(#14=#(1) #13#)) (b '#14#)) (list (eq (aref a 0) b) (eq (aref a 1) a))))
+      ;; nodes reached from a site's own, and nodes connected through a third site
+      (print (let ((a '(#15=(p #16=(q)) #17=(r))) (b '(#16# #17#)) (c '#15#))
+               (list (eq (car b) (cadr c)) (eq (cadr b) (cadr a)) (eq (car a) c))))
+      ;; a macro's sharing, within a form and across two
+      (print (let ((v (ci-lbs-two (m)))) (eq (car v) (caadr v))))
+      (defun ci-lbs-n () (ci-lbs-const-1))
+      (defun ci-lbs-o () (ci-lbs-const-2))
+      (print (eq (car (ci-lbs-n)) (cadr (ci-lbs-o))))
+      ;; past one builder's budget: a node, a spine reaching one, a circle
+      (progn
+        (defun ci-lbs-big-a () '(head #18=#.(make-list 300 :initial-element 7)))
+        (defun ci-lbs-big-b () '#18#))
+      (print (list (eq (cadr (ci-lbs-big-a)) (ci-lbs-big-b)) (length (ci-lbs-big-b))))
+      (print (let ((a '#.(append (make-list 300 :initial-element 'sym) '(#19=(end)))) (b '#19#))
+               (eq (nth 300 a) b)))
+      (progn
+        (defun ci-lbs-c-a () '#20=(#.(make-list 300 :initial-element 7) #21=(back #20#)))
+        (defun ci-lbs-c-b () '#21#))
+      (print (eq (cadr (ci-lbs-c-b)) (ci-lbs-c-a)))
+      ;; a closure, a local function, a handler's clause, a top-level progn
+      (progn
+        (defconstant +ci-lbs-c+ '(#22=(k)))
+        (defun ci-lbs-m () (lambda () '#22#)))
+      (print (eq (car +ci-lbs-c+) (funcall (ci-lbs-m))))
+      (print (flet ((f () '(#23=(l))) (g () '#23#)) (eq (car (f)) (g))))
+      (print (let ((a '#24=(h))) (handler-case (error "x") (error () (eq a '#24#)))))
+      (progn
+        (defparameter *ci-lbs-a* '#25=(top))
+        (defparameter *ci-lbs-b* '(#25#)))
+      (print (eq *ci-lbs-a* (car *ci-lbs-b*)))
+      ;; what an array literal holds outlives the fresh array; an array in it does not
+      (print (let ((a #(#26=(e))) (b '#26#)) (eq (aref a 0) b)))
+      (print (let ((a #(#(#27=(e)))) (b '#27#)) (eq (aref (aref a 0) 0) b)))
+      (print (let ((a #(#28=(e) (f #28#)))) (eq (aref a 0) (cadr (aref a 1)))))
+      (defun ci-lbs-fresh () #((k)))
+      (print (list (eq (ci-lbs-fresh) (ci-lbs-fresh)) (eq (aref (ci-lbs-fresh) 0) (aref (ci-lbs-fresh) 0))))
+      (print (let ((a #(#29=#(v))) (b '#29#)) (eq (aref a 0) b)))
+      (print (let ((a '(#34=#(v))) (b '(1 #34#)) (c #34#)) (list (eq (car a) (cadr b)) (eq c (car a)))))
+      ;; a label on a #. names one value, and a #. in a circle or a literal is read
+      (print (let ((a '(#30=#.(list 1 2) #30#))) (eq (car a) (cadr a))))
+      (print (let ((a '#31=#.(list 1 2)) (b '(#31#))) (eq a (car b))))
+      (print (list (car '#32=(#.(+ 1 2) #32#)) (let ((a '#33=#(#.(+ 1 2) #33#))) (aref a 0))
+                   (aref '#(#.(+ 1 2)) 0) (ci-lbs-pt-x #S(ci-lbs-pt :x #.(+ 1 2)))))
+      ;; under a package, where the symbols of a datum are rewritten
+      (defpackage :ci-lbs-p (:use :cl))
+      (in-package :ci-lbs-p)
+      (defstruct ci-lbs-qt x)
+      (print (eq '#1=(x) '#1#))
+      (print (let ((a '(#2=(x))) (b '(#2#))) (eq (car a) (car b))))
+      (print (let ((a '(#3=(1 2))) (b '(foo #3#))) (eq (car a) (cadr b))))
+      (print (let ((a '(foo #4=(1 2))) (b '#4#)) (eq (cadr a) b)))
+      (print (let ((a '(1 #5=(bar))) (b '(foo #5#)))
+               (list (eq (cadr a) (cadr b)) (package-name (symbol-package (car (cadr a)))))))
+      (print (let ((a '#6=(foo #6#)) (b '#6#)) (list (eq a b) (eq a (cadr b)))))
+      (print (let ((a '#7=#(foo #7#)) (b '(#7#))) (eq a (car b))))
+      (print (let ((a '#8=#S(ci-lbs-qt :x (foo #8#))) (b '(#8#))) (eq a (car b))))
+      (progn
+        (defparameter *ci-lbs-a* '#9=(top))
+        (defparameter *ci-lbs-b* '(#9#)))
+      (print (eq *ci-lbs-a* (car *ci-lbs-b*)))
+      (in-package :cl-user)
+    expected: |
+      T
+      T
+      T
+      T
+      (W)
+      (T T)
+      T
+      T
+      T
+      (T T)
+      (T T)
+      T
+      (T T)
+      (T T T)
+      T
+      T
+      (T 300)
+      T
+      T
+      T
+      T
+      T
+      T
+      T
+      T
+      T
+      (NIL T)
+      NIL
+      (T NIL)
+      T
+      T
+      (3 3 3 3)
+      T
+      T
+      T
+      T
+      (T "CI-LBS-P")
+      (T T)
       T
       T
       T
@@ -26151,6 +26308,83 @@ cases:
       (:DATA 1)
       :HELPER
       "CI-IIS"
+  # A token of a run-time read is a symbol of the current package, and a qualified one the
+  # symbol its package reaches the name as, whatever spelling the text gives it. SBCL
+  # 2.2.9 agrees, but that the reader folds t and nil ahead of a package using no cl
+  # (.kb/pretty-printer.md).
+  - name: a-run-time-read-interns-in-the-current-package
+    source: |
+      (defpackage :ci-rh-lib (:use :cl) (:intern #:lib-hidden) (:export #:lib-out #:lib-pt #:make-lib-pt #:lib-pt-x))
+      (in-package :ci-rh-lib)
+      (defstruct lib-pt x)
+      (defpackage :ci-rh (:use :cl :ci-rh-lib) (:export #:own-out) (:shadow #:rest)
+        (:import-from :ci-rh-lib #:lib-hidden) (:local-nicknames (:ci-rh-n :ci-rh-lib)))
+      (defpackage :ci-rh-nocl (:use))
+      (in-package :ci-rh)
+      (defstruct own-pt x (y 'dflt) (z '(car rest cl-user::rh-u)))
+      (defun fn-of-p () :in-p)
+      (defvar *var-of-p* 11)
+      (defun home (s) (let ((p (symbol-package s))) (if p (package-name p) nil)))
+      (defun rd (s) (read-from-string s))
+      (print (list (eq (rd "foo") 'foo) (home (rd "foo")) (rd "foo")))
+      (print (list (eq (rd "own-out") 'own-out) (eq (rd "lib-out") 'ci-rh-n:lib-out) (home (rd "lib-out"))
+                   (eq (rd "car") 'car) (home (rd "car")) (eq (rd "rest") 'rest) (eq (rd "rest") 'cl:rest)
+                   (eq (rd "lib-hidden") 'ci-rh-n::lib-hidden)))
+      (print (list (rd "t") (rd "nil") (rd ":foo") (home (rd "#:foo")) (eq (rd "|foo|") '|foo|) (eq (rd "\\foo") '|fOO|)
+                   (eq (rd "||") '||) (eq (rd "cl-user::||") 'cl-user::||)))
+      (print (list (eq (rd "ci-rh::foo") 'foo) (eq (rd "ci-rh:own-out") 'own-out) (eq (rd "ci-rh::own-out") 'own-out)
+                   (eq (rd "ci-rh::lib-out") 'ci-rh-n:lib-out) (eq (rd "ci-rh-n::lib-out") 'ci-rh-n:lib-out)
+                   (eq (rd "ci-rh::car") 'car) (eq (rd "ci-rh::|foo|") '|foo|)))
+      (print (list (eq (rd "cl:car") 'car) (eq (rd "cl:rest") 'cl:rest) (eq (rd "cl-user::rh-u") 'cl-user::rh-u)
+                   (home (rd "cl-user::rh-u")) (eq (rd "keyword:foo") :foo)))
+      (print (rd "(foo (bar . baz) #(qux) 'quo #'fun car 1 \"s\" #\\a)"))
+      (print (equalp (rd "(foo (bar . baz) #(qux) 'quo #'fun car)") '(foo (bar . baz) #(qux) 'quo #'fun car)))
+      (print (list (eq (aref (rd "#(foo)") 0) 'foo) (eq (aref (rd "#2A((foo))") 0 0) 'foo)))
+      (print (list (own-pt-x (rd "#S(own-pt :x 8)")) (eq (own-pt-x (rd "#S(own-pt :x foo)")) 'foo)
+                   (own-pt-x (rd "#S(ci-rh::own-pt x 9)")) (lib-pt-x (rd "#S(lib-pt :x 10)"))
+                   (lib-pt-x (rd "#S(ci-rh-n:lib-pt :x 12)"))))
+      (let ((o (rd "#S(own-pt)")))
+        (print (list (eq (own-pt-y o) 'dflt) (own-pt-z o) (eq (first (own-pt-z o)) 'car)
+                     (eq (second (own-pt-z o)) 'rest) (eq (third (own-pt-z o)) 'cl-user::rh-u))))
+      (print (list (eq (with-input-from-string (s "foo bar") (read s)) 'foo)
+                   (eq (read-from-string "foo" nil nil :start 0) 'foo)
+                   (eq (funcall #'read-from-string "foo") 'foo)
+                   (eq (rd "foo") (intern "FOO"))
+                   (eq (nth-value 0 (read-from-string "foo")) 'foo)))
+      (print (list (eval (rd "(fn-of-p)")) (funcall (rd "fn-of-p")) (eval (rd "*var-of-p*"))
+                   (symbol-value (rd "*var-of-p*")) (eval (rd "'foo"))))
+      (print (list (home (let ((*package* (find-package :ci-rh-n))) (rd "foo")))
+                   (eq (let ((*package* (find-package :ci-rh-n))) (rd "lib-out")) 'ci-rh-n:lib-out)
+                   (home (let ((*package* (find-package :cl-user))) (rd "foo")))
+                   (let ((*package* (find-package :keyword))) (rd "foo"))
+                   (home (with-standard-io-syntax (rd "foo")))
+                   (home (let ((*package* (find-package :ci-rh-nocl))) (rd "car")))))
+      (let ((q (let ((*package* (find-package :ci-rh-nocl))) (rd "'x"))))
+        (print (list (eq (first q) 'quote) (home (second q)))))
+      (defpackage :ci-rh-other (:use :cl) (:export #:other-out))
+      (defpackage :ci-rh-swap (:use :cl) (:local-nicknames (:ci-rh-lib :ci-rh-other) (:ci-rh-other :ci-rh-lib)))
+      (in-package :ci-rh-swap)
+      (print (list (eq (read-from-string "ci-rh-lib:other-out") 'ci-rh-lib:other-out)
+                   (eq (read-from-string "ci-rh-other:lib-out") 'ci-rh-other:lib-out)))
+      (in-package :cl-user)
+      (print (list (ci-rh::home (ci-rh::rd "later")) (eq (ci-rh::rd "later") 'later) (eq (ci-rh::rd "ci-rh::own-out") 'ci-rh:own-out)))
+    expected: |
+      (T "CI-RH" FOO)
+      (T T "CI-RH-LIB" T "COMMON-LISP" T NIL T)
+      (T NIL :FOO NIL T T T T)
+      (T T T T T T T)
+      (T T T "COMMON-LISP-USER" T)
+      (FOO (BAR . BAZ) #(QUX) 'QUO #'FUN CAR 1 "s" #\a)
+      T
+      (T T)
+      (8 T 9 10 12)
+      (T (CAR REST COMMON-LISP-USER::RH-U) T T T)
+      (T T T T T)
+      (:IN-P :IN-P 11 11 FOO)
+      ("CI-RH-LIB" T "COMMON-LISP-USER" :FOO "COMMON-LISP-USER" "CI-RH-NOCL")
+      (T "CI-RH-NOCL")
+      (T T)
+      ("COMMON-LISP-USER" T T)
   - name: find-symbol-of-a-computed-standard-name
     source: |
       (defpackage :ci-stn-a (:use :cl))
@@ -34875,6 +35109,11 @@ standalone:
         (write-line "to both" b))
       (print (stream-element-type (make-snd-own)))
       (print (list (input-stream-p t) (read-char nil nil :eof) (read-byte nil nil :eof)))
+      ;; the Gray rewrite runs before the resolver, inside the user's package
+      (defpackage :snd-p (:use :cl))
+      (in-package :snd-p)
+      (defun snd-in-a-closure (s) (funcall (lambda () (format s "x"))))
+      (print (handler-case (snd-in-a-closure 3) (type-error () :type-error)))
     stdout: |
       ("write-char" "WRITE-CHAR: The value 3 is not of type STREAM" :TYPE-ERROR :TYPE-ERROR)
       ("write-string" "WRITE-STRING: The value 3 is not of type STREAM" :TYPE-ERROR :TYPE-ERROR)
@@ -34926,6 +35165,7 @@ standalone:
       to both
       :OWN
       (T :EOF :EOF)
+      :TYPE-ERROR
   - name: instances-follow-the-printer-controls-in-a-program-with-no-method
     source: |
       ;; Standalone: a method or a condition anywhere routes a program through the
@@ -36705,6 +36945,20 @@ standalone:
       (9 16 :ZERO GFP-AREA 2 T T)
       (:ZERO :NO-METHOD NIL)
       (8 ((GFP-VOLUME NIL (INTEGER)) (GFP-VOLUME (:BEFORE) ((EQL 0)))) GFP-LOGGED)
+  # Alone: what cl-user reaches is one answer for the whole compile, and the corpus keeps
+  # it pristine. A program that never leaves cl-user reads through it all the same.
+  - name: a-run-time-read-in-a-cl-user-that-uses-a-package
+    source: |
+      (defpackage :rh-used (:use :cl) (:export #:used-out))
+      (defpackage :rh-other (:use :cl) (:export #:other-out))
+      (use-package :rh-used)
+      (print (list (eq (read-from-string "used-out") 'rh-used:used-out)
+                   (package-name (symbol-package (read-from-string "used-out")))
+                   (eq (read-from-string "car") 'car) (eq (read-from-string "fresh") 'fresh)
+                   (eq (read-from-string "rh-other::other-out") 'rh-other:other-out)
+                   (eq (read-from-string "rh-other::car") 'car)))
+    stdout: |
+      (T "RH-USED" T T T T)
   # Instance updating tracks the instances of a :metaclass class defined more than
   # once, so it runs alone, not in the corpus.
   - name: instance-updating-of-a-redefined-metaclass-class

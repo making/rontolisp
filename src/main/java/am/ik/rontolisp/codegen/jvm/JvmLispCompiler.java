@@ -1295,6 +1295,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The (setf (symbol-function 'n) ...) forwarders: no definition of their name, so
 		// out of the registry, and #'n / fboundp read the runtime function namespace.
 		Set<String> fenvForwarders = new HashSet<>(LispMacroExpander.symbolFunctionForwarderNames(program));
+		// What the run-time reader asks of the current package, where it can be another
+		// than the pristine cl-user (LispMacroExpander.injectReadHome).
+		program = LispMacroExpander.injectReadHome(program, packageResolver);
 		// The read/compile-time package table for the runtime package API (see
 		// .kb/packages.md): injected after package resolution, from the resolver's
 		// final registry, only when the program can need it at run time.
@@ -1826,6 +1829,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		StringEntry spaceStr = cp.stringEntry(" ");
 		StringEntry dotStr = cp.stringEntry(" . ");
 
+		// The nodes two literals of the program reach: one object across their sites
+		// (.kb/quoted-data.md), so the sites have to be known before any body compiles.
+		am.ik.rontolisp.compiler.QuotedSharing quotedSharing = am.ik.rontolisp.compiler.QuotedSharing.of(program);
 		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
 		// binds a variable to a closure like any other setq.
@@ -2991,6 +2997,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()
+			.quotedSharing(quotedSharing)
 			.intFusion(intFusion)
 			.rawGlobals(rawGlobals)
 			.inlinableDefuns(inlinableDefuns)
@@ -4024,6 +4031,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<JvmReadRuntimeBuilder.ReadMethod> readMethods = List.of();
 		@Nullable MethodCode structTableClinit = null;
 		if (usesRead) {
+			FunctionInfo readHome = functions.get(LispNames.READ_HOME_INTERNAL);
 			// The reader reads #S(...) and #P"..." only when an instance can exist at
 			// all (the same gate the instance machinery uses); with it on, every struct
 			// layout is interned so the runtime directory can resolve any registered
@@ -4039,7 +4047,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				}
 				pathnameLayoutField = mainCtx.layoutPool.intern(cp, className, am.ik.rontolisp.LispLayout.PATHNAME);
 				structTableClinit = JvmReadRuntimeBuilder.structTableClinit(cp, thisClass, mainCtx.layoutPool,
-						closRegistry, objectClass, objectArrayClass, stringClass);
+						closRegistry, objectClass, objectArrayClass, stringClass, readHome != null);
 			}
 			FieldRefEntry readBaseGlobal = mainCtx.globalFields.get(LispNames.READ_BASE_VAR);
 			FieldRefEntry readBaseLocal = readBaseGlobal == null || dynVarRuntime == null ? null
@@ -4050,7 +4058,9 @@ public final class JvmLispCompiler implements LispCompiler {
 						pathnameLayoutField != null ? pathnameLayoutField : null,
 						readBaseGlobal == null ? null
 								: new JvmReadRuntimeBuilder.ReadBaseVar(readBaseGlobal, readBaseLocal,
-										readBaseLocal == null ? null : Objects.requireNonNull(dynVarRuntime).dget()))
+										readBaseLocal == null ? null : Objects.requireNonNull(dynVarRuntime).dget()),
+						readHome == null ? null
+								: new JvmReadRuntimeBuilder.ReadHome(readHome.methodref(), readHome.bounceVisible()))
 				.methods();
 		}
 		final List<JvmReadRuntimeBuilder.ReadMethod> readMethodsFinal = readMethods;
@@ -9533,6 +9543,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			 * from the same builder shares it.
 			 */
 			private final JvmQuotePool quotePool = new JvmQuotePool();
+
+			Builder quotedSharing(am.ik.rontolisp.compiler.@Nullable QuotedSharing sharing) {
+				this.quotePool.sharing(sharing);
+				return this;
+			}
 
 			/**
 			 * One UNSUPPLIED marker per builder (= per compilation): every context built

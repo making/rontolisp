@@ -74,7 +74,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [string-accumulate-cost.md](string-accumulate-cost.md) -- building one string out of N pieces costs the total length, not the sum of the prefixes
 - [hash-tables.md](hash-tables.md) -- the one representation (flat, a structure-sharing trie once copied, insertion-order walk), `equalp` key fold, depth cap and work budget, the wasm identity-hash slot and `%identity-hash`
 - [array-literals.md](array-literals.md) -- an array literal is a constructor, not a constant; rank-0 arrays; when `:element-type` specializes
-- [quoted-data.md](quoted-data.md) -- a quoted datum is one shared constant per quote site on all four backends; a long list is built in runs of 16 on wasm-GC (Cranelift time vs. live values across calls)
+- [quoted-data.md](quoted-data.md) -- a quoted datum is one shared constant per quote site on all four backends, and a node two literals reach one object (`QuotedSharing`'s units); a long list is built in runs of 16 on wasm-GC (Cranelift time vs. live values across calls)
 - [adjustable-arrays.md](adjustable-arrays.md) -- fill pointers, `:adjustable`, displaced arrays, `vector-push*`, `adjust-array`
 - [packed-integer-vectors.md](packed-integer-vectors.md) -- `(unsigned-byte 8|16|32)` rank-1 packs, `#N@(...)`, per-backend raw paths
 - [bfloat16.md](bfloat16.md) -- bfloat16 conversion pair, the packed `#bf16` width, and the width's account (why bf16, the name, the prefix, the lattice entry)
@@ -101,7 +101,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## I/O and streams
 
-- [read-load-streams.md](read-load-streams.md) -- `read`/`load`/`read-line`/file streams; a stream is a self-describing value; synonym streams; output left open is flushed at the end; element types wider and narrower than one octet; the real stream direction and a string stream's `file-position`
+- [read-load-streams.md](read-load-streams.md) -- `read`/`load`/`read-line`/file streams; a compiled run-time read interning in the current package (`%read-home`), a list's length costing it no stack; a stream is a self-describing value; synonym streams; output left open is flushed at the end; element types wider and narrower than one octet; the real stream direction and a string stream's `file-position`
 - [standard-output-redirect.md](standard-output-redirect.md) -- stream designators resolve through `*standard-output*`/`*standard-input*` at call time; `*error-output*`
 - [gray-streams.md](gray-streams.md) -- the Gray-stream protocol, the compile-path splice, the flexi-streams wrapper
 - [binary-sequence-io.md](binary-sequence-io.md) -- `read-sequence`/`write-sequence` over a packed buffer in one native transfer

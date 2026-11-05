@@ -7015,20 +7015,6 @@ public final class LispMacroExpander {
 	 * @return the lowered form
 	 */
 	public static LispVal expandReadFromStringFailure(LispCons cons, boolean typed) {
-		return expandReadFromStringFailure(cons, typed, name -> false);
-	}
-
-	/**
-	 * As {@link #expandReadFromStringFailure(LispCons, boolean)}, the datum read through
-	 * the current package's nicknames in a program that has them
-	 * ({@link #injectLocalNicknames}): every run-time read comes here.
-	 * @param cons the one-argument read-from-string call
-	 * @param typed whether the signal may carry an instance
-	 * @param definedFunction whether the program defines the named function
-	 * @return the lowered form
-	 */
-	public static LispVal expandReadFromStringFailure(LispCons cons, boolean typed,
-			java.util.function.Predicate<String> definedFunction) {
 		LispVal text = cons.cdr() instanceof LispCons rest ? rest.car() : LispNil.INSTANCE;
 		LispSymbol failure = new LispSymbol(RFS_FAILURE_VAR);
 		LispVal endOfFile = typed ? endOfFileSignal()
@@ -7043,11 +7029,8 @@ public final class LispMacroExpander {
 								readerError(ReadFailure.UNMATCHED_CLOSE_MESSAGE, typed)))));
 		LispVal inner = makeLet(RFS_FAILURE_VAR, listToCons(List.of(new LispSymbol(LispNames.READ_FAILURE_INTERNAL))),
 				dispatch);
-		LispVal read = callOf(LispNames.READ_FROM_STRING_RAW_INTERNAL, text);
-		if (definedFunction.test(LispNames.READ_THROUGH_LOCAL_NICKNAMES_INTERNAL)) {
-			read = callOf(LispNames.READ_THROUGH_LOCAL_NICKNAMES_INTERNAL, read);
-		}
-		return SourceProvenance.inherit(cons, makeLet(RFS_VALUE_VAR, read, inner));
+		return SourceProvenance.inherit(cons,
+				makeLet(RFS_VALUE_VAR, callOf(LispNames.READ_FROM_STRING_RAW_INTERNAL, text), inner));
 	}
 
 	/** The {@code reader-error} arm of {@link #expandReadFromStringFailure}. */
@@ -16670,61 +16653,6 @@ public final class LispMacroExpander {
 			""";
 
 	/**
-	 * The reader's half: what a run-time read answers, with every qualified token's
-	 * qualifier read through the current package's nicknames. The emitted readers spell a
-	 * token as they read it, the current package unknown to them
-	 * ({@code .kb/symbol-runtime-api.md}), so this walks the datum after the read.
-	 */
-	private static final String LOCAL_NICKNAME_READ_SOURCE = """
-			(defun %local-nicknames-in-p (%lnq-p)
-			  (let ((%lnq-c %local-nicknames%) (%lnq-hit nil))
-			    (while %lnq-c
-			      (if (string= (car (car %lnq-c)) %lnq-p)
-			          (progn (setq %lnq-hit t) (setq %lnq-c nil))
-			          (setq %lnq-c (cdr %lnq-c))))
-			    %lnq-hit))
-			(defun %read-through-local-nicknames (%rtn-x)
-			  (if (%local-nicknames-in-p (string *package*))
-			      (%read-through-local-nickname-walk %rtn-x)
-			      %rtn-x))
-			(defun %read-through-local-nickname-walk (%rtw-x)
-			  (if (consp %rtw-x)
-			      (let ((%rtw-c %rtw-x))
-			        (while (consp %rtw-c)
-			          (rplaca %rtw-c (%read-through-local-nickname-walk (car %rtw-c)))
-			          (if (consp (cdr %rtw-c))
-			              (setq %rtw-c (cdr %rtw-c))
-			              (progn
-			                (rplacd %rtw-c (%read-through-local-nickname-walk (cdr %rtw-c)))
-			                (setq %rtw-c nil))))
-			        %rtw-x)
-			      (if (and (vectorp %rtw-x) (not (stringp %rtw-x)))
-			          (let ((%rtw-i 0))
-			            (while (< %rtw-i (length %rtw-x))
-			              (if (symbolp (aref %rtw-x %rtw-i))
-			                  (setf (aref %rtw-x %rtw-i) (%read-through-local-nickname-walk (aref %rtw-x %rtw-i))))
-			              (setq %rtw-i (+ %rtw-i 1)))
-			            %rtw-x)
-			          (if (and %rtw-x (symbolp %rtw-x))
-			              (let* ((%rtw-s (%prin1-to-string %rtw-x)) (%rtw-n (length %rtw-s)) (%rtw-j 0) (%rtw-colon nil))
-			                (if (or (= %rtw-n 0) (char= (char %rtw-s 0) #\\:) (char= (char %rtw-s 0) #\\#)
-			                        (char= (char %rtw-s 0) #\\|))
-			                    %rtw-x
-			                    (progn
-			                      (while (and (< %rtw-j %rtw-n) (null %rtw-colon))
-			                        (if (char= (char %rtw-s %rtw-j) #\\:)
-			                            (setq %rtw-colon %rtw-j))
-			                        (setq %rtw-j (+ %rtw-j 1)))
-			                      (let ((%rtw-t (if %rtw-colon
-			                                        (%local-nickname-find (subseq %rtw-s 0 %rtw-colon))
-			                                        nil)))
-			                        (if %rtw-t
-			                            (intern (concatenate 'string %rtw-t (subseq %rtw-s %rtw-colon)))
-			                            %rtw-x)))))
-			              %rtw-x))))
-			""";
-
-	/**
 	 * What follows a package's {@code rename-package} or {@code delete-package} in the
 	 * table: its own rows and the nicknames naming it, as the interpreter's registry does
 	 * (a nil new name turns such a nickname into a removal).
@@ -16825,14 +16753,11 @@ public final class LispMacroExpander {
 		StringBuilder source = new StringBuilder(LOCAL_NICKNAMES_SOURCE);
 		boolean add = false;
 		boolean remove = false;
-		boolean read = false;
 		for (LispVal form : program) {
 			add = add || usesSymbol(form, LispNames.LOCAL_NICKNAME_ADD_INTERNAL);
 			remove = remove || usesSymbol(form, LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL);
-			read = read || usesSymbol(form, LispNames.READ_FROM_STRING);
 		}
 		source.append(add ? LOCAL_NICKNAME_ADD_SOURCE : "").append(remove ? LOCAL_NICKNAME_REMOVE_SOURCE : "");
-		source.append(read ? LOCAL_NICKNAME_READ_SOURCE : "");
 		if (definesName(program, LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL)) {
 			source.append(LOCAL_NICKNAME_QUALIFIER_SOURCE);
 		}
@@ -16900,6 +16825,73 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		return definedFunction.test(LispNames.PRINT_CASED_LOCAL_QUALIFIER_INTERNAL)
 				? callOf(LispNames.PRINT_CASED_LOCAL_QUALIFIER_INTERNAL, parts.get(1), parts.get(2)) : parts.get(1);
+	}
+
+	/**
+	 * Whether a program reads at run time where a token answers more than its spelling:
+	 * it can make another package current -- a top-level package assignment leaving
+	 * {@code cl-user}, a mention of {@code *package*} -- or holds a package a qualifier
+	 * can name, a nickname one can be, or a {@code cl-user} that reaches more than
+	 * {@code cl}. A {@code with-standard-io-syntax} is no such thing: it binds
+	 * {@code cl-user}.
+	 */
+	private static boolean readsUnderAPackage(List<LispVal> program, PackageResolver resolver) {
+		boolean reads = false;
+		boolean moves = resolver.definesPackages() || resolver.programHasLocalNicknames()
+				|| !resolver.clUserIsPristine();
+		for (LispVal form : program) {
+			reads = reads || usesSymbol(form, LispNames.READ_FROM_STRING) || usesSymbol(form, LispNames.READ)
+					|| usesSymbol(form, LispNames.LOAD);
+			moves = moves || (isTopLevelPackageAssignment(form) ? !assignsClUser((LispCons) form)
+					: usesSymbol(form, LispNames.PACKAGE_VAR));
+			if (reads && moves) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Prepends {@code %read-home} to a program that can read under a package: the one
+	 * definition both emitted readers call for a symbol token, over the lookup
+	 * {@code intern} takes. Any other program's reader spells a token as it reads it. It
+	 * goes in after the prelude has been selected and the library definitions pruned, so
+	 * a dead read costs nothing, over operators the expression compilers lower; and ahead
+	 * of {@link #injectBakedAccess}, {@link #injectFindPackageHelper} and
+	 * {@link #injectMvSpillGlobal}, whose scans it joins.
+	 *
+	 * <p>
+	 * A token with no qualifier is what its name interns in the current package, at once
+	 * its spelling in a pristine {@code cl-user}; a qualified one what its name interns
+	 * in the package the qualifier names, which the current package's nicknames read. A
+	 * qualifier naming no package keeps the spelling, as a token with a colon past a
+	 * qualifier's does: the readers do not ask. {@code t} is read ahead of any package,
+	 * as the interpreter's reader folds it. A nickname of the current package may be
+	 * named like the package found, and {@code intern} would read its designator through
+	 * it; a package has no nickname of its own name, so in a program with nicknames the
+	 * lookup runs with that package current.
+	 * @param program the resolved top-level forms
+	 * @param resolver the resolver holding the final registry
+	 * @return the program with the definition prepended, or unchanged
+	 */
+	public static List<LispVal> injectReadHome(List<LispVal> program, PackageResolver resolver) {
+		if (!readsUnderAPackage(program, resolver)) {
+			return program;
+		}
+		String lookup = "(intern (symbol-name %rh-s) %rh-k)";
+		String source = """
+				(defun %read-home (%rh-s %rh-q)
+				  (let ((%rh-k (if %rh-q (find-package %rh-q) *package*)))
+				    (if (or (null %rh-k) (eq %rh-s t) CL_USER_ANSWERS)
+				        %rh-s
+				        LOOKUP)))
+				"""
+			.replace("CL_USER_ANSWERS", resolver.clUserIsPristine() ? "(and (null %rh-q) (eq %rh-k :cl-user))" : "")
+			.replace("LOOKUP",
+					resolver.programHasLocalNicknames() ? "(let ((*package* %rh-k)) " + lookup + ")" : lookup);
+		List<LispVal> out = new java.util.ArrayList<>(LispReader.readAllFromString(source, Features.INTERPRETER));
+		out.addAll(program);
+		return out;
 	}
 
 	/**

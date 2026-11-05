@@ -3621,6 +3621,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The (setf (symbol-function 'n) ...) forwarders: no definition of their name, so
 		// out of the registry, and #'n / fboundp read the runtime function namespace.
 		Set<String> fenvForwarders = new HashSet<>(LispMacroExpander.symbolFunctionForwarderNames(program));
+		// What the run-time reader asks of the current package, where it can be another
+		// than the pristine cl-user (LispMacroExpander.injectReadHome).
+		program = LispMacroExpander.injectReadHome(program, packageResolver);
 		// The read/compile-time package table for the runtime package API (see
 		// .kb/packages.md): injected after package resolution, from the resolver's
 		// final registry, only when the program can need it at run time.
@@ -4024,6 +4027,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// imports on a --native module. A plain Preview 1 module compiles each call to
 		// a call-time error (WasmExprCompiler). fetch + tcp and serve + tcp compose:
 		// both are just user imports of different interfaces.
+		// The nodes two literals of the program reach: one object across their sites
+		// (.kb/quoted-data.md), so the sites have to be known before any body compiles.
+		am.ik.rontolisp.compiler.QuotedSharing quotedSharing = am.ik.rontolisp.compiler.QuotedSharing.of(program);
 		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
 		// binds a variable to a closure like any other setq.
@@ -4748,6 +4754,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// knew about them.
 		QuoteGlobals quoteGlobals = new QuoteGlobals((streamEndedGlobalIndex >= 0 ? streamEndedGlobalIndex
 				: operandOpGlobalIndex >= 0 ? operandOpGlobalIndex : renderDepthGlobalIndex) + 1);
+		quoteGlobals.sharing(quotedSharing);
 
 		// Create string table. The page-6 component base exists to keep the static data
 		// clear of the OTHER writers of the shared memory (the adapter's page-5 scratch,
@@ -6800,7 +6807,9 @@ public final class WasmLispCompiler implements LispCompiler {
 						new WasmReadRuntimeBuilder.ReadBaseVar(globalIndices.getOrDefault(LispNames.READ_BASE_VAR, -1),
 								reentrantTaskGlobalIndex >= 0 && dynSlots.containsKey(LispNames.READ_BASE_VAR)
 										? reentrantTaskGlobalIndex : -1,
-								dynSlots.getOrDefault(LispNames.READ_BASE_VAR, -1)));
+								dynSlots.getOrDefault(LispNames.READ_BASE_VAR, -1)),
+						functions.containsKey(LispNames.READ_HOME_INTERNAL)
+								? functions.get(LispNames.READ_HOME_INTERNAL).funcIndex() : -1);
 				readExprBody = WasmReadRuntimeBuilder.buildReadExprBody(readCtx);
 				readListBody = WasmReadRuntimeBuilder.buildReadListBody(readCtx);
 				// FUNC_READ is a RETIRED index: read is prelude rontolisp over read-char
@@ -11314,8 +11323,39 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		private final LispVal funcBoxTableToken = new am.ik.rontolisp.LispSymbol("#<function-box-table>");
 
+		private am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedSharing sharing;
+
 		QuoteGlobals(int base) {
 			this.base = base;
+		}
+
+		/**
+		 * Finds the nodes of a datum a build has to name.
+		 * @param datum the datum
+		 * @return its graph, or null when it has none
+		 */
+		am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedGraph graphOf(LispVal datum) {
+			am.ik.rontolisp.compiler.QuotedSharing current = this.sharing;
+			return (current != null) ? current.graphOf(datum) : am.ik.rontolisp.compiler.QuotedGraph.of(datum);
+		}
+
+		/**
+		 * Sets what {@code QuotedSharing.of} found in the program, before any body
+		 * compiles.
+		 * @param sharing the program's sharing
+		 */
+		void sharing(am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedSharing sharing) {
+			this.sharing = sharing;
+		}
+
+		/**
+		 * The unit a site reads a node from.
+		 * @param node the node
+		 * @return the unit, null when the node is no unit's entry
+		 */
+		am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedGraph unitOf(LispVal node) {
+			am.ik.rontolisp.compiler.QuotedSharing current = this.sharing;
+			return (current != null) ? current.unitOf(node) : null;
 		}
 
 		/**

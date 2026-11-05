@@ -74,7 +74,7 @@ final class WasmReadRuntimeBuilder {
 			Msg msgRank, Msg msgRagged, Msg msgNested, Msg msgProper, Msg msgPackedNum, Msg msgReadEval, Msg msgFeature,
 			Msg msgLabels, Msg msgStructType, Msg msgStructClassHint, Msg msgStructName, Msg msgStructEmpty,
 			Msg msgStructOdd, Msg msgStructNoSlot, Msg msgStructInit, Msg msgDivZero, Msg msgPathname,
-			ReadBaseVar readBase) {
+			ReadBaseVar readBase, int readHome) {
 	}
 
 	/**
@@ -112,11 +112,14 @@ final class WasmReadRuntimeBuilder {
 	 * @param instanceTypeIndex {@code TYPE_INSTANCE}'s index, or -1 when instances off
 	 * @param registry the layout registry (for the {@code #S} directory)
 	 * @param layoutAddresses baked layout record addresses by tag
+	 * @param readHome the module function index of {@code %read-home}, which a symbol
+	 * token asks where the program can read under a package other than the pristine
+	 * {@code cl-user} ({@code LispMacroExpander.injectReadHome}), or -1
 	 * @return the reader context
 	 */
 	static ReadCtx buildReadCtx(WasmLispCompiler.StringTable st, int nilOffset, int emptyNameOffset, int quoteOffset,
 			int functionOffset, boolean ehMode, boolean simd, int instanceTypeIndex, boolean identityHash,
-			ClosRegistry registry, Map<String, Integer> layoutAddresses, ReadBaseVar readBase) {
+			ClosRegistry registry, Map<String, Integer> layoutAddresses, ReadBaseVar readBase, int readHome) {
 		// character-name table: {nameOff, nameLen, code} triples
 		int[][] nameRefs = new int[CHAR_NAMES.length][3];
 		for (int i = 0; i < CHAR_NAMES.length; i++) {
@@ -169,7 +172,7 @@ final class WasmReadRuntimeBuilder {
 				int initsRel = 0;
 				if (isStruct) {
 					initsRel = headerSize + inits.size();
-					@Nullable String[] texts = EmittedReaderInitforms.initTexts(layout, true);
+					@Nullable String[] texts = EmittedReaderInitforms.initTexts(layout, true, readHome >= 0);
 					for (@Nullable
 					String text : texts) {
 						if (text == null) {
@@ -223,7 +226,7 @@ final class WasmReadRuntimeBuilder {
 				msg(st, "#S: an omitted slot's initform is not readable at run time"),
 				msg(st, "Division by zero in ratio literal"),
 				msg(st, "#P pathname literals need the instance runtime, which this artifact was compiled without"),
-				readBase);
+				readBase, readHome);
 	}
 
 	private static Msg msg(WasmLispCompiler.StringTable st, String text) {
@@ -986,8 +989,10 @@ final class WasmReadRuntimeBuilder {
 		// the frontend, and a float token's digits stay exact) ; i64 local: MV=21 ; i32
 		// locals:
 		// STRIP=22 (a leading '+' was dropped from the token), ESCAPED=23 (the token
-		// holds an escape, so it names a symbol). The
+		// holds an escape, so it names a symbol), and in a module that asks %read-home
+		// TOKEN=24 (where the token started, ahead of a standard qualifier). The
 		// classifiers reuse the i32 slots freely between attempts.
+		boolean home = ctx.readHome() >= 0;
 		w.write(6);
 		w.write(2);
 		w.writeRefType(true, Type.EQ.code());
@@ -999,11 +1004,11 @@ final class WasmReadRuntimeBuilder {
 		w.writeRefType(true, Type.EQ.code());
 		w.write(1);
 		w.write(Type.I64);
-		w.write(2);
+		w.write(home ? 3 : 2);
 		w.write(Type.I32);
 		final int CAR = 0, CDR = 1, BYTE = 2, START = 3, LEN = 4, OFF = 5, POS = 6, ESC = 7, HP = 8, NEG = 9, ACC = 10,
 				VALID = 11, SAWDOT = 12, C2 = 13, SAWE = 14, EXPVAL = 15, EXPSGN = 16, EXPDIGIT = 17, FVAL = 18,
-				FPOW = 19, ACC64 = 20, MV = 21, STRIP = 22, ESCAPED = 23;
+				FPOW = 19, ACC64 = 20, MV = 21, STRIP = 22, ESCAPED = 23, TOKEN = 24;
 
 		emitSkipWs(w, ctx);
 		// if cursor >= end: the text ran out where a datum is due
@@ -1097,6 +1102,10 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, START);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, LEN);
+		if (home) {
+			getLocal(w, START);
+			setLocal(w, TOKEN);
+		}
 		emitDropStandardQualifier(w, START, LEN, OFF, POS);
 		// A token holding an escape names a symbol; every other one may read as a number.
 		getLocal(w, ESCAPED);
@@ -1186,6 +1195,9 @@ final class WasmReadRuntimeBuilder {
 		i32(w, ctx.emptyNameOffset());
 		i32(w, LispSymbol.CL_USER_EMPTY_NAME.length());
 		WasmEmitHelper.emitStrBuildCall(w);
+		if (home) {
+			emitAskHome(w, ctx, START, LEN, TOKEN, CAR, CDR, OFF, POS, ACC);
+		}
 		w.write(Instruction.RETURN);
 		end(w);
 
@@ -1220,8 +1232,110 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, OFF);
 		getLocal(w, LEN);
 		WasmEmitHelper.emitStrBuildCall(w);
+		if (home) {
+			emitAskHome(w, ctx, START, LEN, TOKEN, CAR, CDR, OFF, POS, ACC);
+		}
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/**
+	 * Replaces the symbol on the stack, the token at (START, LEN), by what
+	 * {@code %read-home} answers: a token a standard qualifier named (START moved past
+	 * TOKEN) is spelled already. See {@link #emitHomeOf}.
+	 */
+	private static void emitAskHome(WasmWriter w, ReadCtx ctx, int START, int LEN, int TOKEN, int SYM, int QUALIFIER,
+			int AT, int K, int LAST) {
+		setLocal(w, SYM);
+		getLocal(w, START);
+		getLocal(w, TOKEN);
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		emitHomeOf(w, ctx, START, LEN, SYM, QUALIFIER, AT, K, LAST);
+		end(w);
+		getLocal(w, SYM);
+	}
+
+	/**
+	 * Sets SYM, the symbol the token at (START, LEN) spells, to what {@code %read-home}
+	 * answers for it. A keyword is its own, and a token with a colon past its qualifier's
+	 * is no name of any package; any other passes its qualifier, as a symbol, or nil.
+	 * Clobbers QUALIFIER, AT, K and LAST.
+	 */
+	private static void emitHomeOf(WasmWriter w, ReadCtx ctx, int START, int LEN, int SYM, int QUALIFIER, int AT, int K,
+			int LAST) {
+		// AT = the token's first colon, LAST = its last, or -1
+		i32(w, -1);
+		setLocal(w, AT);
+		i32(w, -1);
+		setLocal(w, LAST);
+		getLocal(w, START);
+		setLocal(w, K);
+		block(w);
+		loop(w);
+		getLocal(w, K);
+		getLocal(w, START);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_GE_S);
+		brIf(w, 1);
+		getLocal(w, K);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, ':');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		getLocal(w, AT);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		ifVoid(w);
+		getLocal(w, K);
+		setLocal(w, AT);
+		end(w);
+		getLocal(w, K);
+		setLocal(w, LAST);
+		end(w);
+		getLocal(w, K);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, K);
+		br(w, 0);
+		end(w); // loop
+		end(w); // block
+		getLocal(w, AT);
+		getLocal(w, START);
+		w.write(Instruction.I32_NE);
+		getLocal(w, LAST);
+		getLocal(w, AT);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		emitNull(w);
+		setLocal(w, QUALIFIER);
+		getLocal(w, AT);
+		i32(w, 0);
+		w.write(Instruction.I32_GE_S);
+		ifVoid(w);
+		getLocal(w, START);
+		getLocal(w, AT);
+		getLocal(w, START);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INTERN);
+		getLocal(w, AT);
+		getLocal(w, START);
+		w.write(Instruction.I32_SUB);
+		WasmEmitHelper.emitStrBuildCall(w);
+		setLocal(w, QUALIFIER);
+		end(w);
+		// a defun's closure environment, then its parameters
+		emitNull(w);
+		getLocal(w, SYM);
+		getLocal(w, QUALIFIER);
+		call(w, ctx.readHome());
+		setLocal(w, SYM);
+		end(w);
 	}
 
 	/**
@@ -2805,56 +2919,60 @@ final class WasmReadRuntimeBuilder {
 	static byte[] buildReadListBody(ReadCtx ctx) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// ref locals: CAR=0, CDR=1 ; i32 locals: ISDOT=2, CH2=3
+		// ref locals: HEAD=0, LAST=1 (the last cell), CELL=2 ; i32 locals: ISDOT=3,
+		// CH2=4.
+		// A loop over the elements, so a list's length costs no stack: only its nesting
+		// does.
 		w.write(2);
-		w.write(2);
+		w.write(3);
 		w.writeRefType(true, Type.EQ.code());
 		w.write(2);
 		w.write(Type.I32);
-		final int CAR = 0, CDR = 1, ISDOT = 2, CH2 = 3;
+		final int HEAD = 0, LAST = 1, CELL = 2, ISDOT = 3, CH2 = 4;
 
+		loop(w);
 		emitSkipWs(w, ctx);
 		// if cursor >= end: the text ends before the list's ')'
 		loadMem32(w, CURSOR);
 		loadMem32(w, END_ADDR);
 		w.write(Instruction.I32_GE_S);
 		ifVoid(w);
-		emitEofReturn(w);
+		emitMarkEof(w);
+		getLocal(w, HEAD);
+		w.write(Instruction.RETURN);
 		end(w);
-		// if byte == ')': consume, return null
+		// if byte == ')': consume, return the list
 		curByte(w);
 		i32(w, ')');
 		w.write(Instruction.I32_EQ);
 		ifVoid(w);
 		advanceCursor(w);
-		emitNull(w);
+		getLocal(w, HEAD);
 		w.write(Instruction.RETURN);
 		end(w);
-		// A '.' token ahead of every element has no car to be the cdr of.
+		// Dotted pair: a standalone '.' token (followed by a delimiter or the end of
+		// input) puts the next datum directly in the final cdr, mirroring the
+		// compile-time reader: (a . b). Symbols and floats containing '.' are
+		// untouched.
 		emitDotTokenTest(w, ctx, CH2, ISDOT);
 		getLocal(w, ISDOT);
+		ifVoid(w);
+		// A '.' token ahead of every element has no car to be the cdr of.
+		getLocal(w, LAST);
+		w.write(Instruction.REF_IS_NULL);
 		ifVoid(w);
 		emitRecordError(w, ReadFailure.NOTHING_BEFORE_DOT);
 		emitNull(w);
 		w.write(Instruction.RETURN);
 		end(w);
-		// car = _read_expr
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
-		setLocal(w, CAR);
-		// Dotted pair: a standalone '.' token (followed by a delimiter or the end of
-		// input) puts the next datum directly in the final cdr, mirroring the
-		// compile-time reader: (a . b). Symbols and floats containing '.' are
-		// untouched.
-		emitSkipWs(w, ctx);
-		emitDotTokenTest(w, ctx, CH2, ISDOT);
-		// if isdot: consume '.', cdr = _read_expr, then consume the closing ')'
-		getLocal(w, ISDOT);
-		ifVoid(w);
 		advanceCursor(w);
+		getLocal(w, LAST);
+		refCast(w, WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
-		setLocal(w, CDR);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
 		emitSkipWs(w, ctx);
 		loadMem32(w, CURSOR);
 		loadMem32(w, END_ADDR);
@@ -2873,19 +2991,34 @@ final class WasmReadRuntimeBuilder {
 		// the text ends before the dotted list's ')'
 		emitMarkEof(w);
 		end(w);
+		getLocal(w, HEAD);
+		w.write(Instruction.RETURN);
 		end(w);
-		// else: cdr = _read_list
-		getLocal(w, ISDOT);
-		w.write(Instruction.I32_EQZ);
-		ifVoid(w);
+		// cell = cons(_read_expr, nil), linked behind the last one
 		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_LIST);
-		setLocal(w, CDR);
-		end(w);
-		// cons(car, cdr)
-		getLocal(w, CAR);
-		getLocal(w, CDR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+		emitNull(w);
 		WasmEmitHelper.emitNewCons(w, ctx.identityHash());
+		setLocal(w, CELL);
+		getLocal(w, LAST);
+		w.write(Instruction.REF_IS_NULL);
+		ifVoid(w);
+		getLocal(w, CELL);
+		setLocal(w, HEAD);
+		w.write(Instruction.ELSE);
+		getLocal(w, LAST);
+		refCast(w, WasmLispCompiler.TYPE_CONS);
+		getLocal(w, CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		end(w);
+		getLocal(w, CELL);
+		setLocal(w, LAST);
+		br(w, 0);
+		end(w); // loop
+		// the loop only leaves through a return
+		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -4857,6 +4990,9 @@ final class WasmReadRuntimeBuilder {
 		ifVoid(w);
 		emitErr(w, ctx, ctx.msgStructName());
 		end(w);
+		if (ctx.readHome() >= 0) {
+			emitStructNameHome(w, ctx, new StructNameSlots(NSTART, NLEN, PSTART, CI, K, TMPI, IDX, SLOTS, VAL));
+		}
 		// split PKG:MEMBER: CI = first ':', TMPI = last ':'
 		i32(w, -1);
 		setLocal(w, CI);
@@ -5454,6 +5590,56 @@ final class WasmReadRuntimeBuilder {
 		WasmEmitHelper.emitNewInstance(w, ctx.instanceTypeIndex(), ctx.identityHash());
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/** The slots {@link #emitStructNameHome} works in: the first two read and written. */
+	private record StructNameSlots(int start, int len, int token, int off, int at, int k, int last, int sym,
+			int qualifier) {
+	}
+
+	/**
+	 * Points the {@code #S} type name (NSTART, NLEN) at the symbol the token names, as
+	 * {@code _read_expr} reads one: the directory search is over the canonical spelling,
+	 * whose bytes stay in linear memory at the symbol's id (an interned name's offset).
+	 * {@code nil} names no structure, and neither does a name that reads as it: the
+	 * search then fails on the token.
+	 */
+	private static void emitStructNameHome(WasmWriter w, ReadCtx ctx, StructNameSlots s) {
+		getLocal(w, s.start());
+		setLocal(w, s.token());
+		emitDropStandardQualifier(w, s.start(), s.len(), s.off(), s.at());
+		getLocal(w, s.start());
+		getLocal(w, s.token());
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		getLocal(w, s.start());
+		getLocal(w, s.len());
+		call(w, WasmLispCompiler.FUNC_INTERN);
+		setLocal(w, s.off());
+		getLocal(w, s.off());
+		i32(w, ctx.nilOffset());
+		w.write(Instruction.I32_NE);
+		ifVoid(w);
+		getLocal(w, s.off());
+		getLocal(w, s.len());
+		WasmEmitHelper.emitStrBuildCall(w);
+		setLocal(w, s.sym());
+		emitHomeOf(w, ctx, s.start(), s.len(), s.sym(), s.qualifier(), s.at(), s.k(), s.last());
+		getLocal(w, s.sym());
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		ifVoid(w);
+		getLocal(w, s.sym());
+		refCast(w, WasmLispCompiler.TYPE_STRING);
+		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		setLocal(w, s.start());
+		getLocal(w, s.sym());
+		refCast(w, WasmLispCompiler.TYPE_STRING);
+		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
+		setLocal(w, s.len());
+		end(w);
+		end(w);
+		end(w);
 	}
 
 	/** Pushes nothing; sets {@code ENT} = the address of directory entry {@code IDX}. */
