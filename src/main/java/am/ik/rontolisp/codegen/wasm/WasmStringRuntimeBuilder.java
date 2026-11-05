@@ -378,9 +378,7 @@ final class WasmStringRuntimeBuilder {
 		// hand this boundary a charvec on THOSE routes. read-from-string, load, `#`
 		// reader macros and pathname construction were not exercised -- do not read this
 		// as "the reader never builds one."
-		get(w, str);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		set(w, str);
+		WasmEmitHelper.emitCharvecToStrLocal(w, str, charvecPossible);
 		// arr = str.data; len = array.len(arr)
 		get(w, str);
 		WasmEmitHelper.emitStrBytesArray(w);
@@ -1383,12 +1381,8 @@ final class WasmStringRuntimeBuilder {
 		// same belt-and-braces). Anything still not a TYPE_STRING traps on the cast
 		// below -- the contract the interpreter and the JVM backend enforce by
 		// throwing.
-		get(w, 0);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		set(w, 0);
-		get(w, 1);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		set(w, 1);
+		WasmEmitHelper.emitCharvecToStrLocal(w, 0, charvecPossible);
+		WasmEmitHelper.emitCharvecToStrLocal(w, 1, charvecPossible);
 		// arrA/lenA, arrB/lenB: the framed byte arrays and their lengths.
 		setStrArray(w, 0, arrA);
 		get(w, arrA);

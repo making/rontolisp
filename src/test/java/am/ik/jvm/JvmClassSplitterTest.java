@@ -126,9 +126,13 @@ class JvmClassSplitterTest {
 		Builder b = new Builder(cp);
 		MethodRefEntry used = b.ref("used", "()V");
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "main", "([Ljava/lang/String;)V",
-				new MethodCode().invokestatic(used).return_());
+				new MethodCode().invokestatic(used)
+					.ldc(cp.staticMethodHandle(b.ref("handled", "()V")))
+					.pop()
+					.return_());
 		b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "used", "()V",
 				new MethodCode().ldc(cp.stringEntry("kept")).pop().return_());
+		b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "handled", "()V", new MethodCode().return_());
 		b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "unused", "()V",
 				new MethodCode().ldc(cp.stringEntry("dropped")).pop().return_());
 		JvmClassSplitter.Split split = split(b.build(), Set.of("main"), method -> false, ConstantPool.MAX_INDEX);
@@ -136,7 +140,7 @@ class JvmClassSplitterTest {
 		assertThat(shape(split.mainClass()))
 			.containsSequence("method used:()V", "flags " + (AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC),
 					"ldc kept")
-			.contains("method main:([Ljava/lang/String;)V")
+			.contains("method main:([Ljava/lang/String;)V", "method handled:()V")
 			.doesNotContain("method unused:()V", "ldc dropped");
 		assertThat(new String(split.mainClass(), java.nio.charset.StandardCharsets.ISO_8859_1))
 			.doesNotContain("dropped");
@@ -224,7 +228,12 @@ class JvmClassSplitterTest {
 				.iconst_1()
 				.iadd()
 				.putstatic(counter);
-			if (k + 1 < CHAIN) {
+			if (k + 2 == CHAIN) {
+				// The last step is reached through a method handle, wherever it lands.
+				code.ldc(cp.staticMethodHandle(b.ref("step" + (k + 1), "()V")))
+					.invokevirtual(cp.methodRef("java/lang/invoke/MethodHandle", "invokeExact", "()V"));
+			}
+			else if (k + 1 < CHAIN) {
 				code.invokestatic(b.ref("step" + (k + 1), "()V"));
 			}
 			b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "step" + k, "()V", code.return_());

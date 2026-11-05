@@ -25550,6 +25550,20 @@ public final class LispMacroExpander {
 	}
 
 	public static boolean mayCreateInstances(List<LispVal> program, ClosRegistry closRegistry) {
+		return mayCreateInstances(program, closRegistry, false);
+	}
+
+	/**
+	 * {@link #mayCreateInstances(List, ClosRegistry)}, for a backend whose handlers read
+	 * no class where {@link #handlersTakeEveryThrow} holds: a catching form then builds
+	 * nothing.
+	 * @param program the top-level forms, AFTER the library splices
+	 * @param closRegistry the class registry
+	 * @param handlersReadNoClass whether a catching form needs no instance
+	 * @return whether an instance can exist
+	 */
+	public static boolean mayCreateInstances(List<LispVal> program, ClosRegistry closRegistry,
+			boolean handlersReadNoClass) {
 		if (mayCreateStreamValues(program)) {
 			// An OPEN stream is an instance of the fixed STREAM layout, so a program that
 			// can build one needs the instance representation -- including the program
@@ -25558,24 +25572,33 @@ public final class LispMacroExpander {
 			return true;
 		}
 		for (LispVal form : program) {
-			if (mayCreateInstance(form)) {
+			if (mayCreateInstance(form, handlersReadNoClass)) {
 				return true;
 			}
 		}
 		for (LispVal report : closRegistry.conditionReports().values()) {
-			if (mayCreateInstance(report)) {
+			if (mayCreateInstance(report, handlersReadNoClass)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	private static boolean mayCreateInstance(LispVal form) {
+	private static boolean mayCreateInstance(LispVal form, boolean handlersReadNoClass) {
 		while (form instanceof LispCons cons) {
-			if (cons.car() instanceof LispSymbol head && constructsInstance(head.name(), cons)) {
-				return true;
+			if (cons.car() instanceof LispSymbol head) {
+				boolean catching = handlersReadNoClass
+						&& (LispNames.HANDLER_CASE.equals(head.name()) || LispNames.IGNORE_ERRORS.equals(head.name()));
+				if (!catching && constructsInstance(head.name(), cons)) {
+					return true;
+				}
+				// A clause head would read as a signal call with initargs.
+				List<LispVal> evaluated = catching ? evaluatedClauseForms(head.name(), cons) : null;
+				if (evaluated != null) {
+					return evaluated.stream().anyMatch(f -> mayCreateInstance(f, true));
+				}
 			}
-			if (mayCreateInstance(cons.car())) {
+			if (mayCreateInstance(cons.car(), handlersReadNoClass)) {
 				return true;
 			}
 			form = cons.cdr();
@@ -25596,13 +25619,91 @@ public final class LispMacroExpander {
 			// A folded #S(...) literal may sit inside a #(...) vector literal, which is
 			// the one container the cons walk below cannot see through.
 			for (LispVal element : array.data()) {
-				if (mayCreateInstance(element)) {
+				if (mayCreateInstance(element, handlersReadNoClass)) {
 					return true;
 				}
 			}
 			return false;
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the first clause of every {@code handler-case} takes whatever the program
+	 * can throw: each is headed {@code error}, {@code serious-condition},
+	 * {@code condition} or {@code t}, and nothing throws what is no error -- no
+	 * {@code signal}, no {@code warn}, no computed datum, a quoted datum naming a class
+	 * under {@code error}. Every built-in signals an {@code error}. Reads every cons, so
+	 * quoted data counts against it. Where no report is read either, a landing has
+	 * nothing to ask of what it caught.
+	 * @param program the top-level forms, with their classes registered
+	 * @param closRegistry the class registry
+	 * @return whether a landing needs no class
+	 */
+	public static boolean handlersTakeEveryThrow(List<LispVal> program, ClosRegistry closRegistry) {
+		return program.stream().allMatch(form -> throwsOnlyToAnyClause(form, closRegistry));
+	}
+
+	private static boolean throwsOnlyToAnyClause(LispVal form, ClosRegistry closRegistry) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				if (!throwTakenByAnyClause(head.name(), cons, closRegistry)) {
+					return false;
+				}
+				List<LispVal> evaluated = evaluatedClauseForms(LispSymbol.memberName(head.name()), cons);
+				if (evaluated != null) {
+					return evaluated.stream().allMatch(f -> throwsOnlyToAnyClause(f, closRegistry));
+				}
+			}
+			if (!throwsOnlyToAnyClause(cons.car(), closRegistry)) {
+				return false;
+			}
+			form = cons.cdr();
+		}
+		return true;
+	}
+
+	private static boolean throwTakenByAnyClause(String head, LispCons form, ClosRegistry closRegistry) {
+		if (!form.isProperList()) {
+			return true;
+		}
+		List<LispVal> parts = form.toList();
+		switch (LispSymbol.memberName(head)) {
+			case LispNames.HANDLER_CASE:
+				for (int i = 2; i < parts.size(); i++) {
+					if (!(parts.get(i) instanceof LispCons clause) || !isClauseOfEveryThrow(clause.car())) {
+						return false;
+					}
+				}
+				return true;
+			case LispNames.SIGNAL, LispNames.WARN, LispNames.HANDLER_BIND:
+				return false;
+			case LispNames.FUNCTION:
+				return !(parts.size() == 2 && parts.get(1) instanceof LispSymbol name
+						&& (LispNames.ERROR.equals(name.name()) || LispNames.CERROR.equals(name.name())
+								|| LispNames.SIGNAL.equals(name.name()) || LispNames.WARN.equals(name.name())));
+			case LispNames.ERROR:
+				return parts.size() > 1 && isDatumOfAnError(parts.get(1), closRegistry);
+			case LispNames.CERROR:
+				return parts.size() > 2 && isDatumOfAnError(parts.get(2), closRegistry);
+			default:
+				return true;
+		}
+	}
+
+	private static boolean isClauseOfEveryThrow(LispVal head) {
+		return head instanceof LispTrue || head instanceof LispSymbol name
+				&& (":NO-ERROR".equals(name.name()) || "T".equals(name.name()) || "ERROR".equals(name.name())
+						|| "SERIOUS-CONDITION".equals(name.name()) || "CONDITION".equals(name.name()));
+	}
+
+	private static boolean isDatumOfAnError(LispVal datum, ClosRegistry closRegistry) {
+		if (datum instanceof LispString) {
+			return true;
+		}
+		LispSymbol type = quotedSymbol(datum);
+		ClosRegistry.ClassInfo cls = type == null ? null : closRegistry.findClass(type.name());
+		return cls != null && cls.ancestors().contains("ERROR");
 	}
 
 	/**
@@ -26259,7 +26360,9 @@ public final class LispMacroExpander {
 				continue;
 			}
 			for (LispVal bodyForm : clauseParts.subList(2, clauseParts.size())) {
-				if (usesSymbol(bodyForm, var.name())) {
+				boolean declaration = bodyForm instanceof LispCons declared && declared.car() instanceof LispSymbol op
+						&& LispNames.DECLARE.equals(op.name());
+				if (!declaration && usesSymbol(bodyForm, var.name())) {
 					return true;
 				}
 			}
@@ -31772,7 +31875,9 @@ public final class LispMacroExpander {
 			// every mode: changes the bytes of every EH-mode module whose renderer is
 			// declined (.kb/error-handling.md, "Location lines on wasm-GC").
 			boolean functionControls = !narrowing.declineRenderer();
-			out.addAll(conditionReportDefuns(closRegistry, narrowing, functionControls));
+			boolean guarded = signalMessages != SignalMessages.LAZY;
+			out.addAll(conditionReportDefuns(closRegistry, guarded ? narrowing.withRawFailures() : narrowing,
+					functionControls, guarded, dynamic || buildsSignalledInitargs(out, closRegistry)));
 		}
 		// The print-object renderer, once per program that defines a print-object method
 		// or routes condition reports. Emitted here so the tag list is the COMPLETE
@@ -31832,13 +31937,13 @@ public final class LispMacroExpander {
 	 * {@link #signalRendersRuntimeControl}.</li>
 	 * </ul>
 	 * The scan covers the registry's condition {@code :report}s beside the program: a
-	 * typed signal of a class with a report of its own inlines that report at the signal
-	 * site ({@link #expandTypedSignal}), and {@code define-condition} left it in the
-	 * registry, not in the program. Outside the routed report runtime (the wasm-GC
-	 * backends' lazy messages) nothing else carries it, so a report rendering through
-	 * {@code #'format} -- {@code uiop:not-implemented-error}'s -- compiled to a call of
-	 * an undefined {@code %fmt-render}. A report no site inlines costs nothing: the
-	 * renderer it brought is unreachable and the dead-code pass drops it.
+	 * {@code warn} of a class with a report of its own inlines that report at its site
+	 * ({@link #expandTypedSignal}), and {@code define-condition} left it in the registry,
+	 * not in the program. Outside the routed report runtime (the wasm-GC backends' lazy
+	 * messages) nothing else carries it, so a report rendering through {@code #'format}
+	 * -- {@code uiop:not-implemented-error}'s -- compiled to a call of an undefined
+	 * {@code %fmt-render}. A report no site inlines costs nothing: the renderer it
+	 * brought is unreachable and the dead-code pass drops it.
 	 * <p>
 	 * The {@code ~/name/} arm rides along only when the program can be seen to reach it:
 	 * that arm resolves a function out of the control string at run time, so carrying it
@@ -32276,6 +32381,10 @@ public final class LispMacroExpander {
 	private static boolean reachesFormatRenderer(LispVal form) {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head) {
+				List<LispVal> evaluated = evaluatedClauseForms(memberOf(head.name()), cons);
+				if (evaluated != null) {
+					return evaluated.stream().anyMatch(LispMacroExpander::reachesFormatRenderer);
+				}
 				if (LispNames.FUNCTION.equals(head.name()) && cons.cdr() instanceof LispCons quoted
 						&& quoted.car() instanceof LispSymbol named && LispNames.FORMAT.equals(named.name())) {
 					return true;
@@ -36198,11 +36307,8 @@ public final class LispMacroExpander {
 			message = warn ? new LispString("WARNING: " + reportString.value()) : reportString;
 		}
 		else if (report != null) {
-			LispSymbol streamVar = new LispSymbol(SIGNAL_STREAM_VAR);
-			LispVal rendered = callOf(LispNames.PRINT_WITHOUT_READABLY_INTERNAL,
-					listToCons(List.of(new LispSymbol(LispNames.WITH_OUTPUT_TO_STRING),
-							listToCons(List.<LispVal>of(streamVar)),
-							listToCons(List.of(new LispSymbol(LispNames.FUNCALL), report, condVar, streamVar)))));
+			LispVal rendered = !warn && closRegistry.routesConditionReports() ? signalText(condVar, LispNil.INSTANCE)
+					: writtenReport(report, condVar);
 			message = warn
 					? listToCons(
 							List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), rendered))
@@ -36214,17 +36320,31 @@ public final class LispMacroExpander {
 			// format-control) is unchanged, and so is a covered one whose format-control
 			// is nil at runtime. A class that INHERITS a report always renders one (a
 			// string, or a stream's contents), so its fallback is dead and not built: the
-			// wasm-GC signal compiles the fallback into every site's payload.
-			LispVal fallback = cls != null && inheritsConditionReport(cls, closRegistry) ? LispNil.INSTANCE
-					: formatControlMessage(typeSym, cls, items, bindings, passedInitargs) instanceof LispVal supplied
-							? supplied : legacySignalMessage(typeSym, items, bindings, false, passedInitargs);
-			LispVal rendered = conditionReportOr(condVar, fallback);
-			message = warn
-					? listToCons(
-							List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), rendered))
-					: rendered;
+			// wasm-GC signal compiles the fallback into every site's payload. A class
+			// reporting nothing carries the initarg list, rendered by %signal-text, since
+			// printing a value runs that value's print-object. Only a warn renders here,
+			// for the warning it is about to write.
+			boolean inherits = cls != null && inheritsConditionReport(cls, closRegistry);
+			if (warn) {
+				LispVal fallback = inherits ? LispNil.INSTANCE
+						: formatControlMessage(typeSym, cls, items, bindings, passedInitargs,
+								false) instanceof LispVal supplied ? supplied
+										: legacySignalMessage(typeSym, items, bindings, false, passedInitargs);
+				message = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "),
+						conditionReportOr(condVar, fallback)));
+			}
+			else {
+				LispVal fallback = inherits ? LispNil.INSTANCE
+						: formatControlMessage(typeSym, cls, items, bindings, passedInitargs,
+								true) instanceof LispVal supplied ? supplied
+										: signalledInitargs(typeSym, items, bindings, passedInitargs);
+				LispSymbol ownText = hasKeyword(items, ":FORMAT-ARGUMENTS") ? null
+						: textControlVariable(fallback, bindings);
+				message = ownText != null ? ownText : signalText(condVar, fallback);
+			}
 		}
-		else if (formatControlMessage(typeSym, cls, items, bindings, passedInitargs) instanceof LispVal supplied) {
+		else if (formatControlMessage(typeSym, cls, items, bindings, passedInitargs,
+				false) instanceof LispVal supplied) {
 			// A simple-* style class with a supplied :format-control: the message is
 			// its value (lite: :format-arguments are carried in the instance but not
 			// rendered into the message), preserving the (error (make-condition
@@ -36269,6 +36389,24 @@ public final class LispMacroExpander {
 		return listToCons(letParts);
 	}
 
+	/** A function report rendered at its site: for a warning about to be written. */
+	private static LispVal writtenReport(LispVal report, LispSymbol condVar) {
+		LispSymbol streamVar = new LispSymbol(SIGNAL_STREAM_VAR);
+		return callOf(LispNames.PRINT_WITHOUT_READABLY_INTERNAL,
+				listToCons(List.of(new LispSymbol(LispNames.WITH_OUTPUT_TO_STRING),
+						listToCons(List.<LispVal>of(streamVar)),
+						listToCons(List.of(new LispSymbol(LispNames.FUNCALL), report, condVar, streamVar)))));
+	}
+
+	private static boolean hasKeyword(List<LispVal> items, String keyword) {
+		for (int i = 0; i < items.size(); i += 2) {
+			if (items.get(i) instanceof LispSymbol k && k.isKeyword() && keyword.equals(k.name())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * Whether a {@code :report} is found along the class precedence list -- the walk the
 	 * generated renderer makes ({@link #conditionReportGroups}), so such a class's
@@ -36286,6 +36424,17 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal legacySignalMessage(LispSymbol typeSym, List<LispVal> items, List<LispVal> bindings,
 			boolean warn, @Nullable LispSymbol passedInitargs) {
+		LispSymbol msgVar = signalledInitargs(typeSym, items, bindings, passedInitargs);
+		String control = warn ? "WARNING: Condition ~s was signalled." : "Condition ~s was signalled.";
+		return formatMessagePieces(control, List.of(msgVar));
+	}
+
+	/**
+	 * The variable, bound here, of {@code (type initarg value ...)}: what a typed signal
+	 * of a class that reports nothing says it signalled.
+	 */
+	private static LispSymbol signalledInitargs(LispSymbol typeSym, List<LispVal> items, List<LispVal> bindings,
+			@Nullable LispSymbol passedInitargs) {
 		LispVal quotedType = listToCons(List.of(new LispSymbol(LispNames.QUOTE), typeSym));
 		LispVal msgList;
 		if (passedInitargs != null) {
@@ -36302,8 +36451,7 @@ public final class LispMacroExpander {
 		}
 		LispSymbol msgVar = new LispSymbol(ERROR_ARG_VAR + "m");
 		bindings.add(listToCons(List.of(msgVar, msgList)));
-		String control = warn ? "WARNING: Condition ~s was signalled." : "Condition ~s was signalled.";
-		return formatMessagePieces(control, List.of(msgVar));
+		return msgVar;
 	}
 
 	private static final String IGNORE_ERRORS_COND_VAR = "__ignore_errors_cond";
@@ -36357,7 +36505,7 @@ public final class LispMacroExpander {
 	 * legacy text over the plist otherwise.
 	 */
 	private static @Nullable LispVal formatControlMessage(LispSymbol typeSym, ClosRegistry.@Nullable ClassInfo cls,
-			List<LispVal> items, List<LispVal> bindings, @Nullable LispSymbol passedInitargs) {
+			List<LispVal> items, List<LispVal> bindings, @Nullable LispSymbol passedInitargs, boolean routed) {
 		LispVal supplied = suppliedFormatControl(cls, items);
 		if (supplied == null || passedInitargs == null) {
 			return supplied;
@@ -36369,7 +36517,8 @@ public final class LispMacroExpander {
 		LispVal absent = mvCall(LispNames.EQ_GENERAL,
 				mvCall(LispNames.GETF, passedInitargs, new LispSymbol(":FORMAT-CONTROL"), passedInitargs),
 				passedInitargs);
-		return makeIf(absent, legacySignalMessage(typeSym, items, bindings, false, passedInitargs), supplied);
+		return makeIf(absent, routed ? signalledInitargs(typeSym, items, bindings, passedInitargs)
+				: legacySignalMessage(typeSym, items, bindings, false, passedInitargs), supplied);
 	}
 
 	/**
@@ -36471,7 +36620,7 @@ public final class LispMacroExpander {
 				callOf(LispNames.PRINC_PIECE_INTERNAL, condVar));
 		LispVal message = makeIf(isSimpleWithMessage, callOf(LispNames.CONTROL_TEXT_INTERNAL, slotMsg), fallback);
 		if (closRegistry.routesConditionReports()) {
-			message = conditionReportOr(condVar, message);
+			message = warn ? conditionReportOr(condVar, message) : signalText(condVar, message);
 		}
 		LispVal stringCase;
 		LispVal conditionCase;
@@ -36639,6 +36788,53 @@ public final class LispMacroExpander {
 	private static LispVal formatMessagePieces(String controlText, List<LispVal> argSyms) {
 		LispVal message = formatMessageText(controlText, argSyms);
 		return argSyms.isEmpty() ? message : callOf(LispNames.PRINT_WITHOUT_READABLY_INTERNAL, message);
+	}
+
+	/**
+	 * Whether evaluating a signal's message does nothing but build text: a literal, a
+	 * variable a rendering reads ({@link #formatMessagePieces} binds a signal's arguments
+	 * to temporaries first), text built of those, or the class's {@code :report} run over
+	 * the instance. A report is for whoever prints the condition, and the interpreter
+	 * does not run one at a signal either.
+	 * @param message the message operand
+	 * @return whether it can go unevaluated where nothing reads it
+	 */
+	public static boolean buildsTextOnly(LispVal message) {
+		if (message instanceof LispString || message instanceof LispNil) {
+			return true;
+		}
+		if (message instanceof LispSymbol symbol) {
+			return symbol.name().startsWith("__");
+		}
+		if (!(message instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head) || !cons.isProperList()) {
+			return false;
+		}
+		return switch (head.name()) {
+			case LispNames.STRING_CONCAT, LispNames.PRINT_WITHOUT_READABLY_INTERNAL, LispNames.PRINC_PIECE_INTERNAL,
+					LispNames.PRIN1_PIECE_INTERNAL ->
+				cons.toList().subList(1, cons.toList().size()).stream().allMatch(LispMacroExpander::buildsTextOnly);
+			case LispNames.WITH_OUTPUT_TO_STRING -> rendersSignalReport(cons);
+			default -> false;
+		};
+	}
+
+	/**
+	 * Whether a form is {@link #expandTypedSignal}'s rendering of a report:
+	 * {@code (with-output-to-string (stream) (funcall report condition stream))} over its
+	 * own two variables.
+	 */
+	private static boolean rendersSignalReport(LispCons form) {
+		List<LispVal> parts = form.toList();
+		if (parts.size() != 3 || !(parts.get(1) instanceof LispCons streamBinding)
+				|| !(streamBinding.car() instanceof LispSymbol stream) || !SIGNAL_STREAM_VAR.equals(stream.name())
+				|| !(parts.get(2) instanceof LispCons call) || !call.isProperList()) {
+			return false;
+		}
+		List<LispVal> callParts = call.toList();
+		return callParts.size() == 4 && callParts.get(0) instanceof LispSymbol head
+				&& LispNames.FUNCALL.equals(head.name()) && callParts.get(2) instanceof LispSymbol condition
+				&& SIGNAL_COND_VAR.equals(condition.name()) && callParts.get(3) instanceof LispSymbol reportStream
+				&& SIGNAL_STREAM_VAR.equals(reportStream.name());
 	}
 
 	private static LispVal formatMessageText(String controlText, List<LispVal> argSyms) {
@@ -39944,6 +40140,22 @@ public final class LispMacroExpander {
 			java.util.@Nullable Set<String> programTags, boolean declineRenderer) {
 
 		/**
+		 * This narrowing, with what {@code %signal-text}'s guard synthesizes for a report
+		 * failing raw: a landing pad no scan of the program sees.
+		 * @return the narrowing
+		 */
+		ConditionNarrowing withRawFailures() {
+			if (this.constructibleTags == null) {
+				return this;
+			}
+			java.util.Set<String> tags = new java.util.HashSet<>(this.constructibleTags);
+			for (String rawFailure : rawFailureConditionClasses()) {
+				tags.add(LispLayout.CLASS_TAG_PREFIX + rawFailure);
+			}
+			return new ConditionNarrowing(java.util.Set.copyOf(tags), this.programTags, this.declineRenderer);
+		}
+
+		/**
 		 * No narrowing at all: every registered condition class stays in the report
 		 * partition and the renderer arm stays in {@code %format-condition}.
 		 * @return the identity narrowing
@@ -39996,6 +40208,10 @@ public final class LispMacroExpander {
 		}
 		ConditionTagScan scan = new ConditionTagScan(closRegistry);
 		for (LispVal form : program) {
+			// Its catching form guards a report: no landing pad a failure reaches.
+			if (isSignalTextDefun(form)) {
+				continue;
+			}
 			scan.inGeneratedErrorRuntime = isGeneratedErrorRuntimeDefun(form);
 			scan.walk(form, false);
 		}
@@ -40654,6 +40870,14 @@ public final class LispMacroExpander {
 	 */
 	public static List<LispVal> conditionReportDefuns(ClosRegistry closRegistry, ConditionNarrowing narrowing,
 			boolean functionControls) {
+		return conditionReportDefuns(closRegistry, narrowing, functionControls, true, true);
+	}
+
+	/**
+	 * As the overload above, sizing {@code %signal-text} ({@link #signalTextDefun}).
+	 */
+	private static List<LispVal> conditionReportDefuns(ClosRegistry closRegistry, ConditionNarrowing narrowing,
+			boolean functionControls, boolean guarded, boolean initargs) {
 		LispSymbol value = new LispSymbol("__crv");
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		clauses.add(new LispSymbol(LispNames.COND));
@@ -40676,7 +40900,123 @@ public final class LispMacroExpander {
 		LispVal reportDefun = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
 				new LispSymbol(LispNames.CONDITION_REPORT_STR_INTERNAL), listToCons(List.<LispVal>of(value)),
 				callOf(LispNames.PRINT_WITHOUT_READABLY_INTERNAL, listToCons(clauses))));
-		return List.of(formatConditionDefun(narrowing.declineRenderer(), functionControls), reportDefun);
+		return List.of(formatConditionDefun(narrowing.declineRenderer(), functionControls), reportDefun,
+				signalTextDefun(guarded, initargs));
+	}
+
+	/**
+	 * {@code (%signal-text c fallback)}: the text a signal of {@code c} reports, whoever
+	 * asks -- the instance's report, else what the site could say of it: the
+	 * {@code (type initarg value ...)} list {@link #signalledInitargs} built, a message,
+	 * or {@code NIL} for nil. Rendering runs program code, so it happens only where the
+	 * text is read, never at the signal. A report that fails is itself the text
+	 * ({@code #<error printing a C: ...>}, SBCL's words), so no reader has to answer for
+	 * a second condition while reporting the first.
+	 * @param guarded whether exception handling is there to catch a failing report: not
+	 * on a wasm-GC module outside exception-handling mode, whose EH gate a
+	 * {@code handler-case} here would turn on for every program signalling a typed
+	 * condition
+	 * @param initargs whether a site can hand a {@code (type initarg value ...)} list
+	 * ({@link #buildsSignalledInitargs}), whose {@code ~s} brings the printer
+	 */
+	private static LispVal signalTextDefun(boolean guarded, boolean initargs) {
+		LispSymbol condition = new LispSymbol("__stc");
+		LispSymbol fallback = new LispSymbol("__stm");
+		LispSymbol report = new LispSymbol("__str");
+		LispVal className = listToCons(List.of(new LispSymbol(LispNames.SUBSEQ),
+				callOf(LispNames.SYMBOL_NAME, objTag(condition)), new LispInteger(7)));
+		LispVal list = initargs ? formatMessagePieces("Condition ~s was signalled.", List.of(fallback))
+				: concatOf(new LispString("Condition of type "), className, new LispString(" was signalled."));
+		LispVal text = makeIf(fallback, makeIf(callOf(LispNames.CONSP, fallback), list, fallback),
+				new LispString("NIL"));
+		LispVal rendered = makeLet(report.name(), callOf(LispNames.CONDITION_REPORT_STR_INTERNAL, condition),
+				makeIf(report, report, text));
+		if (guarded) {
+			LispSymbol failure = new LispSymbol("__ste");
+			LispSymbol inner = new LispSymbol("__sti");
+			LispVal innerReport = listToCons(List.of(new LispSymbol(LispNames.HANDLER_CASE),
+					callOf(LispNames.CONDITION_REPORT_STR_INTERNAL, failure),
+					listToCons(List.of(new LispSymbol(LispNames.ERROR), LispNil.INSTANCE, LispNil.INSTANCE))));
+			LispVal failed = makeLet(inner.name(), innerReport, concatOf(new LispString("#<error printing a "),
+					className,
+					makeIf(inner, concatOf(new LispString(": "), inner, new LispString(">")), new LispString(">"))));
+			rendered = listToCons(List.of(new LispSymbol(LispNames.HANDLER_CASE), rendered, listToCons(
+					List.of(new LispSymbol(LispNames.ERROR), listToCons(List.<LispVal>of(failure)), failed))));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SIGNAL_TEXT_INTERNAL),
+				listToCons(List.of(condition, fallback)), rendered));
+	}
+
+	private static boolean isSignalTextDefun(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.DEFUN.equals(op.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
+				&& LispNames.SIGNAL_TEXT_INTERNAL.equals(name.name());
+	}
+
+	private static LispVal concatOf(LispVal first, LispVal second, LispVal third) {
+		return listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT),
+				listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), first, second)), third));
+	}
+
+	/**
+	 * Whether a signal in the program can say {@code (type initarg value ...)}: a literal
+	 * designator of a class no {@code :report} reaches, with no {@code :format-control}
+	 * written, or a dispatch over a computed one. A {@code warn} renders its own.
+	 */
+	private static boolean buildsSignalledInitargs(List<LispVal> program, ClosRegistry closRegistry) {
+		return program.stream()
+			.anyMatch(form -> isGeneratedErrorRuntimeDefun(form) || formBuildsSignalledInitargs(form, closRegistry))
+				|| signalCanSignalTypeError(program, closRegistry);
+	}
+
+	private static boolean formBuildsSignalledInitargs(LispVal form, ClosRegistry closRegistry) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.isQuote(head.name())) {
+				return false;
+			}
+			String member = memberOf(head.name());
+			List<LispVal> evaluated = evaluatedClauseForms(member, cons);
+			if (evaluated != null) {
+				return evaluated.stream().anyMatch(sub -> formBuildsSignalledInitargs(sub, closRegistry));
+			}
+			if (!head.name().startsWith(":") && CONDITION_SIGNAL_FAMILY.contains(member)
+					&& !LispNames.WARN.equals(member)
+					&& signalBuildsInitargs(cons, LispNames.CERROR.equals(member), closRegistry)) {
+				return true;
+			}
+		}
+		LispVal rest = cons;
+		while (rest instanceof LispCons link) {
+			if (formBuildsSignalledInitargs(link.car(), closRegistry)) {
+				return true;
+			}
+			rest = link.cdr();
+		}
+		return false;
+	}
+
+	private static boolean signalBuildsInitargs(LispCons signal, boolean cerror, ClosRegistry closRegistry) {
+		List<LispVal> parts = signal.toList();
+		int at = cerror ? 2 : 1;
+		if (parts.size() <= at) {
+			return false;
+		}
+		LispVal datum = parts.get(at);
+		List<LispVal> initargs = parts.subList(at + 1, parts.size());
+		if (datum instanceof LispCons make && make.car() instanceof LispSymbol op
+				&& LispNames.MAKE_CONDITION.equals(op.name()) && make.cdr() instanceof LispCons makeArgs) {
+			datum = makeArgs.car();
+			initargs = make.toList().subList(2, make.toList().size());
+		}
+		LispSymbol type = quotedSymbol(datum);
+		if (type == null) {
+			return false;
+		}
+		ClosRegistry.ClassInfo cls = closRegistry.findClass(type.name());
+		return cls == null || !inheritsConditionReport(cls, closRegistry) && !hasKeyword(initargs, ":FORMAT-CONTROL");
 	}
 
 	/**
@@ -40755,49 +41095,39 @@ public final class LispMacroExpander {
 
 	/**
 	 * The report rendering of a condition value, falling back to {@code fallback} when
-	 * its class has no report -- the shape every SIGNAL site uses so its message and the
+	 * its class has no report -- the shape a {@code warn} writes, so its text and the
 	 * text {@code princ} writes for the same condition agree.
 	 * @param value the (temp-bound) condition value form
 	 * @param fallback the message form to use when there is no report
 	 * @return the message form
 	 */
 	private static LispVal conditionReportOr(LispVal value, LispVal fallback) {
-		LispSymbol reportVar = new LispSymbol(CONDITION_REPORT_VAR_PREFIX + MV_COUNTER.getAndIncrement());
+		LispSymbol reportVar = new LispSymbol("__crm" + MV_COUNTER.getAndIncrement());
 		return makeLet(reportVar.name(), callOf(LispNames.CONDITION_REPORT_STR_INTERNAL, value),
 				makeIf(reportVar, reportVar, fallback));
 	}
 
-	private static final String CONDITION_REPORT_VAR_PREFIX = "__crm";
+	/**
+	 * The message operand of a signal that reports {@code value}, else {@code fallback}.
+	 */
+	private static LispVal signalText(LispVal value, LispVal fallback) {
+		return listToCons(List.of(new LispSymbol(LispNames.SIGNAL_TEXT_INTERNAL), value, fallback));
+	}
 
 	/**
-	 * The {@code fallback} of a message {@link #conditionReportOr} built, or null when
-	 * the form is not one: the half of a signal's text that only the signal SITE can make
-	 * (a report-less class's {@code Condition (TYPE :INITARG v) was signalled.}), while
-	 * the report half is the instance's, re-rendered wherever the instance is. The
-	 * wasm-GC signal compiles only this half into its payload, since its entry landing
-	 * pad renders the instance itself ({@code .kb/error-handling.md}).
+	 * The {@code fallback} of a message {@link #signalText} built, or null when the form
+	 * is not one: what only the signal SITE can say of a class that reports nothing,
+	 * while the report is the instance's, rendered wherever the instance is. Every signal
+	 * evaluates only this half: the text is rendered where it is read
+	 * ({@code .kb/error-handling.md}, "A signal renders nothing").
 	 * @param message a signal's message operand
 	 * @return the fallback form, or null
 	 */
 	public static @Nullable LispVal conditionReportFallback(LispVal message) {
-		// (let ((__crmN (%condition-report-str v))) (if __crmN __crmN fallback))
-		if (!(message instanceof LispCons let && let.car() instanceof LispSymbol letOp
-				&& LispNames.LET.equals(letOp.name()) && let.cdr() instanceof LispCons letRest
-				&& letRest.car() instanceof LispCons bindings && bindings.cdr() instanceof LispNil
-				&& bindings.car() instanceof LispCons binding && binding.car() instanceof LispSymbol var
-				&& var.name().startsWith(CONDITION_REPORT_VAR_PREFIX) && binding.cdr() instanceof LispCons valueCell
-				&& valueCell.car() instanceof LispCons value && value.car() instanceof LispSymbol valueOp
-				&& LispNames.CONDITION_REPORT_STR_INTERNAL.equals(valueOp.name())
-				&& letRest.cdr() instanceof LispCons bodyCell && bodyCell.cdr() instanceof LispNil
-				&& bodyCell.car() instanceof LispCons body)) {
-			return null;
-		}
-		List<LispVal> ifParts = body.toList();
-		if (ifParts.size() == 4 && ifParts.get(0) instanceof LispSymbol ifOp && LispNames.IF.equals(ifOp.name())
-				&& var.equals(ifParts.get(1)) && var.equals(ifParts.get(2))) {
-			return ifParts.get(3);
-		}
-		return null;
+		// (%signal-text v fallback)
+		return message instanceof LispCons call && call.car() instanceof LispSymbol op
+				&& LispNames.SIGNAL_TEXT_INTERNAL.equals(op.name()) && call.toList().size() == 3 ? call.toList().get(2)
+						: null;
 	}
 
 	/**
@@ -55109,7 +55439,8 @@ public final class LispMacroExpander {
 		java.util.List<String> loadContextVars = new java.util.ArrayList<>();
 		boolean quiet = false;
 		for (LispVal form : program) {
-			usesMv = usesMv || usesMvOperator(form);
+			// Its handler-case has no :no-error clause, so it consumes no values.
+			usesMv = usesMv || !isSignalTextDefun(form) && usesMvOperator(form);
 			quiet = quiet || usesAnySymbol(form, QUIET_MV_OPERATORS);
 		}
 		if (quiet) {

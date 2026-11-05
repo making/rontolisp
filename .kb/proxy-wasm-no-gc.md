@@ -8,9 +8,9 @@ parent README, the other SDK's choices in `proxy-wasm-sdk.md`, and whether eithe
 
 | Filter | raw | gzip | by hand on `rontolisp:memory` (`.todo/artefacts/i51-proxy-wasm-filter-size/no-gc/`) | on the wasm-GC SDK, `(:on-failure :trap)` |
 | --- | ---: | ---: | ---: | ---: |
-| `http_body` | 2,166 | 1,246 | 2,101 / 1,109 | 6,086 / 3,165 |
-| `http_headers` | 2,583 | 1,388 | 2,556 / 1,372 | 20,311 / 8,702 |
-| `test_plugin` | 6,581 | 3,145 | not written | 49,489 / 20,741 |
+| `http_body` | 2,166 | 1,246 | 2,101 / 1,109 | 4,872 / 2,563 |
+| `http_headers` | 2,583 | 1,388 | 2,556 / 1,372 | 7,114 / 3,433 |
+| `test_plugin` | 6,581 | 3,145 | not written | 31,340 / 13,012 |
 | A filter with one `remove-header` | 1,193 | 716 | | |
 
 Same size as by hand, since the macros leave what a person writes, and `http_body` was smaller until

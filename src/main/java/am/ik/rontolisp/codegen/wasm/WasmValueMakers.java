@@ -15,7 +15,7 @@ import java.util.Set;
  * is compiled -- a body the tree shaker then drops included -- and the ladder's
  * {@code call} would keep the callee, and everything it reaches, for a value nothing can
  * make. This is the half of the answer only the compiler knows: the shake asks it
- * ({@code WasmTreeShaker.madeValues}) which values a KEPT function makes, and the ladders
+ * ({@code WasmTreeShaker.valueReach}) which values a KEPT function makes, and the ladders
  * are rebuilt over those ({@code .kb/optimize-dead-code-elimination.md}, "A ladder arm
  * lives while a kept function makes its value").
  *
@@ -35,6 +35,8 @@ final class WasmValueMakers {
 	private int unit = UNATTRIBUTED;
 
 	private final Map<Integer, Set<Integer>> makers = new HashMap<>();
+
+	private final Map<String, Set<Integer>> spellers = new HashMap<>();
 
 	/**
 	 * Opens the unit every value noted until {@link #close} is credited to.
@@ -56,6 +58,24 @@ final class WasmValueMakers {
 	 */
 	void note(int funcId) {
 		this.makers.computeIfAbsent(funcId, k -> new HashSet<>()).add(this.unit);
+	}
+
+	/**
+	 * Records that the open unit spells a literal a run-time designator can carry.
+	 * @param spelling the literal's spelling
+	 */
+	void noteSpelling(String spelling) {
+		this.spellers.computeIfAbsent(spelling, k -> new HashSet<>()).add(this.unit);
+	}
+
+	/**
+	 * The functions whose bodies hold a literal.
+	 * @param spelling the literal's spelling
+	 * @return the functions ({@link #UNATTRIBUTED} among them for a literal spelled
+	 * outside any unit)
+	 */
+	Set<Integer> spellers(String spelling) {
+		return this.spellers.getOrDefault(spelling, Set.of());
 	}
 
 	/**

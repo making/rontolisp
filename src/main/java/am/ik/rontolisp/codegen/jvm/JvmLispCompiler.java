@@ -213,6 +213,9 @@ public final class JvmLispCompiler implements LispCompiler {
 	/** Whether the output needs {@link #CONS_CAS_RUNTIME_CLASS_FILES}. */
 	private boolean needsConsCasRuntime;
 
+	/** Whether the output needs {@link JvmSignalThrow#RUNTIME_CLASS_FILES}. */
+	private boolean needsSignalRuntime;
+
 	/**
 	 * Whether the last {@link #compile} polls for SIGINT, i.e. whether the emitted class
 	 * needs {@code RontoInterruptSignal} beside it.
@@ -1004,11 +1007,11 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsInflateRuntime
-				&& !this.needsConditionVariableRuntime && !this.needsConsCasRuntime && !this.needsInterruptRuntime
-				&& !this.needsTerminalRuntime && !this.needsHashTableRuntime && !this.needsComplexRuntime
-				&& !this.needsQuantizedRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime
-				&& !this.needsStringInputRuntime && !this.needsJavaValueRuntime && this.partClassFiles.isEmpty()
-				&& this.bridgeClassFiles.isEmpty()) {
+				&& !this.needsConditionVariableRuntime && !this.needsConsCasRuntime && !this.needsSignalRuntime
+				&& !this.needsInterruptRuntime && !this.needsTerminalRuntime && !this.needsHashTableRuntime
+				&& !this.needsComplexRuntime && !this.needsQuantizedRuntime && !this.needsIoStreamRuntime
+				&& !this.needsCharFileRuntime && !this.needsStringInputRuntime && !this.needsJavaValueRuntime
+				&& this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
 		// A program too large for one class brings its $PartN classes, and a bridged
@@ -1054,6 +1057,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsConsCasRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(CONS_CAS_RUNTIME_CLASS_FILES));
+		}
+		if (this.needsSignalRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmSignalThrow.RUNTIME_CLASS_FILES));
 		}
 		if (this.needsInterruptRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmInterruptPoll.RUNTIME_CLASS_FILES));
@@ -3340,6 +3346,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				usesStreamValues && functions.containsKey(LispNames.CHARACTER_STREAM_P_INTERNAL),
 				functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL),
 				functions.containsKey(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL));
+		// A reference the gates above have read makes no value: only an evaluation could
+		// (compiler/ToplevelStatements).
+		topLevelExprs = ToplevelStatements.pruneFunctionReferences(topLevelExprs, name -> {
+			FunctionInfo fi = functions.get(name);
+			return fi != null && fi.cell() == null && !fenvForwarders.contains(name);
+		});
 		// Cut a top-level form an earlier attempt measured too large for one method
 		// into methods of its own: the chunker below only splits BETWEEN forms, so one
 		// form past the per-method cap has no split point otherwise
@@ -5090,6 +5102,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// The runtime struct-layout directory for #S(...) read at run time.
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rdStructsName, rdStructsDesc);
 		}
+		this.needsSignalRuntime = mainCtx.conditionChannel.signalNew != null;
 		if (mainCtx.conditionChannel.used) {
 			// The per-thread condition carrier from a %error-cond throw site to a
 			// handler-case catch handler; initialized in <clinit>.
@@ -6968,6 +6981,31 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
+	// One walk whatever the number of names: a gate over a package's verbs walking the
+	// program per verb was 8% of compiling the corpus.
+	private static boolean programUsesAnySymbol(List<LispVal> program, List<String> names) {
+		Set<String> lookup = Set.copyOf(names);
+		for (LispVal expr : program) {
+			if (usesAnySymbol(expr, lookup)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean usesAnySymbol(LispVal val, Set<String> names) {
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym && names.contains(sym.name())) {
+				return true;
+			}
+			if (usesAnySymbol(cons.car(), names)) {
+				return true;
+			}
+			val = cons.cdr();
+		}
+		return false;
+	}
+
 	// The host types the program text gives its variables lowered onto the java: sites
 	// they type, every top-level form in order (compiler/JavaDeclarations); a program
 	// that mentions no java: symbol comes back unchanged without opening the classes.
@@ -7005,12 +7043,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	// (LispNames.JAVA_OPERATORS_QUALIFIED), so its sites are resolved against the class
 	// files (and the bridge emitted when one needs it).
 	private static boolean programUsesAnyJavaOp(List<LispVal> program) {
-		for (String operator : LispNames.JAVA_OPERATORS_QUALIFIED) {
-			if (programUsesSymbol(program, operator)) {
-				return true;
-			}
-		}
-		return false;
+		return programUsesAnySymbol(program, LispNames.JAVA_OPERATORS_QUALIFIED);
 	}
 
 	// True when the program calls the objc primitive layer (objc.lisp's calls, and
@@ -7018,12 +7051,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	// need) is emitted. A program that uses appkit: qualifies through the spliced
 	// appkit.lisp and objc.lisp.
 	private static boolean programUsesAnyObjcOp(List<LispVal> program) {
-		for (String name : JvmObjcPrimitivesCompiler.names()) {
-			if (programUsesSymbol(program, name)) {
-				return true;
-			}
-		}
-		return false;
+		return programUsesAnySymbol(program, JvmObjcPrimitivesCompiler.names());
 	}
 
 	// True when the program references any of the ffi: verbs, so the shipped
@@ -7031,12 +7059,11 @@ public final class JvmLispCompiler implements LispCompiler {
 	// program that uses cffi: qualifies through the spliced cffi-sys backend, whose
 	// primitives are ffi: calls.
 	private static boolean programUsesAnyFfiOp(List<LispVal> program) {
-		for (String member : JvmFfiInteropCompiler.members()) {
-			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.FFI_PKG, member))) {
-				return true;
-			}
-		}
-		return false;
+		return programUsesAnySymbol(program,
+				JvmFfiInteropCompiler.members()
+					.stream()
+					.map(member -> PackageRegistry.qualify(LispNames.FFI_PKG, member))
+					.toList());
 	}
 
 	/**
@@ -7739,6 +7766,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * two shapes it has. Minted with {@link #condRan}.
 		 */
 		@Nullable MethodRefEntry condOf;
+
+		/**
+		 * {@code _signalNew(Object, Object)Throwable}: a throw site's
+		 * {@code RontoSignal}, built on the first site that renders where it is read
+		 * ({@link JvmSignalThrow}); its class then travels with the output.
+		 */
+		@Nullable MethodRefEntry signalNew;
 
 		@Nullable Utf8Entry fieldName;
 

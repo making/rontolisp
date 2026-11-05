@@ -557,7 +557,7 @@ class WasmExportCompilerTest {
 		// with the reactor component's text, as one inside a defun does, not point at a
 		// hook the shape does not have.
 		String source = """
-				(defvar *t0* (or (ignore-errors (get-universal-time)) 0))
+				(defvar *t0* (handler-case (get-universal-time) (error (c) (length (princ-to-string c)))))
 				(defun t0 () *t0*)
 				(rontolisp:wasm-export 't0 :returns :s64)
 				""";

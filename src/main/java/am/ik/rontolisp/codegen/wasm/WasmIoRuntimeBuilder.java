@@ -2668,8 +2668,8 @@ final class WasmIoRuntimeBuilder {
 		// A mutable character vector (a subseq/copy-seq result being written) renders
 		// once here; any other value passes through _charvec_to_str unchanged.
 		getLocal(w, STR);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
 		setLocal(w, NSTR);
+		WasmEmitHelper.emitCharvecToStrLocal(w, NSTR, charvecPossible);
 		// fd = stream is an i31 handle ? i31.get_s(stream) : 1 (stdout) -- nil and the
 		// designator t (a redirected *standard-output*'s default) both mean stdout. The
 		// dispatch comes FIRST: the string-output-stream branch copies GC array to GC

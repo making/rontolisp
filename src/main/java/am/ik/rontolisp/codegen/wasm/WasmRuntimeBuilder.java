@@ -187,14 +187,8 @@ final class WasmRuntimeBuilder {
 		// fast path, so one code path serves all four combinations): two character
 		// vectors with equal content compare true, and a character vector compares true
 		// to a string with the same content.
-		getLocal(w, 0);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		getLocal(w, 1);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(1);
+		WasmEmitHelper.emitCharvecToStrLocal(w, 0, charvecPossible);
+		WasmEmitHelper.emitCharvecToStrLocal(w, 1, charvecPossible);
 
 		// if (ref.eq a b) -> 1
 		getLocal(w, 0);
@@ -707,10 +701,7 @@ final class WasmRuntimeBuilder {
 		// vector key hashes exactly like the string with the same content (agreeing
 		// with _equal's entry normalization -- equal-table gethash/sethash with mixed
 		// string/character-vector keys interoperate).
-		getLocal(w, 0);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(0);
+		WasmEmitHelper.emitCharvecToStrLocal(w, 0, charvecPossible);
 
 		// if v is null -> 0
 		getLocal(w, 0);
@@ -1387,13 +1378,13 @@ final class WasmRuntimeBuilder {
 		if (instanceTypeIndex < 0) {
 			return;
 		}
-		WasmLispCompiler.StringTable.StringEntry openStruct = st.addString("#S(");
-		WasmLispCompiler.StringTable.StringEntry openClass = st.addString("#<");
-		WasmLispCompiler.StringTable.StringEntry closeClass = st.addString(">");
-		WasmLispCompiler.StringTable.StringEntry keySep = st.addString(" :");
-		WasmLispCompiler.StringTable.StringEntry depthMarker = st.addString("#");
+		WasmLispCompiler.StringTable.StringEntry openStruct = st.addBodyString("#S(");
+		WasmLispCompiler.StringTable.StringEntry openClass = st.addBodyString("#<");
+		WasmLispCompiler.StringTable.StringEntry closeClass = st.addBodyString(">");
+		WasmLispCompiler.StringTable.StringEntry keySep = st.addBodyString(" :");
+		WasmLispCompiler.StringTable.StringEntry depthMarker = st.addBodyString("#");
 		boolean escape = elementFunc == WasmLispCompiler.FUNC_PRINT_VAL;
-		WasmLispCompiler.StringTable.StringEntry pathnamePrefix = escape ? st.addString("#P") : null;
+		WasmLispCompiler.StringTable.StringEntry pathnamePrefix = escape ? st.addBodyString("#P") : null;
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -2298,10 +2289,14 @@ final class WasmRuntimeBuilder {
 		/** {@code _arity_message}'s module index, or -1 when the module has none. */
 		private final int messageIndex;
 
+		/** Whether nothing reads the text ({@code Ctx.unreadReports}). */
+		private final boolean unread;
+
 		ArityReport(WasmLispCompiler.StringTable stringTable, int layoutAddress, int instanceTypeIndex,
 				int slotCapacity, int formatControlSlot, boolean identityHash, SortedMap<Integer, String> namedFuncIds,
 				SortedMap<Integer, DeclaredArityReport> declaredFuncIds, SortedMap<Integer, String> unbackedOperators,
-				int messageIndex) {
+				int messageIndex, boolean unread) {
+			this.unread = unread;
 			this.stringTable = stringTable;
 			this.layoutAddress = layoutAddress;
 			this.instanceTypeIndex = instanceTypeIndex;
@@ -2405,6 +2400,9 @@ final class WasmRuntimeBuilder {
 
 		private final boolean identityHash;
 
+		/** Whether nothing reads the text ({@code Ctx.unreadReports}). */
+		private final boolean unread;
+
 		private WasmLispCompiler.StringTable.@Nullable StringEntry notFunctionPrefix;
 
 		private WasmLispCompiler.StringTable.@Nullable StringEntry undefinedPrefix;
@@ -2412,12 +2410,14 @@ final class WasmRuntimeBuilder {
 		private WasmLispCompiler.StringTable.@Nullable StringEntry undefinedSuffix;
 
 		NotFunctionReport(WasmLispCompiler.StringTable stringTable, @Nullable ConditionInstance typeError,
-				@Nullable ConditionInstance undefinedFunction, int undefinedNameSlot, boolean identityHash) {
+				@Nullable ConditionInstance undefinedFunction, int undefinedNameSlot, boolean identityHash,
+				boolean unread) {
 			this.stringTable = stringTable;
 			this.typeError = typeError;
 			this.undefinedFunction = undefinedFunction;
 			this.undefinedNameSlot = undefinedFunction != null ? undefinedNameSlot : -1;
 			this.identityHash = identityHash;
+			this.unread = unread;
 		}
 
 		private void intern() {
@@ -2439,7 +2439,9 @@ final class WasmRuntimeBuilder {
 		 * @param byteLocal a spare {@code i32} local
 		 */
 		void emitUndefinedThrow(WasmWriter w, int msgLocal, int byteLocal) {
-			intern();
+			if (!this.unread) {
+				intern();
+			}
 			// the name's first byte, 0 for nil
 			w.write(Instruction.GET_LOCAL);
 			w.writeUnsignedLeb128(0);
@@ -2463,6 +2465,10 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.I32_EQ);
 			w.write(Instruction.BR_IF);
 			w.writeUnsignedLeb128(0); // $notFunction
+			if (this.unread) {
+				emitUnreadThrow(w, this.undefinedFunction, this.identityHash);
+				return;
+			}
 			emitStrConst(w, Objects.requireNonNull(this.undefinedPrefix));
 			emitSymbolSpelling(w, 0, msgLocal);
 			emitUndefinedTail(w, msgLocal);
@@ -2479,6 +2485,10 @@ final class WasmRuntimeBuilder {
 		 * @param msgLocal a spare {@code (ref null eq)} local
 		 */
 		void emitUndefinedSetfThrow(WasmWriter w, int msgLocal) {
+			if (this.unread) {
+				emitUnreadThrow(w, this.undefinedFunction, this.identityHash);
+				return;
+			}
 			intern();
 			emitStrConst(w, Objects.requireNonNull(this.undefinedPrefix));
 			w.write(Instruction.GET_LOCAL);
@@ -2519,6 +2529,10 @@ final class WasmRuntimeBuilder {
 		 * @param msgLocal a spare {@code (ref null eq)} local
 		 */
 		void emitNotFunctionThrow(WasmWriter w, int msgLocal) {
+			if (this.unread) {
+				emitUnreadThrow(w, this.typeError, this.identityHash);
+				return;
+			}
 			intern();
 			emitStrConst(w, Objects.requireNonNull(this.notFunctionPrefix));
 			w.write(Instruction.GET_LOCAL);
@@ -2577,16 +2591,20 @@ final class WasmRuntimeBuilder {
 
 		private final boolean identityHash;
 
+		/** Whether nothing reads the text ({@code Ctx.unreadReports}). */
+		private final boolean unread;
+
 		private WasmLispCompiler.StringTable.@Nullable StringEntry prefix;
 
 		private WasmLispCompiler.StringTable.@Nullable StringEntry suffix;
 
 		UnboundVariableReport(WasmLispCompiler.StringTable stringTable, @Nullable ConditionInstance unboundVariable,
-				int nameSlot, boolean identityHash) {
+				int nameSlot, boolean identityHash, boolean unread) {
 			this.stringTable = stringTable;
 			this.unboundVariable = unboundVariable;
 			this.nameSlot = unboundVariable != null ? nameSlot : -1;
 			this.identityHash = identityHash;
+			this.unread = unread;
 		}
 
 		/**
@@ -2596,6 +2614,10 @@ final class WasmRuntimeBuilder {
 		 * @param msgLocal a spare {@code (ref null eq)} local
 		 */
 		void emitThrow(WasmWriter w, int symLocal, int msgLocal) {
+			if (this.unread) {
+				emitUnreadThrow(w, this.unboundVariable, this.identityHash);
+				return;
+			}
 			if (this.prefix == null) {
 				this.prefix = this.stringTable
 					.addBodyString("\"" + ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX + "\"");
@@ -2743,7 +2765,10 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
-		if (report != null) {
+		if (report != null && report.unread) {
+			emitUnreadThrow(w, null, report.identityHash);
+		}
+		else if (report != null) {
 			w.write(Instruction.REF_NULL);
 			w.writeHeapType(Type.EQ.code());
 			emitStrConst(w, report.applyImproperList());
@@ -2814,6 +2839,12 @@ final class WasmRuntimeBuilder {
 	 */
 	private static void emitArityThrow(WasmWriter w, ArityReport report, int shapeLocal, boolean named, int slotsLocal,
 			int msgLocal, Runnable pushGot) {
+		if (report.unread) {
+			emitUnreadThrow(w, report.layoutAddress < 0 ? null : new ConditionInstance(report.layoutAddress,
+					report.instanceTypeIndex, report.slotCapacity, report.formatControlSlot, report.identityHash),
+					report.identityHash);
+			return;
+		}
 		report.intern();
 		if (named) {
 			// the whole message from the shared function, which reads the callee's
@@ -2948,6 +2979,52 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		emitStrConst(w, message);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		w.write(Instruction.THROW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+	}
+
+	/**
+	 * Builds a landing where nothing reads a report ({@code Ctx.unreadReports}): whatever
+	 * the signature, it reads no parameter and never returns.
+	 * @param instance the class's shape, or null for the instance-less payload
+	 * @param identityHash whether a cons carries the identity-hash field
+	 * @return the function body
+	 */
+	static byte[] buildUnreadThrowBody(@Nullable ConditionInstance instance, boolean identityHash) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no locals
+		emitUnreadThrow(w, instance, identityHash);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Throws where nothing reads a report: the class's instance with every slot nil, or
+	 * no instance for a class the module did not bake, and no message.
+	 * @param w the writer
+	 * @param instance the class's shape, or null for the instance-less payload
+	 * @param identityHash whether a cons carries the identity-hash field
+	 */
+	static void emitUnreadThrow(WasmWriter w, @Nullable ConditionInstance instance, boolean identityHash) {
+		if (instance == null) {
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+		}
+		else {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(instance.layoutAddress());
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(instance.slotCapacity());
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			WasmEmitHelper.emitNewInstance(w, instance.instanceTypeIndex(), instance.identityHash());
+		}
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
 		WasmEmitHelper.emitNewCons(w, identityHash);
 		w.write(Instruction.THROW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
@@ -5308,11 +5385,7 @@ final class WasmRuntimeBuilder {
 		// Normalize a mutable character vector into a string up front: it then falls
 		// into the string branch below (the readable form keeps the quotes), and the
 		// recursive cons/array element prints route back through this entry.
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(0);
+		WasmEmitHelper.emitCharvecToStrLocal(w, 0, charvecPossible);
 
 		// Check null (nil)
 		w.write(Instruction.GET_LOCAL);
@@ -5544,11 +5617,7 @@ final class WasmRuntimeBuilder {
 		// Normalize a mutable character vector into a string up front: it then falls
 		// into the string branch below (princ strips the quotes), and the recursive
 		// cons/array element prints route back through this entry.
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(0);
+		WasmEmitHelper.emitCharvecToStrLocal(w, 0, charvecPossible);
 
 		// Check null (nil)
 		w.write(Instruction.GET_LOCAL);

@@ -223,6 +223,9 @@ public final class WasmRefTypeFolder {
 
 		boolean thenFellThrough;
 
+		/** What the then arm left, when it fell through. */
+		@Nullable List<Val> thenVals;
+
 		/**
 		 * Whether any branch (or catch) delivered to this label, as opposed to falling
 		 * through.
@@ -427,6 +430,8 @@ public final class WasmRefTypeFolder {
 
 		final int[][][] assignPositions; // per defined function, per local: sorted
 
+		final int[][] loopOpeners; // per defined function: sorted
+
 		final int[][] impurePrefix; // per defined function
 
 		// Per defined function, per instruction: whether the if opened there was the
@@ -570,6 +575,7 @@ public final class WasmRefTypeFolder {
 			this.lastGlobalInitEpoch = new int[this.globalInits.size()];
 			this.localSets = new @Nullable BitSet[this.codeEntries.length][];
 			this.assignPositions = new int[this.codeEntries.length][][];
+			this.loopOpeners = new int[this.codeEntries.length][];
 			this.impurePrefix = new int[this.codeEntries.length][];
 			this.targeted = new boolean[this.codeEntries.length][];
 			this.returnSets = new @Nullable BitSet[this.numFuncs][];
@@ -683,13 +689,18 @@ public final class WasmRefTypeFolder {
 			}
 			this.localSets[d] = sets;
 			int[] prefix = new int[body.code().size() + 1];
+			List<Integer> loops = new ArrayList<>();
 			for (int i = 0; i < body.code().size(); i++) {
 				Instr in = body.code().get(i);
 				if (in.op == 0x21 || in.op == 0x22) {
 					assigns.get((int) in.a).add(i);
 				}
+				else if (in.op == 0x03) {
+					loops.add(i);
+				}
 				prefix[i + 1] = prefix[i] + (isPure(in) ? 0 : 1);
 			}
+			this.loopOpeners[d] = loops.stream().mapToInt(Integer::intValue).toArray();
 			int[][] positions = new int[n][];
 			for (int l = 0; l < n; l++) {
 				positions[l] = assigns.get(l).stream().mapToInt(Integer::intValue).toArray();
@@ -1123,6 +1134,8 @@ public final class WasmRefTypeFolder {
 
 		final int[][] assignPositions;
 
+		final int[] loopOpeners;
+
 		final int[] impurePrefix;
 
 		final boolean[] targeted;
@@ -1158,6 +1171,7 @@ public final class WasmRefTypeFolder {
 				}
 				this.localSets = m.localSets[this.def];
 				this.assignPositions = m.assignPositions[this.def];
+				this.loopOpeners = m.loopOpeners[this.def];
 				this.impurePrefix = m.impurePrefix[this.def];
 				this.targeted = m.targeted[this.def];
 			}
@@ -1168,6 +1182,7 @@ public final class WasmRefTypeFolder {
 				this.localTypes = new ValType[0];
 				this.localSets = new BitSet[0];
 				this.assignPositions = new int[0][];
+				this.loopOpeners = new int[0];
 				this.impurePrefix = new int[this.code.size() + 1];
 				this.targeted = new boolean[this.code.size()];
 			}
@@ -1357,9 +1372,36 @@ public final class WasmRefTypeFolder {
 		// about a value assigned since, so the local must be unassigned from that read to
 		// the end of the range the refinement covers.
 		private void addRefinement(Bool cond, boolean inSet, int from, int to) {
-			if (to > from + 1 && !assignedIn(cond.local(), cond.getPos(), to)) {
-				this.refinements.add(new Refinement(cond.local(), cond.member(), inSet, from, to));
+			int end = heldUntil(cond.local(), cond.getPos(), from, to);
+			if (end > from + 1) {
+				this.refinements.add(new Refinement(cond.local(), cond.member(), inSet, from, end));
 			}
+		}
+
+		// Where, in [from, to), the local stops holding what it held when read at getPos:
+		// its next assignment, or the head of a loop that holds that assignment and opens
+		// in the range, which comes back around with the assigned value. Every path into
+		// the range runs through `from`: a label is the end of a block that encloses its
+		// branch, and no block opened in front of `from` ends inside the range.
+		private int heldUntil(int local, int getPos, int from, int to) {
+			int[] positions = this.assignPositions[local];
+			int at = Arrays.binarySearch(positions, getPos + 1);
+			int next = at >= 0 ? at : -at - 1;
+			if (next == positions.length || positions[next] >= to) {
+				return to;
+			}
+			int assignment = positions[next];
+			if (assignment <= from) {
+				return from;
+			}
+			int[] loops = this.loopOpeners;
+			int found = Arrays.binarySearch(loops, from + 1);
+			for (int k = found >= 0 ? found : -found - 1; k < loops.length && loops[k] < assignment; k++) {
+				if (this.code.get(loops[k]).match > assignment) {
+					return loops[k];
+				}
+			}
+			return assignment;
 		}
 
 		private void dropRefinementsFrom(int mark) {
@@ -1875,6 +1917,7 @@ public final class WasmRefTypeFolder {
 					}
 				}
 				fr.thenFellThrough = true;
+				fr.thenVals = vals;
 				fr.arrivals.add((BitSet) this.assigned.clone());
 			}
 			fr.inElse = true;
@@ -1953,7 +1996,16 @@ public final class WasmRefTypeFolder {
 			}
 			else {
 				truncateStack(fr.stackBase);
-				pushAll(valuesOf(fr.results, fr.carried, fr.opener));
+				@Nullable List<Val> armVals = fr.folded == FOLD_THEN && fr.elseIndex >= 0 ? fr.thenVals : fallVals;
+				if (fr.folded != FOLD_NONE && fr.elided && !fr.branchedTo && armVals != null) {
+					// A spliced-in arm is no merge: what follows reads the arm's own
+					// values, and knows what the walk knows of them (a constant, a test
+					// of a local).
+					pushAll(armVals);
+				}
+				else {
+					pushAll(valuesOf(fr.results, fr.carried, fr.opener));
+				}
 				if (after) {
 					BitSet merged = (BitSet) fr.arrivals.get(0).clone();
 					for (int k = 1; k < fr.arrivals.size(); k++) {

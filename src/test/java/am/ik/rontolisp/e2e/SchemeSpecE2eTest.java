@@ -249,23 +249,34 @@ class SchemeSpecE2eTest {
 		}
 	}
 
+	/**
+	 * What a class run in a process of its own needs in its class path directory, as the
+	 * CLI writes it: the class and the runtime classes travelling beside it.
+	 */
+	private static void writeClasses(Path dir, String name, JvmSourceCompiler.Result compiled) throws IOException {
+		Files.write(dir.resolve(name + ".class"), compiled.classBytes());
+		for (Map.Entry<String, byte[]> runtime : compiled.runtimeClasses().entrySet()) {
+			Path file = dir.resolve(runtime.getKey());
+			Files.createDirectories(file.getParent());
+			Files.write(file, runtime.getValue());
+		}
+	}
+
 	private static void runStandaloneJvm(Standalone s, String standard) throws Exception {
 		String stem = "SStandalone" + s.name().replaceAll("[^A-Za-z0-9]", "") + standard.replaceAll("[^A-Za-z0-9]", "");
 		Path dir = workDir.resolve(stem);
 		Files.createDirectories(dir);
 		String entry = entryFile(s, standard, "jvm");
-		Files.write(dir.resolve(stem + ".class"),
-				new JvmSourceCompiler(stem).sourceLanguage("scheme")
-					.schemeStandard(standard)
-					// A relative load resolves against the entry file's directory, like
-					// the CLI's.
-					.baseDir(entry == null ? null
-							: java.util.Objects
-								.requireNonNullElse(Path.of(entry).toAbsolutePath().getParent(),
-										Path.of(entry).toAbsolutePath())
-								.toString())
-					.compile(s.source(), entry)
-					.classBytes());
+		writeClasses(dir, stem, new JvmSourceCompiler(stem).sourceLanguage("scheme")
+			.schemeStandard(standard)
+			// A relative load resolves against the entry file's directory, like
+			// the CLI's.
+			.baseDir(entry == null ? null
+					: java.util.Objects
+						.requireNonNullElse(Path.of(entry).toAbsolutePath().getParent(),
+								Path.of(entry).toAbsolutePath())
+						.toString())
+			.compile(s.source(), entry));
 		Path outFile = Files.createTempFile(workDir, stem + "-jvm", ".out");
 		Path errFile = Files.createTempFile(workDir, stem + "-jvm", ".err");
 		Path inFile = Files.createTempFile(workDir, stem + "-jvm", ".in");
@@ -353,10 +364,8 @@ class SchemeSpecE2eTest {
 			legs.add(dynamicTest(name + " JVM", () -> {
 				Path dir = workDir.resolve("exit-" + expected);
 				Files.createDirectories(dir);
-				Files.write(dir.resolve("SchemeExit.class"),
-						new JvmSourceCompiler("SchemeExit").sourceLanguage("scheme")
-							.compile(source, null)
-							.classBytes());
+				writeClasses(dir, "SchemeExit",
+						new JvmSourceCompiler("SchemeExit").sourceLanguage("scheme").compile(source, null));
 				Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
 						"-cp", dir.toString(), "SchemeExit")
 					.redirectErrorStream(true)
@@ -397,8 +406,8 @@ class SchemeSpecE2eTest {
 		legs.add(dynamicTest("(emergency-exit 7) JVM", () -> {
 			Path dir = workDir.resolve("emergency-exit-7");
 			Files.createDirectories(dir);
-			Files.write(dir.resolve("SchemeExit.class"),
-					new JvmSourceCompiler("SchemeExit").sourceLanguage("scheme").compile(abrupt, null).classBytes());
+			writeClasses(dir, "SchemeExit",
+					new JvmSourceCompiler("SchemeExit").sourceLanguage("scheme").compile(abrupt, null));
 			Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
 					"-cp", dir.toString(), "SchemeExit")
 				.redirectErrorStream(true)

@@ -17,9 +17,10 @@ public enum SignalMessages {
 
 	/**
 	 * No signal's message is ever read: a wasm-GC module outside exception-handling mode,
-	 * where an uncaught condition is a bare trap. The renderer's one consumer is a
-	 * printing operator handed a condition value, so it is in only when program code can
-	 * HOLD one.
+	 * where an uncaught condition is a bare trap, or one whose standard error is a sink
+	 * ({@code --no-wasi}) and whose handlers hold no condition. The renderer's one
+	 * consumer is a printing operator handed a condition value, so it is in only when
+	 * program code can HOLD one.
 	 */
 	LAZY,
 

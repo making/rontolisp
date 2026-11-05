@@ -1,16 +1,20 @@
 package am.ik.rontolisp.codegen.wasm;
 
 import java.io.ByteArrayOutputStream;
+import java.util.HashMap;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.wasm.WasmWriter;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.InstanceOfAssertFactories.STRING;
 
 /**
  * Pins the bound on the size of any single emitted WASM function body.
@@ -139,6 +143,16 @@ class WasmToplevelChunkingTest {
 		assertThat(compile(source).length)
 			.as("module of 40 classes of 20 slots each, sharing no slot, with one computed change-class")
 			.isLessThan(512 * 1024);
+		// The classes sharing a clause must not nest per class either: an or of their
+		// tags, a let and an if each once it expands, cost the JVM backend three times
+		// the bytes on 300 classes and overflowed a compile thread's stack on the corpus.
+		assertThat(LispMacroExpander
+			.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(), new ClosRegistry())
+			.stream()
+			.map(LispVal::print)
+			.filter(form -> form.startsWith("(DEFUN %CC-0 "))).singleElement(STRING)
+			.contains("(MEMBER ")
+			.doesNotContain("(OR ");
 	}
 
 	@Test

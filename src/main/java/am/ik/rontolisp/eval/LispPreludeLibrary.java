@@ -4389,9 +4389,9 @@ public final class LispPreludeLibrary {
 		// the raw conversion, so a symbol nested in one keeps the stored (upper-case)
 		// spelling and its elements are never truncated. .kb/pretty-printer.md carries
 		// the re-evaluation trigger. The vector guard is the twin of the generated
-		// %print-object-str's -- the two walks are never both live in one program (a
-		// program with a print-object route walks THERE and hands this one leaves), so
-		// they have to be read together to stay in step. Under every default the raw
+		// %print-object-str's -- a value goes through one walk or the other (a program
+		// with a print-object route walks THERE and hands this one leaves), so they have
+		// to be read together to stay in step. Under every default the raw
 		// conversion answers directly, which is what keeps a program that merely calls
 		// write byte-identical in OUTPUT to one that never mentions a variable.
 		SOURCES.put(LispNames.PRINT_CASED_INTERNAL, """
@@ -4420,8 +4420,8 @@ public final class LispPreludeLibrary {
 		// its #: under a nil *print-gensym*, a rational takes %print-radixed when
 		// *print-base* / *print-radix* are off their defaults, and a symbol spelling
 		// goes through %print-case-fold. The guard is the twin of the
-		// %print-object-str walk's (%pos-walk); the two walks are never both live in
-		// one program, and have to stay in step.
+		// %print-object-str walk's (%pos-walk); a structure goes through one walk or the
+		// other, and they have to stay in step.
 		SOURCES.put(LispNames.PRINT_CASED_WALK_INTERNAL,
 				"""
 						(defun %pc-walk (%pc-x %pc-esc %pc-path %pc-depth %pc-lvl)

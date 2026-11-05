@@ -181,7 +181,8 @@ normal completion OUTSIDE the handler. `ignore-errors` = `expandIgnoreErrors` ov
 
 ## The JVM keeps what a throwable carries under the throwable
 **Invariant: a compiled landing pad reads only the record of the throwable it caught.** A
-`RuntimeException` has nowhere to carry an object and a compiled program ships no exception class,
+`RuntimeException` has nowhere to carry an object and nearly every throw is a plain one
+(`RontoSignal`, "A signal renders nothing", carries only what it renders from),
 so the condition a signal travels with (`_condTl`) and a wrong-type operand's datum and type
 (`_teTl`, "A non-number reaching arithmetic") live per thread in a `java.util.WeakHashMap` keyed by
 the throwable (`JvmThrowableRecords`; `_tlMap` makes a thread's map on its first record).
@@ -194,9 +195,9 @@ the throwable (`JvmThrowableRecords`; `_tlMap` makes a thread's map on its first
   second one the same way (the slot held the last record only), an `await` of a plain failure in
   the cleanup CLEARED the typed condition, and a condition whose `:report` handled an error of its
   own while its message was built lost its type (the slot was set before the message ran).
-- **Writers.** `%error-cond` / `%signal-cond` evaluate the condition into a local, then the message,
-  then `throw _condPut(new RuntimeException(message), condition)`: nothing is recorded before the
-  exception exists. `_await` / `_thread_join` record the payload's condition on the awaiting thread
+- **Writers.** `%error-cond` / `%signal-cond` evaluate the condition into a local, then the message
+  (or `_signalNew`'s fallback), then `throw _condPut(new RuntimeException(message), condition)`:
+  nothing is recorded before the exception exists. `_await` / `_thread_join` record the payload's condition on the awaiting thread
   (a plain failure's: none). `_teRaw` / `_oob` / `_opTypeErr` record `{datum, type}`; in a class
   with `_teTl` an async body's `run()` and a thread's `call()` put the throwable's record (or null)
   LAST in the error payload, and `_await` / `_thread_join` record it again on the awaiting thread.
@@ -468,17 +469,111 @@ fails. What decides the gate is whether program code can ever HOLD that instance
   `(print (ignore-errors (+ 1 2)))` 22,782 -> 5,638 B. Gating the renderer's defun on a pre-Pass-2
   scan for printing operators is NOT sound: `format`'s `~A` lowers to `%princ-piece` after it.
 
+## A signal renders nothing
+**Invariant: `error` and `signal` of a condition evaluate its instance and what only the site can say
+of it; the report, and any printing of a value, runs where the text is read, on all four backends.**
+A report is program code. Rendered at the signal (the interpreter and the JVM until 2026-11-06), what
+it signalled replaced the condition and what it did happened for a condition nothing printed.
+Measured with `c` having a slot with no `:initform` and a report reading it through its reader, `d` a
+report counting its runs, `e` no report, `o` a failing `print-object` (SBCL 2.2.9; all four agree with
+it now; "was" is the interpreter and the JVM, wasm-GC already answering SBCL's except in the third
+row):
+
+| Form | SBCL | was |
+| --- | --- | --- |
+| `(handler-case (error 'c) (error (x) (type-of x)))`, and `(error (id 'c))`, `(error (make-condition 'c))`, `(signal 'c)`, `(cerror "go" 'c)` | `C` | `UNBOUND-SLOT` |
+| `(handler-case (error 'd) ...)`, `(signal 'd)`, then the count | 0 | 2 |
+| `(handler-case (error 'e :a (make-instance 'o)) (error (x) (type-of x)))` | `E` | `SIMPLE-ERROR` |
+| `(signal 'e :a (make-instance 'o))` | nil | escaped: `boom` |
+
+- **The shape**: the message operand of `%error-cond` / `%signal-cond` is `(%signal-text c fallback)`
+  (`LispMacroExpander.signalText`), and every backend recognizes it
+  (`conditionReportFallback`) and evaluates `fallback` alone. The call stays in the tree so every pass
+  sees the reference. `%signal-text` is generated beside `%condition-report-str`
+  (`signalTextDefun`): the report, else the fallback -- `(type initarg value ...)`, a message, or `NIL`
+  for nil. A literal `:report` string, and a `:format-control` holding `(%text-control v)` with no
+  arguments, are plain messages: no program code can run, so they throw what they always threw.
+- **Where it is read**: interpreter, `LispEvalException.getMessage` (`rendering`, once; `%error-cond`
+  is an operator of the evaluator now, as `%signal-cond` was, because a built-in's operands are
+  evaluated). JVM, `RontoSignal.getMessage`, once. wasm-GC, the entry pad, which holds the instance
+  and the payload cdr.
+- **`RontoSignal`, not the entry handler alone**: `getMessage` is what an embedder holding a thrown
+  exception reads, a thread's default handler prints it, a `RontoHttpServer` logs it; a `main`-only
+  render leaves all of them `null`. So the throwable renders on demand and every reader is right
+  without knowing. `new RontoSignal(handle, c, fallback)` sits in the one helper `_signalNew`; the
+  `MethodHandle` constant names `_signalText` (`JvmSignalThrow`), and `am.ik.jvm.JvmClassSplitter`
+  reads a handle as a call of its target when it shakes, moves and re-mints. Its `toString` keeps the
+  host's echo `java.lang.RuntimeException: <text>`. It travels (`.kb/jvm-export.md`, "What travels")
+  only where such a site compiled; a `Prog.class` copied without it runs up to such a signal, the
+  helper casting so the verifier does not load it.
+- **The failing report** is text: `Unhandled condition: #<error printing a C: <what failed>>`, SBCL's
+  words, on all four. `%signal-text` holds one `handler-case`, around the report and around the
+  report of what failed; a raw failure's classes stay in its narrowing (`withRawFailures`), since the
+  guard is a landing pad no scan of the program sees. `princ` of the same condition still signals, as
+  on SBCL. Until 2026-11-06 the interpreter and the JVM reported the second condition, and a wasm-GC
+  pad trapped with no line.
+  Outside EH mode nothing reads the text, so `%signal-text` carries no guard (`SignalMessages.LAZY`):
+  the `handler-case` symbol would turn EH on for every program signalling a typed condition.
+- **The `~s` arm**: the fallback list is rendered once per program, in `%signal-text`, not per site;
+  `buildsSignalledInitargs` keeps it out of a program where every signal reports, which would otherwise
+  pull the printer in. Without the arm a cons says `Condition of type C was signalled.`: reachable only
+  by a typed signal a late lowering builds after the scan.
+- **wasm-GC's "handlers ran" payload** was any cons in the cdr. The initarg list is a cons too, so the
+  test is now a cons opening on nil (`WasmErrorCompiler.emitSaysHandlersRan`); a list opens on its type.
+- **What is left of the old order, deliberately**:
+  - A report reads the dynamic bindings of where it is READ, the entry after unwinding:
+    `(let ((*base* 16)) (error 'c))` uncaught, with a report printing `*base*`, says 10, where SBCL
+    says 16 (the debugger runs at the signal). The interpreter and the JVM said 16 until 2026-11-06;
+    wasm-GC always said 10. Rendering at the signal only when `%hc-match-p` finds no taker was weighed:
+    a site's code on every typed signal, in the hot methods this removes it from, and no taker at the
+    signal is not no reader (an `await`, a Java catch).
+  - `warn` renders at its write, as SBCL does, and a failing report signals from it there.
+  - The object arm `(error c)` still evaluates its fallback at the site: it reads only the instance.
+- Pinned: ci-spec `a-signal-renders-no-report`, `standalone:` `uncaught-failing-report-is-the-report`,
+  `uncaught-initargs-past-the-handler-bind-handlers`; `JvmClassSplitterTest` (a call
+  through a handle across parts and through the shake),
+  `JvmLispCompilerTest#anUncaughtConditionReportsOneLineAndRethrowsWithoutATrace` (an embedder's read,
+  one rendering).
+
+## A module with nowhere to report
+Under `--no-wasi` standard error is a sink, so the entry pad reads nothing: `_start` lands on a plain trap
+(`emitCatchAllPrologue`), the exit class the pad ended in. Where no program code can hold a condition
+either (`mayHoldConditions`, and not `--dynamic`, restart mode, P1 futures or a data evaluator), no report
+is read at all: `Ctx.unreadReports`. A throw then carries its class and no text
+(`WasmRuntimeBuilder.emitUnreadThrow`, `buildUnreadThrowBody` for `_type_err`, `_type_err_of`,
+`_subseq_bad`, `_div_zero`; `unread` on the dispatchers' reports and `_big_ash`), a rank mismatch builds no
+type, `SignalMessages` is `LAZY`, and `%error` evaluates a message only for its effects
+(`buildsTextOnly`: a rendering reads temporaries its signal bound, and a class's `:report` is for whoever
+prints the condition, which the interpreter does not do at a signal either). A landing reads no cdr: `_charvec_to_str`
+over it handed `~a` every value any cdr holds. `(error (e) (declare (ignore e)) ...)` no longer counts as
+holding `e`.
+
+The surface scan runs before the expansion, so an expansion that lets program code hold a condition
+(`routesConditionReports` afterwards) retries with the broad answer, `UncaughtReportUnforeseen`'s way.
+
+**`Ctx.handlersReadNoClass`**: on top of that, `LispMacroExpander.handlersTakeEveryThrow`. Every clause
+is headed `error`, `serious-condition`, `condition` or `t`, and nothing throws what is no error: no `signal`,
+no `warn`, no computed datum, a quoted datum under `error`. The first clause then takes whatever
+arrives, so a landing asks nothing, `hasLandingPad` is off for what it gates (a pad is the only thing that
+can observe a class) and `mayCreateInstances` leaves a catching form out: `(nil . nil)` payloads, no
+instance type, no layouts. A wrong argument count keeps its throw (`padAsksNothing`), since `hasLandingPad`
+would have made it the trap of a module with no pad.
+
+The default handler of the Proxy-Wasm SDK was 8,420 raw and 3,065 gzip on `http_body`, now 300 and 99.
+Bare `handler-case` with `(error () 0)`: 2,701 to 453. Pin:
+`WasmLispCompilerIntegrationTest#aReactorNothingReadsAReportOfStillCatchesEveryClassItCan`, on the same answers
+as a module with a stderr, at every level.
+
 ## Signal messages are lazy on wasm-GC
 **Invariant: on the wasm-GC backends a signal's message string is rendered only where a condition
 value can reach program hands -- never at the signal point.** In EH mode the entry landing pad is a
 second payload reader, so both gates go broad; outside EH mode nothing is observable.
 
 - **`WasmErrorCompiler.compileCond` / `WasmSignalCondCompiler` never compile the REPORT half of their
-  message operand**: those forms always carry a real instance in the car, and the entry pad renders
-  its report itself. `compileCond` compiles only what the pad cannot rebuild -- the fallback of a
-  routed message (`LispMacroExpander.conditionReportFallback`, the recognizer of
-  `conditionReportOr`'s own shape), below "An uncaught condition reports ONE line". The instance
-  operand still compiles (initargs are evaluated at construction per CL).
+  message operand** ("A signal renders nothing"): those forms always carry a real instance in the car,
+  and the entry pad renders its text itself. `compileCond` compiles only what the pad cannot rebuild --
+  the fallback (`LispMacroExpander.conditionReportFallback`), below "An uncaught condition reports ONE
+  line". The instance operand still compiles (initargs are evaluated at construction per CL).
 - **A plain `%error`'s message operand always compiles in EH mode** -- its message IS what a caught
   raw trap becomes a `simple-error` from AND the only text the entry landing pad has; outside EH mode
   `%error` is a bare `unreachable` that evaluates nothing. The `Ctx.condMessagesObservable` flag that
@@ -656,7 +751,7 @@ compile whose warning could say it.
   `block $trap` + `block $cond (result (ref null eq))` +
   `try_table (catch $lisp-cond 0) (catch_all 1)`; the landing takes the payload as the inner block's
   result, splits it into `__uc_cond$N`/`__uc_msg$N` and compiles
-  `(%warn (%string-concat "Unhandled condition: " (if cond (or (%condition-report-str cond) m) m)))`
+  `(%warn (%string-concat "Unhandled condition: " (if cond (%signal-text cond msg) m)))`
   with `m` = `(if msg msg "NIL")`: a message is a string, a character vector or nil, and a nil one is
   the message's VALUE -- `(error 'simple-error :format-control nil)` prints `NIL` on all four
   backends (`standalone:` `uncaught-nil-message-report`). Until 2026-09-28 the whole text was
@@ -687,10 +782,11 @@ compile whose warning could say it.
 - **A class that reports nothing is reported by its SIGNAL SITE** (`(define-condition c (error) ())`,
   a bare `type-error`, `simple-error` with no control): `%condition-report-str` answers nil, and the
   text -- `Condition (C :INITARG v) was signalled.` for a typed signal, `Condition of type C was
-  signalled.` for `(error c)` -- is the fallback half of the site's `conditionReportOr` message, which
-  `compileCond` compiles into the payload cdr and the pad prints when the report is nil. **The text is
-  built in ONE place, the expansion** (`legacySignalMessage`, `expandObjectSignal`'s `typeMessage`),
-  and every backend prints what it evaluates to: a change to its shape changes all four together.
+  signalled.` for `(error c)` -- comes from the fallback of the site's `(%signal-text c fallback)`,
+  which `compileCond` compiles into the payload cdr. **The text is built in ONE place per shape**
+  (`signalTextDefun` over the list `signalledInitargs` builds, `legacySignalMessage` for a `warn`,
+  `expandObjectSignal`'s `typeMessage`), and every backend prints what it evaluates to: a change to
+  its shape changes all four together.
   Chosen over a fallback arm in the pad because the pad sees only the instance, and the typed text
   names the initargs AS WRITTEN (`:DATUM "abc" :EXPECTED-TYPE INTEGER`), which a built instance
   cannot reproduce. A COMPUTED type (`(error ty :code 42)`, the `%error-runtime` helpers) has no
@@ -1018,8 +1114,9 @@ its 52,000 tripwire with it, 51,891 without -- the eight rows over four `define-
   record on as it came, and a restart-mode `handler-case` landing that declines puts back the record
   AS TAKEN (it rides the result slot, which nothing writes on the landing path before a clause
   answers); what only carries a record (future, join, `_jsig` / `_jfail`) carries it unchanged.
-  wasm-GC: the payload `(instance . (nil . message))` -- a cdr that is a cons, which no message is (a
-  string, a character vector, nil); the pad tests it with one `ref.test` and rethrows such a payload
+  wasm-GC: the payload `(instance . (nil . message))` -- a cdr that is a cons opening on nil, which
+  no message is (a string, a character vector, nil, a list opening on its type); the pad tests it
+  (`WasmErrorCompiler.emitSaysHandlersRan`) and rethrows such a payload
   untouched, a declining `handler-case` rethrows the payload it caught, and the entry report takes
   the message out of it (restart mode only).
 - **Before (until 2026-09-27)**: one global, `%handlers-ran%`, set by `%run-handlers` at the end of

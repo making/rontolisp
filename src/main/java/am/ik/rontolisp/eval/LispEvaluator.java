@@ -11601,6 +11601,8 @@ public final class LispEvaluator {
 				return singleValue(evalDefsystem(cons));
 			case LispNames.SIGNAL_COND_INTERNAL:
 				return singleValue(evalSignalCond(cons, env));
+			case LispNames.ERROR_COND_INTERNAL:
+				return evalErrorCond(cons, env);
 			case LispNames.WIT_EXPORT_QUALIFIED:
 				return singleValue(evalWitExport(cons));
 			case LispNames.WIT_IMPORT_QUALIFIED:
@@ -15448,8 +15450,8 @@ public final class LispEvaluator {
 			// resolution
 			// that reaches it before any condition form ran loads the same defuns the
 			// compile path injects, rather than failing.
-			if (LispNames.CONDITION_REPORT_STR_INTERNAL.equals(name)
-					|| LispNames.FORMAT_CONDITION_INTERNAL.equals(name)) {
+			if (LispNames.CONDITION_REPORT_STR_INTERNAL.equals(name) || LispNames.FORMAT_CONDITION_INTERNAL.equals(name)
+					|| LispNames.SIGNAL_TEXT_INTERNAL.equals(name)) {
 				ensureConditionReportRuntimeLoaded();
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {
@@ -16928,15 +16930,52 @@ public final class LispEvaluator {
 			throw new LispEvalException(LispNames.SIGNAL_COND_INTERNAL + " expects a condition and a message");
 		}
 		LispVal condition = eval(parts.get(1), env);
-		LispVal message = eval(parts.get(2), env);
+		LispVal message = conditionMessage(parts.get(2), env);
 		if (anyHandlerCaseMatches(condition)) {
-			LispEvalException raised = new LispEvalException(
-					message instanceof am.ik.rontolisp.LispString s ? s.value() : message.display(), condition);
-			// The signal hook's terminal: the handler-bind handlers ran at the signal
-			// point, and the throw says so to every pad on its way to the handler-case.
-			throw LispMacroExpander.handlersRan(parts) ? raised.markHandlersRan() : raised;
+			throw raisedCondition(parts, condition, message);
 		}
 		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Evaluates {@code (%error-cond condition message)}, which signals an error carrying
+	 * a condition object (a CLOS-subset tagged-list instance) alongside the message.
+	 * Produced by the typed / condition-object error designator expansions.
+	 */
+	private LispVal evalErrorCond(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		LispVal condition = eval(parts.get(1), env);
+		throw signalPoint(raisedCondition(parts, condition, conditionMessage(parts.get(2), env)), env, null);
+	}
+
+	/**
+	 * What a signal's message operand evaluates at the signal: all of it, or of a message
+	 * that is the condition's report ({@link LispMacroExpander#conditionReportFallback})
+	 * only the fallback. A report runs when the error's message is read: what it signals
+	 * or does must not replace the condition, or happen for one nothing prints.
+	 */
+	private LispVal conditionMessage(LispVal message, Environment env) {
+		LispVal fallback = LispMacroExpander.conditionReportFallback(message);
+		return eval(fallback != null ? fallback : message, env);
+	}
+
+	/**
+	 * The error a signal raises, saying the {@code handler-bind} handlers ran when the
+	 * signal hook's terminal says so.
+	 */
+	private LispEvalException raisedCondition(List<LispVal> parts, LispVal condition, LispVal message) {
+		LispEvalException raised = LispMacroExpander.conditionReportFallback(parts.get(2)) != null
+				? renderingCondition(condition, message) : new LispEvalException(
+						message instanceof am.ik.rontolisp.LispString s ? s.value() : message.display(), condition);
+		return LispMacroExpander.handlersRan(parts) ? raised.markHandlersRan() : raised;
+	}
+
+	private LispEvalException renderingCondition(LispVal condition, LispVal fallback) {
+		return LispEvalException.rendering(() -> {
+			LispVal text = apply(resolveFunction(LispNames.SIGNAL_TEXT_INTERNAL), List.of(condition, fallback),
+					this.globalEnv);
+			return text instanceof am.ik.rontolisp.LispString s ? s.value() : text.display();
+		}, condition);
 	}
 
 	/**
