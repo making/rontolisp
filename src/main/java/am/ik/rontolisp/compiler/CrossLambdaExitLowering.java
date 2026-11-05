@@ -219,7 +219,10 @@ public final class CrossLambdaExitLowering {
 					case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> {
 						return cons;
 					}
-					case LispNames.LAMBDA -> {
+					// An async lambda reaches this pass on --component, the one target
+					// that
+					// does not lower it first: its body is a function of its own too.
+					case LispNames.LAMBDA, LispNames.ASYNC_LAMBDA_QUALIFIED -> {
 						return transformLambda(cons, lambdaDepth);
 					}
 					case LispNames.FUNCTION -> {

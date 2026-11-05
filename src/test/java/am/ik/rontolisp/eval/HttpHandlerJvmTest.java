@@ -18,6 +18,7 @@ import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.runtime.RontoHttpClack;
 import am.ik.rontolisp.runtime.RontoHttpServer;
+import am.ik.rontolisp.testsupport.OwnHandlerStacksPrograms;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -450,6 +451,27 @@ class HttpHandlerJvmTest {
 				assertThat(answers.get(i).get()).isEqualTo("/r" + i);
 			}
 		}
+	}
+
+	@Test
+	void aRequestsHandlersAreItsOwn() throws Exception {
+		// The handler stack was one static: a request leaving its handler-bind restored
+		// what it had saved over a handler another request pushed since, whose condition
+		// then found none.
+		int port = freePort();
+		compileAndServeInBackground(
+				OwnHandlerStacksPrograms.SERVED + "(rontolisp:http-handler 'handle %d)\n".formatted(port), port);
+		java.util.concurrent.CompletableFuture<HttpResponse<String>> first = java.util.concurrent.CompletableFuture
+			.supplyAsync(() -> {
+				try {
+					return get(port, "/first");
+				}
+				catch (Exception ex) {
+					throw new IllegalStateException(ex);
+				}
+			});
+		assertThat(get(port, "/second").body()).isEqualTo(OwnHandlerStacksPrograms.SERVED_OUTPUT);
+		assertThat(first.get().body()).isEqualTo("first");
 	}
 
 	@Test

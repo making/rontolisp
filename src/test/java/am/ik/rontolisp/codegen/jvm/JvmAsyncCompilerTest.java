@@ -15,6 +15,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.AwaitValuesMatrix;
+import am.ik.rontolisp.testsupport.OwnHandlerStacksPrograms;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -116,6 +117,12 @@ class JvmAsyncCompilerTest {
 	void awaitAnswersEveryValueOfAnAsyncBodyThatSuspended() throws Exception {
 		assertThat(compileAndRun(AwaitValuesMatrix.SUSPENDING_PROGRAM))
 			.isEqualTo(AwaitValuesMatrix.SUSPENDING_EXPECTED);
+	}
+
+	@Test
+	void anAsyncBodysHandlersAndExitsAcrossASuspension() throws Exception {
+		assertThat(compileAndRunExpanded(OwnHandlerStacksPrograms.SUSPENDING))
+			.isEqualTo(OwnHandlerStacksPrograms.SUSPENDING_OUTPUT);
 	}
 
 	@Test

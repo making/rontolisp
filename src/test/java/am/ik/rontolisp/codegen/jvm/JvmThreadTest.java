@@ -7,7 +7,9 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
+import am.ik.rontolisp.testsupport.OwnHandlerStacksPrograms;
 import am.ik.rontolisp.testsupport.SocketTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -31,8 +33,14 @@ class JvmThreadTest {
 	private String compileAndRun(String lispCode, String className) throws Exception {
 		// The command line's whole front end, so a library's macros expand as they do
 		// for a user.
-		byte[] classBytes = new am.ik.rontolisp.cli.JvmSourceCompiler(className).compile(lispCode, null).classBytes();
-		Files.write(this.tempDir.resolve(className + ".class"), classBytes);
+		am.ik.rontolisp.cli.JvmSourceCompiler.Result compiled = new am.ik.rontolisp.cli.JvmSourceCompiler(className)
+			.compile(lispCode, null);
+		Files.write(this.tempDir.resolve(className + ".class"), compiled.classBytes());
+		for (java.util.Map.Entry<String, byte[]> beside : compiled.runtimeClasses().entrySet()) {
+			Path file = this.tempDir.resolve(beside.getKey());
+			Files.createDirectories(file.getParent());
+			Files.write(file, beside.getValue());
+		}
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
 				ClassLoader.getSystemClassLoader())) {
 			Class<?> clazz = loader.loadClass(className);
@@ -133,21 +141,13 @@ class JvmThreadTest {
 	void aThreadsHandlersAreItsOwn() throws Exception {
 		// The handler stack was one static: a thread leaving its handler-bind restored
 		// what it had saved over a handler the main thread pushed since.
-		assertThat(compileAndRun("""
-				(defvar *phase* 0)
-				(define-condition own-stack (error) ())
-				(defun worker ()
-				  (handler-bind ((own-stack #'identity))
-				    (setq *phase* 1)
-				    (loop until (= *phase* 2) do (sleep 0.01))))
-				(let ((th (rontolisp:make-thread #'worker)))
-				  (loop until (= *phase* 1) do (sleep 0.01))
-				  (print (handler-bind ((own-stack (lambda (e) (declare (ignore e)) (invoke-restart 'go-on))))
-				           (setq *phase* 2)
-				           (rontolisp:join-thread th)
-				           (with-simple-restart (go-on "Go on.") (error 'own-stack))
-				           :handled)))
-				""", "ThreadHandlersProg")).isEqualTo(":HANDLED");
+		int program = 0;
+		for (String[] shape : List.of(OwnHandlerStacksPrograms.MAKE_THREAD, OwnHandlerStacksPrograms.JAVA_THREAD,
+				OwnHandlerStacksPrograms.ASYNC_BODY)) {
+			assertThat(compileAndRun(OwnHandlerStacksPrograms.thread(shape), "ThreadHandlersProg" + program++))
+				.as(shape[0])
+				.isEqualTo(OwnHandlerStacksPrograms.THREAD_OUTPUT);
+		}
 	}
 
 	@Test

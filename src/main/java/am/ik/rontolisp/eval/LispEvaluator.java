@@ -3646,7 +3646,7 @@ public final class LispEvaluator {
 				for (int i = 0; i < bindingNames.size(); i++) {
 					this.dynamicBindings.push(bindingNames.get(i), bindingValues.get(i));
 				}
-				return onOwnThread(spawnerPackage, () -> apply(fn, List.of(), this.globalEnv));
+				return withOwnPackage(spawnerPackage, () -> apply(fn, List.of(), this.globalEnv));
 			}, args.size() == 3 ? args.get(2) : LispNil.INSTANCE);
 		}));
 		String joinThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JOIN_THREAD);
@@ -3737,8 +3737,8 @@ public final class LispEvaluator {
 			ensureHttpServerLoaded();
 			try {
 				String servingPackage = this.packageResolver.currentPackageName();
-				RontoHttpServer.serve(port,
-						request -> onOwnThread(servingPackage, () -> invokeHttpHandler(handler, request, bufferBody)));
+				RontoHttpServer.serve(port, request -> withOwnPackage(servingPackage,
+						() -> invokeHttpHandler(handler, request, bufferBody)));
 			}
 			catch (RontoHttpServer.ServerException ex) {
 				// The server lives in the TRAVELLING runtime package, which carries no
@@ -3782,7 +3782,8 @@ public final class LispEvaluator {
 			String servingPackage = this.packageResolver.currentPackageName();
 			try {
 				handle = RontoHttpServer.startServer((int) portArg.value(), address,
-						request -> onOwnThread(servingPackage, () -> invokeHttpHandler(handler, request, bufferBody)));
+						request -> withOwnPackage(servingPackage,
+								() -> invokeHttpHandler(handler, request, bufferBody)));
 			}
 			catch (RontoHttpServer.ServerException ex) {
 				throw new LispEvalException(ex.reason());
@@ -15667,6 +15668,13 @@ public final class LispEvaluator {
 			if (this.dynamicBindings.isBound(name)) {
 				this.dynamicBindings.setCurrent(name, value);
 			}
+			else if (LispNames.HANDLER_CLUSTERS_VAR.equals(name) || LispNames.RESTART_CLUSTERS_VAR.equals(name)) {
+				// Never the global: every thread running the program's code, whatever
+				// started it, has stacks of its own, starting from the global's nil.
+				// Through one global a thread leaving its handler-bind restores what it
+				// saved over what another thread pushed since.
+				this.dynamicBindings.push(name, value);
+			}
 			else if (!env.setLexical(name, value)) {
 				env.root().set(name, value);
 			}
@@ -17250,10 +17258,19 @@ public final class LispEvaluator {
 		// they travel in the future -- the awaiter publishes them from there, never
 		// from the channel it shares with every other thread.
 		String spawnerPackage = this.packageResolver.currentPackageName();
+		Map<String, LispVal> callerStacks = new HashMap<>();
+		for (String stack : List.of(LispNames.HANDLER_CLUSTERS_VAR, LispNames.RESTART_CLUSTERS_VAR)) {
+			LispVal bound = threadBinding(stack);
+			if (bound != null) {
+				callerStacks.put(stack, bound);
+			}
+		}
+		ArrayDeque<List<LispVal>> callerHandlerCases = new ArrayDeque<>(this.handlerCaseTypes.get());
 		return AsyncRuntime.run(future -> {
 			LispVal primary;
 			try {
-				primary = withOwnPackage(spawnerPackage, () -> apply(thunk, List.of(), this.globalEnv));
+				primary = withCallersHandlers(callerStacks, callerHandlerCases,
+						() -> withOwnPackage(spawnerPackage, () -> apply(thunk, List.of(), this.globalEnv)));
 			}
 			catch (LispEvalException e) {
 				e.trace().crossedAsync(asyncFunction, future.future());
@@ -17265,18 +17282,26 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Runs what a thread or a served request runs under what no other thread may move:
-	 * its current package, and the handler and restart stacks, which start empty. A
-	 * thread leaving its {@code handler-bind} restores the stack it saved, and through
-	 * one global that drops whatever another thread pushed since.
+	 * Runs an async body starting from what a signal reads on its caller's thread: the
+	 * handler and restart stacks and the armed {@code handler-case} clauses. The part of
+	 * the body before its first suspension is a call, as on the backends that run it on
+	 * the caller's stack; what the body pushes from here on is its own.
 	 */
-	private <T> T onOwnThread(String pkg, java.util.function.Supplier<T> body) {
-		Map<String, LispVal> stacks = new HashMap<>();
-		stacks.put(LispNames.HANDLER_CLUSTERS_VAR, LispNil.INSTANCE);
-		stacks.put(LispNames.RESTART_CLUSTERS_VAR, LispNil.INSTANCE);
-		List<T> result = new ArrayList<>(1);
-		withThreadBindings(stacks, () -> result.add(withOwnPackage(pkg, body)));
-		return result.getFirst();
+	private <T> T withCallersHandlers(Map<String, LispVal> stacks, ArrayDeque<List<LispVal>> handlerCases,
+			java.util.function.Supplier<T> body) {
+		ArrayDeque<List<LispVal>> outer = this.handlerCaseTypes.get();
+		this.handlerCaseTypes.set(handlerCases);
+		try {
+			if (stacks.isEmpty()) {
+				return body.get();
+			}
+			List<T> result = new ArrayList<>(1);
+			withThreadBindings(stacks, () -> result.add(body.get()));
+			return result.getFirst();
+		}
+		finally {
+			this.handlerCaseTypes.set(outer);
+		}
 	}
 
 	/**
@@ -17359,6 +17384,10 @@ public final class LispEvaluator {
 				// re-signalled it").
 				lispError.trace().reawaited(cf);
 				throw lispError;
+			}
+			if (cause instanceof RuntimeException transfer && isControlTransfer(transfer)) {
+				// A handler's exit to a frame the awaiter is in.
+				throw transfer;
 			}
 			// a host failure with no message (the JDK client's ConnectException)
 			// reports its class, as the JVM backend's rethrown throwable does

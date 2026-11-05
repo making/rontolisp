@@ -23,6 +23,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.OwnHandlerStacksPrograms;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -350,6 +351,23 @@ class HttpHandlerTest {
 			}
 		}
 		throw new IllegalStateException("no " + key + " in the environment plist");
+	}
+
+	@Test
+	void aRequestsHandlersAreItsOwn() throws Exception {
+		int port = freePort();
+		serveInBackground(OwnHandlerStacksPrograms.SERVED + "(rontolisp:http-handler 'handle %d)\n".formatted(port),
+				port);
+		CompletableFuture<HttpResponse<String>> first = CompletableFuture.supplyAsync(() -> {
+			try {
+				return get(port, "/first");
+			}
+			catch (Exception ex) {
+				throw new IllegalStateException(ex);
+			}
+		});
+		assertThat(get(port, "/second").body()).isEqualTo(OwnHandlerStacksPrograms.SERVED_OUTPUT);
+		assertThat(first.get().body()).isEqualTo("first");
 	}
 
 	@Test

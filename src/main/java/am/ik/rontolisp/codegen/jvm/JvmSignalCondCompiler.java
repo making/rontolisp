@@ -20,16 +20,15 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  *
  * <p>
  * "Will handle" is decided in two steps. The per-thread depth counter must be positive (a
- * handler-case is armed on THIS thread -- the cluster stack below is a shared global, so
- * the depth read keeps another thread's handler-case from capturing this thread's
- * signal), and, under {@code Ctx.signalClauseMatch}, the injected {@code %hc-match-p}
- * defun must find a MATCHING handler-case clause on the dynamic
- * {@code %handler-clusters%} stack -- a handler-case whose clauses do not match is not an
- * applicable handler and is declined. Outside that gate (the program signals but
- * establishes no handler-case, or vice versa) the depth test alone decides, exactly as
- * before, and the emission is byte-identical. The restart-mode signal hook's terminal
- * ({@code (%signal-cond condition message t)}) records that the {@code handler-bind}
- * handlers already ran, as {@code %error-cond}'s does.
+ * handler-case is armed on THIS thread, or, for an async body, was on its caller's), and,
+ * under {@code Ctx.signalClauseMatch}, the injected {@code %hc-match-p} defun must find a
+ * MATCHING handler-case clause on the dynamic {@code %handler-clusters%} stack -- a
+ * handler-case whose clauses do not match is not an applicable handler and is declined.
+ * Outside that gate (the program signals but establishes no handler-case, or vice versa)
+ * the depth test alone decides, exactly as before, and the emission is byte-identical.
+ * The restart-mode signal hook's terminal ({@code (%signal-cond condition message t)})
+ * records that the {@code handler-bind} handlers already ran, as {@code %error-cond}'s
+ * does.
  */
 final class JvmSignalCondCompiler {
 

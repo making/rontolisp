@@ -880,7 +880,9 @@ closures), all pinned cross-backend. `--no-gc` keeps the lite lowering.
   `ensureRestartRuntimeLoaded()` at interpret time).
 - **Two dynamic stacks, both TOP-LEVEL GLOBALS** (`%HANDLER-CLUSTERS%`, `%RESTART-CLUSTERS%`,
   injected as `defvar`s), mutated with plain `setq`
-  and restored through an `unwind-protect` cleanup over a LEXICALLY saved value. Plain `setq` +
+  and restored through an `unwind-protect` cleanup over a LEXICALLY saved value; each thread's own where
+  several can run the program ([threads.md](threads.md), "What a thread keeps of its own"), each suspended
+  frame's own on a component ([async-await.md](async-await.md), "The eager part is a call"). Plain `setq` +
   cleanup rather than special-`let` rebindings, chosen when the compile paths still skipped the
   special-binding restore on the error-throw, `catch`/`throw` and cross-lambda `return-from`
   channels. Those holes are closed -- a special `let` is now itself an unwind-protect region

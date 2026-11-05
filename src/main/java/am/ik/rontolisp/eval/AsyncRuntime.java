@@ -42,17 +42,25 @@ final class AsyncRuntime {
 	 * ({@link LispFuture#settleExtras}) before answering its primary value
 	 * @return a future settling with the body's value, or exceptionally with what it
 	 * threw
+	 * @throws RuntimeException the control transfer that left the body before its first
+	 * suspension: that part of the body is a call, so the exit goes on from here. A
+	 * condition stays the future's, for the await to signal.
 	 */
 	static LispFuture run(Function<LispFuture, LispVal> body) {
 		CompletableFuture<LispVal> result = new CompletableFuture<>();
 		LispFuture future = LispFuture.of(result);
 		CountDownLatch handoff = new CountDownLatch(1);
+		RuntimeException[] exit = new RuntimeException[1];
 		Thread.ofVirtual().start(() -> {
 			HANDOFF.set(handoff);
 			try {
 				result.complete(body.apply(future));
 			}
 			catch (Throwable ex) {
+				if (handoff.getCount() > 0 && ex instanceof RuntimeException transfer
+						&& LispEvaluator.isControlTransfer(transfer)) {
+					exit[0] = transfer;
+				}
 				result.completeExceptionally(ex);
 			}
 			finally {
@@ -66,6 +74,9 @@ final class AsyncRuntime {
 		catch (InterruptedException ex) {
 			Thread.currentThread().interrupt();
 			throw new LispEvalException("async body interrupted before its first suspension");
+		}
+		if (exit[0] != null) {
+			throw exit[0];
 		}
 		return future;
 	}

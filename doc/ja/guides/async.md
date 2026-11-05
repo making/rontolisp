@@ -101,6 +101,24 @@ rontolisp:await is only allowed inside rontolisp:async-defun/async-lambda or at 
   (error (e) (declare (ignore e)) "caught"))   ; => "caught"
 ```
 
+本体の最初のサスペンドより前の部分は呼び出しの一部なので、呼び出しを囲むハンドラと
+再起動はそこでシグナルされたものに適用されます。`handler-bind` のハンドラは本体が
+シグナルした地点で動き、`return-from`、`throw`、再起動で抜ければ呼び出しごと抜けます。
+どのハンドラも引き取らなかった条件だけが future に残ります:
+
+```lisp
+(define-condition tick (condition) ())
+(rontolisp:async-defun ticking () (signal 'tick) :done)
+(block found
+  (handler-bind ((tick (lambda (c) (declare (ignore c)) (return-from found :left))))
+    (ticking)
+    :stayed))   ; => :LEFT
+```
+
+サスペンドした後も、本体は呼び出し時に見えていたハンドラを持ち続けます。本体自身が
+設定したものは本体だけのもので、呼び出し元や他の本体がそのハンドラを動かすことはなく、
+それを抜けても相手がその後に設定したものは乱れません。
+
 ## 処理をオーバーラップさせる
 
 呼び出しが future を返す時点で処理は既に走っているので、複数の非同期処理は
