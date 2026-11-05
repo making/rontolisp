@@ -282,6 +282,8 @@ final class JvmExprCompiler {
 				compileCons(cons, ctx, className);
 			}
 			case am.ik.rontolisp.LispArray array -> JvmQuoteCompiler.compileLiteralArray(array, ctx, className);
+			case am.ik.rontolisp.LispCircularLiteral literal ->
+				JvmQuoteCompiler.compileCircularLiteral(literal, ctx, className);
 			// An instance is self-evaluating (CLHS 3.1.2.1.3: neither a symbol nor a
 			// cons), so a #S(...) literal in code position builds the same
 			// Object[]{layout, slots...} %obj-new does.

@@ -104,15 +104,12 @@ class WideListStackTest {
 	}
 
 	@Test
-	void aListClosedIntoItsOwnTailIsRefusedAtTheRead() throws Exception {
+	void aListClosedIntoItsOwnTailIsAConstantEveryPassWalksPast() throws Exception {
 		Path file = this.dir.resolve("circular.lisp");
-		Files.writeString(file, "(defvar *c* '#1=(a b . #1#))\n(print (car *c*))\n");
-		assertThatThrownBy(() -> runOnSmallStack(List.of(file.toString()))).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("circular list literal");
-		assertThatThrownBy(() -> runOnSmallStack(
-				List.of("-o", this.dir.resolve("C.class").toString(), "--class-name", "C", file.toString())))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("circular list literal");
+		Files.writeString(file, "(defvar *c* '#1=(a b . #1#))\n(print (eq *c* (cddr *c*)))\n");
+		assertThat(runOnSmallStack(List.of(file.toString())).strip()).isEqualTo("T");
+		runOnSmallStack(List.of("-o", this.dir.resolve("C.class").toString(), "--class-name", "C", file.toString()));
+		assertThat(this.dir.resolve("C.class")).exists();
 	}
 
 	@Test

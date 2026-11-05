@@ -1,9 +1,12 @@
 package am.ik.rontolisp;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -69,162 +72,231 @@ public final class StructLiteralFolder {
 	/**
 	 * Folds every struct literal in a form, however deeply nested -- inside quoted data,
 	 * a backquote's list-building code, a {@code #(...)} vector literal and another
-	 * literal's slot values alike. Unchanged subtrees keep their identity.
+	 * literal's slot values alike. A form is a graph, since a {@code #n=} reader label
+	 * may share a node or close a circle through a car, a tail, an array or a literal
+	 * (CLHS 2.4.8.3), and the fold answers the same graph: one instance per literal, one
+	 * copy per node that leads to a literal, and every other node as it stands.
 	 * @param form the form to fold
 	 * @param registry the layout registry
 	 * @return the folded form, or {@code form} itself when it holds no struct literal
 	 */
 	public static LispVal fold(LispVal form, ClosRegistry registry) {
-		return fold(form, registry, Collections.newSetFromMap(new IdentityHashMap<>()));
+		return new Folding(registry).foldGraph(form);
 	}
 
-	/**
-	 * The walk itself, carrying the aggregates on the CURRENT PATH by identity. A datum a
-	 * {@code #n=} reader label closed into a circle (CLHS 2.4.8.3) has a back edge, and
-	 * this walk REBUILDS what it changes, so a back edge can only be left alone: the node
-	 * is returned as it stands the second time the path reaches it. On the path and not
-	 * "ever seen", so a DAG -- the same label referenced twice, side by side -- still
-	 * folds both occurrences.
-	 */
-	private static LispVal fold(LispVal form, ClosRegistry registry, Set<LispVal> active) {
-		switch (form) {
-			case LispStructLiteral literal -> {
-				return foldLiteral(literal, registry, active);
+	/** One fold's memo: what each node of the graph became. */
+	private static final class Folding {
+
+		private final ClosRegistry registry;
+
+		private final Set<LispVal> leadingToLiteral = Collections.newSetFromMap(new IdentityHashMap<>());
+
+		private final Map<LispVal, LispVal> folded = new IdentityHashMap<>();
+
+		Folding(ClosRegistry registry) {
+			this.registry = registry;
+		}
+
+		/** Folds a graph of its own: the form, or the constant initform of a slot. */
+		LispVal foldGraph(LispVal root) {
+			if (holdsLiteral(root)) {
+				addNodesLeadingToLiteral(root);
 			}
-			case LispCons cons -> {
-				return foldSpine(cons, registry, active);
-			}
-			case LispArray array -> {
-				// A #(...) / #nA(...) literal may hold struct literals; the packed float
-				// arrays cannot, their elements are numbers. Only a literal's own storage
-				// is walked -- a displaced view is never reader-produced.
-				if (!active.add(array)) {
-					return form;
+			return fold(root);
+		}
+
+		/**
+		 * Adds every node with a path to a literal, the literals included, by walking the
+		 * predecessors back from them.
+		 */
+		private void addNodesLeadingToLiteral(LispVal root) {
+			Map<LispVal, List<LispVal>> predecessors = new IdentityHashMap<>();
+			Deque<LispVal> pending = new ArrayDeque<>();
+			Deque<LispVal> reached = new ArrayDeque<>();
+			predecessors.put(root, new ArrayList<>());
+			pending.push(root);
+			while (!pending.isEmpty()) {
+				LispVal node = pending.pop();
+				if (node instanceof LispStructLiteral) {
+					reached.push(node);
 				}
-				try {
-					LispVal[] data = array.data();
-					LispVal[] folded = null;
-					for (int i = 0; i < data.length; i++) {
-						LispVal element = fold(data[i], registry, active);
-						if (element != data[i] && folded == null) {
-							folded = data.clone();
-						}
-						if (folded != null) {
-							folded[i] = element;
-						}
+				for (LispVal next : LispTrees.childNodes(node)) {
+					List<LispVal> known = predecessors.get(next);
+					if (known == null) {
+						known = new ArrayList<>(1);
+						predecessors.put(next, known);
+						pending.push(next);
 					}
-					return folded == null ? form : new LispArray(array.dimensions(), folded);
-				}
-				finally {
-					active.remove(array);
+					known.add(node);
 				}
 			}
-			default -> {
-				return form;
+			Set<LispVal> marked = Collections.newSetFromMap(new IdentityHashMap<>());
+			while (!reached.isEmpty()) {
+				LispVal node = reached.pop();
+				if (marked.add(node)) {
+					this.leadingToLiteral.add(node);
+					predecessors.getOrDefault(node, List.of()).forEach(reached::push);
+				}
 			}
 		}
-	}
 
-	/**
-	 * A list, walked down its cdr spine in a loop so the stack is spent per level of
-	 * nesting rather than per element. Every cell of the spine stays on the path until
-	 * the whole spine is done, as it did when the walk recursed on the cdr.
-	 */
-	private static LispVal foldSpine(LispCons head, ClosRegistry registry, Set<LispVal> active) {
-		List<LispCons> cells = new ArrayList<>();
-		List<LispVal> cars = new ArrayList<>();
-		try {
-			LispVal node = head;
-			LispVal tail;
-			while (true) {
-				if (node instanceof LispCons cell) {
-					if (!active.add(cell)) {
-						tail = cell;
-						break;
-					}
-					cells.add(cell);
-					cars.add(fold(cell.car(), registry, active));
-					node = cell.cdr();
+		private LispVal fold(LispVal node) {
+			if (!this.leadingToLiteral.contains(node)) {
+				return node;
+			}
+			LispVal done = this.folded.get(node);
+			if (done != null) {
+				return done;
+			}
+			return switch (node) {
+				case LispStructLiteral literal -> foldLiteral(literal);
+				case LispCircularLiteral literal -> {
+					LispVal copy = new LispCircularLiteral(fold(literal.datum()));
+					this.folded.put(literal, copy);
+					yield copy;
 				}
-				else {
-					tail = fold(node, registry, active);
+				case LispCons head -> foldSpine(head);
+				case LispArray array -> {
+					LispVal[] data = array.data().clone();
+					LispVal copy = new LispArray(array.dimensions(), data, -1, false, array.elementTypeCode());
+					this.folded.put(array, copy);
+					for (int i = 0; i < data.length; i++) {
+						if (data[i] != null) {
+							data[i] = fold(data[i]);
+						}
+					}
+					yield copy;
+				}
+				default -> node;
+			};
+		}
+
+		/**
+		 * A list, walked down its cdr spine in a loop so the stack is spent per level of
+		 * nesting rather than per element. Each copy exists before its car is folded, so
+		 * a circle finds it to close on.
+		 */
+		private LispVal foldSpine(LispCons head) {
+			LispCons first = LispTrees.copyCell(head, this.folded);
+			LispCons last = first;
+			LispCons cell = head;
+			while (true) {
+				last.setCar(fold(cell.car()));
+				if (!(cell.cdr() instanceof LispCons next) || !this.leadingToLiteral.contains(next)
+						|| this.folded.containsKey(next)) {
+					last.setCdr(fold(cell.cdr()));
+					return first;
+				}
+				LispCons copy = LispTrees.copyCell(next, this.folded);
+				last.setCdr(copy);
+				last = copy;
+				cell = next;
+			}
+		}
+
+		/**
+		 * Builds the instance one {@code #S(...)} literal denotes. It exists before its
+		 * slot values are folded, so a label naming the literal from inside finds it.
+		 */
+		private LispInstance foldLiteral(LispStructLiteral literal) {
+			LispLayout layout = this.registry.findStructLayout(literal.typeName());
+			if (layout == null) {
+				String hint = this.registry.findClassLayout(literal.typeName()) != null
+						? " (it names a class; #S reads defstruct types only)" : "";
+				throw new IllegalArgumentException("#S(" + literal.typeName() + " ...): " + literal.typeName()
+						+ " is not a defined structure type" + hint);
+			}
+			// The LEFTMOST :allow-other-keys pair decides whether unknown slots are
+			// licensed; the pairs themselves are never slots and never errors.
+			boolean allowOtherKeys = false;
+			for (int i = 0; i < literal.slotNames().size(); i++) {
+				if (isAllowOtherKeys(literal.slotNames().get(i))) {
+					allowOtherKeys = !(literal.slotValues().get(i) instanceof LispNil);
 					break;
 				}
 			}
-			for (int i = cells.size() - 1; i >= 0; i--) {
-				tail = LispCons.rebuilt(cells.get(i), cars.get(i), tail);
-			}
-			return tail;
-		}
-		finally {
-			for (LispCons cell : cells) {
-				active.remove(cell);
-			}
-		}
-	}
-
-	/** Builds the instance one {@code #S(...)} literal denotes. */
-	private static LispInstance foldLiteral(LispStructLiteral literal, ClosRegistry registry, Set<LispVal> active) {
-		LispLayout layout = registry.findStructLayout(literal.typeName());
-		if (layout == null) {
-			String hint = registry.findClassLayout(literal.typeName()) != null
-					? " (it names a class; #S reads defstruct types only)" : "";
-			throw new IllegalArgumentException("#S(" + literal.typeName() + " ...): " + literal.typeName()
-					+ " is not a defined structure type" + hint);
-		}
-		// The LEFTMOST :allow-other-keys pair decides whether unknown slots are
-		// licensed; the pairs themselves are never slots and never errors.
-		boolean allowOtherKeys = false;
-		for (int i = 0; i < literal.slotNames().size(); i++) {
-			if (isAllowOtherKeys(literal.slotNames().get(i))) {
-				allowOtherKeys = !(literal.slotValues().get(i) instanceof LispNil);
-				break;
-			}
-		}
-		LispVal[] slots = new LispVal[layout.slotCount()];
-		for (int i = 0; i < literal.slotNames().size(); i++) {
-			String spelled = literal.slotNames().get(i);
-			if (isAllowOtherKeys(spelled)) {
-				continue;
-			}
-			int index = slotIndexOf(layout, spelled);
-			if (index < 0) {
-				if (allowOtherKeys) {
+			LispVal[] slots = new LispVal[layout.slotCount()];
+			LispInstance instance = new LispInstance(layout, slots);
+			this.folded.put(literal, instance);
+			for (int i = 0; i < literal.slotNames().size(); i++) {
+				String spelled = literal.slotNames().get(i);
+				if (isAllowOtherKeys(spelled)) {
 					continue;
 				}
+				int index = slotIndexOf(layout, spelled);
+				if (index < 0) {
+					if (allowOtherKeys) {
+						continue;
+					}
+					throw new IllegalArgumentException("#S(" + literal.typeName() + " ...): " + layout.printName()
+							+ " has no slot named " + spelled);
+				}
+				// Leftmost wins: a repeated slot keeps the value written first.
+				if (slots[index] == null) {
+					slots[index] = fold(literal.slotValues().get(i));
+				}
+			}
+			for (int i = 0; i < slots.length; i++) {
+				if (slots[i] == null) {
+					slots[i] = defaultSlotValue(literal, layout, i);
+				}
+			}
+			return instance;
+		}
+
+		/**
+		 * The value of a slot the literal omits: the recorded initform, which must be a
+		 * constant. An initform that has to be EVALUATED cannot be honored here -- the
+		 * fold runs at compile time on three of the four backends, where there is no
+		 * evaluator -- so it is rejected instead of silently reading as nil on some
+		 * backends and as its value on others.
+		 */
+		private LispVal defaultSlotValue(LispStructLiteral literal, LispLayout layout, int index) {
+			LispVal initform = layout.initforms().get(index);
+			LispVal constant = constantValue(initform);
+			if (constant == null) {
 				throw new IllegalArgumentException(
-						"#S(" + literal.typeName() + " ...): " + layout.printName() + " has no slot named " + spelled);
+						"#S(" + literal.typeName() + " ...): slot " + layout.slotNames().get(index)
+								+ " is omitted and its initform " + initform.print() + " is not a constant");
 			}
-			// Leftmost wins: a repeated slot keeps the value written first.
-			if (slots[index] == null) {
-				slots[index] = fold(literal.slotValues().get(i), registry, active);
-			}
+			return foldGraph(constant);
 		}
-		for (int i = 0; i < slots.length; i++) {
-			if (slots[i] == null) {
-				slots[i] = defaultSlotValue(literal, layout, i, registry, active);
-			}
-		}
-		return new LispInstance(layout, slots);
+
 	}
 
 	/**
-	 * The value of a slot the literal omits: the recorded initform, which must be a
-	 * constant. An initform that has to be EVALUATED cannot be honored here -- the fold
-	 * runs at compile time on three of the four backends, where there is no evaluator --
-	 * so it is rejected instead of silently reading as nil on some backends and as its
-	 * value on others.
+	 * Whether any node of a form is a struct literal. Every form costs this walk; only
+	 * one that holds a literal goes on to the graph the fold needs.
 	 */
-	private static LispVal defaultSlotValue(LispStructLiteral literal, LispLayout layout, int index,
-			ClosRegistry registry, Set<LispVal> active) {
-		LispVal initform = layout.initforms().get(index);
-		LispVal constant = constantValue(initform);
-		if (constant == null) {
-			throw new IllegalArgumentException(
-					"#S(" + literal.typeName() + " ...): slot " + layout.slotNames().get(index)
-							+ " is omitted and its initform " + initform.print() + " is not a constant");
+	private static boolean holdsLiteral(LispVal form) {
+		Set<LispVal> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+		Deque<LispVal> pending = new ArrayDeque<>();
+		pending.push(form);
+		while (!pending.isEmpty()) {
+			LispVal node = pending.pop();
+			while (node instanceof LispCons cell && seen.add(cell)) {
+				if (LispTrees.isNode(cell.car())) {
+					pending.push(cell.car());
+				}
+				node = cell.cdr();
+			}
+			switch (node) {
+				case LispStructLiteral ignored -> {
+					return true;
+				}
+				case LispCircularLiteral literal -> pending.push(literal.datum());
+				case LispArray array when seen.add(array) -> {
+					for (LispVal element : array.data()) {
+						if (LispTrees.isNode(element)) {
+							pending.push(element);
+						}
+					}
+				}
+				default -> {
+				}
+			}
 		}
-		return fold(constant, registry, active);
+		return false;
 	}
 
 	/**
@@ -236,9 +308,10 @@ public final class StructLiteralFolder {
 	private static LispVal constantValue(LispVal initform) {
 		return switch (initform) {
 			case LispCons cons -> cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())
-					&& cons.cdr() instanceof LispCons datum && datum.cdr() instanceof LispNil ? datum.car() : null;
+					&& cons.cdr() instanceof LispCons datum && datum.cdr() instanceof LispNil
+							? LispCircularLiteral.unwrapped(datum.car()) : null;
 			case LispSymbol ignored -> null;
-			default -> initform;
+			default -> LispCircularLiteral.unwrapped(initform);
 		};
 	}
 

@@ -8472,6 +8472,16 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		int nextLocal = 1;
 
+		/**
+		 * The graph of the quoted datum being built, when its nodes have to be named
+		 * ({@code JvmQuoteCompiler.compileDatum}); the slot of the {@code Object[]} that
+		 * holds them is {@link #quotedNames}.
+		 */
+		am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedGraph quotedGraph;
+
+		/** The local slot of the named nodes of {@link #quotedGraph}. */
+		int quotedNames;
+
 		int maxLocals = 1;
 
 		/**

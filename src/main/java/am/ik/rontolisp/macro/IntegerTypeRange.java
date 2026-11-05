@@ -15,9 +15,10 @@ import org.jspecify.annotations.Nullable;
  * The closed interval of integers an integer type specifier denotes: {@code bit},
  * {@code fixnum} (64 bits), {@code unsigned-byte}, {@code signed-byte}, {@code integer}
  * and the compounds {@code (unsigned-byte n)}, {@code (signed-byte n)},
- * {@code (integer lo hi)} and {@code (mod n)}. A null bound is unbounded on that side.
- * Shared by {@code subtypep}'s interval rule and the stream element-type classification
- * ({@link StreamElementType}), so the two read one table.
+ * {@code (integer lo hi)}, {@code (mod n)} and an {@code (and ...)} of any of these. A
+ * null bound is unbounded on that side. Shared by {@code subtypep}'s interval rule and
+ * the stream element-type classification ({@link StreamElementType}), so the two read one
+ * table.
  *
  * @param lo the least member, or null when unbounded below
  * @param hi the greatest member, or null when unbounded above
@@ -48,6 +49,17 @@ public record IntegerTypeRange(@Nullable BigInteger lo, @Nullable BigInteger hi)
 		List<LispVal> parts = cons.toList();
 		String name = plainName(head);
 		switch (name) {
+			case "AND" -> {
+				IntegerTypeRange meet = null;
+				for (LispVal conjunct : parts.subList(1, parts.size())) {
+					IntegerTypeRange range = of(conjunct);
+					if (range == null) {
+						return null;
+					}
+					meet = meet == null ? range : meet.meet(range);
+				}
+				return meet;
+			}
 			case "UNSIGNED-BYTE", "SIGNED-BYTE" -> {
 				if (parts.size() == 1 || (parts.size() == 2 && isStar(parts.get(1)))) {
 					return of(head);
@@ -130,6 +142,17 @@ public record IntegerTypeRange(@Nullable BigInteger lo, @Nullable BigInteger hi)
 		boolean loOk = this.lo == null || (other.lo != null && this.lo.compareTo(other.lo) <= 0);
 		boolean hiOk = this.hi == null || (other.hi != null && this.hi.compareTo(other.hi) >= 0);
 		return loOk && hiOk;
+	}
+
+	/**
+	 * The interval both hold.
+	 * @param other the other interval
+	 * @return the intersection, empty when they do not meet
+	 */
+	public IntegerTypeRange meet(IntegerTypeRange other) {
+		BigInteger l = this.lo == null ? other.lo : other.lo == null ? this.lo : this.lo.max(other.lo);
+		BigInteger h = this.hi == null ? other.hi : other.hi == null ? this.hi : this.hi.min(other.hi);
+		return new IntegerTypeRange(l, h);
 	}
 
 	/**

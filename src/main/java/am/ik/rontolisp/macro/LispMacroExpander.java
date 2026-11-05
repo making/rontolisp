@@ -31001,7 +31001,7 @@ public final class LispMacroExpander {
 		}
 		if (runtimeSubtypepValid) {
 			// Position-independent like the dispatch they call.
-			out.addAll(subtypepValidRuntimeDefuns());
+			out.addAll(subtypepValidRuntimeDefuns(runtimeSubtypep && mentionsIntegerIntervalType(program)));
 		}
 		if (runtimeTypep) {
 			// The defun is position-independent like the subtypep one; its data table
@@ -48775,7 +48775,8 @@ public final class LispMacroExpander {
 	 */
 	private static final java.util.Map<String, List<String>> SUBTYPEP_PARENTS = orderedMap(
 			java.util.Map.entry("FIXNUM", List.of("INTEGER")), java.util.Map.entry("BIGNUM", List.of("INTEGER")),
-			java.util.Map.entry("BIT", List.of("INTEGER")), java.util.Map.entry("UNSIGNED-BYTE", List.of("INTEGER")),
+			java.util.Map.entry("BIT", List.of("FIXNUM", "INTEGER")),
+			java.util.Map.entry("UNSIGNED-BYTE", List.of("INTEGER")),
 			java.util.Map.entry("SIGNED-BYTE", List.of("INTEGER")), java.util.Map.entry("INTEGER", List.of("RATIONAL")),
 			java.util.Map.entry("RATIO", List.of("RATIONAL")), java.util.Map.entry("RATIONAL", List.of("REAL")),
 			java.util.Map.entry("BFLOAT16", List.of("FLOAT")), java.util.Map.entry("FLOAT", List.of("REAL")),
@@ -49700,7 +49701,8 @@ public final class LispMacroExpander {
 	 * @return whether the {@code subtypep} answer for the pair is a decision
 	 */
 	public static boolean subtypepValid(LispVal subV, LispVal superV, ClosRegistry closRegistry) {
-		return (!(subV instanceof LispCons) && !(superV instanceof LispCons)) || subtypep(subV, superV, closRegistry);
+		return (!(subV instanceof LispCons) && !(superV instanceof LispCons)) || subtypep(subV, superV, closRegistry)
+				|| (IntegerTypeRange.of(subV) != null && IntegerTypeRange.of(superV) != null);
 	}
 
 	/**
@@ -49742,13 +49744,30 @@ public final class LispMacroExpander {
 			""";
 
 	/**
+	 * {@link #RUNTIME_SUBTYPEP_VALID_SOURCE} for a program with the interval arm: a nil
+	 * between two intervals is exact, so it is a decision.
+	 */
+	private static final String RUNTIME_SUBTYPEP_VALID_INTERVAL_SOURCE = """
+			(defun %subtypep-valid-runtime (%stv-a %stv-b)
+			  (if (or (consp %stv-a) (consp %stv-b))
+			      (if (%subtypep-runtime %stv-a %stv-b)
+			          t
+			          (if (or (eq (%subtypep-interval %stv-a) :none) (eq (%subtypep-interval %stv-b) :none))
+			              nil
+			              t))
+			      t))
+			""";
+
+	/**
 	 * The defun backing a runtime {@code %subtypep-valid}, read from its source. Injected
 	 * by {@link #expandTopLevelDefinitions} beside the {@code %subtypep-runtime} dispatch
 	 * it calls.
 	 * @return the {@code %subtypep-valid-runtime} defun
 	 */
-	private static List<LispVal> subtypepValidRuntimeDefuns() {
-		return LispReader.readAllFromString(RUNTIME_SUBTYPEP_VALID_SOURCE, Features.INTERPRETER);
+	private static List<LispVal> subtypepValidRuntimeDefuns(boolean intervals) {
+		return LispReader.readAllFromString(
+				intervals ? RUNTIME_SUBTYPEP_VALID_INTERVAL_SOURCE : RUNTIME_SUBTYPEP_VALID_SOURCE,
+				Features.INTERPRETER);
 	}
 
 	/**
@@ -49872,6 +49891,18 @@ public final class LispMacroExpander {
 			                 ((or (string= %sti-n "SIGNED-BYTE") (string= %sti-n "INTEGER")) (cons nil nil))
 			                 (t :none)))
 			          ((not (consp %sti-s)) :none)
+			          ((string= %sti-n "AND")
+			           (let ((%sti-lo nil) (%sti-hi nil) (%sti-r nil) (%sti-any nil))
+			             (dolist (%sti-e (cdr %sti-s) (if %sti-any (cons %sti-lo %sti-hi) :none))
+			               (setq %sti-r (%subtypep-interval %sti-e))
+			               (if (eq %sti-r :none)
+			                   (return :none)
+			                   (progn
+			                     (setq %sti-any t)
+			                     (if (car %sti-r)
+			                         (setq %sti-lo (if %sti-lo (max %sti-lo (car %sti-r)) (car %sti-r))))
+			                     (if (cdr %sti-r)
+			                         (setq %sti-hi (if %sti-hi (min %sti-hi (cdr %sti-r)) (cdr %sti-r)))))))))
 			          ((or (string= %sti-n "UNSIGNED-BYTE") (string= %sti-n "SIGNED-BYTE"))
 			           (let ((%sti-b (if (consp (cdr %sti-s)) (car (cdr %sti-s)) '*)))
 			             (cond ((and (consp (cdr %sti-s)) (cdr (cdr %sti-s))) :none)
@@ -49959,7 +49990,7 @@ public final class LispMacroExpander {
 
 	/** The compound heads {@link IntegerTypeRange} reads as an interval. */
 	private static final java.util.Set<String> INTERVAL_HEADS = java.util.Set.of("UNSIGNED-BYTE", "SIGNED-BYTE",
-			"INTEGER", "MOD");
+			"INTEGER", "MOD", "AND");
 
 	/**
 	 * Whether the program can call a function through a RUNTIME designator -- a

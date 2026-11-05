@@ -134,12 +134,34 @@ worth building when a datum's function sets a module's wall time by seconds (pas
 one per run, each taking the tail and returning the list; a tree splits per subtree. A helper
 is larger than `WasmInliner.MAX_MOVED_BODY`, so the inliner leaves it out of line.
 
+## A label's graph reaches one constant
+**Invariant: a node reached twice in one literal is one object on all four backends, and a
+circle stays a circle** (2026-11-05). `compiler/QuotedGraph` walks a datum by identity and names
+the aggregates it reaches twice; a tree has no name and emits exactly what it did. With names,
+`compileDatum` builds in two steps through an array of the named nodes held in one local: every
+named node empty (a cons with nil fields, an array with no elements, an instance with its layout;
+a packed array finished), then every one filled, where a named node reads the array. Every circle
+runs through a named node, so a spine, an element or a size estimate stops there. The JVM cuts the
+steps by `QUOTE_CHUNK_BUDGET` and passes the array to each `_ql$N` builder as an extra argument,
+and a named spine chunk does the same. The root still goes through `_qdSet`: nothing is published before
+the build ends, and the final field covers the graph (JLS 17.5). Source circles reach here as a
+`LispCircularLiteral` ([reader-features.md](reader-features.md)), a macro's sharing as it is.
+
+`StructLiteralFolder` keeps the graph: nodes with a path to a literal (a predecessor walk back from
+the literals) get one copy each, made before its children, and every other node stands. A form with no
+literal costs one identity walk. `LiteralArrays` copies each nested array once for the same reason.
+
 ## Not covered
 Two DIFFERENT quote sites spelling the same text are not `eq` (CLHS permits but does not
-require coalescing). `--no-gc` is scalar-only (`.kb/no-gc-scalar-wasm.md`).
+require coalescing). `--no-gc` is scalar-only (`.kb/no-gc-scalar-wasm.md`). A node a label shares between
+two quote sites is one per site on the compile backends, since `QuotedGraph` sees one datum:
+`(let ((a '(#1=(x))) (b '(#1#))) (eq (car a) (car b)))` is `NIL` there and `T` on the interpreter and
+SBCL (2026-11-05). Outside `cl-user` the interpreter answers `NIL` as well, and so does
+`(eq '#1=(x) '#1#)` everywhere: `PackageResolver` copies per quote.
 
 ## Tests
-ci-spec `quoted-datum-shared-cross-backend`, `instance-literal-shared-cross-backend`;
+ci-spec `quoted-datum-shared-cross-backend`, `instance-literal-shared-cross-backend`,
+`reader-label-sharing-and-circles-in-a-constant`;
 `LispEvaluatorTest.{aQuotedDatum,anInstanceLiteral}IsOneSharedConstantOnEveryBackend`;
 `{aQuotedDatum,aBareInstanceLiteral}IsOneSharedConstantAcrossEvaluations` in
 `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest` (Preview 1 AND component).

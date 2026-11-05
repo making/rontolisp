@@ -62,6 +62,8 @@ static_resources:
                 direct_response: {status: 200, body: {inline_string: "authz-service"}}
               - match: {prefix: "/authz/"}
                 direct_response: {status: 403, body: {inline_string: "no"}}
+              - match: {path: "/secret"}
+                direct_response: {status: 200, body: {inline_string: "a secret"}}
               - match: {prefix: "/"}
                 direct_response: {status: 200, body: {inline_string: "hello from upstream\n"}}
                 response_headers_to_add:
