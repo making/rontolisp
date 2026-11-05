@@ -1824,6 +1824,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		StringEntry spaceStr = cp.stringEntry(" ");
 		StringEntry dotStr = cp.stringEntry(" . ");
 
+		// The nodes two literals of the program reach: one object across their sites
+		// (.kb/quoted-data.md), so the sites have to be known before any body compiles.
+		am.ik.rontolisp.compiler.QuotedSharing quotedSharing = am.ik.rontolisp.compiler.QuotedSharing.of(program);
 		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
 		// binds a variable to a closure like any other setq.
@@ -2977,6 +2980,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()
+			.quotedSharing(quotedSharing)
 			.intFusion(intFusion)
 			.rawGlobals(rawGlobals)
 			.inlinableDefuns(inlinableDefuns)
@@ -9520,6 +9524,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			 * from the same builder shares it.
 			 */
 			private final JvmQuotePool quotePool = new JvmQuotePool();
+
+			Builder quotedSharing(am.ik.rontolisp.compiler.@Nullable QuotedSharing sharing) {
+				this.quotePool.sharing(sharing);
+				return this;
+			}
 
 			/**
 			 * One UNSUPPLIED marker per builder (= per compilation): every context built

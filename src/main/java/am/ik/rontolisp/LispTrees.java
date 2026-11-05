@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
 import org.jspecify.annotations.Nullable;
@@ -141,21 +142,170 @@ public final class LispTrees {
 	 * <p>
 	 * A datum is a graph, since a {@code #n=} reader label may share a node or close a
 	 * circle through a car, a tail or an array, and the rewrite answers the same graph:
-	 * the datum itself when no symbol changes, else a copy with one new node per old one.
+	 * one new node per old one with a path to a symbol that changes, and every other node
+	 * as it stands, the datum itself when no symbol changes.
 	 * <p>
 	 * An array the reader cannot write -- displaced, adjustable, with a fill pointer --
 	 * is a value a {@code #.} computed, not a datum, and stands as it is.
 	 * @param datum the datum
-	 * @param rewrite what a symbol becomes, the symbol itself when it stays; asked twice
-	 * of a symbol in a datum that changes, so it has to answer the same both times
+	 * @param rewrite what a symbol becomes, the symbol itself when it stays; asked more
+	 * than once of a symbol in a datum that changes, so it has to answer the same
 	 * @return the rewritten datum
 	 */
 	public static LispVal rewriteDatumSymbols(LispVal datum, Function<LispSymbol, LispVal> rewrite) {
+		return rewriteDatumSymbols(datum, rewrite, new IdentityHashMap<>());
+	}
+
+	/**
+	 * {@link #rewriteDatumSymbols(LispVal, Function)} over several data that may share
+	 * nodes: a {@code #n=} label is one object wherever its form spells it (CLHS
+	 * 2.4.8.15), in one quote or in two, so a node stays one object across the calls that
+	 * pass one {@code copies}. A node stands or takes its copy by what it reaches, which
+	 * is the same from every datum.
+	 * @param datum the datum
+	 * @param rewrite what a symbol becomes, the symbol itself when it stays
+	 * @param copies what the nodes rewritten so far became, by identity
+	 * @return the rewritten datum
+	 */
+	public static LispVal rewriteDatumSymbols(LispVal datum, Function<LispSymbol, LispVal> rewrite,
+			Map<LispVal, LispVal> copies) {
 		if (datum instanceof LispSymbol sym) {
 			return rewrite.apply(sym);
 		}
-		return datumChanges(datum, rewrite, Collections.newSetFromMap(new IdentityHashMap<>()))
-				? copyDatum(datum, rewrite, new IdentityHashMap<>()) : datum;
+		if (!datumChanges(datum, rewrite, Collections.newSetFromMap(new IdentityHashMap<>()))) {
+			return datum;
+		}
+		Set<LispVal> changing = nodesLeadingTo(datum, node -> holdsChangedSymbol(node, rewrite),
+				node -> (node instanceof LispArray array && !isLiteralArray(array)) ? List.of() : childNodes(node));
+		return copyDatum(datum, rewrite, copies, changing);
+	}
+
+	/**
+	 * A datum graph with some of its conses replaced, a new node per old one leading to a
+	 * replacement and every other node as it stands.
+	 * @param datum the datum
+	 * @param replace what a cons becomes, null when it stays and the walk goes on through
+	 * it
+	 * @param copies what the nodes of the graphs replaced so far became, by identity: a
+	 * node two graphs share stays one
+	 * @return the datum itself when nothing is replaced, else the copy
+	 */
+	public static LispVal replaceDatumNodes(LispVal datum, Function<LispCons, @Nullable LispVal> replace,
+			Map<LispVal, LispVal> copies) {
+		Set<LispVal> replaced = Collections.newSetFromMap(new IdentityHashMap<>());
+		Set<LispVal> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+		Deque<LispVal> pending = new ArrayDeque<>();
+		pending.push(datum);
+		while (!pending.isEmpty()) {
+			LispVal node = pending.pop();
+			if (!seen.add(node)) {
+				continue;
+			}
+			LispVal replacement = (node instanceof LispCons cell) ? replace.apply(cell) : null;
+			if (replacement != null) {
+				copies.put(node, replacement);
+				replaced.add(node);
+			}
+			else {
+				childNodes(node).forEach(pending::push);
+			}
+		}
+		if (replaced.isEmpty()) {
+			return datum;
+		}
+		Set<LispVal> changing = nodesLeadingTo(datum, replaced::contains,
+				node -> replaced.contains(node) ? List.of() : childNodes(node));
+		return copyDatum(datum, sym -> sym, copies, changing);
+	}
+
+	/**
+	 * Whether anything a datum graph holds satisfies a test, symbols included.
+	 * @param datum the datum
+	 * @param test the test
+	 * @return whether a value of the graph passes it
+	 */
+	public static boolean anyDatumNode(LispVal datum, Predicate<LispVal> test) {
+		Set<LispVal> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+		Deque<LispVal> pending = new ArrayDeque<>();
+		pending.push(datum);
+		while (!pending.isEmpty()) {
+			LispVal node = pending.pop();
+			if (test.test(node)) {
+				return true;
+			}
+			if (seen.add(node)) {
+				switch (node) {
+					case LispCons cell -> {
+						pending.push(cell.cdr());
+						pending.push(cell.car());
+					}
+					case LispArray array -> {
+						for (LispVal element : array.data()) {
+							if (element != null) {
+								pending.push(element);
+							}
+						}
+					}
+					case LispStructLiteral literal -> literal.slotValues().forEach(pending::push);
+					case LispCircularLiteral literal -> pending.push(literal.datum());
+					default -> {
+					}
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The nodes of a graph with a path to a target, the targets included, by walking the
+	 * predecessors back from the targets.
+	 * @param root where the graph starts
+	 * @param isTarget what the paths end at
+	 * @param children what a node points at
+	 * @return the nodes, by identity
+	 */
+	static Set<LispVal> nodesLeadingTo(LispVal root, Predicate<LispVal> isTarget,
+			Function<LispVal, List<LispVal>> children) {
+		Map<LispVal, List<LispVal>> predecessors = new IdentityHashMap<>();
+		Deque<LispVal> pending = new ArrayDeque<>();
+		Deque<LispVal> reached = new ArrayDeque<>();
+		predecessors.put(root, new ArrayList<>());
+		pending.push(root);
+		while (!pending.isEmpty()) {
+			LispVal node = pending.pop();
+			if (isTarget.test(node)) {
+				reached.push(node);
+			}
+			for (LispVal next : children.apply(node)) {
+				List<LispVal> known = predecessors.get(next);
+				if (known == null) {
+					known = new ArrayList<>(1);
+					predecessors.put(next, known);
+					pending.push(next);
+				}
+				known.add(node);
+			}
+		}
+		Set<LispVal> marked = Collections.newSetFromMap(new IdentityHashMap<>());
+		while (!reached.isEmpty()) {
+			LispVal node = reached.pop();
+			if (marked.add(node)) {
+				predecessors.getOrDefault(node, List.of()).forEach(reached::push);
+			}
+		}
+		return marked;
+	}
+
+	private static boolean holdsChangedSymbol(LispVal node, Function<LispSymbol, LispVal> rewrite) {
+		Predicate<@Nullable LispVal> changes = value -> value instanceof LispSymbol sym && rewrite.apply(sym) != sym;
+		return switch (node) {
+			case LispCons cell -> changes.test(cell.car()) || changes.test(cell.cdr());
+			case LispCircularLiteral literal -> changes.test(literal.datum());
+			case LispStructLiteral literal -> !literal.typeName().equals(rewrittenTypeName(literal, rewrite))
+					|| literal.slotValues().stream().anyMatch(changes);
+			case LispArray array -> isLiteralArray(array) && Arrays.stream(array.data()).anyMatch(changes);
+			default -> false;
+		};
 	}
 
 	private static boolean datumChanges(LispVal datum, Function<LispSymbol, LispVal> rewrite, Set<LispVal> seen) {
@@ -191,31 +341,37 @@ public final class LispTrees {
 		return false;
 	}
 
-	private static LispVal copyDatum(LispVal datum, Function<LispSymbol, LispVal> rewrite,
-			Map<LispVal, LispVal> copies) {
+	private static LispVal copyDatum(LispVal datum, Function<LispSymbol, LispVal> rewrite, Map<LispVal, LispVal> copies,
+			Set<LispVal> changing) {
 		LispVal copied = copies.get(datum);
 		if (copied != null) {
 			return copied;
 		}
+		if (datum instanceof LispSymbol sym) {
+			return rewrite.apply(sym);
+		}
+		if (!changing.contains(datum)) {
+			return datum;
+		}
 		return switch (datum) {
-			case LispSymbol sym -> rewrite.apply(sym);
-			case LispCons head -> copyDatumSpine(head, rewrite, copies);
-			case LispCircularLiteral literal -> new LispCircularLiteral(copyDatum(literal.datum(), rewrite, copies));
+			case LispCons head -> copyDatumSpine(head, rewrite, copies, changing);
+			case LispCircularLiteral literal ->
+				new LispCircularLiteral(copyDatum(literal.datum(), rewrite, copies, changing));
 			case LispStructLiteral literal -> {
 				LispStructLiteral out = new LispStructLiteral(rewrittenTypeName(literal, rewrite), literal.slotNames(),
 						literal.slotValues());
 				copies.put(literal, out);
 				for (int i = 0; i < out.slotValues().size(); i++) {
-					out.setSlotValue(i, copyDatum(literal.slotValues().get(i), rewrite, copies));
+					out.setSlotValue(i, copyDatum(literal.slotValues().get(i), rewrite, copies, changing));
 				}
 				yield out;
 			}
-			case LispArray array when isLiteralArray(array) -> {
+			case LispArray array -> {
 				LispVal[] data = array.data().clone();
 				LispVal out = new LispArray(array.dimensions(), data, -1, false, array.elementTypeCode());
 				copies.put(array, out);
 				for (int i = 0; i < data.length; i++) {
-					data[i] = copyDatum(data[i], rewrite, copies);
+					data[i] = copyDatum(data[i], rewrite, copies, changing);
 				}
 				yield out;
 			}
@@ -227,14 +383,14 @@ public final class LispTrees {
 	 * Each cell exists before its car is copied, so a circle finds the copy to close on.
 	 */
 	private static LispVal copyDatumSpine(LispCons head, Function<LispSymbol, LispVal> rewrite,
-			Map<LispVal, LispVal> copies) {
+			Map<LispVal, LispVal> copies, Set<LispVal> changing) {
 		LispCons first = copyCell(head, copies);
 		LispCons last = first;
 		LispCons cell = head;
 		while (true) {
-			last.setCar(copyDatum(cell.car(), rewrite, copies));
-			if (!(cell.cdr() instanceof LispCons next) || copies.containsKey(next)) {
-				last.setCdr(copyDatum(cell.cdr(), rewrite, copies));
+			last.setCar(copyDatum(cell.car(), rewrite, copies, changing));
+			if (!(cell.cdr() instanceof LispCons next) || !changing.contains(next) || copies.containsKey(next)) {
+				last.setCdr(copyDatum(cell.cdr(), rewrite, copies, changing));
 				return first;
 			}
 			LispCons copy = copyCell(next, copies);
@@ -395,6 +551,9 @@ public final class LispTrees {
 	/** One depth-first walk of a form, and what it found. */
 	private static final class CircleShield {
 
+		private static final Set<String> READ_TIME_MARKERS = Set.of(LispNames.READ_EVAL, LispNames.READ_EVAL_TEMPLATE,
+				LispNames.READ_EVAL_UNREADABLE, LispNames.READ_TIME_FEATURE, LispNames.READ_TIME_FEATURE_TEMPLATE);
+
 		/** The nodes with a path to a circle. */
 		private final Set<LispVal> leading = Collections.newSetFromMap(new IdentityHashMap<>());
 
@@ -406,6 +565,9 @@ public final class LispTrees {
 		private final Set<LispVal> closing = Collections.newSetFromMap(new IdentityHashMap<>());
 
 		private final Map<LispVal, LispVal> wrappers = new IdentityHashMap<>();
+
+		/** The wrapped nodes, in the order the walk met them. */
+		private final List<LispVal> wrapped = new ArrayList<>();
 
 		private final Set<LispCons> descended = Collections.newSetFromMap(new IdentityHashMap<>());
 
@@ -508,18 +670,25 @@ public final class LispTrees {
 		}
 
 		private LispVal wrap(LispVal node) {
-			return this.wrappers.computeIfAbsent(node, LispCircularLiteral::new);
+			return this.wrappers.computeIfAbsent(node, unwrapped -> {
+				this.wrapped.add(unwrapped);
+				return new LispCircularLiteral(unwrapped);
+			});
 		}
 
-		/** The distinct symbols inside the wrappers, as a list; keywords name nothing. */
+		/**
+		 * The distinct symbols inside the wrappers, as a list, in a fixed order; keywords
+		 * name nothing, and a {@code #.} marker's head is no name a program spells: a
+		 * tail of the list that began with one would read as the marker.
+		 */
 		LispVal hiddenSymbols() {
 			Map<String, LispVal> symbols = new java.util.LinkedHashMap<>();
 			Set<LispVal> seen = Collections.newSetFromMap(new IdentityHashMap<>());
-			Deque<LispVal> pending = new ArrayDeque<>(this.wrappers.keySet());
+			Deque<LispVal> pending = new ArrayDeque<>(this.wrapped);
 			while (!pending.isEmpty()) {
 				LispVal node = pending.pop();
 				if (node instanceof LispSymbol sym) {
-					if (!sym.isKeyword()) {
+					if (!sym.isKeyword() && !READ_TIME_MARKERS.contains(sym.name())) {
 						symbols.putIfAbsent(sym.name(), sym);
 					}
 				}

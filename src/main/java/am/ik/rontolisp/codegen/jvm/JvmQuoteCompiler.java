@@ -29,6 +29,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.LiteralArrayRuns;
 import am.ik.rontolisp.compiler.QuotedGraph;
+import am.ik.rontolisp.compiler.QuotedSharing;
 
 /**
  * Compiles the {@code quote} special form.
@@ -88,12 +89,53 @@ final class JvmQuoteCompiler {
 	 * field behind it covers everything the root reaches.
 	 */
 	private static void compileDatum(LispVal datum, JvmLispCompiler.Ctx ctx, String className) {
-		QuotedGraph graph = QuotedGraph.of(datum);
+		QuotedGraph graph = ctx.quotePool.graphOf(datum);
 		if (graph == null) {
-			compileQuotedVal(datum, ctx, className);
+			buildQuotedVal(datum, ctx, className);
 			return;
 		}
+		QuotedGraph savedGraph = ctx.quotedGraph;
+		int savedNames = ctx.quotedNames;
 		int savedNextLocal = ctx.nextLocal;
+		emitNamedNodes(graph, ctx, className);
+		if (graph.nameOf(datum) >= 0) {
+			emitNamedNode(graph.nameOf(datum), ctx);
+		}
+		else {
+			buildQuotedVal(datum, ctx, className);
+		}
+		ctx.quotedGraph = savedGraph;
+		ctx.quotedNames = savedNames;
+		ctx.nextLocal = savedNextLocal;
+	}
+
+	/**
+	 * Reads a node from the unit it is an entry of ({@link QuotedSharing}): the unit's
+	 * slot holds the {@code Object[]} of its named nodes, built whole by whichever site
+	 * runs first. The array travels through {@code _qdSet} like a datum, so racing first
+	 * builds settle on one and the final field behind it covers every node.
+	 */
+	private static void emitUnitRead(LispVal node, QuotedGraph unit, JvmLispCompiler.Ctx ctx, String className) {
+		emitSlot(ctx.quotePool.slot(unit.named().getFirst()), ctx, className, () -> {
+			QuotedGraph savedGraph = ctx.quotedGraph;
+			int savedNames = ctx.quotedNames;
+			int savedNextLocal = ctx.nextLocal;
+			emitNamedNodes(unit, ctx, className);
+			ctx.body.aload(ctx.quotedNames);
+			ctx.quotedGraph = savedGraph;
+			ctx.quotedNames = savedNames;
+			ctx.nextLocal = savedNextLocal;
+		});
+		ctx.body.checkcast(ctx.cp.classEntry(NAMES_DESCRIPTOR));
+		JvmEmitHelper.emitIntConst(ctx, unit.nameOf(node));
+		ctx.body.aaload();
+	}
+
+	/**
+	 * Makes a graph current, with its named nodes in a new local: every one made empty,
+	 * then every one filled.
+	 */
+	private static void emitNamedNodes(QuotedGraph graph, JvmLispCompiler.Ctx ctx, String className) {
 		ctx.quotedGraph = graph;
 		ctx.quotedNames = ctx.allocTemp();
 		List<LispVal> named = graph.named();
@@ -119,9 +161,6 @@ final class JvmQuoteCompiler {
 				ctx.body.pop();
 			}
 		}
-		compileQuotedVal(datum, ctx, className);
-		ctx.quotedGraph = null;
-		ctx.nextLocal = savedNextLocal;
 	}
 
 	/**
@@ -190,6 +229,14 @@ final class JvmQuoteCompiler {
 		return (node instanceof LispCons) ? CELL_BYTES : EMPTY_NODE_BYTES;
 	}
 
+	private static int estimateNamedNodes(QuotedGraph graph) {
+		int size = 0;
+		for (LispVal node : graph.named()) {
+			size += estimateEmpty(node) + estimateFilling(node, graph);
+		}
+		return size;
+	}
+
 	private static int estimateFilling(LispVal node, QuotedGraph graph) {
 		return switch (node) {
 			case LispCons cell -> CELL_BYTES + estimateQuoted(cell.car(), graph) + estimateQuoted(cell.cdr(), graph);
@@ -216,6 +263,11 @@ final class JvmQuoteCompiler {
 	 * @param build emits the construction, leaving exactly one value on the stack
 	 */
 	private static void emitSharedConstant(LispVal datum, JvmLispCompiler.Ctx ctx, String className, Runnable build) {
+		QuotedGraph unit = ctx.quotePool.unitOf(datum);
+		if (unit != null) {
+			emitUnitRead(datum, unit, ctx, className);
+			return;
+		}
 		emitSlot(ctx.quotePool.slot(datum), ctx, className, build);
 	}
 
@@ -562,16 +614,23 @@ final class JvmQuoteCompiler {
 
 	private static void compileQuotedVal(LispVal val, JvmLispCompiler.Ctx ctx, String className) {
 		QuotedGraph graph = ctx.quotedGraph;
-		int name = (graph != null) ? graph.nameOf(val) : -1;
-		if (name >= 0) {
-			emitNamedNode(name, ctx);
-			return;
+		if (graph != null) {
+			int name = graph.nameOf(val);
+			if (name >= 0) {
+				emitNamedNode(name, ctx);
+				return;
+			}
+			QuotedGraph unit = graph.unitOf(val);
+			if (unit != null) {
+				emitUnitRead(val, unit, ctx, className);
+				return;
+			}
 		}
 		buildQuotedVal(val, ctx, className);
 	}
 
 	private static boolean isNamed(LispVal val, @Nullable QuotedGraph graph) {
-		return graph != null && graph.nameOf(val) >= 0;
+		return graph != null && graph.stopsAt(val);
 	}
 
 	private static void buildQuotedVal(LispVal val, JvmLispCompiler.Ctx ctx, String className) {
@@ -906,9 +965,14 @@ final class JvmQuoteCompiler {
 	 *
 	 * Only ever compared against {@link #QUOTE_CHUNK_BUDGET}, so every leaf is charged
 	 * the width of the widest constant load and no emitter is consulted. A named node is
-	 * such a load, which is also what ends the walk on a circle.
+	 * such a load, which is also what ends the walk on a circle. A read of a unit holds
+	 * the unit's build.
 	 */
 	private static int estimateQuoted(LispVal val, @Nullable QuotedGraph graph) {
+		QuotedGraph unit = (graph != null) ? graph.unitOf(val) : null;
+		if (unit != null) {
+			return estimateNamedNodes(unit);
+		}
 		if (isNamed(val, graph)) {
 			return 6;
 		}

@@ -451,7 +451,10 @@ So does `resolveForm` with a literal in code position: a `#S(...)` (type name an
 names match by base name) and a `#(...)`/`#nA(...)` evaluate to themselves, so what they hold is data
 too. All of it is one walk, `LispTrees.rewriteDatumSymbols`, which `readThrough` (local nicknames)
 takes as well: a `#n=` label's sharing and circle survive, in a car, a tail, an array or a `#S`, and a datum
-that does not change comes back as the same object. Pinned by ci-spec
+that does not change comes back as the same object. Only a node with a path to a symbol that changes is
+copied, so a node reads the same from every datum holding it; `PackageResolver` keeps the copies for a form
+(`resolve`) or a program (`resolveProgram`, `holdDatumCopies`, since the compile path has flattened a top-level
+`progn`), under one current package, which is what makes a label one object across two quotes. Pinned by ci-spec
 `a-literal-holds-symbols-of-the-current-package`, `LispTreesTest#rewriteDatumSymbolsKeepsTheShapeOfTheDatum`.
 
 The walk cannot tell a `#.` value from source, since the value is spliced before resolution: a bare

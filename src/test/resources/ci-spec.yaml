@@ -8972,6 +8972,144 @@ cases:
       T
       T
       T
+  - name: reader-label-shared-between-quote-sites
+    source: |
+      (defstruct ci-lbs-pt x)
+      (defmacro ci-lbs-two (x) `(list ',x ',(list x)))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (defparameter *ci-lbs-shared* (list 'shared)))
+      (defmacro ci-lbs-const-1 () (list 'quote (list *ci-lbs-shared*)))
+      (defmacro ci-lbs-const-2 () (list 'quote (list 1 *ci-lbs-shared*)))
+      (print (let ((a '(#1=(x))) (b '(#1#))) (eq (car a) (car b))))
+      (print (let ((a '(#2=(x))) (b '#2#)) (eq (car a) b)))
+      (print (eq '#3=(x) '#3#))
+      ;; across functions, a write through one site seen from the other
+      (progn
+        (defun ci-lbs-f () '(#4=(s) 1))
+        (defun ci-lbs-g () '(2 #4#)))
+      (print (eq (car (ci-lbs-f)) (cadr (ci-lbs-g))))
+      (print (progn (setf (car (car (ci-lbs-f))) 'w) (cadr (ci-lbs-g))))
+      ;; a tail, a whole datum inside another, whichever runs first
+      (progn
+        (defun ci-lbs-h () '(a . #5=(u v)))
+        (defun ci-lbs-i () '(b . #5#))
+        (defun ci-lbs-j () '#5#))
+      (print (list (eq (cdr (ci-lbs-i)) (ci-lbs-j)) (eq (cdr (ci-lbs-h)) (cdr (ci-lbs-i)))))
+      ;; an array, an instance, a packed array
+      (print (let ((a '(#6=#(x y))) (b '#(#6#))) (eq (car a) (aref b 0))))
+      (print (let ((a '(#7=#S(ci-lbs-pt :x 1))) (b '#7#)) (eq (car a) b)))
+      (print (let ((a '(#8=#d(1.0d0))) (b '(#8#))) (eq (car a) (car b))))
+      ;; a circle between two sites, entered from either
+      (progn
+        (defun ci-lbs-k () '#9=(a #10=(b #9#)))
+        (defun ci-lbs-l () '#10#))
+      (print (list (eq (cadr (ci-lbs-l)) (ci-lbs-k)) (eq (cadr (ci-lbs-k)) (ci-lbs-l))))
+      (print (let ((a '(z #11=(c . #11#))) (b '#11#)) (list (eq (cadr a) b) (eq (cdr b) b))))
+      (print (let ((a '#12=#S(ci-lbs-pt :x (y #12#))) (b '(#12#))) (eq a (car b))))
+      (print (let ((a '#13=#(#14=#(1) #13#)) (b '#14#)) (list (eq (aref a 0) b) (eq (aref a 1) a))))
+      ;; nodes reached from a site's own, and nodes connected through a third site
+      (print (let ((a '(#15=(p #16=(q)) #17=(r))) (b '(#16# #17#)) (c '#15#))
+               (list (eq (car b) (cadr c)) (eq (cadr b) (cadr a)) (eq (car a) c))))
+      ;; a macro's sharing, within a form and across two
+      (print (let ((v (ci-lbs-two (m)))) (eq (car v) (caadr v))))
+      (defun ci-lbs-n () (ci-lbs-const-1))
+      (defun ci-lbs-o () (ci-lbs-const-2))
+      (print (eq (car (ci-lbs-n)) (cadr (ci-lbs-o))))
+      ;; past one builder's budget: a node, a spine reaching one, a circle
+      (progn
+        (defun ci-lbs-big-a () '(head #18=#.(make-list 300 :initial-element 7)))
+        (defun ci-lbs-big-b () '#18#))
+      (print (list (eq (cadr (ci-lbs-big-a)) (ci-lbs-big-b)) (length (ci-lbs-big-b))))
+      (print (let ((a '#.(append (make-list 300 :initial-element 'sym) '(#19=(end)))) (b '#19#))
+               (eq (nth 300 a) b)))
+      (progn
+        (defun ci-lbs-c-a () '#20=(#.(make-list 300 :initial-element 7) #21=(back #20#)))
+        (defun ci-lbs-c-b () '#21#))
+      (print (eq (cadr (ci-lbs-c-b)) (ci-lbs-c-a)))
+      ;; a closure, a local function, a handler's clause, a top-level progn
+      (progn
+        (defconstant +ci-lbs-c+ '(#22=(k)))
+        (defun ci-lbs-m () (lambda () '#22#)))
+      (print (eq (car +ci-lbs-c+) (funcall (ci-lbs-m))))
+      (print (flet ((f () '(#23=(l))) (g () '#23#)) (eq (car (f)) (g))))
+      (print (let ((a '#24=(h))) (handler-case (error "x") (error () (eq a '#24#)))))
+      (progn
+        (defparameter *ci-lbs-a* '#25=(top))
+        (defparameter *ci-lbs-b* '(#25#)))
+      (print (eq *ci-lbs-a* (car *ci-lbs-b*)))
+      ;; what an array literal holds outlives the fresh array; an array in it does not
+      (print (let ((a #(#26=(e))) (b '#26#)) (eq (aref a 0) b)))
+      (print (let ((a #(#(#27=(e)))) (b '#27#)) (eq (aref (aref a 0) 0) b)))
+      (print (let ((a #(#28=(e) (f #28#)))) (eq (aref a 0) (cadr (aref a 1)))))
+      (defun ci-lbs-fresh () #((k)))
+      (print (list (eq (ci-lbs-fresh) (ci-lbs-fresh)) (eq (aref (ci-lbs-fresh) 0) (aref (ci-lbs-fresh) 0))))
+      (print (let ((a #(#29=#(v))) (b '#29#)) (eq (aref a 0) b)))
+      (print (let ((a '(#34=#(v))) (b '(1 #34#)) (c #34#)) (list (eq (car a) (cadr b)) (eq c (car a)))))
+      ;; a label on a #. names one value, and a #. in a circle or a literal is read
+      (print (let ((a '(#30=#.(list 1 2) #30#))) (eq (car a) (cadr a))))
+      (print (let ((a '#31=#.(list 1 2)) (b '(#31#))) (eq a (car b))))
+      (print (list (car '#32=(#.(+ 1 2) #32#)) (let ((a '#33=#(#.(+ 1 2) #33#))) (aref a 0))
+                   (aref '#(#.(+ 1 2)) 0) (ci-lbs-pt-x #S(ci-lbs-pt :x #.(+ 1 2)))))
+      ;; under a package, where the symbols of a datum are rewritten
+      (defpackage :ci-lbs-p (:use :cl))
+      (in-package :ci-lbs-p)
+      (defstruct ci-lbs-qt x)
+      (print (eq '#1=(x) '#1#))
+      (print (let ((a '(#2=(x))) (b '(#2#))) (eq (car a) (car b))))
+      (print (let ((a '(#3=(1 2))) (b '(foo #3#))) (eq (car a) (cadr b))))
+      (print (let ((a '(foo #4=(1 2))) (b '#4#)) (eq (cadr a) b)))
+      (print (let ((a '(1 #5=(bar))) (b '(foo #5#)))
+               (list (eq (cadr a) (cadr b)) (package-name (symbol-package (car (cadr a)))))))
+      (print (let ((a '#6=(foo #6#)) (b '#6#)) (list (eq a b) (eq a (cadr b)))))
+      (print (let ((a '#7=#(foo #7#)) (b '(#7#))) (eq a (car b))))
+      (print (let ((a '#8=#S(ci-lbs-qt :x (foo #8#))) (b '(#8#))) (eq a (car b))))
+      (progn
+        (defparameter *ci-lbs-a* '#9=(top))
+        (defparameter *ci-lbs-b* '(#9#)))
+      (print (eq *ci-lbs-a* (car *ci-lbs-b*)))
+      (in-package :cl-user)
+    expected: |
+      T
+      T
+      T
+      T
+      (W)
+      (T T)
+      T
+      T
+      T
+      (T T)
+      (T T)
+      T
+      (T T)
+      (T T T)
+      T
+      T
+      (T 300)
+      T
+      T
+      T
+      T
+      T
+      T
+      T
+      T
+      T
+      (NIL T)
+      NIL
+      (T NIL)
+      T
+      T
+      (3 3 3 3)
+      T
+      T
+      T
+      T
+      (T "CI-LBS-P")
+      (T T)
+      T
+      T
+      T
   - name: vector-svref-and-array-introspection-cross-backend
     source: |
       (defun ci-array-intro ()

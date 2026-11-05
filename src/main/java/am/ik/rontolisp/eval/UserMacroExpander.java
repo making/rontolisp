@@ -95,6 +95,8 @@ public final class UserMacroExpander {
 			return program;
 		}
 		Session session = new Session(false);
+		// The walk resolves a flattened form at a time: one program to the labels in it.
+		session.macroEval.holdResolverDatumCopies();
 		// The forms in front of the program's own first form are the libraries the
 		// compile path spliced there: implementation source, read without recording.
 		session.programHead = programHead;
@@ -126,6 +128,12 @@ public final class UserMacroExpander {
 		private final boolean shallow;
 
 		final LispEvaluator macroEval = new LispEvaluator(new PrintStream(OutputStream.nullOutputStream()));
+
+		/**
+		 * What this run's {@code #.} markers evaluated to: the forms here are flattened,
+		 * and a label's one value may span two of them.
+		 */
+		private final java.util.Map<LispVal, LispVal> readTimeValues = new java.util.IdentityHashMap<>();
 
 		// A :metaclass defclass evaluated below runs the class-definition protocol in the
 		// macro-time evaluator; a build-dao-methods-style (compile nil `(lambda ()
@@ -293,7 +301,8 @@ public final class UserMacroExpander {
 			// resolves them just before its top-level form evaluates): each datum runs in
 			// the macro-time evaluator, so it sees the defuns/defvars registered by the
 			// preceding forms.
-			LispVal form = usesReadEvalMarker(rawForm) ? macroEval.resolveReadTimeEvalInCode(rawForm) : rawForm;
+			LispVal form = usesReadEvalMarker(rawForm)
+					? macroEval.resolveReadTimeEvalInCode(rawForm, this.readTimeValues) : rawForm;
 			// What the markers made is the form as CL reads it, and only now can it be
 			// seen to be a progn or eval-when: its members are top-level forms, like
 			// those of one spelled out, which were flattened before this loop.
@@ -1375,6 +1384,11 @@ public final class UserMacroExpander {
 	}
 
 	/** Whether the form contains a {@code %read-eval} marker symbol anywhere. */
+	private static boolean holdsReadEvalMarker(LispVal datum) {
+		return LispTrees.anyDatumNode(datum, node -> node instanceof LispSymbol sym
+				&& (LispNames.READ_EVAL.equals(sym.name()) || LispNames.READ_EVAL_TEMPLATE.equals(sym.name())));
+	}
+
 	private static boolean usesReadEvalMarker(LispVal form) {
 		while (true) {
 			switch (form) {
@@ -1386,6 +1400,15 @@ public final class UserMacroExpander {
 						return true;
 					}
 					form = cons.cdr();
+				}
+				case am.ik.rontolisp.LispCircularLiteral literal -> {
+					return holdsReadEvalMarker(literal.datum());
+				}
+				case am.ik.rontolisp.LispArray array -> {
+					return holdsReadEvalMarker(array);
+				}
+				case am.ik.rontolisp.LispStructLiteral literal -> {
+					return holdsReadEvalMarker(literal);
 				}
 				default -> {
 					return false;

@@ -13,6 +13,8 @@ import org.jspecify.annotations.Nullable;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.QuotedGraph;
+import am.ik.rontolisp.compiler.QuotedSharing;
 
 /**
  * The compilation-wide quoted-datum table (.kb/quoted-data.md): one SLOT per DISTINCT
@@ -86,6 +88,36 @@ final class JvmQuotePool {
 	private @Nullable ClassEntry owner;
 
 	private boolean frozen;
+
+	private @Nullable QuotedSharing sharing;
+
+	/**
+	 * Finds the nodes of a datum a build has to name.
+	 * @param datum the datum
+	 * @return its graph, or null when it has none
+	 */
+	@Nullable QuotedGraph graphOf(LispVal datum) {
+		QuotedSharing current = this.sharing;
+		return (current != null) ? current.graphOf(datum) : QuotedGraph.of(datum);
+	}
+
+	/**
+	 * Sets what {@link QuotedSharing#of} found in the program, before any body compiles.
+	 * @param sharing the program's sharing
+	 */
+	void sharing(@Nullable QuotedSharing sharing) {
+		this.sharing = sharing;
+	}
+
+	/**
+	 * The unit a site reads a node from.
+	 * @param node the node
+	 * @return the unit, null when the node is no unit's entry
+	 */
+	@Nullable QuotedGraph unitOf(LispVal node) {
+		QuotedSharing current = this.sharing;
+		return (current != null) ? current.unitOf(node) : null;
+	}
 
 	/**
 	 * The slot of a datum, interned on first sight (by identity).
