@@ -11,6 +11,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OperandTypes;
+import am.ik.rontolisp.compiler.StreamOperandChecks;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import org.jspecify.annotations.Nullable;
 
@@ -205,8 +206,8 @@ final class JvmCharCompiler {
 	/**
 	 * Compiles {@code (%check-stream x 'op designator-p)}: a call to the shared
 	 * {@code %check-stream-runtime} with the operator's name as its token, as
-	 * {@link #compileCheckSequence} does, and the value alone in a class that holds no
-	 * such defun.
+	 * {@link #compileCheckSequence} does -- and, where a stream can be a value, what the
+	 * operator needs of it -- and the value alone in a class that holds no such defun.
 	 */
 	static void compileCheckStream(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
@@ -216,10 +217,14 @@ final class JvmCharCompiler {
 			return;
 		}
 		String operator = LispMacroExpander.checkListOperator(cons);
-		JvmPhysicalArgs.emit(ctx, className, helper,
+		List<Runnable> args = new java.util.ArrayList<>(
 				List.of(() -> JvmExprCompiler.compileExpr(parts.get(1), ctx, className),
 						() -> JvmEmitHelper.compileUnspelledLiteral(operator, ctx),
 						() -> JvmExprCompiler.compileExpr(parts.get(3), ctx, className)));
+		if (ctx.usesStreamValues) {
+			args.add(() -> JvmExprCompiler.compileExpr(StreamOperandChecks.neededAbilities(operator), ctx, className));
+		}
+		JvmPhysicalArgs.emit(ctx, className, helper, args);
 		JvmTailBounce.emitDirectCall(helper, null, ctx, className);
 	}
 

@@ -36636,6 +36636,138 @@ cases:
       (6 2 NIL 7)
       (1 2 NIL 3)
       REFUSED
+  # A closed stream and a stream that cannot do what the operator does: the answers SBCL 2.2.9
+  # gives, its sb-int:closed-stream-error a stream-error and its simple-type-error a type-error
+  # over (satisfies output-stream-p) or (satisfies input-stream-p).
+  - name: stream-operators-refuse-a-closed-stream
+    source: |
+      (defvar *csr-target* nil)
+      (defun csr-rows (s)
+        (list (lambda () (write-string "x" s)) (lambda () (write-line "x" s)) (lambda () (write-char #\x s))
+              (lambda () (write-sequence "x" s)) (lambda () (write-byte 1 s)) (lambda () (princ 1 s))
+              (lambda () (prin1 1 s)) (lambda () (print 1 s)) (lambda () (terpri s)) (lambda () (fresh-line s))
+              (lambda () (format s "x")) (lambda () (force-output s)) (lambda () (finish-output s))
+              (lambda () (clear-output s)) (lambda () (read-char s)) (lambda () (read-char-no-hang s))
+              (lambda () (read-line s)) (lambda () (read-byte s)) (lambda () (read-sequence (make-string 1) s))
+              (lambda () (peek-char nil s)) (lambda () (unread-char #\a s)) (lambda () (listen s))
+              (lambda () (read s)) (lambda () (clear-input s)) (lambda () (funcall #'write-string "x" s))
+              (lambda () (apply #'read-char (list s)))
+              (lambda () (let ((*standard-output* s)) (print 1))) (lambda () (let ((*standard-output* s)) (terpri)))
+              (lambda () (let ((*standard-output* s)) (format t "x")))
+              (lambda () (let ((*standard-input* s)) (read-line))) (lambda () (let ((*standard-input* s)) (read)))))
+      (defun csr-answers (s)
+        (remove-duplicates
+         (mapcar (lambda (f)
+                   (handler-case (progn (funcall f) :answered)
+                     (stream-error (c) (list :stream-error (typep c 'error) (streamp (stream-error-stream c))
+                                             (format nil "~a" c)))
+                     (error () :other)))
+                 (csr-rows s))
+         :test #'equal))
+      (with-open-file (o "csr.txt" :direction :output :if-exists :supersede) (write-line "abc" o))
+      (let ((kept nil))
+        (with-open-file (i "csr.txt") (setq kept i))
+        (print (csr-answers kept)))
+      (let ((s (open "csr.txt"))) (close s) (print (csr-answers s)))
+      (let ((s (open "csr2.txt" :direction :output :if-exists :supersede))) (close s) (print (csr-answers s)))
+      (let ((s (make-string-output-stream))) (close s) (print (csr-answers s)))
+      (let ((s (make-string-input-stream "abc"))) (close s) (print (csr-answers s)))
+      (let ((s (make-string-output-stream)))
+        (setq *csr-target* s)
+        (close s)
+        (print (csr-answers (make-synonym-stream '*csr-target*))))
+      ;; Closing again is still no error, and the closed stream's descriptor may be another's.
+      (let ((a (open "csr.txt")))
+        (close a)
+        (let ((b (open "csr.txt")))
+          (print (list (close a) (read-line b)))
+          (close b)))
+    expected: |
+      ((:STREAM-ERROR T T "#<STREAM> is closed"))
+      ((:STREAM-ERROR T T "#<STREAM> is closed"))
+      ((:STREAM-ERROR T T "#<STREAM> is closed"))
+      ((:STREAM-ERROR T T "#<STREAM> is closed"))
+      ((:STREAM-ERROR T T "#<STREAM> is closed"))
+      ((:STREAM-ERROR T T "#<STREAM> is closed"))
+      (T "abc")
+  - name: stream-operators-refuse-a-stream-of-the-wrong-direction
+    source: |
+      (defvar *wds-target* nil)
+      (defun wds-writers (s)
+        (list (lambda () (write-string "x" s)) (lambda () (write-line "x" s)) (lambda () (write-char #\x s))
+              (lambda () (write-sequence "x" s)) (lambda () (princ 1 s)) (lambda () (prin1 1 s))
+              (lambda () (print 1 s)) (lambda () (terpri s)) (lambda () (fresh-line s)) (lambda () (format s "x"))
+              (lambda () (funcall #'write-string "x" s)) (lambda () (let ((*standard-output* s)) (print 1)))))
+      (defun wds-readers (s)
+        (list (lambda () (read-char s)) (lambda () (read-char-no-hang s)) (lambda () (read-line s))
+              (lambda () (read-sequence (make-string 1) s)) (lambda () (peek-char nil s))
+              (lambda () (unread-char #\a s)) (lambda () (listen s)) (lambda () (read s))
+              (lambda () (apply #'read-char (list s))) (lambda () (let ((*standard-input* s)) (read-line)))
+              (lambda () (let ((*standard-input* s)) (read)))))
+      (defun wds-answers (rows)
+        (remove-duplicates
+         (mapcar (lambda (f)
+                   (handler-case (progn (funcall f) :answered)
+                     (type-error (c) (list :type-error (streamp (type-error-datum c)) (type-error-expected-type c)))
+                     (error () :other)))
+                 rows)
+         :test #'equal))
+      (defun wds-report (f)
+        (handler-case (funcall f) (type-error (c) (format nil "~a" c))))
+      (with-open-file (o "wds.txt" :direction :output :if-exists :supersede) (write-line "abc" o))
+      (with-open-file (s "wds.txt") (print (wds-answers (wds-writers s))))
+      (print (wds-answers (wds-writers (make-string-input-stream "abc"))))
+      (with-open-file (s "wds2.txt" :direction :output :if-exists :supersede) (print (wds-answers (wds-readers s))))
+      (print (wds-answers (wds-readers (make-string-output-stream))))
+      (setq *wds-target* (make-string-input-stream "abc"))
+      (print (wds-answers (wds-writers (make-synonym-stream '*wds-target*))))
+      (print (wds-answers (wds-readers *error-output*)))
+      ;; A stream of the other element: a character stream takes no byte, a binary one no character.
+      (with-open-file (s "wds.txt") (print (wds-answers (list (lambda () (read-byte s))))))
+      (with-open-file (s "wds2.txt" :direction :output :if-exists :supersede)
+        (print (wds-answers (list (lambda () (write-byte 1 s))))))
+      (with-open-file (s "wds.txt" :element-type '(unsigned-byte 8))
+        (print (wds-answers (list (lambda () (read-char s)) (lambda () (read-line s)) (lambda () (read s))))))
+      (with-open-file (s "wds3.txt" :direction :output :if-exists :supersede :element-type '(unsigned-byte 8))
+        (print (wds-answers (list (lambda () (write-char #\a s)) (lambda () (write-string "a" s))
+                                  (lambda () (format s "a"))))))
+      (print (wds-answers (list (lambda () (write-byte 1 (make-string-output-stream)))
+                                (lambda () (read-byte (make-string-input-stream "abc"))))))
+      ;; What the report says, naming the operator as a stream that is no stream does.
+      (with-open-file (s "wds.txt") (print (wds-report (lambda () (write-string "x" s)))))
+      (print (wds-report (lambda () (read-char (make-string-output-stream)))))
+      ;; What still answers: an :io stream both ways, the flushes on an input stream, an
+      ;; output stream's clear-input.
+      (with-open-file (s "wds4.txt" :direction :io :if-exists :supersede :if-does-not-exist :create)
+        (print (list (write-string "ab" s) (file-position s 0) (read-char s))))
+      (with-open-file (s "wds.txt")
+        (print (list (force-output s) (finish-output s) (clear-output s) (clear-input s) (read-char s)
+                     (unread-char #\a s) (read-char s))))
+      (with-open-file (s "wds2.txt" :direction :output :if-exists :supersede) (print (clear-input s)))
+      (with-output-to-string (*standard-output*)
+        (print 1)
+        (fresh-line)
+        (format t "x")
+        (write-string "y"))
+      (print (with-input-from-string (*standard-input* "(a) bc") (list (read) (read-char) (read-line))))
+    expected: |
+      ((:TYPE-ERROR T (SATISFIES OUTPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES OUTPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES INPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES INPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES OUTPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES INPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES INPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES OUTPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES INPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES OUTPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES OUTPUT-STREAM-P)) (:TYPE-ERROR T (SATISFIES INPUT-STREAM-P)))
+      "WRITE-STRING: The value #<STREAM> is not of type (SATISFIES OUTPUT-STREAM-P)"
+      "READ-CHAR: The value #<STREAM> is not of type (SATISFIES INPUT-STREAM-P)"
+      ("ab" T #\a)
+      (NIL NIL NIL NIL #\a NIL #\a)
+      NIL
+      ((A) #\b "c")
 standalone:
   - name: a-format-of-tilde-a-under-a-package-spells-no-qualifier
     source: |
@@ -37284,6 +37416,19 @@ standalone:
       (:REFUSED :REFUSED)
       (:REFUSED :REFUSED)
       (:REFUSED :REFUSED)
+  - name: an-uncaught-write-to-a-closed-stream-reports-it
+    source: |
+      ;; Standalone: no handler anywhere, so wasm builds no condition instance and ends.
+      (defun cwc-out ()
+        (let ((s (make-string-output-stream)))
+          (close s)
+          s))
+      (print 1)
+      (write-string "x" (cwc-out))
+      (print 2)
+    expected: |
+      1
+    fails: true
   - name: stream-operators-refuse-a-non-stream-past-every-layer
     source: |
       ;; Standalone: the same refusals where every layer is in the way -- stream values, the

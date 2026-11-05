@@ -765,6 +765,39 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * Seeds the condition a stream operator signals on a closed stream, a
+	 * {@code stream-error} under a {@code rontolisp} name as SBCL's is under
+	 * {@code sb-int}. Idempotent, and like {@link #ensureJavaExceptionSeeded} not run
+	 * from the constructor: the interpreter seeds it for every program, the compile path
+	 * for one that can build a stream value.
+	 */
+	public void ensureClosedStreamErrorSeeded() {
+		if (!this.classes.containsKey(CLOSED_STREAM_ERROR_CLASS_NAME)) {
+			seedClass(CLOSED_STREAM_ERROR_CLASS_NAME, "STREAM-ERROR");
+			registerConditionReport(CLOSED_STREAM_ERROR_CLASS_NAME, new LispString(CLOSED_STREAM_MESSAGE));
+		}
+	}
+
+	/** The condition class {@link #ensureClosedStreamErrorSeeded} registers. */
+	public static final String CLOSED_STREAM_ERROR_CLASS_NAME = "RONTOLISP::CLOSED-STREAM-ERROR";
+
+	/**
+	 * Its report: SBCL's words, and a built-in stream prints as this on every backend.
+	 */
+	public static final String CLOSED_STREAM_MESSAGE = "#<STREAM> is closed";
+
+	/**
+	 * A fresh condition of {@link #CLOSED_STREAM_ERROR_CLASS_NAME} for the interpreter.
+	 * @param stream the closed stream
+	 * @return the condition instance
+	 */
+	public static LispVal newClosedStreamCondition(LispVal stream) {
+		return new LispInstance(
+				LispLayout.ofClass(CLOSED_STREAM_ERROR_CLASS_NAME, List.of("STREAM"), List.of(LispNil.INSTANCE)),
+				new LispVal[] { stream });
+	}
+
+	/**
 	 * The condition class {@link #ensureJavaExceptionSeeded} registers, as the registry
 	 * spells {@code java:java-exception}.
 	 */

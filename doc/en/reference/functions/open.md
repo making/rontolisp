@@ -12,4 +12,6 @@ Opens a file and returns a stream. The optional direction is `:input` (the defau
 
 This opens `data.txt` for input, reads its first line, and closes the stream. Passing `:output` instead would create or truncate the file for writing; `(open "data.bin" :input '(unsigned-byte 8))` opens the same kind of handle in binary mode.
 
+An operator the stream cannot serve signals a `type-error` whose expected type is `(satisfies output-stream-p)` or `(satisfies input-stream-p)`: a write to an `:input` stream, a read from an `:output` one, `read-byte` or `write-byte` on a character stream, a character operator on a binary one. `:element-type :default` is a character stream on the interpreter and the JVM, and takes bytes too on WASM. `read-sequence` and `write-sequence` take their element from the buffer, so only the direction is refused there on WASM.
+
 A file that cannot be opened signals a `file-error` on every backend, reporting `OPEN: cannot open file <name>`; [`file-error-pathname`](file-error-pathname.md) answers the designator that was passed.

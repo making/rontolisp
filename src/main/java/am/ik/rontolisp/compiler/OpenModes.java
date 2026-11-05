@@ -3,6 +3,7 @@ package am.ik.rontolisp.compiler;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
@@ -218,6 +219,26 @@ public final class OpenModes {
 	 */
 	public static int direction(int mode) {
 		return (mode & IO_BIT) != 0 ? 3 : (mode & OUTPUT_BIT) != 0 ? 2 : 1;
+	}
+
+	private static final String DEFAULT_ELEMENT_TYPE = ":DEFAULT";
+
+	/**
+	 * What a stream a literal positional {@code open} leaf opens can do
+	 * ({@link LispLayout.Abilities}): {@code :default} moves both elements, as wasm's
+	 * descriptor does; the JVM's reader then refuses the bytes itself.
+	 * @param parts the positional open form parts
+	 * @return the ability bits
+	 */
+	public static int abilities(List<LispVal> parts) {
+		int direction = direction(staticMode(parts));
+		if (parts.size() > 3 && unquote(parts.get(3)) instanceof LispSymbol type
+				&& DEFAULT_ELEMENT_TYPE.equals(type.name())) {
+			return direction | LispLayout.Abilities.CHARACTER | LispLayout.Abilities.BINARY;
+		}
+		StreamElementType type = staticElementType(parts);
+		return direction
+				| (type == null || type.isCharacter() ? LispLayout.Abilities.CHARACTER : LispLayout.Abilities.BINARY);
 	}
 
 	/**

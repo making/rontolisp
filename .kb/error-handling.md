@@ -1753,7 +1753,8 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
     P1 13886 -> 14500 B, class 17492 -> 16703 B. A Gray program: P1 7452 -> 7576 B.
   - Limits: `format` to a string with no fill pointer is this `type-error` too, where SBCL signals a
     `simple-error` ([format.md](format.md), "A string with a fill pointer"). A synonym stream over a
-    non-stream is refused by no check.
+    non-stream is refused by no check. A stream that IS one but closed, or of the wrong direction:
+    "A closed stream and a stream of the wrong direction" below.
   - Pinned by ci-spec `stream-operators-refuse-a-non-stream-in-a-program-with-no-stream` and
     `stream-operators-refuse-a-non-stream-past-every-layer` (standalone, all four).
 - **`get-output-stream-string` of a stream of another kind** (measured 2026-10-07, SBCL 2.2.9): a
@@ -2078,6 +2079,75 @@ ratio or a negative number is not real.
 - Pinned by `ci-spec.yaml`'s `random-limit-domain-violations-signal-a-type-error` and the
   `randomLimitDomainViolationsSignalATypeError` / `ehRandomLimitDomainViolationsSignalATypeError`
   triple (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
+
+## A closed stream and a stream of the wrong direction
+
+**A stream value that is closed, or cannot do what the operator does, is refused at the operator's
+stream check, the same way on all four backends.** Measured 2026-11-05 against SBCL 2.2.9, one
+program per row, 24 operators over 22 stream kinds.
+
+| | SBCL | before: interpreter / JVM | before: Preview 1 / component |
+| --- | --- | --- | --- |
+| any read, write or flush of a closed stream | `sb-int:closed-stream-error`, a `stream-error` | `simple-error`; the JVM's flushes, `listen`: nil | nothing, or a trap (`index 2 is not a resource`, out of bounds), `end-of-file` |
+| write to an input stream, read from an output stream | `simple-type-error`, datum the stream, type `(satisfies output-stream-p)` / `(satisfies input-stream-p)` | `simple-error` / `type-error` | writes nothing and answers; a string stream traps |
+| `read-byte`, `write-byte` on a character stream; a character operator on a binary one | the same `simple-type-error` | the same | moves the bytes; a string stream traps on the component |
+
+Now: `rontolisp::closed-stream-error` (a `stream-error`, `stream-error-stream` the stream, report
+`#<STREAM> is closed`), and a `type-error` of the same datum and type, its report
+`OP: The value #<STREAM> is not of type (SATISFIES OUTPUT-STREAM-P)`. Not SBCL's `simple-type-error`:
+`%operand-type-error` is what the sibling refusals signal.
+
+- **What a stream can do is on the VALUE**: `LispLayout.STREAM_ABILITY_CELL`, `Abilities` bits
+  (input, output, character, binary), nil where a producer states nothing (a socket, a request body,
+  a Clojure standard stream: passes). `Abilities.ofKind` for what the kind says, `emitWrapStream` and
+  `StreamDesignators.streamValue` at the producers; `OpenModes.abilities` at a literal open leaf
+  (`LispMacroExpander.fileStreamValue`), `Environment.fileStreamValue` on the interpreter. The file
+  arm of the direction predicates reads it too, which retired the alist they kept.
+- **What an operator needs is one table**: `StreamOperandChecks.neededAbilities`, by the name the
+  check reports (so the Gray and pushback helpers share their operator's row). 0 asks only that the
+  stream is open (`force-output`, `finish-output`, `clear-output`, `clear-input`: SBCL answers nil
+  on an input stream); nil asks nothing (the queries). `fresh-line`, `listen` and the two sequence
+  operators need the direction alone: a binary stream stays at column 0 (SBCL), and a sequence's
+  buffer picks its element where the check cannot see it.
+- **Compile paths**: a site passes the row as a fourth argument of `%check-stream-runtime`
+  (`checkStreamValueRuntimeWrapper`), which resolves a synonym, asks `%open-stream-p-raw` (the
+  table on the JVM, the closed mark on wasm) and tests the bits with `%abilities-hold-p`, inline on
+  both backends: `logand` brought the numeric tower, +5.4 KB of every JVM class with a string stream.
+  `%closed-stream-error` lowers like `%file-error`: an instance behind a landing pad, else `%error`.
+- **Interpreter**: `LispEvaluator.checkStreamOperand`, from the same table.
+- **A stream-less call**: `(print 1)` reads `*standard-output*`, which may hold a stream closed since
+  it was bound. In a program that can build a stream value and rebinds the variable (a binding pair
+  or a lambda list starting with it, a `setq`/`setf` naming it: `collectRebound`), such a site, and a
+  `format` to `t`, checks the variable's value; `standardStreamOf` says which. Every other program
+  keeps its site as it was.
+- **Cost, measured 2026-11-05 against the previous jar** (class, P1, component, in bytes). A program
+  with no stream value is byte-identical, the design question this answered: `(print 3)`,
+  `(format t ...)`, `(write-string "x" t)`, and a computed stream argument holding `t` (the helper
+  keeps its old shape behind `usesStreamValues`). `(format *error-output* "x")`: 8866 -> 8876, 1845
+  -> 1895, 3193 -> 3243. `with-output-to-string` with a `princ`: 16555 -> 17577, 14317 -> 14781,
+  17913 -> 18382. A `with-open-file` writing a line: 10539 -> 11724, 8505 -> 9001, 13668 -> 14169.
+  Asking `input-stream-p` of a file: 10266 -> 11361, 8004 -> 8127, 11548 -> 11672. Time: 3,000,000
+  `write-char` on a string stream and 1,000,000 on a file, in a defun, 4 runs each on a loaded box:
+  JVM string 844-917 ms before, 701-930 after, file 326-388 before, 340-391 after; P1 string 727-1288
+  before, 655-823 after, file 1490-1534 before, 1545-1870 after: at most some 10% on a wasm file
+  write, so the check stays.
+- **A quoted list keeps a wasm module's list printer** (measured: +1.5 KB of a `with-open-file`
+  program). Without a landing pad nothing can read the type, so the helper's refusal is `%error` over
+  a literal saying the same (`catchable`), which in EH mode still reports.
+- **Limits**. A sequence operator refuses only the direction, so a string buffer on a binary file
+  moves characters on wasm where the JVM's writer refuses it (`type-error`) and SBCL does. On
+  `:element-type :default` wasm also moves bytes, as SBCL does; the interpreter's and the JVM's
+  reader refuse them with this `type-error`. A closed stream under `make-two-way-stream` /
+  `make-broadcast-stream`: writes and reads refuse, `listen`, `unread-char` and `force-output` of the
+  composite answer as they did; SBCL's constructors refuse the closed component first. `listen` of a
+  file on wasm keeps its `simple-error` (`doc/en/reference/functions/listen.md`). `file-position`,
+  `file-length` and `stream-element-type` of a closed stream, which SBCL refuses, answer as they did
+  (`.kb/read-load-streams.md`). Interpreter and SBCL differ on `(listen string-output-stream)`,
+  `read-char-no-hang`, `unread-char` and `clear-input` of an output stream: SBCL's string output
+  stream answers nil, its file stream refuses; all four here refuse, `clear-input` excepted.
+- Pinned by ci-spec `stream-operators-refuse-a-closed-stream`,
+  `stream-operators-refuse-a-stream-of-the-wrong-direction` and the standalone
+  `an-uncaught-write-to-a-closed-stream-reports-it`.
 
 ## One argument is still checked
 **Invariant: a one-argument call compares or folds nothing, but its argument is checked like any
