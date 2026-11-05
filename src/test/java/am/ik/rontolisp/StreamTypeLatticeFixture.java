@@ -41,9 +41,10 @@ public final class StreamTypeLatticeFixture {
 			    (let ((name (type-of s)))
 			      (print (list name (stl-ty s name) (eq (class-name (class-of s)) name)
 			                   (stl-ty s (class-of s)) (stl-st name 'stream))))))
-			(with-open-file (f "stl-kind.txt" :direction :output :if-exists :supersede)
+			(with-open-file (f #+rontolisp-interpreter "target/stl-kind.txt" #-rontolisp-interpreter "stl-kind.txt"
+			                   :direction :output :if-exists :supersede)
 			  (stl-rows f))
-			(ignore-errors (delete-file "stl-kind.txt"))
+			(ignore-errors (delete-file #+rontolisp-interpreter "target/stl-kind.txt" #-rontolisp-interpreter "stl-kind.txt"))
 			(print (list (subtypep 'file-stream 'stream) (subtypep 'string-stream 'stream)
 			             (subtypep 'synonym-stream 'stream) (subtypep 'two-way-stream 'stream)
 			             (subtypep 'broadcast-stream 'stream) (subtypep 'echo-stream 'stream)
