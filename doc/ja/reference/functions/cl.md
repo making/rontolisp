@@ -477,6 +477,8 @@
 | `compute-restarts` | `(compute-restarts)` | アクティブなすべてのリスタートレコードを最内から順に返します |
 | `restart-name` | `(restart-name r)` | リスタートオブジェクトの名前 |
 | `muffle-warning` | `(muffle-warning w)` | `warn` が確立する `muffle-warning` リスタートを起動し、印字される前に警告を中止します |
+| `invalid-method-error` | `(invalid-method-error method "bad ~A" x)` | メソッドコンビネーションの form から、メソッドを拒むエラーをシグナルします |
+| `method-combination-error` | `(method-combination-error "bad ~A" x)` | メソッドコンビネーションの form から、メソッド全体を拒むエラーをシグナルします |
 | `abort` | `(abort)` | 最内の `abort` リスタートを起動します。アクティブなものがなければエラー |
 | `continue` | `(continue)` | 最内の `continue` リスタート(`cerror` のもの)を起動します。アクティブなものがなければ `nil` |
 | `use-value` | `(use-value v)` | 最内の `use-value` リスタートを値を渡して起動します。アクティブなものがなければ `nil` |

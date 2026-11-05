@@ -5165,6 +5165,15 @@ public final class LispPreludeLibrary {
 				          (close %rd-out)
 				          (if eof-error-p (error 'end-of-file :stream (or stream *standard-input*)) eof-value)))))
 				""");
+		// What a define-method-combination body refuses a method or a generic with.
+		SOURCES.put(LispNames.INVALID_METHOD_ERROR, """
+				(defun invalid-method-error (method format-control &rest args)
+				  (error "Invalid method ~S: ~A" method (apply #'format nil format-control args)))
+				""");
+		SOURCES.put(LispNames.METHOD_COMBINATION_ERROR, """
+				(defun method-combination-error (format-control &rest args)
+				  (error "Invalid method combination: ~A" (apply #'format nil format-control args)))
+				""");
 		SOURCES.put(LispNames.RD_DATUM, """
 				(defun %rd-datum (%rd-s %rd-out)
 				  (let ((%rd-c (%rd-skip %rd-s)))

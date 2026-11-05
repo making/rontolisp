@@ -190,8 +190,11 @@ so `#'name`/`funcall`/`mapcar` work with no `BuiltinFunctionWrappers` entry.
   value `effectiveMethod(branchRep, ...)`.
 - `applicableMethods` filters by `appliesToBranch`: default methods always apply; a class
   method applies to a class branch whose class has it as an ancestor; a STRUCT method applies
-  to a branch struct that `:include`-descends from it (`descendantStructTags`); eql and
-  built-in type methods apply only to their exact-same branch.
+  to a branch struct that `:include`-descends from it (`descendantStructTags`); a built-in type
+  method to a branch of a type below it in `SUBTYPEP_PARENTS` (2026-11-05: until then `(call-next-method)`
+  from `integer` to `number` had no next method and a `:before` on `number` did not run; `REAL`
+  ranks ahead of `NUMBER` for it); `standard-object` to a class branch, `structure-object` to a struct
+  branch; an eql method to its exact-same branch.
 - **Plus one branch per position-wise MEET of two INCOMPARABLE specializer vectors**
   (`addMeetBranches`/`specializerMeet`) — one branch per method suffices only while the
   vectors form a chain, because `appliesToBranch` is a SUBSET test. Quadratic but run to
@@ -751,6 +754,40 @@ what the program signals without the generic, so an uncovered read is unchanged.
   an unrecognized symbol specifier before the registry lookup, `built-in-class` too.
   `structure-class` keeps its deliberate empty test.
 
+## `define-method-combination`
+Since 2026-11-05 on all four backends (`macro/MethodCombinations`), for McCLIM's `values-max-min`;
+in the cached Quicklisp systems arnesi's `wrapping-standard` and `cc-standard` and serapeum's
+`standard/context` are the other long forms. No run-time part: what the body computes becomes the
+dispatcher's code.
+- **An evaluator runs the body, once per dispatcher branch.** `expanderLambda` makes the form a lambda
+  of the generic's name, the `:method-combination` arguments, `(method . qualifiers)` per applicable
+  method and the argument forms: the groups are classified in generated Lisp (`%mc-qualifiers-match-p`,
+  a selector being a pattern or a predicate), ordered, and refused when `:required`, and the body runs in
+  their scope. The short form is CLHS's long-form equivalent. `LispEvaluator.evalDefineMethodCombination`
+  registers a `LispFunction` over it (`ClosRegistry.registerMethodCombination`), which hands the body
+  a `standard-method` holding only the qualifiers (`methodObject`; CLHS's example sorts by
+  `method-qualifiers`), puts the defun's name where each stood, and expands the macros of the answer
+  (arnesi's `closure-with-nextmethod`; a compile path generates its dispatchers past its macro-time pass).
+- **The compile paths** run the form in the macro-time evaluator and leave
+  `(%define-method-combination 'name '#<function>)` (`UserMacroExpander.stripDefmacroDefinitions`), so the
+  backend's registry calls that evaluator: `expandTopLevelDefinitions` registers and drops it first.
+- **The effective method** (`definedCombinationEffectiveMethod`): every method applicable to the branch,
+  most specific first, through the function; `MethodCombinations.lowered` makes `(call-method m nexts)`
+  `(%m thunk args...)`, the thunk the lambda chain `buildNextChain` builds, `(make-method form)` a
+  thunk of the form. The arguments are rebound to `%MC-ARG-n`, as the answer may bind a variable named
+  like a parameter around a `call-method` (values-max-min's `max`). A signal of the function, a required
+  group left empty among them, becomes `(error message)` in the branch: CLHS computes the effective
+  method for the call, and a branch no call reaches must not stop the definition.
+- **Qualifiers**: under such a generic any atoms before the lambda list (`methodLambdaListIndex`,
+  shared with the walkers that had "a symbol after the name"), kept per defun in
+  `GenericInfo.methodQualifiers`.
+- Residuals: run-time `add-method` methods do not join such a generic (the short form's residual); a
+  method object answers `method-qualifiers` only; SBCL's "More than one method of type X with the same
+  specializers" is not signalled; `:arguments` takes required parameters and `&rest`.
+- A true list matches element by element, `*` matching anything there (CLHS); SBCL 2.2.9's
+  `qualifier-check-runtime` honors `*` as the tail only, so `(:a *)` misses `(:a :x)` there.
+- Pinned by ci-spec `define-method-combination-long-and-short-forms` (SBCL 2.2.9 agrees).
+
 ## `print-object` — the printer consults it
 A `defmethod print-object` makes the printing operators render that type through the generic.
 **Gated on the program defining a method** (plus the condition and `*print-case*` gates
@@ -845,9 +882,8 @@ below): with none, every printing operator compiles exactly as before.
 ## Short-form `:method-combination`
 `(defgeneric g (x) (:method-combination NAME [:most-specific-first | :most-specific-last]))`,
 NAME one of `ClosRegistry.SHORT_FORM_COMBINATIONS` —
-`progn`/`and`/`or`/`+`/`list`/`nconc`/`append`/`max`/`min`. The CLHS **long** form
-(`define-method-combination`) is out of scope; a NAME outside the set is REJECTED at
-`defgeneric` time.
+`progn`/`and`/`or`/`+`/`list`/`nconc`/`append`/`max`/`min`. A NAME outside the set that no `define-method-combination` defined (below) is REJECTED at
+`defgeneric` time, and `standard` is the default written out.
 - `GenericInfo` gains `methodCombination` + `mostSpecificLast`; `registerDefgeneric` records
   the option BEFORE the inline `(:method ...)` clauses expand.
 - Legal qualifiers: the combination NAME as a primary qualifier, `:around`; `:before`/`:after`
@@ -1084,6 +1120,13 @@ in each slot's storage, reached past its own `slot-value-using-class`, and pins 
   not in those descendants' layouts (redefinition does not propagate).
   `LispEvaluatorTest.closerMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators`, SBCL 2.2.9
   agrees. McCLIM's own load makes none (measured 2026-11-05 over `clim-core`).
+- **A method on `compute-slots` adding a slot** (ESA's `modual-class`) gets it storage:
+  `absorbComputedSlots` lists the effective slots neither the form nor its superclasses' static rows
+  bring, the `%ABSORBED-SLOTS` of "Layered classes". A method on `make-instance`
+  (`constructsThroughGeneric`, a metaclass the method specializes) sees a literal call of such a class
+  and every computed one, as `(funcall #'make-instance class ...)`; the default is the system's
+  (`%SYSTEM-MAKE-INSTANCE` on the interpreter, `%mop-make-instance` on the compile paths). ci-spec
+  standalone `compute-slots-and-make-instance-methods-of-a-metaclass`.
 - **`closer-mop:class-default-initargs`** is AMOP's `(initarg form function)` over
   `ClosRegistry.defaultInitargs`: a built-in on the interpreter, the gated `%class-default-initargs`
   dispatch (`%CDI-<n>`) on the compile paths. The readable exports with no operator yet:
@@ -1578,8 +1621,8 @@ pre-chunking shape). Top-level compile crashes name the offending form (`JvmLisp
 chunk-loop wrapper).
 
 ## Out of scope / known gaps
-- Qualifier combination is for class + default methods; eql/type-specialized qualified methods
-  combine only with same-specializer primaries + the default method.
+- An eql-specialized qualified method combines only with same-specializer primaries + the
+  default method.
 - Still OUT of the MOP (classes are compile-time-static; `--optimize` DCE and the dispatch
   tables depend on it): runtime class construction beyond `make-instance` of a metaclass
   ("Classes made at run time": `ensure-class` from computed data, a non-top-level `defclass`, a

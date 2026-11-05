@@ -477,6 +477,8 @@ page.
 | `compute-restarts` | `(compute-restarts)` | every active restart record, innermost first |
 | `restart-name` | `(restart-name r)` | the name of a restart object |
 | `muffle-warning` | `(muffle-warning w)` | invoke the `muffle-warning` restart a `warn` establishes, aborting the warning before it prints |
+| `invalid-method-error` | `(invalid-method-error method "bad ~A" x)` | Signal, from a method combination's forms, that a method is refused |
+| `method-combination-error` | `(method-combination-error "bad ~A" x)` | Signal, from a method combination's forms, that the methods are refused |
 | `abort` | `(abort)` | invoke the innermost `abort` restart; an error when none is active |
 | `continue` | `(continue)` | invoke the innermost `continue` restart (a `cerror`'s); `nil` when none is active |
 | `use-value` | `(use-value v)` | invoke the innermost `use-value` restart with a value; `nil` when none is active |

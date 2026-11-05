@@ -17,7 +17,7 @@ The lambda list may continue past the required parameters with `&optional`/`&res
 (describe-parts (make-instance 'square)) ; => (SQUARE SHAPE)
 ```
 
-Lite subset: `define-method-combination` (the long form) and the remaining options are errors.
+A combination [`define-method-combination`](../macros/define-method-combination.md) defined is selected the same way, with its arguments, and `standard` names the default one. The remaining options are errors.
 
 ```lisp
 (defgeneric area (shape)

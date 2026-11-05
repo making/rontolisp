@@ -477,8 +477,8 @@ public final class PureBuiltinFolder {
 			case LispNames.DEFUN:
 				return parts.size() >= 3 ? rebuilt(cons, foldFrom(parts, 3, blocked)) : form;
 			case LispNames.DEFMETHOD: {
-				// (defmethod name [qualifier] (params...) body...)
-				int lambdaList = parts.size() > 2 && parts.get(2) instanceof LispSymbol ? 3 : 2;
+				// (defmethod name qualifier* (params...) body...)
+				int lambdaList = MethodCombinations.methodLambdaListIndex(parts);
 				return parts.size() > lambdaList ? rebuilt(cons, foldFrom(parts, lambdaList + 1, blocked)) : form;
 			}
 			case LispNames.THE:

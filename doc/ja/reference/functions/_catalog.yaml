@@ -1159,6 +1159,8 @@ categories:
       - { slug: compute-restarts, name: "compute-restarts" }
       - { slug: restart-name, name: "restart-name" }
       - { slug: muffle-warning, name: "muffle-warning" }
+      - { slug: invalid-method-error, name: "invalid-method-error" }
+      - { slug: method-combination-error, name: "method-combination-error" }
       - { slug: abort, name: "abort" }
       - { slug: continue, name: "continue" }
       - { slug: use-value, name: "use-value" }

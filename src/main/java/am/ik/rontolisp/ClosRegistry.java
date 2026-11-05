@@ -1437,6 +1437,42 @@ public final class ClosRegistry {
 			LispLayout.READTABLE_TAG, "READTABLE", LispLayout.RANDOM_STATE_TAG, "RANDOM-STATE");
 
 	/**
+	 * The {@code define-method-combination} functions, normalized name to what computes
+	 * an effective method form ({@code macro/MethodCombinations.java}).
+	 */
+	private final Map<String, LispVal> methodCombinations = new java.util.HashMap<>();
+
+	/**
+	 * Records a {@code define-method-combination}.
+	 * @param name the combination's name
+	 * @param expander the function computing an effective method form
+	 */
+	public void registerMethodCombination(String name, LispVal expander) {
+		this.methodCombinations.put(normalize(name), expander);
+	}
+
+	/**
+	 * The function of a {@code define-method-combination}.
+	 * @param name the combination's name
+	 * @return the function, or null when the name was not defined
+	 */
+	@Nullable public LispVal findMethodCombination(String name) {
+		return this.methodCombinations.get(normalize(name));
+	}
+
+	/**
+	 * What a {@code define-method-combination} body handles as a method: a
+	 * {@code standard-method} with the method's qualifiers, which is all the static
+	 * subset has of it there.
+	 * @param qualifiers the method's qualifiers
+	 * @return the method object
+	 */
+	public LispInstance methodObject(LispVal qualifiers) {
+		ensureMethodMetaobjectClassesSeeded("STANDARD-METHOD");
+		return newSeededInstance("STANDARD-METHOD", qualifiers);
+	}
+
+	/**
 	 * Registers a built-in class (a condition of the seeded hierarchy, or one of the MOP
 	 * base classes) with nil-defaulted slots: parent slots first, then the given ones,
 	 * each accepting its {@code :slot-name} initarg.
@@ -1814,6 +1850,15 @@ public final class ClosRegistry {
 
 		@Nullable private String methodCombination;
 
+		/** The {@code define-method-combination} function, or null. */
+		@Nullable private LispVal methodCombinationExpander;
+
+		/** The {@code :method-combination} arguments for that function. */
+		private LispVal methodCombinationOptions = LispNil.INSTANCE;
+
+		/** A method's qualifiers under that function, by its defun's name. */
+		private final Map<String, LispVal> methodQualifiers = new java.util.HashMap<>();
+
 		private boolean mostSpecificLast;
 
 		@Nullable private LispVal genericFunctionClass;
@@ -1959,6 +2004,9 @@ public final class ClosRegistry {
 			view.methods.putAll(table);
 			view.variadic = this.variadic;
 			view.methodCombination = this.methodCombination;
+			view.methodCombinationExpander = this.methodCombinationExpander;
+			view.methodCombinationOptions = this.methodCombinationOptions;
+			view.methodQualifiers.putAll(this.methodQualifiers);
 			view.mostSpecificLast = this.mostSpecificLast;
 			view.precedenceOrder = this.precedenceOrder;
 			view.lambdaListShape = this.lambdaListShape;
@@ -2218,6 +2266,47 @@ public final class ClosRegistry {
 		public void methodCombination(@Nullable String name, boolean mostSpecificLast) {
 			this.methodCombination = name;
 			this.mostSpecificLast = mostSpecificLast;
+			this.methodCombinationExpander = null;
+			this.methodCombinationOptions = LispNil.INSTANCE;
+		}
+
+		/**
+		 * Records a combination {@code define-method-combination} defined.
+		 * @param name the combination's name
+		 * @param expander its function
+		 * @param options the arguments {@code :method-combination} gives it
+		 */
+		public void methodCombination(String name, LispVal expander, LispVal options) {
+			this.methodCombination = name;
+			this.mostSpecificLast = false;
+			this.methodCombinationExpander = expander;
+			this.methodCombinationOptions = options;
+		}
+
+		/**
+		 * The function of a combination {@code define-method-combination} defined.
+		 * @return the function, or null
+		 */
+		@Nullable public LispVal methodCombinationExpander() {
+			return this.methodCombinationExpander;
+		}
+
+		/**
+		 * The arguments {@code :method-combination} gives
+		 * {@link #methodCombinationExpander()}.
+		 * @return the list
+		 */
+		public LispVal methodCombinationOptions() {
+			return this.methodCombinationOptions;
+		}
+
+		/**
+		 * Each method's qualifiers under {@link #methodCombinationExpander()}, by the
+		 * name of its method-body defun.
+		 * @return the mutable table
+		 */
+		public Map<String, LispVal> methodQualifiers() {
+			return this.methodQualifiers;
 		}
 
 		/**
@@ -2635,7 +2724,29 @@ public final class ClosRegistry {
 	 * @return true for such a class
 	 */
 	public boolean allocatesThroughGeneric(String className) {
-		GenericInfo generic = findGeneric(LispNames.ALLOCATE_INSTANCE);
+		return metaclassHasMethod(findGeneric(LispNames.ALLOCATE_INSTANCE), className);
+	}
+
+	/**
+	 * Whether a literal {@code make-instance} of the class calls the generic: the class
+	 * was defined with a {@code :metaclass} a method on {@code make-instance} specializes
+	 * (ESA's {@code modual-class}).
+	 * @param className the class name as spelled
+	 * @return true for such a class
+	 */
+	public boolean constructsThroughGeneric(String className) {
+		return metaclassHasMethod(makeInstanceGeneric(), className);
+	}
+
+	/**
+	 * The generic a method on {@code make-instance} made, in whatever package.
+	 * @return the generic, or null
+	 */
+	@Nullable public GenericInfo makeInstanceGeneric() {
+		return findGeneric(LispNames.MAKE_INSTANCE);
+	}
+
+	private boolean metaclassHasMethod(@Nullable GenericInfo generic, String className) {
 		String metaclass = this.metaclassOf.get(normalize(className));
 		if (generic == null || metaclass == null) {
 			return false;

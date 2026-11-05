@@ -10,6 +10,7 @@ import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFloatArray;
+import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispInteger;
@@ -19938,7 +19939,11 @@ public final class LispMacroExpander {
 		}
 		else if (parts.get(1) instanceof LispCons header && header.car() instanceof LispSymbol headerName) {
 			nameSym = headerName;
-			for (LispVal option : header.toList().subList(1, header.toList().size())) {
+			for (LispVal written : header.toList().subList(1, header.toList().size())) {
+				// A keyword alone is the option with no argument (CLHS: :conc-name is
+				// (:conc-name)).
+				LispVal option = written instanceof LispSymbol bare && bare.isKeyword()
+						? new LispCons(bare, LispNil.INSTANCE) : written;
 				if (!(option instanceof LispCons optCons) || !(optCons.car() instanceof LispSymbol optSym)) {
 					throw new UnsupportedOperationException(
 							LispNames.DEFSTRUCT + " option is not supported: " + option.print());
@@ -19951,6 +19956,11 @@ public final class LispMacroExpander {
 						if (optParts.size() > 3) {
 							throw new UnsupportedOperationException(
 									LispNames.DEFSTRUCT + " option is not supported: " + option.print());
+						}
+						if (optParts.size() == 1) {
+							// No argument names the default constructor; nil suppresses
+							// it.
+							continue;
 						}
 						if (optValue instanceof LispSymbol s) {
 							// A BOA constructor's explicit lambda list is used verbatim;
@@ -19973,7 +19983,7 @@ public final class LispMacroExpander {
 						if (optValue instanceof LispSymbol s) {
 							customPredicate = s.name();
 						}
-						else {
+						else if (optParts.size() > 1) {
 							suppressPredicate = true;
 						}
 					}
@@ -19981,7 +19991,7 @@ public final class LispMacroExpander {
 						if (optValue instanceof LispSymbol s) {
 							customCopier = s.name();
 						}
-						else {
+						else if (optParts.size() > 1) {
 							suppressCopier = true;
 						}
 					}
@@ -20722,7 +20732,7 @@ public final class LispMacroExpander {
 						if (optValue instanceof LispSymbol s) {
 							customPredicate = s.name();
 						}
-						else {
+						else if (optParts.size() > 1) {
 							suppressPredicate = true;
 						}
 					}
@@ -20730,7 +20740,7 @@ public final class LispMacroExpander {
 						if (optValue instanceof LispSymbol s) {
 							customCopier = s.name();
 						}
-						else {
+						else if (optParts.size() > 1) {
 							suppressCopier = true;
 						}
 					}
@@ -22138,6 +22148,7 @@ public final class LispMacroExpander {
 		boolean supersChanged = !finalMembers.isEmpty() && !finalMembers.equals(declared);
 		List<LispVal> staticSupers = !absorbedSupers.isEmpty() ? absorbedSupers
 				: supersChanged ? finalSupers : List.of();
+		absorbComputedSlots(parts, metaobject, absorbedSlots, absorbedSlotNames, closRegistry);
 		List<LispVal> widened = new java.util.ArrayList<>(parts);
 		boolean slotsChanged = parts.size() >= 4 && reconcileSlotInitargs(widened, metaobject);
 		boolean allocationsChanged = parts.size() >= 4 && reconcileSlotAllocations(widened, metaobject);
@@ -22163,6 +22174,43 @@ public final class LispMacroExpander {
 			return null;
 		}
 		return (LispCons) listToCons(widened);
+	}
+
+	/**
+	 * Collects the effective slots the metaclass's {@code compute-slots} added, which no
+	 * definition declares (ESA's {@code modual-class} keeps the original class name in
+	 * one), as slot specifications: the static layout needs their storage.
+	 */
+	private static void absorbComputedSlots(List<LispVal> defclass, LispInstance metaobject, List<LispVal> slots,
+			java.util.Set<String> slotNames, ClosRegistry closRegistry) {
+		if (!(metaobjectSlot(metaobject, "EFFECTIVE-SLOTS") instanceof LispCons effective)
+				|| !effective.isProperList()) {
+			return;
+		}
+		// What the form brings: its class's row in the registry may hold the widened
+		// form.
+		java.util.Set<String> known = new java.util.HashSet<>();
+		if (defclass.size() > 3 && defclass.get(3) instanceof LispCons written && written.isProperList()) {
+			for (LispVal spec : written.toList()) {
+				LispVal slot = spec instanceof LispCons cons ? cons.car() : spec;
+				if (slot instanceof LispSymbol sym) {
+					known.add(memberOf(sym.name()));
+				}
+			}
+		}
+		for (LispInstance superclass : metaobjectSupers(metaobject)) {
+			ClosRegistry.ClassInfo info = metaobjectSlot(superclass, "NAME") instanceof LispSymbol sym
+					? closRegistry.findClass(sym.name()) : null;
+			if (info != null) {
+				info.slots().forEach(slot -> known.add(slot.baseName()));
+			}
+		}
+		for (LispVal definition : effective.toList()) {
+			if (definition instanceof LispInstance slot && metaobjectSlot(slot, "NAME") instanceof LispSymbol slotName
+					&& !known.contains(memberOf(slotName.name())) && slotNames.add(memberOf(slotName.name()))) {
+				slots.add(listToCons(List.of(slotName)));
+			}
+		}
 	}
 
 	/**
@@ -23011,19 +23059,36 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(LispNames.MAKE_INSTANCE + " expects a class name: " + cons.print());
 		}
 		LispSymbol classSym = quotedSymbol(parts.get(1));
+		boolean system = cons.car() instanceof LispSymbol head && LispNames.SYSTEM_MAKE_INSTANCE.equals(head.name());
 		if (classSym == null) {
 			// A computed class ((make-instance driver) -- dbi's connect instantiates
 			// the class metaobject find-driver returned): route through the runtime
 			// %mop-make-instance, which takes a metaobject or a name symbol. The
 			// interpreter defines it natively; the compile paths emit it because a
 			// computed direct call flips the same gate #'make-instance-as-a-value does
-			// (referencesMakeInstanceValue).
+			// (referencesMakeInstanceValue). A method on make-instance sees it first.
 			List<LispVal> call = new java.util.ArrayList<>();
-			call.add(new LispSymbol(LispNames.MOP_MAKE_INSTANCE));
+			if (closRegistry.makeInstanceGeneric() != null) {
+				call.add(new LispSymbol(LispNames.FUNCALL));
+				call.add(listToCons(
+						List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.MAKE_INSTANCE))));
+			}
+			else {
+				call.add(new LispSymbol(LispNames.MOP_MAKE_INSTANCE));
+			}
 			call.addAll(parts.subList(1, parts.size()));
 			return listToCons(call);
 		}
 		ClosRegistry.ClassInfo info = closRegistry.findClass(classSym.name());
+		if (!system && info != null && closRegistry.constructsThroughGeneric(info.name())) {
+			// CLHS 7.1: make-instance is a generic function of the class metaobject.
+			List<LispVal> call = new java.util.ArrayList<>();
+			call.add(new LispSymbol(LispNames.FUNCALL));
+			call.add(listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.MAKE_INSTANCE))));
+			call.add(findClassForm(new LispSymbol(info.name())));
+			call.addAll(parts.subList(2, parts.size()));
+			return listToCons(call);
+		}
 		if (info == null) {
 			if (coldBranchOk) {
 				return listToCons(List.of(new LispSymbol(LispNames.ERROR),
@@ -27237,6 +27302,8 @@ public final class LispMacroExpander {
 		String documentation = null;
 		String combination = null;
 		boolean mostSpecificLast = false;
+		LispVal combinationExpander = null;
+		LispVal combinationOptions = LispNil.INSTANCE;
 		LispVal genericFunctionClass = null;
 		LispVal methodClass = null;
 		List<String> precedenceOrder = new java.util.ArrayList<>();
@@ -27261,11 +27328,23 @@ public final class LispMacroExpander {
 				// (:method-combination NAME [:most-specific-first | :most-specific-last])
 				// -- the CLHS SHORT forms only; see ClosRegistry.SHORT_FORM_COMBINATIONS.
 				List<LispVal> option = optCons.toList();
+				if (option.size() >= 2 && option.get(1) instanceof LispSymbol definedName
+						&& closRegistry.findMethodCombination(definedName.name()) != null) {
+					// Its lambda list takes the arguments, which are not evaluated.
+					combination = plainTypeName(definedName);
+					combinationExpander = closRegistry.findMethodCombination(definedName.name());
+					combinationOptions = ((LispCons) optCons.cdr()).cdr();
+					continue;
+				}
 				if (option.size() < 2 || option.size() > 3 || !(option.get(1) instanceof LispSymbol nameArg)) {
 					throw new UnsupportedOperationException(LispNames.DEFGENERIC
 							+ " :method-combination expects a name and an optional order: " + parts.get(i).print());
 				}
 				combination = plainTypeName(nameArg);
+				if ("STANDARD".equals(combination) && option.size() == 2) {
+					combination = null;
+					continue;
+				}
 				if (!ClosRegistry.SHORT_FORM_COMBINATIONS.contains(combination)) {
 					throw new UnsupportedOperationException(LispNames.DEFGENERIC
 							+ " :method-combination supports the CLHS short forms only (progn/and/or/+/list/nconc/append/max/min), got "
@@ -27357,7 +27436,13 @@ public final class LispMacroExpander {
 		// Recorded BEFORE the inline (:method progn ...) clauses expand: expandDefmethod
 		// accepts the combination name as a qualifier only once the generic carries it,
 		// and checks each clause's lambda list against this one.
-		info.methodCombination(combination, mostSpecificLast);
+		if (combinationExpander != null) {
+			info.methodCombination(java.util.Objects.requireNonNull(combination), combinationExpander,
+					combinationOptions);
+		}
+		else {
+			info.methodCombination(combination, mostSpecificLast);
+		}
 		info.lambdaListShape(shape, true);
 		info.metaobjectOptions(genericFunctionClass, methodClass, parts.get(2));
 		info.precedenceOrder(precedenceOrder);
@@ -27509,7 +27594,17 @@ public final class LispMacroExpander {
 		String combination = declared == null ? null : declared.methodCombination();
 		String qualifier = "";
 		int llIndex = 2;
-		if (parts.get(2) instanceof LispSymbol qSym) {
+		LispVal qualifierList = LispNil.INSTANCE;
+		if (declared != null && declared.methodCombinationExpander() != null) {
+			// Any atoms are qualifiers there: the combination's method groups judge them.
+			llIndex = MethodCombinations.methodLambdaListIndex(parts);
+			for (int i = Math.min(llIndex, parts.size()) - 1; i >= 2; i--) {
+				qualifierList = new LispCons(parts.get(i), qualifierList);
+			}
+			qualifier = String.join(" ",
+					parts.subList(2, Math.min(llIndex, parts.size())).stream().map(LispVal::print).toList());
+		}
+		else if (parts.get(2) instanceof LispSymbol qSym) {
 			String qName = plainTypeName(qSym);
 			if (combination != null && combination.equals(qName)) {
 				qualifier = qName;
@@ -27667,6 +27762,7 @@ public final class LispMacroExpander {
 			}
 		}
 		List<LispVal> body = methodBody;
+		generic.methodQualifiers().put(functionName, qualifierList);
 		closRegistry.changeMethod(generic, key,
 				new ClosRegistry.MethodInfo(List.copyOf(specializers), functionName, qualifier, usesNext));
 		generic.methodShapes().put(key, methodShape);
@@ -28928,7 +29024,8 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal dispatchBody(ClosRegistry.GenericInfo generic, List<LispVal> params,
 			ClosRegistry closRegistry, @Nullable String builtinFallback, @Nullable DispatchNarrower narrower) {
-		boolean combined = generic.methods().values().stream().anyMatch(m -> !m.isPrimary() || m.usesNext());
+		boolean combined = generic.methodCombinationExpander() != null
+				|| generic.methods().values().stream().anyMatch(m -> !m.isPrimary() || m.usesNext());
 		LispVal chain = combined ? combinedDispatchBody(generic, params, closRegistry, builtinFallback, narrower)
 				: simpleDispatchBody(generic, params, closRegistry, builtinFallback, narrower);
 		if ((closRegistry.dynamicClasses() || closRegistry.gfProtocol()) && generic.methodCombination() == null) {
@@ -29510,8 +29607,9 @@ public final class LispMacroExpander {
 			}
 		}
 		branches.sort(specificityOrder(closRegistry, generic.precedenceIndexes()));
-		java.util.@Nullable Set<String> roles = generic.methodCombination() == null ? STANDARD_COMBINATION_ROLES
-				: java.util.Set.of(generic.methodCombination(), ":AROUND");
+		java.util.@Nullable Set<String> roles = generic.methodCombinationExpander() != null ? null
+				: generic.methodCombination() == null ? STANDARD_COMBINATION_ROLES
+						: java.util.Set.of(generic.methodCombination(), ":AROUND");
 		LispVal chain = effectiveMethod(null, generic, params, closRegistry, builtinFallback);
 		LispVal fallbackGuard = nestedBranchGuard(generic, null, closRegistry, roles);
 		if (fallbackGuard != null) {
@@ -29643,6 +29741,9 @@ public final class LispMacroExpander {
 			ClosRegistry.GenericInfo generic, List<LispVal> params, ClosRegistry closRegistry,
 			@Nullable String builtinFallback) {
 		boolean variadic = generic.variadic();
+		if (generic.methodCombinationExpander() != null) {
+			return definedCombinationEffectiveMethod(generic, branchRep, params, closRegistry);
+		}
 		List<ClosRegistry.MethodInfo> arounds = applicableMethods(generic, branchRep, ":AROUND", closRegistry);
 		String combination = generic.methodCombination();
 		if (combination != null) {
@@ -29664,6 +29765,58 @@ public final class LispMacroExpander {
 		LispVal coreThunk = lambdaOf(params, core, variadic);
 		LispVal next = buildNextChain(arounds, 1, coreThunk, params, variadic);
 		return callWithNext(arounds.get(0).functionName(), next, params, variadic);
+	}
+
+	/**
+	 * The effective method under a combination {@code define-method-combination} defined:
+	 * what its function answers for the branch's applicable methods, most specific first,
+	 * lowered to calls. The arguments stay in variables of their own, as the form may
+	 * bind a variable named like a parameter around a {@code call-method}. What the
+	 * function signals, a required method group left empty among them, is the call's
+	 * error (CLHS: the effective method is computed for the call).
+	 */
+	private static LispVal definedCombinationEffectiveMethod(ClosRegistry.GenericInfo generic,
+			ClosRegistry.@Nullable MethodInfo branchRep, List<LispVal> params, ClosRegistry closRegistry) {
+		List<ClosRegistry.MethodInfo> applicable = new java.util.ArrayList<>();
+		for (ClosRegistry.MethodInfo m : generic.methods().values()) {
+			if (appliesToBranch(m, branchRep, closRegistry)) {
+				applicable.add(m);
+			}
+		}
+		if (applicable.isEmpty()) {
+			return noApplicableMethod(generic.name(), params);
+		}
+		applicable.sort(branchSpecificityOrder(branchRep, closRegistry, generic.precedenceIndexes()));
+		List<LispVal> methods = new java.util.ArrayList<>();
+		for (ClosRegistry.MethodInfo m : applicable) {
+			methods.add(new LispCons(new LispSymbol(m.functionName()),
+					generic.methodQualifiers().getOrDefault(m.functionName(), LispNil.INSTANCE)));
+		}
+		List<LispVal> variables = new java.util.ArrayList<>();
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		for (int i = 0; i < params.size(); i++) {
+			LispSymbol variable = new LispSymbol("%MC-ARG-" + i);
+			variables.add(variable);
+			bindings.add(listToCons(List.of(variable, params.get(i))));
+		}
+		LispSymbol rest = generic.variadic() ? new LispSymbol(GF_REST_VAR) : null;
+		List<LispVal> arguments = new java.util.ArrayList<>(variables);
+		if (rest != null) {
+			arguments.add(rest);
+		}
+		LispVal form;
+		try {
+			form = ((LispFunction) java.util.Objects.requireNonNull(generic.methodCombinationExpander())).body()
+				.apply(List.of(new LispSymbol(generic.name()), generic.methodCombinationOptions(), listToCons(methods),
+						listToCons(arguments)));
+		}
+		catch (RuntimeException ex) {
+			return listToCons(List.of(new LispSymbol(LispNames.ERROR),
+					textDatum(String.valueOf(ex.getMessage()).replace("~", "~~"))));
+		}
+		LispVal lowered = MethodCombinations.lowered(form, variables, rest);
+		return bindings.isEmpty() ? lowered
+				: listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), lowered));
 	}
 
 	/**
@@ -29794,8 +29947,8 @@ public final class LispMacroExpander {
 	 * position. A default (unspecialized) parameter always applies; a class parameter
 	 * applies when the branch's parameter is a descendant class; a struct (type)
 	 * parameter applies when the branch's struct descends from it through
-	 * {@code :include}; eql and built-in type parameters apply only when the branch's
-	 * parameter matches exactly (cross-type subtyping among them is out of scope).
+	 * {@code :include}; a built-in type parameter applies to a branch of a type below it
+	 * in the lattice; an eql parameter only when the branch's parameter matches exactly.
 	 */
 	private static boolean appliesToBranch(ClosRegistry.MethodInfo m, ClosRegistry.@Nullable MethodInfo branchRep,
 			ClosRegistry closRegistry) {
@@ -29835,7 +29988,9 @@ public final class LispMacroExpander {
 			}
 			case TYPE -> {
 				if (branch.kind() != ClosRegistry.SpecializerKind.TYPE) {
-					yield false;
+					// Every class instance is a standard-object.
+					yield branch.kind() == ClosRegistry.SpecializerKind.CLASS
+							&& ClosRegistry.STANDARD_OBJECT_NAME.equals(spec.name());
 				}
 				if (java.util.Objects.equals(spec.name(), branch.name())) {
 					yield true;
@@ -29843,15 +29998,32 @@ public final class LispMacroExpander {
 				// A struct specializer applies to a branch struct that descends from it
 				// through :include -- the struct-side twin of the class ancestry test
 				// above (sxql's yield methods over the sql-statement :include tree).
-				// Compared via the spelling-tolerant tag APIs; built-in type
-				// specializers keep the exact-name rule (cross-type subtyping among
-				// them stays out of scope).
+				// Compared via the spelling-tolerant tag APIs; a built-in type
+				// specializer applies to a branch of a type below it in the lattice.
 				String branchTag = branch.name() == null ? null
 						: closRegistry.findStructTag(java.util.Objects.requireNonNull(branch.name()));
-				yield branchTag != null && spec.name() != null
-						&& closRegistry.descendantStructTags(spec.name()).contains(branchTag);
+				if (branchTag != null) {
+					yield spec.name() != null && ("STRUCTURE-OBJECT".equals(spec.name())
+							|| closRegistry.descendantStructTags(spec.name()).contains(branchTag));
+				}
+				yield branch.name() != null && spec.name() != null
+						&& builtInTypeHasAncestor(branch.name(), spec.name());
 			}
 		};
+	}
+
+	/** Whether the built-in type is below the other in the subtypep lattice. */
+	private static boolean builtInTypeHasAncestor(String type, String ancestor) {
+		List<String> parents = SUBTYPEP_PARENTS.get(type);
+		if (parents == null) {
+			return false;
+		}
+		for (String parent : parents) {
+			if (parent.equals(ancestor) || builtInTypeHasAncestor(parent, ancestor)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -30250,7 +30422,8 @@ public final class LispMacroExpander {
 		ranks.put("RATIONAL", 225);
 		ranks.put("SIMPLE-BIT-VECTOR", 226);
 		ranks.put("BIT-VECTOR", 228);
-		for (String name : List.of("NUMBER", "REAL", "VECTOR", "SIMPLE-VECTOR", "SIMPLE-STRING", "BASE-STRING")) {
+		ranks.put("REAL", 229);
+		for (String name : List.of("NUMBER", "VECTOR", "SIMPLE-VECTOR", "SIMPLE-STRING", "BASE-STRING")) {
 			ranks.put(name, 230);
 		}
 		for (String name : List.of("LIST", "ARRAY", "SIMPLE-ARRAY")) {
@@ -30305,6 +30478,29 @@ public final class LispMacroExpander {
 	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry) {
 		return expandTopLevelDefinitions(program, structAccessors, closRegistry, null);
+	}
+
+	/**
+	 * Registers what the macro-time pass left of each {@code define-method-combination}
+	 * ({@link MethodCombinations#MARKER}) and drops it: the dispatchers run the function
+	 * as they are generated, and the program has nothing left of it.
+	 */
+	private static List<LispVal> withoutMethodCombinationMarkers(List<LispVal> program, ClosRegistry closRegistry) {
+		if (program.stream().noneMatch(form -> isNamedForm(form, MethodCombinations.MARKER))) {
+			return program;
+		}
+		List<LispVal> kept = new java.util.ArrayList<>();
+		for (LispVal form : program) {
+			if (isNamedForm(form, MethodCombinations.MARKER)) {
+				List<LispVal> parts = ((LispCons) form).toList();
+				closRegistry.registerMethodCombination(((LispSymbol) unquoted(parts.get(1))).name(),
+						unquoted(parts.get(2)));
+			}
+			else {
+				kept.add(form);
+			}
+		}
+		return kept;
 	}
 
 	/**
@@ -30442,6 +30638,13 @@ public final class LispMacroExpander {
 	// A #'make-instance VALUE reference anywhere outside quoted data -- a literal
 	// (make-instance ...) call keeps the static expansion and does not count.
 	private static boolean referencesMakeInstanceValue(LispVal form) {
+		// A method on the generic: the literal calls of a class its metaclass
+		// specializes go through the value, whose arms construct any class.
+		if (isNamedForm(form, LispNames.DEFMETHOD) && form instanceof LispCons method
+				&& method.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
+				&& LispNames.MAKE_INSTANCE.equals(plainName(name.name()))) {
+			return true;
+		}
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
@@ -30589,6 +30792,7 @@ public final class LispMacroExpander {
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
 			java.util.function.@org.jspecify.annotations.Nullable BinaryOperator<String> spelling, boolean dynamic,
 			SignalMessages signalMessages, @org.jspecify.annotations.Nullable DispatchNarrower narrower) {
+		program = withoutMethodCombinationMarkers(program, closRegistry);
 		// The one whole-program pass both compilers already run, so the pure-builtin fold
 		// and the load-time-value hoist ride along instead of needing their own
 		// registration in every pipeline. The fold goes FIRST: a folded

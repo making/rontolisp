@@ -17,7 +17,7 @@
 (describe-parts (make-instance 'square)) ; => (SQUARE SHAPE)
 ```
 
-ライトサブセット: `define-method-combination`（長形式）と残りのオプションはエラーです。
+[`define-method-combination`](../macros/define-method-combination.md) で定義したコンビネーションも同じように引数付きで選べます。`standard` は既定のものを指します。残りのオプションはエラーです。
 
 ```lisp
 (defgeneric area (shape)
