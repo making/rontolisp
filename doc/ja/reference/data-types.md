@@ -272,8 +272,7 @@ $ rontolisp main.lisp
 [`array-row-major-index`](functions/array-row-major-index.md))、配列は同一性(`eq`)で比較されるため、異なる2つの配列が
 `equal` になることはありません。`length`
 はベクタ(階数1の配列)の要素数を返します。多次元配列はシーケンスではないため、`length`
-はエラーを通知します。ハッシュテーブル演算子とは異なり、配列演算子は第一級の関数値として公開されないため、`#'aref`
-と `#'make-array` は利用できません(直接呼び出してください)。
+はエラーを通知します。
 ベクタは [`vector`](functions/vector.md) で構築し、[`svref`](functions/svref.md)
 で読み取ることもできます。配列の形状は
 [`array-dimensions`](functions/array-dimensions.md) /

@@ -32809,14 +32809,9 @@ public final class LispMacroExpander {
 		// A conditional control string with per-branch controls: distribute the format
 		// over the branches so each compiles with a literal control -- cl-who's
 		// escape-char does (format nil (if (eq *html-mode* :xml) "&#x~x;" "&#~d;") code).
-		if (parts.get(2) instanceof LispCons ctrl && ctrl.car() instanceof LispSymbol ifSym
-				&& LispNames.IF.equals(ifSym.name())) {
-			List<LispVal> ifParts = ctrl.toList();
-			if (ifParts.size() == 4) {
-				LispVal thenFmt = expandFormat((LispCons) replaceFormatControl(parts, ifParts.get(2)));
-				LispVal elseFmt = expandFormat((LispCons) replaceFormatControl(parts, ifParts.get(3)));
-				return listToCons(List.of(new LispSymbol(LispNames.IF), ifParts.get(1), thenFmt, elseFmt));
-			}
+		LispVal distributed = distributeFormat(cons);
+		if (distributed != null) {
+			return expandFormatBranches(distributed);
 		}
 		if (!(parts.get(2) instanceof LispString control)) {
 			// A computed (non-literal) control string cannot be lowered to string pieces
@@ -32856,7 +32851,8 @@ public final class LispMacroExpander {
 				// is bound first so the destination is evaluated before the arguments.
 				LispSymbol streamVar = new LispSymbol(FORMAT_STREAM_VAR);
 				bindings.add(0, listToCons(List.of(streamVar, streamDest)));
-				forms = new java.util.ArrayList<>(List.of(formatDestinationDispatch(result, streamVar)));
+				forms = new java.util.ArrayList<>(
+						List.of(formatDestinationDispatch(result, streamVar, formatStartsFresh(control))));
 			}
 			else {
 				forms = new java.util.ArrayList<>(List.of(result));
@@ -32877,6 +32873,84 @@ public final class LispMacroExpander {
 		return listToCons(letParts);
 	}
 
+	/**
+	 * A {@code format} call whose control is a two-way {@code if}, distributed over the
+	 * branches, each then a call with its own control; null for any other call. The
+	 * destination is evaluated first: bound here where it is computed.
+	 * @param call the {@code (format destination control args...)} call
+	 * @return {@code (if test (format d then ...) (format d else ...))} or that form in a
+	 * {@code let} of {@code d}, or null
+	 */
+	public static @Nullable LispVal distributeFormat(LispCons call) {
+		List<LispVal> parts = call.toList();
+		if (parts.size() < 3 || !(parts.get(2) instanceof LispCons ctrl) || !(ctrl.car() instanceof LispSymbol ifSym)
+				|| !LispNames.IF.equals(ifSym.name()) || !ctrl.isProperList() || ctrl.toList().size() != 4) {
+			return null;
+		}
+		List<LispVal> ifParts = ctrl.toList();
+		boolean literal = parts.get(1) instanceof LispTrue || parts.get(1) instanceof LispNil;
+		List<LispVal> branch = new java.util.ArrayList<>(parts);
+		if (!literal) {
+			branch.set(1, new LispSymbol(FORMAT_DEST_VAR));
+		}
+		LispVal branched = listToCons(List.of(new LispSymbol(LispNames.IF), ifParts.get(1),
+				replaceFormatControl(branch, ifParts.get(2)), replaceFormatControl(branch, ifParts.get(3))));
+		return literal ? branched : makeLet(FORMAT_DEST_VAR, parts.get(1), branched);
+	}
+
+	// A distributed format's branches, expanded in place.
+	private static LispVal expandFormatBranches(LispVal distributed) {
+		LispCons form = (LispCons) distributed;
+		if (form.car() instanceof LispSymbol head && LispNames.LET.equals(head.name())) {
+			List<LispVal> let = form.toList();
+			return listToCons(List.of(let.get(0), let.get(1), expandFormatBranches(let.get(2))));
+		}
+		List<LispVal> branched = form.toList();
+		return listToCons(List.of(branched.get(0), branched.get(1), expandFormat((LispCons) branched.get(2)),
+				expandFormat((LispCons) branched.get(3))));
+	}
+
+	/**
+	 * Whether a {@code format} call must ask its destination to start a line first: the
+	 * text is rendered from column 0, so a {@code ~&} that opens the control says nothing
+	 * in it of the column the text lands on ({@code .kb/format.md}, "What the LITERAL
+	 * path lowers to"). A destination {@code t} under a literal control asks by its own
+	 * lowering.
+	 * @param control the control's form, a distributed {@code if} excluded
+	 * @return null when it does not, {@code t} when it does, or the test when that is a
+	 * run-time fact
+	 */
+	public static @Nullable LispVal formatStartsFresh(LispVal control) {
+		if (control instanceof LispString literal) {
+			return OPENING_FRESH_LINE.matcher(literal.value()).lookingAt() ? LispTrue.INSTANCE : null;
+		}
+		return callOf(LispNames.FMT_STARTS_FRESH, control);
+	}
+
+	private static final java.util.regex.Pattern OPENING_FRESH_LINE = java.util.regex.Pattern
+		.compile("~(?:0*[1-9][0-9]*)?&");
+
+	/**
+	 * A stream's {@code fresh-line} where it has a column to look at: {@code fresh-line}
+	 * always writes to a file, a socket or standard error, which keep none
+	 * ({@code .kb/standard-output-redirect.md}), and a {@code ~&} at the start of a line
+	 * there is the far likelier case. So a {@code %STREAM} value is asked only when it is
+	 * a string stream; {@code t} and a raw string handle answer exactly.
+	 * @param stream a form safe to evaluate twice
+	 * @return the conditional call
+	 */
+	public static LispVal freshLineWhereTheColumnIsKnown(LispVal stream) {
+		LispVal known = makeIf(objIs(stream, List.of(LispLayout.STREAM_TAG)),
+				callOf(LispNames.TYPEP, stream, callOf(LispNames.QUOTE, new LispSymbol(STRING_STREAM_TYPE))),
+				LispTrue.INSTANCE);
+		return makeIf(known, callOf(LispNames.FRESH_LINE, stream), LispNil.INSTANCE);
+	}
+
+	// The fresh-line call a site makes under a formatStartsFresh answer.
+	private static LispVal whenStartsFresh(LispVal startsFresh, LispVal freshLine) {
+		return startsFresh instanceof LispTrue ? freshLine : makeIf(startsFresh, freshLine, LispNil.INSTANCE);
+	}
+
 	// The runtime-renderer fallback for a control the static expansion cannot lower: a
 	// computed (non-literal) control string (cl-who's escape-string binds its control to
 	// a local variable) or a literal one using a directive shape outside the static
@@ -32887,15 +32961,32 @@ public final class LispMacroExpander {
 		List<LispVal> listCall = new java.util.ArrayList<>();
 		listCall.add(new LispSymbol(LispNames.LIST));
 		listCall.addAll(fargs);
-		LispVal rendered = FormatRenderer.call(parts.get(2), fargs.isEmpty() ? LispNil.INSTANCE : listToCons(listCall));
+		LispVal args = fargs.isEmpty() ? LispNil.INSTANCE : listToCons(listCall);
+		if (toString && streamDest == null) {
+			return FormatRenderer.call(parts.get(2), args);
+		}
+		// Written out, so the destination is asked about a ~& that opens the control: a
+		// computed control is held for that.
+		boolean literal = parts.get(2) instanceof LispString;
+		LispVal control = literal ? parts.get(2) : new LispSymbol(FORMAT_CONTROL_VAR);
+		LispVal rendered = FormatRenderer.call(control, args);
+		LispVal startsFresh = formatStartsFresh(control);
+		LispVal written;
 		if (streamDest != null) {
-			LispSymbol streamVar = new LispSymbol(FORMAT_STREAM_VAR);
-			return makeLet(streamVar.name(), streamDest, formatDestinationDispatch(rendered, streamVar));
+			written = formatDestinationDispatch(rendered, new LispSymbol(FORMAT_STREAM_VAR), startsFresh);
 		}
-		if (toString) {
-			return rendered;
+		else if (startsFresh == null) {
+			written = makeProgn(List.of(callOf(LispNames.PRINC, rendered), LispNil.INSTANCE));
 		}
-		return makeProgn(List.of(callOf(LispNames.PRINC, rendered), LispNil.INSTANCE));
+		else {
+			LispSymbol text = new LispSymbol("__format_result");
+			written = makeLet(text.name(), rendered,
+					makeProgn(List.of(
+							whenStartsFresh(startsFresh, listToCons(List.of(new LispSymbol(LispNames.FRESH_LINE)))),
+							callOf(LispNames.PRINC, text), LispNil.INSTANCE)));
+		}
+		LispVal held = literal ? written : makeLet(FORMAT_CONTROL_VAR, parts.get(2), written);
+		return streamDest != null ? makeLet(FORMAT_STREAM_VAR, streamDest, held) : held;
 	}
 
 	/**
@@ -33012,6 +33103,10 @@ public final class LispMacroExpander {
 
 	private static final String FORMAT_STREAM_VAR = "__format_stream";
 
+	private static final String FORMAT_DEST_VAR = "__format_dest";
+
+	private static final String FORMAT_CONTROL_VAR = "__format_control";
+
 	/**
 	 * The run-time dispatch on a {@code format} destination that is neither the literal
 	 * {@code nil} nor the literal {@code t}: {@code (if dest (progn (write-string STR
@@ -33027,21 +33122,28 @@ public final class LispMacroExpander {
 	 * whichever branch consumes it.
 	 * @param result the form that builds the rendered string
 	 * @param streamVar the symbol already bound to the evaluated destination
+	 * @param startsFresh {@link #formatStartsFresh} of the control
 	 * @return the dispatching form
 	 */
-	private static LispVal formatDestinationDispatch(LispVal result, LispSymbol streamVar) {
+	private static LispVal formatDestinationDispatch(LispVal result, LispSymbol streamVar,
+			@Nullable LispVal startsFresh) {
 		LispSymbol resultVar = new LispSymbol("__format_result");
-		LispVal writeToStream = makeProgn(List
-			.of(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), resultVar, streamVar)), LispNil.INSTANCE));
+		LispVal writeToStream = formatWrite(startsFresh, freshLineWhereTheColumnIsKnown(streamVar),
+				listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), resultVar, streamVar)));
 		// A t destination is *standard-output*: the one-argument write-string reads it at
 		// call time, so a surrounding with-output-to-string capture still applies.
-		LispVal writeToDefault = makeProgn(
-				List.of(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), resultVar)), LispNil.INSTANCE));
+		LispVal writeToDefault = formatWrite(startsFresh, listToCons(List.of(new LispSymbol(LispNames.FRESH_LINE))),
+				listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), resultVar)));
 		LispVal nonNil = listToCons(List.of(new LispSymbol(LispNames.IF),
 				listToCons(List.of(new LispSymbol(LispNames.EQL), streamVar, LispTrue.INSTANCE)), writeToDefault,
 				writeToStream));
 		return makeLet(resultVar.name(), result,
 				listToCons(List.of(new LispSymbol(LispNames.IF), streamVar, nonNil, resultVar)));
+	}
+
+	private static LispVal formatWrite(@Nullable LispVal startsFresh, LispVal freshLine, LispVal write) {
+		return makeProgn(startsFresh == null ? List.of(write, LispNil.INSTANCE)
+				: List.of(whenStartsFresh(startsFresh, freshLine), write, LispNil.INSTANCE));
 	}
 
 	/**

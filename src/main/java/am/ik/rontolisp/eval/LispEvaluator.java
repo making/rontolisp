@@ -3571,8 +3571,12 @@ public final class LispEvaluator {
 			LispVal rendered = eval(
 					FormatRenderer.call(quotedValue(args.get(1)), quotedValue(valueList(args.subList(2, args.size())))),
 					this.globalEnv);
-			return eval(new LispCons(new LispSymbol(LispNames.FORMAT_WRITE_INTERNAL),
-					new LispCons(quotedValue(args.get(0)), new LispCons(quotedValue(rendered), LispNil.INSTANCE))),
+			LispVal startsFresh = new LispCons(new LispSymbol(LispNames.FMT_STARTS_FRESH),
+					new LispCons(quotedValue(args.get(1)), LispNil.INSTANCE));
+			return eval(
+					new LispCons(new LispSymbol(LispNames.FORMAT_WRITE_INTERNAL),
+							new LispCons(quotedValue(args.get(0)),
+									new LispCons(quotedValue(rendered), new LispCons(startsFresh, LispNil.INSTANCE)))),
 					this.globalEnv);
 		}));
 		installStreamOperandChecks();

@@ -121,9 +121,11 @@ body), but its `~:^`/`~@^` variants and prefix parameters are not. Further notes
   every backend) and the digit count must be a literal, not a runtime `v`. The scaled mantissa is computed in 64-bit arithmetic, which limits `~,De` to roughly `D` <= 17 digits of precision (identically on every backend); the default (`~e`, 6 digits) is well within that bound. The overflow character of `~f`/`~e` requires a literal width.
 - The repeat count of `~%`/`~&`/`~~` must be a literal or `#` (a runtime `v` count
   there is not supported). `~&` decides whether to emit a newline from the actual
-  output column for destination `t`, but from the surrounding literal text (a
-  static approximation) for destination `nil` and inside composite
-  (`~(`/`~[`/`~{`) bodies.
+  output column for destination `t` and, where it opens the control string, for
+  a string stream or a string with a fill pointer too. Elsewhere it decides from
+  the surrounding literal text (a static approximation), and so inside composite
+  (`~(`/`~[`/`~{`) bodies: a file stream and `*error-output*` have no column to
+  read, so a `~&` that opens the control writes nothing to them.
 - Composite directives nest freely: a `~[` conditional may hold another `~[` (or
   a `~{ ... ~}` iteration) in any of its clauses. When a runtime-selected `~[`
   has clauses that consume DIFFERENT numbers of arguments, the rest of the

@@ -1498,13 +1498,24 @@ public final class LispPreludeLibrary {
 				      (%check-stream %fd-d (%unspelled-quote format) t)))
 				""");
 		SOURCES.put(LispNames.FORMAT_WRITE_INTERNAL, """
-				(defun %format-write (%fw-d %fw-text)
+				(defun %format-write (%fw-d %fw-text %fw-fresh)
 				  (cond ((null %fw-d) %fw-text)
 				        ((stringp %fw-d)
+				         (if (and %fw-fresh
+				                  (> (length %fw-d) 0)
+				                  (char/= (char %fw-d (- (length %fw-d) 1)) #\\Newline))
+				             (vector-push-extend #\\Newline %fw-d))
 				         (dotimes (%fw-i (length %fw-text))
 				           (vector-push-extend (char %fw-text %fw-i) %fw-d)))
-				        ((eq %fw-d t) (write-string %fw-text) nil)
-				        (t (write-string %fw-text %fw-d) nil)))
+				        ((eq %fw-d t)
+				         (if %fw-fresh (fresh-line))
+				         (write-string %fw-text)
+				         nil)
+				        (t
+				         (if (and %fw-fresh (if (%obj-is %fw-d '%STREAM) (typep %fw-d 'string-stream) t))
+				             (fresh-line %fw-d))
+				         (write-string %fw-text %fw-d)
+				         nil)))
 				""");
 		SOURCES.put(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, """
 				(defclass %broadcast-stream (rontolisp:fundamental-character-output-stream)
@@ -5752,7 +5763,8 @@ public final class LispPreludeLibrary {
 		// that one keeps the inline expansion, and a program with only such sites must
 		// splice nothing.
 		if (LispNames.MAKE_ARRAY_ET_INTERNAL.equals(entry)) {
-			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, false);
+			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, false)
+					|| mayPassKeywordsToMakeArray(program, canonical);
 		}
 		// %make-hash-table-by-test: the same timing, for a make-hash-table whose :test is
 		// computed, or make-hash-table taken as a value (its wrapper passes the :test of
@@ -5761,7 +5773,8 @@ public final class LispPreludeLibrary {
 			return am.ik.rontolisp.macro.LispMacroExpander.mayMakeHashTableWithComputedTest(program);
 		}
 		if (LispNames.MAKE_ARRAY_ET_FP_INTERNAL.equals(entry)) {
-			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, true);
+			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, true)
+					|| mayPassKeywordsToMakeArray(program, canonical);
 		}
 		// %symbol-in-package: the find-symbol / intern lowerings call it from inside the
 		// expression compilers, after this pass; the surface fact is a call spelling a
@@ -6181,6 +6194,17 @@ public final class LispPreludeLibrary {
 			}
 			rest = cell.cdr();
 			index++;
+		}
+		return false;
+	}
+
+	// #'make-array's wrapper dispatches on the element type through both %make-array-et
+	// entries where its value can be handed a keyword tail.
+	private static boolean mayPassKeywordsToMakeArray(List<LispVal> program, boolean canonical) {
+		for (LispVal form : program) {
+			if (mayPassMoreThanOneArgument(form, LispNames.MAKE_ARRAY, canonical)) {
+				return true;
+			}
 		}
 		return false;
 	}

@@ -10512,6 +10512,13 @@ public final class LispNames {
 	public static final String FMT_RENDER = "%FMT-RENDER";
 
 	/**
+	 * {@code (%fmt-starts-fresh-p control)}: whether a run-time control opens with a
+	 * {@code ~&}, which asks the destination's column
+	 * ({@code LispMacroExpander.formatStartsFresh}).
+	 */
+	public static final String FMT_STARTS_FRESH = "%FMT-STARTS-FRESH-P";
+
+	/**
 	 * The internal {@code (%print-cased x escape)} renderer: the text the printer writes
 	 * for a value with the printer-control variables applied -- {@link #PRINT_CASE_VAR}
 	 * to every SYMBOL it spells, {@link #PRINT_LENGTH_VAR} / {@link #PRINT_LEVEL_VAR} to
