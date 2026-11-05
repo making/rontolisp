@@ -947,6 +947,51 @@ computed packages) and `jvm/cffi-sqlite.lisp` (the `%symbol-home` name). Pinned 
 `StandardNameLookupFixture` (four suites), ci-spec `find-symbol-of-a-computed-standard-name`,
 `LispMacroExpanderTest#{theStandardNameTableAnswersExactlyTheNamesClExports,injectBakedAccessCarriesTheStandardNamesForAComputedNameInAPackageThatUsesCl,aComputedDesignatorWithAComputedNameCarriesTheClUsers,aOneArgumentLookupWhoseStatusIsReadCarriesTheStandardNames,injectBakedAccessLeavesAProgramNoRowServesUnchanged}`.
 
+### What a program read
+
+A name a compiled program only read (a quoted symbol, a variable, a name in a macro body) answers
+every enumeration, as on the interpreter and SBCL (i40, 2026-11-05). `(print (find-all-symbols
+'ci-only-here))` was `NIL` on the JVM, P1 and the component, and `do-symbols`, `do-all-symbols`,
+`apropos-list`, `with-package-iterator`, a loop's `being the symbols` and a literal `(find-symbol
+"NAME")` missed it the same way (a defined function's name too). `find-symbol` with a package
+argument found it by building the spelling, and still answers a name nobody read
+(`.kb/symbol-runtime-api.md`).
+
+**Who knows the names: the macro-time evaluator's reader, not the compilers' resolver.** It records
+what it reads already ("The member table"), it reads a `defmacro` body the backends never see, and it
+reads the libraries the compile path spliced in front of the program as implementation source. The
+library passes after it are not read at all, so `%PSW-PAT` and a splice's lexicals stay out.
+`UserMacroExpander.expand` appends what it recorded as `(%read-symbols (PACKAGE MEMBER...)...)`
+(`PackageResolver.readSymbolsMarker`), and the compilers' resolver records those members in turn, so
+`accessibleEntriesOf`, the baked rows and the literal fold need no other change. Rejected: the
+compilers' resolver recording its own reads, which take in the spliced prelude and miss macro bodies;
+a resolver of its own over the raw program, which a macro-defined package stops.
+
+**Narrowed to a program that can ask** (`LispPreludeLibrary.asksWhatWasRead`, over the program as
+read): it spells `do-symbols`, `do-all-symbols`, `find-all-symbols`, `apropos`, `apropos-list`,
+`with-package-iterator`, `package-definition-form` (`:internp`, a spliced walk) or a loop's `being`
+clause, or holds a `(find-symbol "NAME")`. Such a program runs the macro pass even with no macro in
+it. `do-external-symbols` does not count: a read name is no external. Any other program is untouched.
+A walk the scan cannot see (`read-from-string` of its source) answers as before.
+
+Cost (2026-11-05, against the same commit without the change). `examples/net/hello-clack.lisp`, whose
+libraries spell a walk the pruner drops: unchanged, 1,617,780 B (class), 1,376,963 B (component).
+The same program with one `find-all-symbols` added: class 2,143,193 -> 2,179,729 B, component
+1,937,512 -> 1,974,156 B, +1.7 to 1.9 %: the names, and the functions a walk can now call by them
+(`RuntimeNameProducers.packageWalkSpellings`). A toy pays 13.7 KB for its first name:
+`cl-user`'s row stops sharing one data-pool string with the other rows holding the same `cl` names.
+Each further name costs its spelling. The corpus compiles on both backends (16.6 MB class).
+
+**Divergence**: the compiled table holds the whole program from the start, so `(find-all-symbols
+"X")` ahead of the first `'x` answers `(X)` where the interpreter and SBCL's `load` of the source
+answer `NIL` (SBCL's `compile-file` and `load` of the fasl answer `(X)`). A literal `(find-symbol "X")`
+the same.
+
+A universe's packed length counts characters, as the decoder's `subseq` does: a read name
+can hold a character outside the BMP, and `packSpellings` counted UTF-16 units, which stopped the walk
+at `SUBSEQ: invalid bounds`. Pinned by ci-spec `an-enumeration-sees-a-symbol-the-program-only-read`,
+`UserMacroExpanderTest#aProgramAskingWhatAPackageHoldsCarriesWhatItRead`.
+
 ### The member table (`.todo/917`)
 
 **A runtime package records its members, and a symbol is STILL its spelling.** The
@@ -1000,7 +1045,8 @@ interpreter's live registry and mirrored for the compiled backends' runtime entr
   macro-time evaluator's reads (a `defmacro` body never reaches the backend) would still be
   missing. So a compiled run-time lookup of a read-only name keeps the build answer
   (`.todo/254`) -- `PKG::NAME :internal`, which IS the read member's answer since `.todo/h55`
-  (only its existence, nil before, differs). Pinned by ci-spec `macro-time-find-symbol-sees-a-symbol-only-read`
+  (only its existence, nil before, differs). The macro-time evaluator's records do reach them,
+  in a program that asks ("What a program read", below). Pinned by ci-spec `macro-time-find-symbol-sees-a-symbol-only-read`
   (expansion time, all four backends) and
   `LispEvaluatorTest#findSymbolSeesSymbolsReadOrDefinedInsideAUserPackage`.
 - `export` (`exportSymbols`): a symbol homed ELSEWHERE must be accessible in the target

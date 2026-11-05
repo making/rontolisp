@@ -307,10 +307,10 @@ public final class RuntimeNameProducers {
 			catch (NumberFormatException ex) {
 				return null;
 			}
-			int end = colon + 1 + length;
-			if (length < 0 || end > packed.length()) {
+			if (length < 0 || length > packed.codePointCount(colon + 1, packed.length())) {
 				return null;
 			}
+			int end = packed.offsetByCodePoints(colon + 1, length);
 			out.add(packed.substring(colon + 1, end));
 			i = end;
 		}

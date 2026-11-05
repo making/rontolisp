@@ -6138,6 +6138,15 @@ public final class LispNames {
 	public static final String OWN_SYMBOL = "%OWN-SYMBOL";
 
 	/**
+	 * Internal marker {@code (%read-symbols (PACKAGE MEMBER...)...)}, everything a
+	 * string, the compile path's macro expander leaves at the end of a program that can
+	 * ask what a package holds: the names its macro-time reader recorded, which the
+	 * compilers' resolution pass records in turn so the baked package tables hold them.
+	 * Consumed by the resolver, never reaching the backends.
+	 */
+	public static final String READ_SYMBOLS = "%READ-SYMBOLS";
+
+	/**
 	 * Internal marker inserted by {@code LoadInliner} before the spliced forms of a
 	 * loaded file: it makes the {@code PackageResolver} save the current package so a
 	 * file's internal {@code in-package} cannot leak past the load, mirroring Common Lisp

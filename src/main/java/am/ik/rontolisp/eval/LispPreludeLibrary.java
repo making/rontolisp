@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispPackageException;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
@@ -5763,6 +5764,40 @@ public final class LispPreludeLibrary {
 					|| referencesName(program, LispNames.APROPOS_LIST, canonical)
 					|| referencesName(program, LispNames.WITH_PACKAGE_ITERATOR, canonical)
 					|| am.ik.rontolisp.macro.LispMacroExpander.loopIteratesPackageSymbols(program, false);
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the program can ask for a symbol it only read: it walks more than a
+	 * package's externals, or folds a literal one-argument {@code find-symbol}. Asked of
+	 * the program as read, before any splice ({@code UserMacroExpander}).
+	 * @param program the top-level forms
+	 * @return whether the names the program read must reach the compilers
+	 */
+	static boolean asksWhatWasRead(List<LispVal> program) {
+		return referencesName(program, LispNames.DO_SYMBOLS, false)
+				|| referencesName(program, LispNames.DO_ALL_SYMBOLS, false)
+				|| referencesName(program, LispNames.FIND_ALL_SYMBOLS, false)
+				|| referencesName(program, LispNames.APROPOS, false)
+				|| referencesName(program, LispNames.APROPOS_LIST, false)
+				|| referencesName(program, LispNames.WITH_PACKAGE_ITERATOR, false)
+				|| referencesName(program, "PACKAGE-DEFINITION-FORM", false)
+				|| am.ik.rontolisp.macro.LispMacroExpander.loopIteratesPackageSymbols(program, false)
+				|| program.stream().anyMatch(LispPreludeLibrary::foldsLiteralFindSymbol);
+	}
+
+	/** Whether a form holds a {@code (find-symbol "NAME")} call. */
+	private static boolean foldsLiteralFindSymbol(LispVal form) {
+		if (form instanceof LispCons call && call.car() instanceof LispSymbol op
+				&& LispNames.FIND_SYMBOL.equals(member(op.name())) && call.cdr() instanceof LispCons argument
+				&& argument.car() instanceof LispString && argument.cdr() instanceof LispNil) {
+			return true;
+		}
+		for (LispVal cursor = form; cursor instanceof LispCons cell; cursor = cell.cdr()) {
+			if (foldsLiteralFindSymbol(cell.car())) {
+				return true;
+			}
 		}
 		return false;
 	}

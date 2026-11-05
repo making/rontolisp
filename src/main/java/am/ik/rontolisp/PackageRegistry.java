@@ -1895,6 +1895,20 @@ public final class PackageRegistry {
 	}
 
 	/**
+	 * Every member {@link #markRecorded} recorded, by package, in a stable order.
+	 * @return the member names by canonical package name
+	 */
+	public Map<String, Set<String>> recordedMembers() {
+		Map<String, Set<String>> members = new java.util.TreeMap<>();
+		this.recorded.forEach((pkg, names) -> {
+			if (!names.isEmpty()) {
+				members.put(pkg, new java.util.TreeSet<>(names));
+			}
+		});
+		return members;
+	}
+
+	/**
 	 * Forgets a runtime-minted member ({@code unintern} took it out).
 	 * @param canonicalName the canonical package name
 	 * @param name the member name

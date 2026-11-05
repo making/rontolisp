@@ -16093,7 +16093,7 @@ public final class LispMacroExpander {
 			// name is spelled bare, as in cl-user, and answers like a computed name
 			// there when the program carries the standard names.
 			if (literal != null) {
-				return imageStatus(literal, LispNames.STATUS_INHERITED, userDefunNames);
+				return imageStatus(literal, LispNames.STATUS_INHERITED, userDefunNames, access);
 			}
 			LispVal internal = new LispSymbol(LispNames.STATUS_INTERNAL);
 			return access.standardNames()
@@ -16200,14 +16200,18 @@ public final class LispMacroExpander {
 	 * spellings {@code T} / {@code NIL} answer the singletons, as the interpreter does.
 	 * @param name the literal name
 	 * @param userDefunNames the Pass-1 user definition names
+	 * @param access the registry's accessibility answers
 	 * @return {@code t}, {@code nil} (also for an absent name), or the symbol
 	 */
-	public static LispVal foldLiteralFindSymbol(String name, java.util.Set<String> userDefunNames) {
-		if (imageStatus(name, LispNames.STATUS_INHERITED, userDefunNames) instanceof LispNil) {
+	public static LispVal foldLiteralFindSymbol(String name, java.util.Set<String> userDefunNames,
+			BakedSymbolAccess access) {
+		if (imageStatus(name, LispNames.STATUS_INHERITED, userDefunNames, access) instanceof LispNil) {
 			return LispNil.INSTANCE;
 		}
-		LispVal form = symbolFormOfSpelling(name);
-		return form instanceof LispCons ? new LispSymbol(name) : form;
+		PackageResolver.Accessible present = presentInClUser(name, userDefunNames, access);
+		String spelling = present != null ? present.spelling() : name;
+		LispVal form = symbolFormOfSpelling(spelling);
+		return form instanceof LispCons ? new LispSymbol(spelling) : form;
 	}
 
 	/**
@@ -16215,14 +16219,31 @@ public final class LispMacroExpander {
 	 * of the compilers' literal {@code find-symbol} fold, in the same order, so the two
 	 * agree on which names are absent.
 	 */
-	private static LispVal imageStatus(String name, String standardStatus, java.util.Set<String> userDefunNames) {
+	private static LispVal imageStatus(String name, String standardStatus, java.util.Set<String> userDefunNames,
+			BakedSymbolAccess access) {
 		if (!name.isEmpty() && name.charAt(0) == ':') {
 			return new LispSymbol(LispNames.STATUS_EXTERNAL);
 		}
 		if (PackageRegistry.isClMemberName(name)) {
 			return new LispSymbol(name.startsWith("%") ? LispNames.STATUS_INTERNAL : standardStatus);
 		}
-		return userDefunNames.contains(name) ? new LispSymbol(LispNames.STATUS_INTERNAL) : LispNil.INSTANCE;
+		if (userDefunNames.contains(name)) {
+			return new LispSymbol(LispNames.STATUS_INTERNAL);
+		}
+		PackageResolver.Accessible present = presentInClUser(name, userDefunNames, access);
+		return present != null ? new LispSymbol(present.status()) : LispNil.INSTANCE;
+	}
+
+	/**
+	 * What the registry says {@code cl-user} holds under a name the other arms of
+	 * {@link #imageStatus} do not answer: one the program read, when it carries what it
+	 * read ({@code .kb/packages.md}, "What a program read"), or one it imported.
+	 */
+	private static PackageResolver.@Nullable Accessible presentInClUser(String name,
+			java.util.Set<String> userDefunNames, BakedSymbolAccess access) {
+		boolean answeredElsewhere = (!name.isEmpty() && name.charAt(0) == ':') || PackageRegistry.isClMemberName(name)
+				|| userDefunNames.contains(name);
+		return answeredElsewhere ? null : access.answer(LispNames.CL_USER_PKG, name);
 	}
 
 	/**
@@ -17564,7 +17585,8 @@ public final class LispMacroExpander {
 	/**
 	 * Packs canonically spelled symbols into one length-prefixed string
 	 * ({@code "3:CAR6:MAPCAR"}) for the baked table: length-delimited, so every spelling
-	 * round-trips whatever it contains. See {@link #injectBakedPackageTable} for why the
+	 * round-trips whatever it contains, the length counted in characters as the decoder's
+	 * {@code subseq} counts them. See {@link #injectBakedPackageTable} for why the
 	 * universes travel packed.
 	 * @param symbols the spellings, already sorted
 	 * @return the packed string, empty when there is nothing to pack
@@ -17572,7 +17594,7 @@ public final class LispMacroExpander {
 	private static String packSpellings(java.util.List<LispSymbol> symbols) {
 		StringBuilder packed = new StringBuilder();
 		for (LispSymbol sym : symbols) {
-			packed.append(sym.name().length()).append(':').append(sym.name());
+			packed.append(sym.name().codePointCount(0, sym.name().length())).append(':').append(sym.name());
 		}
 		return packed.toString();
 	}

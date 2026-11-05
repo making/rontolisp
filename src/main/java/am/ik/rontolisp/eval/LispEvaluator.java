@@ -8180,6 +8180,15 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * What this evaluator's reader recorded, for the compilers' resolution pass
+	 * ({@link PackageResolver#readSymbolsMarker}).
+	 * @return the marker, or null when nothing was recorded
+	 */
+	public @Nullable LispVal readSymbolsMarker() {
+		return this.packageResolver.readSymbolsMarker();
+	}
+
+	/**
 	 * Resolves an implementation form against the current package state, recording
 	 * nothing it reads (see {@link PackageResolver#resolveUnrecorded}).
 	 * @param form the form to resolve

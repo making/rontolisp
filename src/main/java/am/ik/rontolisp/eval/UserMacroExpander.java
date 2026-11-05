@@ -75,6 +75,10 @@ public final class UserMacroExpander {
 		// Read-eval markers ((%read-eval datum), the shape the marker-mode reader wraps
 		// #. in) also activate the pass: they resolve against the macro-time evaluator
 		// per top-level form, mirroring the interpreter's loadFile timing.
+		// A program that can ask what a package holds activates it for that evaluator's
+		// reader, which leaves what it read for the compilers (.kb/packages.md, "What a
+		// program read").
+		boolean asksWhatWasRead = LispPreludeLibrary.asksWhatWasRead(program);
 		if (program.stream().noneMatch(form -> isOperator(form, LispNames.DEFMACRO))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_COMPILER_MACRO))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_MODIFY_MACRO))
@@ -86,7 +90,7 @@ public final class UserMacroExpander {
 				&& program.stream().noneMatch(UserMacroExpander::usesDefineSymbolMacro)
 				&& program.stream().noneMatch(UserMacroExpander::usesReadEvalMarker)
 				&& program.stream().noneMatch(UserMacroExpander::isParameterizedDeftype)
-				&& program.stream().noneMatch(UserMacroExpander::isMetaclassDefclass)) {
+				&& program.stream().noneMatch(UserMacroExpander::isMetaclassDefclass) && !asksWhatWasRead) {
 			return program;
 		}
 		Session session = new Session(false);
@@ -97,7 +101,12 @@ public final class UserMacroExpander {
 		for (LispVal rawForm : program) {
 			session.accept(rawForm, compileTime.contains(rawForm));
 		}
-		return session.finish();
+		List<LispVal> expanded = session.finish();
+		LispVal readSymbols = asksWhatWasRead ? session.macroEval.readSymbolsMarker() : null;
+		if (readSymbols != null) {
+			expanded.add(readSymbols);
+		}
+		return expanded;
 	}
 
 	/**
