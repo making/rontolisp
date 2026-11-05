@@ -106,6 +106,9 @@ final class WasmConditionCompiler {
 				if (args.size() != 3) {
 					return false;
 				}
+				if (WasmEmitHelper.tryEmitLiteralComparison(args, ctx, negated)) {
+					return true;
+				}
 				WasmExprCompiler.compileExpr(args.get(1), ctx);
 				WasmExprCompiler.compileExpr(args.get(2), ctx);
 				// eq and eql are one predicate (.kb/eq-numbers.md)

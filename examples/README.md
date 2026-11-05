@@ -20,7 +20,7 @@ documented here: [`size-report/`](../size-report).
 | [`jvm/`](jvm) | A Java-callable library class, a C library through `cffi`, `java:` interop and Swing GUIs (JVM only) |
 | [`macos/`](macos) | A native Cocoa window, the Objective-C runtime, and Metal under it, through the built-in `appkit` / `objc` / `metal` / `scene` packages (macOS only) |
 | [`browser/`](browser) | Browser demos: compile to WASM, run in a page |
-| [`proxy-wasm/`](proxy-wasm) | Two Proxy-Wasm SDKs written from scratch, one with CLOS and one for `--no-gc`, and Envoy HTTP filters on them, checked in a real Envoy |
+| [`proxy-wasm/`](proxy-wasm) | Two Proxy-Wasm SDKs written from scratch, one with all of Lisp and one for `--no-gc`, and Envoy HTTP filters on them, checked in a real Envoy |
 | [`count-vowels/`](count-vowels), [`wit/`](wit) | Crossing the WASM boundary: exporting to a host, implementing and calling a WIT world, composing with Rust |
 | [`asdf/`](asdf) | Loading real third-party libraries with `asdf:load-system` / `ql:quickload` |
 | [`wasmcloud/`](wasmcloud), [`cloudflare-workers/`](cloudflare-workers), [`gae/`](gae) | Platform templates |

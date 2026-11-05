@@ -630,7 +630,18 @@ final class WasmSymbolApiCompiler {
 		List<LispVal> parts = cons.toList();
 		LispCons quoted = (LispCons) parts.get(2);
 		int offset = ctx.stringTable.addString(((LispSymbol) ((LispCons) quoted.cdr()).car()).name()).offset();
-		LispVal operand = parts.get(1);
+		emitStringIdTest(parts.get(1), offset, ctx, negated);
+	}
+
+	/**
+	 * The operand is a string struct whose id is {@code offset}, as an i32 truth value
+	 * (the complement when {@code negated}).
+	 * @param operand the form to compile
+	 * @param offset the string-table offset
+	 * @param ctx the compilation context
+	 * @param negated whether to answer the complement
+	 */
+	static void emitStringIdTest(LispVal operand, int offset, WasmLispCompiler.Ctx ctx, boolean negated) {
 		int slot = -1;
 		WasmExprCompiler.compileExpr(operand, ctx);
 		if (!(operand instanceof LispSymbol)) {

@@ -39,6 +39,37 @@ ranges) generated from `Character.toUpperCase(int)`, so WASM matches the other b
 Unicode letter ([[characters-code-points]]). Byte-level ASCII fold and equality stay correct
 under UTF-8.
 
+## A literal is one object
+`compileUnspelledLiteral` calls `_str_lit` (`FUNC_STR_LIT`, `(off, len)` like `_str_build`, which it
+calls the first time): a table of 1,024 slots, direct-mapped by the offset's low bits, kept in a quote
+global and made by the first literal. An evaluation is 17 instructions and no allocation, where it
+was a byte loop and two allocations, about 14 per byte. Measured 2026-11-05: 34 such evaluations were 44% of
+what a Proxy-Wasm filter ran per exchange (`.kb/proxy-wasm-sdk.md`).
+
+- **Nothing can tell.** Nothing writes a `$str_bytes` in place (every `array.set` and `array.copy` into
+  one is onto an array made in that function), a literal is never written (`.kb/string-write-runtime.md`),
+  `eq` already compared ids, and the mutable fields are the cursor, a cache of the same bytes. So a
+  second evaluation also starts from the cursor the first left.
+- **A slot holds the last literal that mapped there.** Two hot literals in one slot rebuild, which is
+  what every evaluation did before. Only whole literals come here: a `_str_build` of part of one (a
+  message's piece at another length under one offset) goes straight to it.
+- **A top-level form takes `_str_build`**, as it mostly runs once (`Ctx.topLevel`), a top-level loop too. So
+  a module whose literals are all there has no `_str_lit` and no global: `QuoteGlobals.sealLiteralSites`,
+  after every body compiled, decides. `hello_world` stays 481 bytes, against 580 with the table.
+- It costs 89 bytes raw once. The sites are as they were, because a per-site global would be about 13 bytes
+  each on the 440 of a filter of 59KB, and a literal number at the site would have to be a class the shaker renumbers
+  ("The byte loop stays" below).
+- Pin: `WasmLispCompilerIntegrationTest.aLiteralIsOneObjectAndAPieceOfAStringIsNoByteLoop`, fuel over 10,000 rounds:
+  1,000 bytes 17.7 M against 430 M, of which 16.8 M are the module's start. ci-spec
+  `eql-of-a-literal-and-a-literal-evaluated-twice`.
+
+**A piece of a string is no byte loop either** (same pin). `_string_concat` is `array.new_default` and two
+`array.copy`s, where it wrote both operands to the linear scratch and `_str_fresh` read them back: 57.9 M
+against 740 M. `_princ_to_str` of an immutable string answers it (17.2 M against 430 M): the public
+`princ-to-string` copies it in the wrap, and a piece is only ever concatenated. `_str_from_mem` builds its array directly,
+at 14 instructions per byte where the scratch made it 35, and every string consumer's `_charvec_to_str` opens with
+`ref.test TYPE_CELL`, 6 where it was 18.
+
 ## HEAP_PTR is a stack pointer; identity is a counter
 Two disciplines share the linear scratch at `HEAP_PTR_ADDR`:
 - **Transient (save on entry, pop on exit)** -- a runtime build assembles bytes at
@@ -53,10 +84,10 @@ Two disciplines share the linear scratch at `HEAP_PTR_ADDR`:
   the offset, so `eq`. **The boolean `t` does not build per site**: `emitTrue` calls `_t_sym`
   (`FUNC_T_SYM`), which lazily builds "T" ONCE into the last module global; quoted `'t` still goes
   through `compileStringLiteral`, id-equal.
-- `_str_fresh(off,len)` (`FUNC_STR_FRESH`) -- id = counter++, for RUNTIME strings. Two are built
-  WITHOUT it: `_str_stream_contents` and `_iv_utf8_str` (`FUNC_IV_UTF8_STR`; one GC-to-GC
-  `array.copy` for valid UTF-8, a two-pass lenient transcode otherwise), each stamping the counter
-  id itself.
+- `_str_fresh(off,len)` (`FUNC_STR_FRESH`) -- id = counter++, for RUNTIME strings. Four are built
+  WITHOUT it: `_str_stream_contents`, `_string_concat`, `_str_from_mem` and `_iv_utf8_str`
+  (`FUNC_IV_UTF8_STR`; one GC-to-GC `array.copy` for valid UTF-8, a two-pass lenient transcode
+  otherwise), each stamping the counter id itself.
 - `_str_to_mem(str,ptr)->len` (`FUNC_STR_TO_MEM`) -- the array->linear bridge for `open`/`load`,
   the reader input scratch (RESERVED so parse-time interns stack above the unparsed input),
   `intern`, the host `:string` boundary (`WasmExportCompiler.emitStringResult`; a staged import

@@ -277,17 +277,17 @@ final class WasmRatioRuntimeBuilder {
 	// components otherwise -- cross-multiplied through _big_mul and normalized by
 	// _rat_new.
 	//
-	// i31Head (every level but --optimize=size) opens the body with the two-i31 case
-	// answered inline: two i31s add, subtract or multiply exactly in i64 (|a|,|b| <=
-	// 2^30), and _int_new boxes the result in its narrowest tier -- what the _big_* path
-	// below answers for the same operands, minus its two _int_val calls and the
-	// dispatch. This is the path of every unfused (+ a b) over plain boxed operands (a
-	// recursive function's `(+ (f ...) (f ...))` tail): measured 2026-09-19, fib 30 x 20
-	// on wasmtime 47 went 680-740 -> 415-480 ms (.kb/wasm-int-fusion.md). The size level
-	// keeps the dispatch-only body, which the type-test fold can still reduce to a pure
-	// forwarder of _big_* in an integer-only module (.kb/wasm-ref-type-fold.md).
-	static byte[] buildRatBinaryBody(int i32Opcode, int f64Opcode, boolean i31Head) {
-		return buildRatBinaryBody(i32Opcode, f64Opcode, i31Head, -1);
+	// The body opens with the two-i31 case answered inline: two i31s add, subtract or
+	// multiply exactly in i64 (|a|,|b| <= 2^30), and _int_new boxes the result in its
+	// narrowest tier -- what the _big_* path below answers for the same operands, minus
+	// its two _int_val calls and the dispatch. This is the path of every unfused (+ a b)
+	// over plain boxed operands (a recursive function's `(+ (f ...) (f ...))` tail):
+	// measured 2026-09-19, fib 30 x 20 on wasmtime 47 went 680-740 -> 415-480 ms
+	// (.kb/wasm-int-fusion.md). --optimize=size has it too, where fusion is off and every
+	// (+ a b) comes here: measured 2026-11-05, +102 bytes on zlib (+0.06%), -21% of the
+	// instructions a Proxy-Wasm filter runs per exchange (.kb/proxy-wasm-sdk.md).
+	static byte[] buildRatBinaryBody(int i32Opcode, int f64Opcode) {
+		return buildRatBinaryBody(i32Opcode, f64Opcode, -1);
 	}
 
 	// The same, with the holder arm of a program that may observe a complex
@@ -297,7 +297,7 @@ final class WasmRatioRuntimeBuilder {
 	// _rat_num and the non-rational landing (emitComplexArm) -- so the i31 head and
 	// the exact-integer path test nothing new. Two floats, which cannot be the pair the
 	// arm is for, answer ahead of it (emitFloatPairArm).
-	static byte[] buildRatBinaryBody(int i32Opcode, int f64Opcode, boolean i31Head, int complexFunc) {
+	static byte[] buildRatBinaryBody(int i32Opcode, int f64Opcode, int complexFunc) {
 		int i64Opcode = i32Opcode == Instruction.I32_ADD ? Instruction.I64_ADD
 				: i32Opcode == Instruction.I32_SUB ? Instruction.I64_SUB : Instruction.I64_MUL;
 		int bigFunc = i64Opcode == Instruction.I64_ADD ? WasmLispCompiler.FUNC_BIG_ADD
@@ -307,20 +307,18 @@ final class WasmRatioRuntimeBuilder {
 
 		w.write(0); // no extra locals
 
-		if (i31Head) {
-			getLocal(w, 0);
-			refTestI31(w);
-			getLocal(w, 1);
-			refTestI31(w);
-			w.write(Instruction.I32_AND);
-			w.write(Instruction.IF, 0x40);
-			emitI31ToI64(w, 0);
-			emitI31ToI64(w, 1);
-			w.write(i64Opcode);
-			call(w, WasmLispCompiler.FUNC_INT_NEW);
-			w.write(Instruction.RETURN);
-			w.write(Instruction.END);
-		}
+		getLocal(w, 0);
+		refTestI31(w);
+		getLocal(w, 1);
+		refTestI31(w);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		emitI31ToI64(w, 0);
+		emitI31ToI64(w, 1);
+		w.write(i64Opcode);
+		call(w, WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 
 		// Float fast path: if either operand is a float, compute in f64 (float contagion)
 		// and box the result. Mirrors the JVM _add/_sub/_mul Double prologue.
@@ -755,6 +753,34 @@ final class WasmRatioRuntimeBuilder {
 		w.writeRefType(true, Type.EQ.code());
 		w.write(2);
 		w.write(Type.F64);
+
+		// Two i31s, which is what most comparisons compare: 1 << (signum + 1), the mask
+		// the arms below answer for them.
+		getLocal(w, 0);
+		refTestI31(w);
+		getLocal(w, 1);
+		refTestI31(w);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		emitI31(w, 0);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(tmp);
+		emitI31(w, 1);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(exp);
+		w.write(Instruction.I32_GT_S);
+		getLocal(w, tmp);
+		getLocal(w, exp);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 
 		emitEitherFloat(w);
 		w.write(Instruction.IF);
@@ -1460,11 +1486,15 @@ final class WasmRatioRuntimeBuilder {
 
 	// Emits local[slot], known to be an i31, as its sign-extended i64 value.
 	private static void emitI31ToI64(WasmWriter w, int slot) {
+		emitI31(w, slot);
+		w.write(Instruction.I64_EXTEND_S_I32);
+	}
+
+	private static void emitI31(WasmWriter w, int slot) {
 		getLocal(w, slot);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
-		w.write(Instruction.I64_EXTEND_S_I32);
 	}
 
 	private static void refTestI31(WasmWriter w) {

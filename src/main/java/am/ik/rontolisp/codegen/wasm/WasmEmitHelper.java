@@ -1,8 +1,15 @@
 package am.ik.rontolisp.codegen.wasm;
 
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Shared helper methods for WASM instruction emission used across all expression
@@ -1027,6 +1034,73 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * The name an {@code eq} or {@code eql} operand compares by when it is a literal
+	 * symbol, which needs no object to compare: a keyword, or a quoted symbol.
+	 * @param operand the operand as written
+	 * @return the symbol's name, or null for any other operand
+	 */
+	private static @Nullable String literalSymbolName(LispVal operand) {
+		if (operand instanceof LispSymbol symbol) {
+			return symbol.isKeyword() ? symbol.name() : null;
+		}
+		if (operand instanceof LispCons quote && quote.car() instanceof LispSymbol head
+				&& LispNames.QUOTE.equals(head.name()) && quote.isProperList() && quote.toList().size() == 2
+				&& quote.toList().get(1) instanceof LispSymbol symbol) {
+			return symbol.name();
+		}
+		return null;
+	}
+
+	/**
+	 * {@code eq} or {@code eql} of two operands, one of them a literal the comparison
+	 * needs no object or call for, as an i32 truth value. Against a literal symbol the
+	 * other operand is a string struct at the name's offset: what
+	 * {@link #emitEqlComparison} answers for that pair, without an object for the
+	 * literal. The name is recorded as a literal the program spelled, so the gates read
+	 * the same program whichever way the comparison is written. Against an integer in the
+	 * i31 range it is that i31, since {@code _int_new} never boxes one
+	 * ({@link WasmBignumRuntimeBuilder}).
+	 * @param args the call form's elements, the operator first
+	 * @param ctx the compilation context
+	 * @param negated whether to answer the complement
+	 * @return whether the comparison was emitted; false, having emitted nothing, when
+	 * neither operand is such a literal or both are
+	 */
+	static boolean tryEmitLiteralComparison(List<LispVal> args, WasmLispCompiler.Ctx ctx, boolean negated) {
+		if (args.size() != 3) {
+			return false;
+		}
+		boolean firstIsLiteral = isComparedWithoutAnObject(args.get(1));
+		if (firstIsLiteral == isComparedWithoutAnObject(args.get(2))) {
+			return false;
+		}
+		LispVal literal = args.get(firstIsLiteral ? 1 : 2);
+		LispVal other = args.get(firstIsLiteral ? 2 : 1);
+		String name = literalSymbolName(literal);
+		if (name != null) {
+			WasmSymbolApiCompiler.emitStringIdTest(other, internSpelledLiteral(name, ctx).offset(), ctx, negated);
+			return true;
+		}
+		WasmExprCompiler.compileExpr(other, ctx);
+		compileIntegerLiteral(((am.ik.rontolisp.LispInteger) literal).value(), ctx);
+		ctx.writer.write(Instruction.REF_EQ);
+		if (negated) {
+			ctx.writer.write(Instruction.I32_EQZ);
+		}
+		return true;
+	}
+
+	private static boolean isComparedWithoutAnObject(LispVal operand) {
+		return literalSymbolName(operand) != null || isI31Literal(operand);
+	}
+
+	private static boolean isI31Literal(LispVal operand) {
+		return operand instanceof am.ik.rontolisp.LispInteger integer
+				&& integer.value() >= WasmBignumRuntimeBuilder.I31_MIN
+				&& integer.value() <= WasmBignumRuntimeBuilder.I31_MAX;
+	}
+
+	/**
 	 * Compares two (ref null eq) values on the stack for {@code eql} -- and {@code eq},
 	 * the same predicate on every backend ({@code .kb/eq-numbers.md}: a number compares
 	 * by type and value, never by box identity). Produces an i32 (0=false, 1=true):
@@ -1153,7 +1227,14 @@ final class WasmEmitHelper {
 		ctx.writer.writeSignedLeb128(entry.offset());
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(entry.length());
-		emitStrBuildCall(ctx.writer);
+		// A top-level form mostly runs once, and a module whose literals are all there
+		// (hello_world) carries no table it would never read twice.
+		if (ctx.topLevel || !ctx.quoteGlobals.takeLiteralSite()) {
+			emitStrBuildCall(ctx.writer);
+			return;
+		}
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_LIT);
 	}
 
 	/**

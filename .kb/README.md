@@ -172,11 +172,11 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [wasi-component.md](wasi-component.md) -- `--component` WASI 0.3 component output
 - [wit.md](wit.md) -- `am.ik.wit`, `--emit-wit`, `WitTypeMapper`, `rontolisp:wit-export`/`wit-import`, the `:names` naming hook and `describe`, `:octets` (a `list<u8>` result lifted as octets)
 - [wasm-export-no-wasi.md](wasm-export-no-wasi.md) -- `rontolisp:wasm-export` + `--no-wasi` reactor mode
-- [wasm-import.md](wasm-import.md) -- `rontolisp:wasm-import`, `:async t`, `"rontolisp:memory"`, `--emit-js-glue`, `--host-boundary`
-- [proxy-wasm-sdk.md](proxy-wasm-sdk.md) -- `examples/proxy-wasm`: what a filter pays for, the compile-time error mode, what was weighed and left
+- [wasm-import.md](wasm-import.md) -- `rontolisp:wasm-import`, `:async t`, `"rontolisp:memory"` and its `search`, `--emit-js-glue`, `--host-boundary`
+- [proxy-wasm-sdk.md](proxy-wasm-sdk.md) -- `examples/proxy-wasm`: what an exchange runs, instruction by instruction; `define-filter` over `defmethod`, measured; what state and each choice cost, what was weighed and left
 - [no-gc-scalar-wasm.md](no-gc-scalar-wasm.md) -- the `--no-gc` non-GC scalar backend
 - [proxy-wasm-no-gc.md](proxy-wasm-no-gc.md) -- the `--no-gc` Proxy-Wasm SDK in `examples/proxy-wasm/no-gc/`: why macros, what state and each piece cost, measured
-- [wasm-gc-strings.md](wasm-gc-strings.md) -- GC-backend strings as `$str_bytes` arrays
+- [wasm-gc-strings.md](wasm-gc-strings.md) -- GC-backend strings as `$str_bytes` arrays; a literal is one object (`_str_lit`), a concatenation is `array.copy`
 - [wasm-gc-final-types.md](wasm-gc-final-types.md) -- every emitted wasm-GC type must be `sub final`
 - [wasm-gc-heap-pregrow.md](wasm-gc-heap-pregrow.md) -- `_start` pre-grows the engine's GC heap with one dropped allocation
 - [wasm-gc-object-size.md](wasm-gc-object-size.md) -- what a struct field costs on the heap per engine, measured (a wasmtime object is a 16-byte header plus fields rounded to 16, so the identity-hash slot is free there and +8 bytes per cons on V8), and the capped-heap probe that measures it

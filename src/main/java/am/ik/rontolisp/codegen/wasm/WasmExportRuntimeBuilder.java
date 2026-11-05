@@ -337,108 +337,50 @@ final class WasmExportRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 		final int ptr = 0;
 		final int len = 1;
-		final int dst = 2;
+		final int framed = 2;
 		final int idx = 3;
-		// locals: dst (i32), idx (i32)
-		w.write(1);
+		final int id = 4;
+		final int arr = 5;
+		// locals: framed, idx, id (i32); arr ($str_bytes)
 		w.write(2);
+		w.write(3);
 		w.write(Type.I32);
-		// dst = memory[HEAP_PTR_ADDR]
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(dst);
-		// Ensure [dst, dst+len+2) is within linear memory before writing the quoted copy.
-		WasmEmitHelper.emitGrowHeapTo(w, () -> {
-			w.write(Instruction.GET_LOCAL);
-			w.writeUnsignedLeb128(dst);
-			w.write(Instruction.GET_LOCAL);
-			w.writeUnsignedLeb128(len);
-			w.write(Instruction.I32_ADD);
-			w.write(Instruction.I32_CONST);
-			w.writeSignedLeb128(2);
-			w.write(Instruction.I32_ADD);
-		});
-		// memory[dst] = '"'
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(dst);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0x22);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		// idx = 0
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(idx);
-		// while (idx < len) memory[dst+1+idx] = memory[ptr+idx]; idx++
-		w.write(Instruction.BLOCK);
-		w.write(0x40); // void block type
-		w.write(Instruction.LOOP);
-		w.write(0x40);
-		// if idx >= len, break out of block (depth 1)
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(idx);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(len);
-		w.write(Instruction.I32_GE_U);
-		w.write(Instruction.BR_IF);
-		w.writeUnsignedLeb128(1);
-		// addr = dst + 1 + idx
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(dst);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(idx);
-		w.write(Instruction.I32_ADD);
-		// value = memory[ptr + idx]
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(ptr);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(idx);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		// idx++
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(idx);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(idx);
-		// continue loop (depth 0)
-		w.write(Instruction.BR);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.END); // loop
-		w.write(Instruction.END); // block
-		// memory[dst+1+len] = '"'
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(dst);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(len);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0x22);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		// HEAP_PTR is NOT advanced (a stack pop): _str_fresh copies the quoted bytes into
-		// a
-		// fresh GC array with a counter id, so the scratch region is reused. (The host's
-		// source buffer at ptr is __ronto_alloc'd and owned by the host, untouched.)
-		// return _str_fresh(dst, len + 2)
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(dst);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
+		// framed = len + 2; arr = array.new_default $str_bytes (framed)
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(len);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(2);
 		w.write(Instruction.I32_ADD);
-		WasmEmitHelper.emitStrFreshCall(w);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(framed);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		// arr[0] = arr[len + 1] = '"'
+		for (boolean closing : new boolean[] { false, true }) {
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(arr);
+			if (closing) {
+				w.write(Instruction.GET_LOCAL);
+				w.writeUnsignedLeb128(len);
+				w.write(Instruction.I32_CONST);
+				w.writeSignedLeb128(1);
+				w.write(Instruction.I32_ADD);
+			}
+			else {
+				w.write(Instruction.I32_CONST);
+				w.writeSignedLeb128(0);
+			}
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0x22);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		}
+		WasmStringRuntimeBuilder.emitCopyFromMemory(w, arr, 1, ptr, len, idx);
+		WasmStringRuntimeBuilder.emitRuntimeString(w, framed, arr, id);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
