@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.wasm;
 
 import java.io.ByteArrayOutputStream;
 
+import am.ik.rontolisp.LispSymbol;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
@@ -491,9 +492,13 @@ final class WasmStringRuntimeBuilder {
 	 * not just one that calls {@code string-upcase} -- the same size-discipline reason
 	 * the JVM backend's {@code _symEsc} gives (`JvmRuntimeBuilder.buildSymEscBody`'s
 	 * Javadoc), and the two are kept identical on purpose.
+	 * @param emptyNameOffset the string-table offset of
+	 * {@link LispSymbol#CL_USER_EMPTY_NAME} -- that symbol carries its qualifier for its
+	 * first byte only and prints as bare -- or -1 in a program that can hold no such
+	 * symbol
 	 * @return the function body (signature reuses TYPE_WRITE_STR_GC)
 	 */
-	static byte[] buildSymEscGcBody() {
+	static byte[] buildSymEscGcBody(int emptyNameOffset) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: str = 0, from = 1, to = 2, unused = 3. locals: arr = 4 ($str_bytes,
@@ -512,6 +517,21 @@ final class WasmStringRuntimeBuilder {
 		get(w, str);
 		WasmEmitHelper.emitStrBytesArray(w);
 		set(w, arr);
+		if (emptyNameOffset >= 0) {
+			// str.id == the empty name's -> from = to: nothing but the empty member
+			get(w, str);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+			w.writeUnsignedLeb128(0);
+			i32(w, emptyNameOffset);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			get(w, to);
+			set(w, from);
+			w.write(Instruction.END);
+		}
 		// prefixEnd: a keyword's ':' (LispSymbol.isKeyword), else an uninterned
 		// symbol's "#:" marker, else a package qualifier's colon(s)
 		// (LispSymbol.qualifierEnd) -- all written out verbatim, never escaped,

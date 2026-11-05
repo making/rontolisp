@@ -2887,7 +2887,7 @@ public final class LispEvaluator {
 			if (!(args.get(0) instanceof LispSymbol sym)) {
 				throw new LispEvalException(LispNames.SET + " expects a symbol, got " + args.get(0).print());
 			}
-			if (sym.isKeyword() || "NIL".equals(sym.name()) || "T".equals(sym.name()) || sym.name().isEmpty()) {
+			if (sym.isKeyword() || "NIL".equals(sym.name()) || "T".equals(sym.name())) {
 				throw new LispEvalException(LispNames.SET + " cannot set " + args.get(0).print());
 			}
 			if (LispNames.PACKAGE_VAR.equals(sym.name())) {
@@ -8503,7 +8503,18 @@ public final class LispEvaluator {
 	 * @return the result
 	 */
 	private LispVal evalDatum(LispVal datum) {
-		return evalResolved(this.packageResolver.resolveDatum(datum));
+		LispVal resolved;
+		try {
+			resolved = this.packageResolver.resolveDatum(datum);
+		}
+		catch (LispPackageException ex) {
+			// A symbol read at run time naming no package: this runs under the caller's
+			// handlers, so it is the condition CL names, never the end of the program.
+			String message = String.valueOf(ex.getMessage());
+			return signalPackageError(message,
+					message.startsWith(NO_SUCH_PACKAGE) ? message.substring(NO_SUCH_PACKAGE.length()) : "");
+		}
+		return evalResolved(resolved);
 	}
 
 	/**
@@ -11780,7 +11791,12 @@ public final class LispEvaluator {
 		return this.definitions.get(name);
 	}
 
-	private LispVal evalDefstruct(LispCons cons, Environment env) {
+	private LispVal evalDefstruct(LispCons written, Environment env) {
+		// The form may be a macro's expansion, which no resolution saw with this package
+		// current. A body keeps the package it was read in, wherever it is called from.
+		String sitePackage = env.lexicalPackage();
+		LispCons cons = this.packageResolver.defstructInternedIn(written,
+				sitePackage != null ? sitePackage : this.packageResolver.currentPackageName());
 		// Expand into the generated defuns (constructor, predicate, copier, accessors)
 		// and evaluate each; the accessor registry makes them setf-able places.
 		for (LispVal form : LispMacroExpander.expandDefstruct(cons, this.structAccessors, this.closRegistry,
@@ -14074,6 +14090,8 @@ public final class LispEvaluator {
 	private LispVal signalNoSuchPackage(String operator, String designator) {
 		return signalPackageError(operator + ": no such package: " + designator, designator);
 	}
+
+	private static final String NO_SUCH_PACKAGE = "No such package: ";
 
 	private LispVal signalPackageError(String message, String designator) {
 		return eval(packageErrorForm(message, designator, false), this.globalEnv);

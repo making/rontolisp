@@ -46,7 +46,7 @@
 
 ;; A weak pointer whose object is never collected: the same trade again, and
 ;; what a consumer must already handle, since a collection may not happen.
-(defstruct (trivial-garbage::weak-pointer
+(defstruct (trivial-garbage::weak-pointer (:%intern-package "TRIVIAL-GARBAGE")
             (:constructor trivial-garbage:make-weak-pointer (object))
             (:predicate trivial-garbage:weak-pointer-p)
             (:conc-name trivial-garbage::%weak-pointer-) (:copier nil))

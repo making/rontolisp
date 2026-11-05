@@ -131,15 +131,12 @@ escapes. Abbreviation applies under BOTH
   in a sign. `|10|`, `|1E5|`, `|1/2/3|`, `|...|`; `1+`, `E1`, `1AB`, `%1` stay bare. 45 names agree with
   SBCL 2.2.9 on all four (ci-spec `prin1-escapes-a-name-that-reads-as-no-symbol`), and the rule costs
   the bytes of those two functions in every program printing a symbol. Limit: the digits are decimal,
-  where SBCL also escapes `FF` under `*print-base*` 16 (the twins read no variable). An emitted reader
-  has no `|...|` syntax, so `(read-from-string (prin1-to-string (intern "10")))` is a symbol named with
-  its bars there, where it was the number 10 before.
-- The empty name: until 2026-11-05 the JVM twin answered it verbatim (`#:`, an empty line) and the wasm
-  `(intern "")` built an empty byte array that `_print_val`'s unguarded byte 0 test trapped on;
-  `buildInternSym` now keeps one byte behind the zero length. On the JVM a bare `""` remains a symbol
-  no first-character test survives (about 30 `charAt(0)` sites): `(symbolp (intern ""))` throws
-  `StringIndexOutOfBoundsException`, a `simple-error`, measured 2026-11-05 (`.todo/i49`). So ci-spec spells only
-  `(make-symbol "")` and `(intern "" :keyword)`.
+  where SBCL also escapes `FF` under `*print-base*` 16 (the twins read no variable). `(read-from-string
+  (prin1-to-string (intern "10")))` reads the symbol back on all four (`.kb/read-load-streams.md`,
+  "Escapes").
+- The empty name: `||`, `#:||`, `:||` and `P::||` come out of the twins' empty-member arm. `cl-user`'s has
+  the spelling of its own `.kb/symbol-runtime-api.md`, "The empty name", describes, and the twins print
+  that one as `||`.
 - `%print-case-fold` converts only what stands ahead of the first `|`: the escaped member is never
   recased (`|Foo|` under `:downcase`, `pkg::|1E5|`). Until 2026-11-05 it folded the whole text.
 - Non-constituent set (space, tab, newline, CR, form feed, `(`, `)`, `'`, `"`, `;`, `,`, `` ` ``,

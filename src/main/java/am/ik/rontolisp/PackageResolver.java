@@ -946,7 +946,7 @@ public final class PackageResolver {
 
 	/** The spelling of a package's own symbol, the package given as a designator. */
 	private String ownSpellingOf(String pkg, String name) {
-		return LispNames.CL_USER_PKG.equals(pkg) || LispNames.CL_PKG.equals(pkg) ? name
+		return LispNames.CL_USER_PKG.equals(pkg) || LispNames.CL_PKG.equals(pkg) ? LispSymbol.clUserSpelling(name)
 				: PackageRegistry.qualifyInternal(pkg, name);
 	}
 
@@ -2555,39 +2555,64 @@ public final class PackageResolver {
 	 * Marks a {@code defstruct} whose derived names belong to a package other than its
 	 * name's. CL interns the derived constructor, predicate, copier and accessor names in
 	 * the package current at the form, while the expansion runs after resolution and only
-	 * sees the resolved name: an unqualified name inherited or imported from another
-	 * package ({@code optima}'s {@code (defstruct and-pattern)}, the name exported by
+	 * sees the resolved name: a name inherited or imported from another package
+	 * ({@code optima}'s {@code (defstruct and-pattern)}, the name exported by
 	 * {@code optima.core}) put {@code and-pattern-p} there, where no call site of the
-	 * defining package looked. The header gains {@code (:%intern-package "CURRENT")}
-	 * ({@link LispNames#DEFSTRUCT_INTERN_PACKAGE}). A name written package-qualified
-	 * keeps its own package (the bundled libraries spell
-	 * {@code (defstruct (bordeaux-threads:lock ...))} from {@code cl-user} and call
-	 * {@code bordeaux-threads::lock-...}).
+	 * defining package looked, and so did a name written qualified. The header gains
+	 * {@code (:%intern-package "CURRENT")} ({@link LispNames#DEFSTRUCT_INTERN_PACKAGE})
+	 * unless it already names a package, as the bundled libraries' do: they are written
+	 * in {@code cl-user} and call {@code bordeaux-threads::lock-...}.
 	 */
 	private LispVal withDefstructInternPackage(LispCons original, LispVal resolved) {
 		if (!(original.car() instanceof LispSymbol op) || !LispNames.DEFSTRUCT.equals(operatorMember(op))
-				|| !(original.cdr() instanceof LispCons nameCell) || !(resolved instanceof LispCons out)
-				|| !(out.cdr() instanceof LispCons outNameCell)) {
+				|| !(resolved instanceof LispCons out)) {
 			return resolved;
 		}
-		LispVal written = nameCell.car() instanceof LispCons header ? header.car() : nameCell.car();
-		LispVal name = outNameCell.car() instanceof LispCons header ? header.car() : outNameCell.car();
-		if (!(written instanceof LispSymbol writtenSym) || writtenSym.isKeyword()
-				|| PackageRegistry.splitQualified(writtenSym.name()) != null || !(name instanceof LispSymbol nameSym)) {
+		return defstructInternedIn(out, current());
+	}
+
+	/**
+	 * A resolved {@code defstruct} whose derived names belong in {@code pkg}: the form
+	 * itself when they land there anyway, or when its header already names a package.
+	 * Resolution marks the forms it sees; an interpreted macro's expansion is not
+	 * resolved again, so the evaluator asks for its own, as the call site's package
+	 * decides.
+	 * @param resolved the resolved form
+	 * @param pkg the canonical name of the package current at the form
+	 * @return the form to expand
+	 */
+	public LispCons defstructInternedIn(LispCons resolved, String pkg) {
+		if (!(resolved.cdr() instanceof LispCons nameCell)) {
+			return resolved;
+		}
+		LispVal nameOrHeader = nameCell.car();
+		LispVal name = nameOrHeader instanceof LispCons given ? given.car() : nameOrHeader;
+		if (!(name instanceof LispSymbol nameSym) || nameSym.isKeyword() || namesInternPackage(nameOrHeader)) {
 			return resolved;
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(nameSym.name());
-		String home = qn == null ? LispNames.CL_USER_PKG : qn.pkg();
-		if (home.equals(current())) {
+		if ((qn == null ? LispNames.CL_USER_PKG : qn.pkg()).equals(pkg)) {
 			return resolved;
 		}
 		LispVal option = new LispCons(new LispSymbol(LispNames.DEFSTRUCT_INTERN_PACKAGE),
-				new LispCons(new LispString(current()), LispNil.INSTANCE));
-		LispVal header = outNameCell.car() instanceof LispCons given
+				new LispCons(new LispString(pkg), LispNil.INSTANCE));
+		LispVal header = nameOrHeader instanceof LispCons given
 				? LispCons.rebuiltList(given, appended(given.toList(), option))
 				: new LispCons(nameSym, new LispCons(option, LispNil.INSTANCE));
-		return SourceProvenance.inherit(out,
-				LispCons.rebuilt(out, out.car(), LispCons.rebuilt(outNameCell, header, outNameCell.cdr())));
+		return SourceProvenance.inherit(resolved,
+				LispCons.rebuilt(resolved, resolved.car(), LispCons.rebuilt(nameCell, header, nameCell.cdr())));
+	}
+
+	private static boolean namesInternPackage(LispVal nameOrHeader) {
+		if (nameOrHeader instanceof LispCons header && header.isProperList()) {
+			for (LispVal option : header.toList()) {
+				if (option instanceof LispCons cons && cons.car() instanceof LispSymbol head
+						&& LispNames.DEFSTRUCT_INTERN_PACKAGE.equals(head.name())) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	private static List<LispVal> appended(List<LispVal> list, LispVal element) {
@@ -3024,7 +3049,7 @@ public final class PackageResolver {
 		// cl and cl-user are normalized to bare names; other packages keep the qualified
 		// canonical name.
 		if (LispNames.CL_PKG.equals(pkg)) {
-			return new LispSymbol(member);
+			return new LispSymbol(LispSymbol.clUserSpelling(member));
 		}
 		return providesMember(pkg, member) ? canonical(pkg, member) : mint(pkg, member);
 	}
@@ -3098,7 +3123,7 @@ public final class PackageResolver {
 		// package that does not use cl.
 		String importSource = current.imports().get(name);
 		if (importSource != null) {
-			if (LispNames.CL_PKG.equals(importSource) || LispNames.CL_USER_PKG.equals(importSource)) {
+			if (LispNames.CL_PKG.equals(importSource)) {
 				return new LispSymbol(name);
 			}
 			return canonical(importSource, name);
@@ -3258,7 +3283,7 @@ public final class PackageResolver {
 		if (home == null) {
 			return canonical(used, name);
 		}
-		if (LispNames.CL_PKG.equals(home) || LispNames.CL_USER_PKG.equals(home)) {
+		if (LispNames.CL_PKG.equals(home)) {
 			return new LispSymbol(name);
 		}
 		return canonical(home, name);
@@ -3320,7 +3345,7 @@ public final class PackageResolver {
 	 */
 	private LispSymbol canonical(String pkg, String name) {
 		if (LispNames.CL_USER_PKG.equals(pkg)) {
-			return new LispSymbol(name);
+			return new LispSymbol(LispSymbol.clUserSpelling(name));
 		}
 		if (spellsExternal(pkg, name)) {
 			return new LispSymbol(PackageRegistry.qualify(pkg, name));
@@ -3419,8 +3444,8 @@ public final class PackageResolver {
 					// A single-colon spelling of a symbol the package does not export:
 					// intern is not the reader, so it interns rather than refusing.
 				}
-				if (LispNames.CL_PKG.equals(pkg) || LispNames.CL_USER_PKG.equals(pkg)) {
-					return qn.member();
+				if (LispNames.CL_PKG.equals(pkg)) {
+					return LispSymbol.clUserSpelling(qn.member());
 				}
 				return canonical(pkg, qn.member()).name();
 			}
@@ -3601,7 +3626,8 @@ public final class PackageResolver {
 				// they are reached from.
 				return new Accessible(member, clSymbolStatus(member, true));
 			}
-			String defined = LispNames.CL_USER_PKG.equals(pkg) ? member : PackageRegistry.qualifyInternal(pkg, member);
+			String defined = LispNames.CL_USER_PKG.equals(pkg) ? LispSymbol.clUserSpelling(member)
+					: PackageRegistry.qualifyInternal(pkg, member);
 			if (definedProbe.test(defined)) {
 				return new Accessible(defined, LispNames.STATUS_INTERNAL);
 			}
@@ -3663,7 +3689,7 @@ public final class PackageResolver {
 
 	/** The spelling of a package's OWN member: bare in cl-user, qualified elsewhere. */
 	private String ownSpelling(String pkg, String member) {
-		return LispNames.CL_USER_PKG.equals(pkg) ? member : canonical(pkg, member).name();
+		return canonical(pkg, member).name();
 	}
 
 	/**
@@ -3674,8 +3700,8 @@ public final class PackageResolver {
 		if ("keyword".equals(home)) {
 			return ":" + member;
 		}
-		if (LispNames.CL_PKG.equals(home) || LispNames.CL_USER_PKG.equals(home)) {
-			return member;
+		if (LispNames.CL_PKG.equals(home)) {
+			return LispSymbol.clUserSpelling(member);
 		}
 		return canonical(home, member).name();
 	}
@@ -4002,7 +4028,7 @@ public final class PackageResolver {
 	 */
 	private static Accessible permissiveAnswer(String canonical, String upper, String name) {
 		if (LispNames.CL_USER_PKG.equals(canonical)) {
-			return new Accessible(name, LispNames.STATUS_INTERNAL);
+			return new Accessible(LispSymbol.clUserSpelling(name), LispNames.STATUS_INTERNAL);
 		}
 		return PackageRegistry.isBuiltinPackageName(canonical)
 				? new Accessible(upper + ":" + name, LispNames.STATUS_EXTERNAL)
@@ -4322,6 +4348,9 @@ public final class PackageResolver {
 		if (symbolName.startsWith(":") || symbolName.startsWith("#:")) {
 			return true;
 		}
+		if (symbolName.isEmpty()) {
+			return printsBare(LispSymbol.CL_USER_EMPTY_NAME);
+		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(symbolName);
 		if (qn != null && this.registry.canonicalName(qn.pkg()).equals(current())) {
 			return true;
@@ -4358,6 +4387,9 @@ public final class PackageResolver {
 	 * @return the prefix, or {@code null} when it prints bare
 	 */
 	public synchronized @Nullable String bareSymbolPrefix(String bareName) {
+		if (LispSymbol.CL_USER_EMPTY_NAME.equals(bareName)) {
+			return printsBare(bareName) ? null : SymbolPrintTable.CL_USER_PREFIX;
+		}
 		if (bareName.startsWith(LispLayout.CLASS_TAG_PREFIX) || bareName.startsWith(LispLayout.STRUCT_TAG_PREFIX)
 				|| PackageRegistry.splitQualified(bareName) != null || printsBare(bareName)) {
 			return null;
@@ -4541,7 +4573,10 @@ public final class PackageResolver {
 	private static void collectBareSymbols(LispVal datum, java.util.Set<String> into) {
 		if (datum instanceof LispSymbol sym) {
 			String name = sym.name();
-			if (!sym.isKeyword() && !name.startsWith("#:") && !PackageRegistry.isClInternal(name)
+			if (LispSymbol.CL_USER_EMPTY_NAME.equals(name)) {
+				into.add("");
+			}
+			else if (!sym.isKeyword() && !name.startsWith("#:") && !PackageRegistry.isClInternal(name)
 					&& PackageRegistry.splitQualified(name) == null) {
 				into.add(name);
 			}

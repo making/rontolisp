@@ -19844,7 +19844,7 @@ class WasmLispCompilerIntegrationTest {
 		// predicate and construction still compile with the unreferenced accessors
 		// pruned.
 		java.util.List<LispVal> pruned = am.ik.rontolisp.eval.LibraryDefunPruner.prune(LispReader.readAllFromString("""
-				(defstruct torch::rec a b c)
+				(defstruct (torch::rec (:%intern-package "TORCH")) a b c)
 				(setq r (torch::make-rec :a 1 :b 2 :c 3))
 				(setf (torch::rec-a r) 10)
 				(print (torch::rec-a r))

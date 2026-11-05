@@ -34,6 +34,58 @@ persistent top-level env (`GLOBAL_ENV` wasm global / `_genv` JVM field), with
 `setq`/`setf`/`push`/`pop` delegating to `_store`. Emitted only when `programUsesEval`; WASM keeps
 stubs to hold fixed function indices, JVM needs none.
 
+## What a form that is no call answers, and what no binding answers
+
+**Invariant: `_eval` agrees with the interpreter and SBCL 2.2.9 on the three below (2026-11-05, ci-spec
+`eval-signals-an-unbound-variable-and-an-undefined-function`, `eval-answers-a-value-that-is-no-form`).**
+
+- **Anything but a symbol and a cons is its own value.** The arms enumerated the self-evaluating
+  representations, so each one added later fell through: `(eval (vector 1 2))` was NIL on the JVM and a
+  cast-failure trap on wasm, as were a character, a hash table, a stream and an instance. `_eval` asks
+  the one question now: wasm `ref.test cons`, the JVM `consp`'s shape (`JvmOperandTypeRuntime.ConsShape`:
+  an `Object[2]`, no `BigInteger[]`, no `Integer` or `String[]` head).
+- **`t` and a keyword are their own value; any other symbol no binding holds signals `unbound-variable`**
+  naming it: `_symbol_value`'s text and class, on wasm through the same `UnboundVariableReport` (a trap
+  outside EH mode). The JVM's one case-flipped retry stays and reports the original spelling.
+  Before, it answered the symbol, so `(eval '(+ 1 x))` reported `+: The value X is not of type NUMBER`.
+- **An operator no namespace answers signals `undefined-function`** before evaluating an argument, through
+  `_apply`'s symbol probe, the path fmakunbound's tombstone already took; so does `#'name` and
+  `symbol-function` of one, and of a retired one. Before, each answered NIL, which is why
+  `(eval '(typep 1 'integer))` was NIL. `EvalReferences.UNPROCESSED_DIRECTIVES` (`in-package`,
+  `defpackage`, `declaim`) stay NIL on purpose: a file a runtime `load` reads may hold them, and the
+  doc says they are not processed.
+- **What the corpus relied on (measured 2026-11-05, before signalling).** Baseline jar against the change:
+  every ci-spec case that can reach `_eval`, alone on JVM and P1 and the component; the library E2E classes
+  whose sources call `eval` (Alexandria, clsql, cl-who, esrap, ironclad, iterate, trivia, contextl). The
+  only readers of the old answer were standard variables a form read at run time named, which no gate had
+  seeded (`(eval (read-from-string "pi"))` answered PI), and the operators below. Both are `EvalReferences`.
+
+## What a form can reach (`compiler/EvalReferences`)
+
+The registry answers the catalog wrappers and the program's own functions; the reference-gated wrappers
+(`BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS`, `COMPLEX_GATED_FUNCTIONS`: `typep`, `subtypep`,
+`coerce`, `aref`, `format`, `error`, `sqrt` ...) and the standard variables exist only where the program
+names them, and a form's data names nothing to a gate. Rather than teach each gate about eval, the pass
+adds at the program's head what every gate already counts, as forms that run nothing: `(function op)` and a
+quoted list of variable names. It runs right after user-macro expansion, before any splice, because a
+wrapper's body reaches the prelude (placed after the pruner, `#'format` called an undefined `%print-cased`).
+
+- A program whose forms are its own data references the gated operators that data spells: the head of a
+  quoted list at any depth, or a quoted symbol (`(list 'typep x ''integer)`). Pinned standalone by ci-spec
+  `eval-reaches-a-gated-operator-its-forms-spell`: the corpus program reads forms, so it would not show it.
+- A program that can evaluate what it reads or builds at run time (`load`, or `eval` beside `read`,
+  `read-from-string` or a `RuntimeNameProducers` symbol builder) references all of them and every standard
+  variable (`PackageRegistry.standardVariableNames`); an ASDF system's forms do not count for this, so a
+  library's feature probe does not grow every program using it. Pinned standalone by
+  `eval-reaches-every-standard-name-from-a-form-read-at-run-time`.
+- Left out: the `rontolisp:` natives, which refuse the compile on the backends without them; `sleep` (on
+  `--component` it switches the whole module to async mode) and `load` (`LibraryDefunPruner` bails on a
+  surviving one, keeping every library definition) unless the program names them; and `--no-gc`, which has
+  no `_eval`.
+- Cost, measured 2026-11-05 on `(print (eval '(+ 1 2)))` (422,425 B JVM / 276,481 B P1) with one more name:
+  `typep` +34 KB / +42 KB, `coerce` +42 / +49, `subtypep` +133 / +95, `aref` +131 / +113, `format` +105 / +81.
+  A program that names none of them is unchanged.
+
 ## Gating
 
 - **WASM has an `apply` tier below the full runtime** (`LispMacroExpander.needsApplyRuntime` plus a

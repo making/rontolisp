@@ -39,7 +39,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [multiple-values.md](multiple-values.md) -- `values`/`multiple-value-bind`/`-list`/`-call`/`nth-value` as a syntactic lowering
 - [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when`, runtime type checks
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
-- [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output
+- [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output; a value that is no form, an unbound variable, an undefined function; what a form can reach (`EvalReferences`)
 - [interpreter-expansion-memo.md](interpreter-expansion-memo.md) -- the interpreter expands a built-in macro once per call site; which arms must re-expand
 
 ## Macros, reader, printer
@@ -63,7 +63,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## Data types
 
-- [symbol-runtime-api.md](symbol-runtime-api.md) -- symbol/package runtime API, accessibility second value, the string-designator contract
+- [symbol-runtime-api.md](symbol-runtime-api.md) -- symbol/package runtime API, accessibility second value, the string-designator contract, the empty name (no symbol is the empty string)
 - [packages.md](packages.md) -- the `cl`/`cl-user`/`rontolisp` package system, a standard name in a package not reading it as `cl`'s (its own symbol; the report that keeps the advice), `defpackage` over an existing package, package-local nicknames (read through the current package's table, the spelling a second read needs, the run-time table a compiled program builds), `*package*` as dynamic
 - [defstruct.md](defstruct.md) -- `defstruct` as plain defuns, setf accessor registry, `:include`, `:type (vector ...)`
 - [instance-syntax.md](instance-syntax.md) -- the one instance value model behind defstruct/CLOS/conditions, `%obj-*`, `#S(...)`/`#<...>`

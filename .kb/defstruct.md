@@ -216,16 +216,22 @@ backend suites) and `LispMacroExpanderTest#aDefstructSlotWriterFunctionIsEmitted
 CL interns the derived constructor/predicate/copier/accessor names in `*package*` at the form.
 Expansion is POST-resolution and sees only the resolved name, so:
 
-- **A name written UNQUALIFIED that resolves to another package's symbol** (inherited or
-  imported) gets `(:%intern-package "CUR")` appended to its header
+- **A name that resolves to another package's symbol** (inherited, imported, written qualified)
+  gets `(:%intern-package "CUR")` appended to its header
   (`PackageResolver.withDefstructInternPackage`, `LispNames.DEFSTRUCT_INTERN_PACKAGE`). Until
   2026-10-30 the derived names went to the NAME's package: optima's `(defstruct and-pattern)`
   in `optima`, the name exported by `optima.core`, defined `optima.core::and-pattern-p` and
   `(optima:match ...)` failed `OPTIMA::AND-PATTERN-P is undefined`. Pinned by ci-spec
   `defstruct-derived-names-intern-in-the-current-package` (`:include` and `:conc-name` too).
-- **A name written QUALIFIED keeps its own package**: `(defstruct foo::point x)` from `cl-user`
-  defines `foo::make-point`. Deliberate deviation (CL: `cl-user::make-point`): the bundled
-  libraries (`bordeaux-threads.lisp`, `objc*.lisp`) are written in `cl-user` that way.
+- **A bundled library spells the option itself**: `(defstruct (torch::%tensor (:%intern-package "TORCH") ...))`.
+  The shipped sources are written in `cl-user` and call `torch::%tensor-...`, which is what a qualified
+  name did for everyone until 2026-11-05 (SBCL 2.2.9 interns `MAKE-Q` in `cl-user` for
+  `(defstruct other-pkg::q r)`, and a program's `cl-user::make-q` was undefined here). A header
+  already naming a package is left alone. **A new bundled struct with a qualified name needs the option**;
+  without it `LibraryDefunPrunerTest` and the library's own calls report `TORCH::X-A is undefined`.
+- **The interpreter does not resolve a macro's expansion again**, so `evalDefstruct` asks
+  `PackageResolver.defstructInternedIn` with the package current at the form (a function body: the one it was
+  read in, `Environment.lexicalPackage`). The compile paths resolve an expansion like any form.
 - **Spelling**: `PackageResolver.internedSpelling(pkg, member)`, the bare reference's resolution
   with `pkg` current (CL `intern`): the package's own symbol by its declared export (quri's
   exported `uri-p`), or an accessible symbol of a used package (an exported `make-ap` of the
@@ -236,6 +242,14 @@ Expansion is POST-resolution and sees only the resolved name, so:
 - The resolver-less summaries (`defstructDefinedNames`, `defstructSlotFlow`) spell a derived
   name in the name's package AND the intern package: an over-approximation, since a missed
   name drops a definition a kept call site needs.
+
+## The case of the derived names
+The affixes are the literal `MAKE-`, `-P`, `COPY-` (a class's `%MAKE-`), and the struct and slot names are
+taken as they are, as in SBCL 2.2.9: `(defstruct |low| |x|)` defines `|MAKE-low|`, `|low-P|`, `|COPY-low|`,
+`|low-x|`, and `(defstruct pt |y|)` defines `|PT-y|`. Until 2026-11-05 `LispMacroExpander.affixFor` guessed a
+case from the name, for lowercase-authored internal sources; none remained (every reader upcases, and the
+lowerings that build a `defstruct` give explicit names), so nothing has to tell them from an escaped name.
+Pinned by ci-spec `defstruct-derived-names-intern-in-the-current-package`.
 
 ## Gaps
 No `structurep` (not standard CL). Compiled runtime `eval` cannot define structs or setf

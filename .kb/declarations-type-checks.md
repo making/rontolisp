@@ -327,6 +327,11 @@ table is GENERATED from it. **Change them together.**
   (all of postmodern). `typep` over such a name still recurses (undefined in CL; nothing loads
   one into a `typep`). Pins `LispEvaluatorTest#evalSubtypepOverCircularDeftypes`, ci-spec
   `runtime-subtypep-beside-circular-deftypes`.
+- **A bare lattice name is that type** (2026-11-05): `SubtypepName.classInfo` takes only an exact class for a
+  `SUBTYPEP_PARENTS` key, since `findClass`'s tolerance for a bare spelling answered `coalton:bit`, a class, for
+  `cl:bit`, so `(subtypep 'bit 'integer)` was nil and coalton's `Bit` conversions asked for `Bounded Integer`.
+  `bit` is below `fixnum` in the lattice, and a deftype name joins the run-time table in its one-colon spelling
+  too (`(subtypep x 'p:num)` answered nil compiled). ci-spec `subtypep-fixnum-is-a-64-bit-interval`.
 - **The stream subtypes are edges to `STREAM`** (`file-stream` ... `concatenated-stream`), and a
   Gray class (ancestor `rontolisp:fundamental-stream`) is below `STREAM` in `namedSubtypep`. The
   edges join the runtime universe only for the names `runtimeStreamTypeNames` keeps, so a

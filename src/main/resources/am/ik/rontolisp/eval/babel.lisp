@@ -63,7 +63,8 @@
 
 ;; Upstream's external-format, a class there. Nothing here dispatches on it, and a
 ;; structure leaves a program that never makes one free of make-instance.
-(defstruct (babel:external-format (:conc-name nil) (:copier nil)
+(defstruct (babel:external-format (:%intern-package "BABEL") (:conc-name nil)
+                                  (:copier nil)
                                   (:predicate babel::%external-format-p)
                                   (:constructor babel::%make-external-format
                                    (babel:external-format-encoding

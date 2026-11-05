@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.wasm;
 
 import java.io.ByteArrayOutputStream;
 
+import am.ik.rontolisp.LispSymbol;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
@@ -133,12 +134,16 @@ final class WasmSymbolApiRuntimeBuilder {
 	 * The spelling {@code NIL} names the {@code nil} singleton -- the null ref, not a
 	 * symbol struct -- so the interned offset is compared against NIL's, the way the
 	 * reader's symbol path does; {@code T} needs no arm, since {@code t} IS the interned
-	 * symbol {@code "T"}.
+	 * symbol {@code "T"}. The empty name is {@link LispSymbol#CL_USER_EMPTY_NAME}, so
+	 * that no symbol has no byte for the unguarded first-byte tests that tell it from a
+	 * string.
 	 * @param nilOffset the string-table offset of {@code NIL} in the runtime intern
 	 * table, or -1 when the program never interns (the body is then unreachable and stays
 	 * the plain canonicalization)
+	 * @param emptyNameOffset the string-table offset of the empty name's spelling, under
+	 * the same condition
 	 */
-	static byte[] buildInternSym(int nilOffset) {
+	static byte[] buildInternSym(int nilOffset, int emptyNameOffset) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int STR = 0, OFF = 1, LEN = 2;
@@ -158,6 +163,16 @@ final class WasmSymbolApiRuntimeBuilder {
 		i32(w, 2);
 		w.write(Instruction.I32_SUB);
 		set(w, LEN);
+		if (emptyNameOffset >= 0) {
+			get(w, LEN);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+			i32(w, emptyNameOffset);
+			i32(w, LispSymbol.CL_USER_EMPTY_NAME.length());
+			WasmEmitHelper.emitStrBuildCall(w);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+		}
 		// off = off + 1 (skip the opening quote -> the bare content start)
 		get(w, OFF);
 		i32(w, 1);
@@ -186,21 +201,6 @@ final class WasmSymbolApiRuntimeBuilder {
 			get(w, OFF);
 		}
 		set(w, OFF);
-		// The empty name keeps one byte behind its length: a string and a symbol are told
-		// apart by byte 0 (its quote), which every such test reads unguarded.
-		get(w, LEN);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		get(w, OFF);
-		i32(w, 0);
-		i32(w, 1);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
-		WasmStringRuntimeBuilder.emitSeedCursor(w);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
 		get(w, OFF);
 		get(w, LEN);
 		WasmEmitHelper.emitStrBuildCall(w);

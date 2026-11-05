@@ -14,6 +14,7 @@ Symbols are read with the reader's [upcasing](../../guides/reader-case.md), iden
 
 ```lisp
 (read-from-string "foo") ; => FOO
+(read-from-string "|a b|") ; => |a b|
 ```
 
 `*read-base*` (2 to 36, default 10) is the radix an integer or ratio token reads in, on every backend. Such a token is that number whatever else it could spell, and one holding a digit past the base is a symbol; a trailing dot and a float stay decimal. A dispatch such as `#x` has its own radix.

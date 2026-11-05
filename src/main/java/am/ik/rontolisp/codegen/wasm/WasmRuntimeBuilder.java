@@ -3243,25 +3243,18 @@ final class WasmRuntimeBuilder {
 	 * {@code prin1} adds the bars. A symbol is a {@code TYPE_STRING} whose bytes are not
 	 * quote-framed, so the framed copy is built here, a transient that
 	 * {@code _string_concat} consumes at once. A value that is no bare name -- nil, a
-	 * quote-framed string, an empty name -- keeps {@code princ}'s text.
+	 * quote-framed string -- keeps {@code princ}'s text.
 	 * @param w the writer
 	 * @param symLocal the local holding the value
 	 * @param scratchLocal a spare {@code (ref null eq)} local, overwritten
 	 */
 	private static void emitSymbolSpelling(WasmWriter w, int symLocal, int scratchLocal) {
-		// a bare name: a TYPE_STRING that is not empty and does not open with a quote
+		// a bare name: a TYPE_STRING that does not open with a quote
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(symLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.IF, Type.I32.code());
-		emitSymbolBytes(w, symLocal);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, Type.I32.code());
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.ELSE);
 		emitSymbolBytes(w, symLocal);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
@@ -3270,7 +3263,6 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128('"');
 		w.write(Instruction.I32_NE);
-		w.write(Instruction.END);
 		w.write(Instruction.ELSE);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);

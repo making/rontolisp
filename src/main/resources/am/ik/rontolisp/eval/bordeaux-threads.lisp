@@ -64,7 +64,7 @@
 
 ;;; --- locks -------------------------------------------------------------------
 
-(defstruct (bordeaux-threads:lock
+(defstruct (bordeaux-threads:lock (:%intern-package "BORDEAUX-THREADS")
             (:constructor bordeaux-threads::%make-lock (mutex))
             (:predicate bordeaux-threads:lock-p)
             (:conc-name bordeaux-threads::%lock-) (:copier nil))
@@ -109,6 +109,7 @@
 ;;; --- condition variables -------------------------------------------------------
 
 (defstruct (bordeaux-threads::condition-variable
+            (:%intern-package "BORDEAUX-THREADS")
             (:constructor bordeaux-threads::%make-condition-variable (handle))
             (:predicate bordeaux-threads::condition-variable-p)
             (:conc-name bordeaux-threads::%condition-variable-) (:copier nil))
@@ -158,7 +159,7 @@
 
 ;; Upstream's own portable semaphore: a count under a lock, and a condition
 ;; variable a waiter sleeps on while the count is zero.
-(defstruct (bordeaux-threads:semaphore
+(defstruct (bordeaux-threads:semaphore (:%intern-package "BORDEAUX-THREADS")
             (:constructor bordeaux-threads::%make-semaphore
                           (name count lock condition-variable))
             (:predicate bordeaux-threads:semaphore-p)

@@ -270,9 +270,7 @@ final class MethodGenerations {
 			}
 			for (ClosRegistry.ClassInfo info : registry.classes().values()) {
 				String name = plain(info.name());
-				// The constructor's prefix takes the name's case.
 				edge(name, "%MAKE-" + name);
-				edge(name, "%make-" + name);
 			}
 			this.reachedByRunningForms = closure(this.runningFormsMentioning.keySet(), this.mentions);
 			this.callsFunctionValues = positionsOf(closure(CALLS_FUNCTION_VALUES, this.mentionedBy));

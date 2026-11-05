@@ -16,7 +16,7 @@
 
 ;; A block made by make-objc-block: the literal's address (nil once freed), the
 ;; encoding the host calls it by, and the signature its descriptor carries.
-(defstruct (objc:objc-block
+(defstruct (objc:objc-block (:%intern-package "OBJC")
             (:constructor objc::%make-objc-block (pointer types signature))
             (:predicate objc::%objc-block-p) (:conc-name objc::%block-)
             (:copier nil))

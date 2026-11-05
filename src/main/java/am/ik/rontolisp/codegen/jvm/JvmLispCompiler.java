@@ -3883,8 +3883,6 @@ public final class JvmLispCompiler implements LispCompiler {
 				.invoke(invoke)
 				.invokeSpread(invokeSpread)
 				.functions(functions)
-				.complexValues(usesComplex)
-				.hasComplexField(hasComplexField != null ? hasComplexField : null)
 				// _arityChk comes with _apply (reportsCount below), and only then does
 				// the
 				// runtime reference it
@@ -4283,7 +4281,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Entry symEscName = cp.utf8Entry("_symEsc");
 		MethodRefEntry symEscMethod = cp.methodRef(thisClass, symEscName, strEscDescUtf);
 		MethodCode symEscCode = JvmRuntimeBuilder.buildSymEscBody(cp, stringLength, stringCharAt, stringIndexOf,
-				stringSubstring, stringReplace, stringConcat);
+				stringSubstring, stringReplace, stringConcat, objectEquals);
 		MethodCode strEscCode = JvmRuntimeBuilder.buildStrEscBody(cp, stringLength, stringCharAt, stringIndexOf,
 				stringIndexOfFrom, stringSubstring, stringReplace, stringConcat, symEscMethod);
 		// The quote/function abbreviation _consToString(Display) applies ahead of the

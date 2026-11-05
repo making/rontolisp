@@ -161,6 +161,7 @@ final class JvmSymbolApiCompiler {
 		JvmEmitHelper.emitSharedCall(ctx, className, "_internName", 1, helper -> {
 			helper.body.aload(0);
 			emitStripQuotes(helper);
+			emitEmptyNameSpelling(helper);
 			emitNilSpellingToNil(helper);
 		});
 	}
@@ -180,6 +181,20 @@ final class JvmSymbolApiCompiler {
 		MethodCode.Label keep = ctx.body.newLabel();
 		ctx.body.ifeq(keep);
 		ctx.body.pop().aconst_null();
+		ctx.body.labelBinding(keep);
+	}
+
+	/**
+	 * Maps the stripped name on the stack to its spelling: the empty name is
+	 * {@link LispSymbol#CL_USER_EMPTY_NAME}, so that no symbol is the empty string, which
+	 * every first-character test on a value would fail on.
+	 */
+	private static void emitEmptyNameSpelling(JvmLispCompiler.Ctx ctx) {
+		ctx.body.dup().invokevirtual(JvmEmitHelper.stringMethod(ctx, "isEmpty", "()Z"));
+		MethodCode.Label keep = ctx.body.newLabel();
+		ctx.body.ifeq(keep);
+		ctx.body.pop();
+		JvmEmitHelper.compileUnspelledLiteral(LispSymbol.CL_USER_EMPTY_NAME, ctx);
 		ctx.body.labelBinding(keep);
 	}
 
@@ -672,10 +687,10 @@ final class JvmSymbolApiCompiler {
 
 	/**
 	 * {@code (%set-mirror name value)} -- the checked half of {@code set}: constants
-	 * (nil, t and keywords, by value or by computed name, and the empty name) and
-	 * non-symbols signal; otherwise the eval mirror is written through {@code _store},
-	 * which creates the binding when the name has none -- so {@code symbol-value} and
-	 * {@code eval} see the store wherever it lands. Answers the stored value.
+	 * (nil, t and keywords, by value or by computed name) and non-symbols signal;
+	 * otherwise the eval mirror is written through {@code _store}, which creates the
+	 * binding when the name has none -- so {@code symbol-value} and {@code eval} see the
+	 * store wherever it lands. Answers the stored value.
 	 */
 	static void compileSetMirror(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
@@ -693,12 +708,9 @@ final class JvmSymbolApiCompiler {
 		ctx.body.ifne(isString);
 		emitSetTypeThrow(nameSlot, ctx);
 		ctx.body.labelBinding(isString);
-		// T, NIL by computed name, keywords and the empty name are constants ->
-		// throw. The empty name would otherwise sail through both probes below and
-		// materialize a binding no read can spell.
+		// T, NIL by computed name and keywords are constants -> throw.
 		emitSetConstantNameThrow(nameSlot, "T", ctx);
 		emitSetConstantNameThrow(nameSlot, "NIL", ctx);
-		emitSetEmptyNameThrow(nameSlot, ctx);
 		ctx.body.aload(nameSlot).checkcast(ctx.stringClass).iconst_0();
 		ctx.body.invokevirtual(ctx.stringCharAt);
 		JvmEmitHelper.emitIntConst(ctx, ':');
@@ -787,19 +799,6 @@ final class JvmSymbolApiCompiler {
 		JvmEmitHelper.compileStringLiteral(LispNames.SET + " cannot set ", ctx);
 		ctx.body.aload(nameSlot).checkcast(ctx.stringClass).invokevirtual(concat);
 		ctx.body.invokespecial(ctor).athrow();
-	}
-
-	// throw new RuntimeException("SET cannot set ") for the empty name (the name is
-	// on the stack as a String here)
-	private static void emitSetEmptyNameThrow(int nameSlot, JvmLispCompiler.Ctx ctx) {
-		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
-		MethodRefEntry ctor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
-		MethodRefEntry isEmpty = ctx.cp.methodRef(ctx.stringClass, "isEmpty", "()Z");
-		ctx.body.aload(nameSlot).checkcast(ctx.stringClass).invokevirtual(isEmpty);
-		MethodCode.Label keep = ctx.body.newLabel();
-		ctx.body.ifeq(keep);
-		emitSetConstantThrow("", ctx);
-		ctx.body.labelBinding(keep);
 	}
 
 	// throw new RuntimeException("SET expects a symbol, got " + value)
