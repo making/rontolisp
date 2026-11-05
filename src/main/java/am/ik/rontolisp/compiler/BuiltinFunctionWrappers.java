@@ -740,6 +740,9 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
+	 * {@code #'make-array} takes the keyword tail the call position does where the two
+	 * {@code %make-array-et} entries are spliced -- a program that can hand the value
+	 * more than one argument -- and the dimensions alone otherwise.
 	 * {@code #'make-broadcast-stream} is the Gray broadcast stream where its entry is
 	 * spliced -- which the prelude does for any program naming the operator -- and the
 	 * discarding sink otherwise. {@code #'write-to-string} binds the printer variables
@@ -750,7 +753,8 @@ public final class BuiltinFunctionWrappers {
 	 * and the one-argument read otherwise.
 	 */
 	private static final Map<String, HelperWrapper> HELPER_WRAPPERS = Map
-		.of(LispNames.MAKE_BROADCAST_STREAM,
+		.of(LispNames.MAKE_ARRAY, new HelperWrapper(LispNames.MAKE_ARRAY_ET_FP_INTERNAL, variadicMakeArray()),
+				LispNames.MAKE_BROADCAST_STREAM,
 				new HelperWrapper(LispNames.MAKE_BROADCAST_STREAM_INTERNAL,
 						new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(),
 								List.of(call(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL)))),
@@ -2322,11 +2326,52 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	// Variadic wrapper for make-array (gated with the fill-pointer array group):
-	// runtime keywords are re-extracted with getf. A :displaced-to argument selects
-	// the bare-view shape (a displaced array cannot combine with the other options),
-	// everything else the general shape; :element-type is accepted and ignored, like
-	// the call position. Enables cl-utilities' copy-array idiom
-	// (apply #'make-array (list* dims options...)).
+	// runtime keywords are re-extracted with getf and the call-position shapes chosen by
+	// which are there. A :displaced-to argument selects the bare-view shape (a displaced
+	// array cannot combine with the other options), :initial-contents the call position's
+	// computed element-type lowering, and everything else the prelude's dispatch on the
+	// element type: %make-array-et-fp where a fill pointer or adjustability forces a
+	// general array, else %make-array-et, whose arms can pack. cl-utilities' copy-array
+	// idiom is (apply #'make-array (list* dims options...)).
+	private static WrapperDef fullMakeArray() {
+		LispVal elementType = getfKwOr(LispNames.ELEMENT_TYPE_KEYWORD, LispTrue.INSTANCE);
+		LispVal displaced = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
+				new LispSymbol(LispNames.DISPLACED_TO_KEYWORD), getfKw(LispNames.DISPLACED_TO_KEYWORD),
+				new LispSymbol(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD),
+				getfKwOr(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD, new LispInteger(0)),
+				new LispSymbol(LispNames.ADJUSTABLE_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD),
+				new LispSymbol(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.FILL_POINTER_KEYWORD)));
+		LispVal contents = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
+				new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD), elementType,
+				new LispSymbol(LispNames.INITIAL_CONTENTS_KEYWORD), getfKw(LispNames.INITIAL_CONTENTS_KEYWORD),
+				new LispSymbol(LispNames.ADJUSTABLE_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD),
+				new LispSymbol(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.FILL_POINTER_KEYWORD)));
+		LispVal given = listToCons(List.of(new LispSymbol(LispNames.NOT), kwAbsent(LispNames.INITIAL_ELEMENT_KEYWORD)));
+		LispVal element = getfKw(LispNames.INITIAL_ELEMENT_KEYWORD);
+		LispVal general = listToCons(List.of(new LispSymbol(LispNames.IF),
+				listToCons(List.of(new LispSymbol(LispNames.OR), getfKw(LispNames.FILL_POINTER_KEYWORD),
+						getfKw(LispNames.ADJUSTABLE_KEYWORD))),
+				callV(LispNames.MAKE_ARRAY_ET_FP_INTERNAL, new LispSymbol("dims"), elementType, element, given,
+						getfKw(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD)),
+				callV(LispNames.MAKE_ARRAY_ET_INTERNAL, new LispSymbol("dims"), elementType, element, given)));
+		LispVal undisplaced = listToCons(
+				List.of(new LispSymbol(LispNames.IF), kwAbsent(LispNames.INITIAL_CONTENTS_KEYWORD), general, contents));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), getfKw(LispNames.DISPLACED_TO_KEYWORD), displaced, undisplaced));
+		return new WrapperDef(LispNames.MAKE_ARRAY, List.of("dims", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	// Whether the keyword is not in the tail, whatever a supplied one holds:
+	// (eq (getf kw KEY kw) kw).
+	private static LispVal kwAbsent(String keyword) {
+		LispSymbol kw = new LispSymbol("kw");
+		return callV(LispNames.EQ_GENERAL, callV(LispNames.GETF, kw, new LispSymbol(keyword), kw), kw);
+	}
+
+	// #'make-array where the %make-array-et entries are not in the program, reachable
+	// only
+	// through a designator the surface does not show: the dimensions, the fill-pointer
+	// group's keywords, an :element-type accepted and ignored.
 	private static WrapperDef variadicMakeArray() {
 		LispVal displaced = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
 				new LispSymbol(LispNames.DISPLACED_TO_KEYWORD), getfKw(LispNames.DISPLACED_TO_KEYWORD),
@@ -3101,7 +3146,7 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.VECTOR_POP), binaryOptionalThird(LispNames.VECTOR_PUSH_EXTEND),
 			// array-displacement yields its primary value (the target) -- the offset
 			// needs a direct mv consumer.
-			adjustArrayWrapper(), unary(LispNames.ARRAY_DISPLACEMENT), variadicMakeArray(),
+			adjustArrayWrapper(), unary(LispNames.ARRAY_DISPLACEMENT), fullMakeArray(),
 			// terpri / fresh-line / read-line: the optional stream, forwarded
 			// unconditionally (omitted == nil == the standard stream designator).
 			optionalStream(LispNames.TERPRI), optionalStream(LispNames.FRESH_LINE), readLineWrapper(),

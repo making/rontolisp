@@ -27423,6 +27423,45 @@ cases:
       (princ (with-output-to-string (s) (format s "x=~a, y=~s~%" 1 "two")))
     expected: |
       x=1, y="two"
+  - name: make-array-function-value-takes-every-keyword
+    source: |
+      (defun mav-desc (a) (list (stringp a) (array-element-type a) (array-has-fill-pointer-p a) (array-dimensions a)))
+      (defun mav-et () 'character)
+      (print (mav-desc (funcall #'make-array 3 :element-type 'character)))
+      (print (mav-desc (apply #'make-array 3 :element-type (mav-et) (list :fill-pointer 0))))
+      (print (mav-desc (funcall #'make-array 3 :element-type '(unsigned-byte 8))))
+      (print (mav-desc (funcall #'make-array 3 :element-type 'double-float :fill-pointer 1)))
+      (print (mav-desc (funcall #'make-array 3 :element-type t :adjustable t :initial-element 1)))
+      (print (mav-desc (funcall #'make-array '(2 2))))
+      ;; An element absent is the type's own zero, and nil given is nil.
+      (print (list (aref (funcall #'make-array 2 :element-type '(unsigned-byte 8)) 0)
+                   (zerop (aref (funcall #'make-array 2 :element-type 'double-float) 1))
+                   (funcall #'make-array 2 :initial-element nil)))
+      (print (funcall #'make-array 3 :initial-contents '(1 2 3)))
+      (print (funcall #'make-array 2 :element-type 'character :initial-contents "ab"))
+      (print (funcall #'make-array 2 :element-type 'character :initial-element #\z))
+      (print (let ((a (make-array 4 :element-type 'character :initial-element #\q)))
+               (funcall #'make-array 2 :element-type 'character :displaced-to a :displaced-index-offset 1)))
+      (print (funcall #'make-array 2 :displaced-to (vector 1 2 3)))
+      ;; Such a string is the string the call position makes.
+      (let ((a (apply 'make-array 3 :element-type 'character :fill-pointer 0 nil)))
+        (vector-push-extend #\a a)
+        (format a "b~a" 1)
+        (print (list a (fill-pointer a))))
+    expected: |
+      (T CHARACTER NIL (3))
+      (T CHARACTER T (3))
+      (NIL (UNSIGNED-BYTE 8) NIL (3))
+      (NIL DOUBLE-FLOAT T (3))
+      (NIL T NIL (3))
+      (NIL T NIL (2 2))
+      (0 T #(NIL NIL))
+      #(1 2 3)
+      "ab"
+      "zz"
+      "qq"
+      #(1 2)
+      ("ab1" 3)
   - name: format-opening-fresh-line-asks-the-destination
     source: |
       (defun ffl-cap (f) (with-output-to-string (s) (write-string "ab" s) (funcall f s)))

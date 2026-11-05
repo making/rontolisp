@@ -5763,7 +5763,8 @@ public final class LispPreludeLibrary {
 		// that one keeps the inline expansion, and a program with only such sites must
 		// splice nothing.
 		if (LispNames.MAKE_ARRAY_ET_INTERNAL.equals(entry)) {
-			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, false);
+			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, false)
+					|| mayPassKeywordsToMakeArray(program, canonical);
 		}
 		// %make-hash-table-by-test: the same timing, for a make-hash-table whose :test is
 		// computed, or make-hash-table taken as a value (its wrapper passes the :test of
@@ -5772,7 +5773,8 @@ public final class LispPreludeLibrary {
 			return am.ik.rontolisp.macro.LispMacroExpander.mayMakeHashTableWithComputedTest(program);
 		}
 		if (LispNames.MAKE_ARRAY_ET_FP_INTERNAL.equals(entry)) {
-			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, true);
+			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, true)
+					|| mayPassKeywordsToMakeArray(program, canonical);
 		}
 		// %symbol-in-package: the find-symbol / intern lowerings call it from inside the
 		// expression compilers, after this pass; the surface fact is a call spelling a
@@ -6192,6 +6194,17 @@ public final class LispPreludeLibrary {
 			}
 			rest = cell.cdr();
 			index++;
+		}
+		return false;
+	}
+
+	// #'make-array's wrapper dispatches on the element type through both %make-array-et
+	// entries where its value can be handed a keyword tail.
+	private static boolean mayPassKeywordsToMakeArray(List<LispVal> program, boolean canonical) {
+		for (LispVal form : program) {
+			if (mayPassMoreThanOneArgument(form, LispNames.MAKE_ARRAY, canonical)) {
+				return true;
+			}
 		}
 		return false;
 	}
