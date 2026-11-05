@@ -12,9 +12,7 @@ import java.util.List;
  * {@code intern} + marker-free {@code symbol-name}), the {@code (setf (schar s i) c)}
  * string mutation ({@code %schar-set} on the interpreter, the setq-rebuild lowering on
  * the compiled backends), {@code locally}, string-as-character-array {@code make-array}/
- * {@code aref}, and the {@code (apply #'error ...)} signal path (typed condition on the
- * interpreter, datum-only lite on the compiled backends -- both caught by the same
- * {@code handler-case}). The integer round-trip value stays inside the WASM {@code i31}
+ * {@code aref}, and the {@code (apply #'error ...)} signal path. The integer round-trip value stays inside the WASM {@code i31}
  * range (a larger integer degrades to a float there).
  */
 class ClBase64E2eTest extends AsdfLibraryE2eSupport {

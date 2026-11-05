@@ -119,10 +119,9 @@ public final class BuiltinFunctionWrappers {
 	 * Signal-operator wrappers ({@code #'error}/{@code #'cerror}/{@code #'signal}/
 	 * {@code #'warn}), injected only when the program takes the operator as a first-class
 	 * value (see {@link #referencesFunctionValue}) so ordinary programs stay
-	 * byte-identical. Lite semantics: the wrapper forwards the datum only -- initargs and
-	 * format arguments after it are dropped, so a symbol datum signals a plain condition
-	 * naming the class rather than a typed instance with slots (the interpreter keeps the
-	 * full designator protocol).
+	 * byte-identical. The wrapper forwards the datum and the arguments after it to the
+	 * run-time dispatch a computed datum goes through
+	 * ({@code LispMacroExpander.runtimeSignalDefuns}), which the reference injects.
 	 */
 	public static final Set<String> SIGNAL_FUNCTIONS = Set.of(LispNames.ERROR, LispNames.CERROR, LispNames.SIGNAL,
 			LispNames.WARN);
@@ -2469,16 +2468,16 @@ public final class BuiltinFunctionWrappers {
 				List.of(body));
 	}
 
-	// Signal-operator wrapper: (lambda (datum &rest r) (op datum)) -- the datum-only
-	// lite forwarding described on SIGNAL_FUNCTIONS.
-	private static WrapperDef signalDatum(String name, String delegate) {
-		return new WrapperDef(name, List.of("datum", LispNames.LAMBDA_REST, "r"), List.of(call(delegate, "datum")));
+	// Signal-operator wrapper: (lambda (datum &rest r) (%op-runtime datum r)), described
+	// on SIGNAL_FUNCTIONS.
+	private static WrapperDef signalDatum(String name, String runtime) {
+		return new WrapperDef(name, List.of("datum", LispNames.LAMBDA_REST, "r"), List.of(call(runtime, "datum", "r")));
 	}
 
-	// cerror's wrapper additionally drops the leading continue format control.
+	// cerror's wrapper additionally hands over the leading continue format control.
 	private static WrapperDef cerrorWrapper() {
 		return new WrapperDef(LispNames.CERROR, List.of("cfc", "datum", LispNames.LAMBDA_REST, "r"),
-				List.of(call(LispNames.ERROR, "datum")));
+				List.of(call(LispNames.CERROR_RUNTIME, "cfc", "datum", "r")));
 	}
 
 	// #'format wrapper (gated by REFERENCE_GATED_FUNCTIONS): renders through the shared
@@ -2929,8 +2928,9 @@ public final class BuiltinFunctionWrappers {
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
 			// Signal operators and format (gated by REFERENCE_GATED_FUNCTIONS in the
 			// backend compilers)
-			signalDatum(LispNames.ERROR, LispNames.ERROR), signalDatum(LispNames.SIGNAL, LispNames.SIGNAL),
-			signalDatum(LispNames.WARN, LispNames.WARN), cerrorWrapper(), formatWrapper(), concatenateWrapper(),
+			signalDatum(LispNames.ERROR, LispNames.ERROR_RUNTIME),
+			signalDatum(LispNames.SIGNAL, LispNames.SIGNAL_RUNTIME),
+			signalDatum(LispNames.WARN, LispNames.WARN_RUNTIME), cerrorWrapper(), formatWrapper(), concatenateWrapper(),
 			// %seq-string: injected only when a concatenate 'string lowering needs it
 			// (gated on ConcatenateForms.needsSeqString, not on a #'name reference).
 			seqStringWrapper(),

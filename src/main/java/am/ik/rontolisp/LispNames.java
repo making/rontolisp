@@ -9944,6 +9944,15 @@ public final class LispNames {
 	 */
 	public static final String ERROR_RUNTIME = "%ERROR-RUNTIME";
 
+	/** The {@code signal} twin of {@link #ERROR_RUNTIME}. */
+	public static final String SIGNAL_RUNTIME = "%SIGNAL-RUNTIME";
+
+	/** The {@code warn} twin of {@link #ERROR_RUNTIME}. */
+	public static final String WARN_RUNTIME = "%WARN-RUNTIME";
+
+	/** What {@code #'cerror} calls: {@link #ERROR_RUNTIME} under its restart. */
+	public static final String CERROR_RUNTIME = "%CERROR-RUNTIME";
+
 	/**
 	 * The instance-tag acceptance table backing {@link #TYPEP_RUNTIME}: an alist-like
 	 * constant, each entry {@code ((type-name...) tag...)} mapping every registered

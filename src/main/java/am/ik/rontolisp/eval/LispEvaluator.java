@@ -2090,17 +2090,12 @@ public final class LispEvaluator {
 		// The plist dispatches the #'make-condition / #'change-class catalog wrappers
 		// call (the compile paths generate them as defuns): the literal call, every
 		// argument quoted, evaluated like the runtime make-instance above.
-		// A type naming no condition class signals, as the compile paths' dispatch does
-		// (the literal call degrades an unknown type to a simple-condition instead).
+		// A type naming no condition class is a type-error, the literal call's: only a
+		// symbol reaches it through the quote, any other value would come back here.
 		this.globalEnv.defineFunction(LispNames.MAKE_CONDITION_RUNTIME,
 				new LispFunction(LispNames.MAKE_CONDITION_RUNTIME, args -> {
-					ClosRegistry.ClassInfo info = args.get(0) instanceof LispSymbol type
-							? this.closRegistry.findClass(type.name()) : null;
-					String condition = ClosRegistry.normalize(ClosRegistry.CONDITION_CLASS_NAMES.get(0));
-					if (info == null || !info.ancestors().contains(condition)
-							&& !condition.equals(ClosRegistry.normalize(info.name()))) {
-						throw new LispEvalException(
-								LispNames.MAKE_CONDITION + ": " + args.get(0).print() + " is not a condition type");
+					if (!(args.get(0) instanceof LispSymbol)) {
+						return eval(LispMacroExpander.designatorTypeErrorForm(args.get(0)), this.globalEnv);
 					}
 					return evalQuotedPlistCall(LispNames.MAKE_CONDITION, args.subList(0, 1), args.get(1));
 				}));
@@ -3632,14 +3627,11 @@ public final class LispEvaluator {
 					this.globalEnv);
 		}));
 		installStreamOperandChecks();
-		// cerror (lite): no restart machinery exists, so the "continuable" part is
-		// dropped -- (cerror continue-format datum args...) signals like
-		// (error datum args...).
 		this.globalEnv.defineFunction(LispNames.CERROR, new LispFunction(LispNames.CERROR, args -> {
 			if (args.size() < 2) {
 				throw new LispEvalException(LispNames.CERROR + " expects a continue format control and a datum");
 			}
-			return eval(rebuildSignalForm(LispNames.ERROR, args.subList(1, args.size())), this.globalEnv);
+			return eval(rebuildSignalForm(LispNames.CERROR, args), this.globalEnv);
 		}));
 		this.funcallBuiltin = new LispFunction(LispNames.FUNCALL, args -> {
 			if (args.isEmpty()) {
@@ -10377,7 +10369,7 @@ public final class LispEvaluator {
 									}
 									ensureWitLoadedForConditionClass(cons);
 									ensureConditionReportRuntimeLoaded();
-									next = LispMacroExpander.expandSignalMacro(cons, this.closRegistry,
+									next = LispMacroExpander.expandSignalWithRuntimeType(cons, this.closRegistry,
 											this.restartRuntimeLoaded);
 									break dispatch;
 								case LispNames.HANDLER_CASE:
@@ -11128,7 +11120,7 @@ public final class LispEvaluator {
 				return builtinMacroExpansion(cons, LispMacroExpander::expandRestartCase);
 			case LispNames.MAKE_CONDITION:
 				ensureConditionReportRuntimeLoaded();
-				return LispMacroExpander.expandMakeCondition(cons, this.closRegistry);
+				return LispMacroExpander.expandMakeConditionWithRuntimeType(cons, this.closRegistry);
 			case LispNames.DOCUMENTATION:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandDocumentation);
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
@@ -14766,12 +14758,15 @@ public final class LispEvaluator {
 
 	private static LispVal rebuildSignalForm(String opName, List<LispVal> args) {
 		LispVal form = LispNil.INSTANCE;
+		int datumIndex = LispNames.CERROR.equals(opName) ? 1 : 0;
 		for (int i = args.size() - 1; i >= 0; i--) {
 			LispVal a = args.get(i);
+			// A keyword datum stays quoted: unquoted it is a computed datum, a symbol,
+			// and would re-enter this function value.
 			boolean selfEvaluating = a instanceof LispString || a instanceof LispInteger || a instanceof LispBigInteger
 					|| a instanceof LispRatio || a instanceof LispDouble || a instanceof LispChar
 					|| a instanceof LispNil || a instanceof LispTrue
-					|| (a instanceof LispSymbol sym && sym.isKeyword());
+					|| (i != datumIndex && a instanceof LispSymbol sym && sym.isKeyword());
 			LispVal wrapped = selfEvaluating ? a
 					: new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(a, LispNil.INSTANCE));
 			form = new LispCons(wrapped, form);
