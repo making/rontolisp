@@ -2,7 +2,7 @@
 
 Everything here is `--no-wasi --optimize=size` unless it says otherwise, but for `test_plugin`, which writes
 to stdout and is built without `--no-wasi` (its `_start` and two WASI imports are about 20 bytes more). gzip is `gzip -9 -c < file`.
-Measured 2026-11-05. Behaviour: each row marked "tested" ran through a 16-test plugin suite of a host
+Measured 2026-11-05 on `6f8a7628f`, except where a table says otherwise. Behaviour: each row marked "tested" ran through a 16-test plugin suite of a host
 embedding a wasm interpreter (edits, refusals, traps, timeouts, memory limits, local responses,
 body replacement).
 
@@ -12,9 +12,9 @@ body replacement).
 
 | Filter | raw | gzip | code | data | `--optimize` raw / gzip |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `http_body` | 86,494 | 31,096 | 77,147 | 7,694 | 100,122 / 35,817 |
-| `http_headers` | 151,176 | 53,102 | 118,187 | 31,132 | 185,857 / 62,634 |
-| `test_plugin` | 100,147 | 36,108 | 88,839 | 9,143 | 119,577 / 42,514 |
+| `http_body` | 89,595 | 31,888 | 80,136 | 7,799 | 104,755 / 36,842 |
+| `http_headers` | 154,268 | 53,759 | 121,176 | 31,228 | 190,536 / 64,074 |
+| `test_plugin` | 103,131 | 36,964 | 91,836 | 9,123 | 124,093 / 43,823 |
 
 The numbers to get under, on both columns:
 
@@ -24,18 +24,18 @@ The numbers to get under, on both columns:
 | `http_headers` | 94,189 | 25,472 |
 | `test_plugin` | 122,261 | 36,790 |
 
-`wasm-opt -Oz --all-features` over the three: 75,799 / 134,869 / 87,338 raw. Context, not a target
+`wasm-opt -Oz --all-features` over the three: 78,269 / 137,342 / 89,680 raw. Context, not a target
 (`.kb/size-measurement.md`).
 
 ## What the SDK costs (`variants.py`), all tested
 
 | Levers | `http_body` raw / gzip | `http_headers` raw / gzip | `test_plugin` raw / gzip |
 | --- | ---: | ---: | ---: |
-| none | 86,494 / 31,096 | 151,176 / 53,102 | 100,147 / 36,108 |
-| `logmacro` | 86,494 / 31,095 | 89,513 / 32,289 | 100,147 / 36,110 |
-| `nocond` | 77,540 / 28,354 | 142,331 / 50,726 | 91,108 / 33,388 |
-| `logmacro,nocond` | 77,540 / 28,355 | 80,658 / 29,677 | 91,108 / 33,389 |
-| `logmacro,nocond,trap` | 60,671 / 23,671 | 63,347 / 24,749 | 72,413 / 27,705 |
+| none | 89,595 / 31,888 | 154,268 / 53,759 | 103,131 / 36,964 |
+| `logmacro` | 89,595 / 31,887 | 92,591 / 33,001 | 103,151 / 36,967 |
+| `nocond` | 79,350 / 28,981 | 144,071 / 51,209 | 92,970 / 33,898 |
+| `logmacro,nocond` | 79,350 / 28,981 | 82,361 / 30,154 | 92,970 / 33,897 |
+| `logmacro,nocond,trap` | 62,404 / 24,250 | 65,055 / 25,172 | 74,119 / 28,205 |
 
 - `logmacro`: `log-*` become macros, so a literal control string is compiled instead of interpreted.
   `%log`'s `(apply #'format nil control args)` is what brings in the run-time `format` interpreter,
@@ -53,18 +53,20 @@ One small export each, nothing else:
 | `p00-empty` | 714 | 514 |
 | `p01-memory-import-string` | 963 | 608 |
 | `p04-clos` (two classes, a generic, `make-instance`) | 2,604 | 1,520 |
-| `p05-handler-case` | 2,721 | 1,512 |
+| `p05-handler-case` | 2,753 | 1,538 |
 | `p09-search` | 3,655 | 1,981 |
 | `p10-princ-to-string` | 5,075 | 2,200 |
 | `p07-format-a` (`~a` of an `:s32` parameter) | 5,405 | 2,315 |
 | `p03-hash` | 5,888 | 2,651 |
-| `q3-format-clos-a` (`~a` of a value of unknown type, in a method) | 7,977 | - |
+| `q3-format-clos-a` (`~a` of a value of unknown type, in a method) | 8,029 | 3,426 |
 | `p11-concat` | 8,382 | 3,643 |
-| `q11-handler-funcall` (`handler-case` around a `funcall`) | 10,829 | - |
-| `p06-error-format` (`error` with arguments, `~a` of the condition) | 20,129 | 7,798 |
+| `q11-handler-funcall` (`handler-case` around a `funcall`) | 10,923 | 4,653 |
+| `p06-error-format` (`error` with arguments, `~a` of the condition) | 20,292 | 7,903 |
 | `p08-format-apply` (`apply #'format`) | 76,527 | 28,728 |
 
-Taking `http_body` apart from the `logmacro,nocond,trap` row, cumulatively:
+Taking `http_body` apart from the `logmacro,nocond,trap` row, cumulatively. This table is from just before
+`45f0b386a`, which printed instance slots through the walk and added about 3KB to every filter, so its
+start row is lower than the one above. It ranks causes, and it was not repeated:
 
 | Removed | raw | gzip |
 | --- | ---: | ---: |

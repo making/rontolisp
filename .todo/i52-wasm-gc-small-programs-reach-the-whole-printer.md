@@ -3,20 +3,21 @@
 Difficulty: High
 
 What is left of a Proxy-Wasm filter once its SDK is lean (i51) is mostly runtime it never runs: `http_body` with the
-SDK levers applied is 60,671 bytes, for a filter that removes a header, reads a body, and replaces it. Numbers and tools:
+SDK levers applied is 62,404 bytes, for a filter that removes a header, reads a body, and replaces it. Numbers and tools:
 `.todo/artefacts/i51-proxy-wasm-filter-size/README.md`. The same costs fall on any small `--no-wasi` module, so measure
 `size-report/programs/` too. The target number is raw and gzip of the whole module (`.kb/size-measurement.md`).
 
 ## What is there
 
-From `funcsizes.py` on that module (`code` 54,233 of 60,671):
+From `funcsizes.py` on that module (about 55,600 bytes of code). `%PC-*` and the `FUNC_PRINT*` sizes are current; the other
+sizes, and the removal measurements, are from just before `45f0b386a`, which added about 3KB, and rank causes:
 
 - **`~a` of a value of unknown type** is 14,860 raw and 4,739 gzip, the largest single use. `%PC-UNQUALIFIED` 4,191,
-  `%PC-WALK` 3,458, `FUNC_PRINT_VAL` 3,323, `FUNC_PRINC_VAL` 3,238, `FUNC_SYM_ESC_GC` 923, `FUNC_DEC_FMT` 913, and the
+  `%PC-WALK` 4,007, `FUNC_PRINT_VAL` 3,333, `FUNC_PRINC_VAL` 3,290, `FUNC_SYM_ESC_GC` 923, `FUNC_DEC_FMT` 913, and the
   float decimal path. The value is an integer here, and `~a` of an `:s32` parameter costs 5,405 in all.
 - **`prin1` in a program that only uses `princ`.** `%pc-walk` takes `escape` as an argument, so `%PC-UNQUALIFIED`,
   `FUNC_PRINT_VAL` and `FUNC_SYM_ESC_GC` (about 8.4KB) stay for a flag that is never true. No caller passes `t` here.
-- **Both printer walks live at once.** The unchanged SDK's `http_body` holds `%POS-WALK` (6,493) and `%PC-WALK` (3,772).
+- **Both printer walks live at once.** The unchanged SDK's `http_body` holds `%POS-WALK` (6,499) and `%PC-WALK` (4,322).
   The comment above `LispPreludeLibrary`'s `PRINT_CASED_WALK_INTERNAL` entry says they are never both live, but the path is
   `%POS-WALK` -> `%PRINT-OBJECT-LEAF` -> `%PRINT-CASED` -> `%PC-WALK`. The comment is wrong for this program; find out
   whether the leaf needs the whole walk.
@@ -26,7 +27,7 @@ From `funcsizes.py` on that module (`code` 54,233 of 60,671):
 - **Dispatcher arms for what nothing calls first-class.** `_dispatch_1` holds `CONCATENATE`, `STRING`, `VECTOR`, `IDENTITY`,
   `%SEQ-STRING` in a filter that names none of them with `#'`. `q7-dead-hash-ref` shows one way in: `#'string` in an
   uncalled function leaves the arm. Why these five are there is **not yet known**: start with that.
-- **`handler-case` around a `funcall`** is 10,829, against 2,721 without the `funcall` and 1,070 without the handler. The
+- **`handler-case` around a `funcall`** is 10,923, against 2,753 without the `funcall` and 1,070 without the handler. The
   dispatcher gains `FUNC_TILDE`, `FUNC_PRIN1_TO_STR`, `FUNC_PRINC_TO_STR`: a condition's report function as a first-class
   value is the likely reason, and it is not confirmed.
 
