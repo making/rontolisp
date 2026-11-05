@@ -13985,16 +13985,23 @@ cases:
       ;; rather than handed to the first preopened directory whole. probe-file's
       ;; answer is the truename, which differs by host (macOS's /tmp is a link) and,
       ;; on WASM, by what the preopens let the module see -- but it opens everywhere.
+      ;; The name is the run's own: every test run on a machine shares /tmp, and a read
+      ;; beside another run's truncating open answers NIL.
       (defvar *abs-dir* "/tmp")
-      (defvar *abs-file* (concatenate 'string *abs-dir* "/ronto-abs-path.txt"))
+      (defvar *abs-name*
+        (concatenate 'string *abs-dir* "/ronto-abs-path-"
+                     (princ-to-string (random 1000000000 (make-random-state t)))))
+      (defvar *abs-file* (concatenate 'string *abs-name* ".txt"))
+      (defvar *abs-source* (concatenate 'string *abs-name* ".lisp"))
       (with-open-file (out *abs-file* :direction :output) (write-line "absolute" out))
       (print (with-open-file (in *abs-file*) (read-line in)))
       (print (with-open-file (in (probe-file *abs-file*)) (read-line in)))
-      (print (probe-file (concatenate 'string *abs-dir* "/ronto-abs-absent.txt")))
-      (with-open-file (out (concatenate 'string *abs-dir* "/ronto-abs-path.lisp")
-                       :direction :output)
+      (print (probe-file (concatenate 'string *abs-name* "-absent.txt")))
+      (with-open-file (out *abs-source* :direction :output)
         (write-line "(print \"loaded-by-absolute-path\")" out))
-      (load (concatenate 'string *abs-dir* "/ronto-abs-path.lisp"))
+      (load *abs-source*)
+      (delete-file *abs-file*)
+      (delete-file *abs-source*)
     expected: |
       "absolute"
       "absolute"
@@ -39911,3 +39918,42 @@ standalone:
       (print (list (iu-a *iu*) (iu-c *iu*) (slot-exists-p *iu* 'b) *iu-log*))
     stdout: |
       (1 :C NIL (((C) (B))))
+  # Alone, because the corpus's eval keeps every name resolvable and its gates open.
+  - name: what-a-kept-function-can-name-and-what-a-fold-may-assume
+    source: |
+      ;; A symbol reaches a dispatcher only from a function that spells it, and a name only a
+      ;; function nothing calls spells has no case; the shake must not take the one it needs.
+      (defun s1-target (x) (* x 10))
+      (defun s1-give () 's1-target)
+      (defun s1-unspelled (x) (* x 100))
+      (defun s1-nobody () 's1-unspelled)
+      (print (funcall (s1-give) 3))
+      ;; (ecase map ...) reads as a (map computed-type ...) call to the scan behind
+      ;; #'concatenate's gate, in a program spelling a packed element type.
+      (defun s1-pick (map) (ecase map (:a 1) (:b 2)))
+      (print (s1-pick :b))
+      (print (make-array 1 :element-type '(unsigned-byte 8) :initial-element 7))
+      ;; nreverse answers a list whatever any cdr holds, also back into its own variable,
+      ;; and a string or a vector in its own kind.
+      (print (let ((held (cons "a" "b")) (acc '()))
+               (dotimes (i 3) (push (cons i i) acc))
+               (setq acc (nreverse acc))
+               (list held acc)))
+      (print (let ((s (copy-seq "abc")) (v (vector 1 2 3)))
+               (list (nreverse s) (nreverse v))))
+      ;; A cursor is what its guard said up to its next assignment.
+      (print (let ((x (list 1 "two" 3)) (n 0))
+               (loop (unless (consp x) (return n))
+                     (setq n (+ n (if (stringp (car x)) 10 1)))
+                     (setq x (cdr x)))))
+      (print (handler-case (car 1) (error () :caught)))
+      (print (handler-case (error "text ~a" 1) (error () :caught-text)))
+    stdout: |
+      30
+      2
+      #(7)
+      (("a" . "b") ((0 . 0) (1 . 1) (2 . 2)))
+      ("cba" #(3 2 1))
+      12
+      :CAUGHT
+      :CAUGHT-TEXT

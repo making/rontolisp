@@ -137,29 +137,30 @@ body. The Rust SDK's `http_body` runs 2,342 of them, from a module of 92,163 byt
 
 | `http_body` with | Bytes | Instructions, 5 bytes | 64KiB |
 | --- | ---: | ---: | ---: |
-| `(:on-failure :trap)` | 6,086 (3,165) | 1,145 | 223,013 |
-| A handler in the callbacks given, the default | 14,516 (6,242) | 1,219 | 223,163 |
-| `(:stream (id root) (make-instance 'my-stream))` | 14,063 (6,197) | 2,357 | 224,401 |
-| `get-buffer` and `search`, not `with-buffer` and `search-bytes` | 8,469 (4,275) | 1,482 | 1,967,966 |
+| `(:on-failure :trap)` | 4,872 (2,563) | 1,116 | 222,976 |
+| A handler in the callbacks given, the default | 5,172 (2,662) | 1,160 | 223,056 |
+| `(:stream (id root) (make-instance 'my-stream))` | 10,061 (4,719) | 2,287 | 224,307 |
+| `get-buffer` and `search`, not `with-buffer` and `search-bytes` | 6,945 (3,537) | 1,443 | 1,967,919 |
 
-- **Errors trap, or are handled.** The handler costs a filter 8KB raw and 3KB gzip, however
-  much it does, and about 25 instructions per callback given. A filter gives it up with
-  `(:on-failure :trap)`. Then an error traps, as an `unwrap` in the Rust SDK panics, and no
-  callback answers its default. The VM is gone: Envoy answers 503 to that request and to every
-  one after it. All of `sdk-examples/` but `error_log.lisp` do this.
+- **Errors trap, or are handled.** The handler costs `http_body` 300 bytes raw and 100 gzip, a
+  filter that does as much as `test_plugin` 3KB and 1KB, and about 22 instructions per callback
+  given. A filter gives it up with `(:on-failure :trap)`. Then an error traps, as an `unwrap` in
+  the Rust SDK panics, and no callback answers its default. The VM is gone: Envoy answers 503 to
+  that request and to every one after it. All of `sdk-examples/` but `error_log.lisp` do this.
 - **The log gives the reason for a failed host call, not for any other error.** Printing a
   condition would cost every filter the printer. A filter that wants the report catches the
-  error itself and prints it, and pays for that: `(handler-case ... (error (c) (proxy-wasm:log-error "~a" c)))`.
+  error itself and prints it, and pays for that, 22KB raw and 8KB gzip:
+  `(handler-case ... (error (c) (proxy-wasm:log-error "~a" c)))`.
   A failed call is logged where it fails, also when a filter goes on to handle the error.
 - **A `log-*` control string is compiled when it is a literal.** A computed one brings the
-  run-time `format` interpreter into the module, 85KB raw and 31KB gzip on `http_body`. A literal
+  run-time `format` interpreter into the module, 82KB raw and 30KB gzip on `http_body`. A literal
   with `~s` brings the printer that knows packages, 22KB raw and 8KB gzip; one with `~a` and `~d`
-  52 bytes.
+  44 bytes.
 - **A body is searched where the host put it.** `with-buffer` binds its address and size, and
   `search-bytes` looks through it at 3.4 instructions per byte, with no copy. `get-buffer` copies
   it to the engine's heap, and with `search` that is 30 per byte. A loop over `get-buffer-octets`
   is 155.
-- **Contexts live in a table of 64 buckets**, 4KB raw smaller than a hash table, and only in a
+- **Contexts live in a table of 64 buckets**, up to 4KB raw smaller than a hash table, and only in a
   filter that has `:root`, `:stream` or `:on-http-call-response`. A lookup walks 1/64 of the
   live streams of its VM, unless it is for the context the last callback took.
 
@@ -200,9 +201,9 @@ builds the filters there and runs on them the checks of `sdk-examples/check.sh`.
 
 | Filter, at `--optimize=size` | On this SDK: raw / gzip | On `proxy-wasm.lisp` with `(:on-failure :trap)`: raw / gzip |
 | --- | ---: | ---: |
-| `http_body` | 2,166 / 1,246 | 6,086 / 3,165 |
-| `http_headers` | 2,583 / 1,388 | 20,311 / 8,702 |
-| `test_plugin` | 6,581 / 3,145 | 49,489 / 20,741 |
+| `http_body` | 2,166 / 1,246 | 4,872 / 2,563 |
+| `http_headers` | 2,583 / 1,388 | 7,114 / 3,433 |
+| `test_plugin` | 6,581 / 3,145 | 31,340 / 13,012 |
 
 What it gives up, for a filter's author:
 

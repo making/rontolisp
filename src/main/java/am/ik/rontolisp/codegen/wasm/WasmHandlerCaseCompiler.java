@@ -188,6 +188,23 @@ final class WasmHandlerCaseCompiler {
 		WasmLandingPad.refresh(ctx, kept);
 		WasmUncaughtLocations.notePad(ctx, payloadSlot);
 		emitDepthAdjust(ctx, false);
+		if (ctx.handlersReadNoClass) {
+			// The first clause takes whatever arrives, and nothing reads what it was.
+			if (errorClauses.isEmpty()) {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(payloadSlot);
+				ctx.writer.write(Instruction.THROW);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+			}
+			else {
+				compileClauseBody(errorClauses.get(0), condSlot, resultSlot, ctx);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(resultSlot);
+				ctx.writer.write(Instruction.BR, ctx.wasmCtrlDepth - doneDepth);
+			}
+			closeLanding(ctx, blockExitDepth >= 0, needTrampoline, depthDecForm, continueDepth);
+			return;
+		}
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -235,7 +252,14 @@ final class WasmHandlerCaseCompiler {
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		ctx.writer.write(Instruction.THROW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
-		if (ctx.blockExitTag) {
+		closeLanding(ctx, blockExitDepth >= 0, needTrampoline, depthDecForm, continueDepth);
+	}
+
+	// What follows the $lisp-cond landing: the block-exit passthrough and the return
+	// trampoline, each where the form opened one, and the end of block $done.
+	private static void closeLanding(WasmLispCompiler.Ctx ctx, boolean blockExit, boolean needTrampoline,
+			LispVal depthDecForm, int continueDepth) {
+		if (blockExit) {
 			ctx.wasmCtrlDepth--;
 			ctx.writer.write(Instruction.END); // block $bx
 			// Block-exit landing: the (id . value) payload is on the stack; a
@@ -581,6 +605,20 @@ final class WasmHandlerCaseCompiler {
 	 * payload with an instance does.
 	 */
 	private static void emitSynthesizeSimpleError(int payloadSlot, int condSlot, WasmLispCompiler.Ctx ctx) {
+		LispVal quotedClass = new LispCons(new LispSymbol(LispNames.QUOTE),
+				new LispCons(new LispSymbol(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"), LispNil.INSTANCE));
+		if (ctx.unreadReports) {
+			// What only names a class to the clauses: the cdr holds no text, and a read
+			// of it would hand the fold every value any cdr holds.
+			WasmExprCompiler.compileExpr(
+					new LispCons(new LispSymbol(LispNames.OBJ_NEW),
+							new LispCons(quotedClass,
+									new LispCons(LispNil.INSTANCE, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)))),
+					ctx);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(condSlot);
+			return;
+		}
 		int msgSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
@@ -595,11 +633,10 @@ final class WasmHandlerCaseCompiler {
 		ctx.locals.put(msgVarName, msgSlot);
 		try {
 			// (%obj-new '%class-SIMPLE-ERROR (%text-control __hc_msg) nil)
-			LispVal quotedTag = new LispCons(new LispSymbol(LispNames.QUOTE),
-					new LispCons(new LispSymbol(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"), LispNil.INSTANCE));
 			LispVal instance = new LispCons(new LispSymbol(LispNames.OBJ_NEW),
-					new LispCons(quotedTag, new LispCons(LispMacroExpander.textControlForm(new LispSymbol(msgVarName)),
-							new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))));
+					new LispCons(quotedClass,
+							new LispCons(LispMacroExpander.textControlForm(new LispSymbol(msgVarName)),
+									new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))));
 			WasmExprCompiler.compileExpr(instance, ctx);
 		}
 		finally {

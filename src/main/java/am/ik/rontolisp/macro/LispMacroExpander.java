@@ -25550,6 +25550,20 @@ public final class LispMacroExpander {
 	}
 
 	public static boolean mayCreateInstances(List<LispVal> program, ClosRegistry closRegistry) {
+		return mayCreateInstances(program, closRegistry, false);
+	}
+
+	/**
+	 * {@link #mayCreateInstances(List, ClosRegistry)}, for a backend whose handlers read
+	 * no class where {@link #handlersTakeEveryThrow} holds: a catching form then builds
+	 * nothing.
+	 * @param program the top-level forms, AFTER the library splices
+	 * @param closRegistry the class registry
+	 * @param handlersReadNoClass whether a catching form needs no instance
+	 * @return whether an instance can exist
+	 */
+	public static boolean mayCreateInstances(List<LispVal> program, ClosRegistry closRegistry,
+			boolean handlersReadNoClass) {
 		if (mayCreateStreamValues(program)) {
 			// An OPEN stream is an instance of the fixed STREAM layout, so a program that
 			// can build one needs the instance representation -- including the program
@@ -25558,24 +25572,33 @@ public final class LispMacroExpander {
 			return true;
 		}
 		for (LispVal form : program) {
-			if (mayCreateInstance(form)) {
+			if (mayCreateInstance(form, handlersReadNoClass)) {
 				return true;
 			}
 		}
 		for (LispVal report : closRegistry.conditionReports().values()) {
-			if (mayCreateInstance(report)) {
+			if (mayCreateInstance(report, handlersReadNoClass)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	private static boolean mayCreateInstance(LispVal form) {
+	private static boolean mayCreateInstance(LispVal form, boolean handlersReadNoClass) {
 		while (form instanceof LispCons cons) {
-			if (cons.car() instanceof LispSymbol head && constructsInstance(head.name(), cons)) {
-				return true;
+			if (cons.car() instanceof LispSymbol head) {
+				boolean catching = handlersReadNoClass
+						&& (LispNames.HANDLER_CASE.equals(head.name()) || LispNames.IGNORE_ERRORS.equals(head.name()));
+				if (!catching && constructsInstance(head.name(), cons)) {
+					return true;
+				}
+				// A clause head would read as a signal call with initargs.
+				List<LispVal> evaluated = catching ? evaluatedClauseForms(head.name(), cons) : null;
+				if (evaluated != null) {
+					return evaluated.stream().anyMatch(f -> mayCreateInstance(f, true));
+				}
 			}
-			if (mayCreateInstance(cons.car())) {
+			if (mayCreateInstance(cons.car(), handlersReadNoClass)) {
 				return true;
 			}
 			form = cons.cdr();
@@ -25596,13 +25619,91 @@ public final class LispMacroExpander {
 			// A folded #S(...) literal may sit inside a #(...) vector literal, which is
 			// the one container the cons walk below cannot see through.
 			for (LispVal element : array.data()) {
-				if (mayCreateInstance(element)) {
+				if (mayCreateInstance(element, handlersReadNoClass)) {
 					return true;
 				}
 			}
 			return false;
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the first clause of every {@code handler-case} takes whatever the program
+	 * can throw: each is headed {@code error}, {@code serious-condition},
+	 * {@code condition} or {@code t}, and nothing throws what is no error -- no
+	 * {@code signal}, no {@code warn}, no computed datum, a quoted datum naming a class
+	 * under {@code error}. Every built-in signals an {@code error}. Reads every cons, so
+	 * quoted data counts against it. Where no report is read either, a landing has
+	 * nothing to ask of what it caught.
+	 * @param program the top-level forms, with their classes registered
+	 * @param closRegistry the class registry
+	 * @return whether a landing needs no class
+	 */
+	public static boolean handlersTakeEveryThrow(List<LispVal> program, ClosRegistry closRegistry) {
+		return program.stream().allMatch(form -> throwsOnlyToAnyClause(form, closRegistry));
+	}
+
+	private static boolean throwsOnlyToAnyClause(LispVal form, ClosRegistry closRegistry) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				if (!throwTakenByAnyClause(head.name(), cons, closRegistry)) {
+					return false;
+				}
+				List<LispVal> evaluated = evaluatedClauseForms(LispSymbol.memberName(head.name()), cons);
+				if (evaluated != null) {
+					return evaluated.stream().allMatch(f -> throwsOnlyToAnyClause(f, closRegistry));
+				}
+			}
+			if (!throwsOnlyToAnyClause(cons.car(), closRegistry)) {
+				return false;
+			}
+			form = cons.cdr();
+		}
+		return true;
+	}
+
+	private static boolean throwTakenByAnyClause(String head, LispCons form, ClosRegistry closRegistry) {
+		if (!form.isProperList()) {
+			return true;
+		}
+		List<LispVal> parts = form.toList();
+		switch (LispSymbol.memberName(head)) {
+			case LispNames.HANDLER_CASE:
+				for (int i = 2; i < parts.size(); i++) {
+					if (!(parts.get(i) instanceof LispCons clause) || !isClauseOfEveryThrow(clause.car())) {
+						return false;
+					}
+				}
+				return true;
+			case LispNames.SIGNAL, LispNames.WARN, LispNames.HANDLER_BIND:
+				return false;
+			case LispNames.FUNCTION:
+				return !(parts.size() == 2 && parts.get(1) instanceof LispSymbol name
+						&& (LispNames.ERROR.equals(name.name()) || LispNames.CERROR.equals(name.name())
+								|| LispNames.SIGNAL.equals(name.name()) || LispNames.WARN.equals(name.name())));
+			case LispNames.ERROR:
+				return parts.size() > 1 && isDatumOfAnError(parts.get(1), closRegistry);
+			case LispNames.CERROR:
+				return parts.size() > 2 && isDatumOfAnError(parts.get(2), closRegistry);
+			default:
+				return true;
+		}
+	}
+
+	private static boolean isClauseOfEveryThrow(LispVal head) {
+		return head instanceof LispTrue || head instanceof LispSymbol name
+				&& (":NO-ERROR".equals(name.name()) || "T".equals(name.name()) || "ERROR".equals(name.name())
+						|| "SERIOUS-CONDITION".equals(name.name()) || "CONDITION".equals(name.name()));
+	}
+
+	private static boolean isDatumOfAnError(LispVal datum, ClosRegistry closRegistry) {
+		if (datum instanceof LispString) {
+			return true;
+		}
+		LispSymbol type = quotedSymbol(datum);
+		ClosRegistry.ClassInfo cls = type == null ? null : closRegistry.findClass(type.name());
+		return cls != null && cls.ancestors().contains("ERROR");
 	}
 
 	/**
@@ -26259,7 +26360,9 @@ public final class LispMacroExpander {
 				continue;
 			}
 			for (LispVal bodyForm : clauseParts.subList(2, clauseParts.size())) {
-				if (usesSymbol(bodyForm, var.name())) {
+				boolean declaration = bodyForm instanceof LispCons declared && declared.car() instanceof LispSymbol op
+						&& LispNames.DECLARE.equals(op.name());
+				if (!declaration && usesSymbol(bodyForm, var.name())) {
 					return true;
 				}
 			}
@@ -36685,6 +36788,53 @@ public final class LispMacroExpander {
 	private static LispVal formatMessagePieces(String controlText, List<LispVal> argSyms) {
 		LispVal message = formatMessageText(controlText, argSyms);
 		return argSyms.isEmpty() ? message : callOf(LispNames.PRINT_WITHOUT_READABLY_INTERNAL, message);
+	}
+
+	/**
+	 * Whether evaluating a signal's message does nothing but build text: a literal, a
+	 * variable a rendering reads ({@link #formatMessagePieces} binds a signal's arguments
+	 * to temporaries first), text built of those, or the class's {@code :report} run over
+	 * the instance. A report is for whoever prints the condition, and the interpreter
+	 * does not run one at a signal either.
+	 * @param message the message operand
+	 * @return whether it can go unevaluated where nothing reads it
+	 */
+	public static boolean buildsTextOnly(LispVal message) {
+		if (message instanceof LispString || message instanceof LispNil) {
+			return true;
+		}
+		if (message instanceof LispSymbol symbol) {
+			return symbol.name().startsWith("__");
+		}
+		if (!(message instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head) || !cons.isProperList()) {
+			return false;
+		}
+		return switch (head.name()) {
+			case LispNames.STRING_CONCAT, LispNames.PRINT_WITHOUT_READABLY_INTERNAL, LispNames.PRINC_PIECE_INTERNAL,
+					LispNames.PRIN1_PIECE_INTERNAL ->
+				cons.toList().subList(1, cons.toList().size()).stream().allMatch(LispMacroExpander::buildsTextOnly);
+			case LispNames.WITH_OUTPUT_TO_STRING -> rendersSignalReport(cons);
+			default -> false;
+		};
+	}
+
+	/**
+	 * Whether a form is {@link #expandTypedSignal}'s rendering of a report:
+	 * {@code (with-output-to-string (stream) (funcall report condition stream))} over its
+	 * own two variables.
+	 */
+	private static boolean rendersSignalReport(LispCons form) {
+		List<LispVal> parts = form.toList();
+		if (parts.size() != 3 || !(parts.get(1) instanceof LispCons streamBinding)
+				|| !(streamBinding.car() instanceof LispSymbol stream) || !SIGNAL_STREAM_VAR.equals(stream.name())
+				|| !(parts.get(2) instanceof LispCons call) || !call.isProperList()) {
+			return false;
+		}
+		List<LispVal> callParts = call.toList();
+		return callParts.size() == 4 && callParts.get(0) instanceof LispSymbol head
+				&& LispNames.FUNCALL.equals(head.name()) && callParts.get(2) instanceof LispSymbol condition
+				&& SIGNAL_COND_VAR.equals(condition.name()) && callParts.get(3) instanceof LispSymbol reportStream
+				&& SIGNAL_STREAM_VAR.equals(reportStream.name());
 	}
 
 	private static LispVal formatMessageText(String controlText, List<LispVal> argSyms) {

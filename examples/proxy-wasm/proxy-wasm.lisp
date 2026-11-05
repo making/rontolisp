@@ -555,7 +555,7 @@
                                        ,(%pairs-form headers) ,grpc-status)))
 
 ;; A table keyed by a host-issued integer: buckets of an alist. A host's ids and tokens count
-;; up, so the buckets fill evenly. It costs a filter 4KB less than a hash table.
+;; up, so the buckets fill evenly. It costs a filter up to 4KB less than a hash table.
 (defun %table () (make-array 64 :initial-element nil))
 
 (defun %lookup (table key) (cdr (assoc key (aref table (logand key 63)))))
@@ -647,9 +647,9 @@
 ;;; ---------------------------------------------------------------------------
 ;;; A filter that asks for an object per context has them here, and a filter that does not
 ;;; has none of this. A callback mostly takes the context the one before it took, which the
-;;; last pair answers.
+;;; last pair answers. define-filter makes each table for a filter that uses it.
 
-(defvar *contexts* (%table))
+(defvar *contexts* nil)
 
 (defvar *last-context-id* nil)
 
@@ -671,7 +671,7 @@
 
 ;; Which context made each outgoing call: the ABI hands a call's reply to the PLUGIN's
 ;; context whichever stream made it, so getting it back to that stream is this SDK's job.
-(defvar *calls* (%table))
+(defvar *calls* nil)
 
 (defvar *running-context* nil)
 
@@ -927,6 +927,8 @@
                                 calls trap))
         (push form forms)))
     `(progn
+       ,@(when tracked '((setq *contexts* (%table))))
+       ,@(when calls '((setq *calls* (%table))))
        (defun %abi-version () nil)
        (rontolisp:wasm-export '%abi-version :as "proxy_abi_version_0_2_1")
        (defun %on-memory-allocate (size) (alloc size))

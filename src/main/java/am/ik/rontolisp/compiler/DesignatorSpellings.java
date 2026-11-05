@@ -79,6 +79,23 @@ public final class DesignatorSpellings {
 	}
 
 	/**
+	 * Every spelling that resolves {@code name}, those of its {@code (setf place)} too.
+	 * @param name the function's canonical name
+	 * @param symbolBuilders whether the program contains a symbol builder
+	 * @param setfNamesBuilt whether the program maps a {@code (setf place)} list built at
+	 * run time onto its function ({@link RuntimeFunctionNames})
+	 * @return the spellings
+	 */
+	public static List<String> all(String name, boolean symbolBuilders, boolean setfNamesBuilt) {
+		List<String> spellings = new ArrayList<>(of(name, symbolBuilders));
+		String place = setfNamesBuilt ? ClosRegistry.setfPlaceOfFunctionName(name) : null;
+		if (place != null) {
+			spellings.addAll(of(place, symbolBuilders));
+		}
+		return spellings;
+	}
+
+	/**
 	 * Whether any spelling of {@code name} occurs among the program's spelled literals.
 	 * @param name the function's canonical name
 	 * @param spelledLiterals the spellings Pass 2 emitted as runtime values
@@ -105,13 +122,12 @@ public final class DesignatorSpellings {
 	 */
 	public static @Nullable String matched(String name, Set<String> spelledLiterals, boolean symbolBuilders,
 			boolean setfNamesBuilt) {
-		for (String spelling : of(name, symbolBuilders)) {
+		for (String spelling : all(name, symbolBuilders, setfNamesBuilt)) {
 			if (spelledLiterals.contains(spelling)) {
 				return spelling;
 			}
 		}
-		String place = setfNamesBuilt ? ClosRegistry.setfPlaceOfFunctionName(name) : null;
-		return place != null ? matched(place, spelledLiterals, symbolBuilders, false) : null;
+		return null;
 	}
 
 }

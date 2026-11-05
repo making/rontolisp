@@ -535,6 +535,35 @@ row):
   `JvmLispCompilerTest#anUncaughtConditionReportsOneLineAndRethrowsWithoutATrace` (an embedder's read,
   one rendering).
 
+## A module with nowhere to report
+Under `--no-wasi` standard error is a sink, so the entry pad reads nothing: `_start` lands on a plain trap
+(`emitCatchAllPrologue`), the exit class the pad ended in. Where no program code can hold a condition
+either (`mayHoldConditions`, and not `--dynamic`, restart mode, P1 futures or a data evaluator), no report
+is read at all: `Ctx.unreadReports`. A throw then carries its class and no text
+(`WasmRuntimeBuilder.emitUnreadThrow`, `buildUnreadThrowBody` for `_type_err`, `_type_err_of`,
+`_subseq_bad`, `_div_zero`; `unread` on the dispatchers' reports and `_big_ash`), a rank mismatch builds no
+type, `SignalMessages` is `LAZY`, and `%error` evaluates a message only for its effects
+(`buildsTextOnly`: a rendering reads temporaries its signal bound, and a class's `:report` is for whoever
+prints the condition, which the interpreter does not do at a signal either). A landing reads no cdr: `_charvec_to_str`
+over it handed `~a` every value any cdr holds. `(error (e) (declare (ignore e)) ...)` no longer counts as
+holding `e`.
+
+The surface scan runs before the expansion, so an expansion that lets program code hold a condition
+(`routesConditionReports` afterwards) retries with the broad answer, `UncaughtReportUnforeseen`'s way.
+
+**`Ctx.handlersReadNoClass`**: on top of that, `LispMacroExpander.handlersTakeEveryThrow`. Every clause
+is headed `error`, `serious-condition`, `condition` or `t`, and nothing throws what is no error: no `signal`,
+no `warn`, no computed datum, a quoted datum under `error`. The first clause then takes whatever
+arrives, so a landing asks nothing, `hasLandingPad` is off for what it gates (a pad is the only thing that
+can observe a class) and `mayCreateInstances` leaves a catching form out: `(nil . nil)` payloads, no
+instance type, no layouts. A wrong argument count keeps its throw (`padAsksNothing`), since `hasLandingPad`
+would have made it the trap of a module with no pad.
+
+The default handler of the Proxy-Wasm SDK was 8,420 raw and 3,065 gzip on `http_body`, now 300 and 99.
+Bare `handler-case` with `(error () 0)`: 2,701 to 453. Pin:
+`WasmLispCompilerIntegrationTest#aReactorNothingReadsAReportOfStillCatchesEveryClassItCan`, on the same answers
+as a module with a stderr, at every level.
+
 ## Signal messages are lazy on wasm-GC
 **Invariant: on the wasm-GC backends a signal's message string is rendered only where a condition
 value can reach program hands -- never at the signal point.** In EH mode the entry landing pad is a

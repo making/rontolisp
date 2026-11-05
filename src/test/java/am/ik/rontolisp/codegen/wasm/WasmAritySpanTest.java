@@ -146,7 +146,7 @@ class WasmAritySpanTest {
 			SortedMap<Integer, String> named = new TreeMap<>();
 			named.put(5, "LENGTH");
 			WasmRuntimeBuilder.ArityReport report = withReport ? new WasmRuntimeBuilder.ArityReport(st, 0, 0, 8, 0,
-					false, named, new TreeMap<>(), new TreeMap<>(), MESSAGE_INDEX) : null;
+					false, named, new TreeMap<>(), new TreeMap<>(), MESSAGE_INDEX, false) : null;
 			WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(0, defuns, List.of(),
 					defunCount, st, false, false, 0, false, null, 1_000_000, report, -1, false, null, false, -1);
 			assertThat(built.pages()).as("an unpaged dispatcher").isEmpty();

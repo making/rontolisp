@@ -3346,6 +3346,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				usesStreamValues && functions.containsKey(LispNames.CHARACTER_STREAM_P_INTERNAL),
 				functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL),
 				functions.containsKey(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL));
+		// A reference the gates above have read makes no value: only an evaluation could
+		// (compiler/ToplevelStatements).
+		topLevelExprs = ToplevelStatements.pruneFunctionReferences(topLevelExprs, name -> {
+			FunctionInfo fi = functions.get(name);
+			return fi != null && fi.cell() == null && !fenvForwarders.contains(name);
+		});
 		// Cut a top-level form an earlier attempt measured too large for one method
 		// into methods of its own: the chunker below only splits BETWEEN forms, so one
 		// form past the per-method cap has no split point otherwise

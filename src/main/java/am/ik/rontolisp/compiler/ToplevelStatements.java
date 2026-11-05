@@ -2,6 +2,7 @@ package am.ik.rontolisp.compiler;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
@@ -23,8 +24,8 @@ import am.ik.rontolisp.PackageRegistry;
  * in order to have something to return is code no run can observe.
  *
  * <p>
- * Two shapes produce exactly that, and this class is where both are recognized, once, for
- * both compile paths:
+ * Three shapes produce exactly that, and this class is where they are recognized, once,
+ * for both compile paths:
  *
  * <ul>
  * <li>{@link #prune(List) a form that IS a constant} -- {@code (in-package :chipz)} and
@@ -36,17 +37,20 @@ import am.ik.rontolisp.PackageRegistry;
  * {@code defvar}/{@code defparameter}/{@code defconstant} bind the variable and then
  * return the name symbol. The binding is the effect; the symbol is not. The two backends'
  * top-level emitters compile these for effect, so the name is never materialized.</li>
+ * <li>{@link #pruneFunctionReferences(List, Predicate) a reference that cannot fail} --
+ * {@code (function name)} added to open a wrapper's gate. The reference is what the gate
+ * reads, and nothing reads its value.</li>
  * </ul>
  *
  * <p>
- * <b>Why this is not behind {@code --optimize}.</b> Neither shape is a speed/size trade
- * with a losing side: the removed code cannot be observed at any level, and leaving it in
- * makes the flag-less module differ from the shaken one for no reason. It is the same
- * standing this project gives {@code PureBuiltinFolder}
- * ({@code .kb/pure-builtin-fold.md}) -- always on, both compile paths.
+ * <b>Why this is not behind {@code --optimize}.</b> No shape is a speed/size trade with a
+ * losing side: the removed code cannot be observed at any level, and leaving it in makes
+ * the flag-less module differ from the shaken one for no reason. It is the same standing
+ * this project gives {@code PureBuiltinFolder} ({@code .kb/pure-builtin-fold.md}) --
+ * always on, both compile paths.
  *
  * <p>
- * <b>Why only constants are pruned.</b> A bare non-keyword symbol at top level is NOT
+ * <b>Why nothing else is pruned.</b> A bare non-keyword symbol at top level is NOT
  * effect-free: evaluating it can signal an unbound-variable error, which is an observable
  * effect, so it stays. Neither is a call to a function whose body happens to be pure --
  * deciding that is {@link am.ik.rontolisp.macro.PureBuiltinFolder}'s job, and anything it
@@ -78,6 +82,32 @@ public final class ToplevelStatements {
 		List<LispVal> kept = new ArrayList<>(topLevelForms.size());
 		for (LispVal form : topLevelForms) {
 			if (!isConstant(form)) {
+				kept.add(form);
+			}
+		}
+		return kept;
+	}
+
+	/**
+	 * Drops the top-level {@code (function name)} forms whose evaluation cannot fail. The
+	 * gates that inject a wrapper read that spelling, so
+	 * {@code FunctionDesignators.normalizeBuiltinDesignators} and {@link EvalReferences}
+	 * add one to open a gate, as a form that runs nothing. Evaluated, it would make the
+	 * value: a dispatcher would carry the function's arm, and all the function reaches,
+	 * though nothing can hold that value. For after the last gate scan, since the names
+	 * have to be known.
+	 * @param topLevelForms the top-level forms about to be emitted
+	 * @param plainFunction whether a name is a registered function a reference of which
+	 * reads no cell and no namespace
+	 * @return the forms that still have something to do, in the same order
+	 */
+	public static List<LispVal> pruneFunctionReferences(List<LispVal> topLevelForms, Predicate<String> plainFunction) {
+		List<LispVal> kept = new ArrayList<>(topLevelForms.size());
+		for (LispVal form : topLevelForms) {
+			if (!(form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& LispNames.FUNCTION.equals(op.name()) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && rest.cdr() instanceof LispNil
+					&& plainFunction.test(name.name()))) {
 				kept.add(form);
 			}
 		}
