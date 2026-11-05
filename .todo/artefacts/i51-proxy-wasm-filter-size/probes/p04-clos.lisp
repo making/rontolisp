@@ -1,0 +1,6 @@
+(defclass c () ((id :initarg :id :reader c-id)))
+(defclass d (c) ())
+(defgeneric g (o x) (:method ((o c) x) (declare (ignore x)) 1))
+(defmethod g ((o d) x) (+ x (c-id o)))
+(defun f (x) (g (make-instance 'd :id x) x))
+(rontolisp:wasm-export 'f :as "f" :params '(:s32) :returns :s32)

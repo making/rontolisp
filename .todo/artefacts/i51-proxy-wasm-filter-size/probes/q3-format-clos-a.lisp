@@ -1,0 +1,6 @@
+(rontolisp:wasm-import '%log :from "env" :as "proxy_log" :params '(:s32 :string) :returns :s32)
+(defclass c () ((id :initarg :id :reader c-id)))
+(defgeneric g (o x))
+(defmethod g ((o c) x) (%log 2 (format nil "x=~a" x)) 0)
+(defun f (x) (g (make-instance 'c :id x) x))
+(rontolisp:wasm-export 'f :as "f" :params '(:s32) :returns :s32)
