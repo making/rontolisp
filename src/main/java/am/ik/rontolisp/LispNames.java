@@ -151,6 +151,44 @@ public final class LispNames {
 	public static final String GLOBAL_ACCESS_RUNTIME = "%GLOBAL-ACCESS";
 
 	/**
+	 * The run-time table's dispatch over the built-in macros a compiled {@code eval} can
+	 * reach ({@code eval-macros.lisp}): {@code (op form env)} answers what the form
+	 * expands to, the form itself for a name no row holds.
+	 */
+	public static final String EVAL_EXPANSION = "%EVAL-EXPANSION";
+
+	/**
+	 * The dispatch over the places {@code _store} has no arm for: {@code (op args value)}
+	 * answers the form that assigns one, nil for a name no row holds.
+	 */
+	public static final String EVAL_PLACE_EXPANSION = "%EVAL-PLACE-EXPANSION";
+
+	/**
+	 * What an eval'd {@code let} binding a special evaluates instead:
+	 * {@code ((bindings . body))} answers the form, nil when the let binds none.
+	 */
+	public static final String EVAL_SPECIAL_LET = "%EVAL-SPECIAL-LET";
+
+	/**
+	 * Whether a name is special in the compiled program, generated from the final set.
+	 */
+	public static final String EVAL_COMPILED_SPECIAL_P = "%EVAL-COMPILED-SPECIAL-P";
+
+	/** The variable an eval'd {@code flet} or {@code labels} keeps its alist in. */
+	public static final String EVAL_LOCAL_FUNCTIONS = "%EVAL-FUNCTIONS";
+
+	/**
+	 * The table row of {@code flet}: its presence switches the local-function lookup on.
+	 */
+	public static final String EVAL_ROW_FLET = "%EVAL-ROW-FLET";
+
+	/**
+	 * The table row of {@code labels}: its presence switches the local-function lookup
+	 * on.
+	 */
+	public static final String EVAL_ROW_LABELS = "%EVAL-ROW-LABELS";
+
+	/**
 	 * Internal (compile-path only): the shared runtime a {@code progv} site binds its
 	 * runtime symbols through -- {@code (%progv-bind symbols values)} binds each name and
 	 * answers the save list {@link #PROGV_UNBIND_RUNTIME} restores. Its per-name dispatch

@@ -348,6 +348,12 @@ Traps:
   `evalAtom`, both quote compilers. A user macro's arguments are unwrapped and its expansion shielded
   again (`LispEvaluator.expandMacroCall`), so a macro sees the datum and a macro-made circle compiles;
   a `#.` value is shielded where its marker resolves (`resolveReadTimeEvalInCode`).
+  A marker inside the wrapper, an array or a `#S` is reached by `LispTrees.replaceDatumNodes`, since no
+  spine walk goes through those: `'#1=(#.(+ 1 2) #1#)` and `'#(#.(+ 1 2))` held `(%READ-EVAL (+ 1 2))` on
+  all four until 2026-11-05. A label on a `#.` names one value, evaluated once (`readTimeValue`; across a
+  flattened `progn` through `Session.readTimeValues`). The hidden names leave out a marker's head: a tail
+  of the list that began `%READ-EVAL` read as a marker and evaluated the next name, and the list's order
+  came from an identity hash, so it failed on some runs only (`The variable BACK is unbound`).
   A pass that decides by the symbols a program names (library splice, defun prune) reads data too, so
   the form becomes `(progn '(hidden-symbols...) form)`: without it `(funcall (car '#1=(vec:dot #1#)) ...)`
   answered `VEC:DOT is undefined` on the compile backends. This replaced the read error for a label

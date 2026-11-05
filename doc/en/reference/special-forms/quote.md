@@ -8,9 +8,10 @@ Returns `expr` without evaluating it, yielding the literal datum -- a symbol, li
 (quote (a b c)) ; => (A B C)
 ```
 
-The literal keeps what a `#n=` reader label wrote: a node the label shares is one object, and a label inside its own datum closes a circle, through a list, an array or a structure.
+The literal keeps what a `#n=` reader label wrote: a node the label shares is one object, in one literal or in two, and a label inside its own datum closes a circle, through a list, an array or a structure.
 
 ```lisp
 (let ((a '(#1=(x) #1#))) (eq (car a) (cadr a))) ; => T
 (let ((a '#2=(x #2#))) (eq a (cadr a))) ; => T
+(let ((a '(#3=(x))) (b '#3#)) (eq (car a) b)) ; => T
 ```

@@ -74,7 +74,7 @@ public final class StructLiteralFolder {
 	 * a backquote's list-building code, a {@code #(...)} vector literal and another
 	 * literal's slot values alike. A form is a graph, since a {@code #n=} reader label
 	 * may share a node or close a circle through a car, a tail, an array or a literal
-	 * (CLHS 2.4.8.3), and the fold answers the same graph: one instance per literal, one
+	 * (CLHS 2.4.8.15), and the fold answers the same graph: one instance per literal, one
 	 * copy per node that leads to a literal, and every other node as it stands.
 	 * @param form the form to fold
 	 * @param registry the layout registry
@@ -100,44 +100,10 @@ public final class StructLiteralFolder {
 		/** Folds a graph of its own: the form, or the constant initform of a slot. */
 		LispVal foldGraph(LispVal root) {
 			if (holdsLiteral(root)) {
-				addNodesLeadingToLiteral(root);
+				this.leadingToLiteral
+					.addAll(LispTrees.nodesLeadingTo(root, LispStructLiteral.class::isInstance, LispTrees::childNodes));
 			}
 			return fold(root);
-		}
-
-		/**
-		 * Adds every node with a path to a literal, the literals included, by walking the
-		 * predecessors back from them.
-		 */
-		private void addNodesLeadingToLiteral(LispVal root) {
-			Map<LispVal, List<LispVal>> predecessors = new IdentityHashMap<>();
-			Deque<LispVal> pending = new ArrayDeque<>();
-			Deque<LispVal> reached = new ArrayDeque<>();
-			predecessors.put(root, new ArrayList<>());
-			pending.push(root);
-			while (!pending.isEmpty()) {
-				LispVal node = pending.pop();
-				if (node instanceof LispStructLiteral) {
-					reached.push(node);
-				}
-				for (LispVal next : LispTrees.childNodes(node)) {
-					List<LispVal> known = predecessors.get(next);
-					if (known == null) {
-						known = new ArrayList<>(1);
-						predecessors.put(next, known);
-						pending.push(next);
-					}
-					known.add(node);
-				}
-			}
-			Set<LispVal> marked = Collections.newSetFromMap(new IdentityHashMap<>());
-			while (!reached.isEmpty()) {
-				LispVal node = reached.pop();
-				if (marked.add(node)) {
-					this.leadingToLiteral.add(node);
-					predecessors.getOrDefault(node, List.of()).forEach(reached::push);
-				}
-			}
 		}
 
 		private LispVal fold(LispVal node) {

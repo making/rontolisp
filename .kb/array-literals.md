@@ -20,7 +20,9 @@ BARE `(array (mut i8|i16|i32))` and every emitted type is `sub final`,
   `compileIntVectorLiteral` rebuild at the site; `eval/LiteralArrays.materialize` is the
   interpreter's half, called from the three self-evaluating array arms of
   `LispEvaluator.eval`. The copy is **deep through nested ARRAYS only**; every other element
-  passes through by identity.
+  passes through by identity, and on the compile backends is one constant for the same reason
+  (`compiler/QuotedSharing`, `.kb/quoted-data.md`, "A node two literals reach"):
+  `(eq (aref (f) 0) (aref (f) 0))` is `T` for `(defun f () #((k)))`, `NIL` there until 2026-11-05.
 - **`quote` goes the other way**: `'#(1 2 3)` is a CONSTANT, one shared object per quote
   site on all four backends; the two rules meet exactly at the `'`. `evalQuote` hands the
   datum back as is because `(quote <value>)` is also the interpreter's live-value splice

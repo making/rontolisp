@@ -151,17 +151,53 @@ the build ends, and the final field covers the graph (JLS 17.5). Source circles 
 the literals) get one copy each, made before its children, and every other node stands. A form with no
 literal costs one identity walk. `LiteralArrays` copies each nested array once for the same reason.
 
+## A node two literals reach is one object
+**Invariant: a node reached from two literals of a program is one object on all four backends**, a
+`#n=` label in two quotes or a macro's constant spliced into two (CLHS 3.2.4.4), and a circle between
+them closes (2026-11-05, against SBCL). The interpreter has it from the reader's identity.
+
+The compile backends need the sites before a body compiles: `compiler/QuotedSharing.of`, in front of
+Pass 1, walks the program for its literals (a `quote`, a bare instance, a circle) and finds what two of
+them reach. Those nodes are closed downward, since what a shared node reaches is reached twice too; a
+literal keeps the nodes only it reaches. A connected set of shared nodes is a UNIT, with a graph naming
+the nodes the literals come in through. Its slot (`_qd`, a wasm global) holds the array of named nodes,
+built whole by whichever read runs first, and a read is the slot plus one array read: racing first
+builds settle in `_qdSet` on one whole unit. A literal holding a shared node stops there and reads it
+(`QuotedGraph.stopsAt`), so its private part stays behind its own slot, and the shaker drops a dead
+site's part with it. A site made in Pass 2 builds what it holds, except an entry.
+
+An array in code position is a constructor, so its elements stand for it: each non-array element it or
+an array inside it holds is an entry, which keeps it one object across evaluations as the interpreter's
+`LiteralArrays` does, and the array itself is built even when two quotes share it.
+
+**The cost, measured 2026-11-05 before the build.** The todo this came from feared the frontends reuse
+sublists between quote sites and every program's emission would move. Census over ci-spec's `cases:` as
+one program and the 219 examples that compile on their own: ci-spec has 5,089 literals in 1,750,948
+conses of code and 4 nodes two of them reach; 208 examples have none; the most is `jvm/cffi-sqlite` with
+15 (31 literals), and what they are is type specifiers (`(UNSIGNED-BYTE 8)`) and a template's sublist.
+The census counted two quotes reaching a node, not a list in an array literal, which is an entry too.
+With neither `QuotedSharing.of` answers null and nothing else changes; a unit costs one read per
+reference over what each literal built on its own. The walk is one identity pass, about 1 s on ci-spec's
+program on a loaded machine.
+
+A read holds the unit's build inline, so `k` reads of a unit of `n` nodes emit `k * n` build code. That
+is what the literals' own copies cost before when the unit is one list; a unit grows past that only when
+its shared nodes connect, which the census does not reach.
+
 ## Not covered
 Two DIFFERENT quote sites spelling the same text are not `eq` (CLHS permits but does not
-require coalescing). `--no-gc` is scalar-only (`.kb/no-gc-scalar-wasm.md`). A node a label shares between
-two quote sites is one per site on the compile backends, since `QuotedGraph` sees one datum:
-`(let ((a '(#1=(x))) (b '(#1#))) (eq (car a) (car b)))` is `NIL` there and `T` on the interpreter and
-SBCL (2026-11-05). Outside `cl-user` the interpreter answers `NIL` as well, and so does
-`(eq '#1=(x) '#1#)` everywhere: `PackageResolver` copies per quote.
+require coalescing). `--no-gc` is scalar-only (`.kb/no-gc-scalar-wasm.md`). Two more, both measured
+2026-11-05 and `T` on SBCL:
+
+- A top-level `progn` in a package other than `cl-user`, with a label across two members, only one of them
+  holding a macro call: the walk (`UserMacroExpander`) resolves that member and leaves the other's spelling
+  for the compilers' resolver, so two copies are made. `NIL` on the compile backends.
+- An array inside a bare array that two quotes also share is read from the unit, not fresh, on the compile
+  backends.
 
 ## Tests
 ci-spec `quoted-datum-shared-cross-backend`, `instance-literal-shared-cross-backend`,
-`reader-label-sharing-and-circles-in-a-constant`;
+`reader-label-sharing-and-circles-in-a-constant`, `reader-label-shared-between-quote-sites`;
 `LispEvaluatorTest.{aQuotedDatum,anInstanceLiteral}IsOneSharedConstantOnEveryBackend`;
 `{aQuotedDatum,aBareInstanceLiteral}IsOneSharedConstantAcrossEvaluations` in
 `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest` (Preview 1 AND component).

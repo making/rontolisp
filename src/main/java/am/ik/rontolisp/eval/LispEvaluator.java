@@ -8,6 +8,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -20,6 +21,7 @@ import java.util.function.Supplier;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispCircularLiteral;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispComplex;
 import am.ik.rontolisp.LispDouble;
@@ -5777,7 +5779,7 @@ public final class LispEvaluator {
 	 * @return the form with every read-time-eval marker resolved
 	 */
 	public LispVal resolveReadTimeEval(LispVal form) {
-		return resolveReadTimeEval(form, false);
+		return resolveReadTimeEval(form, false, new IdentityHashMap<>());
 	}
 
 	/**
@@ -5795,20 +5797,31 @@ public final class LispEvaluator {
 	 * @return the form with every read-time-eval marker resolved
 	 */
 	public LispVal resolveReadTimeEvalInCode(LispVal form) {
-		// A #. value is a datum the read never saw, and may hold a circle.
-		return LispTrees.shieldProgramForm(resolveReadTimeEval(form, true));
+		return resolveReadTimeEvalInCode(form, new IdentityHashMap<>());
 	}
 
-	private LispVal resolveReadTimeEval(LispVal form, boolean inCode) {
+	/**
+	 * {@link #resolveReadTimeEvalInCode(LispVal)} for one of the forms that were a single
+	 * form as read: a label on a {@code #.} names one value, evaluated once.
+	 * @param form the form as read
+	 * @param values what the markers resolved so far evaluated to, by identity
+	 * @return the form with every read-time-eval marker resolved
+	 */
+	LispVal resolveReadTimeEvalInCode(LispVal form, Map<LispVal, LispVal> values) {
+		// A #. value is a datum the read never saw, and may hold a circle.
+		return LispTrees.shieldProgramForm(resolveReadTimeEval(form, true, values));
+	}
+
+	private LispVal resolveReadTimeEval(LispVal form, boolean inCode, Map<LispVal, LispVal> values) {
 		if (inCode && form instanceof LispCons call && isMarker(call.car(), LispNames.READ_EVAL)) {
 			// A marker in a call's OPERATOR position is not evaluated, so its value
 			// splices raw: ironclad tiger.lisp's (#.+tiger-block-copy-fn+ block ...)
 			// names the function, where a quoted symbol would be no call at all.
-			LispVal head = resolveReadTimeEval(call.car(), false);
-			LispVal rest = resolveReadTimeEvalSpine(call.cdr(), true);
+			LispVal head = resolveReadTimeEval(call.car(), false, values);
+			LispVal rest = resolveReadTimeEvalSpine(call.cdr(), true, values);
 			return head == call.car() && rest == call.cdr() ? form : new LispCons(head, rest);
 		}
-		return resolveReadTimeEvalSpine(form, inCode);
+		return resolveReadTimeEvalSpine(form, inCode, values);
 	}
 
 	/**
@@ -5816,9 +5829,9 @@ public final class LispEvaluator {
 	 * operator-position rule: {@code form} is a TAIL, so its first element is an
 	 * argument.
 	 */
-	private LispVal resolveReadTimeEvalSpine(LispVal form, boolean inCode) {
-		return LispTrees.rebuildSpine(form, node -> resolvedReadTimeEvalNode(node, inCode),
-				car -> resolveReadTimeEval(car, inCode));
+	private LispVal resolveReadTimeEvalSpine(LispVal form, boolean inCode, Map<LispVal, LispVal> values) {
+		return LispTrees.rebuildSpine(form, node -> resolvedReadTimeEvalNode(node, inCode, values),
+				car -> resolveReadTimeEval(car, inCode, values));
 	}
 
 	/**
@@ -5826,30 +5839,36 @@ public final class LispEvaluator {
 	 * stays, a marker is its value, a quoted datum and a {@code defpackage}'s clauses are
 	 * resolved as data -- or {@code null} for an ordinary cell.
 	 */
-	private @Nullable LispVal resolvedReadTimeEvalNode(LispVal form, boolean inCode) {
+	private @Nullable LispVal resolvedReadTimeEvalNode(LispVal form, boolean inCode, Map<LispVal, LispVal> values) {
+		if (form instanceof LispCircularLiteral literal) {
+			LispVal resolved = resolvedReadTimeEvalData(literal.datum(), values);
+			return (resolved == literal.datum()) ? form : new LispCircularLiteral(resolved);
+		}
+		if (form instanceof LispArray || form instanceof LispStructLiteral) {
+			return resolvedReadTimeEvalData(form, values);
+		}
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
 		if (cons.car() instanceof LispCons element && isMarker(element, LispNames.READ_TIME_FEATURE)) {
 			// A deferred #+#. guard as a list element: the guarded datum splices in, or
 			// the element is dropped.
-			LispVal rest = resolveReadTimeEvalSpine(cons.cdr(), inCode);
-			LispVal guarded = readTimeFeatureChoice(element, inCode);
+			LispVal rest = resolveReadTimeEvalSpine(cons.cdr(), inCode, values);
+			LispVal guarded = readTimeFeatureChoice(element, inCode, values);
 			return guarded == null ? rest : new LispCons(guarded, rest);
 		}
 		if (isMarker(cons, LispNames.READ_TIME_FEATURE)) {
 			// The whole form is the guard (a top-level #+#.): a dropped form is nil.
-			return Objects.requireNonNullElse(readTimeFeatureChoice(cons, inCode), LispNil.INSTANCE);
+			return Objects.requireNonNullElse(readTimeFeatureChoice(cons, inCode, values), LispNil.INSTANCE);
 		}
 		if (isMarker(cons, LispNames.READ_TIME_FEATURE_TEMPLATE)) {
 			// Inside backquote construction code the marker is a spliced segment.
-			return Objects.requireNonNullElse(readTimeFeatureChoice(cons, true), LispNil.INSTANCE);
+			return Objects.requireNonNullElse(readTimeFeatureChoice(cons, true, values), LispNil.INSTANCE);
 		}
 		if (cons.car() instanceof LispSymbol head && LispNames.READ_EVAL.equals(head.name())
 				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
 			requireReadEvalEnabled();
-			// The datum itself is always evaluated, so nested markers are in code.
-			LispVal value = eval(resolveReadTimeEval(datumCons.car(), true));
+			LispVal value = readTimeValue(cons, datumCons.car(), values);
 			// ONLY a symbol value quotes: rontolisp renders a package object as a
 			// symbol, and quoting keeps it the OBJECT it is in CL (where a package
 			// self-evaluates). A cons value stays raw exactly like CL -- the spliced
@@ -5867,14 +5886,14 @@ public final class LispEvaluator {
 			// variant): the value is template DATA, so it substitutes quoted --
 			// evaluating the construction code embeds the value itself.
 			requireReadEvalEnabled();
-			LispVal value = eval(resolveReadTimeEval(datumCons.car(), true));
+			LispVal value = readTimeValue(cons, datumCons.car(), values);
 			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
 		}
 		if (inCode && cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())
 				&& cons.cdr() instanceof LispCons datumCell && datumCell.cdr() instanceof LispNil) {
 			// The well-formed (quote DATUM) shape: the datum is data, so a marker
 			// inside it splices raw.
-			LispVal datum = resolveReadTimeEval(datumCell.car(), false);
+			LispVal datum = resolveReadTimeEval(datumCell.car(), false, values);
 			if (datum == datumCell.car()) {
 				return form;
 			}
@@ -5884,7 +5903,7 @@ public final class LispEvaluator {
 				&& LispNames.DEFPACKAGE.equals(LispSymbol.memberName(dataOp.name()))) {
 			// defpackage's clauses are unevaluated data: alexandria-2 splices its
 			// re-export list as (:export . #.(let ...)).
-			LispVal rest = resolveReadTimeEval(cons.cdr(), false);
+			LispVal rest = resolveReadTimeEval(cons.cdr(), false, values);
 			if (rest == cons.cdr()) {
 				return form;
 			}
@@ -5894,13 +5913,40 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Resolves the markers of a literal, a graph no spine walk goes through: an array, a
+	 * {@code #S} literal, the circle wrapped where it was read. It is data, so a value
+	 * splices raw.
+	 */
+	private LispVal resolvedReadTimeEvalData(LispVal datum, Map<LispVal, LispVal> values) {
+		return LispTrees.replaceDatumNodes(datum,
+				cell -> (isMarker(cell, LispNames.READ_EVAL) || isMarker(cell, LispNames.READ_EVAL_TEMPLATE))
+						? resolvedReadTimeEvalNode(cell, false, values) : null,
+				values);
+	}
+
+	/**
+	 * What a marker evaluates to: once, however many places a {@code #n=} label on it
+	 * spells it in, CL's reader reading the {@code #.} once.
+	 */
+	private LispVal readTimeValue(LispCons marker, LispVal datum, Map<LispVal, LispVal> values) {
+		LispVal known = values.get(marker);
+		if (known != null) {
+			return known;
+		}
+		// The datum itself is always evaluated, so nested markers are in code.
+		LispVal value = eval(resolveReadTimeEval(datum, true, values));
+		values.put(marker, value);
+		return value;
+	}
+
+	/**
 	 * Decides a {@code %read-time-feature} marker (or its template variant): its feature
 	 * expression's {@code #.} values put in place and the result tested against the
 	 * feature set the read used, as a {@code #+}/{@code #-} would have.
 	 * @return the guarded datum, resolved, when the guard holds; {@code null} when it
 	 * fails or nested guards left no datum
 	 */
-	private @Nullable LispVal readTimeFeatureChoice(LispCons marker, boolean inCode) {
+	private @Nullable LispVal readTimeFeatureChoice(LispCons marker, boolean inCode, Map<LispVal, LispVal> values) {
 		List<LispVal> parts = marker.toList();
 		if (parts.size() < 4 || parts.size() > 5 || !(parts.get(1) instanceof LispString sign)
 				|| !(parts.get(2) instanceof LispCons || parts.get(2) instanceof LispNil)) {
@@ -5913,7 +5959,7 @@ public final class LispEvaluator {
 				spelling.add(((LispString) name).value());
 			}
 		}
-		LispVal expr = resolveReadTimeEval(parts.get(3), false);
+		LispVal expr = resolveReadTimeEval(parts.get(3), false, values);
 		boolean holds;
 		try {
 			holds = Features.decode(spelling).isEnabled(expr) != "-".equals(sign.value());
@@ -5930,7 +5976,7 @@ public final class LispEvaluator {
 			throw new LispEvalException("#" + sign.value() + "#.: the guard holds, but the form behind it could not"
 					+ " be read: " + source.value());
 		}
-		return resolveReadTimeEval(guarded, inCode);
+		return resolveReadTimeEval(guarded, inCode, values);
 	}
 
 	private static boolean isMarker(LispVal form, String name) {
@@ -7486,6 +7532,12 @@ public final class LispEvaluator {
 			}
 			throw new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + signal.name());
 		}
+		catch (GoSignal signal) {
+			if (nestedInDebugger()) {
+				throw signal;
+			}
+			throw new LispEvalException(LispNames.GO + ": no enclosing tagbody holds the tag " + signal.tag);
+		}
 		catch (ThrowSignal signal) {
 			if (nestedInDebugger() || caughtOutside(signal)) {
 				throw signal;
@@ -8247,6 +8299,14 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Has every later {@link #resolvePackages} read one program
+	 * ({@link PackageResolver#holdDatumCopies}).
+	 */
+	void holdResolverDatumCopies() {
+		this.packageResolver.holdDatumCopies();
+	}
+
+	/**
 	 * The spelling a resolved symbol takes in a form the compilers' own resolution pass
 	 * reads again ({@link PackageResolver#emittedSpelling}).
 	 * @param symbol the resolved symbol
@@ -8486,6 +8546,12 @@ public final class LispEvaluator {
 				throw signal;
 			}
 			throw new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + signal.name());
+		}
+		catch (GoSignal signal) {
+			if (nestedInDebugger()) {
+				throw signal;
+			}
+			throw new LispEvalException(LispNames.GO + ": no enclosing tagbody holds the tag " + signal.tag);
 		}
 		catch (ThrowSignal signal) {
 			if (nestedInDebugger() || caughtOutside(signal)) {
@@ -10064,7 +10130,7 @@ public final class LispEvaluator {
 									}
 									next = evalAllButLast(((LispCons) cons.cdr()).cdr(), letEnv, owner, deferTo);
 									if (next == null) {
-										result = LispNil.INSTANCE;
+										result = singleValue(LispNil.INSTANCE);
 										break frame;
 									}
 									env = letEnv;

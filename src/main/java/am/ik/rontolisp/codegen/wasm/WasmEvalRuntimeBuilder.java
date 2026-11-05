@@ -91,6 +91,85 @@ final class WasmEvalRuntimeBuilder {
 
 	}
 
+	/**
+	 * What {@code _eval} and {@code _store} reach beyond their own arms.
+	 *
+	 * @param valueChannel the global of the {@code %mv-spill} channel, or -1 when the
+	 * program runs no form through eval or nothing can read it
+	 * @param expansion whether the module carries the run-time macro table's dispatch
+	 * @param placeExpansion whether it carries the dispatch over the places
+	 * {@code _store} has no arm for
+	 * @param specialLet whether an eval'd {@code let} asks if it binds a special
+	 * @param localFunctions whether {@code flet} or {@code labels} can bind a name
+	 */
+	record EvalHooks(int valueChannel, boolean expansion, boolean placeExpansion, boolean specialLet,
+			boolean localFunctions) {
+
+		static final EvalHooks NONE = new EvalHooks(-1, false, false, false, false);
+
+	}
+
+	/**
+	 * Empties the {@code %mv-spill} channel: an arm answers one value after a form it
+	 * evaluated for something else published more.
+	 */
+	private static void emitClearValues(WasmWriter w, int valueChannel) {
+		if (valueChannel >= 0) {
+			emitNull(w);
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(valueChannel);
+		}
+	}
+
+	/**
+	 * Calls the compiled function named by the string-table offset through the registry,
+	 * as a form of the program would, with the values of {@code args}; its answer is left
+	 * on the stack.
+	 */
+	private static void emitCallRegistered(WasmWriter w, int nameOffset, boolean identityHash, int... args) {
+		i32(w, nameOffset);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		emitNull(w);
+		WasmEmitHelper.emitNewClosure(w, identityHash);
+		for (int arg : args) {
+			getLocal(w, arg);
+		}
+		emitNull(w);
+		for (int i = 0; i < args.length; i++) {
+			WasmEmitHelper.emitNewCons(w, identityHash);
+		}
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
+	}
+
+	/**
+	 * Opens an {@code if} entered with the binding of the name at {@code offSlot} in the
+	 * alist of the local functions {@code flet} and {@code labels} bound in the
+	 * environment, left in {@code tmpSlot}. The caller closes it with two {@code end}s.
+	 */
+	private static void emitOpenLocalFunction(WasmWriter w, int offSlot, int envSlot, int tmpSlot, int localsOffset) {
+		i32(w, localsOffset);
+		getLocal(w, envSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		setLocal(w, tmpSlot);
+		getLocal(w, tmpSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, offSlot);
+		emitCdrOf(w, tmpSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		setLocal(w, tmpSlot);
+		getLocal(w, tmpSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+	}
+
 	// === low-level emit helpers ===
 
 	private static void getLocal(WasmWriter w, int slot) {
@@ -638,11 +717,12 @@ final class WasmEvalRuntimeBuilder {
 	 * evaluates to itself); the special forms {@code quote}, {@code if}, {@code progn},
 	 * {@code let}, {@code lambda}, {@code defun}, {@code function} ({@code #'}),
 	 * {@code symbol-function}, {@code cond}, {@code and}, {@code or}, {@code when},
-	 * {@code unless}, {@code while}, {@code dotimes}, {@code setq}, {@code eval}
-	 * (nested), {@code funcall} and {@code list}; variadic {@code + - * /}; chained
+	 * {@code unless}, {@code while}, {@code setq}, {@code setf}, {@code eval} (nested),
+	 * {@code funcall} and {@code list}; variadic {@code + - * /}; chained
 	 * {@code = < > <= >= /=}; {@code car}/{@code cdr} compositions such as {@code cadr};
-	 * and application of any registered function (built-in wrappers and user defuns) as
-	 * well as interpreted closures produced by {@code lambda}.
+	 * application of any registered function (built-in wrappers and user defuns) as well
+	 * as interpreted closures produced by {@code lambda}; and what the run-time macro
+	 * table expands ({@code eval-macros.lisp}).
 	 * @param off the string-table offsets of the special-form symbols
 	 * @param counts what the arms that check their own argument count report through
 	 * @param globalAccessIndex the function index of the shared accessor
@@ -660,11 +740,12 @@ final class WasmEvalRuntimeBuilder {
 	 * boxes fresh per resolution, as it always did
 	 * @param unbound what a read of an unbound variable throws, or null outside EH mode,
 	 * where it traps: nothing could catch it
+	 * @param hooks what the arms reach beyond themselves
 	 * @return the encoded function body
 	 */
 	static byte[] buildEvalBody(SpecialFormOffsets off, CountChecks counts, int globalAccessIndex,
 			java.util.List<String> fenvForwarders, boolean identityHash, int funcrefFuncIndex,
-			WasmRuntimeBuilder.@Nullable UnboundVariableReport unbound) {
+			WasmRuntimeBuilder.@Nullable UnboundVariableReport unbound, EvalHooks hooks) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -679,6 +760,12 @@ final class WasmEvalRuntimeBuilder {
 		final int VAL = 0, ENV = 1, REST = 2, TMP = 3, OP = 4, ARGHEAD = 5, ARGTAIL = 6, NEWCELL = 7, ACC = 8, FN = 9,
 				BODY = 10, BINDCUR = 11, ELEM = 12;
 		final int OFF = 14, LEN = 15, ADDR = 16, ARITY = 17, IDX = 18, CH = 19;
+		final int CHANNEL = hooks.valueChannel();
+
+		// A form answers its own values and no older ones: every evaluation starts with
+		// the channel empty, the arms that answer one value after evaluating something
+		// else empty it again, and a tail form or a call publishes for itself.
+		emitClearValues(w, CHANNEL);
 
 		// --- 1. nil is self-evaluating ---
 		getLocal(w, VAL);
@@ -821,6 +908,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, REST);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
+		emitClearValues(w, CHANNEL);
 		emitNull(w);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -843,6 +931,22 @@ final class WasmEvalRuntimeBuilder {
 
 		// ---- let ----
 		openSpecial(w, OFF, off.of(LispNames.LET));
+		// A name bound here that is special binds by name: its expansion answers the form
+		// that does, nil when the let binds none.
+		if (hooks.specialLet()) {
+			emitCallRegistered(w, off.of(LispNames.EVAL_SPECIAL_LET), identityHash, REST);
+			setLocal(w, ACC);
+			getLocal(w, ACC);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+			getLocal(w, ACC);
+			getLocal(w, ENV);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+		}
 		emitCdrOf(w, REST);
 		setLocal(w, BODY);
 		emitCarOf(w, REST);
@@ -855,12 +959,28 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.BR_IF, 1);
 		emitCarOf(w, BINDCUR);
-		setLocal(w, TMP);
+		setLocal(w, TMP); // name, (name) or (name value)
+		getLocal(w, TMP);
+		refTest(w, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.IF, 0x40);
+		emitCarOf(w, TMP);
+		setLocal(w, ARGHEAD);
 		emitCdrOf(w, TMP);
 		setLocal(w, NEWCELL);
+		getLocal(w, NEWCELL);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
 		emitEvalCar(w, NEWCELL, ENV);
 		setLocal(w, NEWCELL);
-		emitCarOf(w, TMP);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		getLocal(w, TMP);
+		setLocal(w, ARGHEAD);
+		emitNull(w);
+		setLocal(w, NEWCELL);
+		w.write(Instruction.END);
+		getLocal(w, ARGHEAD);
 		getLocal(w, NEWCELL);
 		WasmEmitHelper.emitNewCons(w, identityHash);
 		setLocal(w, TMP);
@@ -875,6 +995,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.END);
 		getLocal(w, BODY);
 		setLocal(w, REST);
+		emitClearValues(w, CHANNEL);
 		emitPrognLoop(w, REST, ELEM, TMP);
 		getLocal(w, TMP);
 		w.write(Instruction.RETURN);
@@ -928,6 +1049,13 @@ final class WasmEvalRuntimeBuilder {
 		refCast(w, WasmLispCompiler.TYPE_STRING);
 		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
 		setLocal(w, IDX);
+		if (hooks.localFunctions()) {
+			emitOpenLocalFunction(w, IDX, ENV, TMP, off.of(LispNames.EVAL_LOCAL_FUNCTIONS));
+			emitCdrOf(w, TMP);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
 		emitFunctionLookupReturn(w, ACC, IDX, TMP, ADDR, identityHash, funcrefFuncIndex);
 		w.write(Instruction.END);
 		// non-symbol designator (a lambda form): evaluate it
@@ -964,6 +1092,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, BINDCUR);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
+		emitClearValues(w, CHANNEL);
 		emitNull(w);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -980,6 +1109,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, BODY);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
+		emitClearValues(w, CHANNEL);
 		getLocal(w, ACC);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -1022,6 +1152,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, ACC);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
+		emitClearUnlessLast(w, BINDCUR, CHANNEL);
 		emitNull(w);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -1052,6 +1183,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
+		emitClearUnlessLast(w, BINDCUR, CHANNEL);
 		getLocal(w, ACC);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -1069,6 +1201,7 @@ final class WasmEvalRuntimeBuilder {
 		emitEvalCar(w, REST, ENV);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
+		emitClearValues(w, CHANNEL);
 		emitNull(w);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -1085,6 +1218,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
+		emitClearValues(w, CHANNEL);
 		emitNull(w);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -1115,89 +1249,20 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
+		emitClearValues(w, CHANNEL);
 		emitNull(w);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// ---- dotimes: (dotimes (var count result?) body...) ----
-		openSpecial(w, OFF, off.of(LispNames.DOTIMES));
-		emitCarOf(w, REST);
-		setLocal(w, TMP); // TMP = (var count result?)
-		emitCarOf(w, TMP);
-		setLocal(w, BINDCUR); // BINDCUR = loop variable symbol
-		emitCdrOf(w, TMP);
-		setLocal(w, ACC); // ACC = (count result?)
-		emitEvalCar(w, ACC, ENV); // evaluate the count form once
-		i31GetS(w);
-		setLocal(w, ARITY); // ARITY = count limit (i32)
-		emitCdrOf(w, ACC);
-		setLocal(w, ACC); // ACC = (result?) or nil
-		getLocal(w, ACC);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF);
-		w.writeRefType(true, Type.EQ.code());
-		emitNull(w);
-		w.write(Instruction.ELSE);
-		emitCarOf(w, ACC);
-		w.write(Instruction.END);
-		setLocal(w, FN); // FN = result form (or nil when absent)
-		emitCdrOf(w, REST);
-		setLocal(w, BODY); // BODY = body list
-		// bindCell = cons(var, i31(0)); newEnv = cons(bindCell, env)
-		getLocal(w, BINDCUR);
-		i32(w, 0);
-		i31New(w);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		setLocal(w, NEWCELL); // NEWCELL = mutable binding cell
-		getLocal(w, NEWCELL);
-		getLocal(w, ENV);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		setLocal(w, ELEM); // ELEM = extended environment
-		i32(w, 0);
-		setLocal(w, IDX); // IDX = loop counter
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		getLocal(w, IDX);
-		getLocal(w, ARITY);
-		w.write(Instruction.I32_GE_S);
-		w.write(Instruction.BR_IF, 1); // i >= count -> exit
-		getLocal(w, NEWCELL);
-		refCast(w, WasmLispCompiler.TYPE_CONS);
-		getLocal(w, IDX);
-		i31New(w);
-		structSet(w, WasmLispCompiler.TYPE_CONS, 1); // bind var = i
-		getLocal(w, BODY);
-		setLocal(w, REST);
-		emitPrognLoop(w, REST, ELEM, TMP);
-		getLocal(w, IDX);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, IDX);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END); // loop
-		w.write(Instruction.END); // block
-		// var = count for the result form
-		getLocal(w, NEWCELL);
-		refCast(w, WasmLispCompiler.TYPE_CONS);
-		getLocal(w, ARITY);
-		i31New(w);
-		structSet(w, WasmLispCompiler.TYPE_CONS, 1);
-		getLocal(w, FN);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF);
-		w.writeRefType(true, Type.EQ.code());
-		emitNull(w);
-		w.write(Instruction.ELSE);
-		getLocal(w, FN);
-		getLocal(w, ELEM);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
-		w.write(Instruction.END);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-
-		// ---- setq: assign each name = value via _store ----
-		openSpecial(w, OFF, off.of(LispNames.SETQ));
+		// ---- setq, setf: assign each pair in order via _store ----
+		getLocal(w, OFF);
+		i32(w, off.of(LispNames.SETQ));
+		w.write(Instruction.I32_EQ);
+		getLocal(w, OFF);
+		i32(w, off.of(LispNames.SETF));
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
 		getLocal(w, REST);
 		setLocal(w, BINDCUR);
 		emitNull(w);
@@ -1224,20 +1289,8 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
+		emitClearValues(w, CHANNEL);
 		getLocal(w, ACC);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-
-		// ---- setf: store value into a place ----
-		openSpecial(w, OFF, off.of(LispNames.SETF));
-		emitCarOf(w, REST); // place form
-		emitCdrOf(w, REST);
-		setLocal(w, NEWCELL);
-		emitEvalCar(w, NEWCELL, ENV); // value
-		emitGlobalVariableStoreOfPair(w, globalAccessIndex, BODY, ELEM, ENV);
-		getLocal(w, ENV);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
@@ -1261,6 +1314,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, ENV);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
+		emitClearValues(w, CHANNEL);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
@@ -1293,6 +1347,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
 		w.write(Instruction.DROP);
+		emitClearValues(w, CHANNEL);
 		getLocal(w, ACC);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -1327,6 +1382,8 @@ final class WasmEvalRuntimeBuilder {
 		emitCdrOf(w, REST);
 		setLocal(w, REST);
 		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
+		// What an argument published is no value of the call.
+		emitClearValues(w, CHANNEL);
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.CALL);
@@ -1344,6 +1401,7 @@ final class WasmEvalRuntimeBuilder {
 		// ---- list (variadic) ----
 		openSpecial(w, OFF, off.of(LispNames.LIST));
 		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
+		emitClearValues(w, CHANNEL);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -1430,6 +1488,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
+		emitClearValues(w, CHANNEL);
 		getLocal(w, ACC);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -1440,7 +1499,22 @@ final class WasmEvalRuntimeBuilder {
 
 		// ---- generic named application ----
 		// Lisp-2: the operator resolves in the function namespace only. Variable
-		// bindings (lexical or global) never shadow a function.
+		// bindings (lexical or global) never shadow a function. A local function of flet
+		// or labels comes before every global one.
+		if (hooks.localFunctions()) {
+			emitOpenLocalFunction(w, OFF, ENV, TMP, off.of(LispNames.EVAL_LOCAL_FUNCTIONS));
+			emitCdrOf(w, TMP);
+			setLocal(w, FN);
+			emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
+			emitClearValues(w, CHANNEL);
+			getLocal(w, FN);
+			getLocal(w, ARGHEAD);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
 		// (a) operator defined at runtime via defun (the $fenv function namespace)
 		getLocal(w, OFF);
 		emitGetGlobalFenv(w);
@@ -1460,6 +1534,8 @@ final class WasmEvalRuntimeBuilder {
 		emitUndefinedOperatorReturn(w, OP);
 		w.write(Instruction.END);
 		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
+		// What an argument published is no value of the call.
+		emitClearValues(w, CHANNEL);
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.CALL);
@@ -1495,6 +1571,8 @@ final class WasmEvalRuntimeBuilder {
 		WasmEmitHelper.emitNewClosure(w, identityHash);
 		setLocal(w, FN);
 		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
+		// What an argument published is no value of the call.
+		emitClearValues(w, CHANNEL);
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.CALL);
@@ -1502,8 +1580,25 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// (c) car/cdr composition such as cadr (operator matches c[ad]+r)
-		emitCarCdrComposition(w, OP, LEN, REST, ENV, ACC, IDX, CH, ARITY);
-		// (d) An operator no namespace answers: _apply's symbol probe reports it by name,
+		emitCarCdrComposition(w, OP, LEN, REST, ENV, ACC, IDX, CH, ARITY, CHANNEL);
+		// (d) A built-in macro the run-time table holds: what it expands to, evaluated
+		// where the form stands. The table answers the form itself for any other name.
+		if (hooks.expansion()) {
+			emitCallRegistered(w, off.of(LispNames.EVAL_EXPANSION), identityHash, OP, VAL, ENV);
+			setLocal(w, ACC);
+			getLocal(w, ACC);
+			getLocal(w, VAL);
+			w.write(Instruction.REF_EQ);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+			getLocal(w, ACC);
+			getLocal(w, ENV);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+		}
+		// (e) An operator no namespace answers: _apply's symbol probe reports it by name,
 		// before any argument is evaluated.
 		emitUndefinedOperatorReturn(w, OP);
 
@@ -1515,6 +1610,8 @@ final class WasmEvalRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 		setLocal(w, FN);
 		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
+		// What an argument published is no value of the call.
+		emitClearValues(w, CHANNEL);
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.CALL);
@@ -1648,7 +1745,7 @@ final class WasmEvalRuntimeBuilder {
 	 * Clobbers the supplied scratch locals.
 	 */
 	private static void emitCarCdrComposition(WasmWriter w, int strValSlot, int lenSlot, int restSlot, int envSlot,
-			int accSlot, int idxSlot, int chSlot, int validSlot) {
+			int accSlot, int idxSlot, int chSlot, int validSlot, int valueChannel) {
 		// first/last byte check: len>=3 && arr[0]=='C' && arr[len-1]=='R'
 		getLocal(w, lenSlot);
 		i32(w, 3);
@@ -1732,10 +1829,26 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
+		emitClearValues(w, valueChannel);
 		getLocal(w, accSlot);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
+	}
+
+	/**
+	 * Empties the channel when the form {@code cursorSlot} stands at is not the last:
+	 * only the last form of an {@code and} or an {@code or} passes its values on.
+	 */
+	private static void emitClearUnlessLast(WasmWriter w, int cursorSlot, int valueChannel) {
+		if (valueChannel >= 0) {
+			emitCdrOf(w, cursorSlot);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+			emitClearValues(w, valueChannel);
+			w.write(Instruction.END);
+		}
 	}
 
 	/**
@@ -1827,7 +1940,7 @@ final class WasmEvalRuntimeBuilder {
 	 * @return the encoded function body
 	 */
 	static byte[] buildApplyBody(boolean usesEval, int arityChkIndex, List<Integer> lambdaListKeywordOffsets,
-			boolean identityHash) {
+			boolean identityHash, int valueChannel) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -1976,6 +2089,7 @@ final class WasmEvalRuntimeBuilder {
 			w.write(Instruction.END); // loop
 			w.write(Instruction.END); // block
 			// evaluate body as progn in newEnv
+			emitClearValues(w, valueChannel);
 			emitPrognLoop(w, BODY, NEWENV, TMP);
 			getLocal(w, TMP);
 			w.write(Instruction.RETURN);
@@ -2112,7 +2226,7 @@ final class WasmEvalRuntimeBuilder {
 	 * @param off the string-table offsets of the accessor symbols
 	 * @return the encoded function body
 	 */
-	static byte[] buildStoreBody(SpecialFormOffsets off, boolean identityHash) {
+	static byte[] buildStoreBody(SpecialFormOffsets off, boolean identityHash, EvalHooks hooks) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -2217,6 +2331,28 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.IF, 0x40);
 		emitCarCdrStoreTarget(w, OP, LEN, TMP, ENV, TARGET, FIELD, IDX, CH);
 		w.write(Instruction.END);
+
+		// A place with no arm above: the run-time expansion, when the program spelled one
+		// a form can reach, answers the form that stores it.
+		if (hooks.placeExpansion()) {
+			getLocal(w, FIELD);
+			i32(w, -1);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			emitCallRegistered(w, off.of(LispNames.EVAL_PLACE_EXPANSION), identityHash, OP, TMP, VALUE);
+			setLocal(w, TARGET);
+			getLocal(w, TARGET);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+			getLocal(w, TARGET);
+			getLocal(w, ENV);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
 
 		// store: if a target was resolved and is a cons, set car (FIELD 0) or cdr (FIELD
 		// 1)

@@ -4027,6 +4027,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// imports on a --native module. A plain Preview 1 module compiles each call to
 		// a call-time error (WasmExprCompiler). fetch + tcp and serve + tcp compose:
 		// both are just user imports of different interfaces.
+		// The nodes two literals of the program reach: one object across their sites
+		// (.kb/quoted-data.md), so the sites have to be known before any body compiles.
+		am.ik.rontolisp.compiler.QuotedSharing quotedSharing = am.ik.rontolisp.compiler.QuotedSharing.of(program);
 		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
 		// binds a variable to a closure like any other setq.
@@ -4567,6 +4570,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				callOnlyRuntimes.add(defuns.getLast().name);
 			}
 		}
+		if (userDefinedNames.contains(LispNames.EVAL_SPECIAL_LET)) {
+			inject(LispMacroExpander.compiledSpecialRuntime(specialVars), defuns, injectedRuntimeDefuns, injectedForms,
+					specialVars);
+			callOnlyRuntimes.add(defuns.getLast().name);
+		}
 		// The specials only a binding or an assignment gives a value
 		// (SpecialVarCollector.collectValueless): _start seeds their module global with
 		// the UNBOUND marker, a store overwrites it, a binding saves and restores it like
@@ -4746,6 +4754,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// knew about them.
 		QuoteGlobals quoteGlobals = new QuoteGlobals((streamEndedGlobalIndex >= 0 ? streamEndedGlobalIndex
 				: operandOpGlobalIndex >= 0 ? operandOpGlobalIndex : renderDepthGlobalIndex) + 1);
+		quoteGlobals.sharing(quotedSharing);
 
 		// Create string table. The page-6 component base exists to keep the static data
 		// clear of the OTHER writers of the shared memory (the adapter's page-5 scratch,
@@ -6618,6 +6627,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						this.usesIdentityHashTables)
 				: null;
 		List<Integer> lambdaListKeywordOffsets = new ArrayList<>();
+		WasmEvalRuntimeBuilder.EvalHooks evalHooks = WasmEvalRuntimeBuilder.EvalHooks.NONE;
 		if (usesEval) {
 			for (String keyword : ClConstants.LAMBDA_LIST_KEYWORD_NAMES) {
 				lambdaListKeywordOffsets.add(stringTable.addString(keyword).offset());
@@ -6636,7 +6646,6 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.WHEN)
 				.add(stringTable, LispNames.UNLESS)
 				.add(stringTable, LispNames.WHILE)
-				.add(stringTable, LispNames.DOTIMES)
 				.add(stringTable, LispNames.SETQ)
 				.add(stringTable, LispNames.EVAL)
 				.add(stringTable, LispNames.FUNCALL)
@@ -6671,6 +6680,24 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (String forwarded : evalForwarders) {
 				offsetsBuilder.add(stringTable, forwarded);
 			}
+			evalHooks = new WasmEvalRuntimeBuilder.EvalHooks(
+					evalRunsForms ? globalIndices.getOrDefault(LispNames.MV_SPILL, -1) : -1,
+					functions.containsKey(LispNames.EVAL_EXPANSION),
+					functions.containsKey(LispNames.EVAL_PLACE_EXPANSION),
+					functions.containsKey(LispNames.EVAL_SPECIAL_LET),
+					functions.containsKey(LispNames.EVAL_ROW_FLET) || functions.containsKey(LispNames.EVAL_ROW_LABELS));
+			if (evalHooks.expansion()) {
+				offsetsBuilder.add(stringTable, LispNames.EVAL_EXPANSION);
+			}
+			if (evalHooks.placeExpansion()) {
+				offsetsBuilder.add(stringTable, LispNames.EVAL_PLACE_EXPANSION);
+			}
+			if (evalHooks.specialLet()) {
+				offsetsBuilder.add(stringTable, LispNames.EVAL_SPECIAL_LET);
+			}
+			if (evalHooks.localFunctions()) {
+				offsetsBuilder.add(stringTable, LispNames.EVAL_LOCAL_FUNCTIONS);
+			}
 			WasmEvalRuntimeBuilder.SpecialFormOffsets offsets = offsetsBuilder.build();
 			// The shape the arm that checks its own count reports through: eval, which no
 			// wrapper backs, named by the id the report reserved.
@@ -6694,8 +6721,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupBody();
 			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets, counts,
 					evalRunsForms ? globalAccessIndex(functions) : -1, evalForwarders, this.usesIdentityHashTables,
-					symfuncrefFuncIndex(), unboundReport);
-			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets, this.usesIdentityHashTables);
+					symfuncrefFuncIndex(), unboundReport, evalHooks);
+			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets, this.usesIdentityHashTables, evalHooks);
 		}
 		else {
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupStub();
@@ -6705,8 +6732,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// _apply exists whenever the apply runtime does; without the _eval interpreter
 		// its body skips the $fenv and interpreted-closure arms (nothing can create
 		// either without _eval/_store).
-		applyBody = usesApplyRuntime ? WasmEvalRuntimeBuilder.buildApplyBody(usesEval, arityChkIndex,
-				lambdaListKeywordOffsets, this.usesIdentityHashTables) : WasmEvalRuntimeBuilder.buildApplyStub();
+		applyBody = usesApplyRuntime
+				? WasmEvalRuntimeBuilder.buildApplyBody(usesEval, arityChkIndex, lambdaListKeywordOffsets,
+						this.usesIdentityHashTables, evalHooks.valueChannel())
+				: WasmEvalRuntimeBuilder.buildApplyStub();
 
 		// The symbol-API helper bodies (always emitted) embed the offset of the symbol
 		// T; intern it before the runtime intern blob below is snapshotted so a runtime
@@ -11297,8 +11326,39 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		private final LispVal funcBoxTableToken = new am.ik.rontolisp.LispSymbol("#<function-box-table>");
 
+		private am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedSharing sharing;
+
 		QuoteGlobals(int base) {
 			this.base = base;
+		}
+
+		/**
+		 * Finds the nodes of a datum a build has to name.
+		 * @param datum the datum
+		 * @return its graph, or null when it has none
+		 */
+		am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedGraph graphOf(LispVal datum) {
+			am.ik.rontolisp.compiler.QuotedSharing current = this.sharing;
+			return (current != null) ? current.graphOf(datum) : am.ik.rontolisp.compiler.QuotedGraph.of(datum);
+		}
+
+		/**
+		 * Sets what {@code QuotedSharing.of} found in the program, before any body
+		 * compiles.
+		 * @param sharing the program's sharing
+		 */
+		void sharing(am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedSharing sharing) {
+			this.sharing = sharing;
+		}
+
+		/**
+		 * The unit a site reads a node from.
+		 * @param node the node
+		 * @return the unit, null when the node is no unit's entry
+		 */
+		am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedGraph unitOf(LispVal node) {
+			am.ik.rontolisp.compiler.QuotedSharing current = this.sharing;
+			return (current != null) ? current.unitOf(node) : null;
 		}
 
 		/**

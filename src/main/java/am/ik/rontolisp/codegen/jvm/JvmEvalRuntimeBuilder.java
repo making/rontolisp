@@ -111,6 +111,8 @@ final class JvmEvalRuntimeBuilder {
 
 		private final @Nullable MethodRefEntry globalAccessRef;
 
+		private final @Nullable JvmMvChannel valueChannel;
+
 		private final JvmArityOperators arityOperators;
 
 		private final Set<String> fenvForwarders;
@@ -149,6 +151,7 @@ final class JvmEvalRuntimeBuilder {
 			this.functions = Objects.requireNonNull(b.functions);
 			this.arityChkRef = b.arityChkRef;
 			this.globalAccessRef = b.globalAccessRef;
+			this.valueChannel = b.valueChannel;
 			this.arityOperators = Objects.requireNonNull(b.arityOperators);
 			this.fenvForwarders = b.fenvForwarders;
 			this.thisClass = Objects.requireNonNull(b.thisClass);
@@ -289,6 +292,15 @@ final class JvmEvalRuntimeBuilder {
 		}
 
 		/**
+		 * The {@code %mv-spill} channel, or null when the program runs no form through
+		 * eval or nothing can read it: what an arm leaves in it is what a consumer reads
+		 * of the form it evaluated.
+		 */
+		@Nullable JvmMvChannel valueChannel() {
+			return this.valueChannel;
+		}
+
+		/**
 		 * The compile's arity-operator registry, still open while the runtime is built.
 		 */
 		JvmArityOperators arityOperators() {
@@ -383,6 +395,8 @@ final class JvmEvalRuntimeBuilder {
 			private @Nullable MethodRefEntry arityChkRef;
 
 			private @Nullable MethodRefEntry globalAccessRef;
+
+			private @Nullable JvmMvChannel valueChannel;
 
 			private @Nullable JvmArityOperators arityOperators;
 
@@ -532,6 +546,11 @@ final class JvmEvalRuntimeBuilder {
 
 			Builder arityChkRef(@Nullable MethodRefEntry arityChkRef) {
 				this.arityChkRef = arityChkRef;
+				return this;
+			}
+
+			Builder valueChannel(@Nullable JvmMvChannel valueChannel) {
+				this.valueChannel = valueChannel;
 				return this;
 			}
 
@@ -899,6 +918,83 @@ final class JvmEvalRuntimeBuilder {
 	}
 
 	/**
+	 * Empties the {@code %mv-spill} channel: an arm answers one value after a form it
+	 * evaluated for something else published more.
+	 */
+	private void clearValues(MethodCode a) {
+		JvmMvChannel channel = this.k.valueChannel();
+		if (channel != null) {
+			a.aconst_null();
+			channel.emitStore(a);
+		}
+	}
+
+	/** Whether the program carries the run-time expansion function {@code name}. */
+	private boolean carries(String name) {
+		return this.k.functions().containsKey(name);
+	}
+
+	/**
+	 * Calls the compiled function {@code name} through the registry, as a form of the
+	 * program would, with the values of {@code args}; its answer is left on the stack.
+	 */
+	private void callRegistered(MethodCode a, String name, int tmpSlot, int... args) {
+		ldcStr(a, name);
+		a.invokestatic(this.k.lookupRef());
+		a.astore(tmpSlot);
+		a.loadConstant(1);
+		a.anewarray(this.k.objectClass());
+		a.dup();
+		a.loadConstant(0);
+		a.aload(tmpSlot);
+		a.checkcast(this.k.objectArrayClass());
+		a.loadConstant(0);
+		a.aaload();
+		a.aastore();
+		listOfSlots(a, args, 0);
+		a.invokestatic(this.k.applyRef());
+	}
+
+	private void listOfSlots(MethodCode a, int[] slots, int from) {
+		if (from == slots.length) {
+			a.aconst_null();
+			return;
+		}
+		a.loadConstant(2);
+		a.anewarray(this.k.objectClass());
+		a.dup();
+		a.loadConstant(0);
+		a.aload(slots[from]);
+		a.aastore();
+		a.dup();
+		a.loadConstant(1);
+		listOfSlots(a, slots, from + 1);
+		a.aastore();
+	}
+
+	/**
+	 * Leaves in {@code fnSlot} the local function {@code flet} or {@code labels} bound
+	 * {@code nameSlot} to in the environment, jumping to {@code none} when none did.
+	 */
+	private void localFunction(MethodCode a, int nameSlot, int envSlot, int tmpSlot, int fnSlot,
+			MethodCode.Label none) {
+		ldcStr(a, LispNames.EVAL_LOCAL_FUNCTIONS);
+		a.aload(envSlot);
+		a.invokestatic(this.k.envLookupRef());
+		a.astore(tmpSlot);
+		a.aload(tmpSlot);
+		a.ifnull(none);
+		a.aload(nameSlot);
+		cdr(a, tmpSlot);
+		a.invokestatic(this.k.envLookupRef());
+		a.astore(tmpSlot);
+		a.aload(tmpSlot);
+		a.ifnull(none);
+		cdr(a, tmpSlot);
+		a.astore(fnSlot);
+	}
+
+	/**
 	 * Emits a {@code progn} loop over the list at {@code restSlot}, leaving the last
 	 * value (nil for an empty list) in {@code accSlot}. Consumes {@code restSlot}.
 	 */
@@ -953,6 +1049,8 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(restSlot);
 		a.goto_(loop);
 		a.labelBinding(end);
+		// What an argument published is no value of the call.
+		clearValues(a);
 	}
 
 	/**
@@ -1376,6 +1474,7 @@ final class JvmEvalRuntimeBuilder {
 			a.astore(ARGCUR);
 			a.goto_(bloop);
 			a.labelBinding(bend);
+			clearValues(a);
 			prognInto(a, BODY, NEWENV, TMP);
 			a.aload(TMP);
 			a.areturn();
@@ -1575,6 +1674,24 @@ final class JvmEvalRuntimeBuilder {
 		a.if_icmpne(skipCarCdr);
 		carCdrStoreTarget(a, OP, ARGS, ENV, TARGET, FIELD, IDX, CH, LEN, VALID);
 		a.labelBinding(skipCarCdr);
+
+		// A place with no arm above: the run-time expansion, when the program spelled one
+		// a form can reach, answers the form that stores it.
+		if (carries(LispNames.EVAL_PLACE_EXPANSION)) {
+			MethodCode.Label knownPlace = a.newLabel();
+			a.iload(FIELD);
+			a.loadConstant(-1);
+			a.if_icmpne(knownPlace);
+			callRegistered(a, LispNames.EVAL_PLACE_EXPANSION, TMP, OP, ARGS, VALUE);
+			a.astore(TMP);
+			a.aload(TMP);
+			a.ifnull(knownPlace);
+			a.aload(TMP);
+			a.aload(ENV);
+			a.invokestatic(this.k.evalRef());
+			a.areturn();
+			a.labelBinding(knownPlace);
+		}
 
 		// store: if a target was resolved and is a cons, set car (FIELD 0) or cdr (FIELD
 		// 1)
@@ -1789,6 +1906,11 @@ final class JvmEvalRuntimeBuilder {
 				BODY = 10, BINDCUR = 11, ELEM = 12;
 		final int IDX = 15, LEN = 16, CH = 17, ARITY = 18, VALID = 19;
 
+		// A form answers its own values and no older ones: every evaluation starts with
+		// the channel empty, the arms that answer one value after evaluating something
+		// else empty it again, and a tail form or a call publishes for itself.
+		clearValues(a);
+
 		// --- nil is self-evaluating ---
 		MethodCode.Label notNil = a.newLabel();
 		a.aload(VAL);
@@ -1984,6 +2106,7 @@ final class JvmEvalRuntimeBuilder {
 		MethodCode.Label hasElse = a.newLabel();
 		a.aload(REST);
 		a.ifnonnull(hasElse);
+		clearValues(a);
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(hasElse);
@@ -2005,6 +2128,20 @@ final class JvmEvalRuntimeBuilder {
 
 		// ---- let ----
 		n = special(a, OP, LispNames.LET);
+		// A name bound here that is special binds by name: its expansion answers the form
+		// that does, nil when the let binds none.
+		if (carries(LispNames.EVAL_SPECIAL_LET)) {
+			MethodCode.Label noSpecial = a.newLabel();
+			callRegistered(a, LispNames.EVAL_SPECIAL_LET, TMP, REST);
+			a.astore(ACC);
+			a.aload(ACC);
+			a.ifnull(noSpecial);
+			a.aload(ACC);
+			a.aload(ENV);
+			a.invokestatic(this.k.evalRef());
+			a.areturn();
+			a.labelBinding(noSpecial);
+		}
 		cdr(a, REST);
 		a.astore(BODY);
 		car(a, REST);
@@ -2017,17 +2154,34 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(BINDCUR);
 		a.ifnull(letEnd);
 		car(a, BINDCUR);
-		a.astore(TMP); // (name value)
+		a.astore(TMP); // name, (name) or (name value)
+		MethodCode.Label named = a.newLabel();
+		MethodCode.Label bound = a.newLabel();
+		a.aload(TMP);
+		a.instanceOf(this.k.objectArrayClass());
+		a.ifne(named);
+		// a bare name: nil
+		a.aload(TMP);
+		a.astore(ARGHEAD);
+		a.aconst_null();
+		a.astore(NEWCELL);
+		a.goto_(bound);
+		a.labelBinding(named);
+		car(a, TMP);
+		a.astore(ARGHEAD);
 		cdr(a, TMP);
-		a.astore(NEWCELL); // (value)
+		a.astore(NEWCELL); // (value), or nil for (name)
+		a.aload(NEWCELL);
+		a.ifnull(bound);
 		evalCar(a, NEWCELL, ENV);
 		a.astore(NEWCELL); // value evaluated in the outer env
-		// binding = cons(car(TMP), value)
+		a.labelBinding(bound);
+		// binding = cons(name, value)
 		a.loadConstant(2);
 		a.anewarray(this.k.objectClass());
 		a.dup();
 		a.loadConstant(0);
-		car(a, TMP);
+		a.aload(ARGHEAD);
 		a.aastore();
 		a.dup();
 		a.loadConstant(1);
@@ -2042,6 +2196,7 @@ final class JvmEvalRuntimeBuilder {
 		a.labelBinding(letEnd);
 		a.aload(BODY);
 		a.astore(REST);
+		clearValues(a);
 		prognInto(a, REST, ELEM, TMP);
 		a.aload(TMP);
 		a.areturn();
@@ -2110,6 +2265,13 @@ final class JvmEvalRuntimeBuilder {
 		a.invokestatic(this.k.evalRef());
 		a.areturn();
 		a.labelBinding(fnSym);
+		if (carries(LispNames.EVAL_ROW_FLET) || carries(LispNames.EVAL_ROW_LABELS)) {
+			MethodCode.Label notLocal = a.newLabel();
+			localFunction(a, ACC, ENV, TMP, FN, notLocal);
+			a.aload(FN);
+			a.areturn();
+			a.labelBinding(notLocal);
+		}
 		emitFunctionLookupReturn(a, ACC, TMP, BINDCUR);
 		a.labelBinding(n);
 
@@ -2148,6 +2310,7 @@ final class JvmEvalRuntimeBuilder {
 		MethodCode.Label hasBody = a.newLabel();
 		a.aload(BODY);
 		a.ifnonnull(hasBody);
+		clearValues(a);
 		a.aload(ACC);
 		a.areturn();
 		a.labelBinding(hasBody);
@@ -2161,6 +2324,7 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(BINDCUR);
 		a.goto_(condLoop);
 		a.labelBinding(condEnd);
+		clearValues(a);
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(n);
@@ -2187,6 +2351,13 @@ final class JvmEvalRuntimeBuilder {
 		MethodCode.Label andOk = a.newLabel();
 		a.aload(ACC);
 		a.ifnonnull(andOk);
+		cdr(a, BINDCUR);
+		a.astore(BINDCUR);
+		MethodCode.Label andLast = a.newLabel();
+		a.aload(BINDCUR);
+		a.ifnull(andLast);
+		clearValues(a);
+		a.labelBinding(andLast);
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(andOk);
@@ -2212,6 +2383,13 @@ final class JvmEvalRuntimeBuilder {
 		MethodCode.Label orNot = a.newLabel();
 		a.aload(ACC);
 		a.ifnull(orNot);
+		cdr(a, BINDCUR);
+		a.astore(BINDCUR);
+		MethodCode.Label orLast = a.newLabel();
+		a.aload(BINDCUR);
+		a.ifnull(orLast);
+		clearValues(a);
+		a.labelBinding(orLast);
 		a.aload(ACC);
 		a.areturn();
 		a.labelBinding(orNot);
@@ -2228,6 +2406,7 @@ final class JvmEvalRuntimeBuilder {
 		evalCar(a, REST, ENV);
 		MethodCode.Label whenProceed = a.newLabel();
 		a.ifnonnull(whenProceed);
+		clearValues(a);
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(whenProceed);
@@ -2243,6 +2422,7 @@ final class JvmEvalRuntimeBuilder {
 		evalCar(a, REST, ENV);
 		MethodCode.Label unlessProceed = a.newLabel();
 		a.ifnull(unlessProceed);
+		clearValues(a);
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(unlessProceed);
@@ -2271,98 +2451,19 @@ final class JvmEvalRuntimeBuilder {
 		prognInto(a, REST, ENV, TMP);
 		a.goto_(whileLoop);
 		a.labelBinding(whileEnd);
+		clearValues(a);
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(n);
 
-		// ---- dotimes: (dotimes (var count result?) body...) ----
-		n = special(a, OP, LispNames.DOTIMES);
-		car(a, REST);
-		a.astore(TMP); // (var count result?)
-		car(a, TMP);
-		a.astore(BINDCUR); // loop variable symbol
-		cdr(a, TMP);
-		a.astore(ACC); // (count result?)
-		evalCar(a, ACC, ENV); // evaluate the count form once
-		a.checkcast(this.k.longClass());
-		a.invokevirtual(this.k.longValue());
-		a.l2i();
-		a.istore(ARITY); // count limit
-		cdr(a, ACC);
-		a.astore(ACC); // (result?) or nil
-		MethodCode.Label dtHasResult = a.newLabel();
-		MethodCode.Label dtResultDone = a.newLabel();
-		a.aload(ACC);
-		a.ifnonnull(dtHasResult);
-		a.aconst_null();
-		a.astore(FN);
-		a.goto_(dtResultDone);
-		a.labelBinding(dtHasResult);
-		car(a, ACC);
-		a.astore(FN); // result form
-		a.labelBinding(dtResultDone);
-		cdr(a, REST);
-		a.astore(BODY); // body list
-		// bindCell = cons(var, Long(0)); newEnv = cons(bindCell, env)
-		a.loadConstant(2);
-		a.anewarray(this.k.objectClass());
-		a.dup();
-		a.loadConstant(0);
-		a.aload(BINDCUR);
-		a.aastore();
-		a.dup();
-		a.loadConstant(1);
-		a.loadConstant(0);
-		a.i2l();
-		a.invokestatic(this.k.longValueOf());
-		a.aastore();
-		a.astore(NEWCELL); // mutable binding cell
-		consFromSlots(a, NEWCELL, ENV);
-		a.astore(ELEM); // extended environment
-		a.loadConstant(0);
-		a.istore(IDX); // loop counter
-		MethodCode.Label dtLoop = a.newLabel();
-		MethodCode.Label dtEnd = a.newLabel();
-		a.labelBinding(dtLoop);
-		a.iload(IDX);
-		a.iload(ARITY);
-		a.if_icmpge(dtEnd);
-		// bindCell[1] = Long(i)
-		a.aload(NEWCELL);
-		a.checkcast(this.k.objectArrayClass());
-		a.loadConstant(1);
-		a.iload(IDX);
-		a.i2l();
-		a.invokestatic(this.k.longValueOf());
-		a.aastore();
-		a.aload(BODY);
-		a.astore(REST);
-		prognInto(a, REST, ELEM, TMP);
-		a.iinc(IDX, 1);
-		a.goto_(dtLoop);
-		a.labelBinding(dtEnd);
-		// var = count for the result form
-		a.aload(NEWCELL);
-		a.checkcast(this.k.objectArrayClass());
-		a.loadConstant(1);
-		a.iload(ARITY);
-		a.i2l();
-		a.invokestatic(this.k.longValueOf());
-		a.aastore();
-		MethodCode.Label dtResult = a.newLabel();
-		a.aload(FN);
-		a.ifnonnull(dtResult);
-		a.aconst_null();
-		a.areturn();
-		a.labelBinding(dtResult);
-		a.aload(FN);
-		a.aload(ELEM);
-		a.invokestatic(this.k.evalRef());
-		a.areturn();
-		a.labelBinding(n);
-
-		// ---- setq ----
+		// ---- setq, setf: assign each pair in order ----
+		MethodCode.Label assignment = a.newLabel();
+		a.aload(OP);
+		ldcStr(a, LispNames.SETF);
+		a.invokevirtual(this.k.objectEquals());
+		a.ifne(assignment);
 		n = special(a, OP, LispNames.SETQ);
+		a.labelBinding(assignment);
 		a.aload(REST);
 		a.astore(BINDCUR);
 		a.aconst_null();
@@ -2386,19 +2487,8 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(BINDCUR);
 		a.goto_(setqLoop);
 		a.labelBinding(setqEnd);
+		clearValues(a);
 		a.aload(ACC);
-		a.areturn();
-		a.labelBinding(n);
-
-		// ---- setf ----
-		n = special(a, OP, LispNames.SETF);
-		car(a, REST); // place
-		cdr(a, REST);
-		a.astore(NEWCELL);
-		evalCar(a, NEWCELL, ENV); // value
-		globalVariableStoreOfPair(a, BODY, ELEM, ENV);
-		a.aload(ENV);
-		a.invokestatic(this.k.storeRef());
 		a.areturn();
 		a.labelBinding(n);
 
@@ -2427,6 +2517,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(ACC);
 		a.aload(ENV);
 		a.invokestatic(this.k.storeRef());
+		clearValues(a);
 		a.areturn();
 		a.labelBinding(n);
 
@@ -2458,6 +2549,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(ENV);
 		a.invokestatic(this.k.storeRef());
 		a.pop();
+		clearValues(a);
 		a.aload(ACC);
 		a.areturn();
 		a.labelBinding(n);
@@ -2581,6 +2673,7 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(REST);
 		a.goto_(foldLoop);
 		a.labelBinding(foldEnd);
+		clearValues(a);
 		a.aload(ACC);
 		a.areturn();
 		a.labelBinding(notArith);
@@ -2599,6 +2692,17 @@ final class JvmEvalRuntimeBuilder {
 		MethodRefEntry applyToLowerCase = stringCaseRef("toLowerCase");
 		MethodRefEntry applyToUpperCase = stringCaseRef("toUpperCase");
 		a.labelBinding(registryApply);
+		// A local function of flet or labels comes before every global one.
+		if (carries(LispNames.EVAL_ROW_FLET) || carries(LispNames.EVAL_ROW_LABELS)) {
+			MethodCode.Label noLocal = a.newLabel();
+			localFunction(a, OP, ENV, TMP, FN, noLocal);
+			buildArgList(a, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
+			a.aload(FN);
+			a.aload(ARGHEAD);
+			a.invokestatic(this.k.applyRef());
+			a.areturn();
+			a.labelBinding(noLocal);
+		}
 		a.loadConstant(0);
 		a.istore(ARITY);
 		MethodCode.Label genericApply = a.newLabel();
@@ -2694,7 +2798,24 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(OP);
 		a.goto_(genericApply);
 		a.labelBinding(noRetry);
-		// (d) An operator no namespace answers, or one the function namespace knows to be
+		// (d) A built-in macro the run-time table holds: what it expands to, evaluated
+		// where the form stands. The table answers the form itself for any other name.
+		if (carries(LispNames.EVAL_EXPANSION)) {
+			MethodCode.Label noRow = a.newLabel();
+			car(a, VAL);
+			a.astore(OP);
+			callRegistered(a, LispNames.EVAL_EXPANSION, TMP, OP, VAL, ENV);
+			a.astore(ACC);
+			a.aload(ACC);
+			a.aload(VAL);
+			a.if_acmpeq(noRow);
+			a.aload(ACC);
+			a.aload(ENV);
+			a.invokestatic(this.k.evalRef());
+			a.areturn();
+			a.labelBinding(noRow);
+		}
+		// (e) An operator no namespace answers, or one the function namespace knows to be
 		// undefined: _apply's symbol probe reports it by name, before any argument is
 		// evaluated. The form holds the spelling the retry above may have flipped.
 		a.labelBinding(undefinedOperator);
@@ -2795,6 +2916,7 @@ final class JvmEvalRuntimeBuilder {
 		a.iinc(idxSlot, -1);
 		a.goto_(iloop);
 		a.labelBinding(iend);
+		clearValues(a);
 		a.aload(accSlot);
 		a.areturn();
 		a.labelBinding(notValid);

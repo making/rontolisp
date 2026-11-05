@@ -39,7 +39,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [multiple-values.md](multiple-values.md) -- `values`/`multiple-value-bind`/`-list`/`-call`/`nth-value` as a syntactic lowering
 - [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when`, runtime type checks
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
-- [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output; a value that is no form, an unbound variable, an undefined function; what a form can reach (`EvalReferences`)
+- [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output; a value that is no form, an unbound variable, an undefined function; the built-in macros (`eval-macros.lisp`); what a form can reach (`EvalReferences`)
 - [interpreter-expansion-memo.md](interpreter-expansion-memo.md) -- the interpreter expands a built-in macro once per call site; which arms must re-expand
 
 ## Macros, reader, printer
@@ -74,7 +74,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [string-accumulate-cost.md](string-accumulate-cost.md) -- building one string out of N pieces costs the total length, not the sum of the prefixes
 - [hash-tables.md](hash-tables.md) -- the one representation (flat, a structure-sharing trie once copied, insertion-order walk), `equalp` key fold, depth cap and work budget, the wasm identity-hash slot and `%identity-hash`
 - [array-literals.md](array-literals.md) -- an array literal is a constructor, not a constant; rank-0 arrays; when `:element-type` specializes
-- [quoted-data.md](quoted-data.md) -- a quoted datum is one shared constant per quote site on all four backends; a long list is built in runs of 16 on wasm-GC (Cranelift time vs. live values across calls)
+- [quoted-data.md](quoted-data.md) -- a quoted datum is one shared constant per quote site on all four backends, and a node two literals reach one object (`QuotedSharing`'s units); a long list is built in runs of 16 on wasm-GC (Cranelift time vs. live values across calls)
 - [adjustable-arrays.md](adjustable-arrays.md) -- fill pointers, `:adjustable`, displaced arrays, `vector-push*`, `adjust-array`
 - [packed-integer-vectors.md](packed-integer-vectors.md) -- `(unsigned-byte 8|16|32)` rank-1 packs, `#N@(...)`, per-backend raw paths
 - [bfloat16.md](bfloat16.md) -- bfloat16 conversion pair, the packed `#bf16` width, and the width's account (why bf16, the name, the prefix, the lattice entry)
