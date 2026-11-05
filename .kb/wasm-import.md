@@ -489,6 +489,9 @@ for free) but its body answers from the module: `buildIntrinsicBody` here,
   The arena fields (`needsArena`) force `memoryHelpers`/`hostArena`; a module declaring only
   `load32` carries no allocator. `--no-gc --component` refuses it; `octets` is refused there by
   the vocabulary.
+- A program declaring the arena fields owns the heap: `--no-gc` drops its scalar-return reset for
+  it (`Mem.programOwnsHeap`, `.kb/no-gc-scalar-wasm.md`), which is what the wasm-GC wrappers already
+  do, since their scratch is not on this heap.
 - Pins: `WasmOctetsBoundaryE2eTest` (GC), `NoGcWasmImportE2eTest.theMemoryModuleReadsWhatAHostAnsweredThroughOutPointers`,
   `WasmImportCompilerTest.theMemoryModuleIsTheFixedSetOfFieldsNotAHostModule`, and
   `examples/proxy-wasm/check.sh` in a real Envoy (not in CI: it needs Docker).
