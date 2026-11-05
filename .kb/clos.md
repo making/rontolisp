@@ -627,7 +627,7 @@ stored, the instance is the value.
   of a 3.32 MB module, 0.89 GB; an inline initarg scan per slot per source took them to 4.69 MB of
   7.09 MB, 21 bodies of 165-203 KB side by side, and the peak to 7.2 GB, which killed a `test-e2e`
   runner ([test-execution.md](test-execution.md), "CI shards"); merged, with a `getf` for a slot of
-  one initarg, 0.82 MB of 2.80 MB, largest arm 52 KB, 0.71 GB.
+  one initarg, 0.77 MB of 2.72 MB, largest arm 49 KB, 0.71 GB.
   **An arm tests its sources with one `member`, never an `or`:** an `or` expands to a `let` and an
   `if` per element, which the backends walk recursively (`JvmIntFusionCompiler.scanAssigns` over the
   rest of the nest at each `let`). On the corpus's 358 classes it overflowed a 1 MiB compile thread
