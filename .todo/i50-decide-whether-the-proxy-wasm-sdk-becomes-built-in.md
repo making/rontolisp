@@ -18,8 +18,8 @@ package, as a program names `linalg` or `rontolisp:json-parse`.
   `proxy_on_*` exports, `define-filter` (the `defmethod` API went, `.kb/proxy-wasm-sdk.md`). Covers logging, the clock,
   ticks, header maps, buffers, local responses, outgoing HTTP calls, shared data, metrics and properties. Not covered:
   gRPC calls, shared queues, foreign functions, the TCP (network filter) callbacks.
-- `gateway.lisp`: a filter using most of that. Measured 2026-11-05 with `--no-wasi --optimize=size`: 79,802 bytes raw,
-  30,367 gzip.
+- `gateway.lisp`: a filter using most of that. Measured 2026-11-05 with `--no-wasi --optimize=size`: 73,789 bytes raw,
+  28,692 gzip.
 - Run against Envoy v1.40.2 on V8 and Sluice on Endive. The `--no-gc` backend cannot host it: no conditions, no `:octets`.
 
 The compiler half is already general and stays whatever this decides: the reserved import module

@@ -22,7 +22,7 @@ nothing is 13 instructions. "Before" is `7d24bc53b`.
 | Same: function calls | 37 | 553 | 141 | 196,630 | 37 |
 | `http_body`: bytes | 92,163 | 59,634 / 23,071 | 4,872 / 2,563 | 2,064 / 1,152 | 2,166 / 1,246 |
 | `http_headers`: bytes | 94,189 | 61,382 / 23,762 | 7,114 / 3,433 | 2,583 / 1,388 | same |
-| `gateway`: bytes | | 125,898 / 45,243 | 79,802 / 30,367 | | |
+| `gateway`: bytes | | 125,898 / 45,243 | 73,789 / 28,692 | | |
 
 Warm p50 per exchange, load 14-30, against 445-487us for that plugin that does nothing: `http_body` Rust 621-723us, wasm-GC before
 1000-1468us and now 715-733us, `--no-gc` 512-639us; `http_headers` Rust 1532us, wasm-GC now 1332us, `--no-gc` 1527us, one round.
@@ -106,7 +106,7 @@ a filter that traps is 4,872 / 2,563, one with the default handler 5,172 / 2,662
 default made `gateway.lisp` answer its callback's fallback, `:continue`: the request passed without its authorization.
 
 **Contexts are in 64 buckets of an alist, not a hash table.** Measured again at this tree, a hash table is 442 / 213 more on
-`http_body` with `:stream`, where the fold keeps `_hash` to its integer arm, 812 / 276 on `gateway`, and 4,070 / 1,709 on `test_plugin` and
+`http_body` with `:stream`, where the fold keeps `_hash` to its integer arm, 818 / 287 on `gateway`, and 4,070 / 1,709 on `test_plugin` and
 4,482 / 1,666 on `error_log`, where `_equal` stays. It runs 390 fewer of that exchange's 2,287 instructions (the bucket's `aref`, below) and
 walks nothing. The bytes decide for now: a filter's author sees them in every build. A plain alist saves another 782 / 301, and walks every
 live stream per callback in a VM that may hold thousands. `define-filter` makes a table only for a filter that uses it: a `defvar`

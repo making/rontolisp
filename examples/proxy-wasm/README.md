@@ -142,12 +142,11 @@ body. The Rust SDK's `http_body` runs 2,342 of them, from a module of 92,163 byt
 | `(:stream (id root) (make-instance 'my-stream))` | 10,061 (4,719) | 2,287 | 224,307 |
 | `get-buffer` and `search`, not `with-buffer` and `search-bytes` | 6,945 (3,537) | 1,443 | 1,967,919 |
 
-- **Errors trap, or are handled.** The handler costs `http_body` 300 bytes raw and 100 gzip, and
-  a filter that does as much as `test_plugin` 3KB and 1KB, and about 22 instructions per callback
-  given. A filter gives it up with
-  `(:on-failure :trap)`. Then an error traps, as an `unwrap` in the Rust SDK panics, and no
-  callback answers its default. The VM is gone: Envoy answers 503 to that request and to every
-  one after it. All of `sdk-examples/` but `error_log.lisp` do this.
+- **Errors trap, or are handled.** The handler costs `http_body` 300 bytes raw and 100 gzip, a
+  filter that does as much as `test_plugin` 3KB and 1KB, and about 22 instructions per callback
+  given. A filter gives it up with `(:on-failure :trap)`. Then an error traps, as an `unwrap` in
+  the Rust SDK panics, and no callback answers its default. The VM is gone: Envoy answers 503 to
+  that request and to every one after it. All of `sdk-examples/` but `error_log.lisp` do this.
 - **The log gives the reason for a failed host call, not for any other error.** Printing a
   condition would cost every filter the printer. A filter that wants the report catches the
   error itself and prints it, and pays for that, 22KB raw and 8KB gzip:

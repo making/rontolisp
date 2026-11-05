@@ -1117,7 +1117,8 @@ several roots held the same helpers, so each fix alone showed little. In the ord
   in a `handler-case` around a `funcall` were no arms and no report function as a value (`made` lists
   the lambda alone): they are the not-a-function and arity reports the dispatcher itself builds. A
   class's `:report` is another: `%no-applicable-method` and `%slot-read` ran theirs at the signal, and
-  made its lambda a value, for any filter with an accessor under a handler.
+  made its lambda a value, for any filter with an accessor under a handler (`gateway` 79,802 to 73,789,
+  `zlib` 98,242 to 85,839).
 - **Writes nothing reads** (`WasmWriteOnlyGlobals`, below).
 
 | raw / gzip, `--no-wasi --optimize=size` | before | after |
@@ -1129,10 +1130,10 @@ several roots held the same helpers, so each fix alone showed little. In the ord
 | the same under the default handler | 56,373 / 22,089 | 8,761 / 4,338 |
 | `http_headers` | 20,311 / 8,701 | 7,114 / 3,433 |
 | `error_log` | 54,715 / 21,530 | 20,351 / 8,778 |
-| `gateway` | 105,198 / 39,453 | 79,802 / 30,367 |
+| `gateway` | 105,198 / 39,453 | 73,789 / 28,692 |
 | `handler-case` around a `funcall` | 11,375 / 4,904 | 1,003 / 690 |
 | a bare `funcall` | 1,105 / 771 | 906 / 644 |
-| `zlib` | 176,603 / 58,763 | 98,242 / 32,331 |
+| `zlib` | 176,603 / 58,763 | 85,839 / 29,461 |
 | `zlib`, no flags | 229,564 / 74,572 | 225,464 / 73,625 |
 | `hello_world`, `pi_approx`, `dom_reactor`, `webgl-cube` | | within 50 bytes |
 

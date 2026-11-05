@@ -170,10 +170,9 @@ a log line. If you need the text, return it from the export instead.
 
 It also means nothing reads an error's message unless your program does. A
 reactor whose handlers never look at their condition — `(handler-case (parse x)
-(error () 0))` — builds no message for any error and carries no printer for one,
-and when every clause takes every error it carries no condition classes either.
-A handler that uses the condition, `(error (c) (princ-to-string c))`, brings all
-of that back, since it can hold any error the module signals.
+(error () 0))` — builds no message for any error and carries no printer for one.
+A handler that uses the condition, `(error (c) (princ-to-string c))`, brings them
+back, since it can hold any error the module signals.
 
 The clock and randomness are the two services with a choice to make, because
 both are values the module cannot produce for itself. A core module exports one
