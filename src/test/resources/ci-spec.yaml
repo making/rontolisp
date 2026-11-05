@@ -26173,7 +26173,7 @@ cases:
   # A token of a run-time read is a symbol of the current package, and a qualified one the
   # symbol its package reaches the name as, whatever spelling the text gives it. SBCL
   # 2.2.9 agrees, but that the reader folds t and nil ahead of a package using no cl
-  # (.kb/packages.md).
+  # (.kb/pretty-printer.md).
   - name: a-run-time-read-interns-in-the-current-package
     source: |
       (defpackage :ci-rh-lib (:use :cl) (:intern #:lib-hidden) (:export #:lib-out #:lib-pt #:make-lib-pt #:lib-pt-x))

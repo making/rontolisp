@@ -94,8 +94,9 @@ under `P`, `"p::car"` is `car`, `"p::out"` is `P:OUT`, `"#S(pt)"` finds an inher
 - **The gate** (`readsUnderAPackage`): the program spells `read-from-string`, `read` or `load`, and
   it assigns a package other than `cl-user` at top level, mentions `*package*` anywhere (a
   `with-standard-io-syntax` does not count: it binds `cl-user`), defines a package a qualifier can name,
-  names a local nickname, or widens `cl-user`. Any other program's reader carries none of it (`cmp` against the commit before
-  on the JVM class, P1 and the component, 2026-11-05). `(eq *package* :cl-user)` answers a bare token
+  names a local nickname, or widens `cl-user`. Any other program's reader carries none of it (`cmp` on
+  the JVM class, P1 and the component, 2026-11-05, ahead of the next section's change).
+  `(eq *package* :cl-user)` answers a bare token
   at once while `cl-user` is pristine (`clUserIsPristine`); a program that widened it asks its row,
   so `(use-package :lib)` reaches `lib:x` from a bare `"x"`. What a package reaches is one answer for
   the whole compile, as for `intern`: a `use-package` a later `unuse-package` undoes reads as undone.
@@ -113,7 +114,7 @@ under `P`, `"p::car"` is `car`, `"p::out"` is `P:OUT`, `"#S(pt)"` finds an inher
   scan and the row lookups. A memo per package was not added: nothing reads that much under a package.
 - Limits: a qualifier naming no package keeps the spelling on all four, where SBCL signals; a
   single colon on an internal name interns as the double colon does on all four, where SBCL signals;
-  `t` and `nil` read ahead of any package (`.kb/packages.md`). A run-time `load`'s package directives
+  `t` and `nil` read ahead of any package (`.kb/pretty-printer.md`). A run-time `load`'s package directives
   stay unprocessed (`EvalReferences.UNPROCESSED_DIRECTIVES`), so a file reads in the package current
   when `load` runs.
 
