@@ -1498,13 +1498,24 @@ public final class LispPreludeLibrary {
 				      (%check-stream %fd-d (%unspelled-quote format) t)))
 				""");
 		SOURCES.put(LispNames.FORMAT_WRITE_INTERNAL, """
-				(defun %format-write (%fw-d %fw-text)
+				(defun %format-write (%fw-d %fw-text %fw-fresh)
 				  (cond ((null %fw-d) %fw-text)
 				        ((stringp %fw-d)
+				         (if (and %fw-fresh
+				                  (> (length %fw-d) 0)
+				                  (char/= (char %fw-d (- (length %fw-d) 1)) #\\Newline))
+				             (vector-push-extend #\\Newline %fw-d))
 				         (dotimes (%fw-i (length %fw-text))
 				           (vector-push-extend (char %fw-text %fw-i) %fw-d)))
-				        ((eq %fw-d t) (write-string %fw-text) nil)
-				        (t (write-string %fw-text %fw-d) nil)))
+				        ((eq %fw-d t)
+				         (if %fw-fresh (fresh-line))
+				         (write-string %fw-text)
+				         nil)
+				        (t
+				         (if (and %fw-fresh (if (%obj-is %fw-d '%STREAM) (typep %fw-d 'string-stream) t))
+				             (fresh-line %fw-d))
+				         (write-string %fw-text %fw-d)
+				         nil)))
 				""");
 		SOURCES.put(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, """
 				(defclass %broadcast-stream (rontolisp:fundamental-character-output-stream)

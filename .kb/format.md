@@ -66,6 +66,27 @@ A `t` destination lowers to print calls, a `nil` one to `%string-concat` pieces
   `(princ x)`/`(prin1 x)`), matching the two-element call SHAPE only, so a padded or composite
   piece keeps building its string.
 
+A `~&` that opens the control asks the destination, whichever path renders it (SBCL 2.2.9,
+2026-11-05, every row of ci-spec `format-opening-fresh-line-asks-the-destination` but the file's): the
+text is built from column 0, so `~&` is silent in it, and `(fresh-line d)` runs after the arguments and
+before the write (`LispMacroExpander.formatStartsFresh`: `~&`, `~n&` with a nonzero `n`). **Only a
+destination with a column is asked** (`freshLineWhereTheColumnIsKnown`, gray.lisp's
+`%gray-format-fresh-line`, `%format-write`): `t`, a string stream, a Gray instance, a string with a fill
+pointer. A file, a socket and standard error keep none, so `fresh-line` always writes there
+([standard-output-redirect.md](standard-output-redirect.md)), and `(format *error-output* "~&x~%")`, the
+usual spelling, would open every message with a blank line (uiop's fatal report did); SBCL writes a
+newline only past column 0, here never. A literal control decides
+at expansion, so one with no such `~&` lowers as it did; a computed one is held in a temp and asks
+`%fmt-starts-fresh-p` (`format-render.lisp`, there because a computed control means the renderer is),
+at each write site: `formatDestinationDispatch`, `runtimeRenderFallback`'s `t`, the Gray rewrite, the
+`#'format` wrappers, `%format-write` and the interpreter's function value. A `~&` anywhere else keeps the
+text's approximation, a value piece assumed not to end a line. Before 2026-11-05 `(format s "~&x")` and
+`(format t ctrl)` lost it: `(princ "a") (format *standard-output* "~&b")` printed `ab`, on all four.
+
+`(format D (if test a b) ...)` distributes over the branches (`distributeFormat`, also for the Gray
+rewrite and `formatThroughDestination`, so each branch keeps its literal control). A computed `D` is bound
+first: until 2026-11-05 `test` ran before it.
+
 Together these put a literal in FRONT of a backend's literal fold
 ([optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)).
 
@@ -267,7 +288,8 @@ cursor cannot serve it -- `~*`, `~:*`, `~n@*` and `~?`/`~{` recursion make the a
   rows of a 0..10^100 sweep identically on the interpreter, JVM, P1 and component, literal and runtime
   control (2026-10-07).
 - `~x`/`~o`/`~b`/`~r` answer UPPERCASE digits on both paths (`ClWhoE2eTest`); `~&` measures the
-  column from the text rendered so far, the literal path's `t` destination using the real one.
+  column from the text rendered so far, the literal path's `t` destination using the real one and
+  an opening `~&` asking the destination ("What the LITERAL path lowers to").
 - **A signal's runtime control renders EAGERLY, into the message** -- the condition carries the
   rendered text in `format-control` and nil `format-arguments`, on BOTH paths
   ([error-handling.md](error-handling.md)).

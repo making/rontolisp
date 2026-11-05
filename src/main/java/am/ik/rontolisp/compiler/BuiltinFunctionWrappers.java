@@ -901,7 +901,10 @@ public final class BuiltinFunctionWrappers {
 								List.of(listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("b"),
 										call(positionSet, "a", "b"), call(position, "a")))))));
 		String writeString = rontolispInternal("%GRAY-WRITE-STRING-DISPATCH");
-		table.put(LispNames.FORMAT, new DispatchWrapper(List.of(writeString), formatWrapper(writeString)));
+		String freshLine = rontolispInternal("%GRAY-FORMAT-FRESH-LINE");
+		table.put(LispNames.FORMAT,
+				new DispatchWrapper(List.of(writeString, freshLine, rontolispInternal("%GRAY-FRESH-LINE-DISPATCH")),
+						formatWrapper(writeString, call(freshLine, "dest"))));
 		return java.util.Collections.unmodifiableMap(table);
 	}
 
@@ -2385,15 +2388,19 @@ public final class BuiltinFunctionWrappers {
 	// string, anything else (the t designator or a stream handle) gets one write-string
 	// call and nil.
 	private static WrapperDef formatWrapper() {
-		return formatWrapper(LispNames.WRITE_STRING);
+		return formatWrapper(LispNames.WRITE_STRING,
+				LispMacroExpander.freshLineWhereTheColumnIsKnown(new LispSymbol("dest")));
 	}
 
 	// writer: the (writer string destination) call that writes the rendered text.
-	private static WrapperDef formatWrapper(String writer) {
+	// freshLine: what a ~& opening the control does.
+	private static WrapperDef formatWrapper(String writer, LispVal freshLine) {
 		LispSymbol strVar = new LispSymbol("__fmt_str");
 		LispVal rendered = am.ik.rontolisp.macro.FormatRenderer.call(new LispSymbol("ctrl"), new LispSymbol("r"));
 		LispVal bindings = listToCons(List.of((LispVal) listToCons(List.of(strVar, rendered))));
-		LispVal writeForm = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+		LispVal writeForm = listToCons(List.of(
+				new LispSymbol(LispNames.PROGN), listToCons(List.of(new LispSymbol(LispNames.IF),
+						call(LispNames.FMT_STARTS_FRESH, "ctrl"), freshLine, LispNil.INSTANCE)),
 				callV(writer, strVar, new LispSymbol("dest")), LispNil.INSTANCE));
 		LispVal ifForm = listToCons(
 				List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "dest"), strVar, writeForm));
@@ -2407,7 +2414,8 @@ public final class BuiltinFunctionWrappers {
 	private static WrapperDef formatThroughDestinationWrapper() {
 		return new WrapperDef(LispNames.FORMAT, List.of("dest", "ctrl", LispNames.LAMBDA_REST, "r"),
 				List.of(callV(LispNames.FORMAT_WRITE_INTERNAL, call(LispNames.FORMAT_DESTINATION_INTERNAL, "dest"),
-						am.ik.rontolisp.macro.FormatRenderer.call(new LispSymbol("ctrl"), new LispSymbol("r")))));
+						am.ik.rontolisp.macro.FormatRenderer.call(new LispSymbol("ctrl"), new LispSymbol("r")),
+						call(LispNames.FMT_STARTS_FRESH, "ctrl"))));
 	}
 
 	// #'concatenate wrapper (gated by REFERENCE_GATED_FUNCTIONS): the result type is a
