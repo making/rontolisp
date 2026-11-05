@@ -6,6 +6,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.function.Function;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
@@ -67,29 +69,14 @@ public final class ShadowedBuiltins {
 	}
 
 	/**
-	 * Compiler-lowered built-in FUNCTIONS with no {@link BuiltinFunctionWrappers} entry.
-	 * Only names whose lowering accepts general (non-literal) arguments belong here: the
-	 * forwarder defun's body hands the generic's parameters straight to the lowered call,
-	 * so a literal-only lowering ({@code find-symbol}, {@code symbol-function}) or one
-	 * that leans on a runtime injected by a gate that has already run
-	 * ({@code typep}/{@code subtypep} inside {@code expandTopLevelDefinitions}) cannot be
-	 * spelled as a fallback and keeps the old shadowing behavior.
-	 */
-	private static final Set<String> LOWERED_WITHOUT_WRAPPER = Set.of(LispNames.CLOSE, LispNames.LISTEN,
-			LispNames.OPEN_STREAM_P, LispNames.WRITE_LINE, LispNames.GET_OUTPUT_STREAM_STRING, LispNames.FORCE_OUTPUT,
-			LispNames.FINISH_OUTPUT, LispNames.CLEAR_OUTPUT, LispNames.ARRAYP, LispNames.ARRAY_DIMENSIONS,
-			LispNames.RATIONALP, LispNames.NUMERATOR, LispNames.DENOMINATOR, LispNames.RPLACA, LispNames.RPLACD,
-			LispNames.HASH_TABLE_TEST, LispNames.HASH_TABLE_SIZE, LispNames.HASH_TABLE_REHASH_SIZE,
-			LispNames.HASH_TABLE_REHASH_THRESHOLD);
-
-	/**
 	 * Wrapped names a generic must NOT shadow. The signal operators double as
 	 * {@code handler-case} clause heads ({@code (error (e) ...)} is a clause, not a
 	 * call), and {@code make-instance}/{@code class-of} have dedicated dispatch machinery
 	 * ({@code %mop-make-instance}, the metaobject runtime) a rename would sever.
 	 * {@code subtypep}'s wrapper leans on the {@code %subtypep-runtime} a gate has
 	 * already injected, so it cannot be spelled as a fallback
-	 * ({@link #LOWERED_WITHOUT_WRAPPER} says the same of its lowering).
+	 * ({@link BuiltinFunctionWrappers#LOWERED_WITHOUT_WRAPPER} says the same of its
+	 * lowering).
 	 */
 	private static final Set<String> NOT_SHADOWABLE = Set.of(LispNames.ERROR, LispNames.CERROR, LispNames.SIGNAL,
 			LispNames.WARN, LispNames.MAKE_INSTANCE, LispNames.CLASS_OF, LispNames.SUBTYPEP);
@@ -131,7 +118,8 @@ public final class ShadowedBuiltins {
 	/**
 	 * The compiler-lowered built-in FUNCTION names a user {@code defmethod} can shadow:
 	 * every {@link BuiltinFunctionWrappers} name (minus internals and
-	 * {@link #NOT_SHADOWABLE}) plus {@link #LOWERED_WITHOUT_WRAPPER}.
+	 * {@link #NOT_SHADOWABLE}) plus
+	 * {@link BuiltinFunctionWrappers#LOWERED_WITHOUT_WRAPPER}.
 	 * @return the shadowable lowered built-in function names
 	 */
 	public static Set<String> loweredBuiltinFunctions() {
@@ -142,7 +130,7 @@ public final class ShadowedBuiltins {
 					name -> name.startsWith("%") || NOT_SHADOWABLE.contains(name) || EXPANSION_LOWERED.contains(name)
 					// The interpreter expands these in call position too.
 							|| BuiltinFunctionWrappers.INLINE_EXPANDED_VALUE_FUNCTIONS.contains(name));
-			names.addAll(LOWERED_WITHOUT_WRAPPER);
+			names.addAll(BuiltinFunctionWrappers.LOWERED_WITHOUT_WRAPPER);
 			cached = Set.copyOf(names);
 			lowered = cached;
 		}
@@ -177,12 +165,7 @@ public final class ShadowedBuiltins {
 	 */
 	public static List<LispVal> process(List<LispVal> program, ClosRegistry closRegistry,
 			Map<String, BuiltinAlias> builtinAliases) {
-		Map<String, String> shadowed = new LinkedHashMap<>();
-		for (ClosRegistry.GenericInfo generic : closRegistry.generics().values()) {
-			if (loweredBuiltinFunctions().contains(generic.name())) {
-				shadowed.put(generic.name(), LispMacroExpander.shadowedDispatcherName(generic.name()));
-			}
-		}
+		Map<String, String> shadowed = dispatchers(closRegistry);
 		if (shadowed.isEmpty()) {
 			return program;
 		}
@@ -224,6 +207,44 @@ public final class ShadowedBuiltins {
 			}
 		}
 		return out;
+	}
+
+	// Each registered generic colliding with a lowered built-in -> its dispatcher's name.
+	private static Map<String, String> dispatchers(ClosRegistry closRegistry) {
+		Map<String, String> shadowed = new LinkedHashMap<>();
+		for (ClosRegistry.GenericInfo generic : closRegistry.generics().values()) {
+			if (loweredBuiltinFunctions().contains(generic.name())) {
+				shadowed.put(generic.name(), LispMacroExpander.shadowedDispatcherName(generic.name()));
+			}
+		}
+		return shadowed;
+	}
+
+	/**
+	 * What the {@code _lookup} registry answers in place of a built-in's own name: a call
+	 * by a run-time name ({@code (funcall (intern "CLOSE") x)}, a form {@code eval} runs)
+	 * has to reach the user method as a compiled call does, but the name cannot enter the
+	 * compilers' {@code functions} table, whose entry would stop the forwarder's call
+	 * from lowering to the built-in. So the registry alone maps it: a row of the
+	 * generic's name answers the dispatcher, in place of the function value's wrapper if
+	 * the program has one, which stays for the forwarder's {@code #'name}.
+	 * @param <F> what the backend records of a function
+	 * @param closRegistry the completed registry
+	 * @param functions the backend's functions by name: a generic whose dispatcher defun
+	 * this pass never saw (a nested {@code defmethod}) has no row
+	 * @return the generic's name -&gt; its dispatcher, sorted so the output's bytes
+	 * follow from the program; empty for a program without such a generic
+	 */
+	public static <F> Map<String, F> runTimeNames(ClosRegistry closRegistry,
+			Function<String, @org.jspecify.annotations.Nullable F> functions) {
+		Map<String, F> rows = new TreeMap<>();
+		dispatchers(closRegistry).forEach((name, dispatcher) -> {
+			F function = functions.apply(dispatcher);
+			if (function != null) {
+				rows.put(name, function);
+			}
+		});
+		return rows;
 	}
 
 	/**
@@ -415,19 +436,23 @@ public final class ShadowedBuiltins {
 	 * @return the rewritten form, or {@code form} itself when nothing matched
 	 */
 	public static LispVal renameCallSites(LispVal form, Map<String, String> dispatchers) {
-		return rewrite(form, dispatchers, false);
+		return CallSiteWalk.walk(form, new CallSiteRenamer(dispatchers, false, false));
 	}
 
 	private static LispVal rewrite(LispVal form, Map<String, String> shadowed, boolean closeShadowed) {
-		return CallSiteWalk.walk(form, new CallSiteRenamer(shadowed, closeShadowed));
+		return CallSiteWalk.walk(form, new CallSiteRenamer(shadowed, closeShadowed, true));
 	}
 
 	/**
 	 * Renames each call of a shadowed built-in -- and each {@code #'name} of one -- onto
-	 * its dispatcher; {@link CallSiteWalk} keeps the positions that are not calls.
+	 * its dispatcher; {@link CallSiteWalk} keeps the positions that are not calls. On a
+	 * compile path a {@code (symbol-function 'name)} or {@code (fdefinition 'name)} is
+	 * {@code #'name} too: the compilers resolve the literal in their {@code functions}
+	 * table, which holds the built-in's wrapper. The interpreter's reads the binding,
+	 * which already is the dispatcher.
 	 */
-	private record CallSiteRenamer(Map<String, String> shadowed,
-			boolean closeShadowed) implements CallSiteWalk.Rewriter {
+	private record CallSiteRenamer(Map<String, String> shadowed, boolean closeShadowed,
+			boolean literalDefinitions) implements CallSiteWalk.Rewriter {
 
 		@Override
 		public @org.jspecify.annotations.Nullable LispVal call(LispCons cons, LispSymbol op) {
@@ -440,6 +465,18 @@ public final class ShadowedBuiltins {
 					}
 				}
 				return null;
+			}
+			if (this.literalDefinitions
+					&& (LispNames.SYMBOL_FUNCTION.equals(opName) || LispNames.FDEFINITION.equals(opName))
+					&& cons.cdr() instanceof LispCons arg && arg.cdr() instanceof LispNil
+					&& arg.car() instanceof LispCons quoted && quoted.car() instanceof LispSymbol quote
+					&& LispNames.QUOTE.equals(quote.name()) && quoted.cdr() instanceof LispCons named
+					&& named.car() instanceof LispSymbol name) {
+				String dispatch = this.shadowed.get(name.name());
+				if (dispatch != null) {
+					return SourceProvenance.inherit(cons,
+							listOf(new LispSymbol(LispNames.FUNCTION), new LispSymbol(dispatch)));
+				}
 			}
 			if (this.closeShadowed) {
 				// The stream-closing macros spell (close ...) only after expansion;

@@ -2507,8 +2507,9 @@ final class WasmExprCompiler {
 				// WASM trap is uncatchable and carries no payload; the arguments are
 				// not evaluated); in EH mode it throws the typed instance.
 				WasmErrorCompiler.compileCond(cons, ctx);
-			case LispNames.WARN ->
-				compileExpansion(LispMacroExpander.expandWarn(cons, ctx.closRegistry, ctx.restartMode), ctx, tail);
+			case LispNames.WARN -> compileExpansion(
+					LispMacroExpander.expandWarn(cons, ctx.closRegistry, ctx.restartMode, ctx.signalClauseMatch), ctx,
+					tail);
 			case LispNames.WARN_INTERNAL -> WasmWarnCompiler.compile(cons, ctx);
 			case LispNames.SIGNAL -> compileExpansion(
 					LispMacroExpander.expandSignalMacro(cons, ctx.closRegistry, ctx.restartMode), ctx, tail);

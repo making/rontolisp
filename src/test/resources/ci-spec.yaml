@@ -21210,6 +21210,38 @@ cases:
       65
       T
       T
+  - name: a-cons-walk-refuses-the-values-that-are-no-cons
+    source: |
+      ;; An instance and a function value are Object[] on the JVM, as a cons is.
+      (defclass wnc-cls () ())
+      (defgeneric wnc-gf (x))
+      (defmethod wnc-gf ((x wnc-cls)) :gf)
+      (defvar *wnc-instance* (make-instance 'wnc-cls))
+      (defvar *wnc-function* #'car)
+      (defun wnc-report (thunk)
+        (print (handler-case (funcall thunk) (error (c) (princ-to-string c)))))
+      (wnc-report (lambda () (length *wnc-instance*)))
+      (wnc-report (lambda () (length *wnc-function*)))
+      (wnc-report (lambda () (length (cons 1 *wnc-instance*))))
+      (wnc-report (lambda () (append *wnc-instance* nil)))
+      (wnc-report (lambda () (append *wnc-function* nil)))
+      (wnc-report (lambda () (apply #'+ *wnc-instance*)))
+      (wnc-report (lambda () (apply #'+ 1 *wnc-function*)))
+      ;; A generic has one function object, whichever way it is named.
+      (print (eq #'wnc-gf #'wnc-gf))
+      (print (eq (symbol-function 'wnc-gf) #'wnc-gf))
+      (print (eq (fdefinition 'wnc-gf) #'wnc-gf))
+    expected: |
+      "LENGTH: The value #<WNC-CLS> is not of type SEQUENCE"
+      "LENGTH: The value #<function CAR> is not of type SEQUENCE"
+      "LENGTH: The value #<WNC-CLS> is not of type SEQUENCE"
+      "APPEND: The value #<WNC-CLS> is not of type LIST"
+      "APPEND: The value #<function CAR> is not of type LIST"
+      "APPLY: last argument must be a list"
+      "APPLY: last argument must be a list"
+      T
+      T
+      T
   - name: flexi-streams-external-formats
     source: |
       ;; The flexi-streams shim's external formats: an object made from a name
@@ -35202,6 +35234,20 @@ cases:
       (print (em-values2 '(nth-value 1 (em-two))))
       (print (em-values2 '(nth-value 5 (em-two))))
       (print (em-values2 '(multiple-value-list (values))))
+      (defvar *em-h* (make-hash-table))
+      (setf (gethash 1 *em-h*) 5)
+      (defvar *em-in* (make-string-input-stream "hi"))
+      (print (multiple-value-list (eval '(gethash 1 *em-h*))))
+      (print (multiple-value-list (eval '(read-line *em-in*))))
+      (print (multiple-value-list (eval '(if t (floor 7 2)))))
+      (print (multiple-value-list (eval '(read-from-string "12 34"))))
+      (print (multiple-value-list (eval '(array-displacement (make-array 2)))))
+      (print (eval '(eval-when (:compile-toplevel) 1)))
+      (print (eval '(let () (eval-when (:load-toplevel) 2))))
+      (print (eval '(eval-when (:execute) 3)))
+      (print (eval '(eval-when (:compile-toplevel :execute) 4)))
+      (print (eval '(eval-when (compile load) 5)))
+      (print (eval '(eval-when (eval) 6)))
     expected: |
       2
       2
@@ -35267,6 +35313,69 @@ cases:
       (2)
       (NIL)
       (NIL)
+      (5 T)
+      ("hi" T)
+      (3 1)
+      (12 3)
+      (NIL 0)
+      NIL
+      NIL
+      3
+      4
+      NIL
+      6
+  - name: warn-signals-to-a-handler-case
+    source: |
+      (defvar *ci-wsc-reports* 0)
+      (define-condition ci-wsc (warning) ((x :initarg :x :reader ci-wsc-x))
+        (:report (lambda (c s) (format s "ci-wsc ~a" (ci-wsc-x c)))))
+      (define-condition ci-wsc-counted (warning) ()
+        (:report (lambda (c s)
+                   (declare (ignorable c))
+                   (incf *ci-wsc-reports*)
+                   (format s "counted"))))
+      (print (handler-case (progn (warn "w") 1) (warning () 'wrn)))
+      (print (handler-case (progn (warn "w ~a" 1) 1) (error () 'err)))
+      (print (handler-case (progn (warn "w ~a" 2) 1) (condition (c) (princ-to-string c))))
+      (print (handler-case (progn (warn 'ci-wsc :x 3) 1) (ci-wsc (c) (ci-wsc-x c))))
+      (print (handler-case (progn (warn (make-condition 'ci-wsc :x 4)) 1) (warning (c) (princ-to-string c))))
+      (let ((d "runtime ~a"))
+        (print (handler-case (progn (warn d 5) 1) (simple-warning (c) (princ-to-string c)))))
+      (print (handler-case (progn (funcall #'warn "fv") 1) (warning () 'fv)))
+      (print (handler-case (handler-case (progn (warn "n") 1) (error () 'inner)) (warning () 'outer)))
+      (print (handler-case (progn (warn 'style-warning) 1) (style-warning () 'sw)))
+      (print (handler-case (progn (warn 'simple-error :format-control "e") 1) (error () 'err)))
+      (print (handler-case (eval '(progn (warn "ev") 1)) (warning () 'ev)))
+      (print (handler-case
+                 (handler-bind ((warning (lambda (c) (declare (ignorable c)) (muffle-warning))))
+                   (warn "m")
+                   2)
+               (warning () 'wrn)))
+      (print (handler-bind ((warning (lambda (c) (declare (ignorable c)) (muffle-warning))))
+               (handler-case (progn (warn "i") 3) (warning () 'wrn))))
+      (handler-case (warn 'ci-wsc-counted) (warning () nil))
+      (print *ci-wsc-reports*)
+      (print (with-output-to-string (*error-output*)
+               (handler-case (warn 'ci-wsc-counted) (error () nil))))
+      (print *ci-wsc-reports*)
+    expected: |
+      WRN
+      1
+      "w 2"
+      3
+      "ci-wsc 4"
+      "runtime 5"
+      FV
+      OUTER
+      SW
+      ERR
+      EV
+      2
+      WRN
+      0
+      "WARNING: counted
+      "
+      1
   - name: iteration-bodies-are-implicit-tagbodies
     source: |
       (let ((acc nil))
@@ -35306,6 +35415,161 @@ cases:
       (1 0)
       :DONE
 standalone:
+  - name: a-method-on-a-lowered-built-in-answers-a-name-built-at-run-time
+    source: |
+      ;; Standalone: no eval, and the only spelling of either name is what intern builds,
+      ;; so the row of a name no function carries has to arm itself.
+      (defclass lrn-c () ())
+      (defmethod close ((x lrn-c) &key abort) (declare (ignore abort)) :closed)
+      (defmethod length ((x lrn-c)) 42)
+      (defvar *lrn* (make-instance 'lrn-c))
+      (print (funcall (intern "CLOSE") *lrn*))
+      (print (apply (intern "CLOSE") (list *lrn* :abort t)))
+      (print (funcall (symbol-function (intern "CLOSE")) *lrn*))
+      (print (funcall (intern "CLOSE") (make-string-input-stream "x")))
+      (print (close (make-string-input-stream "y")))
+      (print (list (funcall (intern "LENGTH") *lrn*) (funcall (intern "LENGTH") "abc")))
+      (print (fboundp (intern "CLOSE")))
+      (print (handler-case (funcall (intern "CLOSE") 1) (type-error () :type-error)))
+      (print (handler-case (funcall (intern "CLOSE")) (program-error (c) (princ-to-string c))))
+    stdout: |
+      :CLOSED
+      :CLOSED
+      :CLOSED
+      T
+      T
+      (42 3)
+      T
+      :TYPE-ERROR
+      "CLOSE expects at least 1 argument, got 0"
+  - name: a-method-on-a-lowered-built-in-answers-a-name-held-as-a-value
+    source: |
+      ;; Standalone: a quoted symbol at a computed call site, and a literal name's function
+      ;; value, for a name a function value's wrapper backs and one nothing does.
+      (defclass lrq-c () ())
+      (defmethod close ((x lrq-c) &key abort) (declare (ignore abort)) :closed)
+      (defmethod length ((x lrq-c)) 42)
+      (defvar *lrq* (make-instance 'lrq-c))
+      (defvar *lrq-names* (list 'close 'length))
+      (print (funcall (car *lrq-names*) *lrq*))
+      (print (funcall (cadr *lrq-names*) *lrq*))
+      (print (funcall (cadr *lrq-names*) "abc"))
+      (print (mapcar 'close (list *lrq*)))
+      (print (mapcar (car *lrq-names*) (list *lrq* (make-string-input-stream "x"))))
+      (print (mapcar 'length (list *lrq* "ab")))
+      (print (apply 'length (list *lrq*)))
+      (print (funcall (coerce (car *lrq-names*) 'function) *lrq*))
+      (print (funcall (coerce 'length 'function) *lrq*))
+      (print (funcall (symbol-function 'length) *lrq*))
+      (print (funcall (fdefinition 'length) *lrq*))
+      (print (funcall (symbol-function 'length) "ab"))
+      (print (funcall (symbol-function 'close) *lrq*))
+      (print (funcall (fdefinition 'close) *lrq*))
+      (print (eq (symbol-function 'close) #'close))
+      (print (eq (symbol-function 'length) #'length))
+      (print (eq (fdefinition 'length) #'length))
+      (print #'close)
+      (print (symbol-function 'length))
+    stdout: |
+      :CLOSED
+      42
+      3
+      (:CLOSED)
+      (:CLOSED T)
+      (42 2)
+      42
+      :CLOSED
+      42
+      42
+      42
+      2
+      :CLOSED
+      :CLOSED
+      T
+      T
+      T
+      #<function CLOSE>
+      #<function LENGTH>
+  - name: a-method-on-a-lowered-built-in-answers-a-form-eval-runs
+    source: |
+      ;; Standalone: a form's call reaches the method, past eval's own arms too, and the
+      ;; stream macros' close is one such call. A built-in fmakunbound retired is undefined
+      ;; to a run-time name, where the interpreter's wrapper used to call itself forever.
+      (defclass lre-c () ())
+      (defmethod close ((x lre-c) &key abort) (declare (ignore abort)) :closed)
+      (defmethod length ((x lre-c)) 42)
+      (defmethod list ((x lre-c) &rest more) (declare (ignore more)) :listed)
+      (defmethod + ((x lre-c) &rest more) (declare (ignore more)) :added)
+      (defvar *lre* (make-instance 'lre-c))
+      (print (eval '(close *lre*)))
+      (print (eval '(close *lre* :abort t)))
+      (print (eval '(close (make-string-input-stream "x"))))
+      (print (eval '(funcall #'close *lre*)))
+      (print (eval '(funcall 'close *lre*)))
+      (print (eval '(mapcar #'close (cons *lre* nil))))
+      (print (eval (list 'length *lre*)))
+      (print (eval '(length "abc")))
+      (print (eval '(list *lre*)))
+      (print (eval '(list 1 2)))
+      (print (eval '(+ *lre*)))
+      (print (eval '(+ *lre* 1)))
+      (print (eval '(+ 1 2 3)))
+      (print (eval '(- 3)))
+      (print (eval '(with-open-stream (s *lre*) (length s))))
+      (print (eval '(with-open-stream (s (make-string-input-stream "x")) (read-char s))))
+      (print (eval '(with-open-file (o "lre.txt" :direction :output :if-exists :supersede) (write-string "ok" o))))
+      (print (eval '(with-open-file (i "lre.txt") (read-line i))))
+      (print (handler-case (eval '(close)) (program-error (c) (princ-to-string c))))
+      (print (close *lre*))
+      (print (length "abcd"))
+      (print (list 1))
+      (print (+ 1 1))
+      (fmakunbound 'length)
+      (print (fboundp 'length))
+      (print (handler-case (eval '(length "ab")) (undefined-function () :undefined)))
+      (print (handler-case (funcall (intern "LENGTH") "ab") (undefined-function () :undefined)))
+    stdout: |
+      :CLOSED
+      :CLOSED
+      T
+      :CLOSED
+      :CLOSED
+      (:CLOSED)
+      42
+      3
+      :LISTED
+      (1 2)
+      :ADDED
+      :ADDED
+      6
+      -3
+      42
+      #\x
+      "ok"
+      "ok"
+      "CLOSE expects at least 1 argument, got 0"
+      :CLOSED
+      4
+      (1)
+      2
+      NIL
+      :UNDEFINED
+      :UNDEFINED
+  - name: warn-signals-to-a-handler-case-outside-restart-mode
+    source: |
+      ;; Standalone: the corpus puts every case in restart mode.
+      (define-condition sa-w (warning) ((x :initarg :x :reader sa-w-x)))
+      (print (handler-case (progn (warn "w") 1) (warning () 'wrn)))
+      (print (handler-case (progn (warn "w ~a" 1) 1) (error () 'err)))
+      (print (handler-case (progn (warn 'sa-w :x 3) 1) (sa-w (c) (sa-w-x c))))
+      (print (handler-case (handler-case (progn (warn "n") 1) (error () 'inner)) (warning () 'outer)))
+      (print (handler-case (progn (warn (make-condition 'simple-error :format-control "e")) 1) (error () 'err)))
+    stdout: |
+      WRN
+      1
+      3
+      OUTER
+      ERR
   - name: eval-reaches-a-gated-operator-its-forms-spell
     source: |
       ;; Standalone: the corpus reads forms at run time, which references them all.

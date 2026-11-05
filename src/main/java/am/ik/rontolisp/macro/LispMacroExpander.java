@@ -35061,8 +35061,9 @@ public final class LispMacroExpander {
 	/**
 	 * Expands {@code (warn datum args...)} with the same designator surface as
 	 * {@link #expandError}, delegating to {@code (%warn message)} which writes
-	 * {@code WARNING: message} to standard error and returns nil. Nothing can handle or
-	 * muffle the warning (no {@code muffle-warning} restart).
+	 * {@code WARNING: message} to standard error and returns nil. With no handler to ask
+	 * (see {@link #expandWarn(LispCons, ClosRegistry, boolean, boolean)}) nothing can
+	 * handle or muffle the warning.
 	 * @param cons the warn expression
 	 * @return the expanded expression
 	 */
@@ -35086,19 +35087,27 @@ public final class LispMacroExpander {
 	 * restart mode ({@code signalHook}) the handlers run at the signal point and the
 	 * whole warning is wrapped in a {@code muffle-warning} restart, so
 	 * {@code (muffle-warning)} from a handler aborts the pending output (the CL
-	 * contract).
+	 * contract). With {@code signalsHandlerCase} it signals before it writes, through
+	 * {@code %signal-cond} and the instance {@code signal} builds, so a
+	 * {@code handler-case} clause matching the warning takes it and nothing is written
+	 * (CLHS {@code warn}); a report renders only past that, for the warning that is
+	 * written.
 	 * @param cons the warn expression
 	 * @param closRegistry the class registry
 	 * @param signalHook whether to run {@code handler-bind} handlers at the signal point
+	 * @param signalsHandlerCase whether to ask the established {@code handler-case}s: the
+	 * interpreter always, a compiled program under {@link #needsSignalClauseMatch}
 	 * @return the expanded expression
 	 */
-	public static LispVal expandWarn(LispCons cons, ClosRegistry closRegistry, boolean signalHook) {
-		return expandSignalDesignator(cons, LispNames.WARN, LispNames.WARN_INTERNAL, closRegistry, false, signalHook);
+	public static LispVal expandWarn(LispCons cons, ClosRegistry closRegistry, boolean signalHook,
+			boolean signalsHandlerCase) {
+		return expandSignalDesignator(cons, LispNames.WARN, LispNames.WARN_INTERNAL, closRegistry, false, signalHook,
+				signalsHandlerCase);
 	}
 
 	/**
 	 * The interpreter's {@code (warn ...)}:
-	 * {@link #expandWarn(LispCons, ClosRegistry, boolean)} with every
+	 * {@link #expandWarn(LispCons, ClosRegistry, boolean, boolean)} with every
 	 * {@code (%warn message)} terminal widened to {@code (%warn message designator)}, the
 	 * designator naming what was signalled -- the quoted class of a typed designator, the
 	 * runtime datum ({@code __signal_cond}: a condition instance, a class-name symbol, or
@@ -35113,7 +35122,7 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandWarnWithDesignator(LispCons cons, ClosRegistry closRegistry, boolean signalHook) {
-		LispVal expansion = expandWarn(cons, closRegistry, signalHook);
+		LispVal expansion = expandWarn(cons, closRegistry, signalHook, true);
 		List<LispVal> parts = cons.toList();
 		LispVal datum = parts.get(1);
 		LispVal designator;
@@ -35204,18 +35213,23 @@ public final class LispMacroExpander {
 	// other expression (a runtime condition object).
 	private static LispVal expandSignalDesignator(LispCons cons, String opName, String internalName,
 			ClosRegistry closRegistry) {
-		return expandSignalDesignator(cons, opName, internalName, closRegistry, false, false);
+		return expandSignalDesignator(cons, opName, internalName, closRegistry, false, false, false);
 	}
 
 	private static LispVal expandSignalDesignator(LispCons cons, String opName, String internalName,
 			ClosRegistry closRegistry, boolean runtimeTypeDispatch) {
-		return expandSignalDesignator(cons, opName, internalName, closRegistry, runtimeTypeDispatch, false);
+		return expandSignalDesignator(cons, opName, internalName, closRegistry, runtimeTypeDispatch, false, false);
 	}
 
 	private static LispVal expandSignalDesignator(LispCons cons, String opName, String internalName,
 			ClosRegistry closRegistry, boolean runtimeTypeDispatch, boolean signalHook) {
+		return expandSignalDesignator(cons, opName, internalName, closRegistry, runtimeTypeDispatch, signalHook, false);
+	}
+
+	private static LispVal expandSignalDesignator(LispCons cons, String opName, String internalName,
+			ClosRegistry closRegistry, boolean runtimeTypeDispatch, boolean signalHook, boolean signalsHandlerCase) {
 		LispVal expansion = expandSignalDesignatorInner(cons, opName, internalName, closRegistry, runtimeTypeDispatch,
-				signalHook);
+				signalHook, signalsHandlerCase);
 		if (signalHook && LispNames.WARN_INTERNAL.equals(internalName)) {
 			// Restart mode: every warn establishes the muffle-warning restart around
 			// the handler run and the output, so (muffle-warning) from a handler
@@ -35228,7 +35242,7 @@ public final class LispMacroExpander {
 	}
 
 	private static LispVal expandSignalDesignatorInner(LispCons cons, String opName, String internalName,
-			ClosRegistry closRegistry, boolean runtimeTypeDispatch, boolean signalHook) {
+			ClosRegistry closRegistry, boolean runtimeTypeDispatch, boolean signalHook, boolean signalsHandlerCase) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException(opName + " expects a condition designator");
@@ -35240,15 +35254,16 @@ public final class LispMacroExpander {
 			// (error (make-condition 'type args...)): the type is statically known, so
 			// route through the typed path (construction + :report-aware message).
 			return expandTypedSignal(opName, internalName, java.util.Objects.requireNonNull(quotedSymbol(mcArgs.car())),
-					mc.toList().subList(2, mc.toList().size()), closRegistry, signalHook);
+					mc.toList().subList(2, mc.toList().size()), closRegistry, signalHook, null, signalsHandlerCase);
 		}
 		LispSymbol typeSym = quotedSymbol(datum);
 		if (typeSym != null) {
 			return expandTypedSignal(opName, internalName, typeSym, parts.subList(2, parts.size()), closRegistry,
-					signalHook);
+					signalHook, null, signalsHandlerCase);
 		}
 		if (datum instanceof LispString control) {
-			return expandStringSignal(opName, internalName, control, parts.subList(2, parts.size()), signalHook);
+			return expandStringSignal(opName, internalName, control, parts.subList(2, parts.size()), signalHook,
+					signalsHandlerCase);
 		}
 		if (runtimeTypeDispatch) {
 			// Interpreter only: the datum is a runtime value. A SYMBOL value is a
@@ -35287,7 +35302,8 @@ public final class LispMacroExpander {
 			listParts.addAll(parts.subList(2, parts.size()));
 			return listToCons(List.of(new LispSymbol(LispNames.ERROR_RUNTIME), datum, listToCons(listParts)));
 		}
-		return expandObjectSignal(internalName, datum, closRegistry, signalHook, formatArgumentList(parts));
+		return expandObjectSignal(internalName, datum, closRegistry, signalHook, formatArgumentList(parts),
+				signalsHandlerCase);
 	}
 
 	/**
@@ -35328,6 +35344,35 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * What a warn runs before it writes, around its {@code %warn} terminal: the
+	 * restart-mode hook's handlers, then the signal asking the established
+	 * {@code handler-case}s, whose throw says the handlers ran when the hook did.
+	 * @param condition the form answering the instance, read once per step
+	 * @param signalMessage the {@code %signal-cond} message operand
+	 * @param terminal the {@code %warn} call
+	 * @param signalHook whether to run {@code handler-bind} handlers at the signal point
+	 * @param signalsHandlerCase whether to ask the established {@code handler-case}s
+	 * @return the steps in order, or the terminal alone when there are none
+	 */
+	private static LispVal warnAfterSignal(LispVal condition, LispVal signalMessage, LispVal terminal,
+			boolean signalHook, boolean signalsHandlerCase) {
+		if (!signalHook && !signalsHandlerCase) {
+			return terminal;
+		}
+		List<LispVal> steps = new ArrayList<>();
+		steps.add(new LispSymbol(LispNames.PROGN));
+		if (signalHook) {
+			steps.add(callOf(LispNames.RUN_HANDLERS_INTERNAL, condition));
+		}
+		if (signalsHandlerCase) {
+			steps.add(signalHook ? handlersRanTerminal(LispNames.SIGNAL_COND_INTERNAL, condition, signalMessage)
+					: listToCons(List.of(new LispSymbol(LispNames.SIGNAL_COND_INTERNAL), condition, signalMessage)));
+		}
+		steps.add(terminal);
+		return listToCons(steps);
+	}
+
+	/**
 	 * Whether a {@code %error-cond} / {@code %signal-cond} form says the
 	 * {@code handler-bind} handlers already ran for its condition
 	 * ({@link #handlersRanTerminal}): a third operand that is not the nil literal.
@@ -35347,11 +35392,11 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal expandStringSignal(String opName, String internalName, LispString control,
 			List<LispVal> args) {
-		return expandStringSignal(opName, internalName, control, args, false);
+		return expandStringSignal(opName, internalName, control, args, false, false);
 	}
 
 	private static LispVal expandStringSignal(String opName, String internalName, LispString control,
-			List<LispVal> args, boolean signalHook) {
+			List<LispVal> args, boolean signalHook, boolean signalsHandlerCase) {
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		List<LispVal> argSyms = new java.util.ArrayList<>();
 		for (int i = 0; i < args.size(); i++) {
@@ -35360,11 +35405,12 @@ public final class LispMacroExpander {
 			bindings.add(listToCons(List.of(g, args.get(i))));
 		}
 		LispVal signalCall;
-		if (signalHook) {
-			// Restart mode: bind the rendered (unprefixed) message, synthesize the
-			// simple-* instance the handlers see -- the same shape a handler-case
-			// synthesizes from a plain message -- run the handlers, then reach the
-			// unchanged throwing/printing terminal.
+		boolean warn = LispNames.WARN_INTERNAL.equals(internalName);
+		if (signalHook || (warn && signalsHandlerCase)) {
+			// Restart mode, or a warn asking the handler-cases: bind the rendered
+			// (unprefixed) message, synthesize the simple-* instance the handlers see --
+			// the same shape a handler-case synthesizes from a plain message -- run the
+			// handlers, then reach the unchanged throwing/printing terminal.
 			LispSymbol msgVar = new LispSymbol(SIG_MSG_VAR);
 			LispSymbol condVar = new LispSymbol(SIGNAL_COND_VAR);
 			LispVal message = formatMessagePieces(control.value(), argSyms);
@@ -35384,10 +35430,11 @@ public final class LispMacroExpander {
 				// or signal-point seam runs them a second time.
 				default -> handlersRanTerminal(LispNames.ERROR_COND_INTERNAL, condVar, msgVar);
 			};
+			LispVal steps = warn ? warnAfterSignal(condVar, msgVar, terminal, signalHook, signalsHandlerCase)
+					: listToCons(List.of(new LispSymbol(LispNames.PROGN),
+							callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar), terminal));
 			signalCall = makeLet(SIG_MSG_VAR, message,
-					makeLet(SIGNAL_COND_VAR, objNew(tag, List.of(textControlForm(msgVar), LispNil.INSTANCE)),
-							listToCons(List.of(new LispSymbol(LispNames.PROGN),
-									callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar), terminal))));
+					makeLet(SIGNAL_COND_VAR, objNew(tag, List.of(textControlForm(msgVar), LispNil.INSTANCE)), steps));
 		}
 		else if (LispNames.SIGNAL_COND_INTERNAL.equals(internalName)) {
 			// (let ((__signal_cond message)) (%signal-cond (%obj-new
@@ -35402,8 +35449,7 @@ public final class LispMacroExpander {
 		else {
 			// warn prefixes the rendered message so %warn stays a plain write
 			// primitive.
-			String controlText = LispNames.WARN_INTERNAL.equals(internalName) ? "WARNING: " + control.value()
-					: control.value();
+			String controlText = warn ? "WARNING: " + control.value() : control.value();
 			LispVal message = formatMessagePieces(controlText, argSyms);
 			signalCall = listToCons(List.of(new LispSymbol(internalName), message));
 		}
@@ -35434,7 +35480,12 @@ public final class LispMacroExpander {
 
 	private static LispVal expandTypedSignal(String opName, String internalName, LispSymbol typeSym, List<LispVal> args,
 			ClosRegistry closRegistry, boolean signalHook) {
-		return expandTypedSignal(opName, internalName, typeSym, args, closRegistry, signalHook, null);
+		return expandTypedSignal(opName, internalName, typeSym, args, closRegistry, signalHook, null, false);
+	}
+
+	private static LispVal expandTypedSignal(String opName, String internalName, LispSymbol typeSym, List<LispVal> args,
+			ClosRegistry closRegistry, boolean signalHook, @Nullable LispSymbol passedInitargs) {
+		return expandTypedSignal(opName, internalName, typeSym, args, closRegistry, signalHook, passedInitargs, false);
 	}
 
 	/**
@@ -35446,7 +35497,8 @@ public final class LispMacroExpander {
 	 * only when the plist carries one.
 	 */
 	private static LispVal expandTypedSignal(String opName, String internalName, LispSymbol typeSym, List<LispVal> args,
-			ClosRegistry closRegistry, boolean signalHook, @Nullable LispSymbol passedInitargs) {
+			ClosRegistry closRegistry, boolean signalHook, @Nullable LispSymbol passedInitargs,
+			boolean signalsHandlerCase) {
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		List<LispVal> items = new java.util.ArrayList<>();
 		ClosRegistry.ClassInfo cls = closRegistry.findClass(typeSym.name());
@@ -35460,7 +35512,7 @@ public final class LispMacroExpander {
 		// condition.
 		boolean routeReport = report == null && closRegistry.routesConditionReports();
 		LispSymbol condVar = new LispSymbol(SIGNAL_COND_VAR);
-		boolean needsInstance = !warn || signalHook || routeReport
+		boolean needsInstance = !warn || signalHook || signalsHandlerCase || routeReport
 				|| (report != null && !(report instanceof LispString));
 		if (needsInstance) {
 			bindings.add(listToCons(List.of(condVar, construct)));
@@ -35519,7 +35571,12 @@ public final class LispMacroExpander {
 		LispVal signalCall = warn ? listToCons(List.of(new LispSymbol(internalName), message))
 				: signalHook ? handlersRanTerminal(condInternal, condVar, message)
 						: listToCons(List.of(new LispSymbol(condInternal), condVar, message));
-		if (signalHook) {
+		if (warn) {
+			// The signal's own message goes unread: a matching handler-case holds the
+			// instance, and a report renders only for the warning that is written.
+			signalCall = warnAfterSignal(condVar, new LispString(""), signalCall, signalHook, signalsHandlerCase);
+		}
+		else if (signalHook) {
 			// Restart mode: run the handler-bind handlers on the instance at the
 			// signal point, before the throwing/printing terminal -- whose throw says
 			// they ran.
@@ -35672,6 +35729,11 @@ public final class LispMacroExpander {
 		return expandObjectSignal(internalName, datumExpr, closRegistry, signalHook, null);
 	}
 
+	private static LispVal expandObjectSignal(String internalName, LispVal datumExpr, ClosRegistry closRegistry,
+			boolean signalHook, @Nullable LispVal formatArgs) {
+		return expandObjectSignal(internalName, datumExpr, closRegistry, signalHook, formatArgs, false);
+	}
+
 	/**
 	 * The condition-object designator with the call's remaining arguments (see
 	 * {@link #expandObjectSignal(String, LispVal, ClosRegistry, boolean)}). Per CL a
@@ -35696,9 +35758,10 @@ public final class LispMacroExpander {
 	 * @param signalHook whether to run {@code handler-bind} handlers at the signal point
 	 * @param formatArgs a form answering the format-argument LIST, or null when the call
 	 * has no arguments after the datum (then the expansion is unchanged)
+	 * @param signalsHandlerCase whether a warn asks the established {@code handler-case}s
 	 */
 	private static LispVal expandObjectSignal(String internalName, LispVal datumExpr, ClosRegistry closRegistry,
-			boolean signalHook, @Nullable LispVal formatArgs) {
+			boolean signalHook, @Nullable LispVal formatArgs, boolean signalsHandlerCase) {
 		boolean warn = LispNames.WARN_INTERNAL.equals(internalName);
 		LispSymbol condVar = new LispSymbol(SIGNAL_COND_VAR);
 		// The string arm's message: the datum itself when nothing can be rendered into
@@ -35756,7 +35819,22 @@ public final class LispMacroExpander {
 		else {
 			symbolCase = listToCons(List.of(new LispSymbol(LispNames.ERROR_INTERNAL), symbolMessage));
 		}
-		if (signalHook) {
+		if (warn && signalsHandlerCase) {
+			// The string/symbol arms' instance is what the signal raises, so it is bound
+			// to reach the handlers and the signal alike; the condition arm's report
+			// renders only for the warning that is written.
+			LispSymbol instVar = new LispSymbol(SIGNAL_INST_VAR);
+			LispSymbol symMsgVar = new LispSymbol(SIGNAL_SYMBOL_MSG_VAR);
+			stringCase = makeLet(SIGNAL_INST_VAR,
+					objNew("%class-SIMPLE-WARNING", List.of(textControlForm(stringMessage), LispNil.INSTANCE)),
+					warnAfterSignal(instVar, stringMessage, stringCase, signalHook, true));
+			symbolCase = makeLet(SIGNAL_SYMBOL_MSG_VAR, callOf(LispNames.PRINC_PIECE_INTERNAL, condVar),
+					makeLet(SIGNAL_INST_VAR,
+							objNew("%class-SIMPLE-WARNING", List.of(textControlForm(symMsgVar), LispNil.INSTANCE)),
+							warnAfterSignal(instVar, symMsgVar, symbolCase, signalHook, true)));
+			conditionCase = warnAfterSignal(condVar, new LispString(""), conditionCase, signalHook, true);
+		}
+		else if (signalHook) {
 			// Restart mode: run the handler-bind handlers at the signal point. The
 			// string/symbol arms synthesize the same simple-* instance a handler-case
 			// would, bind it, and hand the SAME instance to the throwing terminal
@@ -43250,25 +43328,38 @@ public final class LispMacroExpander {
 	 * {@link #handlerCaseProtectedForm}), {@code expandTopLevelDefinitions} injects the
 	 * {@code %hc-match-p} defun (and the stack's defvar outside restart mode), and
 	 * {@code %signal-cond} throws only when an armed clause matches. A program missing
-	 * either half keeps the historical depth-counter emission and stays byte-identical.
-	 * The walk applies the same operator-position discipline as
-	 * {@link #usesRestartSystem} (quoted data and non-operator spellings do not count).
-	 * The interpreter needs none of this -- its per-thread clause-type stack already
-	 * matches at the signal point.
+	 * either half keeps the historical depth-counter emission and stays byte-identical. A
+	 * {@code warn} signals too, and under this gate its lowering asks before it writes
+	 * ({@link #expandWarn(LispCons, ClosRegistry, boolean, boolean)}): the program warns
+	 * and a {@code handler-case} clause can hold a warning
+	 * ({@link #clauseTypeCanHoldWarning}), or it can warn with a datum that may be no
+	 * warning ({@link #formWarnsAnyDatum}, or it runs forms at run time, which reach the
+	 * {@code #'warn} wrapper) and establishes any catching form. A program warning only
+	 * with a control string or a standard warning under clauses that are all errors never
+	 * has a condition to transfer for, so its {@code warn} keeps the plain write. The
+	 * walk applies the same operator-position discipline as {@link #usesRestartSystem}
+	 * (quoted data and non-operator spellings do not count). The interpreter needs none
+	 * of this -- its per-thread clause-type stack already matches at the signal point.
 	 * @param program the top-level forms (post library splice)
 	 * @return whether the signal-point clause match is needed
 	 */
 	public static boolean needsSignalClauseMatch(List<LispVal> program) {
 		boolean signals = false;
 		boolean catches = false;
+		boolean warns = false;
+		boolean warnsAnyDatum = false;
+		boolean holdsWarning = false;
 		for (LispVal form : program) {
-			signals = signals || formContainsOperator(form, true);
-			catches = catches || formContainsOperator(form, false);
+			signals = signals || formContainsOperator(form, SIGNAL_OPERATORS, true);
+			catches = catches || formContainsOperator(form, CATCHING_OPERATORS, false);
+			warns = warns || formContainsOperator(form, WARNING_OPERATORS, true);
+			warnsAnyDatum = warnsAnyDatum || formWarnsAnyDatum(form);
+			holdsWarning = holdsWarning || formCatchesWarning(form);
 			if (signals && catches) {
 				return true;
 			}
 		}
-		return false;
+		return (holdsWarning && warns) || (catches && (warnsAnyDatum || runsFormsAtRunTime(program)));
 	}
 
 	/**
@@ -43303,12 +43394,32 @@ public final class LispMacroExpander {
 						listToCons(List.of(new LispSymbol(LispNames.PROGN), signal, exit)), LispNil.INSTANCE)));
 	}
 
+	private static final java.util.Set<String> SIGNAL_OPERATORS = java.util.Set.of(LispNames.SIGNAL);
+
+	private static final java.util.Set<String> CATCHING_OPERATORS = java.util.Set.of(LispNames.HANDLER_CASE,
+			LispNames.IGNORE_ERRORS);
+
+	private static final java.util.Set<String> WARNING_OPERATORS = java.util.Set.of(LispNames.WARN);
+
+	private static final java.util.Set<String> RUN_TIME_FORM_OPERATORS = java.util.Set.of(LispNames.EVAL,
+			LispNames.COMPILE, LispNames.LOAD);
+
 	/**
-	 * Whether the form contains, in operator position of an evaluated sub-form, either
-	 * the {@code signal} operator / a {@code #'signal} reference ({@code signal} true) or
-	 * a {@code handler-case}/{@code ignore-errors} head ({@code signal} false).
+	 * Whether the program runs forms at run time ({@code eval}, {@code compile},
+	 * {@code load} or a {@code #'} reference of one), whose calls of a built-in reach its
+	 * function wrapper.
+	 * @param program the top-level forms
+	 * @return whether it does
 	 */
-	private static boolean formContainsOperator(LispVal form, boolean signal) {
+	public static boolean runsFormsAtRunTime(List<LispVal> program) {
+		return program.stream().anyMatch(form -> formContainsOperator(form, RUN_TIME_FORM_OPERATORS, true));
+	}
+
+	/**
+	 * Whether the form contains, in operator position of an evaluated sub-form, one of
+	 * the operators, or with {@code functionValues} a {@code #'} reference of one.
+	 */
+	private static boolean formContainsOperator(LispVal form, java.util.Set<String> operators, boolean functionValues) {
 		if (!(form instanceof LispCons cons)) {
 			return false;
 		}
@@ -43317,24 +43428,123 @@ public final class LispMacroExpander {
 			if (LispNames.isQuote(name)) {
 				return false;
 			}
-			String plain = memberOf(name);
-			if (!name.startsWith(":")) {
-				if (signal ? LispNames.SIGNAL.equals(plain)
-						: (LispNames.HANDLER_CASE.equals(plain) || LispNames.IGNORE_ERRORS.equals(plain))) {
-					return true;
-				}
+			if (!name.startsWith(":") && operators.contains(memberOf(name))) {
+				return true;
 			}
-			if (signal && LispNames.FUNCTION.equals(name) && cons.cdr() instanceof LispCons fnCons
-					&& fnCons.car() instanceof LispSymbol fnSym && LispNames.SIGNAL.equals(memberOf(fnSym.name()))) {
+			if (functionValues && LispNames.FUNCTION.equals(name) && cons.cdr() instanceof LispCons fnCons
+					&& fnCons.car() instanceof LispSymbol fnSym && operators.contains(memberOf(fnSym.name()))) {
 				return true;
 			}
 		}
 		for (LispVal rest = cons; rest instanceof LispCons cell; rest = cell.cdr()) {
-			if (formContainsOperator(cell.car(), signal)) {
+			if (formContainsOperator(cell.car(), operators, functionValues)) {
 				return true;
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the form contains a {@code warn} whose datum may be no warning: a
+	 * {@code #'warn} reference or a call whose datum is neither a control string nor a
+	 * standard warning's name. What a {@code warn} signals is its datum, whatever class
+	 * that is, so such a call can reach a clause of the error family.
+	 */
+	private static boolean formWarnsAnyDatum(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			String name = head.name();
+			if (LispNames.isQuote(name)) {
+				return false;
+			}
+			if (LispNames.FUNCTION.equals(name) && cons.cdr() instanceof LispCons fnCons
+					&& fnCons.car() instanceof LispSymbol fnSym && LispNames.WARN.equals(memberOf(fnSym.name()))) {
+				return true;
+			}
+			if (!name.startsWith(":") && LispNames.WARN.equals(memberOf(name)) && cons.cdr() instanceof LispCons args
+					&& !isWarningDatum(args.car())) {
+				return true;
+			}
+		}
+		for (LispVal rest = cons; rest instanceof LispCons cell; rest = cell.cdr()) {
+			if (formWarnsAnyDatum(cell.car())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether a {@code warn} datum is a control string or a standard warning's name. */
+	private static boolean isWarningDatum(LispVal datum) {
+		if (datum instanceof LispString) {
+			return true;
+		}
+		LispVal named = datum instanceof LispCons mc && mc.car() instanceof LispSymbol mcOp
+				&& LispNames.MAKE_CONDITION.equals(mcOp.name()) && mc.cdr() instanceof LispCons mcArgs ? mcArgs.car()
+						: datum;
+		LispSymbol type = quotedSymbol(named);
+		ClosRegistry.ClassInfo cls = type == null ? null : EMPTY_CLOS_REGISTRY.findClass(type.name());
+		return cls != null && cls.cpl().contains("WARNING");
+	}
+
+	/**
+	 * Whether the form contains a {@code handler-case} with a clause that can hold a
+	 * warning. {@code ignore-errors} has none.
+	 */
+	private static boolean formCatchesWarning(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			String name = head.name();
+			if (LispNames.isQuote(name)) {
+				return false;
+			}
+			if (!name.startsWith(":") && LispNames.HANDLER_CASE.equals(memberOf(name))
+					&& cons.cdr() instanceof LispCons protectedForm) {
+				for (LispVal rest = protectedForm.cdr(); rest instanceof LispCons cell; rest = cell.cdr()) {
+					if (cell.car() instanceof LispCons clause && clauseTypeCanHoldWarning(clause.car())) {
+						return true;
+					}
+				}
+			}
+		}
+		for (LispVal rest = cons; rest instanceof LispCons cell; rest = cell.cdr()) {
+			if (formCatchesWarning(cell.car())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a {@code handler-case} clause type can hold a warning: all but a standard
+	 * name under {@code serious-condition}, which the seeded registry answers, and an
+	 * {@code (or ...)} of such. A program's own class is not looked at, so one under
+	 * {@code error} counts: the safe direction, the warning is only asked about.
+	 * @param type the clause's type specifier
+	 * @return whether it can hold a warning
+	 */
+	private static boolean clauseTypeCanHoldWarning(LispVal type) {
+		if (type instanceof LispSymbol symbol) {
+			if (":NO-ERROR".equals(symbol.name())) {
+				return false;
+			}
+			ClosRegistry.ClassInfo cls = EMPTY_CLOS_REGISTRY.findClass(symbol.name());
+			return cls == null || !cls.cpl().contains("SERIOUS-CONDITION");
+		}
+		if (type instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.OR.equals(memberOf(head.name()))) {
+			for (LispVal rest = cons.cdr(); rest instanceof LispCons cell; rest = cell.cdr()) {
+				if (clauseTypeCanHoldWarning(cell.car())) {
+					return true;
+				}
+			}
+			return false;
+		}
+		return true;
 	}
 
 	private static boolean usesRestartSystemForm(LispVal form) {
@@ -45306,6 +45516,27 @@ public final class LispMacroExpander {
 			return body.get(0);
 		}
 		return makeProgn(body);
+	}
+
+	/**
+	 * Whether an {@code eval-when} outside any top-level position runs its body: its
+	 * situations name {@code :execute} or the old {@code eval}. A malformed form answers
+	 * true, so {@link #expandEvalWhen} reports it.
+	 * @param cons the eval-when expression
+	 * @return whether the body runs
+	 */
+	public static boolean evalWhenExecutes(LispCons cons) {
+		if (!(cons.cdr() instanceof LispCons rest)
+				|| !(rest.car() instanceof LispCons || rest.car() instanceof LispNil)) {
+			return true;
+		}
+		for (LispVal cell = rest.car(); cell instanceof LispCons list; cell = list.cdr()) {
+			if (list.car() instanceof LispSymbol situation && (":EXECUTE".equals(situation.name())
+					|| ":EVAL".equals(situation.name()) || LispNames.EVAL.equals(memberOf(situation.name())))) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

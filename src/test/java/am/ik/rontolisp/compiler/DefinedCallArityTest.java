@@ -48,6 +48,10 @@ class DefinedCallArityTest {
 		assertThat(Objects.requireNonNull(DefinedCallArity.wrongCountSignal(call("(f 1 2)"), dispatcher, 1, false))
 			.print()).isEqualTo("(PROGN 1 2 (%PROGRAM-ERROR \"LENGTH expects 1 argument, got 2\"))");
 		assertThat(BuiltinFunctionWrappers.arityOperator(dispatcher)).isEqualTo(LispNames.LENGTH);
+		for (String shadowable : ShadowedBuiltins.loweredBuiltinFunctions()) {
+			assertThat(BuiltinFunctionWrappers.arityOperator(LispMacroExpander.shadowedDispatcherName(shadowable)))
+				.isEqualTo(shadowable);
+		}
 		assertThat(BuiltinFunctionWrappers.arityOperator(LispNames.CAR)).isEqualTo(LispNames.CAR);
 		assertThat(BuiltinFunctionWrappers.arityOperator("%UD--dispatch")).isNull();
 		assertThat(BuiltinFunctionWrappers.arityOperator(null)).isNull();

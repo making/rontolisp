@@ -2211,8 +2211,9 @@ final class JvmExprCompiler {
 				.compileExpr(LispMacroExpander.expandCerror(cons, ctx.closRegistry, ctx.restartMode), ctx, className);
 			case LispNames.ERROR_INTERNAL -> JvmErrorCompiler.compile(cons, ctx, className);
 			case LispNames.ERROR_COND_INTERNAL -> JvmErrorCondCompiler.compile(cons, ctx, className);
-			case LispNames.WARN -> JvmExprCompiler
-				.compileExpr(LispMacroExpander.expandWarn(cons, ctx.closRegistry, ctx.restartMode), ctx, className);
+			case LispNames.WARN -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.expandWarn(cons, ctx.closRegistry, ctx.restartMode, ctx.signalClauseMatch), ctx,
+					className);
 			case LispNames.WARN_INTERNAL -> JvmWarnCompiler.compile(cons, ctx, className);
 			case LispNames.SIGNAL -> JvmExprCompiler.compileExpr(
 					LispMacroExpander.expandSignalMacro(cons, ctx.closRegistry, ctx.restartMode), ctx, className);

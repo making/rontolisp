@@ -209,6 +209,11 @@ public final class LispEvaluator {
 	// thread; unset everywhere else.
 	private final ThreadLocal<@Nullable BiConsumer<String, Boolean>> macroTimeWarnings = new ThreadLocal<>();
 
+	// Whether this thread is inside a form the eval function was handed, outside any file
+	// that form loaded. Everywhere else an eval-when is a progn, whose every situation a
+	// file run here has to honor, since it stands for both the compile and the load.
+	private final ThreadLocal<Boolean> evalFunctionRuns = ThreadLocal.withInitial(() -> false);
+
 	// Whether the runtime format renderer (FormatRenderer.defuns(), the same forms the
 	// compile path injects) has been evaluated into the global environment. The
 	// interpreter cannot inject a top-level defun the way expandTopLevelDefinitions does,
@@ -1064,6 +1069,16 @@ public final class LispEvaluator {
 	private final Map<String, LispVal> genericDispatchers = new java.util.concurrent.ConcurrentHashMap<>();
 
 	/**
+	 * The names {@code fmakunbound} retired: what would come back without a binding, a
+	 * catalog wrapper or a library function loaded on first use, stays undefined. A later
+	 * binding is found ahead of this.
+	 */
+	private final Set<String> retiredFunctions = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+	/** The one late-bound function value of each generic ({@link #functionValue}). */
+	private final Map<String, LispFunction> genericFunctionValues = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
 	 * Every function-body tail a multiple-value producer was lowered into when its
 	 * function was DEFINED ({@code evalDefun}, {@link #settledLambdaTail}): the lowering
 	 * spells the built-in's values by name, so a {@code defmethod} on the producer that
@@ -1618,7 +1633,7 @@ public final class LispEvaluator {
 					&& LispNames.DEFPACKAGE.equals(LispSymbol.memberName(head.name()))) {
 				return registerRuntimeDefpackage(form);
 			}
-			return evalDatum(args.get(0));
+			return evalFunctionForm(args.get(0));
 		}, true));
 		// compile answers the name, or with no name the function, and neither failure
 		// value: nothing here warns.
@@ -1724,7 +1739,7 @@ public final class LispEvaluator {
 				throw new LispEvalException(
 						LispNames.SYMBOL_FUNCTION + " expects a symbol, got " + args.get(0).print());
 			}
-			return resolveFunction(name);
+			return functionValue(name);
 		}));
 		// fdefinition = symbol-function, which also takes a (setf name) function name.
 		this.globalEnv.defineFunction(LispNames.FDEFINITION, new LispFunction(LispNames.FDEFINITION, args -> {
@@ -1736,7 +1751,7 @@ public final class LispEvaluator {
 			if (name == null) {
 				throw new LispEvalException(LispNames.FDEFINITION + " expects a symbol, got " + args.get(0).print());
 			}
-			return resolveFunction(name);
+			return functionValue(name);
 		}));
 		// concatenate re-registered WITH the class registry, so a result-type designator
 		// naming a user deftype (fast-http's simple-byte-vector) resolves through its
@@ -2953,6 +2968,7 @@ public final class LispEvaluator {
 			}
 			this.globalEnv.undefineFunction(name);
 			removeUserMacro(name);
+			this.retiredFunctions.add(name);
 			return args.get(0);
 		}));
 		// makunbound: set's unbinding twin -- the CURRENT dynamic binding loses its value
@@ -4738,6 +4754,18 @@ public final class LispEvaluator {
 	 * ({@code LispMacroExpander.expandLoadFileErrorSignal}).
 	 */
 	private void loadFile(String operator, String rawPath, @Nullable String systemName, Features features,
+			@Nullable LispVal designator) {
+		boolean outer = this.evalFunctionRuns.get();
+		this.evalFunctionRuns.set(false);
+		try {
+			loadSource(operator, rawPath, systemName, features, designator);
+		}
+		finally {
+			this.evalFunctionRuns.set(outer);
+		}
+	}
+
+	private void loadSource(String operator, String rawPath, @Nullable String systemName, Features features,
 			@Nullable LispVal designator) {
 		String baseDir = this.loadDirStack.peekLast();
 		String resolved = SourceLoader.resolve(baseDir, rawPath);
@@ -8566,6 +8594,10 @@ public final class LispEvaluator {
 	 * @return the result
 	 */
 	private LispVal evalDatum(LispVal datum) {
+		return evalDatum(datum, false);
+	}
+
+	private LispVal evalDatum(LispVal datum, boolean tail) {
 		LispVal resolved;
 		try {
 			resolved = this.packageResolver.resolveDatum(datum);
@@ -8577,7 +8609,28 @@ public final class LispEvaluator {
 			return signalPackageError(message,
 					message.startsWith(NO_SUCH_PACKAGE) ? message.substring(NO_SUCH_PACKAGE.length()) : "");
 		}
-		return evalResolved(resolved);
+		return evalResolved(
+				tail ? LispMacroExpander.spillEscapingMvProducers(dispatchingMethodedProducers(resolved)) : resolved);
+	}
+
+	/**
+	 * What {@code eval} does with its form. The form's tail is a tail: a consumer behind
+	 * {@code eval} cannot lower a syntactic producer for itself, so the producer
+	 * publishes as it would behind a function return. And an {@code eval-when} met while
+	 * it runs is not at top level, so only {@code :execute} runs its body
+	 * ({@link #evalFunctionRuns}).
+	 * @param datum the form
+	 * @return the result, its values on the channel
+	 */
+	private LispVal evalFunctionForm(LispVal datum) {
+		boolean outer = this.evalFunctionRuns.get();
+		this.evalFunctionRuns.set(true);
+		try {
+			return evalDatum(datum, true);
+		}
+		finally {
+			this.evalFunctionRuns.set(outer);
+		}
 	}
 
 	/**
@@ -11154,6 +11207,9 @@ public final class LispEvaluator {
 			case LispNames.THE:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandThe);
 			case LispNames.EVAL_WHEN:
+				if (this.evalFunctionRuns.get() && !LispMacroExpander.evalWhenExecutes(cons)) {
+					return LispNil.INSTANCE;
+				}
 				return builtinMacroExpansion(cons, LispMacroExpander::expandEvalWhen);
 			case LispNames.WITH_COMPILATION_UNIT:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandWithCompilationUnit);
@@ -14038,32 +14094,37 @@ public final class LispEvaluator {
 			return resolveFunction(LispMacroExpander.setfFunctionName(setfPlace.name()));
 		}
 		if (designator instanceof LispSymbol sym) {
-			// A GENERIC function's #' value is late-bound: defmethod REDEFINES the
-			// dispatcher under the name (evalDefmethod), so a captured snapshot would
-			// silently miss every method a later-loaded system adds -- dbi stashes
-			// #'disconnect in its connection pool at load time and dbd-postgres
-			// defines its method afterwards. The wrapper resolves the CURRENT binding
-			// at call time (real CL semantics: #'name IS the generic object methods
-			// join). Non-generic names keep the direct value. It hands on every value
-			// the dispatcher answers. What it resolves is the GENERIC's current
-			// dispatcher, not the name: a (setf (fdefinition 'name) ...) wrapping a
-			// #'name
-			// taken before it must still reach the generic, and a #'name taken after it
-			// is what the setf stored.
-			if (this.closRegistry.findGeneric(sym.name()) != null) {
-				String name = sym.name();
-				LispVal dispatcher = this.genericDispatchers.get(name);
-				if (dispatcher == null || dispatcher == this.globalEnv.lookupFunctionOrNull(name)) {
-					return new LispFunction(name, args -> {
-						LispVal current = this.genericDispatchers.get(name);
-						return apply(current != null ? current : resolveFunction(name), args, this.globalEnv);
-					}, true);
-				}
-			}
-			return resolveFunction(sym.name());
+			return functionValue(sym.name());
 		}
 		throw new LispEvalException(
 				LispNames.FUNCTION + " expects a function name or lambda expression, got " + designator.print());
+	}
+
+	/**
+	 * The value of a name in the function namespace, as {@code #'name} and
+	 * {@code symbol-function} answer it. A GENERIC function's is late-bound: defmethod
+	 * REDEFINES the dispatcher under the name (evalDefmethod), so a captured snapshot
+	 * would silently miss every method a later-loaded system adds -- dbi stashes
+	 * #'disconnect in its connection pool at load time and dbd-postgres defines its
+	 * method afterwards. The wrapper resolves the CURRENT binding at call time (real CL
+	 * semantics: #'name IS the generic object methods join), and there is one per name,
+	 * so two references are {@code eq}. Non-generic names keep the direct value. It hands
+	 * on every value the dispatcher answers. What it resolves is the GENERIC's current
+	 * dispatcher, not the name: a (setf (fdefinition 'name) ...) wrapping a #'name taken
+	 * before it must still reach the generic, and a #'name taken after it is what the
+	 * setf stored.
+	 */
+	private LispVal functionValue(String name) {
+		if (this.closRegistry.findGeneric(name) != null) {
+			LispVal dispatcher = this.genericDispatchers.get(name);
+			if (dispatcher == null || dispatcher == this.globalEnv.lookupFunctionOrNull(name)) {
+				return this.genericFunctionValues.computeIfAbsent(name, generic -> new LispFunction(generic, args -> {
+					LispVal current = this.genericDispatchers.get(generic);
+					return apply(current != null ? current : resolveFunction(generic), args, this.globalEnv);
+				}, true));
+			}
+		}
+		return resolveFunction(name);
 	}
 
 	/**
@@ -14616,7 +14677,7 @@ public final class LispEvaluator {
 		if (fn != null) {
 			return fn;
 		}
-		if (this.userMacros.containsKey(name)) {
+		if (this.userMacros.containsKey(name) || this.retiredFunctions.contains(name)) {
 			throw CellErrorException.undefinedFunction(name);
 		}
 		// A BuiltinFunctionWrappers entry IS the function value of a built-in that
@@ -14629,7 +14690,9 @@ public final class LispEvaluator {
 		// lookup above does: a name with a wrapper is a function, whatever the operator
 		// table calls it (typep is the CL function rontolisp implements as a special
 		// form). The synthesized lambda cannot recurse: every wrapped operator has a
-		// real lowering, so its body never resolves back to this branch.
+		// real lowering, so its body never resolves back to this branch -- but for a
+		// built-in whose lowering IS its global binding, once fmakunbound dropped that,
+		// which the retired names above stop short of.
 		// The lambda carries the operator's name, as the compiled backends' injected
 		// wrapper defun does: it prints as #<function NAME> and its wrong-count
 		// program-error names the operator (checkArity, and the &optional surplus
@@ -18074,8 +18137,8 @@ public final class LispEvaluator {
 		// resolution loads it: each is a function all the same, so the probe loads what a
 		// call would.
 		return SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)
-				|| this.globalEnv.lookupFunctionOrNull(name) != null || BuiltinFunctionWrappers.names().contains(name)
-				|| loadFunction(name) != null;
+				|| this.globalEnv.lookupFunctionOrNull(name) != null || (!this.retiredFunctions.contains(name)
+						&& (BuiltinFunctionWrappers.names().contains(name) || loadFunction(name) != null));
 	}
 
 	/**

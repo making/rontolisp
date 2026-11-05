@@ -395,10 +395,11 @@ public final class WasmRefTypeFolder {
 
 		final byte[][] codeEntries;
 
-		// Per defined function, decoded on first use (materialize) together with the
-		// per-body tables below: the analysis only ever reaches the functions it proves
-		// live, and a backend module is mostly runtime the program never calls.
-		final @Nullable Body[] bodies;
+		// A body is decoded for each walk and dropped with it, not kept for the fixpoint:
+		// held, the decoded instructions of a whole module are most of this pass's heap
+		// (.kb/wasm-ref-type-fold.md). The per-body tables below are built on first use
+		// (materialize): the analysis only ever reaches the functions it proves live, and
+		// a backend module is mostly runtime the program never calls.
 
 		final ValType[] globalTypes;
 
@@ -498,7 +499,6 @@ public final class WasmRefTypeFolder {
 			this.funcTypes = ft.toArray(new FuncType[0]);
 			this.numFuncs = this.funcTypes.length;
 			this.codeEntries = codeEntries.toArray(new byte[0][]);
-			this.bodies = new Body[codeEntries.size()];
 
 			// Globals: imported ones first (none may be a reference -- checked by parse),
 			// then the defined ones with their initializers.
@@ -568,10 +568,10 @@ public final class WasmRefTypeFolder {
 			this.globalReaders = new BitSet[this.globalTypes.length];
 			this.tagReaders = new BitSet[this.tagTypes.size()];
 			this.lastGlobalInitEpoch = new int[this.globalInits.size()];
-			this.localSets = new @Nullable BitSet[this.bodies.length][];
-			this.assignPositions = new int[this.bodies.length][][];
-			this.impurePrefix = new int[this.bodies.length][];
-			this.targeted = new boolean[this.bodies.length][];
+			this.localSets = new @Nullable BitSet[this.codeEntries.length][];
+			this.assignPositions = new int[this.codeEntries.length][][];
+			this.impurePrefix = new int[this.codeEntries.length][];
+			this.targeted = new boolean[this.codeEntries.length][];
 			this.returnSets = new @Nullable BitSet[this.numFuncs][];
 			for (int f = 0; f < this.numFuncs; f++) {
 				this.returnSets[f] = setsFor(this.funcTypes[f].results());
@@ -660,20 +660,19 @@ public final class WasmRefTypeFolder {
 		 * an import or export boundary).
 		 */
 		/**
-		 * Decodes one defined function and builds its per-body tables, once: its local
-		 * sets, where each local is assigned, the impure-instruction prefix sums and the
-		 * branch-target flags. Everything that reads a function's body or tables goes
-		 * through here first.
+		 * Decodes one defined function, building its per-body tables the first time: its
+		 * local sets, where each local is assigned, the impure-instruction prefix sums
+		 * and the branch-target flags. Everything that reads a function's body or tables
+		 * goes through here first.
 		 * @param d the defined-function ordinal
 		 * @return the decoded body
 		 */
 		Body materialize(int d) {
-			@Nullable Body decoded = this.bodies[d];
-			if (decoded != null) {
-				return decoded;
+			Body body = WasmCodeModel.decode(this.codeEntries[d], this.types);
+			if (this.targeted[d] != null) {
+				return body;
 			}
 			FuncType f = this.funcTypes[this.numImports + d];
-			Body body = WasmCodeModel.decode(this.codeEntries[d], this.types);
 			int n = f.params().size() + body.locals().size();
 			@Nullable BitSet[] sets = new BitSet[n];
 			List<List<Integer>> assigns = new ArrayList<>();
@@ -698,8 +697,18 @@ public final class WasmRefTypeFolder {
 			this.assignPositions[d] = positions;
 			this.impurePrefix[d] = prefix;
 			this.targeted[d] = new boolean[body.code().size()];
-			this.bodies[d] = body;
 			return body;
+		}
+
+		/**
+		 * Builds a function's per-body tables if nothing has yet; a caller that reads
+		 * only the tables pays no decode.
+		 * @param d the defined-function ordinal
+		 */
+		void prepare(int d) {
+			if (this.targeted[d] == null) {
+				materialize(d);
+			}
 		}
 
 		static @Nullable Model parse(byte[] module) {
@@ -841,7 +850,7 @@ public final class WasmRefTypeFolder {
 				// The rewrite is the same walk over the final sets; a set that still
 				// grows
 				// here means the fixpoint was not one, and the loop simply continues.
-				rewritten = new byte @Nullable [this.bodies.length][];
+				rewritten = new byte @Nullable [this.codeEntries.length][];
 				this.changed = false;
 				for (int f = this.numImports; f < this.numFuncs; f++) {
 					if (this.live[f]) {
@@ -853,7 +862,7 @@ public final class WasmRefTypeFolder {
 				}
 			}
 			boolean any = false;
-			for (int d = 0; d < this.bodies.length; d++) {
+			for (int d = 0; d < this.codeEntries.length; d++) {
 				if (rewritten[d] != null && !Arrays.equals(rewritten[d], this.codeEntries[d])) {
 					any = true;
 					break;
@@ -863,8 +872,8 @@ public final class WasmRefTypeFolder {
 				return this.module;
 			}
 			java.io.ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
-			WasmSections.writeU(body, this.bodies.length);
-			for (int d = 0; d < this.bodies.length; d++) {
+			WasmSections.writeU(body, this.codeEntries.length);
+			for (int d = 0; d < this.codeEntries.length; d++) {
 				byte[] entry = rewritten[d] != null ? rewritten[d] : this.codeEntries[d];
 				WasmSections.writeU(body, entry.length);
 				WasmSections.writeRaw(body, entry);
@@ -1568,7 +1577,7 @@ public final class WasmRefTypeFolder {
 							this.m.dirty[callee] = true;
 							this.m.changed = true;
 						}
-						this.m.materialize(callee - this.m.numImports);
+						this.m.prepare(callee - this.m.numImports);
 						@Nullable BitSet[] paramSets = this.m.localSets[callee - this.m.numImports];
 						for (int k = 0; k < args.size(); k++) {
 							if (args.get(k).ref()) {
@@ -1592,7 +1601,7 @@ public final class WasmRefTypeFolder {
 							this.m.dirty[callee] = true;
 							this.m.changed = true;
 						}
-						this.m.materialize(callee - this.m.numImports);
+						this.m.prepare(callee - this.m.numImports);
 						@Nullable BitSet[] paramSets = this.m.localSets[callee - this.m.numImports];
 						for (int k = 0; k < args.size(); k++) {
 							if (args.get(k).ref()) {

@@ -19,7 +19,7 @@ the [Language Reference](../reference/special-forms.md).
 | `typep` / `subtypep` / `coerce` | literal (quoted) type specifiers only; `coerce` targets `'list` / `'vector` / `'string` (or a float type) |
 | `concatenate` | builds the `'list` / `'vector` / `'string` sequence families |
 | `make-package` / `rename-package` / `delete-package` / `unintern` / `shadow` (runtime) | `make-package`, `rename-package`, `delete-package`, `packagep`, `package-nicknames`, `find-all-symbols`, `do-all-symbols` and `apropos`/`apropos-list` are available (two tiers below); `shadow` / `shadowing-import` / `unintern` change a package's member table, which on the compiled backends only the packages the program creates have |
-| `eval-when` | treated as `progn` (no phase distinction) |
+| `eval-when` | treated as `progn` (no phase distinction), but for a form `eval` runs |
 | `#:name` | reads as a plain symbol, without gensym-style freshness |
 | `*modules*` | not available (`require`/`provide` are) |
 | complex numbers | available on every backend but `--no-gc` ([Numeric tower](#numeric-tower)) |

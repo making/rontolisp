@@ -1849,19 +1849,15 @@
 
 ;; ---- streams ----
 
-;; A program defining a method on close keeps the name from the registry a form's call
-;; goes through; a call here is the compiled one.
-(defun %eval-close (stream) (close stream))
-
 (defun %eval-row-with-open-file (args env)
   (let ((var (car (car args))))
     `(let ((,var (open ,@(cdr (car args)))))
-       (unwind-protect (progn ,@(cdr args)) (if ,var (%eval-close ,var))))))
+       (unwind-protect (progn ,@(cdr args)) (if ,var (close ,var))))))
 
 (defun %eval-row-with-open-stream (args env)
   (let ((var (car (car args))))
     `(let ((,var ,(cadr (car args))))
-       (unwind-protect (progn ,@(cdr args)) (%eval-close ,var)))))
+       (unwind-protect (progn ,@(cdr args)) (close ,var)))))
 
 (defun %eval-row-with-output-to-string (args env)
   (let ((var (car (car args))) (target (cadr (car args))))

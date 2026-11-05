@@ -16,6 +16,7 @@ import am.ik.rontolisp.ClConstants;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.compiler.EvalReferences;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.jvm.ConstantPool;
 import org.jspecify.annotations.Nullable;
 
@@ -1129,6 +1130,8 @@ final class JvmEvalRuntimeBuilder {
 	 * @param k the shared constants
 	 * @param thisClass the class being emitted
 	 * @param dispatchable the funcIds the dispatchers kept a case for, or null for all
+	 * @param runTimeDispatchers the names answering a dispatcher instead of a function of
+	 * their own ({@code ShadowedBuiltins.runTimeNames})
 	 * @param aliasReachable whether the single-colon alias SPELLING can reach the run
 	 * time at all (see the alias loop below)
 	 * @param spelledLiterals the literal spellings Pass 2 emitted as runtime values
@@ -1138,10 +1141,11 @@ final class JvmEvalRuntimeBuilder {
 	 * @return the segment bodies
 	 */
 	static List<MethodCode> buildLookupSegments(EvalConstants k, ClassEntry thisClass,
-			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable,
+			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable,
+			Map<String, JvmLispCompiler.FunctionInfo> runTimeDispatchers, boolean aliasReachable,
 			Set<String> spelledLiterals, @org.jspecify.annotations.Nullable MethodRefEntry foreignLookup) {
-		return new JvmEvalRuntimeBuilder(k).lookupSegments(thisClass, dispatchable, aliasReachable, spelledLiterals,
-				foreignLookup);
+		return new JvmEvalRuntimeBuilder(k).lookupSegments(thisClass, dispatchable, runTimeDispatchers, aliasReachable,
+				spelledLiterals, foreignLookup);
 	}
 
 	/** Builds the {@code _envLookup} method body. */
@@ -1210,7 +1214,8 @@ final class JvmEvalRuntimeBuilder {
 	private static final int LOOKUP_SEGMENT_BUDGET = 6_000;
 
 	private List<MethodCode> lookupSegments(ClassEntry thisClass,
-			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable,
+			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable,
+			Map<String, JvmLispCompiler.FunctionInfo> runTimeDispatchers, boolean aliasReachable,
 			Set<String> spelledLiterals, @org.jspecify.annotations.Nullable MethodRefEntry foreignLookup) {
 		// Only the names a runtime designator can carry (registryFuncIds), each of
 		// which the dispatchers keep a case for -- a name whose funcId had no case
@@ -1224,7 +1229,15 @@ final class JvmEvalRuntimeBuilder {
 			.entrySet()
 			.stream()
 			.filter(e -> dispatchable == null || dispatchable.contains(e.getValue().funcId()))
+			.filter(e -> !runTimeDispatchers.containsKey(e.getKey()))
 			.toList());
+		// A built-in's name a program defines a method on answers the dispatcher
+		// (ShadowedBuiltins.runTimeNames).
+		for (Map.Entry<String, JvmLispCompiler.FunctionInfo> row : runTimeDispatchers.entrySet()) {
+			if (dispatchable == null || dispatchable.contains(row.getValue().funcId())) {
+				entries.add(row);
+			}
+		}
 		// Alias rows for INTERNAL names: a runtime-interned symbol carries
 		// the single-colon external spelling (the 2-arg intern/find-symbol lowerings
 		// build it -- exportedness is registry knowledge the run time does not have),
@@ -2682,6 +2695,17 @@ final class JvmEvalRuntimeBuilder {
 		// interpreter's type-error on a non-list, where the arms this replaced answered
 		// one list only, took a :from-end for the initial value, dropped a surplus
 		// argument and threw a NullPointerException on (first nil).
+
+		// The two arms below answer the built-in without asking the registry: a name the
+		// program defines a method on goes to its dispatcher instead, every argument with
+		// it.
+		for (String armed : List.of(LispNames.LIST, LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.DIV)) {
+			if (carries(LispMacroExpander.shadowedDispatcherName(armed))) {
+				n = special(a, OP, armed);
+				a.goto_(registryApply);
+				a.labelBinding(n);
+			}
+		}
 
 		// ---- list (variadic) ----
 		n = special(a, OP, LispNames.LIST);
