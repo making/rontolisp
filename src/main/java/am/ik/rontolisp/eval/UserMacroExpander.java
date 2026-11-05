@@ -23,6 +23,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.SplicedComponentGroups;
+import am.ik.rontolisp.reader.FeaturePushes;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -215,6 +216,13 @@ public final class UserMacroExpander {
 			Set<LispVal> compileTime = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
 			for (LispVal member : LispMacroExpander.flattenTopLevel(List.of(form), compileTime)) {
 				accept(member, compileTime.contains(member));
+				// The read-time image runs a computed push onto *features* whatever its
+				// situations, as a literal one announces whatever its situations
+				// (FeaturePushes), so the forms below read on all four as they do where
+				// load runs it.
+				if (this.shallow && !compileTime.contains(member) && FeaturePushes.computesAPush(member)) {
+					this.macroEval.evalResolved(this.macroEval.resolvePackages(member));
+				}
 			}
 		}
 
@@ -1081,7 +1089,7 @@ public final class UserMacroExpander {
 	 * datum is walked too, since the compilers' resolution pass resolves its symbols as
 	 * well; an {@code %unspelled-quote} datum is not.
 	 */
-	private static LispVal requalifyShadowedClNames(LispVal form, LispEvaluator macroEval) {
+	static LispVal requalifyShadowedClNames(LispVal form, LispEvaluator macroEval) {
 		return LispTrees.rebuildSpine(form, node -> switch (node) {
 			case LispSymbol sym -> {
 				String emitted = macroEval.emittedSpelling(sym);
@@ -2216,29 +2224,22 @@ public final class UserMacroExpander {
 					if (parts.size() < 4 || !(parts.get(3) instanceof LispCons slotsCons)) {
 						return form;
 					}
-					List<LispVal> newSlots = new ArrayList<>();
-					for (LispVal slot : slotsCons.toList()) {
-						if (slot instanceof LispCons slotCons && slotCons.isProperList()) {
-							List<LispVal> slotParts = slotCons.toList();
-							List<LispVal> newSlot = new ArrayList<>();
-							newSlot.add(slotParts.get(0));
-							for (int i = 1; i < slotParts.size(); i += 2) {
-								newSlot.add(slotParts.get(i));
-								if (i + 1 < slotParts.size()) {
-									boolean initform = slotParts.get(i) instanceof LispSymbol key
-											&& ":INITFORM".equals(key.name());
-									newSlot.add(initform ? expandAll(slotParts.get(i + 1), macroEval)
-											: slotParts.get(i + 1));
-								}
-							}
-							newSlots.add(properList(newSlot));
-						}
-						else {
-							newSlots.add(slot);
-						}
+					List<LispVal> newParts = new ArrayList<>(parts);
+					newParts.set(3, expandSlotInitforms(slotsCons, macroEval));
+					return properList(newParts);
+				}
+				case LispNames.DEFINE_CONDITION: {
+					// (define-condition name (super) ((slot options...)...) options...):
+					// the slots as defclass's, a slot named like a macro included; an
+					// option holds expressions, the :report lambda among them.
+					if (parts.size() < 4 || !(parts.get(3) instanceof LispCons slotsCons)) {
+						return form;
 					}
 					List<LispVal> newParts = new ArrayList<>(parts);
-					newParts.set(3, properList(newSlots));
+					newParts.set(3, expandSlotInitforms(slotsCons, macroEval));
+					for (int i = 4; i < parts.size(); i++) {
+						newParts.set(i, expandAll(parts.get(i), macroEval));
+					}
 					return properList(newParts);
 				}
 				case LispNames.DEFSTRUCT: {
@@ -2825,6 +2826,33 @@ public final class UserMacroExpander {
 			newParts.add(expandAll(parts.get(i), macroEval));
 		}
 		return LispCons.rebuiltList(original, newParts);
+	}
+
+	/**
+	 * Expands the {@code :initform} values of a {@code defclass} or
+	 * {@code define-condition} slot list, the one place in it holding expressions.
+	 */
+	private static LispVal expandSlotInitforms(LispCons slots, LispEvaluator macroEval) {
+		List<LispVal> newSlots = new ArrayList<>();
+		for (LispVal slot : slots.toList()) {
+			if (slot instanceof LispCons slotCons && slotCons.isProperList()) {
+				List<LispVal> slotParts = slotCons.toList();
+				List<LispVal> newSlot = new ArrayList<>();
+				newSlot.add(slotParts.get(0));
+				for (int i = 1; i < slotParts.size(); i += 2) {
+					newSlot.add(slotParts.get(i));
+					if (i + 1 < slotParts.size()) {
+						boolean initform = slotParts.get(i) instanceof LispSymbol key && ":INITFORM".equals(key.name());
+						newSlot.add(initform ? expandAll(slotParts.get(i + 1), macroEval) : slotParts.get(i + 1));
+					}
+				}
+				newSlots.add(properList(newSlot));
+			}
+			else {
+				newSlots.add(slot);
+			}
+		}
+		return properList(newSlots);
 	}
 
 	/**

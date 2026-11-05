@@ -43,6 +43,7 @@
   :in-order-to ((test-op (test-op "meta-demo/tests"))))
 
 (defsystem "meta-demo/tests"
+  :version (:read-file-form "version.sexp" :at 1)
   :depends-on ("meta-demo")
   :components ((:file "tests"))
   :perform (test-op (o c) (run-demo-tests (component-name c) (typep o 'asdf:test-op))))

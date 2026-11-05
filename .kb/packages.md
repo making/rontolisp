@@ -275,12 +275,15 @@ once); `:documentation`/`:size` ignored.
 ## `define-package` (uiop / mgl-pax variant)
 A literal top-level `(uiop:define-package ...)` / `(mgl-pax:define-package ...)` -- the qualifier is
 REQUIRED and must canonicalize to `UIOP` or `MGL-PAX` (`isDefinePackageOperator`); a bare
-`define-package` stays a user symbol -- is consumed exactly like `defpackage`. One variant-only
-clause, `(:use-reexport PKG...)` (`resolveDefpackage(cons, true)`); in a plain `defpackage` it is a
-hard error, as are `:mix`, `:recycle`, redefinition tolerance. `mgl-pax:defsection` is consumed
+`define-package` stays a user symbol -- is consumed exactly like `defpackage`. Variant-only clauses
+(`resolveDefpackage(cons, true)`), a hard error in a plain `defpackage`: `(:use-reexport PKG...)`;
+`(:mix PKG...)`, each external of each package imported unless shadowed, the earlier package winning a
+name two share (uiop's `ensure-mix`), no use-list entry; `(:reexport PKG...)`, its externals exported;
+`(:mix-reexport PKG...)`, both (every coalton package header). `:recycle` and `:unintern` stay
+errors, as does redefinition tolerance. `mgl-pax:defsection` is consumed
 ADDITIVELY: its `(SYMBOL LOCATIVE)` entries are exported from the current package
 (`consumeDefsectionExports`) -- trivial-utf-8's ONLY export mechanism. Pinned by
-`definePackageIsConsumedLikeDefpackage`, `definePackageUseReexportUsesAndReexports`,
+`definePackageIsConsumedLikeDefpackage`, `definePackageUseReexportUsesAndReexports` (the mix clauses too),
 `aBareDefinePackageIsNotTheVariant`, `paxDefsectionExportsItsEntries`.
 
 ## Nicknames

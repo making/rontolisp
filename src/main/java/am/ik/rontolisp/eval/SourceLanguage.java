@@ -482,6 +482,20 @@ public enum SourceLanguage {
 			return (form != null && this.labels) ? LispTrees.shieldProgramForm(form) : form;
 		}
 
+		/**
+		 * Reads the next top-level form once what the forms before it pushed onto
+		 * {@code *features*} decides its guards too ({@code .kb/reader-features.md}).
+		 * @param syntax the readtable to read it with, or {@code null} for the standard
+		 * syntax
+		 * @param pushed the feature names pushed since the source opened
+		 * @return the form, or {@code null} at the end of the source
+		 * @throws LispReadException when the form does not read
+		 */
+		public @Nullable LispVal next(am.ik.rontolisp.reader.@Nullable ReadSyntax syntax, List<String> pushed) {
+			this.forms.widenFeatures(pushed);
+			return next(syntax);
+		}
+
 	}
 
 	/**

@@ -33,7 +33,7 @@ $ java -jar ../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar gateway.lisp -o gatew
 $ docker run --rm -p 18080:8080 -p 19901:9901 \
     -v "$PWD/envoy.yaml:/etc/envoy/envoy.yaml:ro" \
     -v "$PWD/gateway.wasm:/etc/envoy/gateway.wasm:ro" \
-    envoyproxy/envoy:v1.39.3 -c /etc/envoy/envoy.yaml
+    envoyproxy/envoy:v1.40.2 -c /etc/envoy/envoy.yaml
 $ curl -i localhost:18080/admin/users                  # 403 from the filter
 $ curl -i -H 'x-user: alice' localhost:18080/guarded   # 200, after an authorization call
 $ curl -i -H 'x-user: mallory' localhost:18080/guarded # 403 from the call's reply
@@ -84,7 +84,7 @@ so it can be kept in a slot across callbacks.
 
 ## What Envoy does that the ABI does not say
 
-Both were found by running this filter, against Envoy v1.39.3.
+Both were found by running this filter, and reproduce on Envoy v1.39.3 and v1.40.2.
 
 - `proxy_on_http_call_response` arrives with the **plugin's** context id, whichever
   stream made the call. The SDK records which context made each call, and calls

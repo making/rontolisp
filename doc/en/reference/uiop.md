@@ -112,7 +112,8 @@ cons cells, the six condition classes and the warnings-file plumbing. The rest:
 Eight members outside the complete sub-packages are **macros**, expanded by the
 compiler rather than called: `uiop:with-temporary-file`,
 [`uiop:with-deprecation`](macros/uiop-with-deprecation.md) and
-`uiop:define-package` (a literal top-level call is consumed like `defpackage`).
+`uiop:define-package` (a literal top-level call is consumed like `defpackage`, with
+`:use-reexport`, `:mix`, `:reexport` and `:mix-reexport` besides).
 The five `uiop/stream` ones — `uiop:with-input-file`, `uiop:with-output-file`,
 `uiop:with-input`, `uiop:with-output` and `uiop:with-safe-io-syntax` — expand
 over their `call-with-*` functions.

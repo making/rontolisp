@@ -466,6 +466,8 @@ page.
 | `type-error-expected-type` | `(type-error-expected-type c)` | the `expected-type` slot of a `type-error` |
 | `cell-error-name` | `(cell-error-name c)` | the `name` slot of a `cell-error` (`unbound-variable`, `undefined-function`, `unbound-slot`) |
 | `unbound-slot-instance` | `(unbound-slot-instance c)` | the object whose slot was unbound |
+| `arithmetic-error-operation` | `(arithmetic-error-operation c)` | the `:operation` an `arithmetic-error` was made with, or `nil` |
+| `arithmetic-error-operands` | `(arithmetic-error-operands c)` | the `:operands` an `arithmetic-error` was made with, or `nil` |
 | `print-not-readable-object` | `(print-not-readable-object c)` | the object a `print-not-readable` was signalled for |
 | `file-error-pathname` | `(file-error-pathname c)` | the pathname a failed file operation was given |
 | `print-object` | `(print-object obj stream)` | the generic function the printer consults; define a method to control how instances of a type print |

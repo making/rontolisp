@@ -190,8 +190,13 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
   `:in-order-to`/`:perform` and the `program-op` trio `:entry-point :build-operation
   :build-pathname`. It is the CLOSED list, so
   an option added later is load-bearing by default. The metadata among them is recorded AS WRITTEN
-  for its readers (`LispSystem.metadata`), an option holding a marker being absent; `:version`
-  records a plain STRING, every other spelling answers nil.
+  for its readers (`LispSystem.metadata`), an option holding a marker being absent. `:version`
+  (`declaredVersion`, ASDF's `normalize-version`, 2026-11-05): a string, a `.asd`'s `(:read-file-form PATH
+  :at N)` / `(:read-file-line PATH :at N)` read in its image through uiop's `safe-read-*`, a number spelled;
+  nil for what does not parse as dotted integers, any other spelling, a file that cannot be read, and an
+  indirection in an inline `defsystem`. Consumer: coalton's parser asks `(uiop:version< (component-version
+  (find-system :eclector)) "0.10.0")` to pick a `cst:reconstruct` argument order; nil answered true.
+  Pin: `AsdfMetaobjectsE2eTest` (`meta-demo/tests`), all four.
 
 ### Options around the compile: `:around-compile` (h94, 2026-11-04)
 ASDF stores the form and calls it around `compile-file`, or around the source `load` for
@@ -232,8 +237,8 @@ ASDF stores the form and calls it around `compile-file`, or around the source `l
   on the interpreter and the JVM, its hook a real call with `mgl-pax.asdf` in the build image;
   the sources of `mgl-pax-bootstrap` load on the interpreter under another system name, so the
   option no longer keeps that shim. clingon passes its `#P` modules and loads
-  (`eval/WithUserAbortForms`, tier 4). coalton stops before any hooked component, on fset's
-  `make-lock` (`Code/port.lisp` has no rontolisp arm; measured 2026-11-05, past eclector).
+  (`eval/WithUserAbortForms`, tier 4). coalton's hook runs: its compiler loads and compiles
+  `coalton/library` component by component on the interpreter (see "Libraries that load").
 - Pinned by `AsdfMetaobjectsE2eTest` (all four: lambda, symbol, string, nil; the read, the
   expansion, none of it in the program's `*features*`), `AsdfSystemsTest`, `LispEvaluatorAsdfTest`.
 
@@ -368,8 +373,7 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
   `(asdf:initialize-source-registry '(:source-registry (:tree "~/.rontolisp/quicklisp/software/")
   :ignore-inherited-configuration))`. `lass-file` with `:output`: the CSS SBCL writes,
   all four. `hu.dwim.def`: loads on all four, its class, `package-name` and license as on SBCL
-  (`component-children` real since "The component tree"). coalton stops before any of this, as "Options around the
-  compile" records.
+  (`component-children` real since "The component tree").
 - **Refusal**: a name no image holds is `unsupported component type` / `unsupported :class`, naming it;
   an inline `defsystem` on a compile path cannot see a class the program's own `defclass` defines (the
   program has not run).
@@ -902,6 +906,17 @@ read per target), takes `get-setf-expansion` under one lock, subforms and `old`/
 `setf`. A slot CAS on each representation was weighed and not made: the JVM's general vector widens in
 place and nothing measured wants it.
 
+**`eval/FsetForms`** (cache only, verified by hand; see "Libraries that load"). `Code/port.lisp` defines
+`make-lock`, `with-lock` and the barriers per `#+impl` arm with no generic one. One insertion ahead of
+`defglobal`: upstream's shape for threads with no barrier operator, a mutex per lock and a barrier as a grab
+of one lock (a no-op on wasm, whose mutexes are). `with-lock`'s `:wait? nil` waits: `Tuple-Lookup` uses it
+only to reorder a tuple's keys, and a try-lock primitive does not exist (`.kb/mutexes.md`).
+
+**`eval/CoaltonForms`** (cache only, by hand). `coalton/library`'s `Hash` type and `lisp-combine-hashes` pick
+an arm per implementation; the last `Hash` arm is `#.(cl:error "hashing is not supported ...")`, signalled as the
+form is read. Three markers widen the ccl arms to `(or ccl rontolisp)`: `sxhash` answers a non-negative fixnum,
+and the 64-bit mix is masked back to one.
+
 **`eval/ClReexportForms`** (pinned by `ClReexportE2eTest`, all four, SBCL 2.2.9's answers). clingon's
 `src/package.lisp` is `(defpackage :clingon (:use :cl))` plus top-level
 `(cl-reexport:reexport-from :clingon.command)` calls: a function computing `import` and `export` at
@@ -969,6 +984,23 @@ Every entry loads VERBATIM upstream sources unless a substitution is named.
 `AsdfLibraryE2eSupport` hosts the four-backend E2Es and needs a VENDORED tree per system; a
 library living only in the quicklisp cache is verified MANUALLY on all four.
 
+- **fset 2.2.0** — from the Quicklisp cache, verified manually on all four (2026-11-05): `set`, `with`,
+  `map`, `seq`, `bag`, `tuple`, `lookup`, `convert` and their printed forms, the same text as SBCL 2.2.9
+  on the same program. What it took, each a general fix but the first: the port arm (tier 4 above);
+  `pprint-pop` ([pretty-printer.md](pretty-printer.md)); a BOA `&optional`'s slot initform
+  ([defstruct.md](defstruct.md)); a slot's `:initform` under a symbol macro and a condition slot named like
+  a macro ([symbol-macrolet.md](symbol-macrolet.md)). A `:report` that is a symbol is that function
+  (`defineConditionToDefclass`; coalton's `source-condition`).
+- **coalton** (coalton-20260101-git) — from the Quicklisp cache, interpreter, measured 2026-11-05. The whole
+  `coalton-compiler` loads, and its macros compile `coalton/library` file by file through eclector and the
+  real typechecker and codegen (`library/types.lisp` to `library/math/bounded.lisp` reached, `num.lisp` is the slow
+  one). What it took past fset, each general but the tier 4 hash arm: a `:mix-reexport` clause
+  ([packages.md](packages.md)); a `:report` naming a function; a `.asd`'s `(:read-file-form ...)` `:version`;
+  a computed `*features*` push ([reader-features.md](reader-features.md)); a reader macro's value respelled for
+  the resolver and a `cl:` constant keeping its prefix ([readtables.md](readtables.md),
+  [read-time-constants.md](read-time-constants.md)); `gentemp` in the keyword package; a struct copier handed an
+  `:include` child ([defstruct.md](defstruct.md)); the float-features constants; `fixnum` as a `subtypep`
+  interval. The compile paths are unmeasured: a `coalton-toplevel` needs the compiler in the macro-time image.
 - **sento 3.4.2** — from the Quicklisp cache, verified manually (measured 2026-11-05, interpreter and JVM):
   `make-actor-system`, `actor-of`, `ask-s`, `ask` with `fcompleted`, a `:time-out`, `*state*`, agents,
   8 threads x 200 `tell`s counted to 1600. On wasm it compiles and `make-actor-system` signals at the first

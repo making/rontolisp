@@ -13,8 +13,14 @@ slot-wise (deliberate CL deviation); `#S(...)` source reads back via `StructLite
 - Options: `:constructor`/`:conc-name`/`:predicate`/`:copier`/`:include`/`:type`/
   `:print-object`/`:print-function`, a dropped docstring, parsed-but-ignored slot
   `:type`, a `:read-only` slot (below); anything else throws "DEFSTRUCT option is not supported".
-- BOA `(:constructor name (lambda-list))` passes the lambda list verbatim; a slot matching a
-  parameter (`boaParameterSymbols`) reads it, others evaluate their initform.
+- BOA `(:constructor name (lambda-list))`: a slot matching a parameter (`boaParameterSymbols`) reads
+  it, others evaluate their initform. An `&optional` or `&key` parameter written without a default takes
+  the initform of the slot it names (`boaLambdaListOverInitforms`, CLHS 3.4.6; fset's
+  `tuple-key` type was nil where `t` was meant, measured 2026-11-05); `&aux` does not. ci-spec
+  `esrap-enablement-language-group`.
+- A copier is `copy-structure` (2026-11-05): an `:include` child handed to the parent's copier keeps its
+  type and slots (coalton's `(:copier %copy-node)`, `No applicable method ... on NODE`). ci-spec
+  `esrap-enablement-language-group`.
 - A struct name is a valid `defmethod` specializer (`ClosRegistry.registerStruct` /
   `findStructTag`; `structAncestorCount` ranks it, band 100-199, deeper first).
 - `:conc-name` takes a STRING DESIGNATOR (`structConcName`, one parser for the expander and both
@@ -118,8 +124,8 @@ Both take a function DESIGNATOR and lower to ONE synthesized
 `(defmethod print-object ((obj <struct>) stream) (funcall fn obj stream [0]))`, appended LAST so
 its accessor calls read defuns generated above it. `:print-function` is the CLtL1 spelling,
 differing only in that third `depth` argument, the literal `0`. Rides the `print-object` seam
-([clos.md](clos.md)) on all four backends, firing for a value nested in a printed list or
-general rank-1 vector but NOT one in a structure slot.
+([clos.md](clos.md)) on all four backends, firing for a value nested in a printed list,
+general rank-1 vector or instance slot.
 
 - Mutually exclusive with `:type`, and both spellings at once is an error -- rejected, not
   ignored.

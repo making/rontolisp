@@ -14,6 +14,8 @@ import java.util.function.Predicate;
 
 import am.ik.rontolisp.AsdfExports;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -109,10 +111,8 @@ public final class AsdfSystems {
 	 * ({@code BuiltinSystems.declaredFeatures} -- as a built-in {@code :depends-on} entry
 	 * does, see {@link #dependencyNames}), which is the whole point of the option for a
 	 * reader: dexador's {@code trivial-features} entry
-	 * @param version the {@code :version} value when it is a plain string literal,
-	 * {@code null} otherwise (a {@code (:read-file-form ...)} indirection or an
-	 * unresolved {@code #.} marker -- the option stays in {@link #IGNORED_OPTIONS}, so
-	 * nothing here evaluates anything to find out). Read back by
+	 * @param version the {@code :version} value as {@link #declaredVersion} reads it,
+	 * {@code null} when there is none or it does not parse. Read back by
 	 * {@code asdf:component-version}
 	 * @param weaklyDependsOn the {@code :weakly-depends-on} names no loader has looked
 	 * for yet ({@link #resolveWeakDependencies} moves the ones it finds to
@@ -1213,6 +1213,43 @@ public final class AsdfSystems {
 	}
 
 	/**
+	 * What ASDF's {@code normalize-version} makes of a {@code :version} value: a string,
+	 * or the first form or line of a {@code (:read-file-form PATH :at N)} or
+	 * {@code (:read-file-line PATH :at N)}, a number spelled as a string, and nil for
+	 * what does not parse as dotted integers. A file that cannot be read answers nil too:
+	 * the option is metadata, and an inline definition has no image to read it in.
+	 */
+	private static @Nullable String declaredVersion(LispVal value, @Nullable String baseDir, AsdContext asd) {
+		LispVal version = value;
+		if (value instanceof LispCons cons && cons.car() instanceof LispSymbol op && asd.load() != null
+				&& baseDir != null && cons.cdr() instanceof LispCons args && args.car() instanceof LispString subpath) {
+			String reader = switch (op.name()) {
+				case ":READ-FILE-FORM" -> "UIOP/STREAM:SAFE-READ-FILE-FORM";
+				case ":READ-FILE-LINE" -> "UIOP/STREAM:SAFE-READ-FILE-LINE";
+				default -> null;
+			};
+			if (reader == null) {
+				return null;
+			}
+			try {
+				version = asd.load()
+					.readEval(new LispCons(new LispSymbol(reader),
+							new LispCons(new LispString(baseDir + "/" + subpath.value()), args.cdr())));
+			}
+			catch (RuntimeException ex) {
+				return null;
+			}
+		}
+		String text = switch (version) {
+			case LispString string -> string.value();
+			case LispInteger integer -> integer.print();
+			case LispDouble number -> number.print();
+			default -> null;
+		};
+		return text != null && text.matches("[0-9]+(\\.[0-9]+)*") ? text : null;
+	}
+
+	/**
 	 * Resolves every {@code #.} marker inside a LOAD-BEARING {@code defsystem} value to
 	 * its value in the image the {@code .asd} is loaded into -- a {@code defparameter}
 	 * the file evaluated above it, say: the cl-postgres {@code (:file #.*string-file*)}
@@ -1455,15 +1492,10 @@ public final class AsdfSystems {
 					}
 				}
 				// The one metadata option something reads back: asdf:component-version.
-				// It stays in IGNORED_OPTIONS -- nothing is evaluated to find the value,
-				// so a plain string literal is recorded and every other spelling (ASDF's
-				// (:read-file-form "version.sexp") indirection, an unresolved #. marker)
-				// answers nil, silently, as it always did.
-				case ":VERSION" -> {
-					if (value instanceof LispString versionString) {
-						version = versionString.value();
-					}
-				}
+				// It stays in IGNORED_OPTIONS: a string is recorded, ASDF's read-file
+				// indirections are read in the .asd's image, and every other spelling
+				// (an unresolved #. marker) answers nil, silently.
+				case ":VERSION" -> version = declaredVersion(value, baseDir, asd);
 				// Already consumed by defsystemDependsOn and weaklyDependsOn above.
 				case ":DEFSYSTEM-DEPENDS-ON", ":WEAKLY-DEPENDS-ON" -> {
 				}

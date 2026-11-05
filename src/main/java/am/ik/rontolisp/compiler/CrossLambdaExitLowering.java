@@ -256,6 +256,10 @@ public final class CrossLambdaExitLowering {
 					case LispNames.FLET, LispNames.LABELS -> {
 						return transformFletLabels(cons, lambdaDepth);
 					}
+					case LispNames.PPRINT_LOGICAL_BLOCK -> {
+						return LispMacroExpander.spellsPprintExit(cons)
+								? transform(LispMacroExpander.expandPprintLogicalBlock(cons), lambdaDepth) : null;
+					}
 					default -> {
 						// fall through to structural recursion
 					}

@@ -62,7 +62,10 @@ default T; read/write-sequence's missing end -> `(length sequence)`).
   dispatch on the JVM, P1 and the component. Pinned by
   `CompositeStreampFixture.STANDARD_STREAMS_PROGRAM` on all four backends.
 - `%gray-close-dispatch` does NOT resolve a synonym (CLHS 21.1.3), tests `%STREAM` by tag
-  ahead of `%obj-p`; predicate dispatchers pass the ORIGINAL designator to the built-in.
+  ahead of `%obj-p`; predicate dispatchers pass the ORIGINAL designator to the built-in. An instance
+  that is no stream (`streamp`) is `close`'s and `open-stream-p`'s `type-error` here: the interpreter
+  takes this helper for every instance, and used to answer `t` where the compile paths without
+  Gray signal. ci-spec `close-of-an-instance-that-is-no-stream`.
 - `%gray-fresh-line-dispatch` answers **nil** like the handle-based `fresh-line`, not
   `stream-fresh-line`'s t/nil: an operator's value must not depend on stream kind.
 

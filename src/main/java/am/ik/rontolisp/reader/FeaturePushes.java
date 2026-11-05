@@ -2,6 +2,7 @@ package am.ik.rontolisp.reader;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
 
@@ -29,24 +30,17 @@ import am.ik.rontolisp.PackageRegistry;
  * backend needs an evaluator to reach the same conclusion.
  *
  * <p>
- * <b>What is deliberately NOT honored, and why.</b> Only a LITERAL push is seen -- the
- * pushed value must be a keyword written in the source. A push whose value or whose
+ * <b>What this does not see.</b> Only a LITERAL push is seen here -- the pushed value
+ * must be a keyword written in the source, at top level. A push whose value or whose
  * firing the program COMPUTES ({@code (case char-code-limit (#x110000 (pushnew :utf-32
- * *features*)))}, trivial-utf-16's own header) stays invisible, and that is a limit of
- * the design rather than of this implementation: honoring it means running the program's
- * code to decide how the program's own text is read. The interpreter could; a compile
- * backend cannot, since the value would have to exist before the program does. Widening
- * the recognizer to a mini evaluator would therefore buy fidelity on ONE backend and
- * re-open the cross-backend divergence this whole item is about. A source that needs a
- * computed announcement declares it statically instead -- the ASDF
- * {@code :rontolisp-features} option ({@code .kb/asdf.md}), which is read before any of
- * the system's components are.
+ * *features*)))}, trivial-utf-16's own header) takes running the program's code: the
+ * forms below it read with what it pushed because reading goes form at a time, the
+ * interpreter having run it and a compile path's read-time image running it for this
+ * ({@link #computesAPush(String, Features, String)}, {@code .kb/reader-features.md}).
  *
  * <p>
- * The push is also a WHOLE-FILE widening rather than a positional one: a conditional
- * ABOVE the push sees it too. Reading is one pass over the token stream, and a positional
- * rule would mean re-lexing from the push onward; in the idiom itself the push is the
- * header, so nothing is above it. See {@code .kb/reader-features.md}.
+ * The literal push is also a WHOLE-FILE widening rather than a positional one: a
+ * conditional ABOVE the push sees it too. See {@code .kb/reader-features.md}.
  */
 public final class FeaturePushes {
 
@@ -57,6 +51,10 @@ public final class FeaturePushes {
 	 * a file without end.
 	 */
 	private static final int MAX_ROUNDS = 8;
+
+	/** The forms whose contents do not run where the form stands. */
+	private static final Set<String> NOT_RUN = Set.of(LispNames.QUOTE, LispNames.FUNCTION, LispNames.DEFUN,
+			LispNames.DEFMACRO, LispNames.DEFGENERIC, LispNames.DEFMETHOD, LispNames.LAMBDA);
 
 	private FeaturePushes() {
 	}
@@ -95,6 +93,67 @@ public final class FeaturePushes {
 			current = widened;
 		}
 		return current;
+	}
+
+	/**
+	 * Whether a source holds a top-level push onto {@code *features*} that {@link #widen}
+	 * cannot see: one with a computed value, or under a conditional. A compile path opens
+	 * its read-time image for such a source.
+	 * @param input the source text
+	 * @param features the features the source is read with
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return whether the image has a push to run
+	 */
+	public static boolean computesAPush(String input, Features features, @Nullable String file) {
+		if (!mentionsFeaturesVar(input)) {
+			return false;
+		}
+		return LispReader.scanForms(input, features, file).stream().anyMatch(FeaturePushes::computesAPush);
+	}
+
+	/**
+	 * Whether a top-level form runs a push onto {@code *features*} that {@link #widen}
+	 * cannot see. A definition's body and quoted data do not run here.
+	 * @param form the top-level form
+	 * @return whether the form computes a push
+	 */
+	public static boolean computesAPush(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol op)) {
+			return false;
+		}
+		String operator = memberName(op);
+		List<LispVal> items = cons.toList();
+		if (LispNames.EVAL_WHEN.equals(operator) || LispNames.PROGN.equals(operator)) {
+			return items.subList(LispNames.PROGN.equals(operator) ? 1 : 2, items.size())
+				.stream()
+				.anyMatch(FeaturePushes::computesAPush);
+		}
+		if (isPush(operator, items) && items.get(1) instanceof LispSymbol value && value.isKeyword()) {
+			return false;
+		}
+		return runsAPush(cons);
+	}
+
+	private static boolean runsAPush(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> items = cons.toList();
+		if (cons.car() instanceof LispSymbol op) {
+			String operator = memberName(op);
+			if (NOT_RUN.contains(operator)) {
+				return false;
+			}
+			if (isPush(operator, items)) {
+				return true;
+			}
+		}
+		return items.stream().anyMatch(FeaturePushes::runsAPush);
+	}
+
+	private static boolean isPush(String operator, List<LispVal> items) {
+		return (LispNames.PUSHNEW.equals(operator) || LispNames.PUSH.equals(operator)) && items.size() >= 3
+				&& isFeaturesVar(items.get(2));
 	}
 
 	/**

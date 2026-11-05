@@ -5936,6 +5936,19 @@ public final class LispNames {
 	public static final String PPRINT_LOGICAL_BLOCK = "PPRINT-LOGICAL-BLOCK";
 
 	/**
+	 * The {@code pprint-pop} standard macro: the next element of the enclosing block's
+	 * list, leaving the block once {@code *print-length*} elements are out or the rest is
+	 * no list.
+	 */
+	public static final String PPRINT_POP = "PPRINT-POP";
+
+	/**
+	 * The {@code pprint-exit-if-list-exhausted} standard macro: leaves the enclosing
+	 * block when its list is exhausted.
+	 */
+	public static final String PPRINT_EXIT_IF_LIST_EXHAUSTED = "PPRINT-EXIT-IF-LIST-EXHAUSTED";
+
+	/**
 	 * The {@code pprint-newline} standard function: a line break for {@code :mandatory},
 	 * nothing for the three conditional kinds ({@code :linear} / {@code :fill} /
 	 * {@code :miser}) -- deciding those needs the stream's current column, which no
@@ -10265,10 +10278,20 @@ public final class LispNames {
 	public static final String OBJ_SLOTS = "%OBJ-SLOTS";
 
 	/**
+	 * The internal printed frame of an instance: {@code (%obj-print-frame x)} is a FRESH
+	 * list {@code (class-p name slot...)} -- {@code t} for the {@code #<...>} syntax and
+	 * nil for {@code #S(...)}, then the printed type name and each slot name in layout
+	 * order, as strings -- and nil for a value that has no slot syntax: a non-instance, a
+	 * pathname, a stream. With {@link #OBJ_SLOTS} it is what the {@code print-object}
+	 * walk needs to spell an instance itself.
+	 */
+	public static final String OBJ_PRINT_FRAME = "%OBJ-PRINT-FRAME";
+
+	/**
 	 * The {@code print-object} generic function: a {@code defmethod} on it is what the
 	 * printer consults for an instance of that type, in place of the built-in
-	 * {@code #S(...)}/{@code #<...>} rendering. It has no system method -- the printer
-	 * only routes a type some method specializes on.
+	 * {@code #S(...)}/{@code #<...>} rendering. The printer only routes a type some
+	 * method specializes on.
 	 */
 	public static final String PRINT_OBJECT = "PRINT-OBJECT";
 
@@ -10322,6 +10345,12 @@ public final class LispNames {
 	 * program-dependent half.
 	 */
 	public static final String PRINT_OBJECT_LEAF_INTERNAL = "%PRINT-OBJECT-LEAF";
+
+	/**
+	 * The internal {@code (%print-object-default x)}: the text {@code print-object}'s
+	 * system method writes for a value.
+	 */
+	public static final String PRINT_OBJECT_DEFAULT_INTERNAL = "%PRINT-OBJECT-DEFAULT";
 
 	/**
 	 * The internal {@code (%condition-report-str c)} renderer: a condition instance's
@@ -10499,6 +10528,12 @@ public final class LispNames {
 	public static final String PRINT_CASED_INSTANCE_TEXT_INTERNAL = "%PC-INSTANCE-TEXT";
 
 	/**
+	 * The internal {@code (%pc-instance x escape path depth level)} half of
+	 * {@link #PRINT_CASED_WALK_INTERNAL}: an instance with slot syntax, walked.
+	 */
+	public static final String PRINT_CASED_INSTANCE_INTERNAL = "%PC-INSTANCE";
+
+	/**
 	 * The internal {@code (%symbol-print-bare-p symbol package-spelling external-p)}
 	 * primitive: whether a package-qualified symbol prints without its qualifier in the
 	 * current {@code *package*}. The interpreter answers from the live registry
@@ -10548,6 +10583,13 @@ public final class LispNames {
 	public static final String PRINT_CASED_FOLD_LEAF_INTERNAL = "%PC-FOLD";
 
 	/**
+	 * The internal {@code (%pc-type-name text)} leaf of {@code print-unreadable-object}'s
+	 * {@code :type}: the type name as {@code write} spells that symbol under the printer
+	 * controls in effect, and the text itself where a program can have none.
+	 */
+	public static final String PRINT_CASED_TYPE_NAME_INTERNAL = "%PC-TYPE-NAME";
+
+	/**
 	 * The internal {@code (%pc-radixed n)} leaf of {@link #PRINT_CASED_WALK_INTERNAL}:
 	 * {@link #PRINT_RADIXED_INTERNAL} when the program names a printer-control variable,
 	 * the raw conversion otherwise (the walk only reaches it when {@code *print-base*} /
@@ -10589,6 +10631,12 @@ public final class LispNames {
 	 * {@code unbound-slot}) carries.
 	 */
 	public static final String CELL_ERROR_NAME = "CELL-ERROR-NAME";
+
+	/** The {@code arithmetic-error-operation} condition reader. */
+	public static final String ARITHMETIC_ERROR_OPERATION = "ARITHMETIC-ERROR-OPERATION";
+
+	/** The {@code arithmetic-error-operands} condition reader. */
+	public static final String ARITHMETIC_ERROR_OPERANDS = "ARITHMETIC-ERROR-OPERANDS";
 
 	/**
 	 * The {@code unbound-slot-instance} condition reader: the object whose slot was

@@ -85,6 +85,9 @@ description and a runnable example you can evaluate in your browser.
 | `slot-makunbound` | `(slot-makunbound obj 'slot)` | Makes the slot unbound and returns the instance; a later read signals `unbound-slot` |
 | `slot-exists-p` | `(slot-exists-p obj 'slot)` | Whether the instance's class declares the slot, regardless of boundness; `nil` for a non-instance |
 | `print-unreadable-object` | `(print-unreadable-object (obj stream :type t) body...)` | Writes `#<[type ]...>` around the body's output; returns nil (`:identity` accepted, prints no address) |
+| `pprint-logical-block` | `(pprint-logical-block (s obj :prefix "<" :suffix ">") body...)` | Writes the prefix, the body's output and the suffix. An `obj` that is not a list prints with `write` and skips the body. Nothing wraps (no column is tracked) |
+| `pprint-pop` | `(pprint-pop)` | The next element of the enclosing block's list; prints and leaves the block once `*print-length*` elements are out or the rest is no list |
+| `pprint-exit-if-list-exhausted` | `(pprint-exit-if-list-exhausted)` | Leaves the enclosing block when its list is exhausted |
 | `with-package-iterator` | `(with-package-iterator (next pkgs :external) body...)` | Lite: binds the iterator name to a local FUNCTION always reporting no more symbols (no intern table) |
 | `with-hash-table-iterator` | `(with-hash-table-iterator (next table) body...)` | Binds the iterator name to a local FUNCTION answering `(values t key value)` per call, `(values nil nil nil)` when exhausted; the table is snapshot on entry |
 | `do-external-symbols` | `(do-external-symbols (s :rontolisp) (print s))` | Iterate a package's exported symbols, in sorted order (compiled backends answer from the table baked in at compile time) |

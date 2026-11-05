@@ -1147,6 +1147,8 @@ categories:
       - { slug: type-error-expected-type, name: "type-error-expected-type" }
       - { slug: cell-error-name, name: "cell-error-name" }
       - { slug: unbound-slot-instance, name: "unbound-slot-instance" }
+      - { slug: arithmetic-error-operation, name: "arithmetic-error-operation" }
+      - { slug: arithmetic-error-operands, name: "arithmetic-error-operands" }
       - { slug: print-not-readable-object, name: "print-not-readable-object" }
       - { slug: file-error-pathname, name: "file-error-pathname" }
       - { slug: print-object, name: "print-object" }

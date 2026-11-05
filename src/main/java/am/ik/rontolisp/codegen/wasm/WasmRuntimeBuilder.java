@@ -1465,9 +1465,58 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.ELSE);
 		emitWriteString(w, openStruct);
 		w.write(Instruction.END);
-		// the printed type name
+		// the printed type name, a symbol: princ writes its name alone (CLHS 22.1.3.3.1),
+		// what follows the last colon
+		if (!escape) {
+			emitLoadLayoutWord(w, addrSlot, WasmInstanceLayouts.OFF_NAME_LEN);
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(idxSlot);
+			w.write(Instruction.BLOCK, 0x40);
+			w.write(Instruction.LOOP, 0x40);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(idxSlot);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.BR_IF);
+			w.writeUnsignedLeb128(1);
+			emitLoadLayoutWord(w, addrSlot, WasmInstanceLayouts.OFF_NAME_OFF);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(idxSlot);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.I32_SUB);
+			w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(':');
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.BR_IF);
+			w.writeUnsignedLeb128(1);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(idxSlot);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.I32_SUB);
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(idxSlot);
+			w.write(Instruction.BR);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
+		else {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(idxSlot);
+		}
 		emitLoadLayoutWord(w, addrSlot, WasmInstanceLayouts.OFF_NAME_OFF);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idxSlot);
+		w.write(Instruction.I32_ADD);
 		emitLoadLayoutWord(w, addrSlot, WasmInstanceLayouts.OFF_NAME_LEN);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idxSlot);
+		w.write(Instruction.I32_SUB);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		emitLoadLayoutWord(w, addrSlot, WasmInstanceLayouts.OFF_SLOT_COUNT);

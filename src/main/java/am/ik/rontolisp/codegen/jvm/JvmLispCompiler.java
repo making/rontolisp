@@ -4324,16 +4324,20 @@ public final class JvmLispCompiler implements LispCompiler {
 				stringLastIndexOf, ratioArrayClass, stringConcat, slashStr, charBoxClass, characterToString,
 				arrayListClassForPrint, arrayToDisplayStringMethod, strvMethod, javaPrint, ffiPrint, futurePrint,
 				packedPrint, packedIntPrint, instPrint, hashPrint, princComplex);
-		@Nullable MethodCode instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
-				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
-				objectEquals, lispToStringMethod, cp.stringEntry("S"), cp.stringEntry("#S("), cp.stringEntry("#<"),
-				closeParenStr, cp.stringEntry(">"), cp.stringEntry(" :"), spaceStr, cp.stringEntry("P"),
-				cp.stringEntry("#P"), cp.stringEntry("O"), renderGuard) : null;
-		@Nullable MethodCode instDisplayCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
-				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
-				objectEquals, lispToDisplayStringMethod, cp.stringEntry("S"), cp.stringEntry("#S("),
-				cp.stringEntry("#<"), closeParenStr, cp.stringEntry(">"), cp.stringEntry(" :"), spaceStr,
-				cp.stringEntry("P"), null, cp.stringEntry("O"), renderGuard) : null;
+		@Nullable MethodCode instCode = usesInstances
+				? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass, mainCtx.layoutPool.stringArrayClass(cp),
+						stringBuilderClass, sbInitStr, sbAppendStr, sbToString, objectEquals, lispToStringMethod,
+						cp.stringEntry("S"), cp.stringEntry("#S("), cp.stringEntry("#<"), closeParenStr,
+						cp.stringEntry(">"), cp.stringEntry(" :"), spaceStr, cp.stringEntry("P"), cp.stringEntry("#P"),
+						cp.stringEntry("O"), renderGuard, stringLastIndexOf, stringLength, stringSubstring)
+				: null;
+		@Nullable MethodCode instDisplayCode = usesInstances
+				? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass, mainCtx.layoutPool.stringArrayClass(cp),
+						stringBuilderClass, sbInitStr, sbAppendStr, sbToString, objectEquals, lispToDisplayStringMethod,
+						cp.stringEntry("S"), cp.stringEntry("#S("), cp.stringEntry("#<"), closeParenStr,
+						cp.stringEntry(">"), cp.stringEntry(" :"), spaceStr, cp.stringEntry("P"), null,
+						cp.stringEntry("O"), renderGuard, stringLastIndexOf, stringLength, stringSubstring)
+				: null;
 		MethodCode charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, characterToString);
 		MethodCode ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,

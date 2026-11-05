@@ -4,6 +4,8 @@
 
 `prefix` を書き、本体（`stream` へ出力します）を評価し、`suffix` を書いて `nil` を返します。`object` がリストでないときは `write` で印字して本体は評価しません。これは Common Lisp 自身の規則で、リストかどうか分からない値をこのマクロで包んでも安全なのはそのためです。
 
+本体はリストの要素を [`pprint-pop`](pprint-pop.md) で取り出し、リストの終わりで [`pprint-exit-if-list-exhausted`](pprint-exit-if-list-exhausted.md) によって止まります。どちらもブロックを抜けてもサフィックスは書かれます。
+
 rontolisp のストリームは桁位置を持たないため、このブロックが行を**折り返す**ことはなく、`:per-line-prefix` は `:prefix` の別名として受け付けます（ブロック内で行が独立して始まることがないためです）。詳しくは `pprint` を参照してください。
 
 ```lisp

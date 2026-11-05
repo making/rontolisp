@@ -466,6 +466,8 @@
 | `type-error-expected-type` | `(type-error-expected-type c)` | `type-error` の `expected-type` スロット |
 | `cell-error-name` | `(cell-error-name c)` | `cell-error`(`unbound-variable`、`undefined-function`、`unbound-slot`)の `name` スロット |
 | `unbound-slot-instance` | `(unbound-slot-instance c)` | スロットが未束縛だったオブジェクト |
+| `arithmetic-error-operation` | `(arithmetic-error-operation c)` | `arithmetic-error` の作成時に与えた `:operation`、なければ `nil` |
+| `arithmetic-error-operands` | `(arithmetic-error-operands c)` | `arithmetic-error` の作成時に与えた `:operands`、なければ `nil` |
 | `print-not-readable-object` | `(print-not-readable-object c)` | `print-not-readable` がシグナルされた対象のオブジェクト |
 | `file-error-pathname` | `(file-error-pathname c)` | 失敗したファイル操作に渡されたパス名 |
 | `print-object` | `(print-object obj stream)` | プリンタが参照するジェネリック関数。メソッドを定義すると、その型のインスタンスの出力を制御できます |

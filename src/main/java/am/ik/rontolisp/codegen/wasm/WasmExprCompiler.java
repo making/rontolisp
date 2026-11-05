@@ -1268,6 +1268,15 @@ final class WasmExprCompiler {
 				compileExpansion(LispMacroExpander.expandPrintQualifier(cons, ctx.functions::containsKey), ctx, tail);
 			case LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL ->
 				compileExpansion(LispMacroExpander.expandPrintCasedLeaf(cons, ctx.printControlVariables), ctx, tail);
+			case LispNames.PRINT_CASED_TYPE_NAME_INTERNAL ->
+				compileExpansion(
+						LispMacroExpander.expandPrintedTypeName(cons.toList().get(1),
+								ctx.printControls
+										&& ctx.functions.containsKey(LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL)),
+						ctx, tail);
+			case LispNames.PRINT_OBJECT_DEFAULT_INTERNAL ->
+				compileExpansion(LispMacroExpander.expandPrintObjectDefault(cons.toList().get(1),
+						ctx.functions.containsKey(LispMacroExpander.POS_DEFAULT)), ctx, tail);
 			case LispNames.MAKE_SYMBOL -> WasmSymbolApiCompiler.compileMakeSymbol(cons, ctx);
 			case LispNames.BOUNDP -> WasmSymbolApiCompiler.compileBoundp(cons, ctx);
 			case LispNames.FBOUNDP -> WasmSymbolApiCompiler.compileFboundp(cons, ctx);
@@ -2448,6 +2457,7 @@ final class WasmExprCompiler {
 			case LispNames.OBJ_TAG -> WasmInstanceCompiler.compileTag(cons, ctx);
 			case LispNames.OBJ_P -> WasmInstanceCompiler.compileP(cons, ctx);
 			case LispNames.OBJ_SLOTS -> WasmInstanceCompiler.compileSlots(cons, ctx);
+			case LispNames.OBJ_PRINT_FRAME -> WasmInstanceCompiler.compilePrintFrame(cons, ctx);
 			case LispNames.COPY_STRUCTURE -> WasmInstanceCompiler.compileCopyStructure(cons, ctx);
 			case LispNames.FUNCTIONP -> WasmFunctionpCompiler.compile(cons, ctx);
 			case LispNames.ARRAYP_INTERNAL -> WasmArraypCompiler.compile(cons, ctx);

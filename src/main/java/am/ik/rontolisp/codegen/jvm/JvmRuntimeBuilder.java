@@ -3388,6 +3388,9 @@ final class JvmRuntimeBuilder {
 	 * {@code %STREAM} value): it prints {@code #<NAME>} with NO slots in either escape
 	 * mode -- its HANDLE slot is backend-local and must never reach the output
 	 * ({@code .kb/emitted-output-determinism.md})
+	 * @param lastIndexOf {@code String.lastIndexOf(int)}
+	 * @param length {@code String.length()}
+	 * @param substring {@code String.substring(int, int)}
 	 * @return the method body
 	 */
 	static MethodCode buildInstToStringBody(ClassEntry objectArrayClass, ClassEntry stringArrayClass,
@@ -3396,7 +3399,7 @@ final class JvmRuntimeBuilder {
 			StringEntry structKindStr, StringEntry openStructStr, StringEntry openClassStr, StringEntry closeStructStr,
 			StringEntry closeClassStr, StringEntry keySepStr, StringEntry spaceStr, StringEntry pathnameKindStr,
 			@org.jspecify.annotations.Nullable StringEntry pathnamePrefixStr, StringEntry opaqueKindStr,
-			RenderGuardRefs guard) {
+			RenderGuardRefs guard, MethodRefEntry lastIndexOf, MethodRefEntry length, MethodRefEntry substring) {
 		MethodCode code = new MethodCode();
 		// layout = (String[]) arr[0]
 		code.aload(0);
@@ -3481,11 +3484,24 @@ final class JvmRuntimeBuilder {
 		code.aload(4);
 		code.invokespecial(sbInitStr);
 		code.astore(1);
-		// sb.append(layout[1]) -- the printed type name
+		// sb.append(layout[1]) -- the printed type name, a symbol: princ writes its name
+		// alone (CLHS 22.1.3.3.1), what follows the last colon
 		code.aload(1);
 		code.aload(2);
 		code.iconst_1();
 		code.aaload();
+		if (pathnamePrefixStr == null) {
+			code.dup();
+			code.loadConstant(':');
+			code.invokevirtual(lastIndexOf);
+			code.iconst_1();
+			code.iadd();
+			code.aload(2);
+			code.iconst_1();
+			code.aaload();
+			code.invokevirtual(length);
+			code.invokevirtual(substring);
+		}
 		code.invokevirtual(sbAppendStr);
 		code.pop();
 		// for (i = 3; i < layout.length; i++) sb.append(" :").append(layout[i])

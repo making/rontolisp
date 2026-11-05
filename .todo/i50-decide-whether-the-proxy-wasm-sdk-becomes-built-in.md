@@ -16,7 +16,7 @@ package, as a program names `linalg` or `rontolisp:json-parse`.
   (network filter) callbacks.
 - `gateway.lisp`: a filter using most of that. Measured 2026-11-05 with `--no-wasi --optimize`: 234,589 bytes raw,
   77,610 gzip.
-- Run only against Envoy v1.39.3 on V8, wasm-GC `--no-wasi`. The `--no-gc` backend cannot host it: no CLOS, no `:octets`.
+- Run only against Envoy v1.39.3 and v1.40.2 on V8, wasm-GC `--no-wasi`. The `--no-gc` backend cannot host it: no CLOS, no `:octets`.
 
 The compiler half is already general and stays whatever this decides: the reserved import module
 `"rontolisp:memory"` and `:u32` on wasm-GC imports (`.kb/wasm-import.md`).
@@ -29,7 +29,7 @@ nobody's to get right twice.
 Against: it is the first built-in package tied to one host ABI, with an API that one filter has exercised. Every name
 in it becomes a compatibility promise, and each new ABI version or host quirk becomes the compiler's to track. The two
 Envoy behaviours the SDK works around (`examples/proxy-wasm/README.md`) are host behaviour, not ABI, and were measured
-on one version. A source file in `examples/` can be copied and edited; a built-in cannot.
+on those two versions only. A source file in `examples/` can be copied and edited; a built-in cannot.
 
 Weigh it by evidence not available yet: a second real filter, another host (no other Proxy-Wasm host has been tried),
 and whether the API survives both unchanged. If that has not happened, staying an example is a sound answer, and this

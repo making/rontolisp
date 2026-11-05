@@ -198,16 +198,25 @@ widens the set the file is read with. **The reader announces** rather than "load
 time", because the reader is the ONE layer the interpreter and all three compile backends share.
 `LispReader.readAll` calls `FeaturePushes.widen` first, gated on the text containing `*features*`
 at all (the scan is a second, provenance-free parse, `LispReader.readAllForScan`) and looping to a
-fixpoint. Two deliberate limits:
-- **Only a LITERAL keyword push is seen.** A computed value stays invisible on every backend; such
-  a source declares statically via ASDF `:rontolisp-features`, or depends on a built-in system
-  that ANNOUNCES the feature (`trivial-features` -> `:unix`, `:little-endian`, and the HOST
-  `:darwin`+`:bsd` / `:linux`, `:arm64` / `:x86-64`, on JVM-family targets only) -- one channel,
-  three spellings ([[asdf]]). **The host names are in the ANNOUNCEMENT and not in the base sets**,
-  keeping a `Features` constant the same on every machine.
-- **Widening is WHOLE-FILE, not positional** (a `#+` above the push sees it too), because reading
-  is one pass. If the reader ever becomes incremental the positional rule becomes free; the
-  literal-only limit does not.
+fixpoint.
+- **A literal keyword push widens the WHOLE file** (a `#+` above the push sees it too). A cross-file
+  announcement is a `.asd`'s, ASDF `:rontolisp-features`, or a built-in system's
+  (`trivial-features` -> `:unix`, `:little-endian`, and the HOST `:darwin`+`:bsd` / `:linux`, `:arm64` /
+  `:x86-64`, on JVM-family targets only) -- one channel, three spellings ([[asdf]]). **The host names are
+  in the ANNOUNCEMENT and not in the base sets**, keeping a `Features` constant the same on every machine.
+- **A COMPUTED push decides the forms below it, positionally, on all four** (2026-11-05; the note here said
+  a compile backend could not, written before reading went form at a time). A push whose value or
+  firing the program computes runs before the next form is read: coalton's
+  `(eval-when (:compile-toplevel) (if (uiop:version< ...) (pushnew :eclector-pre-0-10-0 *features*) ...))`
+  picks the arm of its only `make-expression-result` method, and without it the method answered nil. The
+  interpreter's `loadForms`/`evalSource` hand the next read `featuresAddedSince` the file's open. A compile
+  path's `ReadTimeImage` does the same, and opens for a source holding such a push
+  (`FeaturePushes.computesAPush`, a walk of the scan; quoted data and a definition's body do not run). Its
+  `Session.acceptTopLevel` runs the push whatever its `eval-when` situations, as a literal one announces
+  whatever its situations, so the four agree; real `compile-file` would not run a bare one. Same file only:
+  it reaches another file only through `*features*` at run time, as before. An image cannot run a form
+  needing what a later pass splices, and that push stays unseen on a compile path. ci-spec
+  `reader-features-own-push-is-visible`.
 
 Pinned by `LispReaderTest.readOwnFeaturePush*`,
 `JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest`'s

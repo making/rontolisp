@@ -405,6 +405,82 @@ final class JvmObjCompiler {
 		ctx.body.labelBinding(gotoEndPos);
 	}
 
+	/**
+	 * {@code (%obj-print-frame obj)}: the fresh list {@code (class-p name slot...)} of
+	 * what {@code _instToString} writes around the slot values, read off the layout
+	 * <code>{tag, printName, kind, slot...}</code>; nil where that renderer writes no
+	 * slot syntax (a non-instance, a pathname, a stream).
+	 */
+	static void compilePrintFrame(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// A loop in expression position, like %obj-slots.
+		JvmEmitHelper.inLoopScope(ctx, () -> compilePrintFrameLoop(cons, ctx, className));
+	}
+
+	private static void compilePrintFrameLoop(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx, className);
+			return;
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		int objSlot = ctx.allocTemp();
+		ctx.body.astore(objSlot);
+		int hdrSlot = ctx.allocTemp();
+		MethodCode.Label toFalse = ctx.body.newLabel();
+		emitInstanceGuard(ctx, objSlot, hdrSlot, toFalse);
+		int layoutSlot = ctx.allocTemp();
+		ctx.body.aload(hdrSlot).checkcast(ctx.layoutPool.stringArrayClass(ctx.cp)).astore(layoutSlot);
+		int classSlot = ctx.allocTemp();
+		ctx.body.aload(layoutSlot).iconst_2().aaload();
+		JvmEmitHelper.compileUnspelledLiteral("C", ctx);
+		ctx.body.invokevirtual(ctx.objectEquals).istore(classSlot);
+		MethodCode.Label slotSyntax = ctx.body.newLabel();
+		ctx.body.iload(classSlot).ifne(slotSyntax);
+		ctx.body.aload(layoutSlot).iconst_2().aaload();
+		JvmEmitHelper.compileUnspelledLiteral("S", ctx);
+		ctx.body.invokevirtual(ctx.objectEquals).ifeq(toFalse);
+		ctx.body.labelBinding(slotSyntax);
+		// list = null; for (i = layout.length - 1; i >= 3; i--) list = cons(frame(i),
+		// list); then the printed name and the kind ahead of them
+		int listSlot = ctx.allocTemp();
+		ctx.body.aconst_null().astore(listSlot);
+		int idxSlot = ctx.allocTemp();
+		ctx.body.aload(layoutSlot).arraylength().iconst_1().isub().istore(idxSlot);
+		MethodCode.Label loopTop = ctx.body.newBoundLabel();
+		MethodCode.Label exitLoop = ctx.body.newLabel();
+		ctx.body.iload(idxSlot).iconst_3().if_icmplt(exitLoop);
+		emitFramedLayoutEntry(ctx, layoutSlot, idxSlot, listSlot);
+		ctx.body.iinc(idxSlot, -1).goto_(loopTop);
+		ctx.body.labelBinding(exitLoop);
+		ctx.body.iconst_1().istore(idxSlot);
+		emitFramedLayoutEntry(ctx, layoutSlot, idxSlot, listSlot);
+		ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0();
+		MethodCode.Label struct = ctx.body.newLabel();
+		MethodCode.Label classPushed = ctx.body.newLabel();
+		ctx.body.iload(classSlot).ifeq(struct);
+		JvmEmitHelper.compileTrue(ctx);
+		ctx.body.goto_(classPushed);
+		ctx.body.labelBinding(struct);
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(classPushed);
+		ctx.body.aastore().dup().iconst_1().aload(listSlot).aastore();
+		MethodCode.Label end = ctx.body.newLabel();
+		ctx.body.goto_(end);
+		ctx.body.labelBinding(toFalse);
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(end);
+	}
+
+	/** {@code list = cons("\"" + layout[idx] + "\"", list)}: a string value is framed. */
+	private static void emitFramedLayoutEntry(JvmLispCompiler.Ctx ctx, int layoutSlot, int idxSlot, int listSlot) {
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0();
+		JvmEmitHelper.compileUnspelledLiteral("\"", ctx);
+		ctx.body.aload(layoutSlot).iload(idxSlot).aaload().invokevirtual(concat);
+		JvmEmitHelper.compileUnspelledLiteral("\"", ctx);
+		ctx.body.invokevirtual(concat).aastore().dup().iconst_1().aload(listSlot).aastore().astore(listSlot);
+	}
+
 	/** {@code (%obj-tag obj)}: the tag symbol, or nil for a non-instance. */
 	static void compileTag(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		compileGuarded(cons, ctx, className, true);

@@ -50,8 +50,9 @@ import am.ik.rontolisp.reader.ReadSyntax;
  * program, and {@link UserMacroExpander} processes the result from scratch. A form the
  * image cannot process -- one that needs what a later pass splices -- is skipped: that
  * pass reports it. A read only opens an image once a file it reads can change the syntax
- * at all ({@link #changesSyntax}); until then every form reads with the standard syntax,
- * and a program that never opens one pays nothing for it.
+ * at all ({@link #changesSyntax}), or computes a push onto {@code *features*}
+ * ({@code FeaturePushes.computesAPush}); until then every form reads with the standard
+ * syntax, and a program that never opens one pays nothing for it.
  */
 public final class ReadTimeImage {
 
@@ -94,6 +95,25 @@ public final class ReadTimeImage {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * The spelling of {@code *features*} in the image now, for
+	 * {@link #featuresPushedSince}.
+	 * @return the printed entries
+	 */
+	public Set<String> features() {
+		return LispEvaluator.printedFeatures(this.session.macroEval.currentFeatures());
+	}
+
+	/**
+	 * What the forms the image has processed pushed onto {@code *features*} since
+	 * {@code before}: what the next form's guards test too.
+	 * @param before what {@link #features} answered when the source opened
+	 * @return the feature names, without the leading colon
+	 */
+	public List<String> featuresPushedSince(Set<String> before) {
+		return this.session.macroEval.featuresAddedSince(before);
 	}
 
 	/**

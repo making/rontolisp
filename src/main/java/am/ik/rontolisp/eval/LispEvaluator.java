@@ -1843,6 +1843,20 @@ public final class LispEvaluator {
 			}
 			return list;
 		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_PRINT_FRAME, new LispFunction(LispNames.OBJ_PRINT_FRAME, args -> {
+			requireSingleArg(LispNames.OBJ_PRINT_FRAME, args);
+			if (!(args.get(0) instanceof LispInstance inst) || inst.layout().kind() == LispLayout.Kind.PATHNAME
+					|| inst.layout().kind() == LispLayout.Kind.OPAQUE) {
+				return LispNil.INSTANCE;
+			}
+			LispVal list = LispNil.INSTANCE;
+			for (int i = inst.slotCount() - 1; i >= 0; i--) {
+				list = new LispCons(new LispString(inst.layout().slotNames().get(i)), list);
+			}
+			list = new LispCons(new LispString(inst.layout().printName()), list);
+			return new LispCons(inst.layout().kind() == LispLayout.Kind.CLASS ? LispTrue.INSTANCE : LispNil.INSTANCE,
+					list);
+		}));
 		this.globalEnv.defineFunction(LispNames.CLASS_OF, new LispFunction(LispNames.CLASS_OF, args -> {
 			requireSingleArg(LispNames.CLASS_OF, args);
 			// The class METAOBJECT of any value: the memoized standard-class instance
@@ -3271,6 +3285,22 @@ public final class LispEvaluator {
 					requireSingleArg(LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL, args);
 					return eval(new LispCons(new LispSymbol(LispNames.PRINT_RADIXED_INTERNAL),
 							new LispCons(quoteValue(args.get(0)), LispNil.INSTANCE)), this.globalEnv);
+				}));
+		this.globalEnv.defineFunction(LispNames.PRINT_OBJECT_DEFAULT_INTERNAL,
+				new LispFunction(LispNames.PRINT_OBJECT_DEFAULT_INTERNAL, args -> {
+					requireSingleArg(LispNames.PRINT_OBJECT_DEFAULT_INTERNAL, args);
+					// A direct call can be this program's first use of the printer.
+					ensurePrintObjectRuntimeLoaded(printControlsInEffect());
+					return eval(LispMacroExpander.expandPrintObjectDefault(quoteValue(args.get(0)), true),
+							this.globalEnv);
+				}));
+		this.globalEnv.defineFunction(LispNames.PRINT_CASED_TYPE_NAME_INTERNAL,
+				new LispFunction(LispNames.PRINT_CASED_TYPE_NAME_INTERNAL, args -> {
+					requireSingleArg(LispNames.PRINT_CASED_TYPE_NAME_INTERNAL, args);
+					return printControlsInEffect()
+							? eval(LispMacroExpander.expandPrintedTypeName(quoteValue(args.get(0)), true),
+									this.globalEnv)
+							: args.get(0);
 				}));
 		// The package half of %print-cased's fast path: under the pristine cl-user no
 		// qualified symbol is accessible, so the raw conversion is exact.
@@ -4793,11 +4823,12 @@ public final class LispEvaluator {
 		LoadRecorder recorder = this.loadRecorder;
 		List<LispVal> read = new ArrayList<>();
 		List<LispVal> resolved = new ArrayList<>();
+		Set<String> featuresAtOpen = printedFeatures(currentFeatures());
 		try {
 			while (true) {
 				LispVal form;
 				try {
-					form = forms.next(currentReadSyntax());
+					form = forms.next(sourceReadSyntax(), featuresAddedSince(featuresAtOpen));
 				}
 				catch (LispReadException error) {
 					throw loadReadError(error);
@@ -4833,7 +4864,9 @@ public final class LispEvaluator {
 	public void evalSource(String source, @Nullable String file) {
 		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
 		SourceLanguage.Forms forms = SourceLanguage.readForms(source, this.features, file);
-		for (LispVal form = forms.next(currentReadSyntax()); form != null; form = forms.next(currentReadSyntax())) {
+		Set<String> featuresAtOpen = printedFeatures(currentFeatures());
+		for (LispVal form = forms.next(sourceReadSyntax()); form != null; form = forms.next(sourceReadSyntax(),
+				featuresAddedSince(featuresAtOpen))) {
 			eval(markers ? resolveReadTimeEvalInCode(form) : form);
 		}
 	}
@@ -4871,8 +4904,32 @@ public final class LispEvaluator {
 					catch (RuntimeException ex) {
 						throw new ReadSyntax.Refusal("the reader macro function signalled: " + ex.getMessage(), ex);
 					}
-					return check.apply(result);
+					return check.apply(respelledForResolver(result));
 				});
+	}
+
+	/**
+	 * {@link #currentReadSyntax()} for a read of SOURCE, whose form goes through the
+	 * package resolver before it runs, as a run-time {@code read}'s datum does not.
+	 * @return the syntax, or {@code null} for the standard one
+	 */
+	private @Nullable ReadSyntax sourceReadSyntax() {
+		return ReadtableSyntax.of(currentSpecialValue(LispNames.READTABLE_VAR),
+				currentSpecialValue(LispNames.READ_BASE_VAR),
+				(function, input, offset, arguments, templateDepth) -> respelledForResolver(
+						callReaderMacro(function, input, offset, arguments, templateDepth)));
+	}
+
+	/**
+	 * A reader macro function answers symbols, and the form it lands in is resolved as
+	 * spelled: a bare {@code cl} name must survive that in a package using no {@code cl}
+	 * (coalton's readtable reads {@code cl:declaim} through eclector, in a package using
+	 * only coalton).
+	 */
+	private ReadSyntax.Result respelledForResolver(ReadSyntax.Result result) {
+		LispVal value = result.value();
+		return value == null ? result
+				: new ReadSyntax.Result(UserMacroExpander.requalifyShadowedClNames(value, this), result.end());
 	}
 
 	/**
@@ -6927,12 +6984,12 @@ public final class LispEvaluator {
 	}
 
 	/** The current value of {@code *features*}, dynamic binding first. */
-	private LispVal currentFeatures() {
+	LispVal currentFeatures() {
 		LispVal value = currentSpecialValue(LispNames.FEATURES_VAR);
 		return value == null ? LispNil.INSTANCE : value;
 	}
 
-	private static Set<String> printedFeatures(LispVal features) {
+	static Set<String> printedFeatures(LispVal features) {
 		Set<String> printed = new HashSet<>();
 		for (LispVal cell = features; cell instanceof LispCons cons; cell = cons.cdr()) {
 			printed.add(cons.car().print());
@@ -6945,7 +7002,7 @@ public final class LispEvaluator {
 	 * ({@link #printedFeatures}), oldest first, downcased as {@code Features} spells
 	 * them.
 	 */
-	private List<String> featuresAddedSince(Set<String> before) {
+	List<String> featuresAddedSince(Set<String> before) {
 		List<String> added = new ArrayList<>();
 		for (LispVal cell = currentFeatures(); cell instanceof LispCons cons; cell = cons.cdr()) {
 			if (cons.car() instanceof LispSymbol feature && !before.contains(feature.print())) {
@@ -10714,6 +10771,10 @@ public final class LispEvaluator {
 				return builtinMacroExpansion(cons, LispMacroExpander::expandWithOpenFile);
 			case LispNames.PPRINT_LOGICAL_BLOCK:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandPprintLogicalBlock);
+			case LispNames.PPRINT_POP:
+				return builtinMacroExpansion(cons, call -> LispMacroExpander.expandPprintPop());
+			case LispNames.PPRINT_EXIT_IF_LIST_EXHAUSTED:
+				return builtinMacroExpansion(cons, call -> LispMacroExpander.expandPprintExitIfListExhausted());
 			case LispNames.WITH_ARENA_QUALIFIED:
 				// A reclamation boundary for --no-gc; a real GC
 				// already reclaims, so the interpreter runs the body
@@ -14905,7 +14966,7 @@ public final class LispEvaluator {
 			// The interpreter always emits the vector arm: the gate the compile paths use
 			// exists to keep the array runtime out of an array-free ARTIFACT, and there
 			// is no artifact here.
-			for (LispVal form : LispMacroExpander.printObjectStrDefuns(this.closRegistry, controls, true, true)) {
+			for (LispVal form : LispMacroExpander.printObjectStrDefuns(this.closRegistry, controls, true, true, true)) {
 				eval(form, this.globalEnv);
 			}
 		}

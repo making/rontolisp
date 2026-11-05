@@ -528,11 +528,14 @@
 ;; synonym closes the SYNONYM, not the stream it forwards to (CLHS 21.1.3), and
 ;; a synonym is an instance, so the instance arm is already its answer. An OPEN
 ;; stream is an instance too and must NOT take that arm -- it is the one kind
-;; close really has work to do for, so it is tested by tag ahead of %obj-p.
+;; close really has work to do for, so it is tested by tag ahead of %obj-p. An
+;; instance that is no stream is the type error it is for the built-in.
 (defun rontolisp::%gray-close-dispatch (stream)
   (if (%obj-is stream '%STREAM)
       (close stream)
-      (if (%obj-p stream) t (close stream))))
+      (if (%obj-p stream)
+          (if (streamp stream) t (%operand-type-error stream 'close 'stream))
+          (close stream))))
 
 (defun rontolisp::%gray-write-byte-dispatch (byte stream)
   (let ((stream (%stream-target stream)))
@@ -623,7 +626,11 @@
 ;; bare handle is not a stream to streamp / input-stream-p / output-stream-p any
 ;; more -- the value is. Only the %obj-p test needs the resolution.
 (defun rontolisp::%gray-open-stream-p-dispatch (stream)
-  (if (%obj-p (%stream-target stream)) t (open-stream-p stream)))
+  (if (%obj-p (%stream-target stream))
+      (if (streamp stream)
+          t
+          (%operand-type-error stream 'open-stream-p 'stream))
+      (open-stream-p stream)))
 
 ;; input-stream-p / output-stream-p: the same rule, answered by a typep against
 ;; the two direction base classes rather than by a direction generic per class.

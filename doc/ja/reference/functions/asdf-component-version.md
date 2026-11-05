@@ -3,10 +3,11 @@
 `(asdf:component-version component)`
 
 リーダー: システムの `defsystem` が宣言した `:version` 文字列を返します。宣言が
-なければ `nil` です。記録されるのは素の文字列リテラルだけです。`.asd` は **データ**
-として解析されるため、ASDF の `(:read-file-form "version.sexp")` のような間接指定
-（その他の計算された書き方も同様）は評価されず `nil` になります。コンポーネント
-ファイル自身はバージョンを持ちません。
+なければ `nil` です。`.asd` ファイルの `(:read-file-form "version.sexp" :at 0)` と
+`(:read-file-line "version.txt" :at 0)` という間接指定は、ASDF と同じく `.asd` の隣の
+そのファイルを読みます。ドット区切りの整数として解釈できないものは `nil` です。その他の
+書き方、読めない間接指定、`.asd` の外の `defsystem` の間接指定も `nil` です。
+コンポーネントファイル自身はバージョンを持ちません。
 
 ```lisp
 (asdf:defsystem :demo-cv :version "0.9.15" :components ((:file "main")))

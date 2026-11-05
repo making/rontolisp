@@ -2,7 +2,7 @@
 
 `(define-condition name (parent...) (slot...) option...)`
 
-コンディション型を、組み込みコンディション階層 `condition` > `serious-condition` > `error`(> `simple-error` および標準エラーサブタイプ)と `warning` の上の CLOS サブセットクラス([`defclass`](../special-forms/defclass.md) 参照)として定義します。親のデフォルトは `condition` です。親が複数ある場合、**最初の**親がスロットレイアウトを提供し(単一継承)、残りの親は `typep`/`typecase`/`handler-case` の型マッチングにのみ参加します(それらのスロットは継承されません)。スロットは `defclass` サブセット(`:initarg`/`:initform`/`:reader`/`:accessor`、および破棄される `:documentation`)を使います。クラスオプションのうち `(:report x)`(リテラル文字列または `(lambda (condition stream) ...)`)はコンディションの**レポート**です。[`error`](error.md)/[`signal`](signal.md)/[`warn`](warn.md) でシグナルされたときのメッセージであると同時に、[`princ`](../functions/princ.md)・[`princ-to-string`](../functions/princ-to-string.md)・[`format`](format.md) の `~A` がそのコンディションオブジェクトに対して出力するテキストでもあります。[`prin1`](../functions/prin1.md) / `~S` は影響を受けず、`#<TYPE :SLOT value ...>` のインスタンス構文のままです。`:report` を定義しない型は親のものを継承します。どの祖先にも `:report` がなく `simple-condition` 系のスロット(`format-control`/`format-arguments`、つまり `simple-error`/`simple-warning`/`simple-condition` のサブタイプ)を持つ型は、それらに `format` を適用した結果をレポートとします。どちらも持たない型は `princ` でも `#<...>` 表現のままです。型に [`print-object`](../functions/print-object.md) メソッドがあれば、どちらのエスケープモードでもレポートより優先されます。`(:default-initargs :initarg value ...)` は生成されるクラスに転送され(未指定の initarg に `make-condition`/型付き `error` がデフォルトを適用)、`(:documentation ...)` は破棄されます。型名を返します。コンパイルパスでは `defclass` と同じく、トップレベルフォームか、トップレベルの `defparameter`/`defvar` の値フォームとしてのみサポートされます。
+コンディション型を、組み込みコンディション階層 `condition` > `serious-condition` > `error`(> `simple-error` および標準エラーサブタイプ)と `warning` の上の CLOS サブセットクラス([`defclass`](../special-forms/defclass.md) 参照)として定義します。親のデフォルトは `condition` です。親が複数ある場合、**最初の**親がスロットレイアウトを提供し(単一継承)、残りの親は `typep`/`typecase`/`handler-case` の型マッチングにのみ参加します(それらのスロットは継承されません)。スロットは `defclass` サブセット(`:initarg`/`:initform`/`:reader`/`:accessor`、および破棄される `:documentation`)を使います。クラスオプションのうち `(:report x)`(リテラル文字列、`(lambda (condition stream) ...)`、またはそのような関数を名指しするシンボル)はコンディションの**レポート**です。[`error`](error.md)/[`signal`](signal.md)/[`warn`](warn.md) でシグナルされたときのメッセージであると同時に、[`princ`](../functions/princ.md)・[`princ-to-string`](../functions/princ-to-string.md)・[`format`](format.md) の `~A` がそのコンディションオブジェクトに対して出力するテキストでもあります。[`prin1`](../functions/prin1.md) / `~S` は影響を受けず、`#<TYPE :SLOT value ...>` のインスタンス構文のままです。`:report` を定義しない型は親のものを継承します。どの祖先にも `:report` がなく `simple-condition` 系のスロット(`format-control`/`format-arguments`、つまり `simple-error`/`simple-warning`/`simple-condition` のサブタイプ)を持つ型は、それらに `format` を適用した結果をレポートとします。どちらも持たない型は `princ` でも `#<...>` 表現のままです。型に [`print-object`](../functions/print-object.md) メソッドがあれば、どちらのエスケープモードでもレポートより優先されます。`(:default-initargs :initarg value ...)` は生成されるクラスに転送され(未指定の initarg に `make-condition`/型付き `error` がデフォルトを適用)、`(:documentation ...)` は破棄されます。型名を返します。コンパイルパスでは `defclass` と同じく、トップレベルフォームか、トップレベルの `defparameter`/`defvar` の値フォームとしてのみサポートされます。
 
 ```lisp
 (define-condition my-parse-error (error)
@@ -19,6 +19,13 @@
 (list (princ-to-string (make-condition 'dc-report-demo :input "x"))
       (prin1-to-string (make-condition 'dc-report-demo :input "x")))
 ; => ("did not parse: x" "#<DC-REPORT-DEMO :INPUT \"x\">")
+```
+
+プログラムが自分でシグナルした標準クラスも、そのクラスの組み込みシグナルと同じ文を、与えられたスロットから報告します。対象は `undefined-function`、`unbound-variable`、`type-error`、`division-by-zero` とそのサブクラスです。
+
+```lisp
+(handler-case (error 'undefined-function :name 'dc-missing)
+  (error (e) (princ-to-string e))) ; => "The function DC-MISSING is undefined"
 ```
 
 ```console

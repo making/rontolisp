@@ -1074,6 +1074,15 @@ final class JvmExprCompiler {
 			case LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintCasedLeaf(cons, ctx.printControlVariables),
 						ctx, className);
+			case LispNames.PRINT_CASED_TYPE_NAME_INTERNAL ->
+				JvmExprCompiler.compileExpr(
+						LispMacroExpander.expandPrintedTypeName(cons.toList().get(1),
+								ctx.printControls
+										&& ctx.functions.containsKey(LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL)),
+						ctx, className);
+			case LispNames.PRINT_OBJECT_DEFAULT_INTERNAL ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintObjectDefault(cons.toList().get(1),
+						ctx.functions.containsKey(LispMacroExpander.POS_DEFAULT)), ctx, className);
 			case LispNames.MAKE_SYMBOL -> JvmSymbolApiCompiler.compileMakeSymbol(cons, ctx, className);
 			case LispNames.BOUNDP -> JvmSymbolApiCompiler.compileBoundp(cons, ctx, className);
 			case LispNames.FBOUNDP -> JvmSymbolApiCompiler.compileFboundp(cons, ctx, className);
@@ -2159,6 +2168,7 @@ final class JvmExprCompiler {
 			case LispNames.OBJ_TAG -> JvmObjCompiler.compileTag(cons, ctx, className);
 			case LispNames.OBJ_P -> JvmObjCompiler.compileP(cons, ctx, className);
 			case LispNames.OBJ_SLOTS -> JvmObjCompiler.compileSlots(cons, ctx, className);
+			case LispNames.OBJ_PRINT_FRAME -> JvmObjCompiler.compilePrintFrame(cons, ctx, className);
 			case LispNames.COPY_STRUCTURE -> JvmObjCompiler.compileCopyStructure(cons, ctx, className);
 			case LispNames.FUNCTIONP -> JvmFunctionpCompiler.compile(cons, ctx, className);
 			case LispNames.ARRAYP_INTERNAL -> JvmArraypCompiler.compile(cons, ctx, className);

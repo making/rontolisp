@@ -8,7 +8,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$here/../.." && pwd)"
 jar="$repo_root/target/rontolisp-0.1.0-SNAPSHOT-exec.jar"
-image="${ENVOY_IMAGE:-envoyproxy/envoy:v1.39.3}"
+image="${ENVOY_IMAGE:-envoyproxy/envoy:v1.40.2}"
 port="${GATEWAY_PORT:-18080}"
 admin="${ADMIN_PORT:-19901}"
 container="rontolisp-proxy-wasm-$$"
