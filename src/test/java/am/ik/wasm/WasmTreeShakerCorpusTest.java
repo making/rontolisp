@@ -53,12 +53,11 @@ class WasmTreeShakerCorpusTest {
 	/**
 	 * Corpus compiles one mode runs at once. The three levels of a mode are independent
 	 * compiles of one program and the two modes are concurrent invocations, so the class
-	 * holds up to twice this many corpus compiles in flight. One keeps 1.4 GB live at its
-	 * peak (measured 2026-11-05), and six in flight died of the 6 GB heap in two runs of
-	 * three, so the bound follows the core count rather than filling it: two on a
-	 * many-core box, one on the 4 vCPU CI runner (whose other fork is busy anyway).
+	 * holds up to twice this many corpus compiles in flight. Each keeps hundreds of
+	 * megabytes live, so the bound follows the core count rather than filling it: three
+	 * on a many-core box, one on the 4 vCPU CI runner (whose other fork is busy anyway).
 	 */
-	private static final int COMPILE_THREADS = Math.clamp(Runtime.getRuntime().availableProcessors() / 4, 1, 2);
+	private static final int COMPILE_THREADS = Math.clamp(Runtime.getRuntime().availableProcessors() / 4, 1, 3);
 
 	@TempDir
 	Path workDir;
