@@ -24,8 +24,8 @@ import am.ik.rontolisp.PackageRegistry;
  * in order to have something to return is code no run can observe.
  *
  * <p>
- * Two shapes produce exactly that, and this class is where both are recognized, once, for
- * both compile paths:
+ * Three shapes produce exactly that, and this class is where they are recognized, once,
+ * for both compile paths:
  *
  * <ul>
  * <li>{@link #prune(List) a form that IS a constant} -- {@code (in-package :chipz)} and
@@ -37,17 +37,20 @@ import am.ik.rontolisp.PackageRegistry;
  * {@code defvar}/{@code defparameter}/{@code defconstant} bind the variable and then
  * return the name symbol. The binding is the effect; the symbol is not. The two backends'
  * top-level emitters compile these for effect, so the name is never materialized.</li>
+ * <li>{@link #pruneFunctionReferences(List, Predicate) a reference that cannot fail} --
+ * {@code (function name)} added to open a wrapper's gate. The reference is what the gate
+ * reads, and nothing reads its value.</li>
  * </ul>
  *
  * <p>
- * <b>Why this is not behind {@code --optimize}.</b> Neither shape is a speed/size trade
- * with a losing side: the removed code cannot be observed at any level, and leaving it in
- * makes the flag-less module differ from the shaken one for no reason. It is the same
- * standing this project gives {@code PureBuiltinFolder}
- * ({@code .kb/pure-builtin-fold.md}) -- always on, both compile paths.
+ * <b>Why this is not behind {@code --optimize}.</b> No shape is a speed/size trade with a
+ * losing side: the removed code cannot be observed at any level, and leaving it in makes
+ * the flag-less module differ from the shaken one for no reason. It is the same standing
+ * this project gives {@code PureBuiltinFolder} ({@code .kb/pure-builtin-fold.md}) --
+ * always on, both compile paths.
  *
  * <p>
- * <b>Why only constants are pruned.</b> A bare non-keyword symbol at top level is NOT
+ * <b>Why nothing else is pruned.</b> A bare non-keyword symbol at top level is NOT
  * effect-free: evaluating it can signal an unbound-variable error, which is an observable
  * effect, so it stays. Neither is a call to a function whose body happens to be pure --
  * deciding that is {@link am.ik.rontolisp.macro.PureBuiltinFolder}'s job, and anything it

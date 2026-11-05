@@ -1473,15 +1473,18 @@ class WasmLispCompilerTest {
 				(print (sq-work 4))
 				""";
 		// The same program with the ONE fact the gate rests on taken away: the
-		// destination is a parameter nothing pins down, so both sites keep the wide
-		// dispatch and the module carries its non-array arms.
+		// destination is a parameter nothing pins down, an array at one call and a list
+		// at the other, so both sites keep the wide dispatch and the module carries its
+		// non-array arms. (With arrays at its only call, the type-test fold decides the
+		// wide dispatch without the gate.)
 		String unproven = """
 				(defun sq-work2 (a b)
 				  (fill b 7 :start 1)
 				  (replace a b :start1 1)
-				  (aref a 1))
+				  (elt a 1))
 				(print (sq-work2 (make-array 8 :element-type '(unsigned-byte 8))
 				                 (make-array 8 :element-type '(unsigned-byte 8))))
+				(print (sq-work2 (list 1 2 3) (list 4 5 6)))
 				""";
 		assertThat(compileForSize(proven).length).isLessThan(compileForSize(unproven).length - 2000);
 		// Under-predicting costs the module bytes and never its correctness -- the wide

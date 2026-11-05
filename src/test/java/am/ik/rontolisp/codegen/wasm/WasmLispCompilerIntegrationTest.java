@@ -723,10 +723,9 @@ class WasmLispCompilerIntegrationTest {
 	void aReactorNothingReadsAReportOfStillCatchesEveryClassItCan() throws Exception {
 		// --no-wasi's standard error is a sink and no clause binds its condition, so no
 		// report is read: every landing throws the class alone, and the module has no
-		// text
-		// for one, and no prin1. A clause still tells each class apart, and a signal
-		// still
-		// evaluates its arguments, as the same program answers on a module with a stderr.
+		// text for one, and no prin1. A clause still tells each class apart, and a signal
+		// still evaluates its arguments, as the same program answers on a module with a
+		// stderr.
 		String program = """
 				(defvar *seen* nil)
 				(defun catch-it (k)
@@ -751,23 +750,48 @@ class WasmLispCompilerIntegrationTest {
 				    (program-error () 104)
 				    (simple-error () (if *seen* 105 107))
 				    (error () 106)))
+				(defun no-clause (k) (handler-case (handler-case (car k) (:no-error (v) v)) (error () 108)))
 				(rontolisp:wasm-export 'catch-it :as "catch-it" :params '(:s32) :returns :s32)
+				(rontolisp:wasm-export 'no-clause :as "no-clause" :params '(:s32) :returns :s32)
 				""";
-		List<LispVal> forms = LispReader.readAllFromString(program);
-		byte[] read = new WasmLispCompiler().compile(forms);
-		for (OptimizeLevel level : OptimizeLevel.values()) {
-			byte[] unread = WasmLispCompiler.builder().noWasi(true).optimize(level).build().compile(forms);
-			if (level.eliminatesDeadCode()) {
-				assertThat(new String(unread, java.nio.charset.StandardCharsets.ISO_8859_1))
-					.doesNotContain("The value ");
+		// One clause that takes everything leaves a landing nothing to ask: no instance.
+		String anyClass = program.substring(0, program.indexOf("(type-error"))
+				+ "(error () (if (eql k 6) (if *seen* 105 107) 106))))\n"
+				+ program.substring(program.indexOf("(defun no-clause"));
+		// A class's :report is for whoever prints the condition: it is not run, or there.
+		String reporting = program.replace("(defun catch-it", """
+				(define-condition reported-error (error) ((code :initarg :code :reader code))
+				  (:report (lambda (c s) (format s "reported ~a" (code c)))))
+				(defun catch-it""")
+			.replace("(t 99))", "(11 (error 'reported-error :code k)) (t 99))")
+			.replace("(type-error () 100)", "(reported-error () 109) (type-error () 100)");
+		for (String source : List.of(program, anyClass, reporting)) {
+			List<LispVal> forms = LispReader.readAllFromString(source);
+			byte[] read = new WasmLispCompiler().compile(forms);
+			for (OptimizeLevel level : OptimizeLevel.values()) {
+				byte[] unread = WasmLispCompiler.builder().noWasi(true).optimize(level).build().compile(forms);
+				if (level.eliminatesDeadCode()) {
+					assertThat(new String(unread, java.nio.charset.StandardCharsets.ISO_8859_1))
+						.doesNotContain("The value ")
+						.doesNotContain("reported ");
+				}
+				for (int k = 0; k <= 12; k++) {
+					String caught = invoke(unread, "catch-it", String.valueOf(k));
+					assertThat(caught).as("%s, case %d", level, k)
+						.isEqualTo(invoke(read, "catch-it", String.valueOf(k)));
+				}
+				assertThat(invoke(unread, "no-clause", "1")).isEqualTo("108");
 			}
-			for (int k = 0; k <= 11; k++) {
-				String caught = invoke(unread, "catch-it", String.valueOf(k));
-				assertThat(caught).as("%s, case %d", level, k).isEqualTo(invoke(read, "catch-it", String.valueOf(k)));
-			}
+			assertThat(invoke(read, "catch-it", "6")).isEqualTo("105");
 		}
-		assertThat(invoke(read, "catch-it", "6")).isEqualTo("105");
-		assertThat(invoke(read, "catch-it", "2")).isEqualTo("101");
+		assertThat(invoke(new WasmLispCompiler().compile(LispReader.readAllFromString(program)), "catch-it", "2"))
+			.isEqualTo("101");
+		byte[] noClass = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(LispReader.readAllFromString(anyClass));
+		assertThat(new String(noClass, java.nio.charset.StandardCharsets.ISO_8859_1)).doesNotContain("%class-");
 	}
 
 	private static String invoke(byte[] module, String function, String... args) throws Exception {

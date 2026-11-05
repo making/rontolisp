@@ -1391,6 +1391,34 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Normalizes the value in a local where it can be a character vector, in a runtime
+	 * body that goes on to branch on its type. The test goes ahead of the call for what
+	 * the type-test fold makes of it: {@code _charvec_to_str} answers whatever else it is
+	 * handed, so past a bare call the local holds what any caller in the module hands it,
+	 * and every arm below stays ({@code .kb/wasm-ref-type-fold.md}).
+	 * @param w the writer for the function body being emitted
+	 * @param local the local holding the value
+	 * @param charvecPossible {@link WasmLispCompiler.Ctx#charvecPossible}: nothing is
+	 * emitted when it is false
+	 */
+	static void emitCharvecToStrLocal(WasmWriter w, int local, boolean charvecPossible) {
+		if (!charvecPossible) {
+			return;
+		}
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(local);
+		emitCharvecToStrCall(w, true);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(local);
+		w.write(Instruction.END);
+	}
+
+	/**
 	 * Emits {@code call FUNC_CHARVEC_P}: replaces a value on the stack with the i32
 	 * {@code 1}/{@code 0} answer to "is this a mutable character vector?". The shape half
 	 * of {@link #emitCharvecToStrCall(WasmLispCompiler.Ctx)}, for a caller that wants the

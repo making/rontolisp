@@ -1999,9 +1999,8 @@ public final class WasmRefTypeFolder {
 				@Nullable List<Val> armVals = fr.folded == FOLD_THEN && fr.elseIndex >= 0 ? fr.thenVals : fallVals;
 				if (fr.folded != FOLD_NONE && fr.elided && !fr.branchedTo && armVals != null) {
 					// A spliced-in arm is no merge: what follows reads the arm's own
-					// values,
-					// and knows what the walk knows of them (a constant, a test of a
-					// local).
+					// values, and knows what the walk knows of them (a constant, a test
+					// of a local).
 					pushAll(armVals);
 				}
 				else {

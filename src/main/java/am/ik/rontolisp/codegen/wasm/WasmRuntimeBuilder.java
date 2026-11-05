@@ -187,14 +187,8 @@ final class WasmRuntimeBuilder {
 		// fast path, so one code path serves all four combinations): two character
 		// vectors with equal content compare true, and a character vector compares true
 		// to a string with the same content.
-		getLocal(w, 0);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		getLocal(w, 1);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(1);
+		WasmEmitHelper.emitCharvecToStrLocal(w, 0, charvecPossible);
+		WasmEmitHelper.emitCharvecToStrLocal(w, 1, charvecPossible);
 
 		// if (ref.eq a b) -> 1
 		getLocal(w, 0);
@@ -707,10 +701,7 @@ final class WasmRuntimeBuilder {
 		// vector key hashes exactly like the string with the same content (agreeing
 		// with _equal's entry normalization -- equal-table gethash/sethash with mixed
 		// string/character-vector keys interoperate).
-		getLocal(w, 0);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(0);
+		WasmEmitHelper.emitCharvecToStrLocal(w, 0, charvecPossible);
 
 		// if v is null -> 0
 		getLocal(w, 0);
@@ -1387,13 +1378,13 @@ final class WasmRuntimeBuilder {
 		if (instanceTypeIndex < 0) {
 			return;
 		}
-		WasmLispCompiler.StringTable.StringEntry openStruct = st.addString("#S(");
-		WasmLispCompiler.StringTable.StringEntry openClass = st.addString("#<");
-		WasmLispCompiler.StringTable.StringEntry closeClass = st.addString(">");
-		WasmLispCompiler.StringTable.StringEntry keySep = st.addString(" :");
-		WasmLispCompiler.StringTable.StringEntry depthMarker = st.addString("#");
+		WasmLispCompiler.StringTable.StringEntry openStruct = st.addBodyString("#S(");
+		WasmLispCompiler.StringTable.StringEntry openClass = st.addBodyString("#<");
+		WasmLispCompiler.StringTable.StringEntry closeClass = st.addBodyString(">");
+		WasmLispCompiler.StringTable.StringEntry keySep = st.addBodyString(" :");
+		WasmLispCompiler.StringTable.StringEntry depthMarker = st.addBodyString("#");
 		boolean escape = elementFunc == WasmLispCompiler.FUNC_PRINT_VAL;
-		WasmLispCompiler.StringTable.StringEntry pathnamePrefix = escape ? st.addString("#P") : null;
+		WasmLispCompiler.StringTable.StringEntry pathnamePrefix = escape ? st.addBodyString("#P") : null;
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -2849,8 +2840,9 @@ final class WasmRuntimeBuilder {
 	private static void emitArityThrow(WasmWriter w, ArityReport report, int shapeLocal, boolean named, int slotsLocal,
 			int msgLocal, Runnable pushGot) {
 		if (report.unread) {
-			emitUnreadThrow(w, new ConditionInstance(report.layoutAddress, report.instanceTypeIndex,
-					report.slotCapacity, report.formatControlSlot, report.identityHash), report.identityHash);
+			emitUnreadThrow(w, report.layoutAddress < 0 ? null : new ConditionInstance(report.layoutAddress,
+					report.instanceTypeIndex, report.slotCapacity, report.formatControlSlot, report.identityHash),
+					report.identityHash);
 			return;
 		}
 		report.intern();
@@ -5393,11 +5385,7 @@ final class WasmRuntimeBuilder {
 		// Normalize a mutable character vector into a string up front: it then falls
 		// into the string branch below (the readable form keeps the quotes), and the
 		// recursive cons/array element prints route back through this entry.
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(0);
+		WasmEmitHelper.emitCharvecToStrLocal(w, 0, charvecPossible);
 
 		// Check null (nil)
 		w.write(Instruction.GET_LOCAL);
@@ -5629,11 +5617,7 @@ final class WasmRuntimeBuilder {
 		// Normalize a mutable character vector into a string up front: it then falls
 		// into the string branch below (princ strips the quotes), and the recursive
 		// cons/array element prints route back through this entry.
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(0);
+		WasmEmitHelper.emitCharvecToStrLocal(w, 0, charvecPossible);
 
 		// Check null (nil)
 		w.write(Instruction.GET_LOCAL);

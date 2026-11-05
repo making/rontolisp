@@ -100,6 +100,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	// Whether nothing in this module can read a condition's report (Ctx.unreadReports).
 	private boolean unreadReports;
 
+	// Whether no landing asks what it caught (Ctx.handlersReadNoClass).
+	private boolean handlersReadNoClass;
+
 	private final OptimizeLevel optimize;
 
 	private final boolean serve;
@@ -3639,9 +3642,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean entryReportOnly = !ehFormReport && this.reportLocations != null && !this.noWasi
 				&& WasmUncaughtLocations.readsAnyFile(program);
 		// --no-wasi's standard error is a sink, so the entry pad reads nothing there.
-		// Where
-		// no program code can hold a condition either, no report is read at all: each
-		// throw carries its class, and no text (Ctx.unreadReports).
+		// Where no program code can hold a condition either, no report is read at all:
+		// each throw carries its class, and no text (Ctx.unreadReports).
 		this.unreadReports = this.noWasi && !reportsUncaughtUnforeseen && !this.dynamic && !restartMode && !p1Futures
 				&& !RuntimeNameProducers.anyNameResolvable(program)
 				&& !LispMacroExpander.mayHoldConditions(program, closRegistry);
@@ -3672,6 +3674,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			// The expansion gave program code a condition the surface scan did not see.
 			throw new UncaughtReportUnforeseen();
 		}
+		// With no report read, a landing that also needs no class needs no instance: a
+		// pad no longer observes the class, so no throw builds one for it.
+		this.handlersReadNoClass = this.unreadReports
+				&& LispMacroExpander.handlersTakeEveryThrow(program, closRegistry);
+		boolean padAsksNothing = hasLandingPad && this.handlersReadNoClass;
+		hasLandingPad = hasLandingPad && !this.handlersReadNoClass;
 		// The (setf (symbol-function 'n) ...) forwarders: no definition of their name, so
 		// out of the registry, and #'n / fboundp read the runtime function namespace.
 		Set<String> fenvForwarders = new HashSet<>(LispMacroExpander.symbolFunctionForwarderNames(program));
@@ -3768,7 +3776,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// layout addresses are needed as constants before any body is compiled. Restart
 		// mode forces it on: the signal hook synthesizes simple-* instances for plain
 		// string signals.
-		this.usesInstances = LispMacroExpander.mayCreateInstances(program, closRegistry) || restartMode;
+		this.usesInstances = LispMacroExpander.mayCreateInstances(program, closRegistry, this.handlersReadNoClass)
+				|| restartMode;
 		// The complex gate, decided on the same snapshot and for the same reason: the
 		// complex block shifts userFuncBase(), which every body compiled from here on
 		// reads.
@@ -5228,6 +5237,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.asyncDefunNames(Set.copyOf(asyncDefunNames))
 			.p1Futures(p1Futures)
 			.unreadReports(this.unreadReports)
+			.handlersReadNoClass(this.handlersReadNoClass)
 			.currentTaskGlobalIndex(currentTaskGlobalIndex)
 			.serveInitGlobalIndex(serveInitGlobalIndex)
 			.reentryGuardGlobalIndex(reentryGuardGlobalIndex)
@@ -6429,7 +6439,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			unbackedArityOperators.put(unbackedId, LispNames.EVAL);
 		}
 		WasmRuntimeBuilder.ArityReport arityReport = arityReport(
-				ehMode && hasLandingPad && this.usesInstances
+				ehMode && (hasLandingPad && this.usesInstances || padAsksNothing)
 						&& (!indirectCallArities.isEmpty() || usesApplyRuntime || this.emitsArityChk),
 				closRegistry, stringTable, layoutAddresses, arityNamedFuncIds, arityDeclaredFuncIds,
 				unbackedArityOperators);
@@ -6635,8 +6645,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			int registryCount = 0;
 			// A row compares offsets, and reads no name's bytes. Only the runtime intern
 			// table reads them for a row: it hands out a name no body cites. Elsewhere
-			// the
-			// bytes stand or fall with the bodies citing them.
+			// the bytes stand or fall with the bodies citing them.
 			java.util.function.Function<String, StringTable.StringEntry> rowName = usesIntern ? stringTable::addString
 					: stringTable::addBodyString;
 			for (int i = 0; i < defuns.size(); i++) {
@@ -10176,6 +10185,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		coreModule = am.ik.wasm.WasmCallForwarding.redirect(am.ik.wasm.WasmRefTypeFolder.fold(coreModule));
+		// The fold retires readers; what they read goes before the peepholes collect the
+		// values it stored.
+		coreModule = am.ik.wasm.WasmWriteOnlyGlobals.rewrite(coreModule);
 		// Then the adjacent-instruction peepholes, over the bodies those two leave: the
 		// emitter's own store/load pairs and statement-position values, plus the
 		// `i32.const; drop` / `ref.null; drop` debris the fold makes of a folded
@@ -10522,8 +10534,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			StringTable stringTable, Map<String, Integer> layoutAddresses,
 			SortedMap<Integer, String> arityOperatorFuncIds, SortedMap<Integer, DeclaredArityReport> declaredFuncIds,
 			SortedMap<Integer, String> unbackedOperators) {
-		WasmRuntimeBuilder.ConditionInstance instance = on
+		WasmRuntimeBuilder.ConditionInstance instance = on && !this.handlersReadNoClass
 				? conditionInstance(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, closRegistry, layoutAddresses) : null;
+		if (on && this.handlersReadNoClass) {
+			// No landing asks the class, and a wrong count still has to reach the
+			// landing.
+			return new WasmRuntimeBuilder.ArityReport(stringTable, -1, -1, 0, 0, this.usesIdentityHashTables,
+					arityOperatorFuncIds, declaredFuncIds, unbackedOperators, arityMessageFuncIndex(), true);
+		}
 		if (instance == null) {
 			return null;
 		}
@@ -12819,6 +12837,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean unreadReports;
 
 		/**
+		 * Whether, on top of {@link #unreadReports}, no landing asks what it caught: the
+		 * first clause of every {@code handler-case} takes whatever the module can throw
+		 * ({@code LispMacroExpander.handlersTakeEveryThrow}).
+		 */
+		boolean handlersReadNoClass;
+
+		/**
 		 * The global index of the CURRENT task record (asyncMode), or -1. Frames store it
 		 * as their owner at creation; the callback-task runtime swaps it at every host
 		 * entry.
@@ -13089,6 +13114,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.asyncDefunNames = builder.asyncDefunNames;
 			this.p1Futures = builder.p1Futures;
 			this.unreadReports = builder.unreadReports;
+			this.handlersReadNoClass = builder.handlersReadNoClass;
 			this.currentTaskGlobalIndex = builder.currentTaskGlobalIndex;
 			this.serveInitGlobalIndex = builder.serveInitGlobalIndex;
 			this.reentryGuardGlobalIndex = builder.reentryGuardGlobalIndex;
@@ -13332,6 +13358,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private boolean unreadReports;
 
+			private boolean handlersReadNoClass;
+
 			private int currentTaskGlobalIndex = -1;
 
 			private int serveInitGlobalIndex = -1;
@@ -13456,6 +13484,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.asyncDefunNames = proto.asyncDefunNames;
 				this.p1Futures = proto.p1Futures;
 				this.unreadReports = proto.unreadReports;
+				this.handlersReadNoClass = proto.handlersReadNoClass;
 				this.currentTaskGlobalIndex = proto.currentTaskGlobalIndex;
 				this.serveInitGlobalIndex = proto.serveInitGlobalIndex;
 				this.reentryGuardGlobalIndex = proto.reentryGuardGlobalIndex;
@@ -13976,6 +14005,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				return this;
 			}
 
+			Builder handlersReadNoClass(boolean handlersReadNoClass) {
+				this.handlersReadNoClass = handlersReadNoClass;
+				return this;
+			}
+
 			Builder currentTaskGlobalIndex(int currentTaskGlobalIndex) {
 				this.currentTaskGlobalIndex = currentTaskGlobalIndex;
 				return this;
@@ -14209,7 +14243,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// A %program-error signal constructs its program-error instance during BODY
 		// compilation (lowerProgramError) -- after this scan, and only behind a handler
 		// landing pad -- so the pad stands in for the tag.
-		if (LispMacroExpander.establishesLandingPad(program)) {
+		if (LispMacroExpander.establishesLandingPad(program) && !this.handlersReadNoClass) {
 			used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.PROGRAM_ERROR_CLASS_NAME);
 			// The same for a wrong-type operand's type-error, which the fixed
 			// _type_err_* landings build (WasmOperandTypes.buildLandingBody).

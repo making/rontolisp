@@ -449,8 +449,7 @@ class WasmRefTypeFolderTest {
 	@Test
 	void aGuardHoldsUpToTheLocalsNextAssignmentButNotAcrossALoopHoldingIt() throws Exception {
 		// Local 0 is {i31, struct{i32}}. Past the `x is i31` guard the walk's read of x
-		// is
-		// an i31 although x is assigned further down: the struct test goes, the way
+		// is an i31 although x is assigned further down: the struct test goes, the way
 		// nreverse's previous-cell read keeps a cdr's string out of its answer. A loop
 		// opened behind the guard comes back around with the assigned value, so the same
 		// test inside it stays.

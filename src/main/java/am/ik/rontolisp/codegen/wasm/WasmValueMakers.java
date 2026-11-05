@@ -15,7 +15,7 @@ import java.util.Set;
  * is compiled -- a body the tree shaker then drops included -- and the ladder's
  * {@code call} would keep the callee, and everything it reaches, for a value nothing can
  * make. This is the half of the answer only the compiler knows: the shake asks it
- * ({@code WasmTreeShaker.madeValues}) which values a KEPT function makes, and the ladders
+ * ({@code WasmTreeShaker.valueReach}) which values a KEPT function makes, and the ladders
  * are rebuilt over those ({@code .kb/optimize-dead-code-elimination.md}, "A ladder arm
  * lives while a kept function makes its value").
  *

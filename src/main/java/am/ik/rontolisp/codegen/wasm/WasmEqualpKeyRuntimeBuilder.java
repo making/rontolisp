@@ -126,9 +126,7 @@ final class WasmEqualpKeyRuntimeBuilder {
 		// producer-built key (concatenate, format nil) takes the framed-string fold
 		// below and two equal-content keys collide -- _hash already folds them alike,
 		// and without this the vector fell to the "its own key" arm and never matched.
-		getLocal(w, 0);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
-		setLocal(w, 0);
+		WasmEmitHelper.emitCharvecToStrLocal(w, 0, charvecPossible);
 
 		// A framed string -> _string_upcase
 		refTest(w, WasmLispCompiler.TYPE_STRING);

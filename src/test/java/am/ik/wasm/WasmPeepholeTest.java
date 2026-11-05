@@ -160,6 +160,45 @@ class WasmPeepholeTest {
 	}
 
 	@Test
+	void foldsALiteralBoxedForAParameterThatUnboxesIt() {
+		// A cast of an i31 just boxed needs no check, a constant the box holds comes back
+		// out as itself, and a call the caller vouches for is only there for its value. A
+		// constant past 31 bits is what the unboxing changes, so it stays.
+		byte[] literal = body(0, w -> {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(7);
+			w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(Type.I31.code());
+			w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		});
+		byte[] wide = body(0, w -> {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1 << 30);
+			w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		});
+		byte[] vouched = body(0, w -> {
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(3);
+			w.write(Instruction.DROP);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(4);
+			w.write(Instruction.DROP);
+		});
+		byte[] value = body(0, w -> {
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+		});
+		byte[] rewritten = WasmPeephole
+			.rewrite(module(new int[] { 2, 2, 1, 3, 3 }, List.of(literal, wide, vouched, value, value)), f -> f == 3);
+
+		assertThat(code(rewritten, 0)).containsExactly("i32.const", "end");
+		assertThat(code(rewritten, 1)).containsExactly("i32.const", "0xFB", "0xFB", "end");
+		assertThat(code(rewritten, 2)).containsExactly("call 4", "drop", "end");
+	}
+
+	@Test
 	void keepsAPairThatABlockBoundarySeparates() {
 		// The load starts a block body, so it is not the store's consumer -- and the
 		// store's own value has to stay on the stack for nobody.

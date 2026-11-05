@@ -82,8 +82,8 @@ final class WasmStringStreamRuntimeBuilder {
 		// A mutable character vector (a subseq/copy-seq result being written) renders
 		// once here; any other value passes through _charvec_to_str unchanged.
 		getLocal(w, STR);
-		WasmEmitHelper.emitCharvecToStrCall(w, charvecPossible);
 		setLocal(w, NSTR);
+		WasmEmitHelper.emitCharvecToStrLocal(w, NSTR, charvecPossible);
 		// The DESTINATION is decided before the string is staged anywhere: a string
 		// output stream copies GC array to GC array and must not touch linear memory at
 		// all, while the two fd sinks below share one staging copy at HEAP_PTR (which is

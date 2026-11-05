@@ -1272,7 +1272,7 @@ public final class WasmTreeShaker {
 
 	// --- Export / start sections ---
 
-	private static int[] exportGlobalRoots(@Nullable Section exportSec) {
+	static int[] exportGlobalRoots(@Nullable Section exportSec) {
 		return exportRoots(exportSec, WasmSections.KIND_GLOBAL);
 	}
 

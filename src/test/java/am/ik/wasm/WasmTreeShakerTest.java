@@ -659,8 +659,7 @@ class WasmTreeShakerTest {
 		// (ecase map (:a 0)) reads as a (map <computed type> ...) call to the scan that
 		// opens #'concatenate's wrapper gate in a program spelling a packed element type,
 		// and may: what the gate reads is a reference, which is no value. With a ladder
-		// in
-		// the module, an evaluated one kept the wrapper and everything it reaches.
+		// in the module, an evaluated one kept the wrapper and everything it reaches.
 		String program = "(defvar *f* (lambda (x) (+ x 1))) (defvar *v* (make-array 1 :element-type '(unsigned-byte 8)))"
 				+ "(defun pick (VAR) (ecase VAR (:a 0) (:b 1))) "
 				+ "(defun e (x) (+ (pick :a) (aref *v* 0) (funcall *f* x))) "
@@ -1023,10 +1022,10 @@ class WasmTreeShakerTest {
 		// resolved structurally now: each candidate's (offset, length) row is its own
 		// droppable range PROBED on the string's interval, so row and bytes fall
 		// together, and _intern skips the zeroed hole a cut row reads as. An interning
-		// program therefore keeps only what live bodies still address: printing the
-		// runtime-made symbol keeps the whole generic printer and with it the prologue,
-		// while the dead wrapper literals (the sequence keywords, the find-package
-		// alias alist) go, rows included -- the module was over 24 KB of data before.
+		// program therefore keeps only what live bodies still address: the program's own
+		// literal stays, while the dead wrapper literals (the sequence keywords, the
+		// find-package alias alist) go, rows included -- the module was over 24 KB of
+		// data before.
 		// The name is computed behind a defun so nothing folds: a folded
 		// string-upcase would drag the ~16 KB Unicode case-fold tables into a test
 		// that is about the intern blob's rows, and a folded subseq would replace the
@@ -1034,20 +1033,16 @@ class WasmTreeShakerTest {
 		byte[] interning = compile("(defun sh (x) x) (print (intern (subseq (sh \"FOOX\") 0 3)))", false,
 				OptimizeLevel.DEFAULT);
 		Module.parse(interning).assertWellFormed();
-		// The generic printer keeps its own data: the printer prologue strings plus
-		// the ~755-byte Schubfach float table.
-		assertThat(dataSectionSize(interning)).isLessThan(2048);
+		assertThat(dataSectionSize(interning)).isLessThan(512);
 		byte[] data = dataSectionPayload(interning);
-		// #<FUTURE> is the printer's arm for a type this program never constructs: the
-		// type-test fold retires the arm (.kb/wasm-ref-type-fold.md), and the literal
-		// only that arm addressed falls with it, like the wrapper literals.
-		for (String dead : new String[] { ":FROM-END", "\"ASDF\"", "keyword", "#<FUTURE>" }) {
-			assertThat(contains(data, dead)).as("dead wrapper literal %s survived the interning program", dead)
-				.isFalse();
+		// The rest are the printer's arms for what this program never hands it, a future,
+		// a character, a list: the type-test fold retires each arm
+		// (.kb/wasm-ref-type-fold.md), and the literal only that arm addressed falls with
+		// it, like the wrapper literals.
+		for (String dead : new String[] { ":FROM-END", "\"ASDF\"", "keyword", "#<FUTURE>", "Rubout", "NIL(" }) {
+			assertThat(contains(data, dead)).as("dead literal %s survived the interning program", dead).isFalse();
 		}
-		for (String live : new String[] { "\"FOOX\"", "Rubout", "NIL(" }) {
-			assertThat(contains(data, live)).as("the interning program lost %s", live).isTrue();
-		}
+		assertThat(contains(data, "\"FOOX\"")).as("the interning program lost its literal").isTrue();
 		assertThat(WasmTreeShaker.shake(interning)).isEqualTo(interning);
 	}
 
