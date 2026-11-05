@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.WrittenPlaces;
 
 /**
  * The top-level {@code defun}s a program can replace or retire while it runs. Both
@@ -247,7 +248,9 @@ public final class RedefinedDefuns {
 			if (LispNames.isQuote(op) || LispNames.FUNCTION.equals(op)) {
 				return namesFmakunbound(cons.cdr());
 			}
-			if (cons.isProperList() && isComputedWrite(op, cons.toList())) {
+			if (WrittenPlaces.of(op, cons).stream().anyMatch(RedefinedDefuns::isComputedPlace)
+					|| LispNames.FMAKUNBOUND.equals(op) && cons.isProperList() && cons.toList().size() > 1
+							&& literalName(cons.toList().get(1)) == null) {
 				return true;
 			}
 		}
@@ -274,23 +277,6 @@ public final class RedefinedDefuns {
 			node = cell.cdr();
 		}
 		return false;
-	}
-
-	private static boolean isComputedWrite(String op, List<LispVal> parts) {
-		return switch (op) {
-			case LispNames.SETF, LispNames.PSETF -> {
-				for (int i = 1; i + 1 < parts.size(); i += 2) {
-					if (isComputedPlace(parts.get(i))) {
-						yield true;
-					}
-				}
-				yield false;
-			}
-			case LispNames.ROTATEF, LispNames.SHIFTF ->
-				parts.stream().skip(1).anyMatch(RedefinedDefuns::isComputedPlace);
-			case LispNames.FMAKUNBOUND -> parts.size() > 1 && literalName(parts.get(1)) == null;
-			default -> false;
-		};
 	}
 
 	private static boolean isComputedPlace(LispVal place) {
@@ -322,18 +308,11 @@ public final class RedefinedDefuns {
 		if (!call.isProperList()) {
 			return;
 		}
+		for (LispVal place : WrittenPlaces.of(op, call)) {
+			addPlaceName(place, written);
+		}
 		List<LispVal> parts = call.toList();
 		switch (op) {
-			case LispNames.SETF, LispNames.PSETF -> {
-				for (int i = 1; i + 1 < parts.size(); i += 2) {
-					addPlaceName(parts.get(i), written);
-				}
-			}
-			case LispNames.ROTATEF, LispNames.SHIFTF -> {
-				for (LispVal place : parts.subList(1, parts.size())) {
-					addPlaceName(place, written);
-				}
-			}
 			case LispNames.FMAKUNBOUND -> addLiteralName(parts, retired);
 			case LispNames.COMPILE -> {
 				// Without a definition, compile installs nothing.

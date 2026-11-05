@@ -32420,7 +32420,7 @@ public final class LispMacroExpander {
 				if (LispNames.isQuote(member)) {
 					return false;
 				}
-				for (LispVal place : writtenPlaces(member, cons)) {
+				for (LispVal place : WrittenPlaces.of(member, cons)) {
 					if (isSymbolFunctionPlace(place)) {
 						return true;
 					}
@@ -32432,30 +32432,6 @@ public final class LispMacroExpander {
 			form = cons.cdr();
 		}
 		return false;
-	}
-
-	/**
-	 * The places a form of a place-assigning macro assigns, each of which lowers to a
-	 * {@code setf} of it: {@code setf} and {@code psetf} every other argument,
-	 * {@code rotatef} and {@code shiftf} all of them.
-	 * @param member the operator's package-stripped name
-	 * @param form the form
-	 * @return the places, empty for any other form
-	 */
-	private static List<LispVal> writtenPlaces(String member, LispCons form) {
-		boolean pairs = LispNames.SETF.equals(member) || LispNames.PSETF.equals(member);
-		if (!pairs && !LispNames.ROTATEF.equals(member) && !LispNames.SHIFTF.equals(member) || !form.isProperList()) {
-			return List.of();
-		}
-		List<LispVal> parts = form.toList();
-		if (!pairs) {
-			return parts.subList(1, parts.size());
-		}
-		List<LispVal> places = new java.util.ArrayList<>();
-		for (int i = 1; i + 1 < parts.size(); i += 2) {
-			places.add(parts.get(i));
-		}
-		return places;
 	}
 
 	/**
@@ -32481,7 +32457,7 @@ public final class LispMacroExpander {
 				if (LispNames.isQuote(member)) {
 					return false;
 				}
-				for (LispVal written : writtenPlaces(member, cons)) {
+				for (LispVal written : WrittenPlaces.of(member, cons)) {
 					if (isSymbolFunctionPlace(written) && written instanceof LispCons place
 							&& !(place.cdr() instanceof LispCons nameCell && isQuotedFunctionName(nameCell.car()))) {
 						return true;
@@ -32646,7 +32622,7 @@ public final class LispMacroExpander {
 				if (LispNames.isQuote(member)) {
 					return;
 				}
-				for (LispVal written : writtenPlaces(member, cons)) {
+				for (LispVal written : WrittenPlaces.of(member, cons)) {
 					if (isSymbolFunctionPlace(written) && written instanceof LispCons place && place.isProperList()
 							&& place.toList().size() > 1
 							&& quotedSymbol(place.toList().get(1)) instanceof LispSymbol nameSym) {

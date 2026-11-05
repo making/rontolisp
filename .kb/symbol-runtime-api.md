@@ -517,10 +517,10 @@ and a literal `symbol-function` / `fdefinition` with the old definition on JVM, 
   program holding `eval`, every function celled: Graal 271-299 -> 383-402 ms, C2 439-469 -> 479-486 ms,
   P1 963-989 -> 1128-1155 ms; class +0.2%, module +0.1%. An inline check at a self call instead of the
   entry gained nothing (Graal 370, C2 475): the read costs that, not the hop.
-  The ci-spec corpus as one program, every function celled, printed its 9,107 expected lines on all
-  four; classes 24.64 -> 25.09 MB (+1.8%), module 18.27 -> 18.53 MB (+1.4%). The premise that held
-  this back ("most of its functions in an alist each reference walks") is what the cell removes: the
-  functions stay where they are.
+  The ci-spec corpus as one program, every function celled, printed its 9,366 expected lines on all
+  four; at 9,107 lines classes 24.64 -> 25.09 MB (+1.8%), module 18.27 -> 18.53 MB (+1.4%). The premise
+  that held this back ("most of its functions in an alist each reference walks") is what the cell
+  removes: the functions stay where they are.
 - Pinned by ci-spec `a-defun-written-through-a-computed-name-answers-the-new-definition`, standalone
   `a-defun-written-through-a-name-held-as-a-value` (both agree with SBCL 2.2.9),
   `a-write-of-the-name-of-a-method-on-a-lowered-built-in-reaches-every-reference` (the interpreter's
@@ -531,6 +531,10 @@ and a literal `symbol-function` / `fdefinition` with the old definition on JVM, 
 as well as a symbol (`symbol-function` does not: SBCL signals a type-error). The writer is stored
 under `%setf-NAME` (`LispMacroExpander.setfFunctionName`), so the list maps onto that name.
 
+- **A standard accessor's `(setf F)` is not fbound**, on all four (2026-11-05: `#'(setf car)` is
+  `undefined-function`, `(fboundp '(setf gethash))` NIL; SBCL 2.2.9 answers T): the place lowers where
+  `setf` is. CLHS 5.1.2.9 leaves this implementation-dependent, so a portable program cannot ask.
+  **Re-evaluate when** a library takes one as a value.
 - **Interpreter**: at run time, any list (`LispEvaluator.functionName`); `fmakunbound` answers the
   list.
 - **Compile paths**: a QUOTED list only, rewritten in `FunctionDesignators.normalizeBuiltinDesignators`

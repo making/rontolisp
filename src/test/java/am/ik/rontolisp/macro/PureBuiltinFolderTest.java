@@ -160,17 +160,18 @@ class PureBuiltinFolderTest {
 	}
 
 	@Test
-	void aComputedFunctionBindingStandsTheWholePassDown() {
-		// (setf (symbol-function <computed>) ...) can install anything under any name,
-		// so no table entry can be assumed to still be the built-in.
-		List<LispVal> program = read("(setf (symbol-function name) #'f) (+ 1 2)");
-		assertThat(PureBuiltinFolder.foldProgram(program, false, LispMacroExpander.usesPrintControls(program)))
-			.isSameAs(program);
-		// A LITERAL name blocks only that name.
-		List<LispVal> named = PureBuiltinFolder.foldProgram(read("(setf (symbol-function 'max) #'f) (max 1 2) (+ 1 2)"),
+	void onlyAFunctionBindingOfALiteralNameBlocksThatName() {
+		// A LITERAL name blocks only that name, by each operator that assigns the place.
+		for (String write : List.of("(setf (symbol-function 'max) #'f)", "(psetf (fdefinition 'max) #'f)",
+				"(rotatef (fdefinition 'max) (fdefinition 'g))", "(shiftf (fdefinition 'max) #'f)")) {
+			List<LispVal> named = PureBuiltinFolder.foldProgram(read(write + " (max 1 2) (+ 1 2)"), false, false);
+			assertThat(named.get(1).print()).as(write).isEqualTo("(MAX 1 2)");
+			assertThat(named.get(2)).as(write).isEqualTo(new LispInteger(3));
+		}
+		// A computed one blocks nothing: the call lowers to the built-in in any case.
+		List<LispVal> computed = PureBuiltinFolder.foldProgram(read("(setf (symbol-function name) #'f) (max 1 2)"),
 				false, false);
-		assertThat(named.get(1).print()).isEqualTo("(MAX 1 2)");
-		assertThat(named.get(2)).isEqualTo(new LispInteger(3));
+		assertThat(computed.get(1)).isEqualTo(new LispInteger(2));
 	}
 
 	@Test

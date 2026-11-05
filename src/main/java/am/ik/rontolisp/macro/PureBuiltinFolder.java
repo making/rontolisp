@@ -128,12 +128,6 @@ public final class PureBuiltinFolder {
 			return program;
 		}
 		Set<String> blocked = shadowedOperators(program, usesPrintControls);
-		if (blocked == null) {
-			// The program installs a function binding through (setf (symbol-function
-			// ...)) with a computed name: no table entry can be assumed to still be the
-			// built-in.
-			return program;
-		}
 		List<LispVal> out = null;
 		for (int i = 0; i < program.size(); i++) {
 			LispVal folded = foldForm(program.get(i), blocked);
@@ -323,14 +317,12 @@ public final class PureBuiltinFolder {
 	 * <p>
 	 * Matched by both the exact spelling and the package-stripped member name, so a
 	 * library's {@code (defun cl-user::length ...)} blocks {@code length} as well.
-	 * @return the blocked names, or {@code null} when the whole pass must stand down
+	 * @return the blocked names
 	 */
-	private static @Nullable Set<String> shadowedOperators(List<LispVal> program, boolean usesPrintControls) {
+	private static Set<String> shadowedOperators(List<LispVal> program, boolean usesPrintControls) {
 		Set<String> blocked = new LinkedHashSet<>();
 		for (LispVal form : program) {
-			if (!collectShadowed(form, blocked)) {
-				return null;
-			}
+			collectShadowed(form, blocked);
 		}
 		// A program that mentions a printer-control variable can rebind it around any
 		// print, and NIL / T render as symbols -- (princ-to-string nil) is "nil" under a
@@ -346,13 +338,13 @@ public final class PureBuiltinFolder {
 		return blocked;
 	}
 
-	/** Walks a form recording definitions; false when the pass must stand down. */
-	private static boolean collectShadowed(LispVal form, Set<String> blocked) {
+	/** Walks a form recording definitions. */
+	private static void collectShadowed(LispVal form, Set<String> blocked) {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				switch (op.name()) {
 					case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> {
-						return true;
+						return;
 					}
 					case LispNames.DEFUN, LispNames.DEFMETHOD, LispNames.DEFGENERIC, LispNames.DEFMACRO,
 							LispNames.DEFINE_COMPILER_MACRO -> {
@@ -370,46 +362,33 @@ public final class PureBuiltinFolder {
 							}
 						}
 					}
-					case LispNames.SETF, LispNames.PSETF -> {
-						// (setf (symbol-function 'f) g) installs a function binding the
-						// compile path cannot see through. A literal name blocks that
-						// name;
-						// a computed one blocks the pass.
-						List<LispVal> parts = cons.isProperList() ? cons.toList() : List.of();
-						for (int i = 1; i + 1 < parts.size(); i += 2) {
-							if (!collectFunctionBindingPlace(parts.get(i), blocked)) {
-								return false;
-							}
-						}
-					}
 					default -> {
+						for (LispVal place : WrittenPlaces.of(LispSymbol.memberName(op.name()), cons)) {
+							blockLiteralFunctionBinding(place, blocked);
+						}
 					}
 				}
 			}
-			if (!collectShadowed(cons.car(), blocked)) {
-				return false;
-			}
+			collectShadowed(cons.car(), blocked);
 			form = cons.cdr();
 		}
-		return true;
 	}
 
 	/**
-	 * False when a {@code (setf (symbol-function ...))} place names a computed function.
+	 * A {@code (setf (symbol-function 'f) g)} place moves {@code f} to the function
+	 * namespace ({@code compiler.RedefinedDefuns}), which every call of it then reads, so
+	 * it blocks that name. A computed name blocks nothing: a call of a table entry lowers
+	 * to the built-in whatever the namespace holds ({@code .kb/symbol-runtime-api.md}),
+	 * and a write {@code eval} makes never could.
 	 */
-	private static boolean collectFunctionBindingPlace(LispVal place, Set<String> blocked) {
-		if (!(place instanceof LispCons cons) || !(cons.car() instanceof LispSymbol accessor)
-				|| !(LispNames.SYMBOL_FUNCTION.equals(accessor.name())
-						|| LispNames.FDEFINITION.equals(accessor.name()))) {
-			return true;
-		}
-		if (cons.cdr() instanceof LispCons argCell && argCell.car() instanceof LispCons quoted
+	private static void blockLiteralFunctionBinding(LispVal place, Set<String> blocked) {
+		if (place instanceof LispCons cons && cons.car() instanceof LispSymbol accessor
+				&& (LispNames.SYMBOL_FUNCTION.equals(accessor.name()) || LispNames.FDEFINITION.equals(accessor.name()))
+				&& cons.cdr() instanceof LispCons argCell && argCell.car() instanceof LispCons quoted
 				&& quoted.car() instanceof LispSymbol quoteOp && LispNames.QUOTE.equals(quoteOp.name())
 				&& quoted.cdr() instanceof LispCons datum && datum.car() instanceof LispSymbol named) {
 			block(named, blocked);
-			return true;
 		}
-		return false;
 	}
 
 	private static void block(LispSymbol name, Set<String> blocked) {
