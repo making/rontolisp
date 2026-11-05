@@ -479,10 +479,28 @@ dies with "No applicable method: CLOSE on INTEGER".
   format, ...) are un-dispatchable everywhere; (3) under `--component` with sockets spliced,
   `WasmSocketsRewrite` runs BEFORE this pass — the pass COMPOSES via
   `WasmSocketsRewrite.builtinDispatchAliases` (without it an instance reaching `%io-close` was
-  a wasm CAST-FAILURE trap); still open, the ASYNC read promotions bypass a user method;
-  (4) a runtime designator (`(funcall 'close x)`) does not dispatch on the compile paths;
-  (5) the forwarder drops the `&rest` tail, so with a `floor` method `(floor 7 2)` is `(7 0)`
-  on the compile paths and `(3 1)` on the interpreter (measured 2026-09-26).
+  a wasm CAST-FAILURE trap); still open, the ASYNC read promotions bypass a user method.
+- **A run-time name reaches the dispatcher** (2026-11-05, ci-spec
+  `a-method-on-a-lowered-built-in-answers-a-name-built-at-run-time`,
+  `a-method-on-a-lowered-built-in-answers-a-form-eval-runs`). The call-site rewrite cannot see
+  `(funcall (intern "CLOSE") x)` or `(eval '(close x))`, and no function of the name exists, or
+  only the function value's wrapper does, so each answered undefined or the built-in's
+  `type-error`. `ShadowedBuiltins.runTimeNames` gives both `_lookup` builders a row of the
+  generic's name answering the dispatcher, replacing the wrapper's row. The name stays out of
+  `functions`: the forwarder's call still has to lower, and its `#'write-line` still has to be
+  the wrapper. The row is gated by the generic's name, as every row is by its own
+  (`DesignatorSpellings`), and wasm's `anyDefunNameSpelled` reads those names too, since no defun
+  carries one. What else follows the row: `_eval`'s `list` and `+ - * /` arms step aside for a
+  methoded name (`JvmEvalRuntimeBuilder.evalBody`, `EvalHooks.armOffset`), as they answer without
+  asking the registry; a literal `(symbol-function 'length)` or `(fdefinition 'length)` is
+  `#'%LENGTH--dispatch` on a compile path (`CallSiteRenamer`), because the compilers resolve the
+  literal in `functions`; a dispatcher reports a wrong count and prints under the built-in's name
+  (`arityOperator`, `printedName`), so `(print #'close)` is `#<function CLOSE>` everywhere.
+  Left: after `(setf (symbol-function 'length) f)` a literal `#'length` or
+  `(symbol-function 'length)` still answers the dispatcher where `_lookup` answers `f`.
+- **A generic has one function object on the interpreter** (2026-11-05): `#'g`, `symbol-function`
+  and `fdefinition` answer the one late-bound wrapper per name (`LispEvaluator.functionValue`), so
+  `(eq #'g #'g)` is T as on the compile paths and SBCL; each reference used to make a new one.
 
 ## The instance-initialization protocol
 `initialize-instance`, `reinitialize-instance`, `shared-initialize` are CL symbols

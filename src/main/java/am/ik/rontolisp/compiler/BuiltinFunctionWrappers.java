@@ -592,12 +592,39 @@ public final class BuiltinFunctionWrappers {
 	/**
 	 * Every wrapped operator name -- by construction a built-in FUNCTION both expression
 	 * compilers lower in call position (each wrapper body uses its operator exactly
-	 * there). {@code ShadowedBuiltins} unions this with its own list of lowered-but-
-	 * unwrappable names to decide when a user {@code defmethod} shadows a built-in.
+	 * there). {@code ShadowedBuiltins} unions this with {@link #LOWERED_WITHOUT_WRAPPER}
+	 * to decide when a user {@code defmethod} shadows a built-in.
 	 * @return the wrapped operator names
 	 */
 	public static Set<String> names() {
 		return WRAPPER_NAMES;
+	}
+
+	/**
+	 * Compiler-lowered built-in FUNCTIONS with no catalog entry a {@code defmethod} can
+	 * shadow. Only names whose lowering accepts general (non-literal) arguments belong
+	 * here: the forwarder defun's body hands the generic's parameters straight to the
+	 * lowered call, so a literal-only lowering ({@code find-symbol},
+	 * {@code symbol-function}) or one that leans on a runtime injected by a gate that has
+	 * already run ({@code typep}/{@code subtypep} inside
+	 * {@code expandTopLevelDefinitions}) cannot be spelled as a fallback and keeps the
+	 * old shadowing behavior.
+	 */
+	static final Set<String> LOWERED_WITHOUT_WRAPPER = Set.of(LispNames.CLOSE, LispNames.LISTEN,
+			LispNames.OPEN_STREAM_P, LispNames.WRITE_LINE, LispNames.GET_OUTPUT_STREAM_STRING, LispNames.FORCE_OUTPUT,
+			LispNames.FINISH_OUTPUT, LispNames.CLEAR_OUTPUT, LispNames.ARRAYP, LispNames.ARRAY_DIMENSIONS,
+			LispNames.RATIONALP, LispNames.NUMERATOR, LispNames.DENOMINATOR, LispNames.RPLACA, LispNames.RPLACD,
+			LispNames.HASH_TABLE_TEST, LispNames.HASH_TABLE_SIZE, LispNames.HASH_TABLE_REHASH_SIZE,
+			LispNames.HASH_TABLE_REHASH_THRESHOLD);
+
+	/**
+	 * The name a function value of this name prints as: a dispatcher's is the built-in's,
+	 * as the interpreter's dispatcher, which keeps that name, prints.
+	 * @param functionName the compiled function's name
+	 * @return the built-in's name for a dispatcher, else {@code functionName}
+	 */
+	public static String printedName(String functionName) {
+		return ShadowedDispatchers.OPERATORS.getOrDefault(functionName, functionName);
 	}
 
 	/**
@@ -609,8 +636,8 @@ public final class BuiltinFunctionWrappers {
 	 * anything else. One rule for all four backends -- the interpreter asks it of a
 	 * lambda's name, the compiled backends of a callable's -- decided by the NAME,
 	 * because the interpreter's catalog lambda and the compilers' injected wrapper defun
-	 * are the same function under it. The compile paths' dispatcher of a wrapped built-in
-	 * a {@code defmethod} shadows ({@code ShadowedBuiltins},
+	 * are the same function under it. The compile paths' dispatcher of a built-in a
+	 * {@code defmethod} shadows ({@code ShadowedBuiltins},
 	 * {@link LispMacroExpander#shadowedDispatcherName}) reports as the built-in, as the
 	 * interpreter's dispatcher, which keeps the built-in's name, does.
 	 * @param functionName the callee's name, or {@code null} for an anonymous one
@@ -628,9 +655,9 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
-	 * {@link LispMacroExpander#shadowedDispatcherName} of every wrapped name -&gt; the
-	 * name, built on first use rather than in this class's initializer, which the
-	 * expander's may be running.
+	 * {@link LispMacroExpander#shadowedDispatcherName} of every wrapped name and every
+	 * {@link #LOWERED_WITHOUT_WRAPPER} -&gt; the name, built on first use rather than in
+	 * this class's initializer, which the expander's may be running.
 	 */
 	private static final class ShadowedDispatchers {
 
@@ -638,6 +665,9 @@ public final class BuiltinFunctionWrappers {
 		static {
 			Map<String, String> operators = new java.util.HashMap<>();
 			for (String name : WRAPPER_NAMES) {
+				operators.put(LispMacroExpander.shadowedDispatcherName(name), name);
+			}
+			for (String name : LOWERED_WITHOUT_WRAPPER) {
 				operators.put(LispMacroExpander.shadowedDispatcherName(name), name);
 			}
 			OPERATORS = Map.copyOf(operators);

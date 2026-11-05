@@ -85,4 +85,4 @@ Defining a method on the name of a built-in function (`close`, `open-stream-p`, 
 (list (length (make-instance 'counter)) (length "abcd")) ; => (3 4)
 ```
 
-Lite subset: this works on every backend — the compilation paths route calls to such a name through the generated dispatcher, whose fall-through is the original built-in. Only names backed by a native built-in function participate; a name implemented as an expansion (`mapcar`, `sort`, `format`, ...) cannot take methods, and a plain `defun` on a built-in name is still ignored on the compilation paths.
+Lite subset: this works on every backend — the compilation paths route calls to such a name through the generated dispatcher, whose fall-through is the original built-in, and a call by a name computed at run time or a form [`eval`](../functions/eval.md) runs reaches it too. Only names backed by a native built-in function participate; a name implemented as an expansion (`mapcar`, `sort`, `format`, ...) cannot take methods, and a plain `defun` on a built-in name is still ignored on the compilation paths.

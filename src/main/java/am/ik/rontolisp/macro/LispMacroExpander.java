@@ -6080,6 +6080,37 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * {@link LispNames#EVAL_SETF_FORM}: what an eval'd assignment of a place no table row
+	 * holds evaluates, the place's name tested over the program's {@code (setf name)}
+	 * functions. The call is the compile-time one, the new value first.
+	 * @param definedNames every name the program defines
+	 * @return the definition, wrapper-shaped, or null when the program defines no such
+	 * function
+	 */
+	public static @Nullable LispVal evalSetfRuntime(java.util.Collection<String> definedNames) {
+		List<String> places = new ArrayList<>();
+		for (String name : new java.util.TreeSet<>(definedNames)) {
+			if (name.startsWith(ClosRegistry.SETF_FUNCTION_PREFIX)) {
+				places.add(name.substring(ClosRegistry.SETF_FUNCTION_PREFIX.length()));
+			}
+		}
+		if (places.isEmpty()) {
+			return null;
+		}
+		LispSymbol op = new LispSymbol("%EVAL-OP");
+		LispSymbol args = new LispSymbol("%EVAL-ARGS");
+		LispSymbol value = new LispSymbol("%EVAL-VALUE");
+		return runtimeDefinition(LispNames.EVAL_SETF_FORM, List.of(op, args, value), nameChain(op, places, (place) -> {
+			LispVal function = listToCons(
+					List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(setfFunctionName(place.name()))));
+			LispVal quoteSymbol = quoteOf(LispNames.QUOTE);
+			return callOf(LispNames.CONS, quoteOf(LispNames.FUNCALL),
+					callOf(LispNames.CONS, callOf(LispNames.LIST, quoteSymbol, function),
+							callOf(LispNames.CONS, callOf(LispNames.LIST, quoteSymbol, value), args)));
+		}, LispNil.INSTANCE));
+	}
+
+	/**
 	 * A shared dispatch of a runtime name over a static name set, cut into segments of
 	 * {@link #NAME_DISPATCH_SEGMENT_ARMS} arms: segment {@code k} is the defun
 	 * {@code base} ({@code k} = 0) or {@code base-k} over {@code params}, whose first

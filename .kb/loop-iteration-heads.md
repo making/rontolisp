@@ -1,7 +1,10 @@
 # `loop` iteration heads: what is assigned BEFORE vs AFTER the termination test
 
 Shared expansion `LispMacroExpander.LoopExpander` (interpreter + all three compile dispatchers),
-so everything here moves on all four backends at once. `head-k` =
+so everything here moves on all four backends at once. A loop a compiled `eval` runs is the same
+parser ported to Lisp (`%eval-loop-*` in `macro/eval-macros.lisp`, `.kb/eval-runtime.md`): a change to
+the clause order or a clause moves there too, and ci-spec `eval-runs-the-keyword-clauses-of-loop`
+pins it. `head-k` =
 `(if (not (or <clause k's end tests>)) (progn <clause k's assignments> t) nil)`, ANDed in SOURCE
 order inside the `while`; a terminating clause short-circuits, so no later clause's assignments
 run. Cursors step at the END of the body; heads only test them.

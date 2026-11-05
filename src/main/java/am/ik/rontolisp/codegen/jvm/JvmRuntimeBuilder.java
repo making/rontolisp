@@ -793,13 +793,14 @@ final class JvmRuntimeBuilder {
 	 * @param operators the program's arity-operator registry: every dispatchable callee
 	 * registers here -- which covers every spread case, built after this -- and
 	 * {@code _arityMsg} is built from it, frozen
+	 * @param consShape what tells a cons from the other {@code Object[]}-shaped values
 	 * @return the helper methods
 	 */
 	static List<JvmLispCompiler.DispatchMethod> buildArityMethods(Map<String, JvmLispCompiler.FunctionInfo> functions,
 			List<JvmLispCompiler.LambdaInfo> lambdaDecls, ConstantPool cp, ClassEntry thisClass,
 			ClassEntry objectArrayClass, ClassEntry stringClass,
 			@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean withErr, boolean withChk,
-			JvmArityOperators operators) {
+			JvmArityOperators operators, JvmOperandTypeRuntime.ConsShape consShape) {
 		SortedMap<Integer, Integer> shapes = new java.util.TreeMap<>();
 		for (Map.Entry<String, JvmLispCompiler.FunctionInfo> entry : functions.entrySet()) {
 			JvmLispCompiler.FunctionInfo fi = entry.getValue();
@@ -839,7 +840,7 @@ final class JvmRuntimeBuilder {
 		}
 		if (withChk) {
 			methods.add(new JvmLispCompiler.DispatchMethod(cp.utf8Entry(ARITY_CHK_NAME), cp.utf8Entry(ARITY_CHK_DESC),
-					buildArityChkBody(cp, objectArrayClass, runtimeEx, exCtor, msgRef, !operatorNames.isEmpty())));
+					buildArityChkBody(cp, consShape, runtimeEx, exCtor, msgRef, !operatorNames.isEmpty())));
 		}
 		return methods;
 	}
@@ -866,10 +867,11 @@ final class JvmRuntimeBuilder {
 	 * interpreter's spread does. The aligned literal {@code apply} passes its rest tail
 	 * here with the shape {@code (0, variadic)} for that check alone.
 	 */
-	private static MethodCode buildArityChkBody(ConstantPool cp, ClassEntry objectArrayClass, ClassEntry runtimeEx,
-			MethodRefEntry exCtor, MethodRefEntry msgRef, boolean named) {
-		// Params: 0 = argList, 1 = shape. Locals: 2 = got, 3 = cursor, 4 = required.
-		int argList = 0, shape = 1, got = 2, cursor = 3, required = 4;
+	private static MethodCode buildArityChkBody(ConstantPool cp, JvmOperandTypeRuntime.ConsShape consShape,
+			ClassEntry runtimeEx, MethodRefEntry exCtor, MethodRefEntry msgRef, boolean named) {
+		// Params: 0 = argList, 1 = shape. Locals: 2 = got, 3 = cursor, 4 = required,
+		// 5 = the cursor as a cons, 6 = its car.
+		int argList = 0, shape = 1, got = 2, cursor = 3, required = 4, cell = 5, head = 6;
 		MethodCode a = new MethodCode();
 		MethodCode.Label loop = a.newLabel();
 		MethodCode.Label counted = a.newLabel();
@@ -881,12 +883,9 @@ final class JvmRuntimeBuilder {
 		a.aload(argList);
 		a.astore(cursor);
 		a.labelBinding(loop);
-		a.aload(cursor);
-		a.instanceOf(objectArrayClass);
-		a.ifeq(counted);
+		consShape.emitTest(a, cursor, cell, head, counted);
 		a.iinc(got, 1);
-		a.aload(cursor);
-		a.checkcast(objectArrayClass);
+		a.aload(cell);
 		a.loadConstant(1);
 		a.aaload();
 		a.astore(cursor);
@@ -2879,7 +2878,7 @@ final class JvmRuntimeBuilder {
 	 * ({@link JvmOperandTypeRuntime}).
 	 */
 	static MethodCode buildAppendBody(ConstantPool cp, ClassEntry thisClass, ClassEntry objectArrayClass,
-			ClassEntry objectClass) {
+			ClassEntry objectClass, JvmOperandTypeRuntime.ConsShape consShape) {
 		MethodCode code = new MethodCode();
 		// cursor = a; head = null; tail = null
 		code.aload(0);
@@ -2889,23 +2888,19 @@ final class JvmRuntimeBuilder {
 		code.aconst_null();
 		code.astore(3);
 		MethodCode.Label loop = code.newBoundLabel();
-		// if (cursor == null) goto end; if (!(cursor instanceof Object[])) goto notList
+		// if (cursor == null) goto end; if cursor is no cons goto notList (locals 6, 7 =
+		// it as a cons, its car)
 		code.aload(4);
 		MethodCode.Label end = code.newLabel();
 		code.ifnull(end);
-		code.aload(4);
-		code.instanceOf(objectArrayClass);
 		MethodCode.Label notList = code.newLabel();
-		code.ifeq(notList);
-		// fresh = new Object[]{((Object[]) cursor)[0], null}
+		consShape.emitTest(code, 4, 6, 7, notList);
+		// fresh = new Object[]{car, null}
 		code.iconst_2();
 		code.anewarray(objectClass);
 		code.dup();
 		code.iconst_0();
-		code.aload(4);
-		code.checkcast(objectArrayClass);
-		code.iconst_0();
-		code.aaload();
+		code.aload(7);
 		code.aastore();
 		code.astore(5);
 		// if (head == null) head = fresh; else ((Object[]) tail)[1] = fresh

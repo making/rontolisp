@@ -100,9 +100,39 @@ arm per macro** (2026-11-05, ci-spec `eval-expands-the-built-in-macros`, agrees 
   or a tail form publishes for itself. Only where the program runs forms through eval.
 - `setq` and `setf` are one arm: `(setf a 1 b 2)` assigned the first pair and dropped the rest. `let` takes `(x)` and a bare
   `x`, which threw and trapped. A `throw` and a `return-from` carry their value's values as a list (`%eval-throw-values`).
-- **Left out:** `loop`'s keyword clauses (a row refuses them), `macrolet`, `symbol-macrolet`, `with-slots`, `restart-case`
-  (`.todo/i63`) and the definers; the doc page lists them. A form's `close` in a program with a method on it misses the registry
-  (`.todo/i64`), which `%eval-close` works around for the stream macros.
+- **`loop`'s keyword clauses** (2026-11-05, ci-spec `eval-runs-the-keyword-clauses-of-loop`, agrees with SBCL 2.2.9 where
+  the compiled loop does) are `LoopExpander` ported to the file's `%eval-loop-*`: same parse, same clause order and
+  divergences (`.kb/loop-iteration-heads.md`), the refusals its text, so a change to one is a change to both. Hidden variables
+  are places of one list, `(nth k %eval-loop)`: `make-symbol` collapses same-named symbols on the JVM (`_envLookup` compares
+  strings), and a fixed name per clause has no bound. `across` reads with `elt`, so a loop does not open the `aref` gate. A
+  package walk stays out of every other loop: `%eval-soft-loop-symbols` names its helpers as data, and `EvalReferences.loopWords`
+  spells the row for a word (`EvalMacroRows.loopWordRow`) among a quoted loop's clauses or quoted alone, as `(list 'loop ...)`
+  spells it.
+- **Macros a form binds** (2026-11-05, ci-spec `eval-binds-macros-in-its-environment`, agrees with SBCL 2.2.9). Three arms on
+  each of `_eval` and `_store`, present only with their row (`EvalHooks`, `carries`), none costing a program without one:
+  - `macrolet` binds the alist `%eval-macros` beside `%eval-functions`; the operator path asks it first, applies the expander to
+    the whole form and evaluates the answer in the form's environment. The expander is a closure over `destructuring-bind`,
+    the one place a run-time lambda list has keywords. `flet`/`labels` take a name they bind out of the alist, which is what
+    makes the first-asked order right. Lite: `&environment` is nil.
+  - `symbol-macrolet` is a `let` whose values are `(%eval-symbol-macro . expansion)`, so shadowing is the alist's. A read of a
+    lexical binding tests for the mark and evaluates the expansion where the read stands (`(symbol-macrolet ((a x)) (let ((x 3))
+    a))` is 3); `_store` hands the expansion to itself, a place like any other.
+  - `define-symbol-macro` keeps the alist `%eval-symbol-macros%`, consulted where no variable answers. **Trap: read it through the
+    mirror, as both arms do.** A compiled read of the global from `_store`'s path signals: every global's first mirrored store
+    comes there, before this defvar ran (`(eval (read-from-string "1"))` died on `%EVAL-SYMBOL-MACROS% is unbound`).
+    A program's own top-level definition stays compile-time (`.kb/symbol-macrolet.md`): to carry it, the macro pass would have to
+    know the program evaluates forms, and a library's `eval` would force the runtime into every `cffi:defcvar` program.
+  - `with-slots`/`with-accessors` evaluate the instance into `%eval-instance` and expand a second row, `%eval-instance-macros`,
+    which reads it from `env` and quotes the VALUE into each variable's form: a variable is expanded at its reference, where a
+    nested form's `%eval-instance` would answer.
+- **`(setf name)` functions:** `%eval-setf-form` (`LispMacroExpander.evalSetfRuntime`) is generated like `%eval-compiled-special-p`
+  over the final `%setf-` definitions, and `_store` asks it after the place rows, so `with-accessors` and any eval'd
+  `(setf (accessor x) v)` of a `defclass` accessor or a `(defun (setf f) ...)` assign. A structure accessor has no such function
+  and still assigns nothing.
+- **Restarts** (2026-11-05, ci-spec `eval-establishes-restarts`, agrees with SBCL 2.2.9 but for printing a restart object:
+  on every backend it prints the record, SBCL its report). `%eval-restart-case` pushes the records the compile-time
+  expansion writes, names computed, through an empty `restart-bind`: its save and restore, and what opens restart mode.
+- **Left out:** `pprint-logical-block` and the definers; the doc page lists them.
 - **The interpreter's `eval` answers what `_eval` does** (2026-11-05, `LispEvaluator.evalFunctionForm`; SBCL 2.2.9's answers). The
   form's tail is a tail (`spillEscapingMvProducers`): `(multiple-value-list (eval '(gethash 1 h)))` was `(5)`. And an `eval-when`
   met while it runs, which is at no top level, runs only for `:execute` or `eval` (`evalWhenExecutes`, `%eval-row-eval-when`): the

@@ -330,7 +330,11 @@ binding AND any user macro of the same name are dropped (`Environment.undefineFu
 function namespace (`_fenv` on the JVM, `GLOBAL_FENV` on WASM): a binding whose value cell is
 nil. That namespace is probed BEFORE the compiled-function registry, so it shadows it, and
 `fboundp` had to learn the same rule (a binding decides the answer on its own instead of merely
-existing).
+existing). A built-in or a library function is retired too: the interpreter keeps the names
+(`LispEvaluator.retiredFunctions`), since dropping `car`'s binding left `fboundp` at T through the
+catalog and `(car x)` calling its catalog wrapper, whose body resolved the wrapper again, forever
+(2026-11-05, ci-spec `a-method-on-a-lowered-built-in-answers-a-form-eval-runs`). SBCL refuses such a
+`fmakunbound` by package lock. A direct call on a compile path still lowers (below).
 
 **`(fboundp 'x)` stops being a bare constant when the program calls `fmakunbound`**: the fold is
 emitted BEHIND the tombstone probe (`Ctx.usesFmakunbound`;

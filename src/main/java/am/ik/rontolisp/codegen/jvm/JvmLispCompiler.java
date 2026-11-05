@@ -2394,6 +2394,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			inject(LispMacroExpander.compiledSpecialRuntime(specialVars), defuns, injectedForms, specialVars);
 			callOnlyRuntimes.add(defuns.getLast().name);
 		}
+		LispVal evalSetfRuntime = usesEval ? LispMacroExpander.evalSetfRuntime(userDefinedNames) : null;
+		if (evalSetfRuntime != null) {
+			inject(evalSetfRuntime, defuns, injectedForms, specialVars);
+		}
 		Map<String, FieldRefEntry> globalFields = new HashMap<>();
 		List<Utf8Entry> globalFieldNameUtfs = new ArrayList<>();
 		Utf8Entry globalFieldDescUtf = cp.utf8Entry("Ljava/lang/Object;");
@@ -3790,8 +3794,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The registry's rows are the names a runtime designator can carry; the
 		// dispatchers take those plus every funcId materialized as a value. Computed
 		// together, so a row always has its case.
-		Set<Integer> registryFuncIds = registryFuncIds(functions, valueFuncIds, spelledLiterals, needsLookup,
-				nameResolvable, symbolBuilders, callOnlyRuntimes);
+		Map<String, FunctionInfo> runTimeDispatchers = ShadowedBuiltins.runTimeNames(closRegistry, functions::get);
+		Set<Integer> registryFuncIds = registryFuncIds(functions, runTimeDispatchers, valueFuncIds, spelledLiterals,
+				needsLookup, nameResolvable, symbolBuilders, callOnlyRuntimes);
 		if (linkedClass) {
 			// Every function a later fragment links against answers by name: the run-time
 			// half routes a name another class resolves to the id of its row
@@ -3917,7 +3922,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				applyEntryCode = JvmEvalRuntimeBuilder.buildApplyEntry(ec);
 			}
 			lookupSegments = JvmEvalRuntimeBuilder.buildLookupSegments(ec, thisClass, registryFuncIds,
-					this.dynamic || nameResolvable || symbolBuilders, spelledLiterals,
+					runTimeDispatchers, this.dynamic || nameResolvable || symbolBuilders, spelledLiterals,
 					linkedClass ? cp.methodRef(linked != null ? cp.classEntry(linked.host()) : thisClass,
 							JvmLinkage.FOREIGN_LOOKUP, JvmLinkage.FOREIGN_LOOKUP_DESC) : null);
 			for (int g = 1; g < lookupSegments.size(); g++) {
@@ -3977,7 +3982,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			valueTailCopies.clear();
 			if (reportsMiss || reportsCount) {
 				built.addAll(JvmRuntimeBuilder.buildArityMethods(functions, lambdaDecls, cp, thisClass,
-						objectArrayClass, stringClass, funcIds, reportsMiss, reportsCount, arityOperators));
+						objectArrayClass, stringClass, funcIds, reportsMiss, reportsCount, arityOperators, consShape));
 			}
 			// What applying a non-function raises, shared by every dispatcher and by
 			// _apply (the eval runtime, which the spread dispatcher comes with).
@@ -4255,7 +4260,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		TreeMap<Integer, StringEntry> funNameEntries = new TreeMap<>();
 		for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
 			if (dispatchableFuncIds.contains(entry.getValue().funcId())) {
-				funNameEntries.put(entry.getValue().funcId(), cp.stringEntry(entry.getKey()));
+				funNameEntries.put(entry.getValue().funcId(),
+						cp.stringEntry(BuiltinFunctionWrappers.printedName(entry.getKey())));
 			}
 		}
 		Utf8Entry funNameName = funNameEntries.isEmpty() ? null : cp.utf8Entry(JvmRuntimeBuilder.FUN_NAME_NAME);
@@ -4365,7 +4371,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodCode ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
 				dotStr, ratioArrayClass, renderGuard, quoteAbbrev);
-		MethodCode appendCode = JvmRuntimeBuilder.buildAppendBody(cp, thisClass, objectArrayClass, objectClass);
+		MethodCode appendCode = JvmRuntimeBuilder.buildAppendBody(cp, thisClass, objectArrayClass, objectClass,
+				consShape);
 		StringEntry quoteStr = cp.stringEntry("\"");
 		MethodCode readLineCode = JvmRuntimeBuilder.buildReadLineBody(bufferedReaderClass, inputStreamReaderClass,
 				brInit, lfLine, isrInit, systemIn, stdinReaderField, quoteStr, stringConcat);
@@ -4597,7 +4604,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// keeping main within the JVM's 64 KB per-method limit.
 		final JvmLengthRuntimeBuilder.LengthMethod lengthMethodBody = JvmLengthRuntimeBuilder.build(cp,
 				objectArrayClass, stringClass, longValueOf, thisClass,
-				javaSites != null ? javaSites.direct().lispArray() : null);
+				javaSites != null ? javaSites.direct().lispArray() : null, consShape);
 
 		// nthcdr runtime helper. Emitted unconditionally for the same reason _length is:
 		// nthcdr is generated internally by a long tail of expanders (nth, elt, loop's
@@ -6573,6 +6580,8 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * (compile with {@code --dynamic}, which turns this gate off, to keep every function
 	 * dispatchable).
 	 * @param functions the program's functions by name
+	 * @param runTimeDispatchers {@link ShadowedBuiltins#runTimeNames}: a name it holds
+	 * arms its dispatcher, not a function of its own
 	 * @param valueFuncIds the funcIds Pass 2 materialized as function values
 	 * @param spelledLiterals the literal spellings Pass 2 emitted as runtime values
 	 * @param registryLive whether a real {@code _lookup} registry is emitted at all
@@ -6585,15 +6594,15 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * lowered onto them -- never a designator's target, however names resolve
 	 * @return the funcIds that get a registry row (and a dispatcher case)
 	 */
-	private Set<Integer> registryFuncIds(Map<String, FunctionInfo> functions, Set<Integer> valueFuncIds,
-			Set<String> spelledLiterals, boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders,
-			Set<String> callOnly) {
+	private Set<Integer> registryFuncIds(Map<String, FunctionInfo> functions,
+			Map<String, FunctionInfo> runTimeDispatchers, Set<Integer> valueFuncIds, Set<String> spelledLiterals,
+			boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders, Set<String> callOnly) {
 		if (this.dynamic || anyNameResolvable) {
 			// Late binding, or an operator that can produce a name this compile never
 			// sees spelled: any name can be resolved at run time.
 			Set<Integer> all = new HashSet<>(valueFuncIds);
 			for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
-				if (!callOnly.contains(entry.getKey())) {
+				if (!callOnly.contains(entry.getKey()) && !runTimeDispatchers.containsKey(entry.getKey())) {
 					all.add(entry.getValue().funcId());
 				}
 			}
@@ -6602,8 +6611,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<Integer> rows = new HashSet<>();
 		boolean setfNamesBuilt = functions.containsKey(LispNames.FUNCTION_NAME_INTERNAL);
 		if (registryLive) {
+			for (Map.Entry<String, FunctionInfo> row : runTimeDispatchers.entrySet()) {
+				if (DesignatorSpellings.anySpelled(row.getKey(), spelledLiterals, symbolBuilders, setfNamesBuilt)) {
+					rows.add(row.getValue().funcId());
+				}
+			}
 			for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
-				if (callOnly.contains(entry.getKey())) {
+				if (callOnly.contains(entry.getKey()) || runTimeDispatchers.containsKey(entry.getKey())) {
 					continue;
 				}
 				// Every spelling a runtime designator can carry for the name --

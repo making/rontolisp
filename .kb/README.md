@@ -39,7 +39,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [multiple-values.md](multiple-values.md) -- `values`/`multiple-value-bind`/`-list`/`-call`/`nth-value` as a syntactic lowering
 - [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when`, runtime type checks
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
-- [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output; a value that is no form, an unbound variable, an undefined function; the built-in macros (`eval-macros.lisp`); what a form can reach (`EvalReferences`)
+- [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output; a value that is no form, an unbound variable, an undefined function; the built-in macros (`eval-macros.lisp`), `loop`'s clauses ported to it, the macros a form binds, restarts, `(setf name)` places; what a form can reach (`EvalReferences`)
 - [interpreter-expansion-memo.md](interpreter-expansion-memo.md) -- the interpreter expands a built-in macro once per call site; which arms must re-expand
 
 ## Macros, reader, printer
