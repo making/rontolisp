@@ -279,8 +279,12 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
   direct supers (first name wins).
 
 ## Where each path hooks in
-- **Interpreter**: `evalDefclass` (expands + evals defuns, then REGENERATES every dispatcher
-  with a class-specialized method), `evalDefstruct` (likewise, `GenericInfo.hasStructMethod`),
+- **Interpreter**: `evalDefclass` (expands + evals defuns, then REGENERATES the dispatchers the
+  class changes: every one with a class-specialized method on a redefinition, for a class never
+  defined before only those `GenericInfo.dispatchesOverNewClass` reaches, a class specializer among
+  its ancestors or a `standard-object`/`cons`/`list`/`sequence` one that enumerates instances;
+  measured on `(ql:quickload :clim)`, over 10 minutes before and under 3 after, 2026-11-05),
+  `evalDefstruct` (likewise, `GenericInfo.hasStructMethod`),
   `evalDefgeneric`, `evalDefmethod`. A `#'generic` captured BEFORE a later defmethod is NOT
   stale: `evalFunction` answers a LATE-BOUND wrapper for any name `findGeneric` knows.
 - **Compilers**: `expandTopLevelDefinitions(program, structAccessors, closRegistry)` sits at
@@ -611,7 +615,9 @@ stored, the instance is the value.
 - `expandChangeClass`: capture the OLD tag -> `(%obj-become obj '%class-T)` -> a `cond` on the
   captured tag, one arm per possible source (the target's chain + every non-seeded class)
   whose by-name mapping is not the identity: moved values are read from their old index
-  (`let`) before any store, missing slots get the target's initform (unbound without one) ->
+  (`let`) before any store, missing slots get the target's initform (unbound without one), NOT
+  when an initarg supplies the slot (`changeClassInitformFill`'s `supplied`: Drei's narrowed marks
+  have `:initform (error ...)`, ci-spec `clos-computed-change-class`) ->
   the initarg stores. **The tag is captured BEFORE the swap.** Arms are sources x targets, so
   the computed path's dispatch is quadratic in user classes (fine for change-class programs
   measured so far; a runtime layout-driven remap would make it linear).
@@ -724,8 +730,9 @@ what the program signals without the generic, so an uncovered read is unchanged.
   inside the body still resolves. **Not cosmetic**: `with-slots` BINDS, never reads, so a body
   that only ASSIGNS an initform-less slot must not signal on entry (fast-io's
   `(with-slots (buffer) self (setf buffer ...))`); a read the body REALLY performs still
-  signals. **`with-accessors`' fallback is NOT guarded** — an accessor is a generic with no
-  boundness twin, and wrapping it would force EH mode on WASM.
+  signals. **`with-accessors` has no such binding** (2026-11-05): an accessor is a generic with no
+  boundness twin, its unguarded read on entry refused a body only writing an unbound slot (Drei's
+  views), and with the macros of the body expanded first nothing is left for it to resolve.
 - **The instance temp is named PER FORM, so a NESTED `with-slots`/`with-accessors` cannot
   capture the enclosing one's** (`freshObjVar`). With the old fixed `__with_slots_obj` name an
   inner form rebound it and every outer read inside resolved against the INNER instance,
@@ -757,7 +764,8 @@ what the program signals without the generic, so an uncovered read is unchanged.
 ## `define-method-combination`
 Since 2026-11-05 on all four backends (`macro/MethodCombinations`), for McCLIM's `values-max-min`;
 in the cached Quicklisp systems arnesi's `wrapping-standard` and `cc-standard` and serapeum's
-`standard/context` are the other long forms. No run-time part: what the body computes becomes the
+`standard/context` are the other long forms (`(ql:quickload :arnesi)` loads and `wrapping-standard`
+combines on the interpreter). No run-time part: what the body computes becomes the
 dispatcher's code.
 - **An evaluator runs the body, once per dispatcher branch.** `expanderLambda` makes the form a lambda
   of the generic's name, the `:method-combination` arguments, `(method . qualifiers)` per applicable
@@ -1394,7 +1402,8 @@ cannot name it. Since 2026-10-31 such a class works on all four backends:
 ### The slot-access protocol (contextl's special slots)
 AMOP 5.5, since 2026-11-01 on all four backends: with a method on
 `closer-mop:slot-value-using-class`, its `setf`, `slot-boundp-using-class` or
-`slot-makunbound-using-class` in the program (`SlotProtocol.isProtocolGenericName`: the
+`slot-makunbound-using-class` in the program, or a call of one (Drei's `circle-subst`, ci-spec
+`slot-access-generics-called-with-no-method`; `SlotProtocol.isProtocolGenericName`: the
 closer-mop symbol, which contextl's unqualified names resolve to since the three are
 closer-mop externals), `slot-value` (a computed name too), its `setf`, `slot-boundp`,
 `slot-makunbound` and the accessors of an instance of a class defined with a `:metaclass` call
@@ -1405,11 +1414,11 @@ the four generics with the class metaobject, the instance and the effective slot
   class-allocated slot's cell included), an unbound read calling `slot-unbound`; NEVER through
   `slot-value`, whose expansion would route back. `%slot-protocol-instance-p`: `(class-of
   (class-of x))` is not `standard-class`. The compile paths prepend it beside `MopProtocol`
-  (gate: a `:metaclass` defclass AND a top-level defmethod/defgeneric on a protocol name),
-  `ClosRegistry.enableSlotProtocol()` before the walk, and the runtime-name dispatch gates
-  (`needsRuntimeSlotNameDispatch`/`needsRuntimeSlotSetDispatch`) answer true; the interpreter
-  loads it at the first such `defmethod` (`ensureSlotProtocolLoaded`). Every other program is
-  byte-identical.
+  (gate `namesSlotProtocolGeneric`: the program names a protocol generic, which also brings the
+  metaclass runtime), `ClosRegistry.enableSlotProtocol()` before the walk, and the runtime-name
+  dispatch gates (`needsRuntimeSlotNameDispatch`/`needsRuntimeSlotSetDispatch`) answer true; the
+  interpreter loads it at the first such `defmethod`, or the first call through a loading stub
+  (`ensureSlotProtocolLoaded`, `SlotProtocol.ENTRY_NAMES`). Every other program is byte-identical.
 - **Routing** (`slotProtocolRoute`): `(let ((o obj) [(n name)] [(v value)]) (if
   (%slot-protocol-instance-p o) (%slot-protocol-value o n) <the static expansion over o>))` in
   `expandSlotValue`, the `expandSetf` `slot-value` place (its static half is
@@ -1449,7 +1458,8 @@ the four generics with the class metaobject, the instance and the effective slot
 ### The generic-function protocol (method metaobjects at run time)
 Since 2026-11-01 on all four backends (`macro/generic-functions.lisp`, `GenericFunctions`):
 `ensure-generic-function`, `add-method`/`remove-method` (generics, so contextl's `:after`
-methods merge), `find-method`, `method-qualifiers`, closer-mop's `ensure-method`, the
+methods merge), `find-method`, `method-qualifiers`, `compute-applicable-methods`, closer-mop's
+`ensure-method`, the
 `generic-function-*`/`method-*` readers, `intern-eql-specializer`/`eql-specializer-object`.
 - **The decision** (h89 item 1, measured 2026-11-01): first-class generic function and method
   METAOBJECTS with a run-time method table the existing dispatchers consult, NOT a narrow
@@ -1467,8 +1477,9 @@ methods merge), `find-method`, `method-qualifiers`, closer-mop's `ensure-method`
   `enableGfProtocol()` seeds the method metaobject families with constructors; the interpreter
   binds a loading stub per operator (`ENTRY_NAMES`, unbound again before the runtime loads, or
   `add-method`'s dispatcher would stash a stub as its built-in default and recurse) and loads at
-  a `defgeneric` naming metaobject classes or a method on `add-method`/`remove-method`. The
-  prelude's signalling `remove-method` is gone. Every other program compiles as before.
+  a `defgeneric` naming metaobject classes or a method on `add-method`/`remove-method`/
+  `compute-applicable-methods`. The prelude's signalling `remove-method` is gone. Every other
+  program compiles as before.
 - **A generic function metaobject** is a funcallable instance (`generic-function` descends from
   `funcallable-standard-object`) made on first request and memoized by name (`%gf-metaobjects%`,
   keyed by the dispatcher's symbol, `%setf-` for a setf name); its `%STATIC` slot holds the
@@ -1511,6 +1522,20 @@ methods merge), `find-method`, `method-qualifiers`, closer-mop's `ensure-method`
   variables are gensyms and `%gf-call-next` goes in as a function OBJECT: the definition spells
   no symbol of this runtime, which a precompiled definition would read in the program's package
   ("Precompiled definitions").
+- **`find-method`/`remove-method` take the generic's function** (`%gf-designated`): the metaobject
+  whose `%STATIC` it is, nil while it has none, so no method was added at run time. Drei's
+  `lisp-syntax-swine.lisp` finds and removes a method through `#'name` before redefining it.
+- **`compute-applicable-methods`** (2026-11-05): the default method runs the metaobject's methods
+  and `%gf-static-methods` through `%gf-runtime-entry` and sorts them as `%dynamic-dispatch` does,
+  newest first between equals as SBCL has them. `%gf-static-methods` is what only a dispatcher knows
+  (`LispMacroExpander.staticMethodsForm`): `(order method...)`, evaluated per call by a builtin on
+  the interpreter, an `(eq gf #'g)` dispatch generated on the compile paths, with arms only in a
+  program naming `compute-applicable-methods` (they keep every generic alive). A generic naming its
+  metaobject classes answers nil there: its metaobject lists its methods already. One metaobject per
+  method's function (`%gf-static-method-objects%`). No dispatcher consults it, so a method on it
+  changes only what its caller sees (McCLIM's `:around`, "Out of scope"). Consumers: Drei's
+  `print-object` of a lambda list, coalton's `derive-methods`, `access` (over a metaobject; its
+  function arm below). A function that is no generic answers nil where SBCL signals.
 - **`:argument-precedence-order`** (`GenericInfo.precedenceIndexes`): a generic's methods are
   ordered by their specializers compared in that order, by the static dispatchers
   (`specificityOrder`, `branchSpecificityOrder`) and in the run-time keys (`dynamicMethodEntry`,
@@ -1626,7 +1651,7 @@ chunk-loop wrapper).
 - Still OUT of the MOP (classes are compile-time-static; `--optimize` DCE and the dispatch
   tables depend on it): runtime class construction beyond `make-instance` of a metaclass
   ("Classes made at run time": `ensure-class` from computed data, a non-top-level `defclass`, a
-  class made at run time with slots), `compute-applicable-methods`, `update-instance-for-*`.
+  class made at run time with slots), `update-instance-for-*`.
   Methods made at run time are IN ("The generic-function protocol"). Class REdefinition of a
   statically-known name is IN; redefinition from computed data is out.
 - **Known static-model seam**: on the compile paths `find-class`/`class-of` see the WHOLE
@@ -1634,20 +1659,26 @@ chunk-loop wrapper).
   defined at call time. `change-class` is the ONE runtime exception and is not MOP.
 - **A generic's VALUE is still a plain function** (`#'g`, a literal `fdefinition`): access's
   `(etypecase fn (standard-generic-function (compute-applicable-methods ...)) (function ...))`
-  takes the function arm and calls it, trivia's `unary-function-p` its test-call arm. No
-  `compute-applicable-methods`. Consumers of the rest, measured 2026-10-31 in the local
+  takes the function arm and calls it, trivia's `unary-function-p` its test-call arm. Consumers
+  of the rest, measured 2026-10-31 in the local
   Quicklisp cache: moptilities' method side (`method-name`, `get-method`, `map-methods` --
   nothing loaded calls them), cl-store, trivial-arguments, documentation-utils, clunit2 and
   in-nomine (`find-method` of a `defmethod`'s method, which only a generic naming its
   metaobject classes lists).
-- **McCLIM, 2026-11-05, interpreter**: `(ql:quickload :clim-core)` loads (`Core/**`: geometry, sheets,
-  streams, presentations, commands, panes, frames, gadgets, dialogs). Over it `present`,
-  `accept-from-string` (`integer`, `string`, `boolean`, `(sequence integer)`), `presentation-typep`,
-  `presentation-subtypep`, `presentation-type-direct-supertypes` and regions, transformations and
-  text styles answer. No dispatcher consults `compute-applicable-methods`, so its `:around` removing
+- **McCLIM, 2026-11-05, interpreter**: `(ql:quickload :clim)` loads (`clim-core`, whose `Core/**` is
+  geometry, sheets, streams, presentations, commands, panes, frames, gadgets, dialogs, and
+  `drei-mcclim`), in under 3 minutes at a load average of 380. A 46-form exercise answers what SBCL
+  2.2.9 answers on the same sources, but for the address in an unreadable object and the wording of
+  five errors both signal: a user's presentation types, one inheriting a type defined later,
+  `presentation-typep`/`-subtypep`, `present-to-string`, `accept-from-string` (`member`, `or`, `real`,
+  `symbol`, `expression`, `form`), a command table and `define-command`, `define-application-frame`,
+  regions, transformations, text styles, colors, and in Drei a buffer, marks, `lisp-syntax`'s
+  `update-parse`, `form-around` and `form-to-object` of `(defun f (x) (+ x 1))`. Not run: anything
+  needing a port. No dispatcher consults `compute-applicable-methods`, so its `:around` removing
   the `standard-object` methods for a presentation-type key has no effect; Core's one such method is
   `presentation-typep`'s, whose body answers `t` for a key of that kind as the `t` method does.
-  What it took: `built-in-class` above, a `macrolet` body run as top-level forms
+  What it took: `built-in-class` above, `define-method-combination` (ESA's `utils.lisp`), `absorbComputedSlots`
+  and methods on `make-instance` (Drei's `modual-mixin`), `change-class` honoring initargs, a `macrolet` body run as top-level forms
   (`LispEvaluator.evalMacroletForm`, CLHS 3.2.3.1: a `define-presentation-type` and its methods in one
   expansion, where SBCL's `load` and `compile-file` both expand a member after the one before it;
   the compile paths walk in that order and run the compile-time half afterwards, as

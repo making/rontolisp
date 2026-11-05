@@ -2359,17 +2359,36 @@ public final class ClosRegistry {
 		 * @return true when such a method exists
 		 */
 		public boolean hasClassMethod() {
-			return this.methods.values().stream().anyMatch(m -> m.specializers().stream().anyMatch(s -> {
-				if (s.kind() == SpecializerKind.CLASS) {
-					return true;
-				}
-				if (s.kind() != SpecializerKind.TYPE || s.name() == null) {
-					return false;
-				}
-				String plain = plainNameOf(s.name());
-				return "STANDARD-OBJECT".equals(plain) || "CONS".equals(plain) || "LIST".equals(plain)
-						|| "SEQUENCE".equals(plain);
-			}));
+			return this.methods.values()
+				.stream()
+				.anyMatch(m -> m.specializers()
+					.stream()
+					.anyMatch(s -> s.kind() == SpecializerKind.CLASS || enumeratesClassInstances(s)));
+		}
+
+		/**
+		 * {@link #hasClassMethod()} for one class never defined before: the dispatcher
+		 * changes only where a class specializer is among its ancestors, so a big system
+		 * does not regenerate each of its generics per {@code defclass}.
+		 * @param defined the new class
+		 * @return true when the dispatcher has to be regenerated
+		 */
+		public boolean dispatchesOverNewClass(ClassInfo defined) {
+			return this.methods.values()
+				.stream()
+				.anyMatch(m -> m.specializers()
+					.stream()
+					.anyMatch(s -> (s.kind() == SpecializerKind.CLASS && defined.ancestors().contains(s.name()))
+							|| enumeratesClassInstances(s)));
+		}
+
+		private static boolean enumeratesClassInstances(Specializer specializer) {
+			if (specializer.kind() != SpecializerKind.TYPE || specializer.name() == null) {
+				return false;
+			}
+			String plain = plainNameOf(specializer.name());
+			return "STANDARD-OBJECT".equals(plain) || "CONS".equals(plain) || "LIST".equals(plain)
+					|| "SEQUENCE".equals(plain);
 		}
 
 		/**

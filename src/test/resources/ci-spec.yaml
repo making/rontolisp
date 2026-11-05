@@ -15954,6 +15954,27 @@ cases:
       (T T T T (NIL :INHERITED))
       NIL
       (A 1)
+  - name: macroexpand-of-iteration-answers-standard-operators
+    source: |
+      ;; A code walker (arnesi's) knows block and tagbody and has to meet the block a
+      ;; return leaves. What it emits runs. SBCL 2.2.9 has the same operators at those
+      ;; positions.
+      (defmacro meso-emit (form) (macroexpand-1 form))
+      (print (list (car (macroexpand-1 '(dolist (x '(1)) x)))
+                   (car (macroexpand-1 '(do ((x 0 (1+ x))) ((> x 0)) x)))
+                   (car (macroexpand-1 '(do* ((x 0 (1+ x))) ((> x 0)) x)))
+                   (car (macroexpand-1 '(prog ((x 1)) (return x))))))
+      (print (list (meso-emit (dolist (x '(1 2 3) :end) (when (= x 2) (return x))))
+                   (meso-emit (dolist (x '(1 2 3) :end) x))
+                   (meso-emit (dotimes (x 3 x) x))
+                   (meso-emit (do ((x 0 (1+ x)) (sum 0 (+ sum x))) ((> x 2) sum)))
+                   (meso-emit (do* ((x 0 (1+ x))) ((> x 2) x) (when (= x 1) (return :one))))
+                   (meso-emit (loop for x in '(1 2 3) when (= x 2) do (return x)))
+                   (meso-emit (loop for x in '(1 2 3) collect (* x x)))
+                   (meso-emit (prog ((x 1)) (setq x 2) (return x)))))
+    expected: |
+      (BLOCK BLOCK BLOCK BLOCK)
+      (2 :END 3 3 :ONE 2 (1 4 9) 2)
   - name: macro-function-and-special-operator-p
     source: |
       ;; Every operator with no function value is EITHER a special operator OR a
@@ -20888,6 +20909,19 @@ cases:
       NIL
       (FCM-AGAIN 2)
       NIL
+  - name: upgraded-array-element-type-answers-what-make-array-holds
+    source: |
+      ;; Over the types whose answer agrees with SBCL 2.2.9, whose answer for the others
+      ;; (fixnum, single-float) keeps more than this array model does.
+      (print (mapcar #'upgraded-array-element-type
+                     '(character bit t (unsigned-byte 8) (unsigned-byte 16) (unsigned-byte 32))))
+      (print (mapcar (lambda (type)
+                       (equal (upgraded-array-element-type type)
+                              (array-element-type (make-array 1 :element-type type))))
+                     '(fixnum double-float single-float symbol (integer 0 3) (signed-byte 8) string)))
+    expected: |
+      (CHARACTER BIT T (UNSIGNED-BYTE 8) (UNSIGNED-BYTE 16) (UNSIGNED-BYTE 32))
+      (T T T T T T T)
   - name: read-preserving-whitespace-leaves-the-terminator
     source: |
       ;; read takes the whitespace ending a datum, read-preserving-whitespace leaves it,
@@ -23488,10 +23522,23 @@ cases:
         (print (list (slot-value o 'tag) (slot-value o 'extra) (slot-value o 'n) (slot-boundp o 'fresh)))
         (change-class o cls)
         (print (list (class-name (class-of o)) (slot-value o 'n) (slot-value o 'extra))))
+      ;; A slot an initarg supplies takes no initform, literal or computed.
+      (defclass clsurf-plain () ((p :initform 0)))
+      (defclass clsurf-narrow (clsurf-plain)
+        ((low :initarg :low :initform (error "A low must be provided"))))
+      (defvar *clsurf-a* (make-instance 'clsurf-plain))
+      (change-class *clsurf-a* 'clsurf-narrow :low 3)
+      (defvar *clsurf-b* (make-instance 'clsurf-plain))
+      (let ((class 'clsurf-narrow))
+        (change-class *clsurf-b* class :low 4)
+        (print (list (slot-value *clsurf-a* 'low) (slot-value *clsurf-b* 'low)
+                     (handler-case (change-class (make-instance 'clsurf-plain) class)
+                       (error () :initform-ran)))))
     expected: |
       (CLSURF-SUB 1 42 7)
       (:T 42 1 NIL)
       (CLSURF-SUB 1 42)
+      (3 4 :INITFORM-RAN)
   - name: clos-slot-options-and-metaobject-types
     source: |
       ;; The rest of that CLOS surface: :writer in both spellings, the
@@ -32737,6 +32784,12 @@ cases:
         (print (with-accessors ((x wsv-x)) a (list x (with-accessors ((x wsv-x)) b x) (let ((x 9)) x))))
         (print (with-slots (x) a (setf x 3) (setq x (+ x 1)) x))
         (print (wsv-x a)))
+      ;; A body that only writes an unbound slot reads nothing on entry.
+      (defclass wsv-unbound () ((top :accessor wsv-top) (bot :accessor wsv-bot)))
+      (let ((u (make-instance 'wsv-unbound)))
+        (with-accessors ((top wsv-top) (bot wsv-bot)) u
+          (setf top 1 bot (+ top 1)))
+        (print (list (wsv-top u) (wsv-bot u))))
     expected: |
       (1 10 1)
       (1 (:INNER 10))
@@ -32749,6 +32802,40 @@ cases:
       (1 10 9)
       4
       4
+      (1 2)
+  - name: optimize-qualities-are-cl-symbols
+    source: |
+      ;; A quality reads as cl's symbol in any package using cl, and
+      ;; declaration-information answers each, as serapeum's policy-quality asks it.
+      ;; SBCL 2.2.9 (sb-cltl2) agrees.
+      (asdf:load-system "trivial-cltl2")
+      (defpackage :oqc (:use :cl))
+      (print (list (eq 'oqc::space 'cl:space) (eq 'oqc::speed 'speed) (eq 'oqc::optimize 'cl:optimize)
+                   (eq (symbol-package 'oqc::debug) (find-package :cl))))
+      (print (every (lambda (quality)
+                      (integerp (second (assoc quality (trivial-cltl2:declaration-information 'oqc::optimize)))))
+                    '(oqc::speed oqc::safety oqc::space oqc::debug oqc::compilation-speed)))
+    expected: |
+      (T T T T)
+      T
+  - name: type-specifier-of-a-declaration-is-no-macro-call
+    source: |
+      ;; serapeum's -> is a type and a macro, and declaims in a labels: the walk over a
+      ;; local function's scope leaves a declaration alone. SBCL 2.2.9 agrees.
+      (deftype tsd-> (args &optional values)
+        `(function ,args ,@(when values (list values))))
+      (defmacro tsd-> (function (&rest args) &optional values)
+        `(declaim (ftype (tsd-> (,@args) ,@(when values (list values))) ,function)))
+      (labels ((tsd-f (x) x))
+        (tsd-> tsd-g (t))
+        (print (tsd-f 1)))
+      (flet ((tsd-f (fn)
+               (declare (type (tsd-> (t)) fn))
+               (funcall fn '(2))))
+        (print (tsd-f #'car)))
+    expected: |
+      1
+      2
   - name: defmacro-inside-a-macro-expanded-locally
     # hu.dwim.def's (def macro ...): the members of a top-level locally are top-level
     # forms whoever wrote it.
@@ -37923,6 +38010,40 @@ standalone:
       (NIL (:UNBOUND X) 1 1)
       ((:READ X) (:READ Y) :BOUNDP (:WRITE X 3) (:WRITE Y 4) (:READ X) (:READ Y) :MAKUNBOUND :BOUNDP (:READ X))
       (50 T)
+  - name: slot-access-generics-called-with-no-method
+    source: |
+      ;; A program calling the slot-access protocol's generics has them with their system
+      ;; methods, as Drei's circle-subst does over an instance or a structure. SBCL 2.2.9
+      ;; (sb-mop) agrees.
+      (asdf:load-system "closer-mop")
+      (defclass sagc-a () ((a :initarg :a :accessor sagc-a) (b)))
+      (defstruct sagc-s x)
+      (let* ((x (make-instance 'sagc-a :a 1))
+             (class (class-of x)))
+        (dolist (slotd (closer-mop:class-slots class))
+          (print (list (closer-mop:slot-definition-name slotd)
+                       (closer-mop:slot-boundp-using-class class x slotd)
+                       (if (closer-mop:slot-boundp-using-class class x slotd)
+                           (closer-mop:slot-value-using-class class x slotd)
+                           :unbound))))
+        (setf (closer-mop:slot-value-using-class class x (first (closer-mop:class-slots class))) 5)
+        (print (sagc-a x))
+        (closer-mop:slot-makunbound-using-class class x (first (closer-mop:class-slots class)))
+        (print (slot-boundp x 'a)))
+      (let* ((s (make-sagc-s :x 1))
+             (class (class-of s))
+             (slotd (first (closer-mop:class-slots class))))
+        (print (list (closer-mop:slot-boundp-using-class class s slotd)
+                     (closer-mop:slot-value-using-class class s slotd)))
+        (setf (closer-mop:slot-value-using-class class s slotd) 2)
+        (print (sagc-s-x s)))
+    stdout: |
+      (A T 1)
+      (B NIL :UNBOUND)
+      5
+      NIL
+      (T 1)
+      2
   - name: slot-locations-and-allocate-instance-methods
     source: |
       ;; An effective slot's location addresses its storage through
@@ -38181,11 +38302,68 @@ standalone:
       (defmethod gfp-volume :before ((s (eql 0))) nil)
       (print (list (gfp-volume 2) (reverse *gfp-added*)
                    (class-name (class-of (ensure-generic-function 'gfp-volume :generic-function-class 'gfp-logged)))))
+      ;; compute-applicable-methods: what only a dispatcher knows, most specific first, one
+      ;; metaobject per method, and over a metaobject a method on it changes the answer.
+      (defclass gfp-cam-a () ())
+      (defclass gfp-cam-b (gfp-cam-a) ())
+      (defgeneric gfp-cam (x y))
+      (defmethod gfp-cam ((x gfp-cam-a) y) :a)
+      (defmethod gfp-cam :around ((x gfp-cam-b) y) (call-next-method))
+      (defmethod gfp-cam ((x integer) (y (eql :k))) :integer)
+      (defmethod gfp-cam (x y) :t)
+      (defun gfp-cam-names (fn &rest args)
+        (mapcar (lambda (method)
+                  (list (method-qualifiers method)
+                        (mapcar (lambda (s) (if (typep s 'class) (class-name s) :eql))
+                                (closer-mop:method-specializers method))))
+                (compute-applicable-methods fn args)))
+      (print (gfp-cam-names #'gfp-cam (make-instance 'gfp-cam-b) 1))
+      (print (gfp-cam-names #'gfp-cam 1 :k))
+      (print (gfp-cam-names #'gfp-cam 1 :other))
+      (print (eq (car (compute-applicable-methods #'gfp-cam (list 1 2)))
+                 (car (compute-applicable-methods #'gfp-cam (list 1 2)))))
+      (defgeneric (setf gfp-cam) (v x))
+      (defmethod (setf gfp-cam) (v (x integer)) v)
+      (print (list (gfp-cam-names #'(setf gfp-cam) 1 2) (gfp-cam-names #'(setf gfp-cam) 1 "s")
+                   (eq #'(setf gfp-cam) (fdefinition '(setf gfp-cam)))))
+      (defclass gfp-cam-gf (standard-generic-function) () (:metaclass closer-mop:funcallable-standard-class))
+      (defgeneric gfp-cam-2 (x) (:generic-function-class gfp-cam-gf))
+      (defmethod gfp-cam-2 ((x number)) :number)
+      (defmethod gfp-cam-2 ((x integer)) :integer)
+      (print (gfp-cam-names (ensure-generic-function 'gfp-cam-2 :generic-function-class 'gfp-cam-gf) 1))
+      (defmethod compute-applicable-methods :around ((gf gfp-cam-gf) arguments)
+        (remove-if (lambda (method)
+                     (eq (car (closer-mop:method-specializers method)) (find-class 'integer)))
+                   (call-next-method)))
+      (print (gfp-cam-names (ensure-generic-function 'gfp-cam-2 :generic-function-class 'gfp-cam-gf) 1))
+      ;; find-method and remove-method take the generic's function.
+      (defgeneric gfp-fn (x))
+      (defmethod gfp-fn ((x integer)) :integer)
+      (print (list (find-method #'gfp-fn nil (list (find-class 'string)) nil)
+                   (handler-case (find-method #'gfp-fn nil (list (find-class 'string)))
+                     (error () :signaled))))
+      (let ((m (make-instance 'standard-method :lambda-list '(x) :specializers (list (find-class 'string))
+                              :function (lambda (args next) (declare (ignore next)) (list :string (car args))))))
+        (add-method (ensure-generic-function 'gfp-fn) m)
+        (print (list (gfp-fn "s") (eq (find-method #'gfp-fn nil '(string)) m)))
+        (remove-method #'gfp-fn m)
+        (print (list (find-method #'gfp-fn nil '(string) nil)
+                     (handler-case (gfp-fn "s") (error () :no-method)) (gfp-fn 1))))
     stdout: |
       ((:DOG :ANIMAL "rex") (:ANIMAL "cat"))
       (9 16 :ZERO GFP-AREA 2 T T)
       (:ZERO :NO-METHOD NIL)
       (8 ((GFP-VOLUME NIL (INTEGER)) (GFP-VOLUME (:BEFORE) ((EQL 0)))) GFP-LOGGED)
+      (((:AROUND) (GFP-CAM-B T)) (NIL (GFP-CAM-A T)) (NIL (T T)))
+      ((NIL (INTEGER :EQL)) (NIL (T T)))
+      ((NIL (T T)))
+      T
+      (((NIL (T INTEGER))) NIL T)
+      ((NIL (INTEGER)) (NIL (NUMBER)))
+      ((NIL (NUMBER)))
+      (NIL :SIGNALED)
+      ((:STRING "s") T)
+      (NIL :NO-METHOD :INTEGER)
   # Alone: what cl-user reaches is one answer for the whole compile, and the corpus keeps
   # it pristine. A program that never leaves cl-user reads through it all the same.
   - name: a-run-time-read-in-a-cl-user-that-uses-a-package

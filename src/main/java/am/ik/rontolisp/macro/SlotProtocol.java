@@ -24,9 +24,9 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Lisp source read with the real {@link LispReader}, like {@link MopProtocol}: the
  * compile paths prepend {@link #forms()} from
- * {@code LispMacroExpander.expandTopLevelDefinitions} when a program carries a
- * {@code :metaclass} defclass and a method on one of the four generics; the interpreter
- * evaluates the same forms when it first meets such a method.
+ * {@code LispMacroExpander.expandTopLevelDefinitions} when a program names one of the
+ * four generics; the interpreter evaluates the same forms at the first method on one or
+ * call of one.
  */
 public final class SlotProtocol {
 
@@ -36,6 +36,14 @@ public final class SlotProtocol {
 
 	/** The package the protocol's generics live in. */
 	private static final String PACKAGE = "CLOSER-MOP";
+
+	/**
+	 * The function names of the four generics as the interpreter binds them; a program
+	 * may call one with no method of its own.
+	 */
+	public static final List<String> ENTRY_NAMES = List.of(PACKAGE + ":SLOT-VALUE-USING-CLASS",
+			ClosRegistry.SETF_FUNCTION_PREFIX + PACKAGE + ":SLOT-VALUE-USING-CLASS",
+			PACKAGE + ":SLOT-BOUNDP-USING-CLASS", PACKAGE + ":SLOT-MAKUNBOUND-USING-CLASS");
 
 	@Nullable private static volatile List<LispVal> forms;
 

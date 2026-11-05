@@ -25050,7 +25050,8 @@ public final class LispMacroExpander {
 		LispSymbol val = new LispSymbol("%cca_v");
 		List<LispVal> body = new java.util.ArrayList<>();
 		body.add(objBecome(obj, LispLayout.CLASS_TAG_PREFIX + target.name()));
-		LispVal fill = changeClassInitformFill(obj, tagVar, target, closRegistry);
+		LispVal fill = changeClassInitformFill(obj, tagVar, target, closRegistry,
+				slot -> slot.initformSupplied() ? initargTailScan(args, slot.initargs()) : null);
 		if (fill != null) {
 			body.add(fill);
 		}
@@ -25172,7 +25173,8 @@ public final class LispMacroExpander {
 		bindings.add(1, listToCons(List.of(tagVar, objTag(objVar))));
 		List<LispVal> body = new java.util.ArrayList<>();
 		body.add(objBecome(objVar, LispLayout.CLASS_TAG_PREFIX + target.name()));
-		LispVal fill = changeClassInitformFill(objVar, tagVar, target, closRegistry);
+		LispVal fill = changeClassInitformFill(objVar, tagVar, target, closRegistry,
+				slot -> leftmostLiteralInitarg(initargKeys, initargTemps, slot) != null ? LispTrue.INSTANCE : null);
 		if (fill != null) {
 			body.add(fill);
 		}
@@ -25202,10 +25204,13 @@ public final class LispMacroExpander {
 	 * classes have system-built instances). Runs right after the layout swap: every moved
 	 * value is read before any store, and the old slots are still in the storage
 	 * ({@link ClosRegistry#applyChangeClassCapacities()} reserved the target's room in
-	 * every such class). Null when no arm is needed.
+	 * every such class). A slot an initarg supplies takes no initform (CLHS 7.1.4; Drei's
+	 * narrowed marks have one that signals): {@code supplied} answers the form telling,
+	 * or null when none is. Null when no arm is needed.
 	 */
 	@Nullable private static LispVal changeClassInitformFill(LispSymbol objVar, LispSymbol oldTagVar,
-			ClosRegistry.ClassInfo target, ClosRegistry closRegistry) {
+			ClosRegistry.ClassInfo target, ClosRegistry closRegistry,
+			java.util.function.Function<ClosRegistry.SlotSpec, @Nullable LispVal> supplied) {
 		String targetKey = ClosRegistry.normalize(target.name());
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		for (ClosRegistry.ClassInfo source : closRegistry.classes().values()) {
@@ -25217,7 +25222,7 @@ public final class LispMacroExpander {
 			if (!sameChain && closRegistry.isSeededClass(source.name())) {
 				continue;
 			}
-			LispVal remap = changeClassSlotRemap(objVar, source, target);
+			LispVal remap = changeClassSlotRemap(objVar, source, target, supplied);
 			if (remap == null) {
 				continue;
 			}
@@ -25239,7 +25244,8 @@ public final class LispMacroExpander {
 	 * the target already holds its value in place.
 	 */
 	@Nullable private static LispVal changeClassSlotRemap(LispSymbol objVar, ClosRegistry.ClassInfo source,
-			ClosRegistry.ClassInfo target) {
+			ClosRegistry.ClassInfo target,
+			java.util.function.Function<ClosRegistry.SlotSpec, @Nullable LispVal> supplied) {
 		List<ClosRegistry.SlotSpec> from = source.slots();
 		List<ClosRegistry.SlotSpec> to = target.slots();
 		List<LispVal> bindings = new java.util.ArrayList<>();
@@ -25257,6 +25263,14 @@ public final class LispMacroExpander {
 			}
 			LispVal value;
 			if (j < 0) {
+				LispVal initarg = supplied.apply(slot);
+				if (initarg instanceof LispTrue) {
+					continue;
+				}
+				if (initarg != null) {
+					stores.add(makeIf(initarg, LispNil.INSTANCE, objSet(objVar, i, slot.initform())));
+					continue;
+				}
 				value = slot.initform();
 			}
 			else if (from.get(j).sharedCellVar() instanceof String cell) {
@@ -26363,7 +26377,6 @@ public final class LispMacroExpander {
 		String objVar = freshObjVar(WITH_ACCESSORS_OBJ_VAR, cons);
 		LispSymbol obj = new LispSymbol(objVar);
 		java.util.Map<String, LispVal> substitutions = new java.util.LinkedHashMap<>();
-		List<LispVal> letBindings = new java.util.ArrayList<>();
 		if (parts.get(1) instanceof LispCons entryList) {
 			for (LispVal entry : entryList.toList()) {
 				if (!(entry instanceof LispCons pair) || pair.toList().size() != 2
@@ -26372,9 +26385,7 @@ public final class LispMacroExpander {
 					throw new IllegalArgumentException(
 							LispNames.WITH_ACCESSORS + " expects (var accessor) pairs: " + cons.print());
 				}
-				LispVal read = listToCons(List.of(accessor, obj));
-				substitutions.put(var.name(), read);
-				letBindings.add(listToCons(List.of(var, read)));
+				substitutions.put(var.name(), listToCons(List.of(accessor, obj)));
 			}
 		}
 		else if (!(parts.get(1) instanceof LispNil)) {
@@ -26385,11 +26396,9 @@ public final class LispMacroExpander {
 		for (LispVal form : parts.subList(3, parts.size())) {
 			body.add(substituteSymbolMacros(form, substitutions));
 		}
-		// Same fallback let as with-slots: code GENERATED at run time inside the body
-		// still resolves the variables, as entry-time reads.
-		LispVal inner = letBindings.isEmpty() ? prognOrNil(body)
-				: listToCons(concatForms(List.of(new LispSymbol(LispNames.LET), listToCons(letBindings)), body));
-		return makeLet(objVar, parts.get(2), inner);
+		// A variable is read where the body reads it: a body that only writes an unbound
+		// slot (Drei's views) must not read it on entry.
+		return makeLet(objVar, parts.get(2), prognOrNil(body));
 	}
 
 	/** Concatenates a form-list head with body forms into one list. */
@@ -27980,6 +27989,131 @@ public final class LispMacroExpander {
 				|| closRegistry.isNestedMethodFunction(method.functionName())) {
 			return null;
 		}
+		LispVal call = staticMethodCall("%GF-STATIC-METHOD-ADDED", generic, key, method,
+				functionRef(method.functionName()), closRegistry);
+		return new LispCons(((LispCons) call).car(),
+				new LispCons(quotedData(new LispSymbol(generic.name())), ((LispCons) call).cdr()));
+	}
+
+	/**
+	 * What {@code macroexpand} answers of a built-in macro's lowering: its {@code %block}
+	 * and {@code while}, which no code walker knows, as {@code block} and {@code tagbody}
+	 * (arnesi's walker refused the {@code return} of a {@code dolist}). The forms the
+	 * call itself wrote stay as they are.
+	 * @param expansion the lowering
+	 * @param call the macro call
+	 * @return the expansion in standard operators
+	 */
+	public static LispVal withStandardIteration(LispVal expansion, LispCons call) {
+		java.util.Set<LispCons> written = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		collectConses(call, written);
+		return standardIteration(expansion, written);
+	}
+
+	private static void collectConses(LispVal form, java.util.Set<LispCons> conses) {
+		while (form instanceof LispCons cons && conses.add(cons)) {
+			collectConses(cons.car(), conses);
+			form = cons.cdr();
+		}
+	}
+
+	private static LispVal standardIteration(LispVal form, java.util.Set<LispCons> written) {
+		if (!(form instanceof LispCons cons) || written.contains(cons)
+				|| (cons.car() instanceof LispSymbol quote && LispNames.isQuote(quote.name()))) {
+			return form;
+		}
+		LispVal car = standardIteration(cons.car(), written);
+		LispVal cdr = standardIteration(cons.cdr(), written);
+		if (car instanceof LispSymbol head && cdr instanceof LispCons rest) {
+			if (LispNames.BLOCK_INTERNAL.equals(head.name())) {
+				return new LispCons(new LispSymbol(LispNames.BLOCK), new LispCons(LispNil.INSTANCE, rest));
+			}
+			if (LispNames.WHILE.equals(head.name())) {
+				LispSymbol top = new LispSymbol("__while_top");
+				LispVal again = listToCons(List.of(new LispSymbol(LispNames.GO), top));
+				List<LispVal> body = new java.util.ArrayList<>(
+						rest.cdr() instanceof LispCons forms ? forms.toList() : List.of());
+				body.add(again);
+				body.add(0, new LispSymbol(LispNames.PROGN));
+				return listToCons(List.of(new LispSymbol(LispNames.TAGBODY), top,
+						makeIf(rest.car(), listToCons(body), LispNil.INSTANCE)));
+			}
+		}
+		return car == cons.car() && cdr == cons.cdr() ? cons : new LispCons(car, cdr);
+	}
+
+	/**
+	 * The form {@code %gf-static-methods} answers for a generic:
+	 * {@code (order method...)}, its argument precedence order as indexes and the
+	 * metaobjects of the methods its dispatcher was generated from, newest first as
+	 * {@code add-method} keeps them. Nil for a generic whose {@code defgeneric} named its
+	 * metaobject classes, whose metaobject holds them. A nested method not yet defined
+	 * answers nil in its place.
+	 * @param generic the generic
+	 * @param closRegistry the registry
+	 * @return the form
+	 */
+	public static LispVal staticMethodsForm(ClosRegistry.GenericInfo generic, ClosRegistry closRegistry) {
+		if (generic.genericFunctionClass() != null || generic.methodClass() != null) {
+			return LispNil.INSTANCE;
+		}
+		List<LispVal> order = new java.util.ArrayList<>();
+		if (generic.precedenceIndexes() instanceof int[] indexes) {
+			for (int index : indexes) {
+				order.add(new LispInteger(index));
+			}
+		}
+		List<LispVal> form = new java.util.ArrayList<>();
+		form.add(new LispSymbol(LispNames.LIST));
+		form.add(quotedData(order.isEmpty() ? LispNil.INSTANCE : listToCons(order)));
+		List<String> keys = new java.util.ArrayList<>(generic.methods().keySet());
+		java.util.Collections.reverse(keys);
+		for (String key : keys) {
+			ClosRegistry.MethodInfo method = java.util.Objects.requireNonNull(generic.methods().get(key));
+			boolean nested = closRegistry.isNestedMethodFunction(method.functionName());
+			LispVal object = staticMethodCall("%GF-STATIC-METHOD", generic, key, method,
+					nested ? new LispSymbol(method.functionName()) : functionRef(method.functionName()), closRegistry);
+			form.add(nested ? makeIf(methodAssignedTest(method.functionName()), object, LispNil.INSTANCE) : object);
+		}
+		return listToCons(form);
+	}
+
+	/**
+	 * The compile paths' {@code %gf-static-methods}: a program has no table of the
+	 * methods its dispatchers were generated from, so one naming
+	 * {@code compute-applicable-methods} gets this one, which keeps every generic it
+	 * answers for alive; any other program answers nil.
+	 */
+	private static List<LispVal> staticMethodsDefuns(ClosRegistry closRegistry, java.util.Set<String> placedDispatchers,
+			boolean asksApplicableMethods) {
+		LispSymbol gf = new LispSymbol("%gsm_gf");
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		if (asksApplicableMethods) {
+			for (ClosRegistry.GenericInfo generic : closRegistry.generics().values()) {
+				if (placedDispatchers.contains(generic.name())) {
+					clauses.add(listToCons(List.of(mvCall(LispNames.EQ_GENERAL, gf, functionRef(generic.name())),
+							staticMethodsForm(generic, closRegistry))));
+				}
+			}
+		}
+		return chainedDispatchDefuns("%GF-STATIC-METHODS", "%GSM-", List.of(gf), clauses, LispNil.INSTANCE);
+	}
+
+	/**
+	 * A call of {@code operator} with what a method's metaobject is made from: its
+	 * qualifiers, specializers, function, lambda list and key.
+	 */
+	private static LispVal staticMethodCall(String operator, ClosRegistry.GenericInfo generic, String key,
+			ClosRegistry.MethodInfo method, LispVal function, ClosRegistry closRegistry) {
+		LispVal qualifiers = generic.methodCombinationExpander() != null
+				? generic.methodQualifiers().getOrDefault(method.functionName(), LispNil.INSTANCE)
+				: method.isPrimary() ? LispNil.INSTANCE : listToCons(List.of(new LispSymbol(method.qualifier())));
+		LispVal lambdaList = generic.methodLambdaLists().get(key);
+		return mvCall(operator, quotedData(qualifiers), methodSpecializersForm(method, closRegistry), function,
+				quotedData(lambdaList == null ? LispNil.INSTANCE : lambdaList), new LispString(key));
+	}
+
+	private static LispVal methodSpecializersForm(ClosRegistry.MethodInfo method, ClosRegistry closRegistry) {
 		List<LispVal> specializers = new java.util.ArrayList<>();
 		specializers.add(new LispSymbol(LispNames.LIST));
 		for (ClosRegistry.Specializer spec : method.specializers()) {
@@ -27992,12 +28126,7 @@ public final class LispMacroExpander {
 						eqlValueForm(java.util.Objects.requireNonNull(spec.eqlValue())));
 			});
 		}
-		LispVal qualifiers = method.isPrimary() ? LispNil.INSTANCE
-				: listToCons(List.of(new LispSymbol(method.qualifier())));
-		LispVal lambdaList = generic.methodLambdaLists().get(key);
-		return listToCons(List.of(new LispSymbol("%GF-STATIC-METHOD-ADDED"), quotedData(new LispSymbol(generic.name())),
-				quotedData(qualifiers), listToCons(specializers), functionRef(method.functionName()),
-				quotedData(lambdaList == null ? LispNil.INSTANCE : lambdaList), new LispString(key)));
+		return listToCons(specializers);
 	}
 
 	/**
@@ -30817,6 +30946,9 @@ public final class LispMacroExpander {
 		// dispatches through, and every dispatcher generated below consults its generic's
 		// run-time methods.
 		boolean gfProtocol = usesGenericFunctionProtocol(program);
+		boolean asksApplicableMethods = program.stream()
+			.anyMatch(f -> usesAnySymbol(f, java.util.Set.of(LispNames.COMPUTE_APPLICABLE_METHODS,
+					"COMMON-LISP:" + LispNames.COMPUTE_APPLICABLE_METHODS)));
 		if (gfProtocol) {
 			closRegistry.enableGfProtocol();
 			List<LispVal> withGf = new java.util.ArrayList<>(GenericFunctions.forms());
@@ -30824,7 +30956,8 @@ public final class LispMacroExpander {
 			withGf.addAll(program);
 			program = withGf;
 		}
-		boolean metaclassProtocol = usesMetaclassProtocol(program);
+		boolean slotProtocol = program.stream().anyMatch(LispMacroExpander::namesSlotProtocolGeneric);
+		boolean metaclassProtocol = slotProtocol || usesMetaclassProtocol(program);
 		if (metaclassProtocol || namesMopBaseSuperclass(program)) {
 			closRegistry.ensureMopClassesSeeded();
 		}
@@ -30848,10 +30981,12 @@ public final class LispMacroExpander {
 				closRegistry.enableDynamicClasses();
 			}
 			// A method on slot-value-using-class or a sibling (contextl's special
-			// slots) switches the slot-access protocol on: its runtime is prepended,
-			// and every slot form -- and the accessors of a :metaclass class -- expanded
-			// from here on routes an instance of a :metaclass class through it.
-			if (definesSlotProtocolMethod(program)) {
+			// slots), or a call of one, switches the slot-access protocol on: its runtime
+			// is prepended, and every slot form -- and the accessors of a :metaclass
+			// class
+			// -- expanded from here on routes an instance of a :metaclass class through
+			// it.
+			if (slotProtocol) {
 				List<LispVal> withSlotProtocol = new java.util.ArrayList<>(SlotProtocol.forms());
 				withSlotProtocol.addAll(program);
 				program = withSlotProtocol;
@@ -31267,6 +31402,9 @@ public final class LispMacroExpander {
 		if (lastTrackedRedefinition >= 0) {
 			out.addAll(instanceTrackingDefuns(closRegistry));
 			out.addAll(0, LispReader.readAllFromString(INSTANCE_TRACKING_GLOBALS_SOURCE, Features.INTERPRETER));
+		}
+		if (gfProtocol) {
+			out.addAll(staticMethodsDefuns(closRegistry, placedDispatchers, asksApplicableMethods));
 		}
 		if (metaclassProtocol) {
 			out.add(mopClassFinalizedDefun(closRegistry.dynamicClasses(), lastTrackedRedefinition >= 0));
@@ -52032,21 +52170,19 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Whether a top-level form defines a method on (or the generic of) one of the
-	 * slot-access protocol's generic functions
+	 * Whether a form names one of the slot-access protocol's generic functions
 	 * ({@link SlotProtocol#isProtocolGenericName}).
-	 * @param program the top-level forms
+	 * @param form the form
 	 * @return true when the program carries the slot-access protocol
 	 */
-	private static boolean definesSlotProtocolMethod(List<LispVal> program) {
-		for (LispVal form : program) {
-			if ((isNamedForm(form, LispNames.DEFMETHOD) || isNamedForm(form, LispNames.DEFGENERIC))
-					&& ((LispCons) form).cdr() instanceof LispCons rest
-					&& SlotProtocol.isProtocolGenericName(rest.car())) {
+	private static boolean namesSlotProtocolGeneric(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (namesSlotProtocolGeneric(cons.car())) {
 				return true;
 			}
+			form = cons.cdr();
 		}
-		return false;
+		return form instanceof LispSymbol sym && SlotProtocol.isProtocolGenericName(sym.name());
 	}
 
 	/**

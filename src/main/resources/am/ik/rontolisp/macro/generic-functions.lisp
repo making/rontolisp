@@ -364,15 +364,62 @@
          (closer-mop:intern-eql-specializer (car (cdr specializer))))
         (t specializer)))
 
+(defun %gf-designated (gf)
+  ;; A generic's compiled function stands for its metaobject, nil while it has none:
+  ;; then no method was added to it at run time.
+  (if (%obj-p gf)
+      gf
+      (let ((hit nil))
+        (dolist (pair %gf-metaobjects%)
+          (if (and (null hit) (eq (slot-value (cdr pair) '%static) gf))
+              (setq hit (cdr pair))
+              nil))
+        hit)))
+
+(defmethod remove-method ((gf function) method)
+  (let ((generic (%gf-designated gf)))
+    (if generic (remove-method generic method) nil))
+  gf)
+
 (defun find-method (gf qualifiers specializers &optional (errorp t))
-  (let ((method
-         (%gf-find-method gf qualifiers
-                          (mapcar #'%gf-specializer-designator specializers))))
+  (let* ((generic (%gf-designated gf))
+         (method
+          (if generic
+              (%gf-find-method generic qualifiers
+               (mapcar #'%gf-specializer-designator specializers))
+              nil)))
     (if (or method (not errorp))
         method
         (error
          "There is no method on ~S with qualifiers ~S and specializers ~S." gf
          qualifiers specializers))))
+
+(defgeneric compute-applicable-methods (generic-function arguments))
+
+(defmethod compute-applicable-methods (gf arguments)
+  ;; Most specific first; between equals the newest first, as a generic's metaobject
+  ;; lists its methods. The metaobject has what add-method saw, %gf-static-methods
+  ;; (see LispMacroExpander.staticMethodsForm) what only a dispatcher knows. No
+  ;; dispatcher calls this: a method on it changes what a caller of it sees.
+  (let* ((generic (%gf-designated gf))
+         (static
+          (%gf-static-methods
+           (if generic
+               (or (slot-value generic '%static) (slot-value generic 'name))
+               gf)))
+         (order
+          (if (car static)
+              (car static)
+              (if generic (%gf-precedence-indexes generic) nil)))
+         (entries nil))
+    (dolist (method
+             (append (if generic (slot-value generic 'methods) nil)
+                     (cdr static)))
+      (let ((entry (if method (%gf-runtime-entry method arguments order) nil)))
+        (if entry (setq entries (cons (cons method entry) entries)) nil)))
+    (mapcar #'car
+            (stable-sort (reverse entries)
+             (lambda (a b) (%dynamic-more-specific-p (cdr a) (cdr b)))))))
 
 (defun closer-mop:ensure-method (gf lambda-expression &key method-class
                                     (qualifiers nil)
@@ -399,20 +446,46 @@
     (add-method gf method)
     method))
 
+(defun %gf-static-metaobject
+    (class qualifiers specializers function lambda-list static-key)
+  (let ((method
+         (make-instance class
+                        :qualifiers qualifiers
+                        :specializers specializers
+                        :lambda-list lambda-list
+                        :function (%gf-static-method-function function))))
+    (setf (slot-value method '%static-key) static-key)
+    method))
+
 (defun %gf-static-method-added
     (name qualifiers specializers function lambda-list static-key)
   ;; A defmethod defined this method on a generic whose defgeneric named a
   ;; generic-function class: its metaobject reaches add-method.
   (let* ((gf (%gf-ensure name))
          (method
-          (make-instance (%gf-class-designator (slot-value gf 'method-class))
-                         :qualifiers qualifiers
-                         :specializers specializers
-                         :lambda-list lambda-list
-                         :function (%gf-static-method-function function))))
-    (setf (slot-value method '%static-key) static-key)
+          (%gf-static-metaobject
+           (%gf-class-designator (slot-value gf 'method-class)) qualifiers
+           specializers function lambda-list static-key)))
     (add-method gf method)
     method))
+
+;; A method's function -> the metaobject compute-applicable-methods answers for it.
+(defvar %gf-static-method-objects% nil)
+
+(defun %gf-static-method
+    (qualifiers specializers function lambda-list static-key)
+  ;; A method of a generic naming no metaobject class has its metaobject only when
+  ;; asked for, one per method; a redefined method has a new function, so a new one.
+  (let ((hit (assoc function %gf-static-method-objects% :test #'eq)))
+    (if hit
+        (cdr hit)
+        (let ((method
+               (%gf-static-metaobject (find-class 'standard-method) qualifiers
+                                      specializers function lambda-list
+                                      static-key)))
+          (setq %gf-static-method-objects%
+                (cons (cons function method) %gf-static-method-objects%))
+          method))))
 
 (defmethod print-object ((gf standard-generic-function) stream)
   (print-unreadable-object (gf stream :type t :identity t)

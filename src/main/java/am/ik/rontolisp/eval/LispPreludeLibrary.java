@@ -5165,6 +5165,12 @@ public final class LispPreludeLibrary {
 				          (close %rd-out)
 				          (if eof-error-p (error 'end-of-file :stream (or stream *standard-input*)) eof-value)))))
 				""");
+		// What an array made with the element type holds: one definition of what upgrades
+		// to what, make-array's.
+		SOURCES.put(LispNames.UPGRADED_ARRAY_ELEMENT_TYPE, """
+				(defun upgraded-array-element-type (typespec &optional environment)
+				  (array-element-type (make-array 0 :element-type typespec)))
+				""");
 		// What a define-method-combination body refuses a method or a generic with.
 		SOURCES.put(LispNames.INVALID_METHOD_ERROR, """
 				(defun invalid-method-error (method format-control &rest args)

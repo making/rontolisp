@@ -33,7 +33,8 @@ public final class GenericFunctions {
 
 	/** The {@code cl} names of the protocol. */
 	private static final Set<String> CL_NAMES = Set.of(LispNames.ENSURE_GENERIC_FUNCTION, LispNames.ADD_METHOD,
-			LispNames.REMOVE_METHOD, LispNames.FIND_METHOD, LispNames.METHOD_QUALIFIERS);
+			LispNames.REMOVE_METHOD, LispNames.FIND_METHOD, LispNames.METHOD_QUALIFIERS,
+			LispNames.COMPUTE_APPLICABLE_METHODS);
 
 	/** The {@code closer-mop} member names of the protocol. */
 	private static final Set<String> CLOSER_MOP_NAMES = Set.of("ENSURE-METHOD", "GENERIC-FUNCTION-NAME",
@@ -81,14 +82,16 @@ public final class GenericFunctions {
 	}
 
 	/**
-	 * Whether a generic-function name a {@code defmethod} spells is {@code add-method} or
-	 * {@code remove-method}: a user method on one needs the system method first.
+	 * Whether a generic-function name a {@code defmethod} spells is {@code add-method},
+	 * {@code remove-method} or {@code compute-applicable-methods}: a user method on one
+	 * needs the system method first.
 	 * @param name the generic's name
-	 * @return true for the two
+	 * @return true for the three
 	 */
 	public static boolean isMethodSetGenericName(LispVal name) {
 		return name instanceof LispSymbol sym
-				&& (LispNames.ADD_METHOD.equals(sym.name()) || LispNames.REMOVE_METHOD.equals(sym.name()));
+				&& (LispNames.ADD_METHOD.equals(sym.name()) || LispNames.REMOVE_METHOD.equals(sym.name())
+						|| LispNames.COMPUTE_APPLICABLE_METHODS.equals(sym.name()));
 	}
 
 	/**

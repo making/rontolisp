@@ -2794,6 +2794,14 @@ public final class LispNames {
 	/** What an effective method form makes a form a next method with. */
 	public static final String MAKE_METHOD = "MAKE-METHOD";
 
+	/** The {@code upgraded-array-element-type} standard function: a prelude defun. */
+	public static final String UPGRADED_ARRAY_ELEMENT_TYPE = "UPGRADED-ARRAY-ELEMENT-TYPE";
+
+	/**
+	 * The {@code compute-applicable-methods} generic of the generic-function protocol.
+	 */
+	public static final String COMPUTE_APPLICABLE_METHODS = "COMPUTE-APPLICABLE-METHODS";
+
 	/** The {@code invalid-method-error} standard function: a prelude defun. */
 	public static final String INVALID_METHOD_ERROR = "INVALID-METHOD-ERROR";
 

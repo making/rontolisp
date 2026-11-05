@@ -564,8 +564,8 @@ eclector's tests).
   `meta-demo-tree.expected` there and on all four; re-derive it by running that file on SBCL. On real
   libraries: cl-dejavu's `list-fonts` and `font-pathname` (interpreter, JVM, wasm Preview 1); `hu.dwim.def`'s
   children (`("source")`) and `(find-component "hu.dwim.def" "source")`, `xsubseq-test` through prove's `:module`
-  (interpreter). djula itself stops earlier, on arnesi's `define-method-combination`, so its
-  `list-asdf-system-templates` was run verbatim over a `:module` of `:static-file`s.
+  (interpreter). djula's `list-asdf-system-templates` was run verbatim over a `:module` of
+  `:static-file`s; djula itself loads since 2026-11-05 and renders a template as SBCL does (interpreter).
 - Pinned by `AsdfMetaobjectsE2eTest` (all four), `PackageInferredSystemE2eTest` (`"lisp"`).
 
 ### test-op

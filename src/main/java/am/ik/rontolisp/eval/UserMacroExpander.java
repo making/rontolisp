@@ -2183,7 +2183,11 @@ public final class UserMacroExpander {
 		}
 		if (cons.car() instanceof LispSymbol sym) {
 			if (LispNames.isQuote(sym.name()) || LispNames.DEFMACRO.equals(sym.name())
+					|| LispNames.DECLARE.equals(sym.name()) || LispNames.DECLAIM.equals(sym.name())
 					|| isExpansionTimeDefinition(cons)) {
+				// A declaration's type specifier is no call, whatever macro shares its
+				// name
+				// (serapeum's ->).
 				return form;
 			}
 			if (!cons.isProperList()) {

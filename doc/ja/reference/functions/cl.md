@@ -410,6 +410,7 @@
 | `array-has-fill-pointer-p` | `(array-has-fill-pointer-p a)` | 配列がフィルポインタを持てば `t`、そうでなければ `nil` |
 | `adjustable-array-p` | `(adjustable-array-p a)` | 配列が `:adjustable` で作成されていれば `t`、そうでなければ `nil` |
 | `array-element-type` | `(array-element-type a)` | アップグレード後の要素型。アップグレード先がなければ `t` |
+| `upgraded-array-element-type` | `(upgraded-array-element-type 'bit)` | その `:element-type` で作った配列の要素型 |
 | `vector-push` | `(vector-push x v)` | フィルポインタの位置に `x` を格納しインデックスを返す。満杯なら `nil` |
 | `vector-pop` | `(vector-pop v)` | フィルポインタをデクリメントし、通過した要素を返す |
 | `vector-push-extend` | `(vector-push-extend x v &optional ext)` | `vector-push` と同様だが満杯時にベクタを拡張する |

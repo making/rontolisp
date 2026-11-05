@@ -5,6 +5,7 @@
 `(remove-method generic-function method)`
 `(find-method generic-function qualifiers specializers &optional (errorp t))`
 `(method-qualifiers method)`
+`(compute-applicable-methods generic-function arguments)`
 
 Generic function and method **metaobjects** (AMOP 5.3–5.4). `ensure-generic-function` answers the generic function metaobject of a name: a funcallable instance of `standard-generic-function`, or of the class `:generic-function-class` names or the name's [`defgeneric`](../special-forms/defgeneric.md) names with `(:generic-function-class c)`. It is made on the first request and kept, calling it calls the generic function, and from then on `fdefinition` of a computed name answers it. A name no generic function has gets a new one, which a program calls through its name like any function defined at run time.
 
@@ -26,6 +27,18 @@ A `defmethod` on a generic function whose `defgeneric` names a `:generic-functio
                                        (list :dog (animal-name (first args))))))
 (list (speak (make-instance 'dog :name "rex"))
       (speak (make-instance 'animal :name "cat"))) ; => ((:DOG "rex") (:ANIMAL "cat"))
+```
+
+`compute-applicable-methods` answers the methods of a generic function that apply to a list of arguments as method metaobjects, most specific first and the same object for a method each time: the methods a `defmethod` defined as well as those `add-method` added. It takes a generic function's metaobject or its `#'name`; a function that is no generic function answers `nil`. It is a generic function too, so a program can define methods on it, but a call of a generic function does not consult it: such a method changes only what a caller of `compute-applicable-methods` sees. A compiled program has these metaobjects where it names `compute-applicable-methods`.
+
+```lisp
+(defgeneric size (x))
+(defmethod size ((x number)) :number)
+(defmethod size :around ((x integer)) (call-next-method))
+(defmethod size (x) :anything)
+(mapcar #'method-qualifiers (compute-applicable-methods #'size (list 1))) ; => ((:AROUND) NIL NIL)
+(mapcar (lambda (method) (class-name (first (closer-mop:method-specializers method))))
+        (compute-applicable-methods #'size (list "s"))) ; => (T)
 ```
 
 ## Backend support

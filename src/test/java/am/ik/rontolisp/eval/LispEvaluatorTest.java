@@ -8514,7 +8514,7 @@ class LispEvaluatorTest {
 				      (macroexpand-1 '(defun (setf f) (v x) "d" (declare (ignore x)) v))
 				      (macroexpand-1 '(defvar *v* 1)))
 				""").print()).isEqualTo("(NIL NIL NIL ((TYPEP 1 X) NIL) ((RETURN-FROM NIL 1) T)"
-				+ " ((%BLOCK (LET (A) (TAGBODY (RETURN A)))) T) (#'(LAMBDA (X) X) T)"
+				+ " ((BLOCK NIL (LET (A) (TAGBODY (RETURN A)))) T) (#'(LAMBDA (X) X) T)"
 				+ " (%HANDLER-CASE (F) 'ERROR #'(LAMBDA (C) C) ':NO-ERROR #'(LAMBDA (V) V))"
 				+ " (%DEFUN '(SETF F) #'(LAMBDA (V X) \"d\" (DECLARE (IGNORE X)) (BLOCK F V)))"
 				+ " (%DEFINITION '(DEFVAR *V* 1)))");
