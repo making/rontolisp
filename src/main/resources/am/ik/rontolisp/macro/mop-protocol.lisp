@@ -50,11 +50,36 @@
     hit))
 
 (defun %mop-record-ensured-class (name class)
-  (if (%mop-ensured-class name)
+  (if (eq (%mop-ensured-class name) class)
       nil
       (setq %mop-ensured-classes%
             (cons (cons name class) %mop-ensured-classes%)))
   class)
+
+(defun %mop-existing-class (name)
+  ;; What a definition of NAME finds: the class the driver defined under it, unless
+  ;; that one has another name now, or the one (setf find-class) moved to it
+  ;; (McCLIM's forward-referenced presentation types).
+  (let ((ensured (%mop-ensured-class name)))
+    (if (and ensured (eq (slot-value ensured 'name) name))
+        ensured
+        (let ((found (find-class name nil)))
+          (if (and found (rassoc found %mop-ensured-classes% :test #'eq))
+              found
+              nil)))))
+
+(defun %mop-waits-for-a-class-p (class)
+  ;; AMOP: a class with a forward-referenced class among its superclasses is not
+  ;; finalized: a superclass that is neither finalized nor a standard class.
+  (let ((waits nil))
+    (dolist (super (slot-value class 'direct-superclasses))
+      (if (or (and (slot-boundp super 'finalized-p)
+                   (slot-value super 'finalized-p))
+              (and (typep super 'standard-class)
+                   (not (%mop-waits-for-a-class-p super))))
+          nil
+          (setq waits t)))
+    waits))
 
 ;; The leftmost tail of a plist whose key matches, nil when absent -- getf that
 ;; can tell a supplied nil from an absent key.
@@ -100,7 +125,7 @@
 ;; metaobjects through the protocol, AFTER the raw fill (the raw plists land in
 ;; the slots first and are then replaced), so a user :around's post-
 ;; call-next-method code already sees real metaobjects.
-(defmethod shared-initialize ((class standard-class) slot-names &rest initargs)
+(defmethod shared-initialize ((class class) slot-names &rest initargs)
   (%mop-fill-slots class initargs slot-names)
   (let ((supers-tail (%mop-initarg-tail initargs ':direct-superclasses)))
     (if supers-tail
@@ -320,6 +345,13 @@
   (let ((metaclass (car (%mop-initarg-tail initargs ':metaclass))))
     (if class
         (progn
+          ;; Defined at last, a forward-referenced class takes the metaclass of its
+          ;; definition, and stays the object its subclasses hold (AMOP).
+          (if (or (null metaclass)
+                  (eq (slot-value (class-of class) 'name) metaclass))
+              nil
+              (%mop-change-metaclass class metaclass))
+          (%mop-record-ensured-class name class)
           ;; Re-prime the memo first: the static re-registration invalidated the
           ;; registry's view, and the finalization inside reinitialize-instance
           ;; reaches the prototype through class-of (contextl's singleton :after
@@ -329,18 +361,20 @@
           (%register-class-metaobject name class)
           ;; The system reinitialize-instance finalized it anew; one a user method
           ;; left unfinalized is finalized here.
-          (if (and (slot-boundp class 'finalized-p)
-                   (slot-value class 'finalized-p))
+          (if (or (and (slot-boundp class 'finalized-p)
+                       (slot-value class 'finalized-p))
+                  (%mop-waits-for-a-class-p class))
               nil
               (closer-mop:finalize-inheritance class))
           class)
         (let ((new-class
                (apply #'%mop-make-instance metaclass ':name name initargs)))
-          ;; AMOP default: a class with no direct superclasses gets
+          ;; AMOP default: a standard class with no direct superclasses gets
           ;; (standard-object) -- the walk shape libraries rely on (mito's
           ;; map-all-superclasses flushes its accumulator when the superclass
           ;; chain reaches (find-class 'standard-object)).
-          (if (slot-value new-class 'direct-superclasses)
+          (if (or (slot-value new-class 'direct-superclasses)
+                  (not (typep new-class 'standard-class)))
               nil
               (setf (slot-value new-class 'direct-superclasses)
                     (cons (find-class 'standard-object) nil)))
@@ -355,7 +389,9 @@
           ;; class back through (find-class 'name), see MopEvalCapture).
           (%register-class-metaobject name new-class)
           (%mop-record-ensured-class name new-class)
-          (closer-mop:finalize-inheritance new-class)
+          (if (%mop-waits-for-a-class-p new-class)
+              nil
+              (closer-mop:finalize-inheritance new-class))
           new-class))))
 
 (defun %ensure-class-with-metaclass
@@ -365,6 +401,6 @@
   ;; the superclass NAMES (resolution happens in the shared-initialize fill,
   ;; AFTER user :arounds may have munged the list) and the canonicalized
   ;; slot-spec plists.
-  (apply #'closer-mop:ensure-class-using-class (%mop-ensured-class name) name
+  (apply #'closer-mop:ensure-class-using-class (%mop-existing-class name) name
          ':metaclass metaclass ':direct-superclasses supers ':direct-slots
          slot-specs class-initargs))

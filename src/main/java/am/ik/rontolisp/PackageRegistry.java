@@ -191,23 +191,23 @@ public final class PackageRegistry {
 			LispNames.DELETE_FILE, LispNames.Y_OR_N_P, LispNames.NAMESTRING_CL, LispNames.COPY_READTABLE,
 			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE, LispNames.GET_DISPATCH_MACRO_CHARACTER,
 			LispNames.MAKE_DISPATCH_MACRO_CHARACTER, LispNames.SET_MACRO_CHARACTER, LispNames.GET_MACRO_CHARACTER,
-			LispNames.SET_SYNTAX_FROM_CHAR, LispNames.READTABLEP, LispNames.READ_DELIMITED_LIST, LispNames.FIND_PACKAGE,
-			LispNames.SYMBOL_PACKAGE, LispNames.PACKAGE_NAME, LispNames.TYPE_OF, LispNames.INVOKE_RESTART,
-			LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING,
-			LispNames.ABORT, LispNames.CONTINUE, LispNames.USE_VALUE, LispNames.STORE_VALUE, LispNames.REMPROP,
-			LispNames.IMPORT, LispNames.PACKAGE_USE_LIST, LispNames.PACKAGE_USED_BY_LIST,
-			LispNames.PACKAGE_SHADOWING_SYMBOLS, LispNames.PATHNAME_HOST, LispNames.PATHNAME_DEVICE,
-			LispNames.PATHNAME_VERSION, LispNames.WILD_PATHNAME_P, LispNames.ENOUGH_NAMESTRING,
-			LispNames.TRANSLATE_PATHNAME, LispNames.TRANSLATE_LOGICAL_PATHNAME, LispNames.LOGICAL_PATHNAME,
-			LispNames.LOGICAL_PATHNAME_TRANSLATIONS, LispNames.LOAD_LOGICAL_PATHNAME_TRANSLATIONS,
-			LispNames.PATHNAME_MATCH_P, LispNames.RENAME_FILE, LispNames.FILE_NAMESTRING,
-			LispNames.DIRECTORY_NAMESTRING, LispNames.HOST_NAMESTRING, LispNames.NSTRING_UPCASE,
-			LispNames.NSTRING_DOWNCASE, LispNames.NSTRING_CAPITALIZE, LispNames.LISP_IMPLEMENTATION_TYPE,
-			LispNames.LISP_IMPLEMENTATION_VERSION, LispNames.SOFTWARE_TYPE, LispNames.SOFTWARE_VERSION,
-			LispNames.MACHINE_TYPE, LispNames.MACHINE_VERSION, LispNames.MACHINE_INSTANCE, LispNames.SHORT_SITE_NAME,
-			LispNames.LONG_SITE_NAME, LispNames.USER_HOMEDIR_PATHNAME, LispNames.COPY_SYMBOL, LispNames.INVOKE_DEBUGGER,
-			LispNames.REMOVE_METHOD, LispNames.ADD_METHOD, LispNames.FIND_METHOD, LispNames.ENSURE_GENERIC_FUNCTION,
-			LispNames.METHOD_QUALIFIERS, LispNames.MAKE_INSTANCES_OBSOLETE,
+			LispNames.SET_SYNTAX_FROM_CHAR, LispNames.READTABLEP, LispNames.READ_DELIMITED_LIST,
+			LispNames.READ_PRESERVING_WHITESPACE, LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE,
+			LispNames.PACKAGE_NAME, LispNames.TYPE_OF, LispNames.INVOKE_RESTART, LispNames.FIND_RESTART,
+			LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING, LispNames.ABORT,
+			LispNames.CONTINUE, LispNames.USE_VALUE, LispNames.STORE_VALUE, LispNames.REMPROP, LispNames.IMPORT,
+			LispNames.PACKAGE_USE_LIST, LispNames.PACKAGE_USED_BY_LIST, LispNames.PACKAGE_SHADOWING_SYMBOLS,
+			LispNames.PATHNAME_HOST, LispNames.PATHNAME_DEVICE, LispNames.PATHNAME_VERSION, LispNames.WILD_PATHNAME_P,
+			LispNames.ENOUGH_NAMESTRING, LispNames.TRANSLATE_PATHNAME, LispNames.TRANSLATE_LOGICAL_PATHNAME,
+			LispNames.LOGICAL_PATHNAME, LispNames.LOGICAL_PATHNAME_TRANSLATIONS,
+			LispNames.LOAD_LOGICAL_PATHNAME_TRANSLATIONS, LispNames.PATHNAME_MATCH_P, LispNames.RENAME_FILE,
+			LispNames.FILE_NAMESTRING, LispNames.DIRECTORY_NAMESTRING, LispNames.HOST_NAMESTRING,
+			LispNames.NSTRING_UPCASE, LispNames.NSTRING_DOWNCASE, LispNames.NSTRING_CAPITALIZE,
+			LispNames.LISP_IMPLEMENTATION_TYPE, LispNames.LISP_IMPLEMENTATION_VERSION, LispNames.SOFTWARE_TYPE,
+			LispNames.SOFTWARE_VERSION, LispNames.MACHINE_TYPE, LispNames.MACHINE_VERSION, LispNames.MACHINE_INSTANCE,
+			LispNames.SHORT_SITE_NAME, LispNames.LONG_SITE_NAME, LispNames.USER_HOMEDIR_PATHNAME, LispNames.COPY_SYMBOL,
+			LispNames.INVOKE_DEBUGGER, LispNames.REMOVE_METHOD, LispNames.ADD_METHOD, LispNames.FIND_METHOD,
+			LispNames.ENSURE_GENERIC_FUNCTION, LispNames.METHOD_QUALIFIERS, LispNames.MAKE_INSTANCES_OBSOLETE,
 			LispNames.UPDATE_INSTANCE_FOR_REDEFINED_CLASS, LispNames.COMPILE_FILE, LispNames.COMPILE_FILE_PATHNAME,
 			LispNames.MAKE_PACKAGE, LispNames.DELETE_PACKAGE, LispNames.RENAME_PACKAGE, LispNames.PACKAGEP,
 			LispNames.PACKAGE_NICKNAMES, LispNames.FIND_ALL_SYMBOLS, LispNames.APROPOS, LispNames.APROPOS_LIST,
@@ -261,10 +261,10 @@ public final class PackageRegistry {
 			"EXTENDED-CHAR",
 			// Bit-vector types (no longer empty: a bit vector is the
 			// general array stamped with the remembered element type bit, with its
-			// lattice edges in LispMacroExpander.SUBTYPEP_PARENTS). The two metaclass
-			// names are empty types (nothing satisfies them, by the same must-not-become-
-			// pkg::name rule): a defstruct's class metaobject is a standard-class and
-			// built-in types have no metaobjects -- trivia level2 dispatches
+			// lattice edges in LispMacroExpander.SUBTYPEP_PARENTS). The metaclass names,
+			// by the same must-not-become-pkg::name rule: structure-class is an empty
+			// type (a defstruct's class metaobject is a standard-class), built-in-class a
+			// seeded class (McCLIM tells the two apart) -- trivia level2 dispatches
 			// typecase/etypecase over them.
 			"BIT-VECTOR", "SIMPLE-BIT-VECTOR", "STRUCTURE-CLASS", "BUILT-IN-CLASS",
 			// The generic-function and method metaobject classes
@@ -455,10 +455,9 @@ public final class PackageRegistry {
 			"FUNCTION-KEYWORDS", "HASH-TABLE", "IGNORABLE", "IGNORE", "INLINE", "INSPECT", "INVALID-METHOD-ERROR",
 			"INVOKE-RESTART-INTERACTIVELY", "KEYWORD", "LOOP-FINISH", "MAKE-METHOD", "METHOD-COMBINATION-ERROR",
 			"NEXT-METHOD-P", "NIL", "NO-APPLICABLE-METHOD", "NO-NEXT-METHOD", "NOTINLINE", "OPTIMIZE", "PPRINT-FILL",
-			"PPRINT-LINEAR", "PPRINT-TABULAR", "READ-PRESERVING-WHITESPACE", "RESTART", "ROOM", "SAFETY", "SPACE",
-			"SPECIAL", "SPEED", "STANDARD", "STEP", "STRUCTURE-OBJECT", "SYMBOL", "T", "TRACE", "UNTRACE",
-			"UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "UPGRADED-ARRAY-ELEMENT-TYPE", "VARIABLE", "WITH-CONDITION-RESTARTS",
-			"YES-OR-NO-P");
+			"PPRINT-LINEAR", "PPRINT-TABULAR", "RESTART", "ROOM", "SAFETY", "SPACE", "SPECIAL", "SPEED", "STANDARD",
+			"STEP", "STRUCTURE-OBJECT", "SYMBOL", "T", "TRACE", "UNTRACE", "UPDATE-INSTANCE-FOR-DIFFERENT-CLASS",
+			"UPGRADED-ARRAY-ELEMENT-TYPE", "VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
 
 	/**
 	 * The 28 car/cdr compositions ({@code caar} .. {@code cddddr}). Resolution recognizes

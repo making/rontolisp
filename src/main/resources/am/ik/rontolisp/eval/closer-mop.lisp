@@ -17,7 +17,7 @@
 ;; its nickname (c2mop) are seeded in PackageRegistry, as is the flat
 ;; closer-common-lisp (nickname c2cl) re-export package over cl + this one.
 
-(defun closer-mop:classp (class) (typep class 'standard-class))
+(defun closer-mop:classp (class) (typep class 'class))
 
 (defun closer-mop:ensure-finalized (class) class)
 
@@ -143,6 +143,11 @@
 
 (defun closer-mop:class-direct-subclasses (class)
   (%class-direct-subclasses class))
+
+(defun closer-mop:class-default-initargs (class)
+  ;; AMOP: (initarg form function) for the class and its superclasses, the most
+  ;; specific default of an initarg winning.
+  (%class-default-initargs class))
 
 (defun closer-mop:subclassp (class superclass)
   ;; Whether SUPERCLASS is in CLASS's precedence list (reflexive); each argument

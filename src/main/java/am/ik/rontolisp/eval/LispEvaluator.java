@@ -2194,6 +2194,30 @@ public final class LispEvaluator {
 					}
 					return result;
 				}));
+		this.globalEnv.defineFunction(LispNames.CLASS_DEFAULT_INITARGS_INTERNAL,
+				new LispFunction(LispNames.CLASS_DEFAULT_INITARGS_INTERNAL, args -> {
+					// (%class-default-initargs designator) -- AMOP's canonicalized
+					// (initarg form function) list of the class and its superclasses.
+					requireSingleArg(LispNames.CLASS_DEFAULT_INITARGS_INTERNAL, args);
+					LispVal designator = args.get(0);
+					if (designator instanceof LispInstance inst && this.closRegistry.isClassMetaobject(inst)) {
+						designator = inst.slot(0);
+					}
+					ClosRegistry.ClassInfo info = designator instanceof LispSymbol sym
+							? this.closRegistry.findClass(sym.name()) : null;
+					if (info == null) {
+						return LispNil.INSTANCE;
+					}
+					java.util.List<LispVal> rows = new java.util.ArrayList<>();
+					this.closRegistry.defaultInitargs(info).forEach((initarg, form) -> {
+						LispVal thunk = eval(
+								new LispCons(new LispSymbol(LispNames.LAMBDA),
+										new LispCons(LispNil.INSTANCE, new LispCons(form, LispNil.INSTANCE))),
+								this.globalEnv);
+						rows.add(valueList(List.of(new LispSymbol(initarg), form, thunk)));
+					});
+					return valueList(rows);
+				}));
 		this.globalEnv.defineFunction(LispNames.REGISTER_CLASS_METAOBJECT,
 				new LispFunction(LispNames.REGISTER_CLASS_METAOBJECT, args -> {
 					// (%register-class-metaobject name metaobject) -- primes the registry
@@ -5052,7 +5076,8 @@ public final class LispEvaluator {
 						ClosRegistry.newEndOfFileCondition(designator));
 			}
 			// CLHS 23.2: the whitespace character that ends the datum is consumed.
-			if (end < text.length() && Character.isWhitespace(text.charAt(end))) {
+			if (!LispNames.READ_PRESERVING_WHITESPACE.equals(name) && end < text.length()
+					&& Character.isWhitespace(text.charAt(end))) {
 				end++;
 			}
 			table.moveTo(designator, reader, end);
@@ -5067,10 +5092,11 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Evaluates a {@code read} or {@code read-delimited-list} call: the prelude defun,
-	 * with the readtable-honoring read of a string stream in front of it
-	 * ({@link #readWithSyntax}) -- the {@link #evalSequenceScan} shape, serving the call
-	 * only while the name still resolves to the prelude's own definition.
+	 * Evaluates a {@code read}, {@code read-preserving-whitespace} or
+	 * {@code read-delimited-list} call: the prelude defun, with the readtable-honoring
+	 * read of a string stream in front of it ({@link #readWithSyntax}) -- the
+	 * {@link #evalSequenceScan} shape, serving the call only while the name still
+	 * resolves to the prelude's own definition.
 	 */
 	private LispVal evalReadCall(LispCons cons, Environment env, String name) {
 		LispVal function = resolveFunction(name);
@@ -6756,8 +6782,8 @@ public final class LispEvaluator {
 			}
 			else if (!this.loadedSystems.contains(name)) {
 				if (LispNames.CLOSER_MOP_PKG.equalsIgnoreCase(name)) {
-					// The shim's classp is (typep x 'standard-class): the MOP base
-					// classes must be registered before that type test expands.
+					// The shim's classp is (typep x 'class): the MOP base classes
+					// must be registered before that type test expands.
 					this.closRegistry.ensureMopClassesSeeded();
 				}
 				for (LispVal form : BuiltinSystems.forms(name, Features.INTERPRETER)) {
@@ -9615,11 +9641,19 @@ public final class LispEvaluator {
 				}
 				return LispNil.INSTANCE;
 			}));
+			// A forward-referenced class defined at last, in place. The compile paths
+			// generate a no-op (LispMacroExpander, beside mopClassFinalizedDefun).
+			this.globalEnv.defineFunction(MOP_CHANGE_METACLASS,
+					new LispFunction(MOP_CHANGE_METACLASS, args -> evalQuotedPlistCall(LispNames.CHANGE_CLASS,
+							List.of(args.get(0), args.get(1)), LispNil.INSTANCE)));
 		}
 	}
 
 	/** The (re)finalization hook mop-protocol.lisp's finalize-inheritance calls. */
 	private static final String MOP_CLASS_FINALIZED = "%MOP-CLASS-FINALIZED";
+
+	/** The hook mop-protocol.lisp's ensure-class-using-class changes a metaclass by. */
+	private static final String MOP_CHANGE_METACLASS = "%MOP-CHANGE-METACLASS";
 
 	/** dynamic-classes.lisp's memo of the class precedence lists. */
 	private static final String DYNAMIC_CPLS = "%DYNAMIC-CPLS%";
@@ -11588,6 +11622,7 @@ public final class LispEvaluator {
 				// ~2.5 us per element PAIR. The arm declines to this same call.
 				return singleValue(evalSequenceScan(cons, env, name));
 			case LispNames.READ:
+			case LispNames.READ_PRESERVING_WHITESPACE:
 			case LispNames.READ_DELIMITED_LIST:
 				// The prelude defun, with the readtable-honoring read of a string stream
 				// in front of it (.kb/readtables.md). The arm declines to this same call.
@@ -12023,8 +12058,12 @@ public final class LispEvaluator {
 			regenerateClassDispatchers(env);
 		}
 		LispCons registered = cons;
+		String movedFrom = null;
 		if (LispMacroExpander.defclassUsesMetaclass(cons)) {
 			ensureMopProtocolLoaded();
+			if (cons.toList().get(1) instanceof LispSymbol defined) {
+				movedFrom = this.closRegistry.classMovedTo(defined.name());
+			}
 			// A REdefinition starts from what the previous driver-built metaobject knew
 			// about slot allocations: the static side below is registered before this
 			// definition's driver runs, and its hooks may write a class-allocated slot
@@ -12041,6 +12080,10 @@ public final class LispEvaluator {
 		// the new class may extend one of their descendant tag sets.
 		LispVal driverMetaobject = null;
 		for (LispVal form : LispMacroExpander.expandDefclass(registered, this.closRegistry, this.structAccessors)) {
+			if (movedFrom != null && cons.toList().get(1) instanceof LispSymbol defined) {
+				this.closRegistry.moveDescendants(movedFrom, defined.name());
+				movedFrom = null;
+			}
 			LispVal value = eval(form, env);
 			if (isEnsureClassDriverCall(form)) {
 				driverMetaobject = value;
@@ -12787,12 +12830,7 @@ public final class LispEvaluator {
 		try {
 			LispVal result = LispNil.INSTANCE;
 			for (LispVal bodyForm : parts.subList(2, parts.size())) {
-				// Pre-expand with the local macros active BEFORE evaluating: a body form
-				// that only CAPTURES code (a defun/defgeneric method body) must bake the
-				// expansion in now -- by the time the captured body runs, the local
-				// macros are gone and the call would resolve as an undefined function
-				// (jzon's %coerced-fields-slots inside its coerced-fields defgeneric).
-				result = eval(expandAllAtSite(bodyForm, env), env);
+				result = evalMacroletForm(bodyForm, env);
 			}
 			return result;
 		}
@@ -12806,6 +12844,47 @@ public final class LispEvaluator {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Evaluates a form of a {@code macrolet} body as the top-level form it is (CLHS
+	 * 3.2.3.1): a macro call is expanded until it is not one, and the members of the
+	 * {@code progn}, {@code eval-when} or {@code locally} it became run in order, each
+	 * expanded once the one before it has run (McCLIM's {@code define} of a presentation
+	 * type and then its methods, whose macro reads the type). Anything else is
+	 * pre-expanded with the local macros active BEFORE evaluating: a form that only
+	 * CAPTURES code (a defun/defgeneric method body) must bake the expansion in now -- by
+	 * the time the captured body runs, the local macros are gone and the call would
+	 * resolve as an undefined function (jzon's {@code %coerced-fields-slots} inside its
+	 * {@code coerced-fields} defgeneric).
+	 */
+	private LispVal evalMacroletForm(LispVal form, Environment env) {
+		LispVal expanded = inSitePackage(env, () -> UserMacroExpander.expandMacroCall(form, this));
+		if (expanded instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head) {
+			switch (memberName(head.name())) {
+				case LispNames.PROGN:
+					return evalMacroletMembers(cons.toList().subList(1, cons.toList().size()), env);
+				case LispNames.EVAL_WHEN:
+					if (this.evalFunctionRuns.get() && !LispMacroExpander.evalWhenExecutes(cons)) {
+						return LispNil.INSTANCE;
+					}
+					return evalMacroletForm(LispMacroExpander.expandEvalWhen(cons), env);
+				case LispNames.LOCALLY:
+					return evalMacroletForm(LispMacroExpander.expandLocally(cons), env);
+				case LispNames.MACROLET:
+					return evalMacrolet(cons, env);
+				default:
+			}
+		}
+		return eval(expandAllAtSite(expanded, env), env);
+	}
+
+	private LispVal evalMacroletMembers(List<LispVal> members, Environment env) {
+		LispVal result = LispNil.INSTANCE;
+		for (LispVal member : members) {
+			result = evalMacroletForm(member, env);
+		}
+		return result;
 	}
 
 	/**
@@ -15545,14 +15624,18 @@ public final class LispEvaluator {
 	 * under whatever package its caller is in.
 	 */
 	private LispVal expandAllAtSite(LispVal form, Environment env) {
+		return inSitePackage(env, () -> UserMacroExpander.expandAll(form, this));
+	}
+
+	private LispVal inSitePackage(Environment env, java.util.function.Supplier<LispVal> expansion) {
 		String callerPackage = this.packageResolver.currentPackageName();
 		String sitePackage = env.lexicalPackage();
 		if (sitePackage == null || callerPackage.equals(sitePackage)) {
-			return UserMacroExpander.expandAll(form, this);
+			return expansion.get();
 		}
 		this.packageResolver.setCurrentPackage(sitePackage);
 		try {
-			return UserMacroExpander.expandAll(form, this);
+			return expansion.get();
 		}
 		finally {
 			this.packageResolver.setCurrentPackage(callerPackage);

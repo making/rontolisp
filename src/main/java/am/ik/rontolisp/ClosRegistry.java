@@ -531,14 +531,14 @@ public final class ClosRegistry {
 			return;
 		}
 		this.mopClassesSeeded = true;
-		// CLASS is slot-less and never instantiated: it exists so that (typep x 'class)
-		// -- the metaobject predicate mito's contains-class-or-subclasses rides -- is an
-		// ordinary registry ancestor test on every backend, and so that standard-class
-		// keeps its own slots at index 0 (a slot-less parent contributes nothing to the
-		// layout, so the %obj-ref index contract below is unchanged).
-		seedClass(CLASS_NAME, null);
-		seedClass(STANDARD_CLASS_NAME, CLASS_NAME, "NAME", "DIRECT-SUPERCLASSES", "DIRECT-SLOTS", "EFFECTIVE-SLOTS",
-				"FINALIZED-P");
+		// CLASS is never instantiated and holds the slots of every class metaobject, so
+		// (typep x 'class) -- the metaobject predicate mito's
+		// contains-class-or-subclasses rides -- is an ordinary registry ancestor test on
+		// every backend, and every metaclass, standard-class and built-in-class alike,
+		// has the %obj-ref index contract below.
+		seedClass(CLASS_NAME, null, "NAME", "DIRECT-SUPERCLASSES", "DIRECT-SLOTS", "EFFECTIVE-SLOTS", "FINALIZED-P");
+		seedClass(STANDARD_CLASS_NAME, CLASS_NAME);
+		seedClass(BUILT_IN_CLASS_NAME, CLASS_NAME);
 		// The slot-definition hierarchy (AMOP 5.4): the root holds every slot, so both
 		// standard classes keep the same layout.
 		seedClass(SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS", "INITFUNCTION",
@@ -617,7 +617,7 @@ public final class ClosRegistry {
 					// generic-function is a funcallable-standard-object (AMOP 5.2).
 					ensureFuncallableClassesSeeded();
 				}
-				if (STANDARD_CLASS_NAME.equals(seed.parent())) {
+				if (CLASS_NAME.equals(seed.parent())) {
 					ensureMopClassesSeeded();
 				}
 				if (!this.classes.containsKey(normalize(seed.name()))) {
@@ -1078,11 +1078,17 @@ public final class ClosRegistry {
 
 	/**
 	 * The seeded metaclass every plain class metaobject is an instance of (see
-	 * {@link #classMetaobject}). Slot order (an index contract, see
-	 * {@code seedMopClasses}): name, direct-superclasses, direct-slots, effective-slots,
-	 * finalized-p.
+	 * {@link #classMetaobject}). Slot-less: its layout is {@link #CLASS_NAME}'s.
 	 */
 	public static final String STANDARD_CLASS_NAME = "STANDARD-CLASS";
+
+	/**
+	 * The seeded metaclass of the built-in classes (see {@link #builtinClassMetaobject}),
+	 * beside {@link #STANDARD_CLASS_NAME} under {@link #CLASS_NAME}: McCLIM's
+	 * {@code (typep (find-class name nil) 'standard-class)} is how a program tells a CLOS
+	 * class from a built-in one. Slot-less, and never instantiated by a program.
+	 */
+	public static final String BUILT_IN_CLASS_NAME = "BUILT-IN-CLASS";
 
 	/**
 	 * CL's root class: every class's last ancestor before {@code t}, never registered
@@ -1093,10 +1099,13 @@ public final class ClosRegistry {
 
 	/**
 	 * The seeded root of the metaclass hierarchy -- CL's {@code class}, the superclass of
-	 * {@link #STANDARD_CLASS_NAME} and hence of every user metaclass. Slot-less and never
-	 * instantiated: its only job is to make {@code (typep x 'class)} / {@code (subtypep m
-	 * 'class)} answer for a class metaobject through the ordinary ancestor machinery,
-	 * identically on all four backends.
+	 * {@link #STANDARD_CLASS_NAME}, {@link #BUILT_IN_CLASS_NAME},
+	 * {@link #FORWARD_REFERENCED_CLASS_NAME} and hence of every user metaclass. Never
+	 * instantiated: it makes {@code (typep x 'class)} / {@code (subtypep m 'class)}
+	 * answer for a class metaobject through the ordinary ancestor machinery, identically
+	 * on all four backends, and holds the slots of every class metaobject. Slot order (an
+	 * index contract, see {@link #ensureMopClassesSeeded}): name, direct-superclasses,
+	 * direct-slots, effective-slots, finalized-p.
 	 */
 	public static final String CLASS_NAME = "CLASS";
 
@@ -1205,9 +1214,8 @@ public final class ClosRegistry {
 	public static final String FORWARD_REFERENCED_CLASS = "FORWARD-REFERENCED-CLASS";
 
 	/**
-	 * AMOP's {@code forward-referenced-class}, under its {@code closer-mop} name: a
-	 * metaclass of the metaobject layout, so below {@code standard-class} where AMOP has
-	 * it beside.
+	 * AMOP's {@code forward-referenced-class}, under its {@code closer-mop} name, beside
+	 * {@link #STANDARD_CLASS_NAME} under {@link #CLASS_NAME}.
 	 */
 	public static final String FORWARD_REFERENCED_CLASS_NAME = LispNames.CLOSER_MOP_PKG + ":"
 			+ FORWARD_REFERENCED_CLASS;
@@ -1277,7 +1285,7 @@ public final class ClosRegistry {
 					new MopSeed(STANDARD_WRITER_METHOD_NAME, STANDARD_ACCESSOR_METHOD_NAME)),
 			List.of(new MopSeed("METHOD-COMBINATION", null)),
 			List.of(new MopSeed(EQL_SPECIALIZER_NAME, null, List.of("OBJECT"))),
-			List.of(new MopSeed(FORWARD_REFERENCED_CLASS_NAME, STANDARD_CLASS_NAME)));
+			List.of(new MopSeed(FORWARD_REFERENCED_CLASS_NAME, CLASS_NAME)));
 
 	/** Each member name of {@link #METHOD_METAOBJECT_FAMILIES} to its family. */
 	private static final Map<String, List<MopSeed>> METHOD_METAOBJECT_FAMILY_BY_MEMBER = methodMetaobjectFamilyIndex();
@@ -1294,7 +1302,7 @@ public final class ClosRegistry {
 
 	/** The classes {@link #ensureMopClassesSeeded()} registers, in seeding order. */
 	private static final List<String> MOP_BASE_CLASS_NAMES = List.of(CLASS_NAME, STANDARD_CLASS_NAME,
-			SLOT_DEFINITION_NAME, DIRECT_SLOT_DEFINITION_NAME, EFFECTIVE_SLOT_DEFINITION_NAME,
+			BUILT_IN_CLASS_NAME, SLOT_DEFINITION_NAME, DIRECT_SLOT_DEFINITION_NAME, EFFECTIVE_SLOT_DEFINITION_NAME,
 			STANDARD_SLOT_DEFINITION_NAME, STANDARD_DIRECT_SLOT_DEFINITION_NAME,
 			STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME);
 
@@ -1398,7 +1406,8 @@ public final class ClosRegistry {
 	 * eq-compare superclass metaobjects against {@code (find-class 'standard-object)}
 	 * (mito's {@code map-all-superclasses}), and the metaclass protocol defaults a
 	 * driver-built class's empty {@code :direct-superclasses} to it
-	 * ({@code mop-protocol.lisp}), per AMOP.
+	 * ({@code mop-protocol.lisp}), per AMOP. It and {@code structure-object}
+	 * ({@link #STANDARD_METACLASS_ROOT_NAMES}) are {@code standard-class} instances.
 	 *
 	 * <p>
 	 * The rest are the INTERIOR of the built-in class lattice: every value they cover is
@@ -1410,7 +1419,14 @@ public final class ClosRegistry {
 	 * specifier resolves through by name (`.kb/clos.md`).
 	 */
 	public static final List<String> FIND_CLASS_ONLY_CLASS_NAMES = List.of("STANDARD-OBJECT", "SEQUENCE", "LIST",
-			"NUMBER", "REAL", "RATIONAL", "STRUCTURE-OBJECT", "BUILT-IN-CLASS");
+			"NUMBER", "REAL", "RATIONAL", "STRUCTURE-OBJECT");
+
+	/**
+	 * The {@link #FIND_CLASS_ONLY_CLASS_NAMES} that are no built-in classes: the roots of
+	 * the instances, whose metaobjects are {@link #STANDARD_CLASS_NAME} instances as a
+	 * class's and a structure's are.
+	 */
+	public static final List<String> STANDARD_METACLASS_ROOT_NAMES = List.of(STANDARD_OBJECT_NAME, "STRUCTURE-OBJECT");
 
 	/**
 	 * The fixed layouts whose instances are values of a built-in class rather than of a
@@ -3846,6 +3862,51 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * The name a class defined under {@code name} was defined as before: the memo key of
+	 * the metaobject {@code (setf find-class)} moved to {@code name}, which keeps it
+	 * through the definition (McCLIM's forward-referenced presentation types).
+	 * @param name the class name being defined
+	 * @return the earlier key, or null when no class moved to the name
+	 */
+	@Nullable public String classMovedTo(String name) {
+		if (!(findClassOverride(name) instanceof LispInstance moved)) {
+			return null;
+		}
+		for (Map.Entry<String, LispInstance> entry : this.classMetaobjects.entrySet()) {
+			if (entry.getValue() == moved && !entry.getKey().equals(normalize(name))) {
+				return entry.getKey();
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Makes the classes descending from {@code oldKey} descend from the class now defined
+	 * as {@code newName}, the same class by {@link #classMovedTo}. Their layouts stay:
+	 * redefinition does not propagate in the static subset.
+	 * @param oldKey the class's earlier key
+	 * @param newName the class's name
+	 */
+	public void moveDescendants(String oldKey, String newName) {
+		ClassInfo target = java.util.Objects.requireNonNull(findClass(newName));
+		for (ClassInfo info : List.copyOf(this.classes.values())) {
+			if (info != target && info.ancestors().contains(oldKey)) {
+				Set<String> ancestors = new java.util.LinkedHashSet<>(info.ancestors());
+				ancestors.addAll(target.ancestors());
+				java.util.function.UnaryOperator<String> moved = name -> normalize(name).equals(oldKey) ? target.name()
+						: name;
+				this.classes.put(normalize(info.name()),
+						new ClassInfo(info.name(), info.superclasses().stream().map(moved).toList(),
+								info.cpl().stream().map(moved).toList(), info.directSlots(), info.slots(),
+								Set.copyOf(ancestors)));
+			}
+		}
+		this.hierarchyVersion++;
+		this.classesByMember = null;
+		this.descendantStructTagsMemo.clear();
+	}
+
+	/**
 	 * The {@link #setFindClassOverride} answer for a name, or null when none is in force
 	 * (nil itself means forgotten).
 	 * @param name the class name
@@ -3929,10 +3990,10 @@ public final class ClosRegistry {
 	/**
 	 * The memoized metaobject of a BUILT-IN class name ({@link #BUILTIN_CLASS_NAMES}) --
 	 * what {@code class-of} answers for a non-instance value and {@code find-class} falls
-	 * back to when no registered class matches. A {@code standard-class} instance with no
-	 * slots and no superclasses ({@code built-in-class} does not exist, a documented
-	 * divergence); the {@code T} class's name slot holds the boolean {@code t} value,
-	 * matching what the compiled table's quoted {@code T} reads as.
+	 * back to when no registered class matches. A {@link #BUILT_IN_CLASS_NAME} instance
+	 * with no slots and no superclasses ({@link #STANDARD_METACLASS_ROOT_NAMES} a
+	 * {@code standard-class} one); the {@code T} class's name slot holds the boolean
+	 * {@code t} value, matching what the compiled table's quoted {@code T} reads as.
 	 * @param name the built-in class name (upcased)
 	 * @return the metaobject, or null when the name is not a built-in class
 	 */
@@ -3946,16 +4007,17 @@ public final class ClosRegistry {
 			return cached;
 		}
 		LispVal nameVal = "T".equals(name) ? LispTrue.INSTANCE : new LispSymbol(name);
-		LispInstance metaobject = newSeededInstance(STANDARD_CLASS_NAME, nameVal, LispNil.INSTANCE, LispNil.INSTANCE,
-				LispNil.INSTANCE, LispTrue.INSTANCE);
+		LispInstance metaobject = newSeededInstance(
+				STANDARD_METACLASS_ROOT_NAMES.contains(name) ? STANDARD_CLASS_NAME : BUILT_IN_CLASS_NAME, nameVal,
+				LispNil.INSTANCE, LispNil.INSTANCE, LispNil.INSTANCE, LispTrue.INSTANCE);
 		this.classMetaobjects.put(name, metaobject);
 		return metaobject;
 	}
 
 	/**
-	 * Whether a value is a class metaobject -- an instance of
-	 * {@link #STANDARD_CLASS_NAME} or of a class derived from it (a user metaclass). This
-	 * is what {@code closer-mop:classp} tests.
+	 * Whether a value is a class metaobject -- an instance of a class derived from
+	 * {@link #CLASS_NAME}: {@link #STANDARD_CLASS_NAME}, {@link #BUILT_IN_CLASS_NAME}, a
+	 * user metaclass. This is what {@code closer-mop:classp} tests.
 	 * @param value the value to test
 	 * @return true for a class metaobject
 	 */
@@ -3968,7 +4030,7 @@ public final class ClosRegistry {
 			return false;
 		}
 		ClassInfo info = findClass(typeName);
-		return info != null && info.ancestors().contains(STANDARD_CLASS_NAME);
+		return info != null && info.ancestors().contains(CLASS_NAME);
 	}
 
 	// A fresh instance of a seeded class, with the trailing slots nil-filled up to the

@@ -410,6 +410,7 @@ categories:
       - { slug: read-from-string, name: "read-from-string" }
       - { slug: parse-integer, name: "parse-integer" }
       - { slug: read-delimited-list, name: "read-delimited-list" }
+      - { slug: read-preserving-whitespace, name: "read-preserving-whitespace" }
       - { slug: copy-readtable, name: "copy-readtable" }
       - { slug: readtablep, name: "readtablep" }
       - { slug: readtable-case, name: "readtable-case" }

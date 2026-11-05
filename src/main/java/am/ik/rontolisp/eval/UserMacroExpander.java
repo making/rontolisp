@@ -789,7 +789,7 @@ public final class UserMacroExpander {
 	}
 
 	// A macro call expanded until it is not one; any other form unchanged.
-	private static LispVal expandMacroCall(LispVal form, LispEvaluator macroEval) {
+	static LispVal expandMacroCall(LispVal form, LispEvaluator macroEval) {
 		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 				&& isMacroInWalk(sym.name(), macroEval)) {
 			form = foldNativeExpansion(SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons)));

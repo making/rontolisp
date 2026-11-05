@@ -149,7 +149,7 @@ no-applicable-method. A **definition-time MOP
 subset** is in:
 [`find-class`](../reference/functions/find-class.md) and
 [`class-of`](../reference/functions/class-of.md) answer real `standard-class`
-metaobjects, [`allocate-instance`](../reference/functions/allocate-instance.md)
+and `built-in-class` metaobjects, [`allocate-instance`](../reference/functions/allocate-instance.md)
 works, and a `(:metaclass M)` class option runs the class-definition protocol at
 definition time (see [`defclass`](../reference/special-forms/defclass.md)) — this
 is what loads postmodern's DAO layer verbatim. Multiple inheritance works

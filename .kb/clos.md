@@ -176,9 +176,9 @@ so `#'name`/`funcall`/`mapcar` work with no `BuiltinFunctionWrappers` entry.
   form was an `UnsupportedOperationException` at expansion. ci-spec
   `clos-defmethod-eql-specializer-over-a-constant`.
 - **Metaclass specializers**: `parseSpecializer` seeds the MOP classes for `class` /
-  `standard-class` (`ensureMopClassesSeededFor`, like a type specifier) so they become CLASS
-  specializers matching every class metaobject (built-in classes included);
-  `structure-class` / `built-in-class` are TYPE specializers with the empty test. A class
+  `standard-class` / `built-in-class` (`ensureMopClassesSeededFor`, like a type specifier) so they
+  become CLASS specializers: `class` matches every class metaobject, the other two theirs;
+  `structure-class` is a TYPE specializer with the empty test. A class
   OBJECT in specializer position (serapeum's `#.(class-of ...)`) is read as its slot-0 name
   (`classMetaobjectName`; the literal comes from the macro-time evaluator, so the tag is
   checked by name, not only via this registry). ci-spec: `clos-slot-options-and-metaobject-types`.
@@ -254,7 +254,8 @@ The interpreter needs nothing, it regenerates at each form.
 `ClassInfo` carries `superclasses` (local precedence order), `cpl` (CLHS 4.3.5 topological
 sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException`) and
 `directSlots`, beside the effective `slots` and the ancestor SET.
-- **Layout rule**: the FIRST superclass's effective slots keep their indexes, each later
+- **Layout rule**: the FIRST superclass's effective slots keep their indexes (the first
+  descending from `class` for a metaclass, the metaobject index contract), each other
   superclass appends its not-yet-present slot names, a diamond keeps ONE copy. Inherited slot
   OPTIONS are re-merged from the direct specs along the CPL (`cplMergedSlot`/`shadowSlotSpec`).
 - **Shifted accessors**: a non-first superclass's accessors bake THEIR index while their class
@@ -729,8 +730,8 @@ what the program signals without the generic, so an uncovered read is unchanged.
   `instanceSlotRef` answers a `CellSlotRef`). **Residual**: the instance PRINTER shows the
   mirror, and `equalp`/`%obj-slots` walk mirrors.
 - **`standard-class` as a type specifier**: `makeTypeTest` calls `ensureMopClassesSeededFor` on
-  an unrecognized symbol specifier before the registry lookup.
-  `structure-class`/`built-in-class` keep their deliberate empty tests.
+  an unrecognized symbol specifier before the registry lookup, `built-in-class` too.
+  `structure-class` keeps its deliberate empty test.
 
 ## `print-object` — the printer consults it
 A `defmethod print-object` makes the printing operators render that type through the generic.
@@ -842,17 +843,20 @@ NAME one of `ClosRegistry.SHORT_FORM_COMBINATIONS` —
 
 ## MOP boundary — what is IN
 The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real memoized
-`standard-class` instance on all four backends, `eq` to each other for the same class.
+`standard-class` or `built-in-class` instance on all four backends, `eq` to each other for the
+same class.
 - **Interpreter**: Java built-ins over `ClosRegistry.classMetaobject` (designator-aware: plain
   names AND instance tags; a struct class is a `standard-class` instance, `structure-class`
   does not exist) and `builtinClassMetaobject` (`BUILTIN_CLASS_NAMES` = exactly the
-  `class-of` designator result set, `T` for everything else). Seeding is lazy
+  `class-of` designator result set, `T` for everything else; a `built-in-class` instance but for
+  `STANDARD_METACLASS_ROOT_NAMES`, `standard-object` and `structure-object`). Seeding is lazy
   (`ensureMopClassesSeeded()`) — **NEVER seed unconditionally**: that joins every runtime
   dispatch table and once pushed the ci-spec corpus over the JVM 64 KB method ceiling.
 - **Compile paths**: `expandTopLevelDefinitions`, gated on the program referencing `find-class`
   OR `class-of`, injects the node-budget-chunked `%class-meta-table%` (one entry per registered
   class AND struct layout: spellings — the instance TAG among them — / superclass /
-  effective-slot data) plus `%find-class` + `%find-class-materialize`. The public `find-class`
+  effective-slot data) plus `%find-class` + `%find-class-materialize` (an entry of the spellings
+  alone, what the built-in names resolve to, makes a `built-in-class` instance). The public `find-class`
   defun is a thin wrapper injected only when the program references it without defining it.
   `(class-of x)` expands to `(%find-class <%class-designator dispatch> t)`.
 - The OLD tag/type-name view lives on as the internal `%class-designator`, ridden by the light
@@ -882,8 +886,20 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   nest the printed representation of every built-in class four deep, and buys no ANSI test:
   what the suite asks of these names is `(typep X (find-class 'name))` and "does the name
   resolve", not `class-precedence-list` (which `.todo/715` §4 rules out).
-  `built-in-class` is a NAME here, not a metaclass: `(class-of (find-class 'array))` is
-  `standard-class`, and `(typep x 'built-in-class)` keeps its deliberate empty test.
+- **`built-in-class` is a metaclass beside `standard-class`** (2026-11-05, on all four):
+  `(class-of (find-class 'array))` is `built-in-class`, `(typep (class-of 1) 'standard-class)` nil.
+  McCLIM's `record-presentation-type` asks exactly that to tell a CLOS class, which gets a proxy,
+  from a built-in one, which gets a class of its own (every built-in class a `standard-class`
+  instance stopped it: `DEFCLASS: the type NULL cannot be a superclass`). SBCL's `system-class`
+  (`t`, `function`, `stream`, `sequence`) and its structure classes among the built-in names
+  (`hash-table`, `readtable`, `random-state`, the composite streams) are `built-in-class` here;
+  `boolean` and `keyword` name no class in SBCL. What moved with it: `ClosRegistry.isClassMetaobject`,
+  `closer-mop:classp` and the name normalizations (`metaobjectNameNormalization`,
+  `%class-slot-defs-runtime`) ask for `class`; `%slot-protocol-instance-p` asks for a
+  `standard-class`, as what `class-of` answers a built-in class for (a stream, a pathname) is no
+  protocol instance; the system `shared-initialize` is on `class`. `isMetaobjectClass` means a
+  metaclass a program instantiates, so `class` and `built-in-class` have no constructor, and
+  `make-instance` of one is the seeded classes' run-time error.
 - **Checked 2026-09-11** (suite `ca06bd9`, interpreter, `arrays` + `objects` +
   `types-and-classes`): adding the names fixes 40 `arrays` cases and one
   `types-and-classes` case, **+41 tests**, with `objects` unchanged. Only
@@ -899,15 +915,16 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   `class-precedence-list` instead.
   A count of ERROR lines naming a missing operator is an UPPER bound on the tests it wins.
 - **`typep`/`subtypep` take a class METAOBJECT wherever a type specifier is expected.** ONE
-  rule — "an instance tagged as a `standard-class` descendant continues as its slot-0 name" —
+  rule — "an instance tagged as a `class` descendant continues as its slot-0 name" —
   with three emission sites: `subtypep` folds it in Java for the interpreter
   (`classMetaobjectDesignator`, AHEAD of the `t`/`nil` constant edges), and the emitted
   `%typep-runtime` (the specifier) / `%subtypep-runtime` (BOTH arguments) carry
   `metaobjectNameNormalization`. A metaobject is always a RUNTIME value, so the literal fold is
   untouched.
-- `class` is a SEEDED slot-less class (`ClosRegistry.CLASS_NAME`), superclass of
-  `standard-class`, so `(typep x 'class)` is the metaobject predicate through the ordinary
-  ancestor machinery. Never instantiated.
+- `class` is a SEEDED class (`ClosRegistry.CLASS_NAME`), superclass of `standard-class`,
+  `built-in-class` and `forward-referenced-class`, so `(typep x 'class)` is the metaobject predicate
+  through the ordinary ancestor machinery. It holds the five slots of every class metaobject, its
+  children being slot-less. Never instantiated.
 - **The method metaobject classes** (2026-10-31, `ClosRegistry.METHOD_METAOBJECT_FAMILIES`):
   `generic-function` > `standard-generic-function`; `method` > `standard-method` > closer-mop's
   `standard-accessor-method` > `standard-reader-method`/`standard-writer-method`;
@@ -953,7 +970,9 @@ The STATIC metaobject subset is IN: `find-class` AND `class-of` answer a real me
   wrapper is REFERENCE_GATED; `class-name` is a prelude defun over metaobject slot 0.
 - **Metaobject slot order is a `%obj-ref` index contract** shared with the closer-mop shim —
   append, never reorder: class = name, direct-superclasses, direct-slots, effective-slots,
-  finalized-p; slot-definition = name, initargs, initform, type, readers, initfunction (5),
+  finalized-p (the first superclass of a metaclass descending from `class` opens its layout whatever
+  its place: `expandDefclass`'s `layoutPrefix`, for McCLIM's `(presentation-type-info standard-class)`,
+  the shifted accessors covering the mixin); slot-definition = name, initargs, initform, type, readers, initfunction (5),
   writers (6, 2026-10-30), allocation (7, 2026-11-01: `:class`, or nil, which
   `closer-mop:slot-definition-allocation` answers as `:instance`; a materialized plain view
   carries `:class` for a `SlotSpec.sharedCellVar` slot -- the compile paths' meta-table row as
@@ -1033,10 +1052,24 @@ in each slot's storage, reached past its own `slot-value-using-class`, and pins 
 - **`closer-mop:ensure-class`** is `(eval (defclass ...))` of its initargs, so on the interpreter a
   method can specialize on the class and `make-instance` find it by name, what McCLIM's presentation
   types want. On the compile paths the `eval` defines no class, so `find-class` signals: the class
-  set is fixed there (`doc/**/find-class.md`). `forward-referenced-class` is a seeded metaclass BELOW
-  `standard-class` (AMOP: beside it), since every metaobject test goes through that tag. The readable
-  exports with no operator yet: `class-default-initargs`, `compute-effective-method`,
-  `specializer-direct-methods`, `specializer-direct-generic-functions`,
+  set is fixed there (`doc/**/find-class.md`).
+- **`forward-referenced-class`** is a seeded metaclass beside `standard-class`: `:metaclass` takes
+  its descendants, the system `finalize-inheritance` stays the shim's no-op for one, it gets no
+  default superclass, and a class with one among its superclasses is not finalized
+  (`%mop-waits-for-a-class-p`). Defined at last it stays the object its subclasses hold, of the
+  definition's metaclass, also when moved to another name first, as McCLIM's
+  `record-presentation-type` does: `%mop-existing-class` finds it through `find-class`,
+  `%mop-change-metaclass` is `change-class` on the interpreter and a no-op on the compile paths (a
+  compiled class keeps the layout of its first metaclass; `change-class` in the runtime would give
+  every `:metaclass` program its arms), and `ClosRegistry.moveDescendants` makes the static
+  descendants of the old name descend from the new one. Residual: a slot the definition brings is
+  not in those descendants' layouts (redefinition does not propagate).
+  `LispEvaluatorTest.closerMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators`, SBCL 2.2.9
+  agrees. McCLIM's own load makes none (measured 2026-11-05 over `clim-core`).
+- **`closer-mop:class-default-initargs`** is AMOP's `(initarg form function)` over
+  `ClosRegistry.defaultInitargs`: a built-in on the interpreter, the gated `%class-default-initargs`
+  dispatch (`%CDI-<n>`) on the compile paths. The readable exports with no operator yet:
+  `compute-effective-method`, `specializer-direct-methods`, `specializer-direct-generic-functions`,
   `compute-applicable-methods-using-classes` (a generic with what a program defines, never called).
 - Pinned by ci-spec standalone `slot-locations-and-allocate-instance-methods` (SBCL 2.2.9 `sb-mop`
   agrees) and `LispEvaluatorTest.closerMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators`.
@@ -1546,6 +1579,19 @@ chunk-loop wrapper).
   nothing loaded calls them), cl-store, trivial-arguments, documentation-utils, clunit2 and
   in-nomine (`find-method` of a `defmethod`'s method, which only a generic naming its
   metaobject classes lists).
+- **McCLIM, 2026-11-05, interpreter**: `(ql:quickload :clim-core)` loads (`Core/**`: geometry, sheets,
+  streams, presentations, commands, panes, frames, gadgets, dialogs). Over it `present`,
+  `accept-from-string` (`integer`, `string`, `boolean`, `(sequence integer)`), `presentation-typep`,
+  `presentation-subtypep`, `presentation-type-direct-supertypes` and regions, transformations and
+  text styles answer. No dispatcher consults `compute-applicable-methods`, so its `:around` removing
+  the `standard-object` methods for a presentation-type key has no effect; Core's one such method is
+  `presentation-typep`'s, whose body answers `t` for a key of that kind as the `t` method does.
+  What it took: `built-in-class` above, a `macrolet` body run as top-level forms
+  (`LispEvaluator.evalMacroletForm`, CLHS 3.2.3.1: a `define-presentation-type` and its methods in one
+  expansion, where SBCL's `load` and `compile-file` both expand a member after the one before it;
+  the compile paths walk in that order and run the compile-time half afterwards, as
+  `compile-file` of a `defclass` gives no `find-class`), `read-preserving-whitespace`,
+  `class-default-initargs`.
 - **contextl, 2026-10-31**: `(ql:quickload :contextl)` LOADS on all four backends, its layer GC
   included, and `deflayer`, `define-layered-function`/`-method` (`:in` a layer, qualifiers,
   `call-next-method`), `with-active-layers`/`with-inactive-layers`, `ensure-active-layer`,
