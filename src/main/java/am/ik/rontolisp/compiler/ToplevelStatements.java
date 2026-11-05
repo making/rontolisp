@@ -2,6 +2,7 @@ package am.ik.rontolisp.compiler;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
@@ -78,6 +79,32 @@ public final class ToplevelStatements {
 		List<LispVal> kept = new ArrayList<>(topLevelForms.size());
 		for (LispVal form : topLevelForms) {
 			if (!isConstant(form)) {
+				kept.add(form);
+			}
+		}
+		return kept;
+	}
+
+	/**
+	 * Drops the top-level {@code (function name)} forms whose evaluation cannot fail. The
+	 * gates that inject a wrapper read that spelling, so
+	 * {@code FunctionDesignators.normalizeBuiltinDesignators} and {@link EvalReferences}
+	 * add one to open a gate, as a form that runs nothing. Evaluated, it would make the
+	 * value: a dispatcher would carry the function's arm, and all the function reaches,
+	 * though nothing can hold that value. For after the last gate scan, since the names
+	 * have to be known.
+	 * @param topLevelForms the top-level forms about to be emitted
+	 * @param plainFunction whether a name is a registered function a reference of which
+	 * reads no cell and no namespace
+	 * @return the forms that still have something to do, in the same order
+	 */
+	public static List<LispVal> pruneFunctionReferences(List<LispVal> topLevelForms, Predicate<String> plainFunction) {
+		List<LispVal> kept = new ArrayList<>(topLevelForms.size());
+		for (LispVal form : topLevelForms) {
+			if (!(form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& LispNames.FUNCTION.equals(op.name()) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && rest.cdr() instanceof LispNil
+					&& plainFunction.test(name.name()))) {
 				kept.add(form);
 			}
 		}

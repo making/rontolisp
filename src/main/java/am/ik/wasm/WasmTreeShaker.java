@@ -1177,17 +1177,27 @@ public final class WasmTreeShaker {
 	}
 
 	/**
-	 * The values a module can make: those of {@link ValueCalls#alwaysMade()} and every
-	 * value a function makes that the roots reach (exports and the start function, as
-	 * {@link #shake} roots them), where a dispatcher's call through a value is followed
-	 * only once that value is made. A dispatcher arm whose value is absent from the
-	 * answer can never be taken; the caller rebuilds the dispatchers without it, since a
-	 * {@code call} left in a body would keep its target whatever this says.
+	 * What {@link #valueReach} answers.
+	 *
+	 * @param made the values the module can make
+	 * @param reached the functions the module can reach
+	 */
+	public record ValueReach(Set<Integer> made, Set<Integer> reached) {
+	}
+
+	/**
+	 * The values a module can make, and the functions it can reach: those of
+	 * {@link ValueCalls#alwaysMade()} and every value a function makes that the roots
+	 * reach (exports and the start function, as {@link #shake} roots them), where a
+	 * dispatcher's call through a value is followed only once that value is made. A
+	 * dispatcher arm whose value is absent from the answer can never be taken; the caller
+	 * rebuilds the dispatchers without it, since a {@code call} left in a body would keep
+	 * its target whatever this says.
 	 * @param module a core WASM module
 	 * @param calls the value edges and their makers
-	 * @return the made values
+	 * @return the made values and the reached functions
 	 */
-	public static Set<Integer> madeValues(byte[] module, ValueCalls calls) {
+	public static ValueReach valueReach(byte[] module, ValueCalls calls) {
 		List<Section> sections = WasmSections.parseSections(module);
 		@Nullable Section importSec = WasmSections.find(sections, SEC_IMPORT);
 		int numImportedFuncs = 0;
@@ -1244,7 +1254,13 @@ public final class WasmTreeShaker {
 				}
 			}
 		}
-		return made;
+		Set<Integer> reached = new HashSet<>();
+		for (int fn = 0; fn < totalFuncs; fn++) {
+			if (reachable[fn]) {
+				reached.add(fn);
+			}
+		}
+		return new ValueReach(made, reached);
 	}
 
 	private static void reach(int fn, boolean[] reachable, Deque<Integer> work) {

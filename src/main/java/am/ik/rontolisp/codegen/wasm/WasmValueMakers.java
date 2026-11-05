@@ -36,6 +36,8 @@ final class WasmValueMakers {
 
 	private final Map<Integer, Set<Integer>> makers = new HashMap<>();
 
+	private final Map<String, Set<Integer>> spellers = new HashMap<>();
+
 	/**
 	 * Opens the unit every value noted until {@link #close} is credited to.
 	 * @param funcIndex the module index (before host-import injection) of the function
@@ -56,6 +58,24 @@ final class WasmValueMakers {
 	 */
 	void note(int funcId) {
 		this.makers.computeIfAbsent(funcId, k -> new HashSet<>()).add(this.unit);
+	}
+
+	/**
+	 * Records that the open unit spells a literal a run-time designator can carry.
+	 * @param spelling the literal's spelling
+	 */
+	void noteSpelling(String spelling) {
+		this.spellers.computeIfAbsent(spelling, k -> new HashSet<>()).add(this.unit);
+	}
+
+	/**
+	 * The functions whose bodies hold a literal.
+	 * @param spelling the literal's spelling
+	 * @return the functions ({@link #UNATTRIBUTED} among them for a literal spelled
+	 * outside any unit)
+	 */
+	Set<Integer> spellers(String spelling) {
+		return this.spellers.getOrDefault(spelling, Set.of());
 	}
 
 	/**

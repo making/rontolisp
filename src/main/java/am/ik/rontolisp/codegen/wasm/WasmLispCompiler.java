@@ -5512,6 +5512,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				usesStreamValues && functions.containsKey(LispNames.CHARACTER_STREAM_P_INTERNAL),
 				functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL),
 				functions.containsKey(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL));
+		// A reference the gates above have read makes no value: only an evaluation could
+		// (compiler/ToplevelStatements).
+		topLevelExprs = ToplevelStatements.pruneFunctionReferences(topLevelExprs, name -> {
+			WasmFunctionInfo fi = functions.get(name);
+			return fi != null && fi.cellGlobal() < 0 && !fenvForwarders.contains(name);
+		});
 		if (this.asyncMode) {
 			for (LispVal expr : topLevelExprs) {
 				topLevelAwaits += WasmAwaitAnalysis.countAwaits(expr);
@@ -6311,6 +6317,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// program holds without emitting them, which the probes read like its own.
 		spelledLiterals.addAll(walkSpellings);
 		userSpelledLiterals.addAll(walkSpellings);
+		walkSpellings.forEach(valueMakers::noteSpelling);
 		// Whether a runtime SYMBOL designator can reach a call site. The source scan
 		// above reads funcall/apply SPELLINGS only, so every other operator that calls
 		// its function argument -- mapcar, sort, reduce, maphash, and the whole
@@ -6596,9 +6603,18 @@ public final class WasmLispCompiler implements LispCompiler {
 		// actually having such a call -- the registry embeds every defun NAME, so
 		// emitting it unconditionally would make two programs with identical CODE
 		// differ in bytes (the wit-import byte-identity pins).
+		List<RegistryRow> registryRows = new ArrayList<>();
+		int registryStart = -1;
+		int registryBase = -1;
 		if (registryLive) {
 			ByteArrayOutputStream registry = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			int registryCount = 0;
+			// A row compares offsets, and reads no name's bytes. Only the runtime intern
+			// table reads them for a row: it hands out a name no body cites. Elsewhere
+			// the
+			// bytes stand or fall with the bodies citing them.
+			java.util.function.Function<String, StringTable.StringEntry> rowName = usesIntern ? stringTable::addString
+					: stringTable::addBodyString;
 			for (int i = 0; i < defuns.size(); i++) {
 				DefunDecl defun = defuns.get(i);
 				// Only the names a runtime designator can carry (registryFuncIds): a
@@ -6617,12 +6633,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (Objects.requireNonNull(functions.get(defun.name)).funcId() != i) {
 					continue;
 				}
-				int nameOffset = stringTable.addString(defun.name).offset();
+				int nameOffset = rowName.apply(defun.name).offset();
 				writeLittleEndian32(registry, nameOffset);
 				writeLittleEndian32(registry, i); // funcId == defun index
 				// arity; a variadic function is encoded as -physicalParamCount so the
 				// eval call path evaluates every argument instead of exactly arity
 				writeLittleEndian32(registry, defun.variadic ? -defun.paramNames.size() : defun.paramNames.size());
+				registryRows.add(new RegistryRow(defun.name, i));
 				registryCount++;
 			}
 			// A built-in's name a program defines a method on answers the dispatcher
@@ -6631,9 +6648,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				int dispatcher = row.getValue().funcId();
 				if (registryFuncIds.contains(dispatcher)) {
 					DefunDecl defun = defuns.get(dispatcher);
-					writeLittleEndian32(registry, stringTable.addString(row.getKey()).offset());
+					writeLittleEndian32(registry, rowName.apply(row.getKey()).offset());
 					writeLittleEndian32(registry, dispatcher);
 					writeLittleEndian32(registry, defun.variadic ? -defun.paramNames.size() : defun.paramNames.size());
+					registryRows.add(new RegistryRow(row.getKey(), dispatcher));
 					registryCount++;
 				}
 			}
@@ -6665,15 +6683,17 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (q > 0) {
 					String alias = defun.name.substring(0, q) + defun.name.substring(q + 1);
 					if (!defunNames.contains(alias) && (aliasReachable || spelledLiterals.contains(alias))) {
-						writeLittleEndian32(registry, stringTable.addString(alias).offset());
+						writeLittleEndian32(registry, rowName.apply(alias).offset());
 						writeLittleEndian32(registry, i);
 						writeLittleEndian32(registry,
 								defun.variadic ? -defun.paramNames.size() : defun.paramNames.size());
+						registryRows.add(new RegistryRow(alias, i));
 						registryCount++;
 					}
 				}
 			}
-			int registryBase = stringTable.appendBlob(registry.toByteArray());
+			registryStart = stringTable.nextOffset;
+			registryBase = stringTable.appendBlob(registry.toByteArray());
 			lookupBody = WasmEvalRuntimeBuilder.buildLookupBody(registryBase, registryCount);
 		}
 		else {
@@ -9616,10 +9636,16 @@ public final class WasmLispCompiler implements LispCompiler {
 				data.addActiveData(0, alnumOffset, alnumBytes);
 			});
 		byte[] coreModule = out.toByteArray();
+		List<Integer> deadRegistryRows = List.of();
 		// Before the injection below, whose renumbering a rebuilt ladder body would miss.
 		if (this.optimize.eliminatesDeadCode() && !this.rawCoreForTest) {
-			coreModule = narrowLadders(coreModule, ladders, ladderBuilder, dispatchableFuncIds, valueFuncIds,
-					valueMakers, registryLive ? registryFuncIds : Set.of(), defuns, lambdaDecls, stringTable);
+			NarrowedLadders narrowed = narrowLadders(coreModule, ladders, ladderBuilder, dispatchableFuncIds,
+					valueFuncIds, valueMakers, registryLive ? registryFuncIds : Set.of(), registryRows,
+					new RowSpellings(this.dynamic || nameResolvable, symbolBuilders, definesSetfNameMapper(defuns),
+							runTimeDispatchers),
+					defuns, lambdaDecls, stringTable);
+			coreModule = narrowed.module();
+			deadRegistryRows = narrowed.deadRows();
 		}
 		// Resolve (rontolisp:wasm-import ...) directives: prepend the host imports and
 		// renumber every function reference (incl. the placeholder call indices). Must
@@ -9656,8 +9682,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// exactly that reason).
 		int stringDataSegIndex = upperFoldSegIndex - 1;
 		List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> stringRanges = stringData.length == 0 ? List.of()
-				: stringTable.shakeableRanges(stringDataSegIndex, dataBase, internBase, internRows, funNameBase,
-						hostImports.size());
+				: new ArrayList<>(stringTable.shakeableRanges(stringDataSegIndex, dataBase, internBase, internRows,
+						funNameBase, hostImports.size()));
+		// A registry row nothing can hit goes, its padding with the first (_lookup reads
+		// the hole as a name no symbol has).
+		for (int row : deadRegistryRows) {
+			int rowStart = registryBase - dataBase + row * REGISTRY_ROW_BYTES;
+			stringRanges.add(am.ik.wasm.WasmTreeShaker.DroppableDataRange.readBy(stringDataSegIndex,
+					row == 0 ? registryStart - dataBase : rowStart, rowStart + REGISTRY_ROW_BYTES, new int[0], false));
+		}
 		// The two --no-wasi host setters, offered to the shaker as cell hooks: each is an
 		// export (hence a root, hence immortal) whose only effect is a store to one cell,
 		// so a module in which no OTHER surviving body names that cell can drop the hook
@@ -9796,29 +9829,77 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	}
 
+	/** The bytes of one row of the {@code _lookup} registry. */
+	private static final int REGISTRY_ROW_BYTES = 12;
+
+	/**
+	 * One row of the {@code _lookup} registry.
+	 *
+	 * @param name the name it answers, as the program spells it
+	 * @param funcId the function it answers
+	 */
+	private record RegistryRow(String name, int funcId) {
+	}
+
+	/**
+	 * What decides which function holds a name the registry answers.
+	 *
+	 * @param anyNameArrives whether a run can produce a name this compile never sees
+	 * spelled ({@code --dynamic}, a data evaluator): then {@code _lookup} is what makes
+	 * every row's value
+	 * @param symbolBuilders whether the program contains a symbol builder
+	 * @param setfNamesBuilt whether it maps a {@code (setf place)} list built at run time
+	 * @param runTimeDispatchers {@code ShadowedBuiltins.runTimeNames}
+	 */
+	private record RowSpellings(boolean anyNameArrives, boolean symbolBuilders, boolean setfNamesBuilt,
+			Map<String, WasmFunctionInfo> runTimeDispatchers) {
+
+		/** The functions whose bodies hold a spelling of {@code name}. */
+		Set<Integer> spellers(String name, WasmValueMakers valueMakers) {
+			Set<Integer> units = new HashSet<>();
+			for (String spelling : DesignatorSpellings.all(name, this.symbolBuilders, this.setfNamesBuilt)) {
+				units.addAll(valueMakers.spellers(spelling));
+			}
+			return units;
+		}
+
+	}
+
+	/**
+	 * What {@link #narrowLadders} leaves.
+	 *
+	 * @param module the module, with its ladders swapped when some funcId is never made
+	 * @param deadRows the indices of the {@code _lookup} rows no symbol can hit
+	 */
+	private record NarrowedLadders(byte[] module, List<Integer> deadRows) {
+	}
+
 	/**
 	 * Rebuilds the dispatch ladders over the funcIds a KEPT function makes. A funcId
 	 * joins {@code valueFuncIds} wherever its {@code (lambda ...)} / {@code #'name} is
 	 * compiled -- in a body the shake then drops too -- and its arm's {@code call} would
 	 * keep the callee, and all it reaches, for a value nothing can make. The tree shaker
 	 * answers which values the module makes when an arm is followed only once a reached
-	 * function makes its value ({@code WasmTreeShaker.madeValues}); the makers are
-	 * {@link WasmValueMakers}' credits, plus {@code _lookup} for every name-registry row
-	 * (a name the registry answers is a value it makes), plus every dispatchable defun no
-	 * compiled body and no row makes. The {@code _lookup} rows and the {@code _fun_name}
-	 * table are not narrowed, as on the JVM.
+	 * function makes its value ({@code WasmTreeShaker.valueReach}); the makers are
+	 * {@link WasmValueMakers}' credits, plus for a name-registry row every function
+	 * spelling its name (the symbol {@code _lookup} is asked for is a literal one of them
+	 * holds; {@code _lookup} itself where a run can produce any name), plus every
+	 * dispatchable defun no compiled body and no row makes. A row no reached function can
+	 * hand a symbol for is dead with its arm, and {@code _lookup} is the stub when every
+	 * row is. The {@code _fun_name} table is not narrowed, as on the JVM.
 	 *
 	 * <p>
 	 * A rebuilt ladder takes the page slots it was given and never needs more (fewer
 	 * cases, never more leaves); a slot it leaves over gets an {@code unreachable} body,
 	 * which the shake drops. Every other index, type and section is untouched.
-	 * @return the module, the ladders swapped when some dispatchable funcId is never made
+	 * @return the module and the dead rows
 	 */
-	private byte[] narrowLadders(byte[] coreModule, List<Ladder> ladders, LadderBuilder ladderBuilder,
+	private NarrowedLadders narrowLadders(byte[] coreModule, List<Ladder> ladders, LadderBuilder ladderBuilder,
 			Set<Integer> dispatchable, Set<Integer> valueFuncIds, WasmValueMakers valueMakers,
-			Set<Integer> registryRows, List<DefunDecl> defuns, List<LambdaInfo> lambdaDecls, StringTable stringTable) {
-		if (ladders.isEmpty()) {
-			return coreModule;
+			Set<Integer> registryFuncIds, List<RegistryRow> registryRows, RowSpellings rowSpellings,
+			List<DefunDecl> defuns, List<LambdaInfo> lambdaDecls, StringTable stringTable) {
+		if (ladders.isEmpty() && registryRows.isEmpty()) {
+			return new NarrowedLadders(coreModule, List.of());
 		}
 		Set<Integer> dispatchers = new HashSet<>();
 		for (Ladder ladder : ladders) {
@@ -9831,11 +9912,31 @@ public final class WasmLispCompiler implements LispCompiler {
 		Map<Integer, Set<Integer>> makers = new HashMap<>();
 		Set<Integer> alwaysMade = new HashSet<>();
 		int userBase = userFuncBase();
+		Map<Integer, List<String>> dispatcherNames = new HashMap<>();
+		rowSpellings.runTimeDispatchers()
+			.forEach((name, fi) -> dispatcherNames.computeIfAbsent(fi.funcId(), k -> new ArrayList<>()).add(name));
 		for (int funcId : dispatchable) {
 			if (funcId < defuns.size()) {
 				targetValues.put(userBase + funcId, funcId);
-				if (registryRows.contains(funcId)) {
-					makers.computeIfAbsent(FUNC_LOOKUP, k -> new HashSet<>()).add(funcId);
+				if (registryFuncIds.contains(funcId)) {
+					Set<Integer> units = new HashSet<>();
+					if (rowSpellings.anyNameArrives()) {
+						units.add(FUNC_LOOKUP);
+					}
+					else {
+						units.addAll(rowSpellings.spellers(defuns.get(funcId).name, valueMakers));
+						for (String name : dispatcherNames.getOrDefault(funcId, List.of())) {
+							units.addAll(rowSpellings.spellers(name, valueMakers));
+						}
+					}
+					for (int unit : units) {
+						if (unit == WasmValueMakers.UNATTRIBUTED) {
+							alwaysMade.add(funcId);
+						}
+						else {
+							makers.computeIfAbsent(unit, k -> new HashSet<>()).add(funcId);
+						}
+					}
 				}
 				else if (!valueFuncIds.contains(funcId)) {
 					alwaysMade.add(funcId);
@@ -9857,33 +9958,82 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 		}
-		Set<Integer> madeValues = am.ik.wasm.WasmTreeShaker.madeValues(coreModule,
+		am.ik.wasm.WasmTreeShaker.ValueReach reach = am.ik.wasm.WasmTreeShaker.valueReach(coreModule,
 				new am.ik.wasm.WasmTreeShaker.ValueCalls(dispatchers, targetValues, makers, alwaysMade));
+		List<Integer> deadRows = new ArrayList<>();
+		for (int row = 0; row < registryRows.size(); row++) {
+			boolean hit = reach.reached().contains(FUNC_LOOKUP) && (rowSpellings.anyNameArrives()
+					|| rowSpellings.spellers(registryRows.get(row).name(), valueMakers)
+						.stream()
+						.anyMatch(unit -> unit == WasmValueMakers.UNATTRIBUTED || reach.reached().contains(unit)));
+			if (!hit) {
+				deadRows.add(row);
+			}
+		}
 		Set<Integer> live = new HashSet<>(dispatchable);
-		live.retainAll(madeValues);
-		if (live.size() == dispatchable.size()) {
-			return coreModule;
+		live.retainAll(reach.made());
+		if (Boolean.getBoolean("rontolisp.debug.dispatchgate")) {
+			reportMadeValues(live, makers, alwaysMade, userBase, defuns, lambdaDecls);
 		}
 		Map<Integer, byte[]> rebuilt = new HashMap<>();
-		int interned = stringTable.entries().size();
-		for (Ladder ladder : ladders) {
-			WasmRuntimeBuilder.DispatchFunctions built = ladderBuilder.build(ladder, live);
-			if (built.pages().size() > ladder.pages()) {
-				// Fewer cases never need more pages; keep the ladder as it was if one
-				// did.
-				continue;
+		if (live.size() != dispatchable.size()) {
+			int interned = stringTable.entries().size();
+			for (Ladder ladder : ladders) {
+				WasmRuntimeBuilder.DispatchFunctions built = ladderBuilder.build(ladder, live);
+				if (built.pages().size() > ladder.pages()) {
+					// Fewer cases never need more pages; keep the ladder as it was if one
+					// did.
+					continue;
+				}
+				rebuilt.put(ladder.funcIndex(), built.body());
+				for (int page = 0; page < ladder.pages(); page++) {
+					rebuilt.put(ladder.pageBase() + page,
+							page < built.pages().size() ? built.pages().get(page) : UNREACHABLE_BODY);
+				}
 			}
-			rebuilt.put(ladder.funcIndex(), built.body());
-			for (int page = 0; page < ladder.pages(); page++) {
-				rebuilt.put(ladder.pageBase() + page,
-						page < built.pages().size() ? built.pages().get(page) : UNREACHABLE_BODY);
+			if (stringTable.entries().size() != interned) {
+				// The data section is written: a string new here would have no bytes.
+				throw new IllegalStateException("a narrowed dispatch ladder interned a string the full one did not");
 			}
 		}
-		if (stringTable.entries().size() != interned) {
-			// The data section is written: a string new here would have no bytes.
-			throw new IllegalStateException("a narrowed dispatch ladder interned a string the full one did not");
+		if (!registryRows.isEmpty() && deadRows.size() == registryRows.size()) {
+			rebuilt.put(FUNC_LOOKUP, WasmEvalRuntimeBuilder.buildLookupStub());
 		}
-		return am.ik.wasm.WasmSections.replaceBodies(coreModule, rebuilt);
+		return new NarrowedLadders(
+				rebuilt.isEmpty() ? coreModule : am.ik.wasm.WasmSections.replaceBodies(coreModule, rebuilt), deadRows);
+	}
+
+	/**
+	 * The {@code -Drontolisp.debug.dispatchgate} report: which function holds each arm.
+	 */
+	private static void reportMadeValues(Set<Integer> live, Map<Integer, Set<Integer>> makers, Set<Integer> alwaysMade,
+			int userBase, List<DefunDecl> defuns, List<LambdaInfo> lambdaDecls) {
+		Map<Integer, String> functions = new HashMap<>();
+		Map<Integer, String> values = new HashMap<>();
+		for (int i = 0; i < defuns.size(); i++) {
+			functions.put(userBase + i, defuns.get(i).name);
+			values.put(i, defuns.get(i).name);
+		}
+		for (LambdaInfo lambda : lambdaDecls) {
+			functions.put(lambda.funcIndex(), lambda.methodName());
+			values.put(lambda.funcId(), lambda.methodName());
+		}
+		functions.put(FUNC_LOOKUP, "_lookup");
+		functions.put(FUNC_START, "_start");
+		for (int value : new java.util.TreeSet<>(live)) {
+			List<String> by = new ArrayList<>();
+			if (alwaysMade.contains(value)) {
+				by.add("every module");
+			}
+			makers.forEach((fn, made) -> {
+				if (made.contains(value)) {
+					by.add(functions.getOrDefault(fn, String.valueOf(fn)));
+				}
+			});
+			by.sort(null);
+			System.err
+				.println("[dispatch-gate] made\t" + values.getOrDefault(value, String.valueOf(value)) + "\tby\t" + by);
+		}
 	}
 
 	/** A body that only traps: valid under every function type. */

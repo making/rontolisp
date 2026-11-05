@@ -1203,6 +1203,7 @@ final class WasmEmitHelper {
 	 */
 	static WasmLispCompiler.StringTable.StringEntry internSpelledLiteral(String displayForm, WasmLispCompiler.Ctx ctx) {
 		ctx.spelledLiterals.add(displayForm);
+		ctx.valueMakers.noteSpelling(displayForm);
 		if (!ctx.injectedRuntimeBody) {
 			// ... and the registry gate needs to know whether the USER's text is what
 			// spells it: an injected wrapper body quotes 'list / 'cons / 'string as type

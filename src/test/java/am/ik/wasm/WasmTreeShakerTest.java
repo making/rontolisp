@@ -629,6 +629,50 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
+	void aNameOnlyAFunctionNothingReachesSpellsHasNoCaseAndNoRow() {
+		// NOBODY holds the only 'GIVEN, and nothing calls it: no symbol of that name can
+		// reach the ladder, so GIVEN shakes out with the row and the bytes of its name.
+		// Call NOBODY and all three come back. The same in a reactor whose program spells
+		// nothing live: every row goes, and with them _lookup's loop.
+		String live = "(defun h (x) x (* x 10)) (print (funcall (car (list 'h)) 3)) ";
+		String defs = "(defun given (x) x (* x 100)) (defun nobody () 'given) ";
+		byte[] unspelled = compile(live, false, OptimizeLevel.DEFAULT);
+		byte[] shaken = compile(defs + live, false, OptimizeLevel.DEFAULT);
+		byte[] made = compile(defs + live + "(print (funcall (nobody) 6))", false, OptimizeLevel.DEFAULT);
+		Module.parse(shaken).assertWellFormed();
+		Module.parse(made).assertWellFormed();
+		assertThat(Module.parse(shaken).definedFunctionCount())
+			.isEqualTo(Module.parse(unspelled).definedFunctionCount());
+		assertThat(contains(shaken, "GIVEN")).isFalse();
+		assertThat(Module.parse(made).definedFunctionCount())
+			.isGreaterThan(Module.parse(shaken).definedFunctionCount());
+		assertThat(contains(made, "GIVEN")).isTrue();
+		String reactor = "(defvar *f* (lambda (x) (+ x 1))) (defun e (x) (funcall *f* x)) "
+				+ "(rontolisp:wasm-export 'e :as \"e\" :params '(:s32) :returns :s32)";
+		byte[] noRow = compile(defs + reactor, true, OptimizeLevel.SIZE);
+		Module.parse(noRow).assertWellFormed();
+		assertThat(noRow.length).isEqualTo(compile(reactor, true, OptimizeLevel.SIZE).length);
+	}
+
+	@Test
+	void aMapVariableReadAsAComputedConversionMakesNoConcatenateValue() {
+		// (ecase map (:a 0)) reads as a (map <computed type> ...) call to the scan that
+		// opens #'concatenate's wrapper gate in a program spelling a packed element type,
+		// and may: what the gate reads is a reference, which is no value. With a ladder
+		// in
+		// the module, an evaluated one kept the wrapper and everything it reaches.
+		String program = "(defvar *f* (lambda (x) (+ x 1))) (defvar *v* (make-array 1 :element-type '(unsigned-byte 8)))"
+				+ "(defun pick (VAR) (ecase VAR (:a 0) (:b 1))) "
+				+ "(defun e (x) (+ (pick :a) (aref *v* 0) (funcall *f* x))) "
+				+ "(rontolisp:wasm-export 'e :as \"e\" :params '(:s32) :returns :s32)";
+		byte[] colliding = compile(program.replace("VAR", "map"), true, OptimizeLevel.SIZE);
+		byte[] plain = compile(program.replace("VAR", "mapp"), true, OptimizeLevel.SIZE);
+		Module.parse(colliding).assertWellFormed();
+		assertThat(Module.parse(colliding).definedFunctionCount())
+			.isEqualTo(Module.parse(plain).definedFunctionCount());
+	}
+
+	@Test
 	void aValueCallIsFollowedOnlyOnceAReachedFunctionMakesTheValue() {
 		// r calls the dispatcher d, whose arms call t (value 7) and u (value 8); m makes
 		// value 8 and t makes it too. Nothing reached makes either value, so neither arm
@@ -637,11 +681,14 @@ class WasmTreeShakerTest {
 		WasmTreeShaker.ValueCalls valueCalls = new WasmTreeShaker.ValueCalls(java.util.Set.of(1),
 				java.util.Map.of(2, 7, 3, 8), java.util.Map.of(4, java.util.Set.of(8), 2, java.util.Set.of(8)),
 				java.util.Set.of());
-		assertThat(WasmTreeShaker.madeValues(callModule(calls, false), valueCalls)).isEmpty();
-		assertThat(WasmTreeShaker.madeValues(callModule(calls, true), valueCalls)).containsExactly(8);
-		assertThat(WasmTreeShaker.madeValues(callModule(calls, false), new WasmTreeShaker.ValueCalls(
-				valueCalls.dispatchers(), valueCalls.targetValues(), valueCalls.makers(), java.util.Set.of(7))))
-			.containsExactlyInAnyOrder(7, 8);
+		assertThat(WasmTreeShaker.valueReach(callModule(calls, false), valueCalls).made()).isEmpty();
+		assertThat(WasmTreeShaker.valueReach(callModule(calls, false), valueCalls).reached()).containsExactly(0, 1);
+		assertThat(WasmTreeShaker.valueReach(callModule(calls, true), valueCalls).made()).containsExactly(8);
+		WasmTreeShaker.ValueReach taken = WasmTreeShaker.valueReach(callModule(calls, false),
+				new WasmTreeShaker.ValueCalls(valueCalls.dispatchers(), valueCalls.targetValues(), valueCalls.makers(),
+						java.util.Set.of(7)));
+		assertThat(taken.made()).containsExactlyInAnyOrder(7, 8);
+		assertThat(taken.reached()).containsExactlyInAnyOrder(0, 1, 2, 3);
 	}
 
 	// Void functions whose bodies only call: function 0 is exported, and the last one
