@@ -209,8 +209,9 @@ oracle's calls through the var do; a function value taken before keeps its code.
   (`ClojureLowering.define`). A JVM-only primitive, not `setf symbol-function`, because
   that place forces `_fenv`, the eval runtime and the setf-only forwarder defun into the
   fragment (`.kb/symbol-runtime-api.md`).
-- The backend (`JvmFunctionCell`): in a linked class only (an ordinary class binds every
-  call, the declaration or not), a notinline defun gets a volatile static `_fc$<name>` --
+- The backend (`JvmFunctionCell`): in a linked class only (an ordinary class's cells are the run-time
+  namespace's, `.kb/symbol-runtime-api.md`, "A write through a computed name"; the declaration
+  changes nothing there), a notinline defun gets a volatile static `_fc$<name>` --
   null until `%run-time-redefine` stores into it -- shared with later fragments like a
   global (`JvmLinkage.shared`, the table's `celled` flag). Each class
   calling it by name has a named entry `_n$<name>` of its descriptor: the method while the

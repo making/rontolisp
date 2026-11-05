@@ -84,6 +84,14 @@ it survived to be found by generating a host.
   together in `doc/*/guides/wasm-host-boundary.md`.
 
 ### A literal `:string` argument does not round-trip
+
+Since 2026-11-05 this also takes a call with `:u32` arguments beside it, and a literal at an `:octets`
+parameter, whose bytes are the string's UTF-8 encoding: what a Proxy-Wasm `(add-header :response "x" "y")` is, 305
+instructions of `_str_to_mem` and the wrapper's, now 12 of `_lit_stage`. And a `(format nil ...)` at a parameter
+taking text loses the mutable-result wrap (`WasmImportCompiler.withTextArguments`): a host sees bytes, so
+nothing can observe the identity the wrap gives, and the wrapper rendered the character vector straight back,
+2,100 + 1,200 instructions on a log line of 30 bytes.
+
 A literal's bytes START in linear memory -- the interned data segment put them there -- and
 the boundary WANTS bytes in linear memory. The general path nevertheless walks them
 byte-by-byte into a GC array (`_str_build`) so the wrapper can walk them byte-by-byte back
@@ -495,18 +503,27 @@ for free) but its body answers from the module: `buildIntrinsicBody` here,
 - `address` and `size` take a `:string` and answer its bytes, so `--no-gc` code can copy or compare a
   string without decoding it, which `length` and `char` do. Only there: `buildIntrinsicBody` refuses
   them by name, a wasm-GC string being an engine object.
-- Pins: `WasmOctetsBoundaryE2eTest` (GC), `NoGcWasmImportE2eTest.theMemoryModuleReadsWhatAHostAnsweredThroughOutPointers`,
+- `search` is the one loop over memory here (`WasmMemoryIntrinsic.emitSearch`, in the binding's body on
+  both backends): where a string's bytes first occur in `(ptr, len)`, or -1. Eight bytes at a time past
+  the words without the needle's first byte, by the zero-byte test on `word ^ pattern`, 3.4 instructions per
+  byte on a body of 64KiB; `ctz` of the test's mask is the first candidate, as its lowest bit is exact. A
+  Proxy-Wasm `search-bytes`: on `--no-gc` it was 86 per byte and 3 calls, in Lisp over `load8`, on wasm-GC there
+  was none, and `get-buffer` + `search` is 30 (`.kb/string-search-runtime.md`). On wasm-GC the needle crosses to the
+  un-advanced scratch like a `:string` argument, 16 per byte of needle, and nothing allocates on it.
+- Pins: `WasmOctetsBoundaryE2eTest` (GC), `NoGcWasmImportE2eTest.theMemoryModuleReadsWhatAHostAnsweredThroughOutPointers`
+  (each with `SEARCH_CHECK`, against a byte-wise search on bytes a word test could mistake),
   `WasmImportCompilerTest.theMemoryModuleIsTheFixedSetOfFieldsNotAHostModule`, and
   `examples/proxy-wasm/check.sh` in a real Envoy (not in CI: it needs Docker).
 
 **`:u32` on wasm-GC, and why `:s32` arguments did not widen instead.** An `:s32` argument is
 `ref.cast i31; i31.get_s`: past 2^30 it traps. A Proxy-Wasm context id only counts up, so a
 resident VM reaches that after 2^30 streams on a worker, and every WebGL-style `:int` boundary
-pays for the fix if `:s32` itself widens. So `:u32` is the opt-in: it reuses the export side's
-`emitNarrowIntResult` (exact-or-trap on an i64 scratch local the wrapper declares only then), and a
-module not naming it is unchanged. Measured 2026-11-05 on `examples/proxy-wasm/gateway.lisp`, all
-ids, sizes and addresses `:s32` -> `:u32`: 233,179 -> 234,589 bytes raw, 77,079 -> 77,610 gzip, which
-is the price per argument `:int` users are spared.
+pays for the fix if `:s32` itself widens. So `:u32` is the opt-in: one call of `_u32_val`
+(`FUNC_U32_VAL`, `WasmBignumRuntimeBuilder.buildU32ValBody`), an i31 first, 13 instructions, and exact-or-trap
+as `emitNarrowIntResult` states it past that, which was 33 inline per argument. A module not naming it is
+unchanged. Measured 2026-11-05 on `examples/proxy-wasm/gateway.lisp`, all ids, sizes and addresses
+`:s32` -> `:u32`, when it was inline: 233,179 -> 234,589 bytes raw, 77,079 -> 77,610 gzip, which is the price per
+argument `:int` users are spared.
 
 **An `:s32` RESULT was silently wrong past 2^30** (`i31.new` kept 31 bits: 1500000000 became
 -647483648). It now boxes through `_int_new`. Measured 2026-11-05 against the previous commit:

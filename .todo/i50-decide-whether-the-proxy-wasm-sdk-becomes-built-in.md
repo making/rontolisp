@@ -2,7 +2,11 @@
 
 Difficulty: Medium
 
-A decision first, then the work if the answer is yes. Today a filter keeps a copy of the SDK beside its source and
+Decided 2026-11-05 by the project owner: the SDK becomes built in, once the optimization of it settles. Do not start
+while that is in progress, because its API is still changing, and do not close this item as cancelled. What remains
+open is which SDK or SDKs, and the "For and against" below is the background to that.
+
+Today a filter keeps a copy of the SDK beside its source and
 says `(require :proxy-wasm "proxy-wasm.lisp")`. Built in, it would say `(require :proxy-wasm)`, or only name the
 package, as a program names `linalg` or `rontolisp:json-parse`.
 
@@ -10,13 +14,13 @@ package, as a program names `linalg` or `rontolisp:json-parse`.
 
 `examples/proxy-wasm/`, all of it checked by `examples/proxy-wasm/check.sh` (needs Docker; not in CI):
 
-- `proxy-wasm.lisp`: the SDK, about 700 lines, ABI v0.2.1. One `rontolisp:wasm-import` per host function, the
-  `proxy_on_*` exports, the CLOS API. Covers logging, the clock, ticks, header maps, buffers, local responses, outgoing
-  HTTP calls, shared data, metrics and properties. Not covered: gRPC calls, shared queues, foreign functions, the TCP
-  (network filter) callbacks.
-- `gateway.lisp`: a filter using most of that. Measured 2026-11-05 with `--no-wasi --optimize`: 234,589 bytes raw,
-  77,610 gzip.
-- Run only against Envoy v1.39.3 and v1.40.2 on V8, wasm-GC `--no-wasi`. The `--no-gc` backend cannot host it: no CLOS, no `:octets`.
+- `proxy-wasm.lisp`: the SDK, about 950 lines, ABI v0.2.1. One `rontolisp:wasm-import` per host function, the
+  `proxy_on_*` exports, `define-filter` (the `defmethod` API went, `.kb/proxy-wasm-sdk.md`). Covers logging, the clock,
+  ticks, header maps, buffers, local responses, outgoing HTTP calls, shared data, metrics and properties. Not covered:
+  gRPC calls, shared queues, foreign functions, the TCP (network filter) callbacks.
+- `gateway.lisp`: a filter using most of that. Measured 2026-11-05 with `--no-wasi --optimize=size`: 105,200 bytes raw,
+  39,439 gzip.
+- Run against Envoy v1.40.2 on V8 and Sluice on Endive. The `--no-gc` backend cannot host it: no conditions, no `:octets`.
 
 The compiler half is already general and stays whatever this decides: the reserved import module
 `"rontolisp:memory"` and `:u32` on wasm-GC imports (`.kb/wasm-import.md`).
@@ -25,7 +29,8 @@ A second SDK now exists, `examples/proxy-wasm/no-gc/` (`.kb/proxy-wasm-no-gc.md`
 `--no-gc`, with `http_body`, `http_headers` and `test_plugin` on it at 2 to 7KB, checked in Envoy and against Sluice's suite.
 Weigh it here:
 
-- A filter on one does not compile on the other, a context being an object there and an integer here. So "the" built-in
+- Both have the one form now, and a filter with no state and only what both have may compile on either: `:root` and `:stream` are
+  this one's state, `(:state ...)` that one's, and a body there spells `:continue` where the clause can see it. So "the" built-in
   SDK is a choice between them, or two packages with one name and an answer for which `(require :proxy-wasm)` means, by backend.
 - Against the size argument: on `--no-gc`, an SDK kept in a file already costs a filter nothing it does not call.
 - It adds to the evidence asked for below: a second host (Sluice), and a third filter. It did not leave the API unchanged.
@@ -42,11 +47,9 @@ in it becomes a compatibility promise, and each new ABI version or host quirk be
 Envoy behaviours the SDK works around (`examples/proxy-wasm/README.md`) are host behaviour, not ABI, and were measured
 on those two versions only. A source file in `examples/` can be copied and edited; a built-in cannot.
 
-Weigh it by evidence not available yet: a second real filter, another host (no other Proxy-Wasm host has been tried),
-and whether the API survives both unchanged. If that has not happened, staying an example is a sound answer, and this
-item closes as cancelled.
+Evidence to look at when this starts: a second real filter, another host, and whether the API has stopped changing.
 
-## If the answer is yes
+## The work
 
 The mechanism to follow is a library spliced by name: `JsonLibrary` and `LinalgLibrary` in
 `src/main/java/am/ik/rontolisp/eval/`, with sources under `src/main/resources/am/ik/rontolisp/eval/`, and

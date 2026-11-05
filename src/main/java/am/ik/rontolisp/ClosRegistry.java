@@ -179,6 +179,9 @@ public final class ClosRegistry {
 	 */
 	public static final String ASH_COUNT_TOO_LARGE_MESSAGE_PREFIX = "ASH: shift count too large: ";
 
+	/** The class every datum {@code warn} signals descends from. */
+	public static final String WARNING_CLASS_NAME = "WARNING";
+
 	/**
 	 * The warning class a compile never fails on: a macro-time {@code warn} of one is
 	 * reported and not counted by {@code --warnings-as-errors}, as SBCL's
@@ -2580,6 +2583,23 @@ public final class ClosRegistry {
 	 */
 	public void enableSlotProtocol() {
 		this.slotProtocol = true;
+	}
+
+	private boolean marksGenericDefinitions;
+
+	/**
+	 * Whether a compile path's walk marks where a generic function that has its
+	 * dispatcher is defined again, which binds a name the program retired or replaced
+	 * ({@code compiler.RedefinedDefuns}).
+	 * @return {@code true} once {@link #markGenericDefinitions} ran
+	 */
+	public boolean marksGenericDefinitions() {
+		return this.marksGenericDefinitions;
+	}
+
+	/** Has the walk mark each later definition of a generic function. */
+	public void markGenericDefinitions() {
+		this.marksGenericDefinitions = true;
 	}
 
 	private boolean gfProtocol;

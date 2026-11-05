@@ -415,7 +415,8 @@ every narrowing is IMPOSSIBILITY-based.
   constructed after both scans, so `conditionNarrowing` and `usedLayoutTags` read
   `LispMacroExpander.END_OF_FILE_SITES` / `FILE_ERROR_SITES` instead. The narrowing used to
   miss `end-of-file` entirely: a caught one `princ`ed as `#<END-OF-FILE :STREAM NIL>` on the
-  compiled backends instead of `end of file` (found and fixed 2026-09-19).
+  compiled backends instead of `end of file` (found and fixed 2026-09-19). The `type-error` of a
+  `warn` of what is no warning is the same situation ("`warn` of what is no warning", below).
 - **`WasmInstanceLayouts.emit` takes a used-tag set** (`usedLayoutTags`): a `%class-`/`%struct-`
   layout ships only when its tag or bare name occurs as a symbol in the final program (plus the
   simple-* three the handler lowering synthesizes during Pass 2), with null (= bake all) under
@@ -1159,20 +1160,42 @@ and went on: `(handler-case (progn (warn "w") 1) (warning () 'wrn))` answered 1,
   `Ctx` flag or `JvmLinkage.Mode` exists. Its warn half has two arms. The program warns and a
   `handler-case` clause can hold a warning (`clauseTypeCanHoldWarning`: all but a standard name
   under `serious-condition` and an `or` of such, the seeded registry answering; a program's own class
-  counts whatever its parent, the safe direction). Or its datum may be no warning and any catching
-  form is there: `formWarnsAnyDatum` (`#'warn`, or a datum neither a control string nor a standard
-  warning's name) or `runsFormsAtRunTime` (`eval`/`compile`/`load`, whose form calls the `#'warn`
-  wrapper). Without that arm `(warn 'simple-error)` under an `error` clause was caught on the
-  interpreter and written on the compile paths. A program warning only with control strings or
-  standard warnings under `error` clauses or `ignore-errors`, or with no catching form at all, keeps
-  its bytes, and its handler-case stays off the cluster stack. Measured 2026-11-05 against the commit
-  before: five such programs identical on the JVM, Preview 1 and the component. A program a warning
-  clause does hold pays for the walk and the cluster: `(defun f () (warn "w") 2) (print (handler-case
-  (f) (warning () 1)))` wasm-GC 3,297 -> 9,883 B, component 4,633 -> 11,299 B, class 10,932 -> 15,727 B.
+  counts whatever its parent, the safe direction). Or it runs forms at run time
+  (`runsFormsAtRunTime`: `eval`/`compile`/`load`, which can spell their own catching forms) and any
+  catching form is there. A program whose clauses are all errors, or `ignore-errors`, or with no
+  catching form at all, keeps its write and its handler-case stays off the cluster stack, whatever
+  the datum: only a warning reaches the signal. Measured 2026-11-05 against the commit before: five
+  such programs identical on the JVM, Preview 1 and the component. A program a warning clause does
+  hold pays for the walk and the cluster: `(defun f () (warn "w") 2) (print (handler-case (f) (warning
+  () 1)))` wasm-GC 3,297 -> 9,883 B, component 4,633 -> 11,299 B, class 10,932 -> 15,727 B.
 - The interpreter always asks: `evalSignalCond` matches on its per-thread clause-type stack.
-- A `warn` whose datum is a condition outside `warning` signals that condition, then writes, on all
-  four. SBCL signals a `type-error` for it, so an `error` clause agrees and a `type-error` clause
-  does not (`.todo/i67`).
+
+### `warn` of what is no warning is a `type-error`
+**Invariant: `warn` signals nothing but a warning. Anything else is a `type-error` with that datum and
+expected type `warning`, before any signal, restart or write, on all four.** SBCL 2.2.9's answers on
+ci-spec `warn-of-what-is-no-warning-is-a-type-error`; until 2026-11-05 all four signalled the datum
+and wrote it.
+- **A quoted name of a registered class outside `warning`** is known at expansion
+  (`namesNoWarning`): the initargs run and the `type-error` holds the symbol, as SBCL's does. A
+  `make-condition` of such a class takes the object path, so it holds the instance.
+- **The object path tests at run time**, ahead of the `muffle-warning` restart, so a handler of the
+  `type-error` finds none (`find-restart` nil, SBCL's): what passes is a string, a symbol, a function
+  (a control the standard allows; it still prints as a value) or `%obj-is` over `warning`'s
+  descendant tags. The registry is complete on the compile paths, since `define-condition` does not
+  run in compiled `eval`, and the interpreter re-expands `warn` per evaluation.
+- **It is the backend's own `error` lowering** of `(error 'type-error ...)`, so restart mode and
+  handler-bind need nothing. That lowering comes after the scans, so three read the site:
+  `conditionNarrowing` adds the tag for a quoted name (a computed datum bails; without the tag the
+  control-free report arm is missing and a caught one prints `#<TYPE-ERROR ...>`), `usedLayoutTags`
+  bakes it on `warnCanSignalTypeError` (without a pad, `no layout was baked` fails the compile), and
+  `constructsInstance` counts a computed `warn`.
+- **Deviations kept.** `simple-type-error` with `X does not designate a WARNING class` in SBCL, a
+  plain `type-error` reporting from its slots here: a control with directives pulls the renderer in.
+  A value that is no condition expects `warning` here, SBCL's internal `condition-class` there.
+- **A run-time SYMBOL stays on the symbol arm**, the signal family's datum-only shape (`(warn (id
+  'simple-error))` and a compiled `#'warn`/`eval` write a `simple-warning` naming it; SBCL
+  `type-error`), and an undefined name on the typed path's degradation (`buildTypedConstruct`):
+  `.todo/i70`.
 
 ## A built-in error carries its CONDITION CLASS
 `(handler-case (car 1) (type-error ...))` matches, and so does rove's `(ok (signals (car 1)

@@ -25734,8 +25734,9 @@ public final class LispMacroExpander {
 					return true;
 				}
 				// A runtime datum WITH initargs takes error's registry dispatch, which
-				// constructs; warn keeps the plain object-designator path.
-				return !LispNames.WARN.equals(head) && parts.size() > datumIndex + 1;
+				// constructs; warn's object path builds the type-error of what is no
+				// warning.
+				return LispNames.WARN.equals(head) || parts.size() > datumIndex + 1;
 			}
 			default:
 				return false;
@@ -31216,6 +31217,9 @@ public final class LispMacroExpander {
 					dispatcherSlots.put(out.size(), generic);
 					out.add(LispNil.INSTANCE);
 				}
+				else if (closRegistry.marksGenericDefinitions()) {
+					out.add(genericDefinedAgain(generic));
+				}
 				if (gfProtocol) {
 					out.addAll(genericProtocolForms(closRegistry.findGeneric(generic),
 							((LispCons) form).toList().get(1), closRegistry));
@@ -32371,6 +32375,9 @@ public final class LispMacroExpander {
 			dispatcherSlots.put(out.size(), generic);
 			out.add(LispNil.INSTANCE);
 		}
+		else if (closRegistry.marksGenericDefinitions()) {
+			out.add(genericDefinedAgain(generic));
+		}
 		// A method expansion may REGISTER a further generic as a side effect (the
 		// instance-initialization protocol's shared-initialize), which needs a dispatcher
 		// slot of its own. Reserving it here is safe whatever the definition order: the
@@ -32382,6 +32389,28 @@ public final class LispMacroExpander {
 				out.add(LispNil.INSTANCE);
 			}
 		}
+	}
+
+	/**
+	 * {@code (%generic-defined-again "name")}: what a compile path leaves where a generic
+	 * function that has its dispatcher is defined once more
+	 * ({@link ClosRegistry#marksGenericDefinitions}), for
+	 * {@code compiler.RedefinedDefuns} to turn into what binds the name there. The name
+	 * is a string, so that no pass between the two reads it as a mention of the name.
+	 */
+	private static LispVal genericDefinedAgain(String generic) {
+		return listToCons(List.of(new LispSymbol(LispNames.GENERIC_DEFINED_AGAIN_INTERNAL), new LispString(generic)));
+	}
+
+	/**
+	 * The generic function {@link #genericDefinedAgain} marks a definition of.
+	 * @param form a top-level form
+	 * @return the name, or null when the form is no such mark
+	 */
+	public static @Nullable String genericDefinedAgainName(LispVal form) {
+		return isNamedForm(form, LispNames.GENERIC_DEFINED_AGAIN_INTERNAL)
+				&& ((LispCons) form).cdr() instanceof LispCons arg && arg.car() instanceof LispString name
+						? name.value() : null;
 	}
 
 	/**
@@ -32667,10 +32696,11 @@ public final class LispMacroExpander {
 
 	/**
 	 * Whether the program writes the function namespace through a
-	 * {@code (setf (symbol-function ...))} / {@code (setf (fdefinition ...))} place
-	 * (anywhere in the tree, quoted data skipped). Forces the eval runtime's function
-	 * namespace ({@code _fenv}) onto the compile paths, and gates the setf-only-alias
-	 * forwarder injection in {@link #expandTopLevelDefinitions}.
+	 * {@code (setf (symbol-function ...))} / {@code (setf (fdefinition ...))} place, or
+	 * such a place of {@code psetf}, {@code rotatef} or {@code shiftf} (anywhere in the
+	 * tree, quoted data skipped). Forces the eval runtime's function namespace
+	 * ({@code _fenv}) onto the compile paths, and gates the setf-only-alias forwarder
+	 * injection in {@link #expandTopLevelDefinitions}.
 	 * @param program the top-level forms
 	 * @return true when such a place is written
 	 */
@@ -32733,12 +32763,9 @@ public final class LispMacroExpander {
 				if (LispNames.isQuote(member)) {
 					return false;
 				}
-				if (LispNames.SETF.equals(member) && cons.isProperList()) {
-					List<LispVal> parts = cons.toList();
-					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (isSymbolFunctionPlace(parts.get(i))) {
-							return true;
-						}
+				for (LispVal place : WrittenPlaces.of(member, cons)) {
+					if (isSymbolFunctionPlace(place)) {
+						return true;
 					}
 				}
 			}
@@ -32752,12 +32779,13 @@ public final class LispMacroExpander {
 
 	/**
 	 * Whether the program can bind a function name the compile cannot read: a
-	 * {@code (setf (symbol-function x) ...)} / {@code (setf (fdefinition x) ...)} place
-	 * whose name is neither a quoted symbol nor a quoted {@code (setf name)} list (both
-	 * of those get the setf-only forwarder of {@link #expandTopLevelDefinitions}). With
-	 * {@code eval} and {@code load}, it is what makes a call of a name no definition has
-	 * read the run-time function namespace instead of compiling to the undefined-function
-	 * signal alone.
+	 * {@code (setf (symbol-function x) ...)} / {@code (setf (fdefinition x) ...)} place,
+	 * or such a place of {@code psetf}, {@code rotatef} or {@code shiftf}, whose name is
+	 * neither a quoted symbol nor a quoted {@code (setf name)} list (both of those get
+	 * the setf-only forwarder of {@link #expandTopLevelDefinitions}). With {@code eval}
+	 * and {@code load}, it is what makes a call of a name no definition has read the
+	 * run-time function namespace instead of compiling to the undefined-function signal
+	 * alone.
 	 * @param program the top-level forms
 	 * @return true when such a place is written
 	 */
@@ -32772,14 +32800,10 @@ public final class LispMacroExpander {
 				if (LispNames.isQuote(member)) {
 					return false;
 				}
-				if (LispNames.SETF.equals(member) && cons.isProperList()) {
-					List<LispVal> parts = cons.toList();
-					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (isSymbolFunctionPlace(parts.get(i)) && parts.get(i) instanceof LispCons place
-								&& !(place.cdr() instanceof LispCons nameCell
-										&& isQuotedFunctionName(nameCell.car()))) {
-							return true;
-						}
+				for (LispVal written : WrittenPlaces.of(member, cons)) {
+					if (isSymbolFunctionPlace(written) && written instanceof LispCons place
+							&& !(place.cdr() instanceof LispCons nameCell && isQuotedFunctionName(nameCell.car()))) {
+						return true;
 					}
 				}
 			}
@@ -32941,14 +32965,11 @@ public final class LispMacroExpander {
 				if (LispNames.isQuote(member)) {
 					return;
 				}
-				if (LispNames.SETF.equals(member) && cons.isProperList()) {
-					List<LispVal> parts = cons.toList();
-					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (isSymbolFunctionPlace(parts.get(i)) && parts.get(i) instanceof LispCons place
-								&& place.isProperList() && place.toList().size() > 1
-								&& quotedSymbol(place.toList().get(1)) instanceof LispSymbol nameSym) {
-							names.add(nameSym.name());
-						}
+				for (LispVal written : WrittenPlaces.of(member, cons)) {
+					if (isSymbolFunctionPlace(written) && written instanceof LispCons place && place.isProperList()
+							&& place.toList().size() > 1
+							&& quotedSymbol(place.toList().get(1)) instanceof LispSymbol nameSym) {
+						names.add(nameSym.name());
 					}
 				}
 				// Without a definition, compile installs nothing.
@@ -35591,42 +35612,41 @@ public final class LispMacroExpander {
 
 	private static LispVal expandSignalDesignator(LispCons cons, String opName, String internalName,
 			ClosRegistry closRegistry, boolean runtimeTypeDispatch, boolean signalHook, boolean signalsHandlerCase) {
-		LispVal expansion = expandSignalDesignatorInner(cons, opName, internalName, closRegistry, runtimeTypeDispatch,
-				signalHook, signalsHandlerCase);
-		if (signalHook && LispNames.WARN_INTERNAL.equals(internalName)) {
-			// Restart mode: every warn establishes the muffle-warning restart around
-			// the handler run and the output, so (muffle-warning) from a handler
-			// returns nil from the warn without printing.
-			LispVal clause = listToCons(
-					List.of(new LispSymbol(LispNames.MUFFLE_WARNING), LispNil.INSTANCE, LispNil.INSTANCE));
-			expansion = listToCons(List.of(new LispSymbol(LispNames.RESTART_CASE), expansion, clause));
-		}
-		return expansion;
-	}
-
-	private static LispVal expandSignalDesignatorInner(LispCons cons, String opName, String internalName,
-			ClosRegistry closRegistry, boolean runtimeTypeDispatch, boolean signalHook, boolean signalsHandlerCase) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException(opName + " expects a condition designator");
 		}
 		LispVal datum = parts.get(1);
+		boolean warn = LispNames.WARN_INTERNAL.equals(internalName);
 		if (datum instanceof LispCons mc && mc.car() instanceof LispSymbol mcOp
 				&& LispNames.MAKE_CONDITION.equals(mcOp.name()) && mc.cdr() instanceof LispCons mcArgs
-				&& quotedSymbol(mcArgs.car()) != null) {
+				&& quotedSymbol(mcArgs.car()) != null
+				&& !(warn && namesNoWarning(java.util.Objects.requireNonNull(quotedSymbol(mcArgs.car())),
+						closRegistry))) {
 			// (error (make-condition 'type args...)): the type is statically known, so
-			// route through the typed path (construction + :report-aware message).
-			return expandTypedSignal(opName, internalName, java.util.Objects.requireNonNull(quotedSymbol(mcArgs.car())),
-					mc.toList().subList(2, mc.toList().size()), closRegistry, signalHook, null, signalsHandlerCase);
+			// route through the typed path (construction + :report-aware message). A warn
+			// of a class that is no warning leaves it for the object path, whose check
+			// answers the instance it built.
+			return muffleWarningRestart(expandTypedSignal(opName, internalName,
+					java.util.Objects.requireNonNull(quotedSymbol(mcArgs.car())),
+					mc.toList().subList(2, mc.toList().size()), closRegistry, signalHook, null, signalsHandlerCase),
+					internalName, signalHook);
 		}
 		LispSymbol typeSym = quotedSymbol(datum);
 		if (typeSym != null) {
-			return expandTypedSignal(opName, internalName, typeSym, parts.subList(2, parts.size()), closRegistry,
-					signalHook, null, signalsHandlerCase);
+			if (warn && namesNoWarning(typeSym, closRegistry)) {
+				// The initargs are evaluated as make-condition's would be, and no restart
+				// is established: the type-error comes before the signal.
+				List<LispVal> steps = new ArrayList<>(parts.subList(2, parts.size()));
+				steps.add(noWarningTypeError(unspelledQuoteOf(typeSym.name())));
+				return makeProgn(steps);
+			}
+			return muffleWarningRestart(expandTypedSignal(opName, internalName, typeSym, parts.subList(2, parts.size()),
+					closRegistry, signalHook, null, signalsHandlerCase), internalName, signalHook);
 		}
 		if (datum instanceof LispString control) {
-			return expandStringSignal(opName, internalName, control, parts.subList(2, parts.size()), signalHook,
-					signalsHandlerCase);
+			return muffleWarningRestart(expandStringSignal(opName, internalName, control,
+					parts.subList(2, parts.size()), signalHook, signalsHandlerCase), internalName, signalHook);
 		}
 		if (runtimeTypeDispatch) {
 			// Interpreter only: the datum is a runtime value. A SYMBOL value is a
@@ -35667,6 +35687,44 @@ public final class LispMacroExpander {
 		}
 		return expandObjectSignal(internalName, datum, closRegistry, signalHook, formatArgumentList(parts),
 				signalsHandlerCase);
+	}
+
+	/**
+	 * Restart mode's {@code muffle-warning} restart around a warn's handler run and
+	 * output, so {@code (muffle-warning)} from a handler returns nil from the warn
+	 * without printing; any other signal, or a warn outside restart mode, as it is.
+	 */
+	private static LispVal muffleWarningRestart(LispVal expansion, String internalName, boolean signalHook) {
+		if (!signalHook || !LispNames.WARN_INTERNAL.equals(internalName)) {
+			return expansion;
+		}
+		LispVal clause = listToCons(
+				List.of(new LispSymbol(LispNames.MUFFLE_WARNING), LispNil.INSTANCE, LispNil.INSTANCE));
+		return listToCons(List.of(new LispSymbol(LispNames.RESTART_CASE), expansion, clause));
+	}
+
+	/**
+	 * Whether a {@code warn} datum names a registered class outside {@code warning}. A
+	 * name no class holds stays on the typed path, the undefined-type degradation of the
+	 * whole signal family ({@link #buildTypedConstruct}).
+	 */
+	private static boolean namesNoWarning(LispSymbol type, ClosRegistry closRegistry) {
+		ClosRegistry.ClassInfo cls = closRegistry.findClass(type.name());
+		return cls != null && !cls.cpl().contains(ClosRegistry.WARNING_CLASS_NAME);
+	}
+
+	/**
+	 * What a {@code warn} of something other than a warning does (CLHS {@code warn}): the
+	 * {@code type-error} the backend's own {@code error} lowering expands. It comes after
+	 * the whole-program scans read the program, so they take the {@code warn} site for it
+	 * ({@link #warnCanSignalTypeError}).
+	 * @param datum the form answering the type-error's datum
+	 * @return the signal
+	 */
+	private static LispVal noWarningTypeError(LispVal datum) {
+		return listToCons(List.of(new LispSymbol(LispNames.ERROR), quoteOf(ClosRegistry.TYPE_ERROR_CLASS_NAME),
+				new LispSymbol(":DATUM"), datum, new LispSymbol(":EXPECTED-TYPE"),
+				unspelledQuoteOf(ClosRegistry.WARNING_CLASS_NAME)));
 	}
 
 	/**
@@ -36247,8 +36305,18 @@ public final class LispMacroExpander {
 					callOf(LispNames.PRINT_WITHOUT_READABLY_INTERNAL, FormatRenderer.call(condVar, formatArgs)),
 					stringCase);
 		}
-		return makeLet(SIGNAL_COND_VAR, datumExpr, makeIf(callOf(LispNames.STRINGP, condVar), stringCase,
-				makeIf(callOf(LispNames.SYMBOLP, condVar), symbolCase, conditionCase)));
+		LispVal arms = makeIf(callOf(LispNames.STRINGP, condVar), stringCase,
+				makeIf(callOf(LispNames.SYMBOLP, condVar), symbolCase, conditionCase));
+		if (warn) {
+			// What is no warning ends here, outside the restart: a condition of another
+			// class, a value that is no condition. A function is a format control the
+			// standard allows, and stays what it was.
+			LispVal passes = listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, condVar),
+					callOf(LispNames.SYMBOLP, condVar), callOf(LispNames.FUNCTIONP, condVar),
+					objIs(condVar, List.copyOf(closRegistry.descendantTags(ClosRegistry.WARNING_CLASS_NAME)))));
+			arms = makeIf(passes, muffleWarningRestart(arms, internalName, signalHook), noWarningTypeError(condVar));
+		}
+		return makeLet(SIGNAL_COND_VAR, datumExpr, arms);
 	}
 
 	/**
@@ -40112,8 +40180,16 @@ public final class LispMacroExpander {
 			String className = quotedSymbolName(datum);
 			if (className != null) {
 				ClosRegistry.ClassInfo info = this.closRegistry.findClass(className);
-				this.tags.add(LispLayout.CLASS_TAG_PREFIX + (info != null ? info.name() : className));
-				checkInitargs(args.subList(datumAt + 1, args.size()));
+				if (LispNames.WARN.equals(member) && info != null
+						&& !info.cpl().contains(ClosRegistry.WARNING_CLASS_NAME)) {
+					// Builds no instance of the class: the type-error, a lowering after
+					// this scan, carries no control and reports from its slots.
+					this.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.TYPE_ERROR_CLASS_NAME);
+				}
+				else {
+					this.tags.add(LispLayout.CLASS_TAG_PREFIX + (info != null ? info.name() : className));
+					checkInitargs(args.subList(datumAt + 1, args.size()));
+				}
 			}
 			else if (!(datum instanceof LispString)) {
 				// A computed datum can name any condition class.
@@ -43469,14 +43545,98 @@ public final class LispMacroExpander {
 	 * conversion of a symbol -- the only conversion that spells a package qualifier
 	 * ({@code princ} never does, CLHS 22.1.3.3), and so the only one the package gate
 	 * ({@link #printsUnderAPackage}) has anything to change. The direct operators, the
-	 * {@code format} family ({@code ~S}), the signalling operators (a report is
-	 * formatted), the print-object seam and the internal {@code prin1} piece the
-	 * expansions produce.
+	 * signalling operators that do not take a control (a report is formatted), the
+	 * print-object seam and the internal {@code prin1} piece the expansions produce.
+	 * Those taking a control are asked of apart, as it can be read
+	 * ({@link #controlReachesPrin1}).
 	 */
 	private static final List<String> PRIN1_SURFACE_OPERATORS = List.of(LispNames.PRINT, LispNames.PRIN1,
-			LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.WRITE, LispNames.PPRINT, LispNames.FORMAT,
-			LispNames.ERROR, LispNames.WARN, LispNames.SIGNAL, LispNames.CERROR, LispNames.ASSERT, LispNames.CHECK_TYPE,
-			LispNames.PRINT_OBJECT, LispNames.PRINT_UNREADABLE_OBJECT, LispNames.PRIN1_PIECE_INTERNAL);
+			LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.WRITE, LispNames.PPRINT, LispNames.CERROR,
+			LispNames.ASSERT, LispNames.CHECK_TYPE, LispNames.PRINT_OBJECT, LispNames.PRINT_UNREADABLE_OBJECT,
+			LispNames.PRIN1_PIECE_INTERNAL);
+
+	/**
+	 * A directive of a {@code format} control: its parameters and modifiers, a pad
+	 * character's quote among them so that {@code ~'sA} is an {@code ~A}, then the
+	 * character naming it.
+	 */
+	private static final java.util.regex.Pattern FORMAT_DIRECTIVE = java.util.regex.Pattern
+		.compile("~(?:[-+]?[0-9]+|'.|[vV#]|,)*[:@]*(.)", java.util.regex.Pattern.DOTALL);
+
+	/**
+	 * Whether a control has a directive that can print a symbol with
+	 * {@code *print-escape*} true: {@code ~S} and {@code ~W}, and {@code ~/} and
+	 * {@code ~?}, which run what the control does not spell.
+	 */
+	private static boolean hasPrin1Directive(String control) {
+		java.util.regex.Matcher directive = FORMAT_DIRECTIVE.matcher(control);
+		while (directive.find()) {
+			if ("sSwW/?".contains(directive.group(1))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a form can reach {@code prin1} through an operator taking a {@code format}
+	 * control: it names one anywhere but as the head of a call whose control is a literal
+	 * without such a directive ({@link #hasPrin1Directive}). A filter's {@code ~a} logs
+	 * and its one {@code (error "text")} under a package carry the whole of
+	 * {@code %print-cased} otherwise, a third of the module, and a call of it for every
+	 * piece ({@code .kb/proxy-wasm-sdk.md}).
+	 */
+	private static boolean controlReachesPrin1(LispVal form) {
+		if (form instanceof LispSymbol symbol) {
+			return controlPosition(symbol) >= 0;
+		}
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		LispVal rest = cons;
+		if (cons.car() instanceof LispSymbol head && spellsClName(head.name(), LispNames.HANDLER_CASE)
+				&& cons.cdr() instanceof LispCons body) {
+			// A clause's head names a condition type, not an operator.
+			if (controlReachesPrin1(body.car())) {
+				return true;
+			}
+			for (LispVal clauses = body.cdr(); clauses instanceof LispCons cell; clauses = cell.cdr()) {
+				if (cell.car() instanceof LispCons clause && clause.cdr() instanceof LispCons variable
+						&& controlReachesPrin1(variable.cdr())) {
+					return true;
+				}
+			}
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head && controlPosition(head) >= 0) {
+			LispVal at = cons.cdr();
+			for (int i = 1; i < controlPosition(head) && at instanceof LispCons cell; i++) {
+				at = cell.cdr();
+			}
+			if (at instanceof LispCons control && control.car() instanceof LispString literal
+					&& !hasPrin1Directive(literal.value())) {
+				rest = cons.cdr();
+			}
+		}
+		for (LispVal cur = rest; cur instanceof LispCons cell; cur = cell.cdr()) {
+			if (controlReachesPrin1(cell.car())) {
+				return true;
+			}
+			if (!(cell.cdr() instanceof LispCons) && controlReachesPrin1(cell.cdr())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Where a call of an operator taking a control has it, -1 for any other symbol.
+	private static int controlPosition(LispSymbol symbol) {
+		if (spellsClName(symbol.name(), LispNames.FORMAT)) {
+			return 2;
+		}
+		return spellsClName(symbol.name(), LispNames.ERROR) || spellsClName(symbol.name(), LispNames.WARN)
+				|| spellsClName(symbol.name(), LispNames.SIGNAL) ? 1 : -1;
+	}
 
 	/**
 	 * Whether the program names an operator that can print a symbol with
@@ -43490,6 +43650,9 @@ public final class LispMacroExpander {
 	 */
 	public static boolean reachesPrin1FromTheSurface(List<LispVal> program) {
 		for (LispVal form : program) {
+			if (controlReachesPrin1(form)) {
+				return true;
+			}
 			for (String name : PRIN1_SURFACE_OPERATORS) {
 				if (usesSymbol(form, name)) {
 					return true;
@@ -43695,14 +43858,14 @@ public final class LispMacroExpander {
 	 * {@code warn} signals too, and under this gate its lowering asks before it writes
 	 * ({@link #expandWarn(LispCons, ClosRegistry, boolean, boolean)}): the program warns
 	 * and a {@code handler-case} clause can hold a warning
-	 * ({@link #clauseTypeCanHoldWarning}), or it can warn with a datum that may be no
-	 * warning ({@link #formWarnsAnyDatum}, or it runs forms at run time, which reach the
-	 * {@code #'warn} wrapper) and establishes any catching form. A program warning only
-	 * with a control string or a standard warning under clauses that are all errors never
-	 * has a condition to transfer for, so its {@code warn} keeps the plain write. The
-	 * walk applies the same operator-position discipline as {@link #usesRestartSystem}
-	 * (quoted data and non-operator spellings do not count). The interpreter needs none
-	 * of this -- its per-thread clause-type stack already matches at the signal point.
+	 * ({@link #clauseTypeCanHoldWarning}), or it runs forms at run time, which can spell
+	 * their own catching forms, and establishes any catching form. A program whose
+	 * clauses are all errors never has a condition to transfer for: only a warning
+	 * reaches the signal, and what is none is a {@code type-error} thrown before it. Its
+	 * {@code warn} keeps the plain write. The walk applies the same operator-position
+	 * discipline as {@link #usesRestartSystem} (quoted data and non-operator spellings do
+	 * not count). The interpreter needs none of this -- its per-thread clause-type stack
+	 * already matches at the signal point.
 	 * @param program the top-level forms (post library splice)
 	 * @return whether the signal-point clause match is needed
 	 */
@@ -43710,19 +43873,17 @@ public final class LispMacroExpander {
 		boolean signals = false;
 		boolean catches = false;
 		boolean warns = false;
-		boolean warnsAnyDatum = false;
 		boolean holdsWarning = false;
 		for (LispVal form : program) {
 			signals = signals || formContainsOperator(form, SIGNAL_OPERATORS, true);
 			catches = catches || formContainsOperator(form, CATCHING_OPERATORS, false);
 			warns = warns || formContainsOperator(form, WARNING_OPERATORS, true);
-			warnsAnyDatum = warnsAnyDatum || formWarnsAnyDatum(form);
 			holdsWarning = holdsWarning || formCatchesWarning(form);
 			if (signals && catches) {
 				return true;
 			}
 		}
-		return (holdsWarning && warns) || (catches && (warnsAnyDatum || runsFormsAtRunTime(program)));
+		return (holdsWarning && warns) || (catches && runsFormsAtRunTime(program));
 	}
 
 	/**
@@ -43808,39 +43969,48 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Whether the form contains a {@code warn} whose datum may be no warning: a
-	 * {@code #'warn} reference or a call whose datum is neither a control string nor a
-	 * standard warning's name. What a {@code warn} signals is its datum, whatever class
-	 * that is, so such a call can reach a clause of the error family.
+	 * Whether the program can build the {@code type-error} of a {@code warn} of something
+	 * other than a warning ({@link #noWarningTypeError}): a {@code #'warn} reference or a
+	 * call whose datum is neither a control string nor the name of a warning class, seen
+	 * here because that signal only exists in the expression expansion.
+	 * @param program the top-level forms
+	 * @param closRegistry the class registry
+	 * @return whether it can
 	 */
-	private static boolean formWarnsAnyDatum(LispVal form) {
+	public static boolean warnCanSignalTypeError(List<LispVal> program, ClosRegistry closRegistry) {
+		return program.stream().anyMatch(form -> formCanSignalWarnTypeError(form, closRegistry));
+	}
+
+	private static boolean formCanSignalWarnTypeError(LispVal form, ClosRegistry closRegistry) {
 		if (!(form instanceof LispCons cons)) {
 			return false;
 		}
 		if (cons.car() instanceof LispSymbol head) {
 			String name = head.name();
 			if (LispNames.isQuote(name)) {
-				return false;
+				// (funcall 'warn x) names the wrapper too.
+				return cons.cdr() instanceof LispCons quoted && quoted.car() instanceof LispSymbol quotedName
+						&& LispNames.WARN.equals(memberOf(quotedName.name()));
 			}
 			if (LispNames.FUNCTION.equals(name) && cons.cdr() instanceof LispCons fnCons
 					&& fnCons.car() instanceof LispSymbol fnSym && LispNames.WARN.equals(memberOf(fnSym.name()))) {
 				return true;
 			}
 			if (!name.startsWith(":") && LispNames.WARN.equals(memberOf(name)) && cons.cdr() instanceof LispCons args
-					&& !isWarningDatum(args.car())) {
+					&& !isWarningDatum(args.car(), closRegistry)) {
 				return true;
 			}
 		}
 		for (LispVal rest = cons; rest instanceof LispCons cell; rest = cell.cdr()) {
-			if (formWarnsAnyDatum(cell.car())) {
+			if (formCanSignalWarnTypeError(cell.car(), closRegistry)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	/** Whether a {@code warn} datum is a control string or a standard warning's name. */
-	private static boolean isWarningDatum(LispVal datum) {
+	/** Whether a {@code warn} datum is a control string or a warning class's name. */
+	private static boolean isWarningDatum(LispVal datum, ClosRegistry closRegistry) {
 		if (datum instanceof LispString) {
 			return true;
 		}
@@ -43848,8 +44018,8 @@ public final class LispMacroExpander {
 				&& LispNames.MAKE_CONDITION.equals(mcOp.name()) && mc.cdr() instanceof LispCons mcArgs ? mcArgs.car()
 						: datum;
 		LispSymbol type = quotedSymbol(named);
-		ClosRegistry.ClassInfo cls = type == null ? null : EMPTY_CLOS_REGISTRY.findClass(type.name());
-		return cls != null && cls.cpl().contains("WARNING");
+		ClosRegistry.ClassInfo cls = type == null ? null : closRegistry.findClass(type.name());
+		return cls != null && cls.cpl().contains(ClosRegistry.WARNING_CLASS_NAME);
 	}
 
 	/**

@@ -99,6 +99,11 @@
                        :as "size"
                        :params '(:string)
                        :returns :u32)
+(rontolisp:wasm-import '%search
+                       :from "rontolisp:memory"
+                       :as "search"
+                       :params '(:string :u32 :u32)
+                       :returns :s32)
 
 ;;; ---------------------------------------------------------------------------
 ;;; The proxy_* host functions: only a reached one becomes an import
@@ -256,23 +261,9 @@
 
 (defun %cell-string (cells) (%string (%load32 cells) (%load32 (+ cells 4))))
 
-(defun %bytes= (a b size)
-  (let ((i 0))
-    (loop while (and (< i size) (= (load8 (+ a i)) (load8 (+ b i))))
-          do (setq i (+ i 1)))
-    (= i size)))
-
-;; Whether the string NEEDLE is in the SIZE bytes at ADDRESS. One pass over the bytes, so
-;; a body costs what its size says: `char` would walk from the start at every index.
-(defun search-bytes (needle address size)
-  (let ((start (%address needle))
-        (needle-size (%size needle))
-        (i 0)
-        (found nil))
-    (loop while (and (not found) (<= (+ i needle-size) size))
-          do (setq found (%bytes= start (+ address i) needle-size))
-            (setq i (+ i 1)))
-    found))
+;; Whether the string NEEDLE is in the SIZE bytes at ADDRESS: about 3.5 instructions per
+;; byte, where `char` would walk from the start at every index.
+(defun search-bytes (needle address size) (>= (%search needle address size) 0))
 
 (defun %copy-bytes (to from size)
   (dotimes (i size) (store8 (+ to i) (load8 (+ from i)))))
@@ -643,22 +634,31 @@
               :params ',types
               ,@(if (eq returns :void) '() `(:returns ,returns)))))))
 
-;; A filter. Each clause but two is a callback the host calls, by the name the other SDK
-;; gives its generic function:
+;; A filter. Each clause but two is a callback the host calls, as in ../proxy-wasm.lisp:
 ;;
 ;;   (:on-request-headers (stream num-headers end-of-stream) body...)
 ;;
 ;; The first parameter is the context's id, and a body answers :continue or :pause, or a
-;; boolean, as that generic function says in ../proxy-wasm.lisp.
+;; boolean, as the clause does there.
 ;;
 ;;   (:state field...)            fields every context has: see %state-accessors
 ;;   (:on-failure :log | :trap)   what a failed host call does before answering NIL
 ;;
 (defmacro define-filter (&rest clauses)
   (dolist (clause clauses)
-    (unless (or (member (car clause) '(:state :on-failure))
-                (assoc (car clause) (%callbacks)))
-      (error "proxy-wasm: no clause ~s in define-filter" (car clause))))
+    (let* ((key (car clause)) (callback (assoc key (%callbacks))))
+      (cond
+       ((not (eq clause (assoc key clauses)))
+        (error "proxy-wasm: a second ~s in define-filter" key))
+       ((eq key :on-failure)
+        (unless (member (cadr clause) '(:log :trap))
+          (error "proxy-wasm: :on-failure is :log or :trap, not ~s"
+                 (cadr clause))))
+       ((eq key :state))
+       ((null callback) (error "proxy-wasm: no clause ~s in define-filter" key))
+       ((/= (length (cadr clause)) (length (cadddr callback)))
+        (error "proxy-wasm: ~s takes ~a parameters" key
+               (length (cadddr callback)))))))
   (let* ((accessors
           (multiple-value-list (%state-accessors (cdr (assoc :state clauses)))))
          (state-size (cadr accessors))

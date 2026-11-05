@@ -151,7 +151,7 @@ final class WasmDesignatorCall {
 		emitNull(ctx); // env
 		WasmPhysicalArgs.emit(ctx, this.target, args);
 		ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, this.target.name()));
-		ctx.writer.writeUnsignedLeb128(this.target.funcIndex());
+		ctx.writer.writeUnsignedLeb128(this.target.callIndex());
 	}
 
 	/** {@code ref.null eq} -- the ignored env of a defun, and the empty rest list. */

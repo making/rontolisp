@@ -99,6 +99,31 @@ final class WasmFunctionCallCompiler {
 		WasmUncaughtLocations.emitValueCall(ctx, tail, arity + 1, dispatchFuncIdx);
 	}
 
+	// A call that passes no keyword at all finds none, whatever it asks for: a keyword
+	// parameter's scan costs that call the test, and not the literal and the call. A
+	// function with &key spends most of its calls with most keywords absent.
+	private static boolean compileAbsentKeyword(String name, LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (!LispNames.LL_KEY_CELL.equals(name) || !(cons.car() instanceof LispSymbol)) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 4 || !(parts.get(1) instanceof LispSymbol plist)) {
+			return false;
+		}
+		WasmExprCompiler.compileExpr(plist, ctx);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.wasmCtrlDepth++;
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.ELSE);
+		compileResolvedCall(name, cons, ctx, false);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
+		return true;
+	}
+
 	private static void compileDirectCall(String name, LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		// A host import whose every :string argument is a literal reaches the host
 		// without the wrapper, and without the GC byte array the wrapper would have
@@ -108,7 +133,33 @@ final class WasmFunctionCallCompiler {
 		if (WasmImportCompiler.compileLiteralImportCall(name, cons, ctx)) {
 			return;
 		}
+		if (compileAbsentKeyword(name, cons, ctx)) {
+			return;
+		}
+		compileResolvedCall(name, WasmImportCompiler.withTextArguments(name, cons, ctx), ctx, tail);
+	}
+
+	private static void compileResolvedCall(String name, LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		WasmLispCompiler.WasmFunctionInfo fi = ctx.functions.get(name);
+		if (fi != null && ctx.fenvForwarders.contains(name) && cons.toList().size() - 1 <= ctx.callArityCeiling) {
+			// A name only the function namespace holds: the call applies what its cell
+			// holds when it runs, a miss the undefined-function ahead of the arguments.
+			// No
+			// rest list, which the forwarder defun of the name makes -- and which takes
+			// a count past the dispatchers' ceiling.
+			ctx.tailPosition = tail;
+			WasmExprCompiler.compileExpr(LispMacroExpander.runtimeFunctionNamespaceCall(name, cons), ctx);
+			return;
+		}
+		if (fi != null && fi.entryIndex() >= 0 && !(fi.variadic() ? cons.toList().size() - 1 >= fi.required()
+				: cons.toList().size() - 1 == fi.required())) {
+			// A count this definition rules out, which a replacement may take: the call
+			// applies what the name holds when it runs, whose own count check reports a
+			// miss (WasmFunctionCells).
+			ctx.tailPosition = tail;
+			WasmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughFunctionValue(cons), ctx);
+			return;
+		}
 		if (fi != null) {
 			WasmEmitHelper.requireNoCharvecHelper(ctx, name);
 			List<LispVal> args = cons.toList();
@@ -137,7 +188,7 @@ final class WasmFunctionCallCompiler {
 			// Every compiled Lisp function answers one (ref null eq), so a tail call
 			// to any of them is a return_call from any of them.
 			ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, name));
-			ctx.writer.writeUnsignedLeb128(fi.funcIndex());
+			ctx.writer.writeUnsignedLeb128(fi.callIndex());
 		}
 		else if (WasmFunctionFormCompiler.nestedDefun(name, ctx)) {
 			// A defun nested inside a top-level let or a function body compiles to

@@ -238,8 +238,8 @@ final class WasmImportCompiler {
 	 * {@code :s-expr} would have to print its argument first and {@code :bytes} stages a
 	 * runtime vector, so neither is a literal in the sense this lowering means.
 	 */
-	private static final List<BoundaryType> LOWERABLE_PARAM_TYPES = List.of(BoundaryType.STRING, BoundaryType.S32,
-			BoundaryType.FLOAT, BoundaryType.BOOL);
+	private static final List<BoundaryType> LOWERABLE_PARAM_TYPES = List.of(BoundaryType.STRING, BoundaryType.OCTETS,
+			BoundaryType.S32, BoundaryType.U32, BoundaryType.FLOAT, BoundaryType.BOOL);
 
 	/**
 	 * Whether a declaration's SHAPE admits the literal {@code :string} call-site lowering
@@ -251,8 +251,15 @@ final class WasmImportCompiler {
 	 * @return whether a site of this import may lower
 	 */
 	static boolean canLowerLiteralCallSite(Decl decl) {
-		return decl.paramTypes().contains(BoundaryType.STRING) && LOWERABLE_PARAM_TYPES.containsAll(decl.paramTypes())
+		return decl.paramTypes().stream().anyMatch(WasmImportCompiler::takesText)
+				&& LOWERABLE_PARAM_TYPES.containsAll(decl.paramTypes())
 				&& LOWERABLE_RESULT_TYPES.contains(decl.returnType());
+	}
+
+	// A parameter a literal string crosses as its bytes: an :octets one takes a string's
+	// UTF-8 encoding, which is what the data segment holds.
+	private static boolean takesText(BoundaryType type) {
+		return type == BoundaryType.STRING || type == BoundaryType.OCTETS;
 	}
 
 	/**
@@ -282,6 +289,40 @@ final class WasmImportCompiler {
 		Decl decl = decls.get(name);
 		return decl == null || WasmMemoryIntrinsic.isIntrinsic(decl) ? -1
 				: slots.get(decl.module() + "\0" + decl.field());
+	}
+
+	/**
+	 * A call of a host import with each {@code (format nil ...)} at a parameter that
+	 * takes text as the string it builds, without the mutable-result wrap the operator
+	 * finishes with ({@code .kb/string-write-runtime.md}): a host sees bytes, so nothing
+	 * can observe the identity the wrap gives the result, and the wrapper would render
+	 * the character vector straight back.
+	 * @param name the Lisp name called
+	 * @param cons the call
+	 * @param ctx the compilation context
+	 * @return the call to compile, {@code cons} itself when nothing changed
+	 */
+	static LispCons withTextArguments(String name, LispCons cons, WasmLispCompiler.Ctx ctx) {
+		Decl decl = ctx.importDecls.get(name);
+		if (decl == null || WasmMemoryIntrinsic.isIntrinsic(decl)) {
+			return cons;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() - 1 != decl.paramTypes().size()) {
+			return cons;
+		}
+		List<LispVal> rewritten = new ArrayList<>(parts);
+		boolean changed = false;
+		for (int i = 0; i < decl.paramTypes().size(); i++) {
+			if (takesText(decl.paramTypes().get(i)) && parts.get(i + 1) instanceof LispCons argument
+					&& argument.car() instanceof am.ik.rontolisp.LispSymbol head
+					&& am.ik.rontolisp.LispNames.FORMAT.equals(head.name())
+					&& am.ik.rontolisp.compiler.MutableStringProducers.isFormatToString(argument)) {
+				rewritten.set(i + 1, am.ik.rontolisp.macro.LispMacroExpander.expandFormat(argument));
+				changed = true;
+			}
+		}
+		return changed ? (LispCons) LispCons.rebuiltList(cons, rewritten) : cons;
 	}
 
 	/**
@@ -331,7 +372,7 @@ final class WasmImportCompiler {
 		String[] literals = new String[numParams];
 		int firstLiteral = -1;
 		for (int i = 0; i < numParams; i++) {
-			if (decl.paramTypes().get(i) != BoundaryType.STRING) {
+			if (!takesText(decl.paramTypes().get(i))) {
 				continue;
 			}
 			if (!(parts.get(i + 1) instanceof am.ik.rontolisp.LispString literal)) {
@@ -557,12 +598,7 @@ final class WasmImportCompiler {
 		int memParamBase = resultPtrSlot + (bytesResult ? 3 : 0);
 		int numI32Temps = sExprTemps
 				+ (staging ? 1 + 2 * numBytesParams + (bytesResult ? 3 : 0) + 2 * numMemParams : 0);
-		// A :u32 argument leaves the i31 range, so it is range-checked on the i64 its
-		// exact
-		// value unboxes to (one scratch, since each check is finished before the next).
-		boolean u32Param = decl.paramTypes().contains(BoundaryType.U32);
-		int u32Scratch = numLispParams + 1 + numI32Temps;
-		ctx.nextLocal = u32Scratch + (u32Param ? 1 : 0);
+		ctx.nextLocal = numLispParams + 1 + numI32Temps;
 		int stagingAllocFuncIndex = reentrant ? ctx.parkAllocFuncIndex : allocFuncIndex;
 		if (staging && !reentrant) {
 			// mark = HEAP_PTR; every staged buffer below is a bump allocation popped
@@ -658,11 +694,6 @@ final class WasmImportCompiler {
 				emitStagedMemoryParam(ctx, decl.paramTypes().get(i), i + 1, memParamBase + 2 * m, reentrant);
 				m++;
 			}
-			else if (decl.paramTypes().get(i) == BoundaryType.U32) {
-				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(i + 1);
-				WasmExportCompiler.emitNarrowIntResult(ctx, BoundaryType.U32, u32Scratch);
-			}
 			else {
 				emitUnboxParam(ctx, decl.paramTypes().get(i), i + 1);
 			}
@@ -731,21 +762,16 @@ final class WasmImportCompiler {
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
 		}
 		ctx.writer.write(Instruction.END);
-		// Local declarations: the i32 scratch run (when present), the i64 scratch of a
-		// :u32 argument, then the (ref null eq) temps allocated by allocTemp during
-		// unboxing.
-		int numEqTemps = ctx.nextLocal - (numLispParams + 1 + numI32Temps + (u32Param ? 1 : 0));
+		// Local declarations: the i32 scratch run (when present), then the (ref null eq)
+		// temps allocated by allocTemp during unboxing.
+		int numEqTemps = ctx.nextLocal - (numLispParams + 1 + numI32Temps);
 		ByteArrayOutputStream entry = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter entryWriter = new WasmWriter(entry);
-		int groups = (numI32Temps > 0 ? 1 : 0) + (u32Param ? 1 : 0) + (numEqTemps > 0 ? 1 : 0);
+		int groups = (numI32Temps > 0 ? 1 : 0) + (numEqTemps > 0 ? 1 : 0);
 		entryWriter.write(groups);
 		if (numI32Temps > 0) {
 			entryWriter.writeUnsignedLeb128(numI32Temps);
 			entryWriter.write(Type.I32);
-		}
-		if (u32Param) {
-			entryWriter.writeUnsignedLeb128(1);
-			entryWriter.write(Type.I64);
 		}
 		if (numEqTemps > 0) {
 			entryWriter.writeUnsignedLeb128(numEqTemps);
@@ -778,15 +804,18 @@ final class WasmImportCompiler {
 		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
+		if (intrinsic == WasmMemoryIntrinsic.SEARCH) {
+			return buildSearchBody(ctx, bodyStream);
+		}
 		List<BoundaryType> params = intrinsic.params();
-		int scratch = params.size() + 1;
-		int firstTemp = scratch + 1;
+		int firstTemp = params.size() + 1;
 		ctx.nextLocal = firstTemp;
 		for (int i = 0; i < params.size(); i++) {
 			writer.write(Instruction.GET_LOCAL);
 			writer.writeUnsignedLeb128(i + 1);
 			if (params.get(i) == BoundaryType.U32) {
-				WasmExportCompiler.emitNarrowIntResult(ctx, BoundaryType.U32, scratch);
+				writer.write(Instruction.CALL);
+				writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_U32_VAL);
 			}
 			else {
 				WasmExportCompiler.emitWideIntResult(ctx, true);
@@ -808,8 +837,50 @@ final class WasmImportCompiler {
 		int numEqTemps = ctx.nextLocal - firstTemp;
 		ByteArrayOutputStream entry = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter entryWriter = new WasmWriter(entry);
-		entryWriter.write(1 + (numEqTemps > 0 ? 1 : 0));
-		entryWriter.writeUnsignedLeb128(1);
+		entryWriter.write(numEqTemps > 0 ? 1 : 0);
+		if (numEqTemps > 0) {
+			entryWriter.writeUnsignedLeb128(numEqTemps);
+			entryWriter.writeRefType(true, Type.EQ.code());
+		}
+		entryWriter.write((Object) bodyStream.toByteArray());
+		return entry.toByteArray();
+	}
+
+	// The needle crosses to linear memory as a :string argument does, at the un-advanced
+	// scratch: the search allocates nothing, so nothing lands on it.
+	private static byte[] buildSearchBody(WasmLispCompiler.Ctx ctx, ByteArrayOutputStream bodyStream) {
+		WasmWriter writer = ctx.writer;
+		final int needleParam = 1, addressParam = 2, sizeParam = 3;
+		final int needle = 4, needleSize = 5, address = 6, size = 7, at = 8, end = 9, k = 10, pattern = 11, mask = 12;
+		final int firstTemp = 13;
+		ctx.nextLocal = firstTemp;
+		writer.write(Instruction.GET_LOCAL);
+		writer.writeUnsignedLeb128(needleParam);
+		WasmExportCompiler.emitStringResult(ctx);
+		writer.write(Instruction.SET_LOCAL);
+		writer.writeUnsignedLeb128(needleSize);
+		writer.write(Instruction.SET_LOCAL);
+		writer.writeUnsignedLeb128(needle);
+		writer.write(Instruction.GET_LOCAL);
+		writer.writeUnsignedLeb128(addressParam);
+		emitCall(writer, WasmLispCompiler.FUNC_U32_VAL);
+		writer.write(Instruction.SET_LOCAL);
+		writer.writeUnsignedLeb128(address);
+		writer.write(Instruction.GET_LOCAL);
+		writer.writeUnsignedLeb128(sizeParam);
+		emitCall(writer, WasmLispCompiler.FUNC_U32_VAL);
+		writer.write(Instruction.SET_LOCAL);
+		writer.writeUnsignedLeb128(size);
+		WasmMemoryIntrinsic.emitSearch(writer, needle, needleSize, address, size, at, end, k, pattern, mask);
+		emitBoxResult(ctx, BoundaryType.S32, -1, -1, false);
+		writer.write(Instruction.END);
+		int numEqTemps = ctx.nextLocal - firstTemp;
+		ByteArrayOutputStream entry = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter entryWriter = new WasmWriter(entry);
+		entryWriter.write(2 + (numEqTemps > 0 ? 1 : 0));
+		entryWriter.writeUnsignedLeb128(pattern - needle);
+		entryWriter.write(Type.I32);
+		entryWriter.writeUnsignedLeb128(firstTemp - pattern);
 		entryWriter.write(Type.I64);
 		if (numEqTemps > 0) {
 			entryWriter.writeUnsignedLeb128(numEqTemps);
@@ -977,6 +1048,11 @@ final class WasmImportCompiler {
 	private static void emitUnboxTop(WasmLispCompiler.Ctx ctx, BoundaryType type) {
 		switch (type) {
 			case S32 -> WasmEmitHelper.castI31GetS(ctx);
+			// A :u32 argument leaves the i31 range, so it is not one cast.
+			case U32 -> {
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_U32_VAL);
+			}
 			// Any exact integer (an i31 or the boxed i64 lane), exactly; a float
 			// truncates, as the export side's result does.
 			case S64 -> WasmExportCompiler.emitWideIntResult(ctx, true);

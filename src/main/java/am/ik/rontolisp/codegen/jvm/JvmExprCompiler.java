@@ -1094,6 +1094,8 @@ final class JvmExprCompiler {
 			case LispNames.SET_SYMBOL_FUNCTION_INTERNAL ->
 				JvmSymbolApiCompiler.compileSetSymbolFunction(cons, ctx, className);
 			case LispNames.FENV_FUNCTION_INTERNAL -> JvmSymbolApiCompiler.compileFenvFunction(cons, ctx, className);
+			case LispNames.RESTORE_COMPILED_DEFINITION_INTERNAL ->
+				JvmSymbolApiCompiler.compileRestoreCompiledDefinition(cons, ctx, className);
 			case LispNames.SETF_FUNCTION_SYMBOL_INTERNAL ->
 				JvmSymbolApiCompiler.compileSetfFunctionSymbol(cons, ctx, className);
 			case LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL ->

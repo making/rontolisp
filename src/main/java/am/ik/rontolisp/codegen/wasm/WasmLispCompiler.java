@@ -573,6 +573,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * shifts, and only when one of those conditional blocks is present.
 	 */
 	int userFuncBase() {
+		return functionCellsBase() + this.functionCells.functionCount();
+	}
+
+	/**
+	 * The index of the first function of the block {@link WasmFunctionCells} holds, right
+	 * after {@code _funcref}, so adding it moves no fixed index -- only
+	 * {@link #userFuncBase()}. Only meaningful when {@link #functionCells} has cells.
+	 */
+	private int functionCellsBase() {
 		return symfuncrefFuncBase() + (this.emitsFuncref ? 1 : 0);
 	}
 
@@ -985,6 +994,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * keeps the old fresh box.
 	 */
 	private boolean emitsFuncref;
+
+	/**
+	 * The module's function-namespace cells and the functions behind them. Set in front
+	 * of pass 2, once the definitions are final, because the block shifts
+	 * {@link #userFuncBase()}.
+	 */
+	private WasmFunctionCells functionCells = WasmFunctionCells.NONE;
 
 	/**
 	 * Whether the program may observe a complex value
@@ -1404,6 +1420,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// indices below is safe.
 	static final int FUNC_STR_BUILD = FUNC_READ_CHAR + 1;
 
+	// _str_lit (off, len) -> (ref null eq): the one object of a literal, built by
+	// _str_build the first time and kept in a table after that
+	// (WasmStringRuntimeBuilder.buildStrLitBody). What evaluating a literal calls: its
+	// id, bytes and length never change, so nothing can tell two evaluations apart.
+	static final int FUNC_STR_LIT = FUNC_STR_BUILD + 1;
+
 	// _str_fresh (off, len) -> (ref null eq): like _str_build, but stamps a fresh id
 	// from the monotonic STRING_ID_CTR counter instead of id=off. Every RUNTIME string
 	// build (concatenate/subseq/case/trim, read, gensym/make-symbol, getenv, the
@@ -1412,7 +1434,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// counter id -- not the reused offset -- is what keeps distinct runtime strings and
 	// uninterned symbols eq-distinct. Interned names (literals, _intern'd symbols, t)
 	// keep calling _str_build (id=stable offset). Same (i32,i32)->ref shape.
-	static final int FUNC_STR_FRESH = FUNC_STR_BUILD + 1;
+	static final int FUNC_STR_FRESH = FUNC_STR_LIT + 1;
 
 	// _str_to_mem (str, ptr) -> i32 (TYPE_STR_TO_MEM): copies a string's GC byte array
 	// into linear[ptr..) and returns its length. See the type comment.
@@ -1546,8 +1568,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// _int_val ((ref null eq)) -> i64: i31 sign-extended, or a TYPE_BIGNUM's field.
 	static final int FUNC_INT_VAL = FUNC_INT_NEW + 1;
 
+	// _u32_val ((ref null eq)) -> i32: a :u32 argument of a host import, exact or a trap.
+	static final int FUNC_U32_VAL = FUNC_INT_VAL + 1;
+
 	// _print_i64_no_nl (i64) -> (): the i64 counterpart of _print_i32_no_nl.
-	static final int FUNC_PRINT_I64_NO_NL = FUNC_INT_VAL + 1;
+	static final int FUNC_PRINT_I64_NO_NL = FUNC_U32_VAL + 1;
 
 	// The limb (arbitrary-precision) integer runtime (WasmBigIntRuntimeBuilder, always
 	// present, appended after the boxed-i64 helpers so every constant above keeps its
@@ -3620,6 +3645,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The program's own defuns it replaces or retires by a literal name, read before
 		// the expansion adds the definitions that are no defun of its own.
 		Set<String> redefinedDefuns = RedefinedDefuns.names(program);
+		closRegistry.markGenericDefinitions();
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
 				packageResolver::internedSpelling, this.dynamic,
 				entryReportOnly ? SignalMessages.ENTRY_REPORT
@@ -3707,8 +3733,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		fenvForwarders.addAll(namespaceNestedDefuns);
 		program = NestedDefunRedefinition.rewrite(program, namespaceNestedDefuns);
 		// A name the program itself replaces has the same one home: every reference reads
-		// what the namespace holds when it runs (compiler/RedefinedDefuns).
-		program = RedefinedDefuns.rewrite(program, redefinedDefuns);
+		// what the namespace holds when it runs. A name a write it cannot read can reach
+		// keeps its compiled definition and reads a cell (compiler/RedefinedDefuns).
+		Map<String, String> shadowedDispatchers = ShadowedBuiltins.dispatchers(closRegistry);
+		boolean computedFunctionWrites = programUsesEval(program) || programUsesSymbol(program, LispNames.LOAD)
+				|| RedefinedDefuns.writesComputedNames(program);
+		Set<String> celledDefuns = RedefinedDefuns.celledDefuns(program, redefinedDefuns, computedFunctionWrites,
+				shadowedDispatchers);
+		program = RedefinedDefuns.rewrite(program, redefinedDefuns, celledDefuns, shadowedDispatchers,
+				name -> closRegistry.gfProtocol() && closRegistry.findGeneric(name) != null);
 		fenvForwarders.addAll(LispMacroExpander.symbolFunctionForwarderNames(program));
 		// Every struct/class layout is registered by the pass above, so the instance gate
 		// can be decided here -- it must be, because the struct type index and the baked
@@ -3922,7 +3955,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean writesFunctionNamespace = programUsesEval(program) || usesLoad || this.dynamic
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				|| LispMacroExpander.usesSymbolFunctionWrite(program) || !namespaceNestedDefuns.isEmpty()
-				|| !redefinedDefuns.isEmpty();
+				|| !redefinedDefuns.isEmpty() || computedFunctionWrites || !celledDefuns.isEmpty();
 		// Of those writers, the ones that can bind a name no definition in the program
 		// has: a call of such a name reads GLOBAL_FENV instead of compiling to the
 		// undefined-function signal alone (fmakunbound only retires, and a quoted
@@ -4767,8 +4800,28 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the render-guard pair included -- and nothing renumbers. A program with no
 		// quoted aggregate allocates none and is byte-identical to a build that never
 		// knew about them.
-		QuoteGlobals quoteGlobals = new QuoteGlobals((streamEndedGlobalIndex >= 0 ? streamEndedGlobalIndex
-				: operandOpGlobalIndex >= 0 ? operandOpGlobalIndex : renderDepthGlobalIndex) + 1);
+		int functionCellGlobalBase = (streamEndedGlobalIndex >= 0 ? streamEndedGlobalIndex
+				: operandOpGlobalIndex >= 0 ? operandOpGlobalIndex : renderDepthGlobalIndex) + 1;
+		// The function-namespace cells (WasmFunctionCells), one (mut (ref null eq)) =
+		// null
+		// per name a literal reference reads, by each spelling that names it at compile
+		// time: a generic on a lowered built-in shares its dispatcher's.
+		Map<String, Integer> functionCellGlobals = new LinkedHashMap<>();
+		for (String name : new java.util.TreeSet<>(fenvForwarders)) {
+			functionCellGlobals.put(name, functionCellGlobalBase + functionCellGlobals.size());
+		}
+		for (String name : celledDefuns) {
+			functionCellGlobals.putIfAbsent(name, functionCellGlobalBase + functionCellGlobals.size());
+		}
+		final int functionCellGlobalCount = functionCellGlobals.size();
+		shadowedDispatchers.forEach((generic, dispatcher) -> {
+			Integer global = functionCellGlobals.get(dispatcher);
+			if (global != null) {
+				functionCellGlobals.put(generic, global);
+			}
+		});
+		// The quoted-datum constants (.kb/quoted-data.md), continued: after the cells.
+		QuoteGlobals quoteGlobals = new QuoteGlobals(functionCellGlobalBase + functionCellGlobalCount);
 		quoteGlobals.sharing(quotedSharing);
 
 		// Create string table. The page-6 component base exists to keep the static data
@@ -4906,7 +4959,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			for (DefunDecl defun : defuns) {
 				if (defunCounts.getOrDefault(defun.name(), 0) == 1 && !asyncDefunNames.contains(defun.name())
-						&& WasmIntFusionCompiler.isInlinableDefun(defun)) {
+						&& !celledDefuns.contains(defun.name()) && WasmIntFusionCompiler.isInlinableDefun(defun)) {
 					inlinableDefuns.put(defun.name(), defun);
 				}
 			}
@@ -4916,6 +4969,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		this.emitsArityMessage = ehMode && hasLandingPad && this.usesInstances
 				&& (!arityOperatorFuncIds(defuns, null, Set.of()).isEmpty()
 						|| programUsesSymbol(program, LispNames.ARITY_REPORT_INTERNAL));
+		Map<String, int[]> celledShapes = new LinkedHashMap<>();
+		for (DefunDecl defun : defuns) {
+			if (celledDefuns.contains(defun.name)) {
+				int positional = defun.paramNames.size() - (defun.variadic ? 1 : 0);
+				celledShapes.put(defun.name,
+						new int[] { positional - defun.optionals, defun.optionals, defun.variadic ? 1 : 0 });
+			}
+		}
+		this.functionCells = WasmFunctionCells.of(functionCellsBase(), functionCellGlobals, celledShapes);
 		for (int i = 0; i < defuns.size(); i++) {
 			DefunDecl defun = defuns.get(i);
 			int funcId = nextFuncId[0]++;
@@ -4926,7 +4988,8 @@ public final class WasmLispCompiler implements LispCompiler {
 						+ arity + " (bundle the extra arguments into a list)");
 			}
 			functions.put(defun.name, new WasmFunctionInfo(defun.name, arity, defun.variadic, defun.optionals, funcId,
-					TYPE_CALLABLE_BASE + arity, userFuncBase() + i, DeclaredArityReport.of(defun.bodyExprs)));
+					TYPE_CALLABLE_BASE + arity, userFuncBase() + i, DeclaredArityReport.of(defun.bodyExprs),
+					this.functionCells.entryIndex(defun.name), functionCellGlobals.getOrDefault(defun.name, -1)));
 			if (Boolean.getBoolean("rontolisp.debug.functable")) {
 				// Profiling aid: map a perf "wasm[0]::function[N]" index back to its
 				// defun (the emitted module carries no name section).
@@ -5097,6 +5160,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			.warnedClRedefinitions(warnedClRedefinitions)
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
 			.fenvForwarders(Set.copyOf(fenvForwarders))
+			.functionCells(functionCellGlobals)
+			.functionCellRestore(this.functionCells.restoreIndex())
 			.bindsRuntimeFunctionNames(bindsRuntimeFunctionNames)
 			.usesRuntimePackages(packageResolver.runtimePackagesMutable())
 			// Every context carries the flag (not just _start): the progv lowering
@@ -5956,7 +6021,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// emission; the (ref null eq) temps allocTemp hands out follow.
 				List<Type> scratch = WasmExportCompiler.scratchTypes(decl);
 				wrapperCtx.nextLocal = paramSlots + scratch.size();
-				WasmExportCompiler.emitBody(wrapperCtx, decl, target.funcIndex(), strFromMemFuncIndex,
+				WasmExportCompiler.emitBody(wrapperCtx, decl, target.callIndex(), strFromMemFuncIndex,
 						bytesFromMemFuncIndex, bytesCopyFuncIndex);
 				// Prepend the local declarations: the scratch locals (one run each, so
 				// the
@@ -6534,6 +6599,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (runTimeDispatchers.containsKey(defun.name)) {
 					continue;
 				}
+				// A name's row answers its last definition, the one its calls bind
+				// (.kb/core-representation.md): this module emits every body.
+				if (Objects.requireNonNull(functions.get(defun.name)).funcId() != i) {
+					continue;
+				}
 				int nameOffset = stringTable.addString(defun.name).offset();
 				writeLittleEndian32(registry, nameOffset);
 				writeLittleEndian32(registry, i); // funcId == defun index
@@ -6575,7 +6645,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			for (int i = 0; i < defuns.size(); i++) {
 				DefunDecl defun = defuns.get(i);
-				if (!registryFuncIds.contains(i)) {
+				if (!registryFuncIds.contains(i) || Objects.requireNonNull(functions.get(defun.name)).funcId() != i) {
 					continue;
 				}
 				int q = defun.name.indexOf("::");
@@ -6596,6 +6666,24 @@ public final class WasmLispCompiler implements LispCompiler {
 		else {
 			lookupBody = WasmEvalRuntimeBuilder.buildLookupStub();
 		}
+		// The function cells' block: each spelling a run-time name can carry, its alias
+		// row's as _lookup's has it, reaches the cell (WasmFunctionCells).
+		Map<Integer, Integer> functionCellRows = new LinkedHashMap<>();
+		boolean cellAliasReachable = this.dynamic || nameResolvable || symbolBuilders;
+		functionCellGlobals.forEach((name, global) -> {
+			functionCellRows.put(stringTable.addString(name).offset(), global);
+			int q = name.indexOf("::");
+			if (q > 0) {
+				String alias = name.substring(0, q) + name.substring(q + 1);
+				if (cellAliasReachable || spelledLiterals.contains(alias)) {
+					functionCellRows.putIfAbsent(stringTable.addString(alias).offset(), global);
+				}
+			}
+		});
+		List<byte[]> functionCellBodies = new ArrayList<>();
+		this.functionCells.forEachBody(functionCellRows,
+				name -> Objects.requireNonNull(functions.get(name)).funcIndex(), rawSentinelGlobalIndex,
+				this.usesIdentityHashTables, functionCellBodies::add);
 		// The funcId -> name table _fun_name binary-searches to print a closure value
 		// as #<function NAME> (interpreter parity). One 12-byte {funcId, nameOff,
 		// nameLen} row per defun whose funcId MATERIALIZES as a callable value
@@ -6640,6 +6728,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// object. Its table covers every defun, the funcIds the registry and a
 		// static site can name; its global is allocated here, before the global
 		// section is emitted.
+		final byte[] strLitBody = quoteGlobals.sealLiteralSites()
+				? WasmStringRuntimeBuilder.buildStrLitBody(quoteGlobals.literalTableIndex()) : UNREACHABLE_BODY;
 		final byte[] funcrefBody;
 		if (this.emitsFuncref) {
 			funcrefBody = WasmEvalRuntimeBuilder.buildFuncrefBody(defuns.size(), quoteGlobals.funcBoxTableIndex(),
@@ -6938,9 +7028,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] unboundVariableBody = this.emitsUnboundVariable
 				? WasmRuntimeBuilder.buildUnboundVariableBody(Objects.requireNonNull(unboundReport)) : new byte[0];
 		final byte[] fboundpBody = WasmSymbolApiRuntimeBuilder.buildFboundp(symbolTOffset);
-		final byte[] fmakunboundBody = WasmSymbolApiRuntimeBuilder.buildFmakunbound(this.usesIdentityHashTables);
+		final byte[] fmakunboundBody = WasmSymbolApiRuntimeBuilder.buildFmakunbound(this.usesIdentityHashTables,
+				this.functionCells.publishIndex());
 		final byte[] setSymbolFunctionBody = WasmSymbolApiRuntimeBuilder
-			.buildSetSymbolFunction(this.usesIdentityHashTables);
+			.buildSetSymbolFunction(this.usesIdentityHashTables, this.functionCells.publishIndex());
 
 		// Case-fold tables. Two compressed (from, to, delta) triple tables, generated
 		// from Character.toUpperCase(int) / toLowerCase(int) so char-upcase /
@@ -7994,6 +8085,7 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (ref null eq)
 				// _str_build (off, len) -> (ref null eq): reuses the (i32,i32)->ref shape
 				fnDef.addFunction(TYPE_RAT_NEW); // _str_build (FUNC_STR_BUILD)
+				fnDef.addFunction(TYPE_RAT_NEW); // _str_lit (FUNC_STR_LIT)
 				fnDef.addFunction(TYPE_RAT_NEW); // _str_fresh (FUNC_STR_FRESH)
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_to_mem (FUNC_STR_TO_MEM)
 				fnDef.addFunction(TYPE_WRITE_STR_GC); // _write_str_gc (FUNC_WRITE_STR_GC)
@@ -8026,6 +8118,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// bignum helpers (FUNC_INT_NEW, FUNC_INT_VAL, FUNC_PRINT_I64_NO_NL)
 				fnDef.addFunction(TYPE_INT_NEW); // _int_new (i64) -> (ref null eq)
 				fnDef.addFunction(TYPE_INT_VAL); // _int_val ((ref null eq)) -> i64
+				fnDef.addFunction(TYPE_RAT_GET); // _u32_val ((ref null eq)) -> i32
 				fnDef.addFunction(TYPE_PRINT_I64); // _print_i64_no_nl (i64) -> ()
 				// the limb bigint runtime (FUNC_LIMB_OF .. FUNC_BIG_HASH)
 				fnDef.addFunction(TYPE_CALLABLE_BASE); // _limb_of
@@ -8293,6 +8386,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.emitsFuncref) {
 					fnDef.addFunction(funcrefTypeIndex);
 				}
+				// The function cells' block, in functionCellsBase() order.
+				this.functionCells.forEachType(fnDef::addFunction);
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -8651,6 +8746,18 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(Instruction.END);
 					});
 				}
+				// One (mut (ref null eq)) = null per function-namespace cell
+				// (WasmFunctionCells), each published when the program makes the name's
+				// binding.
+				for (int i = 0; i < functionCellGlobalCount; i++) {
+					gs.add(g -> {
+						g.writeRefType(true, Type.EQ.code());
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.REF_NULL);
+						g.writeHeapType(Type.EQ.code());
+						g.write(Instruction.END);
+					});
+				}
 				// One (mut (ref null eq)) = null per quoted aggregate datum
 				// (.kb/quoted-data.md), filled lazily by its quote site's first
 				// evaluation (WasmQuoteCompiler.compile) -- and per canonical
@@ -8894,11 +9001,11 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmRatioRuntimeBuilder.buildRatNumBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatDenBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_ADD, Instruction.F64_ADD,
-							!this.optimize.prefersSizeOverSpeed(), this.complexCapable ? FUNC_C_ADD : -1))
+							this.complexCapable ? FUNC_C_ADD : -1))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_SUB, Instruction.F64_SUB,
-							!this.optimize.prefersSizeOverSpeed(), this.complexCapable ? FUNC_C_SUB : -1))
+							this.complexCapable ? FUNC_C_SUB : -1))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_MUL, Instruction.F64_MUL,
-							!this.optimize.prefersSizeOverSpeed(), this.complexCapable ? FUNC_C_MUL : -1))
+							this.complexCapable ? FUNC_C_MUL : -1))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatDivBody(this.complexCapable ? FUNC_C_DIV : -1))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatCmpBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatCmpBitsBody())
@@ -8970,6 +9077,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// _str_build helper body (FUNC_STR_BUILD): linear[off..off+len) -> a
 				// TYPE_STRING backed by a $str_bytes GC array.
 				code.addFunction(WasmStringRuntimeBuilder.buildStrBuildBody());
+				// _str_lit (FUNC_STR_LIT): a literal's one object.
+				code.addFunction(strLitBody);
 				// _str_fresh (FUNC_STR_FRESH): like _str_build but id = STRING_ID_CTR++.
 				code.addFunction(WasmStringRuntimeBuilder.buildStrFreshBody());
 				// _str_to_mem (FUNC_STR_TO_MEM): copy a string's GC array into
@@ -9027,6 +9136,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// bignum helper bodies (FUNC_INT_NEW, FUNC_INT_VAL, FUNC_PRINT_I64_NO_NL)
 				code.addFunction(WasmBignumRuntimeBuilder.buildIntNewBody());
 				code.addFunction(WasmBignumRuntimeBuilder.buildIntValBody());
+				code.addFunction(WasmBignumRuntimeBuilder.buildU32ValBody());
 				code.addFunction(WasmBignumRuntimeBuilder.buildPrintI64NoNlBody());
 				// the limb bigint runtime bodies (FUNC_LIMB_OF .. FUNC_BIG_HASH)
 				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbOfBody());
@@ -9386,6 +9496,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.emitsFuncref) {
 					code.addFunction(funcrefBody);
 				}
+				// The function cells' block, in functionCellsBase() order.
+				functionCellBodies.forEach(code::addFunction);
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);
@@ -11061,9 +11173,20 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * (an argument or the UNSUPPLIED marker, {@link WasmPhysicalArgs}), and the callable
 	 * minimum is {@link #required()} arguments. {@code declaredArity} is the wrong-count
 	 * report the defun's body declares ({@link DeclaredArityReport}), or {@code null}.
+	 * {@code entryIndex} is the named entry of a function with a cell, whose global is
+	 * {@code cellGlobal}, each -1 for every other function ({@link WasmFunctionCells}).
 	 */
 	record WasmFunctionInfo(String name, int paramCount, boolean variadic, int optionals, int funcId, int typeIndex,
-			int funcIndex, @Nullable DeclaredArityReport declaredArity) {
+			int funcIndex, @Nullable DeclaredArityReport declaredArity, int entryIndex, int cellGlobal) {
+
+		/**
+		 * {@return what a call of the function by name calls}: its named entry where a
+		 * write by a run-time name can reach it ({@link WasmFunctionCells}), else the
+		 * function.
+		 */
+		int callIndex() {
+			return this.entryIndex >= 0 ? this.entryIndex : this.funcIndex;
+		}
 
 		/**
 		 * {@return the arguments a call must pass at least}
@@ -11394,6 +11517,12 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		private final LispVal funcBoxTableToken = new am.ik.rontolisp.LispSymbol("#<function-box-table>");
 
+		private final LispVal literalTableToken = new am.ik.rontolisp.LispSymbol("#<literal-table>");
+
+		private boolean literalSites;
+
+		private boolean literalSitesSealed;
+
 		private am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedSharing sharing;
 
 		QuoteGlobals(int base) {
@@ -11469,6 +11598,38 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		int funcBoxTableIndex() {
 			return indexFor(this.funcBoxTableToken);
+		}
+
+		/**
+		 * The module global holding {@code _str_lit}'s table of literal objects,
+		 * allocating the next index on first sight.
+		 * @return the global index
+		 */
+		int literalTableIndex() {
+			return indexFor(this.literalTableToken);
+		}
+
+		/**
+		 * A form is about to evaluate a literal.
+		 * @return whether it may call {@code _str_lit}: after {@link #sealLiteralSites},
+		 * only if that found a caller and so a body
+		 */
+		boolean takeLiteralSite() {
+			if (this.literalSitesSealed) {
+				return this.literalSites;
+			}
+			this.literalSites = true;
+			return true;
+		}
+
+		/**
+		 * Every body is compiled: whether {@code _str_lit} has a caller, so that a module
+		 * without one has no global for its table.
+		 * @return whether a site was taken
+		 */
+		boolean sealLiteralSites() {
+			this.literalSitesSealed = true;
+			return this.literalSites;
 		}
 
 		/**
@@ -12168,6 +12329,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> fenvForwarders = Set.of();
 
 		/**
+		 * The global a literal reference reads a name's {@code GLOBAL_FENV} binding from,
+		 * in constant time ({@link WasmFunctionCells}): the names a write by a run-time
+		 * name can reach and those of {@link #fenvForwarders}.
+		 */
+		Map<String, Integer> functionCells = Map.of();
+
+		/** The index of {@code _fc_restore}, or -1 in a module with no cell. */
+		int functionCellRestore = -1;
+
+		/**
 		 * Whether the program can bind a function name the compile cannot see -- a
 		 * runtime {@code eval}'s {@code defun}, {@code load}, or a write through a
 		 * computed name ({@link LispMacroExpander#writesComputedFunctionName}). When it
@@ -12650,6 +12821,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.builtinShapedDefuns = builder.builtinShapedDefuns;
 			this.usesFmakunbound = builder.usesFmakunbound;
 			this.fenvForwarders = builder.fenvForwarders;
+			this.functionCells = builder.functionCells;
+			this.functionCellRestore = builder.functionCellRestore;
 			this.bindsRuntimeFunctionNames = builder.bindsRuntimeFunctionNames;
 			this.usesRuntimePackages = builder.usesRuntimePackages;
 			this.usesEval = builder.usesEval;
@@ -12838,6 +13011,10 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private int undefinedFunctionFuncIndex = -1;
 
+			private Map<String, Integer> functionCells = Map.of();
+
+			private int functionCellRestore = -1;
+
 			private int symfuncrefFuncIndex = -1;
 
 			private int unboundVariableFuncIndex = -1;
@@ -12998,6 +13175,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.arityNamedCallees = proto.arityNamedCallees;
 				this.litStageFuncIndex = proto.litStageFuncIndex;
 				this.undefinedFunctionFuncIndex = proto.undefinedFunctionFuncIndex;
+				this.functionCells = proto.functionCells;
+				this.functionCellRestore = proto.functionCellRestore;
 				this.symfuncrefFuncIndex = proto.symfuncrefFuncIndex;
 				this.unboundVariableFuncIndex = proto.unboundVariableFuncIndex;
 				this.complexBlock = proto.complexBlock;
@@ -13324,6 +13503,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder litStageFuncIndex(int litStageFuncIndex) {
 				this.litStageFuncIndex = litStageFuncIndex;
+				return this;
+			}
+
+			Builder functionCells(Map<String, Integer> functionCells) {
+				this.functionCells = functionCells;
+				return this;
+			}
+
+			Builder functionCellRestore(int functionCellRestore) {
+				this.functionCellRestore = functionCellRestore;
 				return this;
 			}
 
@@ -13752,6 +13941,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// expansion (expandCheckType) -- after this scan -- so the operator stands in.
 		if (symbols.contains(LispNames.CHECK_TYPE)) {
 			used.add(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-TYPE-ERROR");
+		}
+		// So does a warn of something other than a warning its type-error.
+		if (LispMacroExpander.warnCanSignalTypeError(program, closRegistry)) {
+			used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.TYPE_ERROR_CLASS_NAME);
 		}
 		// #'aref / #'array-row-major-index construct a type-error instance in
 		// the FUNCTION-VALUE wrapper's fold (BuiltinFunctionWrappers's row-major fold),

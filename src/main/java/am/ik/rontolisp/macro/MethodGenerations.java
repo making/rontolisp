@@ -193,7 +193,8 @@ final class MethodGenerations {
 
 	private static boolean runs(LispVal form) {
 		return form instanceof LispCons && !isDefinition(form, LispNames.DEFUN)
-				&& !isDefinition(form, LispNames.DEFMACRO);
+				&& !isDefinition(form, LispNames.DEFMACRO)
+				&& !isDefinition(form, LispNames.GENERIC_DEFINED_AGAIN_INTERNAL);
 	}
 
 	private static boolean isDefinition(LispVal form, String definer) {

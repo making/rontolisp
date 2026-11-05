@@ -3777,6 +3777,35 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			w.write(Instruction.CALL).writeUnsignedLeb128(mem.memcpyIndex());
 			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		}
+		else if (intrinsic == WasmMemoryIntrinsic.SEARCH) {
+			// The first parameter is the needle, a pointer to [len][bytes].
+			int needle = nextLocal[0]++;
+			int needleSize = nextLocal[0]++;
+			int address = nextLocal[0]++;
+			int size = nextLocal[0]++;
+			int at = nextLocal[0]++;
+			int end = nextLocal[0]++;
+			int k = nextLocal[0]++;
+			for (int i = 0; i < 7; i++) {
+				locals.add(Ty.STRING);
+			}
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+			w.write(Instruction.I32_CONST).writeSignedLeb128(4);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(needle);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+			w.write(Instruction.I32_LOAD, 0x02, 0x00);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(needleSize);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
+			emitImportArgUnbox(w, params.get(1), scratch);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(address);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
+			emitImportArgUnbox(w, params.get(2), scratch);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(size);
+			WasmMemoryIntrinsic.emitSearch(w, needle, needleSize, address, size, at, end, k, scratch.getAsInt(),
+					scratch.getAsInt());
+			w.write(Instruction.I64_EXTEND_S_I32);
+		}
 		else if (intrinsic == WasmMemoryIntrinsic.ADDRESS || intrinsic == WasmMemoryIntrinsic.SIZE) {
 			// The parameter is the string itself, a pointer to [len][bytes].
 			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);

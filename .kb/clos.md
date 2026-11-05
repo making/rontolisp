@@ -503,8 +503,9 @@ dies with "No applicable method: CLOSE on INTEGER".
   `#'%LENGTH--dispatch` on a compile path (`CallSiteRenamer`), because the compilers resolve the
   literal in `functions`; a dispatcher reports a wrong count and prints under the built-in's name
   (`arityOperator`, `printedName`), so `(print #'close)` is `#<function CLOSE>` everywhere.
-  Left: after `(setf (symbol-function 'length) f)` a literal `#'length` or
-  `(symbol-function 'length)` still answers the dispatcher where `_lookup` answers `f`.
+  A write of the name reaches the dispatcher's cell (`.kb/symbol-runtime-api.md`, "A write through
+  a computed name"): after `(setf (symbol-function 'length) f)` a literal `#'length`, a
+  `(symbol-function 'length)` and a call of `length` answer `f` as `_lookup` does.
 - **A generic has one function object on the interpreter** (2026-11-05): `#'g`, `symbol-function`
   and `fdefinition` answer the one late-bound wrapper per name (`LispEvaluator.functionValue`), so
   `(eq #'g #'g)` is T as on the compile paths and SBCL; each reference used to make a new one.

@@ -125,8 +125,8 @@ its index is part of the tree (below). What is this backend's own:
 ## The generic helpers' i31 head (the unfused single op)
 
 **Invariant: `_rat_add`/`_rat_sub`/`_rat_mul` answer two i31 operands exactly as their
-`_big_*` path would, before any dispatch.** Outside `--optimize=size`
-(`WasmRatioRuntimeBuilder.buildRatBinaryBody(..., i31Head)`) each opens with
+`_big_*` path would, before any dispatch, and `_rat_cmp_bits` compares them.** At every level
+(`WasmRatioRuntimeBuilder.buildRatBinaryBody`) each opens with
 `if (a is i31 & b is i31) return _int_new(a op b)` in i64 -- exact, `|a|,|b| <= 2^30`, and
 `_int_new` picks the narrowest tier. Without it an unfused `(+ a b)` over plain boxed
 operands (every recursive function's `(+ (f ...) (f ...))` tail, a `+` of two parameters)
@@ -137,14 +137,17 @@ paid `_rat_add -> _big_add -> _int_val x2 -> _int_new`.
   two shapes was this dispatch, not the `if`. A head in `_big_add` alone (hand-patched
   module) does not close it: the `_rat_add` hop is the other half. The other bench
   programs are within noise.
-- Size: a few bytes to a hundred-odd per module at `default`;
-  `--optimize=size` and a program with no generic `+ - *` (`hello_world`) byte-identical.
-  The size level keeps the dispatch-only body so the type-test fold can still reduce
-  `_rat_add` to a pure forwarder of `_big_add` in an integer-only module
-  (.kb/wasm-ref-type-fold.md "What follows it"); with the head it never is one.
+- Size: a few bytes to a hundred-odd per module; a program with no generic `+ - *`
+  (`hello_world`) byte-identical. `--optimize=size` kept the dispatch-only body until 2026-11-05 so
+  the type-test fold could reduce `_rat_add` to a pure forwarder of `_big_add` in an integer-only
+  module (.kb/wasm-ref-type-fold.md "What follows it"). Fusion is off at that level, so every `+`
+  comes here, and measured there: +102 bytes on `zlib` (0.06%), +84 on `dom_reactor` (3%), which is the
+  forwarder lost, against `(+ cells 4)` at 31 instructions for 95 and a third of a filter's instructions
+  going through it: `http_headers` 28,126 -> 22,200 (`.kb/proxy-wasm-sdk.md`).
 - Tests: `WasmRatioRuntimeBuilderTest`,
   `WasmLispCompilerIntegrationTest.theGenericArithmeticHelpersAnswerEveryTierThroughTheirI31Head`
-  (tier boundaries at every level, SBCL output).
+  (tier boundaries at every level, SBCL output), ci-spec `eql-of-a-literal-and-a-literal-evaluated-twice`
+  (the comparisons).
 
 ## Mechanics
 

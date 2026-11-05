@@ -11,6 +11,8 @@ check "an error fails the plugin" '^HTTP/1.1 5' "$url/signal"
 # The SDK's default: the callback answers its default, and the VM lives.
 start error_log --no-wasi
 check "a refused call answers nil" '^x-outgoing: refused' "$url/"
+sleep 0.2
+check "an on-delete that signals loses its context" '^x-deleted: gone' "$url/"
 check "a failed host call answers the default" 'hello from upstream' "$url/failed-call"
 sleep 0.2
 check_log "the log says which call" 'proxy-wasm: proxy_set_buffer_bytes answered status [0-9]+'

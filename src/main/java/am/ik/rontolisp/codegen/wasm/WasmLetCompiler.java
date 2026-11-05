@@ -63,8 +63,8 @@ final class WasmLetCompiler {
 		// propagated into them and dropped, so the designator never becomes a VALUE here
 		// (LetBoundDesignators; the JVM twin does the same). It cannot collide with the
 		// __FLET registration below: that one wants a LAMBDA init, this one a designator.
-		LispCons letForm = LetBoundDesignators.propagate(cons, ctx.specialVars,
-				name -> ctx.functions.containsKey(name) && !ctx.fenvForwarders.contains(name));
+		LispCons letForm = LetBoundDesignators.propagate(cons, ctx.specialVars, name -> ctx.functions.containsKey(name)
+				&& !ctx.functionCells.containsKey(name) && !ctx.fenvForwarders.contains(name));
 		// A let is PARALLEL, and the loop below binds one variable at a time: a let in
 		// which a later init reads an earlier variable's name, or runs code after a
 		// special binding, is staged through temporaries first (ParallelLetStaging; the

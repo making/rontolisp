@@ -56,7 +56,9 @@ instructions from an `ExecutionListener` over one exchange:
   (`.kb/wasm-unboxed-locals.md`). So each read of `i` tests the shadow against the sentinel, `aref`
   keeps its `ref.test` and index range test with the generic arm behind them, and `(+ i 1)` its
   overflow test. At `--optimize=size` fusion is off too (`.kb/optimize-dead-code-elimination.md`).
-  A `search` now costs a tenth of what that loop costs, so no filter needs the loop for this.
+  A `search` now costs a tenth of what that loop costs, so no filter needs the loop for this. A filter that
+  need not hold the body as a string searches it in linear memory for 3.4 per byte, against the 49 of the first
+  row of this arm, with nothing on the engine's heap (`.kb/wasm-import.md`, `search-bytes`).
 
 ```lisp
 (defun %contains-secret (octets)

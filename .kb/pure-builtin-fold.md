@@ -157,9 +157,12 @@ defines: top-level `defun`/`defmethod`/`defgeneric`/`defmacro`/`define-compiler-
 by package-stripped member name. A program mentioning `*print-case*` blocks
 `princ-to-string`/`prin1-to-string` and their pieces (`nil`/`t` render as SYMBOLS); the block is on
 the OPERATORS, not the literal types — `symbol-name` and `string` answer the NAME, untouched by
-`*print-case*` (`.kb/pretty-printer.md`). `(setf (symbol-function <computed>) ...)` stands the
-WHOLE pass down; a literal one blocks that name. Under `--dynamic` nothing folds
-(`.kb/dynamic-late-binding.md`).
+`*print-case*` (`.kb/pretty-printer.md`). A literal `(setf (symbol-function 'n) ...)` blocks that
+name. A computed one blocks nothing: a call of a table entry lowers to the built-in whatever the
+namespace holds (`.kb/symbol-runtime-api.md`), so the fold answers what the call would, and `eval`'s
+write never stood it down. Until 2026-11-05 it stood the whole pass down, so one such form in the
+ci-spec program unfolded all of it and changed `(eq (symbol-name 'x) "X")`. Under `--dynamic` nothing
+folds (`.kb/dynamic-late-binding.md`).
 
 A plain `(defun length ...)` is DIAGNOSED, not honoured (`compiler.ClRedefinitionWarnings`): all
 THREE dispatchers arm a flag before their operator switch (`redefinesClFunction` = top-level defun

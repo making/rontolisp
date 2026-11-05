@@ -9998,7 +9998,7 @@ public final class LispEvaluator {
 			}));
 			eval(LispMacroExpander.classKeyRanksForm(), this.globalEnv);
 			for (ClosRegistry.GenericInfo generic : List.copyOf(this.closRegistry.generics().values())) {
-				defineDispatcher(generic.name(), this.globalEnv);
+				regenerateDispatcher(generic.name(), this.globalEnv);
 			}
 		}
 	}
@@ -10014,7 +10014,7 @@ public final class LispEvaluator {
 			}
 			for (ClosRegistry.GenericInfo generic : List.copyOf(this.closRegistry.generics().values())) {
 				if (generic.hasClassMethod()) {
-					defineDispatcher(generic.name(), this.globalEnv);
+					regenerateDispatcher(generic.name(), this.globalEnv);
 				}
 			}
 		}
@@ -12028,7 +12028,7 @@ public final class LispEvaluator {
 		// operator.lisp and the clause structs it must catch in clause.lisp).
 		for (ClosRegistry.GenericInfo generic : this.closRegistry.generics().values()) {
 			if (generic.hasStructMethod(this.closRegistry)) {
-				defineDispatcher(generic.name(), env);
+				regenerateDispatcher(generic.name(), env);
 			}
 		}
 		// defstruct returns the structure name, like Common Lisp.
@@ -12195,8 +12195,33 @@ public final class LispEvaluator {
 	private void regenerateClassDispatchers(Environment env) {
 		for (ClosRegistry.GenericInfo generic : List.copyOf(this.closRegistry.generics().values())) {
 			if (generic.hasClassMethod()) {
-				defineDispatcher(generic.name(), env);
+				regenerateDispatcher(generic.name(), env);
 			}
+		}
+	}
+
+	/**
+	 * Regenerates a generic function's dispatcher for a change that is no definition of
+	 * the generic, a class or a struct its tests read: a name the program replaced or
+	 * retired since keeps what it has, and what a {@code #'name} taken from the generic
+	 * calls is the new dispatcher ({@link #genericDispatchers}).
+	 * @param genericName the generic-function name
+	 * @param env the environment to evaluate the dispatcher defun in
+	 */
+	private void regenerateDispatcher(String genericName, Environment env) {
+		LispVal dispatcher = this.genericDispatchers.get(genericName);
+		LispVal current = this.globalEnv.lookupFunctionOrNull(genericName);
+		if (dispatcher == null || current == dispatcher) {
+			defineDispatcher(genericName, env);
+			return;
+		}
+		this.globalEnv.defineFunction(genericName, dispatcher);
+		defineDispatcher(genericName, env);
+		if (current == null) {
+			this.globalEnv.undefineFunction(genericName);
+		}
+		else {
+			this.globalEnv.defineFunction(genericName, current);
 		}
 	}
 
@@ -12325,7 +12350,8 @@ public final class LispEvaluator {
 		// instance-initialization protocol's shared-initialize) whose dispatcher does not
 		// exist yet; define any such dispatcher too.
 		for (ClosRegistry.GenericInfo info : this.closRegistry.generics().values()) {
-			if (this.globalEnv.lookupFunctionOrNull(info.name()) == null) {
+			if (this.globalEnv.lookupFunctionOrNull(info.name()) == null
+					&& !this.retiredFunctions.contains(info.name())) {
 				defineDispatcher(info.name(), env);
 			}
 		}

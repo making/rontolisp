@@ -19209,6 +19209,45 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aLiteralIsOneObjectAndAPieceOfAStringIsNoByteLoop() throws Exception {
+		// Fuel measured 2026-11-05 (wasmtime 49), of which 16.8 M are the module's start,
+		// over 10,000 rounds and 1,000-byte strings, against what these answered before
+		// (.kb/wasm-gc-strings.md, "A literal is one object"): evaluating a literal 17.7
+		// M,
+		// 430 M building it each time; (eq x :keyword) 17.3 M, 22.9 M; an ~a of a string
+		// 17.2 M, 430 M rendering and copying it; %string-concat 57.9 M, 740 M.
+		String literal = "x".repeat(1000);
+		assertThat(compileAndRunWithFuel("""
+				(defun f () "%s")
+				(defvar *n* 0)
+				(dotimes (i 10000) (setq *n* (+ *n* (length (f)))))
+				(print *n*)
+				""".formatted(literal), 25_000_000L)).isEqualTo("10000000");
+		assertThat(compileAndRunWithFuel("""
+				(defvar *k* :a-keyword-named-at-some-length)
+				(defvar *n* 0)
+				(dotimes (i 10000) (when (eq *k* :a-keyword-named-at-some-length) (setq *n* (+ *n* 1))))
+				(print *n*)
+				""", 20_000_000L)).isEqualTo("10000");
+		String pieces = """
+				(defvar *a* (rontolisp:octets-to-string
+				             (make-array 1000 :element-type '(unsigned-byte 8) :initial-element 120)))
+				(defvar *r* nil)
+				(dotimes (i 10000) (setq *r* %s))
+				(print (length *r*))
+				""";
+		assertThat(compileAndRunWithFuel(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(pieces.formatted("(%princ-piece *a*)"))), 25_000_000L))
+			.isEqualTo("1000");
+		assertThat(
+				compileAndRunWithFuel(
+						am.ik.rontolisp.eval.LispPreludeLibrary
+							.process(LispReader.readAllFromString(pieces.formatted("(%string-concat *a* *a*)"))),
+						100_000_000L))
+			.isEqualTo("2000");
+	}
+
+	@Test
 	void searchAndMismatchWalkAListWithACursor() throws Exception {
 		// This backend runs the prelude defun, which used to index a LIST operand with
 		// (elt seq i) -- an nth walk from the head, so O(n^2*m) for search and O(n^2)

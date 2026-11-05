@@ -258,10 +258,16 @@ class NoGcWasmImportE2eTest {
 				    (store32 4 99)
 				    (+ (* 1000 before) (load32 4) (mem-size (or nil "")))))
 				(rontolisp:wasm-export 'low-cell :params '() :returns :s64)
+
+				(rontolisp:wasm-import 'mem-search :from "rontolisp:memory" :as "search" :params '(:string :u32 :u32) :returns :s32)
+				(defun search-in (needle needle-size at size)
+				  (mem-search (mem-string needle needle-size) at size))
+				(rontolisp:wasm-export 'search-in :params '(:u32 :u32 :u32 :u32) :returns :s32)
 				""";
 		String driver = """
 				const fs = require('fs');
 				let inst;
+				""" + WasmOctetsBoundaryE2eTest.SEARCH_CHECK + """
 				const env = {
 				  answer: (pointerCell, sizeCell) => {
 				    const text = new TextEncoder().encode('hello');
@@ -285,12 +291,13 @@ class NoGcWasmImportE2eTest {
 				console.log(WebAssembly.Module.imports(mod).map((i) => i.module + '.' + i.name).join(' '));
 				const reserved = inst.exports.reserve(8);
 				console.log(inst.exports.reserve(8) >= reserved + 8 ? 'stays reserved' : 'handed out twice');
+				console.log(searchCheck(inst.exports.reserve, inst.exports['search-in']));
 				""";
 		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.SIZE)) {
 			assertThat(run(module, driver, level, "memory-" + level.spelling()).lines().toList())
 				.as("optimize=%s", level.spelling())
 				.containsExactly("5", String.valueOf(200L + 4000000000L + 1099511627776L),
-						String.valueOf(4000 + 0xE6 + 'b' + 2), "99", "1", "trap", "env.answer", "stays reserved");
+						String.valueOf(4000 + 0xE6 + 'b' + 2), "99", "1", "trap", "env.answer", "stays reserved", "0");
 		}
 	}
 

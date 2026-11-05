@@ -58,6 +58,11 @@ CLHS 3.2.4.4 coalescing, which both compiled backends do by construction (JVM `l
 interning, the WASM string table's offset id) and the interpreter reproduces by
 comparing two `LispString.sourceLiteral()` strings by content. A symbol's name
 (`symbol-name`, `string` of a symbol; `LispString.symbolName`) is such a constant.
+On the compile paths only where it folds, a literal symbol (`PureBuiltinFolder`): a computed
+symbol's name is a fresh string per call, so `(eq (symbol-name s) (symbol-name s))` and an `eq` table
+keyed by it answer NIL on JVM, P1 and the component, T on the interpreter and SBCL (measured
+2026-11-05). One object per name would take `_intern` in every wasm module with a computed
+`symbol-name`, and no consumer asks. **Re-evaluate when** one does.
 
 - interpreter: `LispEquality.isIdentityAggregate` counts a non-constant `LispString`.
 - JVM: `_eqv` answers identity for a `List` (every array shape, character vectors

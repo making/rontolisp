@@ -7,6 +7,13 @@ identity (interned offset on wasm); a number or a character by type and value. `
 `eq-on-numbers-is-eql` and `scheme-spec.yaml` `eq-on-numbers-is-eqv` (Scheme `eq?`, `memq`,
 `assq` lower to `eq`).
 
+**wasm-GC needs no object for a literal operand** (`WasmEmitHelper.tryEmitLiteralComparison`,
+value and test position, so `case` and `ecase` too). A keyword or quoted symbol is a `ref.test` of the
+other operand and its id against the name's offset, `%symbol-is`'s test, with the name still
+recorded as spelled so the gates read the same program. An integer in the i31 range is `ref.eq`
+alone, since `_int_new` never boxes one. Both are smaller than the general comparison, and the first
+was a `_str_build` per evaluation. Pinned by ci-spec `eql-of-a-literal-and-a-literal-evaluated-twice`.
+
 ## Host objects (interpreter and JVM; wasm has none)
 
 **`eq`/`eql` on a `java:` host object is identity; `equal`/`equalp` ask its `equals`.**

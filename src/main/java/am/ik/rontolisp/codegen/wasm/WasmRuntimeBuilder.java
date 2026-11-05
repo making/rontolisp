@@ -5032,6 +5032,32 @@ final class WasmRuntimeBuilder {
 		w.write(2);
 		w.write(Type.I32);
 
+		// princ of a string is that string's text, and an immutable string's text is the
+		// string: what a format's ~a of a string runs, with no rendering and no copy.
+		if (renderFunc == WasmLispCompiler.FUNC_PRINC_VAL) {
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+			w.write(Instruction.IF, 0x40);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			WasmEmitHelper.emitStrBytesArray(w);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128('"');
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
+
 		// start = memory[HEAP_PTR_ADDR]
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);

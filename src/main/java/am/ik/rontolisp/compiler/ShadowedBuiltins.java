@@ -210,7 +210,7 @@ public final class ShadowedBuiltins {
 	}
 
 	// Each registered generic colliding with a lowered built-in -> its dispatcher's name.
-	private static Map<String, String> dispatchers(ClosRegistry closRegistry) {
+	public static Map<String, String> dispatchers(ClosRegistry closRegistry) {
 		Map<String, String> shadowed = new LinkedHashMap<>();
 		for (ClosRegistry.GenericInfo generic : closRegistry.generics().values()) {
 			if (loweredBuiltinFunctions().contains(generic.name())) {

@@ -10036,6 +10036,32 @@ public final class LispNames {
 	public static final String FENV_FUNCTION_INTERNAL = "%FENV-FUNCTION";
 
 	/**
+	 * What a top-level {@code defun} of a name a run-time write can reach leaves where it
+	 * stood ({@code compiler.RedefinedDefuns}): the name's binding in the run-time
+	 * function namespace, if a write made one, is gone again, so the compiled definition
+	 * answers from here on, as a definition does where a load runs its form.
+	 */
+	public static final String RESTORE_COMPILED_DEFINITION_INTERNAL = "%RESTORE-COMPILED-DEFINITION";
+
+	/**
+	 * What a {@code defmethod} or {@code defgeneric} of a generic function that already
+	 * has its dispatcher leaves where it stood, on the compile paths, until
+	 * {@code compiler.RedefinedDefuns} turns it into what binds the name again there, or
+	 * drops it: it binds a name a program retired or replaced.
+	 */
+	public static final String GENERIC_DEFINED_AGAIN_INTERNAL = "%GENERIC-DEFINED-AGAIN";
+
+	/**
+	 * The generic-function protocol's predicate of a name holding its generic function
+	 * metaobject (generic-functions.lisp), which a definition of the generic leaves
+	 * there.
+	 */
+	public static final String GF_INSTALLED_P_INTERNAL = "%GF-INSTALLED-P";
+
+	/** The generic-function protocol's table of its metaobjects, by generic. */
+	public static final String GF_METAOBJECTS_VAR = "%GF-METAOBJECTS%";
+
+	/**
 	 * The compile paths' prelude helper mapping a function name built at run time onto
 	 * the name its function is stored under: a {@code (setf place)} list onto the
 	 * writer's internal symbol ({@link #SETF_FUNCTION_SYMBOL_INTERNAL}), anything else

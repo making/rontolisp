@@ -182,7 +182,7 @@ page.
 | `set` | `(set '*level* 8)`, `(setf (symbol-value '*level*) 8)` | Set the variable a computed name names, as `setq` would: its active dynamic binding, else the global (created when unbound) |
 | `boundp` | `(boundp '*level*)` | `t` when the symbol names a bound global variable (t/nil/keywords are self-bound) |
 | `fboundp` | `(fboundp 'car)` | `t` for functions, macros and special forms (compilers: a computed argument sees functions only) |
-| `fmakunbound` | `(fmakunbound 'greet)` | `greet` -- makes the name call-time-undefined again (compilers: late-bound references only) |
+| `fmakunbound` | `(fmakunbound 'greet)` | `greet` -- makes the name call-time-undefined again |
 | `makunbound` | `(makunbound '*level*)` | `*level*` -- its current binding loses its value: `boundp` answers `nil`, a read signals `unbound-variable` |
 | `macroexpand-1` | `(macroexpand-1 '(unless c x))` | `(if c nil x)` -- expand the top-level form once (user and built-in macros) |
 | `macroexpand` | `(macroexpand '(outer 41))` | The full expansion: `macroexpand-1` repeated to a fixpoint |
