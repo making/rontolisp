@@ -337,7 +337,8 @@ data, so it is exported on its own: the ids only follow once the cut is right."
 
 ;;; --- the tokenizer record -----------------------------------------------------------
 
-(defstruct (tokenizer::%tk (:constructor tokenizer::%make-tk))
+(defstruct (tokenizer::%tk (:%intern-package "TOKENIZER")
+                           (:constructor tokenizer::%make-tk))
   ;; model          :bpe or :sentencepiece
   ;; kind           the pre-tokenizer keyword (:bpe only)
   ;; tokens         id -> token string; the byte-level spelling for :bpe

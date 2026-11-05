@@ -11721,7 +11721,12 @@ public final class LispEvaluator {
 		return this.definitions.get(name);
 	}
 
-	private LispVal evalDefstruct(LispCons cons, Environment env) {
+	private LispVal evalDefstruct(LispCons written, Environment env) {
+		// The form may be a macro's expansion, which no resolution saw with this package
+		// current. A body keeps the package it was read in, wherever it is called from.
+		String sitePackage = env.lexicalPackage();
+		LispCons cons = this.packageResolver.defstructInternedIn(written,
+				sitePackage != null ? sitePackage : this.packageResolver.currentPackageName());
 		// Expand into the generated defuns (constructor, predicate, copier, accessors)
 		// and evaluate each; the accessor registry makes them setf-able places.
 		for (LispVal form : LispMacroExpander.expandDefstruct(cons, this.structAccessors, this.closRegistry,

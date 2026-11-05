@@ -53,7 +53,7 @@
 ;;; one-element vector per read is not free) and OUR OWN byte position, which is
 ;;; the only position there is: file-position does not answer one.
 
-(defstruct (gguf::%rd (:constructor gguf::%make-rd))
+(defstruct (gguf::%rd (:%intern-package "GGUF") (:constructor gguf::%make-rd))
   stream
   (u16 nil)
   (u32 nil)
@@ -249,7 +249,8 @@
 
 ;;; --- the header, the KV block and the tensor directory -------------------------------
 
-(defstruct (gguf::%file (:constructor gguf::%make-file))
+(defstruct (gguf::%file (:%intern-package "GGUF")
+                        (:constructor gguf::%make-file))
   ;; path        what was read
   ;; version     the GGUF version (3 for everything current)
   ;; alignment   general.alignment, 32 when the file does not say

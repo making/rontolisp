@@ -23,7 +23,7 @@
 ;; program holds through it (objc::%new-handle). The interpreter and the JVM keep one value per
 ;; address (%intern), so two answers for one object are eq; a --native module cannot
 ;; (no weak references) and its backend compares this type by the address slot alone.
-(defstruct (objc:objc-object-pointer
+(defstruct (objc:objc-object-pointer (:%intern-package "OBJC")
             (:constructor objc::%make-pointer (address handle))
             (:predicate objc::%pointerp) (:conc-name objc::%pointer-)
             (:copier nil))
@@ -31,27 +31,30 @@
   handle)
 
 ;; A class: an object that is never released, interned per address on every target.
-(defstruct (objc:objc-class (:include objc:objc-object-pointer)
+(defstruct (objc:objc-class (:%intern-package "OBJC")
+                            (:include objc:objc-object-pointer)
                             (:constructor objc::%make-class (address handle))
                             (:predicate objc::%classp)
                             (:conc-name objc::%class-struct-) (:copier nil)))
 
 ;; A selector, interned per name.
-(defstruct (objc:sel (:constructor objc::%make-sel (address name))
+(defstruct (objc:sel (:%intern-package "OBJC")
+                     (:constructor objc::%make-sel (address name))
                      (:predicate objc::%selp) (:conc-name objc::%sel-struct-)
                      (:copier nil))
   address
   name)
 
 ;; An emulated autorelease pool: the pointers whose references it holds.
-(defstruct (objc::autorelease-pool (:constructor objc::%make-pool ())
+(defstruct (objc::autorelease-pool (:%intern-package "OBJC")
+                                   (:constructor objc::%make-pool ())
                                    (:predicate objc::%poolp)
                                    (:conc-name objc::%pool-) (:copier nil))
   (pointers nil))
 
 ;; What objc:current-super answers inside a method defined in Lisp: the receiver's address
 ;; and the class a send to it starts its lookup in (the defining class's superclass).
-(defstruct (objc::super-ref
+(defstruct (objc::super-ref (:%intern-package "OBJC")
             (:constructor objc::%make-super-ref (receiver class))
             (:predicate objc::%super-ref-p) (:conc-name objc::%super-)
             (:copier nil))
@@ -65,7 +68,7 @@
 ;; module's linear memory. ELEMENT is the pointee's layout (objc::%element-type), worked
 ;; out when the pointer is made, so an access is arithmetic and one %peek or %poke. Not
 ;; interned and not compared by address: fli:pointer-eq does that.
-(defstruct (fli::pointer
+(defstruct (fli::pointer (:%intern-package "FLI")
             (:constructor objc::%make-foreign-pointer (address type element))
             (:predicate fli:pointerp) (:conc-name fli::%pointer-) (:copier nil))
   address

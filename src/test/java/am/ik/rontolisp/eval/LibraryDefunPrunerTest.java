@@ -1101,7 +1101,7 @@ class LibraryDefunPrunerTest {
 		// One accessor referenced: the other accessors, the constructor, the predicate
 		// and the copier all go, and the bookkeeping marker survives for the compilers.
 		List<LispVal> program = LibraryDefunPruner.prune(LispReader.readAllFromString("""
-				(defstruct torch::rec a b c d e f)
+				(defstruct (torch::rec (:%intern-package "TORCH")) a b c d e f)
 				(print (torch::rec-b (car (list 1))))
 				"""));
 		assertThat(definedNames(program)).contains("TORCH::REC-B")
@@ -1116,10 +1116,11 @@ class LibraryDefunPrunerTest {
 		// and is this pass's own bookkeeping: it must not count as a reference to what
 		// it spells, or the expansion would anchor exactly the defuns it made prunable
 		// (a custom predicate/copier name is spelled verbatim in the payload).
-		List<LispVal> program = LibraryDefunPruner.prune(LispReader.readAllFromString("""
-				(defstruct (torch::rec (:predicate torch::recp) (:copier torch::clone-rec)) a)
-				(print (torch::rec-a (car (list 1))))
-				"""));
+		List<LispVal> program = LibraryDefunPruner.prune(LispReader.readAllFromString(
+				"""
+						(defstruct (torch::rec (:%intern-package "TORCH") (:predicate torch::recp) (:copier torch::clone-rec)) a)
+						(print (torch::rec-a (car (list 1))))
+						"""));
 		assertThat(definedNames(program)).contains("TORCH::REC-A")
 			.doesNotContain("TORCH::RECP", "TORCH::CLONE-REC", "TORCH::MAKE-REC");
 	}
@@ -1129,8 +1130,8 @@ class LibraryDefunPrunerTest {
 		// The child re-generates accessors over inherited slots; referencing one keeps
 		// only it -- the parent's own accessor over the same slot goes.
 		List<LispVal> program = LibraryDefunPruner.prune(LispReader.readAllFromString("""
-				(defstruct torch::base x y)
-				(defstruct (torch::child (:include torch::base)) z)
+				(defstruct (torch::base (:%intern-package "TORCH")) x y)
+				(defstruct (torch::child (:%intern-package "TORCH") (:include torch::base)) z)
 				(print (torch::child-x (car (list 1))))
 				"""));
 		assertThat(definedNames(program)).contains("TORCH::CHILD-X")
@@ -1146,7 +1147,7 @@ class LibraryDefunPrunerTest {
 		// defun is keyed under the accessor too. The untouched slot's accessor and
 		// writer still go.
 		List<LispVal> program = LibraryDefunPruner.prune(LispReader.readAllFromString("""
-				(defstruct (torch::regs (:type (vector (unsigned-byte 32)))) a b)
+				(defstruct (torch::regs (:%intern-package "TORCH") (:type (vector (unsigned-byte 32)))) a b)
 				(let ((r (torch::make-regs :a 1 :b 2)))
 				  (setf (torch::regs-a r) 3)
 				  (print (torch::regs-a r)))
@@ -1162,10 +1163,10 @@ class LibraryDefunPrunerTest {
 		// a root: the struct nothing builds takes its printer -- and the accessors only
 		// the printer reads -- with it, while the one a program does build keeps both.
 		List<LispVal> program = LibraryDefunPruner.prune(LispReader.readAllFromString("""
-				(defstruct (torch::kept
+				(defstruct (torch::kept (:%intern-package "TORCH")
 					     (:print-object (lambda (r s) (write-string (torch::kept-a r) s))))
 				  a)
-				(defstruct (torch::gone
+				(defstruct (torch::gone (:%intern-package "TORCH")
 					     (:print-object (lambda (r s) (write-string (torch::gone-a r) s))))
 				  a)
 				(print (torch::make-kept :a 1))

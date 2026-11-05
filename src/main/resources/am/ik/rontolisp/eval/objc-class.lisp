@@ -20,7 +20,8 @@
 (defclass objc:standard-objc-object () ((objc::%objc-pointer% :initform nil)))
 
 ;; What define-objc-class recorded about a Lisp class.
-(defstruct (objc::lisp-class (:constructor objc::%make-lisp-class
+(defstruct (objc::lisp-class (:%intern-package "OBJC")
+                             (:constructor objc::%make-lisp-class
                                            (name supers objc-name objc-super
                                                  ivars protocols))
                              (:conc-name objc::%lc-) (:copier nil)
@@ -35,7 +36,8 @@
   (realized nil))
 
 ;; A method define-objc-method or define-objc-class-method recorded.
-(defstruct (objc::method-def (:constructor objc::%make-method-def
+(defstruct (objc::method-def (:%intern-package "OBJC")
+                             (:constructor objc::%make-method-def
                                            (class-name selector result-type
                                                        result-style result-var-p
                                                        arg-specs class-method-p

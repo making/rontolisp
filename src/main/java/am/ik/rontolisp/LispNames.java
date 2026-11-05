@@ -2317,10 +2317,11 @@ public final class LispNames {
 
 	/**
 	 * The {@code defstruct} header option {@code PackageResolver} adds when the struct
-	 * name, written unqualified, resolves to a symbol of ANOTHER package (inherited or
-	 * imported): {@code (:%intern-package "PKG")} names the package current at the form,
-	 * where CL interns the derived constructor, predicate, copier and accessor names.
-	 * Without it the derived names land in the struct name's own package.
+	 * name is a symbol of ANOTHER package (inherited, imported or written qualified):
+	 * {@code (:%intern-package "PKG")} names the package current at the form, where CL
+	 * interns the derived constructor, predicate, copier and accessor names. Without it
+	 * the derived names land in the struct name's own package. A bundled library, written
+	 * in {@code cl-user}, spells it to keep them in its own.
 	 */
 	public static final String DEFSTRUCT_INTERN_PACKAGE = ":%INTERN-PACKAGE";
 

@@ -13530,9 +13530,31 @@ cases:
     # CLHS: the derived names are interned in *package*, not in the struct name's home
     # (optima's (defstruct and-pattern) names a symbol inherited from optima.core).
     # An inherited exported derived name (make-ap, ap-subs) stays the used package's.
+    # A name written qualified (dsq) or spelled by another package's macro (dsm) is no
+    # different. The affixes are the literal MAKE-, -P and COPY- whatever the name's case,
+    # and a slot's name is taken as it is.
     source: |
       (defpackage :ci-dsh-core (:use :cl) (:export #:ap #:make-ap #:ap-subs #:cp))
       (defpackage :ci-dsh-main (:use :cl :ci-dsh-core))
+      (in-package :ci-dsh-core)
+      (defmacro def-dsm () '(defstruct dsm s))
+      (in-package :cl-user)
+      (ci-dsh-core::def-dsm)
+      (print (mapcar (lambda (s) (not (null (fboundp s))))
+                     '(cl-user::make-dsm ci-dsh-core::make-dsm cl-user::dsm-s ci-dsh-core::dsm-s)))
+      (defstruct ci-dsh-core::dsq r)
+      (let ((o (make-dsq :r 1)))
+        (setf (dsq-r o) 9)
+        (print (list (dsq-r (copy-dsq o)) (dsq-p o) (typep o 'ci-dsh-core::dsq))))
+      (print (mapcar (lambda (s) (not (null (fboundp s))))
+                     '(cl-user::make-dsq ci-dsh-core::make-dsq cl-user::dsq-p ci-dsh-core::dsq-p
+                       cl-user::copy-dsq ci-dsh-core::copy-dsq cl-user::dsq-r ci-dsh-core::dsq-r)))
+      (defstruct |dsl| |x| y)
+      (defstruct dsu |x|)
+      (let ((o (|MAKE-dsl| :|x| 5 :y 6)))
+        (print (list (|dsl-x| (|COPY-dsl| o)) (|dsl-Y| o) (|dsl-P| o) (|DSU-x| (make-dsu :|x| 7)))))
+      (print (mapcar (lambda (s) (not (null (fboundp s))))
+                     '(|make-dsl| |dsl-p| |copy-dsl| |dsl-X| dsu-x)))
       (in-package :ci-dsh-main)
       (defstruct ap subs)
       (defstruct (cp (:include ap) (:conc-name cp-)) w)
@@ -13546,6 +13568,11 @@ cases:
                        ci-dsh-main::cp-subs ci-dsh-core::cp-subs)))
       (in-package :cl-user)
     expected: |
+      (T NIL T NIL)
+      (9 T T)
+      (T NIL T NIL T NIL T NIL)
+      (5 6 T 7)
+      (NIL NIL NIL NIL NIL)
       (T 3 T T NIL)
       (4 5 5 7)
       (T NIL T NIL T NIL)
