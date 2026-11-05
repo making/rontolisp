@@ -33410,15 +33410,37 @@ cases:
       (1 T "1 cannot be printed readably.")
 
   - name: subtypep-fixnum-is-a-64-bit-interval
+    # Expected is SBCL 2.2.9's.
     source: |
       (defun ci-stf-probe (a b) (subtypep a b))
       (print (list (subtypep '(signed-byte 32) 'fixnum) (subtypep 'fixnum '(signed-byte 64))
                    (subtypep 'fixnum '(signed-byte 32)) (subtypep '(integer 0 1) 'fixnum)))
       (print (list (ci-stf-probe '(signed-byte 32) 'fixnum) (ci-stf-probe 'fixnum '(signed-byte 64))
                    (ci-stf-probe 'fixnum '(signed-byte 32))))
+      ;; coalton's integer conversions: an (and ...) of intervals is one, a nil between two
+      ;; is a decision, and bit is below fixnum.
+      (defvar *ci-stf-ufix* '(and fixnum unsigned-byte))
+      (print (multiple-value-list (subtypep 'bit '(and fixnum unsigned-byte))))
+      (print (multiple-value-list (subtypep '(and fixnum unsigned-byte) '(unsigned-byte 32))))
+      (print (multiple-value-list (subtypep '(signed-byte 16) '(signed-byte 8))))
+      (print (multiple-value-list (subtypep 'integer 'fixnum)))
+      (print (multiple-value-list (subtypep 'bit 'fixnum)))
+      (print (multiple-value-list (ci-stf-probe 'bit *ci-stf-ufix*)))
+      (print (multiple-value-list (ci-stf-probe *ci-stf-ufix* '(unsigned-byte 32))))
+      (print (multiple-value-list (ci-stf-probe '(signed-byte 16) '(signed-byte 8))))
+      (print (multiple-value-list (ci-stf-probe 'bit 'fixnum)))
     expected: |
       (T T NIL T)
       (T T NIL)
+      (T T)
+      (NIL T)
+      (NIL T)
+      (NIL T)
+      (T T)
+      (T T)
+      (NIL T)
+      (NIL T)
+      (T T)
   - name: pprint-pop-and-the-exit-take-the-list-of-their-block
     # Expected is SBCL 2.2.9's. fset's set printer pops in a closure over a block with
     # no list; a macro may spell the call; a nested block pops its own list.
