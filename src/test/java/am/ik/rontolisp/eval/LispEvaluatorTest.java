@@ -12347,7 +12347,7 @@ class LispEvaluatorTest {
 				(with-open-file (in "%s")
 				  (read-byte in))
 				""".formatted(file, file))).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("binary input stream");
+			.hasMessageContaining("(SATISFIES INPUT-STREAM-P)");
 	}
 
 	@Test

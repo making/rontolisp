@@ -58,9 +58,9 @@ with `(pathname ...)`.
 `open` puts the namestring it opened on the stream VALUE (`LispLayout.STREAM_PATH_CELL`, a
 reserved cell, nil on every other stream); `pathname`, `namestring` and `%path-ns` read it
 (literal index 4), so every path-taking prelude operator, `truename` / `probe-file` /
-`delete-file` included, takes a file stream. On the value, not in a handle-keyed registry like
-`%file-stream-directions`: cl-fad's `with-open-temporary-file` deletes `(pathname s)` AFTER the
-close, which forgets a registry entry, and a wasm descriptor is reused by the next `open`.
+`delete-file` included, takes a file stream. On the value, not in a handle-keyed registry:
+cl-fad's `with-open-temporary-file` deletes `(pathname s)` AFTER the close, which forgets a
+registry entry, and a wasm descriptor is reused by the next `open`.
 - Interpreter: `Environment.fileStreamValue` fills it on every open (`:probe` too);
   `PathnameOps.designatorNamestring` reads it, so the `open` / `load` built-ins take a stream.
 - Compile paths: `LispMacroExpander.recordingStreamPath`, applied by both `Jvm/WasmExprCompiler`

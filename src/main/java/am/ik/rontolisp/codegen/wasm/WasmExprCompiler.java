@@ -1391,16 +1391,15 @@ final class WasmExprCompiler {
 				}
 				LispVal checked = LispMacroExpander.expandOpenFileErrorSignal(cons, ctx.instanceTypeIndex >= 0);
 				LispVal registered = registeredOpenLeaf(cons, checked, ctx);
-				LispVal directed = directedOpenLeaf(cons, checked, registered, ctx);
-				if (directed != null) {
-					// The stream VALUE, its direction recorded
-					// (%file-stream-direction-register answers it).
-					WasmExprCompiler.compileExpr(directed, ctx);
-					break;
-				}
 				if (registered != null) {
 					// Already the stream VALUE (%file-stream-register answers it).
 					WasmExprCompiler.compileExpr(registered, ctx);
+					break;
+				}
+				if (checked != null && ctx.usesStreamValues) {
+					// The stream VALUE, with what this open can do.
+					WasmExprCompiler.compileExpr(LispMacroExpander.fileStreamValue(checked,
+							OpenModes.abilities(OpenModes.normalizeKeywordForm(cons).toList())), ctx);
 					break;
 				}
 				if (checked != null) {
@@ -1412,6 +1411,10 @@ final class WasmExprCompiler {
 				wrapStreamValue(ctx, am.ik.rontolisp.LispLayout.Kinds.FILE);
 			}
 			case LispNames.OPEN_OR_NIL_INTERNAL -> WasmOpenCompiler.compile(cons, ctx);
+			case LispNames.ABILITIES_HOLD_INTERNAL -> WasmInstanceCompiler.compileAbilitiesHold(cons, ctx);
+			case LispNames.CLOSED_STREAM_ERROR_INTERNAL -> compileExpansion(
+					LispMacroExpander.lowerClosedStreamError(cons, ctx.hasLandingPad && ctx.instanceTypeIndex >= 0),
+					ctx, tail);
 			case LispNames.FILE_ERROR_INTERNAL -> compileExpansion(LispMacroExpander.lowerFileError(cons,
 					ctx.closRegistry, ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx, tail);
 			case LispNames.PACKAGE_ERROR_INTERNAL -> compileExpansion(LispMacroExpander.lowerPackageError(cons,
@@ -1682,11 +1685,9 @@ final class WasmExprCompiler {
 			case LispNames.STREAMP -> compileExpansion(LispMacroExpander.expandStreamp(cons, ctx.usesSynonymStreams,
 					ctx.usesStreamValues, ctx.closRegistry), ctx, tail);
 			case LispNames.SIMPLE_STRING_P -> compileExpansion(LispMacroExpander.expandSimpleStringP(cons), ctx, tail);
-			case LispNames.INPUT_STREAM_P,
-					LispNames.OUTPUT_STREAM_P ->
+			case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P ->
 				compileExpansion(LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams,
-						ctx.usesStreamValues, ctx.asksStreamDirection,
-						ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_SYMBOL)), ctx, tail);
+						ctx.usesStreamValues, ctx.asksStreamDirection), ctx, tail);
 			// file-length is REAL here: it stats the stream's descriptor through the
 			// fd_filestat_get import and answers nil only for what genuinely has no
 			// length (a string stream, a standard stream, a socket, a closed or
@@ -2953,23 +2954,8 @@ final class WasmExprCompiler {
 				|| !ctx.functions.containsKey(LispNames.FILE_STREAM_REGISTER_INTERNAL)) {
 			return type.isWide() ? LispMacroExpander.wideElementTypeUnavailableStub() : null;
 		}
-		return LispMacroExpander.registeredOpen(checked, type);
-	}
-
-	/**
-	 * The registering shape of a literal open leaf once the program can ask a file
-	 * stream's direction -- the JVM twin's rule (JvmExprCompiler.directedOpenLeaf).
-	 */
-	private static @org.jspecify.annotations.Nullable LispVal directedOpenLeaf(LispCons cons,
-			@org.jspecify.annotations.Nullable LispVal checked, @org.jspecify.annotations.Nullable LispVal registered,
-			WasmLispCompiler.Ctx ctx) {
-		if (checked == null || !ctx.usesStreamValues
-				|| !ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_SYMBOL)) {
-			return null;
-		}
-		return LispMacroExpander.directedOpen(
-				registered != null ? registered : LispMacroExpander.fileStreamValue(checked),
-				OpenModes.direction(OpenModes.staticMode(OpenModes.normalizeKeywordForm(cons).toList())));
+		return LispMacroExpander.registeredOpen(checked, type,
+				OpenModes.abilities(OpenModes.normalizeKeywordForm(cons).toList()));
 	}
 
 	/**
@@ -3021,21 +3007,15 @@ final class WasmExprCompiler {
 
 	/**
 	 * The registry-forgetting {@code close} (LispMacroExpander.forgettingClose), or null
-	 * when the program has neither the element-type nor the direction registry.
+	 * when the program has no element-type registry.
 	 */
 	private static @org.jspecify.annotations.Nullable LispVal forgettingClose(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		java.util.List<String> forgetters = new java.util.ArrayList<>(2);
-		if (ctx.functions.containsKey(LispNames.FILE_STREAM_FORGET_INTERNAL)) {
-			forgetters.add(LispNames.FILE_STREAM_FORGET_INTERNAL);
-		}
-		if (ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_FORGET_SYMBOL)) {
-			forgetters.add(LispNames.FILE_STREAM_DIRECTION_FORGET_SYMBOL);
-		}
-		if (!(ctx.usesSynonymStreams || ctx.usesStreamValues) || forgetters.isEmpty()) {
+		if (!(ctx.usesSynonymStreams || ctx.usesStreamValues)
+				|| !ctx.functions.containsKey(LispNames.FILE_STREAM_FORGET_INTERNAL)) {
 			return null;
 		}
 		return LispMacroExpander.forgettingClose(cons, c -> LispMacroExpander.expandCloseOverStream(c,
-				ctx.usesSynonymStreams, ctx.functions.containsKey(LispNames.STREAM_TARGET)), forgetters);
+				ctx.usesSynonymStreams, ctx.functions.containsKey(LispNames.STREAM_TARGET)));
 	}
 
 	/**

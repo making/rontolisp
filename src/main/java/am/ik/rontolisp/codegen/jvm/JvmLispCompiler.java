@@ -1397,6 +1397,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// instance representation behind it.
 		final boolean usesStreamValues = LispMacroExpander.mayCreateStreamValues(program)
 				|| linksMode(JvmLinkage.Mode.STREAM_VALUES);
+		if (usesStreamValues) {
+			closRegistry.ensureClosedStreamErrorSeeded();
+		}
 		// Cut a function an earlier attempt measured over HotSpot's HugeMethodLimit
 		// into pieces small enough to be JIT-compiled: an oversized evaluated
 		// sub-form becomes a local function, which is what reaches the shape the
@@ -2314,8 +2317,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// program with no stream value keeps raw handles for the string streams its
 		// reports open, which the table entry tells from any other integer.
 		if (LispMacroExpander.programUsesStreamCheck(program) || LispMacroExpander.programUsesStreamCheck(wrappers)) {
-			inject(LispMacroExpander.checkStreamRuntimeWrapper(usesStreamValues ? null
-					: x -> new LispCons(new LispSymbol(LispNames.OPEN_STREAM_P), new LispCons(x, LispNil.INSTANCE))),
+			inject(usesStreamValues
+					? LispMacroExpander
+						.checkStreamValueRuntimeWrapper(programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM), true)
+					: LispMacroExpander
+						.checkStreamRuntimeWrapper(x -> new LispCons(new LispSymbol(LispNames.OPEN_STREAM_P),
+								new LispCons(x, LispNil.INSTANCE))),
 					defuns, injectedForms, specialVars);
 		}
 
@@ -6930,6 +6937,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			code.dup();
 			code.iconst_2();
 			code.ldc(java.util.Objects.requireNonNull(streamKindStr));
+			code.aastore();
+			code.dup();
+			code.loadConstant(1 + am.ik.rontolisp.LispLayout.STREAM_ABILITY_CELL);
+			code.loadConstant(am.ik.rontolisp.LispLayout.Abilities.ofKind(am.ik.rontolisp.LispLayout.Kinds.STANDARD));
+			code.i2l();
+			code.invokestatic(longValueOf);
 			code.aastore();
 			return;
 		}

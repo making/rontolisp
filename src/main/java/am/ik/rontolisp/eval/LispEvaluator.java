@@ -1622,6 +1622,7 @@ public final class LispEvaluator {
 		// a sleep an interrupt woke asks whether a debugger went on with the evaluation
 		this.globalEnv.setInterruptResumed(this::resumeAfterInterrupt);
 		this.closRegistry.ensureInteractiveInterruptSeeded();
+		this.closRegistry.ensureClosedStreamErrorSeeded();
 		this.globalEnv.defineFunction(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
 			if (args.size() != 1) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
@@ -9310,6 +9311,9 @@ public final class LispEvaluator {
 				if (args.size() > index && !(LispNames.FORMAT.equals(name) && hasFillPointer(args.get(index)))) {
 					checkStreamOperand(args.get(index), name, designator);
 				}
+				if (designator && readsStandardStream(args, index, name)) {
+					checkStreamOperand(standardStreamValue(StreamOperandChecks.standardStreamOf(name)), name, true);
+				}
 				return apply(base, args, this.globalEnv);
 			}));
 		});
@@ -9320,6 +9324,10 @@ public final class LispEvaluator {
 					if (!args.isEmpty()) {
 						checkStreamOperand(args.get(0), LispNames.READ_LINE, true);
 					}
+					if (readsStandardStream(args, 0, LispNames.READ_LINE)) {
+						checkStreamOperand(standardStreamValue(LispNames.STANDARD_INPUT_VAR), LispNames.READ_LINE,
+								true);
+					}
 					return apply(basePair, args, this.globalEnv);
 				}));
 		this.globalEnv.defineFunction(LispNames.CHECK_STREAM_INTERNAL,
@@ -9328,6 +9336,23 @@ public final class LispEvaluator {
 							args.get(2) != LispNil.INSTANCE);
 					return args.get(0);
 				}));
+	}
+
+	// What a call's stream position spells where it writes to or reads from a standard
+	// stream variable, whose value may have been closed since it was bound.
+	private static boolean readsStandardStream(List<LispVal> args, int index, String operator) {
+		if (args.size() <= index) {
+			return true;
+		}
+		LispVal stream = args.get(index);
+		return stream instanceof LispNil || (stream instanceof LispSymbol keyword && keyword.name().startsWith(":"))
+				|| (stream instanceof LispTrue && LispNames.FORMAT.equals(operator));
+	}
+
+	private LispVal standardStreamValue(String variable) {
+		LispVal value = this.dynamicBindings.isBound(variable) ? this.dynamicBindings.get(variable)
+				: this.globalEnv.lookupOrNull(variable);
+		return value == null ? LispTrue.INSTANCE : value;
 	}
 
 	private static boolean hasFillPointer(LispVal value) {
@@ -9345,6 +9370,22 @@ public final class LispEvaluator {
 		if (!stream) {
 			throw operator == null ? OperandTypeException.of(value, OperandTypes.Kind.STREAM)
 					: OperandTypeException.of(value, OperandTypes.Kind.STREAM, operator);
+		}
+		Integer needed = StreamOperandChecks.neededAbilityBits(operator);
+		LispVal target = needed == null ? value : Environment.synonymTarget(value);
+		if (needed != null && target instanceof LispInstance instance && Environment.isStreamValue(instance)) {
+			if (apply(this.globalEnv.lookupFunction(LispNames.OPEN_STREAM_P_RAW_INTERNAL), List.of(instance),
+					this.globalEnv) == LispNil.INSTANCE) {
+				throw new LispEvalException(ClosRegistry.CLOSED_STREAM_MESSAGE,
+						ClosRegistry.newClosedStreamCondition(instance));
+			}
+			if (instance.slot(LispLayout.STREAM_ABILITY_CELL) instanceof LispInteger held
+					&& (held.value() & needed) != needed) {
+				throw OperandTypeException.notOfType(
+						instance, List.of("SATISFIES", (needed & LispLayout.Abilities.INPUT) != 0
+								? LispNames.INPUT_STREAM_P : LispNames.OUTPUT_STREAM_P),
+						Objects.requireNonNull(operator));
+			}
 		}
 	}
 

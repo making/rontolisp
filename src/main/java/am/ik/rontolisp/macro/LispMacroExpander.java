@@ -12974,15 +12974,15 @@ public final class LispMacroExpander {
 	 * with its element type.
 	 *
 	 * <pre>
-	 * (%file-stream-register (%obj-new '%STREAM &lt;checked open&gt; :FILE) octets signed 'spec)
+	 * (%file-stream-register &lt;the checked open's stream value&gt; octets signed 'spec)
 	 * </pre>
 	 * @param checked the failure-signalling open expression (answers the raw handle)
 	 * @param elementType the leaf's element type
+	 * @param abilities the leaf's {@link LispLayout.Abilities}
 	 * @return the registering expression, answering the stream value
 	 */
-	public static LispVal registeredOpen(LispVal checked, StreamElementType elementType) {
-		LispVal stream = listToCons(List.of(new LispSymbol(LispNames.OBJ_NEW), quoteOf(LispLayout.STREAM_TAG), checked,
-				new LispSymbol(LispLayout.Kinds.FILE)));
+	public static LispVal registeredOpen(LispVal checked, StreamElementType elementType, int abilities) {
+		LispVal stream = fileStreamValue(checked, abilities);
 		return listToCons(List.of(new LispSymbol(LispNames.FILE_STREAM_REGISTER_INTERNAL), stream,
 				new LispInteger(elementType.octets()), elementType.signed() ? LispTrue.INSTANCE : LispNil.INSTANCE,
 				elementTypeLiteral(elementType)));
@@ -13019,21 +13019,6 @@ public final class LispMacroExpander {
 	 */
 	public static @Nullable LispVal forgettingClose(LispCons cons,
 			java.util.function.Function<LispCons, LispVal> close) {
-		return forgettingClose(cons, close, List.of(LispNames.FILE_STREAM_FORGET_INTERNAL));
-	}
-
-	/**
-	 * {@link #forgettingClose(LispCons, java.util.function.Function)} over the registries
-	 * the program carries: each forgetter named is called on the stream, in order, before
-	 * the close. The element-type registry alone is exactly the shape above, so a program
-	 * without the direction registry keeps its bytes.
-	 * @param cons the close call
-	 * @param close builds the backend's own close of the bound temporary
-	 * @param forgetters the registry-forget defuns to call, at least one
-	 * @return the forgetting form, or null for a malformed call
-	 */
-	public static @Nullable LispVal forgettingClose(LispCons cons, java.util.function.Function<LispCons, LispVal> close,
-			List<String> forgetters) {
 		LispCons stripped = stripCloseAbort(cons) instanceof LispCons s ? s : cons;
 		List<LispVal> parts = stripped.toList();
 		if (parts.size() != 2) {
@@ -13044,39 +13029,22 @@ public final class LispMacroExpander {
 		List<LispVal> form = new ArrayList<>();
 		form.add(new LispSymbol(LispNames.LET));
 		form.add(listToCons(List.of(listToCons(List.of(var, parts.get(1))))));
-		for (String forgetter : forgetters) {
-			form.add(callOf(forgetter, var));
-		}
+		form.add(callOf(LispNames.FILE_STREAM_FORGET_INTERNAL, var));
 		form.add(close.apply(inner));
 		return listToCons(form);
 	}
 
 	/**
-	 * The registration of a FILE stream's direction around the stream value an
-	 * {@code open} leaf answers, once the program can ask for it
-	 * ({@code .kb/read-load-streams.md}, "String streams").
-	 *
-	 * <pre>
-	 * (%file-stream-direction-register &lt;stream value&gt; direction)
-	 * </pre>
-	 * @param streamValue the leaf's stream-value expression
-	 * @param direction the leaf's direction bits ({@code OpenModes.direction})
-	 * @return the registering expression, answering the stream value
-	 */
-	public static LispVal directedOpen(LispVal streamValue, int direction) {
-		return listToCons(List.of(new LispSymbol(LispNames.FILE_STREAM_DIRECTION_REGISTER_SYMBOL), streamValue,
-				new LispInteger(direction)));
-	}
-
-	/**
 	 * The stream VALUE of a checked {@code open} leaf, as the backends' own wrap builds
-	 * it.
+	 * it, with what the open can do in its reserved cell.
 	 * @param checked the failure-signalling open expression (answers the raw handle)
-	 * @return {@code (%obj-new '%STREAM checked :FILE)}
+	 * @param abilities the leaf's {@link LispLayout.Abilities}
+	 * @return {@code (%obj-new '%STREAM checked :FILE nil nil nil abilities)}
 	 */
-	public static LispVal fileStreamValue(LispVal checked) {
+	public static LispVal fileStreamValue(LispVal checked, int abilities) {
 		return listToCons(List.of(new LispSymbol(LispNames.OBJ_NEW), quoteOf(LispLayout.STREAM_TAG), checked,
-				new LispSymbol(LispLayout.Kinds.FILE)));
+				new LispSymbol(LispLayout.Kinds.FILE), LispNil.INSTANCE, LispNil.INSTANCE, LispNil.INSTANCE,
+				new LispInteger(abilities)));
 	}
 
 	/**
@@ -14404,7 +14372,7 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandStreamDirectionP(LispCons cons, boolean synonymStreams, boolean streamValues) {
-		return expandStreamDirectionP(cons, synonymStreams, streamValues, false, false);
+		return expandStreamDirectionP(cons, synonymStreams, streamValues, false);
 	}
 
 	/**
@@ -14414,15 +14382,14 @@ public final class LispMacroExpander {
 	 * body and a standard stream answer their kind's direction, a socket both, the
 	 * {@code t} designator both, anything that is not a stream neither, and a synonym
 	 * what its target answers (resolved only where the program can build one). A FILE
-	 * stream reads the direction its open leaf recorded ({@code %file-stream-directions})
-	 * when the program carries the record, and a closed one -- forgotten -- is neither;
-	 * without the record no file can have been opened, and the arm answers the lite t.
-	 * Without stream values -- or in a program that never names a direction predicate,
-	 * whose only such call is the dead {@code #'input-stream-p} /
-	 * {@code #'output-stream-p} wrapper every WASM module compiles and then drops -- the
-	 * lowering is the lite {@code streamp} it always was, so such a program keeps its
-	 * bytes: the inline test names the kind keywords, and interning them from a dead
-	 * wrapper moved every later string of a string-stream program.
+	 * stream reads what its open leaf put on the value
+	 * ({@link LispLayout#STREAM_ABILITY_CELL}), and a closed one is neither. Without
+	 * stream values -- or in a program that never names a direction predicate, whose only
+	 * such call is the dead {@code #'input-stream-p} / {@code #'output-stream-p} wrapper
+	 * every WASM module compiles and then drops -- the lowering is the lite
+	 * {@code streamp} it always was, so such a program keeps its bytes: the inline test
+	 * names the kind keywords, and interning them from a dead wrapper moved every later
+	 * string of a string-stream program.
 	 *
 	 * <pre>
 	 * (output-stream-p x) ->
@@ -14435,18 +14402,17 @@ public final class LispMacroExpander {
 	 *                   (if (equal __sdp_k :standard-input) nil
 	 *                   (if (equal __sdp_k :body) nil
 	 *                       (if (equal __sdp_k :standard) (not (eql (%obj-ref __sdp_s 0) 0))
-	 *                           (if (equal __sdp_k :file) &lt;recorded bits &gt; 1&gt; t))))))
+	 *                           (if (equal __sdp_k :file) &lt;open and the output bit&gt; t))))))
 	 *         (eq __sdp_s t)))
 	 * </pre>
 	 * @param cons the input-stream-p / output-stream-p expression
 	 * @param synonymStreams whether the program can build a synonym stream
 	 * @param streamValues whether the program can build an OPEN stream value
 	 * @param asked whether the program names a direction predicate
-	 * @param directionRecord whether the file-stream direction record is spliced
 	 * @return the expanded expression
 	 */
 	public static LispVal expandStreamDirectionP(LispCons cons, boolean synonymStreams, boolean streamValues,
-			boolean asked, boolean directionRecord) {
+			boolean asked) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException(
@@ -14461,16 +14427,11 @@ public final class LispMacroExpander {
 		LispSymbol k = new LispSymbol("__sdp_k");
 		LispVal handleRef = objRef(s, 0);
 		LispVal standard = fmtCall(LispNames.EQL, handleRef, new LispInteger(0));
-		LispVal file = LispTrue.INSTANCE;
-		if (directionRecord) {
-			LispSymbol entry = new LispSymbol("__sdp_e");
-			LispVal bits = fmtCall(LispNames.CDR, entry);
-			file = makeLet(entry.name(),
-					fmtCall(LispNames.ASSOC, objRef(s, 0), new LispSymbol(LispNames.FILE_STREAM_DIRECTIONS_VAR)),
-					makeIf(entry,
-							input ? callOf(LispNames.ODDP, bits) : fmtCall(LispNames.GT, bits, new LispInteger(1)),
-							LispNil.INSTANCE));
-		}
+		LispVal abilities = objRef(s, LispLayout.STREAM_ABILITY_CELL);
+		LispVal file = makeIf(openStreamPRaw(s),
+				abilityTest(abilities,
+						new LispInteger(input ? LispLayout.Abilities.INPUT : LispLayout.Abilities.OUTPUT)),
+				LispNil.INSTANCE);
 		LispVal byKind = makeIf(kindIs(k, LispLayout.Kinds.FILE), file, LispTrue.INSTANCE);
 		byKind = makeIf(kindIs(k, LispLayout.Kinds.STANDARD), input ? standard : callOf(LispNames.NOT, standard),
 				byKind);
@@ -14495,6 +14456,19 @@ public final class LispMacroExpander {
 		}
 		body.add(test);
 		return listToCons(body);
+	}
+
+	// The built-in open-stream-p whatever a Gray program defines: the value is no Gray
+	// instance here.
+	private static LispVal openStreamPRaw(LispSymbol stream) {
+		return callOf(LispNames.OPEN_STREAM_P_RAW_QUALIFIED, stream);
+	}
+
+	// Whether a stream's ability bits hold those needed, a value stating none passing.
+	private static LispVal abilityTest(LispVal abilities, LispVal needed) {
+		LispSymbol held = new LispSymbol("__ability");
+		return makeLet(held.name(), abilities,
+				makeIf(held, callOf(LispNames.ABILITIES_HOLD_INTERNAL, held, needed), LispTrue.INSTANCE));
 	}
 
 	private static LispVal kindIs(LispSymbol kindVar, String kind) {
@@ -19565,23 +19539,115 @@ public final class LispMacroExpander {
 	 * @param rawHandle the test of {@code x} being the handle of a string stream, in a
 	 * program that keeps raw handles for the ones its reports open
 	 * ({@code .kb/read-load-streams.md}, "A stream is a VALUE, not a handle"), a function
-	 * of the variable; null in a program whose streams are all values
+	 * of the variable
 	 * @return the helper's definition, wrapper-shaped
 	 */
-	public static LispVal checkStreamRuntimeWrapper(java.util.function.@Nullable UnaryOperator<LispVal> rawHandle) {
-		LispSymbol x = new LispSymbol("%cst_x");
-		LispSymbol op = new LispSymbol("%cst_op");
-		LispSymbol designator = new LispSymbol("%cst_d");
-		LispVal raw = rawHandle == null ? LispNil.INSTANCE
-				: makeIf(callOf(LispNames.INTEGERP, x), rawHandle.apply(x), LispNil.INSTANCE);
+	public static LispVal checkStreamRuntimeWrapper(java.util.function.UnaryOperator<LispVal> rawHandle) {
+		LispSymbol x = new LispSymbol(CHECK_STREAM_VALUE_VAR);
+		LispSymbol op = new LispSymbol(CHECK_STREAM_OPERATOR_VAR);
+		LispSymbol designator = new LispSymbol(CHECK_STREAM_DESIGNATOR_VAR);
+		LispVal raw = makeIf(callOf(LispNames.INTEGERP, x), rawHandle.apply(x), LispNil.INSTANCE);
+		return checkStreamDefinition(listToCons(List.of(x, op, designator)), notAStreamCheck(raw));
+	}
+
+	/**
+	 * {@link #checkStreamRuntimeWrapper(java.util.function.UnaryOperator)} in a program
+	 * whose streams are all values: a site also passes what its operator needs of the
+	 * stream ({@link LispLayout.Abilities}, nil asking nothing), and a stream value that
+	 * is closed or cannot do it is refused. Those arms cost this one body, and a program
+	 * that can build no stream value keeps the shape above
+	 * ({@code .kb/error-handling.md}, "A closed stream and a stream of the wrong
+	 * direction").
+	 *
+	 * <pre>
+	 * (lambda (x op designator-p needs)
+	 *   (let ((s x))
+	 *     (while (%obj-is s '%SYNONYM-STREAM) (setq s (funcall (%obj-ref s 1))))
+	 *     (if (if needs (%obj-is s '%STREAM) nil)
+	 *         (if (%open-stream-p-raw s)
+	 *             (if ABLE x (%operand-type-error s op '(satisfies DIRECTION-P)))
+	 *             (%closed-stream-error s))
+	 *         (if (if (streamp x) t (if (null x) designator-p nil)) x
+	 *             (%operand-type-error x op 'stream)))))
+	 * </pre>
+	 * @param synonymStreams whether the program can build a synonym stream
+	 * @param catchable whether a refusal can be caught, so that its type is carried as a
+	 * value: a quoted list is what keeps a wasm module's list printer, and a module that
+	 * only ends at a refusal says the same in a literal
+	 * @return the helper's definition, wrapper-shaped
+	 */
+	public static LispVal checkStreamValueRuntimeWrapper(boolean synonymStreams, boolean catchable) {
+		LispSymbol x = new LispSymbol(CHECK_STREAM_VALUE_VAR);
+		LispSymbol op = new LispSymbol(CHECK_STREAM_OPERATOR_VAR);
+		LispSymbol designator = new LispSymbol(CHECK_STREAM_DESIGNATOR_VAR);
+		LispSymbol needs = new LispSymbol("%cst_n");
+		LispSymbol s = synonymStreams ? new LispSymbol("%cst_s") : x;
+		LispVal refusal = makeIf(
+				callOf(LispNames.ABILITIES_HOLD_INTERNAL, needs, new LispInteger(LispLayout.Abilities.INPUT)),
+				directionRefusal(s, op, LispNames.INPUT_STREAM_P, catchable),
+				directionRefusal(s, op, LispNames.OUTPUT_STREAM_P, catchable));
+		LispVal stream = makeIf(openStreamPRaw(s),
+				makeIf(abilityTest(objRef(s, LispLayout.STREAM_ABILITY_CELL), needs), x, refusal),
+				callOf(LispNames.CLOSED_STREAM_ERROR_INTERNAL, s));
+		LispVal body = makeIf(makeIf(needs, objIs(s, List.of(LispLayout.STREAM_TAG)), LispNil.INSTANCE), stream,
+				notAStreamCheck(LispNil.INSTANCE));
+		if (synonymStreams) {
+			body = listToCons(
+					List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(s, x)))),
+							listToCons(List.of(new LispSymbol(LispNames.WHILE),
+									objIs(s, List.of(LispLayout.SYNONYM_STREAM_TAG)),
+									listToCons(List.of(new LispSymbol(LispNames.SETQ), s,
+											listToCons(List.of(new LispSymbol(LispNames.FUNCALL), objRef(s, 1))))))),
+							body));
+		}
+		return checkStreamDefinition(listToCons(List.of(x, op, designator, needs)), body);
+	}
+
+	private static final String CHECK_STREAM_VALUE_VAR = "%cst_x";
+
+	private static final String CHECK_STREAM_OPERATOR_VAR = "%cst_op";
+
+	private static final String CHECK_STREAM_DESIGNATOR_VAR = "%cst_d";
+
+	private static LispVal notAStreamCheck(LispVal raw) {
+		LispSymbol x = new LispSymbol(CHECK_STREAM_VALUE_VAR);
 		LispVal passes = makeIf(callOf(LispNames.STREAMP, x), LispTrue.INSTANCE,
-				makeIf(callOf(LispNames.NULL, x), designator, raw));
-		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), x, op,
-				callOf(LispNames.QUOTE, new LispSymbol("STREAM"))));
-		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(x, op, designator)),
-				makeIf(passes, x, signal)));
-		return listToCons(
-				List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.CHECK_STREAM_RUNTIME), lambda));
+				makeIf(callOf(LispNames.NULL, x), new LispSymbol(CHECK_STREAM_DESIGNATOR_VAR), raw));
+		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), x,
+				new LispSymbol(CHECK_STREAM_OPERATOR_VAR), callOf(LispNames.QUOTE, new LispSymbol("STREAM"))));
+		return makeIf(passes, x, signal);
+	}
+
+	private static LispVal directionRefusal(LispSymbol stream, LispSymbol operator, String predicate,
+			boolean catchable) {
+		if (!catchable) {
+			return callOf(LispNames.ERROR_INTERNAL,
+					new LispString("The value #<STREAM> is not of type (SATISFIES " + predicate + ")"));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), stream, operator,
+				callOf(LispNames.QUOTE, listToCons(List.of(new LispSymbol("SATISFIES"), new LispSymbol(predicate))))));
+	}
+
+	private static LispVal checkStreamDefinition(LispVal lambdaList, LispVal body) {
+		return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.CHECK_STREAM_RUNTIME),
+				listToCons(List.of(new LispSymbol(LispNames.LAMBDA), lambdaList, body))));
+	}
+
+	/**
+	 * Lowers {@code (%closed-stream-error stream)} for a compiled backend: the
+	 * {@link #lowerFileError} split. Where a handler landing pad exists ({@code typed})
+	 * the signal carries a condition instance with the stream; without one nothing can
+	 * observe the class and the plain {@code %error} channel prints the same line.
+	 * @param cons the {@code %closed-stream-error} form
+	 * @param typed whether the signal may carry an instance
+	 * @return the lowered form
+	 */
+	public static LispVal lowerClosedStreamError(LispCons cons, boolean typed) {
+		if (!typed) {
+			return callOf(LispNames.ERROR_INTERNAL, new LispString(ClosRegistry.CLOSED_STREAM_MESSAGE));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.ERROR), quoteOf(ClosRegistry.CLOSED_STREAM_ERROR_CLASS_NAME),
+				new LispSymbol(":STREAM"), cons.toList().get(1)));
 	}
 
 	/**
@@ -25225,7 +25291,7 @@ public final class LispMacroExpander {
 			ClosRegistry.ClassInfo target, ClosRegistry closRegistry,
 			java.util.function.Function<ClosRegistry.SlotSpec, @Nullable LispVal> supplied) {
 		String targetKey = ClosRegistry.normalize(target.name());
-		java.util.Map<List<ChangeClassSlotOrigin>, List<LispVal>> tagTestsByOrigins = new java.util.LinkedHashMap<>();
+		java.util.Map<List<ChangeClassSlotOrigin>, List<String>> tagsByOrigins = new java.util.LinkedHashMap<>();
 		for (ClosRegistry.ClassInfo source : closRegistry.classes().values()) {
 			String sourceKey = ClosRegistry.normalize(source.name());
 			if (sourceKey.equals(targetKey)) {
@@ -25235,18 +25301,21 @@ public final class LispMacroExpander {
 			if (!sameChain && closRegistry.isSeededClass(source.name())) {
 				continue;
 			}
-			tagTestsByOrigins.computeIfAbsent(changeClassSlotOrigins(source, target), origins -> new ArrayList<>())
-				.add(fmtCall(LispNames.EQUAL, oldTagVar, quoteOf(LispLayout.CLASS_TAG_PREFIX + source.name())));
+			tagsByOrigins.computeIfAbsent(changeClassSlotOrigins(source, target), origins -> new ArrayList<>())
+				.add(LispLayout.CLASS_TAG_PREFIX + source.name());
 		}
 		List<LispVal> clauses = new java.util.ArrayList<>();
-		for (java.util.Map.Entry<List<ChangeClassSlotOrigin>, List<LispVal>> entry : tagTestsByOrigins.entrySet()) {
+		for (java.util.Map.Entry<List<ChangeClassSlotOrigin>, List<String>> entry : tagsByOrigins.entrySet()) {
 			LispVal remap = changeClassSlotRemap(objVar, entry.getKey(), target, supplied);
 			if (remap == null) {
 				continue;
 			}
-			List<LispVal> tests = entry.getValue();
-			clauses.add(listToCons(List
-				.of(tests.size() == 1 ? tests.get(0) : fmtCall(LispNames.OR, tests.toArray(LispVal[]::new)), remap)));
+			// A member, not an or: an or nests a let and an if per class, which the
+			// compiler walks recursively, so hundreds of classes overflow its stack.
+			List<String> tags = entry.getValue();
+			LispVal test = tags.size() == 1 ? fmtCall(LispNames.EQUAL, oldTagVar, quoteOf(tags.get(0)))
+					: mvCall(LispNames.MEMBER, oldTagVar, quotedSymbolList(tags));
+			clauses.add(listToCons(List.of(test, remap)));
 		}
 		if (clauses.isEmpty()) {
 			return null;
@@ -31072,6 +31141,10 @@ public final class LispMacroExpander {
 		// any type test over it expands.
 		if (program.stream().anyMatch(f -> usesAnySymbol(f, JAVA_EXCEPTION_NAMES))) {
 			closRegistry.ensureJavaExceptionSeeded();
+		}
+		// The closed-stream error where a stream value can exist.
+		if (mayCreateStreamValues(program)) {
+			closRegistry.ensureClosedStreamErrorSeeded();
 		}
 		// rontolisp:interactive-interrupt likewise, only where the program names it.
 		if (program.stream().anyMatch(f -> usesAnySymbol(f, INTERACTIVE_INTERRUPT_NAMES))) {
@@ -40037,6 +40110,12 @@ public final class LispMacroExpander {
 			String javaException = LispLayout.CLASS_TAG_PREFIX + ClosRegistry.JAVA_EXCEPTION_CLASS_NAME;
 			if (closRegistry.findLayoutByTag(javaException) != null) {
 				scan.tags.add(javaException);
+			}
+			// So is the closed-stream error of a stream check, where a stream value can
+			// exist.
+			String closedStream = LispLayout.CLASS_TAG_PREFIX + ClosRegistry.CLOSED_STREAM_ERROR_CLASS_NAME;
+			if (closRegistry.findLayoutByTag(closedStream) != null) {
+				scan.tags.add(closedStream);
 			}
 		}
 		// A signalling read builds its end-of-file during the expression expansion

@@ -2081,6 +2081,20 @@ public final class LispNames {
 	public static final String CHECK_STREAM_RUNTIME = "%CHECK-STREAM-RUNTIME";
 
 	/**
+	 * {@code (%closed-stream-error stream)}: what {@link #CHECK_STREAM_RUNTIME} signals
+	 * on a closed stream, lowered like {@code %file-error}
+	 * ({@code LispMacroExpander.lowerClosedStreamError}). Only the helper spells it.
+	 */
+	public static final String CLOSED_STREAM_ERROR_INTERNAL = "%CLOSED-STREAM-ERROR";
+
+	/**
+	 * {@code (%abilities-hold-p held needed)}: whether two fixnums of ability bits
+	 * ({@code LispLayout.Abilities}) hold every bit needed, compiled inline so a stream
+	 * check brings no numeric tower. Only the compile paths' stream forms spell it.
+	 */
+	public static final String ABILITIES_HOLD_INTERNAL = "%ABILITIES-HOLD-P";
+
+	/**
 	 * {@code (%format-destination x)}: {@code format}'s check of a computed destination
 	 * in a program that can hold a string with a fill pointer, which it passes where
 	 * {@link #CHECK_STREAM_INTERNAL} refuses it ({@code compiler.StreamOperandChecks}).
@@ -6950,6 +6964,13 @@ public final class LispNames {
 	public static final String OPEN_STREAM_P_RAW_INTERNAL = "%OPEN-STREAM-P-RAW";
 
 	/**
+	 * The canonical internal-qualified spelling of {@link #OPEN_STREAM_P_RAW_INTERNAL}:
+	 * what a form the backends build asks, whatever a Gray program defines
+	 * {@code open-stream-p} to be.
+	 */
+	public static final String OPEN_STREAM_P_RAW_QUALIFIED = "RONTOLISP::" + OPEN_STREAM_P_RAW_INTERNAL;
+
+	/**
 	 * The compile paths' per-file-stream element-type registry: a prelude defun that
 	 * records a binary {@code open}'s element type against its stream and answers the
 	 * stream. Called around every literal binary {@code open} leaf once the program can
@@ -6981,33 +7002,6 @@ public final class LispNames {
 	 * {@code %character-stream-p} shape, for the same per-site reason. A prelude defun.
 	 */
 	public static final String CHECK_SEQUENCE_BOUNDS_INTERNAL = "%CHECK-SEQUENCE-BOUNDS";
-
-	/**
-	 * The compile paths' record of FILE-stream directions: an alist of
-	 * {@code (handle . bits)}, 1 input and 2 output, which a compiled
-	 * {@code input-stream-p} / {@code output-stream-p} reads inline
-	 * ({@code .kb/read-load-streams.md}, "String streams"). A {@code rontolisp} internal,
-	 * like the two defuns beside it, so the {@code cl} symbol table every
-	 * package-introspecting program bakes does not grow by their names.
-	 */
-	public static final String FILE_STREAM_DIRECTIONS_VAR = "RONTOLISP::%FILE-STREAM-DIRECTIONS";
-
-	/**
-	 * Records the direction of a FILE stream an {@code open} leaf just made, keyed by its
-	 * handle, into {@link #FILE_STREAM_DIRECTIONS_VAR}. A prelude defun.
-	 */
-	public static final String FILE_STREAM_DIRECTION_REGISTER_INTERNAL = "%FILE-STREAM-DIRECTION-REGISTER";
-
-	/** The symbol {@link #FILE_STREAM_DIRECTION_REGISTER_INTERNAL}'s defun defines. */
-	public static final String FILE_STREAM_DIRECTION_REGISTER_SYMBOL = "RONTOLISP::%FILE-STREAM-DIRECTION-REGISTER";
-
-	/**
-	 * Forgets a FILE stream's recorded direction; every compiled {@code close} runs it.
-	 */
-	public static final String FILE_STREAM_DIRECTION_FORGET_INTERNAL = "%FILE-STREAM-DIRECTION-FORGET";
-
-	/** The symbol {@link #FILE_STREAM_DIRECTION_FORGET_INTERNAL}'s defun defines. */
-	public static final String FILE_STREAM_DIRECTION_FORGET_SYMBOL = "RONTOLISP::%FILE-STREAM-DIRECTION-FORGET";
 
 	/** The registry read behind a compiled {@code stream-element-type}. */
 	public static final String FILE_STREAM_ELEMENT_TYPE_INTERNAL = "%FILE-STREAM-ELEMENT-TYPE";

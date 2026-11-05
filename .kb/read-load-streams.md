@@ -761,28 +761,20 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   handle is in `outputOnlyCursorStreams`, a `Reader` / `InputStream` input, a `Writer` /
   `OutputStream` output, nothing -- closed -- neither). Compile paths: `expandStreamDirectionP`
   lowers INLINE to a test of the value's kind keywords (a `while` resolving synonyms first, only
-  where the program builds them), and a `:FILE` reads an ALIST, `%file-stream-directions` of
-  `(handle . bits)`, that every literal open leaf registers into
-  (`%file-stream-direction-register` around the leaf's stream value, `OpenModes.direction`) and
-  every close forgets (`forgettingClose` with both registries' forgetters, element types first).
-  **Three gates, each decided on size**: the inline test only in a program that NAMES a predicate
+  where the program builds them), and a `:FILE` reads the value's ability cell
+  (`LispLayout.STREAM_ABILITY_CELL`, which every literal open leaf fills, `OpenModes.abilities`)
+  behind an open test, a closed one being neither. Until 2026-11-05 an alist of
+  `(handle . bits)` registered at the leaf and forgotten at the close; the stream check needs the
+  answer on every write of every file program, where a linear search and two more prelude defuns
+  stop being a small price.
+  **The gate, decided on size**: the inline test only in a program that NAMES a predicate
   (`Ctx.asksStreamDirection`, which `WasmAsyncEmit.freshCtx` must carry -- inherited by
   construction since; until 2026-10-04 it was not copied, so on both wasm backends a TOP-LEVEL predicate fell back to `streamp` and answered t for
   either direction; ci-spec `error-output-identity-and-top-level-stream-direction`) -- without the
   gate the dead `#'input-stream-p` wrapper every WASM module compiles and drops interned the
   kind keywords and shifted every later string of every string-stream program; gating the two
-  WRAPPERS instead (`REFERENCE_GATED_FUNCTIONS`) shifted them too, so it was not taken. The
-  record only where the program can also open a file. A classifier DEFUN instead of the inline
-  test and a HASH-TABLE record (a second class file, `RontoHashTable` travels) were measured
-  and declined; the inline test plus the record is the accepted shape. **The record's three
-  names are `rontolisp::` internals** (the `%octets-join`
-  shape: a prelude key without the package, a defined symbol with it), NOT `CL_INTERNALS`
-  entries: `CL_SYMBOLS` is baked into every program that asks the runtime package API, and
-  listing them there grows each such program (`runtime-package-api`,
-  `uiop-package-surgery`, the cffi-sqlite example). Identity over the ci-spec and example
-  corpus: a program naming none of a direction predicate,
-  `file-position` or a composite constructor is byte-identical, save programs that print
-  `rontolisp:version`'s build timestamp.
+  WRAPPERS instead (`REFERENCE_GATED_FUNCTIONS`) shifted them too, so it was not taken. A
+  classifier DEFUN instead of the inline test was measured and declined.
   The composite constructors now check their components' direction
   (`make-two-way-stream`, `make-echo-stream`, `make-concatenated-stream` signal `type-error`):
   with the lite answer every stream was an input stream, so ANSI `MAKE-TWO-WAY-STREAM.ERROR.5`
@@ -991,8 +983,10 @@ wasm (`(0 #(0 0 0))`, `(3 #(108 108 108))` -- the string-stream record's bytes).
   general vector from `*standard-input*` and bytes for an octet vector); keeping the buffer rule
   there left every stdin/stdout program's behaviour, and its bytes, where they were.
 - **A FILE stream keeps the buffer rule -- measured, not chosen.** Telling a character file from a
-  binary one needs the element-type registry (next section), which is spliced only for a program
-  that asks `stream-element-type` or opens a wide stream. The first cut spliced it for every
+  binary one here needed the element-type registry (next section), which is spliced only for a
+  program that asks `stream-element-type` or opens a wide stream. (The ability cell knows since
+  2026-11-05, and refuses `read-char` and `read-byte` by it; a sequence operator asks it only the
+  direction, because its stream check does not see the buffer.) The first cut spliced it for every
   program naming `read-sequence`/`write-sequence` and `open`, a sizable per-program cost -- for
   no ANSI test (every failing test in the chapter reads a string stream). The cheaper shape -- a
   distinct kind keyword for a binary file stream,
@@ -1612,9 +1606,11 @@ answer.
   `OPAQUE` and a stream PRINTS as the plain `#<STREAM>` on every backend — the handle never reaches
   the output (`.kb/emitted-output-determinism.md`, `.kb/instance-syntax.md`). A test that must tell
   two streams apart uses `equal` in-program (see `StreamHandleConcurrencySupport`), not the text.
-- **Three reserved cells** past the declared slots: `STREAM_CLOSED_CELL` (the wasm closed mark),
-  `STREAM_PUSHBACK_CELL` (the `unread-char` character, `.kb/gray-streams.md`) and
-  `STREAM_PATH_CELL` (a file stream's namestring, `.kb/pathnames.md`). The interpreter's
+- **Four reserved cells** past the declared slots: `STREAM_CLOSED_CELL` (the wasm closed mark),
+  `STREAM_PUSHBACK_CELL` (the `unread-char` character, `.kb/gray-streams.md`),
+  `STREAM_PATH_CELL` (a file stream's namestring, `.kb/pathnames.md`) and `STREAM_ABILITY_CELL`
+  (what the stream can do, `.kb/error-handling.md`, "A closed stream and a stream of the wrong
+  direction"). The interpreter's
   `StreamDesignators.streamValue` allocates the full capacity like `%obj-new`.
 - **The KIND is a keyword** (`LispLayout.Kinds`): `:FILE`, `:STRING-INPUT`, `:STRING-OUTPUT`,
   `:SOCKET`, `:SOCKET-SERVER`, `:BODY`, `:STANDARD`, `:STANDARD-OUTPUT`, `:STANDARD-INPUT`.
@@ -1683,7 +1679,9 @@ answer.
   `open-stream-p` / `%open-stream-p-raw` read it (`expandOpenStreamPOnValue`, a synonym
   resolved to its target VALUE first). The `--component` sockets / async-stdin dispatchers
   fall through to the built-in under the `%open-stream-p-raw` alias. The interpreter and
-  the JVM keep answering from their stream table and never touch the cell. Pinned by
+  the JVM keep answering from their stream table and never touch the cell. Every read, write
+  and flush refuses a closed stream off the same answer (`.kb/error-handling.md`, "A closed
+  stream and a stream of the wrong direction"). Pinned by
   `WasmLispCompilerIntegrationTest#openStreamPAnswersNilAfterCloseOnPreview1` /
   `#componentOpenStreamPAnswersNilAfterClose` (both splices included) and the two ci-spec
   cases above.
