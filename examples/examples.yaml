@@ -953,6 +953,14 @@ examples:
       and the tree-shaker still lower the whole program to a --no-wasi reactor.
       What it looks like is examples/browser/webgl-solids/index.html
 
+  # --- proxy-wasm: an Envoy filter on an SDK written in Lisp --------------------
+  - path: proxy-wasm/gateway.lisp
+    backends: [wasm-reactor]
+    note: >-
+      a Proxy-Wasm filter on the SDK in proxy-wasm.lisp, spliced in by its require.
+      A proxy calls it, so the harness only compiles; examples/proxy-wasm/check.sh
+      runs it in a real Envoy under Docker and checks it with curl
+
   # --- browser/wit-component: a component loaded by a page, with no glue -------
   - path: browser/wit-component/fractal.lisp
     backends: [no-gc, wasm-component]

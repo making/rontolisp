@@ -167,8 +167,9 @@ runtime-built string, the flat-memory loop).
   `hostResultTypes` settle the host signature, and `am.ik.wasm.WasmImportInjector` resolves the
   same `PLACEHOLDER_FUNC_BASE` encoding. **The accepted TYPE SET is per-backend and follows the
   house integer**, which is why `parse` takes it as an argument: `KNOWN_PARAM_TYPES` here
-  (`:s32`, `:s64`, `:float`, `:bool`, `:string`, `:s-expr`, `:bytes`, `:octets`, `:extern` -- the house
-  integer is `i31ref`; `:s64` crosses through the boxed exact integer, `_int_val` / `_int_new`),
+  (`:s32`, `:s64`, `:u32`, `:float`, `:bool`, `:string`, `:s-expr`, `:bytes`, `:octets`, `:extern` -- the
+  house integer is `i31ref`; `:s64` and `:u32` cross through the boxed exact integer, `_int_val` /
+  `_int_new`),
   `SCALAR_PARAM_TYPES` there (every type with a WIT spelling, i.e. the whole fixed-width integer
   family plus `:float`/`:bool`/`:string` -- the house integer is `i64`, and `:s-expr`/`:bytes`/
   `:octets` are heap objects that model has no runtime for). `SCALAR_PARAM_TYPES` is DERIVED from
@@ -476,6 +477,36 @@ What `rontolisp:wit-import :octets t` lowers a WIT `list<u8>` to on a wasm-GC co
   `HostGlueEmitterTest.anOctetsImportHandsTheHostAUint8ArrayAndTakesOneBack`,
   `WasmImportCompilerTest.parsesOctetsAsAValueOfTheStringShapeAndKeepsItAnImportOnlyType`.
 
+## `"rontolisp:memory"` -- the module's own memory, as imports (2026-11-05)
+What a C-shaped host ABI needs and no boundary type states: a host function answering through
+out-pointers (Proxy-Wasm's `proxy_get_header_map_value(..., char**, size_t*)`) takes addresses the
+program reserved and then reads. `WasmMemoryIntrinsic` is the fixed field table; a directive naming
+the reserved `:from` still makes the synthetic defun (so `#'name` and the interpreter/JVM stub come
+for free) but its body answers from the module: `buildIntrinsicBody` here,
+`compileIntrinsicBody` under `--no-gc`. `hostImportOrdinal`, `importSlots`, `glueImports` and
+`NoGcWasmCompiler.importOrdinals` skip it, so the import section and the glue gain nothing.
+- `parse` validates field and exact signature, so the stub's arity and the body cannot disagree.
+  The arena fields (`needsArena`) force `memoryHelpers`/`hostArena`; a module declaring only
+  `load32` carries no allocator. `--no-gc --component` refuses it; `octets` is refused there by
+  the vocabulary.
+- Pins: `WasmOctetsBoundaryE2eTest` (GC), `NoGcWasmImportE2eTest.theMemoryModuleReadsWhatAHostAnsweredThroughOutPointers`,
+  `WasmImportCompilerTest.theMemoryModuleIsTheFixedSetOfFieldsNotAHostModule`, and
+  `examples/proxy-wasm/check.sh` in a real Envoy (not in CI: it needs Docker).
+
+**`:u32` on wasm-GC, and why `:s32` arguments did not widen instead.** An `:s32` argument is
+`ref.cast i31; i31.get_s`: past 2^30 it traps. A Proxy-Wasm context id only counts up, so a
+resident VM reaches that after 2^30 streams on a worker, and every WebGL-style `:int` boundary
+pays for the fix if `:s32` itself widens. So `:u32` is the opt-in: it reuses the export side's
+`emitNarrowIntResult` (exact-or-trap on an i64 scratch local the wrapper declares only then), and a
+module not naming it is unchanged. Measured 2026-11-05 on `examples/proxy-wasm/gateway.lisp`, all
+ids, sizes and addresses `:s32` -> `:u32`: 233,179 -> 234,589 bytes raw, 77,079 -> 77,610 gzip, which
+is the price per argument `:int` users are spared.
+
+**An `:s32` RESULT was silently wrong past 2^30** (`i31.new` kept 31 bits: 1500000000 became
+-647483648). It now boxes through `_int_new`. Measured 2026-11-05 against the previous commit:
+`dom_reactor` 2,963 -> 2,963 raw and 1,618 -> 1,618 gzip; `webgl-cube` 18,693 -> 18,697 raw and
+7,655 -> 7,659 gzip.
+
 ## The component path does NOT go through this compiler
 A `rontolisp:wit-import` under `--component` lowers to `rontolisp::%component-import`, which
 `WasmComponentImportCompiler` turns into canonical-ABI marshalling defuns -- a different compiler,
@@ -488,4 +519,5 @@ preload E2E in `WasmLispCompilerIntegrationTest` (`wasmtime run --preload host=.
 stubs in `LispEvaluatorTest`/`JvmLispCompilerTest`. Showcases: `examples/browser/webgl-triangle/`
 (10 imports, no exports), `webgl-cube/`, `webgl-galaxy/` (32 imports, GLSL as `:string` params,
 `:string` results); cube, galaxy, heat3d and robot-arm pull the WebGL2 boundary from
-`examples/browser/webgl-common/gl.lisp`.
+`examples/browser/webgl-common/gl.lisp`. `examples/proxy-wasm/` is a whole C-shaped ABI on
+`rontolisp:memory`, run in a real Envoy.

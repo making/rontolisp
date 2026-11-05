@@ -205,6 +205,14 @@ Boundary details beyond the scalar types:
   buffer's length means "retry with a bigger buffer"), and the wrapper's
   staging is popped on return, so a pull loop over one reused buffer keeps
   linear memory flat.
+- A `:u32` crosses the whole unsigned range exactly, in both directions, where
+  an `:int` **argument** stops at the 31 bits of the internal `i31ref` and traps.
+  Declare an address, a size or a host-issued id as `:u32`. It costs more code
+  per argument than `:int`, so a value that stays small is better left as `:int`.
+- A host function that answers through **out-pointers** writes into cells the
+  program reserved: bind the module's own memory with
+  [`:from "rontolisp:memory"`](../reference/functions/rontolisp-wasm-import.md#rontolispmemory--the-modules-own-linear-memory)
+  to reserve them and read the answer back.
 - An **asynchronous** host function — a `WebAssembly.Suspending`-wrapped
   import under JSPI — is declared with `:async t`: the call then returns a
   future that `rontolisp:await` resolves, the build prints the host's
