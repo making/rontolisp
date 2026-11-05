@@ -23,9 +23,11 @@ final class WasmEqGeneralCompiler {
 	 */
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		WasmExprCompiler.compileExpr(args.get(2), ctx);
-		WasmEmitHelper.emitEqlComparison(ctx);
+		if (!WasmEmitHelper.tryEmitLiteralComparison(args, ctx, false)) {
+			WasmExprCompiler.compileExpr(args.get(1), ctx);
+			WasmExprCompiler.compileExpr(args.get(2), ctx);
+			WasmEmitHelper.emitEqlComparison(ctx);
+		}
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 

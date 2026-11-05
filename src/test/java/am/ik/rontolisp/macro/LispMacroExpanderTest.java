@@ -1585,6 +1585,22 @@ class LispMacroExpanderTest {
 		assertThat(LispMacroExpander
 			.usesPrintControls(LispReader.readAllFromString("(defun %print-cased (x e) x) (setq *package* :APP)")))
 			.isTrue();
+		// A control that is a literal says whether it can reach prin1, which is what the
+		// package gate has anything to change: an ~a never spells a qualifier.
+		for (String princOnly : List.of("(format nil \"~a ~10a ~:a ~@a ~d ~'sa ~~s\" x)", "(format t \"plain\")",
+				"(error \"text ~a\" x)", "(warn \"text\")", "(signal \"text\")",
+				"(handler-case (f) (error () 1) (warning (c) (format nil \"~a\" c)))")) {
+			assertThat(LispMacroExpander.reachesPrin1FromTheSurface(LispReader.readAllFromString(princOnly)))
+				.as(princOnly)
+				.isFalse();
+		}
+		for (String reaches : List.of("(format nil \"~s\" x)", "(format nil \"~:@s\" x)", "(format nil \"~2,3w\" x)",
+				"(format nil \"~/f/\" x)", "(format nil \"~?\" c x)", "(format nil c x)", "(apply #'format nil c x)",
+				"(error \"text ~s\" x)", "(error 'some-condition)", "(error c)", "(signal 'some-condition)",
+				"(handler-case (f) (error (c) (prin1 c)))", "(print x)")) {
+			assertThat(LispMacroExpander.reachesPrin1FromTheSurface(LispReader.readAllFromString(reaches))).as(reaches)
+				.isTrue();
+		}
 	}
 
 	@Test

@@ -43106,14 +43106,98 @@ public final class LispMacroExpander {
 	 * conversion of a symbol -- the only conversion that spells a package qualifier
 	 * ({@code princ} never does, CLHS 22.1.3.3), and so the only one the package gate
 	 * ({@link #printsUnderAPackage}) has anything to change. The direct operators, the
-	 * {@code format} family ({@code ~S}), the signalling operators (a report is
-	 * formatted), the print-object seam and the internal {@code prin1} piece the
-	 * expansions produce.
+	 * signalling operators that do not take a control (a report is formatted), the
+	 * print-object seam and the internal {@code prin1} piece the expansions produce.
+	 * Those taking a control are asked of apart, as it can be read
+	 * ({@link #controlReachesPrin1}).
 	 */
 	private static final List<String> PRIN1_SURFACE_OPERATORS = List.of(LispNames.PRINT, LispNames.PRIN1,
-			LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.WRITE, LispNames.PPRINT, LispNames.FORMAT,
-			LispNames.ERROR, LispNames.WARN, LispNames.SIGNAL, LispNames.CERROR, LispNames.ASSERT, LispNames.CHECK_TYPE,
-			LispNames.PRINT_OBJECT, LispNames.PRINT_UNREADABLE_OBJECT, LispNames.PRIN1_PIECE_INTERNAL);
+			LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.WRITE, LispNames.PPRINT, LispNames.CERROR,
+			LispNames.ASSERT, LispNames.CHECK_TYPE, LispNames.PRINT_OBJECT, LispNames.PRINT_UNREADABLE_OBJECT,
+			LispNames.PRIN1_PIECE_INTERNAL);
+
+	/**
+	 * A directive of a {@code format} control: its parameters and modifiers, a pad
+	 * character's quote among them so that {@code ~'sA} is an {@code ~A}, then the
+	 * character naming it.
+	 */
+	private static final java.util.regex.Pattern FORMAT_DIRECTIVE = java.util.regex.Pattern
+		.compile("~(?:[-+]?[0-9]+|'.|[vV#]|,)*[:@]*(.)", java.util.regex.Pattern.DOTALL);
+
+	/**
+	 * Whether a control has a directive that can print a symbol with
+	 * {@code *print-escape*} true: {@code ~S} and {@code ~W}, and {@code ~/} and
+	 * {@code ~?}, which run what the control does not spell.
+	 */
+	private static boolean hasPrin1Directive(String control) {
+		java.util.regex.Matcher directive = FORMAT_DIRECTIVE.matcher(control);
+		while (directive.find()) {
+			if ("sSwW/?".contains(directive.group(1))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a form can reach {@code prin1} through an operator taking a {@code format}
+	 * control: it names one anywhere but as the head of a call whose control is a literal
+	 * without such a directive ({@link #hasPrin1Directive}). A filter's {@code ~a} logs
+	 * and its one {@code (error "text")} under a package carry the whole of
+	 * {@code %print-cased} otherwise, a third of the module, and a call of it for every
+	 * piece ({@code .kb/proxy-wasm-sdk.md}).
+	 */
+	private static boolean controlReachesPrin1(LispVal form) {
+		if (form instanceof LispSymbol symbol) {
+			return controlPosition(symbol) >= 0;
+		}
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		LispVal rest = cons;
+		if (cons.car() instanceof LispSymbol head && spellsClName(head.name(), LispNames.HANDLER_CASE)
+				&& cons.cdr() instanceof LispCons body) {
+			// A clause's head names a condition type, not an operator.
+			if (controlReachesPrin1(body.car())) {
+				return true;
+			}
+			for (LispVal clauses = body.cdr(); clauses instanceof LispCons cell; clauses = cell.cdr()) {
+				if (cell.car() instanceof LispCons clause && clause.cdr() instanceof LispCons variable
+						&& controlReachesPrin1(variable.cdr())) {
+					return true;
+				}
+			}
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head && controlPosition(head) >= 0) {
+			LispVal at = cons.cdr();
+			for (int i = 1; i < controlPosition(head) && at instanceof LispCons cell; i++) {
+				at = cell.cdr();
+			}
+			if (at instanceof LispCons control && control.car() instanceof LispString literal
+					&& !hasPrin1Directive(literal.value())) {
+				rest = cons.cdr();
+			}
+		}
+		for (LispVal cur = rest; cur instanceof LispCons cell; cur = cell.cdr()) {
+			if (controlReachesPrin1(cell.car())) {
+				return true;
+			}
+			if (!(cell.cdr() instanceof LispCons) && controlReachesPrin1(cell.cdr())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Where a call of an operator taking a control has it, -1 for any other symbol.
+	private static int controlPosition(LispSymbol symbol) {
+		if (spellsClName(symbol.name(), LispNames.FORMAT)) {
+			return 2;
+		}
+		return spellsClName(symbol.name(), LispNames.ERROR) || spellsClName(symbol.name(), LispNames.WARN)
+				|| spellsClName(symbol.name(), LispNames.SIGNAL) ? 1 : -1;
+	}
 
 	/**
 	 * Whether the program names an operator that can print a symbol with
@@ -43127,6 +43211,9 @@ public final class LispMacroExpander {
 	 */
 	public static boolean reachesPrin1FromTheSurface(List<LispVal> program) {
 		for (LispVal form : program) {
+			if (controlReachesPrin1(form)) {
+				return true;
+			}
 			for (String name : PRIN1_SURFACE_OPERATORS) {
 				if (usesSymbol(form, name)) {
 					return true;

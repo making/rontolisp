@@ -1404,6 +1404,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// indices below is safe.
 	static final int FUNC_STR_BUILD = FUNC_READ_CHAR + 1;
 
+	// _str_lit (off, len) -> (ref null eq): the one object of a literal, built by
+	// _str_build the first time and kept in a table after that
+	// (WasmStringRuntimeBuilder.buildStrLitBody). What evaluating a literal calls: its
+	// id, bytes and length never change, so nothing can tell two evaluations apart.
+	static final int FUNC_STR_LIT = FUNC_STR_BUILD + 1;
+
 	// _str_fresh (off, len) -> (ref null eq): like _str_build, but stamps a fresh id
 	// from the monotonic STRING_ID_CTR counter instead of id=off. Every RUNTIME string
 	// build (concatenate/subseq/case/trim, read, gensym/make-symbol, getenv, the
@@ -1412,7 +1418,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// counter id -- not the reused offset -- is what keeps distinct runtime strings and
 	// uninterned symbols eq-distinct. Interned names (literals, _intern'd symbols, t)
 	// keep calling _str_build (id=stable offset). Same (i32,i32)->ref shape.
-	static final int FUNC_STR_FRESH = FUNC_STR_BUILD + 1;
+	static final int FUNC_STR_FRESH = FUNC_STR_LIT + 1;
 
 	// _str_to_mem (str, ptr) -> i32 (TYPE_STR_TO_MEM): copies a string's GC byte array
 	// into linear[ptr..) and returns its length. See the type comment.
@@ -1546,8 +1552,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// _int_val ((ref null eq)) -> i64: i31 sign-extended, or a TYPE_BIGNUM's field.
 	static final int FUNC_INT_VAL = FUNC_INT_NEW + 1;
 
+	// _u32_val ((ref null eq)) -> i32: a :u32 argument of a host import, exact or a trap.
+	static final int FUNC_U32_VAL = FUNC_INT_VAL + 1;
+
 	// _print_i64_no_nl (i64) -> (): the i64 counterpart of _print_i32_no_nl.
-	static final int FUNC_PRINT_I64_NO_NL = FUNC_INT_VAL + 1;
+	static final int FUNC_PRINT_I64_NO_NL = FUNC_U32_VAL + 1;
 
 	// The limb (arbitrary-precision) integer runtime (WasmBigIntRuntimeBuilder, always
 	// present, appended after the boxed-i64 helpers so every constant above keeps its
@@ -6640,6 +6649,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// object. Its table covers every defun, the funcIds the registry and a
 		// static site can name; its global is allocated here, before the global
 		// section is emitted.
+		final byte[] strLitBody = quoteGlobals.sealLiteralSites()
+				? WasmStringRuntimeBuilder.buildStrLitBody(quoteGlobals.literalTableIndex()) : UNREACHABLE_BODY;
 		final byte[] funcrefBody;
 		if (this.emitsFuncref) {
 			funcrefBody = WasmEvalRuntimeBuilder.buildFuncrefBody(defuns.size(), quoteGlobals.funcBoxTableIndex(),
@@ -7994,6 +8005,7 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (ref null eq)
 				// _str_build (off, len) -> (ref null eq): reuses the (i32,i32)->ref shape
 				fnDef.addFunction(TYPE_RAT_NEW); // _str_build (FUNC_STR_BUILD)
+				fnDef.addFunction(TYPE_RAT_NEW); // _str_lit (FUNC_STR_LIT)
 				fnDef.addFunction(TYPE_RAT_NEW); // _str_fresh (FUNC_STR_FRESH)
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_to_mem (FUNC_STR_TO_MEM)
 				fnDef.addFunction(TYPE_WRITE_STR_GC); // _write_str_gc (FUNC_WRITE_STR_GC)
@@ -8026,6 +8038,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// bignum helpers (FUNC_INT_NEW, FUNC_INT_VAL, FUNC_PRINT_I64_NO_NL)
 				fnDef.addFunction(TYPE_INT_NEW); // _int_new (i64) -> (ref null eq)
 				fnDef.addFunction(TYPE_INT_VAL); // _int_val ((ref null eq)) -> i64
+				fnDef.addFunction(TYPE_RAT_GET); // _u32_val ((ref null eq)) -> i32
 				fnDef.addFunction(TYPE_PRINT_I64); // _print_i64_no_nl (i64) -> ()
 				// the limb bigint runtime (FUNC_LIMB_OF .. FUNC_BIG_HASH)
 				fnDef.addFunction(TYPE_CALLABLE_BASE); // _limb_of
@@ -8894,11 +8907,11 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmRatioRuntimeBuilder.buildRatNumBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatDenBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_ADD, Instruction.F64_ADD,
-							!this.optimize.prefersSizeOverSpeed(), this.complexCapable ? FUNC_C_ADD : -1))
+							this.complexCapable ? FUNC_C_ADD : -1))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_SUB, Instruction.F64_SUB,
-							!this.optimize.prefersSizeOverSpeed(), this.complexCapable ? FUNC_C_SUB : -1))
+							this.complexCapable ? FUNC_C_SUB : -1))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatBinaryBody(Instruction.I32_MUL, Instruction.F64_MUL,
-							!this.optimize.prefersSizeOverSpeed(), this.complexCapable ? FUNC_C_MUL : -1))
+							this.complexCapable ? FUNC_C_MUL : -1))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatDivBody(this.complexCapable ? FUNC_C_DIV : -1))
 					.addFunction(WasmRatioRuntimeBuilder.buildRatCmpBody())
 					.addFunction(WasmRatioRuntimeBuilder.buildRatCmpBitsBody())
@@ -8970,6 +8983,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// _str_build helper body (FUNC_STR_BUILD): linear[off..off+len) -> a
 				// TYPE_STRING backed by a $str_bytes GC array.
 				code.addFunction(WasmStringRuntimeBuilder.buildStrBuildBody());
+				// _str_lit (FUNC_STR_LIT): a literal's one object.
+				code.addFunction(strLitBody);
 				// _str_fresh (FUNC_STR_FRESH): like _str_build but id = STRING_ID_CTR++.
 				code.addFunction(WasmStringRuntimeBuilder.buildStrFreshBody());
 				// _str_to_mem (FUNC_STR_TO_MEM): copy a string's GC array into
@@ -9027,6 +9042,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// bignum helper bodies (FUNC_INT_NEW, FUNC_INT_VAL, FUNC_PRINT_I64_NO_NL)
 				code.addFunction(WasmBignumRuntimeBuilder.buildIntNewBody());
 				code.addFunction(WasmBignumRuntimeBuilder.buildIntValBody());
+				code.addFunction(WasmBignumRuntimeBuilder.buildU32ValBody());
 				code.addFunction(WasmBignumRuntimeBuilder.buildPrintI64NoNlBody());
 				// the limb bigint runtime bodies (FUNC_LIMB_OF .. FUNC_BIG_HASH)
 				code.addFunction(WasmBigIntRuntimeBuilder.buildLimbOfBody());
@@ -11394,6 +11410,12 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		private final LispVal funcBoxTableToken = new am.ik.rontolisp.LispSymbol("#<function-box-table>");
 
+		private final LispVal literalTableToken = new am.ik.rontolisp.LispSymbol("#<literal-table>");
+
+		private boolean literalSites;
+
+		private boolean literalSitesSealed;
+
 		private am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedSharing sharing;
 
 		QuoteGlobals(int base) {
@@ -11469,6 +11491,38 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		int funcBoxTableIndex() {
 			return indexFor(this.funcBoxTableToken);
+		}
+
+		/**
+		 * The module global holding {@code _str_lit}'s table of literal objects,
+		 * allocating the next index on first sight.
+		 * @return the global index
+		 */
+		int literalTableIndex() {
+			return indexFor(this.literalTableToken);
+		}
+
+		/**
+		 * A form is about to evaluate a literal.
+		 * @return whether it may call {@code _str_lit}: after {@link #sealLiteralSites},
+		 * only if that found a caller and so a body
+		 */
+		boolean takeLiteralSite() {
+			if (this.literalSitesSealed) {
+				return this.literalSites;
+			}
+			this.literalSites = true;
+			return true;
+		}
+
+		/**
+		 * Every body is compiled: whether {@code _str_lit} has a caller, so that a module
+		 * without one has no global for its table.
+		 * @return whether a site was taken
+		 */
+		boolean sealLiteralSites() {
+			this.literalSitesSealed = true;
+			return this.literalSites;
 		}
 
 		/**

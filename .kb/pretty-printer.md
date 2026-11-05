@@ -67,6 +67,12 @@ to an unrouted one. Covers `princ` `prin1` `print` `princ-to-string` `prin1-to-s
   prelude splice (`LispPreludeLibrary.referencedBySurfaceForm`, `LibraryDefunPruner`) and flips
   `Ctx.printControls`; naming none => BYTE-IDENTICAL output. Interpreter gates on the CURRENT VALUE
   (`LispEvaluator.printControlsInEffect`).
+- Under a package the gate is whether a `prin1` is in reach (`reachesPrin1FromTheSurface`). A literal
+  control is read: `(format x "~a")`, `(error "text ~a" y)`, `(warn ...)` and `(signal ...)` with no `~s`, `~w`, `~/` or
+  `~?` do not count, and a `handler-case` clause's head is a type, not a call (`controlReachesPrin1`,
+  `LispMacroExpanderTest.printsUnderAPackageIsThePackageGateOfThePrinter`). Before 2026-11-05 any mention of those
+  names counted, so a `~a` log under a package carried the renderer, 8.5KB, and a call of it per piece. ci-spec
+  `a-format-of-tilde-a-under-a-package-spells-no-qualifier` runs the raw conversions on all four.
 - It also flips for every `write` user (prelude `write` binds all fifteen variables): the compilers
   scan the SPLICED program, so `LispPreludeLibrary.process`'s selection fixpoint asks
   `referencedBySurfaceForm` for `%print-cased` over each PULLED entry's forms too — the only entry

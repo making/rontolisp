@@ -35414,7 +35414,158 @@ cases:
       (1 0)
       (1 0)
       :DONE
+  - name: eql-of-a-literal-and-a-literal-evaluated-twice
+    source: |
+      ;; eq and eql of a literal: no object for it, the same answer in value and test position
+      (defun lit-kind (x)
+        (list (eq x :lit-a) (eql :lit-a x) (eq x 'lit-sym) (eql 'lit-sym x)
+              (if (eq x :lit-a) 'yes 'no) (if (not (eql x 'lit-sym)) 'yes 'no)
+              (case x (:lit-a 'kw) (lit-sym 'sym) (3 'three) (t 'other))))
+      (print (lit-kind :lit-a))
+      (print (lit-kind 'lit-sym))
+      (print (lit-kind (intern "LIT-A" :keyword)))
+      (print (lit-kind (intern "LIT-SYM")))
+      (print (lit-kind :lit-b))
+      (print (lit-kind "LIT-A"))
+      (print (lit-kind ":LIT-A"))
+      (print (lit-kind 3))
+      (print (lit-kind nil))
+      (print (lit-kind t))
+      (print (lit-kind #\a))
+      (print (lit-kind (make-symbol "LIT-SYM")))
+      (defun lit-num (x)
+        (list (eql x 3) (eq 3 x) (if (eql x 3) 'yes 'no) (if (not (eql x 3)) 'yes 'no)
+              (eql x 1073741823) (eql x -1073741824) (eql x 1073741824)))
+      (print (lit-num 3))
+      (print (lit-num (+ 1 2)))
+      (print (lit-num 3.0))
+      (print (lit-num 7/2))
+      (print (lit-num (* 2 3/2)))
+      (print (lit-num 1073741823))
+      (print (lit-num (+ 1073741822 1)))
+      (print (lit-num -1073741824))
+      (print (lit-num 1073741824))
+      (print (lit-num (+ 1073741823 1)))
+      (print (lit-num :lit-a))
+      ;; two fixnums compared and added, across the edge of the i31 range
+      (defun lit-cmp (a b)
+        (list (= a b) (< a b) (> a b) (<= a b) (>= a b) (/= a b) (+ a b) (- a b) (* a b)))
+      (print (lit-cmp 3 3))
+      (print (lit-cmp 2 3))
+      (print (lit-cmp 1073741823 1))
+      (print (lit-cmp -1073741824 -1))
+      (print (lit-cmp -1073741824 1073741823))
+      (print (lit-cmp 1073741824 1))
+      (print (lit-cmp 3 3.0))
+      (print (lit-cmp 1/2 1))
+      ;; a literal evaluated twice is one object nothing can change; what is made from it is not
+      ;; (the fifth writes a literal: sbcl writes it, and a compile path rebinds the place)
+      (defun lit-string () "lit-abc")
+      (print (eq (lit-string) (lit-string)))
+      (print (let ((s (format nil "~a" (lit-string))))
+               (setf (char s 0) #\L)
+               (list s (lit-string))))
+      (print (let ((s (princ-to-string (lit-string))))
+               (setf (char s 0) #\L)
+               (list s (lit-string))))
+      (print (let* ((v (copy-seq "lit-abc")) (s (princ-to-string v)))
+               (setf (char v 0) #\L)
+               (list v s)))
+      (print (let ((a (lit-string))) (setf (char a 0) #\L) (list a (lit-string))))
+      (print (char (lit-string) 6))
+      (print (length (lit-string)))
+      (print (char (lit-string) 2))
+      ;; pieces of any kind
+      (print (format nil "[~a|~a|~a|~a]" "日本" (copy-seq "語") #\c 'lit-sym))
+      (print (format nil "~a~a" "" ""))
+      (print (concatenate 'string "日" (copy-seq "本") ""))
+      ;; a function called with no keyword finds none, and one with a keyword finds it
+      (defun lit-keys (&key (a 1) (b 2 b-p) ((:c c) 3)) (list a b b-p c))
+      (print (lit-keys))
+      (print (lit-keys :b 5))
+      (print (lit-keys :c 7 :a 6))
+      (print (apply #'lit-keys nil))
+      (print (handler-case (lit-keys :d 1) (program-error () 'refused)))
+    expected: |
+      (T T NIL NIL YES YES KW)
+      (NIL NIL T T NO NO SYM)
+      (T T NIL NIL YES YES KW)
+      (NIL NIL T T NO NO SYM)
+      (NIL NIL NIL NIL NO YES OTHER)
+      (NIL NIL NIL NIL NO YES OTHER)
+      (NIL NIL NIL NIL NO YES OTHER)
+      (NIL NIL NIL NIL NO YES THREE)
+      (NIL NIL NIL NIL NO YES OTHER)
+      (NIL NIL NIL NIL NO YES OTHER)
+      (NIL NIL NIL NIL NO YES OTHER)
+      (NIL NIL NIL NIL NO YES OTHER)
+      (T T YES NO NIL NIL NIL)
+      (T T YES NO NIL NIL NIL)
+      (NIL NIL NO YES NIL NIL NIL)
+      (NIL NIL NO YES NIL NIL NIL)
+      (T T YES NO NIL NIL NIL)
+      (NIL NIL NO YES T NIL NIL)
+      (NIL NIL NO YES T NIL NIL)
+      (NIL NIL NO YES NIL T NIL)
+      (NIL NIL NO YES NIL NIL T)
+      (NIL NIL NO YES NIL NIL T)
+      (NIL NIL NO YES NIL NIL NIL)
+      (T NIL NIL T T NIL 6 0 9)
+      (NIL T NIL T NIL T 5 -1 6)
+      (NIL NIL T NIL T T 1073741824 1073741822 1073741823)
+      (NIL T NIL T NIL T -1073741825 -1073741823 1073741824)
+      (NIL T NIL T NIL T -1 -2147483647 -1152921503533105152)
+      (NIL NIL T NIL T T 1073741825 1073741823 1073741824)
+      (T NIL NIL T T NIL 6.0 0.0 9.0)
+      (NIL T NIL T NIL T 3/2 -1/2 1/2)
+      T
+      ("Lit-abc" "lit-abc")
+      ("Lit-abc" "lit-abc")
+      ("Lit-abc" "lit-abc")
+      ("Lit-abc" "lit-abc")
+      #\c
+      7
+      #\t
+      "[日本|語|c|LIT-SYM]"
+      ""
+      "日本"
+      (1 2 NIL 3)
+      (1 5 T 3)
+      (6 2 NIL 7)
+      (1 2 NIL 3)
+      REFUSED
 standalone:
+  - name: a-format-of-tilde-a-under-a-package-spells-no-qualifier
+    source: |
+      ;; Standalone: no prin1 anywhere, so the program prints through the raw conversions.
+      ;; under a package, ~a and princ never spell a qualifier
+      (defpackage :probe-a (:use :cl) (:export :ext))
+      (defpackage :probe-b (:use :cl))
+      (in-package :probe-b)
+      (defstruct thing a)
+
+      (defun show (x) (format nil "[~a]" x))
+      (princ (show 'plain)) (terpri)
+      (princ (show 'probe-a::int)) (terpri)
+      (princ (show 'probe-a:ext)) (terpri)
+      (princ (show :kw)) (terpri)
+      (princ (show '(plain probe-a::int :kw "s" 1 2.5))) (terpri)
+      (princ (show "string")) (terpri)
+      (princ (show (make-thing :a 'probe-a::int))) (terpri)
+      (princ (show nil)) (terpri)
+      (princ (show t)) (terpri)
+      (princ (format nil "~10a|~@a|~:a" 'plain 'probe-a::int nil)) (terpri)
+    stdout: |
+      [PLAIN]
+      [INT]
+      [EXT]
+      [KW]
+      [(PLAIN INT KW s 1 2.5)]
+      [string]
+      [#S(THING :A INT)]
+      [NIL]
+      [T]
+      PLAIN     |INT|()
   - name: a-method-on-a-lowered-built-in-answers-a-name-built-at-run-time
     source: |
       ;; Standalone: no eval, and the only spelling of either name is what intern builds,

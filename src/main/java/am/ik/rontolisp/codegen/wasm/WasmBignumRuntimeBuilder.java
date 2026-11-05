@@ -37,16 +37,15 @@ final class WasmBignumRuntimeBuilder {
 
 		w.write(0); // no extra locals
 
-		// (v >= I31_MIN) & (v <= I31_MAX)
+		// I31_MIN <= v <= I31_MAX, as one unsigned compare: this runs for every integer
+		// a program boxes.
 		getLocal(w, 0);
 		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(I31_MIN);
-		w.write(Instruction.I64_GE_S);
-		getLocal(w, 0);
+		w.writeSignedLeb128(-I31_MIN);
+		w.write(Instruction.I64_ADD);
 		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(I31_MAX);
-		w.write(Instruction.I64_LE_S);
-		w.write(Instruction.I32_AND);
+		w.writeSignedLeb128(I31_MAX - I31_MIN + 1);
+		w.write(Instruction.I64_LT_U);
 		w.write(Instruction.IF);
 		w.writeRefType(true, Type.EQ.code());
 		getLocal(w, 0);
@@ -116,6 +115,72 @@ final class WasmBignumRuntimeBuilder {
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// _u32_val((ref null eq) x) -> i32: what a :u32 argument of a host import is, or a
+	// trap:
+	// the rule WasmExportCompiler.emitNarrowIntResult states, with an i31 answered first.
+	// One function, for the several arguments a wrapper has: an address, a size or an
+	// id the host issued is nearly always an i31.
+	static byte[] buildU32ValBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// locals: 1 = the i31 (i32), 2 = the wide value (i64)
+		w.write(2);
+		w.write(1);
+		w.write(Type.I32);
+		w.write(1);
+		w.write(Type.I64);
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		getLocal(w, 1);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		getLocal(w, 0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+		w.write(Instruction.ELSE);
+		getLocal(w, 0);
+		WasmEmitHelper.castFloatGetF64(w);
+		w.write(Instruction.I32_TRUNC_U_F64);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.END);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(2);
+		getLocal(w, 2);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.I64_NE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		getLocal(w, 2);
+		w.write(Instruction.I32_WRAP_I64);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

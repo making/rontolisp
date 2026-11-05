@@ -140,6 +140,7 @@ section gains nothing. On the interpreter and JVM the name is the usual stub.
 | `"load64"` / `"store64"` | `(:u32)` / `(:u32 :s64)` | `:s64` / none | Little-endian, any alignment |
 | `"string"` | `(:u32 :u32)` | `:string` | A new string from `(ptr, len)`, as UTF-8 |
 | `"octets"` | `(:u32 :u32)` | `:octets` | A new byte vector from `(ptr, len)`; not under `--no-gc` |
+| `"search"` | `(:string :u32 :u32)` | `:s32` | Where a string's bytes first occur in the `(ptr, len)` given: the index, or -1 |
 | `"address"` | `(:string)` | `:u32` | Where a string's UTF-8 bytes are, to read and not to write; only under `--no-gc` |
 | `"size"` | `(:string)` | `:u32` | How many bytes those are, where `length` counts characters; only under `--no-gc` |
 

@@ -34,6 +34,10 @@ parameters"). User docs: `doc/en/reference/special-forms/defun.md`, `lambda.md`.
   `do`-over-a-list loops with the same head shape
   ([optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)). Pinned by
   `LambdaListsTest`.
+- **On wasm-GC a call passing no keyword scans nothing.** `WasmFunctionCallCompiler.compileAbsentKeyword`
+  tests the tail at each `(%ll-key-cell tail :kw upper)` site ahead of the literal and the call, 5
+  instructions where it was 30: `(search a b)` has eight, and most calls of a keyword function pass
+  few. +7 bytes per keyword parameter.
 - **The interpreter answers both helpers in Java** (`LispEvaluator.keywordHelper`, installed at
   the same first resolution): a scan over a well-formed tail with nothing to signal, and
   anything else -- a malformed tail, an unknown indicator (the `getf :allow-other-keys` rule),

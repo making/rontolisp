@@ -99,6 +99,31 @@ final class WasmFunctionCallCompiler {
 		WasmUncaughtLocations.emitValueCall(ctx, tail, arity + 1, dispatchFuncIdx);
 	}
 
+	// A call that passes no keyword at all finds none, whatever it asks for: a keyword
+	// parameter's scan costs that call the test, and not the literal and the call. A
+	// function with &key spends most of its calls with most keywords absent.
+	private static boolean compileAbsentKeyword(String name, LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (!LispNames.LL_KEY_CELL.equals(name) || !(cons.car() instanceof LispSymbol)) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 4 || !(parts.get(1) instanceof LispSymbol plist)) {
+			return false;
+		}
+		WasmExprCompiler.compileExpr(plist, ctx);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.wasmCtrlDepth++;
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.ELSE);
+		compileResolvedCall(name, cons, ctx, false);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
+		return true;
+	}
+
 	private static void compileDirectCall(String name, LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		// A host import whose every :string argument is a literal reaches the host
 		// without the wrapper, and without the GC byte array the wrapper would have
@@ -108,6 +133,13 @@ final class WasmFunctionCallCompiler {
 		if (WasmImportCompiler.compileLiteralImportCall(name, cons, ctx)) {
 			return;
 		}
+		if (compileAbsentKeyword(name, cons, ctx)) {
+			return;
+		}
+		compileResolvedCall(name, WasmImportCompiler.withTextArguments(name, cons, ctx), ctx, tail);
+	}
+
+	private static void compileResolvedCall(String name, LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		WasmLispCompiler.WasmFunctionInfo fi = ctx.functions.get(name);
 		if (fi != null) {
 			WasmEmitHelper.requireNoCharvecHelper(ctx, name);

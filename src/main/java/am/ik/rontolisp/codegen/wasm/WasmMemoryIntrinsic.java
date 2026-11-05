@@ -5,6 +5,7 @@ import java.util.List;
 
 import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
 
 /**
@@ -45,6 +46,13 @@ enum WasmMemoryIntrinsic {
 	OCTETS("octets", List.of(BoundaryType.U32, BoundaryType.U32), BoundaryType.OCTETS, false),
 
 	/**
+	 * Where a string's bytes first occur in the {@code size} bytes at an address: their
+	 * index, or -1. A loop over memory no boundary crosses per byte, so a body costs what
+	 * this function's words cost ({@link #emitSearch}) and is never copied.
+	 */
+	SEARCH("search", List.of(BoundaryType.STRING, BoundaryType.U32, BoundaryType.U32), BoundaryType.S32, false),
+
+	/**
 	 * Where a string's bytes are, which only {@code --no-gc} can answer: its string is a
 	 * block of linear memory, and a wasm-GC string is an engine object.
 	 */
@@ -57,6 +65,9 @@ enum WasmMemoryIntrinsic {
 
 	/** The reserved {@code :from} value. */
 	static final String MODULE = "rontolisp:memory";
+
+	/** A one in the low bit of each of a word's bytes. */
+	private static final long ONE_PER_BYTE = 0x0101010101010101L;
 
 	private final String field;
 
@@ -128,7 +139,7 @@ enum WasmMemoryIntrinsic {
 	 * handed.
 	 * @param w the writer
 	 * @return whether this intrinsic is one instruction ({@code false} for the arena
-	 * family, the two lifts and the two string fields, which each backend answers its own
+	 * family, the two lifts and the string fields, which each backend answers its own
 	 * way)
 	 */
 	boolean emitAccess(WasmWriter w) {
@@ -146,6 +157,166 @@ enum WasmMemoryIntrinsic {
 		}
 		w.write(opcode, 0x00, 0x00);
 		return true;
+	}
+
+	/**
+	 * Emits {@link #SEARCH}'s loop, which leaves the answer on the stack as an i32: eight
+	 * bytes at a time past the words not holding the needle's first byte, by the
+	 * zero-byte test on {@code word ^ pattern} (about 3.5 instructions per byte, against
+	 * 14 a byte at a time), then a byte-wise comparison where one does. The lowest bit
+	 * the test sets is exact, so the comparison starts at the first candidate. Fewer than
+	 * eight starts left go byte-wise. A word read stays inside the {@code size} bytes:
+	 * its last byte is below {@code end} plus 7, and {@code end} is one past the last
+	 * start.
+	 * @param w the writer
+	 * @param needle a local holding the needle's address
+	 * @param needleSize a local holding its size
+	 * @param hay a local holding the address searched
+	 * @param size a local holding the size searched
+	 * @param at an i32 local to use
+	 * @param end an i32 local to use
+	 * @param k an i32 local to use
+	 * @param pattern an i64 local to use
+	 * @param mask an i64 local to use
+	 */
+	static void emitSearch(WasmWriter w, int needle, int needleSize, int hay, int size, int at, int end, int k,
+			int pattern, int mask) {
+		w.write(Instruction.BLOCK, Type.I32.code());
+		// An empty needle is at the start; one longer than the bytes is nowhere.
+		i32(w, 0);
+		get(w, needleSize);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 0);
+		w.write(Instruction.DROP);
+		i32(w, -1);
+		get(w, size);
+		get(w, needleSize);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.BR_IF, 0);
+		w.write(Instruction.DROP);
+		get(w, hay);
+		set(w, at);
+		get(w, hay);
+		get(w, size);
+		w.write(Instruction.I32_ADD);
+		get(w, needleSize);
+		w.write(Instruction.I32_SUB);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, end);
+		get(w, needle);
+		w.write(Instruction.I64_LOAD8_U, 0x00, 0x00);
+		i64(w, ONE_PER_BYTE);
+		w.write(Instruction.I64_MUL);
+		set(w, pattern);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, at);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		get(w, end);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF, 1);
+		get(w, at);
+		w.write(Instruction.I64_LOAD, 0x00, 0x00);
+		get(w, pattern);
+		w.write(Instruction.I64_XOR);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(mask);
+		i64(w, ONE_PER_BYTE);
+		w.write(Instruction.I64_SUB);
+		get(w, mask);
+		i64(w, -1);
+		w.write(Instruction.I64_XOR);
+		w.write(Instruction.I64_AND);
+		i64(w, ONE_PER_BYTE << 7);
+		w.write(Instruction.I64_AND);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(mask);
+		w.write(Instruction.I64_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, at);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		set(w, at);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		get(w, at);
+		get(w, mask);
+		w.write(Instruction.I64_CTZ);
+		i64(w, 3);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_ADD);
+		set(w, at);
+		w.write(Instruction.END); // the word loop
+		w.write(Instruction.END);
+		// A candidate, or a start past the words. None left: nowhere.
+		i32(w, -1);
+		get(w, at);
+		get(w, end);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.DROP);
+		i32(w, 0);
+		set(w, k);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, k);
+		get(w, needleSize);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		get(w, at);
+		get(w, hay);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.BR, 4);
+		w.write(Instruction.END);
+		get(w, at);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		get(w, needle);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 1);
+		get(w, k);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, k);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // the comparison loop
+		w.write(Instruction.END);
+		get(w, at);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, at);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // the scan
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+	}
+
+	private static void get(WasmWriter w, int local) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(local);
+	}
+
+	private static void set(WasmWriter w, int local) {
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(local);
+	}
+
+	private static void i32(WasmWriter w, int value) {
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(value);
+	}
+
+	private static void i64(WasmWriter w, long value) {
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(value);
 	}
 
 	/**

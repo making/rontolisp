@@ -19,11 +19,9 @@ final class WasmStringConcatCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		// Mutable character vectors normalize to strings first (both operands).
+		// The callee normalizes a mutable character vector, on either side.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
-		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
 	}
