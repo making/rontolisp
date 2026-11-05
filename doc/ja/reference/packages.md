@@ -27,7 +27,7 @@ Common Lisp と同じシングル/ダブルコロンの区別です([external �
 `common-lisp` と `common-lisp-user` は `cl` と `cl-user` の組み込み **ニックネーム** なので、ポータブルな
 `(:use #:common-lisp)` clause や `common-lisp:car` の参照も解決されます。短縮名 `rl` と `la` は `rontolisp` と `linalg`
 の、`quicklisp` は `ql` の組み込みニックネームです。ユーザーパッケージは `defpackage` の
-`:nicknames` clause で独自のニックネームを登録できます。
+`:nicknames` clause で独自のニックネームを登録できます。`keyword:foo` と `keyword::foo` はキーワード `:foo` として読まれます。
 
 ```lisp
 (print *package*)              ; => :CL-USER

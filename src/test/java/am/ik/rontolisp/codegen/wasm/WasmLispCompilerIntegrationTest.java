@@ -9371,8 +9371,8 @@ class WasmLispCompilerIntegrationTest {
 				+ " (print (file-position t)) (print (file-length t)) (print (pathnamep \"/tmp/x\"))"
 				+ " (print (pathnamep #P\"/tmp/x\"))" + " (print (stream-element-type t))"
 				+ " (print (input-stream-p t))" + " (print (output-stream-p (make-string-output-stream)))"
-				+ " (print (input-stream-p \"s\"))"))
-			.isEqualTo("240\n44\n12.0\n0.0\n42\nNIL\nNIL\nNIL\nT\nCHARACTER\nT\nT\nNIL");
+				+ " (print (handler-case (input-stream-p \"s\") (type-error () :type-error)))"))
+			.isEqualTo("240\n44\n12.0\n0.0\n42\nNIL\nNIL\nNIL\nT\nCHARACTER\nT\nT\n:TYPE-ERROR");
 	}
 
 	@Test
@@ -15681,8 +15681,8 @@ class WasmLispCompilerIntegrationTest {
 		// win over the seeded default: the seed IS the binding cell _store mutates.
 		assertThat(compileAndRun("(defvar *sv-stream-name* '*error-output*)"
 				+ "(print (boundp *sv-stream-name*)) (print (symbol-value *sv-stream-name*))"
-				+ "(setq *error-output* 7) (print (symbol-value '*error-output*))"))
-			.isEqualTo("T\n#<STREAM>\n7");
+				+ "(setq *error-output* t) (print (symbol-value '*error-output*))"))
+			.isEqualTo("T\n#<STREAM>\nT");
 	}
 
 	private static final String FUNCTION_PRINT_PIN_PROGRAM = """

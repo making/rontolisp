@@ -42,6 +42,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.AstOutliner;
 import am.ik.rontolisp.compiler.DeadTypeBranchPruner;
+import am.ik.rontolisp.compiler.EvalReferences;
 import am.ik.rontolisp.compiler.ToplevelStatements;
 import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
@@ -3287,6 +3288,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the rest of compilation sees canonical names.
 		PackageResolver packageResolver = new PackageResolver();
 		program = packageResolver.resolveProgram(program);
+		// A stream operator's argument is a stream (compiler/StreamOperandChecks).
+		program = am.ik.rontolisp.compiler.StreamOperandChecks.process(program);
 		// A quoted designator of a wrapped built-in becomes #'name before any wrapper
 		// gate scans the program for that spelling (compiler/FunctionDesignators).
 		program = am.ik.rontolisp.compiler.FunctionDesignators.normalizeBuiltinDesignators(program);
@@ -4461,6 +4464,18 @@ public final class WasmLispCompiler implements LispCompiler {
 			inject(LispMacroExpander.checkSequenceRuntimeWrapper(), defuns, injectedRuntimeDefuns, injectedForms,
 					specialVars);
 		}
+		// The shared check every %check-stream site calls, one streamp for the module. A
+		// program with no stream value keeps raw handles for the string streams its
+		// reports open, and those alone are negative (a WASI descriptor never is).
+		final Set<String> streamCheckOperators = new java.util.TreeSet<>();
+		program.forEach(form -> LispMacroExpander.collectStreamCheckOperators(form, streamCheckOperators));
+		wrappers.forEach(form -> LispMacroExpander.collectStreamCheckOperators(form, streamCheckOperators));
+		if (LispMacroExpander.programUsesStreamCheck(program) || LispMacroExpander.programUsesStreamCheck(wrappers)) {
+			inject(LispMacroExpander.checkStreamRuntimeWrapper(usesStreamValues ? null
+					: x -> new LispCons(new LispSymbol("<"),
+							new LispCons(x, new LispCons(new LispInteger(0), LispNil.INSTANCE)))),
+					defuns, injectedRuntimeDefuns, injectedForms, specialVars);
+		}
 		// The shared name dispatches injected below are called only from the sites the
 		// compiler lowers onto them, never through a designator: no dispatcher case
 		// (registryFuncIds), so a program whose names resolve at run time does not
@@ -4785,8 +4800,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		StringTable.StringEntry subseqBoundsForLength = ehMode
 				? stringTable.addBodyString(WasmSubseqCompiler.STRING_LENGTH) : null;
 		final List<LispVal> spelledProgram = program;
-		WasmOperandTypes.Operators operandOperators = ehMode
-				? WasmOperandTypes.Operators.place(stringTable, name -> programUsesSymbol(spelledProgram, name))
+		WasmOperandTypes.Operators operandOperators = ehMode ? WasmOperandTypes.Operators.place(stringTable,
+				name -> programUsesSymbol(spelledProgram, name), streamCheckOperators)
 				: WasmOperandTypes.Operators.NONE;
 		// The symbols of the type a rank mismatch in _arr_check_rank is not of, interned
 		// HERE for the same reason as operandTexts above: where the table names an
@@ -6590,6 +6605,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		else {
 			funcrefBody = new byte[0];
 		}
+		// What _eval, _symbol_value and _unbound_variable throw for an unbound name: EH
+		// mode only, like the dispatchers' report, the typed unbound-variable where
+		// usedLayoutTags baked it.
+		final WasmRuntimeBuilder.@Nullable UnboundVariableReport unboundReport = ehMode
+				? new WasmRuntimeBuilder.UnboundVariableReport(stringTable,
+						this.usesInstances ? conditionInstance(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, closRegistry,
+								layoutAddresses) : null,
+						slotIndex(closRegistry, ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, "NAME"),
+						this.usesIdentityHashTables)
+				: null;
 		List<Integer> lambdaListKeywordOffsets = new ArrayList<>();
 		if (usesEval) {
 			for (String keyword : ClConstants.LAMBDA_LIST_KEYWORD_NAMES) {
@@ -6636,6 +6661,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.POP)
 				.add(stringTable, LispNames.FUNCTION)
 				.add(stringTable, LispNames.SYMBOL_FUNCTION);
+			for (String directive : EvalReferences.UNPROCESSED_DIRECTIVES) {
+				offsetsBuilder.add(stringTable, directive);
+			}
 			List<String> evalForwarders = new ArrayList<>(fenvForwarders);
 			java.util.Collections.sort(evalForwarders);
 			for (String forwarded : evalForwarders) {
@@ -6664,7 +6692,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupBody();
 			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets, counts,
 					evalRunsForms ? globalAccessIndex(functions) : -1, evalForwarders, this.usesIdentityHashTables,
-					symfuncrefFuncIndex());
+					symfuncrefFuncIndex(), unboundReport);
 			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets, this.usesIdentityHashTables);
 		}
 		else {
@@ -6825,16 +6853,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] makeSymbolBody = WasmSymbolApiRuntimeBuilder.buildMakeSymbol();
 		final byte[] internSymBody = WasmSymbolApiRuntimeBuilder.buildInternSym(internNilOffset, internEmptyNameOffset);
 		final byte[] boundpBody = WasmSymbolApiRuntimeBuilder.buildBoundp(symbolTOffset);
-		// What _symbol_value and _unbound_variable throw for an unbound name: EH mode
-		// only, like the dispatchers' report, the typed unbound-variable where
-		// usedLayoutTags baked it.
-		final WasmRuntimeBuilder.@Nullable UnboundVariableReport unboundReport = ehMode
-				? new WasmRuntimeBuilder.UnboundVariableReport(stringTable,
-						this.usesInstances ? conditionInstance(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, closRegistry,
-								layoutAddresses) : null,
-						slotIndex(closRegistry, ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, "NAME"),
-						this.usesIdentityHashTables)
-				: null;
 		final byte[] symbolValueBody = WasmSymbolApiRuntimeBuilder.buildSymbolValue(symbolTOffset, unboundReport);
 		final byte[] unboundVariableBody = this.emitsUnboundVariable
 				? WasmRuntimeBuilder.buildUnboundVariableBody(Objects.requireNonNull(unboundReport)) : new byte[0];

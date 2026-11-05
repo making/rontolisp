@@ -19434,6 +19434,68 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Builds the shared {@code %check-stream-runtime} defun every compiled
+	 * {@code %check-stream} site calls, its token
+	 * {@link #checkSequenceRuntimeWrapper()}'s.
+	 *
+	 * <pre>
+	 * (lambda (x op designator-p)
+	 *   (if (if (streamp x) t (if (null x) designator-p RAW)) x
+	 *       (%operand-type-error x op 'stream)))
+	 * </pre>
+	 * @param rawHandle the test of {@code x} being the handle of a string stream, in a
+	 * program that keeps raw handles for the ones its reports open
+	 * ({@code .kb/read-load-streams.md}, "A stream is a VALUE, not a handle"), a function
+	 * of the variable; null in a program whose streams are all values
+	 * @return the helper's definition, wrapper-shaped
+	 */
+	public static LispVal checkStreamRuntimeWrapper(java.util.function.@Nullable UnaryOperator<LispVal> rawHandle) {
+		LispSymbol x = new LispSymbol("%cst_x");
+		LispSymbol op = new LispSymbol("%cst_op");
+		LispSymbol designator = new LispSymbol("%cst_d");
+		LispVal raw = rawHandle == null ? LispNil.INSTANCE
+				: makeIf(callOf(LispNames.INTEGERP, x), rawHandle.apply(x), LispNil.INSTANCE);
+		LispVal passes = makeIf(callOf(LispNames.STREAMP, x), LispTrue.INSTANCE,
+				makeIf(callOf(LispNames.NULL, x), designator, raw));
+		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), x, op,
+				callOf(LispNames.QUOTE, new LispSymbol("STREAM"))));
+		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(x, op, designator)),
+				makeIf(passes, x, signal)));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.CHECK_STREAM_RUNTIME), lambda));
+	}
+
+	/**
+	 * Whether any form holds a {@code %check-stream} site.
+	 * @param forms the program's (or the generated wrappers') top-level forms
+	 * @return true when one does
+	 */
+	public static boolean programUsesStreamCheck(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (namesAnySymbol(form, java.util.Set.of(LispNames.CHECK_STREAM_INTERNAL))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The operators the {@code %check-stream} sites of a form name.
+	 * @param form a form
+	 * @param into receives the operators' names
+	 */
+	public static void collectStreamCheckOperators(LispVal form, java.util.Set<String> into) {
+		if (form instanceof LispCons site && site.car() instanceof LispSymbol head
+				&& LispNames.CHECK_STREAM_INTERNAL.equals(head.name())) {
+			into.add(checkListOperator(site));
+		}
+		while (form instanceof LispCons cons) {
+			collectStreamCheckOperators(cons.car(), into);
+			form = cons.cdr();
+		}
+	}
+
+	/**
 	 * The operators whose lowering can reach a {@code %check-sequence} site: the sequence
 	 * operators, {@code coerce} (whose shared conversions check) and the
 	 * {@code %check-sequence} form itself, which a spliced prelude defun

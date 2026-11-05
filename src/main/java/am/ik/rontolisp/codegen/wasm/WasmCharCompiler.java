@@ -175,6 +175,23 @@ final class WasmCharCompiler {
 	}
 
 	/**
+	 * Compiles {@code (%check-stream x 'op designator-p)}: a call to the module's shared
+	 * {@code %check-stream-runtime} with the operator's row, as
+	 * {@link #compileCheckSequence} does, and the value alone in a module without it.
+	 */
+	static void compileCheckStream(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		if (!ctx.functions.containsKey(LispNames.CHECK_STREAM_RUNTIME)) {
+			WasmExprCompiler.compileExpr(parts.get(1), ctx);
+			return;
+		}
+		int id = WasmOperandTypes.streamOperatorId(ctx, LispMacroExpander.checkListOperator(cons));
+		LispVal call = new LispCons(new LispSymbol(LispNames.CHECK_STREAM_RUNTIME), new LispCons(parts.get(1),
+				new LispCons(new LispInteger(id), new LispCons(parts.get(3), LispNil.INSTANCE))));
+		WasmExprCompiler.compileExpr(call, ctx);
+	}
+
+	/**
 	 * Compiles a check form's operand and, in EH mode, lands it as the form's operator's
 	 * {@code kind} type-error when {@code test} (an i32 over the operand's local) fails.
 	 */

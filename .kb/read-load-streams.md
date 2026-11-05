@@ -16,7 +16,7 @@ nesting `#|...|#`.
   unescaped, terminators inside bars and all, so what `prin1` prints reads back. `_readAtom` hands it to
   `_rdEscaped`; `_rd_token` leaves its name at the end of the token, so `_read_expr` tells it from
   one with no escape by where it starts. A text ending inside one records end-of-file. Both read it past
-  the standard qualifier drop and `|NIL|` is nil. Until 2026-11-05 the bar and the backslash were
+  the standard qualifier drop (`keyword:foo` and `keyword::foo` narrow to `:foo`, in `LispReader` too) and `|NIL|` is nil. Until 2026-11-05 the bar and the backslash were
   constituents: `(read-from-string "|a b|")` answered the symbol `|\|A|`. Limit, the model's: `|a:b|` is
   spelled as `a:b` is. ci-spec `the-empty-name-is-a-symbol-like-any-other`.
 - Unclaimed tokens fall to the atom path like `readSymbol`: `#foo` -> `#FOO`, `#16r1f` -> a symbol.
@@ -1567,6 +1567,9 @@ answer.
   answers `Ctx.usesStreamValues`, gating the WRAP a
   producer emits AND the UNWRAP a consumer emits, so the two can never disagree. It also forces
   `mayCreateInstances` on.
+- **An integer is no stream** (`.kb/error-handling.md`, "A stream operator's argument is a stream"):
+  a built-in reaches a raw handle only behind the check, which passes an integer only in the next
+  bullet's case.
 - **A `with-output-to-string` the gate never saw**: a seeded condition's `:report`
   (`no-applicable-method-error`, `unbound-slot`) renders through one `expandTypedSignal` writes while
   the body compiles, in a program the gate answered no for. Its stream is a raw handle, consistent

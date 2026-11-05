@@ -102,8 +102,10 @@ the print family wrote PAST the instance to standard output on the compile paths
   helper (read-char, -no-hang, peek-char, unread-char, read-line, listen) `(or stream
   *standard-input*)`, before `%stream-target` and the instance test -- so a stream argument
   that is nil at run time, and the function-value wrappers (`(funcall #'read-line)`), resolve
-  too. The read helpers' fallback still gets the stream as given. An unbound read is the
-  constant `t` on the compile paths, so a program that binds nothing is unaffected.
+  too. Every helper's fallback gets the stream as given (the output and byte helpers since
+  2026-11-05: a built-in refuses a bare integer, `.kb/error-handling.md`, "A stream operator's
+  argument is a stream"). An unbound read is the constant `t` on the compile paths, so a program
+  that binds nothing is unaffected.
 - Compile-path gate (`GrayStreamsLibrary.binds`): the program binds the variable
   (`SpecialVarCollector.collectDynamicallyBound`, the backends' activation rule) or names
   `rontolisp:make-thread` (its bindings alist). Then the stream-less / literal-nil calls of
@@ -163,6 +165,10 @@ the print family wrote PAST the instance to standard output on the compile paths
   binary answer signals on SBCL (`.kb/http-server.md`, `:raw-body`).
 
 ## Interpreter dispatch
+- An instance that is no stream never reaches a helper: a stream operator refuses it first, on
+  every backend (`.kb/error-handling.md`, "A stream operator's argument is a stream"), so the
+  no-applicable-method error a helper's generic would answer is a program's own class only when it
+  descends from `rontolisp:fundamental-stream`.
 - `LispEvaluator` wraps the built-ins: `resolveSynonymArg` (Java twin of `%stream-target`),
   then for an INSTANCE lazy-load gray.lisp (`ensureGrayStreamsLoaded`) and apply the helper
   (`applyGrayDispatch`); fallbacks re-enter the wraps, one hop, no recursion.
@@ -434,9 +440,8 @@ Contract, identical on all four:
   read compiles to the constant `t` (checked 2026-10-06 with `javap`: an `unread-char` program
   that binds nothing has no `*STANDARD-INPUT*` field). What it does add is the eval runtime's
   mirror seed of the variable, in an `unread-char` program that also uses `eval`.
-- **gray.lisp's read-side helpers hand the fallback built-in the stream AS GIVEN** (`read-char`,
-  `-no-hang`, `peek-char`, `unread-char`, `read-line`, `listen`, `file-position` and its set),
-  testing `%obj-p` on the `%stream-target` result only. They handed the resolved HANDLE until
+- **gray.lisp's helpers hand the fallback built-in the stream AS GIVEN**, testing `%obj-p` on the
+  `%stream-target` result only. The read-side ones handed the resolved HANDLE until
   2026-10-06, so in a Gray-using program every open-stream read keyed the pushback on an integer
   -- the shared cell: two string streams each unread once signalled on JVM, P1 and component.
   Pinned by `GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_PROGRAM`.

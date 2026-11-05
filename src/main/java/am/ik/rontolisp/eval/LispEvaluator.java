@@ -68,6 +68,7 @@ import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
+import am.ik.rontolisp.compiler.StreamOperandChecks;
 import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.compiler.ClackEnv;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -3581,6 +3582,7 @@ public final class LispEvaluator {
 					this.globalEnv);
 			return LispNil.INSTANCE;
 		}));
+		installStreamOperandChecks();
 		// cerror (lite): no restart machinery exists, so the "continuable" part is
 		// dropped -- (cerror continue-format datum args...) signals like
 		// (error datum args...).
@@ -8555,7 +8557,18 @@ public final class LispEvaluator {
 	 * @return the result
 	 */
 	private LispVal evalDatum(LispVal datum) {
-		return evalResolved(this.packageResolver.resolveDatum(datum));
+		LispVal resolved;
+		try {
+			resolved = this.packageResolver.resolveDatum(datum);
+		}
+		catch (LispPackageException ex) {
+			// A symbol read at run time naming no package: this runs under the caller's
+			// handlers, so it is the condition CL names, never the end of the program.
+			String message = String.valueOf(ex.getMessage());
+			return signalPackageError(message,
+					message.startsWith(NO_SUCH_PACKAGE) ? message.substring(NO_SUCH_PACKAGE.length()) : "");
+		}
+		return evalResolved(resolved);
 	}
 
 	/**
@@ -9173,6 +9186,65 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * The interpreter's half of {@code compiler.StreamOperandChecks}: a stream operator
+	 * refuses an argument that is no stream, outermost, ahead of the Gray dispatch, which
+	 * would take any instance for one. The operators the evaluator lowers before any
+	 * function is called check at their own seam.
+	 */
+	private void installStreamOperandChecks() {
+		StreamOperandChecks.designatorByOperator().forEach((name, designator) -> {
+			LispVal base = this.globalEnv.lookupFunctionOrNull(name);
+			if (base == null) {
+				return;
+			}
+			int index = StreamOperandChecks.streamArgument(name);
+			this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+				if (args.size() > index) {
+					checkStreamOperand(args.get(index), name, designator);
+				}
+				return apply(base, args, this.globalEnv);
+			}));
+		});
+		// The read under a read-line producer's multiple-value lowering.
+		LispVal basePair = this.globalEnv.lookupFunction(LispNames.READ_LINE_PAIR_INTERNAL);
+		this.globalEnv.defineFunction(LispNames.READ_LINE_PAIR_INTERNAL,
+				new LispFunction(LispNames.READ_LINE_PAIR_INTERNAL, args -> {
+					if (!args.isEmpty()) {
+						checkStreamOperand(args.get(0), LispNames.READ_LINE, true);
+					}
+					return apply(basePair, args, this.globalEnv);
+				}));
+		this.globalEnv.defineFunction(LispNames.CHECK_STREAM_INTERNAL,
+				new LispFunction(LispNames.CHECK_STREAM_INTERNAL, args -> {
+					checkStreamOperand(args.get(0), args.get(1) instanceof LispSymbol op ? op.name() : null,
+							args.get(2) != LispNil.INSTANCE);
+					return args.get(0);
+				}));
+	}
+
+	// What a stream operator takes: a stream, t, and where nil designates a standard
+	// stream, nil. A keyword is what a stream-less keyword call spells at that position,
+	// which the built-in reads.
+	private void checkStreamOperand(LispVal value, @Nullable String operator, boolean designator) {
+		boolean stream = value instanceof LispTrue || (designator && value instanceof LispNil)
+				|| (value instanceof LispSymbol symbol && symbol.name().startsWith(":"))
+				|| Environment.isStreamValue(value) || Environment.isSynonymStream(value)
+				|| isGrayStreamInstance(value);
+		if (!stream) {
+			throw operator == null ? OperandTypeException.of(value, OperandTypes.Kind.STREAM)
+					: OperandTypeException.of(value, OperandTypes.Kind.STREAM, operator);
+		}
+	}
+
+	// A standard stream variable's binding or assignment: when SBCL's declared type
+	// refuses a value that is no stream, so no stream-less operator meets one.
+	private void checkStandardStreamValue(String name, LispVal value) {
+		if (StreamOperandChecks.isStandardStreamVariable(name)) {
+			checkStreamOperand(value, name, false);
+		}
+	}
+
+	/**
 	 * Wraps a printing operator's FUNCTION VALUE so a {@code #'}-reference honors
 	 * {@code *print-case*} exactly as the operator form does: while the variable holds a
 	 * converting value the call is rebuilt as the source form it would have been (its
@@ -9252,7 +9324,9 @@ public final class LispEvaluator {
 		LispVal seq = eval(parts.get(1), env);
 		// The synonym resolved but an open stream value KEPT: the expansion reads its
 		// kind to tell a character stream (LispMacroExpander.CharacterStreams).
-		LispVal stream = Environment.synonymTarget(eval(parts.get(2), env));
+		LispVal given = eval(parts.get(2), env);
+		checkStreamOperand(given, read ? LispNames.READ_SEQUENCE : LispNames.WRITE_SEQUENCE, true);
+		LispVal stream = Environment.synonymTarget(given);
 		if (stream instanceof LispInstance inst && !inst.hasTag(am.ik.rontolisp.LispLayout.STREAM_TAG)) {
 			// The first occurrence of a keyword counts (CLHS 3.4.1.4), as in the
 			// expansion.
@@ -9308,14 +9382,16 @@ public final class LispEvaluator {
 			return eval(LispMacroExpander.expandWriteChar(cons), env);
 		}
 		LispVal ch = eval(parts.get(1), env);
-		LispVal stream = parts.size() == 3 ? Environment.streamTarget(eval(parts.get(2), env)) : LispNil.INSTANCE;
+		LispVal given = parts.size() == 3 ? eval(parts.get(2), env) : LispNil.INSTANCE;
+		checkStreamOperand(given, LispNames.WRITE_CHAR, true);
+		LispVal stream = Environment.streamTarget(given);
 		// A stream-less or nil stream writes to the current *standard-output*, which may
 		// hold a Gray instance.
 		LispVal target = stream instanceof LispNil ? Environment.streamTargetOrNull(currentStandardOutput()) : stream;
 		if (target instanceof LispInstance) {
 			return applyGrayDispatch(GRAY_WRITE_CHAR_DISPATCH, List.of(ch, target));
 		}
-		LispVal rest = parts.size() == 3 ? new LispCons(quoteValue(stream), LispNil.INSTANCE) : LispNil.INSTANCE;
+		LispVal rest = parts.size() == 3 ? new LispCons(quoteValue(given), LispNil.INSTANCE) : LispNil.INSTANCE;
 		LispCons rebuilt = new LispCons(parts.get(0), new LispCons(quoteValue(ch), rest));
 		return eval(LispMacroExpander.expandWriteChar(rebuilt), env);
 	}
@@ -10382,7 +10458,8 @@ public final class LispEvaluator {
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandDecf);
 									break dispatch;
 								case LispNames.FORMAT:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandFormat);
+									next = builtinMacroExpansion(cons, form -> LispMacroExpander
+										.expandFormat(StreamOperandChecks.checkedCall(form)));
 									break dispatch;
 								case LispNames.WITH_OUTPUT_TO_STRING:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithOutputToString);
@@ -10899,6 +10976,10 @@ public final class LispEvaluator {
 				// "the program mentions the variable" scan -- the interpreter has no
 				// whole-program pass to run one in -- and the two agree because
 				// %print-cased re-reads the variables itself.
+				LispCons checkedCall = StreamOperandChecks.checkedCall(cons);
+				if (checkedCall != cons) {
+					return checkedCall;
+				}
 				if (LispNames.WRITE_TO_STRING.equals(name) && cons.isProperList() && cons.toList().size() > 2) {
 					// A keyword tail binds the printer variables around the one-argument
 					// primitive, the same lowering both compilers take.
@@ -14064,6 +14145,8 @@ public final class LispEvaluator {
 		return signalPackageError(operator + ": no such package: " + designator, designator);
 	}
 
+	private static final String NO_SUCH_PACKAGE = "No such package: ";
+
 	private LispVal signalPackageError(String message, String designator) {
 		return eval(packageErrorForm(message, designator, false), this.globalEnv);
 	}
@@ -15603,6 +15686,7 @@ public final class LispEvaluator {
 					if (dynamicNames == null) {
 						dynamicNames = new java.util.ArrayList<>(2);
 					}
+					checkStandardStreamValue(names[i], vals[i]);
 					this.dynamicBindings.push(names[i], vals[i]);
 					dynamicNames.add(names[i]);
 					if (!proclaimed) {
@@ -15807,6 +15891,7 @@ public final class LispEvaluator {
 		// binding, and where a special declaration or nothing lexical names it, in an
 		// active dynamic binding, else the global.
 		if (this.specialVars.contains(name)) {
+			checkStandardStreamValue(name, value);
 			if (this.dynamicBindings.isBound(name)) {
 				this.dynamicBindings.setCurrent(name, value);
 			}

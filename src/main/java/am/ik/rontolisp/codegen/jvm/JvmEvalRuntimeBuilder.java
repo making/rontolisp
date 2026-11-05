@@ -13,7 +13,9 @@ import java.util.Set;
 
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ClConstants;
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.compiler.EvalReferences;
 import am.ik.jvm.ConstantPool;
 import org.jspecify.annotations.Nullable;
 
@@ -105,10 +107,6 @@ final class JvmEvalRuntimeBuilder {
 
 		private final Map<String, JvmLispCompiler.FunctionInfo> functions;
 
-		private final boolean complexValues;
-
-		private final @Nullable FieldRefEntry hasComplexField;
-
 		private final @Nullable MethodRefEntry arityChkRef;
 
 		private final @Nullable MethodRefEntry globalAccessRef;
@@ -149,8 +147,6 @@ final class JvmEvalRuntimeBuilder {
 			this.invoke = Objects.requireNonNull(b.invoke);
 			this.invokeSpread = Objects.requireNonNull(b.invokeSpread);
 			this.functions = Objects.requireNonNull(b.functions);
-			this.complexValues = b.complexValues;
-			this.hasComplexField = b.hasComplexField;
 			this.arityChkRef = b.arityChkRef;
 			this.globalAccessRef = b.globalAccessRef;
 			this.arityOperators = Objects.requireNonNull(b.arityOperators);
@@ -273,14 +269,6 @@ final class JvmEvalRuntimeBuilder {
 			return this.functions;
 		}
 
-		boolean complexValues() {
-			return this.complexValues;
-		}
-
-		@Nullable FieldRefEntry hasComplexField() {
-			return this.hasComplexField;
-		}
-
 		/**
 		 * {@code _arityChk(argList, shape)}: the count guard the spread cases carry,
 		 * which the runtime's own count checks throw through too. Present wherever
@@ -385,16 +373,12 @@ final class JvmEvalRuntimeBuilder {
 
 			private @Nullable Map<String, JvmLispCompiler.FunctionInfo> functions;
 
-			private boolean complexValues;
-
 			private @Nullable ClassEntry thisClass;
 
 			Builder thisClass(ClassEntry thisClass) {
 				this.thisClass = thisClass;
 				return this;
 			}
-
-			private @Nullable FieldRefEntry hasComplexField;
 
 			private @Nullable MethodRefEntry arityChkRef;
 
@@ -546,16 +530,6 @@ final class JvmEvalRuntimeBuilder {
 				return this;
 			}
 
-			Builder complexValues(boolean complexValues) {
-				this.complexValues = complexValues;
-				return this;
-			}
-
-			Builder hasComplexField(@Nullable FieldRefEntry hasComplexField) {
-				this.hasComplexField = hasComplexField;
-				return this;
-			}
-
 			Builder arityChkRef(@Nullable MethodRefEntry arityChkRef) {
 				this.arityChkRef = arityChkRef;
 				return this;
@@ -663,6 +637,26 @@ final class JvmEvalRuntimeBuilder {
 		a.invokestatic(access);
 		a.pop();
 		a.labelBinding(skip);
+	}
+
+	/**
+	 * Emits {@code throw new RuntimeException("The variable NAME is unbound")} for the
+	 * symbol in {@code slot}: the text the landing pad recovers the class and the name
+	 * from, as {@code symbol-value}'s miss does ({@code JvmSymbolApiCompiler}).
+	 */
+	private void emitUnboundThrow(MethodCode a, int slot) {
+		ClassEntry runtimeException = this.k.cp().classEntry("java/lang/RuntimeException");
+		MethodRefEntry concat = this.k.cp()
+			.methodRef(this.k.stringClass(), "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		a.new_(runtimeException);
+		a.dup();
+		ldcStr(a, ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX);
+		aloadStr(a, slot);
+		a.invokevirtual(concat);
+		ldcStr(a, ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX);
+		a.invokevirtual(concat);
+		a.invokespecial(this.k.cp().methodRef(runtimeException, "<init>", "(Ljava/lang/String;)V"));
+		a.athrow();
 	}
 
 	private void ldcStr(MethodCode a, String value) {
@@ -784,19 +778,22 @@ final class JvmEvalRuntimeBuilder {
 	 * Emits code that resolves the symbol in {@code nameSlot} against the function
 	 * namespace and returns the function value: a runtime {@code defun} binding in
 	 * {@code _fenv} first, then the compiled function registry (wrapped as a closure
-	 * {@code Object[]{Integer funcId}}), and nil when undefined. Every path ends in
-	 * {@code areturn}; clobbers {@code tmpSlot}.
+	 * {@code Object[]{Integer funcId}}); {@code _apply}'s symbol probe reports an
+	 * undefined name, or a retired one, under its original spelling. Every path ends in
+	 * {@code areturn} or a throw; clobbers {@code tmpSlot} and {@code spellingSlot}.
 	 */
-	private void emitFunctionLookupReturn(MethodCode a, int nameSlot, int tmpSlot) {
+	private void emitFunctionLookupReturn(MethodCode a, int nameSlot, int tmpSlot, int spellingSlot) {
 		MethodRefEntry toLowerCase = stringCaseRef("toLowerCase");
 		MethodRefEntry toUpperCase = stringCaseRef("toUpperCase");
+		MethodCode.Label realMiss = a.newLabel();
+		a.aload(nameSlot);
+		a.astore(spellingSlot);
 		// Probe the exact spelling first.
-		emitFunctionProbeReturn(a, nameSlot, tmpSlot);
+		emitFunctionProbeReturn(a, nameSlot, tmpSlot, realMiss);
 		// One case-flip retry: compiled references read upcased (the reader premise)
 		// while runtime-read definitions are case-preserved -- and vice versa for a
 		// runtime-read reference to a compiled definition. Flip to the lowercase
 		// spelling (or, when already lowercase, the uppercase one) and probe again.
-		MethodCode.Label realMiss = a.newLabel();
 		MethodCode.Label flipped = a.newLabel();
 		a.aload(nameSlot);
 		a.checkcast(this.k.stringClass());
@@ -817,15 +814,18 @@ final class JvmEvalRuntimeBuilder {
 		a.labelBinding(flipped);
 		a.aload(tmpSlot);
 		a.astore(nameSlot);
-		emitFunctionProbeReturn(a, nameSlot, tmpSlot);
+		emitFunctionProbeReturn(a, nameSlot, tmpSlot, realMiss);
 		a.labelBinding(realMiss);
+		a.aload(spellingSlot);
 		a.aconst_null();
+		a.invokestatic(this.k.applyRef());
 		a.areturn();
 	}
 
 	// One probe pass of the function namespace: a runtime defun binding in _fenv, then
-	// the compiled function registry; every hit returns, a miss falls through.
-	private void emitFunctionProbeReturn(MethodCode a, int nameSlot, int tmpSlot) {
+	// the compiled function registry; every hit returns, a miss falls through, and
+	// fmakunbound's tombstone (a nil cell) goes to retired.
+	private void emitFunctionProbeReturn(MethodCode a, int nameSlot, int tmpSlot, MethodCode.Label retired) {
 		MethodCode.Label reg = a.newLabel();
 		a.aload(nameSlot);
 		a.getstatic(this.k.fenvField());
@@ -837,6 +837,10 @@ final class JvmEvalRuntimeBuilder {
 		a.checkcast(this.k.objectArrayClass());
 		a.loadConstant(1);
 		a.aaload();
+		a.astore(tmpSlot);
+		a.aload(tmpSlot);
+		a.ifnull(retired);
+		a.aload(tmpSlot);
 		a.areturn();
 		a.labelBinding(reg);
 		MethodCode.Label miss = a.newLabel();
@@ -1785,67 +1789,13 @@ final class JvmEvalRuntimeBuilder {
 				BODY = 10, BINDCUR = 11, ELEM = 12;
 		final int IDX = 15, LEN = 16, CH = 17, ARITY = 18, VALID = 19;
 
-		// --- self-evaluating: nil, Long, Double ---
+		// --- nil is self-evaluating ---
 		MethodCode.Label notNil = a.newLabel();
 		a.aload(VAL);
 		a.ifnonnull(notNil);
 		a.aload(VAL);
 		a.areturn();
 		a.labelBinding(notNil);
-		MethodCode.Label notLong = a.newLabel();
-		a.aload(VAL);
-		a.instanceOf(this.k.longClass());
-		a.ifeq(notLong);
-		a.aload(VAL);
-		a.areturn();
-		a.labelBinding(notLong);
-		MethodCode.Label notDouble = a.newLabel();
-		a.aload(VAL);
-		a.instanceOf(this.k.doubleClass());
-		a.ifeq(notDouble);
-		a.aload(VAL);
-		a.areturn();
-		a.labelBinding(notDouble);
-		// a BigInteger (an exact integer past the long range) is self-evaluating too
-		ClassEntry bigIntegerClass = this.k.cp().classEntry("java/math/BigInteger");
-		MethodCode.Label notBigInteger = a.newLabel();
-		a.aload(VAL);
-		a.instanceOf(bigIntegerClass);
-		a.ifeq(notBigInteger);
-		a.aload(VAL);
-		a.areturn();
-		a.labelBinding(notBigInteger);
-
-		// --- ratios (BigInteger[]) are self-evaluating; checked before the generic
-		// Object[] form handling because a ratio is also an Object[] ---
-		ClassEntry ratioArrayClass = this.k.cp().classEntry("[Ljava/math/BigInteger;");
-		MethodCode.Label notRatio = a.newLabel();
-		a.aload(VAL);
-		a.instanceOf(ratioArrayClass);
-		a.ifeq(notRatio);
-		a.aload(VAL);
-		a.areturn();
-		a.labelBinding(notRatio);
-
-		// --- complex values (RontoComplex) are self-evaluating, like ratios --
-		// emitted only for a complex-capable program, so the travelling class
-		// stays out of every other constant pool. The presence probe first: a
-		// lone class run without the file beside it skips the test without
-		// resolving the holder class -- exact, since no holder can exist then.
-		if (this.k.complexValues()) {
-			ClassEntry complexClass = this.k.cp().classEntry("am/ik/rontolisp/runtime/RontoComplex");
-			MethodCode.Label noHolder = a.newLabel();
-			a.getstatic(Objects.requireNonNull(this.k.hasComplexField()));
-			a.ifeq(noHolder);
-			MethodCode.Label notComplex = a.newLabel();
-			a.aload(VAL);
-			a.instanceOf(complexClass);
-			a.ifeq(notComplex);
-			a.aload(VAL);
-			a.areturn();
-			a.labelBinding(notComplex);
-			a.labelBinding(noHolder);
-		}
 
 		// --- strings: string literal (self-eval) or symbol (variable reference) ---
 		MethodCode.Label notStr = a.newLabel();
@@ -1877,10 +1827,10 @@ final class JvmEvalRuntimeBuilder {
 		a.labelBinding(global);
 		// global lookup; Lisp-2: a bare symbol resolves the variable namespace only,
 		// never the function registry. A special answers its variable first, the
-		// mirror after (OP holds the miss sentinel). An unbound symbol retries the
-		// case-flipped spelling once (compiled references read upcased while
-		// runtime-read definitions are case-preserved, and vice versa), then
-		// evaluates to ITSELF under its original spelling.
+		// mirror after (OP holds the miss sentinel). t and a keyword are their own value.
+		// Any other unbound symbol retries the case-flipped spelling once (compiled
+		// references read upcased while runtime-read definitions are case-preserved, and
+		// vice versa), then signals the unbound-variable under its original spelling.
 		MethodRefEntry access = this.k.globalAccessRef();
 		if (access != null) {
 			a.loadConstant(0);
@@ -1890,7 +1840,7 @@ final class JvmEvalRuntimeBuilder {
 		}
 		MethodRefEntry varToLowerCase = stringCaseRef("toLowerCase");
 		MethodRefEntry varToUpperCase = stringCaseRef("toUpperCase");
-		MethodCode.Label self = a.newLabel();
+		MethodCode.Label unbound = a.newLabel();
 		MethodCode.Label varFlipped = a.newLabel();
 		MethodCode.Label retry = a.newLabel();
 		a.aload(VAL);
@@ -1905,6 +1855,21 @@ final class JvmEvalRuntimeBuilder {
 		a.aaload();
 		a.areturn();
 		a.labelBinding(retry);
+		MethodCode.Label selfBound = a.newLabel();
+		MethodCode.Label notSelfBound = a.newLabel();
+		ldcStr(a, "T");
+		a.aload(VAL);
+		a.invokevirtual(this.k.objectEquals());
+		a.ifne(selfBound);
+		aloadStr(a, VAL);
+		a.loadConstant(0);
+		a.invokevirtual(this.k.stringCharAt());
+		a.loadConstant(':');
+		a.if_icmpne(notSelfBound);
+		a.labelBinding(selfBound);
+		a.aload(VAL);
+		a.areturn();
+		a.labelBinding(notSelfBound);
 		a.aload(VAL);
 		a.checkcast(this.k.stringClass());
 		a.invokevirtual(varToLowerCase);
@@ -1920,7 +1885,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(TMP);
 		a.aload(VAL);
 		a.invokevirtual(this.k.objectEquals());
-		a.ifne(self);
+		a.ifne(unbound);
 		a.labelBinding(varFlipped);
 		if (access != null) {
 			specialValueReturn(a, access, TMP, OP, REST);
@@ -1930,32 +1895,39 @@ final class JvmEvalRuntimeBuilder {
 		a.invokestatic(this.k.envLookupRef());
 		a.astore(TMP);
 		a.aload(TMP);
-		a.ifnull(self);
+		a.ifnull(unbound);
 		a.aload(TMP);
 		a.checkcast(this.k.objectArrayClass());
 		a.loadConstant(1);
 		a.aaload();
 		a.areturn();
-		a.labelBinding(self);
-		a.aload(VAL);
-		a.areturn();
+		a.labelBinding(unbound);
+		emitUnboundThrow(a, VAL);
 		a.labelBinding(notStr);
 
-		// --- Object[]: function value (self-eval) or cons (special form / application)
-		// ---
-		MethodCode.Label isArr = a.newLabel();
+		// --- a cons: special form or application. Anything else is its own value: a
+		// number, a character, an array, a hash table, a stream, a function, an instance
+		// (the test is consp's, JvmOperandTypeRuntime.ConsShape) ---
+		ClassEntry ratioArrayClass = this.k.cp().classEntry("[Ljava/math/BigInteger;");
+		ClassEntry instanceHeadClass = this.k.cp().classEntry("[Ljava/lang/String;");
+		MethodCode.Label selfEvaluating = a.newLabel();
+		MethodCode.Label cons = a.newLabel();
 		a.aload(VAL);
 		a.instanceOf(this.k.objectArrayClass());
-		a.ifne(isArr);
-		a.aconst_null();
-		a.areturn();
-		a.labelBinding(isArr);
-		MethodCode.Label cons = a.newLabel();
+		a.ifeq(selfEvaluating);
+		a.aload(VAL);
+		a.instanceOf(ratioArrayClass);
+		a.ifne(selfEvaluating);
 		arrLen(a, VAL);
-		a.ifeq(cons);
+		a.loadConstant(2);
+		a.if_icmpne(selfEvaluating);
 		car(a, VAL);
 		a.instanceOf(this.k.integerClass());
+		a.ifne(selfEvaluating);
+		car(a, VAL);
+		a.instanceOf(instanceHeadClass);
 		a.ifeq(cons);
+		a.labelBinding(selfEvaluating);
 		a.aload(VAL);
 		a.areturn();
 		a.labelBinding(cons);
@@ -1991,6 +1963,13 @@ final class JvmEvalRuntimeBuilder {
 		car(a, REST);
 		a.areturn();
 		a.labelBinding(n);
+
+		for (String directive : EvalReferences.UNPROCESSED_DIRECTIVES) {
+			n = special(a, OP, directive);
+			a.aconst_null();
+			a.areturn();
+			a.labelBinding(n);
+		}
 
 		// ---- if ----
 		n = special(a, OP, LispNames.IF);
@@ -2131,7 +2110,7 @@ final class JvmEvalRuntimeBuilder {
 		a.invokestatic(this.k.evalRef());
 		a.areturn();
 		a.labelBinding(fnSym);
-		emitFunctionLookupReturn(a, ACC, TMP);
+		emitFunctionLookupReturn(a, ACC, TMP, BINDCUR);
 		a.labelBinding(n);
 
 		// ---- symbol-function: like function but the argument is evaluated ----
@@ -2145,7 +2124,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aconst_null();
 		a.areturn();
 		a.labelBinding(sfSym);
-		emitFunctionLookupReturn(a, ACC, TMP);
+		emitFunctionLookupReturn(a, ACC, TMP, BINDCUR);
 		a.labelBinding(n);
 
 		// ---- cond ----
@@ -2649,8 +2628,7 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.labelBinding(notFenv);
 		// A name only (setf (symbol-function 'n) ...) binds, before the setf ran: its
-		// forwarder defun is in no registry, so the probes below would miss into the
-		// unknown operator's nil.
+		// forwarder defun is in no registry, and it is undefined until then.
 		for (String forwarded : new java.util.TreeSet<>(this.k.fenvForwarders())) {
 			MethodCode.Label other = special(a, OP, forwarded);
 			a.goto_(undefinedOperator);
@@ -2716,13 +2694,11 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(OP);
 		a.goto_(genericApply);
 		a.labelBinding(noRetry);
-		// (d) unknown operator
-		a.aconst_null();
-		a.areturn();
-		// An operator the function namespace knows to be undefined: _apply's symbol
-		// probe reports it by name, before any argument is evaluated.
+		// (d) An operator no namespace answers, or one the function namespace knows to be
+		// undefined: _apply's symbol probe reports it by name, before any argument is
+		// evaluated. The form holds the spelling the retry above may have flipped.
 		a.labelBinding(undefinedOperator);
-		a.aload(OP);
+		car(a, VAL);
 		a.aconst_null();
 		a.invokestatic(this.k.applyRef());
 		a.areturn();

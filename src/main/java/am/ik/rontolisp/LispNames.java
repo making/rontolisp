@@ -1986,6 +1986,20 @@ public final class LispNames {
 	public static final String CHECK_SEQUENCE_RUNTIME = "%CHECK-SEQUENCE-RUNTIME";
 
 	/**
+	 * {@code (%check-stream x 'op designator-p)}: {@code x} when it is a stream,
+	 * {@code t} or, under a true {@code designator-p}, nil, else {@code op}'s
+	 * {@code STREAM} type-error ({@code compiler.StreamOperandChecks}).
+	 */
+	public static final String CHECK_STREAM_INTERNAL = "%CHECK-STREAM";
+
+	/**
+	 * The shared defun a compiled {@code %check-stream} site calls:
+	 * {@code (%check-stream-runtime x token designator-p)}, the token as
+	 * {@link #CHECK_SEQUENCE_RUNTIME}'s.
+	 */
+	public static final String CHECK_STREAM_RUNTIME = "%CHECK-STREAM-RUNTIME";
+
+	/**
 	 * The {@code row-major-aref} built-in function (flat row-major element access,
 	 * independent of rank); also a {@code setf} place.
 	 */

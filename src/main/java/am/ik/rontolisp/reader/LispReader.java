@@ -958,13 +958,17 @@ public final class LispReader {
 	}
 
 	/**
-	 * The member name of a {@code cl:}-qualified {@code nil}/{@code t}, or the name
+	 * The member name of a {@code cl:}-qualified {@code nil}/{@code t}, the keyword a
+	 * {@code keyword:}-qualified name is (no package table holds keywords), or the name
 	 * unchanged when it is neither.
 	 * @param name the symbol name as read (upcased, package prefix intact)
 	 * @return the unqualified name, or {@code name}
 	 */
 	private static String unqualifySelfEval(String name) {
 		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
+		if (qualified != null && "KEYWORD".equals(qualified.pkg())) {
+			return ":" + qualified.member();
+		}
 		if (qualified != null && LispNames.CL_PKG.equals(PackageRegistry.canonicalBuiltinName(qualified.pkg()))
 				&& ("NIL".equals(qualified.member()) || "T".equals(qualified.member()))) {
 			return qualified.member();
