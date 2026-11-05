@@ -19913,7 +19913,7 @@ cases:
       ;; on all four backends: t, an explicit nil, and *standard-output* (which
       ;; holds t) all name it. This is the output half of a byte-oriented filter;
       ;; the input half cannot be a case here, because the driver hands the child
-      ;; a stdin pipe nobody writes to.
+      ;; an empty stdin.
       (write-byte 62 t)
       (write-byte 62 nil)
       (write-sequence #(98 105 110 97 114 121) *standard-output*)
