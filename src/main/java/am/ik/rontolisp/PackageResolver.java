@@ -2555,39 +2555,64 @@ public final class PackageResolver {
 	 * Marks a {@code defstruct} whose derived names belong to a package other than its
 	 * name's. CL interns the derived constructor, predicate, copier and accessor names in
 	 * the package current at the form, while the expansion runs after resolution and only
-	 * sees the resolved name: an unqualified name inherited or imported from another
-	 * package ({@code optima}'s {@code (defstruct and-pattern)}, the name exported by
+	 * sees the resolved name: a name inherited or imported from another package
+	 * ({@code optima}'s {@code (defstruct and-pattern)}, the name exported by
 	 * {@code optima.core}) put {@code and-pattern-p} there, where no call site of the
-	 * defining package looked. The header gains {@code (:%intern-package "CURRENT")}
-	 * ({@link LispNames#DEFSTRUCT_INTERN_PACKAGE}). A name written package-qualified
-	 * keeps its own package (the bundled libraries spell
-	 * {@code (defstruct (bordeaux-threads:lock ...))} from {@code cl-user} and call
-	 * {@code bordeaux-threads::lock-...}).
+	 * defining package looked, and so did a name written qualified. The header gains
+	 * {@code (:%intern-package "CURRENT")} ({@link LispNames#DEFSTRUCT_INTERN_PACKAGE})
+	 * unless it already names a package, as the bundled libraries' do: they are written
+	 * in {@code cl-user} and call {@code bordeaux-threads::lock-...}.
 	 */
 	private LispVal withDefstructInternPackage(LispCons original, LispVal resolved) {
 		if (!(original.car() instanceof LispSymbol op) || !LispNames.DEFSTRUCT.equals(operatorMember(op))
-				|| !(original.cdr() instanceof LispCons nameCell) || !(resolved instanceof LispCons out)
-				|| !(out.cdr() instanceof LispCons outNameCell)) {
+				|| !(resolved instanceof LispCons out)) {
 			return resolved;
 		}
-		LispVal written = nameCell.car() instanceof LispCons header ? header.car() : nameCell.car();
-		LispVal name = outNameCell.car() instanceof LispCons header ? header.car() : outNameCell.car();
-		if (!(written instanceof LispSymbol writtenSym) || writtenSym.isKeyword()
-				|| PackageRegistry.splitQualified(writtenSym.name()) != null || !(name instanceof LispSymbol nameSym)) {
+		return defstructInternedIn(out, current());
+	}
+
+	/**
+	 * A resolved {@code defstruct} whose derived names belong in {@code pkg}: the form
+	 * itself when they land there anyway, or when its header already names a package.
+	 * Resolution marks the forms it sees; an interpreted macro's expansion is not
+	 * resolved again, so the evaluator asks for its own, as the call site's package
+	 * decides.
+	 * @param resolved the resolved form
+	 * @param pkg the canonical name of the package current at the form
+	 * @return the form to expand
+	 */
+	public LispCons defstructInternedIn(LispCons resolved, String pkg) {
+		if (!(resolved.cdr() instanceof LispCons nameCell)) {
+			return resolved;
+		}
+		LispVal nameOrHeader = nameCell.car();
+		LispVal name = nameOrHeader instanceof LispCons given ? given.car() : nameOrHeader;
+		if (!(name instanceof LispSymbol nameSym) || nameSym.isKeyword() || namesInternPackage(nameOrHeader)) {
 			return resolved;
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(nameSym.name());
-		String home = qn == null ? LispNames.CL_USER_PKG : qn.pkg();
-		if (home.equals(current())) {
+		if ((qn == null ? LispNames.CL_USER_PKG : qn.pkg()).equals(pkg)) {
 			return resolved;
 		}
 		LispVal option = new LispCons(new LispSymbol(LispNames.DEFSTRUCT_INTERN_PACKAGE),
-				new LispCons(new LispString(current()), LispNil.INSTANCE));
-		LispVal header = outNameCell.car() instanceof LispCons given
+				new LispCons(new LispString(pkg), LispNil.INSTANCE));
+		LispVal header = nameOrHeader instanceof LispCons given
 				? LispCons.rebuiltList(given, appended(given.toList(), option))
 				: new LispCons(nameSym, new LispCons(option, LispNil.INSTANCE));
-		return SourceProvenance.inherit(out,
-				LispCons.rebuilt(out, out.car(), LispCons.rebuilt(outNameCell, header, outNameCell.cdr())));
+		return SourceProvenance.inherit(resolved,
+				LispCons.rebuilt(resolved, resolved.car(), LispCons.rebuilt(nameCell, header, nameCell.cdr())));
+	}
+
+	private static boolean namesInternPackage(LispVal nameOrHeader) {
+		if (nameOrHeader instanceof LispCons header && header.isProperList()) {
+			for (LispVal option : header.toList()) {
+				if (option instanceof LispCons cons && cons.car() instanceof LispSymbol head
+						&& LispNames.DEFSTRUCT_INTERN_PACKAGE.equals(head.name())) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	private static List<LispVal> appended(List<LispVal> list, LispVal element) {

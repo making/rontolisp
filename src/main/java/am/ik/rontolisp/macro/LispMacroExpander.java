@@ -7727,18 +7727,6 @@ public final class LispMacroExpander {
 
 	// Validates a keyword/value argument tail against the operator's allowed keyword
 	// set; anything else is rejected loudly rather than silently ignored.
-	// The affix in the same case as the base name: a lowercase-authored internal source
-	// keeps it lowercase, every other base (the upcase reader's user symbols, the empty
-	// name among them) gets it upcased.
-	private static String affixFor(String affix, String base) {
-		for (int i = 0; i < base.length(); i++) {
-			if (Character.isLowerCase(base.charAt(i))) {
-				return affix;
-			}
-		}
-		return affix.toUpperCase(java.util.Locale.ROOT);
-	}
-
 	// The (%program-error "...") form a call with a malformed keyword tail lowers to, or
 	// null when the tail is well-formed. The expander RETURNS the signal instead of
 	// throwing: CLHS 3.5.1.4-6 make a bad keyword, an odd tail and a wrong count
@@ -19648,10 +19636,13 @@ public final class LispMacroExpander {
 	 * </pre>
 	 *
 	 * The form is expected in its canonical (package-resolved) spelling; a qualified
-	 * struct name derives internal (double-colon) generated names, e.g.
-	 * {@code (defstruct foo::point x)} defines {@code foo::make-point},
-	 * {@code foo::point-p}, {@code foo::copy-point} and {@code foo::point-x}, and the
-	 * constructor keywords come from the unqualified slot names ({@code :x}).
+	 * struct name with no {@code :%intern-package} derives internal (double-colon)
+	 * generated names, e.g. {@code (defstruct foo::point x)} defines
+	 * {@code foo::make-point}, {@code foo::point-p}, {@code foo::copy-point} and
+	 * {@code foo::point-x}, and the constructor keywords come from the unqualified slot
+	 * names ({@code :x}). The affixes are the literal {@code MAKE-}, {@code -P} and
+	 * {@code COPY-} whatever the name's case, as the name and a slot's are taken as they
+	 * are: {@code (defstruct |low| |x|)} defines {@code MAKE-low} and {@code low-x}.
 	 *
 	 * <p>
 	 * The struct type is also registered in {@code closRegistry} so its name is usable as
@@ -19910,12 +19901,6 @@ public final class LispMacroExpander {
 				: LispNames.CL_USER_PKG.equals(home) ? member : PackageRegistry.qualifyInternal(home, member);
 		String base = qn == null ? structName : qn.member();
 		String concName = concNameGiven ? (concNameOverride == null ? "" : concNameOverride) : base + "-";
-		// Synthesized affixes follow the base name's case: an upcased-reader struct PT
-		// gets MAKE-PT/PT-P/COPY-PT (matching the call sites the reader upcases), while
-		// a lowercase-authored internal struct keeps make-/-p/copy-.
-		String makeAffix = affixFor("make-", base);
-		String pAffix = affixFor("-p", base);
-		String copyAffix = affixFor("copy-", base);
 		String structTag = LispLayout.STRUCT_TAG_PREFIX + structName;
 		List<LispSymbol> slotSyms = new java.util.ArrayList<>();
 		List<String> slotBases = new java.util.ArrayList<>();
@@ -20042,7 +20027,7 @@ public final class LispMacroExpander {
 		}
 		if (!suppressConstructor) {
 			List<StructConstructor> declared = constructors.isEmpty()
-					? List.of(new StructConstructor(inPackage.apply(makeAffix + base), null)) : constructors;
+					? List.of(new StructConstructor(inPackage.apply("MAKE-" + base), null)) : constructors;
 			for (StructConstructor ctor : declared) {
 				if (ctor.boaLambdaList() != null) {
 					// (defun name (<boa lambda list>) (%obj-new '%struct-<name>
@@ -20080,7 +20065,7 @@ public final class LispMacroExpander {
 		LispSymbol obj = new LispSymbol(STRUCT_VAR);
 		LispVal params = listToCons(List.<LispVal>of(obj));
 		if (!suppressPredicate && !typedVector) {
-			String predicateName = customPredicate != null ? customPredicate : inPackage.apply(base + pAffix);
+			String predicateName = customPredicate != null ? customPredicate : inPackage.apply(base + "-P");
 			forms.add(structPredicateDefun(structName, predicateName, closRegistry));
 			if (closRegistry != null) {
 				closRegistry.registerStructPredicate(structName, predicateName);
@@ -20090,7 +20075,7 @@ public final class LispMacroExpander {
 		// ...)): a shallow copy, like copy-structure -- the slot values are shared. A
 		// :type vector struct copies with copy-seq (it IS a vector).
 		if (!suppressCopier) {
-			String copierName = customCopier != null ? customCopier : inPackage.apply(copyAffix + base);
+			String copierName = customCopier != null ? customCopier : inPackage.apply("COPY-" + base);
 			if (typedVector) {
 				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(copierName), params,
 						callOf(LispNames.COPY_SEQ, obj))));
@@ -20109,14 +20094,11 @@ public final class LispMacroExpander {
 			}
 		}
 		// (defun <conc-name><slot> (__struct) (%obj-ref __struct <index>))
-		// The slot part case-matches the struct base: a slot named after a CL symbol
-		// (md5's `block`) folds to lowercase while the upcase-read struct name stays
-		// upper, and the accessor must match its fully-upcased call sites
-		// (MD5-STATE-BLOCK). A :type vector struct reads with aref and writes through a
-		// generated %setf-<accessor> writer defun (the setf-function protocol), since
-		// there is no instance object to %obj-set.
+		// A :type vector struct reads with aref and writes through a generated
+		// %setf-<accessor> writer defun (the setf-function protocol), since there is no
+		// instance object to %obj-set.
 		for (int i = 0; i < slotSyms.size(); i++) {
-			String accessor = inPackage.apply(concName + affixFor(slotBases.get(i), base));
+			String accessor = inPackage.apply(concName + slotBases.get(i));
 			boolean readOnly = readOnlySlots.contains(slotBases.get(i));
 			if (typedVector) {
 				LispVal arefRead = typedList
@@ -20597,18 +20579,18 @@ public final class LispMacroExpander {
 		String concName = concNameGiven ? (concNameOverride == null ? "" : concNameOverride) : base + "-";
 		List<String> defined = new java.util.ArrayList<>(prunerSpellings(structName));
 		if (defaultConstructor) {
-			defined.addAll(derivedSpellings(structName, internPackage, affixFor("make-", base) + base));
+			defined.addAll(derivedSpellings(structName, internPackage, "MAKE-" + base));
 		}
 		for (String ctor : constructorNames) {
 			defined.addAll(prunerSpellings(ctor));
 		}
 		if (!suppressPredicate) {
 			defined.addAll(customPredicate != null ? prunerSpellings(customPredicate)
-					: derivedSpellings(structName, internPackage, base + affixFor("-p", base)));
+					: derivedSpellings(structName, internPackage, base + "-P"));
 		}
 		if (!suppressCopier) {
 			defined.addAll(customCopier != null ? prunerSpellings(customCopier)
-					: derivedSpellings(structName, internPackage, affixFor("copy-", base) + base));
+					: derivedSpellings(structName, internPackage, "COPY-" + base));
 		}
 		List<String> ownSlotBases = new java.util.ArrayList<>();
 		List<LispVal> slotSpecs = parts.subList(2, parts.size());
@@ -20625,13 +20607,13 @@ public final class LispMacroExpander {
 		}
 		List<String> instantiators = new java.util.ArrayList<>(prunerSpellings(structName));
 		if (defaultConstructor) {
-			instantiators.addAll(derivedSpellings(structName, internPackage, affixFor("make-", base) + base));
+			instantiators.addAll(derivedSpellings(structName, internPackage, "MAKE-" + base));
 		}
 		for (String ctor : constructorNames) {
 			instantiators.addAll(prunerSpellings(ctor));
 		}
 		return new StructDefinedNames(structName, includeParent, List.copyOf(ownSlotBases), List.copyOf(defined),
-				List.copyOf(instantiators), concName, base, internPackage);
+				List.copyOf(instantiators), concName, internPackage);
 	}
 
 	/**
@@ -20645,11 +20627,10 @@ public final class LispMacroExpander {
 	 * @param instantiatorNames the names whose reference proves an instance can exist:
 	 * the struct name (a {@code #S} literal, {@code make-instance}) and the constructors
 	 * @param concName the accessor prefix (member spelling)
-	 * @param caseBase the base name whose case the generated affixes follow
 	 * @param internPackage the {@code :%intern-package} of the derived names, or null
 	 */
 	public record StructDefinedNames(String structName, @Nullable String includeParent, List<String> ownSlotBases,
-			List<String> definedNames, List<String> instantiatorNames, String concName, String caseBase,
+			List<String> definedNames, List<String> instantiatorNames, String concName,
 			@Nullable String internPackage) {
 
 		/**
@@ -20659,8 +20640,7 @@ public final class LispMacroExpander {
 		 * @return the accessor name in every spelling a reference can take
 		 */
 		public List<String> accessorSpellings(String slotBase) {
-			return derivedSpellings(this.structName, this.internPackage,
-					this.concName + affixFor(slotBase, this.caseBase));
+			return derivedSpellings(this.structName, this.internPackage, this.concName + slotBase);
 		}
 	}
 
@@ -20771,8 +20751,8 @@ public final class LispMacroExpander {
 		String base = qn == null ? structName : qn.member();
 		String concName = concNameGiven ? (concNameOverride == null ? "" : concNameOverride) : base + "-";
 		if (!explicitConstructor && !suppressConstructor) {
-			constructors.add(new StructSlotFlow.CtorFlow(
-					derivedSpellings(structName, internPackage, affixFor("make-", base) + base), null));
+			constructors
+				.add(new StructSlotFlow.CtorFlow(derivedSpellings(structName, internPackage, "MAKE-" + base), null));
 		}
 		List<StructSlotFlow.SlotFlow> ownSlots = new java.util.ArrayList<>();
 		List<LispVal> slotSpecs = parts.subList(2, parts.size());
@@ -20798,7 +20778,7 @@ public final class LispMacroExpander {
 		}
 		return new StructSlotFlow(structName, prunerSpellings(structName), includeParent,
 				java.util.Map.copyOf(includeOverrides), List.copyOf(ownSlots), List.copyOf(constructors), concName,
-				base, internPackage, opaque);
+				internPackage, opaque);
 	}
 
 	/**
@@ -20813,14 +20793,13 @@ public final class LispMacroExpander {
 	 * @param constructors every constructor, each with its spellings and its BOA lambda
 	 * list (null = the keyword constructor)
 	 * @param concName the accessor prefix (member spelling)
-	 * @param caseBase the base name whose case the generated affixes follow
 	 * @param internPackage the {@code :%intern-package} of the derived names, or null
 	 * @param opaque true when an option this summary cannot attribute is present -- the
 	 * consumer must widen every slot of this struct to unknown
 	 */
 	public record StructSlotFlow(String structName, List<String> structSpellings, @Nullable String includeParent,
 			java.util.Map<String, LispVal> includeOverrides, List<SlotFlow> ownSlots, List<CtorFlow> constructors,
-			String concName, String caseBase, @Nullable String internPackage, boolean opaque) {
+			String concName, @Nullable String internPackage, boolean opaque) {
 
 		/**
 		 * One slot.
@@ -20847,8 +20826,7 @@ public final class LispMacroExpander {
 		 * @return the accessor name in every spelling a reference can take
 		 */
 		public List<String> accessorSpellings(String slotBase) {
-			return derivedSpellings(this.structName, this.internPackage,
-					this.concName + affixFor(slotBase, this.caseBase));
+			return derivedSpellings(this.structName, this.internPackage, this.concName + slotBase);
 		}
 	}
 
@@ -21447,10 +21425,9 @@ public final class LispMacroExpander {
 						new LispSymbol(parsed.spec().sharedCellVar()), parsed.cellInitform())));
 			}
 		}
-		forms.add(listToCons(
-				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(prefix + affixFor("%make-", base) + base),
-						lambdaList.isEmpty() ? LispNil.INSTANCE : listToCons(lambdaList),
-						tracked(className, objNew(classTag, slotVars), closRegistry))));
+		forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(prefix + "%MAKE-" + base),
+				lambdaList.isEmpty() ? LispNil.INSTANCE : listToCons(lambdaList),
+				tracked(className, objNew(classTag, slotVars), closRegistry))));
 		// Reader/accessor METHODS for the class's OWN slots (inherited slots keep the
 		// methods their defining class generated; positions are shared and the class
 		// test covers descendants). A reader is a defmethod, not a plain defun, because
@@ -22877,8 +22854,7 @@ public final class LispMacroExpander {
 							+ info.name() + ": generic functions and methods are not run-time objects here"))));
 			return makeProgn(refusal);
 		}
-		String ctor = qn == null ? affixFor("%make-", info.name()) + info.name()
-				: qn.pkg() + "::" + affixFor("%make-", qn.member()) + qn.member();
+		String ctor = qn == null ? "%MAKE-" + info.name() : qn.pkg() + "::" + "%MAKE-" + qn.member();
 		// CL has ONE initialize-instance generic; the registry keys generics by their
 		// package-qualified spelling, so match by plain name (a make-instance in any
 		// package must find cl-ppcre::initialize-instance). When only shared-initialize
@@ -51568,8 +51544,7 @@ public final class LispMacroExpander {
 			// The constructor name expandMakeInstance calls: a qualified class keeps its
 			// package and prefixes the member.
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
-			String ctor = qn == null ? affixFor("%make-", name) + name
-					: qn.pkg() + "::" + affixFor("%make-", qn.member()) + qn.member();
+			String ctor = qn == null ? "%MAKE-" + name : qn.pkg() + "::" + "%MAKE-" + qn.member();
 			defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(ctor), listToCons(lambdaList),
 					objNew(LispLayout.CLASS_TAG_PREFIX + name, slotVars))));
 		}
@@ -51687,8 +51662,7 @@ public final class LispMacroExpander {
 				refillClauses
 					.add(listToCons(List.of(mvCall(LispNames.MEMBER, name, quotedSymbolList(spellings)), refillForms)));
 			}
-			String ctor = qn == null ? affixFor("%make-", info.name()) + info.name()
-					: qn.pkg() + "::" + affixFor("%make-", qn.member()) + qn.member();
+			String ctor = qn == null ? "%MAKE-" + info.name() : qn.pkg() + "::" + "%MAKE-" + qn.member();
 			LispVal construct;
 			if (allocateGeneric) {
 				// With no initialization generic to fill it, the arm does.

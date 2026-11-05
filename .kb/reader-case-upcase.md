@@ -16,8 +16,9 @@ package members too (`rl:fetch` -> `RL:FETCH`).
   `_classify` (`toUpperCase(Locale.ROOT)`), and WASM upcasing token bytes in place before
   `_intern`. Non-ASCII code chars on WASM remain a limitation.
 - `symbol-name`/print report the stored upcased spelling; `LispSymbol.displayName` strips a
-  keyword/gensym package marker. Java-side name synthesis goes through
-  `LispMacroExpander.affixFor`, which case-matches its base. Output side: [[pretty-printer]].
+  keyword/gensym package marker. Java-side name synthesis spells upper-case affixes around the name as it
+  is; nothing internal is authored lowercase any more, so no case guess remains ([defstruct.md](defstruct.md),
+  "The case of the derived names"). Output side: [[pretty-printer]].
 
 ## Case-tolerance seams that REMAIN (keep them)
 - `LispEvaluator.instanceSlotCell` uses `equalsIgnoreCase` on slot base names: Java callers spell

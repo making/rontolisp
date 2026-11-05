@@ -464,7 +464,8 @@
 ;; so it answers #t (true for a string stream with data and at EOF, the cases the
 ;; tests pin; a terminal with nothing typed is the stated deviation).
 
-(defstruct (rontolisp::%scheme-eof (:constructor rontolisp::%make-scheme-eof)
+(defstruct (rontolisp::%scheme-eof (:%intern-package "RONTOLISP")
+                                   (:constructor rontolisp::%make-scheme-eof)
                                    (:copier nil)))
 
 (defvar rontolisp::%scheme-eof-instance (rontolisp::%make-scheme-eof))
@@ -2013,7 +2014,7 @@
 
 (defvar rontolisp::%scheme-parameter-token (list nil))
 
-(defstruct (rontolisp::%scheme-parameter
+(defstruct (rontolisp::%scheme-parameter (:%intern-package "RONTOLISP")
             (:constructor rontolisp::%scheme-new-parameter (value converter))
             (:copier nil))
   value
@@ -2093,7 +2094,8 @@
 ;; for a program calling one of its functions: every other program -- (read) on
 ;; standard input included -- carries none of it, not even the record's layout.
 #+rontolisp-scheme-ports
-(defstruct (rontolisp::%scheme-port (:constructor rontolisp::%scheme-new-port
+(defstruct (rontolisp::%scheme-port (:%intern-package "RONTOLISP")
+                                    (:constructor rontolisp::%scheme-new-port
                                                   (input binary string stream
                                                          open pushback
                                                          fold-case))
@@ -2806,7 +2808,7 @@
 ;; a thunk answering another promise. Promises that delay-force chains into each other
 ;; SHARE one box (R7RS 4.2.5's promise-update!), so forcing the chain is a loop that
 ;; runs in constant space and memoizes every link at once.
-(defstruct (rontolisp::%scheme-promise
+(defstruct (rontolisp::%scheme-promise (:%intern-package "RONTOLISP")
             (:constructor rontolisp::%scheme-new-promise (box)) (:copier nil))
   box)
 

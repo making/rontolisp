@@ -65,7 +65,8 @@
   (when (torch::%t-requires-grad tn) (write-string " :REQUIRES-GRAD T" stream))
   (write-string ">" stream))
 
-(defstruct (torch::%tensor (:constructor torch::%t-new
+(defstruct (torch::%tensor (:%intern-package "TORCH")
+                           (:constructor torch::%t-new
                             (store grad requires-grad parents backward-fn))
                            (:conc-name torch::%t-) (:predicate torch:tensorp)
                            (:copier nil) (:print-object torch::%t-print))
@@ -105,7 +106,8 @@
 ;; accessor used to be, so no operation but those two and torch:shape knows
 ;; that views exist.
 
-(defstruct (torch::%view (:constructor torch::%v-new (kind source arg))
+(defstruct (torch::%view (:%intern-package "TORCH")
+                         (:constructor torch::%v-new (kind source arg))
                          (:conc-name torch::%v-) (:predicate torch::%view-p)
                          (:copier nil))
   kind
@@ -1287,7 +1289,7 @@
   (write-string (%prin1-piece (torch::%m-kind m)) stream)
   (write-string ">" stream))
 
-(defstruct (torch::%module
+(defstruct (torch::%module (:%intern-package "TORCH")
             (:constructor torch::%m-new (kind fields forward-fn training))
             (:conc-name torch::%m-) (:predicate torch:modulep) (:copier nil)
             (:print-object torch::%m-print))
@@ -1761,7 +1763,7 @@
   (write-string (%prin1-piece (torch::%o-step-count o)) stream)
   (write-string ">" stream))
 
-(defstruct (torch::%optimizer
+(defstruct (torch::%optimizer (:%intern-package "TORCH")
             (:constructor torch::%o-new (kind params fields step-fn))
             (:conc-name torch::%o-) (:predicate torch:optimizerp) (:copier nil)
             (:print-object torch::%o-print))
