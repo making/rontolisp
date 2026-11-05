@@ -1195,7 +1195,7 @@ and wrote it.
 - **A run-time SYMBOL stays on the symbol arm**, the signal family's datum-only shape (`(warn (id
   'simple-error))` and a compiled `#'warn`/`eval` write a `simple-warning` naming it; SBCL
   `type-error`), and an undefined name on the typed path's degradation (`buildTypedConstruct`):
-  `.todo/i94`.
+  `.todo/i70`.
 
 ## A built-in error carries its CONDITION CLASS
 `(handler-case (car 1) (type-error ...))` matches, and so does rove's `(ok (signals (car 1)
