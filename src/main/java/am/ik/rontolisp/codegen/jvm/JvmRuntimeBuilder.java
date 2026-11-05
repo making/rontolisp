@@ -19,6 +19,7 @@ import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.DeclaredArityReport;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.RenderCycleGuard;
 import am.ik.rontolisp.compiler.OperandTypes;
 
@@ -2106,7 +2107,7 @@ final class JvmRuntimeBuilder {
 	 */
 	static MethodCode buildSymEscBody(ConstantPool cp, MethodRefEntry stringLength, MethodRefEntry stringCharAt,
 			MethodRefEntry stringIndexOf, MethodRefEntry stringSubstring, MethodRefEntry stringReplace,
-			MethodRefEntry stringConcat) {
+			MethodRefEntry stringConcat, MethodRefEntry stringEquals) {
 		MethodCode a = new MethodCode();
 		// locals: s = 0 (param), n = 1, prefixEnd = 2, i = 3, c = 4, idx = 5 (int),
 		// tmp = 6 (String, the substring/concat scratch), and the shape of the member:
@@ -2322,8 +2323,17 @@ final class JvmRuntimeBuilder {
 		// return (prefixEnd == 0 ? "" : s.substring(0, prefixEnd)) + "|"
 		// + member.replace("\\", "\\\\").replace("|", "\\|") + "|", where member is
 		// s.substring(prefixEnd) -- the empty member (prefixEnd == n) needs no
-		// replace calls, String.substring(n, n) already being "".
+		// replace calls, String.substring(n, n) already being "". cl-user's empty name
+		// carries its qualifier for its first character only and prints as bare.
 		a.labelBinding(doEscape);
+		a.ldc(cp.stringEntry(LispSymbol.CL_USER_EMPTY_NAME));
+		a.aload(slotS);
+		a.invokevirtual(stringEquals);
+		MethodCode.Label notEmptyName = a.newLabel();
+		a.ifeq(notEmptyName);
+		a.ldc(cp.stringEntry("||"));
+		a.areturn();
+		a.labelBinding(notEmptyName);
 		a.aload(slotS);
 		a.iload(slotPrefixEnd);
 		a.iload(slotN);

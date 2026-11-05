@@ -2886,7 +2886,7 @@ public final class LispEvaluator {
 			if (!(args.get(0) instanceof LispSymbol sym)) {
 				throw new LispEvalException(LispNames.SET + " expects a symbol, got " + args.get(0).print());
 			}
-			if (sym.isKeyword() || "NIL".equals(sym.name()) || "T".equals(sym.name()) || sym.name().isEmpty()) {
+			if (sym.isKeyword() || "NIL".equals(sym.name()) || "T".equals(sym.name())) {
 				throw new LispEvalException(LispNames.SET + " cannot set " + args.get(0).print());
 			}
 			if (LispNames.PACKAGE_VAR.equals(sym.name())) {

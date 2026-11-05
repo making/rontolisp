@@ -277,6 +277,33 @@ against this model and kept the model (`.kb/packages.md`, "The member table"):
 plump (2026-10-30) was not one: it needed MEMBERSHIP (a name it only read, found by
 `find-symbol`), which the member table answers once the reader records into it.
 
+## The empty name
+**No symbol is the empty string.** A compiled symbol is a bare string told from a framed one by byte 0,
+and nothing else tells them apart, so `cl-user`'s `||` is spelled `CL-USER::`
+(`LispSymbol.CL_USER_EMPTY_NAME`), on all four backends, where every other `cl-user` symbol is bare.
+`PackageResolver.canonical` is where the interpreter, a source form and a macro's `(intern "")` get it;
+`_internName`, `_intern_sym` and the emitted readers (JVM, wasm) mint it at run time. `P::||`, `:||` and
+`#:||` were never empty.
+
+- Being a qualified spelling of that very symbol, it needs nothing from anything reading a member name or
+  a home: `symbol-name`, `string`, `princ`, `symbol-package`, `eq`, a method name, the by-name dispatch.
+- The printers know it, as it prints as a bare spelling does: `LispSymbol.print`, `_symEsc`, `_sym_esc_gc`
+  answer `||`, and `%symbol-print-prefix` then asks about `""` like any other bare name
+  (`COMMON-LISP-USER::||` under another package, `PackageResolver.bareSymbolPrefix` on the interpreter).
+- The other shape weighed was a guard at each of the ~30 `charAt(0)` tests, on every program's hot paths.
+  This one costs a program that never spells the name: on the JVM an `equals` arm in `_symEsc`'s escaping
+  path, an `isEmpty` arm in `_internName`, and it dropped the `isEmpty` guard `%set-mirror` had; on wasm
+  nothing but `_intern_sym`'s arm and row where the program interns, and `_sym_esc_gc`'s id compare only
+  where the table holds the spelling (`StringTable.offsetOrNone`). Before 2026-11-05 `(symbolp '||)`
+  threw on the JVM, and on wasm `(intern "")` kept one byte behind a zero length while a literal `'||`
+  trapped.
+- `set` takes it (SBCL does): it was refused only for the empty string's sake.
+- Limits: `(intern "CL-USER::")` is this symbol, as `(intern "P::X")` is `P::X` (the model's). An instance
+  of a `(defstruct ||)` prints `#S( :A 1)` where SBCL prints `#S(|| :A 1)`: an instance's type name is
+  printed raw on all four, `(defstruct |a b|)`'s too. A run-time read under another package answers
+  `cl-user`'s, like any token (`.todo/i45`).
+- Pinned by ci-spec `the-empty-name-is-a-symbol-like-any-other`.
+
 ## A definition IS an interning: the find-symbol namespace probe
 - **Interpreter `find-symbol` probes the global namespaces under the canonical spelling**
   (`LispEvaluator.definedInImage`: user macros, functions, global bindings) as one arm of
@@ -492,7 +519,7 @@ side, answering the value -- so only `set` needs the per-backend work.
   declared or not -- exactly what `setq` assigns; otherwise the global, creating the
   binding when the name is unbound (what a run-time evaluator defines program globals
   through -- and a deliberate creation where CL's `set` signals). Constants (nil, t and
-  keywords, by value or by computed `NIL`/`T` name, and the empty name) and non-symbols
+  keywords, by value or by computed `NIL`/`T` name) and non-symbols
   signal on the interpreter and the JVM and trap on WASM, the symbol API's usual split.
   Before, the backends answered three ways (`(let ((*dv* 2)) (set '*dv* 3) (list *dv*
   (symbol-value '*dv*)))`, then `*dv*`): interpreter `(2 2)` / 3 (it defined the global

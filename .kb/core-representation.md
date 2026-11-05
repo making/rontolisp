@@ -10,7 +10,8 @@ Encoding and pipeline invariants shared by the interpreter and both compilers.
 - WASM function types stay OUTSIDE the rec group (wasmtime's WASI host needs plain `(func ...)`
   for imports); only the cons struct is in one.
 - symbolp/stringp: quoted symbols and string literals share one representation, split by a
-  leading `"`.
+  leading `"`; so no symbol is the empty string ([symbol-runtime-api.md](symbol-runtime-api.md),
+  "The empty name").
 - consp on the JVM: cons cells and function references are both `Object[]`, split by
   `arr[0] instanceof Integer`. A two-field class measured ~4% slower on a `cdr` walk.
   Instances (`String[]` head), ratios (`BigInteger[]`) and async values (`Object[3]` + marker)

@@ -8,6 +8,26 @@ package am.ik.rontolisp;
 public record LispSymbol(String name) implements LispVal {
 
 	/**
+	 * The canonical spelling of the {@code cl-user} symbol whose name is empty. Every
+	 * other {@code cl-user} symbol is spelled bare, but a compiled symbol is a bare
+	 * string told from a framed one by its first character, so this one has to have a
+	 * first character. It is the qualified spelling of that very symbol, so every reader
+	 * of a member name and of a symbol's home answers it as it answers {@code FOO::||};
+	 * only the printers know it, because it prints as a bare spelling does
+	 * ({@code .kb/symbol-runtime-api.md}, "The empty name").
+	 */
+	public static final String CL_USER_EMPTY_NAME = "CL-USER::";
+
+	/**
+	 * Returns the canonical spelling of a {@code cl-user} member.
+	 * @param member the member name
+	 * @return the member itself, or {@link #CL_USER_EMPTY_NAME} for the empty name
+	 */
+	public static String clUserSpelling(String member) {
+		return member.isEmpty() ? CL_USER_EMPTY_NAME : member;
+	}
+
+	/**
 	 * Returns whether this symbol is a keyword (starts with {@code :}).
 	 * @return {@code true} if the symbol name starts with ':'
 	 */
@@ -75,6 +95,9 @@ public record LispSymbol(String name) implements LispVal {
 			// refuses (CLHS 2.4.8.5), so #:a:b would not read back while #:|a:b|
 			// does.
 			return "#:" + (member.indexOf(':') >= 0 ? forceEscape(member) : escape(member));
+		}
+		if (CL_USER_EMPTY_NAME.equals(this.name)) {
+			return escape("");
 		}
 		int colon = qualifierEnd(this.name);
 		if (colon > 0 && !isInstanceTag(this.name)) {

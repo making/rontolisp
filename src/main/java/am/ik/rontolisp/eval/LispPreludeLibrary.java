@@ -641,14 +641,19 @@ public final class LispPreludeLibrary {
 		// KNOWN internal tag's prefix or a qualifier's colon off prin1-to-string's text
 		// (below), and the %struct-/%class- tag prefix is always lowercase, so an
 		// unqualified tag now round-trips as e.g. "|%struct-PT|" -- this peels exactly
-		// one leading/trailing '|' back off so the prefix match still sees "%struct-PT".
+		// the member's opening and closing '|' back off so the prefix match still sees
+		// "%struct-PT", and a qualified tag's "%struct-P::|a b|" the name it was made of.
 		// Does not undo interior backslash-doubling: neither caller's input (a tag
 		// prefix, a qualifier, a reader-upcased name) can itself contain '|' or '\'.
 		SOURCES.put(LispNames.UNESCAPED_SYMBOL_TEXT_INTERNAL, """
 				(defun %unescaped-symbol-text (s)
-				  (if (and (> (length s) 1) (char= (char s 0) #\\|))
-				      (subseq s 1 (1- (length s)))
-				      s))
+				  (let ((n (length s)) (b 0))
+				    (if (and (> n 1) (char= (char s (1- n)) #\\|))
+				        (progn
+				          (while (not (char= (char s b) #\\|))
+				            (setq b (+ b 1)))
+				          (concatenate 'string (subseq s 0 b) (subseq s (+ b 1) (1- n))))
+				        s)))
 				""");
 		// A "package" is the upcased canonical package name as a keyword (there are no
 		// package objects), so %symbol-home reads the qualifier off the symbol's stored
@@ -661,7 +666,7 @@ public final class LispPreludeLibrary {
 				(defun %symbol-home (symbol)
 				  (let* ((s (%unescaped-symbol-text (%prin1-to-string symbol)))
 				         (n (length s)))
-				    (cond ((= n 0) nil)
+				    (cond ((= n 0) :cl-user)
 				          ((char= (char s 0) #\\:) :keyword)
 				          ((and (> n 1) (char= (char s 0) #\\#) (char= (char s 1) #\\:)) nil)
 				          (t (let ((idx (position #\\: s)))

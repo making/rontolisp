@@ -7727,21 +7727,16 @@ public final class LispMacroExpander {
 
 	// Validates a keyword/value argument tail against the operator's allowed keyword
 	// set; anything else is rejected loudly rather than silently ignored.
-	// The affix in the same case as the base name: all-uppercase bases (the upcase
-	// reader's user symbols) get an upcased affix, everything else (the
-	// lowercase-authored internal sources) keeps it lowercase.
+	// The affix in the same case as the base name: a lowercase-authored internal source
+	// keeps it lowercase, every other base (the upcase reader's user symbols, the empty
+	// name among them) gets it upcased.
 	private static String affixFor(String affix, String base) {
-		boolean hasLetter = false;
 		for (int i = 0; i < base.length(); i++) {
-			char c = base.charAt(i);
-			if (Character.isLowerCase(c)) {
+			if (Character.isLowerCase(base.charAt(i))) {
 				return affix;
 			}
-			if (Character.isLetter(c)) {
-				hasLetter = true;
-			}
 		}
-		return hasLetter ? affix.toUpperCase(java.util.Locale.ROOT) : affix;
+		return affix.toUpperCase(java.util.Locale.ROOT);
 	}
 
 	// The (%program-error "...") form a call with a malformed keyword tail lowers to, or

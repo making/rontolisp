@@ -198,9 +198,9 @@ public final class LispNames {
 
 	/**
 	 * Internal (compile-path only): {@code (%set-mirror name value)}, the checked half of
-	 * a computed {@code set} -- signals on a constant (nil, t, a keyword, the empty name)
-	 * or a non-symbol, then writes the eval runtime's global env mirror, creating the
-	 * binding. Answers the value.
+	 * a computed {@code set} -- signals on a constant (nil, t, a keyword) or a
+	 * non-symbol, then writes the eval runtime's global env mirror, creating the binding.
+	 * Answers the value.
 	 */
 	public static final String SET_MIRROR = "%SET-MIRROR";
 
