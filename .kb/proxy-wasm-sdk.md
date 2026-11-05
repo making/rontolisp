@@ -6,9 +6,9 @@ why the SDK is shaped as it is, and what was weighed and left. The compiler's ha
 
 | Filter | Before | Handled (default) | `:proxy-wasm-trap` |
 | --- | ---: | ---: | ---: |
-| `http_body` | 90,066 / 32,037 | 74,421 / 27,352 | 58,957 / 22,877 |
-| `http_headers` | 154,818 / 53,565 | 77,321 / 28,353 | 61,394 / 23,771 |
-| `test_plugin` | 103,795 / 37,035 | 87,800 / 32,201 | 70,824 / 27,004 |
+| `http_body` | 90,066 / 32,037 | 74,412 / 27,346 | 58,948 / 22,867 |
+| `http_headers` | 154,818 / 53,565 | 77,312 / 28,346 | 61,385 / 23,764 |
+| `test_plugin` | 103,795 / 37,035 | 87,791 / 32,190 | 70,815 / 26,998 |
 
 **The error mode is read while the filter compiles.** `%trap-or-handle` is a macro over the macro-time `*features*`, not
 a `#+`, because a filter's own push reaches a macro but not the read of a file it requires
