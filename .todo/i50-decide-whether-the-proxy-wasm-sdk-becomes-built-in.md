@@ -2,7 +2,11 @@
 
 Difficulty: Medium
 
-A decision first, then the work if the answer is yes. Today a filter keeps a copy of the SDK beside its source and
+Decided 2026-11-05 by the project owner: the SDK becomes built in, once the optimization of it settles. Do not start
+while that is in progress, because its API is still changing, and do not close this item as cancelled. What remains
+open is which SDK or SDKs, and the "For and against" below is the background to that.
+
+Today a filter keeps a copy of the SDK beside its source and
 says `(require :proxy-wasm "proxy-wasm.lisp")`. Built in, it would say `(require :proxy-wasm)`, or only name the
 package, as a program names `linalg` or `rontolisp:json-parse`.
 
@@ -42,11 +46,9 @@ in it becomes a compatibility promise, and each new ABI version or host quirk be
 Envoy behaviours the SDK works around (`examples/proxy-wasm/README.md`) are host behaviour, not ABI, and were measured
 on those two versions only. A source file in `examples/` can be copied and edited; a built-in cannot.
 
-Weigh it by evidence not available yet: a second real filter, another host (no other Proxy-Wasm host has been tried),
-and whether the API survives both unchanged. If that has not happened, staying an example is a sound answer, and this
-item closes as cancelled.
+Evidence to look at when this starts: a second real filter, another host, and whether the API has stopped changing.
 
-## If the answer is yes
+## The work
 
 The mechanism to follow is a library spliced by name: `JsonLibrary` and `LinalgLibrary` in
 `src/main/java/am/ik/rontolisp/eval/`, with sources under `src/main/resources/am/ik/rontolisp/eval/`, and
