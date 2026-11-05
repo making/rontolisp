@@ -31,6 +31,100 @@ final class WasmFutureRuntimeBuilder {
 	/** Number of functions this block appends (in {@code build} index order). */
 	static final int FUNC_COUNT = 16;
 
+	/**
+	 * A future's state besides 0 (pending), 1 (fulfilled) and 2 (rejected): a resumed
+	 * frame left by a non-local exit, whose {@code $block-exit} payload the value field
+	 * holds.
+	 */
+	static final int STATE_EXITED = 3;
+
+	/**
+	 * What a signal reads, which a suspended frame keeps of its own: the globals of the
+	 * handler and restart stacks and of the {@code handler-case} depth. A frame resumes
+	 * under its own and hands them back on its way out, so a body leaving its
+	 * {@code handler-bind} restores nothing over what another body or its caller pushed
+	 * since, as on the backends that give each body a thread. They live in the three
+	 * slots of the frame's spill array no local mirrors
+	 * ({@link WasmAsyncEmit#SPILL_BASE}).
+	 *
+	 * @param handlers the handler stack's global
+	 * @param restarts the restart stack's global, or -1 outside restart mode
+	 * @param depth the {@code handler-case} depth's global
+	 */
+	record HandlerState(int handlers, int restarts, int depth) {
+
+		private static final int SPILL_HANDLERS = 0;
+
+		private static final int SPILL_RESTARTS = 1;
+
+		private static final int SPILL_DEPTH = 2;
+
+		/**
+		 * The module's globals, or null when it has no handler stack: nothing reads them.
+		 * @param globals the module's global indices by name
+		 * @param depth the {@code handler-case} depth's global
+		 * @return the state, or null
+		 */
+		static @org.jspecify.annotations.Nullable HandlerState of(java.util.Map<String, Integer> globals, int depth) {
+			Integer handlers = globals.get(am.ik.rontolisp.LispNames.HANDLER_CLUSTERS_VAR);
+			return handlers == null ? null : new HandlerState(handlers,
+					globals.getOrDefault(am.ik.rontolisp.LispNames.RESTART_CLUSTERS_VAR, -1), depth);
+		}
+
+		/**
+		 * Emits the store of the current values into a frame's spill array.
+		 * @param w the writer
+		 * @param spill emits the array as an {@code eq} reference
+		 */
+		void save(WasmWriter w, Runnable spill) {
+			saveSlot(w, spill, SPILL_HANDLERS, () -> globalGet(w, this.handlers));
+			if (this.restarts >= 0) {
+				saveSlot(w, spill, SPILL_RESTARTS, () -> globalGet(w, this.restarts));
+			}
+			saveSlot(w, spill, SPILL_DEPTH, () -> {
+				globalGet(w, this.depth);
+				w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			});
+		}
+
+		/**
+		 * Emits the load of the values a frame's spill array holds.
+		 * @param w the writer
+		 * @param spill emits the array as an {@code eq} reference
+		 */
+		void load(WasmWriter w, Runnable spill) {
+			loadSlot(w, spill, SPILL_HANDLERS);
+			globalSet(w, this.handlers);
+			if (this.restarts >= 0) {
+				loadSlot(w, spill, SPILL_RESTARTS);
+				globalSet(w, this.restarts);
+			}
+			loadSlot(w, spill, SPILL_DEPTH);
+			unboxI31(w);
+			globalSet(w, this.depth);
+		}
+
+		private static void saveSlot(WasmWriter w, Runnable spill, int slot, Runnable value) {
+			spill.run();
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			i32(w, slot);
+			value.run();
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		}
+
+		private static void loadSlot(WasmWriter w, Runnable spill, int slot) {
+			spill.run();
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			i32(w, slot);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		}
+
+	}
+
 	static final int OFF_NEW = 0;
 
 	static final int OFF_SETTLE = 1;
@@ -262,25 +356,31 @@ final class WasmFutureRuntimeBuilder {
 	 * @param streamCheck the stream helpers' operand check
 	 * ({@link WasmOperandTypes#emitStreamCheck}): a value that is no stream is the
 	 * operator's type-error; null where the module builds no type-error landing
+	 * @param blockExitTag whether the module has the {@code $block-exit} tag: an exit
+	 * leaving a resumed frame then settles its future with {@link #STATE_EXITED}, and an
+	 * await throws it again, so it reaches a block or a {@code catch} the awaiter is in
+	 * @param handlerState what a resumed frame swaps in, or null when nothing reads it
 	 * @return the function body bytes (locals declaration included)
 	 */
 	static byte[] build(int off, int base, int futureType, int frameType, int streamType, int currentTaskGlobal,
 			@org.jspecify.annotations.Nullable Sched sched, @org.jspecify.annotations.Nullable Cb cb,
 			boolean identityHash, int spillGlobal, int reawaitFunc,
-			WasmOperandTypes.@org.jspecify.annotations.Nullable StreamCheck streamCheck) {
+			WasmOperandTypes.@org.jspecify.annotations.Nullable StreamCheck streamCheck, boolean blockExitTag,
+			@org.jspecify.annotations.Nullable HandlerState handlerState) {
 		return switch (off) {
 			case OFF_NEW -> buildNew(futureType);
 			case OFF_SETTLE -> buildSettleOrReject(base, futureType, 1);
 			case OFF_REJECT -> buildSettleOrReject(base, futureType, 2);
 			case OFF_ADD_WAITER -> buildAddWaiter(futureType, identityHash);
 			case OFF_WAKE -> buildWake(base, futureType);
-			case OFF_POLL -> buildPoll(futureType, spillGlobal, reawaitFunc);
+			case OFF_POLL -> buildPoll(futureType, spillGlobal, reawaitFunc, blockExitTag);
 			case OFF_SUBTASK_FUTURE ->
 				sched == null ? buildUnreachableStub() : buildSubtaskFuture(futureType, sched, identityHash);
 			case OFF_SCHED_LOOP -> sched == null ? buildSyncForce(base) : buildSchedLoop(base, futureType, sched);
 			case OFF_WSTREAM_READ -> buildWasiStreamRead(futureType, streamType, sched, streamCheck);
 			case OFF_WSTREAM_CLOSE -> buildWasiStreamClose(streamType, streamCheck);
-			case OFF_WAKE_LIST -> buildWakeList(base, futureType, frameType, currentTaskGlobal, cb, identityHash);
+			case OFF_WAKE_LIST -> buildWakeList(base, futureType, frameType, currentTaskGlobal, cb, identityHash,
+					blockExitTag, handlerState);
 			case OFF_SCHED_DISPATCH ->
 				sched == null ? buildUnreachableStub() : buildSchedDispatch(base, streamType, sched, identityHash);
 			case OFF_TASK_BEGIN ->
@@ -418,18 +518,45 @@ final class WasmFutureRuntimeBuilder {
 	// a doorbell not yet created -- the owner is still in its eager phase -- skips the
 	// ring, and the owner's suspend path drains the list).
 	private static byte[] buildWakeList(int base, int futureType, int frameType, int currentTaskGlobal,
-			WasmFutureRuntimeBuilder.@org.jspecify.annotations.Nullable Cb cb, boolean identityHash) {
+			WasmFutureRuntimeBuilder.@org.jspecify.annotations.Nullable Cb cb, boolean identityHash,
+			boolean blockExitTag, @org.jspecify.annotations.Nullable HandlerState handlerState) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int LIST = 0;
 		final int WASEMPTY = 1, TX = 2, RING = 3;
 		final int CLOSURE = 4, FRAME = 5, RESULT = 6, PAYLOAD = 7, OWNER = 8, CELL = 9;
-		// locals: 3x i32, 6x (ref null eq)
-		w.write(2);
+		// The resumer's handler state, while the frame runs under its own.
+		final int SAVED_DEPTH = 10, SAVED_HANDLERS = 11, SAVED_RESTARTS = 12;
+		// locals: 3x i32, 6x (ref null eq), and 1x i32, 2x (ref null eq) for the state
+		w.write(handlerState != null ? 4 : 2);
 		w.writeUnsignedLeb128(3);
 		w.write(Type.I32);
 		w.writeUnsignedLeb128(6);
 		w.writeRefType(true, Type.EQ.code());
+		if (handlerState != null) {
+			w.writeUnsignedLeb128(1);
+			w.write(Type.I32);
+			w.writeUnsignedLeb128(2);
+			w.writeRefType(true, Type.EQ.code());
+		}
+		Runnable frameSpill = () -> {
+			getLocal(w, FRAME);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(frameType);
+			structGet(w, frameType, 1);
+		};
+		Runnable restoreResumers = () -> {
+			if (handlerState != null) {
+				getLocal(w, SAVED_HANDLERS);
+				globalSet(w, handlerState.handlers());
+				if (handlerState.restarts() >= 0) {
+					getLocal(w, SAVED_RESTARTS);
+					globalSet(w, handlerState.restarts());
+				}
+				getLocal(w, SAVED_DEPTH);
+				globalSet(w, handlerState.depth());
+			}
+		};
 		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY); // $done
 		w.write(Instruction.LOOP, WasmLispCompiler.BLOCKTYPE_EMPTY); // $next
 		getLocal(w, LIST);
@@ -522,27 +649,59 @@ final class WasmFutureRuntimeBuilder {
 			w.write(Instruction.BR, 1); // -> $next
 		}
 		w.write(Instruction.END); // if defer
-		// Direct resume. block $caught (result eq): the rejection payload lands here.
+		if (handlerState != null) {
+			globalGet(w, handlerState.handlers());
+			setLocal(w, SAVED_HANDLERS);
+			if (handlerState.restarts() >= 0) {
+				globalGet(w, handlerState.restarts());
+				setLocal(w, SAVED_RESTARTS);
+			}
+			globalGet(w, handlerState.depth());
+			setLocal(w, SAVED_DEPTH);
+			handlerState.load(w, frameSpill);
+		}
+		// Direct resume. block $caught (result eq): the rejection payload lands here; in
+		// block $exit around it, an exit's.
+		if (blockExitTag) {
+			w.write(Instruction.BLOCK);
+			w.writeRefType(true, Type.EQ.code());
+		}
+		int next = blockExitTag ? 2 : 1;
 		w.write(Instruction.BLOCK);
 		w.writeRefType(true, Type.EQ.code());
-		// try_table (result eq) (catch $lisp-cond -> $caught)
+		// try_table (result eq) (catch $lisp-cond -> $caught) [(catch $block-exit ->
+		// $exit)]
 		w.write(Instruction.TRY_TABLE);
 		w.writeRefType(true, Type.EQ.code());
-		w.writeUnsignedLeb128(1);
+		w.writeUnsignedLeb128(blockExitTag ? 2 : 1);
 		w.write(Instruction.CATCH);
 		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 		w.writeUnsignedLeb128(0); // -> $caught
+		if (blockExitTag) {
+			w.write(Instruction.CATCH);
+			w.writeUnsignedLeb128(WasmLispCompiler.TAG_BLOCK_EXIT);
+			w.writeUnsignedLeb128(1); // -> $exit
+		}
 		getLocal(w, CLOSURE);
 		refNullEq(w);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 1);
 		w.write(Instruction.END); // try_table
 		setLocal(w, RESULT);
+		if (handlerState != null) {
+			getLocal(w, RESULT);
+			getLocal(w, FRAME);
+			w.write(Instruction.REF_EQ);
+			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			handlerState.save(w, frameSpill);
+			w.write(Instruction.END);
+			restoreResumers.run();
+		}
 		// Still suspended (the resume returned its own frame): nothing to do.
 		getLocal(w, RESULT);
 		getLocal(w, FRAME);
 		w.write(Instruction.REF_EQ);
-		w.write(Instruction.BR_IF, 1); // -> $next (continue), depths: $caught=0, loop=1
+		w.write(Instruction.BR_IF, next); // -> $next (continue)
 		// Completed: settle the frame's future with the result (cascades).
 		getLocal(w, FRAME);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -552,9 +711,10 @@ final class WasmFutureRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(base + OFF_SETTLE);
 		w.write(Instruction.DROP);
-		w.write(Instruction.BR, 1); // -> $next
+		w.write(Instruction.BR, next); // -> $next
 		w.write(Instruction.END); // block $caught; payload on stack
 		setLocal(w, PAYLOAD);
+		restoreResumers.run();
 		getLocal(w, FRAME);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(frameType);
@@ -563,7 +723,34 @@ final class WasmFutureRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(base + OFF_REJECT);
 		w.write(Instruction.DROP);
-		w.write(Instruction.BR, 0); // -> $next
+		w.write(Instruction.BR, next - 1); // -> $next
+		if (blockExitTag) {
+			w.write(Instruction.END); // block $exit; the exit's payload on stack
+			setLocal(w, PAYLOAD);
+			restoreResumers.run();
+			getLocal(w, FRAME);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(frameType);
+			structGet(w, frameType, 2);
+			setLocal(w, CELL);
+			// First settle wins, as _future_reject's; the waiters' polls throw it.
+			castFuture(w, CELL, futureType);
+			structGet(w, futureType, 0);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			castFuture(w, CELL, futureType);
+			i32(w, STATE_EXITED);
+			structSet(w, futureType, 0);
+			castFuture(w, CELL, futureType);
+			getLocal(w, PAYLOAD);
+			structSet(w, futureType, 1);
+			getLocal(w, CELL);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(base + OFF_WAKE);
+			w.write(Instruction.DROP);
+			w.write(Instruction.END);
+			w.write(Instruction.BR, 0); // -> $next
+		}
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block $done
 		refNullEq(w);
@@ -578,7 +765,7 @@ final class WasmFutureRuntimeBuilder {
 	// the non-asyncMode lowering), so there is no degenerate-future branch. With a spill
 	// global the poll is await's multiple-value producer: it answers one value unless
 	// the last fulfilled future of the chain carries extras, which it publishes.
-	private static byte[] buildPoll(int futureType, int spillGlobal, int reawaitFunc) {
+	private static byte[] buildPoll(int futureType, int spillGlobal, int reawaitFunc, boolean blockExitTag) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int STATE = 1;
@@ -622,6 +809,18 @@ final class WasmFutureRuntimeBuilder {
 		setLocal(w, 0);
 		w.write(Instruction.BR, 2); // -> loop (past this if and the TYPE_FUTURE if)
 		w.write(Instruction.END);
+		if (blockExitTag) {
+			// exited -> the exit goes on from here
+			getLocal(w, STATE);
+			i32(w, STATE_EXITED);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			castFuture(w, 0, futureType);
+			structGet(w, futureType, 1);
+			w.write(Instruction.THROW);
+			w.writeUnsignedLeb128(WasmLispCompiler.TAG_BLOCK_EXIT);
+			w.write(Instruction.END);
+		}
 		// rejected -> re-signal the memoized payload, the uncaught report's note first
 		// rewound to where this future's boundary left it
 		if (reawaitFunc >= 0) {

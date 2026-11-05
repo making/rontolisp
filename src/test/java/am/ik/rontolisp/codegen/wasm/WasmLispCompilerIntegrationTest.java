@@ -53,6 +53,7 @@ import am.ik.rontolisp.testsupport.HashTableCopyPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
+import am.ik.rontolisp.testsupport.OwnHandlerStacksPrograms;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import am.ik.rontolisp.testsupport.HostWasmtime.ExecResult;
@@ -16478,6 +16479,12 @@ class WasmLispCompilerIntegrationTest {
 	void componentAwaitAnswersEveryValueOfAnAsyncBodyThatSuspended() throws Exception {
 		assertThat(compileAndRunComponent(AwaitValuesMatrix.SUSPENDING_PROGRAM))
 			.isEqualTo(AwaitValuesMatrix.SUSPENDING_EXPECTED);
+	}
+
+	@Test
+	void componentAsyncBodysHandlersAndExitsAcrossASuspension() throws Exception {
+		assertThat(compileAndRunComponent(OwnHandlerStacksPrograms.SUSPENDING))
+			.isEqualTo(OwnHandlerStacksPrograms.SUSPENDING_OUTPUT);
 	}
 
 	@Test

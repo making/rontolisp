@@ -60,6 +60,46 @@
   size-report and bench program is byte-identical at default, `--component` and `--optimize=size`.
   **`--no-gc`** rejects the whole async surface by name, `%stream-new` included.
 
+## The eager part is a call
+**Invariant (2026-11-05): before its first suspension an async body sees what a call sees, on all four backends.**
+It starts from its caller's handler and restart stacks and armed `handler-case`s, so a `handler-bind` around the
+call runs for what the body signals, `find-restart` finds a restart around it, and a `signal` a `handler-case`
+around it matches raises. A handler's non-local exit (`return-from`, `throw`, `invoke-restart`), and the body's own
+to a block outside it, leaves the call. Only a condition no handler took stays the future's, for the await to
+signal: a body's `error` under a `handler-case` around the CALL alone still reaches the `handler-case` around the
+await (nothing transfers across a call that has to answer a future).
+
+The handler stacks used to be one global, which is why a `handler-bind` around the call saw the body at all. The
+answer was yes because Preview 1 and the component run the eager part on the caller's stack, so "no" meant emptying
+the stacks there too; a test framework's `handler-bind` around a call recording what it signals keeps working.
+
+**After the first suspension the body keeps what it started from and owns what it pushes:** a handler around the
+call stays visible to it even past that `handler-bind`'s end (the one thing a snapshot cannot tell, on all three
+suspending backends alike), and nothing it pushes reaches its caller or another body. What each backend does:
+- Interpreter: `runAsync` reads the caller's bindings and `handlerCaseTypes`, `withCallersHandlers` installs them on
+  the body's thread. Each thread's stacks: [threads.md](threads.md), "What a thread keeps of its own".
+- JVM: `_async_run` hands `run()` `_asyncState`, `{depth, exited, each stack}`.
+- Component: **a suspended frame keeps them** in the three spill slots no local mirrors
+  (`WasmFutureRuntimeBuilder.HandlerState`, slots below `SPILL_BASE`, only in a module with a handler stack). The entry
+  stores them and puts its caller's back when the resume answers the frame; `_wake_list` swaps them around every
+  resume. Without the swap a body's `handler-bind` left its cluster in the one global while suspended, its caller ran
+  it, and leaving it restored over what the caller had pushed since (`Unhandled condition`, measured 2026-11-05).
+  The specials' refusal to bind across an await (`.kb/dynamic-special-variables.md`) stands.
+
+**An exit crosses the future.** A resumed or threaded body has no caller's frames below it, so the exit waits at
+the await: the interpreter's `joinFuture` rethrows a control transfer as itself (it was a `LispEvalException`
+naming `BlockReturnSignal`), the JVM's payload carries the throwable's `_nleTl` entry and `_await` pushes it on the
+awaiter's channel (a landing reads the channel of the thread it lands on; it was a message-less `simple-error`),
+the component settles the frame's future in state 3 (`STATE_EXITED`) and `_future_poll` throws `$block-exit` again
+(it trapped `unreachable` uncaught). An exit out of the eager part goes on from the call: `AsyncRuntime.run` and
+`_async_run` are still waiting, and rethrow it (it was lost with the body's thread: the caller went on as if nothing
+had happened). A component's `async-lambda` is a function boundary to `CrossLambdaExitLowering` too: its `return-from`
+of an outer block returned from the lambda alone.
+
+Pinned by ci-spec `an-async-bodys-eager-part-is-a-call` (all four) and `OwnHandlerStacksPrograms.SUSPENDING`
+(`anAsyncBodysHandlersAndExitsAcrossASuspension` in `AsyncEvalTest` and `JvmAsyncCompilerTest`,
+`WasmLispCompilerIntegrationTest#componentAsyncBodysHandlersAndExitsAcrossASuspension`).
+
 ## Multiple values
 **Invariant (2026-09-26): an async body's values reach its awaiter the way a function call's
 do.** The future settles with the body's full value list, captured where the body completes, on

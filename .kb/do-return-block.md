@@ -60,7 +60,8 @@ establishing block to `(let ((id (%nlx-tag))) (%nlx-catch id BODY))` and the cro
 is a **dynamic block-instance id** captured by `FreeVarAnalyzer`, minted fresh per activation.
 - Transport: JVM a `RuntimeException` + the `_nleTl` `{throwable,id,value,previous}` channel
   (`JvmNlxCompiler`); wasm a `$block-exit` tag carrying `(id . value)` (`WasmNlxCompiler`,
-  tag 1, gated).
+  tag 1, gated). Out of an async body it crosses the future ([async-await.md](async-await.md),
+  "The eager part is a call").
 - **On wasm the id is an i31 VALUE** (`NLX_ID_CTR` cell, `ref.eq` = value equality),
   snapshotted at region entry. **Never a fresh GC struct compared by identity**: that broke at
   cl-ppcre scale, shape-dependently and engine-divergently. JVM object identity is sound.

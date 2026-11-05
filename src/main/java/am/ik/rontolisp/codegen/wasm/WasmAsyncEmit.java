@@ -60,7 +60,10 @@ final class WasmAsyncEmit {
 	/** Resume-function slot of the {@code $rt} resume-target local (i32). */
 	static final int RT_SLOT = 2;
 
-	/** First resume-function slot mirrored by the frame's spill array. */
+	/**
+	 * First resume-function slot mirrored by the frame's spill array; the frame's own
+	 * {@link WasmFutureRuntimeBuilder.HandlerState} takes the slots below it.
+	 */
 	static final int SPILL_BASE = 3;
 
 	/**
@@ -257,10 +260,14 @@ final class WasmAsyncEmit {
 		int fut = paramCount + 2;
 		int frame = paramCount + 3;
 		int r = paramCount + 4;
+		int callersHandlers = paramCount + 5;
+		int callersRestarts = paramCount + 6;
 		Integer spillGlobal = proto.globalIndices.get(LispNames.MV_SPILL);
-		// locals: 4x (ref null eq)
+		WasmFutureRuntimeBuilder.@Nullable HandlerState handlerState = WasmFutureRuntimeBuilder.HandlerState
+			.of(proto.globalIndices, proto.ehDepthGlobalIndex);
+		// locals: 4x (ref null eq), and the caller's stacks where a frame keeps its own
 		w.write(1);
-		w.writeUnsignedLeb128(4);
+		w.writeUnsignedLeb128(handlerState != null ? 6 : 4);
 		w.writeRefType(true, Type.EQ.code());
 		// spill = array.new_default(resume local count); spill[3+i] = param i
 		w.write(Instruction.I32_CONST);
@@ -308,6 +315,18 @@ final class WasmAsyncEmit {
 		w.writeUnsignedLeb128(proto.frameTypeIndex);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(frame);
+		if (handlerState != null) {
+			w.write(Instruction.GET_GLOBAL);
+			w.writeUnsignedLeb128(handlerState.handlers());
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(callersHandlers);
+			if (handlerState.restarts() >= 0) {
+				w.write(Instruction.GET_GLOBAL);
+				w.writeUnsignedLeb128(handlerState.restarts());
+				w.write(Instruction.SET_LOCAL);
+				w.writeUnsignedLeb128(callersRestarts);
+			}
+		}
 		// block $h (result eq) { try_table (catch $lisp-cond -> $h) { r = resume(frame,
 		// nil) } ... } -- the landing rejects the future with the payload.
 		w.write(Instruction.BLOCK);
@@ -334,6 +353,23 @@ final class WasmAsyncEmit {
 		w.writeUnsignedLeb128(frame);
 		w.write(Instruction.REF_EQ);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		if (handlerState != null) {
+			// The stacks the body left are its own from here, its caller's come back.
+			handlerState.save(w, () -> {
+				w.write(Instruction.GET_LOCAL);
+				w.writeUnsignedLeb128(spillArr);
+			});
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(callersHandlers);
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(handlerState.handlers());
+			if (handlerState.restarts() >= 0) {
+				w.write(Instruction.GET_LOCAL);
+				w.writeUnsignedLeb128(callersRestarts);
+				w.write(Instruction.SET_GLOBAL);
+				w.writeUnsignedLeb128(handlerState.restarts());
+			}
+		}
 		clearSpill(w, spillGlobal);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(fut);
@@ -431,6 +467,14 @@ final class WasmAsyncEmit {
 		w.writeUnsignedLeb128(frame);
 		w.write(Instruction.REF_EQ);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		WasmFutureRuntimeBuilder.@Nullable HandlerState handlerState = WasmFutureRuntimeBuilder.HandlerState
+			.of(ctx.globalIndices, ctx.ehDepthGlobalIndex);
+		if (handlerState != null) {
+			handlerState.save(w, () -> {
+				w.write(Instruction.GET_LOCAL);
+				w.writeUnsignedLeb128(spillArr);
+			});
+		}
 		// Suspended: block on the event loop until the root future settles (a
 		// rejection re-signals out of it into the catch-all prologue).
 		w.write(Instruction.GET_LOCAL);

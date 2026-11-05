@@ -29,6 +29,9 @@ final class Target_AsyncRuntime {
 			result.complete(body.apply(future));
 		}
 		catch (RuntimeException ex) {
+			if (LispEvaluator.isControlTransfer(ex)) {
+				throw ex;
+			}
 			result.completeExceptionally(ex);
 		}
 		return future;

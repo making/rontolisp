@@ -48,9 +48,10 @@ import org.jspecify.annotations.Nullable;
  * across threads (it is a ThreadLocal), so {@code run()} completes the future NORMALLY
  * with {@code {EMARKER, throwable, condition}} and {@code _await} records the condition
  * under the throwable on the awaiting thread before rethrowing it -- {@code handler-case}
- * around the await then dispatches by type exactly like a same-thread signal. A program
- * whose uncaught report records async boundaries adds the throwable's trace as the body
- * left it, which each await puts back ({@link JvmUncaughtHandler});</li>
+ * around the await then dispatches by type exactly like a same-thread signal; a non-local
+ * exit's entry on {@code _nleTl} travels the same way. A program whose uncaught report
+ * records async boundaries adds the throwable's trace as the body left it, which each
+ * await puts back ({@link JvmUncaughtHandler});</li>
  * <li>a body that answers other than exactly one value completes the future with
  * {@code {VMARKER, primary, extras}}, the channel read on the body's own thread the
  * moment it returns; {@code _await} answers the primary and publishes the extras on the
@@ -152,6 +153,18 @@ final class JvmAsyncRuntimeBuilder {
 
 	static final String LATCH_FIELD = "_asyncLatch";
 
+	/**
+	 * What the caller hands the body besides: {@code {its handler-case depth, whether the
+	 * body left by an exit while the caller waited, each of its stacks}}.
+	 */
+	static final String STATE_FIELD = "_asyncState";
+
+	private static final int STATE_DEPTH = 0;
+
+	private static final int STATE_EXITED = 1;
+
+	private static final int STATE_STACKS = 2;
+
 	/** The eager-start handoff ThreadLocal static field. */
 	static final String HANDOFF_FIELD = "_handoffTl";
 
@@ -202,6 +215,15 @@ final class JvmAsyncRuntimeBuilder {
 	 * payload carries the record of its throwable, made on the body's thread, and
 	 * {@code _await} records it again on the awaiting one, so a built-in's type-error
 	 * stays one across the await
+	 * @param nleTl the non-local exit channel, or null when the program can make no exit:
+	 * an error payload carries the entry of its throwable, and {@code _await} pushes it
+	 * again on the awaiting thread, so an exit reaches a block or a {@code catch} the
+	 * awaiter is in; one that leaves the body before its first suspension is rethrown by
+	 * {@code _async_run}, which is still waiting
+	 * @param ownStacks the handler and restart stacks' ThreadLocals, those the program
+	 * has: a body starts with the caller's, so what its eager part signals finds what a
+	 * call would
+	 * @param dynVars the dynamic-binding runtime, or null when {@code ownStacks} is empty
 	 * @return the runtime bodies
 	 */
 	static AsyncRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
@@ -209,7 +231,8 @@ final class JvmAsyncRuntimeBuilder {
 			MethodRefEntry instanceInitRef, MethodRefEntry longValueOf, MethodRefEntry stringLength,
 			MethodRefEntry stringSubstring, MethodRefEntry stringConcat, @Nullable MethodRefEntry launcherRun,
 			@Nullable JvmMvChannel mvChannel, @Nullable MethodRefEntry asyncAwaited, boolean futureSettled,
-			@Nullable FieldRefEntry teTl) {
+			@Nullable FieldRefEntry teTl, @Nullable FieldRefEntry nleTl, List<FieldRefEntry> ownStacks,
+			JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars) {
 		// --- shared class/method references ---
 		ClassEntry futureClass = cp.classEntry("java/util/concurrent/CompletableFuture");
 		MethodRefEntry futureCtor = cp.methodRef(futureClass, "<init>", "()V");
@@ -233,6 +256,7 @@ final class JvmAsyncRuntimeBuilder {
 		MethodRefEntry latchCtor = cp.methodRef(latchClass, "<init>", "(I)V");
 		MethodRefEntry latchAwait = cp.methodRef(latchClass, "await", "()V");
 		MethodRefEntry latchCountDown = cp.methodRef(latchClass, "countDown", "()V");
+		MethodRefEntry latchGetCount = cp.methodRef(latchClass, "getCount", "()J");
 
 		ClassEntry threadClass = cp.classEntry("java/lang/Thread");
 		MethodRefEntry threadOfVirtual = cp.methodRef(threadClass, "ofVirtual",
@@ -250,9 +274,11 @@ final class JvmAsyncRuntimeBuilder {
 		// records
 		// the boundary in it (asyncAwaited): {EMARKER, t, cond, trace}. A wrong-type
 		// operand's record ({datum, type}) is per thread like the condition, so it rides
-		// last when a pad can read one: {EMARKER, t, cond[, trace], record}.
-		int errorPayloadLength = (asyncAwaited != null ? 4 : 3) + (teTl != null ? 1 : 0);
-		int teRecordIndex = errorPayloadLength - 1;
+		// after them when a pad can read one, and t's entry of the exit channel last when
+		// the program can make an exit: {EMARKER, t, cond[, trace][, record][, exit]}.
+		int teRecordIndex = asyncAwaited != null ? 4 : 3;
+		int exitIndex = teRecordIndex + (teTl != null ? 1 : 0);
+		int errorPayloadLength = exitIndex + (nleTl != null ? 1 : 0);
 		@Nullable MethodRefEntry tlMap = teTl != null ? JvmThrowableRecords.tlMap(cp, thisClass) : null;
 		@Nullable MethodRefEntry throwableGetStackTrace = asyncAwaited != null
 				? cp.methodRef(throwableClass, "getStackTrace", "()[Ljava/lang/StackTraceElement;") : null;
@@ -267,6 +293,8 @@ final class JvmAsyncRuntimeBuilder {
 		FieldRefEntry fnField = cp.fieldRef(thisClass, FN_FIELD, "Ljava/lang/Object;");
 		FieldRefEntry futureField = cp.fieldRef(thisClass, FUTURE_FIELD, "Ljava/lang/Object;");
 		FieldRefEntry latchField = cp.fieldRef(thisClass, LATCH_FIELD, "Ljava/lang/Object;");
+		FieldRefEntry stateField = cp.fieldRef(thisClass, STATE_FIELD, "Ljava/lang/Object;");
+		FieldRefEntry depthTl = java.util.Objects.requireNonNull(channel.depthTlField);
 
 		MethodRefEntry invoke0 = cp.methodRef(thisClass, JvmRuntimeBuilder.dispatcherName(0, false),
 				JvmRuntimeBuilder.dispatcherDesc(0, false));
@@ -335,6 +363,26 @@ final class JvmAsyncRuntimeBuilder {
 			a.aload(3);
 			a.aload(2);
 			a.putfield(latchField);
+			// state (slot 4): what a signal reads starts as the caller's
+			a.loadConstant(STATE_STACKS + ownStacks.size());
+			a.anewarray(objectClass);
+			a.astore(4);
+			a.aload(4);
+			a.loadConstant(STATE_DEPTH);
+			a.getstatic(depthTl);
+			a.invokevirtual(tlGet);
+			a.aastore();
+			for (int i = 0; i < ownStacks.size(); i++) {
+				a.aload(4);
+				a.loadConstant(STATE_STACKS + i);
+				a.getstatic(ownStacks.get(i));
+				a.aconst_null();
+				a.invokestatic(java.util.Objects.requireNonNull(dynVars).dget());
+				a.aastore();
+			}
+			a.aload(3);
+			a.aload(4);
+			a.putfield(stateField);
 			// Thread.ofVirtual().start(runner)
 			a.invokestatic(threadOfVirtual); // [builder]
 			a.aload(3);
@@ -343,6 +391,18 @@ final class JvmAsyncRuntimeBuilder {
 			// latch.await() -- resumes at the body's first suspension or completion
 			a.aload(2);
 			a.invokevirtual(latchAwait);
+			if (nleTl != null) {
+				// An exit out of the eager part is a call's: it goes on from here
+				MethodCode.Label stayed = a.newLabel();
+				a.aload(4);
+				a.loadConstant(STATE_EXITED);
+				a.aaload();
+				a.ifnull(stayed);
+				a.aload(1);
+				a.invokestatic(awaitSelf);
+				a.pop();
+				a.labelBinding(stayed);
+			}
 			a.aload(1);
 			a.areturn();
 			methods.add(new AsyncMethod(cp.utf8Entry(ASYNC_RUN_METHOD), cp.utf8Entry(ASYNC_RUN_DESC), a));
@@ -368,6 +428,24 @@ final class JvmAsyncRuntimeBuilder {
 			a.aload(0);
 			a.getfield(latchField);
 			a.invokevirtual(tlSet);
+			// state (slot 2): this thread starts from the caller's depth and stacks
+			a.aload(0);
+			a.getfield(stateField);
+			a.checkcast(objectArrayClass);
+			a.astore(2);
+			a.getstatic(depthTl);
+			a.aload(2);
+			a.loadConstant(STATE_DEPTH);
+			a.aaload();
+			a.invokevirtual(tlSet);
+			for (int i = 0; i < ownStacks.size(); i++) {
+				a.getstatic(ownStacks.get(i));
+				a.aload(2);
+				a.loadConstant(STATE_STACKS + i);
+				a.aaload();
+				a.invokestatic(java.util.Objects.requireNonNull(dynVars).dbind());
+				a.pop();
+			}
 			// try { future.complete(_invoke_0(fn)) }
 			MethodCode.Label tryStart = a.newBoundLabel();
 			a.aload(0);
@@ -413,6 +491,37 @@ final class JvmAsyncRuntimeBuilder {
 			// t.getStackTrace() after them when the body recorded its boundary there
 			MethodCode.Label handler = a.newBoundLabel();
 			a.astore(1);
+			if (nleTl != null) {
+				// t's exit (slot 3), or null; the caller still waiting takes it on
+				MethodCode.Label noExit = a.newLabel();
+				a.aconst_null();
+				a.astore(3);
+				a.getstatic(nleTl);
+				a.invokevirtual(tlGet);
+				a.checkcast(objectArrayClass);
+				a.astore(4);
+				a.aload(4);
+				a.ifnull(noExit);
+				a.aload(4);
+				a.loadConstant(0);
+				a.aaload();
+				a.aload(1);
+				a.if_acmpne(noExit);
+				a.aload(4);
+				a.astore(3);
+				a.aload(0);
+				a.getfield(latchField);
+				a.checkcast(latchClass);
+				a.invokevirtual(latchGetCount);
+				a.lconst_0();
+				a.lcmp();
+				a.ifle(noExit);
+				a.aload(2);
+				a.loadConstant(STATE_EXITED);
+				a.ldc(tStr);
+				a.aastore();
+				a.labelBinding(noExit);
+			}
 			a.aload(0);
 			a.getfield(futureField);
 			a.checkcast(futureClass);
@@ -448,6 +557,12 @@ final class JvmAsyncRuntimeBuilder {
 				a.invokestatic(java.util.Objects.requireNonNull(tlMap));
 				a.aload(1);
 				a.invokevirtual(JvmThrowableRecords.mapGet(cp));
+				a.aastore();
+			}
+			if (nleTl != null) {
+				a.dup();
+				a.loadConstant(exitIndex);
+				a.aload(3);
 				a.aastore();
 			}
 			// [future, payload]
@@ -597,6 +712,37 @@ final class JvmAsyncRuntimeBuilder {
 				a.aaload();
 				a.checkcast(java.util.Objects.requireNonNull(stackTraceArrayClass));
 				a.invokestatic(asyncAwaited);
+			}
+			if (nleTl != null) {
+				// t's exit, pushed on this thread's channel (slot 6 = the body's entry):
+				// its landing reads the channel of the thread it lands on
+				MethodCode.Label noExit = a.newLabel();
+				a.aload(4);
+				a.checkcast(objectArrayClass);
+				a.loadConstant(exitIndex);
+				a.aaload();
+				a.checkcast(objectArrayClass);
+				a.astore(6);
+				a.aload(6);
+				a.ifnull(noExit);
+				a.getstatic(nleTl);
+				a.loadConstant(4);
+				a.anewarray(objectClass);
+				for (int field = 0; field < 3; field++) {
+					a.dup();
+					a.loadConstant(field);
+					a.aload(6);
+					a.loadConstant(field);
+					a.aaload();
+					a.aastore();
+				}
+				a.dup();
+				a.loadConstant(3);
+				a.getstatic(nleTl);
+				a.invokevirtual(tlGet);
+				a.aastore();
+				a.invokevirtual(tlSet);
+				a.labelBinding(noExit);
 			}
 			a.athrow();
 			a.labelBinding(plain);

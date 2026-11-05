@@ -2,10 +2,12 @@ package am.ik.rontolisp.eval;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.util.List;
 
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.OwnHandlerStacksPrograms;
 import am.ik.rontolisp.testsupport.SocketTest;
 import org.junit.jupiter.api.Test;
 
@@ -118,23 +120,14 @@ class ThreadTest {
 		// The handler stack was one global: a thread leaving its handler-bind restored
 		// what it had saved over a handler the main thread pushed since, and the main
 		// thread's condition found none (sento's test suite: "Unhandled condition").
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		evalAll(new LispEvaluator(new PrintStream(out, true, java.nio.charset.StandardCharsets.UTF_8)), """
-				(defvar *phase* 0)
-				(define-condition own-stack (error) ())
-				(defun worker ()
-				  (handler-bind ((own-stack #'identity))
-				    (setq *phase* 1)
-				    (loop until (= *phase* 2) do (sleep 0.01))))
-				(let ((th (rontolisp:make-thread #'worker)))
-				  (loop until (= *phase* 1) do (sleep 0.01))
-				  (print (handler-bind ((own-stack (lambda (e) (declare (ignore e)) (invoke-restart 'go-on))))
-				           (setq *phase* 2)
-				           (rontolisp:join-thread th)
-				           (with-simple-restart (go-on "Go on.") (error 'own-stack))
-				           :handled)))
-				""");
-		assertThat(out.toString(java.nio.charset.StandardCharsets.UTF_8).trim()).isEqualTo(":HANDLED");
+		for (String[] shape : List.of(OwnHandlerStacksPrograms.MAKE_THREAD, OwnHandlerStacksPrograms.JAVA_THREAD,
+				OwnHandlerStacksPrograms.ASYNC_BODY)) {
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			evalAll(new LispEvaluator(new PrintStream(out, true, java.nio.charset.StandardCharsets.UTF_8)),
+					OwnHandlerStacksPrograms.thread(shape));
+			assertThat(out.toString(java.nio.charset.StandardCharsets.UTF_8).trim()).as(shape[0])
+				.isEqualTo(OwnHandlerStacksPrograms.THREAD_OUTPUT);
+		}
 	}
 
 	@Test

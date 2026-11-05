@@ -189,6 +189,12 @@ final class JvmSetqCompiler {
 	 * through to the {@code _g$} global default when none does -- the CL rule that
 	 * {@code setq} of a special assigns the current dynamic binding. Every other global
 	 * stays a plain {@code putstatic}, which a shallow binding's field is too.
+	 * <p>
+	 * The handler and restart stacks never reach their global: a thread with no binding
+	 * of one binds it here, so every thread running the program's code -- whatever
+	 * started it -- has stacks of its own, starting from the global's nil. Through one
+	 * field a thread leaving its {@code handler-bind} restores what it saved over what
+	 * another thread pushed since.
 	 */
 	static void emitGlobalStore(String name, JvmLispCompiler.Ctx ctx) {
 		if (ctx.mvChannel != null && am.ik.rontolisp.LispNames.MV_SPILL.equals(name)) {
@@ -207,7 +213,12 @@ final class JvmSetqCompiler {
 		ctx.body.dup().getstatic(tlField).swap().invokestatic(dyn.dset());
 		MethodCode.Label ifWrotePos = ctx.body.newLabel();
 		ctx.body.ifne(ifWrotePos);
-		ctx.body.dup().putstatic(globalFieldIndex);
+		if (JvmLispCompiler.THREAD_OWN_STACKS.contains(name)) {
+			ctx.body.dup().getstatic(tlField).swap().invokestatic(dyn.dbind()).pop();
+		}
+		else {
+			ctx.body.dup().putstatic(globalFieldIndex);
+		}
 		ctx.body.labelBinding(ifWrotePos);
 	}
 

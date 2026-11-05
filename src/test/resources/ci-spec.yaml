@@ -5324,6 +5324,68 @@ cases:
       (1 2 3)
       (4 1)
       3
+  - name: an-async-bodys-eager-part-is-a-call
+    # Before its first suspension an async body sees the handlers and restarts around
+    # the call, and a handler's exit leaves the call; only a condition no handler took
+    # stays the future's (.kb/async-await.md, "The eager part is a call").
+    source: |
+      (define-condition ci-eager-c (error) ())
+      (rontolisp:async-defun ci-eager-signals () (signal 'ci-eager-c) (print :declined) 1)
+      (rontolisp:async-defun ci-eager-errs () (error 'ci-eager-c) (print :never) 2)
+      (rontolisp:async-defun ci-eager-restart () (and (find-restart 'ci-eager-r) t))
+      (print (let* ((seen nil)
+                    (f (handler-bind ((ci-eager-c (lambda (e) (declare (ignore e)) (setq seen t))))
+                         (ci-eager-signals))))
+               (list seen (rontolisp:await f))))
+      (print (let* ((seen nil)
+                    (f (handler-bind ((ci-eager-c (lambda (e) (declare (ignore e)) (setq seen t))))
+                         (ci-eager-errs))))
+               (list seen (handler-case (rontolisp:await f) (ci-eager-c () :at-await)))))
+      (print (let ((f (handler-case (ci-eager-errs) (ci-eager-c () :at-call))))
+               (if (rontolisp:futurep f)
+                   (handler-case (rontolisp:await f) (ci-eager-c () :at-await))
+                   f)))
+      (print (let ((f (handler-case (ci-eager-signals) (ci-eager-c () :at-call))))
+               (if (rontolisp:futurep f)
+                   (handler-case (rontolisp:await f) (ci-eager-c () :at-await))
+                   f)))
+      (print (rontolisp:await (with-simple-restart (ci-eager-r "R.") (ci-eager-restart))))
+      (defun ci-eager-return (call)
+        (block out
+          (handler-bind ((ci-eager-c (lambda (e) (declare (ignore e)) (return-from out :left))))
+            (funcall call)
+            :stayed)))
+      (print (ci-eager-return #'ci-eager-signals))
+      (print (ci-eager-return #'ci-eager-errs))
+      (defun ci-eager-throw ()
+        (catch 'ci-eager-tag
+          (handler-bind ((ci-eager-c (lambda (e) (declare (ignore e)) (throw 'ci-eager-tag :thrown))))
+            (ci-eager-signals)
+            :stayed)))
+      (print (ci-eager-throw))
+      (defun ci-eager-invoke ()
+        (with-simple-restart (ci-eager-r "R.")
+          (handler-bind ((ci-eager-c (lambda (e) (declare (ignore e)) (invoke-restart 'ci-eager-r))))
+            (ci-eager-errs)
+            :stayed)))
+      (print (multiple-value-list (ci-eager-invoke)))
+      (defun ci-eager-body-exit ()
+        (block out
+          (funcall (rontolisp:async-lambda () (return-from out :left) :stayed))
+          :stayed))
+      (print (ci-eager-body-exit))
+    expected: |
+      :DECLINED
+      (T 1)
+      (T :AT-AWAIT)
+      :AT-AWAIT
+      :AT-AWAIT
+      T
+      :LEFT
+      :LEFT
+      :THROWN
+      (NIL T)
+      :LEFT
   - name: first-rest-nth-as-first-class-function
     source: |
       (print (funcall #'first '(1 2 3)))

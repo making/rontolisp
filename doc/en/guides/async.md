@@ -105,6 +105,25 @@ barrier:
   (error (e) (declare (ignore e)) "caught"))   ; => "caught"
 ```
 
+The part of a body before its first suspension is part of the call, so the
+handlers and restarts around the call apply to what it signals. A `handler-bind`
+handler runs where the body signals, and one that leaves by `return-from`,
+`throw` or a restart leaves the call. Only a condition no handler took stays the
+future's:
+
+```lisp
+(define-condition tick (condition) ())
+(rontolisp:async-defun ticking () (signal 'tick) :done)
+(block found
+  (handler-bind ((tick (lambda (c) (declare (ignore c)) (return-from found :left))))
+    (ticking)
+    :stayed))   ; => :LEFT
+```
+
+A body keeps the handlers its call saw after it suspends, and what it establishes
+itself stays its own: its caller and other bodies never run those handlers, and
+leaving them disturbs nothing they established since.
+
 ## Overlapping work
 
 Because a call is already running when it returns its future, several

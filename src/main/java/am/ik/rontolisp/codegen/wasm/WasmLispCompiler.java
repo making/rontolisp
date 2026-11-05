@@ -9215,7 +9215,9 @@ public final class WasmLispCompiler implements LispCompiler {
 						code.addFunction(WasmFutureRuntimeBuilder.build(i, asyncFuncBase(), asyncTypeBase(),
 								asyncTypeBase() + 1, asyncTypeBase() + 2, currentTaskGlobalIndex, sched, cb,
 								this.usesIdentityHashTables, globalIndices.getOrDefault(LispNames.MV_SPILL, -1),
-								uncaughtLocations != null ? uncaughtLocations.reawaitFuncIndex() : -1, streamCheck));
+								uncaughtLocations != null ? uncaughtLocations.reawaitFuncIndex() : -1, streamCheck,
+								blockExitTag,
+								WasmFutureRuntimeBuilder.HandlerState.of(globalIndices, ehDepthGlobalIndex)));
 					}
 				}
 				// The degenerate tier's stream runtime bodies, in p1StreamFuncBase()
