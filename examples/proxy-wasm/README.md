@@ -12,8 +12,8 @@ rontolisp. No other language or SDK is involved: the module is the output of
 | `gateway.lisp` | The filter |
 | `envoy.yaml` | An Envoy running the filter in front of a small upstream |
 | `check.sh` | Builds the filter, runs it in Envoy under Docker and checks it with curl |
-| `sdk-examples/` | Three smaller filters on the same SDK |
-| `no-gc/` | A second SDK, for `--no-gc`, and the same three filters on it |
+| `sdk-examples/` | Four smaller filters on the same SDK |
+| `no-gc/` | A second SDK, for `--no-gc`, and the same four filters on it |
 
 ## Running it
 
@@ -163,11 +163,11 @@ a host without wasm-GC. A filter is one form, and the macro writes the exports:
 Compile with `--no-gc --no-wasi`, and `--optimize=size` for the sizes below. `no-gc/check.sh`
 builds the filters there and runs on them the checks of `sdk-examples/check.sh`.
 
-| Filter, at `--optimize=size` | On this SDK: raw / gzip | On `proxy-wasm.lisp`: raw / gzip |
+| Filter, at `--optimize=size` | On this SDK: raw / gzip | On `proxy-wasm.lisp` with `:proxy-wasm-trap`: raw / gzip |
 | --- | ---: | ---: |
-| `http_body` | 2,064 / 1,152 | 89,595 / 31,888 |
-| `http_headers` | 2,583 / 1,388 | 154,268 / 53,759 |
-| `test_plugin` | 6,541 / 3,124 | 103,131 / 36,964 |
+| `http_body` | 2,064 / 1,152 | 59,633 / 23,065 |
+| `http_headers` | 2,583 / 1,388 | 61,385 / 23,764 |
+| `test_plugin` | 6,581 / 3,145 | 70,815 / 26,998 |
 
 What it gives up, for a filter's author:
 
@@ -180,7 +180,7 @@ What it gives up, for a filter's author:
 | A body | A string or a byte vector | An address and a size, with `load8` and `search-bytes`, and it can be changed in place. As a string, `char` would walk from the start at each index |
 | Headers | An alist | `do-headers`, and `make-pairs` to build a map. A quoted alist of at most 127 bytes per name or value is serialized at compile time |
 | Other values | Everything Lisp has | Numbers, strings, a keyword spelled in the SDK's call. No lists, no closures, no `defvar` |
-| A failed host call | Signals; logged and the callback answers its default, or traps | Answers `nil` and the callback goes on, after a log line, or traps under `(:on-failure :trap)`. `http-call` always answers `nil` |
+| A failed host call | Signals; logged and the callback answers its default, or traps under `:proxy-wasm-trap` | Answers `nil` and the callback goes on, after a log line that gives the status but not the call, or traps under `(:on-failure :trap)`. A refused `http-call` answers `nil` on both |
 | `format` | All of it | To `t` or `nil`, a literal control of `~a`, `~d`, `~%`, `~~` |
 | Not covered | gRPC, queues, foreign functions, TCP | Those, and the clock, ticks, shared data, setting a property, continuing a paused stream, and finding the stream that made an outgoing call |
 

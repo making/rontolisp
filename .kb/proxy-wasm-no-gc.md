@@ -2,15 +2,15 @@
 
 `examples/proxy-wasm/no-gc/`: a second SDK beside `examples/proxy-wasm/proxy-wasm.lisp`, for a filter of
 a few KB on a host with or without wasm-GC. What a filter's author gives up is in that directory's
-parent README. Whether either SDK becomes built in: `.todo/i50`.
+parent README, the other SDK's choices in `proxy-wasm-sdk.md`, and whether either becomes built in in `.todo/i50`.
 
 ## Measured (2026-11-05, Envoy v1.40.2, `--no-gc --optimize=size`)
 
-| Filter | raw | gzip | by hand on `rontolisp:memory` (`.todo/artefacts/i51-proxy-wasm-filter-size/no-gc/`) | on the wasm-GC SDK |
+| Filter | raw | gzip | by hand on `rontolisp:memory` (`.todo/artefacts/i51-proxy-wasm-filter-size/no-gc/`) | on the wasm-GC SDK, `:proxy-wasm-trap` |
 | --- | ---: | ---: | ---: | ---: |
-| `http_body` | 2,064 | 1,152 | 2,101 / 1,109 | 89,595 / 31,888 |
-| `http_headers` | 2,583 | 1,388 | 2,556 / 1,372 | 154,268 / 53,759 |
-| `test_plugin` | 6,541 | 3,124 | not written | 103,131 / 36,964 |
+| `http_body` | 2,064 | 1,152 | 2,101 / 1,109 | 59,633 / 23,065 |
+| `http_headers` | 2,583 | 1,388 | 2,556 / 1,372 | 61,385 / 23,764 |
+| `test_plugin` | 6,581 | 3,145 | not written | 70,815 / 26,998 |
 | A filter with one `remove-header` | 1,193 | 716 | | |
 
 Same size as by hand, since the macros leave what a person writes: `http_body` is smaller, by the
@@ -24,7 +24,7 @@ it by 300 blocks, once.
 
 Behaviour: `sluice-client`'s `ProxyWasmFilterTest` (25 tests), with these three in the place of its Rust
 `http_body`, `http_headers` and `test_plugin`, passes against sluice ec574c2 on Endive, a wasm
-interpreter, as it does the wasm-GC SDK's. `no-gc/check.sh` is the Envoy half; neither is in CI.
+interpreter, as it does the wasm-GC SDK's. `no-gc/check.sh` is the Envoy half, 22 checks; neither is in CI.
 
 ## Why it looks as it does
 
@@ -42,9 +42,9 @@ interpreter, as it does the wasm-GC SDK's. `no-gc/check.sh` is the Envoy half; n
   form, reached or not. `intern` and `symbol-package` in `%state-accessors` brought in a `defvar`,
   refused at top level, which is why `defsetf` there is the long form and needs no setter name.
 - **The callbacks Sluice requires are exported** whatever the filter gives
-  (`ProxyWasmFilter.REQUIRED_EXPORTS`). Envoy needs none of them. Their bodies are identical, so they
-  fold and each costs its export entry. Trailers and `on_http_call_response` are exported only when
-  given, which both hosts accept.
+  (`ProxyWasmFilter.REQUIRED_EXPORTS`). Their bodies are identical, so they fold and each costs its
+  export entry. Trailers and `on_http_call_response` are exported only when given, which Sluice and
+  Envoy both accept.
 
 ## State
 

@@ -114,6 +114,7 @@
       (proxy-wasm:set-header :response "x-plugin"
        #.(format nil "a~c~cx-smuggled: 1" (code-char 13) (code-char 10))))
      ("/edit" (proxy-wasm:add-header :response "x-plugin" "edited"))
+     ("/failed-call" (proxy-wasm:set-buffer :call-response-body 0 1 "x"))
      ("/hog-fields"
       (loop
         (proxy-wasm:add-header :response "x-plugin"

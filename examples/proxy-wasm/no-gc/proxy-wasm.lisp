@@ -563,7 +563,7 @@
 ;; Each callback: its export, the function behind it, what the ABI gives and takes, and
 ;; what it answers when the filter leaves it out. Those marked :optional no host asks for,
 ;; so leaving them out leaves out the export too. Sluice refuses a module missing any of
-;; the others, and Envoy takes any of them as absent.
+;; the others.
 (defun %callbacks ()
   '((:on-vm-start "proxy_on_vm_start" %on-vm-start (:u32 :s32) :s32 1)
     (:on-configure "proxy_on_configure" %on-configure (:u32 :s32) :s32 1)

@@ -343,7 +343,7 @@ takes a wrapper, whose whole content is the `drop`. Two documented divergences (
   A program reading what a host wrote through `"rontolisp:memory"` keeps them for that host's
   allocator, unless it exports its own, a defun that hands its one parameter to `alloc`
   (`exportsItsOwnAllocator`), which is a Proxy-Wasm filter's `proxy_on_memory_allocate`. The bodies
-  stay for its own calls (`arenaHelpers`) and the export entries go: 59 bytes raw, 40 gzip, on
+  stay for its own calls (`arenaHelpers`) and the export entries go: 85 bytes raw, 40 gzip, on
   `examples/proxy-wasm/no-gc/http_body.lisp`, 2026-11-05.
 - **`rontolisp:with-arena`** closes the intra-call hole. Cross-backend it is
   `LispMacroExpander.expandWithArena` lowering to `progn` (ci-spec
