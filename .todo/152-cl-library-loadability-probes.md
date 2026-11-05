@@ -134,13 +134,8 @@ verification against the actual Quicklisp dist at probe time)
   - Load, wrong result: `3bmd` (warning, h39), `optima` (h40 done: `match` runs on the interpreter), `zpng` (h41),
     `lisp-unit` (h45), `cl-markup` (h46), `st-json` (h51), `uuid` v5 (h48), `cl-annot` (h53),
     `lass` (a block keeps only its first property: h46; `~&` inside `~@[`: `.todo/001`).
-  - Do not load: `fset` (h43), `vecto` (h44), `djula` (h49, h59 done: `access`, `cl-slice`'s `bit-vector` method, funcallable
-    templates on all four backends, `collectors`' `closer-mop:standard-object`, arnesi's
-    `:properties` and ASDF plan order; h72 done: arnesi's unexported `defmacro while`; h73 done:
-    `asdf:operation-done-p`/`compile-bundle-op`; next arnesi's long-form
-    `define-method-combination` (`cc-standard` in `src/call-cc/generic-functions.lisp`,
-    `wrapping-standard` in `src/mop.lisp`), which `.kb/clos.md` "Short-form
-    `:method-combination`" puts out of scope), `hunchentoot` (h50 done:
+  - Do not load: `fset` (h43), `vecto` (h44), `djula` (h49, h59, h72, h73, i44 done: loads and renders on
+    the interpreter, measured 2026-11-05), `hunchentoot` (h50 done:
     `cl-fad` loads and runs; next `flex:make-external-format`, h52),
     `cl-smtp` (h48), `drakma` (h52), `cl-csv`/`function-cache`/
     `cl-containers`/`cl-pdf` (h35), `jonathan`/`cl-redis`/`parenscript` (h53),

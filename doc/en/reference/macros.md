@@ -79,6 +79,7 @@ description and a runnable example you can evaluate in your browser.
 | `prog*` | `(prog* ((v init)...) tag-or-form...)` | Like `prog` with sequential (`let*`-style) bindings |
 | `shiftf` | `(shiftf a b 9)` | Shift place values left, store the last value into the last place, return the first place's old value |
 | `load-time-value` | `(load-time-value form)` | Evaluates `form` once per occurrence in the source (lazily, on first use), not once per use |
+| `define-method-combination` | `(define-method-combination name lambda-list (group...) form...)`, `(define-method-combination name :operator op)` | Define a method combination for `(:method-combination name ...)`, by forms computing the effective method or by an operator over the methods |
 | `define-compiler-macro` | `(define-compiler-macro name (params...) body...)` | Rewrite calls to `name` at compile time; returning the `&whole` form declines. A hint: it is ignored when the body signals, when `name` is a standard operator, or under `apply`/`funcall` |
 | `typep` | `(typep x '(unsigned-byte 8))` | Type test over the `typecase` specifier set; the specifier must be a literal (quoted) type |
 | `slot-boundp` | `(slot-boundp obj 'slot)` | Whether the slot holds a value: `nil` for an unknown slot, one written with no `:initform` and never supplied, or one `slot-makunbound` emptied |

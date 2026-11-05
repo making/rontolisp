@@ -214,7 +214,7 @@ categories:
       - { slug: list-all-packages, name: "list-all-packages" }
       - { slug: find-class, name: "find-class" }
       - { slug: allocate-instance, name: "allocate-instance" }
-      - { slug: add-method, name: "ensure-generic-function add-method remove-method find-method method-qualifiers" }
+      - { slug: add-method, name: "ensure-generic-function add-method remove-method find-method method-qualifiers compute-applicable-methods" }
       - { slug: slot-unbound, name: "slot-unbound" }
       - { slug: slot-missing, name: "slot-missing" }
       - { slug: class-name, name: "class-name" }
@@ -392,6 +392,7 @@ categories:
       - { slug: array-has-fill-pointer-p, name: "array-has-fill-pointer-p" }
       - { slug: adjustable-array-p, name: "adjustable-array-p" }
       - { slug: array-element-type, name: "array-element-type" }
+      - { slug: upgraded-array-element-type, name: "upgraded-array-element-type" }
       - { slug: vector-push, name: "vector-push" }
       - { slug: vector-pop, name: "vector-pop" }
       - { slug: vector-push-extend, name: "vector-push-extend" }
@@ -1159,6 +1160,8 @@ categories:
       - { slug: compute-restarts, name: "compute-restarts" }
       - { slug: restart-name, name: "restart-name" }
       - { slug: muffle-warning, name: "muffle-warning" }
+      - { slug: invalid-method-error, name: "invalid-method-error" }
+      - { slug: method-combination-error, name: "method-combination-error" }
       - { slug: abort, name: "abort" }
       - { slug: continue, name: "continue" }
       - { slug: use-value, name: "use-value" }

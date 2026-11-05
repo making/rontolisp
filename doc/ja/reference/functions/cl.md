@@ -410,6 +410,7 @@
 | `array-has-fill-pointer-p` | `(array-has-fill-pointer-p a)` | 配列がフィルポインタを持てば `t`、そうでなければ `nil` |
 | `adjustable-array-p` | `(adjustable-array-p a)` | 配列が `:adjustable` で作成されていれば `t`、そうでなければ `nil` |
 | `array-element-type` | `(array-element-type a)` | アップグレード後の要素型。アップグレード先がなければ `t` |
+| `upgraded-array-element-type` | `(upgraded-array-element-type 'bit)` | その `:element-type` で作った配列の要素型 |
 | `vector-push` | `(vector-push x v)` | フィルポインタの位置に `x` を格納しインデックスを返す。満杯なら `nil` |
 | `vector-pop` | `(vector-pop v)` | フィルポインタをデクリメントし、通過した要素を返す |
 | `vector-push-extend` | `(vector-push-extend x v &optional ext)` | `vector-push` と同様だが満杯時にベクタを拡張する |
@@ -477,6 +478,8 @@
 | `compute-restarts` | `(compute-restarts)` | アクティブなすべてのリスタートレコードを最内から順に返します |
 | `restart-name` | `(restart-name r)` | リスタートオブジェクトの名前 |
 | `muffle-warning` | `(muffle-warning w)` | `warn` が確立する `muffle-warning` リスタートを起動し、印字される前に警告を中止します |
+| `invalid-method-error` | `(invalid-method-error method "bad ~A" x)` | メソッドコンビネーションの form から、メソッドを拒むエラーをシグナルします |
+| `method-combination-error` | `(method-combination-error "bad ~A" x)` | メソッドコンビネーションの form から、メソッド全体を拒むエラーをシグナルします |
 | `abort` | `(abort)` | 最内の `abort` リスタートを起動します。アクティブなものがなければエラー |
 | `continue` | `(continue)` | 最内の `continue` リスタート(`cerror` のもの)を起動します。アクティブなものがなければ `nil` |
 | `use-value` | `(use-value v)` | 最内の `use-value` リスタートを値を渡して起動します。アクティブなものがなければ `nil` |

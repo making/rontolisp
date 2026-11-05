@@ -95,6 +95,7 @@ public final class UserMacroExpander {
 		if (program.stream().noneMatch(form -> isOperator(form, LispNames.DEFMACRO))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_COMPILER_MACRO))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_MODIFY_MACRO))
+				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_METHOD_COMBINATION))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_SETF_EXPANDER))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFSETF))
 				&& program.stream().noneMatch(UserMacroExpander::writesMacroFunction)
@@ -1819,6 +1820,12 @@ public final class UserMacroExpander {
 			return form;
 		}
 		String name = memberName(head.name());
+		if (LispNames.DEFINE_METHOD_COMBINATION.equals(name)) {
+			// It runs here, where dispatchers run its function; the backend's registry
+			// takes the function from what is left of the form.
+			macroEval.evalResolved(cons);
+			return macroEval.methodCombinationMarker(cons);
+		}
 		if (LispNames.DEFMACRO.equals(name) || isExpansionTimeDefinition(cons)) {
 			macroEval.evalResolved(isOperator(cons, LispNames.DEFINE_MODIFY_MACRO)
 					? LispMacroExpander.expandDefineModifyMacro(cons) : cons);
@@ -1909,6 +1916,7 @@ public final class UserMacroExpander {
 	// program. nibbles' define-storer expands to (progn (defun ...) (defsetf ...)).
 	private static boolean isExpansionTimeDefinition(LispVal form) {
 		return isOperator(form, LispNames.DEFINE_COMPILER_MACRO) || isOperator(form, LispNames.DEFINE_MODIFY_MACRO)
+				|| isOperator(form, LispNames.DEFINE_METHOD_COMBINATION)
 				|| isOperator(form, LispNames.DEFINE_SETF_EXPANDER) || isOperator(form, LispNames.DEFSETF);
 	}
 
@@ -2175,7 +2183,11 @@ public final class UserMacroExpander {
 		}
 		if (cons.car() instanceof LispSymbol sym) {
 			if (LispNames.isQuote(sym.name()) || LispNames.DEFMACRO.equals(sym.name())
+					|| LispNames.DECLARE.equals(sym.name()) || LispNames.DECLAIM.equals(sym.name())
 					|| isExpansionTimeDefinition(cons)) {
+				// A declaration's type specifier is no call, whatever macro shares its
+				// name
+				// (serapeum's ->).
 				return form;
 			}
 			if (!cons.isProperList()) {
@@ -2217,9 +2229,9 @@ public final class UserMacroExpander {
 					if (parts.size() < 3) {
 						return form;
 					}
-					// A leading symbol after the name is a qualifier, so the lambda list
-					// (and body) shift by one.
-					int llIndex = parts.get(2) instanceof LispSymbol ? 3 : 2;
+					// Atoms after the name are qualifiers, so the lambda list (and body)
+					// shift past them.
+					int llIndex = am.ik.rontolisp.macro.MethodCombinations.methodLambdaListIndex(parts);
 					if (parts.size() <= llIndex) {
 						return form;
 					}
@@ -2575,7 +2587,7 @@ public final class UserMacroExpander {
 				case LispNames.DEFUN, LispNames.ASYNC_DEFUN:
 					return parts.size() < 3 ? null : expandAgainWithoutParameters(cons, parts.get(2), scope, macroEval);
 				case LispNames.DEFMETHOD: {
-					int llIndex = parts.size() > 2 && parts.get(2) instanceof LispSymbol ? 3 : 2;
+					int llIndex = am.ik.rontolisp.macro.MethodCombinations.methodLambdaListIndex(parts);
 					return parts.size() <= llIndex ? null
 							: expandAgainWithoutParameters(cons, parts.get(llIndex), scope, macroEval);
 				}

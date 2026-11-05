@@ -256,15 +256,20 @@
             nil
             (setq inherited (cons eslot inherited)))))
     (setq inherited (reverse inherited))
+    ;; A slot no class of the precedence list defines came from a method on
+    ;; compute-slots (ESA's modual-class), which adds it again for this class.
     (dolist (eslot inherited)
       (let ((definitions
              (%mop-direct-slot-definitions cpl (slot-value eslot 'name))))
-        (setq effective
-              (cons (if (and (null (cdr definitions))
-                         (eql (slot-value eslot '%location) (length effective)))
-                        eslot
-                        (closer-mop:compute-effective-slot-definition class
-                         (slot-value eslot 'name) definitions)) effective))))
+        (if definitions
+            (setq effective
+                  (cons (if (and (null (cdr definitions))
+                                 (eql (slot-value eslot '%location)
+                                      (length effective)))
+                            eslot
+                            (closer-mop:compute-effective-slot-definition class
+                             (slot-value eslot 'name) definitions)) effective))
+            nil)))
     (dolist (dsd direct-slots)
       (if (%mop-find-slot-definition (slot-value dsd 'name) inherited)
           nil

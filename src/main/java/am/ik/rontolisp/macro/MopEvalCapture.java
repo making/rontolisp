@@ -108,11 +108,11 @@ public final class MopEvalCapture {
 		return null;
 	}
 
-	// (defmethod name [qualifier] (params...) body...): fold the lambda list's
+	// (defmethod name qualifier* (params...) body...): fold the lambda list's
 	// specializer positions to names/eql literals, then walk the body generally.
 	private static LispVal foldDefmethod(LispCons defmethod, ClosRegistry closRegistry) {
 		List<LispVal> parts = defmethod.toList();
-		int llIndex = parts.size() > 2 && parts.get(2) instanceof LispSymbol ? 3 : 2;
+		int llIndex = MethodCombinations.methodLambdaListIndex(parts);
 		if (parts.size() <= llIndex || !(parts.get(llIndex) instanceof LispCons lambdaList)
 				|| !lambdaList.isProperList()) {
 			return defmethod; // malformed; the expansion reports it

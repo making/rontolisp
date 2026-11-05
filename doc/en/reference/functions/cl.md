@@ -410,6 +410,7 @@ page.
 | `array-has-fill-pointer-p` | `(array-has-fill-pointer-p a)` | `t` if the array has a fill pointer, else `nil` |
 | `adjustable-array-p` | `(adjustable-array-p a)` | `t` if the array was created `:adjustable`, else `nil` |
 | `array-element-type` | `(array-element-type a)` | The upgraded element type; `t` when there is nothing to upgrade to |
+| `upgraded-array-element-type` | `(upgraded-array-element-type 'bit)` | The element type of an array made with that `:element-type` |
 | `vector-push` | `(vector-push x v)` | Store `x` at the fill pointer and return the index, or `nil` when full |
 | `vector-pop` | `(vector-pop v)` | Decrement the fill pointer and return the element it passed |
 | `vector-push-extend` | `(vector-push-extend x v &optional ext)` | Like `vector-push` but grows the vector when full |
@@ -477,6 +478,8 @@ page.
 | `compute-restarts` | `(compute-restarts)` | every active restart record, innermost first |
 | `restart-name` | `(restart-name r)` | the name of a restart object |
 | `muffle-warning` | `(muffle-warning w)` | invoke the `muffle-warning` restart a `warn` establishes, aborting the warning before it prints |
+| `invalid-method-error` | `(invalid-method-error method "bad ~A" x)` | Signal, from a method combination's forms, that a method is refused |
+| `method-combination-error` | `(method-combination-error "bad ~A" x)` | Signal, from a method combination's forms, that the methods are refused |
 | `abort` | `(abort)` | invoke the innermost `abort` restart; an error when none is active |
 | `continue` | `(continue)` | invoke the innermost `continue` restart (a `cerror`'s); `nil` when none is active |
 | `use-value` | `(use-value v)` | invoke the innermost `use-value` restart with a value; `nil` when none is active |

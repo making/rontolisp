@@ -15588,11 +15588,11 @@ class WasmLispCompilerIntegrationTest {
 	void findSymbolAnswersForTheExportedOnlyStandardNames() throws Exception {
 		// The cl package exports every standard name (CLHS 11.1.2.1) whether or not an
 		// operator stands behind it; the same fold the JVM backend uses.
-		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"INVALID-METHOD-ERROR\" 'common-lisp)))"
+		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"FUNCTION-KEYWORDS\" 'common-lisp)))"
 				+ "(print (multiple-value-list (find-symbol \"&AUX\" :cl)))"
 				+ "(print (multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp)))"
-				+ "(print (fboundp 'invalid-method-error))"))
-			.isEqualTo("(INVALID-METHOD-ERROR :EXTERNAL)\n(&AUX :EXTERNAL)\n(NIL NIL)\nNIL");
+				+ "(print (fboundp 'function-keywords))"))
+			.isEqualTo("(FUNCTION-KEYWORDS :EXTERNAL)\n(&AUX :EXTERNAL)\n(NIL NIL)\nNIL");
 	}
 
 	@Test

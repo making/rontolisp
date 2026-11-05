@@ -122,7 +122,9 @@ independently of whether an implementation has an operator behind one: the name 
 `find-symbol` / `do-external-symbols` answer, not a promise that calling it works. The names
 rontolisp does not implement (93 on 2026-10-31) are `PackageRegistry.CL_EXPORTED_ONLY` -- plain strings, exactly
 because there is no implementation to name, and a name that gains one moves OUT of the set into
-its category.
+its category. `optimize` and its five qualities left it on 2026-11-05 (`CL_OPTIMIZE_NAMES`):
+`trivial-cltl2:declaration-information` answers them, which serapeum's `policy-quality` looks up with
+a symbol read in its own package.
 
 **The split is the whole design: exported is not the same question as owned.**
 `CL_EXPORTED_ONLY` joins the package's `externals` (and its `symbols`, so externals stay a

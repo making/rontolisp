@@ -2777,6 +2777,38 @@ public final class LispNames {
 	public static final String DEFINE_MODIFY_MACRO = "DEFINE-MODIFY-MACRO";
 
 	/**
+	 * The {@code define-method-combination} macro: an evaluator keeps a function
+	 * computing effective method forms, and the form leaves nothing for run time.
+	 */
+	public static final String DEFINE_METHOD_COMBINATION = "DEFINE-METHOD-COMBINATION";
+
+	/**
+	 * {@code make-instance} of a literal class as the system does it, past the methods on
+	 * the generic: what the generic's default method evaluates on the interpreter.
+	 */
+	public static final String SYSTEM_MAKE_INSTANCE = "%SYSTEM-MAKE-INSTANCE";
+
+	/** What an effective method form calls a method with. */
+	public static final String CALL_METHOD = "CALL-METHOD";
+
+	/** What an effective method form makes a form a next method with. */
+	public static final String MAKE_METHOD = "MAKE-METHOD";
+
+	/** The {@code upgraded-array-element-type} standard function: a prelude defun. */
+	public static final String UPGRADED_ARRAY_ELEMENT_TYPE = "UPGRADED-ARRAY-ELEMENT-TYPE";
+
+	/**
+	 * The {@code compute-applicable-methods} generic of the generic-function protocol.
+	 */
+	public static final String COMPUTE_APPLICABLE_METHODS = "COMPUTE-APPLICABLE-METHODS";
+
+	/** The {@code invalid-method-error} standard function: a prelude defun. */
+	public static final String INVALID_METHOD_ERROR = "INVALID-METHOD-ERROR";
+
+	/** The {@code method-combination-error} standard function: a prelude defun. */
+	public static final String METHOD_COMBINATION_ERROR = "METHOD-COMBINATION-ERROR";
+
+	/**
 	 * The {@code define-setf-expander} macro. The five-value setf-expansion protocol
 	 * ({@code get-setf-expansion}/{@code &environment}) is supported: the interpreter's
 	 * {@code setfExpanders} registry and {@code UserMacroExpander} rewrite
