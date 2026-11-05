@@ -124,7 +124,9 @@ verification against the actual Quicklisp dist at probe time)
   - `parachute` runs compiled on all four backends, `with-fixtures` and `define-test` (i16,
     measured 2026-11-05).
   - `lparallel` -- bt condition variables (h37).
-  - `serapeum`, `spinneret` -- metaclass / class-object specializers (h33).
+  - `serapeum` loads and matches SBCL on the interpreter (measured 2026-11-05). `spinneret` stops on its
+    dependency trivial-arguments, whose `:import-from` has no arm for this implementation, so the first
+    symbol it imports reads as the package.
   - `cl-interpol`, `cl-csv` -- named-readtables: `:common-lisp` feature (h31), then the
     `readtable` class (h53). cl-csv's `.asd` first (h35).
 - **Probe round 2 (2026-10-30), compared against SBCL 2.2.9 on the same sources.**

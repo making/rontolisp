@@ -20,8 +20,9 @@ moment two threads ran Lisp code.
 - `multiple-value-bind`, `multiple-value-list`, `multiple-value-call`, `nth-value` (CL_MACROS +
   `expandBuiltinMacro`; `multiple-value-call` as a macro deviates from CL's special operator).
 - Secondary values for `floor`/`ceiling`/`round`/`truncate`, `gethash`, `subtypep` and `read-line`
-  (missing-newline-p, "read-line's missing-newline-p" below), ONLY inside consumers -- in call
-  position. Each of them as a FUNCTION object publishes too (below).
+  (missing-newline-p, "read-line's missing-newline-p" below): on the compile paths ONLY inside
+  consumers -- in call position -- and through the walks below; on the interpreter every call
+  publishes (since 2026-11-05). Each of them as a FUNCTION object publishes too (below).
   Two-argument `(floor a b)` elsewhere: `expandFloorFamilyDivisor` -> `(floor (/ a b))`.
 
 ## The lowering (`LispMacroExpander`)
@@ -198,8 +199,16 @@ unconditional spill would tax the hottest built-ins on every call:
   one), the floor family's excepted (next section). Cost: interpreter closure creation, resolved
   within noise (2M `lambda` evaluations, 5 alternating pairs); a program with no producer-tail
   lambda compiles
-  to the same size on both backends. A non-tail `return-from`/`go` escape is not scanned;
-  `multiple-value-prog1` needs no walk (its expansion ends in `values-list`).
+  to the same size on both backends. `multiple-value-prog1` needs no walk (its expansion ends in
+  `values-list`).
+- **A `return`, `return-from` or `throw` anywhere** (`settleExits`, ahead of the tail walks, compile
+  paths only, 2026-11-05): its value leaves however deep the exit sits, so a producer in it publishes.
+  Trivia's `match` returns from inside a `tagbody`, a `dolist` body is a statement, and
+  `(defun f (k) (when k (return-from f (gethash k h))) 0)` is an early return: all three lost the second
+  value (serapeum's `href`). The tail walk repeats it over a `while`, a `tagbody` and the forms ahead
+  of a tail, for the exits an expansion shows only then (a `loop`'s `return` clause). Quoted data is
+  skipped; nothing else is told apart, as a list of that shape in a built-in macro's own syntax only
+  gains a publish nothing reads.
 
 ## The floor family as a function object
 **Invariant (2026-09-19): `#'floor`/`#'ceiling`/`#'round`/`#'truncate` and the four `f` twins take
@@ -207,9 +216,9 @@ the optional divisor and answer both values, through a `funcall`, an `apply`, a 
 `mapcar` and a function return, on every backend.** Before, the function took one argument
 (`(funcall #'floor 7 2)` signalled, wasm trapped) and answered one value.
 - Interpreter: the `LispFunction` (`Environment.floorFamilyValues`) is `passesValues` and publishes
-  the remainder itself. The call position does NOT come here: `evalCons` rounds `(floor x)` through
-  `Environment.roundToInteger`, one value, as it already did `(floor a b)` -- a consumer or a tail
-  lowered its producer before the dispatch, so the remainder is paid only by the function.
+  the remainder itself, and a call in any position comes here (2026-11-05, not measured): a producer
+  a macro expands to, or one under an exit no walk sees, has no lowering. The exception is `(floor (/ a
+  b))`, the shape a lowering leaves, which rounds the exact quotient of `a` and `b` and answers one value.
 - Compile paths: the wrapper is `unaryOptionalSecond` (`(if b (op a b) (op a))`), and
   `settleWrapperLambdas` runs the `PUBLISH` tail walk over it before the `CLEAR` one, gated on the
   spill global, so its tail becomes the syntactic producer's `(values q r)`. Without the global the
@@ -238,8 +247,7 @@ variable, a `mapcar` and a function return, on every backend.** Pinned by the
 - Interpreter: `LispEvaluator.installValuePublishingFunctions` rebinds each name, last in
   `registerEval`, to a `passesValues` function that publishes what the lowering's companion reads
   (`%find-symbol-status`, `%subtypep-valid`, `%read-from-string-end`, `%array-disp-offset`; gethash
-  a present-p off a private sentinel). The call position dispatches to the one-value built-in
-  (`evalConsRareOperator` -> `evalPrimaryValueCall`), as the floor family's does.
+  a present-p off a private sentinel). A call in any position reaches it, as the floor family's does.
 - Compile paths: the wrapper publishes (`settleWrapperLambdas`' PUBLISH walk) and takes the full
   lambda list (`BuiltinFunctionWrappers.VALUE_SHAPES`: gethash's default, intern's package) ONLY in a
   program that names the operator as a designator, `#'name` or `'name`
@@ -262,8 +270,7 @@ variable, a `mapcar` and a function return, on every backend.** Pinned by the
   `(funcall #'gethash ...)` published). With the constant sentinel: time
   unchanged with no multiple-value
   operator in the program; with one, the published call pays for the per-call list and
-  the sentinel literal. The call-position consumer got faster and smaller. Interpreter
-  call-position `gethash` unchanged within noise. Byte-identical: `fib` with and without a consumer,
+  the sentinel literal. The call-position consumer got faster and smaller. Byte-identical: `fib` with and without a consumer,
   a hash-table program without a consumer, `intern`/`find-symbol`, computed `subtypep`,
   `read-from-string` + `array-displacement` programs, on all three compile targets; a program with a
   `gethash` consumer changes by the sentinel only.
@@ -453,8 +460,6 @@ the macro expander.
   [[read-load-streams]] for `read-from-string`'s stop index.)
 
 ## Documented deviations
-- Producers are recognized before user-macro expansion on the interpreter but after it on the
-  compile path, so a USER MACRO expanding to `(values ...)` yields all values only when compiled.
 - A program's own `defun` of a `cl` function name that answers several values is classified as
   one value on the compile paths ("A tail settles the channel", residue).
 - `multiple-value-call` with a builtin `#'name` inherits the wrapper arity:
