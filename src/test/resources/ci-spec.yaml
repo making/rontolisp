@@ -13985,16 +13985,23 @@ cases:
       ;; rather than handed to the first preopened directory whole. probe-file's
       ;; answer is the truename, which differs by host (macOS's /tmp is a link) and,
       ;; on WASM, by what the preopens let the module see -- but it opens everywhere.
+      ;; The name is the run's own: every test run on a machine shares /tmp, and a read
+      ;; beside another run's truncating open answers NIL.
       (defvar *abs-dir* "/tmp")
-      (defvar *abs-file* (concatenate 'string *abs-dir* "/ronto-abs-path.txt"))
+      (defvar *abs-name*
+        (concatenate 'string *abs-dir* "/ronto-abs-path-"
+                     (princ-to-string (random 1000000000 (make-random-state t)))))
+      (defvar *abs-file* (concatenate 'string *abs-name* ".txt"))
+      (defvar *abs-source* (concatenate 'string *abs-name* ".lisp"))
       (with-open-file (out *abs-file* :direction :output) (write-line "absolute" out))
       (print (with-open-file (in *abs-file*) (read-line in)))
       (print (with-open-file (in (probe-file *abs-file*)) (read-line in)))
-      (print (probe-file (concatenate 'string *abs-dir* "/ronto-abs-absent.txt")))
-      (with-open-file (out (concatenate 'string *abs-dir* "/ronto-abs-path.lisp")
-                       :direction :output)
+      (print (probe-file (concatenate 'string *abs-name* "-absent.txt")))
+      (with-open-file (out *abs-source* :direction :output)
         (write-line "(print \"loaded-by-absolute-path\")" out))
-      (load (concatenate 'string *abs-dir* "/ronto-abs-path.lisp"))
+      (load *abs-source*)
+      (delete-file *abs-file*)
+      (delete-file *abs-source*)
     expected: |
       "absolute"
       "absolute"
