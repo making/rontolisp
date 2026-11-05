@@ -65,7 +65,7 @@ public final class FunctionValueWrappers {
 			.sorted()
 			.forEach(name -> wrappers.add(BuiltinFunctionWrappers.setqLambda(name, List.of("x"),
 					List.of(BuiltinFunctionWrappers.call(name, "x")))));
-		return wrappers;
+		return StreamOperandChecks.process(wrappers);
 	}
 
 	/**

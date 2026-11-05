@@ -2392,7 +2392,8 @@ public final class BuiltinFunctionWrappers {
 		LispVal ifForm = listToCons(
 				List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "dest"), strVar, writeForm));
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, ifForm));
-		return new WrapperDef(LispNames.FORMAT, List.of("dest", "ctrl", LispNames.LAMBDA_REST, "r"), List.of(body));
+		return new WrapperDef(LispNames.FORMAT, List.of("dest", "ctrl", LispNames.LAMBDA_REST, "r"),
+				List.of(StreamOperandChecks.checkedFormatDestination(new LispSymbol("dest")), body));
 	}
 
 	// #'concatenate wrapper (gated by REFERENCE_GATED_FUNCTIONS): the result type is a

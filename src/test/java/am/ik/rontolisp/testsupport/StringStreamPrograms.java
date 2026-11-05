@@ -43,7 +43,7 @@ public final class StringStreamPrograms {
 			(print (dir-of (make-synonym-stream '*dir-out*)))
 			(print (dir-of *error-output*))
 			(print (dir-of t))
-			(print (dir-of 3))
+			(print (handler-case (dir-of 3) (type-error () :type-error)))
 			(print (dir-of (%obj-new '%stream t :standard-input)))
 			(print (dir-of (%obj-new '%stream t :standard-output)))
 			""";
@@ -65,7 +65,7 @@ public final class StringStreamPrograms {
 			(NIL T)
 			(NIL T)
 			(T T)
-			(NIL NIL)
+			:TYPE-ERROR
 			(T NIL)
 			(NIL T)""";
 

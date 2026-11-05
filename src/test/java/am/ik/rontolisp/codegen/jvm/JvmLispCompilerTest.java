@@ -3861,8 +3861,8 @@ class JvmLispCompilerTest {
 		// win over the seeded default: the seed IS the binding cell _store mutates.
 		assertThat(compileAndRun("(defvar *sv-stream-name* '*error-output*)"
 				+ "(print (boundp *sv-stream-name*)) (print (symbol-value *sv-stream-name*))"
-				+ "(setq *error-output* 7) (print (symbol-value '*error-output*))"))
-			.isEqualTo("T\n#<STREAM>\n7");
+				+ "(setq *error-output* t) (print (symbol-value '*error-output*))"))
+			.isEqualTo("T\n#<STREAM>\nT");
 	}
 
 	@Test
@@ -5366,8 +5366,8 @@ class JvmLispCompilerTest {
 				(setq h (open "%s"))
 				(close h)
 				(print (file-length h))
-				(print (file-length "not-a-stream"))
-				""".formatted(file, file, file, file, file))).isEqualTo("T\nNIL\n6\nNIL\nNIL");
+				(print (handler-case (file-length "not-a-stream") (type-error () :type-error)))
+				""".formatted(file, file, file, file, file))).isEqualTo("T\nNIL\n6\nNIL\n:TYPE-ERROR");
 	}
 
 	@Test
@@ -9653,8 +9653,8 @@ class JvmLispCompilerTest {
 				+ " (print (pathnamep #P\"/tmp/x\")) (print (stream-element-type t))"))
 			.isEqualTo("NIL\nNIL\nNIL\nT\nCHARACTER");
 		assertThat(compileAndRun("(print (input-stream-p t)) (print (output-stream-p (make-string-output-stream)))"
-				+ " (print (input-stream-p \"s\"))"))
-			.isEqualTo("T\nT\nNIL");
+				+ " (print (handler-case (input-stream-p \"s\") (type-error () :type-error)))"))
+			.isEqualTo("T\nT\n:TYPE-ERROR");
 	}
 
 	@Test
@@ -10467,13 +10467,13 @@ class JvmLispCompilerTest {
 						  (print (list (input-stream-p in) (output-stream-p in)))
 						  (print (list (input-stream-p out) (output-stream-p out)))
 						  (print (list (input-stream-p handle) (output-stream-p handle)))
-						  (print (list (input-stream-p 3) (output-stream-p 3))))
+						  (print (handler-case (input-stream-p 3) (type-error () :type-error))))
 						"""))
 			.isEqualTo("""
 					(T NIL)
 					(NIL T)
 					(T NIL)
-					(NIL NIL)""");
+					:TYPE-ERROR""");
 	}
 
 	@Test

@@ -1175,6 +1175,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// the rest of compilation sees canonical names.
 		PackageResolver packageResolver = new PackageResolver();
 		program = packageResolver.resolveProgram(program);
+		// A stream operator's argument is a stream (compiler/StreamOperandChecks).
+		program = am.ik.rontolisp.compiler.StreamOperandChecks.process(program);
 		// The host types of variables -- declared, inferred from a let initializer,
 		// proclaimed -- onto the java: sites they type, as the interpreter lowers each
 		// top-level form before running it (compiler/JavaDeclarations): the site
@@ -2264,6 +2266,14 @@ public final class JvmLispCompiler implements LispCompiler {
 						|| LispMacroExpander.programUsesSequenceCheck(wrappers)
 						|| LispMacroExpander.programUsesSequenceCheck(seqOpHelpers))) {
 			inject(LispMacroExpander.checkSequenceRuntimeWrapper(), defuns, injectedForms, specialVars);
+		}
+		// The shared check every %check-stream site calls, one streamp for the class. A
+		// program with no stream value keeps raw handles for the string streams its
+		// reports open, which the table entry tells from any other integer.
+		if (LispMacroExpander.programUsesStreamCheck(program) || LispMacroExpander.programUsesStreamCheck(wrappers)) {
+			inject(LispMacroExpander.checkStreamRuntimeWrapper(usesStreamValues ? null
+					: x -> new LispCons(new LispSymbol(LispNames.OPEN_STREAM_P), new LispCons(x, LispNil.INSTANCE))),
+					defuns, injectedForms, specialVars);
 		}
 
 		// Collect top-level global variables and give each a dedicated static field.

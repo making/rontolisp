@@ -181,9 +181,12 @@ final class WasmOperandTypes {
 		 * reports unnamed.
 		 * @param table the module's string table
 		 * @param spelled whether the program spells a name
+		 * @param streamChecked the operators the program's {@code %check-stream} sites
+		 * name, last in the table: spelling one with no such site names no row
 		 * @return the table
 		 */
-		static Operators place(WasmLispCompiler.StringTable table, java.util.function.Predicate<String> spelled) {
+		static Operators place(WasmLispCompiler.StringTable table, java.util.function.Predicate<String> spelled,
+				java.util.Set<String> streamChecked) {
 			java.util.Set<String> wanted = new java.util.LinkedHashSet<>(
 					java.util.List.of("+", "-", "*", "/", "=", "<", ">", "<=", ">="));
 			for (String op : OperandTypes.operators()) {
@@ -203,6 +206,7 @@ final class WasmOperandTypes {
 					wanted.addAll(to);
 				}
 			});
+			wanted.addAll(streamChecked);
 			java.util.Map<String, Integer> ids = new java.util.HashMap<>();
 			java.nio.ByteBuffer rows = java.nio.ByteBuffer.allocate((wanted.size() + 1) * ROW)
 				.order(java.nio.ByteOrder.LITTLE_ENDIAN);
@@ -214,7 +218,7 @@ final class WasmOperandTypes {
 				ids.put(op, ids.size() + 1);
 				rows.putInt(rows.capacity() + texts.size());
 				rows.putInt(text.length);
-				rows.putInt(typeCode(java.util.Objects.requireNonNull(OperandTypes.operatorType(op))));
+				rows.putInt(rowTypeCode(op));
 				texts.writeBytes(text);
 			}
 			java.io.ByteArrayOutputStream blob = new java.io.ByteArrayOutputStream();
@@ -222,7 +226,7 @@ final class WasmOperandTypes {
 			blob.writeBytes(texts.toByteArray());
 			java.util.Set<Integer> rowCodes = new java.util.TreeSet<>();
 			for (String op : wanted) {
-				rowCodes.add(typeCode(java.util.Objects.requireNonNull(OperandTypes.operatorType(op))));
+				rowCodes.add(rowTypeCode(op));
 				if (STRING_CHECKED.contains(op)) {
 					rowCodes.add(code(OperandTypes.Kind.STRING));
 				}
@@ -241,7 +245,7 @@ final class WasmOperandTypes {
 				if (OperandTypes.floatOperators().contains(op)) {
 					rowCodes.add(code(OperandTypes.Kind.FLOAT));
 				}
-				if (OperandTypes.streamOperators().contains(op)) {
+				if (OperandTypes.streamOperators().contains(op) || streamChecked.contains(op)) {
 					rowCodes.add(code(OperandTypes.Kind.STREAM));
 				}
 			}
@@ -301,6 +305,22 @@ final class WasmOperandTypes {
 		}
 		String op = OperandTypes.reportedOperator(operator);
 		Integer row = op == null ? null : ctx.operandOperators.ids().get(op);
+		return row == null ? 0 : row;
+	}
+
+	/**
+	 * The row of an operator a {@code %check-stream} site names, or 0 outside EH mode. It
+	 * reads the table directly: these operators are no named operators elsewhere, so a
+	 * funnel inside one of them reports as it always did.
+	 * @param ctx the emission context
+	 * @param operator the operator's symbol name
+	 * @return the id
+	 */
+	static int streamOperatorId(WasmLispCompiler.Ctx ctx, String operator) {
+		if (ctx.operandOpGlobalIndex < 0) {
+			return 0;
+		}
+		Integer row = ctx.operandOperators.ids().get(operator);
 		return row == null ? 0 : row;
 	}
 
@@ -378,6 +398,12 @@ final class WasmOperandTypes {
 		w.writeSignedLeb128(value);
 		w.write(Instruction.SET_GLOBAL);
 		w.writeUnsignedLeb128(global);
+	}
+
+	// A %check-stream operator is funnel-typed without being a named operator.
+	private static int rowTypeCode(String op) {
+		String type = OperandTypes.operatorType(op);
+		return type == null ? FUNNEL_CODE : typeCode(type);
 	}
 
 	private static int typeCode(String type) {

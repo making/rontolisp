@@ -1734,7 +1734,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalFormatStreamDestinationRejectsNonStream() {
 		assertThatThrownBy(() -> eval("(format 'foo \"~a\" 1)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("not an output stream");
+			.hasMessageContaining("FORMAT: The value FOO is not of type STREAM");
 	}
 
 	@Test
@@ -10232,11 +10232,12 @@ class LispEvaluatorTest {
 		// Common Lisp's "cannot be determined" answer, not a signal.
 		assertThat(eval("(file-write-date \"" + path + ".missing\")")).isEqualTo(LispNil.INSTANCE);
 		assertThat(evalMulti("(with-open-file (in \"" + path + "\") (file-length in))")).isEqualTo(new LispInteger(6));
-		// Only an OPEN file stream has a file behind it; a closed handle, a string stream
-		// and a non-stream all answer nil.
+		// Only an OPEN file stream has a file behind it; a closed handle and a string
+		// stream answer nil, and a non-stream is a type-error.
 		assertThat(evalMulti("(setq h (open \"" + path + "\")) (close h) (file-length h)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(evalMulti("(with-output-to-string (s) (file-length s))").print()).isEqualTo("\"\"");
-		assertThat(eval("(file-length \"not-a-stream\")")).isEqualTo(LispNil.INSTANCE);
+		assertThatThrownBy(() -> eval("(file-length \"not-a-stream\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("FILE-LENGTH: The value \"not-a-stream\" is not of type STREAM");
 	}
 
 	@Test
@@ -25556,10 +25557,9 @@ class LispEvaluatorTest {
 						      (input-stream-p (make-instance 'gdp-plain))
 						      (output-stream-p (make-instance 'gdp-plain))
 						      (input-stream-p (make-string-input-stream "z"))
-						      (output-stream-p (make-string-input-stream "z"))
-						      (input-stream-p 3))
+						      (output-stream-p (make-string-input-stream "z")))
 						""")
-			.print()).isEqualTo("(T NIL NIL T NIL NIL T NIL NIL)");
+			.print()).isEqualTo("(T NIL NIL T NIL NIL T NIL)");
 	}
 
 	@Test

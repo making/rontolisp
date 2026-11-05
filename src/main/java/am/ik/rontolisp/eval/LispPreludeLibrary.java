@@ -1509,6 +1509,10 @@ public final class LispPreludeLibrary {
 				(defmethod rontolisp:stream-clear-input ((%bs-s %broadcast-stream))
 				  nil)
 				(defun %make-broadcast-stream (%mbs-components)
+				  (dolist (%mbs-c %mbs-components)
+				    (if (if (streamp %mbs-c) (output-stream-p %mbs-c) nil)
+				        nil
+				        (error 'type-error :datum %mbs-c :expected-type '(satisfies output-stream-p))))
 				  (make-instance '%broadcast-stream :components %mbs-components))
 				""");
 		// make-two-way-stream: the composite-stream pattern one more time -- a Gray
@@ -4780,16 +4784,19 @@ public final class LispPreludeLibrary {
 		// *print-right-margin* is accepted and ignored rather than partly honored.
 		SOURCES.put(LispNames.PPRINT_NEWLINE, """
 				(defun pprint-newline (kind &optional (stream *standard-output*))
+				  (%check-stream stream 'pprint-newline t)
 				  (when (and *print-pretty* (eq kind :mandatory))
 				    (terpri stream))
 				  nil)
 				""");
 		SOURCES.put(LispNames.PPRINT_INDENT, """
 				(defun pprint-indent (relative-to n &optional (stream *standard-output*))
+				  (%check-stream stream 'pprint-indent t)
 				  nil)
 				""");
 		SOURCES.put(LispNames.PPRINT_TAB, """
 				(defun pprint-tab (kind colnum colinc &optional (stream *standard-output*))
+				  (%check-stream stream 'pprint-tab t)
 				  nil)
 				""");
 		// A pprint dispatch table is a one-element LIST holding the entry list, so
@@ -5091,6 +5098,7 @@ public final class LispPreludeLibrary {
 		// second value of every (read s).
 		SOURCES.put(LispNames.READ, """
 				(defun read (&optional stream (eof-error-p t) eof-value recursive-p)
+				  (%check-stream stream 'read t)
 				  (let ((%rd-out (make-string-output-stream)))
 				    (if (%rd-datum stream %rd-out)
 				        (let ((%rd-text (get-output-stream-string %rd-out)))
