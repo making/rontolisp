@@ -549,6 +549,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 						+ "' has the same name as a top-level defun (one name, one function)");
 			}
 		}
+		if (!defuns.containsKey(LispNames.FORMAT)) {
+			defuns.replaceAll((name, defun) -> new Defun(name, defun.params(),
+					defun.body().stream().map(NoGcFormatLowering::lower).toList()));
+		}
 		if (this.component) {
 			// Two declarations of one (module, field) would put one function name twice
 			// into the imported instance's type, which a component cannot express; on the
@@ -907,7 +911,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return "--no-gc supports only (defun ...), (rontolisp:wasm-export ...) and (rontolisp:wasm-import ...) at top"
 				+ " level, got: " + expr.print() + " -- the scalar backend is a pure-compute reactor over unboxed"
 				+ " i64/f64 values and linear-memory strings: no top-level init body, no cons or list, no symbol or"
-				+ " hash value, no format, no eval, and packed float arrays only at rank 1 and 2. A program that"
+				+ " hash value, no format past a literal ~a/~d/~%/~~ control, no eval, and packed float arrays only at rank 1 and 2. A program that"
 				+ " needs any of those compiles on the default GC backend (drop --no-gc)";
 	}
 
@@ -1554,8 +1558,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param used whether the module uses linear memory at all
 	 * @param printUsed whether the module prints (fd_write import + __write_stdout)
 	 * @param ftoaUsed whether the module renders a float to text (__ftoa)
-	 * @param hostArena whether the arena API (the {@code __ronto_alloc} family of exports
-	 * and the mark/reset bodies behind two of them) is emitted at all
+	 * @param hostArena whether the arena API (the {@code __ronto_alloc} family of
+	 * exports) is emitted
 	 * @param allocates whether anything in the module can bump the heap during a call
 	 * @param programOwnsHeap whether the program declares the arena fields of
 	 * {@value WasmMemoryIntrinsic#MODULE}, so no export wrapper restores the heap for it
@@ -1566,6 +1570,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			int ftoaIndex, int schubBase, int fdlibmBase, List<WasmFdlibmRuntimeBuilder.Fn> fdlibmFns,
 			int fdlibmTablesBase, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed,
 			boolean hostArena, boolean allocates, boolean programOwnsHeap) {
+
+		/**
+		 * Whether the bodies behind the arena API are emitted: for the exports, or for
+		 * the program's own {@value WasmMemoryIntrinsic#MODULE} calls to them.
+		 * @return whether the mark, reset and host allocator functions exist
+		 */
+		boolean arenaHelpers() {
+			return this.hostArena || this.programOwnsHeap;
+		}
 
 		/**
 		 * The function index of an fdlibm function this module carries: its position in
@@ -1663,7 +1676,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * {@code __char_at} code-point-index helper)
 	 * @param hostArena whether the boundary gives the HOST a reason to touch the bump
 	 * heap, which is what the {@code __ronto_alloc} / {@code __ronto_alloc_mark} /
-	 * {@code __ronto_alloc_reset} exports and the mark/reset bodies are for
+	 * {@code __ronto_alloc_reset} exports are for
 	 * @param allocates whether anything in the module can bump the heap during a call,
 	 * which is what an export wrapper's save/restore bracket exists to undo
 	 * @param programOwnsHeap whether the program declares the arena fields of
@@ -1673,6 +1686,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			int iovAddr, int schubBase, int fdlibmTablesBase, List<WasmFdlibmRuntimeBuilder.Fn> fdlibmFns, boolean used,
 			boolean printUsed, boolean ftoaUsed, boolean strlenUsed, boolean byteOffsetUsed, boolean charAtUsed,
 			boolean hostArena, boolean allocates, boolean programOwnsHeap) {
+
+		boolean arenaHelpers() {
+			return this.hostArena || this.programOwnsHeap;
+		}
 
 		/**
 		 * The same plan with the given literals laid out header-free, in the same order.
@@ -1989,6 +2006,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// hands the host the (ptr,len) of a block this module already owns.
 		boolean hostArena = false;
 		boolean programOwnsHeap = false;
+		boolean liftsFromHost = false;
 		// Whether anything can bump the heap DURING a call, which is what the export
 		// wrappers' auto-reset bracket exists to undo. Every __alloc call site in the
 		// emitted code is one of: a :string import result copied in (below), a
@@ -2018,7 +2036,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			if (decl != null
 					&& (decl.returnType() == BoundaryType.STRING || decl.paramTypes().contains(BoundaryType.STRING))) {
 				boundaryString = true;
-				hostArena |= decl.returnType() == BoundaryType.STRING;
+				hostArena |= decl.returnType() == BoundaryType.STRING && !WasmMemoryIntrinsic.isIntrinsic(decl);
 				allocates |= decl.returnType() == BoundaryType.STRING;
 			}
 			// A binding of the module's own memory needs that memory. The arena family
@@ -2026,11 +2044,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// scalar export's wrapper would otherwise never have to restore.
 			if (decl != null && WasmMemoryIntrinsic.isIntrinsic(decl)) {
 				boundaryString = true;
-				hostArena |= WasmMemoryIntrinsic.needsArena(decl);
 				allocates |= WasmMemoryIntrinsic.needsArena(decl);
 				programOwnsHeap |= WasmMemoryIntrinsic.needsArena(decl);
+				liftsFromHost |= WasmMemoryIntrinsic.needsArena(decl) || decl.returnType() == BoundaryType.STRING;
 			}
 		}
+		// What such a program reads, a host wrote, into an address it had from somewhere:
+		// from the program's own allocator export if it has one (Proxy-Wasm's
+		// proxy_on_memory_allocate), and then the arena API is an API nobody calls.
+		hostArena |= liftsFromHost && !exportsItsOwnAllocator(exportDecls, defuns, imports);
 		// A body can produce a string without any literal or :string boundary (e.g.
 		// (length (princ-to-string n)) on an :int export), so string-producing ops also
 		// flag the memory as used.
@@ -2094,6 +2116,28 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	/**
+	 * Whether an export is the program's own allocator: a defun whose whole body hands
+	 * its one parameter to the {@code alloc} field.
+	 * @param exportDecls the export directives
+	 * @param defuns the program's functions
+	 * @param imports the import directives
+	 * @return whether the host has an allocator without the arena API
+	 */
+	private static boolean exportsItsOwnAllocator(List<WasmExportCompiler.Decl> exportDecls, Map<String, Defun> defuns,
+			Map<String, WasmImportCompiler.Decl> imports) {
+		for (WasmExportCompiler.Decl export : exportDecls) {
+			Defun defun = defuns.get(export.name());
+			String target = defun == null ? null : forwardTarget(defun);
+			WasmImportCompiler.Decl decl = target == null ? null : imports.get(target);
+			if (decl != null && WasmMemoryIntrinsic.isIntrinsic(decl)
+					&& WasmMemoryIntrinsic.of(decl) == WasmMemoryIntrinsic.ALLOC) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Assign a function index to every helper the layout calls for. The helpers follow
 	 * the internal functions and the EMITTED export wrappers, so the caller passes the
 	 * wrapper count it actually arrived at -- never the export-directive count, which is
@@ -2132,9 +2176,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// the same heap-pointer global, appended after the string helpers. --no-gc
 		// has no fixed-index invariant, so appending is free (nothing renumbers) -- and
 		// so is leaving them out when the boundary gives no host a use for them.
-		int markIndex = layout.hostArena() ? next++ : -1;
-		int resetIndex = layout.hostArena() ? next++ : -1;
-		int rontoAllocIndex = layout.hostArena() ? next++ : -1;
+		int markIndex = layout.arenaHelpers() ? next++ : -1;
+		int resetIndex = layout.arenaHelpers() ? next++ : -1;
+		int rontoAllocIndex = layout.arenaHelpers() ? next++ : -1;
 		// The printing helpers append after the arena pair, again gated.
 		int ftoaIndex = layout.ftoaUsed() ? next : -1;
 		// __ftoa is followed by its five Schubfach helpers (see Mem.schub*Index).
@@ -2481,7 +2525,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int utf8Helpers = (mem.strlenIndex() >= 0 ? 1 : 0) + (mem.byteOffsetIndex() >= 0 ? 1 : 0)
 				+ (mem.charAtIndex() >= 0 ? 1 : 0);
 		int localFuncCount = internalCount + wrapperBodies.size() + (mem.used() ? 4 : 0) + utf8Helpers
-				+ (mem.hostArena() ? 3 : 0) + (mem.ftoaUsed() ? 6 : 0) + mem.fdlibmFns().size()
+				+ (mem.arenaHelpers() ? 3 : 0) + (mem.ftoaUsed() ? 6 : 0) + mem.fdlibmFns().size()
 				+ (mem.printUsed() ? 1 : 0);
 		// Canonical string ABI for --component :string exports:
 		// cabi_realloc (the host lowers string arguments through it), one retptr shim
@@ -2564,7 +2608,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// __char_at (i32, i32) -> i32.
 			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 });
 		}
-		if (mem.hostArena()) {
+		if (mem.arenaHelpers()) {
 			// The host arena API: __ronto_alloc_mark () -> i32 and
 			// __ronto_alloc_reset (i32) -> (), plus the exported __ronto_alloc
 			// (i32) -> i32 host allocator (a one-call wrapper over __alloc, so its
@@ -2741,7 +2785,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				if (mem.charAtIndex() >= 0) {
 					code.addFunction(charAtBody(mem.byteOffsetIndex()));
 				}
-				if (mem.hostArena()) {
+				if (mem.arenaHelpers()) {
 					code.addFunction(markBody());
 					code.addFunction(resetBody());
 					code.addFunction(rontoAllocBody(mem.allocIndex()));
@@ -3732,6 +3776,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1).write(Instruction.I32_WRAP_I64);
 			w.write(Instruction.CALL).writeUnsignedLeb128(mem.memcpyIndex());
 			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
+		}
+		else if (intrinsic == WasmMemoryIntrinsic.ADDRESS || intrinsic == WasmMemoryIntrinsic.SIZE) {
+			// The parameter is the string itself, a pointer to [len][bytes].
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+			if (intrinsic == WasmMemoryIntrinsic.ADDRESS) {
+				w.write(Instruction.I32_CONST).writeSignedLeb128(4).write(Instruction.I32_ADD);
+			}
+			else {
+				w.write(Instruction.I32_LOAD, 0x02, 0x00);
+			}
+			w.write(Instruction.I64_EXTEND_U_I32);
 		}
 		else {
 			for (int p = 0; p < params.size(); p++) {
@@ -8178,13 +8233,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException("--no-gc: not takes exactly one argument in '" + fn.fnName + "'");
 		}
-		Ty argTy = compileExpr(args.get(1), fn);
-		if (argTy == Ty.FLOAT) {
-			fn.writer.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_EQ);
-		}
-		else {
-			fn.writer.write(Instruction.I64_EQZ); // i32: 1 if the value is 0
-		}
+		emitFalsy(compileExpr(args.get(1), fn), fn.writer); // i32: 1 if the value is 0
 		return emitPredicate(fn, Instruction.I64_EXTEND_S_I32);
 	}
 
@@ -8237,10 +8286,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (ty == Ty.FLOAT) {
 			w.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_NE);
 		}
-		else {
+		else if (ty != Ty.STRING) {
 			i64Const(w, 0);
 			w.write(Instruction.I64_NE);
 		}
+		// A string's i32 pointer already is the flag: nil is address 0.
 	}
 
 	// Converts the top-of-stack value into an i32 "is false" flag: 1 iff it is zero. Used
@@ -8254,7 +8304,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			w.write(Instruction.F64_CONST).writeF64(0.0).write(Instruction.F64_EQ);
 		}
 		else {
-			w.write(Instruction.I64_EQZ);
+			w.write(ty == Ty.STRING ? Instruction.I32_EQZ : Instruction.I64_EQZ);
 		}
 	}
 
@@ -8587,9 +8637,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// other backends perform via LispMacroExpander.
 	private static @Nullable LispVal expandMacro(String name, LispCons cons, int argc) {
 		return switch (name) {
-			case LispNames.COND -> LispMacroExpander.expandCond(cons);
+			case LispNames.COND -> LispMacroExpander.expandCondPerTest(cons);
 			case LispNames.AND -> LispMacroExpander.expandAnd(cons);
-			case LispNames.OR -> LispMacroExpander.expandOr(cons);
+			case LispNames.OR -> LispMacroExpander.expandOrPerTest(cons);
 			case LispNames.WHEN -> LispMacroExpander.expandWhen(cons);
 			case LispNames.UNLESS -> LispMacroExpander.expandUnless(cons);
 			case LispNames.LET_STAR -> LispMacroExpander.expandLetStar(cons);
@@ -8600,6 +8650,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.ONE_PLUS -> LispMacroExpander.expandOnePlus(cons);
 			case LispNames.ONE_MINUS -> LispMacroExpander.expandOneMinus(cons);
 			case LispNames.ZEROP -> LispMacroExpander.expandZerop(cons);
+			// No lists here, so nil is the only false and the two cannot differ.
+			case LispNames.NULL -> list(new LispSymbol(LispNames.NOT), cons.toList().get(1));
+			// Two operands only: more would have to bind each to compare it with the
+			// rest.
+			case LispNames.NE -> argc == 2 ? list(new LispSymbol(LispNames.NOT),
+					list(new LispSymbol(LispNames.EQ), cons.toList().get(1), cons.toList().get(2))) : null;
 			case LispNames.PLUSP -> LispMacroExpander.expandPlusp(cons);
 			case LispNames.MINUSP -> LispMacroExpander.expandMinusp(cons);
 			case LispNames.EVENP -> LispMacroExpander.expandEvenp(cons);

@@ -12,6 +12,12 @@ ci-spec `format-runtime-control-string`; add a directive to one path and you add
 implementations is a deliberate cost: an ordinary `(format t "...")` compiles to concatenation
 with no parser and no renderer in the artifact.
 
+`--no-gc` has neither path: its value model cannot hold the temporaries and type tests of the literal
+one. `NoGcFormatLowering` spells a literal control of `~a`, `~d`, `~%` and `~~`, to `t` or `nil`, as
+`princ` or as `concatenate` over `princ-to-string`, which gives the same text because `~a` and `~d`
+of what that backend holds are `princ`. It runs on the defuns before any scan, because `collectLiterals`,
+`usesStringOp` and the print scans read the forms as written. Anything else is refused by name.
+
 ## What reaches the runtime renderer
 Six ways into `(%fmt-render control arguments)`: a computed control expression; `#'format` as a
 value (`BuiltinFunctionWrappers.formatWrapper`, or the interpreter's `format` `LispFunction`);

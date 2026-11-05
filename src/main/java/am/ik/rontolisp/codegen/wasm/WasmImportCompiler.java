@@ -770,6 +770,11 @@ final class WasmImportCompiler {
 	static byte[] buildIntrinsicBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Decl decl, int strFromMemFuncIndex,
 			int allocFuncIndex, int allocMarkFuncIndex, int allocResetFuncIndex, int bytesFromMemFuncIndex) {
 		WasmMemoryIntrinsic intrinsic = WasmMemoryIntrinsic.of(decl);
+		if (intrinsic == WasmMemoryIntrinsic.ADDRESS || intrinsic == WasmMemoryIntrinsic.SIZE) {
+			throw new UnsupportedOperationException("rontolisp:wasm-import '" + decl.name() + "' binds \""
+					+ WasmMemoryIntrinsic.MODULE + "\".\"" + decl.field()
+					+ "\", which needs --no-gc: a wasm-GC string is an engine object, not bytes in linear memory");
+		}
 		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();

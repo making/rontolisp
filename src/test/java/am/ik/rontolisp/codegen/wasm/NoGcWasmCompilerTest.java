@@ -87,6 +87,20 @@ class NoGcWasmCompilerTest {
 	// specifier included -- and the scalar lowering has no places to
 	// write through, so the answer is a clear refusal, not a cast.
 	@Test
+	void formatIsRefusedPastWhatItCanSpellOut() {
+		for (var refused : List.of(Map.entry("(format nil \"~s\" n)", "takes only"),
+				Map.entry("(format nil n)", "literal control string"),
+				Map.entry("(format n \"x\")", "writes to t or nil"), Map.entry("(format nil \"~a\")", "too few"),
+				Map.entry("(format nil \"x\" n)", "too many"))) {
+			assertThatThrownBy(() -> compile("(defun f (n) " + refused.getKey() + " 1)\n"
+					+ "(rontolisp:wasm-export 'f :params '(:int) :returns :int)"))
+				.isInstanceOf(UnsupportedOperationException.class)
+				.hasMessageContaining("--no-gc: format")
+				.hasMessageContaining(refused.getValue());
+		}
+	}
+
+	@Test
 	void setfFunctionsAreRefusedOnTheNoGcBackend() {
 		assertThatThrownBy(() -> compile("""
 				(defun (setf foo) (v x) v)
@@ -956,6 +970,20 @@ class NoGcWasmCompilerTest {
 				""");
 		assertThat(exportNames(Objects.requireNonNull(sections(module).get(7)))).contains("NameLength", "memory",
 				"__ronto_alloc", "__ronto_alloc_mark", "__ronto_alloc_reset");
+		// A program holding the arena fields keeps it too, for a host to answer through
+		// out-pointers, unless the host has the program's own allocator export instead.
+		String memory = """
+				(rontolisp:wasm-import 'mem-alloc :from "rontolisp:memory" :as "alloc" :params '(:u32) :returns :u32)
+				(defun cell () (mem-alloc 8))
+				(rontolisp:wasm-export 'cell :as "Cell" :params '() :returns :u32)
+				""";
+		assertThat(exportNames(Objects.requireNonNull(sections(compile(memory)).get(7)))).contains("Cell", "memory",
+				"__ronto_alloc", "__ronto_alloc_mark", "__ronto_alloc_reset");
+		assertThat(exportNames(Objects.requireNonNull(sections(compile(memory + """
+				(defun allocate (size) (mem-alloc size))
+				(rontolisp:wasm-export 'allocate :as "Allocate" :params '(:u32) :returns :u32)
+				""")).get(7)))).contains("Cell", "Allocate", "memory")
+			.doesNotContain("__ronto_alloc", "__ronto_alloc_mark", "__ronto_alloc_reset");
 	}
 
 	@Test

@@ -242,6 +242,22 @@ class NoGcWasmImportE2eTest {
 
 				(defun reserve (size) (mem-alloc size))
 				(rontolisp:wasm-export 'reserve :params '(:u32) :returns :u32)
+
+				(rontolisp:wasm-import 'mem-address :from "rontolisp:memory" :as "address" :params '(:string) :returns :u32)
+				(rontolisp:wasm-import 'mem-size :from "rontolisp:memory" :as "size" :params '(:string) :returns :u32)
+				;; A string's bytes, where length counts its 2 characters.
+				(defun string-bytes ()
+				  (let ((s "日b"))
+				    (+ (* 1000 (mem-size s)) (load8 (mem-address s)) (load8 (+ 3 (mem-address s))) (length s))))
+				(rontolisp:wasm-export 'string-bytes :params '() :returns :s64)
+
+				;; Bytes 4 to 7 are the program's: no literal is there, and the empty string
+				;; at address 0 does not reach them.
+				(defun low-cell ()
+				  (let ((before (load32 4)))
+				    (store32 4 99)
+				    (+ (* 1000 before) (load32 4) (mem-size (or nil "")))))
+				(rontolisp:wasm-export 'low-cell :params '() :returns :s64)
 				""";
 		String driver = """
 				const fs = require('fs');
@@ -249,7 +265,7 @@ class NoGcWasmImportE2eTest {
 				const env = {
 				  answer: (pointerCell, sizeCell) => {
 				    const text = new TextEncoder().encode('hello');
-				    const ptr = inst.exports.__ronto_alloc(text.length);
+				    const ptr = inst.exports.reserve(text.length);
 				    new Uint8Array(inst.exports.memory.buffer).set(text, ptr);
 				    const view = new DataView(inst.exports.memory.buffer);
 				    view.setUint32(pointerCell, ptr, true);
@@ -260,8 +276,10 @@ class NoGcWasmImportE2eTest {
 				inst = new WebAssembly.Instance(mod, { env });
 				const attempt = (f) => { try { return String(f()); } catch (e) { return 'trap'; } };
 				console.log(attempt(() => inst.exports['read-answer']()));
-				const at = inst.exports.__ronto_alloc(16);
+				const at = inst.exports.reserve(16);
 				console.log(attempt(() => inst.exports['round-trips'](BigInt(at))));
+				console.log(attempt(() => inst.exports['string-bytes']()));
+				console.log(attempt(() => inst.exports['low-cell']()));
 				console.log(attempt(() => inst.exports.flat()));
 				console.log(attempt(() => inst.exports.peek(1n << 32n)));
 				console.log(WebAssembly.Module.imports(mod).map((i) => i.module + '.' + i.name).join(' '));
@@ -271,8 +289,8 @@ class NoGcWasmImportE2eTest {
 		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.SIZE)) {
 			assertThat(run(module, driver, level, "memory-" + level.spelling()).lines().toList())
 				.as("optimize=%s", level.spelling())
-				.containsExactly("5", String.valueOf(200L + 4000000000L + 1099511627776L), "1", "trap", "env.answer",
-						"stays reserved");
+				.containsExactly("5", String.valueOf(200L + 4000000000L + 1099511627776L),
+						String.valueOf(4000 + 0xE6 + 'b' + 2), "99", "1", "trap", "env.answer", "stays reserved");
 		}
 	}
 

@@ -3297,7 +3297,12 @@ class WasmLispCompilerIntegrationTest {
 				  (print nil)
 				  (princ 5)
 				  (terpri)
-				  (print (concatenate 'string "a" (princ-to-string 2.5))))
+				  (print (concatenate 'string "a" (princ-to-string 2.5)))
+				  (let ((n 7))
+				    (format t "~a ~d~%~~ ~a~%" n (* n 2) "s")
+				    (print (format nil "#~a ~d~%~~ ~a" n 1.5 "s"))
+				    (print (format nil "plain~%"))
+				    (print (format nil "~a" n))))
 				(rontolisp:wasm-export 'show :params '() :returns :void)
 				""";
 		String expected = """
@@ -3314,7 +3319,14 @@ class WasmLispCompilerIntegrationTest {
 				T
 				NIL
 				5
-				"a2.5\"""";
+				"a2.5"
+				7 14
+				~ s
+				"#7 1.5
+				~ s"
+				"plain
+				"
+				"7\"""";
 		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show")).isEqualTo(expected);
 		// The import + __write_stdout funnel survive the tree shaker under --optimize.
 		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, program, "show")).isEqualTo(expected);
@@ -3486,7 +3498,18 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'digits :params '(:int) :returns :int)
 				(defun code-at (n) (char-code (char "abc" n)))
 				(rontolisp:wasm-export 'code-at :params '(:int) :returns :int)
+				(defun tested (n)
+				  ;; A string as a test: nil is its address 0. Each or's temporary has the
+				  ;; type of its own test, though one function holds a boolean and a string.
+				  (let ((s (if (> n 0) "x" nil)))
+				    (cond ((null s) (if (or (= n 0) (/= n -1)) 10 20))
+				          ((not s) 30)
+				          (s (length (or s ""))))))
+				(rontolisp:wasm-export 'tested :params '(:int) :returns :int)
 				""";
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "tested", "5")).isEqualTo("1");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "tested", "0")).isEqualTo("10");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "tested", "-1")).isEqualTo("20");
 		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "route", "6")).isEqualTo("1");
 		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "route", "4")).isEqualTo("2");
 		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "route", "-1")).isEqualTo("3");

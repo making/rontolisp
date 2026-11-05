@@ -242,6 +242,16 @@ class LispFormatterTest {
 				           (if (endp list) acc (rec (cdr list) (cons (car list) acc)))))
 				  (rec x nil))
 				""");
+		assertThat(LispFormatter.format("""
+				(proxy-wasm:define-filter (:on-log (stream) (first stream) (second stream))
+				(:on-done (stream) t))
+				""")).isEqualTo("""
+				(proxy-wasm:define-filter
+				  (:on-log (stream)
+				    (first stream)
+				    (second stream))
+				  (:on-done (stream) t))
+				""");
 	}
 
 	@Test

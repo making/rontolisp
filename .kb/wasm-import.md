@@ -492,6 +492,9 @@ for free) but its body answers from the module: `buildIntrinsicBody` here,
 - A program declaring the arena fields owns the heap: `--no-gc` drops its scalar-return reset for
   it (`Mem.programOwnsHeap`, `.kb/no-gc-scalar-wasm.md`), which is what the wasm-GC wrappers already
   do, since their scratch is not on this heap.
+- `address` and `size` take a `:string` and answer its bytes, so `--no-gc` code can copy or compare a
+  string without decoding it, which `length` and `char` do. Only there: `buildIntrinsicBody` refuses
+  them by name, a wasm-GC string being an engine object.
 - Pins: `WasmOctetsBoundaryE2eTest` (GC), `NoGcWasmImportE2eTest.theMemoryModuleReadsWhatAHostAnsweredThroughOutPointers`,
   `WasmImportCompilerTest.theMemoryModuleIsTheFixedSetOfFieldsNotAHostModule`, and
   `examples/proxy-wasm/check.sh` in a real Envoy (not in CI: it needs Docker).
