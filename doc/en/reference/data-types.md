@@ -331,9 +331,7 @@ Lisp's box for "a scalar seen as an array", holding one element that `aref` and
 [`array-row-major-index`](functions/array-row-major-index.md)), and arrays are
 compared by identity (`eq`), so two distinct arrays are never `equal`. `length`
 returns the element count of a vector (rank-1 array); a multidimensional array
-is not a sequence, so `length` signals an error on it. Unlike the hash-table
-operators, the array operators are not exposed as first-class function values,
-so `#'aref` and `#'make-array` are not available (call them directly). Vectors
+is not a sequence, so `length` signals an error on it. Vectors
 can also be built with [`vector`](functions/vector.md) and read with
 [`svref`](functions/svref.md), array shapes are inspected with
 [`array-dimensions`](functions/array-dimensions.md) /

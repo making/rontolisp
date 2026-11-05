@@ -2038,6 +2038,19 @@ public final class LispNames {
 	public static final String CHECK_STREAM_RUNTIME = "%CHECK-STREAM-RUNTIME";
 
 	/**
+	 * {@code (%format-destination x)}: {@code format}'s check of a computed destination
+	 * in a program that can hold a string with a fill pointer, which it passes where
+	 * {@link #CHECK_STREAM_INTERNAL} refuses it ({@code compiler.StreamOperandChecks}).
+	 */
+	public static final String FORMAT_DESTINATION_INTERNAL = "%FORMAT-DESTINATION";
+
+	/**
+	 * {@code (%format-write destination text)}: what {@code format} does with its
+	 * rendered text at a {@link #FORMAT_DESTINATION_INTERNAL} destination.
+	 */
+	public static final String FORMAT_WRITE_INTERNAL = "%FORMAT-WRITE";
+
+	/**
 	 * The {@code row-major-aref} built-in function (flat row-major element access,
 	 * independent of rank); also a {@code setf} place.
 	 */
@@ -10497,6 +10510,13 @@ public final class LispNames {
 	 * {@code (%fmt-render control-string argument-list)} ({@code format-render.lisp}).
 	 */
 	public static final String FMT_RENDER = "%FMT-RENDER";
+
+	/**
+	 * {@code (%fmt-starts-fresh-p control)}: whether a run-time control opens with a
+	 * {@code ~&}, which asks the destination's column
+	 * ({@code LispMacroExpander.formatStartsFresh}).
+	 */
+	public static final String FMT_STARTS_FRESH = "%FMT-STARTS-FRESH-P";
 
 	/**
 	 * The internal {@code (%print-cased x escape)} renderer: the text the printer writes

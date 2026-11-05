@@ -11,10 +11,13 @@ import java.util.Set;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -31,6 +34,13 @@ import org.jspecify.annotations.Nullable;
  * front end's Gray and pushback rewrites, whose helpers stand in for the operators. A
  * {@code %}-named top-level defun is left alone: an internal helper's stream was checked
  * where its caller named it.
+ *
+ * <p>
+ * {@code format} also takes a string with a fill pointer, and a {@code write-string} of
+ * its text would not. In a program that can hold one, which the prelude's splice of
+ * {@code %format-write} says, a computed destination goes through
+ * {@link #formatThroughDestination} instead ({@code .kb/format.md}, "A string with a fill
+ * pointer").
  */
 public final class StreamOperandChecks {
 
@@ -192,6 +202,88 @@ public final class StreamOperandChecks {
 	}
 
 	/**
+	 * Whether a {@code format} destination's form can hold a value that takes a run-time
+	 * check.
+	 * @param destination the destination's form
+	 * @return whether it can
+	 */
+	public static boolean formatDestinationIsComputed(LispVal destination) {
+		return !needsNoCheck(destination, true);
+	}
+
+	/**
+	 * Whether the prelude spliced {@code %format-write}, so {@code format} can meet a
+	 * string with a fill pointer in this program.
+	 * @param program the top-level forms
+	 * @return whether it did
+	 */
+	public static boolean formatTakesStrings(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& LispNames.DEFUN.equals(head.name()) && cons.cdr() instanceof LispCons args
+					&& args.car() instanceof LispSymbol name && LispNames.FORMAT_WRITE_INTERNAL.equals(name.name())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * A {@code format} call with a computed destination, as what takes a string with a
+	 * fill pointer too: {@code (%format-write (%format-destination D) (format nil C
+	 * ARGS...) FRESH)}, {@code FRESH} what the destination is asked of a {@code ~&} that
+	 * opens the control. The destination is evaluated and checked first, as everywhere,
+	 * and the text is written once, after the arguments. Any other call is returned as it
+	 * is.
+	 * @param call the call
+	 * @return the call to evaluate
+	 */
+	public static LispCons formatThroughDestination(LispCons call) {
+		if (call.car() instanceof LispSymbol head && LispNames.FORMAT.equals(head.name()) && call.isProperList()) {
+			List<LispVal> parts = call.toList();
+			if (parts.size() >= 3 && formatDestinationIsComputed(parts.get(1))) {
+				LispVal distributed = LispMacroExpander.distributeFormat(call);
+				return (LispCons) (distributed != null ? distributed : formatThroughDestination(call, parts));
+			}
+		}
+		return call;
+	}
+
+	/**
+	 * {@link #formatThroughDestination(LispCons)} of a call's parts, its subforms already
+	 * rewritten by the caller.
+	 * @param call the call they replace
+	 * @param parts the head, the destination, the control, undistributed, and the
+	 * arguments
+	 * @return the replacing form
+	 */
+	public static LispVal formatThroughDestination(LispCons call, List<LispVal> parts) {
+		List<LispVal> render = new ArrayList<>(parts);
+		render.set(1, LispNil.INSTANCE);
+		LispVal destination = list(new LispSymbol(LispNames.FORMAT_DESTINATION_INTERNAL), parts.get(1));
+		if (parts.get(2) instanceof LispString) {
+			LispVal startsFresh = LispMacroExpander.formatStartsFresh(parts.get(2));
+			return SourceProvenance.inherit(call,
+					list(new LispSymbol(LispNames.FORMAT_WRITE_INTERNAL), destination,
+							SourceProvenance.inherit(call, list(render.toArray(LispVal[]::new))),
+							startsFresh == null ? LispNil.INSTANCE : startsFresh));
+		}
+		// A computed control is held, evaluated after the destination.
+		LispSymbol held = new LispSymbol(FORMAT_DESTINATION_VAR);
+		LispSymbol control = new LispSymbol(FORMAT_CONTROL_VAR);
+		render.set(2, control);
+		return SourceProvenance.inherit(call,
+				list(new LispSymbol(LispNames.LET_STAR), list(list(held, destination), list(control, parts.get(2))),
+						list(new LispSymbol(LispNames.FORMAT_WRITE_INTERNAL), held,
+								SourceProvenance.inherit(call, list(render.toArray(LispVal[]::new))),
+								list(new LispSymbol(LispNames.FMT_STARTS_FRESH), control))));
+	}
+
+	private static final String FORMAT_DESTINATION_VAR = "__format_destination";
+
+	private static final String FORMAT_CONTROL_VAR = "__format_held_control";
+
+	/**
 	 * Adds the checks to a program.
 	 * @param program the resolved top-level forms
 	 * @return the forms with their stream arguments checked
@@ -201,7 +293,7 @@ public final class StreamOperandChecks {
 		for (LispVal form : program) {
 			collectDefined(form, defined);
 		}
-		Rewriter rewriter = new Rewriter(Set.copyOf(defined));
+		Rewriter rewriter = new Rewriter(Set.copyOf(defined), formatTakesStrings(program));
 		List<LispVal> out = new ArrayList<>(program.size());
 		for (LispVal form : program) {
 			out.add(isInternalDefun(form) ? form : CallSiteWalk.walk(form, rewriter));
@@ -268,7 +360,7 @@ public final class StreamOperandChecks {
 		return tail;
 	}
 
-	private record Rewriter(Set<String> shadowed) implements CallSiteWalk.Rewriter {
+	private record Rewriter(Set<String> shadowed, boolean formatTakesStrings) implements CallSiteWalk.Rewriter {
 
 		@Override
 		public @Nullable LispVal call(LispCons form, LispSymbol head) {
@@ -297,12 +389,22 @@ public final class StreamOperandChecks {
 			if (needsNoCheck(stream, site.designator())) {
 				return null;
 			}
+			if (this.formatTakesStrings && LispNames.FORMAT.equals(name)) {
+				LispVal distributed = LispMacroExpander.distributeFormat(form);
+				if (distributed != null) {
+					return CallSiteWalk.walk(distributed, this);
+				}
+			}
 			List<LispVal> out = new ArrayList<>(parts.size());
 			out.add(head);
 			for (int i = 1; i < parts.size(); i++) {
 				LispVal walked = CallSiteWalk.walk(parts.get(i), this);
-				out.add(i == site.streamIndex() ? checked(walked, site.operator(), site.designator()) : walked);
+				out.add(walked);
 			}
+			if (this.formatTakesStrings && LispNames.FORMAT.equals(name) && out.size() >= 3) {
+				return formatThroughDestination(form, out);
+			}
+			out.set(site.streamIndex(), checked(out.get(site.streamIndex()), site.operator(), site.designator()));
 			return LispCons.rebuiltList(form, out);
 		}
 
@@ -343,7 +445,7 @@ public final class StreamOperandChecks {
 				return null;
 			}
 			names.addAll(this.shadowed);
-			return CallSiteWalk.walk(form, new Rewriter(Set.copyOf(names)));
+			return CallSiteWalk.walk(form, new Rewriter(Set.copyOf(names), this.formatTakesStrings));
 		}
 
 		private @Nullable LispVal withCheckedBindings(LispCons form) {

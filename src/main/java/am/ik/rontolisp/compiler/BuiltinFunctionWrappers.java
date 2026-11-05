@@ -697,6 +697,12 @@ public final class BuiltinFunctionWrappers {
 				if (gray != null && userDefinedNames.containsAll(gray.helpers())) {
 					chosen = gray.dispatching();
 				}
+				// Over the Gray twin: %format-write's own write is a site the Gray
+				// rewrite
+				// has already sent to its dispatch.
+				if (LispNames.FORMAT.equals(def.name) && userDefinedNames.contains(LispNames.FORMAT_WRITE_INTERNAL)) {
+					chosen = formatThroughDestinationWrapper();
+				}
 				if (LispNames.MAP.equals(def.name) && excludedNames.contains(LispNames.CONCATENATE)) {
 					chosen = mapWrapper(false);
 				}
@@ -738,6 +744,9 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
+	 * {@code #'make-array} takes the keyword tail the call position does where the two
+	 * {@code %make-array-et} entries are spliced -- a program that can hand the value
+	 * more than one argument -- and the dimensions alone otherwise.
 	 * {@code #'make-broadcast-stream} is the Gray broadcast stream where its entry is
 	 * spliced -- which the prelude does for any program naming the operator -- and the
 	 * discarding sink otherwise. {@code #'write-to-string} binds the printer variables
@@ -748,7 +757,8 @@ public final class BuiltinFunctionWrappers {
 	 * and the one-argument read otherwise.
 	 */
 	private static final Map<String, HelperWrapper> HELPER_WRAPPERS = Map
-		.of(LispNames.MAKE_BROADCAST_STREAM,
+		.of(LispNames.MAKE_ARRAY, new HelperWrapper(LispNames.MAKE_ARRAY_ET_FP_INTERNAL, variadicMakeArray()),
+				LispNames.MAKE_BROADCAST_STREAM,
 				new HelperWrapper(LispNames.MAKE_BROADCAST_STREAM_INTERNAL,
 						new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(),
 								List.of(call(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL)))),
@@ -899,7 +909,10 @@ public final class BuiltinFunctionWrappers {
 								List.of(listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("b"),
 										call(positionSet, "a", "b"), call(position, "a")))))));
 		String writeString = rontolispInternal("%GRAY-WRITE-STRING-DISPATCH");
-		table.put(LispNames.FORMAT, new DispatchWrapper(List.of(writeString), formatWrapper(writeString)));
+		String freshLine = rontolispInternal("%GRAY-FORMAT-FRESH-LINE");
+		table.put(LispNames.FORMAT,
+				new DispatchWrapper(List.of(writeString, freshLine, rontolispInternal("%GRAY-FRESH-LINE-DISPATCH")),
+						formatWrapper(writeString, call(freshLine, "dest"))));
 		return java.util.Collections.unmodifiableMap(table);
 	}
 
@@ -2317,11 +2330,52 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	// Variadic wrapper for make-array (gated with the fill-pointer array group):
-	// runtime keywords are re-extracted with getf. A :displaced-to argument selects
-	// the bare-view shape (a displaced array cannot combine with the other options),
-	// everything else the general shape; :element-type is accepted and ignored, like
-	// the call position. Enables cl-utilities' copy-array idiom
-	// (apply #'make-array (list* dims options...)).
+	// runtime keywords are re-extracted with getf and the call-position shapes chosen by
+	// which are there. A :displaced-to argument selects the bare-view shape (a displaced
+	// array cannot combine with the other options), :initial-contents the call position's
+	// computed element-type lowering, and everything else the prelude's dispatch on the
+	// element type: %make-array-et-fp where a fill pointer or adjustability forces a
+	// general array, else %make-array-et, whose arms can pack. cl-utilities' copy-array
+	// idiom is (apply #'make-array (list* dims options...)).
+	private static WrapperDef fullMakeArray() {
+		LispVal elementType = getfKwOr(LispNames.ELEMENT_TYPE_KEYWORD, LispTrue.INSTANCE);
+		LispVal displaced = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
+				new LispSymbol(LispNames.DISPLACED_TO_KEYWORD), getfKw(LispNames.DISPLACED_TO_KEYWORD),
+				new LispSymbol(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD),
+				getfKwOr(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD, new LispInteger(0)),
+				new LispSymbol(LispNames.ADJUSTABLE_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD),
+				new LispSymbol(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.FILL_POINTER_KEYWORD)));
+		LispVal contents = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
+				new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD), elementType,
+				new LispSymbol(LispNames.INITIAL_CONTENTS_KEYWORD), getfKw(LispNames.INITIAL_CONTENTS_KEYWORD),
+				new LispSymbol(LispNames.ADJUSTABLE_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD),
+				new LispSymbol(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.FILL_POINTER_KEYWORD)));
+		LispVal given = listToCons(List.of(new LispSymbol(LispNames.NOT), kwAbsent(LispNames.INITIAL_ELEMENT_KEYWORD)));
+		LispVal element = getfKw(LispNames.INITIAL_ELEMENT_KEYWORD);
+		LispVal general = listToCons(List.of(new LispSymbol(LispNames.IF),
+				listToCons(List.of(new LispSymbol(LispNames.OR), getfKw(LispNames.FILL_POINTER_KEYWORD),
+						getfKw(LispNames.ADJUSTABLE_KEYWORD))),
+				callV(LispNames.MAKE_ARRAY_ET_FP_INTERNAL, new LispSymbol("dims"), elementType, element, given,
+						getfKw(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD)),
+				callV(LispNames.MAKE_ARRAY_ET_INTERNAL, new LispSymbol("dims"), elementType, element, given)));
+		LispVal undisplaced = listToCons(
+				List.of(new LispSymbol(LispNames.IF), kwAbsent(LispNames.INITIAL_CONTENTS_KEYWORD), general, contents));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), getfKw(LispNames.DISPLACED_TO_KEYWORD), displaced, undisplaced));
+		return new WrapperDef(LispNames.MAKE_ARRAY, List.of("dims", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	// Whether the keyword is not in the tail, whatever a supplied one holds:
+	// (eq (getf kw KEY kw) kw).
+	private static LispVal kwAbsent(String keyword) {
+		LispSymbol kw = new LispSymbol("kw");
+		return callV(LispNames.EQ_GENERAL, callV(LispNames.GETF, kw, new LispSymbol(keyword), kw), kw);
+	}
+
+	// #'make-array where the %make-array-et entries are not in the program, reachable
+	// only
+	// through a designator the surface does not show: the dimensions, the fill-pointer
+	// group's keywords, an :element-type accepted and ignored.
 	private static WrapperDef variadicMakeArray() {
 		LispVal displaced = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
 				new LispSymbol(LispNames.DISPLACED_TO_KEYWORD), getfKw(LispNames.DISPLACED_TO_KEYWORD),
@@ -2383,21 +2437,34 @@ public final class BuiltinFunctionWrappers {
 	// string, anything else (the t designator or a stream handle) gets one write-string
 	// call and nil.
 	private static WrapperDef formatWrapper() {
-		return formatWrapper(LispNames.WRITE_STRING);
+		return formatWrapper(LispNames.WRITE_STRING,
+				LispMacroExpander.freshLineWhereTheColumnIsKnown(new LispSymbol("dest")));
 	}
 
 	// writer: the (writer string destination) call that writes the rendered text.
-	private static WrapperDef formatWrapper(String writer) {
+	// freshLine: what a ~& opening the control does.
+	private static WrapperDef formatWrapper(String writer, LispVal freshLine) {
 		LispSymbol strVar = new LispSymbol("__fmt_str");
 		LispVal rendered = am.ik.rontolisp.macro.FormatRenderer.call(new LispSymbol("ctrl"), new LispSymbol("r"));
 		LispVal bindings = listToCons(List.of((LispVal) listToCons(List.of(strVar, rendered))));
-		LispVal writeForm = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+		LispVal writeForm = listToCons(List.of(
+				new LispSymbol(LispNames.PROGN), listToCons(List.of(new LispSymbol(LispNames.IF),
+						call(LispNames.FMT_STARTS_FRESH, "ctrl"), freshLine, LispNil.INSTANCE)),
 				callV(writer, strVar, new LispSymbol("dest")), LispNil.INSTANCE));
 		LispVal ifForm = listToCons(
 				List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "dest"), strVar, writeForm));
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, ifForm));
 		return new WrapperDef(LispNames.FORMAT, List.of("dest", "ctrl", LispNames.LAMBDA_REST, "r"),
 				List.of(StreamOperandChecks.checkedFormatDestination(new LispSymbol("dest")), body));
+	}
+
+	// #'format in a program that can hold a string with a fill pointer, where the prelude
+	// spliced %format-write (StreamOperandChecks.formatThroughDestination).
+	private static WrapperDef formatThroughDestinationWrapper() {
+		return new WrapperDef(LispNames.FORMAT, List.of("dest", "ctrl", LispNames.LAMBDA_REST, "r"),
+				List.of(callV(LispNames.FORMAT_WRITE_INTERNAL, call(LispNames.FORMAT_DESTINATION_INTERNAL, "dest"),
+						am.ik.rontolisp.macro.FormatRenderer.call(new LispSymbol("ctrl"), new LispSymbol("r")),
+						call(LispNames.FMT_STARTS_FRESH, "ctrl"))));
 	}
 
 	// #'concatenate wrapper (gated by REFERENCE_GATED_FUNCTIONS): the result type is a
@@ -3083,7 +3150,7 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.VECTOR_POP), binaryOptionalThird(LispNames.VECTOR_PUSH_EXTEND),
 			// array-displacement yields its primary value (the target) -- the offset
 			// needs a direct mv consumer.
-			adjustArrayWrapper(), unary(LispNames.ARRAY_DISPLACEMENT), variadicMakeArray(),
+			adjustArrayWrapper(), unary(LispNames.ARRAY_DISPLACEMENT), fullMakeArray(),
 			// terpri / fresh-line / read-line: the optional stream, forwarded
 			// unconditionally (omitted == nil == the standard stream designator).
 			optionalStream(LispNames.TERPRI), optionalStream(LispNames.FRESH_LINE), readLineWrapper(),

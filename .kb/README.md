@@ -175,6 +175,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [wasm-import.md](wasm-import.md) -- `rontolisp:wasm-import`, `:async t`, `"rontolisp:memory"`, `--emit-js-glue`, `--host-boundary`
 - [proxy-wasm-sdk.md](proxy-wasm-sdk.md) -- `examples/proxy-wasm`: what a filter pays for, the compile-time error mode, what was weighed and left
 - [no-gc-scalar-wasm.md](no-gc-scalar-wasm.md) -- the `--no-gc` non-GC scalar backend
+- [proxy-wasm-no-gc.md](proxy-wasm-no-gc.md) -- the `--no-gc` Proxy-Wasm SDK in `examples/proxy-wasm/no-gc/`: why macros, what state and each piece cost, measured
 - [wasm-gc-strings.md](wasm-gc-strings.md) -- GC-backend strings as `$str_bytes` arrays
 - [wasm-gc-final-types.md](wasm-gc-final-types.md) -- every emitted wasm-GC type must be `sub final`
 - [wasm-gc-heap-pregrow.md](wasm-gc-heap-pregrow.md) -- `_start` pre-grows the engine's GC heap with one dropped allocation

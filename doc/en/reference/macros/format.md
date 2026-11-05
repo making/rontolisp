@@ -12,7 +12,9 @@ the formatted string (expanding into `princ-to-string`/`prin1-to-string` calls
 folded with the internal string concatenation); with any other destination
 expression it builds the string the same way and then DISPATCHES on the value at
 run time -- a stream is written with one `write-string` call and nil is returned
-(a `with-output-to-string` string stream or a file stream), a `t` value writes to
+(a `with-output-to-string` string stream or a file stream), a string with a fill
+pointer has the text appended at its fill pointer (with `vector-push-extend`, so
+it grows past its capacity) and nil is returned, a `t` value writes to
 `*standard-output*`, and a nil value returns the string. That test has to happen
 at run time because nil does not name a stream: it is the "return the string"
 destination, so a function that forwards its own `&optional stream` argument
@@ -102,7 +104,10 @@ one yes x=42
 
 ## Limitations
 
-Other destinations (strings with fill pointers) are not supported. The loop escape `~^` is
+Any other value is refused with `FORMAT: The value X is not of type STREAM`, a
+string without a fill pointer included. On the compile paths a string with a fill
+pointer is taken in a program that spells `:fill-pointer`: one that builds that
+keyword at run time is refused too. The loop escape `~^` is
 supported at the top level and inside `~{ ... ~}` / `~@{ ... ~}` bodies (the
 join idiom `"~{~a~^, ~}"`; inside `~:{ ... ~}` it ends the current sublist's
 body), but its `~:^`/`~@^` variants and prefix parameters are not. Further notes:
@@ -116,9 +121,11 @@ body), but its `~:^`/`~@^` variants and prefix parameters are not. Further notes
   every backend) and the digit count must be a literal, not a runtime `v`. The scaled mantissa is computed in 64-bit arithmetic, which limits `~,De` to roughly `D` <= 17 digits of precision (identically on every backend); the default (`~e`, 6 digits) is well within that bound. The overflow character of `~f`/`~e` requires a literal width.
 - The repeat count of `~%`/`~&`/`~~` must be a literal or `#` (a runtime `v` count
   there is not supported). `~&` decides whether to emit a newline from the actual
-  output column for destination `t`, but from the surrounding literal text (a
-  static approximation) for destination `nil` and inside composite
-  (`~(`/`~[`/`~{`) bodies.
+  output column for destination `t` and, where it opens the control string, for
+  a string stream or a string with a fill pointer too. Elsewhere it decides from
+  the surrounding literal text (a static approximation), and so inside composite
+  (`~(`/`~[`/`~{`) bodies: a file stream and `*error-output*` have no column to
+  read, so a `~&` that opens the control writes nothing to them.
 - Composite directives nest freely: a `~[` conditional may hold another `~[` (or
   a `~{ ... ~}` iteration) in any of its clauses. When a runtime-selected `~[`
   has clauses that consume DIFFERENT numbers of arguments, the rest of the

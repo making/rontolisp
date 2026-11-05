@@ -1728,9 +1728,8 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
     `handler-case` P1 3371 -> 8003 B: the EH-mode report reaches the printer, as a program's first
     `%operand-type-error` of any kind does. A `with-output-to-string` body writing through its stream:
     P1 13886 -> 14500 B, class 17492 -> 16703 B. A Gray program: P1 7452 -> 7576 B.
-  - Limits: `(format s ...)` to a string is this `type-error` too, where the compile paths wrote to
-    standard output and the interpreter signalled `not an output stream`. SBCL appends to a string
-    with a fill pointer and signals a `simple-error` for any other. A synonym stream over a
+  - Limits: `format` to a string with no fill pointer is this `type-error` too, where SBCL signals a
+    `simple-error` ([format.md](format.md), "A string with a fill pointer"). A synonym stream over a
     non-stream is refused by no check.
   - Pinned by ci-spec `stream-operators-refuse-a-non-stream-in-a-program-with-no-stream` and
     `stream-operators-refuse-a-non-stream-past-every-layer` (standalone, all four).

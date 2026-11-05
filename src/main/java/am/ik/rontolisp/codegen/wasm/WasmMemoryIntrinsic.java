@@ -42,7 +42,18 @@ enum WasmMemoryIntrinsic {
 
 	STRING("string", List.of(BoundaryType.U32, BoundaryType.U32), BoundaryType.STRING, false),
 
-	OCTETS("octets", List.of(BoundaryType.U32, BoundaryType.U32), BoundaryType.OCTETS, false);
+	OCTETS("octets", List.of(BoundaryType.U32, BoundaryType.U32), BoundaryType.OCTETS, false),
+
+	/**
+	 * Where a string's bytes are, which only {@code --no-gc} can answer: its string is a
+	 * block of linear memory, and a wasm-GC string is an engine object.
+	 */
+	ADDRESS("address", List.of(BoundaryType.STRING), BoundaryType.U32, false),
+
+	/**
+	 * How many bytes start at {@link #ADDRESS}, where {@code length} counts characters.
+	 */
+	SIZE("size", List.of(BoundaryType.STRING), BoundaryType.U32, false);
 
 	/** The reserved {@code :from} value. */
 	static final String MODULE = "rontolisp:memory";
@@ -117,7 +128,8 @@ enum WasmMemoryIntrinsic {
 	 * handed.
 	 * @param w the writer
 	 * @return whether this intrinsic is one instruction ({@code false} for the arena
-	 * family and the two lifts, which each backend calls its own helpers for)
+	 * family, the two lifts and the two string fields, which each backend answers its own
+	 * way)
 	 */
 	boolean emitAccess(WasmWriter w) {
 		int opcode = switch (this) {

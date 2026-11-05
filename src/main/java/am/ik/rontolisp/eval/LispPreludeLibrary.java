@@ -1489,6 +1489,34 @@ public final class LispPreludeLibrary {
 				LispNames.FMAKUNBOUND_INTERNAL)) {
 			SOURCES.put(helper, am.ik.rontolisp.compiler.RuntimeFunctionNames.definition(helper));
 		}
+		// format to a string with a fill pointer (compiler.StreamOperandChecks): the
+		// check of the destination, and the write after the rendering.
+		SOURCES.put(LispNames.FORMAT_DESTINATION_INTERNAL, """
+				(defun %format-destination (%fd-d)
+				  (if (if (stringp %fd-d) (array-has-fill-pointer-p %fd-d) nil)
+				      %fd-d
+				      (%check-stream %fd-d (%unspelled-quote format) t)))
+				""");
+		SOURCES.put(LispNames.FORMAT_WRITE_INTERNAL, """
+				(defun %format-write (%fw-d %fw-text %fw-fresh)
+				  (cond ((null %fw-d) %fw-text)
+				        ((stringp %fw-d)
+				         (if (and %fw-fresh
+				                  (> (length %fw-d) 0)
+				                  (char/= (char %fw-d (- (length %fw-d) 1)) #\\Newline))
+				             (vector-push-extend #\\Newline %fw-d))
+				         (dotimes (%fw-i (length %fw-text))
+				           (vector-push-extend (char %fw-text %fw-i) %fw-d)))
+				        ((eq %fw-d t)
+				         (if %fw-fresh (fresh-line))
+				         (write-string %fw-text)
+				         nil)
+				        (t
+				         (if (and %fw-fresh (if (%obj-is %fw-d '%STREAM) (typep %fw-d 'string-stream) t))
+				             (fresh-line %fw-d))
+				         (write-string %fw-text %fw-d)
+				         nil)))
+				""");
 		SOURCES.put(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, """
 				(defclass %broadcast-stream (rontolisp:fundamental-character-output-stream)
 				  ((components :initarg :components :reader %broadcast-stream-components)))
@@ -5673,6 +5701,14 @@ public final class LispPreludeLibrary {
 			return am.ik.rontolisp.macro.LispMacroExpander.mayPprintLogicalBlockOfAnAtom(program)
 					|| referencesName(program, LispNames.PPRINT_POP, canonical);
 		}
+		// format to a string with a fill pointer: compiler.StreamOperandChecks and the
+		// #'format wrapper call these where they are in the program, both after this
+		// pass. Such a string exists only in a program spelling the keyword that makes
+		// one, and only a computed destination or the function value can receive it.
+		if (LispNames.FORMAT_DESTINATION_INTERNAL.equals(entry) || LispNames.FORMAT_WRITE_INTERNAL.equals(entry)) {
+			return referencesName(program, LispNames.FILL_POINTER_KEYWORD, canonical)
+					&& mayFormatToAComputedDestination(program, canonical);
+		}
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
 			return referencesName(program, LispNames.MAKE_BROADCAST_STREAM, canonical)
 					|| referencesName(program, LispNames.BROADCAST_STREAM_STREAMS, canonical);
@@ -5727,7 +5763,8 @@ public final class LispPreludeLibrary {
 		// that one keeps the inline expansion, and a program with only such sites must
 		// splice nothing.
 		if (LispNames.MAKE_ARRAY_ET_INTERNAL.equals(entry)) {
-			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, false);
+			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, false)
+					|| mayPassKeywordsToMakeArray(program, canonical);
 		}
 		// %make-hash-table-by-test: the same timing, for a make-hash-table whose :test is
 		// computed, or make-hash-table taken as a value (its wrapper passes the :test of
@@ -5736,7 +5773,8 @@ public final class LispPreludeLibrary {
 			return am.ik.rontolisp.macro.LispMacroExpander.mayMakeHashTableWithComputedTest(program);
 		}
 		if (LispNames.MAKE_ARRAY_ET_FP_INTERNAL.equals(entry)) {
-			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, true);
+			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, true)
+					|| mayPassKeywordsToMakeArray(program, canonical);
 		}
 		// %symbol-in-package: the find-symbol / intern lowerings call it from inside the
 		// expression compilers, after this pass; the surface fact is a call spelling a
@@ -6156,6 +6194,46 @@ public final class LispPreludeLibrary {
 			}
 			rest = cell.cdr();
 			index++;
+		}
+		return false;
+	}
+
+	// #'make-array's wrapper dispatches on the element type through both %make-array-et
+	// entries where its value can be handed a keyword tail.
+	private static boolean mayPassKeywordsToMakeArray(List<LispVal> program, boolean canonical) {
+		for (LispVal form : program) {
+			if (mayPassMoreThanOneArgument(form, LispNames.MAKE_ARRAY, canonical)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mayFormatToAComputedDestination(List<LispVal> program, boolean canonical) {
+		for (LispVal form : program) {
+			if (mayFormatToAComputedDestination(form, canonical)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Errs toward true, as a list headed by the name need not be a call.
+	private static boolean mayFormatToAComputedDestination(LispVal form, boolean canonical) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (isDesignatorOf(cons, LispNames.FORMAT, canonical) || (cons.car() instanceof LispSymbol head
+				&& matches(head.name(), LispNames.FORMAT, canonical) && cons.cdr() instanceof LispCons args
+				&& am.ik.rontolisp.compiler.StreamOperandChecks.formatDestinationIsComputed(args.car()))) {
+			return true;
+		}
+		LispVal rest = cons;
+		while (rest instanceof LispCons cell) {
+			if (mayFormatToAComputedDestination(cell.car(), canonical)) {
+				return true;
+			}
+			rest = cell.cdr();
 		}
 		return false;
 	}

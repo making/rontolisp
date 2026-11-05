@@ -27423,6 +27423,162 @@ cases:
       (princ (with-output-to-string (s) (format s "x=~a, y=~s~%" 1 "two")))
     expected: |
       x=1, y="two"
+  - name: make-array-function-value-takes-every-keyword
+    source: |
+      (defun mav-desc (a) (list (stringp a) (array-element-type a) (array-has-fill-pointer-p a) (array-dimensions a)))
+      (defun mav-et () 'character)
+      (print (mav-desc (funcall #'make-array 3 :element-type 'character)))
+      (print (mav-desc (apply #'make-array 3 :element-type (mav-et) (list :fill-pointer 0))))
+      (print (mav-desc (funcall #'make-array 3 :element-type '(unsigned-byte 8))))
+      (print (mav-desc (funcall #'make-array 3 :element-type 'double-float :fill-pointer 1)))
+      (print (mav-desc (funcall #'make-array 3 :element-type t :adjustable t :initial-element 1)))
+      (print (mav-desc (funcall #'make-array '(2 2))))
+      ;; An element absent is the type's own zero, and nil given is nil.
+      (print (list (aref (funcall #'make-array 2 :element-type '(unsigned-byte 8)) 0)
+                   (zerop (aref (funcall #'make-array 2 :element-type 'double-float) 1))
+                   (funcall #'make-array 2 :initial-element nil)))
+      (print (funcall #'make-array 3 :initial-contents '(1 2 3)))
+      (print (funcall #'make-array 2 :element-type 'character :initial-contents "ab"))
+      (print (funcall #'make-array 2 :element-type 'character :initial-element #\z))
+      (print (let ((a (make-array 4 :element-type 'character :initial-element #\q)))
+               (funcall #'make-array 2 :element-type 'character :displaced-to a :displaced-index-offset 1)))
+      (print (funcall #'make-array 2 :displaced-to (vector 1 2 3)))
+      ;; Such a string is the string the call position makes.
+      (let ((a (apply 'make-array 3 :element-type 'character :fill-pointer 0 nil)))
+        (vector-push-extend #\a a)
+        (format a "b~a" 1)
+        (print (list a (fill-pointer a))))
+    expected: |
+      (T CHARACTER NIL (3))
+      (T CHARACTER T (3))
+      (NIL (UNSIGNED-BYTE 8) NIL (3))
+      (NIL DOUBLE-FLOAT T (3))
+      (NIL T NIL (3))
+      (NIL T NIL (2 2))
+      (0 T #(NIL NIL))
+      #(1 2 3)
+      "ab"
+      "zz"
+      "qq"
+      #(1 2)
+      ("ab1" 3)
+  - name: format-opening-fresh-line-asks-the-destination
+    source: |
+      (defun ffl-cap (f) (with-output-to-string (s) (write-string "ab" s) (funcall f s)))
+      ;; A literal control, one the static path declines, a computed one, the function value.
+      (print (ffl-cap (lambda (s) (format s "~&cd"))))
+      (print (ffl-cap (lambda (s) (format s "~2&cd"))))
+      (print (ffl-cap (lambda (s) (format s "~0&cd"))))
+      (print (ffl-cap (lambda (s) (format s "~&"))))
+      (print (ffl-cap (lambda (s) (format s "~&~d item~:p" 2))))
+      (print (ffl-cap (lambda (s) (let ((c "~&ef")) (format s c)))))
+      (print (ffl-cap (lambda (s) (let ((c "~02&ef")) (format s c)))))
+      (print (ffl-cap (lambda (s) (let ((c "~0&ef")) (format s c)))))
+      (print (ffl-cap (lambda (s) (funcall #'format s "~&gh"))))
+      (print (ffl-cap (lambda (s) (funcall #'format s "ij~&gh"))))
+      (print (ffl-cap (lambda (s) (format s (if s "~&ij" "kl")))))
+      ;; It asks after the arguments, and a stream at the start of a line adds nothing.
+      (print (ffl-cap (lambda (s) (format s "~&~a" (progn (write-string "z" s) 1)))))
+      (print (with-output-to-string (s) (format s "~&cd")))
+      (print (with-output-to-string (s) (write-string (format nil "ab~%") s) (format s "~&cd")))
+      ;; A nil destination has no line to end.
+      (print (list (format nil "~&cd") (let ((d nil)) (format d "~&cd")) (funcall #'format nil "~&cd")))
+      ;; The destination first, then the control.
+      (let ((log nil))
+        (format (progn (push :d log) nil) (if (progn (push :c log) t) "a" "b"))
+        (print (reverse log)))
+      ;; A file stream has no column to ask: a line it was at the start of stays one line.
+      (with-open-file (o "ffl-file.txt" :direction :output :if-exists :supersede)
+        (write-line "ab" o)
+        (format o "~&cd~%")
+        (let ((c "~&ef~%")) (format o c))
+        (funcall #'format o "~&gh~%"))
+      (with-open-file (i "ffl-file.txt")
+        (print (list (read-line i) (read-line i) (read-line i) (read-line i))))
+      (delete-file "ffl-file.txt")
+      ;; Standard output, under a variable, a computed control and the function value.
+      (terpri)
+      (princ "a")
+      (format *standard-output* "~&b")
+      (let ((d t))
+        (princ "c")
+        (format d "~&d"))
+      (princ "e")
+      (let ((c "~&f")) (format t c))
+      (princ "g")
+      (funcall #'format t "~&h")
+      (princ "i")
+      (let ((d *standard-output*)) (format d "~&j~%"))
+    expected: |
+      "ab
+      cd"
+      "ab
+
+      cd"
+      "abcd"
+      "ab
+      "
+      "ab
+      2 items"
+      "ab
+      ef"
+      "ab
+
+      ef"
+      "abef"
+      "ab
+      gh"
+      "abij
+      gh"
+      "ab
+      ij"
+      "abz
+      1"
+      "cd"
+      "ab
+      cd"
+      ("cd" "cd" "cd")
+      (:D :C)
+      ("ab" "cd" "ef" "gh")
+
+      a
+      bc
+      de
+      fg
+      hi
+      j
+  - name: format-to-a-string-with-a-fill-pointer-beside-the-gray-dispatch
+    source: |
+      ;; The corpus holds the Gray protocol, so these sites go through its dispatch.
+      (defclass fpg-o (rontolisp:fundamental-character-output-stream) ((text :initform nil :accessor fpg-text)))
+      (defmethod rontolisp:stream-write-char ((s fpg-o) c) (push c (fpg-text s)) c)
+      (defun fpg-make () (make-array 9 :element-type 'character :fill-pointer 0))
+      (let ((s (fpg-make)) (c "y=~a"))
+        (print (list (format s "x=~a" 1) (format s c 2) (funcall #'format s "z=~a" 3) s)))
+      (let ((o (make-instance 'fpg-o)))
+        (print (list (format o "a~a" 1) (funcall #'format o "b") (reverse (fpg-text o)))))
+      (let ((o (make-instance 'fpg-o)) (d t))
+        (let ((*standard-output* o)) (format d "c") (funcall #'format d "d"))
+        (print (reverse (fpg-text o))))
+      (print (let ((d nil)) (list (format d "n") (funcall #'format d "m"))))
+      (let ((o (make-instance 'fpg-o)))
+        (format o "a")
+        (format o "~&b")
+        (let ((c "~&c")) (format o c))
+        (funcall #'format o "~&d")
+        (print (reverse (fpg-text o))))
+      (dolist (d (list "abc" (make-string 3) 3))
+        (print (list (handler-case (format d "x") (error () :refused))
+                     (handler-case (funcall #'format d "x") (error () :refused)))))
+    expected: |
+      (NIL NIL NIL "x=1y=2z=3")
+      (NIL NIL (#\a #\1 #\b))
+      (#\c #\d)
+      ("n" "m")
+      (#\a #\Newline #\b #\Newline #\c #\Newline #\d)
+      (:REFUSED :REFUSED)
+      (:REFUSED :REFUSED)
+      (:REFUSED :REFUSED)
   - name: format-write-directive-renders-like-prin1-on-both-paths
     source: |
       (princ (format nil "Expect ~W to be ~:[true~;false~]." '(= (add 1 2) 3) nil))
@@ -35170,6 +35326,77 @@ standalone:
       "snc 1"
       (:OWN 3)
       (:LOCAL 3)
+  - name: format-to-a-string-with-a-fill-pointer
+    source: |
+      ;; Standalone: no Gray dispatch here, and the corpus has one.
+      (defun fps-make (n) (make-array n :element-type 'character :fill-pointer 0))
+      ;; A literal control, a computed one, one the static path declines, the function value.
+      (let ((s (fps-make 9))) (print (list (format s "x=~a" 1) s (fill-pointer s))))
+      (let ((s (fps-make 9)) (c "y=~a")) (print (list (format s c 2) s)))
+      (let ((s (fps-make 9))) (print (list (format s "~d item~:p" 2) s)))
+      (let ((s (fps-make 9))) (print (list (funcall #'format s "z=~a" 3) s)))
+      (let ((s (fps-make 9))) (print (list (apply 'format s "~a" '(4)) s)))
+      ;; A ~& that opens the control looks at the string.
+      (let ((s (fps-make 9)))
+        (format s "~&a")
+        (format s "~&b")
+        (let ((c "~&c")) (format s c))
+        (funcall #'format s "~&d")
+        (format s "e~%")
+        (format s "~&f")
+        (print s))
+      ;; It appends at the fill pointer, past the capacity too.
+      (let ((s (make-array 8 :element-type 'character :fill-pointer 2 :initial-element #\a)))
+        (format s "bc")
+        (format s "~a" 12)
+        (print s))
+      (let ((s (fps-make 1))) (format s "xyz") (print (list s (length s))))
+      (let ((s (make-array 1 :element-type 'character :fill-pointer 0 :adjustable t)))
+        (format s "~a~a" "é" "é")
+        (print (list s (fill-pointer s))))
+      ;; The destination first and once, then the arguments, and one value.
+      (let ((s (fps-make 5)) (n 0))
+        (print (list (format (progn (setq n (+ n 1)) s) "~a" (setq n (* n 10))) n s)))
+      (let ((s (fps-make 5))) (print (multiple-value-list (format s "m"))))
+      ;; What every other destination answers does not move.
+      (let ((d nil)) (print (format d "n~a" 1)))
+      (let ((d t)) (format d "t~a~%" 1))
+      (print (with-output-to-string (o) (let ((d o)) (format d "o~a" 1))))
+      (print (with-output-to-string (*standard-output*) (let ((d t)) (format d "c~a" 1))))
+      (print (with-output-to-string (o) (funcall #'format o "f~a" 1)))
+      (print (funcall #'format nil "g~a" 1))
+      ;; Any other value is refused.
+      (dolist (d (list "abc" (make-string 3) (make-array 3 :element-type 'character :adjustable t)
+                       (make-array 3 :fill-pointer 0) 3))
+        (print (list (handler-case (format d "x") (error () :refused))
+                     (handler-case (funcall #'format d "x") (error () :refused)))))
+    stdout: |
+      (NIL "x=1" 3)
+      (NIL "y=2")
+      (NIL "2 items")
+      (NIL "z=3")
+      (NIL "4")
+      "a
+      b
+      c
+      de
+      f"
+      "aabc12"
+      ("xyz" 3)
+      ("éé" 2)
+      (NIL 10 "10")
+      (NIL)
+      "n1"
+      t1
+      "o1"
+      "c1"
+      "f1"
+      "g1"
+      (:REFUSED :REFUSED)
+      (:REFUSED :REFUSED)
+      (:REFUSED :REFUSED)
+      (:REFUSED :REFUSED)
+      (:REFUSED :REFUSED)
   - name: stream-operators-refuse-a-non-stream-past-every-layer
     source: |
       ;; Standalone: the same refusals where every layer is in the way -- stream values, the

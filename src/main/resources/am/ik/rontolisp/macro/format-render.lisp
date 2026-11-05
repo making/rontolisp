@@ -422,6 +422,20 @@
             (setq i (- i 1)))))
     col))
 
+(defun %fmt-fresh-count-p (control i nonzero)
+  (if (>= i (length control))
+      nil
+      (let ((c (char control i)))
+        (cond ((char= c #\&) nonzero)
+              ((char= c #\0) (%fmt-fresh-count-p control (+ i 1) nonzero))
+              ((and (char>= c #\1) (char<= c #\9))
+               (%fmt-fresh-count-p control (+ i 1) t))
+              (t nil)))))
+
+(defun %fmt-starts-fresh-p (control)
+  (and (stringp control) (> (length control) 1) (char= (char control 0) #\~)
+       (or (char= (char control 1) #\&) (%fmt-fresh-count-p control 1 nil))))
+
 (defun %fmt-fresh (out n)
   (let ((first (if (= (%fmt-column out) 0) "" (string #\Newline))))
     (%fmt-cat out (%fmt-cat first (%fmt-repeat (string #\Newline) (- n 1))))))

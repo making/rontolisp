@@ -980,6 +980,26 @@ examples:
     note: >-
       a filter on ../proxy-wasm.lisp, compiled only here; proxy-wasm/sdk-examples/check.sh
       runs it in a real Envoy
+  - path: proxy-wasm/no-gc/http_body.lisp
+    backends: [no-gc]
+    note: >-
+      a filter on the --no-gc SDK in proxy-wasm.lisp, compiled only here;
+      proxy-wasm/no-gc/check.sh runs it in a real Envoy
+  - path: proxy-wasm/no-gc/http_headers.lisp
+    backends: [no-gc]
+    note: >-
+      a filter on the --no-gc SDK in proxy-wasm.lisp, compiled only here;
+      proxy-wasm/no-gc/check.sh runs it in a real Envoy
+  - path: proxy-wasm/no-gc/error_log.lisp
+    backends: [no-gc]
+    note: >-
+      a filter on the --no-gc SDK in proxy-wasm.lisp, compiled only here;
+      proxy-wasm/no-gc/check.sh runs it in a real Envoy
+  - path: proxy-wasm/no-gc/test_plugin.lisp
+    backends: [no-gc]
+    note: >-
+      a filter on the --no-gc SDK in proxy-wasm.lisp, compiled only here;
+      proxy-wasm/no-gc/check.sh runs it in a real Envoy
 
   # --- browser/wit-component: a component loaded by a page, with no glue -------
   - path: browser/wit-component/fractal.lisp

@@ -60,8 +60,9 @@ inside this subset:
 - float/int conversions: `float truncate floor ceiling round`;
 - strings and characters: string literals, character literals,
   `(concatenate 'string ...)`, `length`, `subseq`, `string=`, `char`,
-  `char-code`/`code-char`, `char=` and `princ-to-string` (of integers,
-  floats and strings). There is no separate character type: a character is
+  `char-code`/`code-char`, `char=`, `princ-to-string` (of integers, floats
+  and strings) and `format` to `t` or `nil` with a literal control string of
+  `~a`, `~d`, `~%` and `~~`. There is no separate character type: a character is
   represented by its code point, so the portable idioms
   `(char= (char s i) #\x)` and `(char-code (char s i))` behave exactly like
   the other backends, while a bare `(char s i)` crossing an `:int` boundary
@@ -198,6 +199,11 @@ replaced, and the same source compiles as a component where
 `wasmtime run --invoke 'mandelbrot(-2.5, 1.0, -1.2, 1.2, 70, 30, 30)'`
 returns the string with no host memory code and no runtime flags.
 
+Bytes 4 to 7 of the memory belong to the program: nothing here reads or writes
+them. Through `"rontolisp:memory"` they are the one address a program can know
+without having been told it, which is where to keep a pointer across calls,
+since this backend has no global variables.
+
 ## Printing (`print` / `princ` / `terpri`)
 
 An exported function can print: `print` (readable form plus a trailing
@@ -274,8 +280,10 @@ These two and `__ronto_alloc` itself are exported when — and only when —
 the declared boundary gives a host something to do with the heap: an
 export takes a `:string` (the host allocates the input buffer), an export
 returns a `:string` (the result is a live pointer only the host can pop),
-or an imported host function returns a `:string` (the host writes the
-result bytes into this memory). A module whose text only travels *outward*
+an imported host function returns a `:string` (the host writes the
+result bytes into this memory), or the program reads what a host wrote
+through [`"rontolisp:memory"`](../reference/functions/rontolisp-wasm-import.md#rontolispmemory--the-modules-own-linear-memory)
+and exports no allocator of its own. A module whose text only travels *outward*
 — string literals handed to host imports as `(ptr, len)` — exports none of
 the three and needs none of them: nothing outside allocates here, nothing
 inside moves the heap, and its export wrappers carry no reset either.

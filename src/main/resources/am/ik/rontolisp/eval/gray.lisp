@@ -452,6 +452,12 @@
           nil)
         (terpri stream))))
 
+;; A ~& that opens a format control: a stream with no column is not asked
+;; (LispMacroExpander.freshLineWhereTheColumnIsKnown).
+(defun rontolisp::%gray-format-fresh-line (stream)
+  (if (if (%obj-is stream '%STREAM) (typep stream 'string-stream) t)
+      (rontolisp::%gray-fresh-line-dispatch stream)))
+
 (defun rontolisp::%gray-fresh-line-dispatch (stream)
   ;; nil, like the handle-based fresh-line: the value of the operator does not
   ;; depend on which kind of stream it was handed. stream-fresh-line's own

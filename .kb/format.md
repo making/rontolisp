@@ -12,6 +12,12 @@ ci-spec `format-runtime-control-string`; add a directive to one path and you add
 implementations is a deliberate cost: an ordinary `(format t "...")` compiles to concatenation
 with no parser and no renderer in the artifact.
 
+`--no-gc` has neither path: its value model cannot hold the temporaries and type tests of the literal
+one. `NoGcFormatLowering` spells a literal control of `~a`, `~d`, `~%` and `~~`, to `t` or `nil`, as
+`princ` or as `concatenate` over `princ-to-string`, which gives the same text because `~a` and `~d`
+of what that backend holds are `princ`. It runs on the defuns before any scan, because `collectLiterals`,
+`usesStringOp` and the print scans read the forms as written. Anything else is refused by name.
+
 ## What reaches the runtime renderer
 Six ways into `(%fmt-render control arguments)`: a computed control expression; `#'format` as a
 value (`BuiltinFunctionWrappers.formatWrapper`, or the interpreter's `format` `LispFunction`);
@@ -66,6 +72,27 @@ A `t` destination lowers to print calls, a `nil` one to `%string-concat` pieces
   `(princ x)`/`(prin1 x)`), matching the two-element call SHAPE only, so a padded or composite
   piece keeps building its string.
 
+A `~&` that opens the control asks the destination, whichever path renders it (SBCL 2.2.9,
+2026-11-05, every row of ci-spec `format-opening-fresh-line-asks-the-destination` but the file's): the
+text is built from column 0, so `~&` is silent in it, and `(fresh-line d)` runs after the arguments and
+before the write (`LispMacroExpander.formatStartsFresh`: `~&`, `~n&` with a nonzero `n`). **Only a
+destination with a column is asked** (`freshLineWhereTheColumnIsKnown`, gray.lisp's
+`%gray-format-fresh-line`, `%format-write`): `t`, a string stream, a Gray instance, a string with a fill
+pointer. A file, a socket and standard error keep none, so `fresh-line` always writes there
+([standard-output-redirect.md](standard-output-redirect.md)), and `(format *error-output* "~&x~%")`, the
+usual spelling, would open every message with a blank line (uiop's fatal report did); SBCL writes a
+newline only past column 0, here never. A literal control decides
+at expansion, so one with no such `~&` lowers as it did; a computed one is held in a temp and asks
+`%fmt-starts-fresh-p` (`format-render.lisp`, there because a computed control means the renderer is),
+at each write site: `formatDestinationDispatch`, `runtimeRenderFallback`'s `t`, the Gray rewrite, the
+`#'format` wrappers, `%format-write` and the interpreter's function value. A `~&` anywhere else keeps the
+text's approximation, a value piece assumed not to end a line. Before 2026-11-05 `(format s "~&x")` and
+`(format t ctrl)` lost it: `(princ "a") (format *standard-output* "~&b")` printed `ab`, on all four.
+
+`(format D (if test a b) ...)` distributes over the branches (`distributeFormat`, also for the Gray
+rewrite and `formatThroughDestination`, so each branch keeps its literal control). A computed `D` is bound
+first: until 2026-11-05 `test` ran before it.
+
 Together these put a literal in FRONT of a backend's literal fold
 ([optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)).
 
@@ -79,6 +106,37 @@ raise the guarantee, so `~{~a~^, ~}` and `~{~a~^ ~a~}` carry no check. Cost, mea
 2026-10-30: +24 B P1 and +282 B JVM class for one `~{~a=~a~%~}`; +212 B P1 for that plus a
 three-item `~:{` (four checks) under EH mode. Before it the body read NIL past the end and
 ignored `~:}` (the renderer already signalled and forced).
+
+## A string with a fill pointer
+**Invariant: `(format d ...)` appends to a string with a fill pointer on all four backends, growing
+it past its capacity, and answers nil** (SBCL 2.2.9, 2026-11-05: the same, for an `:adjustable` one and
+a `base-char` one too). `(%format-write (%format-destination D) (format nil C ARGS...))`: two prelude
+defuns, `%format-destination` the check that passes such a string ahead of `%check-stream`,
+`%format-write` the dispatch on nil, a string, `t` and a stream. `StreamOperandChecks.formatThroughDestination`
+builds it; the destination is still evaluated and checked first.
+
+- Gate: both defuns are in the program where `referencedBySurfaceForm` says, the program spelling
+  `:fill-pointer` and either a `format` whose destination takes a check or a `#'format` / `'format`;
+  a `:fill-pointer` only in a dead library defun does not count (`LibraryDefunPruner.SYNTHESIZED_ENTRIES`).
+  `formatTakesStrings` reads that one fact, after the splice, for each of the three writers:
+  `StreamOperandChecks`' site rewrite, `GrayStreamsLibrary`'s `format` rewrite (which runs first; the
+  `write-string`s in `%format-write` are ordinary sites of its walk, so a Gray instance still reaches its
+  dispatch) and the `#'format` wrapper (`BuiltinFunctionWrappers.formatThroughDestinationWrapper`, over the
+  Gray twin). Every other program lowers as it did, one `stringp` arm spared per computed destination.
+- A keyword built at run time (`(intern "FILL-POINTER" :keyword)` handed to `#'make-array`) defeats the
+  gate: a compile path refuses that string where the interpreter appends. `--no-gc` refuses `:fill-pointer`
+  outright.
+- The interpreter has no gate: `case FORMAT` takes the same rewrite for every computed destination, the
+  defuns load on first call, and `#'format` writes through `%format-write`
+  (`installStreamOperandChecks` lets the string past its check).
+- **A string with no fill pointer stays `FORMAT: The value X is not of type STREAM`**, where SBCL signals a
+  `simple-error` `X is not a string with a fill-pointer`. CLHS leaves it undefined, a handler for `error`
+  takes both, and SBCL's condition on all four would cost an arm in `%check-stream-runtime` of every program
+  with a computed destination, not only the gated ones (an interpreter and a compile path must not answer
+  differently by what else the program spells).
+- The text is written when the arguments are done, as for a stream. Pinned by ci-spec
+  `format-to-a-string-with-a-fill-pointer` (standalone, no Gray) and
+  `format-to-a-string-with-a-fill-pointer-beside-the-gray-dispatch`.
 
 ## `~F` / `~$` lower to ONE call, and must keep doing so
 `decimalFloatExpr` emits exactly `(%fixed-decimal value places int-digits plus-p)` --
@@ -236,7 +294,8 @@ cursor cannot serve it -- `~*`, `~:*`, `~n@*` and `~?`/`~{` recursion make the a
   rows of a 0..10^100 sweep identically on the interpreter, JVM, P1 and component, literal and runtime
   control (2026-10-07).
 - `~x`/`~o`/`~b`/`~r` answer UPPERCASE digits on both paths (`ClWhoE2eTest`); `~&` measures the
-  column from the text rendered so far, the literal path's `t` destination using the real one.
+  column from the text rendered so far, the literal path's `t` destination using the real one and
+  an opening `~&` asking the destination ("What the LITERAL path lowers to").
 - **A signal's runtime control renders EAGERLY, into the message** -- the condition carries the
   rendered text in `format-control` and nil `format-arguments`, on BOTH paths
   ([error-handling.md](error-handling.md)).

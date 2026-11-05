@@ -21,6 +21,17 @@ package, as a program names `linalg` or `rontolisp:json-parse`.
 The compiler half is already general and stays whatever this decides: the reserved import module
 `"rontolisp:memory"` and `:u32` on wasm-GC imports (`.kb/wasm-import.md`).
 
+A second SDK now exists, `examples/proxy-wasm/no-gc/` (`.kb/proxy-wasm-no-gc.md`): the same ABI as macros for
+`--no-gc`, with `http_body`, `http_headers` and `test_plugin` on it at 2 to 7KB, checked in Envoy and against Sluice's suite.
+Weigh it here:
+
+- A filter on one does not compile on the other, a context being an object there and an integer here. So "the" built-in
+  SDK is a choice between them, or two packages with one name and an answer for which `(require :proxy-wasm)` means, by backend.
+- Against the size argument: on `--no-gc`, an SDK kept in a file already costs a filter nothing it does not call.
+- It adds to the evidence asked for below: a second host (Sluice), and a third filter. It did not leave the API unchanged.
+  What it changed is the part `--no-gc` cannot have.
+- It makes the "built in" list longer: this SDK needs `define-filter` in the formatter's table, and that is there now.
+
 ## For and against
 
 For: a filter is one file, and the SDK cannot drift from the compiler. The `:u32` and out-pointer rules are then
