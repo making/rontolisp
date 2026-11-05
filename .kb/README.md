@@ -37,7 +37,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [symbol-macrolet.md](symbol-macrolet.md) -- `symbol-macrolet` via one shared shadow-aware substitution
 - [dynamic-special-variables.md](dynamic-special-variables.md) -- special variable binding: `defvar`/`declaim special`, `let`/`progv`, a local `(declare (special ...))` scoped as CLHS 3.3.4 scopes it (no dual binding: a closure reads the binding active when it runs), a parameter named like a special, the by-name dispatch as a search, `boundp` of a special without a value (the unbound marker), a read of one signalling `unbound-variable`, and of a global before its first store, `makunbound`
 - [multiple-values.md](multiple-values.md) -- `values`/`multiple-value-bind`/`-list`/`-call`/`nth-value` as a syntactic lowering
-- [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when`, runtime type checks
+- [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when` by its position (any situation at top level, `:execute` elsewhere; what keeps a body at top level), runtime type checks
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
 - [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output; a value that is no form, an unbound variable, an undefined function; the built-in macros (`eval-macros.lisp`), `loop`'s clauses ported to it, the macros a form binds, restarts, `(setf name)` places; what a form can reach (`EvalReferences`)
 - [interpreter-expansion-memo.md](interpreter-expansion-memo.md) -- the interpreter expands a built-in macro once per call site; which arms must re-expand
@@ -103,7 +103,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 ## I/O and streams
 
 - [read-load-streams.md](read-load-streams.md) -- `read`/`load`/`read-line`/file streams; a compiled run-time read interning in the current package (`%read-home`), a list's length costing it no stack; a stream is a self-describing value; synonym streams; output left open is flushed at the end; element types wider and narrower than one octet; the real stream direction and a string stream's `file-position`
-- [standard-output-redirect.md](standard-output-redirect.md) -- stream designators resolve through `*standard-output*`/`*standard-input*` at call time; `*error-output*`
+- [standard-output-redirect.md](standard-output-redirect.md) -- stream designators resolve through `*standard-output*`/`*standard-input*` at call time; `*error-output*`; a stream's line start, what `fresh-line` and an opening `~&` ask on every stream and what moves it
 - [gray-streams.md](gray-streams.md) -- the Gray-stream protocol, the compile-path splice, the flexi-streams wrapper
 - [binary-sequence-io.md](binary-sequence-io.md) -- `read-sequence`/`write-sequence` over a packed buffer in one native transfer
 - [character-sequence-io.md](character-sequence-io.md) -- `read-sequence` into a string: a block of storage units per host read, never one read per character

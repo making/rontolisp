@@ -128,11 +128,11 @@ final class WasmToplevelEmit {
 			// and its async-spine handling; whether it was TAKEN is read back from the
 			// context, so a spelling the dispatch does not route to the defvar compiler
 			// leaves its value on the stack and still gets its drop.
-			boolean offered = ToplevelStatements.isNameValuedDefiner(expr);
-			chunk.ctx.definerNameDropped = offered ? expr : null;
+			boolean offered = ToplevelStatements.isNameValuedDefiner(expr) || ToplevelStatements.isFreshLine(expr);
+			chunk.ctx.valueDropped = offered ? expr : null;
 			WasmExprCompiler.compileExpr(expr, chunk.ctx);
-			boolean taken = offered && chunk.ctx.definerNameDropped == null;
-			chunk.ctx.definerNameDropped = null;
+			boolean taken = offered && chunk.ctx.valueDropped == null;
+			chunk.ctx.valueDropped = null;
 			if (!taken) {
 				chunk.writer.write(Instruction.DROP);
 			}

@@ -996,6 +996,17 @@ class LispEvaluatorTest {
 				  (%string-stream-contents str))"""));
 		assertThat(result).isEqualTo(new LispString("WARNING: captured\ndiag\n"));
 		assertThat(baos.toString()).isEqualTo("out");
+		// It keeps its line start, so a ~& opens no blank line.
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(err));
+		try {
+			evaluator.eval(LispReader.readFromString(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_PROGRAM));
+		}
+		finally {
+			System.setErr(oldErr);
+		}
+		assertThat(err.toString()).contains(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_EXPECTED);
 	}
 
 	@Test
@@ -6373,14 +6384,11 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> eval("(search \"ab\" 5)")).hasMessageContaining("The value 5 is not of type SEQUENCE");
 		assertThatThrownBy(() -> eval("(funcall #'search \"ab\" 5)"))
 			.hasMessageContaining("The value 5 is not of type SEQUENCE");
-		// mismatch's :from-end: the defun ACCEPTS the keyword and ignores it, which is
-		// not
-		// what CLHS specifies. The arm declines rather than spreading that to a second
-		// implementation, so the answer stays the one every backend gives.
+		// mismatch's :from-end is the defun's backward scan.
 		assertThat(evalMulti(both + """
 				(both :m-from-end (mismatch "abcd" "xbcd" :from-end t)
 				      (funcall #'mismatch "abcd" "xbcd" :from-end t))
-				""").print()).isEqualTo("0");
+				""").print()).isEqualTo("1");
 		// A user redefinition takes the call back WHOLE. The lazy prelude loader already
 		// honours one by never loading its entry; the arm honours one made afterwards by
 		// serving only while the name still resolves to the object the loader installed.
@@ -6462,7 +6470,7 @@ class LispEvaluatorTest {
 				      (funcall #'mismatch '(1 2 3) '(1 2 4) :from-end t)
 				      (funcall #'mismatch '(1 2 3) "abc")
 				      (funcall #'mismatch '(9 1 2 3) '(1 2 3) :start1 1))
-				""").print()).isEqualTo("(2 2 2 0 NIL)");
+				""").print()).isEqualTo("(2 2 3 0 NIL)");
 		// Long enough that the old nth-per-element walk showed: the answers are the same,
 		// the walk is not.
 		assertThat(evalMulti("""
@@ -8307,6 +8315,11 @@ class LispEvaluatorTest {
 			.isEqualTo(new LispInteger(3));
 		assertThat(eval("(eval-when (:execute))")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(eval-when (:execute) (defun ew-fn (x) (* x 2)) (ew-fn 21))")).isEqualTo(new LispInteger(42));
+		// Any situation runs it at top level, none but :execute elsewhere.
+		assertThat(eval("(eval-when (:load-toplevel) (+ 1 2))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(eval-when () (+ 1 2))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let () (eval-when (:compile-toplevel :load-toplevel) (+ 1 2)))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let () (eval-when (:execute) (+ 1 2)))")).isEqualTo(new LispInteger(3));
 	}
 
 	@Test
@@ -20692,6 +20705,10 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.THREAD_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.LineStartFixture.SOCKET_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.LineStartFixture.SOCKET_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.LineStartFixture.SOCKET_FORMAT_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.LineStartFixture.SOCKET_FORMAT_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.TLS_PROGRAM))

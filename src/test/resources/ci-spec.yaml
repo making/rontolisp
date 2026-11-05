@@ -1516,6 +1516,15 @@ cases:
                    (search *smb-b* *smb-abc* :start1 *smb-1* :end1 *smb-1*)
                    (mismatch *smb-l123* *smb-v123* :start1 *smb-1* :start2 *smb-1*)
                    (funcall #'search *smb-b* *smb-abc* :start2 *smb-1* :end2 *smb-2*)))
+      ;; :from-end scans from the right; :test-not is the test's opposite.
+      (print (list (mismatch "xab" "yab" :from-end t) (mismatch "abc" "abc" :from-end t)
+                   (mismatch "ab" "xab" :from-end t) (mismatch "xab" "ab" :from-end t)
+                   (mismatch "abx" "aby" :from-end t) (mismatch '(1 2 3) '(0 2 3) :from-end t :test #'=)
+                   (mismatch #(1 2 3) #(0 2 3) :from-end t) (mismatch "xabc" "yabc" :from-end t :start1 1)
+                   (mismatch "abcx" "abcy" :from-end t :end1 3 :end2 3)
+                   (mismatch "xab" "yab" :from-end t :key #'char-upcase)
+                   (mismatch "xab" "yab" :from-end t :test-not #'char/=)
+                   (mismatch "ab" "ac" :test-not #'char/=) (mismatch "" "a" :from-end t)))
     expected: |
       (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR)
       (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR)
@@ -1526,6 +1535,7 @@ cases:
       (:TYPE-ERROR (:TYPE-ERROR 1.5) :TYPE-ERROR :TYPE-ERROR)
       (NIL 1 NIL 3)
       (2 0 NIL 1)
+      (1 NIL 0 1 3 1 1 1 NIL 1 1 1 0)
   # parse-integer: a negative, non-integer or past-int-range :start/:end, one past the
   # string's length and a start past its end are subseq's type-error before the scan --
   # a fresh, a literal and a fill-pointer string, call position and first class -- and
@@ -14570,6 +14580,156 @@ cases:
       "The assertion (STRING= \"~S\" \"x\") failed."
       :DIGIT
       :ABC
+  # An eval-when at no top level runs its body for :execute and nothing else (CLHS 3.2.3.1):
+  # a progn, locally, macrolet or symbol-macrolet there keeps it at none, and a body that does
+  # not run defines nothing and publishes no value. SBCL 2.2.9's answers, loaded or compiled.
+  - name: eval-when-at-no-top-level-asks-for-execute
+    source: |
+      (defun ci-ewn-f () (eval-when (:compile-toplevel) 1))
+      (print (ci-ewn-f))
+      (print (let () (eval-when (:load-toplevel) 2)))
+      (print (funcall (lambda () (eval-when (:compile-toplevel :load-toplevel) 3))))
+      (print (if t (eval-when (load) 4) 0))
+      (print (let () (eval-when (compile load) 5)))
+      (print (let () (eval-when () 6)))
+      (print (let () (eval-when (:execute) 7)))
+      (print (let () (eval-when (:compile-toplevel :execute) 8)))
+      (print (let () (eval-when (eval) 9)))
+      (print (let () (eval-when (cl:eval) 10)))
+      (print (let () (progn (eval-when (:load-toplevel) 11))))
+      (print (let () (locally (eval-when (:load-toplevel) 12))))
+      (print (let () (macrolet ((ci-ewn-l () 13)) (eval-when (:load-toplevel) (ci-ewn-l)))))
+      (print (let () (macrolet ((ci-ewn-l () 14)) (eval-when (:execute) (ci-ewn-l)))))
+      (print (let () (symbol-macrolet ((ci-ewn-s 15)) (eval-when (:load-toplevel) ci-ewn-s))))
+      (print (let () (symbol-macrolet ((ci-ewn-s 16)) (eval-when (:execute) ci-ewn-s))))
+      (print (let () (handler-bind () (eval-when (:load-toplevel) 17))))
+      (print (let () (eval-when (:execute) (eval-when (:load-toplevel) 18))))
+      (defmacro ci-ewn-m (situations form) `(eval-when ,situations ,form))
+      (print (let () (ci-ewn-m (:load-toplevel) 19)))
+      (print (let () (ci-ewn-m (:execute) 20)))
+      (defun ci-ewn-mv () (eval-when (:load-toplevel) (values 1 2)))
+      (print (multiple-value-list (progn (floor 7 2) (ci-ewn-mv))))
+      (print (multiple-value-list (let () (eval-when (:execute) (values 1 2)))))
+      (print (multiple-value-list (progn (floor 7 2) (let () (eval-when (:load-toplevel) (values 1 2))))))
+      (let () (eval-when (:load-toplevel) (defun ci-ewn-g () 1)))
+      (print (fboundp 'ci-ewn-g))
+      (let () (eval-when (:execute) (defun ci-ewn-h () 21)))
+      (print (ci-ewn-h))
+      (print '#.(eval-when (:load-toplevel) 22))
+      (print (funcall (compile nil '(lambda () (eval-when (:load-toplevel) 23)))))
+      (print (block ci-ewn-b (eval-when (:load-toplevel) (return-from ci-ewn-b 24)) 25))
+    expected: |
+      NIL
+      NIL
+      NIL
+      NIL
+      NIL
+      NIL
+      7
+      8
+      9
+      10
+      NIL
+      NIL
+      NIL
+      14
+      NIL
+      16
+      NIL
+      NIL
+      NIL
+      20
+      (NIL)
+      (1 2)
+      (NIL)
+      NIL
+      21
+      NIL
+      NIL
+      25
+  # At top level the body runs under any situation, and what keeps its body at top level keeps
+  # an eval-when there, a macro's expansion included; an empty list names no situation. What
+  # one evaluates at compile time is there for the macros after it.
+  - name: eval-when-at-top-level-stays-there
+    source: |
+      (eval-when (:load-toplevel) (print 1))
+      (progn (eval-when (:load-toplevel) (print 2)))
+      (locally (declare (special *ci-ewt-x*)) (eval-when (:load-toplevel) (print 3)))
+      (eval-when (:load-toplevel) (eval-when (:load-toplevel) (print 4)))
+      (macrolet ((ci-ewt-l () 5)) (eval-when (:load-toplevel) (print (ci-ewt-l))))
+      (symbol-macrolet ((ci-ewt-s 6)) (eval-when (:load-toplevel) (print ci-ewt-s)))
+      (macrolet () (symbol-macrolet () (locally (progn (eval-when (:load-toplevel) (print 7))))))
+      (handler-bind () (eval-when (:load-toplevel) (print 8)))
+      (macrolet () (handler-bind () (eval-when (:load-toplevel) (print 9))))
+      (defmacro ci-ewt-m (form) `(eval-when (:load-toplevel) ,form))
+      (ci-ewt-m (print 10))
+      (progn (ci-ewt-m (print 11)))
+      (locally (ci-ewt-m (print 12)))
+      (macrolet () (ci-ewt-m (print 13)))
+      (symbol-macrolet () (ci-ewt-m (print 14)))
+      (eval-when (:load-toplevel) (ci-ewt-m (print 15)))
+      (defmacro ci-ewt-p (form) `(progn (eval-when (:load-toplevel) ,form)))
+      (ci-ewt-p (print 16))
+      (defmacro ci-ewt-lo (form) `(locally (eval-when (:load-toplevel) ,form)))
+      (ci-ewt-lo (print 17))
+      (defmacro ci-ewt-ml (form) `(macrolet () (eval-when (:load-toplevel) ,form)))
+      (ci-ewt-ml (print 18))
+      (defmacro ci-ewt-sm (form) `(symbol-macrolet () (eval-when (:load-toplevel) ,form)))
+      (ci-ewt-sm (print 19))
+      (uiop:with-upgradability () (eval-when (:load-toplevel) (print :upgradable)))
+      (eval-when () (print :never))
+      (symbol-macrolet () (eval-when () (print :never)))
+      (macrolet () (eval-when () (print :never)))
+      (ci-ewt-p (eval-when () (print :never)))
+      (defmacro ci-ewt-reg () `',*ci-ewt-reg*)
+      (eval-when (:compile-toplevel :load-toplevel :execute) (defvar *ci-ewt-reg* :none))
+      (defmacro ci-ewt-set (value)
+        `(progn (eval-when (:compile-toplevel :load-toplevel :execute) (setq *ci-ewt-reg* ,value))))
+      (ci-ewt-set :by-progn)
+      (print (ci-ewt-reg))
+      (symbol-macrolet ((ci-ewt-s :by-symbol-macrolet))
+        (eval-when (:compile-toplevel :load-toplevel :execute) (setq *ci-ewt-reg* ci-ewt-s)))
+      (print (ci-ewt-reg))
+      (symbol-macrolet ((ci-ewt-s 20))
+        (eval-when (:compile-toplevel :load-toplevel :execute) (defun ci-ewt-f () ci-ewt-s))
+        (defun ci-ewt-f2 () (1+ ci-ewt-s))
+        (defmacro ci-ewt-m2 () 22)
+        (defstruct ci-ewt-st (x 23))
+        (defclass ci-ewt-c () ((y :initform 24 :reader ci-ewt-y))))
+      (defmacro ci-ewt-call () (ci-ewt-f))
+      (print (ci-ewt-call))
+      (print (ci-ewt-f2))
+      (print (ci-ewt-m2))
+      (print (ci-ewt-st-x (make-ci-ewt-st)))
+      (print (ci-ewt-y (make-instance 'ci-ewt-c)))
+    expected: |
+      1
+      2
+      3
+      4
+      5
+      6
+      7
+      8
+      9
+      10
+      11
+      12
+      13
+      14
+      15
+      16
+      17
+      18
+      19
+      :UPGRADABLE
+      :BY-PROGN
+      :BY-SYMBOL-MACROLET
+      20
+      21
+      22
+      23
+      24
   # check-type tests what the literal typep tests, through the registry the compilers
   # hold: a class, a condition, a struct, a deftype, a compound holding one. A correct
   # program is not refused where typep answers an empty type deliberately (a defgeneric's
@@ -15058,6 +15218,35 @@ cases:
       ; before it published; and no value at all is no value, however it
       ; travels (SBCL agrees on every line).
       (defvar ci-svc-q nil)
+      ;; A producer in a macro's expansion, or in the value of an exit that is no tail of
+      ;; the block it leaves, answers both values too.
+      (defvar ci-svc-h (make-hash-table))
+      (setf (gethash :a ci-svc-h) 1)
+      (defmacro ci-svc-m () '(gethash :a ci-svc-h))
+      (defmacro ci-svc-p (&rest forms)
+        `(print (list ,@(mapcar (lambda (form) `(multiple-value-list ,form)) forms))))
+      (defun ci-svc-early (k)
+        (when k (return-from ci-svc-early (gethash k ci-svc-h)))
+        0)
+      (defun ci-svc-map (l)
+        (mapc (lambda (k) (return-from ci-svc-map (gethash k ci-svc-h))) l)
+        0)
+      (ci-svc-p (block b (tagbody (return-from b (gethash :a ci-svc-h))))
+                (block b (tagbody (return-from b (floor 7 2))))
+                (block b (tagbody top (let ((x 1)) x (return-from b (gethash :a ci-svc-h))) (go top)))
+                (dolist (x '(1)) (return (gethash :a ci-svc-h)))
+                (dotimes (x 1) (return (gethash :a ci-svc-h)))
+                (do ((x 0 (1+ x))) ((> x 1)) (return (gethash :a ci-svc-h)))
+                (loop for x in '(1) do (return (gethash :a ci-svc-h)))
+                (loop for x in '(:a) return (gethash x ci-svc-h))
+                (prog () (return (floor 7 2)))
+                (catch 'c (tagbody (throw 'c (gethash :a ci-svc-h))))
+                (ci-svc-early :a)
+                (ci-svc-map '(:a))
+                (macrolet ((m () '(floor 7 2))) (m))
+                (ci-svc-m)
+                (let ((x 1)) x (ci-svc-m))
+                (block b (return-from b (ci-svc-m))))
       (defun ci-svc-floor () (floor 7 2))
       (defun ci-svc-none () (values))
       (defun ci-svc-inc (x) (+ x 1))
@@ -15123,6 +15312,7 @@ cases:
       (print (multiple-value-list (catch 'c (throw 'c (values 1 2)))))
       (print (multiple-value-list (dolist (x '(1 2)) (when (= x 2) (return (values x 9))))))
     expected: |
+      ((1 T) (3 1) (1 T) (1 T) (1 T) (1 T) (1 T) (1 T) (3 1) (1 T) (1 T) (1 T) (3 1) (1 T) (1 T) (1 T))
       (6)
       ((3))
       (2)
@@ -15972,9 +16162,12 @@ cases:
                    (meso-emit (loop for x in '(1 2 3) when (= x 2) do (return x)))
                    (meso-emit (loop for x in '(1 2 3) collect (* x x)))
                    (meso-emit (prog ((x 1)) (setq x 2) (return x)))))
+      ;; The hook calls an expander through it (introspect-environment's).
+      (print (funcall *macroexpand-hook* (lambda (form env) (list form env)) 1 2))
     expected: |
       (BLOCK BLOCK BLOCK BLOCK)
       (2 :END 3 3 :ONE 2 (1 4 9) 2)
+      (1 2)
   - name: macro-function-and-special-operator-p
     source: |
       ;; Every operator with no function value is EITHER a special operator OR a
@@ -18327,8 +18520,7 @@ cases:
         (clear-output gow-s)
         (print (slot-value gow-s 'gow-acc)))
       ; A broadcast stream is prelude Lisp over the same protocol, so it gained
-      ; the line operators for free. It tracks no column, so fresh-line on one
-      ; always breaks the line.
+      ; the line operators for free, and fresh-line on one asks its component.
       (print (with-output-to-string (gow-o)
                (let ((gow-b (make-broadcast-stream gow-o)))
                  (princ "a" gow-b)
@@ -20281,14 +20473,14 @@ cases:
       ;; princ after a write-byte may not overtake it on any backend.
       (princ "|")
       (write-byte 10 t)
-      ;; A raw octet moves the standard-output COLUMN exactly like a character
-      ;; does, so fresh-line after a written newline adds nothing -- the one
-      ;; place the byte path has to agree with the character path's bookkeeping.
+      ;; A raw octet moves no column, as on every stream of SBCL 2.2.9: the line the
+      ;; princ left open is open, so fresh-line writes past the octet's newline.
       (fresh-line)
       ;; The value is the byte, as CL says (so "A" from the write, then 65).
       (print (write-byte 65 t))
     expected: |
       >>binary<|
+
       A65
 
   - name: first-class-print-family-stream-argument
@@ -28116,14 +28308,19 @@ cases:
       (let ((log nil))
         (format (progn (push :d log) nil) (if (progn (push :c log) t) "a" "b"))
         (print (reverse log)))
-      ;; A file stream has no column to ask: a line it was at the start of stays one line.
+      ;; A file stream answers too: a line it was at the start of stays one line.
       (with-open-file (o "ffl-file.txt" :direction :output :if-exists :supersede)
         (write-line "ab" o)
         (format o "~&cd~%")
         (let ((c "~&ef~%")) (format o c))
-        (funcall #'format o "~&gh~%"))
+        (funcall #'format o "~&gh~%")
+        (write-string "ij" o)
+        (format o "~&kl")
+        (let ((c "~&mn")) (format o c))
+        (funcall #'format o "~&op"))
       (with-open-file (i "ffl-file.txt")
-        (print (list (read-line i) (read-line i) (read-line i) (read-line i))))
+        (print (list (read-line i) (read-line i) (read-line i) (read-line i) (read-line i) (read-line i)
+                     (read-line i) (read-line i))))
       (delete-file "ffl-file.txt")
       ;; Standard output, under a variable, a computed control and the function value.
       (terpri)
@@ -28168,7 +28365,7 @@ cases:
       cd"
       ("cd" "cd" "cd")
       (:D :C)
-      ("ab" "cd" "ef" "gh")
+      ("ab" "cd" "ef" "gh" "ij" "kl" "mn" "op")
 
       a
       bc
@@ -28176,6 +28373,155 @@ cases:
       fg
       hi
       j
+  - name: fresh-line-asks-the-stream-it-is-given
+    source: |
+      ;; SBCL 2.2.9, row by row. A stream starts at column 0 whatever it is opened on,
+      ;; a write of characters moves its line, and an octet, a read and file-position
+      ;; do not; fresh-line answers whether it wrote.
+      (defun fla-lines ()
+        (with-open-file (i "fla-file.txt")
+          (let ((lines nil) (line nil))
+            (loop
+              (setq line (read-line i nil nil))
+              (if line (push line lines) (return (reverse lines)))))))
+      (defun fla-new (f)
+        (let ((v (with-open-file (s "fla-file.txt" :direction :output :if-exists :supersede)
+                   (funcall f s))))
+          (list v (fla-lines))))
+      (print (fla-new (lambda (s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (list (fresh-line s) (fresh-line s)))))
+      (print (fla-new (lambda (s) (write-char #\x s) (list (fresh-line s) (write-char #\Newline s) (fresh-line s)))))
+      (print (fla-new (lambda (s) (write-line "x" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (terpri s) (fresh-line s))))
+      (print (fla-new (lambda (s) (print 1 s) (fresh-line s))))
+      (print (fla-new (lambda (s) (princ 1 s) (fresh-line s))))
+      (print (fla-new (lambda (s) (prin1 "a" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (write-string "" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-line "x" s) (write-string "" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string (format nil "ab~%c") s :end 3) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string (format nil "ab~%c") s :start 3) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-sequence "x" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-sequence (format nil "x~%") s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (force-output s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (list (funcall #'fresh-line s) (funcall #'fresh-line s)))))
+      ;; A descriptor handed out again starts at column 0, and two streams keep two lines.
+      (print (fla-new (lambda (s) (fresh-line s))))
+      (with-open-file (a "fla-file.txt" :direction :output :if-exists :supersede)
+        (with-open-file (b "fla-other.txt" :direction :output :if-exists :supersede)
+          (write-string "a" a)
+          (print (list (fresh-line b) (fresh-line a) (fresh-line a)))))
+      ;; Opened on a line left open, a stream is still at column 0.
+      (with-open-file (s "fla-file.txt" :direction :output :if-exists :supersede) (write-string "abcdef" s))
+      (with-open-file (s "fla-file.txt" :direction :output :if-exists :append) (print (fresh-line s)))
+      (print (fla-lines))
+      (with-open-file (s "fla-file.txt" :direction :output :if-exists :overwrite)
+        (print (list (fresh-line s) (write-string "x" s) (fresh-line s))))
+      (print (fla-lines))
+      ;; A read moves nothing, nor does file-position.
+      (with-open-file (s "fla-file.txt" :direction :output :if-exists :supersede) (write-string "abc" s))
+      (with-open-file (s "fla-file.txt" :direction :io :if-exists :overwrite)
+        (print (list (read-char s) (fresh-line s) (file-position s) (write-string "x" s) (fresh-line s)))
+        (file-position s 0)
+        (print (list (read-char s) (fresh-line s))))
+      (print (fla-lines))
+      (print (fla-new (lambda (s) (write-string "abc" s) (file-position s 0) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-line "abc" s) (file-position s 1) (fresh-line s))))
+      ;; An octet moves nothing either: a binary stream stays at column 0.
+      (with-open-file (b "fla-file.txt" :direction :output :if-exists :supersede :element-type '(unsigned-byte 8))
+        (write-byte 65 b)
+        (write-sequence (make-array 2 :element-type '(unsigned-byte 8) :initial-contents '(66 67)) b)
+        (print (fresh-line b)))
+      (print (fla-lines))
+      ;; A string stream's contents answer, the ones get-output-stream-string leaves too.
+      (let ((s (make-string-output-stream)))
+        (print (list (fresh-line s) (write-string "x" s) (fresh-line s) (fresh-line s) (write-string "y" s)
+                     (get-output-stream-string s) (fresh-line s) (get-output-stream-string s))))
+      ;; A composite stream asks its output, a broadcast stream its first component.
+      (print (fla-new (lambda (s)
+                        (let ((y (make-two-way-stream (make-string-input-stream "") s)))
+                          (list (fresh-line y) (write-string "x" y) (fresh-line y) (write-string "y" s) (fresh-line y))))))
+      (print (fla-new (lambda (s)
+                        (let ((y (make-echo-stream (make-string-input-stream "z") s)))
+                          (list (fresh-line y) (write-string "x" y) (fresh-line y) (read-char y) (fresh-line y))))))
+      (defvar *fla-syn* nil)
+      (print (fla-new (lambda (s)
+                        (setq *fla-syn* s)
+                        (let ((y (make-synonym-stream '*fla-syn*)))
+                          (list (fresh-line y) (write-string "x" s) (fresh-line y))))))
+      (print (fla-new (lambda (a)
+                        (let* ((b (make-string-output-stream)) (y (make-broadcast-stream a b)))
+                          (write-string "x" a)
+                          (list (fresh-line y) (fresh-line y) (get-output-stream-string b))))))
+      (print (fla-new (lambda (a)
+                        (let* ((b (make-string-output-stream)) (y (make-broadcast-stream b a)))
+                          (write-string "x" a)
+                          (list (fresh-line y) (get-output-stream-string b))))))
+      (print (fla-new (lambda (a)
+                        (let* ((b (make-string-output-stream)) (y (make-broadcast-stream b a)))
+                          (write-string "x" b)
+                          (list (fresh-line y) (get-output-stream-string b))))))
+      (print (fresh-line (make-broadcast-stream)))
+      ;; Standard output under the binding the corpus holds, and what the file bound to it says.
+      (fresh-line)
+      (princ "a")
+      (write-line "b")
+      (fresh-line)
+      (write-string "c")
+      (write-line "")
+      (fresh-line)
+      (print (list (fresh-line) (progn (princ "d") (fresh-line)) (fresh-line)))
+      (print (fla-new (lambda (s)
+                        (let ((*standard-output* s))
+                          (list (fresh-line) (write-string "x") (fresh-line) (write-line "y") (fresh-line)
+                                (format t "~&z") (format t "~&w~%") (fresh-line))))))
+      (delete-file "fla-file.txt")
+      (delete-file "fla-other.txt")
+    expected: |
+      (NIL NIL)
+      ((T NIL) ("x"))
+      ((T #\Newline NIL) ("x" ""))
+      (NIL ("x"))
+      (NIL ("x"))
+      (NIL ("1"))
+      (T ("1"))
+      (T ("\"a\""))
+      (T ("x"))
+      (NIL ("x"))
+      (NIL ("ab"))
+      (T ("c"))
+      (T ("x"))
+      (NIL ("x"))
+      (T ("x"))
+      ((T NIL) ("x"))
+      (NIL NIL)
+      (NIL T NIL)
+      NIL
+      ("abcdef")
+      (NIL "x" T)
+      ("x" "cdef")
+      (#\a NIL 1 "x" T)
+      (#\a NIL)
+      ("ax")
+      (T ("" "bc"))
+      (NIL ("abc"))
+      NIL
+      ("ABC")
+      (NIL "x" T NIL "y" "x
+      y" NIL "")
+      ((NIL "x" T "y" T) ("x" "y"))
+      ((NIL "x" T #\z T) ("x" "z"))
+      ((NIL "x" T) ("x"))
+      ((T NIL "
+      ") ("x"))
+      ((NIL "") ("x"))
+      ((T "x
+      ") (""))
+      NIL
+      ab
+      c
+      d
+      (NIL T NIL)
+      ((NIL "x" T "y" NIL NIL NIL NIL) ("x" "y" "z" "w"))
   - name: format-to-a-string-with-a-fill-pointer-beside-the-gray-dispatch
     source: |
       ;; The corpus holds the Gray protocol, so these sites go through its dispatch.
@@ -33119,6 +33465,65 @@ cases:
     expected: |
       (T T T T)
       T
+  - name: subtypep-reads-array-specifiers
+    source: |
+      ;; An array specifier compares by element type, dimensions and simplicity, against a
+      ;; name of the family or a compound, literal or computed; against any other name it
+      ;; is the vector or array it is. Two enumerations compare by their elements, and a
+      ;; deftype against a compound is its expansion against it. The pairs serapeum's
+      ;; dispatch and exhaustiveness macros ask are here. SBCL 2.2.9 agrees.
+      (deftype sras-string () 'simple-string)
+      (deftype sras-keys () '(member :a :b :c))
+      (defmacro sras (&rest pairs)
+        `(print (list ,@(mapcar (lambda (pair)
+                                  `(list (multiple-value-list (subtypep ',(first pair) ',(second pair)))
+                                         (let ((a ',(first pair)) (b ',(second pair)))
+                                           (multiple-value-list (subtypep a b)))))
+                                pairs))))
+      (sras ((simple-array character (*)) string)
+            ((simple-array character (*)) simple-string)
+            ((simple-array character (3)) (simple-array character (*)))
+            ((vector character 3) string)
+            ((array bit (*)) bit-vector)
+            ((simple-array t (*)) simple-vector)
+            (simple-vector (simple-array t (*)))
+            ((simple-array character (*)) (simple-array character))
+            ((simple-array character (* *)) (array * 2)))
+      (sras ((simple-array character (*)) vector)
+            ((simple-array character (*)) sequence)
+            ((simple-array fixnum (* *)) array)
+            ((simple-array character (*)) (or integer string)))
+      (sras (string (simple-array character (*)))
+            ((array character (*)) simple-string)
+            ((vector t) string)
+            ((simple-array fixnum (* *)) vector)
+            (bit-vector (simple-array bit (*)))
+            ((simple-array character (3)) (simple-array character (4)))
+            ((simple-array character (*)) (simple-array character (* *))))
+      (deftype sras-name () '(and symbol (not (member t nil))))
+      (deftype sras-designator () '(or null sras-name function))
+      (sras (sras-name sras-designator))
+      (sras ((simple-array character (*)) sras-string)
+            (sras-string (array * (*)))
+            ((member :a) (member :a :b))
+            ((eql :a) (member :a :b))
+            ((member :a) sras-keys)
+            (sras-keys (member :a :b :c :d)))
+      (sras ((member :a :b) (eql :a))
+            ((member :d) sras-keys)
+            (sras-keys (member :a :b)))
+      (print (list (subtypep '(simple-array fixnum (* *)) 'sequence)
+                   (subtypep '(simple-array character (*)) 'integer)
+                   (let ((a '(simple-array fixnum (* *)))) (subtypep a 'sequence))
+                   (let ((a '(simple-array character (*)))) (subtypep a 'integer))))
+    expected: |
+      (((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)))
+      (((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)))
+      (((NIL T) (NIL T)) ((NIL T) (NIL T)) ((NIL T) (NIL T)) ((NIL T) (NIL T)) ((NIL T) (NIL T)) ((NIL T) (NIL T)) ((NIL T) (NIL T)))
+      (((T T) (T T)))
+      (((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)))
+      (((NIL T) (NIL T)) ((NIL T) (NIL T)) ((NIL T) (NIL T)))
+      (NIL NIL NIL NIL)
   - name: type-specifier-of-a-declaration-is-no-macro-call
     source: |
       ;; serapeum's -> is a type and a macro, and declaims in a labels: the walk over a
@@ -38391,6 +38796,113 @@ standalone:
     fails: true
   # A program that never BINDS *error-output* (the shared corpus does): every
   # read answers the one seeded stream value, and symbol-value answers it too.
+  - name: fresh-line-on-standard-output-with-no-binding-of-it
+    source: |
+      ;; Standalone: the corpus binds *standard-output*, and an unbound one is the
+      ;; compilers' own path, as a statement and for its answer.
+      (fresh-line)
+      (princ "a")
+      (fresh-line)
+      (fresh-line)
+      (princ "b")
+      (write-line "c")
+      (fresh-line)
+      (write-string "d")
+      (write-line "")
+      (fresh-line)
+      (print (fresh-line))
+      (princ "e")
+      (print (fresh-line))
+      (defun flo-f () (princ "f") (fresh-line) (let ((v (fresh-line))) v))
+      (print (flo-f))
+      (princ "g")
+      (print (if (fresh-line) :wrote :did-not))
+      (print (if (fresh-line) :wrote :did-not))
+      (format t "h~&i~&")
+      (format t "~&j~%")
+      (format t "~&k")
+      (format t "~&l~%")
+      (princ "m")
+      (print (funcall #'fresh-line))
+      (print (funcall 'fresh-line))
+      (princ "n")
+      (print (apply #'fresh-line nil))
+      ;; An octet moves no column here either.
+      (write-byte 65 t)
+      (print (fresh-line))
+      (terpri)
+      (write-byte 66 t)
+      (terpri)
+      (print (fresh-line))
+    stdout: |
+      a
+      bc
+      d
+      NIL
+      e
+      T
+      f
+      NIL
+      g
+      :WROTE
+      :DID-NOT
+      h
+      i
+      j
+      k
+      l
+      m
+      T
+      NIL
+      n
+      T
+      ANIL
+
+      B
+      NIL
+  - name: fresh-line-and-format-on-standard-error
+    source: |
+      ;; Standalone: a run's standard error is compared here, each line on its own.
+      (let ((e *error-output*))
+        (print (fresh-line e))
+        (write-string "fle-1" e)
+        (print (fresh-line e))
+        (write-string "fle-2" e)
+        (terpri e)
+        (print (fresh-line e))
+        (write-string "fle-3" e)
+        (format e "~&fle-4")
+        (format e "~&fle-5~%")
+        (format e "~&fle-6~%")
+        (write-line "fle-7" e)
+        (format e "~&fle-8~%")
+        (princ "fle-9" e)
+        (let ((c "~&fle-10~%")) (format e c) (format e c))
+        (funcall #'format e "~&fle-11~%")
+        (print (funcall #'fresh-line e))
+        (write-char #\z e)
+        (print (fresh-line e))
+        (force-output e))
+    stdout: |
+      NIL
+      T
+      NIL
+      NIL
+      T
+    stderr: |
+      fle-1
+      fle-2
+      fle-3
+      fle-4
+      fle-5
+      fle-6
+      fle-7
+      fle-8
+      fle-9
+      fle-10
+      fle-10
+      fle-11
+      z
   - name: error-output-is-one-value-without-a-binding
     source: |
       (print (list (eq *error-output* *error-output*)

@@ -450,6 +450,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	private static final String GROUP_OTHER_THREADS = "other-threads";
 
 	/**
+	 * {@code _freshLine} and what a character write owes it: forced on when the attempt
+	 * compiled a call the source scan did not predict, and in a class another links
+	 * against, whose stream a fragment's {@code fresh-line} may ask.
+	 */
+	private static final String GROUP_LINE_STARTS = "line-starts";
+
+	/**
 	 * Which gate emits a given runtime helper, i.e. which gate to force on when the
 	 * finished class turns out to call that helper without it having been emitted. A
 	 * helper absent from this table is not recoverable and makes the compile fail loudly
@@ -479,6 +486,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (JvmComplexRuntimeBuilder.METHOD_NAMES.contains(helperName)) {
 			return GROUP_COMPLEX;
+		}
+		if (JvmIoRuntimeBuilder.FRESH_LINE_METHOD.equals(helperName)) {
+			return GROUP_LINE_STARTS;
 		}
 		return null;
 	}
@@ -1084,6 +1094,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			// _apply, and a function value another class applies through the spread
 			// dispatcher of the class that made it (JvmLinkage).
 			forced.add(GROUP_APPLY);
+			// One class writes a stream another's fresh-line asks.
+			forced.add(GROUP_LINE_STARTS);
 		}
 		// A fragment's helpers take the values the classes before it make as those
 		// classes' helpers do: a table they made keys as they key it, their arrays and
@@ -1212,7 +1224,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Splice top-level (progn ...)/(eval-when ...) so Pass 1 collects the defuns
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
-		program = LispMacroExpander.flattenTopLevel(program);
+		program = LispMacroExpander.flattenCompiledTopLevel(program);
 		if (this.optimize.eliminatesDeadCode()) {
 			// A typecase clause whose type no call site's argument can have is dead code
 			// the class shaker cannot see, because its reachability is by NAME
@@ -2109,6 +2121,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (!(programUsesSymbol(program, LispNames.READ) || programUsesSymbol(program, LispNames.READ_FROM_STRING)
 				|| programUsesSymbol(program, LispNames.LOAD))) {
 			wrapperExcludes.add(LispNames.READ_FROM_STRING);
+		}
+		// fresh-line's wrapper would keep _freshLine, and with it the line start every
+		// character write owes it, in a program that cannot reach the wrapper.
+		final boolean reachesFreshLineValue = usesEval || nameResolvable || this.dynamic || linkedClass
+				|| BuiltinFunctionWrappers.reachesFreshLineValue(program, closRegistry.conditionReports().values());
+		if (!reachesFreshLineValue) {
+			wrapperExcludes.add(LispNames.FRESH_LINE);
 		}
 		// With the eval runtime on, a runtime funcall designator -- (eval '(funcall)), a
 		// read or interned FUNCALL -- resolves through _lookup like any wrapper name, and
@@ -3383,8 +3402,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			// gives it; whether it was TAKEN is read back from the context, so a spelling
 			// the dispatch does not route to the defvar compiler leaves its value on the
 			// stack and still gets its pop.
-			boolean offered = ToplevelStatements.isNameValuedDefiner(expr);
-			chunkCtx.definerNameDropped = offered ? expr : null;
+			boolean offered = ToplevelStatements.isNameValuedDefiner(expr) || ToplevelStatements.isFreshLine(expr);
+			chunkCtx.valueDropped = offered ? expr : null;
 			int formSizeBefore = chunkCtx.body.size();
 			try {
 				JvmExprCompiler.compileExpr(expr, chunkCtx, this.className);
@@ -3398,8 +3417,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				}
 				throw new IllegalStateException("while compiling top-level form " + shown + ": " + ex.getMessage(), ex);
 			}
-			boolean taken = offered && chunkCtx.definerNameDropped == null;
-			chunkCtx.definerNameDropped = null;
+			boolean taken = offered && chunkCtx.valueDropped == null;
+			chunkCtx.valueDropped = null;
 			if (!taken) {
 				chunkCtx.body.pop();
 			}
@@ -4450,6 +4469,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				? JvmSocketRuntimeBuilder.build(cp, thisClass, stringClass, longClass, longValueOf, longValue,
 						stringLengthForIo, stringSubstring, stringConcat, usesArrays, usesReadLinePairs)
 				: null;
+		// _freshLine, and the line start every character write owes it, exist only where
+		// a stream can be asked, read off forms some of whose expansions are built after
+		// this census. A call it misses comes back as a forced re-run.
+		final boolean usesLineStarts = forcedGroups.contains(GROUP_LINE_STARTS) || reachesFreshLineValue
+				|| LispMacroExpander.mayAskStreamLineStart(program, globals.contains(LispNames.STANDARD_OUTPUT_VAR));
 		// *error-output* is the reserved stream handle 2 (the process standard error), so
 		// a program that can name it -- explicitly, or through the warn redirect -- gets
 		// the stream built-ins' stderr branch and the reserved table handles; one that
@@ -4504,7 +4528,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
 					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,
 					usesErrorOutput, usesListDirectory, fileMeta, usesPackedSequenceIo, usesCharSequenceIo, usesArrays,
-					usesQuantized, this.needsIoStreamRuntime, usesReadLinePairs)
+					usesQuantized, this.needsIoStreamRuntime, usesReadLinePairs, usesLineStarts)
 			.methods();
 		if (flushStreamsMethod != null) {
 			ioMethods.add(JvmFlushStreamsBuilder.build(cp, thisClass));
@@ -4788,7 +4812,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				? cp.fieldRef(thisClass, streamCountFieldName, streamCountFieldDesc) : null;
 		final @Nullable FieldRefEntry funcrefsFieldRef = needsFuncRef
 				? cp.fieldRef(thisClass, funcrefsFieldName, funcrefsFieldDesc) : null;
-		final boolean initsClinit = seedsStandardStream || usesErrorOutput || topLevelInClinit || usesComplex;
+		final @Nullable FieldRefEntry midLineFieldRef = usesLineStarts
+				? cp.fieldRef(thisClass, JvmIoRuntimeBuilder.MID_LINE_FIELD, JvmIoRuntimeBuilder.MID_LINE_DESC) : null;
+		final boolean initsClinit = seedsStandardStream || usesErrorOutput || usesLineStarts || topLevelInClinit
+				|| usesComplex;
 		final Utf8Entry standardOutputClinitName = initsClinit ? cp.utf8Entry("<clinit>") : null;
 		final Utf8Entry standardOutputClinitDesc = initsClinit ? cp.utf8Entry("()V") : null;
 		// The <clinit> name constants when the canonical function-value fill is
@@ -4862,6 +4889,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, streamsFieldName,
 				streamsFieldDesc);
 		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, streamCountFieldName, streamCountFieldDesc);
+		if (midLineFieldRef != null) {
+			// A concurrent set, filled in <clinit>: one virtual thread per served request
+			// writes its own stream through the same field, and a table of flags growing
+			// beside _streams would lose a write that raced the copy.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					cp.utf8Entry(JvmIoRuntimeBuilder.MID_LINE_FIELD), cp.utf8Entry(JvmIoRuntimeBuilder.MID_LINE_DESC));
+		}
 		if (funcrefsFieldRef != null) {
 			// The canonical function-value boxes, one Object[]{Integer funcId} per
 			// defun taken as a static value, filled once in <clinit> below. Final: class
@@ -5383,6 +5417,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				clinitHeadCode.putstatic(streamsFieldRef);
 				clinitHeadCode.iconst_3();
 				clinitHeadCode.putstatic(java.util.Objects.requireNonNull(streamCountFieldRef));
+			}
+			if (midLineFieldRef != null) {
+				clinitHeadCode.invokestatic(cp.methodRef("java/util/concurrent/ConcurrentHashMap", "newKeySet",
+						"()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;"));
+				clinitHeadCode.putstatic(midLineFieldRef);
 			}
 			// The bignum literals go in before the layouts: they are plain
 			// values with no dependency of their own, and every later fragment
@@ -9004,18 +9043,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		@Nullable MethodRefEntry evalStoreRef;
 
 		/**
-		 * The one top-level form whose returned NAME the emitter is dropping, or
-		 * {@code null}. Set immediately before a {@code defvar}/{@code defparameter}/
-		 * {@code defconstant} in statement position is compiled;
-		 * {@link JvmDefvarCompiler} clears it when it takes the offer and emits no name
-		 * (see {@code compiler/ToplevelStatements},
+		 * The one statement whose value the emitter is dropping, or {@code null}. Set
+		 * immediately before a {@code defvar}/{@code defparameter}/{@code defconstant} at
+		 * the top level, or a {@code fresh-line} in any statement position, is compiled;
+		 * {@link JvmDefvarCompiler} and {@link JvmFreshLineCompiler} clear it when they
+		 * take the offer and leave no value (see {@code compiler/ToplevelStatements},
 		 * {@code .kb/toplevel-statement-values.md}). Keyed by the cons IDENTITY, and
 		 * cleared on acceptance, so the emitter can tell whether the offer was taken --
-		 * an offer the dispatch did not route to the defvar compiler leaves a value on
-		 * the stack and still gets its pop -- and so a nested definer compiled while this
-		 * one's init expression is being emitted cannot take it.
+		 * an offer the dispatch did not route to those compilers leaves a value on the
+		 * stack and still gets its pop -- and so a form nested in this one's arguments
+		 * cannot take it.
 		 */
-		@Nullable LispVal definerNameDropped;
+		@Nullable LispVal valueDropped;
 
 		String className = "";
 

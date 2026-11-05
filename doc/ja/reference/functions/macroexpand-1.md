@@ -8,6 +8,8 @@
 
 コンパイルパスで展開されるのは**リテラル**のクォートされた引数だけです: CLI がコンパイル時に呼び出しを展開結果に畳み込みます。計算された引数はコンパイル済みプログラムに届きますが、そこにはマクロテーブルが残っていないため、フォームをそのまま返し `expanded-p` は nil になります — ただしそのフォーム自体がマクロ呼び出しの場合は `macroexpand-1: a compiled program cannot expand a macro at run time` をシグナルします。これは [`macro-function`](macro-function.md) のスタブがそこで返すのと同じ答えで、「展開されなくなるまで展開する」という定番のループがどのバックエンドでも停止するのはこのためです。
 
+組み込みの反復マクロは、コードウォーカーが読める標準の演算子に展開します。`dolist`、`dotimes`、`do`、`do*`、`loop`、`prog` は `block` と `tagbody` を返します。`*macroexpand-hook*` は渡された展開関数を呼び出します。これを通して呼ぶ展開関数のためのもので、ここでの展開はこの変数を参照しません。
+
 ```lisp
 (macroexpand-1 '(unless c x)) ; => (IF C NIL X)
 ```

@@ -94,8 +94,8 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
   (recorded into the package -> system map); a component-class `defclass` (below; any OTHER
   defclass runs); `defmethod` (ignored, except the `source-file-type` pre-pass); `progn` and an
   `eval-when` whose situations fire on load (`firesOnLoad`) are FLATTENED onto the worklist, a
-  `(:compile-toplevel)`-only one is dropped (the interpreter's own `eval-when` runs every body,
-  so this is decided here); a top-level `#.` marker of either kind is dropped (the ASDF version
+  `(:compile-toplevel)`-only one is dropped (the interpreter's own top-level `eval-when` runs every
+  body, so this is decided here); a top-level `#.` marker of either kind is dropped (the ASDF version
   guard: evaluated, it refused bordeaux-threads, fiveam, in-nomine, split-sequence and
   static-vectors in the h35 prototype, when `asdf:asdf-version` did not exist here).
 - **`asdf::*asdf-version*` is `"3.3.7"`** (asdf.lisp, uiop's contract version; 2026-10-31). A

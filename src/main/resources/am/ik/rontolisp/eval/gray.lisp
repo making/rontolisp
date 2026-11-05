@@ -247,8 +247,7 @@
 ;; fresh-line's answer is CL's: t when it had to break the line, nil when the
 ;; stream was already at one. A stream with no column cannot tell, so
 ;; %gray-default-start-line-p answers nil for it and the line break is
-;; unconditional -- the same rule the handle-based built-in follows for a file
-;; stream (.kb/pretty-printer.md).
+;; unconditional (.kb/gray-streams.md).
 (defun rontolisp::%gray-default-fresh-line (stream)
   (if (rontolisp:stream-start-line-p stream)
       nil
@@ -452,22 +451,10 @@
           nil)
         (terpri stream))))
 
-;; A ~& that opens a format control: a stream with no column is not asked
-;; (LispMacroExpander.freshLineWhereTheColumnIsKnown).
-(defun rontolisp::%gray-format-fresh-line (stream)
-  (if (if (%obj-is stream '%STREAM) (typep stream 'string-stream) t)
-      (rontolisp::%gray-fresh-line-dispatch stream)))
-
 (defun rontolisp::%gray-fresh-line-dispatch (stream)
-  ;; nil, like the handle-based fresh-line: the value of the operator does not
-  ;; depend on which kind of stream it was handed. stream-fresh-line's own
-  ;; CL-shaped t/nil answer is still what a direct caller (and the shim's
-  ;; delegation) sees.
   (let ((target (%stream-target (or stream *standard-output*))))
     (if (%obj-p target)
-        (progn
-          (rontolisp:stream-fresh-line target)
-          nil)
+        (rontolisp:stream-fresh-line target)
         (fresh-line stream))))
 
 (defun rontolisp::%gray-write-line-dispatch (s stream)

@@ -1173,6 +1173,7 @@ public final class Environment implements Scope {
 		// *gensym-counter* and *random-state* special variables, bound so they are not
 		// unbound.
 		env.define(LispNames.GENSYM_COUNTER_VAR, new LispInteger(0));
+		env.define(LispNames.MACROEXPAND_HOOK_VAR, new LispSymbol(LispNames.FUNCALL));
 		env.define(LispNames.RANDOM_STATE_VAR, new LispInstance(LispLayout.RANDOM_STATE, new LispVal[0]));
 		// The pathname operators' default `defaults`. #P"" -- the empty pathname, SBCL's
 		// initial value too -- is the only honest one here: rontolisp absolutizes
@@ -5774,6 +5775,21 @@ public final class Environment implements Scope {
 		// bidirectional class (RontoIoFileStream) with the read half unused, so the class
 		// cannot tell output-stream-p's caller which direction was asked for.
 		Set<Long> outputOnlyCursorStreams = ConcurrentHashMap.newKeySet();
+		// The handles past column 0, what fresh-line asks of a stream whose contents it
+		// cannot read: a file, a socket, standard error. Characters move it, as the
+		// stdout flag above; an octet, reading and file-position do not (SBCL,
+		// .kb/standard-output-redirect.md, "A stream's line start").
+		Set<Long> midLineStreams = ConcurrentHashMap.newKeySet();
+		java.util.function.BiConsumer<Long, String> trackLine = (handle, text) -> {
+			if (!text.isEmpty()) {
+				if (text.charAt(text.length() - 1) == '\n') {
+					midLineStreams.remove(handle);
+				}
+				else {
+					midLineStreams.add(handle);
+				}
+			}
+		};
 		// The set half of file-position for a BINARY file stream: reposition the file at
 		// the given byte offset and answer T, or nil if the stream was not a file
 		// stream or has left the table. An input stream re-opens the file (which also
@@ -5936,6 +5952,9 @@ public final class Environment implements Scope {
 			catch (IOException ex) {
 				throw new UncheckedIOException(ex);
 			}
+			if (!(writer instanceof StringWriter)) {
+				trackLine.accept(handle.value(), text);
+			}
 		};
 		env.defineFunction(LispNames.PRINT, new LispFunction(LispNames.PRINT, args -> {
 			requireArgCountBetween(LispNames.PRINT, args, 1, 2);
@@ -5958,10 +5977,10 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.TERPRI, new LispFunction(LispNames.TERPRI, args -> {
 			requireArgCountBetween(LispNames.TERPRI, args, 0, 1);
 			LispVal dest = resolveOutputDest.apply(args.isEmpty() ? null : args.get(0));
-			Socket socket = socketEntry.apply(dest);
-			if (socket != null) {
+			if (dest instanceof LispInteger handle && streams.get(handle.value()) instanceof Socket socket) {
 				// The socket arm: the entry is a raw Socket, not a Writer.
 				SocketSupport.writeString(socket, "\n");
+				midLineStreams.remove(handle.value());
 				return LispNil.INSTANCE;
 			}
 			emitTo.accept("\n", dest);
@@ -6038,9 +6057,9 @@ public final class Environment implements Scope {
 			int endCU = full.offsetByCodePoints(0, end);
 			String text = full.substring(startCU, endCU);
 			LispVal dest = resolveOutputDest.apply(stream);
-			Socket socket = socketEntry.apply(dest);
-			if (socket != null) {
+			if (dest instanceof LispInteger handle && streams.get(handle.value()) instanceof Socket socket) {
 				SocketSupport.writeString(socket, text);
+				trackLine.accept(handle.value(), text);
 				return str;
 			}
 			emitTo.accept(text, dest);
@@ -6348,23 +6367,37 @@ public final class Environment implements Scope {
 			requireArgCountBetween(LispNames.FRESH_LINE, args, 0, 1);
 			LispVal dest = resolveOutputDest.apply(args.isEmpty() ? null : args.get(0));
 			if (dest == null || dest == LispNil.INSTANCE || dest instanceof LispTrue) {
-				if (!atLineStart[0]) {
-					emit.accept("\n");
+				if (atLineStart[0]) {
+					return LispNil.INSTANCE;
 				}
+				emit.accept("\n");
+				return LispTrue.INSTANCE;
 			}
-			else if (dest instanceof LispInteger handle && streams.get(handle.value()) instanceof Writer writer) {
-				// A string stream exposes its contents, so the line start is exact; a
-				// file stream's column is unknown, so a newline is always written (the
-				// same rule on every backend).
-				if (!(writer instanceof StringWriter sw)
-						|| (!sw.getBuffer().isEmpty() && sw.getBuffer().charAt(sw.getBuffer().length() - 1) != '\n')) {
-					emitTo.accept("\n", dest);
-				}
-			}
-			else {
+			if (!(dest instanceof LispInteger handle)) {
 				throw new LispEvalException("not an output stream: " + dest.print());
 			}
-			return LispNil.INSTANCE;
+			// A string stream's contents answer exactly, and getting them clears it. A
+			// binary stream's column never moves.
+			Closeable entry = streams.get(handle.value());
+			boolean midLine = switch (entry) {
+				case StringWriter sw ->
+					!sw.getBuffer().isEmpty() && sw.getBuffer().charAt(sw.getBuffer().length() - 1) != '\n';
+				case Writer ignored -> midLineStreams.contains(handle.value());
+				case Socket ignored -> midLineStreams.contains(handle.value());
+				case OutputStream ignored -> false;
+				case null, default -> throw new LispEvalException("not an output stream: " + dest.print());
+			};
+			if (!midLine) {
+				return LispNil.INSTANCE;
+			}
+			if (entry instanceof Socket socket) {
+				SocketSupport.writeString(socket, "\n");
+				midLineStreams.remove(handle.value());
+			}
+			else {
+				emitTo.accept("\n", dest);
+			}
+			return LispTrue.INSTANCE;
 		}));
 		// princ-to-string / prin1-to-string: the string that princ / prin1 would print.
 		env.defineFunction(LispNames.PRINC_TO_STRING, new LispFunction(LispNames.PRINC_TO_STRING, args -> {
@@ -6847,6 +6880,7 @@ public final class Environment implements Scope {
 			streamPositions.remove(handle.value());
 			streamElementTypes.remove(handle.value());
 			outputOnlyCursorStreams.remove(handle.value());
+			midLineStreams.remove(handle.value());
 			if (stream == null) {
 				// CL: close on an ALREADY-CLOSED stream is not an error -- it answers
 				// true and does nothing (SBCL agrees). The unwind-protect idiom the ANSI
@@ -7028,6 +7062,7 @@ public final class Environment implements Scope {
 			LispVal dest = resolveOutputDest.apply(streamArg);
 			if (dest == null || dest instanceof LispNil || dest instanceof LispTrue) {
 				out.println(text);
+				atLineStart[0] = true;
 				return str;
 			}
 			if (!(dest instanceof LispInteger handle)) {
@@ -7037,6 +7072,7 @@ public final class Environment implements Scope {
 			if (entry instanceof Socket socket) {
 				// Socket writes are unbuffered: the line goes out immediately.
 				SocketSupport.writeLine(socket, text);
+				midLineStreams.remove(handle.value());
 				return str;
 			}
 			if (!(entry instanceof Writer writer)) {
@@ -7049,6 +7085,7 @@ public final class Environment implements Scope {
 			catch (IOException ex) {
 				throw new UncheckedIOException(ex);
 			}
+			midLineStreams.remove(handle.value());
 			return str;
 		}));
 		// The handle-side pushback of unread-char (StreamPushback): read-char /
@@ -7463,7 +7500,6 @@ public final class Environment implements Scope {
 				// The same PrintStream princ writes through, so a program that mixes
 				// text and raw bytes on standard output keeps them in order.
 				out.write((int) value.value());
-				atLineStart[0] = value.value() == '\n';
 				return value;
 			}
 			if (dest instanceof LispInteger err && err.value() == StreamDesignators.STANDARD_ERROR_HANDLE) {
@@ -7612,10 +7648,7 @@ public final class Environment implements Scope {
 			buf.store(ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN), start, end - start);
 			try {
 				out2.write(bytes);
-				if (out2 == out && bytes.length > 0) {
-					atLineStart[0] = bytes[bytes.length - 1] == '\n';
-				}
-				else if (out2 == System.err) {
+				if (out2 == System.err) {
 					out2.flush();
 				}
 				if (dest instanceof LispInteger handle && streamPaths.containsKey(handle.value())) {
@@ -9492,8 +9525,7 @@ public final class Environment implements Scope {
 		// the
 		// remainder published as the second value -- a function call is a multiple-value
 		// producer like any other, and the compile paths' wrappers publish the same
-		// (.kb/multiple-values.md, "The floor family as a function object"). The call
-		// position does not come here: LispEvaluator rounds it directly, one value.
+		// (.kb/multiple-values.md, "The floor family as a function object").
 		for (String op : List.of(LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND)) {
 			env.defineFunction(op, new LispFunction(op, args -> floorFamilyValues(env, op, op, false, args), true));
 		}

@@ -186,6 +186,19 @@ final class JvmExprCompiler {
 			}
 			return;
 		}
+		// A fresh-line's answer is built only for a site that reads it, and the offer is
+		// read back: a call the dispatch routes elsewhere leaves its value for the pop.
+		if (am.ik.rontolisp.compiler.ToplevelStatements.isFreshLine(expr)) {
+			LispVal outer = ctx.valueDropped;
+			ctx.valueDropped = expr;
+			compileExpr(expr, ctx, className);
+			boolean taken = ctx.valueDropped == null;
+			ctx.valueDropped = outer;
+			if (!taken) {
+				ctx.body.pop();
+			}
+			return;
+		}
 		compileExpr(expr, ctx, className);
 		ctx.body.pop();
 	}

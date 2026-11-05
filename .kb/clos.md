@@ -773,9 +773,9 @@ what the program signals without the generic, so an uncovered read is unchanged.
 ## `define-method-combination`
 Since 2026-11-05 on all four backends (`macro/MethodCombinations`), for McCLIM's `values-max-min`;
 in the cached Quicklisp systems arnesi's `wrapping-standard` and `cc-standard` and serapeum's
-`standard/context` are the other long forms (`(ql:quickload :arnesi)` loads and `wrapping-standard`
-combines on the interpreter). No run-time part: what the body computes becomes the
-dispatcher's code.
+`standard/context` are the other long forms (both libraries load on the interpreter, where
+`wrapping-standard`, `cc-standard` and `standard/context` combine as in SBCL). No run-time part: what
+the body computes becomes the dispatcher's code.
 - **An evaluator runs the body, once per dispatcher branch.** `expanderLambda` makes the form a lambda
   of the generic's name, the `:method-combination` arguments, `(method . qualifiers)` per applicable
   method and the argument forms: the groups are classified in generated Lisp (`%mc-qualifiers-match-p`,

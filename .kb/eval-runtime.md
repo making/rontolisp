@@ -134,10 +134,10 @@ arm per macro** (2026-11-05, ci-spec `eval-expands-the-built-in-macros`, agrees 
   on every backend it prints the record, SBCL its report). `%eval-restart-case` pushes the records the compile-time
   expansion writes, names computed, through an empty `restart-bind`: its save and restore, and what opens restart mode.
 - **Left out:** `pprint-logical-block` and the definers; the doc page lists them.
-- **The interpreter's `eval` answers what `_eval` does** (2026-11-05, `LispEvaluator.evalFunctionForm`; SBCL 2.2.9's answers). The
+- **The interpreter's `eval` answers what `_eval` does** (2026-11-05, `LispEvaluator.evalDatum`; SBCL 2.2.9's answers). The
   form's tail is a tail (`spillEscapingMvProducers`): `(multiple-value-list (eval '(gethash 1 h)))` was `(5)`. And an `eval-when`
-  met while it runs, which is at no top level, runs only for `:execute` or `eval` (`evalWhenExecutes`, `%eval-row-eval-when`): the
-  thread-local `evalFunctionRuns` says so, and `loadFile` clears it, a loaded file's forms being top-level forms.
+  met while it runs, which is at no top level, runs only for `:execute` or `eval` (`expandEvalWhen`, `%eval-row-eval-when`), while
+  a file it loads has top-level forms again ([declarations-type-checks.md](declarations-type-checks.md), "An eval-when's position").
 - **A form's call of a value producer gets both values** (same day): `designatedValueProducers` answers all of them where
   `runsFormsAtRunTime`, since the form's call reaches the wrapper. `(eval '(read-line s))` was `("hi")` for `("hi" T)` on the
   compile paths, and `read-from-string`, `intern` and `array-displacement` the same. It pays only in a program with the channel.

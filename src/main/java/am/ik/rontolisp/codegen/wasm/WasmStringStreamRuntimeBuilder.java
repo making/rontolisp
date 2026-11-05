@@ -60,9 +60,11 @@ final class WasmStringStreamRuntimeBuilder {
 	 * output record's byte buffer, a non-negative i31 handle is a WASI fd written via
 	 * fd_write, and anything else (nil, the symbol t) goes to standard output through
 	 * _write_str (which keeps the fresh-line tracking). Returns the string.
+	 * @param lineStarts whether a descriptor's line start is kept for
+	 * {@code _fresh_line_stream}
 	 * @return the function body bytes
 	 */
-	static byte[] buildWriteStreamStrBody(boolean charvecPossible) {
+	static byte[] buildWriteStreamStrBody(boolean charvecPossible, boolean lineStarts) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: STR=0 (ref), STREAM=1 (ref) ; i32 locals: OFF=2, LEN=3, H=4, REC=5,
@@ -147,6 +149,23 @@ final class WasmStringStreamRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
 		w.write(Instruction.DROP);
+		if (lineStarts) {
+			// if (len != 0) _line_mark(h, memory[off + len - 1] != '\n')
+			getLocal(w, LEN);
+			w.write(Instruction.IF, 0x40);
+			getLocal(w, H);
+			getLocal(w, OFF);
+			getLocal(w, LEN);
+			w.write(Instruction.I32_ADD);
+			i32(w, 1);
+			w.write(Instruction.I32_SUB);
+			w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+			i32(w, 10);
+			w.write(Instruction.I32_NE);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LINE_MARK);
+			w.write(Instruction.END);
+		}
 		w.write(Instruction.ELSE);
 		// nil or the symbol t: standard output via _write_str (fresh-line tracking)
 		getLocal(w, OFF);
@@ -936,12 +955,14 @@ final class WasmStringStreamRuntimeBuilder {
 	 * redirected destination. nil / the symbol t is standard output (the
 	 * {@code LINE_START_ADDR} tracking); a negative i31 handle (a string-stream record)
 	 * appends a newline only when the last byte written is not one (an empty record is at
-	 * a line start); a non-negative i31 handle (a WASI fd) always writes a newline -- its
-	 * column is unknown (the same rule on every backend). Returns nil.
+	 * a line start); a non-negative i31 handle (a WASI fd) writes one only when its byte
+	 * in the line table is set ({@link #buildLineMarkBody}). Answers t when it wrote the
+	 * newline, nil when it did not.
 	 * @param newlineOff the linear-memory offset of the static {@code "\n"} literal
+	 * @param lineTable the module global holding the line table
 	 * @return the function body bytes
 	 */
-	static byte[] buildFreshLineStreamBody(int newlineOff) {
+	static byte[] buildFreshLineStreamBody(int newlineOff, int lineTable) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: DEST=0 (ref) ; i32 locals: H=1, REC=2, LEN=3
@@ -990,13 +1011,31 @@ final class WasmStringStreamRuntimeBuilder {
 		w.write(Instruction.I32_NE);
 		w.write(Instruction.IF, 0x40);
 		emitAppendByte(w, REC, 10);
+		emitReturnTrue(w);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// non-negative handle: a real WASI fd -- its column is unknown, always newline
+		// non-negative handle: a real WASI fd, past column 0 when the table says so
+		getGlobal(w, lineTable);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, H);
+		emitLineTableLength(w, lineTable);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
+		emitLineTable(w, lineTable);
+		getLocal(w, H);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.IF, 0x40);
+		emitLineTable(w, lineTable);
+		getLocal(w, H);
+		i32(w, 0);
+		arraySet(w, WasmLispCompiler.TYPE_STR_BYTES);
 		i32(w, IOV);
 		i32(w, newlineOff);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
@@ -1010,6 +1049,10 @@ final class WasmStringStreamRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
 		w.write(Instruction.DROP);
+		emitReturnTrue(w);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		w.write(Instruction.RETURN);
@@ -1023,11 +1066,98 @@ final class WasmStringStreamRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		emitReturnTrue(w);
 		w.write(Instruction.END);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the {@code _line_mark(fd, mid)} body: {@code mid} into the descriptor's byte
+	 * of the line table, a {@code $str_bytes} array in a module global because a
+	 * descriptor number has no bound and a reactor's arena resets between calls, created
+	 * at the first descriptor past column 0 and doubled from there. A descriptor past its
+	 * end was never marked, so a line start has nothing to clear.
+	 * @param lineTable the module global holding the line table
+	 * @return the function body bytes
+	 */
+	static byte[] buildLineMarkBody(int lineTable) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: FD=0, MID=1 ; local NEW=2 (the grown table)
+		w.write(1);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
+		final int FD = 0, MID = 1, NEW = 2;
+		// if (table == null || fd >= table.length) {
+		getGlobal(w, lineTable);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32(w, 1);
+		w.write(Instruction.ELSE);
+		getLocal(w, FD);
+		emitLineTableLength(w, lineTable);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.END);
+		w.write(Instruction.IF, 0x40);
+		// if (!mid) return;
+		getLocal(w, MID);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// new = array.new_default((fd + 8) * 2);
+		getLocal(w, FD);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_SHL);
+		arrayNewDefault(w, WasmLispCompiler.TYPE_STR_BYTES);
+		setLocal(w, NEW);
+		// if (table != null) copy it over
+		getGlobal(w, lineTable);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, NEW);
+		i32(w, 0);
+		emitLineTable(w, lineTable);
+		i32(w, 0);
+		emitLineTableLength(w, lineTable);
+		arrayCopy(w, WasmLispCompiler.TYPE_STR_BYTES, WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.END);
+		getLocal(w, NEW);
+		setGlobal(w, lineTable);
+		w.write(Instruction.END);
+		// table[fd] = mid
+		emitLineTable(w, lineTable);
+		getLocal(w, FD);
+		getLocal(w, MID);
+		arraySet(w, WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/** Pushes the line table, cast to its array type. */
+	private static void emitLineTable(WasmWriter w, int lineTable) {
+		getGlobal(w, lineTable);
+		refCast(w, WasmLispCompiler.TYPE_STR_BYTES);
+	}
+
+	/** Pushes the length of the line table. */
+	private static void emitLineTableLength(WasmWriter w, int lineTable) {
+		emitLineTable(w, lineTable);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+	}
+
+	/** Emits {@code return t}. */
+	private static void emitReturnTrue(WasmWriter w) {
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_T_SYM);
+		w.write(Instruction.RETURN);
 	}
 
 	// === low-level emit helpers ===

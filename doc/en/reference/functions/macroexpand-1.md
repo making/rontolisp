@@ -8,6 +8,8 @@ The second value is Common Lisp's `expanded-p` flag: `(multiple-value-list (macr
 
 On the compilation path only a LITERAL quoted argument expands: the CLI folds the call to its expansion at compile time. A computed argument reaches a compiled program, which has no macro table left, so it answers the form unchanged with `expanded-p` nil — unless the form IS a macro call, which signals `macroexpand-1: a compiled program cannot expand a macro at run time`. That is the same answer [`macro-function`](macro-function.md)'s stub gives there, and it is what makes the usual "expand until it stops expanding" loop terminate on every backend.
 
+What a built-in iteration macro expands to is standard operators a code walker reads: `dolist`, `dotimes`, `do`, `do*`, `loop` and `prog` answer `block` and `tagbody`. `*macroexpand-hook*` calls the expander it is given, for an expander that calls through it; the expansions here do not consult it.
+
 ```lisp
 (macroexpand-1 '(unless c x)) ; => (IF C NIL X)
 ```

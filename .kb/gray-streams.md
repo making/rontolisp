@@ -66,8 +66,8 @@ default T; read/write-sequence's missing end -> `(length sequence)`).
   that is no stream (`streamp`) is `close`'s and `open-stream-p`'s `type-error` here: the interpreter
   takes this helper for every instance, and used to answer `t` where the compile paths without
   Gray signal. ci-spec `close-of-an-instance-that-is-no-stream`.
-- `%gray-fresh-line-dispatch` answers **nil** like the handle-based `fresh-line`, not
-  `stream-fresh-line`'s t/nil: an operator's value must not depend on stream kind.
+- `%gray-fresh-line-dispatch` answers what `stream-fresh-line` answers, as SBCL: t when it wrote, nil
+  when it did not, the same as the handle-based `fresh-line`.
 
 ## `clear-input` (2026-11-04)
 The one operator that reaches the protocol through its DEFINITION: it is a prelude defun on
@@ -495,7 +495,9 @@ Prelude Lisp (`LispPreludeLibrary.MAKE_BROADCAST_STREAM`) defines a
 broadcast stream is that class, with components or without**: a component-less
 `(make-broadcast-stream)` is the same class over an empty list (not the discarding
 sink), so the file queries answer for it. The class carries a `stream-fresh-line`
-method answering the last component (nil with none).
+method asking the first component and breaking the rest's line after it, as SBCL's `charpos`
+(nil with none); `%two-way-stream` and `%echo-stream` have one asking their output
+([standard-output-redirect.md](standard-output-redirect.md), "A stream's line start").
 **So exactly the operators that dispatch on one work
 with it.**
 

@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispEquality;
 import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispHashTable;
@@ -31574,6 +31575,8 @@ public final class LispMacroExpander {
 			if (intervals) {
 				out.addAll(LispReader.readAllFromString(RUNTIME_SUBTYPEP_INTERVAL_SOURCE, Features.INTERPRETER));
 			}
+			out.addAll(LispReader.readAllFromString(RUNTIME_SUBTYPEP_ARRAY_SOURCE, Features.INTERPRETER));
+			out.addAll(0, subtypepDeftypeTableForms(closRegistry));
 			out.addAll(0, subtypepAncestorTableForms(closRegistry, streamNames));
 		}
 		if (runtimeSubtypepValid) {
@@ -33406,19 +33409,57 @@ public final class LispMacroExpander {
 		.compile("~(?:0*[1-9][0-9]*)?&");
 
 	/**
-	 * A stream's {@code fresh-line} where it has a column to look at: {@code fresh-line}
-	 * always writes to a file, a socket or standard error, which keep none
-	 * ({@code .kb/standard-output-redirect.md}), and a {@code ~&} at the start of a line
-	 * there is the far likelier case. So a {@code %STREAM} value is asked only when it is
-	 * a string stream; {@code t} and a raw string handle answer exactly.
-	 * @param stream a form safe to evaluate twice
-	 * @return the conditional call
+	 * Whether the program may ask a stream that keeps no text for its line start: a
+	 * {@code fresh-line} of one, directly or as an opening {@code ~&}, or {@code format}
+	 * or {@code fresh-line} as a value. For a census that runs before the expansions
+	 * exist, so it reads {@code format} as it will expand: a literal {@code nil}
+	 * destination asks nothing, a literal {@code t} one and a stream-less
+	 * {@code fresh-line} ask a stream only under a binding of {@code *standard-output*},
+	 * and a control spelling no {@code &} asks nothing. A form this misses costs that
+	 * backend what any mispredicted gate does.
+	 * @param program the top-level forms
+	 * @param standardOutputBound whether {@code *standard-output*} is a global of the
+	 * program, which a stream-less call reads
+	 * @return whether it may
 	 */
-	public static LispVal freshLineWhereTheColumnIsKnown(LispVal stream) {
-		LispVal known = makeIf(objIs(stream, List.of(LispLayout.STREAM_TAG)),
-				callOf(LispNames.TYPEP, stream, callOf(LispNames.QUOTE, new LispSymbol(STRING_STREAM_TYPE))),
-				LispTrue.INSTANCE);
-		return makeIf(known, callOf(LispNames.FRESH_LINE, stream), LispNil.INSTANCE);
+	public static boolean mayAskStreamLineStart(List<LispVal> program, boolean standardOutputBound) {
+		return program.stream().anyMatch(form -> mayAskStreamLineStart(form, standardOutputBound));
+	}
+
+	private static boolean mayAskStreamLineStart(LispVal form, boolean standardOutputBound) {
+		for (LispVal rest = form; rest instanceof LispCons cell; rest = cell.cdr()) {
+			if (cell.car() instanceof LispSymbol head) {
+				LispVal args = cell.cdr();
+				LispVal first = args instanceof LispCons cons ? cons.car() : LispNil.INSTANCE;
+				switch (head.name()) {
+					case LispNames.FRESH_LINE -> {
+						if (standardOutputBound || !(first instanceof LispNil)) {
+							return true;
+						}
+					}
+					case LispNames.FORMAT -> {
+						boolean asksStream = first instanceof LispTrue ? standardOutputBound
+								: !(first instanceof LispNil);
+						if (asksStream && args instanceof LispCons cons && cons.cdr() instanceof LispCons control
+								&& !(control.car() instanceof LispString literal && literal.value().indexOf('&') < 0)) {
+							return true;
+						}
+					}
+					case LispNames.FUNCTION, LispNames.QUOTE -> {
+						if (first instanceof LispSymbol quoted && (LispNames.FRESH_LINE.equals(quoted.name())
+								|| LispNames.FORMAT.equals(quoted.name()))) {
+							return true;
+						}
+					}
+					default -> {
+					}
+				}
+			}
+			if (mayAskStreamLineStart(cell.car(), standardOutputBound)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// The fresh-line call a site makes under a formatStartsFresh answer.
@@ -33603,7 +33644,7 @@ public final class LispMacroExpander {
 	private static LispVal formatDestinationDispatch(LispVal result, LispSymbol streamVar,
 			@Nullable LispVal startsFresh) {
 		LispSymbol resultVar = new LispSymbol("__format_result");
-		LispVal writeToStream = formatWrite(startsFresh, freshLineWhereTheColumnIsKnown(streamVar),
+		LispVal writeToStream = formatWrite(startsFresh, callOf(LispNames.FRESH_LINE, streamVar),
 				listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), resultVar, streamVar)));
 		// A t destination is *standard-output*: the one-argument write-string reads it at
 		// call time, so a surrounding with-output-to-string capture still applies.
@@ -44609,15 +44650,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (eval-when (situations...) body...)} to {@code (progn body...)}:
-	 * every situation is treated as "evaluate now". The compile path's
-	 * expand-before-codegen pipeline already approximates {@code :compile-toplevel} for
-	 * macros; top-level forms are additionally spliced by {@link #flattenTopLevel} so
-	 * nested {@code defun}/{@code defmacro} definitions are collected.
-	 * @param cons the eval-when expression
-	 * @return the expanded expression
-	 */
-	/**
 	 * Lowers {@code (make-array dims ... :initial-contents list)} for the compiled
 	 * backends to the equivalent allocation plus an element-wise fill: the inner
 	 * {@code make-array} keeps every other keyword. Every level's length is checked
@@ -46089,20 +46121,21 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (eval-when (situations...) body...)} to the body wrapped in a
-	 * {@code progn} (nil for an empty body). The situation list is validated but not
-	 * consulted here -- the compile-time situations are handled where the form is read,
-	 * not where it is expanded.
+	 * Expands an {@code (eval-when (situations...) body...)} at no top level, where only
+	 * {@code :execute} runs the body (CLHS 3.2.3.1): the body wrapped in a {@code progn},
+	 * or nil when it does not run. A top-level one never comes here: a compile path
+	 * splices it ({@link #flattenTopLevel}), the interpreter runs its members
+	 * ({@link #evalWhenMembers}).
 	 * @param cons the eval-when expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandEvalWhen(LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+		if (!hasSituationList(cons)) {
 			throw new IllegalArgumentException("eval-when expects a situation list, got: " + cons.print());
 		}
+		List<LispVal> parts = cons.toList();
 		List<LispVal> body = parts.subList(2, parts.size());
-		if (body.isEmpty()) {
+		if (body.isEmpty() || !evalWhenExecutes(cons)) {
 			return LispNil.INSTANCE;
 		}
 		if (body.size() == 1) {
@@ -46112,18 +46145,34 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * What a well-formed {@code eval-when} runs in a top-level position, where a program
+	 * stands for both its compile and its load: its whole body under any situation, and
+	 * nothing under an empty list, which names none.
+	 * @param cons the eval-when expression
+	 * @return the members that run, or null for a malformed form
+	 */
+	public static @Nullable List<LispVal> evalWhenMembers(LispCons cons) {
+		if (!hasSituationList(cons) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		return parts.get(1) instanceof LispNil ? List.of() : parts.subList(2, parts.size());
+	}
+
+	private static boolean hasSituationList(LispCons cons) {
+		return cons.cdr() instanceof LispCons rest && (rest.car() instanceof LispCons || rest.car() instanceof LispNil);
+	}
+
+	/**
 	 * Whether an {@code eval-when} outside any top-level position runs its body: its
 	 * situations name {@code :execute} or the old {@code eval}. A malformed form answers
 	 * true, so {@link #expandEvalWhen} reports it.
-	 * @param cons the eval-when expression
-	 * @return whether the body runs
 	 */
-	public static boolean evalWhenExecutes(LispCons cons) {
-		if (!(cons.cdr() instanceof LispCons rest)
-				|| !(rest.car() instanceof LispCons || rest.car() instanceof LispNil)) {
+	private static boolean evalWhenExecutes(LispCons cons) {
+		if (!hasSituationList(cons)) {
 			return true;
 		}
-		for (LispVal cell = rest.car(); cell instanceof LispCons list; cell = list.cdr()) {
+		for (LispVal cell = ((LispCons) cons.cdr()).car(); cell instanceof LispCons list; cell = list.cdr()) {
 			if (list.car() instanceof LispSymbol situation && (":EXECUTE".equals(situation.name())
 					|| ":EVAL".equals(situation.name()) || LispNames.EVAL.equals(memberOf(situation.name())))) {
 				return true;
@@ -46134,7 +46183,7 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands {@code (with-compilation-unit (options...) body...)} to the body wrapped in
-	 * a {@code progn}, exactly like {@link #expandEvalWhen}.
+	 * a {@code progn}.
 	 *
 	 * <p>
 	 * A {@code progn} is the whole implementation, and a legitimate one: the option list
@@ -47387,6 +47436,42 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Makes a syntactic producer publish in the value of every {@code return},
+	 * {@code return-from} and {@code throw} a form holds, wherever it sits: the value
+	 * leaves through a block however deep the exit is (trivia's {@code match} returns
+	 * from inside a {@code tagbody}, and a {@code dolist} body is a statement). Quoted
+	 * data is left alone; a list of that shape in a macro's own syntax only gets a
+	 * publish its macro's expansion has no reader for.
+	 */
+	private static LispVal settleExits(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()
+				|| (cons.car() instanceof LispSymbol quote && LispNames.isQuote(quote.name()))) {
+			return form;
+		}
+		List<LispVal> parts = cons.toList();
+		List<LispVal> settled = new java.util.ArrayList<>(parts.size());
+		boolean changed = false;
+		for (LispVal part : parts) {
+			LispVal walked = settleExits(part);
+			changed = changed || walked != part;
+			settled.add(walked);
+		}
+		LispCons walked = changed ? (LispCons) rebuilt(cons, settled) : cons;
+		if (cons.car() instanceof LispSymbol op) {
+			// An exit across a lambda is an %nlx-throw by now.
+			int value = switch (op.name()) {
+				case LispNames.RETURN -> parts.size() == 2 ? 1 : -1;
+				case LispNames.RETURN_FROM, LispNames.THROW, LispNames.NLX_THROW_INTERNAL -> parts.size() == 3 ? 2 : -1;
+				default -> -1;
+			};
+			if (value >= 0) {
+				return settleAt(walked, walked.toList(), value, TailMode.PUBLISH).form();
+			}
+		}
+		return walked;
+	}
+
+	/**
 	 * Settles a tail form for the compile paths: {@link #spillEscapingMvProducers}'
 	 * publishing rewrite PLUS the clears that make {@code %mv-spill} exact after the form
 	 * -- a tail that is single-valued for sure (an atom, a quote, a call of a
@@ -47606,12 +47691,15 @@ public final class LispMacroExpander {
 			// Statements that answer nil on their normal exit; a return/go/throw out of
 			// them carries its own values past the trailing clear.
 			case LispNames.WHILE, LispNames.TAGBODY ->
-				new SettledTail(mode.clears() ? clearAfterStatement(form) : form, true);
+				new SettledTail(mode.clears() ? clearAfterStatement(settleExits(form)) : form, true);
 			case LispNames.DOTIMES -> settleDotimes(cons, parts, mode);
 			case LispNames.PROGN, LispNames.LOCALLY, LispNames.WITH_STANDARD_IO_SYNTAX ->
 				settleLast(cons, parts, 1, mode);
+			// One that does not run leaves its nil, and nothing on the channel.
+			case LispNames.EVAL_WHEN ->
+				evalWhenExecutes(cons) ? settleLast(cons, parts, 2, mode) : settleTail(LispNil.INSTANCE, mode);
 			case LispNames.LET, LispNames.LET_STAR, LispNames.FLET, LispNames.LABELS, LispNames.MACROLET,
-					LispNames.SYMBOL_MACROLET, LispNames.HANDLER_BIND, LispNames.EVAL_WHEN, LispNames.WITH_OPEN_FILE,
+					LispNames.SYMBOL_MACROLET, LispNames.HANDLER_BIND, LispNames.WITH_OPEN_FILE,
 					LispNames.WITH_INPUT_FROM_STRING, LispNames.WITH_OPEN_STREAM, LispNames.WITH_HASH_TABLE_ITERATOR,
 					LispNames.WITH_PACKAGE_ITERATOR, LispNames.WITH_COMPILATION_UNIT, LispNames.WITH_SIMPLE_RESTART,
 					LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED,
@@ -47904,6 +47992,20 @@ public final class LispMacroExpander {
 			List<LispVal> out = new java.util.ArrayList<>(parts);
 			out.add(clearedNil());
 			return new SettledTail(SourceProvenance.inherit(original, listToCons(out)), true);
+		}
+		if (mode.clears()) {
+			// A form ahead of the tail may leave through an exit an expansion just
+			// showed:
+			// a loop's return clause sits in a while ahead of the loop's own result.
+			List<LispVal> settled = new java.util.ArrayList<>(parts);
+			boolean changed = false;
+			for (int i = firstBody; i < parts.size() - 1; i++) {
+				settled.set(i, settleExits(parts.get(i)));
+				changed = changed || settled.get(i) != parts.get(i);
+			}
+			if (changed) {
+				return settleAt((LispCons) rebuilt(original, settled), settled, settled.size() - 1, mode);
+			}
 		}
 		return settleAt(original, parts, parts.size() - 1, mode);
 	}
@@ -49971,7 +50073,10 @@ public final class LispMacroExpander {
 	 * unsound -- the compound is the SMALLER type there.
 	 * <li>{@code (not ...)}/{@code (member ...)}/{@code (eql ...)}/{@code (satisfies ...)}
 	 * stay unknown ({@link #OPAQUE_COMPOUND_TYPE_HEADS}): none of them relates to its
-	 * head by inclusion.
+	 * head by inclusion. Two enumerations compare by their elements, ahead of this.
+	 * <li>Two array specifiers compare by their parts ({@link ArrayTypeShape}), and a
+	 * {@code deftype} name against a compound is its expansion against it:
+	 * {@link #RUNTIME_SUBTYPEP_ARRAY_SOURCE}, ahead of the mirror above.
 	 * <li>{@code (complex Y)} as the super admits only a {@code (complex X)} sub with
 	 * {@code X} a subtype of {@code Y} (a missing or {@code *} part is the whole complex
 	 * type, so it qualifies only as the super).
@@ -50025,6 +50130,31 @@ public final class LispMacroExpander {
 			if (superRange != null && subRange != null) {
 				return superRange.contains(subRange);
 			}
+			// A deftype against a compound is its expansion against it.
+			if (superV instanceof LispSymbol name
+					&& deftypeOnPath(name, closRegistry, expanding) instanceof LispVal expansion) {
+				return subtypep(subV, expansion, closRegistry, withDeftypeOnPath(expanding, name));
+			}
+			// Two enumerations decide by their elements.
+			List<LispVal> subMembers = memberElements(subV);
+			List<LispVal> superMembers = subMembers == null ? null : memberElements(superV);
+			if (subMembers != null && superMembers != null) {
+				return subMembers.stream()
+					.allMatch(element -> superMembers.stream().anyMatch(member -> LispEquality.eql(element, member)));
+			}
+			// Two array specifiers decide by their parts. One against any other name is
+			// the vector or array it is.
+			ArrayTypeShape subShape = arrayTypeShape(subV, closRegistry);
+			if (subShape != null) {
+				ArrayTypeShape superShape = arrayTypeShape(superV, closRegistry);
+				if (superShape != null) {
+					return superShape.contains(subShape);
+				}
+				if (superV instanceof LispSymbol) {
+					return subtypep(new LispSymbol(subShape.isVector() ? LispNames.VECTOR : "ARRAY"), superV,
+							closRegistry, expanding);
+				}
+			}
 		}
 		if (superV instanceof LispCons supCons) {
 			// A COMPOUND super: only the logical connectives decide anything here.
@@ -50056,7 +50186,12 @@ public final class LispMacroExpander {
 				// it qualifies only as the SUPER side).
 				return complexSubtypep(subV, supCons, closRegistry, expanding);
 			}
-			return false;
+			// A deftype is its expansion against it, once the branches of an (or ...)
+			// have
+			// had the deftype's own name to meet.
+			return subV instanceof LispSymbol name
+					&& deftypeOnPath(name, closRegistry, expanding) instanceof LispVal expansion
+					&& subtypep(expansion, superV, closRegistry, withDeftypeOnPath(expanding, name));
 		}
 		if (subV instanceof LispCons subCons) {
 			String subHead = compoundTypeHead(subCons);
@@ -50095,6 +50230,50 @@ public final class LispMacroExpander {
 		}
 		return namedSubtypep(new SubtypepName(subSym, closRegistry), new SubtypepName(superSym, closRegistry),
 				closRegistry, expanding);
+	}
+
+	private static @Nullable ArrayTypeShape arrayTypeShape(LispVal spec, ClosRegistry closRegistry) {
+		return ArrayTypeShape.of(spec, element -> {
+			LispVal alias = resolveElementTypeAlias(element, closRegistry);
+			return ArrayElementTypes.codeOf(alias != null ? alias : element);
+		});
+	}
+
+	/** A deftype's expansion, null for any other name or one being expanded. */
+	private static @Nullable LispVal deftypeOnPath(LispSymbol name, ClosRegistry closRegistry,
+			java.util.Set<String> expanding) {
+		return expanding.contains(ClosRegistry.normalize(name.name())) ? null : closRegistry.findDeftype(name.name());
+	}
+
+	private static java.util.Set<String> withDeftypeOnPath(java.util.Set<String> expanding, LispSymbol name) {
+		java.util.Set<String> deeper = new java.util.HashSet<>(expanding);
+		deeper.add(ClosRegistry.normalize(name.name()));
+		return deeper;
+	}
+
+	/**
+	 * The elements of a {@code (member ...)} or {@code (eql x)}, null for anything else.
+	 */
+	private static @Nullable List<LispVal> memberElements(LispVal spec) {
+		if (!(spec instanceof LispCons cons) || !cons.isProperList()) {
+			return null;
+		}
+		String head = compoundTypeHead(cons);
+		List<LispVal> parts = cons.toList();
+		return LispNames.MEMBER.equals(head) || (LispNames.EQL.equals(head) && parts.size() == 2)
+				? parts.subList(1, parts.size()) : null;
+	}
+
+	/** What a deftype name stands for, through a chain of them; anything else itself. */
+	private static LispVal withoutDeftype(LispVal spec, ClosRegistry closRegistry) {
+		java.util.Set<String> expanding = java.util.Set.of();
+		LispVal current = spec;
+		while (current instanceof LispSymbol name
+				&& deftypeOnPath(name, closRegistry, expanding) instanceof LispVal expansion) {
+			expanding = withDeftypeOnPath(expanding, name);
+			current = expansion;
+		}
+		return current;
 	}
 
 	/**
@@ -50137,6 +50316,15 @@ public final class LispMacroExpander {
 		String supKey = sup.key();
 		LispVal subExpansion = expanding.contains(subKey) ? null : sub.deftype();
 		LispVal supExpansion = expanding.contains(supKey) ? null : sup.deftype();
+		if (subExpansion != null && supExpansion != null) {
+			// The super alone first: a branch of its expansion may name the sub, which
+			// serapeum's key-designator does of function-name.
+			java.util.Set<String> withSuper = new java.util.HashSet<>(expanding);
+			withSuper.add(supKey);
+			if (subtypep(sub.symbol, supExpansion, closRegistry, withSuper)) {
+				return true;
+			}
+		}
 		if (subExpansion != null || supExpansion != null) {
 			java.util.Set<String> deeper = new java.util.HashSet<>(expanding);
 			if (subExpansion != null) {
@@ -50783,8 +50971,12 @@ public final class LispMacroExpander {
 	 * @return whether the {@code subtypep} answer for the pair is a decision
 	 */
 	public static boolean subtypepValid(LispVal subV, LispVal superV, ClosRegistry closRegistry) {
-		return (!(subV instanceof LispCons) && !(superV instanceof LispCons)) || subtypep(subV, superV, closRegistry)
-				|| (IntegerTypeRange.of(subV) != null && IntegerTypeRange.of(superV) != null);
+		LispVal sub = withoutDeftype(subV, closRegistry);
+		LispVal sup = withoutDeftype(superV, closRegistry);
+		return (!(sub instanceof LispCons) && !(sup instanceof LispCons)) || subtypep(subV, superV, closRegistry)
+				|| (IntegerTypeRange.of(sub) != null && IntegerTypeRange.of(sup) != null)
+				|| (arrayTypeShape(sub, closRegistry) != null && arrayTypeShape(sup, closRegistry) != null)
+				|| (memberElements(sub) != null && memberElements(sup) != null);
 	}
 
 	/**
@@ -50818,11 +51010,11 @@ public final class LispMacroExpander {
 	 */
 	private static final String RUNTIME_SUBTYPEP_VALID_SOURCE = """
 			(defun %subtypep-valid-runtime (%stv-a %stv-b)
-			  (if (consp %stv-a)
-			      (if (%subtypep-runtime %stv-a %stv-b) t nil)
-			      (if (consp %stv-b)
-			          (if (%subtypep-runtime %stv-a %stv-b) t nil)
-			          t)))
+			  (if (or (consp (%subtypep-without-deftype %stv-a)) (consp (%subtypep-without-deftype %stv-b)))
+			      (if (%subtypep-runtime %stv-a %stv-b)
+			          t
+			          (%subtypep-parts-pair-p %stv-a %stv-b))
+			      t))
 			""";
 
 	/**
@@ -50831,13 +51023,15 @@ public final class LispMacroExpander {
 	 */
 	private static final String RUNTIME_SUBTYPEP_VALID_INTERVAL_SOURCE = """
 			(defun %subtypep-valid-runtime (%stv-a %stv-b)
-			  (if (or (consp %stv-a) (consp %stv-b))
-			      (if (%subtypep-runtime %stv-a %stv-b)
-			          t
-			          (if (or (eq (%subtypep-interval %stv-a) :none) (eq (%subtypep-interval %stv-b) :none))
-			              nil
-			              t))
-			      t))
+			  (let ((%stv-sa (%subtypep-without-deftype %stv-a))
+			        (%stv-sb (%subtypep-without-deftype %stv-b)))
+			    (if (or (consp %stv-sa) (consp %stv-sb))
+			        (if (%subtypep-runtime %stv-a %stv-b)
+			            t
+			            (if (or (eq (%subtypep-interval %stv-sa) :none) (eq (%subtypep-interval %stv-sb) :none))
+			                (%subtypep-parts-pair-p %stv-a %stv-b)
+			                t))
+			        t)))
 			""";
 
 	/**
@@ -50946,6 +51140,158 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SUBTYPEP_RUNTIME),
 				listToCons(List.of(a, b)), body));
 	}
+
+	/**
+	 * The runtime twin of {@link #subtypep}'s ARRAY rule ({@link ArrayTypeShape}):
+	 * {@code %subtypep-array} reads a specifier VALUE as {@code (element dimensions
+	 * simple)} or {@code :none}, an element or a dimension {@code :any} when {@code *},
+	 * the dimensions {@code :any} for any rank. An element a deftype names reads as
+	 * {@code t}: the aliases of a compiled program are folded where a literal is. The
+	 * rule ahead of it is the same method's over a deftype against a compound
+	 * ({@code %subtypep-deftypes%}) and two enumerations. Change the two together.
+	 */
+	private static final String RUNTIME_SUBTYPEP_ARRAY_SOURCE = """
+			(defun %subtypep-array-star-p (%sts-x)
+			  (and %sts-x (symbolp %sts-x) (string= (symbol-name %sts-x) "*")))
+			(defun %subtypep-array-element (%ste-e)
+			  (cond ((%subtypep-array-star-p %ste-e) :any)
+			        ((symbolp %ste-e)
+			         (let ((%ste-n (if %ste-e (symbol-name %ste-e) "")))
+			           (cond ((or (string= %ste-n "CHARACTER") (string= %ste-n "BASE-CHAR")
+			                      (string= %ste-n "STANDARD-CHAR"))
+			                  :character)
+			                 ((string= %ste-n "SINGLE-FLOAT") :single)
+			                 ((string= %ste-n "DOUBLE-FLOAT") :double)
+			                 ((string= %ste-n "BFLOAT16") :half)
+			                 ((string= %ste-n "BIT") :bit)
+			                 (t t))))
+			        ((and (consp %ste-e) (symbolp (car %ste-e))
+			              (string= (symbol-name (car %ste-e)) "UNSIGNED-BYTE")
+			              (consp (cdr %ste-e)) (null (cdr (cdr %ste-e)))
+			              (member (car (cdr %ste-e)) '(8 16 32)))
+			         (car (cdr %ste-e)))
+			        (t t)))
+			(defun %subtypep-array-size (%stz-s)
+			  (cond ((%subtypep-array-star-p %stz-s) :any)
+			        ((and (integerp %stz-s) (>= %stz-s 0)) %stz-s)
+			        (t :none)))
+			(defun %subtypep-array-dimensions (%std-d)
+			  (cond ((%subtypep-array-star-p %std-d) :any)
+			        ((integerp %std-d)
+			         (if (and (>= %std-d 0) (<= %std-d 7))
+			             (let ((%std-out nil))
+			               (dotimes (%std-i %std-d %std-out)
+			                 (setq %std-out (cons :any %std-out))))
+			             :none))
+			        ((listp %std-d)
+			         (let ((%std-out nil) (%std-s nil))
+			           (dolist (%std-e %std-d (reverse %std-out))
+			             (setq %std-s (%subtypep-array-size %std-e))
+			             (if (eq %std-s :none)
+			                 (return :none)
+			                 (setq %std-out (cons %std-s %std-out))))))
+			        (t :none)))
+			(defun %subtypep-array-named (%stn-n)
+			  (cond ((string= %stn-n "ARRAY") (list :any :any nil))
+			        ((string= %stn-n "SIMPLE-ARRAY") (list :any :any t))
+			        ((string= %stn-n "VECTOR") (list :any (list :any) nil))
+			        ((string= %stn-n "SIMPLE-VECTOR") (list t (list :any) t))
+			        ((or (string= %stn-n "STRING") (string= %stn-n "BASE-STRING"))
+			         (list :character (list :any) nil))
+			        ((or (string= %stn-n "SIMPLE-STRING") (string= %stn-n "SIMPLE-BASE-STRING"))
+			         (list :character (list :any) t))
+			        ((string= %stn-n "BIT-VECTOR") (list :bit (list :any) nil))
+			        ((string= %stn-n "SIMPLE-BIT-VECTOR") (list :bit (list :any) t))
+			        (t :none)))
+			(defun %subtypep-array-name (%stm-s)
+			  (if (member %stm-s '(array simple-array vector simple-vector string simple-string
+			                       base-string simple-base-string bit-vector simple-bit-vector))
+			      (symbol-name %stm-s)
+			      ""))
+			(defun %subtypep-array (%sta-s)
+			  (if (not (consp %sta-s))
+			      (%subtypep-array-named (%subtypep-array-name %sta-s))
+			      (let* ((%sta-n (%subtypep-array-name (car %sta-s)))
+			             (%sta-named (%subtypep-array-named %sta-n))
+			             (%sta-r (cdr %sta-s)))
+			        (cond ((eq %sta-named :none) :none)
+			              ((or (string= %sta-n "ARRAY") (string= %sta-n "SIMPLE-ARRAY")
+			                   (string= %sta-n "VECTOR"))
+			               (if (and (consp %sta-r) (consp (cdr %sta-r)) (cdr (cdr %sta-r)))
+			                   :none
+			                   (let* ((%sta-e (if (consp %sta-r) (%subtypep-array-element (car %sta-r)) :any))
+			                          (%sta-given (and (consp %sta-r) (consp (cdr %sta-r))))
+			                          (%sta-d (if (string= %sta-n "VECTOR")
+			                                      (let ((%sta-z (if %sta-given
+			                                                        (%subtypep-array-size (car (cdr %sta-r)))
+			                                                        :any)))
+			                                        (if (eq %sta-z :none) :none (list %sta-z)))
+			                                      (if %sta-given
+			                                          (%subtypep-array-dimensions (car (cdr %sta-r)))
+			                                          :any))))
+			                     (if (eq %sta-d :none)
+			                         :none
+			                         (list %sta-e %sta-d (car (cdr (cdr %sta-named))))))))
+			              ((and (consp %sta-r) (cdr %sta-r)) :none)
+			              (t
+			               (let ((%sta-z (if (consp %sta-r) (%subtypep-array-size (car %sta-r)) :any)))
+			                 (if (eq %sta-z :none)
+			                     :none
+			                     (list (car %sta-named) (list %sta-z) (car (cdr (cdr %sta-named)))))))))))
+			(defun %subtypep-array-in (%sti-a %sti-b)
+			  (let ((%sti-ae (car %sti-a)) (%sti-be (car %sti-b))
+			        (%sti-ad (car (cdr %sti-a))) (%sti-bd (car (cdr %sti-b)))
+			        (%sti-as (car (cdr (cdr %sti-a)))) (%sti-bs (car (cdr (cdr %sti-b)))))
+			    (cond ((and %sti-bs (not %sti-as)) nil)
+			          ((not (or (eq %sti-be :any) (eql %sti-be %sti-ae))) nil)
+			          ((eq %sti-bd :any) t)
+			          ((eq %sti-ad :any) nil)
+			          ((/= (length %sti-ad) (length %sti-bd)) nil)
+			          (t
+			           (let ((%sti-ok t) (%sti-r %sti-ad))
+			             (dolist (%sti-x %sti-bd %sti-ok)
+			               (if (or (eq %sti-x :any) (eql %sti-x (car %sti-r)))
+			                   nil
+			                   (setq %sti-ok nil))
+			               (setq %sti-r (cdr %sti-r))))))))
+			(defun %subtypep-members-p (%stq-s)
+			  (and (consp %stq-s) (symbolp (car %stq-s))
+			       (or (string= (symbol-name (car %stq-s)) "MEMBER")
+			           (and (string= (symbol-name (car %stq-s)) "EQL")
+			                (consp (cdr %stq-s)) (null (cdr (cdr %stq-s)))))))
+			(defun %subtypep-parts-rule (%str-a %str-b)
+			  (let ((%str-xb (if (consp %str-a) (assoc %str-b %subtypep-deftypes%) nil))
+			        (%str-xa (if (consp %str-b) (assoc %str-a %subtypep-deftypes%) nil)))
+			    (cond
+			      (%str-xb (%subtypep-runtime %str-a (cdr %str-xb)))
+			      (%str-xa (%subtypep-runtime (cdr %str-xa) %str-b))
+			      ((and (%subtypep-members-p %str-a) (%subtypep-members-p %str-b))
+			       (dolist (%str-e (cdr %str-a) t)
+			         (if (member %str-e (cdr %str-b)) nil (return nil))))
+			      (t
+			       (let ((%str-sa (%subtypep-array %str-a)))
+			         (if (eq %str-sa :none)
+			             :none
+			             (let ((%str-sb (%subtypep-array %str-b)))
+			               (cond ((not (eq %str-sb :none)) (%subtypep-array-in %str-sa %str-sb))
+			                     ((symbolp %str-b)
+			                      (%subtypep-runtime
+			                       (if (and (consp (car (cdr %str-sa))) (null (cdr (car (cdr %str-sa)))))
+			                           'vector
+			                           'array)
+			                       %str-b))
+			                     (t :none)))))))))
+			(defun %subtypep-without-deftype (%stw-s)
+			  (let ((%stw-x (assoc %stw-s %subtypep-deftypes%)))
+			    (if %stw-x (%subtypep-without-deftype (cdr %stw-x)) %stw-s)))
+			(defun %subtypep-parts-pair-p (%stp-a %stp-b)
+			  (let ((%stp-sa (%subtypep-without-deftype %stp-a))
+			        (%stp-sb (%subtypep-without-deftype %stp-b)))
+			    (if (or (and (%subtypep-members-p %stp-sa) (%subtypep-members-p %stp-sb))
+			            (not (or (eq (%subtypep-array %stp-sa) :none) (eq (%subtypep-array %stp-sb) :none))))
+			        t
+			        nil)))
+			""";
 
 	/**
 	 * The runtime twin of {@link #subtypep}'s INTEGER INTERVAL rule
@@ -53442,6 +53788,11 @@ public final class LispMacroExpander {
 		// by type NAME -- can never match. One shared Lisp source reads the head out of
 		// the specifier value, exactly as the static subtypep reads it out of the AST.
 		LispVal compound = runtimeCompoundSubtypepBody(a, b, LispNames.SUBTYPEP_RUNTIME);
+		// A deftype, two enumerations or two array specifiers decide ahead of them, the
+		// twin of the Java arm too.
+		LispSymbol parts = new LispSymbol(prefix + "_pr");
+		compound = makeLet(parts.name(), mvCall("%SUBTYPEP-PARTS-RULE", a, b),
+				makeIf(fmtCall(LispNames.EQ_GENERAL, parts, new LispSymbol(":NONE")), compound, parts));
 		if (intervals) {
 			// Two integer INTERVALS decide by containment ahead of the compound rules,
 			// the twin of the Java arm in subtypep.
@@ -53528,6 +53879,43 @@ public final class LispMacroExpander {
 			entries.add(listToCons(entryParts));
 		}
 		return chunkedTableForms(LispNames.SUBTYPEP_ANCESTOR_TABLE, entries);
+	}
+
+	/**
+	 * The {@code %subtypep-deftypes%} table a run-time {@code subtypep} expands a deftype
+	 * against a compound by: every spelling of each name but one whose expansion reaches
+	 * it again, which {@link #subtypep} stops at and a table walk would not.
+	 */
+	private static List<LispVal> subtypepDeftypeTableForms(ClosRegistry closRegistry) {
+		List<LispVal> entries = new java.util.ArrayList<>();
+		for (String deftype : closRegistry.deftypeNames()) {
+			LispVal expansion = closRegistry.findDeftype(deftype);
+			if (expansion == null || reachesDeftype(expansion, deftype, closRegistry, new java.util.HashSet<>())) {
+				continue;
+			}
+			java.util.LinkedHashSet<String> spellings = new java.util.LinkedHashSet<>();
+			addDesignatorSpellings(spellings, deftype);
+			for (String spelling : spellings) {
+				entries.add(new LispCons(new LispSymbol(spelling), expansion));
+			}
+		}
+		return entries.isEmpty() ? List.of(listToCons(
+				List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol("%SUBTYPEP-DEFTYPES%"), LispNil.INSTANCE)))
+				: chunkedTableForms("%SUBTYPEP-DEFTYPES%", entries);
+	}
+
+	private static boolean reachesDeftype(LispVal spec, String deftype, ClosRegistry closRegistry,
+			java.util.Set<String> seen) {
+		if (spec instanceof LispCons cons) {
+			return reachesDeftype(cons.car(), deftype, closRegistry, seen)
+					|| reachesDeftype(cons.cdr(), deftype, closRegistry, seen);
+		}
+		if (!(spec instanceof LispSymbol name)
+				|| !(closRegistry.findDeftype(name.name()) instanceof LispVal expansion)) {
+			return false;
+		}
+		String key = ClosRegistry.normalize(name.name());
+		return key.equals(deftype) || (seen.add(key) && reachesDeftype(expansion, deftype, closRegistry, seen));
 	}
 
 	/**
@@ -54088,16 +54476,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Splices top-level {@code (progn ...)} and {@code (eval-when (situations) ...)}
-	 * forms into the top-level form list (recursively), preserving evaluation order. Used
-	 * on the compile path (and by {@code UserMacroExpander}) so Pass 1 defun collection
-	 * and the compile-time defmacro scan see definitions nested in the
-	 * {@code (eval-when (:compile-toplevel ...) (defmacro ...))} idiom. The interpreter
-	 * needs no flattening: it evaluates {@code eval-when} as {@code progn} natively.
-	 * @param program the top-level forms
-	 * @return the flattened top-level forms
-	 */
-	/**
 	 * Prepends the top-level {@code (setq %mv-spill nil)} creating the multiple-value
 	 * spill global (see {@link LispNames#MV_SPILL}) when the program uses any
 	 * multiple-value operator; returns the program unchanged otherwise. Both compilers
@@ -54362,6 +54740,12 @@ public final class LispMacroExpander {
 			program = spelled;
 		}
 		if (usesMv) {
+			// A return, return-from or throw leaves with its value however deep it sits.
+			List<LispVal> exitsSettled = new java.util.ArrayList<>(program.size());
+			for (LispVal form : program) {
+				exitsSettled.add(settleExits(form));
+			}
+			program = exitsSettled;
 			// Every defun's tail settles the spill: a syntactic producer publishes its
 			// secondary value so it survives the function return (defmethod bodies are
 			// defuns by this point), a single-valued tail clears what a non-tail form
@@ -54434,6 +54818,7 @@ public final class LispMacroExpander {
 		// paths seed the same initial values with defvar: a reference answers what the
 		// interpreter answers, and a setq works on both.
 		boolean usesGensymCounter = mentioned.contains(LispNames.GENSYM_COUNTER_VAR);
+		boolean usesMacroexpandHook = mentioned.contains(LispNames.MACROEXPAND_HOOK_VAR);
 		boolean usesRandomState = mentioned.contains(LispNames.RANDOM_STATE_VAR);
 		// java:*warn-on-reflection*: a global the interpreter binds to nil
 		// (LispEvaluator.registerJava) and consults while it resolves java: sites; a
@@ -54495,7 +54880,8 @@ public final class LispMacroExpander {
 			program = kept;
 		}
 		if (!usesMv && printerVars.isEmpty() && loadContextVars.isEmpty() && !readsPackage && !usesFeatures
-				&& constantNames.isEmpty() && !usesGensymCounter && !usesRandomState && !usesJavaWarnVar) {
+				&& constantNames.isEmpty() && !usesGensymCounter && !usesMacroexpandHook && !usesRandomState
+				&& !usesJavaWarnVar) {
 			return program;
 		}
 		List<LispVal> out = new java.util.ArrayList<>(
@@ -54516,6 +54902,11 @@ public final class LispMacroExpander {
 		if (usesGensymCounter) {
 			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.GENSYM_COUNTER_VAR),
 					new LispInteger(0))));
+		}
+		if (usesMacroexpandHook) {
+			out.addAll(LispReader.readAllFromString(
+					"(defvar *macroexpand-hook* (lambda (expander form env) (funcall expander form env)))",
+					Features.INTERPRETER));
 		}
 		if (usesRandomState) {
 			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.RANDOM_STATE_VAR),
@@ -54810,6 +55201,41 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * {@link #flattenTopLevel(List)} for what a backend compiles, past the macro pass: a
+	 * top-level {@code symbol-macrolet} can substitute there, and the forms of its body
+	 * are top-level forms too (CLHS 3.2.3.1). {@code UserMacroExpander} has done the same
+	 * to a program with macros, whose expansion has to see them.
+	 * @param program the top-level forms
+	 * @return the flattened top-level forms
+	 */
+	public static List<LispVal> flattenCompiledTopLevel(List<LispVal> program) {
+		List<LispVal> flat = flattenTopLevel(program);
+		if (flat.stream().noneMatch(LispMacroExpander::isSymbolMacroletForm)) {
+			return flat;
+		}
+		List<LispVal> out = new java.util.ArrayList<>();
+		for (LispVal form : flat) {
+			if (form instanceof LispCons cons && isSymbolMacroletForm(cons)) {
+				try {
+					out.addAll(flattenCompiledTopLevel(List.of(splicedPart(cons, expandSymbolMacrolet(cons)))));
+				}
+				catch (IllegalArgumentException ex) {
+					throw SourceProvenance.noteFailure(cons, ex);
+				}
+			}
+			else {
+				out.add(form);
+			}
+		}
+		return out;
+	}
+
+	private static boolean isSymbolMacroletForm(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head && cons.isProperList()
+				&& LispNames.SYMBOL_MACROLET.equals(clOperatorSpelling(head.name()));
+	}
+
+	/**
 	 * {@link #flattenTopLevel(List)}, also collecting -- by identity -- every spliced
 	 * form an {@code eval-when} evaluates at COMPILE time (CLHS 3.2.3.1: under
 	 * {@code :compile-toplevel}, or under {@code :execute} inside compile-time-too
@@ -54853,8 +55279,9 @@ public final class LispMacroExpander {
 		String operator = clOperatorSpelling(sym.name());
 		return LispNames.PROGN.equals(operator) || LispNames.LOCALLY.equals(operator)
 				|| classDefinerInitializer(cons) != null || isHandlerlessHandlerBind(cons)
-				|| ((LispNames.EVAL_WHEN.equals(operator) || isUiopWithDeprecationWrapper(operator)
-						|| isUiopWithUpgradabilityWrapper(operator)) && cons.toList().size() >= 2);
+				|| (LispNames.EVAL_WHEN.equals(operator) && hasSituationList(cons))
+				|| ((isUiopWithDeprecationWrapper(operator) || isUiopWithUpgradabilityWrapper(operator))
+						&& cons.toList().size() >= 2);
 	}
 
 	/**
@@ -54936,6 +55363,25 @@ public final class LispMacroExpander {
 				&& UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_UPGRADABILITY);
 	}
 
+	/**
+	 * What a form {@link #flattenTopLevel} opens beyond the special forms becomes: a uiop
+	 * wrapper around top-level definitions and a {@code handler-bind} binding nothing,
+	 * whose members stay top-level forms (SBCL's too).
+	 * @param cons a proper-list top-level form
+	 * @return the {@code progn} or nil it stands for, or null for any other form
+	 */
+	public static @Nullable LispVal topLevelWrapperExpansion(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		if (isHandlerlessHandlerBind(cons)) {
+			List<LispVal> parts = cons.toList();
+			return prognOrNil(parts.subList(2, parts.size()));
+		}
+		return isUiopWithUpgradabilityWrapper(head.name()) ? expandUiopWithUpgradability(cons)
+				: isUiopWithDeprecationWrapper(head.name()) ? expandUiopWithDeprecation(cons) : null;
+	}
+
 	private static void flattenTopLevelInto(LispVal form, List<LispVal> out, boolean compileTimeToo,
 			@Nullable Set<LispVal> compileTime) {
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && isSpliceableSpine(cons)) {
@@ -54957,13 +55403,19 @@ public final class LispMacroExpander {
 			// response.lisp does with-deprecation, inside an eval-when; upstream uiop
 			// puts with-upgradability around every one of its own), and burying those in
 			// an expression would stop them being definitions at all.
-			if (LispNames.EVAL_WHEN.equals(operator) || isUiopWithUpgradabilityWrapper(operator)) {
+			List<LispVal> members = LispNames.EVAL_WHEN.equals(operator) ? evalWhenMembers(cons) : null;
+			if (members != null) {
+				boolean memberCompileTime = evaluatesAtCompileTime(cons.toList().get(1), compileTimeToo);
+				for (LispVal member : members) {
+					flattenTopLevelInto(splicedPart(cons, member), out, memberCompileTime, compileTime);
+				}
+				return;
+			}
+			if (isUiopWithUpgradabilityWrapper(operator)) {
 				List<LispVal> parts = cons.toList();
 				if (parts.size() >= 2) {
-					boolean memberCompileTime = LispNames.EVAL_WHEN.equals(operator)
-							? evaluatesAtCompileTime(parts.get(1), compileTimeToo) : compileTimeToo;
 					for (int i = 2; i < parts.size(); i++) {
-						flattenTopLevelInto(splicedPart(cons, parts.get(i)), out, memberCompileTime, compileTime);
+						flattenTopLevelInto(splicedPart(cons, parts.get(i)), out, compileTimeToo, compileTime);
 					}
 					return;
 				}

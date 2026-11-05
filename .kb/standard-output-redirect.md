@@ -127,14 +127,59 @@ nothing is byte-counted. `LispEvaluatorTest#evalWithOutputToStringBindingStandar
   i31 -> string-stream record, fd -> `fd_write`), global seeded `(call $_t_sym)` in `_start`.
   `_fresh_line_stream` (`FUNC_FRESH_LINE_STREAM`) reads the last written byte out of the
   record's byte buffer (index `len`; index 0 is the frame quote).
-- `fresh-line`: on a STRING stream the line-start test is EXACT (contents inspected); on any
-  other stream the column is unknown and a newline is ALWAYS written -- same on every backend.
 - `format`'s literal `t` lowers to `princ`/`terpri` and literal `nil` folds into string
   concatenation, but any OTHER destination builds the string then tests at RUN time: a stream
   takes one `write-string`, a `t` value the stream-argument-less `write-string`, a **nil value
   returns the string**. Not hoistable -- `nil` IS the "build and return" destination, so a
   VARIABLE destination has no compile-time answer.
   `LispMacroExpander.formatDestinationDispatch`.
+
+## A stream's line start
+**Invariant: `fresh-line` writes a newline only past column 0 and answers whether it wrote, on every
+stream of all four backends** (SBCL 2.2.9, 2026-11-05, row by row in ci-spec
+`fresh-line-asks-the-stream-it-is-given`). What it asks:
+
+| stream | what answers | written by |
+| --- | --- | --- |
+| standard output | the one flag: `atLineStart`, `_col`, `LINE_START_ADDR` | every character write; the compilers' inline `(fresh-line)` too |
+| a string stream | the buffer's last character, so `get-output-stream-string` leaves it at a line start | nothing, no cost per write |
+| a file, standard error | one per stream: `midLineStreams`, `_midLine` (the entry, or handle 2), the fd's byte in `_line_mark`'s table | `emitTo` and `write-line`; `_writeStr`, `_writeLine`; `_write_stream_str`, `_write_line` |
+| a socket | the same; on `--component` and `--native` the entry's `mid-line` (`%sock-track-line`) | `write-string`, `write-line`, `terpri`, a string `write-sequence` |
+| a composite stream | `stream-fresh-line` asks the output; a broadcast stream the FIRST component, then a newline to the rest (SBCL's `charpos`) | |
+
+- **Only characters move it.** On a `:default` file, a socket and `sb-sys:*stdout*` alike, SBCL's `write-byte` and
+  byte `write-sequence` leave the column: `(write-string "x") (write-byte 10 s) (fresh-line s)` writes a
+  second newline, `(write-byte 65 s) (fresh-line s)` none. So no byte path keeps anything, a binary stream
+  answers nil and writes nothing (it was an error on the interpreter and the JVM, a written newline on wasm), and
+  `(fresh-line t)` after `(write-byte 10 t)` is that second newline; until 2026-11-05 standard output's octets moved
+  its flag, all four, from a choice made when they disagreed with SBCL unread.
+- A stream starts at column 0 whatever it is opened on (`:append` onto an open line answers nil, written `partialx`).
+  A read and `file-position` move nothing. An empty write moves nothing.
+- `print` writes `x` then a newline here, so `(print 1 s) (fresh-line s)` adds none where SBCL's trailing space does.
+- A `print-object` method or a condition's report writes on the string its printer builds, so `(princ c s)` past column
+  0 with a report opening `~&` adds no newline where SBCL's writes one: the text is built from column 0.
+- A closed stream and an input stream refuse on the interpreter and the JVM, as any write does (SBCL names both).
+  On wasm they answer nil: nothing marks them, and a write to one is no signal there either.
+- The interpreter and the JVM key by what stays put under concurrent requests: a concurrent set, not a flag per
+  handle growing beside `_streams`, whose copy would lose a write that raced it.
+- `_write_line` to fd 1 stored nothing until 2026-11-05: `(princ "a") (write-line "b") (fresh-line)` wrote a blank
+  line on the interpreter, P1 and the component, none on the JVM and SBCL.
+
+**Gates.** A program that cannot ask carries none of it: `(fresh-line)` on an unbound `*standard-output*` is the
+compilers' inline flag, and a stream's ask is what the writes pay for. wasm decides at emission: a compiled
+`_fresh_line_stream` call allocates the table's global (`QuoteGlobals.lineStartTable`), and the runtime bodies built
+after it read the answer; `_fresh_line_stream` and `_line_mark` are `unreachable` otherwise. The JVM's runtime is built
+before the bodies, so a census predicts it (`LispMacroExpander.mayAskStreamLineStart`) and `_freshLine` exists only
+under it; a call the census missed (a condition's report lives in the registry) is an unresolved method,
+`GROUP_LINE_STARTS`, a re-run. A linked class forces it: one class writes a stream another's `fresh-line` asks, so
+`_midLine` is shared state (`JvmLinkage`). The catalog wrapper of `#'fresh-line`, which a program compiled whether or
+not it could reach it and whose body asks, is left out where the name cannot be reached
+(`BuiltinFunctionWrappers.reachesFreshLineValue`, or a program naming anything at run time). A statement takes the
+offer to answer nothing (`.kb/toplevel-statement-values.md`), so a `~&` keeps no `_t_sym` reachable.
+
+**A line start is no column.** One bit per stream is what `fresh-line` needs and what standard output always kept;
+`.kb/pretty-printer.md`, "What a stream with no column cannot do", wants a count, and those write paths are where it
+would be kept.
 
 ## Pinning tests
 Each name below exists in `LispEvaluatorTest` (`eval`-prefixed), `JvmLispCompilerTest` and
@@ -156,3 +201,9 @@ ci-spec: `s-sql-enablement-language-group`, `postmodern-language-incidentals`,
 stderr lines do NOT appear there), `error-output-identity-and-top-level-stream-direction`, the
 standalone `error-output-is-one-value-without-a-binding` (the shared corpus binds the variable,
 so only a standalone program reaches the unbound read), `quri-enablement-language-group`, `pm-input-designators`.
+
+A stream's line start: ci-spec `fresh-line-asks-the-stream-it-is-given`, `format-opening-fresh-line-asks-the-destination`,
+`binary-standard-output`, the standalone `fresh-line-on-standard-output-with-no-binding-of-it` and
+`fresh-line-and-format-on-standard-error`; `LineStartFixture` (standard error's text, sockets) in
+`errorOutputIsTheProcessErrorStream` and `rontolispNativesAreFunctionValues`'s twins and `NativeTcpTest`;
+`JvmLispCompilerTest.onlyAProgramThatCanAskALineStartKeepsThem`, `WasmLispCompilerTest.onlyAModuleThatCanAskALineStartKeepsThem`.
