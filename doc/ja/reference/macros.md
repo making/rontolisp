@@ -85,6 +85,8 @@
 | `slot-exists-p` | `(slot-exists-p obj 'slot)` | インスタンスのクラスがそのスロットを宣言しているか(束縛の有無は無関係)。インスタンスでない値には `nil` |
 | `print-unreadable-object` | `(print-unreadable-object (obj stream :type t) body...)` | 本体出力を `#<[type ]...>` で囲んで書き、nil を返します(`:identity` は受理のみでアドレスは出力しません) |
 | `pprint-logical-block` | `(pprint-logical-block (s obj :prefix "<" :suffix ">") body...)` | プレフィックス、本体の出力、サフィックスを書きます。`obj` がリストでなければ `write` で印字し本体は評価しません。折り返しは起きません(桁位置を持たないため) |
+| `pprint-pop` | `(pprint-pop)` | 囲むブロックのリストの次の要素を返します。`*print-length*` 個を出し切った、または残りがリストでないときは印字してブロックを抜けます |
+| `pprint-exit-if-list-exhausted` | `(pprint-exit-if-list-exhausted)` | 囲むブロックのリストが尽きていればブロックを抜けます |
 | `with-package-iterator` | `(with-package-iterator (next pkgs :external) body...)` | ライト版: イテレータ名を「もうシンボルはない」と常に返すローカル関数に束縛(intern テーブルなし) |
 | `with-hash-table-iterator` | `(with-hash-table-iterator (next table) body...)` | イテレータ名を、呼ぶたびに `(values t key value)`、尽きたら `(values nil nil nil)` を返すローカル関数に束縛。テーブルは開始時にスナップショット |
 | `do-external-symbols` | `(do-external-symbols (s :rontolisp) (print s))` | パッケージのエクスポート済みシンボルをソート順で反復(コンパイル済みバックエンドは compile 時に焼き込んだテーブルから答えます) |

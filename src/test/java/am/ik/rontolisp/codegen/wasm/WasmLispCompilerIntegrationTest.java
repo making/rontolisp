@@ -19742,6 +19742,13 @@ class WasmLispCompilerIntegrationTest {
 				             (equal (make-point :x 1 :y 2) (list 1 2))
 				             (equal (make-point :x 1 :y 2) 5)))
 				""")).isEqualTo("((1 \"hi\") NIL NIL NIL)\n(T NIL NIL NIL)");
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(defstruct empty)
+				(defclass box () ((w :initarg :w)))
+				(print (list (%obj-print-frame (make-point)) (%obj-print-frame (make-empty))
+				             (%obj-print-frame (make-instance 'box)) (%obj-print-frame '(1 2)) (%obj-print-frame 5)))
+				""")).isEqualTo("((NIL \"POINT\" \"X\" \"Y\") (NIL \"EMPTY\") (T \"BOX\" \"W\") NIL NIL)");
 	}
 
 	@Test
@@ -21885,8 +21892,8 @@ class WasmLispCompilerIntegrationTest {
 		return Stream.of(
 				List.of("(define-condition uc-plain (error) ()) (error 'uc-plain)",
 						"Condition (UC-PLAIN) was signalled."),
-				List.of("(defun uc-f (x) (error 'type-error :datum x :expected-type 'integer)) (uc-f \"abc\")",
-						"Condition (TYPE-ERROR :DATUM \"abc\" :EXPECTED-TYPE INTEGER) was signalled."),
+				List.of("(defun uc-f (x) (error 'package-error :package x)) (uc-f \"abc\")",
+						"Condition (PACKAGE-ERROR :PACKAGE \"abc\") was signalled."),
 				List.of("(error 'simple-error)", "Condition (SIMPLE-ERROR) was signalled."),
 				// A nil format-control SUPPLIED is the message itself, printed as princ
 				// prints nil -- not the absent message the pad once rendered as nothing.

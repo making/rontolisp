@@ -39,6 +39,17 @@ conversion runs), `*print-pretty*` (mandatory break), and the seven the `%print-
   `print-object`) expands without the arm and pays nothing. ci-spec
   `pprint-logical-block-of-an-atom-in-a-program-not-naming-write`, standalone because the concatenated
   corpus names `write`.
+- `pprint-pop` / `pprint-exit-if-list-exhausted` (`expandPprintPop`, SBCL's order; 2026-11-05, fset's
+  printers): over the block's `__plb_object`, `__plb_count`, `__plb_stream` and `(block __plb_block ...)`,
+  which every block now binds, a nested block's shadowing the outer's. Atom rest: `. ` + `write`, leave;
+  `*print-length*` out: `...`, leave. `withPprintOperatorsExpanded` replaces a call the body spells when the
+  block expands, because the capture analyses read the block through its expansion, and a closure may
+  mutate the variables. Only the interpreter meets a call a user macro makes (the `LispEvaluator` arms; a
+  compile path expanded the macro before the block). A closure may cross the exit (`do-set`'s body), and
+  `CrossLambdaExitLowering` runs before the compilers expand a block, so it expands one spelling either
+  operator (`spellsPprintExit`). `write` is selected for a program naming `pprint-pop`, which also defines
+  `*print-length*`. ci-spec `pprint-pop-and-the-exit-take-the-list-of-their-block`, SBCL's answers.
+  `*print-level*` and `*print-circle*` are not consulted by the block.
 - `pprint-newline :mandatory` and `~:@_`: real breaks, gated on `*print-pretty*`.
 - `~<...~>` / `~<...~:>` (`.kb/format.md`): SECTION rules real.
 
@@ -81,9 +92,14 @@ to an unrouted one. Covers `princ` `prin1` `print` `princ-to-string` `prin1-to-s
   leaf facts in `%pc-walk` alone. `%pos-walk` reads both variables UNCONDITIONALLY — one cons arm
   to keep in step, not two.
 
-**Known gap (all seven):** a symbol inside a STRUCTURE, CLOS instance, hash table, array of rank
-!= 1 or packed float vector is neither cased nor truncated — the walk covers symbols, conses and
-general rank-1 vectors. `%print-object-str`'s walk (`.kb/clos.md`) has the SAME guard and gap and
+**An instance is walked** (2026-11-05, `%pc-instance`, the twin of `%pos-instance`, `.kb/clos.md`): its
+type name and slot keys are cased, its slots count against `*print-length*` (`#S(I :A 1 ...)`), it is a
+level for `*print-level*`, and its values are the walk's own. Text as SBCL 2.2.9 prints it. Only `#<...>`
+having slots at all, and `:|A|` under a `*print-base*` reading `A` as a digit, differ. ci-spec
+`instances-follow-the-printer-controls-in-a-program-with-no-method`.
+
+**Known gap (all seven):** a symbol inside a hash table, array of rank != 1 or packed float vector is
+neither cased nor truncated. `%print-object-str`'s walk (`.kb/clos.md`) has the SAME guard and gap and
 is never live in the same program — read them together. Also inert: `*print-array*` nil,
 `*print-circle*` t, `~@W`.
 
@@ -180,8 +196,7 @@ spells a qualifier only when the symbol is NOT accessible in the current `*packa
   reaches `%symbol-print-bare-p` as a STRING: the compile paths' correction lists hold only symbols and
   answer no, leaving the rule, so a class imported into the current package keeps its qualifier there
   while the interpreter's live answer drops it. prove's own suite matches `#<MY-CONDITION` against this.
-  `princ` stays raw, and slot values inside stay the known gap above. ci-spec
-  `instance-type-name-follows-the-current-package`.
+  ci-spec `instance-type-name-follows-the-current-package`.
 - A qualifier it keeps is the current package's nickname for the home when it has one (`%pc-qualifier`,
   `.kb/packages.md`, "Package-local nicknames").
 - **A bare spelling gets a qualifier where the package reads that name as another symbol** (i30,
@@ -215,11 +230,13 @@ spells a qualifier only when the symbol is NOT accessible in the current `*packa
   The interpreter's answer is exact. `'nil` read under a package using no `cl` is `cl`'s `nil` on every
   backend (the reader folds it ahead of the resolver), so it prints `COMMON-LISP:NIL` where SBCL prints
   the package's own `NIL`.
-- **`print-unreadable-object :type t` does not follow the package** (measured 2026-11-05, all four
-  backends): `typeNameOf` peels the tag, so a `cl-user` class prints `#<HF-C>` under another package and a
-  class of the current package prints `#<HF-P::D>`, where SBCL prints `#<COMMON-LISP-USER::HF-C>` and
-  `#<D>`. The tag itself never takes a prefix (`bareSymbolPrefix`); with one the peel found nothing, and
-  the interpreter printed `#<COMMON-LISP-USER::|%class-GEOM:SOLID|>` under a `cl-user` that uses a package.
+- **`print-unreadable-object :type t` follows the package** (2026-11-05, all four backends):
+  `%pc-type-name` lowers, where a control can be in effect (`Ctx.printControls`, the interpreter's
+  `printControlsInEffect`), to `%pc-unqualified` over the peeled text under `prin1` and `%pc-fold` under both,
+  so a `cl-user` class prints `#<COMMON-LISP-USER::HF-C>` under another package and a class of the current
+  package `#<D>`, as SBCL prints them. Elsewhere it is the text. The tag itself never takes a prefix
+  (`bareSymbolPrefix`); with one the peel found nothing, and the interpreter printed
+  `#<COMMON-LISP-USER::|%class-GEOM:SOLID|>` under a `cl-user` that uses a package.
 - **A printed qualifier reads back:** the compiled run-time readers drop `CL`, `COMMON-LISP`, `CL-USER`
   and `COMMON-LISP-USER` qualifiers at the token (`JvmReadRuntimeBuilder.buildClassify`,
   `WasmReadRuntimeBuilder.emitDropStandardQualifier`), one colon or two. Until then `(read-from-string

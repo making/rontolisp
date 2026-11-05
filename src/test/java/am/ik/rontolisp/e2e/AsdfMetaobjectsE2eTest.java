@@ -284,8 +284,8 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 	}
 
 	private static final List<String> EXPECTED = Stream.concat(Stream.of("T", "T", "NIL", "T", "\"meta-demo\"",
-			"(\"one\" \"m\")", "NIL", "T", "NIL", "T", "T", "(\"meta-demo\")", "\"1.2.3\"", "NIL", ":UNIX", ":SMALL",
-			":TOOL", ":RELATIVE-OK", ":SYSTEM", ":FILE", "NIL", "(NIL \"3.3.7\")",
+			"(\"one\" \"m\")", "NIL", "T", "NIL", "T", "T", "(\"meta-demo\")", "\"1.2.3\"", "\"2.5.0\"", ":UNIX",
+			":SMALL", ":TOOL", ":RELATIVE-OK", ":SYSTEM", ":FILE", "NIL", "(NIL \"3.3.7\")",
 			"(\"meta-demo-tool\" \"meta-demo-tool/hook\" \"meta-demo\" \"meta-demo/tests\" \"meta-demo/hooks\""
 					+ " \"meta-demo/perform\" \"meta-demo/nested\" \"meta-demo/weak\" \"meta-demo/hooked\""
 					+ " \"trivial-features\")",

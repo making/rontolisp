@@ -7,7 +7,6 @@ import java.util.function.UnaryOperator;
 
 import org.jspecify.annotations.Nullable;
 
-import am.ik.rontolisp.ClConstants;
 import am.ik.rontolisp.FloatWidth;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
@@ -631,6 +630,15 @@ public final class LispReader {
 		}
 
 		/**
+		 * Widens the features the guards of the data still to read test: what the forms
+		 * already read pushed when they ran ({@code .kb/reader-features.md}).
+		 * @param pushed the feature names, without the leading colon
+		 */
+		public void widenFeatures(List<String> pushed) {
+			this.lexer.widenFeatures(pushed);
+		}
+
+		/**
 		 * Reads datums up to {@code delimiter}, which is consumed -- the body of
 		 * {@code read-delimited-list}.
 		 * @param syntax the readtable to read with
@@ -902,14 +910,12 @@ public final class LispReader {
 	}
 
 	private LispVal readSymbol(Token.SymbolToken sym) {
-		// A cl:-qualified spelling of a standard constant means the standard name
-		// (cl:pi is pi), so it is stripped here rather than left for a per-backend
-		// binding to reproduce -- while the BARE spelling one line above answers the
-		// same global. Every other qualified spelling keeps its prefix for
-		// PackageResolver. cl:nil/cl:t strip the same way: the cl package does not
-		// export the self-evaluating symbols, so the qualified spelling would die
-		// in the resolver as "not external".
-		String name = unqualifySelfEval(ClConstants.memberOf(sym.name()));
+		// Every qualified spelling keeps its prefix for PackageResolver, cl:pi included:
+		// stripped here it would read as the current package's own PI where the package
+		// uses no cl. cl:nil/cl:t strip: the cl package does not export the
+		// self-evaluating symbols, so the qualified spelling would die in the resolver
+		// as "not external".
+		String name = unqualifySelfEval(sym.name());
 		if ("NIL".equals(name)) {
 			return LispNil.INSTANCE;
 		}

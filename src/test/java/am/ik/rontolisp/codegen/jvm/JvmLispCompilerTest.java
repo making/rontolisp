@@ -14923,6 +14923,13 @@ class JvmLispCompilerTest {
 				             (equal (make-point :x 1 :y 2) (make-point :x 1 :y 9))
 				             (equal (make-point :x 1 :y 2) (list 1 2))))
 				""")).isEqualTo("((1 \"hi\") NIL NIL NIL)\n(T NIL T T NIL)\n(T NIL NIL)");
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(defstruct empty)
+				(defclass box () ((w :initarg :w)))
+				(print (list (%obj-print-frame (make-point)) (%obj-print-frame (make-empty))
+				             (%obj-print-frame (make-instance 'box)) (%obj-print-frame '(1 2)) (%obj-print-frame 5)))
+				""")).isEqualTo("((NIL \"POINT\" \"X\" \"Y\") (NIL \"EMPTY\") (T \"BOX\" \"W\") NIL NIL)");
 	}
 
 	// A program with BOTH a layout constant and a condition channel shares one <clinit>;

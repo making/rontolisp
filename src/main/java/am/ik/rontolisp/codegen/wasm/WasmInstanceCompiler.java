@@ -492,6 +492,137 @@ final class WasmInstanceCompiler {
 		ctx.writer.write(Instruction.END);
 	}
 
+	/**
+	 * {@code (%obj-print-frame obj)}: the fresh list {@code (class-p name slot...)} of
+	 * what the instance renderer writes around the slot values, read off the layout
+	 * record; nil where it writes no slot syntax (a non-instance, a pathname, a stream).
+	 * Each name reaches a string through the {@code HEAP_PTR} scratch with its frame
+	 * quotes added: the record's bytes are bare.
+	 */
+	static void compilePrintFrame(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx);
+			return;
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int objSlot = ctx.allocTemp();
+		setLocal(ctx, objSlot);
+		int listSlot = ctx.allocTemp();
+		int idxSlot = ctx.allocTemp();
+		refNull(ctx);
+		setLocal(ctx, listSlot);
+		getLocal(ctx, objSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		ctx.writer.write(Instruction.IF, 0x40);
+		pushLayoutWord(ctx, objSlot, WasmInstanceLayouts.OFF_KIND);
+		i32Const(ctx, WasmInstanceLayouts.KIND_CLASS);
+		ctx.writer.write(Instruction.I32_LE_U);
+		ctx.writer.write(Instruction.IF, 0x40);
+		pushLayoutWord(ctx, objSlot, WasmInstanceLayouts.OFF_SLOT_COUNT);
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_SUB);
+		refI31(ctx);
+		setLocal(ctx, idxSlot);
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.LOOP, 0x40);
+		getIndex(ctx, idxSlot);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.I32_LT_S);
+		ctx.writer.write(Instruction.BR_IF, 1);
+		emitFramedString(ctx, () -> pushSlotEntryWord(ctx, objSlot, idxSlot, 0),
+				() -> pushSlotEntryWord(ctx, objSlot, idxSlot, 4));
+		getLocal(ctx, listSlot);
+		WasmEmitHelper.emitNewCons(ctx);
+		setLocal(ctx, listSlot);
+		getIndex(ctx, idxSlot);
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_SUB);
+		refI31(ctx);
+		setLocal(ctx, idxSlot);
+		ctx.writer.write(Instruction.BR, 0);
+		ctx.writer.write(Instruction.END); // end loop
+		ctx.writer.write(Instruction.END); // end block
+		emitFramedString(ctx, () -> pushLayoutWord(ctx, objSlot, WasmInstanceLayouts.OFF_NAME_OFF),
+				() -> pushLayoutWord(ctx, objSlot, WasmInstanceLayouts.OFF_NAME_LEN));
+		getLocal(ctx, listSlot);
+		WasmEmitHelper.emitNewCons(ctx);
+		setLocal(ctx, listSlot);
+		// (class-p . list)
+		pushLayoutWord(ctx, objSlot, WasmInstanceLayouts.OFF_KIND);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		WasmEmitHelper.emitTrue(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		refNull(ctx);
+		ctx.writer.write(Instruction.END);
+		getLocal(ctx, listSlot);
+		WasmEmitHelper.emitNewCons(ctx);
+		setLocal(ctx, listSlot);
+		ctx.writer.write(Instruction.END); // end kind test
+		ctx.writer.write(Instruction.END); // end instance test
+		getLocal(ctx, listSlot);
+	}
+
+	// Pushes one word of the instance's layout record.
+	private static void pushLayoutWord(WasmLispCompiler.Ctx ctx, int objSlot, int offset) {
+		getLocal(ctx, objSlot);
+		pushLayoutAddress(ctx);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, offset);
+	}
+
+	// Pushes one word of the slot-name entry the i31-boxed cursor selects.
+	private static void pushSlotEntryWord(WasmLispCompiler.Ctx ctx, int objSlot, int idxSlot, int offset) {
+		getLocal(ctx, objSlot);
+		pushLayoutAddress(ctx);
+		getIndex(ctx, idxSlot);
+		i32Const(ctx, WasmInstanceLayouts.SLOT_ENTRY_BYTES);
+		ctx.writer.write(Instruction.I32_MUL);
+		ctx.writer.write(Instruction.I32_ADD);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, WasmInstanceLayouts.OFF_SLOTS + offset);
+	}
+
+	/**
+	 * Pushes a fresh string over {@code linear[off..off+len)}, quote-framed as a string's
+	 * bytes are. The bytes are staged at {@code HEAP_PTR}, which does not advance: the
+	 * string's own copy lives on the GC heap. Both pushes must be side-effect free.
+	 */
+	private static void emitFramedString(WasmLispCompiler.Ctx ctx, Runnable pushOff, Runnable pushLen) {
+		Runnable pushHeap = () -> {
+			i32Const(ctx, WasmLispCompiler.HEAP_PTR_ADDR);
+			ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+		};
+		WasmEmitHelper.emitGrowHeapTo(ctx.writer, () -> {
+			pushHeap.run();
+			pushLen.run();
+			ctx.writer.write(Instruction.I32_ADD);
+			i32Const(ctx, 2);
+			ctx.writer.write(Instruction.I32_ADD);
+		});
+		pushHeap.run();
+		i32Const(ctx, '"');
+		ctx.writer.write(Instruction.I32_STORE8, 0x00, 0x00);
+		pushHeap.run();
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_ADD);
+		pushOff.run();
+		pushLen.run();
+		ctx.writer.write(Instruction.MISC_PREFIX);
+		ctx.writer.writeUnsignedLeb128(Instruction.MEMORY_COPY);
+		ctx.writer.write(0x00, 0x00);
+		pushHeap.run();
+		pushLen.run();
+		ctx.writer.write(Instruction.I32_ADD);
+		i32Const(ctx, '"');
+		ctx.writer.write(Instruction.I32_STORE8, 0x00, 0x01);
+		pushHeap.run();
+		pushLen.run();
+		i32Const(ctx, 2);
+		ctx.writer.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrFreshCall(ctx.writer);
+	}
+
 	// Pushes the i32 value of the i31-boxed cursor in the given local.
 	private static void getIndex(WasmLispCompiler.Ctx ctx, int slot) {
 		getLocal(ctx, slot);

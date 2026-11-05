@@ -226,7 +226,7 @@ class PackedFloatReachabilityTest {
 
 	@Test
 	void thePrintObjectWalkerExcludesEveryPermit() {
-		String walker = LispMacroExpander.printObjectStrDefuns(new ClosRegistry(), false, true, false)
+		String walker = LispMacroExpander.printObjectStrDefuns(new ClosRegistry(), false, true, true, false)
 			.stream()
 			.map(LispVal::print)
 			.collect(Collectors.joining("\n"));

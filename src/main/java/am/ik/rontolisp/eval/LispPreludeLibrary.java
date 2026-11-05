@@ -225,6 +225,8 @@ public final class LispPreludeLibrary {
 				""");
 		// The counter is a defvar for the same reason the %symbol-plists store is one:
 		// defvar assigns only when unbound, so the spliced copy never resets a count.
+		// find-symbol answers every name in the keyword package, which keeps no table
+		// (.kb/symbol-runtime-api.md), so a keyword gentemp asks it nothing.
 		SOURCES.put(LispNames.GENTEMP, """
 				(defvar %gentemp-counter 0)
 				(defun gentemp (&optional %gt-prefix %gt-package)
@@ -235,7 +237,8 @@ public final class LispPreludeLibrary {
 				      (setq %gt-name
 				            (concatenate 'string %gt-stem (write-to-string %gentemp-counter)))
 				      (unless (if %gt-package
-				                  (find-symbol %gt-name %gt-package)
+				                  (and (not (string= (string %gt-package) "KEYWORD"))
+				                       (find-symbol %gt-name %gt-package))
 				                  (find-symbol %gt-name))
 				        (return (if %gt-package
 				                    (intern %gt-name %gt-package)
@@ -603,6 +606,12 @@ public final class LispPreludeLibrary {
 				""");
 		SOURCES.put(LispNames.CELL_ERROR_NAME, """
 				(defun cell-error-name (condition) (slot-value condition 'name))
+				""");
+		SOURCES.put(LispNames.ARITHMETIC_ERROR_OPERATION, """
+				(defun arithmetic-error-operation (condition) (slot-value condition 'operation))
+				""");
+		SOURCES.put(LispNames.ARITHMETIC_ERROR_OPERANDS, """
+				(defun arithmetic-error-operands (condition) (slot-value condition 'operands))
 				""");
 		SOURCES.put(LispNames.UNBOUND_SLOT_INSTANCE, """
 				(defun unbound-slot-instance (condition) (slot-value condition 'instance))
@@ -4332,10 +4341,11 @@ public final class LispPreludeLibrary {
 		// *print-gensym* / *print-base* / *print-radix* -- or calls write /
 		// write-to-string with a keyword that binds one (LispMacroExpander rewrites the
 		// printing operators onto it). It walks the VALUE rather than the rendered text
-		// because only SYMBOL spellings are cased, only lists and vectors are truncated
+		// because only SYMBOL spellings are cased, only lists, vectors and instances are
+		// truncated
 		// and only a rational is re-based -- a string element keeps its own characters,
 		// and a character prints as itself. What it does NOT walk is the containers
-		// whose rendering is a runtime form of its own (a structure, an instance, a
+		// whose rendering is a runtime form of its own (a
 		// hash table, an array of rank != 1, a packed float array): those delegate to
 		// the raw conversion, so a symbol nested in one keeps the stored (upper-case)
 		// spelling and its elements are never truncated. .kb/pretty-printer.md carries
@@ -4441,9 +4451,44 @@ public final class LispPreludeLibrary {
 						               (concatenate 'string %pc-acc ")"))))
 						        ((and (rationalp %pc-x) (or (not (eql *print-base* 10)) *print-radix*))
 						         (%pc-radixed %pc-x))
+						        ((%obj-print-frame %pc-x) (%pc-instance %pc-x %pc-esc %pc-path %pc-depth %pc-lvl))
 						        ((and %pc-esc (%obj-p %pc-x)) (%pc-instance-text (%prin1-to-string %pc-x)))
 						        (%pc-esc (%prin1-to-string %pc-x))
 						        (t (%princ-to-string %pc-x))))
+						""");
+		// The twin of the %print-object-str walk's %pos-instance: a structure's or an
+		// instance's type name and slot keys are symbols the variables case, and its
+		// slot values are the walk's own.
+		SOURCES.put(LispNames.PRINT_CASED_INSTANCE_INTERNAL,
+				"""
+						(defun %pc-instance (%pc-x %pc-esc %pc-path %pc-depth %pc-lvl)
+						  (if (or (%pc-on-path %pc-x %pc-path) (>= %pc-depth 256)
+						          (and *print-level* (>= %pc-lvl *print-level*)))
+						      "#"
+						      (let* ((%pc-frame (%obj-print-frame %pc-x))
+						             (%pc-name (cadr %pc-frame))
+						             (%pc-i (length %pc-name)))
+						        (while (and (> %pc-i 0) (not (char= (char %pc-name (- %pc-i 1)) #\\:)))
+						          (setq %pc-i (- %pc-i 1)))
+						        (let ((%pc-acc (concatenate 'string (if (car %pc-frame) "#<" "#S(")
+						                                    (%pc-fold (if %pc-esc
+						                                                  (%pc-unqualified %pc-name %pc-name)
+						                                                  (subseq %pc-name %pc-i)))))
+						              (%pc-key (cddr %pc-frame)) (%pc-val (%obj-slots %pc-x)) (%pc-n 0)
+						              (%pc-sub (cons %pc-x %pc-path)) (%pc-subd (+ %pc-depth 1))
+						              (%pc-subl (+ %pc-lvl 1)))
+						          (while (consp %pc-key)
+						            (if (and *print-length* (>= %pc-n *print-length*))
+						                (progn
+						                  (setq %pc-acc (concatenate 'string %pc-acc " ..."))
+						                  (setq %pc-key nil))
+						                (progn
+						                  (setq %pc-acc (concatenate 'string %pc-acc " :" (%pc-fold (car %pc-key)) " "
+						                                             (%pc-walk (car %pc-val) %pc-esc %pc-sub %pc-subd %pc-subl)))
+						                  (setq %pc-n (+ %pc-n 1))
+						                  (setq %pc-key (cdr %pc-key))
+						                  (setq %pc-val (cdr %pc-val)))))
+						          (concatenate 'string %pc-acc (if (car %pc-frame) ">" ")"))))))
 						""");
 		SOURCES.put(LispNames.PRINT_CASED_ON_PATH_INTERNAL, """
 				(defun %pc-on-path (%pc-x %pc-path)
@@ -5510,9 +5555,11 @@ public final class LispPreludeLibrary {
 		}
 		// write: LispMacroExpander.expandPprintLogicalBlock's atom arm calls it, inside
 		// the expression compilers. The arm exists unless the object is spelled as a
-		// list.
+		// list. A pprint-pop prints a dotted tail with it and reads *print-length*, whose
+		// defvar comes with it.
 		if (LispNames.WRITE.equals(entry)) {
-			return am.ik.rontolisp.macro.LispMacroExpander.mayPprintLogicalBlockOfAnAtom(program);
+			return am.ik.rontolisp.macro.LispMacroExpander.mayPprintLogicalBlockOfAnAtom(program)
+					|| referencesName(program, LispNames.PPRINT_POP, canonical);
 		}
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
 			return referencesName(program, LispNames.MAKE_BROADCAST_STREAM, canonical)

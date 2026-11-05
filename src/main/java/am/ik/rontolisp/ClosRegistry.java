@@ -479,7 +479,7 @@ public final class ClosRegistry {
 			// (open, delete-file, rename-file, truename), so it reports like the other
 			// built-in-signaled classes.
 			seed(FILE_ERROR_CLASS_NAME, "ERROR", "PATHNAME", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
-			seed(ARITHMETIC_ERROR_CLASS_NAME, "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
+			seed(ARITHMETIC_ERROR_CLASS_NAME, "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS", "OPERATION", "OPERANDS"),
 			seed(DIVISION_BY_ZERO_CLASS_NAME, ARITHMETIC_ERROR_CLASS_NAME),
 			seed("FLOATING-POINT-INEXACT", ARITHMETIC_ERROR_CLASS_NAME),
 			seed("FLOATING-POINT-INVALID-OPERATION", ARITHMETIC_ERROR_CLASS_NAME),
@@ -833,6 +833,39 @@ public final class ClosRegistry {
 			clauses = new LispCons(list(test, list(new LispSymbol(LispNames.SUBSEQ), text, length)), clauses);
 		}
 		return new LispCons(new LispSymbol(LispNames.COND), clauses);
+	}
+
+	/**
+	 * What a condition of a class whose built-in signals carry their message as a text
+	 * control reports when a program signals it with no control, as
+	 * {@code (error 'undefined-function :name 'f)}: the text the built-in signal writes,
+	 * from the slots the program supplied. A class with no control and no entry here, or
+	 * in its precedence list, reports nothing.
+	 * @param className the class name
+	 * @return the report (a literal string or a lambda expression), or null
+	 */
+	public static @Nullable LispVal controlFreeReport(String className) {
+		return switch (className) {
+			case UNDEFINED_FUNCTION_CLASS_NAME -> slotsReport("The function ~S is undefined", 1);
+			case UNBOUND_VARIABLE_CLASS_NAME -> slotsReport("The variable ~S is unbound", 1);
+			case TYPE_ERROR_CLASS_NAME -> slotsReport("The value ~S is not of type ~S", 2);
+			case DIVISION_BY_ZERO_CLASS_NAME -> new LispString(DIVISION_BY_ZERO_MESSAGE);
+			default -> null;
+		};
+	}
+
+	/**
+	 * {@code (lambda (c s) (format s control (%obj-ref c 0) ...))}, over leading slots.
+	 */
+	private static LispVal slotsReport(String control, int slotCount) {
+		LispSymbol condition = new LispSymbol("__c");
+		LispSymbol stream = new LispSymbol("__s");
+		List<LispVal> format = new java.util.ArrayList<>(
+				List.of(new LispSymbol("FORMAT"), stream, new LispString(control)));
+		for (int i = 0; i < slotCount; i++) {
+			format.add(list(new LispSymbol(LispNames.OBJ_REF), condition, new LispInteger(i)));
+		}
+		return list(new LispSymbol(LispNames.LAMBDA), list(condition, stream), list(format.toArray(new LispVal[0])));
 	}
 
 	/**
@@ -4223,6 +4256,17 @@ public final class ClosRegistry {
 	 */
 	public Map<String, LispLayout> layouts() {
 		return this.layoutsByTag;
+	}
+
+	/**
+	 * Whether the program defined an instance type of its own, a {@code defstruct},
+	 * {@code defclass} or {@code define-condition}: without one the only instances are
+	 * seeded conditions, whose slots the printer has no reason to walk.
+	 * @return {@code true} when a type beyond the seeded ones is registered
+	 */
+	public boolean definesInstanceTypes() {
+		return this.layoutsByTag.keySet().stream().anyMatch(tag -> tag.startsWith(LispLayout.STRUCT_TAG_PREFIX))
+				|| !this.seededClassNames.containsAll(this.classes.keySet());
 	}
 
 	/**

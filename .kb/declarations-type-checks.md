@@ -302,8 +302,9 @@ table is GENERATED from it. **Change them together.**
   nil (SBCL agrees). `(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)` stay unknown
   (`OPAQUE_COMPOUND_TYPE_HEADS`), which the VALID-P below reports as such.
 - **Integer INTERVALS decide by containment** (`.todo/919`): `(unsigned-byte n)`, `(signed-byte n)`,
-  `(integer lo hi)` (exclusive `(k)` bounds, `*`), `(mod n)` and the names `bit` / `unsigned-byte`
-  / `signed-byte` / `integer` each read as one interval (`macro/IntegerTypeRange`), and with a
+  `(integer lo hi)` (exclusive `(k)` bounds, `*`), `(mod n)` and the names `bit` / `fixnum` (64 bits on
+  all four, since 2026-11-05: coalton's load asks `(subtypep '(signed-byte 32) 'fixnum)`; ci-spec
+  `subtypep-fixnum-is-a-64-bit-interval`) / `unsigned-byte` / `signed-byte` / `integer` each read as one interval (`macro/IntegerTypeRange`), and with a
   COMPOUND on at least one side two intervals answer containment -- exact, so a nil there is still
   `nil nil` only because the valid-p rule below says compound. An `(or ...)` SUB is covered by its
   branches' hull (sound; the super is read exactly). Runtime twin: `%subtypep-interval` /
