@@ -511,7 +511,10 @@ compile path. Unwrapped directives are unaffected.
   `eval(LispVal, Environment)` are at no top level.
 - **Libraries sized** (a walk over `src/`, `examples/` and the 229 releases in the quicklisp cache): of
   1185 `eval-when` forms 95 name no `:execute` at a syntactic top level and 20 inside another form, every
-  one of those a macro's body or template that the library uses at top level, or a test.
+  one of those a macro's body or template that the library uses at top level, or a test. Each of the 383
+  non-test systems there loaded on the interpreter and compiled to a class, against the build before, with
+  `expandEvalWhen` logging what it dropped: nothing, in 766 legs, of which 625 load before and after (one
+  more after, a 200 s timeout before) with the same output.
 - Lite: a macro call in a body that does not run still expands on a compile path, since the walk does
   not know the interpreter's position. A compiled run-time `load` goes through `_eval`, so only `:execute`
   runs there (a form the interpreter's `load` runs for every situation).
