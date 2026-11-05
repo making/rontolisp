@@ -468,7 +468,8 @@ not be: every call site is inside a string arm `stringp` has already gated. Impl
 `eval-when`-wrapped `defmacro` registers at compile time) and at
 `Jvm`/`Wasm`/`NoGcWasmCompiler.compile` right before `expandTopLevelDefstructs` (so Pass 1 collects
 nested defuns in direct compiler invocations). The interpreter does NOT flatten: it evaluates
-`eval-when` natively as `progn`. A malformed `(eval-when)` without a situation list is left
+`eval-when` natively as `progn`, except under the `eval` function, where only `:execute` runs the
+body as under `_eval` (`.kb/eval-runtime.md`). A malformed `(eval-when)` without a situation list is left
 unspliced so the expander's validation error surfaces.
 
 **Known gap:** `LoadInliner` runs BEFORE `UserMacroExpander`, so a top-level

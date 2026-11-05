@@ -183,6 +183,28 @@ class LispMacroExpanderTest {
 		assertThat(LispMacroExpander
 			.needsSignalClauseMatch(LispReader.readAllFromString("(handler-case (print '(signal x)) (error (e) 1))")))
 			.isFalse();
+		// A warn asks where a handler-case clause can hold the warning, or where its
+		// datum may be no warning: a control string or a standard warning under a clause
+		// of the error family, or ignore-errors, keeps the plain write.
+		for (String holding : List.of("(warn \"w\") (handler-case (f) (warning () 1))",
+				"(funcall #'warn \"w\") (handler-case (f) (condition () 1))",
+				"(warn \"w\") (handler-case (f) (my-error () 1))", "(warn \"w\") (handler-case (f) (t () 1))",
+				"(warn \"w\") (handler-case (f) ((or error warning) () 1))",
+				"(eval '(warn \"w\")) (handler-case (f) (warning () 1))", "(warn x) (handler-case (f) (error () 1))",
+				"(warn 'simple-error) (ignore-errors (f))", "(funcall #'warn x) (ignore-errors (f))",
+				"(eval x) (handler-case (f) (error () 1))")) {
+			assertThat(LispMacroExpander.needsSignalClauseMatch(LispReader.readAllFromString(holding))).as(holding)
+				.isTrue();
+		}
+		for (String declining : List.of("(warn \"w\")", "(warn x)", "(warn \"w\") (handler-case (f) (error () 1))",
+				"(warn 'style-warning) (handler-case (f) (error () 1))",
+				"(warn (make-condition 'simple-warning)) (ignore-errors (f))",
+				"(warn \"w\") (handler-case (f) (type-error () 1) ((or error serious-condition) () 2))",
+				"(warn \"w\") (ignore-errors (f))", "(warn \"w\") (handler-case (f) (:no-error (v) v))",
+				"(handler-case (f) (warning () 1))", "(handler-case (print '(warn x)) (warning () 1))")) {
+			assertThat(LispMacroExpander.needsSignalClauseMatch(LispReader.readAllFromString(declining))).as(declining)
+				.isFalse();
+		}
 	}
 
 	@Test

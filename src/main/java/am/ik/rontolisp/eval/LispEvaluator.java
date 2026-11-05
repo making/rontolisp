@@ -209,6 +209,11 @@ public final class LispEvaluator {
 	// thread; unset everywhere else.
 	private final ThreadLocal<@Nullable BiConsumer<String, Boolean>> macroTimeWarnings = new ThreadLocal<>();
 
+	// Whether this thread is inside a form the eval function was handed, outside any file
+	// that form loaded. Everywhere else an eval-when is a progn, whose every situation a
+	// file run here has to honor, since it stands for both the compile and the load.
+	private final ThreadLocal<Boolean> evalFunctionRuns = ThreadLocal.withInitial(() -> false);
+
 	// Whether the runtime format renderer (FormatRenderer.defuns(), the same forms the
 	// compile path injects) has been evaluated into the global environment. The
 	// interpreter cannot inject a top-level defun the way expandTopLevelDefinitions does,
@@ -1628,7 +1633,7 @@ public final class LispEvaluator {
 					&& LispNames.DEFPACKAGE.equals(LispSymbol.memberName(head.name()))) {
 				return registerRuntimeDefpackage(form);
 			}
-			return evalDatum(args.get(0));
+			return evalFunctionForm(args.get(0));
 		}, true));
 		// compile answers the name, or with no name the function, and neither failure
 		// value: nothing here warns.
@@ -3582,8 +3587,12 @@ public final class LispEvaluator {
 			LispVal rendered = eval(
 					FormatRenderer.call(quotedValue(args.get(1)), quotedValue(valueList(args.subList(2, args.size())))),
 					this.globalEnv);
-			return eval(new LispCons(new LispSymbol(LispNames.FORMAT_WRITE_INTERNAL),
-					new LispCons(quotedValue(args.get(0)), new LispCons(quotedValue(rendered), LispNil.INSTANCE))),
+			LispVal startsFresh = new LispCons(new LispSymbol(LispNames.FMT_STARTS_FRESH),
+					new LispCons(quotedValue(args.get(1)), LispNil.INSTANCE));
+			return eval(
+					new LispCons(new LispSymbol(LispNames.FORMAT_WRITE_INTERNAL),
+							new LispCons(quotedValue(args.get(0)),
+									new LispCons(quotedValue(rendered), new LispCons(startsFresh, LispNil.INSTANCE)))),
 					this.globalEnv);
 		}));
 		installStreamOperandChecks();
@@ -4745,6 +4754,18 @@ public final class LispEvaluator {
 	 * ({@code LispMacroExpander.expandLoadFileErrorSignal}).
 	 */
 	private void loadFile(String operator, String rawPath, @Nullable String systemName, Features features,
+			@Nullable LispVal designator) {
+		boolean outer = this.evalFunctionRuns.get();
+		this.evalFunctionRuns.set(false);
+		try {
+			loadSource(operator, rawPath, systemName, features, designator);
+		}
+		finally {
+			this.evalFunctionRuns.set(outer);
+		}
+	}
+
+	private void loadSource(String operator, String rawPath, @Nullable String systemName, Features features,
 			@Nullable LispVal designator) {
 		String baseDir = this.loadDirStack.peekLast();
 		String resolved = SourceLoader.resolve(baseDir, rawPath);
@@ -8573,6 +8594,10 @@ public final class LispEvaluator {
 	 * @return the result
 	 */
 	private LispVal evalDatum(LispVal datum) {
+		return evalDatum(datum, false);
+	}
+
+	private LispVal evalDatum(LispVal datum, boolean tail) {
 		LispVal resolved;
 		try {
 			resolved = this.packageResolver.resolveDatum(datum);
@@ -8584,7 +8609,28 @@ public final class LispEvaluator {
 			return signalPackageError(message,
 					message.startsWith(NO_SUCH_PACKAGE) ? message.substring(NO_SUCH_PACKAGE.length()) : "");
 		}
-		return evalResolved(resolved);
+		return evalResolved(
+				tail ? LispMacroExpander.spillEscapingMvProducers(dispatchingMethodedProducers(resolved)) : resolved);
+	}
+
+	/**
+	 * What {@code eval} does with its form. The form's tail is a tail: a consumer behind
+	 * {@code eval} cannot lower a syntactic producer for itself, so the producer
+	 * publishes as it would behind a function return. And an {@code eval-when} met while
+	 * it runs is not at top level, so only {@code :execute} runs its body
+	 * ({@link #evalFunctionRuns}).
+	 * @param datum the form
+	 * @return the result, its values on the channel
+	 */
+	private LispVal evalFunctionForm(LispVal datum) {
+		boolean outer = this.evalFunctionRuns.get();
+		this.evalFunctionRuns.set(true);
+		try {
+			return evalDatum(datum, true);
+		}
+		finally {
+			this.evalFunctionRuns.set(outer);
+		}
 	}
 
 	/**
@@ -11161,6 +11207,9 @@ public final class LispEvaluator {
 			case LispNames.THE:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandThe);
 			case LispNames.EVAL_WHEN:
+				if (this.evalFunctionRuns.get() && !LispMacroExpander.evalWhenExecutes(cons)) {
+					return LispNil.INSTANCE;
+				}
 				return builtinMacroExpansion(cons, LispMacroExpander::expandEvalWhen);
 			case LispNames.WITH_COMPILATION_UNIT:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandWithCompilationUnit);

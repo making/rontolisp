@@ -3774,9 +3774,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// %read-line-pair, the read under a read-line producer's multiple-value lowering,
 		// exists only where one was lowered: a settled defun tail already spells it, and
 		// a consumer lowers its producer during Pass 2 -- in a program with the channel
-		// that names read-line (or its --component alias).
-		boolean namesReadLine = programUsesSymbol(program, LispNames.READ_LINE) || programUsesSymbol(program,
-				PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.READ_LINE_RAW_INTERNAL));
+		// that names read-line (or its --component alias), or runs forms whose call
+		// reaches the settled wrapper.
+		boolean namesReadLine = programUsesSymbol(program, LispNames.READ_LINE)
+				|| programUsesSymbol(program,
+						PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.READ_LINE_RAW_INTERNAL))
+				|| LispMacroExpander.runsFormsAtRunTime(program);
 		this.usesReadLinePairs = programUsesSymbol(program, LispNames.READ_LINE_PAIR_INTERNAL)
 				|| (LispMacroExpander.declaresMvSpill(program) && namesReadLine);
 		// Take the arguments of too-wide fixed-arity defuns as one rest list so

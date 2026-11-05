@@ -172,6 +172,17 @@ The first two are the physical optional's prologue; `pi_approx` and the `dotimes
 the raw-local sentinel -- `_ub_read` and the boxing arm of each `shadow == sentinel` test go
 where the unboxed counter is never boxed. Outputs identical on wasmtime.
 
+## Measured 2026-11-05 (its heap)
+
+A body is decoded for each walk and dropped with it; only the per-body tables stay for the
+fixpoint. Kept for the whole pass, the decoded instructions were most of its heap:
+`WasmTreeShakerCorpusTest`, run alone on the 64-core box, compiles the concatenated corpus
+six times at once (two modes, three levels each, `COMPILE_THREADS`), and its live heap held
+53.2M `Instr` (3.65 GB) of about 5.4 GB. It took 204 s and 151 full collections in `-Xmx6g`,
+and died with `OutOfMemoryError` beside other classes in two of three full runs. Decoding per
+walk: live heap at the same point 1.8 GB, 118 s, the only full collections those the
+histograms asked for.
+
 ## Traps
 
 - **The analysis must stay a superset at every point.** A `Val`'s set is never mutated;

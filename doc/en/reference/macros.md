@@ -53,7 +53,7 @@ description and a runnable example you can evaluate in your browser.
 | `declaim` | `(declaim declaration...)` | Parsed no-op like `declare`, for file-level declarations |
 | `proclaim` | `(proclaim declaration)` | Parsed no-op like `declaim` (deviates from CL: classified as a macro, the argument is not evaluated) |
 | `the` | `(the type form)` | Returns the value of `form` unchanged; the type is not checked |
-| `eval-when` | `(eval-when (situation...) body...)` | Evaluates the body as a `progn`; every situation is treated as "evaluate now". Top-level bodies are spliced so nested `defun`/`defmacro` definitions are collected |
+| `eval-when` | `(eval-when (situation...) body...)` | Evaluates the body as a `progn`; every situation is treated as "evaluate now", but for a form `eval` runs, where only `:execute` is. Top-level bodies are spliced so nested `defun`/`defmacro` definitions are collected |
 | `locally` | `(locally declaration... form...)` | Evaluates the body as a `progn`; the leading `declare` forms are dropped (declarations are parsed no-ops) |
 | `with-standard-io-syntax` | `(with-standard-io-syntax form...)` | Binds the reader and printer control variables to the standard values of CLHS 23.1.2 and evaluates the body as a `progn` |
 | `flet` | `(flet ((name lambda-list body...)...) body...)` | Local, non-recursive function bindings (Lisp-2: call position and `#'name`). A definition body sees the outer function of the same name, not its siblings. Lambda lists support the `defun` extensions |
