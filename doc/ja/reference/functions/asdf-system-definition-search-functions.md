@@ -19,7 +19,7 @@ nil なら次の関数に進み、それ以外の値は `type-error` です。Qu
 
 `asdf:search-for-system-definition` がこの走査を行い、`asdf:locate-system` はその上で本物の ASDF の
 5 つの値を返します。リストに `sysdef-source-registry-search` がなければ
-[探索パス](../../guides/asdf-systems.md#システム探索パス)も探索しません。rontolisp に組み込みの
+[探索パス](../../guides/asdf-systems.md#the-system-search-path)も探索しません。rontolisp に組み込みの
 システムは、リストの内容にかかわらず見つかります。
 
 ## バックエンドサポート
