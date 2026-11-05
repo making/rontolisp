@@ -111,7 +111,7 @@
 完全実装済みサブパッケージ以外の 8 つのメンバは**マクロ**で、呼び出されるのではなく
 コンパイラが展開します: `uiop:with-temporary-file`、
 [`uiop:with-deprecation`](macros/uiop-with-deprecation.md)、
-`uiop:define-package` (リテラルなトップレベル呼び出しは `defpackage` と同様に処理されます)。
+`uiop:define-package` (リテラルなトップレベル呼び出しは `defpackage` と同様に処理され、`:use-reexport`、`:mix`、`:reexport`、`:mix-reexport` も使えます)。
 `uiop/stream` の 5 つ — `uiop:with-input-file`、`uiop:with-output-file`、
 `uiop:with-input`、`uiop:with-output`、`uiop:with-safe-io-syntax` — は対応する
 `call-with-*` 関数への展開です。

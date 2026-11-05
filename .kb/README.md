@@ -112,8 +112,8 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 ## Errors and concurrency
 
 - [error-handling.md](error-handling.md) -- `unwind-protect`, condition objects, `handler-case`, restarts, per-backend mechanics (the JVM's condition and wrong-type records keyed by their throwable); the uncaught report and wasm-GC's opt-in `--report-locations` frames with their measured cost; SIGINT as `rontolisp:interactive-interrupt`
-- [async-await.md](async-await.md) -- async-defun/await, futures, asynchronous streams
-- [threads.md](threads.md) -- `rontolisp:make-thread` and friends
+- [async-await.md](async-await.md) -- async-defun/await, futures, asynchronous streams; a body's eager part as a call (its caller's handlers, a handler's exit), an exit crossing a future
+- [threads.md](threads.md) -- `rontolisp:make-thread` and friends; what a thread keeps of its own (the handler and restart stacks, whatever started it)
 - [mutexes.md](mutexes.md) -- `rontolisp:make-mutex`/`with-mutex`
 - [concurrent-served-requests.md](concurrent-served-requests.md) -- one virtual thread per request over shared interpreter/JVM state
 
@@ -171,7 +171,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [wasi-component.md](wasi-component.md) -- `--component` WASI 0.3 component output
 - [wit.md](wit.md) -- `am.ik.wit`, `--emit-wit`, `WitTypeMapper`, `rontolisp:wit-export`/`wit-import`, the `:names` naming hook and `describe`, `:octets` (a `list<u8>` result lifted as octets)
 - [wasm-export-no-wasi.md](wasm-export-no-wasi.md) -- `rontolisp:wasm-export` + `--no-wasi` reactor mode
-- [wasm-import.md](wasm-import.md) -- `rontolisp:wasm-import`, `:async t`, `--emit-js-glue`, `--host-boundary`
+- [wasm-import.md](wasm-import.md) -- `rontolisp:wasm-import`, `:async t`, `"rontolisp:memory"`, `--emit-js-glue`, `--host-boundary`
 - [no-gc-scalar-wasm.md](no-gc-scalar-wasm.md) -- the `--no-gc` non-GC scalar backend
 - [wasm-gc-strings.md](wasm-gc-strings.md) -- GC-backend strings as `$str_bytes` arrays
 - [wasm-gc-final-types.md](wasm-gc-final-types.md) -- every emitted wasm-GC type must be `sub final`

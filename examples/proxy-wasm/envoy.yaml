@@ -1,0 +1,88 @@
+# The gateway filter in front of a small upstream, both inside one Envoy.
+#
+#   :8080   the wasm filter, routing to the cluster `upstream`
+#   :9000   the upstream: direct responses, echoing what the filter added as a header
+#   :9901   the admin interface, where the filter's metrics appear (/stats?filter=gateway)
+static_resources:
+  listeners:
+  - name: gateway
+    address:
+      socket_address: {address: 0.0.0.0, port_value: 8080}
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: gateway
+          route_config:
+            virtual_hosts:
+            - name: all
+              domains: ["*"]
+              routes:
+              - match: {prefix: "/"}
+                route: {cluster: upstream}
+          http_filters:
+          - name: envoy.filters.http.wasm
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+              config:
+                name: lisp-gateway
+                vm_config:
+                  runtime: envoy.wasm.runtime.v8
+                  code:
+                    local: {filename: /etc/envoy/gateway.wasm}
+                configuration:
+                  "@type": type.googleapis.com/google.protobuf.StringValue
+                  value: |
+                    {
+                      "blocked_prefixes": ["/admin", "/internal"],
+                      "forbidden_word": "lisp-is-dead",
+                      "authz_cluster": "upstream",
+                      "banner": "rontolisp",
+                      "tick_milliseconds": 200
+                    }
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  - name: upstream
+    address:
+      socket_address: {address: 127.0.0.1, port_value: 9000}
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: upstream
+          route_config:
+            virtual_hosts:
+            - name: all
+              domains: ["*"]
+              routes:
+              - match: {path: "/authz/alice"}
+                direct_response: {status: 200, body: {inline_string: "authz-service"}}
+              - match: {prefix: "/authz/"}
+                direct_response: {status: 403, body: {inline_string: "no"}}
+              - match: {prefix: "/"}
+                direct_response: {status: 200, body: {inline_string: "hello from upstream\n"}}
+                response_headers_to_add:
+                - header: {key: x-internal-secret, value: s3cr3t}
+                - header: {key: x-seen-request-number, value: "%REQ(x-gateway-request)%"}
+                - header: {key: x-seen-authorized-by, value: "%REQ(x-authorized-by)%"}
+          http_filters:
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+  - name: upstream
+    connect_timeout: 1s
+    type: STATIC
+    load_assignment:
+      cluster_name: upstream
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: {address: 127.0.0.1, port_value: 9000}
+admin:
+  address:
+    socket_address: {address: 0.0.0.0, port_value: 9901}

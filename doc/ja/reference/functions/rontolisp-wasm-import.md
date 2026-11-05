@@ -43,7 +43,8 @@ WASM ホスト (ブラウザの JavaScript、または wasmtime にプリロー�
 
 | Designator | WASM boundary | Notes |
 | --- | --- | --- |
-| `:int` | `i32` | 31-bit signed range (the internal `i31ref`) |
+| `:int` | `i32` | an argument must fit the 31-bit signed range (the internal `i31ref`) and traps outside it; a result crosses over the full 32-bit signed range |
+| `:u32` | `i32` | the full unsigned range, exactly, and an argument outside it traps; a JavaScript host reads the value as signed, so `n >>> 0` recovers it |
 | `:float` | `f64` | an int or ratio argument is converted like the arithmetic built-ins |
 | `:bool` | `i32` | `nil` crosses as `0`, anything else as `1`; a non-zero result reads back as `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
@@ -123,6 +124,42 @@ pull ループはリニアメモリをフラットに保ちます。
   スタックで実行されるため、そこでのサスペンドは誰の名前も出さずにトラップ
   します。呼び出しをエクスポートの背後へ移すか、ホストが同期的に応答するなら
   `:async t` を外してください。
+
+## `"rontolisp:memory"` — モジュール自身のリニアメモリ
+
+この予約された `:from` の値はホスト関数を束縛しません。各ディレクティブはモジュール自身のメモリの操作を指すため、プログラムは出力先のセルを確保し、そのアドレスをホストへ渡し、ホストが書き込んだ値を読み返せます。インポートセクションは増えません。インタプリタと JVM では、通常のインポートと同じくスタブになります。
+
+| `:as` | `:params` | `:returns` | 動作 |
+| --- | --- | --- | --- |
+| `"alloc"` | `(:u32)` | `:u32` | `__ronto_alloc` と同じくバンプヒープにバイト列を確保します |
+| `"mark"` | なし | `:u32` | ヒープの現在の先頭を返します |
+| `"reset"` | `(:u32)` | なし | ヒープを `mark` の位置まで戻します |
+| `"load8"` / `"store8"` | `(:u32)` / `(:u32 :u32)` | `:u32` / なし | 1 バイトを読み書きします |
+| `"load32"` / `"store32"` | `(:u32)` / `(:u32 :u32)` | `:u32` / なし | リトルエンディアンで、アラインメントは問いません |
+| `"load64"` / `"store64"` | `(:u32)` / `(:u32 :s64)` | `:s64` / なし | リトルエンディアンで、アラインメントは問いません |
+| `"string"` | `(:u32 :u32)` | `:string` | `(ptr, len)` から UTF-8 として新しい文字列を作ります |
+| `"octets"` | `(:u32 :u32)` | `:octets` | `(ptr, len)` から新しいバイトベクタを作ります。`--no-gc` では使えません |
+
+Lisp 側の名前は自由に選べますが、フィールド名とシグネチャは固定で、異なる宣言はコンパイルエラーになります。`:async t` と `--no-gc --component` は拒否されます。`:u32` の範囲外のアドレスとメモリ末尾を越えるアクセスはトラップします。それ以外の保護はないため、誤ったアドレスへのストアはそこにある内容を上書きします。
+
+```lisp
+(rontolisp:wasm-import '%alloc :from "rontolisp:memory" :as "alloc"
+                       :params '(:u32) :returns :u32)
+(rontolisp:wasm-import '%load32 :from "rontolisp:memory" :as "load32"
+                       :params '(:u32) :returns :u32)
+(rontolisp:wasm-import '%string :from "rontolisp:memory" :as "string"
+                       :params '(:u32 :u32) :returns :string)
+;; A C-shaped host function: answers through two char**/size_t* out-pointers.
+(rontolisp:wasm-import '%get-value :from "env" :as "get_value"
+                       :params '(:string :u32 :u32) :returns :s32)
+
+(defun get-value (key)
+  (let ((cells (%alloc 8)))
+    (when (= 0 (%get-value key cells (+ cells 4)))
+      (%string (%load32 cells) (%load32 (+ cells 4))))))
+```
+
+[Proxy-Wasm のサンプル](https://github.com/making/rontolisp/tree/develop/examples/proxy-wasm)は、これを使って SDK 全体を構築しています。
 
 ## 制限事項
 

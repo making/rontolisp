@@ -76,8 +76,8 @@ final class WasmImportCompiler {
 	 * {@code list<u8>} to.
 	 */
 	private static final List<BoundaryType> KNOWN_PARAM_TYPES = List.of(BoundaryType.S32, BoundaryType.S64,
-			BoundaryType.FLOAT, BoundaryType.BOOL, BoundaryType.STRING, BoundaryType.S_EXPR, BoundaryType.BYTES,
-			BoundaryType.OCTETS, BoundaryType.EXTERN);
+			BoundaryType.U32, BoundaryType.FLOAT, BoundaryType.BOOL, BoundaryType.STRING, BoundaryType.S_EXPR,
+			BoundaryType.BYTES, BoundaryType.OCTETS, BoundaryType.EXTERN);
 
 	/**
 	 * Whether a declaration names {@code :extern} anywhere: the module then carries the
@@ -174,8 +174,12 @@ final class WasmImportCompiler {
 		}
 		BoundaryType returns = directive.returnType() == null ? BoundaryType.VOID
 				: knownType(directive.returnType(), form, true, accepted, backend);
-		return new Decl(directive.name(), directive.module(), directive.field(), List.copyOf(params),
+		Decl decl = new Decl(directive.name(), directive.module(), directive.field(), List.copyOf(params),
 				directive.paramNames(), returns, directive.async());
+		if (WasmMemoryIntrinsic.isIntrinsic(decl)) {
+			WasmMemoryIntrinsic.of(decl);
+		}
+		return decl;
 	}
 
 	// One designator from the directive, restricted to the import vocabulary. The
@@ -271,10 +275,13 @@ final class WasmImportCompiler {
 	static int hostImportOrdinal(java.util.Map<String, Decl> decls, String name) {
 		java.util.LinkedHashMap<String, Integer> slots = new java.util.LinkedHashMap<>();
 		for (Decl decl : decls.values()) {
-			slots.putIfAbsent(decl.module() + "\0" + decl.field(), slots.size());
+			if (!WasmMemoryIntrinsic.isIntrinsic(decl)) {
+				slots.putIfAbsent(decl.module() + "\0" + decl.field(), slots.size());
+			}
 		}
 		Decl decl = decls.get(name);
-		return decl == null ? -1 : slots.get(decl.module() + "\0" + decl.field());
+		return decl == null || WasmMemoryIntrinsic.isIntrinsic(decl) ? -1
+				: slots.get(decl.module() + "\0" + decl.field());
 	}
 
 	/**
@@ -550,7 +557,12 @@ final class WasmImportCompiler {
 		int memParamBase = resultPtrSlot + (bytesResult ? 3 : 0);
 		int numI32Temps = sExprTemps
 				+ (staging ? 1 + 2 * numBytesParams + (bytesResult ? 3 : 0) + 2 * numMemParams : 0);
-		ctx.nextLocal = numLispParams + 1 + numI32Temps;
+		// A :u32 argument leaves the i31 range, so it is range-checked on the i64 its
+		// exact
+		// value unboxes to (one scratch, since each check is finished before the next).
+		boolean u32Param = decl.paramTypes().contains(BoundaryType.U32);
+		int u32Scratch = numLispParams + 1 + numI32Temps;
+		ctx.nextLocal = u32Scratch + (u32Param ? 1 : 0);
 		int stagingAllocFuncIndex = reentrant ? ctx.parkAllocFuncIndex : allocFuncIndex;
 		if (staging && !reentrant) {
 			// mark = HEAP_PTR; every staged buffer below is a bump allocation popped
@@ -646,6 +658,11 @@ final class WasmImportCompiler {
 				emitStagedMemoryParam(ctx, decl.paramTypes().get(i), i + 1, memParamBase + 2 * m, reentrant);
 				m++;
 			}
+			else if (decl.paramTypes().get(i) == BoundaryType.U32) {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(i + 1);
+				WasmExportCompiler.emitNarrowIntResult(ctx, BoundaryType.U32, u32Scratch);
+			}
 			else {
 				emitUnboxParam(ctx, decl.paramTypes().get(i), i + 1);
 			}
@@ -714,16 +731,21 @@ final class WasmImportCompiler {
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
 		}
 		ctx.writer.write(Instruction.END);
-		// Local declarations: the i32 scratch run (when present), then the
-		// (ref null eq) temps allocated by allocTemp during unboxing.
-		int numEqTemps = ctx.nextLocal - (numLispParams + 1 + numI32Temps);
+		// Local declarations: the i32 scratch run (when present), the i64 scratch of a
+		// :u32 argument, then the (ref null eq) temps allocated by allocTemp during
+		// unboxing.
+		int numEqTemps = ctx.nextLocal - (numLispParams + 1 + numI32Temps + (u32Param ? 1 : 0));
 		ByteArrayOutputStream entry = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter entryWriter = new WasmWriter(entry);
-		int groups = (numI32Temps > 0 ? 1 : 0) + (numEqTemps > 0 ? 1 : 0);
+		int groups = (numI32Temps > 0 ? 1 : 0) + (u32Param ? 1 : 0) + (numEqTemps > 0 ? 1 : 0);
 		entryWriter.write(groups);
 		if (numI32Temps > 0) {
 			entryWriter.writeUnsignedLeb128(numI32Temps);
 			entryWriter.write(Type.I32);
+		}
+		if (u32Param) {
+			entryWriter.writeUnsignedLeb128(1);
+			entryWriter.write(Type.I64);
 		}
 		if (numEqTemps > 0) {
 			entryWriter.writeUnsignedLeb128(numEqTemps);
@@ -731,6 +753,70 @@ final class WasmImportCompiler {
 		}
 		entryWriter.write((Object) bodyStream.toByteArray());
 		return entry.toByteArray();
+	}
+
+	/**
+	 * Builds the body of a {@value WasmMemoryIntrinsic#MODULE} binding: the same boxed
+	 * wrapper shape as {@link #buildWrapperBody}, answering from the module itself.
+	 * @param ctxBuilder the shared context builder
+	 * @param decl the parsed declaration
+	 * @param strFromMemFuncIndex the function index of {@code _str_from_mem}
+	 * @param allocFuncIndex the function index of {@code __ronto_alloc}
+	 * @param allocMarkFuncIndex the function index of {@code __ronto_alloc_mark}
+	 * @param allocResetFuncIndex the function index of {@code __ronto_alloc_reset}
+	 * @param bytesFromMemFuncIndex the function index of {@code _bytes_from_mem}
+	 * @return the code entry bytes
+	 */
+	static byte[] buildIntrinsicBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Decl decl, int strFromMemFuncIndex,
+			int allocFuncIndex, int allocMarkFuncIndex, int allocResetFuncIndex, int bytesFromMemFuncIndex) {
+		WasmMemoryIntrinsic intrinsic = WasmMemoryIntrinsic.of(decl);
+		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter writer = new WasmWriter(bodyStream);
+		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
+		List<BoundaryType> params = intrinsic.params();
+		int scratch = params.size() + 1;
+		int firstTemp = scratch + 1;
+		ctx.nextLocal = firstTemp;
+		for (int i = 0; i < params.size(); i++) {
+			writer.write(Instruction.GET_LOCAL);
+			writer.writeUnsignedLeb128(i + 1);
+			if (params.get(i) == BoundaryType.U32) {
+				WasmExportCompiler.emitNarrowIntResult(ctx, BoundaryType.U32, scratch);
+			}
+			else {
+				WasmExportCompiler.emitWideIntResult(ctx, true);
+			}
+		}
+		if (!intrinsic.emitAccess(writer)) {
+			switch (intrinsic) {
+				case ALLOC -> emitCall(writer, allocFuncIndex);
+				case MARK -> emitCall(writer, allocMarkFuncIndex);
+				case RESET -> emitCall(writer, allocResetFuncIndex);
+				// The (ptr, len) already on the stack is what the lift below reads.
+				default -> {
+				}
+			}
+		}
+		emitBoxResult(ctx, intrinsic.result(), -1,
+				intrinsic.result() == BoundaryType.OCTETS ? bytesFromMemFuncIndex : strFromMemFuncIndex, false);
+		writer.write(Instruction.END);
+		int numEqTemps = ctx.nextLocal - firstTemp;
+		ByteArrayOutputStream entry = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter entryWriter = new WasmWriter(entry);
+		entryWriter.write(1 + (numEqTemps > 0 ? 1 : 0));
+		entryWriter.writeUnsignedLeb128(1);
+		entryWriter.write(Type.I64);
+		if (numEqTemps > 0) {
+			entryWriter.writeUnsignedLeb128(numEqTemps);
+			entryWriter.writeRefType(true, Type.EQ.code());
+		}
+		entryWriter.write((Object) bodyStream.toByteArray());
+		return entry.toByteArray();
+	}
+
+	private static void emitCall(WasmWriter writer, int funcIndex) {
+		writer.write(Instruction.CALL);
+		writer.writeUnsignedLeb128(funcIndex);
 	}
 
 	// Pushes array.len of the (unsigned-byte 8) vector in the given local slot; the
@@ -928,7 +1014,18 @@ final class WasmImportCompiler {
 	private static void emitBoxResult(WasmLispCompiler.Ctx ctx, BoundaryType type, int ptrSlot, int fromMemFuncIndex,
 			boolean reentrant) {
 		switch (type) {
-			case S32 -> ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			// Any i32 exactly: an i31 when it fits, else the boxed exact integer. A bare
+			// i31.new would keep 31 bits and silently answer a different number.
+			case S32 -> {
+				ctx.writer.write(Instruction.I64_EXTEND_S_I32);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+			}
+			case U32 -> {
+				ctx.writer.write(Instruction.I64_EXTEND_U_I32);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+			}
 			// The whole i64 exactly: an i31 when it fits, else the boxed exact integer.
 			case S64 -> {
 				ctx.writer.write(Instruction.CALL);

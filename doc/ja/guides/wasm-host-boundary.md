@@ -133,6 +133,8 @@ const { instance } = await WebAssembly.instantiate(bytes, imports);
 - `:s-expr` の**結果**は組み込みリーダーで解析されるため、ホストはリスト構造全体をテキストとして渡し返せます。
 - `:bytes` の**引数**は `(unsigned-byte 8)` ベクタを生の `(ptr, len)` ペアとしてステージします — UTF-8 エンコードを通らないため、任意のバイナリが正確に渡ります。
 - `:bytes` の**結果**は呼び出し側バッファ方式です: Lisp シグネチャの末尾に受信用の `(unsigned-byte 8)` ベクタが 1 つ加わり、ホスト関数は末尾の `(ptr, cap)` ペア付きで呼ばれます — *`ptr` に最大 `cap` バイトを書き込み、全長 `n` を返す*。呼び出しは `n` を返し(バッファ長を超える `n` は「より大きいバッファでリトライ」の合図)、ラッパーのステージングは返却時にポップされるため、1 つのバッファを使い回す pull ループはリニアメモリをフラットに保ちます。
+- `:u32` は符号なしの全範囲を両方向で正確に渡します。一方、`:int` の**引数**は内部の `i31ref` の 31 ビットまでで、超えるとトラップします。アドレス、サイズ、ホストが発行する ID は `:u32` で宣言してください。引数あたりのコードは `:int` より大きいので、小さいままの値は `:int` のほうが適しています。
+- **出力先ポインタ**で答えるホスト関数は、プログラムが確保したセルに書き込みます。そのセルの確保と応答の読み返しには、[`:from "rontolisp:memory"`](../reference/functions/rontolisp-wasm-import.md#rontolispmemory--the-modules-own-linear-memory) でモジュール自身のメモリを束縛します。
 - **非同期の**ホスト関数 — JSPI で `WebAssembly.Suspending` ラップされたインポート — は `:async t` で宣言します: 呼び出しは `rontolisp:await` で解決できる future を返し、ビルドはホストの義務(インポートの `Suspending` ラップ、そこへ到達しうるエクスポートの `promising` 経由呼び出し、呼び出しの直列化 — 再入されたエクスポートは両方の呼び出しを壊す代わりにトラップで拒否します。ただし [`--reentrant`](#overlapping-calls---reentrant) でコンパイルされたモジュールを除きます)を出力し、`--no-wasi` モジュールのトップレベルフォームから到達しうる呼び出しはコンパイルエラーになります(`_initialize` はサスペンドできない)。完全な契約は[リファレンスページ](../reference/functions/rontolisp-wasm-import.md)を参照してください。
 
 制限:

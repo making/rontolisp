@@ -135,14 +135,14 @@ A source may also **announce a feature about itself**: a top-level
 `(pushnew :my-feature *features*)` — bare or inside an `eval-when`/`progn` —
 is read by the reader, so a `#+my-feature` in the same file sees it. That is
 the header idiom real Common Lisp gets from loading a file form at a time, and
-it behaves identically on all four backends here. Only a **literal** keyword
-push counts: a push whose value the program computes
-(`(pushnew (intern name :keyword) *features*)`) is a real run-time push but is
-invisible to the reader, because deciding it would mean running the program to
-decide how the program is read. A `.asd` file is the exception: it is loaded
-form at a time, so a push it computes decides every `#+` below it and holds for
-the files of the systems it defines after the push (see the
-[Systems guide](../guides/asdf-systems.md)).
+it behaves identically on all four backends here. A push the program
+**computes** at top level, its value (`(pushnew (intern name :keyword) *features*)`)
+or whether it fires (`(if ok (pushnew :a *features*) (pushnew :b *features*))`),
+decides the `#+` of the forms below it in the same file, on all four backends: the
+interpreter has run it, and a compile path runs it at compile time for that purpose.
+A push inside a function's body does not count, even when the function is called.
+A `.asd` file goes further: a push it computes holds for the files of the systems it
+defines after the push (see the [Systems guide](../guides/asdf-systems.md)).
 
 And **you** may declare features on the command line: `--feature NAME`
 (comma-separated, repeatable) widens the set every source of the run is read

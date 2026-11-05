@@ -1,7 +1,7 @@
 # asdf:\*central-registry\*
 
 他のどの探索先よりも先に `NAME.asd` を探すディレクトリのリストです
-([システム探索パス](../../guides/asdf-systems.md#システム探索パス))。本物の ASDF と同じく、各要素は
+([システム探索パス](../../guides/asdf-systems.md#the-system-search-path))。本物の ASDF と同じく、各要素は
 探索のたびに評価し、その値をパス名の指定子として扱います。したがって文字列、パス名、
 `'*default-pathname-defaults*` のようなフォームを要素にできます。初期値は nil です。
 

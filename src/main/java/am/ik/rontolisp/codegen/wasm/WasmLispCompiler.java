@@ -5579,6 +5579,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// module changes shape.
 		boolean importStagesMemoryParams = importDecls.stream().anyMatch(WasmImportCompiler::stagesMemoryParams);
 		boolean memoryHelpers = exportUsesMemory || importUsesStrFromMem || bytesBoundary
+				|| importDecls.stream().anyMatch(WasmMemoryIntrinsic::needsArena)
 				|| (this.reentrant && importStagesMemoryParams) || !componentImportWrappers.isEmpty()
 				|| !componentAsyncWrappers.isEmpty() || !componentCallStartWrappers.isEmpty()
 				|| !componentTaskReturnWrappers.isEmpty();
@@ -5660,6 +5661,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		LinkedHashMap<String, Integer> importSlotIndex = new LinkedHashMap<>();
 		List<ImportSlot> importSlots = new ArrayList<>();
 		for (WasmImportCompiler.Decl decl : importWrappers.values()) {
+			if (WasmMemoryIntrinsic.isIntrinsic(decl)) {
+				continue;
+			}
 			if (importSlotIndex.putIfAbsent(decl.module() + "\0" + decl.field(), importSlots.size()) == null) {
 				importSlots.add(new ImportSlot(decl.module(), decl.field(), WasmImportCompiler.hostParamTypes(decl),
 						WasmImportCompiler.hostResultTypes(decl)));
@@ -5779,6 +5783,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// onto one import.
 		{
 			for (WasmImportCompiler.Decl decl : importWrappers.values()) {
+				if (WasmMemoryIntrinsic.isIntrinsic(decl)) {
+					userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(decl.name())),
+							WasmImportCompiler.buildIntrinsicBody(ctxBuilder, decl, strFromMemFuncIndex, allocFuncIndex,
+									allocMarkFuncIndex, allocResetFuncIndex, bytesFromMemFuncIndex));
+					continue;
+				}
 				int ordinal = Objects.requireNonNull(importSlotIndex.get(decl.module() + "\0" + decl.field()));
 				// The literal call-site lowering settled its own ordinal from the
 				// declarations alone, long before this list existed
@@ -5937,8 +5947,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (this.noWasi && !this.component) {
 			List<HostGlueEmitter.Import> glueImports = new ArrayList<>();
 			for (WasmImportCompiler.Decl decl : importWrappers.values()) {
-				glueImports
-					.add(new HostGlueEmitter.Import(decl.module(), decl.field(), decl.paramTypes(), decl.returnType()));
+				if (!WasmMemoryIntrinsic.isIntrinsic(decl)) {
+					glueImports.add(new HostGlueEmitter.Import(decl.module(), decl.field(), decl.paramTypes(),
+							decl.returnType()));
+				}
 			}
 			// --host-random routes random_get at an import no directive named, and one
 			// the glue IMPLEMENTS rather than asks for: preview1 fixes what
@@ -9215,7 +9227,9 @@ public final class WasmLispCompiler implements LispCompiler {
 						code.addFunction(WasmFutureRuntimeBuilder.build(i, asyncFuncBase(), asyncTypeBase(),
 								asyncTypeBase() + 1, asyncTypeBase() + 2, currentTaskGlobalIndex, sched, cb,
 								this.usesIdentityHashTables, globalIndices.getOrDefault(LispNames.MV_SPILL, -1),
-								uncaughtLocations != null ? uncaughtLocations.reawaitFuncIndex() : -1, streamCheck));
+								uncaughtLocations != null ? uncaughtLocations.reawaitFuncIndex() : -1, streamCheck,
+								blockExitTag,
+								WasmFutureRuntimeBuilder.HandlerState.of(globalIndices, ehDepthGlobalIndex)));
 					}
 				}
 				// The degenerate tier's stream runtime bodies, in p1StreamFuncBase()

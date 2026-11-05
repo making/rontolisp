@@ -59,14 +59,20 @@ non-function first argument still spawns on both and fails at the join. Pinned b
   `reader-features-variable` (feature count 4 vs 3).
 
 ## What a thread keeps of its own
-**The handler and restart stacks** (`%handler-clusters%`, `%restart-clusters%`), interpreter and JVM: a thread
-starts them empty (`LispEvaluator.onOwnThread`, `JvmThreadRuntimeBuilder`'s `call()`). They were one global: a
-thread leaving its `handler-bind` restored what it had saved over what another thread pushed since, and that
-thread's condition found no handler (sento's `tell` across threads, fiveam's `is` on the main one: `Unhandled
-condition`, measured 2026-11-05 on both). An editor's request bound them already (`CommonLispSwank.serve`). A
-served request on the interpreter too; on the JVM a served request and on both an async body still share them
-(`.todo/i42`). Pinned by `ThreadTest` and `JvmThreadTest#aThreadsHandlersAreItsOwn`, deterministic: the main
-thread pushes between the worker's push and its restore.
+**The handler and restart stacks** (`%handler-clusters%`, `%restart-clusters%`), interpreter and JVM: every thread
+running the program's code has its own, starting empty, whatever started it. The rule is the variable's, not an
+entry's, so a `make-thread` body, a served request (all its transports) and a thread Java or a host calls in on
+need no site: **a store never reaches the global**, a thread with no binding binds it there
+(`LispEvaluator.assignVariable`, `JvmSetqCompiler.emitGlobalStore`), and every read falls back on the global's nil.
+On the JVM the stacks get their `_d$` ThreadLocal wherever `lispOnOtherThreads` holds (`THREAD_OWN_STACKS`); a
+one-thread program keeps the shallow `_g$`. They were one global: a thread leaving its `handler-bind` restored what
+it had saved over what another thread pushed since, and that thread's condition found no handler (sento's `tell`
+across threads, fiveam's `is` on the main one: `Unhandled condition`, measured 2026-11-05 on both). An async body
+starts from its caller's instead ([async-await.md](async-await.md), "The eager part is a call"). An editor's
+request binds them as well (`CommonLispSwank.serve`), to keep them between its inputs. Pinned, deterministically
+(the other thread pushes between a thread's push and its restore), by `aThreadsHandlersAreItsOwn` in `ThreadTest`
+and `JvmThreadTest` (a `make-thread`, a thread Java starts, an async body) and `aRequestsHandlersAreItsOwn` in
+`HttpHandlerTest` and `HttpHandlerJvmTest`.
 
 The rest of this section is the interpreter's.
 

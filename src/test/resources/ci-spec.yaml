@@ -4512,6 +4512,10 @@ cases:
       (define-condition ci-rep-sub (ci-rep-lam) ())
       (define-condition ci-rep-simple (simple-warning) ())
       (define-condition ci-rep-bare (error) ((v :initarg :v)))
+      (defun ci-rep-named (c s) (declare (ignore c)) (write-string "named report" s))
+      (define-condition ci-rep-sym (error) () (:report ci-rep-named))
+      (print (princ-to-string (make-condition 'ci-rep-sym)))
+      (print (handler-case (error 'ci-rep-sym) (error (e) (format nil "~a" e))))
       (print (princ-to-string (make-condition 'ci-rep-lam :msg "boom")))
       (print (prin1-to-string (make-condition 'ci-rep-lam :msg "boom")))
       (print (princ-to-string (make-condition 'ci-rep-str)))
@@ -4521,6 +4525,8 @@ cases:
       (print (princ-to-string (make-condition 'ci-rep-bare :v 1)))
       (print (handler-case (error "plain ~a" 7) (error (e) (princ-to-string e))))
     expected: |
+      "named report"
+      "named report"
       "ci-rep: boom"
       "#<CI-REP-LAM :MSG \"boom\">"
       "fixed text"
@@ -5324,6 +5330,68 @@ cases:
       (1 2 3)
       (4 1)
       3
+  - name: an-async-bodys-eager-part-is-a-call
+    # Before its first suspension an async body sees the handlers and restarts around
+    # the call, and a handler's exit leaves the call; only a condition no handler took
+    # stays the future's (.kb/async-await.md, "The eager part is a call").
+    source: |
+      (define-condition ci-eager-c (error) ())
+      (rontolisp:async-defun ci-eager-signals () (signal 'ci-eager-c) (print :declined) 1)
+      (rontolisp:async-defun ci-eager-errs () (error 'ci-eager-c) (print :never) 2)
+      (rontolisp:async-defun ci-eager-restart () (and (find-restart 'ci-eager-r) t))
+      (print (let* ((seen nil)
+                    (f (handler-bind ((ci-eager-c (lambda (e) (declare (ignore e)) (setq seen t))))
+                         (ci-eager-signals))))
+               (list seen (rontolisp:await f))))
+      (print (let* ((seen nil)
+                    (f (handler-bind ((ci-eager-c (lambda (e) (declare (ignore e)) (setq seen t))))
+                         (ci-eager-errs))))
+               (list seen (handler-case (rontolisp:await f) (ci-eager-c () :at-await)))))
+      (print (let ((f (handler-case (ci-eager-errs) (ci-eager-c () :at-call))))
+               (if (rontolisp:futurep f)
+                   (handler-case (rontolisp:await f) (ci-eager-c () :at-await))
+                   f)))
+      (print (let ((f (handler-case (ci-eager-signals) (ci-eager-c () :at-call))))
+               (if (rontolisp:futurep f)
+                   (handler-case (rontolisp:await f) (ci-eager-c () :at-await))
+                   f)))
+      (print (rontolisp:await (with-simple-restart (ci-eager-r "R.") (ci-eager-restart))))
+      (defun ci-eager-return (call)
+        (block out
+          (handler-bind ((ci-eager-c (lambda (e) (declare (ignore e)) (return-from out :left))))
+            (funcall call)
+            :stayed)))
+      (print (ci-eager-return #'ci-eager-signals))
+      (print (ci-eager-return #'ci-eager-errs))
+      (defun ci-eager-throw ()
+        (catch 'ci-eager-tag
+          (handler-bind ((ci-eager-c (lambda (e) (declare (ignore e)) (throw 'ci-eager-tag :thrown))))
+            (ci-eager-signals)
+            :stayed)))
+      (print (ci-eager-throw))
+      (defun ci-eager-invoke ()
+        (with-simple-restart (ci-eager-r "R.")
+          (handler-bind ((ci-eager-c (lambda (e) (declare (ignore e)) (invoke-restart 'ci-eager-r))))
+            (ci-eager-errs)
+            :stayed)))
+      (print (multiple-value-list (ci-eager-invoke)))
+      (defun ci-eager-body-exit ()
+        (block out
+          (funcall (rontolisp:async-lambda () (return-from out :left) :stayed))
+          :stayed))
+      (print (ci-eager-body-exit))
+    expected: |
+      :DECLINED
+      (T 1)
+      (T :AT-AWAIT)
+      :AT-AWAIT
+      :AT-AWAIT
+      T
+      :LEFT
+      :LEFT
+      :THROWN
+      (NIL T)
+      :LEFT
   - name: first-rest-nth-as-first-class-function
     source: |
       (print (funcall #'first '(1 2 3)))
@@ -11349,6 +11417,9 @@ cases:
       (print (macroexpand-1 '(unless c x)))
       (print (macroexpand '(ci-outer 41)))
       (print (macroexpand-1 '(+ 1 2)))
+      ;; find-symbol answers every keyword name, and gentemp asks it for a free one.
+      (print (list (keywordp (gentemp "CI-GT-" :keyword))
+                   (keywordp (gentemp "CI-GT-" (find-package :keyword)))))
     expected: |
       #:G1
       #:|ci2|
@@ -11359,6 +11430,7 @@ cases:
       (IF C NIL X)
       (+ 41 1)
       (+ 1 2)
+      (T T)
   # JSON: the Lisp-source library (json.lisp) is spliced by the compile path and
   # loaded lazily by the interpreter, so one implementation runs on all four
   # backends. The value mapping matches com.inuoe.jzon's defaults: an object
@@ -14098,21 +14170,29 @@ cases:
       ;; (&optional (features *features*)) invites a caller to do.
       (defun ci-feature-default (&optional (fs *features*)) (car fs))
       (print (let ((*features* '(:ci-rebound))) (ci-feature-default)))
-      ;; A push whose value the program COMPUTES stays invisible to the reader on
-      ;; every backend: honoring it means running the program's code to decide how
-      ;; the program's own text is read, which a compile backend cannot do before
-      ;; the program exists. It is still a real run-time push.
+      ;; A push the program COMPUTES -- its value, or whether it fires -- decides the
+      ;; forms below it, as load's form at a time does: the interpreter has run it, a
+      ;; compile path's read-time image runs it. Forms above it read without it.
+      (print #+ci-computed :early #-ci-computed :not-yet)
       (pushnew (intern "CI-COMPUTED" :keyword) *features*)
       (print #+ci-computed :read-it #-ci-computed :not-read)
       (print (and (member :ci-computed *features*) t))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (if (< 1 2) (pushnew :ci-chosen *features*) (pushnew :ci-not-chosen *features*)))
+      (print (list #+ci-chosen :chosen #+ci-not-chosen :not-chosen))
+      (defun ci-never-called () (pushnew :ci-in-a-body *features*))
+      (print #+ci-in-a-body :read-it #-ci-in-a-body :not-read)
     expected: |
       :SAW-IT
       T
       :CI-BOUND
       :CI-ANNOUNCED
       :CI-REBOUND
-      :NOT-READ
+      :NOT-YET
+      :READ-IT
       T
+      (:CHOSEN)
+      :NOT-READ
   - name: reader-sharp-dot-generated-defconstants
     # fast-http's multipart-parser idiom: #. generates definitions via a
     # backquoted eval-when whose datum value is CODE, evaluated in place. The
@@ -15197,6 +15277,13 @@ cases:
       (print (handler-case (assert nil (ci-dsm-slot0) "at ~A" ci-dsm-slot0)
                (error (c) (princ-to-string c))))
       (print (let ((ci-dsm-slot0 7)) ci-dsm-slot0))
+      ;; A slot's initform and default are expressions (fset's identity mixin).
+      (defmacro ci-dsm-next () `(incf ci-dsm-slot0))
+      (defclass ci-dsm-c () ((n :initform (ci-dsm-next) :reader ci-dsm-c-n)))
+      (defstruct ci-dsm-s (v ci-dsm-slot0))
+      (define-condition ci-dsm-e (error) ((v :initform ci-dsm-slot0 :reader ci-dsm-e-v)))
+      (print (list (ci-dsm-c-n (make-instance 'ci-dsm-c)) (ci-dsm-s-v (make-ci-dsm-s))
+                   (ci-dsm-e-v (make-condition 'ci-dsm-e))))
       (defpackage :ci-dsm-p (:use :cl))
       (in-package :ci-dsm-p)
       (defvar *cell* (list 1 2))
@@ -15220,6 +15307,7 @@ cases:
       (44 #(44 0 0))
       "at 44"
       7
+      (45 45 45)
       (5 5)
       7
       ((:Q-CAR 1) 5)
@@ -21093,6 +21181,13 @@ cases:
       (1 NIL NIL)
   - name: esrap-enablement-language-group
     source: |
+      (defstruct (ci-es-boa (:constructor make-ci-es-boa (a &optional b (c 5) &key d)))
+        a (b 3) (c 4) (d 'six))
+      (print (make-ci-es-boa 1))
+      (print (make-ci-es-boa 1 2 3 :d 4))
+      (defstruct ci-es-base (a 1))
+      (defstruct (ci-es-sub (:include ci-es-base)) (b 2))
+      (print (copy-ci-es-base (make-ci-es-sub :b 3)))
       ;; the esrap enablement batch: general language features the
       ;; verbatim esrap-20260101-git load and run forced, none esrap-specific.
       ;; The real (asdf:load-system "esrap") + mito's migration grammar run in
@@ -21176,6 +21271,9 @@ cases:
       ;; *modules* is what provide records and require consults
       (print *modules*)
     expected: |
+      #S(CI-ES-BOA :A 1 :B 3 :C 5 :D SIX)
+      #S(CI-ES-BOA :A 1 :B 2 :C 3 :D 4)
+      #S(CI-ES-SUB :A 1 :B 3)
       (T NIL T T NIL)
       (T NIL T T NIL T)
       ((A EQL A) (X CONS (EQL X)) (Y CONS (EQL Y)) (TERMINAL . TERMINAL) (T . T))
@@ -33368,6 +33466,64 @@ cases:
       "\"a\""
       (1 T "1 cannot be printed readably.")
 
+  - name: subtypep-fixnum-is-a-64-bit-interval
+    source: |
+      (defun ci-stf-probe (a b) (subtypep a b))
+      (print (list (subtypep '(signed-byte 32) 'fixnum) (subtypep 'fixnum '(signed-byte 64))
+                   (subtypep 'fixnum '(signed-byte 32)) (subtypep '(integer 0 1) 'fixnum)))
+      (print (list (ci-stf-probe '(signed-byte 32) 'fixnum) (ci-stf-probe 'fixnum '(signed-byte 64))
+                   (ci-stf-probe 'fixnum '(signed-byte 32))))
+    expected: |
+      (T T NIL T)
+      (T T NIL)
+  - name: pprint-pop-and-the-exit-take-the-list-of-their-block
+    # Expected is SBCL 2.2.9's. fset's set printer pops in a closure over a block with
+    # no list; a macro may spell the call; a nested block pops its own list.
+    source: |
+      (defun plb-show (object)
+        (with-output-to-string (s)
+          (pprint-logical-block (s object :prefix "<" :suffix ">")
+            (pprint-exit-if-list-exhausted)
+            (loop (princ (pprint-pop) s)
+                  (pprint-exit-if-list-exhausted)
+                  (write-char #\Space s)))))
+      (print (plb-show '(1 2 3)))
+      (print (plb-show '()))
+      (print (plb-show '(1 2 . 3)))
+      (print (plb-show 5))
+      (print (let ((*print-length* 2)) (plb-show '(1 2 3))))
+      (print (let ((*print-length* 0)) (plb-show '(1 2 3))))
+      (defun plb-each (f items) (dolist (i items) (funcall f i)))
+      (defun plb-set (items)
+        (with-output-to-string (s)
+          (pprint-logical-block (s nil :prefix "#{" :suffix " }")
+            (plb-each (lambda (x) (pprint-pop) (write-char #\Space s) (princ x s)) items))))
+      (print (plb-set '(1 2 3 4)))
+      (print (let ((*print-length* 2)) (plb-set '(1 2 3 4))))
+      (defmacro plb-next () '(pprint-pop))
+      (print (with-output-to-string (s)
+               (pprint-logical-block (s '(1 (2 3) 4))
+                 (loop (let ((x (plb-next)))
+                         (if (consp x)
+                             (pprint-logical-block (s x :prefix "[" :suffix "]")
+                               (loop (princ (pprint-pop) s)
+                                     (pprint-exit-if-list-exhausted)))
+                             (princ x s)))
+                       (pprint-exit-if-list-exhausted)))))
+      (print (with-output-to-string (s)
+               (pprint-logical-block (s '(1))
+                 (prin1 (list (pprint-pop) (pprint-pop) (pprint-pop)) s))))
+    expected: |
+      "<1 2 3>"
+      "<>"
+      "<1 2 . 3>"
+      "5"
+      "<1 2 ...>"
+      "<...>"
+      "#{ 1 2 3 4 }"
+      "#{ 1 2... }"
+      "1[23]4"
+      "(1 NIL NIL)"
   - name: read-base-reads-rationals-in-its-radix
     source: |
       ;; CLHS 2.3.1: a rational token reads in *read-base*, ahead of every other reading; a
@@ -33632,6 +33788,28 @@ standalone:
       #S(Q :R SYM)
       #S(COMMON-LISP-USER::IFP-I :A SYM :B NIL)
       #S(IFP-I :A SYM :B NIL)
+  - name: a-reader-macro-answers-a-cl-symbol-in-a-package-using-no-cl
+    # Standalone: it changes the global readtable. coalton's readtable reads cl:declaim
+    # through eclector, in a package using only coalton.
+    source: |
+      (defpackage :ci-rm-nocl (:use))
+      (cl:in-package :ci-rm-nocl)
+      (cl:eval-when (:compile-toplevel :load-toplevel :execute)
+        (cl:set-macro-character #\!
+          (cl:lambda (s c)
+            (cl:declare (cl:ignore c))
+            (cl:list 'cl:list (cl:read s cl:t cl:nil cl:t)))))
+      (cl:princ !(cl:+ 1 2))
+      (cl:terpri)
+      ;; A cl: constant is cl's here too, read natively or by the reader macro.
+      (cl:princ !(cl:plusp cl:most-positive-fixnum))
+      (cl:terpri)
+      (cl:princ (cl:plusp cl:pi))
+      (cl:terpri)
+    stdout: |
+      (3)
+      (T)
+      T
   - name: pprint-logical-block-of-an-atom-in-a-program-not-naming-write
     source: |
       ;; Standalone: the concatenated corpus names write elsewhere, which hides the

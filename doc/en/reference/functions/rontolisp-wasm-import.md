@@ -43,7 +43,8 @@ The type designators are shared with
 
 | Designator | WASM boundary | Notes |
 | --- | --- | --- |
-| `:int` | `i32` | 31-bit signed range (the internal `i31ref`) |
+| `:int` | `i32` | an argument must fit the 31-bit signed range (the internal `i31ref`) and traps outside it; a result crosses over the full 32-bit signed range |
+| `:u32` | `i32` | the full unsigned range, exactly, and an argument outside it traps; a JavaScript host reads the value as signed, so `n >>> 0` recovers it |
 | `:float` | `f64` | an int or ratio argument is converted like the arithmetic built-ins |
 | `:bool` | `i32` | `nil` crosses as `0`, anything else as `1`; a non-zero result reads back as `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
@@ -121,6 +122,50 @@ spells both directions `async func`, and the directive carries the direction.)
   error**: `_initialize` runs on a stack no `promising` entered, so a
   suspension there traps naming nobody. Move the call behind an export, or
   drop `:async t` if the host answers synchronously.
+
+## `"rontolisp:memory"` — the module's own linear memory
+
+The reserved `:from` value binds no host function. Each directive names a field
+of the module's own memory instead, so a program can reserve out-cells, hand
+their addresses to the host and read back what the host wrote. The import
+section gains nothing. On the interpreter and JVM the name is the usual stub.
+
+| `:as` | `:params` | `:returns` | What it does |
+| --- | --- | --- | --- |
+| `"alloc"` | `(:u32)` | `:u32` | Reserves bytes on the bump heap, as `__ronto_alloc` does |
+| `"mark"` | none | `:u32` | The heap's current top |
+| `"reset"` | `(:u32)` | none | Pops the heap back to a `mark` |
+| `"load8"` / `"store8"` | `(:u32)` / `(:u32 :u32)` | `:u32` / none | One byte |
+| `"load32"` / `"store32"` | `(:u32)` / `(:u32 :u32)` | `:u32` / none | Little-endian, any alignment |
+| `"load64"` / `"store64"` | `(:u32)` / `(:u32 :s64)` | `:s64` / none | Little-endian, any alignment |
+| `"string"` | `(:u32 :u32)` | `:string` | A new string from `(ptr, len)`, as UTF-8 |
+| `"octets"` | `(:u32 :u32)` | `:octets` | A new byte vector from `(ptr, len)`; not under `--no-gc` |
+
+The Lisp name is yours; the field and its exact signature are not, and a
+declaration that differs is a compile error. `:async t` and
+`--no-gc --component` are refused. An address outside the `:u32` range traps,
+and so does an access past the end of memory; nothing else protects the
+memory, so a store through a wrong address overwrites whatever is there.
+
+```lisp
+(rontolisp:wasm-import '%alloc :from "rontolisp:memory" :as "alloc"
+                       :params '(:u32) :returns :u32)
+(rontolisp:wasm-import '%load32 :from "rontolisp:memory" :as "load32"
+                       :params '(:u32) :returns :u32)
+(rontolisp:wasm-import '%string :from "rontolisp:memory" :as "string"
+                       :params '(:u32 :u32) :returns :string)
+;; A C-shaped host function: answers through two char**/size_t* out-pointers.
+(rontolisp:wasm-import '%get-value :from "env" :as "get_value"
+                       :params '(:string :u32 :u32) :returns :s32)
+
+(defun get-value (key)
+  (let ((cells (%alloc 8)))
+    (when (= 0 (%get-value key cells (+ cells 4)))
+      (%string (%load32 cells) (%load32 (+ cells 4))))))
+```
+
+The [Proxy-Wasm example](https://github.com/making/rontolisp/tree/develop/examples/proxy-wasm)
+builds a complete SDK on this.
 
 ## Limitations
 

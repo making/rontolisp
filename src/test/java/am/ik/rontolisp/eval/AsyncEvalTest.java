@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.AwaitValuesMatrix;
+import am.ik.rontolisp.testsupport.OwnHandlerStacksPrograms;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -506,6 +507,12 @@ class AsyncEvalTest {
 	void awaitAnswersEveryValueOfAnAsyncBodyThatSuspended() {
 		Run run = evalMulti(AwaitValuesMatrix.SUSPENDING_PROGRAM);
 		assertThat(run.output().trim()).isEqualTo(AwaitValuesMatrix.SUSPENDING_EXPECTED);
+	}
+
+	@Test
+	void anAsyncBodysHandlersAndExitsAcrossASuspension() {
+		assertThat(evalMulti(OwnHandlerStacksPrograms.SUSPENDING).output().trim())
+			.isEqualTo(OwnHandlerStacksPrograms.SUSPENDING_OUTPUT);
 	}
 
 	@Test

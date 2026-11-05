@@ -196,6 +196,8 @@ public final class LispMacroExpander {
 			case LispNames.DESTRUCTURING_BIND -> expandDestructuringBind(cons);
 			case LispNames.WITH_OUTPUT_TO_STRING -> expandWithOutputToString(cons);
 			case LispNames.PPRINT_LOGICAL_BLOCK -> expandPprintLogicalBlock(cons);
+			case LispNames.PPRINT_POP -> expandPprintPop();
+			case LispNames.PPRINT_EXIT_IF_LIST_EXHAUSTED -> expandPprintExitIfListExhausted();
 			case LispNames.WITH_INPUT_FROM_STRING -> expandWithInputFromString(cons);
 			case LispNames.PUSHNEW -> expandPushnew(cons);
 			case LispNames.DEFTYPE -> expandDeftype(cons);
@@ -11424,6 +11426,12 @@ public final class LispMacroExpander {
 
 	private static final String PLB_OBJECT_VAR = "__plb_object";
 
+	private static final String PLB_COUNT_VAR = "__plb_count";
+
+	private static final String PLB_STREAM_VAR = "__plb_stream";
+
+	private static final String PLB_BLOCK = "__plb_block";
+
 	/**
 	 * Expands {@code (pprint-logical-block (stream object &key prefix per-line-prefix
 	 * suffix) body...)}.
@@ -11432,7 +11440,11 @@ public final class LispMacroExpander {
 	 * (pprint-logical-block (s obj :prefix "(" :suffix ")") body...) ->
 	 *   (let ((__plb_object obj))
 	 *     (if (listp __plb_object)
-	 *         (progn (write-string "(" s) body... (write-string ")" s) nil)
+	 *         (progn (write-string "(" s)
+	 *                (let ((__plb_count 0) (__plb_stream s))
+	 *                  (block __plb_block body...))
+	 *                (write-string ")" s)
+	 *                nil)
 	 *         (progn (write __plb_object :stream s) nil)))
 	 * </pre>
 	 *
@@ -11479,19 +11491,135 @@ public final class LispMacroExpander {
 		if (prefix != null) {
 			listArm.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), prefix, stream)));
 		}
-		listArm.addAll(parts.subList(2, parts.size()));
+		List<LispVal> block = new ArrayList<>(List.of(new LispSymbol(LispNames.BLOCK), new LispSymbol(PLB_BLOCK)));
+		for (LispVal form : parts.subList(2, parts.size())) {
+			block.add(withPprintOperatorsExpanded(form));
+		}
+		listArm.add(listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(new LispSymbol(PLB_COUNT_VAR), new LispInteger(0))),
+						listToCons(List.of(new LispSymbol(PLB_STREAM_VAR), stream)))),
+				listToCons(block))));
 		if (suffix != null) {
 			listArm.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), suffix, stream)));
 		}
 		listArm.add(LispNil.INSTANCE);
 		if (isLiteralList(object)) {
-			return listToCons(listArm);
+			return makeLet(PLB_OBJECT_VAR, object, listToCons(listArm));
 		}
 		LispVal atomArm = listToCons(List.of(new LispSymbol(LispNames.PROGN), listToCons(
 				List.of(new LispSymbol(LispNames.WRITE), objectVar, new LispSymbol(LispNames.STREAM_KEYWORD), stream)),
 				LispNil.INSTANCE));
 		return makeLet(PLB_OBJECT_VAR, object,
 				makeIf(callOf(LispNames.LISTP, objectVar), listToCons(listArm), atomArm));
+	}
+
+	/**
+	 * Expands the block's {@code pprint-pop} and {@code pprint-exit-if-list-exhausted}
+	 * where the block's body spells them. The expressions mutate the block's variables,
+	 * and the capture analyses read the block through this expansion, so a call must be
+	 * gone by then; a nested block's own calls expand to the same text, which its own
+	 * bindings shadow. Only the interpreter meets a call this walk does not see, one a
+	 * user macro makes ({@link #expandPprintPop}).
+	 */
+	private static LispVal withPprintOperatorsExpanded(LispVal form) {
+		return LispTrees.rebuildSpine(form, node -> {
+			if (!(node instanceof LispCons cons)) {
+				return node;
+			}
+			if (cons.car() instanceof LispSymbol head && cons.cdr() instanceof LispNil) {
+				switch (memberName(head.name())) {
+					case LispNames.PPRINT_POP:
+						return expandPprintPop();
+					case LispNames.PPRINT_EXIT_IF_LIST_EXHAUSTED:
+						return expandPprintExitIfListExhausted();
+					default:
+				}
+			}
+			return cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name()) ? node : null;
+		}, LispMacroExpander::withPprintOperatorsExpanded);
+	}
+
+	/**
+	 * Expands {@code (pprint-pop)} (CLHS, SBCL's order) over the enclosing block's
+	 * variables ({@link #expandPprintLogicalBlock}).
+	 *
+	 * <pre>
+	 * (progn
+	 *   (if (not (listp __plb_object))
+	 *       (progn (write-string ". " __plb_stream)
+	 *              (write __plb_object :stream __plb_stream)
+	 *              (return-from __plb_block nil)))
+	 *   (if (eql __plb_count *print-length*)
+	 *       (progn (write-string "..." __plb_stream) (return-from __plb_block nil)))
+	 *   (setq __plb_count (+ __plb_count 1))
+	 *   (prog1 (car __plb_object) (setq __plb_object (cdr __plb_object))))
+	 * </pre>
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPprintPop() {
+		LispSymbol object = new LispSymbol(PLB_OBJECT_VAR);
+		LispSymbol count = new LispSymbol(PLB_COUNT_VAR);
+		LispSymbol stream = new LispSymbol(PLB_STREAM_VAR);
+		LispVal leave = listToCons(
+				List.of(new LispSymbol(LispNames.RETURN_FROM), new LispSymbol(PLB_BLOCK), LispNil.INSTANCE));
+		LispVal atomTail = makeIf(callOf(LispNames.LISTP, object), LispNil.INSTANCE,
+				listToCons(List.of(new LispSymbol(LispNames.PROGN),
+						listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), new LispString(". "), stream)),
+						listToCons(List.of(new LispSymbol(LispNames.WRITE), object,
+								new LispSymbol(LispNames.STREAM_KEYWORD), stream)),
+						leave)));
+		LispVal lengthOut = makeIf(
+				listToCons(List.of(new LispSymbol(LispNames.EQL), count, new LispSymbol(LispNames.PRINT_LENGTH_VAR))),
+				listToCons(List.of(new LispSymbol(LispNames.PROGN),
+						listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), new LispString("..."), stream)),
+						leave)),
+				LispNil.INSTANCE);
+		LispVal counted = listToCons(List.of(new LispSymbol(LispNames.SETQ), count,
+				listToCons(List.of(new LispSymbol(LispNames.ADD), count, new LispInteger(1)))));
+		LispVal popped = listToCons(List.of(new LispSymbol(LispNames.PROG1), callOf(LispNames.CAR, object),
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), object, callOf(LispNames.CDR, object)))));
+		return listToCons(List.of(new LispSymbol(LispNames.PROGN), atomTail, lengthOut, counted, popped));
+	}
+
+	/**
+	 * Expands {@code (pprint-exit-if-list-exhausted)} over the enclosing block's
+	 * variables: {@code (if (null __plb_object) (return-from __plb_block nil))}.
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPprintExitIfListExhausted() {
+		return makeIf(callOf(LispNames.NULL, new LispSymbol(PLB_OBJECT_VAR)),
+				listToCons(List.of(new LispSymbol(LispNames.RETURN_FROM), new LispSymbol(PLB_BLOCK), LispNil.INSTANCE)),
+				LispNil.INSTANCE);
+	}
+
+	/**
+	 * Whether a {@code pprint-logical-block}'s body spells {@code pprint-pop} or
+	 * {@code pprint-exit-if-list-exhausted}, whose exit a closure may cross: the
+	 * cross-lambda pass reads such a block through its expansion.
+	 * @param cons the pprint-logical-block form
+	 * @return whether the body spells one
+	 */
+	public static boolean spellsPprintExit(LispCons cons) {
+		return cons.cdr() instanceof LispCons args && spellsPprintExit(args.cdr());
+	}
+
+	private static boolean spellsPprintExit(LispVal val) {
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				String name = memberName(head.name());
+				if (LispNames.QUOTE.equals(name)) {
+					return false;
+				}
+				if (LispNames.PPRINT_POP.equals(name) || LispNames.PPRINT_EXIT_IF_LIST_EXHAUSTED.equals(name)) {
+					return true;
+				}
+			}
+			if (spellsPprintExit(cons.car())) {
+				return true;
+			}
+			val = cons.cdr();
+		}
+		return false;
 	}
 
 	private static boolean isLiteralList(LispVal form) {
@@ -19933,8 +20061,9 @@ public final class LispMacroExpander {
 						boaValues.add(param != null ? param : slotDefaults.get(i));
 					}
 					forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(ctor.name()),
-							ctor.boaLambdaList(), typedList ? listOf(boaValues) : typedVector
-									? vectorOf(boaValues, typedVectorElementBits) : objNew(structTag, boaValues))));
+							boaLambdaListOverInitforms(ctor.boaLambdaList(), slotBases, slotDefaults),
+							typedList ? listOf(boaValues) : typedVector ? vectorOf(boaValues, typedVectorElementBits)
+									: objNew(structTag, boaValues))));
 				}
 				else {
 					// A slot-less struct has an EMPTY lambda list, which is nil rather
@@ -19972,11 +20101,10 @@ public final class LispMacroExpander {
 						callOf(LispNames.COPY_SEQ, obj))));
 			}
 			else {
-				List<LispVal> copied = new java.util.ArrayList<>();
-				for (int i = 0; i < slotSyms.size(); i++) {
-					copied.add(objRef(obj, i));
-				}
-				LispVal copy = objNew(structTag, copied);
+				// copy-structure, not this struct's own slots: an :include child handed
+				// to
+				// the parent's copier keeps its type and slots (coalton's %copy-node).
+				LispVal copy = callOf(LispNames.COPY_STRUCTURE, obj);
 				forms
 					.add(listToCons(
 							List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(copierName), params,
@@ -20324,6 +20452,50 @@ public final class LispMacroExpander {
 			cur = c.cdr();
 		}
 		return bound;
+	}
+
+	/**
+	 * A BOA lambda list with the default CLHS 3.4.6 gives an {@code &optional} or
+	 * {@code &key} parameter written without one: the initform of the slot it names.
+	 * @param lambdaList the BOA lambda list as written (possibly nil)
+	 * @param slotBases the slots' plain names
+	 * @param slotDefaults the slots' initforms, in the same order
+	 * @return the lambda list to compile; the given one when no parameter takes a default
+	 */
+	private static LispVal boaLambdaListOverInitforms(LispVal lambdaList, List<String> slotBases,
+			List<LispVal> slotDefaults) {
+		if (!(lambdaList instanceof LispCons)) {
+			return lambdaList;
+		}
+		List<LispVal> out = new java.util.ArrayList<>();
+		boolean defaulted = false;
+		boolean changed = false;
+		for (LispVal cur = lambdaList; cur instanceof LispCons c; cur = c.cdr()) {
+			LispVal item = c.car();
+			if (item instanceof LispSymbol keyword && keyword.isLambdaListKeyword()) {
+				defaulted = LispNames.LAMBDA_OPTIONAL.equals(keyword.name())
+						|| LispNames.LAMBDA_KEY.equals(keyword.name());
+				out.add(item);
+				continue;
+			}
+			LispSymbol bare = item instanceof LispSymbol s ? s
+					: item instanceof LispCons one && one.car() instanceof LispSymbol s && one.cdr() instanceof LispNil
+							? s : null;
+			int slot = !defaulted || bare == null ? -1 : slotBases.indexOf(plainSymbolName(bare));
+			if (slot >= 0 && !(slotDefaults.get(slot) instanceof LispNil)) {
+				out.add(listToCons(List.of(bare, slotDefaults.get(slot))));
+				changed = true;
+			}
+			else {
+				out.add(item);
+			}
+		}
+		return changed ? listToCons(out) : lambdaList;
+	}
+
+	private static String plainSymbolName(LispSymbol symbol) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(symbol.name());
+		return qn == null ? symbol.name() : qn.member();
 	}
 
 	// ------------------------------------------------------------------
@@ -26145,6 +26317,66 @@ public final class LispMacroExpander {
 	 * The shadow-aware substitution behind {@link #expandSymbolMacrolet}; see there for
 	 * the rules. {@code macros} maps each active symbol-macro name to its expansion.
 	 */
+	/**
+	 * A {@code defclass} or {@code define-condition}: a slot's {@code :initform} is an
+	 * expression, as is what the {@code :report} or {@code :default-initargs} option
+	 * holds when it is a cons or sits in a value position. Names and the rest stay.
+	 */
+	private static LispVal substituteSymbolMacroClass(LispCons cons, List<LispVal> parts,
+			java.util.Map<String, LispVal> macros) {
+		List<LispVal> out = new ArrayList<>(parts);
+		if (parts.size() > 3 && parts.get(3) instanceof LispCons slots && slots.isProperList()) {
+			List<LispVal> newSlots = new ArrayList<>();
+			for (LispVal slot : slots.toList()) {
+				newSlots.add(slot instanceof LispCons slotCons && slotCons.isProperList()
+						? substituteSymbolMacroPlist(slotCons, ":INITFORM", macros) : slot);
+			}
+			out.set(3, LispCons.rebuiltList(slots, newSlots));
+		}
+		for (int i = 4; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispCons option && option.isProperList()
+					&& option.car() instanceof LispSymbol key) {
+				if (":DEFAULT-INITARGS".equals(key.name())) {
+					out.set(i, substituteSymbolMacroPlist(option, null, macros));
+				}
+				else if (":REPORT".equals(key.name()) && option.cdr() instanceof LispCons value
+						&& value.car() instanceof LispCons) {
+					out.set(i, LispCons.rebuiltList(option, List.of(key, substituteSymbolMacros(value.car(), macros))));
+				}
+			}
+		}
+		return LispCons.rebuiltList(cons, out);
+	}
+
+	/**
+	 * The expression values of a {@code (head key value key value...)} list: those of
+	 * {@code only}, or every value when it is {@code null}.
+	 */
+	private static LispVal substituteSymbolMacroPlist(LispCons list, @Nullable String only,
+			java.util.Map<String, LispVal> macros) {
+		List<LispVal> items = new ArrayList<>(list.toList());
+		for (int i = 1; i + 1 < items.size(); i += 2) {
+			if (only == null || (items.get(i) instanceof LispSymbol key && only.equals(key.name()))) {
+				items.set(i + 1, substituteSymbolMacros(items.get(i + 1), macros));
+			}
+		}
+		return LispCons.rebuiltList(list, items);
+	}
+
+	/** A {@code defstruct}: a slot's default is an expression. */
+	private static LispVal substituteSymbolMacroStruct(LispCons cons, List<LispVal> parts,
+			java.util.Map<String, LispVal> macros) {
+		List<LispVal> out = new ArrayList<>(parts);
+		for (int i = 2; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispCons slot && slot.isProperList() && slot.cdr() instanceof LispCons value) {
+				List<LispVal> items = new ArrayList<>(slot.toList());
+				items.set(1, substituteSymbolMacros(value.car(), macros));
+				out.set(i, LispCons.rebuiltList(slot, items));
+			}
+		}
+		return LispCons.rebuiltList(cons, out);
+	}
+
 	private static LispVal substituteSymbolMacros(LispVal form, java.util.Map<String, LispVal> macros) {
 		if (macros.isEmpty()) {
 			return form;
@@ -26172,12 +26404,17 @@ public final class LispMacroExpander {
 		switch (head.name()) {
 			case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM,
 					LispNames.GO, LispNames.DEFMACRO, LispNames.DEFINE_SYMBOL_MACRO, LispNames.DEFPACKAGE,
-					LispNames.IN_PACKAGE, LispNames.DEFSTRUCT, LispNames.DEFCLASS, LispNames.DEFGENERIC,
-					LispNames.DEFTYPE, LispNames.DEFINE_CONDITION, LispNames.DEFSETF, LispNames.DEFINE_SETF_EXPANDER,
-					LispNames.DEFINE_COMPILER_MACRO, LispNames.DEFINE_MODIFY_MACRO: {
+					LispNames.IN_PACKAGE, LispNames.DEFGENERIC, LispNames.DEFTYPE, LispNames.DEFSETF,
+					LispNames.DEFINE_SETF_EXPANDER, LispNames.DEFINE_COMPILER_MACRO, LispNames.DEFINE_MODIFY_MACRO: {
 				// Data-only shapes, and definition bodies that do not see the lexical
 				// environment: kept verbatim.
 				return form;
+			}
+			case LispNames.DEFCLASS, LispNames.DEFINE_CONDITION: {
+				return substituteSymbolMacroClass(cons, parts, macros);
+			}
+			case LispNames.DEFSTRUCT: {
+				return substituteSymbolMacroStruct(cons, parts, macros);
 			}
 			case LispNames.LET: {
 				return substituteSymbolMacroLet(parts, macros, false);
@@ -41373,7 +41610,11 @@ public final class LispMacroExpander {
 							throw new IllegalArgumentException(
 									LispNames.DEFINE_CONDITION + " :report expects a value: " + cons.print());
 						}
-						closRegistry.registerConditionReport(nameSym.name(), reportCell.car());
+						// A symbol names the report function (CLHS define-condition); the
+						// renderer funcalls what it finds here as a form.
+						LispVal report = reportCell.car();
+						closRegistry.registerConditionReport(nameSym.name(), report instanceof LispSymbol
+								? listToCons(List.of(new LispSymbol(LispNames.FUNCTION), report)) : report);
 					}
 					case ":DEFAULT-INITARGS" -> {
 						// Forwarded verbatim to the generated defclass, which supports
@@ -49537,6 +49778,7 @@ public final class LispMacroExpander {
 			                      (t ""))))
 			    (cond ((symbolp %sti-s)
 			           (cond ((string= %sti-n "BIT") (cons 0 1))
+			                 ((string= %sti-n "FIXNUM") (cons -9223372036854775808 9223372036854775807))
 			                 ((string= %sti-n "UNSIGNED-BYTE") (cons 0 nil))
 			                 ((or (string= %sti-n "SIGNED-BYTE") (string= %sti-n "INTEGER")) (cons nil nil))
 			                 (t :none)))

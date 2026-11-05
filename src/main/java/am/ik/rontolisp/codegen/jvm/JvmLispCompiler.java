@@ -382,6 +382,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * {@code _gpuMaterialize}/{@code _gpuWritten}, which the travelling float-array
 	 * handle resolves through {@code MethodHandles} ({@code .kb/jvm-export.md}).
 	 */
+	/**
+	 * The handler and restart stacks, which every thread running the program's code keeps
+	 * of its own where more than one can ({@link JvmSetqCompiler#emitGlobalStore}).
+	 */
+	static final List<String> THREAD_OWN_STACKS = List.of(LispNames.HANDLER_CLUSTERS_VAR,
+			LispNames.RESTART_CLUSTERS_VAR);
+
 	private static final Set<String> REFLECTIVELY_FOUND_METHODS = Set.of("_apply", "_strv", "_lispToString",
 			JvmFloatArrayRuntimeBuilder.BF16_VALUE, JvmHashRuntimeBuilder.VALUES, JvmJavaDirectSites.SIGNAL,
 			JvmJavaDirectSites.FAIL, "_gpuMaterialize", "_gpuWritten");
@@ -2410,6 +2417,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			// bindings alist, so each needs its _d$ ThreadLocal (the _dtl dispatch in
 			// JvmThreadRuntimeBuilder). Over-collection is only a small read cost.
 			boundSpecialVars.addAll(specialVars);
+		}
+		if (lispOnOtherThreads) {
+			// Each thread's own (JvmSetqCompiler.emitGlobalStore).
+			for (String stack : THREAD_OWN_STACKS) {
+				if (specialVars.contains(stack)) {
+					boundSpecialVars.add(stack);
+				}
+			}
 		}
 		// The specials only a binding or an assignment gives a value
 		// (SpecialVarCollector.collectValueless): their _g$ starts as the UNBOUND marker,
@@ -4473,13 +4488,23 @@ public final class JvmLispCompiler implements LispCompiler {
 		final @Nullable ClassEntry runnableClass;
 		if (usesAsyncRuntime) {
 			mainCtx.conditionChannel.ensure(cp, this.className);
+			if (mainCtx.blockExitChannel) {
+				mainCtx.conditionChannel.ensureNle(cp, this.className);
+			}
 			MethodRefEntry progInitForAsync = cp.methodRef(thisClass, "<init>", "()V");
 			asyncRuntimeBodies = JvmAsyncRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, stringClass,
 					mainCtx.conditionChannel, progInitForAsync, longValueOf, stringLength, stringSubstring,
 					stringConcat, sizedMain != null ? sizedMain.runRef() : null, mainCtx.mvChannel,
 					recordsAsyncBoundaries ? cp.methodRef(thisClass, JvmUncaughtHandler.ASYNC_AWAITED_METHOD,
 							JvmUncaughtHandler.ASYNC_AWAITED_DESC) : null,
-					programUsesSymbol(program, LispNames.FUTURE_SETTLED_QUALIFIED), teTlField);
+					programUsesSymbol(program, LispNames.FUTURE_SETTLED_QUALIFIED), teTlField,
+					mainCtx.conditionChannel.nleTlField,
+					dynVarRuntime == null ? List.of()
+							: THREAD_OWN_STACKS.stream()
+								.map(dynVarRuntime.fields()::get)
+								.filter(Objects::nonNull)
+								.toList(),
+					dynVarRuntime);
 			runnableClass = cp.classEntry("java/lang/Runnable");
 		}
 		else {
@@ -4842,7 +4867,8 @@ public final class JvmLispCompiler implements LispCompiler {
 					java.util.Objects.requireNonNull(handoffFieldDesc));
 			for (Utf8Entry instField : List.of(java.util.Objects.requireNonNull(asyncFnFieldName),
 					java.util.Objects.requireNonNull(asyncFutureFieldName),
-					java.util.Objects.requireNonNull(asyncLatchFieldName))) {
+					java.util.Objects.requireNonNull(asyncLatchFieldName),
+					cp.utf8Entry(JvmAsyncRuntimeBuilder.STATE_FIELD))) {
 				definition.addField(AccessFlag.ACC_PRIVATE, Objects.requireNonNull(instField),
 						Objects.requireNonNull(asyncInstanceFieldDesc));
 			}

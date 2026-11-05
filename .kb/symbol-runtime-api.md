@@ -63,7 +63,9 @@ literals.
   (+ twins) and ci-spec `type-of-foreign-package-class-name`.
 - **2-argument `find-symbol`**: interpreter = registry-backed
   (`PackageResolver.accessible`: present member, inherited export, standard name, keyword --
-  `.kb/packages.md` "The member table"), returning the canonical spelling; on the compiled
+  `.kb/packages.md` "The member table"; the keyword package keeps no table, so it answers every name,
+  SBCL `NIL NIL` for one never interned, and `gentemp` does not ask it, measured hanging 2026-11-05,
+  coalton's `make-local-vars`), returning the canonical spelling; on the compiled
   backends a symbol IS its canonical spelling, so for a READ/COMPILE-TIME package
   `expandFindSymbolInPackage` BUILDS it (`(intern (concatenate 'string "PKG:" name))`, or the
   same over `(string PKG)` when computed), while a package the program created with

@@ -7,6 +7,9 @@ bugs, and each looks like someone else's fault.
 
 - Servlet (`-o app.war`, `.kb/http-server.md`): the container reuses ONE platform thread, so
   `RontoHttpServlet` must `startAsync` onto a fresh virtual thread.
+- The handler and restart stacks are each thread's own, so a request leaving its `handler-bind` keeps what
+  another pushed (`.kb/threads.md`, "What a thread keeps of its own"; `aRequestsHandlersAreItsOwn` in
+  `HttpHandlerTest` and `HttpHandlerJvmTest`; before, on the JVM, that request answered a 500).
 - Fixed: special variables (`.kb/dynamic-special-variables.md`); stream-table handle allocation
   (`.kb/read-load-streams.md`); the JVM backend's lazy inits (`_javaInit`, `_objcInit`, `_ffiInit`,
   simd/gpu/geom inits) are emitted `ACC_SYNCHRONIZED` by `JvmLispCompiler` (found when they still

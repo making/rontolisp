@@ -399,6 +399,25 @@ class PackageResolverTest {
 		assertThatThrownBy(() -> resolve(resolver, "(defpackage :plain (:use-reexport :re-src))"))
 			.isInstanceOf(LispPackageException.class)
 			.hasMessageContaining(":USE-REEXPORT");
+		// coalton's headers: :mix-reexport takes the externals without using the package,
+		// an earlier package winning a name two share, and exports them; a shadow wins.
+		resolve(resolver, "(defpackage :re-other (:use :cl) (:export :frob :bar :baz))");
+		resolve(resolver, "(uiop:define-package :re-mix (:shadow :baz) (:mix-reexport :re-src :re-other))");
+		resolve(resolver, "(in-package :cl-user)");
+		assertThat(resolve(resolver, "(re-mix:frob re-mix:bar)")).isEqualTo("(RE-SRC:FROB RE-OTHER:BAR)");
+		assertThat(resolve(resolver, "(re-mix:baz)")).isEqualTo("(RE-MIX:BAZ)");
+		resolve(resolver, "(uiop:define-package :re-mix-only (:mix :re-src))");
+		resolve(resolver, "(in-package :re-mix-only)");
+		assertThat(resolve(resolver, "(frob)")).isEqualTo("(RE-SRC:FROB)");
+		resolve(resolver, "(in-package :cl-user)");
+		assertThatThrownBy(() -> resolve(resolver, "(re-mix-only:frob)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("not external");
+		resolve(resolver, "(uiop:define-package :re-only (:use :re-other) (:reexport :re-other))");
+		resolve(resolver, "(in-package :cl-user)");
+		assertThat(resolve(resolver, "(re-only:bar)")).isEqualTo("(RE-OTHER:BAR)");
+		assertThatThrownBy(() -> resolve(resolver, "(uiop:define-package :re-gone (:mix :no-such-package))"))
+			.isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("NO-SUCH-PACKAGE");
 	}
 
 	@Test

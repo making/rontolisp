@@ -13,11 +13,11 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The closed interval of integers an integer type specifier denotes: {@code bit},
- * {@code unsigned-byte}, {@code signed-byte}, {@code integer} and the compounds
- * {@code (unsigned-byte n)}, {@code (signed-byte n)}, {@code (integer lo hi)} and
- * {@code (mod n)}. A null bound is unbounded on that side. Shared by {@code subtypep}'s
- * interval rule and the stream element-type classification ({@link StreamElementType}),
- * so the two read one table.
+ * {@code fixnum} (64 bits), {@code unsigned-byte}, {@code signed-byte}, {@code integer}
+ * and the compounds {@code (unsigned-byte n)}, {@code (signed-byte n)},
+ * {@code (integer lo hi)} and {@code (mod n)}. A null bound is unbounded on that side.
+ * Shared by {@code subtypep}'s interval rule and the stream element-type classification
+ * ({@link StreamElementType}), so the two read one table.
  *
  * @param lo the least member, or null when unbounded below
  * @param hi the greatest member, or null when unbounded above
@@ -35,6 +35,8 @@ public record IntegerTypeRange(@Nullable BigInteger lo, @Nullable BigInteger hi)
 		if (spec instanceof LispSymbol sym) {
 			return switch (plainName(sym)) {
 				case "BIT" -> new IntegerTypeRange(BigInteger.ZERO, BigInteger.ONE);
+				case "FIXNUM" ->
+					new IntegerTypeRange(BigInteger.valueOf(Long.MIN_VALUE), BigInteger.valueOf(Long.MAX_VALUE));
 				case "UNSIGNED-BYTE" -> new IntegerTypeRange(BigInteger.ZERO, null);
 				case "SIGNED-BYTE", "INTEGER" -> new IntegerTypeRange(null, null);
 				default -> null;

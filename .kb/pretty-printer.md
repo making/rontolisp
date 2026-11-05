@@ -39,6 +39,17 @@ conversion runs), `*print-pretty*` (mandatory break), and the seven the `%print-
   `print-object`) expands without the arm and pays nothing. ci-spec
   `pprint-logical-block-of-an-atom-in-a-program-not-naming-write`, standalone because the concatenated
   corpus names `write`.
+- `pprint-pop` / `pprint-exit-if-list-exhausted` (`expandPprintPop`, SBCL's order; 2026-11-05, fset's
+  printers): over the block's `__plb_object`, `__plb_count`, `__plb_stream` and `(block __plb_block ...)`,
+  which every block now binds, a nested block's shadowing the outer's. Atom rest: `. ` + `write`, leave;
+  `*print-length*` out: `...`, leave. `withPprintOperatorsExpanded` replaces a call the body spells when the
+  block expands, because the capture analyses read the block through its expansion, and a closure may
+  mutate the variables. Only the interpreter meets a call a user macro makes (the `LispEvaluator` arms; a
+  compile path expanded the macro before the block). A closure may cross the exit (`do-set`'s body), and
+  `CrossLambdaExitLowering` runs before the compilers expand a block, so it expands one spelling either
+  operator (`spellsPprintExit`). `write` is selected for a program naming `pprint-pop`, which also defines
+  `*print-length*`. ci-spec `pprint-pop-and-the-exit-take-the-list-of-their-block`, SBCL's answers.
+  `*print-level*` and `*print-circle*` are not consulted by the block.
 - `pprint-newline :mandatory` and `~:@_`: real breaks, gated on `*print-pretty*`.
 - `~<...~>` / `~<...~:>` (`.kb/format.md`): SECTION rules real.
 

@@ -33,8 +33,10 @@ import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.reader.FeaturePushes;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
+import am.ik.rontolisp.reader.ReadSyntax;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -403,13 +405,22 @@ public final class LoadInliner {
 			return FormSource.of(language.read(source, ctx.features(), path, ctx.standards(), ctx.loader()));
 		}
 		Reading reading = ctx.reading();
-		if (reading.image == null && ReadTimeImage.changesSyntax(source)) {
+		if (reading.image == null
+				&& (ReadTimeImage.changesSyntax(source) || FeaturePushes.computesAPush(source, ctx.features(), path))) {
 			reading.image = new ReadTimeImage();
 		}
 		SourceLanguage.Forms forms = SourceLanguage.readForms(source, ctx.features(), path);
+		List<Set<String>> featuresAtOpen = new ArrayList<>(1);
 		return () -> {
 			ReadTimeImage image = reading.image;
-			return forms.next(image == null ? null : image.syntax(out));
+			if (image == null) {
+				return forms.next(null);
+			}
+			ReadSyntax syntax = image.syntax(out);
+			if (featuresAtOpen.isEmpty()) {
+				featuresAtOpen.add(image.features());
+			}
+			return forms.next(syntax, image.featuresPushedSince(featuresAtOpen.get(0)));
 		};
 	}
 

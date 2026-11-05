@@ -47,7 +47,7 @@ public final class LispLexer {
 
 	private final String input;
 
-	private final Features features;
+	private Features features;
 
 	private final ReadEvalMode readEvalMode;
 
@@ -163,6 +163,15 @@ public final class LispLexer {
 	 */
 	void setSyntax(@Nullable ReadSyntax syntax) {
 		this.syntax = syntax;
+	}
+
+	/**
+	 * Widens the features the guards test from here on: an incremental read's forms ran,
+	 * and what they pushed onto {@code *features*} holds for the next.
+	 * @param pushed the feature names, without the leading colon
+	 */
+	void widenFeatures(List<String> pushed) {
+		this.features = this.features.with(pushed);
 	}
 
 	/**

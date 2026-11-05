@@ -2,7 +2,7 @@
 
 `(asdf:initialize-source-registry [parameter])`
 
-`NAME.asd` の探索先を設定します ([システム探索パス](../../guides/asdf-systems.md#システム探索パス))。
+`NAME.asd` の探索先を設定します ([システム探索パス](../../guides/asdf-systems.md#the-system-search-path))。
 本物の ASDF と同じく、設定が指すディレクトリはこの呼び出しの時点で走査します。値は返しません。
 
 ```console

@@ -13,8 +13,14 @@ slot-wise (deliberate CL deviation); `#S(...)` source reads back via `StructLite
 - Options: `:constructor`/`:conc-name`/`:predicate`/`:copier`/`:include`/`:type`/
   `:print-object`/`:print-function`, a dropped docstring, parsed-but-ignored slot
   `:type`, a `:read-only` slot (below); anything else throws "DEFSTRUCT option is not supported".
-- BOA `(:constructor name (lambda-list))` passes the lambda list verbatim; a slot matching a
-  parameter (`boaParameterSymbols`) reads it, others evaluate their initform.
+- BOA `(:constructor name (lambda-list))`: a slot matching a parameter (`boaParameterSymbols`) reads
+  it, others evaluate their initform. An `&optional` or `&key` parameter written without a default takes
+  the initform of the slot it names (`boaLambdaListOverInitforms`, CLHS 3.4.6; fset's
+  `tuple-key` type was nil where `t` was meant, measured 2026-11-05); `&aux` does not. ci-spec
+  `esrap-enablement-language-group`.
+- A copier is `copy-structure` (2026-11-05): an `:include` child handed to the parent's copier keeps its
+  type and slots (coalton's `(:copier %copy-node)`, `No applicable method ... on NODE`). ci-spec
+  `esrap-enablement-language-group`.
 - A struct name is a valid `defmethod` specializer (`ClosRegistry.registerStruct` /
   `findStructTag`; `structAncestorCount` ranks it, band 100-199, deeper first).
 - `:conc-name` takes a STRING DESIGNATOR (`structConcName`, one parser for the expander and both

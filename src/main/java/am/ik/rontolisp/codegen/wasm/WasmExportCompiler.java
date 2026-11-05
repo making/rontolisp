@@ -825,7 +825,7 @@ final class WasmExportCompiler {
 	// float-to-decimal helpers it roots (.kb/wasm-ref-type-fold.md). A TYPE_BIGINT is
 	// beyond every 32-bit range, and _int_val's trap on it is the same refusal the
 	// trunc would have been.
-	private static void emitNarrowIntResult(WasmLispCompiler.Ctx ctx, BoundaryType type, int i64Slot) {
+	static void emitNarrowIntResult(WasmLispCompiler.Ctx ctx, BoundaryType type, int i64Slot) {
 		int slot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
