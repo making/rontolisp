@@ -99,6 +99,10 @@ of an outer block returned from the lambda alone.
 Pinned by ci-spec `an-async-bodys-eager-part-is-a-call` (all four) and `OwnHandlerStacksPrograms.SUSPENDING`
 (`anAsyncBodysHandlersAndExitsAcrossASuspension` in `AsyncEvalTest` and `JvmAsyncCompilerTest`,
 `WasmLispCompilerIntegrationTest#componentAsyncBodysHandlersAndExitsAcrossASuspension`).
+**A program pinning this orders its bodies by a turn its caller hands out, not by a timer:** on the interpreter and
+the JVM a resumed body runs in parallel with its caller. Holders on 2 and 3 ms timers failed CI three times on
+2026-11-05, the first reads of `*own-seen*` losing to the timer; on 4 CPUs beside 8 busy loops 24 of 1500 interpreter
+runs failed, 9 of them a `push` lost to the other holder's, and none of 1500 on turns.
 
 ## Multiple values
 **Invariant (2026-09-26): an async body's values reach its awaiter the way a function call's
