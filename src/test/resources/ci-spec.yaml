@@ -33558,6 +33558,14 @@ cases:
       (print (multiple-value-list (ci-stf-probe *ci-stf-ufix* '(unsigned-byte 32))))
       (print (multiple-value-list (ci-stf-probe '(signed-byte 16) '(signed-byte 8))))
       (print (multiple-value-list (ci-stf-probe 'bit 'fixnum)))
+      ;; A class of another package named like a lattice type is not that type.
+      (defpackage :ci-stf-p (:use) (:export #:bit #:num))
+      (defclass ci-stf-p:bit () ())
+      (print (multiple-value-list (subtypep 'bit 'integer)))
+      (print (multiple-value-list (ci-stf-probe 'bit 'integer)))
+      ;; An external deftype name reaches the run-time table in its one-colon spelling.
+      (deftype ci-stf-p:num () 'integer)
+      (print (list (ci-stf-probe 'ci-stf-p:num 'integer) (ci-stf-probe 'bit 'ci-stf-p:num)))
     expected: |
       (T T NIL T)
       (T T NIL)
@@ -33569,6 +33577,9 @@ cases:
       (T T)
       (NIL T)
       (NIL T)
+      (T T)
+      (T T)
+      (T T)
       (T T)
   - name: pprint-pop-and-the-exit-take-the-list-of-their-block
     # Expected is SBCL 2.2.9's. fset's set printer pops in a closure over a block with

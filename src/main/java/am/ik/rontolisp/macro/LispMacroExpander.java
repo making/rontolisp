@@ -49033,7 +49033,12 @@ public final class LispMacroExpander {
 
 		ClosRegistry.@Nullable ClassInfo classInfo() {
 			if (!this.classResolved) {
-				this.classInfo = this.registry.findClass(this.symbol.name());
+				// A bare lattice name is that type: the registry's tolerance for a bare
+				// spelling would answer another package's class of the same member
+				// (coalton:bit, a class, for cl:bit).
+				String name = this.symbol.name();
+				this.classInfo = SUBTYPEP_PARENTS.containsKey(name)
+						? this.registry.classes().get(ClosRegistry.normalize(name)) : this.registry.findClass(name);
 				this.classResolved = true;
 			}
 			return this.classInfo;
@@ -52357,7 +52362,9 @@ public final class LispMacroExpander {
 				}
 			}
 		}
-		names.addAll(closRegistry.deftypeNames());
+		for (String deftype : closRegistry.deftypeNames()) {
+			addDesignatorSpellings(names, deftype);
+		}
 		return List.copyOf(names);
 	}
 
