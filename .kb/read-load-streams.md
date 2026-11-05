@@ -67,6 +67,68 @@ nesting `#|...|#`.
 Pinned by `Jvm/WasmLispCompilerTest#compileReadFromString{CharLiterals,VectorsAndArrays,StructLiterals,SymbolParityAndBlockComments,ReaderErrors*}`,
 ci-spec `runtime-read-*`, `read-from-string*`.
 
+## A symbol token reads in the current package
+**Invariant: a compiled run-time read interns as CL's reader does, on every path into the emitted
+readers: `read-from-string`, `read`, a computed `load`, a `#S` type name, a slot value.** A bare token
+is what its name interns in `*package*`; a qualified one what its name interns in the package the
+qualifier names, the current package's nicknames read first. So `(eq (read-from-string "foo") 'foo)`
+under `P`, `"p::car"` is `car`, `"p::out"` is `P:OUT`, `"#S(pt)"` finds an inherited `U:PT`, and
+`(eval (read-from-string "(foo)"))` calls `P::FOO`. Until 2026-11-05 a token was its spelling.
+
+- **One definition** (`LispMacroExpander.injectReadHome`, both compilers right after the definitions
+  expand): `(%read-home symbol qualifier)` over `intern`'s computed-designator lowering, so the
+  `%baked-access` rows, the standard names and a `make-package` member table answer as they answer
+  `intern` (a read of a fresh name in a run-time package is a member `find-symbol` then finds). It goes
+  in after the prelude and the pruner, so a dead read costs nothing and no surface fact is needed.
+- **The readers call it for a token only** (the interpreter's `symbolHome` rule): `quote`/`function` are
+  not tokens, a token a standard qualifier named is spelled already (`cl-user::foo` stays bare under
+  `P`), a keyword is its own, and so is a token with a colon past a qualifier's (`p:out:x`, which SBCL
+  refuses and the interpreter spells). JVM `_rdHome(spelled, token)` at `_classify`'s symbol exit and
+  `_rdEscaped`; wasm `emitAskHome` at `_read_expr`'s two symbol exits and `emitStructNameHome` for the
+  `#S` type name, which `_rd_token` reads past `_read_expr`: it continues from the answer's `(id, len)`,
+  an interned name's bytes. wasm passes a defun's closure environment first (a null), and the text is
+  safe across the call: `emitSetup` reserves it below `HEAP_PTR`.
+- **Why not a walk over the datum**, which `%read-through-local-nicknames` was: `cl-user::foo` and `foo`
+  leave one spelling, `quote` under a package using no `cl` would be re-homed, and `#S` looks its type
+  up during the read. The nickname walk went with this.
+- **The gate** (`readsUnderAPackage`): the program spells `read-from-string`, `read` or `load`, and
+  it assigns a package other than `cl-user` at top level, mentions `*package*` anywhere (a
+  `with-standard-io-syntax` does not count: it binds `cl-user`), defines a package a qualifier can name,
+  names a local nickname, or widens `cl-user`. Any other program's reader carries none of it (`cmp` against the commit before
+  on the JVM class, P1 and the component, 2026-11-05). `(eq *package* :cl-user)` answers a bare token
+  at once while `cl-user` is pristine (`clUserIsPristine`); a program that widened it asks its row,
+  so `(use-package :lib)` reaches `lib:x` from a bare `"x"`. What a package reaches is one answer for
+  the whole compile, as for `intern`: a `use-package` a later `unuse-package` undoes reads as undone.
+- **A baked initform's text must not home** (`EmittedReaderInitforms.initTexts`, `homing`): the omitted
+  slot of `#S` re-reads a printed constant, whose bare `CAR` means `cl`'s whatever is current, so a
+  homing program's text spells a bare symbol `CL-USER::CAR`, which the reader drops and takes as spelled.
+- **The interpreter under the keyword package**: `(let ((*package* (find-package :keyword)))
+  (read-from-string "foo"))` was `No such package: keyword` (`internSpellingExact`); it is `:FOO`.
+- Cost, measured 2026-11-05. Bytes: `(defpackage :p (:use :cl)) (in-package :p) (print
+  (read-from-string "foo"))` 89,698 -> 109,580 (class), 60,900 -> 88,271 (P1), 62,472 -> 90,009
+  (component): `intern`'s lookup with its rows and the 7.4 K standard names. Time: 100,000 tokens
+  (75,000 symbols of 502 names, 25,000 keywords) warm, under `P` against under `cl-user` in the
+  same program, 165 ms / 38 ms on the JVM, 400 ms / 34 ms on P1 and the component, 97 ms / 67 ms on
+  the interpreter; the first read decodes the tables, about 1 s on wasm. Per symbol that is `find-package`'s
+  scan and the row lookups. A memo per package was not added: nothing reads that much under a package.
+- Limits: a qualifier naming no package keeps the spelling on all four, where SBCL signals; a
+  single colon on an internal name interns as the double colon does on all four, where SBCL signals;
+  `t` and `nil` read ahead of any package (`.kb/packages.md`). A run-time `load`'s package directives
+  stay unprocessed (`EvalReferences.UNPROCESSED_DIRECTIVES`), so a file reads in the package current
+  when `load` runs.
+
+Pinned by ci-spec `a-run-time-read-interns-in-the-current-package` (SBCL-checked),
+`a-run-time-read-in-a-cl-user-that-uses-a-package`,
+`LispMacroExpanderTest#onlyAProgramThatCanReadUnderAnotherPackageCarriesTheReadersHome`.
+
+## A list's length costs the reader no stack
+`_readList` / `_read_list` are loops down the list, so depth is nesting, as in `LispTrees`
+(`.kb/interpreter-stack.md`). They recursed per element until 2026-11-05: `(read-from-string text)` of
+100,000 elements was a `StackOverflowError` on a JVM and 12,000 `call stack exhausted` under wasmtime,
+which the interpreter and SBCL read. An unfinished list still answers what it read with the failure
+recorded. ci-spec `runtime-read-of-a-long-list`. It moved every reader program a little (-34 B class,
+-534 B P1, on a small program).
+
 ## `read` is PRELUDE RONTOLISP, not a primitive on any backend
 One `LispPreludeLibrary` entry (`read` + the `%rd-*` family), so all four backends run one code path.
 It consumes exactly ONE datum's characters and leaves the stream after them.

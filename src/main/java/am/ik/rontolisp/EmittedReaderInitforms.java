@@ -1,6 +1,8 @@
 package am.ik.rontolisp;
 
 import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
@@ -26,6 +28,12 @@ import org.jspecify.annotations.Nullable;
  * The guard is deliberately conservative: only value shapes whose printed form is
  * guaranteed re-readable are baked as text, so this class can never introduce a silent
  * misread -- the exact invariant the emitted-reader parity work exists to protect.
+ *
+ * <p>
+ * A reader that homes its tokens in the current package ({@code %read-home}) would read a
+ * bare symbol of the text as that package's, so its text spells one with a standard
+ * qualifier, which the reader drops and takes as spelled: a symbol's canonical spelling
+ * comes back whichever package is current when the datum is read.
  */
 public final class EmittedReaderInitforms {
 
@@ -40,10 +48,11 @@ public final class EmittedReaderInitforms {
 	 * @param layout the struct layout
 	 * @param wasmLimits when true, apply the WASM runtime's narrower numeric grammar (no
 	 * bignums, i31 integers only)
+	 * @param homing whether the reader homes its tokens in the current package
 	 * @return one entry per slot: null (nil), a re-readable printed text, or
 	 * {@link #SIGNAL_MARKER} followed by the error message
 	 */
-	public static @Nullable String[] initTexts(LispLayout layout, boolean wasmLimits) {
+	public static @Nullable String[] initTexts(LispLayout layout, boolean wasmLimits, boolean homing) {
 		@Nullable String[] out = new @Nullable String[layout.slotCount()];
 		for (int i = 0; i < out.length; i++) {
 			LispVal initform = layout.initforms().get(i);
@@ -56,7 +65,7 @@ public final class EmittedReaderInitforms {
 				out[i] = null;
 			}
 			else if (isReadable(constant, wasmLimits)) {
-				out[i] = constant.print();
+				out[i] = (homing ? spelledInAnyPackage(constant) : constant).print();
 			}
 			else {
 				out[i] = SIGNAL_MARKER + "#S(" + layout.printName() + " ...): slot " + layout.slotNames().get(i)
@@ -124,6 +133,50 @@ public final class EmittedReaderInitforms {
 				yield true;
 			}
 			default -> false;
+		};
+	}
+
+	/**
+	 * A value {@link #isReadable} accepted, with each bare symbol spelled so that it
+	 * reads as itself in any package.
+	 */
+	private static LispVal spelledInAnyPackage(LispVal value) {
+		return switch (value) {
+			// cl-user's empty name prints bare, whatever its spelling: the long qualifier
+			// has an empty member to print.
+			case LispSymbol sym -> LispSymbol.CL_USER_EMPTY_NAME.equals(sym.name())
+					? new LispSymbol("COMMON-LISP-USER::")
+					: sym.name().indexOf(':') < 0 ? new LispSymbol(LispSymbol.CL_USER_EMPTY_NAME + sym.name()) : sym;
+			case LispCons list -> {
+				List<LispVal> elements = new ArrayList<>();
+				LispVal node = list;
+				while (node instanceof LispCons cell) {
+					elements.add(spelledInAnyPackage(cell.car()));
+					node = cell.cdr();
+				}
+				LispVal spelled = spelledInAnyPackage(node);
+				for (int i = elements.size() - 1; i >= 0; i--) {
+					spelled = new LispCons(elements.get(i), spelled);
+				}
+				yield spelled;
+			}
+			case LispArray array -> {
+				LispVal[] data = array.data().clone();
+				for (int i = 0; i < data.length; i++) {
+					if (data[i] != null) {
+						data[i] = spelledInAnyPackage(data[i]);
+					}
+				}
+				yield new LispArray(array.dimensions(), data, -1, false, array.elementTypeCode());
+			}
+			case LispInstance inst -> {
+				LispVal[] slots = new LispVal[inst.slotCount()];
+				for (int i = 0; i < slots.length; i++) {
+					slots[i] = spelledInAnyPackage(inst.slot(i));
+				}
+				yield new LispInstance(inst.layout(), slots);
+			}
+			default -> value;
 		};
 	}
 

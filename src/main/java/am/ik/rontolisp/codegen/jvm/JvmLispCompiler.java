@@ -1293,6 +1293,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The (setf (symbol-function 'n) ...) forwarders: no definition of their name, so
 		// out of the registry, and #'n / fboundp read the runtime function namespace.
 		Set<String> fenvForwarders = new HashSet<>(LispMacroExpander.symbolFunctionForwarderNames(program));
+		// What the run-time reader asks of the current package, where it can be another
+		// than the pristine cl-user (LispMacroExpander.injectReadHome).
+		program = LispMacroExpander.injectReadHome(program, packageResolver);
 		// The read/compile-time package table for the runtime package API (see
 		// .kb/packages.md): injected after package resolution, from the resolver's
 		// final registry, only when the program can need it at run time.
@@ -4009,6 +4012,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<JvmReadRuntimeBuilder.ReadMethod> readMethods = List.of();
 		@Nullable MethodCode structTableClinit = null;
 		if (usesRead) {
+			FunctionInfo readHome = functions.get(LispNames.READ_HOME_INTERNAL);
 			// The reader reads #S(...) and #P"..." only when an instance can exist at
 			// all (the same gate the instance machinery uses); with it on, every struct
 			// layout is interned so the runtime directory can resolve any registered
@@ -4024,7 +4028,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				}
 				pathnameLayoutField = mainCtx.layoutPool.intern(cp, className, am.ik.rontolisp.LispLayout.PATHNAME);
 				structTableClinit = JvmReadRuntimeBuilder.structTableClinit(cp, thisClass, mainCtx.layoutPool,
-						closRegistry, objectClass, objectArrayClass, stringClass);
+						closRegistry, objectClass, objectArrayClass, stringClass, readHome != null);
 			}
 			FieldRefEntry readBaseGlobal = mainCtx.globalFields.get(LispNames.READ_BASE_VAR);
 			FieldRefEntry readBaseLocal = readBaseGlobal == null || dynVarRuntime == null ? null
@@ -4035,7 +4039,9 @@ public final class JvmLispCompiler implements LispCompiler {
 						pathnameLayoutField != null ? pathnameLayoutField : null,
 						readBaseGlobal == null ? null
 								: new JvmReadRuntimeBuilder.ReadBaseVar(readBaseGlobal, readBaseLocal,
-										readBaseLocal == null ? null : Objects.requireNonNull(dynVarRuntime).dget()))
+										readBaseLocal == null ? null : Objects.requireNonNull(dynVarRuntime).dget()),
+						readHome == null ? null
+								: new JvmReadRuntimeBuilder.ReadHome(readHome.methodref(), readHome.bounceVisible()))
 				.methods();
 		}
 		final List<JvmReadRuntimeBuilder.ReadMethod> readMethodsFinal = readMethods;

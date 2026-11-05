@@ -329,6 +329,20 @@ public final class PackageResolver {
 	}
 
 	/**
+	 * Whether the registry holds a package no compile starts with: one a
+	 * {@code defpackage} of the program made.
+	 * @return {@code true} when a package is the program's own
+	 */
+	public synchronized boolean definesPackages() {
+		for (String name : this.registry.designatorTable().values()) {
+			if (!PackageRegistry.isBuiltinPackageName(name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Whether the program {@link #resolveProgram} last resolved can give a package a
 	 * nickname of its own, and so what it asks at run time may depend on them.
 	 * @return {@code true} when the last resolved program names a local nickname
@@ -3450,6 +3464,11 @@ public final class PackageResolver {
 				return canonical(pkg, qn.member()).name();
 			}
 		}
+		if ("keyword".equals(current())) {
+			// (let ((*package* (find-package :keyword))) (read-from-string "foo")): the
+			// package keeps no table, and every name in it is its keyword.
+			return ":" + name;
+		}
 		if (("T".equals(name) || "NIL".equals(name)) && currentUsesCl()) {
 			// The reader never mints PKG::T -- t and nil read as the singletons in every
 			// cl-using package -- so intern answers them too, bare, rather than the
@@ -4408,7 +4427,12 @@ public final class PackageResolver {
 		return LispNames.CL_USER_PKG.equals(current()) && clUserIsPristine();
 	}
 
-	private boolean clUserIsPristine() {
+	/**
+	 * Whether {@code cl-user} is as the registry seeded it: using only {@code cl},
+	 * importing and shadowing nothing, with no nickname of its own.
+	 * @return {@code true} when no qualified symbol can be accessible in it
+	 */
+	public synchronized boolean clUserIsPristine() {
 		LispPackage clUser = this.registry.get(LispNames.CL_USER_PKG);
 		return clUser != null && clUser.useList().equals(List.of(LispNames.CL_PKG)) && clUser.imports().isEmpty()
 				&& clUser.shadows().isEmpty() && !this.clUserNicknamed;

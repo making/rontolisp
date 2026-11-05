@@ -28,7 +28,7 @@ Symbols are read with the reader's [upcasing](../../guides/reader-case.md), iden
 
 Deviation: a value outside 2 to 36, which SBCL refuses as a type error, reads base 10. A source file reads with the variable too: the interpreter reads each form with the value the forms before it left, the compile paths with the value an `eval-when` left at compile time.
 
-A symbol is interned in the current package as it is read, as in Common Lisp: under `(let ((*package* (find-package :p))) ...)` the text `"foo"` reads as `P::FOO`, so a macro that builds a name with `read-from-string` at expansion time names a symbol of the package it expands in. Deviation: at run time, the compiled backends keep the name as read (a `cl-user` symbol), like their one-argument [`intern`](intern.md). A read during macro expansion is not affected, because the compiler expands macros in the file's package.
+A symbol is interned in the current package as it is read, as in Common Lisp: under `(let ((*package* (find-package :p))) ...)` the text `"foo"` reads as `P::FOO`, so a macro that builds a name with `read-from-string` at expansion time names a symbol of the package it expands in. A qualified token is the symbol its package reaches the name as: `"p::car"` reads as `car` where `p` uses `cl`. A `#S(...)` looks its type up the same way.
 
 
 ## The optional and keyword arguments

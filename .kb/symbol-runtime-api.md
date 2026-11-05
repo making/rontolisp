@@ -128,14 +128,15 @@ since `.todo/917` a package keeps a MEMBER table of what `intern` / `export` / `
   1-arg form to intern a CANONICAL spelling verbatim (`"PKG::MEMBER"`), which the rewrite
   would requalify. What stays package-blind: the `Environment` converter, a designator the
   pass cannot see as one (`(symbol-function 'intern)`, a symbol held in a variable -- the
-  wrapper's 1-arg branch), `eval`'d code and the compiled run-time reader. A program that
+  wrapper's 1-arg branch) and `eval`'d code. A program that
   never leaves `cl-user` is byte-identical. Cost (2026-10-31, JVM class of every
   `examples.yaml` program): 124 of 125 byte-identical; `jvm/cffi-sqlite.lisp` (alexandria's
   `symbolicate`, `(values (intern name))`, survives pruning) 2.652 -> 2.690 MB, output
   unchanged. Pinned by ci-spec `intern-of-an-internal-name-is-the-read-symbol`
   (SBCL-checked). The interpreter's
   runtime READ homes each symbol token the same way (`PackageResolver.readSpelling`,
-  `.kb/packages.md`); the compiled backends' runtime reader stays package-blind.
+  `.kb/packages.md`), and the compiled backends' reader through `%read-home`
+  (`.kb/read-load-streams.md`, "A symbol token reads in the current package").
   `(intern name
   :keyword)` builds a keyword; any other package argument goes through
   `PackageResolver.internSpellingIn`. A designator naming no package is a catchable
@@ -301,7 +302,7 @@ and nothing else tells them apart, so `cl-user`'s `||` is spelled `CL-USER::`
 - Limits: `(intern "CL-USER::")` is this symbol, as `(intern "P::X")` is `P::X` (the model's). An instance
   of a `(defstruct ||)` prints `#S( :A 1)` where SBCL prints `#S(|| :A 1)`: an instance's type name is
   printed raw on all four, `(defstruct |a b|)`'s too. A run-time read under another package answers
-  `cl-user`'s, like any token (`.todo/i45`).
+  that package's, like any token.
 - Pinned by ci-spec `the-empty-name-is-a-symbol-like-any-other`.
 
 ## A definition IS an interning: the find-symbol namespace probe

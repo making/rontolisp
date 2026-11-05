@@ -1621,10 +1621,8 @@ final class JvmExprCompiler {
 				}
 				else {
 					// Malformed text signals (expandReadFromStringFailure).
-					JvmExprCompiler.compileExpr(
-							LispMacroExpander.expandReadFromStringFailure(cons,
-									ctx.hasLandingPad && ctx.mayUseInstances, ctx.functions::containsKey),
-							ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReadFromStringFailure(cons,
+							ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
 				}
 			}
 			case LispNames.READ_FROM_STRING_RAW_INTERNAL -> JvmReadFromStringCompiler.compile(cons, ctx, className);
