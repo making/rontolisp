@@ -185,26 +185,40 @@ class LispMacroExpanderTest {
 		assertThat(LispMacroExpander
 			.needsSignalClauseMatch(LispReader.readAllFromString("(handler-case (print '(signal x)) (error (e) 1))")))
 			.isFalse();
-		// A warn asks where a handler-case clause can hold the warning, or where its
-		// datum may be no warning: a control string or a standard warning under a clause
-		// of the error family, or ignore-errors, keeps the plain write.
+		// A warn asks where a handler-case clause can hold the warning. Only a warning
+		// reaches the signal, so a clause of the error family, or ignore-errors, keeps
+		// the
+		// plain write whatever the datum.
 		for (String holding : List.of("(warn \"w\") (handler-case (f) (warning () 1))",
 				"(funcall #'warn \"w\") (handler-case (f) (condition () 1))",
 				"(warn \"w\") (handler-case (f) (my-error () 1))", "(warn \"w\") (handler-case (f) (t () 1))",
 				"(warn \"w\") (handler-case (f) ((or error warning) () 1))",
-				"(eval '(warn \"w\")) (handler-case (f) (warning () 1))", "(warn x) (handler-case (f) (error () 1))",
-				"(warn 'simple-error) (ignore-errors (f))", "(funcall #'warn x) (ignore-errors (f))",
-				"(eval x) (handler-case (f) (error () 1))")) {
+				"(eval '(warn \"w\")) (handler-case (f) (warning () 1))", "(eval x) (handler-case (f) (error () 1))")) {
 			assertThat(LispMacroExpander.needsSignalClauseMatch(LispReader.readAllFromString(holding))).as(holding)
 				.isTrue();
 		}
 		for (String declining : List.of("(warn \"w\")", "(warn x)", "(warn \"w\") (handler-case (f) (error () 1))",
-				"(warn 'style-warning) (handler-case (f) (error () 1))",
+				"(warn x) (handler-case (f) (error () 1))", "(warn 'simple-error) (ignore-errors (f))",
+				"(funcall #'warn x) (ignore-errors (f))", "(warn 'style-warning) (handler-case (f) (error () 1))",
 				"(warn (make-condition 'simple-warning)) (ignore-errors (f))",
 				"(warn \"w\") (handler-case (f) (type-error () 1) ((or error serious-condition) () 2))",
 				"(warn \"w\") (ignore-errors (f))", "(warn \"w\") (handler-case (f) (:no-error (v) v))",
 				"(handler-case (f) (warning () 1))", "(handler-case (print '(warn x)) (warning () 1))")) {
 			assertThat(LispMacroExpander.needsSignalClauseMatch(LispReader.readAllFromString(declining))).as(declining)
+				.isFalse();
+		}
+		// What the wasm-GC layout scan takes for the type-error of a warn.
+		ClosRegistry registry = new ClosRegistry();
+		for (String typeError : List.of("(warn x)", "(warn 'simple-error)", "(warn (make-condition 'simple-error))",
+				"(funcall #'warn \"w\")", "(funcall 'warn \"w\")")) {
+			assertThat(LispMacroExpander.warnCanSignalTypeError(LispReader.readAllFromString(typeError), registry))
+				.as(typeError)
+				.isTrue();
+		}
+		for (String warning : List.of("(warn \"w\")", "(warn 'style-warning)",
+				"(warn (make-condition 'simple-warning))", "(print '(warn x))")) {
+			assertThat(LispMacroExpander.warnCanSignalTypeError(LispReader.readAllFromString(warning), registry))
+				.as(warning)
 				.isFalse();
 		}
 	}

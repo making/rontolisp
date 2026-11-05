@@ -179,6 +179,9 @@ public final class ClosRegistry {
 	 */
 	public static final String ASH_COUNT_TOO_LARGE_MESSAGE_PREFIX = "ASH: shift count too large: ";
 
+	/** The class every datum {@code warn} signals descends from. */
+	public static final String WARNING_CLASS_NAME = "WARNING";
+
 	/**
 	 * The warning class a compile never fails on: a macro-time {@code warn} of one is
 	 * reported and not counted by {@code --warnings-as-errors}, as SBCL's

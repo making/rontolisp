@@ -13888,6 +13888,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (symbols.contains(LispNames.CHECK_TYPE)) {
 			used.add(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-TYPE-ERROR");
 		}
+		// So does a warn of something other than a warning its type-error.
+		if (LispMacroExpander.warnCanSignalTypeError(program, closRegistry)) {
+			used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.TYPE_ERROR_CLASS_NAME);
+		}
 		// #'aref / #'array-row-major-index construct a type-error instance in
 		// the FUNCTION-VALUE wrapper's fold (BuiltinFunctionWrappers's row-major fold),
 		// never in ordinary call position -- whose own bound check is a separate bare

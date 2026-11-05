@@ -35748,6 +35748,73 @@ cases:
       "WARNING: counted
       "
       1
+  - name: warn-of-what-is-no-warning-is-a-type-error
+    source: |
+      (define-condition ci-wnw-e (error) ())
+      (define-condition ci-wnw-c (condition) ())
+      (define-condition ci-wnw-mixin (condition) ())
+      (define-condition ci-wnw-w (ci-wnw-mixin warning) ((x :initarg :x :reader ci-wnw-x)))
+      (defclass ci-wnw-no () ())
+      (defun ci-wnw-id (x) x)
+      (defvar *ci-wnw-n* 0)
+      (print (handler-case (warn 'simple-error :format-control "e") (type-error () 'te) (error () 'err)))
+      (print (handler-case (warn 'ci-wnw-e)
+               (type-error (c) (list (type-error-datum c) (type-error-expected-type c)))))
+      (print (handler-case (warn 'ci-wnw-c) (error (c) (princ-to-string c))))
+      (print (handler-case (warn 'ci-wnw-no) (type-error (c) (type-error-datum c))))
+      (print (handler-case (warn 'ci-wnw-e :x (incf *ci-wnw-n*)) (type-error () *ci-wnw-n*)))
+      (print (handler-case (warn (make-condition 'ci-wnw-e))
+               (type-error (c) (list (type-of (type-error-datum c)) (type-error-expected-type c)))))
+      (print (handler-case (warn (ci-wnw-id (make-condition 'ci-wnw-c)))
+               (type-error (c) (list (type-of (type-error-datum c)) (type-error-expected-type c)))))
+      (print (handler-case (warn (ci-wnw-id 5)) (error (c) (princ-to-string c))))
+      (print (handler-case (warn (ci-wnw-id (make-instance 'ci-wnw-no))) (type-error () 'te)))
+      (print (handler-case (warn 'ci-wnw-w :x 1) (warning (c) (ci-wnw-x c))))
+      (print (handler-case (warn (ci-wnw-id (make-condition 'ci-wnw-w :x 2))) (ci-wnw-mixin (c) (ci-wnw-x c))))
+      (print (handler-case (progn (warn (ci-wnw-id (make-condition 'ci-wnw-e))) 'written) (error () 'err)))
+      (print (with-output-to-string (*error-output*)
+               (handler-case (warn (ci-wnw-id (make-condition 'simple-warning :format-control "w"))) (error () nil))))
+      (print (ignore-errors (warn 'ci-wnw-e) 'written))
+      (print (ignore-errors (warn (ci-wnw-id 5)) 'written))
+      (print (handler-case
+                 (handler-bind ((type-error (lambda (c)
+                                              (declare (ignorable c))
+                                              (print (find-restart 'muffle-warning)))))
+                   (warn 'ci-wnw-e))
+               (type-error () 'te)))
+      (print (handler-case
+                 (handler-bind ((type-error (lambda (c)
+                                              (declare (ignorable c))
+                                              (print (find-restart 'muffle-warning)))))
+                   (warn (ci-wnw-id 5)))
+               (type-error () 'te)))
+      (print (handler-bind ((warning (lambda (c) (declare (ignorable c)) (muffle-warning))))
+               (warn (ci-wnw-id (make-condition 'ci-wnw-w)))
+               'muffled))
+      (print (stringp (with-output-to-string (*error-output*) (warn (ci-wnw-id (lambda (s) s))))))
+    expected: |
+      TE
+      (CI-WNW-E WARNING)
+      "The value CI-WNW-C is not of type WARNING"
+      CI-WNW-NO
+      1
+      (CI-WNW-E WARNING)
+      (CI-WNW-C WARNING)
+      "The value 5 is not of type WARNING"
+      TE
+      1
+      2
+      ERR
+      "WARNING: w
+      "
+      NIL
+      NIL
+      NIL
+      TE
+      NIL
+      TE
+      MUFFLED
+      T
   - name: iteration-bodies-are-implicit-tagbodies
     source: |
       (let ((acc nil))
