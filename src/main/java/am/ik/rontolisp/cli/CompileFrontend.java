@@ -5,6 +5,7 @@ import java.util.Objects;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
+import am.ik.rontolisp.compiler.EvalReferences;
 import am.ik.rontolisp.compiler.CurrentPackageIntern;
 import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.JavaClassLookup;
@@ -841,13 +842,14 @@ final class CompileFrontend {
 		// A one-argument intern / find-symbol of the user program reads *package*
 		// (CurrentPackageIntern): right after user-macro expansion, before any library
 		// splice, whose own one-argument interns take a canonical spelling verbatim.
-		List<LispVal> languages = InflateLibrary
-			.process(
-					ClojureLibrary.process(SchemeLibrary.process(
-							CurrentPackageIntern
-								.rewrite(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded), programHead)),
-							features, input.standards()), !wasm, input.lowersAtRunTime(), input.linked()),
-					witBackend);
+		// What the forms a compiled eval runs can reach, ahead of the splices: a
+		// wrapper's
+		// body reaches the prelude. Not on --no-gc, which has no eval runtime.
+		List<LispVal> expanded = CurrentPackageIntern
+			.rewrite(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded), programHead));
+		List<LispVal> languages = InflateLibrary.process(ClojureLibrary.process(
+				SchemeLibrary.process(noGc ? expanded : EvalReferences.process(expanded), features, input.standards()),
+				!wasm, input.lowersAtRunTime(), input.linked()), witBackend);
 		List<LispVal> macos = ObjcLibrary
 			.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
 				.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary.process(

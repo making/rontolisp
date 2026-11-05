@@ -1148,6 +1148,32 @@ final class JvmReadRuntimeBuilder {
 		a.iload(1);
 		a.invokevirtual(this.stringSubstring);
 		a.astore(2);
+		// keyword:foo and keyword::foo are :foo: the rest of the token from its last
+		// colon
+		MethodCode.Label notKeyword = a.newLabel();
+		MethodCode.Label singleColon = a.newLabel();
+		a.aload(2);
+		ldc(a, "KEYWORD");
+		a.invokevirtual(this.objectEquals);
+		a.ifeq(notKeyword);
+		a.aload(0);
+		a.iload(1);
+		a.loadConstant(1);
+		a.iadd();
+		a.invokevirtual(this.stringSubstringFrom);
+		a.astore(2);
+		a.aload(2);
+		ldc(a, ":");
+		a.invokevirtual(this.stringStartsWith);
+		a.ifeq(singleColon);
+		a.aload(2);
+		a.areturn();
+		a.labelBinding(singleColon);
+		a.aload(0);
+		a.iload(1);
+		a.invokevirtual(this.stringSubstringFrom);
+		a.areturn();
+		a.labelBinding(notKeyword);
 		for (String pkg : List.of("CL", "COMMON-LISP", "CL-USER", "COMMON-LISP-USER")) {
 			a.aload(2);
 			ldc(a, pkg);

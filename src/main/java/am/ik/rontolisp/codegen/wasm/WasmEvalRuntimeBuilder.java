@@ -6,9 +6,11 @@ import java.util.List;
 import java.util.Map;
 
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.compiler.EvalReferences;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Builds the WASM bytecode for the runtime {@code eval} interpreter and its supporting
@@ -199,10 +201,11 @@ final class WasmEvalRuntimeBuilder {
 	/**
 	 * Emits code that resolves a function name offset against the function namespace and
 	 * returns the function value: a runtime {@code defun} binding in {@code $fenv} first,
-	 * then the compiled registry (wrapped as a closure {@code {funcId, null}}), and nil
-	 * when undefined. Every path ends in {@code return}.
+	 * then the compiled registry (wrapped as a closure {@code {funcId, null}});
+	 * {@code _apply}'s symbol probe reports an undefined name, or a retired one. Every
+	 * path ends in {@code return}.
 	 */
-	private static void emitFunctionLookupReturn(WasmWriter w, int offSlot, int tmpSlot, int addrSlot,
+	private static void emitFunctionLookupReturn(WasmWriter w, int nameSlot, int offSlot, int tmpSlot, int addrSlot,
 			boolean identityHash, int funcrefFuncIndex) {
 		// runtime defun binding in $fenv?
 		getLocal(w, offSlot);
@@ -215,6 +218,13 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
 		emitCdrOf(w, tmpSlot);
+		setLocal(w, tmpSlot);
+		getLocal(w, tmpSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		emitUndefinedOperatorReturn(w, nameSlot);
+		w.write(Instruction.END);
+		getLocal(w, tmpSlot);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// compiled registry?
@@ -241,8 +251,7 @@ final class WasmEvalRuntimeBuilder {
 		}
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		emitNull(w);
-		w.write(Instruction.RETURN);
+		emitUndefinedOperatorReturn(w, nameSlot);
 	}
 
 	/**
@@ -649,10 +658,13 @@ final class WasmEvalRuntimeBuilder {
 	 * @param funcrefFuncIndex the function index of {@code _funcref}, the canonical box a
 	 * registry hit answers through, or -1 when this module carries none: then the hit
 	 * boxes fresh per resolution, as it always did
+	 * @param unbound what a read of an unbound variable throws, or null outside EH mode,
+	 * where it traps: nothing could catch it
 	 * @return the encoded function body
 	 */
 	static byte[] buildEvalBody(SpecialFormOffsets off, CountChecks counts, int globalAccessIndex,
-			java.util.List<String> fenvForwarders, boolean identityHash, int funcrefFuncIndex) {
+			java.util.List<String> fenvForwarders, boolean identityHash, int funcrefFuncIndex,
+			WasmRuntimeBuilder.@Nullable UnboundVariableReport unbound) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -676,19 +688,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// --- 2. integers (i31 / boxed i64 / limb), ratios, floats and closures are
-		// self-evaluating ---
-		for (int heapType : new int[] { Type.I31.code(), WasmLispCompiler.TYPE_BIGNUM, WasmLispCompiler.TYPE_BIGINT,
-				WasmLispCompiler.TYPE_RATIO, WasmLispCompiler.TYPE_FLOAT, WasmLispCompiler.TYPE_CLOSURE }) {
-			getLocal(w, VAL);
-			refTest(w, heapType);
-			w.write(Instruction.IF, 0x40);
-			getLocal(w, VAL);
-			w.write(Instruction.RETURN);
-			w.write(Instruction.END);
-		}
-
-		// --- 3. strings: string literal (self-eval) or symbol (variable reference) ---
+		// --- 2. strings: string literal (self-eval) or symbol (variable reference) ---
 		getLocal(w, VAL);
 		refTest(w, WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.IF, 0x40);
@@ -722,7 +722,8 @@ final class WasmEvalRuntimeBuilder {
 		// never the mirror, which no binding's restore touches; REST holds the miss
 		// sentinel, a fresh cons nothing else can hold. Then the global environment.
 		// Lisp-2: a bare symbol resolves the variable namespace only, never the
-		// function registry. An unbound symbol evaluates to itself.
+		// function registry. t and a keyword are their own value; any other unbound
+		// symbol signals the unbound-variable.
 		if (globalAccessIndex >= 0) {
 			emitNull(w);
 			emitNull(w);
@@ -747,9 +748,35 @@ final class WasmEvalRuntimeBuilder {
 			w.write(Instruction.END);
 		}
 		emitGlobalLookupReturn(w, OFF, TMP);
+		getLocal(w, OFF);
+		i32(w, off.of("T"));
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
 		getLocal(w, VAL);
 		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		strByteAt(w, VAL, () -> i32(w, 0));
+		i32(w, ':');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, VAL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		if (unbound != null) {
+			unbound.emitThrow(w, VAL, TMP);
+		}
+		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END); // end string-if
+
+		// --- 3. anything but a cons is its own value: a number, a character, an array,
+		// a hash table, a stream, a function, an instance ---
+		getLocal(w, VAL);
+		refTest(w, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, VAL);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 
 		// --- 4. cons: special form or application ---
 		emitCarOf(w, VAL);
@@ -774,6 +801,13 @@ final class WasmEvalRuntimeBuilder {
 		emitCarOf(w, REST);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
+
+		for (String directive : EvalReferences.UNPROCESSED_DIRECTIVES) {
+			openSpecial(w, OFF, off.of(directive));
+			emitNull(w);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+		}
 
 		// ---- if ----
 		openSpecial(w, OFF, off.of(LispNames.IF));
@@ -894,7 +928,7 @@ final class WasmEvalRuntimeBuilder {
 		refCast(w, WasmLispCompiler.TYPE_STRING);
 		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
 		setLocal(w, IDX);
-		emitFunctionLookupReturn(w, IDX, TMP, ADDR, identityHash, funcrefFuncIndex);
+		emitFunctionLookupReturn(w, ACC, IDX, TMP, ADDR, identityHash, funcrefFuncIndex);
 		w.write(Instruction.END);
 		// non-symbol designator (a lambda form): evaluate it
 		getLocal(w, ACC);
@@ -915,7 +949,7 @@ final class WasmEvalRuntimeBuilder {
 		refCast(w, WasmLispCompiler.TYPE_STRING);
 		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
 		setLocal(w, IDX);
-		emitFunctionLookupReturn(w, IDX, TMP, ADDR, identityHash, funcrefFuncIndex);
+		emitFunctionLookupReturn(w, ACC, IDX, TMP, ADDR, identityHash, funcrefFuncIndex);
 		w.write(Instruction.END);
 		emitNull(w);
 		w.write(Instruction.RETURN);
@@ -1433,8 +1467,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// A name only (setf (symbol-function 'n) ...) binds, before the setf ran: its
-		// forwarder defun is in no registry, so the probes below would miss into the
-		// unknown operator's nil.
+		// forwarder defun is in no registry, and it is undefined until then.
 		for (String forwarded : fenvForwarders) {
 			getLocal(w, OFF);
 			i32(w, off.of(forwarded));
@@ -1470,9 +1503,9 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.END);
 		// (c) car/cdr composition such as cadr (operator matches c[ad]+r)
 		emitCarCdrComposition(w, OP, LEN, REST, ENV, ACC, IDX, CH, ARITY);
-		// (d) unknown operator
-		emitNull(w);
-		w.write(Instruction.RETURN);
+		// (d) An operator no namespace answers: _apply's symbol probe reports it by name,
+		// before any argument is evaluated.
+		emitUndefinedOperatorReturn(w, OP);
 
 		w.write(Instruction.ELSE);
 		// operator is not a symbol (e.g. an inline lambda): evaluate it to a function

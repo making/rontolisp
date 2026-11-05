@@ -8501,7 +8501,18 @@ public final class LispEvaluator {
 	 * @return the result
 	 */
 	private LispVal evalDatum(LispVal datum) {
-		return evalResolved(this.packageResolver.resolveDatum(datum));
+		LispVal resolved;
+		try {
+			resolved = this.packageResolver.resolveDatum(datum);
+		}
+		catch (LispPackageException ex) {
+			// A symbol read at run time naming no package: this runs under the caller's
+			// handlers, so it is the condition CL names, never the end of the program.
+			String message = String.valueOf(ex.getMessage());
+			return signalPackageError(message,
+					message.startsWith(NO_SUCH_PACKAGE) ? message.substring(NO_SUCH_PACKAGE.length()) : "");
+		}
+		return evalResolved(resolved);
 	}
 
 	/**
@@ -14004,6 +14015,8 @@ public final class LispEvaluator {
 	private LispVal signalNoSuchPackage(String operator, String designator) {
 		return signalPackageError(operator + ": no such package: " + designator, designator);
 	}
+
+	private static final String NO_SUCH_PACKAGE = "No such package: ";
 
 	private LispVal signalPackageError(String message, String designator) {
 		return eval(packageErrorForm(message, designator, false), this.globalEnv);

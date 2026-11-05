@@ -16,7 +16,7 @@ nesting `#|...|#`.
   unescaped, terminators inside bars and all, so what `prin1` prints reads back. `_readAtom` hands it to
   `_rdEscaped`; `_rd_token` leaves its name at the end of the token, so `_read_expr` tells it from
   one with no escape by where it starts. A text ending inside one records end-of-file. Both read it past
-  the standard qualifier drop and `|NIL|` is nil. Until 2026-11-05 the bar and the backslash were
+  the standard qualifier drop (`keyword:foo` and `keyword::foo` narrow to `:foo`, in `LispReader` too) and `|NIL|` is nil. Until 2026-11-05 the bar and the backslash were
   constituents: `(read-from-string "|a b|")` answered the symbol `|\|A|`. Limit, the model's: `|a:b|` is
   spelled as `a:b` is. ci-spec `the-empty-name-is-a-symbol-like-any-other`.
 - Unclaimed tokens fall to the atom path like `readSymbol`: `#foo` -> `#FOO`, `#16r1f` -> a symbol.

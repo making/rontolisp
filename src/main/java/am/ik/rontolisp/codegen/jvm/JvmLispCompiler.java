@@ -3873,8 +3873,6 @@ public final class JvmLispCompiler implements LispCompiler {
 				.invoke(invoke)
 				.invokeSpread(invokeSpread)
 				.functions(functions)
-				.complexValues(usesComplex)
-				.hasComplexField(hasComplexField != null ? hasComplexField : null)
 				// _arityChk comes with _apply (reportsCount below), and only then does
 				// the
 				// runtime reference it

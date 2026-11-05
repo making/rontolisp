@@ -42,6 +42,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.AstOutliner;
 import am.ik.rontolisp.compiler.DeadTypeBranchPruner;
+import am.ik.rontolisp.compiler.EvalReferences;
 import am.ik.rontolisp.compiler.ToplevelStatements;
 import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
@@ -6586,6 +6587,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		else {
 			funcrefBody = new byte[0];
 		}
+		// What _eval, _symbol_value and _unbound_variable throw for an unbound name: EH
+		// mode only, like the dispatchers' report, the typed unbound-variable where
+		// usedLayoutTags baked it.
+		final WasmRuntimeBuilder.@Nullable UnboundVariableReport unboundReport = ehMode
+				? new WasmRuntimeBuilder.UnboundVariableReport(stringTable,
+						this.usesInstances ? conditionInstance(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, closRegistry,
+								layoutAddresses) : null,
+						slotIndex(closRegistry, ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, "NAME"),
+						this.usesIdentityHashTables)
+				: null;
 		List<Integer> lambdaListKeywordOffsets = new ArrayList<>();
 		if (usesEval) {
 			for (String keyword : ClConstants.LAMBDA_LIST_KEYWORD_NAMES) {
@@ -6632,6 +6643,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.POP)
 				.add(stringTable, LispNames.FUNCTION)
 				.add(stringTable, LispNames.SYMBOL_FUNCTION);
+			for (String directive : EvalReferences.UNPROCESSED_DIRECTIVES) {
+				offsetsBuilder.add(stringTable, directive);
+			}
 			List<String> evalForwarders = new ArrayList<>(fenvForwarders);
 			java.util.Collections.sort(evalForwarders);
 			for (String forwarded : evalForwarders) {
@@ -6660,7 +6674,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupBody();
 			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets, counts,
 					evalRunsForms ? globalAccessIndex(functions) : -1, evalForwarders, this.usesIdentityHashTables,
-					symfuncrefFuncIndex());
+					symfuncrefFuncIndex(), unboundReport);
 			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets, this.usesIdentityHashTables);
 		}
 		else {
@@ -6821,16 +6835,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] makeSymbolBody = WasmSymbolApiRuntimeBuilder.buildMakeSymbol();
 		final byte[] internSymBody = WasmSymbolApiRuntimeBuilder.buildInternSym(internNilOffset, internEmptyNameOffset);
 		final byte[] boundpBody = WasmSymbolApiRuntimeBuilder.buildBoundp(symbolTOffset);
-		// What _symbol_value and _unbound_variable throw for an unbound name: EH mode
-		// only, like the dispatchers' report, the typed unbound-variable where
-		// usedLayoutTags baked it.
-		final WasmRuntimeBuilder.@Nullable UnboundVariableReport unboundReport = ehMode
-				? new WasmRuntimeBuilder.UnboundVariableReport(stringTable,
-						this.usesInstances ? conditionInstance(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, closRegistry,
-								layoutAddresses) : null,
-						slotIndex(closRegistry, ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, "NAME"),
-						this.usesIdentityHashTables)
-				: null;
 		final byte[] symbolValueBody = WasmSymbolApiRuntimeBuilder.buildSymbolValue(symbolTOffset, unboundReport);
 		final byte[] unboundVariableBody = this.emitsUnboundVariable
 				? WasmRuntimeBuilder.buildUnboundVariableBody(Objects.requireNonNull(unboundReport)) : new byte[0];

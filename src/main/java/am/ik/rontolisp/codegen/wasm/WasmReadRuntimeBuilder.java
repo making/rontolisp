@@ -1229,9 +1229,36 @@ final class WasmReadRuntimeBuilder {
 	 * qualifier reads it: the printer spells {@code COMMON-LISP:CAR} where the package
 	 * reads {@code CAR} as another. Narrows the token (START, LEN) past one of the four
 	 * qualifiers and its colons. Every byte compared before a length check is a
-	 * constituent of the matched run, so a match stays inside the token.
+	 * constituent of the matched run, so a match stays inside the token. A
+	 * {@code keyword:} qualifier narrows to the token's last colon, the keyword it names.
 	 */
 	private static void emitDropStandardQualifier(WasmWriter w, int START, int LEN, int MATCHED, int AT) {
+		getLocal(w, LEN);
+		i32(w, "KEYWORD:".length());
+		w.write(Instruction.I32_GT_S);
+		ifVoid(w);
+		emitTokenMatches(w, START, "KEYWORD:");
+		ifVoid(w);
+		// MATCHED = 7, or 8 past a second colon
+		getLocal(w, START);
+		i32(w, "KEYWORD:".length());
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, ':');
+		w.write(Instruction.I32_EQ);
+		i32(w, "KEYWORD".length());
+		w.write(Instruction.I32_ADD);
+		setLocal(w, MATCHED);
+		getLocal(w, LEN);
+		getLocal(w, MATCHED);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, LEN);
+		getLocal(w, START);
+		getLocal(w, MATCHED);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, START);
+		end(w);
+		end(w);
 		i32(w, 0);
 		setLocal(w, MATCHED);
 		getLocal(w, LEN);

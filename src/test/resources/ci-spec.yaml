@@ -32644,11 +32644,84 @@ cases:
       (print (eval '((lambda (a b) (- a b)) 10 3)))
     expected: |
       7
-  - name: eval-unbound-symbol-self-evaluates
+  - name: eval-signals-an-unbound-variable-and-an-undefined-function
     source: |
-      (print (eval ':foo))
+      (defun ev-report (form)
+        (handler-case (eval form)
+          (unbound-variable (c) (list :unbound (cell-error-name c) (princ-to-string c)))
+          (undefined-function (c) (list :undefined (cell-error-name c) (princ-to-string c)))))
+      (print (ev-report 'ev-no-such-var))
+      (print (ev-report '(+ 1 ev-no-such-var)))
+      (print (ev-report '(funcall (lambda () ev-no-such-var))))
+      (print (let ((ev-lexical 5)) (list ev-lexical (ev-report 'ev-lexical))))
+      (print (ev-report '(ev-no-such-fn (print :not-evaluated))))
+      (print (ev-report '#'ev-no-such-fn))
+      (print (ev-report '(symbol-function 'ev-no-such-fn)))
+      (defun ev-retired () 1)
+      (print (funcall (eval '#'ev-retired)))
+      (fmakunbound 'ev-retired)
+      (print (ev-report '#'ev-retired))
+      (print (list (eval ':foo) (eval t) (eval 't) (eval nil)))
+      (print (progn (eval '(setq ev-later 3)) (ev-report 'ev-later)))
+      (print (list 'keyword::ev-foo 'keyword:ev-foo (eq 'keyword::ev-foo :ev-foo)))
+      (print (list (read-from-string "keyword::ev-foo") (read-from-string "keyword:ev-foo")
+                   (eq (read-from-string "keyword::ev-foo") :ev-foo)))
+      (print (handler-case (eval (read-from-string "ev-no-such-package:bar")) (error () :caught)))
+      (defmacro ev-both (form) `(list ',form ,form))
+      (print (ev-both (eval (read-from-string "1"))))
     expected: |
-      :FOO
+      (:UNBOUND EV-NO-SUCH-VAR "The variable EV-NO-SUCH-VAR is unbound")
+      (:UNBOUND EV-NO-SUCH-VAR "The variable EV-NO-SUCH-VAR is unbound")
+      (:UNBOUND EV-NO-SUCH-VAR "The variable EV-NO-SUCH-VAR is unbound")
+      (5 (:UNBOUND EV-LEXICAL "The variable EV-LEXICAL is unbound"))
+      (:UNDEFINED EV-NO-SUCH-FN "The function EV-NO-SUCH-FN is undefined")
+      (:UNDEFINED EV-NO-SUCH-FN "The function EV-NO-SUCH-FN is undefined")
+      (:UNDEFINED EV-NO-SUCH-FN "The function EV-NO-SUCH-FN is undefined")
+      1
+      (:UNDEFINED EV-RETIRED "The function EV-RETIRED is undefined")
+      (:FOO T T NIL)
+      3
+      (:EV-FOO :EV-FOO T)
+      (:EV-FOO :EV-FOO T)
+      :CAUGHT
+      ((EVAL (READ-FROM-STRING "1")) 1)
+  - name: eval-answers-a-value-that-is-no-form
+    source: |
+      ;; Everything but a symbol and a cons is its own value, whatever its representation.
+      (defstruct ev-point x)
+      (print (eval (vector 1 2)))
+      (print (eval (vector)))
+      (print (eval #\A))
+      (print (characterp (eval #\A)))
+      (print (eval "str"))
+      (print (eval (make-array '(2 2) :initial-element 0)))
+      (print (eval (make-array 3 :element-type 'bit :initial-element 1)))
+      (print (hash-table-p (eval (make-hash-table))))
+      (print (ev-point-x (eval (make-ev-point :x 1))))
+      (print (functionp (eval #'car)))
+      (print (list (eval 1) (eval 1.5) (eval 1/2) (eval 123456789012345678901234567890) (eval (complex 1 2))))
+      (print (streamp (eval (make-string-output-stream))))
+      (print (eval '(eq #\A #\A)))
+      (print (eval (list 'eq (list 'code-char 65) #\A)))
+      (print (eval (list 'length (vector 1 2))))
+      (print (eval '(let ((v #(1 2))) (length v))))
+    expected: |
+      #(1 2)
+      #()
+      #\A
+      T
+      "str"
+      #2A((0 0) (0 0))
+      #*111
+      T
+      1
+      T
+      (1 1.5 1/2 123456789012345678901234567890 #C(1 2))
+      T
+      T
+      T
+      2
+      2
   - name: eval-cond
     source: |
       (print (eval '(cond ((= 1 2) 10) ((= 1 1) 20) (t 30))))
@@ -34022,6 +34095,66 @@ cases:
       (|| || T "" COMMON-LISP-USER::||)
       (ENS-P::|| NIL)
 standalone:
+  - name: eval-reaches-a-gated-operator-its-forms-spell
+    source: |
+      ;; Standalone: the corpus reads forms at run time, which references them all.
+      (defstruct ev-point x)
+      (print (eval '(typep 1 'integer)))
+      (print (eval '(typep 1 'string)))
+      (print (eval '(typep (make-ev-point :x 1) 'ev-point)))
+      (print (eval (list 'typep 1 ''integer)))
+      (print (eval `(typep ,(+ 1 1) 'fixnum)))
+      (print (eval '(subtypep 'integer 'number)))
+      (print (eval '(coerce 1 'float)))
+      (print (eval '(aref (vector 1 2) 0)))
+      (print (eval '(format nil "~a" 1)))
+      (print (eval '(concatenate 'string "a" "b")))
+      (print (eval '(sqrt 4)))
+      (print (eval '(let ((x 1)) (if (typep x 'integer) (coerce x 'float) nil))))
+      (print (handler-case (eval '(no-such-fn (typep 1 'integer))) (undefined-function (c) (cell-error-name c))))
+    stdout: |
+      T
+      NIL
+      T
+      T
+      T
+      T
+      1.0
+      1
+      "1"
+      "ab"
+      2.0
+      1.0
+      NO-SUCH-FN
+  - name: eval-reaches-every-standard-name-from-a-form-read-at-run-time
+    source: |
+      ;; Standalone: no gate can see what these forms name.
+      (defun rd (s) (eval (read-from-string s)))
+      (print (rd "(typep 1 'integer)"))
+      (print (rd "(coerce 1 'float)"))
+      (print (rd "(subtypep 'integer 'number)"))
+      (print (rd "(aref (vector 1 2) 0)"))
+      (print (rd "(format nil \"~a\" 1)"))
+      (print (rd "(sqrt 4)"))
+      (print (rd "pi"))
+      (print (rd "*print-base*"))
+      (print (rd "*read-eval*"))
+      (print (rd "*package*"))
+      (print (handler-case (rd "ev-no-such-var") (unbound-variable (c) (cell-error-name c))))
+      (print (handler-case (rd "(no-such-fn)") (undefined-function (c) (cell-error-name c))))
+    stdout: |
+      T
+      1.0
+      T
+      1
+      "1"
+      2.0
+      3.141592653589793
+      10
+      T
+      :CL-USER
+      EV-NO-SUCH-VAR
+      NO-SUCH-FN
   - name: a-standard-condition-a-program-signals-reports-with-no-control
     source: |
       ;; Standalone: the corpus's computed datums turn off the narrowing that decides,

@@ -737,10 +737,10 @@ final class CompileTimePathnameFolder {
 	 * fold time and the resulting form reduced, so the nested
 	 * {@code asdf:component-pathname} / {@code asdf:find-system} calls fold exactly as
 	 * they do unwrapped. Any other shape -- a computed string, a non-read-from-string
-	 * argument, an uninterruptible eval -- is returned null so the form is left alone:
-	 * the runtime {@code eval} of a reader-built form is not available on the compile
-	 * backends, and this pass must never answer a different value than the interpreter.
-	 *
+	 * argument, an uninterruptible eval, a form that answers no path -- is returned null
+	 * so the form is left alone: the runtime {@code eval} answers it, and this pass runs
+	 * ahead of macro expansion, so the form may be a macro's data
+	 * ({@code `(list ',form ,form)}).
 	 */
 	private static @Nullable LispVal reduceEval(List<LispVal> args, Map<String, AsdfSystems.LispSystem> systems,
 			Map<String, LispVal> parameters, Map<String, LispVal> locals, boolean loadPath) {
@@ -763,7 +763,10 @@ final class CompileTimePathnameFolder {
 					&& LispNames.QUOTE.equals(head.name())) {
 				return null;
 			}
-			return reduce(parsed, systems, parameters, locals, loadPath);
+			LispVal reduced = reduce(parsed, systems, parameters, locals, loadPath);
+			return reduced instanceof LispString
+					|| (reduced instanceof LispInstance inst && inst.layout().kind() == LispLayout.Kind.PATHNAME)
+							? reduced : null;
 		}
 		catch (RuntimeException ex) {
 			return null;

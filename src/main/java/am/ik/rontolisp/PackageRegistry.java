@@ -2118,6 +2118,18 @@ public final class PackageRegistry {
 	}
 
 	/**
+	 * The variables the standard defines for a program, for a compile path that has to
+	 * seed them all: the {@code cl} variables without the REPL's {@code *}, {@code +} and
+	 * {@code /} families, which only the listener binds.
+	 * @return the variable names
+	 */
+	public static Set<String> standardVariableNames() {
+		Set<String> names = new HashSet<>(CL_VARIABLES);
+		LispNames.REPL_VARIABLES.forEach(names::remove);
+		return names;
+	}
+
+	/**
 	 * Returns whether the {@code cl} package ANSWERS for the given name -- the question
 	 * {@code find-symbol} / {@code intern} / {@code do-external-symbols} ask, which is
 	 * wider than {@link #isClSymbol}: it also admits the standard names the package
