@@ -278,8 +278,8 @@ pass. Lite, one portable shape each: `:element-type` defaults to `'character` an
 to `:utf-8` (part 2's `*default-stream-element-type*` / `*default-encoding*` / `*utf-8-external-format*`
 are those values, real); `:if-exists` defaults to `:supersede` and `concatenate-files`
 spells it (upstream's `:error` / `:rename-and-delete` have no surface -- the
-lowering refuses `:error` loudly); `slurp-stream-forms` reads with `read`
-(no `read-preserving-whitespace` exists); `safe-read-from-string` reads
+lowering refuses `:error` loudly); `slurp-stream-forms` reads with `read`,
+as a slurp keeps no positions; `safe-read-from-string` reads
 through `with-input-from-string` + `read` (compile-path `read-from-string`
 takes one argument) and answers the object only; `call-with-output` over a
 string appends through its fill pointer when the function returns;

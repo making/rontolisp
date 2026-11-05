@@ -20877,7 +20877,7 @@ cases:
       :SIGNALED
       (TYPE-ERROR ERROR)
       (T T T FCM-NODE STRING)
-      #<STANDARD-CLASS :NAME INTEGER :DIRECT-SUPERCLASSES NIL :DIRECT-SLOTS NIL :EFFECTIVE-SLOTS NIL :FINALIZED-P T>
+      #<BUILT-IN-CLASS :NAME INTEGER :DIRECT-SUPERCLASSES NIL :DIRECT-SLOTS NIL :EFFECTIVE-SLOTS NIL :FINALIZED-P T>
       ((ARRAY VECTOR BIT-VECTOR NUMBER REAL RATIONAL SEQUENCE LIST STRUCTURE-OBJECT BUILT-IN-CLASS) T NIL T T)
       (VECTOR ARRAY STRING T (SIMPLE-VECTOR 3))
       (T NIL "rex" NIL :SIGNALED)
@@ -20888,6 +20888,97 @@ cases:
       NIL
       (FCM-AGAIN 2)
       NIL
+  - name: read-preserving-whitespace-leaves-the-terminator
+    source: |
+      ;; read takes the whitespace ending a datum, read-preserving-whitespace leaves it,
+      ;; as a function value too. SBCL 2.2.9 agrees.
+      (with-input-from-string (s "12 34(a) x")
+        (print (list (read-preserving-whitespace s) (read-char s) (read-preserving-whitespace s)
+                     (peek-char nil s) (read-preserving-whitespace s) (read-char s))))
+      (with-input-from-string (s "12 34")
+        (print (list (read s) (read-char s) (read s))))
+      (with-input-from-string (s "ab cd")
+        (print (list (funcall #'read-preserving-whitespace s) (read-char s) (read s))))
+      (with-input-from-string (s "")
+        (print (list (read-preserving-whitespace s nil :eof)
+                     (handler-case (read-preserving-whitespace s) (end-of-file () :signaled)))))
+    expected: |
+      (12 #\Space 34 #\( (A) #\Space)
+      (12 #\3 4)
+      (AB #\Space CD)
+      (:EOF :SIGNALED)
+  - name: built-in-class-is-a-metaclass
+    source: |
+      ;; built-in-class stands beside standard-class under class: what class-of and
+      ;; find-class answer a built-in class for is no standard-class, which is how McCLIM
+      ;; tells a CLOS class from a built-in one. A metaclass may write a mixin ahead of
+      ;; standard-class (McCLIM's presentation-type-class) and its metaobjects keep their
+      ;; name where every reader takes it. SBCL 2.2.9 agrees.
+      (defclass bicm-c () ())
+      (defclass bicm-mixin () ((tag :initarg :tag :initform :none :accessor bicm-tag)))
+      (defclass bicm-meta (bicm-mixin standard-class) ((own :initform 1 :accessor bicm-own)))
+      (defmethod closer-mop:validate-superclass ((class bicm-meta) (super standard-class)) t)
+      (defclass bicm-d (bicm-c) ((a :initarg :a :initform 7)) (:metaclass bicm-meta) (:tag . :written))
+      (print (list (typep (find-class 'integer) 'built-in-class)
+                   (typep (find-class 'integer) 'standard-class)
+                   (typep (find-class 'integer) 'class)
+                   (typep (class-of 1) 'built-in-class)
+                   (typep (class-of "s") 'built-in-class)
+                   (typep (find-class 'number) 'built-in-class)
+                   (typep (find-class 'bicm-c) 'built-in-class)
+                   (typep (find-class 'bicm-c) 'standard-class)
+                   (typep (find-class 'bicm-c) 'class)
+                   (typep (find-class 'standard-object) 'standard-class)
+                   (typep (find-class 'standard-object) 'built-in-class)))
+      (print (mapcar (lambda (n) (class-name (class-of (find-class n))))
+                     '(integer number cons null standard-object bicm-c class standard-class built-in-class)))
+      (print (eq (class-of (find-class 'integer)) (find-class 'built-in-class)))
+      (print (list (multiple-value-list (subtypep 'built-in-class 'class))
+                   (multiple-value-list (subtypep 'built-in-class 'standard-class))
+                   (multiple-value-list (subtypep 'standard-class 'built-in-class))))
+      (print (list (typep (find-class 'integer) (find-class 'built-in-class))
+                   (typep (find-class 'bicm-c) (find-class 'built-in-class))
+                   (typep 1 (find-class 'integer))
+                   (typep 1 (find-class t))
+                   (subtypep (find-class 'integer) (find-class 'number))
+                   (subtypep (find-class 'built-in-class) (find-class 'class))))
+      (defgeneric bicm-m (x))
+      (defmethod bicm-m ((x class)) :class)
+      (defmethod bicm-m ((x standard-class)) :standard-class)
+      (defmethod bicm-m ((x built-in-class)) :built-in-class)
+      (print (list (bicm-m (find-class 'integer)) (bicm-m (class-of 1.5)) (bicm-m (find-class 'bicm-c))
+                   (bicm-m (find-class 'standard-object))))
+      (print (list (typecase (find-class 'integer) (standard-class :std) (built-in-class :bic) (t :other))
+                   (typecase (find-class 'bicm-c) (standard-class :std) (built-in-class :bic) (t :other))))
+      (print (handler-case (make-instance (find-class 'integer)) (error () :refused)))
+      (print (handler-case (allocate-instance (find-class 'integer)) (error () :refused)))
+      (let ((c (find-class 'bicm-d)))
+        (print (list (class-name c)
+                     (class-name (class-of c))
+                     (bicm-tag c)
+                     (bicm-own c)
+                     (typep (make-instance 'bicm-d) c)
+                     (typep 1 c)
+                     (subtypep c 'bicm-c)
+                     (eq (class-of (make-instance 'bicm-d)) c)
+                     (bicm-m c))))
+      (defvar *bicm-t-class* (find-class t))
+      (defgeneric bicm-t (x))
+      (defmethod bicm-t ((x (eql *bicm-t-class*))) :t-class)
+      (defmethod bicm-t ((x built-in-class)) :built-in)
+      (print (list (bicm-t (find-class t)) (bicm-t (find-class 'integer))))
+    expected: |
+      (T NIL T T T T NIL T T T NIL)
+      (BUILT-IN-CLASS BUILT-IN-CLASS BUILT-IN-CLASS BUILT-IN-CLASS STANDARD-CLASS STANDARD-CLASS STANDARD-CLASS STANDARD-CLASS STANDARD-CLASS)
+      T
+      ((T T) (NIL T) (NIL T))
+      (T NIL T T T T)
+      (:BUILT-IN-CLASS :BUILT-IN-CLASS :STANDARD-CLASS :STANDARD-CLASS)
+      (:BIC :STD)
+      :REFUSED
+      :REFUSED
+      (BICM-D BICM-META :WRITTEN 1 T NIL T T :STANDARD-CLASS)
+      (:T-CLASS :BUILT-IN)
   - name: defclass-metaclass-protocol
     source: |
       ;; The metaclass protocol (the postmodern dao-class shape): a defclass
@@ -23270,7 +23361,7 @@ cases:
       (defmethod clsurf-meta ((c class)) (list :class (class-name c)))
       (defmethod clsurf-meta ((c (eql (find-class 'clsurf-op)))) :op-class)
       (defmethod clsurf-meta ((c structure-class)) :never)
-      (defmethod clsurf-meta ((c built-in-class)) :never)
+      (defmethod clsurf-meta ((c built-in-class)) (list :built-in (class-name c)))
       (defmethod clsurf-meta ((n #.(class-of 1))) (list :integer n))
       (defmethod clsurf-meta (x) :other)
       (defgeneric clsurf-std (x))
@@ -23306,7 +23397,7 @@ cases:
       (5 7)
       (BASE-OP LOAD-DEP 9 9 9)
       :META
-      (:OP-CLASS (:CLASS CLSURF-R) (:CLASS CLSURF-S) (:CLASS INTEGER) (:INTEGER 7) :OTHER :STANDARD :NO)
+      (:OP-CLASS (:CLASS CLSURF-R) (:CLASS CLSURF-S) (:BUILT-IN INTEGER) (:INTEGER 7) :OTHER :STANDARD :NO)
       (3 T :METHOD :READER :OBJECT :OTHER T (T T) (T T) STANDARD-GENERIC-FUNCTION T)
 
   - name: missing-cl-names
@@ -37928,6 +38019,18 @@ standalone:
                      '(integer ratio float complex number real rational string character symbol
                        null cons list sequence vector array bit-vector hash-table function
                        stream pathname)))
+      ;; A built-in class is a class (classp), with no slots of its own.
+      (print (list (closer-mop:classp (find-class 'integer)) (closer-mop:class-slots (find-class 'integer))))
+      ;; The default initargs of a class and its superclasses, the most specific one's
+      ;; form winning: (initarg form function).
+      (defclass slc-di-a () ((a :initarg :a) (b :initarg :b)) (:default-initargs :a (+ 1 1) :b :from-a))
+      (defclass slc-di-b (slc-di-a) ((c :initarg :c)) (:default-initargs :b :from-b :c 3))
+      (print (mapcar (lambda (row) (list (first row) (second row) (funcall (third row))))
+                     (closer-mop:class-default-initargs (find-class 'slc-di-a))))
+      (print (sort (mapcar (lambda (row) (list (first row) (second row) (funcall (third row))))
+                           (closer-mop:class-default-initargs (find-class 'slc-di-b)))
+                   #'string< :key (lambda (row) (symbol-name (first row)))))
+      (print (closer-mop:class-default-initargs (find-class 'slc-a)))
     stdout: |
       (1 2 3)
       20
@@ -37946,6 +38049,10 @@ standalone:
       (5 7 1)
       ((:INTEGER (:DEFAULT 1)) (:DEFAULT :A))
       (T T T T T T T T T T T T T T T T T T T T T)
+      (T NIL)
+      ((:A (+ 1 1) 2) (:B :FROM-A :FROM-A))
+      ((:A (+ 1 1) 2) (:B :FROM-B :FROM-B) (:C 3 3))
+      NIL
   # The generic-function protocol adds an arm consulting its generic's run-time
   # methods to every dispatcher, so it runs alone, not in the corpus.
   - name: generic-function-protocol

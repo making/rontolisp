@@ -46,11 +46,12 @@
   object)
 
 (defun %slot-protocol-instance-p (object)
-  ;; An instance whose class metaobject is not a direct instance of
-  ;; standard-class -- a class defined with a :metaclass.
+  ;; An instance whose class metaobject is a standard-class, not a direct instance
+  ;; of it -- a class defined with a :metaclass. What class-of answers a built-in
+  ;; class for, a stream or a pathname, is no such instance.
   (if (%obj-p object)
       (let ((class (class-of object)))
-        (if (%obj-p class)
+        (if (typep class 'standard-class)
             (not (eq (class-of class) (find-class 'standard-class)))
             nil))
       nil))

@@ -148,7 +148,7 @@ CLOS は**静的なサブセット**です
 **定義時 MOP サブセット**が入っています:
 [`find-class`](../reference/functions/find-class.md) と
 [`class-of`](../reference/functions/class-of.md) は実物の `standard-class`
-メタオブジェクトを返し、
+と `built-in-class` のメタオブジェクトを返し、
 [`allocate-instance`](../reference/functions/allocate-instance.md) が動作し、
 クラスオプション `(:metaclass M)` は定義時にクラス定義プロトコルを実行します
 （[`defclass`](../reference/special-forms/defclass.md) 参照）— これが postmodern

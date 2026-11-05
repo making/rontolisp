@@ -21401,9 +21401,12 @@ public final class LispMacroExpander {
 				}
 				closRegistry.ensureMopClassesSeededFor(metaclassSym.name());
 				ClosRegistry.ClassInfo metaclassInfo = closRegistry.findClass(metaclassSym.name());
-				if (metaclassInfo == null || !metaclassInfo.ancestors().contains(ClosRegistry.STANDARD_CLASS_NAME)) {
+				if (metaclassInfo == null || !(metaclassInfo.ancestors().contains(ClosRegistry.STANDARD_CLASS_NAME)
+						|| metaclassInfo.ancestors()
+							.contains(ClosRegistry.normalize(ClosRegistry.FORWARD_REFERENCED_CLASS_NAME)))) {
 					throw new IllegalArgumentException(LispNames.DEFCLASS + " :metaclass must name a class inheriting "
-							+ "standard-class, defined before its first use: " + metaclassSym.name());
+							+ "standard-class or forward-referenced-class, defined before its first use: "
+							+ metaclassSym.name());
 				}
 				metaclassName = metaclassInfo.name();
 				closRegistry.markMetaclassed(className, metaclassInfo.name());
@@ -21463,17 +21466,27 @@ public final class LispMacroExpander {
 		else if (parts.size() > 3 && !(parts.get(3) instanceof LispNil)) {
 			throw new IllegalArgumentException(LispNames.DEFCLASS + " expects a slot list: " + cons.print());
 		}
+		// The layout prefix: a metaclass keeps the class metaobject slots at the indexes
+		// every metaobject reader takes (McCLIM's presentation-type-class writes a mixin
+		// ahead of standard-class); the shifted accessors below cover the mixin.
+		ClosRegistry.ClassInfo layoutPrefix = superInfos.stream()
+			.filter(info -> info.ancestors().contains(ClosRegistry.CLASS_NAME))
+			.findFirst()
+			.orElse(superInfo);
 		List<ClosRegistry.SlotSpec> slots = new java.util.ArrayList<>(
-				superInfo == null ? List.of() : superInfo.slots());
+				layoutPrefix == null ? List.of() : layoutPrefix.slots());
 		if (superInfos.size() > 1) {
-			// Multiple inheritance: the first superclass's effective slots keep their
-			// indexes (the layout prefix rule), each later superclass appends the slots
+			// Multiple inheritance: the prefix superclass's effective slots keep their
+			// indexes (the layout prefix rule), each other superclass appends the slots
 			// whose base name is not present yet, and every inherited slot's OPTIONS are
 			// then re-merged from the direct specifications along the class precedence
 			// list (a diamond re-declaration on a non-first superclass must still win
 			// over the shared base's specification).
-			for (int s = 1; s < superInfos.size(); s++) {
-				for (ClosRegistry.SlotSpec spec : superInfos.get(s).slots()) {
+			for (ClosRegistry.ClassInfo info : superInfos) {
+				if (info == layoutPrefix) {
+					continue;
+				}
+				for (ClosRegistry.SlotSpec spec : info.slots()) {
 					boolean present = slots.stream().anyMatch(x -> x.baseName().equals(spec.baseName()));
 					if (!present) {
 						slots.add(spec);
@@ -24712,7 +24725,7 @@ public final class LispMacroExpander {
 	 * scans the {@code %class-slot-defs-table%} designator spellings and answers the
 	 * entry's pair list, nil for anything unregistered. A class METAOBJECT (what
 	 * {@code class-of} answers since the metaobject migration) designates through its
-	 * name slot -- the preamble replaces it with that name when {@code standard-class} is
+	 * name slot -- the preamble replaces it with that name when {@code class} is
 	 * registered (with no MOP surface in the program no metaobject can exist, and the
 	 * preamble is dropped).
 	 */
@@ -24730,7 +24743,7 @@ public final class LispMacroExpander {
 		List<LispVal> bodyParts = new java.util.ArrayList<>();
 		bodyParts.add(new LispSymbol(LispNames.LET));
 		bodyParts.add(listToCons(List.of(listToCons(List.of(hit, LispNil.INSTANCE)))));
-		List<String> metaobjectTags = closRegistry.descendantTags(ClosRegistry.STANDARD_CLASS_NAME);
+		List<String> metaobjectTags = closRegistry.descendantTags(ClosRegistry.CLASS_NAME);
 		if (!metaobjectTags.isEmpty()) {
 			bodyParts.add(makeIf(objIs(v, List.copyOf(metaobjectTags)),
 					listToCons(List.of(new LispSymbol(LispNames.SETQ), v, objRef(v, 0))), LispNil.INSTANCE));
@@ -28349,10 +28362,10 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The name of a class metaobject literal -- an instance of {@code standard-class}
-	 * (seeded or not in this registry: a {@code #.} literal comes from the macro-time
-	 * evaluator) or of a registered metaclass -- or null for anything else. The built-in
-	 * {@code T} class answers the boolean {@code t}.
+	 * The name of a class metaobject literal -- an instance of {@code standard-class} or
+	 * {@code built-in-class} (seeded or not in this registry: a {@code #.} literal comes
+	 * from the macro-time evaluator) or of a registered metaclass -- or null for anything
+	 * else. The built-in {@code T} class answers the boolean {@code t}.
 	 */
 	@Nullable private static LispVal classMetaobjectName(LispVal value, ClosRegistry closRegistry) {
 		if (!(value instanceof LispInstance inst)) {
@@ -28360,6 +28373,7 @@ public final class LispMacroExpander {
 		}
 		String typeName = LispLayout.printNameOfTag(inst.layout().tag());
 		boolean metaobject = typeName != null && (ClosRegistry.STANDARD_CLASS_NAME.equals(plainName(typeName))
+				|| ClosRegistry.BUILT_IN_CLASS_NAME.equals(plainName(typeName))
 				|| closRegistry.isClassMetaobject(inst));
 		return metaobject && inst.slot(0) instanceof LispVal name
 				&& (name instanceof LispSymbol || name instanceof LispTrue) ? name : null;
@@ -28819,8 +28833,7 @@ public final class LispMacroExpander {
 				|| switch (plainName) {
 					case "BOOLEAN", "BIT", "UNSIGNED-BYTE", "SIGNED-BYTE", "VECTOR", "SIMPLE-VECTOR", "BIT-VECTOR",
 							"SIMPLE-BIT-VECTOR", "ARRAY", "SIMPLE-ARRAY", "SEQUENCE", "STANDARD-OBJECT",
-							"STRUCTURE-OBJECT", "PATHNAME", "PACKAGE", "STRUCTURE-CLASS", "BUILT-IN-CLASS",
-							"READTABLE" ->
+							"STRUCTURE-OBJECT", "PATHNAME", "PACKAGE", "STRUCTURE-CLASS", "READTABLE" ->
 						true;
 					default -> false;
 				};
@@ -30647,7 +30660,7 @@ public final class LispMacroExpander {
 			program = withDynamic;
 			closRegistry.enableDynamicClasses();
 		}
-		// The closer-mop library's classp is (typep x 'standard-class): when its defuns
+		// The closer-mop library's classp is (typep x 'class): when its defuns
 		// are in the program (spliced by the system loaders, which have no registry in
 		// scope), the MOP base classes must register before any type test over them
 		// expands -- including on the fast path below, whose forms still get their
@@ -31025,6 +31038,9 @@ public final class LispMacroExpander {
 				out.addAll(classDirectSubclassesDefuns(closRegistry));
 			}
 		}
+		if (program.stream().anyMatch(f -> referencesFunction(f, LispNames.CLASS_DEFAULT_INITARGS_INTERNAL))) {
+			out.addAll(classDefaultInitargsDefuns(closRegistry));
+		}
 		if (allocateInstanceRuntime) {
 			// Position-independent defuns, appended once the registry is complete so
 			// the per-class construction arms cover every class the program defines.
@@ -31050,6 +31066,11 @@ public final class LispMacroExpander {
 		}
 		if (metaclassProtocol) {
 			out.add(mopClassFinalizedDefun(closRegistry.dynamicClasses(), lastTrackedRedefinition >= 0));
+			// A compiled class keeps the layout of the metaclass it was first defined
+			// with: the interpreter's hook changes it, which here would give every
+			// :metaclass program the change-class arms of every class.
+			out.addAll(LispReader.readAllFromString("(defun %mop-change-metaclass (class metaclass) class)",
+					Features.INTERPRETER));
 		}
 		if (compileRuntime) {
 			// Position-independent defuns, appended: a compiled program's compile is a
@@ -40777,13 +40798,13 @@ public final class LispMacroExpander {
 				// simple-vector above.
 				return makeArrayTypeTest(value, new LispSymbol(LispNames.BIT), listToCons(List.of(new LispSymbol("*"))),
 						closRegistry, "SIMPLE-BIT-VECTOR".equals(name));
-			case "STRUCTURE-CLASS", "BUILT-IN-CLASS":
+			case "STRUCTURE-CLASS":
 				// A defstruct's class metaobject IS a standard-class here (the one
-				// instance model, .kb/instance-syntax.md) and built-in types have no
-				// metaobjects at all, so neither metaclass type has instances. The
-				// empty test routes trivia level2's (typecase (find-class type)
-				// (structure-class ...) (built-in-class ...) (t ...)) to its t branch
-				// -- the slot-value accessor form, which works on struct instances.
+				// instance model, .kb/instance-syntax.md), so this metaclass has no
+				// instances. The empty test routes trivia level2's (typecase (find-class
+				// type) (structure-class ...) (built-in-class ...) (t ...)) to its t
+				// branch -- the slot-value accessor form, which works on struct
+				// instances.
 				return LispNil.INSTANCE;
 			case "LOGICAL-PATHNAME", "EXTENDED-CHAR":
 				// No such value: a logical pathname is the flat pathname
@@ -41546,11 +41567,11 @@ public final class LispMacroExpander {
 	/**
 	 * Widens the types {@code typep} deliberately answers as empty, so a correct
 	 * {@code check-type} is not refused: a {@code defgeneric}'s dispatcher is a plain
-	 * function, a struct's or built-in type's class is a standard class, a logical
-	 * pathname is a pathname and a character outside {@code base-char} is a character.
-	 * The empty tests keep {@code typecase} on the arms trivia relies on
-	 * (.kb/declarations-type-checks.md, "makeTypeTest"). Only a positive position is
-	 * widened: under a {@code not} the empty test already passes everything.
+	 * function, a struct's class is a standard class, a logical pathname is a pathname
+	 * and a character outside {@code base-char} is a character. The empty tests keep
+	 * {@code typecase} on the arms trivia relies on (.kb/declarations-type-checks.md,
+	 * "makeTypeTest"). Only a positive position is widened: under a {@code not} the empty
+	 * test already passes everything.
 	 * @param spec the type specifier
 	 * @return the specifier to test
 	 */
@@ -41559,7 +41580,7 @@ public final class LispMacroExpander {
 			return switch (plainTypeName(sym)) {
 				case "GENERIC-FUNCTION", "STANDARD-GENERIC-FUNCTION" ->
 					listToCons(List.of(new LispSymbol(LispNames.OR), new LispSymbol("FUNCTION"), sym));
-				case "STRUCTURE-CLASS", "BUILT-IN-CLASS" -> new LispSymbol("CLASS");
+				case "STRUCTURE-CLASS" -> new LispSymbol("CLASS");
 				case "LOGICAL-PATHNAME" -> new LispSymbol("PATHNAME");
 				case "EXTENDED-CHAR" -> new LispSymbol("CHARACTER");
 				default -> spec;
@@ -49849,8 +49870,8 @@ public final class LispMacroExpander {
 	 * precedent). The INTERPRETER cannot make that inference -- it seeds the MOP classes
 	 * LAZILY, and the very {@code (find-class 'c)} producing the metaobject runs AFTER
 	 * this expansion, so an unseeded registry does NOT mean "no metaobject at run time".
-	 * It falls back to the base metaclass tag, which is a constant and is the only tag a
-	 * metaobject can carry while no user metaclass is defined.
+	 * It falls back to the two base metaclass tags, which are constants and the only tags
+	 * a metaobject can carry while no user metaclass is defined.
 	 * @param var the variable holding the runtime type designator
 	 * @param closRegistry the class registry
 	 * @param liveRegistry whether the registry may still grow before the form is
@@ -49859,12 +49880,13 @@ public final class LispMacroExpander {
 	 */
 	@Nullable private static LispVal metaobjectNameNormalization(LispSymbol var, ClosRegistry closRegistry,
 			boolean liveRegistry) {
-		List<String> metaobjectTags = closRegistry.descendantTags(ClosRegistry.STANDARD_CLASS_NAME);
+		List<String> metaobjectTags = closRegistry.descendantTags(ClosRegistry.CLASS_NAME);
 		if (metaobjectTags.isEmpty()) {
 			if (!liveRegistry) {
 				return null;
 			}
-			metaobjectTags = List.of(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_CLASS_NAME);
+			metaobjectTags = List.of(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_CLASS_NAME,
+					LispLayout.CLASS_TAG_PREFIX + ClosRegistry.BUILT_IN_CLASS_NAME);
 		}
 		return makeIf(objIs(var, List.copyOf(metaobjectTags)),
 				listToCons(List.of(new LispSymbol(LispNames.SETQ), var, objRef(var, 0))), LispNil.INSTANCE);
@@ -51753,30 +51775,39 @@ public final class LispMacroExpander {
 		// memo with a synthetic slot-less entry, so (eq (class-of 42) (find-class
 		// 'integer)) holds. The boolean t is tested apart from the member scan -- (find-
 		// class t) hands the BOOLEAN over, while the %class-designator dispatch yields
-		// the symbol spelling.
+		// the symbol spelling. A synthetic entry is the spellings alone; standard-object
+		// and structure-object, which no built-in class is, carry an empty superclass
+		// column as a table row does, and the materializer tells them apart by it.
 		List<LispVal> builtinSyms = new java.util.ArrayList<>();
 		for (String name : ClosRegistry.BUILTIN_CLASS_NAMES) {
 			builtinSyms.add(new LispSymbol(name));
 		}
+		List<LispVal> standardRootSyms = new java.util.ArrayList<>();
 		for (String name : ClosRegistry.FIND_CLASS_ONLY_CLASS_NAMES) {
 			// find-class-resolvable only (standard-object): a slot-less metaobject
 			// through the same memo; class-of never answers these.
-			builtinSyms.add(new LispSymbol(name));
+			(ClosRegistry.STANDARD_METACLASS_ROOT_NAMES.contains(name) ? standardRootSyms : builtinSyms)
+				.add(new LispSymbol(name));
 		}
 		LispVal builtinList = listToCons(
 				List.of(new LispSymbol(LispNames.QUOTE), listToCons(java.util.List.copyOf(builtinSyms))));
+		LispVal standardRootList = listToCons(
+				List.of(new LispSymbol(LispNames.QUOTE), listToCons(java.util.List.copyOf(standardRootSyms))));
 		LispVal syntheticEntry = mvCall(LispNames.CONS, mvCall(LispNames.CONS, sym, LispNil.INSTANCE),
 				LispNil.INSTANCE);
+		LispVal standardRootEntry = mvCall(LispNames.CONS, mvCall(LispNames.CONS, sym, LispNil.INSTANCE),
+				mvCall(LispNames.CONS, LispNil.INSTANCE, LispNil.INSTANCE));
 		LispVal builtinAnswer = makeIf(fmtCall(LispNames.EQ_GENERAL, sym, LispTrue.INSTANCE),
 				mvCall(LispNames.FIND_CLASS_MATERIALIZE, quoteOf("T"),
 						mvCall(LispNames.CONS, mvCall(LispNames.CONS, quoteOf("T"), LispNil.INSTANCE),
 								LispNil.INSTANCE)),
 				makeIf(mvCall(LispNames.MEMBER, sym, builtinList),
 						mvCall(LispNames.FIND_CLASS_MATERIALIZE, sym, syntheticEntry),
-						makeIf(errorp,
-								listToCons(List.of(new LispSymbol(LispNames.ERROR),
+						makeIf(mvCall(LispNames.MEMBER, sym, standardRootList),
+								mvCall(LispNames.FIND_CLASS_MATERIALIZE, sym, standardRootEntry),
+								makeIf(errorp, listToCons(List.of(new LispSymbol(LispNames.ERROR),
 										new LispString(LispNames.FIND_CLASS + ": there is no class named ~A"), sym)),
-								LispNil.INSTANCE)));
+										LispNil.INSTANCE))));
 		LispVal answer = makeIf(entry,
 				mvCall(LispNames.FIND_CLASS_MATERIALIZE, mvCall(LispNames.CAR, mvCall(LispNames.CAR, entry)), entry),
 				builtinAnswer);
@@ -51858,8 +51889,14 @@ public final class LispMacroExpander {
 						listToCons(List.of(new LispSymbol(LispNames.SETQ), superAcc, mvCall(LispNames.CONS,
 								mvCall(LispNames.FIND_CLASS_INTERNAL, superVar, LispTrue.INSTANCE), superAcc))))),
 				mvCall(LispNames.REVERSE, superAcc)));
-		LispVal buildMetaobject = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_CLASS_NAME, List.of(name,
-				supers, mvCall(LispNames.REVERSE, directSlots), mvCall(LispNames.REVERSE, slots), LispTrue.INSTANCE));
+		// A synthetic entry, the spellings alone, is a built-in class; the rest of what
+		// the table describes, standard-object included, are standard-class instances.
+		LispVal buildMetaobject = makeIf(mvCall(LispNames.CDR, entry),
+				objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_CLASS_NAME,
+						List.of(name, supers, mvCall(LispNames.REVERSE, directSlots), mvCall(LispNames.REVERSE, slots),
+								LispTrue.INSTANCE)),
+				objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.BUILT_IN_CLASS_NAME,
+						List.of(name, LispNil.INSTANCE, LispNil.INSTANCE, LispNil.INSTANCE, LispTrue.INSTANCE)));
 		LispVal memoize = listToCons(List.of(new LispSymbol(LispNames.SETQ),
 				new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO), mvCall(LispNames.CONS,
 						mvCall(LispNames.CONS, name, metaobject), new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO))));
@@ -52455,9 +52492,13 @@ public final class LispMacroExpander {
 				listToCons(List.of(name, args)), listToCons(condParts)));
 	}
 
-	/** Whether the class descends from one of the seeded MOP base classes. */
+	/**
+	 * Whether the class descends from one of the seeded MOP base classes a program makes
+	 * instances of: {@code class} and {@code built-in-class} are not among them.
+	 */
 	private static boolean isMetaobjectClass(ClosRegistry.ClassInfo info) {
 		return info.ancestors().contains(ClosRegistry.STANDARD_CLASS_NAME)
+				|| info.ancestors().contains(ClosRegistry.normalize(ClosRegistry.FORWARD_REFERENCED_CLASS_NAME))
 				|| info.ancestors().contains(ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME)
 				|| info.ancestors().contains(ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME);
 	}
@@ -52676,10 +52717,67 @@ public final class LispMacroExpander {
 		return defuns;
 	}
 
+	/**
+	 * Builds the generated {@code %class-default-initargs} defun: for a class designator
+	 * (a metaobject's name slot, or the name symbol), AMOP's {@code (initarg form
+	 * function)} list of a class with default initargs, over {@code %CDI-<n>} helpers
+	 * chunked like the {@code %class-direct-subclasses} ones.
+	 */
+	private static List<LispVal> classDefaultInitargsDefuns(ClosRegistry closRegistry) {
+		LispSymbol name = new LispSymbol("%cdi_name");
+		List<LispVal> defuns = new java.util.ArrayList<>();
+		List<String> helperNames = new java.util.ArrayList<>();
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		int clauseNodes = 0;
+		java.util.Set<String> seen = new java.util.HashSet<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			java.util.Map<String, LispVal> defaults = closRegistry.defaultInitargs(info);
+			if (defaults.isEmpty() || !seen.add(info.name())) {
+				continue;
+			}
+			List<LispVal> rows = new java.util.ArrayList<>();
+			rows.add(new LispSymbol(LispNames.LIST));
+			defaults.forEach((initarg, form) -> rows.add(mvCall(LispNames.LIST, initargForm(initarg), quoteOf(form),
+					listToCons(List.of(new LispSymbol(LispNames.LAMBDA), LispNil.INSTANCE, form)))));
+			List<String> spellings = new java.util.ArrayList<>();
+			addDesignatorSpellings(spellings, info.name());
+			LispVal clause = listToCons(
+					List.of(mvCall(LispNames.MEMBER, name, quotedSymbolList(spellings)), listToCons(rows)));
+			clauses.add(clause);
+			clauseNodes += consNodeCount(clause);
+			if (clauseNodes >= 600) {
+				defuns.add(classDispatchHelperDefun("%CDI-", helperNames, clauses, name));
+				clauses = new java.util.ArrayList<>();
+				clauseNodes = 0;
+			}
+		}
+		if (!clauses.isEmpty()) {
+			defuns.add(classDispatchHelperDefun("%CDI-", helperNames, clauses, name));
+		}
+		LispSymbol cls = new LispSymbol("%cdi_class");
+		List<LispVal> orParts = new java.util.ArrayList<>();
+		orParts.add(new LispSymbol(LispNames.OR));
+		for (String helper : helperNames) {
+			orParts.add(mvCall(helper, name));
+		}
+		LispVal designator = makeIf(callOf(LispNames.OBJ_P, cls), mvCall(LispNames.OBJ_REF, cls, new LispInteger(0)),
+				cls);
+		defuns.add(listToCons(
+				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.CLASS_DEFAULT_INITARGS_INTERNAL),
+						listToCons(List.<LispVal>of(cls)), makeLet(name.name(), designator, listToCons(orParts)))));
+		return defuns;
+	}
+
 	/** One {@code %CDS-<n>} helper: the static subclass NAMES of its chunk's classes. */
 	private static LispVal classDirectSubclassesHelperDefun(List<String> helperNames, List<LispVal> clauses,
 			LispSymbol name) {
-		String helperName = "%CDS-" + helperNames.size();
+		return classDispatchHelperDefun("%CDS-", helperNames, clauses, name);
+	}
+
+	/** One chunk of a dispatch over a class's name, answering nil past its clauses. */
+	private static LispVal classDispatchHelperDefun(String prefix, List<String> helperNames, List<LispVal> clauses,
+			LispSymbol name) {
+		String helperName = prefix + helperNames.size();
 		helperNames.add(helperName);
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));

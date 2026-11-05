@@ -1279,6 +1279,13 @@ public final class LispNames {
 	public static final String READ_DELIMITED_LIST = "READ-DELIMITED-LIST";
 
 	/**
+	 * The {@code read-preserving-whitespace} standard function: a prelude defun over the
+	 * same scan as {@code read}, leaving the terminating whitespace character in the
+	 * stream.
+	 */
+	public static final String READ_PRESERVING_WHITESPACE = "READ-PRESERVING-WHITESPACE";
+
+	/**
 	 * The {@code readtable-case} standard function and its {@code setf} place: the
 	 * readtable's slot 0 (prelude). The interpreter's reader converts a token's case by
 	 * it; the compile paths read source as {@code :upcase} ({@code .kb/readtables.md}).
@@ -11352,6 +11359,15 @@ public final class LispNames {
 	 * gated on a reference, like the allocate-instance runtime).
 	 */
 	public static final String CLASS_DIRECT_SUBCLASSES_INTERNAL = "%CLASS-DIRECT-SUBCLASSES";
+
+	/**
+	 * The internal {@code %class-default-initargs} behind
+	 * {@code closer-mop:class-default-initargs}: AMOP's {@code (initarg form function)}
+	 * list, from the registry on the interpreter, a generated dispatch defun on the
+	 * compile paths (injected gated on a reference, like
+	 * {@link #CLASS_DIRECT_SUBCLASSES_INTERNAL}).
+	 */
+	public static final String CLASS_DEFAULT_INITARGS_INTERNAL = "%CLASS-DEFAULT-INITARGS";
 
 	/**
 	 * The {@code %mop-fill-slots} initarg fill of the metaclass protocol:

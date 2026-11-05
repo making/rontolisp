@@ -5151,6 +5151,20 @@ public final class LispPreludeLibrary {
 				          (close %rd-out)
 				          (if eof-error-p (error 'end-of-file :stream (or stream *standard-input*)) eof-value)))))
 				""");
+		// read's scan, with the terminator left where it stopped: a token's already rides
+		// the pushback cell, and whatever follows any other datum was never taken.
+		SOURCES.put(LispNames.READ_PRESERVING_WHITESPACE, """
+				(defun read-preserving-whitespace (&optional stream (eof-error-p t) eof-value recursive-p)
+				  (%check-stream stream 'read-preserving-whitespace t)
+				  (let ((%rd-out (make-string-output-stream)))
+				    (if (%rd-datum stream %rd-out)
+				        (let ((%rd-text (get-output-stream-string %rd-out)))
+				          (close %rd-out)
+				          (values (read-from-string %rd-text)))
+				        (progn
+				          (close %rd-out)
+				          (if eof-error-p (error 'end-of-file :stream (or stream *standard-input*)) eof-value)))))
+				""");
 		SOURCES.put(LispNames.RD_DATUM, """
 				(defun %rd-datum (%rd-s %rd-out)
 				  (let ((%rd-c (%rd-skip %rd-s)))
