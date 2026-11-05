@@ -1173,6 +1173,7 @@ public final class Environment implements Scope {
 		// *gensym-counter* and *random-state* special variables, bound so they are not
 		// unbound.
 		env.define(LispNames.GENSYM_COUNTER_VAR, new LispInteger(0));
+		env.define(LispNames.MACROEXPAND_HOOK_VAR, new LispSymbol(LispNames.FUNCALL));
 		env.define(LispNames.RANDOM_STATE_VAR, new LispInstance(LispLayout.RANDOM_STATE, new LispVal[0]));
 		// The pathname operators' default `defaults`. #P"" -- the empty pathname, SBCL's
 		// initial value too -- is the only honest one here: rontolisp absolutizes
@@ -9524,8 +9525,7 @@ public final class Environment implements Scope {
 		// the
 		// remainder published as the second value -- a function call is a multiple-value
 		// producer like any other, and the compile paths' wrappers publish the same
-		// (.kb/multiple-values.md, "The floor family as a function object"). The call
-		// position does not come here: LispEvaluator rounds it directly, one value.
+		// (.kb/multiple-values.md, "The floor family as a function object").
 		for (String op : List.of(LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND)) {
 			env.defineFunction(op, new LispFunction(op, args -> floorFamilyValues(env, op, op, false, args), true));
 		}

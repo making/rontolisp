@@ -122,6 +122,26 @@ class WasmToplevelChunkingTest {
 	}
 
 	@Test
+	void aComputedChangeClassFillsASlotOncePerWayAClassMapsOntoIt() {
+		// %change-class-runtime has an arm per class, and each arm a clause per class an
+		// instance can change from, so a fill repeated per clause is quadratic in the
+		// program's classes. ASDF's 103 came to 4.7 MB of a 7.1 MB module, in bodies of
+		// up to 203 KB side by side, and wasmtime's cold compile of it peaked at 7.2 GB
+		// instead of 0.9: a 16 GB runner running the rest of the suite was killed.
+		String classes = IntStream.range(0, 40)
+			.mapToObj(c -> "(defclass c%d () (%s))".formatted(c,
+					IntStream.range(0, 20)
+						.mapToObj(s -> "(c%d-s%d :initarg :c%d-s%d :initform %d)".formatted(c, s, c, s, s))
+						.collect(Collectors.joining(" "))))
+			.collect(Collectors.joining("\n"));
+		String source = classes + "\n(print (slot-value (change-class (make-instance 'c0) (car (list 'c1))) 'c1-s7))\n";
+
+		assertThat(compile(source).length)
+			.as("module of 40 classes of 20 slots each, sharing no slot, with one computed change-class")
+			.isLessThan(512 * 1024);
+	}
+
+	@Test
 	void aLongAsyncToplevelIsNotEmittedAsOneFunctionBody() {
 		// One top-level await puts the WHOLE top level on the async resume path, which
 		// outlines each await-free RUN of statements -- a run whose length is the

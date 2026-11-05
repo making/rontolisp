@@ -49,10 +49,8 @@ import org.jspecify.annotations.Nullable;
  * once, there.</li>
  * <li><b>Anything {@code (length seq)} does not measure the way this arm does</b> -- a
  * dotted list, a rank-2 array, a non-sequence.</li>
- * <li><b>{@code mismatch} with {@code :from-end}</b> -- the prelude accepts the keyword
- * and IGNORES it, scanning forward. That is a deliberate, documented deviation from CLHS
- * (the "Lite" note on the {@code mismatch} reference page); reproducing it here would
- * spread it to a second implementation.</li>
+ * <li><b>{@code mismatch} with {@code :from-end}</b> -- the prelude's backward scan
+ * answers it.</li>
  * <li>An unknown, duplicated or malformed keyword argument.</li>
  * </ul>
  */
@@ -100,8 +98,7 @@ final class SequenceScanFast {
 	 */
 	static @Nullable LispVal mismatch(List<LispVal> args) {
 		Call call = parse(args);
-		// The prelude ignores :from-end rather than scanning backwards; that answer stays
-		// its own (see the class comment).
+		// The backward scan is the prelude's (see the class comment).
 		if (call == null || call.fromEnd()) {
 			return null;
 		}

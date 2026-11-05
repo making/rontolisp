@@ -3017,9 +3017,10 @@ public final class LispNames {
 	public static final String PUSHNEW = "PUSHNEW";
 
 	/**
-	 * The {@code eval-when} operator. Expands to {@code progn} of its body; at top level
-	 * the compile path additionally splices the body into top-level forms (see
-	 * {@code LispMacroExpander.flattenTopLevel}).
+	 * The {@code eval-when} operator. At top level its body runs under any situation (the
+	 * compile path splices it into top-level forms, see
+	 * {@code LispMacroExpander.flattenTopLevel}); elsewhere only {@code :execute} runs
+	 * it.
 	 */
 	public static final String EVAL_WHEN = "EVAL-WHEN";
 
@@ -9943,6 +9944,15 @@ public final class LispNames {
 	 */
 	public static final String ERROR_RUNTIME = "%ERROR-RUNTIME";
 
+	/** The {@code signal} twin of {@link #ERROR_RUNTIME}. */
+	public static final String SIGNAL_RUNTIME = "%SIGNAL-RUNTIME";
+
+	/** The {@code warn} twin of {@link #ERROR_RUNTIME}. */
+	public static final String WARN_RUNTIME = "%WARN-RUNTIME";
+
+	/** What {@code #'cerror} calls: {@link #ERROR_RUNTIME} under its restart. */
+	public static final String CERROR_RUNTIME = "%CERROR-RUNTIME";
+
 	/**
 	 * The instance-tag acceptance table backing {@link #TYPEP_RUNTIME}: an alist-like
 	 * constant, each entry {@code ((type-name...) tag...)} mapping every registered
@@ -11119,6 +11129,13 @@ public final class LispNames {
 
 	/** The {@code *gensym-counter*} special variable. */
 	public static final String GENSYM_COUNTER_VAR = "*GENSYM-COUNTER*";
+
+	/**
+	 * {@code *macroexpand-hook*}: calls the expander it is given, for a compiler-macro
+	 * expander that calls through it (introspect-environment's); the expansions do not
+	 * consult it.
+	 */
+	public static final String MACROEXPAND_HOOK_VAR = "*MACROEXPAND-HOOK*";
 
 	/** The {@code *random-state*} special variable. */
 	public static final String RANDOM_STATE_VAR = "*RANDOM-STATE*";

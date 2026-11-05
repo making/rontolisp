@@ -29,6 +29,12 @@ on the smallest CI runner, updating these numbers in the same change.
 - **The async top-level resume grew quadratically until 2026-11-04** ("Keeping the top level
   bounded"): it spilled all of its locals at every suspend site, 442 locals and 194,297 bytes of
   the corpus, ~10 more awaits from the bound.
+- **Bodies compiled at once add up**, so large ones side by side cost far more than one, under
+  the bound. A 7.6 MB component with 21 bodies of 165-203 KB next to each other (wasmtime 49, 4
+  CPUs, 2026-11-05): 7.15 GB at 4 threads (46 s), 4.52 GB at `MALLOC_ARENA_MAX=1` (63 s), 2.36 GB
+  at `RAYON_NUM_THREADS=2` (79 s), 2.11 GB at `-C parallel-compilation=n` (117 s). Its Preview 1
+  build kept 4.1 GB at 2 threads. Fixing what emitted them gave 0.71 GB at 4 threads
+  ([clos.md](clos.md), "`change-class`").
 - **The guard must measure the `--component` build separately** — an async top level
   compiles as an entry+resume pair, so either build can be larger.
   `WasmModuleInspector.largestFunctionBodySize` walks a component's embedded core modules.

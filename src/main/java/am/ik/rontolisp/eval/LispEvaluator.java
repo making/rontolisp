@@ -109,10 +109,11 @@ public final class LispEvaluator {
 	private static final LispVal UNHANDLED = new LispSymbol("%unhandled-operator%");
 
 	/**
-	 * The one-value built-in behind each multiple-value built-in's publishing function
-	 * object, which a call position dispatches to ({@link #evalPrimaryValueCall}).
+	 * The publishing functions of the multiple-value built-ins
+	 * ({@link #installValuePublishingFunctions}).
 	 */
-	private final Map<LispFunction, LispFunction> primaryValueBuiltins = new java.util.IdentityHashMap<>();
+	private final Set<LispFunction> publishingBuiltins = java.util.Collections
+		.newSetFromMap(new java.util.IdentityHashMap<>());
 
 	private final Environment globalEnv;
 
@@ -210,10 +211,9 @@ public final class LispEvaluator {
 	// thread; unset everywhere else.
 	private final ThreadLocal<@Nullable BiConsumer<String, Boolean>> macroTimeWarnings = new ThreadLocal<>();
 
-	// Whether this thread is inside a form the eval function was handed, outside any file
-	// that form loaded. Everywhere else an eval-when is a progn, whose every situation a
-	// file run here has to honor, since it stands for both the compile and the load.
-	private final ThreadLocal<Boolean> evalFunctionRuns = ThreadLocal.withInitial(() -> false);
+	// The form this thread last ran in a top-level position (evalAtTopLevel): the arms
+	// of the operator tables that make a top-level form of one ask it.
+	private final ThreadLocal<@Nullable LispCons> topLevelForm = new ThreadLocal<>();
 
 	// Whether the runtime format renderer (FormatRenderer.defuns(), the same forms the
 	// compile path injects) has been evaluated into the global environment. The
@@ -1634,7 +1634,7 @@ public final class LispEvaluator {
 					&& LispNames.DEFPACKAGE.equals(LispSymbol.memberName(head.name()))) {
 				return registerRuntimeDefpackage(form);
 			}
-			return evalFunctionForm(args.get(0));
+			return evalDatum(args.get(0), true);
 		}, true));
 		// compile answers the name, or with no name the function, and neither failure
 		// value: nothing here warns.
@@ -2091,17 +2091,12 @@ public final class LispEvaluator {
 		// The plist dispatches the #'make-condition / #'change-class catalog wrappers
 		// call (the compile paths generate them as defuns): the literal call, every
 		// argument quoted, evaluated like the runtime make-instance above.
-		// A type naming no condition class signals, as the compile paths' dispatch does
-		// (the literal call degrades an unknown type to a simple-condition instead).
+		// A type naming no condition class is a type-error, the literal call's: only a
+		// symbol reaches it through the quote, any other value would come back here.
 		this.globalEnv.defineFunction(LispNames.MAKE_CONDITION_RUNTIME,
 				new LispFunction(LispNames.MAKE_CONDITION_RUNTIME, args -> {
-					ClosRegistry.ClassInfo info = args.get(0) instanceof LispSymbol type
-							? this.closRegistry.findClass(type.name()) : null;
-					String condition = ClosRegistry.normalize(ClosRegistry.CONDITION_CLASS_NAMES.get(0));
-					if (info == null || !info.ancestors().contains(condition)
-							&& !condition.equals(ClosRegistry.normalize(info.name()))) {
-						throw new LispEvalException(
-								LispNames.MAKE_CONDITION + ": " + args.get(0).print() + " is not a condition type");
+					if (!(args.get(0) instanceof LispSymbol)) {
+						return eval(LispMacroExpander.designatorTypeErrorForm(args.get(0)), this.globalEnv);
 					}
 					return evalQuotedPlistCall(LispNames.MAKE_CONDITION, args.subList(0, 1), args.get(1));
 				}));
@@ -3633,14 +3628,11 @@ public final class LispEvaluator {
 					this.globalEnv);
 		}));
 		installStreamOperandChecks();
-		// cerror (lite): no restart machinery exists, so the "continuable" part is
-		// dropped -- (cerror continue-format datum args...) signals like
-		// (error datum args...).
 		this.globalEnv.defineFunction(LispNames.CERROR, new LispFunction(LispNames.CERROR, args -> {
 			if (args.size() < 2) {
 				throw new LispEvalException(LispNames.CERROR + " expects a continue format control and a datum");
 			}
-			return eval(rebuildSignalForm(LispNames.ERROR, args.subList(1, args.size())), this.globalEnv);
+			return eval(rebuildSignalForm(LispNames.CERROR, args), this.globalEnv);
 		}));
 		this.funcallBuiltin = new LispFunction(LispNames.FUNCALL, args -> {
 			if (args.isEmpty()) {
@@ -4599,11 +4591,10 @@ public final class LispEvaluator {
 	 * {@code array-displacement} -- answer their second value too, as the floor family's
 	 * does: a {@code funcall}, an {@code apply}, a variable or a {@code mapcar} reaches
 	 * the function, which publishes the value the companion built-in the lowering reads
-	 * it through computes ({@code LispMacroExpander.lowerMvProducer}). The call position
-	 * keeps the one-value built-in ({@link #evalPrimaryValueCall}): a consumer or a
-	 * function tail has lowered its producer before the dispatch, so only the function
-	 * pays for the second value. Runs last, after {@link #foldStructLiteralsOf} wrapped
-	 * {@code read-from-string}.
+	 * it through computes ({@code LispMacroExpander.lowerMvProducer}). A call reaches it
+	 * too: a consumer or a function tail has lowered the producers it can see, and a
+	 * macro's expansion or a non-tail exit from a block is one it cannot. Runs last,
+	 * after {@link #foldStructLiteralsOf} wrapped {@code read-from-string}.
 	 */
 	private void installValuePublishingFunctions() {
 		LispVal absent = new LispSymbol("%gethash-absent%");
@@ -4689,7 +4680,7 @@ public final class LispEvaluator {
 	/** Binds the publishing function and records the one-value built-in behind it. */
 	private void installValuePublishing(LispFunction primary, LispFunction publishing) {
 		this.globalEnv.defineFunction(publishing.name(), publishing);
-		this.primaryValueBuiltins.put(publishing, primary);
+		this.publishingBuiltins.add(publishing);
 	}
 
 	/** The registered built-in {@code name}. */
@@ -4698,20 +4689,6 @@ public final class LispEvaluator {
 			throw new IllegalStateException(name + " must be registered");
 		}
 		return builtin;
-	}
-
-	/**
-	 * A call-position {@code (gethash ...)}/{@code (find-symbol ...)}/... : the one-value
-	 * built-in while the name is still bound to its publishing function, else whatever
-	 * the name is bound to now (a user generic that shadows it), through the same
-	 * {@link #apply} seam and in the same order as an ordinary call. See
-	 * {@link #installValuePublishingFunctions}.
-	 */
-	private LispVal evalPrimaryValueCall(LispCons cons, Environment env, String name) {
-		LispVal function = resolveFunction(name);
-		List<LispVal> args = evalArgs(cons, env, cons.properLength() - 1);
-		LispFunction primary = function instanceof LispFunction bound ? this.primaryValueBuiltins.get(bound) : null;
-		return apply(primary != null ? primary : function, args, env);
 	}
 
 	// Registers the interpreter's primitive layer of the `objc` package (eval/ObjcInterop
@@ -4791,18 +4768,6 @@ public final class LispEvaluator {
 	 * ({@code LispMacroExpander.expandLoadFileErrorSignal}).
 	 */
 	private void loadFile(String operator, String rawPath, @Nullable String systemName, Features features,
-			@Nullable LispVal designator) {
-		boolean outer = this.evalFunctionRuns.get();
-		this.evalFunctionRuns.set(false);
-		try {
-			loadSource(operator, rawPath, systemName, features, designator);
-		}
-		finally {
-			this.evalFunctionRuns.set(outer);
-		}
-	}
-
-	private void loadSource(String operator, String rawPath, @Nullable String systemName, Features features,
 			@Nullable LispVal designator) {
 		String baseDir = this.loadDirStack.peekLast();
 		String resolved = SourceLoader.resolve(baseDir, rawPath);
@@ -5998,7 +5963,7 @@ public final class LispEvaluator {
 			return known;
 		}
 		// The datum itself is always evaluated, so nested markers are in code.
-		LispVal value = eval(resolveReadTimeEval(datum, true, values));
+		LispVal value = evalReadTimeDatum(resolveReadTimeEval(datum, true, values));
 		values.put(marker, value);
 		return value;
 	}
@@ -7261,7 +7226,7 @@ public final class LispEvaluator {
 
 		@Override
 		public LispVal readEval(LispVal datum) {
-			return LispEvaluator.this.eval(resolveReadTimeEvalInCode(datum));
+			return evalReadTimeDatum(resolveReadTimeEvalInCode(datum));
 		}
 
 		@Override
@@ -7557,6 +7522,18 @@ public final class LispEvaluator {
 	 * @return the result
 	 */
 	LispVal evalTopLevel(LispVal expr, @Nullable Consumer<LispVal> resolvedForm) {
+		return evalSourceForm(expr, resolvedForm, true);
+	}
+
+	/**
+	 * Evaluates what a {@code #.} read: source, as a top-level form is, in the position
+	 * {@code eval} runs a form, which is no top level.
+	 */
+	private LispVal evalReadTimeDatum(LispVal datum) {
+		return evalSourceForm(datum, null, false);
+	}
+
+	private LispVal evalSourceForm(LispVal expr, @Nullable Consumer<LispVal> resolvedForm, boolean topLevel) {
 		List<LispVal> members = membersAroundInPackage(expr);
 		if (members != null) {
 			// One read form hands on one resolved form: the load recorder pairs them.
@@ -7564,7 +7541,7 @@ public final class LispEvaluator {
 			try {
 				LispVal value = LispNil.INSTANCE;
 				for (LispVal member : members) {
-					value = evalTopLevel(member, resolvedMembers::add);
+					value = evalSourceForm(member, resolvedMembers::add, topLevel);
 				}
 				return value;
 			}
@@ -7586,7 +7563,7 @@ public final class LispEvaluator {
 		// (declaredSpecials).
 		SpecialVarCollector.collectForm(resolved, this.specialVars);
 		try {
-			return eval(resolved, this.globalEnv);
+			return topLevel ? evalAtTopLevel(resolved, this.globalEnv) : eval(resolved, this.globalEnv);
 		}
 		catch (BlockReturnSignal signal) {
 			// A named return-from whose block was never established (or whose exit
@@ -8600,10 +8577,14 @@ public final class LispEvaluator {
 	 * @return the result
 	 */
 	public LispVal evalResolved(LispVal expr) {
+		return evalResolved(expr, true);
+	}
+
+	private LispVal evalResolved(LispVal expr, boolean topLevel) {
 		expr = prepareJavaSites(resolveStructLiterals(expr));
 		SpecialVarCollector.collectForm(expr, this.specialVars);
 		try {
-			return eval(expr, this.globalEnv);
+			return topLevel ? evalAtTopLevel(expr, this.globalEnv) : eval(expr, this.globalEnv);
 		}
 		catch (BlockReturnSignal signal) {
 			if (nestedInDebugger()) {
@@ -8649,27 +8630,8 @@ public final class LispEvaluator {
 					message.startsWith(NO_SUCH_PACKAGE) ? message.substring(NO_SUCH_PACKAGE.length()) : "");
 		}
 		return evalResolved(
-				tail ? LispMacroExpander.spillEscapingMvProducers(dispatchingMethodedProducers(resolved)) : resolved);
-	}
-
-	/**
-	 * What {@code eval} does with its form. The form's tail is a tail: a consumer behind
-	 * {@code eval} cannot lower a syntactic producer for itself, so the producer
-	 * publishes as it would behind a function return. And an {@code eval-when} met while
-	 * it runs is not at top level, so only {@code :execute} runs its body
-	 * ({@link #evalFunctionRuns}).
-	 * @param datum the form
-	 * @return the result, its values on the channel
-	 */
-	private LispVal evalFunctionForm(LispVal datum) {
-		boolean outer = this.evalFunctionRuns.get();
-		this.evalFunctionRuns.set(true);
-		try {
-			return evalDatum(datum, true);
-		}
-		finally {
-			this.evalFunctionRuns.set(outer);
-		}
+				tail ? LispMacroExpander.spillEscapingMvProducers(dispatchingMethodedProducers(resolved)) : resolved,
+				false);
 	}
 
 	/**
@@ -8759,6 +8721,51 @@ public final class LispEvaluator {
 			}
 			return eval(valueForm);
 		});
+	}
+
+	/**
+	 * Runs a form in a top-level position (CLHS 3.2.3.1). The members of a {@code progn},
+	 * {@code locally} or {@code eval-when}, and what a macro call or a {@code macrolet}
+	 * or {@code symbol-macrolet} body becomes ({@link #topLevelForm}), are in one too.
+	 * What runs here stands for both a program's compile and its load, so every situation
+	 * of an {@code eval-when} runs its body; {@link #eval(LispVal, Environment)} is at no
+	 * top level, where only {@code :execute} does.
+	 * @param form the form
+	 * @param env the environment
+	 * @return the value of the form, the last member's for one with members
+	 */
+	private LispVal evalAtTopLevel(LispVal form, Environment env) {
+		if (!(form instanceof LispCons cons)) {
+			return eval(form, env);
+		}
+		List<LispVal> members = cons.isProperList() ? topLevelMembers(cons) : null;
+		if (members == null) {
+			this.topLevelForm.set(cons);
+			return eval(cons, env);
+		}
+		LispVal value = singleValue(LispNil.INSTANCE);
+		for (LispVal member : members) {
+			value = evalAtTopLevel(member, env);
+		}
+		return value;
+	}
+
+	/**
+	 * The members of a form whose body stays at top level, its declarations no-ops among
+	 * them as on the compile paths, or null for any other form and a malformed one.
+	 */
+	private static @Nullable List<LispVal> topLevelMembers(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		return switch (head.name()) {
+			case LispNames.PROGN, LispNames.LOCALLY -> cons.toList().subList(1, cons.toList().size());
+			case LispNames.EVAL_WHEN -> LispMacroExpander.evalWhenMembers(cons);
+			default -> {
+				LispVal wrapped = LispMacroExpander.topLevelWrapperExpansion(cons);
+				yield wrapped == null ? null : List.of(wrapped);
+			}
+		};
 	}
 
 	/**
@@ -10348,7 +10355,7 @@ public final class LispEvaluator {
 									}
 									ensureWitLoadedForConditionClass(cons);
 									ensureConditionReportRuntimeLoaded();
-									next = LispMacroExpander.expandSignalMacro(cons, this.closRegistry,
+									next = LispMacroExpander.expandSignalWithRuntimeType(cons, this.closRegistry,
 											this.restartRuntimeLoaded);
 									break dispatch;
 								case LispNames.HANDLER_CASE:
@@ -10698,6 +10705,10 @@ public final class LispEvaluator {
 								ensureObjcLoaded();
 							}
 							if (this.userMacros.containsKey(sym.name())) {
+								if (cons == this.topLevelForm.get()) {
+									result = evalAtTopLevel(expandUserMacro(cons, env), env);
+									break frame;
+								}
 								next = expandUserMacro(cons, env);
 								break dispatch;
 							}
@@ -11095,7 +11106,7 @@ public final class LispEvaluator {
 				return builtinMacroExpansion(cons, LispMacroExpander::expandRestartCase);
 			case LispNames.MAKE_CONDITION:
 				ensureConditionReportRuntimeLoaded();
-				return LispMacroExpander.expandMakeCondition(cons, this.closRegistry);
+				return LispMacroExpander.expandMakeConditionWithRuntimeType(cons, this.closRegistry);
 			case LispNames.DOCUMENTATION:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandDocumentation);
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
@@ -11170,10 +11181,10 @@ public final class LispEvaluator {
 			case LispNames.READ_FROM_STRING:
 				// More than the string is the prelude defun's whole lambda list, as on
 				// the compiled backends, while the name is still the built-in's; the
-				// one-argument call, and any call of a program's own definition, is
-				// evalPrimaryValueCall's (evalConsRareOperator).
+				// one-argument call, and any call of a program's own definition, is an
+				// ordinary one.
 				if (cons.properLength() > 2 && resolveFunction(name) instanceof LispFunction bound
-						&& this.primaryValueBuiltins.containsKey(bound)) {
+						&& this.publishingBuiltins.contains(bound)) {
 					return builtinMacroExpansion(cons, LispMacroExpander::expandReadFromString);
 				}
 				return null;
@@ -11273,9 +11284,6 @@ public final class LispEvaluator {
 			case LispNames.THE:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandThe);
 			case LispNames.EVAL_WHEN:
-				if (this.evalFunctionRuns.get() && !LispMacroExpander.evalWhenExecutes(cons)) {
-					return LispNil.INSTANCE;
-				}
 				return builtinMacroExpansion(cons, LispMacroExpander::expandEvalWhen);
 			case LispNames.WITH_COMPILATION_UNIT:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandWithCompilationUnit);
@@ -11332,7 +11340,8 @@ public final class LispEvaluator {
 			case LispNames.PROG_STAR:
 				return builtinMacroExpansion(cons, c -> LispMacroExpander.expandProg(c, true));
 			case LispNames.SYMBOL_MACROLET:
-				return expandSymbolMacrolet(cons, env);
+				// At top level its members are top-level forms: the rare table runs them.
+				return cons == this.topLevelForm.get() ? null : expandSymbolMacrolet(cons, env);
 			case LispNames.BYTE:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandByte);
 			case LispNames.BYTE_SIZE:
@@ -11555,7 +11564,9 @@ public final class LispEvaluator {
 			case LispNames.DEFINE_METHOD_COMBINATION:
 				return singleValue(evalDefineMethodCombination(cons));
 			case LispNames.MACROLET:
-				return evalMacrolet(cons, env);
+				return evalMacrolet(cons, env, cons == this.topLevelForm.get());
+			case LispNames.SYMBOL_MACROLET:
+				return evalAtTopLevel(expandSymbolMacrolet(cons, env), env);
 			case LispNames.JAVA_NEW_QUALIFIED:
 			case LispNames.JAVA_CALL_QUALIFIED:
 			case LispNames.JAVA_STATIC_QUALIFIED:
@@ -11627,28 +11638,14 @@ public final class LispEvaluator {
 				// family"). The one-argument
 				// form falls through to the ordinary built-in function.
 				LispVal[] operands = floorFamilyOperands(cons);
-				if (operands != null) {
+				if (operands != null && cons.properLength() == 2) {
+					// (floor (/ a b)), one value: its remainder is that of the quotient.
 					return singleValue(evalFloorFamilyDivision(name, operands[0], operands[1], env));
 				}
-				// The one-argument call rounds here too, one value: the FUNCTION
-				// publishes its remainder (a funcall, a mapcar), which a call in an
-				// ordinary position would only pay for -- a consumer or a function
-				// tail has lowered its producer before this dispatch.
-				if (cons.cdr() instanceof LispCons argCell && argCell.cdr() instanceof LispNil) {
-					return singleValue(Environment.roundToInteger(name, eval(argCell.car(), env)));
-				}
+				// The FUNCTION publishes the remainder: a macro's expansion, or an exit
+				// a walk does not see, reaches a consumer from here.
 				break;
 			}
-			case LispNames.GETHASH:
-			case LispNames.FIND_SYMBOL:
-			case LispNames.INTERN:
-			case LispNames.SUBTYPEP:
-			case LispNames.READ_FROM_STRING:
-			case LispNames.ARRAY_DISPLACEMENT:
-			case LispNames.READ_LINE:
-				// One value in call position; the FUNCTION publishes the second
-				// (installValuePublishingFunctions), as the floor family's does above.
-				return evalPrimaryValueCall(cons, env, name);
 			case LispNames.COERCE: {
 				// A packed (unsigned-byte 8|16|32) result type is the one designator
 				// expandCoerce cannot express (it collapses a compound spec to its head);
@@ -12923,8 +12920,9 @@ public final class LispEvaluator {
 	 * that happens to reference a local macro name would also see it (same pre-existing
 	 * interpreter limitation as {@code flet}/{@code labels}); the compile path
 	 * (UserMacroExpander) is lexically correct.
+	 * @param topLevel whether the form is in a top-level position
 	 */
-	private LispVal evalMacrolet(LispCons cons, Environment env) {
+	private LispVal evalMacrolet(LispCons cons, Environment env, boolean topLevel) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
 			throw new LispEvalException(LispNames.MACROLET + " expects a definition list");
@@ -12949,7 +12947,7 @@ public final class LispEvaluator {
 		try {
 			LispVal result = LispNil.INSTANCE;
 			for (LispVal bodyForm : parts.subList(2, parts.size())) {
-				result = evalMacroletForm(bodyForm, env);
+				result = evalMacroletForm(bodyForm, env, topLevel);
 			}
 			return result;
 		}
@@ -13009,42 +13007,54 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Evaluates a form of a {@code macrolet} body as the top-level form it is (CLHS
-	 * 3.2.3.1): a macro call is expanded until it is not one, and the members of the
-	 * {@code progn}, {@code eval-when} or {@code locally} it became run in order, each
-	 * expanded once the one before it has run (McCLIM's {@code define} of a presentation
-	 * type and then its methods, whose macro reads the type). Anything else is
-	 * pre-expanded with the local macros active BEFORE evaluating: a form that only
-	 * CAPTURES code (a defun/defgeneric method body) must bake the expansion in now -- by
-	 * the time the captured body runs, the local macros are gone and the call would
-	 * resolve as an undefined function (jzon's {@code %coerced-fields-slots} inside its
-	 * {@code coerced-fields} defgeneric).
+	 * Evaluates a form of a {@code macrolet} body: a macro call is expanded until it is
+	 * not one, and the members of the {@code progn}, {@code eval-when} or {@code locally}
+	 * it became run in order, each expanded once the one before it has run (McCLIM's
+	 * {@code define} of a presentation type and then its methods, whose macro reads the
+	 * type). Anything else is pre-expanded with the local macros active BEFORE
+	 * evaluating: a form that only CAPTURES code (a defun/defgeneric method body) must
+	 * bake the expansion in now -- by the time the captured body runs, the local macros
+	 * are gone and the call would resolve as an undefined function (jzon's
+	 * {@code %coerced-fields-slots} inside its {@code coerced-fields} defgeneric).
+	 * @param topLevel whether the {@code macrolet} is in a top-level position, which its
+	 * body keeps (CLHS 3.2.3.1) and an {@code eval-when} there asks
 	 */
-	private LispVal evalMacroletForm(LispVal form, Environment env) {
+	private LispVal evalMacroletForm(LispVal form, Environment env, boolean topLevel) {
 		LispVal expanded = inSitePackage(env, () -> UserMacroExpander.expandMacroCall(form, this));
 		if (expanded instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head) {
 			switch (memberName(head.name())) {
 				case LispNames.PROGN:
-					return evalMacroletMembers(cons.toList().subList(1, cons.toList().size()), env);
+					return evalMacroletMembers(cons.toList().subList(1, cons.toList().size()), env, topLevel);
 				case LispNames.EVAL_WHEN:
-					if (this.evalFunctionRuns.get() && !LispMacroExpander.evalWhenExecutes(cons)) {
-						return LispNil.INSTANCE;
+					if (topLevel) {
+						List<LispVal> members = LispMacroExpander.evalWhenMembers(cons);
+						return members == null ? eval(cons, env) : evalMacroletMembers(members, env, true);
 					}
-					return evalMacroletForm(LispMacroExpander.expandEvalWhen(cons), env);
+					return evalMacroletForm(LispMacroExpander.expandEvalWhen(cons), env, false);
 				case LispNames.LOCALLY:
-					return evalMacroletForm(LispMacroExpander.expandLocally(cons), env);
+					return topLevel ? evalMacroletMembers(cons.toList().subList(1, cons.toList().size()), env, true)
+							: evalMacroletForm(LispMacroExpander.expandLocally(cons), env, false);
 				case LispNames.MACROLET:
-					return evalMacrolet(cons, env);
+					return evalMacrolet(cons, env, topLevel);
+				case LispNames.SYMBOL_MACROLET:
+					if (topLevel) {
+						return evalMacroletForm(expandSymbolMacrolet(cons, env), env, true);
+					}
+					break;
 				default:
+					LispVal wrapped = topLevel ? LispMacroExpander.topLevelWrapperExpansion(cons) : null;
+					if (wrapped != null) {
+						return evalMacroletForm(wrapped, env, true);
+					}
 			}
 		}
 		return eval(expandAllAtSite(expanded, env), env);
 	}
 
-	private LispVal evalMacroletMembers(List<LispVal> members, Environment env) {
+	private LispVal evalMacroletMembers(List<LispVal> members, Environment env, boolean topLevel) {
 		LispVal result = LispNil.INSTANCE;
 		for (LispVal member : members) {
-			result = evalMacroletForm(member, env);
+			result = evalMacroletForm(member, env, topLevel);
 		}
 		return result;
 	}
@@ -14720,12 +14730,15 @@ public final class LispEvaluator {
 
 	private static LispVal rebuildSignalForm(String opName, List<LispVal> args) {
 		LispVal form = LispNil.INSTANCE;
+		int datumIndex = LispNames.CERROR.equals(opName) ? 1 : 0;
 		for (int i = args.size() - 1; i >= 0; i--) {
 			LispVal a = args.get(i);
+			// A keyword datum stays quoted: unquoted it is a computed datum, a symbol,
+			// and would re-enter this function value.
 			boolean selfEvaluating = a instanceof LispString || a instanceof LispInteger || a instanceof LispBigInteger
 					|| a instanceof LispRatio || a instanceof LispDouble || a instanceof LispChar
 					|| a instanceof LispNil || a instanceof LispTrue
-					|| (a instanceof LispSymbol sym && sym.isKeyword());
+					|| (i != datumIndex && a instanceof LispSymbol sym && sym.isKeyword());
 			LispVal wrapped = selfEvaluating ? a
 					: new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(a, LispNil.INSTANCE));
 			form = new LispCons(wrapped, form);

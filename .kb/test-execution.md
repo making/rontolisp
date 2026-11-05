@@ -116,6 +116,24 @@ each shard owns classes needing them. What did NOT change: `release` and
 `examples` still chain through `native-image`, both shards run on pull
 requests exactly as `test` did, and `examples` still never runs on a PR.
 
+**A runner out of memory leaves no report.** The log ends in `Killed` (the `/bin/sh -c`
+surefire wraps a fork in, its fork SIGKILLed) and, milliseconds later, `The runner has
+received a shutdown signal`: no failed test, no surefire report, the other jobs skipped. So
+every `[rontolisp] JUnit parallelism` line, one per class start, carries `memory available`.
+What it was on 2026-11-05 (`ea1a290ce`, the first in six days and 120 failed runs): a
+generated dispatch had grown a module eightfold in wasmtime's peak
+([clos.md](clos.md), "`change-class`"), the two wasm legs of `AsdfMetaobjectsE2eTest` can
+compile at once (4.4 + 7.2 GB), and `ClPostgresE2eTest`'s CLI JVMs started beside them. Measured
+beside that, the shard on 2 forks at 16 GB ergonomics: forks up to 9.1 GB together, CLI
+JVMs 2.3 GB, Maven 1.1 GB. The next run of the same tree passed, and surefire's class order
+differs run to run (on the killed job `AsdfMetaobjectsE2eTest` started 317 s in and
+`ClPostgresE2eTest` 370 s; on three others 484-644 s and 226-242 s): a single green run says
+nothing about the margin.
+Inferred from the fingerprint and those numbers, since a kill leaves no memory record; on
+the first run with the line (`bd5cf2979`, the dispatch fixed) the lowest of 71 class starts
+was 7,978 MB available, against the 11.6 GB those two compiles asked for. The other library
+modules measured then (jose's test suite, ironclad, clsql, contextl) peak under 1 GB on 4 CPUs.
+
 The NEXT split, decided 2026-10-22, not built: when a shard fills its runner
 again, split `test-rest` by package -- the `codegen.*` wasmtime-compile
 owners versus everything else -- as a third scope value on the same profile

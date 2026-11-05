@@ -207,20 +207,59 @@ class LispMacroExpanderTest {
 			assertThat(LispMacroExpander.needsSignalClauseMatch(LispReader.readAllFromString(declining))).as(declining)
 				.isFalse();
 		}
-		// What the wasm-GC layout scan takes for the type-error of a warn.
+		// What the wasm-GC layout scan takes for the type-error of a literal signal.
 		ClosRegistry registry = new ClosRegistry();
-		for (String typeError : List.of("(warn x)", "(warn 'simple-error)", "(warn (make-condition 'simple-error))",
-				"(funcall #'warn \"w\")", "(funcall 'warn \"w\")")) {
-			assertThat(LispMacroExpander.warnCanSignalTypeError(LispReader.readAllFromString(typeError), registry))
+		for (String typeError : List.of("(warn 'simple-error)", "(warn (make-condition 'simple-error))",
+				"(error 'no-such-class)", "(signal 'no-such-class)", "(warn 'no-such-class)",
+				"(make-condition 'no-such-class)", "(cerror \"c\" 'no-such-class)")) {
+			assertThat(LispMacroExpander.signalCanSignalTypeError(LispReader.readAllFromString(typeError), registry))
 				.as(typeError)
 				.isTrue();
 		}
-		for (String warning : List.of("(warn \"w\")", "(warn 'style-warning)",
-				"(warn (make-condition 'simple-warning))", "(print '(warn x))")) {
-			assertThat(LispMacroExpander.warnCanSignalTypeError(LispReader.readAllFromString(warning), registry))
-				.as(warning)
+		for (String signal : List.of("(warn \"w\")", "(warn 'style-warning)", "(warn (make-condition 'simple-warning))",
+				"(print '(warn 'simple-error))", "(warn x)", "(error 'simple-error)", "(funcall #'warn \"w\")")) {
+			assertThat(LispMacroExpander.signalCanSignalTypeError(LispReader.readAllFromString(signal), registry))
+				.as(signal)
 				.isFalse();
 		}
+	}
+
+	@Test
+	void aComputedDatumDispatchesOverTheClassesTheProgramCanName() {
+		// "defuns of the dispatch, helpers" per program: a helper per class a datum can
+		// hold, none for what the program only signals literally or only defines.
+		java.util.Map<String, List<Integer>> programs = new java.util.LinkedHashMap<>();
+		String defined = "(define-condition c (error) ()) ";
+		programs.put("(defun f (x) (error (format nil \"~a\" x)))", List.of(0, 0));
+		programs.put("(defun f (x) (error (concatenate 'string \"a\" x)))", List.of(0, 0));
+		programs.put("(defun f (m) (error m))", List.of(1, 0));
+		programs.put("(defun f (m) (error m)) (f 'parse-error)", List.of(1, 1));
+		programs.put("(defun f (m) (error m)) (handler-case (f \"x\") (type-error () 1))", List.of(1, 0));
+		programs.put("(defun f (m) (error m)) (funcall #'(lambda () (f 'parse-error)))", List.of(1, 1));
+		programs.put(defined + "(defun f (m) (error m))", List.of(1, 0));
+		programs.put(defined + "(defun f (m) (error m)) (error 'c)", List.of(1, 0));
+		programs.put(defined + "(defun f (m) (error m)) (f 'c)", List.of(1, 1));
+		programs.put(defined + "(defun f (m) (error m)) (f (intern \"C\"))", List.of(1, 1));
+		for (java.util.Map.Entry<String, List<Integer>> program : programs.entrySet()) {
+			List<String> defuns = LispMacroExpander
+				.expandTopLevelDefinitions(LispReader.readAllFromString(program.getKey()), new java.util.HashMap<>(),
+						new ClosRegistry())
+				.stream()
+				.filter(form -> form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+						&& LispNames.DEFUN.equals(op.name()))
+				.map(form -> ((LispCons) ((LispCons) form).cdr()).car().print())
+				.toList();
+			assertThat(List.of(defuns.stream().filter(LispNames.ERROR_RUNTIME::equals).count(),
+					defuns.stream().filter(name -> name.startsWith("%ERROR-RT-")).count()))
+				.as(program.getKey())
+				.isEqualTo(program.getValue().stream().map(Integer::longValue).toList());
+		}
+		// A wasm-GC module outside exception-handling mode traps whatever the datum is.
+		assertThat(LispMacroExpander
+			.expandTopLevelDefinitions(LispReader.readAllFromString("(defun f (m) (error m))"),
+					new java.util.HashMap<>(), new ClosRegistry(), null, false, true)
+			.stream()
+			.noneMatch(form -> form.print().contains(LispNames.ERROR_RUNTIME))).isTrue();
 	}
 
 	@Test

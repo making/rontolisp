@@ -565,6 +565,12 @@ public final class SpecialVarCollector {
 						return;
 					}
 				}
+				// An eval-when's body runs whatever the situations at top level, and this
+				// walk does not know the position.
+				if (LispNames.EVAL_WHEN.equals(h) && cons.cdr() instanceof LispCons situations) {
+					form = situations.cdr();
+					continue;
+				}
 				// Binding sugar (do/dolist/dotimes/loop/multiple-value-bind/with-*/...)
 				// reveals its lets one expansion step at a time; a form the expander
 				// rejects (it may validate shapes the compiler checks later) is walked

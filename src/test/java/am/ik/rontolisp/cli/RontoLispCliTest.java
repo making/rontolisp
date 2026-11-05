@@ -2031,6 +2031,10 @@ class RontoLispCliTest {
 		String program = """
 				(print (if t (unless nil (let ((x 1)) (setf x (+ x 1)) x)) 'kept))
 				(print '(unless 1 2))
+				(defmacro ew-m (form) `(eval-when (:load-toplevel) (progn (eval-when (:load-toplevel) ,form))))
+				(ew-m (print 3))
+				(print (let () (eval-when (:load-toplevel) 4)))
+				(symbol-macrolet ((ew-s 5)) (eval-when (:load-toplevel) (print ew-s)))
 				""";
 		String ran = runCli("", "-e", program);
 		String dump = runCli("", "-e", program, "--dump-ir");
