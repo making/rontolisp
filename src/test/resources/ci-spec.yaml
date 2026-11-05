@@ -22575,6 +22575,33 @@ cases:
       (in-package :pon-p)
       (print (list 'foo (let ((*package* (find-package :cl-user))) (prin1-to-string 'zz)) 'bar))
       (in-package :cl-user)
+      ;; A slot is a place too, of a structure or a class instance, and the walk spells
+      ;; the instance around it. SBCL 2.2.9 prints the structures the same, *print-level*
+      ;; and *print-length* included, but no slots in #<...> and no end to a cycle.
+      (defstruct pon-s a b)
+      (print (make-pon-s :a *pon-i* :b (list *pon-i* "s" 'sym)))
+      (princ (make-pon-s :a *pon-i* :b "s"))
+      (terpri)
+      (print (make-pon-s :a (make-pon-s :a *pon-i*)))
+      (defclass pon-h () ((v :initarg :v)))
+      (print (make-instance 'pon-h :v *pon-i*))
+      (let ((p (make-pon-s))) (setf (pon-s-a p) (list p)) (print p))
+      (let ((*print-level* 1)) (print (make-pon-s :a '(1) :b (make-pon-s))))
+      (let ((*print-length* 1)) (print (make-pon-s :a 1 :b 2)))
+      (print (make-pon-s :a #p"/x" :b (make-string-output-stream)))
+      ;; print-object's system method walks too: out of (call-next-method) and on a
+      ;; direct call. A cycle through a method still ends.
+      (defstruct pon-n n)
+      (defmethod print-object ((o pon-n) s) (write-string "N:" s) (call-next-method))
+      (print (make-pon-n :n *pon-i*))
+      (let ((a (make-pon-n)) (b (make-pon-n)))
+        (setf (pon-n-n a) b)
+        (setf (pon-n-n b) a)
+        (print a))
+      (print-object (make-pon-s :a *pon-i*) *standard-output*)
+      (terpri)
+      (print-object (list *pon-i*) *standard-output*)
+      (terpri)
     expected: |
       #<C custom>
       (#<C custom>)
@@ -22586,6 +22613,18 @@ cases:
       (1 s SYM)
       (#2A((3 3) (3 3)) #d(1.5 1.5))
       (FOO "PON-P::ZZ" BAR)
+      #S(PON-S :A #<C custom> :B (#<C custom> "s" SYM))
+      #S(PON-S :A #<C custom> :B s)
+      #S(PON-S :A #S(PON-S :A #<C custom> :B NIL) :B NIL)
+      #<PON-H :V #<C custom>>
+      #S(PON-S :A (#) :B NIL)
+      #S(PON-S :A # :B #)
+      #S(PON-S :A 1 ...)
+      #S(PON-S :A #P"/x" :B #<STREAM>)
+      N:#S(PON-N :N #<C custom>)
+      N:#S(PON-N :N N:#S(PON-N :N N:#))
+      #S(PON-S :A #<C custom> :B NIL)
+      (#<C custom>)
   - name: computed-stream-options
     # A portable file wrapper takes the open options as ARGUMENTS and passes
     # them down -- uiop's call-with-input-file / call-with-output-file are
@@ -31801,9 +31840,22 @@ cases:
     # same names, and no slots in #<...>): prove's own suite matches #<MY-CONDITION
     # against what its package prints.
     source: |
+      (defclass itn-here () ())
+      (defmethod print-object ((o itn-here) s) (print-unreadable-object (o s :type t)))
       (defpackage :itn-home (:use :cl) (:export :itn-exported :itn-report))
       (in-package :itn-home)
       (defclass itn-own () ())
+      (defclass itn-puo () ())
+      (defmethod print-object ((o itn-puo) s)
+        (print-unreadable-object (o s :type t) (write-string "b" s)))
+      ;; print-unreadable-object :type writes the type's symbol.
+      (print (list (make-instance 'itn-puo) (make-instance 'cl-user::itn-here)))
+      (print (princ-to-string (make-instance 'cl-user::itn-here)))
+      (in-package :cl-user)
+      (print (list (make-instance 'itn-home::itn-puo) (make-instance 'itn-here)))
+      (print (princ-to-string (make-instance 'itn-home::itn-puo)))
+      (print (let ((*print-case* :downcase)) (prin1-to-string (make-instance 'itn-here))))
+      (in-package :itn-home)
       (defclass itn-exported () ())
       (defstruct itn-struct a)
       (define-condition itn-cond (error) ())
@@ -31817,6 +31869,11 @@ cases:
       (in-package :cl-user)
       (print (itn-home:itn-report))
     expected: |
+      (#<ITN-PUO b> #<COMMON-LISP-USER::ITN-HERE>)
+      "#<ITN-HERE>"
+      (#<ITN-HOME::ITN-PUO b> #<ITN-HERE>)
+      "#<ITN-PUO b>"
+      "#<itn-here>"
       (#<ITN-OWN> #<ITN-EXPORTED> #S(ITN-STRUCT :A 1))
       "#<ITN-COND>"
       (#<ITN-HOME::ITN-OWN> #<ITN-EXPORTED> #S(ITN-HOME::ITN-STRUCT :A 1))
@@ -33472,6 +33529,109 @@ cases:
       (|10| . |1.5|)
       
 standalone:
+  - name: a-standard-condition-a-program-signals-reports-with-no-control
+    source: |
+      ;; Standalone: the corpus's computed datums turn off the narrowing that decides,
+      ;; per class, whether this report can be reached. Only the first two classes are
+      ;; signaled by name; a caught (/ 1 0) and (car 1) carry their text as a control.
+      (print (handler-case (error 'undefined-function :name 'rsn-f) (error (e) (princ-to-string e))))
+      (print (handler-case (error 'unbound-variable :name 'rsn-v) (error (e) (format nil "~a" e))))
+      (print (handler-case (/ 1 (length nil)) (error (e) (princ-to-string e))))
+      (print (handler-case (car (length nil)) (error (e) (princ-to-string e))))
+      (print (princ-to-string (make-condition 'division-by-zero)))
+      (print (handler-case (error 'division-by-zero :operation '/ :operands '(1 0))
+               (arithmetic-error (e) (list (arithmetic-error-operation e) (arithmetic-error-operands e)))))
+      (print (handler-case (/ 1 (length nil))
+               (arithmetic-error (e) (list (arithmetic-error-operation e) (arithmetic-error-operands e)))))
+      (print (princ-to-string (make-condition 'type-error :datum 1 :expected-type 'string)))
+      (define-condition rsn-u (undefined-function) ())
+      (print (princ-to-string (make-condition 'rsn-u :name 'rsn-f)))
+      (print (princ-to-string (make-condition 'undefined-function :name 'rsn-f
+                                              :format-control "own ~a" :format-arguments '(1))))
+      (print (prin1-to-string (make-condition 'undefined-function :name 'rsn-f)))
+      (error 'undefined-function :name 'rsn-f)
+    stdout: |
+      "The function RSN-F is undefined"
+      "The variable RSN-V is unbound"
+      "Division by zero"
+      "CAR: The value 0 is not of type LIST"
+      "Division by zero"
+      (/ (1 0))
+      (NIL NIL)
+      "The value 1 is not of type STRING"
+      "The function RSN-F is undefined"
+      "own 1"
+      "#<UNDEFINED-FUNCTION :NAME RSN-F :FORMAT-CONTROL NIL :FORMAT-ARGUMENTS NIL>"
+    stderr: |
+      Unhandled condition: The function RSN-F is undefined
+    fails: true
+  - name: close-of-an-instance-that-is-no-stream
+    source: |
+      ;; Standalone: a program defining a close method stands the Gray close down, and
+      ;; the corpus has one. An instance is a stream only by its class.
+      (defclass cin-s (rontolisp:fundamental-character-output-stream) ())
+      (defclass cin-o () ())
+      (defstruct cin-t)
+      (print (list (close (make-instance 'cin-s)) (open-stream-p (make-instance 'cin-s))))
+      (print (handler-case (close (make-instance 'cin-o)) (type-error () :type-error)))
+      (print (handler-case (close (make-cin-t) :abort t) (type-error () :type-error)))
+      (print (handler-case (open-stream-p (make-cin-t)) (type-error () :type-error)))
+      (print (close (make-synonym-stream '*standard-output*)))
+      (print (close (make-string-output-stream)))
+    stdout: |
+      (T T)
+      :TYPE-ERROR
+      :TYPE-ERROR
+      :TYPE-ERROR
+      T
+      T
+  - name: instances-follow-the-printer-controls-in-a-program-with-no-method
+    source: |
+      ;; Standalone: a method or a condition anywhere routes a program through the
+      ;; print-object walk, and this pins the %print-cased one. SBCL 2.2.9 prints these,
+      ;; no slots in #<...> and no end to a cycle aside.
+      (defpackage :ifp (:use :cl))
+      (in-package :ifp)
+      (defstruct q r)
+      (defclass k () ((v :initarg :v)))
+      (in-package :cl-user)
+      (defstruct ifp-i a b)
+      (print (ifp::make-q :r 'ifp::sym))
+      (princ (ifp::make-q :r 'ifp::sym))
+      (terpri)
+      (print (format nil "~a ~a" (make-instance 'ifp::k :v 1) (ifp::make-q)))
+      (let ((*print-case* :downcase))
+        (print (make-ifp-i :a 'foo :b '(bar)))
+        (princ (ifp::make-q :r 'foo))
+        (terpri))
+      (let ((*print-level* 1)) (print (make-ifp-i :a '(1))))
+      (let ((*print-level* 0)) (print (make-ifp-i :a '(1))))
+      (let ((*print-length* 1)) (print (make-ifp-i :a 1 :b 2)))
+      (let ((*print-length* 0)) (print (make-ifp-i :a 1 :b 2)))
+      (let ((*print-base* 2)) (print (make-ifp-i :a 5)))
+      (let ((i (make-ifp-i)) (*print-case* :downcase))
+        (setf (ifp-i-a i) i)
+        (print i))
+      (in-package :ifp)
+      (print (make-q :r 'sym))
+      (print (cl-user::make-ifp-i :a 'sym))
+      (princ (cl-user::make-ifp-i :a 'sym))
+      (terpri)
+    stdout: |
+      #S(IFP::Q :R IFP::SYM)
+      #S(Q :R SYM)
+      "#<K :V 1> #S(Q :R NIL)"
+      #S(ifp-i :a foo :b (bar))
+      #S(q :r foo)
+      #S(IFP-I :A # :B NIL)
+      #
+      #S(IFP-I :A 1 ...)
+      #S(IFP-I ...)
+      #S(IFP-I :A 101 :B NIL)
+      #S(ifp-i :a # :b nil)
+      #S(Q :R SYM)
+      #S(COMMON-LISP-USER::IFP-I :A SYM :B NIL)
+      #S(IFP-I :A SYM :B NIL)
   - name: pprint-logical-block-of-an-atom-in-a-program-not-naming-write
     source: |
       ;; Standalone: the concatenated corpus names write elsewhere, which hides the
@@ -33628,9 +33788,9 @@ standalone:
       ;; A computed condition type with initargs, and nothing caught anywhere: the
       ;; text names the initargs the call passed, as the literal call's does.
       (defun ci-uc-boom (ty) (error ty :code 42))
-      (ci-uc-boom 'type-error)
+      (ci-uc-boom 'parse-error)
     stderr: |
-      Unhandled condition: Condition (TYPE-ERROR :CODE 42) was signalled.
+      Unhandled condition: Condition (PARSE-ERROR :CODE 42) was signalled.
     fails: true
   - name: failing-handler-bind-handler-report
     source: |

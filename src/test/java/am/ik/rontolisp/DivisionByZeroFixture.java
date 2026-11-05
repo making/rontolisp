@@ -148,7 +148,7 @@ public final class DivisionByZeroFixture {
 			(:DIVISION-BY-ZERO "Division by zero" T)
 			(:DIVISION-BY-ZERO "Division by zero" T)
 			(:DIVISION-BY-ZERO "Division by zero" T)
-			(NIL #<DIVISION-BY-ZERO :FORMAT-CONTROL "Division by zero" :FORMAT-ARGUMENTS NIL>)
+			(NIL #<DIVISION-BY-ZERO :FORMAT-CONTROL "Division by zero" :FORMAT-ARGUMENTS NIL :OPERATION NIL :OPERANDS NIL>)
 			DIVISION-BY-ZERO""";
 
 }

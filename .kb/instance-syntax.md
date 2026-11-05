@@ -14,7 +14,8 @@ render it with one fixed loop.
 - `defstruct`: `#S(NAME :SLOT value ...)`. `defclass`/`define-condition`: `#<NAME :SLOT value ...>`.
   Slot-less: `#S(EMPTY)` / `#<EMPTY>`. `NAME` is the type name as spelled, keeping a package
   qualifier (`GEO::PT`), which `prin1` drops where the name is accessible
-  ([pretty-printer.md](pretty-printer.md), "The package qualifier").
+  ([pretty-printer.md](pretty-printer.md), "The package qualifier"). Under `princ` it is the symbol's
+  name alone (`PT`, what follows the last colon, in all three printer loops), as SBCL 2.2.9 prints it.
 - A third layout kind `PATHNAME` is the ONE fixed layout of the pathname value (`.kb/pathnames.md`):
   `#P"namestring"` under `prin1`, bare namestring under `princ` — a per-kind arm in all three printer
   loops, never the slot-name syntax. Seeded layout-only (never in `classes()`, never a struct tag,
@@ -113,6 +114,7 @@ knows nothing about `ClosRegistry`, so reading is split in two:
 | `(%obj-tag obj)` | the instance tag symbol, nil for a non-instance |
 | `(%obj-p obj)` | t for any instance |
 | `(%obj-slots obj)` | a FRESH list of slot values in layout order, nil for a non-instance |
+| `(%obj-print-frame obj)` | a FRESH list `(class-p name slot...)` of what the printer writes around the slot values, as strings; nil where it writes no slot syntax (a non-instance, a pathname, a stream). What the two walks spell an instance from (`.kb/clos.md`), so neither has to render one to find its name |
 
 On the compile path the tag and index must be LITERAL (quoted symbol / integer); every expansion
 satisfies that via the private `objNew`/`objRef`/`objSet`/`objIs`/`objTag` builders in

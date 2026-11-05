@@ -19068,6 +19068,13 @@ class LispEvaluatorTest {
 				      (%obj-slots (%obj-new '|%struct-EMPTY|))
 				      (%obj-slots '(1 2)) (%obj-slots 5))
 				""").print()).isEqualTo("((1 \"hi\") NIL NIL NIL)");
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(defstruct empty)
+				(defclass box () ((w :initarg :w)))
+				(list (%obj-print-frame (make-point)) (%obj-print-frame (make-empty))
+				      (%obj-print-frame (make-instance 'box)) (%obj-print-frame '(1 2)) (%obj-print-frame 5))
+				""").print()).isEqualTo("((NIL \"POINT\" \"X\" \"Y\") (NIL \"EMPTY\") (T \"BOX\" \"W\") NIL NIL)");
 	}
 
 	@Test

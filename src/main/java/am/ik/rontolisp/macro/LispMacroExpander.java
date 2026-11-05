@@ -27748,15 +27748,14 @@ public final class LispMacroExpander {
 	 * user method.
 	 *
 	 * <p>
-	 * It renders through {@link LispNames#PRIN1_TO_STRING_RAW} /
-	 * {@link LispNames#PRINC_TO_STRING_RAW} -- the unrouted printers every backend lowers
-	 * -- rather than through the routing {@code %print-object-str} walk, and that is not
-	 * an optimization: {@code printObjectTags} collects specializers from EVERY parameter
-	 * while the dispatcher dispatches on the first, so a method specialized on its STREAM
-	 * parameter puts that class in the routed set and a routed default would recurse
-	 * forever. The visible consequence is that a nested instance inside a value passed to
-	 * a DIRECT {@code print-object} call gets the raw rendering, where the printer's own
-	 * walk would consult the method.
+	 * It renders through {@code %pos-default}, which walks the value but does not route
+	 * the instance it was handed: that instance is here because its method chain ended
+	 * here, and {@code printObjectTags} collects specializers from EVERY parameter while
+	 * the dispatcher dispatches on the first, so one specialized on its STREAM parameter
+	 * alone would recurse forever. {@code %pos-defaults} holds the instances this default
+	 * is rendering, since a method between two of them starts the walk's path over: a
+	 * cycle through it still ends in {@code #}. A program with nothing to route has no
+	 * walk, and takes the raw conversions ({@link #expandPrintObjectDefault}).
 	 * @param generic the print-object generic
 	 * @param out the forms to append the default method's defun to
 	 */
@@ -27773,13 +27772,31 @@ public final class LispMacroExpander {
 		LispSymbol value = new LispSymbol(generic.paramNames().get(0));
 		LispVal stream = generic.paramNames().size() >= 2 ? new LispSymbol(generic.paramNames().get(1))
 				: LispTrue.INSTANCE;
-		LispVal rendered = makeIf(new LispSymbol(LispNames.PRINT_ESCAPE_VAR),
-				callOf(LispNames.PRIN1_TO_STRING_RAW, value), callOf(LispNames.PRINC_TO_STRING_RAW, value));
+		LispVal rendered = callOf(LispNames.PRINT_OBJECT_DEFAULT_INTERNAL, value);
 		LispVal body = makeProgn(
 				List.of(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), rendered, stream)), value));
 		out.add(listToCons(
 				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(defaultName), listToCons(params), body)));
 	}
+
+	/**
+	 * Lowers {@code (%print-object-default x)}, the text {@code print-object}'s system
+	 * method writes under the current {@code *print-escape*}.
+	 * @param value the form of the value
+	 * @param walks whether the program carries the walk ({@code %pos-default})
+	 * @return the equivalent expression
+	 */
+	public static LispVal expandPrintObjectDefault(LispVal value, boolean walks) {
+		LispSymbol escape = new LispSymbol(LispNames.PRINT_ESCAPE_VAR);
+		if (walks) {
+			return callOf(POS_DEFAULT, value, escape);
+		}
+		return makeIf(escape, callOf(LispNames.PRIN1_TO_STRING_RAW, value),
+				callOf(LispNames.PRINC_TO_STRING_RAW, value));
+	}
+
+	/** The walk's entry for the system method; see {@link #printObjectInstanceDefun}. */
+	public static final String POS_DEFAULT = "%POS-DEFAULT";
 
 	/**
 	 * Synthesizes {@code make-load-form}'s standard methods into {@code out} as one
@@ -30851,8 +30868,19 @@ public final class LispMacroExpander {
 		if (!printObjectTags(closRegistry).isEmpty() || closRegistry.printsConditionReports()) {
 			boolean printReadably = program.stream()
 				.anyMatch(form -> mentionsPrinterVariable(form, LispNames.PRINT_READABLY_VAR));
-			out.addAll(printObjectStrDefuns(closRegistry, usesPrintControls(program), programUsesGeneralArrayOp(out),
-					printReadably));
+			for (LispVal form : printObjectStrDefuns(closRegistry, usesPrintControls(program),
+					programUsesGeneralArrayOp(out),
+					!printObjectTags(closRegistry).isEmpty() || closRegistry.definesInstanceTypes(), printReadably)) {
+				// A defun is hoisted and its variable is not: the first print can run
+				// ahead of where this splice lands.
+				if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+						&& LispNames.DEFVAR.equals(op.name())) {
+					out.add(0, form);
+				}
+				else {
+					out.add(form);
+				}
+			}
 		}
 		// The runtime format renderer, once per program that can reach it. Emitted here
 		// so the scan sees the definitions injected above (the condition report renders a
@@ -38440,15 +38468,80 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The instance half of the walk, the twin of the raw renderers' slot loop
+	 * ({@code LispInstance.render}, {@code _instToString}, {@code _print_val}'s instance
+	 * arm): each slot value is the walk's own, so a method is consulted for a value in a
+	 * slot at any depth. It reproduces the raw text byte for byte where no method applies
+	 * and, like a list here, honors {@code *print-level*} and {@code *print-length*}. A
+	 * pathname or a stream has no slot syntax ({@code %obj-print-frame} answers nil) and
+	 * takes the leaf conversion.
+	 * @param printControls whether the leaf conversions are {@code %print-cased}, which
+	 * also spells the type name by the current package
+	 */
+	private static String printObjectInstanceDefun(boolean printControls) {
+		String raw = printControls ? "(%print-cased %pos-x %pos-esc)"
+				: "(if %pos-esc (%prin1-to-string %pos-x) (%princ-to-string %pos-x))";
+		String name = printControls ? "(%pc-fold (if %pos-esc (%pc-unqualified %pos-name %pos-name) %pos-member))"
+				: "(if %pos-esc %pos-name %pos-member)";
+		String key = printControls ? "(%pc-fold (car %pos-key))" : "(car %pos-key)";
+		return """
+				(defun %pos-instance (%pos-x %pos-esc %pos-path %pos-depth %pos-lvl)
+				  (let ((%pos-frame (%obj-print-frame %pos-x)))
+				    (cond ((null %pos-frame)
+				""" + raw + """
+				)
+				      ((or (%pos-on-path %pos-x %pos-path) (>= %pos-depth 256)
+				           (and *print-level* (>= %pos-lvl *print-level*)))
+				       "#")
+				      (t
+				       (let* ((%pos-name (cadr %pos-frame))
+				              (%pos-i (length %pos-name)))
+				         (while (and (> %pos-i 0) (not (char= (char %pos-name (- %pos-i 1)) #\\:)))
+				           (setq %pos-i (- %pos-i 1)))
+				         (let* ((%pos-member (subseq %pos-name %pos-i))
+				                (%pos-acc (concatenate 'string (if (car %pos-frame) "#<" "#S(")
+				""" + name + """
+				))
+				                (%pos-key (cddr %pos-frame)) (%pos-val (%obj-slots %pos-x)) (%pos-n 0)
+				                (%pos-sub (cons %pos-x %pos-path)) (%pos-subd (+ %pos-depth 1))
+				                (%pos-subl (+ %pos-lvl 1)))
+				           (while (consp %pos-key)
+				             (if (and *print-length* (>= %pos-n *print-length*))
+				                 (progn
+				                   (setq %pos-acc (concatenate 'string %pos-acc " ..."))
+				                   (setq %pos-key nil))
+				                 (progn
+				                   (setq %pos-acc (concatenate 'string %pos-acc " :"
+				""" + key
+				+ """
+						 " "
+						                                               (%pos-walk (car %pos-val) %pos-esc %pos-sub %pos-subd %pos-subl)))
+						                   (setq %pos-n (+ %pos-n 1))
+						                   (setq %pos-key (cdr %pos-key))
+						                   (setq %pos-val (cdr %pos-val)))))
+						           (concatenate 'string %pos-acc (if (car %pos-frame) ">" ")"))))))))
+						(defvar %pos-defaults nil)
+						(defun %pos-default (%pos-x %pos-esc)
+						  (if (%obj-p %pos-x)
+						      (if (%pos-on-path %pos-x %pos-defaults)
+						          "#"
+						          (let ((%pos-defaults (cons %pos-x %pos-defaults)))
+						            (%pos-instance %pos-x %pos-esc nil 0 0)))
+						      (%pos-walk %pos-x %pos-esc nil 0 0)))
+						""";
+	}
+
+	/**
 	 * The generated renderer pair. {@code (%print-object-str x escape)} is the entry
 	 * point every printing operator is rewritten onto: a cons -- and, where the program
 	 * can hold one, a general rank-1 vector -- is WALKED element-wise through itself, so
 	 * a {@code print-object} method (and a condition's {@code :report}) is consulted for
 	 * a nested value exactly as CL does; every other value goes to
-	 * {@code (%print-object-leaf x escape)}, which is the routing half: an instance of a
-	 * type some method specializes on is rendered by calling the generic into a string
-	 * stream, and everything else falls back to the RAW ({@code print-object}-free)
-	 * conversions, which is what makes the recursion terminate.
+	 * {@code %print-object-leaf}, which is the routing half: an instance of a type some
+	 * method specializes on is rendered by calling the generic into a string stream, any
+	 * other instance by {@code %pos-instance}, which walks its slots, and everything else
+	 * falls back to the RAW ({@code print-object}-free) conversions, which is what makes
+	 * the recursion terminate.
 	 *
 	 * <p>
 	 * The walk is fixed Lisp SOURCE rather than a hand-assembled AST because it is the
@@ -38459,28 +38552,40 @@ public final class LispMacroExpander {
 	 * {@code %print-cased} renderer instead of the raw conversion
 	 * @param walkVectors whether to emit the vector arm; false for a program that can
 	 * hold no general array, which then pulls no array runtime in
+	 * @param walkInstances whether to walk an instance's slots; false for a program
+	 * defining no method and no instance type, whose only instances are conditions
 	 * @param printReadably whether the program can read {@code *print-readably*}: the
 	 * variable then overrides {@code *print-length*} and {@code *print-level*} under
 	 * {@code prin1}, and a {@code princ} of an instance binds it to nil around the method
 	 * @return the {@code %print-object-str} and {@code %print-object-leaf} defuns
 	 */
 	public static List<LispVal> printObjectStrDefuns(ClosRegistry closRegistry, boolean printControls,
-			boolean walkVectors, boolean printReadably) {
+			boolean walkVectors, boolean walkInstances, boolean printReadably) {
 		String walk = "(%pos-walk %pos-x %pos-esc nil 0 0)";
 		String entry = printReadably ? "(if (and %pos-esc *print-readably* (or *print-length* *print-level*))"
 				+ " (let ((*print-length* nil) (*print-level* nil)) " + walk + ") " + walk + ")" : walk;
 		String source = "(defun %print-object-str (%pos-x %pos-esc) " + entry + ")\n"
 				+ "(defun %pos-walk (%pos-x %pos-esc %pos-path %pos-depth %pos-lvl) (cond " + PRINT_OBJECT_CONS_ARM
-				+ (walkVectors ? printObjectVectorArm() : "") + "(t (%print-object-leaf %pos-x %pos-esc))))\n"
-				+ PRINT_OBJECT_GUARD_HELPERS;
+				+ (walkVectors ? printObjectVectorArm() : "") + "(t (%print-object-leaf %pos-x %pos-esc"
+				+ (walkInstances ? " %pos-path %pos-depth %pos-lvl" : "") + "))))\n" + PRINT_OBJECT_GUARD_HELPERS
+				+ (walkInstances ? printObjectInstanceDefun(printControls) : "");
 		List<LispVal> walker = LispReader.readAllFromString(source, Features.INTERPRETER);
 		LispSymbol value = new LispSymbol("__pox");
 		LispSymbol escape = new LispSymbol("__poe");
-		LispVal fallback = makeIf(escape, rawRendering(value, true, printControls),
-				princRendering(value, closRegistry.printsConditionReports(), printControls));
+		List<LispVal> leafParams = new java.util.ArrayList<>(List.of(value, escape));
+		LispVal instance = null;
+		if (walkInstances) {
+			LispSymbol path = new LispSymbol("__pop");
+			LispSymbol depth = new LispSymbol("__pod");
+			LispSymbol level = new LispSymbol("__pol");
+			leafParams.addAll(List.of(path, depth, level));
+			instance = listToCons(List.of(new LispSymbol("%POS-INSTANCE"), value, escape, path, depth, level));
+		}
+		LispVal fallback = makeIf(escape, instanceOr(value, instance, rawRendering(value, true, printControls)),
+				princRendering(value, closRegistry.printsConditionReports(), printControls, instance));
 		LispVal body = printObjectRouting(value, fallback, closRegistry, escape, printReadably);
 		LispVal leaf = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
-				new LispSymbol(LispNames.PRINT_OBJECT_LEAF_INTERNAL), listToCons(List.of(value, escape)), body));
+				new LispSymbol(LispNames.PRINT_OBJECT_LEAF_INTERNAL), listToCons(leafParams), body));
 		List<LispVal> out = new java.util.ArrayList<>(walker);
 		out.add(leaf);
 		return out;
@@ -38506,17 +38611,23 @@ public final class LispMacroExpander {
 	 * "{@code princ} of a condition runs its report, {@code prin1} prints the unreadable
 	 * {@code #<...>} form" -- the escape-on arm is deliberately untouched.
 	 */
-	private static LispVal princRendering(LispVal value, boolean routesConditionReports, boolean printControls) {
+	private static LispVal princRendering(LispVal value, boolean routesConditionReports, boolean printControls,
+			@Nullable LispVal instance) {
 		LispVal raw = rawRendering(value, false, printControls);
 		if (!routesConditionReports) {
-			return raw;
+			return instanceOr(value, instance, raw);
 		}
 		// The %obj-p guard keeps every non-instance print (the overwhelming majority) one
 		// test away from the raw conversion instead of walking the renderer's tag cond.
 		LispSymbol reportVar = new LispSymbol("__cr" + MV_COUNTER.getAndIncrement());
 		LispVal reported = makeLet(reportVar.name(), callOf(LispNames.CONDITION_REPORT_STR_INTERNAL, value),
-				makeIf(reportVar, reportVar, raw));
+				makeIf(reportVar, reportVar, instance != null ? instance : raw));
 		return makeIf(callOf(LispNames.OBJ_P, value), reported, raw);
+	}
+
+	/** {@code raw}, or the instance walk first where the program walks one. */
+	private static LispVal instanceOr(LispVal value, @Nullable LispVal instance, LispVal raw) {
+		return instance == null ? raw : makeIf(callOf(LispNames.OBJ_P, value), instance, raw);
 	}
 
 	/** Builds {@code (with-output-to-string (s) (print-object value s))}. */
@@ -38548,10 +38659,12 @@ public final class LispMacroExpander {
 	 * @param controlIndex the {@code format-control} slot index (format-control family)
 	 * @param argumentsIndex the {@code format-arguments} slot index (format-control
 	 * family)
+	 * @param controlFree what the format-control family reports for a nil control, or
+	 * null for nothing ({@link ClosRegistry#controlFreeReport})
 	 * @param tags the instance tags rendered this way
 	 */
 	private record ConditionReportGroup(@Nullable LispVal report, int controlIndex, int argumentsIndex,
-			List<String> tags) {
+			@Nullable LispVal controlFree, List<String> tags) {
 	}
 
 	/**
@@ -38561,11 +38674,15 @@ public final class LispMacroExpander {
 	 *
 	 * @param constructibleTags the {@code %class-} tags any reachable site can construct,
 	 * or null when unknowable (no narrowing)
+	 * @param programTags those of them a site in the program names: the others come from
+	 * a landing pad's synthesis, whose instance always carries a text control; null when
+	 * unknowable
 	 * @param declineRenderer whether every possible {@code format-control} is a
 	 * directive-free literal (or nil) with nil {@code format-arguments}, so
 	 * {@code %format-condition} needs no runtime renderer
 	 */
-	public record ConditionNarrowing(java.util.@Nullable Set<String> constructibleTags, boolean declineRenderer) {
+	public record ConditionNarrowing(java.util.@Nullable Set<String> constructibleTags,
+			java.util.@Nullable Set<String> programTags, boolean declineRenderer) {
 
 		/**
 		 * No narrowing at all: every registered condition class stays in the report
@@ -38573,7 +38690,7 @@ public final class LispMacroExpander {
 		 * @return the identity narrowing
 		 */
 		public static ConditionNarrowing none() {
-			return new ConditionNarrowing(null, false);
+			return new ConditionNarrowing(null, null, false);
 		}
 
 	}
@@ -38626,6 +38743,7 @@ public final class LispMacroExpander {
 		if (scan.bail) {
 			return ConditionNarrowing.none();
 		}
+		java.util.Set<String> programTags = java.util.Set.copyOf(scan.tags);
 		scan.tags.add("%class-SIMPLE-ERROR");
 		scan.tags.add(SIMPLE_CONDITION_TAG);
 		scan.tags.add("%class-SIMPLE-WARNING");
@@ -38675,7 +38793,7 @@ public final class LispMacroExpander {
 		if (scan.endOfFileSite) {
 			scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.END_OF_FILE_CLASS_NAME);
 		}
-		return new ConditionNarrowing(java.util.Set.copyOf(scan.tags), !scan.rendererForced);
+		return new ConditionNarrowing(java.util.Set.copyOf(scan.tags), programTags, !scan.rendererForced);
 	}
 
 	/**
@@ -39140,7 +39258,7 @@ public final class LispMacroExpander {
 	 * meaning.
 	 */
 	private static List<ConditionReportGroup> conditionReportGroups(ClosRegistry closRegistry,
-			java.util.@Nullable Set<String> constructibleTags) {
+			java.util.@Nullable Set<String> constructibleTags, java.util.@Nullable Set<String> programTags) {
 		java.util.Map<String, ConditionReportGroup> groups = new java.util.LinkedHashMap<>();
 		for (ClosRegistry.ClassInfo cls : closRegistry.classes().values()) {
 			if (!cls.ancestors().contains("CONDITION")) {
@@ -39170,6 +39288,7 @@ public final class LispMacroExpander {
 			}
 			int controlIndex = -1;
 			int argumentsIndex = -1;
+			LispVal controlFree = null;
 			if (report == null) {
 				controlIndex = slotIndexOf(cls, "FORMAT-CONTROL");
 				argumentsIndex = slotIndexOf(cls, "FORMAT-ARGUMENTS");
@@ -39177,10 +39296,19 @@ public final class LispMacroExpander {
 					continue;
 				}
 				key = "F:" + controlIndex + ":" + argumentsIndex;
+				if (programTags == null || programTags.contains(tag)) {
+					for (String walk : cls.cpl()) {
+						controlFree = ClosRegistry.controlFreeReport(walk);
+						if (controlFree != null) {
+							key += ":" + walk;
+							break;
+						}
+					}
+				}
 			}
 			ConditionReportGroup group = groups.get(key);
 			if (group == null) {
-				groups.put(key, new ConditionReportGroup(report, controlIndex, argumentsIndex,
+				groups.put(key, new ConditionReportGroup(report, controlIndex, argumentsIndex, controlFree,
 						new java.util.ArrayList<>(List.of(tag))));
 			}
 			else {
@@ -39254,19 +39382,19 @@ public final class LispMacroExpander {
 		LispSymbol value = new LispSymbol("__crv");
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		clauses.add(new LispSymbol(LispNames.COND));
-		for (ConditionReportGroup group : conditionReportGroups(closRegistry, narrowing.constructibleTags())) {
+		for (ConditionReportGroup group : conditionReportGroups(closRegistry, narrowing.constructibleTags(),
+				narrowing.programTags())) {
 			LispVal rendered;
-			if (group.report() instanceof LispString text) {
-				rendered = text;
-			}
-			else if (group.report() != null) {
-				LispSymbol stream = new LispSymbol("__crs");
-				rendered = renderedToString(stream,
-						listToCons(List.of(new LispSymbol(LispNames.FUNCALL), group.report(), value, stream)));
+			if (group.report() != null) {
+				rendered = renderedReport(group.report(), value);
 			}
 			else {
 				rendered = listToCons(List.of(new LispSymbol(LispNames.FORMAT_CONDITION_INTERNAL),
 						objRef(value, group.controlIndex()), objRef(value, group.argumentsIndex())));
+				if (group.controlFree() != null) {
+					rendered = makeIf(objRef(value, group.controlIndex()), rendered,
+							renderedReport(group.controlFree(), value));
+				}
 			}
 			clauses.add(listToCons(List.of(objIs(value, group.tags()), rendered)));
 		}
@@ -39274,6 +39402,18 @@ public final class LispMacroExpander {
 				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.CONDITION_REPORT_STR_INTERNAL),
 						listToCons(List.<LispVal>of(value)), listToCons(clauses)));
 		return List.of(formatConditionDefun(narrowing.declineRenderer(), functionControls), reportDefun);
+	}
+
+	/**
+	 * The text a report form writes: a literal string, or a function called on a sink.
+	 */
+	private static LispVal renderedReport(LispVal report, LispVal condition) {
+		if (report instanceof LispString) {
+			return report;
+		}
+		LispSymbol stream = new LispSymbol("__crs");
+		return renderedToString(stream,
+				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), report, condition, stream)));
 	}
 
 	/**
@@ -39542,8 +39682,8 @@ public final class LispMacroExpander {
 				List.of(listToCons(List.of(designator, fmtCall(LispNames.CLASS_DESIGNATOR_INTERNAL, obj))),
 						listToCons(List.of(raw, spelled)), listToCons(List.of(text, unpiped)),
 						listToCons(List.of(size, fmtCall(LispNames.LENGTH, text)))));
-		return listToCons(
-				List.of(new LispSymbol(LispNames.LET_STAR), bindings, ClosRegistry.tagStrippedText(text, size)));
+		return callOf(LispNames.PRINT_CASED_TYPE_NAME_INTERNAL, listToCons(
+				List.of(new LispSymbol(LispNames.LET_STAR), bindings, ClosRegistry.tagStrippedText(text, size))));
 	}
 
 	private static final String PUO_OBJ_VAR = "__puo_obj";
@@ -42241,6 +42381,26 @@ public final class LispMacroExpander {
 			return callOf(fold ? LispNames.PRINT_CASE_FOLD_INTERNAL : LispNames.PRINT_RADIXED_INTERNAL, parts.get(1));
 		}
 		return fold ? parts.get(1) : callOf(LispNames.PRIN1_TO_STRING_RAW, parts.get(1));
+	}
+
+	/**
+	 * Lowers {@code (%pc-type-name text)}, the type name {@code print-unreadable-object}
+	 * writes under {@code :type}: CL writes that SYMBOL, so where a printer control can
+	 * be in effect the name is qualified by the current package under {@code prin1} and
+	 * cased under both. It reaches {@code %pc-unqualified} as a string, as
+	 * {@code %pc-instance-text}'s does. A program with no control keeps the text.
+	 * @param text the form of the name's text
+	 * @param printControls whether a printer control can be in effect
+	 * @return the equivalent expression
+	 */
+	public static LispVal expandPrintedTypeName(LispVal text, boolean printControls) {
+		if (!printControls) {
+			return text;
+		}
+		LispSymbol name = new LispSymbol("%ptn-text");
+		LispVal spelled = makeIf(new LispSymbol(LispNames.PRINT_ESCAPE_VAR),
+				callOf(LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL, name, name), name);
+		return makeLet(name.name(), text, callOf(LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, spelled));
 	}
 
 	/**

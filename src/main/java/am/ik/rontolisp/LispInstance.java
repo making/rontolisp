@@ -226,7 +226,11 @@ public final class LispInstance implements LispVal {
 			return DEPTH_MARKER;
 		}
 		try {
-			StringBuilder sb = new StringBuilder(this.layout.openDelimiter()).append(this.layout.printName());
+			// The type name is a symbol, so princ writes its name alone (CLHS
+			// 22.1.3.3.1).
+			String name = this.layout.printName();
+			StringBuilder sb = new StringBuilder(this.layout.openDelimiter())
+				.append(escape ? name : name.substring(name.lastIndexOf(':') + 1));
 			for (int i = 0; i < this.layout.slotCount(); i++) {
 				sb.append(" :")
 					.append(this.layout.slotNames().get(i))

@@ -21,6 +21,13 @@ The report is what `princ`/`~A` prints; `prin1`/`~S` still shows the instance:
 ; => ("did not parse: x" "#<DC-REPORT-DEMO :INPUT \"x\">")
 ```
 
+A standard class a program signals itself reports what the built-in signal of that class says, from the slots it was given: `undefined-function`, `unbound-variable`, `type-error`, `division-by-zero` and their subclasses.
+
+```lisp
+(handler-case (error 'undefined-function :name 'dc-missing)
+  (error (e) (princ-to-string e))) ; => "The function DC-MISSING is undefined"
+```
+
 ```console
 CL-USER> (error 'my-parse-error :input "x")
 Error: input did not parse

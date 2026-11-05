@@ -21,11 +21,11 @@ public final class ComputedConditionTypeReportFixture {
 	/** Each program, mapped to its first line of standard error on every backend. */
 	public static final Map<String, String> PROGRAMS = Map.of("""
 			(defun uc-boom (ty) (error ty :code 42))
-			(uc-boom 'type-error)
-			""", "Unhandled condition: Condition (TYPE-ERROR :CODE 42) was signalled.", """
+			(uc-boom 'parse-error)
+			""", "Unhandled condition: Condition (PARSE-ERROR :CODE 42) was signalled.", """
 			(defun uc-boom (ty) (error ty :datum 1 :expected-type 'string))
 			(uc-boom 'type-error)
-			""", "Unhandled condition: Condition (TYPE-ERROR :DATUM 1 :EXPECTED-TYPE STRING) was signalled.", """
+			""", "Unhandled condition: The value 1 is not of type STRING", """
 			(define-condition uc-two-slots (error) ((a :initarg :a) (b :initarg :b)))
 			(defun uc-boom (ty) (error ty :b 42))
 			(uc-boom 'uc-two-slots)

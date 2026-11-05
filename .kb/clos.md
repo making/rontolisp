@@ -781,8 +781,25 @@ below): with none, every printing operator compiles exactly as before.
   (re)generates the defun pair whenever the routing moves (`ensurePrintObjectRuntimeLoaded`,
   stamped on the tag set + `routesConditionReports` + `*print-case*`) — what lets a `defmethod
   print-object` evaluated AFTER the first print take effect. **Still not walked (trigger)**: a
-  value in a STRUCTURE or class SLOT, a hash table, an array of rank != 1. **Cost**: O(n^2) in
-  string concatenation, like `%print-cased`'s.
+  hash table, an array of rank != 1. **Cost**: O(n^2) in string concatenation, like `%print-cased`'s.
+- **An instance's slots are walked** (2026-11-05, `%pos-instance`): `%print-object-leaf` takes the
+  walk's path, and an instance no method routes spells its own frame from `%obj-print-frame`
+  (`.kb/instance-syntax.md`) and hands each slot value back to `%pos-walk`, so a method applies in a
+  structure or class slot at any depth (sento logged 353876 characters for one idle actor, and an `ask-s`
+  with a `:time-out` met a list another thread was growing in about one run of thirteen). Under
+  `princ` a condition's report still goes first. It honors `*print-level*` and `*print-length*` as SBCL
+  2.2.9 does (`#S(ITEM :A # :B #)`, `#S(ITEM :A 1 ...)`). A pathname or a stream has no frame and takes the
+  leaf. Gate: `printObjectStrDefuns`' `walkInstances`, on for a method or an instance type of the
+  program's own (`ClosRegistry.definesInstanceTypes`), so a program holding only seeded conditions keeps
+  its two-argument leaf. Pinned by ci-spec `print-object-nested`.
+- **`print-object`'s system method walks too** (`%print-object-default` lowering to `%pos-default`, or to
+  the raw conversions in a program with no walk), out of `(call-next-method)` and on a direct call. It does
+  not route the instance it was handed: `printObjectTags` collects specializers from EVERY parameter
+  while the dispatcher dispatches on the first, so a class specialized only as a method's STREAM parameter
+  would recurse. A method between two instances starts the walk's path over, so the special
+  `%pos-defaults` holds what this method is rendering and a cycle through a method still ends in `#`
+  (SBCL exhausts the stack there). The interpreter loads the pair at that call, a direct one being able
+  to come first.
 - **A `print-object` method defined BELOW its first use renders the built-in text for
   the earlier print on all four backends** (todo 445; pinned by the per-backend
   `*PrintObjectMethodDefinedBelowItsFirstUse` tests and
@@ -798,11 +815,13 @@ below): with none, every printing operator compiles exactly as before.
 - `print-unreadable-object`'s `:type t` prints the type NAME with the `%struct-`/`%class-` tag
   prefix stripped INLINE (`typeNameOf`), not via the prelude's `type-of`: this expansion runs
   inside the compilers, after the prelude pre-pass. The separating space is written only when a
-  body follows; `:identity` prints NO address. **That designator follows `*print-escape*`**
+  body follows (SBCL 2.2.9 writes it with an empty body too, `#<D >`, against CLHS's wording);
+  `:identity` prints NO address. **That designator follows `*print-escape*`**
   (CLHS 22.1.3.3): `prin1` of a `quri:uri` gives `#<QURI:URI ...>`, `princ` `#<URI ...>`; the
   tag prefix attaches to the PACKAGE half, so only the unqualified spelling reaches the
-  prefix-stripping cond. The reference is late (Pass 2), so `injectMvSpillGlobal` counts an
-  un-expanded `print-unreadable-object` as the mention declaring `*print-escape*`.
+  prefix-stripping cond. Where a printer control can be in effect the stripped text goes on through
+  `%pc-type-name`, `.kb/pretty-printer.md`. The reference is late (Pass 2), so `injectMvSpillGlobal`
+  counts an un-expanded `print-unreadable-object` as the mention declaring `*print-escape*`.
 
 ## Short-form `:method-combination`
 `(defgeneric g (x) (:method-combination NAME [:most-specific-first | :most-specific-last]))`,
