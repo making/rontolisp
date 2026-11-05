@@ -175,7 +175,8 @@ sublists between quote sites and every program's emission would move. Census ove
 one program and the 219 examples that compile on their own: ci-spec has 5,089 literals in 1,750,948
 conses of code and 4 nodes two of them reach; 208 examples have none; the most is `jvm/cffi-sqlite` with
 15 (31 literals), and what they are is type specifiers (`(UNSIGNED-BYTE 8)`) and a template's sublist.
-With no shared node `QuotedSharing.of` answers null and nothing else changes; a unit costs one read per
+The census counted two quotes reaching a node, not a list in an array literal, which is an entry too.
+With neither `QuotedSharing.of` answers null and nothing else changes; a unit costs one read per
 reference over what each literal built on its own. The walk is one identity pass, about 1 s on ci-spec's
 program on a loaded machine.
 

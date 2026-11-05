@@ -34580,6 +34580,11 @@ standalone:
         (write-line "to both" b))
       (print (stream-element-type (make-snd-own)))
       (print (list (input-stream-p t) (read-char nil nil :eof) (read-byte nil nil :eof)))
+      ;; the Gray rewrite runs before the resolver, inside the user's package
+      (defpackage :snd-p (:use :cl))
+      (in-package :snd-p)
+      (defun snd-in-a-closure (s) (funcall (lambda () (format s "x"))))
+      (print (handler-case (snd-in-a-closure 3) (type-error () :type-error)))
     stdout: |
       ("write-char" "WRITE-CHAR: The value 3 is not of type STREAM" :TYPE-ERROR :TYPE-ERROR)
       ("write-string" "WRITE-STRING: The value 3 is not of type STREAM" :TYPE-ERROR :TYPE-ERROR)
@@ -34631,6 +34636,7 @@ standalone:
       to both
       :OWN
       (T :EOF :EOF)
+      :TYPE-ERROR
   - name: instances-follow-the-printer-controls-in-a-program-with-no-method
     source: |
       ;; Standalone: a method or a condition anywhere routes a program through the
