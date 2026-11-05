@@ -4564,6 +4564,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				callOnlyRuntimes.add(defuns.getLast().name);
 			}
 		}
+		if (userDefinedNames.contains(LispNames.EVAL_SPECIAL_LET)) {
+			inject(LispMacroExpander.compiledSpecialRuntime(specialVars), defuns, injectedRuntimeDefuns, injectedForms,
+					specialVars);
+			callOnlyRuntimes.add(defuns.getLast().name);
+		}
 		// The specials only a binding or an assignment gives a value
 		// (SpecialVarCollector.collectValueless): _start seeds their module global with
 		// the UNBOUND marker, a store overwrites it, a binding saves and restores it like
@@ -6612,6 +6617,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						this.usesIdentityHashTables)
 				: null;
 		List<Integer> lambdaListKeywordOffsets = new ArrayList<>();
+		WasmEvalRuntimeBuilder.EvalHooks evalHooks = WasmEvalRuntimeBuilder.EvalHooks.NONE;
 		if (usesEval) {
 			for (String keyword : ClConstants.LAMBDA_LIST_KEYWORD_NAMES) {
 				lambdaListKeywordOffsets.add(stringTable.addString(keyword).offset());
@@ -6630,7 +6636,6 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.WHEN)
 				.add(stringTable, LispNames.UNLESS)
 				.add(stringTable, LispNames.WHILE)
-				.add(stringTable, LispNames.DOTIMES)
 				.add(stringTable, LispNames.SETQ)
 				.add(stringTable, LispNames.EVAL)
 				.add(stringTable, LispNames.FUNCALL)
@@ -6665,6 +6670,24 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (String forwarded : evalForwarders) {
 				offsetsBuilder.add(stringTable, forwarded);
 			}
+			evalHooks = new WasmEvalRuntimeBuilder.EvalHooks(
+					evalRunsForms ? globalIndices.getOrDefault(LispNames.MV_SPILL, -1) : -1,
+					functions.containsKey(LispNames.EVAL_EXPANSION),
+					functions.containsKey(LispNames.EVAL_PLACE_EXPANSION),
+					functions.containsKey(LispNames.EVAL_SPECIAL_LET),
+					functions.containsKey(LispNames.EVAL_ROW_FLET) || functions.containsKey(LispNames.EVAL_ROW_LABELS));
+			if (evalHooks.expansion()) {
+				offsetsBuilder.add(stringTable, LispNames.EVAL_EXPANSION);
+			}
+			if (evalHooks.placeExpansion()) {
+				offsetsBuilder.add(stringTable, LispNames.EVAL_PLACE_EXPANSION);
+			}
+			if (evalHooks.specialLet()) {
+				offsetsBuilder.add(stringTable, LispNames.EVAL_SPECIAL_LET);
+			}
+			if (evalHooks.localFunctions()) {
+				offsetsBuilder.add(stringTable, LispNames.EVAL_LOCAL_FUNCTIONS);
+			}
 			WasmEvalRuntimeBuilder.SpecialFormOffsets offsets = offsetsBuilder.build();
 			// The shape the arm that checks its own count reports through: eval, which no
 			// wrapper backs, named by the id the report reserved.
@@ -6688,8 +6711,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupBody();
 			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets, counts,
 					evalRunsForms ? globalAccessIndex(functions) : -1, evalForwarders, this.usesIdentityHashTables,
-					symfuncrefFuncIndex(), unboundReport);
-			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets, this.usesIdentityHashTables);
+					symfuncrefFuncIndex(), unboundReport, evalHooks);
+			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets, this.usesIdentityHashTables, evalHooks);
 		}
 		else {
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupStub();
@@ -6699,8 +6722,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// _apply exists whenever the apply runtime does; without the _eval interpreter
 		// its body skips the $fenv and interpreted-closure arms (nothing can create
 		// either without _eval/_store).
-		applyBody = usesApplyRuntime ? WasmEvalRuntimeBuilder.buildApplyBody(usesEval, arityChkIndex,
-				lambdaListKeywordOffsets, this.usesIdentityHashTables) : WasmEvalRuntimeBuilder.buildApplyStub();
+		applyBody = usesApplyRuntime
+				? WasmEvalRuntimeBuilder.buildApplyBody(usesEval, arityChkIndex, lambdaListKeywordOffsets,
+						this.usesIdentityHashTables, evalHooks.valueChannel())
+				: WasmEvalRuntimeBuilder.buildApplyStub();
 
 		// The symbol-API helper bodies (always emitted) embed the offset of the symbol
 		// T; intern it before the runtime intern blob below is snapshotted so a runtime

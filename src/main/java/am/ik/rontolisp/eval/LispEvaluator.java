@@ -7486,6 +7486,12 @@ public final class LispEvaluator {
 			}
 			throw new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + signal.name());
 		}
+		catch (GoSignal signal) {
+			if (nestedInDebugger()) {
+				throw signal;
+			}
+			throw new LispEvalException(LispNames.GO + ": no enclosing tagbody holds the tag " + signal.tag);
+		}
 		catch (ThrowSignal signal) {
 			if (nestedInDebugger() || caughtOutside(signal)) {
 				throw signal;
@@ -8486,6 +8492,12 @@ public final class LispEvaluator {
 				throw signal;
 			}
 			throw new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + signal.name());
+		}
+		catch (GoSignal signal) {
+			if (nestedInDebugger()) {
+				throw signal;
+			}
+			throw new LispEvalException(LispNames.GO + ": no enclosing tagbody holds the tag " + signal.tag);
 		}
 		catch (ThrowSignal signal) {
 			if (nestedInDebugger() || caughtOutside(signal)) {
@@ -10064,7 +10076,7 @@ public final class LispEvaluator {
 									}
 									next = evalAllButLast(((LispCons) cons.cdr()).cdr(), letEnv, owner, deferTo);
 									if (next == null) {
-										result = LispNil.INSTANCE;
+										result = singleValue(LispNil.INSTANCE);
 										break frame;
 									}
 									env = letEnv;

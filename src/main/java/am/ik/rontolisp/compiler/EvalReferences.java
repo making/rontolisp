@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.macro.EvalMacroRows;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -26,7 +27,8 @@ import org.jspecify.annotations.Nullable;
  * which no gate counts, so the call found no function. Every gate does count a
  * {@code #'name}, and every standard variable's gate counts a mention, so this pass adds
  * those at the head of the program, ahead of any {@code in-package}, as forms that run
- * nothing.
+ * nothing. A built-in macro has no function to reference; the rows of the run-time table
+ * ({@link EvalMacroRows}) a form can reach go at the head with them.
  *
  * <p>
  * Two cases, both syntactic like {@link RuntimeNameProducers}:
@@ -61,6 +63,16 @@ public final class EvalReferences {
 	private static final Set<String> NOT_REFERENCED_FOR_READ_FORMS = Set.of(LispNames.SLEEP, LispNames.LOAD);
 
 	private static final Set<String> GATED_OPERATORS = gatedOperators();
+
+	/**
+	 * What runs a definition it is handed, where nothing was precompiled, by evaluating
+	 * it. Its forms are the program's own data as those of {@code eval} are, but it is no
+	 * reason to count forms it reads: {@code read-from-string} beside a {@code coerce}
+	 * says nothing.
+	 */
+	private static final Set<String> COMPILING_OPERATORS = Set.of(LispNames.COMPILE, LispNames.COERCE);
+
+	private static final String SPECIAL = "SPECIAL";
 
 	private static Set<String> gatedOperators() {
 		Set<String> gated = new TreeSet<>(BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS);
@@ -98,19 +110,23 @@ public final class EvalReferences {
 		}
 		boolean readForms = user.loads
 				|| user.evaluates && (user.reads || RuntimeNameProducers.anySymbolBuilder(userForms));
-		if (!readForms && !user.evaluates && !library.evaluates) {
+		if (!readForms && !user.evaluates && !library.evaluates && !user.compiles && !library.compiles) {
 			return program;
 		}
 		Set<String> spelled = new TreeSet<>(user.spelled);
 		spelled.addAll(library.spelled);
+		EvalMacroRows.Selection rows = EvalMacroRows.select(readForms ? EvalMacroRows.operators() : spelled,
+				readForms || user.bindsSpecial(library) || library.bindsSpecial(user));
 		Set<String> operators = new TreeSet<>(readForms ? GATED_OPERATORS : spelled);
+		operators.addAll(rows.quoted());
+		operators.retainAll(GATED_OPERATORS);
 		if (readForms) {
 			operators.removeAll(NOT_REFERENCED_FOR_READ_FORMS);
 		}
-		if (operators.isEmpty() && !readForms) {
+		if (operators.isEmpty() && rows.forms().isEmpty() && !readForms) {
 			return program;
 		}
-		List<LispVal> out = new ArrayList<>(program.size() + operators.size() + 1);
+		List<LispVal> out = new ArrayList<>(program.size() + operators.size() + rows.forms().size() + 1);
 		for (String operator : operators) {
 			out.add(form(LispNames.FUNCTION, new LispSymbol(operator)));
 		}
@@ -121,6 +137,7 @@ public final class EvalReferences {
 			}
 			out.add(form(LispNames.QUOTE, list(names)));
 		}
+		out.addAll(rows.forms());
 		out.addAll(program);
 		return out;
 	}
@@ -151,14 +168,54 @@ public final class EvalReferences {
 
 		final Set<String> spelled = new TreeSet<>();
 
+		/** The names a quoted {@code let} or {@code let*} binds. */
+		final Set<String> boundInData = new TreeSet<>();
+
+		/** The names the program's code defines or declares special. */
+		final Set<String> declaredSpecial = new TreeSet<>();
+
 		boolean evaluates;
+
+		boolean compiles;
 
 		boolean reads;
 
 		boolean loads;
 
+		/**
+		 * Whether a quoted {@code let} binds a name that may be special: one the code
+		 * here or in {@code other} defines, or one with the earmuffs a special a library
+		 * spliced later defines by convention.
+		 */
+		boolean bindsSpecial(Scan other) {
+			for (String name : this.boundInData) {
+				if (this.declaredSpecial.contains(name) || other.declaredSpecial.contains(name)
+						|| name.length() > 2 && name.startsWith("*") && name.endsWith("*")) {
+					return true;
+				}
+			}
+			return false;
+		}
+
 		/** Walks code: the head of every list, and the data of a {@code quote}. */
 		void code(LispVal form) {
+			if (form instanceof LispCons definition && definition.car() instanceof LispSymbol definer
+					&& definition.cdr() instanceof LispCons rest) {
+				String name = standardName(definer);
+				if ((LispNames.DEFVAR.equals(name) || LispNames.DEFPARAMETER.equals(name))
+						&& rest.car() instanceof LispSymbol variable) {
+					this.declaredSpecial.add(variable.name());
+				}
+				else if (SPECIAL.equals(name)) {
+					LispVal cursor = rest;
+					while (cursor instanceof LispCons cons) {
+						if (cons.car() instanceof LispSymbol variable) {
+							this.declaredSpecial.add(variable.name());
+						}
+						cursor = cons.cdr();
+					}
+				}
+			}
 			LispVal cursor = form;
 			while (cursor instanceof LispCons cons) {
 				if (cons.car() instanceof LispSymbol head) {
@@ -168,6 +225,7 @@ public final class EvalReferences {
 						return;
 					}
 					this.evaluates = this.evaluates || LispNames.EVAL.equals(name);
+					this.compiles = this.compiles || name != null && COMPILING_OPERATORS.contains(name);
 					this.reads = this.reads || LispNames.READ.equals(name) || LispNames.READ_FROM_STRING.equals(name);
 					this.loads = this.loads || LispNames.LOAD.equals(name);
 				}
@@ -188,6 +246,11 @@ public final class EvalReferences {
 			else if (datum instanceof LispCons list) {
 				if (list.car() instanceof LispSymbol head) {
 					spell(head);
+					String name = standardName(head);
+					if ((LispNames.LET.equals(name) || LispNames.LET_STAR.equals(name))
+							&& list.cdr() instanceof LispCons rest) {
+						boundNames(rest.car());
+					}
 				}
 				LispVal cursor = list;
 				while (cursor instanceof LispCons cons) {
@@ -204,9 +267,20 @@ public final class EvalReferences {
 			}
 		}
 
+		private void boundNames(LispVal bindings) {
+			LispVal cursor = bindings;
+			while (cursor instanceof LispCons cons) {
+				LispVal binding = cons.car() instanceof LispCons pair ? pair.car() : cons.car();
+				if (binding instanceof LispSymbol name) {
+					this.boundInData.add(name.name());
+				}
+				cursor = cons.cdr();
+			}
+		}
+
 		private void spell(LispSymbol symbol) {
 			String name = standardName(symbol);
-			if (name != null && GATED_OPERATORS.contains(name)) {
+			if (name != null && (GATED_OPERATORS.contains(name) || EvalMacroRows.holds(name))) {
 				this.spelled.add(name);
 			}
 		}

@@ -79,7 +79,9 @@ final class WasmDotimesCompiler {
 	 * not qualify.
 	 */
 	private static boolean compileCounted(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
-		if (ctx.asyncResume != null || ctx.dynamic) {
+		List<LispVal> forms = cons.toList();
+		if (ctx.asyncResume != null || ctx.dynamic
+				|| LispMacroExpander.iterationBodyHasTags(forms.subList(Math.min(2, forms.size()), forms.size()))) {
 			// An async body's locals belong to the spill machinery, and --dynamic
 			// resolves variables through the environment. A top-level counter is fine:
 			// the eval mirror writes a global backing store, never a lexical slot

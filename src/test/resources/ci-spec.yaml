@@ -34133,6 +34133,390 @@ cases:
       (:EOF :EOF)
       (|| || T "" COMMON-LISP-USER::||)
       (ENS-P::|| NIL)
+  - name: eval-expands-the-built-in-macros
+    source: |
+      (defun em-values (form) (multiple-value-list (eval form)))
+      (defun em-report (form)
+        (handler-case (eval form)
+          (error (c) (list :error (princ-to-string c)))))
+      (setq em-x 1)
+      (setq em-list (list 1 2 3))
+      (print (eval '(let* ((a 1) (b a)) (list a b))))
+      (print (eval '(let (a (b) (c 1)) (list a b c))))
+      (print (eval '(let* (a (b) (c 1)) (list a b c))))
+      (print (list (eval '(incf em-x)) (eval '(decf em-x)) (eval '(incf em-x 5)) (eval '(decf em-x 5))))
+      (print (eval '(setf em-a 1 em-b 2)))
+      (print (eval '(list em-a em-b)))
+      (print (eval '(let ((c (list 1 2))) (setf (car c) 5 (cadr c) 6) c)))
+      (print (eval '(let ((h (make-hash-table))) (setf (gethash 1 h) 2) (incf (gethash 1 h)) (incf (gethash 2 h 10)) (list (gethash 1 h) (gethash 2 h)))))
+      (print (eval '(let ((v (vector 1 2))) (setf (aref v 0) 5) (incf (svref v 1)) v)))
+      (print (eval '(let ((p (list :a 1))) (setf (getf p :b) 2) (incf (getf p :a)) (list (getf p :a) (getf p :b)))))
+      (print (eval '(let ((i 0) (c (list 1 2))) (incf (nth (progn (incf i) 0) c)) (list i c))))
+      (print (eval '(let ((a 1) (b 2)) (psetq a b b a) (list a b))))
+      (print (eval '(let ((a 1) (b 2)) (psetf a b b a) (list a b))))
+      (print (eval '(let ((a 1) (b 2) (c 3)) (rotatef a b c) (list a b c))))
+      (print (eval '(let ((a 1) (b 2)) (list (shiftf a b 3) a b))))
+      (print (eval '(let ((c (list 1 2))) (rotatef (car c) (cadr c)) c)))
+      (print (eval '(let ((l (list 2))) (pushnew 1 l) (pushnew 1 l) l)))
+      (print (eval '(let ((l (list "a"))) (pushnew "a" l :test #'equal) l)))
+      (print (eval '(let ((p (list :a 1 :b 2))) (list (remf p :a) (copy-list p) (remf p :z) p))))
+      (print (eval '(let ((acc nil)) (dolist (x '(1 2)) (push x acc)) acc)))
+      (print (eval '(dolist (x '(1 2) 'done) (if (= x 2) (return x)))))
+      (print (eval '(dolist (x '(1 2) 'done) x)))
+      (print (eval '(let ((acc nil)) (dotimes (i 3) (push i acc)) acc)))
+      (print (eval '(dotimes (i 3 i))))
+      (print (eval '(dotimes (i 3) (if (= i 1) (return i)))))
+      (print (eval '(let ((n 0)) (do ((i 0 (+ i 1)) (j 10 (- j 1))) ((= i 2) (list i j n)) (setq n (+ n j))))))
+      (print (eval '(do* ((i 0 (+ i 1)) (j i (+ i 1))) ((= i 2) (list i j)))))
+      (print (eval '(do ((i 0 (+ i 1))) ((= i 3)) (if (= i 1) (return 'left)))))
+      (print (eval '(do ((x)) (t x))))
+      (print (eval '(let ((fs nil)) (dolist (x '(1 2)) (push (lambda () x) fs)) (mapcar #'funcall fs))))
+      (print (eval '(let ((i 0)) (loop (setq i (+ i 1)) (if (> i 2) (return i))))))
+      (print (eval '(let ((acc nil)) (dolist (x '(1 2)) (if (= x 1) (go skip)) (push x acc) skip (push :end acc)) acc)))
+      (print (eval '(case 2 (1 'a) ((2 3) 'b) (t 'c))))
+      (print (eval '(case 9 (1 'a) (otherwise 'c))))
+      (print (eval '(case 9 (1 'a))))
+      (print (eval '(case nil ((nil) 'a) (t 'b))))
+      (print (eval '(ecase 1 (1 'a))))
+      (print (em-report '(ecase 2 (1 'a))))
+      (print (em-report '(ccase em-x (0 'a))))
+      (print (eval '(typecase 1 (string 's) ((or list integer) 'li))))
+      (print (eval '(typecase 1 (string 's))))
+      (print (eval '(etypecase 1 (integer 'i))))
+      (print (em-report '(etypecase 1 (string 's))))
+      (print (em-report '(ctypecase 1 (string 's))))
+      (print (eval '(prog1 1 2 3)))
+      (print (eval '(prog2 1 2 3)))
+      (print (em-report '(assert (> 1 2))))
+      (print (em-report '(assert (> 1 2) () "bad ~a" 1)))
+      (print (eval '(check-type em-x integer)))
+      (print (em-report '(check-type em-x string)))
+      (print (em-report '(check-type em-x string "a text")))
+      (print (em-values '(block b (return-from b (values 1 2)) 3)))
+      (print (eval '(block a (block b (return-from a 1)) 2)))
+      (print (eval '(block a (let ((f (lambda () (return-from a 1)))) (funcall f)) 2)))
+      (print (em-report '(return-from em-nosuch 1)))
+      (print (eval '(let ((acc nil)) (tagbody (push 1 acc) (go b) a (push 2 acc) b (push 3 acc)) acc)))
+      (print (eval '(let ((n 0)) (tagbody top (setq n (+ n 1)) (if (< n 3) (go top))) n)))
+      (print (eval '(prog ((i 0)) top (setq i (+ i 1)) (if (< i 3) (go top)) (return i))))
+      (print (eval '(prog* ((a 1) (b a)) (return b))))
+      (print (em-values '(catch 'a (throw 'a (values 1 2)))))
+      (print (eval '(catch 'a (catch 'b (throw 'a 1)) 2)))
+      (print (em-values '(unwind-protect (values 1 2) 3)))
+      (print (eval '(let ((x 0)) (catch 'a (unwind-protect (throw 'a 1) (setq x 2))) x)))
+      (print (eval '(handler-case (error "boom") (string () 1) (error (e) (princ-to-string e)))))
+      (print (em-values '(handler-case (values 1 2) (error () 3))))
+      (print (eval '(handler-case (values 1 2) (:no-error (a b) (list a b)))))
+      (print (eval '(handler-case (handler-case (error "x") (string () 1)) (error () 2))))
+      (print (eval '(handler-case (car 1) (type-error () 'te))))
+      (print (eval '(handler-case (em-no-such-fn) (undefined-function (c) (cell-error-name c)))))
+      (print (eval '(handler-case em-no-such-var (unbound-variable (c) (cell-error-name c)))))
+      (print (eval '(handler-case (signal "x") (condition () 'signalled))))
+      (print (eval '(ignore-errors (error "x") 1)))
+      (print (eval '(car (ignore-errors (list 1)))))
+      (print (eval '(let ((seen nil)) (handler-case (handler-bind ((error (lambda (c) (setq seen t)))) (error "x")) (error () seen)))))
+      (print (eval '(flet ((f (x) (+ x 1))) (list (f 1) (funcall #'f 2) (mapcar #'f '(3))))))
+      (print (eval '(flet ((f (x) (return-from f (+ x 1)) 9)) (f 1))))
+      (print (eval '(flet ((f () 1)) (flet ((f () 2) (g () (f))) (list (f) (g))))))
+      (print (eval '(labels ((f (n) (if (= n 0) 0 (+ n (f (- n 1)))))) (f 3))))
+      (print (eval '(labels ((ev (n) (if (= n 0) t (od (- n 1)))) (od (n) (if (= n 0) nil (ev (- n 1))))) (ev 4))))
+      (print (eval '(destructuring-bind (a (b (c)) d) '(1 (2 (3)) 4) (list a b c d))))
+      (print (eval '(destructuring-bind (a &optional b (c 3) (d 4 d-p)) '(1 2) (list a b c d d-p))))
+      (print (eval '(destructuring-bind (a &rest r) '(1 2 3) (list a r))))
+      (print (eval '(destructuring-bind (a . r) '(1 2 3) (list a r))))
+      (print (eval '(destructuring-bind (&key a (b 2) ((:cc c) 3)) '(:a 1 :cc 9) (list a b c))))
+      (print (eval '(destructuring-bind (a &aux (b 2)) '(1) (list a b))))
+      (print (eval '(with-output-to-string (s) (princ 1 s) (princ 2 s))))
+      (print (eval '(with-input-from-string (s "1 2") (list (read s) (read s)))))
+      (print (eval '(with-input-from-string (s "1 2" :start 2) (read s))))
+      (print (eval '(with-open-file (s "/em-no-such-file" :if-does-not-exist nil) s)))
+      (print (eval '(with-open-stream (s (make-string-input-stream "x")) (read-char s))))
+      (print (eval '(with-standard-io-syntax *print-base*)))
+      (print (eval '(with-hash-table-iterator (next (let ((h (make-hash-table))) (setf (gethash 1 h) 2) h)) (multiple-value-list (next)))))
+      (print (eval '(the integer 1)))
+      (print (eval '(locally (declare (special em-x)) 1)))
+      (print (eval '(eval-when (:execute) 1)))
+      (print (eval '(load-time-value (+ 1 2))))
+      (print (eval '(with-compilation-unit (:override t) 1 2)))
+      (print (eval '(do-symbols (s :cl) (return 1))))
+      (print (eval '(do-external-symbols (s :cl (quote none)) (return 1))))
+      (print (em-report '(em-no-such-macro)))
+    expected: |
+      (1 1)
+      (NIL NIL 1)
+      (NIL NIL 1)
+      (2 1 6 1)
+      2
+      (1 2)
+      (5 6)
+      (3 11)
+      #(5 3)
+      (2 2)
+      (1 (2 2))
+      (2 1)
+      (2 1)
+      (2 3 1)
+      (1 2 3)
+      (2 1)
+      (1 2)
+      ("a")
+      (T (:B 2) NIL (:B 2))
+      (2 1)
+      2
+      DONE
+      (2 1 0)
+      3
+      1
+      (2 8 19)
+      (2 3)
+      LEFT
+      NIL
+      (2 1)
+      3
+      (:END 2 :END)
+      B
+      C
+      NIL
+      A
+      A
+      (:ERROR "ECASE: no clause matches 2")
+      (:ERROR "ECASE: no clause matches 1")
+      LI
+      NIL
+      I
+      (:ERROR "ETYPECASE: no clause matches 1")
+      (:ERROR "ETYPECASE: no clause matches 1")
+      1
+      2
+      (:ERROR "The assertion (> 1 2) failed.")
+      (:ERROR "bad 1")
+      NIL
+      (:ERROR "The value of EM-X is 1, which is not of type STRING.")
+      (:ERROR "The value of EM-X is 1, which is not a text.")
+      (1 2)
+      1
+      1
+      (:ERROR "RETURN-FROM: no enclosing block named EM-NOSUCH")
+      (3 1)
+      3
+      3
+      1
+      (1 2)
+      1
+      (1 2)
+      2
+      "boom"
+      (1 2)
+      (1 2)
+      2
+      TE
+      EM-NO-SUCH-FN
+      EM-NO-SUCH-VAR
+      SIGNALLED
+      NIL
+      1
+      T
+      (2 3 (4))
+      2
+      (2 1)
+      6
+      T
+      (1 2 3 4)
+      (1 2 3 4 NIL)
+      (1 (2 3))
+      (1 (2 3))
+      (1 2 9)
+      (1 2)
+      "12"
+      (1 2)
+      2
+      NIL
+      #\x
+      10
+      (T 1 2)
+      1
+      1
+      1
+      3
+      2
+      1
+      1
+      (:ERROR "The function EM-NO-SUCH-MACRO is undefined")
+  - name: eval-binds-specials-by-name-and-answers-its-own-values
+    source: |
+      (defvar *em-s* 1)
+      (defvar *em-nv*)
+      (defun em-s () *em-s*)
+      (defun em-nv () *em-nv*)
+      (defun em-two () (values 1 2))
+      (defun em-values2 (form) (multiple-value-list (eval form)))
+      (print (eval '(let ((*em-s* 2)) (em-s))))
+      (print (eval '(let ((*em-s* 2)) *em-s*)))
+      (print (eval '(let ((*em-s* 2)) (setq *em-s* 3) (em-s))))
+      (print (eval '(let ((*em-s* 2)) (symbol-value '*em-s*))))
+      (print (eval '(let ((a 1) (*em-s* (+ 1 1)) (b 3)) (list a *em-s* b (em-s)))))
+      (print (eval '(let* ((*em-s* 5) (a *em-s*)) (list a (em-s)))))
+      (print (em-s))
+      (print (eval '(let ((*em-nv* 2)) (em-nv))))
+      (print (boundp '*em-nv*))
+      (print (eval '(defvar *em-nv* 7)))
+      (print (em-nv))
+      (print (eval '(defvar *em-run* 1)))
+      (print (eval '(defvar *em-run* 2)))
+      (print (eval '*em-run*))
+      (print (eval '(defparameter *em-run* 3)))
+      (print (eval '*em-run*))
+      (print (eval '(let ((*em-run* 9)) (symbol-value '*em-run*))))
+      (print (eval '(defun em-read-run () *em-run*)))
+      (print (eval '(let ((*em-run* 9)) (em-read-run))))
+      (print (eval '(em-read-run)))
+      (print (eval '(defvar *em-run-unbound*)))
+      (print (eval '(boundp '*em-run-unbound*)))
+      (print (eval '(let ((*em-run-unbound* 1)) (boundp '*em-run-unbound*))))
+      (print (eval '(boundp '*em-run-unbound*)))
+      (print (eval '(let ((em-y 1)) (declare (special em-y)) (symbol-value 'em-y))))
+      (print (eval '(defconstant +em-k+ 5)))
+      (print (eval '+em-k+))
+      (print (eval '(let ((*print-base* 16)) (princ-to-string 255))))
+      (print (eval '(progv '(*em-s*) '(8) (em-s))))
+      (print (em-s))
+      (print (em-values2 '(progn (values 1 2) 3)))
+      (print (em-values2 '(if (values 1 2) 3)))
+      (print (em-values2 '(if (values nil 2) 3)))
+      (print (em-values2 '(let ((a (values 1 2))) a)))
+      (print (em-values2 '(let ((a (values 1 2))))))
+      (print (em-values2 '(funcall (lambda () (values 1 2) 3))))
+      (print (em-values2 '(funcall (lambda (x)) (values 1 2))))
+      (print (em-values2 '(cond ((values 1 2)))))
+      (print (em-values2 '(cond ((values nil 2)))))
+      (print (em-values2 '(cond ((values 1 2) (values 3 4)))))
+      (print (em-values2 '(or (values 1 2) 3)))
+      (print (em-values2 '(or nil (values 1 2))))
+      (print (em-values2 '(and 1 (values 1 2))))
+      (print (em-values2 '(and (values nil 2) 3)))
+      (print (em-values2 '(setq em-z (values 1 2))))
+      (print (em-values2 '(setf em-z (values 1 2))))
+      (print (em-values2 '(push (values 1 2) em-z)))
+      (print (em-values2 '(pop em-z)))
+      (print (em-values2 '(list (values 1 2))))
+      (print (em-values2 '(+ (values 1 2))))
+      (print (em-values2 '(cadr (values '(1 2) 2))))
+      (print (em-values2 '(when (values nil 2) 1)))
+      (print (em-values2 '(unless (values 1 2) 1)))
+      (print (em-values2 '(em-two)))
+      (print (em-values2 '(let ((x 1)) (em-two))))
+      (print (em-values2 '(multiple-value-list (progn (em-two) 3))))
+      (print (em-values2 '(multiple-value-bind (a b c) (em-two) (list a b c))))
+      (print (em-values2 '(multiple-value-setq (em-p em-q) (em-two))))
+      (print (eval '(list em-p em-q)))
+      (print (em-values2 '(multiple-value-call #'list (em-two) (values 3 4) 5)))
+      (print (em-values2 '(multiple-value-prog1 (values 1 2) (values 3 4))))
+      (print (em-values2 '(nth-value 1 (em-two))))
+      (print (em-values2 '(nth-value 5 (em-two))))
+      (print (em-values2 '(multiple-value-list (values))))
+    expected: |
+      2
+      2
+      3
+      2
+      (1 2 3 2)
+      (5 5)
+      1
+      2
+      NIL
+      *EM-NV*
+      7
+      *EM-RUN*
+      *EM-RUN*
+      1
+      *EM-RUN*
+      3
+      9
+      EM-READ-RUN
+      9
+      3
+      *EM-RUN-UNBOUND*
+      NIL
+      T
+      NIL
+      1
+      +EM-K+
+      5
+      "FF"
+      8
+      1
+      (3)
+      (3)
+      (NIL)
+      (1)
+      (NIL)
+      (3)
+      (NIL)
+      (1)
+      (NIL)
+      (3 4)
+      (1)
+      (1 2)
+      (1 2)
+      (NIL)
+      (1)
+      (1)
+      ((1 . 1))
+      (1)
+      ((1))
+      (1)
+      (2)
+      (NIL)
+      (NIL)
+      (1 2)
+      (1 2)
+      ((3))
+      ((1 2 NIL))
+      (1)
+      (1 2)
+      ((1 2 3 4 5))
+      (1 2)
+      (2)
+      (NIL)
+      (NIL)
+  - name: iteration-bodies-are-implicit-tagbodies
+    source: |
+      (let ((acc nil))
+        (dolist (x '(1 2))
+          (if (= x 1) (go skip))
+          (push x acc)
+          skip
+          (push :end acc))
+        (print acc))
+      (let ((acc nil))
+        (do ((i 0 (+ i 1))) ((= i 2))
+          (go a)
+          (push :no acc)
+          a
+          (push i acc))
+        (print acc))
+      (let ((acc nil))
+        (do* ((i 0 (+ i 1))) ((= i 2))
+          (go a)
+          (push :no acc)
+          a
+          (push i acc))
+        (print acc))
+      (let ((acc nil))
+        (dotimes (i 2)
+          (declare (ignorable i))
+          (go a)
+          (push :no acc)
+          a
+          (push i acc))
+        (print acc))
+      (print (dotimes (i 2 :done) i))
+    expected: |
+      (:END 2 :END)
+      (1 0)
+      (1 0)
+      (1 0)
+      :DONE
 standalone:
   - name: eval-reaches-a-gated-operator-its-forms-spell
     source: |
@@ -34165,6 +34549,51 @@ standalone:
       2.0
       1.0
       NO-SUCH-FN
+  - name: eval-reaches-a-macro-its-forms-spell
+    source: |
+      ;; Standalone: the corpus reads forms at run time, which brings the whole table.
+      (setq em-sx 1)
+      (defvar *em-ss* 1)
+      (defun em-ss () *em-ss*)
+      (print (eval '(let* ((a 1) (b a)) b)))
+      (print (eval '(incf em-sx)))
+      (print (eval (list 'decf 'em-sx)))
+      (print (eval '(defvar *em-sv* 1)))
+      (print (eval '*em-sv*))
+      (print (eval '(let ((*em-ss* 2)) (em-ss))))
+      (print (eval '(dolist (x '(1 2) x))))
+      (print (eval '(dotimes (i 2 i))))
+      (print (eval '(multiple-value-list (values 1 2))))
+      (print (eval '(case 1 (1 'one))))
+      (print (eval '(prog1 1 2)))
+    stdout: |
+      1
+      2
+      1
+      *EM-SV*
+      1
+      2
+      NIL
+      2
+      (1 2)
+      ONE
+      1
+  - name: eval-reaches-what-a-macro-expands-to
+    source: |
+      ;; Standalone: what the rows here reach beyond themselves comes along by name.
+      (print (eval '(dolist (x '(1 2)) (return x))))
+      (print (eval '(typecase 1 (integer 'i))))
+      (print (eval '(handler-case (error "x") (error () 1))))
+      (print (eval '(let ((h (make-hash-table))) (incf (gethash 1 h 0)) (gethash 1 h))))
+      (print (eval `(block b (return-from b ,(+ 1 1)))))
+      (print (funcall (compile nil '(lambda () (let* ((a 1) (b a)) (dotimes (i 2 b)))))))
+    stdout: |
+      1
+      I
+      1
+      1
+      2
+      1
   - name: eval-reaches-every-standard-name-from-a-form-read-at-run-time
     source: |
       ;; Standalone: no gate can see what these forms name.
@@ -34175,6 +34604,8 @@ standalone:
       (print (rd "(aref (vector 1 2) 0)"))
       (print (rd "(format nil \"~a\" 1)"))
       (print (rd "(sqrt 4)"))
+      (print (rd "(let* ((a 1) (b a)) (incf a b) (list a b))"))
+      (print (rd "(dolist (x '(1 2)) (return x))"))
       (print (rd "pi"))
       (print (rd "*print-base*"))
       (print (rd "*read-eval*"))
@@ -34188,6 +34619,8 @@ standalone:
       1
       "1"
       2.0
+      (2 1)
+      1
       3.141592653589793
       10
       T

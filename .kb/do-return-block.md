@@ -101,6 +101,14 @@ qualification, not the constant, tells them apart.
   NON-CONSTANT catch tag inside an `async-defun` is re-evaluated on the unwind.
 
 ## `tagbody`/`go` + `prog`/`prog*`
+
+- **The body of `do`, `do*`, `dolist` and `dotimes` is an implicit tagbody** (2026-11-05, ci-spec
+  `iteration-bodies-are-implicit-tagbodies`, agrees with SBCL): `LispMacroExpander.iterationBody` wraps one holding a
+  tag and a `go`, leading declarations left in front; any other body expands as before. `dotimes`' own compilers
+  (`JvmTypedLoopCompiler`, `WasmDotimesCompiler`) hand such a body to the expansion. A tag was `Cannot compile symbol` on
+  the compilers and an uncaught `GoSignal` on the interpreter.
+- **A `go` nothing answers** reaches the interpreter's top-level entry as `GO: no enclosing tagbody holds the tag X`,
+  like `return-from`'s; it was a raw `GoSignal`.
 - **A tag is a symbol OR an integer** (CLHS 5.3, compared with `eql` -- the ANSI suite's
   handler-case idiom aborts with `(go 10)` to a numeric label). Every tag table keys the
   two uniformly: the interpreter's `evalTagbody` labels map by `plainName` /

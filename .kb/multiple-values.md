@@ -379,6 +379,12 @@ sub-form: a `(values ...)` tail reaches the consumer behind any number of return
   flag (`beginArguments`/`endArguments`) is gone: it only cleared arguments, and left a
   `let` initform, a `progn` body form and a callback's publish to leak.
 
+## Through a compiled `eval`
+`_eval` keeps the channel exact itself (`.kb/eval-runtime.md`, "The built-in macros", Values): it is emptied on entry and after
+what answers one value, and a call or a tail form publishes for itself. Only in a program that runs forms through eval. The
+consumers there are compiled helpers over a closure (`%eval-values-of`), so `multiple-value-bind` and its family need no
+lowering of their own. Pinned by ci-spec `eval-binds-specials-by-name-and-answers-its-own-values`.
+
 ## One register per thread
 **Invariant (2026-09-26): each thread that runs Lisp code has its own channel** on the two
 multi-threaded backends; the WASM tiers are single-threaded (the component's tasks are

@@ -60,6 +60,49 @@ stubs to hold fixed function indices, JVM needs none.
   only readers of the old answer were standard variables a form read at run time named, which no gate had
   seeded (`(eval (read-from-string "pi"))` answered PI), and the operators below. Both are `EvalReferences`.
 
+## The built-in macros (`macro/eval-macros.lisp`, `macro/EvalMacroRows`)
+
+**Invariant: a built-in macro answers through `_eval` what it answers compiled, on all four backends, without an
+arm per macro** (2026-11-05, ci-spec `eval-expands-the-built-in-macros`, agrees with SBCL 2.2.9 but for the text of an
+`ecase` and of a `return-from` no block encloses). `_eval` asks the table where it would report an undefined function:
+
+- `eval-macros.lisp` holds one `%eval-row-NAME (args env)` per operator, answering the form it expands to, and
+  `EvalMacroRows` generates `%eval-expansion (op form env)`, a `%symbol-is` chain the compilers search
+  (`NameDispatch`), answering the form itself for a name no row holds. `_eval` calls it through `_lookup`/`_apply`
+  (no bounce or signature to know about) and evaluates the answer in the form's environment. A form re-expands every
+  time it runs. `%eval-place-NAME (args value)` is the same for `_store`, reached where no place arm matched, and
+  `dotimes` is a row: its arm is gone from both backends.
+- **A row expands to closures, not to arms.** `(block b . body)` is `(%eval-catch tag (lambda () . body))`, so what
+  an arm cannot do in bytecode is an ordinary Lisp helper over the compiled operator: `%eval-handler-case`,
+  `%eval-unwind-protect`, `%eval-values-of`. Temporaries are fixed names (`%eval-cursor`): an inner one shadows the
+  outer only where no outer read happens, and no form of the program names them, so nothing advances `gensym`.
+- **A row reads the lexical environment.** An `env` entry is an ordinary `(name . value)` cons. `(block name)` and
+  `(tagbody tags)` are bound to `%eval-exit`, and `return-from`/`go` walk `env` for the innermost that serves them:
+  their identity is the catch tag, so a nested closure still finds its block. `flet`/`labels` bind the alist
+  `%eval-functions`, which the operator path and `#'name` look a name up in first (only where a row exists).
+- **Selection.** `EvalReferences` counts the rows a program's data spells; a quoted symbol in a selected row brings
+  that row (`EvalMacroRows.walk`), and the gated operators it quotes (`typep`) go through the one reference pass.
+  `%eval-soft-*` definitions are not followed for quoted data, so `(dolist (x l) x)` carries no `block` and stays out of
+  wasm EH mode, which `catch` forces; it blocks only a body spelling `return`, whose row the program then has. `compile`
+  and `coerce` count as evaluating for selection only: they say nothing about a form read at run time. `LibraryDefunPruner`
+  roots the table when `eval`, `compile` or `coerce` is live, so a library's dead `eval` does not keep it.
+- **Specials.** An eval'd `defvar`/`defparameter`/`defconstant` goes through `boundp` and `set`, which answer a
+  compiled special without a value, where `%global-access` throws. A name is special if it is in `%eval-specials%`
+  (the run-time `defvar`s) or `%eval-compiled-special-p` (a name test the compilers generate over the final
+  `specialVars`, `LispMacroExpander.compiledSpecialRuntime`). `_eval`'s `let` asks `%eval-special-let` first, which
+  rewrites a let binding a special into `%eval-progv` over a closure; a compiled `progv` binds a name in no arm in the
+  mirror. Before, `_eval` bound every name lexically, so `(eval '(let ((*x* 2)) (f)))` left `f` reading 1. The hook exists only
+  where a `let` can bind one: a `defvar` row, or data binding an earmuffed name or one the code declares special.
+- **Values** (`.kb/multiple-values.md`). The channel is what a consumer reads of an eval'd form, so `_eval` empties it on
+  entry, after a call's arguments, and on every arm that answers one value after evaluating something else (`if` with
+  no else, `cond`, an `and`/`or` stopping before its last form, `while`, `setq`/`setf`/`push`/`pop`, `+`, a `c[ad]+r`),
+  and `_apply` before a closure's body: `(multiple-value-list (eval '(progn (values 1 2) 3)))` answered `(3 2)`. A call
+  or a tail form publishes for itself. Only where the program runs forms through eval.
+- `setq` and `setf` are one arm: `(setf a 1 b 2)` assigned the first pair and dropped the rest. `let` takes `(x)` and a bare
+  `x`, which threw and trapped. A `throw` and a `return-from` carry their value's values as a list (`%eval-throw-values`).
+- **Left out:** `loop`'s keyword clauses (a row refuses them), `macrolet`, `symbol-macrolet`, `with-slots`, `restart-case`
+  and the definers (`.todo`). The doc page lists them.
+
 ## What a form can reach (`compiler/EvalReferences`)
 
 The registry answers the catalog wrappers and the program's own functions; the reference-gated wrappers

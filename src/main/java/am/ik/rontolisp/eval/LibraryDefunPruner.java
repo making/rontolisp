@@ -13,6 +13,7 @@ import java.util.function.Predicate;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.macro.EvalMacroRows;
 import am.ik.rontolisp.macro.FormatRenderer;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
@@ -432,6 +433,11 @@ public final class LibraryDefunPruner {
 			LispNames.READ_FROM_STRING_FULL_INTERNAL, LispNames.STRING_LT, LispNames.MACRO_FUNCTION,
 			LispNames.SET_MACRO_FUNCTION, LispNames.WRITE);
 
+	private static final Set<String> EVALUATING_OPERATORS = Set.of(LispNames.EVAL, LispNames.COMPILE, LispNames.COERCE);
+
+	private static final List<String> EVAL_TABLE_ENTRIES = List.of(LispNames.EVAL_EXPANSION,
+			LispNames.EVAL_PLACE_EXPANSION, LispNames.EVAL_SPECIAL_LET);
+
 	/**
 	 * Roots every synthesized-call entry whose surface fact the forms kept SO FAR show,
 	 * and answers whether one was added (the walk then runs again). Read off the live
@@ -452,6 +458,15 @@ public final class LibraryDefunPruner {
 			}
 		}
 		boolean added = false;
+		// The run-time macro table is reached from _eval alone, by name.
+		if (usesAnySymbol(liveForms, EVALUATING_OPERATORS)) {
+			for (String entry : EVAL_TABLE_ENTRIES) {
+				if (live.add(entry)) {
+					queue.add(entry);
+					added = true;
+				}
+			}
+		}
 		for (String synthesized : SYNTHESIZED_ENTRIES) {
 			// The surface check first: definedName answers only for an entry the
 			// prelude defines.
@@ -1289,7 +1304,7 @@ public final class LibraryDefunPruner {
 	 * macro-time expansion as well as a run-time one.
 	 */
 	private static boolean isBundledName(String name) {
-		return prunableNames().contains(name)
+		return prunableNames().contains(name) || EvalMacroRows.defines(name)
 				|| AsdfRuntimeLibrary.mayDefine(name) && asdfDefinitionNames().contains(name)
 				|| SchemeLibrary.mayDefine(name) && schemeDefinitionNames().contains(name)
 				|| ClojureLibrary.mayDefine(name) && clojureDefinitionNames().contains(name)

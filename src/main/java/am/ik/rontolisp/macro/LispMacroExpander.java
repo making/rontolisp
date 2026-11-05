@@ -1001,7 +1001,7 @@ public final class LispMacroExpander {
 		List<LispVal> whileParts = new java.util.ArrayList<>();
 		whileParts.add(new LispSymbol(LispNames.WHILE));
 		whileParts.add(test);
-		whileParts.addAll(body);
+		whileParts.addAll(iterationBody(body));
 		whileParts.add(step);
 		LispVal whileExpr = listToCons(whileParts);
 		// (let (bindings) while-expr result-form); a special declaration of the body is
@@ -1016,6 +1016,53 @@ public final class LispMacroExpander {
 	}
 
 	private static final String DOTIMES_LIMIT_VAR = "__dotimes_limit";
+
+	/**
+	 * The forms of a {@code do}, {@code do*}, {@code dolist} or {@code dotimes} body,
+	 * which is an implicit {@code tagbody}: one whose statements a {@code go} jumps
+	 * between, with the leading declarations left in front. Any other body stays as it
+	 * is, so a loop without a tag compiles to what it always did.
+	 * @param body the body forms
+	 * @return the forms the loop runs
+	 */
+	private static List<LispVal> iterationBody(List<LispVal> body) {
+		if (!iterationBodyHasTags(body)) {
+			return body;
+		}
+		int declarations = 0;
+		while (declarations < body.size() && body.get(declarations) instanceof LispCons cons
+				&& cons.car() instanceof LispSymbol head && LispNames.DECLARE.equals(head.name())) {
+			declarations++;
+		}
+		List<LispVal> tagbody = new java.util.ArrayList<>();
+		tagbody.add(new LispSymbol(LispNames.TAGBODY));
+		tagbody.addAll(body.subList(declarations, body.size()));
+		List<LispVal> forms = new java.util.ArrayList<>(body.subList(0, declarations));
+		forms.add(listToCons(tagbody));
+		return forms;
+	}
+
+	/**
+	 * Whether an iteration's body forms stand a tag and a {@code go} that can reach it. A
+	 * compiler's own loop for the body hands such a body to the expansion instead.
+	 * @param body the body forms
+	 * @return true when the body is a {@code tagbody} in earnest
+	 */
+	public static boolean iterationBodyHasTags(List<LispVal> body) {
+		boolean tagged = false;
+		for (LispVal form : body) {
+			tagged = tagged || form instanceof LispSymbol || form instanceof LispInteger;
+		}
+		if (!tagged) {
+			return false;
+		}
+		for (LispVal form : body) {
+			if (mentionsSymbol(form, LispNames.GO)) {
+				return true;
+			}
+		}
+		return false;
+	}
 
 	/**
 	 * Expands (prog1 first body...) into a let that evaluates first, then the body forms,
@@ -1158,7 +1205,7 @@ public final class LispMacroExpander {
 		List<LispVal> whileParts = new java.util.ArrayList<>();
 		whileParts.add(new LispSymbol(LispNames.WHILE));
 		whileParts.add(makeNot(endTest));
-		whileParts.addAll(body);
+		whileParts.addAll(iterationBody(body));
 		whileParts.addAll(makeStepForms(steps));
 		LispVal whileExpr = listToCons(whileParts);
 		// Result: nil with no result forms, the form itself for one, else a progn.
@@ -1232,7 +1279,7 @@ public final class LispMacroExpander {
 		List<LispVal> whileParts = new java.util.ArrayList<>();
 		whileParts.add(new LispSymbol(LispNames.WHILE));
 		whileParts.add(makeNot(endTest));
-		whileParts.addAll(body);
+		whileParts.addAll(iterationBody(body));
 		for (LispVal[] s : steps) {
 			whileParts.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), s[0], s[1])));
 		}
@@ -5135,7 +5182,7 @@ public final class LispMacroExpander {
 			List<LispVal> iterParts = new java.util.ArrayList<>();
 			iterParts.add(new LispSymbol(LispNames.LET));
 			iterParts.add(new LispCons(listToCons(List.of(var, callOf(LispNames.CAR, cursor))), LispNil.INSTANCE));
-			iterParts.addAll(body);
+			iterParts.addAll(iterationBody(body));
 			whileParts.add(listToCons(iterParts));
 		}
 		whileParts.add(step);
@@ -5986,6 +6033,20 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * {@link LispNames#EVAL_COMPILED_SPECIAL_P}: whether a run-time name is one of the
+	 * program's specials, a name test over the final set, for an eval'd {@code let}. The
+	 * accessor cannot answer it: a special declared without a value throws through its
+	 * read.
+	 * @param specials the program's special-variable names
+	 * @return the definition, wrapper-shaped
+	 */
+	public static LispVal compiledSpecialRuntime(java.util.Collection<String> specials) {
+		LispSymbol n = new LispSymbol(freshName("%CS-NAME", specials));
+		return runtimeDefinition(LispNames.EVAL_COMPILED_SPECIAL_P, List.of(n),
+				nameChain(n, new ArrayList<>(specials), s -> LispTrue.INSTANCE, LispNil.INSTANCE));
+	}
+
+	/**
 	 * A shared dispatch of a runtime name over a static name set, cut into segments of
 	 * {@link #NAME_DISPATCH_SEGMENT_ARMS} arms: segment {@code k} is the defun
 	 * {@code base} ({@code k} = 0) or {@code base-k} over {@code params}, whose first
@@ -6049,8 +6110,8 @@ public final class LispMacroExpander {
 	 * @param miss the form a name matching no arm answers
 	 * @return the chain
 	 */
-	private static LispVal nameChain(LispSymbol n, List<String> names,
-			java.util.function.Function<LispSymbol, LispVal> arm, LispVal miss) {
+	static LispVal nameChain(LispSymbol n, List<String> names, java.util.function.Function<LispSymbol, LispVal> arm,
+			LispVal miss) {
 		LispVal chain = miss;
 		for (int i = names.size() - 1; i >= 0; i--) {
 			LispSymbol s = new LispSymbol(names.get(i));

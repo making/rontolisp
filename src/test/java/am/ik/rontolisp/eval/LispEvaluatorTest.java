@@ -14076,6 +14076,8 @@ class LispEvaluatorTest {
 				""")).hasMessageContaining("no enclosing block named NIL");
 		assertThatThrownBy(() -> eval("(return 1)")).hasMessageContaining("no enclosing block named NIL");
 		assertThatThrownBy(() -> eval("(return-from nowhere 1)")).hasMessageContaining("no enclosing block named");
+		assertThatThrownBy(() -> eval("(go nowhere)"))
+			.hasMessageContaining("no enclosing tagbody holds the tag NOWHERE");
 	}
 
 	@Test
