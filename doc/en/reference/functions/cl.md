@@ -132,7 +132,7 @@ page.
 | `special-operator-p` | `(special-operator-p 'if)` | `t` for the 25 ANSI special operators, `nil` for everything else |
 | `macro-function` | `(macro-function 'when)` | The macro expander (real on the interpreter, a signalling stub in compiled output), `nil` for a function or special operator |
 | `compiler-macro-function` | `(compiler-macro-function 'square)` | The `define-compiler-macro` expander (real on the interpreter, a signalling stub in compiled output), `nil` when the name has none |
-| `compiled-function-p` | `(compiled-function-p #'car)` | Lite stub: always `nil` |
+| `compiled-function-p` | `(compiled-function-p #'car)` | True for every function |
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | Lite stub: `(values nil t nil)` (no source recorded) |
 | `list-all-packages` | `(list-all-packages)` | Every registered package, as the keywords `find-package` answers (the compilers answer from a table baked in at compile time) |
 | `find-class` | `(find-class 'c)` | The memoized (`eq`-stable) class metaobject; signals unless `errorp` is `nil` |
@@ -319,7 +319,8 @@ page.
 | `isqrt` | `(isqrt 17)` | `4` (integer square root, floor of the real root) |
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
 | `random` | `(random 100)`, `(random 1.0)` | a value in `[0, 100)` / `[0.0, 1.0)` (the result type follows the limit; `(random 1)` is always `0`). every backend draws from a generator inside the program (`ThreadLocalRandom` on the interpreter and JVM, a built-in generator on WASM), seeded once per run from the host's entropy where there is a host — WASI `random_get` in Preview 1 mode, `wasi:random@0.3.0` in `--component` mode — so the sequence differs each run |
-| `make-random-state` | `(make-random-state t)` | always `nil` -- no random-state objects exist; `random` accepts and ignores an optional state argument, so the store-and-pass-back seeding idiom works unchanged |
+| `make-random-state` | `(make-random-state t)` | a fresh random-state, which carries no generator; `random` accepts and ignores an optional state argument, so the store-and-pass-back seeding idiom works |
+| `random-state-p` | `(random-state-p *random-state*)` | True for a random-state |
 | `get-universal-time` | `(get-universal-time)` | seconds since 1900-01-01 GMT, as an integer on every backend (WASM reads the real host clock in Preview 1, `wasi:clocks@0.3.0` in `--component` mode) |
 | `encode-universal-time` | `(encode-universal-time 0 0 0 1 1 1970 0)` | `2208988800` -- decoded components to universal time; a missing time zone is the local zone, daylight saving time included |
 | `decode-universal-time` | `(decode-universal-time 2208988800 0)` | the nine decoded values (second, minute, hour, date, month, year, day-of-week, daylight-p, zone); without a zone, in the local zone |

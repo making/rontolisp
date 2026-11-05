@@ -2305,8 +2305,6 @@ final class JvmExprCompiler {
 					JvmRandomCompiler.compile(cons, ctx, className);
 				}
 			}
-			case LispNames.MAKE_RANDOM_STATE -> JvmExprCompiler
-				.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx, className);
 			case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME ->
 				JvmTimeCompiler.compile(cons, ctx, sym.name());
 			case LispNames.ISQRT -> JvmIsqrtCompiler.compile(cons, ctx, className);
@@ -2426,7 +2424,7 @@ final class JvmExprCompiler {
 			case LispNames.UPGRADED_COMPLEX_PART_TYPE ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandUpgradedComplexPartType(cons), ctx, className);
 			case LispNames.CHECK_TYPE ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandCheckType(cons), ctx, className);
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandCheckType(cons, ctx.closRegistry), ctx, className);
 			case LispNames.ASSERT -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAssert(cons), ctx, className);
 			case LispNames.DECLARE ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandDeclare(cons), ctx, className);

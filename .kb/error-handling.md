@@ -81,7 +81,7 @@ A condition is a CLOS-subset instance ([instance-syntax.md](instance-syntax.md))
   `stream-error-stream`); `end-of-file` inherits it, `reader-error` declares its own after the
   message pair it inherits from `parse-error` (`[FORMAT-CONTROL, FORMAT-ARGUMENTS, STREAM]`) with
   `stream-error` as its second ancestor -- the lite-multiple-parents rule applied to a seed
-  (`reader-error` is both a `parse-error` and a `stream-error`, CLHS 9.1.2); likewise `simple-type-error` takes `type-error`'s layout with `simple-condition` as its second ancestor, so a `simple-condition` clause catches a `check-type` failure. A seeded class's hand-built factory instance
+  (`reader-error` is both a `parse-error` and a `stream-error`, CLHS 9.1.2); likewise `simple-type-error` takes `type-error`'s layout with `simple-condition` as its second ancestor, so a `simple-condition` clause catches a `check-type` failure; `simple-error` and `simple-warning` have `simple-condition` as a second ancestor too (2026-11-05). A seeded class's hand-built factory instance
   (`newEndOfFileCondition`, `newReaderErrorCondition`) must mirror its seed's slot order exactly;
   the report partition groups by slot position, so a drift reads the wrong slots instead of
   failing (2026-09-16: the seed without `STREAM` grouped `reader-error` with `simple-error` and
@@ -1913,8 +1913,8 @@ interns one SYMBOL per `Kind`, not a compound cons structure, so building the CL
 would mean teaching the shared operand-type table (used by many operators) a new representation
 for this one operator alone. Resolution: report it under RANDOM's own ALREADY-registered type,
 `REAL` -- the same text `(random nil)` already got before this fix -- rather than adding
-compound-type machinery only `random` would ever use. A known simplification (like "no
-random-state objects exist" above), not a claim that a ratio or a negative number is not real.
+compound-type machinery only `random` would ever use. A known simplification, not a claim that a
+ratio or a negative number is not real.
 
 - **Interpreter** (`Environment.java`'s `RANDOM` builtin): the three hand-written
   `LispEvalException` throws (ratio, non-positive int/float/bignum) became

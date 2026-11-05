@@ -132,7 +132,7 @@
 | `special-operator-p` | `(special-operator-p 'if)` | ANSI の 25 個の特殊オペレータで `t`、それ以外は `nil` |
 | `macro-function` | `(macro-function 'when)` | マクロ展開器(インタープリタでは本物、コンパイル済み出力ではシグナルするスタブ)。関数と特殊オペレータには `nil` |
 | `compiler-macro-function` | `(compiler-macro-function 'square)` | `define-compiler-macro` の展開器(インタープリタでは本物、コンパイル済み出力ではシグナルするスタブ)。なければ `nil` |
-| `compiled-function-p` | `(compiled-function-p #'car)` | ライト版スタブ: 常に `nil` |
+| `compiled-function-p` | `(compiled-function-p #'car)` | どの関数にも真 |
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | ライト版スタブ: `(values nil t nil)`(ソース未記録) |
 | `list-all-packages` | `(list-all-packages)` | 登録済みの全パッケージを `find-package` が返すキーワードのリストで返します(コンパイラはコンパイル時に焼き込んだテーブルから答えます) |
 | `find-class` | `(find-class 'c)` | メモ化された(`eq` 安定な)クラスメタオブジェクト。`errorp` が `nil` でなければシグナル |
@@ -319,7 +319,8 @@
 | `isqrt` | `(isqrt 17)` | `4`(整数平方根、実数根の床) |
 | `expt` | `(expt 2 10)`, `(expt 2.0 3)` | `1024`, `8.0` |
 | `random` | `(random 100)`, `(random 1.0)` | `[0, 100)` / `[0.0, 1.0)` の範囲の値(結果型は上限に従います。`(random 1)` は常に `0`)。どのバックエンドもプログラム内部の生成器(インタプリタとJVMは `ThreadLocalRandom`、WASMは組み込みの生成器)から draw し、ホストがある場合はそのエントロピー(Preview 1モードではWASIの `random_get`、`--component` モードでは `wasi:random@0.3.0`)で実行ごとに一度シードされるため、列は実行ごとに異なります |
-| `make-random-state` | `(make-random-state t)` | 常に `nil` -- random-state オブジェクトは存在しません。`random` は省略可能な state 引数を受理して無視するため、保存して渡し直すイディオムはそのまま動きます |
+| `make-random-state` | `(make-random-state t)` | 新しい random-state。生成器は持ちません。`random` は省略可能な state 引数を受理して無視するため、保存して渡し直すシードのイディオムは動きます |
+| `random-state-p` | `(random-state-p *random-state*)` | random-state なら真 |
 | `get-universal-time` | `(get-universal-time)` | 1900-01-01 GMTからの秒数。すべてのバックエンドで整数です(WASMはPreview 1では実際のホストクロック、`--component` モードでは `wasi:clocks@0.3.0` を読みます) |
 | `encode-universal-time` | `(encode-universal-time 0 0 0 1 1 1970 0)` | `2208988800` -- 分解された時刻要素からユニバーサルタイムへ。タイムゾーン省略時は夏時間を含むローカルゾーン |
 | `decode-universal-time` | `(decode-universal-time 2208988800 0)` | 9 個の分解値 (秒・分・時・日・月・年・曜日・夏時間・ゾーン)。ゾーン省略時はローカルゾーンで分解 |

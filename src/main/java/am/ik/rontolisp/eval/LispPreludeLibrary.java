@@ -586,7 +586,7 @@ public final class LispPreludeLibrary {
 				      (values form nil)))
 				""");
 		SOURCES.put(LispNames.COMPILED_FUNCTION_P, """
-				(defun compiled-function-p (object) nil)
+				(defun compiled-function-p (object) (functionp object))
 				""");
 		SOURCES.put(LispNames.FUNCTION_LAMBDA_EXPRESSION, """
 				(defun function-lambda-expression (function) (values nil t nil))
@@ -712,6 +712,7 @@ public final class LispPreludeLibrary {
 				           (let ((name (intern (%home-spelling (subseq s 7))))) name))
 				          ((string= s "%PATHNAME") 'pathname)
 				          ((string= s "%READTABLE") 'readtable)
+				          ((string= s "%RANDOM-STATE") 'random-state)
 				          ((and (string= s "T") (%arrayp object))
 				           (let ((et (array-element-type object))
 				                 (dims (array-dimensions object)))
@@ -4705,6 +4706,19 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.RT_MAKE_INTERNAL, """
 				(defun %rt-make ()
 				  (%obj-new '%READTABLE :upcase (make-hash-table)))
+				""");
+		// A random-state is a value of the fixed LispLayout.RANDOM_STATE layout and
+		// carries
+		// no generator (.kb/random.md).
+		SOURCES.put(LispNames.RANDOM_STATE_P, """
+				(defun random-state-p (object)
+				  (%obj-is object '%RANDOM-STATE))
+				""");
+		SOURCES.put(LispNames.MAKE_RANDOM_STATE, """
+				(defun make-random-state (&optional state)
+				  (if (or (null state) (eq state t) (%obj-is state '%RANDOM-STATE))
+				      (%obj-new '%RANDOM-STATE)
+				      (error 'type-error :datum state :expected-type '(or random-state boolean))))
 				""");
 		SOURCES.put(LispNames.READTABLEP, """
 				(defun readtablep (object)

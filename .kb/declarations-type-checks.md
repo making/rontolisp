@@ -36,7 +36,21 @@ Seven `LispMacroExpander` expansions (no per-backend codegen), in `PackageRegist
   whole-program gates, so the gates name `check-type` themselves: `constructsInstance` (instance
   + condition-report gates), `ConditionTagScan` walks the expansion (report-arm narrowing + the
   runtime format renderer -- without it a JVM uncaught message printed the raw `~s`), and wasm's
-  `usedLayoutTags` keeps the `SIMPLE-TYPE-ERROR` layout.
+  `usedLayoutTags` keeps the `SIMPLE-TYPE-ERROR` layout. **Its test is the literal `typep`'s**
+  (`expandCheckType(cons, registry)`, 2026-11-05; it used to take no registry and pass any class,
+  condition, struct or deftype): the compilers hand `ctx.closRegistry`, the interpreter's live one,
+  so that arm re-expands ([interpreter-expansion-memo.md](interpreter-expansion-memo.md)). The
+  no-registry overload is for `FreeVarAnalyzer`, `ConditionTagScan`, `macroexpand-1` and `--no-gc`
+  (no classes there), none of which runs a class test. A false refusal is the risk, so:
+  `checkableTypeSpec` widens, in a positive position, what `typep` answers empty here on purpose
+  (`generic-function` -> `(or function ...)`, `structure-class`/`built-in-class` -> `class`,
+  `logical-pathname` -> `pathname`, `extended-char` -> `character`); a specifier nothing defines
+  still passes, as does `restart` (a restart is a cons here; `typep` answers nil), and SBCL's
+  run-time error is not copied because a class can be defined at run time on a compile path. The
+  deciding measurement is a matrix of 140 specifiers against 55 values, literal `typep`, computed
+  `typep` and `check-type`, on all four against SBCL 2.2.9 (fixes below). What differs from SBCL
+  afterwards is deliberate: the float and string name collapses, `standard-class` on a struct's
+  class, `standard-object` on a condition, the `t` stream designator, a package being a keyword.
 - `assert` -> `(if test nil (error ...))`; the places list is dropped (no `continue`/`store-value`
   restart, though the restart system exists, [error-handling.md](error-handling.md)).
 
@@ -121,10 +135,17 @@ form may be evaluated several times, so callers bind a temp (`__check-type` / `_
   `unsigned-byte` -> `(and (integerp v) (>= v 0))`; `array` -> `(or (stringp v) (%arrayp v))` (rank
   NOT checked -- that separates it from `vector`, whose atomic arm goes through
   `makeArrayTypeTest`); `sequence` adds `listp`; `t`/`otherwise` -> t; literal `nil` -> nil. The
-  three `simple-` spellings add `%simple-array-p`. `functionp` is a real public builtin (JVM =
+  three `simple-` spellings add `%simple-array-p`. `compiled-function` -> `functionp` (`compiled-function-p`
+  too; SBCL agrees), `standard-char` spells `standard-char-p`'s set with `char-code`, because a type
+  test splices no prelude defun, and `sequence` is a list or a rank-1 vector, no longer a rank-2 array.
+  **`fixnum`/`bignum` stay `integerp` on purpose:** `most-positive-fixnum` is 2^30-1 on wasm, so a real
+  test would refuse `(check-type x fixnum)` over 2^30 there and take every library's `fixnum` arm off the
+  values SBCL keeps on it. `functionp` is a real public builtin (JVM =
   `Object[]` with an Integer funcId in slot 0, WASM = `ref.test TYPE_CLOSURE`); `%arrayp` is
   CL_INTERNALS-only.
-- **Compound**: `or`/`and`/`not` recurse; `(member items...)` -> `(member v '(items))`;
+- `logical-pathname`/`extended-char` are empty too (no such value), and `random-state` is the
+  `%RANDOM-STATE` tag ([random.md](random.md)).
+- **Compound**: `or`/`and`/`not` recurse; `(mod n)` -> `(integer 0 (n))`; `(member items...)` -> `(member v '(items))`;
   `(eql obj)` -> `(eql v 'obj)`; `(satisfies fn)` -> `(fn v)`;
   `(integer|float|rational|real|number [low [high]])` -> base predicate + bound checks, `*`
   unbounded, `(n)` exclusive.
@@ -207,7 +228,9 @@ branch offsets -- whose recursion is `%typep-runtime`.
   the head symbol ALONE then applying the range bounds, which makes a compound spelling of a
   NON-numeric atomic type answer through its base predicate. The head is matched by `symbol-name`,
   the runtime spelling of `plainTypeName`; the three narrower float names are in
-  `RUNTIME_TYPEP_BUILTINS`.
+  `RUNTIME_TYPEP_BUILTINS`, as are `signed-byte`, `base-char`, `standard-char`, `base-string`,
+  `simple-base-string` and `compiled-function`, each of which answered nil when computed until
+  2026-11-05 (so did `readtable` on the compile paths, now in the tag table with `random-state`).
 - Size: emitted once per program under the computed-`typep` gate, but it reaches the generic array
   accessors and `funcall`. `hello-clack` Worker (`--no-wasi --optimize=size`) +5.2% raw / +5.9%
   gzipped, ~half the ARRAY arm alone; no computed `typep` -> byte-identical. **Trigger: if a Worker
@@ -235,8 +258,9 @@ that turns a class object into the name this reads.
   SPELLS** (`narrowedDeftypeAliases`, closed afterwards under the alias references its own entries
   make): array-operations then carries 2 entries and pays +1,765 B (+1.9%).
 - Not covered: a designator built at run time out of characters (`(typep x (intern (read-line)))`)
-  answers `nil` on the compile paths; the interpreter resolves it. The `make-array :element-type`
-  half is [array-literals.md](array-literals.md), a DIFFERENT narrowing.
+  answers `nil` on the compile paths; the interpreter resolves it. An alias as the ELEMENT type of a
+  computed compound (`(vector my-char)`) is compared unresolved on all four; the literal resolves it.
+  The `make-array :element-type` half is [array-literals.md](array-literals.md), a DIFFERENT narrowing.
 
 ## A PARAMETERIZED `deftype` as a compound specifier
 **`(name args...)` is what the deftype's body returns over those arguments, on all four
@@ -459,7 +483,8 @@ collect declaration specifiers); `expandBuiltinMacro`.
   `compileAndRunDeclarations`/`The`/`EvalWhen`/`CheckType`/`Assert`,
   `compileAndRunEvalWhenWrappedDefmacroThroughUserMacroExpander`,
   `declaredArrayTypesEmitSingleArmAccessorsWithoutChangingResults`; `ChipzE2eTest`.
-- ci-spec: `declarations-eval-when-check-type-assert`, `declared-array-types-single-arm-access`,
+- ci-spec: `declarations-eval-when-check-type-assert`, `check-type-tests-what-typep-tests`,
+  `standard-type-names-answer-literal-and-computed`, `declared-array-types-single-arm-access`,
   `declared-float-scalars-answer-what-undeclared-code-answers`, `computed-compound-type-specifier`,
   `array-type-of-and-compound-array-specifier`, `vectorp-and-the-vector-specifier-check-the-rank`,
   `runtime-typep-deftype-alias`, `computed-compound-subtypep-specifier`,

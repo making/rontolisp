@@ -290,11 +290,14 @@ public final class LispNames {
 	/** The {@code random} built-in function. */
 	public static final String RANDOM = "RANDOM";
 
+	/** The {@code random-state-p} standard function, a prelude defun. */
+	public static final String RANDOM_STATE_P = "RANDOM-STATE-P";
+
 	/**
-	 * The {@code make-random-state} standard function, lowered to a nil-returning no-op:
-	 * rontolisp has no random-state objects ({@link #RANDOM} ignores its optional state
-	 * argument and draws from the backend's own entropy), and nil is what a caller stores
-	 * and later passes back (uuid's {@code *uuid-random-state*} seeding).
+	 * The {@code make-random-state} standard function, a prelude defun answering a fresh
+	 * random-state ({@link #RANDOM} ignores its optional state argument and draws from
+	 * the backend's own entropy), and nil is what a caller stores and later passes back
+	 * (uuid's {@code *uuid-random-state*} seeding).
 	 */
 	public static final String MAKE_RANDOM_STATE = "MAKE-RANDOM-STATE";
 
@@ -4696,8 +4699,8 @@ public final class LispNames {
 	public static final String MACRO_FUNCTION_WRITES = "%MACRO-FUNCTION-WRITES%";
 
 	/**
-	 * The {@code compiled-function-p} standard function: a lite prelude stub returning
-	 * nil.
+	 * The {@code compiled-function-p} standard function: a prelude defun answering true
+	 * for every function, as {@code (typep x 'compiled-function)} does.
 	 */
 	public static final String COMPILED_FUNCTION_P = "COMPILED-FUNCTION-P";
 

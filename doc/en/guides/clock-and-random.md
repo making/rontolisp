@@ -109,8 +109,8 @@ real one** — and a value the *host* hands in is not an invention, which is wha
 the two hooks below are for.
 
 Randomness lands on the answering side by itself. The module carries its own
-generator, which is inside `random`'s contract — `make-random-state` here answers
-`nil`, so no state object is observable and "the sequence repeats" is a property
+generator, which is inside `random`'s contract — a random-state here carries no
+generator, so no state is observable and "the sequence repeats" is a property
 of the contract rather than a claim about the host. The consequence is worth
 stating plainly: **unseeded, every instance of one module produces the same
 sequence.** Because that generator is not entropy, `rontolisp:random-bytes`

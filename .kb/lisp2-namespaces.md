@@ -41,7 +41,7 @@ covers what the interpreter lowers in `evalCons`; the NATIVE built-ins it binds 
 `#'arrayp` refused the program (measured 2026-10-07: 28 names, `array-dimensions arrayp close eval
 export fdefinition fmakunbound get-internal-real-time get-internal-run-time
 get-output-stream-string get-universal-time hash-table-rehash-size hash-table-rehash-threshold
-hash-table-size hash-table-test import load make-random-state make-string-input-stream
+hash-table-size hash-table-test import load make-string-input-stream
 make-string-output-stream make-synonym-stream open-stream-p rationalp row-major-aref
 symbol-function unexport unuse-package use-package`; JVM, P1 and component identical).
 

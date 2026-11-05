@@ -2560,8 +2560,6 @@ final class WasmExprCompiler {
 					WasmRandomCompiler.compile(cons, ctx);
 				}
 			}
-			case LispNames.MAKE_RANDOM_STATE ->
-				compileExpansion(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx, tail);
 			// Under --no-wasi these read the cell a host writes through the exported
 			// __ronto_set_time hook instead of the (unimported) clock, and signal
 			// while it is unset -- the branch is WasmTimeCompiler's, which is also
@@ -2741,7 +2739,8 @@ final class WasmExprCompiler {
 				compileExpansion(LispMacroExpander.expandSubtypepValid(cons, ctx.closRegistry), ctx, tail);
 			case LispNames.UPGRADED_COMPLEX_PART_TYPE ->
 				compileExpansion(LispMacroExpander.expandUpgradedComplexPartType(cons), ctx, tail);
-			case LispNames.CHECK_TYPE -> compileExpansion(LispMacroExpander.expandCheckType(cons), ctx, tail);
+			case LispNames.CHECK_TYPE ->
+				compileExpansion(LispMacroExpander.expandCheckType(cons, ctx.closRegistry), ctx, tail);
 			case LispNames.ASSERT -> compileExpansion(LispMacroExpander.expandAssert(cons), ctx, tail);
 			case LispNames.DECLARE -> compileExpansion(LispMacroExpander.expandDeclare(cons), ctx, tail);
 			case LispNames.DECLAIM -> compileExpansion(LispMacroExpander.expandDeclaim(cons), ctx, tail);

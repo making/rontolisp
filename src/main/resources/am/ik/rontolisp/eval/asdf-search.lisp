@@ -16,13 +16,7 @@
 
 ;; Real ASDF's check-type: a string is no answer, as a pathname is.
 (defun %asdf-check-found (found)
-  (unless (or (null found) (pathnamep found) (typep found 'asdf:system))
-    (error 'simple-type-error
-           :datum found
-           :expected-type '(or null pathname asdf:system)
-           :format-control
-           "A search for a system definition answered ~S, neither a pathname nor a system."
-           :format-arguments (list found)))
+  (check-type found (or null pathname asdf:system))
   found)
 
 (defun asdf:locate-system (name)

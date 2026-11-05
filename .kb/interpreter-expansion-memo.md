@@ -9,7 +9,7 @@ compile-time-constant flags.**
 ## Arms that MUST re-expand (state read)
 - `error`, `cerror`, `warn`, `signal` — `restartRuntimeLoaded`, `closRegistry`
 - `make-instance`, `change-class`, `make-condition`, `define-condition`, `handler-bind`,
-  `typep`, `typecase`, `etypecase`, `ctypecase`, `coerce` — `closRegistry` (`streamp` is no
+  `typep`, `typecase`, `etypecase`, `ctypecase`, `check-type`, `coerce` — `closRegistry` (`streamp` is no
   arm at all: the function value reads the registry after its argument ran, `.kb/gray-streams.md`)
 - `setf` — user `defsetf`/`define-setf-expander`, user macro places, `(setf (macro-function ...))`
 - `print`, `princ`, `prin1`, `princ-to-string`, `prin1-to-string`, `write-to-string`,

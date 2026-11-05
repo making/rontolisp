@@ -4,8 +4,11 @@
 host call per draw is the defect this file prevents. Entropy is a SEPARATE API:
 `rontolisp::%random-byte` behind `rontolisp:random-bytes` calls `random_get` (wasm) /
 `SecureRandom` (JVM, interpreter) per byte, and answering it from the generator below is a
-security regression. No random-state objects exist (`make-random-state` -> `nil`; `random`'s
-optional state argument normalized away -- `LispNames.MAKE_RANDOM_STATE`, `LispMacroExpander`).
+security regression. A random-state is a value of the slot-less fixed `LispLayout.RANDOM_STATE` layout
+(2026-11-05; `make-random-state` used to answer `nil`, which `(check-type s random-state)` refused and
+`null` accepted), carrying no generator: `make-random-state` and `random-state-p` are prelude defuns,
+`*random-state*` starts as one, and `random`'s optional state argument is normalized away
+(`expandRandomWithState`), so `(make-random-state nil)` does not replay its original's draws.
 
 | backend | generator | seed |
 | --- | --- | --- |
