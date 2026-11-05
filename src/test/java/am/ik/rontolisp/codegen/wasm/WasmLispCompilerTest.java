@@ -1555,17 +1555,19 @@ class WasmLispCompilerTest {
 		// 12,156 B and 7.3% of the zlib --optimize=size artifact for what was an
 		// eleven-argument call. Inside the derived ceiling the site gets its own
 		// per-arity dispatcher instead: measured 41 bytes here, 975 on zlib, against the
-		// 2,405 the spread dispatcher costs even in this two-callable program.
+		// 2,405 the spread dispatcher costs even in this two-callable program (before the
+		// fold learned what a decided arm leaves: since 2026-11-05 it folds down to a
+		// few hundred bytes here, where the one callable takes a rest list).
 		int fixed = compileFuncallOfWidth(10).length;
 		assertThat(compileFuncallOfWidth(11).length - fixed).isLessThan(500);
-		assertThat(compileFuncallOfWidth(
-				WasmLispCompiler.MAX_CALLABLE_ARITY + WasmLispCompiler.MAX_EXTRA_CALL_ARITY).length - fixed)
-			.isLessThan(500);
+		int atTheCap = compileFuncallOfWidth(
+				WasmLispCompiler.MAX_CALLABLE_ARITY + WasmLispCompiler.MAX_EXTRA_CALL_ARITY).length;
+		assertThat(atTheCap - fixed).isLessThan(500);
 		// One argument past the cap the ladders would outgrow the one function that
 		// serves every arity, so the program keeps the old ceiling and spreads.
 		assertThat(compileFuncallOfWidth(
-				WasmLispCompiler.MAX_CALLABLE_ARITY + WasmLispCompiler.MAX_EXTRA_CALL_ARITY + 1).length - fixed)
-			.isGreaterThan(1000);
+				WasmLispCompiler.MAX_CALLABLE_ARITY + WasmLispCompiler.MAX_EXTRA_CALL_ARITY + 1).length)
+			.isGreaterThan(atTheCap);
 	}
 
 	// A program whose only wide call is one funcall of `width` arguments through a

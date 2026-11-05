@@ -579,6 +579,21 @@ final class WasmHandlerCaseCompiler {
 	 * payload with an instance does.
 	 */
 	private static void emitSynthesizeSimpleError(int payloadSlot, int condSlot, WasmLispCompiler.Ctx ctx) {
+		LispVal quotedClass = new LispCons(new LispSymbol(LispNames.QUOTE),
+				new LispCons(new LispSymbol(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"), LispNil.INSTANCE));
+		if (ctx.unreadReports) {
+			// What only names a class to the clauses: the cdr holds no text, and a read
+			// of
+			// it would hand the fold every value any cdr holds.
+			WasmExprCompiler.compileExpr(
+					new LispCons(new LispSymbol(LispNames.OBJ_NEW),
+							new LispCons(quotedClass,
+									new LispCons(LispNil.INSTANCE, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)))),
+					ctx);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(condSlot);
+			return;
+		}
 		int msgSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
@@ -593,11 +608,10 @@ final class WasmHandlerCaseCompiler {
 		ctx.locals.put(msgVarName, msgSlot);
 		try {
 			// (%obj-new '%class-SIMPLE-ERROR (%text-control __hc_msg) nil)
-			LispVal quotedTag = new LispCons(new LispSymbol(LispNames.QUOTE),
-					new LispCons(new LispSymbol(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"), LispNil.INSTANCE));
 			LispVal instance = new LispCons(new LispSymbol(LispNames.OBJ_NEW),
-					new LispCons(quotedTag, new LispCons(LispMacroExpander.textControlForm(new LispSymbol(msgVarName)),
-							new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))));
+					new LispCons(quotedClass,
+							new LispCons(LispMacroExpander.textControlForm(new LispSymbol(msgVarName)),
+									new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))));
 			WasmExprCompiler.compileExpr(instance, ctx);
 		}
 		finally {

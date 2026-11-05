@@ -97,6 +97,9 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private final boolean noWasi;
 
+	// Whether nothing in this module can read a condition's report (Ctx.unreadReports).
+	private boolean unreadReports;
+
 	private final OptimizeLevel optimize;
 
 	private final boolean serve;
@@ -3635,7 +3638,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// nowhere.
 		boolean entryReportOnly = !ehFormReport && this.reportLocations != null && !this.noWasi
 				&& WasmUncaughtLocations.readsAnyFile(program);
-		boolean reportsUncaught = ehFormReport || entryReportOnly;
+		// --no-wasi's standard error is a sink, so the entry pad reads nothing there.
+		// Where
+		// no program code can hold a condition either, no report is read at all: each
+		// throw carries its class, and no text (Ctx.unreadReports).
+		this.unreadReports = this.noWasi && !reportsUncaughtUnforeseen && !this.dynamic && !restartMode && !p1Futures
+				&& !RuntimeNameProducers.anyNameResolvable(program)
+				&& !LispMacroExpander.mayHoldConditions(program, closRegistry);
+		boolean reportsUncaught = (ehFormReport && !this.unreadReports) || entryReportOnly;
 		// SignalMessages.LAZY: without a landing pad that reads it, this backend never
 		// renders a signal's message (an uncaught condition is a bare trap and the
 		// %error/%error-cond compilers skip the message operand), so the report-routing
@@ -3658,6 +3668,10 @@ public final class WasmLispCompiler implements LispCompiler {
 						: reportsUncaught ? SignalMessages.RENDERED : SignalMessages.LAZY,
 				this.optimize.eliminatesDeadCode() && !this.dynamic
 						? new am.ik.rontolisp.compiler.GenericDispatchNarrowing() : null);
+		if (this.unreadReports && closRegistry.routesConditionReports()) {
+			// The expansion gave program code a condition the surface scan did not see.
+			throw new UncaughtReportUnforeseen();
+		}
 		// The (setf (symbol-function 'n) ...) forwarders: no definition of their name, so
 		// out of the registry, and #'n / fboundp read the runtime function namespace.
 		Set<String> fenvForwarders = new HashSet<>(LispMacroExpander.symbolFunctionForwarderNames(program));
@@ -4028,7 +4042,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// catching form. A program without one stays byte-identical and flag-free.
 		// --report-locations outside it turns it on as well (entryReportOnly above).
 		boolean ehMode = programUsesEhForm(program) || this.asyncMode || blockExitTag || entryReportOnly;
-		if (ehMode && !reportsUncaught) {
+		if (ehMode && !reportsUncaught && !this.unreadReports) {
 			// The pad below reads every escaping condition, but the expansion above ran
 			// for a module that has none: its signals carry no message.
 			throw new UncaughtReportUnforeseen();
@@ -4038,7 +4052,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// producer of the reserved *error-output* handle that no scan of the user's text
 		// can find -- and the --component narrowing below reads this same fact rather
 		// than re-deriving one, so the two cannot drift apart.
-		boolean uncaughtReportPad = WasmUncaughtReportCompiler.emittedFor(ehMode);
+		boolean uncaughtReportPad = WasmUncaughtReportCompiler.emittedFor(ehMode) && !this.noWasi;
+		boolean uncaughtTrapPad = ehMode && this.noWasi;
 		this.usesFailedFutures = ehMode && p1Futures;
 		// Whether this module carries _arity_chk: it shifts userFuncBase(), so the
 		// decision has to be made here, in front of pass 2, rather than beside the
@@ -5212,6 +5227,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.asyncFuncBase(this.asyncMode ? asyncFuncBase() : -1)
 			.asyncDefunNames(Set.copyOf(asyncDefunNames))
 			.p1Futures(p1Futures)
+			.unreadReports(this.unreadReports)
 			.currentTaskGlobalIndex(currentTaskGlobalIndex)
 			.serveInitGlobalIndex(serveInitGlobalIndex)
 			.reentryGuardGlobalIndex(reentryGuardGlobalIndex)
@@ -5503,6 +5519,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (uncaughtReportPad) {
 			WasmUncaughtReportCompiler.emitPrologue(ctx);
 		}
+		else if (uncaughtTrapPad) {
+			WasmEmitHelper.emitCatchAllPrologue(ctx);
+		}
 		int topLevelAwaits = 0;
 		// A sequence proven not to be a string takes the byte arm directly, so the dead
 		// character arm leaves the artifact (compiler/SequenceIoNarrowing). After every
@@ -5549,6 +5568,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		if (uncaughtReportPad) {
 			WasmUncaughtReportCompiler.emitEpilogue(ctx);
+		}
+		else if (uncaughtTrapPad) {
+			WasmEmitHelper.emitCatchAllEpilogue(ctx);
 		}
 		startWriter.write(Instruction.END);
 
@@ -6428,6 +6450,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the message-only payload reports the same text.
 		WasmOperandTypes.@Nullable TypeErrorShape operandTypeError = operandTexts != null
 				&& operandTexts.typeNames() != null ? operandTypeErrorShape(closRegistry, layoutAddresses) : null;
+		WasmRuntimeBuilder.@Nullable ConditionInstance operandTypeErrorInstance = operandTypeError != null
+				? operandTypeError.instance() : null;
 		// The division-by-zero _div_zero throws: where usedLayoutTags baked the class (a
 		// handler landing pad and a division operator spelled); elsewhere the
 		// message-only payload reports the same text.
@@ -6443,7 +6467,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						? conditionInstance(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME, closRegistry, layoutAddresses)
 						: null,
 				slotIndex(closRegistry, ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME, "NAME"),
-				this.usesIdentityHashTables) : null;
+				this.usesIdentityHashTables, this.unreadReports) : null;
 		// The undefined-function throw a name in hand reaches, built here beside the
 		// dispatchers so its texts are interned with theirs.
 		byte[] undefinedFunctionBody = this.emitsUndefinedFunction
@@ -6779,7 +6803,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						this.usesInstances ? conditionInstance(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, closRegistry,
 								layoutAddresses) : null,
 						slotIndex(closRegistry, ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME, "NAME"),
-						this.usesIdentityHashTables)
+						this.usesIdentityHashTables, this.unreadReports)
 				: null;
 		List<Integer> lambdaListKeywordOffsets = new ArrayList<>();
 		WasmEvalRuntimeBuilder.EvalHooks evalHooks = WasmEvalRuntimeBuilder.EvalHooks.NONE;
@@ -9203,7 +9227,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigBitopBody(am.ik.wasm.Instruction.I64_XOR));
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigNotBody());
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigAshBody(ashTooLargePrefix, operandOpGlobalIndex,
-						this.usesIdentityHashTables));
+						this.usesIdentityHashTables, this.unreadReports));
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigIntlenBody());
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigLogbitpBody());
 				code.addFunction(WasmBigIntRuntimeBuilder.buildBigGcdBody());
@@ -9316,7 +9340,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrFpBody());
 				// shared aref/%aset rank-check body (FUNC_ARR_CHECK_RANK)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrCheckRankBody(operandOpGlobalIndex, rankNames,
-						this.usesIdentityHashTables));
+						this.usesIdentityHashTables, this.unreadReports));
 				// shared displaced-view materialization body (FUNC_ARR_UNDISPLACE)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrUndisplaceBody(this.simd));
 				// exact float floor-family division body (FUNC_F64_FDIV)
@@ -9382,11 +9406,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmEmitHelper.buildIndexCheckBody(operandOpGlobalIndex));
 				// the shared landing body (FUNC_TYPE_ERR), the operator table's one
 				// reader
-				if (operandOperators.base() >= 0) {
+				if (operandOperators.base() >= 0 && !this.unreadReports) {
 					stringTable.readBlob(operandOperators.base(), FUNC_TYPE_ERR);
 				}
-				code.addFunction(WasmOperandTypes.buildSharedLandingBody(operandTexts, operandOperators,
-						operandOpGlobalIndex, operandTypeError, this.usesIdentityHashTables));
+				code.addFunction(this.unreadReports && ehMode
+						? WasmRuntimeBuilder.buildUnreadThrowBody(operandTypeErrorInstance, this.usesIdentityHashTables)
+						: WasmOperandTypes.buildSharedLandingBody(operandTexts, operandOperators, operandOpGlobalIndex,
+								operandTypeError, this.usesIdentityHashTables));
 				// the text-control body (FUNC_TILDE): shaken when no condition stores or
 				// renders text.
 				code.addFunction(WasmStringRuntimeBuilder.buildTildeBody());
@@ -9403,11 +9429,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmCharCompiler.buildCodeCheckBody(ehMode ? operandOpGlobalIndex : -1));
 				// the compound landing body (FUNC_TYPE_ERR_OF), the operator table's
 				// other reader: shaken when nothing lands through it.
-				if (operandOperators.base() >= 0) {
+				if (operandOperators.base() >= 0 && !this.unreadReports) {
 					stringTable.readBlob(operandOperators.base(), FUNC_TYPE_ERR_OF);
 				}
-				code.addFunction(WasmOperandTypes.buildCompoundLandingBody(operandTexts, operandOperators,
-						operandOpGlobalIndex, operandTypeError, this.usesIdentityHashTables));
+				code.addFunction(this.unreadReports && ehMode
+						? WasmRuntimeBuilder.buildUnreadThrowBody(operandTypeErrorInstance, this.usesIdentityHashTables)
+						: WasmOperandTypes.buildCompoundLandingBody(operandTexts, operandOperators,
+								operandOpGlobalIndex, operandTypeError, this.usesIdentityHashTables));
 				// the fill-pointer check body (FUNC_FP_HDR): shaken with its sites.
 				code.addFunction(WasmOperandTypes.buildFillPointerCheckBody(operandTexts, operandOpGlobalIndex,
 						this.usesIdentityHashTables));
@@ -9415,15 +9443,19 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmRatioRuntimeBuilder.buildRatToF64Body());
 				// the division-by-zero landing body (FUNC_DIV_ZERO): shaken when nothing
 				// divides.
-				code.addFunction(WasmRuntimeBuilder.buildDivZeroBody(divZeroMessage, divZeroInstance,
-						this.usesIdentityHashTables));
+				code.addFunction(this.unreadReports && divZeroMessage != null
+						? WasmRuntimeBuilder.buildUnreadThrowBody(divZeroInstance, this.usesIdentityHashTables)
+						: WasmRuntimeBuilder.buildDivZeroBody(divZeroMessage, divZeroInstance,
+								this.usesIdentityHashTables));
 				// the subseq bounds landing body (FUNC_SUBSEQ_BAD): shaken when nothing
 				// refuses a range.
-				code.addFunction(WasmStringRuntimeBuilder
-					.buildSubseqBadBody(subseqBoundsPrefix, subseqBoundsComma, operandTypeError,
-							operandTexts != null ? operandTexts.compoundNames()
-								.get(am.ik.rontolisp.compiler.OperandTypes.INTEGER_TYPE) : null,
-							this.usesIdentityHashTables));
+				code.addFunction(this.unreadReports && ehMode
+						? WasmRuntimeBuilder.buildUnreadThrowBody(operandTypeErrorInstance, this.usesIdentityHashTables)
+						: WasmStringRuntimeBuilder.buildSubseqBadBody(subseqBoundsPrefix, subseqBoundsComma,
+								operandTypeError,
+								operandTexts != null ? operandTexts.compoundNames()
+									.get(am.ik.rontolisp.compiler.OperandTypes.INTEGER_TYPE) : null,
+								this.usesIdentityHashTables));
 				// the bounds check body (FUNC_CK_BOUNDS): shaken when nothing spells a
 				// bound.
 				code.addFunction(WasmStringRuntimeBuilder.buildCheckBoundsBody(ehMode, subseqBoundsForLength));
@@ -10497,7 +10529,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		return new WasmRuntimeBuilder.ArityReport(stringTable, instance.layoutAddress(), instance.instanceTypeIndex(),
 				instance.slotCapacity(), instance.formatControlSlot(), this.usesIdentityHashTables,
-				arityOperatorFuncIds, declaredFuncIds, unbackedOperators, arityMessageFuncIndex());
+				arityOperatorFuncIds, declaredFuncIds, unbackedOperators, arityMessageFuncIndex(), this.unreadReports);
 	}
 
 	/**
@@ -12779,6 +12811,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean p1Futures;
 
 		/**
+		 * Whether nothing in this module can read a condition's report: its standard
+		 * error is a sink ({@code --no-wasi}), and no program code can hold a condition
+		 * ({@code LispMacroExpander.mayHoldConditions}). A throw then carries its class
+		 * alone, and a signal renders no message.
+		 */
+		boolean unreadReports;
+
+		/**
 		 * The global index of the CURRENT task record (asyncMode), or -1. Frames store it
 		 * as their owner at creation; the callback-task runtime swaps it at every host
 		 * entry.
@@ -13048,6 +13088,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.asyncFuncBase = builder.asyncFuncBase;
 			this.asyncDefunNames = builder.asyncDefunNames;
 			this.p1Futures = builder.p1Futures;
+			this.unreadReports = builder.unreadReports;
 			this.currentTaskGlobalIndex = builder.currentTaskGlobalIndex;
 			this.serveInitGlobalIndex = builder.serveInitGlobalIndex;
 			this.reentryGuardGlobalIndex = builder.reentryGuardGlobalIndex;
@@ -13289,6 +13330,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private boolean p1Futures;
 
+			private boolean unreadReports;
+
 			private int currentTaskGlobalIndex = -1;
 
 			private int serveInitGlobalIndex = -1;
@@ -13412,6 +13455,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.asyncFuncBase = proto.asyncFuncBase;
 				this.asyncDefunNames = proto.asyncDefunNames;
 				this.p1Futures = proto.p1Futures;
+				this.unreadReports = proto.unreadReports;
 				this.currentTaskGlobalIndex = proto.currentTaskGlobalIndex;
 				this.serveInitGlobalIndex = proto.serveInitGlobalIndex;
 				this.reentryGuardGlobalIndex = proto.reentryGuardGlobalIndex;
@@ -13924,6 +13968,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder p1Futures(boolean p1Futures) {
 				this.p1Futures = p1Futures;
+				return this;
+			}
+
+			Builder unreadReports(boolean unreadReports) {
+				this.unreadReports = unreadReports;
 				return this;
 			}
 

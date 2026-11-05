@@ -1838,9 +1838,10 @@ final class WasmBigIntRuntimeBuilder {
 	//
 	// tooLargePrefix: the interned quote-framed "ASH: shift count too large: ", or null
 	// where the guard traps (outside EH mode, or nothing spells ash). operatorGlobal:
-	// the operator register the signal clears, or -1.
+	// the operator register the signal clears, or -1. unread: nothing reads a report
+	// (Ctx.unreadReports), so the signal carries no text.
 	static byte[] buildBigAshBody(WasmLispCompiler.StringTable.@Nullable StringEntry tooLargePrefix, int operatorGlobal,
-			boolean identityHash) {
+			boolean identityHash, boolean unread) {
 		BodyWriter b = new BodyWriter();
 		WasmWriter w = b.w;
 		// params 0=x, 1=count. locals: 2=c, 3=va, 4=m (i64), 5=arr (ref null eq)
@@ -1931,7 +1932,10 @@ final class WasmBigIntRuntimeBuilder {
 		b.i64c(1L << 25);
 		w.write(Instruction.I64_GT_S);
 		b.ifVoid();
-		if (tooLargePrefix != null) {
+		if (tooLargePrefix != null && unread) {
+			WasmRuntimeBuilder.emitUnreadThrow(w, null, identityHash);
+		}
+		else if (tooLargePrefix != null) {
 			emitTooLargeThrow(w, tooLargePrefix, operatorGlobal, identityHash);
 		}
 		else {

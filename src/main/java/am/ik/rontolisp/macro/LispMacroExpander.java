@@ -26133,7 +26133,9 @@ public final class LispMacroExpander {
 				continue;
 			}
 			for (LispVal bodyForm : clauseParts.subList(2, clauseParts.size())) {
-				if (usesSymbol(bodyForm, var.name())) {
+				boolean declaration = bodyForm instanceof LispCons declared && declared.car() instanceof LispSymbol op
+						&& LispNames.DECLARE.equals(op.name());
+				if (!declaration && usesSymbol(bodyForm, var.name())) {
 					return true;
 				}
 			}
@@ -36427,6 +36429,31 @@ public final class LispMacroExpander {
 	private static LispVal formatMessagePieces(String controlText, List<LispVal> argSyms) {
 		LispVal message = formatMessageText(controlText, argSyms);
 		return argSyms.isEmpty() ? message : callOf(LispNames.PRINT_WITHOUT_READABLY_INTERNAL, message);
+	}
+
+	/**
+	 * Whether evaluating a signal's message does nothing but build text: a literal, a
+	 * variable a rendering reads ({@link #formatMessagePieces} binds a signal's arguments
+	 * to temporaries first), or text built of those.
+	 * @param message the message operand
+	 * @return whether it can go unevaluated where nothing reads it
+	 */
+	public static boolean buildsTextOnly(LispVal message) {
+		if (message instanceof LispString || message instanceof LispNil) {
+			return true;
+		}
+		if (message instanceof LispSymbol symbol) {
+			return symbol.name().startsWith("__");
+		}
+		if (!(message instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head) || !cons.isProperList()) {
+			return false;
+		}
+		return switch (head.name()) {
+			case LispNames.STRING_CONCAT, LispNames.PRINT_WITHOUT_READABLY_INTERNAL, LispNames.PRINC_PIECE_INTERNAL,
+					LispNames.PRIN1_PIECE_INTERNAL ->
+				cons.toList().subList(1, cons.toList().size()).stream().allMatch(LispMacroExpander::buildsTextOnly);
+			default -> false;
+		};
 	}
 
 	private static LispVal formatMessageText(String controlText, List<LispVal> argSyms) {

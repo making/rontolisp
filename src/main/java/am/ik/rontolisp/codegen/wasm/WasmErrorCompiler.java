@@ -46,8 +46,25 @@ final class WasmErrorCompiler {
 		List<LispVal> parts = cons.toList();
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
-		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		if (ctx.unreadReports) {
+			emitUnreadMessage(parts.get(1), ctx);
+		}
+		else {
+			WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		}
 		emitThrowPayload(ctx);
+	}
+
+	/**
+	 * Pushes nil for a message nothing reads, past whatever evaluating it would do but
+	 * build text: a message rendered from a signal's arguments reads their temporaries.
+	 */
+	private static void emitUnreadMessage(LispVal message, WasmLispCompiler.Ctx ctx) {
+		if (!LispMacroExpander.buildsTextOnly(message)) {
+			WasmExprCompiler.compileForEffect(message, ctx);
+		}
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
 	}
 
 	/**
@@ -77,7 +94,10 @@ final class WasmErrorCompiler {
 		LispVal text = !ctx.closRegistry.routesConditionReports() ? parts.get(2)
 				: LispMacroExpander.conditionReportFallback(parts.get(2));
 		emitThrowPayload(ctx, LispMacroExpander.handlersRan(parts), () -> {
-			if (text != null) {
+			if (text != null && ctx.unreadReports) {
+				emitUnreadMessage(text, ctx);
+			}
+			else if (text != null) {
 				WasmExprCompiler.compileExpr(text, ctx);
 			}
 			else {

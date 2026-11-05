@@ -720,6 +720,67 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aReactorNothingReadsAReportOfStillCatchesEveryClassItCan() throws Exception {
+		// --no-wasi's standard error is a sink and no clause binds its condition, so no
+		// report is read: every landing throws the class alone, and the module has no
+		// text
+		// for one, and no prin1. A clause still tells each class apart, and a signal
+		// still
+		// evaluates its arguments, as the same program answers on a module with a stderr.
+		String program = """
+				(defvar *seen* nil)
+				(defun catch-it (k)
+				  (handler-case
+				      (case k
+				        (0 (car k))
+				        (1 (funcall k))
+				        (2 (funcall (car (list 'no-such-function))))
+				        (3 (/ 1 (- k 3)))
+				        (4 (aref (make-array 1) (+ k 1)))
+				        (5 (subseq "abc" (+ k 4)))
+				        (6 (error "text ~a" (setq *seen* k)))
+				        (7 (symbol-value (car (list 'no-such-variable))))
+				        (8 (aref (make-array '(1 1)) 0))
+				        (9 (apply #'cons (list k)))
+				        (10 (ash 1 (expt 2 40)))
+				        (t 99))
+				    (type-error () 100)
+				    (undefined-function () 101)
+				    (division-by-zero () 102)
+				    (unbound-variable () 103)
+				    (program-error () 104)
+				    (simple-error () (if *seen* 105 107))
+				    (error () 106)))
+				(rontolisp:wasm-export 'catch-it :as "catch-it" :params '(:s32) :returns :s32)
+				""";
+		List<LispVal> forms = LispReader.readAllFromString(program);
+		byte[] read = new WasmLispCompiler().compile(forms);
+		for (OptimizeLevel level : OptimizeLevel.values()) {
+			byte[] unread = WasmLispCompiler.builder().noWasi(true).optimize(level).build().compile(forms);
+			if (level.eliminatesDeadCode()) {
+				assertThat(new String(unread, java.nio.charset.StandardCharsets.ISO_8859_1))
+					.doesNotContain("The value ");
+			}
+			for (int k = 0; k <= 11; k++) {
+				String caught = invoke(unread, "catch-it", String.valueOf(k));
+				assertThat(caught).as("%s, case %d", level, k).isEqualTo(invoke(read, "catch-it", String.valueOf(k)));
+			}
+		}
+		assertThat(invoke(read, "catch-it", "6")).isEqualTo("105");
+		assertThat(invoke(read, "catch-it", "2")).isEqualTo("101");
+	}
+
+	private static String invoke(byte[] module, String function, String... args) throws Exception {
+		wasmtime.copyFileToContainer(Transferable.of(module), path("test.wasm"));
+		List<String> command = new java.util.ArrayList<>(
+				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "-W", "exceptions=y", path("test.wasm")));
+		command.addAll(List.of(args));
+		ExecResult result = wasmtime.execInContainer(command.toArray(new String[0]));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
 	void exportScalarFunctionsCallableViaInvoke() throws Exception {
 		String program = """
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
