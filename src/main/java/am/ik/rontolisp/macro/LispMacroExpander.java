@@ -36318,16 +36318,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The condition-object designator {@code (error obj)}: binds the value, signals it as
-	 * a plain message when it is a string at runtime, and otherwise signals the instance
-	 * with its carried message -- slot 0 for the simple-* classes, the
-	 * {@code Condition of type ... was signalled.} shape derived from the instance tag
-	 * otherwise. When the program routes condition reports the message is the datum's
-	 * REPORT, rendered by the generated renderer -- the type is not statically known
-	 * here, so a runtime dispatch is the only thing that can consult it -- with the
-	 * shapes above as the fallback for a class that reports nothing.
-	 */
-	/**
 	 * What {@link #expandObjectSignal} knows of its datum, and what it does with one that
 	 * designates no condition.
 	 */
@@ -36352,13 +36342,20 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The condition-object designator with the call's remaining arguments (see
-	 * {@link #expandObjectSignal}). Per CL a STRING datum is a format control and the
-	 * rest are its format arguments, whatever the datum's shape in the source -- so when
-	 * the datum turns out to be a string at runtime, the message is the control RENDERED
-	 * over those arguments ({@code %fmt-render}, the same renderer a computed
-	 * {@code (format nil ctrl args)} uses) instead of the raw control with its directives
-	 * standing.
+	 * The condition-object designator {@code (error obj)}: binds the value, signals it as
+	 * a plain message when it is a string at runtime, and otherwise signals the instance
+	 * with its carried message -- slot 0 for the simple-* classes, the
+	 * {@code Condition of type ... was signalled.} shape derived from the instance tag
+	 * otherwise. When the program routes condition reports the message is the datum's
+	 * REPORT, rendered by the generated renderer -- the type is not statically known
+	 * here, so a runtime dispatch is the only thing that can consult it -- with the
+	 * shapes above as the fallback for a class that reports nothing.
+	 * <p>
+	 * Per CL a STRING datum is a format control and the rest are its format arguments,
+	 * whatever the datum's shape in the source -- so when the datum turns out to be a
+	 * string at runtime, the message is the control RENDERED over those arguments
+	 * ({@code %fmt-render}, the same renderer a computed {@code (format nil ctrl args)}
+	 * uses) instead of the raw control with its directives standing.
 	 * <p>
 	 * The rendering is EAGER, exactly as the literal-control designator
 	 * ({@link #expandStringSignal}) renders at expansion time: the instance a handler
