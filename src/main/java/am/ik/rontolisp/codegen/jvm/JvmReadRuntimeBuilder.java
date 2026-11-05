@@ -14,6 +14,7 @@ import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.EmittedReaderInitforms;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.ReadFailure;
 import org.jspecify.annotations.Nullable;
@@ -127,6 +128,12 @@ final class JvmReadRuntimeBuilder {
 	private final MethodRefEntry readStr;
 
 	private final MethodRefEntry classify;
+
+	private final MethodRefEntry rdEscaped;
+
+	private final MethodRefEntry rdStandardSpelling;
+
+	private final MethodRefEntry characterToUpperCase;
 
 	// === # dispatch (the frontend lexer's dispatch set, mirrored) ===
 
@@ -319,6 +326,9 @@ final class JvmReadRuntimeBuilder {
 		this.readAtom = methodref("_readAtom", "()Ljava/lang/Object;");
 		this.readStr = methodref("_readStr", "()Ljava/lang/Object;");
 		this.classify = methodref("_classify", "(Ljava/lang/String;)Ljava/lang/Object;");
+		this.rdEscaped = methodref("_rdEscaped", "(Ljava/lang/String;)Ljava/lang/Object;");
+		this.rdStandardSpelling = methodref("_rdStandardSpelling", "(Ljava/lang/String;)Ljava/lang/String;");
+		this.characterToUpperCase = cp.methodRef(characterClass, "toUpperCase", "(C)C");
 		this.readBaseNow = readBaseVar == null ? null : methodref("_readBaseNow", "()I");
 		this.rdRational = readBaseVar == null ? null : methodref("_rdRational", "(Ljava/lang/String;I)Z");
 		this.rdInBase = readBaseVar == null ? null : methodref("_rdInBase", "(Ljava/lang/String;I)Ljava/lang/Object;");
@@ -512,6 +522,10 @@ final class JvmReadRuntimeBuilder {
 				buildReadStr()));
 		ms.add(new ReadMethod(this.cp.utf8Entry("_classify"),
 				this.cp.utf8Entry("(Ljava/lang/String;)Ljava/lang/Object;"), buildClassify()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_rdEscaped"),
+				this.cp.utf8Entry("(Ljava/lang/String;)Ljava/lang/Object;"), buildRdEscaped()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_rdStandardSpelling"),
+				this.cp.utf8Entry("(Ljava/lang/String;)Ljava/lang/String;"), buildRdStandardSpelling()));
 		ms.add(new ReadMethod(this.cp.utf8Entry("_readFromString"),
 				this.cp.utf8Entry("(Ljava/lang/Object;)Ljava/lang/Object;"), buildReadFromString()));
 		ms.add(new ReadMethod(this.cp.utf8Entry("_readHash"), this.cp.utf8Entry("()Ljava/lang/Object;"),
@@ -955,8 +969,16 @@ final class JvmReadRuntimeBuilder {
 		MethodCode a = new MethodCode();
 		MethodCode.Label aloop = a.newLabel();
 		MethodCode.Label aend = a.newLabel();
+		MethodCode.Label notSingle = a.newLabel();
+		MethodCode.Label plain = a.newLabel();
+		MethodCode.Label bars = a.newLabel();
+		MethodCode.Label barEscape = a.newLabel();
+		MethodCode.Label eof = a.newLabel();
+		MethodCode.Label unescaped = a.newLabel();
 		pos(a);
 		a.istore(0); // start
+		a.loadConstant(0);
+		a.istore(2); // escaped
 		a.labelBinding(aloop);
 		pos(a);
 		srcLen(a);
@@ -972,14 +994,190 @@ final class JvmReadRuntimeBuilder {
 		stopIf(a, '"', aend);
 		stopIf(a, ';', aend);
 		advance(a);
+		// a single escape takes the next character, a multiple escape every character
+		// up to the next bar (CLHS 2.1.4.6, 2.1.4.7), terminators included
+		a.iload(1);
+		a.loadConstant('\\');
+		a.if_icmpne(notSingle);
+		a.iinc(2, 1);
+		a.goto_(barEscape);
+		a.labelBinding(notSingle);
+		a.iload(1);
+		a.loadConstant('|');
+		a.if_icmpne(plain);
+		a.iinc(2, 1);
+		a.labelBinding(bars);
+		pos(a);
+		srcLen(a);
+		a.if_icmpge(eof);
+		charAtPos(a);
+		a.istore(1);
+		advance(a);
+		a.iload(1);
+		a.loadConstant('|');
+		a.if_icmpeq(aloop);
+		a.iload(1);
+		a.loadConstant('\\');
+		a.if_icmpne(bars);
+		pos(a);
+		srcLen(a);
+		a.if_icmpge(eof);
+		advance(a);
+		a.goto_(bars);
+		a.labelBinding(barEscape);
+		pos(a);
+		srcLen(a);
+		a.if_icmpge(eof);
+		advance(a);
+		a.labelBinding(plain);
 		a.goto_(aloop);
+		a.labelBinding(eof);
+		markEof(a);
 		a.labelBinding(aend);
 		// token = src.substring(start, pos)
 		a.getstatic(this.readSrc);
 		a.iload(0);
 		pos(a);
 		a.invokevirtual(this.stringSubstring);
+		a.iload(2);
+		a.ifeq(unescaped);
+		a.invokestatic(this.rdEscaped);
+		a.areturn();
+		a.labelBinding(unescaped);
 		a.invokestatic(this.classify);
+		a.areturn();
+		return a;
+	}
+
+	// _rdEscaped(String token): the symbol a token holding an escape names. It is no
+	// number and upcases only its unescaped characters; |NIL| is still nil.
+	private MethodCode buildRdEscaped() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label notSingle = a.newLabel();
+		MethodCode.Label notBar = a.newLabel();
+		MethodCode.Label append = a.newLabel();
+		MethodCode.Label notNil = a.newLabel();
+		a.new_(this.stringBuilderClass);
+		a.dup();
+		ldc(a, "");
+		a.invokespecial(this.sbInitStr);
+		a.astore(1); // sb
+		a.loadConstant(0);
+		a.istore(2); // i
+		a.loadConstant(0);
+		a.istore(3); // in bars
+		a.labelBinding(loop);
+		a.iload(2);
+		a.aload(0);
+		a.invokevirtual(this.stringLength);
+		a.if_icmpge(done);
+		a.aload(0);
+		a.iload(2);
+		a.invokevirtual(this.stringCharAt);
+		a.istore(4); // c
+		a.iinc(2, 1);
+		a.iload(4);
+		a.loadConstant('\\');
+		a.if_icmpne(notSingle);
+		a.iload(2);
+		a.aload(0);
+		a.invokevirtual(this.stringLength);
+		a.if_icmpge(done);
+		a.aload(0);
+		a.iload(2);
+		a.invokevirtual(this.stringCharAt);
+		a.istore(4);
+		a.iinc(2, 1);
+		a.goto_(append);
+		a.labelBinding(notSingle);
+		a.iload(4);
+		a.loadConstant('|');
+		a.if_icmpne(notBar);
+		a.iload(3);
+		a.loadConstant(1);
+		a.ixor();
+		a.istore(3);
+		a.goto_(loop);
+		a.labelBinding(notBar);
+		a.iload(3);
+		a.ifne(append);
+		a.iload(4);
+		a.invokestatic(this.characterToUpperCase);
+		a.istore(4);
+		a.labelBinding(append);
+		a.aload(1);
+		a.iload(4);
+		a.invokevirtual(this.sbAppendChar);
+		a.pop();
+		a.goto_(loop);
+		a.labelBinding(done);
+		a.aload(1);
+		a.invokevirtual(this.sbToString);
+		a.invokestatic(this.rdStandardSpelling);
+		a.astore(0);
+		a.aload(0);
+		ldc(a, "NIL");
+		a.invokevirtual(this.objectEquals);
+		a.ifeq(notNil);
+		a.aconst_null();
+		a.areturn();
+		a.labelBinding(notNil);
+		a.aload(0);
+		a.areturn();
+		return a;
+	}
+
+	// _rdStandardSpelling(String token): a canonical cl or cl-user symbol is spelled
+	// bare, whatever qualifier reads it -- the printer spells COMMON-LISP:CAR where the
+	// package reads CAR as another -- and cl-user's empty name by its own spelling.
+	private MethodCode buildRdStandardSpelling() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label noQualifier = a.newLabel();
+		MethodCode.Label standardQualifier = a.newLabel();
+		MethodCode.Label notEmpty = a.newLabel();
+		a.aload(0);
+		a.loadConstant((int) ':');
+		a.invokevirtual(this.stringIndexOf);
+		a.istore(1);
+		a.iload(1);
+		a.ifle(noQualifier);
+		a.aload(0);
+		a.loadConstant(0);
+		a.iload(1);
+		a.invokevirtual(this.stringSubstring);
+		a.astore(2);
+		for (String pkg : List.of("CL", "COMMON-LISP", "CL-USER", "COMMON-LISP-USER")) {
+			a.aload(2);
+			ldc(a, pkg);
+			a.invokevirtual(this.objectEquals);
+			a.ifne(standardQualifier);
+		}
+		a.goto_(noQualifier);
+		a.labelBinding(standardQualifier);
+		a.aload(0);
+		a.iload(1);
+		a.loadConstant(1);
+		a.iadd();
+		a.invokevirtual(this.stringSubstringFrom);
+		a.astore(0);
+		a.aload(0);
+		ldc(a, ":");
+		a.invokevirtual(this.stringStartsWith);
+		a.ifeq(noQualifier);
+		a.aload(0);
+		a.loadConstant(1);
+		a.invokevirtual(this.stringSubstringFrom);
+		a.astore(0);
+		a.labelBinding(noQualifier);
+		a.aload(0);
+		a.invokevirtual(this.stringLength);
+		a.ifne(notEmpty);
+		ldc(a, LispSymbol.CL_USER_EMPTY_NAME);
+		a.areturn();
+		a.labelBinding(notEmpty);
+		a.aload(0);
 		a.areturn();
 		return a;
 	}
@@ -1362,44 +1560,9 @@ final class JvmReadRuntimeBuilder {
 		if (this.readBaseVar != null) {
 			emitReadBaseArm(a);
 		}
-		// A canonical cl or cl-user symbol is spelled bare, whatever qualifier reads it:
-		// the printer spells COMMON-LISP:CAR where the package reads CAR as another.
-		MethodCode.Label noQualifier = a.newLabel();
-		MethodCode.Label standardQualifier = a.newLabel();
 		a.aload(0);
-		a.loadConstant((int) ':');
-		a.invokevirtual(this.stringIndexOf);
-		a.istore(11);
-		a.iload(11);
-		a.ifle(noQualifier);
-		a.aload(0);
-		a.loadConstant(0);
-		a.iload(11);
-		a.invokevirtual(this.stringSubstring);
-		a.astore(12);
-		for (String pkg : List.of("CL", "COMMON-LISP", "CL-USER", "COMMON-LISP-USER")) {
-			a.aload(12);
-			ldc(a, pkg);
-			a.invokevirtual(this.objectEquals);
-			a.ifne(standardQualifier);
-		}
-		a.goto_(noQualifier);
-		a.labelBinding(standardQualifier);
-		a.aload(0);
-		a.iload(11);
-		a.loadConstant(1);
-		a.iadd();
-		a.invokevirtual(this.stringSubstringFrom);
+		a.invokestatic(this.rdStandardSpelling);
 		a.astore(0);
-		a.aload(0);
-		ldc(a, ":");
-		a.invokevirtual(this.stringStartsWith);
-		a.ifeq(noQualifier);
-		a.aload(0);
-		a.loadConstant(1);
-		a.invokevirtual(this.stringSubstringFrom);
-		a.astore(0);
-		a.labelBinding(noQualifier);
 		// nil?
 		a.aload(0);
 		ldc(a, "NIL");

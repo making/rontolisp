@@ -2,7 +2,7 @@
 
 `(print-not-readable-object condition)`
 
-The object a `print-not-readable` condition was signalled for, the condition's `:object`. A `print-object` method signals it to refuse a readable print; the printer itself does not ([`with-standard-io-syntax`](../macros/with-standard-io-syntax.md)).
+The object a `print-not-readable` condition was signalled for, the condition's `:object`. The printer signals it for a value with no readable syntax under `*print-readably*` ([`with-standard-io-syntax`](../macros/with-standard-io-syntax.md)), and a `print-object` method may signal it to refuse a readable print.
 
 ```lisp
 (handler-case (error 'print-not-readable :object 1)

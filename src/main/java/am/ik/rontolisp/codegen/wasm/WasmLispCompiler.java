@@ -6709,6 +6709,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// NIL's offset in the runtime intern table (-1 without one): _intern_sym maps a
 		// runtime spelling NIL to the null ref by it.
 		int internNilOffset = -1;
+		int internEmptyNameOffset = -1;
 		// The bytes reserved at the runtime intern base: the initial hash table of an
 		// interning module (sized to its compile-time rows), the historical gap
 		// otherwise -- so a module that never interns keeps every address it had.
@@ -6723,6 +6724,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// interned above via symbolTOffset.
 			int nilOffset = stringTable.addString("NIL").offset();
 			internNilOffset = nilOffset;
+			internEmptyNameOffset = stringTable.addString(LispSymbol.CL_USER_EMPTY_NAME).offset();
 			int quoteOffset = stringTable.addString(LispNames.QUOTE).offset();
 			int functionOffset = stringTable.addString(LispNames.FUNCTION).offset();
 			List<StringTable.StringEntry> internEntries = new ArrayList<>(stringTable.entries());
@@ -6739,8 +6741,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					WasmReadRuntimeBuilder.internTableSlots(internCount) * 8);
 			if (usesRead) {
 				WasmReadRuntimeBuilder.ReadCtx readCtx = WasmReadRuntimeBuilder.buildReadCtx(stringTable, nilOffset,
-						quoteOffset, functionOffset, ehMode, this.simd, this.usesInstances ? instanceTypeBase() : -1,
-						this.usesIdentityHashTables, closRegistry, layoutAddresses,
+						internEmptyNameOffset, quoteOffset, functionOffset, ehMode, this.simd,
+						this.usesInstances ? instanceTypeBase() : -1, this.usesIdentityHashTables, closRegistry,
+						layoutAddresses,
 						new WasmReadRuntimeBuilder.ReadBaseVar(globalIndices.getOrDefault(LispNames.READ_BASE_VAR, -1),
 								reentrantTaskGlobalIndex >= 0 && dynSlots.containsKey(LispNames.READ_BASE_VAR)
 										? reentrantTaskGlobalIndex : -1,
@@ -6816,7 +6819,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the
 		// string table is serialized because they embed the offset of the symbol t.
 		final byte[] makeSymbolBody = WasmSymbolApiRuntimeBuilder.buildMakeSymbol();
-		final byte[] internSymBody = WasmSymbolApiRuntimeBuilder.buildInternSym(internNilOffset);
+		final byte[] internSymBody = WasmSymbolApiRuntimeBuilder.buildInternSym(internNilOffset, internEmptyNameOffset);
 		final byte[] boundpBody = WasmSymbolApiRuntimeBuilder.buildBoundp(symbolTOffset);
 		// What _symbol_value and _unbound_variable throw for an unbound name: EH mode
 		// only, like the dispatchers' report, the typed unbound-variable where
@@ -8872,7 +8875,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringRuntimeBuilder.buildWriteStrGcBody());
 				// _sym_esc_gc (FUNC_SYM_ESC_GC): the |...|-escaping half of
 				// *print-escape* = t for a bare symbol name.
-				code.addFunction(WasmStringRuntimeBuilder.buildSymEscGcBody());
+				code.addFunction(WasmStringRuntimeBuilder
+					.buildSymEscGcBody(stringTable.offsetOrNone(LispSymbol.CL_USER_EMPTY_NAME)));
 				// _charvec_to_str (FUNC_CHARVEC_TO_STR): normalize a mutable character
 				// vector into the equivalent runtime string.
 				code.addFunction(WasmStringRuntimeBuilder.buildCharvecToStrBody());
@@ -13736,6 +13740,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		private final ByteArrayOutputStream data = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 
 		private final Map<String, StringEntry> cache = new HashMap<>();
+
+		/** The offset of a string this table holds, -1 for one it does not. */
+		int offsetOrNone(String text) {
+			StringEntry entry = this.cache.get(text);
+			return entry == null ? -1 : entry.offset();
+		}
 
 		/**
 		 * The entries a dead function body may take with it: the ones interned ONLY while

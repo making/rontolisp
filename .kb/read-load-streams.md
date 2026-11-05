@@ -12,10 +12,17 @@ interning symbols to shared string offsets.
 (`--simd` builds the VBLOCK layout), `#S(...)`, `#P"..."` (fixed PATHNAME layout), `#x`/`#o`/`#b`,
 nesting `#|...|#`.
 
+- **Escapes** (`\c`, `|...|`, CLHS 2.1.4.6-7): a token holding one is a symbol, upcased only where
+  unescaped, terminators inside bars and all, so what `prin1` prints reads back. `_readAtom` hands it to
+  `_rdEscaped`; `_rd_token` leaves its name at the end of the token, so `_read_expr` tells it from
+  one with no escape by where it starts. A text ending inside one records end-of-file. Both read it past
+  the standard qualifier drop and `|NIL|` is nil. Until 2026-11-05 the bar and the backslash were
+  constituents: `(read-from-string "|a b|")` answered the symbol `|\|A|`. Limit, the model's: `|a:b|` is
+  spelled as `a:b` is. ci-spec `the-empty-name-is-a-symbol-like-any-other`.
 - Unclaimed tokens fall to the atom path like `readSymbol`: `#foo` -> `#FOO`, `#16r1f` -> a symbol.
   The interpreter's reader has since learned errors the emitted readers never did: `..`/`...`
-  (dot-only tokens), `#:a:b`, `#<`, `#n*` over/under-fill, a constituent behind `#*` bits and a
-  trailing `\` are reader errors there and symbols here. The `#n*` fill (repeat-last-bit) the
+  (dot-only tokens), `#:a:b`, `#<`, `#n*` over/under-fill and a constituent behind `#*` bits are
+  reader errors there and symbols here. The `#n*` fill (repeat-last-bit) the
   interpreter computes in the lexer has no twin on either compiled backend.
 - PERMANENT limits: `#.`, `#+`/`#-`, `#n=`/`#n#` signal a catchable error (`#+`/`#-` only in the
   one-argument `read-from-string`: `read` and the full defun resolve guards in the prelude scanner). The interpreter's runtime

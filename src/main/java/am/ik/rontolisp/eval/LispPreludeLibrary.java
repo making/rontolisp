@@ -641,14 +641,19 @@ public final class LispPreludeLibrary {
 		// KNOWN internal tag's prefix or a qualifier's colon off prin1-to-string's text
 		// (below), and the %struct-/%class- tag prefix is always lowercase, so an
 		// unqualified tag now round-trips as e.g. "|%struct-PT|" -- this peels exactly
-		// one leading/trailing '|' back off so the prefix match still sees "%struct-PT".
+		// the member's opening and closing '|' back off so the prefix match still sees
+		// "%struct-PT", and a qualified tag's "%struct-P::|a b|" the name it was made of.
 		// Does not undo interior backslash-doubling: neither caller's input (a tag
 		// prefix, a qualifier, a reader-upcased name) can itself contain '|' or '\'.
 		SOURCES.put(LispNames.UNESCAPED_SYMBOL_TEXT_INTERNAL, """
 				(defun %unescaped-symbol-text (s)
-				  (if (and (> (length s) 1) (char= (char s 0) #\\|))
-				      (subseq s 1 (1- (length s)))
-				      s))
+				  (let ((n (length s)) (b 0))
+				    (if (and (> n 1) (char= (char s (1- n)) #\\|))
+				        (progn
+				          (while (not (char= (char s b) #\\|))
+				            (setq b (+ b 1)))
+				          (concatenate 'string (subseq s 0 b) (subseq s (+ b 1) (1- n))))
+				        s)))
 				""");
 		// A "package" is the upcased canonical package name as a keyword (there are no
 		// package objects), so %symbol-home reads the qualifier off the symbol's stored
@@ -661,7 +666,7 @@ public final class LispPreludeLibrary {
 				(defun %symbol-home (symbol)
 				  (let* ((s (%unescaped-symbol-text (%prin1-to-string symbol)))
 				         (n (length s)))
-				    (cond ((= n 0) nil)
+				    (cond ((= n 0) :cl-user)
 				          ((char= (char s 0) #\\:) :keyword)
 				          ((and (> n 1) (char= (char s 0) #\\#) (char= (char s 1) #\\:)) nil)
 				          (t (let ((idx (position #\\: s)))
@@ -4364,7 +4369,7 @@ public final class LispPreludeLibrary {
 				        ((and (eq *print-case* :upcase) (null *print-length*) (null *print-level*)
 				              *print-gensym* (eql *print-base* 10) (null *print-radix*)
 				              (or (null %pc-esc) (%print-package-raw-p)))
-				         (if %pc-esc (%prin1-to-string %pc-x) (%princ-to-string %pc-x)))
+				         (if %pc-esc (%pc-raw %pc-x) (%princ-to-string %pc-x)))
 				        (t (%pc-walk %pc-x %pc-esc nil 0 0))))
 				""");
 		// The recursive half of %print-cased, carrying the cycle guard the raw
@@ -4452,8 +4457,8 @@ public final class LispPreludeLibrary {
 						        ((and (rationalp %pc-x) (or (not (eql *print-base* 10)) *print-radix*))
 						         (%pc-radixed %pc-x))
 						        ((%obj-print-frame %pc-x) (%pc-instance %pc-x %pc-esc %pc-path %pc-depth %pc-lvl))
-						        ((and %pc-esc (%obj-p %pc-x)) (%pc-instance-text (%prin1-to-string %pc-x)))
-						        (%pc-esc (%prin1-to-string %pc-x))
+						        ((and %pc-esc (%obj-p %pc-x)) (%pc-instance-text (%pc-leaf %pc-x)))
+						        (%pc-esc (%pc-leaf %pc-x))
 						        (t (%princ-to-string %pc-x))))
 						""");
 		// The twin of the %print-object-str walk's %pos-instance: a structure's or an
@@ -4465,7 +4470,7 @@ public final class LispPreludeLibrary {
 						  (if (or (%pc-on-path %pc-x %pc-path) (>= %pc-depth 256)
 						          (and *print-level* (>= %pc-lvl *print-level*)))
 						      "#"
-						      (let* ((%pc-frame (%obj-print-frame %pc-x))
+						      (let* ((%pc-frame (progn (%pc-instance-check %pc-x %pc-esc) (%obj-print-frame %pc-x)))
 						             (%pc-name (cadr %pc-frame))
 						             (%pc-i (length %pc-name)))
 						        (while (and (> %pc-i 0) (not (char= (char %pc-name (- %pc-i 1)) #\\:)))
@@ -4490,6 +4495,98 @@ public final class LispPreludeLibrary {
 						                  (setq %pc-val (cdr %pc-val)))))
 						          (concatenate 'string %pc-acc (if (car %pc-frame) ">" ")"))))))
 						""");
+		// The printer's half of *print-readably* (CLHS 22.1.3.13, SBCL 2.2.9 measured,
+		// .kb/pretty-printer.md): a value with no readable syntax signals under prin1.
+		// The
+		// raw text answers first, so a value holding no #< keeps the raw conversion's
+		// cost;
+		// a #< in it may still be a string's or a symbol's, which the walk tells apart.
+		// Reached from the %pc-raw / %pc-leaf / %pc-instance-check leaves, which the
+		// compile
+		// paths lower here only for a program that can bind the variable.
+		SOURCES.put(LispNames.PRINT_NOT_READABLE_INTERNAL, """
+				(defun %pc-not-readable (%pn-x)
+				  (when *print-readably*
+				    (error 'print-not-readable :object %pn-x)))
+				""");
+		SOURCES.put(LispNames.PRINT_HOLDS_UNREADABLE_INTERNAL, """
+				(defun %pc-holds-unreadable (%pn-s)
+				  (let ((%pn-i 1) (%pn-n (length %pn-s)) (%pn-hit nil))
+				    (while (and (< %pn-i %pn-n) (not %pn-hit))
+				      (when (and (char= (char %pn-s %pn-i) #\\<) (char= (char %pn-s (- %pn-i 1)) #\\#))
+				        (setq %pn-hit t))
+				      (setq %pn-i (+ %pn-i 1)))
+				    %pn-hit))
+				""");
+		SOURCES.put(LispNames.PRINT_READABLE_RAW_INTERNAL, """
+				(defun %pc-readable-raw (%pn-x)
+				  (let ((%pn-s (%prin1-to-string %pn-x)))
+				    (if (and *print-readably* (%pc-holds-unreadable %pn-s))
+				        (%pc-walk %pn-x t nil 0 0)
+				        %pn-s)))
+				""");
+		SOURCES.put(LispNames.PRINT_READABLE_LEAF_INTERNAL, """
+				(defun %pc-readable-leaf (%pn-x)
+				  (let ((%pn-s (%prin1-to-string %pn-x)))
+				    (cond ((or (null *print-readably*) (stringp %pn-x) (not (%pc-holds-unreadable %pn-s)))
+				           %pn-s)
+				          ((or (hash-table-p %pn-x) (arrayp %pn-x)) (%pc-readable-nested %pn-x))
+				          ((and (char= (char %pn-s 0) #\\#) (char= (char %pn-s 1) #\\<))
+				           (%pc-not-readable %pn-x))
+				          (t %pn-s))))
+				""");
+		SOURCES.put(LispNames.PRINT_READABLE_INSTANCE_INTERNAL, """
+				(defun %pc-readable-instance (%pn-x %pn-esc)
+				  (when (and %pn-esc (car (%obj-print-frame %pn-x)))
+				    (%pc-not-readable %pn-x)))
+				""");
+		// Elements print through prin1-to-string, the route the program's printing
+		// operators take, so a print-object method applies to one. A table is written the
+		// way SBCL writes one, as #. of its construction, which is why it needs
+		// *read-eval*.
+		SOURCES.put(LispNames.PRINT_READABLE_NESTED_INTERNAL, """
+				(defvar %pc-readable-path nil)
+				(defun %pc-readable-nested (%pn-x)
+				  (if (%pc-on-path %pn-x %pc-readable-path)
+				      (%pc-not-readable %pn-x)
+				      (let ((%pc-readable-path (cons %pn-x %pc-readable-path)))
+				        (if (hash-table-p %pn-x)
+				            (%pc-readable-table %pn-x)
+				            (concatenate 'string "#" (%princ-to-string (array-rank %pn-x)) "A"
+				                         (%pc-readable-rows %pn-x (array-dimensions %pn-x) 0
+				                                            (array-total-size %pn-x)))))))
+				""");
+		SOURCES.put(LispNames.PRINT_READABLE_ROWS_INTERNAL, """
+				(defun %pc-readable-rows (%pn-a %pn-dims %pn-start %pn-size)
+				  (if (null %pn-dims)
+				      (prin1-to-string (row-major-aref %pn-a %pn-start))
+				      (let* ((%pn-n (car %pn-dims)) (%pn-sub (if (= %pn-n 0) 0 (floor %pn-size %pn-n)))
+				             (%pn-acc "(") (%pn-i 0))
+				        (while (< %pn-i %pn-n)
+				          (setq %pn-acc (concatenate 'string %pn-acc (if (= %pn-i 0) "" " ")
+				                                     (%pc-readable-rows %pn-a (cdr %pn-dims)
+				                                                        (+ %pn-start (* %pn-i %pn-sub)) %pn-sub)))
+				          (setq %pn-i (+ %pn-i 1)))
+				        (concatenate 'string %pn-acc ")"))))
+				""");
+		SOURCES.put(LispNames.PRINT_READABLE_TABLE_INTERNAL, """
+				(defun %pc-readable-table (%pn-h)
+				  (unless *read-eval*
+				    (%pc-not-readable %pn-h))
+				  (let* ((%pn-test (symbol-name (hash-table-test %pn-h)))
+				         (%pn-make (if (string= %pn-test "EQL")
+				                       "(MAKE-HASH-TABLE)"
+				                       (concatenate 'string "(MAKE-HASH-TABLE :TEST (QUOTE " %pn-test "))")))
+				         (%pn-acc (list "")))
+				    (maphash (lambda (%pn-k %pn-v)
+				               (rplaca %pn-acc (concatenate 'string (car %pn-acc)
+				                                            " (SETF (GETHASH (QUOTE " (prin1-to-string %pn-k)
+				                                            ") H) (QUOTE " (prin1-to-string %pn-v) "))")))
+				             %pn-h)
+				    (if (string= (car %pn-acc) "")
+				        (concatenate 'string "#." %pn-make)
+				        (concatenate 'string "#.(LET ((H " %pn-make "))" (car %pn-acc) " H)"))))
+				""");
 		SOURCES.put(LispNames.PRINT_CASED_ON_PATH_INTERNAL, """
 				(defun %pc-on-path (%pc-x %pc-path)
 				  (let ((%pc-c %pc-path) (%pc-hit nil))
@@ -5759,7 +5856,16 @@ public final class LispPreludeLibrary {
 			// a qualifier, so a program that only ever princs has nothing to route.
 			return am.ik.rontolisp.macro.LispMacroExpander.mentionsPrintControlVariable(program)
 					|| (am.ik.rontolisp.macro.LispMacroExpander.printsUnderAPackage(program)
-							&& am.ik.rontolisp.macro.LispMacroExpander.reachesPrin1FromTheSurface(program));
+							&& am.ik.rontolisp.macro.LispMacroExpander.reachesPrin1FromTheSurface(program))
+					|| am.ik.rontolisp.macro.LispMacroExpander.printsReadably(program);
+		}
+		// The readable half of the renderer: the leaves lowered onto it run inside the
+		// expression compilers too, and only a program that can bind *print-readably*
+		// carries the condition class they signal.
+		if (LispNames.PRINT_NOT_READABLE_INTERNAL.equals(entry) || LispNames.PRINT_READABLE_RAW_INTERNAL.equals(entry)
+				|| LispNames.PRINT_READABLE_LEAF_INTERNAL.equals(entry)
+				|| LispNames.PRINT_READABLE_INSTANCE_INTERNAL.equals(entry)) {
+			return am.ik.rontolisp.macro.LispMacroExpander.printsReadably(program);
 		}
 		// The walk's two heavy leaves (the Unicode case fold; the re-basing) are
 		// reached through the %pc-fold / %pc-radixed primitives, which the compile

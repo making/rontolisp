@@ -4273,7 +4273,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Entry symEscName = cp.utf8Entry("_symEsc");
 		MethodRefEntry symEscMethod = cp.methodRef(thisClass, symEscName, strEscDescUtf);
 		MethodCode symEscCode = JvmRuntimeBuilder.buildSymEscBody(cp, stringLength, stringCharAt, stringIndexOf,
-				stringSubstring, stringReplace, stringConcat);
+				stringSubstring, stringReplace, stringConcat, objectEquals);
 		MethodCode strEscCode = JvmRuntimeBuilder.buildStrEscBody(cp, stringLength, stringCharAt, stringIndexOf,
 				stringIndexOfFrom, stringSubstring, stringReplace, stringConcat, symEscMethod);
 		// The quote/function abbreviation _consToString(Display) applies ahead of the

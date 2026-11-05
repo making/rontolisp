@@ -36,11 +36,13 @@ under such a package and would swallow typos. This subset denies by default.
 ## What would decide it
 
 A consumer. Found 2026-08-02 while patching uiop from Lisp, which is no longer
-how uiop is served (`.kb/asdf.md`), so the item has none today. When one turns
-up, weigh the two shapes: (a) admit the spelling only for packages named as a
-literal TARGET of a computed export, (b) wait for symbol identity
-(`.todo/156`), where "does this package own this name" is a real question and
-the answer needs no heuristic.
+how uiop is served (`.kb/asdf.md`). A consumer measured since: plump, which
+re-exports by a run-time `do-external-symbols` loop (`.todo/152`). Measured 2026-11-05 on
+JVM: `The symbol PARSE is not external in the PLUMP package`. clingon's `cl-reexport` calls
+went through `eval/ClReexportForms` instead (`.kb/asdf.md`). Weigh the two shapes: (a) admit the spelling only for packages named as a
+literal TARGET of a computed export, (b) wait for symbol identity (`.todo/156`),
+where "does this package own this name" is a real question and the answer needs
+no heuristic.
 
 ## Non-goals
 

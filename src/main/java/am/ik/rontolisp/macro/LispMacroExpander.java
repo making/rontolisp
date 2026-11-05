@@ -7727,21 +7727,16 @@ public final class LispMacroExpander {
 
 	// Validates a keyword/value argument tail against the operator's allowed keyword
 	// set; anything else is rejected loudly rather than silently ignored.
-	// The affix in the same case as the base name: all-uppercase bases (the upcase
-	// reader's user symbols) get an upcased affix, everything else (the
-	// lowercase-authored internal sources) keeps it lowercase.
+	// The affix in the same case as the base name: a lowercase-authored internal source
+	// keeps it lowercase, every other base (the upcase reader's user symbols, the empty
+	// name among them) gets it upcased.
 	private static String affixFor(String affix, String base) {
-		boolean hasLetter = false;
 		for (int i = 0; i < base.length(); i++) {
-			char c = base.charAt(i);
-			if (Character.isLowerCase(c)) {
+			if (Character.isLowerCase(base.charAt(i))) {
 				return affix;
 			}
-			if (Character.isLetter(c)) {
-				hasLetter = true;
-			}
 		}
-		return hasLetter ? affix.toUpperCase(java.util.Locale.ROOT) : affix;
+		return affix.toUpperCase(java.util.Locale.ROOT);
 	}
 
 	// The (%program-error "...") form a call with a malformed keyword tail lowers to, or
@@ -35219,9 +35214,10 @@ public final class LispMacroExpander {
 		}
 		else if (report != null) {
 			LispSymbol streamVar = new LispSymbol(SIGNAL_STREAM_VAR);
-			LispVal rendered = listToCons(
-					List.of(new LispSymbol(LispNames.WITH_OUTPUT_TO_STRING), listToCons(List.<LispVal>of(streamVar)),
-							listToCons(List.of(new LispSymbol(LispNames.FUNCALL), report, condVar, streamVar))));
+			LispVal rendered = callOf(LispNames.PRINT_WITHOUT_READABLY_INTERNAL,
+					listToCons(List.of(new LispSymbol(LispNames.WITH_OUTPUT_TO_STRING),
+							listToCons(List.<LispVal>of(streamVar)),
+							listToCons(List.of(new LispSymbol(LispNames.FUNCALL), report, condVar, streamVar)))));
 			message = warn
 					? listToCons(
 							List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), rendered))
@@ -35549,7 +35545,9 @@ public final class LispMacroExpander {
 			// message too). The argument forms are evaluated only on this arm: a datum
 			// that is not a string carries no format arguments, so the expansion of every
 			// other arm -- and of every call with a datum only -- is unchanged.
-			stringCase = makeLet(SIG_MSG_VAR, FormatRenderer.call(condVar, formatArgs), stringCase);
+			stringCase = makeLet(SIG_MSG_VAR,
+					callOf(LispNames.PRINT_WITHOUT_READABLY_INTERNAL, FormatRenderer.call(condVar, formatArgs)),
+					stringCase);
 		}
 		return makeLet(SIGNAL_COND_VAR, datumExpr, makeIf(callOf(LispNames.STRINGP, condVar), stringCase,
 				makeIf(callOf(LispNames.SYMBOLP, condVar), symbolCase, conditionCase)));
@@ -35623,6 +35621,11 @@ public final class LispMacroExpander {
 	 * destination does.
 	 */
 	private static LispVal formatMessagePieces(String controlText, List<LispVal> argSyms) {
+		LispVal message = formatMessageText(controlText, argSyms);
+		return argSyms.isEmpty() ? message : callOf(LispNames.PRINT_WITHOUT_READABLY_INTERNAL, message);
+	}
+
+	private static LispVal formatMessageText(String controlText, List<LispVal> argSyms) {
 		List<FmtOp> parsed;
 		try {
 			parsed = truncateAtCut(new FmtParser(controlText).parseTop(FmtArgs.forTemps(argSyms)));
@@ -38721,6 +38724,7 @@ public final class LispMacroExpander {
 		String name = printControls ? "(%pc-fold (if %pos-esc (%pc-unqualified %pos-name %pos-name) %pos-member))"
 				: "(if %pos-esc %pos-name %pos-member)";
 		String key = printControls ? "(%pc-fold (car %pos-key))" : "(car %pos-key)";
+		String readableCheck = printControls ? "(%pc-instance-check %pos-x %pos-esc)" : "";
 		return """
 				(defun %pos-instance (%pos-x %pos-esc %pos-path %pos-depth %pos-lvl)
 				  (let ((%pos-frame (%obj-print-frame %pos-x)))
@@ -38731,6 +38735,8 @@ public final class LispMacroExpander {
 				           (and *print-level* (>= %pos-lvl *print-level*)))
 				       "#")
 				      (t
+				""" + readableCheck + """
+
 				       (let* ((%pos-name (cadr %pos-frame))
 				              (%pos-i (length %pos-name)))
 				         (while (and (> %pos-i 0) (not (char= (char %pos-name (- %pos-i 1)) #\\:)))
@@ -39635,9 +39641,9 @@ public final class LispMacroExpander {
 			}
 			clauses.add(listToCons(List.of(objIs(value, group.tags()), rendered)));
 		}
-		LispVal reportDefun = listToCons(
-				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.CONDITION_REPORT_STR_INTERNAL),
-						listToCons(List.<LispVal>of(value)), listToCons(clauses)));
+		LispVal reportDefun = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
+				new LispSymbol(LispNames.CONDITION_REPORT_STR_INTERNAL), listToCons(List.<LispVal>of(value)),
+				callOf(LispNames.PRINT_WITHOUT_READABLY_INTERNAL, listToCons(clauses))));
 		return List.of(formatConditionDefun(narrowing.declineRenderer(), functionControls), reportDefun);
 	}
 
@@ -39939,6 +39945,18 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandPrintUnreadableObject(LispCons cons) {
+		return expandPrintUnreadableObject(cons, false);
+	}
+
+	/**
+	 * As {@link #expandPrintUnreadableObject(LispCons)}, refusing first under
+	 * {@code *print-readably*} where the program can bind it, as SBCL does before it runs
+	 * the body and whichever way {@code *print-escape*} stands.
+	 * @param cons the print-unreadable-object expression
+	 * @param readable whether the program carries the readable half of the renderer
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPrintUnreadableObject(LispCons cons, boolean readable) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons specCons)) {
 			throw new IllegalArgumentException(
@@ -39960,6 +39978,9 @@ public final class LispMacroExpander {
 		List<LispVal> body = new java.util.ArrayList<>();
 		body.add(new LispSymbol(LispNames.LET_STAR));
 		body.add(listToCons(List.of(listToCons(List.of(obj, spec.get(0))), listToCons(List.of(stream, spec.get(1))))));
+		if (readable) {
+			body.add(callOf(LispNames.PRINT_NOT_READABLE_INTERNAL, obj));
+		}
 		body.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), new LispString("#<"), stream)));
 		if (!(typeArg instanceof LispNil)) {
 			// The printed designator is the TYPE NAME (PARSER), not the internal instance
@@ -42561,8 +42582,71 @@ public final class LispMacroExpander {
 	 * @return true when some form names a printer-control variable
 	 */
 	public static boolean usesPrintControls(List<LispVal> program) {
-		return mentionsPrintControlVariable(program)
+		return mentionsPrintControlVariable(program) || definesName(program, LispNames.PRINT_NOT_READABLE_INTERNAL)
 				|| (printsUnderAPackage(program) && definesName(program, LispNames.PRINT_CASED_INTERNAL));
+	}
+
+	/**
+	 * The operators through which a program can hand the printer a value under
+	 * {@code prin1}, for {@link #printsReadably}: {@link #PRIN1_SURFACE_OPERATORS} less
+	 * the signalling ones, whose message binds {@code *print-readably*} to nil.
+	 */
+	private static final List<String> READABLE_SURFACE_OPERATORS = List.of(LispNames.PRINT, LispNames.PRIN1,
+			LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.WRITE, LispNames.PPRINT, LispNames.FORMAT,
+			LispNames.PRINT_OBJECT, LispNames.PRINT_UNREADABLE_OBJECT, LispNames.PRIN1_PIECE_INTERNAL);
+
+	/**
+	 * Whether the program can print with {@code *print-readably*} true, and so signal
+	 * {@code print-not-readable}: it names the variable, {@code with-standard-io-syntax}
+	 * or the {@code :readably} keyword, and an operator that prints under {@code prin1}.
+	 * The renderer's own forms and the {@code write} family's, which read the variable or
+	 * pass it along, do not count: a {@code write} call binding it spells the keyword.
+	 * This selects the readable half of the renderer ({@code LispPreludeLibrary}), the
+	 * error call in which reaches the condition class, so a program that cannot get there
+	 * keeps neither. Unlike {@link #mentionsPrintControlVariable} it pulls no case fold.
+	 * @param program the top-level forms, or one pulled prelude entry's
+	 * @return true when the printer can be asked for a readable print
+	 */
+	public static boolean printsReadably(List<LispVal> program) {
+		List<LispVal> forms = new java.util.ArrayList<>(program.size());
+		for (LispVal form : program) {
+			if (!isPrintCasedRendererDefun(form) && !isWriteFamilyDefun(form)) {
+				forms.add(form);
+			}
+		}
+		java.util.Set<String> names = symbolNames(forms);
+		return (names.contains(LispNames.PRINT_READABLY_VAR) || names.contains(LispNames.WITH_STANDARD_IO_SYNTAX)
+				|| names.contains(":READABLY")) && READABLE_SURFACE_OPERATORS.stream().anyMatch(names::contains);
+	}
+
+	/** Whether the form is the prelude {@code write} or its keyed-call helper. */
+	private static boolean isWriteFamilyDefun(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.DEFUN.equals(op.name())
+				&& cons.cdr() instanceof LispCons nameCell && nameCell.car() instanceof LispSymbol defined
+				&& (LispNames.WRITE.equals(defined.name())
+						|| LispNames.WRITE_TO_STRING_KEYED_INTERNAL.equals(defined.name()));
+	}
+
+	/**
+	 * Lowers the leaves of the readable half of the renderer
+	 * ({@link LispNames#PRINT_CASED_RAW_LEAF_INTERNAL} and its siblings) onto the prelude
+	 * defun, or onto what the print is without it. The interpreter always takes the
+	 * defun.
+	 * @param cons the leaf call
+	 * @param readable whether the program carries the readable half
+	 * @return the equivalent expression
+	 */
+	public static LispVal expandPrintReadableLeaf(LispCons cons, boolean readable) {
+		List<LispVal> parts = cons.toList();
+		return switch (((LispSymbol) parts.get(0)).name()) {
+			case LispNames.PRINT_CASED_RAW_LEAF_INTERNAL ->
+				callOf(readable ? LispNames.PRINT_READABLE_RAW_INTERNAL : LispNames.PRIN1_TO_STRING_RAW, parts.get(1));
+			case LispNames.PRINT_CASED_TEXT_LEAF_INTERNAL ->
+				callOf(readable ? LispNames.PRINT_READABLE_LEAF_INTERNAL : LispNames.PRIN1_TO_STRING_RAW, parts.get(1));
+			case LispNames.PRINT_CASED_INSTANCE_CHECK_INTERNAL -> readable
+					? callOf(LispNames.PRINT_READABLE_INSTANCE_INTERNAL, parts.get(1), parts.get(2)) : LispNil.INSTANCE;
+			default -> readable ? makeLet(LispNames.PRINT_READABLY_VAR, LispNil.INSTANCE, parts.get(1)) : parts.get(1);
+		};
 	}
 
 	/**

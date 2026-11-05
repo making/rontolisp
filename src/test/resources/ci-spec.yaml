@@ -33538,6 +33538,174 @@ cases:
       "\"a\""
       (1 T "1 cannot be printed readably.")
 
+  - name: print-readably-signals-print-not-readable
+    source: |
+      ;; CLHS 22.1.3.13, SBCL 2.2.9 agrees on every line but the table with an entry, which
+      ;; it spells through SB-IMPL::%STUFF-HASH-TABLE, and the table holding itself, which
+      ;; it never finishes printing.
+      (defun prnr-try (thunk)
+        (handler-case (funcall thunk)
+          (print-not-readable (e) (list :pnr (functionp (print-not-readable-object e))))
+          (error (e) (list :error (type-of e)))))
+      (defmacro prnr (form) `(progn (prin1 (prnr-try (lambda () ,form))) (terpri)))
+      (defclass prnr-c () ())
+      (defclass prnr-m () ())
+      (defmethod print-object ((o prnr-m) s) (format s "m:~A/~A" *print-readably* *print-escape*))
+      (defclass prnr-u () ())
+      (defmethod print-object ((o prnr-u) s) (print-unreadable-object (o s) (write-string "u" s)))
+      (defclass prnr-n () ())
+      (defmethod print-object ((o prnr-n) s) (call-next-method))
+      (defstruct prnr-s a)
+      (define-condition prnr-e (error) ()
+        (:report (lambda (c s) (declare (ignore c)) (format s "~A" (stringp (format nil "~S" #'car))))))
+      ;; What has no readable syntax, at any depth and through every operator.
+      (prnr (with-standard-io-syntax (prin1-to-string (lambda (x) x))))
+      (prnr (with-standard-io-syntax (prin1-to-string #'car)))
+      (prnr (with-standard-io-syntax (prin1-to-string (make-instance 'prnr-c))))
+      (prnr (with-standard-io-syntax (prin1-to-string (make-condition 'simple-error))))
+      (prnr (with-standard-io-syntax (prin1-to-string (list 1 #'car))))
+      (prnr (with-standard-io-syntax (prin1-to-string (vector 1 #'car))))
+      (prnr (with-standard-io-syntax (prin1-to-string (make-prnr-s :a #'car))))
+      (prnr (with-standard-io-syntax (prin1-to-string (make-array '(1 1) :initial-element #'car))))
+      (prnr (with-standard-io-syntax (format nil "~S" #'car)))
+      (prnr (with-standard-io-syntax (format nil (concatenate 'string "~" "S") #'car)))
+      (prnr (with-standard-io-syntax (format nil "~W" #'car)))
+      (prnr (with-standard-io-syntax (funcall #'prin1-to-string #'car)))
+      (prnr (with-standard-io-syntax (write-to-string #'car :escape nil)))
+      (prnr (write-to-string #'car :readably t))
+      (prnr (with-output-to-string (s) (with-standard-io-syntax (prin1 #'car s))))
+      (prnr (with-output-to-string (s) (with-standard-io-syntax (print #'car s))))
+      (prnr (with-output-to-string (s) (with-standard-io-syntax (pprint #'car s))))
+      (prnr (with-output-to-string (s) (write #'car :stream s :readably t)))
+      (prnr (with-output-to-string (s) (write #'car :stream s :readably t :escape nil)))
+      ;; princ and ~A bind the variable to nil, and so may a program.
+      (prnr (with-standard-io-syntax (stringp (princ-to-string #'car))))
+      (prnr (with-standard-io-syntax (stringp (format nil "~A" (list #'car (make-instance 'prnr-u))))))
+      (prnr (with-standard-io-syntax (let ((*print-readably* nil)) (stringp (prin1-to-string #'car)))))
+      ;; What has one, a #< in its text included.
+      (prnr (with-standard-io-syntax (prin1-to-string (list "a#<b" '|c#<d| 1 2.5 #p"/x/#<y"))))
+      (prnr (with-standard-io-syntax (prin1-to-string (make-prnr-s :a "#<"))))
+      (prnr (with-standard-io-syntax (prin1-to-string (make-array '(1 2) :initial-element "#<"))))
+      (prnr (with-standard-io-syntax (prin1-to-string (make-array '(2 2) :initial-element 7))))
+      ;; A hash table is written as #. of its construction, which *read-eval* gates.
+      (prnr (with-standard-io-syntax (prin1-to-string (make-hash-table :test 'eq))))
+      (prnr (with-standard-io-syntax (prin1-to-string (list (make-hash-table :test 'eql)))))
+      (prnr (with-standard-io-syntax (let ((*read-eval* nil)) (prin1-to-string (make-hash-table :test 'eq)))))
+      (prnr (with-standard-io-syntax
+              (let ((h (make-hash-table :test 'equal))) (setf (gethash "a" h) #'car) (prin1-to-string h))))
+      (prnr (with-standard-io-syntax
+              (let ((h (make-hash-table :test 'equal)))
+                (setf (gethash "a" h) (make-instance 'prnr-m))
+                (prin1-to-string h))))
+      (prnr (with-standard-io-syntax
+              (let ((h (make-hash-table :test 'equal))) (setf (gethash "a" h) h) (prin1-to-string h))))
+      ;; A method decides for itself; print-unreadable-object and the default method refuse.
+      (prnr (with-standard-io-syntax (list (prin1-to-string (make-instance 'prnr-m))
+                                           (princ-to-string (make-instance 'prnr-m)))))
+      (prnr (with-standard-io-syntax (prin1-to-string (make-array '(1 1) :initial-element (make-instance 'prnr-m)))))
+      (prnr (with-standard-io-syntax (prin1-to-string (make-instance 'prnr-u))))
+      (prnr (with-standard-io-syntax (prin1-to-string (make-instance 'prnr-n))))
+      (prnr (with-standard-io-syntax (princ-to-string (make-instance 'prnr-u))))
+      (prnr (with-output-to-string (s)
+              (with-standard-io-syntax (print-unreadable-object (1 s) (error "not reached")))))
+      (prnr (with-output-to-string (s)
+              (let ((*print-readably* t) (*print-escape* nil)) (print-unreadable-object (1 s :type t)))))
+      (prnr (with-output-to-string (s) (print-unreadable-object (nil s) (write-string "x" s))))
+      ;; A signal raises what it was asked to, whatever its message prints.
+      (prnr (with-standard-io-syntax (error "bad ~S" #'car)))
+      (prnr (with-standard-io-syntax (cerror "go on" "bad ~S" #'car)))
+      (prnr (with-standard-io-syntax (let ((d "bad ~S")) (error d #'car))))
+      (prnr (with-standard-io-syntax (error 'simple-error :format-control "~S" :format-arguments (list #'car))))
+      (prnr (with-standard-io-syntax (let ((x #'car)) (check-type x integer))))
+      (prnr (with-standard-io-syntax (let ((x #'car)) (assert (null x) () "was ~S" x))))
+      (prnr (with-standard-io-syntax (signal "s ~S" #'car)))
+      (prnr (with-standard-io-syntax (error 'prnr-e)))
+      (prnr (with-standard-io-syntax
+              (handler-case (error "~S" #'car) (error (e) (stringp (princ-to-string e))))))
+      (prnr (with-standard-io-syntax (handler-case (error 'prnr-e) (error (e) (format nil "~A" e)))))
+      (prnr (with-standard-io-syntax (handler-case (error 'prnr-e) (error (e) (prin1-to-string e)))))
+      (prnr (handler-case (with-output-to-string (s) (with-standard-io-syntax (print-unreadable-object (1 s))))
+              (error (e) (with-standard-io-syntax (princ-to-string e)))))
+      ;; serapeum's same-literal-p: two lambdas are not the same literal.
+      (defun prnr-same-literal-p (x y)
+        (handler-case (let ((*print-readably* t)) (equal (prin1-to-string x) (prin1-to-string y)))
+          (print-not-readable () nil)))
+      (prnr (list (prnr-same-literal-p (lambda (x) x) (lambda (y) y)) (prnr-same-literal-p '(1 "a") (list 1 "a"))))
+    expected: |
+      (:PNR T)
+      (:PNR T)
+      (:PNR NIL)
+      (:PNR NIL)
+      (:PNR T)
+      (:PNR T)
+      (:PNR T)
+      (:PNR T)
+      (:PNR T)
+      (:PNR T)
+      (:PNR T)
+      (:PNR T)
+      (:PNR T)
+      (:PNR T)
+      (:PNR T)
+      (:PNR T)
+      (:PNR T)
+      (:PNR T)
+      (:PNR T)
+      T
+      T
+      T
+      "(\"a#<b\" |c#<d| 1 2.5 #P\"/x/#<y\")"
+      "#S(PRNR-S :A \"#<\")"
+      "#2A((\"#<\" \"#<\"))"
+      "#2A((7 7) (7 7))"
+      "#.(MAKE-HASH-TABLE :TEST (QUOTE EQ))"
+      "(#.(MAKE-HASH-TABLE))"
+      (:PNR NIL)
+      (:PNR T)
+      "#.(LET ((H (MAKE-HASH-TABLE :TEST (QUOTE EQUAL)))) (SETF (GETHASH (QUOTE \"a\") H) (QUOTE m:T/T)) H)"
+      (:PNR NIL)
+      ("m:T/T" "m:NIL/NIL")
+      "#2A((m:T/T))"
+      (:PNR NIL)
+      (:PNR NIL)
+      "#<u>"
+      (:PNR NIL)
+      (:PNR NIL)
+      "#<x>"
+      (:ERROR SIMPLE-ERROR)
+      (:ERROR SIMPLE-ERROR)
+      (:ERROR SIMPLE-ERROR)
+      (:ERROR SIMPLE-ERROR)
+      (:ERROR SIMPLE-TYPE-ERROR)
+      (:ERROR SIMPLE-ERROR)
+      NIL
+      (:ERROR PRNR-E)
+      T
+      "T"
+      (:PNR NIL)
+      "1 cannot be printed readably."
+      (NIL T)
+
+  - name: print-readably-alone-routes-the-printer
+    source: |
+      ;; A program naming only the variable carries the signal and no case fold.
+      (let ((*print-readably* t))
+        (print (handler-case (prin1-to-string #'car) (print-not-readable () :pnr)))
+        (print (prin1-to-string (list 'a "#<" 1)))
+        (print (stringp (princ-to-string #'car))))
+    expected: |
+      :PNR
+      "(A \"#<\" 1)"
+      T
+
+  - name: print-readably-named-only-in-data
+    source: |
+      ;; The name in data carries the signal, whose messages bind the variable: the compile
+      ;; paths need its thread-local home though no form of the program binds it.
+      (print (handler-case (error "~S" '(*print-readably*)) (error (e) (princ-to-string e))))
+    expected: |
+      "(*PRINT-READABLY*)"
+
   - name: subtypep-fixnum-is-a-64-bit-interval
     # Expected is SBCL 2.2.9's.
     source: |
@@ -33789,6 +33957,81 @@ cases:
       #(|10|)
       (|10| . |1.5|)
       
+  - name: the-empty-name-is-a-symbol-like-any-other
+    source: |
+      ;; A compiled symbol is a bare string told from a framed one by its first character, so the
+      ;; empty name has a spelling of its own; everything reads and prints it as the empty name.
+      (defpackage :ens-p (:use :cl))
+      (defstruct || a)
+      (defun || (x) (+ x 1))
+      (defvar || 7)
+      (defmacro ens-macro () (intern ""))
+      (defun ens-key (&key ||) ||)
+      (defgeneric ens-gf (x))
+      (defmethod ens-gf ((x (eql '||))) :the-empty-name)
+      (defun ens-show (x)
+        (list (symbolp x) (stringp x) (keywordp x) (symbol-name x) (package-name (symbol-package x)) (type-of x)
+              (eq x '||) (equal x "") (string= x "") (prin1-to-string x) (princ-to-string x)
+              (ens-gf x)))
+      (print (ens-show '||))
+      (print (ens-show 'cl-user::||))
+      (print (ens-show (intern "")))
+      (print (ens-show (intern "" :cl-user)))
+      (print (ens-show (intern (subseq "abc" 1 1))))
+      (print (ens-show (read-from-string "||")))
+      (print (multiple-value-list (find-symbol "")))
+      (print (list (|| 1) (funcall '|| 2) (funcall (intern "") 3) (funcall #'|| 4) (and (fboundp '||) t)))
+      (print (list || (let ((|| 8)) ||) (symbol-value '||) (ens-macro) (boundp (intern "")) (ens-key :|| 9)))
+      (print (progn (set (intern "") 10) ||))
+      (print (list (||-a (make-|| :a 2)) (||-p (make-|| :a 3)) (type-of (make-|| :a 4))))
+      (print (list (block || (return-from || 1)) (catch '|| (throw (intern "") 2)) (case (intern "") (|| 3) (t 4))))
+      (print (progn (setf (get '|| 'ens-p::k) 5) (get (intern "") 'ens-p::k)))
+      (print '(a (|| . ||) #(||) '|| #'||))
+      (print (let ((*print-case* :downcase)) (prin1-to-string '(|| a))))
+      (print (eval (list 'let (list (list (intern "") 11)) (intern ""))))
+      (print (list (intern "" :keyword) (make-symbol "") 'ens-p::|| (intern "" :ens-p)))
+      (print (list (read-from-string ":||") (read-from-string "#:||") (read-from-string "ens-p::||") (read-from-string "cl-user::||")))
+      (print (list (read-from-string "|a b|") (read-from-string "a|b c|d") (read-from-string "|12|") (read-from-string "|NIL|")
+                   (read-from-string "a\\bc") (read-from-string "\\(") (read-from-string "|a\\|b|") (read-from-string ":|a b|")
+                   (read-from-string "ens-p::|x y|") (read-from-string "(|| |x| y)") (read-from-string "'||")))
+      (print (list (eq (read-from-string "|ABC|") 'abc) (eq (read-from-string "ens-p::||") 'ens-p::||)
+                   (eq (read-from-string (prin1-to-string '|a b|)) '|a b|)
+                   (eq (read-from-string (prin1-to-string (intern "10"))) (intern "10"))
+                   (multiple-value-list (read-from-string "|a b| c"))
+                   (multiple-value-list (read-from-string "(|a) b| c) d"))
+                   (multiple-value-list (read-from-string "#:|a b| c"))))
+      (print (with-input-from-string (s "|| |p q| \\r") (list (read s) (read s) (read s))))
+      (print (list (handler-case (read-from-string "|abc") (end-of-file () :eof))
+                   (handler-case (read-from-string "|a\\") (end-of-file () :eof))))
+      (in-package :ens-p)
+      (print (list '|| (intern "") (eq '|| (intern "")) (symbol-name '||) 'cl-user::||))
+      (in-package :cl-user)
+      (print (list 'ens-p::|| (eq 'ens-p::|| '||)))
+    expected: |
+      (T NIL NIL "" "COMMON-LISP-USER" SYMBOL T NIL T "||" "" :THE-EMPTY-NAME)
+      (T NIL NIL "" "COMMON-LISP-USER" SYMBOL T NIL T "||" "" :THE-EMPTY-NAME)
+      (T NIL NIL "" "COMMON-LISP-USER" SYMBOL T NIL T "||" "" :THE-EMPTY-NAME)
+      (T NIL NIL "" "COMMON-LISP-USER" SYMBOL T NIL T "||" "" :THE-EMPTY-NAME)
+      (T NIL NIL "" "COMMON-LISP-USER" SYMBOL T NIL T "||" "" :THE-EMPTY-NAME)
+      (T NIL NIL "" "COMMON-LISP-USER" SYMBOL T NIL T "||" "" :THE-EMPTY-NAME)
+      (|| :INTERNAL)
+      (2 3 4 5 T)
+      (7 8 7 7 T 9)
+      10
+      (2 T ||)
+      (1 2 3)
+      5
+      (A (|| . ||) #(||) '|| #'||)
+      "(|| a)"
+      11
+      (:|| #:|| ENS-P::|| ENS-P::||)
+      (:|| #:|| ENS-P::|| ||)
+      (|a b| |Ab cD| |12| NIL |AbC| |(| |a\|b| :|a b| ENS-P::|x y| (|| |x| Y) '||)
+      (T T T T (|a b| 6) ((|a) b| C) 11) (#:|a b| 8))
+      (|| |p q| |r|)
+      (:EOF :EOF)
+      (|| || T "" COMMON-LISP-USER::||)
+      (ENS-P::|| NIL)
 standalone:
   - name: a-standard-condition-a-program-signals-reports-with-no-control
     source: |

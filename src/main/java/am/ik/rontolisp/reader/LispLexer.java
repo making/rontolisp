@@ -1867,9 +1867,7 @@ public final class LispLexer {
 			// directly following string (#P"..." -- without this the namestring would
 			// surface as a datum of its own).
 			this.pos++;
-			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
-				this.pos++;
-			}
+			skipTokenRaw();
 			if (this.pos < this.input.length() && this.input.charAt(this.pos) == '(') {
 				skipDelimitedList();
 			}
@@ -1879,10 +1877,29 @@ public final class LispLexer {
 			return true;
 		}
 		// A symbol or number token.
-		while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
-			this.pos++;
-		}
+		skipTokenRaw();
 		return true;
+	}
+
+	// Skips the rest of a token, whose escapes (CLHS 2.1.4.6, 2.1.4.7) hold characters
+	// that would end it. Text ending inside one leaves the position at its end: the
+	// read of that text is what reports it.
+	private void skipTokenRaw() {
+		while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+			char c = this.input.charAt(this.pos);
+			boolean standard = this.syntax == null || this.syntax.entry(c) == null;
+			this.pos++;
+			if (standard && c == '\\') {
+				this.pos++;
+			}
+			else if (standard && c == '|') {
+				while (this.pos < this.input.length() && this.input.charAt(this.pos) != '|') {
+					this.pos += this.input.charAt(this.pos) == '\\' ? 2 : 1;
+				}
+				this.pos++;
+			}
+		}
+		this.pos = Math.min(this.pos, this.input.length());
 	}
 
 	// Skips a balanced (...) list at the raw character level, honoring strings,
@@ -1914,6 +1931,9 @@ public final class LispLexer {
 				if (depth == 0) {
 					return;
 				}
+			}
+			else if ((c == '\\' || c == '|') && (this.syntax == null || this.syntax.entry(c) == null)) {
+				skipTokenRaw();
 			}
 			else {
 				this.pos++;
