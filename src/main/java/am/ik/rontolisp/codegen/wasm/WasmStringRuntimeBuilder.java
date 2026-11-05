@@ -1977,6 +1977,281 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	/**
+	 * Builds {@code _str_search} (FUNC_STR_SEARCH), the {@code %string-search} primitive:
+	 * the leftmost occurrence of the characters {@code [start1, end1)} of {@code seq1} in
+	 * {@code [start2, end2)} of {@code seq2} as a character index, -1 when there is none,
+	 * and nil when an operand is no string. The caller checked the bounds; a nil end is
+	 * the string's end. Nothing is allocated, where {@code search}'s element loop boxes
+	 * two characters per position ({@code .kb/string-search-runtime.md}).
+	 *
+	 * <p>
+	 * Two immutable strings compare as bytes. UTF-8 encodes a code point one way and no
+	 * lead byte is a continuation byte, so a byte match that starts on a needle's lead
+	 * byte is a character match and needs no decoding; the match's character index is
+	 * counted only once there is one. A mutable character vector on either side compares
+	 * code points through {@code _str_char_ref}: rendering it would make a bounded search
+	 * cost the whole vector ({@code .kb/string-index-cost.md}).
+	 * @return the function body (signature {@code TYPE_CALLABLE_BASE + 5})
+	 */
+	static byte[] buildStrSearchBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		int seq1 = 0, seq2 = 1, start1 = 2, end1 = 3, start2 = 4, end2 = 5;
+		// locals: needle = 6, hay = 7 ($str_bytes); from1 = 8, from2 = 9, last = 10,
+		// width = 11, pos = 12, k = 13, first = 14 (i32).
+		int needle = 6, hay = 7, from1 = 8, from2 = 9, last = 10, width = 11, pos = 12, k = 13, first = 14;
+		w.write(2);
+		w.write(2);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(7);
+		w.write(Type.I32);
+		WasmStringpCompiler.emitStringpI32(w, seq1);
+		WasmStringpCompiler.emitStringpI32(w, seq2);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		get(w, seq1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		get(w, seq2);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		setStrArray(w, seq1, needle);
+		setStrArray(w, seq2, hay);
+		emitByteOffset(w, seq1, start1);
+		set(w, from1);
+		emitByteOffset(w, seq2, start2);
+		set(w, from2);
+		// width = (end1's byte) - from1; last = (end2's byte) - width
+		emitEndByteOffset(w, seq1, end1, needle);
+		get(w, from1);
+		w.write(Instruction.I32_SUB);
+		set(w, width);
+		emitEndByteOffset(w, seq2, end2, hay);
+		get(w, width);
+		w.write(Instruction.I32_SUB);
+		set(w, last);
+		// An empty needle matches where the range starts.
+		get(w, width);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, start2);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		arrGetLocal(w, needle, from1);
+		set(w, first);
+		get(w, from2);
+		set(w, pos);
+		w.write(Instruction.BLOCK, 0x40);
+		get(w, pos);
+		get(w, last);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.BR_IF, 0);
+		w.write(Instruction.LOOP, 0x40);
+		arrGetLocal(w, hay, pos);
+		get(w, first);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		emitByteMatch(w, needle, hay, from1, pos, width, k, start2, from2);
+		w.write(Instruction.END);
+		get(w, pos);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(pos);
+		get(w, last);
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.BR_IF, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.ELSE);
+		emitCharacterSearch(w, seq1, seq2, start1, end1, start2, end2, from1, from2, last, width, pos, k);
+		w.write(Instruction.END);
+		i32(w, -1);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
+	// Pushes the byte offset of the character the fixnum in indexLocal names.
+	private static void emitByteOffset(WasmWriter w, int strLocal, int indexLocal) {
+		get(w, strLocal);
+		get(w, indexLocal);
+		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_BYTE_OFFSET);
+	}
+
+	// Pushes the byte offset of an end bound: the closing quote's when it is nil.
+	private static void emitEndByteOffset(WasmWriter w, int strLocal, int endLocal, int arrLocal) {
+		get(w, endLocal);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, Type.I32.code());
+		get(w, arrLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.ELSE);
+		emitByteOffset(w, strLocal, endLocal);
+		w.write(Instruction.END);
+	}
+
+	// At a position whose first byte matched: compares the rest and, on a match, returns
+	// the position as a character index -- start2 plus the lead bytes before it, counted
+	// in k, which the comparison is done with by then.
+	private static void emitByteMatch(WasmWriter w, int needle, int hay, int from1, int pos, int width, int k,
+			int start2, int from2) {
+		i32(w, 1);
+		set(w, k);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, k);
+		get(w, width);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		get(w, needle);
+		get(w, from1);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		get(w, hay);
+		get(w, pos);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 2);
+		get(w, k);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, k);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		w.write(Instruction.END); // loop
+		// k = start2; while (from2 < pos) k += hay[from2++] is a lead byte
+		get(w, start2);
+		WasmEmitHelper.castI31GetS(w);
+		set(w, k);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, from2);
+		get(w, pos);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		get(w, k);
+		arrGetLocal(w, hay, from2);
+		i32(w, 0xC0);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_ADD);
+		set(w, k);
+		get(w, from2);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, from2);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		get(w, k);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // block: not a match
+	}
+
+	// The character-vector arm: code points through _str_char_ref, returning the match
+	// and falling out when there is none.
+	private static void emitCharacterSearch(WasmWriter w, int seq1, int seq2, int start1, int end1, int start2,
+			int end2, int from1, int from2, int last, int width, int pos, int k) {
+		get(w, start1);
+		WasmEmitHelper.castI31GetS(w);
+		set(w, from1);
+		get(w, start2);
+		WasmEmitHelper.castI31GetS(w);
+		set(w, from2);
+		// width = (end1 or the length) - from1; last = (end2 or the length) - width
+		emitEndIndex(w, seq1, end1);
+		get(w, from1);
+		w.write(Instruction.I32_SUB);
+		set(w, width);
+		emitEndIndex(w, seq2, end2);
+		get(w, width);
+		w.write(Instruction.I32_SUB);
+		set(w, last);
+		get(w, from2);
+		set(w, pos);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, pos);
+		get(w, last);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.BR_IF, 1);
+		i32(w, 0);
+		set(w, k);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, k);
+		get(w, width);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		get(w, pos);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		emitCodePoint(w, seq1, from1, k);
+		emitCodePoint(w, seq2, pos, k);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 1);
+		get(w, k);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, k);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		get(w, pos);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, pos);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+	}
+
+	// Pushes an end bound as an index: the length when it is nil.
+	private static void emitEndIndex(WasmWriter w, int seqLocal, int endLocal) {
+		get(w, endLocal);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, Type.I32.code());
+		get(w, seqLocal);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_SEQ_LEN);
+		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.ELSE);
+		get(w, endLocal);
+		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.END);
+	}
+
+	// Pushes the code point of character (base + k) of the string in strLocal.
+	private static void emitCodePoint(WasmWriter w, int strLocal, int baseLocal, int k) {
+		get(w, strLocal);
+		get(w, baseLocal);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_REF);
+	}
+
+	/**
 	 * Builds {@code _str_char_ref} (FUNC_STR_CHAR_REF): the code point of character
 	 * {@code i} of a string in EITHER representation. A mutable character vector (the
 	 * shape {@code _charvec_p} recognizes, string views included) reads its ELEMENT

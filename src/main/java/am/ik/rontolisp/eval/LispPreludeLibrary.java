@@ -3937,37 +3937,44 @@ public final class LispPreludeLibrary {
 		// (complemented) :test-not, then to eql (ANSI's search.order.2 and
 		// search-list.16). SequenceScanFast.search already declines any keyword it does
 		// not recognize, so a :test-not call simply falls through to this body -- no
-		// change needed there.
+		// change needed there. %string-search answers two plain strings with no element
+		// loop where the backend has that arm (.kb/string-search-runtime.md); the loop
+		// boxes two characters per position on wasm.
 		SOURCES.put(LispNames.SEARCH, """
 				(defun search (seq1 seq2 &key (start1 0 s1p) end1 (start2 0 s2p) end2 test test-not key from-end)
 				  (let ((seq1 (%check-sequence seq1 'search))
 				        (seq2 (%check-sequence seq2 'search)))
 				    (when (or s1p end1) (%check-bounds seq1 start1 end1))
 				    (when (or s2p end2) (%check-bounds seq2 start2 end2))
-				    (let* ((e2 (or end2 (length seq2)))
-				           (w (- (or end1 (length seq1)) start1))
-				           (h1 (if (listp seq1) (nthcdr start1 seq1) nil))
-				           (h2 (if (listp seq2) (nthcdr start2 seq2) nil))
-				           (result nil))
-				      (do ((pos start2 (+ pos 1)))
-				          ((or (> (+ pos w) e2) (and result (not from-end))) result)
-				        (let ((ok t) (c1 h1) (c2 h2))
-				          (do ((i 0 (+ i 1)))
-				              ((or (>= i w) (not ok)))
-				            (let ((a (if (consp c1)
-				                         (prog1 (car c1) (setq c1 (cdr c1)))
-				                         (elt seq1 (+ start1 i))))
-				                  (b (if (consp c2)
-				                         (prog1 (car c2) (setq c2 (cdr c2)))
-				                         (elt seq2 (+ pos i)))))
-				              (let ((ka (if key (funcall key a) a))
-				                    (kb (if key (funcall key b) b)))
-				                (unless (if test
-				                            (funcall test ka kb)
-				                            (if test-not (not (funcall test-not ka kb)) (eql ka kb)))
-				                  (setq ok nil)))))
-				          (setq h2 (if (consp h2) (cdr h2) h2))
-				          (when ok (setq result pos)))))))
+				    (let ((found (if (or test test-not key from-end)
+				                     nil
+				                     (%string-search seq1 seq2 start1 end1 start2 end2))))
+				      (if found
+				          (if (eql found -1) nil found)
+				          (let* ((e2 (or end2 (length seq2)))
+				                 (w (- (or end1 (length seq1)) start1))
+				                 (h1 (if (listp seq1) (nthcdr start1 seq1) nil))
+				                 (h2 (if (listp seq2) (nthcdr start2 seq2) nil))
+				                 (result nil))
+				            (do ((pos start2 (+ pos 1)))
+				                ((or (> (+ pos w) e2) (and result (not from-end))) result)
+				              (let ((ok t) (c1 h1) (c2 h2))
+				                (do ((i 0 (+ i 1)))
+				                    ((or (>= i w) (not ok)))
+				                  (let ((a (if (consp c1)
+				                               (prog1 (car c1) (setq c1 (cdr c1)))
+				                               (elt seq1 (+ start1 i))))
+				                        (b (if (consp c2)
+				                               (prog1 (car c2) (setq c2 (cdr c2)))
+				                               (elt seq2 (+ pos i)))))
+				                    (let ((ka (if key (funcall key a) a))
+				                          (kb (if key (funcall key b) b)))
+				                      (unless (if test
+				                                  (funcall test ka kb)
+				                                  (if test-not (not (funcall test-not ka kb)) (eql ka kb)))
+				                        (setq ok nil)))))
+				                (setq h2 (if (consp h2) (cdr h2) h2))
+				                (when ok (setq result pos)))))))))
 				""");
 		// count-if-not is count-if over the complemented predicate: count-if now carries
 		// the whole keyword set itself (:key and CLHS 17.2.1's bounding keywords), so the

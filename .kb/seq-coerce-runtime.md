@@ -125,8 +125,9 @@ unchanged. Served only where identical answers are provable:
   `preludeDefinitions` by `LispEvaluator.loadPreludeDefinition` (the single load
   site both callers use). Without it the fast shapes would silently ignore a
   LATER redefinition.
-- Nothing added to the compile paths: `search` costs a call site, the `defun`
-  being a shared callee (`.kb/sequence-op-runtimes.md`). A native `Environment`
+- Nothing added to the compile paths for this arm: `search` costs a call site, the
+  `defun` being a shared callee (`.kb/sequence-op-runtimes.md`); wasm-GC's arm for two
+  strings is `.kb/string-search-runtime.md`. A native `Environment`
   built-in was rejected: the prelude loads only when the name is unresolved, so
   that is a REPLACEMENT, not a fast path, and a second keyword implementation.
 
