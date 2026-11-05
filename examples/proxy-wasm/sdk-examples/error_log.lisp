@@ -9,23 +9,22 @@
 
 (in-package :error-log)
 
-(defmethod proxy-wasm:on-request-headers
-    ((stream proxy-wasm:http-context) num-headers end-of-stream)
-  (declare (ignore num-headers end-of-stream))
-  (let ((path (proxy-wasm:get-header :request ":path")))
-    (cond ((equal path "/failed-call")
-           ;; There is no call's reply to write to here.
-           (proxy-wasm:set-buffer :call-response-body "x"))
-          ((equal path "/signal") (error "not reported"))))
-  (proxy-wasm:send-local-response 200
-                                  :headers
-                                  (list
-                                   (cons "x-outgoing"
-                                         (if (proxy-wasm:http-call
-                                              "no-such-cluster"
-                                              '((":method" . "GET")
-                                                (":path" . "/")
-                                                (":authority" . "x")))
-                                             "sent"
-                                             "refused"))))
-  :pause)
+(proxy-wasm:define-filter
+  (:on-request-headers (stream num-headers end-of-stream)
+    (let ((path (proxy-wasm:get-header :request ":path")))
+      (cond ((equal path "/failed-call")
+             ;; There is no call's reply to write to here.
+             (proxy-wasm:set-buffer :call-response-body "x"))
+            ((equal path "/signal") (error "not reported"))))
+    (proxy-wasm:send-local-response 200
+                                    :headers
+                                    (list
+                                     (cons "x-outgoing"
+                                           (if (proxy-wasm:http-call
+                                                "no-such-cluster"
+                                                '((":method" . "GET")
+                                                  (":path" . "/")
+                                                  (":authority" . "x")))
+                                               "sent"
+                                               "refused"))))
+    :pause))

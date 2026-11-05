@@ -6,15 +6,16 @@ parent README, the other SDK's choices in `proxy-wasm-sdk.md`, and whether eithe
 
 ## Measured (2026-11-05, Envoy v1.40.2, `--no-gc --optimize=size`)
 
-| Filter | raw | gzip | by hand on `rontolisp:memory` (`.todo/artefacts/i51-proxy-wasm-filter-size/no-gc/`) | on the wasm-GC SDK, `:proxy-wasm-trap` |
+| Filter | raw | gzip | by hand on `rontolisp:memory` (`.todo/artefacts/i51-proxy-wasm-filter-size/no-gc/`) | on the wasm-GC SDK, `(:on-failure :trap)` |
 | --- | ---: | ---: | ---: | ---: |
-| `http_body` | 2,064 | 1,152 | 2,101 / 1,109 | 59,633 / 23,065 |
-| `http_headers` | 2,583 | 1,388 | 2,556 / 1,372 | 61,385 / 23,764 |
-| `test_plugin` | 6,581 | 3,145 | not written | 70,815 / 26,998 |
+| `http_body` | 2,166 | 1,246 | 2,101 / 1,109 | 6,084 / 3,162 |
+| `http_headers` | 2,583 | 1,388 | 2,556 / 1,372 | 20,313 / 8,701 |
+| `test_plugin` | 6,581 | 3,145 | not written | 49,508 / 20,759 |
 | A filter with one `remove-header` | 1,193 | 716 | | |
 
-Same size as by hand, since the macros leave what a person writes: `http_body` is smaller, by the
-identical default callbacks folding to one function and the arena exports going.
+Same size as by hand, since the macros leave what a person writes, and `http_body` was smaller until
+`search-bytes` took the module's own search (+102 raw, +94 gzip; `%bytes=` went). What an exchange runs is in
+`proxy-wasm-sdk.md`: 64KiB through `http_body` was 5,636,321 instructions and 196,630 calls, 3 per byte, and is 221,979 and 37.
 
 **State**, the question `test_plugin` was ported for: the first `(:state hits)` field adds 395 raw and
 199 gzip to that one-`remove-header` filter, and a string field read and set in two callbacks 525 and
@@ -68,8 +69,9 @@ heap, so comparing against a path costs that copy; `test_plugin` does it in each
 
 - **Strings as address pairs, or as values?** Values for what is small and read as text: the backend's
   `format`, `string=`, `concatenate` read like Lisp and share one `__alloc`, `__memcpy` and `__itoa`.
-  Address pairs for a body: `search-bytes` is one pass, where `char` walks from the start at each index
-  (`.kb/no-gc-scalar-wasm.md`, "Indexing here is O(n)"), and it can be upcased in place.
+  Address pairs for a body: `search-bytes` is the module's own loop (`.kb/wasm-import.md`), where `char` walks
+  from the start at each index (`.kb/no-gc-scalar-wasm.md`, "Indexing here is O(n)"), and it can be upcased in place.
+  The wasm-GC SDK took the same pair for a body, as it keeps the body off the engine's heap too.
 - **Errors**: a failed call answers NIL after a log line, or traps under `(:on-failure :trap)`, decided at
   compile time. `http-call` answers NIL either way: a trap cannot be handled, and a filter has to be
   able to do without the call.
