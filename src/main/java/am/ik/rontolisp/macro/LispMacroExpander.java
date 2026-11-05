@@ -25229,7 +25229,7 @@ public final class LispMacroExpander {
 			ClosRegistry.ClassInfo target, ClosRegistry closRegistry,
 			java.util.function.Function<ClosRegistry.SlotSpec, @Nullable LispVal> supplied) {
 		String targetKey = ClosRegistry.normalize(target.name());
-		java.util.Map<List<ChangeClassSlotOrigin>, List<LispVal>> tagTestsByOrigins = new java.util.LinkedHashMap<>();
+		java.util.Map<List<ChangeClassSlotOrigin>, List<String>> tagsByOrigins = new java.util.LinkedHashMap<>();
 		for (ClosRegistry.ClassInfo source : closRegistry.classes().values()) {
 			String sourceKey = ClosRegistry.normalize(source.name());
 			if (sourceKey.equals(targetKey)) {
@@ -25239,18 +25239,21 @@ public final class LispMacroExpander {
 			if (!sameChain && closRegistry.isSeededClass(source.name())) {
 				continue;
 			}
-			tagTestsByOrigins.computeIfAbsent(changeClassSlotOrigins(source, target), origins -> new ArrayList<>())
-				.add(fmtCall(LispNames.EQUAL, oldTagVar, quoteOf(LispLayout.CLASS_TAG_PREFIX + source.name())));
+			tagsByOrigins.computeIfAbsent(changeClassSlotOrigins(source, target), origins -> new ArrayList<>())
+				.add(LispLayout.CLASS_TAG_PREFIX + source.name());
 		}
 		List<LispVal> clauses = new java.util.ArrayList<>();
-		for (java.util.Map.Entry<List<ChangeClassSlotOrigin>, List<LispVal>> entry : tagTestsByOrigins.entrySet()) {
+		for (java.util.Map.Entry<List<ChangeClassSlotOrigin>, List<String>> entry : tagsByOrigins.entrySet()) {
 			LispVal remap = changeClassSlotRemap(objVar, entry.getKey(), target, supplied);
 			if (remap == null) {
 				continue;
 			}
-			List<LispVal> tests = entry.getValue();
-			clauses.add(listToCons(List
-				.of(tests.size() == 1 ? tests.get(0) : fmtCall(LispNames.OR, tests.toArray(LispVal[]::new)), remap)));
+			// A member, not an or: an or nests a let and an if per class, which the
+			// compiler walks recursively, so hundreds of classes overflow its stack.
+			List<String> tags = entry.getValue();
+			LispVal test = tags.size() == 1 ? fmtCall(LispNames.EQUAL, oldTagVar, quoteOf(tags.get(0)))
+					: mvCall(LispNames.MEMBER, oldTagVar, quotedSymbolList(tags));
+			clauses.add(listToCons(List.of(test, remap)));
 		}
 		if (clauses.isEmpty()) {
 			return null;
