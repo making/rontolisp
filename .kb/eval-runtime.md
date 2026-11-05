@@ -36,7 +36,7 @@ stubs to hold fixed function indices, JVM needs none.
 
 ## What a form that is no call answers, and what no binding answers
 
-**Invariant: `_eval` agrees with the interpreter and SBCL 2.2.9 on all four below (2026-11-05, ci-spec
+**Invariant: `_eval` agrees with the interpreter and SBCL 2.2.9 on the three below (2026-11-05, ci-spec
 `eval-signals-an-unbound-variable-and-an-undefined-function`, `eval-answers-a-value-that-is-no-form`).**
 
 - **Anything but a symbol and a cons is its own value.** The arms enumerated the self-evaluating
