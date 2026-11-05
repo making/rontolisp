@@ -22,7 +22,7 @@
 (let ((*read-base* 16)) (read-from-string "ff"))  ; => 255
 (let ((*read-base* 16)) (read-from-string "1e5")) ; => 485
 (let ((*read-base* 16)) (read-from-string "10.")) ; => 10
-(let ((*read-base* 2)) (read-from-string "102"))  ; => 名前が "102" のシンボル
+(let ((*read-base* 2)) (read-from-string "102"))  ; => |102|
 ```
 
 相違点: 2 から 36 の範囲外の値は、SBCL では型エラーになりますが、ここでは 10 進で読みます。ソースファイルの読み取りもこの変数に従います。インタプリタは各フォームをその前のフォームが残した値で読み、コンパイル経路は `eval-when` がコンパイル時に残した値で読みます。

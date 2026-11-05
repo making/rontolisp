@@ -22,7 +22,7 @@ Symbols are read with the reader's [upcasing](../../guides/reader-case.md), iden
 (let ((*read-base* 16)) (read-from-string "ff"))  ; => 255
 (let ((*read-base* 16)) (read-from-string "1e5")) ; => 485
 (let ((*read-base* 16)) (read-from-string "10.")) ; => 10
-(let ((*read-base* 2)) (read-from-string "102"))  ; => the symbol named "102"
+(let ((*read-base* 2)) (read-from-string "102"))  ; => |102|
 ```
 
 Deviation: a value outside 2 to 36, which SBCL refuses as a type error, reads base 10. A source file reads with the variable too: the interpreter reads each form with the value the forms before it left, the compile paths with the value an `eval-when` left at compile time.

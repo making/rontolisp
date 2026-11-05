@@ -41,7 +41,7 @@ class SchemeReaderTest {
 	@Test
 	void identifiersKeepTheirCase() {
 		assertThat(printed("foo Foo FOO list->vector + ... 1+ -x"))
-			.isEqualTo("[|foo|, |Foo|, FOO, |list->vector|, +, ..., 1+, |-x|]");
+			.isEqualTo("[|foo|, |Foo|, FOO, |list->vector|, +, |...|, 1+, |-x|]");
 	}
 
 	@Test
