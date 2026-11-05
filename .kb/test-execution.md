@@ -116,6 +116,19 @@ each shard owns classes needing them. What did NOT change: `release` and
 `examples` still chain through `native-image`, both shards run on pull
 requests exactly as `test` did, and `examples` still never runs on a PR.
 
+**A runner out of memory leaves no report.** The log ends in `Killed` (the `/bin/sh -c`
+surefire wraps a fork in, its fork SIGKILLed) and, milliseconds later, `The runner has
+received a shutdown signal`: no failed test, no surefire report, the other jobs skipped. So
+every `[rontolisp] JUnit parallelism` line, one per class start, carries `memory available`.
+What it was on 2026-11-05 (`ea1a290ce`, the first in six days and 120 failed runs): a
+generated dispatch had grown a module eightfold in wasmtime's peak
+([clos.md](clos.md), "`change-class`"), the two wasm legs of `AsdfMetaobjectsE2eTest` compile
+at once (4.4 + 7.2 GB), and `ClPostgresE2eTest`'s CLI JVMs started beside them. Measured
+beside that, the shard on 2 forks at 16 GB ergonomics: forks up to 9.1 GB together, CLI
+JVMs 2.3 GB, Maven 1.1 GB. The next run of the same tree passed, because surefire's class
+order moves with the runner's filesystem: a single green run says nothing about the margin.
+Inferred from the fingerprint and those numbers, since a kill leaves no memory record.
+
 The NEXT split, decided 2026-10-22, not built: when a shard fills its runner
 again, split `test-rest` by package -- the `codegen.*` wasmtime-compile
 owners versus everything else -- as a third scope value on the same profile

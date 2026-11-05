@@ -11130,6 +11130,13 @@ public final class LispNames {
 	/** The {@code *gensym-counter*} special variable. */
 	public static final String GENSYM_COUNTER_VAR = "*GENSYM-COUNTER*";
 
+	/**
+	 * {@code *macroexpand-hook*}: calls the expander it is given, for a compiler-macro
+	 * expander that calls through it (introspect-environment's); the expansions do not
+	 * consult it.
+	 */
+	public static final String MACROEXPAND_HOOK_VAR = "*MACROEXPAND-HOOK*";
+
 	/** The {@code *random-state*} special variable. */
 	public static final String RANDOM_STATE_VAR = "*RANDOM-STATE*";
 

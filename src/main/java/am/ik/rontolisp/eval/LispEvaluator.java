@@ -109,10 +109,11 @@ public final class LispEvaluator {
 	private static final LispVal UNHANDLED = new LispSymbol("%unhandled-operator%");
 
 	/**
-	 * The one-value built-in behind each multiple-value built-in's publishing function
-	 * object, which a call position dispatches to ({@link #evalPrimaryValueCall}).
+	 * The publishing functions of the multiple-value built-ins
+	 * ({@link #installValuePublishingFunctions}).
 	 */
-	private final Map<LispFunction, LispFunction> primaryValueBuiltins = new java.util.IdentityHashMap<>();
+	private final Set<LispFunction> publishingBuiltins = java.util.Collections
+		.newSetFromMap(new java.util.IdentityHashMap<>());
 
 	private final Environment globalEnv;
 
@@ -4590,11 +4591,10 @@ public final class LispEvaluator {
 	 * {@code array-displacement} -- answer their second value too, as the floor family's
 	 * does: a {@code funcall}, an {@code apply}, a variable or a {@code mapcar} reaches
 	 * the function, which publishes the value the companion built-in the lowering reads
-	 * it through computes ({@code LispMacroExpander.lowerMvProducer}). The call position
-	 * keeps the one-value built-in ({@link #evalPrimaryValueCall}): a consumer or a
-	 * function tail has lowered its producer before the dispatch, so only the function
-	 * pays for the second value. Runs last, after {@link #foldStructLiteralsOf} wrapped
-	 * {@code read-from-string}.
+	 * it through computes ({@code LispMacroExpander.lowerMvProducer}). A call reaches it
+	 * too: a consumer or a function tail has lowered the producers it can see, and a
+	 * macro's expansion or a non-tail exit from a block is one it cannot. Runs last,
+	 * after {@link #foldStructLiteralsOf} wrapped {@code read-from-string}.
 	 */
 	private void installValuePublishingFunctions() {
 		LispVal absent = new LispSymbol("%gethash-absent%");
@@ -4680,7 +4680,7 @@ public final class LispEvaluator {
 	/** Binds the publishing function and records the one-value built-in behind it. */
 	private void installValuePublishing(LispFunction primary, LispFunction publishing) {
 		this.globalEnv.defineFunction(publishing.name(), publishing);
-		this.primaryValueBuiltins.put(publishing, primary);
+		this.publishingBuiltins.add(publishing);
 	}
 
 	/** The registered built-in {@code name}. */
@@ -4689,20 +4689,6 @@ public final class LispEvaluator {
 			throw new IllegalStateException(name + " must be registered");
 		}
 		return builtin;
-	}
-
-	/**
-	 * A call-position {@code (gethash ...)}/{@code (find-symbol ...)}/... : the one-value
-	 * built-in while the name is still bound to its publishing function, else whatever
-	 * the name is bound to now (a user generic that shadows it), through the same
-	 * {@link #apply} seam and in the same order as an ordinary call. See
-	 * {@link #installValuePublishingFunctions}.
-	 */
-	private LispVal evalPrimaryValueCall(LispCons cons, Environment env, String name) {
-		LispVal function = resolveFunction(name);
-		List<LispVal> args = evalArgs(cons, env, cons.properLength() - 1);
-		LispFunction primary = function instanceof LispFunction bound ? this.primaryValueBuiltins.get(bound) : null;
-		return apply(primary != null ? primary : function, args, env);
 	}
 
 	// Registers the interpreter's primitive layer of the `objc` package (eval/ObjcInterop
@@ -11195,10 +11181,10 @@ public final class LispEvaluator {
 			case LispNames.READ_FROM_STRING:
 				// More than the string is the prelude defun's whole lambda list, as on
 				// the compiled backends, while the name is still the built-in's; the
-				// one-argument call, and any call of a program's own definition, is
-				// evalPrimaryValueCall's (evalConsRareOperator).
+				// one-argument call, and any call of a program's own definition, is an
+				// ordinary one.
 				if (cons.properLength() > 2 && resolveFunction(name) instanceof LispFunction bound
-						&& this.primaryValueBuiltins.containsKey(bound)) {
+						&& this.publishingBuiltins.contains(bound)) {
 					return builtinMacroExpansion(cons, LispMacroExpander::expandReadFromString);
 				}
 				return null;
@@ -11652,28 +11638,14 @@ public final class LispEvaluator {
 				// family"). The one-argument
 				// form falls through to the ordinary built-in function.
 				LispVal[] operands = floorFamilyOperands(cons);
-				if (operands != null) {
+				if (operands != null && cons.properLength() == 2) {
+					// (floor (/ a b)), one value: its remainder is that of the quotient.
 					return singleValue(evalFloorFamilyDivision(name, operands[0], operands[1], env));
 				}
-				// The one-argument call rounds here too, one value: the FUNCTION
-				// publishes its remainder (a funcall, a mapcar), which a call in an
-				// ordinary position would only pay for -- a consumer or a function
-				// tail has lowered its producer before this dispatch.
-				if (cons.cdr() instanceof LispCons argCell && argCell.cdr() instanceof LispNil) {
-					return singleValue(Environment.roundToInteger(name, eval(argCell.car(), env)));
-				}
+				// The FUNCTION publishes the remainder: a macro's expansion, or an exit
+				// a walk does not see, reaches a consumer from here.
 				break;
 			}
-			case LispNames.GETHASH:
-			case LispNames.FIND_SYMBOL:
-			case LispNames.INTERN:
-			case LispNames.SUBTYPEP:
-			case LispNames.READ_FROM_STRING:
-			case LispNames.ARRAY_DISPLACEMENT:
-			case LispNames.READ_LINE:
-				// One value in call position; the FUNCTION publishes the second
-				// (installValuePublishingFunctions), as the floor family's does above.
-				return evalPrimaryValueCall(cons, env, name);
 			case LispNames.COERCE: {
 				// A packed (unsigned-byte 8|16|32) result type is the one designator
 				// expandCoerce cannot express (it collapses a compound spec to its head);

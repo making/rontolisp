@@ -1,8 +1,12 @@
 package am.ik.rontolisp.testsupport;
 
+import java.io.IOException;
 import java.lang.management.ManagementFactory;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.ForkJoinPool;
 import java.util.function.Predicate;
+import java.util.stream.Stream;
 
 import org.junit.platform.engine.ConfigurationParameters;
 import org.junit.platform.engine.support.hierarchical.ParallelExecutionConfiguration;
@@ -75,9 +79,28 @@ public final class CoreCountParallelismStrategy implements ParallelExecutionConf
 			.orElseGet(() -> parallelismFor(availableProcessors, loadAverage));
 		// The value now differs per machine and per moment, and the CI notes warn against
 		// comparing runs that disagree on it, so every run has to say which one it used.
-		System.out.println("[rontolisp] JUnit parallelism = %d (availableProcessors = %d, load average = %.2f)"
-			.formatted(parallelism, availableProcessors, loadAverage));
+		System.out.println("[rontolisp] JUnit parallelism = %d (availableProcessors = %d, load average = %.2f%s)"
+			.formatted(parallelism, availableProcessors, loadAverage, memoryAvailable()));
 		return new CoreCountConfiguration(parallelism);
+	}
+
+	/**
+	 * What the machine has left, for the line every class start prints: a runner that
+	 * runs out is killed with no report, so the log's last lines are all there is to say
+	 * how close it came (.kb/test-execution.md, "CI shards").
+	 * @return {@code ", memory available = <n> MB"}, empty where {@code /proc/meminfo} is
+	 * not
+	 */
+	private static String memoryAvailable() {
+		try (Stream<String> lines = Files.lines(Path.of("/proc/meminfo"))) {
+			return lines.filter(line -> line.startsWith("MemAvailable:"))
+				.findFirst()
+				.map(line -> ", memory available = %d MB".formatted(Long.parseLong(line.replaceAll("\\D", "")) / 1024))
+				.orElse("");
+		}
+		catch (IOException ex) {
+			return "";
+		}
 	}
 
 	static int parallelismFor(int availableProcessors, double loadAverage) {

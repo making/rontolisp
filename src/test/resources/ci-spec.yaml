@@ -1516,6 +1516,15 @@ cases:
                    (search *smb-b* *smb-abc* :start1 *smb-1* :end1 *smb-1*)
                    (mismatch *smb-l123* *smb-v123* :start1 *smb-1* :start2 *smb-1*)
                    (funcall #'search *smb-b* *smb-abc* :start2 *smb-1* :end2 *smb-2*)))
+      ;; :from-end scans from the right; :test-not is the test's opposite.
+      (print (list (mismatch "xab" "yab" :from-end t) (mismatch "abc" "abc" :from-end t)
+                   (mismatch "ab" "xab" :from-end t) (mismatch "xab" "ab" :from-end t)
+                   (mismatch "abx" "aby" :from-end t) (mismatch '(1 2 3) '(0 2 3) :from-end t :test #'=)
+                   (mismatch #(1 2 3) #(0 2 3) :from-end t) (mismatch "xabc" "yabc" :from-end t :start1 1)
+                   (mismatch "abcx" "abcy" :from-end t :end1 3 :end2 3)
+                   (mismatch "xab" "yab" :from-end t :key #'char-upcase)
+                   (mismatch "xab" "yab" :from-end t :test-not #'char/=)
+                   (mismatch "ab" "ac" :test-not #'char/=) (mismatch "" "a" :from-end t)))
     expected: |
       (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR)
       (:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR :TYPE-ERROR)
@@ -1526,6 +1535,7 @@ cases:
       (:TYPE-ERROR (:TYPE-ERROR 1.5) :TYPE-ERROR :TYPE-ERROR)
       (NIL 1 NIL 3)
       (2 0 NIL 1)
+      (1 NIL 0 1 3 1 1 1 NIL 1 1 1 0)
   # parse-integer: a negative, non-integer or past-int-range :start/:end, one past the
   # string's length and a start past its end are subseq's type-error before the scan --
   # a fresh, a literal and a fill-pointer string, call position and first class -- and
@@ -15208,6 +15218,35 @@ cases:
       ; before it published; and no value at all is no value, however it
       ; travels (SBCL agrees on every line).
       (defvar ci-svc-q nil)
+      ;; A producer in a macro's expansion, or in the value of an exit that is no tail of
+      ;; the block it leaves, answers both values too.
+      (defvar ci-svc-h (make-hash-table))
+      (setf (gethash :a ci-svc-h) 1)
+      (defmacro ci-svc-m () '(gethash :a ci-svc-h))
+      (defmacro ci-svc-p (&rest forms)
+        `(print (list ,@(mapcar (lambda (form) `(multiple-value-list ,form)) forms))))
+      (defun ci-svc-early (k)
+        (when k (return-from ci-svc-early (gethash k ci-svc-h)))
+        0)
+      (defun ci-svc-map (l)
+        (mapc (lambda (k) (return-from ci-svc-map (gethash k ci-svc-h))) l)
+        0)
+      (ci-svc-p (block b (tagbody (return-from b (gethash :a ci-svc-h))))
+                (block b (tagbody (return-from b (floor 7 2))))
+                (block b (tagbody top (let ((x 1)) x (return-from b (gethash :a ci-svc-h))) (go top)))
+                (dolist (x '(1)) (return (gethash :a ci-svc-h)))
+                (dotimes (x 1) (return (gethash :a ci-svc-h)))
+                (do ((x 0 (1+ x))) ((> x 1)) (return (gethash :a ci-svc-h)))
+                (loop for x in '(1) do (return (gethash :a ci-svc-h)))
+                (loop for x in '(:a) return (gethash x ci-svc-h))
+                (prog () (return (floor 7 2)))
+                (catch 'c (tagbody (throw 'c (gethash :a ci-svc-h))))
+                (ci-svc-early :a)
+                (ci-svc-map '(:a))
+                (macrolet ((m () '(floor 7 2))) (m))
+                (ci-svc-m)
+                (let ((x 1)) x (ci-svc-m))
+                (block b (return-from b (ci-svc-m))))
       (defun ci-svc-floor () (floor 7 2))
       (defun ci-svc-none () (values))
       (defun ci-svc-inc (x) (+ x 1))
@@ -15273,6 +15312,7 @@ cases:
       (print (multiple-value-list (catch 'c (throw 'c (values 1 2)))))
       (print (multiple-value-list (dolist (x '(1 2)) (when (= x 2) (return (values x 9))))))
     expected: |
+      ((1 T) (3 1) (1 T) (1 T) (1 T) (1 T) (1 T) (1 T) (3 1) (1 T) (1 T) (1 T) (3 1) (1 T) (1 T) (1 T))
       (6)
       ((3))
       (2)
@@ -16122,9 +16162,12 @@ cases:
                    (meso-emit (loop for x in '(1 2 3) when (= x 2) do (return x)))
                    (meso-emit (loop for x in '(1 2 3) collect (* x x)))
                    (meso-emit (prog ((x 1)) (setq x 2) (return x)))))
+      ;; The hook calls an expander through it (introspect-environment's).
+      (print (funcall *macroexpand-hook* (lambda (form env) (list form env)) 1 2))
     expected: |
       (BLOCK BLOCK BLOCK BLOCK)
       (2 :END 3 3 :ONE 2 (1 4 9) 2)
+      (1 2)
   - name: macro-function-and-special-operator-p
     source: |
       ;; Every operator with no function value is EITHER a special operator OR a
@@ -23964,11 +24007,31 @@ cases:
         (print (list (slot-value *clsurf-a* 'low) (slot-value *clsurf-b* 'low)
                      (handler-case (change-class (make-instance 'clsurf-plain) class)
                        (error () :initform-ran)))))
+      ;; Classes mapping onto a target alike share one arm of the dispatch, and those
+      ;; that do not keep their own: nothing in common, a slot moving to another index,
+      ;; a slot staying at its index, a slot leaving a shared cell.
+      (defclass clsurf-to () ((a :initarg :a :initform 1) (b :initform 2) (c)))
+      (defclass clsurf-none-1 () ((x :initform :x)))
+      (defclass clsurf-none-2 () ((y :initform :y) (z :initform :z)))
+      (defclass clsurf-moved () ((b :initform :moved)))
+      (defclass clsurf-kept () ((a :initform :kept)))
+      (defclass clsurf-cell () ((b :allocation :class :initform :cell)))
+      (defun clsurf-to-values (o) (list (slot-value o 'a) (slot-value o 'b) (slot-boundp o 'c)))
+      (let ((class 'clsurf-to))
+        (dolist (from '(clsurf-none-1 clsurf-none-2 clsurf-moved clsurf-kept clsurf-cell))
+          (print (clsurf-to-values (change-class (make-instance from) class))))
+        (print (clsurf-to-values (change-class (make-instance 'clsurf-none-2) class :a :given))))
     expected: |
       (CLSURF-SUB 1 42 7)
       (:T 42 1 NIL)
       (CLSURF-SUB 1 42)
       (3 4 :INITFORM-RAN)
+      (1 2 NIL)
+      (1 2 NIL)
+      (1 :MOVED NIL)
+      (:KEPT 2 NIL)
+      (1 :CELL NIL)
+      (:GIVEN 2 NIL)
   - name: clos-slot-options-and-metaobject-types
     source: |
       ;; The rest of that CLOS surface: :writer in both spellings, the
@@ -33402,6 +33465,65 @@ cases:
     expected: |
       (T T T T)
       T
+  - name: subtypep-reads-array-specifiers
+    source: |
+      ;; An array specifier compares by element type, dimensions and simplicity, against a
+      ;; name of the family or a compound, literal or computed; against any other name it
+      ;; is the vector or array it is. Two enumerations compare by their elements, and a
+      ;; deftype against a compound is its expansion against it. The pairs serapeum's
+      ;; dispatch and exhaustiveness macros ask are here. SBCL 2.2.9 agrees.
+      (deftype sras-string () 'simple-string)
+      (deftype sras-keys () '(member :a :b :c))
+      (defmacro sras (&rest pairs)
+        `(print (list ,@(mapcar (lambda (pair)
+                                  `(list (multiple-value-list (subtypep ',(first pair) ',(second pair)))
+                                         (let ((a ',(first pair)) (b ',(second pair)))
+                                           (multiple-value-list (subtypep a b)))))
+                                pairs))))
+      (sras ((simple-array character (*)) string)
+            ((simple-array character (*)) simple-string)
+            ((simple-array character (3)) (simple-array character (*)))
+            ((vector character 3) string)
+            ((array bit (*)) bit-vector)
+            ((simple-array t (*)) simple-vector)
+            (simple-vector (simple-array t (*)))
+            ((simple-array character (*)) (simple-array character))
+            ((simple-array character (* *)) (array * 2)))
+      (sras ((simple-array character (*)) vector)
+            ((simple-array character (*)) sequence)
+            ((simple-array fixnum (* *)) array)
+            ((simple-array character (*)) (or integer string)))
+      (sras (string (simple-array character (*)))
+            ((array character (*)) simple-string)
+            ((vector t) string)
+            ((simple-array fixnum (* *)) vector)
+            (bit-vector (simple-array bit (*)))
+            ((simple-array character (3)) (simple-array character (4)))
+            ((simple-array character (*)) (simple-array character (* *))))
+      (deftype sras-name () '(and symbol (not (member t nil))))
+      (deftype sras-designator () '(or null sras-name function))
+      (sras (sras-name sras-designator))
+      (sras ((simple-array character (*)) sras-string)
+            (sras-string (array * (*)))
+            ((member :a) (member :a :b))
+            ((eql :a) (member :a :b))
+            ((member :a) sras-keys)
+            (sras-keys (member :a :b :c :d)))
+      (sras ((member :a :b) (eql :a))
+            ((member :d) sras-keys)
+            (sras-keys (member :a :b)))
+      (print (list (subtypep '(simple-array fixnum (* *)) 'sequence)
+                   (subtypep '(simple-array character (*)) 'integer)
+                   (let ((a '(simple-array fixnum (* *)))) (subtypep a 'sequence))
+                   (let ((a '(simple-array character (*)))) (subtypep a 'integer))))
+    expected: |
+      (((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)))
+      (((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)))
+      (((NIL T) (NIL T)) ((NIL T) (NIL T)) ((NIL T) (NIL T)) ((NIL T) (NIL T)) ((NIL T) (NIL T)) ((NIL T) (NIL T)) ((NIL T) (NIL T)))
+      (((T T) (T T)))
+      (((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)) ((T T) (T T)))
+      (((NIL T) (NIL T)) ((NIL T) (NIL T)) ((NIL T) (NIL T)))
+      (NIL NIL NIL NIL)
   - name: type-specifier-of-a-declaration-is-no-macro-call
     source: |
       ;; serapeum's -> is a type and a macro, and declaims in a labels: the walk over a

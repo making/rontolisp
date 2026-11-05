@@ -302,7 +302,7 @@ table is GENERATED from it. **Change them together.**
 - **Any other head as the SUB reduces to that head and re-tests** (`(integer 0 10)` <= `integer`);
   the same reduction on the SUPER would be unsound, so `(subtypep 'integer '(integer 0 10))` stays
   nil (SBCL agrees). `(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)` stay unknown
-  (`OPAQUE_COMPOUND_TYPE_HEADS`), which the VALID-P below reports as such.
+  (`OPAQUE_COMPOUND_TYPE_HEADS`) but for two enumerations, below, which the VALID-P below reports as such.
 - **Integer INTERVALS decide by containment** (`.todo/919`): `(unsigned-byte n)`, `(signed-byte n)`,
   `(integer lo hi)` (exclusive `(k)` bounds, `*`), `(mod n)` and the names `bit` / `fixnum` (64 bits on
   all four, since 2026-11-05: coalton's load asks `(subtypep '(signed-byte 32) 'fixnum)`; ci-spec
@@ -319,6 +319,20 @@ table is GENERATED from it. **Change them together.**
   `types-and-classes` 2026-09-22: +18 (`SUBTYPEP.INTEGER.*`), 0 regressed. Pins
   `LispEvaluatorTest#subtypepDecidesIntegerIntervals` + the JVM / WASM
   `compileSubtypepIntegerIntervals` twins.
+- **A deftype name against a deftype name** tries the super's expansion alone first (`namedSubtypep`): a
+  branch of it may name the sub (serapeum's `key-designator` holds `function-name`), which expanding both
+  loses. The VALID-P reads through deftypes: a name standing for a compound is not a plain name.
+- **Array specifiers decide by their parts** (2026-11-05, serapeum's `with-type-dispatch` and
+  `vector-dispatch`): with a compound on one side, two of `array`, `simple-array`, `vector`,
+  `simple-vector`, `string`, `simple-string`, `base-string`, `simple-base-string`, `bit-vector`,
+  `simple-bit-vector` and their compounds compare upgraded element type, dimensions and simplicity
+  (`macro/ArrayTypeShape`), exact, so a nil is a decision; against another name one is the vector or
+  array it is. **Deviation**: a string IS `(array character (*))` here, one character type, where SBCL
+  has base strings besides. Two `(member ...)`/`(eql x)` compare elements. A deftype name against
+  a compound is its expansion against it. Runtime twin: `RUNTIME_SUBTYPEP_ARRAY_SOURCE`
+  (`%subtypep-parts-rule`, `%subtypep-deftypes%` without the circular names), ahead of the compound
+  template in every computed-`subtypep` program. An element a deftype names reads as `t` there.
+  Pin: ci-spec `subtypep-reads-array-specifiers`.
 - **A CIRCULAR `deftype` is an unknown type name, never an endless expansion** (2026-09-24,
   `.todo/954`). `subtypep` threads the deftype names being expanded on the current path and does
   not expand one again, so postmodern's `(deftype tsvector () 'tsvector)` answers nil against
