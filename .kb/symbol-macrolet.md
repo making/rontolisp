@@ -63,7 +63,8 @@ is never referenced, only stored into by one macro and read by a later one).
   `evalSetq` rewrites to `(setf expansion value)`. `symbol-value` does not see the name.
 - Compile paths: `UserMacroExpander.harvestSymbolMacros` runs per top-level form after `expandAll`,
   registers and REMOVES definitions reachable through `progn`/`eval-when`; `Session.emitted`
-  substitutes each form emitted after that. Activated by `usesDefineSymbolMacro`.
+  substitutes each form emitted after that. Activated by `usesDefineSymbolMacro`. A form a compiled
+  `eval` runs is data to all of this; `_eval` has its own table ([eval-runtime.md](eval-runtime.md)).
 - **The table holds RESOLVED names**, and the pass emits an untouched form in its original spelling.
   A form mentioning a symbol macro therefore emits its resolved spelling: until 2026-11-04 the
   substitution ran over the original one at the end of the pass, so a bare `SM` under

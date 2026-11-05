@@ -188,6 +188,42 @@ public final class LispNames {
 	 */
 	public static final String EVAL_ROW_LABELS = "%EVAL-ROW-LABELS";
 
+	/** The variable an eval'd {@code macrolet} keeps its alist of expanders in. */
+	public static final String EVAL_LOCAL_MACROS = "%EVAL-MACROS";
+
+	/**
+	 * The table row of {@code macrolet}: its presence switches the local-macro lookup on.
+	 */
+	public static final String EVAL_ROW_MACROLET = "%EVAL-ROW-MACROLET";
+
+	/**
+	 * The head of the value a binding of an eval'd {@code symbol-macrolet} holds:
+	 * {@code (mark . expansion)}.
+	 */
+	public static final String EVAL_SYMBOL_MACRO = "%EVAL-SYMBOL-MACRO";
+
+	/**
+	 * The table row of {@code symbol-macrolet}: its presence makes a read and an
+	 * assignment of a lexical binding look for the mark.
+	 */
+	public static final String EVAL_ROW_SYMBOL_MACROLET = "%EVAL-ROW-SYMBOL-MACROLET";
+
+	/** The global alist of what an eval'd {@code define-symbol-macro} defined. */
+	public static final String EVAL_GLOBAL_SYMBOL_MACROS = "%EVAL-SYMBOL-MACROS%";
+
+	/**
+	 * The table row of {@code define-symbol-macro}: its presence makes a name no variable
+	 * answers look in that alist.
+	 */
+	public static final String EVAL_ROW_DEFINE_SYMBOL_MACRO = "%EVAL-ROW-DEFINE-SYMBOL-MACRO";
+
+	/**
+	 * The dispatch over the program's {@code (setf name)} functions, generated from the
+	 * final set: {@code (op args value)} answers the form that calls the one a place
+	 * names, nil for a name none is for.
+	 */
+	public static final String EVAL_SETF_FORM = "%EVAL-SETF-FORM";
+
 	/**
 	 * Internal (compile-path only): the shared runtime a {@code progv} site binds its
 	 * runtime symbols through -- {@code (%progv-bind symbols values)} binds each name and
@@ -1241,6 +1277,13 @@ public final class LispNames {
 	 * current readtable is not the standard one ({@code .kb/readtables.md}).
 	 */
 	public static final String READ_DELIMITED_LIST = "READ-DELIMITED-LIST";
+
+	/**
+	 * The {@code read-preserving-whitespace} standard function: a prelude defun over the
+	 * same scan as {@code read}, leaving the terminating whitespace character in the
+	 * stream.
+	 */
+	public static final String READ_PRESERVING_WHITESPACE = "READ-PRESERVING-WHITESPACE";
 
 	/**
 	 * The {@code readtable-case} standard function and its {@code setf} place: the
@@ -11342,6 +11385,15 @@ public final class LispNames {
 	 * gated on a reference, like the allocate-instance runtime).
 	 */
 	public static final String CLASS_DIRECT_SUBCLASSES_INTERNAL = "%CLASS-DIRECT-SUBCLASSES";
+
+	/**
+	 * The internal {@code %class-default-initargs} behind
+	 * {@code closer-mop:class-default-initargs}: AMOP's {@code (initarg form function)}
+	 * list, from the registry on the interpreter, a generated dispatch defun on the
+	 * compile paths (injected gated on a reference, like
+	 * {@link #CLASS_DIRECT_SUBCLASSES_INTERNAL}).
+	 */
+	public static final String CLASS_DEFAULT_INITARGS_INTERNAL = "%CLASS-DEFAULT-INITARGS";
 
 	/**
 	 * The {@code %mop-fill-slots} initarg fill of the metaclass protocol:

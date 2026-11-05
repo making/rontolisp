@@ -55,9 +55,9 @@
 ;;;;   spelling, and the lowering refuses it loudly rather than silently
 ;;;;   reinterpreting it. `concatenate-files` spells `:supersede` for the same
 ;;;;   reason (upstream's `:rename-and-delete` has no atomic-rename surface).
-;;;; - `slurp-stream-forms` reads with `read`, not `read-preserving-whitespace`
-;;;;   (which does not exist): preserving the whitespace only matters to a caller
-;;;;   that keeps positions, and a slurp keeps forms.
+;;;; - `slurp-stream-forms` reads with `read`, not `read-preserving-whitespace`:
+;;;;   preserving the whitespace only matters to a caller that keeps positions, and
+;;;;   a slurp keeps forms.
 ;;;; - `safe-read-from-string` reads through `with-input-from-string` + `read`,
 ;;;;   not `read-from-string`: the compile paths compile `read-from-string` with
 ;;;;   one argument only, while prelude `read` honors `eof-error-p`/`eof-value`

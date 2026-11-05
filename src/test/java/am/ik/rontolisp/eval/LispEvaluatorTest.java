@@ -8460,6 +8460,16 @@ class LispEvaluatorTest {
 		assertThat(eval("(list (macrolet ((m () 1)) (m)) 2)").print()).isEqualTo("(1 2)");
 		// An extended lambda list (rest) is destructured like defmacro.
 		assertThat(eval("(macrolet ((mklist (&rest xs) `(list ,@xs))) (mklist 1 2 3))").print()).isEqualTo("(1 2 3)");
+		// The body is top-level forms (CLHS 3.2.3.1), as when SBCL loads it: a member
+		// expands once the one before it has run, through progn, eval-when and locally.
+		assertThat(evalMulti("""
+				(defvar *mlt-seen* nil)
+				(defmacro mlt-seen () `',*mlt-seen*)
+				(macrolet ((both (x)
+				             `(progn (eval-when (:execute) (push ,x *mlt-seen*) (push (mlt-seen) *mlt-seen*))
+				                     (locally (push 3 *mlt-seen*) (mlt-seen)))))
+				  (both 1))
+				""").print()).isEqualTo("(3 (1) 1)");
 	}
 
 	@Test
@@ -19758,6 +19768,37 @@ class LispEvaluatorTest {
 				        (ec-a (make-instance 'ec-sub)) (ec-b (make-instance 'ec-sub :b 2))
 				        (ec-what (make-instance 'ec-sub))))
 				""").print()).isEqualTo("(T EC-SUB :HELLO 1 2 :SUB)");
+		// A forward-referenced class is no standard class and leaves its subclasses
+		// unfinalized; moved to another name and defined there it stays the object they
+		// hold, of its definition's metaclass, McCLIM's forward-referenced presentation
+		// types. SBCL 2.2.9 agrees.
+		assertThat(evalMulti("""
+				(asdf:load-system "closer-mop")
+				(defclass frc-fwd (closer-mop:forward-referenced-class) ())
+				(defclass frc-meta (standard-class) ((tag :initarg :tag :initform nil :accessor frc-tag)))
+				(defmethod closer-mop:validate-superclass ((c frc-meta) (s class)) t)
+				(defvar *sup* (closer-mop:ensure-class 'frc-sup :metaclass 'frc-fwd :direct-superclasses nil))
+				(defvar *sub* (closer-mop:ensure-class 'frc-sub :metaclass 'frc-meta :direct-superclasses (list *sup*)))
+				(setq *before* (list (class-name (class-of *sup*)) (typep *sup* 'standard-class) (typep *sup* 'class)
+				                     (typep *sup* 'closer-mop:forward-referenced-class)
+				                     (closer-mop:class-finalized-p *sup*) (closer-mop:class-direct-superclasses *sup*)
+				                     (closer-mop:class-finalized-p *sub*)))
+				(setf (find-class 'frc-sup) nil
+				      (find-class 'frc-sup2) *sup*
+				      (class-name *sup*) 'frc-sup2)
+				(let ((c (closer-mop:ensure-class 'frc-sup2 :name 'frc-sup2 :metaclass 'frc-meta
+				                                  :direct-superclasses nil :tag :defined)))
+				  (closer-mop:finalize-inheritance *sub*)
+				  (list *before*
+				        (list (eq c *sup*) (find-class 'frc-sup nil) (eq c (find-class 'frc-sup2))
+				              (class-name (class-of c)) (frc-tag c) (typep c 'standard-class)
+				              (mapcar #'class-name (closer-mop:class-direct-superclasses *sub*)))
+				        (list (closer-mop:class-finalized-p *sub*)
+				              (and (member c (closer-mop:class-precedence-list *sub*)) t)
+				              (subtypep *sub* c)
+				              (typep (closer-mop:class-prototype *sub*) c))))
+				""").print())
+			.isEqualTo("((FRC-FWD NIL T T NIL NIL NIL) (T NIL T FRC-META :DEFINED T (FRC-SUP2)) (T T T T))");
 	}
 
 	@Test

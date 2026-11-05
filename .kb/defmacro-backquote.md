@@ -89,6 +89,12 @@ like trivia the memo turns hundreds of repeated expansions into one per site.
   program always did; same shrinkage for [gensym-macroexpand.md](gensym-macroexpand.md).
   Built-in macros stay re-expanded per evaluation through `LispMacroExpander.expand*`.
 
+## A macro body is a block named after the macro
+`LispEvaluator.makeUserMacro` wraps a `defmacro`, `macrolet` or `define-compiler-macro` body in
+`(block NAME ...)` only when it spells `(return-from NAME ...)`: a block is a catch per expansion, and
+macro expansion is the compile paths' hot path. Before 2026-11-05 such a body failed on all four
+backends (`RETURN-FROM: no enclosing block`); SBCL answers. ci-spec `eval-binds-macros-in-its-environment`.
+
 ## `destructuring-bind` + macro lambda lists (shared machinery)
 `LispMacroExpander.expandDestructuringBind` (`CL_MACROS`; wired into the evaluator, all three
 compilers, `FreeVarAnalyzer`, and the `rewriteLocalCalls`/`UserMacroExpander.expandAll`

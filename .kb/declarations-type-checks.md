@@ -43,7 +43,7 @@ Seven `LispMacroExpander` expansions (no per-backend codegen), in `PackageRegist
   no-registry overload is for `FreeVarAnalyzer`, `ConditionTagScan`, `macroexpand-1` and `--no-gc`
   (no classes there), none of which runs a class test. A false refusal is the risk, so:
   `checkableTypeSpec` widens, in a positive position, what `typep` answers empty here on purpose
-  (`generic-function` -> `(or function ...)`, `structure-class`/`built-in-class` -> `class`,
+  (`generic-function` -> `(or function ...)`, `structure-class` -> `class`,
   `logical-pathname` -> `pathname`, `extended-char` -> `character`); a specifier nothing defines
   still passes, as does `restart` (a restart is a cons here; `typep` answers nil), and SBCL's
   run-time error is not copied because a class can be defined at run time on a compile path. The
@@ -120,8 +120,9 @@ form may be evaluated several times, so callers bind a temp (`__check-type` / `_
   gate off it compiles to constant nil, also correct.
 - **EMPTY types** (constant-nil, agreeing with runtime `typep`, all in `PackageRegistry.CL_TYPES`):
   `generic-function`/`standard-generic-function` (a defgeneric dispatcher is a plain function value
-  with no marker), `structure-class`/`built-in-class` (a defstruct class metaobject IS a
-  standard-class) -- the last two routing trivia level2 onto its portable fallbacks.
+  with no marker), `structure-class` (a defstruct class metaobject IS a standard-class) --
+  routing trivia level2 onto its portable fallback; `built-in-class` is a seeded class
+  ([clos.md](clos.md), "MOP boundary").
   `bit-vector`/`simple-bit-vector` used to be empty (no bit-vector value existed); since
   `.todo/043` they test the remembered element type `bit` behind the `%arrayp` guard, rank 1
   pinned, the `simple-` spelling ANDing `%simple-array-p` like every other `simple-` spelling.

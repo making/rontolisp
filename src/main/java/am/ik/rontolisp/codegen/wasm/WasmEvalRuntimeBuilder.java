@@ -101,14 +101,21 @@ final class WasmEvalRuntimeBuilder {
 	 * {@code _store} has no arm for
 	 * @param specialLet whether an eval'd {@code let} asks if it binds a special
 	 * @param localFunctions whether {@code flet} or {@code labels} can bind a name
+	 * @param localMacros whether {@code macrolet} can bind a name
+	 * @param symbolMacros whether a lexical binding can hold a symbol macro
+	 * @param globalSymbolMacros whether {@code define-symbol-macro} can define a name
+	 * @param setfForms whether the module carries the dispatch over the program's
+	 * {@code (setf name)} functions
 	 * @param dispatched the built-ins the program defines a method on
 	 * ({@code ShadowedBuiltins.runTimeNames}): a call of one reaches the registry, past
 	 * any arm of its name
 	 */
 	record EvalHooks(int valueChannel, boolean expansion, boolean placeExpansion, boolean specialLet,
-			boolean localFunctions, java.util.Set<String> dispatched) {
+			boolean localFunctions, boolean localMacros, boolean symbolMacros, boolean globalSymbolMacros,
+			boolean setfForms, java.util.Set<String> dispatched) {
 
-		static final EvalHooks NONE = new EvalHooks(-1, false, false, false, false, java.util.Set.of());
+		static final EvalHooks NONE = new EvalHooks(-1, false, false, false, false, false, false, false, false,
+				java.util.Set.of());
 
 		/**
 		 * What the arm answering {@code op} without asking the registry compares the
@@ -119,6 +126,26 @@ final class WasmEvalRuntimeBuilder {
 			return this.dispatched.contains(op) ? -1 : off.of(op);
 		}
 
+	}
+
+	/**
+	 * Opens an {@code if} entered when the local at {@code valueSlot} holds what a
+	 * binding of a symbol macro holds, {@code (mark . expansion)}. The caller closes it
+	 * with three {@code end}s.
+	 */
+	private static void emitOpenSymbolMacro(WasmWriter w, int valueSlot, int markOffset) {
+		getLocal(w, valueSlot);
+		refTest(w, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.IF, 0x40);
+		emitCarOf(w, valueSlot);
+		refTest(w, WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, 0x40);
+		emitCarOf(w, valueSlot);
+		refCast(w, WasmLispCompiler.TYPE_STRING);
+		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
+		i32(w, markOffset);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
 	}
 
 	/**
@@ -164,6 +191,33 @@ final class WasmEvalRuntimeBuilder {
 	private static void emitOpenLocalFunction(WasmWriter w, int offSlot, int envSlot, int tmpSlot, int localsOffset) {
 		i32(w, localsOffset);
 		getLocal(w, envSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		setLocal(w, tmpSlot);
+		getLocal(w, tmpSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, offSlot);
+		emitCdrOf(w, tmpSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		setLocal(w, tmpSlot);
+		getLocal(w, tmpSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+	}
+
+	/**
+	 * Opens an {@code if} entered with the binding of the name at {@code offSlot} in the
+	 * alist of the global symbol macros, left in {@code tmpSlot}. The alist is read
+	 * through the mirror: a global's first mirrored store comes here, before the alist's
+	 * defvar has run. The caller closes it with two {@code end}s.
+	 */
+	private static void emitOpenGlobalSymbolMacro(WasmWriter w, int offSlot, int tmpSlot, int macrosOffset) {
+		i32(w, macrosOffset);
+		emitGetGlobalEnv(w);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		setLocal(w, tmpSlot);
@@ -775,6 +829,20 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
+		// A symbol macro's binding answers its expansion, evaluated here.
+		if (hooks.symbolMacros()) {
+			emitCdrOf(w, TMP);
+			setLocal(w, ACC);
+			emitOpenSymbolMacro(w, ACC, off.of(LispNames.EVAL_SYMBOL_MACRO));
+			emitCdrOf(w, ACC);
+			getLocal(w, ENV);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
 		emitCdrOf(w, TMP);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -822,6 +890,17 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, VAL);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
+		// A global symbol macro: what no variable holds.
+		if (hooks.globalSymbolMacros()) {
+			emitOpenGlobalSymbolMacro(w, OFF, TMP, off.of(LispNames.EVAL_GLOBAL_SYMBOL_MACROS));
+			emitCdrOf(w, TMP);
+			getLocal(w, ENV);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
 		if (unbound != null) {
 			unbound.emitThrow(w, VAL, TMP);
 		}
@@ -1477,7 +1556,25 @@ final class WasmEvalRuntimeBuilder {
 		// ---- generic named application ----
 		// Lisp-2: the operator resolves in the function namespace only. Variable
 		// bindings (lexical or global) never shadow a function. A local function of flet
-		// or labels comes before every global one.
+		// or labels comes before every global one, and a local macro before those: flet
+		// and labels take a name they bind out of the macros' alist.
+		if (hooks.localMacros()) {
+			emitOpenLocalFunction(w, OFF, ENV, TMP, off.of(LispNames.EVAL_LOCAL_MACROS));
+			emitCdrOf(w, TMP);
+			setLocal(w, FN);
+			getLocal(w, FN);
+			getLocal(w, VAL);
+			emitNull(w);
+			WasmEmitHelper.emitNewCons(w, identityHash);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
+			getLocal(w, ENV);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
 		if (hooks.localFunctions()) {
 			emitOpenLocalFunction(w, OFF, ENV, TMP, off.of(LispNames.EVAL_LOCAL_FUNCTIONS));
 			emitCdrOf(w, TMP);
@@ -2226,10 +2323,47 @@ final class WasmEvalRuntimeBuilder {
 		refCast(w, WasmLispCompiler.TYPE_STRING);
 		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
 		setLocal(w, OFF);
+		// A symbol macro's binding assigns its expansion, a place like any other.
+		if (hooks.symbolMacros()) {
+			getLocal(w, OFF);
+			getLocal(w, ENV);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+			setLocal(w, TMP);
+			getLocal(w, TMP);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+			emitCdrOf(w, TMP);
+			setLocal(w, TARGET);
+			emitOpenSymbolMacro(w, TARGET, off.of(LispNames.EVAL_SYMBOL_MACRO));
+			emitCdrOf(w, TARGET);
+			getLocal(w, VALUE);
+			getLocal(w, ENV);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
 		// lexical binding?
 		emitStoreToBindingIfFound(w, OFF, ENV, VALUE, TMP, false);
 		// global binding?
 		emitStoreToBindingIfFound(w, OFF, ENV, VALUE, TMP, true);
+		// A global symbol macro: what no variable holds.
+		if (hooks.globalSymbolMacros()) {
+			emitOpenGlobalSymbolMacro(w, OFF, TMP, off.of(LispNames.EVAL_GLOBAL_SYMBOL_MACROS));
+			emitCdrOf(w, TMP);
+			getLocal(w, VALUE);
+			getLocal(w, ENV);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
 		// not bound anywhere: prepend a new binding to the global environment
 		getLocal(w, PLACE);
 		getLocal(w, VALUE);
@@ -2317,6 +2451,26 @@ final class WasmEvalRuntimeBuilder {
 			w.write(Instruction.I32_EQ);
 			w.write(Instruction.IF, 0x40);
 			emitCallRegistered(w, off.of(LispNames.EVAL_PLACE_EXPANSION), identityHash, OP, TMP, VALUE);
+			setLocal(w, TARGET);
+			getLocal(w, TARGET);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+			getLocal(w, TARGET);
+			getLocal(w, ENV);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
+		// Nor a row: the place's (setf name) function, when the program defines one.
+		if (hooks.setfForms()) {
+			getLocal(w, FIELD);
+			i32(w, -1);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			emitCallRegistered(w, off.of(LispNames.EVAL_SETF_FORM), identityHash, OP, TMP, VALUE);
 			setLocal(w, TARGET);
 			getLocal(w, TARGET);
 			w.write(Instruction.REF_IS_NULL);
