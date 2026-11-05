@@ -1,5 +1,6 @@
 package am.ik.rontolisp;
 
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -29,17 +30,28 @@ import java.util.List;
 public record LispStructLiteral(String typeName, List<String> slotNames, List<LispVal> slotValues) implements LispVal {
 
 	/**
-	 * Canonicalizes the collections so a literal is deeply immutable.
+	 * Takes private copies of the collections; only {@link #setSlotValue} changes one.
 	 * @param typeName the structure type name as spelled
 	 * @param slotNames the slot names as spelled
 	 * @param slotValues the slot values
 	 */
 	public LispStructLiteral {
 		slotNames = List.copyOf(slotNames);
-		slotValues = List.copyOf(slotValues);
+		slotValues = Arrays.asList(slotValues.toArray(LispVal[]::new));
 		if (slotNames.size() != slotValues.size()) {
 			throw new IllegalArgumentException("#S literal: slot name/value counts differ");
 		}
+	}
+
+	/**
+	 * Replaces one slot value: a {@code #n=} reader label holding itself (CLHS 2.4.8.3)
+	 * closes its circle through a literal the way it does through a cons or an array, and
+	 * a copy of such a datum has to exist before its values do.
+	 * @param index the position in {@link #slotValues()}
+	 * @param value the new value
+	 */
+	public void setSlotValue(int index, LispVal value) {
+		this.slotValues.set(index, value);
 	}
 
 	@Override

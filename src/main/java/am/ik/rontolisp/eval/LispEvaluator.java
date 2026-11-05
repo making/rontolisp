@@ -1843,6 +1843,20 @@ public final class LispEvaluator {
 			}
 			return list;
 		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_PRINT_FRAME, new LispFunction(LispNames.OBJ_PRINT_FRAME, args -> {
+			requireSingleArg(LispNames.OBJ_PRINT_FRAME, args);
+			if (!(args.get(0) instanceof LispInstance inst) || inst.layout().kind() == LispLayout.Kind.PATHNAME
+					|| inst.layout().kind() == LispLayout.Kind.OPAQUE) {
+				return LispNil.INSTANCE;
+			}
+			LispVal list = LispNil.INSTANCE;
+			for (int i = inst.slotCount() - 1; i >= 0; i--) {
+				list = new LispCons(new LispString(inst.layout().slotNames().get(i)), list);
+			}
+			list = new LispCons(new LispString(inst.layout().printName()), list);
+			return new LispCons(inst.layout().kind() == LispLayout.Kind.CLASS ? LispTrue.INSTANCE : LispNil.INSTANCE,
+					list);
+		}));
 		this.globalEnv.defineFunction(LispNames.CLASS_OF, new LispFunction(LispNames.CLASS_OF, args -> {
 			requireSingleArg(LispNames.CLASS_OF, args);
 			// The class METAOBJECT of any value: the memoized standard-class instance
@@ -3271,6 +3285,22 @@ public final class LispEvaluator {
 					requireSingleArg(LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL, args);
 					return eval(new LispCons(new LispSymbol(LispNames.PRINT_RADIXED_INTERNAL),
 							new LispCons(quoteValue(args.get(0)), LispNil.INSTANCE)), this.globalEnv);
+				}));
+		this.globalEnv.defineFunction(LispNames.PRINT_OBJECT_DEFAULT_INTERNAL,
+				new LispFunction(LispNames.PRINT_OBJECT_DEFAULT_INTERNAL, args -> {
+					requireSingleArg(LispNames.PRINT_OBJECT_DEFAULT_INTERNAL, args);
+					// A direct call can be this program's first use of the printer.
+					ensurePrintObjectRuntimeLoaded(printControlsInEffect());
+					return eval(LispMacroExpander.expandPrintObjectDefault(quoteValue(args.get(0)), true),
+							this.globalEnv);
+				}));
+		this.globalEnv.defineFunction(LispNames.PRINT_CASED_TYPE_NAME_INTERNAL,
+				new LispFunction(LispNames.PRINT_CASED_TYPE_NAME_INTERNAL, args -> {
+					requireSingleArg(LispNames.PRINT_CASED_TYPE_NAME_INTERNAL, args);
+					return printControlsInEffect()
+							? eval(LispMacroExpander.expandPrintedTypeName(quoteValue(args.get(0)), true),
+									this.globalEnv)
+							: args.get(0);
 				}));
 		// The package half of %print-cased's fast path: under the pristine cl-user no
 		// qualified symbol is accessible, so the raw conversion is exact.
@@ -5751,7 +5781,8 @@ public final class LispEvaluator {
 	 * @return the form with every read-time-eval marker resolved
 	 */
 	public LispVal resolveReadTimeEvalInCode(LispVal form) {
-		return resolveReadTimeEval(form, true);
+		// A #. value is a datum the read never saw, and may hold a circle.
+		return LispTrees.shieldProgramForm(resolveReadTimeEval(form, true));
 	}
 
 	private LispVal resolveReadTimeEval(LispVal form, boolean inCode) {
@@ -8602,6 +8633,7 @@ public final class LispEvaluator {
 			// runtime read, say) is folded here, so evaluating it always yields the
 			// instance rather than a carrier leaking into user data.
 			case LispStructLiteral literal -> singleValue(StructLiteralFolder.fold(literal, this.closRegistry));
+			case am.ik.rontolisp.LispCircularLiteral literal -> singleValue(LiteralArrays.materialize(literal.datum()));
 			// Every other value -- a number, a string, a character, nil and t, a
 			// function or closure, a stream, an instance, a quantized matrix a
 			// macro-time form handed back -- is self-evaluating.
@@ -13287,7 +13319,7 @@ public final class LispEvaluator {
 	 */
 	private LispVal expandMacroCall(String name, UserMacro macro, LispCons form, @Nullable Environment site) {
 		List<LispVal> args = macro.expander() != null ? List.of()
-				: form.cdr() instanceof LispCons argCons ? argCons.toList() : List.of();
+				: LispTrees.exposeCircles(form.cdr()) instanceof LispCons argCons ? argCons.toList() : List.of();
 		if (args.size() < macro.required().size() || (macro.rest() == null && args.size() > macro.required().size())) {
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 					"Macro " + name + " expects " + (macro.rest() == null ? String.valueOf(macro.required().size())
@@ -13347,10 +13379,11 @@ public final class LispEvaluator {
 		shadowedMacros(java.util.Set.of());
 		try {
 			LispVal expansion = macro.expander() == null ? LispNil.INSTANCE
-					: applyGlobal(macro.expander(), List.of(form, expanderEnvironment));
+					: applyGlobal(macro.expander(), List.of(LispTrees.exposeCircles(form), expanderEnvironment));
 			for (LispVal bodyExpr : macro.body()) {
 				expansion = eval(bodyExpr, macroEnv);
 			}
+			expansion = LispTrees.shieldCircles(expansion);
 			markExpansionConstants(expansion, new java.util.IdentityHashMap<>());
 			return expansion;
 		}
@@ -14933,7 +14966,7 @@ public final class LispEvaluator {
 			// The interpreter always emits the vector arm: the gate the compile paths use
 			// exists to keep the array runtime out of an array-free ARTIFACT, and there
 			// is no artifact here.
-			for (LispVal form : LispMacroExpander.printObjectStrDefuns(this.closRegistry, controls, true, true)) {
+			for (LispVal form : LispMacroExpander.printObjectStrDefuns(this.closRegistry, controls, true, true, true)) {
 				eval(form, this.globalEnv);
 			}
 		}
@@ -15022,7 +15055,7 @@ public final class LispEvaluator {
 		// memoize a quoted datum to the same effect, so '#(1 2 3) is one
 		// shared constant everywhere while a bare #(1 2 3) is fresh everywhere --
 		// .kb/quoted-data.md.
-		return singleValue(rest.car());
+		return singleValue(am.ik.rontolisp.LispCircularLiteral.unwrapped(rest.car()));
 	}
 
 	/**

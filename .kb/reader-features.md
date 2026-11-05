@@ -336,17 +336,26 @@ Traps:
   an int label made `#123456789123456789=` a read error. The label is in scope INSIDE its own
   datum: a placeholder cons stands for it while the datum is read and `LispReader.patchLabel`
   replaces every reference by identity afterwards, so `#1=(A B . #1#)` is the circular list it
-  says. `StructLiteralFolder` therefore carries the aggregates on the CURRENT PATH and returns a
-  back edge unwalked -- it rebuilds what it changes, and a circular datum cannot be rebuilt.
-  `PackageResolver` copies the graph (`LispTrees.rewriteDatumSymbols`), so a quoted `#1=(a #1#)` and
-  `'(#1=(a) #1#)` hold on the interpreter in any package. Measured 2026-11-05: JVM and wasm answer NIL
-  for `(eq (car x) (cadr x))` over the second and overflow the stack on a circle through a car or an array
-  (the quote compilers build a tree), and a `#n#` naming a label from inside a `#S(...)` of that label is
-  not patched (`patchLabel` does not enter a literal).
-  In PROGRAM SOURCE a label that closes a list into its own TAIL is a read error
-  (`SourceLanguage.read`): the passes loop down the cdr and would never finish on one
-  ([interpreter-stack.md](interpreter-stack.md), "Depth is NESTING"). `read` at run time
-  still returns it.
+  says; `patchLabel` enters a `#S(...)` too (`LispStructLiteral.setSlotValue`).
+  **A circle in program source becomes an atom at the read seam** (2026-11-05):
+  `SourceLanguage` runs `LispTrees.shieldProgramForm` over every form of a source holding `#<digits>=`,
+  and `LispCircularLiteral` wraps a quoted datum whole, an array or `#S` whole, and otherwise the first
+  cell on the circle. A grep finds ~320 helpers that walk a form, and those that go through quoted data
+  recurse on the car, so a circle overflowed them one by one (the interpreter's `referencesTorch` on
+  `(print ...)` first, before the quote compilers on the compile path);
+  behind the atom every pass walks a tree, and nothing new has to learn about circles. Only these see
+  inside: `PackageResolver` (`LispTrees.rewriteDatumSymbols`), `StructLiteralFolder`, `evalQuote` and
+  `evalAtom`, both quote compilers. A user macro's arguments are unwrapped and its expansion shielded
+  again (`LispEvaluator.expandMacroCall`), so a macro sees the datum and a macro-made circle compiles;
+  a `#.` value is shielded where its marker resolves (`resolveReadTimeEvalInCode`).
+  A pass that decides by the symbols a program names (library splice, defun prune) reads data too, so
+  the form becomes `(progn '(hidden-symbols...) form)`: without it `(funcall (car '#1=(vec:dot #1#)) ...)`
+  answered `VEC:DOT is undefined` on the compile backends. This replaced the read error for a label
+  closing a list into its own tail, so `'#1=(a b . #1#)` is an ordinary constant.
+  Sharing without a circle stays in the form: a tree walk ends on it. What reaches the constant:
+  [quoted-data.md](quoted-data.md), "A label's graph". Measured the same day against SBCL:
+  every shape in ci-spec `reader-label-sharing-and-circles-in-a-constant` answers alike on the four
+  backends, except a bare `#(...)`, a constructor here ([array-literals.md](array-literals.md)).
 - **In a backquote template a labelled datum is template** (2026-11-05, McCLIM's
   `` `(letf ((#1=(cursor-visibility ,cursor) #1#) ...)) ``): `readRawTemplate` reads it (`readRawLabel`)
   and sends the template down the CLtL2 path, each use of the label expanding the same raw datum.

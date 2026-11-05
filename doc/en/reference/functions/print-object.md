@@ -6,13 +6,13 @@ The generic function the printer consults. Defining a [`defmethod`](../special-f
 
 The PRINTER only routes through the generic for a type some method specializes on: a type no method covers keeps the built-in rendering, and a program that defines no `print-object` method prints exactly as it did before.
 
-A DIRECT `(print-object object stream)` call is a different matter and always works, with or without a user method on the object -- Common Lisp supplies a system method for every object, and so does rontolisp. It writes the object's raw rendering (`*print-escape*` picking the `prin1` or the `princ` spelling) and returns the object, so defining a method on one class never loses the printer for the rest, and `(call-next-method)` out of the least specific method reaches it.
+A DIRECT `(print-object object stream)` call is a different matter and always works, with or without a user method on the object -- Common Lisp supplies a system method for every object, and so does rontolisp. It writes the object's built-in rendering (`*print-escape*` picking the `prin1` or the `princ` spelling) and returns the object, so defining a method on one class never loses the printer for the rest, and `(call-next-method)` out of the least specific method reaches it.
 
 ```lisp
 (with-output-to-string (s) (print-object 42 s)) ; => "42"
 ```
 
-One limit on the direct call: the system method renders raw, so a nested instance inside the value it is handed does not get its own method consulted. Printing through `print`/`princ`/`prin1` does walk into it, as below.
+A value inside what the system method renders gets its own method, on a direct call and out of `(call-next-method)` alike.
 
 A [`defstruct`](../special-forms/defstruct.md) `(:print-object fn)` / `(:print-function fn)` option is exactly a method on this generic, so the two are interchangeable and a later `defmethod` on the same type replaces the option's method.
 
@@ -30,7 +30,7 @@ The one built-in rendering that is not `#S(...)`/`#<...>` is a CONDITION's: `pri
 ; => ("/x" "#<URI /x>")
 ```
 
-The method is consulted wherever the instance SITS, not only when the printing operator is handed it directly: an element of a printed list or vector — at any depth, and in a dotted tail — goes through the method too.
+The method is consulted wherever the instance SITS, not only when the printing operator is handed it directly: an element of a printed list or vector — at any depth, and in a dotted tail — and a value in a structure or class slot go through the method too.
 
 ```lisp
 (defstruct po-node value)
@@ -40,6 +40,9 @@ The method is consulted wherever the instance SITS, not only when the printing o
 (list (princ-to-string (make-po-node :value 42))
       (princ-to-string (list (make-po-node :value 7) (vector (make-po-node :value 8)))))
 ; => ("#<PO-NODE 42>" "(#<PO-NODE 7> #(#<PO-NODE 8>))")
+(defstruct po-box content)
+(princ-to-string (make-po-box :content (list (make-po-node :value 9))))
+; => "#S(PO-BOX :CONTENT (#<PO-NODE 9>))"
 ```
 
-Lite: the containers walked that way are the list and the general one-dimensional vector. A value stored in a STRUCTURE or class slot, a hash table, an array of rank other than one or a specialized float vector is still rendered by the container's own printer, so a method on its type does not apply there.
+Lite: the containers walked that way are the list, the general one-dimensional vector and an instance's slots. A value stored in a hash table, an array of rank other than one or a specialized float vector is still rendered by the container's own printer, so a method on its type does not apply there.

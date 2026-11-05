@@ -298,7 +298,10 @@ takes a wrapper, whose whole content is the `drop`. Two documented divergences (
   type is a **non-memory scalar** (NOT `:string`/`:s-expr`), `Mem.used()` **and**
   `Mem.allocates()`, `compileWrapperBody` snapshots heap global 0 at entry (before arg
   boxing) and restores it just before `END`. Reclaims only wrapper-internal scratch — the
-  host's own pre-call input buffer sits below the mark and stays live.
+  host's own pre-call input buffer sits below the mark and stays live. A program declaring
+  the arena fields of `rontolisp:memory` (`Mem.programOwnsHeap`) gets no bracket: its allocator
+  export answers an address the host then writes into, and a bracket popping it hands the same
+  bytes to the next `alloc` (a Proxy-Wasm `proxy_on_memory_allocate` read back as garbage).
 - **`Mem.allocates()`** is the module-level answer to "can anything bump the heap during a
   call": a `:string` import RESULT (copied into a fresh block), a
   string-producing op (`concatenate`/`subseq`/`princ-to-string`), a packed vector, or

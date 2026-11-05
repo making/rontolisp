@@ -21,6 +21,13 @@
 ; => ("did not parse: x" "#<DC-REPORT-DEMO :INPUT \"x\">")
 ```
 
+プログラムが自分でシグナルした標準クラスも、そのクラスの組み込みシグナルと同じ文を、与えられたスロットから報告します。対象は `undefined-function`、`unbound-variable`、`type-error`、`division-by-zero` とそのサブクラスです。
+
+```lisp
+(handler-case (error 'undefined-function :name 'dc-missing)
+  (error (e) (princ-to-string e))) ; => "The function DC-MISSING is undefined"
+```
+
 ```console
 CL-USER> (error 'my-parse-error :input "x")
 Error: input did not parse

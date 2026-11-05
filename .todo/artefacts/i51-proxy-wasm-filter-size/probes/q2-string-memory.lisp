@@ -1,0 +1,6 @@
+(rontolisp:wasm-import '%str :from "rontolisp:memory" :as "string" :params '(:u32 :u32) :returns :string)
+(rontolisp:wasm-import '%log :from "env" :as "proxy_log" :params '(:s32 :string) :returns :s32)
+(defun lift (p) (%str p 1))
+(defun read-it (p f) (funcall f p))
+(defun f (x) (%log 2 (read-it x #'lift)) 0)
+(rontolisp:wasm-export 'f :as "f" :params '(:u32) :returns :s32)

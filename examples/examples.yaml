@@ -960,6 +960,21 @@ examples:
       a Proxy-Wasm filter on the SDK in proxy-wasm.lisp, spliced in by its require.
       A proxy calls it, so the harness only compiles; examples/proxy-wasm/check.sh
       runs it in a real Envoy under Docker and checks it with curl
+  - path: proxy-wasm/sdk-examples/http_body.lisp
+    backends: [wasm-reactor]
+    note: >-
+      a filter on ../proxy-wasm.lisp, compiled only here; proxy-wasm/sdk-examples/check.sh
+      runs it in a real Envoy
+  - path: proxy-wasm/sdk-examples/http_headers.lisp
+    backends: [wasm-reactor]
+    note: >-
+      a filter on ../proxy-wasm.lisp, compiled only here; proxy-wasm/sdk-examples/check.sh
+      runs it in a real Envoy
+  - path: proxy-wasm/sdk-examples/test_plugin.lisp
+    backends: [wasm-reactor]
+    note: >-
+      a filter on ../proxy-wasm.lisp, compiled only here; proxy-wasm/sdk-examples/check.sh
+      runs it in a real Envoy
 
   # --- browser/wit-component: a component loaded by a page, with no glue -------
   - path: browser/wit-component/fractal.lisp

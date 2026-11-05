@@ -147,6 +147,12 @@ declaration that differs is a compile error. `:async t` and
 and so does an access past the end of memory; nothing else protects the
 memory, so a store through a wrong address overwrites whatever is there.
 
+A program declaring `"alloc"`, `"mark"` or `"reset"` owns the heap: what it
+reserves stays reserved until it calls `"reset"`, across calls from the host. So
+an export can answer an address for the host to write into, and a long-lived
+instance has to pop its own scratch. Under `--no-gc` this also turns off the
+reset an export otherwise does when it returns a scalar.
+
 ```lisp
 (rontolisp:wasm-import '%alloc :from "rontolisp:memory" :as "alloc"
                        :params '(:u32) :returns :u32)

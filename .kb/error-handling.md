@@ -338,6 +338,22 @@ split, matching SBCL.
   (%princ-to-string x))`. A `print-object` method on a condition class still wins in BOTH modes.
 - **`%condition-report-str` answers nil when the class reports nothing** and every caller supplies
   its own fallback, so an under-approximating gate degrades to pre-report text instead of failing.
+- **A class whose built-in signal carries a text control reports with none too**
+  (`ClosRegistry.controlFreeReport`, 2026-11-05): `(error 'undefined-function :name 'f)` prints what `(f)`
+  prints, and likewise `unbound-variable`, `type-error`, `division-by-zero` and their subclasses, nearest
+  along the CPL; a control the program gave wins. The signal's message rides the same report, so an
+  uncaught one says so too, not `Condition (TYPE-ERROR :DATUM 1 ...) was signalled.`. Until then all four printed
+  `#<...>` on every backend. The arm exists only for
+  a class a site in the program names (`ConditionNarrowing.programTags`): one in the partition only for a
+  landing pad's synthesis always has a control, and a program catching `(/ 1 0)` does not pay for it.
+  The other classes with the pair (`arithmetic-error`, `file-error`, `package-error`, `program-error`,
+  `parse-error`) keep `#<...>`; SBCL says `Condition X was signalled.` for most of them. Wording is
+  this implementation's, as a built-in signal's is: SBCL ends the sentence with a period and qualifies the
+  function name. ci-spec `a-standard-condition-a-program-signals-reports-with-no-control`.
+- **`arithmetic-error` carries `operation` and `operands`** (2026-11-05, behind the message pair, so a
+  built-in signal's positional `%obj-new` is unchanged): `:operation`/`:operands` were ignored and
+  the two standard readers undefined. A failure the arithmetic signals leaves them nil where SBCL answers
+  `(/ (1 0))`: every division path would have to carry its operands to the signal.
 - **The class partition** (`conditionReportGroups`): a class's report is its own `:report`, else the
   nearest ancestor's along the SLOT-LAYOUT parent chain, else -- when it carries
   `format-control`/`format-arguments` -- CLHS's `simple-condition` report. Groups are keyed by report

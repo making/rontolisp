@@ -171,6 +171,7 @@ public final class LispTrees {
 		}
 		return switch (node) {
 			case LispSymbol sym -> rewrite.apply(sym) != sym;
+			case LispCircularLiteral literal -> datumChanges(literal.datum(), rewrite, seen);
 			case LispStructLiteral literal ->
 				seen.add(literal) && (!literal.typeName().equals(rewrittenTypeName(literal, rewrite))
 						|| anyDatumChanges(literal.slotValues(), rewrite, seen));
@@ -199,17 +200,14 @@ public final class LispTrees {
 		return switch (datum) {
 			case LispSymbol sym -> rewrite.apply(sym);
 			case LispCons head -> copyDatumSpine(head, rewrite, copies);
+			case LispCircularLiteral literal -> new LispCircularLiteral(copyDatum(literal.datum(), rewrite, copies));
 			case LispStructLiteral literal -> {
-				// The reader closes no circle through a literal (patchLabel does not
-				// enter
-				// one), so its values can be copied before it exists.
-				LispVal[] values = new LispVal[literal.slotValues().size()];
-				for (int i = 0; i < values.length; i++) {
-					values[i] = copyDatum(literal.slotValues().get(i), rewrite, copies);
-				}
-				LispVal out = new LispStructLiteral(rewrittenTypeName(literal, rewrite), literal.slotNames(),
-						List.of(values));
+				LispStructLiteral out = new LispStructLiteral(rewrittenTypeName(literal, rewrite), literal.slotNames(),
+						literal.slotValues());
 				copies.put(literal, out);
+				for (int i = 0; i < out.slotValues().size(); i++) {
+					out.setSlotValue(i, copyDatum(literal.slotValues().get(i), rewrite, copies));
+				}
 				yield out;
 			}
 			case LispArray array when isLiteralArray(array) -> {
@@ -246,7 +244,14 @@ public final class LispTrees {
 		}
 	}
 
-	private static LispCons copyCell(LispCons cell, Map<LispVal, LispVal> copies) {
+	/**
+	 * A copy of a cell with nothing in it yet, at the cell's source position, recorded in
+	 * {@code copies} so a circle through the cell finds it.
+	 * @param cell the cell
+	 * @param copies the copies so far, by identity
+	 * @return the empty copy
+	 */
+	static LispCons copyCell(LispCons cell, Map<LispVal, LispVal> copies) {
 		LispCons fresh = cell instanceof LocatedCons located
 				? new LocatedCons(LispNil.INSTANCE, LispNil.INSTANCE, located.file(), located.line())
 				: new LispCons(LispNil.INSTANCE, LispNil.INSTANCE);
@@ -290,43 +295,282 @@ public final class LispTrees {
 	}
 
 	/**
-	 * The first cell whose cdr chain leads back into itself, or {@code null} when every
-	 * list in the tree ends. A {@code #n=} reader label can close such a list
-	 * ({@code #1=(a b . #1#)}), and a walk that loops down the spine would never finish
-	 * on one -- so a caller that hands a tree to such walks refuses it first. Cycles
-	 * through a car are not reported: a walk recurses on the car and meets them as a
-	 * {@link StackOverflowError}, as before.
-	 * @param tree the tree to check, including the elements of any array in it
-	 * @return a cell of a circular spine, or {@code null}
+	 * Wraps every literal of a form that holds a circle in a {@link LispCircularLiteral},
+	 * so the form is a tree to every walk that follows: a quoted datum whole, an array or
+	 * a {@code #S(...)} literal whole, and otherwise the first node on the circle a walk
+	 * from the form reaches. Writes into the form, which the read made and nothing else
+	 * holds. A form with no circle comes back untouched.
+	 * @param form a form as read
+	 * @return the form, or the wrapper when the form itself is on a circle
 	 */
-	public static @Nullable LispCons circularSpine(LispVal tree) {
-		Set<LispVal> done = Collections.newSetFromMap(new IdentityHashMap<>());
-		Deque<LispVal> pending = new ArrayDeque<>();
-		pending.push(tree);
-		while (!pending.isEmpty()) {
-			LispVal node = pending.pop();
-			if (node instanceof LispArray array) {
-				if (done.add(array)) {
-					for (LispVal element : array.data()) {
-						pending.push(element);
-					}
-				}
-				continue;
+	public static LispVal shieldCircles(LispVal form) {
+		return new CircleShield(form).shield(form);
+	}
+
+	/**
+	 * {@link #shieldCircles} for a top-level form of program source. A pass that decides
+	 * what a program needs by the symbols it names -- a library's splice, a
+	 * dead-definition prune -- reads quoted data too, and a wrapper hides it:
+	 * {@code (progn '(names...)
+	 * form)} names them again where every such pass looks, and evaluates to the form.
+	 * @param form a top-level form as read
+	 * @return the form, shielded and with what its wrappers hide named beside it when it
+	 * holds a circle
+	 */
+	public static LispVal shieldProgramForm(LispVal form) {
+		CircleShield shield = new CircleShield(form);
+		LispVal shielded = shield.shield(form);
+		LispVal names = shield.hiddenSymbols();
+		if (names instanceof LispNil) {
+			return shielded;
+		}
+		LispVal quoted = new LispCons(ReaderSymbols.QUOTE, new LispCons(names, LispNil.INSTANCE));
+		return new LispCons(ReaderSymbols.PROGN, new LispCons(quoted, new LispCons(shielded, LispNil.INSTANCE)));
+	}
+
+	/**
+	 * Takes the wrappers back out of a form on its way to a macro, which has to see the
+	 * datum the source wrote: {@code (car x)} of a parameter bound to one is a program's
+	 * own business. {@link #shieldCircles} wraps what the macro answers again.
+	 * @param form a form
+	 * @return the form with every wrapper replaced by its datum, the form itself when it
+	 * holds none
+	 */
+	public static LispVal exposeCircles(LispVal form) {
+		if (!LispCircularLiteral.anyMade()) {
+			return form;
+		}
+		boolean wrapped = form instanceof LispCircularLiteral || anyCons(form,
+				cell -> cell.car() instanceof LispCircularLiteral || cell.cdr() instanceof LispCircularLiteral);
+		return wrapped ? exposed(form) : form;
+	}
+
+	private static LispVal exposed(LispVal form) {
+		return rebuildSpine(form, node -> (node instanceof LispCircularLiteral literal) ? literal.datum() : null,
+				LispTrees::exposed);
+	}
+
+	/**
+	 * What a node of a form points at: the conses, arrays and literals that can lead on,
+	 * and what a wrapper holds.
+	 * @param node the node
+	 * @return its children
+	 */
+	static List<LispVal> childNodes(LispVal node) {
+		List<LispVal> children = new ArrayList<>();
+		switch (node) {
+			case LispCons cell -> {
+				addNode(children, cell.car());
+				addNode(children, cell.cdr());
 			}
-			Set<LispCons> spine = Collections.newSetFromMap(new IdentityHashMap<>());
-			while (node instanceof LispCons cell && !done.contains(cell)) {
-				if (!spine.add(cell)) {
-					return cell;
+			case LispArray array -> {
+				for (LispVal element : array.data()) {
+					addNode(children, element);
 				}
-				pending.push(cell.car());
-				node = cell.cdr();
 			}
-			done.addAll(spine);
-			if (node instanceof LispArray) {
-				pending.push(node);
+			case LispStructLiteral literal -> literal.slotValues().forEach(value -> addNode(children, value));
+			case LispCircularLiteral literal -> addNode(children, literal.datum());
+			default -> {
 			}
 		}
-		return null;
+		return children;
+	}
+
+	/**
+	 * Whether a value is a node of a form's graph.
+	 * @param value the value, null for an unfilled array element
+	 * @return whether it can lead on
+	 */
+	static boolean isNode(@Nullable LispVal value) {
+		return value instanceof LispCons || value instanceof LispArray || value instanceof LispStructLiteral
+				|| value instanceof LispCircularLiteral;
+	}
+
+	private static void addNode(List<LispVal> nodes, @Nullable LispVal value) {
+		if (isNode(value)) {
+			nodes.add(value);
+		}
+	}
+
+	/** One depth-first walk of a form, and what it found. */
+	private static final class CircleShield {
+
+		/** The nodes with a path to a circle. */
+		private final Set<LispVal> leading = Collections.newSetFromMap(new IdentityHashMap<>());
+
+		/**
+		 * The nodes an edge returned to while the walk was still inside them. The first
+		 * node of a circle the walk reaches is always one, so a descent from the form
+		 * that stops at these stops before it can go round.
+		 */
+		private final Set<LispVal> closing = Collections.newSetFromMap(new IdentityHashMap<>());
+
+		private final Map<LispVal, LispVal> wrappers = new IdentityHashMap<>();
+
+		private final Set<LispCons> descended = Collections.newSetFromMap(new IdentityHashMap<>());
+
+		/** A node the walk is inside, and how many of its children it has seen. */
+		private static final class Visit {
+
+			final LispVal node;
+
+			int seen;
+
+			Visit(LispVal node) {
+				this.node = node;
+			}
+
+			/** The next child that can lead on, null when there is none. */
+			@Nullable LispVal nextChild() {
+				while (true) {
+					int index = this.seen++;
+					LispVal child;
+					switch (this.node) {
+						case LispCons cell -> {
+							if (index > 1) {
+								return null;
+							}
+							child = (index == 0) ? cell.car() : cell.cdr();
+						}
+						case LispArray array -> {
+							if (index >= array.data().length) {
+								return null;
+							}
+							child = array.data()[index];
+						}
+						case LispStructLiteral literal -> {
+							if (index >= literal.slotValues().size()) {
+								return null;
+							}
+							child = literal.slotValues().get(index);
+						}
+						default -> {
+							return null;
+						}
+					}
+					if (isCircleNode(child)) {
+						return child;
+					}
+				}
+			}
+
+		}
+
+		// What can be on a circle: a wrapper's circle is shielded already.
+		private static boolean isCircleNode(@Nullable LispVal value) {
+			return value instanceof LispCons || value instanceof LispArray || value instanceof LispStructLiteral;
+		}
+
+		CircleShield(LispVal form) {
+			if (!isCircleNode(form)) {
+				return;
+			}
+			Set<LispVal> open = Collections.newSetFromMap(new IdentityHashMap<>());
+			Set<LispVal> finished = Collections.newSetFromMap(new IdentityHashMap<>());
+			Deque<Visit> path = new ArrayDeque<>();
+			open.add(form);
+			path.push(new Visit(form));
+			while (!path.isEmpty()) {
+				Visit top = path.peek();
+				LispVal child = top.nextChild();
+				if (child == null) {
+					path.pop();
+					open.remove(top.node);
+					finished.add(top.node);
+					Visit parent = path.peek();
+					if (parent != null && this.leading.contains(top.node)) {
+						this.leading.add(parent.node);
+					}
+				}
+				else if (open.contains(child)) {
+					this.closing.add(child);
+					this.leading.add(top.node);
+				}
+				else if (!finished.contains(child)) {
+					open.add(child);
+					path.push(new Visit(child));
+				}
+				else if (this.leading.contains(child)) {
+					this.leading.add(top.node);
+				}
+			}
+		}
+
+		LispVal shield(LispVal node) {
+			if (!this.leading.contains(node)) {
+				return node;
+			}
+			if (node instanceof LispCons cell && !this.closing.contains(cell)) {
+				descend(cell);
+				return cell;
+			}
+			return wrap(node);
+		}
+
+		private LispVal wrap(LispVal node) {
+			return this.wrappers.computeIfAbsent(node, LispCircularLiteral::new);
+		}
+
+		/** The distinct symbols inside the wrappers, as a list; keywords name nothing. */
+		LispVal hiddenSymbols() {
+			Map<String, LispVal> symbols = new java.util.LinkedHashMap<>();
+			Set<LispVal> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+			Deque<LispVal> pending = new ArrayDeque<>(this.wrappers.keySet());
+			while (!pending.isEmpty()) {
+				LispVal node = pending.pop();
+				if (node instanceof LispSymbol sym) {
+					if (!sym.isKeyword()) {
+						symbols.putIfAbsent(sym.name(), sym);
+					}
+				}
+				else if (seen.add(node)) {
+					switch (node) {
+						case LispCons cell -> {
+							pending.push(cell.cdr());
+							pending.push(cell.car());
+						}
+						case LispArray array -> {
+							for (LispVal element : array.data()) {
+								if (element != null) {
+									pending.push(element);
+								}
+							}
+						}
+						case LispStructLiteral literal -> {
+							symbols.putIfAbsent(literal.typeName(), new LispSymbol(literal.typeName()));
+							literal.slotValues().forEach(pending::push);
+						}
+						default -> {
+						}
+					}
+				}
+			}
+			LispVal names = LispNil.INSTANCE;
+			for (LispVal symbol : symbols.values()) {
+				names = new LispCons(symbol, names);
+			}
+			return names;
+		}
+
+		/** Down a cdr spine in a loop, so a long form costs the stack nothing. */
+		private void descend(LispCons head) {
+			LispCons cell = head;
+			while (this.descended.add(cell)) {
+				if (cell.car() instanceof LispSymbol op && LispNames.isQuote(LispSymbol.memberName(op.name()))
+						&& cell.cdr() instanceof LispCons quoted && this.leading.contains(quoted.car())) {
+					quoted.setCar(wrap(quoted.car()));
+					return;
+				}
+				cell.setCar(shield(cell.car()));
+				if (!(cell.cdr() instanceof LispCons next) || !this.leading.contains(next)
+						|| this.closing.contains(next)) {
+					cell.setCdr(shield(cell.cdr()));
+					return;
+				}
+				cell = next;
+			}
+		}
+
 	}
 
 }

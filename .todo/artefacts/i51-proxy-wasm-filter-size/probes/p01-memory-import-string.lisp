@@ -1,0 +1,5 @@
+(rontolisp:wasm-import '%log :from "env" :as "proxy_log" :params '(:s32 :string) :returns :s32)
+(rontolisp:wasm-import '%load32 :from "rontolisp:memory" :as "load32" :params '(:u32) :returns :u32)
+(rontolisp:wasm-import '%str :from "rontolisp:memory" :as "string" :params '(:u32 :u32) :returns :string)
+(defun f (x) (%log 2 (%str x (%load32 x))) x)
+(rontolisp:wasm-export 'f :as "f" :params '(:u32) :returns :u32)

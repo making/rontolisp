@@ -124,8 +124,8 @@ Both take a function DESIGNATOR and lower to ONE synthesized
 `(defmethod print-object ((obj <struct>) stream) (funcall fn obj stream [0]))`, appended LAST so
 its accessor calls read defuns generated above it. `:print-function` is the CLtL1 spelling,
 differing only in that third `depth` argument, the literal `0`. Rides the `print-object` seam
-([clos.md](clos.md)) on all four backends, firing for a value nested in a printed list or
-general rank-1 vector but NOT one in a structure slot.
+([clos.md](clos.md)) on all four backends, firing for a value nested in a printed list,
+general rank-1 vector or instance slot.
 
 - Mutually exclusive with `:type`, and both spellings at once is an error -- rejected, not
   ignored.
