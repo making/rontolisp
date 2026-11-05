@@ -999,14 +999,14 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   (`defineConditionToDefclass`; coalton's `source-condition`).
 - **coalton** (coalton-20260101-git) — from the Quicklisp cache, interpreter, measured 2026-11-05. The whole
   `coalton-compiler` loads, and its macros compile `coalton/library` file by file through eclector and the
-  real typechecker and codegen (`library/types.lisp` to `library/math/bounded.lisp` reached, `num.lisp` is the slow
-  one). What it took past fset, each general but the tier 4 hash arm: a `:mix-reexport` clause
+  real typechecker and codegen: 24 files with no error in 55 minutes, the run stopped inside
+  `library/math/complex.lisp` (`.todo/i58`). What it took past fset, each general but the tier 4 hash arm: a `:mix-reexport` clause
   ([packages.md](packages.md)); a `:report` naming a function; a `.asd`'s `(:read-file-form ...)` `:version`;
   a computed `*features*` push ([reader-features.md](reader-features.md)); a reader macro's value respelled for
   the resolver and a `cl:` constant keeping its prefix ([readtables.md](readtables.md),
   [read-time-constants.md](read-time-constants.md)); `gentemp` in the keyword package; a struct copier handed an
-  `:include` child ([defstruct.md](defstruct.md)); the float-features constants; `fixnum` as a `subtypep`
-  interval. The compile paths are unmeasured: a `coalton-toplevel` needs the compiler in the macro-time image.
+  `:include` child ([defstruct.md](defstruct.md)); the float-features constants; `fixnum` and an `(and ...)` as
+  `subtypep` intervals, and a lattice name staying that type beside `coalton:bit`, a class. The compile paths are unmeasured: a `coalton-toplevel` needs the compiler in the macro-time image.
 - **sento 3.4.2** — from the Quicklisp cache, verified manually (measured 2026-11-05, interpreter and JVM):
   `make-actor-system`, `actor-of`, `ask-s`, `ask` with `fcompleted`, a `:time-out`, `*state*`, agents,
   8 threads x 200 `tell`s counted to 1600. On wasm it compiles and `make-actor-system` signals at the first
