@@ -4386,9 +4386,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// %read-line-pair, the read under a read-line producer's multiple-value lowering,
 		// exists only where one was lowered: a settled defun tail already spells it, and
 		// a consumer lowers its producer during Pass 2 -- in a program with the channel
-		// that names read-line.
+		// that names read-line, or runs forms whose call reaches the settled wrapper.
 		final boolean usesReadLinePairs = programUsesSymbol(program, LispNames.READ_LINE_PAIR_INTERNAL)
-				|| (LispMacroExpander.declaresMvSpill(program) && programUsesSymbol(program, LispNames.READ_LINE));
+				|| (LispMacroExpander.declaresMvSpill(program) && (programUsesSymbol(program, LispNames.READ_LINE)
+						|| LispMacroExpander.runsFormsAtRunTime(program)));
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
 				? JvmSocketRuntimeBuilder.build(cp, thisClass, stringClass, longClass, longValueOf, longValue,
 						stringLengthForIo, stringSubstring, stringConcat, usesArrays, usesReadLinePairs)

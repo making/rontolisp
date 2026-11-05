@@ -34705,6 +34705,20 @@ cases:
       (print (em-values2 '(nth-value 1 (em-two))))
       (print (em-values2 '(nth-value 5 (em-two))))
       (print (em-values2 '(multiple-value-list (values))))
+      (defvar *em-h* (make-hash-table))
+      (setf (gethash 1 *em-h*) 5)
+      (defvar *em-in* (make-string-input-stream "hi"))
+      (print (multiple-value-list (eval '(gethash 1 *em-h*))))
+      (print (multiple-value-list (eval '(read-line *em-in*))))
+      (print (multiple-value-list (eval '(if t (floor 7 2)))))
+      (print (multiple-value-list (eval '(read-from-string "12 34"))))
+      (print (multiple-value-list (eval '(array-displacement (make-array 2)))))
+      (print (eval '(eval-when (:compile-toplevel) 1)))
+      (print (eval '(let () (eval-when (:load-toplevel) 2))))
+      (print (eval '(eval-when (:execute) 3)))
+      (print (eval '(eval-when (:compile-toplevel :execute) 4)))
+      (print (eval '(eval-when (compile load) 5)))
+      (print (eval '(eval-when (eval) 6)))
     expected: |
       2
       2
@@ -34770,6 +34784,69 @@ cases:
       (2)
       (NIL)
       (NIL)
+      (5 T)
+      ("hi" T)
+      (3 1)
+      (12 3)
+      (NIL 0)
+      NIL
+      NIL
+      3
+      4
+      NIL
+      6
+  - name: warn-signals-to-a-handler-case
+    source: |
+      (defvar *ci-wsc-reports* 0)
+      (define-condition ci-wsc (warning) ((x :initarg :x :reader ci-wsc-x))
+        (:report (lambda (c s) (format s "ci-wsc ~a" (ci-wsc-x c)))))
+      (define-condition ci-wsc-counted (warning) ()
+        (:report (lambda (c s)
+                   (declare (ignorable c))
+                   (incf *ci-wsc-reports*)
+                   (format s "counted"))))
+      (print (handler-case (progn (warn "w") 1) (warning () 'wrn)))
+      (print (handler-case (progn (warn "w ~a" 1) 1) (error () 'err)))
+      (print (handler-case (progn (warn "w ~a" 2) 1) (condition (c) (princ-to-string c))))
+      (print (handler-case (progn (warn 'ci-wsc :x 3) 1) (ci-wsc (c) (ci-wsc-x c))))
+      (print (handler-case (progn (warn (make-condition 'ci-wsc :x 4)) 1) (warning (c) (princ-to-string c))))
+      (let ((d "runtime ~a"))
+        (print (handler-case (progn (warn d 5) 1) (simple-warning (c) (princ-to-string c)))))
+      (print (handler-case (progn (funcall #'warn "fv") 1) (warning () 'fv)))
+      (print (handler-case (handler-case (progn (warn "n") 1) (error () 'inner)) (warning () 'outer)))
+      (print (handler-case (progn (warn 'style-warning) 1) (style-warning () 'sw)))
+      (print (handler-case (progn (warn 'simple-error :format-control "e") 1) (error () 'err)))
+      (print (handler-case (eval '(progn (warn "ev") 1)) (warning () 'ev)))
+      (print (handler-case
+                 (handler-bind ((warning (lambda (c) (declare (ignorable c)) (muffle-warning))))
+                   (warn "m")
+                   2)
+               (warning () 'wrn)))
+      (print (handler-bind ((warning (lambda (c) (declare (ignorable c)) (muffle-warning))))
+               (handler-case (progn (warn "i") 3) (warning () 'wrn))))
+      (handler-case (warn 'ci-wsc-counted) (warning () nil))
+      (print *ci-wsc-reports*)
+      (print (with-output-to-string (*error-output*)
+               (handler-case (warn 'ci-wsc-counted) (error () nil))))
+      (print *ci-wsc-reports*)
+    expected: |
+      WRN
+      1
+      "w 2"
+      3
+      "ci-wsc 4"
+      "runtime 5"
+      FV
+      OUTER
+      SW
+      ERR
+      EV
+      2
+      WRN
+      0
+      "WARNING: counted
+      "
+      1
   - name: iteration-bodies-are-implicit-tagbodies
     source: |
       (let ((acc nil))
@@ -34809,6 +34886,21 @@ cases:
       (1 0)
       :DONE
 standalone:
+  - name: warn-signals-to-a-handler-case-outside-restart-mode
+    source: |
+      ;; Standalone: the corpus puts every case in restart mode.
+      (define-condition sa-w (warning) ((x :initarg :x :reader sa-w-x)))
+      (print (handler-case (progn (warn "w") 1) (warning () 'wrn)))
+      (print (handler-case (progn (warn "w ~a" 1) 1) (error () 'err)))
+      (print (handler-case (progn (warn 'sa-w :x 3) 1) (sa-w (c) (sa-w-x c))))
+      (print (handler-case (handler-case (progn (warn "n") 1) (error () 'inner)) (warning () 'outer)))
+      (print (handler-case (progn (warn (make-condition 'simple-error :format-control "e")) 1) (error () 'err)))
+    stdout: |
+      WRN
+      1
+      3
+      OUTER
+      ERR
   - name: eval-reaches-a-gated-operator-its-forms-spell
     source: |
       ;; Standalone: the corpus reads forms at run time, which references them all.

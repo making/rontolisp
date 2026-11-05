@@ -20,7 +20,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `typep` / `subtypep` / `coerce` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string`（または浮動小数点型） |
 | `concatenate` | `'list` / `'vector` / `'string` のシーケンス系統を構築 |
 | `make-package` / `rename-package` / `delete-package` / `unintern` / `shadow`（ランタイム） | `make-package`、`rename-package`、`delete-package`、`packagep`、`package-nicknames`、`find-all-symbols`、`do-all-symbols`、`apropos`/`apropos-list` は利用可能（後述の二層）。`shadow` / `shadowing-import` / `unintern` はパッケージのメンバーテーブルを変更する。コンパイル済みバックエンドでメンバーテーブルを持つのはプログラム自身が作ったパッケージだけ |
-| `eval-when` | `progn` として扱う（フェーズの区別なし） |
+| `eval-when` | `progn` として扱う（フェーズの区別なし）。ただし `eval` が実行するフォームは除く |
 | `#:name` | 普通のシンボルとして読まれ、gensym 的な新規性はない |
 | `*modules*` | 利用不可（`require`/`provide` は利用可能） |
 | 複素数 | `--no-gc` 以外のすべてのバックエンドで利用可（[数値タワー](#numeric-tower)） |

@@ -102,8 +102,14 @@ arm per macro** (2026-11-05, ci-spec `eval-expands-the-built-in-macros`, agrees 
   `x`, which threw and trapped. A `throw` and a `return-from` carry their value's values as a list (`%eval-throw-values`).
 - **Left out:** `loop`'s keyword clauses (a row refuses them), `macrolet`, `symbol-macrolet`, `with-slots`, `restart-case`
   (`.todo/i63`) and the definers; the doc page lists them. A form's `close` in a program with a method on it misses the registry
-  (`.todo/i64`), which `%eval-close` works around for the stream macros. `%eval-handler-case` is over `handler-bind`, so an eval'd
-  one catches a `warn` a compiled one does not yet (`.todo/i65`).
+  (`.todo/i64`), which `%eval-close` works around for the stream macros.
+- **The interpreter's `eval` answers what `_eval` does** (2026-11-05, `LispEvaluator.evalFunctionForm`; SBCL 2.2.9's answers). The
+  form's tail is a tail (`spillEscapingMvProducers`): `(multiple-value-list (eval '(gethash 1 h)))` was `(5)`. And an `eval-when`
+  met while it runs, which is at no top level, runs only for `:execute` or `eval` (`evalWhenExecutes`, `%eval-row-eval-when`): the
+  thread-local `evalFunctionRuns` says so, and `loadFile` clears it, a loaded file's forms being top-level forms.
+- **A form's call of a value producer gets both values** (same day): `designatedValueProducers` answers all of them where
+  `runsFormsAtRunTime`, since the form's call reaches the wrapper. `(eval '(read-line s))` was `("hi")` for `("hi" T)` on the
+  compile paths, and `read-from-string`, `intern` and `array-displacement` the same. It pays only in a program with the channel.
 
 ## What a form can reach (`compiler/EvalReferences`)
 

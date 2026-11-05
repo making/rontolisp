@@ -1145,6 +1145,35 @@ handler-DEPTH counter alone and turned an unmatched decline into a top-level abo
   cannot see (runtime `eval`, a computed designator forged from quoted data) keeps depth-only
   behavior.
 
+### `warn` signals before it writes -- on every backend
+**Invariant: `warn` is `signal` and then the write (CLHS `warn`). A `handler-case` clause matching the
+warning takes it and nothing is written; a report renders only for the warning that is written.**
+SBCL 2.2.9's answers on ci-spec `warn-signals-to-a-handler-case`. Before 2026-11-05 all four wrote
+and went on: `(handler-case (progn (warn "w") 1) (warning () 'wrn))` answered 1, while an eval'd
+`handler-case`, written over `handler-bind`, answered `WRN`.
+- `expandWarn`'s `signalsHandlerCase` puts `(%signal-cond instance message)` ahead of the `%warn`
+  (`warnAfterSignal`, behind the hook's `%run-handlers`, saying the handlers ran when the hook did).
+  The instance is the one `signal` builds. A string or symbol arm reads its rendered text; a typed
+  or condition arm passes `""`, since a matching clause holds the instance.
+- **The compiled gate is `needsSignalClauseMatch` itself**, so a compile asks one question and no new
+  `Ctx` flag or `JvmLinkage.Mode` exists. Its warn half has two arms. The program warns and a
+  `handler-case` clause can hold a warning (`clauseTypeCanHoldWarning`: all but a standard name
+  under `serious-condition` and an `or` of such, the seeded registry answering; a program's own class
+  counts whatever its parent, the safe direction). Or its datum may be no warning and any catching
+  form is there: `formWarnsAnyDatum` (`#'warn`, or a datum neither a control string nor a standard
+  warning's name) or `runsFormsAtRunTime` (`eval`/`compile`/`load`, whose form calls the `#'warn`
+  wrapper). Without that arm `(warn 'simple-error)` under an `error` clause was caught on the
+  interpreter and written on the compile paths. A program warning only with control strings or
+  standard warnings under `error` clauses or `ignore-errors`, or with no catching form at all, keeps
+  its bytes, and its handler-case stays off the cluster stack. Measured 2026-11-05 against the commit
+  before: five such programs identical on the JVM, Preview 1 and the component. A program a warning
+  clause does hold pays for the walk and the cluster: `(defun f () (warn "w") 2) (print (handler-case
+  (f) (warning () 1)))` wasm-GC 3,297 -> 9,883 B, component 4,633 -> 11,299 B, class 10,932 -> 15,727 B.
+- The interpreter always asks: `evalSignalCond` matches on its per-thread clause-type stack.
+- A `warn` whose datum is a condition outside `warning` signals that condition, then writes, on all
+  four. SBCL signals a `type-error` for it, so an `error` clause agrees and a `type-error` clause
+  does not (`.todo/i67`).
+
 ## A built-in error carries its CONDITION CLASS
 `(handler-case (car 1) (type-error ...))` matches, and so does rove's `(ok (signals (car 1)
 'type-error))`. **The class is decided where the failure is DETECTED, never by pattern-matching the

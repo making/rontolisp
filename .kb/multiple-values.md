@@ -243,12 +243,12 @@ variable, a `mapcar` and a function return, on every backend.** Pinned by the
 - Compile paths: the wrapper publishes (`settleWrapperLambdas`' PUBLISH walk) and takes the full
   lambda list (`BuiltinFunctionWrappers.VALUE_SHAPES`: gethash's default, intern's package) ONLY in a
   program that names the operator as a designator, `#'name` or `'name`
-  (`BuiltinFunctionWrappers.designatedValueProducers`). Unlike the floor family's, these wrappers
+  (`BuiltinFunctionWrappers.designatedValueProducers`), or that runs forms at run time. Unlike the floor family's, these wrappers
   are reachable in programs that never take them as values -- JVM keeps every wrapper under an eval
   runtime (a `read-from-string` program's class was +1,444 B), and a shaken wrapper's literals still
   move the WASM string table (+1 to +12 B) -- so an ungated change touched every program that
   interns or reads. Given up by the gate: the second value (and gethash's 3-argument / intern's
-  2-argument call) of a wrapper reached only through a run-time designator or `eval`.
+  2-argument call) of a wrapper reached only through a run-time designator.
   `#'subtypep` is a new wrapper, `REFERENCE_GATED`, and `containsRuntimeSubtypep` counts the
   reference so `%subtypep-runtime` is injected.
 - A function object's arguments are COMPUTED on the compile paths, so `#'find-symbol`/`#'intern`
@@ -379,7 +379,8 @@ sub-form: a `(values ...)` tail reaches the consumer behind any number of return
   flag (`beginArguments`/`endArguments`) is gone: it only cleared arguments, and left a
   `let` initform, a `progn` body form and a callback's publish to leak.
 
-## Through a compiled `eval`
+## Through `eval`
+The interpreter's `eval` settles its form's tail as a function return does (`.kb/eval-runtime.md`, `evalFunctionForm`).
 `_eval` keeps the channel exact itself (`.kb/eval-runtime.md`, "The built-in macros", Values): it is emptied on entry and after
 what answers one value, and a call or a tail form publishes for itself. Only in a program that runs forms through eval. The
 consumers there are compiled helpers over a closure (`%eval-values-of`), so `multiple-value-bind` and its family need no

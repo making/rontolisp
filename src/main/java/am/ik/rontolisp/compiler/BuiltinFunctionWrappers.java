@@ -415,10 +415,11 @@ public final class BuiltinFunctionWrappers {
 
 	/**
 	 * The {@link #VALUE_PUBLISHING_PRODUCERS} a program names as a function designator
-	 * ({@link #referencesFunctionDesignator}) -- the ones whose wrapper publishes its
+	 * ({@link #referencesFunctionDesignator}), or all of them where it runs forms at run
+	 * time, whose calls reach these wrappers -- the ones whose wrapper publishes its
 	 * second value. Every other program carries the one-value wrapper it always did, so
 	 * its output stays byte-identical; what it gives up is the second value of a wrapper
-	 * reached through a designator computed at run time or through {@code eval}.
+	 * reached through a designator computed at run time.
 	 * @param program the top-level forms
 	 * @param extraForms further forms that count as the program's (a condition's
 	 * {@code :report} lambdas)
@@ -426,6 +427,9 @@ public final class BuiltinFunctionWrappers {
 	 */
 	public static Set<String> designatedValueProducers(List<LispVal> program,
 			java.util.Collection<LispVal> extraForms) {
+		if (LispMacroExpander.runsFormsAtRunTime(program)) {
+			return VALUE_PUBLISHING_PRODUCERS;
+		}
 		Set<String> spelled = functionDesignatorNames(program);
 		spelled.addAll(functionDesignatorNames(extraForms));
 		Set<String> named = new java.util.HashSet<>();
