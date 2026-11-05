@@ -156,7 +156,8 @@ byte-reader detour stayed.
   backend with the cursor.
 - WASM: **12 bytes per string** plus the bigger helper bodies (a real program carries a few
   hundred extra bytes at either
-  `--optimize` level); `subseq`/`replace`/`search`/`position` needed no special-casing.
+  `--optimize` level); `subseq`/`replace`/`position` needed no special-casing, and `search`
+  none for the index (what it boxes per position: `.kb/string-search-runtime.md`).
 - **WASM, a multi-byte string indexed randomly far from its cursor**: O(min(i, |i - ci|)).
   The fix if it matters is a stride index on the same struct, NOT walking from zero.
 - **JVM, a surrogate-bearing string** costs the walk from its nearest breakpoint, at most 31

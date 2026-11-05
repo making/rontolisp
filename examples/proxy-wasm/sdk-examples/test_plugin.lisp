@@ -1,17 +1,16 @@
 ;;;; test_plugin.lisp -- a plugin for a host's tests: the request's path picks what it does.
 ;;;;
-;;;; Every failed host call fails the plugin, as an `unwrap` in the Rust SDK does.
-;;;;
 ;;;; Build it without --no-wasi: /stdout writes to WASI's stdout, which a --no-wasi
 ;;;; module drops.
+
+;; A failure takes the VM down, as an `unwrap` in the Rust SDK does.
+(eval-when (:compile-toplevel) (pushnew :proxy-wasm-trap *features*))
 
 (require :proxy-wasm "../proxy-wasm.lisp")
 
 (defpackage :test-plugin (:use :cl))
 
 (in-package :test-plugin)
-
-(setf proxy-wasm:*trap-on-error* t)
 
 (defvar *configuration* "")
 
@@ -136,6 +135,8 @@
     (proxy-wasm:set-header :response "x-plugin"
      (format nil "a~c~cx-smuggled: 1" (code-char 13) (code-char 10))))
    ("/edit" (proxy-wasm:add-header :response "x-plugin" "edited"))
+   ("/failed-call" (proxy-wasm:set-buffer :call-response-body "x"))
+   ("/signal" (error "not handled"))
    ("/hog-fields"
     (loop
       (proxy-wasm:add-header :response "x-plugin" "a value kept by the host")))
@@ -150,11 +151,7 @@
       (proxy-wasm:add-header :response "x-configuration" *configuration*)))
    ("/outgoing"
     (proxy-wasm:add-header :response "x-outgoing"
-                           (handler-case (progn
-                                           (proxy-wasm:http-call "upstream" '()
-                                                                 :timeout 1000)
-                                           "sent")
-                             (error () "refused"))))
+     (if (proxy-wasm:http-call "upstream" '() :timeout 1000) "sent" "refused")))
    ("/replace" (proxy-wasm:remove-header :response "content-length")))
   :continue)
 

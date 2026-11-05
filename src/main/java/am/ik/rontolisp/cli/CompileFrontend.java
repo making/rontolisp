@@ -846,7 +846,7 @@ final class CompileFrontend {
 		// wrapper's
 		// body reaches the prelude. Not on --no-gc, which has no eval runtime.
 		List<LispVal> expanded = CurrentPackageIntern
-			.rewrite(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded), programHead));
+			.rewrite(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded), programHead, features));
 		List<LispVal> languages = InflateLibrary.process(ClojureLibrary.process(
 				SchemeLibrary.process(noGc ? expanded : EvalReferences.process(expanded), features, input.standards()),
 				!wasm, input.lowersAtRunTime(), input.linked()), witBackend);

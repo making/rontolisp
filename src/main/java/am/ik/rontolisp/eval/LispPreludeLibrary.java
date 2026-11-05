@@ -1489,6 +1489,23 @@ public final class LispPreludeLibrary {
 				LispNames.FMAKUNBOUND_INTERNAL)) {
 			SOURCES.put(helper, am.ik.rontolisp.compiler.RuntimeFunctionNames.definition(helper));
 		}
+		// format to a string with a fill pointer (compiler.StreamOperandChecks): the
+		// check of the destination, and the write after the rendering.
+		SOURCES.put(LispNames.FORMAT_DESTINATION_INTERNAL, """
+				(defun %format-destination (%fd-d)
+				  (if (if (stringp %fd-d) (array-has-fill-pointer-p %fd-d) nil)
+				      %fd-d
+				      (%check-stream %fd-d (%unspelled-quote format) t)))
+				""");
+		SOURCES.put(LispNames.FORMAT_WRITE_INTERNAL, """
+				(defun %format-write (%fw-d %fw-text)
+				  (cond ((null %fw-d) %fw-text)
+				        ((stringp %fw-d)
+				         (dotimes (%fw-i (length %fw-text))
+				           (vector-push-extend (char %fw-text %fw-i) %fw-d)))
+				        ((eq %fw-d t) (write-string %fw-text) nil)
+				        (t (write-string %fw-text %fw-d) nil)))
+				""");
 		SOURCES.put(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, """
 				(defclass %broadcast-stream (rontolisp:fundamental-character-output-stream)
 				  ((components :initarg :components :reader %broadcast-stream-components)))
@@ -3937,37 +3954,44 @@ public final class LispPreludeLibrary {
 		// (complemented) :test-not, then to eql (ANSI's search.order.2 and
 		// search-list.16). SequenceScanFast.search already declines any keyword it does
 		// not recognize, so a :test-not call simply falls through to this body -- no
-		// change needed there.
+		// change needed there. %string-search answers two plain strings with no element
+		// loop where the backend has that arm (.kb/string-search-runtime.md); the loop
+		// boxes two characters per position on wasm.
 		SOURCES.put(LispNames.SEARCH, """
 				(defun search (seq1 seq2 &key (start1 0 s1p) end1 (start2 0 s2p) end2 test test-not key from-end)
 				  (let ((seq1 (%check-sequence seq1 'search))
 				        (seq2 (%check-sequence seq2 'search)))
 				    (when (or s1p end1) (%check-bounds seq1 start1 end1))
 				    (when (or s2p end2) (%check-bounds seq2 start2 end2))
-				    (let* ((e2 (or end2 (length seq2)))
-				           (w (- (or end1 (length seq1)) start1))
-				           (h1 (if (listp seq1) (nthcdr start1 seq1) nil))
-				           (h2 (if (listp seq2) (nthcdr start2 seq2) nil))
-				           (result nil))
-				      (do ((pos start2 (+ pos 1)))
-				          ((or (> (+ pos w) e2) (and result (not from-end))) result)
-				        (let ((ok t) (c1 h1) (c2 h2))
-				          (do ((i 0 (+ i 1)))
-				              ((or (>= i w) (not ok)))
-				            (let ((a (if (consp c1)
-				                         (prog1 (car c1) (setq c1 (cdr c1)))
-				                         (elt seq1 (+ start1 i))))
-				                  (b (if (consp c2)
-				                         (prog1 (car c2) (setq c2 (cdr c2)))
-				                         (elt seq2 (+ pos i)))))
-				              (let ((ka (if key (funcall key a) a))
-				                    (kb (if key (funcall key b) b)))
-				                (unless (if test
-				                            (funcall test ka kb)
-				                            (if test-not (not (funcall test-not ka kb)) (eql ka kb)))
-				                  (setq ok nil)))))
-				          (setq h2 (if (consp h2) (cdr h2) h2))
-				          (when ok (setq result pos)))))))
+				    (let ((found (if (or test test-not key from-end)
+				                     nil
+				                     (%string-search seq1 seq2 start1 end1 start2 end2))))
+				      (if found
+				          (if (eql found -1) nil found)
+				          (let* ((e2 (or end2 (length seq2)))
+				                 (w (- (or end1 (length seq1)) start1))
+				                 (h1 (if (listp seq1) (nthcdr start1 seq1) nil))
+				                 (h2 (if (listp seq2) (nthcdr start2 seq2) nil))
+				                 (result nil))
+				            (do ((pos start2 (+ pos 1)))
+				                ((or (> (+ pos w) e2) (and result (not from-end))) result)
+				              (let ((ok t) (c1 h1) (c2 h2))
+				                (do ((i 0 (+ i 1)))
+				                    ((or (>= i w) (not ok)))
+				                  (let ((a (if (consp c1)
+				                               (prog1 (car c1) (setq c1 (cdr c1)))
+				                               (elt seq1 (+ start1 i))))
+				                        (b (if (consp c2)
+				                               (prog1 (car c2) (setq c2 (cdr c2)))
+				                               (elt seq2 (+ pos i)))))
+				                    (let ((ka (if key (funcall key a) a))
+				                          (kb (if key (funcall key b) b)))
+				                      (unless (if test
+				                                  (funcall test ka kb)
+				                                  (if test-not (not (funcall test-not ka kb)) (eql ka kb)))
+				                        (setq ok nil)))))
+				                (setq h2 (if (consp h2) (cdr h2) h2))
+				                (when ok (setq result pos)))))))))
 				""");
 		// count-if-not is count-if over the complemented predicate: count-if now carries
 		// the whole keyword set itself (:key and CLHS 17.2.1's bounding keywords), so the
@@ -5666,6 +5690,14 @@ public final class LispPreludeLibrary {
 			return am.ik.rontolisp.macro.LispMacroExpander.mayPprintLogicalBlockOfAnAtom(program)
 					|| referencesName(program, LispNames.PPRINT_POP, canonical);
 		}
+		// format to a string with a fill pointer: compiler.StreamOperandChecks and the
+		// #'format wrapper call these where they are in the program, both after this
+		// pass. Such a string exists only in a program spelling the keyword that makes
+		// one, and only a computed destination or the function value can receive it.
+		if (LispNames.FORMAT_DESTINATION_INTERNAL.equals(entry) || LispNames.FORMAT_WRITE_INTERNAL.equals(entry)) {
+			return referencesName(program, LispNames.FILL_POINTER_KEYWORD, canonical)
+					&& mayFormatToAComputedDestination(program, canonical);
+		}
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
 			return referencesName(program, LispNames.MAKE_BROADCAST_STREAM, canonical)
 					|| referencesName(program, LispNames.BROADCAST_STREAM_STREAMS, canonical);
@@ -6149,6 +6181,35 @@ public final class LispPreludeLibrary {
 			}
 			rest = cell.cdr();
 			index++;
+		}
+		return false;
+	}
+
+	private static boolean mayFormatToAComputedDestination(List<LispVal> program, boolean canonical) {
+		for (LispVal form : program) {
+			if (mayFormatToAComputedDestination(form, canonical)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Errs toward true, as a list headed by the name need not be a call.
+	private static boolean mayFormatToAComputedDestination(LispVal form, boolean canonical) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (isDesignatorOf(cons, LispNames.FORMAT, canonical) || (cons.car() instanceof LispSymbol head
+				&& matches(head.name(), LispNames.FORMAT, canonical) && cons.cdr() instanceof LispCons args
+				&& am.ik.rontolisp.compiler.StreamOperandChecks.formatDestinationIsComputed(args.car()))) {
+			return true;
+		}
+		LispVal rest = cons;
+		while (rest instanceof LispCons cell) {
+			if (mayFormatToAComputedDestination(cell.car(), canonical)) {
+				return true;
+			}
+			rest = cell.cdr();
 		}
 		return false;
 	}

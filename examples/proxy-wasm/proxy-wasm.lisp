@@ -43,18 +43,17 @@
            :log-error :log-critical
            :current-time-nanos :set-tick-period
            :heap-top :panic
-           :*trap-on-error* :get-header
-           :get-headers :set-header
-           :add-header :remove-header
-           :set-headers :get-buffer
-           :get-buffer-octets :buffer-size
-           :set-buffer :continue-request
-           :continue-response :send-local-response
-           :http-call :shared-data
-           :set-shared-data :define-metric
-           :increment-metric :record-metric
-           :metric-value :get-property
-           :get-property-octets :set-property))
+           :get-header :get-headers
+           :set-header :add-header
+           :remove-header :set-headers
+           :get-buffer :get-buffer-octets
+           :buffer-size :set-buffer
+           :continue-request :continue-response
+           :send-local-response :http-call
+           :shared-data :set-shared-data
+           :define-metric :increment-metric
+           :record-metric :metric-value
+           :get-property :get-property-octets :set-property))
 
 (in-package :proxy-wasm)
 
@@ -232,11 +231,24 @@
 (defconstant +status-empty+ 7)
 (defconstant +status-cas-mismatch+ 8)
 
-;; A host call that only answers OK or fails. Anything else is a defect in the call, and
-;; it signals: every callback below turns that into a log line.
+;; A wasm trap: no handler sees it, and it takes the whole VM down. The address is past
+;; the end of any linear memory that is not the full 4GiB.
+(defun panic () (%load32 #xFFFFFFFC))
+
+;; What a failure does is decided while the filter compiles, because a run-time choice
+;; would keep the handler in every module. Unless the program declares the feature
+;; :proxy-wasm-trap, an error is handled in the callback (%with-callback).
+(defmacro %trap-or-handle (trap handle)
+  (if (member :proxy-wasm-trap *features*) trap handle))
+
+;; A host call that only answers OK or fails. Anything else is a defect in the call: the
+;; reason goes to the log here, where it is known. Printing a condition in the callback
+;; instead would cost every filter the condition printer.
 (defun %check (operation status)
   (unless (= status +status-ok+)
-    (error "~a answered status ~a" operation status))
+    (%proxy-log 4
+     (format nil "proxy-wasm: ~a answered status ~a" operation status))
+    (%trap-or-handle (panic) (error "host call failed")))
   nil)
 
 ;; For a call that reads: T for OK, NIL for "there is no such thing here".
@@ -287,16 +299,29 @@
 ;;; Logging, the clock, ticks
 ;;; ---------------------------------------------------------------------------
 
+;; A call whose control string is a literal has it compiled at the call site, which leaves
+;; the run-time FORMAT interpreter out of the module. Any other call, and #'LOG-INFO,
+;; reach the function, and the interpreter with it.
 (defun %log (level control args)
   (%proxy-log level (apply #'format nil control args))
   nil)
 
-(defun log-trace (control &rest args) (%log 0 control args))
-(defun log-debug (control &rest args) (%log 1 control args))
-(defun log-info (control &rest args) (%log 2 control args))
-(defun log-warn (control &rest args) (%log 3 control args))
-(defun log-error (control &rest args) (%log 4 control args))
-(defun log-critical (control &rest args) (%log 5 control args))
+(defmacro %define-log (name level)
+  `(progn
+     (defun ,name (control &rest args) (%log ,level control args))
+     (define-compiler-macro ,name (&whole form control &rest args)
+       (if (stringp control)
+           `(progn
+              (%proxy-log ,,level (format nil ,control ,@args))
+              nil)
+           form))))
+
+(%define-log log-trace 0)
+(%define-log log-debug 1)
+(%define-log log-info 2)
+(%define-log log-warn 3)
+(%define-log log-error 4)
+(%define-log log-critical 5)
 
 (defun current-time-nanos ()
   (let ((cell (%alloc 8)))
@@ -446,17 +471,35 @@
 ;; call, so getting it back to that stream is this SDK's job.
 (defvar *current-context* nil)
 
-(defvar *callouts* (make-hash-table))
+;; A table keyed by a host-issued integer: buckets of an alist. A host's ids and tokens count
+;; up, so the buckets fill evenly. It costs a filter 4KB less than a hash table.
+(defun %table () (make-array 64 :initial-element nil))
 
-;; HEADERS must carry :method, :path and :authority. Answers the call's token; the
-;; reply arrives at ON-HTTP-CALL-RESPONSE on the context that made the call.
+(defun %lookup (table key) (cdr (assoc key (aref table (logand key 63)))))
+
+(defun %store (table key value)
+  (let ((index (logand key 63)))
+    (setf (aref table index) (cons (cons key value) (aref table index)))))
+
+(defun %forget (table key)
+  (let ((index (logand key 63)) (kept '()))
+    (dolist (entry (aref table index))
+      (unless (= (car entry) key) (push entry kept)))
+    (setf (aref table index) kept)))
+
+(defvar *callouts* (%table))
+
+;; HEADERS must carry :method, :path and :authority. Answers the call's token, or NIL when
+;; the host refuses the call (an unknown cluster, say), which a filter can act on under
+;; either error mode. The reply arrives at ON-HTTP-CALL-RESPONSE on the context that made
+;; the call.
 (defun http-call (cluster headers &key (body "") trailers (timeout 5000))
   (let ((cell (%alloc 8)))
-    (%check "proxy_http_call"
-            (%proxy-http-call cluster (%serialize-pairs headers) body
-                              (%serialize-pairs trailers) timeout cell))
-    (setf (gethash (%load32 cell) *callouts*) *current-context*)
-    (%load32 cell)))
+    (when (= +status-ok+
+             (%proxy-http-call cluster (%serialize-pairs headers) body
+                               (%serialize-pairs trailers) timeout cell))
+      (%store *callouts* (%load32 cell) *current-context*)
+      (%load32 cell))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Shared data, metrics, properties
@@ -593,31 +636,27 @@
 (defvar *root-context-factory*
   (lambda (id) (make-instance 'root-context :id id)))
 
-(defvar *contexts* (make-hash-table))
+(defvar *contexts* (%table))
 
 ;; FACTORY takes a context id and answers a ROOT-CONTEXT.
 (defun set-root-context (factory) (setf *root-context-factory* factory))
 
-;; A wasm trap: no handler sees it, and it takes the whole VM down. The address is past
-;; the end of any linear memory that is not the full 4GiB.
-(defun panic () (%load32 #xFFFFFFFC))
-
-;; Set this for what the Rust SDK does with a failed host call: fail the plugin.
-(defvar *trap-on-error* nil)
-
-;; What every callback runs inside. A Lisp error must not become a wasm trap, which
-;; would take the whole VM down: it is logged and the callback answers FALLBACK, unless
-;; *TRAP-ON-ERROR* asks for the trap. On the way out the bump heap pops back to where it
-;; stood, releasing every out-cell and every byte the host answered during the call.
+;; What every callback runs inside. A Lisp error must not become a wasm trap, which would
+;; take the whole VM down: it is logged and the callback answers FALLBACK. The log says
+;; only that it happened, since the report is the expensive part: a filter that wants it
+;; catches the condition itself. Under :proxy-wasm-trap there is no handler, and the error
+;; does trap. On the way out the bump heap pops back to where it stood, releasing every
+;; out-cell and every byte the host answered during the call.
 (defmacro %with-callback ((fallback) &body body)
   (let ((mark (gensym "MARK")) (result (gensym "RESULT")))
     `(let* ((,mark (%mark))
             (,result
-             (handler-case (progn ,@body)
-               (error (condition)
-                 (%proxy-log 4 (format nil "proxy-wasm: ~a" condition))
-                 (when *trap-on-error* (panic))
-                 ,fallback))))
+             (%trap-or-handle (progn ,@body)
+                              (handler-case (progn ,@body)
+                                (error ()
+                                  (%proxy-log 4
+                                   "proxy-wasm: a callback signaled an error")
+                                  ,fallback)))))
        (%reset ,mark)
        ,result)))
 
@@ -629,7 +668,7 @@
     `(progn
        (defun ,name (,id ,@params)
          (%with-callback (,fallback)
-                         (let ((,context (gethash ,id *contexts*)))
+                         (let ((,context (%lookup *contexts* ,id)))
                            (cond
                             (,context
                              (setq *current-context* ,context)
@@ -655,11 +694,11 @@
 ;; A parent of 0 makes a root context. Every other context is a stream of its parent.
 (defun %on-context-create (id parent)
   (%with-callback (nil)
-                  (setf (gethash id *contexts*)
-                        (if (= parent 0)
-                            (funcall *root-context-factory* id)
-                            (make-http-context (gethash parent *contexts*) id)))
-                  nil))
+                  (%store *contexts* id
+                          (if (= parent 0)
+                              (funcall *root-context-factory* id)
+                              (make-http-context (%lookup *contexts* parent)
+                                                 id))) nil))
 (rontolisp:wasm-export '%on-context-create
                        :as "proxy_on_context_create"
                        :params '(:u32 :u32))
@@ -704,9 +743,9 @@
                   (context token num-headers body-size num-trailers)
                   (:u32 :s32 :s32 :s32)
                   :void nil
-                  (let ((caller (gethash token *callouts*)))
-                    (remhash token *callouts*)
-                    (when (and caller (gethash (context-id caller) *contexts*))
+                  (let ((caller (%lookup *callouts* token)))
+                    (%forget *callouts* token)
+                    (when (and caller (%lookup *contexts* (context-id caller)))
                       (%check "proxy_set_effective_context"
                        (%proxy-set-effective-context (context-id caller)))
                       (setq *current-context* caller)
@@ -721,10 +760,10 @@
 
 (defun %on-delete (id)
   (%with-callback (nil)
-                  (let ((context (gethash id *contexts*)))
+                  (let ((context (%lookup *contexts* id)))
                     (when context
                       (on-delete context)
-                      (remhash id *contexts*))) nil))
+                      (%forget *contexts* id))) nil))
 (rontolisp:wasm-export '%on-delete :as "proxy_on_delete" :params '(:u32))
 
 (provide :proxy-wasm)

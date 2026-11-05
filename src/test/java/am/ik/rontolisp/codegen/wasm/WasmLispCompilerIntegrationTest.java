@@ -19189,6 +19189,23 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("1\nNIL\n0\n3\n4\n3\n2\n1\n1\n0\n1\n1\n(1 NIL)\n2\n1\n1\n1\n"
 				+ "\"SUBSEQ: invalid bounds 0, 99 for string of length 3\"\n"
 				+ "\"SUBSEQ: invalid bounds 3, 1 for string of length 4\"\n2\nNIL\n2\n2\nNIL\n0");
+		// Two strings take no element loop, which boxes two characters per position
+		// (.kb/string-search-runtime.md). Fuel measured 2026-11-05 over 65,536
+		// characters:
+		// 23.1 M to build them, 23.9 M with a search of the immutable string, 38.9 M of
+		// the character vector, 65.4 M through the loop (:key #'identity).
+		String hay = """
+				(defvar *plain* (rontolisp:octets-to-string
+				                 (make-array 65536 :element-type '(unsigned-byte 8) :initial-element 120)))
+				(defvar *vector* (make-string 65536 :initial-element #\\x))
+				(print (search "secret" %s))
+				""";
+		assertThat(compileAndRunWithFuel(
+				am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(hay.formatted("*plain*"))),
+				30_000_000L))
+			.isEqualTo("NIL");
+		assertThat(compileAndRunWithFuel(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(hay.formatted("*vector*"))), 48_000_000L)).isEqualTo("NIL");
 	}
 
 	@Test

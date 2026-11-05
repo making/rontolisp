@@ -120,14 +120,14 @@
 
 (defun ask-authorization (stream root)
   (let ((user (proxy-wasm:get-header :request "x-user")))
-    (cond (user
-           (proxy-wasm:http-call (authz-cluster root)
+    (cond ((null user) (refuse 401 "no x-user"))
+          ((proxy-wasm:http-call (authz-cluster root)
                                  (list (cons ":method" "GET")
                                   (cons ":path" (format nil "/authz/~a" user))
                                   (cons ":authority" "authz"))
                                  :timeout 2000)
            :pause)
-          (t (refuse 401 "no x-user")))))
+          (t (refuse 503 "authorization is unavailable")))))
 
 (defmethod proxy-wasm:on-http-call-response
     ((stream gateway-stream) token num-headers body-size num-trailers)

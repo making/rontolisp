@@ -3547,6 +3547,10 @@ public final class Environment implements Scope {
 			return new LispInteger(
 					System.identityHashCode(x instanceof am.ik.rontolisp.LispJavaObject host ? host.ref() : x));
 		}));
+		// search's string arm decides nothing here: SequenceScanFast answered what it
+		// could before the prelude body ran (.kb/string-search-runtime.md).
+		env.defineFunction(LispNames.STRING_SEARCH,
+				new LispFunction(LispNames.STRING_SEARCH, args -> am.ik.rontolisp.LispNil.INSTANCE));
 		// bfloat16 <-> double: the top sixteen bits of an f32, round-to-nearest-even
 		// on the way down and exact on the way back. Sixteen bits fit a fixnum, so
 		// unlike the quartet above this pair is on all four backends (BFloat16,

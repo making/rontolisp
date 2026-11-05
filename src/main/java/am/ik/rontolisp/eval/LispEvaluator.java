@@ -3562,25 +3562,18 @@ public final class LispEvaluator {
 		// control string is a RUNTIME value here, so the function value renders it with
 		// the shared runtime renderer -- the very code the compiled #'format wrapper
 		// calls, so a control string reaching format through a function value renders
-		// identically on all four backends. The destination dispatch mirrors
-		// formatDestinationDispatch: nil answers the string, t writes to the default
-		// stream (so a with-output-to-string capture applies), anything else is a stream.
+		// identically on all four backends. The destination's dispatch is the prelude's,
+		// the one a format call with a computed destination takes.
 		this.globalEnv.defineFunction(LispNames.FORMAT, new LispFunction(LispNames.FORMAT, args -> {
 			if (args.size() < 2) {
 				throw new LispEvalException(LispNames.FORMAT + " expects a destination and a control string");
 			}
-			LispVal destination = args.get(0);
 			LispVal rendered = eval(
 					FormatRenderer.call(quotedValue(args.get(1)), quotedValue(valueList(args.subList(2, args.size())))),
 					this.globalEnv);
-			if (destination instanceof LispNil) {
-				return rendered;
-			}
-			LispVal writeArgs = (destination instanceof LispTrue) ? LispNil.INSTANCE
-					: new LispCons(quotedValue(destination), LispNil.INSTANCE);
-			eval(new LispCons(new LispSymbol(LispNames.WRITE_STRING), new LispCons(quotedValue(rendered), writeArgs)),
+			return eval(new LispCons(new LispSymbol(LispNames.FORMAT_WRITE_INTERNAL),
+					new LispCons(quotedValue(args.get(0)), new LispCons(quotedValue(rendered), LispNil.INSTANCE))),
 					this.globalEnv);
-			return LispNil.INSTANCE;
 		}));
 		installStreamOperandChecks();
 		// cerror (lite): no restart machinery exists, so the "continuable" part is
@@ -9211,7 +9204,7 @@ public final class LispEvaluator {
 			}
 			int index = StreamOperandChecks.streamArgument(name);
 			this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
-				if (args.size() > index) {
+				if (args.size() > index && !(LispNames.FORMAT.equals(name) && hasFillPointer(args.get(index)))) {
 					checkStreamOperand(args.get(index), name, designator);
 				}
 				return apply(base, args, this.globalEnv);
@@ -9232,6 +9225,10 @@ public final class LispEvaluator {
 							args.get(2) != LispNil.INSTANCE);
 					return args.get(0);
 				}));
+	}
+
+	private static boolean hasFillPointer(LispVal value) {
+		return value instanceof LispString string && string.fillPointer() >= 0;
 	}
 
 	// What a stream operator takes: a stream, t, and where nil designates a standard
@@ -10470,8 +10467,11 @@ public final class LispEvaluator {
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandDecf);
 									break dispatch;
 								case LispNames.FORMAT:
-									next = builtinMacroExpansion(cons, form -> LispMacroExpander
-										.expandFormat(StreamOperandChecks.checkedCall(form)));
+									next = builtinMacroExpansion(cons, form -> {
+										LispCons through = StreamOperandChecks.formatThroughDestination(form);
+										return through != form ? through
+												: LispMacroExpander.expandFormat(StreamOperandChecks.checkedCall(form));
+									});
 									break dispatch;
 								case LispNames.WITH_OUTPUT_TO_STRING:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithOutputToString);

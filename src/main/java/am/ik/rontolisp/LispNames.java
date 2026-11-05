@@ -2038,6 +2038,19 @@ public final class LispNames {
 	public static final String CHECK_STREAM_RUNTIME = "%CHECK-STREAM-RUNTIME";
 
 	/**
+	 * {@code (%format-destination x)}: {@code format}'s check of a computed destination
+	 * in a program that can hold a string with a fill pointer, which it passes where
+	 * {@link #CHECK_STREAM_INTERNAL} refuses it ({@code compiler.StreamOperandChecks}).
+	 */
+	public static final String FORMAT_DESTINATION_INTERNAL = "%FORMAT-DESTINATION";
+
+	/**
+	 * {@code (%format-write destination text)}: what {@code format} does with its
+	 * rendered text at a {@link #FORMAT_DESTINATION_INTERNAL} destination.
+	 */
+	public static final String FORMAT_WRITE_INTERNAL = "%FORMAT-WRITE";
+
+	/**
 	 * The {@code row-major-aref} built-in function (flat row-major element access,
 	 * independent of rank); also a {@code setf} place.
 	 */
@@ -4064,6 +4077,17 @@ public final class LispNames {
 	 * to constant nil. See {@code .kb/sequence-op-runtimes.md}.
 	 */
 	public static final String REPLACE_BULK = "%REPLACE-BULK";
+
+	/**
+	 * The {@code %string-search} internal primitive, called only by the prelude's
+	 * {@link #SEARCH}: {@code (%string-search seq1 seq2 start1 end1 start2 end2)} over
+	 * checked bounds answers the leftmost match when the backend can scan two strings
+	 * without an element loop (WASM: no allocation at all), -1 when there is none, and
+	 * nil -- nothing decided -- for anything else, in which case {@code search}'s loop
+	 * runs. The interpreter and the JVM compile it to constant nil. See
+	 * {@code .kb/string-search-runtime.md}.
+	 */
+	public static final String STRING_SEARCH = "%STRING-SEARCH";
 
 	/** The {@code %fill-runtime} internal helper; see {@link #REPLACE_RUNTIME}. */
 	public static final String FILL_RUNTIME = "%FILL-RUNTIME";

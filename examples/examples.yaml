@@ -970,6 +970,11 @@ examples:
     note: >-
       a filter on ../proxy-wasm.lisp, compiled only here; proxy-wasm/sdk-examples/check.sh
       runs it in a real Envoy
+  - path: proxy-wasm/sdk-examples/error_log.lisp
+    backends: [wasm-reactor]
+    note: >-
+      a filter on ../proxy-wasm.lisp, compiled only here; proxy-wasm/sdk-examples/check.sh
+      runs it in a real Envoy
   - path: proxy-wasm/sdk-examples/test_plugin.lisp
     backends: [wasm-reactor]
     note: >-

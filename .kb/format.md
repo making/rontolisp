@@ -86,6 +86,37 @@ raise the guarantee, so `~{~a~^, ~}` and `~{~a~^ ~a~}` carry no check. Cost, mea
 three-item `~:{` (four checks) under EH mode. Before it the body read NIL past the end and
 ignored `~:}` (the renderer already signalled and forced).
 
+## A string with a fill pointer
+**Invariant: `(format d ...)` appends to a string with a fill pointer on all four backends, growing
+it past its capacity, and answers nil** (SBCL 2.2.9, 2026-11-05: the same, for an `:adjustable` one and
+a `base-char` one too). `(%format-write (%format-destination D) (format nil C ARGS...))`: two prelude
+defuns, `%format-destination` the check that passes such a string ahead of `%check-stream`,
+`%format-write` the dispatch on nil, a string, `t` and a stream. `StreamOperandChecks.formatThroughDestination`
+builds it; the destination is still evaluated and checked first.
+
+- Gate: both defuns are in the program where `referencedBySurfaceForm` says, the program spelling
+  `:fill-pointer` and either a `format` whose destination takes a check or a `#'format` / `'format`;
+  a `:fill-pointer` only in a dead library defun does not count (`LibraryDefunPruner.SYNTHESIZED_ENTRIES`).
+  `formatTakesStrings` reads that one fact, after the splice, for each of the three writers:
+  `StreamOperandChecks`' site rewrite, `GrayStreamsLibrary`'s `format` rewrite (which runs first; the
+  `write-string`s in `%format-write` are ordinary sites of its walk, so a Gray instance still reaches its
+  dispatch) and the `#'format` wrapper (`BuiltinFunctionWrappers.formatThroughDestinationWrapper`, over the
+  Gray twin). Every other program lowers as it did, one `stringp` arm spared per computed destination.
+- A keyword built at run time (`(intern "FILL-POINTER" :keyword)` handed to `#'make-array`) defeats the
+  gate: a compile path refuses that string where the interpreter appends. `--no-gc` refuses `:fill-pointer`
+  outright.
+- The interpreter has no gate: `case FORMAT` takes the same rewrite for every computed destination, the
+  defuns load on first call, and `#'format` writes through `%format-write`
+  (`installStreamOperandChecks` lets the string past its check).
+- **A string with no fill pointer stays `FORMAT: The value X is not of type STREAM`**, where SBCL signals a
+  `simple-error` `X is not a string with a fill-pointer`. CLHS leaves it undefined, a handler for `error`
+  takes both, and SBCL's condition on all four would cost an arm in `%check-stream-runtime` of every program
+  with a computed destination, not only the gated ones (an interpreter and a compile path must not answer
+  differently by what else the program spells).
+- The text is written when the arguments are done, as for a stream. Pinned by ci-spec
+  `format-to-a-string-with-a-fill-pointer` (standalone, no Gray) and
+  `format-to-a-string-with-a-fill-pointer-beside-the-gray-dispatch`.
+
 ## `~F` / `~$` lower to ONE call, and must keep doing so
 `decimalFloatExpr` emits exactly `(%fixed-decimal value places int-digits plus-p)` --
 `compiler/FixedDecimal` in the interpreter, `_fixdec` on the JVM (`JvmNumericRuntimeBuilder`),

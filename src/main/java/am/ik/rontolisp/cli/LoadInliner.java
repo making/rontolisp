@@ -263,7 +263,7 @@ public final class LoadInliner {
 				new java.util.LinkedHashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), new ArrayList<>(),
 				new ArrayList<>(), new SourceRegistryConfig(), features, dists,
 				new java.util.concurrent.atomic.AtomicInteger(), baseDir, standards, new BuildImage(features),
-				new Reading());
+				new Reading(features));
 		FormSource program = entry.open(ctx, result);
 		if (entryFile == null) {
 			expandInto(program, result, ctx, new Origin(baseDir, null, null));
@@ -367,7 +367,14 @@ public final class LoadInliner {
 	 */
 	private static final class Reading {
 
+		/** The set the program is read with, not the one a system widens for its own. */
+		private final Features features;
+
 		@Nullable private ReadTimeImage image;
+
+		Reading(Features features) {
+			this.features = features;
+		}
 
 	}
 
@@ -407,7 +414,7 @@ public final class LoadInliner {
 		Reading reading = ctx.reading();
 		if (reading.image == null
 				&& (ReadTimeImage.changesSyntax(source) || FeaturePushes.computesAPush(source, ctx.features(), path))) {
-			reading.image = new ReadTimeImage();
+			reading.image = new ReadTimeImage(reading.features);
 		}
 		SourceLanguage.Forms forms = SourceLanguage.readForms(source, ctx.features(), path);
 		List<Set<String>> featuresAtOpen = new ArrayList<>(1);

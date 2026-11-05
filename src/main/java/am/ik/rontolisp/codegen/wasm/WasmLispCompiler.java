@@ -2276,6 +2276,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	// program names %read-link.
 	static final int FUNC_READ_LINK = FUNC_FILE_WRITE_DATE + 1;
 
+	// _str_search (seq1, seq2, start1, end1, start2, end2) -> (ref null eq): the
+	// %string-search primitive, search over two strings with nothing allocated
+	// (WasmStringRuntimeBuilder.buildStrSearchBody, .kb/string-search-runtime.md).
+	// Reuses the six-argument callable signature, so no new type entry; appended after
+	// the last fixed helper so no index above shifts, and shaken from a program that
+	// never searches.
+	static final int FUNC_STR_SEARCH = FUNC_READ_LINK + 1;
+
 	// The hash-table runtime (WasmHashTableRuntimeBuilder): gethash, puthash, remhash
 	// and the structure-sharing copy over a chained table that becomes a trie of hash
 	// chains once copied, each keeping the insertion order --
@@ -2283,7 +2291,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// offsets. Each reuses a TYPE_CALLABLE_BASE signature, so no type is added; appended
 	// after the last fixed helper so no index above shifts, and shaken from a module
 	// that makes no table.
-	static final int FUNC_HT_BASE = FUNC_READ_LINK + 1;
+	static final int FUNC_HT_BASE = FUNC_STR_SEARCH + 1;
 
 	// _host_getcwd () -> (ref null eq): the working directory, fd 3's preopen name when
 	// the host spells it absolute, else nil (WasmIoRuntimeBuilder.buildHostGetcwdBody,
@@ -8167,6 +8175,8 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_FILE_WRITE_DATE)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _read_link (path) -> value
 															// (FUNC_READ_LINK)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 5); // _str_search (six values) ->
+															// value (FUNC_STR_SEARCH)
 				// the hash-table runtime block (FUNC_HT_BASE ..)
 				for (int i = 0; i < WasmHashTableRuntimeBuilder.FUNC_COUNT; i++) {
 					fnDef.addFunction(WasmHashTableRuntimeBuilder.typeIndexOf(i));
@@ -9241,6 +9251,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// nil stub where nothing declared it.
 				code.addFunction(readLinkOrdinal < 0 ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
 					.buildReadLinkBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + readLinkOrdinal));
+				// search's string arm (FUNC_STR_SEARCH): shaken when nothing searches.
+				code.addFunction(WasmStringRuntimeBuilder.buildStrSearchBody());
 				// the hash-table runtime block (FUNC_HT_BASE ..): shaken from a module
 				// that makes no table.
 				WasmHashTableRuntimeBuilder.Flags tableFlags = new WasmHashTableRuntimeBuilder.Flags(

@@ -71,6 +71,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [characters-code-points.md](characters-code-points.md) -- character = Unicode code point on every backend
 - [eq-numbers.md](eq-numbers.md) -- `eq` is `eql` on every backend: numbers and characters by type and value, never box identity
 - [string-index-cost.md](string-index-cost.md) -- a character index costs the same wherever it lands; the per-string cursor
+- [string-search-runtime.md](string-search-runtime.md) -- `search` over two strings allocates nothing on wasm-GC (`%string-search`, bytes for two immutable strings, code points through `_str_char_ref` for a character vector); what a filter's `search` and typed loop cost on an interpreting host, measured
 - [string-accumulate-cost.md](string-accumulate-cost.md) -- building one string out of N pieces costs the total length, not the sum of the prefixes
 - [hash-tables.md](hash-tables.md) -- the one representation (flat, a structure-sharing trie once copied, insertion-order walk), `equalp` key fold, depth cap and work budget, the wasm identity-hash slot and `%identity-hash`
 - [array-literals.md](array-literals.md) -- an array literal is a constructor, not a constant; rank-0 arrays; when `:element-type` specializes
@@ -172,6 +173,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [wit.md](wit.md) -- `am.ik.wit`, `--emit-wit`, `WitTypeMapper`, `rontolisp:wit-export`/`wit-import`, the `:names` naming hook and `describe`, `:octets` (a `list<u8>` result lifted as octets)
 - [wasm-export-no-wasi.md](wasm-export-no-wasi.md) -- `rontolisp:wasm-export` + `--no-wasi` reactor mode
 - [wasm-import.md](wasm-import.md) -- `rontolisp:wasm-import`, `:async t`, `"rontolisp:memory"`, `--emit-js-glue`, `--host-boundary`
+- [proxy-wasm-sdk.md](proxy-wasm-sdk.md) -- `examples/proxy-wasm`: what a filter pays for, the compile-time error mode, what was weighed and left
 - [no-gc-scalar-wasm.md](no-gc-scalar-wasm.md) -- the `--no-gc` non-GC scalar backend
 - [proxy-wasm-no-gc.md](proxy-wasm-no-gc.md) -- the `--no-gc` Proxy-Wasm SDK in `examples/proxy-wasm/no-gc/`: why macros, what state and each piece cost, measured
 - [wasm-gc-strings.md](wasm-gc-strings.md) -- GC-backend strings as `$str_bytes` arrays
