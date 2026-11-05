@@ -142,6 +142,33 @@ final class JvmObjCompiler {
 		// the makeTypeTest kind comparison reads back.
 		JvmExprCompiler.compileExpr(new LispSymbol(kind), ctx, className);
 		ctx.body.aastore();
+		int abilities = LispLayout.Abilities.ofKind(kind);
+		if (abilities != 0) {
+			ctx.body.dup();
+			JvmEmitHelper.emitIntConst(ctx, 1 + LispLayout.STREAM_ABILITY_CELL);
+			JvmExprCompiler.compileExpr(new LispInteger(abilities), ctx, className);
+			ctx.body.aastore();
+		}
+	}
+
+	/**
+	 * {@code (%abilities-hold-p held needed)} over two fixnums, unboxed in place:
+	 * {@code (held & needed) == needed}.
+	 */
+	static void compileAbilitiesHold(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		int needed = ctx.allocTemp();
+		ctx.body.astore(needed);
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		ctx.body.checkcast(ctx.longClass).invokevirtual(ctx.longValue);
+		ctx.body.aload(needed).checkcast(ctx.longClass).invokevirtual(ctx.longValue);
+		ctx.body.land();
+		ctx.body.aload(needed).checkcast(ctx.longClass).invokevirtual(ctx.longValue);
+		// lcmp answers 0 on a match and -1 where a needed bit is missing: plus 1, the
+		// truth.
+		ctx.body.lcmp().iconst_1().iadd();
+		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 
 	/**

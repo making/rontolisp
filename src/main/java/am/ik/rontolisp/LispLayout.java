@@ -166,15 +166,16 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	 * {@code %class-slot-defs} answer.
 	 *
 	 * <p>
-	 * THREE reserved cells past the declared slots, hence capacity 5:
+	 * FOUR reserved cells past the declared slots, hence capacity 6:
 	 * {@link #STREAM_CLOSED_CELL}, the wasm backends' CLOSED mark (a WASI descriptor has
 	 * no stream table behind it and is reused by the next {@code open}, so whether a
 	 * stream is still open is a fact about the VALUE there, not the handle),
-	 * {@link #STREAM_PUSHBACK_CELL}, the character {@code unread-char} parked, and
-	 * {@link #STREAM_PATH_CELL}, the namestring a file stream was opened with.
+	 * {@link #STREAM_PUSHBACK_CELL}, the character {@code unread-char} parked,
+	 * {@link #STREAM_PATH_CELL}, the namestring a file stream was opened with, and
+	 * {@link #STREAM_ABILITY_CELL}, what the stream can do.
 	 */
 	public static final LispLayout STREAM = new LispLayout(STREAM_TAG, "STREAM", Kind.OPAQUE, List.of("HANDLE", "KIND"),
-			List.of(LispNil.INSTANCE, LispNil.INSTANCE), 5);
+			List.of(LispNil.INSTANCE, LispNil.INSTANCE), 6);
 
 	/**
 	 * The instance tag of the built-in readtable type, spelled in upper case for the same
@@ -242,6 +243,52 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	 * the index as a literal.
 	 */
 	public static final int STREAM_PATH_CELL = 4;
+
+	/**
+	 * The reserved {@link #STREAM} cell holding what the stream can do, as
+	 * {@link Abilities} bits, nil where a producer states nothing (a socket, a request
+	 * body): a stream operator refuses a stream without the abilities it needs
+	 * ({@code compiler.StreamOperandChecks}). On the value because a wasm stream has no
+	 * table entry to ask, and a descriptor is reused by the next {@code open}.
+	 */
+	public static final int STREAM_ABILITY_CELL = 5;
+
+	/**
+	 * The bits of {@link #STREAM_ABILITY_CELL}: a direction and an element, each stream
+	 * having at least one of each.
+	 */
+	public static final class Abilities {
+
+		private Abilities() {
+		}
+
+		/** Reads. */
+		public static final int INPUT = 1;
+
+		/** Writes. */
+		public static final int OUTPUT = 2;
+
+		/** Moves characters. */
+		public static final int CHARACTER = 4;
+
+		/** Moves bytes. */
+		public static final int BINARY = 8;
+
+		/**
+		 * What a stream of this kind can do whatever opened it.
+		 * @param kind one of {@link Kinds}
+		 * @return the bits, 0 when the kind alone does not say
+		 */
+		public static int ofKind(String kind) {
+			return switch (kind) {
+				case Kinds.STRING_INPUT -> INPUT | CHARACTER;
+				case Kinds.STRING_OUTPUT -> OUTPUT | CHARACTER;
+				case Kinds.STANDARD -> OUTPUT | CHARACTER | BINARY;
+				default -> 0;
+			};
+		}
+
+	}
 
 	/**
 	 * The literal {@code %obj-ref} / {@code %obj-set} index of an instance's LAST storage

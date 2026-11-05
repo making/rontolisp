@@ -3797,6 +3797,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// desugaring could turn one on without the other, which is a %obj-new with no
 		// instance type behind it.
 		final boolean usesStreamValues = LispMacroExpander.mayCreateStreamValues(program);
+		if (usesStreamValues) {
+			closRegistry.ensureClosedStreamErrorSeeded();
+		}
 		// Cut a defun an earlier attempt measured over FUNCTION_BODY_LIMIT_BYTES into
 		// pieces, exactly where the JVM backend cuts one over HotSpot's limit: before
 		// the lowering below, which turns a go/return-from LEAVING an outlined form into
@@ -4556,8 +4559,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		program.forEach(form -> LispMacroExpander.collectStreamCheckOperators(form, streamCheckOperators));
 		wrappers.forEach(form -> LispMacroExpander.collectStreamCheckOperators(form, streamCheckOperators));
 		if (LispMacroExpander.programUsesStreamCheck(program) || LispMacroExpander.programUsesStreamCheck(wrappers)) {
-			inject(LispMacroExpander.checkStreamRuntimeWrapper(usesStreamValues ? null
-					: x -> new LispCons(new LispSymbol("<"),
+			inject(usesStreamValues
+					? LispMacroExpander.checkStreamValueRuntimeWrapper(
+							programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM), ehMode && hasLandingPad)
+					: LispMacroExpander.checkStreamRuntimeWrapper(x -> new LispCons(new LispSymbol("<"),
 							new LispCons(x, new LispCons(new LispInteger(0), LispNil.INSTANCE)))),
 					defuns, injectedRuntimeDefuns, injectedForms, specialVars);
 		}
@@ -14257,6 +14262,14 @@ public final class WasmLispCompiler implements LispCompiler {
 					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME);
 					break;
 				}
+			}
+			// The same for a stream check's closed-stream error, registered where a
+			// stream
+			// value can exist.
+			String closedStream = LispLayout.CLASS_TAG_PREFIX
+					+ am.ik.rontolisp.ClosRegistry.CLOSED_STREAM_ERROR_CLASS_NAME;
+			if (closRegistry.findLayoutByTag(closedStream) != null) {
+				used.add(closedStream);
 			}
 			// The same for a failed open's / %file-error's file-error (lowerFileError).
 			for (String site : LispMacroExpander.FILE_ERROR_SITES) {

@@ -124,22 +124,28 @@ public final class StreamDesignators {
 		LispInstance stream = LispInstance.ofNilSlots(LispLayout.STREAM);
 		stream.setSlot(0, new LispInteger(handle));
 		stream.setSlot(1, new LispSymbol(kind));
+		int abilities = LispLayout.Abilities.ofKind(kind);
+		if (abilities != 0) {
+			stream.setSlot(LispLayout.STREAM_ABILITY_CELL, new LispInteger(abilities));
+		}
 		return stream;
 	}
 
 	/**
-	 * The {@code (%obj-new '%STREAM <handle> :<kind>)} form that wraps a raw handle
-	 * EXPRESSION into a stream value on the compile paths.
+	 * The {@code (%obj-new '%STREAM <handle> :<kind> nil nil nil <abilities>)} form that
+	 * wraps a raw handle EXPRESSION into a stream value on the compile paths.
 	 * @param handle the expression producing the raw handle
 	 * @param kind one of {@link LispLayout.Kinds}
 	 * @return the constructor form
 	 */
 	public static LispVal streamValueForm(LispVal handle, String kind) {
+		LispVal cells = new LispCons(LispNil.INSTANCE, new LispCons(LispNil.INSTANCE, new LispCons(LispNil.INSTANCE,
+				new LispCons(new LispInteger(LispLayout.Abilities.ofKind(kind)), LispNil.INSTANCE))));
 		return new LispCons(new LispSymbol(LispNames.OBJ_NEW),
 				new LispCons(
 						new LispCons(new LispSymbol(LispNames.QUOTE),
 								new LispCons(new LispSymbol(LispLayout.STREAM_TAG), LispNil.INSTANCE)),
-						new LispCons(handle, new LispCons(new LispSymbol(kind), LispNil.INSTANCE))));
+						new LispCons(handle, new LispCons(new LispSymbol(kind), cells))));
 	}
 
 	/**

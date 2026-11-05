@@ -1835,9 +1835,8 @@ public final class LispPreludeLibrary {
 		// one.
 		SOURCES.put(LispNames.CLEAR_INPUT, """
 				(defun clear-input (&optional %ci-s)
-				  (if (or (null %ci-s) (eq %ci-s t) (streamp %ci-s))
-				      nil
-				      (error 'type-error :datum %ci-s :expected-type 'stream)))
+				  (%check-stream (or %ci-s *standard-input*) 'clear-input t)
+				  nil)
 				""");
 		// interactive-stream-p: whether a process standard stream is a terminal, asked of
 		// the host through %terminal-p. t is the terminal *terminal-io* names, standard
@@ -2005,38 +2004,6 @@ public final class LispPreludeLibrary {
 				                       :expected-type '(integer 0 *)
 				                       :format-control "Sequence bounds out of range.")
 				                nil)))))
-				""");
-		// The compile paths' FILE-stream direction record (.kb/read-load-streams.md,
-		// "String streams"): every literal open leaf registers its direction bits (1
-		// input, 2 output, 3 both) under its HANDLE -- the element-type registry's key
-		// -- and every close forgets it, so a closed file stream is neither, as the
-		// interpreter's emptied table entry says. The direction predicates read it
-		// INLINE (LispMacroExpander.expandStreamDirectionP); a classifier defun cost
-		// +6.2 KB on the JVM for one output-stream-p of a string stream, where the
-		// inline test costs +0.6 KB. An ALIST, not a hash table: the table runtime was
-		// +14.7 KB and a second class file on the JVM, and the entries are the file
-		// streams open at once.
-		SOURCES.put(LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL, """
-				(defvar rontolisp::%file-stream-directions nil)
-				(defun rontolisp::%file-stream-direction-register (%fsdr-s %fsdr-d)
-				  (setq rontolisp::%file-stream-directions
-				        (cons (cons (%obj-ref %fsdr-s 0) %fsdr-d) rontolisp::%file-stream-directions))
-				  %fsdr-s)
-				""");
-		SOURCES.put(LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL, """
-				(defvar rontolisp::%file-stream-directions nil)
-				(defun rontolisp::%file-stream-direction-forget (%fsdf-s)
-				  (let ((%fsdf-h (if (%obj-is %fsdf-s '%STREAM)
-				                     (%obj-ref %fsdf-s 0)
-				                     (if (integerp %fsdf-s) %fsdf-s nil)))
-				        (%fsdf-kept nil))
-				    (if %fsdf-h
-				        (progn
-				          (dolist (%fsdf-e rontolisp::%file-stream-directions)
-				            (if (eql (car %fsdf-e) %fsdf-h) nil (setq %fsdf-kept (cons %fsdf-e %fsdf-kept))))
-				          (setq rontolisp::%file-stream-directions %fsdf-kept))
-				        nil)
-				    nil))
 				""");
 		SOURCES.put(LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL, """
 				(defun %file-stream-element-type (%fset-s)
@@ -5158,7 +5125,7 @@ public final class LispPreludeLibrary {
 		// second value of every (read s).
 		SOURCES.put(LispNames.READ, """
 				(defun read (&optional stream (eof-error-p t) eof-value recursive-p)
-				  (%check-stream stream 'read t)
+				  (%check-stream (or stream *standard-input*) 'read t)
 				  (let ((%rd-out (make-string-output-stream)))
 				    (if (%rd-datum stream %rd-out)
 				        (let ((%rd-text (get-output-stream-string %rd-out)))
@@ -5175,7 +5142,7 @@ public final class LispPreludeLibrary {
 		// the pushback cell, and whatever follows any other datum was never taken.
 		SOURCES.put(LispNames.READ_PRESERVING_WHITESPACE, """
 				(defun read-preserving-whitespace (&optional stream (eof-error-p t) eof-value recursive-p)
-				  (%check-stream stream 'read-preserving-whitespace t)
+				  (%check-stream (or stream *standard-input*) 'read-preserving-whitespace t)
 				  (let ((%rd-out (make-string-output-stream)))
 				    (if (%rd-datum stream %rd-out)
 				        (let ((%rd-text (get-output-stream-string %rd-out)))
@@ -5902,16 +5869,6 @@ public final class LispPreludeLibrary {
 							&& (referencesName(program, LispNames.OPEN, canonical)
 									|| referencesName(program, LispNames.WITH_OPEN_FILE, canonical)));
 		}
-		// The file-stream direction record: its register is synthesized at every open
-		// leaf and its forget at every close, and only a program that asks a direction
-		// predicate, can build a stream value and can open a file needs either.
-		if (LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL.equals(entry)
-				|| LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL.equals(entry)) {
-			return namesADirectionPredicate(program, canonical)
-					&& am.ik.rontolisp.macro.LispMacroExpander.mayCreateStreamValues(program)
-					&& (referencesName(program, LispNames.OPEN, canonical)
-							|| referencesName(program, LispNames.WITH_OPEN_FILE, canonical));
-		}
 		// %character-stream-p: called from the read-sequence / write-sequence expansions
 		// the expression compilers build, and only needed where a string stream VALUE can
 		// exist at all -- without one every stream is a bivalent standard stream and the
@@ -6172,11 +6129,6 @@ public final class LispPreludeLibrary {
 			return defName.name();
 		}
 		return null;
-	}
-
-	private static boolean namesADirectionPredicate(List<LispVal> program, boolean canonical) {
-		return referencesName(program, LispNames.INPUT_STREAM_P, canonical)
-				|| referencesName(program, LispNames.OUTPUT_STREAM_P, canonical);
 	}
 
 	/** Per entry, the member names of every symbol its forms spell. */

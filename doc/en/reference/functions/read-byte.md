@@ -18,4 +18,4 @@ Because it touches the filesystem, `read-byte` is shown here statically rather t
 
 The first call returns the next byte of `data.bin`; the second form reads until end of file without signalling, returning `nil` when the bytes are exhausted -- the usual loop-termination test when reading a whole file.
 
-Do not mix `read-byte` with `read-line` / `read-char` on the same stream: the character reads buffer ahead, so bytes a following `read-byte` owes you may already have been consumed.
+A stream moves one element: `read-byte` on a character stream, and `read-line` / `read-char` on a binary one, signal a `type-error` ([`open`](open.md)).

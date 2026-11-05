@@ -695,9 +695,9 @@
         (progn
           (rontolisp:stream-clear-input %ci-target)
           nil)
-        (if (or (null %ci-s) (eq %ci-s t) (streamp %ci-s))
-            nil
-            (error 'type-error :datum %ci-s :expected-type 'stream)))))
+        (progn
+          (%check-stream (or %ci-s *standard-input*) 'clear-input t)
+          nil))))
 
 (defun rontolisp::%gray-listen-dispatch (stream)
   (let ((target (%stream-target (or stream *standard-input*))))
