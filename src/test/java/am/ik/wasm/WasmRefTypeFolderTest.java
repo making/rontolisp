@@ -388,6 +388,132 @@ class WasmRefTypeFolderTest {
 	}
 
 	@Test
+	void anIfBehindASplicedInArmReadsTheArmsConstant() throws Exception {
+		// Each outer if is decided, so its arm is spliced in bare, and its constant is
+		// then what the inner if reads: the then arm's in the first function, the else
+		// arm's in the second. A merge is no such value: the last if stays.
+		byte[] thenArm = body(w -> {
+			i31(w, 5);
+			refTest(w, Type.I31.code());
+			w.write(Instruction.IF, Type.I32.code());
+			i32(w, 0);
+			w.write(Instruction.ELSE);
+			i32(w, 1);
+			w.write(Instruction.END);
+			w.write(Instruction.IF, Type.I32.code());
+			i32(w, 9);
+			w.write(Instruction.ELSE);
+			i32(w, 7);
+			w.write(Instruction.END);
+		});
+		byte[] elseArm = body(w -> {
+			i31(w, 5);
+			refTest(w, 0);
+			w.write(Instruction.IF, Type.I32.code());
+			i32(w, 0);
+			w.write(Instruction.ELSE);
+			i32(w, 1);
+			w.write(Instruction.END);
+			w.write(Instruction.IF, Type.I32.code());
+			i32(w, 7);
+			w.write(Instruction.ELSE);
+			i32(w, 9);
+			w.write(Instruction.END);
+		});
+		byte[] merge = body(w -> {
+			w.write(Instruction.BLOCK, Type.I32.code());
+			i32(w, 1);
+			i32(w, 0);
+			w.write(Instruction.BR_IF);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.DROP);
+			i32(w, 1);
+			w.write(Instruction.END);
+			w.write(Instruction.IF, Type.I32.code());
+			i32(w, 7);
+			w.write(Instruction.ELSE);
+			i32(w, 9);
+			w.write(Instruction.END);
+		});
+		byte[] folded = WasmRefTypeFolder
+			.fold(module(new int[] { 2, 2, 2 }, List.of(thenArm, elseArm, merge), Map.of("t", 0, "e", 1, "m", 2)));
+
+		assertThat(mnemonics(code(folded, 0))).doesNotContain("if").endsWith("i32.const 7", "end");
+		assertThat(mnemonics(code(folded, 1))).doesNotContain("if").endsWith("i32.const 7", "end");
+		assertThat(mnemonics(code(folded, 2))).contains("if", "else");
+		assertThat(validateAndInvoke(folded, "t")).isEqualTo("7");
+		assertThat(validateAndInvoke(folded, "e")).isEqualTo("7");
+		assertThat(validateAndInvoke(folded, "m")).isEqualTo("7");
+	}
+
+	@Test
+	void aGuardHoldsUpToTheLocalsNextAssignmentButNotAcrossALoopHoldingIt() throws Exception {
+		// Local 0 is {i31, struct{i32}}. Past the `x is i31` guard the walk's read of x
+		// is an i31 although x is assigned further down: the struct test goes, the way
+		// nreverse's previous-cell read keeps a cdr's string out of its answer. A loop
+		// opened behind the guard comes back around with the assigned value, so the same
+		// test inside it stays.
+		byte[] holds = body(w -> {
+			w.write(Instruction.BLOCK, 0x40);
+			w.write(Instruction.LOOP, 0x40);
+			local(w, 0);
+			refTest(w, Type.I31.code());
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.BR_IF);
+			w.writeUnsignedLeb128(1);
+			local(w, 0);
+			refTest(w, 0);
+			w.write(Instruction.IF, 0x40);
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+			struct(w, 7);
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.BR);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+			i32(w, 3);
+		});
+		byte[] looped = body(w -> {
+			w.write(Instruction.BLOCK, 0x40);
+			local(w, 0);
+			refTest(w, Type.I31.code());
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.BR_IF);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.LOOP, 0x40);
+			local(w, 0);
+			refTest(w, 0);
+			w.write(Instruction.IF, 0x40);
+			i32(w, 4);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			struct(w, 7);
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.BR);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+			i32(w, 3);
+		});
+		byte[] g = body(w -> {
+			i31(w, 5);
+			call(w, 0);
+			i31(w, 5);
+			call(w, 1);
+			w.write(Instruction.I32_ADD);
+		});
+		byte[] folded = WasmRefTypeFolder
+			.fold(module(new int[] { 1, 1, 2 }, List.of(holds, looped, g), Map.of("g", 2)));
+
+		assertThat(mnemonics(code(folded, 0))).doesNotContain("ref.test 0");
+		assertThat(mnemonics(code(folded, 1))).contains("ref.test 0");
+		assertThat(validateAndInvoke(folded, "g")).isEqualTo("7");
+	}
+
+	@Test
 	void turnsACastNoValueCanPassIntoATrap() throws Exception {
 		// f casts its argument to struct{i32}, and the only value it is ever handed is
 		// an i31: the cast can only fail, so it becomes the trap it always was and the
@@ -587,6 +713,31 @@ class WasmRefTypeFolderTest {
 		byte[] refolded = WasmRefTypeFolder.fold(folded);
 		assertThat(floatTests(refolded)).isZero();
 		assertThat(WasmRefTypeFolder.fold(refolded)).isSameAs(refolded);
+	}
+
+	@Test
+	void nreverseOfAListTheProgramBuiltLeavesNoGenericSequenceFunction() {
+		// Its lowering dispatches over string and vector, whose arms call replace and the
+		// conversions. The tests fold over a list the program builds, whether the answer
+		// goes to a new variable or back into the one reversed, and whatever a cdr holds
+		// elsewhere: the module is the size of the loop, not of the family.
+		String tail = """
+				(defvar *held* (cons "a" "dotted pair of strings"))
+				(defun f (n)
+				  (let ((acc '()))
+				    (dotimes (i n) (push (cons i i) acc))
+				    (setq acc (nreverse acc))
+				    (setq *held* acc)
+				    0))
+				(rontolisp:wasm-export 'f :as "f" :params '(:s32) :returns :s32)
+				""";
+		byte[] module = WasmLispCompiler.builder()
+			.noWasi(true)
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(LispReader.readAllFromString(tail));
+
+		assertThat(module.length).isLessThan(2048);
 	}
 
 	@Test

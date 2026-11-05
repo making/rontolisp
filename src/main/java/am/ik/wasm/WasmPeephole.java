@@ -55,6 +55,11 @@ import org.jspecify.annotations.Nullable;
  * <li>{@code ref.test}, {@code ref.is_null} or {@code i32.eqz} then {@code drop} -&gt;
  * {@code drop}: a unary test that cannot trap, computed for nobody -- so the operand's
  * own push can then go with the drop.</li>
+ * <li>{@code call F; drop} -&gt; nothing, when the caller names {@code F} a pure producer
+ * of a non-null reference.</li>
+ * <li>{@code ref.i31; ref.cast (ref i31)} -&gt; {@code ref.i31}: the operand's type says
+ * so, and {@code i32.const K; ref.i31; i31.get_s} -&gt; {@code i32.const K} for a K the
+ * box holds: a literal boxed for a parameter that unboxes it.</li>
  * </ul>
  * and one structural rewrite, which is why this pass decodes blocks at all:
  * <ul>
@@ -355,6 +360,22 @@ public final class WasmPeephole {
 			out.remove(n - 2);
 			return true;
 		}
+		if (b.opcode == Instruction.DROP && a.opcode == Instruction.CALL && a.bytes == null
+				&& pureNonNullCall.test((int) a.in.a)) {
+			out.remove(n - 1);
+			out.remove(n - 2);
+			return true;
+		}
+		if (isGc(a, Instruction.I31_REF_NEW) && isGc(b, Instruction.REF_CAST) && b.in.a == WasmCodeModel.HEAP_I31) {
+			out.remove(n - 1);
+			return true;
+		}
+		if (n >= 3 && isGc(b, Instruction.I31_GET_S) && isGc(a, Instruction.I31_REF_NEW)
+				&& out.get(n - 3).opcode == Instruction.I32_CONST && fitsI31(immediate(out.get(n - 3)))) {
+			out.remove(n - 1);
+			out.remove(n - 2);
+			return true;
+		}
 		if (b.opcode == Instruction.END && n >= 5 && isSameArmIf(out, n - 5)) {
 			Op open = out.get(n - 5);
 			Op arm = out.get(n - 4);
@@ -382,6 +403,15 @@ public final class WasmPeephole {
 			return true;
 		}
 		return false;
+	}
+
+	private static boolean isGc(Op op, int sub) {
+		return op.opcode == Instruction.GC_PREFIX && op.bytes == null && op.in.sub == sub;
+	}
+
+	// Whether a constant is what `ref.i31; i31.get_s` answers for it.
+	private static boolean fitsI31(long value) {
+		return value >= -(1L << 30) && value < (1L << 30);
 	}
 
 	// `if (result T) call F else ref.null end` at out[at..at+4], F a pure non-null

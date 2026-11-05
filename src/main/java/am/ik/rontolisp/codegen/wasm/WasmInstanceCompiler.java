@@ -115,9 +115,40 @@ final class WasmInstanceCompiler {
 		WasmExprCompiler.compileExpr(new LispSymbol(kind), ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		int abilities = LispLayout.Abilities.ofKind(kind);
+		if (abilities != 0) {
+			getLocal(ctx, slotsSlot);
+			castBuckets(ctx);
+			i32Const(ctx, LispLayout.STREAM_ABILITY_CELL);
+			WasmExprCompiler.compileExpr(new LispInteger(abilities), ctx);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		}
 		i32Const(ctx, address);
 		getLocal(ctx, slotsSlot);
 		WasmEmitHelper.emitNewInstance(ctx);
+	}
+
+	/**
+	 * {@code (%abilities-hold-p held needed)} over two fixnums:
+	 * {@code (~held & needed) == 0}.
+	 */
+	static void compileAbilitiesHold(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, -1);
+		ctx.writer.write(Instruction.I32_XOR);
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I32_AND);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		WasmEmitHelper.emitTrue(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		refNull(ctx);
+		ctx.writer.write(Instruction.END);
 	}
 
 	/** {@code (%obj-ref obj <k>)}. */

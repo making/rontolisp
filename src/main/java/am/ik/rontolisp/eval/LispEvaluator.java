@@ -1622,6 +1622,7 @@ public final class LispEvaluator {
 		// a sleep an interrupt woke asks whether a debugger went on with the evaluation
 		this.globalEnv.setInterruptResumed(this::resumeAfterInterrupt);
 		this.closRegistry.ensureInteractiveInterruptSeeded();
+		this.closRegistry.ensureClosedStreamErrorSeeded();
 		this.globalEnv.defineFunction(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
 			if (args.size() != 1) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
@@ -9310,6 +9311,9 @@ public final class LispEvaluator {
 				if (args.size() > index && !(LispNames.FORMAT.equals(name) && hasFillPointer(args.get(index)))) {
 					checkStreamOperand(args.get(index), name, designator);
 				}
+				if (designator && readsStandardStream(args, index, name)) {
+					checkStreamOperand(standardStreamValue(StreamOperandChecks.standardStreamOf(name)), name, true);
+				}
 				return apply(base, args, this.globalEnv);
 			}));
 		});
@@ -9320,6 +9324,10 @@ public final class LispEvaluator {
 					if (!args.isEmpty()) {
 						checkStreamOperand(args.get(0), LispNames.READ_LINE, true);
 					}
+					if (readsStandardStream(args, 0, LispNames.READ_LINE)) {
+						checkStreamOperand(standardStreamValue(LispNames.STANDARD_INPUT_VAR), LispNames.READ_LINE,
+								true);
+					}
 					return apply(basePair, args, this.globalEnv);
 				}));
 		this.globalEnv.defineFunction(LispNames.CHECK_STREAM_INTERNAL,
@@ -9328,6 +9336,23 @@ public final class LispEvaluator {
 							args.get(2) != LispNil.INSTANCE);
 					return args.get(0);
 				}));
+	}
+
+	// What a call's stream position spells where it writes to or reads from a standard
+	// stream variable, whose value may have been closed since it was bound.
+	private static boolean readsStandardStream(List<LispVal> args, int index, String operator) {
+		if (args.size() <= index) {
+			return true;
+		}
+		LispVal stream = args.get(index);
+		return stream instanceof LispNil || (stream instanceof LispSymbol keyword && keyword.name().startsWith(":"))
+				|| (stream instanceof LispTrue && LispNames.FORMAT.equals(operator));
+	}
+
+	private LispVal standardStreamValue(String variable) {
+		LispVal value = this.dynamicBindings.isBound(variable) ? this.dynamicBindings.get(variable)
+				: this.globalEnv.lookupOrNull(variable);
+		return value == null ? LispTrue.INSTANCE : value;
 	}
 
 	private static boolean hasFillPointer(LispVal value) {
@@ -9345,6 +9370,22 @@ public final class LispEvaluator {
 		if (!stream) {
 			throw operator == null ? OperandTypeException.of(value, OperandTypes.Kind.STREAM)
 					: OperandTypeException.of(value, OperandTypes.Kind.STREAM, operator);
+		}
+		Integer needed = StreamOperandChecks.neededAbilityBits(operator);
+		LispVal target = needed == null ? value : Environment.synonymTarget(value);
+		if (needed != null && target instanceof LispInstance instance && Environment.isStreamValue(instance)) {
+			if (apply(this.globalEnv.lookupFunction(LispNames.OPEN_STREAM_P_RAW_INTERNAL), List.of(instance),
+					this.globalEnv) == LispNil.INSTANCE) {
+				throw new LispEvalException(ClosRegistry.CLOSED_STREAM_MESSAGE,
+						ClosRegistry.newClosedStreamCondition(instance));
+			}
+			if (instance.slot(LispLayout.STREAM_ABILITY_CELL) instanceof LispInteger held
+					&& (held.value() & needed) != needed) {
+				throw OperandTypeException.notOfType(
+						instance, List.of("SATISFIES", (needed & LispLayout.Abilities.INPUT) != 0
+								? LispNames.INPUT_STREAM_P : LispNames.OUTPUT_STREAM_P),
+						Objects.requireNonNull(operator));
+			}
 		}
 	}
 
@@ -11537,6 +11578,8 @@ public final class LispEvaluator {
 				return singleValue(evalDefsystem(cons));
 			case LispNames.SIGNAL_COND_INTERNAL:
 				return singleValue(evalSignalCond(cons, env));
+			case LispNames.ERROR_COND_INTERNAL:
+				return evalErrorCond(cons, env);
 			case LispNames.WIT_EXPORT_QUALIFIED:
 				return singleValue(evalWitExport(cons));
 			case LispNames.WIT_IMPORT_QUALIFIED:
@@ -15277,8 +15320,8 @@ public final class LispEvaluator {
 			// resolution
 			// that reaches it before any condition form ran loads the same defuns the
 			// compile path injects, rather than failing.
-			if (LispNames.CONDITION_REPORT_STR_INTERNAL.equals(name)
-					|| LispNames.FORMAT_CONDITION_INTERNAL.equals(name)) {
+			if (LispNames.CONDITION_REPORT_STR_INTERNAL.equals(name) || LispNames.FORMAT_CONDITION_INTERNAL.equals(name)
+					|| LispNames.SIGNAL_TEXT_INTERNAL.equals(name)) {
 				ensureConditionReportRuntimeLoaded();
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {
@@ -16757,15 +16800,52 @@ public final class LispEvaluator {
 			throw new LispEvalException(LispNames.SIGNAL_COND_INTERNAL + " expects a condition and a message");
 		}
 		LispVal condition = eval(parts.get(1), env);
-		LispVal message = eval(parts.get(2), env);
+		LispVal message = conditionMessage(parts.get(2), env);
 		if (anyHandlerCaseMatches(condition)) {
-			LispEvalException raised = new LispEvalException(
-					message instanceof am.ik.rontolisp.LispString s ? s.value() : message.display(), condition);
-			// The signal hook's terminal: the handler-bind handlers ran at the signal
-			// point, and the throw says so to every pad on its way to the handler-case.
-			throw LispMacroExpander.handlersRan(parts) ? raised.markHandlersRan() : raised;
+			throw raisedCondition(parts, condition, message);
 		}
 		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Evaluates {@code (%error-cond condition message)}, which signals an error carrying
+	 * a condition object (a CLOS-subset tagged-list instance) alongside the message.
+	 * Produced by the typed / condition-object error designator expansions.
+	 */
+	private LispVal evalErrorCond(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		LispVal condition = eval(parts.get(1), env);
+		throw signalPoint(raisedCondition(parts, condition, conditionMessage(parts.get(2), env)), env, null);
+	}
+
+	/**
+	 * What a signal's message operand evaluates at the signal: all of it, or of a message
+	 * that is the condition's report ({@link LispMacroExpander#conditionReportFallback})
+	 * only the fallback. A report runs when the error's message is read: what it signals
+	 * or does must not replace the condition, or happen for one nothing prints.
+	 */
+	private LispVal conditionMessage(LispVal message, Environment env) {
+		LispVal fallback = LispMacroExpander.conditionReportFallback(message);
+		return eval(fallback != null ? fallback : message, env);
+	}
+
+	/**
+	 * The error a signal raises, saying the {@code handler-bind} handlers ran when the
+	 * signal hook's terminal says so.
+	 */
+	private LispEvalException raisedCondition(List<LispVal> parts, LispVal condition, LispVal message) {
+		LispEvalException raised = LispMacroExpander.conditionReportFallback(parts.get(2)) != null
+				? renderingCondition(condition, message) : new LispEvalException(
+						message instanceof am.ik.rontolisp.LispString s ? s.value() : message.display(), condition);
+		return LispMacroExpander.handlersRan(parts) ? raised.markHandlersRan() : raised;
+	}
+
+	private LispEvalException renderingCondition(LispVal condition, LispVal fallback) {
+		return LispEvalException.rendering(() -> {
+			LispVal text = apply(resolveFunction(LispNames.SIGNAL_TEXT_INTERNAL), List.of(condition, fallback),
+					this.globalEnv);
+			return text instanceof am.ik.rontolisp.LispString s ? s.value() : text.display();
+		}, condition);
 	}
 
 	/**

@@ -6310,7 +6310,7 @@ public final class Environment implements Scope {
 		// lite lowering already answered -- without it the two seams disagreed for a
 		// program that OWNS open-stream-p with a defmethod, which is the one case the
 		// Gray dispatch stands down for (.kb/gray-streams.md).
-		env.defineFunction(LispNames.OPEN_STREAM_P, new LispFunction(LispNames.OPEN_STREAM_P, args -> {
+		java.util.function.Function<List<LispVal>, LispVal> openStreamP = args -> {
 			requireArgCount(LispNames.OPEN_STREAM_P, args, 1);
 			return switch (streamTarget(args.get(0))) {
 				case LispTrue ignored -> LispTrue.INSTANCE;
@@ -6322,7 +6322,11 @@ public final class Environment implements Scope {
 				};
 				default -> LispNil.INSTANCE;
 			};
-		}));
+		};
+		env.defineFunction(LispNames.OPEN_STREAM_P, new LispFunction(LispNames.OPEN_STREAM_P, openStreamP));
+		// The same answer past the Gray wrap of the public name.
+		env.defineFunction(LispNames.OPEN_STREAM_P_RAW_INTERNAL,
+				new LispFunction(LispNames.OPEN_STREAM_P_RAW_INTERNAL, openStreamP));
 		// CL's get-output-stream-string CLEARS the stream as it answers, so a second call
 		// sees only what was written after the first; with-output-to-string fetches once
 		// and then closes, so it cannot tell the difference.
@@ -6555,17 +6559,6 @@ public final class Environment implements Scope {
 			String message = (args.get(0) instanceof LispString s) ? s.value() : args.get(0).display();
 			throw new LispEvalException(message);
 		}));
-		// %error-cond: internal two-argument primitive that signals an error carrying a
-		// condition object (a CLOS-subset tagged-list instance) alongside the message.
-		// Produced by the typed / condition-object error designator expansions; the
-		// restart-mode signal hook's terminal adds a third operand, t, when the
-		// handler-bind handlers already ran for the condition, and the error says so.
-		env.defineFunction(LispNames.ERROR_COND_INTERNAL, new LispFunction(LispNames.ERROR_COND_INTERNAL, args -> {
-			requireArgCountBetween(LispNames.ERROR_COND_INTERNAL, args, 2, 3);
-			String message = (args.get(1) instanceof LispString s) ? s.value() : args.get(1).display();
-			LispEvalException error = new LispEvalException(message, args.get(0));
-			throw args.size() > 2 && args.get(2) != LispNil.INSTANCE ? error.markHandlersRan() : error;
-		}));
 		// %warn: internal primitive that writes a pre-built "WARNING: ..." message to the
 		// current *error-output* -- the seeded handle 2 (the process standard error)
 		// unless the program rebound it -- and returns nil. Produced by the warn macro
@@ -6747,6 +6740,8 @@ public final class Environment implements Scope {
 							: new RontoCharFileReader(path.value());
 				}
 				long handle = nextStreamHandle.getAndIncrement();
+				int abilities = OpenModes.direction(directionMode)
+						| (binary ? LispLayout.Abilities.BINARY : LispLayout.Abilities.CHARACTER);
 				if (binary) {
 					streamElementTypes.put(handle, elementType);
 					if (append && output) {
@@ -6761,14 +6756,14 @@ public final class Environment implements Scope {
 					// be opened signals here exactly as it does on the compile paths,
 					// whose lowering is literally an open followed by a close.
 					stream.close();
-					return fileStreamValue(handle, path);
+					return fileStreamValue(handle, path, abilities);
 				}
 				streams.put(handle, stream);
 				streamPaths.put(handle, path.value());
 				if (overwrite && !bidirectional) {
 					outputOnlyCursorStreams.add(handle);
 				}
-				return fileStreamValue(handle, path);
+				return fileStreamValue(handle, path, abilities);
 			}
 			catch (IOException ex) {
 				// A file-error carrying the designator as given, with the message every
@@ -6917,8 +6912,11 @@ public final class Environment implements Scope {
 					case Socket socket -> socket.getOutputStream().flush();
 					case Writer writer -> writer.flush();
 					case OutputStream os -> os.flush();
-					case null, default -> throw new LispEvalException(
+					case null -> throw new LispEvalException(
 							LispNames.FORCE_OUTPUT + " expects an output stream, got: " + dest.print());
+					// An input stream has nothing to flush, as in SBCL.
+					default -> {
+					}
 				}
 				return LispNil.INSTANCE;
 			}
@@ -11120,11 +11118,13 @@ public final class Environment implements Scope {
 	 * with ({@link LispLayout#STREAM_PATH_CELL}): a file stream is a pathname designator.
 	 * @param handle the stream table index
 	 * @param path the namestring the stream was opened with
+	 * @param abilities what the open can do ({@link LispLayout.Abilities})
 	 * @return the stream value
 	 */
-	private static LispVal fileStreamValue(long handle, LispString path) {
+	private static LispVal fileStreamValue(long handle, LispString path, int abilities) {
 		LispInstance stream = StreamDesignators.streamValue(handle, LispLayout.Kinds.FILE);
 		stream.setSlot(LispLayout.STREAM_PATH_CELL, path);
+		stream.setSlot(LispLayout.STREAM_ABILITY_CELL, new LispInteger(abilities));
 		return stream;
 	}
 

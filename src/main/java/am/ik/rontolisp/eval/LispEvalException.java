@@ -1,6 +1,7 @@
 package am.ik.rontolisp.eval;
 
 import java.util.List;
+import java.util.function.Supplier;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispVal;
@@ -17,6 +18,16 @@ import org.jspecify.annotations.Nullable;
 public class LispEvalException extends RuntimeException {
 
 	private final transient @Nullable LispVal condition;
+
+	/**
+	 * Renders the message when it is first read, then gone: a condition's report, which
+	 * runs program code a signal nothing prints must not run. Null for a message known at
+	 * the signal.
+	 */
+	private transient @Nullable Supplier<String> rendering;
+
+	/** What {@link #rendering} answered. */
+	private @Nullable String rendered;
 
 	/** The seeded condition class this error carries, or {@code null} for a plain one. */
 	private final @Nullable String conditionClassName;
@@ -84,6 +95,37 @@ public class LispEvalException extends RuntimeException {
 		super(message);
 		this.condition = condition;
 		this.conditionClassName = conditionClassName;
+	}
+
+	/**
+	 * Create a new evaluation exception carrying a condition object whose message is its
+	 * report, rendered when {@link #getMessage()} first asks.
+	 * @param rendering what renders the message
+	 * @param condition the condition instance
+	 * @return the exception to throw
+	 */
+	static LispEvalException rendering(Supplier<String> rendering, LispVal condition) {
+		LispEvalException raised = new LispEvalException("", condition);
+		raised.rendering = rendering;
+		return raised;
+	}
+
+	@Override
+	public synchronized @Nullable String getMessage() {
+		Supplier<String> pending = this.rendering;
+		if (pending != null) {
+			this.rendering = null;
+			try {
+				this.rendered = pending.get();
+			}
+			catch (RuntimeException | StackOverflowError ex) {
+				// Past what %signal-text catches: a transfer of control to nowhere, or
+				// a report too deep to run. The report is what is unavailable, not the
+				// failure the error stands for.
+				this.rendered = "#<error printing a condition: " + ex + ">";
+			}
+		}
+		return this.rendered != null ? this.rendered : super.getMessage();
 	}
 
 	/**

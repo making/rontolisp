@@ -38,9 +38,8 @@ import org.jspecify.annotations.Nullable;
  * {@code {datum, type}} record ({@link JvmThrowableRecords}: keyed by the exception, so a
  * record made while another is on its way out replaces nothing), read by
  * {@code _teSlot(e, i)}, which is how the pad fills a {@code type-error}'s {@code datum}
- * and {@code expected-type}: a {@code RuntimeException} has nowhere to carry an object,
- * and a compiled program ships no exception class of its own. A program without a pad
- * keeps neither.</li>
+ * and {@code expected-type}: a {@code RuntimeException} has nowhere to carry an object. A
+ * program without a pad keeps neither.</li>
  * </ul>
  */
 final class JvmOperandTypeRuntime {

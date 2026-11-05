@@ -16,10 +16,10 @@ import org.jspecify.annotations.Nullable;
  * and KEYED BY THE THROWABLE: the condition instance a signal travels with
  * ({@code _condTl}, {@link JvmLispCompiler.ConditionChannel}) and a wrong-type operand's
  * datum and expected type ({@code _teTl}, {@link JvmOperandTypeRuntime}). A
- * {@code RuntimeException} has nowhere to carry an object and a compiled program ships no
- * exception class of its own, so the record lives beside the throwable, in a
- * {@code java.util.WeakHashMap} each such {@code ThreadLocal} holds ({@link #TL_MAP}
- * makes it on the thread's first record).
+ * {@code RuntimeException} has nowhere to carry an object and nearly every throw is a
+ * plain one ({@link JvmSignalThrow} the exception), so the record lives beside the
+ * throwable, in a {@code java.util.WeakHashMap} each such {@code ThreadLocal} holds
+ * ({@link #TL_MAP} makes it on the thread's first record).
  *
  * <p>
  * Keyed, a landing pad reads only the record of the throwable it caught. The single slot

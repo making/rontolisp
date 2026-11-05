@@ -129,9 +129,9 @@ final class WasmUncaughtReportCompiler {
 	 * nil in the car and its message in the cdr. Both are read here through
 	 * pseudo-locals, the {@code __hc_cond$<slot>} trick {@code WasmHandlerCaseCompiler}
 	 * uses, so the whole line is an ordinary Lisp form: the instance renders through
-	 * {@code %condition-report-str} -- ONE call site for the whole program, which is what
-	 * lets the per-signal message renders stay deleted ({@code .kb/error-handling.md}) --
-	 * and a plain message is already the rendered text.
+	 * {@code %signal-text} -- ONE call site for the whole program, which is what lets the
+	 * per-signal message renders stay deleted ({@code .kb/error-handling.md}) -- and a
+	 * plain message is already the rendered text.
 	 */
 	private static void emitReport(WasmLispCompiler.Ctx ctx) {
 		int payloadSlot = ctx.allocTemp();
@@ -177,16 +177,16 @@ final class WasmUncaughtReportCompiler {
 
 	/**
 	 * {@code (%warn (%string-concat "Unhandled condition: " text))}, where {@code text}
-	 * prefers the instance's report and falls back to the message -- the plain
-	 * {@code %error}'s text, or what a typed signal of a report-less class built at its
-	 * site ({@link WasmErrorCompiler#compileCond}). Every EH-mode signal carries its
-	 * message ({@code WasmLispCompiler.UncaughtReportUnforeseen}), so a nil one is the
-	 * message's VALUE and prints as {@code NIL}.
+	 * is {@code %signal-text} of an instance, over what its site carried
+	 * ({@link WasmErrorCompiler#compileCond}), and a plain {@code %error}'s message
+	 * otherwise. Every EH-mode signal carries its message
+	 * ({@code WasmLispCompiler.UncaughtReportUnforeseen}), so a nil one is the message's
+	 * VALUE and prints as {@code NIL}.
 	 *
 	 * <p>
-	 * The {@code %condition-report-str} arm is emitted only when the program HAS that
-	 * defun: without a condition class there is no typed signal either, so the car is
-	 * always nil and the arm would be dead code that drags the whole report machinery in.
+	 * The {@code %signal-text} arm is emitted only when the program HAS that defun:
+	 * without a condition class there is no typed signal either, so the car is always nil
+	 * and the arm would be dead code that drags the whole report machinery in.
 	 */
 	private static LispVal reportForm(LispSymbol condVar, LispSymbol msgVar, WasmLispCompiler.Ctx ctx) {
 		// A message is a string, a character vector or nil, and %string-concat takes only
@@ -195,13 +195,9 @@ final class WasmUncaughtReportCompiler {
 		LispVal message = list(new LispSymbol(LispNames.IF), msgVar, msgVar, new LispString("NIL"));
 		LispVal text = message;
 		if (ctx.closRegistry.routesConditionReports()) {
-			// (if cond (let ((r (%condition-report-str cond))) (if r r message)) message)
-			LispSymbol report = new LispSymbol("__uc_report");
+			// (if cond (%signal-text cond msg) message)
 			text = list(new LispSymbol(LispNames.IF), condVar,
-					list(new LispSymbol(LispNames.LET),
-							list(list(report, list(new LispSymbol(LispNames.CONDITION_REPORT_STR_INTERNAL), condVar))),
-							list(new LispSymbol(LispNames.IF), report, report, message)),
-					message);
+					list(new LispSymbol(LispNames.SIGNAL_TEXT_INTERNAL), condVar, msgVar), message);
 		}
 		return list(new LispSymbol(LispNames.WARN_INTERNAL),
 				list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(UncaughtReport.PREFIX), text));

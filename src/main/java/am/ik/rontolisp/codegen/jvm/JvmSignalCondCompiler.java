@@ -49,8 +49,11 @@ final class JvmSignalCondCompiler {
 		int msgSlot = ctx.allocTemp();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		ctx.body.astore(condSlot);
-		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		ctx.body.astore(msgSlot);
+		LispVal fallback = LispMacroExpander.conditionReportFallback(args.get(2));
+		if (fallback == null) {
+			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+			ctx.body.astore(msgSlot);
+		}
 		JvmHandlerCaseCompiler.emitReadDepth(ctx, className);
 		MethodCode.Label ifUnhandledPos = ctx.body.newLabel();
 		ctx.body.ifle(ifUnhandledPos);
@@ -76,18 +79,23 @@ final class JvmSignalCondCompiler {
 		}
 		// A handler that will handle the condition exists: raise like %error-cond (throw,
 		// the condition recorded under the thrown exception).
-		String msgVarName = "__signal_msg$" + msgSlot;
-		Integer shadowed = ctx.locals.put(msgVarName, msgSlot);
-		try {
-			JvmErrorCompiler.compileThrowRuntimeException(new LispSymbol(msgVarName), ctx, className, condSlot,
-					handlersRan);
+		if (fallback != null) {
+			JvmSignalThrow.compile(fallback, ctx, className, condSlot, handlersRan);
 		}
-		finally {
-			if (shadowed != null) {
-				ctx.locals.put(msgVarName, shadowed);
+		else {
+			String msgVarName = "__signal_msg$" + msgSlot;
+			Integer shadowed = ctx.locals.put(msgVarName, msgSlot);
+			try {
+				JvmErrorCompiler.compileThrowRuntimeException(new LispSymbol(msgVarName), ctx, className, condSlot,
+						handlersRan);
 			}
-			else {
-				ctx.locals.remove(msgVarName);
+			finally {
+				if (shadowed != null) {
+					ctx.locals.put(msgVarName, shadowed);
+				}
+				else {
+					ctx.locals.remove(msgVarName);
+				}
 			}
 		}
 		ctx.body.labelBinding(ifUnhandledPos);

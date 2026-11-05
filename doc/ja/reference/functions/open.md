@@ -12,4 +12,6 @@
 
 これは `data.txt` を入力用に開き、最初の行を読み込み、ストリームをクローズします。代わりに `:output` を渡すと、書き込み用にファイルを作成または切り詰めます。`(open "data.bin" :input '(unsigned-byte 8))` は同じ種類のハンドルをバイナリモードで開きます。
 
+ストリームが応じられない演算子は、期待型 `(satisfies output-stream-p)` または `(satisfies input-stream-p)` の `type-error` をシグナルします。`:input` のストリームへの書き込み、`:output` のストリームからの読み込み、文字ストリームへの `read-byte` と `write-byte`、バイナリストリームへの文字の演算子がこれにあたります。`:element-type :default` はインタプリタと JVM では文字ストリームで、WASM ではバイトも受け付けます。`read-sequence` と `write-sequence` はバッファから要素を決めるので、WASM で拒否するのは方向だけです。
+
 開けないファイルはすべてのバックエンドで `file-error` を通知し、`OPEN: cannot open file <name>` を報告します。[`file-error-pathname`](file-error-pathname.md) は渡された指定子を返します。

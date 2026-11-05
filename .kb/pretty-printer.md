@@ -105,8 +105,9 @@ having slots at all, and `:|A|` under a `*print-base*` reading `A` as a digit, d
 `instances-follow-the-printer-controls-in-a-program-with-no-method`.
 
 **Known gap (all seven):** a symbol inside a hash table, array of rank != 1 or packed float vector is
-neither cased nor truncated. `%print-object-str`'s walk (`.kb/clos.md`) has the SAME guard and gap and
-is never live in the same program — read them together. Also inert: `*print-array*` nil,
+neither cased nor truncated. `%print-object-str`'s walk (`.kb/clos.md`) has the SAME guard and gap — read
+them together. A structure goes through one of the two: a program with a `print-object` route and a
+print control holds both, and its `%print-object-leaf` hands `%pc-walk` only atoms. Also inert: `*print-array*` nil,
 `*print-circle*` t, `~@W`.
 
 ## Quote/function abbreviation and `|...|` symbol escaping
@@ -377,8 +378,8 @@ spelling of a table with entries). Consumer: serapeum's `same-literal-p`, where 
   the variable alone without the case-fold tables (`mentionsPrintControlVariable` still gates those).
   Interpreter: `printControlsInEffect` is true while the variable is, and the leaves are functions calling the defuns.
 - **Messages bind it nil** (`%pc-without-readably`): `error`, `warn`, `signal`, `cerror`, `assert`, `check-type` render
-  at the signal here and at report time on SBCL, under `princ`. Around `formatMessagePieces`, the object arm's
-  `FormatRenderer.call`, the typed arm's inlined report and the body of `%condition-report-str`, which covers a
+  under `princ`. Around `formatMessagePieces`, the object arm's
+  `FormatRenderer.call`, a `warn`'s inlined report and the body of `%condition-report-str`, which covers a
   report printed by `~A` and an uncaught one. A handler still sees the variable as bound: only the text is wrapped.
   The let appears in Pass 2, so `SpecialVarCollector` counts the `%pc-not-readable` defun as a binding (a program
   may name the variable only in data; the JVM then refused the let, ci-spec `print-readably-named-only-in-data`).

@@ -879,7 +879,7 @@ final class WasmArrayRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildArrCheckRankBody(int operatorGlobal) {
-		return buildArrCheckRankBody(operatorGlobal, null, false);
+		return buildArrCheckRankBody(operatorGlobal, null, false, false);
 	}
 
 	/**
@@ -893,9 +893,12 @@ final class WasmArrayRuntimeBuilder {
 	 * @param operatorGlobal the operator register, or -1 outside EH mode
 	 * @param rankNames the interned {@code VECTOR}, {@code ARRAY} and {@code *}, or null
 	 * @param identityHash whether a cons carries the identity-hash field
+	 * @param unread whether nothing reads a report ({@code Ctx.unreadReports}), so a
+	 * mismatch needs no type built
 	 * @return the function body
 	 */
-	static byte[] buildArrCheckRankBody(int operatorGlobal, @Nullable RankNames rankNames, boolean identityHash) {
+	static byte[] buildArrCheckRankBody(int operatorGlobal, @Nullable RankNames rankNames, boolean identityHash,
+			boolean unread) {
 		boolean reports = operatorGlobal >= 0;
 		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
@@ -1033,7 +1036,10 @@ final class WasmArrayRuntimeBuilder {
 			w.write(Instruction.I32_NE);
 		}
 		w.write(Instruction.IF, 0x40);
-		if (reports && rankNames != null) {
+		if (reports && unread) {
+			emitArrayLanding(w, operatorGlobal);
+		}
+		else if (reports && rankNames != null) {
 			emitRankMismatchLanding(w, operatorGlobal, rankNames, headerSlot, wantSlot, identityHash);
 		}
 		else {

@@ -52,6 +52,16 @@ class ToplevelStatementsTest {
 	}
 
 	@Test
+	void aReferenceThatCannotFailIsDropped() {
+		// What opens a wrapper's gate runs nothing. A name that may be undefined, or read
+		// from a cell, signals, and a lambda or a call is no such reference.
+		List<LispVal> kept = ToplevelStatements.pruneFunctionReferences(
+				read("#'plain\n#'celled\n#'(lambda (x) x)\n(function plain extra)\n(print 1)\n"), "PLAIN"::equals);
+		assertThat(kept).extracting(LispVal::print)
+			.containsExactly("#'CELLED", "#'(LAMBDA (X) X)", "(FUNCTION PLAIN EXTRA)", "(PRINT 1)");
+	}
+
+	@Test
 	void theOrderAndIdentityOfEverySurvivingFormIsUntouched() {
 		List<LispVal> program = read("'a\n(print 1)\nnil\n(print 2)\n");
 		List<LispVal> kept = ToplevelStatements.prune(program);

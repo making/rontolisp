@@ -9,6 +9,8 @@ import java.util.Objects;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -27,7 +29,8 @@ import org.jspecify.annotations.Nullable;
  * {@code op}'s {@code STREAM} type-error ({@code .kb/error-handling.md}, "A wrong-type
  * argument names its operator"). A binding of a standard stream variable is checked the
  * same way, which is when SBCL's declared type refuses it, so a stream-less call needs no
- * check.
+ * check. Where a stream can be a value the check also refuses a closed stream and one
+ * that cannot do what the operator does ({@link #neededAbilities}).
  *
  * <p>
  * It runs on the resolved program, so {@code foo::read} is no {@code read}, and after the
@@ -62,6 +65,8 @@ public final class StreamOperandChecks {
 
 	private static final Map<String, Site> CHECKED_OPERATORS = plainOperators();
 
+	private static final Map<String, Integer> NEEDED_ABILITIES = neededAbilities();
+
 	private static final Set<String> STANDARD_STREAM_VARS = Set.of(LispNames.STANDARD_OUTPUT_VAR,
 			LispNames.STANDARD_INPUT_VAR, LispNames.ERROR_OUTPUT_VAR, LispNames.TRACE_OUTPUT_VAR,
 			LispNames.DEBUG_IO_VAR, LispNames.QUERY_IO_VAR, LispNames.TERMINAL_IO_VAR);
@@ -89,6 +94,56 @@ public final class StreamOperandChecks {
 			table.put(op, new Site(op, 1, false));
 		}
 		return Map.copyOf(table);
+	}
+
+	private static Map<String, Integer> neededAbilities() {
+		Map<String, Integer> table = new HashMap<>();
+		int textOut = LispLayout.Abilities.OUTPUT | LispLayout.Abilities.CHARACTER;
+		for (String op : List.of(LispNames.WRITE_CHAR, LispNames.WRITE_STRING, LispNames.WRITE_LINE, LispNames.PRINC,
+				LispNames.PRIN1, LispNames.PRINT, LispNames.TERPRI, LispNames.FORMAT)) {
+			table.put(op, textOut);
+		}
+		int textIn = LispLayout.Abilities.INPUT | LispLayout.Abilities.CHARACTER;
+		for (String op : List.of(LispNames.READ_CHAR, LispNames.READ_CHAR_NO_HANG, LispNames.READ_LINE,
+				LispNames.PEEK_CHAR, LispNames.UNREAD_CHAR, LispNames.READ, LispNames.READ_PRESERVING_WHITESPACE)) {
+			table.put(op, textIn);
+		}
+		table.put(LispNames.WRITE_BYTE, LispLayout.Abilities.OUTPUT | LispLayout.Abilities.BINARY);
+		table.put(LispNames.READ_BYTE, LispLayout.Abilities.INPUT | LispLayout.Abilities.BINARY);
+		// A sequence's buffer picks the element (.kb/read-load-streams.md, "The stream
+		// picks the element").
+		table.put(LispNames.WRITE_SEQUENCE, LispLayout.Abilities.OUTPUT);
+		table.put(LispNames.READ_SEQUENCE, LispLayout.Abilities.INPUT);
+		// A binary stream stays at column 0, and has an answer to whether input waits.
+		table.put(LispNames.FRESH_LINE, LispLayout.Abilities.OUTPUT);
+		table.put(LispNames.LISTEN, LispLayout.Abilities.INPUT);
+		// These four only ask that it is open: SBCL answers nil on an input stream.
+		for (String op : List.of(LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT, LispNames.CLEAR_OUTPUT,
+				LispNames.CLEAR_INPUT)) {
+			table.put(op, 0);
+		}
+		return Map.copyOf(table);
+	}
+
+	/**
+	 * What an operator needs of a stream value, as the {@code %check-stream} helper's
+	 * argument: {@link LispLayout.Abilities} bits, 0 for an open stream of any kind, nil
+	 * for an operator that asks nothing of an open or closed stream (the queries).
+	 * @param operator the operator a check reports
+	 * @return the form
+	 */
+	public static LispVal neededAbilities(@Nullable String operator) {
+		Integer needed = operator == null ? null : NEEDED_ABILITIES.get(operator);
+		return needed == null ? LispNil.INSTANCE : new LispInteger(needed);
+	}
+
+	/**
+	 * {@link #neededAbilities(String)} for the interpreter.
+	 * @param operator the operator a check reports
+	 * @return the bits, null when it asks nothing
+	 */
+	public static @Nullable Integer neededAbilityBits(@Nullable String operator) {
+		return operator == null ? null : NEEDED_ABILITIES.get(operator);
 	}
 
 	private static Map<String, Site> sites() {
@@ -293,7 +348,13 @@ public final class StreamOperandChecks {
 		for (LispVal form : program) {
 			collectDefined(form, defined);
 		}
-		Rewriter rewriter = new Rewriter(Set.copyOf(defined), formatTakesStrings(program));
+		Set<String> rebound = new HashSet<>();
+		if (LispMacroExpander.mayCreateStreamValues(program)) {
+			for (LispVal form : program) {
+				collectRebound(form, rebound);
+			}
+		}
+		Rewriter rewriter = new Rewriter(Set.copyOf(defined), formatTakesStrings(program), Set.copyOf(rebound));
 		List<LispVal> out = new ArrayList<>(program.size());
 		for (LispVal form : program) {
 			out.add(isInternalDefun(form) ? form : CallSiteWalk.walk(form, rewriter));
@@ -312,6 +373,42 @@ public final class StreamOperandChecks {
 			collectDefined(cons.car(), defined);
 			rest = cons.cdr();
 		}
+	}
+
+	// The standard stream variables a form gives another value: a binding pair or a
+	// lambda list starts with the variable, an assignment names it. A stream-less call
+	// reads such a variable, and what it holds may have been closed since.
+	private static void collectRebound(LispVal form, Set<String> rebound) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head) {
+			if (STANDARD_STREAM_VARS.contains(head.name())) {
+				rebound.add(head.name());
+			}
+			else if (LispNames.SETQ.equals(head.name()) || LispNames.SETF.equals(head.name())) {
+				LispVal rest = cons.cdr();
+				while (rest instanceof LispCons pair) {
+					if (pair.car() instanceof LispSymbol place && STANDARD_STREAM_VARS.contains(place.name())) {
+						rebound.add(place.name());
+					}
+					rest = pair.cdr() instanceof LispCons next ? next.cdr() : LispNil.INSTANCE;
+				}
+			}
+		}
+		LispVal rest = form;
+		while (rest instanceof LispCons cons) {
+			collectRebound(cons.car(), rebound);
+			rest = cons.cdr();
+		}
+	}
+
+	/**
+	 * The variable a call with no stream argument reads.
+	 * @param operator the operator
+	 * @return the standard stream variable's name
+	 */
+	public static String standardStreamOf(String operator) {
+		Integer needed = NEEDED_ABILITIES.get(operator);
+		return LispNames.CLEAR_INPUT.equals(operator) || (needed != null && (needed & LispLayout.Abilities.INPUT) != 0)
+				? LispNames.STANDARD_INPUT_VAR : LispNames.STANDARD_OUTPUT_VAR;
 	}
 
 	private static boolean isInternalDefun(LispVal form) {
@@ -360,7 +457,8 @@ public final class StreamOperandChecks {
 		return tail;
 	}
 
-	private record Rewriter(Set<String> shadowed, boolean formatTakesStrings) implements CallSiteWalk.Rewriter {
+	private record Rewriter(Set<String> shadowed, boolean formatTakesStrings,
+			Set<String> rebound) implements CallSiteWalk.Rewriter {
 
 		@Override
 		public @Nullable LispVal call(LispCons form, LispSymbol head) {
@@ -383,11 +481,12 @@ public final class StreamOperandChecks {
 			}
 			List<LispVal> parts = form.toList();
 			if (parts.size() <= site.streamIndex()) {
-				return null;
+				return this.withCheckedStandardStream(form, site);
 			}
 			LispVal stream = parts.get(site.streamIndex());
-			if (needsNoCheck(stream, site.designator())) {
-				return null;
+			if (needsNoCheck(stream, site.designator())
+					&& !(stream instanceof LispSymbol read && this.rebound.contains(read.name()))) {
+				return readsStandardStream(stream, site) ? this.withCheckedStandardStream(form, site) : null;
 			}
 			if (this.formatTakesStrings && LispNames.FORMAT.equals(name)) {
 				LispVal distributed = LispMacroExpander.distributeFormat(form);
@@ -406,6 +505,38 @@ public final class StreamOperandChecks {
 			}
 			out.set(site.streamIndex(), checked(out.get(site.streamIndex()), site.operator(), site.designator()));
 			return LispCons.rebuiltList(form, out);
+		}
+
+		// What the form's stream position spells where it writes to or reads from the
+		// variable: nil, a keyword of a stream-less keyword call, format's t.
+		private static boolean readsStandardStream(LispVal stream, Site site) {
+			return stream instanceof LispNil || (stream instanceof LispSymbol keyword && keyword.name().startsWith(":"))
+					|| (stream instanceof LispTrue && LispNames.FORMAT.equals(site.operator()));
+		}
+
+		// A call that reads a standard stream variable the program rebinds: the
+		// variable's value is checked ahead of the call, which keeps its own shape.
+		private @Nullable LispVal withCheckedStandardStream(LispCons form, Site site) {
+			String variable = standardStreamOf(site.operator());
+			if (!this.rebound.contains(variable)) {
+				return null;
+			}
+			List<LispVal> out = new ArrayList<>();
+			out.add(form.car());
+			LispVal rest = form.cdr();
+			while (rest instanceof LispCons cons) {
+				out.add(CallSiteWalk.walk(cons.car(), this));
+				rest = cons.cdr();
+			}
+			LispVal check = checked(new LispSymbol(variable), site.operator(), true);
+			if (out.size() == site.streamIndex()) {
+				// The stream's own position is next: checked after the arguments, as a
+				// stream that is spelled is.
+				out.add(check);
+				return LispCons.rebuiltList(form, out);
+			}
+			return SourceProvenance.inherit(form,
+					list(new LispSymbol(LispNames.PROGN), check, LispCons.rebuiltList(form, out)));
 		}
 
 		// (print-unreadable-object (object stream ...) body...): the stream is first
@@ -445,7 +576,7 @@ public final class StreamOperandChecks {
 				return null;
 			}
 			names.addAll(this.shadowed);
-			return CallSiteWalk.walk(form, new Rewriter(Set.copyOf(names), this.formatTakesStrings));
+			return CallSiteWalk.walk(form, new Rewriter(Set.copyOf(names), this.formatTakesStrings, this.rebound));
 		}
 
 		private @Nullable LispVal withCheckedBindings(LispCons form) {

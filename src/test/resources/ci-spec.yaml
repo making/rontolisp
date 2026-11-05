@@ -2283,7 +2283,7 @@ cases:
       2
       2
       NIL
-      0
+      1
       4
       2
       0
@@ -13985,16 +13985,23 @@ cases:
       ;; rather than handed to the first preopened directory whole. probe-file's
       ;; answer is the truename, which differs by host (macOS's /tmp is a link) and,
       ;; on WASM, by what the preopens let the module see -- but it opens everywhere.
+      ;; The name is the run's own: every test run on a machine shares /tmp, and a read
+      ;; beside another run's truncating open answers NIL.
       (defvar *abs-dir* "/tmp")
-      (defvar *abs-file* (concatenate 'string *abs-dir* "/ronto-abs-path.txt"))
+      (defvar *abs-name*
+        (concatenate 'string *abs-dir* "/ronto-abs-path-"
+                     (princ-to-string (random 1000000000 (make-random-state t)))))
+      (defvar *abs-file* (concatenate 'string *abs-name* ".txt"))
+      (defvar *abs-source* (concatenate 'string *abs-name* ".lisp"))
       (with-open-file (out *abs-file* :direction :output) (write-line "absolute" out))
       (print (with-open-file (in *abs-file*) (read-line in)))
       (print (with-open-file (in (probe-file *abs-file*)) (read-line in)))
-      (print (probe-file (concatenate 'string *abs-dir* "/ronto-abs-absent.txt")))
-      (with-open-file (out (concatenate 'string *abs-dir* "/ronto-abs-path.lisp")
-                       :direction :output)
+      (print (probe-file (concatenate 'string *abs-name* "-absent.txt")))
+      (with-open-file (out *abs-source* :direction :output)
         (write-line "(print \"loaded-by-absolute-path\")" out))
-      (load (concatenate 'string *abs-dir* "/ronto-abs-path.lisp"))
+      (load *abs-source*)
+      (delete-file *abs-file*)
+      (delete-file *abs-source*)
     expected: |
       "absolute"
       "absolute"
@@ -36815,6 +36822,189 @@ cases:
       (6 2 NIL 7)
       (1 2 NIL 3)
       REFUSED
+  - name: a-signal-renders-no-report
+    source: |
+      ;; SBCL's answers: a report runs where its text is read, so what it signals cannot
+      ;; replace the condition, and what it does happens only for a condition printed.
+      (define-condition srn-c (error) ((v :reader srn-c-v :initarg :v))
+        (:report (lambda (x s) (format s "c ~a" (+ 1 (srn-c-v x))))))
+      (define-condition srn-e (error) ((a :initarg :a)))
+      (defvar *srn-n* 0)
+      (define-condition srn-d (error) ()
+        (:report (lambda (x s) (declare (ignore x)) (incf *srn-n*) (format s "d"))))
+      (defun srn-id (x) x)
+      (print (handler-case (error 'srn-c) (error (x) (type-of x))))
+      (print (handler-case (error (srn-id 'srn-c)) (error (x) (type-of x))))
+      (print (handler-case (error 'srn-c :v 1) (error (x) (princ-to-string x))))
+      (print (handler-case (error (make-condition 'srn-c)) (error (x) (type-of x))))
+      (print (handler-case (signal 'srn-c) (error (x) (type-of x))))
+      (print (handler-case (signal (make-condition 'srn-c)) (error (x) (type-of x))))
+      (print (handler-case (cerror "go" 'srn-c) (error (x) (type-of x))))
+      (print (handler-case (handler-bind ((srn-c (lambda (x) (declare (ignore x)) nil))) (error 'srn-c))
+               (srn-c (x) (type-of x))))
+      (print (handler-case (error 'srn-d) (error (x) (type-of x))))
+      (print (signal 'srn-d))
+      (print *srn-n*)
+      (print (handler-case (error 'srn-d) (error (x) (princ-to-string x))))
+      (print *srn-n*)
+      ;; A class that reports nothing says what it was signalled with only when asked:
+      ;; printing a value runs its print-object.
+      (defclass srn-o () ())
+      (defmethod print-object ((x srn-o) s) (declare (ignore x s)) (error "srn-boom"))
+      (print (handler-case (error 'srn-e :a (make-instance 'srn-o)) (error (x) (type-of x))))
+      (print (signal 'srn-e :a (make-instance 'srn-o)))
+      (print (handler-case (handler-bind ((srn-e (lambda (x) (declare (ignore x)) nil)))
+                             (error 'srn-e :a (make-instance 'srn-o)))
+               (srn-e (x) (type-of x))))
+    expected: |
+      SRN-C
+      SRN-C
+      "c 2"
+      SRN-C
+      SRN-C
+      SRN-C
+      SRN-C
+      SRN-C
+      SRN-D
+      NIL
+      0
+      "d"
+      1
+      SRN-E
+      NIL
+      SRN-E
+  # A closed stream and a stream that cannot do what the operator does: the answers SBCL 2.2.9
+  # gives, its sb-int:closed-stream-error a stream-error and its simple-type-error a type-error
+  # over (satisfies output-stream-p) or (satisfies input-stream-p).
+  - name: stream-operators-refuse-a-closed-stream
+    source: |
+      (defvar *csr-target* nil)
+      (defun csr-rows (s)
+        (list (lambda () (write-string "x" s)) (lambda () (write-line "x" s)) (lambda () (write-char #\x s))
+              (lambda () (write-sequence "x" s)) (lambda () (write-byte 1 s)) (lambda () (princ 1 s))
+              (lambda () (prin1 1 s)) (lambda () (print 1 s)) (lambda () (terpri s)) (lambda () (fresh-line s))
+              (lambda () (format s "x")) (lambda () (force-output s)) (lambda () (finish-output s))
+              (lambda () (clear-output s)) (lambda () (read-char s)) (lambda () (read-char-no-hang s))
+              (lambda () (read-line s)) (lambda () (read-byte s)) (lambda () (read-sequence (make-string 1) s))
+              (lambda () (peek-char nil s)) (lambda () (unread-char #\a s)) (lambda () (listen s))
+              (lambda () (read s)) (lambda () (clear-input s)) (lambda () (funcall #'write-string "x" s))
+              (lambda () (apply #'read-char (list s)))
+              (lambda () (let ((*standard-output* s)) (print 1))) (lambda () (let ((*standard-output* s)) (terpri)))
+              (lambda () (let ((*standard-output* s)) (format t "x")))
+              (lambda () (let ((*standard-input* s)) (read-line))) (lambda () (let ((*standard-input* s)) (read)))))
+      (defun csr-answers (s)
+        (remove-duplicates
+         (mapcar (lambda (f)
+                   (handler-case (progn (funcall f) :answered)
+                     (stream-error (c) (list :stream-error (typep c 'error) (streamp (stream-error-stream c))
+                                             (format nil "~a" c)))
+                     (error () :other)))
+                 (csr-rows s))
+         :test #'equal))
+      (with-open-file (o "csr.txt" :direction :output :if-exists :supersede) (write-line "abc" o))
+      (let ((kept nil))
+        (with-open-file (i "csr.txt") (setq kept i))
+        (print (csr-answers kept)))
+      (let ((s (open "csr.txt"))) (close s) (print (csr-answers s)))
+      (let ((s (open "csr2.txt" :direction :output :if-exists :supersede))) (close s) (print (csr-answers s)))
+      (let ((s (make-string-output-stream))) (close s) (print (csr-answers s)))
+      (let ((s (make-string-input-stream "abc"))) (close s) (print (csr-answers s)))
+      (let ((s (make-string-output-stream)))
+        (setq *csr-target* s)
+        (close s)
+        (print (csr-answers (make-synonym-stream '*csr-target*))))
+      ;; Closing again is still no error, and the closed stream's descriptor may be another's.
+      (let ((a (open "csr.txt")))
+        (close a)
+        (let ((b (open "csr.txt")))
+          (print (list (close a) (read-line b)))
+          (close b)))
+    expected: |
+      ((:STREAM-ERROR T T "#<STREAM> is closed"))
+      ((:STREAM-ERROR T T "#<STREAM> is closed"))
+      ((:STREAM-ERROR T T "#<STREAM> is closed"))
+      ((:STREAM-ERROR T T "#<STREAM> is closed"))
+      ((:STREAM-ERROR T T "#<STREAM> is closed"))
+      ((:STREAM-ERROR T T "#<STREAM> is closed"))
+      (T "abc")
+  - name: stream-operators-refuse-a-stream-of-the-wrong-direction
+    source: |
+      (defvar *wds-target* nil)
+      (defun wds-writers (s)
+        (list (lambda () (write-string "x" s)) (lambda () (write-line "x" s)) (lambda () (write-char #\x s))
+              (lambda () (write-sequence "x" s)) (lambda () (princ 1 s)) (lambda () (prin1 1 s))
+              (lambda () (print 1 s)) (lambda () (terpri s)) (lambda () (fresh-line s)) (lambda () (format s "x"))
+              (lambda () (funcall #'write-string "x" s)) (lambda () (let ((*standard-output* s)) (print 1)))))
+      (defun wds-readers (s)
+        (list (lambda () (read-char s)) (lambda () (read-char-no-hang s)) (lambda () (read-line s))
+              (lambda () (read-sequence (make-string 1) s)) (lambda () (peek-char nil s))
+              (lambda () (unread-char #\a s)) (lambda () (listen s)) (lambda () (read s))
+              (lambda () (apply #'read-char (list s))) (lambda () (let ((*standard-input* s)) (read-line)))
+              (lambda () (let ((*standard-input* s)) (read)))))
+      (defun wds-answers (rows)
+        (remove-duplicates
+         (mapcar (lambda (f)
+                   (handler-case (progn (funcall f) :answered)
+                     (type-error (c) (list :type-error (streamp (type-error-datum c)) (type-error-expected-type c)))
+                     (error () :other)))
+                 rows)
+         :test #'equal))
+      (defun wds-report (f)
+        (handler-case (funcall f) (type-error (c) (format nil "~a" c))))
+      (with-open-file (o "wds.txt" :direction :output :if-exists :supersede) (write-line "abc" o))
+      (with-open-file (s "wds.txt") (print (wds-answers (wds-writers s))))
+      (print (wds-answers (wds-writers (make-string-input-stream "abc"))))
+      (with-open-file (s "wds2.txt" :direction :output :if-exists :supersede) (print (wds-answers (wds-readers s))))
+      (print (wds-answers (wds-readers (make-string-output-stream))))
+      (setq *wds-target* (make-string-input-stream "abc"))
+      (print (wds-answers (wds-writers (make-synonym-stream '*wds-target*))))
+      (print (wds-answers (wds-readers *error-output*)))
+      ;; A stream of the other element: a character stream takes no byte, a binary one no character.
+      (with-open-file (s "wds.txt") (print (wds-answers (list (lambda () (read-byte s))))))
+      (with-open-file (s "wds2.txt" :direction :output :if-exists :supersede)
+        (print (wds-answers (list (lambda () (write-byte 1 s))))))
+      (with-open-file (s "wds.txt" :element-type '(unsigned-byte 8))
+        (print (wds-answers (list (lambda () (read-char s)) (lambda () (read-line s)) (lambda () (read s))))))
+      (with-open-file (s "wds3.txt" :direction :output :if-exists :supersede :element-type '(unsigned-byte 8))
+        (print (wds-answers (list (lambda () (write-char #\a s)) (lambda () (write-string "a" s))
+                                  (lambda () (format s "a"))))))
+      (print (wds-answers (list (lambda () (write-byte 1 (make-string-output-stream)))
+                                (lambda () (read-byte (make-string-input-stream "abc"))))))
+      ;; What the report says, naming the operator as a stream that is no stream does.
+      (with-open-file (s "wds.txt") (print (wds-report (lambda () (write-string "x" s)))))
+      (print (wds-report (lambda () (read-char (make-string-output-stream)))))
+      ;; What still answers: an :io stream both ways, the flushes on an input stream, an
+      ;; output stream's clear-input.
+      (with-open-file (s "wds4.txt" :direction :io :if-exists :supersede :if-does-not-exist :create)
+        (print (list (write-string "ab" s) (file-position s 0) (read-char s))))
+      (with-open-file (s "wds.txt")
+        (print (list (force-output s) (finish-output s) (clear-output s) (clear-input s) (read-char s)
+                     (unread-char #\a s) (read-char s))))
+      (with-open-file (s "wds2.txt" :direction :output :if-exists :supersede) (print (clear-input s)))
+      (with-output-to-string (*standard-output*)
+        (print 1)
+        (fresh-line)
+        (format t "x")
+        (write-string "y"))
+      (print (with-input-from-string (*standard-input* "(a) bc") (list (read) (read-char) (read-line))))
+    expected: |
+      ((:TYPE-ERROR T (SATISFIES OUTPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES OUTPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES INPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES INPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES OUTPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES INPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES INPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES OUTPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES INPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES OUTPUT-STREAM-P)))
+      ((:TYPE-ERROR T (SATISFIES OUTPUT-STREAM-P)) (:TYPE-ERROR T (SATISFIES INPUT-STREAM-P)))
+      "WRITE-STRING: The value #<STREAM> is not of type (SATISFIES OUTPUT-STREAM-P)"
+      "READ-CHAR: The value #<STREAM> is not of type (SATISFIES INPUT-STREAM-P)"
+      ("ab" T #\a)
+      (NIL NIL NIL NIL #\a NIL #\a)
+      NIL
+      ((A) #\b "c")
 standalone:
   - name: a-format-of-tilde-a-under-a-package-spells-no-qualifier
     source: |
@@ -37463,6 +37653,19 @@ standalone:
       (:REFUSED :REFUSED)
       (:REFUSED :REFUSED)
       (:REFUSED :REFUSED)
+  - name: an-uncaught-write-to-a-closed-stream-reports-it
+    source: |
+      ;; Standalone: no handler anywhere, so wasm builds no condition instance and ends.
+      (defun cwc-out ()
+        (let ((s (make-string-output-stream)))
+          (close s)
+          s))
+      (print 1)
+      (write-string "x" (cwc-out))
+      (print 2)
+    expected: |
+      1
+    fails: true
   - name: stream-operators-refuse-a-non-stream-past-every-layer
     source: |
       ;; Standalone: the same refusals where every layer is in the way -- stream values, the
@@ -37827,6 +38030,35 @@ standalone:
       :OK
     stderr: |
       Unhandled condition: NIL
+    fails: true
+  - name: uncaught-failing-report-is-the-report
+    source: |
+      ;; The line stays one line: a failing report is the text, in SBCL's words.
+      (define-condition ufr-c (error) ((v :reader ufr-c-v :initarg :v))
+        (:report (lambda (x s) (format s "c ~a" (+ 1 (ufr-c-v x))))))
+      (print (handler-case (error "caught") (error (e) :ok)))
+      (error 'ufr-c)
+    stdout: |
+      :OK
+    stderr: |
+      Unhandled condition: #<error printing a UFR-C: The slot V is unbound in #<UFR-C :V #<%UNBOUND%>>>
+    fails: true
+  - name: uncaught-initargs-past-the-handler-bind-handlers
+    source: |
+      ;; handler-bind makes this a restart-mode program, whose payload says the handlers
+      ;; ran by a cons of its own: the initargs a class that reports nothing carries are
+      ;; a cons too.
+      (define-condition urr-e (error) ((a :initarg :a)))
+      (print (handler-case (handler-bind ((urr-e (lambda (x) (print (type-of x)) nil))) (error 'urr-e :a 1))
+               (urr-e () :caught)))
+      (handler-bind ((urr-e (lambda (x) (print (type-of x)) nil)))
+        (error 'urr-e :a (list 1 "two")))
+    stdout: |
+      URR-E
+      :CAUGHT
+      URR-E
+    stderr: |
+      Unhandled condition: Condition (URR-E :A (1 "two")) was signalled.
     fails: true
   - name: uncaught-computed-condition-type-report
     source: |
@@ -39686,3 +39918,42 @@ standalone:
       (print (list (iu-a *iu*) (iu-c *iu*) (slot-exists-p *iu* 'b) *iu-log*))
     stdout: |
       (1 :C NIL (((C) (B))))
+  # Alone, because the corpus's eval keeps every name resolvable and its gates open.
+  - name: what-a-kept-function-can-name-and-what-a-fold-may-assume
+    source: |
+      ;; A symbol reaches a dispatcher only from a function that spells it, and a name only a
+      ;; function nothing calls spells has no case; the shake must not take the one it needs.
+      (defun s1-target (x) (* x 10))
+      (defun s1-give () 's1-target)
+      (defun s1-unspelled (x) (* x 100))
+      (defun s1-nobody () 's1-unspelled)
+      (print (funcall (s1-give) 3))
+      ;; (ecase map ...) reads as a (map computed-type ...) call to the scan behind
+      ;; #'concatenate's gate, in a program spelling a packed element type.
+      (defun s1-pick (map) (ecase map (:a 1) (:b 2)))
+      (print (s1-pick :b))
+      (print (make-array 1 :element-type '(unsigned-byte 8) :initial-element 7))
+      ;; nreverse answers a list whatever any cdr holds, also back into its own variable,
+      ;; and a string or a vector in its own kind.
+      (print (let ((held (cons "a" "b")) (acc '()))
+               (dotimes (i 3) (push (cons i i) acc))
+               (setq acc (nreverse acc))
+               (list held acc)))
+      (print (let ((s (copy-seq "abc")) (v (vector 1 2 3)))
+               (list (nreverse s) (nreverse v))))
+      ;; A cursor is what its guard said up to its next assignment.
+      (print (let ((x (list 1 "two" 3)) (n 0))
+               (loop (unless (consp x) (return n))
+                     (setq n (+ n (if (stringp (car x)) 10 1)))
+                     (setq x (cdr x)))))
+      (print (handler-case (car 1) (error () :caught)))
+      (print (handler-case (error "text ~a" 1) (error () :caught-text)))
+    stdout: |
+      30
+      2
+      #(7)
+      (("a" . "b") ((0 . 0) (1 . 1) (2 . 2)))
+      ("cba" #(3 2 1))
+      12
+      :CAUGHT
+      :CAUGHT-TEXT
