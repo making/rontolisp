@@ -1649,6 +1649,62 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   standard names it, so a non-stream is `STREAM` (a stream of another kind: next bullet). `(close t)` -- `*standard-output*` holds `t` -- answers `T`
   on all four (it was a `simple-error` or a trap); SBCL closes its stdout. Pinned by
   `StreamOperandErrorsFixture` (ci-spec `load-and-stream-operators-signal-their-condition`).
+- **A stream operator's argument is a stream** (measured 2026-11-05, SBCL 2.2.9: a `type-error` for
+  every row). `write-char`, `write-string`, `write-line`, `princ`, `prin1`, `print`, `pprint`, `write`,
+  `format`, `terpri`, `fresh-line`, the three flushes, `write-byte`, `write-sequence`, `read-char`,
+  `read-char-no-hang`, `read-line`, `read-byte`, `read-sequence`, `read`, `peek-char`, `unread-char`,
+  `listen`, `file-position`, `file-length`, `input-stream-p`, `output-stream-p`, `open-stream-p`,
+  `stream-element-type`, `print-unreadable-object` and `pprint-newline`/`-indent`/`-tab`, given a struct,
+  a plain instance, an integer, a string, a symbol, a float or a list: `OP: The value X is not of type
+  STREAM` on all four (a call through `print-unreadable-object` reports `WRITE-STRING`, `pprint`
+  `TERPRI`, `write` the operator its prelude defun writes with). Before, all four backends differed:
+  the compile paths wrote to standard output, read `end-of-file` or answered nil for an instance, the
+  interpreter's Gray wraps answered a no-applicable-method error, an integer was a live handle or a
+  `simple-error`, and `--component` trapped on one. `t` passes everywhere (`*standard-output*` holds
+  it). nil passes where CL's designator rule says so and, unlike SBCL, for `read-byte`, `write-byte`,
+  `read-sequence` and `write-sequence` (`.kb/read-load-streams.md`, "Binary streams and binary standard
+  I/O"); the six queries refuse it. `make-broadcast-stream` refuses a component that is no output
+  stream, as the other three composite constructors did.
+  - **Compile paths: `compiler.StreamOperandChecks`**, a call-site pass both backends run right after
+    `resolveProgram` (so `foo::read` is not `read`), over the program and the wrappers
+    (`FunctionValueWrappers.generate`). It wraps a stream argument that is not a literal designator in
+    `(%check-stream x 'op designator-p)`, which each backend compiles to the injected
+    `%check-stream-runtime (x token designator-p)` (`checkStreamRuntimeWrapper`, the
+    `%check-sequence-runtime` shape, so one `streamp` per program and a Gray class list at no site).
+    The table lists the Gray and pushback helpers too: the front end's rewrites ran first. Not
+    checked: an operator the program defines (`defun`, `defgeneric`, `defmethod`, `defmacro`, `flet`,
+    `labels`, `macrolet`), a `%`-named top-level defun (the Gray, pushback, `%rd-*` and socket helpers:
+    a caller named that stream; `read` checks at its own head), a read of a standard stream variable.
+  - **A standard stream variable is checked where it is bound or assigned** (`let`, `let*`, `setq`,
+    `setf`; report `*STANDARD-OUTPUT*: The value ...`), SBCL's moment, so a stream-less call costs
+    nothing. Interpreter: `checkStandardStreamValue` in the `let` and `setq` seams.
+  - **Interpreter: `LispEvaluator.installStreamOperandChecks`**, outermost over the Gray wraps, from
+    the same table; `write-char` and the two sequence operators, which the evaluator lowers, check at
+    `evalWriteCharWithGrayDispatch` / `evalSequenceWithGrayDispatch`, and `format` and the routed print
+    family through `StreamOperandChecks.checkedCall`. `gray.lisp`'s helpers hand their built-in the
+    stream AS GIVEN, so no raw handle reaches a built-in there.
+  - **A raw integer in a program with no stream value** (`usesStreamValues` false): a report or a
+    `print-object` method there writes to a raw string stream handle
+    (`.kb/read-load-streams.md`, "A stream is a VALUE, not a handle"), so the helper passes an integer
+    that is one: `(open-stream-p x)` on the JVM, negative on wasm. A computed integer equal to a live
+    handle during such a report is the one value it cannot refuse.
+  - wasm outside EH mode: `unreachable`, as every `%operand-type-error`. The rows
+    (`WasmOperandTypes.Operators.place`) are the operators the sites name, last in the table, and are
+    no named operators to `OperandTypes`, so a funnel inside `write-string` reports as it did.
+  - Cost, measured 2026-11-05 against the previous jar. Speed: 3,000,000 `(write-char #\\a s)` in a
+    defun over a string stream, 5 runs, JVM 702-942 ms before, 569-778 after; P1 1042-1242 before,
+    651-1293 after: no difference above the noise, so the check at every site stays. Size: a program
+    with no computed stream argument is byte-identical (`(print 3)`, `(format t ...)`). `(defun f (s)
+    (princ 1 s))`: P1 762 -> 882 B, component 1916 -> 2036 B, class 5391 -> 9156 B. Under a
+    `handler-case` P1 3371 -> 8003 B: the EH-mode report reaches the printer, as a program's first
+    `%operand-type-error` of any kind does. A `with-output-to-string` body writing through its stream:
+    P1 13886 -> 14500 B, class 17492 -> 16703 B. A Gray program: P1 7452 -> 7576 B.
+  - Limits: `(format s ...)` to a string is this `type-error` too, where the compile paths wrote to
+    standard output and the interpreter signalled `not an output stream`. SBCL appends to a string
+    with a fill pointer and signals a `simple-error` for any other. A synonym stream over a
+    non-stream is refused by no check.
+  - Pinned by ci-spec `stream-operators-refuse-a-non-stream-in-a-program-with-no-stream` and
+    `stream-operators-refuse-a-non-stream-past-every-layer` (standalone, all four).
 - **`get-output-stream-string` of a stream of another kind** (measured 2026-10-07, SBCL 2.2.9): a
   string input stream, a standard stream, `t`, a synonym stream (over a string output stream too:
   SBCL refuses it), a file, composite or Gray stream is `GET-OUTPUT-STREAM-STRING: The value X is

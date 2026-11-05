@@ -203,6 +203,27 @@ final class JvmCharCompiler {
 	}
 
 	/**
+	 * Compiles {@code (%check-stream x 'op designator-p)}: a call to the shared
+	 * {@code %check-stream-runtime} with the operator's name as its token, as
+	 * {@link #compileCheckSequence} does, and the value alone in a class that holds no
+	 * such defun.
+	 */
+	static void compileCheckStream(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		JvmLispCompiler.FunctionInfo helper = ctx.functions.get(LispNames.CHECK_STREAM_RUNTIME);
+		if (helper == null) {
+			JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+			return;
+		}
+		String operator = LispMacroExpander.checkListOperator(cons);
+		JvmPhysicalArgs.emit(ctx, className, helper,
+				List.of(() -> JvmExprCompiler.compileExpr(parts.get(1), ctx, className),
+						() -> JvmEmitHelper.compileUnspelledLiteral(operator, ctx),
+						() -> JvmExprCompiler.compileExpr(parts.get(3), ctx, className)));
+		JvmTailBounce.emitDirectCall(helper, null, ctx, className);
+	}
+
+	/**
 	 * Emits a check's miss over the value under its test's result: {@code ifPass} skips
 	 * it, else {@code kind}'s report of the value -- {@code _teRaw} named by
 	 * {@code _opTypeErr} after the check's operator, unnamed without one -- thrown here.

@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CallSiteWalk;
+import am.ik.rontolisp.compiler.StreamOperandChecks;
 import am.ik.rontolisp.macro.IgnoredArgument;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
@@ -1073,7 +1074,8 @@ public final class GrayStreamsLibrary {
 			LispVal bindResult = listOf(new am.ik.rontolisp.LispSymbol(LispNames.LET),
 					listOf(listOf(result, listOf(fmtNil.toArray(LispVal[]::new)))), tested);
 			return listOf(new am.ik.rontolisp.LispSymbol(LispNames.LET),
-					listOf(listOf(temp, rewrite(parts.get(1), ctx))), bindResult);
+					listOf(listOf(temp, StreamOperandChecks.checkedFormatDestination(rewrite(parts.get(1), ctx)))),
+					bindResult);
 		}
 		return null;
 	}

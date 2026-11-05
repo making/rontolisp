@@ -1629,6 +1629,9 @@ answer.
   answers `Ctx.usesStreamValues`, gating the WRAP a
   producer emits AND the UNWRAP a consumer emits, so the two can never disagree. It also forces
   `mayCreateInstances` on.
+- **An integer is no stream** (`.kb/error-handling.md`, "A stream operator's argument is a stream"):
+  a built-in reaches a raw handle only behind the check, which passes an integer only in the next
+  bullet's case.
 - **A `with-output-to-string` the gate never saw**: a seeded condition's `:report`
   (`no-applicable-method-error`, `unbound-slot`) renders through one `expandTypedSignal` writes while
   the body compiles, in a program the gate answered no for. Its stream is a raw handle, consistent
