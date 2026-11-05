@@ -101,7 +101,7 @@ Measured at `--no-wasi --optimize=size`, gzip in parentheses. `test_plugin` is b
 
 | Filter | With a handler | With `:proxy-wasm-trap` |
 | --- | ---: | ---: |
-| `http_body` | 74,412 (27,346) | 58,948 (22,867) |
+| `http_body` | 75,097 (27,616) | 59,633 (23,065) |
 | `http_headers` | 77,312 (28,346) | 61,385 (23,764) |
 | `test_plugin` | 87,791 (32,190) | 70,815 (26,998) |
 

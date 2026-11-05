@@ -2285,6 +2285,13 @@ final class WasmExprCompiler {
 			case LispNames.ROW_MAJOR_AREF -> WasmArrayCompiler.compileRowMajorAref(cons, ctx);
 			case LispNames.ROW_MAJOR_ASET -> WasmArrayCompiler.compileRowMajorAset(cons, ctx);
 			case LispNames.REPLACE_BULK -> WasmArrayCompiler.compileReplaceBulk(cons, ctx);
+			case LispNames.STRING_SEARCH -> {
+				for (LispVal arg : cons.toList().subList(1, 7)) {
+					WasmExprCompiler.compileExpr(arg, ctx);
+				}
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_SEARCH);
+			}
 			case LispNames.ARRAY_ROW_MAJOR_INDEX ->
 				compileExpansion(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx, tail);
 			case LispNames.VECTOR -> compileExpansion(LispMacroExpander.expandVector(cons), ctx, tail);

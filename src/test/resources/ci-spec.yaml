@@ -2284,6 +2284,63 @@ cases:
       "SUBSEQ: invalid bounds 0, 99 for list of length 3"
       NIL
       (NIL 5 397 NIL 399)
+  - name: search-over-strings-answers-characters-in-either-representation
+    source: |
+      (defun ss-row (ss-n ss-h)
+        (list (search ss-n ss-h)
+              (search ss-n ss-h :start2 2)
+              (search ss-n ss-h :end2 2)
+              (search ss-n ss-h :end2 3)
+              (search ss-n ss-h :start2 6)
+              (search ss-n ss-h :start1 1)
+              (search ss-n ss-h :end1 1)
+              (search ss-n ss-h :start1 1 :end1 1)
+              (search ss-n ss-h :start1 1 :end1 1 :start2 4)
+              (search ss-n ss-h :start1 1 :end1 2 :start2 3 :end2 7)))
+      (let* ((ss-wide (concatenate 'string "a" (string (code-char 233)) (string (code-char 12354))
+                                   (string (code-char 128512)) "b" (string (code-char 233))
+                                   (string (code-char 12354)) (string (code-char 128512)) "c"))
+             (ss-plain (rontolisp:octets-to-string (rontolisp:string-to-octets ss-wide)))
+             (ss-needle (concatenate 'string (string (code-char 233)) (string (code-char 12354))))
+             (ss-plain-needle (rontolisp:octets-to-string (rontolisp:string-to-octets ss-needle))))
+        (print (ss-row ss-plain-needle ss-plain))
+        (print (ss-row ss-needle ss-plain))
+        (print (ss-row ss-plain-needle ss-wide))
+        (print (ss-row ss-needle ss-wide))
+        (print (funcall #'search ss-plain-needle ss-plain))
+        (print (apply #'search ss-needle ss-wide '(:start2 2)))
+        (print (search ss-plain-needle ss-plain :from-end t))
+        (print (search ss-plain-needle ss-plain :test #'char=))
+        (print (search ss-needle ss-wide :key #'char-code))
+        (print (search (string (code-char 232)) (string (code-char 233))))
+        (print (search (string (code-char 12353)) (string (code-char 12354))))
+        (print (search (string (code-char 128513)) ss-plain)))
+      (print (list (search "aab" "aaab") (search "abc" "ab") (search "abc" "abc") (search "" "") (search "a" "")
+                   (search "" "abc" :start2 3) (search "c" "abc" :start2 3) (search "bc" "abc" :end2 2)
+                   (search "ab" "xxab") (search "ab" "abab" :start2 1)))
+      (let ((ss-view (make-array 3 :element-type 'character :displaced-to "abcd" :displaced-index-offset 1))
+            (ss-fill (make-array 6 :element-type 'character :fill-pointer 2 :initial-element #\z)))
+        (print (list (search "cd" ss-view) (search ss-view "xbcd") (search "z" ss-fill :start2 1)
+                     (search "zzz" ss-fill) (search ss-fill "azzb"))))
+      (print (eval '(search "b" "abc")))
+      (print (handler-case (search "b" 'abc) (type-error () :refused)))
+    expected: |
+      (1 5 NIL 1 NIL 2 1 0 4 6)
+      (1 5 NIL 1 NIL 2 1 0 4 6)
+      (1 5 NIL 1 NIL 2 1 0 4 6)
+      (1 5 NIL 1 NIL 2 1 0 4 6)
+      1
+      5
+      5
+      1
+      1
+      NIL
+      NIL
+      NIL
+      (1 NIL 0 0 NIL 3 NIL NIL 2 2)
+      (1 1 1 NIL 1)
+      1
+      :REFUSED
   - name: flet-fusion-and-unboxed-locals
     source: |
       (defun s3-rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))

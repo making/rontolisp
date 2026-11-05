@@ -6,7 +6,7 @@ why the SDK is shaped as it is, and what was weighed and left. The compiler's ha
 
 | Filter | Before | Handled (default) | `:proxy-wasm-trap` |
 | --- | ---: | ---: | ---: |
-| `http_body` | 90,066 / 32,037 | 74,412 / 27,346 | 58,948 / 22,867 |
+| `http_body` | 90,066 / 32,037 | 75,097 / 27,616 | 59,633 / 23,065 |
 | `http_headers` | 154,818 / 53,565 | 77,312 / 28,346 | 61,385 / 23,764 |
 | `test_plugin` | 103,795 / 37,035 | 87,791 / 32,190 | 70,815 / 26,998 |
 

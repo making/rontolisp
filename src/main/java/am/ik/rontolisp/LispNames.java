@@ -4078,6 +4078,17 @@ public final class LispNames {
 	 */
 	public static final String REPLACE_BULK = "%REPLACE-BULK";
 
+	/**
+	 * The {@code %string-search} internal primitive, called only by the prelude's
+	 * {@link #SEARCH}: {@code (%string-search seq1 seq2 start1 end1 start2 end2)} over
+	 * checked bounds answers the leftmost match when the backend can scan two strings
+	 * without an element loop (WASM: no allocation at all), -1 when there is none, and
+	 * nil -- nothing decided -- for anything else, in which case {@code search}'s loop
+	 * runs. The interpreter and the JVM compile it to constant nil. See
+	 * {@code .kb/string-search-runtime.md}.
+	 */
+	public static final String STRING_SEARCH = "%STRING-SEARCH";
+
 	/** The {@code %fill-runtime} internal helper; see {@link #REPLACE_RUNTIME}. */
 	public static final String FILL_RUNTIME = "%FILL-RUNTIME";
 

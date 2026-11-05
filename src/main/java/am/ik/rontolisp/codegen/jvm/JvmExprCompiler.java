@@ -1924,6 +1924,9 @@ final class JvmExprCompiler {
 			// body's own bindings (pure reads), so skipping their evaluation is
 			// unobservable.
 			case LispNames.REPLACE_BULK -> ctx.body.aconst_null();
+			// %string-search (LispNames.STRING_SEARCH): no JVM arm, search's loop runs.
+			// Same reasoning: its arguments are search's own variables.
+			case LispNames.STRING_SEARCH -> ctx.body.aconst_null();
 			case LispNames.ARRAY_ROW_MAJOR_INDEX ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx, className);
 			case LispNames.VECTOR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandVector(cons), ctx, className);
