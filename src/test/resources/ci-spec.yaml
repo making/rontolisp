@@ -23815,11 +23815,31 @@ cases:
         (print (list (slot-value *clsurf-a* 'low) (slot-value *clsurf-b* 'low)
                      (handler-case (change-class (make-instance 'clsurf-plain) class)
                        (error () :initform-ran)))))
+      ;; Classes mapping onto a target alike share one arm of the dispatch, and those
+      ;; that do not keep their own: nothing in common, a slot moving to another index,
+      ;; a slot staying at its index, a slot leaving a shared cell.
+      (defclass clsurf-to () ((a :initarg :a :initform 1) (b :initform 2) (c)))
+      (defclass clsurf-none-1 () ((x :initform :x)))
+      (defclass clsurf-none-2 () ((y :initform :y) (z :initform :z)))
+      (defclass clsurf-moved () ((b :initform :moved)))
+      (defclass clsurf-kept () ((a :initform :kept)))
+      (defclass clsurf-cell () ((b :allocation :class :initform :cell)))
+      (defun clsurf-to-values (o) (list (slot-value o 'a) (slot-value o 'b) (slot-boundp o 'c)))
+      (let ((class 'clsurf-to))
+        (dolist (from '(clsurf-none-1 clsurf-none-2 clsurf-moved clsurf-kept clsurf-cell))
+          (print (clsurf-to-values (change-class (make-instance from) class))))
+        (print (clsurf-to-values (change-class (make-instance 'clsurf-none-2) class :a :given))))
     expected: |
       (CLSURF-SUB 1 42 7)
       (:T 42 1 NIL)
       (CLSURF-SUB 1 42)
       (3 4 :INITFORM-RAN)
+      (1 2 NIL)
+      (1 2 NIL)
+      (1 :MOVED NIL)
+      (:KEPT 2 NIL)
+      (1 :CELL NIL)
+      (:GIVEN 2 NIL)
   - name: clos-slot-options-and-metaobject-types
     source: |
       ;; The rest of that CLOS surface: :writer in both spellings, the
