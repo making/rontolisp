@@ -43,31 +43,35 @@ $ curl -s 'localhost:19901/stats?filter=gateway\.'     # the filter's metrics
 
 ## Writing a filter
 
-A filter subclasses `root-context` (one per plugin on each worker) and
-`http-context` (one per stream), and specializes the callbacks it needs:
+A filter subclasses `proxy-wasm:root-context` (one per plugin on each worker) and
+`proxy-wasm:http-context` (one per stream), and specializes the callbacks it needs:
 
 ```lisp
 (require :proxy-wasm "proxy-wasm.lisp")
 
-(defpackage :my-filter (:use :cl :proxy-wasm))
+(defpackage :my-filter (:use :cl))
 (in-package :my-filter)
 
-(defclass my-root (root-context) ())
-(defclass my-stream (http-context) ())
+(defclass my-root (proxy-wasm:root-context) ())
+(defclass my-stream (proxy-wasm:http-context) ())
 
-(defmethod make-http-context ((root my-root) id)
+(defmethod proxy-wasm:make-http-context ((root my-root) id)
   (make-instance 'my-stream :id id :root root))
 
-(defmethod on-request-headers ((stream my-stream) num-headers end-of-stream)
+(defmethod proxy-wasm:on-request-headers
+    ((stream my-stream) num-headers end-of-stream)
   (declare (ignore num-headers end-of-stream))
-  (cond ((equal (get-header :request ":path") "/teapot")
-         (send-local-response 418 :body "short and stout")
+  (cond ((equal (proxy-wasm:get-header :request ":path") "/teapot")
+         (proxy-wasm:send-local-response 418 :body "short and stout")
          :pause)
-        (t (set-header :request "x-from-lisp" "hello")
+        (t (proxy-wasm:set-header :request "x-from-lisp" "hello")
            :continue)))
 
-(set-root-context (lambda (id) (make-instance 'my-root :id id)))
+(proxy-wasm:set-root-context (lambda (id) (make-instance 'my-root :id id)))
 ```
+
+The examples write the package out on every SDK name, so a reader can tell what comes
+from the SDK.
 
 Compile with `--no-wasi`, and load the module with Envoy's
 `envoy.filters.http.wasm` filter as `envoy.yaml` does.
@@ -78,9 +82,20 @@ properties. It does not cover gRPC calls, shared queues, foreign functions or th
 TCP (network filter) callbacks.
 
 An error signaled in a callback is logged and the callback answers its default
-instead of trapping, because a trap would take the VM down. Each callback also
-pops the bump heap on its way out; everything the SDK answers is a Lisp object,
-so it can be kept in a slot across callbacks.
+instead of trapping, because a trap would take the VM down. A filter that wants the
+trap sets `proxy-wasm:*trap-on-error*`, and `proxy-wasm:panic` traps from anywhere.
+A host call answering anything but OK signals, except that a read of something absent
+answers `nil`. Each callback also pops the bump heap on its way out; everything the
+SDK answers is a Lisp object, so it can be kept in a slot across callbacks.
+
+## Smaller filters on the same SDK
+
+`sdk-examples/` holds three more filters: `http_body.lisp` holds a response body and
+redacts it, `http_headers.lisp` logs both heads and answers `/hello` itself, and
+`test_plugin.lisp` does what the request's path says, for testing a host. It is built
+without `--no-wasi`, because one of its paths writes to stdout: the SDK works either way,
+and a `--no-wasi` module drops what it writes there.
+`sdk-examples/check.sh` builds each one and checks it in a real Envoy.
 
 ## What Envoy does that the ABI does not say
 

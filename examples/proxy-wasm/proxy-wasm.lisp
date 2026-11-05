@@ -6,11 +6,12 @@
 ;;;; calls back. This file is everything between that ABI (v0.2.1) and a filter
 ;;;; written with CLOS:
 ;;;;
-;;;;   (defclass my-root (root-context) ())
-;;;;   (defmethod on-request-headers ((ctx http-context) num-headers end-of-stream)
-;;;;     (set-header :request "x-from-lisp" "hello")
+;;;;   (defclass my-root (proxy-wasm:root-context) ())
+;;;;   (defmethod proxy-wasm:on-request-headers
+;;;;       ((ctx proxy-wasm:http-context) num-headers end-of-stream)
+;;;;     (proxy-wasm:set-header :request "x-from-lisp" "hello")
 ;;;;     :continue)
-;;;;   (set-root-context (lambda (id) (make-instance 'my-root :id id)))
+;;;;   (proxy-wasm:set-root-context (lambda (id) (make-instance 'my-root :id id)))
 ;;;;
 ;;;; Covered: logging, the clock, ticks, header maps, body buffers, local responses,
 ;;;; outgoing HTTP calls, shared data, metrics and properties. Not covered: gRPC
@@ -41,7 +42,8 @@
            :log-info :log-warn
            :log-error :log-critical
            :current-time-nanos :set-tick-period
-           :heap-top :get-header
+           :heap-top :panic
+           :*trap-on-error* :get-header
            :get-headers :set-header
            :add-header :remove-header
            :set-headers :get-buffer
@@ -51,7 +53,8 @@
            :http-call :shared-data
            :set-shared-data :define-metric
            :increment-metric :record-metric
-           :metric-value :get-property :set-property))
+           :metric-value :get-property
+           :get-property-octets :set-property))
 
 (in-package :proxy-wasm)
 
@@ -229,16 +232,20 @@
 (defconstant +status-empty+ 7)
 (defconstant +status-cas-mismatch+ 8)
 
-;; T for OK, NIL for "there is no such thing here". Anything else is a defect in
-;; the call, and it signals: every callback below turns that into a log line.
-(defun %found-p (operation status)
-  (cond ((= status +status-ok+) t)
-        ((or (= status +status-not-found+) (= status +status-empty+)) nil)
-        (t (error "~a answered status ~a" operation status))))
-
+;; A host call that only answers OK or fails. Anything else is a defect in the call, and
+;; it signals: every callback below turns that into a log line.
 (defun %check (operation status)
-  (%found-p operation status)
+  (unless (= status +status-ok+)
+    (error "~a answered status ~a" operation status))
   nil)
+
+;; For a call that reads: T for OK, NIL for "there is no such thing here".
+(defun %found-p (operation status)
+  (or (= status +status-not-found+) (= status +status-empty+)
+      (progn
+        (%check operation status)
+        t))
+  (= status +status-ok+))
 
 (defun %map-type (map)
   (ecase map
@@ -410,10 +417,12 @@
 
 (defun get-buffer-octets (buffer) (%read-buffer buffer #'%cell-octets))
 
-(defun set-buffer (buffer value)
+;; Replaces SIZE bytes from START, by default the whole buffer. A START past the end
+;; appends.
+(defun set-buffer (buffer value &key (start 0) size)
   (%check "proxy_set_buffer_bytes"
-          (%proxy-set-buffer-bytes (%buffer-type buffer) 0 (buffer-size buffer)
-                                   value)))
+          (%proxy-set-buffer-bytes (%buffer-type buffer) start
+                                   (or size (buffer-size buffer)) value)))
 
 ;;; ---------------------------------------------------------------------------
 ;;; The stream: resuming it, answering it, calling out
@@ -493,13 +502,20 @@
       (setq path (concatenate 'string path (string (code-char 0)) segment)))
     path))
 
-;; Answers the property's bytes as a string (a numeric property is its raw
-;; little-endian bytes), or NIL when the host has no such property.
-(defun get-property (&rest segments)
+;; Answers the cells holding the property's bytes, or NIL when the host has no such
+;; property.
+(defun %property-cells (segments)
   (let ((cells (%alloc 8)))
     (when (%found-p "proxy_get_property"
            (%proxy-get-property (%property-path segments) cells (+ cells 4)))
-      (%cell-string cells))))
+      cells)))
+
+(defun get-property (&rest segments)
+  (let ((cells (%property-cells segments))) (when cells (%cell-string cells))))
+
+;; For a numeric property, which is its raw little-endian bytes.
+(defun get-property-octets (&rest segments)
+  (let ((cells (%property-cells segments))) (when cells (%cell-octets cells))))
 
 (defun set-property (value &rest segments)
   (%check "proxy_set_property"
@@ -582,10 +598,17 @@
 ;; FACTORY takes a context id and answers a ROOT-CONTEXT.
 (defun set-root-context (factory) (setf *root-context-factory* factory))
 
+;; A wasm trap: no handler sees it, and it takes the whole VM down. The address is past
+;; the end of any linear memory that is not the full 4GiB.
+(defun panic () (%load32 #xFFFFFFFC))
+
+;; Set this for what the Rust SDK does with a failed host call: fail the plugin.
+(defvar *trap-on-error* nil)
+
 ;; What every callback runs inside. A Lisp error must not become a wasm trap, which
-;; would take the whole VM down: it is logged and the callback answers FALLBACK. On
-;; the way out the bump heap pops back to where it stood, releasing every out-cell
-;; and every byte the host answered during the call.
+;; would take the whole VM down: it is logged and the callback answers FALLBACK, unless
+;; *TRAP-ON-ERROR* asks for the trap. On the way out the bump heap pops back to where it
+;; stood, releasing every out-cell and every byte the host answered during the call.
 (defmacro %with-callback ((fallback) &body body)
   (let ((mark (gensym "MARK")) (result (gensym "RESULT")))
     `(let* ((,mark (%mark))
@@ -593,6 +616,7 @@
              (handler-case (progn ,@body)
                (error (condition)
                  (%proxy-log 4 (format nil "proxy-wasm: ~a" condition))
+                 (when *trap-on-error* (panic))
                  ,fallback))))
        (%reset ,mark)
        ,result)))
