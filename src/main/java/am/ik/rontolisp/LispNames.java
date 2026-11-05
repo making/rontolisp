@@ -8402,6 +8402,23 @@ public final class LispNames {
 	 */
 	public static final String CONS_CAS_CAR_INTERNAL = "%CONS-CAS-CAR";
 
+	/**
+	 * The internal {@code rontolisp::%double-spelled} primitive: {@code (%double-spelled
+	 * float)} answers that float as if a token with a {@code d} marker had spelled it
+	 * ({@link LispDouble#doubleSpelled}), for a reader of a library's own; the compile
+	 * paths' definition answers its argument.
+	 */
+	public static final String DOUBLE_SPELLED_INTERNAL = "%DOUBLE-SPELLED";
+
+	/** The canonical spelling of {@code rontolisp::%double-spelled}. */
+	public static final String DOUBLE_SPELLED_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + DOUBLE_SPELLED_INTERNAL;
+
+	/** The internal {@code rontolisp::%double-spelled-p} predicate over any value. */
+	public static final String DOUBLE_SPELLED_P_INTERNAL = "%DOUBLE-SPELLED-P";
+
+	/** The canonical spelling of {@code rontolisp::%double-spelled-p}. */
+	public static final String DOUBLE_SPELLED_P_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + DOUBLE_SPELLED_P_INTERNAL;
+
 	/** The canonical spelling of {@code rontolisp::%cons-cas-car}. */
 	public static final String CONS_CAS_CAR_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONS_CAS_CAR_INTERNAL;
 

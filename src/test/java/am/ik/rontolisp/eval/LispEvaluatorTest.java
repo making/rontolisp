@@ -126,6 +126,13 @@ class LispEvaluatorTest {
 		assertThat(eval("1.5d3")).isEqualTo(new LispDouble(1500.0));
 		assertThat(eval("6.02e23")).isEqualTo(new LispDouble(6.02e23));
 		assertThat(eval("(* 2 1d0)")).isEqualTo(new LispDouble(2.0));
+		// The one value keeps whether a d or an l spelled it, for coalton's F64 literals
+		// to ask, and no standard operator tells them apart.
+		assertThat(eval("""
+				(list (mapcar #'rontolisp::%double-spelled-p (list 1.0 1d0 1f0 1l0 (* 1 1d0) (read-from-string "2d0")))
+				      (rontolisp::%double-spelled-p (rontolisp::%double-spelled 1.0))
+				      (eql 1.0 1d0) (equalp 1.0 1d0) (typep 1d0 'single-float))
+				""").print()).isEqualTo("((NIL T NIL T NIL T) T T T T)");
 	}
 
 	@Test
@@ -2414,6 +2421,33 @@ class LispEvaluatorTest {
 		assertThat(eval("(equalp (make-array '(2 2) :initial-contents '((1 2) (3 4)))"
 				+ " (make-array '(4) :initial-contents '(1 2 3 4)))"))
 			.isEqualTo(LispNil.INSTANCE);
+		// The interpreter's own equalp answers what the definition the compile paths
+		// splice answers, arm by arm: that definition, in place of the built-in, is the
+		// oracle.
+		String pairs = """
+				(defstruct eqp-s a b)
+				(defstruct eqp-t a)
+				(defun eqp-filled (n) (make-array 3 :fill-pointer n :initial-contents '(1 2 3)))
+				(list (equalp 1 1.0) (equalp 1/2 0.5) (equalp 1 2) (equalp #c(1 0) 1) (equalp (expt 2 70) (expt 2.0 70))
+				      (equalp (/ 0.0 0.0) (/ 0.0 0.0))
+				      (equalp "aB" "Ab") (equalp "a" "b") (equalp "a" 'a) (equalp #\\a #\\A) (equalp #\\a #\\b)
+				      (equalp '(1 "A" #\\b) '(1.0 "a" #\\B)) (equalp '(1 . 2) '(1 . 2.0)) (equalp '(1 2) '(1))
+				      (equalp '(1) '(1 . 2)) (equalp nil nil) (equalp nil '(1)) (equalp 'a 'a) (equalp 'a 'b) (equalp :a :a)
+				      (equalp (make-eqp-s :a 1 :b "X") (make-eqp-s :a 1.0 :b "x"))
+				      (equalp (make-eqp-s :a 1) (make-eqp-s :a 2))
+				      (equalp (make-eqp-s :a 1) (make-eqp-t :a 1))
+				      (let ((s (make-eqp-s))) (equalp s s))
+				      (equalp #(1 2) #(1.0 2)) (equalp #(1 2) '(1 2)) (equalp (eqp-filled 2) #(1 2))
+				      (equalp (eqp-filled 2) (eqp-filled 3))
+				      (equalp (make-array 2 :element-type '(unsigned-byte 8) :initial-element 1) #(1 1))
+				      (equalp (make-array '(2 1) :initial-contents '((1) (2))) (make-array '(1 2) :initial-contents '((1 2))))
+				      (equalp (make-array '() :initial-element 1) (make-array '() :initial-element 1.0))
+				      (equalp #'car #'car) (equalp #'car #'cdr)
+				      (equalp (make-hash-table) (make-hash-table))
+				      (equalp 1 'a) (equalp "a" #\\a))
+				""";
+		String oracle = LispPreludeLibrary.formsFor("EQUALP").get(0).print();
+		assertThat(evalMulti(pairs).print()).isEqualTo(evalMulti(oracle + pairs).print());
 	}
 
 	@Test
@@ -24634,6 +24668,81 @@ class LispEvaluatorTest {
 						+ " (list (ume-here) (ume-here) (ume-here) (ume-there) ume-n)")
 					.print())
 			.isEqualTo("(1 1 1 2 2)");
+		// Another macro changing leaves a call site's expansion alone, and a macrolet a
+		// macro expands to is walked once, with no effect on any other call site: the
+		// walks of two such sites used to drop each other's every time they ran.
+		assertThat(evalMulti("(defvar ume-n 0)"
+				+ " (defmacro ume-probe () (setq ume-n (+ ume-n 1)) (list 'quote ume-n))"
+				+ " (defun ume-here () (ume-probe))"
+				+ " (defmacro ume-walked () '(flet ((ume-f () 1)) (macrolet ((ume-local () 2)) (+ (ume-f) (ume-local)))))"
+				+ " (defun ume-walk () (ume-walked))" + " (defmacro ume-other () 0)"
+				+ " (list (ume-here) (ume-walk) (ume-here) (ume-other) (ume-here) ume-n)")
+			.print()).isEqualTo("(1 3 1 0 1 1)");
+		// No bound for a big system to fall off: every site of these expands once.
+		assertThat(evalMulti("(defvar ume-n 0)" + " (defmacro ume-count () (setq ume-n (+ ume-n 1)) nil)"
+				+ " (defun ume-big () " + "(ume-count) ".repeat(25_000) + ")" + " (ume-big) (ume-big) ume-n")
+			.print()).isEqualTo("25000");
+	}
+
+	@Test
+	void aGenericAnswersEachCallByItsArguments() {
+		// What a dispatcher's chain memo (DispatchChain) must not change: the arguments'
+		// values where a test reads them, a class or struct defined after a first call,
+		// an
+		// instance changing class, a method redefined.
+		assertThat(evalMulti("""
+				(defclass gac-a () ())
+				(defclass gac-b (gac-a) ())
+				(defstruct gac-s1)
+				(defstruct (gac-s2 (:include gac-s1)))
+				(defmethod gac (x y) (list :default x y))
+				(defmethod gac ((x gac-a) (y integer)) :a-integer)
+				(defmethod gac ((x gac-b) (y integer)) (list :b (call-next-method)))
+				(defmethod gac ((x gac-s1) y) :s1)
+				(defmethod gac ((x gac-s2) (y string)) :s2-string)
+				(defmethod gac ((x symbol) (y symbol)) :symbols)
+				(defmethod gac ((x (eql :key)) (y (eql 1))) :key-one)
+				(defmethod gac ((x (eql 5)) y) :five)
+				(defmethod gac ((x integer) y) :integer)
+				(defvar gac-o (make-instance 'gac-a))
+				(defvar gac-first
+				  (list (gac gac-o 1) (gac (make-instance 'gac-b) 1) (gac (make-gac-s1) 1) (gac (make-gac-s2) 1)
+				        (gac (make-gac-s2) "s") (gac 'x 'y) (gac :x 'y) (gac :key 1) (gac :key 2) (gac 5 'y)
+				        (gac 6 'y) (gac "s" 'y) (gac nil 'y)))
+				(defclass gac-c (gac-b) ())
+				(defstruct (gac-s3 (:include gac-s2)))
+				(defvar gac-new (list (gac (make-instance 'gac-c) 1) (gac (make-gac-s3) "s")))
+				(change-class gac-o 'gac-b)
+				(defvar gac-changed (gac gac-o 1))
+				(defmethod gac ((x integer) y) :integer-again)
+				(list gac-first gac-new gac-changed (gac 6 'y))
+				""").print()).isEqualTo("((:A-INTEGER (:B :A-INTEGER) :S1 :S1 :S2-STRING :SYMBOLS :SYMBOLS :KEY-ONE"
+				+ " (:DEFAULT :KEY 2) :FIVE :INTEGER (:DEFAULT \"s\" Y) :SYMBOLS)"
+				+ " ((:B :A-INTEGER) :S2-STRING) (:B :A-INTEGER) :INTEGER-AGAIN)");
+	}
+
+	@Test
+	void aNewStructRegeneratesOnlyTheDispatchersItCanReach() {
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		for (LispVal form : LispReader.readAllFromString("""
+				(defstruct nsr-base)
+				(defmethod nsr-on-base ((x nsr-base)) :base)
+				(defmethod nsr-on-any ((x structure-object)) :any)
+				""")) {
+			evaluator.eval(form);
+		}
+		Environment global = evaluator.globalEnvironment();
+		LispVal onBase = global.lookupFunctionOrNull("NSR-ON-BASE");
+		LispVal onAny = global.lookupFunctionOrNull("NSR-ON-ANY");
+		evaluator.eval(LispReader.readFromString("(defstruct nsr-other)"));
+		assertThat(global.lookupFunctionOrNull("NSR-ON-BASE")).as("a struct no method can apply to").isSameAs(onBase);
+		assertThat(global.lookupFunctionOrNull("NSR-ON-ANY")).as("every struct is a structure-object")
+			.isNotSameAs(onAny);
+		evaluator.eval(LispReader.readFromString("(defstruct (nsr-child (:include nsr-base)))"));
+		assertThat(global.lookupFunctionOrNull("NSR-ON-BASE")).as("a new :include descendant").isNotSameAs(onBase);
+		assertThat(evaluator
+			.eval(LispReader.readFromString("(list (nsr-on-base (make-nsr-child)) (nsr-on-any (make-nsr-other)))"))
+			.print()).isEqualTo("(:BASE :ANY)");
 	}
 
 	@Test
@@ -27251,13 +27360,14 @@ class LispEvaluatorTest {
 		// Weakness is not observable from within Common Lisp, so the shim answers a
 		// plain table: :weakness and :weakness-matters are dropped, every other
 		// argument reaches make-hash-table (:test carries through), and
-		// hash-table-weakness says nil because nothing here is weak.
+		// hash-table-weakness says nil because nothing here is weak. A collection asked
+		// for (coalton's system library) is one nothing waits for.
 		assertThat(evalMulti("""
 				(asdf:load-system "trivial-garbage")
 				(let ((h (tg:make-weak-hash-table :weakness :key :test 'equal)))
 				  (setf (gethash "k" h) 1)
-				  (list (gethash "k" h) (hash-table-count h) (tg:hash-table-weakness h)))
-				""").print()).isEqualTo("(1 1 NIL)");
+				  (list (gethash "k" h) (hash-table-count h) (tg:hash-table-weakness h) (tg:gc :full t)))
+				""").print()).isEqualTo("(1 1 NIL NIL)");
 	}
 
 	@Test

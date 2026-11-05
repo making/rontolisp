@@ -19,6 +19,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.DispatchChain;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCircularLiteral;
@@ -328,8 +329,10 @@ public final class LispEvaluator {
 	/**
 	 * Whether a debugger can be installed on a thread ({@link #enableDebugging}): every
 	 * function call keeps a frame on its thread's stack, and an error is offered to the
-	 * thread's debugger at its signal point. Written once, before any thread that reads
-	 * it starts, so a call pays one plain field read while it is off.
+	 * thread's debugger at its signal point. Written once, before any thread a debugger
+	 * serves starts, so a call pays one plain field read while it is off: a program that
+	 * starts no server never turns it on, and a thread already running may go on without
+	 * frames, as it has no debugger.
 	 */
 	private boolean debugging;
 
@@ -428,17 +431,43 @@ public final class LispEvaluator {
 	 * per source occurrence is what the compile path ({@link UserMacroExpander}) already
 	 * does, so the memo moves the interpreter TOWARD cross-backend identity: a macro body
 	 * that reads a global while expanding now freezes the first answer everywhere alike.
-	 * Every write to {@link #userMacros} goes through {@link #putUserMacro} /
-	 * {@link #removeUserMacro}, which drop the memo -- a redefined {@code defmacro} or a
-	 * {@code macrolet} entering or leaving scope changes what a call site means.
+	 * An entry holds while its macro is still the name's, so a redefined {@code defmacro}
+	 * or a {@code macrolet} entering or leaving scope changes what that macro's call
+	 * sites mean and no other's; the walk of a whole form holds while the table is as it
+	 * was ({@link #expandedPerSite}).
 	 * <p>
-	 * Guarded by its own monitor, never held across an expansion: a macro call is
-	 * ordinary Lisp and so is reachable from a served request, which is one virtual
-	 * thread per request ({@code .kb/concurrent-served-requests.md}). Two threads racing
-	 * on the same call site both expand and the last write wins -- each expansion is
-	 * self-consistent, so that is a wasted expansion, not a wrong answer.
+	 * Never locked across an expansion: a macro call is ordinary Lisp and so is reachable
+	 * from a served request, which is one virtual thread per request
+	 * ({@code .kb/concurrent-served-requests.md}). Two threads racing on the same call
+	 * site both expand and the last write wins -- each expansion is self-consistent, so
+	 * that is a wasted expansion, not a wrong answer.
 	 */
-	private final java.util.IdentityHashMap<LispVal, LispVal> userMacroExpansions = new java.util.IdentityHashMap<>();
+	private final FormMemo<SiteExpansion> userMacroExpansions = new FormMemo<>();
+
+	/**
+	 * A memoized expansion of a form that depends on the macro table.
+	 *
+	 * @param expansion the expansion
+	 * @param macro the macro that made it, or null for the walk of a whole form
+	 * @param epoch the {@link #macroTableEpoch} a walk was made under
+	 */
+	private record SiteExpansion(LispVal expansion, @Nullable UserMacro macro, int epoch) {
+	}
+
+	/**
+	 * Moves on each change of what the program's macros are ({@link #putUserMacro},
+	 * {@link #removeUserMacro}). The bindings a walk makes for the extent of a
+	 * {@code macrolet} body it expands ({@link #pushLocalMacro}) are not one: what the
+	 * walk answers already holds wherever it is reached.
+	 */
+	private volatile int macroTableEpoch;
+
+	/**
+	 * How many walks of a {@code macrolet} body are under way ({@link #withLocalMacros}):
+	 * a form evaluated meanwhile (a macro's own function, called by that walk) must not
+	 * keep what it made of their local macros.
+	 */
+	private volatile int localMacroDepth;
 
 	/**
 	 * Memo of the BUILT-IN macro arms' expansions ({@link #evalBuiltinMacro}), keyed by
@@ -458,10 +487,9 @@ public final class LispEvaluator {
 	 * change (a form REWRITTEN between evaluations keeps its first expansion):
 	 * {@code .kb/interpreter-expansion-memo.md}. Built-in operators cannot be shadowed or
 	 * redefined, so unlike {@link #userMacroExpansions} nothing ever invalidates this
-	 * map; the same monitor-around-lookup, expansion-outside-the-monitor discipline
-	 * applies.
+	 * map.
 	 */
-	private final java.util.IdentityHashMap<LispVal, LispVal> builtinMacroExpansions = new java.util.IdentityHashMap<>();
+	private final FormMemo<LispVal> builtinMacroExpansions = new FormMemo<>();
 
 	/**
 	 * Memo of {@link #expandCompilerMacro}, keyed by the CALL SITE's cons identity: a
@@ -470,29 +498,21 @@ public final class LispEvaluator {
 	 * makes the {@code load-time-value} memo below hit -- the cached expansion is one
 	 * object, so its {@code load-time-value} occurrence is one object too.
 	 */
-	private final java.util.IdentityHashMap<LispVal, LispVal> compilerMacroExpansions = new java.util.IdentityHashMap<>();
+	private final FormMemo<LispVal> compilerMacroExpansions = new FormMemo<>();
 
 	/**
 	 * Memo of {@link #settledLambdaTail}, keyed by the tail form's cons identity. Nothing
 	 * invalidates it: a lowered tail's value is the shared wrapper a later
 	 * {@code defmethod} on the producer rewrites in place ({@link #producerTailSites}).
 	 */
-	private final java.util.IdentityHashMap<LispVal, LispVal> lambdaTailSettlements = new java.util.IdentityHashMap<>();
+	private final FormMemo<LispVal> lambdaTailSettlements = new FormMemo<>();
 
 	/**
 	 * Memo of evaluated {@code (load-time-value ...)} occurrences, keyed by cons identity
 	 * -- CL's "evaluated once" for interpreted code. Holds a one-element list so a
 	 * {@code nil} result still counts as computed.
 	 */
-	private final java.util.IdentityHashMap<LispVal, List<LispVal>> loadTimeValues = new java.util.IdentityHashMap<>();
-
-	/**
-	 * Upper bound on the three identity memos above. A program that builds call forms at
-	 * runtime and feeds them to {@code eval} would otherwise retain one entry per form
-	 * forever; past the bound the expansion is simply recomputed, which is exactly the
-	 * behavior before compiler macros were applied at all.
-	 */
-	private static final int EXPANSION_MEMO_LIMIT = 20_000;
+	private final FormMemo<List<LispVal>> loadTimeValues = new FormMemo<>();
 
 	/**
 	 * A user macro: required parameters, an optional {@code &rest}/{@code &body}
@@ -854,9 +874,9 @@ public final class LispEvaluator {
 	 * keyed by the site's cons identity: resolved on the first evaluation (or when a
 	 * top-level form is loaded under {@code java:*warn-on-reflection*}) and remembered,
 	 * like the expansion memos -- the resolution is a pure function of the site form and
-	 * the classes. Bounded by {@link #EXPANSION_MEMO_LIMIT}; the same monitor discipline.
+	 * the classes.
 	 */
-	private final java.util.IdentityHashMap<LispCons, am.ik.rontolisp.compiler.JavaSite> javaSites = new java.util.IdentityHashMap<>();
+	private final FormMemo<am.ik.rontolisp.compiler.JavaSite> javaSites = new FormMemo<>();
 
 	// The classes java: names resolve to: the source loader's Java class loader
 	// (setSourceLoader), over which the sites below were resolved.
@@ -1227,9 +1247,7 @@ public final class LispEvaluator {
 		if (classes != this.javaClasses.loader()) {
 			this.javaClasses = am.ik.rontolisp.compiler.ReflectiveJavaClasses.over(classes);
 			// a site resolved against other classes is resolved again
-			synchronized (this.javaSites) {
-				this.javaSites.clear();
-			}
+			this.javaSites.clear();
 			synchronized (this) {
 				this.javaDeclarations = null;
 			}
@@ -1851,6 +1869,13 @@ public final class LispEvaluator {
 		this.globalEnv.defineFunction(LispNames.OBJ_P, new LispFunction(LispNames.OBJ_P, args -> {
 			requireSingleArg(LispNames.OBJ_P, args);
 			return args.get(0) instanceof LispInstance ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.EQUALP, new LispFunction(LispNames.EQUALP, args -> {
+			if (args.size() != 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, ClosRegistry
+					.arityMessage(BuiltinFunctionWrappers.arityOperator(LispNames.EQUALP), 2, false, args.size()));
+			}
+			return equalp(args.get(0), args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		this.globalEnv.defineFunction(LispNames.OBJ_SLOTS, new LispFunction(LispNames.OBJ_SLOTS, args -> {
 			requireSingleArg(LispNames.OBJ_SLOTS, args);
@@ -7417,11 +7442,9 @@ public final class LispEvaluator {
 	}
 
 	private am.ik.rontolisp.compiler.JavaSite javaSite(LispCons cons, String location) {
-		synchronized (this.javaSites) {
-			am.ik.rontolisp.compiler.JavaSite cached = this.javaSites.get(cons);
-			if (cached != null) {
-				return cached;
-			}
+		am.ik.rontolisp.compiler.JavaSite cached = this.javaSites.get(cons);
+		if (cached != null) {
+			return cached;
 		}
 		// Outside the monitor: resolving loads classes.
 		am.ik.rontolisp.compiler.JavaSite site = new am.ik.rontolisp.compiler.JavaSiteResolver(this.javaClasses)
@@ -7431,11 +7454,7 @@ public final class LispEvaluator {
 			System.err.println(
 					location + "warning: " + am.ik.rontolisp.compiler.JavaSiteResolver.reflectionWarning(cons, site));
 		}
-		synchronized (this.javaSites) {
-			if (this.javaSites.size() < EXPANSION_MEMO_LIMIT) {
-				this.javaSites.put(cons, site);
-			}
-		}
+		this.javaSites.put(cons, site);
 		return site;
 	}
 
@@ -10269,6 +10288,10 @@ public final class LispEvaluator {
 									result = evalQuote(cons);
 									break frame;
 								case LispNames.IF: {
+									if (cons instanceof DispatchChain chain) {
+										next = dispatchChainArm(chain, env);
+										break dispatch;
+									}
 									if (properLength < 3) {
 										// The malformed shapes, reported as before.
 										result = evalIf(cons, env);
@@ -11792,33 +11815,25 @@ public final class LispEvaluator {
 	 * call ({@link #expandUserMacro}) and like the compile backends. Callers may only
 	 * pass an expander that is a pure function of the form -- see the memo field's
 	 * contract and {@code .kb/interpreter-expansion-memo.md}. The expander runs outside
-	 * the monitor (an expansion may recurse into the reader or another expansion); two
+	 * any lock (an expansion may recurse into the reader or another expansion); two
 	 * threads racing on one call site both expand and the last write wins, a wasted
 	 * expansion rather than a wrong answer. The EVALUATION -- the expansion replaces the
-	 * form in {@link #evalCons}'s loop -- is outside it too, on the hit path as much as
-	 * the miss path: the expansion is a whole program, and a program can hand over to
-	 * another thread (the macOS main thread, a socket read) that then needs the monitor
-	 * for a memo of its own -- holding it across the eval parks both halves.
+	 * form in {@link #evalCons}'s loop -- is outside it too: the expansion is a whole
+	 * program, and a program can hand over to another thread (the macOS main thread, a
+	 * socket read) that then needs the memo itself.
 	 * @param cons the macro call form
 	 * @param expander the pure syntactic expansion of one built-in macro
 	 * @return the (memoized) expansion
 	 */
 	private LispVal builtinMacroExpansion(LispCons cons, java.util.function.Function<LispCons, LispVal> expander) {
-		LispVal cached;
-		synchronized (this.builtinMacroExpansions) {
-			cached = this.builtinMacroExpansions.get(cons);
-		}
+		LispVal cached = this.builtinMacroExpansions.get(cons);
 		if (cached != null) {
 			return cached;
 		}
 		LispVal wrongCount = cons.car() instanceof LispSymbol head
 				? wrongCountCall(cons, head.name(), cons.properLength()) : null;
 		LispVal expansion = wrongCount != null ? wrongCount : expander.apply(cons);
-		synchronized (this.builtinMacroExpansions) {
-			if (this.builtinMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
-				this.builtinMacroExpansions.put(cons, expansion);
-			}
-		}
+		this.builtinMacroExpansions.put(cons, expansion);
 		return expansion;
 	}
 
@@ -12030,6 +12045,9 @@ public final class LispEvaluator {
 		String sitePackage = env.lexicalPackage();
 		LispCons cons = this.packageResolver.defstructInternedIn(written,
 				sitePackage != null ? sitePackage : this.packageResolver.currentPackageName());
+		String writtenName = cons.toList().get(1) instanceof LispCons header ? headerStructName(header)
+				: symbolNameOf(cons.toList().get(1));
+		boolean newStruct = writtenName != null && this.closRegistry.findStructTag(writtenName) == null;
 		// Expand into the generated defuns (constructor, predicate, copier, accessors)
 		// and evaluate each; the accessor registry makes them setf-able places.
 		for (LispVal form : LispMacroExpander.expandDefstruct(cons, this.structAccessors, this.closRegistry,
@@ -12064,8 +12082,11 @@ public final class LispEvaluator {
 		// struct specializer's descendant tag set or the structure-object
 		// enumeration (sxql defines convert-for-sql's structure-object method in
 		// operator.lisp and the clause structs it must catch in clause.lisp).
+		// Every one when the struct was known before, as its ancestors may have changed,
+		// only those it can reach when it is new.
 		for (ClosRegistry.GenericInfo generic : this.closRegistry.generics().values()) {
-			if (generic.hasStructMethod(this.closRegistry)) {
+			if (newStruct && structName != null ? generic.dispatchesOverNewStruct(structName, this.closRegistry)
+					: generic.hasStructMethod(this.closRegistry)) {
 				regenerateDispatcher(generic.name(), env);
 			}
 		}
@@ -12432,7 +12453,8 @@ public final class LispEvaluator {
 		boolean producerWasMethoded = this.methodedProducerDispatch.containsKey(genericName);
 		String fallback = builtinDefaultMethodFor(genericName);
 		LispVal previous = this.globalEnv.lookupFunctionOrNull(genericName);
-		eval(LispMacroExpander.generateDispatcher(genericName, this.closRegistry, fallback), env);
+		eval(DispatchChain.memoizing(LispMacroExpander.generateDispatcher(genericName, this.closRegistry, fallback)),
+				env);
 		if (previous instanceof LispInstance metaobject && isGenericFunctionMetaobject(metaobject)) {
 			// The name answers its generic function METAOBJECT (the generic-function
 			// protocol bound it): the metaobject stays the name's function and calls the
@@ -12461,6 +12483,125 @@ public final class LispEvaluator {
 				relowerProducerTails();
 			}
 		}
+	}
+
+	/**
+	 * {@code equalp} here: the definition the compile paths splice
+	 * ({@link LispPreludeLibrary}), arm for arm, over the same operators. A predicate a
+	 * library tests with for every lookup is too hot to interpret (coalton's
+	 * substitutions compare type variables with it, 20% of its typechecker while it was
+	 * Lisp).
+	 */
+	private boolean equalp(LispVal a, LispVal b) {
+		LispVal left = a;
+		LispVal right = b;
+		while (left instanceof LispCons leftCons && right instanceof LispCons rightCons) {
+			if (!equalp(leftCons.car(), rightCons.car())) {
+				return false;
+			}
+			left = leftCons.cdr();
+			right = rightCons.cdr();
+		}
+		if (left instanceof LispInteger leftInteger && right instanceof LispInteger rightInteger) {
+			return leftInteger.value() == rightInteger.value();
+		}
+		if (isNumberValue(left) && isNumberValue(right)) {
+			return isTruthy(apply(resolveFunction(LispNames.EQ), List.of(left, right), this.globalEnv));
+		}
+		if (left instanceof LispString && right instanceof LispString) {
+			return isTruthy(apply(resolveFunction(LispNames.STRING_EQUAL), List.of(left, right), this.globalEnv));
+		}
+		if (left instanceof LispChar leftChar && right instanceof LispChar rightChar) {
+			return Character.toLowerCase(leftChar.codePoint()) == Character.toLowerCase(rightChar.codePoint());
+		}
+		if (left instanceof LispInstance leftInstance && right instanceof LispInstance rightInstance) {
+			if (LispEquality.eql(left, right)) {
+				return true;
+			}
+			if (!leftInstance.layout().tag().equals(rightInstance.layout().tag())
+					|| leftInstance.slotCount() != rightInstance.slotCount()) {
+				return false;
+			}
+			for (int i = 0; i < leftInstance.slotCount(); i++) {
+				if (!equalp(leftInstance.slot(i), rightInstance.slot(i))) {
+					return false;
+				}
+			}
+			return true;
+		}
+		if (isArrayValue(left) && isArrayValue(right)) {
+			return arraysEqualp(left, right);
+		}
+		return isTruthy(apply(resolveFunction(LispNames.EQUAL), List.of(left, right), this.globalEnv));
+	}
+
+	private static boolean isNumberValue(LispVal value) {
+		return value instanceof LispInteger || value instanceof LispBigInteger || value instanceof LispRatio
+				|| value instanceof LispDouble || value instanceof LispComplex;
+	}
+
+	private static boolean isArrayValue(LispVal value) {
+		return value instanceof LispArray || value instanceof LispFloatArray || value instanceof LispIntVector;
+	}
+
+	private boolean arraysEqualp(LispVal a, LispVal b) {
+		LispVal rankA = callOperator(LispNames.ARRAY_RANK, a);
+		LispVal rankB = callOperator(LispNames.ARRAY_RANK, b);
+		boolean vectors = rankA.equals(new LispInteger(1)) && rankB.equals(new LispInteger(1));
+		boolean sameShape = vectors ? callOperator(LispNames.LENGTH, a).equals(callOperator(LispNames.LENGTH, b))
+				: LispEquality.equal(callOperator(LispNames.ARRAY_DIMENSIONS, a),
+						callOperator(LispNames.ARRAY_DIMENSIONS, b));
+		if (!sameShape) {
+			return false;
+		}
+		LispVal count = callOperator(rankA.equals(new LispInteger(1)) ? LispNames.LENGTH : LispNames.ARRAY_TOTAL_SIZE,
+				a);
+		LispVal rowMajorAref = resolveFunction(LispNames.ROW_MAJOR_AREF);
+		for (long i = 0; i < ((LispInteger) count).value(); i++) {
+			LispInteger index = new LispInteger(i);
+			if (!equalp(apply(rowMajorAref, List.of(a, index), this.globalEnv),
+					apply(rowMajorAref, List.of(b, index), this.globalEnv))) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private LispVal callOperator(String name, LispVal argument) {
+		return apply(resolveFunction(name), List.of(argument), this.globalEnv);
+	}
+
+	/**
+	 * The arm of a generic's dispatcher a call takes: what the shapes of its arguments
+	 * left to test ({@link DispatchChain.Selection}) in place of the walk down the chain.
+	 * @param chain the chain
+	 * @param env the call's environment
+	 * @return the form that replaces the chain in {@link #evalCons}'s loop
+	 */
+	private LispVal dispatchChainArm(DispatchChain chain, Environment env) {
+		LispSymbol[] keys = chain.keys();
+		Object found = chain.root();
+		for (int i = 0; i < keys.length && found != null; i++) {
+			found = ((DispatchChain.Shapes) found).get(DispatchChain.shapeOf(evalSymbolRef(keys[i], env)));
+		}
+		DispatchChain.Selection selection = found != null ? (DispatchChain.Selection) found
+				: firstChainSelection(chain, env);
+		LispVal[] tests = selection.tests();
+		for (int i = 0; i < tests.length; i++) {
+			if (isTruthy(eval(tests[i], env))) {
+				return selection.arms()[i];
+			}
+		}
+		return selection.last();
+	}
+
+	private DispatchChain.Selection firstChainSelection(DispatchChain chain, Environment env) {
+		LispSymbol[] keys = chain.keys();
+		Object[] shapes = new Object[keys.length];
+		for (int i = 0; i < keys.length; i++) {
+			shapes[i] = DispatchChain.shapeOf(evalSymbolRef(keys[i], env));
+		}
+		return chain.select(shapes, test -> isTruthy(eval(test, env)));
 	}
 
 	/**
@@ -12749,9 +12890,7 @@ public final class LispEvaluator {
 			return cached;
 		}
 		LispVal expansion = computeCompilerMacroExpansion(form, site);
-		if (this.compilerMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
-			this.compilerMacroExpansions.put(form, expansion);
-		}
+		this.compilerMacroExpansions.put(form, expansion);
 		return expansion;
 	}
 
@@ -12790,9 +12929,7 @@ public final class LispEvaluator {
 			return computed.get(0);
 		}
 		LispVal value = eval(LispMacroExpander.expandLoadTimeValue(cons), env);
-		if (this.loadTimeValues.size() < EXPANSION_MEMO_LIMIT) {
-			this.loadTimeValues.put(cons, List.of(value));
-		}
+		this.loadTimeValues.put(cons, List.of(value));
 		return value;
 	}
 
@@ -13121,37 +13258,23 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Installs a user macro, invalidating the expansion memo.
+	 * Installs a user macro: its call sites expand again, and so does a walk of any form
+	 * that may name it.
 	 * @param name the macro name
 	 * @param macro the macro
 	 */
 	private void putUserMacro(String name, UserMacro macro) {
 		this.userMacros.put(name, macro);
-		invalidateUserMacroExpansions();
+		this.macroTableEpoch++;
 	}
 
 	/**
-	 * Drops a user macro, invalidating the expansion memo when the table really changed.
+	 * Drops a user macro.
 	 * @param name the macro name
 	 */
 	private void removeUserMacro(String name) {
 		if (this.userMacros.remove(name) != null) {
-			invalidateUserMacroExpansions();
-		}
-	}
-
-	/**
-	 * Drops every memoized user-macro expansion. Called on any change to the macro table:
-	 * a cached expansion is only valid for the macro definitions that produced it, and a
-	 * {@code macrolet} entering or leaving scope is such a change. Dropping the whole
-	 * memo rather than the affected call sites is the cheap and obviously correct answer
-	 * -- the memo refills as the call sites are reached again.
-	 */
-	private void invalidateUserMacroExpansions() {
-		synchronized (this.userMacroExpansions) {
-			if (!this.userMacroExpansions.isEmpty()) {
-				this.userMacroExpansions.clear();
-			}
+			this.macroTableEpoch++;
 		}
 	}
 
@@ -13377,8 +13500,25 @@ public final class LispEvaluator {
 	 */
 	public @Nullable Object pushLocalMacro(LispSymbol name, LispVal paramForm, List<LispVal> body) {
 		UserMacro previous = this.userMacros.get(name.name());
-		putUserMacro(name.name(), makeUserMacro(LispNames.MACROLET, name, paramForm, body, this.globalEnv));
+		this.userMacros.put(name.name(), makeUserMacro(LispNames.MACROLET, name, paramForm, body, this.globalEnv));
 		return previous;
+	}
+
+	/**
+	 * Runs a walk of a {@code macrolet} body with its local macros bound: a form
+	 * evaluated meanwhile keeps nothing it made of them ({@link #localMacroDepth}).
+	 * @param <T> what the walk answers
+	 * @param walk the walk, which binds and restores the local macros itself
+	 * @return what it answered
+	 */
+	<T> T withLocalMacros(java.util.function.Supplier<T> walk) {
+		this.localMacroDepth++;
+		try {
+			return walk.get();
+		}
+		finally {
+			this.localMacroDepth--;
+		}
 	}
 
 	/**
@@ -13389,10 +13529,10 @@ public final class LispEvaluator {
 	 */
 	public void popLocalMacro(String name, @Nullable Object previous) {
 		if (previous instanceof UserMacro macro) {
-			putUserMacro(name, macro);
+			this.userMacros.put(name, macro);
 		}
 		else {
-			removeUserMacro(name);
+			this.userMacros.remove(name);
 		}
 	}
 
@@ -13800,25 +13940,17 @@ public final class LispEvaluator {
 				&& expandsPerScope(scoped)) {
 			return expandMacroCall(op.name(), scoped, form, site);
 		}
-		synchronized (this.userMacroExpansions) {
-			LispVal cached = this.userMacroExpansions.get(form);
-			if (cached != null) {
-				return cached;
-			}
-		}
 		String name = ((LispSymbol) form.car()).name();
 		UserMacro macro = this.userMacros.get(name);
 		if (macro == null) {
 			throw new LispEvalException(name + " is not a user macro");
 		}
-		// Outside the monitor: a macro body is a whole program, it re-enters this method
-		// for the macro calls inside it, and it may take the library load lock.
-		LispVal expansion = expandMacroCall(name, macro, form, site);
-		synchronized (this.userMacroExpansions) {
-			if (this.userMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
-				this.userMacroExpansions.put(form, expansion);
-			}
+		SiteExpansion cached = this.userMacroExpansions.get(form);
+		if (cached != null && cached.macro() == macro) {
+			return cached.expansion();
 		}
+		LispVal expansion = expandMacroCall(name, macro, form, site);
+		this.userMacroExpansions.put(form, new SiteExpansion(expansion, macro, 0));
 		return expansion;
 	}
 
@@ -14148,23 +14280,21 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * The expansion of a form that depends on the macro table, once per call site: it
-	 * shares {@link #userMacroExpansions}, which drops with that table. Computed outside
-	 * the monitor, as a macro body is a whole program.
+	 * The expansion of a form that depends on the macro table, once per call site and
+	 * state of that table ({@link #macroTableEpoch}). A form evaluated while a walk has
+	 * local macros bound keeps nothing: what it made of them holds only there.
 	 */
 	private LispVal expandedPerSite(LispCons cons, java.util.function.Supplier<LispVal> expander) {
-		synchronized (this.userMacroExpansions) {
-			LispVal cached = this.userMacroExpansions.get(cons);
-			if (cached != null) {
-				return cached;
-			}
+		if (this.localMacroDepth > 0) {
+			return expander.get();
+		}
+		int epoch = this.macroTableEpoch;
+		SiteExpansion cached = this.userMacroExpansions.get(cons);
+		if (cached != null && cached.macro() == null && cached.epoch() == epoch) {
+			return cached.expansion();
 		}
 		LispVal expansion = expander.get();
-		synchronized (this.userMacroExpansions) {
-			if (this.userMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
-				this.userMacroExpansions.put(cons, expansion);
-			}
-		}
+		this.userMacroExpansions.put(cons, new SiteExpansion(expansion, null, epoch));
 		return expansion;
 	}
 
@@ -17060,10 +17190,7 @@ public final class LispEvaluator {
 	 * same body conses.
 	 */
 	private LispVal settledLambdaTail(LispCons tail) {
-		LispVal cached;
-		synchronized (this.lambdaTailSettlements) {
-			cached = this.lambdaTailSettlements.get(tail);
-		}
+		LispVal cached = this.lambdaTailSettlements.get(tail);
 		if (cached != null) {
 			return cached;
 		}
@@ -17085,11 +17212,7 @@ public final class LispEvaluator {
 			// methoded name.
 			settled = renamed;
 		}
-		synchronized (this.lambdaTailSettlements) {
-			if (this.lambdaTailSettlements.size() < EXPANSION_MEMO_LIMIT) {
-				this.lambdaTailSettlements.put(tail, settled);
-			}
-		}
+		this.lambdaTailSettlements.put(tail, settled);
 		return settled;
 	}
 

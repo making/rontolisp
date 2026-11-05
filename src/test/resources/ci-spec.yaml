@@ -39764,6 +39764,13 @@ standalone:
                      (eq (car (closer-mop:method-specializers method)) (find-class 'integer)))
                    (call-next-method)))
       (print (gfp-cam-names (ensure-generic-function 'gfp-cam-2 :generic-function-class 'gfp-cam-gf) 1))
+      ;; package is a standard class here too, though class-of answers a package value
+      ;; as the keyword it is: a method on it has its metaobject.
+      (defgeneric gfp-cam-pkg (x))
+      (defmethod gfp-cam-pkg ((x package)) :package)
+      (defmethod gfp-cam-pkg ((x integer)) :integer)
+      (print (list (gfp-cam-names #'gfp-cam-pkg 1) (class-name (find-class 'package))
+                   (typep (find-package :cl) (find-class 'package)) (typep 'x (find-class 'package))))
       ;; find-method and remove-method take the generic's function.
       (defgeneric gfp-fn (x))
       (defmethod gfp-fn ((x integer)) :integer)
@@ -39789,6 +39796,7 @@ standalone:
       (((NIL (T INTEGER))) NIL T)
       ((NIL (INTEGER)) (NIL (NUMBER)))
       ((NIL (NUMBER)))
+      (((NIL (INTEGER))) PACKAGE T NIL)
       (NIL :SIGNALED)
       ((:STRING "s") T)
       (NIL :NO-METHOD :INTEGER)

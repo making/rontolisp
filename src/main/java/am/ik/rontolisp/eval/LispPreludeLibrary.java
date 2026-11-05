@@ -172,6 +172,14 @@ public final class LispPreludeLibrary {
 				                  (return nil)))))
 				        (t (equal a b))))
 				""");
+		// A float's spelling is the interpreter's (LispDouble#doubleSpelled): where a
+		// compile path carries coalton's reader and typechecker it answers no literal.
+		SOURCES.put(LispNames.DOUBLE_SPELLED_INTERNAL, """
+				(defun rontolisp::%double-spelled (float) float)
+				""");
+		SOURCES.put(LispNames.DOUBLE_SPELLED_P_INTERNAL, """
+				(defun rontolisp::%double-spelled-p (value) (declare (ignore value)) nil)
+				""");
 		// ldiff / sublis / gentemp -- the three list-and-symbol functions iterate's own
 		// source needs at LOAD time (expand-iterate splits a body's declarations with
 		// ldiff, defmacro-clause substitutes its template parameters with sublis, and a

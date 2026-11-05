@@ -172,8 +172,19 @@ public sealed interface Token {
 	 * Floating-point number token.
 	 *
 	 * @param value the double value
+	 * @param doubleSpelled whether its exponent marker spells a double
+	 * ({@link am.ik.rontolisp.LispDouble#doubleSpelled})
 	 */
-	record DoubleToken(double value) implements Token {
+	record DoubleToken(double value, boolean doubleSpelled) implements Token {
+
+		/**
+		 * A float token no marker spells as a double.
+		 * @param value the double value
+		 */
+		DoubleToken(double value) {
+			this(value, false);
+		}
+
 	}
 
 	/**

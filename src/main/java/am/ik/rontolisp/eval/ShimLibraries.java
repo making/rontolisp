@@ -306,7 +306,7 @@ public final class ShimLibraries {
 		else if (FsetForms.SYSTEM.equals(systemName)) {
 			rewritten = FsetForms.rewrite(componentFile, source);
 		}
-		else if (CoaltonForms.SYSTEM.equals(systemName)) {
+		else if (CoaltonForms.SYSTEM.equals(systemName) || CoaltonForms.COMPILER_SYSTEM.equals(systemName)) {
 			rewritten = CoaltonForms.rewrite(componentFile, source);
 		}
 		return rewritten == null ? source : rewritten;

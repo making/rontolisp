@@ -209,6 +209,29 @@ so `#'name`/`funcall`/`mapcar` work with no `BuiltinFunctionWrappers` entry.
   `(lambda (params) (%m next params))` literals — NO free-variable capture; base next = `nil`
   for the innermost primary, the `coreThunk` for the innermost around.
 
+### The interpreter's chain memo (`DispatchChain`, since 2026-11-05)
+The interpreter walks a dispatcher's chain the way it walks any `if`: one test per branch until
+one holds. fset's `compare` has some 350 branches and a symbol pair's comes late, and coalton's
+typechecker compares symbols in every `fset:image` of its environment: measured 2026-11-05, the
+walk was 74% of `library/math/num.lisp`'s time (11 minutes; 2 with the memo).
+- `LispEvaluator.defineDispatcher` hands the generated defun to `DispatchChain.memoizing`, which
+  makes the chain's first `if` a `DispatchChain` (a `LispCons` subclass, like `LocatedCons`: car
+  and cdr unchanged, so every walker still sees the chain; a pass that rebuilds the form gets a
+  plain cons and only loses the speed). The compile paths never see one.
+- `evalCons`' `if` arm takes it by a type test: the arguments' SHAPES (an instance's layout, a
+  keyword or another symbol, else the value's Java class) key a table of `Selection`s, and a miss
+  works one out by evaluating, once, every test the shapes decide (`SHAPE_TESTS` over a parameter,
+  under `and`/`or`/`not`/`if`). What no shape decides -- an `eql` specializer's test, a nested
+  method's guard, `package`'s `find-package`, an array's rank -- stays a test for every call, kept
+  in chain order, and only for the shapes it is still open for. Tests have no effect, so dropping
+  one that cannot hold is unobservable.
+- Under the generic-function protocol or with classes made at run time the chain stands inside the
+  dynamic arm's `let`s, whose test is one more open one. coalton's `derive` asks
+  `compute-applicable-methods`, which turns the protocol on and regenerates every dispatcher: before
+  the memo reached under the arm, an integer `compare` went from 5 to 200 us (measured on fset).
+- A dispatcher generated again is a new chain with an empty table, so nothing is invalidated.
+- Pinned by `DispatchChainTest` and `LispEvaluatorTest.aGenericAnswersEachCallByItsArguments`.
+
 ## Method definitions take effect in program order
 `macro/MethodGenerations`, since 2026-11-05. A dispatcher is generated after the whole walk, so
 until then a compiled program answered every call with its LAST method table: a call running
@@ -284,7 +307,10 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
   defined before only those `GenericInfo.dispatchesOverNewClass` reaches, a class specializer among
   its ancestors or a `standard-object`/`cons`/`list`/`sequence` one that enumerates instances;
   measured on `(ql:quickload :clim)`, over 10 minutes before and under 3 after, 2026-11-05),
-  `evalDefstruct` (likewise, `GenericInfo.hasStructMethod`),
+  `evalDefstruct` (likewise: every one with a struct method on a redefinition, for a new struct
+  those `GenericInfo.dispatchesOverNewStruct` reaches, a struct specializer among its ancestors or
+  `structure-object`. Measured 2026-11-05 loading coalton's compiler: dispatchers took 64 s of its
+  first 240, fset's `compare` regenerated 823 times for its 350 methods),
   `evalDefgeneric`, `evalDefmethod`. A `#'generic` captured BEFORE a later defmethod is NOT
   stale: `evalFunction` answers a LATE-BOUND wrapper for any name `findGeneric` knows.
 - **Compilers**: `expandTopLevelDefinitions(program, structAccessors, closRegistry)` sits at

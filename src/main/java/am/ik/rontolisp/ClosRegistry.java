@@ -1455,10 +1455,14 @@ public final class ClosRegistry {
 	 * {@code cons}/{@code null}), so they are reachable only by NAME. The lattice ITSELF
 	 * is not duplicated into their superclass slots -- it lives once in
 	 * {@code typep}/{@code subtypep}, which a class metaobject standing as a type
-	 * specifier resolves through by name (`.kb/clos.md`).
+	 * specifier resolves through by name (`.kb/clos.md`). {@code package} is one by the
+	 * other route: a package value is the keyword naming it, whose class is
+	 * {@code keyword} (`.kb/symbol-runtime-api.md`), and the class is standard all the
+	 * same, so a method on it has a specializer the generic-function protocol can make
+	 * ({@code compute-applicable-methods} over fset's {@code compare}).
 	 */
 	public static final List<String> FIND_CLASS_ONLY_CLASS_NAMES = List.of("STANDARD-OBJECT", "SEQUENCE", "LIST",
-			"NUMBER", "REAL", "RATIONAL", "STRUCTURE-OBJECT");
+			"NUMBER", "REAL", "RATIONAL", "STRUCTURE-OBJECT", "PACKAGE");
 
 	/**
 	 * The {@link #FIND_CLASS_ONLY_CLASS_NAMES} that are no built-in classes: the roots of
@@ -2448,6 +2452,27 @@ public final class ClosRegistry {
 					.anyMatch(s -> s.kind() == SpecializerKind.TYPE && s.name() != null
 							&& ("STRUCTURE-OBJECT".equals(plainNameOf(s.name()))
 									|| registry.findStructTag(s.name()) != null)));
+		}
+
+		/**
+		 * {@link #hasStructMethod} for one struct never defined before: the dispatcher
+		 * changes only where a struct specializer is among its ancestors or a method
+		 * specializes {@code structure-object}, so a big system does not regenerate each
+		 * of its generics per {@code defstruct}, and a struct another library defines
+		 * regenerates none of them.
+		 * @param structName the new struct, as spelled
+		 * @param registry the registry that knows the struct types
+		 * @return true when the dispatcher has to be regenerated
+		 */
+		public boolean dispatchesOverNewStruct(String structName, ClosRegistry registry) {
+			Set<String> ancestors = registry.structAncestorNames(structName);
+			return this.methods.values()
+				.stream()
+				.anyMatch(m -> m.specializers()
+					.stream()
+					.anyMatch(s -> s.kind() == SpecializerKind.TYPE && s.name() != null
+							&& ("STRUCTURE-OBJECT".equals(plainNameOf(s.name()))
+									|| registry.designatesStructIn(s.name(), ancestors))));
 		}
 
 	}
@@ -3580,6 +3605,12 @@ public final class ClosRegistry {
 	@Nullable public String findStructTag(String name) {
 		String key = structKey(name);
 		return key == null ? null : this.structTags.get(key);
+	}
+
+	/** Whether a name designates a struct of this set of registry keys. */
+	private boolean designatesStructIn(String name, Set<String> keys) {
+		String key = structKey(name);
+		return key != null && keys.contains(key);
 	}
 
 	@Nullable private Set<String> structAncestorsOf(String name) {

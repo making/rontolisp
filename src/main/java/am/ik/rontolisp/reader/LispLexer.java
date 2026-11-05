@@ -1062,8 +1062,9 @@ public final class LispLexer {
 			return numberFallbackSymbol(sign + this.input.substring(start, this.pos));
 		}
 		if (isFloat) {
-			return new Token.DoubleToken(
-					Double.parseDouble(normalizeExponentMarker(stripGrouping(this.input.substring(start, this.pos)))));
+			String text = this.input.substring(start, this.pos);
+			return new Token.DoubleToken(Double.parseDouble(normalizeExponentMarker(stripGrouping(text))),
+					spellsDouble(text));
 		}
 		String digits = stripGrouping(this.input.substring(start, trailingDot ? this.pos - 1 : this.pos));
 		try {
@@ -1211,6 +1212,16 @@ public final class LispLexer {
 			probe++;
 		}
 		return probe;
+	}
+
+	private static boolean spellsDouble(String number) {
+		for (int i = 0; i < number.length(); i++) {
+			char c = number.charAt(i);
+			if (c == 'd' || c == 'D' || c == 'l' || c == 'L') {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static boolean isExponentMarker(char c) {

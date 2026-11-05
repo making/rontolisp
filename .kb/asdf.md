@@ -921,7 +921,15 @@ only to reorder a tuple's keys, and a try-lock primitive does not exist (`.kb/mu
 **`eval/CoaltonForms`** (cache only, by hand). `coalton/library`'s `Hash` type and `lisp-combine-hashes` pick
 an arm per implementation; the last `Hash` arm is `#.(cl:error "hashing is not supported ...")`, signalled as the
 form is read. Three markers widen the ccl arms to `(or ccl rontolisp)`: `sxhash` answers a non-negative fixnum,
-and the 64-bit mix is masked back to one.
+and the 64-bit mix is masked back to one. In `coalton-compiler`, a float literal's type: the typechecker's
+`(etypecase value (single-float F32) (double-float F64))` (two sites in `src/typechecker/define.lisp`) answered
+`F32` for every literal here, where every float is both, so `(* 3.0d0 r)` over an `F64` was a type mismatch. The
+spelling decides instead, as SBCL's two float types do: the reader keeps a `d`/`l` marker on the value
+(`LispDouble.doubleSpelled`, `LispLexer` for the host reader, an `interpret-token :around` method on coalton's own
+eclector client for its reader), and an arm ahead of the two asks `rontolisp::%double-spelled-p`. Nothing else
+reads the mark: `eql`, printing and every backend's arithmetic see one float; the compile paths' prelude
+definitions answer nil. Rejected: typing a literal by its expected type (wrong for `(+ 1.0d0 x)` with the
+literal first) and making F32 and F64 unify (an instance on one would be found for the other).
 
 **`eval/ClReexportForms`** (pinned by `ClReexportE2eTest`, all four, SBCL 2.2.9's answers). clingon's
 `src/package.lisp` is `(defpackage :clingon (:use :cl))` plus top-level

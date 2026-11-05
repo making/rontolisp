@@ -2830,6 +2830,10 @@ public final class UserMacroExpander {
 	// dropped. The compilers never see macrolet; the interpreter handles it natively. Its
 	// body at top level is top-level forms (CLHS 3.2.3.1).
 	private static LispVal expandMacrolet(List<LispVal> parts, LispEvaluator macroEval, boolean topLevel) {
+		return macroEval.withLocalMacros(() -> expandMacroletBody(parts, macroEval, topLevel));
+	}
+
+	private static LispVal expandMacroletBody(List<LispVal> parts, LispEvaluator macroEval, boolean topLevel) {
 		List<LispVal> defs = parts.get(1) instanceof LispCons defsCons ? defsCons.toList() : List.of();
 		java.util.LinkedHashMap<String, Object> saved = new java.util.LinkedHashMap<>();
 		for (LispVal def : defs) {

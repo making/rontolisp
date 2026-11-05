@@ -23,7 +23,11 @@ final class SwankServers implements SwankHost {
 
 	private final LispEvaluator evaluator;
 
-	private final CommonLispSwank lisp;
+	/**
+	 * The Common Lisp half of the servers, made for the first of them: it turns the
+	 * evaluator's call frames on, and a program serving nothing does not pay for those.
+	 */
+	private @Nullable CommonLispSwank lisp;
 
 	private final long stackBytes;
 
@@ -40,7 +44,6 @@ final class SwankServers implements SwankHost {
 	 */
 	SwankServers(LispEvaluator evaluator, long stackBytes, @Nullable IntConsumer processExit) {
 		this.evaluator = evaluator;
-		this.lisp = new CommonLispSwank(evaluator);
 		this.stackBytes = stackBytes;
 		this.processExit = processExit;
 	}
@@ -48,9 +51,18 @@ final class SwankServers implements SwankHost {
 	@Override
 	public int listen(@Nullable String host, int port) throws IOException {
 		InetAddress bind = host == null ? InetAddress.getLoopbackAddress() : InetAddress.getByName(host);
-		SwankServer server = new SwankServer(this.lisp, this.evaluator, bind, port, this.stackBytes, this::exit);
+		SwankServer server = new SwankServer(lisp(), this.evaluator, bind, port, this.stackBytes, this::exit);
 		this.listening.put(server.port(), server);
 		return server.port();
+	}
+
+	private synchronized CommonLispSwank lisp() {
+		CommonLispSwank made = this.lisp;
+		if (made == null) {
+			made = new CommonLispSwank(this.evaluator);
+			this.lisp = made;
+		}
+		return made;
 	}
 
 	@Override

@@ -782,7 +782,7 @@ public final class LispReader {
 			case Token.NumberToken n -> new LispInteger(n.value());
 			case Token.BigIntegerToken b -> new LispBigInteger(b.value());
 			case Token.RatioToken r -> readRatio(r);
-			case Token.DoubleToken d -> new LispDouble(d.value());
+			case Token.DoubleToken d -> new LispDouble(d.value(), d.doubleSpelled());
 			// A source constant: the same object answers every evaluation of the form,
 			// so an indexed write through it rebinds the place instead of mutating it.
 			case Token.StringToken s -> LispString.literal(s.value());

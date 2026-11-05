@@ -88,6 +88,10 @@ port. It answers the port. `stop-server` (`%swank-stop`) closes the port, connec
 on; an unknown port warns `No server for :PORT: P`, as SWANK does. `:style` and `:backlog`
 are ignored.
 
+- `SwankServers` makes its `CommonLispSwank` for the first server a program starts: that is what
+  turns the evaluator's call frames on (`enableDebugging`), and a program that serves nothing
+  keeps them off. From 2026-10-30 to 2026-11-05 every interpreted run had them (the host made it
+  eagerly): `CallFrame.at`/`enter` and their `ThreadLocal` reads were 3% of coalton's samples.
 - Such a server's connections read on platform non-daemon threads, so a program that ran
   off its end is served until the port closes and the editor disconnects (SBCL's script
   needs `(loop (sleep 1000))` for that).

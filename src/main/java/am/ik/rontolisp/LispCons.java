@@ -12,7 +12,7 @@ import org.jspecify.annotations.Nullable;
  * A mutable cons cell holding a car and cdr pair. A cons the interpreter read from a
  * named file is a {@link LocatedCons}, which is otherwise the same cell.
  */
-public sealed class LispCons implements LispVal permits LocatedCons {
+public sealed class LispCons implements LispVal permits LocatedCons, DispatchChain {
 
 	private static final VarHandle CAR;
 

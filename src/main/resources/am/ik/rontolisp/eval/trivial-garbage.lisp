@@ -7,7 +7,7 @@
 ;; finalization hooks to build the real thing on anyway.
 ;;
 ;; Written in canonical shape; the package and its nickname (tg) are seeded in
-;; PackageRegistry. Only the two members dbd-postgres imports are defined:
+;; PackageRegistry, with upstream's eight externals:
 ;;
 ;; - finalize registers NOTHING and returns the object (upstream's return
 ;;   value). This is honest, not a lie: Common Lisp gives finalizers no
@@ -23,6 +23,13 @@
 
 (defun trivial-garbage:cancel-finalization (object)
   (declare (ignore object))
+  nil)
+
+;; gc asks for a collection, which upstream answers per implementation and the
+;; platform may decline: nothing here is weak and no finalizer runs, so nothing a
+;; program can observe waits for one. coalton's system library calls it.
+(defun trivial-garbage:gc (&key full verbose)
+  (declare (ignore full verbose))
   nil)
 
 ;; A weak hash table degrades to an ORDINARY one. Weakness is not observable

@@ -2815,6 +2815,18 @@ public final class Environment implements Scope {
 	 * @param env the global environment
 	 */
 	private static void registerConsCas(Environment env) {
+		env.defineFunction(LispNames.DOUBLE_SPELLED_INTERNAL_QUALIFIED,
+				new LispFunction(LispNames.DOUBLE_SPELLED_INTERNAL_QUALIFIED, args -> {
+					requireArgCount(LispNames.DOUBLE_SPELLED_INTERNAL, args, 1);
+					return args.get(0) instanceof LispDouble number ? new LispDouble(number.value(), true)
+							: args.get(0);
+				}));
+		env.defineFunction(LispNames.DOUBLE_SPELLED_P_INTERNAL_QUALIFIED,
+				new LispFunction(LispNames.DOUBLE_SPELLED_P_INTERNAL_QUALIFIED, args -> {
+					requireArgCount(LispNames.DOUBLE_SPELLED_P_INTERNAL, args, 1);
+					return args.get(0) instanceof LispDouble number && number.doubleSpelled() ? LispTrue.INSTANCE
+							: LispNil.INSTANCE;
+				}));
 		String car = LispNames.CONS_CAS_CAR_INTERNAL_QUALIFIED;
 		env.defineFunction(car, new LispFunction(car, args -> {
 			requireArgCount(LispNames.CONS_CAS_CAR_INTERNAL, args, 3);

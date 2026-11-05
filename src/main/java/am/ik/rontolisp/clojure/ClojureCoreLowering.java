@@ -1028,7 +1028,7 @@ final class ClojureCoreLowering {
 	private static @Nullable LispVal foldedCast(boolean toInt, LispVal arg) {
 		if (arg instanceof
 
-		LispDouble(double x)) {
+		LispDouble(double x, boolean doubleSpelled)) {
 			if (toInt) {
 				return (x < Integer.MIN_VALUE || x > Integer.MAX_VALUE) ? outOfRange("int", Double.toString(x))
 						: new LispInteger((int) x);
