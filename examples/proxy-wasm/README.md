@@ -76,6 +76,11 @@ from the SDK.
 Compile with `--no-wasi`, and load the module with Envoy's
 `envoy.filters.http.wasm` filter as `envoy.yaml` does.
 
+A module exporting `proxy_abi_version_*` starts without the transient array, at least
+16 MiB, with which other wasm-GC modules grow the engine's GC heap for wasmtime's copying
+collector. On a host running that collector, size its initial GC heap if a filter's
+collections show up in its latency.
+
 The SDK covers logging, the clock, ticks, header maps, body and configuration
 buffers, local responses, outgoing HTTP calls, shared data, metrics and
 properties. It does not cover gRPC calls, shared queues, foreign functions or the

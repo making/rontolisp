@@ -604,6 +604,9 @@ class CiSpecE2eTest {
 	private static Result execCapture(List<String> command) throws IOException, InterruptedException {
 		ProcessBuilder pb = new ProcessBuilder(command).directory(workDir.toFile());
 		Process process = pb.start();
+		// A child that reads its standard input sees end of file instead of waiting on a
+		// pipe nobody writes to.
+		process.getOutputStream().close();
 		// Drain stdout and stderr concurrently. A single-threaded readAllBytes() on
 		// stdout deadlocks when the child fills the OS pipe buffer on stderr (Linux
 		// pipe buffer is 64 KB, macOS's grows further), so the buffered-first-stream

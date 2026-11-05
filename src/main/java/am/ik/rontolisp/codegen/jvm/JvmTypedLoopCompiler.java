@@ -85,7 +85,12 @@ final class JvmTypedLoopCompiler {
 		if (DISABLED || !ctx.typedLoops || ctx.dynamic) {
 			return false;
 		}
-		if (JvmLispCompiler.hasComplexOperand(cons.toList())) {
+		List<LispVal> forms = cons.toList();
+		if (am.ik.rontolisp.macro.LispMacroExpander
+			.iterationBodyHasTags(forms.subList(Math.min(2, forms.size()), forms.size()))) {
+			return false;
+		}
+		if (JvmLispCompiler.hasComplexOperand(forms)) {
 			// A typed loop unboxes its numeric values as long/double; a complex
 			// literal or complex/conjugate form in the loop would unbox a
 			// holder (`.kb/jvm-complex.md`).

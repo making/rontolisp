@@ -1,8 +1,8 @@
 # `_start` pre-grows the engine's GC heap with one dropped allocation
 
 **Invariant**: the first thing the emitted `_start` body does (Preview 1 and the
-component core; NOT `--no-gc`) is allocate and immediately drop a `TYPE_STR_BYTES` byte
-array. Size follows the program (`WasmLispCompiler.gcHeapPregrowBytes`):
+component core; NOT `--no-gc`, NOT a Proxy-Wasm module, see the last section) is allocate
+and immediately drop a `TYPE_STR_BYTES` byte array. Size follows the program (`WasmLispCompiler.gcHeapPregrowBytes`):
 `GC_HEAP_PREGROW_CODE_FACTOR` (16) x emitted user-function bytes, clamped between
 `GC_HEAP_PREGROW_BYTES` (16 MiB floor) and `GC_HEAP_PREGROW_MAX_BYTES` (64 MiB) and then
 **quantized UP to a power of two**, so the only sizes a program can ask for are 16, 32 and
@@ -134,3 +134,46 @@ the reuse count every real host uses, cheap on a never-retired instance; droppin
 entirely is worse except at reuse=1.
 wasmCloud pools the heap mapping, so the reuse=1 column bounds the SHAPE of the cost, not
 its size — measure the host.
+
+## Why a Proxy-Wasm filter has none
+A module exporting `proxy_abi_version_*` allocates nothing here
+(`WasmExportCompiler.isProxyWasmAbiVersion`). It follows from the export, not an option: that
+name is how every host tells the ABI, and `sdk-examples/test_plugin` has WASI, so `--no-wasi`
+would miss it. None rather than serve's 1 MiB: on Endive, where an `i8` takes 8 bytes, 1 MiB
+is half of sluice's default `max-memory`, and the runtimes below gain nothing from it.
+
+Measured 2026-11-05, with and without the array (the constant patched to 0, the same bytes
+otherwise), on a box other jobs were loading, so only differences beyond the spread count.
+
+Envoy v1.40.2's V8, `gateway.wasm --optimize`, `--concurrency 2`, three rounds of 8 s at 8
+connections:
+
+| | RSS after the start | ready | `/` qps | `/shout` qps |
+|---|---|---|---|---|
+| 16 MiB | 213 MB | 530-548 ms | 4916-5798 | 4091-4873 |
+| none | 147 MB | 464-474 ms | 5233-5911 | 4789-5633 |
+
+wasmtime: neither `envoyproxy/envoy:v1.40.2` nor its `contrib` image has it (`Envoy was
+compiled without support for it`), so this is a small host over the wasmtime 49.0.0 crate, not
+Envoy: 20,000 exchanges of seven callbacks through one VM, two runs each. Each cell is
+16 MiB / none:
+
+| filter, collector | start, ms | total, s | longest exchange, ms | RSS at the end, MB |
+|---|---|---|---|---|
+| `http_body`, drc | 16-19 / 0.15 | 24-30 / 14-17 | 223-240 / 2-21 | 46 / 30 |
+| `http_headers`, drc | 10-11 / 0.16 | 42-48 / 34-42 | 241-385 / 7-16 | 47 / 30 |
+| `gateway`, drc | 10.5 / 0.8 | 9.4-10.8 / 9.0-9.2 | 154-207 / 3-6 | 53 / 37 |
+| `http_body`, copying | 10.5 / 0.12 | 5.7-5.8 / 5.6 | 0.9 / 0.6-0.9 | 55 / 22 |
+| `http_headers`, copying | 11 / 0.2 | 6.3-6.6 / 6.1-7.2 | 8-15 / 4-12 | 56 / 23 |
+| `gateway`, copying | 10.5 / 0.6 | 1.3-1.6 / 2.4-2.7 | 0.8-1.4 / 1.7-3.3 | 64 / 30 |
+
+Under `drc` the array only makes each collection pause longer. The one loss is `gateway` on
+the copying collector, about twice the time per exchange, on a host Envoy is not; such a host
+can size the heap itself (`-O gc-heap-initial-size`). A filter holding 50,000 hash-table
+entries showed no difference on either collector, as its live set grows the heap anyway.
+Every run was green on the copying collector.
+
+sluice (`sluice-client`, Endive): at the default `max-memory` the three `sdk-examples` filters
+were refused at the client's start with `the plugin would hold 134479912 bytes, past its limit
+of 16777216`; without the array the client starts and each one answers. Its
+`ProxyWasmFilterTest` stays green on a `lisp_plugin` rebuilt this way.

@@ -2390,6 +2390,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				callOnlyRuntimes.add(defuns.getLast().name);
 			}
 		}
+		if (userDefinedNames.contains(LispNames.EVAL_SPECIAL_LET)) {
+			inject(LispMacroExpander.compiledSpecialRuntime(specialVars), defuns, injectedForms, specialVars);
+			callOnlyRuntimes.add(defuns.getLast().name);
+		}
 		Map<String, FieldRefEntry> globalFields = new HashMap<>();
 		List<Utf8Entry> globalFieldNameUtfs = new ArrayList<>();
 		Utf8Entry globalFieldDescUtf = cp.utf8Entry("Ljava/lang/Object;");
@@ -3901,6 +3905,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				.funcallableTags(funcallableTags)
 				.thisClass(thisClass)
 				.globalAccessRef(evalRunsForms ? globalAccessRef(functions) : null)
+				.valueChannel(evalRunsForms ? mvChannel : null)
 				.build();
 			if (usesEval) {
 				evalCode = JvmEvalRuntimeBuilder.buildEval(ec);

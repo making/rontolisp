@@ -86,6 +86,8 @@ evaluator and both compilers, so no per-compiler class is needed.
 4. To pass it to `map`/`reduce`/`funcall`: register as a `LispFunction` in `Environment` AND
    add a `BuiltinFunctionWrappers` entry. Both -- omitting `Environment` causes
    `The function X is undefined` in interpreter / native-image mode.
+5. A compiled `eval` knows it through a row of `eval-macros.lisp`, not through the expander
+   (`.kb/eval-runtime.md`, "The built-in macros"); without one it signals `undefined-function`.
 
 ## Adding a Special Form
 

@@ -33,6 +33,14 @@ class WasmGcHeapPregrowTest {
 		WasmWriter w = new WasmWriter(out);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(bytes);
+		w.write(pregrowAllocation());
+		return out.toByteArray();
+	}
+
+	/** The prologue past its size: what it is at any size. */
+	private static byte[] pregrowAllocation() {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(out);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
 		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		w.write(Instruction.DROP);
@@ -95,6 +103,35 @@ class WasmGcHeapPregrowTest {
 		assertThat(containsSubsequence(module, pregrowPrologue(WasmLispCompiler.GC_HEAP_PREGROW_BYTES)))
 			.as("serve core module must not pay the process-lifetime pre-grow")
 			.isFalse();
+	}
+
+	/**
+	 * The export a Proxy-Wasm host recognizes the ABI by leaves the pre-grow out at every
+	 * size, with or without WASI, and another export name does not
+	 * (.kb/wasm-gc-heap-pregrow.md, "Why a Proxy-Wasm filter has none").
+	 */
+	@Test
+	void aProxyWasmModulePregrowsNothing() {
+		String source = """
+				(defun version () nil)
+				(rontolisp:wasm-export 'version :as "%s")
+				""";
+		for (boolean noWasi : new boolean[] { false, true }) {
+			assertThat(containsSubsequence(compile(source.formatted("abi_version"), noWasi), pregrowPrologue()))
+				.isTrue();
+			assertThat(containsSubsequence(compile(source.formatted("proxy_abi_version_0_2_1"), noWasi),
+					pregrowAllocation()))
+				.as("a Proxy-Wasm module (noWasi=%s) must not allocate the pre-grow array", noWasi)
+				.isFalse();
+		}
+	}
+
+	private static byte[] compile(String source, boolean noWasi) {
+		return WasmLispCompiler.builder()
+			.noWasi(noWasi)
+			.optimize(OptimizeLevel.NONE)
+			.build()
+			.compile(LispReader.readAllFromString(source));
 	}
 
 	/**
