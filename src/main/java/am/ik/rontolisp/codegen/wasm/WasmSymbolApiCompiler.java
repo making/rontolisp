@@ -294,7 +294,9 @@ final class WasmSymbolApiCompiler {
 				compileUnaryCall(cons, LispNames.FBOUNDP, WasmLispCompiler.FUNC_FBOUNDP, ctx);
 				return;
 			}
-			if (ctx.usesFmakunbound) {
+			// A name with a cell answers from its binding: a write of it can come from a
+			// form eval runs, whose fmakunbound no scan of the program sees.
+			if (ctx.usesFmakunbound || ctx.functionCells.containsKey(name)) {
 				emitTombstoneGuardedFold(name, bound ? () -> WasmEmitHelper.emitTrue(ctx) : () -> emitNil(ctx), ctx);
 				return;
 			}
@@ -349,6 +351,30 @@ final class WasmSymbolApiCompiler {
 		WasmExprCompiler.compileExpr(parts.get(2), ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_SET_SYMBOL_FUNCTION);
+	}
+
+	/**
+	 * {@code (%restore-compiled-definition name)}: what a top-level {@code defun} of a
+	 * name with a cell leaves where it stood: a binding a write made goes, so the
+	 * compiled definition answers from here on ({@link WasmFunctionCells}). One read of
+	 * the cell where none did. Answers nil.
+	 */
+	static void compileRestoreCompiledDefinition(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		LispCons quote = (LispCons) ((LispCons) cons.cdr()).car();
+		String name = ((LispSymbol) ((LispCons) quote.cdr()).car()).name();
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(java.util.Objects.requireNonNull(ctx.functionCells.get(name)));
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(ctx.stringTable.addString(name).offset());
+		emitNil(ctx);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(ctx.functionCellRestore);
+		ctx.writer.write(Instruction.DROP);
+		ctx.writer.write(Instruction.END);
+		emitNil(ctx);
 	}
 
 	/**
@@ -676,14 +702,20 @@ final class WasmSymbolApiCompiler {
 	 * here, so the probe is {@code _env_lookup} inline rather than a helper call.
 	 */
 	private static void emitTombstoneGuardedFold(String name, Runnable fold, WasmLispCompiler.Ctx ctx) {
-		int offset = ctx.stringTable.addString(name).offset();
 		int bind = ctx.allocTemp();
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(offset);
-		ctx.writer.write(Instruction.GET_GLOBAL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		Integer cell = ctx.functionCells.get(name);
+		if (cell != null) {
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(cell);
+		}
+		else {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(ctx.stringTable.addString(name).offset());
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		}
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(bind);
 		ctx.writer.write(Instruction.GET_LOCAL);

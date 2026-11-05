@@ -182,7 +182,7 @@
 | `set` | `(set '*level* 8)`、`(setf (symbol-value '*level*) 8)` | 計算された名前の変数を `setq` と同様に設定(有効な動的束縛、なければグローバル。未束縛なら作成) |
 | `boundp` | `(boundp '*level*)` | シンボルが束縛されたグローバル変数を指すとき `t`(t/nil/キーワードは自己束縛) |
 | `fboundp` | `(fboundp 'car)` | 関数・マクロ・特殊形式に対して `t`(コンパイラ: 計算された引数は関数のみ判定) |
-| `fmakunbound` | `(fmakunbound 'greet)` | `greet` -- 名前を再び「呼び出し時に未定義」にします(コンパイラ: 遅延束縛の参照のみ) |
+| `fmakunbound` | `(fmakunbound 'greet)` | `greet` -- 名前を再び「呼び出し時に未定義」にします |
 | `makunbound` | `(makunbound '*level*)` | `*level*` -- 現在の束縛が値を失います: `boundp` は `nil`、読み出しは `unbound-variable` を通知 |
 | `macroexpand-1` | `(macroexpand-1 '(unless c x))` | `(if c nil x)` -- トップレベルのフォームを 1 段階だけ展開します(ユーザーマクロと組み込みマクロ) |
 | `macroexpand` | `(macroexpand '(outer 41))` | 完全な展開結果: `macroexpand-1` を変化しなくなるまで繰り返します |

@@ -341,12 +341,9 @@ emitted BEHIND the tombstone probe (`Ctx.usesFmakunbound`;
 `JvmSymbolApiCompiler.emitTombstoneGuard`, `WasmSymbolApiCompiler.emitTombstoneGuardedFold`).
 A program without `fmakunbound` is byte-identical to before.
 
-**The divergence**: for a top-level `defun` a program retires through a COMPUTED name, a call
-site the compiler already bound directly keeps working after `fmakunbound` -- eager compilation
-cannot be undone, so only LATE-bound references see the retirement. `symbol-function`/`fdefinition`
-of a LITERAL name are folded the same way and are likewise not tombstone-aware. A literal
-`(fmakunbound 'n)` of a `defun` has no such divergence (`compiler/RedefinedDefuns`, below).
-**A SYMBOL reaching a dispatcher is one of those late-bound references**: the dispatcher's
+A top-level `defun` a program retires, by a literal or a computed name, is retired for every
+reference (`compiler/RedefinedDefuns`, below).
+**A SYMBOL reaching a dispatcher is a late-bound reference**: the dispatcher's
 symbol arm probes the function namespace before `_lookup`, the order `symbol-function` and
 `_apply` use, and a binding decides on its own -- its function replaces the symbol (an
 interpreted closure then takes the `_apply` arm), the tombstone reports the SYMBOL as
@@ -428,26 +425,116 @@ nil)` reported `The function NIL is undefined`. Pinned on all four backends by
 - **Interpreter, a generic's `#'name`** is late-bound through `genericDispatchers`, not the name:
   a `#'g` taken before `(setf (fdefinition 'g) ...)` keeps reaching the generic (it overflowed the
   stack wrapping itself), one taken after it is what the setf stored.
-- **Divergences**: a top-level `defun` written only through a computed name, `eval`'s `defun` or
-  `load` keeps its definition for every reference the compile resolves (a direct call, `#'n`,
-  `(funcall 'n)`, a literal `symbol-function`); only a name computed at run time reads the
-  namespace. Measured 2026-11-05: `(install 'n f)` over `(setf (fdefinition name) f)`, `(compile
-  name def)` and `(eval '(defun n ...))` answer the old definition on JVM, P1 and component.
-  Holding every name such a program spells as a value is not done: the corpus class and any
-  library with such a write would move most of its functions into an alist each reference walks.
-  `(fmakunbound 'solo)` of a generic leaves its dispatcher bound on the interpreter too (SBCL
-  retires it). `--no-gc` has no eval runtime.
+- **A name in `%fenv-function`'s path reads a cell** (below), not the alist, and a direct call of a
+  forwarder's name is `(funcall (%fenv-function 'n) arg...)`, the same as a name no definition has:
+  no rest list (2026-11-05: `fib 32` through a literally written name, JVM 203-247 -> 41-69 ms, P1
+  490-575 -> 115-119 ms). The forwarder stays for what cannot take that call: on wasm-GC a count past
+  `callArityCeiling`, and `(apply 'n ...)`.
+- **A definition of a generic function binds its name again** (`%generic-defined-again`, 2026-11-05,
+  ci-spec `a-definition-of-a-generic-function-binds-its-name-again`, agrees with SBCL 2.2.9 where
+  SBCL does not refuse). A generic has one dispatcher, placed at its first `defgeneric` or
+  `defmethod`, so after a write and a `fmakunbound` a later definition left the name undefined on JVM,
+  P1 and the component (`(fboundp 'g)` NIL too). `expandTopLevelDefinitions` marks each later
+  definition (`ClosRegistry.markGenericDefinitions`, set by the compilers) and `RedefinedDefuns.rewrite`
+  turns the mark into what binds the name there: the installation of a moved dispatcher, the restore
+  of a celled one, nothing for any other. A name holding its generic function metaobject keeps it
+  (`%gf-installed-p`), as `defineDispatcher` does on the interpreter. So `(fmakunbound 'g)` now counts
+  for a generic as for a `defun`: a direct call of it is `undefined-function`. On the interpreter a
+  regeneration of the dispatchers -- for a `defclass`, a `defstruct`, a condition class a
+  `handler-case` seeds -- is no definition (`regenerateDispatcher`): it brought a retired name back
+  and overwrote a replaced one. SBCL refuses a `defmethod` over an ordinary function; here it replaces
+  it, on all four.
+- **Residuals**: a generic's methods survive `fmakunbound` on all four (SBCL makes a new generic
+  function with none). A `defun` form's restore is the compiled definition, so a name with two
+  top-level `defun`s still has the last one's ("A redefined defun" in `.kb/core-representation.md`).
+  After a `(setf p)` writer is retired by a computed list, a direct call reports `%setf-P` on wasm-GC
+  (the JVM reports `(SETF P)`; a run-time list costs `_intern`). `--no-gc` has no eval runtime.
 - Tests: `LispEvaluatorTest#setfSymbolFunction*`/`#setfFdefinition*`,
   `JvmLispCompilerTest#compileAndRunSetfSymbolFunction*`,
   `WasmLispCompilerIntegrationTest#setfSymbolFunctionAliasAndRedefinition`, ci-spec
   `setf-symbol-function-and-fdefinition`; `SetfSymbolFunctionReferenceFixture`
   (`aNameOnlySetfSymbolFunctionBindsIsUndefinedUntilTheSetfRuns` in the three backend suites).
 
+### A write through a computed name
+**A top-level `defun` a write by a name the compile cannot read can reach keeps its compiled
+definition and gets a cell: a reference reads the cell in constant time and takes the compiled
+definition while the program has written nothing there** (`compiler/RedefinedDefuns`, 2026-11-05,
+all four backends; the interpreter's bindings always were this). Before, such a write reached only a
+name computed at run time: `(install 'n f)` over `(setf (fdefinition name) f)`, `(compile name def)`
+and `(eval '(defun n ...))` left a direct call, `#'n`, `(funcall 'n)`, `(apply 'n)`, `(mapcar 'n)`
+and a literal `symbol-function` / `fdefinition` with the old definition on JVM, P1 and the component.
+
+- **The writers** (`writesComputedNames`, and `eval` / a run-time `load`, which the backends ask
+  about as for `writesFunctionNamespace`): a `fdefinition` / `symbol-function` place of `setf`,
+  `psetf`, `rotatef` or `shiftf` over a computed name; `fmakunbound` of one or as a value; `compile`
+  runs through `(setf (fdefinition name) ...)` and `eval`, so its runtime is both. Read on the
+  expanded program, so the compile runtime and the generic-function protocol count.
+- **The names** (`celledDefuns`): `NestedDefunNamespace`'s rule, every function where the program
+  evaluates data, else those a value of the program spells. An internal `%` name only where it is
+  spelled, `%setf-` writers excepted: nothing says data defines one, and they are most of what a
+  library brings. Never a method body or a forwarder. A name assembled out of computed pieces is the
+  `RuntimeNameProducers` carve-out. A generic on a lowered built-in is reached by its name through
+  its dispatcher's cell, a literal write too (`namespaceCells` / `functionCells` have both
+  spellings): `(setf (symbol-function 'length) f)` reaches a literal `#'length` and a call
+  (`.kb/clos.md`, "A user method on a BUILT-IN name").
+- **The cell** holds nil while `_fenv` / `GLOBAL_FENV` has no binding of the name, the binding once it
+  has. So the alist stays what the program wrote, however much a write could reach, and a write after
+  the first changes what the binding holds: only making a binding publishes (`_fenvSet` ->
+  `_fcPublish` on the JVM, `_set_symbol_function` / `_fmakunbound` -> `_fc_publish` on wasm-GC, each
+  writer's one place; eval's `defun` calls them too). Publishing is a chain of name compares in
+  bounded segments, run once per name written, with the one-colon alias `_lookup` answers.
+  JVM: a static `_fc$name` (`JvmFunctionNamespace`), volatile only where another thread can run Lisp
+  (`lispOnOtherThreads`). Wasm-GC: a module global (`WasmFunctionCells`), in front of the quote globals.
+- **The read**: a call by name goes through the function's named entry -- the JVM's `_n$name`
+  (`JvmFunctionCell`, shared with a linked class's `notinline`), wasm-GC's block in front of the
+  defuns, `WasmFunctionInfo.callIndex` -- which is the function while the cell is nil, and `_apply`
+  of what the binding holds over the arguments once it is not (the optionals passed, the rest list).
+  `#'n` and a literal `symbol-function` / `fdefinition` read the cell ahead of the static box, a
+  literal `fboundp` always probes it, `%fenv-function` reads it where a name has one. A function value
+  keeps its code (the dispatcher cases call the function), so a wrapper's `old` runs the old
+  definition. A count this definition rules out goes through `#'n`, so the replacement's lambda list
+  decides, and `inlinableDefuns` and `LetBoundDesignators` leave the name alone.
+- **`%restore-compiled-definition`**: each `defun` form of such a name leaves it where it stood: a
+  binding is unlinked and the cell cleared, so the compiled definition answers from there, whatever
+  a write did before it (`(undefine 'f) (defun f ...)`, uiop's `defun*`). A call ahead of the form
+  still reaches the compiled definition, as in a program with no write at all; a literally
+  written name is the exact one ("Each definition holds from where it stands").
+- **Tail calls stay proper through a replaced name** (ci-spec: `cwn-loop`, and a tail-recursive
+  defun under a wrapper, 200,000 deep; on the JVM it overflowed the default 16 MB past ~30,000).
+  Wasm-GC's entry and helper `return_call`. On the JVM a tail call in a method whose answer reaches a
+  check takes `_nt$name` (`JvmFunctionCell.tailEntryBody`), whose replaced arm answers a bounce of the
+  apply. That is a lambda, a `bounceVisible` defun, and a celled defun (`Ctx.answersCellBounces`):
+  every call of its method by name goes through its entry and every value through a dispatcher, so
+  the named entry checks for it instead of its callers, and only for a method that has such a tail
+  (`Ctx.celledBouncers`), only while `_fenv` holds anything (one read per call until then). A tail
+  group with a member with no cell keeps real calls, since its code can run in that member's method.
+  `bounceVisible` for every celled defun would have put the check behind every call of every program
+  holding `eval`.
+- **The array weighed**: one array of cells by funcId needs no per-name publish code, but `fib 40` on
+  wasmtime 49 (331M calls; direct 1.4 s) took 2.7 s through an entry reading an array element and 1.9 s
+  through one reading a global: the array's reference pays the collector's read barrier per call.
+- **Measured 2026-11-05** (Xeon E5-2697A v4, load ~15): `fib 38` (126M calls, the adverse case) in a
+  program holding `eval`, every function celled: Graal 271-299 -> 383-402 ms, C2 439-469 -> 479-486 ms,
+  P1 963-989 -> 1128-1155 ms; class +0.2%, module +0.1%. An inline check at a self call instead of the
+  entry gained nothing (Graal 370, C2 475): the read costs that, not the hop.
+  The ci-spec corpus as one program, every function celled, printed its 9,366 expected lines on all
+  four; at 9,107 lines classes 24.64 -> 25.09 MB (+1.8%), module 18.27 -> 18.53 MB (+1.4%). The premise
+  that held this back ("most of its functions in an alist each reference walks") is what the cell
+  removes: the functions stay where they are.
+- Pinned by ci-spec `a-defun-written-through-a-computed-name-answers-the-new-definition`, standalone
+  `a-defun-written-through-a-name-held-as-a-value` (both agree with SBCL 2.2.9),
+  `a-write-of-the-name-of-a-method-on-a-lowered-built-in-reaches-every-reference` (the interpreter's
+  answers; SBCL refuses the method); `RedefinedDefunsTest`.
+
 ### A `(setf name)` function name
 `fdefinition`, `fboundp`, `fmakunbound` and `(setf (fdefinition ...))` take a `(setf name)` list
 as well as a symbol (`symbol-function` does not: SBCL signals a type-error). The writer is stored
 under `%setf-NAME` (`LispMacroExpander.setfFunctionName`), so the list maps onto that name.
 
+- **A standard accessor's `(setf F)` is not fbound**, on all four (2026-11-05: `#'(setf car)` is
+  `undefined-function`, `(fboundp '(setf gethash))` NIL; SBCL 2.2.9 answers T): the place lowers where
+  `setf` is. CLHS 5.1.2.9 leaves this implementation-dependent, so a portable program cannot ask.
+  **Re-evaluate when** a library takes one as a value.
 - **Interpreter**: at run time, any list (`LispEvaluator.functionName`); `fmakunbound` answers the
   list.
 - **Compile paths**: a QUOTED list only, rewritten in `FunctionDesignators.normalizeBuiltinDesignators`

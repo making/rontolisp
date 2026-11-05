@@ -74,10 +74,13 @@ final class WasmApplyCompiler {
 					ctx.writer.writeUnsignedLeb128(tailSlot);
 				}
 				ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, target));
-				ctx.writer.writeUnsignedLeb128(fi.funcIndex());
+				ctx.writer.writeUnsignedLeb128(fi.callIndex());
 				return;
 			}
-			if (fi != null) {
+			// A function with a cell may be replaced with another lambda list, which this
+			// definition's count guard would refuse: its apply goes through _apply over
+			// what the name holds (WasmFunctionCells).
+			if (fi != null && fi.entryIndex() < 0) {
 				WasmExprCompiler.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyArgumentListExpr(cons), ctx);
 				int argsSlot = ctx.allocTemp();
 				ctx.writer.write(Instruction.SET_LOCAL);

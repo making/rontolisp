@@ -1290,6 +1290,8 @@ final class WasmExprCompiler {
 			case LispNames.FMAKUNBOUND -> WasmSymbolApiCompiler.compileFmakunbound(cons, ctx);
 			case LispNames.SET_SYMBOL_FUNCTION_INTERNAL -> WasmSymbolApiCompiler.compileSetSymbolFunction(cons, ctx);
 			case LispNames.FENV_FUNCTION_INTERNAL -> WasmSymbolApiCompiler.compileFenvFunction(cons, ctx);
+			case LispNames.RESTORE_COMPILED_DEFINITION_INTERNAL ->
+				WasmSymbolApiCompiler.compileRestoreCompiledDefinition(cons, ctx);
 			case LispNames.SETF_FUNCTION_SYMBOL_INTERNAL -> WasmSymbolApiCompiler.compileSetfFunctionSymbol(cons, ctx);
 			case LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL ->
 				WasmSymbolApiCompiler.compileUndefinedSetfFunction(cons, ctx);

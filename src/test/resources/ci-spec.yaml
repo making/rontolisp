@@ -16207,6 +16207,287 @@ cases:
       (:WRAPPED (:METHOD 2))
       1
       (:NEW 5)
+  - name: a-defun-written-through-a-computed-name-answers-the-new-definition
+    source: |
+      ;; A write through a name the compile cannot read reaches every reference, in a caller
+      ;; compiled before it too. The corpus evaluates data, so every function can be written.
+      (defun cwn-target (x) (list :old x))
+      (defun cwn-caller (x) (cwn-target x))
+      (defun cwn-install (name f) (setf (fdefinition name) f))
+      (print (cwn-caller 0))
+      (cwn-install 'cwn-target (lambda (x) (list :new x)))
+      (print (cwn-target 1))
+      (print (cwn-caller 2))
+      (print (funcall 'cwn-target 3))
+      (print (funcall #'cwn-target 4))
+      (print (apply 'cwn-target (list 5)))
+      (print (apply #'cwn-target 6 nil))
+      (print (mapcar 'cwn-target '(7)))
+      (print (mapcar #'cwn-target '(8)))
+      (print (funcall (symbol-function 'cwn-target) 9))
+      (print (funcall (fdefinition 'cwn-target) 10))
+      (print (funcall (intern "CWN-TARGET") 11))
+      (print (eval '(cwn-target 12)))
+      (print (eq #'cwn-target (symbol-function 'cwn-target)))
+      ;; The other writers of a name it cannot read.
+      (defun cwn-compiled (x) (list :old x))
+      (let ((name 'cwn-compiled))
+        (print (compile name '(lambda (x) (list :compiled x)))))
+      (print (cwn-compiled 1))
+      (print (funcall #'cwn-compiled 2))
+      (defun cwn-evaled (x) (list :old x))
+      (eval '(defun cwn-evaled (x) (list :evaled x)))
+      (print (cwn-evaled 1))
+      (print (mapcar 'cwn-evaled '(2)))
+      (defun cwn-sym (x) (list :old x))
+      (let ((name 'cwn-sym))
+        (setf (symbol-function name) (lambda (x) (list :sym x))))
+      (print (cwn-sym 1))
+      (defun cwn-left (x) (list :left x))
+      (defun cwn-right (x) (list :right x))
+      (let ((a 'cwn-left) (b 'cwn-right))
+        (rotatef (fdefinition a) (fdefinition b)))
+      (print (list (cwn-left 1) (cwn-right 2)))
+      (let ((a 'cwn-left) (b 'cwn-right))
+        (psetf (fdefinition a) (fdefinition b)
+               (fdefinition b) (fdefinition a)))
+      (print (list (cwn-left 1) (cwn-right 2)))
+      ;; A count only the new definition takes, every lambda list shape, every value.
+      (defun cwn-count (x y) (list :old x y))
+      (print (handler-case (funcall 'cwn-count 1) (program-error () :too-few)))
+      (cwn-install 'cwn-count (lambda (x) (list :new x)))
+      (print (cwn-count 1))
+      (print (funcall 'cwn-count 2))
+      (print (apply 'cwn-count (list 3)))
+      (defun cwn-shape (a &optional (b 2) &rest r) (list :old a b r))
+      (print (list (cwn-shape 1) (cwn-shape 1 3) (cwn-shape 1 3 4 5)))
+      (cwn-install 'cwn-shape (lambda (&rest args) (cons :new args)))
+      (print (list (cwn-shape 1) (cwn-shape 1 3) (cwn-shape 1 3 4 5)))
+      (defun cwn-keys (a &key (b 2)) (list :old a b))
+      (print (cwn-keys 1 :b 3))
+      (cwn-install 'cwn-keys (lambda (a &key (b 9)) (list :new a b)))
+      (print (list (cwn-keys 1) (cwn-keys 1 :b 3)))
+      (defun cwn-values () 1)
+      (cwn-install 'cwn-values (lambda () (values 1 2 3)))
+      (print (multiple-value-list (cwn-values)))
+      ;; A function value taken before the write keeps the definition it was.
+      (defun cwn-wrapped (x) (list :inner x))
+      (let ((old #'cwn-wrapped))
+        (cwn-install 'cwn-wrapped (lambda (x) (list :outer (funcall old x)))))
+      (print (cwn-wrapped 1))
+      ;; Recursion reaches the new definition, by a tail call and mutual tail calls too, each
+      ;; staying proper.
+      (defun cwn-fib (n) (if (< n 2) n (+ (cwn-fib (- n 1)) (cwn-fib (- n 2)))))
+      (defvar *cwn-calls* 0)
+      (let ((old #'cwn-fib))
+        (cwn-install 'cwn-fib (lambda (n) (incf *cwn-calls*) (funcall old n))))
+      (print (list (cwn-fib 10) *cwn-calls*))
+      (defun cwn-tail (n acc) (if (= n 0) acc (cwn-tail (- n 1) (+ acc 1))))
+      (print (cwn-tail 200000 0))
+      (let ((old #'cwn-tail))
+        (cwn-install 'cwn-tail (lambda (n acc) (if (= n 3) (list :seen acc) (funcall old n acc)))))
+      (print (cwn-tail 5 0))
+      (print (cwn-tail 200000 0))
+      (defun cwn-even (n) (if (= n 0) t (cwn-odd (- n 1))))
+      (defun cwn-odd (n) (if (= n 0) nil (cwn-even (- n 1))))
+      (print (cwn-even 200000))
+      (cwn-install 'cwn-odd (lambda (n) (list :odd n)))
+      (print (cwn-even 2))
+      (print (cwn-even 3))
+      (defun cwn-loop (n) (list :old n))
+      (cwn-install 'cwn-loop (lambda (n) (if (= n 0) :done (cwn-loop (- n 1)))))
+      (print (cwn-loop 200000))
+      ;; Retired through a computed name, and defined again where a defun form runs.
+      (defun cwn-retired (x) (list :first x))
+      (defun cwn-retire (name) (fmakunbound name))
+      (print (cwn-retire 'cwn-retired))
+      (print (if (fboundp 'cwn-retired) t nil))
+      (print (if (fboundp (intern "CWN-RETIRED")) t nil))
+      (print (handler-case (cwn-retired 1) (undefined-function (c) (cell-error-name c))))
+      (print (handler-case (funcall 'cwn-retired 1) (undefined-function (c) (cell-error-name c))))
+      (print (handler-case (funcall #'cwn-retired 1) (undefined-function (c) (cell-error-name c))))
+      (print (handler-case (symbol-function 'cwn-retired) (undefined-function (c) (cell-error-name c))))
+      (defun cwn-retired (x) (list :again x))
+      (print (if (fboundp 'cwn-retired) t nil))
+      (print (cwn-retired 1))
+      (print (funcall (intern "CWN-RETIRED") 2))
+      ;; A setf function, and definitions no defun of the program spells.
+      (defun (setf cwn-place) (v l) (setf (car l) (list :old v)))
+      (defun cwn-install-setf (place f) (setf (fdefinition (list 'setf place)) f))
+      (cwn-install-setf 'cwn-place (lambda (v l) (setf (car l) (list :new v))))
+      (let ((l (list 1))) (setf (cwn-place l) 2) (print l))
+      (defgeneric cwn-generic (x))
+      (defmethod cwn-generic ((x integer)) (list :method x))
+      (let ((old #'cwn-generic))
+        (cwn-install 'cwn-generic (lambda (x) (list :wrapped (funcall old x)))))
+      (print (cwn-generic 1))
+      (print (funcall 'cwn-generic 2))
+      (defclass cwn-class () ((v :accessor cwn-v :initform 1)))
+      (print (cwn-v (make-instance 'cwn-class)))
+      (cwn-install 'cwn-v (lambda (o) (list :new o)))
+      (print (cwn-v 5))
+      (defstruct cwn-struct a)
+      (print (cwn-struct-a (make-cwn-struct :a 1)))
+      (cwn-install 'cwn-struct-a (lambda (o) (list :new o)))
+      (print (cwn-struct-a 5))
+      (print (funcall #'cwn-struct-a 6))
+      ;; A write ahead of the defun: the form holds from where it stands.
+      (cwn-install 'cwn-ahead (lambda (x) (list :installed x)))
+      (print (cwn-ahead 1))
+      (defun cwn-ahead (x) (list :defined x))
+      (print (cwn-ahead 2))
+      ;; The last definition of a name is what a name built at run time reaches too.
+      (defun cwn-twice () 1)
+      (defun cwn-twice () 2)
+      (print (list (cwn-twice) (funcall (intern "CWN-TWICE"))))
+      ;; What a file a program loads defines replaces a defun.
+      (defun cwn-loaded (x) (list :old x))
+      (defun cwn-loaded-caller (x) (cwn-loaded x))
+      (defvar *cwn-path* (concatenate 'string "cwn-" "loaded.lisp"))
+      (with-open-file (s *cwn-path* :direction :output :if-exists :supersede)
+        (format s "(defun cwn-loaded (x) (list :loaded x))~%"))
+      (load *cwn-path*)
+      (delete-file *cwn-path*)
+      (print (cwn-loaded 1))
+      (print (cwn-loaded-caller 2))
+      (print (funcall #'cwn-loaded 3))
+    expected: |
+      (:OLD 0)
+      (:NEW 1)
+      (:NEW 2)
+      (:NEW 3)
+      (:NEW 4)
+      (:NEW 5)
+      (:NEW 6)
+      ((:NEW 7))
+      ((:NEW 8))
+      (:NEW 9)
+      (:NEW 10)
+      (:NEW 11)
+      (:NEW 12)
+      T
+      CWN-COMPILED
+      (:COMPILED 1)
+      (:COMPILED 2)
+      (:EVALED 1)
+      ((:EVALED 2))
+      (:SYM 1)
+      ((:RIGHT 1) (:LEFT 2))
+      ((:LEFT 1) (:RIGHT 2))
+      :TOO-FEW
+      (:NEW 1)
+      (:NEW 2)
+      (:NEW 3)
+      ((:OLD 1 2 NIL) (:OLD 1 3 NIL) (:OLD 1 3 (4 5)))
+      ((:NEW 1) (:NEW 1 3) (:NEW 1 3 4 5))
+      (:OLD 1 3)
+      ((:NEW 1 9) (:NEW 1 3))
+      (1 2 3)
+      (:OUTER (:INNER 1))
+      (55 177)
+      200000
+      (:SEEN 2)
+      (:SEEN 199997)
+      T
+      (:ODD 1)
+      (:ODD 2)
+      :DONE
+      CWN-RETIRED
+      NIL
+      NIL
+      CWN-RETIRED
+      CWN-RETIRED
+      CWN-RETIRED
+      CWN-RETIRED
+      T
+      (:AGAIN 1)
+      (:AGAIN 2)
+      ((:NEW 2))
+      (:WRAPPED (:METHOD 1))
+      (:WRAPPED (:METHOD 2))
+      1
+      (:NEW 5)
+      1
+      (:NEW 5)
+      (:NEW 6)
+      (:INSTALLED 1)
+      (:DEFINED 2)
+      (2 2)
+      (:LOADED 1)
+      (:LOADED 2)
+      (:LOADED 3)
+  - name: a-definition-of-a-generic-function-binds-its-name-again
+    source: |
+      ;; A definition of a generic function binds a name the program retired, after any
+      ;; replacement of it, and its dispatcher answers from there. A class defined meanwhile
+      ;; is no definition of it: a retired name stays retired, a replaced one replaced.
+      (defgeneric gda-setf (x))
+      (defmethod gda-setf ((x integer)) (list :int x))
+      (setf (fdefinition 'gda-setf) (lambda (x) (list :setf x)))
+      (print (gda-setf 1))
+      (fmakunbound 'gda-setf)
+      (print (if (fboundp 'gda-setf) t nil))
+      (print (handler-case (gda-setf 1) (undefined-function (c) (cell-error-name c))))
+      (defmethod gda-setf ((x integer)) (list :int2 x))
+      (print (if (fboundp 'gda-setf) t nil))
+      (print (gda-setf 1))
+      (print (funcall 'gda-setf 2))
+      (print (funcall #'gda-setf 3))
+      (print (funcall (symbol-function 'gda-setf) 4))
+      (print (funcall (intern "GDA-SETF") 5))
+      (defgeneric gda-compile (x))
+      (defmethod gda-compile ((x integer)) (list :int x))
+      (compile 'gda-compile (lambda (x) (list :compile x)))
+      (print (gda-compile 1))
+      (fmakunbound 'gda-compile)
+      (print (if (fboundp 'gda-compile) t nil))
+      (defgeneric gda-compile (x))
+      (print (if (fboundp 'gda-compile) t nil))
+      (defmethod gda-compile ((x integer)) (list :int2 x))
+      (print (gda-compile 1))
+      (defgeneric gda-plain (x))
+      (defmethod gda-plain ((x integer)) (list :int x))
+      (print (gda-plain 1))
+      (fmakunbound 'gda-plain)
+      (print (if (fboundp 'gda-plain) t nil))
+      (print (handler-case (gda-plain 1) (undefined-function (c) (cell-error-name c))))
+      (print (handler-case (funcall 'gda-plain 1) (undefined-function (c) (cell-error-name c))))
+      (defclass gda-class () ())
+      (print (if (fboundp 'gda-plain) t nil))
+      (print (handler-case (gda-plain 1) (undefined-function (c) (cell-error-name c))))
+      (defmethod gda-plain ((x integer)) (list :int2 x))
+      (print (if (fboundp 'gda-plain) t nil))
+      (print (gda-plain 1))
+      (defgeneric gda-kept (x))
+      (defmethod gda-kept ((x gda-class)) :method)
+      (setf (fdefinition 'gda-kept) (lambda (x) (declare (ignore x)) :replaced))
+      (defclass gda-other () ())
+      (print (gda-kept (make-instance 'gda-class)))
+      (print (funcall 'gda-kept (make-instance 'gda-other)))
+    expected: |
+      (:SETF 1)
+      NIL
+      GDA-SETF
+      T
+      (:INT2 1)
+      (:INT2 2)
+      (:INT2 3)
+      (:INT2 4)
+      (:INT2 5)
+      (:COMPILE 1)
+      NIL
+      T
+      (:INT2 1)
+      (:INT 1)
+      NIL
+      GDA-PLAIN
+      GDA-PLAIN
+      NIL
+      GDA-PLAIN
+      T
+      (:INT2 1)
+      :REPLACED
+      :REPLACED
   - name: set-and-setf-symbol-value-for-computed-names
     source: |
       ;; set assigns a global by a computed name and creates the binding when
@@ -35684,6 +35965,99 @@ standalone:
       T
       :TYPE-ERROR
       "CLOSE expects at least 1 argument, got 0"
+  - name: a-defun-written-through-a-name-held-as-a-value
+    source: |
+      ;; Standalone: nothing here evaluates data, so a function can be written only by a name
+      ;; a value of the program spells: a quoted symbol, and beside a symbol builder a string.
+      (defun cwv-target (x) (list :old x))
+      (defun cwv-install (name f) (setf (fdefinition name) f))
+      (cwv-install 'cwv-target (lambda (x) (list :new x)))
+      (print (cwv-target 1))
+      (print (funcall #'cwv-target 2))
+      (defun cwv-built (x) (list :old x))
+      (setf (symbol-function (intern "CWV-BUILT")) (lambda (x) (list :new x)))
+      (print (cwv-built 1))
+      (print (mapcar 'cwv-built '(2)))
+      (defun cwv-listed (x) (list :old x))
+      (dolist (name '(cwv-listed))
+        (setf (fdefinition name) (lambda (x) (list :new x))))
+      (print (cwv-listed 1))
+      (defun cwv-kept (x) (list :kept x))
+      (print (cwv-kept 1))
+      (defun cwv-retired (x) (list :old x))
+      (dolist (name (list 'cwv-retired)) (fmakunbound name))
+      (print (if (fboundp 'cwv-retired) t nil))
+      (print (handler-case (cwv-retired 1) (undefined-function (c) (cell-error-name c))))
+      (defun cwv-retired (x) (list :again x))
+      (print (cwv-retired 1))
+      (print (funcall (fdefinition 'cwv-retired) 2))
+      (defun cwv-compiled (x) (list :old x))
+      (let ((name 'cwv-compiled))
+        (compile name (lambda (x) (list :compiled x))))
+      (print (cwv-compiled 1))
+      (mapc #'fmakunbound '(cwv-kept))
+      (print (handler-case (cwv-kept 1) (undefined-function (c) (cell-error-name c))))
+    stdout: |
+      (:NEW 1)
+      (:NEW 2)
+      (:NEW 1)
+      ((:NEW 2))
+      (:NEW 1)
+      (:KEPT 1)
+      NIL
+      CWV-RETIRED
+      (:AGAIN 1)
+      (:AGAIN 2)
+      (:COMPILED 1)
+      CWV-KEPT
+  - name: a-write-of-the-name-of-a-method-on-a-lowered-built-in-reaches-every-reference
+    source: |
+      ;; Standalone: a write of the name of a generic on a lowered built-in reaches every
+      ;; reference, the calls the compile routes through its dispatcher too: the dispatcher
+      ;; has a cell the name's binding goes to. A value taken before the write stays what it
+      ;; was. SBCL refuses the method; the interpreter is the oracle.
+      (defclass lrw-c () ())
+      (defmethod length ((x lrw-c)) :method)
+      (defvar *lrw* (make-instance 'lrw-c))
+      (defvar *lrw-before* #'length)
+      (print (length *lrw*))
+      (print (length "abc"))
+      (setf (symbol-function 'length) (lambda (x) (declare (ignore x)) :replaced))
+      (print (funcall (intern "LENGTH") *lrw*))
+      (print (funcall #'length *lrw*))
+      (print (funcall (symbol-function 'length) *lrw*))
+      (print (funcall (fdefinition 'length) *lrw*))
+      (print (funcall 'length *lrw*))
+      (print (length *lrw*))
+      (print (length "abc"))
+      (print (funcall *lrw-before* *lrw*))
+      (defmethod close ((x lrw-c) &key abort) (declare (ignore abort)) :closed)
+      (print (close *lrw*))
+      (let ((name 'close))
+        (setf (fdefinition name) (lambda (x &key abort) (declare (ignore abort x)) :replaced)))
+      (print (close *lrw*))
+      (print (funcall #'close *lrw*))
+      (print (funcall (intern "CLOSE") *lrw*))
+      (defmethod close ((x string) &key abort) (declare (ignore abort)) :string)
+      (print (close *lrw*))
+      (print (close "s"))
+    stdout: |
+      :METHOD
+      3
+      :REPLACED
+      :REPLACED
+      :REPLACED
+      :REPLACED
+      :REPLACED
+      :REPLACED
+      :REPLACED
+      :METHOD
+      :CLOSED
+      :REPLACED
+      :REPLACED
+      :REPLACED
+      :CLOSED
+      :STRING
   - name: a-method-on-a-lowered-built-in-answers-a-name-held-as-a-value
     source: |
       ;; Standalone: a quoted symbol at a computed call site, and a literal name's function

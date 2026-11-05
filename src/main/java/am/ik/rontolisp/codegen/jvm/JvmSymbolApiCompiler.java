@@ -4,6 +4,7 @@ import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
+import java.util.Objects;
 
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ClosRegistry;
@@ -448,7 +449,10 @@ final class JvmSymbolApiCompiler {
 				compileComputedFboundp(parts.get(1), ctx, className);
 				return;
 			}
-			MethodCode.Label foldEnd = ctx.usesFmakunbound ? emitTombstoneGuard(name, ctx, className) : null;
+			// A name with a cell answers from its binding: a write of it can come from a
+			// form eval runs, whose fmakunbound no scan of the program sees.
+			MethodCode.Label foldEnd = ctx.usesFmakunbound || ctx.namespaceCells.containsKey(name)
+					? emitTombstoneGuard(name, ctx, className) : null;
 			if (bound) {
 				JvmEmitHelper.compileTrue(ctx);
 			}
@@ -520,9 +524,8 @@ final class JvmSymbolApiCompiler {
 	 * skipped. Returns the label the caller binds at the end of the fold.
 	 */
 	private static MethodCode.Label emitTombstoneGuard(String name, JvmLispCompiler.Ctx ctx, String className) {
-		JvmEmitHelper.compileStringLiteral(name, ctx);
-		ctx.body.getstatic(evalField(ctx, className, "_fenv"));
-		ctx.body.invokestatic(envLookupRef(ctx, className)).dup();
+		emitBinding(name, ctx, className);
+		ctx.body.dup();
 		MethodCode.Label noBinding = ctx.body.newLabel();
 		ctx.body.ifnull(noBinding);
 		ctx.body.checkcast(ctx.objectArrayClass).iconst_1().aaload();
@@ -558,22 +561,8 @@ final class JvmSymbolApiCompiler {
 			return;
 		}
 		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
-		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv"));
-		ctx.body.invokestatic(envLookupRef(ctx, className)).dup();
-		MethodCode.Label create = ctx.body.newLabel();
-		ctx.body.ifnull(create);
-		// existing binding: clear its value cell
-		ctx.body.checkcast(ctx.objectArrayClass).iconst_1().aconst_null().aastore();
-		MethodCode.Label done = ctx.body.newLabel();
-		ctx.body.goto_(done);
-		ctx.body.labelBinding(create);
-		ctx.body.pop();
-		// _fenv = new Object[]{new Object[]{name, null}, _fenv}
-		ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0().iconst_2();
-		ctx.body.anewarray(ctx.objectClass).dup().iconst_0().aload(nameSlot).aastore();
-		ctx.body.aastore().dup().iconst_1().getstatic(evalField(ctx, className, "_fenv"));
-		ctx.body.aastore().putstatic(evalField(ctx, className, "_fenv"));
-		ctx.body.labelBinding(done);
+		ctx.body.aload(nameSlot).aconst_null();
+		ctx.body.invokestatic(JvmFunctionNamespace.setRef(ctx.cp, ctx.cp.classEntry(className)));
 		ctx.body.aload(nameSlot);
 	}
 
@@ -591,24 +580,27 @@ final class JvmSymbolApiCompiler {
 		int nameSlot = compileArgToTemp(RuntimeFunctionNames.functionNameArgument(parts.get(1),
 				ctx.functions.containsKey(LispNames.FUNCTION_NAME_INTERNAL)), ctx, className);
 		int valueSlot = compileArgToTemp(parts.get(2), ctx, className);
-		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv"));
-		ctx.body.invokestatic(envLookupRef(ctx, className)).dup();
-		MethodCode.Label create = ctx.body.newLabel();
-		ctx.body.ifnull(create);
-		// existing binding: overwrite its value cell
-		ctx.body.checkcast(ctx.objectArrayClass).iconst_1().aload(valueSlot).aastore();
-		MethodCode.Label done = ctx.body.newLabel();
-		ctx.body.goto_(done);
-		ctx.body.labelBinding(create);
-		ctx.body.pop();
-		// _fenv = new Object[]{new Object[]{name, value}, _fenv}
-		ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0().iconst_2();
-		ctx.body.anewarray(ctx.objectClass).dup().iconst_0().aload(nameSlot).aastore();
-		ctx.body.dup().iconst_1().aload(valueSlot).aastore().aastore().dup().iconst_1();
-		ctx.body.getstatic(evalField(ctx, className, "_fenv")).aastore();
-		ctx.body.putstatic(evalField(ctx, className, "_fenv"));
-		ctx.body.labelBinding(done);
+		ctx.body.aload(nameSlot).aload(valueSlot);
+		ctx.body.invokestatic(JvmFunctionNamespace.setRef(ctx.cp, ctx.cp.classEntry(className)));
 		ctx.body.aload(valueSlot);
+	}
+
+	/**
+	 * {@code (%restore-compiled-definition name)}: what a top-level {@code defun} of a
+	 * name with a cell leaves where it stood: a binding a write made goes, so the
+	 * compiled definition answers from here on. One read of the cell where none did.
+	 * Answers nil.
+	 */
+	static void compileRestoreCompiledDefinition(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		LispCons quote = (LispCons) ((LispCons) cons.cdr()).car();
+		String name = ((LispSymbol) ((LispCons) quote.cdr()).car()).name();
+		MethodCode.Label unwritten = ctx.body.newLabel();
+		ctx.body.getstatic(Objects.requireNonNull(ctx.namespaceCells.get(name)));
+		ctx.body.ifnull(unwritten);
+		JvmEmitHelper.compileUnspelledLiteral(name, ctx);
+		ctx.body.invokestatic(JvmFunctionNamespace.restoreRef(ctx.cp, ctx.cp.classEntry(className)));
+		ctx.body.labelBinding(unwritten);
+		ctx.body.aconst_null();
 	}
 
 	/**
@@ -835,10 +827,8 @@ final class JvmSymbolApiCompiler {
 	 * {@code #'name} of a symbol-function forwarder's name.
 	 */
 	static void compileFenvFunction(String name, JvmLispCompiler.Ctx ctx, String className) {
-		int nameSlot = compileArgToTemp(new LispCons(new LispSymbol(LispNames.QUOTE),
-				new LispCons(new LispSymbol(name), am.ik.rontolisp.LispNil.INSTANCE)), ctx, className);
-		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv"));
-		ctx.body.invokestatic(envLookupRef(ctx, className)).dup();
+		emitBinding(name, ctx, className);
+		ctx.body.dup();
 		MethodCode.Label noBinding = ctx.body.newLabel();
 		ctx.body.ifnull(noBinding);
 		ctx.body.checkcast(ctx.objectArrayClass).iconst_1().aaload().dup();
@@ -852,6 +842,22 @@ final class JvmSymbolApiCompiler {
 		// The name is known here, so a (setf place) writer's is reported as the list.
 		JvmFunctionFormCompiler.emitUndefinedFunctionThrow(name, ctx);
 		ctx.body.labelBinding(end);
+	}
+
+	/**
+	 * Pushes the name's {@code _fenv} binding, or null: its cell's read where it has one
+	 * ({@code Ctx.namespaceCells}), else the alist's walk.
+	 */
+	private static void emitBinding(String name, JvmLispCompiler.Ctx ctx, String className) {
+		FieldRefEntry cell = ctx.namespaceCells.get(name);
+		if (cell != null) {
+			ctx.body.getstatic(cell);
+			return;
+		}
+		JvmExprCompiler.compileExpr(new LispCons(new LispSymbol(LispNames.QUOTE),
+				new LispCons(new LispSymbol(name), am.ik.rontolisp.LispNil.INSTANCE)), ctx, className);
+		ctx.body.getstatic(evalField(ctx, className, "_fenv"));
+		ctx.body.invokestatic(envLookupRef(ctx, className));
 	}
 
 	private static List<LispVal> requireArgs(LispCons cons, int count, String name) {

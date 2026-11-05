@@ -81,6 +81,15 @@ final class JvmFunctionCallCompiler {
 
 	private static void compileDirectCall(String name, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		JvmLispCompiler.FunctionInfo fi = ctx.functions.get(name);
+		if (fi != null && ctx.fenvForwarders.contains(name)) {
+			// A name only the function namespace holds: the call applies what its cell
+			// holds when it runs, a miss the undefined-function ahead of the arguments.
+			// No
+			// rest list, which the forwarder defun of the name would make.
+			JvmExprCompiler.compileExpansion(cons, LispMacroExpander.runtimeFunctionNamespaceCall(name, cons), ctx,
+					className);
+			return;
+		}
 		if (fi != null && fi.cell() != null
 				&& !JvmDesignatorCall.reaches(fi.required(), fi.variadic(), cons.toList().size() - 1)) {
 			// A count this definition of a notinline function rules out, which a

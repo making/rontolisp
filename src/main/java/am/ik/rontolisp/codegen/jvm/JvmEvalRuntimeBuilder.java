@@ -755,43 +755,13 @@ final class JvmEvalRuntimeBuilder {
 
 	/**
 	 * Emits code that installs a function binding into the {@code _fenv} function
-	 * namespace: an existing binding's value cell is mutated, otherwise a new binding is
-	 * prepended. Reads the name from {@code nameSlot} and the value from
-	 * {@code valueSlot}; clobbers {@code tmpSlot}. Leaves nothing on the stack.
+	 * namespace ({@link JvmFunctionNamespace#SET_NAME}). Reads the name from
+	 * {@code nameSlot} and the value from {@code valueSlot}. Leaves nothing on the stack.
 	 */
-	private void storeFunctionBinding(MethodCode a, int nameSlot, int valueSlot, int tmpSlot) {
-		MethodCode.Label create = a.newLabel();
-		MethodCode.Label done = a.newLabel();
+	private void storeFunctionBinding(MethodCode a, int nameSlot, int valueSlot) {
 		a.aload(nameSlot);
-		a.getstatic(this.k.fenvField());
-		a.invokestatic(this.k.envLookupRef());
-		a.astore(tmpSlot);
-		a.aload(tmpSlot);
-		a.ifnull(create);
-		// existing binding: binding[1] = value
-		a.aload(tmpSlot);
-		a.checkcast(this.k.objectArrayClass());
-		a.loadConstant(1);
 		a.aload(valueSlot);
-		a.aastore();
-		a.goto_(done);
-		a.labelBinding(create);
-		// binding = new Object[]{name, value}
-		consFromSlots(a, nameSlot, valueSlot);
-		a.astore(tmpSlot);
-		// _fenv = new Object[]{binding, _fenv}
-		a.loadConstant(2);
-		a.anewarray(this.k.objectClass());
-		a.dup();
-		a.loadConstant(0);
-		a.aload(tmpSlot);
-		a.aastore();
-		a.dup();
-		a.loadConstant(1);
-		a.getstatic(this.k.fenvField());
-		a.aastore();
-		a.putstatic(this.k.fenvField());
-		a.labelBinding(done);
+		a.invokestatic(JvmFunctionNamespace.setRef(this.k.cp(), this.k.thisClass()));
 	}
 
 	/**
@@ -2353,7 +2323,7 @@ final class JvmEvalRuntimeBuilder {
 		a.invokestatic(this.k.evalRef());
 		a.astore(NEWCELL); // closure value
 		// install into the function namespace (Lisp-2): _fenv, not _genv
-		storeFunctionBinding(a, ACC, NEWCELL, TMP);
+		storeFunctionBinding(a, ACC, NEWCELL);
 		a.aload(ACC);
 		a.areturn();
 		a.labelBinding(n);
