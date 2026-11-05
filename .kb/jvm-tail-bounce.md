@@ -108,6 +108,8 @@ before. Self and mutual tail calls the compiler can name are jumps instead
   defun, a continuation) the callee's bounce is returned unchecked (`passesThrough`). So a
   continuation calling a defun that calls the continuation keeps no frame per round, and a
   `(funcall #'f ..)` tail allocates nothing.
+- **A celled defun answers one once a name is written** (`.kb/symbol-runtime-api.md`, "A write through
+  a computed name"): its named entry checks, so it is no `bounceVisible` defun and takes no depth.
 - **Which defuns may answer one** (`bouncingDefuns`, before Pass 2): a value call on the
   tail walk (`JvmTailGroup.tailCalls`, the mark's own relays), a direct tail call of such a
   defun, or a member of a tail group with one. Its `FunctionInfo.bounceVisible` decides the

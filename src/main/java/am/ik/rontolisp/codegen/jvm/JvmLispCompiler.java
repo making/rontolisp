@@ -423,7 +423,9 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * The eval runtime's own methods; {@code _lookup$N} segments hang off
 	 * {@code _lookup}.
 	 */
-	private static final Set<String> EVAL_METHOD_NAMES = Set.of("_eval", "_store", "_envLookup", "_lookup");
+	private static final Set<String> EVAL_METHOD_NAMES = Set.of("_eval", "_store", "_envLookup", "_lookup",
+			JvmFunctionNamespace.SET_NAME, JvmFunctionNamespace.RESTORE_NAME, JvmFunctionNamespace.VALUE_NAME,
+			JvmFunctionNamespace.PUBLISH_NAME);
 
 	/**
 	 * The apply tier's gate: {@code _apply} and the spread dispatcher, without the
@@ -1286,8 +1288,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// may narrow -- under --dynamic any name resolves at run time.
 		// The program's own defuns it replaces or retires by a literal name, read before
 		// the expansion adds the definitions that are no defun of its own.
-		Set<String> redefinedDefuns = this.runTimeImage != null || this.fragment != null ? Set.of()
-				: RedefinedDefuns.names(program);
+		boolean linkedCompile = this.runTimeImage != null || this.fragment != null;
+		Set<String> redefinedDefuns = linkedCompile ? Set.of() : RedefinedDefuns.names(program);
+		if (!linkedCompile) {
+			closRegistry.markGenericDefinitions();
+		}
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
 				packageResolver::internedSpelling, this.dynamic, SignalMessages.RENDERED,
 				this.optimize.eliminatesDeadCode() && !this.dynamic
@@ -1341,13 +1346,19 @@ public final class JvmLispCompiler implements LispCompiler {
 		// names a function at run time only through a lowering verb, whose fragment
 		// links the name at compile time, and the global is a field every later class
 		// shares (JvmLinkage.Global#nestedDefun) where the namespace is not.
-		Set<String> namespaceNestedDefuns = this.runTimeImage != null || this.fragment != null ? Set.of()
-				: NestedDefunNamespace.heldNames(program);
+		Set<String> namespaceNestedDefuns = linkedCompile ? Set.of() : NestedDefunNamespace.heldNames(program);
 		fenvForwarders.addAll(namespaceNestedDefuns);
 		program = NestedDefunRedefinition.rewrite(program, namespaceNestedDefuns);
 		// A name the program itself replaces has the same one home: every reference reads
-		// what the namespace holds when it runs (compiler/RedefinedDefuns).
-		program = RedefinedDefuns.rewrite(program, redefinedDefuns);
+		// what the namespace holds when it runs. A name a write it cannot read can reach
+		// keeps its compiled definition and reads a cell (compiler/RedefinedDefuns).
+		Map<String, String> shadowedDispatchers = ShadowedBuiltins.dispatchers(closRegistry);
+		boolean computedFunctionWrites = !linkedCompile && (programUsesEval(program)
+				|| programUsesSymbol(program, LispNames.LOAD) || RedefinedDefuns.writesComputedNames(program));
+		Set<String> celledDefuns = linkedCompile ? Set.of()
+				: RedefinedDefuns.celledDefuns(program, redefinedDefuns, computedFunctionWrites, shadowedDispatchers);
+		program = RedefinedDefuns.rewrite(program, redefinedDefuns, celledDefuns, shadowedDispatchers,
+				name -> closRegistry.gfProtocol() && closRegistry.findGeneric(name) != null);
 		fenvForwarders.addAll(LispMacroExpander.symbolFunctionForwarderNames(program));
 		// Whether an instance value can exist in this class at all. The predicates and
 		// _equal need the answer BEFORE any body is compiled (their shape changes), and
@@ -2048,7 +2059,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean writesFunctionNamespace = programUsesEval(program) || usesLoad || this.dynamic || usesJavaBridge
 				|| usesObjc || usesFfi || programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				|| LispMacroExpander.usesSymbolFunctionWrite(program) || !namespaceNestedDefuns.isEmpty()
-				|| !redefinedDefuns.isEmpty() || forcedGroups.contains(GROUP_EVAL);
+				|| !redefinedDefuns.isEmpty() || computedFunctionWrites || !celledDefuns.isEmpty()
+				|| forcedGroups.contains(GROUP_EVAL);
 		boolean usesEval = writesFunctionNamespace || boundpReadsMirror
 				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.SET)
 				|| programUsesSymbol(program, LispNames.FBOUNDP);
@@ -2520,8 +2532,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		Map<String, FunctionInfo> functions = new HashMap<>();
 		// A linked class calls a notinline function by name through its cell, which a
 		// redefinition lowered as the program runs sets (JvmFunctionCell); an ordinary
-		// class binds every call.
-		Set<String> notinline = linkedClass ? JvmFunctionCell.notinlineNames(program) : Set.of();
+		// class does so for a function a write by a run-time name can reach, and binds
+		// every other call.
+		Set<String> notinline = linkedClass ? JvmFunctionCell.notinlineNames(program) : celledDefuns;
 		for (DefunDecl defun : defuns) {
 			int funcId = nextFuncId[0]++;
 			boolean bounces = bouncingDefuns.contains(defun.name);
@@ -2532,8 +2545,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			MethodRefEntry methodref = cp.methodRef(thisClass, nameUtf8, descUtf8);
 			functions.put(defun.name,
 					new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, defun.optionals, false, methodref,
-							nameUtf8, descUtf8, bounces,
-							notinline.contains(defun.name) ? functionCell(cp, thisClass, defun.name, descUtf8) : null));
+							nameUtf8, descUtf8, bounces, notinline.contains(defun.name)
+									? functionCell(cp, thisClass, defun.name, descUtf8, !linkedClass) : null));
 		}
 		Map<String, JvmLinkage.Function> externals = new LinkedHashMap<>(externalFunctions);
 		externals.putAll(externalWrappers);
@@ -2550,13 +2563,43 @@ public final class JvmLispCompiler implements LispCompiler {
 					new FunctionInfo(nextFuncId[0]++, fn.paramCount(), fn.variadic(), fn.optionals(), false,
 							cp.methodRef(cp.classEntry(fn.owner()), nameUtf8, descUtf8), nameUtf8, descUtf8,
 							fn.bounces(),
-							fn.celled() ? functionCell(cp, thisClass, external.getKey(), descUtf8) : null));
+							fn.celled() ? functionCell(cp, thisClass, external.getKey(), descUtf8, false) : null));
+		}
+		// The cell of every name a literal reference reads the function namespace for, by
+		// each spelling that names it at compile time: a name with a compiled definition
+		// and one only the namespace holds (JvmFunctionNamespace). A linked class's
+		// namespace has no cells; its cells are the redefinitions' own.
+		Map<String, FieldRefEntry> namespaceCells = new LinkedHashMap<>();
+		if (!linkedClass) {
+			for (String name : new java.util.TreeSet<>(fenvForwarders)) {
+				namespaceCells.put(name, cp.fieldRef(thisClass, JvmLinkage.cellField(name), JvmLinkage.CELL_DESC));
+			}
+			for (DefunDecl defun : defuns) {
+				JvmFunctionCell cell = Objects.requireNonNull(functions.get(defun.name)).cell();
+				if (cell != null) {
+					namespaceCells.put(defun.name, cell.field());
+				}
+			}
+			shadowedDispatchers.forEach((generic, dispatcher) -> {
+				FunctionInfo fi = functions.get(dispatcher);
+				if (fi != null && fi.cell() != null) {
+					namespaceCells.put(generic, fi.cell().field());
+				}
+			});
 		}
 		Map<String, JvmTailGroup.Member> defunMembers = new HashMap<>();
+		// A member's code can run in any member's method, so a replaced function's bounce
+		// reaches a check from a member only where every member's entry makes one.
+		Set<String> uncheckedGroupMembers = new HashSet<>();
 		for (JvmTailGroup group : defunGroups) {
+			boolean checked = true;
 			for (JvmTailGroup.Member member : group.members()) {
 				member.function = functions.get(member.name);
 				defunMembers.put(member.name, member);
+				checked &= member.function != null && member.function.cell() != null;
+			}
+			if (!checked) {
+				group.members().forEach(member -> uncheckedGroupMembers.add(member.name));
 			}
 		}
 
@@ -2989,7 +3032,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		Map<String, DefunDecl> inlinableDefuns = new HashMap<>();
 		if (intFusion && !this.dynamic) {
 			for (DefunDecl defun : defuns) {
-				if (!multiplyDefinedDefuns.contains(defun.name) && JvmIntFusionCompiler.isInlinableDefun(defun)) {
+				if (!multiplyDefinedDefuns.contains(defun.name) && !notinline.contains(defun.name)
+						&& JvmIntFusionCompiler.isInlinableDefun(defun)) {
 					inlinableDefuns.put(defun.name, defun);
 				}
 			}
@@ -3114,6 +3158,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.warnedClRedefinitions(new HashSet<>())
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
 			.fenvForwarders(Set.copyOf(fenvForwarders))
+			.namespaceCells(namespaceCells)
 			.bindsRuntimeFunctionNames(bindsRuntimeFunctionNames)
 			.linked(linkedClass)
 			.linkedWrappers(Set.copyOf(linkedWrappers))
@@ -3148,9 +3193,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			funcCtx.evalStoreRef = evalStoreRef;
 			// A defun bounces, and hands a callee's bounce on, only where its callers
 			// unwrap: its registry entry says so (JvmTailBounce).
-			boolean bounces = Objects.requireNonNull(functions.get(defun.name)).bounceVisible();
+			FunctionInfo defunInfo = Objects.requireNonNull(functions.get(defun.name));
+			boolean bounces = defunInfo.bounceVisible();
 			funcCtx.tailBounce = bounces;
 			funcCtx.passesBounces = bounces;
+			JvmFunctionCell defunCell = defunInfo.cell();
+			funcCtx.answersCellBounces = defunCell != null && defunCell.binding() && !bounces
+					&& !uncheckedGroupMembers.contains(defun.name);
+			funcCtx.ownCell = defunCell;
 			funcCtx.openFunction(JvmSourceSites.reportedName(defun.name), null, defun.bodyExprs);
 			funcCtx.nextLocal = defun.paramNames.size();
 			for (int i = 0; i < defun.paramNames.size(); i++) {
@@ -3630,8 +3680,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				group.finish(this.className, HUGE_METHOD_LIMIT,
 						member -> member.function != null
 								&& (calledEntries.contains(member.function.methodref().index())
-										|| member.function.cell() != null && calledEntries
-											.contains(Objects.requireNonNull(member.function.cell()).named().index())
+										|| calledThroughEntry(member.function.cell(), calledEntries)
 										|| exported.contains(member.name)));
 			}
 		}
@@ -5060,6 +5109,20 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
 					table.setName(), table.setDesc(), table.setCode());
 		}
+		// A member's code can run in any member's method, each called through its entry.
+		for (JvmTailGroup group : defunGroups) {
+			if (group.members()
+				.stream()
+				.anyMatch(
+						member -> member.function != null && mainCtx.celledBouncers.contains(member.function.cell()))) {
+				for (JvmTailGroup.Member member : group.members()) {
+					JvmFunctionCell cell = member.function == null ? null : member.function.cell();
+					if (cell != null) {
+						mainCtx.celledBouncers.add(cell);
+					}
+				}
+			}
+		}
 		// The cell of each notinline function the class defines, and the named entry of
 		// each it calls by name (JvmFunctionCell) -- built before the UNSUPPLIED marker
 		// closes, an entry over optionals reads it -- in definition order, so one
@@ -5070,10 +5133,28 @@ public final class JvmLispCompiler implements LispCompiler {
 			FunctionInfo fi = Objects.requireNonNull(functions.get(defun.name));
 			JvmFunctionCell cell = fi.cell();
 			if (cell != null) {
-				definition.addField(AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, cell.field().name(),
-						cell.field().type());
-				definition.addMethod(AccessFlag.ACC_STATIC, cell.named().name(), cell.named().type(),
-						cell.namedEntryBody(fi, cp, thisClass, mainCtx.unsupplied));
+				if (linkedClass) {
+					definition.addField(AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, cell.field().name(),
+							cell.field().type());
+				}
+				definition.addMethod(AccessFlag.ACC_STATIC, cell.named().name(), cell.named().type(), cell
+					.namedEntryBody(fi, cp, thisClass, mainCtx.unsupplied, mainCtx.celledBouncers.contains(cell)));
+				MethodRefEntry tailNamed = cell.tailNamed();
+				if (tailNamed != null && mainCtx.celledTails.contains(cell)) {
+					MethodCode tailBody = cell.tailEntryBody(fi, cp, thisClass, mainCtx.unsupplied);
+					mainCtx.bouncingBodies.add(tailBody);
+					definition.addMethod(AccessFlag.ACC_STATIC, tailNamed.name(), tailNamed.type(), tailBody);
+				}
+			}
+		}
+		// ... and of the namespace's: volatile like the redefinition's only where another
+		// thread can run Lisp code, a load that blocks an inlined call's folding where
+		// none can write it.
+		Set<String> declaredCells = new HashSet<>();
+		for (FieldRefEntry cell : namespaceCells.values()) {
+			if (declaredCells.add(cell.name().stringValue())) {
+				definition.addField(AccessFlag.ACC_STATIC | (lispOnOtherThreads ? AccessFlag.ACC_VOLATILE : 0),
+						cell.name(), cell.type());
 			}
 		}
 		for (String name : externalFunctions.keySet()) {
@@ -5081,7 +5162,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			JvmFunctionCell cell = fi.cell();
 			if (cell != null) {
 				definition.addMethod(AccessFlag.ACC_STATIC, cell.named().name(), cell.named().type(),
-						cell.namedEntryBody(fi, cp, thisClass, mainCtx.unsupplied));
+						cell.namedEntryBody(fi, cp, thisClass, mainCtx.unsupplied, false));
 			}
 		}
 		// The UNSUPPLIED marker (JvmUnsupplied): its field and the two helpers that
@@ -5854,6 +5935,32 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (usesEval) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, envLookupName, envLookupDesc,
 					envLookupBody);
+			// The namespace's writes and its cells' reads (JvmFunctionNamespace).
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					cp.utf8Entry(JvmFunctionNamespace.SET_NAME), cp.utf8Entry(JvmFunctionNamespace.SET_DESC),
+					JvmFunctionNamespace.setBody(cp, thisClass, fenvField,
+							cp.methodRef(thisClass, envLookupName, envLookupDesc)));
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					cp.utf8Entry(JvmFunctionNamespace.RESTORE_NAME), cp.utf8Entry(JvmFunctionNamespace.RESTORE_DESC),
+					JvmFunctionNamespace.restoreBody(cp, thisClass, fenvField));
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					cp.utf8Entry(JvmFunctionNamespace.VALUE_NAME), cp.utf8Entry(JvmFunctionNamespace.VALUE_DESC),
+					JvmFunctionNamespace.valueBody(cp, thisClass));
+			Map<String, FieldRefEntry> publishRows = new LinkedHashMap<>(namespaceCells);
+			namespaceCells.forEach((name, cell) -> {
+				// A symbol built at run time spells an internal name with one colon, as
+				// _lookup's alias row answers it.
+				int q = name.indexOf("::");
+				if (q > 0) {
+					publishRows.putIfAbsent(name.substring(0, q) + name.substring(q + 1), cell);
+				}
+			});
+			List<MethodCode> publishSegments = JvmFunctionNamespace.publishSegments(cp, thisClass, publishRows);
+			for (int s = 0; s < publishSegments.size(); s++) {
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+						cp.utf8Entry(JvmFunctionNamespace.publishSegmentName(s)),
+						cp.utf8Entry(JvmFunctionNamespace.SET_DESC), publishSegments.get(s));
+			}
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, evalName, evalDesc, evalBody);
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, storeName, storeDesc, storeBody);
 		}
@@ -6385,10 +6492,21 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * function -- this one's, or, linked, the class before it that declares it -- and the
 	 * entry, of the function's descriptor.
 	 */
-	private static JvmFunctionCell functionCell(ConstantPool cp, ClassEntry thisClass, String name,
-			Utf8Entry descUtf8) {
+	private static JvmFunctionCell functionCell(ConstantPool cp, ClassEntry thisClass, String name, Utf8Entry descUtf8,
+			boolean binding) {
 		return new JvmFunctionCell(cp.fieldRef(thisClass, JvmLinkage.cellField(name), JvmLinkage.CELL_DESC),
-				cp.methodRef(thisClass, cp.utf8Entry(JvmLinkage.namedEntry(name)), descUtf8));
+				cp.methodRef(thisClass, cp.utf8Entry(JvmLinkage.namedEntry(name)), descUtf8),
+				binding ? cp.methodRef(thisClass, cp.utf8Entry(JvmLinkage.namedTailEntry(name)), descUtf8) : null);
+	}
+
+	/** Whether a body calls one of a function's entries, each of which calls it. */
+	private static boolean calledThroughEntry(@Nullable JvmFunctionCell cell, Set<Integer> calledEntries) {
+		if (cell == null) {
+			return false;
+		}
+		MethodRefEntry tailNamed = cell.tailNamed();
+		return calledEntries.contains(cell.named().index())
+				|| tailNamed != null && calledEntries.contains(tailNamed.index());
 	}
 
 	/**
@@ -8349,6 +8467,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean[] spreadBounces;
 
 		/**
+		 * The function cells whose tail entry a body calls
+		 * ({@link JvmFunctionCell#tailEntryBody}), each entry written with the class.
+		 */
+		Set<JvmFunctionCell> celledTails;
+
+		/**
+		 * The function cells whose method hands on a replaced function's bounce, which
+		 * their named entry then checks for ({@link JvmFunctionCell#namedEntryBody}).
+		 */
+		Set<JvmFunctionCell> celledBouncers;
+
+		/**
 		 * Whether a computed {@code (symbol-function x)} / {@code (fdefinition x)} box
 		 * was emitted anywhere ({@link JvmFunctionFormCompiler}): the class then sizes
 		 * the {@code _funcrefs} table over the registry too, so a resolution the pre-pass
@@ -8487,6 +8617,21 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * continuation's (the method it was split from checks it).
 		 */
 		boolean passesBounces;
+
+		/**
+		 * Whether this method's answer reaches a check for a bounce once the program has
+		 * written a function name, so a call on the tail mark may hand on the bounce of a
+		 * replaced function: a defun whose calls by name go through an entry that checks
+		 * ({@link JvmFunctionCell#namedEntryBody}), whose function values the
+		 * dispatchers' callers check.
+		 */
+		boolean answersCellBounces;
+
+		/**
+		 * The cell of the defun this method is, which {@link #celledBouncers} records it
+		 * by, or null.
+		 */
+		@Nullable JvmFunctionCell ownCell;
 
 		/**
 		 * The slot of the value-tail depth, or -1: the last parameter of every method
@@ -8906,6 +9051,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<String> fenvForwarders = Set.of();
 
 		/**
+		 * The field a literal reference reads a name's {@code _fenv} binding from, in
+		 * constant time ({@link JvmFunctionNamespace}): the names a write by a run-time
+		 * name can reach and those of {@link #fenvForwarders}; empty in a linked class.
+		 */
+		Map<String, FieldRefEntry> namespaceCells = Map.of();
+
+		/**
 		 * Whether the program can bind a function name the compile cannot see -- a
 		 * runtime {@code eval}'s {@code defun}, {@code load}, or a write through a
 		 * computed name ({@link LispMacroExpander#writesComputedFunctionName}). When it
@@ -9271,6 +9423,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.warnedClRedefinitions = builder.warnedClRedefinitions;
 			this.usesFmakunbound = builder.usesFmakunbound;
 			this.fenvForwarders = builder.fenvForwarders;
+			this.namespaceCells = builder.namespaceCells;
 			this.bindsRuntimeFunctionNames = builder.bindsRuntimeFunctionNames;
 			this.linked = builder.linked;
 			this.linkedWrappers = builder.linkedWrappers;
@@ -9364,6 +9517,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.valueFuncIds = builder.valueFuncIds;
 			this.bouncingBodies = builder.bouncingBodies;
 			this.spreadBounces = builder.spreadBounces;
+			this.celledTails = builder.celledTails;
+			this.celledBouncers = builder.celledBouncers;
 			this.computedFunctionBox = builder.computedFunctionBox;
 			this.valueTailArities = builder.valueTailArities;
 			this.arityGuardShapes = builder.arityGuardShapes;
@@ -9751,6 +9906,16 @@ public final class JvmLispCompiler implements LispCompiler {
 			private final boolean[] spreadBounces = new boolean[1];
 
 			/**
+			 * {@link Ctx#celledTails}.
+			 */
+			private final Set<JvmFunctionCell> celledTails = new java.util.LinkedHashSet<>();
+
+			/**
+			 * {@link Ctx#celledBouncers}.
+			 */
+			private final Set<JvmFunctionCell> celledBouncers = new java.util.HashSet<>();
+
+			/**
 			 * One cell for every {@code Ctx} this builder makes: see
 			 * {@link Ctx#computedFunctionBox}.
 			 */
@@ -9851,6 +10016,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean usesFmakunbound = false;
 
 			private Set<String> fenvForwarders = Set.of();
+
+			private Map<String, FieldRefEntry> namespaceCells = Map.of();
 
 			private boolean bindsRuntimeFunctionNames = false;
 
@@ -10449,6 +10616,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder fenvForwarders(Set<String> fenvForwarders) {
 				this.fenvForwarders = fenvForwarders;
+				return this;
+			}
+
+			Builder namespaceCells(Map<String, FieldRefEntry> namespaceCells) {
+				this.namespaceCells = namespaceCells;
 				return this;
 			}
 

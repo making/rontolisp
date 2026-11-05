@@ -77,8 +77,8 @@ final class JvmLetCompiler {
 		// A binding that only holds a literal designator for the body's funcall sites is
 		// propagated into them and dropped, so the designator never becomes a VALUE here
 		// (LetBoundDesignators; the WASM twin does the same).
-		LispCons letForm = LetBoundDesignators.propagate(cons, ctx.specialVars,
-				name -> ctx.functions.containsKey(name) && !ctx.fenvForwarders.contains(name));
+		LispCons letForm = LetBoundDesignators.propagate(cons, ctx.specialVars, name -> ctx.functions.containsKey(name)
+				&& !ctx.namespaceCells.containsKey(name) && !ctx.fenvForwarders.contains(name));
 		// A let is PARALLEL, and the loop below binds one variable at a time: a let in
 		// which a later init reads an earlier variable's name, or runs code after a
 		// special binding, is staged through temporaries first (ParallelLetStaging; the

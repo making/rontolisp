@@ -389,6 +389,16 @@ public final class JvmLinkage {
 		return "_n$" + methodName(name);
 	}
 
+	/**
+	 * The method a call through a function's cell takes as the tail of a method whose
+	 * callers check for a bounce ({@link JvmFunctionCell#tailEntryBody}).
+	 * @param name the function's canonical name
+	 * @return the method's name
+	 */
+	public static String namedTailEntry(String name) {
+		return "_nt$" + methodName(name);
+	}
+
 	private static final String CELL_PREFIX = "_fc$";
 
 	private static final Set<String> SHARED_STATE = Set.of("_stdinReader", "_streams", "_streamCount", "_streamPaths",

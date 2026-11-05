@@ -346,45 +346,6 @@ final class WasmEvalRuntimeBuilder {
 	}
 
 	/**
-	 * Emits code that installs a function binding into the {@code $fenv} function
-	 * namespace: an existing binding's value cell is mutated, otherwise a new binding is
-	 * prepended. Reads the name (a string struct) from {@code nameSlot} and the value
-	 * from {@code valueSlot}; clobbers {@code tmpSlot} and {@code offScratch}.
-	 */
-	private static void emitStoreFunctionBinding(WasmWriter w, int nameSlot, int valueSlot, int tmpSlot, int offScratch,
-			boolean identityHash) {
-		// off = name.offset
-		getLocal(w, nameSlot);
-		refCast(w, WasmLispCompiler.TYPE_STRING);
-		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
-		setLocal(w, offScratch);
-		// existing = _env_lookup(off, $fenv)
-		getLocal(w, offScratch);
-		emitGetGlobalFenv(w);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
-		setLocal(w, tmpSlot);
-		getLocal(w, tmpSlot);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF, 0x40);
-		// create: $fenv = cons(cons(name, value), $fenv)
-		getLocal(w, nameSlot);
-		getLocal(w, valueSlot);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		emitGetGlobalFenv(w);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		w.write(Instruction.SET_GLOBAL);
-		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
-		w.write(Instruction.ELSE);
-		// mutate: binding.cdr = value
-		getLocal(w, tmpSlot);
-		refCast(w, WasmLispCompiler.TYPE_CONS);
-		getLocal(w, valueSlot);
-		structSet(w, WasmLispCompiler.TYPE_CONS, 1);
-		w.write(Instruction.END);
-	}
-
-	/**
 	 * Emits {@code binding = _env_lookup(off, $genv); if (binding != null) return
 	 * cdr(binding);} using {@code tmpSlot} for the binding. Used to consult the global
 	 * environment after a lexical lookup misses.
@@ -1044,7 +1005,11 @@ final class WasmEvalRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 		setLocal(w, NEWCELL);
 		// install into the function namespace (Lisp-2): $fenv, not $genv
-		emitStoreFunctionBinding(w, ACC, NEWCELL, TMP, IDX, identityHash);
+		getLocal(w, ACC);
+		getLocal(w, NEWCELL);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_SET_SYMBOL_FUNCTION);
+		w.write(Instruction.DROP);
 		getLocal(w, ACC);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);

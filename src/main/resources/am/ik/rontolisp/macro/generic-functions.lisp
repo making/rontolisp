@@ -57,6 +57,12 @@
 (defun %gf-metaobject (name)
   (cdr (assoc (%gf-key name) %gf-metaobjects% :test #'equal)))
 
+(defun %gf-installed-p (name)
+  ;; Whether the name's function is its metaobject: a definition of the generic
+  ;; leaves it there, and the metaobject's %STATIC is the compiled dispatcher.
+  (let ((gf (%gf-metaobject name)))
+    (if (and gf (fboundp name)) (eq (fdefinition name) gf) nil)))
+
 (defun %gf-declare (name class method-class lambda-list)
   ;; A defgeneric naming its generic-function class (or method class): the
   ;; metaobject made for it is an instance of that class.

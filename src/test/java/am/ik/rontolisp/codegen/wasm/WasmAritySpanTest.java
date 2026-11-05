@@ -84,8 +84,8 @@ class WasmAritySpanTest {
 		int max = WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID;
 		DeclaredArityReport report = new DeclaredArityReport("Declared got (", ")");
 		Map<String, WasmLispCompiler.WasmFunctionInfo> functions = new TreeMap<>();
-		functions.put("low", new WasmLispCompiler.WasmFunctionInfo("low", 1, false, 0, max - 1, 0, 0, report));
-		functions.put("high", new WasmLispCompiler.WasmFunctionInfo("high", 1, false, 0, max, 0, 0, report));
+		functions.put("low", new WasmLispCompiler.WasmFunctionInfo("low", 1, false, 0, max - 1, 0, 0, report, -1, -1));
+		functions.put("high", new WasmLispCompiler.WasmFunctionInfo("high", 1, false, 0, max, 0, 0, report, -1, -1));
 		SortedMap<Integer, DeclaredArityReport> declared = WasmLispCompiler.declaredArityFuncIds(functions, List.of(),
 				null, Set.of());
 		assertThat(declared).containsKey(max - 1);

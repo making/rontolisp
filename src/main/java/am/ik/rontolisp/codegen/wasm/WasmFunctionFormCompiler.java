@@ -233,18 +233,8 @@ final class WasmFunctionFormCompiler {
 	 * it would answer the forwarder itself.
 	 */
 	static void emitFenvRead(String name, WasmLispCompiler.Ctx ctx) {
-		WasmExprCompiler.compileExpr(
-				new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(new LispSymbol(name), LispNil.INSTANCE)),
-				ctx);
-		int symTemp = ctx.allocTemp();
 		int valueTemp = ctx.allocTemp();
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(symTemp);
-		emitStringOffset(ctx, symTemp);
-		ctx.writer.write(Instruction.GET_GLOBAL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		emitBinding(name, ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(valueTemp);
 		// value = binding ? binding.cdr : null -- a tombstone's cdr is null as well
@@ -278,6 +268,30 @@ final class WasmFunctionFormCompiler {
 		ctx.writer.write(Instruction.END);
 	}
 
+	/**
+	 * Pushes the name's {@code GLOBAL_FENV} binding, or null: its cell's read where it
+	 * has one ({@link WasmFunctionCells}), else the alist's walk.
+	 */
+	static void emitBinding(String name, WasmLispCompiler.Ctx ctx) {
+		Integer cell = ctx.functionCells.get(name);
+		if (cell != null) {
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(cell);
+			return;
+		}
+		WasmExprCompiler.compileExpr(
+				new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(new LispSymbol(name), LispNil.INSTANCE)),
+				ctx);
+		int symTemp = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(symTemp);
+		emitStringOffset(ctx, symTemp);
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+	}
+
 	static void compileNamed(String name, WasmLispCompiler.Ctx ctx) {
 		if (ctx.fenvForwarders.contains(name)) {
 			// A name only (setf (symbol-function 'name) ...) binds, or a nested defun
@@ -301,7 +315,42 @@ final class WasmFunctionFormCompiler {
 			// callable VALUE, so it is where the dispatch ladders learn they must
 			// carry a case for it.
 			ctx.noteFunctionValue(fi.funcId());
+			if (fi.cellGlobal() < 0) {
+				WasmQuoteCompiler.compileSharedFunctionBox(fi.funcId(), ctx);
+				return;
+			}
+			// A function with a cell names what the program wrote there once it did: a
+			// tombstone is the undefined-function, as for a name no definition has.
+			int valueTemp = ctx.allocTemp();
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(fi.cellGlobal());
+			ctx.writer.write(Instruction.REF_IS_NULL);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			ctx.wasmCtrlDepth++;
 			WasmQuoteCompiler.compileSharedFunctionBox(fi.funcId(), ctx);
+			ctx.writer.write(Instruction.ELSE);
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(fi.cellGlobal());
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(1);
+			ctx.writer.write(Instruction.TEE_LOCAL);
+			ctx.writer.writeUnsignedLeb128(valueTemp);
+			ctx.writer.write(Instruction.REF_IS_NULL);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			ctx.wasmCtrlDepth++;
+			WasmFunctionCallCompiler.emitUndefinedFunctionSignal(name, ctx);
+			ctx.writer.write(Instruction.ELSE);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(valueTemp);
+			ctx.wasmCtrlDepth--;
+			ctx.writer.write(Instruction.END);
+			ctx.wasmCtrlDepth--;
+			ctx.writer.write(Instruction.END);
 		}
 		else if (nestedDefun(name, ctx)) {
 			// A defun nested inside a top-level let or a function body compiles to

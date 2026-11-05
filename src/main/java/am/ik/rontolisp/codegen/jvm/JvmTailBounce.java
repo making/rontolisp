@@ -11,6 +11,7 @@ import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 
 import am.ik.jvm.MethodCode;
 import am.ik.jvm.ConstantPool;
@@ -504,6 +505,18 @@ final class JvmTailBounce {
 	}
 
 	/**
+	 * {@return whether the call {@code cons} may hand on the bounce of a replaced
+	 * function as this method's answer}, where this method's own entry checks for one
+	 * ({@code Ctx.answersCellBounces}).
+	 * @param cons the call form
+	 * @param ctx the method being emitted
+	 */
+	private static boolean answersCellBounce(LispCons cons, JvmLispCompiler.Ctx ctx) {
+		return ctx.answersCellBounces && ctx.tailMark == cons && ctx.unwindScopes.isEmpty()
+				&& ctx.spillScopes.isEmpty();
+	}
+
+	/**
 	 * Emits a direct call of {@code callee}, its physical arguments on the stack, and the
 	 * check it owes its result. A callee that may answer a bounce takes the depth: this
 	 * method's when the call is its tail and the bounce passes on
@@ -518,6 +531,19 @@ final class JvmTailBounce {
 	static void emitDirectCall(JvmLispCompiler.FunctionInfo callee, @Nullable LispCons cons, JvmLispCompiler.Ctx ctx,
 			String className) {
 		boolean passes = cons != null && passesThrough(cons, ctx);
+		JvmFunctionCell cell = callee.cell();
+		MethodRefEntry tailEntry = cell == null ? null : cell.tailNamed();
+		if (cell != null && tailEntry != null && (passes || cons != null && answersCellBounce(cons, ctx))) {
+			// The method's tail, of a function the program can replace: what replaced it
+			// comes back as a bounce this method hands on, so the call stays proper
+			// (JvmFunctionCell).
+			cell.noteTailCall(ctx);
+			if (callee.bounceVisible()) {
+				ctx.body.iload(depthSlot(ctx));
+			}
+			ctx.body.invokestatic(tailEntry);
+			return;
+		}
 		if (callee.bounceVisible()) {
 			if (passes) {
 				ctx.body.iload(depthSlot(ctx));
@@ -528,7 +554,6 @@ final class JvmTailBounce {
 		}
 		// A notinline function of a linked class through its named entry, which reaches
 		// a redefinition (JvmFunctionCell).
-		JvmFunctionCell cell = callee.cell();
 		ctx.body.invokestatic(cell != null ? cell.named() : callee.methodref());
 		if (callee.bounceVisible() && !passes) {
 			emitUnwrap(ctx, className);

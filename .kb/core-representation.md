@@ -191,7 +191,8 @@ family, Wasm twins, second half of ci-spec `closure-binders-share-one-cell`.
 Call sites resolve through the per-NAME map built in Pass 1, where a later `put` wins -- unlike
 the interpreter's sequential redefinition. Only a NON-top-level redefinition, and a name the
 program also writes by a literal name (`compiler/RedefinedDefuns`,
-`.kb/symbol-runtime-api.md`), is late-bound.
+`.kb/symbol-runtime-api.md`), is late-bound; a name a write by a run-time name can reach reads a
+cell first ("A write through a computed name" there), and its compiled definition is the last one.
 
 - JVM: a class may not hold two methods of one name+descriptor (`ClassFormatError: Duplicate
   method name` at LOAD time), so `JvmLispCompiler` drops non-last duplicates from the defuns
@@ -201,7 +202,9 @@ program also writes by a literal name (`compiler/RedefinedDefuns`,
   list size), never from `functions.size()` (the deduplicating name map), or `_start`'s
   top-level-chunk calls land on arbitrary lambdas. Sites: `WasmToplevelEmit.openChunk`,
   `WasmLambdaCompiler`, `WasmAsyncEmit` x2, copied by `freshCtx`. Pin:
-  `WasmLispCompilerIntegrationTest#redefinedDefunKeepsTheTopLevelChunkIndicesRight`.
+  `WasmLispCompilerIntegrationTest#redefinedDefunKeepsTheTopLevelChunkIndicesRight`. The registry
+  rows only the last body's id, as the calls bind (a name built at run time answered the FIRST
+  definition until 2026-11-05).
 
 ## Built-in function wrappers
 

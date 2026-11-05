@@ -73,13 +73,24 @@ public final class NestedDefunNamespace {
 		if (RuntimeNameProducers.anyNameResolvable(program)) {
 			return nested;
 		}
+		return spelledAsValues(program, nested);
+	}
+
+	/**
+	 * Those of {@code names} one of whose {@link DesignatorSpellings} the program holds
+	 * as a value: what a run-time name can be, short of a data evaluator.
+	 * @param program the program after {@code expandTopLevelDefinitions}
+	 * @param names the function names to ask about
+	 * @return the names a value of the program can spell
+	 */
+	static Set<String> spelledAsValues(List<LispVal> program, Set<String> names) {
 		Set<String> spelled = new HashSet<>(RuntimeNameProducers.packageWalkSpellings(program));
 		for (LispVal form : program) {
 			collectSpellings(form, spelled);
 		}
 		boolean symbolBuilders = RuntimeNameProducers.anySymbolBuilder(program);
 		Set<String> held = new LinkedHashSet<>();
-		for (String name : nested) {
+		for (String name : names) {
 			if (DesignatorSpellings.anySpelled(name, spelled, symbolBuilders, true)) {
 				held.add(name);
 			}

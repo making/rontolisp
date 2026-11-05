@@ -109,6 +109,25 @@ final class WasmFunctionCallCompiler {
 			return;
 		}
 		WasmLispCompiler.WasmFunctionInfo fi = ctx.functions.get(name);
+		if (fi != null && ctx.fenvForwarders.contains(name) && cons.toList().size() - 1 <= ctx.callArityCeiling) {
+			// A name only the function namespace holds: the call applies what its cell
+			// holds when it runs, a miss the undefined-function ahead of the arguments.
+			// No
+			// rest list, which the forwarder defun of the name makes -- and which takes
+			// a count past the dispatchers' ceiling.
+			ctx.tailPosition = tail;
+			WasmExprCompiler.compileExpr(LispMacroExpander.runtimeFunctionNamespaceCall(name, cons), ctx);
+			return;
+		}
+		if (fi != null && fi.entryIndex() >= 0 && !(fi.variadic() ? cons.toList().size() - 1 >= fi.required()
+				: cons.toList().size() - 1 == fi.required())) {
+			// A count this definition rules out, which a replacement may take: the call
+			// applies what the name holds when it runs, whose own count check reports a
+			// miss (WasmFunctionCells).
+			ctx.tailPosition = tail;
+			WasmExprCompiler.compileExpr(LispMacroExpander.expandCallThroughFunctionValue(cons), ctx);
+			return;
+		}
 		if (fi != null) {
 			WasmEmitHelper.requireNoCharvecHelper(ctx, name);
 			List<LispVal> args = cons.toList();
@@ -137,7 +156,7 @@ final class WasmFunctionCallCompiler {
 			// Every compiled Lisp function answers one (ref null eq), so a tail call
 			// to any of them is a return_call from any of them.
 			ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, name));
-			ctx.writer.writeUnsignedLeb128(fi.funcIndex());
+			ctx.writer.writeUnsignedLeb128(fi.callIndex());
 		}
 		else if (WasmFunctionFormCompiler.nestedDefun(name, ctx)) {
 			// A defun nested inside a top-level let or a function body compiles to

@@ -30833,6 +30833,9 @@ public final class LispMacroExpander {
 					dispatcherSlots.put(out.size(), generic);
 					out.add(LispNil.INSTANCE);
 				}
+				else if (closRegistry.marksGenericDefinitions()) {
+					out.add(genericDefinedAgain(generic));
+				}
 				if (gfProtocol) {
 					out.addAll(genericProtocolForms(closRegistry.findGeneric(generic),
 							((LispCons) form).toList().get(1), closRegistry));
@@ -31977,6 +31980,9 @@ public final class LispMacroExpander {
 			dispatcherSlots.put(out.size(), generic);
 			out.add(LispNil.INSTANCE);
 		}
+		else if (closRegistry.marksGenericDefinitions()) {
+			out.add(genericDefinedAgain(generic));
+		}
 		// A method expansion may REGISTER a further generic as a side effect (the
 		// instance-initialization protocol's shared-initialize), which needs a dispatcher
 		// slot of its own. Reserving it here is safe whatever the definition order: the
@@ -31988,6 +31994,28 @@ public final class LispMacroExpander {
 				out.add(LispNil.INSTANCE);
 			}
 		}
+	}
+
+	/**
+	 * {@code (%generic-defined-again "name")}: what a compile path leaves where a generic
+	 * function that has its dispatcher is defined once more
+	 * ({@link ClosRegistry#marksGenericDefinitions}), for
+	 * {@code compiler.RedefinedDefuns} to turn into what binds the name there. The name
+	 * is a string, so that no pass between the two reads it as a mention of the name.
+	 */
+	private static LispVal genericDefinedAgain(String generic) {
+		return listToCons(List.of(new LispSymbol(LispNames.GENERIC_DEFINED_AGAIN_INTERNAL), new LispString(generic)));
+	}
+
+	/**
+	 * The generic function {@link #genericDefinedAgain} marks a definition of.
+	 * @param form a top-level form
+	 * @return the name, or null when the form is no such mark
+	 */
+	public static @Nullable String genericDefinedAgainName(LispVal form) {
+		return isNamedForm(form, LispNames.GENERIC_DEFINED_AGAIN_INTERNAL)
+				&& ((LispCons) form).cdr() instanceof LispCons arg && arg.car() instanceof LispString name
+						? name.value() : null;
 	}
 
 	/**
@@ -32273,10 +32301,11 @@ public final class LispMacroExpander {
 
 	/**
 	 * Whether the program writes the function namespace through a
-	 * {@code (setf (symbol-function ...))} / {@code (setf (fdefinition ...))} place
-	 * (anywhere in the tree, quoted data skipped). Forces the eval runtime's function
-	 * namespace ({@code _fenv}) onto the compile paths, and gates the setf-only-alias
-	 * forwarder injection in {@link #expandTopLevelDefinitions}.
+	 * {@code (setf (symbol-function ...))} / {@code (setf (fdefinition ...))} place, or
+	 * such a place of {@code psetf}, {@code rotatef} or {@code shiftf} (anywhere in the
+	 * tree, quoted data skipped). Forces the eval runtime's function namespace
+	 * ({@code _fenv}) onto the compile paths, and gates the setf-only-alias forwarder
+	 * injection in {@link #expandTopLevelDefinitions}.
 	 * @param program the top-level forms
 	 * @return true when such a place is written
 	 */
@@ -32339,12 +32368,9 @@ public final class LispMacroExpander {
 				if (LispNames.isQuote(member)) {
 					return false;
 				}
-				if (LispNames.SETF.equals(member) && cons.isProperList()) {
-					List<LispVal> parts = cons.toList();
-					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (isSymbolFunctionPlace(parts.get(i))) {
-							return true;
-						}
+				for (LispVal place : writtenPlaces(member, cons)) {
+					if (isSymbolFunctionPlace(place)) {
+						return true;
 					}
 				}
 			}
@@ -32357,13 +32383,38 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The places a form of a place-assigning macro assigns, each of which lowers to a
+	 * {@code setf} of it: {@code setf} and {@code psetf} every other argument,
+	 * {@code rotatef} and {@code shiftf} all of them.
+	 * @param member the operator's package-stripped name
+	 * @param form the form
+	 * @return the places, empty for any other form
+	 */
+	private static List<LispVal> writtenPlaces(String member, LispCons form) {
+		boolean pairs = LispNames.SETF.equals(member) || LispNames.PSETF.equals(member);
+		if (!pairs && !LispNames.ROTATEF.equals(member) && !LispNames.SHIFTF.equals(member) || !form.isProperList()) {
+			return List.of();
+		}
+		List<LispVal> parts = form.toList();
+		if (!pairs) {
+			return parts.subList(1, parts.size());
+		}
+		List<LispVal> places = new java.util.ArrayList<>();
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			places.add(parts.get(i));
+		}
+		return places;
+	}
+
+	/**
 	 * Whether the program can bind a function name the compile cannot read: a
-	 * {@code (setf (symbol-function x) ...)} / {@code (setf (fdefinition x) ...)} place
-	 * whose name is neither a quoted symbol nor a quoted {@code (setf name)} list (both
-	 * of those get the setf-only forwarder of {@link #expandTopLevelDefinitions}). With
-	 * {@code eval} and {@code load}, it is what makes a call of a name no definition has
-	 * read the run-time function namespace instead of compiling to the undefined-function
-	 * signal alone.
+	 * {@code (setf (symbol-function x) ...)} / {@code (setf (fdefinition x) ...)} place,
+	 * or such a place of {@code psetf}, {@code rotatef} or {@code shiftf}, whose name is
+	 * neither a quoted symbol nor a quoted {@code (setf name)} list (both of those get
+	 * the setf-only forwarder of {@link #expandTopLevelDefinitions}). With {@code eval}
+	 * and {@code load}, it is what makes a call of a name no definition has read the
+	 * run-time function namespace instead of compiling to the undefined-function signal
+	 * alone.
 	 * @param program the top-level forms
 	 * @return true when such a place is written
 	 */
@@ -32378,14 +32429,10 @@ public final class LispMacroExpander {
 				if (LispNames.isQuote(member)) {
 					return false;
 				}
-				if (LispNames.SETF.equals(member) && cons.isProperList()) {
-					List<LispVal> parts = cons.toList();
-					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (isSymbolFunctionPlace(parts.get(i)) && parts.get(i) instanceof LispCons place
-								&& !(place.cdr() instanceof LispCons nameCell
-										&& isQuotedFunctionName(nameCell.car()))) {
-							return true;
-						}
+				for (LispVal written : writtenPlaces(member, cons)) {
+					if (isSymbolFunctionPlace(written) && written instanceof LispCons place
+							&& !(place.cdr() instanceof LispCons nameCell && isQuotedFunctionName(nameCell.car()))) {
+						return true;
 					}
 				}
 			}
@@ -32547,14 +32594,11 @@ public final class LispMacroExpander {
 				if (LispNames.isQuote(member)) {
 					return;
 				}
-				if (LispNames.SETF.equals(member) && cons.isProperList()) {
-					List<LispVal> parts = cons.toList();
-					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (isSymbolFunctionPlace(parts.get(i)) && parts.get(i) instanceof LispCons place
-								&& place.isProperList() && place.toList().size() > 1
-								&& quotedSymbol(place.toList().get(1)) instanceof LispSymbol nameSym) {
-							names.add(nameSym.name());
-						}
+				for (LispVal written : writtenPlaces(member, cons)) {
+					if (isSymbolFunctionPlace(written) && written instanceof LispCons place && place.isProperList()
+							&& place.toList().size() > 1
+							&& quotedSymbol(place.toList().get(1)) instanceof LispSymbol nameSym) {
+						names.add(nameSym.name());
 					}
 				}
 				// Without a definition, compile installs nothing.

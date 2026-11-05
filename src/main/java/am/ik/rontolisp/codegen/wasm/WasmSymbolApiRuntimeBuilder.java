@@ -303,6 +303,30 @@ final class WasmSymbolApiRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	/**
+	 * With a new binding on the stack: it joins {@code $fenv} and, in a module with
+	 * cells, its name's cell.
+	 */
+	private static void emitPrependBinding(WasmWriter w, boolean identityHash, int bindLocal, int offLocal,
+			int publishFuncIndex) {
+		if (publishFuncIndex >= 0) {
+			w.write(Instruction.TEE_LOCAL);
+			w.writeUnsignedLeb128(bindLocal);
+		}
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+		if (publishFuncIndex >= 0) {
+			get(w, offLocal);
+			get(w, bindLocal);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(publishFuncIndex);
+			w.write(Instruction.DROP);
+		}
+	}
+
 	/** {@code _fboundp(sym) -> (ref null eq)}: GLOBAL_FENV, then the defun registry. */
 	static byte[] buildFboundp(int tOffset) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
@@ -383,9 +407,10 @@ final class WasmSymbolApiRuntimeBuilder {
 	 * for the name in the runtime function namespace {@code GLOBAL_FENV}, which is probed
 	 * before the compiled-function registry -- so every LATE-bound reference sees the
 	 * name undefined again, while a call site the compiler already bound directly keeps
-	 * working (eager compilation cannot be undone). Returns the symbol, like CL.
+	 * working (eager compilation cannot be undone). Returns the symbol, like CL. A new
+	 * binding goes to the name's cell ({@link WasmFunctionCells}).
 	 */
-	static byte[] buildFmakunbound(boolean identityHash) {
+	static byte[] buildFmakunbound(boolean identityHash, int publishFuncIndex) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int SYM = 0, OFF = 1, BIND = 2;
@@ -431,11 +456,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		get(w, SYM);
 		emitNull(w);
 		WasmEmitHelper.emitNewCons(w, identityHash);
-		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		w.write(Instruction.SET_GLOBAL);
-		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+		emitPrependBinding(w, identityHash, BIND, OFF, publishFuncIndex);
 		w.write(Instruction.ELSE);
 		// bind.cdr = nil
 		get(w, BIND);
@@ -458,9 +479,10 @@ final class WasmSymbolApiRuntimeBuilder {
 	 * LATE-bound reference (and the setf-only-alias forwarder's {@code %fenv-function}
 	 * read) resolves to it. Returns the value, the {@code setf} result. A nil or
 	 * non-string name is lenient (the value is handed back untouched), like
-	 * {@code _fmakunbound}'s non-name tolerance.
+	 * {@code _fmakunbound}'s non-name tolerance. A new binding goes to the name's cell
+	 * ({@link WasmFunctionCells}).
 	 */
-	static byte[] buildSetSymbolFunction(boolean identityHash) {
+	static byte[] buildSetSymbolFunction(boolean identityHash, int publishFuncIndex) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int SYM = 0, VALUE = 1, OFF = 2, BIND = 3;
@@ -506,11 +528,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		get(w, SYM);
 		get(w, VALUE);
 		WasmEmitHelper.emitNewCons(w, identityHash);
-		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		w.write(Instruction.SET_GLOBAL);
-		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
+		emitPrependBinding(w, identityHash, BIND, OFF, publishFuncIndex);
 		w.write(Instruction.ELSE);
 		// bind.cdr = value
 		get(w, BIND);

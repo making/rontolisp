@@ -129,7 +129,7 @@ public final class NestedDefunRedefinition {
 				continue;
 			}
 			if (inNamespace) {
-				renameAndInstall((LispCons) expr, name, 1, rewritten);
+				renameAndInstall((LispCons) expr, name, 1, rewritten, false);
 				continue;
 			}
 			LispCons defun = (LispCons) expr;
@@ -148,11 +148,51 @@ public final class NestedDefunRedefinition {
 	 * @param ordinal which top-level definition of the name it is, from 1: each has a
 	 * name of its own, since each installs its own function when it runs
 	 * @param out the program being built
+	 * @param metaobject whether the name can hold a generic function metaobject, which
+	 * the installation then leaves there ({@link #unlessMetaobject})
 	 */
-	static void renameAndInstall(LispCons defun, String name, int ordinal, List<LispVal> out) {
-		String internal = INTERNAL_PREFIX + (ordinal > 1 ? ordinal + "$$" : "") + name;
-		out.add(renamed(defun, internal));
-		out.add(SourceProvenance.inherit(defun, installFunctionValue(name, internal)));
+	static void renameAndInstall(LispCons defun, String name, int ordinal, List<LispVal> out, boolean metaobject) {
+		out.add(renamed(defun, internalName(name, ordinal)));
+		out.add(install(defun, name, ordinal, metaobject));
+	}
+
+	/**
+	 * The form that installs a top-level definition {@link #renameAndInstall} renamed as
+	 * {@code name}'s function in the run-time function namespace.
+	 * @param at the form it stands for
+	 * @param name the function's name
+	 * @param ordinal which top-level definition of the name it installs, from 1
+	 * @param metaobject whether the name can hold a generic function metaobject
+	 * @return the form
+	 */
+	static LispVal install(LispCons at, String name, int ordinal, boolean metaobject) {
+		return SourceProvenance.inherit(at,
+				unlessMetaobject(name, installFunctionValue(name, internalName(name, ordinal)), metaobject));
+	}
+
+	/**
+	 * {@code form}, or -- for a name that can hold a generic function metaobject -- the
+	 * form unless it does: a metaobject stays the name's function across a definition of
+	 * its generic, and its dispatcher stays what it calls, as on the interpreter.
+	 * @param name the function's name
+	 * @param form what binds the name
+	 * @param metaobject whether the name can hold a metaobject
+	 * @return the form to run
+	 */
+	static LispVal unlessMetaobject(String name, LispVal form, boolean metaobject) {
+		if (!metaobject) {
+			return form;
+		}
+		LispVal quotedName = new LispCons(new LispSymbol(LispNames.QUOTE),
+				new LispCons(new LispSymbol(name), LispNil.INSTANCE));
+		LispVal installed = new LispCons(new LispSymbol(LispNames.GF_INSTALLED_P_INTERNAL),
+				new LispCons(quotedName, LispNil.INSTANCE));
+		return new LispCons(new LispSymbol(LispNames.IF),
+				new LispCons(installed, new LispCons(LispNil.INSTANCE, new LispCons(form, LispNil.INSTANCE))));
+	}
+
+	private static String internalName(String name, int ordinal) {
+		return INTERNAL_PREFIX + (ordinal > 1 ? ordinal + "$$" : "") + name;
 	}
 
 	private static LispVal renamed(LispCons defun, String internal) {

@@ -171,7 +171,7 @@ final class JvmFunctionFormCompiler {
 			MethodCode.Label redefined = null;
 			if (cell != null) {
 				redefined = ctx.body.newLabel();
-				cell.emitRead(ctx, redefined);
+				cell.emitRead(ctx, className, redefined);
 			}
 			// The canonical box for this funcId (_funcref), shared by every site that
 			// names it: two (function name) sites answer the SAME object, like the

@@ -63,7 +63,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## Data types
 
-- [symbol-runtime-api.md](symbol-runtime-api.md) -- symbol/package runtime API, accessibility second value, the string-designator contract, the empty name (no symbol is the empty string)
+- [symbol-runtime-api.md](symbol-runtime-api.md) -- symbol/package runtime API, accessibility second value, the string-designator contract, the empty name (no symbol is the empty string), `fmakunbound`, a function replaced by a literal name (its definition moved to the namespace) and by a computed one, `eval` or `load` (a constant-time cell per name, a compiled definition behind it)
 - [packages.md](packages.md) -- the `cl`/`cl-user`/`rontolisp` package system, a standard name in a package not reading it as `cl`'s (its own symbol; the report that keeps the advice), `defpackage` over an existing package, package-local nicknames (read through the current package's table, the spelling a second read needs, the run-time table a compiled program builds), `*package*` as dynamic
 - [defstruct.md](defstruct.md) -- `defstruct` as plain defuns, setf accessor registry, `:include`, `:type (vector ...)`
 - [instance-syntax.md](instance-syntax.md) -- the one instance value model behind defstruct/CLOS/conditions, `%obj-*`, `#S(...)`/`#<...>`
