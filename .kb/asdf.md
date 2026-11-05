@@ -663,6 +663,12 @@ recorded body. A designator op (`'asdf:load-op`) dispatches through a `symbol` m
   (a macro call in a loaded file), `UserMacroExpanderTest#macroExpandingToDefmacroIsConsumedToo`
   (fiveam's `(flet () (defmacro ...) 'name)`, `.kb/defmacro-backquote.md`).
 
+## The exported surface, measured 2026-11-05
+Against SBCL 2.2.9's ASDF 3.3.1 externals, by `find-symbol` on the interpreter: `asdf` has 230 of
+230, `uiop` 418 of 427 (a member may be a stub). Reading an absent `asdf:NAME` stops the file even
+where the line never runs. In a scan of 232 Quicklisp releases (2026-11-04), 34 define a `perform`
+method in an `.asd` and 16 distinct `.asd` files name a `:test-file`.
+
 ## The substitution ladder (five tiers, widest first)
 1. **Whole shim system** (`eval/ShimLibraries` + `BuiltinSystems`).
 2. **Replacement `.asd`** (`eval/AsdOverrides`) — system metadata only, real sources.
