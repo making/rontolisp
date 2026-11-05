@@ -13085,6 +13085,8 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("""
 				(format *error-output* "diag~%")
 				(princ "on-stdout")""")).isEqualTo("on-stdout");
+		assertThat(compileAndRunStderr(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_EXPECTED);
 	}
 
 	@Test
@@ -16335,6 +16337,9 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(
 				compileAndRunFrontEnd(RontolispNativeValueFixture.SOCKET_PROGRAM, true, "tcp=y", "inherit-network=y"))
 			.isEqualTo(RontolispNativeValueFixture.SOCKET_EXPECTED);
+		assertThat(compileAndRunFrontEnd(am.ik.rontolisp.LineStartFixture.SOCKET_PROGRAM, true, "tcp=y",
+				"inherit-network=y"))
+			.isEqualTo(am.ik.rontolisp.LineStartFixture.SOCKET_EXPECTED);
 		assertThat(compileAndRunFrontEnd(RontolispNativeValueFixture.ASYNC_PROGRAM, true, "http=y"))
 			.isEqualTo(RontolispNativeValueFixture.ASYNC_EXPECTED);
 	}

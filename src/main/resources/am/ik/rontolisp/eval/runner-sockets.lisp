@@ -99,7 +99,7 @@
                        :params '()
                        :returns :string)
 
-;;; --- the socket table: fd -> (host kind buf cursor limit eof) ---
+;;; --- the socket table: fd -> (host kind buf cursor limit eof mid-line) ---
 ;;; host = the runner's number; kind 1 = connected, 2 = listener; buf = the
 ;;; chunk buffer (a connected socket's), cursor/limit the unread bytes in it.
 
@@ -124,6 +124,11 @@
 (defun rontolisp::%sock-e-cursor (e) (car (cdr (cdr (cdr e)))))
 (defun rontolisp::%sock-e-limit (e) (car (cdr (cdr (cdr (cdr e))))))
 (defun rontolisp::%sock-e-eof (e) (car (cdr (cdr (cdr (cdr (cdr e)))))))
+(defun rontolisp::%sock-e-mid-line (e)
+  (car (cdr (cdr (cdr (cdr (cdr (cdr e))))))))
+
+(defun rontolisp::%sock-set-mid-line (e mid-line)
+  (rplaca (cdr (cdr (cdr (cdr (cdr (cdr e)))))) mid-line))
 
 (defun rontolisp::%sock-set-buf (e cursor limit)
   (rplaca (cdr (cdr (cdr e))) cursor)
@@ -141,7 +146,7 @@
           (list host kind
                 (if (= kind 1)
                     (make-array 8192 :element-type '(unsigned-byte 8))
-                    nil) 0 0 nil))
+                    nil) 0 0 nil nil))
     (%obj-new '%STREAM fd (if (= kind 2) :socket-server :socket))))
 
 ;;; --- failures: one signalling site, the interpreter's texts ---
@@ -377,6 +382,14 @@
     (rontolisp::%sock-write-octets e s op))
   s)
 
+;; What characters leave of the line (.kb/standard-output-redirect.md, "A stream's
+;; line start"). An octet moves nothing, so %io-write-byte has no call of it.
+(defun rontolisp::%sock-track-line (e s)
+  (let ((n (rontolisp::%str-byte-length s)))
+    (if (> n 0)
+        (rontolisp::%sock-set-mid-line e
+         (not (= (rontolisp::%str-byte-ref s (- n 1)) 10))))))
+
 (defun rontolisp::%sock-seq-octets (seq start end)
   ;; One write payload from seq[start,end): a STRING sequence goes out as its
   ;; own characters, any other vector one raw wire byte per element.
@@ -480,10 +493,10 @@
   (let ((a (if start start 0)))
     (let ((e (rontolisp::%sock-entry s)))
       (if e
-          (progn
-            (rontolisp::%sock-write-octets e
-             (rontolisp::%sock-seq-octets seq a (if end end (length seq)))
-             "write-sequence")
+          (let ((octets
+                 (rontolisp::%sock-seq-octets seq a (if end end (length seq)))))
+            (rontolisp::%sock-write-octets e octets "write-sequence")
+            (if (stringp seq) (rontolisp::%sock-track-line e octets))
             seq)
           (rontolisp::%write-sequence-raw seq s :start a :end end)))))
 
@@ -496,14 +509,30 @@
           ;; conversion would trap on or re-encode
           (rontolisp::%sock-write-string e
            (%string-concat s (%princ-piece #\Newline)) "write-line")
+          (rontolisp::%sock-set-mid-line e nil)
           s)
         (rontolisp::%write-line-raw s stream))))
 
 (defun rontolisp::%io-write-string (s &optional stream)
   (let ((e (rontolisp::%sock-entry stream)))
     (if e
-        (rontolisp::%sock-write-string e s "write-string")
+        (progn
+          (rontolisp::%sock-write-string e s "write-string")
+          (rontolisp::%sock-track-line e s)
+          s)
         (rontolisp::%write-string-raw s stream))))
+
+(defun rontolisp::%io-fresh-line (&optional stream)
+  (let ((e (rontolisp::%sock-entry stream)))
+    (if e
+        (if (rontolisp::%sock-e-mid-line e)
+            (progn
+              (rontolisp::%sock-write-string e (%princ-piece #\Newline)
+                                             "write-string")
+              (rontolisp::%sock-set-mid-line e nil)
+              t)
+            nil)
+        (rontolisp::%fresh-line-raw stream))))
 
 (defun rontolisp::%io-write-byte (b stream)
   ;; %str-from-byte, never code-char: a code point >= 128 is a TWO-byte UTF-8

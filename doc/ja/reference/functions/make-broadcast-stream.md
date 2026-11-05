@@ -30,6 +30,6 @@
 [`terpri`](terpri.md)、[`fresh-line`](fresh-line.md)、[`write-line`](write-line.md)、
 [`force-output`](force-output.md)、[`finish-output`](finish-output.md)、
 [`clear-output`](clear-output.md)、[`close`](close.md) です。
-ブロードキャストストリームは桁位置を追跡しないため行頭かどうかを判断できず、
-`fresh-line` は最後のコンポーネントの答えを返し、コンポーネントがない場合は
-nil を返します。
+`fresh-line` は最初のコンポーネントに問い合わせます。それが桁 0 を過ぎていれば
+すべてのコンポーネントに改行を書いて `t` を返し、そうでないときとコンポーネントが
+ないときは何も書かずに nil を返します。

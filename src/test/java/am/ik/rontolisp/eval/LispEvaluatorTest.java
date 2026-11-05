@@ -996,6 +996,17 @@ class LispEvaluatorTest {
 				  (%string-stream-contents str))"""));
 		assertThat(result).isEqualTo(new LispString("WARNING: captured\ndiag\n"));
 		assertThat(baos.toString()).isEqualTo("out");
+		// It keeps its line start, so a ~& opens no blank line.
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(err));
+		try {
+			evaluator.eval(LispReader.readFromString(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_PROGRAM));
+		}
+		finally {
+			System.setErr(oldErr);
+		}
+		assertThat(err.toString()).contains(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_EXPECTED);
 	}
 
 	@Test
@@ -20692,6 +20703,10 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.THREAD_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.LineStartFixture.SOCKET_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.LineStartFixture.SOCKET_EXPECTED);
+		assertThat(printedLines(am.ik.rontolisp.LineStartFixture.SOCKET_FORMAT_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.LineStartFixture.SOCKET_FORMAT_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_PROGRAM))
 			.isEqualTo(am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_EXPECTED);
 		assertThat(printedLines(am.ik.rontolisp.RontolispNativeValueFixture.TLS_PROGRAM))

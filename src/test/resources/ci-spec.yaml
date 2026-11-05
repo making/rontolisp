@@ -18306,8 +18306,7 @@ cases:
         (clear-output gow-s)
         (print (slot-value gow-s 'gow-acc)))
       ; A broadcast stream is prelude Lisp over the same protocol, so it gained
-      ; the line operators for free. It tracks no column, so fresh-line on one
-      ; always breaks the line.
+      ; the line operators for free, and fresh-line on one asks its component.
       (print (with-output-to-string (gow-o)
                (let ((gow-b (make-broadcast-stream gow-o)))
                  (princ "a" gow-b)
@@ -20260,14 +20259,14 @@ cases:
       ;; princ after a write-byte may not overtake it on any backend.
       (princ "|")
       (write-byte 10 t)
-      ;; A raw octet moves the standard-output COLUMN exactly like a character
-      ;; does, so fresh-line after a written newline adds nothing -- the one
-      ;; place the byte path has to agree with the character path's bookkeeping.
+      ;; A raw octet moves no column, as on every stream of SBCL 2.2.9: the line the
+      ;; princ left open is open, so fresh-line writes past the octet's newline.
       (fresh-line)
       ;; The value is the byte, as CL says (so "A" from the write, then 65).
       (print (write-byte 65 t))
     expected: |
       >>binary<|
+
       A65
 
   - name: first-class-print-family-stream-argument
@@ -27891,14 +27890,19 @@ cases:
       (let ((log nil))
         (format (progn (push :d log) nil) (if (progn (push :c log) t) "a" "b"))
         (print (reverse log)))
-      ;; A file stream has no column to ask: a line it was at the start of stays one line.
+      ;; A file stream answers too: a line it was at the start of stays one line.
       (with-open-file (o "ffl-file.txt" :direction :output :if-exists :supersede)
         (write-line "ab" o)
         (format o "~&cd~%")
         (let ((c "~&ef~%")) (format o c))
-        (funcall #'format o "~&gh~%"))
+        (funcall #'format o "~&gh~%")
+        (write-string "ij" o)
+        (format o "~&kl")
+        (let ((c "~&mn")) (format o c))
+        (funcall #'format o "~&op"))
       (with-open-file (i "ffl-file.txt")
-        (print (list (read-line i) (read-line i) (read-line i) (read-line i))))
+        (print (list (read-line i) (read-line i) (read-line i) (read-line i) (read-line i) (read-line i)
+                     (read-line i) (read-line i))))
       (delete-file "ffl-file.txt")
       ;; Standard output, under a variable, a computed control and the function value.
       (terpri)
@@ -27943,7 +27947,7 @@ cases:
       cd"
       ("cd" "cd" "cd")
       (:D :C)
-      ("ab" "cd" "ef" "gh")
+      ("ab" "cd" "ef" "gh" "ij" "kl" "mn" "op")
 
       a
       bc
@@ -27951,6 +27955,155 @@ cases:
       fg
       hi
       j
+  - name: fresh-line-asks-the-stream-it-is-given
+    source: |
+      ;; SBCL 2.2.9, row by row. A stream starts at column 0 whatever it is opened on,
+      ;; a write of characters moves its line, and an octet, a read and file-position
+      ;; do not; fresh-line answers whether it wrote.
+      (defun fla-lines ()
+        (with-open-file (i "fla-file.txt")
+          (let ((lines nil) (line nil))
+            (loop
+              (setq line (read-line i nil nil))
+              (if line (push line lines) (return (reverse lines)))))))
+      (defun fla-new (f)
+        (let ((v (with-open-file (s "fla-file.txt" :direction :output :if-exists :supersede)
+                   (funcall f s))))
+          (list v (fla-lines))))
+      (print (fla-new (lambda (s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (list (fresh-line s) (fresh-line s)))))
+      (print (fla-new (lambda (s) (write-char #\x s) (list (fresh-line s) (write-char #\Newline s) (fresh-line s)))))
+      (print (fla-new (lambda (s) (write-line "x" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (terpri s) (fresh-line s))))
+      (print (fla-new (lambda (s) (print 1 s) (fresh-line s))))
+      (print (fla-new (lambda (s) (princ 1 s) (fresh-line s))))
+      (print (fla-new (lambda (s) (prin1 "a" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (write-string "" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-line "x" s) (write-string "" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string (format nil "ab~%c") s :end 3) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string (format nil "ab~%c") s :start 3) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-sequence "x" s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-sequence (format nil "x~%") s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (force-output s) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-string "x" s) (list (funcall #'fresh-line s) (funcall #'fresh-line s)))))
+      ;; A descriptor handed out again starts at column 0, and two streams keep two lines.
+      (print (fla-new (lambda (s) (fresh-line s))))
+      (with-open-file (a "fla-file.txt" :direction :output :if-exists :supersede)
+        (with-open-file (b "fla-other.txt" :direction :output :if-exists :supersede)
+          (write-string "a" a)
+          (print (list (fresh-line b) (fresh-line a) (fresh-line a)))))
+      ;; Opened on a line left open, a stream is still at column 0.
+      (with-open-file (s "fla-file.txt" :direction :output :if-exists :supersede) (write-string "abcdef" s))
+      (with-open-file (s "fla-file.txt" :direction :output :if-exists :append) (print (fresh-line s)))
+      (print (fla-lines))
+      (with-open-file (s "fla-file.txt" :direction :output :if-exists :overwrite)
+        (print (list (fresh-line s) (write-string "x" s) (fresh-line s))))
+      (print (fla-lines))
+      ;; A read moves nothing, nor does file-position.
+      (with-open-file (s "fla-file.txt" :direction :output :if-exists :supersede) (write-string "abc" s))
+      (with-open-file (s "fla-file.txt" :direction :io :if-exists :overwrite)
+        (print (list (read-char s) (fresh-line s) (file-position s) (write-string "x" s) (fresh-line s)))
+        (file-position s 0)
+        (print (list (read-char s) (fresh-line s))))
+      (print (fla-lines))
+      (print (fla-new (lambda (s) (write-string "abc" s) (file-position s 0) (fresh-line s))))
+      (print (fla-new (lambda (s) (write-line "abc" s) (file-position s 1) (fresh-line s))))
+      ;; An octet moves nothing either: a binary stream stays at column 0.
+      (with-open-file (b "fla-file.txt" :direction :output :if-exists :supersede :element-type '(unsigned-byte 8))
+        (write-byte 65 b)
+        (write-sequence (make-array 2 :element-type '(unsigned-byte 8) :initial-contents '(66 67)) b)
+        (print (fresh-line b)))
+      (print (fla-lines))
+      ;; A string stream's contents answer, the ones get-output-stream-string leaves too.
+      (let ((s (make-string-output-stream)))
+        (print (list (fresh-line s) (write-string "x" s) (fresh-line s) (fresh-line s) (write-string "y" s)
+                     (get-output-stream-string s) (fresh-line s) (get-output-stream-string s))))
+      ;; A composite stream asks its output, a broadcast stream its first component.
+      (print (fla-new (lambda (s)
+                        (let ((y (make-two-way-stream (make-string-input-stream "") s)))
+                          (list (fresh-line y) (write-string "x" y) (fresh-line y) (write-string "y" s) (fresh-line y))))))
+      (print (fla-new (lambda (s)
+                        (let ((y (make-echo-stream (make-string-input-stream "z") s)))
+                          (list (fresh-line y) (write-string "x" y) (fresh-line y) (read-char y) (fresh-line y))))))
+      (defvar *fla-syn* nil)
+      (print (fla-new (lambda (s)
+                        (setq *fla-syn* s)
+                        (let ((y (make-synonym-stream '*fla-syn*)))
+                          (list (fresh-line y) (write-string "x" s) (fresh-line y))))))
+      (print (fla-new (lambda (a)
+                        (let* ((b (make-string-output-stream)) (y (make-broadcast-stream a b)))
+                          (write-string "x" a)
+                          (list (fresh-line y) (fresh-line y) (get-output-stream-string b))))))
+      (print (fla-new (lambda (a)
+                        (let* ((b (make-string-output-stream)) (y (make-broadcast-stream b a)))
+                          (write-string "x" a)
+                          (list (fresh-line y) (get-output-stream-string b))))))
+      (print (fla-new (lambda (a)
+                        (let* ((b (make-string-output-stream)) (y (make-broadcast-stream b a)))
+                          (write-string "x" b)
+                          (list (fresh-line y) (get-output-stream-string b))))))
+      (print (fresh-line (make-broadcast-stream)))
+      ;; Standard output under the binding the corpus holds, and what the file bound to it says.
+      (fresh-line)
+      (princ "a")
+      (write-line "b")
+      (fresh-line)
+      (write-string "c")
+      (write-line "")
+      (fresh-line)
+      (print (list (fresh-line) (progn (princ "d") (fresh-line)) (fresh-line)))
+      (print (fla-new (lambda (s)
+                        (let ((*standard-output* s))
+                          (list (fresh-line) (write-string "x") (fresh-line) (write-line "y") (fresh-line)
+                                (format t "~&z") (format t "~&w~%") (fresh-line))))))
+      (delete-file "fla-file.txt")
+      (delete-file "fla-other.txt")
+    expected: |
+      (NIL NIL)
+      ((T NIL) ("x"))
+      ((T #\Newline NIL) ("x" ""))
+      (NIL ("x"))
+      (NIL ("x"))
+      (NIL ("1"))
+      (T ("1"))
+      (T ("\"a\""))
+      (T ("x"))
+      (NIL ("x"))
+      (NIL ("ab"))
+      (T ("c"))
+      (T ("x"))
+      (NIL ("x"))
+      (T ("x"))
+      ((T NIL) ("x"))
+      (NIL NIL)
+      (NIL T NIL)
+      NIL
+      ("abcdef")
+      (NIL "x" T)
+      ("x" "cdef")
+      (#\a NIL 1 "x" T)
+      (#\a NIL)
+      ("ax")
+      (T ("" "bc"))
+      (NIL ("abc"))
+      NIL
+      ("ABC")
+      (NIL "x" T NIL "y" "x
+      y" NIL "")
+      ((NIL "x" T "y" T) ("x" "y"))
+      ((NIL "x" T #\z T) ("x" "z"))
+      ((NIL "x" T) ("x"))
+      ((T NIL "
+      ") ("x"))
+      ((NIL "") ("x"))
+      ((T "x
+      ") (""))
+      NIL
+      ab
+      c
+      d
+      (NIL T NIL)
+      ((NIL "x" T "y" NIL NIL NIL NIL) ("x" "y" "z" "w"))
   - name: format-to-a-string-with-a-fill-pointer-beside-the-gray-dispatch
     source: |
       ;; The corpus holds the Gray protocol, so these sites go through its dispatch.
@@ -38113,6 +38266,113 @@ standalone:
     fails: true
   # A program that never BINDS *error-output* (the shared corpus does): every
   # read answers the one seeded stream value, and symbol-value answers it too.
+  - name: fresh-line-on-standard-output-with-no-binding-of-it
+    source: |
+      ;; Standalone: the corpus binds *standard-output*, and an unbound one is the
+      ;; compilers' own path, as a statement and for its answer.
+      (fresh-line)
+      (princ "a")
+      (fresh-line)
+      (fresh-line)
+      (princ "b")
+      (write-line "c")
+      (fresh-line)
+      (write-string "d")
+      (write-line "")
+      (fresh-line)
+      (print (fresh-line))
+      (princ "e")
+      (print (fresh-line))
+      (defun flo-f () (princ "f") (fresh-line) (let ((v (fresh-line))) v))
+      (print (flo-f))
+      (princ "g")
+      (print (if (fresh-line) :wrote :did-not))
+      (print (if (fresh-line) :wrote :did-not))
+      (format t "h~&i~&")
+      (format t "~&j~%")
+      (format t "~&k")
+      (format t "~&l~%")
+      (princ "m")
+      (print (funcall #'fresh-line))
+      (print (funcall 'fresh-line))
+      (princ "n")
+      (print (apply #'fresh-line nil))
+      ;; An octet moves no column here either.
+      (write-byte 65 t)
+      (print (fresh-line))
+      (terpri)
+      (write-byte 66 t)
+      (terpri)
+      (print (fresh-line))
+    stdout: |
+      a
+      bc
+      d
+      NIL
+      e
+      T
+      f
+      NIL
+      g
+      :WROTE
+      :DID-NOT
+      h
+      i
+      j
+      k
+      l
+      m
+      T
+      NIL
+      n
+      T
+      ANIL
+
+      B
+      NIL
+  - name: fresh-line-and-format-on-standard-error
+    source: |
+      ;; Standalone: a run's standard error is compared here, each line on its own.
+      (let ((e *error-output*))
+        (print (fresh-line e))
+        (write-string "fle-1" e)
+        (print (fresh-line e))
+        (write-string "fle-2" e)
+        (terpri e)
+        (print (fresh-line e))
+        (write-string "fle-3" e)
+        (format e "~&fle-4")
+        (format e "~&fle-5~%")
+        (format e "~&fle-6~%")
+        (write-line "fle-7" e)
+        (format e "~&fle-8~%")
+        (princ "fle-9" e)
+        (let ((c "~&fle-10~%")) (format e c) (format e c))
+        (funcall #'format e "~&fle-11~%")
+        (print (funcall #'fresh-line e))
+        (write-char #\z e)
+        (print (fresh-line e))
+        (force-output e))
+    stdout: |
+      NIL
+      T
+      NIL
+      NIL
+      T
+    stderr: |
+      fle-1
+      fle-2
+      fle-3
+      fle-4
+      fle-5
+      fle-6
+      fle-7
+      fle-8
+      fle-9
+      fle-10
+      fle-10
+      fle-11
+      z
   - name: error-output-is-one-value-without-a-binding
     source: |
       (print (list (eq *error-output* *error-output*)

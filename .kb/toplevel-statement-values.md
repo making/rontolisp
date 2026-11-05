@@ -17,9 +17,11 @@ backends:
 ## The offer protocol
 - The definer still compiles through the ordinary `compileExpr`, keeping source-position
   attribution (`SourceProvenance.noteFailure`) and, on wasm, async-spine handling.
-- `Ctx.definerNameDropped` is set to the form itself just before the call;
+- `Ctx.valueDropped` is set to the form itself just before the call;
   `Wasm`/`JvmDefvarCompiler` clears it and skips the name; the emitter reads it back and emits
-  `drop`/`pop` only if the offer was NOT taken.
+  `drop`/`pop` only if the offer was NOT taken. `fresh-line` takes the same offer, there and from
+  `compileForEffect` in every statement position (`ToplevelStatements.isFreshLine`): its `t` would keep
+  `_t_sym` reachable from every `~&`.
 - **The read-back is load-bearing.** The offer is keyed on the operator name while special-form
   dispatch switches on the RAW symbol name, so a spelling that passes the offer's test but is
   not routed to the defvar compiler (package-qualified, a future user-macro interception) leaves

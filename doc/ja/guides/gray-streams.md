@@ -68,8 +68,9 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 `rontolisp:stream-line-column` はストリームの現在の桁位置を返し、桁位置を追跡しない
 ストリームでは `nil` (デフォルト) を返します。`rontolisp:stream-start-line-p` はそこから
 答えます。桁位置のないストリームは行頭かどうかを判断できないため、`fresh-line` は常に
-改行を書き込みます。`rontolisp:stream-advance-to-column` は直接呼ぶプログラムのために
-プロトコルを補完します。
+改行を書き込みます。`fresh-line` の返り値は `rontolisp:stream-fresh-line` の返り値で、
+デフォルトでは書いたときに `t`、書かなかったときに nil です。
+`rontolisp:stream-advance-to-column` は直接呼ぶプログラムのためにプロトコルを補完します。
 
 Gray ストリームを閉じると `t` を返し、他には何もしません — 解放するものがないからです。
 解放するものが**ある**ストリームは CL 本来の綴り、すなわち `close` 自身へのメソッドを

@@ -167,6 +167,18 @@ class NativeTcpTest {
 					":EOF", ":SIGNALLED", "\"shim\"", "\"127.0.0.1\"", ":OK", ":OK", ":OK",
 					"\"TCP-ACCEPT expects a listener handle\"", "\"TCP-PEER-PORT expects a connected socket handle\""));
 		assertThat(process.exitValue()).isZero();
+		// The same line start on the runner's provider.
+		Path lineStarts = this.tempDir.resolve("line-starts.lisp");
+		Files.writeString(lineStarts, am.ik.rontolisp.LineStartFixture.SOCKET_PROGRAM);
+		Path lineStartsExecutable = this.tempDir.resolve("line-starts");
+		new RontoLispCli(new ByteArrayInputStream(new byte[0]),
+				new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8))
+			.run(new String[] { lineStarts.toString(), "--native", "-o", lineStartsExecutable.toString() });
+		Process lineStartsProcess = new ProcessBuilder(lineStartsExecutable.toString()).redirectErrorStream(true)
+			.start();
+		String lineStartsOutput = new String(lineStartsProcess.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(lineStartsProcess.waitFor(2, TimeUnit.MINUTES)).as("output: %s", lineStartsOutput).isTrue();
+		assertThat(lineStartsOutput.trim()).isEqualTo(am.ik.rontolisp.LineStartFixture.SOCKET_EXPECTED);
 	}
 
 }

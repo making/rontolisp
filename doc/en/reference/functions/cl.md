@@ -25,7 +25,7 @@ page.
 | `prin1` | `(prin1 42)` | Like `print` but without newline |
 | `princ` | `(princ "hello")` | Prints without quotes and without newline |
 | `terpri` | `(terpri)` | Prints a newline only |
-| `fresh-line` | `(fresh-line)` | Prints a newline only if standard output is not already at the start of a line. Returns nil |
+| `fresh-line` | `(fresh-line)` | Prints a newline only if the stream, standard output by default, is not already at the start of a line. Returns `t` when it printed one, nil otherwise |
 | `princ-to-string` | `(princ-to-string '(1 "x"))` | `"(1 x)"` -- the string `princ` would print |
 | `prin1-to-string` | `(prin1-to-string "abc")` | `"\"abc\""` -- the string `prin1` would print (readable form) |
 | `write` | `(write "hi" :escape nil)` | Prints `hi`; each keyword binds the matching printer control variable around the one print |

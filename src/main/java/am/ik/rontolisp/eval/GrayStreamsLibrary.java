@@ -136,8 +136,6 @@ public final class GrayStreamsLibrary {
 
 	static final String FRESH_LINE_DISPATCH = "%GRAY-FRESH-LINE-DISPATCH";
 
-	static final String FORMAT_FRESH_LINE = "%GRAY-FORMAT-FRESH-LINE";
-
 	static final String WRITE_LINE_DISPATCH = "%GRAY-WRITE-LINE-DISPATCH";
 
 	static final String FORCE_OUTPUT_DISPATCH = "%GRAY-FORCE-OUTPUT-DISPATCH";
@@ -167,9 +165,9 @@ public final class GrayStreamsLibrary {
 			UNREAD_CHAR_DISPATCH, OPEN_STREAM_P_DISPATCH, INPUT_STREAM_P_DISPATCH, OUTPUT_STREAM_P_DISPATCH,
 			STREAM_ELEMENT_TYPE_DISPATCH, READ_LINE_DISPATCH, LISTEN_DISPATCH, READ_SEQUENCE_DISPATCH,
 			WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH, FILE_POSITION_SET_DISPATCH, BROADCAST_FILE_LENGTH_DISPATCH,
-			TERPRI_DISPATCH, FRESH_LINE_DISPATCH, FORMAT_FRESH_LINE, WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH,
-			FINISH_OUTPUT_DISPATCH, CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH, PRINT_DISPATCH,
-			CLOSE_DISPATCH, LispNames.CLEAR_INPUT, "%GRAY-DEFAULT-READ-LINE", "%GRAY-DEFAULT-READ-SEQUENCE",
+			TERPRI_DISPATCH, FRESH_LINE_DISPATCH, WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH,
+			CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH, PRINT_DISPATCH, CLOSE_DISPATCH,
+			LispNames.CLEAR_INPUT, "%GRAY-DEFAULT-READ-LINE", "%GRAY-DEFAULT-READ-SEQUENCE",
 			"%GRAY-DEFAULT-WRITE-SEQUENCE", "%GRAY-DEFAULT-WRITE-STRING", "%GRAY-DEFAULT-WRITE-CHAR",
 			"%GRAY-DEFAULT-TERPRI", "%GRAY-DEFAULT-START-LINE-P", "%GRAY-DEFAULT-FRESH-LINE",
 			"%GRAY-DEFAULT-ADVANCE-TO-COLUMN", "%GRAY-DEFAULT-UNREAD-CHAR", "%GRAY-DEFAULT-PEEK-CHAR",
@@ -187,9 +185,9 @@ public final class GrayStreamsLibrary {
 			UNREAD_CHAR_DISPATCH, OPEN_STREAM_P_DISPATCH, INPUT_STREAM_P_DISPATCH, OUTPUT_STREAM_P_DISPATCH,
 			STREAM_ELEMENT_TYPE_DISPATCH, READ_LINE_DISPATCH, LISTEN_DISPATCH, READ_SEQUENCE_DISPATCH,
 			WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH, FILE_POSITION_SET_DISPATCH, BROADCAST_FILE_LENGTH_DISPATCH,
-			TERPRI_DISPATCH, FRESH_LINE_DISPATCH, FORMAT_FRESH_LINE, WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH,
-			FINISH_OUTPUT_DISPATCH, CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH, PRINT_DISPATCH,
-			CLOSE_DISPATCH, LispNames.CLEAR_INPUT);
+			TERPRI_DISPATCH, FRESH_LINE_DISPATCH, WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH,
+			CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH, PRINT_DISPATCH, CLOSE_DISPATCH,
+			LispNames.CLEAR_INPUT);
 
 	/**
 	 * The compile-path pre-pass (the usocket {@code process()} pattern): when the program
@@ -1098,7 +1096,8 @@ public final class GrayStreamsLibrary {
 							am.ik.rontolisp.LispNil.INSTANCE)
 					: listOf(new am.ik.rontolisp.LispSymbol(LispNames.PROGN),
 							listOf(new am.ik.rontolisp.LispSymbol(LispNames.IF), startsFresh,
-									formatFreshLine(temp, ctx), am.ik.rontolisp.LispNil.INSTANCE),
+									listOf(dispatchSymbol(FRESH_LINE_DISPATCH, ctx), temp),
+									am.ik.rontolisp.LispNil.INSTANCE),
 							dispatch, am.ik.rontolisp.LispNil.INSTANCE);
 			LispVal tested = listOf(new am.ik.rontolisp.LispSymbol(LispNames.IF), temp, wrote, result);
 			LispVal bindResult = listOf(new am.ik.rontolisp.LispSymbol(LispNames.LET),
@@ -1148,11 +1147,6 @@ public final class GrayStreamsLibrary {
 	 */
 	private static LispVal streamArg(List<LispVal> parts, int index, RewriteContext ctx) {
 		return index < parts.size() ? rewrite(parts.get(index), ctx) : am.ik.rontolisp.LispNil.INSTANCE;
-	}
-
-	private static LispVal formatFreshLine(LispVal stream, RewriteContext ctx) {
-		ctx.used().add(FRESH_LINE_DISPATCH);
-		return listOf(dispatchSymbol(FORMAT_FRESH_LINE, ctx), stream);
 	}
 
 	private static am.ik.rontolisp.LispSymbol dispatchSymbol(String helperName, RewriteContext ctx) {

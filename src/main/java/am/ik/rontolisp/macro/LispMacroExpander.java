@@ -33004,19 +33004,57 @@ public final class LispMacroExpander {
 		.compile("~(?:0*[1-9][0-9]*)?&");
 
 	/**
-	 * A stream's {@code fresh-line} where it has a column to look at: {@code fresh-line}
-	 * always writes to a file, a socket or standard error, which keep none
-	 * ({@code .kb/standard-output-redirect.md}), and a {@code ~&} at the start of a line
-	 * there is the far likelier case. So a {@code %STREAM} value is asked only when it is
-	 * a string stream; {@code t} and a raw string handle answer exactly.
-	 * @param stream a form safe to evaluate twice
-	 * @return the conditional call
+	 * Whether the program may ask a stream that keeps no text for its line start: a
+	 * {@code fresh-line} of one, directly or as an opening {@code ~&}, or {@code format}
+	 * or {@code fresh-line} as a value. For a census that runs before the expansions
+	 * exist, so it reads {@code format} as it will expand: a literal {@code nil}
+	 * destination asks nothing, a literal {@code t} one and a stream-less
+	 * {@code fresh-line} ask a stream only under a binding of {@code *standard-output*},
+	 * and a control spelling no {@code &} asks nothing. A form this misses costs that
+	 * backend what any mispredicted gate does.
+	 * @param program the top-level forms
+	 * @param standardOutputBound whether {@code *standard-output*} is a global of the
+	 * program, which a stream-less call reads
+	 * @return whether it may
 	 */
-	public static LispVal freshLineWhereTheColumnIsKnown(LispVal stream) {
-		LispVal known = makeIf(objIs(stream, List.of(LispLayout.STREAM_TAG)),
-				callOf(LispNames.TYPEP, stream, callOf(LispNames.QUOTE, new LispSymbol(STRING_STREAM_TYPE))),
-				LispTrue.INSTANCE);
-		return makeIf(known, callOf(LispNames.FRESH_LINE, stream), LispNil.INSTANCE);
+	public static boolean mayAskStreamLineStart(List<LispVal> program, boolean standardOutputBound) {
+		return program.stream().anyMatch(form -> mayAskStreamLineStart(form, standardOutputBound));
+	}
+
+	private static boolean mayAskStreamLineStart(LispVal form, boolean standardOutputBound) {
+		for (LispVal rest = form; rest instanceof LispCons cell; rest = cell.cdr()) {
+			if (cell.car() instanceof LispSymbol head) {
+				LispVal args = cell.cdr();
+				LispVal first = args instanceof LispCons cons ? cons.car() : LispNil.INSTANCE;
+				switch (head.name()) {
+					case LispNames.FRESH_LINE -> {
+						if (standardOutputBound || !(first instanceof LispNil)) {
+							return true;
+						}
+					}
+					case LispNames.FORMAT -> {
+						boolean asksStream = first instanceof LispTrue ? standardOutputBound
+								: !(first instanceof LispNil);
+						if (asksStream && args instanceof LispCons cons && cons.cdr() instanceof LispCons control
+								&& !(control.car() instanceof LispString literal && literal.value().indexOf('&') < 0)) {
+							return true;
+						}
+					}
+					case LispNames.FUNCTION, LispNames.QUOTE -> {
+						if (first instanceof LispSymbol quoted && (LispNames.FRESH_LINE.equals(quoted.name())
+								|| LispNames.FORMAT.equals(quoted.name()))) {
+							return true;
+						}
+					}
+					default -> {
+					}
+				}
+			}
+			if (mayAskStreamLineStart(cell.car(), standardOutputBound)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// The fresh-line call a site makes under a formatStartsFresh answer.
@@ -33201,7 +33239,7 @@ public final class LispMacroExpander {
 	private static LispVal formatDestinationDispatch(LispVal result, LispSymbol streamVar,
 			@Nullable LispVal startsFresh) {
 		LispSymbol resultVar = new LispSymbol("__format_result");
-		LispVal writeToStream = formatWrite(startsFresh, freshLineWhereTheColumnIsKnown(streamVar),
+		LispVal writeToStream = formatWrite(startsFresh, callOf(LispNames.FRESH_LINE, streamVar),
 				listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), resultVar, streamVar)));
 		// A t destination is *standard-output*: the one-argument write-string reads it at
 		// call time, so a surrounding with-output-to-string capture still applies.

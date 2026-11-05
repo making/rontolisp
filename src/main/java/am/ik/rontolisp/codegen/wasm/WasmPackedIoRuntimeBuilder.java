@@ -29,10 +29,9 @@ import am.ik.wasm.Type;
  * Both answer {@code null} -- "declined" -- for a buffer that is not packed or a stream
  * that is not a WASI fd (a negative i31 is a string stream), which sends the expansion
  * down its element loop exactly as before. The standard-stream designator (nil / t) is fd
- * 0 for a read and fd 1 for a write, as {@code _read_byte} / {@code _write_byte} take it;
- * a write to fd 1 keeps the {@code LINE_START} fresh-line flag off its last byte, as
- * {@code _write_byte} does. {@code start} / {@code end} are i31s or nil (0 / the total
- * size); a range outside the buffer traps.
+ * 0 for a read and fd 1 for a write, as {@code _read_byte} / {@code _write_byte} take it.
+ * {@code start} / {@code end} are i31s or nil (0 / the total size); a range outside the
+ * buffer traps.
  */
 final class WasmPackedIoRuntimeBuilder {
 
@@ -322,27 +321,6 @@ final class WasmPackedIoRuntimeBuilder {
 			w.write(Instruction.BR, 0);
 			w.write(Instruction.END); // $drain
 			w.write(Instruction.END); // $drained
-			// standard output tracks the fresh-line column off the last byte, as
-			// _write_byte does: if (fd == 1 && need > 0) LINE_START = (last != '\n')
-			getLocal(w, FD);
-			i32(w, 1);
-			w.write(Instruction.I32_EQ);
-			getLocal(w, NEED);
-			i32(w, 0);
-			w.write(Instruction.I32_GT_S);
-			w.write(Instruction.I32_AND);
-			w.write(Instruction.IF, 0x40);
-			i32(w, WasmLispCompiler.LINE_START_ADDR);
-			getLocal(w, BUF);
-			getLocal(w, NEED);
-			w.write(Instruction.I32_ADD);
-			i32(w, 1);
-			w.write(Instruction.I32_SUB);
-			w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-			i32(w, 10);
-			w.write(Instruction.I32_NE);
-			w.write(Instruction.I32_STORE, 0x02, 0x00);
-			w.write(Instruction.END);
 			getLocal(w, I);
 			getLocal(w, N);
 			w.write(Instruction.I32_ADD);

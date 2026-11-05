@@ -28,8 +28,8 @@ final class JvmDefvarCompiler {
 		// compiled, so a nested definer cannot take it and so the emitter can see that it
 		// was taken.
 		boolean emitName = true;
-		if (ctx.definerNameDropped == cons) {
-			ctx.definerNameDropped = null;
+		if (ctx.valueDropped == cons) {
+			ctx.valueDropped = null;
 			emitName = false;
 		}
 		List<LispVal> parts = cons.toList();

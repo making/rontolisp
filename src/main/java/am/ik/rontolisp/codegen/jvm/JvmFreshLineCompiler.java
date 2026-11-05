@@ -11,8 +11,8 @@ import am.ik.rontolisp.LispCons;
  * helpers used by the output primitives. The compiled class holds a static {@code _col}
  * field (0 = at the start of a line, 1 = mid-line); {@code princ}/{@code prin1} update it
  * from the last character printed, {@code terpri}/{@code print} reset it to 0, and
- * {@code fresh-line} emits a newline only when {@code _col} is non-zero. Always returns
- * nil.
+ * {@code fresh-line} emits a newline only when {@code _col} is non-zero. It answers
+ * whether it did.
  */
 final class JvmFreshLineCompiler {
 
@@ -62,6 +62,12 @@ final class JvmFreshLineCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// A statement takes the offer to answer nothing (compiler/ToplevelStatements), so
+		// a site whose answer no one reads does not carry the branch that builds it.
+		boolean answerDropped = ctx.valueDropped == cons;
+		if (answerDropped) {
+			ctx.valueDropped = null;
+		}
 		java.util.List<am.ik.rontolisp.LispVal> args = cons.toList();
 		// The destination, under CL's stream designator rule: an explicit stream, or --
 		// for an omitted argument AND for an explicit nil -- the current
@@ -73,6 +79,9 @@ final class JvmFreshLineCompiler {
 			MethodRefEntry freshLineRef = ctx.cp.methodRef(ctx.cp.classEntry(className),
 					JvmIoRuntimeBuilder.FRESH_LINE_METHOD, JvmIoRuntimeBuilder.FRESH_LINE_DESC);
 			ctx.body.invokestatic(freshLineRef);
+			if (answerDropped) {
+				ctx.body.pop();
+			}
 			return;
 		}
 		FieldRefEntry col = colField(ctx, className);
@@ -81,8 +90,16 @@ final class JvmFreshLineCompiler {
 		ctx.body.ifeq(ifAtStart);
 		ctx.body.getstatic(ctx.systemOut).invokevirtual(ctx.printlnVoid);
 		emitSetLineStart(ctx, className);
+		if (answerDropped) {
+			ctx.body.labelBinding(ifAtStart);
+			return;
+		}
+		JvmEmitHelper.compileTrue(ctx);
+		MethodCode.Label answered = ctx.body.newLabel();
+		ctx.body.goto_(answered);
 		ctx.body.labelBinding(ifAtStart);
 		ctx.body.aconst_null();
+		ctx.body.labelBinding(answered);
 	}
 
 }

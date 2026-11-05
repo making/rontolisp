@@ -49,6 +49,9 @@
 (defun rontolisp::%io-write-byte (b stream)
   (rontolisp::%write-byte-raw b stream))
 
+(defun rontolisp::%io-fresh-line (&optional stream)
+  (rontolisp::%fresh-line-raw stream))
+
 (defun rontolisp::%io-close (stream) (rontolisp::%close-raw stream))
 
 ;;; open-stream-p and listen are redirected by the same rewrite, so they need

@@ -6905,6 +6905,9 @@ public final class LispNames {
 	public static final String WRITE_STRING_RAW_INTERNAL = "%WRITE-STRING-RAW";
 
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String FRESH_LINE_RAW_INTERNAL = "%FRESH-LINE-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
 	public static final String CLOSE_RAW_INTERNAL = "%CLOSE-RAW";
 
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */

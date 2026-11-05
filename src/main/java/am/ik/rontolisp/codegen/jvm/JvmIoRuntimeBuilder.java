@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.lang.classfile.TypeKind;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.InterfaceMethodRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.StringEntry;
 import java.lang.classfile.constantpool.Utf8Entry;
@@ -254,9 +255,26 @@ final class JvmIoRuntimeBuilder {
 
 	static final String STRING_STREAM_CONTENTS_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
+	/**
+	 * Emitted only for a program that calls it ({@link #lineStarts}); a call the census
+	 * did not predict comes back as a forced re-run, its helper missing from the class.
+	 */
 	static final String FRESH_LINE_METHOD = "_freshLine";
 
 	static final String FRESH_LINE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
+	 * What is past column 0 of the streams that keep no text to look at: the table entry
+	 * of a file or a socket, the handle of standard error.
+	 */
+	static final String MID_LINE_FIELD = "_midLine";
+
+	static final String MID_LINE_DESC = "Ljava/util/Set;";
+
+	/** {@code _markLine(String content, Object key)}: what a character write owes it. */
+	static final String MARK_LINE_METHOD = "_markLine";
+
+	static final String MARK_LINE_DESC = "(Ljava/lang/String;Ljava/lang/Object;)V";
 
 	static final String FORCE_OUTPUT_METHOD = "_forceOutput";
 
@@ -608,13 +626,20 @@ final class JvmIoRuntimeBuilder {
 	 */
 	@Nullable private final CharSequenceIo charSequenceIo;
 
+	/**
+	 * The constant-pool entries of {@code _freshLine} and of what a write owes it, minted
+	 * only for a program that can call it, so every other artifact keeps its bytes.
+	 */
+	@Nullable private final LineStarts lineStarts;
+
 	private JvmIoRuntimeBuilder(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass, ClassEntry stringClass,
 			ClassEntry longClass, MethodRefEntry longValueOf, MethodRefEntry longValue, MethodRefEntry stringLength,
 			MethodRefEntry stringSubstring, MethodRefEntry stringConcat, FieldRefEntry systemOut,
 			MethodRefEntry printlnStr, MethodRefEntry readLineHelper,
 			JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets, boolean errorOutput, boolean listDirectory,
 			FileMeta fileMeta, boolean packedSequenceIo, boolean charSequenceIo, boolean arrayRuntime,
-			boolean quantizedBuffer, boolean bidirectionalStreams, boolean readLinePairs) {
+			boolean quantizedBuffer, boolean bidirectionalStreams, boolean readLinePairs, boolean lineStarts) {
+		this.lineStarts = lineStarts ? LineStarts.mint(cp, thisClass) : null;
 		this.sockets = sockets;
 		this.ioStreams = bidirectionalStreams ? IoStreams.mint(cp) : null;
 		this.linePairs = readLinePairs ? LinePairs.mint(cp, bidirectionalStreams) : null;
@@ -837,11 +862,42 @@ final class JvmIoRuntimeBuilder {
 			FieldRefEntry systemOut, MethodRefEntry printlnStr, MethodRefEntry readLineHelper,
 			JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets, boolean errorOutput, boolean listDirectory,
 			FileMeta fileMeta, boolean packedSequenceIo, boolean charSequenceIo, boolean arrayRuntime,
-			boolean quantizedBuffer, boolean bidirectionalStreams, boolean readLinePairs) {
+			boolean quantizedBuffer, boolean bidirectionalStreams, boolean readLinePairs, boolean lineStarts) {
 		return new JvmIoRuntimeBuilder(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue,
 				stringLength, stringSubstring, stringConcat, systemOut, printlnStr, readLineHelper, sockets,
 				errorOutput, listDirectory, fileMeta, packedSequenceIo, charSequenceIo, arrayRuntime, quantizedBuffer,
-				bidirectionalStreams, readLinePairs);
+				bidirectionalStreams, readLinePairs, lineStarts);
+	}
+
+	/**
+	 * The set {@code _freshLine} asks and the writes keep, and how a string stream
+	 * answers from its buffer without copying it.
+	 */
+	private record LineStarts(FieldRefEntry midLine, InterfaceMethodRefEntry add, InterfaceMethodRefEntry remove,
+			InterfaceMethodRefEntry contains, MethodRefEntry mark, MethodRefEntry writeString,
+			MethodRefEntry bufferLength, MethodRefEntry bufferCharAt, StringEntry framedNewline) {
+
+		static LineStarts mint(ConstantPool cp, ClassEntry thisClass) {
+			ClassEntry set = cp.classEntry("java/util/Set");
+			ClassEntry buffer = cp.classEntry("java/lang/StringBuffer");
+			return new LineStarts(cp.fieldRef(thisClass, MID_LINE_FIELD, MID_LINE_DESC),
+					cp.interfaceMethodRef(set, "add", "(Ljava/lang/Object;)Z"),
+					cp.interfaceMethodRef(set, "remove", "(Ljava/lang/Object;)Z"),
+					cp.interfaceMethodRef(set, "contains", "(Ljava/lang/Object;)Z"),
+					cp.methodRef(thisClass, MARK_LINE_METHOD, MARK_LINE_DESC),
+					cp.methodRef(thisClass, WRITE_STRING_METHOD, WRITE_STRING_DESC),
+					cp.methodRef(buffer, "length", "()I"), cp.methodRef(buffer, "charAt", "(I)C"),
+					cp.stringEntry("\"\n\""));
+		}
+
+		// _midLine.remove(key), whose answer no site reads.
+		void emitClear(MethodCode code, Runnable pushKey) {
+			code.getstatic(this.midLine);
+			pushKey.run();
+			code.invokeinterface(this.remove);
+			code.pop();
+		}
+
 	}
 
 	/**
@@ -1149,8 +1205,12 @@ final class JvmIoRuntimeBuilder {
 				this.cp.utf8Entry(MAKE_STRING_INPUT_STREAM_DESC), buildMakeStringInputStream()));
 		ms.add(new IoMethod(this.cp.utf8Entry(STRING_STREAM_CONTENTS_METHOD),
 				this.cp.utf8Entry(STRING_STREAM_CONTENTS_DESC), buildStringStreamContents()));
-		ms.add(new IoMethod(this.cp.utf8Entry(FRESH_LINE_METHOD), this.cp.utf8Entry(FRESH_LINE_DESC),
-				buildFreshLine()));
+		if (this.lineStarts != null) {
+			ms.add(new IoMethod(this.cp.utf8Entry(FRESH_LINE_METHOD), this.cp.utf8Entry(FRESH_LINE_DESC),
+					buildFreshLine(this.lineStarts)));
+			ms.add(new IoMethod(this.cp.utf8Entry(MARK_LINE_METHOD), this.cp.utf8Entry(MARK_LINE_DESC),
+					buildMarkLine(this.lineStarts)));
+		}
 		ms.add(new IoMethod(this.cp.utf8Entry(FORCE_OUTPUT_METHOD), this.cp.utf8Entry(FORCE_OUTPUT_DESC),
 				buildForceOutput()));
 		ms.add(new IoMethod(this.cp.utf8Entry(LISTEN_METHOD), this.cp.utf8Entry(LISTEN_DESC), buildListen()));
@@ -1160,39 +1220,50 @@ final class JvmIoRuntimeBuilder {
 	}
 
 	/**
-	 * {@code _freshLine(Object dest) -> null}. Emits a newline unless the destination is
-	 * already at the start of a line: a non-handle designator ({@code null}/T) is
-	 * standard output (the {@code _col} tracking); a string-stream entry exposes its
-	 * contents, so the check is exact; any other writer's column is unknown, so a newline
-	 * is always written (the same rule on every backend).
+	 * {@code _freshLine(Object dest) -> T or null}. Writes a newline unless the
+	 * destination is at the start of a line, and answers whether it did: a non-handle
+	 * designator ({@code null}/T) is standard output (the {@code _col} tracking), a
+	 * string-stream entry answers from its contents, standard error, a file and a socket
+	 * from {@code _midLine}, which a binary stream's octets never reach. A closed or an
+	 * input stream falls through to the write, which refuses it.
 	 */
-	private MethodCode buildFreshLine() {
-		// Slots: 0=dest, 1=entry, 2=contents (String)
+	private MethodCode buildFreshLine(LineStarts lines) {
+		// Slots: 0=dest, 1=entry, 2=buffer (StringBuffer)
 		MethodCode code = new MethodCode();
-		// The *error-output* designator has no table entry (and stderr's column is
-		// unknown), so it takes the always-write rule through _writeStr.
+		// The *error-output* designator has no table entry, so its handle is the key.
 		emitStderrBranch(code, 0, () -> {
+			code.getstatic(lines.midLine());
+			code.aload(0);
+			code.invokeinterface(lines.contains());
+			MethodCode.Label midLine = code.newLabel();
+			code.ifne(midLine);
+			code.aconst_null();
+			code.areturn();
+			code.labelBinding(midLine);
 			code.ldc(this.newlineStr);
 			code.aload(0);
 			code.invokestatic(this.writeStrMethod);
-			code.aconst_null();
+			code.ldc(this.tStr);
 			code.areturn();
 		});
-		// if (!(dest instanceof Long)) { if (_col != 0) { print "\n"; _col = 0; } }
+		// if (!(dest instanceof Long)) { if (_col == 0) return null; print "\n"; _col =
+		// 0; return "T"; }
 		code.aload(0);
 		code.instanceOf(this.longClass);
 		MethodCode.Label ifHandle = code.newLabel();
 		code.ifne(ifHandle);
 		code.getstatic(this.colField);
-		MethodCode.Label ifAtStart = code.newLabel();
-		code.ifeq(ifAtStart);
+		MethodCode.Label ifMidLine = code.newLabel();
+		code.ifne(ifMidLine);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(ifMidLine);
 		code.getstatic(this.systemOut);
 		code.ldc(this.newlineStr);
 		code.invokevirtual(this.printStr);
 		code.iconst_0();
 		code.putstatic(this.colField);
-		code.labelBinding(ifAtStart);
-		code.aconst_null();
+		code.ldc(this.tStr);
 		code.areturn();
 		code.labelBinding(ifHandle);
 		// entry = _streams[(int) ((Long) dest).longValue()];
@@ -1203,43 +1274,102 @@ final class JvmIoRuntimeBuilder {
 		code.l2i();
 		code.aaload();
 		code.astore(1);
-		// if (entry instanceof StringWriter) { newline only when mid-line }
+		MethodCode.Label atLineStart = code.newLabel();
+		MethodCode.Label write = code.newLabel();
+		// if (entry instanceof StringWriter) { newline only when its buffer is mid-line }
 		code.aload(1);
 		code.instanceOf(this.stringWriterClass);
 		MethodCode.Label ifNotStringWriter = code.newLabel();
 		code.ifeq(ifNotStringWriter);
 		code.aload(1);
 		code.checkcast(this.stringWriterClass);
-		code.invokevirtual(this.stringWriterToString);
+		code.invokevirtual(this.stringWriterGetBuffer);
 		code.astore(2);
-		// if (contents.length() == 0 || contents.charAt(len - 1) == '\n') return null;
+		// if (buffer.length() == 0 || buffer.charAt(len - 1) == '\n') return null;
 		code.aload(2);
+		code.invokevirtual(lines.bufferLength());
+		code.ifeq(atLineStart);
+		code.aload(2);
+		code.aload(2);
+		code.invokevirtual(lines.bufferLength());
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(lines.bufferCharAt());
+		code.loadConstant(10);
+		code.if_icmpeq(atLineStart);
+		code.goto_(write);
+		code.labelBinding(ifNotStringWriter);
+		// if ((entry instanceof Writer || OutputStream || Socket) &&
+		// !_midLine.contains(entry)) return null;
+		MethodCode.Label asked = code.newLabel();
+		code.aload(1);
+		code.instanceOf(this.writerClass);
+		code.ifne(asked);
+		code.aload(1);
+		code.instanceOf(this.outputStreamClass);
+		code.ifne(asked);
+		if (this.sockets != null) {
+			code.aload(1);
+			code.instanceOf(this.sockets.socketClass());
+			code.ifne(asked);
+		}
+		code.goto_(write);
+		code.labelBinding(asked);
+		code.getstatic(lines.midLine());
+		code.aload(1);
+		code.invokeinterface(lines.contains());
+		code.ifne(write);
+		code.labelBinding(atLineStart);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(write);
+		// The socket arm is _writeString's, not _writeStr's (.kb/tcp-sockets.md).
+		if (this.sockets != null) {
+			code.ldc(lines.framedNewline());
+			code.aload(0);
+			code.invokestatic(lines.writeString());
+			code.pop();
+		}
+		else {
+			code.ldc(this.newlineStr);
+			code.aload(0);
+			code.invokestatic(this.writeStrMethod);
+		}
+		code.ldc(this.tStr);
+		code.areturn();
+		return code;
+	}
+
+	/**
+	 * {@code _markLine(String content, Object key)}. A write that ended on a newline
+	 * leaves {@code key} at a line start, any other past column 0, an empty one where it
+	 * was.
+	 */
+	private MethodCode buildMarkLine(LineStarts lines) {
+		// Slots: 0=content, 1=key
+		MethodCode code = new MethodCode();
+		MethodCode.Label done = code.newLabel();
+		code.aload(0);
 		code.invokevirtual(this.stringLength);
-		MethodCode.Label ifEmpty = code.newLabel();
-		code.ifeq(ifEmpty);
-		code.aload(2);
-		code.aload(2);
+		code.ifeq(done);
+		code.aload(0);
+		code.aload(0);
 		code.invokevirtual(this.stringLength);
 		code.iconst_1();
 		code.isub();
 		code.invokevirtual(this.stringCharAt);
 		code.loadConstant(10);
-		MethodCode.Label ifNewline = code.newLabel();
-		code.if_icmpeq(ifNewline);
-		MethodCode.Label gotoWrite = code.newLabel();
-		code.goto_(gotoWrite);
-		code.labelBinding(ifEmpty);
-		code.labelBinding(ifNewline);
-		code.aconst_null();
-		code.areturn();
-		code.labelBinding(gotoWrite);
-		code.labelBinding(ifNotStringWriter);
-		// _writeStr("\n", dest); return null;
-		code.ldc(this.newlineStr);
-		code.aload(0);
-		code.invokestatic(this.writeStrMethod);
-		code.aconst_null();
-		code.areturn();
+		MethodCode.Label notNewline = code.newLabel();
+		code.if_icmpne(notNewline);
+		lines.emitClear(code, () -> code.aload(1));
+		code.return_();
+		code.labelBinding(notNewline);
+		code.getstatic(lines.midLine());
+		code.aload(1);
+		code.invokeinterface(lines.add());
+		code.pop();
+		code.labelBinding(done);
+		code.return_();
 		return code;
 	}
 
@@ -2723,6 +2853,9 @@ final class JvmIoRuntimeBuilder {
 		code.checkcast(this.writerClass);
 		code.invokevirtual(this.writerClose);
 		code.labelBinding(closed);
+		if (this.lineStarts != null) {
+			this.lineStarts.emitClear(code, () -> code.aload(2));
+		}
 		// _streams[idx] = null; return "t";
 		code.getstatic(this.streamsField);
 		code.iload(1);
@@ -2795,6 +2928,9 @@ final class JvmIoRuntimeBuilder {
 			code.getstatic(java.util.Objects.requireNonNull(this.systemErr));
 			code.aload(2);
 			code.invokevirtual(this.printlnStr);
+			if (this.lineStarts != null) {
+				this.lineStarts.emitClear(code, () -> code.aload(1));
+			}
 			code.aload(0);
 			code.areturn();
 		});
@@ -2829,6 +2965,9 @@ final class JvmIoRuntimeBuilder {
 			code.aload(0);
 			code.aload(3);
 			code.invokestatic(this.sockets.sockWriteLine());
+			if (this.lineStarts != null) {
+				this.lineStarts.emitClear(code, () -> code.aload(3));
+			}
 			code.areturn();
 			code.labelBinding(ifNotSocket);
 			code.aload(3);
@@ -2842,6 +2981,9 @@ final class JvmIoRuntimeBuilder {
 		code.aload(3);
 		code.ldc(this.newlineStr);
 		code.invokevirtual(this.writerWrite);
+		if (this.lineStarts != null) {
+			this.lineStarts.emitClear(code, () -> code.aload(3));
+		}
 		code.aload(0);
 		code.areturn();
 		return code;
@@ -3584,15 +3726,6 @@ final class JvmIoRuntimeBuilder {
 		// the write below.
 		code.checkcast(this.outputStreamClass);
 		code.astore(2);
-		// _col = b ^ '\n' -- zero exactly when the octet just written IS a newline,
-		// which is the only thing the field means (fresh-line tests it against zero).
-		// A raw byte moves the standard-output column like a character does, or a
-		// (write-byte 10 t) followed by fresh-line would emit a second newline here
-		// while the interpreter emits none. Branchless, so the frame stays flat.
-		emitByteValue(code);
-		code.loadConstant(10);
-		code.ixor();
-		code.putstatic(this.colField);
 		code.labelBinding(gotoWriteByte);
 		// out.write((int) ((Long) byteObj).longValue()); return byteObj;
 		code.aload(2);
@@ -4361,29 +4494,10 @@ final class JvmIoRuntimeBuilder {
 			code.areturn();
 		}
 		else {
-			// out.write(bytes); standard output tracks the fresh-line column off the
-			// last byte (_col = b ^ '\n', as _writeByte does); return seq
+			// out.write(bytes);
 			code.aload(STREAM);
 			code.aload(BYTES);
 			code.invokevirtual(io.outputStreamWriteBytes());
-			code.aload(1);
-			code.instanceOf(this.longClass);
-			MethodCode.Label ifHandleOut = code.newLabel();
-			code.ifne(ifHandleOut);
-			code.iload(N);
-			MethodCode.Label ifEmpty = code.newLabel();
-			code.ifle(ifEmpty);
-			code.aload(BYTES);
-			code.aload(BYTES);
-			code.arraylength();
-			code.iconst_1();
-			code.isub();
-			code.baload();
-			code.loadConstant(10);
-			code.ixor();
-			code.putstatic(this.colField);
-			code.labelBinding(ifHandleOut);
-			code.labelBinding(ifEmpty);
 			// advance a file stream's position; return seq
 			emitBumpPosition(code, 1, () -> {
 				code.aload(BYTES);
@@ -4466,6 +4580,11 @@ final class JvmIoRuntimeBuilder {
 			code.getstatic(java.util.Objects.requireNonNull(this.systemErr));
 			code.aload(0);
 			code.invokevirtual(this.printStr);
+			if (this.lineStarts != null) {
+				code.aload(0);
+				code.aload(1);
+				code.invokestatic(this.lineStarts.mark());
+			}
 			code.return_();
 		});
 		// if (handle instanceof Long) { ((Writer) _streams[idx]).write(content); return;
@@ -4480,10 +4599,29 @@ final class JvmIoRuntimeBuilder {
 		code.invokevirtual(this.longValue);
 		code.l2i();
 		code.aaload();
-		code.checkcast(this.writerClass);
-		code.aload(0);
-		code.invokevirtual(this.writerWrite);
-		code.return_();
+		if (this.lineStarts != null) {
+			// A string stream's contents answer for it, at no cost per write.
+			code.astore(2);
+			code.aload(2);
+			code.checkcast(this.writerClass);
+			code.aload(0);
+			code.invokevirtual(this.writerWrite);
+			code.aload(2);
+			code.instanceOf(this.stringWriterClass);
+			MethodCode.Label ifStringWriter = code.newLabel();
+			code.ifne(ifStringWriter);
+			code.aload(0);
+			code.aload(2);
+			code.invokestatic(this.lineStarts.mark());
+			code.labelBinding(ifStringWriter);
+			code.return_();
+		}
+		else {
+			code.checkcast(this.writerClass);
+			code.aload(0);
+			code.invokevirtual(this.writerWrite);
+			code.return_();
+		}
 		code.labelBinding(ifStdout);
 		// System.out.print(content);
 		code.getstatic(this.systemOut);
@@ -4548,6 +4686,12 @@ final class JvmIoRuntimeBuilder {
 			code.aload(0);
 			code.aload(3);
 			code.invokestatic(this.sockets.sockWriteString());
+			if (this.lineStarts != null) {
+				emitStripQuotes(code, 0, 2);
+				code.aload(2);
+				code.aload(3);
+				code.invokestatic(this.lineStarts.mark());
+			}
 			code.areturn();
 			code.labelBinding(ifNotHandle);
 			code.labelBinding(ifNotSocket);
