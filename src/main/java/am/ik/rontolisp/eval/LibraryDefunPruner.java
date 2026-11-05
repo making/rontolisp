@@ -284,7 +284,9 @@ public final class LibraryDefunPruner {
 		// %print-cased is reached from the printing operators, rewritten onto it inside
 		// the expression compilers as well; its case-fold and re-basing leaves are
 		// reached from the walk's %pc-fold / %pc-radixed primitives, lowered there too
-		// (LispMacroExpander.expandPrintCasedLeaf).
+		// (LispMacroExpander.expandPrintCasedLeaf). Its readable half is reached from the
+		// %pc-raw / %pc-leaf / %pc-instance-check leaves and print-unreadable-object
+		// (LispMacroExpander.expandPrintReadableLeaf).
 		// %make-array-et is reached from make-array's runtime-:element-type lowering,
 		// which also runs inside the expression compilers.
 		// %call-with-input / %call-with-output are reached from uiop:with-input's /
@@ -412,6 +414,8 @@ public final class LibraryDefunPruner {
 	private static final List<String> SYNTHESIZED_ENTRIES = List.of(LispNames.MAKE_BROADCAST_STREAM_INTERNAL,
 			LispNames.TEMP_FILE_NAME, LispNames.DELETE_FILE_IF_EXISTS, LispNames.STREAM_TARGET,
 			LispNames.PRINT_CASED_INTERNAL, LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.PRINT_RADIXED_INTERNAL,
+			LispNames.PRINT_NOT_READABLE_INTERNAL, LispNames.PRINT_READABLE_RAW_INTERNAL,
+			LispNames.PRINT_READABLE_LEAF_INTERNAL, LispNames.PRINT_READABLE_INSTANCE_INTERNAL,
 			LispNames.MAKE_ARRAY_ET_INTERNAL, LispNames.MAKE_ARRAY_ET_FP_INTERNAL, LispNames.SYMBOL_IN_PACKAGE_INTERNAL,
 			LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL, LispNames.FUNCTION_NAME_INTERNAL,
 			LispNames.FDEFINITION_INTERNAL, LispNames.FMAKUNBOUND_INTERNAL, LispNames.RUNTIME_PACKAGES_INTERNAL,

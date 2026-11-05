@@ -304,7 +304,8 @@ table is GENERATED from it. **Change them together.**
 - **Integer INTERVALS decide by containment** (`.todo/919`): `(unsigned-byte n)`, `(signed-byte n)`,
   `(integer lo hi)` (exclusive `(k)` bounds, `*`), `(mod n)` and the names `bit` / `fixnum` (64 bits on
   all four, since 2026-11-05: coalton's load asks `(subtypep '(signed-byte 32) 'fixnum)`; ci-spec
-  `subtypep-fixnum-is-a-64-bit-interval`) / `unsigned-byte` / `signed-byte` / `integer` each read as one interval (`macro/IntegerTypeRange`), and with a
+  `subtypep-fixnum-is-a-64-bit-interval`) / `unsigned-byte` / `signed-byte` / `integer`, and an `(and ...)` of
+  those, each read as one interval (`macro/IntegerTypeRange`), and with a
   COMPOUND on at least one side two intervals answer containment -- exact, so a nil there is still
   `nil nil` only because the valid-p rule below says compound. An `(or ...)` SUB is covered by its
   branches' hull (sound; the super is read exactly). Runtime twin: `%subtypep-interval` /
@@ -372,6 +373,8 @@ specifiers; a `t` primary is always a decision, since `subtypep` answers `t` onl
   valid-p and FAILS a false claim -- `(and (cons symbol *) (cons * symbol))` really is
   `(cons symbol symbol)`. Narrowing the claim to name-vs-name gave **+443 and 0 regressions**
   (66.3% -> 68.6%). Under-claiming is conforming; over-claiming is a wrong answer.
+- A nil between two integer INTERVALS is a decision too (2026-11-05): containment is exact, and coalton's
+  `definitely-subtype?` signals on a nil valid-p. A runtime twin of it comes with the interval arm.
 - Deviation: an unknown type NAME answers `nil t` (the name universe is closed here) where CL may
   answer `nil nil`.
 - Pins: `LispEvaluatorTest.subtypepAnswersCommonLispValidP`,

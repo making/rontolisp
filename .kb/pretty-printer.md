@@ -307,7 +307,7 @@ per variable the program MENTIONS — run after `expandTopLevelDefinitions`; "me
 | variable | value | honored? |
 | --- | --- | --- |
 | `*print-escape*` | `t` | yes — picks prin1 vs princ; the `print-object` route binds it |
-| `*print-readably*` | `nil` | yes — forces escaping, overrides length/level/gensym; never signals (below) |
+| `*print-readably*` | `nil` | yes — forces escaping, overrides length/level/gensym, signals `print-not-readable` (below) |
 | `*print-pretty*` | `t` | yes — gates the MANDATORY line break |
 | `*print-circle*` | `nil` | no labels — the guard prints a cycle as `#`/`" . #"` |
 | `*print-right-margin*` / `*print-miser-width*` / `*print-lines*` | `nil` | no (no column) |
@@ -346,12 +346,48 @@ ci-spec `with-standard-io-syntax-binds-the-standard-table`; quri's `*print-base*
   `write`, a `write-to-string` keyword and a one-argument `write-to-string`
   (`expandWriteToStringConversion`; `(let ((*print-escape* nil)) (write-to-string "a"))` printed
   the quotes until then) take `prin1` when it or `*print-escape*` is on.
-- **No printer signals `print-not-readable`** (measured 2026-11-05: `(with-standard-io-syntax
-  (prin1-to-string (lambda (x) x)))` answers `#<...>` on all four, SBCL signals). The class exists
-  (`ClosRegistry`, reader `print-not-readable-object`) because serapeum and coalton signal and handle
-  it themselves; `(error 'print-not-readable)` used to find no class, escaping `(error ...)` clauses.
-  The signal has traps of its own (`.todo/i47`).
 - Inert under it: `*read-default-float-format*` (`1.5d0` prints `1.5`, SBCL `1.5d0`).
+
+## `print-not-readable`
+**Invariant: under `*print-readably*` and `prin1`, a value with no readable syntax signals, at any depth, on
+all four** (2026-11-05, SBCL 2.2.9 agrees on ci-spec `print-readably-signals-print-not-readable` but for the
+spelling of a table with entries). Consumer: serapeum's `same-literal-p`, where any two lambdas answered true.
+
+- **Where it signals.** `%pc-readable-leaf` (the walk's leaf: raw text starting `#<`),
+  `%pc-readable-instance` (a frame spelled `#<`, in `%pc-instance` and `%pos-instance`, before the method-less
+  text is built) and `print-unreadable-object` (before its body, whichever way `*print-escape*` stands).
+  `%pc-not-readable` is the one `error` call. A method on the value is asked first, as SBCL's is.
+- **`%print-cased`'s raw arm stays the fast path**: `%pc-readable-raw` takes the raw text and walks only when it
+  holds `#<` (the `%pc-walk` concatenation is O(n^2), a big list holding none pays nothing). A string's or a
+  symbol's `#<` then comes back from the walk unchanged; a pathname's does not start the text.
+- **A gate like `expandPrintCasedLeaf`'s.** `error` and the class reach `printsConditionReports` and
+  `mayCreateInstance`, so only a program that can get there carries them: `printsReadably` is a mention of
+  `*print-readably*`, `with-standard-io-syntax` or `:readably` outside the renderer and the `write` family, with an
+  operator in `READABLE_SURFACE_OPERATORS` (the signalling ones are out: their message binds it nil). It selects
+  the four roots (`%pc-not-readable` and the three above, `LispPreludeLibrary`, `LibraryDefunPruner`). The
+  leaves `%pc-raw`, `%pc-leaf`, `%pc-instance-check` and `%pc-without-readably` lower on
+  `ctx.functions.containsKey(%pc-not-readable)` (`expandPrintReadableLeaf`), so splice and lowering cannot
+  disagree; off, the print is what it was. `usesPrintControls` counts the defun, which routes a program naming
+  the variable alone without the case-fold tables (`mentionsPrintControlVariable` still gates those).
+  Interpreter: `printControlsInEffect` is true while the variable is, and the leaves are functions calling the defuns.
+- **Messages bind it nil** (`%pc-without-readably`): `error`, `warn`, `signal`, `cerror`, `assert`, `check-type` render
+  at the signal here and at report time on SBCL, under `princ`. Around `formatMessagePieces`, the object arm's
+  `FormatRenderer.call`, the typed arm's inlined report and the body of `%condition-report-str`, which covers a
+  report printed by `~A` and an uncaught one. A handler still sees the variable as bound: only the text is wrapped.
+  The let appears in Pass 2, so `SpecialVarCollector` counts the `%pc-not-readable` defun as a binding (a program
+  may name the variable only in data; the JVM then refused the let, ci-spec `print-readably-named-only-in-data`).
+  The readable roots are not `PULLED_SURFACE_ENTRIES`: `macro-function`'s table of standard names is no mention.
+- **A hash table prints** as SBCL's does, `#.(MAKE-HASH-TABLE :TEST (QUOTE EQ))`, `:TEST` left out for `eql`, and
+  signals under a nil `*read-eval*` (`%pc-readable-table`). With entries SBCL calls `SB-IMPL::%STUFF-HASH-TABLE`;
+  here `#.(LET ((H ...)) (SETF (GETHASH (QUOTE k) H) (QUOTE v)) ... H)`, which reads on SBCL and on the interpreter
+  (`.kb/reader-features.md`: compiled readers refuse `#.`). `:SIZE` is not kept. `(QUOTE EQ)` is SBCL's spelling under a
+  nil `*print-pretty*`; it writes `'EQ` under `(let ((*print-readably* t)) ...)`.
+- **An array of rank other than 1 is re-spelled** only when its raw text holds `#<` (`%pc-readable-rows`), so a
+  method and a table in it apply; the raw renderer does not walk it. Elements and table entries go through
+  `prin1-to-string`, the program's own route. A table or array holding itself signals (`%pc-readable-path`);
+  SBCL does not finish.
+- **Not signalled, by the value model**: a package is a keyword and `*standard-output*` is `t`, both readable text.
+  **Signalled where SBCL prints**: a random state (`#S(RANDOM-STATE ...)` there). A cons cycle still prints `#`.
 
 ## Tests
 `LispEvaluatorTest.evalWriteAndPprintDispatch`/`evalPprintLogicalBlock`/`evalPrintCase`/

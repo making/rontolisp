@@ -15,11 +15,13 @@
 | `*read-default-float-format*` | `single-float` |
 | `*readtable*` | 新しい標準の[リードテーブル](../../guides/readtables.md) |
 
-`*print-readably*` が真のとき、プリンターの `prin1` 変換は `*print-length*` と `*print-level*` を無視し、`#:` を残します。`princ` と `~A` はこの変数を `nil` に束縛するので、その下の [`print-object`](../functions/print-object.md) メソッドには `nil` が見えます。
+`*print-readably*` が真のとき、プリンターの `prin1` 変換は `*print-length*` と `*print-level*` を無視し、`#:` を残します。読み戻せる表記を持たない値は、どの深さにあっても [`print-not-readable`](../functions/print-not-readable-object.md) をシグナルします。対象は関数、固有のメソッドを持たないクラスやコンディションのインスタンス、[`print-unreadable-object`](print-unreadable-object.md) です。`princ` と `~A` はこの変数を `nil` に束縛するので、その下の [`print-object`](../functions/print-object.md) メソッドには `nil` が見え、シグナルも起きません。コンディションのメッセージも同じ束縛の下で組み立てるので、`(error "bad ~S" #'car)` は指定どおりのエラーをシグナルします。ハッシュテーブルは `*read-eval*` が真なら構築式の `#.` として印字し、偽ならシグナルします。
 
 相違点:
 
-- 読み戻せる表記を持たないオブジェクトを `*print-readably*` の下で印字すると、[`print-not-readable`](../functions/print-not-readable-object.md) をシグナルせず `#<...>` 形式を印字します。
+- パッケージと標準ストリームはこの処理系での値 (`:CL-USER`、`T`) として印字するので、シグナルしません。
+- random state はシグナルします。SBCL は構造体として書き出します。
+- エントリを持つハッシュテーブルは `#.(LET ((H (MAKE-HASH-TABLE ...))) (SETF (GETHASH ...) ...) ... H)` と印字します。SBCL でも読めます。`#.` を評価するのはインタプリタのリーダーだけで、コンパイル済みのリーダーは拒否します。
 - double は `d0` を付けずに印字します。すべての浮動小数点数が唯一の double 表現なので、`*read-default-float-format*` は情報提供用です。
 
 ```lisp
@@ -28,4 +30,6 @@
 (with-standard-io-syntax
   (prin1-to-string (list 1 2 3))) ; => "(1 2 3)"
 (with-standard-io-syntax *package*) ; => :CL-USER
+(handler-case (with-standard-io-syntax (prin1-to-string #'car))
+  (print-not-readable () :refused)) ; => :REFUSED
 ```

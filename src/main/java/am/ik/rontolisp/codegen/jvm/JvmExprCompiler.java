@@ -1074,6 +1074,10 @@ final class JvmExprCompiler {
 			case LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintCasedLeaf(cons, ctx.printControlVariables),
 						ctx, className);
+			case LispNames.PRINT_CASED_RAW_LEAF_INTERNAL, LispNames.PRINT_CASED_TEXT_LEAF_INTERNAL,
+					LispNames.PRINT_CASED_INSTANCE_CHECK_INTERNAL, LispNames.PRINT_WITHOUT_READABLY_INTERNAL ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintReadableLeaf(cons,
+						ctx.functions.containsKey(LispNames.PRINT_NOT_READABLE_INTERNAL)), ctx, className);
 			case LispNames.PRINT_CASED_TYPE_NAME_INTERNAL ->
 				JvmExprCompiler.compileExpr(
 						LispMacroExpander.expandPrintedTypeName(cons.toList().get(1),
@@ -1714,7 +1718,8 @@ final class JvmExprCompiler {
 			case LispNames.TAGBODY -> JvmTagbodyCompiler.compile(cons, ctx, className);
 			case LispNames.GO -> JvmGoCompiler.compile(cons, ctx, className);
 			case LispNames.PRINT_UNREADABLE_OBJECT ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintUnreadableObject(cons), ctx, className);
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintUnreadableObject(cons,
+						ctx.functions.containsKey(LispNames.PRINT_NOT_READABLE_INTERNAL)), ctx, className);
 			case LispNames.WITH_PACKAGE_ITERATOR ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithPackageIterator(cons), ctx, className);
 			case LispNames.WITH_HASH_TABLE_ITERATOR ->

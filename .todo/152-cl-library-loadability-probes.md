@@ -145,6 +145,29 @@ verification against the actual Quicklisp dist at probe time)
     `cl-smtp` (h48), `drakma` (h52), `cl-csv`/`function-cache`/
     `cl-containers`/`cl-pdf` (h35), `jonathan`/`cl-redis`/`parenscript` (h53),
     `cl-store` (implementation guard), `screamer` (not in the dist).
+- **Probe round 3 (2026-10-31), interpreter first; SBCL 2.2.9 loads all ten over the same tree.**
+  - Load and run on all four: `cl-dot` (`generate-graph-from-roots` + `print-graph`).
+  - Interpreter only: `cl-heap` (JVM/WASM: h84), `lquery` (`$ ... (text)` answers `#("x")` as
+    SBCL; JVM/WASM: `plump:node` not external, the computed re-export of 386).
+  - Load, report fails: `trivial-benchmark` (`with-timing`'s table, h85).
+  - Do not load: `cl-qrencode` (h82, then h83 compiled), `cl-ansi-text` (h81), `cl-graph`
+    (h79), `fare-quasiquote` (no `:asdf3`; loads as of 2026-11-05), `contextl`, `lisp-binary` (h80).
+- **Probe round 4 (2026-11-04), chosen for how they use ASDF; SBCL 2.2.9 loads all ten over the same
+  releases.** None loads unpatched. "Walked" = a scratch copy of the source patched past each stop;
+  the order is what each library stops on in turn.
+  - `prove`: h95 (`load-source-op`). Walked: runs on the interpreter. `:test-file` h93; compiled h96.
+  - `clingon`: h94 (`#P`), i07. Walked: matches SBCL on the interpreter. Compiled i08, then 386.
+  - `caveman2`: i04 (`character`), h95 (`*central-registry*`), i02. Walked: routes answer as SBCL on
+    the interpreter. Compiled h96.
+  - `cxml`: i06, i00, h95 (slot read). Walked: loads, then i01 on every parse. Compiled i09.
+  - `opticl`: i04 (`compile`), h94 (`:encoding`), h99. Walked without pngload: writes the PNG SBCL writes.
+  - `coalton`: h94 (`:around-compile`), h98. Further unmeasured.
+  - `clim`: i05, i06, h97. Further unmeasured.
+  - `sento`: i03, h97 (both in log4cl). Further unmeasured.
+  - `hu.dwim.def`: the `:asdf3` features and `asdf` as a system (both there since), h93, h95. Further unmeasured.
+  - `clsql`: i07 (`uffi`), i06. Further unmeasured.
+  - Not usable as probes: `april` (its `cape` dependency is not in the dist index); `cl-protobufs` and
+    `numcl` (not in the index); `iolib` (needs libfixposix, not installed).
 
 ## Deliverable
 
