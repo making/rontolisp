@@ -37663,7 +37663,7 @@ standalone:
       (print 1)
       (write-string "x" (cwc-out))
       (print 2)
-    expected: |
+    stdout: |
       1
     fails: true
   - name: stream-operators-refuse-a-non-stream-past-every-layer
