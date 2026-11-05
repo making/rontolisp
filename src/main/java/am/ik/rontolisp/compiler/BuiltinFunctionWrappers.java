@@ -693,6 +693,12 @@ public final class BuiltinFunctionWrappers {
 				if (gray != null && userDefinedNames.containsAll(gray.helpers())) {
 					chosen = gray.dispatching();
 				}
+				// Over the Gray twin: %format-write's own write is a site the Gray
+				// rewrite
+				// has already sent to its dispatch.
+				if (LispNames.FORMAT.equals(def.name) && userDefinedNames.contains(LispNames.FORMAT_WRITE_INTERNAL)) {
+					chosen = formatThroughDestinationWrapper();
+				}
 				if (LispNames.MAP.equals(def.name) && excludedNames.contains(LispNames.CONCATENATE)) {
 					chosen = mapWrapper(false);
 				}
@@ -2394,6 +2400,14 @@ public final class BuiltinFunctionWrappers {
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, ifForm));
 		return new WrapperDef(LispNames.FORMAT, List.of("dest", "ctrl", LispNames.LAMBDA_REST, "r"),
 				List.of(StreamOperandChecks.checkedFormatDestination(new LispSymbol("dest")), body));
+	}
+
+	// #'format in a program that can hold a string with a fill pointer, where the prelude
+	// spliced %format-write (StreamOperandChecks.formatThroughDestination).
+	private static WrapperDef formatThroughDestinationWrapper() {
+		return new WrapperDef(LispNames.FORMAT, List.of("dest", "ctrl", LispNames.LAMBDA_REST, "r"),
+				List.of(callV(LispNames.FORMAT_WRITE_INTERNAL, call(LispNames.FORMAT_DESTINATION_INTERNAL, "dest"),
+						am.ik.rontolisp.macro.FormatRenderer.call(new LispSymbol("ctrl"), new LispSymbol("r")))));
 	}
 
 	// #'concatenate wrapper (gated by REFERENCE_GATED_FUNCTIONS): the result type is a

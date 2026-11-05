@@ -12,7 +12,9 @@ the formatted string (expanding into `princ-to-string`/`prin1-to-string` calls
 folded with the internal string concatenation); with any other destination
 expression it builds the string the same way and then DISPATCHES on the value at
 run time -- a stream is written with one `write-string` call and nil is returned
-(a `with-output-to-string` string stream or a file stream), a `t` value writes to
+(a `with-output-to-string` string stream or a file stream), a string with a fill
+pointer has the text appended at its fill pointer (with `vector-push-extend`, so
+it grows past its capacity) and nil is returned, a `t` value writes to
 `*standard-output*`, and a nil value returns the string. That test has to happen
 at run time because nil does not name a stream: it is the "return the string"
 destination, so a function that forwards its own `&optional stream` argument
@@ -102,7 +104,10 @@ one yes x=42
 
 ## Limitations
 
-Other destinations (strings with fill pointers) are not supported. The loop escape `~^` is
+Any other value is refused with `FORMAT: The value X is not of type STREAM`, a
+string without a fill pointer included. On the compile paths a string with a fill
+pointer is taken in a program that spells `:fill-pointer`: one that builds that
+keyword at run time is refused too. The loop escape `~^` is
 supported at the top level and inside `~{ ... ~}` / `~@{ ... ~}` bodies (the
 join idiom `"~{~a~^, ~}"`; inside `~:{ ... ~}` it ends the current sublist's
 body), but its `~:^`/`~@^` variants and prefix parameters are not. Further notes:

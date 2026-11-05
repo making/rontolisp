@@ -2038,6 +2038,19 @@ public final class LispNames {
 	public static final String CHECK_STREAM_RUNTIME = "%CHECK-STREAM-RUNTIME";
 
 	/**
+	 * {@code (%format-destination x)}: {@code format}'s check of a computed destination
+	 * in a program that can hold a string with a fill pointer, which it passes where
+	 * {@link #CHECK_STREAM_INTERNAL} refuses it ({@code compiler.StreamOperandChecks}).
+	 */
+	public static final String FORMAT_DESTINATION_INTERNAL = "%FORMAT-DESTINATION";
+
+	/**
+	 * {@code (%format-write destination text)}: what {@code format} does with its
+	 * rendered text at a {@link #FORMAT_DESTINATION_INTERNAL} destination.
+	 */
+	public static final String FORMAT_WRITE_INTERNAL = "%FORMAT-WRITE";
+
+	/**
 	 * The {@code row-major-aref} built-in function (flat row-major element access,
 	 * independent of rank); also a {@code setf} place.
 	 */

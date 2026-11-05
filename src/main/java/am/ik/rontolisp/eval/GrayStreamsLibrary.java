@@ -238,7 +238,8 @@ public final class GrayStreamsLibrary {
 			return program;
 		}
 		RewriteContext ctx = new RewriteContext(new java.util.LinkedHashSet<>(), ownedOperators(program),
-				hostProtocol || binds(program, STANDARD_OUTPUT), hostProtocol || binds(program, STANDARD_INPUT));
+				hostProtocol || binds(program, STANDARD_OUTPUT), hostProtocol || binds(program, STANDARD_INPUT),
+				StreamOperandChecks.formatTakesStrings(program));
 		program = takeOverClearInput(program, ctx);
 		java.util.List<LispVal> rewritten = new java.util.ArrayList<>();
 		for (LispVal form : program) {
@@ -666,9 +667,10 @@ public final class GrayStreamsLibrary {
 	 * are those calls routed through the dispatch helpers
 	 * @param standardInput the same for {@code *standard-input*} and the stream-less
 	 * character reads
+	 * @param formatTakesStrings {@link StreamOperandChecks#formatTakesStrings}
 	 */
 	private record RewriteContext(java.util.Set<String> used, java.util.Set<String> owned, boolean standardOutput,
-			boolean standardInput) implements CallSiteWalk.Rewriter {
+			boolean standardInput, boolean formatTakesStrings) implements CallSiteWalk.Rewriter {
 
 		@Override
 		public @Nullable LispVal call(am.ik.rontolisp.LispCons form, am.ik.rontolisp.LispSymbol head) {
@@ -1051,6 +1053,16 @@ public final class GrayStreamsLibrary {
 			// dispatch (whose fallback handles stream handles and the t designator).
 			// The destination is bound first, preserving CL's evaluation order.
 			//
+			// A program that can hold a string with a fill pointer takes that lowering,
+			// whose write this walk sends to the dispatch.
+			if (ctx.formatTakesStrings() && StreamOperandChecks.formatDestinationIsComputed(parts.get(1))) {
+				List<LispVal> walked = new java.util.ArrayList<>();
+				walked.add(parts.get(0));
+				for (LispVal part : parts.subList(1, parts.size())) {
+					walked.add(rewrite(part, ctx));
+				}
+				return StreamOperandChecks.formatThroughDestination(cons, walked);
+			}
 			// The destination is then tested at RUN time, exactly as the ordinary
 			// format lowering does (LispMacroExpander.formatDestinationDispatch):
 			// nil is not a stream but the "return the string" destination, so a
