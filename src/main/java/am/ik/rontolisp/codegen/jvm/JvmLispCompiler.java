@@ -6955,6 +6955,31 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
+	// One walk whatever the number of names: a gate over a package's verbs walking the
+	// program per verb was 8% of compiling the corpus.
+	private static boolean programUsesAnySymbol(List<LispVal> program, List<String> names) {
+		Set<String> lookup = Set.copyOf(names);
+		for (LispVal expr : program) {
+			if (usesAnySymbol(expr, lookup)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean usesAnySymbol(LispVal val, Set<String> names) {
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym && names.contains(sym.name())) {
+				return true;
+			}
+			if (usesAnySymbol(cons.car(), names)) {
+				return true;
+			}
+			val = cons.cdr();
+		}
+		return false;
+	}
+
 	// The host types the program text gives its variables lowered onto the java: sites
 	// they type, every top-level form in order (compiler/JavaDeclarations); a program
 	// that mentions no java: symbol comes back unchanged without opening the classes.
@@ -6992,12 +7017,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	// (LispNames.JAVA_OPERATORS_QUALIFIED), so its sites are resolved against the class
 	// files (and the bridge emitted when one needs it).
 	private static boolean programUsesAnyJavaOp(List<LispVal> program) {
-		for (String operator : LispNames.JAVA_OPERATORS_QUALIFIED) {
-			if (programUsesSymbol(program, operator)) {
-				return true;
-			}
-		}
-		return false;
+		return programUsesAnySymbol(program, LispNames.JAVA_OPERATORS_QUALIFIED);
 	}
 
 	// True when the program calls the objc primitive layer (objc.lisp's calls, and
@@ -7005,12 +7025,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	// need) is emitted. A program that uses appkit: qualifies through the spliced
 	// appkit.lisp and objc.lisp.
 	private static boolean programUsesAnyObjcOp(List<LispVal> program) {
-		for (String name : JvmObjcPrimitivesCompiler.names()) {
-			if (programUsesSymbol(program, name)) {
-				return true;
-			}
-		}
-		return false;
+		return programUsesAnySymbol(program, JvmObjcPrimitivesCompiler.names());
 	}
 
 	// True when the program references any of the ffi: verbs, so the shipped
@@ -7018,12 +7033,11 @@ public final class JvmLispCompiler implements LispCompiler {
 	// program that uses cffi: qualifies through the spliced cffi-sys backend, whose
 	// primitives are ffi: calls.
 	private static boolean programUsesAnyFfiOp(List<LispVal> program) {
-		for (String member : JvmFfiInteropCompiler.members()) {
-			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.FFI_PKG, member))) {
-				return true;
-			}
-		}
-		return false;
+		return programUsesAnySymbol(program,
+				JvmFfiInteropCompiler.members()
+					.stream()
+					.map(member -> PackageRegistry.qualify(LispNames.FFI_PKG, member))
+					.toList());
 	}
 
 	/**

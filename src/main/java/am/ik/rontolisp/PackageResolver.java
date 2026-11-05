@@ -4513,6 +4513,7 @@ public final class PackageResolver {
 		List<String> clUserSymbols = printableBare.stream()
 			.filter(name -> !PackageRegistry.isClMemberName(name))
 			.toList();
+		java.util.Set<String> clUserSymbolSet = java.util.Set.copyOf(clUserSymbols);
 		List<String> noClPackages = new ArrayList<>();
 		java.util.SequencedMap<String, List<String>> bareExtra = new java.util.LinkedHashMap<>();
 		java.util.SequencedMap<String, List<String>> bareExcluded = new java.util.LinkedHashMap<>();
@@ -4574,7 +4575,7 @@ public final class PackageResolver {
 				List<String> bareExtraHere = new ArrayList<>();
 				List<String> bareExcludedHere = new ArrayList<>();
 				for (String name : candidates) {
-					boolean rule = clUserSymbols.contains(name) ? LispNames.CL_USER_PKG.equals(pkg)
+					boolean rule = clUserSymbolSet.contains(name) ? LispNames.CL_USER_PKG.equals(pkg)
 							: readsCl || !PackageRegistry.isStandardName(name)
 									|| PackageRegistry.isClLambdaListKeyword(name) || LispNames.QUOTE.equals(name);
 					boolean truth = printsBare(name);

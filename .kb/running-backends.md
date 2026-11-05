@@ -56,6 +56,10 @@ mirror stopped recording `%mv-spill` (`.kb/eval-runtime.md`), each cutting the l
 `(cl:format cl:*error-output* "~&@@T ~A ~A~%" "<case>" (cl:get-internal-real-time))` to each
 case of the concatenated program, run the leg, and diff consecutive stamps. What owns the
 interpreter leg now is the constant-stack cases (1M / 100,000-deep tail calls).
+A compile leg can grow with no case to blame: the computed `change-class` arms, quadratic in the
+corpus's classes, took `compile-jvm` past the timeout on macOS CI on 2026-11-05 ([clos.md](clos.md),
+"`change-class`"). `-Drontolisp.wasm.debug-func-sizes` names what the bytes went to, a JFR
+recording of a compile what the time went to.
 
 ## Examples Suite
 
