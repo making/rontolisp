@@ -40,8 +40,11 @@ list) is one value everywhere.
 
 ## Where the globals come from
 
-- The reader substitutes nothing. A `cl:`-qualified spelling still means the
-  standard name (`cl:pi` reads as `PI`), stripped before `PackageResolver` runs.
+- The reader substitutes nothing. A `cl:`-qualified spelling keeps its prefix, and
+  `PackageResolver` makes it the standard name. Until 2026-11-05 the reader stripped it, so in a
+  package using no `cl` the bare `PI` it left read as the package's own, `The variable P::PI is unbound`
+  (coalton's `cl:most-positive-fixnum`). ci-spec
+  `a-reader-macro-answers-a-cl-symbol-in-a-package-using-no-cl`.
 - The interpreter seeds them in `eval/Environment.createGlobal` (wasm false).
 - The JVM and both WASM-GC compiles seed them in
   `macro/LispMacroExpander.injectMvSpillGlobal` as leading `defconstant` forms,

@@ -1715,8 +1715,9 @@ public final class PackageResolver {
 	/**
 	 * Resolves a {@code defpackage} -- or, with {@code definePackageVariant} true, a
 	 * consumed {@code uiop:define-package}/{@code mgl-pax:define-package} -- form. The
-	 * variant additionally accepts {@code :use-reexport}; its other extra clauses stay
-	 * unsupported until a consumer needs them.
+	 * variant additionally accepts {@code :use-reexport}, {@code :mix}, {@code :reexport}
+	 * and {@code :mix-reexport}; its other extra clauses stay unsupported until a
+	 * consumer needs them.
 	 */
 	private LispVal resolveDefpackage(LispCons cons, boolean definePackageVariant) {
 		List<LispVal> parts = cons.toList();
@@ -1748,6 +1749,7 @@ public final class PackageResolver {
 		Set<String> shadows = existing == null ? new HashSet<>() : new HashSet<>(existing.shadows());
 		Set<String> interned = new HashSet<>();
 		List<List<LispVal>> localNicknames = new ArrayList<>();
+		List<String> mixed = new ArrayList<>();
 		for (LispVal clause : parts.subList(2, parts.size())) {
 			if (!(clause instanceof LispCons clauseCons) || !(clauseCons.car() instanceof LispSymbol keyword)
 					|| !keyword.isKeyword()) {
@@ -1790,6 +1792,26 @@ public final class PackageResolver {
 							}
 						}
 						exports.addAll(this.registry.get(used).externals());
+					}
+				}
+				// define-package only (coalton's package headers): :mix takes the
+				// external
+				// symbols of the packages without using them, an earlier package winning
+				// a name two share (uiop's ensure-mix); :reexport exports them; and
+				// :mix-reexport does both. The members are imported below, once every
+				// shadow is known.
+				case ":MIX", ":REEXPORT", ":MIX-REEXPORT" -> {
+					for (LispVal arg : args.subList(1, args.size())) {
+						String from = designatedPackage(designator(keyword.name(), "a package name", arg));
+						if (!this.registry.contains(from)) {
+							throw DefpackageException.packageError("No such package: " + from, from);
+						}
+						if (!":REEXPORT".equals(keyword.name())) {
+							mixed.add(from);
+						}
+						if (!":MIX".equals(keyword.name())) {
+							exports.addAll(this.registry.get(from).externals());
+						}
 					}
 				}
 				case LispNames.NICKNAMES_KEYWORD -> {
@@ -1861,6 +1883,13 @@ public final class PackageResolver {
 		// not change).
 		imports.putAll(shadowingImports);
 		shadows.addAll(shadowingImports.keySet());
+		for (String from : mixed) {
+			for (String member : this.registry.get(from).externals()) {
+				if (!shadows.contains(member)) {
+					imports.putIfAbsent(member, trueHome(from, member));
+				}
+			}
+		}
 		// An :export of a name the package does not define but INHERITS through its use
 		// list is a re-export of the used package's symbol -- in Common Lisp the very
 		// same symbol object, so postmodern's (:use :s-sql) + (:export #:sql) exports
@@ -1978,7 +2007,7 @@ public final class PackageResolver {
 				case LispNames.IMPORT_FROM_KEYWORD, ":SHADOWING-IMPORT-FROM" -> collectNames(names, option, args, 2);
 				case LispNames.USE_KEYWORD, LispNames.NICKNAMES_KEYWORD, LispNames.LOCAL_NICKNAMES_KEYWORD -> {
 				}
-				case ":USE-REEXPORT" -> {
+				case ":USE-REEXPORT", ":MIX", ":REEXPORT", ":MIX-REEXPORT" -> {
 					if (!definePackageVariant) {
 						throw DefpackageException
 							.programError("Unsupported " + LispNames.DEFPACKAGE + " clause: " + option);

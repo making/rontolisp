@@ -5936,6 +5936,19 @@ public final class LispNames {
 	public static final String PPRINT_LOGICAL_BLOCK = "PPRINT-LOGICAL-BLOCK";
 
 	/**
+	 * The {@code pprint-pop} standard macro: the next element of the enclosing block's
+	 * list, leaving the block once {@code *print-length*} elements are out or the rest is
+	 * no list.
+	 */
+	public static final String PPRINT_POP = "PPRINT-POP";
+
+	/**
+	 * The {@code pprint-exit-if-list-exhausted} standard macro: leaves the enclosing
+	 * block when its list is exhausted.
+	 */
+	public static final String PPRINT_EXIT_IF_LIST_EXHAUSTED = "PPRINT-EXIT-IF-LIST-EXHAUSTED";
+
+	/**
 	 * The {@code pprint-newline} standard function: a line break for {@code :mandatory},
 	 * nothing for the three conditional kinds ({@code :linear} / {@code :fill} /
 	 * {@code :miser}) -- deciding those needs the stream's current column, which no

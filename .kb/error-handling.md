@@ -87,7 +87,7 @@ A condition is a CLOS-subset instance ([instance-syntax.md](instance-syntax.md))
   failing (2026-09-16: the seed without `STREAM` grouped `reader-error` with `simple-error` and
   its report `cdr`ed the message).
 - `define-condition` = `defineConditionToDefclass` -> `expandDefclass` (top-level-only on the
-  compile path); `(:report x)` registered (string or lambda AST), `:documentation` dropped. **Lite
+  compile path); `(:report x)` registered (string, lambda AST, or a symbol as `(function x)`: the renderer funcalls the form), `:documentation` dropped. **Lite
   multiple parents**: the FIRST parent provides the slot layout, the rest join the ancestor set only
   (`registerExtraAncestors`).
 - `error`/`warn`/`signal` share `expandSignalDesignator`: a string designator takes the LEGACY

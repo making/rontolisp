@@ -78,10 +78,9 @@ class LispReaderTest {
 		assertThat(LispReader.readFromString("most-positive-fixnum")).isEqualTo(new LispSymbol("MOST-POSITIVE-FIXNUM"));
 		assertThat(LispReader.readFromString("'single-float-epsilon").print()).isEqualTo("'SINGLE-FLOAT-EPSILON");
 		assertThat(LispReader.readFromString("'lambda-list-keywords").print()).isEqualTo("'LAMBDA-LIST-KEYWORDS");
-		// A cl:-qualified spelling means the standard name.
-		assertThat(LispReader.readFromString("cl:pi")).isEqualTo(new LispSymbol("PI"));
-		assertThat(LispReader.readFromString("cl:most-positive-fixnum"))
-			.isEqualTo(new LispSymbol("MOST-POSITIVE-FIXNUM"));
+		// A cl:-qualified spelling keeps its prefix for the resolver, which makes it the
+		// standard name whatever the current package uses.
+		assertThat(LispReader.readFromString("cl:pi")).isEqualTo(new LispSymbol("CL:PI"));
 		// nil and t stay self-evaluating.
 		assertThat(LispReader.readFromString("nil")).isEqualTo(LispNil.INSTANCE);
 		assertThat(LispReader.readFromString("t")).isEqualTo(LispTrue.INSTANCE);

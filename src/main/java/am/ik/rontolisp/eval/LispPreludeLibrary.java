@@ -225,6 +225,8 @@ public final class LispPreludeLibrary {
 				""");
 		// The counter is a defvar for the same reason the %symbol-plists store is one:
 		// defvar assigns only when unbound, so the spliced copy never resets a count.
+		// find-symbol answers every name in the keyword package, which keeps no table
+		// (.kb/symbol-runtime-api.md), so a keyword gentemp asks it nothing.
 		SOURCES.put(LispNames.GENTEMP, """
 				(defvar %gentemp-counter 0)
 				(defun gentemp (&optional %gt-prefix %gt-package)
@@ -235,7 +237,8 @@ public final class LispPreludeLibrary {
 				      (setq %gt-name
 				            (concatenate 'string %gt-stem (write-to-string %gentemp-counter)))
 				      (unless (if %gt-package
-				                  (find-symbol %gt-name %gt-package)
+				                  (and (not (string= (string %gt-package) "KEYWORD"))
+				                       (find-symbol %gt-name %gt-package))
 				                  (find-symbol %gt-name))
 				        (return (if %gt-package
 				                    (intern %gt-name %gt-package)
@@ -5510,9 +5513,11 @@ public final class LispPreludeLibrary {
 		}
 		// write: LispMacroExpander.expandPprintLogicalBlock's atom arm calls it, inside
 		// the expression compilers. The arm exists unless the object is spelled as a
-		// list.
+		// list. A pprint-pop prints a dotted tail with it and reads *print-length*, whose
+		// defvar comes with it.
 		if (LispNames.WRITE.equals(entry)) {
-			return am.ik.rontolisp.macro.LispMacroExpander.mayPprintLogicalBlockOfAnAtom(program);
+			return am.ik.rontolisp.macro.LispMacroExpander.mayPprintLogicalBlockOfAnAtom(program)
+					|| referencesName(program, LispNames.PPRINT_POP, canonical);
 		}
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
 			return referencesName(program, LispNames.MAKE_BROADCAST_STREAM, canonical)

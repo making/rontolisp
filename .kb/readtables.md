@@ -77,6 +77,13 @@ as part of a symbol on all four instead of signalling (CLHS 2.4.8; measured 2026
   and the CLI entry (`evalSource`) read each form with `currentReadSyntax()` after the forms
   before it ran; `load` binds `*readtable*`. A read error is signalled after the forms before
   it ran (the CLI entry included, since 2026-10-30).
+- **A reader macro function's value in SOURCE is respelled** (`respelledForResolver`,
+  `requalifyShadowedClNames`; 2026-11-05): the form goes through the resolver as spelled, so a bare `cl`
+  name it answered read as the package's own where the package uses no `cl` (coalton's readtable
+  returning `cl:declaim` read by eclector: `T1::PRINT is undefined`). A run-time `read`'s datum is not resolved
+  and must keep its symbols (`The function CL:PROGN is undefined` the other way round), so the
+  interpreter's source reads take `sourceReadSyntax` and the image's `currentReadSyntax(check)`.
+  ci-spec `a-reader-macro-answers-a-cl-symbol-in-a-package-using-no-cl`.
 - Run time: one-argument `read-from-string` under a view reads ONE datum
   (`readOneWithSyntax`; the stop index is cached for `%read-from-string-end`, a second read
   would run the reader macros twice). `read` / `read-delimited-list` on a STRING stream under

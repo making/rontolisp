@@ -70,6 +70,11 @@ is never referenced, only stored into by one macro and read by a later one).
   `(in-package P)` missed `P::SM` and every binding's `(cffi:defcvar errno :int)` refused to compile
   (mmap's `check-posix`). The substitution comes before `requalifyShadowedClNames`: an expansion read
   in one package may land in a form of another that shadows a CL name in it.
+- A definition's data stays verbatim, its expressions do not (2026-11-05, fset's `increment-atomic-series`
+  in a `:initform`, `Cannot compile symbol`): a `defclass` or `define-condition` slot's `:initform`, a
+  `:default-initargs` value, a `:report` that is a cons, and a `defstruct` slot's default.
+  `UserMacroExpander.expandAll`'s `define-condition` arm reads the slot list as `defclass`'s, so a slot
+  named like a macro is no call (fset's `(map :initarg :map)`).
 - The walk knows a form that holds an expression where a call's head would be: `assert`'s places, datum and
   arguments and `check-type`'s string (sento's `(assert ... (format t "~a" (name act:*self*)))`, `Cannot
   compile symbol`), a `with-lock-held`/`with-mutex` spec (lparallel's lock slot, `#:LOCK530 is unbound`).

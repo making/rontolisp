@@ -3,10 +3,11 @@
 `(asdf:component-version component)`
 
 Reader: the `:version` string the system's `defsystem` declared, or `nil` when
-it declared none. Only a plain string literal is recorded — a `.asd` is parsed
-as **data**, so ASDF's `(:read-file-form "version.sexp")` indirection (and any
-other computed spelling) is never evaluated and answers `nil`. A component file
-has no version of its own.
+it declared none. A `.asd` file's `(:read-file-form "version.sexp" :at 0)` and
+`(:read-file-line "version.txt" :at 0)` indirections read that file, beside the
+`.asd`, as ASDF does. What does not parse as dotted integers answers `nil`, as does
+any other spelling, an indirection the file cannot satisfy, and an indirection in a
+`defsystem` outside a `.asd`. A component file has no version of its own.
 
 ```lisp
 (asdf:defsystem :demo-cv :version "0.9.15" :components ((:file "main")))

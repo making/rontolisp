@@ -114,6 +114,8 @@ categories:
       - { slug: slot-exists-p, name: slot-exists-p }
       - { slug: print-unreadable-object, name: "print-unreadable-object" }
       - { slug: pprint-logical-block, name: "pprint-logical-block" }
+      - { slug: pprint-pop, name: "pprint-pop" }
+      - { slug: pprint-exit-if-list-exhausted, name: "pprint-exit-if-list-exhausted" }
       - { slug: with-package-iterator, name: "with-package-iterator" }
       - { slug: with-hash-table-iterator, name: "with-hash-table-iterator" }
       - { slug: do-external-symbols, name: "do-external-symbols" }
