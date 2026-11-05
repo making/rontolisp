@@ -634,22 +634,31 @@
               :params ',types
               ,@(if (eq returns :void) '() `(:returns ,returns)))))))
 
-;; A filter. Each clause but two is a callback the host calls, by the name the other SDK
-;; gives its generic function:
+;; A filter. Each clause but two is a callback the host calls, as in ../proxy-wasm.lisp:
 ;;
 ;;   (:on-request-headers (stream num-headers end-of-stream) body...)
 ;;
 ;; The first parameter is the context's id, and a body answers :continue or :pause, or a
-;; boolean, as that generic function says in ../proxy-wasm.lisp.
+;; boolean, as the clause does there.
 ;;
 ;;   (:state field...)            fields every context has: see %state-accessors
 ;;   (:on-failure :log | :trap)   what a failed host call does before answering NIL
 ;;
 (defmacro define-filter (&rest clauses)
   (dolist (clause clauses)
-    (unless (or (member (car clause) '(:state :on-failure))
-                (assoc (car clause) (%callbacks)))
-      (error "proxy-wasm: no clause ~s in define-filter" (car clause))))
+    (let* ((key (car clause)) (callback (assoc key (%callbacks))))
+      (cond
+       ((not (eq clause (assoc key clauses)))
+        (error "proxy-wasm: a second ~s in define-filter" key))
+       ((eq key :on-failure)
+        (unless (member (cadr clause) '(:log :trap))
+          (error "proxy-wasm: :on-failure is :log or :trap, not ~s"
+                 (cadr clause))))
+       ((eq key :state))
+       ((null callback) (error "proxy-wasm: no clause ~s in define-filter" key))
+       ((/= (length (cadr clause)) (length (cadddr callback)))
+        (error "proxy-wasm: ~s takes ~a parameters" key
+               (length (cadddr callback)))))))
   (let* ((accessors
           (multiple-value-list (%state-accessors (cdr (assoc :state clauses)))))
          (state-size (cadr accessors))

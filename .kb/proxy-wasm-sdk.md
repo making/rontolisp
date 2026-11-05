@@ -2,7 +2,7 @@
 
 `examples/proxy-wasm/proxy-wasm.lisp`. Everything here is `--no-wasi --optimize=size`, raw / gzip, measured
 2026-11-05 (`test_plugin` is built without `--no-wasi`). What a filter's author chooses is in the example's README; this is
-why the SDK is shaped as it is, and what was weighed and left. The compiler's half is `.todo` i52.
+why the SDK is shaped as it is, and what was weighed and left. What a `funcall` still brings into a filter is `.todo` i52.
 
 ## What an exchange runs
 
@@ -18,9 +18,9 @@ nothing is 13 instructions. "Before" is `7d24bc53b`.
 | Same: function calls | 465 | 3,039 | 1,126 | 248 | 248 |
 | `http_body`, 64KiB body: instructions | 462,207 | 3,227,624 | 223,013 | 5,636,321 | 221,979 |
 | Same: function calls | 37 | 553 | 143 | 196,630 | 37 |
-| `http_body`: bytes | 92,163 | 59,634 / 23,071 | 6,084 / 3,162 | 2,064 / 1,152 | 2,166 / 1,246 |
-| `http_headers`: bytes | 94,189 | 61,382 / 23,762 | 20,313 / 8,701 | 2,583 / 1,388 | same |
-| `gateway`: bytes | | 125,898 / 45,243 | 105,517 / 39,546 | | |
+| `http_body`: bytes | 92,163 | 59,634 / 23,071 | 6,086 / 3,165 | 2,064 / 1,152 | 2,166 / 1,246 |
+| `http_headers`: bytes | 94,189 | 61,382 / 23,762 | 20,311 / 8,702 | 2,583 / 1,388 | same |
+| `gateway`: bytes | | 125,898 / 45,243 | 105,200 / 39,439 | | |
 
 Warm p50 per exchange, load 14-30, against 445-487us for that plugin that does nothing: `http_body` Rust 621-723us, wasm-GC before
 1000-1468us and now 715-733us, `--no-gc` 512-639us; `http_headers` Rust 1532us, wasm-GC now 1332us, `--no-gc` 1527us, one round.
@@ -53,18 +53,20 @@ Measured on one tree, by keeping the old API over everything else (`http_body` w
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `defmethod`, the old SDK | 6,227 | 393 | 57,883 / 22,590 | 27,491 | 60,595 / 23,638 |
 | `defmethod`, this SDK's host functions | 3,443 | 220 | 41,931 / 17,697 | 22,941 | 42,808 / 17,911 |
-| `define-filter` | 1,145 | 91 | 6,084 / 3,162 | 19,936 | 20,313 / 8,701 |
+| `define-filter` | 1,145 | 91 | 6,086 / 3,165 | 19,936 | 20,311 / 8,702 |
 
 So `defmethod` went: `define-filter` is a third of the instructions and a seventh of the module, and a filter loses nothing it
 can't write itself. What the 2,298 were: an object and a table entry per stream (a third of them dispatch and default methods
 on callbacks nobody specialized), since the SDK expands before the filter's methods are read and so has to export for all of them.
 The form knows at expansion which clauses exist, so a callback left out is `(defun ... nil)`, no context exists unless asked for,
-and a mistyped clause fails the compile where a mistyped `defmethod` made a new generic function. It is also the `--no-gc` SDK's form.
+and a mistyped clause fails the compile where a mistyped `defmethod` made a new generic function, as do a clause given twice, a wrong
+parameter count and an `:on-failure` that is neither mode. It is also the `--no-gc` SDK's form.
 
 **A context is its id unless `:root` or `:stream` says otherwise.** Then it is an object of any kind in `%context`'s table, which
-is what state costs: `(:stream (id root) (make-instance 's))` 2,413 instructions and 14,077 bytes, a `defstruct` 2,435, a cons
-2,405, so the object's kind is not the cost. The table is: create 696, delete 498. A hit on the last context is 17 instructions; a
+is what state costs: `(:stream (id root) (make-instance 's))` 2,357 instructions and 14,063 bytes, a `defstruct` 2,379, a cons
+2,349, so the object's kind is not the cost. The table is: create 696, delete 442. A hit on the last context is 17 instructions; a
 miss, every callback under interleaved streams, is 201 more. `:on-done`, `:on-log` and `:on-delete` get a root's context too (`gateway`'s `typep`).
+A context goes outside `:on-delete`'s handler: inside it, as on the old SDK, a clause that signaled kept its context for good.
 
 **Host functions are macros under a function.** `(get-header :request ":path")` has the number at compile time (`%define-enumerated`, a
 wrong keyword fails the compile) and a literal name reaches `compileLiteralImportCall`; `(get-header map name)` over a variable calls the
@@ -135,6 +137,6 @@ Beside them, programs that are no filter, base and tree: `hello_world` 484 / 387
 
 ## Tests
 No test in the suite reaches these filters past a compile (`examples/examples.yaml`). `examples/proxy-wasm/check.sh` and
-`sdk-examples/check.sh` run them in Envoy under Docker: `error_log.lisp` the default mode, `test_plugin.lisp` the trap. Sluice's
+`sdk-examples/check.sh` run them in Envoy under Docker: `error_log.lisp` the default mode and a failing `:on-delete`, `test_plugin.lisp` the trap. Sluice's
 `ProxyWasmFilterTest`, 25 tests, passes with `http_body`, `http_headers` and `test_plugin` of each SDK in the place of its Rust ones, and
 its `lisp_plugin.lisp` on `define-filter`.

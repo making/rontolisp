@@ -739,51 +739,49 @@
 (defun %argument-names (types)
   (mapcar (lambda (type) (gensym "ARGUMENT")) types))
 
+;; What a clause's body answers, as what its export answers.
+(defun %clause-answer (returns body)
+  (cond ((eq returns :action) `(eq (progn ,@body) :pause))
+        ((eq returns :void)
+         `(progn
+            ,@body
+            nil))
+        (t `(progn ,@body))))
+
+;; A callback a clause gives. One that fails answers what lets the stream go on and refuses a
+;; start, and on-done that the context is finished, as nothing else would finish it.
+(defun %given-callback (name id arguments clause returns tracked calls trap)
+  (let ((parameters (cadr clause)) (fallback (eq (car clause) :on-done)))
+    `(defun ,name (,id ,@arguments)
+       (%guarded ,trap ,fallback
+                 ,(%with-context (car parameters) id tracked calls fallback
+                                 `(let ,(mapcar
+                                         #'list
+                                         (cdr parameters)
+                                         arguments)
+                                    (declare (ignorable ,@(cdr parameters)))
+                                    ,(%clause-answer returns
+                                                     (cddr clause))))))))
+
 (defun %callback-forms (callback clause tracked calls trap)
-  (let* ((key (car callback))
-         (export (cadr callback))
+  (let* ((export (cadr callback))
          (name (caddr callback))
          (types (cadddr callback))
          (returns (car (cddddr callback)))
          (default (cadr (cddddr callback)))
          (id (gensym "ID"))
-         (arguments (%argument-names types))
-         (result (if (eq returns :void) '() '(:returns :bool))))
-    (cond ((and (null clause) (eq default :optional)) '())
-          (t
-           (list (if clause
-                     (let ((parameters (cadr clause)))
-                       `(defun ,name (,id ,@arguments)
-                          (%guarded ,trap nil
-                                    ,(%with-context (car parameters) id tracked
-                                                    calls nil
-                                                    `(let ,(mapcar
-                                                            #'list
-                                                            (cdr parameters)
-                                                            arguments)
-                                                       (declare
-                                                        (ignorable
-                                                         ,@(cdr parameters)))
-                                                       ,(cond
-                                                         ((eq returns :action)
-                                                          `(eq (progn
-                                                                 ,@(cddr
-                                                                    clause))
-                                                               :pause))
-                                                         ((eq returns :void)
-                                                          `(progn
-                                                             ,@(cddr clause)
-                                                             nil))
-                                                         (t
-                                                          `(progn
-                                                             ,@(cddr
-                                                                clause)))))))))
-                     `(defun ,name (,id ,@arguments)
-                        (declare (ignore ,id ,@arguments))
-                        ,default))
-                 `(rontolisp:wasm-export ',name
-                                         :as ,export
-                                         :params '(:u32 ,@types) ,@result))))))
+         (arguments (%argument-names types)))
+    (unless (and (null clause) (eq default :optional))
+      (list (if clause
+                (%given-callback name id arguments clause returns tracked calls
+                                 trap)
+                `(defun ,name (,id ,@arguments)
+                   (declare (ignore ,id ,@arguments))
+                   ,default))
+            `(rontolisp:wasm-export ',name
+              :as ,export
+              :params '(:u32 ,@types)
+              ,@(if (eq returns :void) '() '(:returns :bool)))))))
 
 ;; A parent of 0 makes a root context. Every other context is a stream of its parent.
 (defun %context-create-forms (clauses tracked trap)
@@ -821,22 +819,20 @@
                                   :as "proxy_on_context_create"
                                   :params '(:u32 :u32)))))
 
+;; A context goes whatever its :on-delete does, as nothing else would let it go.
 (defun %delete-forms (clauses tracked calls trap)
-  (let* ((id (gensym "ID"))
-         (given (assoc :on-delete clauses))
-         (body
-          `(progn
-             ,@(when given
-                 (list
-                  (%with-context (car (cadr given)) id tracked calls nil
-                                 `(progn
-                                    ,@(cddr given)
-                                    nil))))
-             ,@(when tracked `((%delete-context ,id)))
-             nil)))
+  (let ((id (gensym "ID")) (given (assoc :on-delete clauses)))
     (list `(defun %on-delete (,id)
              (declare (ignorable ,id))
-             ,@(when (or tracked given) `((%guarded ,trap nil ,body))))
+             ,@(when given
+                 `((%guarded ,trap nil
+                             ,(%with-context (car (cadr given)) id tracked calls
+                                             nil
+                                             `(progn
+                                                ,@(cddr given)
+                                                nil)))))
+             ,@(when tracked `((%delete-context ,id)))
+             nil)
           `(rontolisp:wasm-export '%on-delete
                                   :as "proxy_on_delete"
                                   :params '(:u32)))))
@@ -873,6 +869,14 @@
                                     :as "proxy_on_http_call_response"
                                     :params '(:u32 :u32 :s32 :s32 :s32))))))
 
+;; How many parameters a clause has, NIL for one that does not exist.
+(defun %clause-arity (key)
+  (let ((callback (assoc key (%callbacks))))
+    (cond (callback (+ 1 (length (cadddr callback))))
+          ((member key '(:root :on-delete)) 1)
+          ((member key '(:stream :on-context-create)) 2)
+          ((eq key :on-http-call-response) 5))))
+
 ;; A filter. Each clause but three is a callback the host calls:
 ;;
 ;;   (:on-request-headers (stream num-headers end-of-stream) body...)
@@ -897,17 +901,22 @@
 ;;
 ;; The third says what a failed host call and a signaled error do:
 ;;
-;;   (:on-failure :log | :trap)   logged and the callback answers its default, the default;
-;;                                or a trap, with no handler in any callback
+;;   (:on-failure :log | :trap)   :log, the default, logs it and the callback answers its
+;;                                default; :trap traps, with no handler in any callback
 ;;
 (defmacro define-filter (&rest clauses)
   (dolist (clause clauses)
-    (unless (or (member (car clause)
-                        '(:root :stream :on-failure
-                                :on-context-create :on-delete
-                                :on-http-call-response))
-                (assoc (car clause) (%callbacks)))
-      (error "proxy-wasm: no clause ~s in define-filter" (car clause))))
+    (let* ((key (car clause)) (arity (%clause-arity key)))
+      (cond
+       ((not (eq clause (assoc key clauses)))
+        (error "proxy-wasm: a second ~s in define-filter" key))
+       ((eq key :on-failure)
+        (unless (member (cadr clause) '(:log :trap))
+          (error "proxy-wasm: :on-failure is :log or :trap, not ~s"
+                 (cadr clause))))
+       ((null arity) (error "proxy-wasm: no clause ~s in define-filter" key))
+       ((/= (length (cadr clause)) arity)
+        (error "proxy-wasm: ~s takes ~a parameters" key arity)))))
   (let* ((trap (eq (cadr (assoc :on-failure clauses)) :trap))
          (calls (assoc :on-http-call-response clauses))
          (tracked (or (assoc :root clauses) (assoc :stream clauses) calls))

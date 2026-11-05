@@ -7,6 +7,13 @@ SDK levers applied is 62,404 bytes, for a filter that removes a header, reads a 
 `.todo/artefacts/i51-proxy-wasm-filter-size/README.md`. The same costs fall on any small `--no-wasi` module, so measure
 `size-report/programs/` too. The target number is raw and gzip of the whole module (`.kb/size-measurement.md`).
 
+Measured again 2026-11-05 on `define-filter` (`.kb/proxy-wasm-sdk.md`), raw / gzip at `--no-wasi --optimize=size`. `http_body` is
+6,086 / 3,165 under `(:on-failure :trap)` and 14,516 / 6,242 under the default handler. With `get-buffer`, `search` and `~a` of an
+integer it is 8,469 / 4,275, and holds no `%PC-*`, `%POS-WALK` or `FUNC_PRINT_VAL`: a literal control without `~s` reaches no
+`prin1` (`.kb/pretty-printer.md`). What stands out now is the `funcall`. That filter with a `funcall` of a function in a `defvar`
+is 40,822 / 17,494, and 56,380 / 22,145 under the handler, holding `_dispatch_1`, `_dispatch_2`, `FUNC_PRINC_VAL` 2,884,
+`%REPLACE-RUNTIME-ARRAY` 2,085, `CONCATENATE` 1,990 and `%SUBSEQ-RUNTIME` 1,545. Start there. The sizes below are older.
+
 ## What is there
 
 From `funcsizes.py` on that module (about 55,600 bytes of code). `%PC-*` and the `FUNC_PRINT*` sizes are current; the other

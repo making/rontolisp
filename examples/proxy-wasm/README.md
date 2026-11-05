@@ -79,8 +79,9 @@ Compile with `--no-wasi`, and load the module with Envoy's
 | `:on-log`, `:on-delete` | `(context)` | |
 
 A parameter a body does not use needs no declaration. `:on-done`, `:on-log` and
-`:on-delete` run for any context, a root's too. A clause the SDK does not know fails the
-compile, as a mistyped `(:on-reqest-headers ...)` should.
+`:on-delete` run for any context, a root's too. A clause the SDK does not know, one given
+twice, or one with the wrong number of parameters fails the compile, as a mistyped
+`(:on-reqest-headers ...)` should.
 
 A context is its id, an integer, and the module holds nothing per context. Two clauses
 make it an object instead, of any kind but `nil`, and everything Lisp has works in it:
@@ -118,10 +119,12 @@ TCP (network filter) callbacks.
 A host call answering anything but OK logs the call's name and the status and signals,
 except that a read of something absent answers `nil` and `proxy-wasm:http-call` answers
 `nil` when the host refuses the call. An error signaled in a callback is logged and the
-callback answers its default instead of trapping, because a trap would take the VM down.
-`proxy-wasm:panic` traps from anywhere. Each callback also pops the bump heap on its way
-out; everything the SDK answers is a Lisp object, so it can be kept in a slot across
-callbacks. `with-buffer`'s address is the exception: the bytes behind it go with the callback.
+callback answers its default instead of trapping, because a trap would take the VM down:
+`:continue`, false from `:on-vm-start` and `:on-configure`, and true from `:on-done`. A context
+goes when the host deletes it, whatever `:on-delete` does. `proxy-wasm:panic` traps from
+anywhere. Each callback also pops the bump heap on its way out; everything the SDK answers is
+a Lisp object, so it can be kept in a slot across callbacks. `with-buffer`'s address is the
+exception: the bytes behind it go with the callback.
 
 `log-*`, `send-local-response`, `http-call` and `set-buffer` are macros, so `#'proxy-wasm:log-info`
 is not a function.
@@ -134,10 +137,10 @@ body. The Rust SDK's `http_body` runs 2,342 of them, from a module of 92,163 byt
 
 | `http_body` with | Bytes | Instructions, 5 bytes | 64KiB |
 | --- | ---: | ---: | ---: |
-| `(:on-failure :trap)` | 6,084 (3,162) | 1,145 | 223,013 |
-| A handler in the callbacks given, the default | 14,532 (6,242) | 1,219 | 223,163 |
-| `(:stream (id root) (make-instance 'my-stream))` | 14,077 (6,203) | 2,413 | 224,457 |
-| `get-buffer` and `search`, not `with-buffer` and `search-bytes` | 8,471 (4,272) | 1,482 | 1,967,966 |
+| `(:on-failure :trap)` | 6,086 (3,165) | 1,145 | 223,013 |
+| A handler in the callbacks given, the default | 14,516 (6,242) | 1,219 | 223,163 |
+| `(:stream (id root) (make-instance 'my-stream))` | 14,063 (6,197) | 2,357 | 224,401 |
+| `get-buffer` and `search`, not `with-buffer` and `search-bytes` | 8,469 (4,275) | 1,482 | 1,967,966 |
 
 - **Errors trap, or are handled.** The handler costs a filter 8KB raw and 3KB gzip, however
   much it does, and about 25 instructions per callback given. A filter gives it up with
@@ -197,9 +200,9 @@ builds the filters there and runs on them the checks of `sdk-examples/check.sh`.
 
 | Filter, at `--optimize=size` | On this SDK: raw / gzip | On `proxy-wasm.lisp` with `(:on-failure :trap)`: raw / gzip |
 | --- | ---: | ---: |
-| `http_body` | 2,166 / 1,246 | 6,084 / 3,162 |
-| `http_headers` | 2,583 / 1,388 | 20,313 / 8,701 |
-| `test_plugin` | 6,581 / 3,145 | 49,508 / 20,759 |
+| `http_body` | 2,166 / 1,246 | 6,086 / 3,165 |
+| `http_headers` | 2,583 / 1,388 | 20,311 / 8,702 |
+| `test_plugin` | 6,581 / 3,145 | 49,489 / 20,741 |
 
 What it gives up, for a filter's author:
 
