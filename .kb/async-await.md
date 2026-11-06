@@ -339,8 +339,9 @@ timer ([tcp-sockets.md](tcp-sockets.md), "Read deadlines").
   operation is the caller's to withdraw (the socket read's `-cancel-read`); a losing timer fires
   later into an arm that finds the race settled. No `subtask.cancel` is bound.
 - **Elsewhere**: no other backend needs one -- interpreter/JVM reads carry `SO_TIMEOUT`, and a
-  `--native` read the runner's own deadline. Lifting it (a public `race`, or `.todo/405`'s Preview 1
-  probe over a deferred future, kind 3 above) means a native per backend: `CompletableFuture`
+  `--native` read the runner's own deadline; a `--native` `listen` asks the runner whether bytes
+  wait (`FIONREAD`, [tcp-sockets.md](tcp-sockets.md)), so the Preview 1 probe needed no race
+  either. Lifting it (a public `race`) means a native per backend: `CompletableFuture`
   composition on the interpreter/JVM, and on Preview 1 a poll of `%future-settled-p` over futures
   whose host can answer it.
 

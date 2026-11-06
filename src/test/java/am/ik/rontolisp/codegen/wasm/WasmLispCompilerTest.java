@@ -437,7 +437,7 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void tcpBuiltinsInPreview1ModeAreCallTimeErrors() {
+	void socketBuiltinsInPreview1ModeAreCallTimeErrors() {
 		// Preview 1 has no host sockets, but the call sites compile to CALL-TIME
 		// errors (not compile errors) so a spliced library whose socket layer is
 		// dead code still builds -- s-sql drags in cl-postgres without ever
@@ -448,6 +448,13 @@ class WasmLispCompilerTest {
 		assertThat(compile("(rontolisp:tcp-accept 0)")).isNotEmpty();
 		assertThat(compile("(rontolisp:tcp-local-port 0)")).isNotEmpty();
 		assertThat(compile("(rontolisp:tcp-set-timeout 200 1000)")).isNotEmpty();
+		assertThat(compile("(rontolisp:tcp-peer-address 0)")).isNotEmpty();
+		assertThat(compile("(rontolisp:tcp-peer-port 0)")).isNotEmpty();
+		assertThat(compile("(rontolisp:tcp-local-address 0)")).isNotEmpty();
+		// The client tls pair too: dexador's request reaches the cl+ssl shim's
+		// tls-upgrade on its https branch, which an http:// program never runs.
+		assertThat(compile("(rontolisp:tls-connect \"example.com\" 443)")).isNotEmpty();
+		assertThat(compile("(rontolisp:tls-upgrade 200 \"example.com\")")).isNotEmpty();
 	}
 
 	@Test
@@ -455,10 +462,10 @@ class WasmLispCompilerTest {
 		// listen was a COMPILE error on Preview 1 until the usocket shim grew
 		// wait-for-input (a listen-based poll): the shim is spliced unpruned into
 		// every usocket program, so its listen call site is dead code that must
-		// still build -- the same policy as the tcp built-ins above. A
-		// program that actually calls it gets the old message at CALL time
-		// (catchable under EH mode); the real Preview 1 probe decision stays with
-		// its own todo.
+		// still build -- the same policy as the tcp built-ins above. A plain
+		// Preview 1 module holds no socket, so a program that calls it on any stream
+		// but a string one gets the message at CALL time (catchable under EH mode); a
+		// --native module's socket is runner-sockets.lisp's, which asks the runner.
 		assertThat(compile("(listen 5)")).isNotEmpty();
 	}
 
@@ -477,8 +484,8 @@ class WasmLispCompilerTest {
 				""")).isNotEmpty();
 		// tcp-listen without a host (bind all interfaces) compiles too
 		assertThat(compileComponent("(rontolisp:tcp-listen 7777)")).isNotEmpty();
-		// tcp-set-timeout resolves against its sockets.lisp defun (which SIGNALS at
-		// run time: wasi:sockets has no read-deadline knob -- .kb/tcp-sockets.md)
+		// tcp-set-timeout resolves against its sockets.lisp defun (a real read
+		// deadline, raced against a wasi:clocks timer -- .kb/tcp-sockets.md)
 		assertThat(compileComponent("(rontolisp:tcp-set-timeout 200 1000)")).isNotEmpty();
 	}
 
@@ -517,14 +524,6 @@ class WasmLispCompilerTest {
 			.contains("warning: TCP-LISTEN expects at least 1 argument, got 0")
 			.contains("warning: TCP-ACCEPT expects 1 argument, got 0")
 			.contains("warning: TCP-LOCAL-PORT expects 1 argument, got 2");
-	}
-
-	@Test
-	void tcpAddressAccessorsInPreview1ModeAreCallTimeErrors() {
-		// Same call-time policy as the tcp builtins above.
-		assertThat(compile("(rontolisp:tcp-peer-address 0)")).isNotEmpty();
-		assertThat(compile("(rontolisp:tcp-peer-port 0)")).isNotEmpty();
-		assertThat(compile("(rontolisp:tcp-local-address 0)")).isNotEmpty();
 	}
 
 	@Test
@@ -615,24 +614,6 @@ class WasmLispCompilerTest {
 				    (close l)))
 				(rontolisp:await (main))
 				""")).isNotEmpty();
-	}
-
-	@Test
-	void tlsConnectIsCompileErrorOnPreview1() {
-		// Preview 1 only: --component compiles the client tls built-ins against the
-		// spliced tls.lisp (over wit-imported wasi:tls@0.3.0-draft);
-		// Preview 1 has no wasi:tls host API, so there the compile error stays.
-		assertThatThrownBy(() -> compile("(rontolisp:tls-connect \"example.com\" 443)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-CONNECT requires the interpreter, the JVM backend or --component");
-	}
-
-	@Test
-	void tlsUpgradeIsCompileErrorOnPreview1() {
-		// The cl+ssl shim's substrate: a compile error on Preview 1 only (see above).
-		assertThatThrownBy(() -> compile("(rontolisp:tls-upgrade 200 \"example.com\")"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-UPGRADE requires the interpreter, the JVM backend or --component");
 	}
 
 	@Test

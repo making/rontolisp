@@ -218,11 +218,19 @@ public final class LispNames {
 	public static final String EVAL_ROW_DEFINE_SYMBOL_MACRO = "%EVAL-ROW-DEFINE-SYMBOL-MACRO";
 
 	/**
-	 * The dispatch over the program's {@code (setf name)} functions, generated from the
-	 * final set: {@code (op args value)} answers the form that calls the one a place
-	 * names, nil for a name none is for.
+	 * What an eval'd assignment of a place no table row holds evaluates:
+	 * {@code (op args value)} answers the form that calls the {@code (setf name)}
+	 * function {@link #EVAL_SETF_FUNCTION} finds for the place, nil for a name none is
+	 * for.
 	 */
 	public static final String EVAL_SETF_FORM = "%EVAL-SETF-FORM";
+
+	/**
+	 * The dispatch over the program's {@code (setf name)} functions, generated from the
+	 * final set and cut into segments: {@code (op)} answers the one a place names, nil
+	 * for a name none is for.
+	 */
+	public static final String EVAL_SETF_FUNCTION = "%EVAL-SETF-FUNCTION";
 
 	/**
 	 * Internal (compile-path only): the shared runtime a {@code progv} site binds its

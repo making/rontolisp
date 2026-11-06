@@ -73,8 +73,10 @@ TLS-wrapped protocols:
   **10-second** bound: a peer that accepts and never answers TLS makes the
   call answer `nil` instead of blocking, and the returned handle carries no
   read deadline.
-- **WASM Preview 1**: not supported — a **compile error** (no `wasi:tls` host
-  API exists for Preview 1).
+- **WASM Preview 1**, a [native executable](../../compiling/native.md#tcp-sockets)
+  included: not supported — the call **signals an error when it runs** (no TLS
+  host API exists for Preview 1), so a program that never reaches it still
+  compiles.
 - **Browser playground**: not supported — the browser sandbox provides no raw
   TCP sockets, so `tls-connect` signals an error.
 

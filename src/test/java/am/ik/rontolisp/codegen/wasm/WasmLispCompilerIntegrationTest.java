@@ -16423,10 +16423,6 @@ class WasmLispCompilerIntegrationTest {
 			.hasMessageContaining("WAIT-FOR requires the interpreter, the JVM backend or --component");
 		assertThatThrownBy(() -> compileAndRunFrontEnd("(print (functionp #'rontolisp:fetch))", false))
 			.hasMessageContaining("is only available in WASM component mode");
-		for (String member : List.of("tls-connect", "tls-upgrade")) {
-			assertThatThrownBy(() -> compileAndRunFrontEnd("(print (functionp #'rontolisp:" + member + "))", false))
-				.hasMessageContaining("no wasi:tls host API is wired on Preview 1 WASM");
-		}
 		assertThat(
 				compileAndRunFrontEnd(RontolispNativeValueFixture.SOCKET_PROGRAM, true, "tcp=y", "inherit-network=y"))
 			.isEqualTo(RontolispNativeValueFixture.SOCKET_EXPECTED);
@@ -17119,52 +17115,13 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void componentUsocketReceiveTimeoutAndWaitForInputAreReal() throws Exception {
 		// The usocket timeout surface as the interpreter/JVM have it (.kb/tcp-sockets.md,
-		// "Read deadlines"): the :receive-timeout write installs a real read deadline
-		// (the getter reads it back), wait-for-input on a quiet socket WAITS its timeout
-		// and answers no socket and no time left -- the listen it polls is a real probe
-		// here, a read started and withdrawn -- the read past the deadline signals the
-		// interpreter's text, and once the peer writes, wait-for-input answers the socket
-		// with time to spare.
-		String program = """
-				(let* ((listener (usocket:socket-listen "127.0.0.1" 0))
-				       (port (usocket:get-local-port listener))
-				       (client (usocket:socket-connect "127.0.0.1" port)))
-				  (setf (usocket:socket-option client :receive-timeout) 0.2)
-				  (print (usocket:socket-option client :receive-timeout))
-				  (let ((server (usocket:socket-accept listener))
-				        (start (get-internal-real-time)))
-				    (multiple-value-bind (ready remaining)
-				        (usocket:wait-for-input (list client) :timeout 0.3 :ready-only t)
-				      (print (list ready remaining
-				                   (>= (- (get-internal-real-time) start)
-				                       (* 0.25 internal-time-units-per-second)))))
-				    (print (handler-case (read-line client) (error (e) (princ-to-string e))))
-				    (write-line "ping" server)
-				    (multiple-value-bind (ready remaining)
-				        (usocket:wait-for-input (list client) :timeout 5 :ready-only t)
-				      (print (list (eql (car ready) client) (if remaining t nil))))
-				    (print (eql (usocket:wait-for-input client) client))
-				    (print (read-line client))
-				    (usocket:socket-close server))
-				  (usocket:socket-close client)
-				  (usocket:socket-close listener))
-				""";
-		List<LispVal> spliced = am.ik.rontolisp.eval.WitLibrary.process(
-				am.ik.rontolisp.eval.StdinLibrary.process(
-						am.ik.rontolisp.eval.SocketsLibrary.process(
-								am.ik.rontolisp.eval.WaitForLibrary.process(
-										am.ik.rontolisp.eval.UsocketLibrary
-											.process(LispReader.readAllFromString(program)),
-										am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
-								am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
-						am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false));
-		byte[] componentBytes = WasmLispCompiler.builder().component(true).build().compile(spliced);
-		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("usocket-option.component.wasm"));
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
-				"tcp=y", "-S", "inherit-network=y", path("usocket-option.component.wasm"));
-		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim())
-			.isEqualTo("0.2\n(NIL NIL T)\n\"read-line: Read timed out\"\n(T T)\nT\n\"ping\"");
+		// "Read deadlines"): the :receive-timeout write installs a real read deadline,
+		// and wait-for-input on a quiet socket WAITS its timeout -- the listen it polls
+		// is
+		// a real probe here, a read started and withdrawn.
+		assertThat(
+				compileAndRunFrontEnd(am.ik.rontolisp.UsocketWaitFixture.PROGRAM, true, "tcp=y", "inherit-network=y"))
+			.isEqualTo(am.ik.rontolisp.UsocketWaitFixture.EXPECTED);
 	}
 
 	@Test

@@ -27,9 +27,8 @@
 ;;   (see .kb/tcp-sockets.md), not defuns in this file.
 ;; - socket-option supports :receive-timeout only (a real read deadline
 ;;   wherever the tcp built-ins run), and wait-for-input is a listen-based poll
-;;   (a real wait wherever listen asks the host; a native executable, whose
-;;   listen sees only the chunk it read, returns immediately claiming
-;;   readiness). Both decisions and their reasons: .kb/tcp-sockets.md.
+;;   (a real wait wherever the tcp built-ins run, since listen asks the kernel
+;;   or the host on each). Both decisions and their reasons: .kb/tcp-sockets.md.
 
 (defparameter usocket:*wildcard-host* "0.0.0.0")
 
@@ -207,46 +206,37 @@
 
 (defun usocket::%usock-ready (sockets)
   ;; The subset of SOCKETS with immediately-available input, probed through
-  ;; cl:listen: the kernel receive buffer on the interpreter/JVM, what the host
-  ;; hands over at once on the WASM component, the chunk readahead buffer in a
-  ;; native executable (listen's own documented divergence there). Stream
-  ;; sockets only -- listen on a listener handle signals (no backend has a
-  ;; non-blocking accept probe).
+  ;; cl:listen: the kernel receive buffer on the interpreter, the JVM and in a
+  ;; native executable, what the host hands over at once on the WASM component.
+  ;; Stream sockets only -- listen on a listener handle signals on the
+  ;; interpreter and the JVM (no backend has a non-blocking accept probe).
   (let ((%wfi-ready nil))
     (dolist (%wfi-s sockets)
       (when (listen %wfi-s) (setq %wfi-ready (cons %wfi-s %wfi-ready))))
     (reverse %wfi-ready)))
 
 (defun usocket::%usock-wfi-result
-    (socket-or-sockets all ready claim ready-only timeout start)
+    (socket-or-sockets ready ready-only timeout start)
   ;; Upstream's two return values: the ready sockets (the original argument
   ;; unless :ready-only) and the time remaining within :timeout (nil once it
-  ;; elapsed, or when none was given). In a native executable an empty ready
-  ;; set still CLAIMS readiness (see wait-for-input below), so :ready-only
-  ;; answers the full list there.
-  (let ((%wfi-claimed (if (if claim (null ready) nil) all ready))
-        (%wfi-remaining
+  ;; elapsed, or when none was given).
+  (let ((%wfi-remaining
          (if timeout
              (let ((%wfi-elapsed
                     (/ (- (get-internal-real-time) start)
                        internal-time-units-per-second)))
                (if (< %wfi-elapsed timeout) (- timeout %wfi-elapsed) nil))
              nil)))
-    (values (if ready-only %wfi-claimed socket-or-sockets) %wfi-remaining)))
+    (values (if ready-only ready socket-or-sockets) %wfi-remaining)))
 
 (defun usocket:wait-for-input
     (socket-or-sockets &key timeout ready-only &allow-other-keys)
   ;; Waits until at least one of the given stream sockets has readable input,
   ;; polling cl:listen every 10 ms (a timeout of 0 polls once); without
-  ;; :timeout it waits indefinitely. A REAL wait wherever listen asks the host:
-  ;; the kernel on the interpreter and the JVM, a read started and withdrawn on
-  ;; the WASM component. In a native executable it returns IMMEDIATELY claiming
-  ;; readiness when nothing is buffered (reads block anyway, so the
-  ;; wait-then-read loop behaves identically; a poll loop cannot be honoured
-  ;; there -- the runner's listen sees only the chunk buffer, so a real poll
-  ;; would spin forever on data waiting host-side). The decision is the run-time
-  ;; *features* test below because the shim is parsed once for every backend.
-  ;; wait-list objects are not supported.
+  ;; :timeout it waits indefinitely. A REAL wait on every backend with sockets:
+  ;; listen asks the kernel on the interpreter, the JVM and in a native
+  ;; executable, and the host (a read started and withdrawn) on the WASM
+  ;; component. wait-list objects are not supported.
   (if (null socket-or-sockets)
       (progn
         (when timeout (sleep timeout))
@@ -260,18 +250,16 @@
               (if timeout
                   (+ %wfi-start
                      (round (* timeout internal-time-units-per-second)))
-                  nil))
-             (%wfi-claim (if (member :rontolisp-native *features*) t nil)))
+                  nil)))
         (do ((%wfi-ready
               (usocket::%usock-ready %wfi-list)
               (usocket::%usock-ready %wfi-list)))
-            ((or %wfi-ready %wfi-claim
+            ((or %wfi-ready
                  (if %wfi-deadline
                      (>= (get-internal-real-time) %wfi-deadline)
                      nil))
-             (usocket::%usock-wfi-result socket-or-sockets %wfi-list %wfi-ready
-                                         %wfi-claim ready-only timeout
-                                         %wfi-start))
+             (usocket::%usock-wfi-result socket-or-sockets %wfi-ready ready-only
+                                         timeout %wfi-start))
           (sleep 0.01)))))
 
 (defun usocket:get-host-by-name (name)

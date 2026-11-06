@@ -9,9 +9,9 @@
 ;; The substrate is rontolisp:tls-upgrade, which wraps an ALREADY-CONNECTED
 ;; stream handle in TLS as a client -- the shape make-ssl-client-stream has
 ;; (a client connects, possibly issues a proxy CONNECT, then upgrades) and
-;; tls-connect cannot express. Interpreter/JVM only, like the rest of the TLS
-;; family: on the WASM backends tls-upgrade is a compile error
-;; (.kb/tcp-sockets.md).
+;; tls-connect cannot express. It runs on the interpreter, the JVM and the WASM
+;; component; on Preview 1, a --native executable included, the call signals
+;; when it runs, so an http:// client still builds (.kb/tcp-sockets.md).
 ;;
 ;; What has no backing SIGNALS instead of being accepted and ignored:
 ;; - client certificates (:key/:certificate/:password on

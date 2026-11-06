@@ -71,8 +71,10 @@ HTTPS requests prefer [`rontolisp:fetch`](rontolisp-fetch.md)):
   have no effect there — a non-`nil` `:insecure` value **signals** rather
   than silently verifying). The interface is an explicitly experimental
   draft, so a wasmtime update may need a matching rontolisp update.
-- **WASM Preview 1**: not supported — a **compile error** (no `wasi:tls` host
-  API exists for Preview 1).
+- **WASM Preview 1**, a [native executable](../../compiling/native.md#tcp-sockets)
+  included: not supported — the call **signals an error when it runs** (no TLS
+  host API exists for Preview 1), so a program that never reaches it still
+  compiles.
 - **Browser playground**: not supported — the browser sandbox provides no raw
   TCP sockets, so `tls-upgrade` signals an error.
 

@@ -37,7 +37,7 @@
 ;; whose text lastError holds. read fills the caller's buffer (the :bytes
 ;; shape: the trailing argument is the (unsigned-byte 8) vector) and answers
 ;; the count, 0 at the peer's close; write takes an octet vector or a string's
-;; raw bytes.
+;; raw bytes; readable answers 1 while bytes wait to be read, without blocking.
 (rontolisp:wasm-import 'rontolisp::%rltcp-connect
                        :from "rltcp"
                        :as "connect"
@@ -92,6 +92,11 @@
                        :from "rltcp"
                        :as "setTimeout"
                        :params '(:s32 :s32)
+                       :returns :s32)
+(rontolisp:wasm-import 'rontolisp::%rltcp-readable
+                       :from "rltcp"
+                       :as "readable"
+                       :params '(:s32)
                        :returns :s32)
 (rontolisp:wasm-import 'rontolisp::%rltcp-last-error
                        :from "rltcp"
@@ -545,14 +550,27 @@
           b)
         (rontolisp::%write-byte-raw b stream))))
 
+(defun rontolisp::%sock-readable (e)
+  ;; Whether bytes wait in the kernel's receive buffer (the runner's FIONREAD,
+  ;; the interpreter's available()): never blocks, consumes nothing.
+  (let ((r (rontolisp::%rltcp-readable (rontolisp::%sock-e-host e))))
+    (if (< r 0) (rontolisp::%sock-host-fail "listen: ") (= r 1))))
+
 (defun rontolisp::%io-listen (&optional s)
-  ;; Immediately-available probe: unconsumed bytes in the socket's chunk buffer
-  ;; (the kernel's receive buffer is not asked, the component's documented
-  ;; divergence). A non-socket designator falls through to the native listen
-  ;; under its %listen-raw alias.
+  ;; A connected socket answers whether a read would hand bytes over at once:
+  ;; bytes left in the chunk, else bytes waiting in the kernel's receive buffer
+  ;; (%sock-readable), the interpreter's and the JVM's answer. nil at the peer's
+  ;; close and for a listener, as on the component. A non-socket designator falls
+  ;; through to the native listen under its %listen-raw alias.
   (let ((e (rontolisp::%sock-entry s)))
     (if e
-        (if (rontolisp::%sock-buf-ready e) t nil)
+        (if (= (rontolisp::%sock-e-kind e) 1)
+            (if (rontolisp::%sock-buf-ready e)
+                t
+                (if (rontolisp::%sock-e-eof e)
+                    nil
+                    (rontolisp::%sock-readable e)))
+            nil)
         (rontolisp::%listen-raw s))))
 
 (defun rontolisp::%io-open-stream-p (s)
