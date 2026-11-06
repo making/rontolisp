@@ -57,9 +57,24 @@ allocated, a scope's `Environment` was a third: 128 bytes, 21 of its 29 fields t
 environment's, beside a `NameMap`, the argument array and the `ArgList`. The global
 environment's own state is an object of its own since (`Environment.Globals`; a scope holds
 `Globals.NONE`, every field null as its own were), a scope 56 bytes: the load to
-`math/bounded.lisp` 51.6 -> 46.2 s side by side, `math/num.lisp` 21.9 -> 19.8. Up to
+`math/bounded.lisp` 51.6 -> 46.2 s side by side, `math/num.lisp` 21.9 -> 19.8. The register's
+clear (`ValueCountRegister.clear`) writes only when it holds something else, a reference store
+costing the collector's barrier: a call binding two parameters and two `let`s 287-300 -> 253-270
+ns (best of 15 rounds, three runs side by side). Measured and not kept: the `NameMap` folded into
+its `Environment` (one object a scope) at 257-263 ns against 253-270, and a call keeping its own
+copy of what its cell holds under a count of the namespace's rebindings, within the noise of the
+load to `math/bounded.lisp` (46.6-47.6 s, three builds side by side). Up to
 `math/bounded.lisp`, `typep`'s expansion is 0.3% of the samples, the `typecase` family 0.1%,
 `make-instance` 0.2%: a stamp over what they read would buy no more than that.
+
+Over coalton's whole load (JFR, 2026-11-06, the scope diet in): the compiled nodes 59% of the
+samples (the argument arrays 10%, a call's guard and binding 8% -- 6.6% at the read of the cell's
+binding --, a lexical read 8%, a `let`'s scope 6%), built-ins through `apply` 10%, scopes'
+lookups by name 6%, the CLOS machinery 5% (rebuilding dispatchers 15% of the load up to
+`math/bounded.lisp`, 0.8% of the whole), package and symbol lookups 5%. 3.4% was a compiled
+`#'name` asking whether the name is a generic function's, its spelling normalized for the key at
+each evaluation (`ClosRegistry.normalize`); the node makes the key once since
+(`CompiledForms.FunctionValue`).
 
 ## What a compile reads, and what it guards
 
