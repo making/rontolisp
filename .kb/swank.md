@@ -282,6 +282,11 @@ answers nil on every backend). A function with no record answers its desugared l
 a standard operator the table `cl-arglists.txt` generated from SBCL 2.2.9's
 `sb-introspect:function-lambda-list` over the fbound externals of `COMMON-LISP`, names only
 (no defaults, supplied-p or `&aux`); regenerate with `gen-arglists.lisp` in the artefacts.
+A generic keeps its `defgeneric`'s record across the dispatcher defuns `defineDispatcher`
+evaluates (until 2026-11-07 the dispatcher's `(x y &rest %gf-rest)` replaced it, and its
+location); one only `defmethod` made records the method's lambda list as SBCL derives it
+(`recordImplicitGeneric`). The same records answer `rontolisp::%function-lambda-list`,
+trivial-arguments' `arglist` ([asdf.md](asdf.md), `eval/TrivialArgumentsForms`).
 `autodoc` takes the innermost operator around the cursor with an argument list and marks
 the parameter the argument binds -- by position, `&rest`/`&body` past them, a keyword by
 the keyword before the value, inside a destructuring parameter the item within it -- or

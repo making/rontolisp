@@ -141,6 +141,9 @@ body), but its `~:^`/`~@^` variants and prefix parameters are not. Further notes
 
 ## Runtime control strings
 
+A control that is a FUNCTION (one [`formatter`](formatter.md) made) is called with a
+stream and the arguments, and what it writes is the output.
+
 A control string that is a runtime value -- a computed control expression, a
 call through the function value `#'format` (`funcall`/`apply`), the inner
 control of `~?`, or a condition's `format-control` slot -- is rendered by a

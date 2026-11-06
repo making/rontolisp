@@ -2484,6 +2484,8 @@ final class JvmExprCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx, className);
 			case LispNames.WITH_COMPILATION_UNIT ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithCompilationUnit(cons), ctx, className);
+			case LispNames.FORMATTER ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandFormatter(cons), ctx, className);
 			case LispNames.LOCALLY -> {
 				// A pass-through lowering: the expansion sits where this form sat, so
 				// it inherits the tail spine (JvmBodyOutliner) and the tail mark.

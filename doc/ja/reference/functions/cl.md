@@ -473,6 +473,8 @@
 | `print-not-readable-object` | `(print-not-readable-object c)` | `print-not-readable` がシグナルされた対象のオブジェクト |
 | `file-error-pathname` | `(file-error-pathname c)` | 失敗したファイル操作に渡されたパス名 |
 | `print-object` | `(print-object obj stream)` | プリンタが参照するジェネリック関数。メソッドを定義すると、その型のインスタンスの出力を制御できます |
+| `describe` | `(describe obj)` | `describe-object` によるオブジェクトの説明を書く。値は返さない |
+| `describe-object` | `(describe-object obj stream)` | `describe` が呼ぶ総称関数。システムメソッドはオブジェクトとその型を書く |
 | `find-restart` | `(find-restart 'retry c)` | その名前を持つ最内のアクティブなリスタートを第一級オブジェクトとして返します。なければ `nil`。lite: コンディション引数は無視されます |
 | `invoke-restart` | `(invoke-restart :reconnect host)` | 名前(シンボル/キーワード)またはオブジェクトでリスタートを引数付きで起動します。`restart-case` のリスタートなら制御はその節へ移ります |
 | `compute-restarts` | `(compute-restarts)` | アクティブなすべてのリスタートレコードを最内から順に返します |

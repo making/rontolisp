@@ -614,6 +614,12 @@ Three congruence rules:
   that an UNSUPPLIED optional is not passed on. Gated on the body mentioning
   `call-next-method`/`next-method-p`; pinned against SBCL over six tail shapes.
 
+**`describe-object`** (2026-11-07) is a callable system generic of the same kind: cl-owned, its system method
+`%describe-object-default` (a prelude entry selected for a program naming the generic or `describe`) writes the
+object and its type in brackets, SBCL 2.2.9's first two lines. `describe` is a prelude defun over it answering no
+values (`passesMultipleValues`). in-nomine's `(defmethod describe-object :after (thing stream) ...)` under
+`find-method` is the consumer; spinneret had stopped there. ci-spec `describe-and-describe-object`.
+
 **The trio, `print-object`, `make-load-form`, `slot-unbound` and `slot-missing` are function values with no method in the
 program** (`isCallableSystemGenericName`): the interpreter synthesizes the generic in
 `resolveFunction`, the compile path in `expandTopLevelDefinitions` for any program that NAMES one

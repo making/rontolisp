@@ -124,9 +124,8 @@ verification against the actual Quicklisp dist at probe time)
   - `parachute` runs compiled on all four backends, `with-fixtures` and `define-test` (i16,
     measured 2026-11-05).
   - `lparallel` -- bt condition variables (h37).
-  - `serapeum` loads and matches SBCL on the interpreter (measured 2026-11-05). `spinneret` stops on its
-    dependency trivial-arguments, whose `:import-from` has no arm for this implementation, so the first
-    symbol it imports reads as the package.
+  - `serapeum` loads and matches SBCL on the interpreter (measured 2026-11-05). `spinneret` too, since i89
+    (2026-11-07); its JVM compile stops in serapeum on i99.
   - `cl-interpol`, `cl-csv` -- named-readtables: `:common-lisp` feature (h31), then the
     `readtable` class (h53). cl-csv's `.asd` first (h35).
 - **Probe round 2 (2026-10-30), compared against SBCL 2.2.9 on the same sources.**
@@ -174,10 +173,9 @@ verification against the actual Quicklisp dist at probe time)
   - Since loaded: `cl-unification` (all four, as SBCL; `.kb/asdf.md`, "Libraries that load"),
     `sycamore` (since i85: ropes, tree sets / maps, hash sets and `cgen`'s `|?:|` as SBCL on the
     interpreter, the JVM and P1), `40ants-doc` (interpreter, as SBCL, since i87; the compile paths
-    stop in serapeum: `internal-definitions.lisp:411` `DEFINE-SYMBOL-MACRO must be a top-level form`,
-    after `%DEFINE-METHOD-COMBINATION is undefined` at compile time).
+    stop in serapeum on i99).
   - Interpreter only: `generic-cl` (since i88, 2026-11-07; JVM i97).
-  - Do not load: `petalisp` (i86 in queues, i89,
+  - Do not load: `petalisp` (i86 in queues,
     then i90 in typo), `osicat` (cffi-grovel refused, i84).
   - Side results: `lparallel` loads now (its h37 stop is gone); `asdf:load-system` of a
     `:defsystem-depends-on` that only Quicklisp holds is `.todo/418`.

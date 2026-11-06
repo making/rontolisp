@@ -1068,6 +1068,27 @@ print and every backend's arithmetic see one float; the compile paths' prelude d
 `prin1-to-string`. Rejected: typing a literal by its expected type (wrong for `(+ 1.0d0 x)` with the
 literal first) and making F32 and F64 unify (an instance on one would be found for the other).
 
+**`eval/TrivialArgumentsForms`** (pinned by `TrivialArgumentsE2eTest`, all four, SBCL 2.2.9's answers,
+vendored 20260101). Its `defpackage` imports `method-generic-function`, `method-specializers` and
+`method-lambda-list` from one MOP package per `#+impl` arm with no generic arm, so here the first name was
+read as the package (`No such package: METHOD-GENERIC-FUNCTION`). Three spans: a `#+rontolisp #:closer-mop`
+arm (the three readers are built in, `macro/generic-functions.lisp`, so no closer-mop dependency); an
+`arglist` arm over `rontolisp::%function-lambda-list`; and `:rontolisp` in both `#-(or ...)` fallback
+expressions, the load-time `NOTICE` warning and the `function-lambda-expression` arm. Tier 4 because the
+rest is portable. The primitive is the interpreter's records ([swank.md](swank.md), "Argument lists"): a
+`defun`/`defmacro`/`defgeneric`'s written lambda list, a `defmethod`-made generic's derived one, SBCL's
+for a standard operator, an anonymous lambda's desugared one. The compile paths' prelude answers
+`:unknown` (a compiled function keeps no lambda list); a macro asking while it expands is answered by the
+compile-time evaluator on every backend, which is in-nomine's `define-namespace` use. `argtypes` answers
+`:unknown` but for a method, whose specializers it reads. Measured 2026-11-07: spinneret (with in-nomine)
+loads and answers what SBCL 2.2.9 answers on the interpreter (`with-html-string`, attributes, `deftag`,
+`:raw`, `escape-string`, a `define-namespace`); what it took beyond this item: `describe-object`
+([clos.md](clos.md)), a keyword `macrolet` name and `&whole` being the form
+([defmacro-backquote.md](defmacro-backquote.md)), `notinline` ([compiler-macros.md](compiler-macros.md)),
+`formatter` ([format.md](format.md)). The JVM compile of serapeum then stops at
+`(:import-from #:serapeum/iter #:collecting*)`: a name only a consumed `defmacro` interns, so the package
+stays sealed for the backend's resolver (`.todo/i99`). typo stops on `.todo/i90`.
+
 **`eval/ClReexportForms`** (pinned by `ClReexportE2eTest`, all four, SBCL 2.2.9's answers). clingon's
 `src/package.lisp` is `(defpackage :clingon (:use :cl))` plus top-level
 `(cl-reexport:reexport-from :clingon.command)` calls: a function computing `import` and `export` at

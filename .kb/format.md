@@ -29,6 +29,13 @@ compile); a condition's `format-control` slot via `%format-condition`
 ([error-handling.md](error-handling.md)); and
 `(error/warn/signal/cerror <computed datum> args...)` with a run-time STRING datum.
 
+A FUNCTION control (CLHS 22.2.1.3) is called with a string output stream and the arguments
+(`%fmt-render`'s arm), so `~?` and a computed control take one. `formatter` expands to
+`#'(lambda (stream &rest args) (%fmt-apply stream "control" args))`: the renderer's `%fmt-run`, whose
+cursor gives the arguments left over, which the function answers. A program spelling `formatter`
+gets the renderer (`reachesFormatRenderer`; `FormatRenderer.isUsed` knows `%fmt-apply`). Consumer:
+spinneret's `fast-format` compiler macro. ci-spec `format-runtime-control-string`.
+
 ## A literal control that cannot render never fails a compile
 Two exceptions out of `FmtParser`, the same answer from `expandFormat` and `formatMessagePieces`
 (`error`/`warn`/`signal`/`cerror`), so on all four backends, and each wrapped in

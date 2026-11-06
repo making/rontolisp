@@ -95,6 +95,7 @@ description and a runnable example you can evaluate in your browser.
 | `do-symbols` | `(do-symbols (s :cl-user) (print s))` | Iterate every symbol ACCESSIBLE in a package -- its own plus what it inherits (same baked table on the compiled backends) |
 | `do-all-symbols` | `(do-all-symbols (s) (print s))` | Iterate every distinct symbol accessible in any package, spelled the way code spells it |
 | `with-compilation-unit` | `(with-compilation-unit (:override t) body...)` | A `progn` around the body: the options only merge a deferred-warning report, and there is no `compile-file` to defer one from |
+| `formatter` | `(formatter "~a~%")` | A function of a stream and arguments rendering the control string, answering the arguments it left |
 
 Macros have no function value: `#'cond` or `(funcall 'setf ...)` is an error. Convenience
 accessors and predicates that expand inline in call position (`first`, `rest`, `nth`,

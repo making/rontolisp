@@ -1959,6 +1959,56 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Defines {@code rontolisp::%function-lambda-list}, trivial-arguments'
+	 * {@code arglist} here ({@code eval/TrivialArgumentsForms}): the lambda list a
+	 * {@code defun}, {@code defmacro} or {@code defgeneric} this evaluator ran wrote,
+	 * SBCL's for a standard operator, the desugared one of an anonymous function, else
+	 * {@code :unknown}. The compile paths' prelude answers {@code :unknown}: a compiled
+	 * function keeps no lambda list.
+	 */
+	private void registerFunctionLambdaList() {
+		String name = LispNames.FUNCTION_LAMBDA_LIST_INTERNAL_QUALIFIED;
+		this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.FUNCTION_LAMBDA_LIST_INTERNAL + " expects 1 argument, got " + args.size());
+			}
+			LispVal answer = functionLambdaList(args.get(0));
+			return answer != null ? answer : new LispSymbol(":UNKNOWN");
+		}));
+	}
+
+	private @Nullable LispVal functionLambdaList(LispVal designator) {
+		String name = switch (designator) {
+			case LispSymbol symbol -> symbol.name();
+			case LispLambda lambda -> lambda.name();
+			case LispFunction function -> function.name();
+			default -> null;
+		};
+		if (name != null) {
+			Definition written = definition(name);
+			if (written != null) {
+				return written.lambdaList();
+			}
+			if (PackageRegistry.isClMemberName(name)) {
+				LispVal standard = CommonLispSwank.standardArglist(name);
+				if (standard != null) {
+					return standard;
+				}
+			}
+		}
+		if (designator instanceof LispLambda lambda && lambda.name() == null) {
+			List<LispVal> params = new ArrayList<>(lambda.params());
+			if (lambda.rest() != null) {
+				params.add(new LispSymbol(LispNames.LAMBDA_REST));
+				params.add(Objects.requireNonNull(lambda.rest()));
+			}
+			return consListOf(params);
+		}
+		return null;
+	}
+
+	/**
 	 * Defines {@code rontolisp::%swank-listen}, {@code %swank-serve} and
 	 * {@code %swank-stop}, the interpreter's half of the {@code swank} shim, over the
 	 * installed {@link SwankHost}.
@@ -4393,6 +4443,7 @@ public final class LispEvaluator {
 					RontoHttpServer.serverPort(requireHttpServerHandle(LispNames.HTTP_SERVER_PORT, args)));
 		}));
 		registerSwankHost();
+		registerFunctionLambdaList();
 		// The JSON functions live here because they dispatch to the Lisp-source
 		// library (JsonLibrary), evaluated into the global environment on first use.
 		String jsonParseName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JSON_PARSE);
@@ -12205,9 +12256,12 @@ public final class LispEvaluator {
 				return builtinMacroExpansion(cons, LispMacroExpander::expandThe);
 			case LispNames.EVAL_WHEN:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandEvalWhen);
+			case LispNames.FORMATTER:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandFormatter);
 			case LispNames.WITH_COMPILATION_UNIT:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandWithCompilationUnit);
 			case LispNames.LOCALLY:
+				markNotinlineCalls(cons);
 				return builtinMacroExpansion(cons, LispMacroExpander::expandLocally);
 			case LispNames.WITH_STANDARD_IO_SYNTAX:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandWithStandardIoSyntax);
@@ -13038,6 +13092,58 @@ public final class LispEvaluator {
 		this.definitions.put(name, definition(source, parts.get(2), documentation));
 	}
 
+	/**
+	 * Writes down the lambda list of a generic its first {@code defmethod} made: the
+	 * method's, as SBCL 2.2.9 derives it (CLHS 7.6.4) -- specializers dropped, an
+	 * {@code &optional} default and every supplied-p variable dropped (a defaulted
+	 * optional stays a one-element list), a {@code &key} parameter its variable or its
+	 * {@code ((keyword var))}, no {@code &aux}.
+	 * @param generic the generic's name
+	 * @param source the defmethod as written
+	 * @param method the defmethod, its name normalized
+	 */
+	private void recordImplicitGeneric(String generic, LispCons source, LispCons method) {
+		LispVal lambdaList = null;
+		for (LispVal part = method.cdr() instanceof LispCons rest ? rest.cdr()
+				: LispNil.INSTANCE; part instanceof LispCons cell; part = cell.cdr()) {
+			if (cell.car() instanceof LispCons || cell.car() instanceof LispNil) {
+				lambdaList = cell.car();
+				break;
+			}
+		}
+		if (lambdaList == null
+				|| !(lambdaList instanceof LispNil || lambdaList instanceof LispCons list && list.isProperList())) {
+			return;
+		}
+		List<LispVal> out = new ArrayList<>();
+		String section = null;
+		for (LispVal item : lambdaList instanceof LispCons list ? list.toList() : List.<LispVal>of()) {
+			if (item instanceof LispSymbol keyword && keyword.name().startsWith("&")) {
+				section = keyword.name();
+				if (!LispNames.LAMBDA_AUX.equals(section)) {
+					out.add(item);
+				}
+				continue;
+			}
+			if (LispNames.LAMBDA_AUX.equals(section)) {
+				continue;
+			}
+			if (section == null) {
+				out.add(item instanceof LispCons specialized ? specialized.car() : item);
+			}
+			else if (LispNames.LAMBDA_OPTIONAL.equals(section) && item instanceof LispCons entry) {
+				out.add(new LispCons(entry.car(), LispNil.INSTANCE));
+			}
+			else if (LispNames.LAMBDA_KEY.equals(section) && item instanceof LispCons entry) {
+				out.add(entry.car() instanceof LispCons ? new LispCons(entry.car(), LispNil.INSTANCE) : entry.car());
+			}
+			else {
+				out.add(item);
+			}
+		}
+		this.definitions.put(generic, definition(source, consListOf(out), null));
+	}
+
 	private static Definition definition(LispCons source, LispVal lambdaList, @Nullable String documentation) {
 		String operator = source.car() instanceof LispSymbol head ? LispSymbol.memberName(head.name()) : "DEFUN";
 		return source instanceof LocatedCons located && located.line() >= 1
@@ -13391,6 +13497,7 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalDefmethod(LispCons cons, Environment env) {
+		LispCons written = cons;
 		// A (defmethod (setf name) ...) rides the %setf- writer-generic convention, so
 		// it merges with any defclass :accessor writer methods on the same place.
 		cons = LispMacroExpander.normalizeSetfMethodForm(cons, this.structAccessors);
@@ -13413,6 +13520,9 @@ public final class LispEvaluator {
 		eval(LispMacroExpander.expandDefmethod(cons, this.closRegistry), env);
 		String generic = ((LispSymbol) cons.toList().get(1)).name();
 		defineDispatcher(generic, env);
+		if (!this.definitions.containsKey(generic)) {
+			recordImplicitGeneric(generic, written, cons);
+		}
 		if (this.closRegistry.gfProtocol()) {
 			// A method on a generic whose defgeneric named its metaobject classes
 			// reaches add-method as a metaobject.
@@ -13469,8 +13579,18 @@ public final class LispEvaluator {
 		boolean producerWasMethoded = this.methodedProducerDispatch.containsKey(genericName);
 		String fallback = builtinDefaultMethodFor(genericName);
 		LispVal previous = this.globalEnv.lookupFunctionOrNull(genericName);
+		// The dispatcher is a defun whose lambda list is the dispatch's: the generic
+		// keeps
+		// the one its definition wrote.
+		Definition written = this.definitions.get(genericName);
 		eval(DispatchChain.memoizing(LispMacroExpander.generateDispatcher(genericName, this.closRegistry, fallback)),
 				env);
+		if (written != null) {
+			this.definitions.put(genericName, written);
+		}
+		else {
+			this.definitions.remove(genericName);
+		}
 		if (previous instanceof LispInstance metaobject && isGenericFunctionMetaobject(metaobject)) {
 			// The name answers its generic function METAOBJECT (the generic-function
 			// protocol bound it): the metaobject stays the name's function and calls the
@@ -13814,6 +13934,9 @@ public final class LispEvaluator {
 	 */
 	private static final String MACRO_ARGS_VAR = "__macro_args";
 
+	/** The variable a macro's body finds its whole call form in ({@code &whole}). */
+	private static final String MACRO_WHOLE_VAR = "__macro_whole";
+
 	private LispVal evalDefmacro(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol name)) {
@@ -13917,8 +14040,62 @@ public final class LispEvaluator {
 		return expansion;
 	}
 
+	/**
+	 * Records the calls a {@code (locally (declare (notinline f ...)) body...)} makes of
+	 * a function with a compiler macro, which then expands none of them (CLHS 3.2.2.1.3).
+	 * spinneret's {@code html} compiler macro expands to such a {@code locally} around a
+	 * call of {@code html}; expanding that call again never ended. A local function of
+	 * the name inside the body is not told apart, nor is a global {@code declaim}.
+	 * @param locally the {@code locally} form
+	 */
+	void markNotinlineCalls(LispCons locally) {
+		if (this.compilerMacros.isEmpty()) {
+			return;
+		}
+		Set<String> names = new HashSet<>();
+		LispVal body = locally.cdr();
+		for (; body instanceof LispCons cell && cell.car() instanceof LispCons declaration
+				&& declaration.car() instanceof LispSymbol head
+				&& LispNames.DECLARE.equals(head.name()); body = cell.cdr()) {
+			for (LispVal spec = declaration.cdr(); spec instanceof LispCons specCell; spec = specCell.cdr()) {
+				if (specCell.car() instanceof LispCons clause && clause.car() instanceof LispSymbol kind
+						&& LispNames.NOTINLINE.equals(kind.name())) {
+					for (LispVal item = clause.cdr(); item instanceof LispCons itemCell; item = itemCell.cdr()) {
+						if (itemCell.car() instanceof LispSymbol fn && this.compilerMacros.containsKey(fn.name())) {
+							names.add(fn.name());
+						}
+					}
+				}
+			}
+		}
+		if (!names.isEmpty()) {
+			markCalls(body, names);
+		}
+	}
+
+	private void markCalls(LispVal form, Set<String> names) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.isQuote(head.name())) {
+				return;
+			}
+			if (names.contains(head.name())) {
+				this.notinlineCalls.add(cons);
+			}
+		}
+		for (LispVal cursor = cons; cursor instanceof LispCons cell; cursor = cell.cdr()) {
+			markCalls(cell.car(), names);
+		}
+	}
+
+	/** The calls {@link #markNotinlineCalls} recorded, by identity. */
+	private final Set<LispCons> notinlineCalls = java.util.Collections
+		.synchronizedSet(java.util.Collections.newSetFromMap(new IdentityHashMap<>()));
+
 	private LispVal computeCompilerMacroExpansion(LispCons form, @Nullable Environment site) {
-		if (!(form.car() instanceof LispSymbol op)) {
+		if (!(form.car() instanceof LispSymbol op) || this.notinlineCalls.contains(form)) {
 			return form;
 		}
 		UserMacro macro = this.compilerMacros.get(op.name());
@@ -14029,10 +14206,9 @@ public final class LispEvaluator {
 			body = List.of(blockForm);
 		}
 		// &whole var (first element, per CL; after the &environment strip so the two
-		// compose): bind var to the whole macro call form, (cons 'name args), and
-		// destructure the REMAINING pattern over the argument list as usual. Forces the
-		// destructuring path so the internal rest variable exists for the whole-form
-		// rebuild.
+		// compose): bind var to the whole macro call form, the form itself
+		// (MACRO_WHOLE_VAR, so a declining expander answers it eq), and destructure the
+		// REMAINING pattern over the argument list as usual.
 		if (!paramList.isEmpty() && paramList.get(0) instanceof LispSymbol wholeKw
 				&& LispNames.LAMBDA_WHOLE.equals(wholeKw.name())) {
 			if (paramList.size() < 2 || !(paramList.get(1) instanceof LispSymbol wholeVar)
@@ -14046,9 +14222,7 @@ public final class LispEvaluator {
 				strippedForm = new LispCons(stripped.get(i), strippedForm);
 			}
 			LispSymbol argsVar = new LispSymbol(MACRO_ARGS_VAR);
-			LispVal wholeForm = new LispCons(new LispSymbol(LispNames.CONS),
-					new LispCons(new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(name, LispNil.INSTANCE)),
-							new LispCons(argsVar, LispNil.INSTANCE)));
+			LispVal wholeForm = new LispSymbol(MACRO_WHOLE_VAR);
 			List<LispVal> letParts = new ArrayList<>();
 			letParts.add(new LispSymbol(LispNames.LET));
 			letParts
@@ -14133,7 +14307,7 @@ public final class LispEvaluator {
 		java.util.Set<String> added = new java.util.HashSet<>();
 		for (LispVal def : defs) {
 			if (!(def instanceof LispCons defCons) || !defCons.isProperList() || defCons.toList().size() < 2
-					|| !(defCons.toList().get(0) instanceof LispSymbol name) || name.isKeyword()) {
+					|| !(defCons.toList().get(0) instanceof LispSymbol name)) {
 				throw new LispEvalException(LispNames.MACROLET + " definition must be (name lambda-list body...)");
 			}
 			List<LispVal> dp = defCons.toList();
@@ -15123,14 +15297,17 @@ public final class LispEvaluator {
 	 * {@code null} when it is walking the form rather than running it
 	 */
 	private LispVal expandMacroCall(String name, UserMacro macro, LispCons form, @Nullable Environment site) {
-		List<LispVal> args = macro.expander() != null ? List.of()
-				: LispTrees.exposeCircles(form.cdr()) instanceof LispCons argCons ? argCons.toList() : List.of();
+		LispVal exposedArgs = macro.expander() != null ? LispNil.INSTANCE : LispTrees.exposeCircles(form.cdr());
+		List<LispVal> args = exposedArgs instanceof LispCons argCons ? argCons.toList() : List.of();
 		if (args.size() < macro.required().size() || (macro.rest() == null && args.size() > macro.required().size())) {
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 					"Macro " + name + " expects " + (macro.rest() == null ? String.valueOf(macro.required().size())
 							: "at least " + macro.required().size()) + " arguments, got " + args.size());
 		}
 		Environment macroEnv = new Environment(macro.env());
+		if (macro.expander() == null) {
+			macroEnv.define(MACRO_WHOLE_VAR, exposedArgs == form.cdr() ? form : new LispCons(form.car(), exposedArgs));
+		}
 		macroEnv.lexicalFunction(name);
 		if (macroEnv.lexicalPackage() == null) {
 			macroEnv.lexicalPackage(macro.definitionPackage());

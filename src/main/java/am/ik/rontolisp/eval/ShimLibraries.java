@@ -384,6 +384,9 @@ public final class ShimLibraries {
 		else if (DeployForms.SYSTEM.equals(systemName)) {
 			rewritten = DeployForms.rewrite(componentFile, source);
 		}
+		else if (TrivialArgumentsForms.SYSTEM.equals(systemName)) {
+			rewritten = TrivialArgumentsForms.rewrite(componentFile, source);
+		}
 		return rewritten == null ? source : rewritten;
 	}
 

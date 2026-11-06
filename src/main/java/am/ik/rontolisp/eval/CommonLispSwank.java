@@ -48,6 +48,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.compiler.CallSiteWalk;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 
@@ -88,7 +89,8 @@ public final class CommonLispSwank implements SwankLisp {
 	/** The one-argument printers and helpers, read once in {@code cl-user}. */
 	private final Map<String, LispVal> helpers = new ConcurrentHashMap<>();
 
-	private volatile @Nullable Map<String, LispVal> clArglists;
+	/** SBCL's lambda lists of the standard operators, read once. */
+	private static volatile @Nullable Map<String, LispVal> clArglists;
 
 	/** What the compiled code defines and uses, for {@code M-.} and {@code xref}. */
 	private final SwankSources sources;
@@ -1737,8 +1739,18 @@ public final class CommonLispSwank implements SwankLisp {
 		return null;
 	}
 
-	private Map<String, LispVal> clArglists() {
-		Map<String, LispVal> table = this.clArglists;
+	/**
+	 * The lambda list SBCL 2.2.9's {@code sb-introspect:function-lambda-list} answers for
+	 * a standard operator, names only ({@code cl-arglists.txt}).
+	 * @param name the canonical name
+	 * @return the lambda list, or null when the table has none
+	 */
+	static @Nullable LispVal standardArglist(String name) {
+		return clArglists().get(name);
+	}
+
+	private static Map<String, LispVal> clArglists() {
+		Map<String, LispVal> table = clArglists;
 		if (table != null) {
 			return table;
 		}
@@ -1750,7 +1762,7 @@ public final class CommonLispSwank implements SwankLisp {
 					int space = line.indexOf(' ');
 					if (space > 0 && !line.startsWith(";")) {
 						List<LispVal> forms = LispReader
-							.readPrefixFromString(line.substring(space + 1), this.evaluator.features(), null)
+							.readPrefixFromString(line.substring(space + 1), Features.INTERPRETER, null)
 							.forms();
 						if (!forms.isEmpty()) {
 							loaded.put(line.substring(0, space).toUpperCase(Locale.ROOT), forms.getFirst());
@@ -1762,8 +1774,9 @@ public final class CommonLispSwank implements SwankLisp {
 		catch (IOException ex) {
 			throw new UncheckedIOException(ex);
 		}
-		this.clArglists = Map.copyOf(loaded);
-		return Objects.requireNonNull(this.clArglists);
+		Map<String, LispVal> answer = Map.copyOf(loaded);
+		clArglists = answer;
+		return answer;
 	}
 
 	/**

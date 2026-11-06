@@ -21,15 +21,21 @@ no-op.
 - The compile path's top-level loop registers and DROPS the form; backends never see one.
   `DEFINE_COMPILER_MACRO` must stay in `UserMacroExpander.expand`'s activation gate, or a
   program whose only macro facility is a compiler macro skips the pass and diverges.
-- **Decline must terminate**: the idiom returns `&whole`, a fresh cons an identity test reads
-  as progress (infinite re-expansion). `computeCompilerMacroExpansion` compares `print()`
-  output and returns the ORIGINAL object on equality.
+- **Decline must terminate**: the idiom returns `&whole`, the call form itself
+  ([defmacro-backquote.md](defmacro-backquote.md)); `computeCompilerMacroExpansion` also
+  compares `print()` output and returns the ORIGINAL object on equality, for an expander that
+  rebuilds the call.
 - **A signalling body must not fail the compile**: `RuntimeException`/`StackOverflowError`
   leaves the call alone; likewise a `(setf name)` designator, a rejected lambda list, and a
   standard operator (never registered).
 - **Expansion-time output is suppressed everywhere**: compile path writes to a null stream,
   `LispEvaluator` mutes `MutablePrintStream` around the expansion.
-- Not implemented: `notinline` (still rewritten).
+- **`notinline` in a `locally`** (CLHS 3.2.2.1.3): `LispEvaluator.markNotinlineCalls` records the
+  body's calls of a declared name that has a compiler macro, by identity, and
+  `computeCompilerMacroExpansion` declines them; the interpreter's `locally` arm and
+  `UserMacroExpander.expandAllLocated` call it. spinneret's `html` expands to
+  `(locally (declare (notinline html)) (html ...))`, which re-expanded forever until 2026-11-07.
+  Not covered: a `declare` in any other body, a global `declaim`, a local function of the name.
 - `compiler-macro-function`: the interpreter answers the real expander off `compilerMacros`;
   the compile path answers `macro-function`'s `%macro-expander-stub` for a registered name
   (`UserMacroExpander.emitCompilerMacroFunctionTable` appends the defun when the program names

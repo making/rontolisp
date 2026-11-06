@@ -94,6 +94,7 @@
 | `do-symbols` | `(do-symbols (s :cl-user) (print s))` | パッケージで**アクセス可能な**すべてのシンボルを反復 -- 自身のものと継承したもの(コンパイル済みバックエンドは同じ焼き込みテーブル) |
 | `do-all-symbols` | `(do-all-symbols (s) (print s))` | 全パッケージから到達可能な重複のない全シンボルを反復。コードが綴る形で |
 | `with-compilation-unit` | `(with-compilation-unit (:override t) body...)` | 本体を包む `progn`。オプションは遅延警告レポートの統合を指示するだけで、遅延させる元の `compile-file` が存在しない |
+| `formatter` | `(formatter "~a~%")` | ストリームと引数を受け取り制御文字列を展開する関数。消費しなかった引数を返す |
 
 マクロは関数値を持ちません。`#'cond` や `(funcall 'setf ...)`
 はエラーです。呼び出し位置でインライン展開される便利なアクセサや述語(`first`, `rest`, `nth`,

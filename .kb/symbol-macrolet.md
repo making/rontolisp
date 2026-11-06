@@ -84,7 +84,9 @@ is never referenced, only stored into by one macro and read by a later one).
   arguments and `check-type`'s string (sento's `(assert ... (format t "~a" (name act:*self*)))`, `Cannot
   compile symbol`), a `with-lock-held`/`with-mutex` spec (lparallel's lock slot, `#:LOCK530 is unbound`).
 - A non-top-level definition is refused with `must be a top-level form`
-  (`nestedDefineSymbolMacro`); the interpreter just registers it.
+  (`nestedDefineSymbolMacro`); the interpreter just registers it. A `case`/`ecase`/`ccase` key
+  spelling the name is data, not a definition (serapeum's `internal-definitions.lisp:411`, which
+  stopped the compile paths until 2026-11-07).
 - **Trap**: `expandAll`'s `SETF` case must expand a user setf place FIRST and walk the expansion, or
   a COMPILER MACRO on the accessor renames the place and the accessor-keyed
   `define-setf-expander` misses it (cffi's `mem-ref`). Consumer: `cffi:defcvar` (`.kb/cffi.md`).

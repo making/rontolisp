@@ -184,6 +184,7 @@ public final class LispMacroExpander {
 			case LispNames.THE -> expandThe(cons);
 			case LispNames.EVAL_WHEN -> expandEvalWhen(cons);
 			case LispNames.WITH_COMPILATION_UNIT -> expandWithCompilationUnit(cons);
+			case LispNames.FORMATTER -> expandFormatter(cons);
 			case LispNames.WRITE_CHAR -> expandWriteChar(cons);
 			case LispNames.LOCALLY -> expandLocally(cons);
 			case LispNames.WITH_STANDARD_IO_SYNTAX -> expandWithStandardIoSyntax(cons);
@@ -28148,6 +28149,14 @@ public final class LispMacroExpander {
 			synthesized.add(methodDefun);
 			return withEqlCellAssignments(eqlCellAssignments, makeProgn(synthesized));
 		}
+		// describe-object too: its system method describes every object, and in-nomine's
+		// :after method runs after it.
+		if (LispNames.DESCRIBE_OBJECT.equals(plainName(generic.name())) && !hasDefaultPrimary(generic)) {
+			List<LispVal> synthesized = new java.util.ArrayList<>();
+			synthesizeDescribeObjectDefault(generic, synthesized);
+			synthesized.add(methodDefun);
+			return withEqlCellAssignments(eqlCellAssignments, makeProgn(synthesized));
+		}
 		// update-instance-for-redefined-class too: its system method initializes the
 		// added slots of every instance a redefinition updates.
 		if (LispNames.UPDATE_INSTANCE_FOR_REDEFINED_CLASS.equals(plainName(generic.name()))
@@ -28641,7 +28650,7 @@ public final class LispMacroExpander {
 	private static final List<String> CALLABLE_SYSTEM_GENERICS = List.of(LispNames.INITIALIZE_INSTANCE,
 			LispNames.REINITIALIZE_INSTANCE, LispNames.SHARED_INITIALIZE, LispNames.PRINT_OBJECT,
 			LispNames.MAKE_LOAD_FORM, LispNames.SLOT_UNBOUND, LispNames.SLOT_MISSING,
-			LispNames.UPDATE_INSTANCE_FOR_REDEFINED_CLASS);
+			LispNames.UPDATE_INSTANCE_FOR_REDEFINED_CLASS, LispNames.DESCRIBE_OBJECT);
 
 	/**
 	 * Creates the plainly-named instance-initialization generic with its system default
@@ -28670,6 +28679,12 @@ public final class LispMacroExpander {
 			ClosRegistry.GenericInfo generic = new ClosRegistry.GenericInfo(name, List.of("%mlf-object"));
 			closRegistry.registerGeneric(generic);
 			synthesizeMakeLoadFormDefault(generic, out);
+			return out;
+		}
+		if (LispNames.DESCRIBE_OBJECT.equals(name)) {
+			ClosRegistry.GenericInfo generic = new ClosRegistry.GenericInfo(name, List.of("%do-object", "%do-stream"));
+			closRegistry.registerGeneric(generic);
+			synthesizeDescribeObjectDefault(generic, out);
 			return out;
 		}
 		if (LispNames.UPDATE_INSTANCE_FOR_REDEFINED_CLASS.equals(name)) {
@@ -28756,6 +28771,29 @@ public final class LispMacroExpander {
 
 	/** The walk's entry for the system method; see {@link #printObjectInstanceDefun}. */
 	public static final String POS_DEFAULT = "%POS-DEFAULT";
+
+	/**
+	 * Synthesizes {@code describe-object}'s system method into {@code out} as the
+	 * generic's default primary: {@code %describe-object-default}, a prelude defun
+	 * selected for any program naming the generic or {@code describe}.
+	 * @param generic the describe-object generic
+	 * @param out the forms to append the default method's defun to
+	 */
+	private static void synthesizeDescribeObjectDefault(ClosRegistry.GenericInfo generic, List<LispVal> out) {
+		List<ClosRegistry.Specializer> defaults = new java.util.ArrayList<>();
+		for (int i = 0; i < generic.paramNames().size(); i++) {
+			defaults.add(ClosRegistry.Specializer.DEFAULT);
+		}
+		String defaultName = methodFunctionName(generic);
+		generic.putSystemDefault(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
+		List<LispVal> params = new java.util.ArrayList<>();
+		params.add(new LispSymbol(NEXT_METHOD_VAR));
+		generic.paramNames().stream().<LispVal>map(LispSymbol::new).forEach(params::add);
+		LispVal body = callOf(LispNames.DESCRIBE_OBJECT_DEFAULT_INTERNAL, new LispSymbol(generic.paramNames().get(0)),
+				new LispSymbol(generic.paramNames().get(1)));
+		out.add(listToCons(
+				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(defaultName), listToCons(params), body)));
+	}
 
 	/**
 	 * Synthesizes {@code make-load-form}'s standard methods into {@code out} as one
@@ -32598,7 +32636,8 @@ public final class LispMacroExpander {
 						&& quoted.car() instanceof LispSymbol named && LispNames.FORMAT.equals(named.name())) {
 					return true;
 				}
-				if (LispNames.FORMAT.equals(head.name()) && formatUsesRenderer(cons)) {
+				if (LispNames.FORMAT.equals(head.name()) && formatUsesRenderer(cons)
+						|| LispNames.FORMATTER.equals(head.name())) {
 					return true;
 				}
 				if (signalRendersRuntimeControl(head.name(), cons)) {
@@ -46989,6 +47028,26 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (formatter "control")} to the function CLHS 22.2.1.3 describes: of a
+	 * stream and arguments, rendering the control to the stream and answering the
+	 * arguments it did not consume ({@code %fmt-apply}, the runtime renderer's).
+	 * @param cons the formatter expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandFormatter(LispCons cons) {
+		if (!(cons.cdr() instanceof LispCons rest) || !(rest.car() instanceof LispString control)
+				|| !(rest.cdr() instanceof LispNil)) {
+			throw new IllegalArgumentException("formatter expects a control string, got: " + cons.print());
+		}
+		LispSymbol stream = new LispSymbol("%FMTR-STREAM");
+		LispSymbol args = new LispSymbol("%FMTR-ARGS");
+		LispVal lambdaList = listToCons(List.of(stream, new LispSymbol(LispNames.LAMBDA_REST), args));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.FMT_APPLY), stream, control, args));
+		return listToCons(List.of(new LispSymbol(LispNames.FUNCTION),
+				listToCons(List.of(new LispSymbol(LispNames.LAMBDA), lambdaList, body))));
+	}
+
+	/**
 	 * Expands {@code (with-compilation-unit (options...) body...)} to the body wrapped in
 	 * a {@code progn}.
 	 *
@@ -48651,7 +48710,7 @@ public final class LispMacroExpander {
 					LispNames.INTEGER_DECODE_FLOAT, LispNames.DECODE_UNIVERSAL_TIME, LispNames.GET_DECODED_TIME,
 					LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.GET_PROPERTIES, LispNames.GET_SETF_EXPANSION,
 					LispNames.PARSE_NAMESTRING, LispNames.PPRINT_DISPATCH, LispNames.PPRINT,
-					LispNames.GET_MACRO_CHARACTER, LispNames.COMPILE ->
+					LispNames.GET_MACRO_CHARACTER, LispNames.COMPILE, LispNames.DESCRIBE ->
 				true;
 			default -> false;
 		};

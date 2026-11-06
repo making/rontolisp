@@ -2823,6 +2823,7 @@ final class WasmExprCompiler {
 			case LispNames.EVAL_WHEN -> compileExpansion(LispMacroExpander.expandEvalWhen(cons), ctx, tail);
 			case LispNames.WITH_COMPILATION_UNIT ->
 				compileExpansion(LispMacroExpander.expandWithCompilationUnit(cons), ctx, tail);
+			case LispNames.FORMATTER -> compileExpansion(LispMacroExpander.expandFormatter(cons), ctx, tail);
 			case LispNames.LOCALLY -> compileExpansion(LispMacroExpander.expandLocally(cons), ctx, tail);
 			case LispNames.WITH_STANDARD_IO_SYNTAX ->
 				compileExpansion(LispMacroExpander.expandWithStandardIoSyntax(cons, ctx.specialVars), ctx, tail);

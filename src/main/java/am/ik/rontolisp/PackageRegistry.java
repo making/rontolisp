@@ -72,7 +72,7 @@ public final class PackageRegistry {
 			LispNames.WITH_PACKAGE_ITERATOR, LispNames.WITH_HASH_TABLE_ITERATOR, LispNames.DO_EXTERNAL_SYMBOLS,
 			LispNames.DO_SYMBOLS, LispNames.DO_ALL_SYMBOLS, LispNames.WITH_COMPILATION_UNIT, LispNames.RESTART_BIND,
 			LispNames.WITH_SIMPLE_RESTART, LispNames.PPRINT_LOGICAL_BLOCK, LispNames.PPRINT_POP,
-			LispNames.PPRINT_EXIT_IF_LIST_EXHAUSTED);
+			LispNames.PPRINT_EXIT_IF_LIST_EXHAUSTED, LispNames.FORMATTER);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -112,6 +112,9 @@ public final class PackageRegistry {
 			// inside a package that uses cl specializes CL:PRINT-OBJECT rather than
 			// minting that package's own (quri's uri method).
 			LispNames.PRINT_OBJECT,
+			// The describer generic, cl-owned for the same reason: in-nomine's :after
+			// method reaches every describe. describe calls it.
+			LispNames.DESCRIBE_OBJECT, LispNames.DESCRIBE,
 			// The slot-access generics, cl-owned for the same reason: zpng's
 			// slot-unbound method must reach the generic every unbound read calls.
 			LispNames.SLOT_UNBOUND, LispNames.SLOT_MISSING,
@@ -383,10 +386,11 @@ public final class PackageRegistry {
 			LispNames.SET_SYMBOL_FUNCTION_INTERNAL, LispNames.FENV_FUNCTION_INTERNAL, LispNames.FUNCTION_NAME_INTERNAL,
 			LispNames.FDEFINITION_INTERNAL, LispNames.FMAKUNBOUND_INTERNAL, LispNames.SETF_FUNCTION_SYMBOL_INTERNAL,
 			LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL, LispNames.TEMP_FILE_NAME,
-			LispNames.FILE_STREAM_REGISTER_INTERNAL, LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL,
-			LispNames.FILE_STREAM_ENTRY_INTERNAL, LispNames.FILE_STREAM_FORGET_INTERNAL,
-			LispNames.CHARACTER_STREAM_P_INTERNAL, LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL,
-			LispNames.WIDE_READ_BYTE_INTERNAL, LispNames.WIDE_WRITE_BYTE_INTERNAL, LispNames.WIDE_ELEMENTS_INTERNAL,
+			LispNames.DESCRIBE_OBJECT_DEFAULT_INTERNAL, LispNames.FILE_STREAM_REGISTER_INTERNAL,
+			LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL, LispNames.FILE_STREAM_ENTRY_INTERNAL,
+			LispNames.FILE_STREAM_FORGET_INTERNAL, LispNames.CHARACTER_STREAM_P_INTERNAL,
+			LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL, LispNames.WIDE_READ_BYTE_INTERNAL,
+			LispNames.WIDE_WRITE_BYTE_INTERNAL, LispNames.WIDE_ELEMENTS_INTERNAL,
 			LispNames.WIDE_POSITION_OCTETS_INTERNAL, LispNames.WIDE_WIDTH_INTERNAL, LispNames.READ_OCTET_INTERNAL,
 			LispNames.WRITE_OCTET_INTERNAL, LispNames.FILE_OCTET_LENGTH_INTERNAL,
 			LispNames.FILE_OCTET_POSITION_INTERNAL, LispNames.PROBE_FILE_INTERNAL, LispNames.PROBE_TRUENAME_INTERNAL,
@@ -431,7 +435,7 @@ public final class PackageRegistry {
 			LispNames.RUNTIME_MEMBER_INTERN_INTERNAL, LispNames.RUNTIME_EXTERNAL_FIND_INTERNAL,
 			LispNames.RUNTIME_PACKAGE_OP_INTERNAL, LispNames.CHECK_BOUNDS_INTERNAL, LispNames.PRINC_PIECE_INTERNAL,
 			LispNames.PRIN1_PIECE_INTERNAL, LispNames.DECIMAL_PIECE_INTERNAL, LispNames.DECIMAL_PRINC_INTERNAL,
-			LispNames.DECIMAL_TEXT_INTERNAL, LispNames.FMT_RENDER, LispNames.FMT_STARTS_FRESH,
+			LispNames.DECIMAL_TEXT_INTERNAL, LispNames.FMT_RENDER, LispNames.FMT_APPLY, LispNames.FMT_STARTS_FRESH,
 			LispNames.STRICT_MATH_INTERNAL, LispNames.REGISTER_COMPILED_TEMPLATE, LispNames.TEMPLATE_HOLE,
 			LispNames.TEMPLATE_GENSYM);
 
@@ -489,12 +493,12 @@ public final class PackageRegistry {
 	 * standard's own list, so neither direction can drift.
 	 */
 	private static final Set<String> CL_EXPORTED_ONLY = Set.of("*BREAK-ON-SIGNALS*", "BREAK", "CALL-METHOD",
-			"CALL-NEXT-METHOD", "COMPILER-MACRO", "DESCRIBE", "DESCRIBE-OBJECT", "DISASSEMBLE", "DRIBBLE", "ED",
-			"FILE-AUTHOR", "FLOAT-PRECISION", "FORMATTER", "FUNCTION-KEYWORDS", "HASH-TABLE", "INSPECT",
-			"INVOKE-RESTART-INTERACTIVELY", "KEYWORD", "LOOP-FINISH", "MAKE-METHOD", "NEXT-METHOD-P", "NIL",
-			"NO-APPLICABLE-METHOD", "NO-NEXT-METHOD", "PPRINT-FILL", "PPRINT-LINEAR", "PPRINT-TABULAR", "RESTART",
-			"ROOM", "STANDARD", "STEP", "STRUCTURE-OBJECT", "SYMBOL", "T", "TRACE", "UNTRACE",
-			"UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
+			"CALL-NEXT-METHOD", "COMPILER-MACRO", "DISASSEMBLE", "DRIBBLE", "ED", "FILE-AUTHOR", "FLOAT-PRECISION",
+			"FUNCTION-KEYWORDS", "HASH-TABLE", "INSPECT", "INVOKE-RESTART-INTERACTIVELY", "KEYWORD", "LOOP-FINISH",
+			"MAKE-METHOD", "NEXT-METHOD-P", "NIL", "NO-APPLICABLE-METHOD", "NO-NEXT-METHOD", "PPRINT-FILL",
+			"PPRINT-LINEAR", "PPRINT-TABULAR", "RESTART", "ROOM", "STANDARD", "STEP", "STRUCTURE-OBJECT", "SYMBOL", "T",
+			"TRACE", "UNTRACE", "UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "VARIABLE", "WITH-CONDITION-RESTARTS",
+			"YES-OR-NO-P");
 
 	/**
 	 * The 28 car/cdr compositions ({@code caar} .. {@code cddddr}). Resolution recognizes
@@ -1167,6 +1171,9 @@ public final class PackageRegistry {
 		rontolispSymbols.add(LispNames.DOUBLE_SPELLED_INTERNAL);
 		rontolispSymbols.add(LispNames.DOUBLE_SPELLED_P_INTERNAL);
 		rontolispSymbols.add(LispNames.PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL);
+		// Internal: a function's lambda list, spelled rontolisp::%... by
+		// trivial-arguments' rewrite.
+		rontolispSymbols.add(LispNames.FUNCTION_LAMBDA_LIST_INTERNAL);
 		// Internal: the interpreter's SWANK server hook behind the swank shim's
 		// create-server / stop-server, spelled rontolisp::%swank-* by its call sites.
 		rontolispSymbols.add(LispNames.SWANK_LISTEN);

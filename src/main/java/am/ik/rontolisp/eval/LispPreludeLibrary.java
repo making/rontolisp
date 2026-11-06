@@ -180,6 +180,11 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.DOUBLE_SPELLED_P_INTERNAL, """
 				(defun rontolisp::%double-spelled-p (value) (declare (ignore value)) nil)
 				""");
+		// A lambda list is the interpreter's (LispEvaluator.definition): a compiled
+		// function keeps none, so a compile path answers trivial-arguments' :unknown.
+		SOURCES.put(LispNames.FUNCTION_LAMBDA_LIST_INTERNAL, """
+				(defun rontolisp::%function-lambda-list (function) (declare (ignore function)) :unknown)
+				""");
 		SOURCES.put(LispNames.PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL, """
 				(defun rontolisp::%prin1-keeping-float-spelling (object) (prin1-to-string object))
 				""");
@@ -633,6 +638,44 @@ public final class LispPreludeLibrary {
 				""");
 		SOURCES.put(LispNames.FUNCTION_LAMBDA_EXPRESSION, """
 				(defun function-lambda-expression (function) (values nil t nil))
+				""");
+		SOURCES.put(LispNames.DESCRIBE, """
+				(defun describe (object &optional stream)
+				  (describe-object object
+				                   (cond ((null stream) *standard-output*)
+				                         ((eq stream t) *terminal-io*)
+				                         (t stream)))
+				  (values))
+				""");
+		// describe-object's system method: SBCL 2.2.9's first two lines, the object and
+		// its type (CLHS leaves the rest to the implementation). Fixnum is SBCL's range
+		// on
+		// every backend, since a fixnum type test is integerp here.
+		SOURCES.put(LispNames.DESCRIBE_OBJECT_DEFAULT_INTERNAL, """
+				(defun %describe-object-default (%dod-o %dod-s)
+				  (format %dod-s "~&~S~%  [~A]~%" %dod-o
+				          (typecase %dod-o
+				            (null "null")
+				            (symbol "symbol")
+				            (cons "list")
+				            (integer (if (typep %dod-o '(signed-byte 63)) "fixnum" "bignum"))
+				            (ratio "ratio")
+				            (float (string-downcase (symbol-name (type-of %dod-o))))
+				            (complex "complex")
+				            (character (if (standard-char-p %dod-o) "standard-char" "character"))
+				            (string (if (typep %dod-o 'simple-string) "simple-string" "string"))
+				            (vector (if (simple-vector-p %dod-o) "simple-vector" "vector"))
+				            (array (if (typep %dod-o 'simple-array) "simple array" "array"))
+				            (hash-table "hash-table")
+				            (function "compiled function")
+				            (package "package")
+				            (pathname "pathname")
+				            (stream "stream")
+				            (structure-object "structure-object")
+				            (condition "condition")
+				            (standard-object "standard-object")
+				            (t (string-downcase (prin1-to-string (type-of %dod-o))))))
+				  (values))
 				""");
 		// The standard condition readers over the seeded hierarchy's slots. They are
 		// prelude defuns rather than Java built-ins so one definition serves all four
@@ -5903,6 +5946,12 @@ public final class LispPreludeLibrary {
 		// mirror-image decision for the uiop half of the same expansion.
 		if (LispNames.TEMP_FILE_NAME.equals(entry)) {
 			return referencesName(program, LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED, canonical);
+		}
+		// The entry describe-object's system method calls: the generic and its default
+		// are synthesized after this pass, for a program naming the generic or describe.
+		if (LispNames.DESCRIBE_OBJECT_DEFAULT_INTERNAL.equals(entry)) {
+			return referencesName(program, LispNames.DESCRIBE_OBJECT, canonical)
+					|| referencesName(program, LispNames.DESCRIBE, canonical);
 		}
 		// The entries uiop:with-input's and uiop:with-output's EXPANSIONS call
 		// (.kb/uiop.md). Same timing problem: the expansions run inside the

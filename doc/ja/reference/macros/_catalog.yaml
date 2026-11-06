@@ -123,3 +123,4 @@ categories:
       - { slug: do-symbols, name: "do-symbols" }
       - { slug: do-all-symbols, name: "do-all-symbols" }
       - { slug: with-compilation-unit, name: "with-compilation-unit" }
+      - { slug: formatter, name: "formatter" }

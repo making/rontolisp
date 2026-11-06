@@ -2191,6 +2191,20 @@ public final class UserMacroExpander {
 			if (LispNames.isQuote(name) || LispNames.DEFMACRO.equals(name) || LispNames.MACROLET.equals(name)) {
 				return false;
 			}
+			if (LispNames.CASE.equals(name) || LispNames.ECASE.equals(name) || LispNames.CCASE.equals(name)) {
+				// A clause's keys are data: only the key form and the clause bodies run.
+				List<LispVal> parts = cons.toList();
+				if (parts.size() > 1 && nestedDefineSymbolMacro(parts.get(1))) {
+					return true;
+				}
+				for (LispVal clause : parts.subList(Math.min(2, parts.size()), parts.size())) {
+					if (clause instanceof LispCons body
+							&& nestedDefineSymbolMacro(new LispCons(new LispSymbol(LispNames.PROGN), body.cdr()))) {
+						return true;
+					}
+				}
+				return false;
+			}
 		}
 		for (LispVal part : cons.toList()) {
 			if (nestedDefineSymbolMacro(part)) {
@@ -2346,6 +2360,9 @@ public final class UserMacroExpander {
 				// are data patterns (a loop destructuring pattern like
 				// (value . remaining)) whose elements are plain variables.
 				return form;
+			}
+			if (LispNames.LOCALLY.equals(sym.name())) {
+				macroEval.markNotinlineCalls(cons);
 			}
 			List<LispVal> parts = cons.toList();
 			if (!macroEval.symbolMacroScope().isEmpty()) {
@@ -2958,7 +2975,7 @@ public final class UserMacroExpander {
 		for (LispVal def : defs) {
 			if (def instanceof LispCons defCons && defCons.isProperList()) {
 				List<LispVal> dp = defCons.toList();
-				if (dp.size() >= 2 && dp.get(0) instanceof LispSymbol name && !name.isKeyword()) {
+				if (dp.size() >= 2 && dp.get(0) instanceof LispSymbol name) {
 					Object previous = macroEval.pushLocalMacro(name, dp.get(1), dp.subList(2, dp.size()));
 					// Only remember the binding present before this macrolet (a duplicate
 					// name pushed twice must still restore to the outermost prior value).

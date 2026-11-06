@@ -120,8 +120,13 @@ recurse through `__db<N>_g<i>`; a dotted tail normalizes to `&rest`.
   "A surplus element in a destructuring pattern" and "A missing element in a
   destructuring pattern").
 - **`&whole` works in BOTH forms**: first pattern element binds the whole source list and the
-  rest destructures it again; in a `defmacro` lambda list `evalDefmacro` binds
-  `(cons 'name args)` and forces the destructuring path.
+  rest destructures it again; in a `defmacro` lambda list `expandMacroCall` binds it to the call
+  form itself (`__macro_whole`, `eq` to it, so a compiler macro declining with `&whole` answers the
+  form: introspect-environment's `compiler-macroexpand-1` tests `(eql form new)`, and serapeum's
+  `op` looped there until 2026-11-07) and forces the destructuring path.
+- **A keyword names a local macro** (`macrolet ((:method ...))`, serapeum's `defmethods`,
+  spinneret's `:raw`): both `evalMacrolet` and `UserMacroExpander.expandMacroletBody` refused or
+  skipped one until 2026-11-07. ci-spec `macrolet-compiler-macro-restart-case`.
 - **`&environment` in a MACRO lambda list is stripped by `makeUserMacro`** and bound by
   `expandMacroCall`: nil, or the symbol macros in scope for `macroexpand` to read
   (`.kb/symbol-macrolet.md`); still an error inside `destructuring-bind` itself. A

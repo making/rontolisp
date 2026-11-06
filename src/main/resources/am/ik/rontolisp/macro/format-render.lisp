@@ -459,9 +459,22 @@
 
 ;;; The entry point: control string x argument list -> string.
 (defun %fmt-render (ctrl args)
-  (if (stringp ctrl)
-      (nth 0 (%fmt-run ctrl 0 (length ctrl) (%fmt-args args) 0))
-      (%princ-piece ctrl)))
+  (cond
+   ((stringp ctrl) (nth 0 (%fmt-run ctrl 0 (length ctrl) (%fmt-args args) 0)))
+   ;; A function control (a formatter's) writes the text to the stream it is
+   ;; handed (CLHS 22.2.1.3).
+   ((functionp ctrl)
+    (let ((s (make-string-output-stream)))
+      (apply ctrl s args)
+      (get-output-stream-string s)))
+   (t (%princ-piece ctrl))))
+
+;;; The function formatter makes: renders CTRL over ARGS to STREAM and answers the
+;;; arguments it did not consume.
+(defun %fmt-apply (stream ctrl args)
+  (let ((r (%fmt-run ctrl 0 (length ctrl) (%fmt-args args) 0)))
+    (write-string (nth 0 r) stream)
+    (nthcdr (nth 1 r) args)))
 
 ;;; Renders ctrl[start, end) with the argument cursor at i.
 ;;; Returns (list out i escaped).

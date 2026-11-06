@@ -1156,6 +1156,8 @@ categories:
       - { slug: print-not-readable-object, name: "print-not-readable-object" }
       - { slug: file-error-pathname, name: "file-error-pathname" }
       - { slug: print-object, name: "print-object" }
+      - { slug: describe, name: "describe" }
+      - { slug: describe-object, name: "describe-object" }
       - { slug: simple-condition-format-arguments, name: "simple-condition-format-arguments" }
       - { slug: find-restart, name: "find-restart" }
       - { slug: invoke-restart, name: "invoke-restart" }

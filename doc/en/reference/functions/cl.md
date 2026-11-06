@@ -473,6 +473,8 @@ page.
 | `print-not-readable-object` | `(print-not-readable-object c)` | the object a `print-not-readable` was signalled for |
 | `file-error-pathname` | `(file-error-pathname c)` | the pathname a failed file operation was given |
 | `print-object` | `(print-object obj stream)` | the generic function the printer consults; define a method to control how instances of a type print |
+| `describe` | `(describe obj)` | write `describe-object`'s description of the object; no values |
+| `describe-object` | `(describe-object obj stream)` | the generic function `describe` calls; its system method writes the object and its type |
 | `find-restart` | `(find-restart 'retry c)` | the innermost active restart with that name as a first-class object, or `nil`. Lite: the condition argument is ignored |
 | `invoke-restart` | `(invoke-restart :reconnect host)` | invoke a restart by name (symbol or keyword) or object, with arguments; a `restart-case` restart transfers control to its clause |
 | `compute-restarts` | `(compute-restarts)` | every active restart record, innermost first |

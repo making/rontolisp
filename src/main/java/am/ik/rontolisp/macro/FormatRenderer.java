@@ -211,7 +211,7 @@ public final class FormatRenderer {
 			}
 			form = cons.cdr();
 		}
-		return form instanceof LispSymbol sym && RENDER.equals(sym.name());
+		return form instanceof LispSymbol sym && (RENDER.equals(sym.name()) || LispNames.FMT_APPLY.equals(sym.name()));
 	}
 
 	/**

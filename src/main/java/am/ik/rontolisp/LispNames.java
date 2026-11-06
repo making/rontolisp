@@ -8500,6 +8500,16 @@ public final class LispNames {
 	/** The canonical spelling of {@code rontolisp::%double-spelled-p}. */
 	public static final String DOUBLE_SPELLED_P_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + DOUBLE_SPELLED_P_INTERNAL;
 
+	/**
+	 * The internal {@code rontolisp::%function-lambda-list}: a function designator's
+	 * lambda list, or {@code :unknown} (trivial-arguments' {@code arglist}).
+	 */
+	public static final String FUNCTION_LAMBDA_LIST_INTERNAL = "%FUNCTION-LAMBDA-LIST";
+
+	/** The canonical spelling of {@code rontolisp::%function-lambda-list}. */
+	public static final String FUNCTION_LAMBDA_LIST_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
+			+ FUNCTION_LAMBDA_LIST_INTERNAL;
+
 	/** The canonical spelling of {@code rontolisp::%cons-cas-car}. */
 	public static final String CONS_CAS_CAR_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONS_CAS_CAR_INTERNAL;
 
@@ -10601,6 +10611,32 @@ public final class LispNames {
 	public static final String PRINT_OBJECT = "PRINT-OBJECT";
 
 	/**
+	 * The {@code describe-object} generic function: what {@code describe} calls. Its
+	 * system method writes the object and its type, as SBCL's first two lines do; a
+	 * {@code defmethod} on it joins the one cl-owned generic, as on
+	 * {@link #PRINT_OBJECT}.
+	 */
+	public static final String DESCRIBE_OBJECT = "DESCRIBE-OBJECT";
+
+	/**
+	 * The {@code describe} standard function: a prelude defun calling
+	 * {@link #DESCRIBE_OBJECT} on the stream designator's stream, answering no values.
+	 */
+	public static final String DESCRIBE = "DESCRIBE";
+
+	/**
+	 * The {@code notinline} declaration: a call it covers expands no compiler macro
+	 * ({@code LispEvaluator.markNotinlineCalls}).
+	 */
+	public static final String NOTINLINE = "NOTINLINE";
+
+	/**
+	 * The prelude defun {@link #DESCRIBE_OBJECT}'s system method calls: the object and
+	 * its type in brackets.
+	 */
+	public static final String DESCRIBE_OBJECT_DEFAULT_INTERNAL = "%DESCRIBE-OBJECT-DEFAULT";
+
+	/**
 	 * The {@code slot-unbound} generic: a read of an unbound slot calls it with the
 	 * instance's class, the instance and the slot name; its system method signals
 	 * {@code unbound-slot}.
@@ -10772,6 +10808,18 @@ public final class LispNames {
 	 * {@code (%fmt-render control-string argument-list)} ({@code format-render.lisp}).
 	 */
 	public static final String FMT_RENDER = "%FMT-RENDER";
+
+	/**
+	 * The renderer's {@code (%fmt-apply stream control-string argument-list)}: what a
+	 * {@link #FORMATTER} function calls, answering the arguments left over.
+	 */
+	public static final String FMT_APPLY = "%FMT-APPLY";
+
+	/**
+	 * The {@code formatter} standard macro: a function of a stream and arguments that
+	 * renders its control string ({@link #FMT_APPLY}).
+	 */
+	public static final String FORMATTER = "FORMATTER";
 
 	/**
 	 * {@code (%fmt-starts-fresh-p control)}: whether a run-time control opens with a
