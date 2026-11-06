@@ -195,6 +195,22 @@ public final class JvmLispCompiler implements LispCompiler {
 	static final List<String> CONDITION_VARIABLE_RUNTIME_CLASS_FILES = List.of(CONDITION_VARIABLE_CLASS + ".class");
 
 	/**
+	 * The subprocess behind {@code uiop:run-program} ({@code rontolisp::%run-program}),
+	 * in internal form: the class {@code JvmExprCompiler} calls it on, which travels with
+	 * the output.
+	 */
+	static final String PROCESS_CLASS = "am/ik/rontolisp/runtime/RontoProcess";
+
+	/** The runtime class file a program that starts a process carries beside it. */
+	static final List<String> PROCESS_RUNTIME_CLASS_FILES = List.of(PROCESS_CLASS + ".class");
+
+	/**
+	 * Whether the last {@link #compile} starts a process, i.e. whether the emitted class
+	 * needs {@code RontoProcess} beside it.
+	 */
+	private boolean needsProcessRuntime;
+
+	/**
 	 * Whether the last {@link #compile} makes a condition variable, i.e. whether the
 	 * emitted class needs {@code RontoConditionVariable} beside it.
 	 */
@@ -1007,11 +1023,11 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsInflateRuntime
-				&& !this.needsConditionVariableRuntime && !this.needsConsCasRuntime && !this.needsSignalRuntime
-				&& !this.needsInterruptRuntime && !this.needsTerminalRuntime && !this.needsHashTableRuntime
-				&& !this.needsComplexRuntime && !this.needsQuantizedRuntime && !this.needsIoStreamRuntime
-				&& !this.needsCharFileRuntime && !this.needsStringInputRuntime && !this.needsJavaValueRuntime
-				&& this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
+				&& !this.needsConditionVariableRuntime && !this.needsProcessRuntime && !this.needsConsCasRuntime
+				&& !this.needsSignalRuntime && !this.needsInterruptRuntime && !this.needsTerminalRuntime
+				&& !this.needsHashTableRuntime && !this.needsComplexRuntime && !this.needsQuantizedRuntime
+				&& !this.needsIoStreamRuntime && !this.needsCharFileRuntime && !this.needsStringInputRuntime
+				&& !this.needsJavaValueRuntime && this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
 		// A program too large for one class brings its $PartN classes, and a bridged
@@ -1054,6 +1070,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsConditionVariableRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(CONDITION_VARIABLE_RUNTIME_CLASS_FILES));
+		}
+		if (this.needsProcessRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(PROCESS_RUNTIME_CLASS_FILES));
 		}
 		if (this.needsConsCasRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(CONS_CAS_RUNTIME_CLASS_FILES));
@@ -2754,6 +2773,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		this.needsInflateRuntime = usesInflate;
 		this.needsConditionVariableRuntime = programUsesSymbol(program,
 				LispNames.CONDITION_VARIABLE_NEW_INTERNAL_QUALIFIED);
+		this.needsProcessRuntime = programUsesSymbol(program, LispNames.RUN_PROGRAM_INTERNAL_QUALIFIED);
 		this.needsConsCasRuntime = programUsesSymbol(program, LispNames.CONS_CAS_CAR_INTERNAL_QUALIFIED)
 				|| programUsesSymbol(program, LispNames.CONS_CAS_CDR_INTERNAL_QUALIFIED);
 		this.needsTerminalRuntime = programUsesSymbol(program, LispNames.TERMINAL_P_INTERNAL);

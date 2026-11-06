@@ -216,7 +216,9 @@ public final class AsdfRuntimeLibrary {
 
 	/**
 	 * Records what one {@code asdf.lisp} form defines. A public name it defines has to be
-	 * an inventory name, so the surface cannot grow past real ASDF's unnoticed.
+	 * an inventory name, so the surface cannot grow past real ASDF's unnoticed. The one
+	 * other kind is an internal of a sub-package, spelled with {@code ::}, that a library
+	 * imports from it ({@code asdf/bundle::link-op}, cffi-toolchain's): it is no surface.
 	 */
 	private static void collectDefinition(LispVal form, Set<String> functions, Set<String> classes,
 			Set<String> generics) {
@@ -238,7 +240,9 @@ public final class AsdfRuntimeLibrary {
 			classes.add(qn.member());
 			collectSlotReaders(form, functions);
 		}
-		if (!AsdfExports.owned().contains(qn.member())) {
+		boolean subPackageInternal = qn.internal() && !LispNames.ASDF_PKG.equals(qn.pkg())
+				&& AsdfExports.isAsdfFamily(qn.pkg());
+		if (!AsdfExports.owned().contains(qn.member()) && !subPackageInternal) {
 			throw new IllegalStateException("asdf.lisp defines " + defined.name() + ", which no ASDF package exports");
 		}
 	}
@@ -1114,6 +1118,7 @@ public final class AsdfRuntimeLibrary {
 			        (%asdf-runtime-load "QL:QUICKLOAD" entry))
 			      (%asdf-runtime-load "QL:QUICKLOAD" name))
 			  name)
+			(defun %asdf-perform-build-actions (component) component nil)
 			(defvar %asdf-spliced-thunks% nil)
 			(defun %asdf-load-spliced (system index thunk)
 			  (setq %asdf-spliced-thunks% (cons (list system index thunk) %asdf-spliced-thunks%))
@@ -1152,6 +1157,16 @@ public final class AsdfRuntimeLibrary {
 	// in asdf), and an instance of a class named at run time. A compile path generates
 	// the
 	// second over the classes it spliced, and runs the first in its build image.
+	//
+	// And the build actions: what component-depends-on names ahead of a component's
+	// compile-op and load-op on the component itself beyond the fixed plan's own
+	// operations (cffi-grovel's process-op), each after its own such actions and only
+	// when its output files are missing or older than its input files, as real ASDF's
+	// stamps decide; and the file a load reads when its compile-op compiles another
+	// than the component's own (the groveller's generated Lisp). The interpreter
+	// performs them in plan order (%asdf-perform-component); a compile path loads the
+	// system into its build image for them (LispEvaluator.buildComponentSource) and
+	// splices what they generated, and its program's seam performs none.
 	private static final String IMAGE_SOURCE = """
 			(defun %asdf-class-named (designator)
 			  (let* ((name (cond ((keywordp designator)
@@ -1213,6 +1228,50 @@ public final class AsdfRuntimeLibrary {
 			(defun %asdf-make-component (class initargs name relative resolved parent)
 			  (apply #'make-instance (read-from-string class) :name name :pathname relative
 			         :absolute-pathname resolved :parent parent initargs))
+			(defun %asdf-build-actions (component)
+			  (let ((actions nil))
+			    (labels ((own (operation)
+			               (let ((found nil))
+			                 (dolist (dependency (asdf:component-depends-on operation component))
+			                   (when (and (consp dependency) (member component (cdr dependency)))
+			                     (let ((before (%asdf-operation (car dependency))))
+			                       (unless (member (class-name (class-of before))
+			                                       '(asdf:prepare-op asdf:compile-op asdf:load-op
+			                                         asdf:prepare-source-op asdf:load-source-op))
+			                         (setq found (cons before found))))))
+			                 (nreverse found)))
+			             (add (operation)
+			               (unless (member operation actions)
+			                 (dolist (before (own operation)) (add before))
+			                 (setq actions (cons operation actions)))))
+			      (dolist (operation (list (asdf:make-operation 'asdf:compile-op)
+			                               (asdf:make-operation 'asdf:load-op)))
+			        (dolist (before (own operation)) (add before))))
+			    (nreverse actions)))
+			(defun %asdf-up-to-date-p (operation component)
+			  (let ((outputs (remove nil (asdf:output-files operation component)))
+			        (inputs (asdf:input-files operation component)))
+			    (and outputs
+			         (asdf:operation-done-p operation component)
+			         (every #'probe-file inputs)
+			         (every #'probe-file outputs)
+			         (let ((latest 0))
+			           (dolist (input inputs) (setq latest (max latest (file-write-date input))))
+			           (every (lambda (output) (>= (file-write-date output) latest)) outputs)))))
+			(defun %asdf-perform-build-actions (component)
+			  (dolist (operation (%asdf-build-actions component))
+			    (unless (%asdf-up-to-date-p operation component)
+			      (asdf:perform operation component))))
+			(defun %asdf-component-source (system index)
+			  (let* ((component (%asdf-planned-component system index))
+			         (input (first (asdf:input-files (asdf:make-operation 'asdf:compile-op) component))))
+			    (and input
+			         (not (equal (namestring input) (namestring (asdf:component-pathname component))))
+			         (namestring input))))
+			(defun %asdf-component-builds-p (system index)
+			  (and (or (%asdf-build-actions (%asdf-planned-component system index))
+			           (%asdf-component-source system index))
+			       t))
 			""";
 
 	private static String readSource(String resource) {

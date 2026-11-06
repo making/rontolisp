@@ -33,8 +33,9 @@ a separate ordinary special seeded from it.
   `#-asdf3` 13, `#+asdf` 12, `#-asdf` 9, `#+asdf3.1` 7, `#+asdf2` 2. What the features promise was
   the question: a `#+asdf3` branch may reach a name this ASDF answers with a signalling stub, where
   `#-asdf3` ran before. Checked: `prove:run` over a directory works with them, and trivial-mimes'
-  `#+(and unix asdf3)` `uiop:run-program` is reachable only where `:unix` is announced. Pinned by the
-  same case, whose counts went up by seven.
+  `#+(and unix asdf3)` `uiop:run-program` is reachable only where `:unix` is announced (it starts
+  `file` on the JVM family since 2026-11-07, `.kb/uiop.md`). Pinned by the same case, whose counts
+  went up by seven.
 
 ## Target-shape features beside the backend one
 - `WASM_REACTOR` -> `rontolisp-reactor` (`--no-wasi` or `--no-gc`; [[clack]]).

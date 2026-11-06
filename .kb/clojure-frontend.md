@@ -2841,8 +2841,8 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
 - `clojure.java.shell` (2026-10-09): Clojure source over `ProcessBuilder` interop, so the
   interpreter and the JVM run it; `ClojureBuiltinNamespaces.HOST_ONLY` refuses its load
   while lowering for a target without the host (`ClojureNamespaceLowering.loadNamespace`,
-  `ctx.hostTarget`), not at the first call, the uiop `run-program` stance (`.todo/363`)
-  being for Common Lisp, where no program reaches the host at all. Standard input from a
+  `ctx.hostTarget`), not at the first call; Common Lisp's `uiop:run-program` starts a program
+  on the JVM family and signals on WASM instead (`.kb/uiop.md`). Standard input from a
   temporary file (a string encoded in `:in-enc` through a host `PrintStream`, a File as it
   is, a reader's text; a byte array or a `clojure.java.io` byte stream copied as its octets),
   the error output to another, stdout read by `transferTo` into a host

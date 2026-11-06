@@ -7068,14 +7068,52 @@ public final class LispEvaluator {
 			throw new LispEvalException("ASDF:PERFORM: no component " + index + " in system '" + name + "'");
 		}
 		String file = system.files().get(index);
+		// A class loaded code defines may compile another file than the component's own
+		// -- cffi-grovel's generated Lisp, which its build action wrote -- and that is
+		// the file a load reads here, where compiling is loading.
+		String generated = system.loadedClasses().components().containsKey(file) ? componentSource(name, index) : null;
+		String read = generated != null ? generated : file;
 		LispVal hook = system.aroundCompile().get(file);
 		if (hook == null) {
-			loadComponent(system, file, List.of());
+			loadComponent(system, read, List.of());
 		}
 		else {
 			callAroundCompile("system " + name + " component " + file, hook, system.defsystemDependsOn(),
-					added -> loadComponent(system, file, added));
+					added -> loadComponent(system, read, added));
 		}
+	}
+
+	/**
+	 * The file a load of a planned component reads when its compile-op compiles another
+	 * than its own ({@code %asdf-component-source}), or {@code null}.
+	 */
+	private @Nullable String componentSource(String system, int index) {
+		LispVal source = applyGlobally(this.globalEnv.lookupFunction("%ASDF-COMPONENT-SOURCE"),
+				List.of(new LispString(system), new LispInteger(index)));
+		return source instanceof LispString path ? path.value() : null;
+	}
+
+	/**
+	 * What a compile path splices for a planned component of a class loaded code defines,
+	 * asked of this evaluator as its build image: when the class adds build actions or
+	 * compiles another file than the component's own, the system is loaded here first --
+	 * the image that performs them has loaded everything before them, as in real ASDF
+	 * (cffi-grovel reads a grovel file in the package an earlier component defined, with
+	 * the types an earlier grovel file did) -- and the file its compile-op compiles is
+	 * answered when it is not the component's own.
+	 * @param system the system being spliced
+	 * @param index the component's place in its fixed plan
+	 * @return the generated file to splice, or {@code null} for the component's own
+	 */
+	public @Nullable String buildComponentSource(String system, int index) {
+		ensureAsdfRuntimeLoaded();
+		LispVal builds = applyGlobally(this.globalEnv.lookupFunction("%ASDF-COMPONENT-BUILDS-P"),
+				List.of(new LispString(system), new LispInteger(index)));
+		if (!isTruthy(builds)) {
+			return null;
+		}
+		loadSystem(system);
+		return componentSource(system, index);
 	}
 
 	private void loadComponent(AsdfSystems.LispSystem system, String file, List<String> hookFeatures) {

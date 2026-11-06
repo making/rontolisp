@@ -1143,6 +1143,9 @@ public final class PackageRegistry {
 		rontolispSymbols.add(LispNames.CONDITION_VARIABLE_NEW_INTERNAL);
 		rontolispSymbols.add(LispNames.CONDITION_WAIT_INTERNAL);
 		rontolispSymbols.add(LispNames.CONDITION_NOTIFY_INTERNAL);
+		// Internal: the subprocess behind uiop:run-program, spelled rontolisp::%... by
+		// its one call site (uiop-run-program.lisp).
+		rontolispSymbols.add(LispNames.RUN_PROGRAM_INTERNAL);
 		// Internal: the compare-and-swap behind the atomics arm, spelled rontolisp::%...
 		// by its call sites.
 		rontolispSymbols.add(LispNames.CONS_CAS_CAR_INTERNAL);

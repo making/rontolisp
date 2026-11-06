@@ -23595,8 +23595,9 @@ cases:
       ;; A member nothing implements yet signals uiop:not-implemented-error naming
       ;; the operation -- never "undefined function", and the same on all four.
       ;; (uiop:chdir is no longer one of them: it is a real definition that
-      ;; signals with a REASON -- see the uiop-os-host-identity case.)
-      (print (handler-case (uiop:run-program "ls")
+      ;; signals with a REASON -- see the uiop-os-host-identity case -- and
+      ;; uiop:run-program runs a program on the JVM family.)
+      (print (handler-case (uiop:launch-program "ls")
                (uiop:not-implemented-error (c) (princ-to-string c))))
       ;; An unimplemented MACRO drops its argument forms rather than evaluating
       ;; them: ci-uiop-probe must NOT be defined by the time the handler runs.
@@ -23614,10 +23615,41 @@ cases:
       #P"src/"
       (#P"/tmp/x" NIL)
       (#P"/a/b.lisp" #P"/a/b.lisp" #P"a/b.lisp" NIL)
-      "Not (currently) implemented on rontolisp: UIOP/RUN-PROGRAM:RUN-PROGRAM"
+      "Not (currently) implemented on rontolisp: UIOP/LAUNCH-PROGRAM:LAUNCH-PROGRAM"
       :SIGNALLED
       NIL
       "compile failed while 1/2"
+  - name: uiop-escape-command-lines
+    source: |
+      ;; uiop/launch-program's escape family: a token or a command line quoted for
+      ;; /bin/sh or for CommandLineToArgv, starting nothing -- what SBCL 2.2.9's uiop
+      ;; answers, on every backend.
+      (print (uiop:escape-sh-token "plain-token_1.0"))
+      (print (uiop:escape-sh-token "has space"))
+      (print (uiop:escape-sh-token "it's $HOME `x` \"q\" \\"))
+      (print (uiop:escape-sh-command '("cc" "-o" "out file" "a$b")))
+      (print (uiop:escape-shell-command '("echo" "x y")))
+      (print (uiop:escape-command "already a line"))
+      (print (uiop:escape-windows-token "a b\\\"c\\"))
+      (print (uiop:escape-windows-command '("prog" "a b" "c\\" "d\"e" "")))
+      (print (list (uiop:easy-sh-character-p #\a) (uiop:easy-sh-character-p #\$)))
+      (print (uiop:escape-token "x,y" :good-chars "xy"
+                                :escaper (lambda (tok s) (format s "<~a>" tok))))
+      (print (with-output-to-string (s) (uiop:escape-sh-command '("a" "b c") s)))
+      (print (uiop:escape-sh-command '("")))
+    expected: |
+      "plain-token_1.0"
+      "\"has space\""
+      "\"it's \\$HOME \\`x\\` \\\"q\\\" \\\\\""
+      "cc -o \"out file\" \"a\\$b\""
+      "echo \"x y\""
+      "already a line"
+      "\"a b\\\\\\\"c\\\\\""
+      "prog \"a b\" \"c\\\\\" \"d\\\"e\" "
+      (T NIL)
+      "<x,y>"
+      "a \"b c\""
+      ""
   - name: uiop-symbol-call-as-a-value
     source: |
       ;; dexador's backend dispatch: uiop:symbol-call taken as a VALUE and applied
@@ -37222,6 +37254,12 @@ cases:
       (print (handler-case (handler-bind ((srn-e (lambda (x) (declare (ignore x)) nil)))
                              (error 'srn-e :a (make-instance 'srn-o)))
                (srn-e (x) (type-of x))))
+      ;; An instance signalled as a value names its type from the instance, whatever
+      ;; package the class is in: osicat's posix errors signalled a TYPE-ERROR of SUBSEQ.
+      (defpackage :ci-srn-pkg (:use :cl))
+      (define-condition ci-srn-pkg::srn-p (error) ())
+      (print (handler-case (let ((x (make-condition 'ci-srn-pkg::srn-p))) (error x))
+               (error (x) (symbol-name (type-of x)))))
     expected: |
       SRN-C
       SRN-C
@@ -37239,6 +37277,7 @@ cases:
       SRN-E
       NIL
       SRN-E
+      "SRN-P"
   # A closed stream and a stream that cannot do what the operator does: the answers SBCL 2.2.9
   # gives, its sb-int:closed-stream-error a stream-error and its simple-type-error a type-error
   # over (satisfies output-stream-p) or (satisfies input-stream-p).

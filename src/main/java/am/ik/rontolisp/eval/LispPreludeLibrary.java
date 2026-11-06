@@ -2881,19 +2881,24 @@ public final class LispPreludeLibrary {
 				""");
 		// The uniqueness rule behind uiop:with-temporary-file: create the directory,
 		// then draw random names until one names nothing. Deliberately NOT seeded from
-		// the clock -- (random n) is the one entropy source every backend shares.
+		// the clock -- (random n) is the one entropy source every backend shares. The
+		// name is PREFIX, the draw, SUFFIX and .TYPE, inside DIR unless PREFIX is an
+		// absolute path itself (upstream's ensure-absolute-pathname of the prefix:
+		// cffi-toolchain names its temporary beside the file it stands for).
 		SOURCES.put(LispNames.TEMP_FILE_NAME, """
-				(defun %temp-file-name (%tfn-dir %tfn-prefix %tfn-type)
-				  (let ((%tfn-d (namestring (uiop/pathname:ensure-directory-pathname
-				                              (or %tfn-dir (uiop/stream:default-temporary-directory)))))
-				        (%tfn-p (or %tfn-prefix "tmp"))
-				        (%tfn-t (if %tfn-type (concatenate 'string "." %tfn-type) ""))
-				        (%tfn-n nil))
-				    (ensure-directories-exist %tfn-d)
+				(defun %temp-file-name (%tfn-dir %tfn-prefix %tfn-suffix %tfn-type)
+				  (let* ((%tfn-p (or %tfn-prefix "tmp"))
+				         (%tfn-d (if (and (plusp (length %tfn-p)) (char= (char %tfn-p 0) #\\/))
+				                     ""
+				                     (namestring (uiop/pathname:ensure-directory-pathname
+				                                  (or %tfn-dir (uiop/stream:default-temporary-directory))))))
+				         (%tfn-t (if %tfn-type (concatenate 'string "." %tfn-type) ""))
+				         (%tfn-n nil))
+				    (ensure-directories-exist (concatenate 'string %tfn-d %tfn-p))
 				    (do () (%tfn-n %tfn-n)
 				      (let ((%tfn-c (concatenate 'string %tfn-d %tfn-p
 				                                 (write-to-string (random 1000000000))
-				                                 %tfn-t)))
+				                                 (or %tfn-suffix "") %tfn-t)))
 				        (unless (probe-file %tfn-c) (setq %tfn-n %tfn-c))))))
 				""");
 		// The uiop/stream designator tables (.kb/uiop.md): upstream defines

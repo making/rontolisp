@@ -5402,6 +5402,28 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void uiopRunProgramSignalsWhereNoProgramStarts() throws Exception {
+		// WASI has no process API, so run-program signals naming why -- the JVM family
+		// starts the program (RunProgramPrograms) -- while what it stands on is
+		// portable: subprocess-error and its report, the slurping and vomiting pumps.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus("""
+				(print (handler-case (uiop:run-program '("echo" "x") :output :string)
+				         (uiop:not-implemented-error (c) (princ-to-string c))))
+				(print (handler-case (error 'uiop:subprocess-error :code 3 :command '("x"))
+				         (uiop:subprocess-error (c) (list (uiop:subprocess-error-code c) (princ-to-string c)))))
+				(print (with-input-from-string (s (format nil "a~%b~%")) (uiop:slurp-input-stream :lines s)))
+				(print (with-output-to-string (o) (uiop:vomit-output-stream "text" o :terpri t)))
+				""", am.ik.rontolisp.reader.Features.WASM, true, false))).isEqualTo("""
+				"Not (currently) implemented on rontolisp: UIOP/RUN-PROGRAM:RUN-PROGRAM \
+				-- no WASM backend starts a process: WASI has no process API"
+				(3 "Subprocess with command (\\"x\\")
+				 exited with error code 3")
+				("a" "b")
+				"text
+				\"""");
+	}
+
+	@Test
 	void uiopRegisterHookFunctionCompileAndRun() throws Exception {
 		// The wasm twin of JvmLispCompilerTest#compileAndRunUiopRegisterHookFunction, on
 		// Preview 1 and the component.

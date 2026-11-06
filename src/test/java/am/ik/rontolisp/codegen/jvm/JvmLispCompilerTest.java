@@ -54,6 +54,7 @@ import am.ik.rontolisp.testsupport.HashTableCopyPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
+import am.ik.rontolisp.testsupport.RunProgramPrograms;
 import am.ik.rontolisp.testsupport.SocketTest;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import am.ik.rontolisp.testsupport.ThreadStdio;
@@ -4580,6 +4581,17 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
 				am.ik.rontolisp.reader.Features.JVM, false, false)))
 			.isEqualTo(StringStreamPrograms.DIRECTION_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunUiopRunProgramStartsAProgram() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#evalUiopRunProgramStartsAProgramAndWaitsForIt: one spawn,
+		// runtime/RontoProcess, behind both.
+		String program = RunProgramPrograms.program(this.tempDir.resolve("appended.txt").toString());
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(RunProgramPrograms.EXPECTED);
 	}
 
 	@Test

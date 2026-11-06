@@ -8521,6 +8521,18 @@ public final class LispNames {
 	public static final String CONDITION_NOTIFY_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONDITION_NOTIFY_INTERNAL;
 
 	/**
+	 * The internal {@code rontolisp::%run-program} primitive behind
+	 * {@code uiop:run-program}: {@code (%run-program argv directory input output
+	 * error-output modes)} starts a program, waits for it and answers its exit code
+	 * ({@code runtime/RontoProcess}). Interpreter and JVM only: no WASM backend starts a
+	 * process, and uiop's definition there signals instead of calling this.
+	 */
+	public static final String RUN_PROGRAM_INTERNAL = "%RUN-PROGRAM";
+
+	/** The canonical spelling of {@code rontolisp::%run-program}. */
+	public static final String RUN_PROGRAM_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + RUN_PROGRAM_INTERNAL;
+
+	/**
 	 * The {@code rontolisp:current-file} read-time literal: the origin file of the source
 	 * being read, as a string, or {@code nil} when there is none (a REPL line, a runtime
 	 * {@code read-from-string}). Substituted by {@code LispReader} where the symbol

@@ -72,6 +72,42 @@
     (setf (getf initargs :license) "From the class"))
   (apply #'call-next-method system slot-names initargs))
 
+;; cffi-grovel's process-op-input: an operation of its own ahead of compile-op on the
+;; component itself, writing the file compile-op compiles. Never done, so it runs on
+;; every load; it writes the temporary directory, not the source tree.
+(defclass generate-op (asdf:downward-operation) ())
+
+(defclass generated-file (asdf:cl-source-file) ()
+  (:default-initargs :type "spec"))
+
+(import 'generated-file :asdf)
+
+(defmethod asdf:component-depends-on ((op asdf:compile-op) (c generated-file))
+  `((generate-op ,c) ,@(call-next-method)))
+
+(defmethod asdf:component-depends-on ((op generate-op) (c generated-file))
+  `((asdf:prepare-op ,c) ,@(call-next-method)))
+
+(defmethod asdf:input-files ((op generate-op) (c generated-file))
+  (list (asdf:component-pathname c)))
+
+(defmethod asdf:output-files ((op generate-op) (c generated-file))
+  (values (list (merge-pathnames (concatenate 'string (asdf:component-name c) ".lisp")
+                                 (uiop:default-temporary-directory)))
+          t))
+
+(defmethod asdf:input-files ((op asdf:compile-op) (c generated-file))
+  (list (first (asdf:output-files 'generate-op c))))
+
+(defmethod asdf:operation-done-p ((op generate-op) (c generated-file))
+  nil)
+
+(defmethod asdf:perform ((op generate-op) (c generated-file))
+  (let ((spec (with-open-file (in (first (asdf:input-files op c))) (read in))))
+    (with-open-file (out (first (asdf:output-files op c))
+                         :direction :output :if-exists :supersede)
+      (print `(defvar ,(first spec) ',(second spec)) out))))
+
 ;; coalton-asdf: extending ASDF from inside its package, the keyword finding the class
 ;; there, the file type in the slot's initform.
 (in-package :asdf)

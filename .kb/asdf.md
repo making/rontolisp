@@ -27,7 +27,8 @@ cl-project, caveman2), even on a line never reached. prove, cl-project and cavem
   so it must spell the canonical form: a slot named by an external is `asdf:version`, not
   `asdf::version`. `*asdf-version*` is internal, as in real ASDF.
 - **Real definitions** are `asdf.lisp`; a public name it defines must be an inventory name
-  (`buildDefinitions` fails otherwise). **Everything else exported gets a stub** from its kind
+  (`buildDefinitions` fails otherwise). The one other kind is an internal of a sub-package spelled
+  with `::` that a library imports (`asdf/bundle::link-op`): no surface. **Everything else exported gets a stub** from its kind
   (`AsdfRuntimeLibrary.stubForms`): a function or macro is a `defun` signalling
   `uiop:not-implemented-error`; a generic is a `defgeneric` with upstream's lambda list and a
   default method that signals, so a library's method works; a variable is nil; a class or condition
@@ -609,17 +610,34 @@ propagation mixins `downward-operation` & co., `prepare-op`, `compile-op`, `load
 adds a method), and `operate` (load-op and load-source-op -> `load-system`, test-op ->
 `test-system`, build-op -> `make`, anything else SIGNALS: there is nothing for compile-op alone
 to produce). `compile-bundle-op` is a stub class (arnesi's `make-single-fasl` names it; `operate`
-refuses it). Default
+refuses it). `bundle-op`, the internal `asdf/bundle::link-op` under it and `bundle-pathname-type`
+(real ASDF's per-OS types) are real: cffi-toolchain imports `link-op`, specializes `perform` on it
+and names its object files and executables by the type. Default
 methods are ASDF 3.3.1's for the classes the model has: load-op on a `cl-source-file` loads the
 source (`%asdf-load-component`, the seam), compile-op on a source file and everything on a
 parent component is a no-op, any other op on a source file signals, test-op on a system runs the
 recorded body. A designator op (`'asdf:load-op`) dispatches through a `symbol` method.
 - **The plan is fixed**: `%asdf-perform-system NAME :before` (prepare-op on the system, after its
-  dependencies), then `%asdf-perform-component NAME I` per file in load order (prepare-op,
-  compile-op, load-op on the I-th of the plan), then `:after` (compile-op, load-op on the system) --
-  real ASDF's action order for a source tree with a fresh cache. Compile-op does run each time
-  (rontolisp compiles a source file BY loading it); the plan never consults
-  `operation-done-p`.
+  dependencies), then `%asdf-perform-component NAME I` per file in load order (prepare-op, the
+  build actions below, compile-op, load-op on the I-th of the plan), then `:after` (compile-op,
+  load-op on the system) -- real ASDF's action order for a source tree with a fresh cache.
+  Compile-op does run each time (rontolisp compiles a source file BY loading it); the fixed
+  operations never consult `operation-done-p`.
+- **Build actions** (i84, 2026-11-07; cffi-grovel's `process-op`): what `component-depends-on`
+  names for compile-op and load-op on the component ITSELF (the object, `eq`) beyond the fixed
+  plan's own five operations, each after its own such actions, and skipped when real ASDF's
+  stamps say done: every output file present and no older than every input file, and
+  `operation-done-p`. A load-op then reads the file the component's compile-op compiles
+  (`(first (input-files compile-op c))`), when the class's `input-files` names another than the
+  component's own (the groveller's generated Lisp). Image-only Lisp (`AsdfRuntimeLibrary.IMAGE_SOURCE`:
+  `%asdf-build-actions`, `%asdf-perform-build-actions`, `%asdf-component-source`): the interpreter
+  performs them in plan order and its `loadComponent` asks for the source of a component of a
+  loaded class only; a compile path, for such a component, loads the SYSTEM into its build image
+  (`LispEvaluator.buildComponentSource`: the image that performs them has loaded what precedes
+  them) and splices the generated file; the program's seam `%asdf-perform-build-actions` is a no-op,
+  its build having done them. Divergence: a compiled program performs no build action at run
+  time, as a delivered image does not. Pinned by `AsdfMetaobjectsE2eTest` (`classes-tool.lisp`'s
+  `generated-file`, all four, the answers SBCL 2.2.9 gives) and `CffiGrovelE2eTest`.
 - **Interpreter**: `loadSystem` evaluates those driver calls; load-op's method reaches the Java
   built-in `%asdf-load-component` -> `loadComponent` (leaf shim or `loadFile` with the system's
   features and base dir; self-contained, so a program performing load-op on a component reloads
@@ -688,8 +706,9 @@ method in an `.asd` and 16 distinct `.asd` files name a `:test-file`.
 5. **Generated component** (cl-unicode) — a component absent from the release.
 
 Beyond the end: **refused systems** (`ShimLibraries.refusalReason`) map a name to a SENTENCE,
-checked at the top of both loaders beside the conflict check. Registered: `cffi-grovel`
-(grovelling compiles and runs a C program) and `cffi-libffi` (structs by value already work).
+checked at the top of both loaders beside the conflict check. Registered: `cffi-libffi` (structs
+by value already work), and `cffi-grovel` only on a host without a C compiler, naming the one
+cffi-toolchain would run, or for a WASM target (`.kb/cffi.md`).
 
 ### Tier 1: built-in shim systems
 Bundled shims (`src/main/resources/am/ik/rontolisp/eval/*.lisp`) resolved instead of
@@ -763,7 +782,8 @@ downloading. `BuiltinSystems.DEPENDENCIES` records edges between shims; one exis
     `src/util.lisp` spells it with a SINGLE colon.
   - `print-condition-backtrace` is defined in `uiop/image` and IMPORTED into `uiop`, so both
     spellings are ONE symbol and one prelude splice.
-  - `uiop:run-program` signals `not-implemented-error` (outside every backend's sandbox).
+  - `uiop:run-program` starts a program on the JVM family and signals `not-implemented-error` on
+    both WASM backends (`.kb/uiop.md`, "uiop/launch-program and uiop/run-program").
   - **`with-temporary-file` is a MACRO** and cannot reach `expandUiopStubCall`; it is a built-in
     expansion in `LispEvaluator.evalCons` and both expression compilers. A LITERALLY true `:keep`
     drops the delete entirely (keeping smart-buffer's spill path clear of the WASM

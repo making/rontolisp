@@ -9,7 +9,10 @@ the uiop paragraphs in `.kb/asdf.md`.
 **Acceptance criterion: every uiop function either runs on all four backends or signals
 `not-implemented-error` identically on all four.** `merge-pathnames*` was the one violation (a
 Java built-in on the interpreter only); it, `file-exists-p` and `native-namestring` are Lisp now,
-and `expandUiopStubCall` kept only its real folds.
+and `expandUiopStubCall` kept only its real folds. **The one exception is a host capability WASI
+lacks**, decided like `ffi:`: `run-program` starts a program on the JVM family (the interpreter,
+the native binary, a compiled class) and signals `not-implemented-error` with that reason on both
+WASM backends (2026-11-07, "uiop/launch-program and uiop/run-program"). Re-evaluate on a WASI process proposal.
 
 ## The 15 sub-packages
 `uiop` IS `uiop/driver`, a `:use-reexport` of `uiop/package`, `uiop/package-local-nicknames`,
@@ -234,7 +237,7 @@ directory on all four since 2026-10-09: `%delete-file` falls back to the injecte
 `path_remove_directory` on WASM (`.kb/read-load-streams.md`); a non-empty one signals the
 `file-error`.
 `delete-directory-tree` takes the portable recursive walk only (no `run-program`
-branch -- there is no backend that spawns one); an explicit `:validate nil` fails the
+branch -- the walk runs on all four, `run-program` on the JVM family only); an explicit `:validate nil` fails the
 first check rather than the second, both the same `parameter-error`. **Symlinks resolve
 on all four** (2026-10-09): `truenamize` (and `resolve-symlinks` over it) is
 `%real-path` over `%absolute-path` (absolute where `truename` is, 2026-10-23), the walk
@@ -415,13 +418,50 @@ defensively does not turn a no-op into a failure. Re-evaluation trigger: if ront
 ever grows a real `cl:compile-file`, `compile-file*` is the first thing that should stop
 signalling.
 
+### uiop/launch-program and uiop/run-program (i84, 2026-11-07)
+- **The escape family is real on all four** (`uiop-launch-program.lisp`): `escape-token`,
+  `escape-sh-token`/`-command`, `escape-windows-token`/`-command`, `escape-shell-token`/`-command`,
+  `escape-command`, `easy-sh-character-p`, upstream's bodies with its private helpers as local
+  functions; SBCL 2.2.9's answers (ci-spec `uiop-escape-command-lines`). `launch-program`, the
+  `process-info` family, `wait-process`, `terminate-process`, `process-alive-p` and `close-streams`
+  stay stubs: no backend hands a running child back (`.todo/363`).
+- **`run-program` is real on the JVM family** (`uiop-run-program.lisp`), over one primitive,
+  `rontolisp::%run-program` -> `runtime/RontoProcess.spawn` (the interpreter's `Environment`
+  built-in; the JVM lowers to `RontoProcess.run`, which travels with the class; the web build
+  substitutes a refusal). The primitive takes the arguments NUL-joined (the one character no C
+  `argv` entry holds), a directory and a file or nil per stream, and a mode word (inherit, append,
+  error-to-output); every other stream spec -- `t`, a stream, `:string`, `:lines`, a function, a
+  `(processor . keys)` list -- is upstream's route: vomited into a temporary file before the child
+  starts, slurped from one after it exits. A string command runs as `/bin/sh -c`, a list one
+  directly unless `:force-shell` (then `exec` through `/bin/sh`). Exit code nonzero ->
+  `cerror` of `subprocess-error` (process slot nil: no process object outlives the call) unless
+  `:ignore-error-status`; a program that cannot start signals the host's sentence. Standard
+  output and error are finished first, so what this process wrote precedes the child's.
+  `slurp-input-stream` / `vomit-output-stream` are upstream's method tables as one dispatch each
+  (no user methods, like `call-with-output`); `vomit-output-stream` reads a pathname INTO the
+  stream (upstream's method writes the stream to the file). WASM: `#+rontolisp-wasm` defines
+  `run-program` as the signal, so no `%run-program` reference reaches a module. Pinned by
+  `testsupport/RunProgramPrograms` (interpreter and JVM, SBCL's answers) and
+  `WasmLispCompilerIntegrationTest#uiopRunProgramSignalsWhereNoProgramStarts`.
+- **Why the JVM family and not uniform** (`.todo/363` had recommended the uniform signal): the
+  groveller is plain Lisp over `run-program` (`.kb/cffi.md`), so the interpreter -- the build image
+  included -- needs it; a compiled class was given it too, so the divergence is WASM's alone, the
+  `ffi:` line. trivial-mimes' `file --mime-type` fallback runs for real there now.
+- `with-temporary-file` / `call-with-temporary-file` take upstream's `:suffix` (default `-tmp` once
+  a `:type` is given), and a prefix that is an absolute path itself ignores the directory
+  (`%temp-file-name`): cffi-toolchain names its temporaries beside the file they stand for.
+
 ## Selection, not pruning
 `UiopLibrary.process` prepends only the definitions the program reaches, to a fixpoint on a
 `PackageResolver.resolveProgram` copy. **`MACRO_EXPANSION_CALLEES` is the surface-form rule**
 (mirroring `LispPreludeLibrary.referencedBySurfaceForm`): a uiop macro's expansion runs inside the
 expression compilers, long after this pass, so without an entry the compiled program says
 `The function UIOP/UTILITY:X is undefined` at run time while the interpreter works. Only the DIRECT
-callee is listed; the fixpoint pulls the rest.
+callee is listed; the fixpoint pulls the rest -- and applies the same rule to each selected
+definition's own body (2026-11-07: `escape-token` uses `with-output`, `escape-command`
+`output-string`, and a WASM compile warned `CALL-WITH-OUTPUT-FILE is undefined`). A prelude helper a
+definition calls must find its uiop callees named by that definition (`run-program` names the
+temporary directory it hands `%temp-file-name`, as `call-with-temporary-file` does).
 
 **A library form names another uiop definition HOME-QUALIFIED.** The fixpoint matches the symbol
 names a form spells against the qualified names the inventory defines, so a bare spelling selects

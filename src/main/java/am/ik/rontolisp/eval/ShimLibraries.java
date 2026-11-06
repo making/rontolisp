@@ -1,9 +1,12 @@
 package am.ik.rontolisp.eval;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -136,14 +139,25 @@ public final class ShimLibraries {
 	 * of the ladder where even a stub would be a lie. Both loaders check the map before
 	 * anything else.
 	 */
-	private static final Map<String, String> REFUSED = Map.of("cffi-grovel",
-			"grovelling compiles and runs a C program to read the platform's headers, "
-					+ "which needs a C toolchain at load time -- rontolisp has none. "
-					+ "A binding that grovels cannot be loaded here; most (cl+ssl, static-vectors) do not.",
-			"cffi-libffi",
+	private static final Map<String, String> REFUSED = Map.of("cffi-libffi",
 			"structures by value need no libffi here: rontolisp's cffi-sys backend passes "
 					+ "and returns them through the foreign function API's own struct layout, "
 					+ "so cffi:*foreign-structures-by-value* already works.");
+
+	/**
+	 * The system refused only on a host without what it runs: the groveller compiles a C
+	 * program with the host's compiler, cffi-toolchain's {@code $CC} or else {@code cc}.
+	 */
+	private static final String GROVEL_SYSTEM = "cffi-grovel";
+
+	/**
+	 * The answer of {@link #groveller(Map)} for this process, valid once
+	 * {@link #grovellerProbed}: the PATH is read once per run, at the first ask (not at
+	 * class initialization, which a native image may do at build time).
+	 */
+	private static volatile @Nullable String grovellerRefusal;
+
+	private static volatile boolean grovellerProbed;
 
 	/**
 	 * System pairs that must not be loaded into one program: both define the same
@@ -184,12 +198,67 @@ public final class ShimLibraries {
 
 	/**
 	 * Returns why the named system is refused, or {@code null} when it is not one of the
-	 * refused ones. See {@code REFUSED}.
+	 * refused ones. See {@code REFUSED}; {@code cffi-grovel} is refused only where the
+	 * host has no C compiler ({@link #groveller(Map)}).
 	 * @param name the system name (canonical lower-case)
 	 * @return the reason, or {@code null}
 	 */
 	@Nullable public static String refusalReason(String name) {
+		if (GROVEL_SYSTEM.equals(name)) {
+			if (!grovellerProbed) {
+				grovellerRefusal = groveller(System.getenv());
+				grovellerProbed = true;
+			}
+			return grovellerRefusal;
+		}
 		return REFUSED.get(name);
+	}
+
+	/**
+	 * Returns why the named system is refused for a compile target: as
+	 * {@link #refusalReason(String)}, and {@code cffi-grovel} on a WASM target before its
+	 * build actions run -- a grovelled binding calls C through {@code ffi:}, which the
+	 * WASM backends refuse anyway, and the build image reading with the target's features
+	 * (no OS announced) would fail first, on something else.
+	 * @param name the system name (canonical lower-case)
+	 * @param target the features the compile path reads with
+	 * @return the reason, or {@code null}
+	 */
+	@Nullable public static String refusalReason(String name, Features target) {
+		if (GROVEL_SYSTEM.equals(name) && target.contains("rontolisp-wasm")) {
+			return "a binding that grovels calls C through the ffi: package, which runs on the interpreter "
+					+ "(java -jar, or the rontolisp binary) and in a compiled .class or .jar, not in a .wasm";
+		}
+		return refusalReason(name);
+	}
+
+	/**
+	 * Why {@code cffi-grovel} cannot load in an environment, or {@code null} when it can:
+	 * the compiler cffi-toolchain runs -- {@code CC}, else {@code cc} -- is a path to an
+	 * executable or one on {@code PATH}.
+	 * @param environment the process environment
+	 * @return the refusal naming the missing compiler, or {@code null}
+	 */
+	static @Nullable String groveller(Map<String, String> environment) {
+		String given = environment.get("CC");
+		String compiler = given == null || given.isEmpty() ? "cc" : given;
+		if (compiler.contains("/")) {
+			if (Files.isExecutable(Path.of(compiler))) {
+				return null;
+			}
+		}
+		else {
+			String path = environment.getOrDefault("PATH", "");
+			for (String dir : path.split(java.util.regex.Pattern.quote(File.pathSeparator))) {
+				if (!dir.isEmpty() && Files.isExecutable(Path.of(dir, compiler))) {
+					return null;
+				}
+			}
+		}
+		return "grovelling compiles and runs a C program to read the platform's headers, and the C compiler "
+				+ "cffi-toolchain runs, " + compiler
+				+ (compiler.contains("/") ? ", is not an executable file. " : ", is not on PATH. ")
+				+ "Install one, or set CC to the compiler to run.";
 	}
 
 	/**

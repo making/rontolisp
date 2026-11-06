@@ -52,8 +52,11 @@ its type. The correct spelling is `foreign-funcall-varargs`.
   (an FFM upcall stub cannot be re-targeted).
 
 ## What refuses, and where it runs
-- `cffi-grovel` and `cffi-libffi` are in `ShimLibraries.REFUSED` (checked in
-  `LispEvaluator.loadSystem` and `cli.LoadInliner.spliceSystem`). Both WASM backends refuse `ffi:`
+- `cffi-libffi` is in `ShimLibraries.REFUSED` (checked in `LispEvaluator.loadSystem` and
+  `cli.LoadInliner.spliceSystem`). `cffi-grovel` is refused only on a host without the C compiler
+  cffi-toolchain runs (`ShimLibraries.groveller`: `$CC`, else `cc`, an executable path or on
+  `PATH`; the sentence names it) and, on a compile path, for a WASM target
+  (`refusalReason(name, target)`), before anything builds. Both WASM backends refuse `ffi:`
   (hence `cffi:`) permanently, by name, in `CompileFrontend`.
 - The native binary interprets it against the registered downcall/upcall shape GRID
   (`.kb/ffi.md`); `%call-symbol` re-signals a miss with the function's name in front. A struct
@@ -88,12 +91,42 @@ its type. The correct spelling is `foreign-funcall-varargs`.
   and `.kb/clos.md` (an `(eql +constant+)` specializer), plus flexi-streams in-memory output
   streams, `trivial-garbage:make-weak-hash-table` and bordeaux-threads recursive locks.
 - The bundled `cl+ssl` shim over `rontolisp:tls-upgrade` (`.kb/tcp-sockets.md`) stays the default:
-  no OpenSSL, and the only one that works on the WASM component backend. `cffi-grovel` consumers
-  were not probed and never will be.
+  no OpenSSL, and the only one that works on the WASM component backend.
+- **osicat** (grovel files and a `:cffi-wrapper-file`) -- loads and runs on the interpreter and in
+  a compiled class (2026-11-07): `current-directory`, `getpid`, `file-kind`, grovelled constants,
+  types and enums, `stat` of a missing file signalling `osicat-posix:enoent`.
+
+## cffi-grovel: the groveller is upstream's (i84, 2026-11-07)
+Measured 2026-11-06: 101 of the 6208 Quicklisp systems depend on `cffi-grovel` (osicat, cl-libuv,
+so cl-async, blackbird, wookie). The premise of the old refusal was the toolchain, and that is the
+HOST's: the groveller is plain Lisp that writes a `.c`, runs `cc` through `uiop:run-program`, runs
+the binary and loads the Lisp it prints; a wrapper file compiles C into a library of the system's
+own. Upstream `cffi-grovel` and `cffi-toolchain` load unmodified; what stood in the way, all
+general: `asdf/bundle::link-op` and `bundle-pathname-type` (`.kb/asdf.md`), `uiop:run-program` and
+`escape-command` (`.kb/uiop.md`), `with-temporary-file`'s `:suffix` and absolute `:prefix`, the
+plan's build actions -- `process-op` ahead of `compile-op`, the load reading the generated file
+(`.kb/asdf.md`, "The operation protocol") -- and a signal of a condition instance whose class another package
+names (osicat's `posix-error` subclasses), which died on `SUBSEQ` on all four backends
+(`LispMacroExpander.conditionTypeName`).
+- **Where the outputs go**: beside the grovel file (`.processed-grovel-file`, `__grovel.c`, the
+  executable, the wrapper's `.so`): no output translations here (`.kb/asdf.md`), as real ASDF with
+  them disabled. A read-only source tree cannot grovel. An output newer than its inputs is not
+  rebuilt (`%asdf-up-to-date-p`), so a second load runs no `cc`.
+- **A compile path grovels in its build image**, at compile time, after loading the system there
+  (the groveller reads a grovel file in the package an earlier component defined, with the types
+  an earlier grovel file defined), and splices the generated Lisp; the program performs no build
+  action. The compiled class opens the wrapper library by the absolute path the build wrote, as an
+  SBCL image reopens it: it runs where that file is.
+- Measured on the grovel output: `#.(cffi-grovel::convert-intmax-constant ...)` reads on the compile
+  paths too (the macro-time evaluator has cffi-grovel's defun).
+- Not measured: the native binary (its `ffi:` interprets a registered shape grid, `.kb/ffi.md`).
 
 ## Tests
 `eval/CffiSystemTest` -- upstream source loads with NO native access; type/enum/struct layers;
 `defcfun` / `foreign-funcall` / out parameters / strings / flat namespace / struct by value /
 callback / varargs / `defcvar` (skipped where native access is denied);
-`grovelAndLibffiRefuseWithTheReason`; `aCallbackAndAVariadicCallReachTheForeignSide`. Vendored
-upstream: `src/test/resources/cffi`. Docs: `guides/cffi.md`, `guides/asdf-systems.md`.
+`libffiRefusesAndGrovellingNamesTheCompilerItLacks`; `aCallbackAndAVariadicCallReachTheForeignSide`.
+`e2e/CffiGrovelE2eTest` -- the `cffi-grovel-demo` fixture (a constant, a type, a struct layout, an
+enum, two wrappers) grovelled on the interpreter and in a compiled class's build image; skipped
+without `cc` or native access. Vendored upstream: `src/test/resources/cffi` (cffi, cffi-grovel,
+cffi-toolchain). Docs: `guides/cffi.md`, `guides/asdf-systems.md`.

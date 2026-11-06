@@ -14779,12 +14779,12 @@ public final class LispMacroExpander {
 	 * The option list is UIOP's keyword plist and every option keyword must be literal:
 	 * {@code :stream} / {@code :pathname} name the variables the body receives (at least
 	 * one is required; a body sees only what it asks for), {@code :directory} /
-	 * {@code :prefix} / {@code :type} are ordinary expressions fed to
+	 * {@code :prefix} / {@code :suffix} / {@code :type} are ordinary expressions fed to
 	 * {@code %temp-file-name}, {@code :direction} and {@code :element-type} the
 	 * {@code open} literals, and {@code :keep} decides the delete (a LITERALLY true
 	 * {@code :keep}, smart-buffer's, is the function's own no-delete path). UIOP's
-	 * remaining options ({@code :suffix}, {@code :after}, {@code :external-format}) are
-	 * rejected rather than silently dropped: each one changes what the body sees.
+	 * remaining options ({@code :after}, {@code :external-format}) are rejected rather
+	 * than silently dropped: each one changes what the body sees.
 	 * @param cons the with-temporary-file expression
 	 * @param unwindProtect unused: {@code call-with-temporary-file} owns the cleanup
 	 * @return the expanded expression
@@ -14800,7 +14800,8 @@ public final class LispMacroExpander {
 		LispVal pathVar = null;
 		LispVal directory = LispNil.INSTANCE;
 		LispVal prefix = LispNil.INSTANCE;
-		LispVal type = LispNil.INSTANCE;
+		LispVal suffix = null;
+		LispVal type = null;
 		LispVal keep = null;
 		String direction = null;
 		boolean binary = false;
@@ -14815,6 +14816,7 @@ public final class LispMacroExpander {
 				case ":PATHNAME" -> pathVar = value;
 				case ":DIRECTORY" -> directory = value;
 				case ":PREFIX" -> prefix = value;
+				case ":SUFFIX" -> suffix = value;
 				case ":TYPE" -> type = value;
 				case ":KEEP" -> keep = value;
 				case ":DIRECTION" -> {
@@ -14875,7 +14877,13 @@ public final class LispMacroExpander {
 			call.add(new LispSymbol(":PREFIX"));
 			call.add(prefix);
 		}
-		if (!isLiteralNil(type)) {
+		// Both passed when written, a nil included: a :type given at all makes the
+		// default suffix "-tmp", and a nil one names a file with no type, as upstream.
+		if (suffix != null) {
+			call.add(new LispSymbol(":SUFFIX"));
+			call.add(suffix);
+		}
+		if (type != null) {
 			call.add(new LispSymbol(":TYPE"));
 			call.add(type);
 		}
@@ -36734,14 +36742,12 @@ public final class LispMacroExpander {
 		// it, the temp holding the rendered text otherwise (bound around the whole arm
 		// below, so the renderer runs once).
 		LispVal stringMessage = formatArgs == null ? condVar : new LispSymbol(SIG_MSG_VAR);
-		LispVal tag = objTag(condVar);
 		LispVal slotMsg = objRef(condVar, 0);
 		LispVal isSimpleWithMessage = listToCons(List.of(new LispSymbol(LispNames.AND),
 				objIs(condVar, SIMPLE_CONDITION_TAGS), callOf(LispNames.STRINGP, slotMsg)));
 		LispVal typeMessage = listToCons(List.of(
 				new LispSymbol(LispNames.STRING_CONCAT), listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT),
-						new LispString("Condition of type "), listToCons(List.of(new LispSymbol(LispNames.SUBSEQ),
-								callOf(LispNames.SYMBOL_NAME, tag), new LispInteger(7))))),
+						new LispString("Condition of type "), conditionTypeName(condVar))),
 				new LispString(" was signalled.")));
 		// A value that is not an instance at all has no tag to name, so it signals as its
 		// own printed representation rather than off the end of a nil tag.
@@ -41052,8 +41058,7 @@ public final class LispMacroExpander {
 		LispSymbol condition = new LispSymbol("__stc");
 		LispSymbol fallback = new LispSymbol("__stm");
 		LispSymbol report = new LispSymbol("__str");
-		LispVal className = listToCons(List.of(new LispSymbol(LispNames.SUBSEQ),
-				callOf(LispNames.SYMBOL_NAME, objTag(condition)), new LispInteger(7)));
+		LispVal className = conditionTypeName(condition);
 		LispVal list = initargs ? formatMessagePieces("Condition ~s was signalled.", List.of(fallback))
 				: concatOf(new LispString("Condition of type "), className, new LispString(" was signalled."));
 		LispVal text = makeIf(fallback, makeIf(callOf(LispNames.CONSP, fallback), list, fallback),
@@ -41234,6 +41239,30 @@ public final class LispMacroExpander {
 		LispSymbol reportVar = new LispSymbol("__crm" + MV_COUNTER.getAndIncrement());
 		return makeLet(reportVar.name(), callOf(LispNames.CONDITION_REPORT_STR_INTERNAL, value),
 				makeIf(reportVar, reportVar, fallback));
+	}
+
+	/**
+	 * The name a signalled instance's type is reported by: its tag's symbol name less the
+	 * {@code %class-} prefix, which a class another package names does not show -- its
+	 * tag is qualified, and a qualified symbol's name is the member alone. Cutting the
+	 * prefix off that signalled a {@code SUBSEQ} bounds error instead (osicat's posix
+	 * errors). {@code type-of} would answer the same at the price of the printer.
+	 * @param value the (temp-bound) instance form
+	 * @return the name form
+	 */
+	private static LispVal conditionTypeName(LispVal value) {
+		LispSymbol name = new LispSymbol("__ctn");
+		String prefix = LispLayout.CLASS_TAG_PREFIX;
+		LispVal prefixed = listToCons(
+				List.of(new LispSymbol(LispNames.AND),
+						listToCons(List.of(new LispSymbol(LispNames.GT), callOf(LispNames.LENGTH, name),
+								new LispInteger(prefix.length()))),
+						listToCons(List.of(new LispSymbol(LispNames.STRING_EQ),
+								listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), name, new LispInteger(0),
+										new LispInteger(prefix.length()))),
+								new LispString(prefix)))));
+		return makeLet(name.name(), callOf(LispNames.SYMBOL_NAME, objTag(value)), makeIf(prefixed,
+				listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), name, new LispInteger(prefix.length()))), name));
 	}
 
 	/**

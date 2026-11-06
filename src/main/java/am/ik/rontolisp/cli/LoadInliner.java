@@ -881,7 +881,7 @@ public final class LoadInliner {
 			throw new IllegalStateException("Circular system :depends-on detected: "
 					+ String.join(" -> ", ctx.loadingSystems()) + " -> " + name);
 		}
-		String refusal = ShimLibraries.refusalReason(name);
+		String refusal = ShimLibraries.refusalReason(name, ctx.features());
 		if (refusal != null) {
 			throw new IllegalStateException("Cannot load system '" + name + "': " + refusal);
 		}
@@ -985,13 +985,20 @@ public final class LoadInliner {
 				AsdfSystems.LoadedClass loaded = system.loadedClasses().components().get(file);
 				out.add(SplicedComponentGroups.componentMarker(name, index, loaded != null && loaded.deferred()));
 				LispVal hook = system.aroundCompile().get(file);
+				// What the component's build actions generated, which its compile-op
+				// compiles instead of its own file (cffi-grovel's): performed in the
+				// build
+				// image now, so the program carries their output and performs none.
+				String generated = loaded != null && loaded.lispSource()
+						? buildComponentSource(name, index, file, system, ctx) : null;
+				String read = generated != null ? generated : file;
 				if (loaded != null && !loaded.lispSource()) {
 					// The class's methods act on this file; no loader reads it. The
 					// bracket
 					// stays, for its actions to be performed.
 				}
 				else if (hook == null) {
-					spliceComponent(system, file, out, systemCtx, List.of());
+					spliceComponent(system, read, out, systemCtx, List.of());
 				}
 				else {
 					// The hook runs in the build image, around the read of the component,
@@ -1003,7 +1010,7 @@ public final class LoadInliner {
 					ctx.buildImage()
 						.image(ctx, searchDirs)
 						.callAroundCompile("system " + name + " component " + file, hook, system.defsystemDependsOn(),
-								added -> spliceComponent(system, file, out, systemCtx, added));
+								added -> spliceComponent(system, read, out, systemCtx, added));
 				}
 				out.add(SplicedComponentGroups.componentEndMarker());
 			}
@@ -1031,6 +1038,25 @@ public final class LoadInliner {
 			// have to be part of the program -- splicing it with clack is what puts
 			// them there.
 			spliceSystem(LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM, out, ctx, requestBaseDir);
+		}
+	}
+
+	/**
+	 * The file a component of a class loaded code defines is spliced from when its build
+	 * actions generate it (cffi-grovel's process-op), performed in the build image
+	 * ({@link LispEvaluator#buildComponentSource}); {@code null} for the component's own
+	 * file. A failure names the component, as a compile error does.
+	 */
+	@Nullable private static String buildComponentSource(String name, int index, String file, AsdfSystems.LispSystem system,
+			Ctx ctx) {
+		List<String> searchDirs = new ArrayList<>();
+		searchDirs.add(system.baseDir());
+		searchDirs.addAll(ctx.systemPath());
+		try {
+			return ctx.buildImage().image(ctx, searchDirs).buildComponentSource(name, index);
+		}
+		catch (RuntimeException ex) {
+			throw new IllegalStateException("system " + name + " component " + file + ": " + ex.getMessage(), ex);
 		}
 	}
 
