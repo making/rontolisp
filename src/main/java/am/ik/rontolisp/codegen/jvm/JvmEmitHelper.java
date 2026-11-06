@@ -98,13 +98,23 @@ final class JvmEmitHelper {
 		ctx.body.invokestatic(ctx.longValueOf);
 	}
 
-	/** Pushes the primitive {@code long} (no boxing). */
+	/**
+	 * Pushes the primitive {@code long} (no boxing). A value in the short range is an
+	 * immediate widened, no pool entry: the pool's lookup table probes linearly from a
+	 * {@code Long} entry's value, so a run of small longs is one cluster every later
+	 * entry landing in it walks (a program's 680,000 load-time-value slot indices took
+	 * its JVM compile past an hour).
+	 */
 	static void emitRawLong(long value, JvmLispCompiler.Ctx ctx) {
 		if (value == 0) {
 			ctx.body.lconst_0();
 		}
 		else if (value == 1) {
 			ctx.body.lconst_1();
+		}
+		else if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
+			ctx.body.loadConstant((int) value);
+			ctx.body.i2l();
 		}
 		else {
 			LongEntry lc = ctx.cp.entries().longEntry(value);

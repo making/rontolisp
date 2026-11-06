@@ -462,11 +462,34 @@ public final class AstOutliner {
 			int nodeBudget = Math.max(MIN_BUDGET_NODES,
 					(int) ((long) nodes * budget.targetBytes() / budget.measuredBytes()));
 			LispVal cut = cut(form, nodeBudget);
+			if (cut == form && isStatementRun(form)) {
+				// No branch and no argument list to cut, but a long run of small
+				// statements, as coalton's environment updates are in one let: the form
+				// is a piece of its own, whose run JvmBodyOutliner splits.
+				cut = wrap(form);
+			}
 			if (this.report) {
 				System.err.println("[outline-top] nodes=" + nodes + " measured=" + budget.measuredBytes() + " target="
 						+ budget.targetBytes() + " nodeBudget=" + nodeBudget + " pieces=" + this.counter);
 			}
 			return cut;
+		}
+
+		/**
+		 * {@return whether {@code form} is a {@code let}, {@code let*} or {@code progn}
+		 * whose body is a run of statements} The tail-spine splitter cuts such a run
+		 * between any two statements once the form is a method body.
+		 */
+		private static boolean isStatementRun(LispVal form) {
+			if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head) || !cons.isProperList()) {
+				return false;
+			}
+			int parts = cons.toList().size();
+			return switch (head.name()) {
+				case LispNames.PROGN -> parts > 2;
+				case LispNames.LET, LispNames.LET_STAR -> parts > 3;
+				default -> false;
+			};
 		}
 
 		/**

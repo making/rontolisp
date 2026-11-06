@@ -23,6 +23,9 @@
 ;;;;     tls-upgrade requires a handle that has not been written to.
 ;;;;   - connector.connect (static async, CONSUMING the connector) performs the
 ;;;;     handshake; its error arm re-signals rontolisp:wit-error at the await.
+;;;;     The handshake waits as long as the socket's read deadline allows (the
+;;;;     interpreter/JVM's SO_TIMEOUT bound): it races a wait-for timer, and a
+;;;;     peer that accepts and never answers TLS fails the upgrade.
 ;;;;   - on success the socket ENTRY is swapped onto the cleartext ends IN PLACE,
 ;;;;     so tls-upgrade answers the SAME fd it was given (the component
 ;;;;     divergence from the interpreter/JVM's new-handle convention) and every
@@ -73,8 +76,23 @@
                         ;; after a failed handshake drops live ends, never a transferred
                         ;; one.
                         (rontolisp::%sock-set-streams e (car rp) (cdr sp))
-                        (rontolisp:await (%tls:connector-connect conn host))
-                        fd)
+                        ;; Under the socket's read deadline the handshake races a
+                        ;; timer; losing it fails the upgrade (nil). The abandoned
+                        ;; handshake stays pending host-side -- there is no subtask
+                        ;; cancel here -- until the caller's close ends the socket.
+                        (let ((hs (%tls:connector-connect conn host))
+                              (ms (rontolisp::%sock-e-deadline e))
+                              (winner 0))
+                          (when (and ms (not (rontolisp::%future-settled-p hs)))
+                            (setq winner
+                                  (rontolisp:await
+                                   (rontolisp::%future-race
+                                    (list hs (rontolisp:wait-for ms))))))
+                          (if (eql winner 1)
+                              nil
+                              (progn
+                                (rontolisp:await hs)
+                                fd))))
           (rontolisp:wit-error (c)
             ;; The handshake's err arm carries an own<error> RESOURCE handle
             ;; (an integer) -- release it. The plumbing calls above signal no
@@ -109,17 +127,22 @@
   ;; natural primitive (connector.send/receive transform the socket's own
   ;; streams), so tls-connect is the derived one -- the mirror image of the
   ;; JVM, where the handshaken connect is primitive and the upgrade derived.
-  ;; `host` doubles as the server name the certificate is verified against, so
-  ;; like tcp-connect it must be an IPv4 literal (or localhost) TODAY -- for a
-  ;; real-world host, tcp-connect to its address and tls-upgrade with the DNS
-  ;; name.
+  ;; `host` doubles as the server name the certificate is verified against, and
+  ;; tcp-connect resolves it (wasi:sockets/ip-name-lookup). The handshake runs
+  ;; under the interpreter/JVM's 10 s bound
+  ;; (LispNames.TLS_CONNECT_HANDSHAKE_TIMEOUT_MS) -- the caller has no handle to
+  ;; set a deadline on first -- which the answered handle no longer carries.
   (rontolisp::%tls-check-insecure "rontolisp:tls-connect" opt value)
   (let ((fd (rontolisp:tcp-connect host port)))
     (if fd
-        (let ((up (rontolisp:tls-upgrade fd host)))
-          (if up
-              up
-              (progn
-                (close fd)
-                nil)))
+        (progn
+          (rontolisp:tcp-set-timeout fd 10000)
+          (let ((up (rontolisp:tls-upgrade fd host)))
+            (if up
+                (progn
+                  (rontolisp:tcp-set-timeout fd nil)
+                  up)
+                (progn
+                  (close fd)
+                  nil))))
         nil)))

@@ -215,8 +215,8 @@ DELETE FROM article WHERE (id = ?)
   wasmtime run -S tcp=y -S inherit-network=y blog.wasm
   ```
 
-  `:host` は **IPv4 リテラル**でなければなりません — WASM ではホスト名解決が
-  配線されていません。
+  `:host` が IPv4 リテラルではなくホスト名なら、`-S allow-ip-name-lookup=y`
+  も必要です。
 - **WASM Preview 1** は設計上ホストのソケット API を持ちません。mito の
   プログラムはそこでもコンパイルは通り (ソケット呼び出し箇所は**呼び出し時
   エラー**になるため、スプライスされたデッドコードもビルドできます)、最初の

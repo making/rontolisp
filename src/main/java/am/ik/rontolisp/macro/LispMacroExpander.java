@@ -6083,13 +6083,17 @@ public final class LispMacroExpander {
 
 	/**
 	 * {@link LispNames#EVAL_SETF_FORM}: what an eval'd assignment of a place no table row
-	 * holds evaluates, the place's name tested over the program's {@code (setf name)}
-	 * functions. The call is the compile-time one, the new value first.
+	 * holds evaluates, the compile-time call of the {@code (setf name)} function
+	 * {@link LispNames#EVAL_SETF_FUNCTION} finds for the place's name, the new value
+	 * first. That dispatch over the program's {@code (setf name)} functions is segmented
+	 * ({@link #segmentedNameDispatch}), its arms answering only the function: one chain
+	 * building the call form in every arm was 159 bytes an arm on the JVM, and dexador's
+	 * 451 functions overflowed the 64 KB method limit (2026-11-06).
 	 * @param definedNames every name the program defines
-	 * @return the definition, wrapper-shaped, or null when the program defines no such
-	 * function
+	 * @return the definitions, wrapper-shaped, the entry first; none when the program
+	 * defines no such function
 	 */
-	public static @Nullable LispVal evalSetfRuntime(java.util.Collection<String> definedNames) {
+	public static List<LispVal> evalSetfRuntime(java.util.Collection<String> definedNames) {
 		List<String> places = new ArrayList<>();
 		for (String name : new java.util.TreeSet<>(definedNames)) {
 			if (name.startsWith(ClosRegistry.SETF_FUNCTION_PREFIX)) {
@@ -6097,19 +6101,24 @@ public final class LispMacroExpander {
 			}
 		}
 		if (places.isEmpty()) {
-			return null;
+			return List.of();
 		}
 		LispSymbol op = new LispSymbol("%EVAL-OP");
 		LispSymbol args = new LispSymbol("%EVAL-ARGS");
 		LispSymbol value = new LispSymbol("%EVAL-VALUE");
-		return runtimeDefinition(LispNames.EVAL_SETF_FORM, List.of(op, args, value), nameChain(op, places, (place) -> {
-			LispVal function = listToCons(
-					List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(setfFunctionName(place.name()))));
-			LispVal quoteSymbol = quoteOf(LispNames.QUOTE);
-			return callOf(LispNames.CONS, quoteOf(LispNames.FUNCALL),
-					callOf(LispNames.CONS, callOf(LispNames.LIST, quoteSymbol, function),
-							callOf(LispNames.CONS, callOf(LispNames.LIST, quoteSymbol, value), args)));
-		}, LispNil.INSTANCE));
+		LispSymbol function = new LispSymbol("%EVAL-SETF-FN");
+		LispVal quoteSymbol = quoteOf(LispNames.QUOTE);
+		LispVal call = callOf(LispNames.CONS, quoteOf(LispNames.FUNCALL),
+				callOf(LispNames.CONS, callOf(LispNames.LIST, quoteSymbol, function),
+						callOf(LispNames.CONS, callOf(LispNames.LIST, quoteSymbol, value), args)));
+		List<LispVal> out = new ArrayList<>();
+		out.add(runtimeDefinition(LispNames.EVAL_SETF_FORM, List.of(op, args, value), makeLet(function.name(),
+				callOf(LispNames.EVAL_SETF_FUNCTION, op), makeIf(function, call, LispNil.INSTANCE))));
+		out.addAll(segmentedNameDispatch(LispNames.EVAL_SETF_FUNCTION, List.of(op), places,
+				place -> listToCons(
+						List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(setfFunctionName(place.name())))),
+				LispNil.INSTANCE));
+		return out;
 	}
 
 	/**
@@ -41893,6 +41902,12 @@ public final class LispMacroExpander {
 		if (!(typeSpec instanceof LispSymbol sym)) {
 			throw new IllegalArgumentException("Unsupported type specifier: " + typeSpec.print());
 		}
+		if (PackageRegistry.splitQualified(sym.name()) != null
+				&& closRegistry.findClassExactly(sym.name()) instanceof ClosRegistry.ClassInfo own) {
+			// A package's own class of a standard type's name (coalton's Pathname, Vector
+			// and Symbol): the name is that class, not the type its member spells.
+			return makeClassInstanceTest(value, own.name(), closRegistry);
+		}
 		String name = plainTypeName(sym);
 		switch (name) {
 			case "BOOLEAN":
@@ -49992,19 +50007,25 @@ public final class LispMacroExpander {
 	/**
 	 * Gives {@code load-time-value} its "evaluated once" contract on the compile path:
 	 * every occurrence whose value form is worth computing (see
-	 * {@link #worthHoistingLoadTimeValue}) is replaced by a read of a synthesized global
-	 * that fills itself on first use, and one {@code (defvar %LOAD-TIME-VALUE-N nil)} per
-	 * occurrence is prepended to the program.
+	 * {@link #worthHoistingLoadTimeValue}) is replaced by a read of a slot of one
+	 * synthesized vector that fills itself on first use, and the vector's {@code defvar}
+	 * is prepended to the program.
 	 *
 	 * <pre>
 	 * (cl-ppcre:split (load-time-value (cl-ppcre:create-scanner ";")) line)
-	 *   -&gt; (defvar %LOAD-TIME-VALUE-1 nil)                              ; prepended
-	 *      (cl-ppcre:split (car (or %LOAD-TIME-VALUE-1
-	 *                               (setq %LOAD-TIME-VALUE-1
-	 *                                     (list (cl-ppcre:create-scanner ";")))))
+	 *   -&gt; (defvar %LOAD-TIME-VALUE-SLOTS (make-array 1 :initial-element nil)) ; prepended
+	 *      (cl-ppcre:split (car (or (aref %LOAD-TIME-VALUE-SLOTS 0)
+	 *                               (%aset %LOAD-TIME-VALUE-SLOTS 0
+	 *                                      (list (cl-ppcre:create-scanner ";")))))
 	 *                      line)
 	 * </pre>
 	 *
+	 * One vector, not a global per occurrence: the literal objects {@code make-load-form}
+	 * dumps are occurrences too ({@code LoadFormSubstituter}), a million in coalton's
+	 * library, and a global each was a defvar each -- a special every by-name dispatch
+	 * tested and a field or global every backend table carried.
+	 *
+	 * <p>
 	 * The slot holds a one-element LIST rather than the value itself, so a value of
 	 * {@code nil} still counts as computed. Filling is LAZY rather than at program start:
 	 * a value form spliced out of a library (cl-ppcre's scanners are the motivating case)
@@ -50019,13 +50040,15 @@ public final class LispMacroExpander {
 	 * Both compilers reach this through {@link #expandTopLevelDefinitions}; the
 	 * {@code --no-gc} numeric subset does not, and keeps the re-evaluating lowering. The
 	 * interpreter does not either -- it memoizes each occurrence by identity instead,
-	 * which is the same contract without a program rewrite.
+	 * which is the same contract without a program rewrite. So does this: one form a
+	 * macro splices into two places (the replacement {@code LoadFormSubstituter} writes
+	 * for an object a form holds twice) is one occurrence, with one slot.
 	 * @param program the top-level forms
 	 * @return the program with load-time values hoisted, itself when nothing was hoisted
 	 */
 	public static List<LispVal> hoistLoadTimeValues(List<LispVal> program) {
-		List<LispVal> slots = new ArrayList<>();
-		List<LispVal> out = new ArrayList<>(program.size());
+		LoadTimeSlots slots = new LoadTimeSlots();
+		List<LispVal> out = new ArrayList<>(program.size() + 1);
 		boolean changed = false;
 		for (LispVal form : program) {
 			LispVal hoisted = hoistLoadTimeValues(form, slots);
@@ -50035,19 +50058,41 @@ public final class LispMacroExpander {
 		if (!changed) {
 			return program;
 		}
-		out.addAll(0, slots);
+		out.add(0,
+				listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.LOAD_TIME_VALUE_SLOTS),
+						listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispInteger(slots.count),
+								new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD), LispNil.INSTANCE)))));
 		return out;
 	}
 
-	private static LispVal hoistLoadTimeValues(LispVal form, List<LispVal> slots) {
+	/** The slots a program's hoist has given out, by the occurrence each was given to. */
+	private static final class LoadTimeSlots {
+
+		private int count;
+
+		/** An occurrence's slot and its hoisted value form. */
+		private final java.util.IdentityHashMap<LispCons, Slot> byOccurrence = new java.util.IdentityHashMap<>();
+
+		/**
+		 * One slot.
+		 *
+		 * @param index its index in the vector
+		 * @param value the form that fills it
+		 */
+		private record Slot(LispInteger index, LispVal value) {
+		}
+
+	}
+
+	private static LispVal hoistLoadTimeValues(LispVal form, LoadTimeSlots slots) {
 		return LispTrees.rebuildSpine(form, node -> hoistedWhole(node, slots), car -> hoistLoadTimeValues(car, slots));
 	}
 
 	/**
-	 * What {@link #hoistLoadTimeValues(LispVal, List)} makes of a node it does not split
-	 * into car and cdr, or {@code null} for an ordinary cell of a list's spine.
+	 * What {@link #hoistLoadTimeValues(LispVal, LoadTimeSlots)} makes of a node it does
+	 * not split into car and cdr, or {@code null} for an ordinary cell of a list's spine.
 	 */
-	private static @Nullable LispVal hoistedWhole(LispVal form, List<LispVal> slots) {
+	private static @Nullable LispVal hoistedWhole(LispVal form, LoadTimeSlots slots) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
@@ -50059,13 +50104,20 @@ public final class LispMacroExpander {
 			}
 			if (LispNames.LOAD_TIME_VALUE.equals(name) && cons.cdr() instanceof LispCons rest
 					&& worthHoistingLoadTimeValue(rest.car())) {
-				LispVal value = hoistLoadTimeValues(rest.car(), slots);
-				LispSymbol slot = new LispSymbol(LispNames.LOAD_TIME_VALUE_SLOT_PREFIX + (slots.size() + 1));
-				slots.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), slot, LispNil.INSTANCE)));
-				LispVal fill = listToCons(List.of(new LispSymbol(LispNames.SETQ), slot,
-						listToCons(List.of(new LispSymbol(LispNames.LIST), value))));
+				LoadTimeSlots.Slot slot = slots.byOccurrence.get(cons);
+				if (slot == null) {
+					LispVal value = hoistLoadTimeValues(rest.car(), slots);
+					slot = new LoadTimeSlots.Slot(new LispInteger(slots.count++), value);
+					slots.byOccurrence.put(cons, slot);
+				}
+				// Each place it stands gets its own read: one form in two places would
+				// be one node to the passes that key a node by identity (a tail mark).
+				LispSymbol vector = new LispSymbol(LispNames.LOAD_TIME_VALUE_SLOTS);
+				LispVal read = listToCons(List.of(new LispSymbol(LispNames.AREF), vector, slot.index()));
+				LispVal fill = listToCons(List.of(new LispSymbol(LispNames.ASET), vector, slot.index(),
+						listToCons(List.of(new LispSymbol(LispNames.LIST), slot.value()))));
 				return listToCons(List.of(new LispSymbol(LispNames.CAR),
-						listToCons(List.of(new LispSymbol(LispNames.OR), slot, fill))));
+						listToCons(List.of(new LispSymbol(LispNames.OR), read, fill))));
 			}
 		}
 		return null;
@@ -53150,7 +53202,9 @@ public final class LispMacroExpander {
 			// (and names the metaobject) by (car (car entry)).
 			addDesignatorSpellings(spellings, info.name());
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
-			if (qn != null) {
+			// The bare member answers too, as findClass's tolerance does -- but a
+			// built-in class's name stays cl's (coalton's Pathname is no cl:pathname).
+			if (qn != null && !ClosRegistry.namesBuiltinClass(qn.member())) {
 				spellings.add(qn.member());
 			}
 			spellings.add(LispLayout.CLASS_TAG_PREFIX + info.name());
@@ -53165,7 +53219,7 @@ public final class LispMacroExpander {
 				}
 				addDesignatorSpellings(spellings, alias.getKey());
 				PackageRegistry.QualifiedName aliasQn = PackageRegistry.splitQualified(alias.getKey());
-				if (aliasQn != null) {
+				if (aliasQn != null && !ClosRegistry.namesBuiltinClass(aliasQn.member())) {
 					spellings.add(aliasQn.member());
 				}
 			}
@@ -53200,7 +53254,7 @@ public final class LispMacroExpander {
 			java.util.LinkedHashSet<String> spellings = new java.util.LinkedHashSet<>();
 			addDesignatorSpellings(spellings, layout.printName());
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(layout.printName());
-			if (qn != null) {
+			if (qn != null && !ClosRegistry.namesBuiltinClass(qn.member())) {
 				spellings.add(qn.member());
 			}
 			spellings.add(layout.tag());

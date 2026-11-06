@@ -218,11 +218,19 @@ public final class LispNames {
 	public static final String EVAL_ROW_DEFINE_SYMBOL_MACRO = "%EVAL-ROW-DEFINE-SYMBOL-MACRO";
 
 	/**
-	 * The dispatch over the program's {@code (setf name)} functions, generated from the
-	 * final set: {@code (op args value)} answers the form that calls the one a place
-	 * names, nil for a name none is for.
+	 * What an eval'd assignment of a place no table row holds evaluates:
+	 * {@code (op args value)} answers the form that calls the {@code (setf name)}
+	 * function {@link #EVAL_SETF_FUNCTION} finds for the place, nil for a name none is
+	 * for.
 	 */
 	public static final String EVAL_SETF_FORM = "%EVAL-SETF-FORM";
+
+	/**
+	 * The dispatch over the program's {@code (setf name)} functions, generated from the
+	 * final set and cut into segments: {@code (op)} answers the one a place names, nil
+	 * for a name none is for.
+	 */
+	public static final String EVAL_SETF_FUNCTION = "%EVAL-SETF-FUNCTION";
 
 	/**
 	 * Internal (compile-path only): the shared runtime a {@code progv} site binds its
@@ -6830,17 +6838,19 @@ public final class LispNames {
 	public static final String ASYNC_RUN = "%ASYNC-RUN";
 
 	/**
-	 * The internal {@code rontolisp::%future-new} test primitive of the
-	 * {@code --component} async state machines: a fresh PENDING first-class future.
-	 * Undocumented; it exists so the suspension machinery (spill/restore, waiter cascade)
-	 * is exercisable end-to-end before the import layer produces pending futures of its
-	 * own.
+	 * The internal {@code rontolisp::%future-new} primitive of the {@code --component}
+	 * async state machines: a fresh PENDING first-class future. Undocumented; it makes
+	 * the suspension machinery (spill/restore, waiter cascade) exercisable end-to-end
+	 * without the import layer, and it is the race future of sockets.lisp's
+	 * {@code %future-race} (a socket read or a TLS handshake against its deadline,
+	 * {@code .kb/async-await.md}).
 	 */
 	public static final String FUTURE_NEW_INTERNAL = "%FUTURE-NEW";
 
 	/**
-	 * The internal {@code rontolisp::%future-settle} test primitive: settles a pending
-	 * future with a value, resuming its waiters. See {@link #FUTURE_NEW_INTERNAL}.
+	 * The internal {@code rontolisp::%future-settle} primitive: settles a pending future
+	 * with a value, resuming its waiters; a settled future stays as it is. See
+	 * {@link #FUTURE_NEW_INTERNAL}.
 	 */
 	public static final String FUTURE_SETTLE_INTERNAL = "%FUTURE-SETTLE";
 
@@ -7255,7 +7265,7 @@ public final class LispNames {
 	/**
 	 * The {@code tcp-connect} function provided by the {@code rontolisp} package. Opens a
 	 * blocking TCP connection to {@code host} (a hostname or IP literal; the WASM
-	 * component backend supports IPv4 literals only) and {@code port}, and returns a
+	 * component backend connects over IPv4 only) and {@code port}, and returns a
 	 * bidirectional stream handle usable with {@code read-line}, {@code write-line},
 	 * {@code read-byte}, {@code write-byte} and {@code close}.
 	 */
@@ -9808,8 +9818,8 @@ public final class LispNames {
 
 	/**
 	 * The {@code load-time-value} special operator: its form is evaluated once per
-	 * occurrence, not once per use. The compile path hoists the value into a synthesized
-	 * {@link #LOAD_TIME_VALUE_SLOT_PREFIX} global filled on first use
+	 * occurrence, not once per use. The compile path hoists the value into a slot of the
+	 * synthesized {@link #LOAD_TIME_VALUE_SLOTS} vector filled on first use
 	 * ({@code LispMacroExpander.hoistLoadTimeValues}); the interpreter memoizes the
 	 * occurrence by identity. A value form cheap enough not to be worth a slot (an atom,
 	 * or a {@code quote}/{@code function}/{@code find-package} wrapper) keeps the plain
@@ -9818,11 +9828,12 @@ public final class LispNames {
 	public static final String LOAD_TIME_VALUE = "LOAD-TIME-VALUE";
 
 	/**
-	 * Prefix of the synthesized global holding one hoisted {@code load-time-value}
-	 * result, numbered from 1 in walk order (so the emitted program stays deterministic).
-	 * The slot holds a one-element list, {@code nil} meaning "not computed yet".
+	 * The synthesized global vector holding every hoisted {@code load-time-value} result,
+	 * one slot per occurrence, numbered from 0 in walk order (so the emitted program
+	 * stays deterministic). A slot holds a one-element list, {@code nil} meaning "not
+	 * computed yet".
 	 */
-	public static final String LOAD_TIME_VALUE_SLOT_PREFIX = "%LOAD-TIME-VALUE-";
+	public static final String LOAD_TIME_VALUE_SLOTS = "%LOAD-TIME-VALUE-SLOTS";
 
 	/**
 	 * Prefix of the binding a {@code make-load-form} method's INIT form is run against:

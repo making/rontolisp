@@ -212,7 +212,8 @@ backend — the interpreter re-expands macros on every evaluation.
   wasmtime run -S tcp=y -S inherit-network=y blog.wasm
   ```
 
-  The `:host` must be an **IPv4 literal** — hostname lookup is unwired on WASM.
+  A `:host` that is a hostname rather than an IPv4 literal also needs
+  `-S allow-ip-name-lookup=y`.
 - **WASM Preview 1** has no host socket API by design. A mito program compiles
   there (socket call sites become **call-time errors**, so spliced dead code
   builds), and the first socket call fails loudly at run time with a message

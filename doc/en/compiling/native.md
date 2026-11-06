@@ -89,10 +89,13 @@ a failure signals an error with the same text (`tcp-connect: cannot connect to
 127.0.0.1:1: Connection refused`), which the usocket shim re-signals as
 `usocket:socket-error`. So a program that talks to PostgreSQL (cl-postgres) or
 Redis over the shim runs from an executable. Like the component, the
-executable reads a socket one chunk at a time, so `listen` answers whether a
-chunk already read holds bytes, and `usocket:wait-for-input` claims readiness
-at once. The TLS client and server functions (`tls-connect`, `tls-upgrade`,
-`tls-listen`) stay interpreter, JVM and, for the client half, component only.
+executable reads a socket one chunk at a time; `listen` answers from the
+chunk and then from the kernel's receive buffer, as on the interpreter, so
+`usocket:wait-for-input` waits for data or its `:timeout`. The TLS functions
+stay interpreter, JVM and, for the client half, component only: in an
+executable `tls-connect` and `tls-upgrade` signal an error when the call runs
+(so a client whose https branch is never taken still builds), and `tls-listen`
+is refused when the program is compiled.
 
 ```lisp
 (let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))

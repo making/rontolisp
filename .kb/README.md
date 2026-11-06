@@ -114,7 +114,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 ## Errors and concurrency
 
 - [error-handling.md](error-handling.md) -- `unwind-protect`, condition objects, `handler-case`, restarts, per-backend mechanics (the JVM's condition and wrong-type records keyed by their throwable); a closed stream and a stream of the wrong direction refused off what the value can do; a signal renders nothing, its report running where the text is read; the uncaught report and wasm-GC's opt-in `--report-locations` frames with their measured cost; a `--no-wasi` module nothing can read a report from; SIGINT as `rontolisp:interactive-interrupt`
-- [async-await.md](async-await.md) -- async-defun/await, futures, asynchronous streams; a body's eager part as a call (its caller's handlers, a handler's exit), an exit crossing a future
+- [async-await.md](async-await.md) -- async-defun/await, futures, asynchronous streams; a body's eager part as a call (its caller's handlers, a handler's exit), an exit crossing a future; withdrawing a component stream read, the component's `%future-race`
 - [threads.md](threads.md) -- `rontolisp:make-thread` and friends; what a thread keeps of its own (the handler and restart stacks, whatever started it)
 - [mutexes.md](mutexes.md) -- `rontolisp:make-mutex`/`with-mutex`
 - [concurrent-served-requests.md](concurrent-served-requests.md) -- one virtual thread per request over shared interpreter/JVM state
@@ -125,7 +125,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [http-server.md](http-server.md) -- the server-side HTTP value model since the Clack cutover
 - [swank.md](swank.md) -- `rontolisp --swank`: the Common Lisp REPL over SWANK for SLIME, SLY (Slynk, its REPL channel) and Lem (micros) on one port, the dialect per request's package (the 6-hex-digit framed S-expressions, the `:spawn` threads, the requests SLIME 2.32 sends in SWANK 2.32's shapes), a thread-bound current package in the resolver (the resolver a monitor), output flow control, compile notes, argument lists (the SBCL-generated table), SLIME's debugger (an error entering SLDB at its signal point, per-thread handler and restart stacks, SWANK's restarts as real records, the interpreter's call frames, levels, the interrupt's simple-break), how the oracle was recorded
 - [nrepl.md](nrepl.md) -- `rontolisp --nrepl`: the Clojure session over nREPL (bencode over TCP, the ops an editor needs in nREPL 1.3's shapes), one runtime with per-session thread bindings, per-message `*out*`/`*err*`, the cooperative interrupt, completions, the cmdline client's position metadata, a redefinition reaching every caller in an open lowering (the measurement)
-- [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` sockets and TLS; the three WASM dispatch providers (component, stdin, the `--native` runner's `rltcp` host)
+- [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` sockets and TLS; the three WASM dispatch providers (component, stdin, the `--native` runner's `rltcp` host); read deadlines and the component's `listen` probe
 - [url.md](url.md) -- `rontolisp:url-*`/`query-param*`
 - [json.md](json.md) -- `rontolisp:json-parse`/`json-stringify`; `json-span`/`json-value` over a document's bytes (a string, octets, linear memory in place), the path and value shapes decided with sluice, the wasm-GC scan, the measured edits
 - [lack.md](lack.md) -- the lack request/response + middleware ecosystem

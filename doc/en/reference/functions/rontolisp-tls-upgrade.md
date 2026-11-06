@@ -63,14 +63,18 @@ HTTPS requests prefer [`rontolisp:fetch`](rontolisp-fetch.md)):
   place, not a new handle); the handle must not have been **written to** yet
   (the transform has to be interposed before the socket's send side is
   committed — a handle with prior writes answers `nil`); and failures return
-  `nil` instead of signaling (the WASM error convention). Certificates are
+  `nil` instead of signaling (the WASM error convention). The handshake waits
+  as long as the socket's read deadline allows, as on the interpreter and the
+  JVM; past it the upgrade answers `nil`. Certificates are
   verified against the trust anchors compiled into the host (wasmtime bundles
   the Mozilla root store; the trust-store system properties and `:insecure`
   have no effect there — a non-`nil` `:insecure` value **signals** rather
   than silently verifying). The interface is an explicitly experimental
   draft, so a wasmtime update may need a matching rontolisp update.
-- **WASM Preview 1**: not supported — a **compile error** (no `wasi:tls` host
-  API exists for Preview 1).
+- **WASM Preview 1**, a [native executable](../../compiling/native.md#tcp-sockets)
+  included: not supported — the call **signals an error when it runs** (no TLS
+  host API exists for Preview 1), so a program that never reaches it still
+  compiles.
 - **Browser playground**: not supported — the browser sandbox provides no raw
   TCP sockets, so `tls-upgrade` signals an error.
 

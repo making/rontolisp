@@ -43,19 +43,21 @@ connect、相手が読む前に write):
 組み込み ASDF システム `"usocket"` としても登録されているため、
 `(asdf:load-system "usocket")`、`(ql:quickload :usocket)`、サードパーティ
 `.asd` の `:depends-on ("usocket")` はいずれもネットワークに触れずに解決
-されます。インタープリタと JVM では、接続失敗は型付きの
+されます。ソケットを持つすべてのバックエンドで、接続失敗は型付きの
 `usocket:socket-error` コンディションを通知する(メッセージは保持される)ため、
 `(handler-case (usocket:socket-connect ...) (usocket:socket-error (e) ...))`
 がそのまま機能します。サブタイプ(`usocket:connection-refused-error` など)も
 定義されていますが、再通知は常に `socket-error` を使うので、捕捉はそちらで
-行ってください。WASM コンポーネントバックエンドでは接続失敗は通知ではなく
-`nil` を返します -- 返されたハンドルが `nil` かどうかを確認してください。
+行ってください。WASM コンポーネントバックエンドでのメッセージは
+`tcp-connect: cannot connect to HOST:PORT` で、ホストが返した理由は含みません。
 
 ## バックエンドごとの対応
 
 - **インタープリタ**と **JVM**: フル対応(`rontolisp:tcp-connect` に委譲)。
-- **WASM**: コンポーネントモード(`--component`)のみ、IPv4 リテラルのみ。
-  接続失敗は `nil` を返します。素の Preview 1 `.wasm` は呼び出し時に
+- **WASM**: コンポーネントモード(`--component`)のみ。ホスト名はそこでの
+  [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) と同じく解決し
+  (`-S allow-ip-name-lookup=y` を付けて実行)、接続失敗は
+  `usocket:socket-error` を通知します。素の Preview 1 `.wasm` は呼び出し時に
   エラーを通知します。
 - **ネイティブ実行ファイル**(`--native`): インタープリタ/JVM と同じくフル対応
   -- 接続失敗は `usocket:socket-error` を通知します

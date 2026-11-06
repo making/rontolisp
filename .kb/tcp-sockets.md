@@ -13,8 +13,9 @@ surface anywhere. Blocking and synchronous, except that on `--component` a read 
 is promoted to a real suspension point. Reads are byte-at-a-time on interpreter/JVM; the component
 and a `--native` executable hold one host CHUNK per socket (documented divergence). `read-line`
 answers `nil` at peer close; `read` does not work on sockets. Errors: interpreter/JVM and `--native`
-signal (one text), the WASM component returns `nil`; a plain Preview 1 `.wasm` has no sockets
-(call-time error).
+signal (one text), the WASM component returns `nil` -- but a read past its deadline signals the
+interpreter's text everywhere ("Read deadlines" below), and `usocket:socket-connect` signals on all
+four (the usocket shim, below); a plain Preview 1 `.wasm` has no sockets (call-time error).
 
 ## Argument refusals (interpreter and JVM, one condition and text)
 Every argument is checked, in argument order, before the host acts. A host, path or password that is
@@ -80,11 +81,11 @@ Both groups pinned by `HandleOperandFixture` ([error-handling.md](error-handling
 ## --native: the runner's sockets (since 2026-10-24)
 A `--native` executable is the Preview 1 module plus the runner, so the RUNNER owns the sockets
 and the module owns the dispatch layer: `runner-sockets.lisp` is a SECOND PROVIDER of the
-`%io-*`/`%...-future` names sockets.lisp provides a component, over twelve `rltcp` imports the
+`%io-*`/`%...-future` names sockets.lisp provides a component, over thirteen `rltcp` imports the
 network runner answers (`rontolisp-native/runner/src/tcp.rs`; `connect`/`listen` (host string,
 port), `accept`, `read` (the `:bytes` caller-buffer shape), `write` (`:octets`: an octet vector
 or a string's raw bytes), `close`, `localPort`/`localAddress`/`peerAddress`/`peerPort`,
-`setTimeout`, `lastError`). The host is a `std::net` stream or listener per number; every call
+`setTimeout`, `readable`, `lastError`). The host is a `std::net` stream or listener per number; every call
 BLOCKS the module's one thread (no scheduler on Preview 1), a host name resolves as the JDK
 resolves one, and a failure answers -1 leaving the OS's text (`serve.rs`'s `reason`, no
 `(os error N)`; a read past its deadline is `Read timed out`, the JDK's words).
@@ -109,16 +110,27 @@ resolves one, and a failure answers -1 leaving the OS's text (`serve.rs`'s `reas
 - **Reads**: one 8 KiB `(unsigned-byte 8)` chunk buffer per connected socket, filled by `read`,
   walked with `aref`; lines and characters assembled from bytes exactly as sockets.lisp does
   (`%str-from-byte`/`%string-concat`). `tcp-set-timeout` is REAL (`set_read_timeout`; a timed-out
-  read signals `read-line: Read timed out` out of the stream built-in). `listen` sees the chunk
-  only; `usocket:wait-for-input` keeps the WASM immediate-readiness branch (`:rontolisp-wasm` is
-  on `*features*`). `write-sequence` of a non-string vector copies the range into an octet vector
+  read signals `read-line: Read timed out` out of the stream built-in).
+  `write-sequence` of a non-string vector copies the range into an octet vector
   (no per-byte string concat). TLS stays off (`tls-connect`/`tls-upgrade` keep the Preview 1
-  error; the runner's rustls is the fetch client's only).
+  call-time error; the runner's rustls is the fetch client's only).
+- **`listen` asks the kernel** (since 2026-11-06; it saw the chunk only): bytes left in the chunk,
+  else the runner's `readable`, `FIONREAD` > 0 -- the question the JDK's `available()` asks, so it
+  consumes nothing, not even a pending error (a `peek` would: on Linux 6.8 after a reset,
+  `recv(MSG_PEEK)` answered `ECONNRESET` and the next read EOF, where after `FIONREAD`'s 0 the
+  read still answered `ECONNRESET`, measured 2026-11-06). nil at the eof mark, at the
+  peer's close (FIN is no byte) and for a listener, as on the component. No future race is
+  needed: every runner call blocks anyway. Measured on unpatched dexador (2026-11-06): a
+  `:want-stream t` body of 108 KB read one line in and closed drains the rest through `listen`
+  before the connection goes back to the pool; with the chunk-only `listen` the drain stopped at
+  the chunk's end, and the next request found the pooled connection unusable and went out on a
+  fresh one (the server saw a new client port; dexador's retry hid it).
 - **The stub**: a module importing `rltcp` starts with `rlrun-net` like one importing `rlhttp`
   (`RontoLispCli`, `SocketsLibrary.RUNNER_IMPORT_MODULE`; the plain stub exits 1 naming it). The
   host lives under the runner's `net` feature (std::net adds no dependency; one network runner).
 - Pins: `NativeTcpTest` (the imports; one executable running the loopback programs of the
-  `componentTcp*`/`componentUsocket*` tests with the error texts -- skips without the host pair),
+  `componentTcp*`/`componentUsocket*` tests with the error texts, then the `LineStartFixture` and
+  `UsocketWaitFixture` programs every socket backend runs -- skips without the host pair),
   `NativeFetchTest#theOutputStartsWithTheRunnerItsModuleNeeds` (Linux), the Rust `tcp::tests`
   (`build.sh --test`), `StdinLibraryTest#theThreeDispatchSplicesDefineTheSameNamesAndShapes`.
   Not run anywhere automatically: cl-postgres over the shim from an executable (`ClPostgresE2eTest`
@@ -147,7 +159,10 @@ listener and the accepted `SSLSocket` handshakes lazily on first I/O.
   `SSLSocket` stays open otherwise). A custom bound is `tcp-connect` + `tcp-set-timeout` +
   `tls-upgrade`; no `:timeout` option. The timeout's text is `... Read timed out` (pinned through
   `tls-upgrade` with a 50 ms deadline in `HOST_FAILURE_PROGRAM`; the 10 s default itself is not
-  timed by any test). WASM component: NO handshake deadline (`.todo/415`).
+  timed by any test). WASM component: the same bounds, enforced by racing `connector.connect`'s
+  future against a `wait-for` timer under the entry's deadline (`tls-connect` sets 10000 and
+  clears it after); losing answers `nil` (the component convention) and leaves the handshake
+  subtask pending host-side -- no `subtask.cancel` is bound -- until the caller's close.
 - `:insecure` non-nil skips BOTH chain validation and endpoint identification; the keyword must be
   LITERAL. Interpreter `SocketSupport.TrustAllManager`; on the JVM the GENERATED PROGRAM CLASS
   implements `X509TrustManager` (the JDK cannot take an anonymous TrustManager from hand-assembled
@@ -166,8 +181,12 @@ listener and the accepted `SSLSocket` handshakes lazily on first I/O.
 ### WASM TLS (component only)
 `tls.lisp` (`eval/TlsLibrary`) over a wit-imported `wasi:tls@0.3.0-draft` (`eval/tls.wit`, vendored
 from wasmtime v47.0.2). Run with `-S tls=y` on top of the tcp flags. The SERVER half is a compile
-error on EVERY WASM target PERMANENTLY (the proposal defines only `client.wit`); Preview 1 is a
-compile error for the client half too.
+error on EVERY WASM target PERMANENTLY (the proposal defines only `client.wit`). On Preview 1,
+`--native` included, the client pair is a CALL-time error (`WasmExprCompiler`, the tcp policy;
+pinned by `RontolispNativeValueFixture.NO_SOCKET_PROGRAM`): it was a compile error on the premise
+that no spliced library carries a live-but-unreached site, which dexador overturned -- its
+`request` reaches the cl+ssl shim's `tls-upgrade` on the https branch, so every dexador program
+was refused on Preview 1, `http://` ones included (measured 2026-11-06).
 
 - The UPGRADE is the primitive: `connector.receive` takes the socket's in-flight recv stream and
   answers the cleartext read stream; `connector.send` takes the read end of a fresh cleartext pair
@@ -178,6 +197,10 @@ compile error for the client half too.
   interpose before the send side is committed, so it requires a handle with no prior write.
 - The entry is swapped onto the cleartext ends IN PLACE (`%sock-set-streams`), so here `tls-upgrade`
   answers the SAME fd where interpreter/JVM answer a NEW one.
+- **Many small writes can lose their tail** (measured 2026-11-06, wasmtime 49): about 128 writes in
+  a row before a read leave the last bytes unsent, the peer times out and the read answers EOF.
+  drakma's byte-wise request hits it on every https URL; dexador writes once per request and does
+  not. Measurements and the likely host cause: `.todo/i93`.
 - Errors nil; `connector.connect`'s err arm is an `own<error>` RESOURCE the handler releases
   (`%tls-err:error-drop`). `:insecure` non-nil SIGNALS at RUN time (the draft has no verification
   knob). Verification uses the HOST's anchors, so `javax.net.ssl.trustStore` has no effect.
@@ -227,8 +250,19 @@ so fetch+tcp and serve+tcp compose in one component.
 ### Inside sockets.lisp
 - Plumbing `%sock-plumb`: `receive()` yields the recv stream (its future dropped immediately — EOF is
   the stream status), `sock-stream-new` makes a pair whose read end goes to `send()`; `%io-close`
-  drops the write end (FIN), the recv stream and the resource. IPv4 literals parsed in Lisp
-  (`%sock-parse-ipv4`); `ip-name-lookup` is not wired.
+  drops the write end (FIN), the recv stream and the resource.
+- **Addresses** (`%sock-addr-f`, 2026-11-06): an IPv4 literal (and `localhost`) is parsed in Lisp
+  (`%sock-parse-ipv4`) and needs no lookup permission; any other name goes to
+  `wasi:sockets/ip-name-lookup@0.3.0`'s `resolve-addresses` (the second `wit-import` of sockets.lisp,
+  package `%sock-dns`; the interface is appended to sockets.wit). Its `async func` result
+  `result<list<ip-address>, error-code>` lifted with no compiler change -- an `ip-address` arrives as
+  `(:IPV4 a b c d)` / `(:IPV6 h1 ... h8)`. The first IPv4 address in the resolver's order is taken,
+  the JDK's choice with its default IPv4 preference; a name with only IPv6 addresses is a
+  `wit-error`, so `nil` (the sockets are IPv4 only). wasmtime grants the lookup with
+  `-S allow-ip-name-lookup=y`; without it every name fails `permanent-resolver-failure` (`.invalid`
+  answers `name-unresolvable`, `""` `invalid-argument`), and literals still connect. The lookup
+  runs before `tcp-socket-create`, so a failed one leaves no socket behind. Every tcp component now
+  imports the interface; wasmtime always hosts it (gated by the flag), other hosts unmeasured.
 - `connect` is an `async func` over `%subtask-future`; `listen` returns
   `result<stream<tcp-socket>, ...>` and ACCEPT is one element read through the `accept-stream` alias
   — the ONE non-u8 stream lift (`validateAsyncAlias` admits resource-handle elements,
@@ -330,30 +364,70 @@ reads the real bound port the same way. Preview 1: the call-time error.
   stream built-in, so it surfaces as a catchable plain `error`, NOT `usocket:timeout-error`. The
   deadline lives on the raw socket, so it keeps governing a `tls-upgrade`d connection; listener
   handles are rejected.
-- WASM component: the primitive SIGNALS at call time — wasi:sockets@0.3.0 has no receive-timeout knob
-  and stream reads are futures with no deadline argument; a silent no-op would install the exact hang
-  the client set the timeout to avoid ("what has no backing SIGNALS"). Consequence: dexador's default
-  `:read-timeout 10` dies at connect time until the caller passes `:read-timeout nil` or the
-  scheduler grows a future-race/deadline primitive — which is also what would make `wait-for-input`
-  real there.
+- WASM component (since 2026-11-06; it SIGNALED before, wasi:sockets@0.3.0 having no receive
+  timeout): REAL. The deadline is the entry's ninth slot; `%sock-fill` starts the read, and only
+  a read the host could not answer at once (a pending future) races a `wait-for` timer through
+  `%future-race` ([async-await.md](async-await.md), "`%future-race`"). When the timer wins, the
+  read is WITHDRAWN (`sock-stream-cancel-read`, the synchronous `stream.cancel-read`): a chunk that
+  landed meanwhile is still taken, an empty withdrawal (status 2) signals `OP: Read timed out`
+  with the operator threaded down as runner-sockets.lisp does. Nothing stays in flight, so the
+  socket reads on afterwards, as after `SO_TIMEOUT`. The losing timer is left to fire (exit is
+  not delayed by it, measured 2026-11-06); a fast stream under a long deadline therefore holds one
+  pending timer per blocked read until each expires. 0 clears, like `SO_TIMEOUT`; a bad count is a
+  `simple-error`, a non-socket handle answers nil (the component convention). Measured on
+  unpatched dexador (2026-11-06): its default `:read-timeout 10` runs there -- two keep-alive
+  requests over one pooled connection, `https://1.1.1.1/`, and a stalled origin under
+  `:read-timeout 1` failing with `read-byte: Read timed out`, as on the interpreter. By host name
+  (same day, `-S allow-ip-name-lookup=y`): `http://example.com/` and `https://example.com/` answer
+  200, `http://no-such-host.invalid/` signals `tcp-connect: cannot connect to ...`.
+- **A read left in flight is a trap waiting for the close**: dropping a recv stream with a read in
+  flight traps `cannot remove busy stream`, and dropping only the `tcp-socket` does NOT end the read
+  (it waits on the peer; both measured 2026-11-06). That is why the loser is withdrawn at once rather
+  than kept for the next read, and why `%io-close` withdraws whatever another task still has in
+  flight (a read, or an accept on a listener) after taking the entry out of the table and marking
+  its end -- the withdrawal wakes that reader synchronously, and one that still found the socket
+  open would start a fresh read on the stream being dropped.
+- **`listen` on the component is a probe** (it saw only the chunk before): bytes left in the chunk,
+  else a read started and, when the host has nothing, withdrawn at once (`%sock-probe-f`); a chunk
+  that comes is buffered for the next read. It answers what the host has SURFACED: bytes that need
+  the host to run first -- a peer's bytes still on their way, even from a socket of the same
+  program -- show after the program next waits (measured 2026-11-06: right after a peer write in
+  the same component, the probe answered nil until a `sleep`). So a poll that waits between probes
+  sees data and a tight spin never does; dexador's drain loop and wait-for-input below both wait.
+  A listener answers nil.
 - `usocket:socket-option` supports `:receive-timeout` ONLY; every other option signals naming the
   option, never accept-and-ignore — even `:tcp-nodelay` (though `socket-connect`'s `:nodelay` KEY is
   accepted-and-ignored, the shim's connect-knob convention). The GETTER answers from shim-side
   bookkeeping (`usocket::*%usock-timeouts*`); the setf converts seconds->ms through `%usock-guard`
   and the refusal happens BEFORE any bookkeeping.
 - `usocket:wait-for-input` is a `listen`-based poll in pure Lisp (else poll every 10 ms until
-  `:timeout`; 0 = one poll, none = forever; upstream's two values honoured). On the WASM backends it
-  returns IMMEDIATELY claiming readiness, branching at RUN time on
-  `(member :rontolisp-wasm *features*)` — the shim source is parsed once for all backends, so a
-  reader feature cannot branch it. Both candidate behaviors are wrong for someone and the degenerate
-  claim is wrong for fewer. Stream sockets only; wait-list objects are not reproduced.
-- `listen` on Preview 1 is a CALL-time error (was a compile error): the shim is spliced UNPRUNED into
-  every usocket program (`LibraryDefunPruner` excludes it), so wait-for-input's listen site is dead
-  code that must build. Consequence: cl-postgres/postmodern/mito programs now COMPILE on Preview 1
-  and fail loudly at the first socket call.
+  `:timeout`; 0 = one poll, none = forever; upstream's two values honoured), REAL on every backend
+  with sockets and ONE shape on all of them since 2026-11-06: `listen` asks the kernel on the
+  interpreter, the JVM and `--native`, the host on the component, whose `sleep` blocks on the
+  scheduler between probes. A `--native` executable used to return IMMEDIATELY claiming readiness
+  (a run-time `(member :rontolisp-native *features*)` branch, its listen seeing the chunk only),
+  retired with the honest `listen` above; the 10 ms wait there is Preview 1's `sleep`, which spins
+  on the clock ([time-environment-builtins.md](time-environment-builtins.md)). Racing the probes
+  against the timeout instead of polling was weighed and not built: the poll is the interpreter's
+  own shape and granularity, and it needs no backend-only path in the shim. A socket at end of
+  file is not ready (`listen` answers nil there), where upstream's `select` reports it; stream
+  sockets only; wait-list objects are not reproduced. Pinned on all four socket backends by
+  `UsocketWaitFixture` (the deadline, the quiet wait, `listen` before and after data and at the
+  peer's close): `LispEvaluatorTest#usocketReceiveTimeoutAndWaitForInputAreReal`, its JVM twin,
+  `WasmLispCompilerIntegrationTest#componentUsocketReceiveTimeoutAndWaitForInputAreReal`,
+  `NativeTcpTest`.
+- `listen` on a plain Preview 1 module is a CALL-time error for any stream but a string one (was a
+  compile error): the shim is spliced UNPRUNED into every usocket program (`LibraryDefunPruner`
+  excludes it), so wait-for-input's listen site is dead code that must build. A Preview 1 module
+  has sockets only under the runner (`--native`, above), so this is no socket gap: the module
+  holds no socket for a probe to answer about. Consequence: cl-postgres/postmodern/mito programs
+  COMPILE on Preview 1 and fail loudly at the first socket call.
 - The `WaitForLibrary` trigger widened to any usocket reference (the shim has an unconditional
-  `sleep` site and the usocket splice runs AFTER WaitForLibrary); non-CLI component pipelines must
-  run `WaitForLibrary.process` in their chain.
+  `sleep` site and the usocket splice runs AFTER WaitForLibrary), and on 2026-11-06 to any tcp or
+  client-tls one (`SocketsLibrary.references`, `TlsLibrary.references`: their libraries race a
+  `wait-for` timer and splice later too); non-CLI component pipelines must run
+  `WaitForLibrary.process` in their chain, or a deadline compiles to a call-time
+  `RONTOLISP:WAIT-FOR is undefined`.
 - `socket-server` was split out rather than shipped keys-ignored: silently ignoring `:in-new-thread`
   blocks a caller expecting to continue.
 
@@ -373,10 +447,10 @@ linalg/vec pattern: `eval/usocket.lisp` (canonical package shape) + `eval/Usocke
 - `host-to-hostname`/`get-host-by-name` are pure Lisp over `format`/`elt`/`ash`, so they answer on
   Preview 1 too. `host-to-hostname` is REAL for every designator upstream accepts;
   `get-host-by-name` is LITE — it renders through `host-to-hostname` instead of resolving, because
-  rontolisp has NO name-resolution primitive on any backend, and resolving on interpreter/JVM would
-  cost a real backend divergence in a library SPLICED INTO EVERY socket program. **Trigger**: the day
-  a cross-backend resolver exists (`ip-name-lookup@0.3.0`), return upstream's real vector quad on all
-  four.
+  rontolisp has NO name-resolution primitive (the component's lookup lives inside sockets.lisp's
+  connect/bind), and resolving on some backends only would cost a real backend divergence in a
+  library SPLICED INTO EVERY socket program. Neither dexador nor drakma calls it. **Trigger**: the day
+  a resolver primitive exists on all four, return upstream's real vector quad there.
 - The four `with-*` macros (`with-client-socket`, `with-connected-socket`, `with-server-socket`,
   `with-socket-listener`) are `LispMacroExpander.expandUsocketWith*` expansions (the
   `rontolisp:with-arena` pattern: dispatched on the qualified name, registered only as usocket
@@ -389,10 +463,15 @@ linalg/vec pattern: `eval/usocket.lisp` (canonical package shape) + `eval/Usocke
 - Typed conditions: usocket.lisp defines the hierarchy (`socket-condition` with a `message` slot,
   `socket-error`, `connection-refused-error`, ...) and wraps
   `socket-connect`/`socket-listen`/`socket-accept` in `(usocket::%usock-guard form)`, expanded per
-  backend (`LispMacroExpander.expandUsocketGuard`): interpreter/JVM = `handler-case` +
-  `%usock-resignal`, WASM = pass-through (the source is parsed once and cached for all backends, so
-  the branch cannot be a reader feature). The re-signal always uses `socket-error`
-  (`.kb/error-handling.md`).
+  backend (`LispMacroExpander.expandUsocketGuard`): `handler-case` + `%usock-resignal` on
+  interpreter/JVM and in a wasm EH-mode module (every component socket program), pass-through
+  otherwise (the source is parsed once and cached for all backends, so the branch cannot be a reader
+  feature). The re-signal always uses `socket-error` (`.kb/error-handling.md`).
+- `socket-connect` signals `socket-error` (`tcp-connect: cannot connect to H:P`, the interpreter's
+  text without the host's reason) when `tcp-connect` answers nil, which only the component does
+  (2026-11-06). Before, the nil socket flowed on into the library: cl-postgres given an
+  unresolvable host died as a bare `wasm trap: cast failure`. Pinned by
+  `componentUsocketEchoOverLoopback`.
 - Not reproduced (no substrate): UDP, `socket-shutdown`, wait-list objects, `socket-server`.
 
 ## The cl+ssl shim (`cl+ssl` package, `cl-ssl.lisp` + `ShimLibraries`)
@@ -417,11 +496,9 @@ resource next to `ShimLibraries`, the package seeded in `PackageRegistry`, the s
   dexador's exact `(:import-from :cl+ssl ...)` list is the export set.
 
 ## Not supported
-UDP; hostname resolution on the WASM component (which caps the component TLS story — a real
-`https://` host needs its IP by hand plus `tls-upgrade` with the DNS name; a `--native` executable
-resolves through the runner); TLS on `--native` and TLS servers on WASM (permanent, client-only
-proposal); mutual TLS; CONNECT timeouts (the OS bounds a TCP connect); a TLS handshake deadline on
-the component (`.todo/415`); `--no-gc`; a plain Preview 1 `.wasm`; the browser playground;
+UDP; IPv6 on the WASM component (literals, and a name with only IPv6 addresses); TLS on `--native` and TLS servers on WASM (permanent, client-only
+proposal); mutual TLS; CONNECT timeouts (the OS bounds a TCP connect); `--no-gc`; a plain Preview 1
+`.wasm`; the browser playground;
 `(do () ...)`-style empty do bindings in examples (pre-existing `expandDo` limitation).
 
 ## Socket tests
@@ -449,16 +526,20 @@ the component (`.todo/415`); `--no-gc`; a plain Preview 1 `.wasm`; the browser p
 `HandleOperandFixture` (`ThreadTest`/`JvmThreadTest`); `LispEvaluatorTest#tcp*`/`#usocket*`/`#tls*`/`#clSslShim*`;
 `JvmLispCompilerTest#compileAndRunTcp*`/`#compileAndRunUsocket*`/`#compileAndRunTls*`/
 `#compileAndRunClSslShim*` + the wrong-arg-count rejections;
-`WasmLispCompilerTest#tcp*`/`#usocket*`/`#tls*`/`#fetchAndTcpInOneComponentProgramCompiles`/
+`WasmLispCompilerTest#tcp*`/`#usocket*`/`#tls*`/`#socketBuiltinsInPreview1ModeAreCallTimeErrors`/`#fetchAndTcpInOneComponentProgramCompiles`/
 `#httpHandlerWithTcpCompilesInServeMode`/`#promotedSocketReadHoistsOutOfADispatchDefunArgument`;
 `WasmLispCompilerIntegrationTest#componentTcp*`/`#componentUsocket*` (a full loopback echo inside
-the wasmtime container), `#componentTlsUpgradeAttemptsARealHandshakeAndRejectsAnUntrustedServer` (a
+the wasmtime container; `#componentTcpReadDeadlineListenProbeAndWithdrawnReads` and
+`#componentUsocketReceiveTimeoutAndWaitForInputAreReal` -- `UsocketWaitFixture`, shared with the
+other three socket backends -- the deadline, the probe, the withdrawn reads and the handshake bound), `#componentTlsUpgradeAttemptsARealHandshakeAndRejectsAnUntrustedServer` (a
 REAL handshake against an in-container `openssl s_server`), `#componentTlsFetchesARealHostOverHttps`
 (opt-in `RONTOLISP_HTTP_E2E=1`); `WasmSocketsRewriteTest`;
 `PackageResolverTest#usocketLibraryFormsAreAResolverFixedPoint`; `LoadInlinerTest`;
 `LispEvaluatorAsdfTest`; `NativeTcpTest` (the `--native` runner, "--native: the runner's sockets").
 The one test taking the shim to a real server is `ClPostgresE2eTest` (runs
 by DEFAULT, all 13 legs; Docker is its only gate): verbatim cl-postgres over the usocket shim against
-a Testcontainers PostgreSQL, on the interpreter, the JVM and a component. The single-threaded echo
+a Testcontainers PostgreSQL, on the interpreter, the JVM and a component -- the component by the
+server's network ALIAS, so its leg is also the name-lookup pin (Docker's DNS; the refusals,
+`.invalid` and an IPv6-only name are `componentTcpConnectRefusedOrUnresolvedReturnsNil`). The single-threaded echo
 choreography (listen 0 -> tcp-local-port -> connect -> write -> accept -> read) never deadlocks
 because the connection waits in the listen backlog.

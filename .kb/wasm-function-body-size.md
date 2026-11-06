@@ -118,6 +118,24 @@ Why cuts are safe:
 - Chunks are registered during Pass 2b: Pass 2c picks up entries appended while it runs;
   the function section (built later) will not.
 
+## Keeping a literal's build bounded
+A literal is built where it stands (`WasmQuoteCompiler`), so a body grows with its literal and a
+form holding many with their sum. Coalton's whole library (2026-11-06): its environment updates, a
+statement each in one `let`, and the unit of the types they share made bodies of 250 KB to 1 MB, and
+wasmtime held 76 GB for each of two modules. Since then:
+- a site's literal past `OUT_OF_LINE_NODES` (32 conses, elements and slots) and every unit
+  ([quoted-data.md](quoted-data.md)) are built by an arity-0 function the site calls when its
+  global is empty (`builderFunction`, registered like a top-level chunk);
+- a body that has built `BUILD_NODES_BUDGET` (2048) nodes, counted in `Ctx.quotedBuildNodes`, builds
+  the next aggregate in a function of its own: a subtree, the rest of a list past 2048 cells, the
+  rest of a named build's steps. A function inside a named build takes the bucket array of names,
+  and the steps' function also the storage array that carries each named array's and instance's
+  slots from its empty step to its filling.
+Coalton's first five files: largest quoted build 134 KB -> 41 KB, largest top-level chunk 250 KB ->
+57 KB, module 30.4 MB either way. **Gap:** one array literal's elements stay in one body. The JVM
+twin: [jvm-method-size-limits.md](jvm-method-size-limits.md), "Bodies bounded by construction". Pin:
+ci-spec `quoted-builds-larger-than-one-function-body`.
+
 ## A chunk context inherits every module-wide field by construction
 **Every top-level form compiles in a context `WasmAsyncEmit.freshCtx` builds** (so does every
 async resume body), and that context is `Ctx.builder(proto)`: a builder seeded from the

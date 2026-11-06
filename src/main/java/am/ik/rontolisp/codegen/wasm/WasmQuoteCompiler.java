@@ -91,17 +91,16 @@ final class WasmQuoteCompiler {
 	/**
 	 * Reads a node from the unit it is an entry of ({@link QuotedSharing}): the unit's
 	 * global holds the bucket array of its named nodes, built whole by whichever site
-	 * runs first.
+	 * runs first, through the unit's one builder function ({@link #unitBuilder}).
 	 */
 	private static void emitUnitRead(LispVal node, QuotedGraph unit, WasmLispCompiler.Ctx ctx) {
-		emitSlot(unit.named().getFirst(), ctx, () -> {
-			QuotedGraph savedGraph = ctx.quotedGraph;
-			int savedNames = ctx.quotedNames;
-			emitNamedNodes(unit, ctx);
-			getLocal(ctx, ctx.quotedNames);
-			ctx.quotedGraph = savedGraph;
-			ctx.quotedNames = savedNames;
+		// Built at every site, a unit as wide as the types coalton's environment updates
+		// share made the module a copy of it per literal reaching it.
+		int builder = builderFunction(unit, ctx, 0, b -> {
+			emitNamedNodes(unit, b);
+			getLocal(b, b.quotedNames);
 		});
+		emitSlot(unit.named().getFirst(), ctx, () -> callBuilder(builder, ctx));
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		i32Const(ctx, unit.nameOf(node));
@@ -110,54 +109,169 @@ final class WasmQuoteCompiler {
 	}
 
 	/**
+	 * The quoted nodes a function body builds inline, about: past them the next aggregate
+	 * is built by a function of its own ({@link #builderFunction}) -- a subtree, the rest
+	 * of a list, the rest of a named build -- so no body grows with a literal (coalton's
+	 * environment updates: a unit of the types they share, a tree of types per update).
+	 * Wasmtime compiled the megabyte bodies that made in tens of gigabytes.
+	 */
+	static final int BUILD_NODES_BUDGET = 2048;
+
+	/**
+	 * The index of the function that answers what {@code emit} leaves on the stack, made
+	 * the first time {@code key} asks: called directly like a top-level chunk
+	 * ({@code WasmToplevelEmit}), its body compiled here. With one parameter it takes the
+	 * current build's named nodes, which the body reads as its {@code quotedNames}; with
+	 * two, a named build's storage too, in local 2.
+	 */
+	private static int builderFunction(Object key, WasmLispCompiler.Ctx ctx, int params,
+			java.util.function.Consumer<WasmLispCompiler.Ctx> emit) {
+		Integer known = ctx.quoteGlobals.builder(key);
+		if (known != null) {
+			return known;
+		}
+		int funcId = ctx.nextFuncId[0]++;
+		int funcIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
+		int lambdaIdx = ctx.lambdaDecls.size();
+		ctx.lambdaDecls.add(builderInfo(funcId, funcIndex, params, new byte[] { 0x00, 0x00, 0x0b }));
+		ctx.quoteGlobals.builder(key, funcIndex);
+		java.io.ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(body);
+		WasmLispCompiler.Ctx builder = WasmAsyncEmit.freshCtx(ctx, writer, body);
+		builder.closureEnvSlot = 0;
+		builder.nextLocal = 1 + params;
+		if (params > 0) {
+			builder.quotedGraph = ctx.quotedGraph;
+			builder.quotedNames = 1;
+		}
+		emit.accept(builder);
+		writer.write(Instruction.END);
+		ctx.lambdaDecls.set(lambdaIdx, builderInfo(funcId, funcIndex, params,
+				WasmLispCompiler.buildLocalsAndPatch(builder, 1 + params, body)));
+		return funcIndex;
+	}
+
+	private static WasmLispCompiler.LambdaInfo builderInfo(int funcId, int funcIndex, int params, byte[] precompiled) {
+		List<String> paramNames = new ArrayList<>();
+		for (int i = 0; i < params; i++) {
+			paramNames.add("%build-" + i);
+		}
+		return new WasmLispCompiler.LambdaInfo(funcId, "_quoted_build_" + funcId, paramNames, false, List.of(),
+				List.of(), funcIndex, precompiled);
+	}
+
+	/** Calls a builder over the null environment and the locals it takes. */
+	private static void callBuilder(int funcIndex, WasmLispCompiler.Ctx ctx, int... locals) {
+		refNull(ctx);
+		for (int local : locals) {
+			getLocal(ctx, local);
+		}
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(funcIndex);
+	}
+
+	/**
 	 * Makes a graph current, with its named nodes in a new local: every one made empty,
-	 * then every one filled.
+	 * then every one filled. The storage a named array or instance is filled through
+	 * travels in a second array, so the steps can continue in another function.
 	 */
 	private static void emitNamedNodes(QuotedGraph graph, WasmLispCompiler.Ctx ctx) {
-		List<LispVal> named = graph.named();
+		int count = graph.named().size();
 		ctx.quotedGraph = graph;
 		ctx.quotedNames = ctx.allocTemp();
 		refNull(ctx);
-		i32Const(ctx, named.size());
+		i32Const(ctx, count);
 		arrayNew(ctx);
 		setLocal(ctx, ctx.quotedNames);
-		// The storage of a named array or instance: its filling writes there.
-		int[] storage = new int[named.size()];
-		for (int name = 0; name < named.size(); name++) {
-			LispVal node = named.get(name);
-			if (node instanceof LispArray array) {
-				storage[name] = emitArrayData(array, ctx);
+		int storage = ctx.allocTemp();
+		refNull(ctx);
+		i32Const(ctx, count);
+		arrayNew(ctx);
+		setLocal(ctx, storage);
+		emitNamedSteps(graph, 0, storage, ctx);
+	}
+
+	/**
+	 * Steps {@code from} on of a named build: step {@code i} below the name count makes
+	 * node {@code i} empty, and past it fills the node it counts to. Once this body has
+	 * built its budget the rest is a function of its own, given the names and the
+	 * storage.
+	 */
+	private static void emitNamedSteps(QuotedGraph graph, int from, int storage, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> named = graph.named();
+		for (int step = from; step < 2 * named.size(); step++) {
+			if (step > from && ctx.quotedBuildNodes > BUILD_NODES_BUDGET) {
+				int next = step;
+				int builder = builderFunction(new Object(), ctx, 2, b -> {
+					emitNamedSteps(graph, next, 2, b);
+					refNull(b);
+				});
+				callBuilder(builder, ctx, ctx.quotedNames, storage);
+				ctx.writer.write(Instruction.DROP);
+				return;
 			}
-			else if (node instanceof am.ik.rontolisp.LispInstance inst) {
-				storage[name] = emitInstanceSlots(inst, ctx);
+			ctx.quotedBuildNodes++;
+			if (step < named.size()) {
+				emitEmptyNamedNode(named.get(step), step, storage, ctx);
 			}
-			getBuckets(ctx, ctx.quotedNames);
+			else {
+				emitNamedFilling(named.get(step - named.size()), step - named.size(), storage, ctx);
+			}
+		}
+	}
+
+	private static void emitEmptyNamedNode(LispVal node, int name, int storage, WasmLispCompiler.Ctx ctx) {
+		int data = -1;
+		if (node instanceof LispArray array) {
+			data = emitArrayData(array, ctx);
+		}
+		else if (node instanceof am.ik.rontolisp.LispInstance inst) {
+			data = emitInstanceSlots(inst, ctx);
+		}
+		if (data >= 0) {
+			getBuckets(ctx, storage);
 			i32Const(ctx, name);
-			switch (node) {
-				case LispCons ignored -> {
-					refNull(ctx);
-					refNull(ctx);
-					WasmEmitHelper.emitNewCons(ctx);
-				}
-				case LispArray array -> emitArrayCell(array, storage[name], ctx);
-				case am.ik.rontolisp.LispInstance inst -> emitInstanceStruct(inst, storage[name], ctx);
-				// A packed array holds no reference: it is finished here.
-				default -> buildQuotedVal(node, ctx);
-			}
+			getLocal(ctx, data);
 			arraySet(ctx);
 		}
-		for (int name = 0; name < named.size(); name++) {
-			switch (named.get(name)) {
-				case LispCons cell -> {
-					emitConsFieldSet(name, 0, cell.car(), ctx);
-					emitConsFieldSet(name, 1, cell.cdr(), ctx);
-				}
-				case LispArray array -> emitArrayFilling(array, storage[name], ctx);
-				case am.ik.rontolisp.LispInstance inst -> emitInstanceFilling(inst, storage[name], ctx);
-				default -> {
-				}
+		getBuckets(ctx, ctx.quotedNames);
+		i32Const(ctx, name);
+		switch (node) {
+			case LispCons ignored -> {
+				refNull(ctx);
+				refNull(ctx);
+				WasmEmitHelper.emitNewCons(ctx);
+			}
+			case LispArray array -> emitArrayCell(array, data, ctx);
+			case am.ik.rontolisp.LispInstance inst -> emitInstanceStruct(inst, data, ctx);
+			// A packed array holds no reference: it is finished here.
+			default -> buildQuotedVal(node, ctx);
+		}
+		arraySet(ctx);
+	}
+
+	private static void emitNamedFilling(LispVal node, int name, int storage, WasmLispCompiler.Ctx ctx) {
+		switch (node) {
+			case LispCons cell -> {
+				emitConsFieldSet(name, 0, cell.car(), ctx);
+				emitConsFieldSet(name, 1, cell.cdr(), ctx);
+			}
+			case LispArray array -> emitArrayFilling(array, storedData(name, storage, ctx), ctx);
+			case am.ik.rontolisp.LispInstance inst -> emitInstanceFilling(inst, storedData(name, storage, ctx), ctx);
+			default -> {
 			}
 		}
+	}
+
+	/** The storage a named node keeps, in a new local. */
+	private static int storedData(int name, int storage, WasmLispCompiler.Ctx ctx) {
+		getBuckets(ctx, storage);
+		i32Const(ctx, name);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		int data = ctx.allocTemp();
+		setLocal(ctx, data);
+		return data;
 	}
 
 	private static void emitConsFieldSet(int name, int field, LispVal value, WasmLispCompiler.Ctx ctx) {
@@ -197,7 +311,67 @@ final class WasmQuoteCompiler {
 			emitUnitRead(datum, unit, ctx);
 			return;
 		}
+		if (ctx.quotedGraph == null && largerThan(datum, OUT_OF_LINE_NODES)) {
+			// A large build is a function of its own the site calls: a form holding
+			// many literals (coalton's environment updates, one let) is their sum.
+			int builder = builderFunction(datum, ctx, 0, b -> compileDatum(datum, b));
+			emitSlot(datum, ctx, () -> callBuilder(builder, ctx));
+			return;
+		}
 		emitSlot(datum, ctx, build);
+	}
+
+	/** The nodes a literal's site builds inline, at most. */
+	private static final int OUT_OF_LINE_NODES = 32;
+
+	/**
+	 * Whether a datum holds more than {@code limit} conses, array elements and instance
+	 * slots, counting no node twice and stopping at the limit.
+	 */
+	private static boolean largerThan(LispVal datum, int limit) {
+		java.util.Set<LispVal> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		java.util.ArrayDeque<LispVal> pending = new java.util.ArrayDeque<>();
+		pending.push(datum);
+		int count = 0;
+		while (!pending.isEmpty()) {
+			LispVal node = am.ik.rontolisp.LispCircularLiteral.unwrapped(pending.pop());
+			switch (node) {
+				case LispCons cons -> {
+					if (seen.add(cons)) {
+						pending.push(cons.car());
+						pending.push(cons.cdr());
+						count++;
+					}
+				}
+				case LispArray array -> {
+					if (seen.add(array)) {
+						for (LispVal element : array.data()) {
+							if (element != null) {
+								pending.push(element);
+							}
+						}
+						count += 1 + array.data().length;
+					}
+				}
+				case am.ik.rontolisp.LispInstance inst -> {
+					if (seen.add(inst)) {
+						for (int i = 0; i < inst.slotCount(); i++) {
+							LispVal slot = inst.slot(i);
+							if (slot != null) {
+								pending.push(slot);
+							}
+						}
+						count += 1 + inst.slotCount();
+					}
+				}
+				default -> {
+				}
+			}
+			if (count > limit) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static void emitSlot(LispVal key, WasmLispCompiler.Ctx ctx, Runnable build) {
@@ -661,6 +835,18 @@ final class WasmQuoteCompiler {
 				return;
 			}
 		}
+		if (ctx.quotedBuildNodes > BUILD_NODES_BUDGET && (val instanceof LispCons || val instanceof LispArray
+				|| val instanceof am.ik.rontolisp.LispInstance)) {
+			// This body has built its budget: the aggregate is a function of its own,
+			// given the build's named nodes when it has some.
+			if (graph != null) {
+				callBuilder(builderFunction(val, ctx, 1, b -> buildQuotedVal(val, b)), ctx, ctx.quotedNames);
+			}
+			else {
+				callBuilder(builderFunction(val, ctx, 0, b -> buildQuotedVal(val, b)), ctx);
+			}
+			return;
+		}
 		buildQuotedVal(val, ctx);
 	}
 
@@ -724,11 +910,14 @@ final class WasmQuoteCompiler {
 	private static void compileQuotedCons(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> cars = new ArrayList<>();
 		LispVal rest = cons;
-		// A named cell is the tail of the spine that reaches it.
-		while (rest instanceof LispCons cell && !isNamed(cell, ctx)) {
+		// A named cell is the tail of the spine that reaches it, and so is the cell past
+		// a budget of them: counted first, the rest of the list is a function of its own
+		// (compileQuotedVal).
+		while (rest instanceof LispCons cell && !isNamed(cell, ctx) && cars.size() < BUILD_NODES_BUDGET) {
 			cars.add(cell.car());
 			rest = cell.cdr();
 		}
+		ctx.quotedBuildNodes += cars.size();
 		if (cars.size() <= QUOTED_RUN) {
 			for (LispVal car : cars) {
 				compileQuotedVal(car, ctx);
@@ -765,6 +954,7 @@ final class WasmQuoteCompiler {
 	// meta fields stay null with a 0 offset. This mirrors the layout produced by
 	// WasmArrayCompiler.compileMake.
 	private static void compileQuotedArray(LispArray array, WasmLispCompiler.Ctx ctx) {
+		ctx.quotedBuildNodes += 1 + array.data().length;
 		int dataSlot = emitArrayData(array, ctx);
 		emitArrayFilling(array, dataSlot, ctx);
 		emitArrayCell(array, dataSlot, ctx);
@@ -855,6 +1045,7 @@ final class WasmQuoteCompiler {
 	// Builds a TYPE_INSTANCE over the layout the value already carries: the slots array
 	// first, then the baked layout address, then struct.new.
 	private static void compileQuotedInstance(am.ik.rontolisp.LispInstance inst, WasmLispCompiler.Ctx ctx) {
+		ctx.quotedBuildNodes += 1 + inst.slotCount();
 		int slotsSlot = emitInstanceSlots(inst, ctx);
 		emitInstanceFilling(inst, slotsSlot, ctx);
 		emitInstanceStruct(inst, slotsSlot, ctx);

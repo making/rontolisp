@@ -50,12 +50,14 @@ the server closes:
   signals an error. A `host` that is no string or a `port` outside `(INTEGER 0 65535)` signals the
   operator's `type-error` before anything connects.
 - **WASM**: component-only, over `wasi:sockets@0.3.0` (natively WASI 0.3, no
-  0.2 hybrid). `host` must be an
-  **IPv4 literal** such as `"127.0.0.1"` (hostname resolution via
-  `wasi:sockets/ip-name-lookup` is not wired yet). Compile with `--component`
-  and run with `wasmtime run -S tcp=y
-  -S inherit-network=y` (wasmtime 46+). A
-  failed connection returns `nil` instead of a handle; without the `-S` flags
+  0.2 hybrid). `host` may be a hostname or an IPv4 literal; a hostname
+  resolves through `wasi:sockets/ip-name-lookup@0.3.0` and the first IPv4
+  address it answers is the one connected to (the connection is IPv4 only).
+  Compile with `--component` and run with `wasmtime run -S tcp=y
+  -S inherit-network=y` (wasmtime 46+), plus `-S allow-ip-name-lookup=y` for a
+  hostname (an IPv4 literal and `localhost` need no lookup). A
+  failed connection, or a hostname that does not resolve to an IPv4 address,
+  returns `nil` instead of a handle; without the `-S` flags
   the component still starts, but every socket operation fails and yields
   `nil`. The tcp built-ins
   compile in Preview 1 (core-module) mode but every call raises a call-time
@@ -72,7 +74,8 @@ the server closes:
 - TCP only (no UDP yet): the connection is plain text. For an encrypted
   client connection use [`rontolisp:tls-connect`](rontolisp-tls-connect.md)
   (interpreter/JVM only).
-- The WASM component backend accepts IPv4 literals only.
+- The WASM component backend connects over IPv4 only (no IPv6 literal, and a
+  hostname with only IPv6 addresses fails).
 - `read` (the s-expression reader) does not work on socket handles; read lines
   or bytes and parse them explicitly (e.g. with
   [`read-from-string`](read-from-string.md)).

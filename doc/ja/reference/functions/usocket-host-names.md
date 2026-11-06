@@ -21,7 +21,8 @@ usocket のホスト指定子を扱う 2 つの関数です。`host-to-hostname`
 は与えられたアドレスに対する恒等写像となり、そのアドレスが最終的に届く
 [`usocket:socket-connect`](usocket-socket-connect.md) /
 [`usocket:socket-listen`](usocket-socket-listen.md) の呼び出しが実際の解決を行います
-（インタプリタと JVM ではネイティブに、WASM では IPv4 リテラルのみ）。
+（インタプリタと JVM では JDK、`--native` ではランナー、WASM コンポーネントでは
+`wasi:sockets/ip-name-lookup` を使います）。
 
 ```lisp
 (usocket:host-to-hostname (usocket:get-host-by-name "127.0.0.1")) ; => "127.0.0.1"

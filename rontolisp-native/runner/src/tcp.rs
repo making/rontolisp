@@ -11,8 +11,10 @@
 //! answers -1; the module signals with it under the operator's name.
 
 use std::collections::BTreeMap;
+use std::ffi::{c_int, c_ulong};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -110,6 +112,30 @@ fn read(handle: i32, buf: &mut [u8]) -> Result<usize, String> {
             Err(e) => return Err(io_reason(&e)),
         }
     }
+}
+
+/// `FIONREAD`, the bytes waiting in a socket's receive buffer: `asm-generic/ioctls.h`
+/// (every Linux architecture the runner is built for) and `sys/filio.h` (macOS).
+#[cfg(target_os = "linux")]
+const FIONREAD: c_ulong = 0x541B;
+#[cfg(target_os = "macos")]
+const FIONREAD: c_ulong = 0x4004_667F;
+
+unsafe extern "C" {
+    fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
+}
+
+/// Whether bytes wait in the receive buffer, which a read would hand over without
+/// blocking: `listen`'s question, asked as the JDK's `available()` asks it (`FIONREAD`),
+/// so nothing is consumed, a pending error included. False at the peer's close.
+fn readable(handle: i32) -> Result<bool, String> {
+    let stream = stream(handle)?;
+    let mut waiting: c_int = 0;
+    // SAFETY: FIONREAD writes one int through the pointer and touches nothing else.
+    if unsafe { ioctl(stream.as_raw_fd(), FIONREAD, &raw mut waiting) } < 0 {
+        return Err(reason(&std::io::Error::last_os_error()));
+    }
+    Ok(waiting > 0)
 }
 
 fn write(handle: i32, bytes: &[u8]) -> Result<(), String> {
@@ -245,6 +271,11 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
     linker.func_wrap(MODULE, "setTimeout", |handle: i32, millis: i32| -> i32 {
         answer(set_timeout(handle, millis).map(|()| 0))
     })?;
+    // readable(socket) -> 1 when bytes wait to be read, 0 when none do (the peer's close
+    // included), -1 on a failure: never blocks.
+    linker.func_wrap(MODULE, "readable", |handle: i32| -> i32 {
+        answer(readable(handle).map(i32::from))
+    })?;
     // lastError() -> why the last call that answered -1 failed.
     linker.func_wrap(
         MODULE,
@@ -261,9 +292,18 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
 mod tests {
     use super::*;
 
+    /// Polls `readable` until it answers yes, as a program polling `listen` does.
+    fn wait_readable(handle: i32) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !readable(handle).unwrap() {
+            assert!(std::time::Instant::now() < deadline, "the bytes never arrived");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     /// A loopback exchange through the host functions as the module drives them, with
-    /// no module: listen, connect, accept, both directions, the addresses, the deadline
-    /// and the close.
+    /// no module: listen, connect, accept, both directions, what `readable` answers
+    /// before, while and after bytes wait, the addresses, the deadline and the close.
     #[test]
     fn a_loopback_connection_carries_bytes_both_ways_and_ends_at_the_close() {
         let listener = listen("127.0.0.1", 0).unwrap();
@@ -273,7 +313,9 @@ mod tests {
         let client = connect("localhost", i32::from(port)).unwrap();
         let server = accept(listener).unwrap();
         assert_eq!(peer_addr(server).unwrap().port(), local_addr(client).unwrap().port());
+        assert!(!readable(server).unwrap(), "nothing has been written yet");
         write(client, b"hello\n\xff").unwrap();
+        wait_readable(server);
         let mut buf = [0u8; 16];
         let mut got = Vec::new();
         while got.len() < 7 {
@@ -281,6 +323,7 @@ mod tests {
             got.extend_from_slice(&buf[..n]);
         }
         assert_eq!(got, b"hello\n\xff");
+        assert!(!readable(server).unwrap(), "every byte has been read");
         write(server, b"back").unwrap();
         let n = read(client, &mut buf).unwrap();
         assert_eq!(&buf[..n], b"back");
@@ -288,10 +331,13 @@ mod tests {
         assert_eq!(read(client, &mut buf).unwrap_err(), "Read timed out");
         set_timeout(client, 0).unwrap();
         close(server);
+        assert!(!readable(client).unwrap(), "the peer's close is no byte to read");
         assert_eq!(read(client, &mut buf).unwrap(), 0, "the peer's close is end of stream");
+        assert!(readable(listener).is_err(), "a listener reads nothing");
         close(client);
         close(listener);
         assert_eq!(read(client, &mut buf).unwrap_err(), "not an open socket");
+        assert_eq!(readable(client).unwrap_err(), "not an open socket");
         assert!(accept(listener).is_err());
     }
 

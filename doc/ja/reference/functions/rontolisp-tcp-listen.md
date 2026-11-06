@@ -37,7 +37,9 @@
   `nil`(全インターフェース)でもない `host` は、バインドの前にその演算子の
   `type-error` を通知します。
 - **WASM**: コンポーネント専用で、`wasi:sockets@0.3.0` 上で動作します。`host`
-  は IPv4 リテラルである必要があります。`--component` でコンパイルし、
+  には IPv4 リテラルかホスト名を指定でき、ホスト名は
+  [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) と同じく解決します
+  (`-S allow-ip-name-lookup=y` を付けます)。`--component` でコンパイルし、
   `wasmtime run -S tcp=y -S inherit-network=y` で
   実行します(wasmtime 46+)。バインド失敗は `nil` を返します。
   Preview 1(コアモジュール)モードでは呼び出し時エラーです。
@@ -53,7 +55,7 @@
 - リスナーハンドルが対応するのは `rontolisp:tcp-accept`、
   `rontolisp:tcp-local-port`、`close` のみで、それ自体はバイトストリームでは
   ありません。
-- 共通のソケット制限(TCP のみ、WASM では IPv4 リテラルのみ)は
+- 共通のソケット制限(TCP のみ、WASM では IPv4 のみ)は
   [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) を参照してください。
   このリスナーが扱うのは平文の TCP です。TLS リスナーには
   [`rontolisp:tls-listen`](rontolisp-tls-listen.md) を使ってください

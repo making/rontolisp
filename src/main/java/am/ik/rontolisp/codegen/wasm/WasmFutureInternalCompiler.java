@@ -10,14 +10,15 @@ import am.ik.wasm.Type;
 
 /**
  * Compiles the internal {@code rontolisp::%future-new}/{@code %future-settle}/
- * {@code %future-reject} test primitives of the {@code --component} async state machines
- * -- thin bindings of the {@link WasmFutureRuntimeBuilder} runtime, available only in
- * asyncMode, deliberately undocumented and absent from every other backend -- plus the
- * import layer's {@code rontolisp::%subtask-future} (the bridge from an async-lowered
- * call's token to a first-class future, synthesized by {@code WitImportDirective} for an
- * {@code async func} member's binding), plus the one member that is neither:
- * {@code rontolisp::%stream-new}, which builds a first-class stream value in whichever
- * tier this module has one (see {@link WasmStreamCompiler}).
+ * {@code %future-reject} primitives of the {@code --component} async state machines --
+ * thin bindings of the {@link WasmFutureRuntimeBuilder} runtime, available only in
+ * asyncMode, deliberately undocumented and absent from every other backend; the first two
+ * are also sockets.lisp's race future (its read deadline) -- plus the import layer's
+ * {@code rontolisp::%subtask-future} (the bridge from an async-lowered call's token to a
+ * first-class future, synthesized by {@code WitImportDirective} for an {@code async func}
+ * member's binding), plus the one member that is neither: {@code rontolisp::%stream-new},
+ * which builds a first-class stream value in whichever tier this module has one (see
+ * {@link WasmStreamCompiler}).
  */
 final class WasmFutureInternalCompiler {
 

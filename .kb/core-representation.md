@@ -71,7 +71,10 @@ subform is no compile error but a THREE-WAY divergence -- interpreter right, JVM
 copy (silently wrong), WASM refuses with `Cannot find variable for closure: <NAME>`. Rule for a
 new head: consume the form's FULL argument list (`setq` takes place/value PAIRS). Pins:
 `JvmLispCompilerTest#compileAndRunMultiPairSetqBuildsAClosureInALaterPair` and its
-`WasmLispCompilerIntegrationTest` twin (move together).
+`WasmLispCompilerIntegrationTest` twin (move together). The backends ask once per lambda, so the
+exclusion sets (the program's functions, globals and specials minus the lexicals the lambda sees)
+are views, not copies: a copy per lambda took the wasm backend half an hour over coalton's whole
+library (2026-11-06, 1.2 million globals then).
 
 **One owner decides "this name needs a cell"; every BINDER asks it.** The EMITTER
 (`JvmLambdaCompiler.compile` / `WasmLambdaCompiler.compileValue`) takes captures from

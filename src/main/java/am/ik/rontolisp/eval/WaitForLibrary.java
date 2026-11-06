@@ -54,9 +54,10 @@ public final class WaitForLibrary {
 
 	/**
 	 * The compile-path splice: when a {@code --component} program references
-	 * {@code rontolisp:wait-for}, splice {@code wait.lisp} (its {@code wit-import}
-	 * directive already lowered). A no-op on every other backend and when the program
-	 * does not reference {@code rontolisp:wait-for}.
+	 * {@code rontolisp:wait-for} -- or {@code sleep}, or a surface whose library spliced
+	 * later calls one (usocket, the tcp built-ins, client tls) -- splice
+	 * {@code wait.lisp} (its {@code wit-import} directive already lowered). A no-op on
+	 * every other backend and when the program references none of them.
 	 * @param program the top-level forms
 	 * @param backend the backend being compiled for
 	 * @return the program, spliced when applicable
@@ -74,8 +75,11 @@ public final class WaitForLibrary {
 			// A usocket reference counts too (the SocketsLibrary precedent): the usocket
 			// shim splices later in the pipeline and its wait-for-input carries a sleep
 			// call site unconditionally (usocket.lisp is not pruned), so its sleep
-			// reference is not visible to this pass.
-			if (references(form, LispNames.WAIT_FOR) || referencesSleep(form) || referencesUsocket(form)) {
+			// reference is not visible to this pass. So does a tcp or client-tls one:
+			// sockets.lisp and tls.lisp race a read and a handshake against a
+			// wait-for timer (the read deadline), and both splice later too.
+			if (references(form, LispNames.WAIT_FOR) || referencesSleep(form) || referencesUsocket(form)
+					|| SocketsLibrary.references(form) || TlsLibrary.references(form)) {
 				referenced = true;
 				break;
 			}

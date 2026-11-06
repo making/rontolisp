@@ -126,10 +126,14 @@ arm per macro** (2026-11-05, ci-spec `eval-expands-the-built-in-macros`, agrees 
   - `with-slots`/`with-accessors` evaluate the instance into `%eval-instance` and expand a second row, `%eval-instance-macros`,
     which reads it from `env` and quotes the VALUE into each variable's form: a variable is expanded at its reference, where a
     nested form's `%eval-instance` would answer.
-- **`(setf name)` functions:** `%eval-setf-form` (`LispMacroExpander.evalSetfRuntime`) is generated like `%eval-compiled-special-p`
-  over the final `%setf-` definitions, and `_store` asks it after the place rows, so `with-accessors` and any eval'd
-  `(setf (accessor x) v)` of a `defclass` accessor or a `(defun (setf f) ...)` assign. A structure accessor has no such function
-  and still assigns nothing.
+- **`(setf name)` functions:** `%eval-setf-form` (`LispMacroExpander.evalSetfRuntime`) answers the call of the function
+  `%eval-setf-function` finds over the final `%setf-` definitions, and `_store` asks it after the place rows, so
+  `with-accessors` and any eval'd `(setf (accessor x) v)` of a `defclass` accessor or a `(defun (setf f) ...)` assign. A
+  structure accessor has no such function and still assigns nothing. The finder is `segmentedNameDispatch`'s (128 arms a
+  segment, `%eval-setf-function-1` ...), each arm only `#'(setf f)`: one chain that built the call form in every arm cost 159
+  bytes an arm on the JVM, and dexador's 451 setf functions made a method past the 64 KB limit, refusing every dexador
+  program on the JVM (2026-11-06; segments of 4.5 KB now). Pinned by
+  `JvmLispCompilerTest#anEvaldSetfFindsItsSetfFunctionThroughSegmentsTheJitCompiles`.
 - **Restarts** (2026-11-05, ci-spec `eval-establishes-restarts`, agrees with SBCL 2.2.9 but for printing a restart object:
   on every backend it prints the record, SBCL its report). `%eval-restart-case` pushes the records the compile-time
   expansion writes, names computed, through an empty `restart-bind`: its save and restore, and what opens restart mode.

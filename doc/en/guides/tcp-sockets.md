@@ -37,10 +37,13 @@ take a socket; render with `(format nil ...)` and send the result with
 > runner opens the sockets. A plain `.wasm` has none: the WASM backend is
 > otherwise **component-only** (`--component`, over `wasi:sockets@0.3.0`): the tcp
 > functions compile in Preview 1 (core-module) mode but raise call-time
-> errors, hosts must be
-> IPv4 literals, and the component must run with `-S tcp=y
+> errors, and the component must run with `-S tcp=y
 > -S inherit-network=y` (a tcp component always
-> compiles in exception-handling mode). Combining the tcp functions with
+> compiles in exception-handling mode). A host name there resolves through
+> `wasi:sockets/ip-name-lookup@0.3.0`, which wasmtime grants with
+> `-S allow-ip-name-lookup=y` (an IPv4 literal and `localhost` need no
+> lookup); the component connects over IPv4 only, so a name with no IPv4
+> address fails like an unreachable host. Combining the tcp functions with
 > [`rontolisp:http-handler`](http-handler.md) compiles into one component
 > and runs under `wasmtime serve` — add `-S cli=y` to the flags above
 > (without it the serve linker reports the `wasi:sockets@0.3.0`
@@ -453,7 +456,10 @@ WASM `--component` backend, over wasmtime's experimental
 `wasi:tls@0.3.0-draft` interface — add `-S tls=y` to the socket run flags;
 failures answer `nil` there, `:insecure` signals (the draft exposes no
 verification knob), and `tls-upgrade` upgrades the handle **in place** (it
-answers the same handle, and requires that nothing was written to it yet). The
+answers the same handle, and requires that nothing was written to it yet). On a
+plain Preview 1 `.wasm` and in a [native executable](../compiling/native.md#tcp-sockets)
+a client call signals an error when it runs, so a program whose `https://`
+branch is never taken still compiles there. The
 TLS *server* functions are interpreter/JVM only — a permanent compile error on
 every WASM target, because the `wasi:tls` proposal defines no server
 interface.
@@ -762,21 +768,19 @@ Limitations of the shim (deliberate -- rontolisp's socket model is lite):
   the handle for `nil` instead).
 - **`socket-option` supports `:receive-timeout` only.**
   `(setf (usocket:socket-option sock :receive-timeout) seconds)` sets a real
-  per-socket read deadline on the interpreter and the JVM (via
-  [`rontolisp:tcp-set-timeout`](../reference/functions/rontolisp-tcp-set-timeout.md));
+  per-socket read deadline (via
+  [`rontolisp:tcp-set-timeout`](../reference/functions/rontolisp-tcp-set-timeout.md))
+  on the interpreter, the JVM, the WASM component and in a native executable;
   a timed-out read signals an ordinary catchable `error`, not
-  `usocket:timeout-error`, and the getter reads the set seconds back. A native
-  executable sets the deadline too; on the WASM component the write SIGNALS
-  instead of installing a timeout that never fires. Every other option signals
-  rather than being silently ignored.
-- **`wait-for-input` is a `listen`-based poll**: on the interpreter and the
-  JVM the wait is real (`listen` asks the kernel receive buffer, polled every
-  10 ms until data arrives or `:timeout` elapses; `:ready-only` works). On
-  the WASM backends, native executables included, it returns immediately
-  claiming readiness when nothing is
-  buffered — reads block anyway, so the common wait-then-read loop behaves
-  identically, but a `:timeout` poll cannot be honoured there. Stream sockets
-  only (a listener in the list signals), and wait-list objects do not exist.
+  `usocket:timeout-error`, and the getter reads the set seconds back. Every
+  other option signals rather than being silently ignored.
+- **`wait-for-input` is a `listen`-based poll**: `listen` is polled every
+  10 ms until data arrives or `:timeout` elapses (`:ready-only` works). The
+  wait is real on every backend with sockets: `listen` asks the kernel receive
+  buffer on the interpreter, the JVM and in a native executable, and the host
+  on the WASM component. A socket at end of file is not reported ready
+  (`listen` answers `nil` there). Stream sockets only (a listener in the list
+  signals), and wait-list objects do not exist.
 - **`socket-server` does not exist** (write your own accept loop).
 - **The `with-*` macros close the socket on every exit** on the interpreter
   and the JVM (they expand over

@@ -97,6 +97,10 @@ a byte array (`.kb/clojure-frontend.md`, "Host boundary").
   kind-1 settle); `WasmLispCompiler.streamReadsBytes` forces that one helper on, so a module
   without a byte-stream read is byte-identical. A `list<u8>` RESULT lifts as text unless the
   binding says `:octets t` (above).
+- **A stream alias binds `-cancel-read` too, a future alias does not** (`WitImportDirective
+  .asyncOps`): it withdraws a read the async scheduler left in flight, and no future read is ever
+  left so. A handle-element stream (accept) binds it beside `-read`/`-drop-readable`. Bound only
+  when named, like every async member; what it does: [async-await.md](async-await.md).
 
 ## `rontolisp:wit-export` — implementing a world
 `(rontolisp:wit-export "count_vowels_component.wit" :world root)`; the path resolves against the
@@ -232,6 +236,9 @@ directive stands for; no I/O, no codegen.
   `async-defun`.
 - **`--component`**: a component-model instance import, each function `canon lower`ed
   (`(rontolisp::%component-import ...)`) — every variant, `rontolisp:http-handler` included.
+  An `async func`'s result lifts like a sync one's from its return area, a `list<variant>` inside a
+  `result` included (`ip-name-lookup.resolve-addresses`, measured 2026-11-06); only a `stream<T>`
+  element type needs its own read lift.
 - **`--no-gc`**: the SAME Preview 1 lowering (`boolean wasm` in `WitImportDirective.lower` is
   true for both core-module backends), so one world serves both. It differs in two places, both
   because the vocabulary follows the HOUSE INTEGER: the designator is read straight off the prim

@@ -144,7 +144,14 @@ public final class SocketsLibrary {
 		return out;
 	}
 
-	private static boolean references(LispVal form) {
+	/**
+	 * Whether a form names a {@code rontolisp:tcp-*} built-in or any usocket member: this
+	 * splice's trigger, and {@link WaitForLibrary}'s too (sockets.lisp races its reads
+	 * against a {@code wait-for} timer).
+	 * @param form a top-level form
+	 * @return whether it touches sockets
+	 */
+	static boolean references(LispVal form) {
 		while (true) {
 			switch (form) {
 				case LispSymbol sym -> {

@@ -180,9 +180,13 @@ With neither `QuotedSharing.of` answers null and nothing else changes; a unit co
 reference over what each literal built on its own. The walk is one identity pass, about 1 s on ci-spec's
 program on a loaded machine.
 
-A read holds the unit's build inline, so `k` reads of a unit of `n` nodes emit `k * n` build code. That
-is what the literals' own copies cost before when the unit is one list; a unit grows past that only when
-its shared nodes connect, which the census does not reach.
+A unit's build is one function each read calls when the slot is empty (`_qu$SLOT` on the JVM through
+`JvmEmitHelper.emitSharedCall`, an arity-0 function on wasm, `WasmQuoteCompiler.unitBuilder`), so `k` reads
+of a unit of `n` nodes cost `k` calls and `n` nodes once (2026-11-06). The read held the build inline until
+then, `k * n`, harmless while the census held: coalton's library, whose environment updates share their
+types as literals since `make-load-form`'s saving-slots objects stay literals
+([make-load-form.md](make-load-form.md)), made one unit of them read from every update, and the JVM
+compile ran out of a 40 GB heap.
 
 ## Not covered
 Two DIFFERENT quote sites spelling the same text are not `eq` (CLHS permits but does not
