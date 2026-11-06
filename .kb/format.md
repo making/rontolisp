@@ -64,6 +64,16 @@ A `t` destination lowers to print calls, a `nil` one to `%string-concat` pieces
 - The radix directives answer a NON-NUMBER as if by `~A` (CLHS 22.3.2): `radixIntegerExpr` and
   `decimalExpr` close with `(if (integerp x) DIGITS (%princ-piece x))`, `numberp` for
   `~:D`/`~@D`.
+- `~D` prints in decimal without a radix whatever `*print-base*`/`*print-radix*` say (CLHS
+  22.3.2.2; SBCL binds both): both paths print it through the leaf `%decimal-piece` (stream twin
+  `%decimal-princ`, what `printPiece` makes of it), which `expandDecimalLeaf` lowers to the
+  `%decimal-text` prelude defun (binds the two) where the program carries it -- spliced only
+  for a program naming a printer-control variable -- and to `%princ-piece`/`princ` elsewhere,
+  so neither the expansion nor `format-render.lisp` names a variable (naming one pulls the
+  case-aware renderer, [pretty-printer.md](pretty-printer.md)). The interpreter takes the
+  defun while either variable is off its default. `~B`/`~O`/`~X`/`~R` build their own digits;
+  their non-integer arm still reads the variables (SBCL binds the base to the radix there).
+  ci-spec `format-tilde-d-prints-in-decimal-under-any-print-base`.
 - Every piece renders through `%princ-piece`/`%prin1-piece`, never the public
   `princ-to-string`/`prin1-to-string` -- same print-object routing without the mutable-result
   wrap ([string-write-runtime.md](string-write-runtime.md)). Pinned by

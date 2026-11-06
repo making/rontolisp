@@ -73,13 +73,17 @@ Error: json-parse: unexpected trailing characters
 - On the WASM backends a float with magnitude 2³¹ or larger parses correctly
   but cannot be *printed* (`print`/`princ-to-string` trap); see the
   [WASM guide](../../compiling/wasm.md).
+- On the wasm-GC backends the strings it answers are immutable, as a string
+  literal is: `(setf (char s 0) #\x)` on one makes a new string and rebinds
+  `s`, so the table holding the old one does not see the change. The
+  interpreter and the JVM answer mutable strings.
 
 ## Backend support
 
-Works on every backend and in every WASM mode (Preview 1 included): the
-parser is written in rontolisp itself and is compiled into the program when
-used. The typical use is parsing a [`rontolisp:fetch`](rontolisp-fetch.md)
-response body:
+Works on every backend and in every WASM mode (Preview 1 included). The
+interpreter and the JVM run a parser written in rontolisp itself; the wasm-GC
+backends compile a native one into the program when it is used. The typical
+use is parsing a [`rontolisp:fetch`](rontolisp-fetch.md) response body:
 
 ```console
 (print (gethash "url"

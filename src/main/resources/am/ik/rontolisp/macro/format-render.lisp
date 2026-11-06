@@ -292,11 +292,12 @@
       (setq rem (subseq rem 0 (- (length rem) iv))))
     (%fmt-cat rem out)))
 
-;;; ~D. A non-number argument prints as if by ~A, as Common Lisp specifies.
+;;; ~D. A non-number argument prints as if by ~A, as Common Lisp specifies; both
+;;; in decimal without a radix, whatever *print-base* and *print-radix* say.
 (defun %fmt-dec (n colon comma interval at)
   (if (not (numberp n))
-      (%princ-piece n)
-      (let* ((str (%princ-piece n))
+      (%decimal-piece n)
+      (let* ((str (%decimal-piece n))
              (neg (< n 0))
              (dig (if neg (subseq str 1) str))
              (grouped (if colon (%fmt-group dig comma interval) dig)))

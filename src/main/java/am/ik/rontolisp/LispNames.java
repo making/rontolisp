@@ -7125,6 +7125,20 @@ public final class LispNames {
 	public static final String JSON_STRINGIFY = "JSON-STRINGIFY";
 
 	/**
+	 * The internal {@code rontolisp::%json-decode} primitive: the wasm-GC backend's
+	 * native JSON parser ({@code WasmJsonRuntimeBuilder}), which {@code json.lisp}'s
+	 * {@code %json-native-parse} calls on that backend alone ({@code .kb/json.md}).
+	 */
+	public static final String JSON_DECODE_INTERNAL = "%JSON-DECODE";
+
+	/**
+	 * The internal {@code rontolisp::%json-encode} primitive: the wasm-GC backend's
+	 * native JSON serializer, the half of {@code json.lisp}'s
+	 * {@code %json-native-stringify}.
+	 */
+	public static final String JSON_ENCODE_INTERNAL = "%JSON-ENCODE";
+
+	/**
 	 * The {@code plist-hash-table} function provided by the {@code rontolisp} package. A
 	 * lightweight subset of {@code alexandria:plist-hash-table}: builds a hash table from
 	 * a property list (odd elements keys, even elements values), passing any trailing
@@ -8593,6 +8607,12 @@ public final class LispNames {
 	 * ({@link #COPY_EQUAL_TABLE_INTERNAL}).
 	 */
 	public static final String COPY_EQUAL_TABLE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + COPY_EQUAL_TABLE_INTERNAL;
+
+	/** The canonical spelling of {@code rontolisp::%json-decode}. */
+	public static final String JSON_DECODE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + JSON_DECODE_INTERNAL;
+
+	/** The canonical spelling of {@code rontolisp::%json-encode}. */
+	public static final String JSON_ENCODE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + JSON_ENCODE_INTERNAL;
 
 	/**
 	 * The canonical internal-qualified spelling of
@@ -10650,6 +10670,31 @@ public final class LispNames {
 	 * unwrapped.
 	 */
 	public static final String PRIN1_PIECE_INTERNAL = "%PRIN1-PIECE";
+
+	/**
+	 * The internal {@code (%decimal-piece x)} conversion: {@link #PRINC_PIECE_INTERNAL}
+	 * under {@code *print-base*} 10 and {@code *print-radix*} nil, which is what
+	 * {@code ~D} prints (CLHS 22.3.2.2). A leaf, lowered by
+	 * {@code LispMacroExpander.expandDecimalLeaf}: to {@link #DECIMAL_TEXT_INTERNAL}
+	 * where either variable can be off its default, to {@link #PRINC_PIECE_INTERNAL}
+	 * elsewhere, so the expansion itself names neither variable.
+	 */
+	public static final String DECIMAL_PIECE_INTERNAL = "%DECIMAL-PIECE";
+
+	/**
+	 * The stream twin of {@link #DECIMAL_PIECE_INTERNAL}: {@code (%decimal-princ x)}
+	 * writes the text to {@code *standard-output*}, and is {@code princ} where neither
+	 * variable can be off its default.
+	 */
+	public static final String DECIMAL_PRINC_INTERNAL = "%DECIMAL-PRINC";
+
+	/**
+	 * The internal {@code (%decimal-text x)} prelude defun the two decimal leaves lower
+	 * to in a program that names a printer-control variable:
+	 * {@link #PRINC_PIECE_INTERNAL} with {@code *print-base*} and {@code *print-radix*}
+	 * bound to their defaults.
+	 */
+	public static final String DECIMAL_TEXT_INTERNAL = "%DECIMAL-TEXT";
 
 	/**
 	 * The runtime {@code format} renderer's entry point,

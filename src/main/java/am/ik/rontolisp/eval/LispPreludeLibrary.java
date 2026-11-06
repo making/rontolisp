@@ -4742,6 +4742,15 @@ public final class LispPreludeLibrary {
 				                        (string (char "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 				                                      (mod %pib-n %pib-base)))))))
 				""");
+		// What ~D prints (CLHS 22.3.2.2): an integer in decimal without a radix, anything
+		// else as by ~A in decimal base. The %decimal-piece / %decimal-princ leaves lower
+		// onto it only in a program that names a printer-control variable
+		// (LispMacroExpander.expandDecimalLeaf); no other can move either variable.
+		SOURCES.put(LispNames.DECIMAL_TEXT_INTERNAL, """
+				(defun %decimal-text (%dt-x)
+				  (let ((*print-base* 10) (*print-radix* nil))
+				    (%princ-piece %dt-x)))
+				""");
 		// One symbol spelling under the current *print-case*. :downcase is
 		// string-downcase (char-downcase leaves a lower-case character alone, which is
 		// exactly CLHS's "only the UPPERCASE characters are converted"); :capitalize
@@ -5685,7 +5694,7 @@ public final class LispPreludeLibrary {
 	 * {@code #'make-hash-table}, whose wrapper calls {@code %make-hash-table-by-test}.
 	 */
 	private static final java.util.Set<String> PULLED_SURFACE_ENTRIES = java.util.Set.of(LispNames.PRINT_CASED_INTERNAL,
-			LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.PRINT_RADIXED_INTERNAL,
+			LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.PRINT_RADIXED_INTERNAL, LispNames.DECIMAL_TEXT_INTERNAL,
 			LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL);
 
 	/**
@@ -5942,7 +5951,9 @@ public final class LispPreludeLibrary {
 		// paths lower to the leaf only when the program names a printer-control
 		// variable (LispMacroExpander.expandPrintCasedLeaf) -- a program routed for its
 		// *package* alone never binds one, and must not pay for them.
-		if (LispNames.PRINT_CASE_FOLD_INTERNAL.equals(entry) || LispNames.PRINT_RADIXED_INTERNAL.equals(entry)) {
+		// %decimal-text likewise, from the %decimal-piece / %decimal-princ leaves.
+		if (LispNames.PRINT_CASE_FOLD_INTERNAL.equals(entry) || LispNames.PRINT_RADIXED_INTERNAL.equals(entry)
+				|| LispNames.DECIMAL_TEXT_INTERNAL.equals(entry)) {
 			return am.ik.rontolisp.macro.LispMacroExpander.mentionsPrintControlVariable(program);
 		}
 		if (LispNames.NAMESTRING_CL.equals(entry)) {

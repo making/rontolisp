@@ -74,13 +74,18 @@ Error: json-parse: unexpected trailing characters
 - WASM バックエンドでは絶対値が 2³¹ 以上の浮動小数点数はパースは正しく
   行われますが、*印字* できません(`print`/`princ-to-string` がトラップ
   します)。[WASM ガイド](../../compiling/wasm.md) を参照してください。
+- wasm-GC バックエンドでは、返す文字列は文字列リテラルと同じく変更不可
+  です: `(setf (char s 0) #\x)` は新しい文字列を作って `s` を束縛し直すため、
+  元の文字列を持つハッシュテーブルからは変更が見えません。インタプリタと
+  JVM は変更可能な文字列を返します。
 
 ## バックエンドサポート
 
-すべてのバックエンド・すべての WASM モード(Preview 1 含む)で動作します:
-パーサは rontolisp 自身で書かれており、使用時にプログラムへ組み込まれて
-コンパイルされます。典型的な用途は [`rontolisp:fetch`](rontolisp-fetch.md) の
-レスポンスボディのパースです:
+すべてのバックエンド・すべての WASM モード(Preview 1 含む)で動作します。
+インタプリタと JVM は rontolisp 自身で書かれたパーサを実行し、wasm-GC
+バックエンドは使用時にネイティブのパーサをプログラムへ組み込みます。
+典型的な用途は [`rontolisp:fetch`](rontolisp-fetch.md) のレスポンスボディの
+パースです:
 
 ```console
 (print (gethash "url"

@@ -962,13 +962,17 @@ class WasmLispCompilerTest {
 
 	@Test
 	void jsonOpsCompileInEveryMode() {
-		// The spliced JSON library compiles in Preview 1, component and no-WASI modes
-		// (it is plain Lisp source, so no backend-specific lowering is involved).
+		// The spliced JSON library's entry points over the native codec compile in
+		// Preview 1, component and no-WASI modes, and json.lisp's own walk -- what the
+		// splice for a target without the codec carries -- compiles here too.
 		String source = "(print (rontolisp:json-stringify (rontolisp:json-parse \"{\\\"a\\\": [1, 2.5]}\")))";
 		java.util.List<am.ik.rontolisp.LispVal> program = am.ik.rontolisp.eval.JsonLibrary
-			.process(LispReader.readAllFromString(source));
+			.process(LispReader.readAllFromString(source), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_GC);
 		assertThat(new WasmLispCompiler().compile(program)).isNotEmpty();
 		assertThat(WasmLispCompiler.builder().component(true).build().compile(program)).isNotEmpty();
+		assertThat(WasmLispCompiler.builder().noWasi(true).build().compile(program)).isNotEmpty();
+		assertThat(new WasmLispCompiler()
+			.compile(am.ik.rontolisp.eval.JsonLibrary.process(LispReader.readAllFromString(source)))).isNotEmpty();
 	}
 
 	@Test

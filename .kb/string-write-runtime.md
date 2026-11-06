@@ -196,6 +196,9 @@ entry.
   `%read-line-raw` wraps.
 - json-parse's multi-fragment string values (`%json-concat` merges through the unwrapped
   `%string-concat`). If value identity matters, wrap in `%json-string`'s return, not in the merge.
+  On wasm-GC EVERY json-parse string and json-stringify's result is immutable: the native codec
+  builds `TYPE_STRING`s, because a character vector costs about 100 bytes a character on Endive's
+  count where a string costs 8 (`.kb/json.md`, "The wasm-GC codec").
 - Every string PIECE built with `%princ-piece` / `%prin1-piece`.
 
 ### Cost shape

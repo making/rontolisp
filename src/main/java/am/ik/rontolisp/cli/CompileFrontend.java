@@ -810,7 +810,8 @@ final class CompileFrontend {
 		// and before AppKitLibrary (metal:run's clock is appkit:timer).
 		// JsonLibrary runs AFTER GeomLibrary (geom:read-gltf parses its JSON chunk
 		// through rontolisp:json-parse, so the splice introduces the reference) and
-		// still after the HTTP passes above, whose handlers it also rewrites.
+		// still after the HTTP passes above, whose handlers it also rewrites. A wasm-GC
+		// target gets its entry points over the backend's native codec.
 		// The checkpoint readers run FIRST of all: SafetensorsLibrary (the reader)
 		// before CheckpointLibrary (the staging it is written over), and both before
 		// JsonLibrary and the prelude, which supply the json-parse and
@@ -850,10 +851,11 @@ final class CompileFrontend {
 		List<LispVal> languages = InflateLibrary.process(ClojureLibrary.process(
 				SchemeLibrary.process(noGc ? expanded : EvalReferences.process(expanded), features, input.standards()),
 				!wasm, input.lowersAtRunTime(), input.linked()), witBackend);
-		List<LispVal> macos = ObjcLibrary
-			.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
-				.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary.process(
-						SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary.process(languages))))))))))));
+		List<LispVal> macos = ObjcLibrary.process(AppKitLibrary.process(JsonLibrary.process(
+				LinalgLibrary.process(GeomLibrary
+					.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary.process(
+							SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary.process(languages))))))))),
+				spliceBackend)));
 		// ObjcNativeLibrary right OUTSIDE ObjcLibrary: the primitive layer of a --native
 		// output, needed by the primitive calls the macOS splices above introduce.
 		// LocalTimeLibrary right INSIDE the prelude: the WASM targets' local time zone is

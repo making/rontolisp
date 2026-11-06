@@ -11208,6 +11208,13 @@ public final class LispEvaluator {
 				return LispMacroExpander.expandMakeConditionWithRuntimeType(cons, this.closRegistry);
 			case LispNames.DOCUMENTATION:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandDocumentation);
+			case LispNames.DECIMAL_PIECE_INTERNAL, LispNames.DECIMAL_PRINC_INTERNAL:
+				// ~D's leaves: the binding prelude defun only while a variable it
+				// binds is off its default, the plain conversion otherwise.
+				return LispMacroExpander.expandDecimalLeaf(cons,
+						!(currentSpecialValue(LispNames.PRINT_RADIX_VAR) instanceof LispNil)
+								|| !(currentSpecialValue(LispNames.PRINT_BASE_VAR) instanceof LispInteger base
+										&& base.value() == 10));
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
 					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.PRINC_PIECE_INTERNAL,
 					LispNames.PRIN1_PIECE_INTERNAL: {
@@ -18569,7 +18576,7 @@ public final class LispEvaluator {
 		synchronized (this.libraryLoadLock) {
 			if (!this.jsonLibraryLoaded) {
 				this.jsonLibraryLoaded = true;
-				for (LispVal form : JsonLibrary.forms()) {
+				for (LispVal form : JsonLibrary.portableForms()) {
 					eval(form, this.globalEnv);
 				}
 			}

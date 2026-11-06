@@ -15,6 +15,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -33,12 +34,16 @@ import org.jspecify.annotations.Nullable;
  * Consumers:
  * <ul>
  * <li>the interpreter registers variadic dispatcher functions in {@link LispEvaluator}
- * and lazily evaluates {@link #forms()} into the global environment on first use;</li>
+ * and lazily evaluates {@link #portableForms()} into the global environment on first
+ * use;</li>
  * <li>the compile path ({@code RontoLispCli}, the web playground, and tests that drive
- * the compilers directly) calls {@link #process(List)} after user-macro expansion: when
- * the program references the public functions, call sites are rewritten to the
- * fixed-arity helpers and the library definitions plus one-argument {@code #'}-wrapper
- * defuns are prepended.</li>
+ * the compilers directly) calls {@link #process(List, WitExportDirective.Backend)} after
+ * user-macro expansion: when the program references the public functions, call sites are
+ * rewritten to the fixed-arity helpers and the library definitions plus one-argument
+ * {@code #'}-wrapper defuns are prepended. On a wasm-GC target the helpers are the
+ * {@code %json-native-*} entry points over the backend's native codec, and the walk the
+ * other backends run is left to the library pruner; everywhere else the native entry
+ * points are left out.</li>
  * </ul>
  */
 public final class JsonLibrary {
@@ -51,6 +56,17 @@ public final class JsonLibrary {
 	public static final String HELPER_STRINGIFY = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
 			"%" + LispNames.JSON_STRINGIFY);
 
+	/** The wasm-GC parse entry point, over the backend's native parser. */
+	static final String NATIVE_PARSE = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, "%JSON-NATIVE-PARSE");
+
+	/** The wasm-GC stringify entry point, over the backend's native serializer. */
+	static final String NATIVE_STRINGIFY = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+			"%JSON-NATIVE-STRINGIFY");
+
+	// What every wasm-GC-only definition's name starts with.
+	private static final String NATIVE_PREFIX = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+			"%JSON-NATIVE-");
+
 	// First-class wrappers so #'rontolisp:json-parse / #'rontolisp:json-stringify
 	// work in compiled code (call sites are rewritten away, so these are only
 	// reached through (function ...) / symbol-function / funcall). Single arity,
@@ -60,9 +76,19 @@ public final class JsonLibrary {
 			(defun rontolisp:json-stringify (v) (rontolisp::%json-stringify v))
 			""";
 
+	// The same wrappers over the wasm-GC entry points.
+	private static final String NATIVE_WRAPPER_SOURCE = """
+			(defun rontolisp:json-parse (s) (rontolisp::%json-native-parse s))
+			(defun rontolisp:json-stringify (v) (rontolisp::%json-native-stringify v))
+			""";
+
 	@Nullable private static volatile List<LispVal> forms;
 
+	@Nullable private static volatile List<LispVal> portableForms;
+
 	@Nullable private static volatile List<LispVal> wrapperForms;
+
+	@Nullable private static volatile List<LispVal> nativeWrapperForms;
 
 	private JsonLibrary() {
 	}
@@ -88,6 +114,28 @@ public final class JsonLibrary {
 		return cached;
 	}
 
+	// Every form but the wasm-GC entry points, which call what only that backend has:
+	// what the interpreter loads and a target without the codec gets.
+	static List<LispVal> portableForms() {
+		List<LispVal> cached = portableForms;
+		if (cached == null) {
+			synchronized (JsonLibrary.class) {
+				cached = portableForms;
+				if (cached == null) {
+					cached = forms().stream().filter(form -> !definesNative(form)).toList();
+					portableForms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	private static boolean definesNative(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.DEFUN.equals(head.name()) && cons.cdr() instanceof LispCons nameCell
+				&& nameCell.car() instanceof LispSymbol name && name.name().startsWith(NATIVE_PREFIX);
+	}
+
 	// Package-private: LibraryDefunPruner keys the wrapper defuns as prunable too.
 	static List<LispVal> wrapperForms() {
 		List<LispVal> cached = wrapperForms;
@@ -97,6 +145,20 @@ public final class JsonLibrary {
 				if (cached == null) {
 					cached = List.copyOf(LispReader.readAllFromString(WRAPPER_SOURCE, Features.INTERPRETER));
 					wrapperForms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	private static List<LispVal> nativeWrapperForms() {
+		List<LispVal> cached = nativeWrapperForms;
+		if (cached == null) {
+			synchronized (JsonLibrary.class) {
+				cached = nativeWrapperForms;
+				if (cached == null) {
+					cached = List.copyOf(LispReader.readAllFromString(NATIVE_WRAPPER_SOURCE, Features.INTERPRETER));
+					nativeWrapperForms = cached;
 				}
 			}
 		}
@@ -116,16 +178,32 @@ public final class JsonLibrary {
 	}
 
 	/**
-	 * The compile-path pre-pass: when the program references {@code rontolisp:json-parse}
-	 * or {@code rontolisp:json-stringify} (qualified anywhere, or bare while
-	 * {@code (in-package rontolisp)} is in effect), rewrites the call sites to the
-	 * fixed-arity helpers and prepends the library definitions and the {@code #'} wrapper
-	 * defuns. A program that does not use JSON is returned unchanged.
+	 * {@link #process(List, WitExportDirective.Backend)} for a target without the native
+	 * codec: the interpreter's and the JVM's walk.
 	 * @param program the top-level forms (after load inlining and user-macro expansion)
 	 * @return the program with the JSON library spliced in when used
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
-		Walker walker = new Walker();
+		return process(program, WitExportDirective.Backend.OTHER);
+	}
+
+	/**
+	 * The compile-path pre-pass: when the program references {@code rontolisp:json-parse}
+	 * or {@code rontolisp:json-stringify} (qualified anywhere, or bare while
+	 * {@code (in-package rontolisp)} is in effect), rewrites the call sites to the
+	 * fixed-arity helpers and prepends the library definitions and the {@code #'} wrapper
+	 * defuns. A program that does not use JSON is returned unchanged. A wasm-GC target
+	 * ({@code WASM_GC}, {@code WASM_COMPONENT}) gets the entry points over the backend's
+	 * native codec.
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @param backend the target
+	 * @return the program with the JSON library spliced in when used
+	 */
+	public static List<LispVal> process(List<LispVal> program, WitExportDirective.Backend backend) {
+		boolean nativeCodec = backend == WitExportDirective.Backend.WASM_GC
+				|| backend == WitExportDirective.Backend.WASM_COMPONENT;
+		Walker walker = new Walker(nativeCodec ? NATIVE_PARSE : HELPER_PARSE,
+				nativeCodec ? NATIVE_STRINGIFY : HELPER_STRINGIFY);
 		List<LispVal> rewritten = new ArrayList<>(program.size());
 		for (LispVal form : program) {
 			walker.trackTopLevelInPackage(form);
@@ -134,15 +212,24 @@ public final class JsonLibrary {
 		if (!walker.found) {
 			return program;
 		}
-		List<LispVal> out = new ArrayList<>(forms());
-		out.addAll(wrapperForms());
+		List<LispVal> out = new ArrayList<>(nativeCodec ? forms() : portableForms());
+		out.addAll(nativeCodec ? nativeWrapperForms() : wrapperForms());
 		out.addAll(rewritten);
 		return out;
 	}
 
 	private static final class Walker {
 
+		private final String parseHelper;
+
+		private final String stringifyHelper;
+
 		private boolean found;
+
+		Walker(String parseHelper, String stringifyHelper) {
+			this.parseHelper = parseHelper;
+			this.stringifyHelper = stringifyHelper;
+		}
 
 		private String currentPackage = LispNames.CL_USER_PKG;
 
@@ -201,11 +288,11 @@ public final class JsonLibrary {
 			if (cons.car() instanceof LispSymbol op) {
 				if (matches(op.name(), LispNames.JSON_PARSE)) {
 					this.found = true;
-					return rewriteCall(cons, HELPER_PARSE, 1, 1, false);
+					return rewriteCall(cons, this.parseHelper, 1, 1, false);
 				}
 				if (matches(op.name(), LispNames.JSON_STRINGIFY)) {
 					this.found = true;
-					return rewriteCall(cons, HELPER_STRINGIFY, 1, 1, false);
+					return rewriteCall(cons, this.stringifyHelper, 1, 1, false);
 				}
 			}
 			return null;
