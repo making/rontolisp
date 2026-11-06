@@ -47,6 +47,11 @@ Watch:
   this shape at all — it must keep signalling rather than reaching for one.
 - `.kb/asdf.md` (the search-path and shim-system sections) and `.kb/load-inliner.md`
   record the current "flat directories only" contract; both change with this.
+- `rontolisp build SYSTEM` (`.kb/asdf.md`, "Building an executable") has `rontolisp test`'s
+  need: a deploy application's deploy, cffi and sha3 come only from a quickload. And
+  `(ql:quickload "app")` of a system the search FINDS but no dist lists refuses ("not in the
+  installed dists", measured 2026-11-06) where Quicklisp loads it and fetches what it lacks:
+  the usual `(ql:quickload :app) (asdf:make :app)` build script stops at its first form.
 
 Reduction vehicle: cl-postgres-client's `Makefile` — when this lands its
 `rontolisp-deps` target and its `RONTOLISP_SYSTEM_PATH` shell loop both go away

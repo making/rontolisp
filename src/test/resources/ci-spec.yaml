@@ -18369,6 +18369,13 @@ cases:
       (print (handler-bind ((error (lambda (c) (invoke-restart :five 1 2 3 4 5))))
                (restart-case (error "x")
                  (:five (a b c d e) (list a b c d e)))))
+      ;; A clause's lambda list binds as an ordinary one: an omitted &optional takes
+      ;; its default (deploy's (exit (&optional (exit-code 0)) ...)), &key too.
+      (defun ci-rs-exit (&rest args)
+        (handler-bind ((error (lambda (c) (apply #'invoke-restart 'ci-rs-exit args))))
+          (restart-case (error "x")
+            (ci-rs-exit (&optional (code 0 code-p) &key (why :none)) (list code code-p why)))))
+      (print (list (ci-rs-exit) (ci-rs-exit 3 :why :late)))
       ;; cerror evaluates its format arguments once, for the error and the report;
       ;; with-simple-restart's are evaluated only when the report prints.
       (print (let ((ci-rs-k 0) (ci-rs-msg nil))
@@ -18435,6 +18442,7 @@ cases:
       (:RECONNECTED 42)
       3
       (1 2 3 4 5)
+      ((0 NIL :NONE) (3 T :LATE))
       (:AFTER NIL 1 "problem 1")
       ((NIL T) 0)
       (:DONE NIL)

@@ -241,8 +241,9 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   `.asd` ファイルが読む ASDF の `(:read-file-form ...)` と `(:read-file-line ...)`
   の間接参照、それ以外の任意のリテラルフォーム (nil になります) で構いません。`:around-compile`、
   `:encoding :utf-8`/`:default`、`:weakly-depends-on` は有効で、`program-op` 用の
-  オプション (`:entry-point`、`:build-operation`、`:build-pathname`) は無視されます
-  ([`asdf:defsystem`](../reference/functions/asdf-defsystem.md) を参照)。それ以外
+  オプション (`:entry-point`、`:build-operation`、`:build-pathname`) は `asdf:make` が
+  ビルドする実行ファイルを決めます
+  ([ASDF システムから実行ファイルをビルドする](../compiling/asdf-programs.md) を参照)。それ以外
   (`:output-files` など) は句を名指しするエラーです。
 - `:class :package-inferred-system` をサポートします — ningle、rove、
   array-operations が採用しているスタイルです。このクラスのシステムは
@@ -344,7 +345,8 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   コンポーネントのロードのたびにその周りで実行されます。fiveam のファイルローカルな
   `*suite*` は、asdf-flv の `:around` メソッドによるものです。
   [`asdf:operate`](../reference/functions/asdf-operate.md) は `load-op`
-  (`load-system`) か `test-op` (`test-system`) を perform します。
+  (`load-system`)、`test-op` (`test-system`)、`program-op` (インタプリタでの
+  システムの実行ファイル) を perform します。
   `asdf:make-operation`、`asdf:input-files`、`asdf:output-files`、
   `asdf:source-file-type`、`asdf:operation-done-p` は、ライブラリが定義するメソッドのために存在します。
   `asdf/interface` と本物の ASDF の内部パッケージ (`asdf/component`、`asdf/action`
@@ -467,6 +469,7 @@ Preview 1、`--component` を意味します。**特筆事項**列はロード�
 | [fset](https://github.com/slburson/fset) 2.2.0 | 4 バックエンドすべて | 関数型のセット、マップ、シーケンス、バッグ、タプルを無改変のソースから `(ql:quickload "fset")` でロードします。印字形式も同じです。`with-lock` の `:wait? nil` は先へ進まずロックを待ちますが、遅れるのはタプルのキーの並べ替えだけです |
 | [sento](https://github.com/mdbergmann/cl-gserver) 3.4.2 | インタプリタ、JVM | アクター、エージェント、フューチャー、ルーターを無改変のソースから `(ql:quickload "sento")` でロードします。`.wasm` にもコンパイルできますが、ディスパッチャがスレッドなので `asys:make-actor-system` がエラーを通知します |
 | [clingon](https://github.com/dnaeon/clingon) 0.5.0 | 4 つ全て | コマンドライン解析 — `make-command`、`make-option`、`parse-command-line`、`print-usage`、`getopt`、`run`。with-user-abort を使うので、インタプリタでは Ctrl-C で `Received SIGINT, exiting.` を表示してステータス 130 で終了します |
+| [deploy](https://shinmera.com/docs/deploy/) 3.0.0 | インタプリタでビルドし、実行ファイルは JVM の jar、モジュール、ネイティブとして動く | `deploy-op` のシステムの `asdf:make`。ビルド時のフックはインタプリタで、boot と quit のフックは実行ファイルで走り、`deploy:data-directory` は実行ファイルのディレクトリです。[ASDF システムから実行ファイルをビルドする](../compiling/asdf-programs.md#deploy)を参照 |
 | [cl-reexport](https://github.com/takagi/cl-reexport) | 4 つ全て | パッケージと `:include` / `:exclude` がリテラルの `reexport-from` は、後続のフォームからその名前を読めるようにします。コンパイルパスでは、パッケージやリストを計算する呼び出しは通常の呼び出しになり、何も変更しません。コンパイル済みプログラムのパッケージは固定されているためです |
 | [iterate](https://gitlab.common-lisp.net/iterate/iterate) 1.6.0 | 4 つ全て | Jonathan Amsterdam の反復 DSL を無改変ソースから `(ql:quickload "iterate")` でロードします — `iter`/`iterate` と、数値ドライバ (`from`/`to`/`downto`/`below`/`by`)、シーケンスドライバ (`in`、`on`、`in-string`、`in-vector`、`in-hashtable`)、アキュムレータ (`into` の有無両方の `collect`/`collecting`、`sum`、`multiply`、`maximize`、`minimize`、`counting`、`always`、`thereis`、`appending`、`reducing`)、制御節 (`repeat`、`with`、`while`、`until`、`if-first-time`、`finally`)、および `(in outer ...)` で名前付きの外側へ渡すネストした `iter`。純粋な計算に対するマクロで依存もないため、**4 つのバックエンドすべて**で動きます。節の先頭は通常のシンボルなので、認識させるのは `iterate:` 修飾ではなく `(use-package :iterate)` です — SBCL と同じです |
 | [contextl](https://github.com/pcostanza/contextl) (Quicklisp 2024-10-12) | 4 つ全て | コンテキスト指向プログラミングを無改変ソースから `(ql:quickload "contextl")` でロードします(レイヤー GC を含む)。`contextl-user` でも `contextl` でも使えます — `deflayer`(スーパーレイヤーを含む)、`:in` レイヤー・修飾子・`call-next-method` を使う `define-layered-function`/`define-layered-method`、`with-active-layers`/`with-inactive-layers`、`ensure-active-layer`、`active-layers`、`layer-active-p`、`standard-layer-class` のサブクラスに対する `adjoin-layer-using-class`/`remove-layer-using-class` メソッド、contextl がクラス割り当てにする `deflayer` のスロット(contextl のグループ化レイヤーのように `find-layer` 経由で読む)、`special-class` のスペシャルスロットと `dletf`/`dreletf`・捕捉した動的環境、`adjoin-layer-using-class`/`remove-layer-using-class` に後から `define-layered-method` したときのレイヤーキャッシュの消去(その `defmethod` は [`add-method`](../reference/functions/add-method.md) に届きます)、`:reinitialize t` スロットの有無を変えたシングルトンクラスとレイヤーの再定義、`layer-makunbound`、`define-layered-class` のレイヤードアクセサ、`:in` でレイヤーを指定した再定義による部分クラス(スーパークラスとスロットを追加できます)、`slot-value-using-layer` で読む `:layered` スロット、後の定義が既存インスタンスに与えるスペシャルスロット。レイヤーを有効にするたびに匿名のレイヤークラスを実行時に作ります([`defclass`](../reference/special-forms/defclass.md) を参照)。既存インスタンスのスロットをスペシャルにするクラス再定義はインタプリタで動作します。コンパイルパスでは `eval` した再定義はクラスを定義しません |

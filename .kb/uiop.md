@@ -197,13 +197,18 @@ IMPORT; a `--no-wasi`/`--no-gc` reactor is REFUSED by name. **`quit` neither unw
 catchable** (`LispEvaluator.evalUnwindProtect` has an explicit `LispExitSignal` arm running NO
 cleanup). Backtraces are lite and stay lite (three members, one rendering, `:count` ignored). The
 fatal-condition quartet is real on `handler-bind`; **`*lisp-interaction*` is NIL where upstream
-defaults to T** (trigger: an `invoke-debugger`). The image hooks are REAL; `dump-image`,
-`restore-image`, `create-image` signal. The command-line five are ONE definition over `%host-argv`
+defaults to T** (trigger: an `invoke-debugger`). The image hooks are REAL; `restore-image` is
+upstream's start on all four (a program starts fresh, the restored case); `dump-image` is upstream's
+protocol around the `%dump-image` primitive -- the interpreter's compile of its image through the
+command line, a refusal in a compiled program (a prelude definition) -- ([asdf.md](asdf.md),
+"Building an executable"); `create-image` signals. `*image-restored-p*`, upstream's internal, is
+defined because deploy reads it (`UiopLibrary.INTERNALS`). The command-line five are ONE definition over `%host-argv`
 (`LispNames.HOST_ARGV`) answering `(program-name user-arg ...)`, so `raw-command-line-arguments` IS
 the primitive; rontolisp is always upstream's executable case because `CliOptions.arguments()`
 splits at `--`. Interpreter: `LispEvaluator.setCommandLineArguments`. JVM: a static `_argv` field
 stored from main's OWN PROLOGUE (a defun is a static method and cannot see main's locals);
-`_argv()` prepends the CLASS NAME; a `jvm-export` library's null field answers nil. **Preview 1's
+`_argv()` prepends the jar the class was loaded from, else the CLASS NAME (2026-11-06: a jar is the
+executable a program finds its data beside); a `jvm-export` library's null field answers nil. **Preview 1's
 `args_sizes_get`/`args_get` are APPENDED USER IMPORTS** (`WasmArgvRuntimeBuilder`, via
 `PLACEHOLDER_FUNC_BASE + ordinal`), while the `_argv` helper is a FIXED index (`FUNC_ARGV`, after
 `FUNC_WRITE_PACKED`, reusing `TYPE_READ_LINE`'s signature). `--component` binds

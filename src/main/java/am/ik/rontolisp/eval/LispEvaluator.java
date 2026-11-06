@@ -955,6 +955,28 @@ public final class LispEvaluator {
 	 */
 	private final java.util.Set<String> loadedSystems = new java.util.LinkedHashSet<>();
 
+	/**
+	 * The systems the program asked for, in the order their loads finished: what a dumped
+	 * image loads again ({@code uiop:dump-image}). {@code asdf:clear-system} only makes
+	 * ASDF forget a system; its code stays in the image, so nothing leaves this.
+	 */
+	private final java.util.Set<String> imageSystems = new java.util.LinkedHashSet<>();
+
+	/** The directories of every loaded system's {@code .asd}, where a dump finds them. */
+	private final java.util.Set<String> imageAsdDirs = new java.util.LinkedHashSet<>();
+
+	/** The loaded systems no {@code .asd} file defines, which a dump cannot find. */
+	private final java.util.Set<String> imageInlineSystems = new java.util.LinkedHashSet<>();
+
+	/** The {@code --feature} names, which a dumped image is read with too. */
+	private List<String> declaredFeatureNames = List.of();
+
+	/**
+	 * What compiles a dumped image: the command line's ({@link #setImageBuilder}), none
+	 * for an embedded evaluator.
+	 */
+	@Nullable private volatile ImageBuilder imageBuilder;
+
 	/** Whether the asdf runtime (asdf.lisp -- the component metaobjects) is loaded. */
 	private boolean asdfRuntimeLoaded;
 
@@ -1729,6 +1751,7 @@ public final class LispEvaluator {
 		if (names.isEmpty()) {
 			return;
 		}
+		this.declaredFeatureNames = List.copyOf(names);
 		this.features = Features.INTERPRETER.with(names);
 		this.globalEnv.define(LispNames.FEATURES_VAR, Environment.featureKeywordList(this.features.names()));
 	}
@@ -1913,6 +1936,16 @@ public final class LispEvaluator {
 	 */
 	public void setSwankHost(SwankHost host) {
 		this.swankHost = host;
+	}
+
+	/**
+	 * Installs what compiles the image the program dumps ({@code uiop:dump-image}, which
+	 * {@code asdf:make} of a {@code program-op} system reaches); the command line
+	 * installs its own before the program runs.
+	 * @param builder the builder
+	 */
+	public void setImageBuilder(ImageBuilder builder) {
+		this.imageBuilder = builder;
 	}
 
 	/**
@@ -4893,6 +4926,29 @@ public final class LispEvaluator {
 			}
 			return loadAsdFile(path.value());
 		}));
+		// The interpreter's dump (uiop:dump-image), a compile of the image through the
+		// command line's builder, and the check asdf's image ops make before any of
+		// their build runs. The compile paths' halves refuse: a compiled program has no
+		// compiler (AsdfRuntimeLibrary's seam, uiop-image.lisp).
+		String checkImageBuildName = "%ASDF-CHECK-IMAGE-BUILD";
+		this.globalEnv.defineFunction(checkImageBuildName, new LispFunction(checkImageBuildName, args -> {
+			if (args.size() != 2 || !(args.get(1) instanceof LispString system)) {
+				throw new LispEvalException(checkImageBuildName + " expects an operation and a system name");
+			}
+			if (this.imageBuilder == null) {
+				throw new LispEvalException("ASDF:OPERATE: " + args.get(0).print() + " on " + system.value()
+						+ " dumps an image, which the rontolisp command line compiles, and this evaluator was not"
+						+ " started by it: run rontolisp build " + system.value());
+			}
+			return LispNil.INSTANCE;
+		}));
+		String dumpImageName = LispNames.DUMP_IMAGE_PRIMITIVE;
+		this.globalEnv.defineFunction(dumpImageName, new LispFunction(dumpImageName, args -> {
+			if (args.size() != 3 || !(args.get(0) instanceof LispString file)) {
+				throw new LispEvalException(dumpImageName + " expects a namestring, a flag and a function");
+			}
+			return dumpImage(file.value(), isTruthy(args.get(1)), args.get(2));
+		}));
 		String loadComponentName = "%ASDF-LOAD-COMPONENT";
 		this.globalEnv.defineFunction(loadComponentName, new LispFunction(loadComponentName, args -> {
 			if (args.size() != 2 || !(args.get(0) instanceof LispString system)
@@ -7233,6 +7289,9 @@ public final class LispEvaluator {
 		if (this.loadedSystems.contains(name)) {
 			return;
 		}
+		// What a dumped image loads again: the systems the program asked for while no
+		// other one was loading (ImageDump).
+		boolean requested = requiredBy == null && this.loadingSystems.isEmpty();
 		// The component metaobject classes must exist before any system's own forms
 		// evaluate: a loaded file may defmethod on asdf:system (rove's run-system).
 		ensureAsdfRuntimeLoaded();
@@ -7276,6 +7335,7 @@ public final class LispEvaluator {
 				}
 			}
 			this.loadedSystems.add(name);
+			noteImageSystem(name, requested, null, false);
 			return;
 		}
 		AsdfSystems.LispSystem located = this.asdfSystems.get(name);
@@ -7346,7 +7406,73 @@ public final class LispEvaluator {
 			this.loadingSystems.removeLast();
 		}
 		this.loadedSystems.add(name);
+		noteImageSystem(name, requested, system.metadata().sourceFile(), !system.files().isEmpty());
 		installIroncladNative();
+	}
+
+	/**
+	 * Records a system whose code is now in this image, which {@code asdf:clear-system}
+	 * does not take out again: a dumped image loads the requested ones, finding them
+	 * where their {@code .asd} files were.
+	 * @param name the system
+	 * @param requested whether the program asked for it rather than a system for it
+	 * @param sourceFile its {@code .asd}, {@code null} for a built-in system or one no
+	 * file defines
+	 * @param loadsFiles whether loading it read a component file
+	 */
+	private void noteImageSystem(String name, boolean requested, @Nullable String sourceFile, boolean loadsFiles) {
+		if (requested) {
+			this.imageSystems.add(name);
+		}
+		if (sourceFile != null) {
+			String dir = SourceLoader.parentDir(sourceFile);
+			this.imageAsdDirs.add(dir == null ? "" : dir);
+		}
+		else if (loadsFiles) {
+			this.imageInlineSystems.add(name);
+		}
+	}
+
+	/**
+	 * {@code uiop:dump-image} on the interpreter: the checks, then upstream's protocol
+	 * around the dump ({@code protocol}: the postlude, the dump hooks, the two flags),
+	 * then the image's program ({@link ImageDump}) compiled by the command line's builder
+	 * into {@code file}.
+	 * @param file the artifact's namestring
+	 * @param executable whether the image is an executable
+	 * @param protocol the function running upstream's protocol
+	 * @return nil
+	 */
+	private LispVal dumpImage(String file, boolean executable, LispVal protocol) {
+		ImageBuilder builder = this.imageBuilder;
+		if (builder == null || !executable) {
+			// uiop's own condition, as the compiled programs signal it.
+			return applyGlobally(resolveFunction(UiopExports.qualified("NOT-IMPLEMENTED-ERROR")),
+					List.of(new LispString(UiopExports.qualified("DUMP-IMAGE")), new LispString(builder == null
+							? "an image is dumped by compiling it, which the rontolisp command line does, and this"
+									+ " evaluator was not started by it"
+							: "an image that is no executable is a heap a Lisp starts from, which no backend has:"
+									+ " dump an executable (:executable t, what asdf:program-op does)")));
+		}
+		if (!this.imageInlineSystems.isEmpty()) {
+			throw new LispEvalException("UIOP:DUMP-IMAGE: the dumped program loads its systems from their .asd"
+					+ " files, and no file defines " + String.join(", ", this.imageInlineSystems)
+					+ ": move the defsystem into its NAME.asd");
+		}
+		applyGlobally(protocol, List.of());
+		LispVal entryPoint = eval(new LispSymbol(UiopExports.qualified("*IMAGE-ENTRY-POINT*")), this.globalEnv);
+		if (entryPoint instanceof LispString) {
+			// ensure-function reads a string in the image, which has the package.
+			entryPoint = applyGlobally(resolveFunction(UiopExports.qualified("ENSURE-FUNCTION")), List.of(entryPoint));
+		}
+		LispVal prelude = eval(new LispSymbol(UiopExports.qualified("*IMAGE-PRELUDE*")), this.globalEnv);
+		String source = ImageDump.program(List.copyOf(this.imageSystems), entryPoint, prelude, executable,
+				this.globalEnv::lookupFunctionOrNull);
+		Set<String> path = new java.util.LinkedHashSet<>(this.imageAsdDirs);
+		path.addAll(this.systemPath);
+		path.addAll(this.distDirs);
+		builder.build(new ImageBuilder.Image(source, file, List.copyOf(path), this.declaredFeatureNames));
+		return LispNil.INSTANCE;
 	}
 
 	/**

@@ -43521,13 +43521,12 @@ public final class LispMacroExpander {
 	 * restart stack; an invoked restart throws {@code (index . args)} to a fresh
 	 * eq-unique catch tag, so control unwinds back to this frame (restoring the stack
 	 * through the unwind-protect cleanup) and the clause body runs INLINE in the
-	 * restart-case's own lexical environment with the invocation arguments bound
-	 * positionally. Normal completion carries the primary form's values through
+	 * restart-case's own lexical environment with the invocation arguments bound by its
+	 * lambda list. Normal completion carries the primary form's values through
 	 * {@code multiple-value-list}/{@code values-list}. Clause options: {@code :report}
 	 * (string or function), {@code :interactive} and {@code :test} are stored in the
 	 * record (nothing in-tree renders or invokes them interactively -- no debugger).
-	 * Lite: {@code &optional} clause parameters take nil instead of their default when
-	 * not supplied, and there is no condition-restart association.
+	 * Lite: there is no condition-restart association.
 	 * @param cons the restart-case expression
 	 * @return the expanded expression
 	 */
@@ -43609,36 +43608,22 @@ public final class LispMacroExpander {
 			LispVal test, List<LispVal> body) {
 
 		/**
-		 * Builds the clause body with the parameters bound positionally from the
-		 * invocation-argument list: required (and {@code &optional}, lite: nil when
-		 * missing, defaults ignored) parameters read {@code (nth k args)}, a
-		 * {@code &rest} parameter reads {@code (nthcdr k args)}.
+		 * Builds the clause body with the parameters bound from the invocation-argument
+		 * list as an ordinary lambda list binds them -- an {@code &optional}'s default
+		 * and supplied-p, {@code &rest}, {@code &key}, {@code &aux} -- through
+		 * {@code destructuring-bind}, whose {@code let*} keeps the body inline. deploy's
+		 * {@code (exit (&optional (exit-code 0)) ...)} is invoked with no argument.
 		 */
 		LispVal bindParams(LispSymbol argsVar) {
-			List<LispVal> bindings = new java.util.ArrayList<>();
-			int pos = 0;
-			boolean rest = false;
-			for (LispVal p : this.params) {
-				if (p instanceof LispSymbol marker && LispNames.LAMBDA_OPTIONAL.equals(marker.name())) {
-					continue;
-				}
-				if (p instanceof LispSymbol marker && LispNames.LAMBDA_REST.equals(marker.name())) {
-					rest = true;
-					continue;
-				}
-				LispVal var = p instanceof LispCons pc ? pc.car() : p;
-				String reader = rest ? LispNames.NTHCDR : LispNames.NTH;
-				bindings.add(listToCons(
-						List.of(var, listToCons(List.of(new LispSymbol(reader), new LispInteger(pos), argsVar)))));
-				if (!rest) {
-					pos++;
-				}
+			if (this.params.isEmpty()) {
+				return prognOrNil(this.body);
 			}
-			LispVal bodyForm = prognOrNil(this.body);
-			if (bindings.isEmpty()) {
-				return bodyForm;
-			}
-			return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), bodyForm));
+			List<LispVal> form = new java.util.ArrayList<>();
+			form.add(new LispSymbol(LispNames.DESTRUCTURING_BIND));
+			form.add(listToCons(this.params));
+			form.add(argsVar);
+			form.addAll(this.body.isEmpty() ? List.of(LispNil.INSTANCE) : this.body);
+			return listToCons(form);
 		}
 	}
 

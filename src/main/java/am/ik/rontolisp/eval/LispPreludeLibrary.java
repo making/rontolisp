@@ -2879,6 +2879,18 @@ public final class LispPreludeLibrary {
 				        (setq %dir-acc (cons %dir-e %dir-acc))))
 				    (mapcar #'pathname (nreverse %dir-acc))))
 				""");
+		// The dump behind uiop:dump-image (uiop-image.lisp): the interpreter compiles its
+		// image through the command line (a Java built-in of the same name, ImageDump);
+		// a compiled program has no compiler, so here it refuses before the protocol
+		// runs.
+		SOURCES.put(LispNames.DUMP_IMAGE_PRIMITIVE,
+				"""
+						(defun %dump-image (%dmp-file %dmp-executable %dmp-protocol)
+						  (declare (ignore %dmp-file %dmp-executable %dmp-protocol))
+						  (uiop/utility:not-implemented-error
+						   "UIOP/IMAGE:DUMP-IMAGE"
+						   "a compiled program has no compiler to dump an image with: dump it from the interpreter (rontolisp build SYSTEM, or asdf:make in a program rontolisp runs)"))
+						""");
 		// The uniqueness rule behind uiop:with-temporary-file: create the directory,
 		// then draw random names until one names nothing. Deliberately NOT seeded from
 		// the clock -- (random n) is the one entropy source every backend shares.

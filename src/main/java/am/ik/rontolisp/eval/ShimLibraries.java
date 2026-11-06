@@ -312,6 +312,9 @@ public final class ShimLibraries {
 		else if (CoaltonForms.SYSTEM.equals(systemName) || CoaltonForms.COMPILER_SYSTEM.equals(systemName)) {
 			rewritten = CoaltonForms.rewrite(componentFile, source);
 		}
+		else if (DeployForms.SYSTEM.equals(systemName)) {
+			rewritten = DeployForms.rewrite(componentFile, source);
+		}
 		return rewritten == null ? source : rewritten;
 	}
 

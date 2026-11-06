@@ -13,7 +13,7 @@ layout and the search-path details.
 | `asdf:test-system` | `(asdf:test-system "my-app")` | load the system, follow its `:in-order-to` test-op chain, then run its recorded `:perform (test-op ...)` body — the standard `.asd` test entry point |
 | `asdf:operate` | `(asdf:operate 'asdf:load-op :my-lib)` | perform an operation on a system: `load-op` is `load-system`, `test-op` is `test-system`; any other operation signals |
 | `asdf:perform` | `(defmethod asdf:perform :around ((o asdf:load-op) (c asdf:cl-source-file)) ...)` | generic: every action of a system load (`prepare-op`, `compile-op`, `load-op` on each file and on the system), so a library's method runs around each component load |
-| `asdf:oos` | `(asdf:oos 'asdf:load-op :my-lib)` | the old name of `operate`. `load-systems`, `load-systems*`, `require-system` and `make` are the other spellings of a load |
+| `asdf:oos` | `(asdf:oos 'asdf:load-op :my-lib)` | the old name of `operate`. `load-systems`, `load-systems*` and `require-system` are the other spellings of a load, and so is `make` of a system with no `:build-operation`; of a `program-op` system it builds the executable ([Build an Executable from an ASDF System](../../compiling/asdf-programs.md)) |
 | `asdf:load-asd` | `(asdf:load-asd "vendor/old/my-lib.asd")` | load the definitions in one `.asd` file |
 | `asdf:clear-system` | `(asdf:clear-system :my-lib)` | forget a system: the next `find-system` searches again |
 | `asdf:map-systems` | `(asdf:map-systems #'print)` | call a function with every registered system. `already-loaded-systems`, `component-loaded-p` and `registered-system` answer about them |

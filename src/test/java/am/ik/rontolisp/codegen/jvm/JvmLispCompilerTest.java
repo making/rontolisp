@@ -3500,9 +3500,9 @@ class JvmLispCompilerTest {
 		// The uiop/image family that does not exit, on the JVM. The hooks are real lists
 		// (only the act of DUMPING is impossible), fatal-condition is a deftype over
 		// serious-condition that a runtime typep matches, the backtrace family prints the
-		// condition and no frames -- no backend carries a Lisp-level call stack -- and
-		// the
-		// three image operations name what is missing instead of half-doing it.
+		// condition and no frames -- no backend carries a Lisp-level call stack -- a
+		// compiled program has no compiler to dump an image with and no object files to
+		// create one from, and restore-image is upstream's start.
 		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
 				(uiop:register-image-dump-hook 'a)
 				(uiop:register-image-dump-hook 'b)
@@ -3521,16 +3521,19 @@ class JvmLispCompilerTest {
 				         (uiop:raw-print-backtrace :stream s)))
 				(print (list (handler-case (uiop:dump-image "x.img")
 				               (uiop:not-implemented-error () :dump-image))
-				             (handler-case (uiop:restore-image) (uiop:not-implemented-error () :restore-image))
 				             (handler-case (uiop:create-image "x" nil)
-				               (uiop:not-implemented-error () :create-image))))
+				               (uiop:not-implemented-error () :create-image))
+				             (multiple-value-list
+				              (uiop:restore-image :lisp-interaction t :entry-point (lambda () (values :entered 2))))
+				             (uiop:restore-image :lisp-interaction t :if-already-restored nil
+				                                 :entry-point (lambda () :again))))
 				""", am.ik.rontolisp.reader.Features.JVM), am.ik.rontolisp.reader.Features.JVM))).isEqualTo("""
 				((B A) (:RESTORED) NIL NIL)
 				(T NIL NIL)
 				"boom
 				second
 				"
-				(:DUMP-IMAGE :RESTORE-IMAGE :CREATE-IMAGE)""");
+				(:DUMP-IMAGE :CREATE-IMAGE (:ENTERED 2) NIL)""");
 	}
 
 	@Test
