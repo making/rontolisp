@@ -539,7 +539,8 @@ public enum SourceLanguage {
 		 * {@code *features*} decides its guards too ({@code .kb/reader-features.md}).
 		 * @param syntax the readtable to read it with, or {@code null} for the standard
 		 * syntax
-		 * @param pushed the feature names pushed since the source opened
+		 * @param pushed feature names the forms run before this one pushed, in this
+		 * source or in one read earlier; a name once given stays (additive)
 		 * @return the form, or {@code null} at the end of the source
 		 * @throws LispReadException when the form does not read
 		 */

@@ -135,8 +135,9 @@ final class ReplBuffer {
 			// own output therefore precedes its own value, and two forms typed on one
 			// line echo twice -- what SBCL does reading them one at a time. A form the
 			// language says has no value (a Scheme define) echoes nothing, and neither
-			// does a value the language does not show (a Scheme effect's).
-			for (SourceSession.Step step : this.session.read(source, Features.INTERPRETER)) {
+			// does a value the language does not show (a Scheme effect's). The buffer
+			// reads with the *features* the forms typed before it left.
+			for (SourceSession.Step step : this.session.read(source, this.evaluator.sourceFeatures())) {
 				List<LispVal> values = List.of();
 				for (int i = 0; i < step.forms().size(); i++) {
 					LispVal form = step.forms().get(i);

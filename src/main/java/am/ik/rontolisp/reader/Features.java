@@ -22,12 +22,12 @@ import am.ik.rontolisp.LispVal;
  * <p>
  * A read-time feature set and the run-time {@code *features*} list are two different
  * things, and keeping them apart is the whole point: this set is what {@code #+} tests
- * while the source is being READ, and it is fixed for the duration of that read --
- * widened only by a declaration the reader can see for itself ({@link #with}: an ASDF
- * {@code :rontolisp-features} option, or the file's own literal top-level push, see
- * {@link FeaturePushes}). {@code *features*} is an ordinary special variable holding a
- * list, initialized to these names on every backend, and a program may
- * {@code push}/{@code setq} it at run time like any other. See
+ * while the source is being READ -- widened only by a declaration the reader can see for
+ * itself ({@link #with}: an ASDF {@code :rontolisp-features} option, or the file's own
+ * literal top-level push, see {@link FeaturePushes}) and by what the forms read before a
+ * form pushed when they ran, in its file or in a file read earlier. {@code *features*} is
+ * an ordinary special variable holding a list, initialized to these names on every
+ * backend, and a program may {@code push}/{@code setq} it at run time like any other. See
  * {@code .kb/reader-features.md}.
  * <p>
  * Every set here is machine-INDEPENDENT, and deliberately: the names describing the host
@@ -212,29 +212,35 @@ public final class Features {
 
 	/**
 	 * Returns this feature set widened by the given names, or {@code this} when they are
-	 * all present already. Three callers. Two are a feature ANNOUNCEMENT the reader can
-	 * see for itself: {@link FeaturePushes}, for a source's own literal top-level push,
-	 * and {@code AsdfSystems}, for a {@code .asd}'s {@code :rontolisp-features}
-	 * declaration -- the cross-FILE half, which the push cannot do (a push in a
-	 * {@code .asd} reaches that file's own {@code #+} and not the component files of the
-	 * systems it defines). The third is the USER, through the {@code --feature} command
-	 * line option ({@code RontoLispCli.declaredFeatures}), for the names a portable
-	 * library's {@code #+sbcl}/{@code #+clisp} chain expects from the host implementation
-	 * and that no announcement of ours could honestly make. Deliberately additive only --
-	 * nothing may switch OFF a backend feature and claim to be that backend, and
-	 * {@code --feature} additionally refuses to name one at all.
+	 * all present already. Four kinds of caller. Two are a feature ANNOUNCEMENT the
+	 * reader can see for itself: {@link FeaturePushes}, for a source's own literal
+	 * top-level push, and {@code AsdfSystems}, for a {@code .asd}'s
+	 * {@code :rontolisp-features} declaration -- what reaches the component files of the
+	 * systems a {@code .asd} defines, which its pushes do not. The third is the USER,
+	 * through the {@code --feature} command line option
+	 * ({@code RontoLispCli.declaredFeatures}), for the names a portable library's
+	 * {@code #+sbcl}/{@code #+clisp} chain expects from the host implementation and that
+	 * no announcement of ours could honestly make. The fourth is a read going form at a
+	 * time, for what the forms run before the next one pushed onto {@code *features*}.
+	 * Deliberately additive only -- nothing may switch OFF a backend feature and claim to
+	 * be that backend, and {@code --feature} additionally refuses to name one at all.
 	 * @param extra the feature names to add, without the leading colon
 	 * @return the widened feature set
 	 */
 	public Features with(List<String> extra) {
-		List<String> widened = new java.util.ArrayList<>(this.names);
+		// A read widens its set before every form it reads, and the names are mostly
+		// there already: nothing is copied until one is not.
+		List<String> widened = null;
 		for (String name : extra) {
 			String canonical = featureName(name);
-			if (widened.stream().noneMatch(canonical::equalsIgnoreCase)) {
+			if ((widened == null ? this.names : widened).stream().noneMatch(canonical::equalsIgnoreCase)) {
+				if (widened == null) {
+					widened = new java.util.ArrayList<>(this.names);
+				}
 				widened.add(canonical);
 			}
 		}
-		return widened.size() == this.names.size() ? this : new Features(List.copyOf(widened));
+		return widened == null ? this : new Features(List.copyOf(widened));
 	}
 
 	/**

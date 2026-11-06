@@ -76,6 +76,9 @@ public final class ReadTimeImage {
 
 	private final UserMacroExpander.Session session;
 
+	/** The spelling of {@code *features*} in the image before it processed anything. */
+	private final Set<String> featuresAtStart;
+
 	/** How many forms of the program being read the session has processed. */
 	private int fed;
 
@@ -94,6 +97,7 @@ public final class ReadTimeImage {
 			Map<String, String> systemPackages, Collection<String> spliced) {
 		this.session = new UserMacroExpander.Session(true, features);
 		this.session.macroEval.answerSystemsFrom(systems, systemPackages, spliced);
+		this.featuresAtStart = LispEvaluator.printedFeatures(this.session.macroEval.currentFeatures());
 	}
 
 	/**
@@ -120,22 +124,14 @@ public final class ReadTimeImage {
 	}
 
 	/**
-	 * The spelling of {@code *features*} in the image now, for
-	 * {@link #featuresPushedSince}.
-	 * @return the printed entries
-	 */
-	public Set<String> features() {
-		return LispEvaluator.printedFeatures(this.session.macroEval.currentFeatures());
-	}
-
-	/**
-	 * What the forms the image has processed pushed onto {@code *features*} since
-	 * {@code before}: what the next form's guards test too.
-	 * @param before what {@link #features} answered when the source opened
+	 * What the forms the image has processed pushed onto {@code *features*}, in this file
+	 * or in any file spliced before it: what the next form's guards test too, as a
+	 * {@code load} reads the next form with the {@code *features*} the forms before it
+	 * left ({@code .kb/reader-features.md}).
 	 * @return the feature names, without the leading colon
 	 */
-	public List<String> featuresPushedSince(Set<String> before) {
-		return this.session.macroEval.featuresAddedSince(before);
+	public List<String> featuresPushed() {
+		return this.session.macroEval.featuresAddedSince(this.featuresAtStart);
 	}
 
 	/**
@@ -146,6 +142,19 @@ public final class ReadTimeImage {
 	 * @return the syntax, or {@code null} for the standard one
 	 */
 	public @Nullable ReadSyntax syntax(List<LispVal> program) {
+		follow(program);
+		return this.session.macroEval.currentReadSyntax(result -> {
+			this.readerMacroCalls++;
+			return compilable(result);
+		});
+	}
+
+	/**
+	 * Brings the image up to the forms read so far.
+	 * @param program the program read so far, in order: the image processes the forms it
+	 * has not seen yet
+	 */
+	public void follow(List<LispVal> program) {
 		while (this.fed < program.size()) {
 			LispVal form = program.get(this.fed++);
 			// The component brackets are stripped before the macro-time pass sees the
@@ -161,10 +170,6 @@ public final class ReadTimeImage {
 				// have run, and reports what is really wrong with it.
 			}
 		}
-		return this.session.macroEval.currentReadSyntax(result -> {
-			this.readerMacroCalls++;
-			return compilable(result);
-		});
 	}
 
 	/**

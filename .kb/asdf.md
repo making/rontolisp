@@ -106,8 +106,12 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
 - **The `.asd` read's feature set is the loader's STATIC one** (measured 2026-10-31, interpreter):
   the evaluator's `features` plus `--feature`, never the program's run-time `*features*` -- a
   `(push :lisp-binary/never-use-own-asdf *features*)` ahead of `ql:quickload` does not reach the
-  `.asd`'s `#-`; a `--feature` does (`--feature lisp-binary/no-cffi` drops its cffi dependency). The compile paths cannot honor a
-  run-time push anyway (compile-file semantics), so this stays.
+  `.asd`'s `#-`; a `--feature` does (`--feature lisp-binary/no-cffi` drops its cffi dependency). The reason
+  given then -- the compile paths cannot honor a run-time push -- went with i82 (2026-11-06): a SOURCE read
+  starts from what every file before it pushed, on all four ([reader-features.md](reader-features.md),
+  "A source's own feature push"). This stays for the determinism decision
+  below: a plan must not depend on which systems happened to load first, and `--feature` is the
+  opt-out's route.
 - **Everything else is EVALUATED** in the image (`AsdLoad.eval`, `#.` markers resolved first; one
   holding an unreadable `#.` fails the load naming it): the package header (a conditional
   `defpackage` included -- cl-csv, function-cache), `warn` (to `*error-output*`; cl-containers),
@@ -268,6 +272,12 @@ ASDF stores the form and calls it around `compile-file`, or around the source `l
   `:depends-on` and `:defsystem-depends-on` announce. Divergence: an announcement also reaches
   this definition's own `:if-feature` clauses (a one-pass parse has no "load between the
   clauses").
+- **What any system's files PUSH reaches every source read after them** (2026-11-06,
+  [reader-features.md](reader-features.md), "A source's own feature push"): the shim's run-time pushes
+  (`BuiltinSystems.trivialFeaturesForms`) reach a dependency loaded after it as much as the system
+  naming it, and a third-party `:defsystem-depends-on` system's push reaches this system's component
+  files -- not its `:if-feature` clauses, which the parse decided before anything loaded. Real ASDF
+  decides `:if-feature` when it plans, after that load, so a clause on such a feature still diverges.
 
 ### The component-class surface
 For ASDF's own classes and the ones a `.asd` declares, only two things reach the plan from a

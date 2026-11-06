@@ -40,7 +40,10 @@ import am.ik.rontolisp.PackageRegistry;
  *
  * <p>
  * The literal push is also a WHOLE-FILE widening rather than a positional one: a
- * conditional ABOVE the push sees it too. See {@code .kb/reader-features.md}.
+ * conditional ABOVE the push sees it too. The files read after the source see either kind
+ * of push as well, as {@code load} reads them with the {@code *features*} it left: the
+ * interpreter's live list, and on a compile path {@link #announced} over the forms
+ * spliced so far plus what the read-time image ran. See {@code .kb/reader-features.md}.
  */
 public final class FeaturePushes {
 
@@ -175,6 +178,20 @@ public final class FeaturePushes {
 	}
 
 	/**
+	 * The feature names one top-level form announces, as {@link #widen} reads them: a
+	 * compile path carries them to the reads of the files spliced after the form, as
+	 * {@code *features*} carries the push to them where {@code load} runs it
+	 * ({@code .kb/reader-features.md}).
+	 * @param form the top-level form
+	 * @return the announced names, without the leading colon, in source order
+	 */
+	public static List<String> announced(LispVal form) {
+		List<String> announced = new ArrayList<>();
+		collectFrom(form, announced);
+		return announced;
+	}
+
+	/**
 	 * The feature names the top-level forms announce, in source order.
 	 * @param forms the top-level forms
 	 * @return the announced names, without the leading colon
@@ -188,11 +205,17 @@ public final class FeaturePushes {
 	}
 
 	private static void collectFrom(LispVal form, List<String> announced) {
-		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol op)) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)) {
+			return;
+		}
+		String operator = memberName(op);
+		// The operator first: every top-level form of a program is asked, and few of
+		// them are a push.
+		if (!LispNames.EVAL_WHEN.equals(operator) && !LispNames.PROGN.equals(operator)
+				&& !LispNames.PUSHNEW.equals(operator) && !LispNames.PUSH.equals(operator) || !cons.isProperList()) {
 			return;
 		}
 		List<LispVal> items = cons.toList();
-		String operator = memberName(op);
 		// eval-when's situations are not consulted: unlike a .asd (which ASDF only ever
 		// LOADS, so a :compile-toplevel-only push really is inert), a source file goes
 		// through whichever of the two CL passes the backend runs, and the announcement
@@ -201,9 +224,6 @@ public final class FeaturePushes {
 			for (int i = LispNames.PROGN.equals(operator) ? 1 : 2; i < items.size(); i++) {
 				collectFrom(items.get(i), announced);
 			}
-			return;
-		}
-		if (!LispNames.PUSHNEW.equals(operator) && !LispNames.PUSH.equals(operator)) {
 			return;
 		}
 		// (push[new] VALUE *features* [keyword args]) -- pushnew's :test/:key are

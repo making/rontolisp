@@ -141,8 +141,12 @@ or whether it fires (`(if ok (pushnew :a *features*) (pushnew :b *features*))`),
 decides the `#+` of the forms below it in the same file, on all four backends: the
 interpreter has run it, and a compile path runs it at compile time for that purpose.
 A push inside a function's body does not count, even when the function is called.
-A `.asd` file goes further: a push it computes holds for the files of the systems it
-defines after the push (see the [Systems guide](../guides/asdf-systems.md)).
+Either kind of push also decides the reads of every file loaded after it — the next
+`load`, the next component of an ASDF system, a system loaded later — since each file
+is read with the `*features*` the files before it left, as Common Lisp's `load` reads
+it. A `.asd` file is the exception: a push it makes holds for the files of the systems
+it defines after the push, and nothing else (see the
+[Systems guide](../guides/asdf-systems.md)).
 
 And **you** may declare features on the command line: `--feature NAME`
 (comma-separated, repeatable) widens the set every source of the run is read
@@ -190,14 +194,14 @@ Notes:
   `:rontolisp-jvm`/`:rontolisp-wasm`, so the set a compiled program's `#+`
   conditionals were resolved against is fixed at compile time. Files pulled in
   by the compile-time `load`/`require`/`asdf:load-system` include are read with
-  the same target features. The run-time `*features*` list starts out holding
-  that same set.
+  the same target features, plus what the files spliced before them pushed. The
+  run-time `*features*` list starts out holding that same set.
 - `--feature` reaches the source **you** brought — the entry file, everything
   it loads, and every ASDF system loaded under it. It never reaches the sources
   rontolisp itself ships (the prelude, the built-in libraries and system
   shims), which are always read with the backend's own set: a claim you make
   about a third-party library must not rewrite our own conditionals underneath
-  it.
+  it. A push the program makes does not reach them either.
 - A form skipped by a failing `#+`/`#-` guard is skipped at the raw character
   level without being parsed, so it may use syntax rontolisp does not support
   (that is the point of guarding it).

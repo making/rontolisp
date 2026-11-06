@@ -1762,6 +1762,24 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * The feature set a read of source starts from now: {@link #features()} widened by
+	 * what {@code *features*} holds beyond it -- what the forms run so far pushed, in any
+	 * file. Common Lisp reads each form with {@code *features*} as it stands then, so a
+	 * push in one loaded file decides the {@code #+} of the next
+	 * ({@code .kb/reader-features.md}). Additive, as every widening is: a name taken off
+	 * the list stays in the set.
+	 * @return the feature set
+	 */
+	public Features sourceFeatures() {
+		return sourceFeatures(this.features);
+	}
+
+	private Features sourceFeatures(Features features) {
+		List<String> pushed = featuresAddedSince(printedFeatures(Environment.featureKeywordList(features.names())));
+		return pushed.isEmpty() ? features : features.with(pushed);
+	}
+
+	/**
 	 * The current package's name, UPCASED as Common Lisp prints it -- the value of
 	 * {@code *package*} named rather than printed. The REPL prompt reads it before every
 	 * line so that an {@code (in-package ...)} typed at one prompt is visible at the
@@ -5280,8 +5298,9 @@ public final class LispEvaluator {
 			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
 			if (language == SourceLanguage.COMMON_LISP) {
 				// Form at a time: each form is read with the readtable the forms before
-				// it left (.kb/readtables.md).
-				loadForms(SourceLanguage.readForms(source, features, resolved)
+				// it left (.kb/readtables.md), and with the *features* they left -- the
+				// pushes of this file and of every file loaded before it.
+				loadForms(SourceLanguage.readForms(source, sourceFeatures(features), resolved)
 					.readingTOrNil(this.packageResolver::readsClTOrNil), resolved, source, markers);
 				return;
 			}
@@ -5356,7 +5375,7 @@ public final class LispEvaluator {
 	 */
 	public void evalSource(String source, @Nullable String file) {
 		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
-		SourceLanguage.Forms forms = SourceLanguage.readForms(source, this.features, file)
+		SourceLanguage.Forms forms = SourceLanguage.readForms(source, sourceFeatures(), file)
 			.readingTOrNil(this.packageResolver::readsClTOrNil);
 		Set<String> featuresAtOpen = printedFeatures(currentFeatures());
 		for (LispVal form = forms.next(sourceReadSyntax()); form != null; form = forms.next(sourceReadSyntax(),

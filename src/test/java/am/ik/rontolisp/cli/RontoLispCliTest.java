@@ -629,6 +629,11 @@ class RontoLispCliTest {
 	void replEvaluatesExpression() {
 		String output = runCli("(+ 1 2)\n");
 		assertThat(output).contains("3");
+		// Each input is read with the *features* the inputs before it left, and with the
+		// ones --feature declares.
+		assertThat(runCli("(progn (pushnew :repl-pushed *features*) t)\n#+repl-pushed :seen #-repl-pushed :unseen\n"))
+			.isEqualTo("T\n:SEEN\n");
+		assertThat(runCli("#+sbcl :declared #-sbcl :absent\n", "--feature", "sbcl")).isEqualTo(":DECLARED\n");
 	}
 
 	@Test

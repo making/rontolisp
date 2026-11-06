@@ -26,3 +26,8 @@
 ;; Read at CALL time, so it answers whatever is current then -- nil once the
 ;; load has finished.
 (defun one-context () (list *load-pathname* *load-truename*))
+
+;; A feature pushed here decides the reads of the files loaded after this one:
+;; two.lisp, the next component, and plain.lisp, which the program loads later.
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (pushnew :lc-demo-one *features*))
