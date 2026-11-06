@@ -539,7 +539,16 @@ final class JvmTailBounce {
 			// (JvmFunctionCell).
 			cell.noteTailCall(ctx);
 			if (callee.bounceVisible()) {
-				ctx.body.iload(depthSlot(ctx));
+				// A method that only answers a replaced function's bounce takes no depth of
+				// its own: its tail found where the walk ends (a return-from in an earlier
+				// statement, fset's cond) starts the callee's chain afresh, as an
+				// ordinary call does.
+				if (passes) {
+					ctx.body.iload(depthSlot(ctx));
+				}
+				else {
+					ctx.body.iconst_0();
+				}
 			}
 			ctx.body.invokestatic(tailEntry);
 			return;

@@ -14809,7 +14809,9 @@ public final class LispMacroExpander {
 				case ":TYPE" -> type = value;
 				case ":KEEP" -> keep = value;
 				case ":DIRECTION" -> {
-					if (!(value instanceof LispSymbol dir) || !(LispNames.INPUT_KEYWORD.equals(dir.name())
+					// A quoted keyword is the same constant (coalton's compile writes
+					// :direction ':output).
+					if (!(unquoted(value) instanceof LispSymbol dir) || !(LispNames.INPUT_KEYWORD.equals(dir.name())
 							|| LispNames.OUTPUT_KEYWORD.equals(dir.name()))) {
 						throw new UnsupportedOperationException(LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED
 								+ " :direction must be the literal :input or :output");
@@ -30987,11 +30989,16 @@ public final class LispMacroExpander {
 		return qn == null ? name : qn.member();
 	}
 
-	/** Whether the form is {@code (defun <functionName> ...)}, member-name matched. */
+	/**
+	 * Whether the form is {@code (defun <functionName> ...)} of the standard name itself,
+	 * spelled bare as the resolver leaves it. A package's own symbol of the name is
+	 * another function: coalton-impl/entry shadows {@code compile} and defines its own,
+	 * which must not keep the compile runtime out of the program.
+	 */
 	private static boolean definesFunction(LispVal form, String functionName) {
 		return isNamedForm(form, LispNames.DEFUN) && form instanceof LispCons cons
 				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
-				&& functionName.equals(memberOf(name.name()));
+				&& functionName.equals(name.name());
 	}
 
 	// A #'make-instance VALUE reference anywhere outside quoted data -- a literal
@@ -32714,11 +32721,15 @@ public final class LispMacroExpander {
 	/**
 	 * Whether the form is a top-level {@code let}/{@code let*} carrying a
 	 * {@code defmethod} or {@code defgeneric} anywhere in its body (quoted data skipped)
-	 * -- the closure-over-let method idiom.
+	 * -- the closure-over-let method idiom -- or an {@code flet}/{@code labels} doing the
+	 * same over local functions (eclector's {@code package-name*} around two
+	 * {@code report-condition} methods). Both shapes keep their body at index 2, and the
+	 * backend lowers the binder around the method-body defuns that replace the methods.
 	 */
 	private static boolean isLetWithNestedMethodDefinition(LispVal form) {
 		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
-				|| (!LispNames.LET.equals(op.name()) && !LispNames.LET_STAR.equals(op.name()))
+				|| !(LispNames.LET.equals(op.name()) || LispNames.LET_STAR.equals(op.name())
+						|| LispNames.FLET.equals(op.name()) || LispNames.LABELS.equals(op.name()))
 				|| !cons.isProperList()) {
 			return false;
 		}
@@ -33575,9 +33586,16 @@ public final class LispMacroExpander {
 		if (!literal) {
 			branch.set(1, new LispSymbol(FORMAT_DEST_VAR));
 		}
-		LispVal branched = listToCons(List.of(new LispSymbol(LispNames.IF), ifParts.get(1),
+		// The operators are the reader's own: GrayStreamsLibrary distributes a call
+		// inside a form the source spelled, ahead of the compilers' resolver, and the
+		// package it reads in may shadow let (fset's).
+		LispVal branched = listToCons(List.of(ReaderSymbols.IF, ifParts.get(1),
 				replaceFormatControl(branch, ifParts.get(2)), replaceFormatControl(branch, ifParts.get(3))));
-		return literal ? branched : makeLet(FORMAT_DEST_VAR, parts.get(1), branched);
+		return literal ? branched
+				: listToCons(List.of(ReaderSymbols.LET,
+						new LispCons(listToCons(List.of(new LispSymbol(FORMAT_DEST_VAR), parts.get(1))),
+								LispNil.INSTANCE),
+						branched));
 	}
 
 	// A distributed format's branches, expanded in place.

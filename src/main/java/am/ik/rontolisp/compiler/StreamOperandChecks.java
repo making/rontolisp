@@ -18,6 +18,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.ReaderSymbols;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import org.jspecify.annotations.Nullable;
@@ -323,12 +324,14 @@ public final class StreamOperandChecks {
 							SourceProvenance.inherit(call, list(render.toArray(LispVal[]::new))),
 							startsFresh == null ? LispNil.INSTANCE : startsFresh));
 		}
-		// A computed control is held, evaluated after the destination.
+		// A computed control is held, evaluated after the destination. The reader's own
+		// let*: GrayStreamsLibrary calls this ahead of the compilers' resolver, in a form
+		// whose package may shadow the name.
 		LispSymbol held = new LispSymbol(FORMAT_DESTINATION_VAR);
 		LispSymbol control = new LispSymbol(FORMAT_CONTROL_VAR);
 		render.set(2, control);
 		return SourceProvenance.inherit(call,
-				list(new LispSymbol(LispNames.LET_STAR), list(list(held, destination), list(control, parts.get(2))),
+				list(ReaderSymbols.LET_STAR, list(list(held, destination), list(control, parts.get(2))),
 						list(new LispSymbol(LispNames.FORMAT_WRITE_INTERNAL), held,
 								SourceProvenance.inherit(call, list(render.toArray(LispVal[]::new))),
 								list(new LispSymbol(LispNames.FMT_STARTS_FRESH), control))));

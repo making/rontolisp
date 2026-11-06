@@ -3041,12 +3041,14 @@ public final class PackageResolver {
 		if (sym.name().startsWith("#:")) {
 			return sym;
 		}
-		// A struct instance tag ('%struct-PKG::NAME, baked into defstruct-generated
-		// defun bodies) is an internal token over an ALREADY-canonical struct name, not
-		// a package-scoped symbol -- its embedded :: must not read as a package
-		// qualifier. It reaches this pass only when generated defuns ride through a
-		// re-resolution, i.e. the pruner's bundled-defstruct early splice.
-		if (sym.name().startsWith(LispLayout.STRUCT_TAG_PREFIX)) {
+		// An instance tag ('%struct-PKG::NAME, baked into defstruct-generated defun
+		// bodies; '%class-PKG::NAME, in the (%obj-new ...) a make-load-form-saving-slots
+		// answers for a literal instance) is an internal token over an ALREADY-canonical
+		// type name, not a package-scoped symbol -- its embedded :: must not read as a
+		// package qualifier. It reaches this pass when generated forms ride through a
+		// re-resolution: the pruner's bundled-defstruct early splice, a backend's resolve
+		// of what the macro-time pass emitted.
+		if (sym.name().startsWith(LispLayout.STRUCT_TAG_PREFIX) || sym.name().startsWith(LispLayout.CLASS_TAG_PREFIX)) {
 			return sym;
 		}
 		String name = sym.name();

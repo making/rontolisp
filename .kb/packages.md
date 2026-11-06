@@ -70,6 +70,15 @@ what any undefined macro around a binding has always said. Pinned by
   macro-generated ones, the deftype instances and both macro tables go through
   `requalifyShadowedClNames` now, and the load-context `setq` is spelled `cl:`. Pinned by
   `UserMacroExpanderTest#aMacrosFormsSpelledClAreExpandedAndEmittedForTheCompilersRead`.
+- **So is what a pass after it writes into a form the source spelled**, which knows no package to
+  spell for: those operators are the reader's own (`ReaderSymbols`, left alone by identity, as the
+  backquote's are; 2026-11-06). The Gray streams' `format` rewrite (fset's `let`,
+  [gray-streams.md](gray-streams.md)) and the `make-load-form` substitution (coalton's `cons`,
+  [make-load-form.md](make-load-form.md)) wrote bare names the package read as its own.
+- **A test for a standard function the program defines matches the canonical name**
+  (`LispMacroExpander.definesFunction`, 2026-11-06): a package's own `compile` (coalton-impl/entry
+  shadows it) kept the compile runtime out of the program by member name, and `cl:compile` was
+  undefined on the compile paths. ci-spec `a-package-of-its-own-compile-keeps-cls`.
 
 **`quote` is the one name that stays `cl`'s** in such a package (a `:shadow` still wins): `(quote x)` is
 the special form to the resolver whatever package reads it, because the passes ahead of it spell it

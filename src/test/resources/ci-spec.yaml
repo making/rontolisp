@@ -12217,10 +12217,26 @@ cases:
       (defmacro mlf-splice-pt () *mlf-pt*)
       (print (make-load-form *mlf-pt*))
       (print (list (mlf-pt-x (mlf-splice-pt)) (mlf-pt-y (mlf-splice-pt))))
+      ;; A class of another package: the tag its creation form quotes carries the
+      ;; package's name, which is no package qualifier (coalton's source-file). The
+      ;; package has a cons of its own (coalton's list constructor), and the constant
+      ;; holding the object is rebuilt with cl's.
+      (defpackage :mlf-pkg (:use :cl) (:shadow #:cons))
+      (in-package :mlf-pkg)
+      (defun cons (a b) (list :own a b))
+      (defclass spot () ((x :initarg :x :reader spot-x)))
+      (defmethod make-load-form ((s spot) &optional env)
+        (make-load-form-saving-slots s :environment env))
+      (defmacro splice-spot () (make-instance 'spot :x 42))
+      (defmacro splice-spots () `'(:spots ,(make-instance 'spot :x 7)))
+      (print (list (spot-x (splice-spot)) (eq (class-of (splice-spot)) (find-class 'spot))
+                   (first (splice-spots)) (spot-x (second (splice-spots))) (cons 1 2)))
+      (in-package :cl-user)
     expected: |
       "dumped"
       (%OBJ-NEW '|%struct-MLF-PT| '3 '"four")
       (3 "four")
+      (42 T :SPOTS 7 (:OWN 1 2))
   - name: setf-function-definitions
     source: |
       (defvar *sf-mode* :xml)
@@ -13644,12 +13660,13 @@ cases:
     # call-with-temporary-file over %temp-file-name, with-temporary-file as its
     # wrapper (keep t keeps, the default deletes), tmpize-pathname, and the
     # staging rename. All four backends open relative paths against the process
-    # working directory, so literal relative names are real opens everywhere.
+    # working directory, so literal relative names are real opens everywhere. A
+    # quoted :direction is the same constant (coalton's compile writes ':output).
     source: |
       (print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory "" :keep t)
                           (write-string "kept" s) p)))
               (and (probe-file p) t)))
-      (print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory "")
+      (print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory "" :direction ':output)
                           (write-string "gone" s) p)))
               (and (probe-file p) t)))
       (let* ((p "u360staged.txt")
@@ -16518,6 +16535,16 @@ cases:
       (defun cwn-loop (n) (list :old n))
       (cwn-install 'cwn-loop (lambda (n) (if (= n 0) :done (cwn-loop (- n 1)))))
       (print (cwn-loop 200000))
+      ;; A tail the bounce walk does not reach (a return-from in an earlier statement,
+      ;; fset's cond) calling a function that bounces.
+      (defun cwn-apply (f x) (funcall f x))
+      (defun cwn-pick (f x)
+        (block b
+          (if (eq x 0) (return-from b (progn (cwn-apply f 100))))
+          (return-from b (progn (- x)))))
+      (print (list (cwn-pick #'1+ 41) (cwn-pick #'1+ 0)))
+      (cwn-install 'cwn-apply (lambda (f x) (funcall f (* 2 x))))
+      (print (cwn-pick #'1+ 0))
       ;; Retired through a computed name, and defined again where a defun form runs.
       (defun cwn-retired (x) (list :first x))
       (defun cwn-retire (name) (fmakunbound name))
@@ -16613,6 +16640,8 @@ cases:
       (:ODD 1)
       (:ODD 2)
       :DONE
+      (-41 101)
+      201
       CWN-RETIRED
       NIL
       NIL
@@ -21973,6 +22002,17 @@ cases:
       65
       T
       T
+  - name: a-package-of-its-own-compile-keeps-cls
+    source: |
+      ;; coalton-impl/entry shadows compile and defines its own; cl's stays defined, in
+      ;; this program and in every case around it that calls it.
+      (defpackage :ci-own-compile (:use :cl) (:shadow #:compile))
+      (in-package :ci-own-compile)
+      (defun compile (x) (list :own x))
+      (print (list (compile 1) (funcall (cl:compile nil '(lambda (y) (+ y 1))) 41)))
+      (in-package :cl-user)
+    expected: |
+      ((:OWN 1) 42)
   - name: a-cons-walk-refuses-the-values-that-are-no-cons
     source: |
       ;; An instance and a function value are Object[] on the JVM, as a cons is.
@@ -28552,6 +28592,20 @@ cases:
       (dolist (d (list "abc" (make-string 3) 3))
         (print (list (handler-case (format d "x") (error () :refused))
                      (handler-case (funcall #'format d "x") (error () :refused)))))
+      ;; In a package shadowing let and let* with macros of its own (fset's let is
+      ;; new-let's), what the dispatch writes into its forms stays cl's.
+      (defpackage :fpg-nl (:use :cl) (:shadow #:let #:let*))
+      (in-package :fpg-nl)
+      (defmacro let (bindings &body body) `(cl:let ,bindings ,@body))
+      (defmacro let* (bindings &body body) `(cl:let* ,bindings ,@body))
+      (defun bracket (s closed) (format s (if closed "[" "(")))
+      (defun spell (s c) (format s c 7))
+      (let ((o (make-instance 'cl-user::fpg-o)))
+        (bracket o t)
+        (bracket o nil)
+        (spell o "~a")
+        (print (reverse (cl-user::fpg-text o))))
+      (in-package :cl-user)
     expected: |
       (NIL NIL NIL "x=1y=2z=3")
       (NIL NIL (#\a #\1 #\b))
@@ -28561,6 +28615,7 @@ cases:
       (:REFUSED :REFUSED)
       (:REFUSED :REFUSED)
       (:REFUSED :REFUSED)
+      (#\[ #\( #\7)
   - name: format-write-directive-renders-like-prin1-on-both-paths
     source: |
       (princ (format nil "Expect ~W to be ~:[true~;false~]." '(= (add 1 2) 3) nil))
@@ -33666,9 +33721,18 @@ cases:
                  (defgeneric gl-deep (x) (:method (x) (list :deep k x))))))
       (setf (gl-cell *gl-cell*) 5)
       (print (list (gl-scale 3) (gl-scale "a") *gl-cell* (gl-deep 1)))
+      ;; eclector's shape: methods closing over an flet's local function, and a
+      ;; labels' that calls itself.
+      (flet ((gl-tag (x) (list :tag x)))
+        (defmethod gl-scale ((x symbol)) (gl-tag x))
+        (defmethod gl-scale ((x float)) (gl-tag (gl-tag x))))
+      (labels ((gl-wrap (x n) (if (= n 0) x (gl-wrap (list x) (- n 1)))))
+        (defmethod gl-scale ((x character)) (gl-wrap x 2)))
+      (print (list (gl-scale 'a) (gl-scale 1.5) (gl-scale #\c) (gl-scale 4)))
     expected: |
       GL-DEEP
       (6 (2 "a") (10) (:DEEP 2 1))
+      ((:TAG A) (:TAG (:TAG 1.5)) ((#\c)) 8)
   - name: negative-zero-literal-keeps-its-sign
     source: |
       (print -0.0)

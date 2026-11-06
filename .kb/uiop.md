@@ -301,7 +301,9 @@ references `ensure-directory-pathname` / `default-temporary-directory` directly 
 so the uiop fixpoint pulls them (the selection rule keyed on `with-temporary-file` is
 redundant-but-harmless). `:keep t` hands the pathname back with the file still there; the
 default deletes on the way out. It uses `unwind-protect` internally, which forces EH mode on
-WASM -- accepted, because no test exercises the non-EH-mode `with-temporary-file`.
+WASM -- accepted, because no test exercises the non-EH-mode `with-temporary-file`. The
+macro's `:direction` is a literal keyword, a quoted one included (coalton's `compile` writes
+`:direction ':output`, which stopped every compile of coalton's compiler until 2026-11-06).
 `tmpize-pathname` builds a uniquely-named sibling and returns a pathname (a `pathname` wrap
 around the namestring); `with-staging-pathname` writes through the staging pathname and
 renames onto the target only on success (`rename-file-overwriting-target`). The null device

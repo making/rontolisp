@@ -351,6 +351,12 @@ variable named like a function"):
   are headed by the slot name — slot NAME, class name and superclass list verbatim, only
   option VALUES rewritten, plus `defstruct`'s positional initform. Pinned by
   `JvmLispCompilerTest.grayRewriteLeavesASlotNamedAfterAStreamBuiltinAlone`.
+- **The operators the rewrite writes are the reader's** (`ReaderSymbols`: `let`, `let*`, `if`,
+  `progn`, `format`; 2026-11-06). The rewrite runs after the macro-time pass and the backends'
+  resolver reads its output again in the form's package, where fset's `let` is new-let's: its
+  `(format s (if x "[" "("))` in `print-interval` came out `(MISC-EXTENSIONS.NEW-LET:LET
+  ((FSET::|__format_dest| s)) ...)` and stopped the compile of any program reaching it. ci-spec
+  `format-to-a-string-with-a-fill-pointer-beside-the-gray-dispatch`.
 
 ## Limits
 - `listen` on an instance works interpreter/JVM; Preview 1 WASM rejects ANY `listen` at

@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.ReaderSymbols;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -127,7 +128,7 @@ final class LoadFormSubstituter {
 		 */
 		@Nullable private LispVal quotedConstant(LispVal datum) {
 			LispVal built = rebuild(datum);
-			return built == null ? null : listOf(new LispSymbol(LispNames.LOAD_TIME_VALUE), built);
+			return built == null ? null : listOf(ReaderSymbols.LOAD_TIME_VALUE, built);
 		}
 
 		/** The expression rebuilding one datum, or null when it needs no rebuilding. */
@@ -153,7 +154,7 @@ final class LoadFormSubstituter {
 				LispCons cell = cells.get(i);
 				LispVal car = cars.get(i);
 				if (car != null || cdr != null) {
-					cdr = listOf(new LispSymbol(LispNames.CONS), car == null ? quoted(cell.car()) : car,
+					cdr = listOf(ReaderSymbols.CONS, car == null ? quoted(cell.car()) : car,
 							cdr == null ? quoted(cell.cdr()) : cdr);
 				}
 			}
@@ -186,7 +187,7 @@ final class LoadFormSubstituter {
 				LispVal creation = code(values.get(0));
 				LispVal init = values.size() > 1 ? values.get(1) : LispNil.INSTANCE;
 				LispVal value = init instanceof LispNil ? creation : withInit(instance, creation, init);
-				LispVal replacement = listOf(new LispSymbol(LispNames.LOAD_TIME_VALUE), value);
+				LispVal replacement = listOf(ReaderSymbols.LOAD_TIME_VALUE, value);
 				this.done.put(instance, replacement);
 				return replacement;
 			}
@@ -204,7 +205,7 @@ final class LoadFormSubstituter {
 		private LispVal withInit(LispInstance instance, LispVal creation, LispVal init) {
 			LispSymbol name = new LispSymbol(LispNames.LOAD_FORM_OBJECT_PREFIX + (++this.counter));
 			LispVal body = code(replaceObject(init, instance, name));
-			return listOf(new LispSymbol(LispNames.LET), listOf(listOf(name, creation)), body, name);
+			return listOf(ReaderSymbols.LET, listOf(listOf(name, creation)), body, name);
 		}
 
 		private LispVal replaceObject(LispVal form, LispInstance instance, LispSymbol name) {
@@ -219,7 +220,7 @@ final class LoadFormSubstituter {
 	}
 
 	private static LispVal quoted(LispVal datum) {
-		return listOf(new LispSymbol(LispNames.QUOTE), datum);
+		return listOf(ReaderSymbols.QUOTE, datum);
 	}
 
 	private static LispVal listOf(LispVal... items) {
