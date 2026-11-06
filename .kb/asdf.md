@@ -1008,7 +1008,8 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   ([defstruct.md](defstruct.md)); a slot's `:initform` under a symbol macro and a condition slot named like
   a macro ([symbol-macrolet.md](symbol-macrolet.md)). A `:report` that is a symbol is that function
   (`defineConditionToDefclass`; coalton's `source-condition`).
-- **coalton** (coalton-20260101-git) — from the Quicklisp cache, interpreter, measured 2026-11-05.
+- **coalton** (coalton-20260101-git) — from the Quicklisp cache, interpreter, measured 2026-11-05 (half the time
+  since 2026-11-06, below).
   `(ql:quickload "coalton")` loads `coalton-compiler` and all of `coalton/library` (prelude included), its macros
   compiling file by file through eclector and the real typechecker and codegen: 60 minutes on a box under load 3-4
   (SBCL 2.2.9 compiles and loads the same tree in 61 s). Then a user package's `coalton-toplevel` (`define-type`, a
@@ -1037,9 +1038,24 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
     expansion ([interpreter-expansion-memo.md](interpreter-expansion-memo.md)); a new struct regenerating only
     the dispatchers it can reach; a native `equalp` (20% while it was Lisp: coalton's substitutions compare type
     variables with it); no call frames in a run that starts no SWANK server ([swank.md](swank.md)).
-  - Where the time goes now: coalton's `reduce-context` maps the whole value environment through `fset:image` for
-    every binding group, so a file costs more the later it comes (`seq.lisp` 503 s, `hashmap.lisp` 425 s,
-    `list.lisp` 333 s); otherwise the interpreter itself, no frame above `evalCons` over 11% (JFR).
+  - Per file against SBCL (2026-11-06): SBCL's `compile-file` and `load` of each component, 57.3 s and 1.0 s in
+    all, against ours, twice side by side with the build before the changes below on a box under load 13-260 (the
+    whole load 2433 s against 4479, then 2468 s on a busier box; 1.7-2.0 times as fast at every file mark both
+    times, the user program's output unchanged): `seq.lisp` 372-521 s against 3.2, `hashmap.lisp` 231-258
+    against 2.6, `list.lisp` 183-185 against 2.2, `file.lisp` 179-184 against 1.4, `ordtree.lisp` 119-154 against
+    1.8, `math/num.lisp` 44-46 against 1.6; 30 to 240 times per file. The dear files are the same on both:
+    coalton's `reduce-context` maps the whole value environment through `fset:image` for every binding group, a
+    cost SBCL pays too (31% of its samples over the library, 51% of ours).
+  - What took the other half: the call-site notes ([interpreter-expansion-memo.md](interpreter-expansion-memo.md),
+    "The call-site note"), a defstruct reader read in place ([defstruct.md](defstruct.md)), a generic's `#'`
+    value run in the caller's frame, a class's descendant tags kept under the hierarchy's version, a new class
+    regenerating only the dispatchers whose tests read classes ([clos.md](clos.md)), `make-instance` finding the
+    initialization generics without a walk of every generic.
+  - What remains is the cost of walking each form, spread thin (JFR up to `math/real.lisp`): `evalCons`'s own
+    dispatch 22%, built-in calls through `apply` 6%, a variable's lookup by name 11%, scopes and their bindings
+    10%, a call's length walk and argument list 6%, a `setf` or `make-instance` expanded again on every evaluation
+    5% (`.todo/i79`). fset's tight loops pay it in full: `fset:compare` of two symbols takes 13.7 µs against
+    SBCL's 37 ns. A factor that size takes running hot function bodies compiled (`.todo/i80`).
   - The float traps: `/` over a float is IEEE on every backend ([error-handling.md](error-handling.md),
     "Per operator"), which is what SBCL answers with coalton's traps off, so the shim's `with-float-traps-masked`
     needs nothing: `(/ 1.0d0 0.0d0)` under coalton is an infinity here too.

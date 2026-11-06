@@ -100,7 +100,9 @@ chunker can adopt it.
   `JvmLispCompilerTest#aFlatCondPastTheMethodSizeBudgetSplitsItsClauseList`.
 - **A flat `list` call has its argument list cut the same way** (`Cutter.splitArguments`,
   2026-11-06): `(list a1 .. ak ak+1 .. an)` is `(list* a1 .. ak <piece: (list ak+1 .. an)>)`,
-  same order, a fresh list. Only an argument that would fill half a run moves on its own first, so
+  same order, a fresh list (`list*` compiles as one loop, `.kb/argument-evaluation-order.md`).
+  `Cutter.cut` keys its replacements by `Child` identity: the record's hash walks the child's
+  form, and a 50,000-argument `list` is one child. Only an argument that would fill half a run moves on its own first, so
   small arguments go a run per piece, not a closure each. The generated tables are this shape:
   `%gf-static-methods`' list of a generic's methods and a dispatcher's run-time entries, hundreds
   of 20-60-node arguments (fset's `compare`, 426 methods: a 77 KB lambda before).

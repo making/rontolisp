@@ -89,6 +89,12 @@ instance, got 42` (a `simple-error`), the JVM a `ClassCastException` -- and, a c
 - Cost, wasm-GC EH mode (2026-09-26, `--optimize=size`): every checked site pays
   the failure call's two literals and the blocks, plus the operator strings. A module already carrying
   the printer pays little. Outside EH mode: nothing.
+- **The interpreter's call of a reader on an instance reads the slot without the body**
+  (since 2026-11-06): a global function whose body is the checked read of its one parameter
+  carries the slot in its binding (`FunctionCell.Binding.slotRead`), and a call its head notes
+  ([interpreter-expansion-memo.md](interpreter-expansion-memo.md), "The call-site note") answers
+  `inst.slot(N)`. Any other argument, and every call under a debugger, runs the body, so the
+  report is the body's. A struct-read loop ran 1.5x faster.
 
 ## `:include` (single inheritance)
 Parent slots (in ITS layout order) are PREPENDED, so an inherited slot keeps one index in every

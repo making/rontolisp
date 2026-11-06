@@ -21441,6 +21441,11 @@ cases:
                          (list (funcall *ci-order-note* 1) (funcall *ci-order-note* 2)
                                (funcall *ci-order-note* 3))))
       (print (ci-order-seen))
+      ;; list* links the same chain onto its last argument, evaluated last.
+      (ci-order-reset)
+      (print (list* (funcall *ci-order-note* 1) (funcall *ci-order-note* 2)
+                    (list (funcall *ci-order-note* 3))))
+      (print (ci-order-seen))
       ;; A direct call and funcall were already left-to-right; pinned so they stay.
       (defun ci-order-three (a b c) (list a b c))
       (ci-order-reset)
@@ -21453,6 +21458,8 @@ cases:
       (1 2 3)
       (1 2 3)
       #(1 2 3)
+      (1 2 3)
+      (1 2 3)
       (1 2 3)
       (1 2 3)
       (1 2 3)

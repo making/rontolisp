@@ -110,6 +110,15 @@ public final class LispEvaluator {
 	private static final LispVal UNHANDLED = new LispSymbol("%unhandled-operator%");
 
 	/**
+	 * What {@link #rareOperatorExpansion} and {@link #evalConsRareOperator} answer for an
+	 * operator no arm of theirs names -- unlike {@code null} and {@link #UNHANDLED},
+	 * which an arm answers when it declines one call -- so a call they leave alone may be
+	 * remembered as an ordinary one ({@link CallNote}). Compared by identity, like
+	 * {@link #UNHANDLED}.
+	 */
+	private static final LispVal NO_OPERATOR_ARM = new LispSymbol("%no-operator-arm%");
+
+	/**
 	 * The publishing functions of the multiple-value built-ins
 	 * ({@link #installValuePublishingFunctions}).
 	 */
@@ -501,6 +510,51 @@ public final class LispEvaluator {
 	private final FormMemo<LispVal> compilerMacroExpansions = new FormMemo<>();
 
 	/**
+	 * What {@link #evalCons} worked out about a call of a name, kept on the head symbol
+	 * ({@link LispSymbol#evaluatorNote}): that no operator arm, macro or compiler macro
+	 * claims the name, and which cell of the global function namespace it names. A call
+	 * whose head carries a current note skips straight to its arguments
+	 * ({@code .kb/interpreter-expansion-memo.md}, "The call-site note"). The note names
+	 * its cell by index and its evaluator by a token, so a symbol another evaluator also
+	 * runs (a form of a parse cache shared by every evaluator) pins neither.
+	 *
+	 * @param owner the {@link #noteOwner} of the evaluator that made it
+	 * @param epoch the {@link #callSiteEpoch} it was made under
+	 * @param cell the {@link FunctionCell#index} of the name's binding
+	 * @param shape the argument counts the name's built-in shape accepts, when it has one
+	 * ({@link #wrongCountCall}): a call with another count is classified again
+	 * @param form the call that made it, compared by identity: that call skips its length
+	 * walk and the operator tables too, any other call of the name only the latter
+	 * @param length that call's length, operator included
+	 */
+	private record CallNote(Object owner, int epoch, int cell, BuiltinCallArity.@Nullable Shape shape, LispCons form,
+			int length) {
+	}
+
+	/** This evaluator's identity on the notes it leaves on symbols ({@link CallNote}). */
+	private final Object noteOwner = new Object();
+
+	/**
+	 * Moves on each change of a table a call's classification reads: the user macros
+	 * (local macros a walk binds included), the compiler macros and the built-ins a
+	 * program defined a method on. A {@link CallNote} made under another epoch is
+	 * classified again.
+	 */
+	private volatile int callSiteEpoch;
+
+	/** What {@link #bumpCallSiteEpoch} holds while it moves the epoch. */
+	private final Object callSiteEpochLock = new Object();
+
+	/**
+	 * Moves {@link #callSiteEpoch}: every change of a table it covers takes a new value.
+	 */
+	private void bumpCallSiteEpoch() {
+		synchronized (this.callSiteEpochLock) {
+			this.callSiteEpoch++;
+		}
+	}
+
+	/**
 	 * Memo of {@link #settledLambdaTail}, keyed by the tail form's cons identity. Nothing
 	 * invalidates it: a lowered tail's value is the shared wrapper a later
 	 * {@code defmethod} on the producer rewrites in place ({@link #producerTailSites}).
@@ -771,9 +825,54 @@ public final class LispEvaluator {
 	 * rather than a lexical binding; variable reads and {@code setq} consult it.
 	 * Concurrent because HTTP-handler requests read it from separate virtual threads
 	 * (they only ever read it -- specials are declared by top-level forms before serving
-	 * begins).
+	 * begins). It counts its changes, so a symbol's {@link SpecialNote} holds until the
+	 * next proclamation.
 	 */
-	private final java.util.Set<String> specialVars = java.util.concurrent.ConcurrentHashMap.newKeySet();
+	private final CountedNames specialVars = new CountedNames();
+
+	/**
+	 * What {@link #isSpecial} found for a symbol's name, kept on the symbol
+	 * ({@link LispSymbol#evaluatorNote}) like a {@link CallNote}: whether the name was
+	 * proclaimed special as of an {@link CountedNames#epoch} of {@link #specialVars}.
+	 *
+	 * @param owner the {@link #noteOwner} of the evaluator that made it
+	 * @param epoch the epoch it was made under
+	 * @param special whether the name is proclaimed special
+	 */
+	private record SpecialNote(Object owner, int epoch, boolean special) {
+	}
+
+	/**
+	 * The two {@link SpecialNote}s of the current epoch, answer false and answer true,
+	 * shared by every symbol so a note costs no allocation.
+	 */
+	private volatile SpecialNote[] specialNotes = { new SpecialNote(this.noteOwner, -1, false),
+			new SpecialNote(this.noteOwner, -1, true) };
+
+	/**
+	 * Whether a variable's name is proclaimed special, by the symbol's note while no
+	 * proclamation has happened since it was made.
+	 * @param symbol the variable
+	 * @return whether its name is in {@link #specialVars}
+	 */
+	private boolean isSpecial(LispSymbol symbol) {
+		int epoch = this.specialVars.epoch();
+		if (symbol.evaluatorNote() instanceof SpecialNote note && note.owner() == this.noteOwner
+				&& note.epoch() == epoch) {
+			return note.special();
+		}
+		boolean special = this.specialVars.contains(symbol.name());
+		SpecialNote[] notes = this.specialNotes;
+		if (notes[0].epoch() != epoch) {
+			notes = new SpecialNote[] { new SpecialNote(this.noteOwner, epoch, false),
+					new SpecialNote(this.noteOwner, epoch, true) };
+			this.specialNotes = notes;
+		}
+		if (mayNote(symbol)) {
+			symbol.evaluatorNote(notes[special ? 1 : 0]);
+		}
+		return special;
+	}
 
 	/**
 	 * The names a LOCAL {@code (declare (special ...))} has named so far, recorded as
@@ -8880,6 +8979,9 @@ public final class LispEvaluator {
 	 * @return the value
 	 */
 	private LispVal evalAtom(LispVal expr, Environment env) {
+		if (expr instanceof LispSymbol sym) {
+			return singleValue(evalSymbolRef(sym, env));
+		}
 		return switch (expr) {
 			case LispSymbol sym -> singleValue(evalSymbolRef(sym, env));
 			// An array literal is a CONSTRUCTOR, not a constant: each evaluation answers
@@ -9043,8 +9145,28 @@ public final class LispEvaluator {
 		if (LispNames.PACKAGE_VAR.equals(name)) {
 			return currentPackageValue();
 		}
+		if (isSpecial(sym)) {
+			return freeValue(sym, env, true);
+		}
+		// The commonest read, a lexical binding, in a method small enough to inline.
+		LispVal value = env.lookupLexical(name);
+		return value != null && value != Environment.SPECIAL ? value : freeValue(sym, env, false);
+	}
+
+	/**
+	 * {@link #evalSymbolRef} of a name no lexical binding answers: a proclaimed special's
+	 * active dynamic binding or global, a free name's dynamic binding (a local
+	 * declaration, {@code progv}) or global, a global symbol macro, a lazily loaded
+	 * library's variable.
+	 * @param sym the variable
+	 * @param env the environment of the reference
+	 * @param special whether the name is proclaimed special
+	 * @return the value
+	 */
+	private LispVal freeValue(LispSymbol sym, Environment env, boolean special) {
+		String name = sym.name();
 		LispVal value;
-		if (this.specialVars.contains(name)) {
+		if (special) {
 			if (this.dynamicBindings.isBound(name)) {
 				return dynamicValue(name);
 			}
@@ -9055,13 +9177,10 @@ public final class LispEvaluator {
 			}
 		}
 		else {
-			value = env.lookupLexical(name);
-			if (value == null || value == Environment.SPECIAL) {
-				if ((this.progvUsed || this.localSpecials.contains(name)) && this.dynamicBindings.isBound(name)) {
-					return dynamicValue(name);
-				}
-				value = env.root().lookupOrNull(name);
+			if ((this.progvUsed || this.localSpecials.contains(name)) && this.dynamicBindings.isBound(name)) {
+				return dynamicValue(name);
 			}
+			value = env.root().lookupOrNull(name);
 		}
 		if (value == null && !this.globalSymbolMacros.isEmpty()) {
 			// define-symbol-macro: the name is not a variable, so it only ever reaches
@@ -10310,20 +10429,47 @@ public final class LispEvaluator {
 				try {
 					dispatch: {
 						LispVal head = cons.car();
-						// A dotted tail is only meaningful as data (inside quote); in
-						// call position it would otherwise be silently dropped by the
-						// toList() walks below. The walk also answers the argument count,
-						// so the fall-through function call below allocates its argument
-						// list exactly sized instead of walking again.
-						int properLength = head instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name()) ? 1
-								: cons.properLength();
-						if (properLength < 0) {
-							throw new LispEvalException("Improper list in call position: " + cons.print());
+						Object headNote = head instanceof LispSymbol noted ? noted.evaluatorNote() : null;
+						if (headNote instanceof ExpansionNote note && note.form() == cons
+								&& note.owner() == this.noteOwner && note.epoch() == this.callSiteEpoch
+								&& (!note.userMacro() || cons != this.topLevelForm.get())) {
+							// A macro call whose head notes its expansion
+							// (ExpansionNote).
+							next = note.expansion();
+							break dispatch;
+						}
+						// A call of a global function its head notes for this very form
+						// (CallNote): its length and its binding, as classified.
+						CallNote callNote = headNote instanceof CallNote note && note.form() == cons
+								&& note.owner() == this.noteOwner && note.epoch() == this.callSiteEpoch ? note : null;
+						FunctionCell.Binding called = callNote == null ? null
+								: this.globalEnv.functionCellAt(callNote.cell()).binding();
+						LispVal notedFunction = called == null ? null : called.value();
+						int properLength;
+						if (callNote != null && notedFunction != null) {
+							properLength = callNote.length();
+						}
+						else {
+							called = null;
+							// A dotted tail is only meaningful as data (inside quote); in
+							// call position it would otherwise be silently dropped by the
+							// toList() walks below. The walk also answers the argument
+							// count, so the fall-through function call below allocates
+							// its argument list exactly sized instead of walking again.
+							properLength = head instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name()) ? 1
+									: cons.properLength();
+							if (properLength < 0) {
+								throw new LispEvalException("Improper list in call position: " + cons.print());
+							}
 						}
 						LispVal function;
 						List<LispVal> args;
 						Set<String> methoded = this.methodedExpandedBuiltins;
-						if (methoded != NO_METHODED_BUILTINS && head instanceof LispSymbol sym
+						if (notedFunction != null && called != null) {
+							function = notedFunction;
+							args = evalArgs(cons, env, properLength - 1);
+						}
+						else if (methoded != NO_METHODED_BUILTINS && head instanceof LispSymbol sym
 								&& methoded.contains(sym.name())) {
 							// A built-in the program defined a method on: its global
 							// binding is now the generic's dispatcher (the built-in its
@@ -10334,6 +10480,7 @@ public final class LispEvaluator {
 							args = evalArgs(cons, env, properLength - 1);
 						}
 						else if (head instanceof LispSymbol sym) {
+							boolean ordinaryCall = false;
 							switch (sym.name()) {
 								case LispNames.QUOTE:
 								case LispNames.UNSPELLED_QUOTE:
@@ -10495,7 +10642,7 @@ public final class LispEvaluator {
 									break dispatch;
 								case LispNames.IGNORE_ERRORS:
 									ensureConditionReportRuntimeLoaded();
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandIgnoreErrors);
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandIgnoreErrors, false);
 									break dispatch;
 								case LispNames.STABLE_SORT:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandStableSort);
@@ -10739,110 +10886,137 @@ public final class LispEvaluator {
 									if (properLength != (read ? 4 : 5)) {
 										break;
 									}
-									List<LispVal> parts = cons.toList();
-									List<LispVal> primitiveArgs = new ArrayList<>(3);
-									primitiveArgs.add(eval(parts.get(1), env));
-									primitiveArgs.add(parts.get(2));
-									if (!read) {
-										primitiveArgs.add(eval(parts.get(3), env));
-									}
-									if (!(primitiveArgs.get(0) instanceof LispInstance inst)) {
-										next = parts.getLast();
+									LispCons objectCell = (LispCons) cons.cdr();
+									LispCons indexCell = (LispCons) objectCell.cdr();
+									LispCons afterIndex = (LispCons) indexCell.cdr();
+									LispVal object = eval(objectCell.car(), env);
+									LispVal value = read ? LispNil.INSTANCE : eval(afterIndex.car(), env);
+									if (!(object instanceof LispInstance inst)) {
+										next = read ? afterIndex.car() : ((LispCons) afterIndex.cdr()).car();
 										break dispatch;
 									}
-									int slot = requireSlotIndex(sym.name(), inst, primitiveArgs);
+									int slot = requireSlotIndex(sym.name(), inst, indexCell.car());
 									if (!read) {
-										inst.setSlot(slot, primitiveArgs.get(2));
+										inst.setSlot(slot, value);
 									}
-									result = singleValue(read ? inst.slot(slot) : primitiveArgs.get(2));
+									result = singleValue(read ? inst.slot(slot) : value);
 									break frame;
 								}
+								default:
+									// No arm of this table names the operator.
+									ordinaryCall = true;
 							}
-							// Neither the tail-transparent expansions nor the value forms
-							// of the second half claimed the operator, then the ordinary
-							// call. A wrapped built-in called with a count its shape
-							// rules out signals before any lowering can drop the surplus
-							// or index past the form (compiler/BuiltinCallArity), as on
-							// the compiled backends.
-							if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
-								break dispatch;
+							// A call of a global function its head's note vouches for
+							// (CallNote): straight to its arguments.
+							called = ordinaryCall ? notedBinding(sym, properLength) : null;
+							LispVal known = called == null ? null : called.value();
+							if (known != null) {
+								function = known;
 							}
-							LispVal expansion = rareOperatorExpansion(cons, env, sym.name());
-							if (expansion != null) {
-								next = expansion;
-								break dispatch;
-							}
-							LispVal rare = evalConsRareOperator(cons, env, sym.name(), owner, deferTo);
-							if (rare != UNHANDLED) {
-								result = rare;
-								break frame;
-							}
-							if (LispNames.isCarCdrComposition(sym.name())) {
-								next = builtinMacroExpansion(cons, LispMacroExpander::expandCarCdrComposition);
-								break dispatch;
-							}
-							// The uiop MACROS -- but only for a package-qualified
-							// operator. A name with no colon cannot be a uiop member, and
-							// this path is the fall-through every ordinary call takes, so
-							// one indexOf here spares BOTH probes' splitQualified for
-							// (char s j) and (+ j 1) alike (4% of run-time samples in one
-							// profile, .kb/interpreter-expansion-memo.md).
-							if (sym.name().indexOf(':') > 0 && isUiopOperator(sym.name())) {
-								// First the ones with a real expansion -- the one
-								// dispatcher both compilers and FreeVarAnalyzer also
-								// call, which is what makes the four backends agree by
-								// construction rather than by four parallel switch
-								// statements kept in step.
-								LispVal uiopMacro = LispMacroExpander.expandUiopMacro(cons, true);
-								if (uiopMacro != null) {
-									next = uiopMacro;
+							else {
+								called = null;
+								int epoch = this.callSiteEpoch;
+								// Neither the tail-transparent expansions nor the value
+								// forms of the second half claimed the operator, then the
+								// ordinary call. A wrapped built-in called with a count
+								// its shape rules out signals before any lowering can
+								// drop the surplus or index past the form
+								// (compiler/BuiltinCallArity), as on the compiled
+								// backends.
+								if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
 									break dispatch;
 								}
-								// Then a uiop macro nothing implements yet: it lowers to
-								// not-implemented-error with its argument forms dropped
-								// -- the same expansion both compilers apply, so an
-								// unimplemented (uiop:with-input-file ...) signals here
-								// too rather than running its body first. The
-								// function-kind members are ordinary calls and fall
-								// through to the lazy load below.
-								LispVal uiopStub = LispMacroExpander.expandUnimplementedUiopMacro(cons);
-								if (uiopStub != null) {
-									next = uiopStub;
+								LispVal expansion = rareOperatorExpansion(cons, env, sym.name());
+								if (expansion != null && expansion != NO_OPERATOR_ARM) {
+									next = expansion;
 									break dispatch;
 								}
-							}
-							// User macros defined with defmacro: expand (evaluating the
-							// macro body with the unevaluated argument forms bound) and
-							// evaluate the expansion. Checked after the built-in
-							// operators, so a user macro can never shadow them. The objc
-							// defining macros live in a lazily loaded library: load it
-							// before asking whether the call is a macro.
-							if (!this.objcLibraryLoaded && ObjcLibrary.definesMacro(sym.name())) {
-								ensureObjcLoaded();
-							}
-							if (this.userMacros.containsKey(sym.name())) {
-								if (cons == this.topLevelForm.get()) {
-									result = evalAtTopLevel(expandUserMacro(cons, env), env);
+								LispVal rare = evalConsRareOperator(cons, env, sym.name(), owner, deferTo);
+								if (rare != UNHANDLED && rare != NO_OPERATOR_ARM) {
+									result = rare;
 									break frame;
 								}
-								next = expandUserMacro(cons, env);
-								break dispatch;
-							}
-							// Compiler macros: applied last, so a defmacro and every
-							// built-in operator still win, and memoized per call site so
-							// the expansion (and the load-time-value slot inside it) is
-							// built once for this occurrence.
-							if (!this.compilerMacros.isEmpty() && this.compilerMacros.containsKey(sym.name())) {
-								LispVal compilerExpansion = expandCompilerMacro(cons, env);
-								if (compilerExpansion != cons) {
-									next = compilerExpansion;
+								ordinaryCall &= expansion == NO_OPERATOR_ARM && rare == NO_OPERATOR_ARM;
+								if (LispNames.isCarCdrComposition(sym.name())) {
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandCarCdrComposition);
 									break dispatch;
 								}
+								// The uiop MACROS -- but only for a package-qualified
+								// operator. A name with no colon cannot be a uiop member,
+								// and this path is the fall-through every ordinary call
+								// takes, so one indexOf here spares BOTH probes'
+								// splitQualified for (char s j) and (+ j 1) alike (4% of
+								// run-time samples in one profile,
+								// .kb/interpreter-expansion-memo.md).
+								if (sym.name().indexOf(':') > 0 && isUiopOperator(sym.name())) {
+									ordinaryCall = false;
+									// First the ones with a real expansion -- the one
+									// dispatcher both compilers and FreeVarAnalyzer also
+									// call, which is what makes the four backends agree
+									// by construction rather than by four parallel
+									// switch statements kept in step.
+									LispVal uiopMacro = LispMacroExpander.expandUiopMacro(cons, true);
+									if (uiopMacro != null) {
+										next = uiopMacro;
+										break dispatch;
+									}
+									// Then a uiop macro nothing implements yet: it lowers
+									// to not-implemented-error with its argument forms
+									// dropped -- the same expansion both compilers apply,
+									// so an unimplemented (uiop:with-input-file ...)
+									// signals here too rather than running its body
+									// first. The function-kind members are ordinary calls
+									// and fall through to the lazy load below.
+									LispVal uiopStub = LispMacroExpander.expandUnimplementedUiopMacro(cons);
+									if (uiopStub != null) {
+										next = uiopStub;
+										break dispatch;
+									}
+								}
+								// User macros defined with defmacro: expand (evaluating
+								// the macro body with the unevaluated argument forms
+								// bound) and evaluate the expansion. Checked after the
+								// built-in operators, so a user macro can never shadow
+								// them. The objc defining macros live in a lazily loaded
+								// library: load it before asking whether the call is a
+								// macro.
+								if (!this.objcLibraryLoaded && ObjcLibrary.definesMacro(sym.name())) {
+									ensureObjcLoaded();
+								}
+								if (this.userMacros.containsKey(sym.name())) {
+									if (cons == this.topLevelForm.get()) {
+										result = evalAtTopLevel(expandUserMacro(cons, env), env);
+										break frame;
+									}
+									next = expandUserMacro(cons, env);
+									if (this.userMacros.get(sym.name()) instanceof UserMacro macro
+											&& macro.environment() == null && macro.expander() == null
+											&& mayNote(sym)) {
+										// memoized per site whatever the scope: noted
+										sym.evaluatorNote(new ExpansionNote(this.noteOwner, epoch, cons, next, true));
+									}
+									break dispatch;
+								}
+								// Compiler macros: applied last, so a defmacro and every
+								// built-in operator still win, and memoized per call site
+								// so the expansion (and the load-time-value slot inside
+								// it) is built once for this occurrence.
+								if (!this.compilerMacros.isEmpty() && this.compilerMacros.containsKey(sym.name())) {
+									ordinaryCall = false;
+									LispVal compilerExpansion = expandCompilerMacro(cons, env);
+									if (compilerExpansion != cons) {
+										next = compilerExpansion;
+										break dispatch;
+									}
+								}
+								// Lisp-2: a symbol in call position is resolved in the
+								// function namespace only; variable bindings of the same
+								// name do not shadow it.
+								function = resolveFunction(sym.name());
+								if (ordinaryCall) {
+									noteCall(cons, sym, epoch, properLength, function);
+								}
 							}
-							// Lisp-2: a symbol in call position is resolved in the
-							// function namespace only; variable bindings of the same name
-							// do not shadow it.
-							function = resolveFunction(sym.name());
 							args = evalArgs(cons, env, properLength - 1);
 						}
 						else {
@@ -10856,14 +11030,15 @@ public final class LispEvaluator {
 						// instead of through the built-in, which is what makes a tail
 						// call through a value proper. The built-in's signal-point seam
 						// is kept for what the closure raises (funcallSeam).
-						if (function == this.funcallBuiltin && !args.isEmpty() && args.get(0) instanceof LispLambda) {
-							function = args.get(0);
+						LispLambda callee = (function == this.funcallBuiltin || function == this.applyBuiltin)
+								&& !args.isEmpty() ? closureCalled(args.get(0)) : null;
+						if (function == this.funcallBuiltin && callee != null) {
+							function = callee;
 							args = args.subList(1, args.size());
 							funcallSeam = true;
 						}
-						else if (function == this.applyBuiltin && args.size() >= 2
-								&& args.get(0) instanceof LispLambda) {
-							function = args.get(0);
+						else if (function == this.applyBuiltin && args.size() >= 2 && callee != null) {
+							function = callee;
 							funcallSeam = true;
 							args = spreadApplyArguments(args);
 						}
@@ -10884,7 +11059,20 @@ public final class LispEvaluator {
 							// every call of a closure, a tail call or a loop's recur
 							// included, is where an interrupted evaluation stops
 							pollInterrupt();
-							Environment lambdaEnv = lexicalLambdaScope(lambda, args);
+							if (called != null && called.slotRead() != FunctionCell.NO_SLOT_READ
+									&& lambda == called.value() && args.size() == 1
+									&& args.get(0) instanceof LispInstance inst && !this.debugging) {
+								// A slot reader on an instance: the slot its body would
+								// read.
+								int cell = called.slotRead() < 0 ? inst.cellCount() + called.slotRead()
+										: called.slotRead();
+								if (cell >= 0 && cell < inst.cellCount()) {
+									result = singleValue(inst.slot(cell));
+									break frame;
+								}
+							}
+							Environment lambdaEnv = lexicalLambdaScope(lambda, args,
+									called != null && lambda == called.value() ? called.declared() : null);
 							if (lambdaEnv != null) {
 								frameLambda = lambda;
 								if (this.debugging) {
@@ -11028,23 +11216,32 @@ public final class LispEvaluator {
 	 * frame.
 	 * @param lambda the function
 	 * @param args its arguments
+	 * @param known the names its body declares special when its global binding says
+	 * ({@link FunctionCell.Binding#declared}), else null to read them
 	 * @return the body's scope, or null
 	 */
-	private @Nullable Environment lexicalLambdaScope(LispLambda lambda, List<LispVal> args) {
+	private @Nullable Environment lexicalLambdaScope(LispLambda lambda, List<LispVal> args,
+			@Nullable Set<String> known) {
 		checkArity(lambda, args);
 		int required = lambda.params().size();
-		Set<String> declared = declaredSpecials(lambda.body(), true);
+		Set<String> declared;
+		if (known != null) {
+			declared = known;
+			recordLocalSpecials(known);
+		}
+		else {
+			declared = declaredSpecials(lambda.body(), true);
+		}
 		for (int i = 0; i < required; i++) {
-			String paramName = lambda.params().get(i).name();
-			if (this.specialVars.contains(paramName) || declared.contains(paramName)) {
+			LispSymbol param = lambda.params().get(i);
+			if (isSpecial(param) || declared.contains(param.name())) {
 				return null;
 			}
 		}
-		if (lambda.rest() != null
-				&& (this.specialVars.contains(lambda.rest().name()) || declared.contains(lambda.rest().name()))) {
+		if (lambda.rest() != null && (isSpecial(lambda.rest()) || declared.contains(lambda.rest().name()))) {
 			return null;
 		}
-		Environment lambdaEnv = callScope(lambda);
+		Environment lambdaEnv = callScope(lambda, required + (lambda.rest() != null ? 1 : 0));
 		for (int i = 0; i < required; i++) {
 			lambdaEnv.define(lambda.params().get(i).name(), args.get(i));
 		}
@@ -11067,7 +11264,17 @@ public final class LispEvaluator {
 	 * code was read in ({@link Environment#lexicalPackage}).
 	 */
 	private static Environment callScope(LispLambda lambda) {
-		Environment scope = new Environment((Environment) lambda.closure());
+		return callScope(lambda, 0);
+	}
+
+	/**
+	 * {@link #callScope(LispLambda)} with room for its bindings made up front.
+	 * @param lambda the function
+	 * @param bindings how many parameters the scope binds
+	 * @return the scope
+	 */
+	private static Environment callScope(LispLambda lambda, int bindings) {
+		Environment scope = new Environment((Environment) lambda.closure(), bindings);
 		if (lambda.sourced() && lambda.name() != null) {
 			scope.lexicalFunction(lambda.name());
 		}
@@ -11100,9 +11307,10 @@ public final class LispEvaluator {
 	 * functions of the form, memoized per call site ({@link #builtinMacroExpansion},
 	 * .kb/interpreter-expansion-memo.md), a few re-expanded per evaluation because they
 	 * read evaluator state (the class registry, the user-macro table, a printer hook).
-	 * Answers null for an operator it does not claim, including the arms that decline a
-	 * particular shape to the ordinary function call (a {@code reduce} without
-	 * {@code :from-end}, a {@code sort} without {@code :key}, a print with no hook).
+	 * Answers {@link #NO_OPERATOR_ARM} for an operator it does not claim and null for the
+	 * arms that decline a particular shape to the ordinary function call (a
+	 * {@code reduce} without {@code :from-end}, a {@code sort} without {@code :key}, a
+	 * print with no hook).
 	 *
 	 * <p>
 	 * The split from {@link #evalConsRareOperator} is by KIND, not by frequency: a value
@@ -11117,7 +11325,7 @@ public final class LispEvaluator {
 	 * @param cons the form being evaluated
 	 * @param env the environment
 	 * @param name the operator name
-	 * @return the form to evaluate in its place, or null
+	 * @return the form to evaluate in its place, null, or {@link #NO_OPERATOR_ARM}
 	 */
 	private @Nullable LispVal rareOperatorExpansion(LispCons cons, Environment env, String name) {
 		switch (name) {
@@ -11139,10 +11347,10 @@ public final class LispEvaluator {
 				return builtinMacroExpansion(cons, LispMacroExpander::expandCcase);
 			case LispNames.RESTART_BIND:
 				ensureRestartRuntimeLoaded();
-				return builtinMacroExpansion(cons, LispMacroExpander::expandRestartBind);
+				return builtinMacroExpansion(cons, LispMacroExpander::expandRestartBind, false);
 			case LispNames.WITH_SIMPLE_RESTART:
 				ensureRestartRuntimeLoaded();
-				return builtinMacroExpansion(cons, LispMacroExpander::expandWithSimpleRestart);
+				return builtinMacroExpansion(cons, LispMacroExpander::expandWithSimpleRestart, false);
 			case LispNames.TIME:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandTime);
 			case LispNames.FIFTH:
@@ -11203,7 +11411,7 @@ public final class LispEvaluator {
 				// the library's defparameter must have declared it
 				// special BEFORE the let binds.
 				ensureTorchLoaded();
-				return builtinMacroExpansion(cons, LispMacroExpander::expandTorchNoGrad);
+				return builtinMacroExpansion(cons, LispMacroExpander::expandTorchNoGrad, false);
 			case LispNames.OBJC_WITH_AUTORELEASE_POOL_QUALIFIED:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandObjcWithAutoreleasePool);
 			case LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED:
@@ -11219,7 +11427,7 @@ public final class LispEvaluator {
 				return builtinMacroExpansion(cons, LispMacroExpander::expandDefineModifyMacro);
 			case LispNames.RESTART_CASE:
 				ensureRestartRuntimeLoaded();
-				return builtinMacroExpansion(cons, LispMacroExpander::expandRestartCase);
+				return builtinMacroExpansion(cons, LispMacroExpander::expandRestartCase, false);
 			case LispNames.MAKE_CONDITION:
 				ensureConditionReportRuntimeLoaded();
 				return LispMacroExpander.expandMakeConditionWithRuntimeType(cons, this.closRegistry);
@@ -11308,7 +11516,7 @@ public final class LispEvaluator {
 				// ordinary one.
 				if (cons.properLength() > 2 && resolveFunction(name) instanceof LispFunction bound
 						&& this.publishingBuiltins.contains(bound)) {
-					return builtinMacroExpansion(cons, LispMacroExpander::expandReadFromString);
+					return builtinMacroExpansion(cons, LispMacroExpander::expandReadFromString, false);
 				}
 				return null;
 			// read has no case here and no Environment function: it is a prelude defun
@@ -11400,10 +11608,10 @@ public final class LispEvaluator {
 				// (declaim (special ...)) proclaims specialness before the form
 				// collapses to nil; other declarations remain no-ops.
 				SpecialVarCollector.collectForm(cons, this.specialVars);
-				return builtinMacroExpansion(cons, LispMacroExpander::expandDeclaim);
+				return builtinMacroExpansion(cons, LispMacroExpander::expandDeclaim, false);
 			case LispNames.PROCLAIM:
 				SpecialVarCollector.collectForm(cons, this.specialVars);
-				return builtinMacroExpansion(cons, LispMacroExpander::expandProclaim);
+				return builtinMacroExpansion(cons, LispMacroExpander::expandProclaim, false);
 			case LispNames.THE:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandThe);
 			case LispNames.EVAL_WHEN:
@@ -11598,6 +11806,8 @@ public final class LispEvaluator {
 				}
 				break;
 			}
+			default:
+				return NO_OPERATOR_ARM;
 		}
 		return null;
 	}
@@ -11605,9 +11815,10 @@ public final class LispEvaluator {
 	/**
 	 * The value half of {@link #evalCons}'s second operator table: the special forms,
 	 * definers and primitive calls that answer a VALUE (and so end the loop's frame),
-	 * answering {@link #UNHANDLED} for an operator it does not claim and for the handful
-	 * of arms that deliberately fall through to the ordinary function call (a
-	 * one-argument {@code floor}, a {@code coerce} to an ordinary sequence type).
+	 * answering {@link #NO_OPERATOR_ARM} for an operator it does not claim and
+	 * {@link #UNHANDLED} for the handful of arms that deliberately fall through to the
+	 * ordinary function call (a one-argument {@code floor}, a {@code coerce} to an
+	 * ordinary sequence type).
 	 *
 	 * <p>
 	 * The table is split for one reason: {@code evalCons} is the interpreter's innermost
@@ -11623,7 +11834,7 @@ public final class LispEvaluator {
 	 * @param owner the owner of the calling frame's blocks, or null
 	 * @param deferTo the owner the calling frame's exits may hand their value form to, or
 	 * null ({@link #evalCons})
-	 * @return the value, or {@link #UNHANDLED}
+	 * @return the value, {@link #UNHANDLED}, or {@link #NO_OPERATOR_ARM}
 	 */
 	private LispVal evalConsRareOperator(LispCons cons, Environment env, String name, @Nullable Environment owner,
 			@Nullable Environment deferTo) {
@@ -11794,6 +12005,8 @@ public final class LispEvaluator {
 				// The prelude defun, with the readtable-honoring read of a string stream
 				// in front of it (.kb/readtables.md). The arm declines to this same call.
 				return singleValue(evalReadCall(cons, env, name));
+			default:
+				return NO_OPERATOR_ARM;
 		}
 		return UNHANDLED;
 	}
@@ -11871,6 +12084,58 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Notes on a call's head that no operator arm, macro or compiler macro claimed its
+	 * name ({@link CallNote}), once the name resolved to its binding in the global
+	 * function namespace.
+	 * @param cons the call
+	 * @param head its head
+	 * @param epoch the {@link #callSiteEpoch} read before the call was classified
+	 * @param properLength the call's length, operator included
+	 * @param function the function the head resolved to
+	 */
+	private void noteCall(LispCons cons, LispSymbol head, int epoch, int properLength, LispVal function) {
+		FunctionCell cell = this.globalEnv.functionCell(head.name());
+		BuiltinCallArity.Shape shape = BuiltinCallArity.of(head.name());
+		if (cell != null && cell.value() == function && (shape == null || shape.accepts(properLength - 1))
+				&& mayNote(head)) {
+			head.evaluatorNote(new CallNote(this.noteOwner, epoch, cell.index(), shape, cons, properLength));
+		}
+	}
+
+	/**
+	 * Whether a head symbol may take a new note for its form: not while it carries a
+	 * current {@link CallNote}, {@link ExpansionNote} or {@link LetNote} of this
+	 * evaluator's for another form. A symbol many forms share -- the reader's backquote
+	 * heads ({@code ReaderSymbols}) -- keeps its first site's, and every other site of it
+	 * asks the name's note or the memo, rather than each overwriting the next.
+	 * @param head the head symbol
+	 * @return whether its note is free to take
+	 */
+	private boolean mayNote(LispSymbol head) {
+		Object note = head.evaluatorNote();
+		int epoch = this.callSiteEpoch;
+		return !(note instanceof CallNote call && call.owner() == this.noteOwner && call.epoch() == epoch)
+				&& !(note instanceof ExpansionNote expansion && expansion.owner() == this.noteOwner
+						&& expansion.epoch() == epoch)
+				&& !(note instanceof LetNote let && let.owner() == this.noteOwner
+						&& let.epoch() == this.specialVars.epoch());
+	}
+
+	/**
+	 * The binding a call's head names when the head carries this evaluator's current
+	 * {@link CallNote} and the call's count is one the name's shape accepts.
+	 * @param head the call's head
+	 * @param properLength the call form's length, operator included
+	 * @return the binding, or null when the call is to be classified
+	 */
+	private FunctionCell.@Nullable Binding notedBinding(LispSymbol head, int properLength) {
+		return head.evaluatorNote() instanceof CallNote note && note.owner() == this.noteOwner
+				&& note.epoch() == this.callSiteEpoch
+				&& (note.shape() == null || note.shape().accepts(properLength - 1))
+						? this.globalEnv.functionCellAt(note.cell()).binding() : null;
+	}
+
+	/**
 	 * The expansion of a built-in macro form through {@link #builtinMacroExpansions}:
 	 * computed once per call site and re-evaluated thereafter, like a {@code defmacro}
 	 * call ({@link #expandUserMacro}) and like the compile backends. Callers may only
@@ -11887,15 +12152,51 @@ public final class LispEvaluator {
 	 * @return the (memoized) expansion
 	 */
 	private LispVal builtinMacroExpansion(LispCons cons, java.util.function.Function<LispCons, LispVal> expander) {
-		LispVal cached = this.builtinMacroExpansions.get(cons);
-		if (cached != null) {
-			return cached;
+		return builtinMacroExpansion(cons, expander, true);
+	}
+
+	/**
+	 * {@link #builtinMacroExpansion(LispCons, java.util.function.Function)}, noting the
+	 * expansion on the form's head ({@link ExpansionNote}) unless the arm does more than
+	 * expand on every evaluation, which a call the note answers would skip.
+	 * @param cons the macro call form
+	 * @param expander the pure syntactic expansion of one built-in macro
+	 * @param noted whether the arm is the expansion alone
+	 * @return the (memoized) expansion
+	 */
+	private LispVal builtinMacroExpansion(LispCons cons, java.util.function.Function<LispCons, LispVal> expander,
+			boolean noted) {
+		int epoch = this.callSiteEpoch;
+		LispVal expansion = this.builtinMacroExpansions.get(cons);
+		if (expansion == null) {
+			LispVal wrongCount = cons.car() instanceof LispSymbol head
+					? wrongCountCall(cons, head.name(), cons.properLength()) : null;
+			expansion = wrongCount != null ? wrongCount : expander.apply(cons);
+			this.builtinMacroExpansions.put(cons, expansion);
 		}
-		LispVal wrongCount = cons.car() instanceof LispSymbol head
-				? wrongCountCall(cons, head.name(), cons.properLength()) : null;
-		LispVal expansion = wrongCount != null ? wrongCount : expander.apply(cons);
-		this.builtinMacroExpansions.put(cons, expansion);
+		if (noted && cons.car() instanceof LispSymbol head && mayNote(head)) {
+			head.evaluatorNote(new ExpansionNote(this.noteOwner, epoch, cons, expansion, false));
+		}
 		return expansion;
+	}
+
+	/**
+	 * A macro call's memoized expansion, kept on the call's head symbol
+	 * ({@link LispSymbol#evaluatorNote}) like a {@link CallNote}: {@link #evalCons}
+	 * answers a form whose head carries a current one with the expansion before it
+	 * classifies the operator, without a probe of the memo tables, whose entries miss the
+	 * cache on a big program ({@code .kb/interpreter-expansion-memo.md}, "The call-site
+	 * note"). Made only where the arm does nothing on each evaluation but expand, and
+	 * dropped by the {@link #callSiteEpoch} -- the macro tables, the methoded built-ins.
+	 *
+	 * @param owner the {@link #noteOwner} of the evaluator that made it
+	 * @param epoch the {@link #callSiteEpoch} it was made under
+	 * @param form the call, compared by identity: a head symbol two forms share notes one
+	 * @param expansion its expansion
+	 * @param userMacro whether a user macro expanded it, which a top-level form's call
+	 * evaluates as top-level forms instead
+	 */
+	private record ExpansionNote(Object owner, int epoch, LispCons form, LispVal expansion, boolean userMacro) {
 	}
 
 	/**
@@ -12793,6 +13094,7 @@ public final class LispEvaluator {
 				producers.put(genericName, LispMacroExpander.shadowedDispatcherName(genericName));
 				this.methodedProducerDispatch = Map.copyOf(producers);
 			}
+			bumpCallSiteEpoch();
 		}
 		return internal;
 	}
@@ -12910,6 +13212,7 @@ public final class LispEvaluator {
 		catch (RuntimeException ex) {
 			this.compilerMacros.remove(name.name());
 		}
+		bumpCallSiteEpoch();
 		return name;
 	}
 
@@ -13327,6 +13630,7 @@ public final class LispEvaluator {
 	private void putUserMacro(String name, UserMacro macro) {
 		this.userMacros.put(name, macro);
 		this.macroTableEpoch++;
+		bumpCallSiteEpoch();
 	}
 
 	/**
@@ -13336,6 +13640,7 @@ public final class LispEvaluator {
 	private void removeUserMacro(String name) {
 		if (this.userMacros.remove(name) != null) {
 			this.macroTableEpoch++;
+			bumpCallSiteEpoch();
 		}
 	}
 
@@ -13562,6 +13867,7 @@ public final class LispEvaluator {
 	public @Nullable Object pushLocalMacro(LispSymbol name, LispVal paramForm, List<LispVal> body) {
 		UserMacro previous = this.userMacros.get(name.name());
 		this.userMacros.put(name.name(), makeUserMacro(LispNames.MACROLET, name, paramForm, body, this.globalEnv));
+		bumpCallSiteEpoch();
 		return previous;
 	}
 
@@ -13595,6 +13901,7 @@ public final class LispEvaluator {
 		else {
 			this.userMacros.remove(name);
 		}
+		bumpCallSiteEpoch();
 	}
 
 	/**
@@ -14535,6 +14842,25 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * The closure a {@code funcall} or {@code apply} of a function value runs in
+	 * {@link #evalCons}'s frame: the value itself when it is one, the current dispatcher
+	 * when it is a generic function's value ({@link #genericFunctionValues}, which calls
+	 * nothing else) and one is installed, else null for the built-in to apply.
+	 * @param value the function value
+	 * @return the closure, or null
+	 */
+	private @Nullable LispLambda closureCalled(LispVal value) {
+		if (value instanceof LispLambda lambda) {
+			return lambda;
+		}
+		if (value instanceof LispFunction function && this.genericFunctionValues.get(function.name()) == function
+				&& this.genericDispatchers.get(function.name()) instanceof LispLambda dispatcher) {
+			return dispatcher;
+		}
+		return null;
+	}
+
+	/**
 	 * The value of a name in the function namespace, as {@code #'name} and
 	 * {@code symbol-function} answer it. A GENERIC function's is late-bound: defmethod
 	 * REDEFINES the dispatcher under the name (evalDefmethod), so a captured snapshot
@@ -14572,8 +14898,25 @@ public final class LispEvaluator {
 	 * keyword. See {@code find-package}.
 	 */
 	private static LispSymbol packageKeyword(String canonicalName) {
-		return new LispSymbol(":" + canonicalName.toUpperCase(java.util.Locale.ROOT));
+		LispSymbol known = PACKAGE_KEYWORDS.get(canonicalName);
+		if (known == null) {
+			known = new LispSymbol(":" + canonicalName.toUpperCase(java.util.Locale.ROOT));
+			if (PACKAGE_KEYWORDS.size() < PACKAGE_KEYWORD_LIMIT) {
+				PACKAGE_KEYWORDS.put(canonicalName, known);
+			}
+		}
+		return known;
 	}
+
+	/**
+	 * {@link #packageKeyword}'s answers by canonical name: {@code symbol-package} asks
+	 * one per call, and fset's {@code compare} asks two per pair of symbols. One per
+	 * package a program names; a program naming more than the limit builds the rest per
+	 * call.
+	 */
+	private static final java.util.concurrent.ConcurrentHashMap<String, LispSymbol> PACKAGE_KEYWORDS = new java.util.concurrent.ConcurrentHashMap<>();
+
+	private static final int PACKAGE_KEYWORD_LIMIT = 4096;
 
 	/** A list of package VALUES (the {@code find-package} keyword shape) from names. */
 	private static LispVal packageKeywordList(java.util.Collection<String> names) {
@@ -14925,7 +15268,11 @@ public final class LispEvaluator {
 	}
 
 	private static int requireSlotIndex(String name, LispInstance inst, List<LispVal> args) {
-		if (args.size() < 2 || !(args.get(1) instanceof LispInteger idx)) {
+		return requireSlotIndex(name, inst, args.size() < 2 ? null : args.get(1));
+	}
+
+	private static int requireSlotIndex(String name, LispInstance inst, @Nullable LispVal index) {
+		if (!(index instanceof LispInteger idx)) {
 			throw new LispEvalException(name + " expects a slot index");
 		}
 		long k = idx.value();
@@ -16124,31 +16471,64 @@ public final class LispEvaluator {
 	 * @return the body's scope, or null
 	 */
 	private @Nullable Environment lexicalLet(LispCons cons, Environment env) {
-		if (!(cons.cdr() instanceof LispCons bindingsCell)) {
-			return null;
+		LispVal bindings;
+		Set<String> declared;
+		if (cons.car() instanceof LispSymbol head && head.evaluatorNote() instanceof LetNote note && note.form() == cons
+				&& note.owner() == this.noteOwner && note.epoch() == this.specialVars.epoch()) {
+			// A let whose head notes its bindings are all lexical (LetNote).
+			bindings = note.bindings();
+			declared = note.declared();
 		}
-		LispVal bindings = LispMacroExpander.normalizeBindingList(bindingsCell.car());
-		if (!(bindings instanceof LispNil) && !(bindings instanceof LispCons)) {
-			return null;
+		else {
+			int epoch = this.specialVars.epoch();
+			if (!(cons.cdr() instanceof LispCons bindingsCell)) {
+				return null;
+			}
+			bindings = LispMacroExpander.normalizeBindingList(bindingsCell.car());
+			if (!(bindings instanceof LispNil) && !(bindings instanceof LispCons)) {
+				return null;
+			}
+			declared = declaredSpecials(bindingsCell.cdr(), false);
+			for (LispVal entry = bindings; entry instanceof LispCons cell; entry = cell.cdr()) {
+				if (!(cell.car() instanceof LispCons pair) || !(pair.car() instanceof LispSymbol name)
+						|| !(pair.cdr() instanceof LispCons)) {
+					return null;
+				}
+				if (LispNames.PACKAGE_VAR.equals(name.name()) || isSpecial(name) || declared.contains(name.name())) {
+					return null;
+				}
+			}
+			if (cons.car() instanceof LispSymbol head && mayNote(head)) {
+				head.evaluatorNote(new LetNote(this.noteOwner, epoch, cons, bindings, declared));
+			}
 		}
-		Set<String> declared = declaredSpecials(bindingsCell.cdr(), false);
+		int count = 0;
 		for (LispVal entry = bindings; entry instanceof LispCons cell; entry = cell.cdr()) {
-			if (!(cell.car() instanceof LispCons pair) || !(pair.car() instanceof LispSymbol name)
-					|| !(pair.cdr() instanceof LispCons)) {
-				return null;
-			}
-			if (LispNames.PACKAGE_VAR.equals(name.name()) || this.specialVars.contains(name.name())
-					|| declared.contains(name.name())) {
-				return null;
-			}
+			count++;
 		}
-		Environment letEnv = new Environment(env);
+		Environment letEnv = new Environment(env, count);
 		for (LispVal entry = bindings; entry instanceof LispCons cell; entry = cell.cdr()) {
 			LispCons pair = (LispCons) cell.car();
 			letEnv.define(((LispSymbol) pair.car()).name(), eval(((LispCons) pair.cdr()).car(), env));
 		}
 		markDeclaredSpecials(declared, letEnv);
 		return letEnv;
+	}
+
+	/**
+	 * What {@link #lexicalLet} found of a {@code let} form whose every binding is
+	 * lexical, kept on its head symbol ({@link LispSymbol#evaluatorNote}) like a
+	 * {@link CallNote}: the normalized binding list and the body's declared specials,
+	 * which hold for the form, and the lexical verdict, which holds until the next
+	 * proclamation ({@link CountedNames#epoch}).
+	 *
+	 * @param owner the {@link #noteOwner} of the evaluator that made it
+	 * @param epoch the {@link #specialVars} epoch it was made under
+	 * @param form the {@code let} form, compared by identity
+	 * @param bindings its binding list, each entry {@code (name init)}
+	 * @param declared the names its body declares special
+	 */
+	private record LetNote(Object owner, int epoch, LispCons form, LispVal bindings, Set<String> declared) {
 	}
 
 	/**
@@ -16540,19 +16920,18 @@ public final class LispEvaluator {
 	 * active where the callback runs (a {@code handler-bind} handler runs deep inside the
 	 * signalling function's loops). An exit aimed at another block -- or at another
 	 * activation of this one -- propagates.
-	 * @param parts the block form's elements
-	 * @param bodyStart the index of the first body form
+	 * @param forms the block's body forms, a cons chain
 	 * @param blockEnv the scope establishing the block, i.e. its identity
 	 * @return the body's value, or the exiting value
 	 */
-	private LispVal runBlockIn(List<LispVal> parts, int bodyStart, Environment blockEnv) {
+	private LispVal runBlockIn(LispVal forms, Environment blockEnv) {
 		try {
-			if (parts.size() <= bodyStart) {
+			if (!(forms instanceof LispCons)) {
 				return singleValue(LispNil.INSTANCE);
 			}
 			LispVal result = LispNil.INSTANCE;
-			for (int i = bodyStart; i < parts.size(); i++) {
-				result = eval(parts.get(i), blockEnv);
+			for (LispVal rest = forms; rest instanceof LispCons cell; rest = cell.cdr()) {
+				result = eval(cell.car(), blockEnv);
 			}
 			return result;
 		}
@@ -17249,6 +17628,23 @@ public final class LispEvaluator {
 	 * ({@link LambdaLists#expand(LispVal, List, boolean, String)}).
 	 */
 	private LispVal evalLambdaForm(LispCons cons, Environment env, @Nullable String functionName) {
+		LambdaLists.Expanded shape = functionName == null ? this.lambdaShapes.get(cons) : null;
+		if (shape == null) {
+			shape = lambdaShape(cons, functionName);
+			if (functionName == null) {
+				this.lambdaShapes.put(cons, shape);
+			}
+		}
+		return singleValue(
+				new LispLambda(shape.required(), shape.rest(), shape.body(), env, null, false, readPackageOf(env)));
+	}
+
+	/**
+	 * A {@code lambda} form's parameters and body as every closure of it has them:
+	 * checked against the {@code await} placement rules, its tail settled, its lambda
+	 * list desugared ({@link #evalLambdaForm}).
+	 */
+	private LambdaLists.Expanded lambdaShape(LispCons cons, @Nullable String functionName) {
 		checkAwaitPlacement(cons);
 		List<LispVal> parts = cons.toList();
 		// No lite return-from rewrite (and no block wrap): CL lambdas establish no
@@ -17266,10 +17662,16 @@ public final class LispEvaluator {
 				body = settledBody;
 			}
 		}
-		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(1), body, false, functionName);
-		return singleValue(new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env, null, false,
-				readPackageOf(env)));
+		return LambdaLists.expand(parts.get(1), body, false, functionName);
 	}
+
+	/**
+	 * {@link #lambdaShape}'s answers, by the {@code lambda} form's cons: a closure is
+	 * made on every evaluation of its form, from the same parameters and body. Nothing
+	 * invalidates it: the shape is a function of the form, its settled tail a wrapper a
+	 * later {@code defmethod} rewrites in place ({@link #settledLambdaTail}).
+	 */
+	private final FormMemo<LambdaLists.Expanded> lambdaShapes = new FormMemo<>();
 
 	/**
 	 * What a lambda created in {@code env} records as {@link LispLambda#readPackage}: the
@@ -18732,13 +19134,15 @@ public final class LispEvaluator {
 		return pushed;
 	}
 
-	private static @Nullable List<LispVal> soleBlockForm(List<LispVal> body) {
+	/**
+	 * The {@code (name forms...)} cell of a body that is one {@code block} form, or null.
+	 */
+	private static @Nullable LispCons soleBlockForm(List<LispVal> body) {
 		if (body.size() != 1 || !(body.get(0) instanceof LispCons form)
 				|| !(form.car() instanceof LispSymbol head && LispNames.BLOCK.equals(head.name()))) {
 			return null;
 		}
-		List<LispVal> parts = form.toList();
-		return parts.size() >= 2 ? parts : null;
+		return form.cdr() instanceof LispCons nameCell ? nameCell : null;
 	}
 
 	private LispVal apply(LispVal function, List<LispVal> args, Environment env) {
@@ -18815,14 +19219,14 @@ public final class LispEvaluator {
 					: null;
 			Supplier<LispVal> resume;
 			try {
-				List<LispVal> blockForm = soleBlockForm(lambda.body());
-				if (blockForm != null) {
+				LispCons blockNameCell = soleBlockForm(lambda.body());
+				if (blockNameCell != null) {
 					// A defun/defmethod body IS one block form. Its block runs in the
 					// call's own scope -- fresh, private to this activation, and covering
 					// exactly the block's lexical extent, so it can BE the block's
 					// identity: the commonest call still allocates one scope, not two.
-					lambdaEnv.installBlock(blockName(blockForm.get(1)));
-					return runBlockIn(blockForm, 2, lambdaEnv);
+					lambdaEnv.installBlock(blockName(blockNameCell.car()));
+					return runBlockIn(blockNameCell.cdr(), lambdaEnv);
 				}
 				LispVal result = LispNil.INSTANCE;
 				for (LispVal bodyExpr : lambda.body()) {

@@ -520,7 +520,9 @@ public final class AstOutliner {
 			// that would fill half a run is worth one of its own.
 			boolean listCall = LispNames.LIST.equals(head.name());
 			int smallest = listCall ? Math.max(MIN_CUT_NODES, budget / 2) : MIN_CUT_NODES;
-			Map<Child, LispVal> replacements = new HashMap<>();
+			// Keyed by position, never by the record's structural hash: that walks the
+			// child's form, and a list call of thousands of arguments is one child.
+			Map<Child, LispVal> replacements = new IdentityHashMap<>();
 			int kept = nodes;
 			for (Child child : children) {
 				if (kept <= budget) {

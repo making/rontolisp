@@ -20,6 +20,18 @@ import org.jspecify.annotations.Nullable;
 public final class PackageRegistry {
 
 	/**
+	 * {@link #splitQualified}'s answers for qualified names, a pure function of the name:
+	 * the interpreter asks it of the same names on every step it takes
+	 * ({@code symbol-name}, {@code symbol-package}, the class registry's keys), and a
+	 * split is two substrings and a lookup of the fresh package part. Cleared whole at
+	 * {@link #SPLIT_CACHE_LIMIT} names, which only a program interning names without
+	 * bound reaches.
+	 */
+	private static final java.util.concurrent.ConcurrentHashMap<String, QualifiedName> SPLITS = new java.util.concurrent.ConcurrentHashMap<>();
+
+	private static final int SPLIT_CACHE_LIMIT = 1 << 16;
+
+	/**
 	 * The {@code cl} special forms: operators handled natively by the evaluator and the
 	 * compilers that have no function value ({@code #'if} is an error).
 	 */
@@ -2322,11 +2334,19 @@ public final class PackageRegistry {
 			// No colon, or a leading colon (keyword): not package-qualified.
 			return null;
 		}
-		String pkg = canonicalBuiltinName(name.substring(name.charAt(0) == GLOBAL_QUALIFIER ? 1 : 0, idx));
-		if (idx + 1 < name.length() && name.charAt(idx + 1) == ':') {
-			return new QualifiedName(pkg, name.substring(idx + 2), true);
+		QualifiedName known = SPLITS.get(name);
+		if (known != null) {
+			return known;
 		}
-		return new QualifiedName(pkg, name.substring(idx + 1), false);
+		String pkg = canonicalBuiltinName(name.substring(name.charAt(0) == GLOBAL_QUALIFIER ? 1 : 0, idx));
+		QualifiedName split = idx + 1 < name.length() && name.charAt(idx + 1) == ':'
+				? new QualifiedName(pkg, name.substring(idx + 2), true)
+				: new QualifiedName(pkg, name.substring(idx + 1), false);
+		if (SPLITS.size() >= SPLIT_CACHE_LIMIT) {
+			SPLITS.clear();
+		}
+		SPLITS.put(name, split);
+		return split;
 	}
 
 	/**

@@ -19891,14 +19891,19 @@ class LispEvaluatorTest {
 	@Test
 	void defclassDefinedAfterMethodExtendsClassDispatch() {
 		// The interpreter regenerates class-specialized dispatchers on defclass, so a
-		// subclass defined AFTER the method still matches it.
+		// subclass defined AFTER the method still matches it, and a standard-object
+		// method its instances; a list method, whose test reads no class, is left alone.
 		assertThat(evalMulti("""
 				(defclass animal () ())
 				(defgeneric speak (x))
 				(defmethod speak ((x animal)) :animal)
+				(defgeneric kind (x))
+				(defmethod kind ((x list)) :list)
+				(defmethod kind ((x standard-object)) :object)
+				(defmethod kind (x) :other)
 				(defclass cat (animal) ())
-				(speak (make-instance 'cat))
-				""").print()).isEqualTo(":ANIMAL");
+				(list (speak (make-instance 'cat)) (kind (make-instance 'cat)) (kind '(1)) (kind 1))
+				""").print()).isEqualTo("(:ANIMAL :OBJECT :LIST :OTHER)");
 	}
 
 	@Test
@@ -24761,11 +24766,38 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void redefiningAMacroReexpandsItsCallSites() {
+	void aCallSiteFollowsWhatItsOperatorBecomes() {
 		// The memoized expansion is only valid for the definitions that produced it.
 		assertThat(evalMulti("(defmacro ume-v () 1)" + " (defun ume-read () (ume-v))" + " (defvar ume-first (ume-read))"
 				+ " (defmacro ume-v () 2)" + " (list ume-first (ume-read))")
 			.print()).isEqualTo("(1 2)");
+		// What a site's head notes (.kb/interpreter-expansion-memo.md, "The call-site
+		// note")
+		// holds only as long as what it was made of: a function redefined, a function
+		// name
+		// that becomes a macro, a compiler macro defined later, a generic's value called
+		// after a new method, a let's variable proclaimed special, a struct reader on a
+		// non-instance and redefined.
+		assertThat(evalMulti("""
+				(defun csn-g () 1) (defun csn-call-g () (csn-g)) (defvar csn-a (csn-call-g))
+				(defun csn-g () 2)
+				(defun csn-f (x) (list :fn x)) (defun csn-call-f () (csn-f 1)) (defvar csn-b (csn-call-f))
+				(defmacro csn-f (x) `(list :macro ,x))
+				(defun csn-c (x) x) (defun csn-call-c () (csn-c 1)) (defvar csn-d (csn-call-c))
+				(define-compiler-macro csn-c (x) `(list :compiler ,x))
+				(defgeneric csn-gf (x)) (defmethod csn-gf ((x integer)) :int) (defvar csn-fv #'csn-gf)
+				(defun csn-call-fv (v) (funcall csn-fv v)) (defvar csn-e (csn-call-fv 1))
+				(defmethod csn-gf ((x string)) :str)
+				(defun csn-read-v () (if (boundp 'csn-v) csn-v :unbound))
+				(defun csn-let () (let ((csn-v 1)) (csn-read-v))) (defvar csn-h (csn-let))
+				(defvar csn-v 0)
+				(defstruct csn-pt x) (defun csn-px (p) (csn-pt-x p))
+				(defvar csn-i (list (csn-px (make-csn-pt :x 7)) (handler-case (csn-px 5) (type-error () :type-error))))
+				(defun csn-pt-x (p) (declare (ignore p)) 42)
+				(list csn-a (csn-call-g) csn-b (csn-call-f) csn-d (csn-call-c) csn-e (csn-call-fv "s") csn-h (csn-let)
+				      csn-i (csn-px (make-csn-pt :x 7)))
+				""").print())
+			.isEqualTo("(1 2 (:FN 1) (:MACRO 1) 1 (:COMPILER 1) :INT :STR :UNBOUND 1 (7 :TYPE-ERROR) 42)");
 	}
 
 	@Test

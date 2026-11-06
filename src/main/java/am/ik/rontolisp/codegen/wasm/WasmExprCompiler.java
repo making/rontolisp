@@ -2750,7 +2750,7 @@ final class WasmExprCompiler {
 			}
 			case LispNames.INTEGER_LENGTH -> WasmBitwiseCompiler.compileIntegerLength(cons, ctx);
 			case LispNames.LOGBITP -> WasmBitwiseCompiler.compileLogbitp(cons, ctx);
-			case LispNames.LIST_STAR -> compileExpansion(LispMacroExpander.expandListStar(cons), ctx, tail);
+			case LispNames.LIST_STAR -> WasmListCompiler.compileStar(cons, ctx, tail);
 			case LispNames.ACONS -> compileExpansion(LispMacroExpander.expandAcons(cons), ctx, tail);
 			case LispNames.ENDP -> WasmNullPredCompiler.compileEndp(cons, ctx);
 			case LispNames.CHECK_LIST_INTERNAL -> WasmNullPredCompiler.compileCheckList(cons, ctx);
