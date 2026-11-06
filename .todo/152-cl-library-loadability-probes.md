@@ -165,6 +165,17 @@ verification against the actual Quicklisp dist at probe time)
   - `clsql`: i07 (`uffi`), i06. Further unmeasured.
   - Not usable as probes: `april` (its `cape` dependency is not in the dist index); `cl-protobufs` and
     `numcl` (not in the index); `iolib` (needs libfixposix, not installed).
+- **Probe round 5 (2026-11-06), ten libraries no earlier round touched; interpreter first, compared
+  with SBCL 2.2.9 over the same cached releases.**
+  - Load and match SBCL: `chanl` (bounded/unbounded channels, `select`, `pexec`; JVM too),
+    `deploy` (`deploy-op` over `program-op`; `asdf:make` refuses, i83).
+  - Load, wrong result: `cl-conspack` (doubles encoded as float32, i90; JVM the same).
+  - Interpreter only: `snooze` (`handle-request` as SBCL; JVM i91).
+  - Do not load: `cl-unification` (i81), `generic-cl` (i82, then i88), `sycamore` (i85; past it
+    matches SBCL), `petalisp` (i86 in queues, i89, then i90 in typo), `40ants-doc` (i87; past it
+    loads), `osicat` (cffi-grovel refused, i84).
+  - Side results: `lparallel` loads now (its h37 stop is gone); `asdf:load-system` of a
+    `:defsystem-depends-on` that only Quicklisp holds is `.todo/418`.
 
 ## Deliverable
 
