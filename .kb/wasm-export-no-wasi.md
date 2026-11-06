@@ -140,9 +140,9 @@ sequence, which is inside the CL contract. The entropy API is deliberately NOT s
   the setter before `_initialize` and once per request. Emitted independently of the seed hook
   (`--host-random` retires that one and leaves this one), sharing its type; NOT on the reactor
   component (different refusal message via `Ctx.reactorComponent`). **`sleep` refuses on `--no-wasi`**
-  -- Preview 1 elapses an interval by SPINNING on a clock that cannot advance during a call.
-  Re-evaluation trigger: a clock that advances DURING a call would be a `--host-clock` flag
-  forwarding `clock_time_get` to an `env.clock_time_get` import, at the same cost to zero imports.
+  -- it imports no timer (Preview 1 blocks in `poll_oneoff`) and its clock cannot advance during
+  a call. Re-evaluation trigger: a host timer would be an `env` import (a `--host-clock` flag), at
+  the same cost to zero imports.
 - **`--host-random`** (first opt-in out of the zero-import contract): the module-local generator is
   SEEDED from the host on its first draw and `rontolisp:random-bytes` takes the host's bytes one at a
   time -- the property the flag exists for. Slot `FUNC_RANDOM_GET` becomes a forwarding body
