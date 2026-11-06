@@ -453,8 +453,23 @@ public enum SourceLanguage {
 	 * @return the read
 	 */
 	public static Forms readForms(String source, Features features, @Nullable String file) {
+		return readFormsFrom(source, features, file, 0);
+	}
+
+	/**
+	 * {@link #readForms} resumed at an offset of the source: the read of a form again
+	 * where a reader macro function read it, in another image (the compile path's
+	 * macro-time pass after its read-time image, {@code ReaderMacroReads}).
+	 * @param source the program text
+	 * @param features the features the guards test there, as {@link Forms#features}
+	 * answered them
+	 * @param file the origin file, or {@code null} when unknown
+	 * @param start the UTF-16 offset the read resumes at
+	 * @return the read
+	 */
+	public static Forms readFormsFrom(String source, Features features, @Nullable String file, int start) {
 		LispReader.Forms forms = SourceProvenance.readingProgramSource(
-				() -> LispReader.forms(source, features, usesReadEvalMarkers(source), file, null, 0, true));
+				() -> LispReader.forms(source, features, usesReadEvalMarkers(source), file, null, start, true));
 		return new Forms(forms, LABEL_DEFINITION.matcher(source).find());
 	}
 
@@ -494,6 +509,20 @@ public enum SourceLanguage {
 		public @Nullable LispVal next(am.ik.rontolisp.reader.@Nullable ReadSyntax syntax, List<String> pushed) {
 			this.forms.widenFeatures(pushed);
 			return next(syntax);
+		}
+
+		/**
+		 * {@return where the read stands: just behind the last form read}
+		 */
+		public int position() {
+			return this.forms.position();
+		}
+
+		/**
+		 * {@return the features the guards of the forms still to read test}
+		 */
+		public Features features() {
+			return this.forms.features();
 		}
 
 	}

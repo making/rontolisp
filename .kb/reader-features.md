@@ -218,7 +218,9 @@ fixpoint.
   `Session.acceptTopLevel` runs the push whatever its `eval-when` situations, as a literal one announces
   whatever its situations, so the four agree; real `compile-file` would not run a bare one. Same file only:
   it reaches another file only through `*features*` at run time, as before. An image cannot run a form
-  needing what a later pass splices, and that push stays unseen on a compile path. ci-spec
+  needing what a later pass splices, and that push stays unseen on a compile path -- but for ASDF's
+  answers about systems, which the image takes from the compile path's registry since 2026-11-06
+  (coalton's eclector probe, [readtables.md](readtables.md), "The compile paths' read"). ci-spec
   `reader-features-own-push-is-visible`.
 
 Pinned by `LispReaderTest.readOwnFeaturePush*`,

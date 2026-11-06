@@ -28241,6 +28241,29 @@ cases:
       ((3 10))
       ((:URI "http://x/") NIL T T)
       ((FOO |foo| |Foo|) !FOO "[X]" T)
+  - name: a-reader-macro-reads-into-the-compiling-image
+    source: |
+      ;; compile-file reads in the image it compiles in, so what a reader macro function
+      ;; leaves there is what a later macro finds (coalton's coalton-toplevel stores its
+      ;; definitions so). The compile paths read in an image of their own and read such a
+      ;; form again where the macros expand.
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (defvar *ci-rmi-standard* *readtable*)
+        (defvar *ci-rmi-seen* nil)
+        (setf *readtable* (copy-readtable nil))
+        (set-macro-character #\!
+          (lambda (s c) (declare (ignore c))
+            (let ((name (read s t nil t)))
+              (push name *ci-rmi-seen*)
+              (list 'quote name)))))
+      (print (list !alpha !beta))
+      (defmacro ci-rmi-seen () (list 'quote (reverse *ci-rmi-seen*)))
+      (print (ci-rmi-seen))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (setf *readtable* *ci-rmi-standard*))
+    expected: |
+      (ALPHA BETA)
+      (ALPHA BETA)
   # Shapes parenscript, jonathan and rutils (cl-redis) load through: a package's own
   # `while` beside rontolisp's, a go in a return-from's value form, a ratio specializer,
   # a built-in macro aliased (under a keyword too), a (:type list) struct.

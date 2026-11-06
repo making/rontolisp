@@ -639,6 +639,15 @@ public final class LispReader {
 		}
 
 		/**
+		 * The features the guards of the data still to read test: the source's, widened
+		 * by what it announces and by what the forms already read pushed.
+		 * @return the features
+		 */
+		public Features features() {
+			return this.lexer.features();
+		}
+
+		/**
 		 * Reads datums up to {@code delimiter}, which is consumed -- the body of
 		 * {@code read-delimited-list}.
 		 * @param syntax the readtable to read with

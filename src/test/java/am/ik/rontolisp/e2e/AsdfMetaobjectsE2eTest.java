@@ -30,6 +30,9 @@ import am.ik.rontolisp.AsdfExports;
  * file is READ (the {@code platform} defun) without ever becoming a sideway dependency,
  * and {@code asdf:system-relative-pathname} has a runtime form on the compile paths --
  * the relative argument is a variable there, so the compile-time fold cannot answer it.
+ * A feature the component's compile pushes from {@code asdf:component-version} decides
+ * the guards read after it (coalton's eclector probe; the compile paths' read-time image
+ * answers from their registry), the {@code build} defun.
  *
  * <p>
  * The {@code .asd} runs as Lisp ({@code .kb/asdf.md}, "What a {@code .asd} may contain"):
@@ -285,7 +288,7 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 
 	private static final List<String> EXPECTED = Stream.concat(Stream.of("T", "T", "NIL", "T", "\"meta-demo\"",
 			"(\"one\" \"m\")", "NIL", "T", "NIL", "T", "T", "(\"meta-demo\")", "\"1.2.3\"", "\"2.5.0\"", ":UNIX",
-			":SMALL", ":TOOL", ":RELATIVE-OK", ":SYSTEM", ":FILE", "NIL", "(NIL \"3.3.7\")",
+			"(:SMALL :NEW)", ":TOOL", ":RELATIVE-OK", ":SYSTEM", ":FILE", "NIL", "(NIL \"3.3.7\")",
 			"(\"meta-demo-tool\" \"meta-demo-tool/hook\" \"meta-demo\" \"meta-demo/tests\" \"meta-demo/hooks\""
 					+ " \"meta-demo/perform\" \"meta-demo/nested\" \"meta-demo/weak\" \"meta-demo/hooked\""
 					+ " \"trivial-features\")",

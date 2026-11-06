@@ -28,6 +28,7 @@ import am.ik.rontolisp.eval.BuiltinSystems;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.ReadTimeImage;
+import am.ik.rontolisp.eval.ReaderMacroReads;
 import am.ik.rontolisp.eval.ShimLibraries;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
@@ -256,6 +257,7 @@ public final class LoadInliner {
 			List<String> systemPath, Features features, DistClient dists, SourceStandards standards,
 			@Nullable String entryFile) {
 		List<LispVal> result = new ArrayList<>();
+		ReaderMacroReads.clear();
 		// The system registry and the loaded set are insertion-ordered: the baked
 		// %asdf-registry% (AsdfRuntimeLibrary) is emitted from them, and the emitted
 		// program must be deterministic (.kb/emitted-output-determinism.md).
@@ -414,7 +416,8 @@ public final class LoadInliner {
 		Reading reading = ctx.reading();
 		if (reading.image == null
 				&& (ReadTimeImage.changesSyntax(source) || FeaturePushes.computesAPush(source, ctx.features(), path))) {
-			reading.image = new ReadTimeImage(reading.features);
+			reading.image = new ReadTimeImage(reading.features, ctx.systems(), ctx.systemPackages(),
+					ctx.loadedSystems());
 		}
 		SourceLanguage.Forms forms = SourceLanguage.readForms(source, ctx.features(), path);
 		List<Set<String>> featuresAtOpen = new ArrayList<>(1);
@@ -427,7 +430,17 @@ public final class LoadInliner {
 			if (featuresAtOpen.isEmpty()) {
 				featuresAtOpen.add(image.features());
 			}
-			return forms.next(syntax, image.featuresPushedSince(featuresAtOpen.get(0)));
+			int calls = image.readerMacroCalls();
+			int start = forms.position();
+			LispVal form = forms.next(syntax, image.featuresPushedSince(featuresAtOpen.get(0)));
+			// A form of the program's own a reader macro function read: the macro-time
+			// pass reads it again, for what the read leaves in the compiling image
+			// (ReaderMacroReads). A system's forms are loaded, not read again.
+			if (form != null && image.readerMacroCalls() != calls && ctx.loadingSystems().isEmpty()) {
+				ReaderMacroReads.record(form,
+						new ReaderMacroReads.Origin(source, path, forms.features(), start, forms.position()));
+			}
+			return form;
 		};
 	}
 
