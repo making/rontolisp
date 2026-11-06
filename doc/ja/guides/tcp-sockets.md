@@ -761,15 +761,15 @@ rontolisp のソケットはストリームハンドルそのものなので、�
 
 - **TCP のみ。** `:protocol :datagram`(UDP)はエラーを通知し、
   `socket-send` / `socket-receive` / `socket-shutdown` は存在しません。
-- **インタープリタと JVM では型付きコンディション。**
+- **全バックエンドで型付きコンディション。**
   `socket-connect`/`socket-listen`/`socket-accept` の失敗は型付きの
   `usocket:socket-error` を通知します(メッセージは保持)。そのため
   `(handler-case (usocket:socket-connect ...) (usocket:socket-error (e) ...))`
-  が動作します(ネイティブ実行ファイルでも同様です)。サブタイプ(`connection-refused-error` など)も定義されますが、
-  再通知は常に `socket-error` を使います(そちらを捕捉してください)。WASM
-  コンポーネントバックエンドでは connect/accept の失敗はシグナルせず `nil`
-  ハンドルを返すため、そこでは `handler-case` パターンには捕捉対象がありません
-  (代わりにハンドルの `nil` を判定してください)。
+  がインタープリタ、JVM、WASM コンポーネント、ネイティブ実行ファイルで動作します。
+  コンポーネントでは `rontolisp:tcp-*` 組み込みが `nil` を返し、シムがそれを
+  通知に変えるため、メッセージにホスト側の理由は含まれません
+  (`tcp-connect: cannot connect to 127.0.0.1:1`)。サブタイプ(`connection-refused-error` など)も定義されますが、
+  再通知は常に `socket-error` を使います(そちらを捕捉してください)。
 - **`socket-option` は `:receive-timeout` のみをサポートします。**
   `(setf (usocket:socket-option sock :receive-timeout) seconds)` は
   インタープリタ、JVM、WASM コンポーネント、ネイティブ実行ファイルのいずれでも

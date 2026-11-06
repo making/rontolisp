@@ -73,6 +73,9 @@
 ;; already-connected stream handle to TLS against :hostname. :verify defaults
 ;; from the global context exactly like upstream; nil skips certificate and
 ;; hostname verification (tls-upgrade's :insecure), any other value verifies.
+;; It answers a stream or signals, as upstream does: on the WASM component a
+;; failed handshake is tls-upgrade's nil, which a client would take for a
+;; stream (dexador reconnects for ever), so the shim signals it.
 (defun cl+ssl:make-ssl-client-stream (stream &key hostname
                                       (verify (cl+ssl:ssl-check-verify-p)) key
                                       certificate password &allow-other-keys)
@@ -82,4 +85,5 @@
   (unless hostname
     (error
      "cl+ssl:make-ssl-client-stream: :hostname is required (the name the server certificate is verified against, and the SNI sent)"))
-  (rontolisp:tls-upgrade stream hostname :insecure (if verify nil t)))
+  (or (rontolisp:tls-upgrade stream hostname :insecure (if verify nil t))
+   (error "tls-upgrade: cannot upgrade the stream to TLS against ~A" hostname)))

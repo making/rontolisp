@@ -467,17 +467,21 @@ linalg/vec pattern: `eval/usocket.lisp` (canonical package shape) + `eval/Usocke
   interpreter/JVM and in a wasm EH-mode module (every component socket program), pass-through
   otherwise (the source is parsed once and cached for all backends, so the branch cannot be a reader
   feature). The re-signal always uses `socket-error` (`.kb/error-handling.md`).
-- `socket-connect` signals `socket-error` (`tcp-connect: cannot connect to H:P`, the interpreter's
-  text without the host's reason) when `tcp-connect` answers nil, which only the component does
-  (2026-11-06). Before, the nil socket flowed on into the library: cl-postgres given an
-  unresolvable host died as a bare `wasm trap: cast failure`. Pinned by
-  `componentUsocketEchoOverLoopback`.
+- `socket-connect`, `socket-listen` and `socket-accept` signal `socket-error` when their primitive
+  answers nil, which only the component does (2026-11-06; `usocket::%usock-failed`, the
+  interpreter's text without the host's reason: `tcp-connect: cannot connect to H:P`,
+  `tcp-listen: cannot listen on H|*:P`, `tcp-accept: no connection was accepted`). Before, the nil
+  socket flowed on into the library: cl-postgres given an unresolvable host died as a bare
+  `wasm trap: cast failure`, and dexador against a refused port reconnected until wasmtime's
+  resource table was full (its `(unless (open-stream-p stream) ...)` retry loop). Pinned by
+  `componentUsocketEchoOverLoopback` (connect).
 - Not reproduced (no substrate): UDP, `socket-shutdown`, wait-list objects, `socket-server`.
 
 ## The cl+ssl shim (`cl+ssl` package, `cl-ssl.lisp` + `ShimLibraries`)
 Every CL HTTP client reaches TLS through cl+ssl, and the real cl+ssl is a CFFI binding to OpenSSL,
 unloadable here. The shim is the CLIENT side only, over `tls-upgrade` (interpreter, JVM, WASM
-component; Preview 1 keeps the compile error). The `flexi-streams.lisp` pattern: a canonical-shape
+component; on Preview 1, `--native` included, a call-time error). Its one consumer measured end to
+end is dexador ([dexador.md](dexador.md)). The `flexi-streams.lisp` pattern: a canonical-shape
 resource next to `ShimLibraries`, the package seeded in `PackageRegistry`, the system in
 `BuiltinSystems` + `ShimLibraries.RESOURCES` + `resource-config.json`.
 
@@ -488,12 +492,22 @@ resource next to `ShimLibraries`, the package seeded in `PackageRegistry`, the s
   dexador's `dex:*not-verify-ssl*`/`:insecure` lands on `:insecure`.
 - `:hostname` is REQUIRED (verified against, and the SNI); nil signals rather than silently skipping
   verification.
+- **`make-ssl-client-stream` answers a stream or signals, on every backend** (upstream's contract).
+  The component's `tls-upgrade` answers nil for a failed handshake, so the shim signals
+  `tls-upgrade: cannot upgrade the stream to TLS against H` (the interpreter's text without the
+  host's reason). Before (measured 2026-11-06), dexador took the nil for a stream, and its retry
+  loop reconnected until `call stack exhausted`. Pinned by
+  `componentTlsUpgradeAttemptsARealHandshakeAndRejectsAnUntrustedServer` (line 5).
 - What has no backing SIGNALS: client certificates (`:key`/`:certificate`/`:password`,
   `use-certificate-chain-file`) and `make-context :verify-location` CA paths (only `:default`/nil
   pass). **Triggers**: wire `:verify-location` the day the primitive takes a CA path, client certs
   the day `tls-upgrade` grows a client identity.
 - `with-global-context` is an ordinary shim `defmacro`; `ensure-initialized` is a no-op returning t.
   dexador's exact `(:import-from :cl+ssl ...)` list is the export set.
+- The context, the verify default and the refusals are pure Lisp, pinned on all four backends by
+  the standalone ci-spec case `cl-ssl-shim-verify-context-and-refusals` -- standalone because
+  loading cl+ssl makes a component import `wasi:tls` (the standalone component run passes
+  `-S tls=y`) and splices sockets.lisp, which no corpus case should pay.
 
 ## Not supported
 UDP; IPv6 on the WASM component (literals, and a name with only IPv6 addresses); TLS on `--native` and TLS servers on WASM (permanent, client-only
@@ -523,7 +537,7 @@ proposal); mutual TLS; CONNECT timeouts (the OS bounds a TCP connect); `--no-gc`
   A host argument for the directive is a product change this rare flake does not pay for.
 
 ## Pinning tests
-`HandleOperandFixture` (`ThreadTest`/`JvmThreadTest`); `LispEvaluatorTest#tcp*`/`#usocket*`/`#tls*`/`#clSslShim*`;
+`HandleOperandFixture` (`ThreadTest`/`JvmThreadTest`); `LispEvaluatorTest#tcp*`/`#usocket*`/`#tls*`/`#clSslShim*` (the two handshakes);
 `JvmLispCompilerTest#compileAndRunTcp*`/`#compileAndRunUsocket*`/`#compileAndRunTls*`/
 `#compileAndRunClSslShim*` + the wrong-arg-count rejections;
 `WasmLispCompilerTest#tcp*`/`#usocket*`/`#tls*`/`#socketBuiltinsInPreview1ModeAreCallTimeErrors`/`#fetchAndTcpInOneComponentProgramCompiles`/

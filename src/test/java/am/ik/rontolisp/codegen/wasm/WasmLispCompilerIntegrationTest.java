@@ -17328,8 +17328,17 @@ class WasmLispCompilerIntegrationTest {
 					(print (handler-case (rontolisp:tls-upgrade 999 "h" :insecure t)
 					         (error () :insecure-signals)))
 					(print (rontolisp:tls-upgrade 999 "h"))
-					""".formatted(port, port);
-			byte[] componentBytes = compileFetchComponent(program);
+					(asdf:load-system "cl+ssl")
+					(print (handler-case
+					           (cl+ssl:make-ssl-client-stream (usocket:socket-connect "127.0.0.1" %d)
+					                                          :hostname "localhost")
+					         (error (e) (princ-to-string e))))
+					""".formatted(port, port, port);
+			byte[] componentBytes = WasmLispCompiler.builder()
+				.component(true)
+				.build()
+				.compile(am.ik.rontolisp.cli.CompileFrontendAccess.withSystemPath(program, List.of(), true, true)
+					.forms());
 			wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("tls-reject.component.wasm"));
 			return wasmtime.execInContainer("sh", "-c", """
 					cd %s || exit 1
@@ -17356,8 +17365,11 @@ class WasmLispCompilerIntegrationTest {
 		// tls-connect (tcp-connect + tls-upgrade) fails the same way. Line 3: a
 		// non-nil :insecure SIGNALS at run time (the draft has no verification
 		// knob; silently verifying would betray the caller). Line 4: a non-socket
-		// handle answers nil.
-		assertThat(result.getStdout().trim()).isEqualTo("NIL\nNIL\n:INSECURE-SIGNALS\nNIL");
+		// handle answers nil. Line 5: the cl+ssl shim turns that nil into the signal
+		// a client expects of make-ssl-client-stream (dexador took the nil for a
+		// stream and reconnected for ever).
+		assertThat(result.getStdout().trim()).isEqualTo("NIL\nNIL\n:INSECURE-SIGNALS\nNIL\n"
+				+ "\"tls-upgrade: cannot upgrade the stream to TLS against localhost\"");
 	}
 
 	@Test

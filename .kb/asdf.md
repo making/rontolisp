@@ -898,6 +898,17 @@ it: `make-command`, `print-usage`, `parse-command-line`, `getopt` and `run` prin
 on the interpreter, and a real SIGINT prints `Received SIGINT, exiting.` and exits 130, there and
 compiled to the JVM (measured 2026-11-04, the handler's `unwind-protect` cleanup first).
 
+**`eval/TrivialMimesForms`** (pinned by `TrivialMimesE2eTest`, all four, vendored 1.1.0).
+`mime-types.lisp` ends in a top-level `(build-mime-db)`: the first of `/etc/mime.types` and the
+`mime.types` beside its source that exists, else `No MIME.TYPES file found anywhere!`. A compiled
+program runs it at start-up, so it stopped there wherever neither path was readable at RUN time:
+a component without `--dir /etc` (measured 2026-11-06 on unpatched dexador, which every dexador
+program loads), a `--no-wasi` module, a JVM class on a machine without `/etc/mime.types` (macOS
+has none) and away from the build machine's Quicklisp tree. One span: the call becomes "`/etc/mime.types` when
+`probe-file` finds it, else upstream's loop over the bundled file through a LITERAL path", which
+`CompileTimePathnameFolder` inlines (66 KB). `build-mime-db`/`find-mime.types` stay verbatim.
+Decided over documenting `--dir /etc`: that covered neither macOS nor a reactor.
+
 **`eval/AtomicsForms`** (pinned by `AtomicsE2eTest`, all four). atomics picks `cas` with `#+` per
 implementation and ends in `(no-support 'CAS)`, and `atomic-incf`/`atomic-decf` likewise; a macro that
 signals as it expands, so sento stopped at its first `ask` on the interpreter and while compiling on the
