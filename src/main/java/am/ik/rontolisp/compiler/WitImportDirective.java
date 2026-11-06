@@ -511,11 +511,12 @@ public final class WitImportDirective {
 		}
 		// An async built-in is derived from a `type` ALIAS the interface declares to a
 		// stream or a future: `type body-stream = stream<u8>` binds body-stream-new /
-		// -read / -write / -drop-readable / -drop-writable. Like a drop, an async member
-		// is not a WIT function -- it is a rontolisp spelling of the canonical ABI's
-		// stream.*/future.* built-ins, typed by the alias's target -- so it is bound ONLY
-		// when the program names it, and it exists ONLY under --component: the built-ins
-		// are a component-model mechanism no other backend has.
+		// -read / -write / -drop-readable / -drop-writable / -cancel-read (the last a
+		// stream's alone). Like a drop, an async member is not a WIT function -- it is
+		// a rontolisp spelling of the canonical ABI's stream.*/future.* built-ins, typed
+		// by the alias's target -- so it is bound ONLY when the program names it, and it
+		// exists ONLY under --component: the built-ins are a component-model mechanism
+		// no other backend has.
 		for (WitItem item : iface.items()) {
 			if (!(item instanceof WitItem.TypeAlias alias)) {
 				continue;
@@ -552,7 +553,7 @@ public final class WitImportDirective {
 				componentMembers.add(taskReturnBinding(alias.name(), name));
 				continue;
 			}
-			for (String op : ASYNC_OPS) {
+			for (String op : asyncOps(stream)) {
 				String member = alias.name() + "-" + op;
 				if (!allMembers.add(member)) {
 					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
@@ -762,7 +763,8 @@ public final class WitImportDirective {
 				continue;
 			}
 			Scoped target = resolveAliases(alias.target(), resolver, iface);
-			boolean async = target.type() instanceof WitType.StreamOf || target.type() instanceof WitType.FutureOf;
+			boolean stream = target.type() instanceof WitType.StreamOf;
+			boolean async = stream || target.type() instanceof WitType.FutureOf;
 			// lower() checks an alias's target only where it binds the alias's members
 			// (--component, the program naming one), so neither does this: a target
 			// that names no definition is a shape nothing can bind
@@ -774,7 +776,7 @@ public final class WitImportDirective {
 				shape = new WitTypeMapper.Shape(WitTypeMapper.Rep.UNSUPPORTED, null,
 						am.ik.wit.WitPrinter.type(alias.target()));
 			}
-			for (String op : async ? ASYNC_OPS : List.of("task-return")) {
+			for (String op : async ? asyncOps(stream) : List.of("task-return")) {
 				String member = alias.name() + "-" + op;
 				if (!allMembers.add(member)) {
 					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
@@ -1105,8 +1107,17 @@ public final class WitImportDirective {
 
 	// The operations an async (stream/future) type alias binds. `new` returns the
 	// (readable . writable) handle pair; the rest take an end. The set is the same for
-	// both kinds -- a future is a one-shot stream as far as its handle lifecycle goes.
+	// both kinds -- a future is a one-shot stream as far as its handle lifecycle goes --
+	// but for `cancel-read`, a stream's alone: it withdraws a read the async scheduler
+	// left in flight, and only a stream read is ever left so.
 	private static final List<String> ASYNC_OPS = List.of("new", "read", "write", "drop-readable", "drop-writable");
+
+	private static final List<String> STREAM_ASYNC_OPS = List.of("new", "read", "write", "drop-readable",
+			"drop-writable", "cancel-read");
+
+	private static List<String> asyncOps(boolean stream) {
+		return stream ? STREAM_ASYNC_OPS : ASYNC_OPS;
+	}
 
 	// (:async "body-stream" "read" "h:body-stream-read") -- an async built-in binding of
 	// a %component-import form. Like :drop it is a distinct emission kind: a canon
@@ -1122,18 +1133,19 @@ public final class WitImportDirective {
 	// memory) -- EXCEPT a stream of resource handles (wasi:sockets' accept
 	// stream<tcp-socket>), whose 4-byte elements the read built-in lifts as opaque
 	// integer handles; such a stream is read-only for the guest, so only read /
-	// drop-readable bind. A future must be parameterized, and its payload must be a
-	// liftable value (future.read lifts it with the same machinery as a function
-	// result).
+	// cancel-read / drop-readable bind. A future must be parameterized, and its payload
+	// must be a liftable value (future.read lifts it with the same machinery as a
+	// function result).
 	private static void validateAsyncAlias(Scoped target, String witPath, WitLocations locations, WitResolver resolver,
 			WitItem.TypeAlias alias, String member, String op) {
 		if (target.type() instanceof WitType.StreamOf stream) {
 			WitType element = stream.element();
 			if (element != null && isResourceHandle(element, resolver, target.iface())) {
-				if (!"read".equals(op) && !"drop-readable".equals(op)) {
+				if (!"read".equals(op) && !"cancel-read".equals(op) && !"drop-readable".equals(op)) {
 					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(alias) + ": '" + member
 							+ "': the alias '" + alias.name() + "' names a stream of resource handles, which is "
-							+ "read-only for the guest -- only the -read and -drop-readable built-ins bind");
+							+ "read-only for the guest -- only the -read, -cancel-read and -drop-readable built-ins "
+							+ "bind");
 				}
 				return;
 			}

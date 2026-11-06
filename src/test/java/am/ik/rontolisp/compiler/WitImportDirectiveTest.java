@@ -773,8 +773,11 @@ class WitImportDirectiveTest {
 		// --component, like a drop...
 		List<LispVal> unfiltered = WitImportDirective.lower(new Directive(WIT, API, null, null, FieldStyle.CAMEL),
 				iface(ASYNC_ALIAS_BODY), WIT, Backend.WASM_COMPONENT, null, null);
+		// (cancel-read is a stream's alone: no future read is ever left in flight)
 		assertThat(printed(unfiltered)).contains("(:ASYNC \"body-stream\" \"new\"")
-			.contains("(:ASYNC \"trailers-future\" \"drop-writable\"");
+			.contains("(:ASYNC \"body-stream\" \"cancel-read\"")
+			.contains("(:ASYNC \"trailers-future\" \"drop-writable\"")
+			.doesNotContain("(:ASYNC \"trailers-future\" \"cancel-read\"");
 		// ...but SKIPS them on a backend without the async ABI: the alias itself is
 		// legal WIT, and a program that never touches the built-ins must keep compiling
 		// everywhere -- including the interpreter and the JVM.

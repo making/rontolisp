@@ -25,10 +25,10 @@
 ;;   re-signal always uses socket-error (lite; catch socket-error).
 ;; - The with-* convenience macros are built-in LispMacroExpander expansions
 ;;   (see .kb/tcp-sockets.md), not defuns in this file.
-;; - socket-option supports :receive-timeout only (a real SO_TIMEOUT read
-;;   deadline on the interpreter/JVM; the primitive signals on the WASM
-;;   backends), and wait-for-input is a listen-based poll (real wait on the
-;;   interpreter/JVM; the WASM backends return immediately claiming
+;; - socket-option supports :receive-timeout only (a real read deadline
+;;   wherever the tcp built-ins run), and wait-for-input is a listen-based poll
+;;   (a real wait wherever listen asks the host; a native executable, whose
+;;   listen sees only the chunk it read, returns immediately claiming
 ;;   readiness). Both decisions and their reasons: .kb/tcp-sockets.md.
 
 (defparameter usocket:*wildcard-host* "0.0.0.0")
@@ -142,10 +142,10 @@
 ;;; --- socket options ---
 
 ;; The one supported option is :receive-timeout, backed by the
-;; rontolisp:tcp-set-timeout read deadline (real on the interpreter and the
-;; JVM via SO_TIMEOUT; the WASM component primitive SIGNALS -- wasi:sockets
-;; has no timeout knob and a timeout that never fires is the failure mode a
-;; client sets it to avoid; Preview 1 keeps the tcp family's call-time error).
+;; rontolisp:tcp-set-timeout read deadline (SO_TIMEOUT on the interpreter and
+;; the JVM, the runner's set_read_timeout in a native executable, a read raced
+;; against a timer on the WASM component; Preview 1 keeps the tcp family's
+;; call-time error).
 ;; Every other option signals rather than silently ignoring. The alist below
 ;; is the read-back bookkeeping for the getter: the shim is the only writer,
 ;; so the recorded seconds are authoritative. Entries are not dropped on
@@ -197,23 +197,24 @@
 
 (defun usocket::%usock-ready (sockets)
   ;; The subset of SOCKETS with immediately-available input, probed through
-  ;; cl:listen: the kernel receive buffer on the interpreter/JVM, the chunk
-  ;; readahead buffer on the WASM component (listen's own documented
-  ;; divergence there). Stream sockets only -- listen on a listener handle
-  ;; signals (no backend has a non-blocking accept probe).
+  ;; cl:listen: the kernel receive buffer on the interpreter/JVM, what the host
+  ;; hands over at once on the WASM component, the chunk readahead buffer in a
+  ;; native executable (listen's own documented divergence there). Stream
+  ;; sockets only -- listen on a listener handle signals (no backend has a
+  ;; non-blocking accept probe).
   (let ((%wfi-ready nil))
     (dolist (%wfi-s sockets)
       (when (listen %wfi-s) (setq %wfi-ready (cons %wfi-s %wfi-ready))))
     (reverse %wfi-ready)))
 
 (defun usocket::%usock-wfi-result
-    (socket-or-sockets all ready wasm ready-only timeout start)
+    (socket-or-sockets all ready claim ready-only timeout start)
   ;; Upstream's two return values: the ready sockets (the original argument
   ;; unless :ready-only) and the time remaining within :timeout (nil once it
-  ;; elapsed, or when none was given). On the WASM backends an empty ready set
-  ;; still CLAIMS readiness (see wait-for-input below), so :ready-only answers
-  ;; the full list there.
-  (let ((%wfi-claimed (if (if wasm (null ready) nil) all ready))
+  ;; elapsed, or when none was given). In a native executable an empty ready
+  ;; set still CLAIMS readiness (see wait-for-input below), so :ready-only
+  ;; answers the full list there.
+  (let ((%wfi-claimed (if (if claim (null ready) nil) all ready))
         (%wfi-remaining
          (if timeout
              (let ((%wfi-elapsed
@@ -227,13 +228,15 @@
     (socket-or-sockets &key timeout ready-only &allow-other-keys)
   ;; Waits until at least one of the given stream sockets has readable input,
   ;; polling cl:listen every 10 ms (a timeout of 0 polls once); without
-  ;; :timeout it waits indefinitely. A REAL wait on the interpreter and the
-  ;; JVM, where listen asks the kernel. On the WASM backends it returns
-  ;; IMMEDIATELY claiming readiness when nothing is buffered (reads block
-  ;; anyway, so the wait-then-read loop behaves identically; a poll loop
-  ;; cannot be honoured there -- component listen sees only the chunk buffer,
-  ;; so a real poll would spin forever on data waiting host-side). wait-list
-  ;; objects are not supported.
+  ;; :timeout it waits indefinitely. A REAL wait wherever listen asks the host:
+  ;; the kernel on the interpreter and the JVM, a read started and withdrawn on
+  ;; the WASM component. In a native executable it returns IMMEDIATELY claiming
+  ;; readiness when nothing is buffered (reads block anyway, so the
+  ;; wait-then-read loop behaves identically; a poll loop cannot be honoured
+  ;; there -- the runner's listen sees only the chunk buffer, so a real poll
+  ;; would spin forever on data waiting host-side). The decision is the run-time
+  ;; *features* test below because the shim is parsed once for every backend.
+  ;; wait-list objects are not supported.
   (if (null socket-or-sockets)
       (progn
         (when timeout (sleep timeout))
@@ -248,16 +251,16 @@
                   (+ %wfi-start
                      (round (* timeout internal-time-units-per-second)))
                   nil))
-             (%wfi-wasm (if (member :rontolisp-wasm *features*) t nil)))
+             (%wfi-claim (if (member :rontolisp-native *features*) t nil)))
         (do ((%wfi-ready
               (usocket::%usock-ready %wfi-list)
               (usocket::%usock-ready %wfi-list)))
-            ((or %wfi-ready %wfi-wasm
+            ((or %wfi-ready %wfi-claim
                  (if %wfi-deadline
                      (>= (get-internal-real-time) %wfi-deadline)
                      nil))
              (usocket::%usock-wfi-result socket-or-sockets %wfi-list %wfi-ready
-                                         %wfi-wasm ready-only timeout
+                                         %wfi-claim ready-only timeout
                                          %wfi-start))
           (sleep 0.01)))))
 

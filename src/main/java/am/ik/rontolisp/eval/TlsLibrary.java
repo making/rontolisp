@@ -101,7 +101,14 @@ public final class TlsLibrary {
 		return out;
 	}
 
-	private static boolean references(LispVal form) {
+	/**
+	 * Whether a form names a client tls built-in: this splice's trigger, and
+	 * {@link WaitForLibrary}'s too (tls.lisp races the handshake against a
+	 * {@code wait-for} timer).
+	 * @param form a top-level form
+	 * @return whether it touches client TLS
+	 */
+	static boolean references(LispVal form) {
 		while (true) {
 			switch (form) {
 				case LispSymbol sym -> {

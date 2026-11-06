@@ -56,12 +56,14 @@ class WasmLispCompilerTest {
 		// no-op for every non-fetch program.
 		List<LispVal> program = HttpLibrary.process(LispReader.readAllFromString(lispCode),
 				WitExportDirective.Backend.WASM_COMPONENT, false);
-		// The client tls built-ins are the tls.lisp library over wit-imported
-		// wasi:tls@0.3.0-draft, spliced BEFORE sockets.lisp (its forms reference
-		// rontolisp:tcp-connect, which fires the sockets trigger), then the tcp
-		// built-ins are the sockets.lisp library over wit-imported
-		// wasi:sockets the same way (a no-op for every non-socket program), followed
-		// by the stdin machinery its dispatchers fall through to.
+		// wait.lisp first, as in the CLI: the socket and tls libraries race their reads
+		// and handshakes against its wait-for timer. The client tls built-ins are the
+		// tls.lisp library over wit-imported wasi:tls@0.3.0-draft, spliced BEFORE
+		// sockets.lisp (its forms reference rontolisp:tcp-connect, which fires the
+		// sockets trigger), then the tcp built-ins are the sockets.lisp library over
+		// wit-imported wasi:sockets the same way (a no-op for every non-socket
+		// program), followed by the stdin machinery its dispatchers fall through to.
+		program = am.ik.rontolisp.eval.WaitForLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = TlsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = StdinLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, false);
@@ -83,6 +85,7 @@ class WasmLispCompilerTest {
 	private byte[] compileComponentAt(String lispCode, OptimizeLevel level) {
 		List<LispVal> program = HttpLibrary.process(LispReader.readAllFromString(lispCode),
 				WitExportDirective.Backend.WASM_COMPONENT, false);
+		program = am.ik.rontolisp.eval.WaitForLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = TlsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 		program = StdinLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, false);
@@ -698,6 +701,7 @@ class WasmLispCompilerTest {
 		List<LispVal> loaded = am.ik.rontolisp.eval.HttpLibrary.process(read,
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
 		loaded = am.ik.rontolisp.eval.HttpServerLibrary.process(loaded, bufferBody);
+		loaded = am.ik.rontolisp.eval.WaitForLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT);
 		loaded = SocketsLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT);
 		loaded = StdinLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT, true);
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary

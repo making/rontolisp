@@ -1,6 +1,7 @@
 package am.ik.rontolisp.eval;
 
 import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
 
 /**
  * An exit whose value form has not run yet: a {@code return}/{@code return-from} in a
@@ -20,11 +21,25 @@ final class BlockTailExit extends RuntimeException {
 
 	private final transient Environment env;
 
+	private final transient @Nullable CompiledForm compiled;
+
 	BlockTailExit(Environment target, LispVal form, Environment env) {
+		this(target, form, env, null);
+	}
+
+	/**
+	 * An exit a compiled body makes, its value form compiled.
+	 * @param target the owner of the block activation it targets
+	 * @param form the value form
+	 * @param env the scope the value form runs in
+	 * @param compiled the value form compiled for that scope, or null
+	 */
+	BlockTailExit(Environment target, LispVal form, Environment env, @Nullable CompiledForm compiled) {
 		super(null, null, false, false);
 		this.target = target;
 		this.form = form;
 		this.env = env;
+		this.compiled = compiled;
 	}
 
 	/** The owner of the block activation this exit targets. */
@@ -40,6 +55,14 @@ final class BlockTailExit extends RuntimeException {
 	/** The scope the value form runs in: the exit site's. */
 	Environment env() {
 		return this.env;
+	}
+
+	/**
+	 * The value form compiled ({@code .kb/interpreter-compiled-bodies.md}), which a
+	 * compiled frame runs in its place; null for a walk's exit.
+	 */
+	@Nullable CompiledForm compiled() {
+		return this.compiled;
 	}
 
 }

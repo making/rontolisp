@@ -116,10 +116,18 @@ public final class Environment implements Scope {
 	 * to a {@link HashMap} once and behaves exactly as before. A binding's value is never
 	 * {@code null}, so {@code get} returning {@code null} is the same answer as
 	 * {@code containsKey} returning false.
+	 *
+	 * <p>
+	 * A map made with room for its names keeps them in the arrays however many there are,
+	 * up to {@link #PRESIZED_MAX}: a compiled body reads a binding by its position there
+	 * ({@link Environment#slot}), so a scope it makes must not be promoted.
 	 */
 	private static final class NameMap {
 
 		private static final int LINEAR_MAX = 8;
+
+		/** The most names a map made with room for them keeps in its arrays. */
+		static final int PRESIZED_MAX = 64;
 
 		private static final String[] NO_KEYS = new String[0];
 
@@ -131,6 +139,12 @@ public final class Environment implements Scope {
 
 		private int size;
 
+		/**
+		 * Whether {@link #keys} is a compiled body's layout, which every scope it makes
+		 * shares: copied before the map writes a key.
+		 */
+		private boolean sharedKeys;
+
 		NameMap() {
 		}
 
@@ -140,10 +154,22 @@ public final class Environment implements Scope {
 		 * @param capacity the number of names it will hold
 		 */
 		NameMap(int capacity) {
-			if (capacity > 0 && capacity <= LINEAR_MAX) {
+			if (capacity > 0 && capacity <= PRESIZED_MAX) {
 				this.keys = new String[capacity];
 				this.values = new LispVal[capacity];
 			}
+		}
+
+		/**
+		 * A map holding every name of a layout, each bound to the value at its position.
+		 * @param keys the names, shared and never written
+		 * @param values their values, the map's own
+		 */
+		NameMap(String[] keys, LispVal[] values) {
+			this.keys = keys;
+			this.values = values;
+			this.size = keys.length;
+			this.sharedKeys = true;
 		}
 
 		@Nullable private Map<String, LispVal> overflow;
@@ -183,7 +209,7 @@ public final class Environment implements Scope {
 					return;
 				}
 			}
-			if (this.size == LINEAR_MAX) {
+			if (this.size >= LINEAR_MAX && this.size == this.keys.length) {
 				// ConcurrentHashMap, not HashMap: the scope that outgrows the linear
 				// arrays is above all the GLOBAL environment, which concurrently served
 				// requests read while a lazy library load writes into it. A
@@ -205,6 +231,7 @@ public final class Environment implements Scope {
 				int grown = this.size == 0 ? 4 : LINEAR_MAX;
 				this.keys = java.util.Arrays.copyOf(this.keys, grown);
 				this.values = java.util.Arrays.copyOf(this.values, grown);
+				this.sharedKeys = false;
 			}
 			this.keys[this.size] = name;
 			this.values[this.size] = value;
@@ -216,6 +243,16 @@ public final class Environment implements Scope {
 			return map != null ? List.copyOf(map.keySet()) : List.of(java.util.Arrays.copyOf(this.keys, this.size));
 		}
 
+		/**
+		 * Appends a name the map does not hold, with no scan for it: a scope a compiled
+		 * body makes binds names its compiler made distinct, into the room made for them.
+		 */
+		void append(String name, LispVal value) {
+			this.keys[this.size] = name;
+			this.values[this.size] = value;
+			this.size++;
+		}
+
 		void remove(String name) {
 			Map<String, LispVal> map = this.overflow;
 			if (map != null) {
@@ -224,6 +261,10 @@ public final class Environment implements Scope {
 			}
 			for (int i = 0; i < this.size; i++) {
 				if (this.keys[i].equals(name)) {
+					if (this.sharedKeys) {
+						this.keys = this.keys.clone();
+						this.sharedKeys = false;
+					}
 					this.keys[i] = this.keys[this.size - 1];
 					this.values[i] = this.values[this.size - 1];
 					this.size--;
@@ -235,6 +276,12 @@ public final class Environment implements Scope {
 	}
 
 	private final NameMap bindings;
+
+	/**
+	 * The most names a scope made with room for them keeps in the order they were bound
+	 * ({@link #slot}): a compiled body lays out no scope binding more.
+	 */
+	static final int PRESIZED_SCOPE_MAX = NameMap.PRESIZED_MAX;
 
 	/**
 	 * The global function namespace, one cell per name ({@link FunctionCell}); null in
@@ -713,6 +760,25 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * A scope a compiled body makes, binding every name of its layout at once: what
+	 * {@link #Environment(Environment, int)} and a {@link #define} per name make, without
+	 * a copy of the names.
+	 * @param parent the scope it lies in
+	 * @param names the layout's names, shared by every scope of the layout and never
+	 * written
+	 * @param values the value of each, the scope's own from here on
+	 */
+	Environment(Environment parent, String[] names, LispVal[] values) {
+		this.bindings = new NameMap(names, values);
+		this.parent = parent;
+		this.functionCells = null;
+		this.functionCellTable = null;
+		this.mvSpill = parent.mvSpill;
+		this.lexicalFunction = parent.lexicalFunction;
+		this.lexicalPackage = parent.lexicalPackage;
+	}
+
+	/**
 	 * The package this scope's code was read in; see {@link #lexicalPackage}.
 	 * @return the package name, or {@code null} at the top level
 	 */
@@ -1131,6 +1197,45 @@ public final class Environment implements Scope {
 			this.pending.remove(name);
 		}
 		this.bindings.put(name, value);
+	}
+
+	/**
+	 * Binds a name this fresh scope does not bind yet, in the room made for it: what a
+	 * compiled body's scope is filled with, its names in the order its compiler laid them
+	 * out ({@link #slot}).
+	 * @param name the variable name
+	 * @param value the value to bind
+	 */
+	void bindFresh(String name, LispVal value) {
+		this.bindings.append(name, value);
+	}
+
+	/**
+	 * The value of the binding at a position of this scope: the scope a compiled body
+	 * made and laid out ({@code BodyCompiler}), whose names stay in the order they were
+	 * bound.
+	 * @param index the binding's position
+	 * @return its value
+	 */
+	LispVal slot(int index) {
+		return this.bindings.values[index];
+	}
+
+	/**
+	 * Assigns the binding at a position of this scope ({@link #slot}).
+	 * @param index the binding's position
+	 * @param value the new value
+	 */
+	void setSlot(int index, LispVal value) {
+		this.bindings.values[index] = value;
+	}
+
+	/**
+	 * The scope this one lies in, for a compiled body that knows it lies in one.
+	 * @return the parent scope
+	 */
+	Environment parent() {
+		return java.util.Objects.requireNonNull(this.parent);
 	}
 
 	/**
@@ -3322,6 +3427,14 @@ public final class Environment implements Scope {
 
 	private static void registerArithmetic(Environment env) {
 		env.defineFunction(LispNames.ADD, new LispFunction(LispNames.ADD, args -> {
+			// two fixnums whose sum is one: what the scans below answer for them, without
+			// them (a call's commonest shape)
+			if (args.size() == 2 && args.get(0) instanceof LispInteger a && args.get(1) instanceof LispInteger b) {
+				long sum = a.value() + b.value();
+				if (((a.value() ^ sum) & (b.value() ^ sum)) >= 0) {
+					return new LispInteger(sum);
+				}
+			}
 			if (hasComplex(args)) {
 				return addComplex(args);
 			}
@@ -3336,6 +3449,12 @@ public final class Environment implements Scope {
 			if (args.isEmpty()) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						ClosRegistry.arityMessage(LispNames.SUB, 1, true, 0));
+			}
+			if (args.size() == 2 && args.get(0) instanceof LispInteger a && args.get(1) instanceof LispInteger b) {
+				long difference = a.value() - b.value();
+				if (((a.value() ^ b.value()) & (a.value() ^ difference)) >= 0) {
+					return new LispInteger(difference);
+				}
 			}
 			if (hasComplex(args)) {
 				return subComplex(args);
@@ -10257,6 +10376,11 @@ public final class Environment implements Scope {
 	 * a catchable type-error through {@link #compareNumeric}.
 	 */
 	private static LispVal compareChain(String name, List<LispVal> args, int loSign, int hiSign) {
+		if (args.size() == 2 && args.get(0) instanceof LispInteger a && args.get(1) instanceof LispInteger b) {
+			// two fixnums: compareNumeric's answer for them, without the scans
+			int sign = Long.compare(a.value(), b.value());
+			return sign < loSign || sign > hiSign ? LispNil.INSTANCE : LispTrue.INSTANCE;
+		}
 		requireMinArgCount(name, args, 1);
 		if (args.size() == 1) {
 			// No pair to compare, but the argument is still checked: a number for =, a

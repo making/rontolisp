@@ -56,3 +56,18 @@ three backends that work, which is already better than most).
 The `--component` backend does have the probe, and it is what makes dexador
 work there -- so this is a P1-only hole in an otherwise complete socket story,
 and option 1 is worth costing before falling back to 2 or 3.
+
+## What `.todo/415` left for this item (2026-11-06)
+
+- The component's `listen` is now a REAL probe: start a read, and withdraw it
+  (`stream.cancel-read`) when the host has nothing, so it consumes nothing
+  (`.kb/tcp-sockets.md`, "Read deadlines"). Option 1 on Preview 1 is the same
+  contract over a different host: the runner (`rontolisp-native/runner/src/tcp.rs`)
+  answering "readable now?" -- a non-blocking `peek`/`poll(2)` behind one more
+  `rltcp` import -- and runner-sockets.lisp's `%io-listen` asking it after its chunk.
+  No future race is needed there: every runner call blocks anyway.
+- `usocket:wait-for-input` claims readiness on `:rontolisp-native` ALONE now
+  (usocket.lisp, `%wfi-claim`); the component runs the shim's ordinary 10 ms
+  listen poll. An honest native `listen` retires that branch outright.
+- The race itself (`%future-race`, `.kb/async-await.md`) is component-only. If
+  this item wants one on Preview 1, the shape it would take is written there.

@@ -26,9 +26,27 @@ import org.jspecify.annotations.Nullable;
  * @param readPackage the package this lambda's code was read in, when it was created
  * outside every function and macro body. {@code null} for one created inside such a body,
  * whose closure already says
+ * @param code the interpreter's slot for its compiled body, shared by the closures of one
+ * site
  */
 public record LispLambda(List<LispSymbol> params, @Nullable LispSymbol rest, List<LispVal> body, Scope closure,
-		@Nullable String name, boolean sourced, @Nullable String readPackage) implements LispVal {
+		@Nullable String name, boolean sourced, @Nullable String readPackage, BodyCode code) implements LispVal {
+
+	/**
+	 * Creates a lambda with a slot of its own for its compiled body.
+	 * @param params the required parameter symbols
+	 * @param rest the {@code &rest} parameter, or {@code null}
+	 * @param body the body expressions
+	 * @param closure the captured lexical scope
+	 * @param name the function name, or {@code null}
+	 * @param sourced whether its body was read from a named file
+	 * @param readPackage the package its code was read in, or {@code null}
+	 */
+	public LispLambda(List<LispSymbol> params, @Nullable LispSymbol rest, List<LispVal> body, Scope closure,
+			@Nullable String name, boolean sourced, @Nullable String readPackage) {
+		this(params, rest, body, closure, name, sourced, readPackage, new BodyCode());
+	}
+
 	/**
 	 * Creates an anonymous fixed-arity lambda (no {@code &rest} parameter, no name).
 	 * @param params the required parameter symbols

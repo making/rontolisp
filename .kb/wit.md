@@ -97,6 +97,10 @@ a byte array (`.kb/clojure-frontend.md`, "Host boundary").
   kind-1 settle); `WasmLispCompiler.streamReadsBytes` forces that one helper on, so a module
   without a byte-stream read is byte-identical. A `list<u8>` RESULT lifts as text unless the
   binding says `:octets t` (above).
+- **A stream alias binds `-cancel-read` too, a future alias does not** (`WitImportDirective
+  .asyncOps`): it withdraws a read the async scheduler left in flight, and no future read is ever
+  left so. A handle-element stream (accept) binds it beside `-read`/`-drop-readable`. Bound only
+  when named, like every async member; what it does: [async-await.md](async-await.md).
 
 ## `rontolisp:wit-export` — implementing a world
 `(rontolisp:wit-export "count_vowels_component.wit" :world root)`; the path resolves against the

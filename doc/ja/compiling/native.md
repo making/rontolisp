@@ -47,7 +47,7 @@ rontolisp app.lisp --native -o app
 
 ## TCP ソケット
 
-[`rontolisp:tcp-*` 関数](../guides/tcp-sockets.md)と usocket シムは、実行ファイルでもインタプリタや JVM と同じように動きます: ソケットを開くのはランナーで、`host` にはホスト名もアドレスリテラルも指定でき、各呼び出しは完了までブロックし、`tcp-set-timeout` は実際の読み取りデッドラインを設定し、失敗は同じテキストのエラーをシグナルします(`tcp-connect: cannot connect to 127.0.0.1:1: Connection refused`)。usocket シムはそれを `usocket:socket-error` として再シグナルします。そのため、シム経由で PostgreSQL(cl-postgres)や Redis と話すプログラムも実行ファイルから動きます。コンポーネントと同じく、実行ファイルはソケットをチャンク単位で読むので、`listen` は読み込み済みのチャンクにバイトが残っているかを答え、`usocket:wait-for-input` は即座に読み取り可能と答えます。TLS のクライアント関数とサーバー関数(`tls-connect`、`tls-upgrade`、`tls-listen`)はインタプリタと JVM、クライアント側はコンポーネントのみのままです。
+[`rontolisp:tcp-*` 関数](../guides/tcp-sockets.md)と usocket シムは、実行ファイルでもインタプリタや JVM と同じように動きます: ソケットを開くのはランナーで、`host` にはホスト名もアドレスリテラルも指定でき、各呼び出しは完了までブロックし、`tcp-set-timeout` は実際の読み取りデッドラインを設定し、失敗は同じテキストのエラーをシグナルします(`tcp-connect: cannot connect to 127.0.0.1:1: Connection refused`)。usocket シムはそれを `usocket:socket-error` として再シグナルします。そのため、シム経由で PostgreSQL(cl-postgres)や Redis と話すプログラムも実行ファイルから動きます。コンポーネントと同じく、実行ファイルはソケットをチャンク単位で読みます。コンポーネントと違って `listen` は読み込み済みのチャンクにバイトが残っているかだけを答えるため、`usocket:wait-for-input` は即座に読み取り可能と答えます。TLS のクライアント関数とサーバー関数(`tls-connect`、`tls-upgrade`、`tls-listen`)はインタプリタと JVM、クライアント側はコンポーネントのみのままです。
 
 ```lisp
 (let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))

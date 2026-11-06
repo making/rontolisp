@@ -14,7 +14,9 @@ into `evalCons` + `evalConsRareOperator`, the latter answering a private `UNHAND
 operators it does not claim (also the deliberate fall-throughs `read`, the `floor` family with a
 divisor, `reduce`, `sort`). The tail-call loop (`.kb/interpreter-tail-calls.md`) grew `evalCons`
 back toward the cliff, and by 2026-10-04 the arms no loop body runs had moved out of it
-(`.kb/interpreter-tail-calls.md`, "The operator table is three methods").
+(`.kb/interpreter-tail-calls.md`, "The operator table is three methods"). The compiled
+bodies' hook in its `call:` loop took it from 6,200 to 6,426 bytes (2026-11-06,
+[interpreter-compiled-bodies.md](interpreter-compiled-bodies.md)).
 
 ## The Clojure lowering's value table
 `ClojureLowering.valueOf` (a builtin named as a value, one string `switch` over every name with a
