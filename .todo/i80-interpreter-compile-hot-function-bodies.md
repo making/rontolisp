@@ -17,7 +17,8 @@ The plan, rewritten around that measurement:
   guards as constants, the built-in a site calls bound to the site -- removes the dispatch and lets the JIT inline
   the built-ins; the native image, which defines no class at run time, keeps the tree. Measure it on fset's
   `compare` and on `math/num.lisp` against the tree before building it whole.
-- The forms still walked: `setf` statements (`.todo/i79`; its per-site memo is what the compiler then takes);
+- The forms still walked (`setf` is compiled from its per-site memo since 2026-11-06,
+  `.kb/interpreter-expansion-memo.md`, "The setf memo"): `make-instance`, whose expansion reads the generics' methods;
   `typep`/`typecase`/`etypecase`/`check-type` and a `handler-case`'s protected form, whose expansions read the
   class registry at each evaluation and need a stamp over what they read; a compiler macro's site; the print
   family.

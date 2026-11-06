@@ -11,7 +11,8 @@ compile-time-constant flags.**
 - `make-instance`, `change-class`, `make-condition`, `define-condition`, `handler-bind`,
   `typep`, `typecase`, `etypecase`, `ctypecase`, `check-type`, `coerce` — `closRegistry` (`streamp` is no
   arm at all: the function value reads the registry after its argument ran, `.kb/gray-streams.md`)
-- `setf` — user `defsetf`/`define-setf-expander`, user macro places, `(setf (macro-function ...))`
+- `setf` — kept per site under a stamp of what it reads instead ("The setf memo" below); a
+  `(setf (macro-function ...))` and a `(setf (find-class ...))` act as they expand, at each evaluation
 - `print`, `princ`, `prin1`, `princ-to-string`, `prin1-to-string`, `write-to-string`,
   `%princ-piece`, `%prin1-piece` — `print-object` routing, live `*print-case*`
 - `flet`, `labels` (`preExpandLocalMacros`), `symbol-macrolet`, `with-slots`, `with-accessors` — live
@@ -21,9 +22,6 @@ compile-time-constant flags.**
   `nth-value`) and lambda tails, ONLY once the program methods a producer — the methoded set
   (`.kb/clos.md`, "Interpreter, the call side"); memoized as before while it is empty
 
-Re-expanding `setf` on every evaluation is a real cost, but a memo
-would need a version bumped by every state read above; not done.
-
 Two per-EVALUATION costs of every call, not memos, found in profiling: a
 package-qualified operator asked the two uiop probes through two `splitQualified` splits
 (now `LispEvaluator.isUiopOperator`, a per-name answer), and
@@ -31,7 +29,36 @@ package-qualified operator asked the two uiop probes through two `splitQualified
 itself unless an entry is a bare symbol or `(x)`).
 
 Place-writing macros (`push`, `pop`, `incf`, `decf`, `pushnew`, `remf`, `psetf`, `rotatef`,
-`shiftf`) ARE memoized: they lower to `(setf place ...)` and that arm re-expands.
+`shiftf`) ARE memoized: they lower to `(setf place ...)`, whose own memo is below.
+
+## The setf memo (`LispEvaluator.setfExpansion`, since 2026-11-06)
+A `setf` site's expansion is kept on its head (`PlaceNote`) and in `placeExpansions`, under
+`placeEpoch`: the sum of counters that only grow, so it is what it was only while none moved.
+What the expansion reads, listed from `expandSetf`'s call graph and the evaluator's arm:
+- the user macros a place may call -- `callSiteEpoch`;
+- the setf expanders (`defsetf`, `define-setf-expander`) and the struct accessors and setf
+  functions (`structAccessors`, `(defun (setf f) ...)` included): `CountedMap`s, counting writes;
+- the class registry's classes, layouts, struct accessors' owners, slot-access protocol switch and
+  generic names (a `slot-missing` generic) -- `ClosRegistry.placeVersion`, moved after each write;
+- the prelude, uiop and usocket place loads: a site's first expansion runs them, and what they
+  define moves the counters above.
+
+Not inputs: a global symbol macro (a symbol place is a `setq`, which resolves it when it runs; a
+`setq` through one makes its `setf` form once per value form, `assignSymbolMacro`), `*package*`.
+Expanded at each evaluation: a `find-class` place (it registers the alias as it expands) and a
+place whose macro expands per scope (`expandsPerScope`). A user setf expander runs once per site,
+as a macro does -- the stated semantic change, as on the compile paths.
+
+Measured (JFR of coalton's load up to `library/math/real.lisp`, 2026-11-06, after the compiled
+bodies): the expansion was 7.3-7.6% of the samples (a slot place's three walks of every class or
+layout 3.9%, the setf expanders' scan of every entry 1.2%), 0.07% with the memo. The window, four
+pairs side by side (load 7-14): 126.2, 134.8, 138.0, 135.6 s against 126.0, 110.8, 117.3, 120.0.
+
+`make-instance` stays expanded at each evaluation: 0.26% of the same samples (2.9% before
+`initializationGeneric` stopped walking every generic), its `ensure*` loads 0.27%. Its expansion
+reads the generics' methods (`make-instance`, `allocate-instance`, the initialization protocol),
+the default initargs, the instance tracking and the protocol switches: a stamp would move with
+every `defmethod`, a blast radius its share does not pay for.
 
 ## The memos (`eval/FormMemo`, since 2026-11-05)
 Every per-site memo (built-in and user macro expansions, compiler macros, `load-time-value`,
@@ -112,7 +139,8 @@ a symbol several forms share keeps one note for all.
 - `LispEvaluatorTest.aCallSiteFollowsWhatItsOperatorBecomes` -- the notes against a function
   redefined, a function name made a macro, a compiler macro defined later, a generic's value
   after a new method, a `let`'s variable proclaimed special, a struct reader on a non-instance
-  and redefined
+  and redefined; a setf site, walked and compiled, against a place given a setf expander or made
+  a macro, a struct and a class redefined, a `slot-missing` method, and its expander run once
 - `LispEvaluatorHotMethodSizeTest` — arms must not push any of the three operator-table
   methods (`evalCons`, `rareOperatorExpansion`, `evalConsRareOperator`) over the
   8000-bytecode cliff (`.kb/hot-path-method-size.md`); an arm's expansion REPLACES the form

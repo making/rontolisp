@@ -2653,6 +2653,7 @@ public final class ClosRegistry {
 	 */
 	public void enableSlotProtocol() {
 		this.slotProtocol = true;
+		placesMoved();
 	}
 
 	private boolean marksGenericDefinitions;
@@ -2925,6 +2926,7 @@ public final class ClosRegistry {
 		this.dynamicClasses = true;
 		this.layoutsByTag.put(DYNAMIC_OBJECT_TAG, LispLayout.ofClass(DYNAMIC_OBJECT_CLASS_NAME,
 				List.of("CLASS", "PRECEDENCE-LIST"), List.of(LispNil.INSTANCE, LispNil.INSTANCE)));
+		placesMoved();
 	}
 
 	/**
@@ -3161,6 +3163,28 @@ public final class ClosRegistry {
 	 * {@link #registerClass}, {@link #registerStruct} or {@link #registerGeneric}.
 	 */
 	private int hierarchyVersion;
+
+	/**
+	 * Moved after every write to what a {@code setf} place's expansion reads of the
+	 * registry ({@code LispMacroExpander.expandSetf}): the classes, the layouts, the
+	 * struct accessors' owners, the slot-access protocol's switch and the generic names
+	 * (whether a {@code slot-missing} generic exists). The interpreter keeps a site's
+	 * expansion while it stays ({@link #placeVersion}).
+	 */
+	private volatile int placeVersion;
+
+	/**
+	 * The {@link #placeVersion}: a {@code setf} expansion made under it holds while it is
+	 * what it was.
+	 * @return the count, which only grows
+	 */
+	public int placeVersion() {
+		return this.placeVersion;
+	}
+
+	private synchronized void placesMoved() {
+		this.placeVersion++;
+	}
 
 	/** The last {@link #printObjectTags} answer and the state it was computed from. */
 	private @Nullable PrintObjectTags printObjectTagsMemo;
@@ -3440,6 +3464,7 @@ public final class ClosRegistry {
 	 */
 	public void registerStructAccessor(String accessorName, String structName) {
 		this.structAccessorOwners.put(normalize(accessorName), structName);
+		placesMoved();
 	}
 
 	/**
@@ -3526,6 +3551,7 @@ public final class ClosRegistry {
 		this.descendantStructTagsMemo.clear();
 		LispLayout layout = LispLayout.ofStruct(structName, slotBaseNames, initforms);
 		this.layoutsByTag.put(layout.tag(), layout);
+		placesMoved();
 	}
 
 	/**
@@ -4145,6 +4171,7 @@ public final class ClosRegistry {
 		this.hierarchyVersion++;
 		this.classesByMember = null;
 		this.descendantStructTagsMemo.clear();
+		placesMoved();
 	}
 
 	/**
@@ -4512,6 +4539,7 @@ public final class ClosRegistry {
 			layout = layout.withCapacity(layout.slotCount() + 1);
 		}
 		this.layoutsByTag.put(layout.tag(), layout);
+		placesMoved();
 	}
 
 	/**
@@ -4656,6 +4684,7 @@ public final class ClosRegistry {
 		LispLayout layout = this.layoutsByTag.get(tag);
 		if (layout != null) {
 			this.layoutsByTag.put(tag, layout.withCapacity(reserved));
+			placesMoved();
 		}
 	}
 
@@ -4666,7 +4695,9 @@ public final class ClosRegistry {
 	public void registerGeneric(GenericInfo info) {
 		this.hierarchyVersion++;
 		String key = normalize(info.name());
-		this.generics.put(key, info);
+		if (this.generics.put(key, info) == null) {
+			placesMoved();
+		}
 		String plain = plainNameOf(info.name());
 		if (LispNames.INITIALIZE_INSTANCE.equals(plain) || LispNames.SHARED_INITIALIZE.equals(plain)) {
 			this.initializationGenerics.put(key, info);

@@ -24836,6 +24836,51 @@ class LispEvaluatorTest {
 			.isEqualTo("((1 1 1) 2 ((:FN 1) (:FN 1) (:FN 1)) (:MACRO 1) (1 1 1) 2"
 					+ " ((1 :UNBOUND) (1 :UNBOUND) (1 :UNBOUND)) (1 1) (6 6 6) 10"
 					+ " ((1 :UNBOUND) (1 :UNBOUND) (1 :UNBOUND)) (1 1) ((2 20) (3 30) (4 40)) 3 ((1 10) (2 20) (3 30)))");
+		// A setf site expands once (a user setf expander runs once for it) and keeps its
+		// expansion, walked and compiled, while what it read holds: a place that gets a
+		// setf expander, a place that becomes a macro, a struct and a class redefined
+		// with their slots reordered, a slot-missing method.
+		assertThat(evalMulti(
+				"""
+						(defvar sp-runs 0)
+						(define-setf-expander sp-once (x)
+						  (incf sp-runs)
+						  (let ((s (gensym))) (values nil nil (list s) `(setf (car ,x) ,s) `(car ,x))))
+						(defvar sp-oc (list 0)) (defun sp-wo (v) (setf (sp-once sp-oc) v))
+						(sp-wo 1) (sp-wo 2) (sp-wo 3)
+						(defvar sp-log nil)
+						(defun (setf sp-thing) (v x) (push (list :fn x v) sp-log) v)
+						(defun sp-set-thing (x v) (push (list :exp x v) sp-log) v)
+						(defun sp-wt (x) (setf (sp-thing x) 1))
+						(sp-wt 1) (sp-wt 2) (sp-wt 3)
+						(defsetf sp-thing sp-set-thing)
+						(sp-wt 4)
+						(defvar sp-cell (list 0 0))
+						(defun (setf sp-m) (v c) (setf (car c) v))
+						(defun sp-wm (v) (setf (sp-m sp-cell) v))
+						(sp-wm 1) (sp-wm 2) (sp-wm 3)
+						(defmacro sp-m (c) `(cadr ,c))
+						(sp-wm 4)
+						(defstruct sp-s a b)
+						(defun sp-ws () (let ((o (make-sp-s :a 1 :b 2))) (setf (sp-s-b o) 5) (list (sp-s-a o) (sp-s-b o))))
+						(defvar sp-s1 (list (sp-ws) (sp-ws) (sp-ws)))
+						(defstruct sp-s b a)
+						(defvar sp-s2 (sp-ws))
+						(defclass sp-c () ((ca :initform 0) (cb :initform 0)))
+						(defun sp-wc () (let ((o (make-instance 'sp-c))) (setf (slot-value o 'cb) 9) (list (slot-value o 'ca) (slot-value o 'cb))))
+						(defvar sp-c1 (list (sp-wc) (sp-wc) (sp-wc)))
+						(defclass sp-c () ((cb :initform 0) (ca :initform 0)))
+						(defvar sp-c2 (sp-wc))
+						(defun sp-miss (o) (setf (slot-value o 'sp-nope) 7))
+						(defun sp-try (o) (handler-case (sp-miss o) (error () :error)))
+						(defvar sp-m1 (list (sp-try (make-instance 'sp-c)) (sp-try (make-instance 'sp-c)) (sp-try (make-instance 'sp-c))))
+						(defmethod slot-missing (class (o sp-c) name op &optional v) (declare (ignore class)) (list name op v))
+						(list sp-runs (car sp-oc) (reverse sp-log) sp-cell sp-s1 sp-s2 sp-c1 sp-c2
+						      sp-m1 (sp-try (make-instance 'sp-c)))
+						""")
+			.print()).isEqualTo(
+					"(1 3 ((:FN 1 1) (:FN 2 1) (:FN 3 1) (:EXP 4 1)) (3 4) ((1 5) (1 5) (1 5)) (1 5) ((0 9) (0 9) (0 9)) (0 9)"
+							+ " (:ERROR :ERROR :ERROR) 7)");
 	}
 
 	@Test

@@ -33448,14 +33448,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Whether the form is a top-level {@code (setf (find-class ...) ...)} -- the class
-	 * ALIAS registration, which the definition walk must expand before the class table is
-	 * emitted. A multi-pair setf counts when ANY pair writes a {@code find-class} place;
-	 * {@code expandSetf} splits the pairs itself.
-	 * @param form the top-level form
-	 * @return true when the form writes a {@code find-class} place
-	 */
-	/**
 	 * Whether the form is a {@code (setf (macro-function ...) ...)} -- a write to the
 	 * MACRO table, which only a macro-expanding consumer can carry out: the interpreter
 	 * does it as it evaluates the form, and the compile paths do it in
@@ -33537,7 +33529,16 @@ public final class LispMacroExpander {
 		return makeProgn(forms);
 	}
 
-	private static boolean isSetfFindClassForm(LispVal form) {
+	/**
+	 * Whether the form is a {@code (setf (find-class ...) ...)} -- the class ALIAS
+	 * registration, which {@code expandSetf} makes as it expands the form: the definition
+	 * walk must expand a top-level one before the class table is emitted, and the
+	 * interpreter expands one at each evaluation. A multi-pair setf counts when ANY pair
+	 * writes a {@code find-class} place; {@code expandSetf} splits the pairs itself.
+	 * @param form the form
+	 * @return true when the form writes a {@code find-class} place
+	 */
+	public static boolean isSetfFindClassForm(LispVal form) {
 		return isSetfPlaceForm(form, LispNames.FIND_CLASS);
 	}
 
