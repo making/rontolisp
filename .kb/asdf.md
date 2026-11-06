@@ -1056,6 +1056,12 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
     10%, a call's length walk and argument list 6%, a `setf` or `make-instance` expanded again on every evaluation
     5% (`.todo/i79`). fset's tight loops pay it in full: `fset:compare` of two symbols takes 13.7 µs against
     SBCL's 37 ns. A factor that size takes running hot function bodies compiled (`.todo/i80`).
+  - Hot bodies compiled ([interpreter-compiled-bodies.md](interpreter-compiled-bodies.md), 2026-11-06), side by
+    side with the build before on a box under load 9-10: the load up to `math/bounded.lisp` 81.0 s against 64.1,
+    `math/num.lisp` 40.3 against 29.6. Of `math/num.lisp`'s samples 70% run compiled and 30% in the walks the
+    compiled code hands back (a `setf` statement 4.5%, `.todo/i79`); what the compiled 70% costs is the nodes'
+    own: a built-in applied through `apply` 10.5%, the argument arrays 7%, a call's guard and binding read 7%,
+    a lexical read 4.6%, a `let`'s scope 3.8%.
   - The float traps: `/` over a float is IEEE on every backend ([error-handling.md](error-handling.md),
     "Per operator"), which is what SBCL answers with coalton's traps off, so the shim's `with-float-traps-masked`
     needs nothing: `(/ 1.0d0 0.0d0)` under coalton is an infinity here too.

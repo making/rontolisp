@@ -10,7 +10,9 @@ definition), `apply` of a closure, mutual `defun`s, a `labels` function, a lambd
 and through every tail-transparent form in between. No bounce and no allocation per call
 -- the trampoline (`.kb/scheme-frontend.md`, "Not a trampoline") was measured at 16x per
 bounced call and rejected; this shape is FASTER than the recursion it replaced, because a
-Lisp call enters fewer Java frames. Landed 2026-09-19 (`.todo/912`).
+Lisp call enters fewer Java frames. Landed 2026-09-19 (`.todo/912`). A compiled body keeps
+it: its tail answers a `TailCall` or a `TailForm` that `evalCons`'s `call:` loop, or a
+compiled frame's, takes in place ([interpreter-compiled-bodies.md](interpreter-compiled-bodies.md)).
 
 ## What the frame carries (locals of `evalCons`, no allocation)
 

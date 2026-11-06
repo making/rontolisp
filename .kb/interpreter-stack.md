@@ -26,7 +26,11 @@ PROGRAM's, so a ceiling inherited from the platform is a different product on ea
   worker where it reached 10,435, and a tail-recursive chain has no ceiling at all
   (`.kb/interpreter-tail-calls.md`). The frame counts below are the pre-loop ones unless
   dated later; the mechanism -- the worker thread, `--stack`, the overflow report and the
-  REPL's recovery -- is unchanged.
+  REPL's recovery -- is unchanged. Since `.todo/i80` (2026-11-06) a function called twice
+  runs compiled, in frames of its own: `depth` reaches 47,251 warm where the walk reached
+  42,198, and 17,323 on a process's first deep recursion where the walk reached 30,149
+  ([interpreter-compiled-bodies.md](interpreter-compiled-bodies.md), "Frames, tails and the
+  stack").
 - **That cost is the JIT's, not the program's.** The deepest `depth` a 1 MiB thread holds,
   one JVM per row (2026-09-17, linux-x64, Oracle GraalVM 25.0.4, binary search per round):
 

@@ -30,12 +30,33 @@ final class FunctionCell {
 
 	private volatile Binding binding = UNBOUND;
 
+	private volatile boolean calledOrdinarily;
+
 	/**
 	 * Creates the cell at a table index.
 	 * @param index its index in the environment's cell table
 	 */
 	FunctionCell(int index) {
 		this.index = index;
+	}
+
+	/**
+	 * Records that a call of the name was classified an ordinary call: no operator arm,
+	 * macro or compiler macro claimed it. What a compiled call reads before it trusts the
+	 * name is one ({@code LispEvaluator.stillOrdinaryCall} checks what can move since).
+	 */
+	void calledOrdinarily() {
+		if (!this.calledOrdinarily) {
+			this.calledOrdinarily = true;
+		}
+	}
+
+	/**
+	 * Whether a call of the name was ever classified an ordinary call.
+	 * @return whether it was
+	 */
+	boolean wasCalledOrdinarily() {
+		return this.calledOrdinarily;
 	}
 
 	/**

@@ -88,6 +88,10 @@ a symbol several forms share keeps one note for all.
   for every data cons (`LocatedCons`).
 - `funcall`/`apply` of a generic function's value (`functionValue`) runs its current
   dispatcher in the frame, as a closure's value does (`closureCalled`).
+- The body compiler reads all of these ([interpreter-compiled-bodies.md](interpreter-compiled-bodies.md)),
+  and the built-in memo's entry says whether its arm is the expansion alone
+  (`BuiltinExpansion.expandsOnly`): a note is per head object, so a form whose head another form
+  noted first has only its memo to say what it expands to.
 
 ## Traps
 - The memo keys on mutable `LispCons` identity: rewriting a macro FORM ITSELF between

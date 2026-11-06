@@ -24798,6 +24798,29 @@ class LispEvaluatorTest {
 				      csn-i (csn-px (make-csn-pt :x 7)))
 				""").print())
 			.isEqualTo("(1 2 (:FN 1) (:MACRO 1) 1 (:COMPILER 1) :INT :STR :UNBOUND 1 (7 :TYPE-ERROR) 42)");
+		// A body called often enough runs compiled (.kb/interpreter-compiled-bodies.md),
+		// and what its compile worked out holds as long as the same things: a function
+		// redefined, a function name made a macro, a macro redefined, a parameter's name
+		// proclaimed special, a labels whose walk is redone once the macro table moves.
+		assertThat(evalMulti(
+				"""
+						(defun cb-g () 1) (defun cb-call-g () (cb-g)) (defvar cb-a (list (cb-call-g) (cb-call-g) (cb-call-g)))
+						(defun cb-g () 2)
+						(defun cb-f (x) (list :fn x)) (defun cb-call-f () (cb-f 1)) (defvar cb-b (list (cb-call-f) (cb-call-f) (cb-call-f)))
+						(defmacro cb-f (x) `(list :macro ,x))
+						(defmacro cb-m () 1) (defun cb-call-m () (cb-m)) (defvar cb-c (list (cb-call-m) (cb-call-m) (cb-call-m)))
+						(defmacro cb-m () 2)
+						(defun cb-read-x () (if (boundp 'cb-x) cb-x :unbound)) (defun cb-param (cb-x) (list cb-x (cb-read-x)))
+						(defvar cb-d (list (cb-param 1) (cb-param 1) (cb-param 1)))
+						(defvar cb-x 0)
+						(defun cb-lab (n) (labels ((cb-sum (k) (if (= k 0) 0 (+ k (cb-sum (- k 1)))))) (cb-sum n)))
+						(defvar cb-e (list (cb-lab 3) (cb-lab 3) (cb-lab 3)))
+						(defmacro cb-unrelated () nil)
+						(list cb-a (cb-call-g) cb-b (cb-call-f) cb-c (cb-call-m) cb-d (cb-param 1) cb-e (cb-lab 4))
+						""")
+			.print())
+			.isEqualTo("((1 1 1) 2 ((:FN 1) (:FN 1) (:FN 1)) (:MACRO 1) (1 1 1) 2"
+					+ " ((1 :UNBOUND) (1 :UNBOUND) (1 :UNBOUND)) (1 1) (6 6 6) 10)");
 	}
 
 	@Test
