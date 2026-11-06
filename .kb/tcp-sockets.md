@@ -407,7 +407,7 @@ reads the real bound port the same way. Preview 1: the call-time error.
   scheduler between probes. A `--native` executable used to return IMMEDIATELY claiming readiness
   (a run-time `(member :rontolisp-native *features*)` branch, its listen seeing the chunk only),
   retired with the honest `listen` above; the 10 ms wait there is Preview 1's `sleep`, which blocks
-  in `poll_oneoff` since 2026-11-07 ([time-environment-builtins.md](time-environment-builtins.md)). Racing the probes
+  in `poll_oneoff` since 2026-11-06 ([time-environment-builtins.md](time-environment-builtins.md)). Racing the probes
   against the timeout instead of polling was weighed and not built: the poll is the interpreter's
   own shape and granularity, and it needs no backend-only path in the shim. A socket at end of
   file is not ready (`listen` answers nil there), where upstream's `select` reports it; stream

@@ -105,7 +105,7 @@ only moves on a host write; `--component` is NOT a lowering but the spliced `wai
 (`eval/WaitForLibrary`, triggered by `rontolisp:wait-for` OR `sleep`) FORCING a
 `wasi:clocks/monotonic-clock` timer future through `rontolisp::%future-force`.
 
-Preview 1 detail (since 2026-11-07; it spun on `get-internal-real-time` before, a core per
+Preview 1 detail (since 2026-11-06; it spun on `get-internal-real-time` before, a core per
 wait, and `usocket:wait-for-input`'s 10 ms polls made every `--native` socket wait one):
 - `poll_oneoff` is an APPENDED import (`.kb/wasm-import.md`), fd_write's shape so no type is
   added, gated on what Pass 2 EMITTED (`Ctx.sleepCompiled`, set by the `%SLEEP-MS` site), not a
@@ -116,7 +116,7 @@ wait, and `usocket:wait-for-input`'s 10 ms polls made every `--native` socket wa
   refuses the poll and returns at once, is polled again for the rest, so the interval always
   elapses -- at worst by the old spin. Counts past an i64 of nanoseconds (limb tier included)
   wait the i64 maximum.
-- Measured 2026-11-07: a 2 s sleep took 2.03 s user CPU spinning and 0.04 s blocking (plain
+- Measured 2026-11-06: a 2 s sleep took 2.03 s user CPU spinning and 0.04 s blocking (plain
   `wasmtime run`; `--native` 0.00 s), and a `--native` `usocket:wait-for-input` on a quiet
   socket for 2 s 0.01 s. Under wasmtime 49 fuel a 0.5 s spin burned 100-200 M against a
   start-up of ~17 M, which `WasmLispCompilerIntegrationTest#sleepBlocksOnPollOneoffOnPreview1`
