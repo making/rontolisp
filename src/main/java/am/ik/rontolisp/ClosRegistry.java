@@ -2480,6 +2480,15 @@ public final class ClosRegistry {
 	private final LinkedHashMap<String, GenericInfo> generics = new LinkedHashMap<>();
 
 	/**
+	 * The {@link #generics} named {@code initialize-instance} or
+	 * {@code shared-initialize} in any package, keyed and ordered alike: what every
+	 * {@code make-instance} expansion asks of the registry
+	 * ({@link #initializationGeneric}, {@link #initRefillTargets}), which a walk of every
+	 * generic answered once per evaluation (3% of coalton's load).
+	 */
+	private final LinkedHashMap<String, GenericInfo> initializationGenerics = new LinkedHashMap<>();
+
+	/**
 	 * The index in the compile walk's output of the top-level form being walked; negative
 	 * off the walk.
 	 */
@@ -3773,12 +3782,7 @@ public final class ClosRegistry {
 	 */
 	public Set<String> initRefillTargets() {
 		Set<String> targets = new java.util.LinkedHashSet<>();
-		for (GenericInfo generic : this.generics.values()) {
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(generic.name());
-			String plain = qn == null ? generic.name() : qn.member();
-			if (!"INITIALIZE-INSTANCE".equals(plain) && !"SHARED-INITIALIZE".equals(plain)) {
-				continue;
-			}
+		for (GenericInfo generic : this.initializationGenerics.values()) {
 			for (MethodInfo method : generic.methods().values()) {
 				if (":BEFORE".equals(method.qualifier()) && !method.specializers().isEmpty()
 						&& method.specializers().get(0).kind() == SpecializerKind.CLASS) {
@@ -4661,7 +4665,29 @@ public final class ClosRegistry {
 	 */
 	public void registerGeneric(GenericInfo info) {
 		this.hierarchyVersion++;
-		this.generics.put(normalize(info.name()), info);
+		String key = normalize(info.name());
+		this.generics.put(key, info);
+		String plain = plainNameOf(info.name());
+		if (LispNames.INITIALIZE_INSTANCE.equals(plain) || LispNames.SHARED_INITIALIZE.equals(plain)) {
+			this.initializationGenerics.put(key, info);
+		}
+	}
+
+	/**
+	 * The first generic in definition order named {@code initialize-instance} or
+	 * {@code shared-initialize} in any package: CL has one of each, and the registry keys
+	 * generics by their qualified spelling, so a {@code make-instance} in any package
+	 * finds {@code cl-ppcre::initialize-instance}.
+	 * @param plainName {@code INITIALIZE-INSTANCE} or {@code SHARED-INITIALIZE}
+	 * @return the generic, or null when none is registered
+	 */
+	public @Nullable GenericInfo initializationGeneric(String plainName) {
+		for (GenericInfo generic : this.initializationGenerics.values()) {
+			if (plainName.equals(plainNameOf(generic.name()))) {
+				return generic;
+			}
+		}
+		return null;
 	}
 
 	/**

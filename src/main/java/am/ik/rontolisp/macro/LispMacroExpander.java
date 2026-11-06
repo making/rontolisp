@@ -23183,26 +23183,13 @@ public final class LispMacroExpander {
 			return makeProgn(refusal);
 		}
 		String ctor = qn == null ? "%MAKE-" + info.name() : qn.pkg() + "::" + "%MAKE-" + qn.member();
-		// CL has ONE initialize-instance generic; the registry keys generics by their
-		// package-qualified spelling, so match by plain name (a make-instance in any
-		// package must find cl-ppcre::initialize-instance). When only shared-initialize
-		// methods exist (ironclad's hmac keying :after), make-instance calls that
-		// generic directly with the t slot-names argument -- the same effective chain
-		// CL's default initialize-instance primary would run.
-		ClosRegistry.GenericInfo init = closRegistry.generics()
-			.values()
-			.stream()
-			.filter(g -> "INITIALIZE-INSTANCE".equals(plainName(g.name())))
-			.findFirst()
-			.orElse(null);
+		// When only shared-initialize methods exist (ironclad's hmac keying :after),
+		// make-instance calls that generic directly with the t slot-names argument -- the
+		// same effective chain CL's default initialize-instance primary would run.
+		ClosRegistry.GenericInfo init = closRegistry.initializationGeneric(LispNames.INITIALIZE_INSTANCE);
 		boolean sharedInit = false;
 		if (init == null) {
-			init = closRegistry.generics()
-				.values()
-				.stream()
-				.filter(g -> "SHARED-INITIALIZE".equals(plainName(g.name())))
-				.findFirst()
-				.orElse(null);
+			init = closRegistry.initializationGeneric(LispNames.SHARED_INITIALIZE);
 			sharedInit = init != null;
 		}
 		// A class defined with a :metaclass under the slot-access protocol fills its
@@ -28773,12 +28760,7 @@ public final class LispMacroExpander {
 			}
 		}
 		else {
-			ClosRegistry.GenericInfo shared = closRegistry.generics()
-				.values()
-				.stream()
-				.filter(g -> "SHARED-INITIALIZE".equals(plainName(g.name())))
-				.findFirst()
-				.orElse(null);
+			ClosRegistry.GenericInfo shared = closRegistry.initializationGeneric(LispNames.SHARED_INITIALIZE);
 			if (shared == null) {
 				// No shared-initialize method anywhere yet: create the generic with its
 				// own system default so the chain resolves. Its DISPATCHER is emitted by
@@ -53935,20 +53917,10 @@ public final class LispMacroExpander {
 		LispSymbol args = new LispSymbol("%mmi_args");
 		LispSymbol name = new LispSymbol("%mmi_name");
 		LispSymbol obj = new LispSymbol("%mmi_obj");
-		ClosRegistry.GenericInfo init = closRegistry.generics()
-			.values()
-			.stream()
-			.filter(g -> "INITIALIZE-INSTANCE".equals(plainName(g.name())))
-			.findFirst()
-			.orElse(null);
+		ClosRegistry.GenericInfo init = closRegistry.initializationGeneric(LispNames.INITIALIZE_INSTANCE);
 		boolean sharedInit = false;
 		if (init == null) {
-			init = closRegistry.generics()
-				.values()
-				.stream()
-				.filter(g -> "SHARED-INITIALIZE".equals(plainName(g.name())))
-				.findFirst()
-				.orElse(null);
+			init = closRegistry.initializationGeneric(LispNames.SHARED_INITIALIZE);
 			sharedInit = init != null;
 		}
 		LispVal initCallOnObj = null;
