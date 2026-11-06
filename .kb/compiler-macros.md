@@ -40,21 +40,28 @@ no-op.
 
 ## `load-time-value`
 `LispMacroExpander.hoistLoadTimeValues`, first line of `expandTopLevelDefinitions`; each
-occurrence becomes, with the defvar prepended at index 0:
+occurrence becomes, with the one vector's defvar prepended at index 0:
 
 ```lisp
-(car (or %LOAD-TIME-VALUE-1 (setq %LOAD-TIME-VALUE-1 (list <value form>))))
+(defvar %LOAD-TIME-VALUE-SLOTS (make-array N :initial-element nil))
+(car (or (aref %LOAD-TIME-VALUE-SLOTS 0) (%aset %LOAD-TIME-VALUE-SLOTS 0 (list <value form>))))
 ```
 
-The one-element LIST makes a `nil` result count as computed; names numbered from 1 in walk
-order ([emitted-output-determinism.md](emitted-output-determinism.md)). Interpreter
-`evalLoadTimeValue` memoizes on cons identity. Both memos cap at `EXPANSION_MEMO_LIMIT`
+The one-element LIST makes a `nil` result count as computed; slots numbered from 0 in walk
+order ([emitted-output-determinism.md](emitted-output-determinism.md)). An occurrence is keyed by
+identity, as the interpreter's `evalLoadTimeValue` keys it: one form in two places is one slot
+([make-load-form.md](make-load-form.md)). The interpreter's memos cap at `EXPANSION_MEMO_LIMIT`
 (20,000), then recompute.
 
+- **One vector, not a defvar per occurrence** (2026-11-06): `make-load-form`'s dumps are
+  occurrences, 1.2 million in coalton's library, and each defvar was a special: an arm of every
+  by-name dispatch (`%global-access`, progv, `symbol-value`), three JVM pool entries, a wasm global
+  (wasmtime refuses a module past 1,000,000). A fragment's vector is its own: the name stays out of
+  the JVM link table (`JvmLinkage`).
 - **The fill is LAZY, a deliberate deviation from CL**: the value form needs its library's
   globals, initialized by LATER top-level forms. An occurrence never reached is never evaluated.
-- **The top-level `(defvar %LOAD-TIME-VALUE-N nil)` is mandatory**: both compilers build their
-  global set from `topLevelExprs`, which EXCLUDES `defun` bodies.
+- **The top-level defvar is mandatory**: both compilers build their global set from
+  `topLevelExprs`, which EXCLUDES `defun` bodies.
 - `worthHoistingLoadTimeValue` hoists only a CALL; `quote`/`function`/`find-package` wrappers
   must stay in place so `LispMacroExpander.literalPackageDesignator` can fold
   `(load-time-value (find-package :ironclad))` to a compile-time package name.

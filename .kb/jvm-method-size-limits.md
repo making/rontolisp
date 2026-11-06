@@ -223,6 +223,15 @@ conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
 
 - An array literal of any family is filled by `_ql$N` builders past a budget, and a run of equal
   immediates costs one `addAll` ([array-literals.md](array-literals.md), "A long literal").
+- **A literal's build is a method of its own past `OUT_OF_LINE_BYTES`** (400,
+  `JvmQuoteCompiler.emitSharedConstant`, `_qb$SLOT`), a unit's always (`_qu$SLOT`,
+  [quoted-data.md](quoted-data.md)), and an instance's slots take `_ql$N` builders past the chunk
+  budget like a list's spine (2026-11-06). One form holding many literals had their sum: coalton's
+  environment updates, a statement each in one `let` no cut splits, stopped the whole library's
+  compile at `method _top$474: method code exceeds the JVM's 65535-byte limit: 150122`. The wasm
+  twin: [wasm-function-body-size.md](wasm-function-body-size.md), "Keeping a literal's build
+  bounded". Pin: ci-spec `quoted-builds-larger-than-one-function-body` (300 literals of 40 cells
+  in one form, a 5000-cell list two literals share, a 4095-object tree).
 
 ## Generated data must not become pool entries
 - **Read the text back; do not scan it** (`ClUnicodeTables`): a scanned table cost ~208,000 pool
@@ -234,6 +243,14 @@ conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
 - Cost: the READER travels into the program — worth it for
   megabytes, not a small table (`Uax15Tables` scans short chunks on FIRST READ, `.kb/asdf.md`).
   `--optimize` chunking helps the METHOD limit but makes the pool WORSE.
+- **A run of numeric constants is one cluster of the master pool's lookup table** (measured
+  2026-11-06): `ConstantPoolBuilder`'s table probes linearly from a hash that is a `Long` or
+  `Integer` entry's value plus a per-tag constant (a `String` entry's is its Utf8's index), so
+  consecutive values fill consecutive slots and every later entry landing there walks the run.
+  100,000 consecutive longs minted among string literals took 9.5 s, the next 100,000 25 s, then 38
+  and 68; 680,000 load-time-value slot indices kept coalton's JVM compile in the pool past half an
+  hour. A long in the short range is an immediate widened (`JvmEmitHelper.emitRawLong`), as an int
+  is (`MethodCode.loadConstant`); a long or int past it still takes an entry.
 
 ## Symbol function designators
 `(funcall f ...)` with a SYMBOL at run time resolves through `_lookup` in dispatcher segment 0

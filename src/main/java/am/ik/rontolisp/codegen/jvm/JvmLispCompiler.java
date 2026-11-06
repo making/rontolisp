@@ -6614,6 +6614,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		Map<String, JvmLinkage.Global> gs = new LinkedHashMap<>();
 		JvmLinkage.Fragment linked = this.fragment;
 		for (String g : globals) {
+			if (LispNames.LOAD_TIME_VALUE_SLOTS.equals(g)) {
+				// Each compile numbers its own load-time values from 0: a fragment's
+				// slots are no host's.
+				continue;
+			}
 			boolean nested = nestedDefunNames.contains(g);
 			JvmLinkage.Global before = linked != null ? linked.linked().globals().get(g) : null;
 			if (before == null) {

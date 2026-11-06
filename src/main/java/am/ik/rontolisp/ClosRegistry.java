@@ -3856,6 +3856,34 @@ public final class ClosRegistry {
 		return found;
 	}
 
+	/**
+	 * Looks up a class by its exact name only, with none of {@link #findClass}'s package
+	 * tolerance.
+	 * @param name the class name as spelled
+	 * @return the class registered under that name, or null
+	 */
+	@Nullable public ClassInfo findClassExactly(String name) {
+		return this.classes.get(normalize(name));
+	}
+
+	/**
+	 * Whether a name, bare or {@code cl}-qualified, is one of {@code cl}'s built-in
+	 * classes ({@link #BUILTIN_CLASS_NAMES}, {@link #FIND_CLASS_ONLY_CLASS_NAMES}): no
+	 * other package's class of the member answers for it.
+	 * @param name the class name as spelled
+	 * @return whether it names a built-in class
+	 */
+	public static boolean namesBuiltinClass(String name) {
+		String member = name;
+		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
+			if (!LispNames.CL_PKG.equals(qn.pkg())) {
+				return false;
+			}
+			member = qn.member();
+		}
+		return BUILTIN_CLASS_NAMES.contains(member) || FIND_CLASS_ONLY_CLASS_NAMES.contains(member);
+	}
+
 	@Nullable private ClassInfo lookupClass(String name) {
 		ClassInfo exact = this.classes.get(normalize(name));
 		if (exact != null) {
@@ -3874,6 +3902,11 @@ public final class ClosRegistry {
 		ClassInfo aliased = aliasTarget(name);
 		if (aliased != null) {
 			return aliased;
+		}
+		if (namesBuiltinClass(name)) {
+			// cl's own class: another package's class of the member (coalton's Pathname,
+			// Vector and Symbol) is no answer for it.
+			return null;
 		}
 		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
 			// A qualified spelling also matches a class registered under the plain name:

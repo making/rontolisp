@@ -4,7 +4,6 @@ import java.lang.classfile.TypeKind;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.DoubleEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
-import java.lang.classfile.constantpool.LongEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
@@ -113,19 +112,17 @@ final class JvmQuoteCompiler {
 	 * Reads a node from the unit it is an entry of ({@link QuotedSharing}): the unit's
 	 * slot holds the {@code Object[]} of its named nodes, built whole by whichever site
 	 * runs first. The array travels through {@code _qdSet} like a datum, so racing first
-	 * builds settle on one and the final field behind it covers every node.
+	 * builds settle on one and the final field behind it covers every node. The build is
+	 * one method a site calls, {@code _qu$SLOT}: built at every site, a unit as wide as
+	 * the types coalton's environment updates share filled the heap, every literal
+	 * reaching it carrying a copy.
 	 */
 	private static void emitUnitRead(LispVal node, QuotedGraph unit, JvmLispCompiler.Ctx ctx, String className) {
-		emitSlot(ctx.quotePool.slot(unit.named().getFirst()), ctx, className, () -> {
-			QuotedGraph savedGraph = ctx.quotedGraph;
-			int savedNames = ctx.quotedNames;
-			int savedNextLocal = ctx.nextLocal;
-			emitNamedNodes(unit, ctx, className);
-			ctx.body.aload(ctx.quotedNames);
-			ctx.quotedGraph = savedGraph;
-			ctx.quotedNames = savedNames;
-			ctx.nextLocal = savedNextLocal;
-		});
+		int slot = ctx.quotePool.slot(unit.named().getFirst());
+		emitSlot(slot, ctx, className, () -> JvmEmitHelper.emitSharedCall(ctx, className, "_qu$" + slot, 0, builder -> {
+			emitNamedNodes(unit, builder, className);
+			builder.body.aload(builder.quotedNames);
+		}));
 		ctx.body.checkcast(ctx.cp.classEntry(NAMES_DESCRIPTOR));
 		JvmEmitHelper.emitIntConst(ctx, unit.nameOf(node));
 		ctx.body.aaload();
@@ -256,7 +253,10 @@ final class JvmQuoteCompiler {
 	 * Emits one datum's build behind its lazy slot of the quoted-datum table
 	 * ({@link JvmQuotePool}), so every evaluation of the site answers the same object.
 	 * Shared by the {@code quote} path and the bare-instance-literal path, which have the
-	 * same identity rule and differ only in what they build.
+	 * same identity rule and differ only in what they build. A build past
+	 * {@link #OUT_OF_LINE_BYTES} is a method of its own the site calls, {@code _qb$SLOT}:
+	 * one form holding many literals (coalton's environment updates, a statement each
+	 * inside one {@code let}) is otherwise their sum, past the method limit.
 	 * @param datum the datum the slot is keyed by (identity, not equality)
 	 * @param ctx the compilation context
 	 * @param className the class being emitted
@@ -268,7 +268,13 @@ final class JvmQuoteCompiler {
 			emitUnitRead(datum, unit, ctx, className);
 			return;
 		}
-		emitSlot(ctx.quotePool.slot(datum), ctx, className, build);
+		int slot = ctx.quotePool.slot(datum);
+		if (ctx.quotedGraph == null && estimateQuoted(datum, ctx.quotePool.graphOf(datum)) > OUT_OF_LINE_BYTES) {
+			emitSlot(slot, ctx, className, () -> JvmEmitHelper.emitSharedCall(ctx, className, "_qb$" + slot, 0,
+					builder -> compileDatum(datum, builder, className)));
+			return;
+		}
+		emitSlot(slot, ctx, className, build);
 	}
 
 	/**
@@ -465,16 +471,7 @@ final class JvmQuoteCompiler {
 	private static void emitRawLongStore(JvmLispCompiler.Ctx ctx, int index, long value) {
 		ctx.body.dup();
 		JvmEmitHelper.emitIntConst(ctx, index);
-		if (value == 0L) {
-			ctx.body.lconst_0();
-		}
-		else if (value == 1L) {
-			ctx.body.lconst_1();
-		}
-		else {
-			LongEntry lc = ctx.cp.entries().longEntry(value);
-			ctx.body.ldc(lc);
-		}
+		JvmEmitHelper.emitRawLong(value, ctx);
 		ctx.body.lastore();
 	}
 
@@ -716,10 +713,33 @@ final class JvmQuoteCompiler {
 		ctx.body.aastore();
 	}
 
-	// Stores the slot values into the Object[] on top of the stack, leaving it there.
+	// Stores the slot values into the Object[] on top of the stack, leaving it there; as
+	// a long list's spine, a builder per chunk when the slots hold more than one method
+	// should (coalton's environment updates hold trees of types as literals).
 	private static void emitInstanceFilling(am.ik.rontolisp.LispInstance inst, JvmLispCompiler.Ctx ctx,
 			String className) {
-		for (int i = 0; i < inst.slotCount(); i++) {
+		int n = inst.slotCount();
+		int[] starts = new int[n];
+		int[] sizes = new int[n];
+		for (int i = 0; i < n; i++) {
+			starts[i] = i;
+			sizes[i] = ADD_BYTES + estimateQuoted(inst.slot(i), ctx.quotedGraph);
+		}
+		List<int[]> chunks = chunks(starts, sizes, n);
+		if (chunks.size() == 1) {
+			emitInstanceSlots(inst, 0, n, ctx, className);
+			return;
+		}
+		for (int[] chunk : chunks) {
+			emitBuilderCall(NAMES_DESCRIPTOR, ctx, className,
+					builder -> emitInstanceSlots(inst, chunk[0], chunk[1], builder, className));
+		}
+	}
+
+	// Stores slots [from, to) into the Object[] on top of the stack, leaving it there.
+	private static void emitInstanceSlots(am.ik.rontolisp.LispInstance inst, int from, int to, JvmLispCompiler.Ctx ctx,
+			String className) {
+		for (int i = from; i < to; i++) {
 			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, 1 + i);
 			compileQuotedVal(inst.slot(i), ctx, className);
@@ -846,6 +866,15 @@ final class JvmQuoteCompiler {
 	/** Bytes a named array or instance costs before it holds anything. */
 	private static final int EMPTY_NODE_BYTES = 40;
 
+	/** Bytes a read of a unit costs: its slot, the builder call and the element read. */
+	private static final int UNIT_READ_BYTES = 24;
+
+	/**
+	 * The build a literal's site keeps inline, at most: past it the build is a method of
+	 * its own. A call and its slot cost about 20 bytes.
+	 */
+	private static final int OUT_OF_LINE_BYTES = 400;
+
 	/** The type of a cons, of an instance, and of the array of a build's named nodes. */
 	private static final String NAMES_DESCRIPTOR = "[Ljava/lang/Object;";
 
@@ -965,16 +994,23 @@ final class JvmQuoteCompiler {
 	 *
 	 * Only ever compared against {@link #QUOTE_CHUNK_BUDGET}, so every leaf is charged
 	 * the width of the widest constant load and no emitter is consulted. A named node is
-	 * such a load, which is also what ends the walk on a circle. A read of a unit holds
-	 * the unit's build.
+	 * such a load, which is also what ends the walk on a circle. A read of a unit is the
+	 * slot and a call of its builder.
 	 */
 	private static int estimateQuoted(LispVal val, @Nullable QuotedGraph graph) {
 		QuotedGraph unit = (graph != null) ? graph.unitOf(val) : null;
 		if (unit != null) {
-			return estimateNamedNodes(unit);
+			return UNIT_READ_BYTES;
 		}
 		if (isNamed(val, graph)) {
 			return 6;
+		}
+		if (val instanceof am.ik.rontolisp.LispInstance inst) {
+			int size = EMPTY_NODE_BYTES;
+			for (int i = 0; i < inst.slotCount(); i++) {
+				size += ADD_BYTES + estimateQuoted(inst.slot(i), graph);
+			}
+			return size;
 		}
 		if (val instanceof LispCons cons) {
 			int size = 0;

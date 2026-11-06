@@ -9818,8 +9818,8 @@ public final class LispNames {
 
 	/**
 	 * The {@code load-time-value} special operator: its form is evaluated once per
-	 * occurrence, not once per use. The compile path hoists the value into a synthesized
-	 * {@link #LOAD_TIME_VALUE_SLOT_PREFIX} global filled on first use
+	 * occurrence, not once per use. The compile path hoists the value into a slot of the
+	 * synthesized {@link #LOAD_TIME_VALUE_SLOTS} vector filled on first use
 	 * ({@code LispMacroExpander.hoistLoadTimeValues}); the interpreter memoizes the
 	 * occurrence by identity. A value form cheap enough not to be worth a slot (an atom,
 	 * or a {@code quote}/{@code function}/{@code find-package} wrapper) keeps the plain
@@ -9828,11 +9828,12 @@ public final class LispNames {
 	public static final String LOAD_TIME_VALUE = "LOAD-TIME-VALUE";
 
 	/**
-	 * Prefix of the synthesized global holding one hoisted {@code load-time-value}
-	 * result, numbered from 1 in walk order (so the emitted program stays deterministic).
-	 * The slot holds a one-element list, {@code nil} meaning "not computed yet".
+	 * The synthesized global vector holding every hoisted {@code load-time-value} result,
+	 * one slot per occurrence, numbered from 0 in walk order (so the emitted program
+	 * stays deterministic). A slot holds a one-element list, {@code nil} meaning "not
+	 * computed yet".
 	 */
-	public static final String LOAD_TIME_VALUE_SLOT_PREFIX = "%LOAD-TIME-VALUE-";
+	public static final String LOAD_TIME_VALUE_SLOTS = "%LOAD-TIME-VALUE-SLOTS";
 
 	/**
 	 * Prefix of the binding a {@code make-load-form} method's INIT form is run against:

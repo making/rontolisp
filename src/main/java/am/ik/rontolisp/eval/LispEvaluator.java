@@ -16864,34 +16864,31 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Whether some {@code make-load-form} method specializes on the instance's own type
-	 * or one of its ancestors (class precedence list for a class, {@code :include} chain
-	 * for a struct). An unspecialized (default) method does not count: it would answer
-	 * every instance in the program, and the built-in structural dump is the better
-	 * answer for the ones nobody wrote a method for.
+	 * Whether some {@code make-load-form} method specializes on the instance's type or
+	 * one of its ancestors: the instance's tag is one the dispatcher's own specializer
+	 * test reads ({@code LispMacroExpander.singleSpecializerTest}), a class's and its
+	 * descendants' or a struct's and its {@code :include} descendants'. A name is no
+	 * identity: coalton's {@code Pathname} class is no class of a {@code cl:pathname},
+	 * which keeps the built-in dump. An unspecialized (default) method does not count: it
+	 * would answer every instance in the program, and the built-in structural dump is the
+	 * better answer for the ones nobody wrote a method for.
 	 */
 	private boolean hasMakeLoadFormMethodFor(LispInstance instance) {
 		ClosRegistry.GenericInfo generic = this.closRegistry.findGeneric(LispNames.MAKE_LOAD_FORM);
 		if (generic == null) {
 			return false;
 		}
-		String typeName = instance.layout().printName();
-		java.util.Set<String> names = new java.util.LinkedHashSet<>();
-		names.add(typeKey(typeName));
-		ClosRegistry.ClassInfo info = this.closRegistry.findClass(typeName);
-		if (info != null) {
-			names.add(typeKey(info.name()));
-			info.cpl().forEach(c -> names.add(typeKey(c)));
-		}
-		this.closRegistry.structAncestorNames(typeName).forEach(a -> names.add(typeKey(a)));
+		String tag = instance.layout().tag();
 		for (ClosRegistry.MethodInfo method : generic.methods().values()) {
 			if (method.specializers().isEmpty()) {
 				continue;
 			}
 			ClosRegistry.Specializer first = method.specializers().get(0);
-			if ((first.kind() == ClosRegistry.SpecializerKind.CLASS
-					|| first.kind() == ClosRegistry.SpecializerKind.TYPE) && first.name() != null
-					&& names.contains(typeKey(first.name()))) {
+			String name = first.name();
+			if (name != null
+					&& (first.kind() == ClosRegistry.SpecializerKind.CLASS
+							|| first.kind() == ClosRegistry.SpecializerKind.TYPE)
+					&& (this.closRegistry.descendantTags(name).contains(tag) || structTagsOf(name).contains(tag))) {
 				return true;
 			}
 		}
@@ -16899,10 +16896,12 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * The package-stripped, upcased spelling a specializer and a type name compare by.
+	 * The tags of a struct type and its {@code :include} descendants, none for no struct.
 	 */
-	private static String typeKey(String name) {
-		return memberName(name).toUpperCase(Locale.ROOT);
+	private List<String> structTagsOf(String name) {
+		List<String> tags = this.closRegistry.descendantStructTags(name);
+		String own = tags.isEmpty() ? this.closRegistry.findStructTag(name) : null;
+		return own == null ? tags : List.of(own);
 	}
 
 	/**

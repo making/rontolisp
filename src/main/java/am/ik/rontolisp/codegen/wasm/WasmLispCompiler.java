@@ -11853,8 +11853,33 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		private am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedSharing sharing;
 
+		/**
+		 * The builder function index of each unit and large literal, by identity
+		 * (WasmQuoteCompiler.builderFunction).
+		 */
+		private final java.util.IdentityHashMap<Object, Integer> builders = new java.util.IdentityHashMap<>();
+
 		QuoteGlobals(int base) {
 			this.base = base;
+		}
+
+		/**
+		 * The function a build was given.
+		 * @param key the unit or the literal
+		 * @return its function index, null before its first site
+		 */
+		@org.jspecify.annotations.Nullable
+		Integer builder(Object key) {
+			return this.builders.get(key);
+		}
+
+		/**
+		 * Records the function a build was given.
+		 * @param key the unit or the literal
+		 * @param funcIndex its function index
+		 */
+		void builder(Object key, int funcIndex) {
+			this.builders.put(key, funcIndex);
 		}
 
 		/**
@@ -14234,6 +14259,13 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		/** The local of the named nodes of {@link #quotedGraph}. */
 		int quotedNames;
+
+		/**
+		 * The quoted nodes this function's body has built inline so far: past
+		 * {@code WasmQuoteCompiler.BUILD_NODES_BUDGET} the next aggregate is built by a
+		 * function of its own ({@code WasmQuoteCompiler.builderFunction}).
+		 */
+		int quotedBuildNodes;
 
 		/**
 		 * Count of i64 scratch locals live in the CURRENT fused site (the fusion compiler
