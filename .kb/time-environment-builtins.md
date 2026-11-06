@@ -96,13 +96,31 @@ on a reference so an entropy-free program never loads `java.security`; WASM = lo
 
 ## `sleep`
 `LispMacroExpander.expandSleep` does the shared `(round (* n 1000))` conversion and the
-non-positive guard. The wait is per backend: interpreter/JVM park via `%SLEEP-MS`
-(`JvmSleepCompiler`'s `Thread.sleep(J)`, pool entries minted at the call site); Preview 1
-spins on the clock (`expandSleep`'s `spin` arm); `--no-wasi` SIGNALS at call time naming
-`sleep`, argument still evaluated (`WasmExprCompiler`, before the spin arm), because its clock
+non-positive guard, ending in `%SLEEP-MS`. The wait is per backend: interpreter/JVM park
+(`JvmSleepCompiler`'s `Thread.sleep(J)`, pool entries minted at the call site); Preview 1 (so
+`--native`) calls `_sleep_ms` (`FUNC_SLEEP_MS`, `WasmIoRuntimeBuilder.buildSleepMsBody`), which
+blocks in WASI `poll_oneoff` on one relative monotonic-clock subscription; `--no-wasi` SIGNALS
+at call time naming `sleep`, argument still evaluated (`WasmExprCompiler`), because its clock
 only moves on a host write; `--component` is NOT a lowering but the spliced `wait.lisp` DEFUN
 (`eval/WaitForLibrary`, triggered by `rontolisp:wait-for` OR `sleep`) FORCING a
 `wasi:clocks/monotonic-clock` timer future through `rontolisp::%future-force`.
+
+Preview 1 detail (since 2026-11-07; it spun on `get-internal-real-time` before, a core per
+wait, and `usocket:wait-for-input`'s 10 ms polls made every `--native` socket wait one):
+- `poll_oneoff` is an APPENDED import (`.kb/wasm-import.md`), fd_write's shape so no type is
+  added, gated on what Pass 2 EMITTED (`Ctx.sleepCompiled`, set by the `%SLEEP-MS` site), not a
+  source scan, so `_sleep_ms` is never the nil stub where a sleep compiled. A module compiling
+  no sleep imports nothing new even at `--optimize=off`; one whose sleep site is unreachable
+  loses the import to the shaker.
+- `_sleep_ms` loops on the monotonic clock around the poll: a host that wakes early, or
+  refuses the poll and returns at once, is polled again for the rest, so the interval always
+  elapses -- at worst by the old spin. Counts past an i64 of nanoseconds (limb tier included)
+  wait the i64 maximum.
+- Measured 2026-11-07: a 2 s sleep took 2.03 s user CPU spinning and 0.04 s blocking (plain
+  `wasmtime run`; `--native` 0.00 s), and a `--native` `usocket:wait-for-input` on a quiet
+  socket for 2 s 0.01 s. Under wasmtime 49 fuel a 0.5 s spin burned 100-200 M against a
+  start-up of ~17 M, which `WasmLispCompilerIntegrationTest#sleepBlocksOnPollOneoffOnPreview1`
+  turns into a 40 M budget.
 
 The component arm must stay a FORCING defun: `await` is legal only at top level or inside
 `async-defun`/`async-lambda`, a lowering would run too late for the async pass and yield a
@@ -137,7 +155,7 @@ runner's `localtime::tests`, ci-spec `time-functions` (TZ-independent round trip
 `WasmLispCompilerTest#getenvInServeModeImportsWasiCliEnvironment`,
 `#getenvInBaseComponentBindsTheBlocksEnvironmentInstance`;
 `WasmLispCompilerIntegrationTest#componentGetenvFromWasiEnvironment`,
-`#preview1GetenvDoesNotCorruptNewline`, `#sleepSpinsOnTheClockOnPreview1`,
+`#preview1GetenvDoesNotCorruptNewline`, `#sleepBlocksOnPollOneoffOnPreview1`,
 `#componentSleepUsesTheHostTimerInsteadOfSpinning`; ci-spec
 `getenv-does-not-corrupt-newline`, `clack-enablement-builtins`,
 `namestring-halves-nstring-case-and-environment-enquiry` (its `expectedByBackend` carries the

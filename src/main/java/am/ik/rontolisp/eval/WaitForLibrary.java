@@ -71,7 +71,7 @@ public final class WaitForLibrary {
 			// `sleep` counts as a reference here: under --component it lowers to
 			// (await (wait-for ms)) in WasmExprCompiler, which resolves to THIS splice's
 			// defun -- and that lowering happens long after this pass, so the trigger has
-			// to name the surface form. Preview 1 spins instead and never gets here.
+			// to name the surface form. Preview 1 polls instead and never gets here.
 			// A usocket reference counts too (the SocketsLibrary precedent): the usocket
 			// shim splices later in the pipeline and its wait-for-input carries a sleep
 			// call site unconditionally (usocket.lisp is not pruned), so its sleep

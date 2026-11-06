@@ -19817,46 +19817,27 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands {@code (sleep seconds)}, the waiting form, into the shared
-	 * seconds-to-whole-milliseconds conversion plus the backend's wait.
-	 *
-	 * <p>
-	 * {@code spin} false (interpreter, JVM) yields
+	 * seconds-to-whole-milliseconds conversion plus the backend's wait:
 	 * {@code (let ((__sleep_ms (round (* seconds 1000)))) (if (> __sleep_ms 0) (%sleep-ms __sleep_ms) nil))}
 	 * -- the guard is here, not in the primitive, so {@code %sleep-ms} is a straight-line
-	 * "park for this many milliseconds" call and a zero/negative duration is a no-op like
-	 * every Common Lisp.
-	 *
-	 * <p>
-	 * {@code spin} true is WASM <strong>Preview 1</strong> only: it loops on
-	 * {@code get-internal-real-time} until the deadline, because Preview 1's nine imports
-	 * include a CLOCK but no host timer, so burning the interval is the only way to
-	 * elapse it. {@code --component} never comes here -- {@code sleep} is the spliced
-	 * {@code wait.lisp} defun over the real {@code wasi:clocks} timer there. See
-	 * {@code .kb/time-environment-builtins.md} for both, and the re-evaluation trigger
-	 * for the Preview 1 spin.
+	 * "wait this many milliseconds" call and a zero/negative duration is a no-op like
+	 * every Common Lisp. The interpreter and the JVM park the thread; WASM Preview 1
+	 * blocks in WASI {@code poll_oneoff}. {@code --component} never comes here --
+	 * {@code sleep} is the spliced {@code wait.lisp} defun over the real
+	 * {@code wasi:clocks} timer there ({@code .kb/time-environment-builtins.md}).
 	 * @param cons the sleep expression
-	 * @param spin whether this backend must loop on the clock instead of parking
 	 * @return the expanded expression
 	 */
-	public static LispVal expandSleep(LispCons cons, boolean spin) {
+	public static LispVal expandSleep(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			return programErrorForm(cons, LispNames.SLEEP + " expects 1 argument, got " + (parts.size() - 1));
 		}
 		LispVal millis = callOf(LispNames.ROUND,
 				listToCons(List.of(new LispSymbol(LispNames.MUL), parts.get(1), new LispInteger(1000))));
-		if (!spin) {
-			LispSymbol ms = new LispSymbol("__sleep_ms");
-			LispVal positive = listToCons(List.of(new LispSymbol(LispNames.GT), ms, new LispInteger(0)));
-			return makeLet(ms.name(), millis, makeIf(positive, callOf(LispNames.SLEEP_MS, ms), LispNil.INSTANCE));
-		}
-		LispSymbol end = new LispSymbol("__sleep_end");
-		LispVal now = listToCons(List.of(new LispSymbol(LispNames.GET_INTERNAL_REAL_TIME)));
-		LispVal deadline = listToCons(List.of(new LispSymbol(LispNames.ADD), now, millis));
-		LispVal spinLoop = listToCons(List.of(new LispSymbol(LispNames.WHILE),
-				listToCons(List.of(new LispSymbol(LispNames.LT), now, end)), LispNil.INSTANCE));
-		return makeLet(end.name(), deadline,
-				listToCons(List.of(new LispSymbol(LispNames.PROGN), spinLoop, LispNil.INSTANCE)));
+		LispSymbol ms = new LispSymbol("__sleep_ms");
+		LispVal positive = listToCons(List.of(new LispSymbol(LispNames.GT), ms, new LispInteger(0)));
+		return makeLet(ms.name(), millis, makeIf(positive, callOf(LispNames.SLEEP_MS, ms), LispNil.INSTANCE));
 	}
 
 	/**

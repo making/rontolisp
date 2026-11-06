@@ -49,8 +49,8 @@ API である [`rontolisp:random-bytes`](../reference/functions/rontolisp-random
 (後述の[ローカルタイムゾーン](#the-local-time-zone))。
 
 待機は時計のもう半分です。[`sleep`](../reference/functions/sleep.md)
-はインタプリタと JVM ではスレッドを停止させ、`--component` では本物のホストタイマーを待ち(CPU
-を消費しません)、WASM Preview 1 ではクロックをビジーウェイトします(インポートにクロックはあってもタイマーが無いためです)。`--no-wasi`
+はインタプリタと JVM ではスレッドを停止させ、WASM Preview 1 と `--native` では WASI の `poll_oneoff`
+でブロックし、`--component` では本物のホストタイマーを待ちます。どれも CPU を消費しません。`--no-wasi`
 ではシグナルします — 後述します。
 
 ## ローカルタイムゾーン

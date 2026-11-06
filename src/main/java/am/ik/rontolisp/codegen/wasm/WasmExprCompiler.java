@@ -1056,8 +1056,9 @@ final class WasmExprCompiler {
 				compileExpr(LispMacroExpander.expandTorchNoGrad(cons), ctx);
 				return;
 			}
-			// sleep: on Preview 1 a spin on the clock, the only wait its nine imports
-			// can express. Under --component it is the SPLICED wait.lisp defun instead
+			// sleep: on Preview 1 %sleep-ms, a block in the injected poll_oneoff
+			// (.kb/time-environment-builtins.md). Under --component it is the SPLICED
+			// wait.lisp defun instead
 			// (eval/WaitForLibrary), which awaits the real wasi:clocks timer and so
 			// YIELDS -- the rest of the instance keeps running -- so the name falls
 			// through to the ordinary call path that resolves the defun, exactly like
@@ -1080,13 +1081,12 @@ final class WasmExprCompiler {
 						warnClRedefinition(sym.name(), cons, ctx);
 					}
 					if (ctx.noWasi) {
-						// Preview 1 elapses an interval by SPINNING on the clock (its
-						// nine imports carry no timer). A --no-wasi module has neither:
-						// its clock is a cell only the host writes, and no host can
-						// write it while a call is running -- so the spin would be an
-						// infinite loop rather than a wait. Signalling names that; the
-						// argument still evaluates for effect, and the condition is
-						// catchable like every other --no-wasi refusal.
+						// Preview 1 waits in the host's poll_oneoff. A --no-wasi module
+						// imports no timer, and its clock is a cell only the host writes,
+						// which no host can do while a call is running -- so no interval
+						// could elapse. Signalling names that; the argument still
+						// evaluates for effect, and the condition is catchable like every
+						// other --no-wasi refusal.
 						compileExpr(LispMacroExpander.expandConstantResult(cons,
 								LispMacroExpander.callTimeUnsupportedStub(sym.name()
 										+ " cannot wait on a --no-wasi module: it imports no timer, and its clock"
@@ -1098,11 +1098,11 @@ final class WasmExprCompiler {
 					if (ctx.functions.containsKey(LispNames.OBJC_SLEEP_INTERNAL)) {
 						// A --native program using objc: runs on thread 0, whose event
 						// loop only turns while the module waits: its sleep is the
-						// host's run loop (objc-native-primitives.lisp), never the spin.
+						// host's run loop (objc-native-primitives.lisp), never a poll.
 						compileExpr(new LispCons(new LispSymbol(LispNames.OBJC_SLEEP_INTERNAL), cons.cdr()), ctx);
 						return;
 					}
-					compileExpr(LispMacroExpander.expandSleep(cons, true), ctx);
+					compileExpr(LispMacroExpander.expandSleep(cons), ctx);
 					return;
 				}
 				if (!ctx.functions.containsKey(LispNames.SLEEP)) {
@@ -1505,6 +1505,23 @@ final class WasmExprCompiler {
 	 */
 	private static boolean compileOperator2(LispSymbol sym, LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		switch (sym.name()) {
+			// %sleep-ms: Preview 1's wait, _sleep_ms over the injected poll_oneoff,
+			// which this site asks for. Only sleep's expansion reaches it, and only off
+			// --component (wait.lisp's defun) and --no-wasi (a refusal).
+			case LispNames.SLEEP_MS -> {
+				if (cons.toList().size() != 2) {
+					throw new UnsupportedOperationException(
+							LispNames.SLEEP_MS + " expects 1 argument, got " + (cons.toList().size() - 1));
+				}
+				if (ctx.component || ctx.noWasi) {
+					throw new UnsupportedOperationException(
+							LispNames.SLEEP_MS + " is Preview 1's wait; --component and --no-wasi have none");
+				}
+				WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_SLEEP_MS);
+				ctx.sleepCompiled[0] = true;
+			}
 			// %terminal-p: _terminal_p over the injected fd_fdstat_get, a nil stub on a
 			// --no-wasi module.
 			case LispNames.TERMINAL_P_INTERNAL -> {
