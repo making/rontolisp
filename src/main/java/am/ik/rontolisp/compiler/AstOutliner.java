@@ -515,6 +515,11 @@ public final class AstOutliner {
 				return form;
 			}
 			children.sort(Comparator.comparingInt((Child child) -> nodes(child.form())).reversed());
+			// A list's argument list is cut into runs below, which moves its small
+			// arguments a run per piece rather than one closure each: only an argument
+			// that would fill half a run is worth one of its own.
+			boolean listCall = LispNames.LIST.equals(head.name());
+			int smallest = listCall ? Math.max(MIN_CUT_NODES, budget / 2) : MIN_CUT_NODES;
 			Map<Child, LispVal> replacements = new HashMap<>();
 			int kept = nodes;
 			for (Child child : children) {
@@ -551,7 +556,7 @@ public final class AstOutliner {
 					}
 					break;
 				}
-				if (childNodes < MIN_CUT_NODES) {
+				if (childNodes < smallest) {
 					// Sorted largest first, so nothing bigger is left to try.
 					break;
 				}
@@ -562,7 +567,42 @@ public final class AstOutliner {
 			if (LispNames.COND.equals(head.name()) && nodes(rebuilt) > budget) {
 				return splitClauses(((LispCons) rebuilt).toList(), budget, rebuilt);
 			}
+			if (listCall && nodes(rebuilt) > budget) {
+				return splitArguments(((LispCons) rebuilt).toList(), budget, rebuilt);
+			}
 			return rebuilt;
+		}
+
+		/**
+		 * {@return a {@code list} call still over {@code budget} once its big arguments
+		 * moved, with its argument list cut} The generated tables
+		 * ({@code %gf-static-methods}, a dispatcher's run-time entries) are hundreds of
+		 * arguments each too small to move. So the arguments past the longest prefix that
+		 * fits move into a piece of their own, cut the same way in turn:
+		 * {@code (list a1 .. ak ak+1 .. an)} is
+		 * {@code (list* a1 .. ak (list ak+1 .. an))} exactly, evaluated in the same order
+		 * into a fresh list. An argument is never split.
+		 */
+		private LispVal splitArguments(List<LispVal> parts, int budget, LispVal form) {
+			// The operator, the list's end, and the piece the tail becomes.
+			int used = 2 + WRAP_NODES;
+			int keep = 1;
+			while (keep < parts.size() && (keep == 1 || used + nodes(parts.get(keep)) <= budget)) {
+				used += nodes(parts.get(keep));
+				keep++;
+			}
+			if (keep >= parts.size() - 1) {
+				// Nothing past the prefix, or a single argument: moving it buys nothing.
+				return form;
+			}
+			List<LispVal> tail = new ArrayList<>();
+			tail.add(parts.get(0));
+			tail.addAll(parts.subList(keep, parts.size()));
+			List<LispVal> out = new ArrayList<>();
+			out.add(new LispSymbol(LispNames.LIST_STAR));
+			out.addAll(parts.subList(1, keep));
+			out.add(wrap(cut(list(tail), budget)));
+			return list(out);
 		}
 
 		/**
@@ -624,8 +664,14 @@ public final class AstOutliner {
 					out.set(child.index(), entry.getValue());
 				}
 				else {
-					clauses.computeIfAbsent(child.index(), i -> new ArrayList<>(((LispCons) parts.get(i)).toList()))
-						.set(child.clauseIndex(), entry.getValue());
+					List<LispVal> clauseParts = clauses.computeIfAbsent(child.index(),
+							i -> new ArrayList<>(((LispCons) parts.get(i)).toList()));
+					LispVal replacement = entry.getValue();
+					if (child.binding()) {
+						replacement = list(
+								List.of(((LispCons) clauseParts.get(child.clauseIndex())).car(), replacement));
+					}
+					clauseParts.set(child.clauseIndex(), replacement);
 				}
 			}
 			clauses.forEach((index, clauseParts) -> out.set(index, list(clauseParts)));
@@ -667,9 +713,10 @@ public final class AstOutliner {
 
 	/**
 	 * One candidate position: {@code parts[index]}, or {@code parts[index][clauseIndex]}
-	 * when the operator's argument is a clause rather than a form.
+	 * when the operator's argument is a clause rather than a form, or the value of that
+	 * element when it is a {@code (variable value)} binding.
 	 */
-	private record Child(int index, int clauseIndex, LispVal form) {
+	private record Child(int index, int clauseIndex, boolean binding, LispVal form) {
 	}
 
 	/**
@@ -689,10 +736,16 @@ public final class AstOutliner {
 					addForm(out, parts, i);
 				}
 			}
+			// A binding's value is evaluated where the binding stands, so a piece called
+			// there sees what it would: the outer scope, and under let* the bindings
+			// before it.
+			case LispNames.LET, LispNames.LET_STAR -> {
+				addBindingValues(out, parts, 1);
+				addForms(out, parts, 2);
+			}
 			// flet/labels: a DEFINITION body is a method of its own already, so only the
 			// body runs in this frame.
-			case LispNames.BLOCK, LispNames.LET, LispNames.LET_STAR, LispNames.FLET, LispNames.LABELS ->
-				addForms(out, parts, 2);
+			case LispNames.BLOCK, LispNames.FLET, LispNames.LABELS -> addForms(out, parts, 2);
 			case LispNames.MULTIPLE_VALUE_BIND -> addForms(out, parts, 3);
 			case LispNames.TAGBODY -> {
 				// A label is an atom and a statement is a form; only the forms are code.
@@ -815,7 +868,7 @@ public final class AstOutliner {
 		if (isDeclaration(form)) {
 			return;
 		}
-		out.add(new Child(index, -1, form));
+		out.add(new Child(index, -1, false, form));
 	}
 
 	private static void addClauseForms(List<Child> out, List<LispVal> parts, int index, int from) {
@@ -826,7 +879,24 @@ public final class AstOutliner {
 		for (int j = from; j < clauseParts.size(); j++) {
 			LispVal form = clauseParts.get(j);
 			if (!isDeclaration(form)) {
-				out.add(new Child(index, j, form));
+				out.add(new Child(index, j, false, form));
+			}
+		}
+	}
+
+	/**
+	 * The value of each {@code (variable value)} binding of the list
+	 * {@code parts[index]}.
+	 */
+	private static void addBindingValues(List<Child> out, List<LispVal> parts, int index) {
+		if (index >= parts.size() || !(parts.get(index) instanceof LispCons bindings) || !bindings.isProperList()) {
+			return;
+		}
+		List<LispVal> list = bindings.toList();
+		for (int j = 0; j < list.size(); j++) {
+			if (list.get(j) instanceof LispCons binding && binding.isProperList() && binding.car() instanceof LispSymbol
+					&& binding.cdr() instanceof LispCons value && value.cdr() instanceof LispNil) {
+				out.add(new Child(index, j, true, value.car()));
 			}
 		}
 	}

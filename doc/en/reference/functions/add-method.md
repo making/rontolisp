@@ -29,7 +29,7 @@ A `defmethod` on a generic function whose `defgeneric` names a `:generic-functio
       (speak (make-instance 'animal :name "cat"))) ; => ((:DOG "rex") (:ANIMAL "cat"))
 ```
 
-`compute-applicable-methods` answers the methods of a generic function that apply to a list of arguments as method metaobjects, most specific first and the same object for a method each time: the methods a `defmethod` defined as well as those `add-method` added. It takes a generic function's metaobject or its `#'name`; a function that is no generic function answers `nil`. It is a generic function too, so a program can define methods on it, but a call of a generic function does not consult it: such a method changes only what a caller of `compute-applicable-methods` sees. A compiled program has these metaobjects where it names `compute-applicable-methods`.
+`compute-applicable-methods` answers the methods of a generic function that apply to a list of arguments as method metaobjects, most specific first and the same object for a method each time: the methods of the `defmethod` forms that have run as well as those `add-method` added. It takes a generic function's metaobject or its `#'name`; a function that is no generic function answers `nil`. It is a generic function too, so a program can define methods on it, but a call of a generic function does not consult it: such a method changes only what a caller of `compute-applicable-methods` sees. A compiled program has these metaobjects where it names `compute-applicable-methods`.
 
 ```lisp
 (defgeneric size (x))

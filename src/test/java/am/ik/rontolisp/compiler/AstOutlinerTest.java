@@ -83,18 +83,32 @@ class AstOutlinerTest {
 	}
 
 	@Test
-	void aFlatCondIsCutIntoAChainOfClauseRuns() {
-		// Clauses each too small to move: the clause list is cut instead, and every
-		// piece but the last ends in the (t ...) clause that calls the next.
+	void aFlatCondOrListIsCutIntoAChainOfRuns() {
+		// Clauses or arguments each too small to move: the clause or argument list is
+		// cut instead, and every piece but the last ends in what calls the next -- a
+		// (t ...) clause, a list* tail.
 		StringBuilder cond = new StringBuilder("(cond");
+		StringBuilder list = new StringBuilder("(list");
 		for (int k = 0; k < 100; k++) {
 			cond.append(" ((eql x ").append(k).append(") ").append(statement(k)).append(')');
+			list.append(" (+ x ").append(statement(k)).append(')');
 		}
-		List<LispVal> program = program(cond.append(')').toString());
-		AstOutliner.Result cut = AstOutliner.outline(program, Map.of("F", new AstOutliner.Budget(12000, FIRST_TARGET)));
-		assertThat(cut.outlined()).containsExactly("F");
-		String printed = cut.program().get(0).print();
-		assertThat(printed).contains("(T (LET ((|__outlined_").contains("((EQL X 0)").contains("((EQL X 99)");
+		String cut = AstOutliner
+			.outline(program(cond.append(')').toString()), Map.of("F", new AstOutliner.Budget(12000, FIRST_TARGET)))
+			.program()
+			.get(0)
+			.print();
+		assertThat(cut).contains("(T (LET ((|__outlined_").contains("((EQL X 0)").contains("((EQL X 99)");
+		cut = AstOutliner
+			.outline(program(list.append(')').toString()), Map.of("F", new AstOutliner.Budget(12000, FIRST_TARGET)))
+			.program()
+			.get(0)
+			.print();
+		assertThat(cut).startsWith("(DEFUN F (X) (LIST* (+ X (SETQ ACC (+ ACC (CAR (LIST 0 0)))))")
+			.contains("(LET ((|__outlined_")
+			.contains("(LIST (+ X")
+			.contains("(LIST 99 0)")
+			.doesNotContain("(LET ((|__outlined_0| (LAMBDA () (+ X");
 	}
 
 	@Test
@@ -176,16 +190,20 @@ class AstOutlinerTest {
 	}
 
 	@Test
-	void aTopLevelSetfValueIsCutButItsPlaceIsNot() {
-		// (setf place value): the value is evaluated, the place is not. The value is
-		// two uncuttable-but-large calls in a progn, so no cut inside it fits and the
-		// whole value moves out; the place stays exactly where it was.
+	void aTopLevelSetfOrBindingValueIsCutButItsPlaceOrVariableIsNot() {
+		// (setf place value), (let ((variable value)) ...): the value is evaluated, the
+		// place and the variable are not. The value is two uncuttable-but-large calls in
+		// a progn, so no cut inside it fits and the whole value moves out; the place and
+		// the variable stay exactly where they were.
 		String value = "(progn " + opaqueCall(300) + " " + opaqueCall(300) + ")";
-		List<LispVal> program = topProgram("(setf (aref arr 0) " + value + ")");
-		AstOutliner.Result cut = AstOutliner.outlineTopLevel(program, Map.of(0, new AstOutliner.Budget(70000, 24000)));
-		assertThat(cut.outlinedTop()).containsExactly(0);
-		String printed = cut.program().get(0).print();
-		assertThat(printed).startsWith("(SETF (AREF ARR 0) (LET").contains("__outlined_");
+		Map.of("(setf (aref arr 0) " + value + ")", "(SETF (AREF ARR 0) (LET ((|__outlined_",
+				"(let* ((v " + value + ")) (print v))", "(LET* ((V (LET ((|__outlined_")
+			.forEach((form, cutForm) -> {
+				AstOutliner.Result cut = AstOutliner.outlineTopLevel(topProgram(form),
+						Map.of(0, new AstOutliner.Budget(70000, 24000)));
+				assertThat(cut.outlinedTop()).containsExactly(0);
+				assertThat(cut.program().get(0).print()).startsWith(cutForm);
+			});
 	}
 
 }

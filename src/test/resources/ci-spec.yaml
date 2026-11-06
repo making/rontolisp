@@ -39967,6 +39967,15 @@ standalone:
       (defmethod gfp-cam-pkg ((x integer)) :integer)
       (print (list (gfp-cam-names #'gfp-cam-pkg 1) (class-name (find-class 'package))
                    (typep (find-package :cl) (find-class 'package)) (typep 'x (find-class 'package))))
+      ;; A generic whose package exports its name, and a method defined after a call: the
+      ;; answer is the dispatcher's at that point.
+      (defpackage :gfp-out (:use :cl) (:export #:gfp-out-cmp))
+      (defgeneric gfp-out:gfp-out-cmp (x y))
+      (defmethod gfp-out:gfp-out-cmp ((x t) (y t)) :t)
+      (defmethod gfp-out:gfp-out-cmp ((x real) (y real)) :real)
+      (print (list (gfp-cam-names #'gfp-out:gfp-out-cmp 1 2) (gfp-out:gfp-out-cmp 1 2)))
+      (defmethod gfp-out:gfp-out-cmp ((x integer) (y real)) :integer)
+      (print (list (gfp-cam-names #'gfp-out:gfp-out-cmp 1 2) (gfp-out:gfp-out-cmp 1 2)))
       ;; find-method and remove-method take the generic's function.
       (defgeneric gfp-fn (x))
       (defmethod gfp-fn ((x integer)) :integer)
@@ -39993,6 +40002,8 @@ standalone:
       ((NIL (INTEGER)) (NIL (NUMBER)))
       ((NIL (NUMBER)))
       (((NIL (INTEGER))) PACKAGE T NIL)
+      (((NIL (REAL REAL)) (NIL (T T))) :REAL)
+      (((NIL (INTEGER REAL)) (NIL (REAL REAL)) (NIL (T T))) :INTEGER)
       (NIL :SIGNALED)
       ((:STRING "s") T)
       (NIL :NO-METHOD :INTEGER)
