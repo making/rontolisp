@@ -24,8 +24,9 @@ backend's bytecode for a hot defun.
   defines no class at run time. A tree whose nodes are bytecode (a class per hot body over the
   interpreter's values) would remove the megamorphic call per node too, but only on HotSpot.
 - Measured on the tree as it landed, builds side by side: `fib 30` 0.92-1.54 s -> 0.52-0.60 s
-  (warm rounds); fset's `compare` 0.48-0.54 s -> 0.40-0.45 s per 40,000; coalton's load up to
-  `library/math/bounded.lisp` 86.1-87.7 s -> 59.5-63.7 s ([asdf.md](asdf.md), the coalton entry).
+  (warm rounds); fset's `compare` 0.56-0.71 s -> 0.30-0.46 s per 40,000 (warm rounds, a box under
+  load 30); coalton's whole load 2168 s -> 1460 s, up to `library/math/bounded.lisp` 86.1-87.7 s
+  -> 59.5-63.7 s ([asdf.md](asdf.md), the coalton entry).
 
 ## Where the time goes now
 
@@ -87,7 +88,7 @@ uiop operator, the print family.
 - Non-tail `depth` on the CLI's 16 MiB, `(defun depth (n) (if (= n 0) 0 (+ 1 (depth (- n
   1)))))`: compiled under `-Xbatch` 47,251 against the walk's 42,198; `-Xint` 22,579 against
   25,019; a cold first recursion (default flags, the tree's classes not yet JIT-compiled while
-  the walk's are) 17,323 against 30,149. Under C2 (`-XX:-UseJVMCICompiler`) 72,126 against the
+  the walk's are) 17,323 against 30,149-32,093. Under C2 (`-XX:-UseJVMCICompiler`) 72,126 against the
   walk's 13,437. Merging the argument loop into `Call` bought `-Xint` depth and cost Graal's.
 - A `BlockTailExit` a compiled exit throws carries its value form compiled, which a compiled
   frame continues with in the exit's scope (a walk frame walks the form): the deferral is for the

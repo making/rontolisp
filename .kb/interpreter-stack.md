@@ -28,7 +28,7 @@ PROGRAM's, so a ceiling inherited from the platform is a different product on ea
   dated later; the mechanism -- the worker thread, `--stack`, the overflow report and the
   REPL's recovery -- is unchanged. Since `.todo/i80` (2026-11-06) a function called twice
   runs compiled, in frames of its own: `depth` reaches 47,251 warm where the walk reached
-  42,198, and 17,323 on a process's first deep recursion where the walk reached 30,149
+  42,198, and 17,323 on a process's first deep recursion where the walk reached 30,149-32,093
   ([interpreter-compiled-bodies.md](interpreter-compiled-bodies.md), "Frames, tails and the
   stack").
 - **That cost is the JIT's, not the program's.** The deepest `depth` a 1 MiB thread holds,

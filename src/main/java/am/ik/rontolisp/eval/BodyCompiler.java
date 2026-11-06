@@ -541,8 +541,8 @@ final class BodyCompiler {
 
 	/**
 	 * A {@code let} whose bindings are all lexical now
-	 * ({@code LispEvaluator.lexicalLet}); any other is the walk's, which binds a special
-	 * and restores it.
+	 * ({@code LispEvaluator.lexicalLet}); one binding a special or {@code *package*} is
+	 * {@link #specialLet}'s, any other shape the walk's.
 	 */
 	private CompiledForm let(LispCons cons, Layout scope, @Nullable LocatedCons here) {
 		if (!(cons.cdr() instanceof LispCons bindingsCell)) {

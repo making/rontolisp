@@ -1057,8 +1057,10 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
     5% (`.todo/i79`). fset's tight loops pay it in full: `fset:compare` of two symbols takes 13.7 µs against
     SBCL's 37 ns. A factor that size takes running hot function bodies compiled (`.todo/i80`).
   - Hot bodies compiled ([interpreter-compiled-bodies.md](interpreter-compiled-bodies.md), 2026-11-06), side by
-    side with the build before on a box under load 14-20: the load up to `math/bounded.lisp` 86.1-87.7 s against
-    59.5-63.7, `math/num.lisp` 41.7-42.7 against 26.5-28.1. Of `math/num.lisp`'s samples 82% run compiled and
+    side with the build before: the whole load 2168 s against 1460 (load 10-55), 1.4-2.4 times as fast at every
+    dear file (`seq.lisp` 300 s against 180, `hashmap.lisp` 224 against 153, `list.lisp` 195 against 107,
+    `file.lisp` 136 against 94, `vector.lisp` 91 against 38); the load up to `math/bounded.lisp` 86.1-87.7 s
+    against 59.5-63.7 (load 14-20). Of `math/num.lisp`'s samples 82% run compiled and
     18% in the walks the compiled code hands back (`setf` statements 5-6% of the samples, `.todo/i79`); what the
     compiled share costs is the tree's own: a built-in applied through `apply` 9%, the argument arrays 8%, a
     lexical read 6%, a `let`'s scope 6%, a call's scope 4%, a call's guard 4% (`.todo/i80` has the plan).
