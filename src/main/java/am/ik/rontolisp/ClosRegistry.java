@@ -4786,11 +4786,35 @@ public final class ClosRegistry {
 	 */
 	public List<String> descendantTags(String className) {
 		String key = normalize(className);
-		return this.classes.values()
+		int version = this.hierarchyVersion;
+		DescendantTags known = this.descendantTagsMemo.get(key);
+		if (known != null && known.hierarchyVersion() == version) {
+			return known.tags();
+		}
+		List<String> tags = this.classes.values()
 			.stream()
 			.filter(c -> c.ancestors().contains(key))
 			.map(c -> "%class-" + c.name())
 			.toList();
+		this.descendantTagsMemo.put(key, new DescendantTags(version, tags));
+		return tags;
+	}
+
+	/**
+	 * {@link #descendantTags}'s answers by normalized class name, each stamped with the
+	 * {@link #hierarchyVersion} it holds for: the interpreter expands a type test, a
+	 * handler's clause and a {@code make-instance} on every evaluation, and each asked
+	 * for a walk of every class.
+	 */
+	private final Map<String, DescendantTags> descendantTagsMemo = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
+	 * One {@link #descendantTags} answer.
+	 *
+	 * @param hierarchyVersion the {@link #hierarchyVersion} it was computed under
+	 * @param tags the tags, an unmodifiable list
+	 */
+	private record DescendantTags(int hierarchyVersion, List<String> tags) {
 	}
 
 	/**
@@ -4801,7 +4825,15 @@ public final class ClosRegistry {
 	 */
 	public static String normalize(String name) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
-		return qn == null ? name : qn.pkg() + "::" + qn.member();
+		if (qn == null) {
+			return name;
+		}
+		// A spelling already in that form is the key itself, whose hash is cached.
+		if (qn.internal() && name.length() == qn.pkg().length() + 2 + qn.member().length()
+				&& name.startsWith(qn.pkg())) {
+			return name;
+		}
+		return qn.pkg() + "::" + qn.member();
 	}
 
 	/** The package-stripped member of a possibly qualified name. */
