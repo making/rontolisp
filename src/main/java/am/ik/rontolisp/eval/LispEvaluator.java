@@ -5934,6 +5934,14 @@ public final class LispEvaluator {
 	static final int NO_JUMP = -1;
 
 	/**
+	 * What a compiled statement answers when it exits to a block of the frame below it
+	 * ({@code CompiledForm#statement}'s {@code deferTo}): the exit waits in the thread's
+	 * register ({@link Environment#takeExit}) for the frame, whose tail its value form
+	 * is. A statement the walk runs throws the exit instead ({@link BlockTailExit}).
+	 */
+	static final int EXITED = -2;
+
+	/**
 	 * Evaluates one tagbody statement for effect and answers the body index of the label
 	 * a {@code go} in its TAIL jumps to, or {@link #NO_JUMP}. The statement runs through
 	 * {@link #evalCons}'s loop with the tagbody's labels, so a {@code (go L)} in any tail

@@ -29,6 +29,22 @@ final class CompiledForms {
 	/** {@code LispEvaluator.NO_JUMP}. */
 	private static final int NO_JUMP = LispEvaluator.NO_JUMP;
 
+	/** {@code LispEvaluator.EXITED}. */
+	private static final int EXITED = LispEvaluator.EXITED;
+
+	/**
+	 * The step a frame takes after a statement of its tail exited to one of its blocks
+	 * ({@link LispEvaluator#EXITED}): the exit's value form, in the exit's scope.
+	 * @param env a scope of the thread the exit was handed on in
+	 * @return the form to step onto next
+	 */
+	static Object exited(Environment env) {
+		BlockTailExit exit = env.takeExit();
+		CompiledForm compiled = exit.compiled();
+		return compiled != null ? new CompiledForm.Scoped(compiled, exit.env())
+				: new CompiledForm.TailForm(exit.form(), exit.env(), null);
+	}
+
 	/**
 	 * Gives an error leaving a form read from a file that place.
 	 * @param e the error
@@ -373,13 +389,22 @@ final class CompiledForms {
 			this.last = last;
 		}
 
-		void statements(Environment env, @Nullable Environment exitTo) {
+		/**
+		 * Runs the statements, up to one that exits to the frame {@code exitTo} names.
+		 * @return {@link LispEvaluator#EXITED} when one did, else
+		 * {@link LispEvaluator#NO_JUMP}
+		 */
+		int statements(Environment env, @Nullable Environment exitTo) {
 			for (CompiledForm statement : this.statements) {
-				statement.statement(env, null, exitTo, null);
+				if (statement.statement(env, null, exitTo, null) == EXITED) {
+					return EXITED;
+				}
 			}
+			return NO_JUMP;
 		}
 
 		LispVal eval(Environment env) {
+			// no exit is handed on with no frame to hand it to
 			statements(env, null);
 			CompiledForm tail = this.last;
 			return tail == null ? nil(env) : tail.eval(env);
@@ -387,7 +412,9 @@ final class CompiledForms {
 
 		int statement(Environment env, @Nullable Environment owner, @Nullable Environment deferTo,
 				LispEvaluator.@Nullable TagbodyLabels labels) {
-			statements(env, owner != null ? owner : deferTo);
+			if (statements(env, owner != null ? owner : deferTo) == EXITED) {
+				return EXITED;
+			}
 			CompiledForm tail = this.last;
 			if (tail == null) {
 				env.clearSpill();
@@ -398,7 +425,9 @@ final class CompiledForms {
 
 		/** The statements run, the form the frame steps onto next in the same scope. */
 		Object step(Environment env, Environment owner) {
-			statements(env, owner);
+			if (statements(env, owner) == EXITED) {
+				return exited(env);
+			}
 			CompiledForm tail = this.last;
 			return tail == null ? nil(env) : tail;
 		}
@@ -407,7 +436,9 @@ final class CompiledForms {
 		 * The statements run, the form the frame steps onto next in a scope of its own.
 		 */
 		Object stepIn(Environment scope, Environment owner) {
-			statements(scope, owner);
+			if (statements(scope, owner) == EXITED) {
+				return exited(scope);
+			}
 			CompiledForm tail = this.last;
 			return tail == null ? nil(scope) : new CompiledForm.Scoped(tail, scope);
 		}
@@ -1093,7 +1124,11 @@ final class CompiledForms {
 				// the statement's frame owns no block yet: this one is its first
 				scope.installBlock(this.name, scope);
 				try {
-					return this.body.statement(scope, scope, deferTo, labels);
+					int jump = this.body.statement(scope, scope, deferTo, labels);
+					if (jump == EXITED && exitsHere(scope)) {
+						return continueStatement(scope.takeExit(), scope, labels);
+					}
+					return jump;
 				}
 				catch (BlockReturnSignal signal) {
 					if (signal.target() != scope) {
@@ -1125,7 +1160,13 @@ final class CompiledForms {
 				try {
 					CompiledForm compiled = exit.compiled();
 					if (compiled != null) {
-						return compiled.statement(exit.env(), null, scope, labels);
+						int jump = compiled.statement(exit.env(), null, scope, labels);
+						if (jump != EXITED) {
+							return jump;
+						}
+						// the value form exited to this block again
+						exit = scope.takeExit();
+						continue;
 					}
 					if (labels != null) {
 						return this.ev.evalTagbodyStatement(exit.form(), exit.env(), labels, scope);
@@ -1146,6 +1187,12 @@ final class CompiledForms {
 					exit = again;
 				}
 			}
+		}
+
+		/** Whether the exit a statement handed on aims at this block's own frame. */
+		private static boolean exitsHere(Environment scope) {
+			BlockTailExit pending = scope.pendingExit();
+			return pending != null && pending.target() == scope;
 		}
 
 		@Override
@@ -1228,7 +1275,9 @@ final class CompiledForms {
 					}
 				}
 				if (deferTo != null && LispEvaluator.exitsOwnedBlock(this.designator, env, deferTo)) {
-					throw new BlockTailExit(deferTo, this.valueForm, env, this.value);
+					// handed up to the frame, with nothing between that opens an extent
+					env.deferExit(new BlockTailExit(deferTo, this.valueForm, env, this.value));
+					return EXITED;
 				}
 			}
 			eval(env);
@@ -1265,15 +1314,24 @@ final class CompiledForms {
 			this.body = body;
 		}
 
-		private LispVal loop(Environment env, @Nullable Environment exitTo) {
+		/**
+		 * Runs the loop to its end, nil its one value, or to a statement that exits to
+		 * the frame {@code exitTo} names.
+		 * @return {@link LispEvaluator#EXITED} when one did, else
+		 * {@link LispEvaluator#NO_JUMP}
+		 */
+		private int loop(Environment env, @Nullable Environment exitTo) {
 			try {
 				while (!(this.test.eval(env) instanceof LispNil)) {
 					this.ev.pollInterrupt();
 					for (CompiledForm statement : this.body) {
-						statement.statement(env, null, exitTo, null);
+						if (statement.statement(env, null, exitTo, null) == EXITED) {
+							return EXITED;
+						}
 					}
 				}
-				return nil(env);
+				env.clearSpill();
+				return NO_JUMP;
 			}
 			catch (LispEvalException e) {
 				throw passing(e, this.located, env);
@@ -1282,19 +1340,19 @@ final class CompiledForms {
 
 		@Override
 		LispVal eval(Environment env) {
-			return loop(env, null);
+			loop(env, null);
+			return LispNil.INSTANCE;
 		}
 
 		@Override
 		int statement(Environment env, @Nullable Environment owner, @Nullable Environment deferTo,
 				LispEvaluator.@Nullable TagbodyLabels labels) {
-			loop(env, owner != null ? owner : deferTo);
-			return NO_JUMP;
+			return loop(env, owner != null ? owner : deferTo);
 		}
 
 		@Override
 		Object step(Environment env, Environment owner) {
-			return loop(env, owner);
+			return loop(env, owner) == EXITED ? exited(env) : LispNil.INSTANCE;
 		}
 
 	}
@@ -1327,7 +1385,13 @@ final class CompiledForms {
 			this.labelled = any;
 		}
 
-		private LispVal run(Environment env, @Nullable Environment exitTo) {
+		/**
+		 * Runs the statements to the end, nil its one value, or to a statement that exits
+		 * to the frame {@code exitTo} names.
+		 * @return {@link LispEvaluator#EXITED} when one did, else
+		 * {@link LispEvaluator#NO_JUMP}
+		 */
+		private int run(Environment env, @Nullable Environment exitTo) {
 			try {
 				// a tagbody with labels is a dynamic extent to an exit's value form: a go
 				// in it must find this tagbody
@@ -1344,6 +1408,9 @@ final class CompiledForms {
 					this.ev.pollInterrupt();
 					try {
 						int jump = item.statement(env, null, statementExitTo, labels);
+						if (jump == EXITED) {
+							return EXITED;
+						}
 						pc = jump == NO_JUMP ? pc + 1 : jump + 1;
 					}
 					catch (LispEvaluator.GoSignal go) {
@@ -1354,7 +1421,8 @@ final class CompiledForms {
 						pc = target + 1;
 					}
 				}
-				return nil(env);
+				env.clearSpill();
+				return NO_JUMP;
 			}
 			catch (LispEvalException e) {
 				throw passing(e, this.located, env);
@@ -1363,19 +1431,19 @@ final class CompiledForms {
 
 		@Override
 		LispVal eval(Environment env) {
-			return run(env, null);
+			run(env, null);
+			return LispNil.INSTANCE;
 		}
 
 		@Override
 		int statement(Environment env, @Nullable Environment owner, @Nullable Environment deferTo,
 				LispEvaluator.@Nullable TagbodyLabels labels) {
-			run(env, owner != null ? owner : deferTo);
-			return NO_JUMP;
+			return run(env, owner != null ? owner : deferTo);
 		}
 
 		@Override
 		Object step(Environment env, Environment owner) {
-			return run(env, owner);
+			return run(env, owner) == EXITED ? exited(env) : LispNil.INSTANCE;
 		}
 
 	}

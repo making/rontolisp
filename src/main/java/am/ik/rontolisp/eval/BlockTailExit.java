@@ -9,9 +9,11 @@ import org.jspecify.annotations.Nullable;
  * enclosing {@code LispEvaluator.evalCons} frame owns, with nothing between the two that
  * opens a dynamic extent. That frame catches it and continues with the value form as its
  * own tail, so the form runs where the block's value is the frame's
- * ({@code .kb/interpreter-tail-calls.md}). It is not a {@link BlockReturnSignal}, which
- * carries a value every other catcher takes as is; only the owning frame catches this
- * one. Not a user-visible error: no stack trace.
+ * ({@code .kb/interpreter-tail-calls.md}). A compiled statement does not throw it: it
+ * leaves it in the thread's register ({@link Environment#deferExit}) and answers
+ * {@link LispEvaluator#EXITED} up to the frame. It is not a {@link BlockReturnSignal},
+ * which carries a value every other catcher takes as is; only the owning frame catches
+ * this one. Not a user-visible error: no stack trace.
  */
 final class BlockTailExit extends RuntimeException {
 

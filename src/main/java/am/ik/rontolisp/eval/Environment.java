@@ -753,7 +753,11 @@ public final class Environment implements Scope {
 		this.bindings = new NameMap(bindings);
 		this.parent = parent;
 		this.functionCells = parent == null ? new ConcurrentHashMap<>() : null;
-		this.functionCellTable = parent == null ? new FunctionCell[256] : null;
+		if (parent == null) {
+			// a volatile store is a fence: a scope below the global one leaves the field
+			// at its default
+			this.functionCellTable = new FunctionCell[256];
+		}
 		this.mvSpill = parent == null ? new ValueCountRegister() : parent.mvSpill;
 		this.lexicalFunction = parent == null ? null : parent.lexicalFunction;
 		this.lexicalPackage = parent == null ? null : parent.lexicalPackage;
@@ -772,7 +776,6 @@ public final class Environment implements Scope {
 		this.bindings = new NameMap(names, values);
 		this.parent = parent;
 		this.functionCells = null;
-		this.functionCellTable = null;
 		this.mvSpill = parent.mvSpill;
 		this.lexicalFunction = parent.lexicalFunction;
 		this.lexicalPackage = parent.lexicalPackage;
@@ -1349,6 +1352,32 @@ public final class Environment implements Scope {
 	 */
 	LispVal spill() {
 		return this.mvSpill.get();
+	}
+
+	/**
+	 * Hands an exit a compiled statement makes to the frame whose block it leaves: the
+	 * statement answers {@link LispEvaluator#EXITED}, and the frame takes the exit
+	 * ({@link #takeExit}).
+	 * @param exit the exit
+	 */
+	void deferExit(BlockTailExit exit) {
+		this.mvSpill.deferExit(exit);
+	}
+
+	/**
+	 * The exit a statement handed on, still pending; null for none.
+	 * @return the exit, or null
+	 */
+	@Nullable BlockTailExit pendingExit() {
+		return this.mvSpill.pendingExit();
+	}
+
+	/**
+	 * Takes the exit a statement handed on ({@link #deferExit}).
+	 * @return the exit
+	 */
+	BlockTailExit takeExit() {
+		return this.mvSpill.takeExit();
 	}
 
 	/**

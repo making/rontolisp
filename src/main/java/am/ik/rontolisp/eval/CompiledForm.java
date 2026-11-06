@@ -19,9 +19,11 @@ import org.jspecify.annotations.Nullable;
  * <ul>
  * <li>{@link #eval}: a frame of its own, as {@link LispEvaluator#eval} runs it;</li>
  * <li>{@link #statement}: a frame of its own whose value is dropped -- a statement of a
- * body, a loop or a {@code tagbody} -- whose exits to the blocks of {@code deferTo} may
- * hand their value form over unevaluated ({@code BlockTailExit}), and whose tail
- * {@code go} to one of {@code labels} answers the label's index;</li>
+ * body, a loop or a {@code tagbody} -- whose exits to the blocks of {@code deferTo} hand
+ * their value form over unevaluated (a {@code BlockTailExit} in the thread's register,
+ * the statement answering {@link LispEvaluator#EXITED} up to the frame that owns the
+ * block), and whose tail {@code go} to one of {@code labels} answers the label's
+ * index;</li>
  * <li>{@link #step}: the tail of the current frame, whose blocks are {@code owner}'s. A
  * frame steps its tail in a loop ({@link #run}), as {@code evalCons} does, so a tail
  * chain costs one Java frame however long it is: a form that hands on to a form of its
@@ -63,7 +65,8 @@ abstract class CompiledForm {
 	 * @param owner the blocks the statement's own frame owns, or null while it owns none
 	 * @param deferTo the owner an exit's value form may be handed to, or null
 	 * @param labels the labels of the {@code tagbody} whose statement this is, or null
-	 * @return the label index a tail {@code go} jumps to, or
+	 * @return the label index a tail {@code go} jumps to, {@link LispEvaluator#EXITED}
+	 * when an exit to {@code deferTo}'s or {@code owner}'s block was handed on, or
 	 * {@link LispEvaluator#NO_JUMP}
 	 */
 	int statement(Environment env, @Nullable Environment owner, @Nullable Environment deferTo,
