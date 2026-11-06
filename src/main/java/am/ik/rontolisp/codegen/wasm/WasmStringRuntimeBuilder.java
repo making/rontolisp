@@ -3199,13 +3199,11 @@ final class WasmStringRuntimeBuilder {
 	/**
 	 * Builds {@code _string_eq} ({@code ignoreCase} false) or {@code _string_equal}
 	 * ({@code ignoreCase} true). Params 0 and 1 are strings. Returns the symbol {@code t}
-	 * on equality, otherwise nil.
+	 * on equality -- {@code _t_sym}'s, so a comparison builds nothing -- otherwise nil.
 	 * @param ignoreCase whether the comparison is case-insensitive (ASCII)
-	 * @param st the string table (to intern the {@code t} symbol)
 	 * @return the function body
 	 */
-	static byte[] buildStringEqBody(boolean ignoreCase, WasmLispCompiler.StringTable st) {
-		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
+	static byte[] buildStringEqBody(boolean ignoreCase) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// Locals 2..5: i, n, ca, cb (i32); 6..7: aArr, bArr ($str_bytes).
@@ -3258,9 +3256,8 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		// all bytes equal -> t
-		i32(w, t.offset());
-		i32(w, t.length());
-		WasmEmitHelper.emitStrBuildCall(w);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_T_SYM);
 		w.write(Instruction.END); // result block
 		w.write(Instruction.END); // function
 		return body.toByteArray();

@@ -126,6 +126,9 @@ final class WasmJsonRuntimeBuilder {
 
 	private static final int LIST = 3;
 
+	// An encoder frame walking a small table's pairs, where OBJECT walks entries.
+	private static final int PAIRS = 4;
+
 	// The key pool's slots, a power of two; each holds a key and its placement hash.
 	private static final int POOL = 64;
 
@@ -597,7 +600,7 @@ final class WasmJsonRuntimeBuilder {
 			inc(this.p, 1);
 			if (kind == OBJECT) {
 				this.a.i32(0).i31();
-				WasmHashTableRuntimeBuilder.emitNewRecord(this.a.w);
+				WasmHashTableRuntimeBuilder.emitNewSmallRecord(this.a.w, 0);
 				WasmEmitHelper.emitNewCons(this.a.w, this.flags.identityHash());
 				WasmEmitHelper.emitNewCell(this.a.w, this.flags.identityHash());
 				this.a.set(this.x);
@@ -1149,12 +1152,86 @@ final class WasmJsonRuntimeBuilder {
 		}
 
 		// x = the hash table of the (key, hash, value) triples on the stack from cstart,
-		// its buckets and order sized so that no insertion grows them, each pair put in
-		// order (a repeated key's last value wins, at its first key's place): the table
-		// _ht_put would have built, built without its growth tests.
+		// each pair put in order (a repeated key's last value wins, at its first key's
+		// place): the table _ht_put would have built -- a small record of at most
+		// SMALL_MAX keys, its room the pairs, else a flat one without its growth tests.
 		private void closeObject() {
 			this.a.get(this.vt).get(this.cstart).op(Instruction.I32_SUB).i32(3).op(Instruction.I32_DIV_U);
 			this.a.set(this.pairs);
+			this.a.get(this.pairs).i32(WasmHashTableRuntimeBuilder.SMALL_MAX).op(Instruction.I32_LE_U).ifVoid();
+			closeSmallObject();
+			this.a.elseArm();
+			closeFlatObject();
+			this.a.end();
+			// the header's count, its test tag (equal, 0) beside it in a module that tags
+			this.a.get(this.size);
+			if (this.flags.tagged()) {
+				this.a.i32(2).op(Instruction.I32_SHL);
+			}
+			this.a.i31().get(this.record);
+			WasmEmitHelper.emitNewCons(this.a.w, this.flags.identityHash());
+			WasmEmitHelper.emitNewCell(this.a.w, this.flags.identityHash());
+			this.a.set(this.x);
+		}
+
+		// record = the small record of the triples' pairs and size their count: a key
+		// repeating an earlier triple's (the placement hashes compare first) gives that
+		// triple its value and leaves its own without a key, which the pairs skip.
+		private void closeSmallObject() {
+			this.a.get(this.pairs).set(this.size);
+			this.a.get(this.cstart).i32(3).op(Instruction.I32_ADD).set(this.k);
+			this.a.block("deduped");
+			this.a.loop("dedup");
+			this.a.get(this.k).get(this.vt).op(Instruction.I32_GE_U).brIf("deduped");
+			this.a.get(this.vs).get(this.k).i32(1).op(Instruction.I32_ADD).arrayGet(ARR).unI31().set(this.h);
+			this.a.get(this.cstart).set(this.index);
+			this.a.block("unique");
+			this.a.loop("earlier");
+			this.a.get(this.index).get(this.k).op(Instruction.I32_GE_U).brIf("unique");
+			this.a.get(this.vs).get(this.index).arrayGet(ARR).set(this.key);
+			this.a.get(this.key).isNull().op(Instruction.I32_EQZ);
+			this.a.get(this.vs).get(this.index).i32(1).op(Instruction.I32_ADD).arrayGet(ARR).unI31();
+			this.a.get(this.h).op(Instruction.I32_EQ).op(Instruction.I32_AND).ifVoid();
+			this.a.get(this.key).get(this.vs).get(this.k).arrayGet(ARR).call(WasmLispCompiler.FUNC_EQUAL).ifVoid();
+			this.a.get(this.vs).get(this.index).i32(2).op(Instruction.I32_ADD);
+			this.a.get(this.vs).get(this.k).i32(2).op(Instruction.I32_ADD).arrayGet(ARR).arraySet(ARR);
+			this.a.get(this.vs).get(this.k).refNull().arraySet(ARR);
+			inc(this.size, -1);
+			this.a.br("unique");
+			this.a.end();
+			this.a.end();
+			inc(this.index, 3);
+			this.a.br("earlier");
+			this.a.end();
+			this.a.end();
+			inc(this.k, 3);
+			this.a.br("dedup");
+			this.a.end();
+			this.a.end();
+			this.a.get(this.size).i32(1).op(Instruction.I32_SHL).i32(WasmHashTableRuntimeBuilder.S_PAIRS);
+			this.a.op(Instruction.I32_ADD).arrayNewDefault(ARR).set(this.record);
+			this.a.get(this.record).i32(WasmHashTableRuntimeBuilder.S_COUNT).get(this.size).i31().arraySet(ARR);
+			this.a.i32(WasmHashTableRuntimeBuilder.S_PAIRS).set(this.index);
+			this.a.get(this.cstart).set(this.k);
+			this.a.block("filled");
+			this.a.loop("fill");
+			this.a.get(this.k).get(this.vt).op(Instruction.I32_GE_U).brIf("filled");
+			this.a.get(this.vs).get(this.k).arrayGet(ARR).set(this.key);
+			this.a.get(this.key).isNull().op(Instruction.I32_EQZ).ifVoid();
+			this.a.get(this.record).get(this.index).get(this.key).arraySet(ARR);
+			this.a.get(this.record).get(this.index).i32(1).op(Instruction.I32_ADD);
+			this.a.get(this.vs).get(this.k).i32(2).op(Instruction.I32_ADD).arrayGet(ARR).arraySet(ARR);
+			inc(this.index, 2);
+			this.a.end();
+			inc(this.k, 3);
+			this.a.br("fill");
+			this.a.end();
+			this.a.end();
+		}
+
+		// record = the flat record of the triples, its buckets and order sized so that no
+		// insertion grows them, and size its entries.
+		private void closeFlatObject() {
 			this.a.i32(1).set(this.buckets);
 			this.a.block("sized");
 			this.a.loop("size");
@@ -1185,15 +1262,6 @@ final class WasmJsonRuntimeBuilder {
 			this.a.end();
 			this.a.end();
 			this.a.get(this.record).i32(WasmHashTableRuntimeBuilder.F_SIZE).get(this.size).i31().arraySet(ARR);
-			// the header's count, its test tag (equal, 0) beside it in a module that tags
-			this.a.get(this.size);
-			if (this.flags.tagged()) {
-				this.a.i32(2).op(Instruction.I32_SHL);
-			}
-			this.a.i31().get(this.record);
-			WasmEmitHelper.emitNewCons(this.a.w, this.flags.identityHash());
-			WasmEmitHelper.emitNewCell(this.a.w, this.flags.identityHash());
-			this.a.set(this.x);
 		}
 
 		// x = the vector of the values on the stack from cstart.
@@ -1361,10 +1429,17 @@ final class WasmJsonRuntimeBuilder {
 			// the innermost frame is the top's (kind 0) until a container opens
 			this.a.get(this.v).set(this.x);
 			this.a.loop("main");
+			this.a.block("pair");
 			this.a.block("next");
 			emitValue();
 			this.a.end();
 			emitNext();
+			this.a.end();
+			// An object's key in y and its value in x: the key and its colon, then the
+			// value.
+			key();
+			text(":");
+			this.a.br("main");
 			this.a.end();
 			this.a.op(Instruction.UNREACHABLE);
 		}
@@ -1478,9 +1553,24 @@ final class WasmJsonRuntimeBuilder {
 			this.a.get(this.x).refCast(CELL).structGet(CELL, 0).set(this.z);
 			this.a.get(this.z).refTest(CONS).op(Instruction.I32_EQZ).brIf("other");
 			this.a.get(this.z).refCast(CONS).structGet(CONS, 0).refTest(I31).ifVoid();
-			// A hash table, its entries in insertion order: a flat table's order array
-			// as it stands (a removed entry's slot nil), a copied one's walk.
+			// A hash table, its entries in insertion order: a small table's pairs, a flat
+			// table's order array as it stands (a removed entry's slot nil), a copied
+			// one's walk.
 			this.a.get(this.z).refCast(CONS).structGet(CONS, 1).refCast(ARR).set(this.newContainer);
+			this.a.get(this.newContainer);
+			WasmHashTableRuntimeBuilder.emitIsSmallRecord(this.a.w);
+			this.a.ifVoid();
+			this.a.get(this.newContainer).i32(WasmHashTableRuntimeBuilder.S_COUNT).arrayGet(ARR).unI31();
+			this.a.set(this.newLimit);
+			this.a.get(this.newLimit).op(Instruction.I32_EQZ).ifVoid();
+			text("{}");
+			this.a.br("next");
+			this.a.end();
+			this.a.i32(0).set(this.newIndex);
+			pushFrame(PAIRS);
+			text("{");
+			pairKeyAndValue();
+			this.a.end();
 			this.a.get(this.newContainer).arrayLen().i32(WasmHashTableRuntimeBuilder.F_LEN).op(Instruction.I32_EQ);
 			this.a.ifVoid();
 			this.a.get(this.newContainer).i32(WasmHashTableRuntimeBuilder.F_SIZE).arrayGet(ARR).unI31();
@@ -1499,11 +1589,7 @@ final class WasmJsonRuntimeBuilder {
 			this.a.end();
 			pushFrame(OBJECT);
 			text("{");
-			this.a.get(this.container).get(this.i).arrayGet(ARR).refCast(ARR).set(this.entry);
-			key();
-			text(":");
-			this.a.get(this.entry).i32(WasmHashTableRuntimeBuilder.E_VALUE).arrayGet(ARR).set(this.x);
-			this.a.br("main");
+			entryKeyAndValue();
 			this.a.end();
 			if (this.flags.charvecPossible()) {
 				this.a.get(this.x).call(WasmLispCompiler.FUNC_CHARVEC_P).ifVoid();
@@ -1618,11 +1704,17 @@ final class WasmJsonRuntimeBuilder {
 			skipRemoved(this.container, this.i, this.n);
 			this.a.get(this.i).get(this.n).op(Instruction.I32_LT_U).ifVoid();
 			text(",");
-			this.a.get(this.container).get(this.i).arrayGet(ARR).refCast(ARR).set(this.entry);
-			key();
-			text(":");
-			this.a.get(this.entry).i32(WasmHashTableRuntimeBuilder.E_VALUE).arrayGet(ARR).set(this.x);
-			this.a.br("main");
+			entryKeyAndValue();
+			this.a.end();
+			text("}");
+			popFrame();
+			this.a.br("pop");
+			this.a.end();
+			this.a.get(this.kind).i32(PAIRS).op(Instruction.I32_EQ).ifVoid();
+			inc(this.i, 1);
+			this.a.get(this.i).get(this.n).op(Instruction.I32_LT_U).ifVoid();
+			text(",");
+			pairKeyAndValue();
 			this.a.end();
 			text("}");
 			popFrame();
@@ -1674,9 +1766,20 @@ final class WasmJsonRuntimeBuilder {
 			this.a.end();
 		}
 
-		// The entry's key as a JSON string: a string as it is, anything else through
-		// key-name first. An equalp entry's seventh slot is the key as written.
-		private void key() {
+		// The i-th pair of the small record the frame walks, its key in y and its value
+		// in x, to the key's writing.
+		private void pairKeyAndValue() {
+			this.a.get(this.container).get(this.i).i32(1).op(Instruction.I32_SHL);
+			this.a.i32(WasmHashTableRuntimeBuilder.S_PAIRS).op(Instruction.I32_ADD).arrayGet(ARR).set(this.y);
+			this.a.get(this.container).get(this.i).i32(1).op(Instruction.I32_SHL);
+			this.a.i32(WasmHashTableRuntimeBuilder.S_PAIRS + 1).op(Instruction.I32_ADD).arrayGet(ARR).set(this.x);
+			this.a.br("pair");
+		}
+
+		// The i-th entry of the order the frame walks, its key in y (an equalp entry's
+		// seventh slot is the key as written) and its value in x, to the key's writing.
+		private void entryKeyAndValue() {
+			this.a.get(this.container).get(this.i).arrayGet(ARR).refCast(ARR).set(this.entry);
 			this.a.get(this.entry).i32(WasmHashTableRuntimeBuilder.E_KEY).arrayGet(ARR).set(this.y);
 			if (this.flags.equalpTables()) {
 				this.a.get(this.entry).arrayLen().i32(WasmHashTableRuntimeBuilder.E_ORIG + 1).op(Instruction.I32_EQ);
@@ -1684,6 +1787,13 @@ final class WasmJsonRuntimeBuilder {
 				this.a.get(this.entry).i32(WasmHashTableRuntimeBuilder.E_ORIG).arrayGet(ARR).set(this.y);
 				this.a.end();
 			}
+			this.a.get(this.entry).i32(WasmHashTableRuntimeBuilder.E_VALUE).arrayGet(ARR).set(this.x);
+			this.a.br("pair");
+		}
+
+		// The key in y as a JSON string: a string as it is, anything else through
+		// key-name first.
+		private void key() {
 			this.a.block("key-bytes");
 			this.a.block("key-string");
 			this.a.get(this.y).refTest(STRING).ifVoid();

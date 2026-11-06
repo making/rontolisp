@@ -4,13 +4,15 @@ package am.ik.rontolisp.testsupport;
  * A hash table's walk order and its copy, pinned identically on the interpreter, the JVM
  * and both WASM backends ({@code .kb/hash-tables.md}, "Representation" and "Copies share
  * structure"): {@code maphash} walks the keys in insertion order -- a re-store keeps its
- * place, a key removed and stored again goes last, and a table most of whose keys went
- * keeps the survivors' order -- and {@code rontolisp::%copy-equal-table} answers a fresh
- * {@code equal} table of the entries in that order which a later store into either table
- * leaves the other without, an {@code eql} or {@code equalp} table's keys placed again
- * under {@code equal} (each as first stored). The last form grows a table to 50,000 keys
- * one copy and one store at a time, every tenth-thousand version kept: a copy that walked
- * its source made that 1.25 x 10^9 entry copies, minutes on every backend.
+ * place, a key removed and stored again goes last, a table most of whose keys went keeps
+ * the survivors' order, and a walk that changes the current key's value, removes the
+ * current key or stores a new one walks the keys it started with -- and
+ * {@code rontolisp::%copy-equal-table} answers a fresh {@code equal} table of the entries
+ * in that order which a later store into either table leaves the other without, an
+ * {@code eql} or {@code equalp} table's keys placed again under {@code equal} (each as
+ * first stored). The last form grows a table to 50,000 keys one copy and one store at a
+ * time, every tenth-thousand version kept: a copy that walked its source made that 1.25 x
+ * 10^9 entry copies, minutes on every backend.
  */
 public final class HashTableCopyPrograms {
 
@@ -30,6 +32,15 @@ public final class HashTableCopyPrograms {
 			  (setf (gethash "d" h) 3)
 			  (print (htc-walk h))
 			  (dolist (k '("e" "a" "c")) (remhash k h))
+			  (print (htc-walk h)))
+			(let ((h (make-hash-table :test 'equal)))
+			  (dolist (k '("p" "q" "r" "s")) (setf (gethash k h) 0))
+			  (maphash (lambda (k v)
+			             (declare (ignore v))
+			             (cond ((equal k "q") (remhash k h))
+			                   ((equal k "r") (setf (gethash "new" h) 1))
+			                   (t (setf (gethash k h) (length k)))))
+			           h)
 			  (print (htc-walk h)))
 			(let ((src (make-hash-table :test 'equal)) (k (list :c%keyword "a")) (v (vector 1 2)))
 			  (dotimes (i 6) (setf (gethash i src) (* i 10)))
@@ -66,6 +77,7 @@ public final class HashTableCopyPrograms {
 	public static final String EXPECTED = """
 			(("e" 1) ("b" 2) ("a" 1) ("c" 1) ("d" 3))
 			(("b" 2) ("d" 3))
+			(("p" 1) ("r" 0) ("s" 1) ("new" 1))
 			((1 10) (2 20) (3 30) (4 :SRC) (5 50) ((:C%KEYWORD "a") :LIST) (#(1 2) :VECTOR))
 			((0 0) (1 10) (2 :COPY) (4 40) (5 50) ((:C%KEYWORD "a") :LIST) (#(1 2) :VECTOR) (6 :NEW))
 			(:LIST :VECTOR EQUAL)
