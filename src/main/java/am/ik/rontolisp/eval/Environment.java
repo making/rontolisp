@@ -275,6 +275,213 @@ public final class Environment implements Scope {
 
 	}
 
+	/**
+	 * What only the global environment holds -- its function namespace, the hooks the
+	 * evaluator installs, its stream table -- apart from the scopes below it, the
+	 * commonest objects an interpreted program makes: a scope holds {@link #NONE}, every
+	 * field null and never written, which is what each was while they were the scope's
+	 * own.
+	 */
+	private static final class Globals {
+
+		/** What a scope below the global environment holds. */
+		static final Globals NONE = new Globals(false);
+
+		/**
+		 * The global function namespace, one cell per name ({@link FunctionCell}); null
+		 * in every scope but the global one, which is where every function is defined.
+		 */
+		private final @Nullable ConcurrentHashMap<String, FunctionCell> functionCells;
+
+		/**
+		 * The cells of {@link #functionCells} by their index, so a note can name one by
+		 * an int ({@link Environment#functionCellAt}); published whole on each growth,
+		 * written under {@link #functionCells}' creation of a cell.
+		 */
+		private volatile FunctionCell @Nullable [] functionCellTable;
+
+		/**
+		 * Resolves the print family's default destination at call time. Set by the
+		 * evaluator (on the global environment) to read the current -- dynamic-first --
+		 * value of {@code *standard-output*}, so a
+		 * {@code (let ((*standard-output* stream)) ...)} or
+		 * {@code (with-output-to-string (*standard-output*) ...)} redirects the
+		 * stream-argument-less print family. A {@code null}/{@code t}/{@code nil} result
+		 * keeps the process standard output.
+		 */
+		@Nullable private Supplier<@Nullable LispVal> defaultOutput;
+
+		/**
+		 * Resolves {@code warn}'s destination at call time: the current -- dynamic-first
+		 * -- value of {@code *error-output*}, so
+		 * {@code (let ((*error-output* s)) (warn ...))} captures the report. A
+		 * {@code null} resolver (no evaluator installed one) falls back to the global
+		 * cell, whose seeded value is the process standard error.
+		 */
+		@Nullable private Supplier<@Nullable LispVal> defaultError;
+
+		/**
+		 * Resolves the read family's default source at call time -- the input mirror of
+		 * {@link #defaultOutput}. Set by the evaluator to read the current --
+		 * dynamic-first -- value of {@code *standard-input*}, so a
+		 * {@code (let ((*standard-input* stream)) ...)} or
+		 * {@code (with-input-from-string (*standard-input* s) ...)} redirects the
+		 * stream-argument-less read family. A {@code null}/{@code t}/{@code nil} result
+		 * keeps the process standard input.
+		 */
+		@Nullable private Supplier<@Nullable LispVal> defaultInput;
+
+		/**
+		 * The process standard input reader the read family shares with the REPL's line
+		 * reader. Both go through this one {@code BufferedReader} so a piped session's
+		 * look-ahead lives in exactly one place: the REPL no longer buffers lines the
+		 * run-time {@code (read)} owes the program (a {@code (driver-loop)} typed at the
+		 * prompt takes over the session's own stdin).
+		 */
+		@Nullable private BufferedReader replInputReader;
+
+		/**
+		 * Opens a buffered served-request body ({@link HttpRequestBodyStream}) in the
+		 * stream table and answers its handle. Installed by {@code createGlobal} (the
+		 * table is local to it); called by the evaluator when it builds a
+		 * {@code :raw-body :buffered} Clack environment -- in Java, because marshalling
+		 * the body through a Lisp call was the measured POST regression this stream
+		 * exists to close.
+		 */
+		private java.util.function.@Nullable Function<byte[], Long> httpBodyStreamOpener;
+
+		/**
+		 * Removes a buffered served-request body from the stream table, quietly (absent
+		 * is fine -- the handler may have closed it). Installed beside
+		 * {@link #httpBodyStreamOpener}; the transport calls it when the request ends,
+		 * which is what keeps a long-running server's stream table from growing per
+		 * request.
+		 */
+		private java.util.function.@Nullable LongConsumer httpBodyStreamCloser;
+
+		/**
+		 * Opens a stream over a Java character sink or source -- a {@code Writer} or a
+		 * {@code Reader} -- in the stream table and answers its handle. Installed by
+		 * {@code createGlobal} beside {@link #httpBodyStreamOpener}; what an nREPL
+		 * session's {@code *out*} and {@code *err*} write through.
+		 * {@link #httpBodyStreamCloser} removes one.
+		 */
+		private java.util.function.@Nullable Function<Closeable, Long> javaStreamOpener;
+
+		/**
+		 * Flushes every buffered output stream still open in the stream table. Installed
+		 * by {@code createGlobal} beside {@link #httpBodyStreamOpener}; see
+		 * {@link Environment#flushOpenStreams}.
+		 */
+		private @Nullable Runnable openStreamFlusher;
+
+		/**
+		 * Resolves {@code (%read-eval datum)} markers in a runtime-read datum -- the
+		 * {@code #.} read-time-eval hook. Set by the evaluator (on the global
+		 * environment) to {@code LispEvaluator.resolveReadTimeEval}, so the runtime
+		 * {@code read} / {@code read-from-string} built-ins evaluate a {@code #.} datum
+		 * exactly like the frontend load path does. A {@code null} resolver (no evaluator
+		 * installed one) keeps the error-mode read, whose {@code #.} signal matches the
+		 * compiled backends' embedded readers.
+		 */
+		@Nullable private UnaryOperator<LispVal> readTimeEvalResolver;
+
+		/**
+		 * Interns each symbol token of a runtime read in the current package, as CL's
+		 * reader does -- set by the evaluator, which holds the package state.
+		 * {@code null} (a bare Environment) keeps the names as read.
+		 */
+		@Nullable private UnaryOperator<String> readSymbolHome;
+
+		/**
+		 * Answers the current -- dynamic binding first -- value of
+		 * {@code *read-suppress*}. Set by the evaluator for the same reason
+		 * {@link Environment#setReadTimeEvalResolver(UnaryOperator)} is: the built-in
+		 * holds the GLOBAL environment, and
+		 * {@code (let ((*read-suppress* t)) (read-from-string ...))} is a dynamic binding
+		 * only the evaluator can see. A {@code null} query (a bare {@code Environment})
+		 * reads as false.
+		 */
+		@Nullable private BooleanSupplier readSuppressQuery;
+
+		/**
+		 * Answers the feature set a RUN-TIME {@code read} / {@code read-from-string}
+		 * tests its {@code #+}/{@code #-} guards against: the live value of
+		 * {@code *features*}. Installed by the evaluator for the same reason
+		 * {@link Environment#setReadSuppressQuery(BooleanSupplier)} is -- the built-in
+		 * holds the global environment, and
+		 * {@code (let ((*features* '(:x))) (read-from-string ...))} is a dynamic binding
+		 * only the evaluator can see. A {@code null} query (a bare {@code Environment})
+		 * reads with the static interpreter set.
+		 * <p>
+		 * This is the direction the read-time set cannot supply: a READ-TIME feature set
+		 * is fixed for the duration of the frontend's one read, while a program's own
+		 * {@code (push :x *features*)} happens later and must reach the reads it makes
+		 * after it. The two are seeded from the same names so they cannot disagree about
+		 * the build ({@code .kb/reader-features.md}).
+		 */
+		@Nullable private Supplier<am.ik.rontolisp.reader.Features> readFeaturesQuery;
+
+		/**
+		 * Answers the readtable a RUN-TIME read honors: the current -- dynamic binding
+		 * first -- {@code *readtable*}, as the syntax the reader reads with, or
+		 * {@code null} while it reads as the standard one ({@code .kb/readtables.md}).
+		 * Installed by the evaluator for the reason
+		 * {@link Environment#setReadFeaturesQuery} is; a bare {@code Environment} reads
+		 * the standard syntax.
+		 */
+		@Nullable private Supplier<am.ik.rontolisp.reader.@Nullable ReadSyntax> readSyntaxQuery;
+
+		/**
+		 * Answers how many backquote templates enclose the reader macro function running
+		 * now: a {@code read-from-string} it makes starts inside them, as a {@code read}
+		 * off its stream does -- CL's backquote depth is dynamic
+		 * ({@code .kb/readtables.md}). Installed by the evaluator; a bare
+		 * {@code Environment} reads at depth 0.
+		 */
+		private java.util.function.@Nullable IntSupplier templateDepthQuery;
+
+		/**
+		 * The string-input-stream view of this environment's stream table, set by
+		 * {@link Environment#createGlobal}: what a reader macro function's stream is
+		 * opened through.
+		 */
+		@Nullable private StringStreamTable stringStreams;
+
+		/**
+		 * The text and the stop index of the last one-argument {@code read-from-string}
+		 * read under a non-standard readtable: the second value
+		 * {@code %read-from-string-end} answers for the SAME string, since a second read
+		 * would run its reader macros twice.
+		 */
+		private volatile @Nullable SyntaxRead lastSyntaxRead;
+
+		/**
+		 * Answers, for a {@code sleep} an interrupt woke, whether the interrupt was the
+		 * evaluator's and its debugger went on with the evaluation, so the sleep sleeps
+		 * out its time ({@code LispEvaluator.resumeAfterInterrupt}); null on a bare
+		 * {@code Environment}.
+		 */
+		@Nullable private BooleanSupplier interruptResumed;
+
+		/**
+		 * The names a {@code defconstant} has defined, on the global environment only
+		 * (null until the first): what the {@code constantp} built-in answers t for.
+		 */
+		private @Nullable Set<String> constantNames;
+
+		Globals(boolean global) {
+			this.functionCells = global ? new ConcurrentHashMap<>() : null;
+			if (global) {
+				this.functionCellTable = new FunctionCell[256];
+			}
+		}
+
+	}
+
+	/** The global environment's own state; {@link Globals#NONE} below it. */
+	private final Globals globals;
+
 	private final NameMap bindings;
 
 	/**
@@ -282,19 +489,6 @@ public final class Environment implements Scope {
 	 * ({@link #slot}): a compiled body lays out no scope binding more.
 	 */
 	static final int PRESIZED_SCOPE_MAX = NameMap.PRESIZED_MAX;
-
-	/**
-	 * The global function namespace, one cell per name ({@link FunctionCell}); null in
-	 * every scope but the global one, which is where every function is defined.
-	 */
-	private final @Nullable ConcurrentHashMap<String, FunctionCell> functionCells;
-
-	/**
-	 * The cells of {@link #functionCells} by their index, so a note can name one by an
-	 * int ({@link #functionCellAt}); published whole on each growth, written under
-	 * {@link #functionCells}' creation of a cell.
-	 */
-	private volatile FunctionCell @Nullable [] functionCellTable;
 
 	/**
 	 * A scope's own function bindings below the global one, made only on the first
@@ -317,69 +511,31 @@ public final class Environment implements Scope {
 	private final ValueCountRegister mvSpill;
 
 	/**
-	 * Resolves the print family's default destination at call time. Set by the evaluator
-	 * (on the global environment) to read the current -- dynamic-first -- value of
-	 * {@code *standard-output*}, so a {@code (let ((*standard-output* stream)) ...)} or
-	 * {@code (with-output-to-string (*standard-output*) ...)} redirects the
-	 * stream-argument-less print family. A {@code null}/{@code t}/{@code nil} result
-	 * keeps the process standard output.
-	 */
-	@Nullable private Supplier<@Nullable LispVal> defaultOutput;
-
-	/**
 	 * Installs the default-output resolver consulted by the stream-argument-less print
-	 * family; see {@link #defaultOutput}.
+	 * family; see {@link Globals#defaultOutput}.
 	 * @param supplier resolves the current {@code *standard-output*} value
 	 */
 	public void setDefaultOutput(Supplier<@Nullable LispVal> supplier) {
-		this.defaultOutput = supplier;
+		this.globals.defaultOutput = supplier;
 	}
-
-	/**
-	 * Resolves {@code warn}'s destination at call time: the current -- dynamic-first --
-	 * value of {@code *error-output*}, so {@code (let ((*error-output* s)) (warn ...))}
-	 * captures the report. A {@code null} resolver (no evaluator installed one) falls
-	 * back to the global cell, whose seeded value is the process standard error.
-	 */
-	@Nullable private Supplier<@Nullable LispVal> defaultError;
 
 	/**
 	 * Installs the resolver {@code warn} sends its report through; see
-	 * {@link #defaultError}.
+	 * {@link Globals#defaultError}.
 	 * @param supplier resolves the current {@code *error-output*} value
 	 */
 	public void setDefaultError(Supplier<@Nullable LispVal> supplier) {
-		this.defaultError = supplier;
+		this.globals.defaultError = supplier;
 	}
-
-	/**
-	 * Resolves the read family's default source at call time -- the input mirror of
-	 * {@link #defaultOutput}. Set by the evaluator to read the current -- dynamic-first
-	 * -- value of {@code *standard-input*}, so a
-	 * {@code (let ((*standard-input* stream)) ...)} or
-	 * {@code (with-input-from-string (*standard-input* s) ...)} redirects the
-	 * stream-argument-less read family. A {@code null}/{@code t}/{@code nil} result keeps
-	 * the process standard input.
-	 */
-	@Nullable private Supplier<@Nullable LispVal> defaultInput;
 
 	/**
 	 * Installs the default-input resolver consulted by the stream-argument-less read
-	 * family; see {@link #defaultInput}.
+	 * family; see {@link Globals#defaultInput}.
 	 * @param supplier resolves the current {@code *standard-input*} value
 	 */
 	public void setDefaultInput(Supplier<@Nullable LispVal> supplier) {
-		this.defaultInput = supplier;
+		this.globals.defaultInput = supplier;
 	}
-
-	/**
-	 * The process standard input reader the read family shares with the REPL's line
-	 * reader. Both go through this one {@code BufferedReader} so a piped session's
-	 * look-ahead lives in exactly one place: the REPL no longer buffers lines the
-	 * run-time {@code (read)} owes the program (a {@code (driver-loop)} typed at the
-	 * prompt takes over the session's own stdin).
-	 */
-	@Nullable private BufferedReader replInputReader;
 
 	/**
 	 * Reads one REPL line through the shared standard input reader, like
@@ -389,42 +545,9 @@ public final class Environment implements Scope {
 	 * @throws java.io.IOException if the read fails
 	 */
 	public @Nullable String readReplLine() throws java.io.IOException {
-		BufferedReader reader = this.replInputReader;
+		BufferedReader reader = this.globals.replInputReader;
 		return reader == null ? null : reader.readLine();
 	}
-
-	/**
-	 * Opens a buffered served-request body ({@link HttpRequestBodyStream}) in the stream
-	 * table and answers its handle. Installed by {@code createGlobal} (the table is local
-	 * to it); called by the evaluator when it builds a {@code :raw-body :buffered} Clack
-	 * environment -- in Java, because marshalling the body through a Lisp call was the
-	 * measured POST regression this stream exists to close.
-	 */
-	private java.util.function.@Nullable Function<byte[], Long> httpBodyStreamOpener;
-
-	/**
-	 * Removes a buffered served-request body from the stream table, quietly (absent is
-	 * fine -- the handler may have closed it). Installed beside
-	 * {@link #httpBodyStreamOpener}; the transport calls it when the request ends, which
-	 * is what keeps a long-running server's stream table from growing per request.
-	 */
-	private java.util.function.@Nullable LongConsumer httpBodyStreamCloser;
-
-	/**
-	 * Opens a stream over a Java character sink or source -- a {@code Writer} or a
-	 * {@code Reader} -- in the stream table and answers its handle. Installed by
-	 * {@code createGlobal} beside {@link #httpBodyStreamOpener}; what an nREPL session's
-	 * {@code *out*} and {@code *err*} write through. {@link #httpBodyStreamCloser}
-	 * removes one.
-	 */
-	private java.util.function.@Nullable Function<Closeable, Long> javaStreamOpener;
-
-	/**
-	 * Flushes every buffered output stream still open in the stream table. Installed by
-	 * {@code createGlobal} beside {@link #httpBodyStreamOpener}; see
-	 * {@link #flushOpenStreams}.
-	 */
-	private @Nullable Runnable openStreamFlusher;
 
 	/**
 	 * Flushes every output stream the program left open -- what C's {@code exit} does for
@@ -433,7 +556,7 @@ public final class Environment implements Scope {
 	 * to flush is skipped, as {@code exit} skips it.
 	 */
 	void flushOpenStreams() {
-		Runnable flusher = this.openStreamFlusher;
+		Runnable flusher = this.globals.openStreamFlusher;
 		if (flusher != null) {
 			flusher.run();
 		}
@@ -445,7 +568,7 @@ public final class Environment implements Scope {
 	 * @return the stream handle
 	 */
 	long openHttpBodyStream(byte[] octets) {
-		java.util.function.Function<byte[], Long> opener = this.httpBodyStreamOpener;
+		java.util.function.Function<byte[], Long> opener = this.globals.httpBodyStreamOpener;
 		if (opener == null) {
 			throw new LispEvalException("http-handler: this environment has no stream table");
 		}
@@ -457,7 +580,7 @@ public final class Environment implements Scope {
 	 * @param handle the stream handle {@link #openHttpBodyStream} answered
 	 */
 	void closeHttpBodyStream(long handle) {
-		java.util.function.LongConsumer closer = this.httpBodyStreamCloser;
+		java.util.function.LongConsumer closer = this.globals.httpBodyStreamCloser;
 		if (closer != null) {
 			closer.accept(handle);
 		}
@@ -470,7 +593,7 @@ public final class Environment implements Scope {
 	 * @return the stream handle
 	 */
 	long openJavaStream(Closeable entry) {
-		java.util.function.Function<Closeable, Long> opener = this.javaStreamOpener;
+		java.util.function.Function<Closeable, Long> opener = this.globals.javaStreamOpener;
 		if (opener == null) {
 			throw new LispEvalException("this environment has no stream table");
 		}
@@ -487,149 +610,74 @@ public final class Environment implements Scope {
 	}
 
 	/**
-	 * Resolves {@code (%read-eval datum)} markers in a runtime-read datum -- the
-	 * {@code #.} read-time-eval hook. Set by the evaluator (on the global environment) to
-	 * {@code LispEvaluator.resolveReadTimeEval}, so the runtime {@code read} /
-	 * {@code read-from-string} built-ins evaluate a {@code #.} datum exactly like the
-	 * frontend load path does. A {@code null} resolver (no evaluator installed one) keeps
-	 * the error-mode read, whose {@code #.} signal matches the compiled backends'
-	 * embedded readers.
-	 */
-	@Nullable private UnaryOperator<LispVal> readTimeEvalResolver;
-
-	/**
 	 * Installs the {@code #.} marker resolver consulted by the runtime read built-ins;
-	 * see {@link #readTimeEvalResolver}.
+	 * see {@link Globals#readTimeEvalResolver}.
 	 * @param resolver replaces every read-eval marker with its datum's value
 	 */
 	public void setReadTimeEvalResolver(UnaryOperator<LispVal> resolver) {
-		this.readTimeEvalResolver = resolver;
+		this.globals.readTimeEvalResolver = resolver;
 	}
-
-	/**
-	 * Interns each symbol token of a runtime read in the current package, as CL's reader
-	 * does -- set by the evaluator, which holds the package state. {@code null} (a bare
-	 * Environment) keeps the names as read.
-	 */
-	@Nullable private UnaryOperator<String> readSymbolHome;
 
 	/**
 	 * Installs the symbol-token interning of the runtime read built-ins; see
-	 * {@link #readSymbolHome}.
+	 * {@link Globals#readSymbolHome}.
 	 * @param home maps a symbol token's name to its spelling in the current package
 	 */
 	public void setReadSymbolHome(UnaryOperator<String> home) {
-		this.readSymbolHome = home;
+		this.globals.readSymbolHome = home;
 	}
-
-	/**
-	 * Answers the current -- dynamic binding first -- value of {@code *read-suppress*}.
-	 * Set by the evaluator for the same reason
-	 * {@link #setReadTimeEvalResolver(UnaryOperator)} is: the built-in holds the GLOBAL
-	 * environment, and {@code (let ((*read-suppress* t)) (read-from-string ...))} is a
-	 * dynamic binding only the evaluator can see. A {@code null} query (a bare
-	 * {@code Environment}) reads as false.
-	 */
-	@Nullable private BooleanSupplier readSuppressQuery;
 
 	/**
 	 * Installs the {@code *read-suppress*} query consulted by the runtime read built-ins;
-	 * see {@link #readSuppressQuery}.
+	 * see {@link Globals#readSuppressQuery}.
 	 * @param query answers whether reading is currently suppressed
 	 */
 	public void setReadSuppressQuery(BooleanSupplier query) {
-		this.readSuppressQuery = query;
+		this.globals.readSuppressQuery = query;
 	}
-
-	/**
-	 * Answers the feature set a RUN-TIME {@code read} / {@code read-from-string} tests
-	 * its {@code #+}/{@code #-} guards against: the live value of {@code *features*}.
-	 * Installed by the evaluator for the same reason
-	 * {@link #setReadSuppressQuery(BooleanSupplier)} is -- the built-in holds the global
-	 * environment, and {@code (let ((*features* '(:x))) (read-from-string ...))} is a
-	 * dynamic binding only the evaluator can see. A {@code null} query (a bare
-	 * {@code Environment}) reads with the static interpreter set.
-	 * <p>
-	 * This is the direction the read-time set cannot supply: a READ-TIME feature set is
-	 * fixed for the duration of the frontend's one read, while a program's own
-	 * {@code (push :x *features*)} happens later and must reach the reads it makes after
-	 * it. The two are seeded from the same names so they cannot disagree about the build
-	 * ({@code .kb/reader-features.md}).
-	 */
-	@Nullable private Supplier<am.ik.rontolisp.reader.Features> readFeaturesQuery;
 
 	/**
 	 * Installs the {@code *features*} query consulted by the runtime read built-ins; see
-	 * {@link #readFeaturesQuery}.
+	 * {@link Globals#readFeaturesQuery}.
 	 * @param query answers the current feature set
 	 */
 	public void setReadFeaturesQuery(Supplier<am.ik.rontolisp.reader.Features> query) {
-		this.readFeaturesQuery = query;
+		this.globals.readFeaturesQuery = query;
 	}
 
 	/**
-	 * Answers the readtable a RUN-TIME read honors: the current -- dynamic binding first
-	 * -- {@code *readtable*}, as the syntax the reader reads with, or {@code null} while
-	 * it reads as the standard one ({@code .kb/readtables.md}). Installed by the
-	 * evaluator for the reason {@link #setReadFeaturesQuery} is; a bare
-	 * {@code Environment} reads the standard syntax.
-	 */
-	@Nullable private Supplier<am.ik.rontolisp.reader.@Nullable ReadSyntax> readSyntaxQuery;
-
-	/**
 	 * Installs the {@code *readtable*} query consulted by the runtime read built-ins; see
-	 * {@link #readSyntaxQuery}.
+	 * {@link Globals#readSyntaxQuery}.
 	 * @param query answers the current syntax
 	 */
 	public void setReadSyntaxQuery(Supplier<am.ik.rontolisp.reader.@Nullable ReadSyntax> query) {
-		this.readSyntaxQuery = query;
+		this.globals.readSyntaxQuery = query;
 	}
 
 	/** The syntax the runtime read built-ins read with, {@code null} for the standard. */
 	private am.ik.rontolisp.reader.@Nullable ReadSyntax currentReadSyntax() {
-		return this.readSyntaxQuery == null ? null : this.readSyntaxQuery.get();
+		return this.globals.readSyntaxQuery == null ? null : this.globals.readSyntaxQuery.get();
 	}
-
-	/**
-	 * Answers how many backquote templates enclose the reader macro function running now:
-	 * a {@code read-from-string} it makes starts inside them, as a {@code read} off its
-	 * stream does -- CL's backquote depth is dynamic ({@code .kb/readtables.md}).
-	 * Installed by the evaluator; a bare {@code Environment} reads at depth 0.
-	 */
-	private java.util.function.@Nullable IntSupplier templateDepthQuery;
 
 	/**
 	 * Installs the template depth query consulted by {@code read-from-string}; see
-	 * {@link #templateDepthQuery}.
+	 * {@link Globals#templateDepthQuery}.
 	 * @param query answers the depth
 	 */
 	public void setTemplateDepthQuery(java.util.function.IntSupplier query) {
-		this.templateDepthQuery = query;
+		this.globals.templateDepthQuery = query;
 	}
-
-	/**
-	 * The string-input-stream view of this environment's stream table, set by
-	 * {@link #createGlobal}: what a reader macro function's stream is opened through.
-	 */
-	@Nullable private StringStreamTable stringStreams;
 
 	/**
 	 * The string-input-stream view of the stream table.
 	 * @return the view
 	 */
 	StringStreamTable stringStreams() {
-		return java.util.Objects.requireNonNull(this.stringStreams, "no stream table");
+		return java.util.Objects.requireNonNull(this.globals.stringStreams, "no stream table");
 	}
 
 	/**
-	 * The text and the stop index of the last one-argument {@code read-from-string} read
-	 * under a non-standard readtable: the second value {@code %read-from-string-end}
-	 * answers for the SAME string, since a second read would run its reader macros twice.
-	 */
-	private volatile @Nullable SyntaxRead lastSyntaxRead;
-
-	/**
-	 * One {@link #lastSyntaxRead}.
+	 * One {@link Globals#lastSyntaxRead}.
 	 *
 	 * @param input the text read, compared by identity
 	 * @param end its stop index
@@ -639,8 +687,8 @@ public final class Environment implements Scope {
 
 	/** The feature set the runtime read built-ins test their guards against. */
 	private am.ik.rontolisp.reader.Features currentReadFeatures() {
-		return this.readFeaturesQuery == null ? am.ik.rontolisp.reader.Features.INTERPRETER
-				: this.readFeaturesQuery.get();
+		return this.globals.readFeaturesQuery == null ? am.ik.rontolisp.reader.Features.INTERPRETER
+				: this.globals.readFeaturesQuery.get();
 	}
 
 	/**
@@ -655,20 +703,12 @@ public final class Environment implements Scope {
 	}
 
 	/**
-	 * Answers, for a {@code sleep} an interrupt woke, whether the interrupt was the
-	 * evaluator's and its debugger went on with the evaluation, so the sleep sleeps out
-	 * its time ({@code LispEvaluator.resumeAfterInterrupt}); null on a bare
-	 * {@code Environment}.
-	 */
-	@Nullable private BooleanSupplier interruptResumed;
-
-	/**
 	 * Installs the query a {@code sleep} an interrupt woke asks; see
-	 * {@link #interruptResumed}.
+	 * {@link Globals#interruptResumed}.
 	 * @param query whether the evaluation goes on
 	 */
 	void setInterruptResumed(BooleanSupplier query) {
-		this.interruptResumed = query;
+		this.globals.interruptResumed = query;
 	}
 
 	/**
@@ -682,7 +722,7 @@ public final class Environment implements Scope {
 				Thread.sleep(left);
 			}
 			catch (InterruptedException e) {
-				BooleanSupplier resumed = env.interruptResumed;
+				BooleanSupplier resumed = env.globals.interruptResumed;
 				if (resumed == null || !resumed.getAsBoolean()) {
 					Thread.currentThread().interrupt();
 					throw new LispEvalException(LispNames.SLEEP + " was interrupted");
@@ -752,12 +792,7 @@ public final class Environment implements Scope {
 	public Environment(@Nullable Environment parent, int bindings) {
 		this.bindings = new NameMap(bindings);
 		this.parent = parent;
-		this.functionCells = parent == null ? new ConcurrentHashMap<>() : null;
-		if (parent == null) {
-			// a volatile store is a fence: a scope below the global one leaves the field
-			// at its default
-			this.functionCellTable = new FunctionCell[256];
-		}
+		this.globals = parent == null ? new Globals(true) : Globals.NONE;
 		this.mvSpill = parent == null ? new ValueCountRegister() : parent.mvSpill;
 		this.lexicalFunction = parent == null ? null : parent.lexicalFunction;
 		this.lexicalPackage = parent == null ? null : parent.lexicalPackage;
@@ -775,7 +810,7 @@ public final class Environment implements Scope {
 	Environment(Environment parent, String[] names, LispVal[] values) {
 		this.bindings = new NameMap(names, values);
 		this.parent = parent;
-		this.functionCells = null;
+		this.globals = Globals.NONE;
 		this.mvSpill = parent.mvSpill;
 		this.lexicalFunction = parent.lexicalFunction;
 		this.lexicalPackage = parent.lexicalPackage;
@@ -1067,7 +1102,7 @@ public final class Environment implements Scope {
 	 */
 	public @Nullable LispVal lookupFunctionOrNull(String name) {
 		Environment scope = this;
-		while (scope.functionCells == null) {
+		while (scope.globals.functionCells == null) {
 			NameMap own = scope.functions;
 			if (own != null) {
 				LispVal val = own.get(name);
@@ -1080,7 +1115,7 @@ public final class Environment implements Scope {
 			}
 			scope = scope.parent;
 		}
-		FunctionCell cell = scope.functionCells.get(name);
+		FunctionCell cell = scope.globals.functionCells.get(name);
 		return cell == null ? null : cell.value();
 	}
 
@@ -1093,7 +1128,7 @@ public final class Environment implements Scope {
 	 * environment)
 	 */
 	@Nullable FunctionCell functionCell(String name) {
-		return this.functionCells == null ? null : this.functionCells.get(name);
+		return this.globals.functionCells == null ? null : this.globals.functionCells.get(name);
 	}
 
 	/**
@@ -1102,19 +1137,19 @@ public final class Environment implements Scope {
 	 * @return the cell
 	 */
 	FunctionCell functionCellAt(int index) {
-		return java.util.Objects.requireNonNull(this.functionCellTable)[index];
+		return java.util.Objects.requireNonNull(this.globals.functionCellTable)[index];
 	}
 
 	/** A new cell of the global function namespace, at the next index of its table. */
 	private FunctionCell newFunctionCell(Map<String, FunctionCell> cells) {
-		FunctionCell[] table = java.util.Objects.requireNonNull(this.functionCellTable);
+		FunctionCell[] table = java.util.Objects.requireNonNull(this.globals.functionCellTable);
 		int index = cells.size();
 		if (index == table.length) {
 			table = java.util.Arrays.copyOf(table, table.length * 2);
 		}
 		FunctionCell cell = new FunctionCell(index);
 		table[index] = cell;
-		this.functionCellTable = table;
+		this.globals.functionCellTable = table;
 		return cell;
 	}
 
@@ -1124,8 +1159,8 @@ public final class Environment implements Scope {
 	 * @param value the function value
 	 */
 	public void defineFunction(String name, LispVal value) {
-		if (this.functionCells != null) {
-			Map<String, FunctionCell> cells = this.functionCells;
+		if (this.globals.functionCells != null) {
+			Map<String, FunctionCell> cells = this.globals.functionCells;
 			FunctionCell cell = cells.get(name);
 			if (cell == null) {
 				synchronized (cells) {
@@ -1152,8 +1187,8 @@ public final class Environment implements Scope {
 	 * @param name the function name
 	 */
 	public void undefineFunction(String name) {
-		if (this.functionCells != null) {
-			FunctionCell cell = this.functionCells.get(name);
+		if (this.globals.functionCells != null) {
+			FunctionCell cell = this.globals.functionCells.get(name);
 			if (cell != null) {
 				cell.set(null);
 			}
@@ -1169,9 +1204,9 @@ public final class Environment implements Scope {
 	 * @return the names
 	 */
 	List<String> functionNames() {
-		if (this.functionCells != null) {
+		if (this.globals.functionCells != null) {
 			List<String> names = new ArrayList<>();
-			this.functionCells.forEach((name, cell) -> {
+			this.globals.functionCells.forEach((name, cell) -> {
 				if (cell.value() != null) {
 					names.add(name);
 				}
@@ -1266,21 +1301,15 @@ public final class Environment implements Scope {
 	}
 
 	/**
-	 * The names a {@code defconstant} has defined, on the global environment only (null
-	 * until the first): what the {@code constantp} built-in answers t for.
-	 */
-	private @Nullable Set<String> constantNames;
-
-	/**
 	 * Records that a {@code defconstant} defined the name; called on the global
 	 * environment.
 	 * @param name the constant name
 	 */
 	public void markConstant(String name) {
-		Set<String> names = this.constantNames;
+		Set<String> names = this.globals.constantNames;
 		if (names == null) {
 			names = java.util.concurrent.ConcurrentHashMap.newKeySet();
-			this.constantNames = names;
+			this.globals.constantNames = names;
 		}
 		names.add(name);
 	}
@@ -1292,7 +1321,7 @@ public final class Environment implements Scope {
 	 * @return true when the name names a constant
 	 */
 	public boolean isConstant(String name) {
-		Set<String> names = this.constantNames;
+		Set<String> names = this.globals.constantNames;
 		return names != null && names.contains(name);
 	}
 
@@ -3156,7 +3185,7 @@ public final class Environment implements Scope {
 				throw new LispEvalException(String.valueOf(ex.getMessage()));
 			}
 			catch (InterruptedException ex) {
-				BooleanSupplier resumed = env.interruptResumed;
+				BooleanSupplier resumed = env.globals.interruptResumed;
 				if (resumed != null && resumed.getAsBoolean()) {
 					// a spurious wakeup, which condition-wait's callers loop over
 					return LispNil.INSTANCE;
@@ -6013,7 +6042,7 @@ public final class Environment implements Scope {
 
 	private static void registerIO(Environment env, PrintStream out, InputStream in) {
 		BufferedReader stdinReader = new BufferedReader(new InputStreamReader(in));
-		env.replInputReader = stdinReader;
+		env.globals.replInputReader = stdinReader;
 		// Tracks whether standard output is at the beginning of a line, so fresh-line
 		// (~&) can emit a newline only when needed.
 		boolean[] atLineStart = { true };
@@ -6135,25 +6164,25 @@ public final class Environment implements Scope {
 		AtomicLong nextStreamHandle = new AtomicLong(StreamDesignators.FIRST_USER_HANDLE);
 		// The view the readtable-honoring reads open their string streams through
 		// (.kb/readtables.md).
-		env.stringStreams = new StringStreamTable(streams, nextStreamHandle, Environment::streamTarget,
+		env.globals.stringStreams = new StringStreamTable(streams, nextStreamHandle, Environment::streamTarget,
 				Environment::synonymTarget);
 		// The buffered served-request body rides the same table (its handle IS the
 		// :raw-body value), but it is opened and closed from Java: per-request Lisp
 		// marshalling was the measured POST regression, and the transport must be able
 		// to reclaim the entry when the request ends whether or not the handler closed
 		// it.
-		env.httpBodyStreamOpener = octets -> {
+		env.globals.httpBodyStreamOpener = octets -> {
 			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, new HttpRequestBodyStream(octets));
 			return handle;
 		};
-		env.httpBodyStreamCloser = streams::remove;
-		env.javaStreamOpener = entry -> {
+		env.globals.httpBodyStreamCloser = streams::remove;
+		env.globals.javaStreamOpener = entry -> {
 			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, entry);
 			return handle;
 		};
-		env.openStreamFlusher = () -> {
+		env.globals.openStreamFlusher = () -> {
 			for (Closeable entry : streams.values()) {
 				if (entry instanceof java.io.Flushable flushable) {
 					try {
@@ -6190,8 +6219,8 @@ public final class Environment implements Scope {
 		// to the process standard output. Resolution happens ONCE, so a *standard-output*
 		// that is itself nil falls through to standard output instead of looping.
 		java.util.function.UnaryOperator<@Nullable LispVal> resolveOutputDest = dest -> {
-			if ((dest == null || dest == LispNil.INSTANCE) && env.defaultOutput != null) {
-				return streamTargetOrNull(env.defaultOutput.get());
+			if ((dest == null || dest == LispNil.INSTANCE) && env.globals.defaultOutput != null) {
+				return streamTargetOrNull(env.globals.defaultOutput.get());
 			}
 			return streamTargetOrNull(dest);
 		};
@@ -6200,16 +6229,16 @@ public final class Environment implements Scope {
 		// Without an evaluator hook (a bare Environment) the seeded global answers, which
 		// is the process standard error.
 		java.util.function.Supplier<@Nullable LispVal> resolveErrorDest = () -> {
-			if (env.defaultError != null) {
-				return env.defaultError.get();
+			if (env.globals.defaultError != null) {
+				return env.globals.defaultError.get();
 			}
 			return env.lookupOrNull(LispNames.ERROR_OUTPUT_VAR);
 		};
 		// The same rule on the input side: an absent argument AND an explicit nil both
 		// denote *standard-input*. Only t is hard-wired to the process standard input.
 		java.util.function.UnaryOperator<@Nullable LispVal> resolveInputSrc = src -> {
-			if ((src == null || src == LispNil.INSTANCE) && env.defaultInput != null) {
-				return streamTargetOrNull(env.defaultInput.get());
+			if ((src == null || src == LispNil.INSTANCE) && env.globals.defaultInput != null) {
+				return streamTargetOrNull(env.globals.defaultInput.get());
 			}
 			return streamTargetOrNull(src);
 		};
@@ -7233,8 +7262,8 @@ public final class Environment implements Scope {
 		// which consults it): on the stream the designator denotes, StreamPushback --
 		// an omitted stream reaches the same cell as the *standard-input* it reads.
 		final StreamPushback pushback = new StreamPushback(stream -> {
-			LispVal designator = stream instanceof LispNil && env.defaultInput != null ? env.defaultInput.get()
-					: stream;
+			LispVal designator = stream instanceof LispNil && env.globals.defaultInput != null
+					? env.globals.defaultInput.get() : stream;
 			return designator == null ? LispNil.INSTANCE : synonymTarget(designator);
 		});
 		// (listen &optional stream): whether input is immediately available without
@@ -8309,10 +8338,10 @@ public final class Environment implements Scope {
 		// read is through readAll (whose first datum readFromString answers), so a
 		// literal nil still reads as nil and only a missing datum signals.
 		java.util.function.Function<String, LispVal> readWholeText = input -> {
-			UnaryOperator<LispVal> resolver = env.readTimeEvalResolver;
+			UnaryOperator<LispVal> resolver = env.globals.readTimeEvalResolver;
 			boolean markers = resolver != null && input.contains("#.");
 			java.util.List<LispVal> exprs = LispReader.readAllRuntime(input, env.currentReadFeatures(),
-					markers ? resolver : null, env.readSymbolHome);
+					markers ? resolver : null, env.globals.readSymbolHome);
 			if (exprs.isEmpty()) {
 				throw endOfFile(errorStream(streams, nextStreamHandle, input));
 			}
@@ -8330,7 +8359,7 @@ public final class Environment implements Scope {
 			catch (LispReadException ex) {
 				int end;
 				try {
-					end = LispLexer.datumEnd(input, env.currentReadFeatures(), env.readTimeEvalResolver);
+					end = LispLexer.datumEnd(input, env.currentReadFeatures(), env.globals.readTimeEvalResolver);
 				}
 				catch (LispReadException ignored) {
 					throw ex;
@@ -8359,7 +8388,7 @@ public final class Environment implements Scope {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.READ_FROM_STRING + " expects a string");
 			}
-			if (env.readSuppressQuery != null && env.readSuppressQuery.getAsBoolean()) {
+			if (env.globals.readSuppressQuery != null && env.globals.readSuppressQuery.getAsBoolean()) {
 				// *read-suppress* (CLHS 2.2): the characters of the datum are consumed
 				// -- which is the stop index, and the whole of what a suppressed read
 				// answers -- and the datum is neither built nor complained about.
@@ -8388,11 +8417,11 @@ public final class Environment implements Scope {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.READ_FROM_STRING_END + " expects a string");
 			}
-			SyntaxRead last = env.lastSyntaxRead;
+			SyntaxRead last = env.globals.lastSyntaxRead;
 			if (last != null && last.input() == str.value() && env.currentReadSyntax() != null) {
 				return last.end();
 			}
-			return readDatumStop(str.value(), env.currentReadFeatures(), env.readTimeEvalResolver);
+			return readDatumStop(str.value(), env.currentReadFeatures(), env.globals.readTimeEvalResolver);
 		}));
 		// parse-integer: parse an integer from a string, with the common :radix,
 		// :junk-allowed, :start and :end keywords. A spelled bound is checked as the
@@ -11205,11 +11234,11 @@ public final class Environment implements Scope {
 	 */
 	private static LispVal readOneWithSyntax(Environment env, String input, am.ik.rontolisp.reader.ReadSyntax syntax,
 			Map<Long, Closeable> streams, AtomicLong nextStreamHandle) {
-		UnaryOperator<LispVal> resolver = env.readTimeEvalResolver;
+		UnaryOperator<LispVal> resolver = env.globals.readTimeEvalResolver;
 		boolean markers = resolver != null && input.contains("#.");
 		LispReader.Forms forms = LispReader.forms(input, env.currentReadFeatures(), markers, null, resolver, 0, false)
-			.homingSymbols(env.readSymbolHome)
-			.withinTemplates(env.templateDepthQuery == null ? 0 : env.templateDepthQuery.getAsInt());
+			.homingSymbols(env.globals.readSymbolHome)
+			.withinTemplates(env.globals.templateDepthQuery == null ? 0 : env.globals.templateDepthQuery.getAsInt());
 		LispVal datum = forms.next(syntax);
 		if (datum == null) {
 			throw endOfFile(errorStream(streams, nextStreamHandle, input));
@@ -11218,7 +11247,7 @@ public final class Environment implements Scope {
 		if (end < input.length() && Character.isWhitespace(input.charAt(end))) {
 			end++;
 		}
-		env.lastSyntaxRead = new SyntaxRead(input, new LispInteger(input.codePointCount(0, end)));
+		env.globals.lastSyntaxRead = new SyntaxRead(input, new LispInteger(input.codePointCount(0, end)));
 		return markers ? java.util.Objects.requireNonNull(resolver).apply(datum) : datum;
 	}
 

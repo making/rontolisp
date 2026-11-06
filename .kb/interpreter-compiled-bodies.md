@@ -53,8 +53,11 @@ argument arrays 10%, a lexical read 8%, a call's guard and binding 10%, a `let`'
 `CompiledFrames.call` 4%, a body's run and statements 8%), built-ins applied through `apply`'s
 megamorphic body 10%, package and symbol lookups over names 7% (`symbol-package`,
 `find-package`), the value-count register 3%, the built-ins' own bodies 2%. Of the bytes
-allocated, a scope's `Environment` is a third: 128 bytes, its 29 fields 21 of them the global
-environment's, beside a `NameMap`, the argument array and the `ArgList`. Up to
+allocated, a scope's `Environment` was a third: 128 bytes, 21 of its 29 fields the global
+environment's, beside a `NameMap`, the argument array and the `ArgList`. The global
+environment's own state is an object of its own since (`Environment.Globals`; a scope holds
+`Globals.NONE`, every field null as its own were), a scope 56 bytes: the load to
+`math/bounded.lisp` 51.6 -> 46.2 s side by side, `math/num.lisp` 21.9 -> 19.8. Up to
 `math/bounded.lisp`, `typep`'s expansion is 0.3% of the samples, the `typecase` family 0.1%,
 `make-instance` 0.2%: a stamp over what they read would buy no more than that.
 
