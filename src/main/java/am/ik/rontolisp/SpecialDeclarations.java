@@ -36,9 +36,16 @@ public final class SpecialDeclarations {
 	 * @return whether its head is {@code declare}
 	 */
 	public static boolean isDeclaration(LispVal form) {
-		// The suffix test first: the interpreter asks this of every let body it enters.
-		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head
-				&& head.name().endsWith(LispNames.DECLARE) && LispNames.DECLARE.equals(member(head.name()));
+		// The suffix test first, its two ends before the rest: the interpreter asks this
+		// of every let body it enters.
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			return false;
+		}
+		String name = head.name();
+		int length = name.length();
+		return length >= LispNames.DECLARE.length() && name.charAt(length - 1) == 'E'
+				&& name.charAt(length - LispNames.DECLARE.length()) == 'D' && name.endsWith(LispNames.DECLARE)
+				&& memberIs(name, LispNames.DECLARE);
 	}
 
 	/**
@@ -144,7 +151,7 @@ public final class SpecialDeclarations {
 	private static @Nullable Set<String> addSpecials(LispVal declaration, @Nullable Set<String> names) {
 		for (LispVal spec = ((LispCons) declaration).cdr(); spec instanceof LispCons cell; spec = cell.cdr()) {
 			if (cell.car() instanceof LispCons clause && clause.car() instanceof LispSymbol op
-					&& LispNames.SPECIAL.equals(member(op.name()))) {
+					&& memberIs(op.name(), LispNames.SPECIAL)) {
 				for (LispVal n = clause.cdr(); n instanceof LispCons nameCell; n = nameCell.cdr()) {
 					if (nameCell.car() instanceof LispSymbol name && !name.isKeyword()) {
 						if (names == null) {
@@ -158,9 +165,18 @@ public final class SpecialDeclarations {
 		return names;
 	}
 
-	private static String member(String name) {
-		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
-		return qn == null ? name : qn.member();
+	/**
+	 * Whether a symbol name's member part ({@link PackageRegistry#splitQualified}) is
+	 * {@code member}, without splitting it: the interpreter asks this of the declarations
+	 * of every body it enters.
+	 */
+	private static boolean memberIs(String name, String member) {
+		int colon = name.startsWith("#:") ? -1 : name.indexOf(':');
+		if (colon <= 0) {
+			return name.equals(member);
+		}
+		int start = colon + 1 < name.length() && name.charAt(colon + 1) == ':' ? colon + 2 : colon + 1;
+		return name.length() - start == member.length() && name.startsWith(member, start);
 	}
 
 }

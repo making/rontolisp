@@ -40,7 +40,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when` by its position (any situation at top level, `:execute` elsewhere; what keeps a body at top level), runtime type checks
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
 - [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output; a value that is no form, an unbound variable, an undefined function; the built-in macros (`eval-macros.lisp`), `loop`'s clauses ported to it, the macros a form binds, restarts, `(setf name)` places; what a form can reach (`EvalReferences`)
-- [interpreter-expansion-memo.md](interpreter-expansion-memo.md) -- the interpreter expands a built-in macro once per call site; which arms must re-expand; the per-site memos as weak identity tables (`FormMemo`), what keeps a user macro site's expansion valid
+- [interpreter-expansion-memo.md](interpreter-expansion-memo.md) -- the interpreter expands a built-in macro once per call site; which arms must re-expand; the per-site memos as weak identity tables (`FormMemo`), what keeps a user macro site's expansion valid; the call-site note on a head symbol (what a call, a macro site, a `let` and a variable keep of a name, and what drops it)
 
 ## Macros, reader, printer
 
