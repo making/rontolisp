@@ -58,6 +58,25 @@ final class ValueCountRegister {
 	}
 
 	/**
+	 * Writes nil to the calling thread's register, the one value of nearly every step:
+	 * only when it holds something else, as a reference store costs the collector's
+	 * barrier and the register mostly holds nil already.
+	 */
+	void clear() {
+		if (Thread.currentThread() == this.owner) {
+			if (this.ownerValue != LispNil.INSTANCE) {
+				this.ownerValue = LispNil.INSTANCE;
+			}
+		}
+		else {
+			@Nullable Object[] slots = this.others.get();
+			if (slots[0] != LispNil.INSTANCE) {
+				slots[0] = LispNil.INSTANCE;
+			}
+		}
+	}
+
+	/**
 	 * Holds the exit a statement hands to the frame whose block it leaves, until the
 	 * frame takes it.
 	 * @param exit the exit

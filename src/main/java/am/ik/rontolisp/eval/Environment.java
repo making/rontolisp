@@ -1372,7 +1372,7 @@ public final class Environment implements Scope {
 	 * the value-count register of a native implementation, kept as a field.
 	 */
 	void clearSpill() {
-		this.mvSpill.set(LispNil.INSTANCE);
+		this.mvSpill.clear();
 	}
 
 	/**

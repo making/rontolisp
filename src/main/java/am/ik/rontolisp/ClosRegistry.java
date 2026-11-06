@@ -4355,6 +4355,16 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * The generic function under a key {@link #normalize} made of its name: what a caller
+	 * that asks for one name many times normalizes once.
+	 * @param key the normalized name
+	 * @return the generic, or null
+	 */
+	@Nullable public GenericInfo findNormalizedGeneric(String key) {
+		return this.generics.get(key);
+	}
+
+	/**
 	 * The 1-based position of a slot (by base name) shared by every class declaring it,
 	 * {@code -1} when classes disagree, or null when unknown.
 	 * @param baseName the package-stripped slot name

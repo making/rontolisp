@@ -1785,15 +1785,19 @@ final class CompiledForms {
 
 		private final String name;
 
+		/** The name as the class registry keys its generic functions, made once. */
+		private final String genericKey;
+
 		FunctionValue(LispEvaluator ev, String name) {
 			super(null);
 			this.ev = ev;
 			this.name = name;
+			this.genericKey = am.ik.rontolisp.ClosRegistry.normalize(name);
 		}
 
 		@Override
 		LispVal eval(Environment env) {
-			LispVal value = this.ev.functionValue(this.name);
+			LispVal value = this.ev.functionValue(this.name, this.genericKey);
 			env.clearSpill();
 			return value;
 		}

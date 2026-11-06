@@ -15439,7 +15439,17 @@ public final class LispEvaluator {
 	 * setf stored.
 	 */
 	LispVal functionValue(String name) {
-		if (this.closRegistry.findGeneric(name) != null) {
+		return functionValue(name, ClosRegistry.normalize(name));
+	}
+
+	/**
+	 * {@link #functionValue(String)} with the name's generic key made already.
+	 * @param name the function name
+	 * @param genericKey {@code ClosRegistry.normalize(name)}
+	 * @return the value
+	 */
+	LispVal functionValue(String name, String genericKey) {
+		if (this.closRegistry.findNormalizedGeneric(genericKey) != null) {
 			LispVal dispatcher = this.genericDispatchers.get(name);
 			if (dispatcher instanceof LispInstance metaobject && isGenericFunctionMetaobject(metaobject)) {
 				// Its metaobject calls the current dispatcher, and is what find-method

@@ -2399,6 +2399,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// %terminal-p.
 	static final int FUNC_TERMINAL_P = FUNC_HOST_GETCWD + 1;
 
+	// _sleep_ms ((ref null eq) ms) -> (ref null eq): Preview 1's %sleep-ms, a wait in
+	// the injected poll_oneoff on a monotonic-clock subscription
+	// (WasmIoRuntimeBuilder.buildSleepMsBody). Reuses the unary callable signature;
+	// appended after the last fixed helper so no index above shifts. A nil stub unless
+	// a Preview 1 sleep was compiled.
+	static final int FUNC_SLEEP_MS = FUNC_TERMINAL_P + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2429,7 +2436,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_TERMINAL_P + 1;
+	static final int FUNC_VEC_BASE = FUNC_SLEEP_MS + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2451,12 +2458,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// bounds landing (_subseq_bad), the bounds check (_ck_bounds), the four exact
 	// prefix steps (_rat_add_f64 .. _rat_div_f64), the limb-tier random draw
 	// (_rand_big), the path stat (_file_write_date), the link read (_read_link), the
-	// hash-table runtime (_ht_*), the working directory (_host_getcwd) and the terminal
-	// probe (_terminal_p) -- plus,
+	// hash-table runtime (_ht_*), the working directory (_host_getcwd), the terminal
+	// probe (_terminal_p) and the wait (_sleep_ms) -- plus,
 	// under --simd, the vec: SIMD block, and the conditional helpers (the _arity_* /
 	// _undefined_function / _unbound_variable / _lit_stage / _funcref chain and the
 	// complex block). Use userFuncBase(), which adds those offsets.
-	static final int FUNC_USER_BASE = FUNC_TERMINAL_P + 1;
+	static final int FUNC_USER_BASE = FUNC_SLEEP_MS + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -5142,6 +5149,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Set by the seams that dispatch a designator the compiler could not read; see
 		// Ctx.runtimeDesignatorDispatch and the registry gate below.
 		boolean[] runtimeDesignatorDispatch = new boolean[1];
+		// Set by a Preview 1 %sleep-ms site (Ctx.sleepCompiled), read where the
+		// poll_oneoff import is appended.
+		boolean[] sleepCompiled = new boolean[1];
 		// The lambdas the injected runtime bodies build; see Ctx.injectedRuntimeLambdas.
 		Set<Integer> injectedRuntimeLambdas = new HashSet<>();
 		// The async waiter wake-up goes through the arity-1 dispatch (the resume
@@ -5225,6 +5235,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.indirectCallArities(indirectCallArities)
 			.fdlibmUsed(fdlibmUsed)
 			.runtimeDesignatorDispatch(runtimeDesignatorDispatch)
+			.sleepCompiled(sleepCompiled)
 			.injectedRuntimeLambdas(injectedRuntimeLambdas)
 			.valueFuncIds(valueFuncIds)
 			.valueMakers(valueMakers)
@@ -6399,6 +6410,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (hostTerminal) {
 			hostImports
 				.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "fd_fdstat_get", TYPE_INTERN));
+		}
+		// poll_oneoff(in, out, nsubscriptions, nevents) -> errno is fd_write's shape
+		// (TYPE_FD_WRITE), so it appends no type. Gated on what Pass 2 EMITTED -- a
+		// Preview 1 sleep compiled anywhere (Ctx.sleepCompiled) -- rather than on a
+		// source scan, so the wait can never be the nil stub; --component waits in
+		// wait.lisp and --no-wasi refuses, so neither reaches the lowering.
+		final int pollOneoffOrdinal = sleepCompiled[0] ? hostImports.size() : -1;
+		if (sleepCompiled[0]) {
+			hostImports
+				.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "poll_oneoff", TYPE_FD_WRITE));
 		}
 
 		// Which funcIds the arity ladders (and the name registry below) must carry a case
@@ -8458,6 +8479,8 @@ public final class WasmLispCompiler implements LispCompiler {
 													// (FUNC_HOST_GETCWD)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _terminal_p (fd) -> value
 															// (FUNC_TERMINAL_P)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _sleep_ms (ms) -> value
+															// (FUNC_SLEEP_MS)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -9590,6 +9613,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				// or a nil stub where nothing declared it.
 				code.addFunction(fdstatOrdinal < 0 ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
 					.buildTerminalPBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + fdstatOrdinal, stringTable));
+				// the wait (FUNC_SLEEP_MS): over the injected poll_oneoff, or a nil stub
+				// where no Preview 1 sleep was compiled.
+				code.addFunction(pollOneoffOrdinal < 0 ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
+					.buildSleepMsBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + pollOneoffOrdinal));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp
@@ -12180,6 +12207,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean[] runtimeDesignatorDispatch;
 
 		/**
+		 * Whether a Preview 1 {@code %sleep-ms} call site was emitted, so the module
+		 * imports {@code poll_oneoff} and carries the real {@code _sleep_ms}. A
+		 * one-element holder shared by every {@code Ctx}, like
+		 * {@link #runtimeDesignatorDispatch}.
+		 */
+		boolean[] sleepCompiled;
+
+		/**
 		 * Whether the body being emitted is INJECTED runtime rather than the user's
 		 * program -- a {@code BuiltinFunctionWrappers} catalog entry or one of the shared
 		 * sequence helpers. Every one of those bodies funcalls a designator PARAMETER, so
@@ -13162,6 +13197,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.indirectCallArities = builder.indirectCallArities;
 			this.fdlibmUsed = builder.fdlibmUsed;
 			this.runtimeDesignatorDispatch = builder.runtimeDesignatorDispatch;
+			this.sleepCompiled = builder.sleepCompiled;
 			this.injectedRuntimeBody = builder.injectedRuntimeBody;
 			this.injectedRuntimeLambdas = builder.injectedRuntimeLambdas;
 			this.valueFuncIds = builder.valueFuncIds;
@@ -13316,6 +13352,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<WasmFdlibmRuntimeBuilder.Fn> fdlibmUsed = EnumSet.noneOf(WasmFdlibmRuntimeBuilder.Fn.class);
 
 			private boolean[] runtimeDesignatorDispatch = new boolean[1];
+
+			private boolean[] sleepCompiled = new boolean[1];
 
 			private boolean injectedRuntimeBody = false;
 
@@ -13538,6 +13576,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.indirectCallArities = proto.indirectCallArities;
 				this.fdlibmUsed = proto.fdlibmUsed;
 				this.runtimeDesignatorDispatch = proto.runtimeDesignatorDispatch;
+				this.sleepCompiled = proto.sleepCompiled;
 				this.injectedRuntimeBody = proto.injectedRuntimeBody;
 				this.injectedRuntimeLambdas = proto.injectedRuntimeLambdas;
 				this.valueFuncIds = proto.valueFuncIds;
@@ -13694,6 +13733,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder runtimeDesignatorDispatch(boolean[] runtimeDesignatorDispatch) {
 				this.runtimeDesignatorDispatch = runtimeDesignatorDispatch;
+				return this;
+			}
+
+			Builder sleepCompiled(boolean[] sleepCompiled) {
+				this.sleepCompiled = sleepCompiled;
 				return this;
 			}
 

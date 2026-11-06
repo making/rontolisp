@@ -328,7 +328,7 @@
 | `get-decoded-time` | `(get-decoded-time)` | 現在時刻をローカルゾーンでの 9 個の分解値として返す |
 | `get-internal-real-time` | `(get-internal-real-time)` | 経過実時間(ミリ秒)(すべてのバックエンドで整数) |
 | `get-internal-run-time` | `(get-internal-run-time)` | 消費した実行時間(ミリ秒)(すべてのバックエンドで整数) |
-| `sleep` | `(sleep 0.5)` | 非負の秒数だけブロックして `nil` を返します(WASM Preview 1 と `--no-wasi` 以外は本物のホストタイマー。Preview 1 はクロックをビジーウェイト、`--no-wasi` はシグナル) |
+| `sleep` | `(sleep 0.5)` | 非負の秒数だけブロックして `nil` を返します(どのバックエンドでも CPU を消費しません。`--no-wasi` はシグナル) |
 | `lisp-implementation-type` `lisp-implementation-version` `software-type` `software-version` `machine-type` `machine-version` `machine-instance` `short-site-name` `long-site-name` | `(lisp-implementation-type)` | `"rontolisp"` — 環境問い合わせの定数群。バージョンはビルド固有、`software-type` は `"Unix"`、`machine-type` は対象 ABI(`"JVM"` / `"WASM32"`)、rontolisp が知り得ないものはすべて `nil` |
 | `user-homedir-pathname` | `(user-homedir-pathname)` | `HOME` を**ディレクトリ**パス名として返す(末尾は区切り文字)。変数が未設定なら `nil` |
 | `invoke-debugger` | `(invoke-debugger c)` | 条件を通知し決して戻らない -- 入り込めるデバッガはどのバックエンドにも無い |

@@ -32,8 +32,8 @@
 ;; an `await` is only legal inside an async-defun/async-lambda or at top level, and
 ;; sleep has to be callable from anywhere (clack's handler `stop` calls it inside a
 ;; plain defun). %future-force blocks on the module scheduler -- so the wait costs no
-;; CPU and other pending tasks still progress, unlike the Preview 1 clock spin, which
-;; exists only because Preview 1 has no timer to force. This is the same synchronous /
+;; CPU and other pending tasks still progress, where Preview 1's poll_oneoff blocks the
+;; whole instance. This is the same synchronous /
 ;; asynchronous split sockets.lisp's tcp-* surface uses (.kb/tcp-sockets.md).
 ;;
 ;; Being a defun is also what makes `#'sleep` work: no built-in wrapper is injected for

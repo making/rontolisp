@@ -1330,8 +1330,7 @@ final class JvmExprCompiler {
 			JvmBodyOutliner.@Nullable Tail tail) {
 		switch (sym.name()) {
 			case LispNames.LIST_DIRECTORY -> JvmListDirectoryCompiler.compile(cons, ctx, className);
-			case LispNames.SLEEP ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandSleep(cons, false), ctx, className);
+			case LispNames.SLEEP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandSleep(cons), ctx, className);
 			case LispNames.SLEEP_MS -> JvmSleepCompiler.compile(cons, ctx, className);
 			case LispNames.WRITE_LINE -> {
 				LispVal bounded = LispMacroExpander.lowerWriteLineBounds(cons);
