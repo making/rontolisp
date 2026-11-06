@@ -225,7 +225,8 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   `:default-component-class cl-source-file.cl` は裸のエントリすべてを `NAME.cl` に
   します)、そして `:file`/`:module`/`:static-file` エントリ、または スコープ内の
   他のコンポーネントクラスを名指しするエントリ (`(:cl-source-file.cl "main")`、
-  `(:txt-file "readme")`) を持つ `:components` をサポートします。
+  `(:txt-file "readme")`。キーワードでもクラスのシンボルそのもの
+  `(txt-file "readme")` でも書けます) を持つ `:components` をサポートします。
   コンポーネントには `:if-feature expr` を付けられます。フィーチャー式が成立しない
   場合、そのコンポーネントのファイルは除外されますが (ライブラリが CLOS 専用
   ファイルを `(:or :sbcl ...)` の後ろにゲートする方法)、依存順序内の位置は

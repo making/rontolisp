@@ -3,6 +3,7 @@
 ;; nil), and meta-demo-tree.expected is what it prints there, line for line.
 (asdf:load-system "meta-demo-tree")
 (print (reverse *tree-log*))
+(print (asdf:component-name (asdf:find-system "meta-demo-tree-sub" nil)))
 (defun tree-kind (c)
   (typecase c
     (asdf:system :system)

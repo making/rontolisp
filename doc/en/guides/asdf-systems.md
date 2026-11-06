@@ -235,7 +235,8 @@ library still has to stay inside the supported subset below.
   makes every bare entry name `NAME.cl`) and `:components` with
   `:file`/`:module`/`:static-file` entries or an entry naming any other
   component class in scope (`(:cl-source-file.cl "main")`,
-  `(:txt-file "readme")`);
+  `(:txt-file "readme")`), by keyword or by the class symbol itself
+  (`(txt-file "readme")`);
   a component may carry `:if-feature expr`, which drops the component's files
   when the feature expression does not hold (how libraries gate CLOS-only
   files behind `(:or :sbcl ...)`) while keeping its place in the dependency
