@@ -4864,7 +4864,8 @@ public final class LispEvaluator {
 			if (language == SourceLanguage.COMMON_LISP) {
 				// Form at a time: each form is read with the readtable the forms before
 				// it left (.kb/readtables.md).
-				loadForms(SourceLanguage.readForms(source, features, resolved), resolved, source, markers);
+				loadForms(SourceLanguage.readForms(source, features, resolved)
+					.readingTOrNil(this.packageResolver::readsClTOrNil), resolved, source, markers);
 				return;
 			}
 			LispReader.ReadPrefix read = language.readUntilError(source, features, resolved, this.sourceStandards,
@@ -4938,7 +4939,8 @@ public final class LispEvaluator {
 	 */
 	public void evalSource(String source, @Nullable String file) {
 		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
-		SourceLanguage.Forms forms = SourceLanguage.readForms(source, this.features, file);
+		SourceLanguage.Forms forms = SourceLanguage.readForms(source, this.features, file)
+			.readingTOrNil(this.packageResolver::readsClTOrNil);
 		Set<String> featuresAtOpen = printedFeatures(currentFeatures());
 		for (LispVal form = forms.next(sourceReadSyntax()); form != null; form = forms.next(sourceReadSyntax(),
 				featuresAddedSince(featuresAtOpen))) {
@@ -16162,7 +16164,7 @@ public final class LispEvaluator {
 		Environment letEnv = new Environment(env);
 		// parts.get(1) is the bindings list: ((x 1) (y 2)); a bare symbol entry is
 		// an init-less binding to nil.
-		LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
+		LispVal bindings = LispMacroExpander.letBindingList(parts.get(1));
 		// A special name gets a thread-scoped dynamic binding instead of a lexical one;
 		// dynamicNames records those to pop on any exit (left null on the common
 		// all-lexical

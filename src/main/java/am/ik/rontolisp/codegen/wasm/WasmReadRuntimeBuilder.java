@@ -1219,12 +1219,17 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INTERN);
 		setLocal(w, OFF);
-		// nil? -> the null ref (nil is the unique null value, not a symbol struct)
+		// nil? -> the null ref (nil is the unique null value, not a symbol struct). A
+		// module asking %read-home asks what the package reads it as: cl's nil goes in
+		// and comes out as the null ref, a package's own NIL as its symbol.
 		getLocal(w, OFF);
 		i32(w, ctx.nilOffset());
 		w.write(Instruction.I32_EQ);
 		ifVoid(w);
 		emitNull(w);
+		if (home) {
+			emitAskHome(w, ctx, START, LEN, TOKEN, CAR, CDR, OFF, POS, ACC);
+		}
 		w.write(Instruction.RETURN);
 		end(w);
 		// symbol struct (t is an ordinary interned symbol "T": the token upcased to "T",

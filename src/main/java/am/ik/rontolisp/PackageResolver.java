@@ -236,6 +236,9 @@ public final class PackageResolver {
 		if (current.shadows(name)) {
 			return true;
 		}
+		if (isTOrNil(name)) {
+			return tOrNilIn(current(), name, false) instanceof LispSymbol;
+		}
 		boolean savedProbing = this.probing;
 		this.probing = true;
 		try {
@@ -2343,6 +2346,80 @@ public final class PackageResolver {
 		}
 	}
 
+	/**
+	 * Follows a top-level form's effect on what a {@code t} or {@code nil} token read
+	 * after it is ({@link #readsClTOrNil}), in a resolver that reads nothing else, ahead
+	 * of every pass: the compile paths' read, which reads a form before the forms ahead
+	 * of it ran. It knows the packages the program's literal definitions and directives
+	 * make, as spelled. A package it has no definition of -- a macro's, or one whose
+	 * clauses it cannot read -- reads {@code cl}'s constants, what every pass took them
+	 * for before the read could tell; an {@code in-package} of it makes it up so. The
+	 * resolvers after the read decide such a token from what they know, so only what this
+	 * one is sure of may differ from that.
+	 * @param form the top-level form
+	 */
+	public synchronized void followReadPackageDirective(LispVal form) {
+		if (!isReadPackageDirective(form)) {
+			return;
+		}
+		LispCons cons = (LispCons) form;
+		LispSymbol op = (LispSymbol) cons.car();
+		String member = operatorMember(op);
+		if (LispNames.PROGN.equals(member) || LispNames.EVAL_WHEN.equals(member)) {
+			for (LispVal part : topLevelMembers(cons, member)) {
+				followReadPackageDirective(part);
+			}
+			return;
+		}
+		try {
+			if (LispNames.IN_PACKAGE.equals(member) && cons.cdr() instanceof LispCons args) {
+				String designator = designator(LispNames.IN_PACKAGE, "a package name", args.car());
+				if (findPackageName(designator) == null) {
+					this.registry.define(new LispPackage(designator, List.of(LispNames.CL_PKG), Set.of(), Set.of()));
+				}
+			}
+			resolve(cons);
+		}
+		catch (RuntimeException ignored) {
+			// The pass that reads the whole form reports what is wrong with it.
+		}
+	}
+
+	/**
+	 * Whether a top-level form can change what a {@code t} or {@code nil} token after it
+	 * reads as ({@link #followReadPackageDirective}): a package definition, a selection
+	 * of one, a directive over a package's symbols, or a {@code progn} or
+	 * {@code eval-when} holding one. A program none of whose forms is one reads every
+	 * token in {@code cl-user}.
+	 * @param form the top-level form
+	 * @return whether the form is such a directive
+	 */
+	public static boolean isReadPackageDirective(LispVal form) {
+		if (!(form instanceof LispCons cons && cons.car() instanceof LispSymbol op && cons.isProperList())) {
+			return false;
+		}
+		String member = operatorMember(op);
+		return switch (member) {
+			case LispNames.PROGN, LispNames.EVAL_WHEN ->
+				topLevelMembers(cons, member).stream().anyMatch(PackageResolver::isReadPackageDirective);
+			// uiop's or mgl-pax's, whichever nickname qualifies it: the resolution asks.
+			case LispNames.DEFINE_PACKAGE -> PackageRegistry.splitQualified(op.name()) != null;
+			case LispNames.IN_PACKAGE, LispNames.DEFPACKAGE, LispNames.PUSH_PACKAGE, LispNames.POP_PACKAGE,
+					LispNames.USE_PACKAGE, LispNames.UNUSE_PACKAGE, LispNames.IMPORT, LispNames.SHADOWING_IMPORT,
+					LispNames.EXPORT, LispNames.UNEXPORT ->
+				true;
+			default -> false;
+		};
+	}
+
+	/**
+	 * The members of a top-level {@code progn} or {@code eval-when}, top-level forms too.
+	 */
+	private static List<LispVal> topLevelMembers(LispCons form, String member) {
+		List<LispVal> parts = form.toList();
+		return parts.subList(Math.min(parts.size(), LispNames.PROGN.equals(member) ? 1 : 2), parts.size());
+	}
+
 	/** Makes up the package a designator names when nothing has defined it yet. */
 	private void ensurePackage(String designator) {
 		if (findPackageName(designator) == null) {
@@ -3059,6 +3136,9 @@ public final class PackageResolver {
 		if (this.resolvingDatum && !PackageRegistry.isClExtensionName(name)) {
 			return sym;
 		}
+		if (isTOrNil(name)) {
+			return tOrNilIn(current(), name, true);
+		}
 		return resolveUnqualified(name);
 	}
 
@@ -3081,6 +3161,9 @@ public final class PackageResolver {
 		if (!qn.internal() && !isExternal(pkg, member)) {
 			throw new LispPackageException("The symbol " + member + " is not external in the " + pkg + " package (use "
 					+ PackageRegistry.qualifyInternal(pkg, member) + ")");
+		}
+		if (isTOrNil(member)) {
+			return tOrNilIn(pkg, member, true);
 		}
 		// A symbol imported via :import-from lives in its source package; resolution is
 		// textual, so redirect to the source package's canonical spelling.
@@ -3174,6 +3257,74 @@ public final class PackageResolver {
 			unbindThreadPackage(previous);
 		}
 		return canonical(pkg, member).name();
+	}
+
+	/**
+	 * Whether a bare token named {@code T} or {@code NIL} is {@code cl}'s constant in the
+	 * current package. The reader folds such a token to the constant exactly where this
+	 * holds; any other it leaves a symbol, which this pass reads as the package's own or
+	 * inherited one ({@code .kb/packages.md}, "T and NIL in a package that does not read
+	 * them as cl's"). What the interpreter's source read asks, a form being read after
+	 * the forms before it ran.
+	 * @param name {@code T} or {@code NIL}
+	 * @return whether the token reads as {@code cl}'s constant
+	 */
+	public synchronized boolean readsClTOrNil(String name) {
+		return !(tOrNilIn(current(), name, false) instanceof LispSymbol);
+	}
+
+	/**
+	 * Whether a symbol name is one of the two names the reader folds to a constant.
+	 * @param name the member name
+	 * @return whether it is {@code T} or {@code NIL}
+	 */
+	public static boolean isTOrNil(String name) {
+		return "NIL".equals(name) || "T".equals(name);
+	}
+
+	/**
+	 * What a token named {@code T} or {@code NIL} reads as in {@code pkg}, found as CL's
+	 * reader finds a name: a symbol the package imports ({@code cl}'s is the constant),
+	 * the package's own where it shadows the name, {@code cl}'s constant where it uses
+	 * {@code cl}, else its own symbol or the one a used package exports ({@code cl}'s,
+	 * re-exported, is the constant), else a symbol of its own made for the read. Neither
+	 * name is in {@link PackageRegistry#isClSymbol}, so {@link #resolveUnqualified} would
+	 * read them as a cl-using package's own.
+	 * @param pkg the canonical package name
+	 * @param name {@code T} or {@code NIL}
+	 * @param read whether a symbol made for the read joins the package ({@link #mint}),
+	 * not only spelled
+	 * @return the constant, or the symbol
+	 */
+	private LispVal tOrNilIn(String pkg, String name, boolean read) {
+		LispVal constant = "NIL".equals(name) ? LispNil.INSTANCE : LispTrue.INSTANCE;
+		if ("keyword".equals(pkg)) {
+			return new LispSymbol(":" + name);
+		}
+		LispPackage p = this.registry.get(pkg);
+		if (p == null || LispNames.CL_PKG.equals(pkg)) {
+			return constant;
+		}
+		String importSource = p.imports().get(name);
+		if (importSource != null) {
+			return LispNames.CL_PKG.equals(importSource) ? constant : canonical(importSource, name);
+		}
+		if (p.shadows(name)) {
+			return canonical(pkg, name);
+		}
+		if (p.uses(LispNames.CL_PKG)) {
+			return constant;
+		}
+		if (p.owns(name) && !this.registry.isUnhomed(pkg, name)) {
+			return canonical(pkg, name);
+		}
+		for (String used : p.useList()) {
+			LispSymbol viaUsed = usedExport(used, name);
+			if (viaUsed != null) {
+				return viaUsed.name().equals(name) ? constant : viaUsed;
+			}
+		}
+		return read ? mint(pkg, name) : canonical(pkg, name);
 	}
 
 	private LispSymbol resolveUnqualified(String name) {
@@ -3500,8 +3651,12 @@ public final class PackageResolver {
 			String pkg = registeredPackageName(this.registry.canonicalName(qn.pkg()));
 			if (this.registry.contains(pkg)) {
 				try {
-					if (resolveQualified(qn) instanceof LispSymbol sym) {
+					LispVal resolved = resolveQualified(qn);
+					if (resolved instanceof LispSymbol sym) {
 						return sym.name();
+					}
+					if (resolved instanceof LispNil || resolved instanceof LispTrue) {
+						return resolved.print();
 					}
 				}
 				catch (LispPackageException ignored) {
@@ -3519,14 +3674,9 @@ public final class PackageResolver {
 			// package keeps no table, and every name in it is its keyword.
 			return ":" + name;
 		}
-		if (("T".equals(name) || "NIL".equals(name)) && currentUsesCl()) {
-			// The reader never mints PKG::T -- t and nil read as the singletons in every
-			// cl-using package -- so intern answers them too, bare, rather than the
-			// qualified spelling the resolver would give a name cl owns (CL:T under cl).
-			LispPackage current = this.registry.get(current());
-			if (current == null || (!current.shadows(name) && !current.imports().containsKey(name))) {
-				return name;
-			}
+		if (isTOrNil(name)) {
+			// What the reader reads the token as: cl's constant, spelled bare.
+			return tOrNilIn(current(), name, true) instanceof LispSymbol sym ? sym.name() : name;
 		}
 		return resolveUnqualified(name).name();
 	}

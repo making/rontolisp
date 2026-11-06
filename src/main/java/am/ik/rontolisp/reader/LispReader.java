@@ -81,6 +81,15 @@ public final class LispReader {
 	private @Nullable UnaryOperator<String> symbolHome;
 
 	/**
+	 * Whether a token naming {@code T} or {@code NIL} with no qualifier is {@code cl}'s
+	 * constant where a source read happens, which only a package using no {@code cl} can
+	 * deny: such a token then stays a symbol for {@code PackageResolver}, as every other
+	 * token does ({@code .kb/packages.md}). {@code null} folds every one, which a read no
+	 * caller places in a package does (a scan, a data read).
+	 */
+	private @Nullable Predicate<String> clTOrNil;
+
+	/**
 	 * How many backquote templates enclose the datum being read, outside this read's own
 	 * backquotes: zero, but for a reader macro function's recursive read inside a
 	 * template ({@link Forms#withinTemplates}), where a comma reads as the raw marker the
@@ -357,6 +366,27 @@ public final class LispReader {
 	}
 
 	/**
+	 * {@link #readPrefixFromString}, or with {@code readEvalMarkers}
+	 * {@link #readPrefixWithReadEvalMarkers}, of a source read in a package: a token
+	 * naming {@code T} or {@code NIL} with no qualifier is {@code cl}'s constant only
+	 * where {@code clTOrNil} answers so ({@link Forms#readingTOrNil}).
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param readEvalMarkers whether {@code #.} reads as a {@code (%read-eval datum)}
+	 * marker (else it is a read error)
+	 * @param file the origin file, or {@code null} when unknown
+	 * @param clTOrNil answers, for {@code T} or {@code NIL}, whether the token is
+	 * {@code cl}'s constant
+	 * @return the forms before the first error, and that error
+	 */
+	public static ReadPrefix readPrefixIn(String input, Features features, boolean readEvalMarkers,
+			@Nullable String file, Predicate<String> clTOrNil) {
+		return readPrefix(input, features,
+				readEvalMarkers ? LispLexer.ReadEvalMode.MARKER : LispLexer.ReadEvalMode.ERROR, file, null, null,
+				clTOrNil);
+	}
+
+	/**
 	 * A RUNTIME read of data -- the {@code read} family's. With {@code readTimeEval} set,
 	 * {@code #.} reads as a {@code (%read-eval datum)} marker and a {@code #+}/{@code #-}
 	 * guard whose feature expression holds a {@code #.} is decided while reading, as CL's
@@ -388,7 +418,7 @@ public final class LispReader {
 	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
 			@Nullable String file, @Nullable UnaryOperator<LispVal> readTimeEval,
 			@Nullable UnaryOperator<String> symbolHome) {
-		ReadPrefix read = readPrefix(input, features, readEvalMode, file, readTimeEval, symbolHome);
+		ReadPrefix read = readPrefix(input, features, readEvalMode, file, readTimeEval, symbolHome, null);
 		LispReadException error = read.error();
 		if (error != null) {
 			throw error;
@@ -398,12 +428,12 @@ public final class LispReader {
 
 	private static ReadPrefix readPrefix(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
 			@Nullable String file, @Nullable UnaryOperator<LispVal> readTimeEval) {
-		return readPrefix(input, features, readEvalMode, file, readTimeEval, null);
+		return readPrefix(input, features, readEvalMode, file, readTimeEval, null, null);
 	}
 
 	private static ReadPrefix readPrefix(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
 			@Nullable String file, @Nullable UnaryOperator<LispVal> readTimeEval,
-			@Nullable UnaryOperator<String> symbolHome) {
+			@Nullable UnaryOperator<String> symbolHome, @Nullable Predicate<String> clTOrNil) {
 		// A source may announce features about ITSELF -- the header
 		// (eval-when (...) (pushnew :F *features*)) idiom -- and the #+F below it must
 		// see them. Real CL gets that free by loading form at a time; here the reader
@@ -413,6 +443,7 @@ public final class LispReader {
 		LispLexer.Prefix lexed = new LispLexer(input, effective, readEvalMode, file, readTimeEval).tokenizePrefix();
 		LispReader reader = new LispReader(lexed.tokens(), effective, input, file, true);
 		reader.symbolHome = symbolHome;
+		reader.clTOrNil = clTOrNil;
 		List<LispVal> result = new ArrayList<>();
 		while (reader.pos < reader.tokens.size()) {
 			try {
@@ -595,6 +626,20 @@ public final class LispReader {
 		 */
 		public Forms homingSymbols(@Nullable UnaryOperator<String> symbolHome) {
 			this.reader.symbolHome = symbolHome;
+			return this;
+		}
+
+		/**
+		 * Reads a token naming {@code T} or {@code NIL} with no qualifier as {@code cl}'s
+		 * constant only where {@code clTOrNil} answers that the package the read happens
+		 * in reads it so, asked as the token is read; any other such token stays a symbol
+		 * for {@code PackageResolver}.
+		 * @param clTOrNil answers, for {@code T} or {@code NIL}, whether the token is
+		 * {@code cl}'s constant
+		 * @return this read
+		 */
+		public Forms readingTOrNil(Predicate<String> clTOrNil) {
+			this.reader.clTOrNil = clTOrNil;
 			return this;
 		}
 
@@ -923,15 +968,22 @@ public final class LispReader {
 	private LispVal readSymbol(Token.SymbolToken sym) {
 		// Every qualified spelling keeps its prefix for PackageResolver, cl:pi included:
 		// stripped here it would read as the current package's own PI where the package
-		// uses no cl. cl:nil/cl:t strip: the cl package does not export the
-		// self-evaluating symbols, so the qualified spelling would die in the resolver
-		// as "not external".
+		// uses no cl. cl:nil/cl:t read as the constants here, whatever package reads
+		// them.
 		String name = unqualifySelfEval(sym.name());
-		if ("NIL".equals(name)) {
-			return LispNil.INSTANCE;
-		}
-		if ("T".equals(name)) {
-			return LispTrue.INSTANCE;
+		boolean nil = "NIL".equals(name);
+		if (nil || "T".equals(name)) {
+			LispVal constant = nil ? LispNil.INSTANCE : LispTrue.INSTANCE;
+			if (!name.equals(sym.name())) {
+				return constant;
+			}
+			// A bare one is the package's: cl's constant wherever the package reads cl's.
+			UnaryOperator<String> home = this.symbolHome;
+			if (home != null) {
+				return homed(home.apply(name));
+			}
+			Predicate<String> clTOrNil = this.clTOrNil;
+			return clTOrNil == null || clTOrNil.test(name) ? constant : new LispSymbol(name);
 		}
 		// The standard constants (pi, the float-range names, the fixnum and array
 		// limits, char-code-limit, internal-time-units-per-second,
@@ -954,7 +1006,17 @@ public final class LispReader {
 			return sourceLiteral;
 		}
 		UnaryOperator<String> home = this.symbolHome;
-		return new LispSymbol(home == null ? name : home.apply(name));
+		return home == null ? new LispSymbol(name) : homed(home.apply(name));
+	}
+
+	/**
+	 * The datum a runtime read's token names, from the spelling its home answered: a bare
+	 * {@code T} or {@code NIL} is {@code cl}'s constant ({@code CL-USER::NIL} homes there
+	 * too), any other spelling a symbol.
+	 */
+	private static LispVal homed(String spelling) {
+		return "NIL".equals(spelling) ? LispNil.INSTANCE
+				: "T".equals(spelling) ? LispTrue.INSTANCE : new LispSymbol(spelling);
 	}
 
 	/**
