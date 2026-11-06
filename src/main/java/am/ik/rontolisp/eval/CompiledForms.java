@@ -1746,7 +1746,12 @@ final class CompiledForms {
 		 * A walk's -- a {@code flet}, a {@code labels}, a slot macro -- while the macro
 		 * table is as it was ({@code macroTableEpoch}).
 		 */
-		WALK
+		WALK,
+		/**
+		 * A {@code setf}'s, while nothing its expansion read has moved
+		 * ({@code placeEpoch}).
+		 */
+		PLACE
 
 	}
 
@@ -1783,6 +1788,8 @@ final class CompiledForms {
 					return this.epoch == this.ev.methodedEpoch();
 				case WALK:
 					return this.ev.walkExpansionsHold(this.epoch);
+				case PLACE:
+					return this.epoch == this.ev.placeEpoch();
 				default:
 					if (this.epoch == this.ev.callSiteEpoch()) {
 						return true;

@@ -501,6 +501,13 @@ public final class LispEvaluator {
 	private final FormMemo<BuiltinExpansion> builtinMacroExpansions = new FormMemo<>();
 
 	/**
+	 * Memo of the {@code setf} arm's expansions, keyed by the form's cons identity, each
+	 * held while the {@link #placeEpoch} it was made under is current
+	 * ({@link #setfExpansion}).
+	 */
+	private final FormMemo<PlaceExpansion> placeExpansions = new FormMemo<>();
+
+	/**
 	 * Memo of {@link #expandCompilerMacro}, keyed by the CALL SITE's cons identity: a
 	 * compiler macro is a compile-time hint, so applying it once per source occurrence
 	 * (rather than once per evaluation) is both the point of the optimization and what
@@ -774,15 +781,28 @@ public final class LispEvaluator {
 
 	/**
 	 * A {@code setq}'s assignment through a global symbol macro, as {@link #evalSetq}
-	 * makes it: the expansion's {@code setf}, which evaluates the value form.
+	 * makes it: the expansion's {@code setf}, which evaluates the value form. The form is
+	 * made once per value form and place ({@link #symbolMacroAssignments}), so its site
+	 * keeps its expansion ({@link #setfExpansion}).
 	 * @param place the expansion
 	 * @param valueForm the value form
 	 * @param env the scope of the assignment
 	 * @return the value
 	 */
 	LispVal assignSymbolMacro(LispVal place, LispVal valueForm, Environment env) {
-		return eval(consList(List.of(new LispSymbol(LispNames.SETF), place, valueForm)), env);
+		LispCons form = this.symbolMacroAssignments.get(valueForm);
+		if (form == null || ((LispCons) form.cdr()).car() != place) {
+			form = (LispCons) consList(List.of(new LispSymbol(LispNames.SETF), place, valueForm));
+			this.symbolMacroAssignments.put(valueForm, form);
+		}
+		return eval(form, env);
 	}
+
+	/**
+	 * The {@code setf} forms {@link #assignSymbolMacro} made, by value form: each holds
+	 * while its place is the symbol macro's expansion it was made of.
+	 */
+	private final FormMemo<LispCons> symbolMacroAssignments = new FormMemo<>();
 
 	/** The {@code funcall} built-in, which a call of a closure is absorbed through. */
 	@Nullable LispFunction funcallBuiltin() {
@@ -1031,9 +1051,10 @@ public final class LispEvaluator {
 	/**
 	 * {@code defstruct} accessor names to their 1-based slot position, accumulated by
 	 * {@link LispMacroExpander#expandDefstruct} so {@code setf} can treat accessor calls
-	 * as places. Kept per evaluator, like the user macro table.
+	 * as places. Kept per evaluator, like the user macro table; its writes move
+	 * {@link #placeEpoch}.
 	 */
-	private final java.util.Map<String, Integer> structAccessors = new java.util.HashMap<>();
+	private final CountedMap<String, Integer> structAccessors = new CountedMap<>();
 
 	/**
 	 * User-defined {@code setf} expansions by accessor name, from
@@ -1041,9 +1062,10 @@ public final class LispEvaluator {
 	 * modify macros) see a place {@code (accessor ...)} whose head is registered here;
 	 * the place is expanded through {@link #expandUserSetfExpanderPlace}. Kept per
 	 * evaluator like the struct accessor and CLOS registries, so the compile-path
-	 * macro-time evaluator ({@code UserMacroExpander}) reuses the same machinery.
+	 * macro-time evaluator ({@code UserMacroExpander}) reuses the same machinery. Its
+	 * writes move {@link #placeEpoch}.
 	 */
-	private final java.util.Map<String, UserSetf> setfExpanders = new java.util.HashMap<>();
+	private final CountedMap<String, UserSetf> setfExpanders = new CountedMap<>();
 
 	/** A registered user {@code setf} expansion for one accessor. */
 	private sealed interface UserSetf permits SetfExpanderForm, DefsetfShort, DefsetfLong {
@@ -11124,13 +11146,7 @@ public final class LispEvaluator {
 										result = singleValue(writeMacroFunction(cons, env));
 										break frame;
 									}
-									// A prelude-provided (setf PLACE) writer (the (defun
-									// (setf get) ...) beside the get defun) registers its
-									// place only when the prelude entry loads; a setf
-									// place reference must trigger that load the same way
-									// a function call would.
-									ensurePreludeSetfPlacesLoaded(cons);
-									next = expandSetfMaybeUserExpander(expandUserMacroPlaces(cons, env));
+									next = setfExpansion(cons, env);
 									break dispatch;
 								}
 								case LispNames.SCHAR_SET:
@@ -12477,7 +12493,9 @@ public final class LispEvaluator {
 				&& !(note instanceof ExpansionNote expansion && expansion.owner() == this.noteOwner
 						&& expansion.epoch() == epoch)
 				&& !(note instanceof LetNote let && let.owner() == this.noteOwner
-						&& let.epoch() == this.specialVars.epoch());
+						&& let.epoch() == this.specialVars.epoch())
+				&& !(note instanceof PlaceNote place && place.owner() == this.noteOwner
+						&& place.epoch() == placeEpoch());
 	}
 
 	/**
@@ -14335,28 +14353,124 @@ public final class LispEvaluator {
 	 * {@link UserMacroExpander} expanding the whole tree first).
 	 * @param cons the setf form
 	 * @param env the scope the setf form runs in
-	 * @return the setf form with macro places expanded
+	 * @return the setf form with macro places expanded, and whether a macro expanded per
+	 * scope ({@link #expandsPerScope})
 	 */
-	private LispCons expandUserMacroPlaces(LispCons cons, Environment env) {
+	private MacroPlaces expandUserMacroPlaces(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
 		boolean changed = false;
+		boolean perScope = false;
 		for (int i = 1; i + 1 < parts.size(); i += 2) {
 			LispVal place = parts.get(i);
 			while (place instanceof LispCons placeCons && placeCons.car() instanceof LispSymbol placeSym
-					&& this.userMacros.containsKey(placeSym.name())) {
+					&& this.userMacros.get(placeSym.name()) instanceof UserMacro macro) {
+				perScope |= expandsPerScope(macro);
 				place = expandUserMacro(placeCons, env);
 				changed = true;
 			}
 			parts.set(i, place);
 		}
 		if (!changed) {
-			return cons;
+			return new MacroPlaces(cons, false);
 		}
 		LispVal rebuilt = LispNil.INSTANCE;
 		for (int i = parts.size() - 1; i >= 0; i--) {
 			rebuilt = new LispCons(parts.get(i), rebuilt);
 		}
-		return (LispCons) rebuilt;
+		return new MacroPlaces((LispCons) rebuilt, perScope);
+	}
+
+	/**
+	 * A {@code setf} form with its user-macro places expanded.
+	 *
+	 * @param form the form
+	 * @param perScope whether a place's macro expanded per scope, so the form's expansion
+	 * is not kept for the site
+	 */
+	private record MacroPlaces(LispCons form, boolean perScope) {
+	}
+
+	/**
+	 * The {@code setf} arm's expansion of a form, made once per site and kept while
+	 * nothing it read has moved ({@link #placeEpoch}): on the form's head
+	 * ({@link PlaceNote}), else in {@link #placeExpansions}. A prelude-provided
+	 * {@code (setf PLACE)} writer (the {@code (defun (setf get) ...)} beside the
+	 * {@code get} defun) registers its place only when the prelude entry loads, so the
+	 * first expansion of a site triggers that load the same way a function call would.
+	 * Expanded at each evaluation instead: a place that writes the class table as it
+	 * expands ({@code (setf (find-class 'alias) ...)}) and one a macro expands per scope.
+	 * @param cons the setf form
+	 * @param env the scope the setf form runs in
+	 * @return the expansion
+	 */
+	private LispVal setfExpansion(LispCons cons, Environment env) {
+		int epoch = placeEpoch();
+		LispVal kept = memoizedSetfExpansion(cons, epoch);
+		if (kept != null) {
+			return kept;
+		}
+		ensurePreludeSetfPlacesLoaded(cons);
+		MacroPlaces placed = expandUserMacroPlaces(cons, env);
+		LispVal expansion = expandSetfMaybeUserExpander(placed.form());
+		if (placed.perScope() || LispMacroExpander.isSetfFindClassForm(placed.form())) {
+			return expansion;
+		}
+		this.placeExpansions.put(cons, new PlaceExpansion(expansion, epoch));
+		if (cons.car() instanceof LispSymbol head && mayNote(head)) {
+			head.evaluatorNote(new PlaceNote(this.noteOwner, epoch, cons, expansion));
+		}
+		return expansion;
+	}
+
+	/**
+	 * A {@code setf} form's expansion kept for it under {@code epoch}
+	 * ({@link #setfExpansion}), or null.
+	 * @param form the setf form
+	 * @param epoch the current {@link #placeEpoch}
+	 * @return the expansion, or null
+	 */
+	@Nullable LispVal memoizedSetfExpansion(LispCons form, int epoch) {
+		if (form.car() instanceof LispSymbol head && head.evaluatorNote() instanceof PlaceNote note
+				&& note.form() == form && note.owner() == this.noteOwner && note.epoch() == epoch) {
+			return note.expansion();
+		}
+		PlaceExpansion memo = this.placeExpansions.get(form);
+		return memo != null && memo.epoch() == epoch ? memo.expansion() : null;
+	}
+
+	/**
+	 * The stamp of everything a {@code setf} expansion reads besides its form: the user
+	 * macros a place may call ({@link #callSiteEpoch}), the setf expanders, the struct
+	 * accessors and setf functions ({@link #structAccessors}), and the class registry's
+	 * classes, layouts and slot switches ({@link ClosRegistry#placeVersion}). Each part
+	 * only grows, so the sum is what it was only while none of them moved.
+	 * @return the stamp
+	 */
+	int placeEpoch() {
+		return this.callSiteEpoch + this.setfExpanders.epoch() + this.structAccessors.epoch()
+				+ this.closRegistry.placeVersion();
+	}
+
+	/**
+	 * A {@code setf} form's expansion and the {@link #placeEpoch} it was made under.
+	 *
+	 * @param expansion the expansion
+	 * @param epoch the stamp
+	 */
+	private record PlaceExpansion(LispVal expansion, int epoch) {
+	}
+
+	/**
+	 * A {@code setf} form's expansion kept on its head symbol, like an
+	 * {@link ExpansionNote} but held by the {@link #placeEpoch} rather than the
+	 * {@link #callSiteEpoch}.
+	 *
+	 * @param owner the {@link #noteOwner} of the evaluator that made it
+	 * @param epoch the {@link #placeEpoch} it was made under
+	 * @param form the setf form, compared by identity
+	 * @param expansion its expansion
+	 */
+	private record PlaceNote(Object owner, int epoch, LispCons form, LispVal expansion) {
 	}
 
 	/**
@@ -17223,9 +17337,7 @@ public final class LispEvaluator {
 					&& this.globalSymbolMacros.containsKey(n)) {
 				// define-symbol-macro: assigning the name assigns its expansion PLACE,
 				// so the value form is evaluated by the setf machinery, not here.
-				value = eval(consList(
-						List.of(new LispSymbol(LispNames.SETF), this.globalSymbolMacros.get(n), parts.get(i + 1))),
-						env);
+				value = assignSymbolMacro(this.globalSymbolMacros.get(n), parts.get(i + 1), env);
 				continue;
 			}
 			value = eval(parts.get(i + 1), env);

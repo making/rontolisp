@@ -31,7 +31,7 @@ backend's bytecode for a hot defun.
 ## Where the time goes now
 
 `math/num.lisp` under JFR: 82% of the samples run compiled, 18% in walks the compiled code hands
-back -- `setf` statements 5-6% (`.todo/i79`), then forms of 1-2% each: an `if` a macro the compiler
+back -- `setf` statements 5-6% (compiled since, from their memo), then forms of 1-2% each: an `if` a macro the compiler
 could not classify expands to, a call it left pending, a free variable's read, a `handler-case`.
 The compiled share is the tree's own cost, spread thin: a built-in applied through `apply`'s
 megamorphic body 9%, the argument arrays 8%, a lexical read 6% (its epoch check and the parent
@@ -49,6 +49,7 @@ The compiler runs and expands nothing. It reads what the walk left on the forms 
 | built-in macro arm | the head's `ExpansionNote`, or `builtinMacroExpansions` with `expandsOnly` (a note is per head object, which the forms one macro makes share) | `methodedEpoch` -- the only state a pure arm's expansion depends on; a multiple-value consumer's memo only while no producer is methoded |
 | user macro | its `ExpansionNote`, or `userMacroExpansions` under the macro (no `&environment`, no expander) | `callSiteEpoch`, else the name is still that macro and not methoded |
 | `flet`/`labels`/slot macros | the walk's `expandedPerSite` memo | `macroTableEpoch` and no walk under way |
+| `setf` | its `PlaceNote`, or `placeExpansions` | `placeEpoch` ([interpreter-expansion-memo.md](interpreter-expansion-memo.md), "The setf memo") |
 | `lambda` | the walk's `lambdaShapes` site | -- |
 | lexical variable, `let`, `setq`, parameters | the compile-time `BodyCompiler.Layout` | the specials' epoch, else the name is still not special |
 
@@ -67,9 +68,9 @@ flipping back and forth grows nothing.
 A body the evaluator rewrites in place (a methoded producer's tail, `relowerProducerTail`)
 compiles again: `bodyRewriteEpoch` moves after the rewrite.
 
-Left to the walk until a memo with a stamp exists for them: `setf` and `make-instance`
-(`.todo/i79` -- once it memoizes them, `memoizedBuiltinExpansion` or a kind of its own lets the
-compiler take them), `typep`/`typecase` and the other arms reading the class registry (a
+Left to the walk until a memo with a stamp exists for them: `make-instance` (expanded at each
+evaluation, [interpreter-expansion-memo.md](interpreter-expansion-memo.md), "The setf memo"),
+`typep`/`typecase` and the other arms reading the class registry (a
 `handler-case`'s protected form among them: its handler clusters' tests are made from the
 registry at each evaluation), the condition signalling forms, `catch`, a compiler macro's site, a
 uiop operator, the print family.
@@ -113,7 +114,8 @@ uiop operator, the print family.
 - `LispEvaluatorTest.aCallSiteFollowsWhatItsOperatorBecomes` -- the compiled half: a function
   redefined, a name made a macro, a macro redefined, a parameter and a `let`'s name proclaimed
   special, a `labels` after the macro table moved, an exit's compiled value form through an
-  `unwind-protect`, a `setq` through a symbol macro.
+  `unwind-protect`, a `setq` through a symbol macro, a `setf` after each input of its expansion
+  moved.
 - With `-Drontolisp.interpreter.compile-after=1` (every body compiled at its first call) the
   `eval`, `cli`, `ansi`, `scheme`, root, `macro`, `reader`, `clojure` and `compiler` packages run
   green, and at the default `eval`, `cli` and `e2e`; the ci-spec `cases:` on the interpreter print

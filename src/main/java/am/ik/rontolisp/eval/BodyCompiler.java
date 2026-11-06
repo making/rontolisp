@@ -364,6 +364,14 @@ final class BodyCompiler {
 			case LispNames.REDUCE:
 			case LispNames.SORT:
 				return reduceOrSort(cons, name, length, scope, here);
+			case LispNames.SETF: {
+				// the expansion the walk kept for the site, while what it read holds
+				int epoch = this.ev.placeEpoch();
+				LispVal expansion = this.ev.memoizedSetfExpansion(cons, epoch);
+				return expansion == null ? pending(cons, scope, here)
+						: new CompiledForms.Expansion(this.ev, cons, scope, here, form(expansion, scope, here),
+								CompiledForms.ExpansionKind.PLACE, name, null, epoch);
+			}
 			case LispNames.UNWIND_PROTECT: {
 				if (length < 2) {
 					// the walk reports it
