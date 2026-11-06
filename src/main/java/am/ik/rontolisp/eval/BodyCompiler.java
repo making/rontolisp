@@ -353,6 +353,29 @@ final class BodyCompiler {
 				// any other shape is the plain function's call, which the walk notes none
 				// of
 				return call(cons, name, length, scope, here, true);
+			case LispNames.FLOOR:
+			case LispNames.CEILING:
+			case LispNames.ROUND:
+			case LispNames.TRUNCATE:
+				// (floor (/ a b)) is the walk's own arm; any other shape the built-in's
+				// call, which the walk notes none of
+				return LispEvaluator.floorFamilyOperands(cons) != null && length == 2 ? pending(cons, scope, here)
+						: call(cons, name, length, scope, here, true);
+			case LispNames.REDUCE:
+			case LispNames.SORT:
+				return reduceOrSort(cons, name, length, scope, here);
+			case LispNames.UNWIND_PROTECT: {
+				if (length < 2) {
+					// the walk reports it
+					return pending(cons, scope, here);
+				}
+				List<LispVal> parts = chain(cons.cdr());
+				CompiledForm[] cleanups = new CompiledForm[parts.size() - 1];
+				for (int i = 0; i < cleanups.length; i++) {
+					cleanups[i] = form(parts.get(i + 1), scope, null);
+				}
+				return new CompiledForms.UnwindProtect(form(parts.get(0), scope, null), cleanups, here);
+			}
 			default:
 				break;
 		}
@@ -378,6 +401,28 @@ final class BodyCompiler {
 					CompiledForms.ExpansionKind.USER_MACRO, name, macro, callSiteEpoch);
 		}
 		return call(cons, name, length, scope, here, false);
+	}
+
+	/**
+	 * A {@code reduce} or {@code sort}: the lowering its arm makes of a shape the
+	 * built-in does not take ({@code :from-end}, {@code :key}) -- a function of the form,
+	 * which the arm makes again at each evaluation -- or the built-in's call.
+	 */
+	private CompiledForm reduceOrSort(LispCons cons, String name, int length, Layout scope,
+			@Nullable LocatedCons here) {
+		BuiltinCallArity.Shape shape = BuiltinCallArity.of(name);
+		if (shape != null && !shape.accepts(length - 1)) {
+			// the walk reports the count
+			return pending(cons, scope, here);
+		}
+		int epoch = this.ev.methodedEpoch();
+		LispVal expansion = LispNames.REDUCE.equals(name) ? LispMacroExpander.expandReduce(cons)
+				: LispMacroExpander.expandSortWithKey(cons);
+		if (expansion == null) {
+			return call(cons, name, length, scope, here, true);
+		}
+		return new CompiledForms.Expansion(this.ev, cons, scope, here, form(expansion, scope, here),
+				CompiledForms.ExpansionKind.BUILTIN, name, null, epoch);
 	}
 
 	/** A macro call the walk noted the expansion of. */
@@ -518,7 +563,7 @@ final class BodyCompiler {
 			}
 			if (LispNames.PACKAGE_VAR.equals(name.name()) || this.ev.isSpecial(name)
 					|| declared.contains(name.name())) {
-				return pending(cons, scope, here);
+				return specialLet(cons, bindingsCell, scope, here);
 			}
 			bound.add(name);
 			inits.add(init.car());
@@ -554,6 +599,90 @@ final class BodyCompiler {
 				distinct, values, marks.toArray(NO_NAMES), declared, body(bindingsCell.cdr(), inner, here), epoch);
 	}
 
+	/**
+	 * A {@code let} binding a special or {@code *package*}, as {@code evalLetIn} binds
+	 * it, its body's scope laid out from the names proclaimed special now.
+	 */
+	private CompiledForm specialLet(LispCons cons, LispCons bindingsCell, Layout scope, @Nullable LocatedCons here) {
+		int epoch = this.ev.specialEpoch();
+		LispVal bindings;
+		try {
+			bindings = LispMacroExpander.letBindingList(bindingsCell.car());
+		}
+		catch (RuntimeException malformed) {
+			// the walk reports it
+			return pending(cons, scope, here);
+		}
+		if (!(bindings instanceof LispNil) && !(bindings instanceof LispCons)) {
+			return pending(cons, scope, here);
+		}
+		Set<String> declared = SpecialDeclarations.leading(bindingsCell.cdr(), false);
+		List<String> names = new ArrayList<>();
+		List<LispVal> inits = new ArrayList<>();
+		for (LispVal entry = bindings; entry instanceof LispCons cell; entry = cell.cdr()) {
+			if (!(cell.car() instanceof LispCons pair) || !(pair.car() instanceof LispSymbol name)
+					|| !(pair.cdr() instanceof LispCons init) || names.contains(name.name())) {
+				return pending(cons, scope, here);
+			}
+			names.add(name.name());
+			inits.add(init.car());
+		}
+		int count = names.size();
+		boolean[] dynamic = new boolean[count];
+		boolean[] swapsPackage = new boolean[count];
+		List<String> lexical = new ArrayList<>();
+		List<Integer> sources = new ArrayList<>();
+		List<String> marks = new ArrayList<>();
+		List<String> watched = new ArrayList<>();
+		List<Boolean> proclaimed = new ArrayList<>();
+		for (int i = 0; i < count; i++) {
+			String name = names.get(i);
+			boolean special = this.ev.isProclaimedSpecial(name);
+			watched.add(name);
+			proclaimed.add(special);
+			swapsPackage[i] = LispNames.PACKAGE_VAR.equals(name);
+			dynamic[i] = special || declared.contains(name);
+			if (!dynamic[i]) {
+				lexical.add(name);
+				sources.add(i);
+			}
+			else if (!special) {
+				marks.add(name);
+			}
+		}
+		for (String name : declared) {
+			boolean special = this.ev.isProclaimedSpecial(name);
+			watched.add(name);
+			proclaimed.add(special);
+			if (!special && !names.contains(name)) {
+				marks.add(name);
+			}
+		}
+		List<String> slots = new ArrayList<>(lexical);
+		slots.addAll(marks);
+		if (slots.size() > Environment.PRESIZED_SCOPE_MAX) {
+			return pending(cons, scope, here);
+		}
+		CompiledForm[] values = new CompiledForm[count];
+		for (int i = 0; i < count; i++) {
+			values[i] = form(inits.get(i), scope, null);
+		}
+		Layout inner = new Layout(scope, slots.toArray(NO_NAMES), lexical.size());
+		int[] sourceIndexes = new int[sources.size()];
+		for (int i = 0; i < sourceIndexes.length; i++) {
+			sourceIndexes[i] = sources.get(i);
+		}
+		boolean[] watchedProclaimed = new boolean[proclaimed.size()];
+		for (int i = 0; i < watchedProclaimed.length; i++) {
+			watchedProclaimed[i] = proclaimed.get(i);
+		}
+		// the body's forms but the last run in frames of their own, the last in the let's
+		CompiledForms.Body body = body(bindingsCell.cdr(), inner, null);
+		return new CompiledForms.SpecialLet(this.ev, cons, here, names.toArray(NO_NAMES), values, dynamic, swapsPackage,
+				slots.toArray(NO_NAMES), sourceIndexes, watched.toArray(NO_NAMES), watchedProclaimed, declared, body,
+				!(bindingsCell.cdr() instanceof LispCons), epoch);
+	}
+
 	private CompiledForm setq(LispCons cons, int length, Layout scope, @Nullable LocatedCons here) {
 		if ((length - 1) % 2 != 0) {
 			// the walk reports the odd count
@@ -564,6 +693,7 @@ final class BodyCompiler {
 		int[] depths = new int[pairs];
 		int[] indexes = new int[pairs];
 		CompiledForm[] values = new CompiledForm[pairs];
+		LispVal[] valueForms = new LispVal[pairs];
 		int epoch = this.ev.specialEpoch();
 		LispVal cell = cons.cdr();
 		for (int i = 0; i < pairs; i++) {
@@ -577,10 +707,11 @@ final class BodyCompiler {
 					: scope.resolve(target.name());
 			depths[i] = where < 0 ? -1 : (int) (where >>> 32);
 			indexes[i] = where < 0 ? -1 : (int) where;
+			valueForms[i] = valueCell.car();
 			values[i] = form(valueCell.car(), scope, null);
 			cell = valueCell.cdr();
 		}
-		return new CompiledForms.Setq(this.ev, cons, here, targets, depths, indexes, values, epoch);
+		return new CompiledForms.Setq(this.ev, cons, here, targets, depths, indexes, values, valueForms, epoch);
 	}
 
 	/** A {@code #'...} ({@code LispEvaluator.evalFunction}). */

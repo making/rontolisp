@@ -105,7 +105,9 @@ final class CompiledFrames {
 	 */
 	private static LispVal leaving(LispEvaluator ev, RuntimeException e, Environment scope, LispLambda lambda) {
 		if (e instanceof BlockTailExit exit && exit.target() == scope) {
-			return call(ev, null, null, scope, new CompiledForm.TailForm(exit.form(), exit.env(), null), scope, lambda);
+			CompiledForm compiled = exit.compiled();
+			return compiled != null ? call(ev, null, null, exit.env(), compiled, scope, lambda) : call(ev, null, null,
+					scope, new CompiledForm.TailForm(exit.form(), exit.env(), null), scope, lambda);
 		}
 		if (e instanceof LispEvalException error) {
 			throw ev.debuggerHere() ? ev.signalPoint(error, scope, null) : error;
@@ -238,7 +240,14 @@ final class CompiledFrames {
 				if (blocks == null || exit.target() != blocks) {
 					throw exit;
 				}
-				next = new CompiledForm.TailForm(exit.form(), exit.env(), null);
+				CompiledForm compiled = exit.compiled();
+				if (compiled != null) {
+					scope = exit.env();
+					next = compiled;
+				}
+				else {
+					next = new CompiledForm.TailForm(exit.form(), exit.env(), null);
+				}
 			}
 			catch (LispEvalException e) {
 				e.trace().passing(located, locatedIn);

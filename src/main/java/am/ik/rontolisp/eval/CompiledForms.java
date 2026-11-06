@@ -746,6 +746,224 @@ final class CompiledForms {
 	}
 
 	/**
+	 * A {@code let} that binds a special or {@code *package*}
+	 * ({@code LispEvaluator.evalLetIn}): the inits evaluated in the outer scope, a
+	 * {@code *package*} swapped as its init is evaluated, a special bound dynamically
+	 * (and marked in the body's scope when only a declaration makes it one), every other
+	 * name bound in that scope, the body run in a frame of its own and the bindings
+	 * undone on any exit. One whose names a proclamation has changed since is the walk's.
+	 */
+	static final class SpecialLet extends Walking {
+
+		private final String[] names;
+
+		private final CompiledForm[] inits;
+
+		private final boolean[] dynamic;
+
+		private final boolean[] swapsPackage;
+
+		private final String[] slots;
+
+		private final int[] sources;
+
+		private final String[] watched;
+
+		private final boolean[] proclaimed;
+
+		private final java.util.Set<String> declared;
+
+		private final Body body;
+
+		private final boolean empty;
+
+		private int epoch;
+
+		private boolean declaredRecorded;
+
+		/**
+		 * A special {@code let}.
+		 * @param names the bound names in their order
+		 * @param inits their inits
+		 * @param dynamic which of them bind dynamically
+		 * @param swapsPackage which of them bind {@code *package*}
+		 * @param slots the body scope's names: the lexical ones, then the marked ones
+		 * @param sources the binding each lexical slot holds
+		 * @param watched the names whose proclamation the layout read
+		 * @param proclaimed whether each was proclaimed special
+		 * @param declared the names the body declares special
+		 * @param body the body
+		 * @param empty whether there are no body forms
+		 * @param epoch the proclaimed specials' epoch the layout was made under
+		 */
+		SpecialLet(LispEvaluator ev, LispCons form, @Nullable LocatedCons located, String[] names, CompiledForm[] inits,
+				boolean[] dynamic, boolean[] swapsPackage, String[] slots, int[] sources, String[] watched,
+				boolean[] proclaimed, java.util.Set<String> declared, Body body, boolean empty, int epoch) {
+			super(ev, form, located);
+			this.names = names;
+			this.inits = inits;
+			this.dynamic = dynamic;
+			this.swapsPackage = swapsPackage;
+			this.slots = slots;
+			this.sources = sources;
+			this.watched = watched;
+			this.proclaimed = proclaimed;
+			this.declared = declared;
+			this.body = body;
+			this.empty = empty;
+			this.epoch = epoch;
+		}
+
+		private boolean holds() {
+			int now = this.ev.specialEpoch();
+			if (this.epoch == now) {
+				return true;
+			}
+			for (int i = 0; i < this.watched.length; i++) {
+				if (this.ev.isProclaimedSpecial(this.watched[i]) != this.proclaimed[i]) {
+					return false;
+				}
+			}
+			this.epoch = now;
+			return true;
+		}
+
+		/**
+		 * Binds, runs the body and undoes the bindings: the body's value, or with
+		 * {@code statement} its jump as a tagbody statement.
+		 */
+		private Object run(Environment env, LispEvaluator.@Nullable TagbodyLabels labels, boolean statement) {
+			if (!this.declaredRecorded) {
+				this.ev.recordLocalSpecials(this.declared);
+				this.declaredRecorded = true;
+			}
+			String[] names = this.names;
+			LispVal[] vals = new LispVal[names.length];
+			String savedPackage = null;
+			for (int i = 0; i < names.length; i++) {
+				vals[i] = this.inits[i].eval(env);
+				if (this.swapsPackage[i] && savedPackage == null) {
+					savedPackage = this.ev.rebindPackage(vals[i]);
+				}
+			}
+			int[] sources = this.sources;
+			LispVal[] values = new LispVal[this.slots.length];
+			for (int i = 0; i < sources.length; i++) {
+				values[i] = vals[sources[i]];
+			}
+			for (int i = sources.length; i < values.length; i++) {
+				values[i] = Environment.SPECIAL;
+			}
+			Environment scope = new Environment(env, this.slots, values);
+			// pushed before the extent the finally undoes, as the walk's are
+			for (int i = 0; i < names.length; i++) {
+				if (this.dynamic[i]) {
+					this.ev.bindDynamic(names[i], vals[i]);
+				}
+			}
+			try {
+				if (this.empty) {
+					// the walk's empty body answers nil and leaves the channel
+					return statement ? (Object) NO_JUMP : LispNil.INSTANCE;
+				}
+				return statement ? (Object) this.body.statement(scope, null, null, labels) : this.body.eval(scope);
+			}
+			finally {
+				for (int i = names.length - 1; i >= 0; i--) {
+					if (this.dynamic[i]) {
+						this.ev.unbindDynamic(names[i]);
+					}
+				}
+				if (savedPackage != null) {
+					this.ev.restorePackage(savedPackage);
+				}
+			}
+		}
+
+		@Override
+		LispVal eval(Environment env) {
+			try {
+				return holds() ? (LispVal) run(env, null, false) : walk(env);
+			}
+			catch (LispEvalException e) {
+				throw passing(e, this.located, env);
+			}
+		}
+
+		@Override
+		int statement(Environment env, @Nullable Environment owner, @Nullable Environment deferTo,
+				LispEvaluator.@Nullable TagbodyLabels labels) {
+			try {
+				return holds() ? (Integer) run(env, labels, true) : walkStatement(env, owner, deferTo, labels);
+			}
+			catch (LispEvalException e) {
+				throw passing(e, this.located, env);
+			}
+		}
+
+		@Override
+		Object step(Environment env, Environment owner) {
+			// the bindings end with the body, so its tail is no tail of the frame
+			return holds() ? run(env, null, false) : walkTail(env);
+		}
+
+	}
+
+	/**
+	 * An {@code unwind-protect} ({@code LispEvaluator.evalUnwindProtect}): the protected
+	 * form in a frame of its own, the cleanups run on every exit from it but a host exit,
+	 * the protected form's values kept across them.
+	 */
+	static final class UnwindProtect extends CompiledForm {
+
+		private final CompiledForm protectedForm;
+
+		private final CompiledForm[] cleanups;
+
+		UnwindProtect(CompiledForm protectedForm, CompiledForm[] cleanups, @Nullable LocatedCons located) {
+			super(located);
+			this.protectedForm = protectedForm;
+			this.cleanups = cleanups;
+		}
+
+		@Override
+		LispVal eval(Environment env) {
+			try {
+				LispVal result;
+				try {
+					result = this.protectedForm.eval(env);
+				}
+				catch (LispExitSignal exit) {
+					// a host exit ends the process where it stands
+					throw exit;
+				}
+				catch (RuntimeException | Error ex) {
+					cleanups(env);
+					throw ex;
+				}
+				cleanups(env);
+				return result;
+			}
+			catch (LispEvalException e) {
+				throw passing(e, this.located, env);
+			}
+		}
+
+		/** The cleanups, for effect, the values channel kept across them. */
+		private void cleanups(Environment env) {
+			if (this.cleanups.length == 0) {
+				return;
+			}
+			LispVal spill = env.spill();
+			for (CompiledForm cleanup : this.cleanups) {
+				cleanup.eval(env);
+			}
+			env.publishSpill(spill);
+		}
+
+	}
+
+	/**
 	 * A {@code setq} ({@code LispEvaluator.evalSetq}): each value evaluated and stored in
 	 * turn, a variable a compiled scope binds by its position, any other the way the walk
 	 * stores it ({@code assignVariable}).
@@ -760,17 +978,20 @@ final class CompiledForms {
 
 		private final CompiledForm[] values;
 
+		private final LispVal[] valueForms;
+
 		private final boolean anyFree;
 
 		private int epoch;
 
 		Setq(LispEvaluator ev, LispCons form, @Nullable LocatedCons located, LispSymbol[] targets, int[] depths,
-				int[] indexes, CompiledForm[] values, int epoch) {
+				int[] indexes, CompiledForm[] values, LispVal[] valueForms, int epoch) {
 			super(ev, form, located);
 			this.targets = targets;
 			this.depths = depths;
 			this.indexes = indexes;
 			this.values = values;
+			this.valueForms = valueForms;
 			boolean free = false;
 			for (int depth : depths) {
 				free |= depth < 0;
@@ -782,16 +1003,21 @@ final class CompiledForms {
 		@Override
 		LispVal eval(Environment env) {
 			try {
-				// a free name may be a global symbol macro, which the walk writes through
-				if (this.anyFree && this.ev.globalSymbolMacrosDefined()) {
-					return walk(env);
-				}
-				boolean lexical = this.epoch == this.ev.specialEpoch() || stillLexical();
 				LispVal value = LispNil.INSTANCE;
 				for (int i = 0; i < this.targets.length; i++) {
-					value = this.values[i].eval(env);
 					int depth = this.depths[i];
-					if (depth < 0 || !lexical) {
+					// a free name may be a global symbol macro, which the walk writes
+					// through
+					if (depth < 0 && this.anyFree && this.ev.globalSymbolMacrosDefined()) {
+						LispVal place = this.ev.symbolMacroPlace(this.targets[i].name(), env);
+						if (place != null) {
+							value = this.ev.assignSymbolMacro(place, this.valueForms[i], env);
+							continue;
+						}
+					}
+					value = this.values[i].eval(env);
+					// what the name is when it is assigned, as the walk decides it
+					if (depth < 0 || this.epoch != this.ev.specialEpoch() && !stillLexical()) {
 						this.ev.assignVariable(this.targets[i].name(), value, env);
 					}
 					else {
@@ -889,13 +1115,18 @@ final class CompiledForms {
 
 		/**
 		 * An exit to this block from a statement of its body: its value form is the tail
-		 * of the statement this block is the first block of, run by the walk.
+		 * of the statement this block is the first block of, compiled or walked as the
+		 * exit hands it over.
 		 */
 		private int continueStatement(BlockTailExit first, Environment scope,
 				LispEvaluator.@Nullable TagbodyLabels labels) {
 			BlockTailExit exit = first;
 			while (true) {
 				try {
+					CompiledForm compiled = exit.compiled();
+					if (compiled != null) {
+						return compiled.statement(exit.env(), null, scope, labels);
+					}
 					if (labels != null) {
 						return this.ev.evalTagbodyStatement(exit.form(), exit.env(), labels, scope);
 					}
@@ -997,7 +1228,7 @@ final class CompiledForms {
 					}
 				}
 				if (deferTo != null && LispEvaluator.exitsOwnedBlock(this.designator, env, deferTo)) {
-					throw new BlockTailExit(deferTo, this.valueForm, env);
+					throw new BlockTailExit(deferTo, this.valueForm, env, this.value);
 				}
 			}
 			eval(env);

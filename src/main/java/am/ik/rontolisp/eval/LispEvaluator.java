@@ -634,6 +634,44 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Binds a special variable dynamically for a binding form's extent, as
+	 * {@link #evalLetIn} does: a standard stream variable refuses a value that is no
+	 * stream.
+	 * @param name the variable's name
+	 * @param value its value
+	 */
+	void bindDynamic(String name, LispVal value) {
+		checkStandardStreamValue(name, value);
+		this.dynamicBindings.push(name, value);
+	}
+
+	/**
+	 * Undoes the innermost dynamic binding of a name ({@link #bindDynamic}).
+	 * @param name the variable's name
+	 */
+	void unbindDynamic(String name) {
+		this.dynamicBindings.pop(name);
+	}
+
+	/**
+	 * Swaps the current package for a {@code (let ((*package* X)) ...)}'s extent, as
+	 * {@link #evalLetIn} does.
+	 * @param value the bound value
+	 * @return the package to restore, or null when the value designates none
+	 */
+	@Nullable String rebindPackage(LispVal value) {
+		return rebindCurrentPackage(value);
+	}
+
+	/**
+	 * Restores the package a {@link #rebindPackage} swapped out.
+	 * @param saved its name
+	 */
+	void restorePackage(String saved) {
+		this.packageResolver.setCurrentPackage(saved);
+	}
+
+	/**
 	 * Whether a name {@link #noteCall} once found an ordinary call still is one: the
 	 * tables of its classification that move ({@link #callSiteEpoch}) do not claim it.
 	 * The rest of the classification is a function of the name.
@@ -719,6 +757,31 @@ public final class LispEvaluator {
 	 */
 	boolean globalSymbolMacrosDefined() {
 		return !this.globalSymbolMacros.isEmpty();
+	}
+
+	/**
+	 * The place a {@code setq} of a name writes through, as {@link #evalSetq} finds it: a
+	 * global symbol macro's expansion where no binding of the name is in sight; else
+	 * null.
+	 * @param name the variable's name
+	 * @param env the scope of the assignment
+	 * @return the expansion, or null
+	 */
+	@Nullable LispVal symbolMacroPlace(String name, Environment env) {
+		return !this.globalSymbolMacros.isEmpty() && env.lookupOrNull(name) == null ? this.globalSymbolMacros.get(name)
+				: null;
+	}
+
+	/**
+	 * A {@code setq}'s assignment through a global symbol macro, as {@link #evalSetq}
+	 * makes it: the expansion's {@code setf}, which evaluates the value form.
+	 * @param place the expansion
+	 * @param valueForm the value form
+	 * @param env the scope of the assignment
+	 * @return the value
+	 */
+	LispVal assignSymbolMacro(LispVal place, LispVal valueForm, Environment env) {
+		return eval(consList(List.of(new LispSymbol(LispNames.SETF), place, valueForm)), env);
 	}
 
 	/** The {@code funcall} built-in, which a call of a closure is absorbed through. */
@@ -12310,7 +12373,7 @@ public final class LispEvaluator {
 	 * {@code (/ a b)} its single-value and multiple-value lowerings leave behind.
 	 * {@code null} for the plain one-argument form, which the built-in function answers.
 	 */
-	private static LispVal @Nullable [] floorFamilyOperands(LispCons cons) {
+	static LispVal @Nullable [] floorFamilyOperands(LispCons cons) {
 		if (!cons.isProperList()) {
 			return null;
 		}

@@ -24800,8 +24800,10 @@ class LispEvaluatorTest {
 			.isEqualTo("(1 2 (:FN 1) (:MACRO 1) 1 (:COMPILER 1) :INT :STR :UNBOUND 1 (7 :TYPE-ERROR) 42)");
 		// A body called often enough runs compiled (.kb/interpreter-compiled-bodies.md),
 		// and what its compile worked out holds as long as the same things: a function
-		// redefined, a function name made a macro, a macro redefined, a parameter's name
-		// proclaimed special, a labels whose walk is redone once the macro table moves.
+		// redefined, a function name made a macro, a macro redefined, a parameter's or a
+		// let's name proclaimed special, a labels whose walk is redone once the macro
+		// table moves. An exit's value form, an unwind-protect and a setq through a
+		// symbol macro run compiled as the walk runs them.
 		assertThat(evalMulti(
 				"""
 						(defun cb-g () 1) (defun cb-call-g () (cb-g)) (defvar cb-a (list (cb-call-g) (cb-call-g) (cb-call-g)))
@@ -24816,11 +24818,24 @@ class LispEvaluatorTest {
 						(defun cb-lab (n) (labels ((cb-sum (k) (if (= k 0) 0 (+ k (cb-sum (- k 1)))))) (cb-sum n)))
 						(defvar cb-e (list (cb-lab 3) (cb-lab 3) (cb-lab 3)))
 						(defmacro cb-unrelated () nil)
-						(list cb-a (cb-call-g) cb-b (cb-call-f) cb-c (cb-call-m) cb-d (cb-param 1) cb-e (cb-lab 4))
+						(defun cb-read-y () (if (boundp 'cb-y) cb-y :unbound)) (defun cb-let (v) (let ((cb-y v)) (list cb-y (cb-read-y))))
+						(defvar cb-h (list (cb-let 1) (cb-let 1) (cb-let 1)))
+						(defvar cb-y 0)
+						(defun cb-up (l)
+						  (dolist (x l :none)
+						    (when (> x 1) (return-from cb-up (unwind-protect (let ((y (* x 10))) (values x y)) (setq cb-y x))))))
+						(defvar cb-i (list (multiple-value-list (cb-up '(1 2))) (multiple-value-list (cb-up '(3)))
+						                   (multiple-value-list (cb-up '(4)))))
+						(define-symbol-macro cb-sm (car cb-cell)) (defvar cb-cell (list 0))
+						(defun cb-set (v) (setq cb-y v cb-sm (* v 10)) (list cb-y cb-sm))
+						(defvar cb-j (list (cb-set 1) (cb-set 2) (cb-set 3)))
+						(list cb-a (cb-call-g) cb-b (cb-call-f) cb-c (cb-call-m) cb-d (cb-param 1) cb-e (cb-lab 4) cb-h (cb-let 1)
+						      cb-i cb-y cb-j)
 						""")
 			.print())
 			.isEqualTo("((1 1 1) 2 ((:FN 1) (:FN 1) (:FN 1)) (:MACRO 1) (1 1 1) 2"
-					+ " ((1 :UNBOUND) (1 :UNBOUND) (1 :UNBOUND)) (1 1) (6 6 6) 10)");
+					+ " ((1 :UNBOUND) (1 :UNBOUND) (1 :UNBOUND)) (1 1) (6 6 6) 10"
+					+ " ((1 :UNBOUND) (1 :UNBOUND) (1 :UNBOUND)) (1 1) ((2 20) (3 30) (4 40)) 3 ((1 10) (2 20) (3 30)))");
 	}
 
 	@Test

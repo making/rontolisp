@@ -25,9 +25,18 @@ backend's bytecode for a hot defun.
   interpreter's values) would remove the megamorphic call per node too, but only on HotSpot.
 - Measured on the tree as it landed, builds side by side: `fib 30` 0.92-1.54 s -> 0.52-0.60 s
   (warm rounds); fset's `compare` 0.48-0.54 s -> 0.40-0.45 s per 40,000; coalton's load up to
-  `library/math/bounded.lisp` 81.0 s -> 64.1 s, `math/num.lisp` 40.3 -> 29.6 s ([asdf.md](asdf.md),
-  the coalton entry). What the tree leaves is the walk of what it cannot compile (below) and the
-  cost of a node: a megamorphic `eval` or `step` per form, an argument array, a scope.
+  `library/math/bounded.lisp` 86.1-87.7 s -> 59.5-63.7 s ([asdf.md](asdf.md), the coalton entry).
+
+## Where the time goes now
+
+`math/num.lisp` under JFR: 82% of the samples run compiled, 18% in walks the compiled code hands
+back -- `setf` statements 5-6% (`.todo/i79`), then forms of 1-2% each: an `if` a macro the compiler
+could not classify expands to, a call it left pending, a free variable's read, a `handler-case`.
+The compiled share is the tree's own cost, spread thin: a built-in applied through `apply`'s
+megamorphic body 9%, the argument arrays 8%, a lexical read 6% (its epoch check and the parent
+chain), a `let`'s scope 6%, a call's scope 4%, a call's guard 4%, a body's statements' dispatch 4%.
+No hotspot is left that a node could shed; the dispatch between nodes and the allocations are
+what a class per hot body would take away (`.todo/i80`).
 
 ## What a compile reads, and what it guards
 
@@ -44,19 +53,25 @@ The compiler runs and expands nothing. It reads what the walk left on the forms 
 
 The special forms `evalCons` runs itself are compiled from its arms: `quote`, `if` (a
 `DispatchChain` included: each shape combination's tests and arms compiled when met), `let`
-(all bindings lexical), `progn`, `setq`, `function`, `lambda`, `block`/`%block`, `return-from`,
-`return`, `while`, `tagbody`, `go`, `%obj-ref`/`%obj-set`. A guard that fails hands the form to
-its `Pending`, which walks it and compiles it again from what the walk then left -- in place,
-never below itself, so a guard flipping back and forth grows nothing.
+(`lexicalLet`'s, and `evalLetIn`'s for a special or `*package*` binding: its layout made from the
+names proclaimed special at the compile, re-checked when a proclamation moves their epoch),
+`progn`, `setq` (a free name the walk's way, through a global symbol macro too), `function`,
+`lambda`, `block`/`%block`, `return-from`, `return`, `while`, `tagbody`, `go`, `unwind-protect`,
+`%obj-ref`/`%obj-set`. So are the arms that decline a shape to the built-in's call and note none
+of it: the floor family but `(floor (/ a b))`, `reduce`/`sort` (their `:from-end`/`:key` lowering a
+function of the form). A guard that fails hands the form to its `Pending`, which walks it and
+compiles it again from what the walk then left -- in place, never below itself, so a guard
+flipping back and forth grows nothing.
 
 A body the evaluator rewrites in place (a methoded producer's tail, `relowerProducerTail`)
 compiles again: `bodyRewriteEpoch` moves after the rewrite.
 
 Left to the walk until a memo with a stamp exists for them: `setf` and `make-instance`
 (`.todo/i79` -- once it memoizes them, `memoizedBuiltinExpansion` or a kind of its own lets the
-compiler take them), `typep`/`typecase` and the other arms reading the class registry, the
-condition signalling forms, `handler-case`, `unwind-protect`, `catch`, a special `let`, the print
-family.
+compiler take them), `typep`/`typecase` and the other arms reading the class registry (a
+`handler-case`'s protected form among them: its handler clusters' tests are made from the
+registry at each evaluation), the condition signalling forms, `catch`, a compiler macro's site, a
+uiop operator, the print family.
 
 ## Frames, tails and the stack
 
@@ -74,8 +89,10 @@ family.
   25,019; a cold first recursion (default flags, the tree's classes not yet JIT-compiled while
   the walk's are) 17,323 against 30,149. Under C2 (`-XX:-UseJVMCICompiler`) 72,126 against the
   walk's 13,437. Merging the argument loop into `Call` bought `-Xint` depth and cost Graal's.
-- A `BlockTailExit` a compiled exit throws carries the value FORM, which the frame walks: the
-  deferral is for the stack (`via-dolist` 100,000 deep), not for speed.
+- A `BlockTailExit` a compiled exit throws carries its value form compiled, which a compiled
+  frame continues with in the exit's scope (a walk frame walks the form): the deferral is for the
+  stack (`via-dolist` 100,000 deep). Until it carried the compiled form, those value forms were
+  8% of `math/num.lisp`'s samples, walked.
 
 ## Traps
 
@@ -84,14 +101,20 @@ family.
 - `ArgList`'s array becomes the callee's scope when the layout is exactly the parameters: nothing
   else may hold it.
 - A scope a compiled body makes shares its layout's names (`NameMap` copies them before writing a
-  key) and keeps up to `PRESIZED_SCOPE_MAX` names linear, never promoted, so `slot(i)` holds.
+  key) and holds up to `PRESIZED_SCOPE_MAX` of them in its arrays, so `slot(i)` holds while no
+  name is added: a map is promoted to a hash only when a put adds a name past its room, which no
+  walked form does to a scope it did not make.
+- A walk's empty special `let` body answers nil and leaves the channel as its inits left it; the
+  compiled one does the same.
 
 ## Tests
 
 - `LispEvaluatorTest.aCallSiteFollowsWhatItsOperatorBecomes` -- the compiled half: a function
-  redefined, a name made a macro, a macro redefined, a parameter proclaimed special, a `labels`
-  after the macro table moved.
-- The whole `eval` package (3,078 tests), `cli` and `scheme` run with
-  `-Drontolisp.interpreter.compile-after=1` (every body compiled at its first call): green but
-  `WideListStackTest`'s wasm leg, the compile path's own (2026-11-06).
+  redefined, a name made a macro, a macro redefined, a parameter and a `let`'s name proclaimed
+  special, a `labels` after the macro table moved, an exit's compiled value form through an
+  `unwind-protect`, a `setq` through a symbol macro.
+- With `-Drontolisp.interpreter.compile-after=1` (every body compiled at its first call) the
+  `eval`, `cli`, `ansi`, `scheme`, root, `macro`, `reader`, `clojure` and `compiler` packages run
+  green, and at the default `eval`, `cli` and `e2e`; the ci-spec `cases:` on the interpreter print
+  what they printed walked (2026-11-06).
 - `LispEvaluatorHotMethodSizeTest` -- `evalCons`'s `call:` loop.
