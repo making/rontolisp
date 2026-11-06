@@ -1188,8 +1188,8 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   **Its `#.*string-file*` component must stay `strings-utf-8`** — `strings-ascii` announces
   `client_encoding SQL_ASCII` and desyncs the connection on a non-ASCII parameter. Harness: a
   Testcontainers `postgres:17-alpine` with ONE ROLE PER METHOD so a broken rung cannot fall back.
-  **The component leg connects to the container's IP ADDRESS**, because `tcp-connect` takes only
-  IPv4 literals on WASM. Scram connect cost is the recorded baseline in the e2e (regression
+  **The component leg connects to the server's network ALIAS** (since 2026-11-06), so it also pins
+  the component's name lookup (`.kb/tcp-sockets.md`, "Inside sockets.lisp"). Scram connect cost is the recorded baseline in the e2e (regression
   = a change to this file).
 - **alexandria 1.0.1** — `AlexandriaE2eTest` (all four); vendored UNMODIFIED. **The exercise IS
   `examples/asdf/alexandria-demo.lisp` verbatim — keep the two in sync.** ci-spec

@@ -21,8 +21,9 @@ chain libraries use -- `(usocket:host-to-hostname (usocket:get-host-by-name
 address))` -- an identity on the address it is given, and the
 [`usocket:socket-connect`](usocket-socket-connect.md) /
 [`usocket:socket-listen`](usocket-socket-listen.md) call that address reaches
-still resolves it for real (natively on the interpreter and the JVM; IPv4
-literals only on WASM).
+still resolves it for real (through the JDK on the interpreter and the JVM,
+the runner under `--native`, `wasi:sockets/ip-name-lookup` on the WASM
+component).
 
 ```lisp
 (usocket:host-to-hostname (usocket:get-host-by-name "127.0.0.1")) ; => "127.0.0.1"

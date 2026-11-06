@@ -13,7 +13,11 @@ over `rontolisp:tls-upgrade`, 400 Gray input protocol).
 
 With the spike shims, dexador RUNS on interpreter, JVM and WASM `--component`:
 get/post/headers/UTF-8/gzip/redirect/404 condition/cookie-jar all OK; `https://`
-OK on those three (IP-literal URLs until `.todo/048`). Re-probe rows that predate
+OK on those three. Done 2026-11-06 (`.todo/048`): the component resolves host names
+(`-S allow-ip-name-lookup=y`); unpatched dexador answered `http://example.com/` and
+`https://example.com/` there, and an unresolvable host signals `usocket:socket-error`.
+The run flags for a component dexador program are now `-S tcp=y -S inherit-network=y
+-S tls=y -S allow-ip-name-lookup=y`. Re-probe rows that predate
 later fixes: `:want-stream t` (400 now done) and the secondary values (397 now
 done).
 

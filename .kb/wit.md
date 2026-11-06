@@ -236,6 +236,9 @@ directive stands for; no I/O, no codegen.
   `async-defun`.
 - **`--component`**: a component-model instance import, each function `canon lower`ed
   (`(rontolisp::%component-import ...)`) — every variant, `rontolisp:http-handler` included.
+  An `async func`'s result lifts like a sync one's from its return area, a `list<variant>` inside a
+  `result` included (`ip-name-lookup.resolve-addresses`, measured 2026-11-06); only a `stream<T>`
+  element type needs its own read lift.
 - **`--no-gc`**: the SAME Preview 1 lowering (`boolean wasm` in `WitImportDirective.lower` is
   true for both core-module backends), so one world serves both. It differs in two places, both
   because the vocabulary follows the HOUSE INTEGER: the designator is read straight off the prim

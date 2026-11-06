@@ -1,5 +1,7 @@
 # Hostname resolution for the WASM tcp built-ins
 
+Difficulty: Medium
+
 `rontolisp:tcp-connect` / `tcp-listen` accept hostnames on the interpreter/JVM
 (`java.net.Socket` / `InetAddress` resolve natively) but only IPv4 literals on the
 WASM component backend: `rontolisp::%sock-parse-ipv4`
