@@ -37,8 +37,8 @@ one member name:
 | [`uiop/filesystem`](uiop/filesystem.md) | probe, walk and mutate the file system | 32 / 32 |
 | `uiop/stream` | file contents, temporary files, encodings, the standard streams | 38 / 66 |
 | [`uiop/image`](uiop/image.md) | exit, fatal conditions, the dump hooks, the command line | 30 / 30 |
-| `uiop/launch-program` | asynchronous subprocesses | 0 / 19 |
-| `uiop/run-program` | synchronous subprocesses | 0 / 7 |
+| `uiop/launch-program` | escaping a command line for a shell (real); asynchronous subprocesses (signal) | 9 / 19 |
+| `uiop/run-program` | a program run to completion, and the stream pumps behind it | 7 / 7 |
 | `uiop/lisp-build` | compiling a file: the muffled-conditions family, `load*`, `reify-simple-sexp` and the condition classes real; `compile-file*` and the deferred warnings signal | 44 / 44 |
 | `uiop/configuration` | XDG paths and the configuration search | 0 / 38 |
  | `uiop/backward-driver` | the deprecated aliases (`coerce-pathname`, `version-compatible-p`) | 2 / 7 |
@@ -108,6 +108,10 @@ cons cells, the six condition classes and the warnings-file plumbing. The rest:
 | `uiop:define-package-style-warning` | — | the `style-warning` a package redefinition would signal |
 | `uiop:package-local-nicknames` | `(uiop:package-local-nicknames :my-pkg)` | the package's own nicknames, as `("NICKNAME" . package)` pairs in nickname order |
 | `uiop:remove-package-local-nickname` | `(uiop:remove-package-local-nickname '#:nick)` | take a nickname from a package (the current one by default), answering `t`, or nil when it had none. A literal top-level call also takes effect for the forms read after it |
+| `uiop:run-program` | `(uiop:run-program '("cc" "--version") :output :string)` | run a program to completion and answer its output, its error output and its exit code — upstream's arguments: a list of tokens runs as it is and a string through `/bin/sh`, `:output`/`:error-output`/`:input` take `nil` (the null device), `:interactive`, a file, `t`, a stream, `:string`, `:lines` or any [processor](#running-a-program), and a nonzero exit signals `uiop:subprocess-error` unless `:ignore-error-status`. On the interpreter, the native binary and a compiled class; both WASM backends signal `not-implemented-error` — WASI has no process to start |
+| `uiop:subprocess-error`, `uiop:subprocess-error-code`, `uiop:subprocess-error-command`, `uiop:subprocess-error-process` | `(handler-case (uiop:run-program "exit 3") (uiop:subprocess-error (c) (uiop:subprocess-error-code c)))` | the condition a nonzero exit signals, and its readers. The process is nil: nothing outlives the call |
+| `uiop:slurp-input-stream`, `uiop:vomit-output-stream` | `(uiop:slurp-input-stream :lines s)` | read a stream as a string, its lines, its forms, into another stream or through a function; write a string, a stream or a file's contents into one. Upstream's method tables as one dispatch each, so a program cannot add a method |
+| `uiop:escape-sh-command`, `uiop:escape-shell-command`, `uiop:escape-windows-command`, `uiop:escape-command`, `uiop:escape-sh-token`, `uiop:escape-shell-token`, `uiop:escape-windows-token`, `uiop:escape-token`, `uiop:easy-sh-character-p` | `(uiop:escape-sh-command '("cc" "-o" "out file"))` | a command line built for `/bin/sh` or for a Windows command line, each token quoted only where it needs it: `"cc -o \"out file\""`. Pure string work, on all four backends |
 
 Eight members outside the complete sub-packages are **macros**, expanded by the
 compiler rather than called: `uiop:with-temporary-file`,
@@ -125,6 +129,31 @@ over their `call-with-*` functions.
 `uiop:nest`, `uiop:while-collecting`, `uiop:with-upgradability` and the rest —
 are [on its page](uiop/utility.md#macros).
 
+## Running a program
+
+`uiop:run-program` starts a program, waits for it, and answers what it printed
+the way you asked for it — the JVM family can start one (the interpreter, the
+native binary and a compiled `.class`/`.jar`), and neither WASM backend can,
+where it signals `not-implemented-error` saying so. A stream the child cannot be
+handed directly — your `*standard-output*`, a string to read back, an input made
+of a string — goes through a temporary file, as upstream does:
+
+```console
+$ rontolisp -e '(print (uiop:run-program (list "sh" "-c" "echo $((6 * 7))") :output (list :string :stripped t)))'
+
+"42"
+```
+
+Building the command line is portable and runs everywhere, a compiled `.wasm`
+included:
+
+```lisp
+(uiop:escape-sh-command '("cc" "-o" "out file" "a$b"))   ; => "cc -o \"out file\" \"a\\$b\""
+```
+
+`uiop:launch-program` and its `process-info` family — a child kept running while
+the program goes on — signal on every backend.
+
 ## What is not
 
 Every other export **resolves and signals `uiop:not-implemented-error`**, naming
@@ -133,12 +162,12 @@ that reaches an unfilled corner of uiop gets one clear answer instead of an
 `undefined function` from the middle of a library, and a handler can catch it:
 
 ```console
-$ rontolisp -e '(uiop:run-program "ls")'
-Unhandled condition: Not (currently) implemented on rontolisp: UIOP/RUN-PROGRAM:RUN-PROGRAM
+$ rontolisp -e '(uiop:launch-program "ls")'
+Unhandled condition: Not (currently) implemented on rontolisp: UIOP/LAUNCH-PROGRAM:LAUNCH-PROGRAM
 ```
 
 ```lisp
-(handler-case (uiop:run-program "ls")
+(handler-case (uiop:launch-program "ls")
   (uiop:not-implemented-error () :cannot))   ; => :CANNOT
 ```
 

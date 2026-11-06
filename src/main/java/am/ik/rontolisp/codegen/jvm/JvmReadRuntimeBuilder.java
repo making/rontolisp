@@ -1094,15 +1094,21 @@ final class JvmReadRuntimeBuilder {
 	}
 
 	// _rdEscaped(String token): the symbol a token holding an escape names. It is no
-	// number and upcases only its unescaped characters; |NIL| reads as nil does.
+	// number and upcases only its unescaped characters; |NIL| reads as nil does. Only
+	// an unescaped colon is a package marker (CLHS 2.3.5): a token whose colons are all
+	// escaped (|a:b|) names that member of the current package, the cl-user spelling of
+	// which is LispSymbol.clUserSpelling's, and asks _rdHome as an empty token does.
 	private MethodCode buildRdEscaped() {
 		MethodCode a = new MethodCode();
 		MethodCode.Label loop = a.newLabel();
 		MethodCode.Label done = a.newLabel();
 		MethodCode.Label notSingle = a.newLabel();
 		MethodCode.Label notBar = a.newLabel();
+		MethodCode.Label upcase = a.newLabel();
+		MethodCode.Label escapedChar = a.newLabel();
 		MethodCode.Label append = a.newLabel();
 		MethodCode.Label notNil = a.newLabel();
+		MethodCode.Label marked = a.newLabel();
 		a.new_(this.stringBuilderClass);
 		a.dup();
 		ldc(a, "");
@@ -1112,6 +1118,8 @@ final class JvmReadRuntimeBuilder {
 		a.istore(2); // i
 		a.loadConstant(0);
 		a.istore(3); // in bars
+		a.loadConstant(0);
+		a.istore(5); // colons: 1 an escaped one, 2 a package marker
 		a.labelBinding(loop);
 		a.iload(2);
 		a.aload(0);
@@ -1134,7 +1142,7 @@ final class JvmReadRuntimeBuilder {
 		a.invokevirtual(this.stringCharAt);
 		a.istore(4);
 		a.iinc(2, 1);
-		a.goto_(append);
+		a.goto_(escapedChar);
 		a.labelBinding(notSingle);
 		a.iload(4);
 		a.loadConstant('|');
@@ -1146,10 +1154,27 @@ final class JvmReadRuntimeBuilder {
 		a.goto_(loop);
 		a.labelBinding(notBar);
 		a.iload(3);
-		a.ifne(append);
+		a.ifne(escapedChar);
+		a.iload(4);
+		a.loadConstant(':');
+		a.if_icmpne(upcase);
+		a.iload(5);
+		a.loadConstant(2);
+		a.ior();
+		a.istore(5);
+		a.labelBinding(upcase);
 		a.iload(4);
 		a.invokestatic(this.characterToUpperCase);
 		a.istore(4);
+		a.goto_(append);
+		a.labelBinding(escapedChar);
+		a.iload(4);
+		a.loadConstant(':');
+		a.if_icmpne(append);
+		a.iload(5);
+		a.loadConstant(1);
+		a.ior();
+		a.istore(5);
 		a.labelBinding(append);
 		a.aload(1);
 		a.iload(4);
@@ -1157,6 +1182,9 @@ final class JvmReadRuntimeBuilder {
 		a.pop();
 		a.goto_(loop);
 		a.labelBinding(done);
+		a.iload(5);
+		a.loadConstant(1);
+		a.if_icmpeq(marked);
 		a.aload(1);
 		a.invokevirtual(this.sbToString);
 		if (this.rdHome != null) {
@@ -1171,16 +1199,32 @@ final class JvmReadRuntimeBuilder {
 			a.aload(1);
 			a.invokestatic(this.rdHome);
 			a.areturn();
-			return a;
 		}
-		a.aload(0);
-		ldc(a, "NIL");
-		a.invokevirtual(this.objectEquals);
-		a.ifeq(notNil);
-		a.aconst_null();
-		a.areturn();
-		a.labelBinding(notNil);
-		a.aload(0);
+		else {
+			a.aload(0);
+			ldc(a, "NIL");
+			a.invokevirtual(this.objectEquals);
+			a.ifeq(notNil);
+			a.aconst_null();
+			a.areturn();
+			a.labelBinding(notNil);
+			a.aload(0);
+			a.areturn();
+		}
+		// "CL-USER::" + name, homed as an empty token is
+		a.labelBinding(marked);
+		a.new_(this.stringBuilderClass);
+		a.dup();
+		ldc(a, LispSymbol.CL_USER_EMPTY_NAME);
+		a.invokespecial(this.sbInitStr);
+		a.aload(1);
+		a.invokevirtual(this.sbToString);
+		a.invokevirtual(this.sbAppendStr);
+		a.invokevirtual(this.sbToString);
+		if (this.rdHome != null) {
+			ldc(a, "");
+			a.invokestatic(this.rdHome);
+		}
 		a.areturn();
 		return a;
 	}
@@ -1257,7 +1301,8 @@ final class JvmReadRuntimeBuilder {
 
 	// _rdStandardSpelling(String token): a canonical cl or cl-user symbol is spelled
 	// bare, whatever qualifier reads it -- the printer spells COMMON-LISP:CAR where the
-	// package reads CAR as another -- and cl-user's empty name by its own spelling.
+	// package reads CAR as another -- and cl-user's empty name and a name holding a
+	// colon by their own spelling.
 	private MethodCode buildRdStandardSpelling() {
 		MethodCode a = new MethodCode();
 		MethodCode.Label noQualifier = a.newLabel();
@@ -1317,11 +1362,27 @@ final class JvmReadRuntimeBuilder {
 		a.aload(0);
 		ldc(a, ":");
 		a.invokevirtual(this.stringStartsWith);
-		a.ifeq(noQualifier);
+		MethodCode.Label stripped = a.newLabel();
+		a.ifeq(stripped);
 		a.aload(0);
 		a.loadConstant(1);
 		a.invokevirtual(this.stringSubstringFrom);
 		a.astore(0);
+		// a member holding a colon keeps cl-user's qualifier
+		// (LispSymbol.clUserSpelling)
+		a.labelBinding(stripped);
+		a.aload(0);
+		a.loadConstant((int) ':');
+		a.invokevirtual(this.stringIndexOf);
+		a.iflt(noQualifier);
+		a.new_(this.stringBuilderClass);
+		a.dup();
+		ldc(a, LispSymbol.CL_USER_EMPTY_NAME);
+		a.invokespecial(this.sbInitStr);
+		a.aload(0);
+		a.invokevirtual(this.sbAppendStr);
+		a.invokevirtual(this.sbToString);
+		a.areturn();
 		a.labelBinding(noQualifier);
 		a.aload(0);
 		a.invokevirtual(this.stringLength);

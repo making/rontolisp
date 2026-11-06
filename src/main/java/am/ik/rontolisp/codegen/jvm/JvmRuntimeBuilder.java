@@ -2105,14 +2105,15 @@ final class JvmRuntimeBuilder {
 	 * kept identical on purpose.
 	 */
 	static MethodCode buildSymEscBody(ConstantPool cp, MethodRefEntry stringLength, MethodRefEntry stringCharAt,
-			MethodRefEntry stringIndexOf, MethodRefEntry stringSubstring, MethodRefEntry stringReplace,
-			MethodRefEntry stringConcat, MethodRefEntry stringEquals) {
+			MethodRefEntry stringIndexOf, MethodRefEntry stringIndexOfFrom, MethodRefEntry stringSubstring,
+			MethodRefEntry stringReplace, MethodRefEntry stringConcat, MethodRefEntry stringEquals) {
 		MethodCode a = new MethodCode();
 		// locals: s = 0 (param), n = 1, prefixEnd = 2, i = 3, c = 4, idx = 5 (int),
 		// tmp = 6 (String, the substring/concat scratch), and the shape of the member:
-		// letterBefore = 7, digit = 8, dots = 9, potential = 10 (int).
+		// letterBefore = 7, digit = 8, dots = 9, potential = 10 (int); prefix = 11
+		// (String, the qualifier text).
 		int slotS = 0, slotN = 1, slotPrefixEnd = 2, slotI = 3, slotC = 4, slotIdx = 5, slotTmp = 6,
-				slotLetterBefore = 7, slotDigit = 8, slotDots = 9, slotPotential = 10;
+				slotLetterBefore = 7, slotDigit = 8, slotDots = 9, slotPotential = 10, slotPrefix = 11;
 		MethodCode.Label checkSharpColon = a.newLabel();
 		MethodCode.Label scanQualifier = a.newLabel();
 		MethodCode.Label havePrefix = a.newLabel();
@@ -2229,8 +2230,9 @@ final class JvmRuntimeBuilder {
 		// whitespace, the reader's list/string/quote/comment/backquote/comma
 		// terminators, and '|' / '\' themselves (reader-special even though the
 		// lexer's own isSymbolChar does not exclude them).
-		for (char forbidden : new char[] { ' ', '\t', '\n', '\r', '\f', '(', ')', '\'', '"', ';', ',', '`', '|',
-				'\\' }) {
+		// A colon in the member is a package marker to a bare re-read.
+		for (char forbidden : new char[] { ' ', '\t', '\n', '\r', '\f', '(', ')', '\'', '"', ';', ',', '`', '|', '\\',
+				':' }) {
 			a.iload(slotC);
 			a.loadConstant(forbidden);
 			a.if_icmpeq(doEscape);
@@ -2321,18 +2323,9 @@ final class JvmRuntimeBuilder {
 		a.areturn();
 		// return (prefixEnd == 0 ? "" : s.substring(0, prefixEnd)) + "|"
 		// + member.replace("\\", "\\\\").replace("|", "\\|") + "|", where member is
-		// s.substring(prefixEnd) -- the empty member (prefixEnd == n) needs no
-		// replace calls, String.substring(n, n) already being "". cl-user's empty name
-		// carries its qualifier for its first character only and prints as bare.
+		// s.substring(prefixEnd). A cl-user name LispSymbol.clUserSpelling qualified --
+		// the empty one, one holding a colon -- prints as bare (framedClUserMember).
 		a.labelBinding(doEscape);
-		a.ldc(cp.stringEntry(LispSymbol.CL_USER_EMPTY_NAME));
-		a.aload(slotS);
-		a.invokevirtual(stringEquals);
-		MethodCode.Label notEmptyName = a.newLabel();
-		a.ifeq(notEmptyName);
-		a.ldc(cp.stringEntry("||"));
-		a.areturn();
-		a.labelBinding(notEmptyName);
 		a.aload(slotS);
 		a.iload(slotPrefixEnd);
 		a.iload(slotN);
@@ -2352,11 +2345,27 @@ final class JvmRuntimeBuilder {
 		a.astore(slotTmp);
 		a.iload(slotPrefixEnd);
 		MethodCode.Label noPrefix = a.newLabel();
+		MethodCode.Label prefixed = a.newLabel();
 		a.ifeq(noPrefix);
 		a.aload(slotS);
 		a.loadConstant(0);
 		a.iload(slotPrefixEnd);
 		a.invokevirtual(stringSubstring);
+		a.astore(slotPrefix);
+		a.ldc(cp.stringEntry(LispSymbol.CL_USER_EMPTY_NAME));
+		a.aload(slotPrefix);
+		a.invokevirtual(stringEquals);
+		a.ifeq(prefixed);
+		a.iload(slotPrefixEnd);
+		a.iload(slotN);
+		a.if_icmpeq(noPrefix);
+		a.aload(slotS);
+		a.loadConstant(':');
+		a.iload(slotPrefixEnd);
+		a.invokevirtual(stringIndexOfFrom);
+		a.ifge(noPrefix);
+		a.labelBinding(prefixed);
+		a.aload(slotPrefix);
 		a.aload(slotTmp);
 		a.invokevirtual(stringConcat);
 		a.areturn();
@@ -2667,8 +2676,8 @@ final class JvmRuntimeBuilder {
 			MethodRefEntry doubleToString, FloatPrint floatPrint, MethodRefEntry objectToString,
 			MethodRefEntry consToDisplayStringMethod, StringEntry nilStr, FuncPrint funcPrint,
 			MethodRefEntry stringCharAt, MethodRefEntry stringLength, MethodRefEntry stringSubstring,
-			MethodRefEntry stringLastIndexOf, ClassEntry ratioArrayClass, MethodRefEntry stringConcat,
-			StringEntry slashStr, ClassEntry charBoxClass, MethodRefEntry characterToString,
+			MethodRefEntry stringIndexOf, ClassEntry ratioArrayClass, MethodRefEntry stringConcat, StringEntry slashStr,
+			ClassEntry charBoxClass, MethodRefEntry characterToString,
 			@org.jspecify.annotations.Nullable ClassEntry arrayListClass,
 			@org.jspecify.annotations.Nullable MethodRefEntry arrayToDisplayStringMethod,
 			@org.jspecify.annotations.Nullable MethodRefEntry strvMethod,
@@ -2769,15 +2778,30 @@ final class JvmRuntimeBuilder {
 		// no package qualifier and no marker (CLHS 22.1.3.3: with *print-escape* false
 		// only the characters of the name are output) -- so QURI:URI princes as URI, a
 		// keyword :KW as KW and a gensym #:G1 as G1. All three are "everything after the
-		// last colon": return s.substring(s.lastIndexOf(':') + 1, s.length()). prin1
-		// keeps the spelling verbatim (_lispToString).
+		// first colon, and a second one right behind it" (LispSymbol.memberName), which
+		// leaves a member's own colons: P::|a:b| princes as a:b. prin1 keeps the
+		// spelling verbatim (_lispToString).
 		code.labelBinding(ifNotQuote);
-		code.aload(1);
+		MethodCode.Label memberStart = code.newLabel();
 		code.aload(1);
 		code.loadConstant(':');
-		code.invokevirtual(stringLastIndexOf);
+		code.invokevirtual(stringIndexOf);
 		code.iconst_1();
 		code.iadd();
+		code.istore(2);
+		code.iload(2);
+		code.aload(1);
+		code.invokevirtual(stringLength);
+		code.if_icmpge(memberStart);
+		code.aload(1);
+		code.iload(2);
+		code.invokevirtual(stringCharAt);
+		code.loadConstant(':');
+		code.if_icmpne(memberStart);
+		code.iinc(2, 1);
+		code.labelBinding(memberStart);
+		code.aload(1);
+		code.iload(2);
 		code.aload(1);
 		code.invokevirtual(stringLength);
 		code.invokevirtual(stringSubstring);

@@ -671,13 +671,15 @@ public final class LispPreludeLibrary {
 		// spelling: prin1-to-string keeps it, unlike symbol-name. A bare symbol is a cl
 		// or a cl-user one, and symbol-package tells them apart by the table of the
 		// standard names; the package walks, which look the symbol up in that home
-		// anyway, take the spelling's answer and carry no table. The interpreter
+		// anyway, take the spelling's answer and carry no table. A text a bar opens is a
+		// bare spelling's, |a:b| too: a qualifier prints as it is. The interpreter
 		// overrides symbol-package with the registry-backed version.
 		SOURCES.put(LispNames.SYMBOL_HOME_INTERNAL, """
 				(defun %symbol-home (symbol)
-				  (let* ((s (%unescaped-symbol-text (%prin1-to-string symbol)))
+				  (let* ((p (%prin1-to-string symbol))
+				         (s (%unescaped-symbol-text p))
 				         (n (length s)))
-				    (cond ((= n 0) :cl-user)
+				    (cond ((or (= n 0) (char= (char p 0) #\\|)) :cl-user)
 				          ((char= (char s 0) #\\:) :keyword)
 				          ((and (> n 1) (char= (char s 0) #\\#) (char= (char s 1) #\\:)) nil)
 				          (t (let ((idx (position #\\: s)))
@@ -2893,19 +2895,24 @@ public final class LispPreludeLibrary {
 						""");
 		// The uniqueness rule behind uiop:with-temporary-file: create the directory,
 		// then draw random names until one names nothing. Deliberately NOT seeded from
-		// the clock -- (random n) is the one entropy source every backend shares.
+		// the clock -- (random n) is the one entropy source every backend shares. The
+		// name is PREFIX, the draw, SUFFIX and .TYPE, inside DIR unless PREFIX is an
+		// absolute path itself (upstream's ensure-absolute-pathname of the prefix:
+		// cffi-toolchain names its temporary beside the file it stands for).
 		SOURCES.put(LispNames.TEMP_FILE_NAME, """
-				(defun %temp-file-name (%tfn-dir %tfn-prefix %tfn-type)
-				  (let ((%tfn-d (namestring (uiop/pathname:ensure-directory-pathname
-				                              (or %tfn-dir (uiop/stream:default-temporary-directory)))))
-				        (%tfn-p (or %tfn-prefix "tmp"))
-				        (%tfn-t (if %tfn-type (concatenate 'string "." %tfn-type) ""))
-				        (%tfn-n nil))
-				    (ensure-directories-exist %tfn-d)
+				(defun %temp-file-name (%tfn-dir %tfn-prefix %tfn-suffix %tfn-type)
+				  (let* ((%tfn-p (or %tfn-prefix "tmp"))
+				         (%tfn-d (if (and (plusp (length %tfn-p)) (char= (char %tfn-p 0) #\\/))
+				                     ""
+				                     (namestring (uiop/pathname:ensure-directory-pathname
+				                                  (or %tfn-dir (uiop/stream:default-temporary-directory))))))
+				         (%tfn-t (if %tfn-type (concatenate 'string "." %tfn-type) ""))
+				         (%tfn-n nil))
+				    (ensure-directories-exist (concatenate 'string %tfn-d %tfn-p))
 				    (do () (%tfn-n %tfn-n)
 				      (let ((%tfn-c (concatenate 'string %tfn-d %tfn-p
 				                                 (write-to-string (random 1000000000))
-				                                 %tfn-t)))
+				                                 (or %tfn-suffix "") %tfn-t)))
 				        (unless (probe-file %tfn-c) (setq %tfn-n %tfn-c))))))
 				""");
 		// The uiop/stream designator tables (.kb/uiop.md): upstream defines

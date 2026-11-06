@@ -1,6 +1,7 @@
 ;; Classes that exist only once :defsystem-depends-on has loaded: a :class named by a
 ;; string (hu.dwim.def's), component types by keyword (:test-file, :lass-file,
-;; :coalton-file), and test-op's :after spelling with a #. in it (prove's consumers).
+;; :coalton-file, :cffi-grovel-file), and test-op's :after spelling with a #. in it
+;; (prove's consumers).
 (defsystem "meta-demo-classes"
   :defsystem-depends-on ("meta-demo-classes-tool")
   :class "classes-tool:tool-system"
@@ -8,7 +9,8 @@
   :components ((:file "classes-plain")
                (:typed-file "classes-typed")
                (:data-file "classes-data" :output "classes-data.out")
-               (:later-file "classes-later"))
+               (:later-file "classes-later")
+               (:generated-file "classes-generated"))
   :perform (test-op :after (o c)
                     (funcall (intern #.(string :run-later) :classes-tool) c)))
 

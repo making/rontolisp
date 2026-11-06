@@ -172,12 +172,12 @@ verification against the actual Quicklisp dist at probe time)
   - Load, wrong result: `cl-conspack` (doubles encoded as float32, i90; JVM the same).
   - Interpreter only: `snooze` (`handle-request` as SBCL; JVM i91).
   - Since loaded: `cl-unification` (all four, as SBCL; `.kb/asdf.md`, "Libraries that load"),
-    `40ants-doc` (interpreter, as SBCL, since i87; the compile paths stop in serapeum:
-    `internal-definitions.lisp:411` `DEFINE-SYMBOL-MACRO must be a top-level form`, after
-    `%DEFINE-METHOD-COMBINATION is undefined` at compile time).
-  - Do not load: `generic-cl` (i88; past i82 since 2026-11-06), `sycamore` (i85; past it
-    matches SBCL), `petalisp` (i86 in queues, i89, then i90 in typo), `osicat` (cffi-grovel
-    refused, i84).
+    `sycamore` (since i85: ropes, tree sets / maps, hash sets and `cgen`'s `|?:|` as SBCL on the
+    interpreter, the JVM and P1), `40ants-doc` (interpreter, as SBCL, since i87; the compile paths
+    stop in serapeum: `internal-definitions.lisp:411` `DEFINE-SYMBOL-MACRO must be a top-level form`,
+    after `%DEFINE-METHOD-COMBINATION is undefined` at compile time).
+  - Do not load: `generic-cl` (i88; past i82 since 2026-11-06), `petalisp` (i86 in queues, i89,
+    then i90 in typo), `osicat` (cffi-grovel refused, i84).
   - Side results: `lparallel` loads now (its h37 stop is gone); `asdf:load-system` of a
     `:defsystem-depends-on` that only Quicklisp holds is `.todo/418`.
 

@@ -37,8 +37,8 @@
 | [`uiop/filesystem`](uiop/filesystem.md) | ファイルシステムの探索・走査・変更 | 32 / 32 |
 | `uiop/stream` | ファイル内容、一時ファイル、エンコーディング、標準ストリーム | 38 / 66 |
 | [`uiop/image`](uiop/image.md) | 終了、致命的コンディション、ダンプフック、コマンドライン | 30 / 30 |
-| `uiop/launch-program` | 非同期のサブプロセス | 0 / 19 |
-| `uiop/run-program` | 同期のサブプロセス | 0 / 7 |
+| `uiop/launch-program` | シェル向けのコマンドラインのエスケープ (実装済み)、非同期のサブプロセス (シグナル) | 9 / 19 |
+| `uiop/run-program` | 終了まで実行するプログラムと、その裏のストリームの汲み出し | 7 / 7 |
 | `uiop/lisp-build` | ファイルのコンパイル: ミュート条件の一族・`load*`・`reify-simple-sexp`・コンディションクラスが実装済み。`compile-file*` と遅延警告はシグナルします | 44 / 44 |
 | `uiop/configuration` | XDG パスと設定ファイルの探索 | 0 / 38 |
  | `uiop/backward-driver` | 非推奨の別名 (`coerce-pathname`、`version-compatible-p`) | 2 / 7 |
@@ -107,6 +107,10 @@
 | `uiop:define-package-style-warning` | — | パッケージ再定義がシグナルするはずの `style-warning` |
 | `uiop:package-local-nicknames` | `(uiop:package-local-nicknames :my-pkg)` | そのパッケージ自身のニックネームを `("NICKNAME" . package)` の組のリストとしてニックネーム順に返す |
 | `uiop:remove-package-local-nickname` | `(uiop:remove-package-local-nickname '#:nick)` | パッケージ(省略時はカレントパッケージ)からニックネームを取り除き `t` を返す。持っていなければ nil。リテラルなトップレベルの呼び出しは、それ以降に読まれるフォームにも有効です |
+| `uiop:run-program` | `(uiop:run-program '("cc" "--version") :output :string)` | プログラムを終了まで実行し、出力・エラー出力・終了コードを返す。引数は本家どおり: トークンのリストはそのまま、文字列は `/bin/sh` で実行し、`:output`/`:error-output`/`:input` には `nil`(ヌルデバイス)、`:interactive`、ファイル、`t`、ストリーム、`:string`、`:lines` などの[プロセッサ](#running-a-program)を渡せる。終了コードが 0 でなければ、`:ignore-error-status` がない限り `uiop:subprocess-error` をシグナルする。インタプリタ・ネイティブバイナリ・コンパイル済みクラスで動き、2 つの WASM バックエンドは `not-implemented-error` をシグナルする — WASI には起動するプロセスがない |
+| `uiop:subprocess-error`, `uiop:subprocess-error-code`, `uiop:subprocess-error-command`, `uiop:subprocess-error-process` | `(handler-case (uiop:run-program "exit 3") (uiop:subprocess-error (c) (uiop:subprocess-error-code c)))` | 終了コードが 0 でないときにシグナルされるコンディションとそのリーダ。プロセスは nil — 呼び出しより長く残るものはない |
+| `uiop:slurp-input-stream`, `uiop:vomit-output-stream` | `(uiop:slurp-input-stream :lines s)` | ストリームを文字列・行・フォームとして読む、別のストリームへ写す、関数に渡す。文字列・ストリーム・ファイルの中身をストリームへ書く。本家のメソッド表をそれぞれ 1 つの分岐にしたもので、プログラムからメソッドは足せない |
+| `uiop:escape-sh-command`, `uiop:escape-shell-command`, `uiop:escape-windows-command`, `uiop:escape-command`, `uiop:escape-sh-token`, `uiop:escape-shell-token`, `uiop:escape-windows-token`, `uiop:escape-token`, `uiop:easy-sh-character-p` | `(uiop:escape-sh-command '("cc" "-o" "out file"))` | `/bin/sh` 向け、または Windows のコマンドライン向けに組んだコマンドライン。各トークンは必要な場合だけクォートする: `"cc -o \"out file\""`。純粋な文字列処理で、4 つのバックエンドすべてで動く |
 
 完全実装済みサブパッケージ以外の 8 つのメンバは**マクロ**で、呼び出されるのではなく
 コンパイラが展開します: `uiop:with-temporary-file`、
@@ -123,6 +127,30 @@
 `uiop:nest`、`uiop:while-collecting`、`uiop:with-upgradability` など — は
 [そのページ](uiop/utility.md#macros)にあります。
 
+## プログラムの実行
+
+`uiop:run-program` はプログラムを起動して終了を待ち、出力を求めた形で返します。
+プログラムを起動できるのは JVM 系(インタプリタ、ネイティブバイナリ、コンパイル済みの
+`.class`/`.jar`)で、どちらの WASM バックエンドも起動できないため、その旨を述べて
+`not-implemented-error` をシグナルします。子プロセスに直接渡せないストリーム
+(`*standard-output*`、読み戻す文字列、文字列から作る入力) は、本家と同じく一時ファイルを
+経由します:
+
+```console
+$ rontolisp -e '(print (uiop:run-program (list "sh" "-c" "echo $((6 * 7))") :output (list :string :stripped t)))'
+
+"42"
+```
+
+コマンドラインの組み立ては移植可能で、コンパイルした `.wasm` を含むどこでも動きます:
+
+```lisp
+(uiop:escape-sh-command '("cc" "-o" "out file" "a$b"))   ; => "cc -o \"out file\" \"a\\$b\""
+```
+
+`uiop:launch-program` と `process-info` の一族 — プログラムが先へ進む間も子プロセスを
+動かしておくもの — はすべてのバックエンドでシグナルします。
+
 ## 未実装のもの
 
 これ以外のエクスポートは**解決はされ、操作名とともに `uiop:not-implemented-error`
@@ -131,12 +159,12 @@
 明確な答えを受け取り、ハンドラで捕捉できます:
 
 ```console
-$ rontolisp -e '(uiop:run-program "ls")'
-Unhandled condition: Not (currently) implemented on rontolisp: UIOP/RUN-PROGRAM:RUN-PROGRAM
+$ rontolisp -e '(uiop:launch-program "ls")'
+Unhandled condition: Not (currently) implemented on rontolisp: UIOP/LAUNCH-PROGRAM:LAUNCH-PROGRAM
 ```
 
 ```lisp
-(handler-case (uiop:run-program "ls")
+(handler-case (uiop:launch-program "ls")
   (uiop:not-implemented-error () :cannot))   ; => :CANNOT
 ```
 

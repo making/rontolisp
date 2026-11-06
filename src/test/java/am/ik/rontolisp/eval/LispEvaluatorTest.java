@@ -59,6 +59,7 @@ import am.ik.rontolisp.testsupport.DeclaredArityReportPrograms;
 import am.ik.rontolisp.testsupport.HashTableCopyPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
+import am.ik.rontolisp.testsupport.RunProgramPrograms;
 import am.ik.rontolisp.testsupport.SocketTest;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import org.junit.jupiter.api.Test;
@@ -19406,15 +19407,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void uninternedSymbolWithAColonPrintsEscapedAndReadsBack() {
-		// A colon in an uninterned member must be |...|-escaped: a bare one behind
-		// #: is a package marker the reader refuses (CLHS 2.4.8.5), so the printer
-		// spells it escaped and the spelling reads back.
+	void aSymbolWithAColonInItsNamePrintsEscapedAndReadsBack() {
+		// A colon in a member must be |...|-escaped: a bare one is a package marker
+		// (CLHS 2.3.5; behind #: one the reader refuses, 2.4.8.5), so the printer spells
+		// it escaped and the spelling reads back. An escaped one is a constituent, so
+		// |a:b| is cl-user's symbol of that name.
 		assertThat(evalMulti("""
 				(list (prin1-to-string (make-symbol ":"))
 				      (symbol-name (read-from-string (prin1-to-string (make-symbol ":"))))
-				      (prin1-to-string (make-symbol "a:b")))
-				""").print()).isEqualTo("(\"#:|:|\" \":\" \"#:|a:b|\")");
+				      (prin1-to-string (make-symbol "a:b"))
+				      (symbol-name '|a:b|) (prin1-to-string 'a\\:b) (package-name (symbol-package '|:x|))
+				      (eq '|a:b| (read-from-string (prin1-to-string '|a:b|)))
+				      (prin1-to-string (read-from-string "(|?:| . 12)")))
+				""").print())
+			.isEqualTo("(\"#:|:|\" \":\" \"#:|a:b|\" \"a:b\" \"|A:B|\" \"COMMON-LISP-USER\" T \"(|?:| . 12)\")");
 	}
 
 	@Test
@@ -26426,6 +26432,20 @@ class LispEvaluatorTest {
 				                    p)))
 				        (and (probe-file gone) t)))
 				""".formatted(dir, dir)).print()).isEqualTo("(T NIL)");
+		// Upstream's name: PREFIX, a draw, SUFFIX ("-tmp" once a :type is given) and
+		// .TYPE, inside the directory unless the prefix is an absolute path itself --
+		// how cffi-toolchain names a temporary beside the file it stands for.
+		assertThat(evalMulti("""
+				(flet ((shape (p) (list (directory-namestring p) (pathname-type p)
+				                        (search "-tmp" (pathname-name p) :from-end t))))
+				  (list (shape (uiop:with-temporary-file (:pathname p :directory "%1$s" :type "dat") p))
+				        (shape (uiop:with-temporary-file (:pathname p :prefix "%1$sout-tmp" :suffix ""
+				                                          :type "o") p))
+				        (shape (uiop:with-temporary-file (:pathname p :directory "/nowhere/"
+				                                          :prefix "%1$sexe" :suffix "" :type nil) p))))
+				""".formatted(dir)).print())
+			.matches("\\(\\(\"%1$s\" \"dat\" \\d+\\) \\(\"%1$s\" \"o\" 3\\) \\(\"%1$s\" NIL NIL\\)\\)"
+				.formatted(java.util.regex.Pattern.quote(dir)));
 	}
 
 	@Test
@@ -26757,6 +26777,19 @@ class LispEvaluatorTest {
 				(progn (uiop:load-from-string "(defun %lfs-probe () 7)")
 				       (%lfs-probe))
 				""").print()).isEqualTo("7");
+	}
+
+	@Test
+	void evalUiopRunProgramStartsAProgramAndWaitsForIt(@TempDir Path dir) {
+		// The JVM twin is JvmLispCompilerTest#compileAndRunUiopRunProgramStartsAProgram;
+		// the WASM backends signal (WasmLispCompilerIntegrationTest).
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader
+			.readAllFromString(RunProgramPrograms.program(dir.resolve("appended.txt").toString()))) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString(StandardCharsets.UTF_8).trim()).isEqualTo(RunProgramPrograms.EXPECTED);
 	}
 
 	@Test

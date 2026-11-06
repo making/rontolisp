@@ -265,7 +265,7 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 				                   (list (asdf:component-name c) (class-name (class-of c)) (asdf:file-type c)
 				                         (file-namestring (asdf:component-pathname c))))
 				                 (asdf:component-children s))))
-				(print (list *classes-plain* *classes-typed*))
+				(print (list *classes-plain* *classes-typed* *classes-generated*))
 				(print (reverse classes-tool:*log*))
 				(let ((s (asdf:find-system "meta-demo-classes")))
 				  (asdf:load-system s))
@@ -322,8 +322,9 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			"((\"classes-plain\" CLASSES-TOOL::LOGGED-FILE \"lisp\" \"classes-plain.lisp\")"
 					+ " (\"classes-typed\" ASDF::TYPED-FILE \"tl\" \"classes-typed.tl\")"
 					+ " (\"classes-data\" ASDF::DATA-FILE \"dat\" \"classes-data.dat\")"
-					+ " (\"classes-later\" CLASSES-TOOL:LATER-FILE \"lisp\" \"classes-later.lisp\"))",
-			"(:READ-HOOKED :TYPED-LOADED)",
+					+ " (\"classes-later\" CLASSES-TOOL:LATER-FILE \"lisp\" \"classes-later.lisp\")"
+					+ " (\"classes-generated\" CLASSES-TOOL::GENERATED-FILE \"spec\" \"classes-generated.spec\"))",
+			"(:READ-HOOKED :TYPED-LOADED :GENERATED-FROM-THE-SPEC)",
 			"((:LOGGED-LOAD \"classes-plain\") (:COMPILE-DATA \"classes-data\" \"classes-data.out\" \"classes-data.dat\")"
 					+ " (:LOAD-DATA \"classes-data\") (:COMPILE-LATER \"classes-later\")"
 					+ " (:REMEMBER-LATER \"classes-later\"))",

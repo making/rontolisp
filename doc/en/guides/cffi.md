@@ -205,13 +205,34 @@ has actually been tried here:
 | [**cl-sqlite**](https://common-lisp.net/project/cl-sqlite/) (`sqlite`) | **works.** `(ql:quickload "sqlite")` and you have a real database: `connect`, `execute-non-query`, `execute-to-list`, `execute-single`, `with-transaction`, prepared statements stepped by hand. There is no SQL engine bundled here — the `libsqlite3` on your machine is the engine. See [`examples/jvm/cffi-sqlite.lisp`](https://github.com/making/rontolisp/blob/develop/examples/jvm/cffi-sqlite.lisp). Interpreter and native binary; see the `defcenum` row below for why not a compiled class |
 | **static-vectors** | **does not load, and cannot.** It is not a CFFI consumer but a second implementation seam: its `.asd` refuses an implementation its own list does not name, and past that it needs a per-implementation file supplying a vector whose storage is memory a pointer can be taken into. Nothing here has such an array. Allocate with `cffi:foreign-alloc` instead |
 | **cl+ssl** | **loads, and is a usable HTTPS client**: the whole `defcvar`/`defcallback`/`defcstruct` surface of the largest binding in Quicklisp runs here, a real TLS handshake completes through cl+ssl's Lisp BIO — OpenSSL calling back into Lisp for every octet — and a `GET https://example.com/` sent over `(cl+ssl:make-ssl-client-stream ...)` reads back a real `HTTP/1.1 200 OK` response, on the interpreter and the native binary alike. Not one blocker met along the way was in CFFI: the last one was a rontolisp stream being indistinguishable from a small integer, which made cl+ssl's `(etypecase socket (integer …) (stream …))` BIO dispatch pick the wrong arm — fixed by giving an open stream its own dispatch instead of sharing an integer's representation. The bundled [`cl+ssl` shim](asdf-systems.md#built-in-shim-systems) over rontolisp's own TLS stays the default anyway: it needs no OpenSSL on the machine and works on the WASM component backend, where CFFI never will |
+| **osicat** | **works**, on `java -jar` and in a compiled class: it [grovels](#grovelling) its constants and structure layouts from the headers and compiles its C wrappers into a library of its own, so `(osicat:file-kind "/tmp")`, `(osicat-posix:getpid)` and a `stat` of a missing file signalling `osicat-posix:enoent` all answer what the machine says |
+
+## Grovelling
+
+A binding that **grovels** (`:defsystem-depends-on (:cffi-grovel)`, and
+`:cffi-grovel-file` / `:cffi-wrapper-file` components) reads the platform's
+constants and structure layouts by compiling and running a small C program, and
+may compile C wrappers into a library of its own. Upstream's `cffi-grovel` does
+that here, unmodified, with **your machine's C compiler** — `$CC`, else `cc` — run
+through `uiop:run-program`:
+
+- It needs a C compiler and the C library's headers on the machine. Without one,
+  loading such a system stops with a sentence naming the compiler it looked for,
+  rather than half-way through.
+- What it builds is written **beside the grovel file**, in the system's own tree,
+  and is not built again while it is newer than the file it came from.
+- A compiled `-o Prog.class` / `-o app.jar` grovels while it **compiles**, and
+  carries the result; the program it builds runs no compiler. A wrapper library is
+  opened at run time from where the compile wrote it, so the program runs on the
+  machine that built it, as an image dumped by SBCL does.
+- Compiling one to a `.wasm` stops before anything is built: a grovelled binding
+  calls C, and neither WASM backend can.
 
 ## What does not work
 
 | | |
 |---|---|
-| `cffi-grovel` | Grovelling compiles and runs a C program to read the platform's headers, which needs a C toolchain at load time. A system naming it in `:defsystem-depends-on` is **refused with that sentence** rather than half-loaded. Most bindings do not grovel |
-| `cffi-libffi` | Refused too, and for the opposite reason: structures by value already work (above), so there is nothing for it to add |
+| `cffi-libffi` | Refused: structures by value already work (above), so there is nothing for it to add |
 | `with-pointer-to-vector-data` | Copies **in and out** instead of pinning: the body sees a fresh foreign buffer, and what the C side wrote reaches the Lisp vector when the body returns, not before. A pointer kept past the body is dangling |
 | `:long-double` | Not a foreign type here |
 

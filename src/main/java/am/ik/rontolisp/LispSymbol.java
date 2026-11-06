@@ -85,12 +85,31 @@ public final class LispSymbol implements LispVal {
 	public static final String CL_USER_EMPTY_NAME = "CL-USER::";
 
 	/**
-	 * Returns the canonical spelling of a {@code cl-user} member.
+	 * Returns the canonical spelling of a {@code cl-user} member: bare, except the empty
+	 * name and a name holding a colon, which a bare spelling would read as a package
+	 * marker ({@code |a:b|}). Those two carry the qualifier, and print as a bare spelling
+	 * does ({@link #framedClUserMember}).
 	 * @param member the member name
-	 * @return the member itself, or {@link #CL_USER_EMPTY_NAME} for the empty name
+	 * @return the member itself, or {@link #CL_USER_EMPTY_NAME} followed by it
 	 */
 	public static String clUserSpelling(String member) {
-		return member.isEmpty() ? CL_USER_EMPTY_NAME : member;
+		return member.isEmpty() || member.indexOf(':') >= 0 ? CL_USER_EMPTY_NAME + member : member;
+	}
+
+	/**
+	 * The member of a {@code cl-user} symbol {@link #clUserSpelling} had to qualify: the
+	 * empty name or a name holding a colon behind {@link #CL_USER_EMPTY_NAME}. Every
+	 * reader of a member name and of a home answers it as it answers {@code P::|a:b|};
+	 * the printers ask this, since it prints as a bare spelling does.
+	 * @param name the stored symbol name
+	 * @return the member, or {@code null} for any other spelling
+	 */
+	public static @Nullable String framedClUserMember(String name) {
+		if (!name.startsWith(CL_USER_EMPTY_NAME)) {
+			return null;
+		}
+		String member = name.substring(CL_USER_EMPTY_NAME.length());
+		return member.isEmpty() || member.indexOf(':') >= 0 ? member : null;
 	}
 
 	/**
@@ -155,15 +174,11 @@ public final class LispSymbol implements LispVal {
 			return ":" + escape(displayName(this.name));
 		}
 		if (this.name.startsWith("#:")) {
-			String member = this.name.substring(2);
-			// A colon in the member must be |...|-escaped even though needsEscape
-			// accepts it: a bare one behind #: is a package marker the reader
-			// refuses (CLHS 2.4.8.5), so #:a:b would not read back while #:|a:b|
-			// does.
-			return "#:" + (member.indexOf(':') >= 0 ? forceEscape(member) : escape(member));
+			return "#:" + escape(this.name.substring(2));
 		}
-		if (CL_USER_EMPTY_NAME.equals(this.name)) {
-			return escape("");
+		String framed = framedClUserMember(this.name);
+		if (framed != null) {
+			return escape(framed);
 		}
 		int colon = qualifierEnd(this.name);
 		if (colon > 0 && !isInstanceTag(this.name)) {
@@ -221,9 +236,8 @@ public final class LispSymbol implements LispVal {
 
 	/**
 	 * The {@code |...|} spelling of {@code member}, escaping every {@code |} and
-	 * {@code \} inside -- the shape {@link #escape} takes once {@link #needsEscape} (or a
-	 * caller that knows more than it, like the {@code #:} branch above) says the bare
-	 * spelling would not read back.
+	 * {@code \} inside -- the shape {@link #escape} takes once {@link #needsEscape} says
+	 * the bare spelling would not read back.
 	 * @param member the name component to spell
 	 * @return the escaped spelling
 	 */
@@ -246,10 +260,11 @@ public final class LispSymbol implements LispVal {
 	 * inside a bare symbol token ({@link LispSymbol}'s own mirror of
 	 * {@code LispLexer.isSymbolChar}'s terminating-character set, plus {@code |} and
 	 * {@code \}, which are reader escape syntax rather than terminating characters
-	 * there), or a name a bare re-read would not reproduce under the reader's
-	 * {@code :upcase} folding. This is independent of the CURRENT {@code *print-case*}
-	 * binding, which only recases an unescaped spelling after this decision is made
-	 * (CLHS: an escaped symbol's spelling is never recased).
+	 * there), a name holding a colon, which a bare re-read takes for a package marker, or
+	 * a name a bare re-read would not reproduce under the reader's {@code :upcase}
+	 * folding. This is independent of the CURRENT {@code *print-case*} binding, which
+	 * only recases an unescaped spelling after this decision is made (CLHS: an escaped
+	 * symbol's spelling is never recased).
 	 *
 	 * <p>
 	 * The case check is scoped to ASCII {@code a}-{@code z} rather than the reader's
@@ -273,7 +288,8 @@ public final class LispSymbol implements LispVal {
 		}
 		for (int i = 0; i < member.length(); i++) {
 			char c = member.charAt(i);
-			if ((c >= 'a' && c <= 'z') || !isBareConstituent(c)) {
+			// A colon in a member is a package marker to a bare re-read (CLHS 2.3.5).
+			if ((c >= 'a' && c <= 'z') || c == ':' || !isBareConstituent(c)) {
 				return true;
 			}
 		}

@@ -804,7 +804,11 @@ compile whose warning could say it.
   printer.
 - The `(error c)` text named the class through `prin1` of its `%class-` tag, which escapes since
   symbols print with `|...|`: `Condition of type -C| was signalled.` on the interpreter and the JVM
-  until 2026-09-26; it reads `symbol-name` now.
+  until 2026-09-26; it reads `symbol-name` now. The tag of a class another package names is
+  qualified (`%class-PKG::C`), so its symbol name is `C` with no prefix to cut: cutting seven
+  characters off it signalled a `SUBSEQ` bounds `type-error` INSTEAD of the condition on all four
+  (osicat's `posix-error` subclasses) until 2026-11-07. `conditionTypeName` cuts the prefix only
+  where it is (ci-spec `a-signal-renders-no-report`).
 - Pinned cross-backend by `ci-spec.yaml`'s `standalone:` list -- a section `CiSpecE2eTest` runs one
   program at a time, per backend; the corpus cannot host these since running one ends the program.
 

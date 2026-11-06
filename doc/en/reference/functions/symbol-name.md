@@ -6,7 +6,7 @@ Returns the symbol's name as a string. The reader upcases unescaped symbols like
 
 On the compiled backends (JVM/WASM) `symbol-name` shares the `princ-to-string` machinery, so a non-symbol argument yields its display text instead of signaling an error (the interpreter signals).
 
-The reader supports the Common Lisp escape syntaxes for symbol names: a backslash makes the next character part of the name verbatim, and a `|...|` multiple escape makes everything between the pipes part of the name — whitespace and terminating characters included — so `'|when used|` is one symbol named `"when used"` and `'|Foo|` keeps its mixed case.
+The reader supports the Common Lisp escape syntaxes for symbol names: a backslash makes the next character part of the name verbatim, and a `|...|` multiple escape makes everything between the pipes part of the name — whitespace and terminating characters included — so `'|when used|` is one symbol named `"when used"` and `'|Foo|` keeps its mixed case. An escaped colon is part of the name, not a package marker: `'|a:b|` is one symbol named `"a:b"` in the current package, which `prin1` prints back as `|a:b|`.
 
 ```lisp
 (symbol-name 'foo) ; => "FOO"
@@ -26,4 +26,8 @@ The reader supports the Common Lisp escape syntaxes for symbol names: a backslas
 
 ```lisp
 (symbol-name '|when used|) ; => "when used"
+```
+
+```lisp
+(symbol-name '|a:b|) ; => "a:b"
 ```

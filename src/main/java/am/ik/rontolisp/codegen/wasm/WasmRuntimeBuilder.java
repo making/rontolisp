@@ -5812,11 +5812,13 @@ final class WasmRuntimeBuilder {
 		// Bare symbol name: the display spelling is the symbol NAME alone -- no package
 		// qualifier and no keyword/gensym marker (CLHS 22.1.3.3: with *print-escape*
 		// false only the characters of the name are output). All three cases are
-		// "everything after the LAST colon", so one backward-free byte scan covers
-		// QURI:URI -> URI, :KW -> KW and #:G1 -> G1. ':' is 0x3A, which cannot occur as
-		// a UTF-8 continuation byte, so scanning bytes is safe on a non-ASCII name.
-		// _print_val keeps the spelling verbatim.
-		// local 6 = scan index, local 7 = start (last colon + 1); both are otherwise
+		// "everything after the first colon, and a second one right behind it"
+		// (LispSymbol.memberName), so one byte scan covers QURI:URI -> URI, :KW -> KW,
+		// #:G1 -> G1 and leaves a member's own colons: P::|a:b| -> a:b. ':' is 0x3A,
+		// which
+		// cannot occur as a UTF-8 continuation byte, so scanning bytes is safe on a
+		// non-ASCII name. _print_val keeps the spelling verbatim.
+		// local 6 = scan index, local 7 = start (first colon + 1); both are otherwise
 		// the array branch's scratch, which this branch never reaches.
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
@@ -5852,6 +5854,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(7);
+		w.write(Instruction.BR, 2);
 		w.write(Instruction.END);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(6);
@@ -5861,6 +5864,39 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(6);
 		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// a second colon right behind the first: start + 1
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(7);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(3);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(7);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		WasmEmitHelper.emitStrBytesArray(w);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(7);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(':');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(7);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(7);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		// _write_str_gc(str, start, len, esc = 0) -- the third argument is the exclusive

@@ -17,8 +17,19 @@ nesting `#|...|#`.
   `_rdEscaped`; `_rd_token` leaves its name at the end of the token, so `_read_expr` tells it from
   one with no escape by where it starts. A text ending inside one records end-of-file. Both read it past
   the standard qualifier drop (`keyword:foo` and `keyword::foo` narrow to `:foo`, in `LispReader` too) and `|NIL|` is nil. Until 2026-11-05 the bar and the backslash were
-  constituents: `(read-from-string "|a b|")` answered the symbol `|\|A|`. Limit, the model's: `|a:b|` is
-  spelled as `a:b` is. ci-spec `the-empty-name-is-a-symbol-like-any-other`.
+  constituents: `(read-from-string "|a b|")` answered the symbol `|\|A|`. ci-spec `the-empty-name-is-a-symbol-like-any-other`.
+- **Only an unescaped colon is a package marker** (CLHS 2.3.5, 2026-11-06): `|a:b|` and `a\:b` are one
+  symbol of the current package, spelled `CL-USER::a:b` in `cl-user` (`.kb/symbol-runtime-api.md`, "The
+  empty name"), `P::a:b` in `P`. JVM `_rdEscaped` counts the colons it appends (escaped, marker); one whose
+  colons are all escaped is that framed spelling, homed as an empty token is. wasm `_rd_token` answers the
+  same count as a second result (the two `#S` callers drop it); `_read_expr` builds the spelling in the
+  `HEAP_PTR` scratch `_intern_sym` uses and asks `%read-home` with no qualifier. `cl-user::|b:c|` keeps the
+  qualifier on both (`_rdStandardSpelling`, `_read_expr` past `emitDropStandardQualifier`). The source
+  lexer marks such a token `PackageRegistry.CURRENT_PACKAGE_QUALIFIER`, which the resolver and the
+  interpreter's run-time read take as a bare token of the whole name. Until then `|a:b|` read as `A`'s `B`
+  ("No such package: a"), stopping sycamore at `(|?:| . 12)`. Limit: a package name holding a colon
+  (`|a:b|::c`) splits at its first colon, where SBCL looks for the package `a:b`. ci-spec
+  `a-colon-inside-a-multiple-escape-is-a-constituent` (SBCL-checked).
 - Unclaimed tokens fall to the atom path like `readSymbol`: `#foo` -> `#FOO`, `#16r1f` -> a symbol.
   The interpreter's reader has since learned errors the emitted readers never did: `..`/`...`
   (dot-only tokens), `#:a:b`, `#<`, `#n*` over/under-fill and a constituent behind `#*` bits are
