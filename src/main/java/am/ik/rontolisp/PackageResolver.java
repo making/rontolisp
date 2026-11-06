@@ -3175,6 +3175,10 @@ public final class PackageResolver {
 	}
 
 	private LispVal resolveQualified(PackageRegistry.QualifiedName qn) {
+		if (PackageRegistry.CURRENT_PACKAGE_QUALIFIER.equals(qn.pkg())) {
+			// |a:b|: a bare token whose name holds a colon
+			return resolveUnqualified(qn.member());
+		}
 		String pkg = registeredPackageName(this.registry.canonicalName(qn.pkg()));
 		String member = qn.member();
 		if (!this.registry.contains(pkg)) {
@@ -3655,6 +3659,9 @@ public final class PackageResolver {
 		if (name.startsWith(":") || name.startsWith("#:")) {
 			return name;
 		}
+		if (name.startsWith(PackageRegistry.CURRENT_PACKAGE_QUALIFIER)) {
+			return internSpelling(name, true);
+		}
 		String read = localNicknameSpelling(name, this.registry.localNicknames(current()));
 		if (read != null) {
 			return read.startsWith(":") ? read : internSpelling(read, true);
@@ -3679,6 +3686,13 @@ public final class PackageResolver {
 
 	private String internSpellingExact(String name) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		boolean member = false;
+		if (qn != null && PackageRegistry.CURRENT_PACKAGE_QUALIFIER.equals(qn.pkg())) {
+			// A run-time read's |a:b|: a bare token whose name holds a colon
+			name = qn.member();
+			qn = null;
+			member = true;
+		}
 		if (qn != null) {
 			String pkg = registeredPackageName(this.registry.canonicalName(qn.pkg()));
 			if (this.registry.contains(pkg)) {
@@ -3710,7 +3724,11 @@ public final class PackageResolver {
 			// What the reader reads the token as: cl's constant, spelled bare.
 			return tOrNilIn(current(), name, true) instanceof LispSymbol sym ? sym.name() : name;
 		}
-		return resolveUnqualified(name).name();
+		String spelling = resolveUnqualified(name).name();
+		// The one-argument intern takes any other name holding a colon as spelled, as
+		// the compiled backends' does: the implementation's own Lisp interns a canonical
+		// spelling that way, ":KW" a keyword (.kb/symbol-runtime-api.md).
+		return member || name.indexOf(':') < 0 || LispSymbol.framedClUserMember(spelling) == null ? spelling : name;
 	}
 
 	/**
@@ -4638,7 +4656,7 @@ public final class PackageResolver {
 	 * @return the prefix, or {@code null} when it prints bare
 	 */
 	public synchronized @Nullable String bareSymbolPrefix(String bareName) {
-		if (LispSymbol.CL_USER_EMPTY_NAME.equals(bareName)) {
+		if (LispSymbol.framedClUserMember(bareName) != null) {
 			return printsBare(bareName) ? null : SymbolPrintTable.CL_USER_PREFIX;
 		}
 		if (bareName.startsWith(LispLayout.CLASS_TAG_PREFIX) || bareName.startsWith(LispLayout.STRUCT_TAG_PREFIX)
@@ -4760,7 +4778,9 @@ public final class PackageResolver {
 					boolean rule = clUserSymbolSet.contains(name) ? LispNames.CL_USER_PKG.equals(pkg)
 							: readsCl || !PackageRegistry.isStandardName(name)
 									|| PackageRegistry.isClLambdaListKeyword(name) || LispNames.QUOTE.equals(name);
-					boolean truth = printsBare(name);
+					// cl-user's name holding a colon is asked by its own spelling
+					boolean truth = printsBare(clUserSymbolSet.contains(name) && name.indexOf(':') >= 0
+							? LispSymbol.clUserSpelling(name) : name);
 					if (truth && !rule) {
 						bareExtraHere.add(name);
 					}
@@ -4830,8 +4850,9 @@ public final class PackageResolver {
 	private static void collectBareSymbols(LispVal datum, java.util.Set<String> into) {
 		if (datum instanceof LispSymbol sym) {
 			String name = sym.name();
-			if (LispSymbol.CL_USER_EMPTY_NAME.equals(name)) {
-				into.add("");
+			String framed = LispSymbol.framedClUserMember(name);
+			if (framed != null) {
+				into.add(framed);
 			}
 			else if (!sym.isKeyword() && !name.startsWith("#:") && !PackageRegistry.isClInternal(name)
 					&& PackageRegistry.splitQualified(name) == null) {

@@ -2363,6 +2363,27 @@ public final class PackageRegistry {
 	public static final char GLOBAL_QUALIFIER = '';
 
 	/**
+	 * The qualifier the source reader spells in front of a token whose colons were all
+	 * escaped ({@code |a:b|}, {@code a\:b}): it has no package marker, so it names a
+	 * member of the package it is read in, which only the resolver knows. Spelled as an
+	 * internal qualifier ({@link #currentPackageSpelling}), so that what reads a member
+	 * name ahead of the resolver ({@link #splitQualified}, {@code LispSymbol.memberName})
+	 * answers the whole name; the resolver reads it as a bare token of that name. Nothing
+	 * else produces it.
+	 */
+	public static final String CURRENT_PACKAGE_QUALIFIER = "";
+
+	/**
+	 * The spelling the source reader gives a token naming {@code member} in the current
+	 * package although the name holds a colon ({@link #CURRENT_PACKAGE_QUALIFIER}).
+	 * @param member the member name, colons and all
+	 * @return the spelling
+	 */
+	public static String currentPackageSpelling(String member) {
+		return CURRENT_PACKAGE_QUALIFIER + "::" + member;
+	}
+
+	/**
 	 * A package-qualified symbol name split into its package and member parts.
 	 *
 	 * @param pkg the package part

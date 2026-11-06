@@ -18,9 +18,9 @@ gap:
   the honest rendering of "the backtrace for this condition" is the condition and
   nothing else. Real UIOP's own fallback for an implementation without a
   backtrace API has the same shape.
-- **There is no image to dump, restore or create**, so those three signal — but
-  the hooks around them are real, because registering into one is just a list
-  push. See [Image hooks](#image-hooks).
+- **An image is a program.** No backend can save its heap, so the interpreter
+  dumps an image by compiling it, and a compiled program starts the way a
+  restored image does. See [Dumping an image](#dumping-an-image).
 - **The argument vector has one shape everywhere**, `(program-name user-arg
   ...)`, and an interpreted program's arguments follow a `--` separator. See
   [The command line](#the-command-line).
@@ -152,8 +152,8 @@ is one line long.
 | `uiop:*image-restore-hook*` / `uiop:*image-dump-hook*` | the two lists |
 | `uiop:*image-prelude*` / `uiop:*image-entry-point*` / `uiop:*image-postlude*` / `uiop:*image-dumped-p*` | `nil` |
 
-The hooks are **real** even though nothing here can dump an image: a library may
-register into one while it loads, and that must not be an error.
+The hooks are **real**: a library may register into one while it loads, the dump
+calls the dump hooks, and a dumped program's start calls the restore hooks.
 
 ```lisp
 (defvar *log* nil)
@@ -162,26 +162,23 @@ register into one while it loads, and that must not be an error.
 *log*   ; => (:RESTORED)
 ```
 
-`uiop:*image-dumped-p*` is `nil` and stays `nil` — nothing sets it, because
-nothing dumps.
+`uiop:*image-dumped-p*` is `nil` in a program that was started and `:executable`
+in one an image was dumped to.
 
 ## Dumping an image
 
-| Function | What it signals |
-|----------|-----------------|
-| `uiop:dump-image` | `uiop:not-implemented-error` — no backend can save its heap; compile the program instead |
-| `uiop:restore-image` | `uiop:not-implemented-error` — a program is started from source, never resumed |
+| Function | What it does |
+|----------|--------------|
+| `uiop:dump-image` | on the interpreter the rontolisp command line started: runs the postlude and the dump hooks, then compiles the image into the executable its file names. In a compiled program, and in an evaluator nothing gave the command line's compilers, `uiop:not-implemented-error` |
+| `uiop:restore-image` | upstream's start: the restore hooks, the prelude, then the entry point, whose first value is the exit status (0 for true, 1 for `nil`) unless `:lisp-interaction` is true |
 | `uiop:create-image` | `uiop:not-implemented-error` — there are no Lisp object files to link |
 
-rontolisp has no image in the SBCL sense. A program is read and run, or read and
-compiled into one artifact:
-
-```bash
-rontolisp app.lisp -o App.class      # a JVM class
-rontolisp app.lisp -o app.wasm       # a WASM module
-```
-
-which is what `uiop:dump-image` would have been for.
+rontolisp has no heap to save, so the dump is a compile: each system the image
+loaded, read again for the target, then `uiop:restore-image` of
+`uiop:*image-entry-point*`. The file's name decides what the executable is -- no
+type is a native executable, `.jar` a JVM program, `.wasm` a module. This is
+what `asdf:make` of a `program-op` system does; see
+[Build an Executable from an ASDF System](../../compiling/asdf-programs.md).
 
 ## The command line
 
@@ -223,8 +220,9 @@ The SHAPE is the same on all four backends, which is what lets
 `uiop:command-line-arguments` be the vector's rest and `uiop:argv0` its first
 with no per-backend rule. Only the program NAME differs, because only the host
 knows it: the input file under the interpreter, the class name on the JVM (what
-stood on the `java` command line), and whatever the host put in `args[0]` on
-both WASM backends — the module path, for `wasmtime run`.
+stood on the `java` command line) or the path of the jar the class came from
+(`java -jar app.jar`), and whatever the host put in `args[0]` on both WASM
+backends — the module path, for `wasmtime run`.
 
 Upstream UIOP answers this way only for an image that was dumped as an
 executable, and otherwise hunts for a `--` inside a vector that still carries

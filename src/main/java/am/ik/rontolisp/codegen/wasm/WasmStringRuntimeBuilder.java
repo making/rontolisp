@@ -32,10 +32,12 @@ final class WasmStringRuntimeBuilder {
 	// The non-constituent bytes _sym_esc_gc escapes for, mirroring
 	// LispSymbol.isBareConstituent's ASCII set on the interpreter (space, tab, newline,
 	// CR, form feed, then the reader's list/string/quote/comment/backquote/comma
-	// terminators, plus '|' and '\' themselves): ' ', '\t', '\n', '\r', '\f', '(', ')',
-	// '\'', '"', ';', ',', '`', '|', '\\'.
+	// terminators, plus '|' and '\' themselves), and ':', a package marker to a bare
+	// re-read: ' ', '\t', '\n', '\r', '\f', '(', ')', '\'', '"', ';', ',', '`', '|',
+	// '\\',
+	// ':'.
 	private static final int[] SYM_ESC_FORBIDDEN = { 0x20, 0x09, 0x0A, 0x0D, 0x0C, 0x28, 0x29, 0x27, QUOTE, 0x3B, 0x2C,
-			0x60, PIPE, BACKSLASH };
+			0x60, PIPE, BACKSLASH, ':' };
 
 	// Fold modes for the shared code-point build core.
 	private static final int UPCASE = 1;
@@ -706,13 +708,12 @@ final class WasmStringRuntimeBuilder {
 	 * not just one that calls {@code string-upcase} -- the same size-discipline reason
 	 * the JVM backend's {@code _symEsc} gives (`JvmRuntimeBuilder.buildSymEscBody`'s
 	 * Javadoc), and the two are kept identical on purpose.
-	 * @param emptyNameOffset the string-table offset of
-	 * {@link LispSymbol#CL_USER_EMPTY_NAME} -- that symbol carries its qualifier for its
-	 * first byte only and prints as bare -- or -1 in a program that can hold no such
-	 * symbol
+	 * @param framedNames whether the program can hold a {@code cl-user} symbol
+	 * {@link LispSymbol#clUserSpelling} qualified -- the empty name, a name holding a
+	 * colon -- which prints as bare ({@link LispSymbol#framedClUserMember})
 	 * @return the function body (signature reuses TYPE_WRITE_STR_GC)
 	 */
-	static byte[] buildSymEscGcBody(int emptyNameOffset) {
+	static byte[] buildSymEscGcBody(boolean framedNames) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: str = 0, from = 1, to = 2, unused = 3. locals: arr = 4 ($str_bytes,
@@ -731,19 +732,68 @@ final class WasmStringRuntimeBuilder {
 		get(w, str);
 		WasmEmitHelper.emitStrBytesArray(w);
 		set(w, arr);
-		if (emptyNameOffset >= 0) {
-			// str.id == the empty name's -> from = to: nothing but the empty member
-			get(w, str);
-			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-			w.writeHeapType(WasmLispCompiler.TYPE_STRING);
-			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
-			w.writeUnsignedLeb128(0);
-			i32(w, emptyNameOffset);
+		if (framedNames) {
+			// bytes[from, from + 9) = "CL-USER::" and the member empty or holding a colon
+			// -> from = prefixEnd = from + 9, found = 1: the member alone, with no prefix
+			// for the arms below to find in it.
+			int prefix = LispSymbol.CL_USER_EMPTY_NAME.length();
+			get(w, to);
+			get(w, from);
+			w.write(Instruction.I32_SUB);
+			i32(w, prefix);
+			w.write(Instruction.I32_GE_S);
+			w.write(Instruction.IF, 0x40);
+			i32(w, 1);
+			for (int k = 0; k < prefix; k++) {
+				get(w, arr);
+				get(w, from);
+				i32(w, k);
+				w.write(Instruction.I32_ADD);
+				w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+				w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+				i32(w, LispSymbol.CL_USER_EMPTY_NAME.charAt(k));
+				w.write(Instruction.I32_EQ);
+				w.write(Instruction.I32_AND);
+			}
+			w.write(Instruction.IF, 0x40);
+			get(w, from);
+			i32(w, prefix);
+			w.write(Instruction.I32_ADD);
+			set(w, idx);
+			get(w, idx);
+			get(w, to);
+			w.write(Instruction.I32_EQ);
+			set(w, found);
+			w.write(Instruction.BLOCK, 0x40);
+			w.write(Instruction.LOOP, 0x40);
+			get(w, idx);
+			get(w, to);
+			w.write(Instruction.I32_GE_U);
+			w.write(Instruction.BR_IF, 1);
+			arrGetLocal(w, arr, idx);
+			i32(w, ':');
 			w.write(Instruction.I32_EQ);
 			w.write(Instruction.IF, 0x40);
-			get(w, to);
+			i32(w, 1);
+			set(w, found);
+			w.write(Instruction.END);
+			get(w, idx);
+			i32(w, 1);
+			w.write(Instruction.I32_ADD);
+			set(w, idx);
+			w.write(Instruction.BR, 0);
+			w.write(Instruction.END); // loop
+			w.write(Instruction.END); // block
+			get(w, found);
+			w.write(Instruction.IF, 0x40);
+			get(w, from);
+			i32(w, prefix);
+			w.write(Instruction.I32_ADD);
 			set(w, from);
+			get(w, from);
+			set(w, prefixEnd);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
 			w.write(Instruction.END);
 		}
 		// prefixEnd: a keyword's ':' (LispSymbol.isKeyword), else an uninterned
@@ -752,9 +802,17 @@ final class WasmStringRuntimeBuilder {
 		// exactly like the interpreter's LispSymbol.print(). Defaults to `from`
 		// (no prefix) when none apply; each case sets `found` so the later ones are
 		// skipped rather than branched past, which keeps every block's exit a plain
-		// fall-through and needs no cross-construct BR bookkeeping.
-		i32(w, 0);
-		set(w, found);
+		// fall-through and needs no cross-construct BR bookkeeping. A framed cl-user
+		// name has set `found` above.
+		if (framedNames) {
+			get(w, found);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+		}
+		else {
+			i32(w, 0);
+			set(w, found);
+		}
 		get(w, to);
 		get(w, from);
 		w.write(Instruction.I32_GT_U);
@@ -771,6 +829,9 @@ final class WasmStringRuntimeBuilder {
 		set(w, found);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
+		if (framedNames) {
+			w.write(Instruction.END);
+		}
 		get(w, found);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);

@@ -46,6 +46,13 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * {@code (load (merge-pathnames "src/a.lisp" *load-truename*))} name the same file on the
  * interpreter as on SBCL, and let the compilers fold it and splice the file
  * ({@link #thePortableLoadIdiomSplicesTheEntrysSourcesOnEveryBackend}).
+ *
+ * <p>
+ * A file is read with the {@code *features*} the files loaded before it left
+ * ({@code .kb/reader-features.md}): a push in a component decides the {@code #+} of the
+ * next component and of a later top-level load, and a push the program computes decides
+ * the file loaded after it -- cl-environments' {@code :cl-environments-full}, on which
+ * every later walker file guards.
  */
 class LoadContextE2eTest extends AsdfLibraryE2eSupport {
 
@@ -94,10 +101,15 @@ class LoadContextE2eTest extends AsdfLibraryE2eSupport {
 			;; The idiom that motivated it: a data file read at read time from beside the
 			;; source that ships it, through (or *compile-file-pathname* *load-truename*).
 			(print *one-data*)
+			;; What a file pushed onto *features* decides the reads of the files loaded
+			;; after it: the next component, the next top-level load, and -- for a push
+			;; the program computes -- the file plain.lisp loads after its push.
+			(print (list (two-read) *plain-saw-one* (plain-next-read) (and (member :lc-demo-plain *features*) t)))
 			""".formatted(PLAIN_FILE);
 
 	private static final List<String> EXPECTED = List.of("(NIL NIL)", "(NIL NIL)", "T", "T", "T", "\"helper.lisp\"",
-			"T", "T", "(\"" + PLAIN_FILE + "\" T T)", "T", "T", "T", "\"lc-demo-data\"");
+			"T", "T", "(\"" + PLAIN_FILE + "\" T T)", "T", "T", "T", "\"lc-demo-data\"",
+			"(:ONE-SEEN :ONE-SEEN :PLAIN-SEEN T)");
 
 	@Override
 	protected String systemDir() {

@@ -1403,8 +1403,9 @@ public final class AsdfSystems {
 	 * at parse time to fill a field a User-Agent string prints -- the {@code #.} rule is
 	 * that the consumer decides, and this consumer decides not to.
 	 * <p>
-	 * {@code :entry-point}, {@code :build-operation} and {@code :build-pathname} drive
-	 * {@code program-op}, which has no meaning here: an image is not dumped.
+	 * {@code :entry-point}, {@code :build-operation} and {@code :build-pathname} are
+	 * metadata too: nothing loads by them, and {@code asdf:make} reads them back as
+	 * written to build the executable ({@code .kb/asdf.md}, "Building an executable").
 	 */
 	private static final Set<String> IGNORED_OPTIONS = Set.of(":NAME", ":LONG-NAME", ":DESCRIPTION",
 			":LONG-DESCRIPTION", ":VERSION", ":AUTHOR", ":MAINTAINER", ":LICENSE", ":LICENCE", ":HOMEPAGE",

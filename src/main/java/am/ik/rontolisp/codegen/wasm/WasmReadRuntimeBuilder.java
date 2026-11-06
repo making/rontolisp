@@ -989,8 +989,8 @@ final class WasmReadRuntimeBuilder {
 		// the frontend, and a float token's digits stay exact) ; i64 local: MV=21 ; i32
 		// locals:
 		// STRIP=22 (a leading '+' was dropped from the token), ESCAPED=23 (the token
-		// holds an escape, so it names a symbol), and in a module that asks %read-home
-		// TOKEN=24 (where the token started, ahead of a standard qualifier). The
+		// holds an escape, so it names a symbol), COLONS=24 (_rd_token's second result)
+		// and TOKEN=25 (where the token started, ahead of a standard qualifier). The
 		// classifiers reuse the i32 slots freely between attempts.
 		boolean home = ctx.readHome() >= 0;
 		w.write(6);
@@ -1004,11 +1004,11 @@ final class WasmReadRuntimeBuilder {
 		w.writeRefType(true, Type.EQ.code());
 		w.write(1);
 		w.write(Type.I64);
-		w.write(home ? 3 : 2);
+		w.write(4);
 		w.write(Type.I32);
 		final int CAR = 0, CDR = 1, BYTE = 2, START = 3, LEN = 4, OFF = 5, POS = 6, ESC = 7, HP = 8, NEG = 9, ACC = 10,
 				VALID = 11, SAWDOT = 12, C2 = 13, SAWE = 14, EXPVAL = 15, EXPSGN = 16, EXPDIGIT = 17, FVAL = 18,
-				FPOW = 19, ACC64 = 20, MV = 21, STRIP = 22, ESCAPED = 23, TOKEN = 24;
+				FPOW = 19, ACC64 = 20, MV = 21, STRIP = 22, ESCAPED = 23, COLONS = 24, TOKEN = 25;
 
 		emitSkipWs(w, ctx);
 		// if cursor >= end: the text ran out where a datum is due
@@ -1093,6 +1093,7 @@ final class WasmReadRuntimeBuilder {
 		// left as-is, a documented WASM runtime-read limitation)
 		loadMem32(w, CURSOR);
 		call(w, WasmLispCompiler.FUNC_RD_TOKEN);
+		setLocal(w, COLONS);
 		setLocal(w, START);
 		getLocal(w, START);
 		w.write(Instruction.I32_NE);
@@ -1102,11 +1103,43 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, START);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, LEN);
+		// Colons all escaped (|a:b|): that member of the current package, cl-user's
+		// spelling of which keeps its qualifier (LispSymbol.clUserSpelling)
+		getLocal(w, COLONS);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		emitFramedClUserSymbol(w, ctx, START, LEN, OFF);
 		if (home) {
-			getLocal(w, START);
-			setLocal(w, TOKEN);
+			setLocal(w, CAR);
+			emitNull(w);
+			getLocal(w, CAR);
+			emitNull(w);
+			call(w, ctx.readHome());
 		}
+		w.write(Instruction.RETURN);
+		end(w);
+		getLocal(w, START);
+		setLocal(w, TOKEN);
 		emitDropStandardQualifier(w, START, LEN, OFF, POS);
+		// cl-user::|b:c| keeps the qualifier too
+		getLocal(w, COLONS);
+		i32(w, 1);
+		w.write(Instruction.I32_AND);
+		getLocal(w, START);
+		getLocal(w, TOKEN);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		getLocal(w, START);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, ':');
+		w.write(Instruction.I32_NE);
+		ifVoid(w);
+		emitFramedClUserSymbol(w, ctx, START, LEN, OFF);
+		w.write(Instruction.RETURN);
+		end(w);
+		end(w);
 		// A token holding an escape names a symbol; every other one may read as a number.
 		getLocal(w, ESCAPED);
 		w.write(Instruction.I32_EQZ);
@@ -1242,6 +1275,50 @@ final class WasmReadRuntimeBuilder {
 		}
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/**
+	 * Pushes the {@code cl-user} symbol named by the bytes at (START, LEN), a name
+	 * holding a colon, spelled {@link LispSymbol#CL_USER_EMPTY_NAME} followed by the
+	 * name: the spelling is assembled in the scratch at {@code HEAP_PTR}, which
+	 * {@code _intern} copies on a miss, as {@code _intern_sym} does. Clobbers OFF.
+	 */
+	private static void emitFramedClUserSymbol(WasmWriter w, ReadCtx ctx, int START, int LEN, int OFF) {
+		int prefix = LispSymbol.CL_USER_EMPTY_NAME.length();
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, OFF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, OFF);
+			getLocal(w, LEN);
+			w.write(Instruction.I32_ADD);
+			i32(w, prefix);
+			w.write(Instruction.I32_ADD);
+		});
+		getLocal(w, OFF);
+		i32(w, ctx.emptyNameOffset());
+		i32(w, prefix);
+		w.write(Instruction.MISC_PREFIX);
+		w.writeUnsignedLeb128(Instruction.MEMORY_COPY);
+		w.write(0x00, 0x00);
+		getLocal(w, OFF);
+		i32(w, prefix);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, START);
+		getLocal(w, LEN);
+		w.write(Instruction.MISC_PREFIX);
+		w.writeUnsignedLeb128(Instruction.MEMORY_COPY);
+		w.write(0x00, 0x00);
+		getLocal(w, OFF);
+		getLocal(w, LEN);
+		i32(w, prefix);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INTERN);
+		getLocal(w, LEN);
+		i32(w, prefix);
+		w.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrBuildCall(w);
 	}
 
 	/**
@@ -3447,9 +3524,10 @@ final class WasmReadRuntimeBuilder {
 		return body.toByteArray();
 	}
 
-	// _rd_token () -> i32: scans the maximal symbol-char run from the cursor, upcasing
-	// a-z bytes in place (uppercase-canonical), and returns the start offset; the end is
-	// the cursor.
+	// _rd_token () -> (i32, i32): scans the maximal symbol-char run from the cursor,
+	// upcasing a-z bytes in place (uppercase-canonical), and returns the start offset;
+	// the end is the cursor. The second result says what colons the name holds: bit 0 an
+	// escaped one, bit 1 a package marker (CLHS 2.3.5: only an unescaped colon is one).
 	//
 	// A token holding an escape (CLHS 2.1.4.6, 2.1.4.7) leaves only its name, its escaped
 	// characters as they are: each escape shrinks the token, so its name ends at the
@@ -3459,9 +3537,9 @@ final class WasmReadRuntimeBuilder {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(1);
-		w.write(3);
+		w.write(4);
 		w.write(Type.I32);
-		final int START = 0, BYTE = 1, WR = 2;
+		final int START = 0, BYTE = 1, WR = 2, COLONS = 3;
 		loadMem32(w, CURSOR);
 		setLocal(w, START);
 		getLocal(w, START);
@@ -3489,7 +3567,7 @@ final class WasmReadRuntimeBuilder {
 		i32(w, '\\');
 		w.write(Instruction.I32_EQ);
 		ifVoid(w);
-		emitTokenEscapedByte(w, BYTE, WR, 2);
+		emitTokenEscapedByte(w, BYTE, WR, COLONS, 2);
 		br(w, 1);
 		end(w);
 		// |...|: every byte up to the next bar as it is, \c inside it too
@@ -3516,10 +3594,10 @@ final class WasmReadRuntimeBuilder {
 		i32(w, '\\');
 		w.write(Instruction.I32_EQ);
 		ifVoid(w);
-		emitTokenEscapedByte(w, BYTE, WR, 4);
+		emitTokenEscapedByte(w, BYTE, WR, COLONS, 4);
 		br(w, 1);
 		end(w);
-		emitTokenStore(w, BYTE, WR);
+		emitTokenStore(w, BYTE, WR, COLONS, 1);
 		br(w, 0);
 		end(w); // bars loop
 		end(w);
@@ -3537,7 +3615,7 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_SUB);
 		setLocal(w, BYTE);
 		end(w);
-		emitTokenStore(w, BYTE, WR);
+		emitTokenStore(w, BYTE, WR, COLONS, 2);
 		br(w, 0);
 		end(w); // loop
 		end(w); // block
@@ -3564,12 +3642,27 @@ final class WasmReadRuntimeBuilder {
 		setLocal(w, START);
 		end(w);
 		getLocal(w, START);
+		getLocal(w, COLONS);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
 
-	/** Emits {@code *wr++ = byte} of a token's name. */
-	private static void emitTokenStore(WasmWriter w, int BYTE, int WR) {
+	/** The body of an unused {@code _rd_token}: {@code () -> (i32, i32)}. */
+	static byte[] buildRdTokenStub() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0);
+		i32(w, 0);
+		i32(w, 0);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Emits {@code *wr++ = byte} of a token's name, setting {@code colon} in COLONS for a
+	 * colon.
+	 */
+	private static void emitTokenStore(WasmWriter w, int BYTE, int WR, int COLONS, int colon) {
 		getLocal(w, WR);
 		getLocal(w, BYTE);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
@@ -3577,6 +3670,14 @@ final class WasmReadRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		setLocal(w, WR);
+		getLocal(w, COLONS);
+		getLocal(w, BYTE);
+		i32(w, ':');
+		w.write(Instruction.I32_EQ);
+		i32(w, colon);
+		w.write(Instruction.I32_MUL);
+		w.write(Instruction.I32_OR);
+		setLocal(w, COLONS);
 	}
 
 	/**
@@ -3585,7 +3686,7 @@ final class WasmReadRuntimeBuilder {
 	 * @param leave the {@code br} depth out of the scan from inside the emitted
 	 * {@code if}
 	 */
-	private static void emitTokenEscapedByte(WasmWriter w, int BYTE, int WR, int leave) {
+	private static void emitTokenEscapedByte(WasmWriter w, int BYTE, int WR, int COLONS, int leave) {
 		loadMem32(w, CURSOR);
 		loadMem32(w, END_ADDR);
 		w.write(Instruction.I32_GE_S);
@@ -3596,7 +3697,7 @@ final class WasmReadRuntimeBuilder {
 		curByte(w);
 		setLocal(w, BYTE);
 		advanceCursor(w);
-		emitTokenStore(w, BYTE, WR);
+		emitTokenStore(w, BYTE, WR, COLONS, 1);
 	}
 
 	// _rd_memeq (a, b, len) -> i32: byte-range equality.
@@ -4985,6 +5086,7 @@ final class WasmReadRuntimeBuilder {
 		emitErr(w, ctx, ctx.msgStructEmpty());
 		end(w);
 		call(w, WasmLispCompiler.FUNC_RD_TOKEN);
+		w.write(Instruction.DROP);
 		setLocal(w, NSTART);
 		loadMem32(w, CURSOR);
 		getLocal(w, NSTART);
@@ -5293,6 +5395,7 @@ final class WasmReadRuntimeBuilder {
 		end(w);
 		end(w);
 		call(w, WasmLispCompiler.FUNC_RD_TOKEN);
+		w.write(Instruction.DROP);
 		setLocal(w, SSTART);
 		loadMem32(w, CURSOR);
 		getLocal(w, SSTART);

@@ -299,11 +299,20 @@ and nothing else tells them apart, so `cl-user`'s `||` is spelled `CL-USER::`
   threw on the JVM, and on wasm `(intern "")` kept one byte behind a zero length while a literal `'||`
   trapped.
 - `set` takes it (SBCL does): it was refused only for the empty string's sake.
+- **A `cl-user` name holding a colon is spelled the same way** (`LispSymbol.clUserSpelling`, 2026-11-06):
+  `|a:b|` is `CL-USER::a:b`, since a bare `a:b` is `A`'s `B` to every reader of a member name or a home.
+  The readers frame it (`.kb/read-load-streams.md`, "Emitted reader: frontend parity", the colon bullet), and
+  so do `intern` / `find-symbol` with `cl-user` named (`LispMacroExpander.internSpellingBuild`, the
+  computed designator's `cl-user` arm, `builtSpelling`); the printers print it bare like the empty name,
+  and `%symbol-print-prefix` asks about its member (`collectBareSymbols`, `symbolPrintTable`'s `printsBare`).
+  The one-argument `intern` does not, on any backend: it takes a name holding a colon as spelled
+  (`internSpellingExact`), the implementation's canonical spellings and `":KW"` among them, so
+  `(intern "a:b")` is `A`'s `B` (the model's, below).
 - Limits: `(intern "CL-USER::")` is this symbol, as `(intern "P::X")` is `P::X` (the model's). An instance
   of a `(defstruct ||)` prints `#S( :A 1)` where SBCL prints `#S(|| :A 1)`: an instance's type name is
   printed raw on all four, `(defstruct |a b|)`'s too. A run-time read under another package answers
   that package's, like any token.
-- Pinned by ci-spec `the-empty-name-is-a-symbol-like-any-other`.
+- Pinned by ci-spec `the-empty-name-is-a-symbol-like-any-other`, `a-colon-inside-a-multiple-escape-is-a-constituent`.
 
 ## A definition IS an interning: the find-symbol namespace probe
 - **Interpreter `find-symbol` probes the global namespaces under the canonical spelling**

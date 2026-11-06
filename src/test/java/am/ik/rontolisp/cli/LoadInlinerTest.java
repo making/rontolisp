@@ -346,10 +346,17 @@ class LoadInlinerTest {
 
 	@Test
 	void requiredProgramCompilesAndRunsOnJvm() throws Exception {
-		List<LispVal> program = inline("(require :util) (require :util) (print (u-sq 7))",
+		// A require below the top level loads nothing at run time: a provided module
+		// answers its name, an absent one signals when the call runs.
+		List<LispVal> program = inline("""
+				(require :util) (require :util)
+				(defun again (m) (require m))
+				(print (list (u-sq 7) (again :util) (again "asdf")
+				             (handler-case (again :nope) (error (e) (princ-to-string e)))))""",
 				Map.of("util.lisp", "(provide :util) (defun u-sq (x) (* x x))"));
 		byte[] classBytes = new JvmLispCompiler("TestRequire").compile(program);
-		assertThat(runMain(classBytes, "TestRequire")).isEqualTo("49");
+		assertThat(runMain(classBytes, "TestRequire")).isEqualTo("(49 UTIL ASDF \"REQUIRE cannot load module NOPE"
+				+ " at run time on the compiled backends (modules are spliced at compile time)\")");
 	}
 
 	@Test
@@ -693,7 +700,8 @@ class LoadInlinerTest {
 		// dexador.asd's opener: the .asd-read-time dependency resolves through the
 		// ordinary ladder (trivial-features is a built-in shim), splices BEFORE
 		// :depends-on, and its announced :unix is in force while this system's own
-		// component files are read -- but not for the dependency, which declares its own.
+		// component files are read. What the shim pushed reaches the dependency read
+		// after it as well, as *features* carries it to every later read in CL.
 		List<LispVal> program = LoadInliner.inline(
 				LispReader.readAllFromString("(asdf:load-system :app) (print (which)) (print (dep-which))",
 						Features.JVM),
@@ -702,10 +710,10 @@ class LoadInlinerTest {
 								+ " :components ((:file \"main\")))", //
 						"main.lisp", "(defun which () #+unix \"unix\" #-unix \"unannounced\")", //
 						"dep.asd", "(defsystem :dep :components ((:file \"dep\")))", //
-						"dep.lisp", "(defun dep-which () #+unix \"leaked\" #-unix \"clean\")")),
+						"dep.lisp", "(defun dep-which () #+unix \"after the shim\" #-unix \"ahead of it\")")),
 				null, List.of(), Features.JVM);
 		byte[] classBytes = new JvmLispCompiler("TestDefsystemDependsOn").compile(program);
-		assertThat(runMain(classBytes, "TestDefsystemDependsOn")).isEqualTo("\"unix\"\n\"clean\"");
+		assertThat(runMain(classBytes, "TestDefsystemDependsOn")).isEqualTo("\"unix\"\n\"after the shim\"");
 	}
 
 	@Test

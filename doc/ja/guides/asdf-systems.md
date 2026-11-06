@@ -195,9 +195,11 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   はそのファイルの宣言です。push より後にファイルが定義する全システムで成立し
   (`:if-feature` / `(:feature ...)` 句とコンポーネントファイルの読み取りの両方で、
   各システムに `:rontolisp-features (:my-feature)` を書いたのと同じです)、
-  `*features*` には残りません (本物の ASDF では残ります)。そのため `.asd` や
-  コンポーネントが読むフィーチャーは、どのシステムが先にロードされたかに左右されません。
-  依存システムには及びません (それぞれが自分で宣言します)。ファイルが
+  `*features*` には残りません (本物の ASDF では残ります)。そのため他のシステムには届かず、
+  `.asd` が読むフィーチャーは、どのシステムが先にロードされたかに左右されません。
+  依存システムには及びません (それぞれが自分で宣言します)。コンポーネントファイルでの push
+  は普通の push です: `*features*` に残り、その後に読まれるすべてのファイルがそれを見ます
+  ([データ型](../reference/data-types.md#comments-feature-conditionals-and-features)を参照)。ファイルが
   `asdf:load-system` でロードするシステムは、ファイルの外からロードしたのと同じ
   扱いになります: ファイルのロード開始時のパッケージで読まれ、そのシステムが push
   したフィーチャーは残ります。
@@ -239,8 +241,9 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   `.asd` ファイルが読む ASDF の `(:read-file-form ...)` と `(:read-file-line ...)`
   の間接参照、それ以外の任意のリテラルフォーム (nil になります) で構いません。`:around-compile`、
   `:encoding :utf-8`/`:default`、`:weakly-depends-on` は有効で、`program-op` 用の
-  オプション (`:entry-point`、`:build-operation`、`:build-pathname`) は無視されます
-  ([`asdf:defsystem`](../reference/functions/asdf-defsystem.md) を参照)。それ以外
+  オプション (`:entry-point`、`:build-operation`、`:build-pathname`) は `asdf:make` が
+  ビルドする実行ファイルを決めます
+  ([ASDF システムから実行ファイルをビルドする](../compiling/asdf-programs.md) を参照)。それ以外
   (`:output-files` など) は句を名指しするエラーです。
 - `:class :package-inferred-system` をサポートします — ningle、rove、
   array-operations が採用しているスタイルです。このクラスのシステムは
@@ -342,7 +345,8 @@ $ rontolisp -e '(ql:update-dist "ultralisp")'
   コンポーネントのロードのたびにその周りで実行されます。fiveam のファイルローカルな
   `*suite*` は、asdf-flv の `:around` メソッドによるものです。
   [`asdf:operate`](../reference/functions/asdf-operate.md) は `load-op`
-  (`load-system`) か `test-op` (`test-system`) を perform します。
+  (`load-system`)、`test-op` (`test-system`)、`program-op` (インタプリタでの
+  システムの実行ファイル) を perform します。
   `asdf:make-operation`、`asdf:input-files`、`asdf:output-files`、
   `asdf:source-file-type`、`asdf:operation-done-p` は、ライブラリが定義するメソッドのために存在します。
   `asdf/interface` と本物の ASDF の内部パッケージ (`asdf/component`、`asdf/action`
@@ -405,7 +409,7 @@ Quicklisp ライブラリの中には、rontolisp 側を知り得ない実装ご
 | `uiop` | ASDF の移植性レイヤ。15 個のサブパッケージと 429 個のエクスポートとして登録されています。実装済みのものは **[uiop パッケージ](../reference/uiop.md)** を参照してください。これ以外のエクスポートは解決はされ、操作名とともに `uiop:not-implemented-error` をシグナルするので、名前を挙げているだけのライブラリも読み込めます |
 | `swank` | `swank:create-server` と `swank:stop-server` だけを持ちます。インタプリタでは、`rontolisp --swank` と同じ [SWANK サーバ](../getting-started/swank.md#from-a-running-program)をプログラム自身のイメージ上で起動・停止します。コンパイルしたプログラムでは `create-server` はエラーを送出し、`stop-server` は `nil` を返します。本物の swank は SLIME のサーバ側であり、その `.asd` は処理系ごとにバックエンドファイルを 1 つ選び、rontolisp 用のものはありません -- シムがないと `(ql:quickload "clack")` は SLIME の tarball を取得してそこで失敗します |
 | `mgl-pax-bootstrap` | [mgl-pax](https://github.com/melisgl/mgl-pax) でドキュメント化されたライブラリをロードできるようにする、`mgl-pax` パッケージ (ニックネーム `pax`) のスタブです (uuid の依存である trivial-utf-8 がハード依存しています)。`pax:define-package` は `defpackage` として働き、`pax:defsection` はセクション名を `nil` の変数として定義し、**さらにセクションの `(シンボル ロケーティブ)` エントリを export します** — mgl-pax のドキュメント化されたデフォルトであり、この種のライブラリが公開 API を export する方法です。PAX-World 登録ヘルパーは `nil` を返す何もしない関数です。ドキュメントは生成されません |
-| `trivial-features` | 本家 trivial-features が CFFI で調べて行うフィーチャー宣言を、調査なしで提供します: `:defsystem-depends-on` (または `:depends-on`) にこの名前を書くと、依存する側のシステム自身の句とコンポーネントファイルに対して **`:unix`** と **`:little-endian`** が宣言され、実行時には両方が `*features*` に push されます。`:unix` は、どのバックエンドでもファイル/パス/環境変数まわりが POSIX 形であり Windows ではないためです。`:little-endian` は、プログラムがマシンのレイアウトを見られる唯一の場所 (WASM のリニアメモリ、リアクタの `:bytes` 境界) が wasm 仕様でリトルエンディアンだからです。**`:64-bit`** は、どのバックエンドでも fixnum が64ビットであり、ポインタ相当の値はポインタが存在するところではすべて8バイトだからです — cffi の `types.lisp` はまさにこれを読んで `:size` の基底型を決めます。CPU 名 `:x86-64` は引き続きありません — rontolisp には記述すべき命令セットの表面がありません — `:32-bit` も同様で、rontolisp がそれであることはありません。本家の `.asd` はそもそもここではロードできません: 認識できない処理系に対して `(error "Sorry, your Lisp is not supported")` で終わるためです |
+| `trivial-features` | 本家 trivial-features が CFFI で調べて行うフィーチャー宣言を、調査なしで提供します: `:defsystem-depends-on` (または `:depends-on`) にこの名前を書くと、依存する側のシステム自身の句とコンポーネントファイルに対して **`:unix`**、**`:little-endian`**、**`:64-bit`** が宣言され、ロード時にはそれらが `*features*` に push されるので、その後に読まれるすべてのファイルもそれらを見ます。`:unix` は、どのバックエンドでもファイル/パス/環境変数まわりが POSIX 形であり Windows ではないためです。`:little-endian` は、プログラムがマシンのレイアウトを見られる唯一の場所 (WASM のリニアメモリ、リアクタの `:bytes` 境界) が wasm 仕様でリトルエンディアンだからです。`:64-bit` は、どのバックエンドでも fixnum が64ビットであり、ポインタ相当の値はポインタが存在するところではすべて8バイトだからです — cffi の `types.lisp` はまさにこれを読んで `:size` の基底型を決めます。プログラムがビルドしたマシンの上で動くインタプリタと JVM では、そのマシンも名指しします: `:darwin` と `:bsd` または `:linux`、そして `:arm64` または `:x86-64` です ([CFFI ガイド](cffi.md)を参照)。WASM のプログラムは WASI の上で動くので、これらはどれも付きません。`:32-bit` が宣言されることはありません。本家の `.asd` はそもそもここではロードできません: 認識できない処理系に対して `(error "Sorry, your Lisp is not supported")` で終わるためです |
 | `trivial-garbage` (ニックネーム `tg`) | GC ファイナライザを正直な no-op として提供します: `tg:finalize` は何も登録せずオブジェクトを返し、`tg:cancel-finalization` は `nil` を返す no-op です。`tg:make-weak-hash-table` は**通常の**ハッシュテーブルを返し (`:weakness` と `:weakness-matters` は捨て、残りの引数は `make-hash-table` に渡します)、`tg:hash-table-weakness` は `nil` を返します: 弱参照は Common Lisp の内側からは観測できないため、違いはテーブルがより多くを保持することだけです。`tg:make-weak-pointer`、`tg:weak-pointer-p`、`tg:weak-pointer-value` も同じ扱いで、オブジェクトは回収されません。GC フックを公開するバックエンドは存在せず — そして Common Lisp はファイナライザの実行を何も保証しないため、準拠したコンシューマは実行されなくても動作しなければなりません。`dbd-postgres` (このシムのコンシューマ) への実際的な帰結: リークした prepared statement は接続が閉じるまで残ります。`dbi:disconnect` を明示的に呼んでください |
 | `cl+ssl` | あらゆる CL の HTTP クライアント (dexador、drakma など) が TLS に到達するために使うライブラリのクライアント側を、[`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md) の上に提供します — 本物の cl+ssl は OpenSSL への CFFI バインディングで、ここではロードできません。`cl+ssl:make-ssl-client-stream` は接続済みストリームを `:hostname` (必須) に対して TLS へアップグレードします。`make-context :verify-mode` + `with-global-context` + `ssl-check-verify-p` が検証モードを運ぶため、クライアントの「insecure」ノブ (例: `dex:*not-verify-ssl*`) はプリミティブの `:insecure` に到達します。`ensure-initialized` は no-op です。裏付けのないものは受け取って無視するのではなく**エラーを通知**します: クライアント証明書 (`:key`/`:certificate`/`:password`、および `use-certificate-chain-file`) と `:verify-location` の CA パス — 代わりに `javax.net.ssl.trustStore` システムプロパティでトラストストアを指定してください。インタプリタ、JVM、WASM `--component` バックエンドで動きます (そこでは `tls-upgrade` が `wasi:tls@0.3.0-draft` の上で動き、実行フラグに `-S tls=y` を追加します。非 `nil` の insecure ノブはエラーを通知します — ドラフトには検証のオプトアウトがないため)。WASM Preview 1 (ネイティブ実行ファイルを含む) では `make-ssl-client-stream` が実行時にエラーを通知するため、`https://` の分岐を通らないクライアントはビルドできます |
 | `clack-handler-rontolisp` | [Clack](https://github.com/fukamachi/clack) のハンドラバックエンド: `run`/`stop` をエクスポートするパッケージ `clack.handler.rontolisp` で、Clack のアプリケーションプロトコルを rontolisp の組み込み HTTP サーバに橋渡しします。手動でロードすることはありません — `(clack:clackup app :server :rontolisp)` が実行時に名前で解決します (clack がパッケージ名から導出するドット区切りの綴り `clack.handler.rontolisp` でもこのシステムが応答します)。[Clack ガイド](clack.md)を参照 |
@@ -465,6 +469,7 @@ Preview 1、`--component` を意味します。**特筆事項**列はロード�
 | [fset](https://github.com/slburson/fset) 2.2.0 | 4 バックエンドすべて | 関数型のセット、マップ、シーケンス、バッグ、タプルを無改変のソースから `(ql:quickload "fset")` でロードします。印字形式も同じです。`with-lock` の `:wait? nil` は先へ進まずロックを待ちますが、遅れるのはタプルのキーの並べ替えだけです |
 | [sento](https://github.com/mdbergmann/cl-gserver) 3.4.2 | インタプリタ、JVM | アクター、エージェント、フューチャー、ルーターを無改変のソースから `(ql:quickload "sento")` でロードします。`.wasm` にもコンパイルできますが、ディスパッチャがスレッドなので `asys:make-actor-system` がエラーを通知します |
 | [clingon](https://github.com/dnaeon/clingon) 0.5.0 | 4 つ全て | コマンドライン解析 — `make-command`、`make-option`、`parse-command-line`、`print-usage`、`getopt`、`run`。with-user-abort を使うので、インタプリタでは Ctrl-C で `Received SIGINT, exiting.` を表示してステータス 130 で終了します |
+| [deploy](https://shinmera.com/docs/deploy/) 3.0.0 | インタプリタでビルドし、実行ファイルは JVM の jar、モジュール、ネイティブとして動く | `deploy-op` のシステムの `asdf:make`。ビルド時のフックはインタプリタで、boot と quit のフックは実行ファイルで走り、`deploy:data-directory` は実行ファイルのディレクトリです。[ASDF システムから実行ファイルをビルドする](../compiling/asdf-programs.md#deploy)を参照 |
 | [cl-reexport](https://github.com/takagi/cl-reexport) | 4 つ全て | パッケージと `:include` / `:exclude` がリテラルの `reexport-from` は、後続のフォームからその名前を読めるようにします。コンパイルパスでは、パッケージやリストを計算する呼び出しは通常の呼び出しになり、何も変更しません。コンパイル済みプログラムのパッケージは固定されているためです |
 | [iterate](https://gitlab.common-lisp.net/iterate/iterate) 1.6.0 | 4 つ全て | Jonathan Amsterdam の反復 DSL を無改変ソースから `(ql:quickload "iterate")` でロードします — `iter`/`iterate` と、数値ドライバ (`from`/`to`/`downto`/`below`/`by`)、シーケンスドライバ (`in`、`on`、`in-string`、`in-vector`、`in-hashtable`)、アキュムレータ (`into` の有無両方の `collect`/`collecting`、`sum`、`multiply`、`maximize`、`minimize`、`counting`、`always`、`thereis`、`appending`、`reducing`)、制御節 (`repeat`、`with`、`while`、`until`、`if-first-time`、`finally`)、および `(in outer ...)` で名前付きの外側へ渡すネストした `iter`。純粋な計算に対するマクロで依存もないため、**4 つのバックエンドすべて**で動きます。節の先頭は通常のシンボルなので、認識させるのは `iterate:` 修飾ではなく `(use-package :iterate)` です — SBCL と同じです |
 | [contextl](https://github.com/pcostanza/contextl) (Quicklisp 2024-10-12) | 4 つ全て | コンテキスト指向プログラミングを無改変ソースから `(ql:quickload "contextl")` でロードします(レイヤー GC を含む)。`contextl-user` でも `contextl` でも使えます — `deflayer`(スーパーレイヤーを含む)、`:in` レイヤー・修飾子・`call-next-method` を使う `define-layered-function`/`define-layered-method`、`with-active-layers`/`with-inactive-layers`、`ensure-active-layer`、`active-layers`、`layer-active-p`、`standard-layer-class` のサブクラスに対する `adjoin-layer-using-class`/`remove-layer-using-class` メソッド、contextl がクラス割り当てにする `deflayer` のスロット(contextl のグループ化レイヤーのように `find-layer` 経由で読む)、`special-class` のスペシャルスロットと `dletf`/`dreletf`・捕捉した動的環境、`adjoin-layer-using-class`/`remove-layer-using-class` に後から `define-layered-method` したときのレイヤーキャッシュの消去(その `defmethod` は [`add-method`](../reference/functions/add-method.md) に届きます)、`:reinitialize t` スロットの有無を変えたシングルトンクラスとレイヤーの再定義、`layer-makunbound`、`define-layered-class` のレイヤードアクセサ、`:in` でレイヤーを指定した再定義による部分クラス(スーパークラスとスロットを追加できます)、`slot-value-using-layer` で読む `:layered` スロット、後の定義が既存インスタンスに与えるスペシャルスロット。レイヤーを有効にするたびに匿名のレイヤークラスを実行時に作ります([`defclass`](../reference/special-forms/defclass.md) を参照)。既存インスタンスのスロットをスペシャルにするクラス再定義はインタプリタで動作します。コンパイルパスでは `eval` した再定義はクラスを定義しません |

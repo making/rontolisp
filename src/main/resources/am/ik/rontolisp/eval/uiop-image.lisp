@@ -12,10 +12,12 @@
 ;;;;   and no frames. Real UIOP's own fallback for an implementation with no backtrace
 ;;;;   API has the same shape. The fatal-condition quartet on top of them is real: it
 ;;;;   is *lisp-interaction*-gated error reporting, not frame walking.
-;;;; * The IMAGE itself cannot be dumped, restored or created here -- there is no
-;;;;   image, only a program and the artifact it compiled to -- so those three name
-;;;;   what is missing. The HOOKS are real anyway: they are just lists, a library may
-;;;;   register into one at load time, and only the act of dumping is impossible.
+;;;; * The IMAGE is a program. The interpreter dumps one by COMPILING it: the
+;;;;   systems the image loaded, then the start a restored image runs -- restore-image,
+;;;;   which is real on every backend because a compiled program starts fresh, exactly
+;;;;   the restored case. A compiled program has no compiler to dump with, and there are
+;;;;   no object files to create an image from, so those two refuse by name. The hooks
+;;;;   are real lists a library registers into at load time.
 
 ;;; The variables. Upstream's defaults, except *lisp-interaction*.
 ;;
@@ -27,9 +29,12 @@
 ;; that does not exist.
 (defvar uiop/image:*lisp-interaction* nil)
 
-;; No backend can dump an image (dump-image below says so), so this is nil forever --
-;; upstream's own value for a Lisp that was started, not restored.
+;; Nil in a program that was started; a dumped program sets it before it restores
+;; (:executable), as the heap upstream saves carries it.
 (defvar uiop/image:*image-dumped-p* nil)
+
+;; Upstream's internal state of the restore, which deploy reads with `::`.
+(defvar uiop/image::*image-restored-p* nil)
 
 (defvar uiop/image:*image-restore-hook* nil)
 
@@ -130,18 +135,68 @@
 (defun uiop/image:call-image-dump-hook ()
   (uiop/utility:call-functions uiop/image:*image-dump-hook*))
 
-;;; The image itself. There is none: rontolisp starts a program, runs it and ends,
-;;; and the compile backends emit an artifact from source rather than saving a heap.
-;;; Each of the three names the missing capability rather than half-doing it.
-(defun uiop/image:restore-image (&rest %ri-keys)
-  (declare (ignore %ri-keys))
-  (uiop/utility:not-implemented-error "UIOP/IMAGE:RESTORE-IMAGE"
-                                      "no backend restores a dumped image: a program is started from source, never resumed"))
+;;; The image itself. A dumped image is a compiled program (see the header), so
+;;; restore-image is upstream's start and dump-image the interpreter's compile.
 
-(defun uiop/image:dump-image (%di-filename &rest %di-keys)
-  (declare (ignore %di-filename %di-keys))
-  (uiop/utility:not-implemented-error "UIOP/IMAGE:DUMP-IMAGE"
-                                      "no backend can save its heap: compile the program instead (rontolisp file.lisp -o out)"))
+;; Upstream's body: the restore hooks, the prelude, then the entry point, whose
+;; first value is the exit status when nothing interactive is underneath (nil here,
+;; *lisp-interaction*). A dumped program ends in a call of this.
+(defun uiop/image:restore-image (&key ((:lisp-interaction %ri-interaction)
+                                       uiop/image:*lisp-interaction*)
+                                      ((:restore-hook %ri-restore-hook)
+                                       uiop/image:*image-restore-hook*)
+                                      ((:prelude %ri-prelude)
+                                       uiop/image:*image-prelude*)
+                                      ((:entry-point %ri-entry-point)
+                                       uiop/image:*image-entry-point*)
+                                      ((:if-already-restored %ri-if-restored)
+                                       '(cerror "RUN RESTORE-IMAGE ANYWAY")))
+  (when (and uiop/image::*image-restored-p* %ri-if-restored)
+    (uiop/utility:call-function %ri-if-restored
+                                "Image already ~:[being ~;~]restored"
+                                (eq uiop/image::*image-restored-p* t)))
+  (unless (and uiop/image::*image-restored-p* (null %ri-if-restored))
+    (uiop/image:call-with-fatal-condition-handler
+     (lambda ()
+       (setf uiop/image:*lisp-interaction* %ri-interaction)
+       (setf uiop/image:*image-restore-hook* %ri-restore-hook)
+       (setf uiop/image:*image-prelude* %ri-prelude)
+       (setf uiop/image::*image-restored-p* :in-progress)
+       (uiop/image:call-image-restore-hook)
+       (uiop/stream:standard-eval-thunk %ri-prelude)
+       (setf uiop/image::*image-restored-p* t)
+       (let ((%ri-results
+              (multiple-value-list
+               (if %ri-entry-point
+                   (uiop/utility:call-function %ri-entry-point)
+                   t))))
+         (if %ri-interaction
+             (values-list %ri-results)
+             (uiop/image:shell-boolean-exit (first %ri-results))))))))
+
+;; Upstream's protocol around the dump (the postlude, the dump hooks, the two
+;; flags), run by the %dump-image primitive once it knows it can dump: the
+;; interpreter's compiles the image -- the systems it loaded and the restore of
+;; *image-entry-point* -- to the artifact FILENAME names (no type is a native
+;; executable, .jar a JVM program, .wasm a module); a compiled program's refuses,
+;; having no compiler.
+(defun uiop/image:dump-image (%di-filename &key ((:output-name %di-output-name))
+                                           ((:executable %di-executable))
+                                           ((:postlude %di-postlude)
+                                            uiop/image:*image-postlude*)
+                                           ((:dump-hook %di-dump-hook)
+                                            uiop/image:*image-dump-hook*))
+  (declare (ignore %di-output-name))
+  (%dump-image (namestring %di-filename) %di-executable
+               (lambda ()
+                 (setf uiop/image:*image-dumped-p*
+                       (if %di-executable :executable t))
+                 (setf uiop/image::*image-restored-p* :in-regress)
+                 (setf uiop/image:*image-postlude* %di-postlude)
+                 (uiop/stream:standard-eval-thunk uiop/image:*image-postlude*)
+                 (setf uiop/image:*image-dump-hook* %di-dump-hook)
+                 (uiop/image:call-image-dump-hook)
+                 (setf uiop/image::*image-restored-p* nil))))
 
 (defun uiop/image:create-image (%ci-destination %ci-object-files &rest %ci-keys)
   (declare (ignore %ci-destination %ci-object-files %ci-keys))

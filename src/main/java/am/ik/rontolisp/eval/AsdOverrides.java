@@ -83,7 +83,12 @@ public final class AsdOverrides {
 			// that does not run, and names no MOP system because its package.lisp uses
 			// one MOP package per implementation (ClsqlForms). The replacement declares
 			// closer-mop and leaves uffi to the database backends.
-			Map.entry("clsql.asd", "clsql-closer-mop.asd"));
+			Map.entry("clsql.asd", "clsql-closer-mop.asd"),
+			// Not unparseable but MIS-DECLARED for a .wasm: its cffi dependency copies
+			// foreign libraries next to an executable, which a module has none of (its
+			// mezzano arm), and a .wasm refuses ffi: by name. The replacement skips cffi
+			// there; every other target reads upstream's dependencies.
+			Map.entry("deploy.asd", "deploy-rontolisp.asd"));
 
 	private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
 

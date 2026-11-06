@@ -1534,8 +1534,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodRefEntry stringCharAt = cp.methodRef(stringClass, "charAt", "(I)C");
 		MethodRefEntry stringLength = cp.methodRef(stringClass, "length", "()I");
 		MethodRefEntry stringSubstring = cp.methodRef(stringClass, "substring", "(II)Ljava/lang/String;");
-		// Used by _lispToDisplayString to cut a symbol's package qualifier / marker: the
-		// princ spelling is everything after the last colon.
+		// Used by the instance printers to cut a type name's package qualifier.
 		MethodRefEntry stringLastIndexOf = cp.methodRef(stringClass, "lastIndexOf", "(I)I");
 		MethodRefEntry objectEquals = cp.methodRef(objectClass, "equals", "(Ljava/lang/Object;)Z");
 		// CHARACTER runtime representation references (used by _lispToString /
@@ -4416,7 +4415,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Entry symEscName = cp.utf8Entry("_symEsc");
 		MethodRefEntry symEscMethod = cp.methodRef(thisClass, symEscName, strEscDescUtf);
 		MethodCode symEscCode = JvmRuntimeBuilder.buildSymEscBody(cp, stringLength, stringCharAt, stringIndexOf,
-				stringSubstring, stringReplace, stringConcat, objectEquals);
+				stringIndexOfFrom, stringSubstring, stringReplace, stringConcat, objectEquals);
 		MethodCode strEscCode = JvmRuntimeBuilder.buildStrEscBody(cp, stringLength, stringCharAt, stringIndexOf,
 				stringIndexOfFrom, stringSubstring, stringReplace, stringConcat, symEscMethod);
 		// The quote/function abbreviation _consToString(Display) applies ahead of the
@@ -4464,7 +4463,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodCode ltdsCode = JvmRuntimeBuilder.buildLispToDisplayStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, floatPrint, objectToString,
 				consToDisplayStringMethod, nilStr, funcPrint, stringCharAt, stringLength, stringSubstring,
-				stringLastIndexOf, ratioArrayClass, stringConcat, slashStr, charBoxClass, characterToString,
+				stringIndexOf, ratioArrayClass, stringConcat, slashStr, charBoxClass, characterToString,
 				arrayListClassForPrint, arrayToDisplayStringMethod, strvMethod, javaPrint, ffiPrint, futurePrint,
 				packedPrint, packedIntPrint, instPrint, hashPrint, princComplex);
 		@Nullable MethodCode instCode = usesInstances

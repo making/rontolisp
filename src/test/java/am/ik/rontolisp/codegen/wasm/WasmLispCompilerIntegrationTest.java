@@ -5136,7 +5136,8 @@ class WasmLispCompilerIntegrationTest {
 		// as the interpreter and the JVM: the hooks are real lists (only the act of
 		// DUMPING is impossible), fatal-condition is a deftype over serious-condition a
 		// runtime typep matches, the backtrace family prints the condition and no frames,
-		// and the three image operations name what is missing.
+		// a compiled program dumps and creates no image, and restore-image is upstream's
+		// start.
 		String source = """
 				(uiop:register-image-dump-hook 'a)
 				(uiop:register-image-dump-hook 'b)
@@ -5155,9 +5156,12 @@ class WasmLispCompilerIntegrationTest {
 				         (uiop:raw-print-backtrace :stream s)))
 				(print (list (handler-case (uiop:dump-image "x.img")
 				               (uiop:not-implemented-error () :dump-image))
-				             (handler-case (uiop:restore-image) (uiop:not-implemented-error () :restore-image))
 				             (handler-case (uiop:create-image "x" nil)
-				               (uiop:not-implemented-error () :create-image))))
+				               (uiop:not-implemented-error () :create-image))
+				             (multiple-value-list
+				              (uiop:restore-image :lisp-interaction t :entry-point (lambda () (values :entered 2))))
+				             (uiop:restore-image :lisp-interaction t :if-already-restored nil
+				                                 :entry-point (lambda () :again))))
 				""";
 		String expected = """
 				((B A) (:RESTORED) NIL NIL)
@@ -5165,7 +5169,7 @@ class WasmLispCompilerIntegrationTest {
 				"boom
 				second
 				"
-				(:DUMP-IMAGE :RESTORE-IMAGE :CREATE-IMAGE)""";
+				(:DUMP-IMAGE :CREATE-IMAGE (:ENTERED 2) NIL)""";
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(source, Features.WASM), Features.WASM))).isEqualTo(expected);
 		assertThat(compileAndRunComponent(source)).isEqualTo(expected);

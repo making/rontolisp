@@ -25,6 +25,8 @@ sections:
         title: Compile to WASM
       - file: compiling/native.md
         title: Compile to a Native Executable
+      - file: compiling/asdf-programs.md
+        title: Build an Executable from an ASDF System
       - file: compiling/dynamic.md
         title: Dynamic (Late Binding)
       - file: compiling/warnings.md

@@ -1731,6 +1731,16 @@ cases:
   # nothing. SBCL's answers but for get-output-stream-string's
   # expected type (SBCL's internal STRING-OUTPUT-STREAM) and the standard stream a close leaves open
   # (StreamOperandErrorsFixture.PROGRAM).
+  - name: nested-require-loads-nothing-when-it-runs
+    source: |
+      ;; queues' make-queue autoloads an unloaded part with a require in a function
+      ;; body: a provided module (or asdf) answers its name, an absent one signals.
+      (provide :nrq-present)
+      (defun nrq-require (m) (require m))
+      (print (list (nrq-require :nrq-present) (nrq-require :asdf)
+                   (handler-case (nrq-require :nrq-absent) (error () :absent))))
+    expected: |
+      (NRQ-PRESENT ASDF :ABSENT)
   - name: load-and-stream-operators-signal-their-condition
     source: |
       (defvar *soe-1* (read-from-string "1"))
@@ -18369,6 +18379,13 @@ cases:
       (print (handler-bind ((error (lambda (c) (invoke-restart :five 1 2 3 4 5))))
                (restart-case (error "x")
                  (:five (a b c d e) (list a b c d e)))))
+      ;; A clause's lambda list binds as an ordinary one: an omitted &optional takes
+      ;; its default (deploy's (exit (&optional (exit-code 0)) ...)), &key too.
+      (defun ci-rs-exit (&rest args)
+        (handler-bind ((error (lambda (c) (apply #'invoke-restart 'ci-rs-exit args))))
+          (restart-case (error "x")
+            (ci-rs-exit (&optional (code 0 code-p) &key (why :none)) (list code code-p why)))))
+      (print (list (ci-rs-exit) (ci-rs-exit 3 :why :late)))
       ;; cerror evaluates its format arguments once, for the error and the report;
       ;; with-simple-restart's are evaluated only when the report prints.
       (print (let ((ci-rs-k 0) (ci-rs-msg nil))
@@ -18435,6 +18452,7 @@ cases:
       (:RECONNECTED 42)
       3
       (1 2 3 4 5)
+      ((0 NIL :NONE) (3 T :LATE))
       (:AFTER NIL 1 "problem 1")
       ((NIL T) 0)
       (:DONE NIL)
@@ -22266,13 +22284,21 @@ cases:
     source: |
       ;; coalton-impl/entry shadows compile and defines its own; cl's stays defined, in
       ;; this program and in every case around it that calls it.
-      (defpackage :ci-own-compile (:use :cl) (:shadow #:compile))
+      (defpackage :ci-own-compile (:use :cl) (:shadow #:compile #:macroexpand-1))
       (in-package :ci-own-compile)
       (defun compile (x) (list :own x))
       (print (list (compile 1) (funcall (cl:compile nil '(lambda (y) (+ y 1))) 41)))
+      ;; Its own macroexpand-1, which nothing defines, is undefined, and asking for it
+      ;; leaves cl's alone (cl-environments' cl-overrides): the interpreter loaded the
+      ;; compiled programs' stand-in for the member name, over cl's.
+      (print (handler-case (funcall (intern "MACROEXPAND-1" :ci-own-compile) '(when t 1))
+               (undefined-function (c) (cell-error-name c))))
+      (print (cl:macroexpand-1 '(when t 1)))
       (in-package :cl-user)
     expected: |
       ((:OWN 1) 42)
+      MACROEXPAND-1
+      (IF T 1 NIL)
   - name: a-cons-walk-refuses-the-values-that-are-no-cons
     source: |
       ;; An instance and a function value are Object[] on the JVM, as a cons is.
@@ -34017,12 +34043,28 @@ cases:
         (print (list (so-args-x a) (so-args-x (copy-so-args a)) (so-args-p a))))
       (defstruct (so-none (:constructor nil) (:copier nil) (:predicate nil)) x)
       (print (list (fboundp 'make-so-none) (fboundp 'copy-so-none) (fboundp 'so-none-p)))
+      ;; :named changes nothing on an untyped struct (queues' node); on a :type list or
+      ;; vector struct the name is element 0 and the predicate tests it.
+      (defstruct (so-node (:predicate so-node?) :named) left (active t))
+      (let ((n (make-so-node :left 1)))
+        (print (list (so-node? n) (so-node? 5) (so-node-active n) (consp n))))
+      (defstruct (so-nl (:type list) :named) a b)
+      (let ((l (make-so-nl :a 1 :b 2)))
+        (setf (so-nl-b l) 3)
+        (print (list l (so-nl-a l) (so-nl-p l) (so-nl-p '(x 1 2)) (so-nl-p 7) (copy-so-nl l))))
+      (defstruct (so-nv (:type vector) :named (:constructor so-nv (a))) a)
+      (let ((v (so-nv 4)))
+        (incf (so-nv-a v))
+        (print (list v (so-nv-a v) (so-nv-p v) (so-nv-p (vector)) (so-nv-p "s"))))
     expected: |
       (A T NIL)
       (1 99)
       (1 1 T)
       (2 2 T)
       (NIL NIL NIL)
+      (T NIL T NIL)
+      ((SO-NL 1 3) 1 T NIL NIL (SO-NL 1 3))
+      (#(SO-NV 5) 5 T NIL NIL)
   - name: generics-defined-in-a-top-level-let-close-over-it
     source: |
       ;; cl-qrencode's rs-ecc shape: defgeneric beside defmethod in a top-level let.
@@ -36072,6 +36114,45 @@ cases:
       (:EOF :EOF)
       (|| || T "" COMMON-LISP-USER::||)
       (ENS-P::|| NIL)
+  - name: a-colon-inside-a-multiple-escape-is-a-constituent
+    source: |
+      ;; CLHS 2.3.5: only an unescaped colon is a package marker, so |a:b| is one symbol named
+      ;; "a:b" in the current package, and the printer bars a colon a member holds.
+      (defpackage :ccm-p (:use :cl))
+      (defun ccm-show (x)
+        (list (symbol-name x) (package-name (symbol-package x)) (prin1-to-string x) (princ-to-string x)
+              (eq x (read-from-string (prin1-to-string x)))))
+      (print (ccm-show '|a:b|))
+      (print (ccm-show '|:x|))
+      (print (ccm-show 'ccm-p::|b:c|))
+      (print (ccm-show 'cl-user::|a\:b|))
+      (print (ccm-show (read-from-string "|a:b|")))
+      (print (ccm-show (read-from-string "a\\:b")))
+      (print (ccm-show (read-from-string "ccm-p::|b:c|")))
+      (print (ccm-show (intern "a:b" :cl-user)))
+      (print (list (eq '|a:b| (read-from-string "|a:b|")) (eq '|a:b| 'a\:b) (keywordp '|:x|) (keywordp :|a:b|)))
+      (print (list :|a:b| (make-symbol "a:b") (read-from-string ":|k:w|") (read-from-string "#:|u:v|")))
+      (print (list (read-from-string "(|?:| . 12)") (let ((*print-case* :downcase)) (prin1-to-string '(|A:B| abc)))))
+      (print (with-input-from-string (s "|m:n| rest") (list (read s) (read s))))
+      (in-package :ccm-p)
+      (print (list '|a:b| 'cl-user::|a:b| (read-from-string "|p:q|")
+                   (package-name (symbol-package (read-from-string "|p:q|")))
+                   (eq (read-from-string "|p:q|") '|p:q|)))
+      (in-package :cl-user)
+    expected: |
+      ("a:b" "COMMON-LISP-USER" "|a:b|" "a:b" T)
+      (":x" "COMMON-LISP-USER" "|:x|" ":x" T)
+      ("b:c" "CCM-P" "CCM-P::|b:c|" "b:c" T)
+      ("a:b" "COMMON-LISP-USER" "|a:b|" "a:b" T)
+      ("a:b" "COMMON-LISP-USER" "|a:b|" "a:b" T)
+      ("A:B" "COMMON-LISP-USER" "|A:B|" "A:B" T)
+      ("b:c" "CCM-P" "CCM-P::|b:c|" "b:c" T)
+      ("a:b" "COMMON-LISP-USER" "|a:b|" "a:b" T)
+      (T NIL NIL T)
+      (:|a:b| #:|a:b| :|k:w| #:|u:v|)
+      ((|?:| . 12) "(|A:B| abc)")
+      (|m:n| REST)
+      (|a:b| COMMON-LISP-USER::|a:b| |p:q| "CCM-P" T)
   - name: eval-expands-the-built-in-macros
     source: |
       (defun em-values (form) (multiple-value-list (eval form)))

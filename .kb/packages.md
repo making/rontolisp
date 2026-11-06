@@ -651,6 +651,13 @@ throws `LispPackageException` falls back to member matching. Same shape as `Libr
 resolved copy (`.kb/library-defun-pruning.md`); the other splice pre-passes trigger on a qualified
 name plus their own `in-package` tracking. Pinned by `LispPreludeLibraryTest`.
 
+The interpreter's lazy load of an entry on an unresolved name (`LispPreludeLibrary.isPreludeFunction`)
+matches the same way since 2026-11-06: the name must be the entry's own symbol (`definedName`).
+Member-matched, an undefined `pkg::macroexpand-1` of a package shadowing the cl name loaded the
+prelude's `macroexpand-1` -- the compiled programs' stand-in that signals -- over the interpreter's,
+for the rest of the run (cl-environments' `cl-overrides.lisp`, whose walker expands with
+`cl:macroexpand-1`). Pinned by ci-spec `a-package-of-its-own-compile-keeps-cls`.
+
 ## UserMacroExpander resolves through its own evaluator's resolver
 `UserMacroExpander.expand` resolves every top-level form via `macroEval.resolvePackages` before
 matching, so a `defmacro` under `(in-package P)` registers its canonical qualified name.

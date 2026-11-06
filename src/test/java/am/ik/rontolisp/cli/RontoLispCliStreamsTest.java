@@ -828,14 +828,16 @@ class RontoLispCliStreamsTest {
 	}
 
 	@Test
-	void aTestCommandLineThatCannotNameATargetExitsTwo() {
-		// 2, not 1: "the command was wrong" has to stay distinct from "a test failed",
-		// which is the whole point of the subcommand's exit code (as with `format`).
+	void aTestOrBuildCommandLineThatCannotNameATargetExitsTwo() {
+		// 2, not 1: "the command was wrong" has to stay distinct from "a test failed"
+		// (or a build), which is the whole point of the subcommand's exit code (as with
+		// `format`).
 		for (String[] args : List.of(new String[] { "test" }, new String[] { "test", "nope.lisp" },
-				new String[] { "test", "-r", "not a style", "x.lisp" })) {
+				new String[] { "test", "-r", "not a style", "x.lisp" }, new String[] { "build" },
+				new String[] { "build", "nope.asd" }, new String[] { "build", "app.lisp" })) {
 			String[] result = runReporting(args);
 			assertThat(result[0]).as("%s", String.join(" ", args)).isEqualTo("2");
-			assertThat(result[2]).as("%s", String.join(" ", args)).startsWith("rontolisp: test: ");
+			assertThat(result[2]).as("%s", String.join(" ", args)).startsWith("rontolisp: " + args[0] + ": ");
 		}
 	}
 

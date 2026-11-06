@@ -12527,6 +12527,12 @@ public final class LispNames {
 	public static final String TEMP_FILE_NAME = "%TEMP-FILE-NAME";
 
 	/**
+	 * The dump behind {@code uiop:dump-image}: the interpreter's compile of its image (a
+	 * Java built-in), a refusal in a compiled program (a prelude definition).
+	 */
+	public static final String DUMP_IMAGE_PRIMITIVE = "%DUMP-IMAGE";
+
+	/**
 	 * {@code uiop:get-pathname-defaults} ({@code uiop/filesystem}'s export) -- the
 	 * defaults relative names are resolved against. Lisp source in
 	 * {@code uiop-filesystem.lisp} reading {@code *default-pathname-defaults*} (initially

@@ -204,10 +204,12 @@ time", because the reader is the ONE layer the interpreter and all three compile
 at all (the scan is a second, provenance-free parse, `LispReader.readAllForScan`) and looping to a
 fixpoint.
 - **A literal keyword push widens the WHOLE file** (a `#+` above the push sees it too). A cross-file
-  announcement is a `.asd`'s, ASDF `:rontolisp-features`, or a built-in system's
-  (`trivial-features` -> `:unix`, `:little-endian`, and the HOST `:darwin`+`:bsd` / `:linux`, `:arm64` /
-  `:x86-64`, on JVM-family targets only) -- one channel, three spellings ([[asdf]]). **The host names are
-  in the ANNOUNCEMENT and not in the base sets**, keeping a `Features` constant the same on every machine.
+  ANNOUNCEMENT -- what reaches a system's clauses, parsed before anything of it loads -- is a `.asd`'s,
+  ASDF `:rontolisp-features`, or a built-in system's (`trivial-features` -> `:unix`, `:little-endian`,
+  `:64-bit`, and the HOST `:darwin`+`:bsd` / `:linux`, `:arm64` / `:x86-64`, on JVM-family targets only)
+  -- one channel, three spellings ([[asdf]]). **The host names are in the ANNOUNCEMENT and not in the
+  base sets**, keeping a `Features` constant the same on every machine. How a push reaches the files
+  read after it: the last bullet below.
 - **A COMPUTED push decides the forms below it, positionally, on all four** (2026-11-05; the note here said
   a compile backend could not, written before reading went form at a time). A push whose value or
   firing the program computes runs before the next form is read: coalton's
@@ -217,12 +219,34 @@ fixpoint.
   path's `ReadTimeImage` does the same, and opens for a source holding such a push
   (`FeaturePushes.computesAPush`, a walk of the scan; quoted data and a definition's body do not run). Its
   `Session.acceptTopLevel` runs the push whatever its `eval-when` situations, as a literal one announces
-  whatever its situations, so the four agree; real `compile-file` would not run a bare one. Same file only:
-  it reaches another file only through `*features*` at run time, as before. An image cannot run a form
-  needing what a later pass splices, and that push stays unseen on a compile path -- but for ASDF's
-  answers about systems, which the image takes from the compile path's registry since 2026-11-06
-  (coalton's eclector probe, [readtables.md](readtables.md), "The compile paths' read"). ci-spec
+  whatever its situations, so the four agree; real `compile-file` would not run a bare one. An image
+  cannot run a form needing what a later pass splices, and that push stays unseen on a compile path --
+  but for ASDF's answers about systems, which the image takes from the compile path's registry since
+  2026-11-06 (coalton's eclector probe, [readtables.md](readtables.md), "The compile paths' read"). ci-spec
   `reader-features-own-push-is-visible`.
+- **A push of either kind reaches every file read after it, on all four** (i82, 2026-11-06; until then
+  "same file only", and a run-time `(member :f *features*)` was true where the next file's `#+f` failed).
+  CL's `load` reads each form with `*features*` as it stands, so the next file starts from what the files
+  before it left. The interpreter: `LispEvaluator.sourceFeatures` -- the read set widened by what the live
+  `*features*` holds beyond it -- opens every source read (`loadFile`, `evalSource`, the REPL buffer, a
+  Swank request, the playground), and `featuresAddedSince` the file's open widens it per form as before.
+  A compile path: `LoadInliner.Reading.pushed()`, which a file's read opens with and widens with per
+  form -- the literal pushes of every form spliced so far (`FeaturePushes.announced`, followed in the
+  program's order, so a push AFTER a nested `load` does not reach that file) plus what the read-time
+  image ran (`ReadTimeImage.featuresPushed`, counted from the image's creation, no longer from the
+  file's open). **What does not take it**: a `.asd` read and the plan ([[asdf]], "The `.asd` read's
+  feature set"), the sources rontolisp ships (built-in systems' forms, leaf shims, the Lisp-source
+  libraries -- the `--feature` boundary), a `:rontolisp-features` declaration (stays per system: a
+  declaration, not a push), and a REMOVAL from the list (additive, as every widening). One consequence:
+  a built-in system's run-time push is a push like any other -- trivial-features' names reach every file
+  read after the shim loaded, a later dependency included, not only the system naming it. Consumer:
+  cl-environments 20250622, whose `walker/cl-environments.lisp` pushes `:cl-environments-full` and every
+  later walker file guards on it; it LOADS on the interpreter now (measured 2026-11-06; generic-cl stops
+  at i88's `setf compiler-macro-function`, and so does the JVM compile of cl-environments itself,
+  `cl-overrides.lisp:194`). Pinned by `LoadContextE2eTest` (a component's push read by the next component
+  and by a later top-level load, a computed push read by the file loaded after it; four backends),
+  `LoadInlinerTest.aDefsystemDependsOnEntryIsSplicedAheadOfTheDependenciesAndAnnouncesItsFeatures`,
+  `RontoLispCliTest.replEvaluatesExpression`.
 
 Pinned by `LispReaderTest.readOwnFeaturePush*`,
 `JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest`'s

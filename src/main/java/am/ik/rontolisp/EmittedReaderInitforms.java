@@ -142,10 +142,10 @@ public final class EmittedReaderInitforms {
 	 */
 	private static LispVal spelledInAnyPackage(LispVal value) {
 		return switch (value) {
-			// cl-user's empty name prints bare, whatever its spelling: the long qualifier
-			// has an empty member to print.
-			case LispSymbol sym -> LispSymbol.CL_USER_EMPTY_NAME.equals(sym.name())
-					? new LispSymbol("COMMON-LISP-USER::")
+			// cl-user's empty name and a name holding a colon print bare, whatever their
+			// spelling: the long qualifier is no spelling of theirs.
+			case LispSymbol sym -> LispSymbol.framedClUserMember(sym.name()) instanceof String member
+					? new LispSymbol("COMMON-LISP-USER::" + member)
 					: sym.name().indexOf(':') < 0 ? new LispSymbol(LispSymbol.CL_USER_EMPTY_NAME + sym.name()) : sym;
 			case LispCons list -> {
 				List<LispVal> elements = new ArrayList<>();

@@ -671,13 +671,15 @@ public final class LispPreludeLibrary {
 		// spelling: prin1-to-string keeps it, unlike symbol-name. A bare symbol is a cl
 		// or a cl-user one, and symbol-package tells them apart by the table of the
 		// standard names; the package walks, which look the symbol up in that home
-		// anyway, take the spelling's answer and carry no table. The interpreter
+		// anyway, take the spelling's answer and carry no table. A text a bar opens is a
+		// bare spelling's, |a:b| too: a qualifier prints as it is. The interpreter
 		// overrides symbol-package with the registry-backed version.
 		SOURCES.put(LispNames.SYMBOL_HOME_INTERNAL, """
 				(defun %symbol-home (symbol)
-				  (let* ((s (%unescaped-symbol-text (%prin1-to-string symbol)))
+				  (let* ((p (%prin1-to-string symbol))
+				         (s (%unescaped-symbol-text p))
 				         (n (length s)))
-				    (cond ((= n 0) :cl-user)
+				    (cond ((or (= n 0) (char= (char p 0) #\\|)) :cl-user)
 				          ((char= (char s 0) #\\:) :keyword)
 				          ((and (> n 1) (char= (char s 0) #\\#) (char= (char s 1) #\\:)) nil)
 				          (t (let ((idx (position #\\: s)))
@@ -2879,6 +2881,18 @@ public final class LispPreludeLibrary {
 				        (setq %dir-acc (cons %dir-e %dir-acc))))
 				    (mapcar #'pathname (nreverse %dir-acc))))
 				""");
+		// The dump behind uiop:dump-image (uiop-image.lisp): the interpreter compiles its
+		// image through the command line (a Java built-in of the same name, ImageDump);
+		// a compiled program has no compiler, so here it refuses before the protocol
+		// runs.
+		SOURCES.put(LispNames.DUMP_IMAGE_PRIMITIVE,
+				"""
+						(defun %dump-image (%dmp-file %dmp-executable %dmp-protocol)
+						  (declare (ignore %dmp-file %dmp-executable %dmp-protocol))
+						  (uiop/utility:not-implemented-error
+						   "UIOP/IMAGE:DUMP-IMAGE"
+						   "a compiled program has no compiler to dump an image with: dump it from the interpreter (rontolisp build SYSTEM, or asdf:make in a program rontolisp runs)"))
+						""");
 		// The uniqueness rule behind uiop:with-temporary-file: create the directory,
 		// then draw random names until one names nothing. Deliberately NOT seeded from
 		// the clock -- (random n) is the one entropy source every backend shares. The
@@ -5557,13 +5571,17 @@ public final class LispPreludeLibrary {
 	}
 
 	/**
-	 * Returns whether {@code name} designates a prelude function (bare or
-	 * package-qualified).
+	 * Returns whether {@code name} is the function a prelude entry defines: the entry's
+	 * own symbol ({@link #definedName}), not merely one of its member name. A package's
+	 * own symbol of that name -- a shadowed {@code cl} name, cl-environments'
+	 * {@code macroexpand-1} -- is another function, and loading the entry for it replaced
+	 * {@code cl}'s.
 	 * @param name a resolved function name
 	 * @return true if it is a prelude function
 	 */
 	public static boolean isPreludeFunction(String name) {
-		return SOURCES.containsKey(member(name));
+		String key = member(name);
+		return SOURCES.containsKey(key) && name.equals(definedName(key));
 	}
 
 	/**

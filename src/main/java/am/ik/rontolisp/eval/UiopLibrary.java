@@ -93,6 +93,14 @@ public final class UiopLibrary {
 	private static final String STUB_ARGS = "%UIOP-STUB-ARGS";
 
 	/**
+	 * Upstream's INTERNAL names a resource may define beside the inventory: state a
+	 * library reads with {@code ::} (deploy's image hooks read
+	 * {@code uiop/image::*image-restored-p*}). Each is selected and lazy-loaded like an
+	 * export, and none is counted as one.
+	 */
+	private static final Set<String> INTERNALS = Set.of("UIOP/IMAGE::*IMAGE-RESTORED-P*");
+
+	/**
 	 * The built tables: every uiop member's definitions, keyed by its home-qualified name
 	 * and in inventory order, plus the subset that is REALLY implemented (a Lisp
 	 * definition here, a Java built-in or a built-in macro expansion) rather than
@@ -219,7 +227,8 @@ public final class UiopLibrary {
 					collectSymbols(form, referenced);
 				}
 				for (String candidate : definedNames()) {
-					if (referenced.contains(candidate) && selected.add(candidate)) {
+					if ((referenced.contains(candidate) || reachedBySurfaceForm(candidate, referenced))
+							&& selected.add(candidate)) {
 						grew = true;
 					}
 				}
@@ -337,10 +346,12 @@ public final class UiopLibrary {
 				for (LispVal form : definitions.getOrDefault(name, List.of())) {
 					collectSymbols(form, referenced);
 				}
-				// A definition's own body reaches what it never names the way the program
-				// does: through a uiop macro it uses or a member whose helpers do
-				// (escape-token's with-output, escape-command's output-string).
 				for (String candidate : definitions.keySet()) {
+					// A selected definition reaches what a surface form IT names reaches,
+					// as the program does: restore-image's standard-eval-thunk reaches
+					// eval-input, whose prelude helper opens a file through a name no
+					// definition spells, and escape-token's with-output and
+					// escape-command's output-string the same way.
 					if ((referenced.contains(candidate) || reachedBySurfaceForm(candidate, referenced))
 							&& !alreadyDefined.contains(candidate) && selected.add(candidate)) {
 						grew = true;
@@ -523,6 +534,13 @@ public final class UiopLibrary {
 			else {
 				out.put(qualified, stubFor(qualified, entry));
 			}
+		}
+		for (String internal : INTERNALS) {
+			List<LispVal> defined = real.get(internal);
+			if (defined == null) {
+				throw new IllegalStateException("uiop-*.lisp no longer defines the internal " + internal);
+			}
+			out.put(internal, List.copyOf(defined));
 		}
 		Set<String> unknown = new LinkedHashSet<>(real.keySet());
 		unknown.removeAll(out.keySet());

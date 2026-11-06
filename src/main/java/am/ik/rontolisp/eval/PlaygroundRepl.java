@@ -98,7 +98,7 @@ public final class PlaygroundRepl {
 		this.buffer.reset();
 		SourceSession session = session();
 		try {
-			List<SourceSession.Step> steps = session.read(source, Features.INTERPRETER);
+			List<SourceSession.Step> steps = session.read(source, this.evaluator.sourceFeatures());
 			List<LispVal> values = List.of();
 			for (int s = 0; s < steps.size(); s++) {
 				values = evalStep(steps.get(s), s == steps.size() - 1, source);
@@ -129,8 +129,8 @@ public final class PlaygroundRepl {
 		this.buffer.reset();
 		try {
 			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
-			for (LispVal form : this.language.read(source, this.evaluator.features(), null, SourceStandards.DEFAULT,
-					this.loader)) {
+			for (LispVal form : this.language.read(source, this.evaluator.sourceFeatures(), null,
+					SourceStandards.DEFAULT, this.loader)) {
 				this.evaluator.eval(markers ? this.evaluator.resolveReadTimeEvalInCode(form) : form);
 			}
 		}
@@ -150,7 +150,7 @@ public final class PlaygroundRepl {
 		this.buffer.reset();
 		SourceSession session = session();
 		try {
-			for (SourceSession.Step step : session.read(source, Features.INTERPRETER)) {
+			for (SourceSession.Step step : session.read(source, this.evaluator.sourceFeatures())) {
 				List<LispVal> values = evalStep(step, true, source);
 				freshLine();
 				for (LispVal value : values) {

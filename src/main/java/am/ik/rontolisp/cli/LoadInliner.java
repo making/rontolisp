@@ -75,9 +75,9 @@ import org.jspecify.annotations.Nullable;
  * explicit second argument {@code (require NAME "path.lisp")} overrides the file mapping.
  * The provided-module set is threaded through the whole inline recursion, so the diamond
  * case (two files both requiring the same module) loads the module once. Unlike
- * {@code load}, a {@code require}/{@code provide} that is not a literal top-level form
- * cannot be deferred to runtime (the compiled runtime reader does not know them), so the
- * compilers reject any occurrence left after this pass.
+ * {@code load}, a {@code require} that is not a literal top-level form loads nothing at
+ * run time ({@link NestedRequires}); a {@code provide} cannot be deferred to runtime, so
+ * the compilers reject any occurrence left after this pass.
  *
  * <p>
  * The same pass also implements the compile-time side of the limited ASDF subset (see
@@ -277,6 +277,9 @@ public final class LoadInliner {
 			expandInto(program, result, ctx, new Origin(baseDir, entryFile, truename));
 			result.add(marker(LispNames.END_FILE));
 		}
+		// A require left in the program (nested, or a computed name) loads nothing at
+		// run time; the provided set is complete here.
+		result = NestedRequires.lower(result, ctx.provided());
 		// Fold the ASDF/UIOP pathname primitives + bundle with-open-file bodies of
 		// literal-path files: a real library evaluates them at load time to build a path
 		// pointing at a bundled data file (uax-15's precomputed-tables.lisp), and the
@@ -365,8 +368,10 @@ public final class LoadInliner {
 	}
 
 	/**
-	 * The read-time image the files are read with once one of them can change how source
-	 * reads ({@link ReadTimeImage}); {@code null} until then.
+	 * What the reads so far leave for the next one: the read-time image the files are
+	 * read with once one of them can change how source reads ({@link ReadTimeImage};
+	 * {@code null} until then), the package a {@code t} or {@code nil} token is read in,
+	 * and the features the forms spliced so far pushed.
 	 */
 	private static final class Reading {
 
@@ -374,6 +379,13 @@ public final class LoadInliner {
 		private final Features features;
 
 		@Nullable private ReadTimeImage image;
+
+		/**
+		 * The features the literal pushes among the forms followed so far announce
+		 * ({@link FeaturePushes#announced}), oldest first: what {@code *features*} holds
+		 * beyond the read set where {@code load} runs those forms.
+		 */
+		private final List<String> announced = new ArrayList<>();
 
 		/**
 		 * The packages a {@code t} or {@code nil} token is read in
@@ -410,7 +422,37 @@ public final class LoadInliner {
 					}
 					read.followReadPackageDirective(form);
 				}
+				for (String feature : FeaturePushes.announced(form)) {
+					if (!this.announced.contains(feature)) {
+						this.announced.add(feature);
+					}
+				}
 			}
+			ReadTimeImage image = this.image;
+			if (image != null) {
+				image.follow(program);
+			}
+		}
+
+		/**
+		 * What the forms followed so far pushed onto {@code *features*}: the literal
+		 * pushes, and what the read-time image ran. A file spliced next starts its read
+		 * with them, as {@code load} reads a file with the {@code *features*} the files
+		 * before it left ({@code .kb/reader-features.md}).
+		 * @return the feature names, without the leading colon
+		 */
+		List<String> pushed() {
+			ReadTimeImage image = this.image;
+			if (image == null) {
+				return this.announced;
+			}
+			List<String> pushed = new ArrayList<>(this.announced);
+			for (String feature : image.featuresPushed()) {
+				if (!pushed.contains(feature)) {
+					pushed.add(feature);
+				}
+			}
+			return pushed;
 		}
 
 	}
@@ -449,27 +491,26 @@ public final class LoadInliner {
 			return FormSource.of(language.read(source, ctx.features(), path, ctx.standards(), ctx.loader()));
 		}
 		Reading reading = ctx.reading();
+		// The read starts from what the forms spliced before it pushed, in any file.
+		reading.follow(out);
+		Features features = ctx.features().with(reading.pushed());
 		if (reading.image == null
-				&& (ReadTimeImage.changesSyntax(source) || FeaturePushes.computesAPush(source, ctx.features(), path))) {
+				&& (ReadTimeImage.changesSyntax(source) || FeaturePushes.computesAPush(source, features, path))) {
 			reading.image = new ReadTimeImage(reading.features, ctx.systems(), ctx.systemPackages(),
 					ctx.loadedSystems());
 		}
-		SourceLanguage.Forms forms = SourceLanguage.readForms(source, ctx.features(), path)
+		SourceLanguage.Forms forms = SourceLanguage.readForms(source, features, path)
 			.readingTOrNil(reading::readsClTOrNil);
-		List<Set<String>> featuresAtOpen = new ArrayList<>(1);
 		return () -> {
 			reading.follow(out);
 			ReadTimeImage image = reading.image;
 			if (image == null) {
-				return forms.next(null);
+				return forms.next(null, reading.pushed());
 			}
 			ReadSyntax syntax = image.syntax(out);
-			if (featuresAtOpen.isEmpty()) {
-				featuresAtOpen.add(image.features());
-			}
 			int calls = image.readerMacroCalls();
 			int start = forms.position();
-			LispVal form = forms.next(syntax, image.featuresPushedSince(featuresAtOpen.get(0)));
+			LispVal form = forms.next(syntax, reading.pushed());
 			// A form of the program's own a reader macro function read: the macro-time
 			// pass reads it again, for what the read leaves in the compiling image
 			// (ReaderMacroReads). A system's forms are loaded, not read again.

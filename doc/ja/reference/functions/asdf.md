@@ -12,7 +12,7 @@
 | `asdf:test-system` | `(asdf:test-system "my-app")` | システムをロードし、`:in-order-to` の test-op 連鎖をたどって、記録された `:perform (test-op ...)` 本体を実行する — `.asd` の標準テストエントリポイント |
 | `asdf:operate` | `(asdf:operate 'asdf:load-op :my-lib)` | システムに operation を perform する: `load-op` は `load-system`、`test-op` は `test-system` と同じ。それ以外の operation はエラーを通知する |
 | `asdf:perform` | `(defmethod asdf:perform :around ((o asdf:load-op) (c asdf:cl-source-file)) ...)` | 総称関数: システムのロードを構成する各動作 (各ファイルとシステムへの `prepare-op`・`compile-op`・`load-op`)。ライブラリのメソッドはコンポーネントのロードごとにその周りで実行される |
-| `asdf:oos` | `(asdf:oos 'asdf:load-op :my-lib)` | `operate` の旧名。`load-systems`、`load-systems*`、`require-system`、`make` もロードの別の書き方 |
+| `asdf:oos` | `(asdf:oos 'asdf:load-op :my-lib)` | `operate` の旧名。`load-systems`、`load-systems*`、`require-system` もロードの別の書き方で、`:build-operation` のないシステムの `make` もそうです。`program-op` のシステムの `make` は実行ファイルをビルドします([ASDF システムから実行ファイルをビルドする](../../compiling/asdf-programs.md)) |
 | `asdf:load-asd` | `(asdf:load-asd "vendor/old/my-lib.asd")` | 1 つの `.asd` ファイルの定義をロードする |
 | `asdf:clear-system` | `(asdf:clear-system :my-lib)` | システムを忘れる。次の `find-system` は探索し直す |
 | `asdf:map-systems` | `(asdf:map-systems #'print)` | 登録済みの各システムを引数に関数を呼ぶ。`already-loaded-systems`、`component-loaded-p`、`registered-system` で状態を問い合わせる |

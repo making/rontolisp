@@ -413,9 +413,12 @@ public final class CommonLispSwank implements SwankLisp {
 		return read.forms();
 	}
 
-	/** An editor's text, read in the package its request runs in. */
+	/**
+	 * An editor's text, read in the package its request runs in and with the
+	 * {@code *features*} the image holds.
+	 */
 	private LispReader.ReadPrefix readUntilError(String code) {
-		return SourceLanguage.COMMON_LISP.readUntilError(code, this.evaluator.features(), null,
+		return SourceLanguage.COMMON_LISP.readUntilError(code, this.evaluator.sourceFeatures(), null,
 				this.evaluator.sourceStandards(), null, this.evaluator.packageResolver()::readsClTOrNil);
 	}
 
