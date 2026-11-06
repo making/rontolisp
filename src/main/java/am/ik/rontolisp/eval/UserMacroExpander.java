@@ -42,6 +42,21 @@ import org.jspecify.annotations.Nullable;
  */
 public final class UserMacroExpander {
 
+	/**
+	 * The head of the placeholder a form a reader macro function read stands under until
+	 * its turn ({@link Session#readAgain}); only {@link #expand} makes and meets one.
+	 */
+	private static final String REREAD_MARKER = "%READ-AGAIN";
+
+	/**
+	 * A form a reader macro function read in the read-time image, and where.
+	 *
+	 * @param form the form as that read answered it
+	 * @param origin where it was read
+	 */
+	private record Reread(LispVal form, ReaderMacroReads.Origin origin) {
+	}
+
 	private UserMacroExpander() {
 	}
 
@@ -82,6 +97,7 @@ public final class UserMacroExpander {
 		// eval-when evaluates at compile time are remembered: the macro-time evaluator
 		// runs them too (Session#accept).
 		Set<LispVal> compileTime = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		List<LispVal> asRead = program;
 		program = LispMacroExpander.flattenTopLevel(program, compileTime);
 		// Also activate for macroexpand/macroexpand-1 calls: their literal quoted
 		// arguments are folded to the expansion here, even when no macro is defined.
@@ -115,7 +131,34 @@ public final class UserMacroExpander {
 		// compile path spliced there: implementation source, read without recording.
 		session.programHead = programHead;
 		session.implementationPrefix = programHead != null && program.stream().anyMatch(form -> form == programHead);
+		// A form of the program's own that a reader macro function read in the
+		// read-time image is read again here, at its turn, and stands whole until then:
+		// the flatten would have split what the read answered (ReaderMacroReads).
+		java.util.Map<LispVal, Reread> rereads = new java.util.IdentityHashMap<>();
+		if (ReaderMacroReads.any()) {
+			List<LispVal> marked = new ArrayList<>(asRead.size());
+			for (LispVal form : asRead) {
+				ReaderMacroReads.Origin origin = ReaderMacroReads.originOf(form);
+				if (origin == null) {
+					marked.add(form);
+					continue;
+				}
+				LispCons marker = new LispCons(new LispSymbol(REREAD_MARKER), LispNil.INSTANCE);
+				rereads.put(marker, new Reread(form, origin));
+				marked.add(marker);
+			}
+			ReaderMacroReads.clear();
+			if (!rereads.isEmpty()) {
+				compileTime.clear();
+				program = LispMacroExpander.flattenTopLevel(marked, compileTime);
+			}
+		}
 		for (LispVal rawForm : program) {
+			Reread reread = rereads.get(rawForm);
+			if (reread != null) {
+				session.acceptTopLevel(session.readAgain(reread));
+				continue;
+			}
 			session.accept(rawForm, compileTime.contains(rawForm));
 		}
 		List<LispVal> expanded = session.finish();
@@ -246,6 +289,40 @@ public final class UserMacroExpander {
 				if (this.shallow && !compileTime.contains(member) && FeaturePushes.computesAPush(member)) {
 					this.macroEval.evalResolved(this.macroEval.resolvePackages(member));
 				}
+			}
+		}
+
+		/**
+		 * Reads again, in this evaluator and at its turn, a form a reader macro function
+		 * read in the read-time image, so this evaluator holds what the read leaves
+		 * behind -- coalton's global environment after a {@code coalton-toplevel} -- for
+		 * the macros of the forms after it ({@link ReaderMacroReads}). The image's read
+		 * stands when this one does not read the same text the same way, no reader macro
+		 * function running or the read ending elsewhere: a readtable this pass holds
+		 * otherwise (a spliced system's {@code defvar} the image evaluated and this pass
+		 * parks) must not change the program.
+		 * @param reread the form and where it was read
+		 * @return the form this read answers, or the image's
+		 */
+		LispVal readAgain(Reread reread) {
+			ReaderMacroReads.Origin origin = reread.origin();
+			int[] calls = { 0 };
+			am.ik.rontolisp.reader.ReadSyntax syntax = this.macroEval.currentReadSyntax(result -> {
+				calls[0]++;
+				return ReadTimeImage.compilable(result);
+			});
+			if (syntax == null) {
+				return reread.form();
+			}
+			try {
+				SourceLanguage.Forms forms = SourceLanguage
+					.readFormsFrom(origin.source(), origin.features(), origin.file(), origin.start())
+					.readingTOrNil(this.macroEval.packageResolver()::readsClTOrNil);
+				LispVal form = forms.next(syntax);
+				return form != null && calls[0] > 0 && forms.position() == origin.end() ? form : reread.form();
+			}
+			catch (RuntimeException ex) {
+				return reread.form();
 			}
 		}
 

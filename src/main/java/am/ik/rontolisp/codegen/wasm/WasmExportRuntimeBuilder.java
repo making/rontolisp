@@ -329,10 +329,11 @@ final class WasmExportRuntimeBuilder {
 	 * heap and returns a {@code TYPE_STRING} struct over it (the internal string
 	 * representation stores surrounding {@code "} quotes). Used to box a {@code :string}
 	 * argument a host wrote into memory.
+	 * @param words whether to copy eight bytes a round, a speed-for-size trade
 	 * @return the function body bytes (signature {@code (i32,i32) -> (ref null eq)},
 	 * reuses TYPE_RAT_NEW)
 	 */
-	static byte[] buildStrFromMemBody() {
+	static byte[] buildStrFromMemBody(boolean words) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int ptr = 0;
@@ -340,10 +341,11 @@ final class WasmExportRuntimeBuilder {
 		final int framed = 2;
 		final int idx = 3;
 		final int id = 4;
-		final int arr = 5;
-		// locals: framed, idx, id (i32); arr ($str_bytes)
+		final int src = 5;
+		final int arr = 6;
+		// locals: framed, idx, id, src (i32); arr ($str_bytes)
 		w.write(2);
-		w.write(3);
+		w.write(4);
 		w.write(Type.I32);
 		w.write(1);
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
@@ -379,7 +381,12 @@ final class WasmExportRuntimeBuilder {
 			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		}
-		WasmStringRuntimeBuilder.emitCopyFromMemory(w, arr, 1, ptr, len, idx);
+		if (words) {
+			WasmStringRuntimeBuilder.emitCopyFromMemoryWords(w, arr, 1, ptr, len, idx, src);
+		}
+		else {
+			WasmStringRuntimeBuilder.emitCopyFromMemory(w, arr, 1, ptr, len, idx);
+		}
 		WasmStringRuntimeBuilder.emitRuntimeString(w, framed, arr, id);
 		w.write(Instruction.END);
 		return body.toByteArray();

@@ -64,12 +64,31 @@ class LispMacroExpanderTest {
 		assertThat(generationFlags(
 				"(defclass c () ()) (make-instance 'c) (defmethod initialize-instance :after ((x c) &key) nil)"))
 			.containsExactly("%INITIALIZE-INSTANCE--gen0");
+		// The tables are one chain however many there are: each method, the redefined
+		// one's first body included, is in the dispatcher once.
+		String redefinitions = "(defmethod g ((x integer)) 1) (print (g 1)) (defmethod g ((x string)) 2) "
+				+ "(print (g 1)) (defmethod g ((x symbol)) 3) (print (g 1)) (defmethod g ((x integer)) 4)";
+		assertThat(generationFlags(redefinitions)).containsExactlyInAnyOrder("%G--gen0", "%G--gen1", "%G--gen2");
+		List<String> mentions = new ArrayList<>();
+		for (LispVal form : expanded(redefinitions)) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& LispNames.DEFUN.equals(op.name()) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && "G".equals(name.name())) {
+				collectSymbols(rest.cdr(), mentions);
+			}
+		}
+		assertThat(mentions.stream().filter(name -> name.startsWith("%G--m"))).containsExactlyInAnyOrder("%G--m0",
+				"%G--m1", "%G--m2", "%G--m3");
+	}
+
+	private static List<LispVal> expanded(String source) {
+		return LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(),
+				new ClosRegistry());
 	}
 
 	private static List<String> generationFlags(String source) {
 		List<String> flags = new ArrayList<>();
-		for (LispVal form : LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
-				new HashMap<>(), new ClosRegistry())) {
+		for (LispVal form : expanded(source)) {
 			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
 					&& LispNames.DEFVAR.equals(op.name()) && cons.cdr() instanceof LispCons rest
 					&& rest.car() instanceof LispSymbol flag && flag.name().contains("--gen")) {
@@ -1656,6 +1675,24 @@ class LispMacroExpanderTest {
 			assertThat(LispMacroExpander.reachesPrin1FromTheSurface(LispReader.readAllFromString(reaches))).as(reaches)
 				.isTrue();
 		}
+	}
+
+	@Test
+	void aLetBindingTOrNilIsRefusedForEveryBackend() {
+		// Every let binds its names through this one normalization -- the interpreter's
+		// and both compilers' -- and each of them used to take the constant for a symbol
+		// and die on the cast. An analysis walking the form normalizes and goes on, so
+		// the refusal comes from the let, where its position is.
+		for (String bindings : List.of("((t 1))", "(nil)", "((x 1) (nil 2))", "(a (t))")) {
+			org.assertj.core.api.Assertions
+				.assertThatThrownBy(() -> LispMacroExpander.letBindingList(LispReader.readFromString(bindings)))
+				.as(bindings)
+				.hasMessageEndingWith(" names a constant, and cannot be bound");
+			assertThat(LispMacroExpander.normalizeBindingList(LispReader.readFromString(bindings))).as(bindings)
+				.isNotNull();
+		}
+		assertThat(LispMacroExpander.letBindingList(LispReader.readFromString("(a (b 1))")).print())
+			.isEqualTo("((A NIL) (B 1))");
 	}
 
 	@Test

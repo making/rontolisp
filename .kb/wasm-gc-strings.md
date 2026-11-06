@@ -70,6 +70,13 @@ against 740 M. `_princ_to_str` of an immutable string answers it (17.2 M against
 at 14 instructions per byte where the scratch made it 35, and every string consumer's `_charvec_to_str` opens with
 `ref.test TYPE_CELL`, 6 where it was 18.
 
+**The host boundary copies eight bytes a round** where the level allows a speed-for-size trade
+(not `--optimize=size`): `_str_from_mem` (`emitCopyFromMemoryWords`, every `:string` result, so
+proxy-wasm's `get-buffer`) and `_str_to_mem` (every `:string` argument, so `set-buffer`), each
+load's or store's offset its immediate. Measured 2026-11-06 on Endive over an 8 KiB body: 16 and
+14 instructions a byte, 9 and 8.7; about 120 bytes each. `_str_build` and `_str_fresh` keep the
+byte loop: what they copy is short, and every module carries them.
+
 ## HEAP_PTR is a stack pointer; identity is a counter
 Two disciplines share the linear scratch at `HEAP_PTR_ADDR`:
 - **Transient (save on entry, pop on exit)** -- a runtime build assembles bytes at

@@ -204,7 +204,14 @@ and spent across the WHOLE traversal, never handed down per branch.
   `JvmHashRuntimeBuilder`'s `KeyHash`.
 - WASM: a second `(mut i32)` global after the depth one (`hashGasGlobalIndex`) — `_hash`'s
   signature is fixed at `((ref null eq)) -> i32`. The outermost entry refills it; unlike the depth
-  counter it is NOT restored on the way out.
+  counter it is NOT restored on the way out. A symbol or string at depth zero folds its bytes
+  before any of that (`WasmRuntimeBuilder.emitTopLevelStringFold`, the string arm's value): it
+  descends nowhere. Measured 2026-11-06 on Endive, a 4-to-6-byte key's `_hash` went from 167
+  instructions to 99, for 75 bytes; a speed-for-size trade, so not under `--optimize=size`.
+- The JSON decoder builds a parsed object's flat record itself, sized so nothing grows, through
+  `WasmHashTableRuntimeBuilder.emitFlatInsert` (`_ht_put`'s flat arm without its growth tests)
+  and `emitEqualPlacementHash` (`_ht_put`'s `_hash` and spread): a change to the flat layout or
+  the spread changes both (`.kb/json.md`, "The wasm-GC codec").
 
 **The `equalp` fold carries the same budget**, more sharply: it BUILDS the structure it walks (an
 unbudgeted `equalp` `gethash` of a 26-cons DAG was an `OutOfMemoryError`). Same number, same refill

@@ -1091,6 +1091,9 @@ final class JvmExprCompiler {
 			case LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintCasedLeaf(cons, ctx.printControlVariables),
 						ctx, className);
+			case LispNames.DECIMAL_PIECE_INTERNAL, LispNames.DECIMAL_PRINC_INTERNAL ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDecimalLeaf(cons,
+						ctx.functions.containsKey(LispNames.DECIMAL_TEXT_INTERNAL)), ctx, className);
 			case LispNames.PRINT_CASED_RAW_LEAF_INTERNAL, LispNames.PRINT_CASED_TEXT_LEAF_INTERNAL,
 					LispNames.PRINT_CASED_INSTANCE_CHECK_INTERNAL, LispNames.PRINT_WITHOUT_READABLY_INTERNAL ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintReadableLeaf(cons,

@@ -1,10 +1,12 @@
 package am.ik.rontolisp.eval;
 
 import java.util.ArrayDeque;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -48,10 +50,12 @@ import am.ik.rontolisp.reader.ReadSyntax;
  * <p>
  * The image is thrown away once the program is read: the pass pipeline between the read
  * and the macro-time pass ({@code CompileFrontend.expand}) rewrites and splices the
- * program, and {@link UserMacroExpander} processes the result from scratch. A form the
- * image cannot process -- one that needs what a later pass splices -- is skipped: that
- * pass reports it. A read only opens an image once a file it reads can change the syntax
- * at all ({@link #changesSyntax}), or computes a push onto {@code *features*}
+ * program, and {@link UserMacroExpander} processes the result from scratch, reading again
+ * a form of the program's own a reader macro function read ({@link ReaderMacroReads}),
+ * for what that read leaves in the compiling image. A form the image cannot process --
+ * one that needs what a later pass splices -- is skipped: that pass reports it. A read
+ * only opens an image once a file it reads can change the syntax at all
+ * ({@link #changesSyntax}), or computes a push onto {@code *features*}
  * ({@code FeaturePushes.computesAPush}); until then every form reads with the standard
  * syntax, and a program that never opens one pays nothing for it.
  */
@@ -75,12 +79,21 @@ public final class ReadTimeImage {
 	/** How many forms of the program being read the session has processed. */
 	private int fed;
 
+	/** How many reader macro functions the read has called in this image. */
+	private int readerMacroCalls;
+
 	/**
 	 * An image for one program's read.
 	 * @param features the feature set the program is read with
+	 * @param systems the compile path's registered systems, which the image's ASDF
+	 * answers about ({@link LispEvaluator#answerSystemsFrom}), shared
+	 * @param systemPackages its {@code register-system-packages} map, shared
+	 * @param spliced the systems it has spliced so far, shared
 	 */
-	public ReadTimeImage(Features features) {
+	public ReadTimeImage(Features features, Map<String, AsdfSystems.LispSystem> systems,
+			Map<String, String> systemPackages, Collection<String> spliced) {
 		this.session = new UserMacroExpander.Session(true, features);
+		this.session.macroEval.answerSystemsFrom(systems, systemPackages, spliced);
 	}
 
 	/**
@@ -148,13 +161,25 @@ public final class ReadTimeImage {
 				// have run, and reports what is really wrong with it.
 			}
 		}
-		return this.session.macroEval.currentReadSyntax(ReadTimeImage::compilable);
+		return this.session.macroEval.currentReadSyntax(result -> {
+			this.readerMacroCalls++;
+			return compilable(result);
+		});
+	}
+
+	/**
+	 * How many reader macro functions this image has run: a read that moved it ran one
+	 * ({@link ReaderMacroReads}).
+	 * @return the count
+	 */
+	public int readerMacroCalls() {
+		return this.readerMacroCalls;
 	}
 
 	// A reader macro function's value becomes part of a form the backends compile, so it
 	// must have a literal form (.kb/readtables.md): a closure, a hash table, a stream do
 	// not.
-	private static ReadSyntax.Result compilable(ReadSyntax.Result result) {
+	static ReadSyntax.Result compilable(ReadSyntax.Result result) {
 		LispVal value = result.value();
 		LispVal refused = value == null ? null : firstUncompilable(value);
 		if (refused != null) {

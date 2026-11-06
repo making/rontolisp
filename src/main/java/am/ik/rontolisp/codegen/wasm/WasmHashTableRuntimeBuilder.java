@@ -368,10 +368,74 @@ final class WasmHashTableRuntimeBuilder {
 			a.get(keyLocal).call(WasmLispCompiler.FUNC_HASH);
 		}
 		a.set(hLocal);
-		// The high half folded into the low (the JVM's spread): a bucket index and the
-		// trie read the low bits first, and small integers keep their own.
+		emitSpread(a, hLocal);
+	}
+
+	// The high half folded into the low (the JVM's spread): a bucket index and the trie
+	// read the low bits first, and small integers keep their own. Cut to 30 bits, an
+	// i31.
+	private static void emitSpread(Asm a, int hLocal) {
 		a.xorShift(hLocal, 16);
 		a.get(hLocal).i32(HASH_MASK).op(Instruction.I32_AND).set(hLocal);
+	}
+
+	/**
+	 * Leaves in {@code hLocal} the i32 hash an {@code equal} table places the key in
+	 * {@code keyLocal} by -- what {@code _ht_put} and {@code _ht_get} compute for it, so
+	 * a table built from it ({@link #emitFlatInsert}) is the table they would build.
+	 * @param w the writer
+	 * @param keyLocal the local holding the key
+	 * @param hLocal an i32 local
+	 */
+	static void emitEqualPlacementHash(WasmWriter w, int keyLocal, int hLocal) {
+		Asm a = new Asm(w);
+		a.get(keyLocal).call(WasmLispCompiler.FUNC_HASH).set(hLocal);
+		emitSpread(a, hLocal);
+	}
+
+	/**
+	 * Puts a key into a FLAT {@code equal} record whose buckets and order have room for
+	 * it -- {@code _ht_put}'s flat arm without its growth: an entry of the same key has
+	 * its value replaced, else a fresh entry heads its bucket and goes last in the order.
+	 * The caller keeps the record's size in {@code sizeLocal} (stored back, and the
+	 * header's count, once the record is complete) and the bucket mask, the length less
+	 * one, in {@code maskLocal}.
+	 * @param w the writer
+	 * @param recLocal the record (a TYPE_HASH_BUCKETS local)
+	 * @param bucketsLocal its buckets (a TYPE_HASH_BUCKETS local)
+	 * @param orderLocal its order (a TYPE_HASH_BUCKETS local)
+	 * @param maskLocal the bucket mask (i32)
+	 * @param sizeLocal the entries so far (i32), counted up for a fresh one
+	 * @param keyLocal the key (eqref)
+	 * @param hLocal its placement hash ({@link #emitEqualPlacementHash}, i32)
+	 * @param valueLocal the value (eqref)
+	 * @param indexLocal an i32 local
+	 * @param entryLocal a TYPE_HASH_BUCKETS local
+	 */
+	static void emitFlatInsert(WasmWriter w, int recLocal, int bucketsLocal, int orderLocal, int maskLocal,
+			int sizeLocal, int keyLocal, int hLocal, int valueLocal, int indexLocal, int entryLocal) {
+		Asm a = new Asm(w);
+		a.get(hLocal).get(maskLocal).op(Instruction.I32_AND).set(indexLocal);
+		a.get(bucketsLocal).get(indexLocal).aget().arr().set(entryLocal);
+		a.block();
+		a.block().loop();
+		a.get(entryLocal).isNull().brIf(1);
+		a.get(entryLocal).i32(E_HASH).aget().unI31().get(hLocal).op(Instruction.I32_EQ).ifVoid();
+		a.get(keyLocal).get(entryLocal).i32(E_KEY).aget().call(WasmLispCompiler.FUNC_EQUAL).ifVoid();
+		a.get(entryLocal).i32(E_VALUE).get(valueLocal).aset();
+		a.br(4);
+		a.end();
+		a.end();
+		a.get(entryLocal).i32(E_NEXT).aget().arr().set(entryLocal);
+		a.br(0);
+		a.end().end();
+		a.get(hLocal).i31().get(sizeLocal).i31().get(recLocal);
+		a.get(bucketsLocal).get(indexLocal).aget().get(keyLocal).get(valueLocal).fixed(E_VALUE + 1);
+		a.set(entryLocal);
+		a.get(bucketsLocal).get(indexLocal).get(entryLocal).aset();
+		a.get(orderLocal).get(sizeLocal).get(entryLocal).aset();
+		a.get(sizeLocal).i32(1).op(Instruction.I32_ADD).set(sizeLocal);
+		a.end();
 	}
 
 	// tagLocal = the header's test tag (0 in a module that tags no count), and the key

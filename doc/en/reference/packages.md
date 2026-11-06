@@ -46,6 +46,8 @@ Unhandled condition: The function RONTOLISP::CAR is undefined
   (use CL:CAR)
 ```
 
+`t` and `nil` are no exception: there they are `cl`'s only where the package imports them or uses a package that exports them, and otherwise the package's own (or those a used package exports, such as coalton's `Nil`). `()`, `cl:t` and `cl:nil` are `cl`'s everywhere. The compile paths read a form before the forms ahead of it run, so a package a macro defines, rather than a `defpackage` form, reads them as `cl`'s there.
+
 The default package `cl-user` is empty and uses `cl`, so ordinary programs do not need any qualifiers.
 
 ## External and internal symbols

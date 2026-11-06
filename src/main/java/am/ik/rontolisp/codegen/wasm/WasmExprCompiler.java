@@ -736,6 +736,12 @@ final class WasmExprCompiler {
 					WasmHashTableCompiler.compileCopy(cons, ctx);
 					return;
 				}
+				if (LispNames.JSON_DECODE_INTERNAL.equals(qn.member())
+						|| LispNames.JSON_ENCODE_INTERNAL.equals(qn.member())) {
+					// json.lisp's wasm-GC entry points: the module's JSON codec.
+					WasmJsonCompiler.compile(qn.member(), cons, ctx);
+					return;
+				}
 				if (LispNames.OCTETS_TO_STRING_PACKED_INTERNAL.equals(qn.member())) {
 					// The native half of the prelude's lenient octet decoder: a packed
 					// (unsigned-byte 8) vector decoded (one copy when it is valid UTF-8,
@@ -1283,6 +1289,9 @@ final class WasmExprCompiler {
 				compileExpansion(LispMacroExpander.expandPrintQualifier(cons, ctx.functions::containsKey), ctx, tail);
 			case LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL ->
 				compileExpansion(LispMacroExpander.expandPrintCasedLeaf(cons, ctx.printControlVariables), ctx, tail);
+			case LispNames.DECIMAL_PIECE_INTERNAL, LispNames.DECIMAL_PRINC_INTERNAL ->
+				compileExpansion(LispMacroExpander.expandDecimalLeaf(cons,
+						ctx.functions.containsKey(LispNames.DECIMAL_TEXT_INTERNAL)), ctx, tail);
 			case LispNames.PRINT_CASED_RAW_LEAF_INTERNAL, LispNames.PRINT_CASED_TEXT_LEAF_INTERNAL,
 					LispNames.PRINT_CASED_INSTANCE_CHECK_INTERNAL, LispNames.PRINT_WITHOUT_READABLY_INTERNAL ->
 				compileExpansion(LispMacroExpander.expandPrintReadableLeaf(cons,

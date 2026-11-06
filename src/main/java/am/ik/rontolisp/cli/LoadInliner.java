@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.eval.AsdfRuntimeLibrary;
@@ -28,6 +29,7 @@ import am.ik.rontolisp.eval.BuiltinSystems;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.ReadTimeImage;
+import am.ik.rontolisp.eval.ReaderMacroReads;
 import am.ik.rontolisp.eval.ShimLibraries;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
@@ -256,6 +258,7 @@ public final class LoadInliner {
 			List<String> systemPath, Features features, DistClient dists, SourceStandards standards,
 			@Nullable String entryFile) {
 		List<LispVal> result = new ArrayList<>();
+		ReaderMacroReads.clear();
 		// The system registry and the loaded set are insertion-ordered: the baked
 		// %asdf-registry% (AsdfRuntimeLibrary) is emitted from them, and the emitted
 		// program must be deterministic (.kb/emitted-output-determinism.md).
@@ -372,8 +375,42 @@ public final class LoadInliner {
 
 		@Nullable private ReadTimeImage image;
 
+		/**
+		 * The packages a {@code t} or {@code nil} token is read in
+		 * ({@link PackageResolver#followReadPackageDirective}), from the first form that
+		 * names one on; {@code null} until then, every token reading in {@code cl-user}.
+		 */
+		@Nullable private PackageResolver packages;
+
+		/** How many forms of the program read so far {@link #packages} has followed. */
+		private int followed;
+
 		Reading(Features features) {
 			this.features = features;
+		}
+
+		/**
+		 * Whether a {@code t} or {@code nil} token is {@code cl}'s constant where the
+		 * read stands, which the forms read so far decide.
+		 */
+		boolean readsClTOrNil(String name) {
+			PackageResolver read = this.packages;
+			return read == null || read.readsClTOrNil(name);
+		}
+
+		/** Follows the forms read since the last call, ahead of the next read. */
+		void follow(List<LispVal> program) {
+			while (this.followed < program.size()) {
+				LispVal form = program.get(this.followed++);
+				if (PackageResolver.isReadPackageDirective(form)) {
+					PackageResolver read = this.packages;
+					if (read == null) {
+						read = new PackageResolver();
+						this.packages = read;
+					}
+					read.followReadPackageDirective(form);
+				}
+			}
 		}
 
 	}
@@ -414,11 +451,14 @@ public final class LoadInliner {
 		Reading reading = ctx.reading();
 		if (reading.image == null
 				&& (ReadTimeImage.changesSyntax(source) || FeaturePushes.computesAPush(source, ctx.features(), path))) {
-			reading.image = new ReadTimeImage(reading.features);
+			reading.image = new ReadTimeImage(reading.features, ctx.systems(), ctx.systemPackages(),
+					ctx.loadedSystems());
 		}
-		SourceLanguage.Forms forms = SourceLanguage.readForms(source, ctx.features(), path);
+		SourceLanguage.Forms forms = SourceLanguage.readForms(source, ctx.features(), path)
+			.readingTOrNil(reading::readsClTOrNil);
 		List<Set<String>> featuresAtOpen = new ArrayList<>(1);
 		return () -> {
+			reading.follow(out);
 			ReadTimeImage image = reading.image;
 			if (image == null) {
 				return forms.next(null);
@@ -427,7 +467,17 @@ public final class LoadInliner {
 			if (featuresAtOpen.isEmpty()) {
 				featuresAtOpen.add(image.features());
 			}
-			return forms.next(syntax, image.featuresPushedSince(featuresAtOpen.get(0)));
+			int calls = image.readerMacroCalls();
+			int start = forms.position();
+			LispVal form = forms.next(syntax, image.featuresPushedSince(featuresAtOpen.get(0)));
+			// A form of the program's own a reader macro function read: the macro-time
+			// pass reads it again, for what the read leaves in the compiling image
+			// (ReaderMacroReads). A system's forms are loaded, not read again.
+			if (form != null && image.readerMacroCalls() != calls && ctx.loadingSystems().isEmpty()) {
+				ReaderMacroReads.record(form,
+						new ReaderMacroReads.Origin(source, path, forms.features(), start, forms.position()));
+			}
+			return form;
 		};
 	}
 

@@ -238,12 +238,29 @@ until then a compiled program answered every call with its LAST method table: a 
 before a `defmethod` form saw that method, and a redefined method's first body never ran
 (measured on JVM, P1 and the component; the interpreter and SBCL 2.2.9 agree with each other).
 The interpreter needs nothing, it regenerates at each form.
-- **A generation** (`ClosRegistry.MethodGeneration`) is an earlier table a call can observe. The
-  dispatcher tests its flags newest first: `(if %g--gen1 LAST (if %g--gen0 T1 T0))`. A flag is a
-  hoisted `(defvar %g--genN nil)` plus a `(setq %g--genN t)` right ahead of the defining form, so
-  that form's value stays the top level's. Every table goes through `dispatchBody`, so combination,
-  `call-next-method`, the dynamic arm and the narrower need nothing per generation, and a call after
-  the last form pays one global read.
+- **A generation** (`ClosRegistry.MethodGeneration`) is an earlier table a call can observe. A flag
+  is a hoisted `(defvar %g--genN nil)` plus a `(setq %g--genN t)` right ahead of the defining form,
+  so that form's value stays the top level's. The flags are set in program order: the state is how
+  many are set, and "state k or later" is one read of flag k-1.
+- **One chain over every table** (`macro/DispatchBranches`, 2026-11-06): each table's chain is built
+  as without generations (`dispatchChain` over the generic's view of the table, so combination,
+  `call-next-method` and the narrower need nothing per generation), then merged: each distinct
+  branch (specializer key and test) once, in an order every table's keeps, guarded by the states
+  whose table has it, its value switched by state only where the tables' effective methods differ;
+  the base likewise. The dynamic arm is built once, each test and method entry guarded by its
+  states. A table that combines makes every table's chain the combined one. A call after the last
+  form reads a flag on the branch it takes. Before, the dispatcher was one whole `dispatchBody` per
+  generation, newest first: fset's `compare` had 40 generations of up to 426 methods (its
+  `define-cross-type-compare-methods` interleaves running forms), a 5.5 MB defun (915,783 nodes,
+  9,972 method references) past the JVM's method limit after outlining; now 47,262 nodes, and the
+  program over it 14.9 MB -> 5.6 MB on wasm (measured 2026-11-06). Its JVM compile then needed the
+  outliner's binding-value and `list` cuts for the protocol's arm and `%gf-static-methods`
+  (`.kb/hot-path-method-size.md`). Residual: two tables ordering two branches apart (a key a second
+  `defgeneric` removed and added back moves to the end of its table) get the last table's order,
+  which can matter only between branches of one rank.
+- **`compute-applicable-methods` answers the table of its time**: `staticMethodsForm` lists each
+  method once, guarded by its states (before: the last table, so a call ahead of a `defmethod`
+  listed that method, where the interpreter and SBCL do not).
 - **The log**: the walk tells the registry its output index (`definitionPosition`) and every table
   write records a `MethodChange`, a removal by a second `defgeneric` included
   (`ClosRegistry.changeMethod`). `methodsBefore(p)` replays it. A method under a top-level `let` is
@@ -272,9 +289,12 @@ The interpreter needs nothing, it regenerates at each form.
   made before its class's `defclass` form (an error on the interpreter), the literal `fboundp` of a
   generic. A plain `defun` keeps its own whole-program rule (`.kb/core-representation.md`).
 - Size, measured 2026-11-05 on the ci-spec corpus as one program: 49 generics of its method-heavy
-  cases split, `print-object` with 3 generations over 19 methods.
-- Pinned by ci-spec `clos-methods-take-effect-where-their-forms-run` (agrees with SBCL 2.2.9) and
-  `LispMacroExpanderTest.aGenericKeepsOneMethodTableUnlessAnEarlierFormCanCallIt`.
+  cases split, `print-object` with 3 generations over 19 methods. The one chain took that program
+  from 22.36 to 22.20 MB of classes and from 15.02 to 14.98 MB of wasm (2026-11-06).
+- Pinned by ci-spec `clos-methods-take-effect-where-their-forms-run` (agrees with SBCL 2.2.9),
+  standalone `generic-function-protocol` (`gfp-out-cmp`) and
+  `LispMacroExpanderTest.aGenericKeepsOneMethodTableUnlessAnEarlierFormCanCallIt` (each method in
+  the dispatcher once).
 
 ## Multiple inheritance
 `ClassInfo` carries `superclasses` (local precedence order), `cpl` (CLHS 4.3.5 topological
@@ -333,7 +353,11 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
   let (a global-closure `setq`). A nested `defgeneric` (`expandNestedDefgeneric`) leaves
   its `(:method ...)` clauses' defuns plus `'name` in place; the dispatcher goes after the
   let. cl-qrencode's `rs-ecc.lisp` needs it (2026-10-31: `encode-symbol` agrees on all
-  four). `defclass`/`define-condition`/`defstruct` in a let stay refused: their initforms
+  four). A top-level `flet`/`labels` is the same shape (body at index 2) and takes the same
+  path since 2026-11-06: eclector's `messages-english.lisp` puts two `report-condition` methods
+  under `(flet ((package-name* ...)) ...)`, which failed every compile of eclector, and so of
+  coalton. ci-spec `generics-defined-in-a-top-level-let-close-over-it`.
+  `defclass`/`define-condition`/`defstruct` in a let stay refused: their initforms
   are inlined into top-level constructors (the class's and every subclass's) and the
   metaobject table, so they cannot close over the let, and hoisting a capture-free one
   would have to happen before the many earlier top-level scans that look for definers. No
@@ -1584,7 +1608,10 @@ methods merge), `find-method`, `method-qualifiers`, `compute-applicable-methods`
   method's function (`%gf-static-method-objects%`). No dispatcher consults it, so a method on it
   changes only what its caller sees (McCLIM's `:around`, "Out of scope"). Consumers: Drei's
   `print-object` of a lambda list, coalton's `derive-methods`, `access` (over a metaobject; its
-  function arm below). A function that is no generic answers nil where SBCL signals.
+  function arm below). A function that is no generic answers nil where SBCL signals. A generic
+  whose package exports its name had no arm until 2026-11-06 (the walk records its dispatcher
+  under the normalized `PKG::NAME`, the generic keeps `PKG:NAME`), so it answered only its
+  run-time methods: fset's `compare` answered 0 for `(1 2)` on all three compiled backends.
 - **`:argument-precedence-order`** (`GenericInfo.precedenceIndexes`): a generic's methods are
   ordered by their specializers compared in that order, by the static dispatchers
   (`specificityOrder`, `branchSpecificityOrder`) and in the run-time keys (`dynamicMethodEntry`,

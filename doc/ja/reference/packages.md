@@ -54,6 +54,8 @@ Unhandled condition: The function RONTOLISP::CAR is undefined
   (use CL:CAR)
 ```
 
+`t` と `nil` も例外ではありません。そのようなパッケージで `cl` のものになるのは、パッケージがそれを import しているか、それを export するパッケージを使用している場合だけで、それ以外ではそのパッケージ自身のシンボル(または使用するパッケージが export するもの。coalton の `Nil` など)です。`()`、`cl:t`、`cl:nil` はどこでも `cl` のものです。コンパイルパスはフォームをその前のフォームの実行より先に読むため、`defpackage` フォームではなくマクロが定義したパッケージでは `cl` のものとして読みます。
+
 デフォルトパッケージ `cl-user` は空で `cl` を使用するため、通常のプログラムでは修飾子は不要です。
 
 ## external シンボルと internal シンボル

@@ -4103,9 +4103,13 @@ cases:
       ;; Whatever the name turns out to be there: a parameter (vom's SECOND), a LOOP
       ;; keyword, which compares by name, a definition, a call ahead of it. Data spelled
       ;; cl: stays cl's under eval and compile, and a name the package never defines is
-      ;; undefined, not cl's. SBCL agrees, printing under cl-user where it would qualify
-      ;; COMMON-LISP:NIL.
+      ;; undefined, not cl's. T and NIL too, but where the package reads cl's: one it
+      ;; imports, or inherits from cl, or another package exporting its own. SBCL agrees,
+      ;; printing under cl-user where it would qualify COMMON-LISP:NIL.
       (defpackage :ci-nocl (:use) (:export #:rest))
+      (defpackage :ci-nocl-own (:use) (:export #:nil))
+      (defpackage :ci-nocl-heir (:use :ci-nocl-own) (:import-from :cl #:t))
+      (defpackage :ci-nocl-shadow (:use :cl) (:shadow #:t))
       (cl:in-package :ci-nocl)
       (cl:print (cl:let ((caar 1)) caar))
       (cl:defun ci-parameter (second) second)
@@ -4131,12 +4135,23 @@ cases:
         (cl:list (cl:fboundp 'first)
                  (cl:handler-case (cl:funcall (cl:intern "FIRST") '(21))
                    (cl:undefined-function (c) (cl:eq (cl:cell-error-name c) 'first)))))
+      (cl:defun nil (t) (cl:list :nil t))
+      (cl:print (cl:list (nil 25) (cl:let ((t 26)) t) 't (cl:eq 'nil cl:nil) (cl:eq () cl:nil)))
+      (cl:defparameter *t-and-nil* (cl:list 'nil (cl:package-name (cl:symbol-package 't)) '(cl:nil cl:t . ())))
+      (cl:in-package :ci-nocl-heir)
+      (cl:defparameter *heir* (cl:list 'nil (cl:eq 'nil 'ci-nocl-own:nil) (cl:eq 't cl:t)))
+      (cl:in-package :ci-nocl-shadow)
+      (defparameter *shadowed* (list (eq 't cl:t) (package-name (symbol-package 't)) (eq 'nil cl:nil)
+                                     (eq 'cl-user::nil nil) (eq 'ci-nocl-shadow::nil nil) (eq 'ci-nocl-heir::t cl:t)))
       (cl:in-package :cl-user)
       (print ci-nocl::*loops*)
       (print ci-nocl::*identity*)
       (print ci-nocl::*data*)
       (print ci-nocl::*undefined*)
       (print (list (ci-nocl::second 22) (ci-nocl:rest 23) (first '(24)) 'ci-nocl::list))
+      (print ci-nocl::*t-and-nil*)
+      (print ci-nocl-heir::*heir*)
+      (print ci-nocl-shadow::*shadowed*)
     expected: |
       1
       2
@@ -4144,11 +4159,15 @@ cases:
       (6 7)
       ((:OWN 9) (:OWN 10) (:OWN 11) 13)
       (14 Y 15 (:MIN 16) (:REST 17))
+      ((:NIL 25) 26 T COMMON-LISP:NIL COMMON-LISP:T)
       (NIL (8) 2)
       (NIL "CI-NOCL")
       (18 NIL 20)
       (NIL T)
       ((:OWN 22) (:REST 23) 24 CI-NOCL::LIST)
+      (CI-NOCL::NIL "CI-NOCL" (NIL T))
+      (CI-NOCL-OWN:NIL T T)
+      (NIL "CI-NOCL-SHADOW" T T T T)
   - name: a-bare-symbol-prints-qualified-where-the-package-reads-another
     source: |
       ;; A cl symbol and a cl-user one under a package reading that name as something
@@ -11728,8 +11747,9 @@ cases:
       (+ 1 2)
       (T T)
   # JSON: the Lisp-source library (json.lisp) is spliced by the compile path and
-  # loaded lazily by the interpreter, so one implementation runs on all four
-  # backends. The value mapping matches com.inuoe.jzon's defaults: an object
+  # loaded lazily by the interpreter; on the wasm-GC backends its entry points call
+  # the native codec (json-codec-edges below). The value mapping matches
+  # com.inuoe.jzon's defaults: an object
   # becomes a hash table with string keys, an array a vector, and null the
   # symbol null; on the way out nil is false and the symbol null is null.
   # Integers up to 18 digits stay exact (the WASM GC backend carries them in
@@ -11781,6 +11801,74 @@ cases:
       "{\"x\":[1,2]}"
       "{\"deep\":{\"list\":[{\"k\":\"v\"},2.5,true]}}"
       "[7]"
+  # The wasm-GC backends parse and serialize natively (WasmJsonRuntimeBuilder); the
+  # interpreter and the JVM run json.lisp's walk. Both answer the same thing: each
+  # malformed input's error, the number forms, every escape (a surrogate pair combined),
+  # a repeated key's last value at its first key's place, a parsed table that keeps
+  # working as a table (its keys pooled on wasm-GC), a fill-pointered vector, an empty
+  # one, a keyword, a character, an integer past 64 bits, a ratio, a structure, an
+  # improper list's error, integers in decimal under *print-base* 16 (jzon's ~D), and
+  # nesting past what a recursive walk on any of them would want to hold.
+  - name: json-codec-edges
+    source: |
+      (dolist (input '("" "1 2" "\"abc" "\"\\" "\"\\x\"" "\"\\u12\"" "\"\\u12G4\"" "-" "1." "1e+" ".5"
+                       "trux" "[1 2]" "[1,]" "{\"a\" 1}" "{\"a\":1" "{\"a\":1 \"b\":2}" "{1:2}"
+                       "\"\\u0あ\"" "\"\\u0あ0\""))
+        (print (handler-case (rontolisp:json-parse input) (error (e) (princ-to-string e)))))
+      (print (handler-case (rontolisp:json-parse 42) (error (e) (princ-to-string e))))
+      (print (rontolisp:json-parse
+              "[-0, 0.5, -0.0, 1E2, 1e-2, 12.5e+1, 007, 1073741824, -999999999999999999]"))
+      (print (rontolisp:json-stringify
+              (rontolisp:json-parse
+               "\"\\\"\\\\\\/\\b\\f\\n\\r\\t\\u0001\\u001f\\ud83d\\ude00 a\\u00e9\"")))
+      (let ((h (rontolisp:json-parse "{\"a\":1,\"b\":2,\"a\":3}")))
+        (print (list (hash-table-count h) (gethash "a" h) (rontolisp:json-stringify h))))
+      (let ((h (rontolisp:json-parse "{\"k\":[1,{\"k\":2}]}")))
+        (setf (gethash "k" h) "replaced")
+        (setf (gethash "more" h) (list t 'null))
+        (remhash "more" h)
+        (print (rontolisp:json-stringify h)))
+      (defstruct json-edge-pair left right)
+      (print (rontolisp:json-stringify
+              (list (make-array 3 :fill-pointer 2 :initial-contents '(1 2 3)) (vector) :key
+                    #\a (expt 2 70) 1/4 (make-json-edge-pair :left "l" :right (vector 1)))))
+      (print (handler-case (rontolisp:json-stringify (cons 1 2)) (error (e) (princ-to-string e))))
+      (let ((h (make-hash-table)))
+        (setf (gethash 255 h) (list 255 (expt 2 40) (expt 2 70)))
+        (print (let ((*print-base* 16) (*print-radix* t)) (rontolisp:json-stringify h))))
+      (let ((deep "1"))
+        (dotimes (i 300) (setq deep (concatenate 'string "[" deep "]")))
+        (print (length (rontolisp:json-stringify (rontolisp:json-parse deep)))))
+    expected: |
+      "json-parse: unexpected end of input"
+      "json-parse: unexpected trailing characters"
+      "json-parse: unterminated string"
+      "json-parse: unterminated escape"
+      "json-parse: invalid escape in string"
+      "json-parse: unterminated unicode escape"
+      "json-parse: invalid hex digit in unicode escape"
+      "json-parse: invalid number"
+      "json-parse: invalid number"
+      "json-parse: invalid number"
+      "json-parse: unexpected character"
+      "json-parse: invalid literal"
+      "json-parse: expected , or ] in array"
+      "json-parse: unexpected character"
+      "json-parse: expected : after object key"
+      "json-parse: unterminated object"
+      "json-parse: expected , or } in object"
+      "json-parse: expected an object key string"
+      "json-parse: unterminated unicode escape"
+      "json-parse: invalid hex digit in unicode escape"
+      "json-parse expects a string"
+      #(0 0.5 -0.0 100.0 0.01 125.0 7 1073741824 -999999999999999999)
+      "\"\\\"\\\\/\\b\\f\\n\\r\\t\\u0001\\u001f😀 aé\""
+      (2 3 "{\"a\":3,\"b\":2}")
+      "{\"k\":\"replaced\"}"
+      "[[1,2],[],\"KEY\",\"a\",1180591620717411303424,0.25,{\"left\":\"l\",\"right\":[1]}]"
+      "json-stringify: improper list"
+      "{\"255\":[255,1099511627776,1180591620717411303424]}"
+      601
   # The URL / query-string library (url.lisp, spliced by UrlLibrary): percent
   # decoding/encoding must agree across the UTF-16-indexed backends
   # (interpreter/JVM) and the UTF-8 byte-indexed WASM backends, including
@@ -12217,10 +12305,26 @@ cases:
       (defmacro mlf-splice-pt () *mlf-pt*)
       (print (make-load-form *mlf-pt*))
       (print (list (mlf-pt-x (mlf-splice-pt)) (mlf-pt-y (mlf-splice-pt))))
+      ;; A class of another package: the tag its creation form quotes carries the
+      ;; package's name, which is no package qualifier (coalton's source-file). The
+      ;; package has a cons of its own (coalton's list constructor), and the constant
+      ;; holding the object is rebuilt with cl's.
+      (defpackage :mlf-pkg (:use :cl) (:shadow #:cons))
+      (in-package :mlf-pkg)
+      (defun cons (a b) (list :own a b))
+      (defclass spot () ((x :initarg :x :reader spot-x)))
+      (defmethod make-load-form ((s spot) &optional env)
+        (make-load-form-saving-slots s :environment env))
+      (defmacro splice-spot () (make-instance 'spot :x 42))
+      (defmacro splice-spots () `'(:spots ,(make-instance 'spot :x 7)))
+      (print (list (spot-x (splice-spot)) (eq (class-of (splice-spot)) (find-class 'spot))
+                   (first (splice-spots)) (spot-x (second (splice-spots))) (cons 1 2)))
+      (in-package :cl-user)
     expected: |
       "dumped"
       (%OBJ-NEW '|%struct-MLF-PT| '3 '"four")
       (3 "four")
+      (42 T :SPOTS 7 (:OWN 1 2))
   - name: setf-function-definitions
     source: |
       (defvar *sf-mode* :xml)
@@ -13644,12 +13748,13 @@ cases:
     # call-with-temporary-file over %temp-file-name, with-temporary-file as its
     # wrapper (keep t keeps, the default deletes), tmpize-pathname, and the
     # staging rename. All four backends open relative paths against the process
-    # working directory, so literal relative names are real opens everywhere.
+    # working directory, so literal relative names are real opens everywhere. A
+    # quoted :direction is the same constant (coalton's compile writes ':output).
     source: |
       (print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory "" :keep t)
                           (write-string "kept" s) p)))
               (and (probe-file p) t)))
-      (print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory "")
+      (print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory "" :direction ':output)
                           (write-string "gone" s) p)))
               (and (probe-file p) t)))
       (let* ((p "u360staged.txt")
@@ -16518,6 +16623,16 @@ cases:
       (defun cwn-loop (n) (list :old n))
       (cwn-install 'cwn-loop (lambda (n) (if (= n 0) :done (cwn-loop (- n 1)))))
       (print (cwn-loop 200000))
+      ;; A tail the bounce walk does not reach (a return-from in an earlier statement,
+      ;; fset's cond) calling a function that bounces.
+      (defun cwn-apply (f x) (funcall f x))
+      (defun cwn-pick (f x)
+        (block b
+          (if (eq x 0) (return-from b (progn (cwn-apply f 100))))
+          (return-from b (progn (- x)))))
+      (print (list (cwn-pick #'1+ 41) (cwn-pick #'1+ 0)))
+      (cwn-install 'cwn-apply (lambda (f x) (funcall f (* 2 x))))
+      (print (cwn-pick #'1+ 0))
       ;; Retired through a computed name, and defined again where a defun form runs.
       (defun cwn-retired (x) (list :first x))
       (defun cwn-retire (name) (fmakunbound name))
@@ -16613,6 +16728,8 @@ cases:
       (:ODD 1)
       (:ODD 2)
       :DONE
+      (-41 101)
+      201
       CWN-RETIRED
       NIL
       NIL
@@ -21973,6 +22090,17 @@ cases:
       65
       T
       T
+  - name: a-package-of-its-own-compile-keeps-cls
+    source: |
+      ;; coalton-impl/entry shadows compile and defines its own; cl's stays defined, in
+      ;; this program and in every case around it that calls it.
+      (defpackage :ci-own-compile (:use :cl) (:shadow #:compile))
+      (in-package :ci-own-compile)
+      (defun compile (x) (list :own x))
+      (print (list (compile 1) (funcall (cl:compile nil '(lambda (y) (+ y 1))) 41)))
+      (in-package :cl-user)
+    expected: |
+      ((:OWN 1) 42)
   - name: a-cons-walk-refuses-the-values-that-are-no-cons
     source: |
       ;; An instance and a function value are Object[] on the JVM, as a cons is.
@@ -27243,7 +27371,10 @@ cases:
                    (home (let ((*package* (find-package :cl-user))) (rd "foo")))
                    (let ((*package* (find-package :keyword))) (rd "foo"))
                    (home (with-standard-io-syntax (rd "foo")))
-                   (home (let ((*package* (find-package :ci-rh-nocl))) (rd "car")))))
+                   (home (let ((*package* (find-package :ci-rh-nocl))) (rd "car")))
+                   (home (let ((*package* (find-package :ci-rh-nocl))) (rd "nil")))
+                   (home (let ((*package* (find-package :ci-rh-nocl))) (rd "|T|")))
+                   (let ((*package* (find-package :ci-rh-nocl))) (rd "(cl:nil cl:t . ())"))))
       (let ((q (let ((*package* (find-package :ci-rh-nocl))) (rd "'x"))))
         (print (list (eq (first q) 'quote) (home (second q)))))
       (defpackage :ci-rh-other (:use :cl) (:export #:other-out))
@@ -27266,7 +27397,7 @@ cases:
       (T (CAR REST COMMON-LISP-USER::RH-U) T T T)
       (T T T T T)
       (:IN-P :IN-P 11 11 FOO)
-      ("CI-RH-LIB" T "COMMON-LISP-USER" :FOO "COMMON-LISP-USER" "CI-RH-NOCL")
+      ("CI-RH-LIB" T "COMMON-LISP-USER" :FOO "COMMON-LISP-USER" "CI-RH-NOCL" "CI-RH-NOCL" "CI-RH-NOCL" (NIL T))
       (T "CI-RH-NOCL")
       (T T)
       ("COMMON-LISP-USER" T T)
@@ -28201,6 +28332,29 @@ cases:
       ((3 10))
       ((:URI "http://x/") NIL T T)
       ((FOO |foo| |Foo|) !FOO "[X]" T)
+  - name: a-reader-macro-reads-into-the-compiling-image
+    source: |
+      ;; compile-file reads in the image it compiles in, so what a reader macro function
+      ;; leaves there is what a later macro finds (coalton's coalton-toplevel stores its
+      ;; definitions so). The compile paths read in an image of their own and read such a
+      ;; form again where the macros expand.
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (defvar *ci-rmi-standard* *readtable*)
+        (defvar *ci-rmi-seen* nil)
+        (setf *readtable* (copy-readtable nil))
+        (set-macro-character #\!
+          (lambda (s c) (declare (ignore c))
+            (let ((name (read s t nil t)))
+              (push name *ci-rmi-seen*)
+              (list 'quote name)))))
+      (print (list !alpha !beta))
+      (defmacro ci-rmi-seen () (list 'quote (reverse *ci-rmi-seen*)))
+      (print (ci-rmi-seen))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (setf *readtable* *ci-rmi-standard*))
+    expected: |
+      (ALPHA BETA)
+      (ALPHA BETA)
   # Shapes parenscript, jonathan and rutils (cl-redis) load through: a package's own
   # `while` beside rontolisp's, a go in a return-from's value form, a ratio specializer,
   # a built-in macro aliased (under a keyword too), a (:type list) struct.
@@ -28552,6 +28706,20 @@ cases:
       (dolist (d (list "abc" (make-string 3) 3))
         (print (list (handler-case (format d "x") (error () :refused))
                      (handler-case (funcall #'format d "x") (error () :refused)))))
+      ;; In a package shadowing let and let* with macros of its own (fset's let is
+      ;; new-let's), what the dispatch writes into its forms stays cl's.
+      (defpackage :fpg-nl (:use :cl) (:shadow #:let #:let*))
+      (in-package :fpg-nl)
+      (defmacro let (bindings &body body) `(cl:let ,bindings ,@body))
+      (defmacro let* (bindings &body body) `(cl:let* ,bindings ,@body))
+      (defun bracket (s closed) (format s (if closed "[" "(")))
+      (defun spell (s c) (format s c 7))
+      (let ((o (make-instance 'cl-user::fpg-o)))
+        (bracket o t)
+        (bracket o nil)
+        (spell o "~a")
+        (print (reverse (cl-user::fpg-text o))))
+      (in-package :cl-user)
     expected: |
       (NIL NIL NIL "x=1y=2z=3")
       (NIL NIL (#\a #\1 #\b))
@@ -28561,6 +28729,7 @@ cases:
       (:REFUSED :REFUSED)
       (:REFUSED :REFUSED)
       (:REFUSED :REFUSED)
+      (#\[ #\( #\7)
   - name: format-write-directive-renders-like-prin1-on-both-paths
     source: |
       (princ (format nil "Expect ~W to be ~:[true~;false~]." '(= (add 1 2) 3) nil))
@@ -33666,9 +33835,18 @@ cases:
                  (defgeneric gl-deep (x) (:method (x) (list :deep k x))))))
       (setf (gl-cell *gl-cell*) 5)
       (print (list (gl-scale 3) (gl-scale "a") *gl-cell* (gl-deep 1)))
+      ;; eclector's shape: methods closing over an flet's local function, and a
+      ;; labels' that calls itself.
+      (flet ((gl-tag (x) (list :tag x)))
+        (defmethod gl-scale ((x symbol)) (gl-tag x))
+        (defmethod gl-scale ((x float)) (gl-tag (gl-tag x))))
+      (labels ((gl-wrap (x n) (if (= n 0) x (gl-wrap (list x) (- n 1)))))
+        (defmethod gl-scale ((x character)) (gl-wrap x 2)))
+      (print (list (gl-scale 'a) (gl-scale 1.5) (gl-scale #\c) (gl-scale 4)))
     expected: |
       GL-DEEP
       (6 (2 "a") (10) (:DEEP 2 1))
+      ((:TAG A) (:TAG (:TAG 1.5)) ((#\c)) 8)
   - name: negative-zero-literal-keeps-its-sign
     source: |
       (print -0.0)
@@ -35179,6 +35357,22 @@ cases:
       "\"a\""
       "\"a\""
       (1 T "1 cannot be printed readably.")
+
+  - name: format-tilde-d-prints-in-decimal-under-any-print-base
+    source: |
+      ;; CLHS 22.3.2.2: ~D prints an integer in decimal without a radix and anything else as
+      ;; by ~A in decimal base, whatever *print-base* and *print-radix* say; ~A and ~X follow
+      ;; them. Literal and run-time controls, to a string and to a stream. SBCL 2.2.9 agrees.
+      (defun tdpb-control () "~D ~:D ~@D ~5D|~D ~D")
+      (let ((*print-base* 16) (*print-radix* t))
+        (print (list (format nil "~D ~:D ~@D ~5D|~D ~D" 255 1234567 -255 42 1/3 '(1 17))
+                     (format nil (tdpb-control) 255 1234567 -255 42 1/3 '(1 17))
+                     (with-output-to-string (*standard-output*) (format t "~D ~D" 255 1/3))
+                     (format nil "~A ~X" 255 255))))
+      (print (let ((*print-base* 2) (*print-case* :downcase)) (format nil "~D ~D ~A" 5 'foo 5)))
+    expected: |
+      ("255 1,234,567 -255    42|1/3 (1 17)" "255 1,234,567 -255    42|1/3 (1 17)" "255 1/3" "#xFF FF")
+      "5 foo 101"
 
   - name: print-readably-signals-print-not-readable
     source: |
@@ -39858,6 +40052,15 @@ standalone:
       (defmethod gfp-cam-pkg ((x integer)) :integer)
       (print (list (gfp-cam-names #'gfp-cam-pkg 1) (class-name (find-class 'package))
                    (typep (find-package :cl) (find-class 'package)) (typep 'x (find-class 'package))))
+      ;; A generic whose package exports its name, and a method defined after a call: the
+      ;; answer is the dispatcher's at that point.
+      (defpackage :gfp-out (:use :cl) (:export #:gfp-out-cmp))
+      (defgeneric gfp-out:gfp-out-cmp (x y))
+      (defmethod gfp-out:gfp-out-cmp ((x t) (y t)) :t)
+      (defmethod gfp-out:gfp-out-cmp ((x real) (y real)) :real)
+      (print (list (gfp-cam-names #'gfp-out:gfp-out-cmp 1 2) (gfp-out:gfp-out-cmp 1 2)))
+      (defmethod gfp-out:gfp-out-cmp ((x integer) (y real)) :integer)
+      (print (list (gfp-cam-names #'gfp-out:gfp-out-cmp 1 2) (gfp-out:gfp-out-cmp 1 2)))
       ;; find-method and remove-method take the generic's function.
       (defgeneric gfp-fn (x))
       (defmethod gfp-fn ((x integer)) :integer)
@@ -39884,6 +40087,8 @@ standalone:
       ((NIL (INTEGER)) (NIL (NUMBER)))
       ((NIL (NUMBER)))
       (((NIL (INTEGER))) PACKAGE T NIL)
+      (((NIL (REAL REAL)) (NIL (T T))) :REAL)
+      (((NIL (INTEGER REAL)) (NIL (REAL REAL)) (NIL (T T))) :INTEGER)
       (NIL :SIGNALED)
       ((:STRING "s") T)
       (NIL :NO-METHOD :INTEGER)

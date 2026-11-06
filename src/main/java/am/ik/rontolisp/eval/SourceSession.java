@@ -11,6 +11,8 @@ import am.ik.rontolisp.clojure.ClojureMacroEvaluator;
 import am.ik.rontolisp.clojure.ClojureSession;
 import am.ik.rontolisp.clojure.ClojureTopLevel;
 import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReadException;
+import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.scheme.Scheme;
 import am.ik.rontolisp.scheme.SchemeSession;
 import am.ik.rontolisp.scheme.SchemeTopLevel;
@@ -58,6 +60,13 @@ public final class SourceSession {
 	private final @Nullable ClojureMacroEvaluator clojureMacros;
 
 	/**
+	 * Whether a Common Lisp {@code t} or {@code nil} token is {@code cl}'s constant in
+	 * the package a buffer is read in: the attached evaluator's current one
+	 * ({@link #attach}); {@code null} before, reading every one as {@code cl}'s.
+	 */
+	private java.util.function.@Nullable Predicate<String> clTOrNil;
+
+	/**
 	 * Starts a session read against every language's default standard.
 	 * @param language the language typed at the prompt
 	 */
@@ -101,13 +110,16 @@ public final class SourceSession {
 	 * Binds the session to the evaluator its inputs run on: a Clojure session's lowering
 	 * answers the lowering verbs its inputs reach as they run ({@code eval}, a computed
 	 * {@code resolve} or {@code require} ...), like one more input in the namespace
-	 * {@code *ns*} holds ({@link LispEvaluator#setClojureRunTime}). Nothing for another
-	 * language.
+	 * {@code *ns*} holds ({@link LispEvaluator#setClojureRunTime}); a Common Lisp buffer
+	 * is read in the evaluator's current package.
 	 * @param evaluator the evaluator
 	 */
 	public void attach(LispEvaluator evaluator) {
 		if (this.clojure != null) {
 			evaluator.setClojureRunTime(this.clojure.runTime());
+		}
+		if (this.language == SourceLanguage.COMMON_LISP) {
+			this.clTOrNil = evaluator.packageResolver()::readsClTOrNil;
 		}
 	}
 
@@ -157,7 +169,13 @@ public final class SourceSession {
 			}
 			return steps;
 		}
-		for (LispVal form : this.language.read(buffer, features, null)) {
+		LispReader.ReadPrefix read = this.language.readUntilError(buffer, features, null, SourceStandards.DEFAULT, null,
+				this.clTOrNil);
+		LispReadException error = read.error();
+		if (error != null) {
+			throw error;
+		}
+		for (LispVal form : read.forms()) {
 			steps.add(new Step(List.of(form), true));
 		}
 		return steps;

@@ -405,7 +405,18 @@ public final class CommonLispSwank implements SwankLisp {
 	}
 
 	private List<LispVal> read(String code) {
-		return SourceLanguage.COMMON_LISP.read(code, this.evaluator.features(), null, this.evaluator.sourceStandards());
+		LispReader.ReadPrefix read = readUntilError(code);
+		LispReadException error = read.error();
+		if (error != null) {
+			throw error;
+		}
+		return read.forms();
+	}
+
+	/** An editor's text, read in the package its request runs in. */
+	private LispReader.ReadPrefix readUntilError(String code) {
+		return SourceLanguage.COMMON_LISP.readUntilError(code, this.evaluator.features(), null,
+				this.evaluator.sourceStandards(), null, this.evaluator.packageResolver()::readsClTOrNil);
 	}
 
 	/**
@@ -996,8 +1007,7 @@ public final class CommonLispSwank implements SwankLisp {
 			java.util.function.IntFunction<SwankLocation> definitionPlace, boolean buffer) {
 		long started = System.nanoTime();
 		List<Note> notes = new ArrayList<>();
-		LispReader.ReadPrefix read = SourceLanguage.COMMON_LISP.readUntilError(code, this.evaluator.features(), null,
-				this.evaluator.sourceStandards(), null);
+		LispReader.ReadPrefix read = readUntilError(code);
 		List<Integer> offsets = SwankSources.topLevelOffsets(code, false);
 		boolean aligned = offsets.size() >= read.forms().size();
 		boolean markers = SourceLanguage.usesReadEvalMarkers(code);

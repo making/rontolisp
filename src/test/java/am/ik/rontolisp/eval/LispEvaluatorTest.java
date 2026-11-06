@@ -18615,6 +18615,12 @@ class LispEvaluatorTest {
 				(let ((h (make-hash-table :test 'equal)))
 				  (setf (gethash "x" h) (list 1 2))
 				  (rontolisp:json-stringify h))""").print()).isEqualTo("\"{\\\"x\\\":[1,2]}\"");
+		// an integer, and an integer key, in decimal whatever *print-base* is (jzon's ~D)
+		assertThat(eval("""
+				(let ((h (make-hash-table)))
+				  (setf (gethash 255 h) (list 255 (expt 2 70)))
+				  (let ((*print-base* 16) (*print-radix* t)) (rontolisp:json-stringify h)))""").print())
+			.isEqualTo("\"{\\\"255\\\":[255,1180591620717411303424]}\"");
 	}
 
 	@Test

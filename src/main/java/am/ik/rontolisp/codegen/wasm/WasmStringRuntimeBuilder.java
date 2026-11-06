@@ -280,6 +280,81 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	/**
+	 * {@link #emitCopyFromMemory}'s copy for a string that may be long, the host
+	 * boundary's: eight bytes a round, each load's offset its immediate, so a byte costs
+	 * about 9 instructions where the byte loop's costs 16; the rest one at a time. A
+	 * builder that copies only the short strings it builds keeps the byte loop, which is
+	 * the smaller.
+	 * @param w the writer
+	 * @param arr the local holding the {@code $str_bytes} array
+	 * @param at the index the first byte goes to
+	 * @param from the local holding the source address
+	 * @param count the local holding the byte count
+	 * @param i a local holding 0
+	 * @param src an i32 local
+	 */
+	static void emitCopyFromMemoryWords(WasmWriter w, int arr, int at, int from, int count, int i, int src) {
+		// Eight bytes a round while eight remain, each load's offset the immediate; the
+		// rest one at a time.
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, i);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		get(w, count);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF, 1);
+		get(w, from);
+		get(w, i);
+		w.write(Instruction.I32_ADD);
+		set(w, src);
+		for (int k = 0; k < 8; k++) {
+			get(w, arr);
+			get(w, i);
+			if (at + k != 0) {
+				i32(w, at + k);
+				w.write(Instruction.I32_ADD);
+			}
+			get(w, src);
+			w.write(Instruction.I32_LOAD8_U, 0x00, k);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		}
+		get(w, i);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		set(w, i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, i);
+		get(w, count);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		get(w, arr);
+		get(w, i);
+		if (at != 0) {
+			i32(w, at);
+			w.write(Instruction.I32_ADD);
+		}
+		get(w, from);
+		get(w, i);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		get(w, i);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+	}
+
+	/**
 	 * {@code arr[at + i] = load8_u[from + i]} for {@code i} below {@code count}, the test
 	 * at the bottom of the loop. {@code i} must be 0, as a new local is.
 	 * @param w the writer
@@ -354,20 +429,22 @@ final class WasmStringRuntimeBuilder {
 	 * pointer (WASI iovecs, the reader input scratch, the fetch wire, the host
 	 * {@code :string} boundary, runtime intern); content-only callers use
 	 * {@code [ptr+1, ptr+len-1)}.
+	 * @param charvecPossible whether a character vector can reach it
+	 * @param words whether to copy eight bytes a round, a speed-for-size trade
 	 * @return the function body (signature {@code ((ref null eq),i32)->i32},
 	 * TYPE_STR_TO_MEM)
 	 */
-	static byte[] buildStrToMemBody(boolean charvecPossible) {
+	static byte[] buildStrToMemBody(boolean charvecPossible, boolean words) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: str = 0 (ref null eq), ptr = 1. locals: arr = 2 ($str_bytes), len = 3,
-		// i = 4 (i32).
+		// i = 4, dst = 5 (i32).
 		w.write(2);
 		w.write(1);
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
-		w.write(2);
+		w.write(3);
 		w.write(Type.I32);
-		int str = 0, ptr = 1, arr = 2, len = 3, i = 4;
+		int str = 0, ptr = 1, arr = 2, len = 3, i = 4, dst = 5;
 		// A mutable character vector crossing this boundary (a subseq/copy-seq result
 		// handed to the host, a path, the reader scratch) renders once here; any other
 		// value passes through _charvec_to_str unchanged, so a TYPE_STRING costs one
@@ -392,11 +469,48 @@ final class WasmStringRuntimeBuilder {
 			get(w, len);
 			w.write(Instruction.I32_ADD);
 		});
-		// mem[ptr + i] = array.get_u(arr, i) for each i, the test at the bottom of the
-		// loop: a framed string has at least its two quotes, a symbol its name
+		// Eight bytes a round while eight remain, each store's offset its immediate: a
+		// body crossing to the host costs about 9 instructions a byte where the byte loop
+		// below costs 13, for about 120 bytes of module.
+		if (words) {
+			w.write(Instruction.BLOCK, 0x40);
+			w.write(Instruction.LOOP, 0x40);
+			get(w, i);
+			i32(w, 8);
+			w.write(Instruction.I32_ADD);
+			get(w, len);
+			w.write(Instruction.I32_GT_U);
+			w.write(Instruction.BR_IF, 1);
+			get(w, ptr);
+			get(w, i);
+			w.write(Instruction.I32_ADD);
+			set(w, dst);
+			for (int k = 0; k < 8; k++) {
+				get(w, dst);
+				get(w, arr);
+				get(w, i);
+				if (k != 0) {
+					i32(w, k);
+					w.write(Instruction.I32_ADD);
+				}
+				w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+				w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+				w.write(Instruction.I32_STORE8, 0x00, k);
+			}
+			get(w, i);
+			i32(w, 8);
+			w.write(Instruction.I32_ADD);
+			set(w, i);
+			w.write(Instruction.BR, 0);
+			w.write(Instruction.END); // loop
+			w.write(Instruction.END); // block
+		}
+		// mem[ptr + i] = array.get_u(arr, i) for each i left, the test at the bottom of
+		// the loop
 		w.write(Instruction.BLOCK, 0x40);
+		get(w, i);
 		get(w, len);
-		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF, 0);
 		w.write(Instruction.LOOP, 0x40);
 		get(w, ptr);

@@ -14809,7 +14809,9 @@ public final class LispMacroExpander {
 				case ":TYPE" -> type = value;
 				case ":KEEP" -> keep = value;
 				case ":DIRECTION" -> {
-					if (!(value instanceof LispSymbol dir) || !(LispNames.INPUT_KEYWORD.equals(dir.name())
+					// A quoted keyword is the same constant (coalton's compile writes
+					// :direction ':output).
+					if (!(unquoted(value) instanceof LispSymbol dir) || !(LispNames.INPUT_KEYWORD.equals(dir.name())
 							|| LispNames.OUTPUT_KEYWORD.equals(dir.name()))) {
 						throw new UnsupportedOperationException(LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED
 								+ " :direction must be the literal :input or :output");
@@ -16905,11 +16907,13 @@ public final class LispMacroExpander {
 	 * its spelling in a pristine {@code cl-user}; a qualified one what its name interns
 	 * in the package the qualifier names, which the current package's nicknames read. A
 	 * qualifier naming no package keeps the spelling, as a token with a colon past a
-	 * qualifier's does: the readers do not ask. {@code t} is read ahead of any package,
-	 * as the interpreter's reader folds it. A nickname of the current package may be
-	 * named like the package found, and {@code intern} would read its designator through
-	 * it; a package has no nickname of its own name, so in a program with nicknames the
-	 * lookup runs with that package current.
+	 * qualifier's does: the readers do not ask. {@code t} and {@code nil} are no
+	 * exception, as the interpreter's reader asks for them too ({@code .kb/packages.md}):
+	 * a package using no {@code cl} reads its own; {@code nil} comes in as nil, and
+	 * whichever reader answers the symbol spelled {@code NIL} reads it as nil. A nickname
+	 * of the current package may be named like the package found, and {@code intern}
+	 * would read its designator through it; a package has no nickname of its own name, so
+	 * in a program with nicknames the lookup runs with that package current.
 	 * @param program the resolved top-level forms
 	 * @param resolver the resolver holding the final registry
 	 * @return the program with the definition prepended, or unchanged
@@ -16922,7 +16926,7 @@ public final class LispMacroExpander {
 		String source = """
 				(defun %read-home (%rh-s %rh-q)
 				  (let ((%rh-k (if %rh-q (find-package %rh-q) *package*)))
-				    (if (or (null %rh-k) (eq %rh-s t) CL_USER_ANSWERS)
+				    (if (or (null %rh-k) CL_USER_ANSWERS)
 				        %rh-s
 				        LOOKUP)))
 				"""
@@ -28277,8 +28281,8 @@ public final class LispMacroExpander {
 	 * {@code (order method...)}, its argument precedence order as indexes and the
 	 * metaobjects of the methods its dispatcher was generated from, newest first as
 	 * {@code add-method} keeps them. Nil for a generic whose {@code defgeneric} named its
-	 * metaobject classes, whose metaobject holds them. A nested method not yet defined
-	 * answers nil in its place.
+	 * metaobject classes, whose metaobject holds them. A nested method not yet defined,
+	 * or one whose generation has not begun or is over, answers nil in its place.
 	 * @param generic the generic
 	 * @param closRegistry the registry
 	 * @return the form
@@ -28296,14 +28300,42 @@ public final class LispMacroExpander {
 		List<LispVal> form = new java.util.ArrayList<>();
 		form.add(new LispSymbol(LispNames.LIST));
 		form.add(quotedData(order.isEmpty() ? LispNil.INSTANCE : listToCons(order)));
-		List<String> keys = new java.util.ArrayList<>(generic.methods().keySet());
-		java.util.Collections.reverse(keys);
-		for (String key : keys) {
-			ClosRegistry.MethodInfo method = java.util.Objects.requireNonNull(generic.methods().get(key));
+		// Each method once, in the order every table keeps, with the generations it is
+		// in. The interpreter builds this form per call, and has no generations.
+		DispatchBranches states = new DispatchBranches(
+				generic.generations().stream().map(ClosRegistry.MethodGeneration::flag).toList(), 0);
+		java.util.LinkedHashMap<java.util.Map.Entry<String, ClosRegistry.MethodInfo>, java.util.BitSet> methods = new java.util.LinkedHashMap<>();
+		if (generic.generations().isEmpty()) {
+			java.util.BitSet always = new java.util.BitSet();
+			always.set(0);
+			generic.methods().forEach((key, method) -> methods.put(java.util.Map.entry(key, method), always));
+		}
+		else {
+			List<List<java.util.Map.Entry<String, ClosRegistry.MethodInfo>>> perTable = new java.util.ArrayList<>();
+			for (ClosRegistry.GenericInfo table : generationTables(generic)) {
+				perTable.add(table.methods()
+					.entrySet()
+					.stream()
+					.map(keyed -> java.util.Map.entry(keyed.getKey(), keyed.getValue()))
+					.toList());
+			}
+			methods.putAll(states.union(perTable));
+		}
+		List<java.util.Map.Entry<String, ClosRegistry.MethodInfo>> newestFirst = new java.util.ArrayList<>(
+				methods.keySet());
+		java.util.Collections.reverse(newestFirst);
+		for (java.util.Map.Entry<String, ClosRegistry.MethodInfo> keyed : newestFirst) {
+			String key = keyed.getKey();
+			ClosRegistry.MethodInfo method = keyed.getValue();
 			boolean nested = closRegistry.isNestedMethodFunction(method.functionName());
 			LispVal object = staticMethodCall("%GF-STATIC-METHOD", generic, key, method,
 					nested ? new LispSymbol(method.functionName()) : functionRef(method.functionName()), closRegistry);
-			form.add(nested ? makeIf(methodAssignedTest(method.functionName()), object, LispNil.INSTANCE) : object);
+			LispVal live = states.guard(java.util.Objects.requireNonNull(methods.get(keyed)));
+			if (nested) {
+				LispVal assigned = methodAssignedTest(method.functionName());
+				live = live == null ? assigned : listToCons(List.of(new LispSymbol(LispNames.AND), live, assigned));
+			}
+			form.add(live == null ? object : makeIf(live, object, LispNil.INSTANCE));
 		}
 		return listToCons(form);
 	}
@@ -28320,7 +28352,9 @@ public final class LispMacroExpander {
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		if (asksApplicableMethods) {
 			for (ClosRegistry.GenericInfo generic : closRegistry.generics().values()) {
-				if (placedDispatchers.contains(generic.name())) {
+				// The walk places a dispatcher under its normalized name; a generic's own
+				// name keeps the external spelling its package exports it under.
+				if (placedDispatchers.contains(ClosRegistry.normalize(generic.name()))) {
 					clauses.add(listToCons(List.of(mvCall(LispNames.EQ_GENERAL, gf, functionRef(generic.name())),
 							staticMethodsForm(generic, closRegistry))));
 				}
@@ -29349,20 +29383,9 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> params = generic.paramNames().stream().<LispVal>map(LispSymbol::new).toList();
 		boolean variadic = generic.variadic();
-		LispVal chain = dispatchBody(generic, params, closRegistry, builtinFallback, narrower);
-		// A call that runs before a later method's form sees the table of its time; the
-		// newest flag is tested first, so a call after the last form tests one global.
-		List<ClosRegistry.MethodGeneration> generations = generic.generations();
-		if (!generations.isEmpty()) {
-			LispVal older = generationBody(generations.get(0), generic, params, closRegistry, builtinFallback,
-					narrower);
-			for (int i = 0; i < generations.size(); i++) {
-				LispVal newer = i + 1 == generations.size() ? chain : generationBody(generations.get(i + 1), generic,
-						params, closRegistry, builtinFallback, narrower);
-				older = makeIf(new LispSymbol(generations.get(i).flag()), newer, older);
-			}
-			chain = older;
-		}
+		LispVal chain = generic.generations().isEmpty()
+				? dispatchBody(generic, params, closRegistry, builtinFallback, narrower)
+				: generationalDispatchBody(generic, params, closRegistry, builtinFallback, narrower);
 		List<LispVal> defun = new java.util.ArrayList<>();
 		defun.add(new LispSymbol(LispNames.DEFUN));
 		defun.add(new LispSymbol(generic.name()));
@@ -29383,34 +29406,109 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal dispatchBody(ClosRegistry.GenericInfo generic, List<LispVal> params,
 			ClosRegistry closRegistry, @Nullable String builtinFallback, @Nullable DispatchNarrower narrower) {
-		boolean combined = generic.methodCombinationExpander() != null
-				|| generic.methods().values().stream().anyMatch(m -> !m.isPrimary() || m.usesNext());
-		LispVal chain = combined ? combinedDispatchBody(generic, params, closRegistry, builtinFallback, narrower)
-				: simpleDispatchBody(generic, params, closRegistry, builtinFallback, narrower);
+		LispVal chain = dispatchChain(generic, combines(generic), params, closRegistry, builtinFallback, narrower)
+			.form();
 		if ((closRegistry.dynamicClasses() || closRegistry.gfProtocol()) && generic.methodCombination() == null) {
 			chain = withDynamicDispatchArm(generic, params, generic.variadic(), closRegistry, chain);
 		}
 		return chain;
 	}
 
-	/**
-	 * The dispatcher body over one earlier method table. Before anything made the generic
-	 * exist, a call is a call of an undefined function; a built-in the generic shadows
-	 * answers it instead, as its default method.
-	 */
-	private static LispVal generationBody(ClosRegistry.MethodGeneration generation, ClosRegistry.GenericInfo generic,
+	/** Whether a dispatcher over the generic's table needs the method combination. */
+	private static boolean combines(ClosRegistry.GenericInfo generic) {
+		return generic.methodCombinationExpander() != null
+				|| generic.methods().values().stream().anyMatch(m -> !m.isPrimary() || m.usesNext());
+	}
+
+	private static DispatchBranches.Chain dispatchChain(ClosRegistry.GenericInfo generic, boolean combined,
 			List<LispVal> params, ClosRegistry closRegistry, @Nullable String builtinFallback,
 			@Nullable DispatchNarrower narrower) {
-		if (generation.methods().isEmpty() && !generation.declared() && builtinFallback == null) {
-			return listToCons(List.of(new LispSymbol(LispNames.ERROR),
-					quotedData(new LispSymbol(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME)), new LispSymbol(":NAME"),
-					quotedData(new LispSymbol(generic.name())), new LispSymbol(":FORMAT-CONTROL"),
-					new LispString((ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX
-							+ ClosRegistry.functionNameForReport(generic.name())
-							+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX)
-						.replace("~", "~~"))));
+		return combined ? combinedDispatchChain(generic, params, closRegistry, builtinFallback, narrower)
+				: simpleDispatchChain(generic, params, closRegistry, builtinFallback, narrower);
+	}
+
+	/**
+	 * The dispatcher body of a generic with generations: one chain over the branches of
+	 * every generation's table, each guarded by the generations it is in
+	 * ({@link DispatchBranches}). A table that combines makes every table's chain the
+	 * combined one, which answers a table without qualifiers or {@code call-next-method}
+	 * as the simple one does. Before anything made the generic exist, a call is a call of
+	 * an undefined function; a built-in the generic shadows answers it instead, as its
+	 * default method.
+	 */
+	private static LispVal generationalDispatchBody(ClosRegistry.GenericInfo generic, List<LispVal> params,
+			ClosRegistry closRegistry, @Nullable String builtinFallback, @Nullable DispatchNarrower narrower) {
+		List<ClosRegistry.MethodGeneration> generations = generic.generations();
+		int floor = 0;
+		while (floor < generations.size() && generations.get(floor).methods().isEmpty()
+				&& !generations.get(floor).declared() && builtinFallback == null) {
+			floor++;
 		}
-		return dispatchBody(generic.withMethods(generation.methods()), params, closRegistry, builtinFallback, narrower);
+		List<ClosRegistry.GenericInfo> tables = generationTables(generic).subList(floor, generations.size() + 1);
+		boolean combined = tables.stream().anyMatch(LispMacroExpander::combines);
+		DispatchBranches dispatch = new DispatchBranches(
+				generations.stream().map(ClosRegistry.MethodGeneration::flag).toList(), floor);
+		List<DispatchBranches.Chain> chains = new java.util.ArrayList<>();
+		for (ClosRegistry.GenericInfo table : tables) {
+			chains.add(dispatchChain(table, combined, params, closRegistry, builtinFallback, narrower));
+		}
+		LispVal chain = dispatch.form(chains);
+		if ((closRegistry.dynamicClasses() || closRegistry.gfProtocol()) && generic.methodCombination() == null) {
+			chain = generationalDynamicDispatchArm(generic, tables, params, closRegistry, dispatch, chain);
+		}
+		if (floor > 0) {
+			chain = makeIf(new LispSymbol(generations.get(floor - 1).flag()), chain,
+					listToCons(List.of(new LispSymbol(LispNames.ERROR),
+							quotedData(new LispSymbol(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME)),
+							new LispSymbol(":NAME"), quotedData(new LispSymbol(generic.name())),
+							new LispSymbol(":FORMAT-CONTROL"),
+							new LispString((ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX
+									+ ClosRegistry.functionNameForReport(generic.name())
+									+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX)
+								.replace("~", "~~")))));
+		}
+		return chain;
+	}
+
+	/**
+	 * The generic over each generation's method table, oldest first, then the generic
+	 * itself with its last one.
+	 */
+	private static List<ClosRegistry.GenericInfo> generationTables(ClosRegistry.GenericInfo generic) {
+		List<ClosRegistry.GenericInfo> tables = new java.util.ArrayList<>();
+		for (ClosRegistry.MethodGeneration generation : generic.generations()) {
+			tables.add(generic.withMethods(generation.methods()));
+		}
+		tables.add(generic);
+		return tables;
+	}
+
+	/**
+	 * The run-time dispatch arm of {@link #withDynamicDispatchArm} over every generation:
+	 * each test and each method's entry guarded by the generations whose table has it.
+	 */
+	private static LispVal generationalDynamicDispatchArm(ClosRegistry.GenericInfo generic,
+			List<ClosRegistry.GenericInfo> tables, List<LispVal> params, ClosRegistry closRegistry,
+			DispatchBranches dispatch, LispVal chain) {
+		List<List<LispVal>> testsPerTable = new java.util.ArrayList<>();
+		List<List<ClosRegistry.MethodInfo>> methodsPerTable = new java.util.ArrayList<>();
+		for (ClosRegistry.GenericInfo table : tables) {
+			testsPerTable.add(dynamicArmTests(table, params, closRegistry));
+			methodsPerTable.add(new java.util.ArrayList<>(table.methods().values()));
+		}
+		java.util.LinkedHashMap<LispVal, java.util.BitSet> tests = dispatch.union(testsPerTable);
+		if (tests.isEmpty() && !closRegistry.gfProtocol()) {
+			return chain;
+		}
+		List<LispVal> guardedTests = new java.util.ArrayList<>();
+		tests.forEach((test, states) -> guardedTests.add(dispatch.guarded(test, states)));
+		List<LispVal> entries = new java.util.ArrayList<>();
+		dispatch.union(methodsPerTable).forEach((method, states) -> {
+			LispVal entry = dynamicMethodEntry(method, params, closRegistry, generic.precedenceIndexes());
+			LispVal live = dispatch.guard(states);
+			entries.add(live == null ? entry : makeIf(live, entry, LispNil.INSTANCE));
+		});
+		return dynamicArm(generic, params, generic.variadic(), closRegistry, guardedTests, entries, chain);
 	}
 
 	/**
@@ -29426,7 +29524,24 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal withDynamicDispatchArm(ClosRegistry.GenericInfo generic, List<LispVal> params,
 			boolean variadic, ClosRegistry closRegistry, LispVal chain) {
-		boolean runtimeMethods = closRegistry.gfProtocol();
+		List<LispVal> tests = dynamicArmTests(generic, params, closRegistry);
+		if (tests.isEmpty() && !closRegistry.gfProtocol()) {
+			return chain;
+		}
+		List<LispVal> entries = new java.util.ArrayList<>();
+		for (ClosRegistry.MethodInfo m : generic.methods().values()) {
+			entries.add(dynamicMethodEntry(m, params, closRegistry, generic.precedenceIndexes()));
+		}
+		return dynamicArm(generic, params, variadic, closRegistry, tests, entries, chain);
+	}
+
+	/**
+	 * What sends a call down the run-time dispatch arm besides run-time methods: an
+	 * instance of a class made at run time where a method specializes on a class, and,
+	 * when the generic combines, an argument an eql specializer selects.
+	 */
+	private static List<LispVal> dynamicArmTests(ClosRegistry.GenericInfo generic, List<LispVal> params,
+			ClosRegistry closRegistry) {
 		java.util.SortedSet<Integer> positions = new java.util.TreeSet<>();
 		if (closRegistry.dynamicClasses()) {
 			for (ClosRegistry.MethodInfo m : generic.methods().values()) {
@@ -29438,18 +29553,11 @@ public final class LispMacroExpander {
 				}
 			}
 		}
-		if (positions.isEmpty() && !runtimeMethods) {
-			return chain;
-		}
-		List<LispVal> anyDynamic = new java.util.ArrayList<>();
-		anyDynamic.add(new LispSymbol(LispNames.OR));
-		if (runtimeMethods) {
-			anyDynamic.add(new LispSymbol(GF_RUNTIME_METHODS_VAR));
-		}
+		List<LispVal> tests = new java.util.ArrayList<>();
 		for (int i : positions) {
-			anyDynamic.add(objIs(params.get(i), List.of(ClosRegistry.DYNAMIC_OBJECT_TAG)));
+			tests.add(objIs(params.get(i), List.of(ClosRegistry.DYNAMIC_OBJECT_TAG)));
 		}
-		if (anyDynamic.size() > 1
+		if ((!tests.isEmpty() || closRegistry.gfProtocol())
 				&& generic.methods().values().stream().anyMatch(m -> !m.isPrimary() || m.usesNext())) {
 			// An argument an eql specializer selects takes the run-time combination too:
 			// the static eql branch admits only methods specialized the same way, so a
@@ -29462,17 +29570,31 @@ public final class LispMacroExpander {
 					if (specs.get(i).kind() == ClosRegistry.SpecializerKind.EQL) {
 						LispVal test = singleSpecializerTest(specs.get(i), params.get(i), closRegistry);
 						if (seen.add(test.print())) {
-							anyDynamic.add(test);
+							tests.add(test);
 						}
 					}
 				}
 			}
 		}
+		return tests;
+	}
+
+	/**
+	 * The run-time dispatch arm over {@code chain}: taken when one of {@code tests} holds
+	 * or the generic has run-time methods, and some primary method's entry applies.
+	 */
+	private static LispVal dynamicArm(ClosRegistry.GenericInfo generic, List<LispVal> params, boolean variadic,
+			ClosRegistry closRegistry, List<LispVal> tests, List<LispVal> methodEntries, LispVal chain) {
+		boolean runtimeMethods = closRegistry.gfProtocol();
+		List<LispVal> anyDynamic = new java.util.ArrayList<>();
+		anyDynamic.add(new LispSymbol(LispNames.OR));
+		if (runtimeMethods) {
+			anyDynamic.add(new LispSymbol(GF_RUNTIME_METHODS_VAR));
+		}
+		anyDynamic.addAll(tests);
 		List<LispVal> entries = new java.util.ArrayList<>();
 		entries.add(new LispSymbol(LispNames.LIST));
-		for (ClosRegistry.MethodInfo m : generic.methods().values()) {
-			entries.add(dynamicMethodEntry(m, params, closRegistry, generic.precedenceIndexes()));
-		}
+		entries.addAll(methodEntries);
 		List<LispVal> argList = new java.util.ArrayList<>();
 		argList.add(new LispSymbol(variadic ? LispNames.LIST_STAR : LispNames.LIST));
 		argList.addAll(params);
@@ -29723,9 +29845,15 @@ public final class LispMacroExpander {
 			":AROUND");
 
 	/**
-	 * The single-method-per-branch dispatcher body (no qualifiers, no call-next-method).
+	 * The key prefix of a multiple-inheritance exact-tag branch, which tests one class
+	 * where a method's branch on the same specializers tests its descendants too.
 	 */
-	private static LispVal simpleDispatchBody(ClosRegistry.GenericInfo generic, List<LispVal> params,
+	private static final String EXACT_TAG_BRANCH_KEY = "%exact-tag ";
+
+	/**
+	 * The single-method-per-branch dispatcher chain (no qualifiers, no call-next-method).
+	 */
+	private static DispatchBranches.Chain simpleDispatchChain(ClosRegistry.GenericInfo generic, List<LispVal> params,
 			ClosRegistry closRegistry, @Nullable String builtinFallback, @Nullable DispatchNarrower narrower) {
 		List<ClosRegistry.MethodInfo> methods = new java.util.ArrayList<>(generic.methods().values());
 		MiRefinement refinement = miRefinement(generic, closRegistry);
@@ -29751,20 +29879,20 @@ public final class LispMacroExpander {
 			.filter(ClosRegistry.MethodInfo::isDefault)
 			.findFirst()
 			.orElse(null);
-		LispVal chain;
+		LispVal base;
 		if (defaultMethod == null) {
-			chain = fallbackOrNoApplicableMethod(generic.name(), params, variadic, builtinFallback);
+			base = fallbackOrNoApplicableMethod(generic.name(), params, variadic, builtinFallback);
 		}
 		else if (!closRegistry.isNestedMethodFunction(defaultMethod.functionName())) {
-			chain = methodCall(defaultMethod, params, variadic);
+			base = methodCall(defaultMethod, params, variadic);
 		}
 		else {
 			// A nested default is assigned only when its defmethod form runs; until
 			// then the call falls through to the last resort.
-			chain = makeIf(methodAssignedTest(defaultMethod.functionName()),
-					methodCall(defaultMethod, params, variadic),
+			base = makeIf(methodAssignedTest(defaultMethod.functionName()), methodCall(defaultMethod, params, variadic),
 					fallbackOrNoApplicableMethod(generic.name(), params, variadic, builtinFallback));
 		}
+		List<DispatchBranches.Branch> branches = new java.util.ArrayList<>();
 		for (ClosRegistry.MethodInfo method : methods.reversed()) {
 			if (method.isDefault()) {
 				continue;
@@ -29774,21 +29902,18 @@ public final class LispMacroExpander {
 				// the method defun once nothing references it.
 				continue;
 			}
-			LispVal test = exactTagBranches.contains(method)
-					? miExactTagTest(method, java.util.Objects.requireNonNull(refinement), params)
+			boolean exactTag = exactTagBranches.contains(method);
+			LispVal test = exactTag ? miExactTagTest(method, java.util.Objects.requireNonNull(refinement), params)
 					: specializerTest(method, params, closRegistry);
-			if (closRegistry.isNestedMethodFunction(method.functionName())) {
-				// The body is assigned only when the defmethod form runs; until then
-				// the branch is skipped.
-				List<LispVal> and = new java.util.ArrayList<>();
-				and.add(new LispSymbol(LispNames.AND));
-				and.add(methodAssignedTest(method.functionName()));
-				and.add(test);
-				test = listToCons(and);
-			}
-			chain = makeIf(test, methodCall(method, params, variadic), chain);
+			// A nested body is assigned only when the defmethod form runs; until then the
+			// branch is skipped.
+			LispVal guard = closRegistry.isNestedMethodFunction(method.functionName())
+					? methodAssignedTest(method.functionName()) : null;
+			branches.add(new DispatchBranches.Branch(
+					(exactTag ? EXACT_TAG_BRANCH_KEY : "") + specKeyText(method.specializers()), test, guard,
+					methodCall(method, params, variadic)));
 		}
-		return chain;
+		return new DispatchBranches.Chain(branches.reversed(), base);
 	}
 
 	/**
@@ -29935,13 +30060,13 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The standard-method-combination dispatcher body: one branch per distinct
+	 * The standard-method-combination dispatcher chain: one branch per distinct
 	 * specializer (most specific first) whose value is that branch's effective method
 	 * (its applicable {@code :around}/{@code :before}/primary/{@code :after} methods
 	 * composed with {@code call-next-method}), with the default methods as the fallback
 	 * branch.
 	 */
-	private static LispVal combinedDispatchBody(ClosRegistry.GenericInfo generic, List<LispVal> params,
+	private static DispatchBranches.Chain combinedDispatchChain(ClosRegistry.GenericInfo generic, List<LispVal> params,
 			ClosRegistry closRegistry, @Nullable String builtinFallback, @Nullable DispatchNarrower narrower) {
 		java.util.LinkedHashMap<String, ClosRegistry.MethodInfo> reps = new java.util.LinkedHashMap<>();
 		for (ClosRegistry.MethodInfo m : generic.methods().values()) {
@@ -29969,38 +30094,34 @@ public final class LispMacroExpander {
 		java.util.@Nullable Set<String> roles = generic.methodCombinationExpander() != null ? null
 				: generic.methodCombination() == null ? STANDARD_COMBINATION_ROLES
 						: java.util.Set.of(generic.methodCombination(), ":AROUND");
-		LispVal chain = effectiveMethod(null, generic, params, closRegistry, builtinFallback);
+		LispVal base = effectiveMethod(null, generic, params, closRegistry, builtinFallback);
 		LispVal fallbackGuard = nestedBranchGuard(generic, null, closRegistry, roles);
 		if (fallbackGuard != null) {
 			// A nested default is assigned only when its defmethod form runs; until
 			// then the call falls through to the last resort.
-			chain = makeIf(fallbackGuard, chain,
+			base = makeIf(fallbackGuard, base,
 					fallbackOrNoApplicableMethod(generic.name(), params, generic.variadic(), builtinFallback));
 		}
+		List<DispatchBranches.Branch> chain = new java.util.ArrayList<>();
 		for (ClosRegistry.MethodInfo rep : branches.reversed()) {
 			if (narrower != null && !narrower.branchSelectable(generic.name(), rep.specializers())) {
 				// No call site can select this branch (a meet branch's vector is more
 				// specific than either parent, so it is ruled out with them).
 				continue;
 			}
-			LispVal test = exactTagBranches.contains(rep)
-					? miExactTagTest(rep, java.util.Objects.requireNonNull(refinement), params)
+			boolean exactTag = exactTagBranches.contains(rep);
+			LispVal test = exactTag ? miExactTagTest(rep, java.util.Objects.requireNonNull(refinement), params)
 					: specializerTest(rep, params, closRegistry);
+			// A nested participant is assigned only when its defmethod form runs; until
+			// then the branch is skipped. Conservative: the whole branch is skipped when
+			// ANY participant is unassigned, even when the remaining ones could still
+			// run.
 			LispVal branchGuard = nestedBranchGuard(generic, rep, closRegistry, roles);
-			if (branchGuard != null) {
-				// A nested participant is assigned only when its defmethod form runs;
-				// until then the branch is skipped. Conservative: the whole
-				// branch is skipped when ANY participant is unassigned, even when the
-				// remaining ones could still run.
-				List<LispVal> and = new java.util.ArrayList<>();
-				and.add(new LispSymbol(LispNames.AND));
-				and.add(branchGuard);
-				and.add(test);
-				test = listToCons(and);
-			}
-			chain = makeIf(test, effectiveMethod(rep, generic, params, closRegistry, builtinFallback), chain);
+			chain.add(new DispatchBranches.Branch(
+					(exactTag ? EXACT_TAG_BRANCH_KEY : "") + specKeyText(rep.specializers()), test, branchGuard,
+					effectiveMethod(rep, generic, params, closRegistry, builtinFallback)));
 		}
-		return chain;
+		return new DispatchBranches.Chain(chain.reversed(), base);
 	}
 
 	/** The specializer key of a method, ignoring its qualifier. */
@@ -31005,11 +31126,16 @@ public final class LispMacroExpander {
 		return qn == null ? name : qn.member();
 	}
 
-	/** Whether the form is {@code (defun <functionName> ...)}, member-name matched. */
+	/**
+	 * Whether the form is {@code (defun <functionName> ...)} of the standard name itself,
+	 * spelled bare as the resolver leaves it. A package's own symbol of the name is
+	 * another function: coalton-impl/entry shadows {@code compile} and defines its own,
+	 * which must not keep the compile runtime out of the program.
+	 */
 	private static boolean definesFunction(LispVal form, String functionName) {
 		return isNamedForm(form, LispNames.DEFUN) && form instanceof LispCons cons
 				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
-				&& functionName.equals(memberOf(name.name()));
+				&& functionName.equals(name.name());
 	}
 
 	// A #'make-instance VALUE reference anywhere outside quoted data -- a literal
@@ -32732,11 +32858,15 @@ public final class LispMacroExpander {
 	/**
 	 * Whether the form is a top-level {@code let}/{@code let*} carrying a
 	 * {@code defmethod} or {@code defgeneric} anywhere in its body (quoted data skipped)
-	 * -- the closure-over-let method idiom.
+	 * -- the closure-over-let method idiom -- or an {@code flet}/{@code labels} doing the
+	 * same over local functions (eclector's {@code package-name*} around two
+	 * {@code report-condition} methods). Both shapes keep their body at index 2, and the
+	 * backend lowers the binder around the method-body defuns that replace the methods.
 	 */
 	private static boolean isLetWithNestedMethodDefinition(LispVal form) {
 		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
-				|| (!LispNames.LET.equals(op.name()) && !LispNames.LET_STAR.equals(op.name()))
+				|| !(LispNames.LET.equals(op.name()) || LispNames.LET_STAR.equals(op.name())
+						|| LispNames.FLET.equals(op.name()) || LispNames.LABELS.equals(op.name()))
 				|| !cons.isProperList()) {
 			return false;
 		}
@@ -33593,9 +33723,14 @@ public final class LispMacroExpander {
 		if (!literal) {
 			branch.set(1, new LispSymbol(FORMAT_DEST_VAR));
 		}
-		LispVal branched = listToCons(List.of(new LispSymbol(LispNames.IF), ifParts.get(1),
+		// The operators are the reader's own: GrayStreamsLibrary distributes a call
+		// inside a form the source spelled, ahead of the compilers' resolver, and the
+		// package it reads in may shadow let (fset's).
+		LispVal branched = listToCons(List.of(ReaderSymbols.IF, ifParts.get(1),
 				replaceFormatControl(branch, ifParts.get(2)), replaceFormatControl(branch, ifParts.get(3))));
-		return literal ? branched : makeLet(FORMAT_DEST_VAR, parts.get(1), branched);
+		return literal ? branched : listToCons(List.of(ReaderSymbols.LET,
+				new LispCons(listToCons(List.of(new LispSymbol(FORMAT_DEST_VAR), parts.get(1))), LispNil.INSTANCE),
+				branched));
 	}
 
 	// A distributed format's branches, expanded in place.
@@ -34305,7 +34440,7 @@ public final class LispMacroExpander {
 					LispVal arg = args.next(directive);
 					LispVal base = (colon || at)
 							? decimalExpr(arg, colon, fmtCommaChar(params, 2), fmtInterval(params, 3), at)
-							: fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg);
+							: fmtCall(LispNames.DECIMAL_PIECE_INTERNAL, arg);
 					if (fmtHasParam(params, 0)) {
 						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 1, ' '), true);
 					}
@@ -34826,7 +34961,7 @@ public final class LispMacroExpander {
 		LispSymbol nstr = new LispSymbol("__fmtn");
 		LispSymbol neg = new LispSymbol("__fmtneg");
 		LispSymbol dig = new LispSymbol("__fmtd");
-		LispVal nstrInit = fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg);
+		LispVal nstrInit = fmtCall(LispNames.DECIMAL_PIECE_INTERNAL, arg);
 		LispVal negInit = fmtCall(LispNames.LT, arg, new LispInteger(0));
 		LispVal digInit = makeIf(neg, fmtCall(LispNames.SUBSEQ, nstr, new LispInteger(1)), nstr);
 		LispVal grouped = comma ? groupExpr(dig, commaChar, interval) : dig;
@@ -34836,9 +34971,9 @@ public final class LispMacroExpander {
 		LispVal body = fmtCall(LispNames.STRING_CONCAT, sign, grouped);
 		LispVal digits = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
 		// The same CLHS 22.3.2 rule as radixIntegerExpr, and the same runtime renderer
-		// to agree with (%fmt-dec). Plain ~D is already princ-to-string; this is the
+		// to agree with (%fmt-dec). Plain ~D is already %decimal-piece; this is the
 		// ~:D / ~@D arm, which would otherwise compare a non-number against zero.
-		return makeIf(fmtCall(LispNames.NUMBERP, arg), digits, fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg));
+		return makeIf(fmtCall(LispNames.NUMBERP, arg), digits, fmtCall(LispNames.DECIMAL_PIECE_INTERNAL, arg));
 	}
 
 	/** Builds the comma-grouping loop over a string of digits. */
@@ -35176,6 +35311,9 @@ public final class LispMacroExpander {
 				}
 				if (LispNames.PRIN1_PIECE_INTERNAL.equals(head.name())) {
 					return fmtCall(LispNames.PRIN1, parts.get(1));
+				}
+				if (LispNames.DECIMAL_PIECE_INTERNAL.equals(head.name())) {
+					return fmtCall(LispNames.DECIMAL_PRINC_INTERNAL, parts.get(1));
 				}
 			}
 			if (LispNames.FIXED_DECIMAL.equals(head.name())) {
@@ -36829,7 +36967,7 @@ public final class LispMacroExpander {
 		}
 		return switch (head.name()) {
 			case LispNames.STRING_CONCAT, LispNames.PRINT_WITHOUT_READABLY_INTERNAL, LispNames.PRINC_PIECE_INTERNAL,
-					LispNames.PRIN1_PIECE_INTERNAL ->
+					LispNames.PRIN1_PIECE_INTERNAL, LispNames.DECIMAL_PIECE_INTERNAL ->
 				cons.toList().subList(1, cons.toList().size()).stream().allMatch(LispMacroExpander::buildsTextOnly);
 			case LispNames.WITH_OUTPUT_TO_STRING -> rendersSignalReport(cons);
 			default -> false;
@@ -44086,6 +44224,33 @@ public final class LispMacroExpander {
 			return callOf(fold ? LispNames.PRINT_CASE_FOLD_INTERNAL : LispNames.PRINT_RADIXED_INTERNAL, parts.get(1));
 		}
 		return fold ? parts.get(1) : callOf(LispNames.PRIN1_TO_STRING_RAW, parts.get(1));
+	}
+
+	/**
+	 * Lowers {@code ~D}'s two leaves, {@code (%decimal-piece x)} (the text) and
+	 * {@code (%decimal-princ x)} (written to {@code *standard-output*}): through the
+	 * {@code %decimal-text} prelude defun, which binds {@code *print-base*} 10 and
+	 * {@code *print-radix*} nil, where either variable can be off its default, and as
+	 * {@code %princ-piece} / {@code princ} elsewhere -- so a program that names neither
+	 * variable compiles {@code ~D} as it did before the leaves existed.
+	 * @param cons the call
+	 * @param rebinds whether {@code %decimal-text} must bind the variables: on the
+	 * compile paths, whether the program carries it; on the interpreter, whether either
+	 * variable is off its default now
+	 * @return the equivalent expression
+	 */
+	public static LispVal expandDecimalLeaf(LispCons cons, boolean rebinds) {
+		List<LispVal> parts = cons.toList();
+		String op = ((LispSymbol) parts.get(0)).name();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(op + " expects 1 argument");
+		}
+		boolean text = LispNames.DECIMAL_PIECE_INTERNAL.equals(op);
+		if (!rebinds) {
+			return callOf(text ? LispNames.PRINC_PIECE_INTERNAL : LispNames.PRINC, parts.get(1));
+		}
+		LispVal decimal = callOf(LispNames.DECIMAL_TEXT_INTERNAL, parts.get(1));
+		return text ? decimal : callOf(LispNames.WRITE_STRING, decimal);
 	}
 
 	/**
@@ -55226,7 +55391,23 @@ public final class LispMacroExpander {
 	 * @return the normalized binding list
 	 */
 	public static LispVal normalizeBindingList(LispVal bindings) {
-		if (!(bindings instanceof LispCons cons) || !cons.isProperList() || !hasShorthandBinding(cons)) {
+		return normalizeBindingList(bindings, false);
+	}
+
+	/**
+	 * {@link #normalizeBindingList} for a {@code let} about to bind its names -- the
+	 * interpreter's and both compilers': an entry binding {@code t} or {@code nil} is
+	 * refused, which CL forbids and which each of them used to take for a symbol and die
+	 * on the cast. An analysis walking the form normalizes without the check.
+	 * @param bindings the binding list form
+	 * @return the normalized binding list
+	 */
+	public static LispVal letBindingList(LispVal bindings) {
+		return normalizeBindingList(bindings, true);
+	}
+
+	private static LispVal normalizeBindingList(LispVal bindings, boolean binding) {
+		if (!(bindings instanceof LispCons cons) || !cons.isProperList() || !hasShorthandBinding(cons, binding)) {
 			return bindings;
 		}
 		List<LispVal> entries = cons.toList();
@@ -55252,14 +55433,20 @@ public final class LispMacroExpander {
 
 	// Whether any entry is a bare symbol or (x): the interpreter asks on every let it
 	// evaluates, and nearly every binding list has neither, so it answers without
-	// allocating.
-	private static boolean hasShorthandBinding(LispCons bindings) {
+	// allocating. A let about to bind refuses an entry binding t or nil on the way.
+	private static boolean hasShorthandBinding(LispCons bindings, boolean binding) {
+		boolean shorthand = false;
 		for (LispVal cell = bindings; cell instanceof LispCons c; cell = c.cdr()) {
-			if (c.car() instanceof LispSymbol || c.car() instanceof LispCons pair && pair.cdr() instanceof LispNil) {
-				return true;
+			LispVal entry = c.car();
+			if (binding) {
+				LispVal name = entry instanceof LispCons pair ? pair.car() : entry;
+				if (name instanceof LispNil || name instanceof LispTrue) {
+					throw new IllegalArgumentException(name.print() + " names a constant, and cannot be bound");
+				}
 			}
+			shorthand |= entry instanceof LispSymbol || entry instanceof LispCons pair && pair.cdr() instanceof LispNil;
 		}
-		return false;
+		return shorthand;
 	}
 
 	/**

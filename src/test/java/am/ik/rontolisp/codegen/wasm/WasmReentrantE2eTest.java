@@ -569,8 +569,8 @@ class WasmReentrantE2eTest {
 		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true, boundary, reentrant);
 		loaded = HttpReactorLibrary.process(loaded);
 		loaded = HttpServerLibrary.process(loaded, false);
-		return GrayStreamsLibrary
-			.process(LispPreludeLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))));
+		return GrayStreamsLibrary.process(LispPreludeLibrary.process(JsonLibrary
+			.process(UserMacroExpander.expand(loaded), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_GC)));
 	}
 
 	private Path compile(String fileName, String source) throws IOException {

@@ -42,7 +42,7 @@ With destination `nil` the result is returned as a string instead of printed:
 | `~a`, `~A` | Aesthetic: prints the argument like `princ` (strings without quotes). With `:`, nil prints as `()` |
 | `~s`, `~S` | Standard: prints the argument like `prin1` (readable; a string is quoted and its embedded `"` / `\` escaped). With `:`, nil prints as `()` |
 | `~w`, `~W` | Write: prints the argument like `write` -- `prin1` under the printer control variables. It takes no prefix parameters, and its modifiers bind variables the printer does not honor (`~:W` binds `*print-pretty*`, `~@W` unbinds `*print-level*`/`*print-length*`), so all three spellings print the same text |
-| `~d`, `~D` | Decimal integer. With `:`, digits are grouped with commas; with `@`, a `+` sign precedes non-negative values |
+| `~d`, `~D` | Decimal integer, whatever `*print-base*` and `*print-radix*` are; anything else prints as by `~a` in decimal. With `:`, digits are grouped with commas; with `@`, a `+` sign precedes non-negative values |
 | `~x`, `~o`, `~b` | Hexadecimal / octal / binary integer (uppercase digits), with the same parameters and modifiers as `~d` |
 | `~R` | Radix: `~NR` prints the integer in radix `N` (2-36). Without the radix parameter the integer is spelled: `~R` an English cardinal (`twelve`), `~:R` an ordinal (`twelfth`), `~@R` Roman numerals (`XIV`), `~:@R` old Roman numerals (`XIIII`); the other parameters are ignored |
 | `~c`, `~C` | Character: prints the glyph like `write-char`. With `@`, the `#\` reader syntax (like `prin1`); with `:`, non-graphic characters print their name (`Newline`, `Space`, ...) |

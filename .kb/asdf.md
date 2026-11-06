@@ -1015,7 +1015,10 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   parameterized one with `Ord`, `define-class`/`define-instance`, `define-struct`, `match`, `Result`, cells,
   hashtables, `for` over an iterator, F32 and F64 literals) and 33 `coalton` forms print what SBCL prints over the
   same tree, but for SBCL's `d0` on a double and its infinity's spelling (one float type here). Read with
-  `(named-readtables:in-readtable coalton:coalton)`, as coalton's docs advise; without it see `.todo/i74`. What it
+  `(named-readtables:in-readtable coalton:coalton)`, as coalton's docs advise, or without it since i74
+  (2026-11-06, [packages.md](packages.md), "T and NIL in a package that does not read them as cl's"): `Nil` as a
+  pattern and a value and a `let` of `t` print what SBCL prints; re-measured then, the library loads in 63
+  minutes (box under load 4-10) and the program above prints what it printed. What it
   took past fset, each general but the tier 4 arms: a `:mix-reexport` clause
   ([packages.md](packages.md)); a `:report` naming a function; a `.asd`'s `(:read-file-form ...)` `:version`;
   a computed `*features*` push ([reader-features.md](reader-features.md)); a reader macro's value respelled for
@@ -1040,9 +1043,25 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   - The float traps: `/` over a float is IEEE on every backend ([error-handling.md](error-handling.md),
     "Per operator"), which is what SBCL answers with coalton's traps off, so the shim's `with-float-traps-masked`
     needs nothing: `(/ 1.0d0 0.0d0)` under coalton is an infinity here too.
-  - Not measured: coalton's own tests (`coalton/tests`, through fiasco), `coalton/library/big-float`. A bare
-    `nil` or `t` in a package not using `cl` is `cl`'s here, so a program read without coalton's readtable has
-    `cl:nil` for `Nil` (`.todo/i74`). The compile paths stop before the library (`.todo/i73`).
+  - Not measured: coalton's own tests (`coalton/tests`, through fiasco), `coalton/library/big-float`.
+  - **The compile paths** (measured 2026-11-06). A compile does what SBCL's `compile-file` does: the read-time
+    image ([readtables.md](readtables.md), "The compile paths' read") runs coalton's `(` reader macro, which
+    typechecks every library `coalton-toplevel` where it reads it, and the macro-time pass replays the generated
+    code, whose environment updates build `*global-environment*` for the program's own `coalton` macros. So the
+    library's hour on the interpreter is the compile's too (`.todo/i75`). What stopped it within a minute, each
+    general: eclector's methods under a top-level `flet` ([clos.md](clos.md)); the image's ASDF knowing no system
+    (coalton's eclector probe, `CST:RAW on SYMBOL`); a `%class-PKG::NAME` tag and a bare `cons` in what
+    `make-load-form` writes ([make-load-form.md](make-load-form.md)); `:direction ':output`
+    ([uiop.md](uiop.md)); fset's `let` in the Gray `format` rewrite ([gray-streams.md](gray-streams.md));
+    coalton-impl/entry's own `compile` keeping `cl:compile` out ([packages.md](packages.md)); a celled tail call's
+    depth ([jvm-tail-bounce.md](jvm-tail-bounce.md)); and a user file's `coalton-toplevel` read only in the
+    image, its definitions missing where its `coalton` forms expanded (`ReaderMacroReads`).
+    Checked against the library's first five files as `coalton/library` (a stand-in `.asd`, the derived forms
+    key on the name): a program with a parameterized `define-type`, `match`, `define-class`/`define-instance`
+    with a superclass constraint and a `Semigroup` instance prints what the interpreter and SBCL print on P1 and
+    the component, with coalton's readtable and without; 256-272 s per compile on a box under load 10-30, 39 MB
+    modules. The JVM stops at fset's `compare`: under the generic-function protocol its dispatcher is past the
+    method limit (`.todo/i77`). The whole library on the compile paths: `.todo/i73`.
 - **sento 3.4.2** — from the Quicklisp cache, verified manually (measured 2026-11-05, interpreter and JVM):
   `make-actor-system`, `actor-of`, `ask-s`, `ask` with `fcompleted`, a `:time-out`, `*state*`, agents,
   8 threads x 200 `tell`s counted to 1600. On wasm it compiles and `make-actor-system` signals at the first

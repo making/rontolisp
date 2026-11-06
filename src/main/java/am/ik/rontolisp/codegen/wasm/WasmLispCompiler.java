@@ -579,7 +579,25 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * shifts, and only when one of those conditional blocks is present.
 	 */
 	int userFuncBase() {
+		return jsonCodecFuncBase() + (this.emitsJsonCodec ? WasmJsonRuntimeBuilder.FUNC_COUNT : 0);
+	}
+
+	/**
+	 * The index of the JSON codec's first function ({@link WasmJsonRuntimeBuilder}),
+	 * right after the function cells' block, so adding it moves no fixed index -- only
+	 * {@link #userFuncBase()}. Only meaningful when {@link #emitsJsonCodec} is set.
+	 */
+	private int jsonCodecFuncBase() {
 		return functionCellsBase() + this.functionCells.functionCount();
+	}
+
+	/**
+	 * The module index of the JSON codec's first function, or {@code -1} when this module
+	 * carries none ({@link #emitsJsonCodec}).
+	 * @return the function index, or -1
+	 */
+	int jsonCodecFuncIndex() {
+		return this.emitsJsonCodec ? jsonCodecFuncBase() : -1;
 	}
 
 	/**
@@ -1000,6 +1018,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * keeps the old fresh box.
 	 */
 	private boolean emitsFuncref;
+
+	/**
+	 * Whether this module carries the JSON codec ({@link WasmJsonRuntimeBuilder}): the
+	 * program names {@code rontolisp::%json-decode} or {@code rontolisp::%json-encode},
+	 * which only {@code json.lisp}'s wasm-GC entry points call. Set in the pre-pass,
+	 * because the block shifts {@link #userFuncBase()}; every other module is
+	 * byte-identical to a build that never knew about it.
+	 */
+	private boolean emitsJsonCodec;
 
 	/**
 	 * The module's function-namespace cells and the functions behind them. Set in front
@@ -4083,6 +4110,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Whether this module carries _funcref (see emitsFuncref): decided here for
 		// the same reason, over the same pre-pass program the registry gate reads.
 		this.emitsFuncref = LispMacroExpander.usesRuntimeFunctionBox(program) || usesEval;
+		// Whether this module carries the JSON codec (see emitsJsonCodec).
+		this.emitsJsonCodec = programUsesSymbol(program, LispNames.JSON_DECODE_INTERNAL_QUALIFIED)
+				|| programUsesSymbol(program, LispNames.JSON_ENCODE_INTERNAL_QUALIFIED);
 		// The instance layouts this module bakes (null: every one), decided here because
 		// the gate below reads them, and baked in front of Pass 2a.
 		java.util.@Nullable Set<String> bakedLayoutTags = this.usesInstances
@@ -5194,6 +5224,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.litStageFuncIndex(litStageFuncIndex())
 			.undefinedFunctionFuncIndex(undefinedFunctionFuncIndex())
 			.symfuncrefFuncIndex(symfuncrefFuncIndex())
+			.jsonCodecFuncBase(jsonCodecFuncIndex())
 			.unboundVariableFuncIndex(unboundVariableFuncIndex())
 			.litStageBytes(litStageBytes)
 			.importDecls(importWrappers)
@@ -8461,6 +8492,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				// The function cells' block, in functionCellsBase() order.
 				this.functionCells.forEachType(fnDef::addFunction);
+				// The JSON codec, right after it, over fixed signatures only.
+				if (this.emitsJsonCodec) {
+					for (int i = 0; i < WasmJsonRuntimeBuilder.FUNC_COUNT; i++) {
+						fnDef.addFunction(WasmJsonRuntimeBuilder.typeIndexOf(i));
+					}
+				}
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -9117,7 +9154,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// Hash-table runtime helper bodies (FUNC_HASH, FUNC_HT_ENTRIES)
 				code.addFunction(WasmRuntimeBuilder.buildHashBody(this.usesInstances ? instanceTypeBase() : -1,
 						this.addressKeyedLayout, hashDepthGlobalIndex, hashGasGlobalIndex, this.charvecPossible,
-						this.usesIdentityHashTables));
+						this.usesIdentityHashTables, !this.optimize.prefersSizeOverSpeed()));
 				code.addFunction(WasmHashTableRuntimeBuilder
 					.buildEntries(this.usesEqualpHashTables || this.usesIdentityHashTables));
 				// Modulo / remainder runtime helper bodies (FUNC_RAT_REM, FUNC_RAT_MOD)
@@ -9162,7 +9199,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringRuntimeBuilder.buildStrFreshBody());
 				// _str_to_mem (FUNC_STR_TO_MEM): copy a string's GC array into
 				// linear[ptr..).
-				code.addFunction(WasmStringRuntimeBuilder.buildStrToMemBody(this.charvecPossible));
+				code.addFunction(WasmStringRuntimeBuilder.buildStrToMemBody(this.charvecPossible,
+						!this.optimize.prefersSizeOverSpeed()));
 				// _write_str_gc (FUNC_WRITE_STR_GC): print a string value from its GC
 				// array.
 				code.addFunction(WasmStringRuntimeBuilder.buildWriteStrGcBody());
@@ -9589,6 +9627,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				// The function cells' block, in functionCellsBase() order.
 				functionCellBodies.forEach(code::addFunction);
+				// The JSON codec's bodies, in jsonCodecFuncBase() order.
+				if (this.emitsJsonCodec) {
+					WasmJsonRuntimeBuilder.Flags jsonFlags = new WasmJsonRuntimeBuilder.Flags(
+							this.usesIdentityHashTables, this.charvecPossible, this.usesEqualpHashTables,
+							this.usesEqualpHashTables || this.usesIdentityHashTables);
+					for (int i = 0; i < WasmJsonRuntimeBuilder.FUNC_COUNT; i++) {
+						code.addFunction(WasmJsonRuntimeBuilder.build(i, jsonCodecFuncBase(), jsonFlags));
+					}
+				}
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
 					code.addFunction(body);
@@ -9602,7 +9649,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// function-section order).
 				if (memoryHelpers) {
 					code.addFunction(WasmExportRuntimeBuilder.buildAllocBody());
-					code.addFunction(WasmExportRuntimeBuilder.buildStrFromMemBody());
+					code.addFunction(
+							WasmExportRuntimeBuilder.buildStrFromMemBody(!this.optimize.prefersSizeOverSpeed()));
 					if (hostArena) {
 						code.addFunction(WasmExportRuntimeBuilder.buildAllocMarkBody());
 						// A reentrant module's arena pops also clamp to the park floor:
@@ -12895,6 +12943,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		int symfuncrefFuncIndex = -1;
 
 		/**
+		 * The module index of the JSON codec's first function, or {@code -1} when this
+		 * module carries none ({@code WasmLispCompiler.emitsJsonCodec}).
+		 */
+		int jsonCodecFuncBase = -1;
+
+		/**
 		 * The module index of {@code _unbound_variable}, or {@code -1} when this module
 		 * carries none ({@code WasmLispCompiler.emitsUnboundVariable}).
 		 */
@@ -13079,6 +13133,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.litStageFuncIndex = builder.litStageFuncIndex;
 			this.undefinedFunctionFuncIndex = builder.undefinedFunctionFuncIndex;
 			this.symfuncrefFuncIndex = builder.symfuncrefFuncIndex;
+			this.jsonCodecFuncBase = builder.jsonCodecFuncBase;
 			this.unboundVariableFuncIndex = builder.unboundVariableFuncIndex;
 			this.complexBlock = builder.complexBlock;
 			this.litStageBytes = builder.litStageBytes;
@@ -13286,6 +13341,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private int symfuncrefFuncIndex = -1;
 
+			private int jsonCodecFuncBase = -1;
+
 			private int unboundVariableFuncIndex = -1;
 
 			private @Nullable WasmComplexBlock complexBlock;
@@ -13451,6 +13508,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.functionCells = proto.functionCells;
 				this.functionCellRestore = proto.functionCellRestore;
 				this.symfuncrefFuncIndex = proto.symfuncrefFuncIndex;
+				this.jsonCodecFuncBase = proto.jsonCodecFuncBase;
 				this.unboundVariableFuncIndex = proto.unboundVariableFuncIndex;
 				this.complexBlock = proto.complexBlock;
 				this.litStageBytes = proto.litStageBytes;
@@ -13798,6 +13856,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder symfuncrefFuncIndex(int symfuncrefFuncIndex) {
 				this.symfuncrefFuncIndex = symfuncrefFuncIndex;
+				return this;
+			}
+
+			Builder jsonCodecFuncBase(int jsonCodecFuncBase) {
+				this.jsonCodecFuncBase = jsonCodecFuncBase;
 				return this;
 			}
 

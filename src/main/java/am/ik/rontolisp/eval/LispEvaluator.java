@@ -656,6 +656,12 @@ public final class LispEvaluator {
 	private java.util.Collection<String> programSystems = List.of();
 
 	/**
+	 * What a compile path has spliced so far, which its READ-TIME image answers as loaded
+	 * ({@link #answerSystemsFrom}); empty on every other evaluator.
+	 */
+	private java.util.Collection<String> splicedSystems = List.of();
+
+	/**
 	 * The {@code .asd} loads open on this evaluator, innermost last: a {@code .asd} that
 	 * loads a system can make the loader read that system's {@code .asd} too.
 	 */
@@ -4462,11 +4468,12 @@ public final class LispEvaluator {
 				throw new LispEvalException(systemRecordName + " expects a system name string");
 			}
 			AsdfSystems.LispSystem system = this.asdfSystems.get(key.value());
+			boolean loaded = this.loadedSystems.contains(key.value()) || this.splicedSystems.contains(key.value());
 			if (system != null) {
-				return AsdfRuntimeLibrary.recordFor(system, this.loadedSystems.contains(key.value()));
+				return AsdfRuntimeLibrary.recordFor(system, loaded);
 			}
 			if (BuiltinSystems.isBuiltin(key.value())) {
-				return AsdfRuntimeLibrary.builtinRecord(this.loadedSystems.contains(key.value()));
+				return AsdfRuntimeLibrary.builtinRecord(loaded);
 			}
 			return LispNil.INSTANCE;
 		}));
@@ -4481,7 +4488,9 @@ public final class LispEvaluator {
 			for (String registered : this.asdfSystems.keySet()) {
 				names.add(new LispString(registered));
 			}
-			for (String loadedName : this.loadedSystems) {
+			java.util.Set<String> loaded = new java.util.LinkedHashSet<>(this.loadedSystems);
+			loaded.addAll(this.splicedSystems);
+			for (String loadedName : loaded) {
 				if (!this.asdfSystems.containsKey(loadedName) && BuiltinSystems.isBuiltin(loadedName)) {
 					names.add(new LispString(loadedName));
 				}
@@ -4963,7 +4972,8 @@ public final class LispEvaluator {
 			if (language == SourceLanguage.COMMON_LISP) {
 				// Form at a time: each form is read with the readtable the forms before
 				// it left (.kb/readtables.md).
-				loadForms(SourceLanguage.readForms(source, features, resolved), resolved, source, markers);
+				loadForms(SourceLanguage.readForms(source, features, resolved)
+					.readingTOrNil(this.packageResolver::readsClTOrNil), resolved, source, markers);
 				return;
 			}
 			LispReader.ReadPrefix read = language.readUntilError(source, features, resolved, this.sourceStandards,
@@ -5037,7 +5047,8 @@ public final class LispEvaluator {
 	 */
 	public void evalSource(String source, @Nullable String file) {
 		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
-		SourceLanguage.Forms forms = SourceLanguage.readForms(source, this.features, file);
+		SourceLanguage.Forms forms = SourceLanguage.readForms(source, this.features, file)
+			.readingTOrNil(this.packageResolver::readsClTOrNil);
 		Set<String> featuresAtOpen = printedFeatures(currentFeatures());
 		for (LispVal form = forms.next(sourceReadSyntax()); form != null; form = forms.next(sourceReadSyntax(),
 				featuresAddedSince(featuresAtOpen))) {
@@ -7075,6 +7086,24 @@ public final class LispEvaluator {
 	 */
 	public void setProgramSystems(java.util.Collection<String> systems) {
 		this.programSystems = systems;
+	}
+
+	/**
+	 * Makes this evaluator, a compile path's READ-TIME image, answer about systems from
+	 * that compile path's live registry, as its build image does: what it has registered
+	 * and, as loaded, what it has spliced so far -- the image replays every spliced form.
+	 * The macro-time pass answers from the same registry, baked into the program
+	 * ({@link AsdfRuntimeLibrary}), so a compile-time {@code (asdf:find-system ...)} the
+	 * read depends on answers what that pass will (coalton's eclector version probe).
+	 * @param systems the compile path's registered systems, shared
+	 * @param systemPackages its {@code register-system-packages} map, shared
+	 * @param spliced the systems it has spliced so far, shared
+	 */
+	void answerSystemsFrom(java.util.Map<String, AsdfSystems.LispSystem> systems,
+			java.util.Map<String, String> systemPackages, java.util.Collection<String> spliced) {
+		this.asdfSystems = systems;
+		this.asdfSystemPackages = systemPackages;
+		this.splicedSystems = spliced;
 	}
 
 	/**
@@ -11387,6 +11416,13 @@ public final class LispEvaluator {
 				return LispMacroExpander.expandMakeConditionWithRuntimeType(cons, this.closRegistry);
 			case LispNames.DOCUMENTATION:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandDocumentation);
+			case LispNames.DECIMAL_PIECE_INTERNAL, LispNames.DECIMAL_PRINC_INTERNAL:
+				// ~D's leaves: the binding prelude defun only while a variable it
+				// binds is off its default, the plain conversion otherwise.
+				return LispMacroExpander.expandDecimalLeaf(cons,
+						!(currentSpecialValue(LispNames.PRINT_RADIX_VAR) instanceof LispNil)
+								|| !(currentSpecialValue(LispNames.PRINT_BASE_VAR) instanceof LispInteger base
+										&& base.value() == 10));
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
 					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.PRINC_PIECE_INTERNAL,
 					LispNames.PRIN1_PIECE_INTERNAL: {
@@ -16542,7 +16578,7 @@ public final class LispEvaluator {
 		Environment letEnv = new Environment(env);
 		// parts.get(1) is the bindings list: ((x 1) (y 2)); a bare symbol entry is
 		// an init-less binding to nil.
-		LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
+		LispVal bindings = LispMacroExpander.letBindingList(parts.get(1));
 		// A special name gets a thread-scoped dynamic binding instead of a lexical one;
 		// dynamicNames records those to pop on any exit (left null on the common
 		// all-lexical
@@ -18942,7 +18978,7 @@ public final class LispEvaluator {
 		synchronized (this.libraryLoadLock) {
 			if (!this.jsonLibraryLoaded) {
 				this.jsonLibraryLoaded = true;
-				for (LispVal form : JsonLibrary.forms()) {
+				for (LispVal form : JsonLibrary.portableForms()) {
 					eval(form, this.globalEnv);
 				}
 			}
