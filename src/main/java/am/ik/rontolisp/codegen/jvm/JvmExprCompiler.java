@@ -2032,9 +2032,10 @@ final class JvmExprCompiler {
 			case LispNames.EVAL -> JvmEvalCompiler.compile(cons, ctx, className);
 			case LispNames.LOAD -> JvmLoadCompiler.compile(cons, ctx, className);
 			// A literal top-level require/provide (and the asdf directives) was
-			// consumed by the compile-time LoadInliner pass; anything left is nested
-			// or non-literal, which the compiled runtime reader cannot execute
-			// (unlike a runtime load).
+			// consumed by the compile-time LoadInliner pass, which also lowers a
+			// require written below the top level; anything left is nested or
+			// non-literal (a require: one a macro expanded to), which the compiled
+			// runtime reader cannot execute (unlike a runtime load).
 			// Same for the dist directives: which dists ql:quickload downloads
 			// from is decided while the LoadInliner splices, so a nested/computed
 			// one has nothing left to configure by the time the program runs.

@@ -441,8 +441,8 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
   ASDF signals.
 - **`(require :asdf)`, `(require :uiop)`** load nothing (`AsdfSystems.isImplementationModule`), on all
   four. Every measured script opens with one, and it stopped each before `initialize-source-registry`:
-  the premise "each is a script's first line" had this line ahead of it. A nested `require` stays refused
-  on a compile path.
+  the premise "each is a script's first line" had this line ahead of it. A nested `require` loads nothing at
+  run time on a compile path ([load-inliner.md](load-inliner.md), `NestedRequires`).
 - **Measured** (2026-11-05, interpreter; `source-registry/exercise.lisp` also on SBCL 2.2.9's ASDF 3.3.1):
   fiveam's `build.lisp` succeeds and `test.lisp` runs 57 of 57 checks. cl-json's `test-cl-json.lisp`
   succeeds with fiveam and its dependencies on `RONTOLISP_SOURCE_REGISTRY`; `compile-cl-json.lisp` stops

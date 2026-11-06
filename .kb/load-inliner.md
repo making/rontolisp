@@ -58,6 +58,14 @@ already in the set.
 - Module name must be a literal designator (keyword, quoted symbol, string); anything else is a hard
   `IllegalStateException`. Any `require`/`provide` surviving the pass is an
   `UnsupportedOperationException` in `Jvm/WasmExprCompiler.compileCons`.
+- **A `require` below the top level is lowered, not refused** (`NestedRequires`, 2026-11-06, at the
+  end of `inline` when `provided` is complete): `CallSiteWalk` finds it in a code position and
+  replaces it with a `cond` over the sorted provided names (each answers `'NAME`) and `asdf`/`uiop`,
+  else an `error` naming the module -- a compiled program loads nothing at run time. The name may be
+  computed. queues' `make-queue` autoload (`(require (cadr value))` in a `restart-case`) refused the
+  whole program; the JVM ran `queues.priority-queue` once it compiled. A `require` a macro expands to
+  is not seen and keeps the refusal. ci-spec `nested-require-loads-nothing-when-it-runs`,
+  `LoadInlinerTest#requiredProgramCompilesAndRunsOnJvm`.
 - Interpreter: runtime functions next to `load` in `LispEvaluator` (`providedModules`, shared
   `loadFile`), in `PackageRegistry.CL_FUNCTIONS` so `#'require` works. `*modules*` is not exposed.
 

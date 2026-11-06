@@ -346,10 +346,17 @@ class LoadInlinerTest {
 
 	@Test
 	void requiredProgramCompilesAndRunsOnJvm() throws Exception {
-		List<LispVal> program = inline("(require :util) (require :util) (print (u-sq 7))",
+		// A require below the top level loads nothing at run time: a provided module
+		// answers its name, an absent one signals when the call runs.
+		List<LispVal> program = inline("""
+				(require :util) (require :util)
+				(defun again (m) (require m))
+				(print (list (u-sq 7) (again :util) (again "asdf")
+				             (handler-case (again :nope) (error (e) (princ-to-string e)))))""",
 				Map.of("util.lisp", "(provide :util) (defun u-sq (x) (* x x))"));
 		byte[] classBytes = new JvmLispCompiler("TestRequire").compile(program);
-		assertThat(runMain(classBytes, "TestRequire")).isEqualTo("49");
+		assertThat(runMain(classBytes, "TestRequire")).isEqualTo("(49 UTIL ASDF \"REQUIRE cannot load module NOPE"
+				+ " at run time on the compiled backends (modules are spliced at compile time)\")");
 	}
 
 	@Test
