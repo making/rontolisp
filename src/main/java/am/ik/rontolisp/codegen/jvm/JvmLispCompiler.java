@@ -2438,9 +2438,16 @@ public final class JvmLispCompiler implements LispCompiler {
 			inject(LispMacroExpander.compiledSpecialRuntime(specialVars), defuns, injectedForms, specialVars);
 			callOnlyRuntimes.add(defuns.getLast().name);
 		}
-		LispVal evalSetfRuntime = usesEval ? LispMacroExpander.evalSetfRuntime(userDefinedNames) : null;
-		if (evalSetfRuntime != null) {
-			inject(evalSetfRuntime, defuns, injectedForms, specialVars);
+		if (usesEval) {
+			// The entry, which the eval runtime finds by name, then the segments of its
+			// name dispatch, which only it calls.
+			List<LispVal> evalSetfRuntime = LispMacroExpander.evalSetfRuntime(userDefinedNames);
+			for (int i = 0; i < evalSetfRuntime.size(); i++) {
+				inject(evalSetfRuntime.get(i), defuns, injectedForms, specialVars);
+				if (i > 0) {
+					callOnlyRuntimes.add(defuns.getLast().name);
+				}
+			}
 		}
 		Map<String, FieldRefEntry> globalFields = new HashMap<>();
 		List<Utf8Entry> globalFieldNameUtfs = new ArrayList<>();

@@ -4720,9 +4720,16 @@ public final class WasmLispCompiler implements LispCompiler {
 					specialVars);
 			callOnlyRuntimes.add(defuns.getLast().name);
 		}
-		LispVal evalSetfRuntime = evalRunsForms ? LispMacroExpander.evalSetfRuntime(userDefinedNames) : null;
-		if (evalSetfRuntime != null) {
-			inject(evalSetfRuntime, defuns, injectedRuntimeDefuns, injectedForms, specialVars);
+		if (evalRunsForms) {
+			// The entry, which the eval runtime finds by name, then the segments of its
+			// name dispatch, which only it calls.
+			List<LispVal> evalSetfRuntime = LispMacroExpander.evalSetfRuntime(userDefinedNames);
+			for (int i = 0; i < evalSetfRuntime.size(); i++) {
+				inject(evalSetfRuntime.get(i), defuns, injectedRuntimeDefuns, injectedForms, specialVars);
+				if (i > 0) {
+					callOnlyRuntimes.add(defuns.getLast().name);
+				}
+			}
 		}
 		// The specials only a binding or an assignment gives a value
 		// (SpecialVarCollector.collectValueless): _start seeds their module global with

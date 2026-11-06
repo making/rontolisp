@@ -15940,6 +15940,27 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void anEvaldSetfFindsItsSetfFunctionThroughSegmentsTheJitCompiles() throws Exception {
+		// An eval'd place no table row holds calls the (setf name) function it names,
+		// found over every one the program defines: one chain over dexador's 451 was a
+		// method past the 64 KB limit (159 bytes an arm, 2026-11-06).
+		String source = IntStream.range(0, 500)
+			.mapToObj(i -> "(defun (setf esf-" + i + ") (v c) (setf (car c) (list " + i + " v)))")
+			.collect(joining("\n", "", "\n"))
+				+ "(print (eval '(let ((c (list 0 0))) (setf (esf-0 c) :a) (setf (esf-499 (cdr c)) :z) c)))\n";
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source)));
+		List<String> segments = declaredMethodNames(classBytes).stream()
+			.filter(m -> m.startsWith("$pctEVAL-SETF-"))
+			.toList();
+		assertThat(segments).hasSizeGreaterThan(2);
+		for (String segment : segments) {
+			assertThat(codeLengthOf(classBytes, segment)).as(segment).isLessThan(8_000);
+		}
+		assertThat(compileAndRun(source)).isEqualTo("((0 :A) (499 :Z))");
+	}
+
+	@Test
 	void theSharedNameDispatchesAreNeverDispatcherTargets() throws Exception {
 		// A program whose names resolve at run time (read-from-string) gives every defun
 		// a dispatcher case -- but not the shared set runtime, which only the sites

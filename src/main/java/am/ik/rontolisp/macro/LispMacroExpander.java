@@ -6083,13 +6083,17 @@ public final class LispMacroExpander {
 
 	/**
 	 * {@link LispNames#EVAL_SETF_FORM}: what an eval'd assignment of a place no table row
-	 * holds evaluates, the place's name tested over the program's {@code (setf name)}
-	 * functions. The call is the compile-time one, the new value first.
+	 * holds evaluates, the compile-time call of the {@code (setf name)} function
+	 * {@link LispNames#EVAL_SETF_FUNCTION} finds for the place's name, the new value
+	 * first. That dispatch over the program's {@code (setf name)} functions is segmented
+	 * ({@link #segmentedNameDispatch}), its arms answering only the function: one chain
+	 * building the call form in every arm was 159 bytes an arm on the JVM, and dexador's
+	 * 451 functions overflowed the 64 KB method limit (2026-11-06).
 	 * @param definedNames every name the program defines
-	 * @return the definition, wrapper-shaped, or null when the program defines no such
-	 * function
+	 * @return the definitions, wrapper-shaped, the entry first; none when the program
+	 * defines no such function
 	 */
-	public static @Nullable LispVal evalSetfRuntime(java.util.Collection<String> definedNames) {
+	public static List<LispVal> evalSetfRuntime(java.util.Collection<String> definedNames) {
 		List<String> places = new ArrayList<>();
 		for (String name : new java.util.TreeSet<>(definedNames)) {
 			if (name.startsWith(ClosRegistry.SETF_FUNCTION_PREFIX)) {
@@ -6097,19 +6101,24 @@ public final class LispMacroExpander {
 			}
 		}
 		if (places.isEmpty()) {
-			return null;
+			return List.of();
 		}
 		LispSymbol op = new LispSymbol("%EVAL-OP");
 		LispSymbol args = new LispSymbol("%EVAL-ARGS");
 		LispSymbol value = new LispSymbol("%EVAL-VALUE");
-		return runtimeDefinition(LispNames.EVAL_SETF_FORM, List.of(op, args, value), nameChain(op, places, (place) -> {
-			LispVal function = listToCons(
-					List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(setfFunctionName(place.name()))));
-			LispVal quoteSymbol = quoteOf(LispNames.QUOTE);
-			return callOf(LispNames.CONS, quoteOf(LispNames.FUNCALL),
-					callOf(LispNames.CONS, callOf(LispNames.LIST, quoteSymbol, function),
-							callOf(LispNames.CONS, callOf(LispNames.LIST, quoteSymbol, value), args)));
-		}, LispNil.INSTANCE));
+		LispSymbol function = new LispSymbol("%EVAL-SETF-FN");
+		LispVal quoteSymbol = quoteOf(LispNames.QUOTE);
+		LispVal call = callOf(LispNames.CONS, quoteOf(LispNames.FUNCALL),
+				callOf(LispNames.CONS, callOf(LispNames.LIST, quoteSymbol, function),
+						callOf(LispNames.CONS, callOf(LispNames.LIST, quoteSymbol, value), args)));
+		List<LispVal> out = new ArrayList<>();
+		out.add(runtimeDefinition(LispNames.EVAL_SETF_FORM, List.of(op, args, value), makeLet(function.name(),
+				callOf(LispNames.EVAL_SETF_FUNCTION, op), makeIf(function, call, LispNil.INSTANCE))));
+		out.addAll(segmentedNameDispatch(LispNames.EVAL_SETF_FUNCTION, List.of(op), places,
+				place -> listToCons(
+						List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(setfFunctionName(place.name())))),
+				LispNil.INSTANCE));
+		return out;
 	}
 
 	/**
