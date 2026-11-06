@@ -92,3 +92,6 @@ use is parsing a [`rontolisp:fetch`](rontolisp-fetch.md) response body:
 ```
 
 The inverse operation is [`rontolisp:json-stringify`](rontolisp-json-stringify.md).
+To read a few values of a large document, or to edit it, without making Lisp
+values of all of it, use [`rontolisp:json-value`](rontolisp-json-value.md) and
+[`rontolisp:json-span`](rontolisp-json-span.md).

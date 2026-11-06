@@ -11881,6 +11881,117 @@ cases:
       "json-stringify: improper list"
       "{\"255\":[255,1099511627776,1180591620717411303424]}"
       601
+  # rontolisp:json-span / json-value over a document's bytes (.kb/json.md, "json-span"): the
+  # interpreter's and the JVM's walk over octets and wasm-GC's native scan answer the same
+  # offsets, counts and cut ranges -- byte offsets past a multi-byte character, a repeated
+  # key's last value, escaped keys, nesting past the scan's kind stack -- and json-parse's
+  # every error under json-span's name. The address form is wasm-only
+  # (WasmLispCompilerIntegrationTest).
+  - name: json-span-and-value
+    source: |
+      (defun json-span-case (document &rest path)
+        (handler-case (multiple-value-list (apply #'rontolisp:json-span document path))
+          (error (e) (princ-to-string e))))
+      (let ((doc "{\"a\":1,\"b\":[true,{\"c\":\"x\"}],\"d\":{}}"))
+        (dolist (path '(() ("a") ("b") ("b" 1 "c") ("b" 0) ("b" 2) ("d") ("zz") ("a" "b") ("b" "c") ("d" 0)))
+          (print (apply #'json-span-case doc path))))
+      (dolist (path '(() (0) (1) (2) (3)))
+        (print (apply #'json-span-case (format nil " [ 1 , 2 ,3 ]~c~c" #\Return #\Newline) path)))
+      (print (list (json-span-case "[[1,[2,3]],4]" 0 1 1) (json-span-case "[[1,[2,3]],4]" 1)
+                   (json-span-case "{\"a\":{\"b\":1},\"a\":{\"c\":2}}" "a" "b")
+                   (json-span-case "{\"a\":{\"b\":1},\"a\":{\"b\":2}}" "a" "b")
+                   (json-span-case "{\"a\":1,\"b\":2,\"a\":3}" "a")))
+      (let ((doc "{\"k\\u00e9y\":1,\"x\\\"y\":2,\"\\/\\t\":3,\"\\ud83d\\ude00\":4,\"\":5}"))
+        (print (list (json-span-case doc "kéy") (json-span-case doc "x\"y")
+                     (json-span-case doc (coerce (list #\/ #\Tab) 'string))
+                     (json-span-case doc "😀") (json-span-case doc "") (json-span-case doc "k"))))
+      (print (list (json-span-case "{\"é\":[\"あ\",{\"😀\":5}]}" "é" 1 "😀")
+                   (json-span-case (rontolisp:string-to-octets "{\"a\":[1,2]}") "a" 1)
+                   (json-span-case "{\"only\":1}" "only")
+                   (json-span-case (format nil "{~%  \"a\": 1,~%  \"b\": 2~%}") "a")
+                   (json-span-case (format nil "{~%  \"a\": 1,~%  \"b\": 2~%}") "b")))
+      (let ((deep "1") (objects "1"))
+        (dotimes (i 100) (setq deep (concatenate 'string "[" deep "]")))
+        (dotimes (i 70) (setq objects (concatenate 'string "{\"k\":" objects "}")))
+        (print (list (apply #'json-span-case deep (make-list 100 :initial-element 0))
+                     (apply #'json-span-case objects (make-list 70 :initial-element "k"))
+                     (apply #'json-span-case objects (make-list 71 :initial-element "k"))
+                     (subseq (json-span-case deep) 0 3))))
+      (print (list (json-span-case "[-0, 0.5, -0.0, 1E2, 1e-2, 12.5e+1, 007]" 6)
+                   (json-span-case "[true,false,null]" 1) (json-span-case "\"s\"")
+                   (json-span-case "{\"a\":[]}" "a") (json-span-case "[]")))
+      (dolist (input '("" "1 2" "\"abc" "\"\\" "\"\\x\"" "\"\\u12\"" "\"\\u12G4\"" "-" "1." "1e+" ".5"
+                       "trux" "[1 2]" "[1,]" "{\"a\" 1}" "{\"a\":1" "{\"a\":1 \"b\":2}" "{1:2}"
+                       "\"\\u0あ\"" "\"\\u0あ0\"" "{\"a\":1,}" "[1}" "{\"a\":1]"))
+        (print (json-span-case input)))
+      (print (list (json-span-case "[1]" :zero) (json-span-case "[1]" -1) (json-span-case 'symbol)
+                   (json-span-case (vector 1 2))))
+      (print (multiple-value-list
+              (rontolisp:json-value "{\"usage\":{\"in\":3,\"out\":4},\"s\":\"a\\nb\\u3042\"}" "usage" "out")))
+      (print (multiple-value-list (rontolisp:json-value "{\"s\":\"a\\nb\\u3042\"}" "s")))
+      (print (multiple-value-list (rontolisp:json-value "{\"usage\":null}" "model")))
+      (let ((usage (rontolisp:json-value "{\"usage\":{\"in\":3,\"out\":4}}" "usage")))
+        (print (list (gethash "in" usage) (gethash "out" usage))))
+      (print (list (multiple-value-list (rontolisp:json-value "[false,null,1.5e3]" 0))
+                   (multiple-value-list (rontolisp:json-value "[false,null,1.5e3]" 1))
+                   (multiple-value-list (rontolisp:json-value "[false,null,1.5e3]" 2))
+                   (multiple-value-list (rontolisp:json-value (rontolisp:string-to-octets "[\"é\"]") 0))))
+      (print (handler-case (rontolisp:json-value "[1,]" 0) (error (e) (princ-to-string e))))
+      (print (list (funcall #'rontolisp:json-span "[7]" 0) (funcall #'rontolisp:json-value "[7]" 0)))
+    expected: |
+      (0 35 3 NIL NIL)
+      (5 6 NIL 1 7)
+      (11 27 2 6 27)
+      (22 25 NIL 18 25)
+      (12 16 NIL 12 17)
+      (NIL)
+      (32 34 0 27 34)
+      (NIL)
+      (NIL)
+      (NIL)
+      (NIL)
+      (1 13 3 NIL NIL)
+      (3 4 NIL 3 7)
+      (7 8 NIL 5 8)
+      (10 11 NIL 9 11)
+      (NIL)
+      ((7 8 NIL 6 8) (11 12 NIL 10 12) (NIL) (22 23 NIL 18 23) (17 18 NIL 12 18))
+      ((12 13 NIL 1 14) (21 22 NIL 13 22) (30 31 NIL 22 31) (47 48 NIL 31 48) (52 53 NIL 48 53) (NIL))
+      ((21 22 NIL 14 22) (8 9 NIL 7 9) (8 9 NIL 1 9) (9 10 NIL 4 14) (19 20 NIL 10 20))
+      ((100 101 NIL 100 101) (350 351 NIL 346 351) (NIL) (0 201 1))
+      ((36 39 NIL 34 39) (6 11 NIL 5 11) (0 3 NIL NIL NIL) (5 7 0 1 7) (0 2 0 NIL NIL))
+      "json-span: unexpected end of input"
+      "json-span: unexpected trailing characters"
+      "json-span: unterminated string"
+      "json-span: unterminated escape"
+      "json-span: invalid escape in string"
+      "json-span: unterminated unicode escape"
+      "json-span: invalid hex digit in unicode escape"
+      "json-span: invalid number"
+      "json-span: invalid number"
+      "json-span: invalid number"
+      "json-span: unexpected character"
+      "json-span: invalid literal"
+      "json-span: expected , or ] in array"
+      "json-span: unexpected character"
+      "json-span: expected : after object key"
+      "json-span: unterminated object"
+      "json-span: expected , or } in object"
+      "json-span: expected an object key string"
+      "json-span: unterminated unicode escape"
+      "json-span: invalid hex digit in unicode escape"
+      "json-span: expected an object key string"
+      "json-span: expected , or ] in array"
+      "json-span: expected , or } in object"
+      ("json-span: a path segment is a string or a non-negative integer" "json-span: a path segment is a string or a non-negative integer" "json-span expects a string, an octet vector, or an address and a size" "json-span expects a string, an octet vector, or an address and a size")
+      (4 T)
+      ("a
+      bあ" T)
+      (NIL NIL)
+      (3 4)
+      ((NIL T) (NULL T) (1500.0 T) ("é" T))
+      "json-span: unexpected character"
+      (1 7)
   # The URL / query-string library (url.lisp, spliced by UrlLibrary): percent
   # decoding/encoding must agree across the UTF-16-indexed backends
   # (interpreter/JVM) and the UTF-8 byte-indexed WASM backends, including
@@ -21330,6 +21441,11 @@ cases:
                          (list (funcall *ci-order-note* 1) (funcall *ci-order-note* 2)
                                (funcall *ci-order-note* 3))))
       (print (ci-order-seen))
+      ;; list* links the same chain onto its last argument, evaluated last.
+      (ci-order-reset)
+      (print (list* (funcall *ci-order-note* 1) (funcall *ci-order-note* 2)
+                    (list (funcall *ci-order-note* 3))))
+      (print (ci-order-seen))
       ;; A direct call and funcall were already left-to-right; pinned so they stay.
       (defun ci-order-three (a b c) (list a b c))
       (ci-order-reset)
@@ -21342,6 +21458,8 @@ cases:
       (1 2 3)
       (1 2 3)
       #(1 2 3)
+      (1 2 3)
+      (1 2 3)
       (1 2 3)
       (1 2 3)
       (1 2 3)

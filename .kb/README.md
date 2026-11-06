@@ -127,7 +127,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [nrepl.md](nrepl.md) -- `rontolisp --nrepl`: the Clojure session over nREPL (bencode over TCP, the ops an editor needs in nREPL 1.3's shapes), one runtime with per-session thread bindings, per-message `*out*`/`*err*`, the cooperative interrupt, completions, the cmdline client's position metadata, a redefinition reaching every caller in an open lowering (the measurement)
 - [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` sockets and TLS; the three WASM dispatch providers (component, stdin, the `--native` runner's `rltcp` host)
 - [url.md](url.md) -- `rontolisp:url-*`/`query-param*`
-- [json.md](json.md) -- `rontolisp:json-parse`/`json-stringify`
+- [json.md](json.md) -- `rontolisp:json-parse`/`json-stringify`; `json-span`/`json-value` over a document's bytes (a string, octets, linear memory in place), the path and value shapes decided with sluice, the wasm-GC scan, the measured edits
 - [lack.md](lack.md) -- the lack request/response + middleware ecosystem
 - [clack.md](clack.md) -- Clack support, the late-bound `clack-handler-rontolisp` shim, and `http-serve.lisp`, the transport legs it shares with the Clojure Ring adapter
 - [mito.md](mito.md) -- Mito DAO + schema migration end to end

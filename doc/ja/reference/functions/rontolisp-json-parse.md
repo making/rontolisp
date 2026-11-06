@@ -94,3 +94,6 @@ Error: json-parse: unexpected trailing characters
 ```
 
 逆の操作は [`rontolisp:json-stringify`](rontolisp-json-stringify.md) です。
+大きなドキュメントから数個の値を読むとき、またはドキュメントを編集するときに、
+全体を Lisp の値にしたくなければ [`rontolisp:json-value`](rontolisp-json-value.md)
+と [`rontolisp:json-span`](rontolisp-json-span.md) を使ってください。

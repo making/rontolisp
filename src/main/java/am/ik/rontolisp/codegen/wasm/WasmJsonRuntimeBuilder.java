@@ -116,7 +116,7 @@ final class WasmJsonRuntimeBuilder {
 
 	// The bytes JSON skips between tokens, as bits of a mask: tab, newline, return and
 	// space.
-	private static final long WHITESPACE = (1L << 9) | (1L << 10) | (1L << 13) | (1L << 32);
+	static final long WHITESPACE = (1L << 9) | (1L << 10) | (1L << 13) | (1L << 32);
 
 	// What a container on the decoder's stack is (the marker's low bits), and what an
 	// encoder frame walks.
@@ -227,7 +227,7 @@ final class WasmJsonRuntimeBuilder {
 		return a.finish();
 	}
 
-	private static Map<Integer, String> cases(String label, int... bytes) {
+	static Map<Integer, String> cases(String label, int... bytes) {
 		Map<Integer, String> cases = new HashMap<>();
 		for (int value : bytes) {
 			cases.put(value, label);
@@ -1970,9 +1970,10 @@ final class WasmJsonRuntimeBuilder {
 
 	/**
 	 * A function body: its locals as they are asked for, and branches by the name of the
-	 * block or loop they leave or repeat, which the depth is counted from.
+	 * block or loop they leave or repeat, which the depth is counted from. The span scan
+	 * ({@link WasmJsonSpanRuntimeBuilder}) writes its body with it too.
 	 */
-	private static final class Asm {
+	static final class Asm {
 
 		// ref.cast to a NULLABLE reference (0x16, REF_CAST, traps on null).
 		private static final int REF_CAST_NULL = 0x17;
@@ -2259,6 +2260,29 @@ final class WasmJsonRuntimeBuilder {
 			gc(Instruction.ARRAY_COPY);
 			this.w.writeUnsignedLeb128(destination);
 			this.w.writeUnsignedLeb128(source);
+			return this;
+		}
+
+		// Linear memory, at the byte alignment an address anywhere takes.
+
+		Asm load8u() {
+			this.w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+			return this;
+		}
+
+		Asm load64() {
+			this.w.write(Instruction.I64_LOAD, 0x00, 0x00);
+			return this;
+		}
+
+		Asm store8() {
+			this.w.write(Instruction.I32_STORE8, 0x00, 0x00);
+			return this;
+		}
+
+		// memory.size of memory 0, in pages
+		Asm memorySize() {
+			this.w.write(Instruction.CURRENT_MEMORY, 0x00);
 			return this;
 		}
 

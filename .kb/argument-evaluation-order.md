@@ -9,6 +9,12 @@ evaluated left to right on the interpreter, the JVM and both WASM backends.**
 - `compiler/ArgumentOrder.isOrderIndependent` decides whether an argument may be reordered;
   `Jvm/WasmListCompiler` pre-evaluate every argument that cannot into a temp, in source
   order, then link from the temps.
+- `list*` takes the same path (2026-11-06), linked onto its last argument, evaluated after the
+  temps: one loop, not `expandListStar`'s `cons` per argument, which cost a Java frame each on
+  both compile backends. `AstOutliner.splitArguments` emits a `list*` of up to a node budget's
+  arguments, and the wasm compile of the expansion overflowed `WideListStackTest`'s 1 MiB
+  525 conses deep.
+  `(list* x)` and `(list*)` still go through the expansion.
 - Order-independent = self-evaluating literals, `nil`/`t`/keywords, `(quote DATUM)`. **A bare
   variable reference is NOT** -- an earlier argument may `setq` it.
 - `rontolisp:await`-promoted reads were always correct (`WasmAwaitNormalizer` hoists them

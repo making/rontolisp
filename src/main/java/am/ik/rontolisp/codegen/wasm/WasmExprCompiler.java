@@ -737,8 +737,9 @@ final class WasmExprCompiler {
 					return;
 				}
 				if (LispNames.JSON_DECODE_INTERNAL.equals(qn.member())
-						|| LispNames.JSON_ENCODE_INTERNAL.equals(qn.member())) {
-					// json.lisp's wasm-GC entry points: the module's JSON codec.
+						|| LispNames.JSON_ENCODE_INTERNAL.equals(qn.member())
+						|| LispNames.JSON_SCAN_INTERNAL.equals(qn.member())) {
+					// json.lisp's wasm-GC entry points: the module's JSON codec and scan.
 					WasmJsonCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
@@ -2749,7 +2750,7 @@ final class WasmExprCompiler {
 			}
 			case LispNames.INTEGER_LENGTH -> WasmBitwiseCompiler.compileIntegerLength(cons, ctx);
 			case LispNames.LOGBITP -> WasmBitwiseCompiler.compileLogbitp(cons, ctx);
-			case LispNames.LIST_STAR -> compileExpansion(LispMacroExpander.expandListStar(cons), ctx, tail);
+			case LispNames.LIST_STAR -> WasmListCompiler.compileStar(cons, ctx, tail);
 			case LispNames.ACONS -> compileExpansion(LispMacroExpander.expandAcons(cons), ctx, tail);
 			case LispNames.ENDP -> WasmNullPredCompiler.compileEndp(cons, ctx);
 			case LispNames.CHECK_LIST_INTERNAL -> WasmNullPredCompiler.compileCheckList(cons, ctx);

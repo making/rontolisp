@@ -444,11 +444,406 @@
   ;; identity every other string producer answers
   (copy-seq (rontolisp::%json-concat (nreverse (rontolisp::%json-out v nil)))))
 
+;; --- json-span and json-value -------------------------------------------------
+;; One scan over a document's UTF-8 bytes: it refuses what json-parse refuses, with
+;; json-parse's error under json-span's name, and finds the bytes of the value a path
+;; of keys and indexes leads to (.kb/json.md, "json-span"). The interpreter and the
+;; JVM walk the document's octets here; wasm-GC runs the same scan natively
+;; (WasmJsonSpanRuntimeBuilder) over a string's bytes, an octet vector, or the bytes
+;; at an address of linear memory. Offsets count bytes on every backend.
+
+(defun rontolisp::%json-span-fail (code)
+  ;; The error for the scan's code: 1-16 are json-parse's (%json-native-fail).
+  (cond
+   ((eql code 0)
+    (error
+     "json-span expects a string, an octet vector, or an address and a size"))
+   ((eql code 1) (error "json-span: unexpected end of input"))
+   ((eql code 2) (error "json-span: unexpected trailing characters"))
+   ((eql code 3) (error "json-span: unterminated string"))
+   ((eql code 4) (error "json-span: unterminated escape"))
+   ((eql code 5) (error "json-span: invalid escape in string"))
+   ((eql code 6) (error "json-span: unterminated unicode escape"))
+   ((eql code 7) (error "json-span: invalid hex digit in unicode escape"))
+   ((eql code 8) (error "json-span: invalid number"))
+   ((eql code 9) (error "json-span: invalid literal"))
+   ((eql code 10) (error "json-span: unexpected character"))
+   ((eql code 11) (error "json-span: unterminated array"))
+   ((eql code 12) (error "json-span: expected , or ] in array"))
+   ((eql code 13) (error "json-span: unterminated object"))
+   ((eql code 14) (error "json-span: expected an object key string"))
+   ((eql code 15) (error "json-span: expected : after object key"))
+   ((eql code 16) (error "json-span: expected , or } in object"))
+   ((eql code 17)
+    (error "json-span: a path segment is a string or a non-negative integer"))
+   ((eql code 18)
+    (error "json-span: the address and the size name bytes outside the memory"))
+   (t (error
+       "json-span: an address is a wasm module's, and this program is none"))))
+
+(defun rontolisp::%json-span-byte (o p n)
+  ;; The byte at p, or past the end a quote: what the native scan reads there,
+  ;; the frame of a string's bytes or the one it writes past an address's.
+  (if (< p n) (aref o p) 34))
+
+(defun rontolisp::%json-span-blanks (o p n)
+  (do ((q p (+ q 1)))
+      ((let ((b (rontolisp::%json-span-byte o q n)))
+         (not (or (= b 32) (= b 9) (= b 10) (= b 13))))
+       q)))
+
+(defun rontolisp::%json-span-digits (o p n)
+  (do ((q p (+ q 1)))
+      ((let ((b (rontolisp::%json-span-byte o q n))) (or (< b 48) (> b 57)))
+       q)))
+
+(defun rontolisp::%json-span-hex-digit (b)
+  (cond ((and (>= b 48) (<= b 57)) (- b 48))
+        ((and (>= b 97) (<= b 102)) (- b 87))
+        ((and (>= b 65) (<= b 70)) (- b 55))
+        (t -1)))
+
+(defun rontolisp::%json-span-hex4 (o q n)
+  ;; The four hex digits at q, or json-parse's error for them: fewer than four
+  ;; CHARACTERS left is unterminated, which a multi-byte one among the four bytes
+  ;; can make it.
+  (when (> (+ q 4) n) (rontolisp::%json-span-fail 6))
+  (let ((v 0))
+    (do ((k 0 (+ k 1)))
+        ((>= k 4) v)
+      (let ((d (rontolisp::%json-span-hex-digit (aref o (+ q k)))))
+        (when (< d 0)
+          (let ((count 0))
+            (do ((at q (+ at 1)))
+                ((or (>= at n) (>= count 4)))
+              (unless (= (logand (aref o at) 192) 128)
+                (setq count (+ count 1))))
+            (rontolisp::%json-span-fail (if (< count 4) 6 7))))
+        (setq v (+ (* v 16) d))))))
+
+(defun rontolisp::%json-span-surrogate-pair-p (o next n cp)
+  ;; Whether a high surrogate's escape is followed by a second \u escape.
+  (and (>= cp 55296) (<= cp 56319) (<= (+ next 6) n) (= (aref o next) 92)
+       (= (aref o (+ next 1)) 117)))
+
+(defun rontolisp::%json-span-escape (o p n)
+  ;; p at a backslash inside a string: the position past its escape.
+  (when (>= (+ p 1) n) (rontolisp::%json-span-fail 4))
+  (let ((c (aref o (+ p 1))))
+    (cond ((or (= c 34) (= c 92) (= c 47) (= c 98) (= c 102) (= c 110) (= c 114)
+               (= c 116))
+           (+ p 2))
+          ((= c 117)
+           (let ((cp (rontolisp::%json-span-hex4 o (+ p 2) n)) (next (+ p 6)))
+             (if (rontolisp::%json-span-surrogate-pair-p o next n cp)
+                 (progn
+                   (rontolisp::%json-span-hex4 o (+ next 2) n)
+                   (+ next 6))
+                 next)))
+          (t (rontolisp::%json-span-fail 5)))))
+
+(defun rontolisp::%json-span-string (o p n)
+  ;; p at a string's opening quote: the position past its closing quote.
+  (let ((q (+ p 1)) (done nil))
+    (do ((dummy nil))
+        (done q)
+      (let ((b (rontolisp::%json-span-byte o q n)))
+        (cond ((= b 34)
+               (when (>= q n) (rontolisp::%json-span-fail 3))
+               (setq q (+ q 1))
+               (setq done t))
+              ((= b 92) (setq q (rontolisp::%json-span-escape o q n)))
+              (t (setq q (+ q 1))))))))
+
+(defun rontolisp::%json-span-number (o p n)
+  ;; p at - or a digit: the position past the number.
+  (let* ((int-start (if (= (aref o p) 45) (+ p 1) p))
+         (q (rontolisp::%json-span-digits o int-start n)))
+    (when (= q int-start) (rontolisp::%json-span-fail 8))
+    (when (= (rontolisp::%json-span-byte o q n) 46)
+      (let ((frac (+ q 1)))
+        (setq q (rontolisp::%json-span-digits o frac n))
+        (when (= q frac) (rontolisp::%json-span-fail 8))))
+    (when (= (logior (rontolisp::%json-span-byte o q n) 32) 101)
+      (setq q (+ q 1))
+      (let ((b (rontolisp::%json-span-byte o q n)))
+        (when (or (= b 43) (= b 45)) (setq q (+ q 1))))
+      (let ((exponent q))
+        (setq q (rontolisp::%json-span-digits o exponent n))
+        (when (= q exponent) (rontolisp::%json-span-fail 8))))
+    q))
+
+(defun rontolisp::%json-span-literal (o p n word)
+  ;; p at the first byte of true, false or null: the position past it.
+  (let ((e (+ p (length word))))
+    (when (> e n) (rontolisp::%json-span-fail 9))
+    (do ((k 1 (+ k 1)))
+        ((>= k (length word)) e)
+      (unless (= (aref o (+ p k)) (char-code (char word k)))
+        (rontolisp::%json-span-fail 9)))))
+
+(defun rontolisp::%json-span-utf8 (cp out)
+  ;; OUT with the UTF-8 bytes of the code point consed on, the last first: what a
+  ;; string of (code-char cp) holds, a lone surrogate's three bytes too.
+  (cond ((< cp 128) (cons cp out))
+        ((< cp 2048)
+         (cons (logior 128 (logand cp 63)) (cons (logior 192 (ash cp -6)) out)))
+        ((< cp 65536)
+         (cons (logior 128 (logand cp 63))
+               (cons (logior 128 (logand (ash cp -6) 63))
+                     (cons (logior 224 (ash cp -12)) out))))
+        (t (cons (logior 128 (logand cp 63))
+                 (cons (logior 128 (logand (ash cp -6) 63))
+                       (cons (logior 128 (logand (ash cp -12) 63))
+                             (cons (logior 240 (ash cp -18)) out)))))))
+
+(defun rontolisp::%json-span-hex-value (o q)
+  ;; The value of the four hex digits at q, which the scan has checked.
+  (let ((v 0))
+    (do ((k 0 (+ k 1)))
+        ((>= k 4) v)
+      (setq v
+            (+ (* v 16) (rontolisp::%json-span-hex-digit (aref o (+ q k))))))))
+
+(defun rontolisp::%json-span-key-bytes (o a z n)
+  ;; The bytes the key whose text is the octets from a to z spells, as json-parse
+  ;; decodes its escapes into a string: a list.
+  (let ((out nil) (q a))
+    (do ((dummy nil))
+        ((>= q z) (nreverse out))
+      (let ((b (aref o q)))
+        (if (not (= b 92))
+            (progn
+              (setq out (cons b out))
+              (setq q (+ q 1)))
+            (let ((c (aref o (+ q 1))))
+              (if (= c 117)
+                  (let ((cp (rontolisp::%json-span-hex-value o (+ q 2))))
+                    (setq q (+ q 6))
+                    (when (rontolisp::%json-span-surrogate-pair-p o q n cp)
+                      (let ((lo (rontolisp::%json-span-hex-value o (+ q 2))))
+                        (setq q (+ q 6))
+                        (if (and (>= lo 56320) (<= lo 57343))
+                            (setq cp
+                                  (+ 65536 (* 1024 (- cp 55296)) (- lo 56320)))
+                            (progn
+                              (setq out (rontolisp::%json-span-utf8 cp out))
+                              (setq cp lo)))))
+                    (setq out (rontolisp::%json-span-utf8 cp out)))
+                  (progn
+                    (setq out
+                          (cons (cond ((= c 98) 8)
+                                      ((= c 102) 12)
+                                      ((= c 110) 10)
+                                      ((= c 114) 13)
+                                      ((= c 116) 9)
+                                      (t c)) out))
+                    (setq q (+ q 2))))))))))
+
+(defun rontolisp::%json-locate (o path)
+  ;; (start end count cut-start cut-end) for the value PATH leads to in the octets
+  ;; O, or NIL. A key of PATH is the list of its UTF-8 bytes. A container on the way
+  ;; to the value is at a depth from 1 to ON, the deepest of them where FOCUS is; the
+  ;; value's own container, once it is entered, at TDEPTH, which FOCUS is then. MATCH
+  ;; says what the next value is: 1 the next container on the way, 2 the value.
+  (let ((n (length o))
+        (plen (length path))
+        (p 0)
+        (b 0)
+        (state 0)
+        (depth 0)
+        (kinds nil)
+        (object nil)
+        (on 0)
+        (focus -1)
+        (tdepth -1)
+        (index 0)
+        (match (if (null path) 2 1))
+        (found nil)
+        (tstart 0)
+        (tend 0)
+        (tcount nil)
+        (mstart 0)
+        (mcomma -1)
+        (copen 0)
+        (last-comma -1)
+        (kstart 0)
+        (vstart 0)
+        (result nil)
+        (done nil))
+    (do ((dummy nil))
+        (done result)
+      (cond ((= state 0)
+             ;; a value
+             (setq p (rontolisp::%json-span-blanks o p n))
+             (setq b (rontolisp::%json-span-byte o p n))
+             (when (and (= depth focus) (not object))
+               (if (= depth tdepth)
+                   (setq tcount (+ tcount 1))
+                   (progn
+                     (when (eql index (nth (- on 1) path))
+                       (setq match (if (= on plen) 2 1))
+                       (setq found nil)
+                       (when (= on plen)
+                         (setq mstart p)
+                         (setq mcomma last-comma)))
+                     (setq index (+ index 1)))))
+             (when (= match 2)
+               (setq found t)
+               (setq tstart p)
+               (setq tcount nil))
+             (setq state 1)
+             (cond
+              ((= b 34)
+               (when (>= p n) (rontolisp::%json-span-fail 1))
+               (setq p (rontolisp::%json-span-string o p n)))
+              ((or (= b 123) (= b 91))
+               (let ((opens-object (= b 123)))
+                 (setq vstart p)
+                 (setq p (rontolisp::%json-span-blanks o (+ p 1) n))
+                 (when (>= p n)
+                   (rontolisp::%json-span-fail (if opens-object 13 11)))
+                 (if (= (rontolisp::%json-span-byte o p n)
+                        (if opens-object 125 93))
+                     (progn
+                       (setq p (+ p 1))
+                       (when (= match 2) (setq tcount 0)))
+                     (progn
+                       (setq kinds (cons object kinds))
+                       (setq object opens-object)
+                       (setq depth (+ depth 1))
+                       (cond ((= match 2)
+                              (setq tdepth depth)
+                              (setq focus depth)
+                              (setq tcount 0))
+                             ((= match 1)
+                              (setq on depth)
+                              (setq focus depth)
+                              (setq index 0)
+                              (when (= on plen)
+                                (setq copen vstart)
+                                (setq last-comma -1))))
+                       (setq match 0)
+                       (setq state (if opens-object 2 0))))))
+              ((= b 116) (setq p (rontolisp::%json-span-literal o p n "true")))
+              ((= b 102) (setq p (rontolisp::%json-span-literal o p n "false")))
+              ((= b 110) (setq p (rontolisp::%json-span-literal o p n "null")))
+              ((or (= b 45) (and (>= b 48) (<= b 57)))
+               (setq p (rontolisp::%json-span-number o p n)))
+              (t (rontolisp::%json-span-fail 10))))
+            ((= state 1)
+             ;; after a value: its separator, or the closes past it
+             (when (= match 2) (setq tend p))
+             (setq match 0)
+             (setq p (rontolisp::%json-span-blanks o p n))
+             (setq b (rontolisp::%json-span-byte o p n))
+             (cond ((= depth 0)
+                    (when (< p n) (rontolisp::%json-span-fail 2))
+                    (setq done t)
+                    (when found
+                      (setq result
+                            (cond
+                             ((null path) (list tstart tend tcount nil nil))
+                             ((>= mcomma 0)
+                              (list tstart tend tcount mcomma tend))
+                             (t
+                              (let ((q (rontolisp::%json-span-blanks o tend n)))
+                                (if (= (rontolisp::%json-span-byte o q n) 44)
+                                    (list tstart tend tcount mstart
+                                     (rontolisp::%json-span-blanks o (+ q 1) n))
+                                    (list tstart tend tcount (+ copen 1)
+                                          q))))))))
+                   ((= b 44)
+                    (when (and (= depth on) (= on plen)) (setq last-comma p))
+                    (setq p (+ p 1))
+                    (setq state (if object 2 0)))
+                   (t
+                    (if object
+                        (unless (= b 125)
+                          (rontolisp::%json-span-fail (if (>= p n) 13 16)))
+                        (unless (= b 93)
+                          (rontolisp::%json-span-fail (if (>= p n) 11 12))))
+                    (setq p (+ p 1))
+                    (when (= depth focus)
+                      (if (= depth tdepth)
+                          (progn
+                            (setq tend p)
+                            (setq tdepth -1)
+                            (setq focus on))
+                          (progn
+                            (setq on (- on 1))
+                            (setq focus on)
+                            ;; an array on the way matched its index: none after it can
+                            (when (and (> on 0) (not (car kinds)))
+                              (setq index (+ (nth (- on 1) path) 1))))))
+                    (setq object (car kinds))
+                    (setq kinds (cdr kinds))
+                    (setq depth (- depth 1)))))
+            (t
+             ;; a key, its colon
+             (setq p (rontolisp::%json-span-blanks o p n))
+             (when (or (not (= (rontolisp::%json-span-byte o p n) 34)) (>= p n))
+               (rontolisp::%json-span-fail 14))
+             (setq kstart p)
+             (setq p (rontolisp::%json-span-string o p n))
+             (when (= depth focus)
+               (if (= depth tdepth)
+                   (setq tcount (+ tcount 1))
+                   (let ((segment (nth (- on 1) path)))
+                     (when (and (listp segment)
+                                (equal segment
+                                       (rontolisp::%json-span-key-bytes o
+                                        (+ kstart 1) (- p 1) n)))
+                       (setq match (if (= on plen) 2 1))
+                       (setq found nil)
+                       (when (= on plen)
+                         (setq mstart kstart)
+                         (setq mcomma last-comma))))))
+             (setq p (rontolisp::%json-span-blanks o p n))
+             (unless (= (rontolisp::%json-span-byte o p n) 58)
+               (rontolisp::%json-span-fail 15))
+             (setq p (+ p 1))
+             (setq state 0))))))
+
+(defun rontolisp::%json-span-path (path)
+  ;; PATH checked, a key as the list of its UTF-8 bytes.
+  (let ((out nil))
+    (dolist (segment path (nreverse out))
+      (setq out
+            (cons (cond ((stringp segment)
+                         (coerce (rontolisp:string-to-octets segment) 'list))
+                        ((and (integerp segment) (>= segment 0)) segment)
+                        (t (rontolisp::%json-span-fail 17))) out)))))
+
+(defun rontolisp::%json-span-octets (document)
+  (cond ((stringp document) (rontolisp:string-to-octets document))
+        ((typep document '(simple-array (unsigned-byte 8) (*))) document)
+        ((integerp document) (rontolisp::%json-span-fail 19))
+        (t (rontolisp::%json-span-fail 0))))
+
+(defun rontolisp::%json-span (document path)
+  (let* ((segments (rontolisp::%json-span-path path))
+         (r
+          (rontolisp::%json-locate (rontolisp::%json-span-octets document)
+                                   segments)))
+    (if r (values (car r) (cadr r) (caddr r) (cadddr r) (car (cddddr r))) nil)))
+
+(defun rontolisp::%json-span-value (document path)
+  (let* ((segments (rontolisp::%json-span-path path))
+         (o (rontolisp::%json-span-octets document))
+         (r (rontolisp::%json-locate o segments)))
+    (if r
+        (values (rontolisp::%json-parse
+                 (rontolisp:octets-to-string (subseq o (car r) (cadr r)))) t)
+        (values nil nil))))
+
 ;; --- the wasm-GC entry points -----------------------------------------------
-;; On a wasm-GC target JsonLibrary routes json-parse and json-stringify here, and
-;; to nothing above but what these call: %json-decode and %json-encode are the
-;; backend's native parser and serializer (WasmJsonRuntimeBuilder, .kb/json.md),
-;; answering what the walk above answers. Every other backend leaves these out.
+;; On a wasm-GC target JsonLibrary routes json-parse, json-stringify, json-span and
+;; json-value here, and to nothing above but what these call: %json-decode and
+;; %json-encode are the backend's native parser and serializer
+;; (WasmJsonRuntimeBuilder, .kb/json.md), %json-scan its native %json-locate
+;; (WasmJsonSpanRuntimeBuilder), answering what the walks above answer. Every
+;; other backend leaves these out.
 
 (defun rontolisp::%json-native-parse (s)
   (let ((r (rontolisp::%json-decode s 'null)))
@@ -502,3 +897,34 @@
 
 (defun rontolisp::%json-native-out (v acc)
   (cons (rontolisp::%json-native-stringify v) acc))
+
+(defun rontolisp::%json-native-scan (document path mode)
+  ;; What %json-scan answers for PATH in DOCUMENT -- a string, octets, or an address
+  ;; whose size is PATH's first element -- under MODE: 0 the list %json-locate answers,
+  ;; 1 a string of the value's bytes. NIL when PATH leads nowhere.
+  (let ((r
+         (if (integerp document)
+             (let ((size (car path)))
+               (unless (and (consp path) (integerp size) (>= document 0)
+                            (>= size 0) (< document 4294967296)
+                            (< size 4294967296))
+                 (rontolisp::%json-span-fail 18))
+               (rontolisp::%json-scan document size
+                                      (rontolisp::%json-native-path (cdr path))
+                                      mode))
+             (rontolisp::%json-scan document 0
+                                    (rontolisp::%json-native-path path) mode))))
+    (if (integerp r) (rontolisp::%json-span-fail r) r)))
+
+(defun rontolisp::%json-native-path (path)
+  (dolist (segment path path)
+    (unless (or (stringp segment) (and (integerp segment) (>= segment 0)))
+      (rontolisp::%json-span-fail 17))))
+
+(defun rontolisp::%json-native-span (document path)
+  (let ((r (rontolisp::%json-native-scan document path 0)))
+    (if r (values (car r) (cadr r) (caddr r) (cadddr r) (car (cddddr r))) nil)))
+
+(defun rontolisp::%json-native-value (document path)
+  (let ((r (rontolisp::%json-native-scan document path 1)))
+    (if r (values (rontolisp::%json-native-parse r) t) (values nil nil))))

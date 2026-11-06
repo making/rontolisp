@@ -579,7 +579,25 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * shifts, and only when one of those conditional blocks is present.
 	 */
 	int userFuncBase() {
+		return jsonSpanFuncBase() + (this.emitsJsonSpan ? WasmJsonSpanRuntimeBuilder.FUNC_COUNT : 0);
+	}
+
+	/**
+	 * The index of the JSON span scan's function ({@link WasmJsonSpanRuntimeBuilder}),
+	 * right after the codec's block, so adding it moves no fixed index -- only
+	 * {@link #userFuncBase()}. Only meaningful when {@link #emitsJsonSpan} is set.
+	 */
+	private int jsonSpanFuncBase() {
 		return jsonCodecFuncBase() + (this.emitsJsonCodec ? WasmJsonRuntimeBuilder.FUNC_COUNT : 0);
+	}
+
+	/**
+	 * The module index of the JSON span scan's function, or {@code -1} when this module
+	 * carries none ({@link #emitsJsonSpan}).
+	 * @return the function index, or -1
+	 */
+	int jsonSpanFuncIndex() {
+		return this.emitsJsonSpan ? jsonSpanFuncBase() : -1;
 	}
 
 	/**
@@ -1027,6 +1045,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * byte-identical to a build that never knew about it.
 	 */
 	private boolean emitsJsonCodec;
+
+	/**
+	 * Whether this module carries the JSON span scan
+	 * ({@link WasmJsonSpanRuntimeBuilder}): the program names
+	 * {@code rontolisp::%json-scan}, which only {@code json.lisp}'s wasm-GC
+	 * {@code json-span} and {@code json-value} call. Set in the pre-pass beside
+	 * {@link #emitsJsonCodec}, for the same reason.
+	 */
+	private boolean emitsJsonSpan;
 
 	/**
 	 * The module's function-namespace cells and the functions behind them. Set in front
@@ -4113,6 +4140,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Whether this module carries the JSON codec (see emitsJsonCodec).
 		this.emitsJsonCodec = programUsesSymbol(program, LispNames.JSON_DECODE_INTERNAL_QUALIFIED)
 				|| programUsesSymbol(program, LispNames.JSON_ENCODE_INTERNAL_QUALIFIED);
+		this.emitsJsonSpan = programUsesSymbol(program, LispNames.JSON_SCAN_INTERNAL_QUALIFIED);
 		// The instance layouts this module bakes (null: every one), decided here because
 		// the gate below reads them, and baked in front of Pass 2a.
 		java.util.@Nullable Set<String> bakedLayoutTags = this.usesInstances
@@ -5225,6 +5253,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.undefinedFunctionFuncIndex(undefinedFunctionFuncIndex())
 			.symfuncrefFuncIndex(symfuncrefFuncIndex())
 			.jsonCodecFuncBase(jsonCodecFuncIndex())
+			.jsonSpanFuncBase(jsonSpanFuncIndex())
 			.unboundVariableFuncIndex(unboundVariableFuncIndex())
 			.litStageBytes(litStageBytes)
 			.importDecls(importWrappers)
@@ -8498,6 +8527,12 @@ public final class WasmLispCompiler implements LispCompiler {
 						fnDef.addFunction(WasmJsonRuntimeBuilder.typeIndexOf(i));
 					}
 				}
+				// The JSON span scan, right after it.
+				if (this.emitsJsonSpan) {
+					for (int i = 0; i < WasmJsonSpanRuntimeBuilder.FUNC_COUNT; i++) {
+						fnDef.addFunction(WasmJsonSpanRuntimeBuilder.typeIndexOf(i));
+					}
+				}
 				// User defun functions
 				for (DefunDecl defun : defuns) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + defun.paramNames.size());
@@ -9628,12 +9663,18 @@ public final class WasmLispCompiler implements LispCompiler {
 				// The function cells' block, in functionCellsBase() order.
 				functionCellBodies.forEach(code::addFunction);
 				// The JSON codec's bodies, in jsonCodecFuncBase() order.
+				WasmJsonRuntimeBuilder.Flags jsonFlags = new WasmJsonRuntimeBuilder.Flags(this.usesIdentityHashTables,
+						this.charvecPossible, this.usesEqualpHashTables,
+						this.usesEqualpHashTables || this.usesIdentityHashTables);
 				if (this.emitsJsonCodec) {
-					WasmJsonRuntimeBuilder.Flags jsonFlags = new WasmJsonRuntimeBuilder.Flags(
-							this.usesIdentityHashTables, this.charvecPossible, this.usesEqualpHashTables,
-							this.usesEqualpHashTables || this.usesIdentityHashTables);
 					for (int i = 0; i < WasmJsonRuntimeBuilder.FUNC_COUNT; i++) {
 						code.addFunction(WasmJsonRuntimeBuilder.build(i, jsonCodecFuncBase(), jsonFlags));
+					}
+				}
+				// The JSON span scan's body, in jsonSpanFuncBase() order.
+				if (this.emitsJsonSpan) {
+					for (int i = 0; i < WasmJsonSpanRuntimeBuilder.FUNC_COUNT; i++) {
+						code.addFunction(WasmJsonSpanRuntimeBuilder.build(i, jsonFlags));
 					}
 				}
 				// User defun function bodies
@@ -12949,6 +12990,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		int jsonCodecFuncBase = -1;
 
 		/**
+		 * The module index of the JSON span scan's function, or {@code -1} when this
+		 * module carries none ({@code WasmLispCompiler.emitsJsonSpan}).
+		 */
+		int jsonSpanFuncBase = -1;
+
+		/**
 		 * The module index of {@code _unbound_variable}, or {@code -1} when this module
 		 * carries none ({@code WasmLispCompiler.emitsUnboundVariable}).
 		 */
@@ -13134,6 +13181,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.undefinedFunctionFuncIndex = builder.undefinedFunctionFuncIndex;
 			this.symfuncrefFuncIndex = builder.symfuncrefFuncIndex;
 			this.jsonCodecFuncBase = builder.jsonCodecFuncBase;
+			this.jsonSpanFuncBase = builder.jsonSpanFuncBase;
 			this.unboundVariableFuncIndex = builder.unboundVariableFuncIndex;
 			this.complexBlock = builder.complexBlock;
 			this.litStageBytes = builder.litStageBytes;
@@ -13343,6 +13391,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private int jsonCodecFuncBase = -1;
 
+			private int jsonSpanFuncBase = -1;
+
 			private int unboundVariableFuncIndex = -1;
 
 			private @Nullable WasmComplexBlock complexBlock;
@@ -13509,6 +13559,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.functionCellRestore = proto.functionCellRestore;
 				this.symfuncrefFuncIndex = proto.symfuncrefFuncIndex;
 				this.jsonCodecFuncBase = proto.jsonCodecFuncBase;
+				this.jsonSpanFuncBase = proto.jsonSpanFuncBase;
 				this.unboundVariableFuncIndex = proto.unboundVariableFuncIndex;
 				this.complexBlock = proto.complexBlock;
 				this.litStageBytes = proto.litStageBytes;
@@ -13861,6 +13912,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder jsonCodecFuncBase(int jsonCodecFuncBase) {
 				this.jsonCodecFuncBase = jsonCodecFuncBase;
+				return this;
+			}
+
+			Builder jsonSpanFuncBase(int jsonSpanFuncBase) {
+				this.jsonSpanFuncBase = jsonSpanFuncBase;
 				return this;
 			}
 

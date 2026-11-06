@@ -160,6 +160,11 @@ body. The Rust SDK's `http_body` runs 2,342 of them, from a module of 92,163 byt
   `search-bytes` looks through it at 3.4 instructions per byte, with no copy. `get-buffer` copies
   it to the engine's heap, and with `search` that is 30 per byte. A loop over `get-buffer-octets`
   is 155.
+- **A JSON body is read and edited there too.** `rontolisp:json-span` over `with-buffer`'s address
+  and size checks the document and answers a value's byte offsets, about 18 instructions per byte,
+  and `set-buffer`'s `:start` and `:size` splice there; `rontolisp:json-value` reads one value.
+  `json-parse` and `json-stringify` over `get-buffer` build the whole tree, 102 per byte, and lose
+  a body past 256KiB to the default 16MB.
 - **Contexts live in a table of 64 buckets**, up to 4KB raw smaller than a hash table, and only in a
   filter that has `:root`, `:stream` or `:on-http-call-response`. A lookup walks 1/64 of the
   live streams of its VM, unless it is for the context the last callback took.

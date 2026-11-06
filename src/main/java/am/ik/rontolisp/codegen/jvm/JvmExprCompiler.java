@@ -2419,8 +2419,7 @@ final class JvmExprCompiler {
 			}
 			case LispNames.INTEGER_LENGTH -> JvmBitwiseCompiler.compileIntegerLength(cons, ctx, className);
 			case LispNames.LOGBITP -> JvmBitwiseCompiler.compileLogbitp(cons, ctx, className);
-			case LispNames.LIST_STAR ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandListStar(cons), ctx, className);
+			case LispNames.LIST_STAR -> JvmListCompiler.compileStar(cons, ctx, className);
 			case LispNames.ACONS -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAcons(cons), ctx, className);
 			case LispNames.ENDP -> JvmNullPredCompiler.compileEndp(cons, ctx, className);
 			case LispNames.CHECK_LIST_INTERNAL -> JvmNullPredCompiler.compileCheckList(cons, ctx, className);
