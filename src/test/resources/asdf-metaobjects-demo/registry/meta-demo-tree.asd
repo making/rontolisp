@@ -6,6 +6,12 @@
 
 (defclass tree-src (cl-source-file.cl) ())
 
+;; cl-unification's shape: a type spelled as the class symbol, its sources named .asd by
+;; a method, so the file loads as source and its defsystem registers.
+(defclass tree-asd (cl-source-file) ())
+
+(defmethod source-file-type ((c tree-asd) (s module)) "asd")
+
 (defsystem "meta-demo-tree"
   :pathname "tree"
   :components ((:file "one")
@@ -16,6 +22,7 @@
                (:tree-txt "notes")
                (:tree-src "cee")
                (:cl-source-file.cl "see")
+               (tree-asd "sub")
                (:file "later" :depends-on ("m"))
                (:module "m"
                 :components ((:file "two")

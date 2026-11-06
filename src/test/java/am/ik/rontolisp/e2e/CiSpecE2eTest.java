@@ -427,8 +427,11 @@ class CiSpecE2eTest {
 				execLabeled("compile-wasm-component-" + standalone.name() + accel.fileTag(), command(
 						List.of(bin.toString(), source.toString(), "-o", stem + ".component.wasm", "--component"),
 						accel.flags()));
-				yield execCapture(List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--dir", ".", "--dir",
-						"/tmp", stem + ".component.wasm"));
+				// -S tls=y: a standalone case may load the cl+ssl shim, whose client
+				// TLS layer imports wasi:tls -- a component without it does not link
+				// (.kb/tcp-sockets.md, "WASM TLS"). The corpus program never does.
+				yield execCapture(List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S", "tls=y", "--dir",
+						".", "--dir", "/tmp", stem + ".component.wasm"));
 			}
 		};
 		String where = "standalone case '%s' on %s%n--- source ---%n%s--- end source ---%n--- stderr ---%n%s"

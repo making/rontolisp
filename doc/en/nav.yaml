@@ -141,6 +141,8 @@ sections:
         title: Clack Web Applications
       - file: guides/mito.md
         title: O/R Mapping (mito, sxql)
+      - file: guides/dexador.md
+        title: HTTP Client (dexador)
       - file: guides/testing.md
         title: Testing (rove)
       - file: guides/reader-case.md

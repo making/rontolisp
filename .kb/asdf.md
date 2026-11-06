@@ -152,8 +152,10 @@ the recorded plan. A file opens (`LispEvaluator.AsdLoadScope`) with `*package*` 
   and the vendored alexandria come out identical.
 - A SYSTEM-level `:pathname "dir"` prefixes every component; a component-level one decouples the
   component's NAME (its identity in the sibling dependency graph) from the path it contributes.
-  On a `:file` the namestring is used verbatim when it carries an extension, else `.lisp` is
-  appended. An EMPTY pathname adds no directory level. **A computed `:pathname` is a hard
+  A string gets the class's extension even past a dot (`"d.cl"` names `d.cl.lisp`), a `#P` literal
+  is verbatim (`#P"b"` names `b`), as `parse-unix-namestring` does (SBCL 2.2.9, 2026-11-06; until
+  then a string with a dot was verbatim, which no cached `.asd` relied on: every such `:pathname` is
+  on a static file). An EMPTY pathname adds no directory level. **A computed `:pathname` is a hard
   error.**
 - A component NAME accepts a string OR a symbol (real ASDF's `coerce-name` downcases).
 - `locate()` finds `NAME.asd` by *attempting to read* each search dir through `SourceLoader` — no
@@ -293,6 +295,15 @@ code defines").
   `.asd` files define one. A method that really moved a file still surfaces as the missing file,
   NAMED; a method in a library's SOURCE runs. **Re-evaluate when** a loadable library's `.asd`
   method carries behavior its program observes.
+- **A component type is any symbol** (i81, 2026-11-06), as `class-for-type` reads it: a keyword or
+  the class symbol itself, cl-unification's `(asdf-system-definition-file "cl-unification-lib")`.
+  Both go through `ComponentClasses.named`.
+- **The `type` slot is the class's, not the extension** (`ComponentClass.slotType`): a
+  `source-file-type` method or a `:pathname` extension leaves `file-type` at the slot's initform
+  (`"lisp"` for that `.asd` component on SBCL 2.2.9). Before, a source file's slot was the extension
+  its file was named by. A loaded class keeps that rule.
+- **A `.asd` loaded as a component source** runs its `defsystem` there and registers the system,
+  loading nothing (`find-system` answers it), on all four (measured 2026-11-06).
 - **`:default-component-class`** is what a bare `(:file "name")` takes, readable on the system
   AND on a module. NOT in `IGNORED_OPTIONS`: its `#.` resolves and an unknown class is an error.
 - Driving library: **portableaserve** (`aserve.asd`, `htmlgen.asd`, `webactions.asd` all load).
@@ -898,6 +909,17 @@ it: `make-command`, `print-usage`, `parse-command-line`, `getopt` and `run` prin
 on the interpreter, and a real SIGINT prints `Received SIGINT, exiting.` and exits 130, there and
 compiled to the JVM (measured 2026-11-04, the handler's `unwind-protect` cleanup first).
 
+**`eval/TrivialMimesForms`** (pinned by `TrivialMimesE2eTest`, all four, vendored 1.1.0).
+`mime-types.lisp` ends in a top-level `(build-mime-db)`: the first of `/etc/mime.types` and the
+`mime.types` beside its source that exists, else `No MIME.TYPES file found anywhere!`. A compiled
+program runs it at start-up, so it stopped there wherever neither path was readable at RUN time:
+a component without `--dir /etc` (measured 2026-11-06 on unpatched dexador, which every dexador
+program loads), a `--no-wasi` module, a JVM class on a machine without `/etc/mime.types` (macOS
+has none) and away from the build machine's Quicklisp tree. One span: the call becomes "`/etc/mime.types` when
+`probe-file` finds it, else upstream's loop over the bundled file through a LITERAL path", which
+`CompileTimePathnameFolder` inlines (66 KB). `build-mime-db`/`find-mime.types` stay verbatim.
+Decided over documenting `--dir /etc`: that covered neither macOS nor a reactor.
+
 **`eval/AtomicsForms`** (pinned by `AtomicsE2eTest`, all four). atomics picks `cas` with `#+` per
 implementation and ends in `(no-support 'CAS)`, and `atomic-incf`/`atomic-decf` likewise; a macro that
 signals as it expands, so sento stopped at its first `ask` on the interpreter and while compiling on the
@@ -1000,6 +1022,11 @@ the loader).
 Every entry loads VERBATIM upstream sources unless a substitution is named.
 `AsdfLibraryE2eSupport` hosts the four-backend E2Es and needs a VENDORED tree per system; a
 library living only in the quicklisp cache is verified MANUALLY on all four.
+
+- **cl-unification** (20260101-git) — from the Quicklisp cache, verified manually on all four (2026-11-06):
+  `unify`, `find-variable-value`, `match`, `match-case` and `apply-substitution` answer what SBCL 2.2.9 answers.
+  What it took: a component type spelled as the class symbol ("The component-class surface"). Pin:
+  `AsdfMetaobjectsE2eTest`'s `meta-demo-tree` (`(tree-asd "sub")`); a ci-spec case cannot carry a `.asd`.
 
 - **fset 2.2.0** — from the Quicklisp cache, verified manually on all four (2026-11-05): `set`, `with`,
   `map`, `seq`, `bag`, `tuple`, `lookup`, `convert` and their printed forms, the same text as SBCL 2.2.9

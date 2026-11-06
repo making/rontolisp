@@ -23,8 +23,9 @@ Accept connections with [`usocket:socket-accept`](usocket-socket-accept.md).
 ## Backend support
 
 - **Interpreter** and **JVM**: full support.
-- **WASM**: component mode only; a failed bind returns `nil`. A plain Preview
-  1 `.wasm` signals at the call.
+- **WASM**: component mode only; a failed bind signals `usocket:socket-error`
+  (`tcp-listen: cannot listen on H:P`, without the host's reason). A plain
+  Preview 1 `.wasm` signals at the call.
 - **Native executable** (`--native`): full support, as on the interpreter and
   the JVM -- a failed bind signals `usocket:socket-error`
   ([TCP sockets in a native executable](../../compiling/native.md#tcp-sockets)).

@@ -294,6 +294,9 @@ public final class ShimLibraries {
 		else if (WithUserAbortForms.SYSTEM.equals(systemName)) {
 			rewritten = WithUserAbortForms.rewrite(componentFile, source);
 		}
+		else if (TrivialMimesForms.SYSTEM.equals(systemName)) {
+			rewritten = TrivialMimesForms.rewrite(componentFile, source, baseDir);
+		}
 		else if (ClsqlForms.SYSTEM.equals(systemName)) {
 			rewritten = ClsqlForms.rewrite(componentFile, source);
 		}

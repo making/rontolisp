@@ -22,7 +22,10 @@
 ;;   pass-through on WASM, where errors are uncatchable traps). The :report
 ;;   echoes the underlying message, so an uncaught failure prints exactly as
 ;;   before. connection-refused-error &c are defined as subtypes but the
-;;   re-signal always uses socket-error (lite; catch socket-error).
+;;   re-signal always uses socket-error (lite; catch socket-error). On the
+;;   WASM component the primitives answer nil instead of signalling; the three
+;;   signal socket-error for that nil (usocket::%usock-failed), so a usocket
+;;   failure signals on every backend.
 ;; - The with-* convenience macros are built-in LispMacroExpander expansions
 ;;   (see .kb/tcp-sockets.md), not defuns in this file.
 ;; - socket-option supports :receive-timeout only (a real read deadline
@@ -63,6 +66,14 @@
                       (simple-condition-format-control c)
                       "socket error")))
 
+(defun usocket::%usock-failed (message)
+  ;; The signal for a primitive that answered nil, the WASM component's failure
+  ;; convention (the interpreter, the JVM and --native signal themselves, with
+  ;; the same text plus the host's reason, which the component does not surface).
+  ;; A library must never carry a nil socket on: into a stream call it is an
+  ;; unreadable cast-failure trap, and dexador reconnects for ever.
+  (error 'usocket:socket-error :message message))
+
 (defun usocket::%usock-listen-host (host)
   ;; usocket passes the host first and uses *wildcard-host* / nil for "all
   ;; interfaces"; rontolisp:tcp-listen expresses that as a nil host argument.
@@ -79,17 +90,9 @@
   (when (eql protocol :datagram)
     (error
      "usocket:socket-connect: :protocol :datagram (UDP) is not supported"))
-  ;; The WASM component's tcp-connect answers nil where the other backends
-  ;; signal; the shim signals there too, so a library never carries a nil socket
-  ;; on into a stream call (an unreadable cast-failure trap). The text is the
-  ;; interpreter's up to its host message.
-  (let ((%usock-socket
-         (usocket::%usock-guard (rontolisp:tcp-connect host port))))
-    (if %usock-socket
-        %usock-socket
-        (error 'usocket:socket-error
-               :message (format nil "tcp-connect: cannot connect to ~A:~A" host
-                                port)))))
+  (or (usocket::%usock-guard (rontolisp:tcp-connect host port))
+      (usocket::%usock-failed
+       (format nil "tcp-connect: cannot connect to ~A:~A" host port))))
 
 (defun usocket:socket-listen
     (host port &key reuse-address backlog element-type &allow-other-keys)
@@ -98,13 +101,17 @@
   ;; (the backlog is the runtime default). tcp-listen rejects an explicit nil
   ;; host, so the all-interfaces case omits the argument.
   (let ((%usock-host (usocket::%usock-listen-host host)))
-    (usocket::%usock-guard
-     (if (null %usock-host)
-         (rontolisp:tcp-listen port)
-         (rontolisp:tcp-listen port %usock-host)))))
+    (or (usocket::%usock-guard
+         (if (null %usock-host)
+             (rontolisp:tcp-listen port)
+             (rontolisp:tcp-listen port %usock-host)))
+        (usocket::%usock-failed
+         (format nil "tcp-listen: cannot listen on ~A:~D" (or %usock-host "*")
+                 port)))))
 
 (defun usocket:socket-accept (socket &key element-type &allow-other-keys)
-  (usocket::%usock-guard (rontolisp:tcp-accept socket)))
+  (or (usocket::%usock-guard (rontolisp:tcp-accept socket))
+      (usocket::%usock-failed "tcp-accept: no connection was accepted")))
 
 (defun usocket:socket-stream (socket)
   ;; The handle IS the stream: read-line/write-line/read-byte/write-byte/close

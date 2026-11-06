@@ -886,23 +886,33 @@ public final class AsdfSystems {
 	 * {@code null}
 	 * @param aroundCompile what {@code :around-compile} holds for an instance when the
 	 * definition says nothing, or {@code null}
+	 * @param slotType what an instance's {@code type} slot holds, the slot's initform:
+	 * {@code fileType} unless a {@code source-file-type} method set the extension, or
+	 * {@code null} when the slot is nil or the class is a loaded one
 	 */
 	private record ComponentClass(boolean source, @Nullable String fileType, boolean module,
-			@Nullable LoadedClass loaded, @Nullable LispVal aroundCompile, String kind) {
+			@Nullable LoadedClass loaded, @Nullable LispVal aroundCompile, String kind, @Nullable String slotType) {
 
-		ComponentClass(boolean source, String fileType, String kind) {
-			this(source, fileType, false, null, null, kind);
+		ComponentClass(boolean source, String fileType, @Nullable String slotType, String kind) {
+			this(source, fileType, false, null, null, kind, slotType);
 		}
 
+		/** A class whose extension is its {@code type} slot. */
+		ComponentClass(boolean source, String fileType, String kind) {
+			this(source, fileType, fileType.isEmpty() ? null : fileType, kind);
+		}
+
+		/** The class with its extension set by a {@code source-file-type} method. */
 		ComponentClass withFileType(String type) {
-			return new ComponentClass(this.source, type, this.module, this.loaded, this.aroundCompile, this.kind);
+			return new ComponentClass(this.source, type, this.module, this.loaded, this.aroundCompile, this.kind,
+					this.slotType);
 		}
 
 		static ComponentClass of(LiveClass live) {
 			LoadedClass loaded = live.plain() ? null
 					: new LoadedClass(live.name(), live.lispSource(), live.deferred(), List.of());
 			return new ComponentClass(live.file(), live.fileType(), live.module(), loaded, live.aroundCompile(),
-					CL_SOURCE_FILE);
+					CL_SOURCE_FILE, null);
 		}
 
 	}
@@ -1091,6 +1101,7 @@ public final class AsdfSystems {
 		}
 		boolean source = false;
 		String fileType = "";
+		String slotType = null;
 		String kind = null;
 		for (LispVal superClass : supers.toList()) {
 			ComponentClass resolved = superClass instanceof LispSymbol superSym ? classes.find(memberName(superSym))
@@ -1102,13 +1113,20 @@ public final class AsdfSystems {
 				source = resolved.source();
 				kind = resolved.kind();
 				fileType = java.util.Objects.requireNonNullElse(resolved.fileType(), "");
+				slotType = resolved.slotType();
 			}
 		}
 		if (kind == null) {
 			return null;
 		}
 		String initform = items.size() >= 4 ? slotTypeInitform(items.get(3)) : null;
-		return new ComponentClass(source, initform == null ? fileType : initform, kind);
+		if (initform == null) {
+			return new ComponentClass(source, fileType, slotType, kind);
+		}
+		// A superclass's source-file-type method applies to this class too, ahead of the
+		// slot the default method reads.
+		boolean methodSet = !fileType.equals(java.util.Objects.requireNonNullElse(slotType, ""));
+		return new ComponentClass(source, methodSet ? fileType : initform, initform, kind);
 	}
 
 	/**
@@ -2663,11 +2681,12 @@ public final class AsdfSystems {
 
 	private static Component parseComponent(String systemName, LispVal entry, String prefix, ComponentScope scope,
 			@Nullable String serialPrevious) {
-		if (!(entry instanceof LispCons compCons) || !(compCons.car() instanceof LispSymbol type)
-				|| !type.isKeyword()) {
-			throw new IllegalStateException(
-					"system " + systemName + ": each component must be (:file \"name\" ...), (:module \"dir\" ...) or"
-							+ " (:static-file \"name\"), got " + entry.print());
+		// The type is any symbol, as ASDF's class-for-type reads it: a keyword, or the
+		// class symbol itself (cl-unification's (asdf-system-definition-file "x")).
+		if (!(entry instanceof LispCons compCons) || !(compCons.car() instanceof LispSymbol type)) {
+			throw new IllegalStateException("system " + systemName
+					+ ": each component must be (TYPE \"name\" ...) with TYPE a symbol naming a component class,"
+					+ " such as (:file \"name\") or (:module \"dir\" ...), got " + entry.print());
 		}
 		List<LispVal> parts = compCons.toList();
 		if (parts.size() < 2) {
@@ -2703,6 +2722,7 @@ public final class AsdfSystems {
 		LispVal ifFeature = null;
 		LispVal nested = null;
 		String pathname = null;
+		boolean pathnameObject = false;
 		ComponentClass moduleDefaultClass = null;
 		LispVal aroundCompile = componentClass != null && componentClass.aroundCompile() != null
 				? componentClass.aroundCompile() : scope.aroundCompile();
@@ -2732,7 +2752,10 @@ public final class AsdfSystems {
 				// :pathname decouples a component's NAME (its identity in the sibling
 				// dependency graph) from the path it contributes. quri's uri-classes
 				// module is exactly this: named uri-classes, living in src/uri/.
-				case ":PATHNAME" -> pathname = componentPathname(systemName, name, value);
+				case ":PATHNAME" -> {
+					pathname = componentPathname(systemName, name, value);
+					pathnameObject = !(value instanceof LispString);
+				}
 				case ":SERIAL" -> {
 					if (!module) {
 						throw unsupportedComponentOption(systemName, type, name, key);
@@ -2797,7 +2820,7 @@ public final class AsdfSystems {
 		}
 		else {
 			ComponentClass fileClass = java.util.Objects.requireNonNull(componentClass);
-			String relative = sourceFileName(name, pathname, fileClass.fileType());
+			String relative = sourceFileName(name, pathname, pathnameObject, fileClass.fileType());
 			String file = prefix + relative;
 			node = new ComponentNode(fileClass.kind(), name, pathname, relative, file,
 					fileTypeOverride(fileClass, relative), List.copyOf(sideway), ifFeature, featureEnabled, loaded,
@@ -2819,13 +2842,19 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * The {@code type} slot of an instance, when its class's does not hold it: a source
-	 * file's is the extension the plan named the file by, whichever class said it, and
-	 * any other file's is what a class a {@code .asd} declares says.
+	 * The {@code type} slot of an instance, when the class it is made of does not hold
+	 * it. For ASDF's own classes and the ones a {@code .asd} declares it is the declared
+	 * class's slot, which neither a {@code source-file-type} method nor a
+	 * {@code :pathname} extension changes (cl-unification's {@code .asd} component is
+	 * {@code "lisp"}, measured on SBCL 2.2.9). A loaded class's source file takes the
+	 * extension the plan named the file by, any other file of one its class's extension.
 	 */
 	private static @Nullable String fileTypeOverride(ComponentClass fileClass, String relative) {
 		String fileType;
-		if (fileClass.source()) {
+		if (fileClass.loaded() == null) {
+			fileType = fileClass.slotType();
+		}
+		else if (fileClass.source()) {
 			int dot = relative.lastIndexOf('.');
 			fileType = dot > relative.lastIndexOf('/') ? relative.substring(dot + 1) : null;
 		}
@@ -2837,14 +2866,16 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * The file a source component names: its {@code :pathname} when it has one --
-	 * verbatim if that namestring already carries an extension, which is how a component
-	 * points at a file whose name differs from its own -- and otherwise the component
-	 * name plus its CLASS's extension, if the class gives it one.
+	 * The file a component names, as ASDF's {@code parse-unix-namestring} makes it: its
+	 * {@code :pathname} or else its name, plus its CLASS's extension when the class gives
+	 * one -- even past a dot already there ({@code "d.cl"} names {@code d.cl.lisp},
+	 * measured on SBCL 2.2.9). A {@code #P} literal is a pathname already and names its
+	 * file verbatim.
 	 */
-	private static String sourceFileName(String name, @Nullable String pathname, @Nullable String fileType) {
+	private static String sourceFileName(String name, @Nullable String pathname, boolean pathnameObject,
+			@Nullable String fileType) {
 		String file = pathname == null ? name : pathname;
-		if (fileType == null || fileType.isEmpty() || pathname != null && pathname.indexOf('.') >= 0) {
+		if (fileType == null || fileType.isEmpty() || pathname != null && pathnameObject) {
 			return file;
 		}
 		return file + "." + fileType;

@@ -1197,14 +1197,17 @@ class AsdfSystemsTest {
 
 	@Test
 	void aFilePathnameNamesTheSourceFile() {
-		// With an extension the namestring is used verbatim; without one, .lisp is
-		// appended exactly as the component name would have been.
+		// A string gets the class's extension as the component name would have, even
+		// past a dot; a #P literal names its file verbatim (SBCL 2.2.9's ASDF 3.3.1).
 		AsdfSystems.LispSystem system = parse("""
 				(asdf:defsystem :lib
-				  :components ((:file "one" :pathname "strings-utf-8.lisp")
-				               (:file "two" :pathname "other")))
+				  :components ((:file "one" :pathname "one.cl")
+				               (:file "two" :pathname "other")
+				               (:file "three" :pathname #P"three.cl")
+				               (:file "four" :pathname #P"four")
+				               (:cl-source-file.cl "five" :pathname "five.x")))
 				""");
-		assertThat(system.files()).containsExactly("strings-utf-8.lisp", "other.lisp");
+		assertThat(system.files()).containsExactly("one.cl.lisp", "other.lisp", "three.cl", "four", "five.x.cl");
 	}
 
 	@Test
@@ -1480,7 +1483,7 @@ class AsdfSystemsTest {
 				(defsystem :lib
 				  :pathname "src/"
 				  :components ((:file "one")
-				               (:file "two" :pathname "other.lisp")
+				               (:file "two" :pathname "other")
 				               (:module "sub" :components ((:file "three")))))""");
 		assertThat(system.files()).containsExactly("src/one.lisp", "src/other.lisp", "src/sub/three.lisp");
 		// A #P literal is constant data: read as the namestring (clingon's modules).

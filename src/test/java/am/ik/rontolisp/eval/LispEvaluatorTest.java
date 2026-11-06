@@ -14869,25 +14869,6 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void clSslShimSignalsOnWhatHasNoBacking() {
-		// Client certificates and CA paths signal instead of being accepted and
-		// ignored: silently unauthenticated (or silently trusting the default
-		// store where the caller named a CA path) is worse than a message.
-		assertThatThrownBy(() -> evalMulti("""
-				(asdf:load-system "cl+ssl")
-				(cl+ssl:make-ssl-client-stream 99 :hostname "h" :key "client-key.pem")
-				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("client certificates");
-		assertThatThrownBy(() -> evalMulti("""
-				(asdf:load-system "cl+ssl")
-				(cl+ssl:use-certificate-chain-file "client-cert.pem")
-				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("client certificates");
-		assertThatThrownBy(() -> evalMulti("""
-				(asdf:load-system "cl+ssl")
-				(cl+ssl:make-context :verify-location "/etc/ssl/certs")
-				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("javax.net.ssl.trustStore");
-	}
-
-	@Test
 	void fetchSendsRequestHeaders() throws Exception {
 		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
 			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);

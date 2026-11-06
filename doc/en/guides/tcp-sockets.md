@@ -756,16 +756,16 @@ Limitations of the shim (deliberate -- rontolisp's socket model is lite):
 
 - **TCP only.** `:protocol :datagram` (UDP) signals an error, and
   `socket-send` / `socket-receive` / `socket-shutdown` do not exist.
-- **Typed conditions on the interpreter and the JVM.** A failure in
+- **Typed conditions on every backend.** A failure in
   `socket-connect`/`socket-listen`/`socket-accept` signals a typed
   `usocket:socket-error` (message preserved), so
   `(handler-case (usocket:socket-connect ...) (usocket:socket-error (e) ...))`
-  works there, and in a native executable. The subtypes
+  works on the interpreter, the JVM, the WASM component and in a native
+  executable. On the component the message lacks the host's reason
+  (`tcp-connect: cannot connect to 127.0.0.1:1`), since the `rontolisp:tcp-*`
+  built-ins answer `nil` there and the shim signals for them. The subtypes
   (`connection-refused-error` &c) are defined but
-  the re-signal always uses `socket-error` (catch that). On the WASM
-  component backend a failed connect/accept yields a `nil` handle instead of
-  signaling, so the `handler-case` pattern has nothing to catch there (test
-  the handle for `nil` instead).
+  the re-signal always uses `socket-error` (catch that).
 - **`socket-option` supports `:receive-timeout` only.**
   `(setf (usocket:socket-option sock :receive-timeout) seconds)` sets a real
   per-socket read deadline (via
