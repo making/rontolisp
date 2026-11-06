@@ -138,6 +138,30 @@ as part of a symbol on all four instead of signalling (CLHS 2.4.8; measured 2026
   numbers, symbols, strings, characters, conses, arrays, packed vectors, instances by slot --
   not a readtable, closure, hash table, stream). Otherwise, and when the function signals,
   `ReadSyntax.Refusal` -> `LispLexer` turns it into a read error at the macro character.
+- **The image's ASDF answers from the compile path's registry** (2026-11-06,
+  `LispEvaluator.answerSystemsFrom`): what `LoadInliner` registered, and as loaded what it spliced
+  so far, as the macro-time pass's baked `%asdf-registry%` does. coalton's parser picks its only
+  `make-expression-result` arm by `(eval-when (:compile-toplevel) (if (uiop:version<
+  (asdf:component-version (asdf:find-system :eclector)) "0.10.0") (pushnew ...) ...))`; the image
+  signalled `Component "eclector" not found`, skipped the form, read the method with neither arm,
+  and the method answered nil: `No applicable method: CONCRETE-SYNTAX-TREE:RAW on SYMBOL` at
+  `library/types.lisp:20`. Pinned by `AsdfMetaobjectsE2eTest` (`meta-demo`).
+- **A form of the program's own that a reader macro function read is read again by the
+  macro-time pass**, at its turn, in its own evaluator (`ReaderMacroReads`, 2026-11-06). The read's
+  effects on the compiling image are part of compile-file's semantics -- coalton's
+  `coalton-toplevel` reader macro typechecks the form and stores what it defined in
+  `*global-environment*`, where the next `(coalton ...)` macro looks -- and the image is thrown
+  away, so the pass had `Unknown variable COLOR-NAME` for a program read with `in-readtable`.
+  `LoadInliner` records the form, the text and offsets and the features it was read with, when the
+  image's reader-macro count moved during the read and no system is splicing; `UserMacroExpander`
+  keeps the form whole through its flatten (`%read-again` placeholder) and reads the text again with
+  its evaluator's readtable. The image's read stands when this one runs no reader macro function or
+  ends elsewhere (a readtable this pass holds otherwise, e.g. one a spliced `defvar` made that the
+  image evaluated and this pass parks). A spliced system's forms are not read again: a system is
+  loaded, and its load-time forms are what the pass replays (coalton's generated code updates the
+  environment itself), as loading a fasl never reads source. Cost: the reader macro runs twice per
+  such form. ci-spec `a-reader-macro-reads-into-the-compiling-image` (all four and SBCL: the second
+  line was NIL on the compile paths).
 - **compile-file semantics**: only what the compile evaluates changes the read. A
   source-level `eval-when` whose situations evaluate at compile time (`:compile-toplevel`,
   or `:execute` in compile-time-too mode) has its members recorded by

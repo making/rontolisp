@@ -155,16 +155,40 @@ public enum SourceLanguage {
 	 */
 	public LispReader.ReadPrefix readUntilError(String source, Features features, @Nullable String file,
 			SourceStandards standards, @Nullable SourceLoader loader) {
+		return readUntilError(source, features, file, standards, loader, null);
+	}
+
+	/**
+	 * {@link #readUntilError(String, Features, String, SourceStandards, SourceLoader)} of
+	 * a source read in a package: a Common Lisp {@code t} or {@code nil} token is
+	 * {@code cl}'s constant only where the package reads it so
+	 * ({@link Forms#readingTOrNil}).
+	 * @param source the program text
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @param standards what each language is read against ({@code --scheme-standard})
+	 * @param loader where named files are read from, or {@code null} when none can be
+	 * @param clTOrNil answers, for {@code T} or {@code NIL}, whether the token is
+	 * {@code cl}'s constant, or {@code null} for a read in a package using {@code cl}
+	 * @return the forms before the first read error, and that error
+	 */
+	public LispReader.ReadPrefix readUntilError(String source, Features features, @Nullable String file,
+			SourceStandards standards, @Nullable SourceLoader loader,
+			java.util.function.@Nullable Predicate<String> clTOrNil) {
 		// What the seam reads is the PROGRAM's source; a library a splice reads goes to
 		// the reader directly. The compile path tells the two apart by this mark
 		// (CompileWarnings counts only the program's warnings).
-		return SourceProvenance
-			.readingProgramSource(() -> shieldCircles(readProgram(source, features, file, standards, loader), source));
+		return SourceProvenance.readingProgramSource(
+				() -> shieldCircles(readProgram(source, features, file, standards, loader, clTOrNil), source));
 	}
 
 	private LispReader.ReadPrefix readProgram(String source, Features features, @Nullable String file,
-			SourceStandards standards, @Nullable SourceLoader loader) {
+			SourceStandards standards, @Nullable SourceLoader loader,
+			java.util.function.@Nullable Predicate<String> clTOrNil) {
 		if (this == COMMON_LISP) {
+			if (clTOrNil != null) {
+				return LispReader.readPrefixIn(source, features, usesReadEvalMarkers(source), file, clTOrNil);
+			}
 			return usesReadEvalMarkers(source) ? LispReader.readPrefixWithReadEvalMarkers(source, features, file)
 					: LispReader.readPrefixFromString(source, features, file);
 		}
@@ -453,8 +477,23 @@ public enum SourceLanguage {
 	 * @return the read
 	 */
 	public static Forms readForms(String source, Features features, @Nullable String file) {
+		return readFormsFrom(source, features, file, 0);
+	}
+
+	/**
+	 * {@link #readForms} resumed at an offset of the source: the read of a form again
+	 * where a reader macro function read it, in another image (the compile path's
+	 * macro-time pass after its read-time image, {@code ReaderMacroReads}).
+	 * @param source the program text
+	 * @param features the features the guards test there, as {@link Forms#features}
+	 * answered them
+	 * @param file the origin file, or {@code null} when unknown
+	 * @param start the UTF-16 offset the read resumes at
+	 * @return the read
+	 */
+	public static Forms readFormsFrom(String source, Features features, @Nullable String file, int start) {
 		LispReader.Forms forms = SourceProvenance.readingProgramSource(
-				() -> LispReader.forms(source, features, usesReadEvalMarkers(source), file, null, 0, true));
+				() -> LispReader.forms(source, features, usesReadEvalMarkers(source), file, null, start, true));
 		return new Forms(forms, LABEL_DEFINITION.matcher(source).find());
 	}
 
@@ -468,6 +507,19 @@ public enum SourceLanguage {
 		private Forms(LispReader.Forms forms, boolean labels) {
 			this.forms = forms;
 			this.labels = labels;
+		}
+
+		/**
+		 * Reads a {@code t} or {@code nil} token as {@code cl}'s constant only where the
+		 * package the read happens in reads it so
+		 * ({@link LispReader.Forms#readingTOrNil}).
+		 * @param clTOrNil answers, for {@code T} or {@code NIL}, whether the token is
+		 * {@code cl}'s constant
+		 * @return this read
+		 */
+		public Forms readingTOrNil(java.util.function.Predicate<String> clTOrNil) {
+			this.forms.readingTOrNil(clTOrNil);
+			return this;
 		}
 
 		/**
@@ -494,6 +546,20 @@ public enum SourceLanguage {
 		public @Nullable LispVal next(am.ik.rontolisp.reader.@Nullable ReadSyntax syntax, List<String> pushed) {
 			this.forms.widenFeatures(pushed);
 			return next(syntax);
+		}
+
+		/**
+		 * {@return where the read stands: just behind the last form read}
+		 */
+		public int position() {
+			return this.forms.position();
+		}
+
+		/**
+		 * {@return the features the guards of the forms still to read test}
+		 */
+		public Features features() {
+			return this.forms.features();
 		}
 
 	}

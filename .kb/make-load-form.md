@@ -52,6 +52,15 @@ use (`.kb/compiler-macros.md`).
   spine is rebuilt -- an object buried in a quoted ARRAY or hash table still fails the compile.
 - One object dumped twice in a top-level form yields one creation form (identity-memoized); a program
   with no method pays one registry lookup, the walk never starts.
+- **What the substitution writes is read again by the backends' resolver** in the package the form
+  sits in (2026-11-06, coalton). The `cons`/`let`/`load-time-value`/`quote` it writes are the reader's
+  own (`ReaderSymbols`), which the resolver leaves alone: a bare `cons` in a coalton package was
+  `coalton:cons`, the list constructor (`The function COALTON:CONS is undefined`). The class tag a
+  `make-load-form-saving-slots` creation form quotes, `'|%class-PKG::NAME|`, is an instance tag to
+  `PackageResolver.resolveSymbolName` as the struct tag was (`No such package: %class-MLF` for any
+  class outside `cl-user`). Residual: a method's own creation form is spelled as the macro-time
+  evaluator holds it, so a `cl` name in it that the target package shadows reads as the package's.
+  ci-spec `make-load-form-literal-object`.
 
 **Why it exists: cffi.** `defcfun` with a `defcenum` type embeds the foreign-type object, and
 upstream `src/early-types.lisp` supplies a `make-load-form` method over `parse-type`/`unparse-type`.

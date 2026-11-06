@@ -327,7 +327,11 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
   let (a global-closure `setq`). A nested `defgeneric` (`expandNestedDefgeneric`) leaves
   its `(:method ...)` clauses' defuns plus `'name` in place; the dispatcher goes after the
   let. cl-qrencode's `rs-ecc.lisp` needs it (2026-10-31: `encode-symbol` agrees on all
-  four). `defclass`/`define-condition`/`defstruct` in a let stay refused: their initforms
+  four). A top-level `flet`/`labels` is the same shape (body at index 2) and takes the same
+  path since 2026-11-06: eclector's `messages-english.lisp` puts two `report-condition` methods
+  under `(flet ((package-name* ...)) ...)`, which failed every compile of eclector, and so of
+  coalton. ci-spec `generics-defined-in-a-top-level-let-close-over-it`.
+  `defclass`/`define-condition`/`defstruct` in a let stay refused: their initforms
   are inlined into top-level constructors (the class's and every subclass's) and the
   metaobject table, so they cannot close over the let, and hoisting a capture-free one
   would have to happen before the many earlier top-level scans that look for definers. No

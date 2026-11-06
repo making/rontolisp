@@ -479,18 +479,23 @@ class LoadInlinerTest {
 		// AFTER the load-system (referenced by unqualified quoted symbol) must resolve in
 		// the caller's package, the shape of examples/net/http-handler-cl-who.lisp.
 		// Without the package save/restore markers, `handle` would be defined under
-		// my-lib and the quoted 'handle lookup would fail.
+		// my-lib and the quoted 'handle lookup would fail. Nor does the package a token
+		// is read in: nil read in my-nocl, a package using no cl, is its own, and cl's
+		// again in the caller (.kb/packages.md).
 		List<LispVal> program = UserMacroExpander.expand(inline("""
 				(asdf:load-system :my-lib)
 				(defun handle () 42)
-				(print (funcall (symbol-function 'handle)))""", Map.of(//
+				(print (list (funcall (symbol-function 'handle)) (my-nocl:nils) 'nil))""", Map.of(//
 				"my-lib.asd", """
 						(defsystem :my-lib
 						  :components ((:file "package") (:file "main" :depends-on ("package"))))""", //
-				"package.lisp", "(defpackage :my-lib (:use :cl) (:export :greet))", //
-				"main.lisp", "(in-package :my-lib) (defun greet () 1)")));
+				"package.lisp",
+				"(defpackage :my-lib (:use :cl) (:export :greet)) (defpackage :my-nocl (:use) (:export :nils))", //
+				"main.lisp", """
+						(in-package :my-lib) (defun greet () 1)
+						(cl:in-package :my-nocl) (cl:defun nils () (cl:list 'nil cl:nil))""")));
 		byte[] classBytes = new JvmLispCompiler("TestPkgLeak").compile(program);
-		assertThat(runMain(classBytes, "TestPkgLeak")).isEqualTo("42");
+		assertThat(runMain(classBytes, "TestPkgLeak")).isEqualTo("(42 (MY-NOCL::NIL NIL) NIL)");
 	}
 
 	// --- built-in systems (BuiltinSystems: "usocket") ---

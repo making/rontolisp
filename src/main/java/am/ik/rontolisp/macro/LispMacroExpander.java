@@ -14809,7 +14809,9 @@ public final class LispMacroExpander {
 				case ":TYPE" -> type = value;
 				case ":KEEP" -> keep = value;
 				case ":DIRECTION" -> {
-					if (!(value instanceof LispSymbol dir) || !(LispNames.INPUT_KEYWORD.equals(dir.name())
+					// A quoted keyword is the same constant (coalton's compile writes
+					// :direction ':output).
+					if (!(unquoted(value) instanceof LispSymbol dir) || !(LispNames.INPUT_KEYWORD.equals(dir.name())
 							|| LispNames.OUTPUT_KEYWORD.equals(dir.name()))) {
 						throw new UnsupportedOperationException(LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED
 								+ " :direction must be the literal :input or :output");
@@ -16905,11 +16907,13 @@ public final class LispMacroExpander {
 	 * its spelling in a pristine {@code cl-user}; a qualified one what its name interns
 	 * in the package the qualifier names, which the current package's nicknames read. A
 	 * qualifier naming no package keeps the spelling, as a token with a colon past a
-	 * qualifier's does: the readers do not ask. {@code t} is read ahead of any package,
-	 * as the interpreter's reader folds it. A nickname of the current package may be
-	 * named like the package found, and {@code intern} would read its designator through
-	 * it; a package has no nickname of its own name, so in a program with nicknames the
-	 * lookup runs with that package current.
+	 * qualifier's does: the readers do not ask. {@code t} and {@code nil} are no
+	 * exception, as the interpreter's reader asks for them too ({@code .kb/packages.md}):
+	 * a package using no {@code cl} reads its own; {@code nil} comes in as nil, and
+	 * whichever reader answers the symbol spelled {@code NIL} reads it as nil. A nickname
+	 * of the current package may be named like the package found, and {@code intern}
+	 * would read its designator through it; a package has no nickname of its own name, so
+	 * in a program with nicknames the lookup runs with that package current.
 	 * @param program the resolved top-level forms
 	 * @param resolver the resolver holding the final registry
 	 * @return the program with the definition prepended, or unchanged
@@ -16922,7 +16926,7 @@ public final class LispMacroExpander {
 		String source = """
 				(defun %read-home (%rh-s %rh-q)
 				  (let ((%rh-k (if %rh-q (find-package %rh-q) *package*)))
-				    (if (or (null %rh-k) (eq %rh-s t) CL_USER_ANSWERS)
+				    (if (or (null %rh-k) CL_USER_ANSWERS)
 				        %rh-s
 				        LOOKUP)))
 				"""
@@ -30987,11 +30991,16 @@ public final class LispMacroExpander {
 		return qn == null ? name : qn.member();
 	}
 
-	/** Whether the form is {@code (defun <functionName> ...)}, member-name matched. */
+	/**
+	 * Whether the form is {@code (defun <functionName> ...)} of the standard name itself,
+	 * spelled bare as the resolver leaves it. A package's own symbol of the name is
+	 * another function: coalton-impl/entry shadows {@code compile} and defines its own,
+	 * which must not keep the compile runtime out of the program.
+	 */
 	private static boolean definesFunction(LispVal form, String functionName) {
 		return isNamedForm(form, LispNames.DEFUN) && form instanceof LispCons cons
 				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
-				&& functionName.equals(memberOf(name.name()));
+				&& functionName.equals(name.name());
 	}
 
 	// A #'make-instance VALUE reference anywhere outside quoted data -- a literal
@@ -32714,11 +32723,15 @@ public final class LispMacroExpander {
 	/**
 	 * Whether the form is a top-level {@code let}/{@code let*} carrying a
 	 * {@code defmethod} or {@code defgeneric} anywhere in its body (quoted data skipped)
-	 * -- the closure-over-let method idiom.
+	 * -- the closure-over-let method idiom -- or an {@code flet}/{@code labels} doing the
+	 * same over local functions (eclector's {@code package-name*} around two
+	 * {@code report-condition} methods). Both shapes keep their body at index 2, and the
+	 * backend lowers the binder around the method-body defuns that replace the methods.
 	 */
 	private static boolean isLetWithNestedMethodDefinition(LispVal form) {
 		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
-				|| (!LispNames.LET.equals(op.name()) && !LispNames.LET_STAR.equals(op.name()))
+				|| !(LispNames.LET.equals(op.name()) || LispNames.LET_STAR.equals(op.name())
+						|| LispNames.FLET.equals(op.name()) || LispNames.LABELS.equals(op.name()))
 				|| !cons.isProperList()) {
 			return false;
 		}
@@ -33575,9 +33588,14 @@ public final class LispMacroExpander {
 		if (!literal) {
 			branch.set(1, new LispSymbol(FORMAT_DEST_VAR));
 		}
-		LispVal branched = listToCons(List.of(new LispSymbol(LispNames.IF), ifParts.get(1),
+		// The operators are the reader's own: GrayStreamsLibrary distributes a call
+		// inside a form the source spelled, ahead of the compilers' resolver, and the
+		// package it reads in may shadow let (fset's).
+		LispVal branched = listToCons(List.of(ReaderSymbols.IF, ifParts.get(1),
 				replaceFormatControl(branch, ifParts.get(2)), replaceFormatControl(branch, ifParts.get(3))));
-		return literal ? branched : makeLet(FORMAT_DEST_VAR, parts.get(1), branched);
+		return literal ? branched : listToCons(List.of(ReaderSymbols.LET,
+				new LispCons(listToCons(List.of(new LispSymbol(FORMAT_DEST_VAR), parts.get(1))), LispNil.INSTANCE),
+				branched));
 	}
 
 	// A distributed format's branches, expanded in place.
@@ -55208,7 +55226,23 @@ public final class LispMacroExpander {
 	 * @return the normalized binding list
 	 */
 	public static LispVal normalizeBindingList(LispVal bindings) {
-		if (!(bindings instanceof LispCons cons) || !cons.isProperList() || !hasShorthandBinding(cons)) {
+		return normalizeBindingList(bindings, false);
+	}
+
+	/**
+	 * {@link #normalizeBindingList} for a {@code let} about to bind its names -- the
+	 * interpreter's and both compilers': an entry binding {@code t} or {@code nil} is
+	 * refused, which CL forbids and which each of them used to take for a symbol and die
+	 * on the cast. An analysis walking the form normalizes without the check.
+	 * @param bindings the binding list form
+	 * @return the normalized binding list
+	 */
+	public static LispVal letBindingList(LispVal bindings) {
+		return normalizeBindingList(bindings, true);
+	}
+
+	private static LispVal normalizeBindingList(LispVal bindings, boolean binding) {
+		if (!(bindings instanceof LispCons cons) || !cons.isProperList() || !hasShorthandBinding(cons, binding)) {
 			return bindings;
 		}
 		List<LispVal> entries = cons.toList();
@@ -55234,14 +55268,20 @@ public final class LispMacroExpander {
 
 	// Whether any entry is a bare symbol or (x): the interpreter asks on every let it
 	// evaluates, and nearly every binding list has neither, so it answers without
-	// allocating.
-	private static boolean hasShorthandBinding(LispCons bindings) {
+	// allocating. A let about to bind refuses an entry binding t or nil on the way.
+	private static boolean hasShorthandBinding(LispCons bindings, boolean binding) {
+		boolean shorthand = false;
 		for (LispVal cell = bindings; cell instanceof LispCons c; cell = c.cdr()) {
-			if (c.car() instanceof LispSymbol || c.car() instanceof LispCons pair && pair.cdr() instanceof LispNil) {
-				return true;
+			LispVal entry = c.car();
+			if (binding) {
+				LispVal name = entry instanceof LispCons pair ? pair.car() : entry;
+				if (name instanceof LispNil || name instanceof LispTrue) {
+					throw new IllegalArgumentException(name.print() + " names a constant, and cannot be bound");
+				}
 			}
+			shorthand |= entry instanceof LispSymbol || entry instanceof LispCons pair && pair.cdr() instanceof LispNil;
 		}
-		return false;
+		return shorthand;
 	}
 
 	/**

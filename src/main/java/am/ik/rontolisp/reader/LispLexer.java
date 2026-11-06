@@ -175,6 +175,14 @@ public final class LispLexer {
 	}
 
 	/**
+	 * The features the guards test now.
+	 * @return the features
+	 */
+	Features features() {
+		return this.features;
+	}
+
+	/**
 	 * Reads every datum from here on inside {@code depth} backquote templates: a reader
 	 * macro function's recursive read.
 	 * @param depth how many templates enclose the read

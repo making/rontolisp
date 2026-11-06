@@ -8,6 +8,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.ReaderSymbols;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CallSiteWalk;
 import am.ik.rontolisp.compiler.StreamOperandChecks;
@@ -933,9 +934,8 @@ public final class GrayStreamsLibrary {
 				&& LispNames.ABORT_KEYWORD.equals(abortKw.name()) && streamArgMayBeInstance(parts.get(1))) {
 			am.ik.rontolisp.LispSymbol temp = new am.ik.rontolisp.LispSymbol("__gray_close_stream");
 			LispVal dispatch = listOf(dispatchSymbol(CLOSE_DISPATCH, ctx), temp);
-			return listOf(new am.ik.rontolisp.LispSymbol(LispNames.LET),
-					listOf(listOf(temp, rewrite(parts.get(1), ctx))),
-					listOf(new am.ik.rontolisp.LispSymbol(LispNames.PROGN), rewrite(parts.get(3), ctx), dispatch));
+			return listOf(ReaderSymbols.LET, listOf(listOf(temp, rewrite(parts.get(1), ctx))),
+					listOf(ReaderSymbols.PROGN, rewrite(parts.get(3), ctx), dispatch));
 		}
 		// (op VALUE STREAM): write-line plus the print family. princ/prin1/print
 		// RENDER to a string in the helper and hand that to stream-write-string, so
@@ -1076,7 +1076,7 @@ public final class GrayStreamsLibrary {
 			// it uses the Gray protocol, so that turned an unrelated
 			// (format stream ...) into the wrong answer.
 			List<LispVal> fmtNil = new java.util.ArrayList<>();
-			fmtNil.add(new am.ik.rontolisp.LispSymbol(LispNames.FORMAT));
+			fmtNil.add(ReaderSymbols.FORMAT);
 			fmtNil.add(am.ik.rontolisp.LispNil.INSTANCE);
 			for (int i = 2; i < parts.size(); i++) {
 				fmtNil.add(rewrite(parts.get(i), ctx));
@@ -1092,21 +1092,17 @@ public final class GrayStreamsLibrary {
 			LispVal startsFresh = am.ik.rontolisp.macro.LispMacroExpander.formatStartsFresh(control);
 			LispVal dispatch = listOf(dispatchSymbol(WRITE_STRING_DISPATCH, ctx), result, temp);
 			LispVal wrote = startsFresh == null
-					? listOf(new am.ik.rontolisp.LispSymbol(LispNames.PROGN), dispatch,
-							am.ik.rontolisp.LispNil.INSTANCE)
-					: listOf(new am.ik.rontolisp.LispSymbol(LispNames.PROGN),
-							listOf(new am.ik.rontolisp.LispSymbol(LispNames.IF), startsFresh,
-									listOf(dispatchSymbol(FRESH_LINE_DISPATCH, ctx), temp),
-									am.ik.rontolisp.LispNil.INSTANCE),
+					? listOf(ReaderSymbols.PROGN, dispatch, am.ik.rontolisp.LispNil.INSTANCE)
+					: listOf(ReaderSymbols.PROGN, listOf(ReaderSymbols.IF, startsFresh,
+							listOf(dispatchSymbol(FRESH_LINE_DISPATCH, ctx), temp), am.ik.rontolisp.LispNil.INSTANCE),
 							dispatch, am.ik.rontolisp.LispNil.INSTANCE);
-			LispVal tested = listOf(new am.ik.rontolisp.LispSymbol(LispNames.IF), temp, wrote, result);
-			LispVal bindResult = listOf(new am.ik.rontolisp.LispSymbol(LispNames.LET),
+			LispVal tested = listOf(ReaderSymbols.IF, temp, wrote, result);
+			LispVal bindResult = listOf(ReaderSymbols.LET,
 					listOf(listOf(result, listOf(fmtNil.toArray(LispVal[]::new)))), tested);
 			if (!literalControl) {
-				bindResult = listOf(new am.ik.rontolisp.LispSymbol(LispNames.LET), listOf(listOf(control, heldControl)),
-						bindResult);
+				bindResult = listOf(ReaderSymbols.LET, listOf(listOf(control, heldControl)), bindResult);
 			}
-			return listOf(new am.ik.rontolisp.LispSymbol(LispNames.LET),
+			return listOf(ReaderSymbols.LET,
 					listOf(listOf(temp, StreamOperandChecks.checkedFormatDestination(rewrite(parts.get(1), ctx)))),
 					bindResult);
 		}
