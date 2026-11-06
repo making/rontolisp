@@ -15,10 +15,10 @@ and indexes. Porting a filter between the two forms is changing the first
 arguments only.
 
 ```lisp
-(rontolisp:json-value "{\"usage\": {\"input_tokens\": 12, \"output_tokens\": 34}}" "usage" "output_tokens")   ; => 34, T
+(multiple-value-list (rontolisp:json-value "{\"usage\": {\"input_tokens\": 12, \"output_tokens\": 34}}" "usage" "output_tokens"))   ; => (34 T)
 (gethash "input_tokens" (rontolisp:json-value "{\"usage\": {\"input_tokens\": 12, \"output_tokens\": 34}}" "usage"))   ; => 12
-(rontolisp:json-value "{\"usage\": null}" "usage")   ; => NULL, T
-(rontolisp:json-value "{\"usage\": null}" "model")   ; => NIL, NIL
+(multiple-value-list (rontolisp:json-value "{\"usage\": null}" "usage"))   ; => (NULL T)
+(multiple-value-list (rontolisp:json-value "{\"usage\": null}" "model"))   ; => (NIL NIL)
 ```
 
 The second value tells a `false` (`nil`, `t`) from a value that is not there

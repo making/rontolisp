@@ -28,8 +28,8 @@ import am.ik.wasm.Type;
  * the i31 code of the error {@code %json-span-fail} signals, or the value: under mode 0
  * the list {@code (start end count cut-start cut-end)} of byte offsets from the
  * document's first byte, under mode 1 a string of its bytes. It allocates the path's
- * array and a stack of the open containers' kinds, nothing a byte; a key is compared
- * only in a container on the way to the value.
+ * array and a stack of the open containers' kinds, nothing a byte; a key is compared only
+ * in a container on the way to the value.
  *
  * <p>
  * The body is two copies of one emitter, the byte loads the one difference: an

@@ -19553,7 +19553,8 @@ class WasmLispCompilerIntegrationTest {
 				(print (list (length *doc*) (string= *doc* *out*)))
 				""")), 150_000_000L)).isEqualTo("(8491 T)");
 		// json-span over an address and a size reads linear memory where it is: the scan
-		// writes its quote past the bytes and puts the byte back (the 33, and the 125 of a
+		// writes its quote past the bytes and puts the byte back (the 33, and the 125 of
+		// a
 		// cut document), copies bytes the memory ends with, and refuses bytes past it
 		// (.kb/json.md, "json-span"). The interpreter and the JVM have no address form.
 		String memory = """
@@ -19569,6 +19570,7 @@ class WasmLispCompilerIntegrationTest {
 				""";
 		assertThat(compileAndRunProgram(jsonSpliced(LispReader.readAllFromString(memory + """
 				(defvar *doc* "{\\"a\\":[1,{\\"b\\":\\"x\\"}],\\"c\\":true}")
+				(defvar *outside* "json-span: the address and the size name bytes outside the memory")
 				(let* ((n (length *doc*)) (address (put *doc* (alloc (+ n 1)))))
 				  (store8 (+ address n) 33)
 				  (print (list (span address n "a" 1 "b") (load8 (+ address n))))
@@ -19578,12 +19580,11 @@ class WasmLispCompilerIntegrationTest {
 				  (do ()
 				      ((<= (- hi lo) 1))
 				    (let ((mid (floor (+ lo hi) 2)))
-				      (if (search "outside" (span mid 0)) (setq hi mid) (setq lo mid))))
+				      (if (equal (span mid 0) *outside*) (setq hi mid) (setq lo mid))))
 				  (let ((address (put *doc* (- lo (length *doc*)))))
-				    (print (list (span address (length *doc*) "c") (span lo 1))))))
-				"""))))
-			.isEqualTo("((13 16 NIL 9 16) 33)\n(\"json-span: unterminated object\" 125)\n(T T)\n"
-					+ "((23 27 NIL 18 27) \"json-span: the address and the size name bytes outside the memory\")");
+				    (print (list (span address (length *doc*) "c") (span lo 1)))))
+				""")))).isEqualTo("((13 16 NIL 9 16) 33)\n(\"json-span: unterminated object\" 125)\n(T T)\n"
+				+ "((23 27 NIL 18 27) \"json-span: the address and the size name bytes outside the memory\")");
 		// A byte costs the scan's loops: 200 scans of the 8,491 bytes above, in memory,
 		// measured 2026-11-06 (wasmtime 49) at 27.1 M fuel beside the 26.4 M the
 		// document's making takes, 16 a byte, where the codec's parse and stringify took

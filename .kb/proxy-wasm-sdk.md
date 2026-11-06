@@ -81,7 +81,9 @@ a filter that traps, 141KB, which is why `%guarded` is a macro. Only `defmacro` 
 `proxy_on_memory_allocate` does not touch them.
 
 **A body stays in linear memory.** `with-buffer` and `search-bytes` (`"rontolisp:memory"."search"`, `wasm-import.md`) are 3.4
-instructions per byte; `get-buffer` and `search` are 30, and a `get-buffer-octets` loop 155 (`string-search-runtime.md`).
+instructions per byte; `get-buffer` and `search` are 30, and a `get-buffer-octets` loop 155 (`string-search-runtime.md`). A JSON
+body too: `rontolisp:json-span` over `with-buffer`'s bytes, 18 per byte, where `json-parse` and `json-stringify` are 102 and stop
+at 256KiB (`json.md`, "json-span").
 
 **The error mode is a clause.** It used to be a `*features*` read by a macro, which kept `*features*` in the module.
 

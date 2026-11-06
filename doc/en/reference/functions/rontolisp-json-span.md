@@ -18,9 +18,9 @@ A path is keys and indexes: a string names an object's key, a non-negative
 integer an array's element. No path names the document itself.
 
 ```lisp
-(rontolisp:json-span "{\"a\": [1, {\"b\": true}]}" "a" 1 "b")   ; => 16, 20, NIL, 11, 20
-(rontolisp:json-span "{\"a\": [1, {\"b\": true}]}")   ; => 0, 23, 1, NIL, NIL
-(rontolisp:json-span "{\"a\": [1, {\"b\": true}]}" "z")   ; => NIL
+(multiple-value-list (rontolisp:json-span "{\"a\": [1, {\"b\": true}]}" "a" 1 "b"))   ; => (16 20 NIL 11 20)
+(multiple-value-list (rontolisp:json-span "{\"a\": [1, {\"b\": true}]}"))   ; => (0 23 1 NIL NIL)
+(multiple-value-list (rontolisp:json-span "{\"a\": [1, {\"b\": true}]}" "z"))   ; => (NIL)
 ```
 
 ## Values
@@ -40,8 +40,8 @@ characters past ASCII they are not character indexes: use an octet vector to cut
 the text.
 
 ```lisp
-(rontolisp:json-span "{\"é\": 1}" "é")   ; => 7, 8, NIL, 1, 8
-(rontolisp:json-span (rontolisp:string-to-octets "[10, 20]") 1)   ; => 5, 7, NIL, 3, 7
+(multiple-value-list (rontolisp:json-span "{\"é\": 1}" "é"))   ; => (7 8 NIL 1 8)
+(multiple-value-list (rontolisp:json-span (rontolisp:string-to-octets "[10, 20]") 1))   ; => (5 7 NIL 3 7)
 ```
 
 ## Editing

@@ -15,10 +15,10 @@ JSON ドキュメントから値を 1 つ読み出します。
 フィルタを移植するときに変えるのは、先頭の引数だけです。
 
 ```lisp
-(rontolisp:json-value "{\"usage\": {\"input_tokens\": 12, \"output_tokens\": 34}}" "usage" "output_tokens")   ; => 34, T
+(multiple-value-list (rontolisp:json-value "{\"usage\": {\"input_tokens\": 12, \"output_tokens\": 34}}" "usage" "output_tokens"))   ; => (34 T)
 (gethash "input_tokens" (rontolisp:json-value "{\"usage\": {\"input_tokens\": 12, \"output_tokens\": 34}}" "usage"))   ; => 12
-(rontolisp:json-value "{\"usage\": null}" "usage")   ; => NULL, T
-(rontolisp:json-value "{\"usage\": null}" "model")   ; => NIL, NIL
+(multiple-value-list (rontolisp:json-value "{\"usage\": null}" "usage"))   ; => (NULL T)
+(multiple-value-list (rontolisp:json-value "{\"usage\": null}" "model"))   ; => (NIL NIL)
 ```
 
 2 番目の値は、`gethash` の 2 番目の値と同じく、`false`(`nil`, `t`)と存在しない

@@ -18,9 +18,9 @@ Lisp の値にはしません。ドキュメント全体を
 配列の要素を指します。パスを省くと、ドキュメント全体を指します。
 
 ```lisp
-(rontolisp:json-span "{\"a\": [1, {\"b\": true}]}" "a" 1 "b")   ; => 16, 20, NIL, 11, 20
-(rontolisp:json-span "{\"a\": [1, {\"b\": true}]}")   ; => 0, 23, 1, NIL, NIL
-(rontolisp:json-span "{\"a\": [1, {\"b\": true}]}" "z")   ; => NIL
+(multiple-value-list (rontolisp:json-span "{\"a\": [1, {\"b\": true}]}" "a" 1 "b"))   ; => (16 20 NIL 11 20)
+(multiple-value-list (rontolisp:json-span "{\"a\": [1, {\"b\": true}]}"))   ; => (0 23 1 NIL NIL)
+(multiple-value-list (rontolisp:json-span "{\"a\": [1, {\"b\": true}]}" "z"))   ; => (NIL)
 ```
 
 ## 返す値
@@ -40,8 +40,8 @@ Lisp の値にはしません。ドキュメント全体を
 テキストを切り出すにはオクテットのベクタを使ってください。
 
 ```lisp
-(rontolisp:json-span "{\"é\": 1}" "é")   ; => 7, 8, NIL, 1, 8
-(rontolisp:json-span (rontolisp:string-to-octets "[10, 20]") 1)   ; => 5, 7, NIL, 3, 7
+(multiple-value-list (rontolisp:json-span "{\"é\": 1}" "é"))   ; => (7 8 NIL 1 8)
+(multiple-value-list (rontolisp:json-span (rontolisp:string-to-octets "[10, 20]") 1))   ; => (5 7 NIL 3 7)
 ```
 
 ## 編集
