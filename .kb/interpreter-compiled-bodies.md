@@ -28,16 +28,38 @@ backend's bytecode for a hot defun.
   load 30); coalton's whole load 2168 s -> 1460 s, up to `library/math/bounded.lisp` 86.1-87.7 s
   -> 59.5-63.7 s ([asdf.md](asdf.md), the coalton entry).
 
+## A class per hot body: built, measured, not kept (2026-11-06)
+
+A prototype wrote each hot body as one hidden class: each node's code where the tree calls the
+node, the nodes, layouts and the built-in a site found bound as class-data constants, an exit to
+the frame's own block a return, any other node called as the tree calls it. Tight code ran 2-7
+times as fast (best of 8 warm rounds: an empty `dotimes` round 133 -> 33 ns, `(+ x 1)` 142 -> 33,
+a `let` 166 -> 23, `char<` 166 -> 25, a two-argument call 178 -> 86, `fib 25` 189 -> 82 ns a call).
+coalton's load did not, up to `library/math/bounded.lisp` side by side with the tree: a class
+after 200 runs 60.6 s against 54.0, after 2,000 56.6 against 53.3, after 10,000 52.4 against 49.4,
+after 50,000-200,000 54.6-55.9 against 56.3; `math/num.lisp` alone 5-13% shorter at best. Why:
+
+- A class is compiled per body, the tree's node methods once for all of them. 147 classes took
+  the JIT from 77 s to 90 s of compile-thread time and 61 MB to 81 MB of code; one class took
+  100-565 ms to compile. The load runs 5,200 compiled bodies, few long enough to repay it.
+- What a class leaves as it is -- the call protocol and the scopes ("Where the time goes now") --
+  is where the load spends its time.
+
 ## Where the time goes now
 
-`math/num.lisp` under JFR: 82% of the samples run compiled, 18% in walks the compiled code hands
-back -- `setf` statements 5-6% (compiled since, from their memo), then forms of 1-2% each: an `if` a macro the compiler
-could not classify expands to, a call it left pending, a free variable's read, a `handler-case`.
-The compiled share is the tree's own cost, spread thin: a built-in applied through `apply`'s
-megamorphic body 9%, the argument arrays 8%, a lexical read 6% (its epoch check and the parent
-chain), a `let`'s scope 6%, a call's scope 4%, a call's guard 4%, a body's statements' dispatch 4%.
-No hotspot is left that a node could shed; the dispatch between nodes and the allocations are
-what a class per hot body would take away (`.todo/i80`).
+`math/num.lisp` under JFR (2026-11-06, the `setf` memo in): 95% of the samples run compiled, 5% in
+walks. By the first frame of each sample that is not the JDK's: the compiled nodes 64% (the
+argument arrays 10%, a lexical read 8%, a call's guard and binding 10%, a `let`'s scope 6%,
+`CompiledFrames.call` 4%, a body's run and statements 8%), built-ins applied through `apply`'s
+megamorphic body 10%, package and symbol lookups over names 7% (`symbol-package`,
+`find-package`), the value-count register 3%, the built-ins' own bodies 2%. Of the bytes
+allocated, a scope's `Environment` was a third: 128 bytes, 21 of its 29 fields the global
+environment's, beside a `NameMap`, the argument array and the `ArgList`. The global
+environment's own state is an object of its own since (`Environment.Globals`; a scope holds
+`Globals.NONE`, every field null as its own were), a scope 56 bytes: the load to
+`math/bounded.lisp` 51.6 -> 46.2 s side by side, `math/num.lisp` 21.9 -> 19.8. Up to
+`math/bounded.lisp`, `typep`'s expansion is 0.3% of the samples, the `typecase` family 0.1%,
+`make-instance` 0.2%: a stamp over what they read would buy no more than that.
 
 ## What a compile reads, and what it guards
 
@@ -91,10 +113,17 @@ uiop operator, the print family.
   25,019; a cold first recursion (default flags, the tree's classes not yet JIT-compiled while
   the walk's are) 17,323 against 30,149-32,093. Under C2 (`-XX:-UseJVMCICompiler`) 72,126 against the
   walk's 13,437. Merging the argument loop into `Call` bought `-Xint` depth and cost Graal's.
-- A `BlockTailExit` a compiled exit throws carries its value form compiled, which a compiled
-  frame continues with in the exit's scope (a walk frame walks the form): the deferral is for the
-  stack (`via-dolist` 100,000 deep). Until it carried the compiled form, those value forms were
-  8% of `math/num.lisp`'s samples, walked.
+- An exit from a statement to a block its frame owns (a `return` out of a `dolist` body) hands
+  its value form to the frame, for the stack (`via-dolist` 100,000 deep): a compiled statement
+  leaves the exit in the thread's register (`Environment.deferExit`) and answers
+  `LispEvaluator.EXITED` up to the frame, which steps the compiled value form in the exit's scope
+  (`CompiledForms.exited`); the walk's statement throws it (`BlockTailExit`), and a frame walks
+  its form. Until it carried the compiled form, those value forms were 8% of `math/num.lisp`'s
+  samples, walked; until 2026-11-06 the compiled statement threw too -- 2.8 million throws up to
+  `math/bounded.lisp`. Without them, side by side: a `dotimes` left at its first round 710 ->
+  340 ns, fset's `compare` of two symbols 0.25 -> 0.18 s per 40,000, its map operations (500
+  symbol keys, 5,000 `with` and `lookup` and 10 `image` a round) 2.0 -> 1.5 s a round, coalton's
+  load to `math/bounded.lisp` 49.8 -> 48.2 s.
 
 ## Traps
 
@@ -108,6 +137,9 @@ uiop operator, the print family.
   walked form does to a scope it did not make.
 - A walk's empty special `let` body answers nil and leaves the channel as its inits left it; the
   compiled one does the same.
+- A statement that answers `EXITED` has left its exit in the register: every caller of
+  `statement` answers it on up or, owning the exit's block, takes the exit. One that drops the
+  answer leaves the exit for some later frame to take as its own.
 
 ## Tests
 

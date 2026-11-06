@@ -198,11 +198,21 @@ final class CompiledBody {
 	 */
 	Object run(Environment scope, Environment owner) {
 		CompiledForm form = this.last;
+		Environment env = scope;
 		if (this.blockName != null) {
 			// A defun's body is one block, established in the call's own scope.
 			scope.installBlock(this.blockName, owner);
 			for (CompiledForm statement : this.statements) {
-				statement.statement(scope, null, owner, null);
+				if (statement.statement(scope, null, owner, null) == LispEvaluator.EXITED) {
+					// an exit to the body's block: its value form is the tail
+					BlockTailExit exit = scope.takeExit();
+					form = exit.compiled();
+					env = exit.env();
+					if (form == null) {
+						return new CompiledForm.TailForm(exit.form(), env, null);
+					}
+					break;
+				}
 			}
 			if (form == null) {
 				scope.clearSpill();
@@ -210,6 +220,7 @@ final class CompiledBody {
 			}
 		}
 		else {
+			// no exit is handed on with no frame to hand it to
 			for (CompiledForm statement : this.statements) {
 				statement.statement(scope, null, null, null);
 			}
@@ -218,7 +229,6 @@ final class CompiledBody {
 			}
 		}
 		// the tail, stepped as CompiledForm.run steps one, in this Java frame
-		Environment env = scope;
 		try {
 			while (true) {
 				Object out = form.step(env, owner);

@@ -188,6 +188,16 @@ had**.
   `WasmLiteralPrint`'s `framed.offset() + 1`, interior) and the closed interval pinned every range
   whose end abutted a LIVE neighbour's start in what is one dense run. An unrelated constant
   landing in a range only KEEPS bytes.
+- **A closure's funcId is such a constant.** Creation spells it as `i32.const` (the
+  `TYPE_CLOSURE` field is i32), and on Preview 1 / `--no-wasi` the funcIds (runtime defuns first,
+  ~330 on a small program) fall inside the blob that starts at 256: each live one keeps the
+  string it lands in, and a dead defun earlier in the numbering moves which. Measured
+  2026-11-06 on `WasmTreeShakerTest#aNameOnlyAFunctionNothingReachesSpellsHasNoCaseAndNoRow`'s
+  reactor at `--optimize=size`, with / without two dead defuns: funcIds 324 / 326 both kept the
+  33-byte `#<HASH-TABLE :TEST EQUAL :COUNT ` (906 = 906 bytes); six more runtime defuns
+  (`2f9bfd82e`) moved them to 330 / 332, which keep `>` / `#(` (875 vs 870, one segment split).
+  Exact size equality across a funcId shift holds only under `--component`, whose data starts at
+  0x60000 above every funcId (1108 = 1108); the test pins it there.
 - **The COMPILER decides candidacy through a window**: `StringTable.attributing(true/false)`
   brackets passes 2a-2c, where a body's own `i32.const` is the only consumer;
   `StringTable.addBodyString` is the same grant spelled explicitly. **Interning with the window
