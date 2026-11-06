@@ -22266,13 +22266,21 @@ cases:
     source: |
       ;; coalton-impl/entry shadows compile and defines its own; cl's stays defined, in
       ;; this program and in every case around it that calls it.
-      (defpackage :ci-own-compile (:use :cl) (:shadow #:compile))
+      (defpackage :ci-own-compile (:use :cl) (:shadow #:compile #:macroexpand-1))
       (in-package :ci-own-compile)
       (defun compile (x) (list :own x))
       (print (list (compile 1) (funcall (cl:compile nil '(lambda (y) (+ y 1))) 41)))
+      ;; Its own macroexpand-1, which nothing defines, is undefined, and asking for it
+      ;; leaves cl's alone (cl-environments' cl-overrides): the interpreter loaded the
+      ;; compiled programs' stand-in for the member name, over cl's.
+      (print (handler-case (funcall (intern "MACROEXPAND-1" :ci-own-compile) '(when t 1))
+               (undefined-function (c) (cell-error-name c))))
+      (print (cl:macroexpand-1 '(when t 1)))
       (in-package :cl-user)
     expected: |
       ((:OWN 1) 42)
+      MACROEXPAND-1
+      (IF T 1 NIL)
   - name: a-cons-walk-refuses-the-values-that-are-no-cons
     source: |
       ;; An instance and a function value are Object[] on the JVM, as a cons is.

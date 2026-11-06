@@ -5552,13 +5552,17 @@ public final class LispPreludeLibrary {
 	}
 
 	/**
-	 * Returns whether {@code name} designates a prelude function (bare or
-	 * package-qualified).
+	 * Returns whether {@code name} is the function a prelude entry defines: the entry's
+	 * own symbol ({@link #definedName}), not merely one of its member name. A package's
+	 * own symbol of that name -- a shadowed {@code cl} name, cl-environments'
+	 * {@code macroexpand-1} -- is another function, and loading the entry for it replaced
+	 * {@code cl}'s.
 	 * @param name a resolved function name
 	 * @return true if it is a prelude function
 	 */
 	public static boolean isPreludeFunction(String name) {
-		return SOURCES.containsKey(member(name));
+		String key = member(name);
+		return SOURCES.containsKey(key) && name.equals(definedName(key));
 	}
 
 	/**
