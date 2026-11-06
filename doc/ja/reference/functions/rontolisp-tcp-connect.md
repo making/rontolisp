@@ -50,10 +50,13 @@ listen し、ループバック経由で自分自身へ接続して、
   その演算子の `type-error` を通知します。
 - **WASM**: コンポーネント専用で、`wasi:sockets@0.3.0` 上で動作します
   (WASI 0.3 ネイティブで、0.2 ハイブリッドは不要)。
-  `host` は `"127.0.0.1"` のような **IPv4 リテラル**である必要があります
-  (`wasi:sockets/ip-name-lookup` によるホスト名解決は未対応)。`--component`
+  `host` にはホスト名と IPv4 リテラルを指定できます。ホスト名は
+  `wasi:sockets/ip-name-lookup@0.3.0` で解決し、その答えのうち最初の IPv4
+  アドレスに接続します(接続は IPv4 のみ)。`--component`
   でコンパイルし、`wasmtime run -S tcp=y
-  -S inherit-network=y` で実行します(wasmtime 46+)。接続失敗はハンドルの代わりに `nil` を返します。`-S` フラグなしでも
+  -S inherit-network=y` で実行します(wasmtime 46+)。ホスト名には
+  `-S allow-ip-name-lookup=y` も付けます(IPv4 リテラルと `localhost` は解決を
+  要しません)。接続失敗や IPv4 アドレスに解決できないホスト名は、ハンドルの代わりに `nil` を返します。`-S` フラグなしでも
   コンポーネントは起動しますが、すべてのソケット操作が失敗して `nil` になります。
   tcp 系関数は Preview 1(コアモジュール)モードでもコンパイルは通りますが、
   呼び出すたびに動作するバックエンドを名指しする呼び出し時エラーになります。
@@ -69,7 +72,8 @@ listen し、ループバック経由で自分自身へ接続して、
 - TCP のみ(UDP は未対応): 通信は平文です。暗号化されたクライアント接続には
   [`rontolisp:tls-connect`](rontolisp-tls-connect.md) を使ってください
   (インタープリタ/JVM のみ)。
-- WASM コンポーネントバックエンドは IPv4 リテラルのみを受け付けます。
+- WASM コンポーネントバックエンドの接続は IPv4 のみです(IPv6 リテラルは
+  使えず、IPv6 アドレスしか持たないホスト名は失敗します)。
 - `read`(S 式リーダー)はソケットハンドルでは動作しません。行またはバイトを
   読み込み、明示的にパースしてください(例:
   [`read-from-string`](read-from-string.md))。

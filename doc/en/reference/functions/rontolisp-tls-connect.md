@@ -61,11 +61,8 @@ TLS-wrapped protocols:
   as long as the socket's read deadline allows.
 - **WASM `--component`** (WASI 0.3): supported, over wasmtime's
   `wasi:tls@0.3.0-draft` interface — add `-S tls=y` to the usual socket run
-  flags (`-S tcp=y -S inherit-network=y`). Like
-  `tcp-connect` there, `host` must be an **IPv4 literal** (or `localhost`) —
-  and it doubles as the name the certificate is verified against, so for a
-  real-world host prefer `tcp-connect` to its address plus
-  [`rontolisp:tls-upgrade`](rontolisp-tls-upgrade.md) with the DNS name.
+  flags (`-S tcp=y -S inherit-network=y`), and `-S allow-ip-name-lookup=y`
+  for a hostname, which resolves as `tcp-connect` resolves one there.
   Failures follow the WASM error convention and return `nil` instead of
   signaling. Certificates are verified against the trust anchors compiled
   into the host (wasmtime bundles the Mozilla root store; the trust-store

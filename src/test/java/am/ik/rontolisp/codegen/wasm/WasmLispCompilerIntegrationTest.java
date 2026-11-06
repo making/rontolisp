@@ -17080,8 +17080,12 @@ class WasmLispCompilerIntegrationTest {
 		// The usocket shim (usocket.lisp, spliced by UsocketLibrary.process like the
 		// CLI pre-pass) over the same loopback choreography as componentTcpLoopbackEcho.
 		// The address accessors are REAL on the component now (sockets.lisp reads
-		// get-remote-address), so the peer address prints like the interpreter/JVM.
+		// get-remote-address), so the peer address prints like the interpreter/JVM. A
+		// refused connect signals usocket:socket-error, as there, where tcp-connect
+		// itself answers nil.
 		String program = """
+				(print (handler-case (usocket:socket-connect "127.0.0.1" 1)
+				         (usocket:socket-error (c) (format nil "~A" c))))
 				(let* ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*))
 				       (port (usocket:get-local-port listener))
 				       (client (usocket:socket-connect "127.0.0.1" port :element-type '(unsigned-byte 8))))
@@ -17108,7 +17112,8 @@ class WasmLispCompilerIntegrationTest {
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
 				"tcp=y", "-S", "inherit-network=y", path("usocket-echo.component.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo("\"hello\"\n\"127.0.0.1\"");
+		assertThat(result.getStdout().trim())
+			.isEqualTo("\"tcp-connect: cannot connect to 127.0.0.1:1\"\n\"hello\"\n\"127.0.0.1\"");
 	}
 
 	@Test
@@ -17303,16 +17308,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void componentTcpConnectRefusedReturnsNil() throws Exception {
+	void componentTcpConnectRefusedOrUnresolvedReturnsNil() throws Exception {
 		// Connecting to a closed port returns nil instead of trapping (the fetch error
-		// convention). Deterministic, no server.
-		String program = "(print (rontolisp:tcp-connect \"127.0.0.1\" 1))";
+		// convention), and so does a host name the lookup cannot answer -- `.invalid`
+		// never resolves (RFC 6761), and ip6-localhost names ::1 at most (Docker's
+		// /etc/hosts), no IPv4 address. Deterministic, no server.
+		String program = """
+				(print (rontolisp:tcp-connect "127.0.0.1" 1))
+				(print (rontolisp:tcp-connect "no-such-host.invalid" 1))
+				(print (rontolisp:tcp-connect "ip6-localhost" 1))
+				""";
 		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("tcp-refused.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
-				"tcp=y", "-S", "inherit-network=y", path("tcp-refused.component.wasm"));
+				"tcp=y", "-S", "inherit-network=y", "-S", "allow-ip-name-lookup=y", path("tcp-refused.component.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo("NIL");
+		assertThat(result.getStdout().trim()).isEqualTo("NIL\nNIL\nNIL");
 	}
 
 	@Test

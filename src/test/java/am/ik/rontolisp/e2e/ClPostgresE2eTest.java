@@ -6,7 +6,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.testsupport.WasmtimeSupport;
@@ -205,10 +204,16 @@ class ClPostgresE2eTest {
 
 	private static final Network NETWORK = Network.newNetwork();
 
+	// The component's host: a NAME, so that leg resolves it through
+	// wasi:sockets/ip-name-lookup (Docker's network DNS) as a driver given a host name
+	// does.
+	private static final String POSTGRES_ALIAS = "postgres-db";
+
 	@Container
 	private static final GenericContainer<?> POSTGRES = new GenericContainer<>(
 			DockerImageName.parse("postgres:17-alpine"))
 		.withNetwork(NETWORK)
+		.withNetworkAliases(POSTGRES_ALIAS)
 		.withExposedPorts(5432)
 		.withEnv("POSTGRES_PASSWORD", "postgres")
 		.withCopyToContainer(Transferable.of(HBA_CONF), "/etc/postgresql/pg_hba.conf")
@@ -406,11 +411,10 @@ class ClPostgresE2eTest {
 	/** Compiles (where the backend needs it) and runs the exercise, returning stdout. */
 	private static String runOn(Backend backend, Path workDir, Exercise exercise) throws Exception {
 		// The component reaches the server over the container network, so it is the one
-		// backend compiled against the server's container ADDRESS rather than the mapped
-		// host port -- an address, not a network alias, because tcp-connect takes only
-		// IPv4 literals on WASM (hostname lookup is unwired there).
+		// backend compiled against the server's network alias rather than the mapped
+		// host port.
 		boolean component = backend == Backend.COMPONENT;
-		String host = component ? containerIpOf(POSTGRES) : POSTGRES.getHost();
+		String host = component ? POSTGRES_ALIAS : POSTGRES.getHost();
 		int port = component ? 5432 : POSTGRES.getMappedPort(5432);
 		String name = writeExercise(workDir, exercise.source(host, port)).getFileName().toString();
 		return switch (backend) {
@@ -426,25 +430,15 @@ class ClPostgresE2eTest {
 				String path = "/tmp/" + workDir.getFileName() + ".component.wasm";
 				WASMTIME.copyFileToContainer(Transferable.of(Files.readAllBytes(workDir.resolve("probe.wasm"))), path);
 				// gc for the value representation, exceptions because the driver uses
-				// handler-case, tcp + inherit-network because wasmtime gates sockets by
-				// permission (without them the socket calls fail and surface as nil).
+				// handler-case, tcp + inherit-network + allow-ip-name-lookup because
+				// wasmtime gates sockets and the lookup by permission (without them the
+				// socket calls fail and surface as nil).
 				ExecResult result = WASMTIME.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
-						"-S", "tcp=y", "-S", "inherit-network=y", path);
+						"-S", "tcp=y", "-S", "inherit-network=y", "-S", "allow-ip-name-lookup=y", path);
 				assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 				yield result.getStdout();
 			}
 		};
-	}
-
-	// The container's address on NETWORK; it is attached to exactly that one.
-	private static String containerIpOf(GenericContainer<?> container) {
-		return Objects.requireNonNull(container.getContainerInfo()
-			.getNetworkSettings()
-			.getNetworks()
-			.values()
-			.iterator()
-			.next()
-			.getIpAddress());
 	}
 
 	private static Path writeExercise(Path workDir, String source) throws Exception {

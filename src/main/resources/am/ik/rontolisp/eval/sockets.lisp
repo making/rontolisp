@@ -40,13 +40,17 @@
 ;;;;     take it back when the host has nothing) and what lets close drop a stream
 ;;;;     another task is still reading.
 
-;; The WIT interface is lowered by SocketsLibrary (which calls
-;; WitImportDirective.lower itself), so this directive never reaches
-;; WitImportInliner -- but it is written here, in sockets.lisp's own source, so the
-;; file reads as the program it is.
+;; The WIT interfaces are lowered by SocketsLibrary (which calls
+;; WitImportDirective.lower itself), so these directives never reach
+;; WitImportInliner -- but they are written here, in sockets.lisp's own source, so
+;; the file reads as the program it is.
 (rontolisp:wit-import "sockets.wit"
                       :interface "wasi:sockets/types@0.3.0"
                       :package %sock)
+
+(rontolisp:wit-import "sockets.wit"
+                      :interface "wasi:sockets/ip-name-lookup@0.3.0"
+                      :package %sock-dns)
 
 ;;; --- the socket table: fd -> (socket kind recv tx buf cursor eof mid-line
 ;;; deadline) ---
@@ -122,8 +126,7 @@
           (list sock kind recv tx nil 0 nil nil nil))
     (%obj-new '%STREAM fd (if (= kind 2) :socket-server :socket))))
 
-;;; --- IPv4 literal parsing (hostname lookup is not wired; dotted quads only,
-;;; matching the old adapter's $parse_ipv4) ---
+;;; --- addresses: IPv4 literals parsed here, every other name looked up ---
 
 (defun rontolisp::%sock-parse-ipv4 (host)
   ;; "a.b.c.d" -> (a b c d), or nil when the string is not a dotted quad. A plain
@@ -158,16 +161,31 @@
               (let ((quad (reverse (cons n octets))))
                 (if (= (length quad) 4) quad nil)))))))
 
-(defun rontolisp::%sock-addr (host port)
-  ;; localhost is resolved as a literal, like the old adapter's callers did.
+(rontolisp:async-defun rontolisp::%sock-addr-f (host port)
+  ;; The ip-socket-address of HOST:PORT for tcp-socket-connect / -bind. An IPv4
+  ;; literal, and localhost, is parsed here and needs no lookup permission; any
+  ;; other name goes to wasi:sockets/ip-name-lookup (wasmtime's
+  ;; -S allow-ip-name-lookup=y), and the first IPv4 address in the resolver's
+  ;; preference order is the one taken -- the address the JDK's InetAddress
+  ;; picks on the interpreter and the JVM, IPv4 first. The sockets here are IPv4
+  ;; only, so a name with no IPv4 address fails like a lookup error: a wit-error,
+  ;; which the tcp-* surface turns into nil.
   (let ((quad
          (rontolisp::%sock-parse-ipv4
           (if (string= host "localhost") "127.0.0.1" host))))
     (if quad
         (cons :ipv4 (list :port port :address quad))
-        (error 'rontolisp:wit-error
-         :payload :invalid-argument
-         :message (concatenate 'string "tcp: not an IPv4 literal: " host)))))
+        (let ((addrs (rontolisp:await (%sock-dns:resolve-addresses host))))
+          ;; An ip-address lifts as (:IPV4 a b c d) / (:IPV6 h ...); this file's
+          ;; :ipv4 reads :IPV4 under the reader's upcase premise.
+          (while (and addrs (not (eq (car (car addrs)) :ipv4)))
+            (setq addrs (cdr addrs)))
+          (if addrs
+              (cons :ipv4 (list :port port :address (cdr (car addrs))))
+              (error 'rontolisp:wit-error
+                     :payload :name-unresolvable
+                     :message (concatenate 'string "tcp: no IPv4 address for "
+                                           host)))))))
 
 ;;; --- plumbing (the old adapter's $plumb): the recv stream eagerly, the send
 ;;; half DEFERRED to the first write ---
@@ -201,14 +219,14 @@
 ;;; the %...-future internals by the compiler's promotion pass) ---
 
 (rontolisp:async-defun rontolisp::%tcp-connect-f (host port)
-  ;; Failure (unreachable host, refused connection, non-literal hostname) yields
-  ;; nil, the WASM error convention -- matching fetch. The nil convention lives
-  ;; HERE so the sync surface (a %future-force of this) and an async body's
-  ;; promoted (await (%tcp-connect-f ...)) behave identically.
-  (handler-case (let ((sock (%sock:tcp-socket-create :ipv4)))
-                  (rontolisp:await
-                   (%sock:tcp-socket-connect sock
-                                             (rontolisp::%sock-addr host port)))
+  ;; Failure (unreachable host, refused connection, a name that does not
+  ;; resolve) yields nil, the WASM error convention -- matching fetch. The nil
+  ;; convention lives HERE so the sync surface (a %future-force of this) and an
+  ;; async body's promoted (await (%tcp-connect-f ...)) behave identically.
+  (handler-case (let* ((addr
+                        (rontolisp:await (rontolisp::%sock-addr-f host port)))
+                       (sock (%sock:tcp-socket-create :ipv4)))
+                  (rontolisp:await (%sock:tcp-socket-connect sock addr))
                   (rontolisp::%sock-plumb sock 1))
     (rontolisp:wit-error () nil)))
 
@@ -218,7 +236,9 @@
 (defun rontolisp:tcp-listen (port &optional host)
   (handler-case (let ((sock (%sock:tcp-socket-create :ipv4)))
                   (%sock:tcp-socket-bind sock
-                   (rontolisp::%sock-addr (if host host "0.0.0.0") port))
+                                         (rontolisp::%future-force
+                                          (rontolisp::%sock-addr-f
+                                           (if host host "0.0.0.0") port)))
                   (rontolisp::%sock-register sock 2
                                              (%sock:tcp-socket-listen sock)
                                              nil))

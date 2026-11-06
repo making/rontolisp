@@ -94,8 +94,9 @@ wasmtime run --dir . fileio.wasm
   `-S tcp=y -S inherit-network=y`
   (a tcp component always compiles in exception-handling mode);
   without the `-S` flags the component still starts but every socket
-  operation fails and yields `nil`. Hosts must be IPv4 literals (no
-  hostname resolution yet). `rontolisp:fetch` and the tcp functions can be
+  operation fails and yields `nil`. A hostname resolves through
+  `wasi:sockets/ip-name-lookup@0.3.0` with `-S allow-ip-name-lookup=y`
+  (connections are IPv4 only). `rontolisp:fetch` and the tcp functions can be
   combined in one component, and tcp works inside a
   `rontolisp:http-handler` (serve) component. In an async body a pending
   `tcp-accept` or socket read suspends only its own task — other tasks (a

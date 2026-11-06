@@ -60,10 +60,8 @@
 - **WASM `--component`**(WASI 0.3): サポートされます。wasmtime の
   `wasi:tls@0.3.0-draft` インターフェイス上で動き、通常のソケット実行フラグ
   (`-S tcp=y -S inherit-network=y`)に `-S tls=y`
-  を追加します。そこでの `tcp-connect` と同じく `host` は **IPv4 リテラル**
-  (または `localhost`)でなければならず、さらに証明書の検証名を兼ねるため、
-  実在のホストには「アドレスへの `tcp-connect` + DNS 名での
-  [`rontolisp:tls-upgrade`](rontolisp-tls-upgrade.md)」を使ってください。
+  を追加します。ホスト名には `-S allow-ip-name-lookup=y` も付け、そこでの
+  `tcp-connect` と同じく解決します。
   失敗は WASM のエラー規約に従い、エラー通知ではなく `nil` を返します。
   証明書はホストに組み込まれたトラストアンカー(wasmtime は Mozilla
   ルートストアを同梱)で検証され、トラストストアのシステムプロパティと

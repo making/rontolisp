@@ -36,9 +36,11 @@ bidirectional stream (see
   already in use) signals an error. A `port` outside `(INTEGER 0 65535)` or a
   `host` that is neither a string nor `nil` (every interface) signals the
   operator's `type-error` before anything binds.
-- **WASM**: component-only, over `wasi:sockets@0.3.0`. `host` must be an IPv4
-  literal. Compile with `--component` and run with `wasmtime run
-  -S tcp=y -S inherit-network=y` (wasmtime 46+); a failed
+- **WASM**: component-only, over `wasi:sockets@0.3.0`. `host` may be an IPv4
+  literal or a hostname, resolved as
+  [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) resolves one (add
+  `-S allow-ip-name-lookup=y`). Compile with `--component` and run with
+  `wasmtime run -S tcp=y -S inherit-network=y` (wasmtime 46+); a failed
   bind returns `nil`. Call-time error in Preview 1 (core-module) mode.
 - **Native executable** (`--native`): as on the interpreter and the JVM -- the
   runner binds the port, `host` may be a hostname or an IP literal, and a
@@ -51,6 +53,6 @@ bidirectional stream (see
 - The listener handle only supports `rontolisp:tcp-accept`,
   `rontolisp:tcp-local-port` and `close` — it is not a byte stream itself.
 - See [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) for the shared
-  socket limitations (TCP only, IPv4 literals on WASM). The listener serves
+  socket limitations (TCP only, IPv4 only on WASM). The listener serves
   plain TCP; for a TLS listener use
   [`rontolisp:tls-listen`](rontolisp-tls-listen.md) (interpreter/JVM only).

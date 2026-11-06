@@ -1088,7 +1088,8 @@ class WasmExportCompilerTest {
 						am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
 		String sockWit = java.util.Objects.requireNonNull(sock.componentWit());
-		assertThat(sockWit).contains("  import wasi:sockets/types@0.3.0;");
+		assertThat(sockWit).contains("  import wasi:sockets/types@0.3.0;")
+			.contains("  import wasi:sockets/ip-name-lookup@0.3.0;");
 		// stdin.lisp rides the FIXED import block (wasi:cli/stdin is already one of the
 		// base world's fixed imports), so splicing it adds no import line: exactly one
 		// mention, the fixed one.

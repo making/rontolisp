@@ -37,10 +37,13 @@ take a socket; render with `(format nil ...)` and send the result with
 > runner opens the sockets. A plain `.wasm` has none: the WASM backend is
 > otherwise **component-only** (`--component`, over `wasi:sockets@0.3.0`): the tcp
 > functions compile in Preview 1 (core-module) mode but raise call-time
-> errors, hosts must be
-> IPv4 literals, and the component must run with `-S tcp=y
+> errors, and the component must run with `-S tcp=y
 > -S inherit-network=y` (a tcp component always
-> compiles in exception-handling mode). Combining the tcp functions with
+> compiles in exception-handling mode). A host name there resolves through
+> `wasi:sockets/ip-name-lookup@0.3.0`, which wasmtime grants with
+> `-S allow-ip-name-lookup=y` (an IPv4 literal and `localhost` need no
+> lookup); the component connects over IPv4 only, so a name with no IPv4
+> address fails like an unreachable host. Combining the tcp functions with
 > [`rontolisp:http-handler`](http-handler.md) compiles into one component
 > and runs under `wasmtime serve` — add `-S cli=y` to the flags above
 > (without it the serve linker reports the `wasi:sockets@0.3.0`

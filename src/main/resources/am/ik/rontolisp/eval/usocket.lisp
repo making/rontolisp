@@ -80,7 +80,17 @@
   (when (eql protocol :datagram)
     (error
      "usocket:socket-connect: :protocol :datagram (UDP) is not supported"))
-  (usocket::%usock-guard (rontolisp:tcp-connect host port)))
+  ;; The WASM component's tcp-connect answers nil where the other backends
+  ;; signal; the shim signals there too, so a library never carries a nil socket
+  ;; on into a stream call (an unreadable cast-failure trap). The text is the
+  ;; interpreter's up to its host message.
+  (let ((%usock-socket
+         (usocket::%usock-guard (rontolisp:tcp-connect host port))))
+    (if %usock-socket
+        %usock-socket
+        (error 'usocket:socket-error
+               :message (format nil "tcp-connect: cannot connect to ~A:~A" host
+                                port)))))
 
 (defun usocket:socket-listen
     (host port &key reuse-address backlog element-type &allow-other-keys)
@@ -270,13 +280,12 @@
   ;; renders the designator instead, which keeps clack's normalize-then-hand-on
   ;; chain -- (host-to-hostname (get-host-by-name address)) -- an identity on the
   ;; address it is given; the tcp-connect/tcp-listen call that address eventually
-  ;; reaches does the real resolution inside the host (natively on the
-  ;; interpreter and the JVM; IPv4 literals only on WASM).
+  ;; reaches does the real resolution (the JDK's on the interpreter and the JVM,
+  ;; the runner's under --native, wasi:sockets/ip-name-lookup on the component).
   ;;
-  ;; Deliberately NOT resolved on the interpreter/JVM only: a per-backend answer
-  ;; here would buy nothing (both sides hand the result straight back to a socket
+  ;; Deliberately NOT resolved on some backends only: a per-backend answer here
+  ;; would buy nothing (every side hands the result straight back to a socket
   ;; call that resolves anyway) and would cost a backend divergence in a library
-  ;; every socket program splices. Re-evaluate when a cross-backend resolver
-  ;; primitive exists -- wiring wasi:sockets/ip-name-lookup is what that waits on
-  ;; -- at which point this should return a real vector quad on all four.
+  ;; every socket program splices. Re-evaluate when a resolver primitive exists
+  ;; on all four, at which point this should return a real vector quad there.
   (usocket:host-to-hostname name))

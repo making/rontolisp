@@ -188,8 +188,9 @@ spliced by `eval/SocketsLibrary`), so a tcp program is the BASE variant plus
 one appended user import — which is why tcp now composes with fetch and with
 `rontolisp:http-handler` in one component. Run a socket component with
 `-S tcp=y -S inherit-network=y` (it is an async
-component); IPv4 literals only (`wasi:sockets/ip-name-lookup` is not wired
-yet). Details: `../../.kb/tcp-sockets.md`.
+component), plus `-S allow-ip-name-lookup=y` for a host name, which resolves
+through `wasi:sockets/ip-name-lookup@0.3.0` (IPv4 only). Details:
+`../../.kb/tcp-sockets.md`.
 
 ## HTTP client (`rontolisp:fetch`) — the `http.lisp` library, no adapter blob
 

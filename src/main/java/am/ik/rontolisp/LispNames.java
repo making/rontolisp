@@ -7257,7 +7257,7 @@ public final class LispNames {
 	/**
 	 * The {@code tcp-connect} function provided by the {@code rontolisp} package. Opens a
 	 * blocking TCP connection to {@code host} (a hostname or IP literal; the WASM
-	 * component backend supports IPv4 literals only) and {@code port}, and returns a
+	 * component backend connects over IPv4 only) and {@code port}, and returns a
 	 * bidirectional stream handle usable with {@code read-line}, {@code write-line},
 	 * {@code read-byte}, {@code write-byte} and {@code close}.
 	 */

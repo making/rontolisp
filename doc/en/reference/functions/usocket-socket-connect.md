@@ -44,20 +44,22 @@ spliced into the compiled program (JVM / WASM component), and is also
 registered as the built-in ASDF system `"usocket"`, so
 `(asdf:load-system "usocket")`, `(ql:quickload :usocket)` and a third-party
 `.asd`'s `:depends-on ("usocket")` all resolve to it without touching the
-network. On the interpreter and the JVM a connection failure signals a typed
-`usocket:socket-error` condition (message preserved), so
+network. A connection failure signals a typed `usocket:socket-error`
+condition (message preserved) on every backend that has sockets, so
 `(handler-case (usocket:socket-connect ...) (usocket:socket-error (e) ...))`
-works there; the subtypes (`usocket:connection-refused-error` etc.) are
+works everywhere; the subtypes (`usocket:connection-refused-error` etc.) are
 defined, but the re-signal always uses `socket-error`, so catch that. On the
-WASM component backend a failed connection returns `nil` instead of signaling
--- test the returned handle for `nil`.
+WASM component backend the message reads `tcp-connect: cannot connect to
+HOST:PORT`, without the reason the host gave.
 
 ## Backend support
 
 - **Interpreter** and **JVM**: full support (delegates to
   `rontolisp:tcp-connect`).
-- **WASM**: component mode only (`--component`), IPv4 literals only; a failed
-  connection returns `nil`. A plain Preview 1 `.wasm` signals at the call.
+- **WASM**: component mode only (`--component`); a hostname resolves as
+  [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) resolves one there (run
+  with `-S allow-ip-name-lookup=y`), and a failed connection signals
+  `usocket:socket-error`. A plain Preview 1 `.wasm` signals at the call.
 - **Native executable** (`--native`): full support, as on the interpreter and
   the JVM -- a failed connection signals `usocket:socket-error`
   ([TCP sockets in a native executable](../../compiling/native.md#tcp-sockets)).

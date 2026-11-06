@@ -127,10 +127,9 @@
   ;; natural primitive (connector.send/receive transform the socket's own
   ;; streams), so tls-connect is the derived one -- the mirror image of the
   ;; JVM, where the handshaken connect is primitive and the upgrade derived.
-  ;; `host` doubles as the server name the certificate is verified against, so
-  ;; like tcp-connect it must be an IPv4 literal (or localhost) TODAY -- for a
-  ;; real-world host, tcp-connect to its address and tls-upgrade with the DNS
-  ;; name. The handshake runs under the interpreter/JVM's 10 s bound
+  ;; `host` doubles as the server name the certificate is verified against, and
+  ;; tcp-connect resolves it (wasi:sockets/ip-name-lookup). The handshake runs
+  ;; under the interpreter/JVM's 10 s bound
   ;; (LispNames.TLS_CONNECT_HANDSHAKE_TIMEOUT_MS) -- the caller has no handle to
   ;; set a deadline on first -- which the answered handle no longer carries.
   (rontolisp::%tls-check-insecure "rontolisp:tls-connect" opt value)

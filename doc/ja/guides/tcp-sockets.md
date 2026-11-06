@@ -36,10 +36,14 @@
 > それ以外の WASM
 > バックエンドは **componentモード専用** です (`--component`、
 > `wasi:sockets@0.3.0` 経由): tcp関数はPreview 1 (コアモジュール) モードでも
-> コンパイルは通りますが呼び出し時エラーになり、ホストはIPv4リテラルでなければならず、component
+> コンパイルは通りますが呼び出し時エラーになり、component
 > は `-S tcp=y -S inherit-network=y` を
 > 付けて実行する必要があります (tcp componentは常にexception-handlingモードで
-> コンパイルされます)。tcp関数と
+> コンパイルされます)。component ではホスト名を
+> `wasi:sockets/ip-name-lookup@0.3.0` で解決し、wasmtime では
+> `-S allow-ip-name-lookup=y` でそれを許可します (IPv4 リテラルと `localhost`
+> は解決を要しません)。component の接続は IPv4 だけなので、IPv4 アドレスを
+> 持たない名前は到達できないホストと同じく失敗します。tcp関数と
 > [`rontolisp:http-handler`](http-handler.md) の組み合わせは1つのcomponentに
 > コンパイルでき、`wasmtime serve` で動きます — 上のフラグに `-S cli=y` を
 > 追加してください (これがないとserveのリンカがインスタンス化時に

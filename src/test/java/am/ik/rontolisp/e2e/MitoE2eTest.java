@@ -351,8 +351,8 @@ class MitoE2eTest {
 	private static String runOn(Backend backend, Path workDir, Exercise exercise) throws Exception {
 		// The component reaches the server over the container network, so it is the one
 		// backend compiled against the server's container ADDRESS rather than the mapped
-		// host port -- an address, not a network alias, because tcp-connect takes only
-		// IPv4 literals on WASM (hostname lookup is unwired there).
+		// host port. An address, so the leg needs no lookup permission; a network alias
+		// through the lookup is ClPostgresE2eTest's component leg.
 		boolean component = backend == Backend.COMPONENT;
 		String host = component ? containerIpOf(POSTGRES) : POSTGRES.getHost();
 		int port = component ? 5432 : POSTGRES.getMappedPort(5432);
