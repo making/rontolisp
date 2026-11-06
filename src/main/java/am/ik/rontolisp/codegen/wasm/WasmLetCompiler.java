@@ -72,7 +72,7 @@ final class WasmLetCompiler {
 		letForm = ParallelLetStaging.stage(letForm, ctx.specialVars);
 		List<LispVal> parts = letForm.toList();
 		// A bare symbol entry is an init-less binding to nil.
-		LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
+		LispVal bindings = LispMacroExpander.letBindingList(parts.get(1));
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
 		// State-machine mode (asyncMode, awaits under this let): each init is guarded
 		// like a sequence statement (a resume restores the bound locals from the spill

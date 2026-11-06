@@ -1659,6 +1659,24 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void aLetBindingTOrNilIsRefusedForEveryBackend() {
+		// Every let binds its names through this one normalization -- the interpreter's
+		// and both compilers' -- and each of them used to take the constant for a symbol
+		// and die on the cast. An analysis walking the form normalizes and goes on, so
+		// the refusal comes from the let, where its position is.
+		for (String bindings : List.of("((t 1))", "(nil)", "((x 1) (nil 2))", "(a (t))")) {
+			org.assertj.core.api.Assertions
+				.assertThatThrownBy(() -> LispMacroExpander.letBindingList(LispReader.readFromString(bindings)))
+				.as(bindings)
+				.hasMessageEndingWith(" names a constant, and cannot be bound");
+			assertThat(LispMacroExpander.normalizeBindingList(LispReader.readFromString(bindings))).as(bindings)
+				.isNotNull();
+		}
+		assertThat(LispMacroExpander.letBindingList(LispReader.readFromString("(a (b 1))")).print())
+			.isEqualTo("((A NIL) (B 1))");
+	}
+
+	@Test
 	void onlyAProgramThatCanReadUnderAnotherPackageCarriesTheReadersHome() {
 		// A token of a program that stays in cl-user, which no package of its own can
 		// qualify, is its spelling: the reader asks nothing. Nor does a program that does

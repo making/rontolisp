@@ -1094,7 +1094,7 @@ final class JvmReadRuntimeBuilder {
 	}
 
 	// _rdEscaped(String token): the symbol a token holding an escape names. It is no
-	// number and upcases only its unescaped characters; |NIL| is still nil.
+	// number and upcases only its unescaped characters; |NIL| reads as nil does.
 	private MethodCode buildRdEscaped() {
 		MethodCode a = new MethodCode();
 		MethodCode.Label loop = a.newLabel();
@@ -1165,6 +1165,14 @@ final class JvmReadRuntimeBuilder {
 		}
 		a.invokestatic(this.rdStandardSpelling);
 		a.astore(0);
+		if (this.rdHome != null) {
+			// |NIL| asks the package too (_rdHome answers cl's as nil)
+			a.aload(0);
+			a.aload(1);
+			a.invokestatic(this.rdHome);
+			a.areturn();
+			return a;
+		}
 		a.aload(0);
 		ldc(a, "NIL");
 		a.invokevirtual(this.objectEquals);
@@ -1173,10 +1181,6 @@ final class JvmReadRuntimeBuilder {
 		a.areturn();
 		a.labelBinding(notNil);
 		a.aload(0);
-		if (this.rdHome != null) {
-			a.aload(1);
-			a.invokestatic(this.rdHome);
-		}
 		a.areturn();
 		return a;
 	}
@@ -1186,7 +1190,7 @@ final class JvmReadRuntimeBuilder {
 	// already, a keyword is its own, and a colon past a qualifier's names nothing of any
 	// package. Any other asks %read-home, a qualified one with its qualifier as a symbol.
 	// An empty token is cl-user's empty name by its spelling alone, and homes like any
-	// bare one.
+	// bare one. Whichever answers the symbol spelled NIL answers cl's nil: null.
 	private MethodCode buildRdHome() {
 		ReadHome home = java.util.Objects.requireNonNull(this.readHome);
 		MethodCode a = new MethodCode();
@@ -1194,6 +1198,8 @@ final class JvmReadRuntimeBuilder {
 		MethodCode.Label asIs = a.newLabel();
 		MethodCode.Label bare = a.newLabel();
 		MethodCode.Label call = a.newLabel();
+		MethodCode.Label answered = a.newLabel();
+		MethodCode.Label notNil = a.newLabel();
 		a.aload(0);
 		a.aload(1);
 		a.if_acmpeq(ask);
@@ -1202,7 +1208,7 @@ final class JvmReadRuntimeBuilder {
 		a.ifeq(ask);
 		a.labelBinding(asIs);
 		a.aload(0);
-		a.areturn();
+		a.goto_(answered);
 		a.labelBinding(ask);
 		a.aload(1);
 		a.loadConstant((int) ':');
@@ -1235,6 +1241,16 @@ final class JvmReadRuntimeBuilder {
 		if (home.bounces()) {
 			JvmTailBounce.unwrapRaw(a, this.cp, this.thisClass);
 		}
+		a.labelBinding(answered);
+		a.astore(3);
+		ldc(a, "NIL");
+		a.aload(3);
+		a.invokevirtual(this.objectEquals);
+		a.ifeq(notNil);
+		a.aconst_null();
+		a.areturn();
+		a.labelBinding(notNil);
+		a.aload(3);
 		a.areturn();
 		return a;
 	}
@@ -1703,22 +1719,42 @@ final class JvmReadRuntimeBuilder {
 		a.aload(0);
 		a.invokestatic(this.rdStandardSpelling);
 		a.astore(0);
-		// nil?
-		a.aload(0);
-		ldc(a, "NIL");
-		a.invokevirtual(this.objectEquals);
-		a.ifeq(notNil);
-		a.aconst_null();
-		a.areturn();
-		a.labelBinding(notNil);
-		// t? -> the symbol t (the bare String "t", like the interpreter's reader), so it
-		// prints as t and is eq to a quoted 't.
-		a.aload(0);
-		ldc(a, "T");
-		a.invokevirtual(this.objectEquals);
-		a.ifeq(notT);
-		ldc(a, "T");
-		a.areturn();
+		if (this.rdHome != null) {
+			// nil? t? -> what the package reads them as (_rdHome), as the interpreter's
+			// reader asks: cl's nil and t, or a package's own.
+			MethodCode.Label home = a.newLabel();
+			a.aload(0);
+			ldc(a, "NIL");
+			a.invokevirtual(this.objectEquals);
+			a.ifne(home);
+			a.aload(0);
+			ldc(a, "T");
+			a.invokevirtual(this.objectEquals);
+			a.ifeq(notT);
+			a.labelBinding(home);
+			a.aload(0);
+			a.aload(11);
+			a.invokestatic(this.rdHome);
+			a.areturn();
+		}
+		else {
+			// nil?
+			a.aload(0);
+			ldc(a, "NIL");
+			a.invokevirtual(this.objectEquals);
+			a.ifeq(notNil);
+			a.aconst_null();
+			a.areturn();
+			a.labelBinding(notNil);
+			// t? -> the symbol t (the bare String "t", like the interpreter's reader), so
+			// it prints as t and is eq to a quoted 't.
+			a.aload(0);
+			ldc(a, "T");
+			a.invokevirtual(this.objectEquals);
+			a.ifeq(notT);
+			ldc(a, "T");
+			a.areturn();
+		}
 		a.labelBinding(notT);
 		// Leading '+': an explicitly positive number literal (+347, +2.5, +.5, +1/3)
 		// drops

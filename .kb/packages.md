@@ -90,6 +90,54 @@ Consumers measured 2026-11-04: `vom` loads and logs on all four backends. `sento
 "Libraries that load". `(ql:quickload :clim)`
 stops in its presentation types (`.todo/i44`).
 
+## T and NIL in a package that does not read them as cl's
+**A bare `t` or `nil` token reads as any other name does** (i74, 2026-11-06): `cl`'s constant where
+the package makes `cl`'s symbol accessible -- it uses `cl` and neither shadows nor imports another
+one, imports `cl`'s, or uses a package re-exporting it -- else the package's own (shadowed, owned, or
+made for the read) or the one a used package exports (`coalton:nil` under `(:use #:coalton)`).
+`()`, `cl:nil` and `cl:t` stay `cl`'s; `pkg::nil` is what `pkg` has (`cl-user::nil` is nil, it was a
+symbol named NIL). SBCL 2.2.9 reads all of it so. Until then `LispReader.readSymbol` folded every
+`t`/`nil` token before any package was asked, so a coalton program read without coalton's readtable
+had `cl:nil` for the list constructor `Nil`.
+- **The reader decides, asking where the read happens** (`LispReader`'s `clTOrNil`,
+  `Forms.readingTOrNil`, `readPrefixIn`): a token it does not fold stays a bare symbol `NIL`/`T`, which
+  `PackageResolver.tOrNilIn` resolves as the package's own or inherited one, as it resolves every bare
+  name. The resolver needs the arm: neither name is in `isClSymbol` (`CL_EXPORTED_ONLY`), so
+  `resolveUnqualified` alone makes them every cl-using package's own. Folding where `cl`'s is certain
+  stays the rule because the passes ahead of the resolvers test raw nils (`.asd` data, `FeaturePushes`,
+  the top-level scans), and turning a symbol into a constant rebuilds the form around it.
+- **Who answers**: the interpreter's source reads ask the live resolver (`readsClTOrNil`): `loadFile`,
+  the entry's `evalSource`, a REPL or playground buffer (`SourceSession.attach`), SWANK's text. The
+  compile paths read a form before the forms ahead of it ran, so `LoadInliner.Reading` follows the
+  literal top-level package directives spliced so far into a resolver of its own
+  (`followReadPackageDirective`: `defpackage`, `uiop:define-package`, `in-package`, the bracket
+  markers, the symbol directives, inside `progn`/`eval-when`). A package it has no definition of -- a
+  macro's (coalton's `defstdlib-package`, McCLIM's `clim-lisp`, a `#.` clause: contextl's `cxcl`), or
+  one using such a package -- reads `cl`'s, what every pass took the tokens for before, and the
+  resolvers after the read decide only the tokens this one leaves. So a macro-made package using no
+  `cl` reads its own `nil` interpreted and `cl`'s compiled. Scans and data reads always fold.
+- **A run-time read asks too**: the interpreter's through `readSpelling` (`internSpellingExact`); a
+  compiled program's emitted readers through `%read-home`, which no longer answers `t` unasked: `nil`
+  goes in as nil (`(symbol-name nil)` is `"NIL"`), and `_rdHome` and the WASM reader's home ask take the
+  symbol spelled `NIL` it answers for nil.
+- **A `let` binding `cl`'s `t` or `nil` is refused**, for every backend at once
+  (`LispMacroExpander.letBindingList`, which the three `let`s bind through and the analyses walking a
+  `let` do not: `T names a constant, and cannot be bound`, located): each `let` took the constant for a
+  symbol and died on a cast (`ClassCastException` compiled, a type-error interpreted). A package's own
+  `t` binds like any name.
+- Measured 2026-11-06 over the 256 cached Quicklisp systems: a package using no `cl` whose code holds a
+  bare `t`/`nil` reads them as `cl`'s through an import (vom's `(:import-from #:cl #:t #:nil ...)`; vom
+  logs on all four backends as before) or a package re-exporting them (McCLIM over `clim-lisp`, contextl's
+  `contextl-user` over `cxcl`: `ContextlE2eTest` writes `:in t` there; hu.dwim over `hu.dwim.common-lisp`,
+  whose exports a load-time `do-external-symbols` loop makes, so the compile paths read none of its `cl`
+  names, these two included), or is coalton's, read through eclector under its readtable.
+
+Pinned by ci-spec `a-standard-name-read-in-a-package-using-no-cl-is-its-own` and
+`a-run-time-read-interns-in-the-current-package`,
+`PackageResolverTest#{aStandardNameReadInAPackageUsingNoClIsItsOwnWhereverItStands,theCompilePathsReadKnowsTheLiteralPackagesAheadOfAToken}`,
+`LoadInlinerTest#loadSystemDoesNotLeakTheCurrentPackageToTheCallerOnJvm`,
+`LispMacroExpanderTest#aLetBindingTOrNilIsRefusedForEveryBackend`.
+
 ## A package defining a name of `cl`'s implementation
 `PackageRegistry.CL_INTERNALS` are the names lowerings emit, read as `cl`'s in every package because
 an expansion may land in any. A program can spell one too: cxml's `(defun %error (class stream

@@ -86,7 +86,7 @@ final class JvmLetCompiler {
 		letForm = ParallelLetStaging.stage(letForm, ctx.specialVars);
 		List<LispVal> parts = letForm.toList();
 		// A bare symbol entry is an init-less binding to nil.
-		LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
+		LispVal bindings = LispMacroExpander.letBindingList(parts.get(1));
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
 		Set<String> savedBoxedVars = new HashSet<>(ctx.boxedVars);
 		Map<String, JvmIntFusionCompiler.RawLocal> savedRawLocals = new HashMap<>(ctx.rawLocals);

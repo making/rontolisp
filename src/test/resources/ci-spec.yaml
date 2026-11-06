@@ -4103,9 +4103,13 @@ cases:
       ;; Whatever the name turns out to be there: a parameter (vom's SECOND), a LOOP
       ;; keyword, which compares by name, a definition, a call ahead of it. Data spelled
       ;; cl: stays cl's under eval and compile, and a name the package never defines is
-      ;; undefined, not cl's. SBCL agrees, printing under cl-user where it would qualify
-      ;; COMMON-LISP:NIL.
+      ;; undefined, not cl's. T and NIL too, but where the package reads cl's: one it
+      ;; imports, or inherits from cl, or another package exporting its own. SBCL agrees,
+      ;; printing under cl-user where it would qualify COMMON-LISP:NIL.
       (defpackage :ci-nocl (:use) (:export #:rest))
+      (defpackage :ci-nocl-own (:use) (:export #:nil))
+      (defpackage :ci-nocl-heir (:use :ci-nocl-own) (:import-from :cl #:t))
+      (defpackage :ci-nocl-shadow (:use :cl) (:shadow #:t))
       (cl:in-package :ci-nocl)
       (cl:print (cl:let ((caar 1)) caar))
       (cl:defun ci-parameter (second) second)
@@ -4131,12 +4135,23 @@ cases:
         (cl:list (cl:fboundp 'first)
                  (cl:handler-case (cl:funcall (cl:intern "FIRST") '(21))
                    (cl:undefined-function (c) (cl:eq (cl:cell-error-name c) 'first)))))
+      (cl:defun nil (t) (cl:list :nil t))
+      (cl:print (cl:list (nil 25) (cl:let ((t 26)) t) 't (cl:eq 'nil cl:nil) (cl:eq () cl:nil)))
+      (cl:defparameter *t-and-nil* (cl:list 'nil (cl:package-name (cl:symbol-package 't)) '(cl:nil cl:t . ())))
+      (cl:in-package :ci-nocl-heir)
+      (cl:defparameter *heir* (cl:list 'nil (cl:eq 'nil 'ci-nocl-own:nil) (cl:eq 't cl:t)))
+      (cl:in-package :ci-nocl-shadow)
+      (defparameter *shadowed* (list (eq 't cl:t) (package-name (symbol-package 't)) (eq 'nil cl:nil)
+                                     (eq 'cl-user::nil nil) (eq 'ci-nocl-shadow::nil nil) (eq 'ci-nocl-heir::t cl:t)))
       (cl:in-package :cl-user)
       (print ci-nocl::*loops*)
       (print ci-nocl::*identity*)
       (print ci-nocl::*data*)
       (print ci-nocl::*undefined*)
       (print (list (ci-nocl::second 22) (ci-nocl:rest 23) (first '(24)) 'ci-nocl::list))
+      (print ci-nocl::*t-and-nil*)
+      (print ci-nocl-heir::*heir*)
+      (print ci-nocl-shadow::*shadowed*)
     expected: |
       1
       2
@@ -4144,11 +4159,15 @@ cases:
       (6 7)
       ((:OWN 9) (:OWN 10) (:OWN 11) 13)
       (14 Y 15 (:MIN 16) (:REST 17))
+      ((:NIL 25) 26 T COMMON-LISP:NIL COMMON-LISP:T)
       (NIL (8) 2)
       (NIL "CI-NOCL")
       (18 NIL 20)
       (NIL T)
       ((:OWN 22) (:REST 23) 24 CI-NOCL::LIST)
+      (CI-NOCL::NIL "CI-NOCL" (NIL T))
+      (CI-NOCL-OWN:NIL T T)
+      (NIL "CI-NOCL-SHADOW" T T T T)
   - name: a-bare-symbol-prints-qualified-where-the-package-reads-another
     source: |
       ;; A cl symbol and a cl-user one under a package reading that name as something
@@ -27283,7 +27302,10 @@ cases:
                    (home (let ((*package* (find-package :cl-user))) (rd "foo")))
                    (let ((*package* (find-package :keyword))) (rd "foo"))
                    (home (with-standard-io-syntax (rd "foo")))
-                   (home (let ((*package* (find-package :ci-rh-nocl))) (rd "car")))))
+                   (home (let ((*package* (find-package :ci-rh-nocl))) (rd "car")))
+                   (home (let ((*package* (find-package :ci-rh-nocl))) (rd "nil")))
+                   (home (let ((*package* (find-package :ci-rh-nocl))) (rd "|T|")))
+                   (let ((*package* (find-package :ci-rh-nocl))) (rd "(cl:nil cl:t . ())"))))
       (let ((q (let ((*package* (find-package :ci-rh-nocl))) (rd "'x"))))
         (print (list (eq (first q) 'quote) (home (second q)))))
       (defpackage :ci-rh-other (:use :cl) (:export #:other-out))
@@ -27306,7 +27328,7 @@ cases:
       (T (CAR REST COMMON-LISP-USER::RH-U) T T T)
       (T T T T T)
       (:IN-P :IN-P 11 11 FOO)
-      ("CI-RH-LIB" T "COMMON-LISP-USER" :FOO "COMMON-LISP-USER" "CI-RH-NOCL")
+      ("CI-RH-LIB" T "COMMON-LISP-USER" :FOO "COMMON-LISP-USER" "CI-RH-NOCL" "CI-RH-NOCL" "CI-RH-NOCL" (NIL T))
       (T "CI-RH-NOCL")
       (T T)
       ("COMMON-LISP-USER" T T)

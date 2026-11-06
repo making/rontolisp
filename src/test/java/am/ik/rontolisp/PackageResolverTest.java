@@ -14,7 +14,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class PackageResolverTest {
 
 	private static String resolve(PackageResolver resolver, String src) {
-		return resolver.resolve(LispReader.readFromString(src)).print();
+		// Read as source is read: a t or nil token in the package resolving it.
+		LispReader.ReadPrefix read = LispReader.readPrefixIn(src, Features.INTERPRETER, false, null,
+				resolver::readsClTOrNil);
+		if (read.error() != null) {
+			throw read.error();
+		}
+		return resolver.resolve(read.forms().getFirst()).print();
 	}
 
 	private static String resolve(String src) {
@@ -228,9 +234,50 @@ class PackageResolverTest {
 		assertThat(resolve(resolver, "(cl:defun second (first) first)"))
 			.isEqualTo("(DEFUN RONTOLISP::SECOND (RONTOLISP::FIRST) RONTOLISP::FIRST)");
 		assertThat(resolve(resolver, "(cl:loop while x)")).isEqualTo("(LOOP RONTOLISP::WHILE RONTOLISP::X)");
+		// t and nil too, where nothing makes cl's accessible; () and cl:nil are cl's.
+		assertThat(resolve(resolver, "'(t nil cl:nil cl:t ())")).isEqualTo("'(RONTOLISP::T RONTOLISP::NIL NIL T NIL)");
+		assertThat(resolve(resolver, "(cl:let ((t 1)) t)")).isEqualTo("(LET ((RONTOLISP::T 1)) RONTOLISP::T)");
 		// The one exception: (quote x) is the special form here in any package, so a
 		// variable of that name has to be one symbol with it.
 		assertThat(resolve(resolver, "(cl:let ((quote 1)) quote)")).isEqualTo("(LET ('1) QUOTE)");
+		// What makes cl's t or nil accessible, spelled with a qualifier too: a use of cl
+		// (cl-user::nil, a cl-using package's), an import, a re-export; a shadow or
+		// another
+		// package's export names that one.
+		PackageResolver cl = new PackageResolver();
+		resolve(cl, "(defpackage :tn-shadow (:use :cl) (:shadow #:t))");
+		resolve(cl, "(defpackage :tn-own (:use) (:export #:nil))");
+		resolve(cl, "(defpackage :tn-heir (:use :tn-own) (:import-from :cl #:t))");
+		resolve(cl, "(defpackage :tn-cl (:use :cl) (:export #:nil))");
+		resolve(cl, "(defpackage :tn-reheir (:use :tn-cl))");
+		assertThat(resolve(cl, "'(cl-user::nil tn-shadow::nil tn-shadow::t tn-heir::t tn-heir::nil tn-cl:nil)"))
+			.isEqualTo("'(NIL NIL TN-SHADOW::T T TN-OWN:NIL NIL)");
+		resolve(cl, "(in-package :tn-heir)");
+		assertThat(resolve(cl, "'(t nil)")).isEqualTo("'(T TN-OWN:NIL)");
+		resolve(cl, "(cl:in-package :tn-reheir)");
+		assertThat(resolve(cl, "'(t nil)")).isEqualTo("'(TN-REHEIR::T NIL)");
+	}
+
+	@Test
+	void theCompilePathsReadKnowsTheLiteralPackagesAheadOfAToken() {
+		// LoadInliner's read reads a form before the forms ahead of it ran: what it
+		// follows
+		// of them decides a t or nil token, and a package it has no definition of reads
+		// cl's, as every pass took them (.kb/packages.md).
+		PackageResolver read = new PackageResolver();
+		for (String directive : List.of("(defpackage :rd-nocl (:use))",
+				"(eval-when (:execute) (in-package :rd-nocl))")) {
+			read.followReadPackageDirective(LispReader.readFromString(directive));
+		}
+		assertThat(read.readsClTOrNil("NIL")).isFalse();
+		read.followReadPackageDirective(LispReader.readFromString("(cl:in-package :rd-a-macros)"));
+		assertThat(read.readsClTOrNil("T")).isTrue();
+		for (String directive : List.of("(cl:defpackage :rd-heir (:use :rd-unseen))", "(cl:in-package :rd-heir)")) {
+			read.followReadPackageDirective(LispReader.readFromString(directive));
+		}
+		assertThat(read.readsClTOrNil("NIL")).isTrue();
+		assertThat(PackageResolver.isReadPackageDirective(LispReader.readFromString("(progn (defun f () nil))")))
+			.isFalse();
 	}
 
 	@Test
@@ -698,7 +745,7 @@ class PackageResolverTest {
 		// An implementation-internal cl name is injected by expansions wherever they run
 		// -- the macro-function table appended under contextl-user, which uses only
 		// cxcl -- so it resolves in every package.
-		assertThat(resolve(resolver, "(%macro-fn x nil)")).isEqualTo("(%MACRO-FN LU::X NIL)");
+		assertThat(resolve(resolver, "(%macro-fn x cl:nil)")).isEqualTo("(%MACRO-FN LU::X NIL)");
 	}
 
 	@Test

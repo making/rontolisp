@@ -16907,11 +16907,13 @@ public final class LispMacroExpander {
 	 * its spelling in a pristine {@code cl-user}; a qualified one what its name interns
 	 * in the package the qualifier names, which the current package's nicknames read. A
 	 * qualifier naming no package keeps the spelling, as a token with a colon past a
-	 * qualifier's does: the readers do not ask. {@code t} is read ahead of any package,
-	 * as the interpreter's reader folds it. A nickname of the current package may be
-	 * named like the package found, and {@code intern} would read its designator through
-	 * it; a package has no nickname of its own name, so in a program with nicknames the
-	 * lookup runs with that package current.
+	 * qualifier's does: the readers do not ask. {@code t} and {@code nil} are no
+	 * exception, as the interpreter's reader asks for them too ({@code .kb/packages.md}):
+	 * a package using no {@code cl} reads its own; {@code nil} comes in as nil, and
+	 * whichever reader answers the symbol spelled {@code NIL} reads it as nil. A nickname
+	 * of the current package may be named like the package found, and {@code intern}
+	 * would read its designator through it; a package has no nickname of its own name, so
+	 * in a program with nicknames the lookup runs with that package current.
 	 * @param program the resolved top-level forms
 	 * @param resolver the resolver holding the final registry
 	 * @return the program with the definition prepended, or unchanged
@@ -16924,7 +16926,7 @@ public final class LispMacroExpander {
 		String source = """
 				(defun %read-home (%rh-s %rh-q)
 				  (let ((%rh-k (if %rh-q (find-package %rh-q) *package*)))
-				    (if (or (null %rh-k) (eq %rh-s t) CL_USER_ANSWERS)
+				    (if (or (null %rh-k) CL_USER_ANSWERS)
 				        %rh-s
 				        LOOKUP)))
 				"""
@@ -55226,7 +55228,23 @@ public final class LispMacroExpander {
 	 * @return the normalized binding list
 	 */
 	public static LispVal normalizeBindingList(LispVal bindings) {
-		if (!(bindings instanceof LispCons cons) || !cons.isProperList() || !hasShorthandBinding(cons)) {
+		return normalizeBindingList(bindings, false);
+	}
+
+	/**
+	 * {@link #normalizeBindingList} for a {@code let} about to bind its names -- the
+	 * interpreter's and both compilers': an entry binding {@code t} or {@code nil} is
+	 * refused, which CL forbids and which each of them used to take for a symbol and die
+	 * on the cast. An analysis walking the form normalizes without the check.
+	 * @param bindings the binding list form
+	 * @return the normalized binding list
+	 */
+	public static LispVal letBindingList(LispVal bindings) {
+		return normalizeBindingList(bindings, true);
+	}
+
+	private static LispVal normalizeBindingList(LispVal bindings, boolean binding) {
+		if (!(bindings instanceof LispCons cons) || !cons.isProperList() || !hasShorthandBinding(cons, binding)) {
 			return bindings;
 		}
 		List<LispVal> entries = cons.toList();
@@ -55252,14 +55270,20 @@ public final class LispMacroExpander {
 
 	// Whether any entry is a bare symbol or (x): the interpreter asks on every let it
 	// evaluates, and nearly every binding list has neither, so it answers without
-	// allocating.
-	private static boolean hasShorthandBinding(LispCons bindings) {
+	// allocating. A let about to bind refuses an entry binding t or nil on the way.
+	private static boolean hasShorthandBinding(LispCons bindings, boolean binding) {
+		boolean shorthand = false;
 		for (LispVal cell = bindings; cell instanceof LispCons c; cell = c.cdr()) {
-			if (c.car() instanceof LispSymbol || c.car() instanceof LispCons pair && pair.cdr() instanceof LispNil) {
-				return true;
+			LispVal entry = c.car();
+			if (binding) {
+				LispVal name = entry instanceof LispCons pair ? pair.car() : entry;
+				if (name instanceof LispNil || name instanceof LispTrue) {
+					throw new IllegalArgumentException(name.print() + " names a constant, and cannot be bound");
+				}
 			}
+			shorthand |= entry instanceof LispSymbol || entry instanceof LispCons pair && pair.cdr() instanceof LispNil;
 		}
-		return false;
+		return shorthand;
 	}
 
 	/**
