@@ -10672,6 +10672,31 @@ public final class LispNames {
 	public static final String PRIN1_PIECE_INTERNAL = "%PRIN1-PIECE";
 
 	/**
+	 * The internal {@code (%decimal-piece x)} conversion: {@link #PRINC_PIECE_INTERNAL}
+	 * under {@code *print-base*} 10 and {@code *print-radix*} nil, which is what
+	 * {@code ~D} prints (CLHS 22.3.2.2). A leaf, lowered by
+	 * {@code LispMacroExpander.expandDecimalLeaf}: to {@link #DECIMAL_TEXT_INTERNAL}
+	 * where either variable can be off its default, to {@link #PRINC_PIECE_INTERNAL}
+	 * elsewhere, so the expansion itself names neither variable.
+	 */
+	public static final String DECIMAL_PIECE_INTERNAL = "%DECIMAL-PIECE";
+
+	/**
+	 * The stream twin of {@link #DECIMAL_PIECE_INTERNAL}: {@code (%decimal-princ x)}
+	 * writes the text to {@code *standard-output*}, and is {@code princ} where neither
+	 * variable can be off its default.
+	 */
+	public static final String DECIMAL_PRINC_INTERNAL = "%DECIMAL-PRINC";
+
+	/**
+	 * The internal {@code (%decimal-text x)} prelude defun the two decimal leaves lower
+	 * to in a program that names a printer-control variable:
+	 * {@link #PRINC_PIECE_INTERNAL} with {@code *print-base*} and {@code *print-radix*}
+	 * bound to their defaults.
+	 */
+	public static final String DECIMAL_TEXT_INTERNAL = "%DECIMAL-TEXT";
+
+	/**
 	 * The runtime {@code format} renderer's entry point,
 	 * {@code (%fmt-render control-string argument-list)} ({@code format-render.lisp}).
 	 */

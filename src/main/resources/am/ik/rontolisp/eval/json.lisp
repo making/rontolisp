@@ -348,19 +348,8 @@
 
 (defun rontolisp::%json-decimal (n)
   ;; An integer's decimal digits whatever *print-base* and *print-radix* say, as
-  ;; jzon's ~D writes them: #xFF is no JSON. Ten prints as "10" exactly when the
-  ;; printer is decimal without a radix; naming either variable, even to read
-  ;; it, would bring the case-aware printer into a compiled program.
-  (if (string= (%princ-piece 10) "10")
-      (%princ-piece n)
-      (let ((parts nil) (m (abs n)))
-        (do ((dummy nil))
-            ((< m 10))
-          (setq parts
-                (cons (rontolisp::%json-char-string (+ 48 (mod m 10))) parts))
-          (setq m (floor m 10)))
-        (setq parts (cons (rontolisp::%json-char-string (+ 48 m)) parts))
-        (rontolisp::%json-concat (if (< n 0) (cons "-" parts) parts)))))
+  ;; jzon's ~D writes them: #xFF is no JSON.
+  (%decimal-piece n))
 
 (defun rontolisp::%json-key-name (k)
   ;; Coerce a hash-table key to a string the way jzon's coerce-key does.

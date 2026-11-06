@@ -35370,6 +35370,22 @@ cases:
       "\"a\""
       (1 T "1 cannot be printed readably.")
 
+  - name: format-tilde-d-prints-in-decimal-under-any-print-base
+    source: |
+      ;; CLHS 22.3.2.2: ~D prints an integer in decimal without a radix and anything else as
+      ;; by ~A in decimal base, whatever *print-base* and *print-radix* say; ~A and ~X follow
+      ;; them. Literal and run-time controls, to a string and to a stream. SBCL 2.2.9 agrees.
+      (defun tdpb-control () "~D ~:D ~@D ~5D|~D ~D")
+      (let ((*print-base* 16) (*print-radix* t))
+        (print (list (format nil "~D ~:D ~@D ~5D|~D ~D" 255 1234567 -255 42 1/3 '(1 17))
+                     (format nil (tdpb-control) 255 1234567 -255 42 1/3 '(1 17))
+                     (with-output-to-string (*standard-output*) (format t "~D ~D" 255 1/3))
+                     (format nil "~A ~X" 255 255))))
+      (print (let ((*print-base* 2) (*print-case* :downcase)) (format nil "~D ~D ~A" 5 'foo 5)))
+    expected: |
+      ("255 1,234,567 -255    42|1/3 (1 17)" "255 1,234,567 -255    42|1/3 (1 17)" "255 1/3" "#xFF FF")
+      "5 foo 101"
+
   - name: print-readably-signals-print-not-readable
     source: |
       ;; CLHS 22.1.3.13, SBCL 2.2.9 agrees on every line but the table with an entry, which
@@ -40048,6 +40064,15 @@ standalone:
       (defmethod gfp-cam-pkg ((x integer)) :integer)
       (print (list (gfp-cam-names #'gfp-cam-pkg 1) (class-name (find-class 'package))
                    (typep (find-package :cl) (find-class 'package)) (typep 'x (find-class 'package))))
+      ;; A generic whose package exports its name, and a method defined after a call: the
+      ;; answer is the dispatcher's at that point.
+      (defpackage :gfp-out (:use :cl) (:export #:gfp-out-cmp))
+      (defgeneric gfp-out:gfp-out-cmp (x y))
+      (defmethod gfp-out:gfp-out-cmp ((x t) (y t)) :t)
+      (defmethod gfp-out:gfp-out-cmp ((x real) (y real)) :real)
+      (print (list (gfp-cam-names #'gfp-out:gfp-out-cmp 1 2) (gfp-out:gfp-out-cmp 1 2)))
+      (defmethod gfp-out:gfp-out-cmp ((x integer) (y real)) :integer)
+      (print (list (gfp-cam-names #'gfp-out:gfp-out-cmp 1 2) (gfp-out:gfp-out-cmp 1 2)))
       ;; find-method and remove-method take the generic's function.
       (defgeneric gfp-fn (x))
       (defmethod gfp-fn ((x integer)) :integer)
@@ -40074,6 +40099,8 @@ standalone:
       ((NIL (INTEGER)) (NIL (NUMBER)))
       ((NIL (NUMBER)))
       (((NIL (INTEGER))) PACKAGE T NIL)
+      (((NIL (REAL REAL)) (NIL (T T))) :REAL)
+      (((NIL (INTEGER REAL)) (NIL (REAL REAL)) (NIL (T T))) :INTEGER)
       (NIL :SIGNALED)
       ((:STRING "s") T)
       (NIL :NO-METHOD :INTEGER)

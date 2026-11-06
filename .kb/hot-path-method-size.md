@@ -98,6 +98,18 @@ chunker can adopt it.
   `%typep-compound-runtime`) are this shape. On the example corpus only the
   clack/postgres/postmodern stacks and `jose-demo` change their `.class`, none their `.wasm`. Pin
   `JvmLispCompilerTest#aFlatCondPastTheMethodSizeBudgetSplitsItsClauseList`.
+- **A flat `list` call has its argument list cut the same way** (`Cutter.splitArguments`,
+  2026-11-06): `(list a1 .. ak ak+1 .. an)` is `(list* a1 .. ak <piece: (list ak+1 .. an)>)`,
+  same order, a fresh list. Only an argument that would fill half a run moves on its own first, so
+  small arguments go a run per piece, not a closure each. The generated tables are this shape:
+  `%gf-static-methods`' list of a generic's methods and a dispatcher's run-time entries, hundreds
+  of 20-60-node arguments (fset's `compare`, 426 methods: a 77 KB lambda before).
+- **A `let`/`let*` binding's value is a cut position** (2026-11-06; only the body was): a piece
+  called where the binding stands sees what the value would, the outer scope and, under `let*`,
+  the bindings before it. A big binding value had nothing to cut, so the piece wrapping its `let`
+  came out past the 64 KB cap, a lambda the retry cannot name (`method _lambda_N: method code
+  exceeds the JVM's 65535-byte limit`): a protocol dispatcher's arm binds its run-time entries.
+  Pin `AstOutlinerTest` (both shapes).
 - Two pre-existing backend bugs this shape can hit: a captured `let` variable assigned inline in a
   sibling arm compiles to a raw store (WRONG ANSWER), and a method past 255 local slots emits a
   truncated index.

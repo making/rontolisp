@@ -8,9 +8,9 @@ where it reads it, as SBCL's `compile-file` does, so it is a reasonable thing to
 interpreter's speed at read time. Checked with the library's first five files: a program over them prints what
 the interpreter and SBCL print on P1 and the component.
 
-What is left:
+What is left (fset's `compare` under the generic-function protocol compiles and answers on all four
+since 2026-11-06, `.kb/clos.md`, "Method definitions take effect in program order"):
 
-- The JVM stops at fset's `compare` dispatcher under the generic-function protocol (`.todo/i77`).
 - The whole library: the read-time image typechecks it as the interpreter does, an hour (`.todo/i75`), and the
   macro-time pass then replays its generated code. Unmeasured past five files: the compile's own time, the
   program's size, and whatever the later files stop on. Check file by file with a stand-in `coalton/library`
