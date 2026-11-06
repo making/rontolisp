@@ -13,8 +13,9 @@ defaults, so a program can switch to jzon unchanged; `JzonE2eTest` is the oracle
   lower-case letter (jzon's `coerce-key`).
 - Divergence from jzon: a `defstruct` instance serializes as an OBJECT.
 - An integer, value or key, is written in decimal whatever `*print-base*` and `*print-radix*`
-  say (`%json-decimal`), as jzon's `~D` writes it; through `%princ-piece` alone
-  `*print-base* 16` wrote `#xFF`, which is no JSON, on every backend until 2026-11-06.
+  say (`%json-decimal`, which is `~D`'s `%decimal-piece`, [format.md](format.md)), as jzon's
+  `~D` writes it; through `%princ-piece` alone `*print-base* 16` wrote `#xFF`, which is no
+  JSON, on every backend until 2026-11-06.
 - Trap: stringify tests `stringp` *before* `vectorp` (a string is a vector) and
   `(eq v 'null)` / `(null v)` before the general `symbolp` branch.
 

@@ -34305,7 +34305,7 @@ public final class LispMacroExpander {
 					LispVal arg = args.next(directive);
 					LispVal base = (colon || at)
 							? decimalExpr(arg, colon, fmtCommaChar(params, 2), fmtInterval(params, 3), at)
-							: fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg);
+							: fmtCall(LispNames.DECIMAL_PIECE_INTERNAL, arg);
 					if (fmtHasParam(params, 0)) {
 						base = padExpr(base, fmtParam(params, 0), fmtPadChar(params, 1, ' '), true);
 					}
@@ -34826,7 +34826,7 @@ public final class LispMacroExpander {
 		LispSymbol nstr = new LispSymbol("__fmtn");
 		LispSymbol neg = new LispSymbol("__fmtneg");
 		LispSymbol dig = new LispSymbol("__fmtd");
-		LispVal nstrInit = fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg);
+		LispVal nstrInit = fmtCall(LispNames.DECIMAL_PIECE_INTERNAL, arg);
 		LispVal negInit = fmtCall(LispNames.LT, arg, new LispInteger(0));
 		LispVal digInit = makeIf(neg, fmtCall(LispNames.SUBSEQ, nstr, new LispInteger(1)), nstr);
 		LispVal grouped = comma ? groupExpr(dig, commaChar, interval) : dig;
@@ -34836,9 +34836,9 @@ public final class LispMacroExpander {
 		LispVal body = fmtCall(LispNames.STRING_CONCAT, sign, grouped);
 		LispVal digits = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
 		// The same CLHS 22.3.2 rule as radixIntegerExpr, and the same runtime renderer
-		// to agree with (%fmt-dec). Plain ~D is already princ-to-string; this is the
+		// to agree with (%fmt-dec). Plain ~D is already %decimal-piece; this is the
 		// ~:D / ~@D arm, which would otherwise compare a non-number against zero.
-		return makeIf(fmtCall(LispNames.NUMBERP, arg), digits, fmtCall(LispNames.PRINC_PIECE_INTERNAL, arg));
+		return makeIf(fmtCall(LispNames.NUMBERP, arg), digits, fmtCall(LispNames.DECIMAL_PIECE_INTERNAL, arg));
 	}
 
 	/** Builds the comma-grouping loop over a string of digits. */
@@ -35176,6 +35176,9 @@ public final class LispMacroExpander {
 				}
 				if (LispNames.PRIN1_PIECE_INTERNAL.equals(head.name())) {
 					return fmtCall(LispNames.PRIN1, parts.get(1));
+				}
+				if (LispNames.DECIMAL_PIECE_INTERNAL.equals(head.name())) {
+					return fmtCall(LispNames.DECIMAL_PRINC_INTERNAL, parts.get(1));
 				}
 			}
 			if (LispNames.FIXED_DECIMAL.equals(head.name())) {
@@ -36829,7 +36832,7 @@ public final class LispMacroExpander {
 		}
 		return switch (head.name()) {
 			case LispNames.STRING_CONCAT, LispNames.PRINT_WITHOUT_READABLY_INTERNAL, LispNames.PRINC_PIECE_INTERNAL,
-					LispNames.PRIN1_PIECE_INTERNAL ->
+					LispNames.PRIN1_PIECE_INTERNAL, LispNames.DECIMAL_PIECE_INTERNAL ->
 				cons.toList().subList(1, cons.toList().size()).stream().allMatch(LispMacroExpander::buildsTextOnly);
 			case LispNames.WITH_OUTPUT_TO_STRING -> rendersSignalReport(cons);
 			default -> false;
@@ -44086,6 +44089,33 @@ public final class LispMacroExpander {
 			return callOf(fold ? LispNames.PRINT_CASE_FOLD_INTERNAL : LispNames.PRINT_RADIXED_INTERNAL, parts.get(1));
 		}
 		return fold ? parts.get(1) : callOf(LispNames.PRIN1_TO_STRING_RAW, parts.get(1));
+	}
+
+	/**
+	 * Lowers {@code ~D}'s two leaves, {@code (%decimal-piece x)} (the text) and
+	 * {@code (%decimal-princ x)} (written to {@code *standard-output*}): through the
+	 * {@code %decimal-text} prelude defun, which binds {@code *print-base*} 10 and
+	 * {@code *print-radix*} nil, where either variable can be off its default, and as
+	 * {@code %princ-piece} / {@code princ} elsewhere -- so a program that names neither
+	 * variable compiles {@code ~D} as it did before the leaves existed.
+	 * @param cons the call
+	 * @param rebinds whether {@code %decimal-text} must bind the variables: on the
+	 * compile paths, whether the program carries it; on the interpreter, whether either
+	 * variable is off its default now
+	 * @return the equivalent expression
+	 */
+	public static LispVal expandDecimalLeaf(LispCons cons, boolean rebinds) {
+		List<LispVal> parts = cons.toList();
+		String op = ((LispSymbol) parts.get(0)).name();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(op + " expects 1 argument");
+		}
+		boolean text = LispNames.DECIMAL_PIECE_INTERNAL.equals(op);
+		if (!rebinds) {
+			return callOf(text ? LispNames.PRINC_PIECE_INTERNAL : LispNames.PRINC, parts.get(1));
+		}
+		LispVal decimal = callOf(LispNames.DECIMAL_TEXT_INTERNAL, parts.get(1));
+		return text ? decimal : callOf(LispNames.WRITE_STRING, decimal);
 	}
 
 	/**
