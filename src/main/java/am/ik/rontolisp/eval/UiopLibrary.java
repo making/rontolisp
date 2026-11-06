@@ -83,6 +83,8 @@ public final class UiopLibrary {
 			Map.entry("UIOP/UTILITY", "uiop-utility.lisp"), Map.entry("UIOP/OS", "uiop-os.lisp"),
 			Map.entry("UIOP/PATHNAME", "uiop-pathname.lisp"), Map.entry("UIOP/FILESYSTEM", "uiop-filesystem.lisp"),
 			Map.entry("UIOP/STREAM", "uiop-stream.lisp"), Map.entry("UIOP/IMAGE", "uiop-image.lisp"),
+			Map.entry("UIOP/LAUNCH-PROGRAM", "uiop-launch-program.lisp"),
+			Map.entry("UIOP/RUN-PROGRAM", "uiop-run-program.lisp"),
 			Map.entry("UIOP/LISP-BUILD", "uiop-lisp-build.lisp"), Map.entry("UIOP/VERSION", "uiop-version.lisp"),
 			Map.entry("UIOP/BACKWARD-DRIVER", "uiop-backward-driver.lisp"),
 			Map.entry("UIOP/CONFIGURATION", "uiop-configuration.lisp"));
@@ -348,7 +350,8 @@ public final class UiopLibrary {
 					// A selected definition reaches what a surface form IT names reaches,
 					// as the program does: restore-image's standard-eval-thunk reaches
 					// eval-input, whose prelude helper opens a file through a name no
-					// definition spells.
+					// definition spells, and escape-token's with-output and
+					// escape-command's output-string the same way.
 					if ((referenced.contains(candidate) || reachedBySurfaceForm(candidate, referenced))
 							&& !alreadyDefined.contains(candidate) && selected.add(candidate)) {
 						grew = true;

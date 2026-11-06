@@ -94,6 +94,16 @@ public final class LispLexer {
 	 */
 	private int[] templatePrefixes = new int[8];
 
+	/**
+	 * The offset whose character reads by a standard macro function whatever the
+	 * readtable gives it, or -1: what calling that function reads
+	 * ({@link LispReader.Forms#readingFirstAs}).
+	 */
+	private int standardOffset = -1;
+
+	/** The standard macro character whose function reads at {@link #standardOffset}. */
+	private int standardAs;
+
 	private int templatePrefixCount;
 
 	/**
@@ -190,6 +200,17 @@ public final class LispLexer {
 	 */
 	void withinTemplates(int depth) {
 		this.baseTemplateDepth = depth;
+	}
+
+	/**
+	 * Reads the character at the scan by the standard function of {@code as}, once: what
+	 * a call of that function reads (CLHS 2.4), the readtable's own entry for the
+	 * character notwithstanding. Every datum after it reads with the readtable.
+	 * @param as the standard macro character
+	 */
+	void readingFirstAs(int as) {
+		this.standardOffset = this.pos;
+		this.standardAs = as;
 	}
 
 	/**
@@ -406,6 +427,12 @@ public final class LispLexer {
 	private void lexUnit(List<LocatedToken> tokens) {
 		{
 			char c = this.input.charAt(this.pos);
+			if (this.pos == this.standardOffset) {
+				this.standardOffset = -1;
+				int code = this.input.codePointAt(this.pos);
+				lexStandard(tokens, this.standardAs, code, this.pos, this.pos + Character.charCount(code));
+				return;
+			}
 			// A character the readtable gives another syntax reads by it first: a reader
 			// macro function, a remapped standard one, whitespace or a constituent.
 			if (this.syntax != null && lexSyntaxEntry(tokens)) {
@@ -832,41 +859,7 @@ public final class LispLexer {
 			case ReadSyntax.Constituent ignored -> add(tokens, readSymbol(), start);
 			case ReadSyntax.Call call ->
 				callReaderMacro(tokens, rs, call.function(), start, after, List.of(new am.ik.rontolisp.LispChar(c)));
-			case ReadSyntax.Standard standard -> {
-				switch (standard.as()) {
-					case '(' -> {
-						add(tokens, new Token.LeftParen(), start);
-						this.pos = after;
-					}
-					case ')' -> {
-						add(tokens, new Token.RightParen(), start);
-						this.pos = after;
-					}
-					case '\'' -> {
-						add(tokens, new Token.Quote(), start);
-						this.pos = after;
-					}
-					case '`' -> {
-						add(tokens, new Token.Backquote(), start);
-						this.pos = after;
-					}
-					case ',' -> {
-						if (after < this.input.length()
-								&& (this.input.charAt(after) == '@' || this.input.charAt(after) == '.')) {
-							add(tokens, new Token.UnquoteSplicing(), start);
-							this.pos = after + 1;
-						}
-						else {
-							add(tokens, new Token.Unquote(), start);
-							this.pos = after;
-						}
-					}
-					case ';' -> skipComment();
-					case '"' -> add(tokens, readString(c), start);
-					default -> throw err("the standard function of " + Character.toString(standard.as())
-							+ " is not supported under another character: " + Character.toString(c));
-				}
-			}
+			case ReadSyntax.Standard standard -> lexStandard(tokens, standard.as(), c, start, after);
 			case ReadSyntax.Sharp sharp -> {
 				int sub = after;
 				while (sub < this.input.length() && isDigit(this.input.charAt(sub))) {
@@ -893,6 +886,43 @@ public final class LispLexer {
 			}
 		}
 		return true;
+	}
+
+	// The character c at `start` read by the standard function of `as`.
+	private void lexStandard(List<LocatedToken> tokens, int as, int c, int start, int after) {
+		switch (as) {
+			case '(' -> {
+				add(tokens, new Token.LeftParen(), start);
+				this.pos = after;
+			}
+			case ')' -> {
+				add(tokens, new Token.RightParen(), start);
+				this.pos = after;
+			}
+			case '\'' -> {
+				add(tokens, new Token.Quote(), start);
+				this.pos = after;
+			}
+			case '`' -> {
+				add(tokens, new Token.Backquote(), start);
+				this.pos = after;
+			}
+			case ',' -> {
+				if (after < this.input.length()
+						&& (this.input.charAt(after) == '@' || this.input.charAt(after) == '.')) {
+					add(tokens, new Token.UnquoteSplicing(), start);
+					this.pos = after + 1;
+				}
+				else {
+					add(tokens, new Token.Unquote(), start);
+					this.pos = after;
+				}
+			}
+			case ';' -> skipComment();
+			case '"' -> add(tokens, readString(c), start);
+			default -> throw err("the standard function of " + Character.toString(as)
+					+ " is not supported under another character: " + Character.toString(c));
+		}
 	}
 
 	// Calls a reader macro function over the input from `from`: the value it answers is

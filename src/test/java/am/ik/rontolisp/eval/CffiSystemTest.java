@@ -4,9 +4,11 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -238,16 +240,21 @@ class CffiSystemTest {
 	}
 
 	@Test
-	void grovelAndLibffiRefuseWithTheReason() {
-		// Neither can work here, and a half-load or a silent download that ends in an
+	void libffiRefusesAndGrovellingNamesTheCompilerItLacks() {
+		// cffi-libffi has nothing to do here, and a silent download that ends in an
 		// unparseable system definition is worse than a sentence saying why.
 		Session session = new Session();
-		assertThatThrownBy(() -> session.eval("(asdf:load-system :cffi-grovel)"))
-			.hasMessageContaining("Cannot load system 'cffi-grovel'")
-			.hasMessageContaining("needs a C toolchain");
 		assertThatThrownBy(() -> session.eval("(asdf:load-system :cffi-libffi)"))
 			.hasMessageContaining("Cannot load system 'cffi-libffi'")
 			.hasMessageContaining("structures by value need no libffi here");
+		// cffi-grovel runs the host's C compiler (CffiGrovelE2eTest), so it is refused
+		// only where there is none -- by the name cffi-toolchain would run -- and on a
+		// WASM target, before anything is built for a binding that calls C through ffi:.
+		assertThat(ShimLibraries.groveller(Map.of("PATH", "/nonexistent"))).contains("cc, is not on PATH");
+		assertThat(ShimLibraries.groveller(Map.of("PATH", "/nonexistent", "CC", "/no/such/gcc")))
+			.contains("/no/such/gcc, is not an executable file");
+		assertThat(ShimLibraries.groveller(Map.of("PATH", "/usr/bin:/bin", "CC", "sh"))).isNull();
+		assertThat(ShimLibraries.refusalReason("cffi-grovel", Features.WASM)).contains("ffi:");
 	}
 
 }

@@ -505,8 +505,11 @@
                                              ((:direction %cw-tf-direction)
                                               :output) ((:keep %cw-tf-keep) nil)
                                              ((:directory %cw-tf-directory) nil)
-                                             ((:type %cw-tf-type) "tmp")
+                                             ((:type %cw-tf-type) "tmp"
+                                              %cw-tf-typep)
                                              ((:prefix %cw-tf-prefix) nil)
+                                             ((:suffix %cw-tf-suffix)
+                                              (when %cw-tf-typep "-tmp"))
                                              ((:element-type
                                                %cw-tf-element-type) 'character)
                                              ((:external-format
@@ -517,7 +520,8 @@
           (namestring
            (uiop/pathname:ensure-directory-pathname
             (or %cw-tf-directory (uiop/stream:default-temporary-directory)))))
-         (%cw-tf-pn (%temp-file-name %cw-tf-d %cw-tf-prefix %cw-tf-type))
+         (%cw-tf-pn
+          (%temp-file-name %cw-tf-d %cw-tf-prefix %cw-tf-suffix %cw-tf-type))
          (%cw-tf-result nil))
     (unwind-protect (progn
                       (with-open-file (%cw-tf-s %cw-tf-pn

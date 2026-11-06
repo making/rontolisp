@@ -359,19 +359,20 @@ public final class PackageRegistry {
 			LispNames.RD_WHITESPACE_P, LispNames.RD_TERMINATING_P, LispNames.RT_MAKE_INTERNAL,
 			LispNames.RT_ENTRY_INTERNAL, LispNames.RT_STD_ENTRY_INTERNAL, LispNames.RT_STD_FN_INTERNAL,
 			LispNames.RT_STD_SUBS_INTERNAL, LispNames.RT_STD_OF_INTERNAL, LispNames.RT_STD_SUB_OF_INTERNAL,
-			LispNames.RT_CALL_STANDARD_INTERNAL, LispNames.RT_DISPATCHER_INTERNAL, LispNames.RT_OWN_ENTRY_INTERNAL,
-			LispNames.RT_COPY_ENTRY_INTERNAL, LispNames.RT_DESIGNATOR_INTERNAL, LispNames.RT_STANDARD_INTERNAL,
-			LispNames.READTABLE_MACRO_ENTRIES_INTERNAL, LispNames.PPRINT_DISPATCH_DEFAULT, LispNames.OBJ_NEW,
-			LispNames.OBJ_REF, LispNames.OBJ_SET, LispNames.OBJ_IS, LispNames.OBJ_TAG, LispNames.OBJ_P,
-			LispNames.OBJ_SLOTS, LispNames.OBJ_PRINT_FRAME, LispNames.RUN_HANDLERS_INTERNAL,
-			LispNames.HB_GUARD_INTERNAL, LispNames.HC_MATCH_INTERNAL, LispNames.INTERRUPT_POLL_INTERNAL,
-			LispNames.INTERRUPT_TAKE_INTERNAL, LispNames.PROGRAM_ERROR_INTERNAL, LispNames.COMPILE_WARNING_INTERNAL,
-			LispNames.PARSE_ERROR_INTERNAL, LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL,
-			LispNames.ARITY_MISSING_MESSAGE_INTERNAL, LispNames.FILE_ERROR_INTERNAL, LispNames.PACKAGE_ERROR_INTERNAL,
-			LispNames.SYMBOL_IN_PACKAGE_INTERNAL, LispNames.FIND_PACKAGE_INTERNAL, LispNames.OPEN_OR_NIL_INTERNAL,
-			LispNames.HANDLER_CLUSTERS_VAR, LispNames.RESTART_CLUSTERS_VAR, LispNames.RESTART_RECORD_TAG,
-			LispNames.LIST_DIRECTORY, LispNames.DIR_NAMESTRING, LispNames.WILD_MATCH, LispNames.PATHNAME_TYPED_P,
-			LispNames.SLEEP_MS, LispNames.MAKE_DIRECTORIES, LispNames.PATHNAME_SPLIT, LispNames.MAKE_ARRAY_ET_INTERNAL,
+			LispNames.RT_CALL_STANDARD_INTERNAL, LispNames.RT_READ_AS_INTERNAL, LispNames.RT_DISPATCHER_INTERNAL,
+			LispNames.RT_OWN_ENTRY_INTERNAL, LispNames.RT_COPY_ENTRY_INTERNAL, LispNames.RT_DESIGNATOR_INTERNAL,
+			LispNames.RT_STANDARD_INTERNAL, LispNames.READTABLE_MACRO_ENTRIES_INTERNAL,
+			LispNames.PPRINT_DISPATCH_DEFAULT, LispNames.OBJ_NEW, LispNames.OBJ_REF, LispNames.OBJ_SET,
+			LispNames.OBJ_IS, LispNames.OBJ_TAG, LispNames.OBJ_P, LispNames.OBJ_SLOTS, LispNames.OBJ_PRINT_FRAME,
+			LispNames.RUN_HANDLERS_INTERNAL, LispNames.HB_GUARD_INTERNAL, LispNames.HC_MATCH_INTERNAL,
+			LispNames.INTERRUPT_POLL_INTERNAL, LispNames.INTERRUPT_TAKE_INTERNAL, LispNames.PROGRAM_ERROR_INTERNAL,
+			LispNames.COMPILE_WARNING_INTERNAL, LispNames.PARSE_ERROR_INTERNAL,
+			LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL, LispNames.ARITY_MISSING_MESSAGE_INTERNAL,
+			LispNames.FILE_ERROR_INTERNAL, LispNames.PACKAGE_ERROR_INTERNAL, LispNames.SYMBOL_IN_PACKAGE_INTERNAL,
+			LispNames.FIND_PACKAGE_INTERNAL, LispNames.OPEN_OR_NIL_INTERNAL, LispNames.HANDLER_CLUSTERS_VAR,
+			LispNames.RESTART_CLUSTERS_VAR, LispNames.RESTART_RECORD_TAG, LispNames.LIST_DIRECTORY,
+			LispNames.DIR_NAMESTRING, LispNames.WILD_MATCH, LispNames.PATHNAME_TYPED_P, LispNames.SLEEP_MS,
+			LispNames.MAKE_DIRECTORIES, LispNames.PATHNAME_SPLIT, LispNames.MAKE_ARRAY_ET_INTERNAL,
 			LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL, LispNames.MAKE_ARRAY_ET_FP_INTERNAL,
 			LispNames.MAKE_BROADCAST_STREAM_INTERNAL, LispNames.WRITE_TO_STRING_KEYED_INTERNAL,
 			LispNames.BROADCAST_STREAM_CLASS, LispNames.BROADCAST_STREAM_COMPONENTS, LispNames.TWO_WAY_STREAM_CLASS,
@@ -451,11 +452,23 @@ public final class PackageRegistry {
 			"SPACE", "SPEED");
 
 	/**
+	 * The standard declaration identifiers (CLHS 3.3.3, {@code type} and {@code optimize}
+	 * aside, which their own categories hold): {@code cl}'s symbols in every package that
+	 * does not shadow them, so a declaration one package reads matches the identifier
+	 * another package's code dispatches on -- parse-declarations' EQL methods on
+	 * {@code ftype}, which serapeum's {@code fbind} reaches with a declaration read in
+	 * its own package.
+	 */
+	private static final Set<String> CL_DECLARATION_NAMES = Set.of("DECLARATION", "DYNAMIC-EXTENT", "FTYPE",
+			"IGNORABLE", "IGNORE", "INLINE", "NOTINLINE", "SPECIAL");
+
+	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of
 	 * the categorized sets above.
 	 */
 	private static final Set<String> CL_SYMBOLS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
-			CL_INTERNALS, CL_TYPES, CL_CONDITION_TYPES, CL_LAMBDA_LIST_KEYWORDS, CL_OPTIMIZE_NAMES);
+			CL_INTERNALS, CL_TYPES, CL_CONDITION_TYPES, CL_LAMBDA_LIST_KEYWORDS, CL_OPTIMIZE_NAMES,
+			CL_DECLARATION_NAMES);
 
 	/**
 	 * The standard names the {@code cl} package EXPORTS without implementing: CLHS
@@ -476,12 +489,11 @@ public final class PackageRegistry {
 	 * standard's own list, so neither direction can drift.
 	 */
 	private static final Set<String> CL_EXPORTED_ONLY = Set.of("*BREAK-ON-SIGNALS*", "BREAK", "CALL-METHOD",
-			"CALL-NEXT-METHOD", "COMPILER-MACRO", "DECLARATION", "DESCRIBE", "DESCRIBE-OBJECT", "DISASSEMBLE",
-			"DRIBBLE", "DYNAMIC-EXTENT", "ED", "FILE-AUTHOR", "FLOAT-PRECISION", "FORMATTER", "FTYPE",
-			"FUNCTION-KEYWORDS", "HASH-TABLE", "IGNORABLE", "IGNORE", "INLINE", "INSPECT",
+			"CALL-NEXT-METHOD", "COMPILER-MACRO", "DESCRIBE", "DESCRIBE-OBJECT", "DISASSEMBLE", "DRIBBLE", "ED",
+			"FILE-AUTHOR", "FLOAT-PRECISION", "FORMATTER", "FUNCTION-KEYWORDS", "HASH-TABLE", "INSPECT",
 			"INVOKE-RESTART-INTERACTIVELY", "KEYWORD", "LOOP-FINISH", "MAKE-METHOD", "NEXT-METHOD-P", "NIL",
-			"NO-APPLICABLE-METHOD", "NO-NEXT-METHOD", "NOTINLINE", "PPRINT-FILL", "PPRINT-LINEAR", "PPRINT-TABULAR",
-			"RESTART", "ROOM", "SPECIAL", "STANDARD", "STEP", "STRUCTURE-OBJECT", "SYMBOL", "T", "TRACE", "UNTRACE",
+			"NO-APPLICABLE-METHOD", "NO-NEXT-METHOD", "PPRINT-FILL", "PPRINT-LINEAR", "PPRINT-TABULAR", "RESTART",
+			"ROOM", "STANDARD", "STEP", "STRUCTURE-OBJECT", "SYMBOL", "T", "TRACE", "UNTRACE",
 			"UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
 
 	/**
@@ -515,8 +527,8 @@ public final class PackageRegistry {
 	 * exports without implementing.
 	 */
 	private static final Set<String> CL_EXTERNALS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
-			CL_TYPES, CL_CONDITION_TYPES, CL_LAMBDA_LIST_KEYWORDS, CL_OPTIMIZE_NAMES, CL_EXPORTED_ONLY,
-			CL_COMPOSITIONS);
+			CL_TYPES, CL_CONDITION_TYPES, CL_LAMBDA_LIST_KEYWORDS, CL_OPTIMIZE_NAMES, CL_DECLARATION_NAMES,
+			CL_EXPORTED_ONLY, CL_COMPOSITIONS);
 
 	/**
 	 * The functions exported by the {@code linalg} package (numpy-style vector/matrix
@@ -1144,6 +1156,9 @@ public final class PackageRegistry {
 		rontolispSymbols.add(LispNames.CONDITION_VARIABLE_NEW_INTERNAL);
 		rontolispSymbols.add(LispNames.CONDITION_WAIT_INTERNAL);
 		rontolispSymbols.add(LispNames.CONDITION_NOTIFY_INTERNAL);
+		// Internal: the subprocess behind uiop:run-program, spelled rontolisp::%... by
+		// its one call site (uiop-run-program.lisp).
+		rontolispSymbols.add(LispNames.RUN_PROGRAM_INTERNAL);
 		// Internal: the compare-and-swap behind the atomics arm, spelled rontolisp::%...
 		// by its call sites.
 		rontolispSymbols.add(LispNames.CONS_CAS_CAR_INTERNAL);

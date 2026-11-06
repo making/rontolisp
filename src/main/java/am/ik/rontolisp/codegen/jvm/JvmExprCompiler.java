@@ -657,6 +657,10 @@ final class JvmExprCompiler {
 					compileConditionVariable(qn.member(), cons, ctx, className);
 					return;
 				}
+				if (LispNames.RUN_PROGRAM_INTERNAL.equals(qn.member())) {
+					compileRunProgram(cons, ctx, className);
+					return;
+				}
 				if (JvmLispCompiler.INFLATE_METHODS.containsKey(qn.member())) {
 					// The streaming DEFLATE decoder of a compressed HTTP reply:
 					// runtime/RontoInflate, which travels with the class (the wasm
@@ -2633,6 +2637,26 @@ final class JvmExprCompiler {
 		}
 		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.CONDITION_VARIABLE_CLASS),
 				java.util.Objects.requireNonNull(JvmLispCompiler.CONDITION_VARIABLE_METHODS.get(member)), desc));
+	}
+
+	/**
+	 * Compiles {@code %run-program} onto {@code runtime/RontoProcess.run}, which travels
+	 * with the class: the five string arguments rendered from a character vector first (a
+	 * {@code format nil} result is one), the mode word as it is.
+	 */
+	private static void compileRunProgram(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> items = cons.toList();
+		if (items.size() != 7) {
+			throw new UnsupportedOperationException("%run-program expects 6 arguments, got " + (items.size() - 1));
+		}
+		for (int i = 1; i <= 6; i++) {
+			compileExpr(items.get(i), ctx, className);
+			if (i < 6) {
+				JvmArrayCompiler.emitStrvNormalize(ctx, className);
+			}
+		}
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.PROCESS_CLASS), "run",
+				"(" + "Ljava/lang/Object;".repeat(6) + ")Ljava/lang/Object;"));
 	}
 
 	/**

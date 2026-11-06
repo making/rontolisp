@@ -96,6 +96,7 @@ import am.ik.rontolisp.runtime.RontoCharFileWriter;
 import am.ik.rontolisp.runtime.RontoConditionVariable;
 import am.ik.rontolisp.runtime.RontoInflate;
 import am.ik.rontolisp.runtime.RontoIoFileStream;
+import am.ik.rontolisp.runtime.RontoProcess;
 import am.ik.rontolisp.runtime.RontoStringInputStream;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -3203,6 +3204,41 @@ public final class Environment implements Scope {
 		}));
 	}
 
+	/** {@code %run-program}: the exit code of the program it started and waited for. */
+	// RontoProcess.spawn takes null for "none"; the runtime package cannot import the
+	// annotation that would say so (it would travel with the class).
+	@SuppressWarnings("NullAway")
+	private static LispVal runProgram(List<LispVal> args) {
+		requireArgCount(LispNames.RUN_PROGRAM_INTERNAL, args, 6);
+		if (!(args.get(0) instanceof LispString argv) || !(args.get(5) instanceof LispInteger modes)) {
+			throw new LispEvalException(
+					LispNames.RUN_PROGRAM_INTERNAL + " expects the joined arguments and a mode word");
+		}
+		try {
+			return new LispInteger(RontoProcess.spawn(argv.value(), processPath(args.get(1)), processPath(args.get(2)),
+					processPath(args.get(3)), processPath(args.get(4)), (int) modes.value()));
+		}
+		catch (java.io.IOException ex) {
+			throw new LispEvalException(RontoProcess.failure(ex));
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+			throw new LispEvalException(RontoProcess.interrupted());
+		}
+	}
+
+	/** A {@code %run-program} path argument: a string, or nil for none. */
+	private static @Nullable String processPath(LispVal value) {
+		if (value instanceof LispString path) {
+			return path.value();
+		}
+		if (value instanceof LispNil) {
+			return null;
+		}
+		throw new LispEvalException(
+				LispNames.RUN_PROGRAM_INTERNAL + " expects a path string or nil, got " + value.print());
+	}
+
 	private static RontoConditionVariable requireConditionVariable(String fn, LispVal handle) {
 		if (handle instanceof LispJavaObject object && object.ref() instanceof RontoConditionVariable variable) {
 			return variable;
@@ -4066,6 +4102,12 @@ public final class Environment implements Scope {
 			String value = System.getenv(name.value());
 			return value == null ? LispNil.INSTANCE : new LispString(value);
 		}));
+		// %run-program: start a program, wait for it, answer its exit code -- the one
+		// spawn uiop:run-program (uiop-run-program.lisp) stands on, the JVM backend's
+		// shared with it (runtime/RontoProcess). Every stream is the null device, this
+		// process's own or a file; the Lisp side turns the rest into files.
+		String runProgramName = LispNames.RUN_PROGRAM_INTERNAL_QUALIFIED;
+		env.defineFunction(runProgramName, new LispFunction(runProgramName, Environment::runProgram));
 		// %target-machine-type: the ABI the running artifact targets, which is what
 		// machine-type answers (a per-backend CONSTANT, no host is consulted -- see
 		// .kb/time-environment-builtins.md). The interpreter runs on the JVM, so it

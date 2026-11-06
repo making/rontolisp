@@ -204,13 +204,33 @@ T
 | [**cl-sqlite**](https://common-lisp.net/project/cl-sqlite/) (`sqlite`) | **動きます。** `(ql:quickload "sqlite")` だけで本物のデータベースが手に入ります: `connect`、`execute-non-query`、`execute-to-list`、`execute-single`、`with-transaction`、手で進めるプリペアドステートメント。SQL エンジンを同梱しているわけではありません——あなたのマシンの `libsqlite3` がエンジンです。[`examples/jvm/cffi-sqlite.lisp`](https://github.com/making/rontolisp/blob/develop/examples/jvm/cffi-sqlite.lisp) を参照。インタプリタとネイティブバイナリで動きます。コンパイル済みクラスで動かない理由は下の `defcenum` の行を参照 |
 | **static-vectors** | **ロードできませんし、できるようにもなりません。** これは CFFI の利用者ではなく、2つめの処理系シームです。`.asd` は自分のリストに無い処理系を拒否し、その先では、ポインタを取れるメモリを記憶域に持つベクタを供給する処理系ごとのファイルが必要になります。ここにはそうした配列がありません。代わりに `cffi:foreign-alloc` で確保してください |
 | **cl+ssl** | **ロードでき、使える HTTPS クライアントになりました**。Quicklisp で最大級のバインディングの `defcvar`/`defcallback`/`defcstruct` の全面がここで動き、cl+ssl の Lisp BIO 経由で——ハンドシェイクの1オクテットごとに OpenSSL から Lisp へコールバックしながら——本物の TLS ハンドシェイクが完了し、`(cl+ssl:make-ssl-client-stream ...)` 越しに送った `GET https://example.com/` は、インタプリタでもネイティブバイナリでも本物の `HTTP/1.1 200 OK` 応答を読み戻せます。途中でぶつかった障害はどれ1つ CFFI 側ではありませんでした。最後の1つは、rontolisp のストリームが小さな整数と区別できなかったために cl+ssl の `(etypecase socket (integer …) (stream …))` という BIO 選択が誤った枝を選んでしまう、というものでした——ストリームが整数と表現を共有せず自分で分岐できるようにして解消しました。rontolisp 自身の TLS の上に載る同梱の [`cl+ssl` シム](asdf-systems.md#built-in-shim-systems) は、それでも既定のままです。マシンに OpenSSL が要らず、CFFI が決して動かない WASM コンポーネントバックエンドでも動くからです |
+| **osicat** | `java -jar` でもコンパイル済みクラスでも**動きます**。定数と構造体のレイアウトをヘッダから [grovel](#grovelling) し、Cのラッパーを自前のライブラリにコンパイルするので、`(osicat:file-kind "/tmp")`、`(osicat-posix:getpid)`、存在しないファイルの `stat` が `osicat-posix:enoent` をシグナルすること、のいずれもマシンが返すとおりに答えます |
+
+## grovel
+
+**grovel する**バインディング(`:defsystem-depends-on (:cffi-grovel)` と、
+`:cffi-grovel-file` / `:cffi-wrapper-file` のコンポーネント)は、小さなCプログラムを
+コンパイル・実行してプラットフォームの定数と構造体のレイアウトを読み、Cのラッパーを
+自前のライブラリにコンパイルすることもあります。上流の `cffi-grovel` がこれを無改変で、
+**あなたのマシンのCコンパイラ**(`$CC`、なければ `cc`)を `uiop:run-program` で実行して
+行います:
+
+- マシンにCコンパイラとCライブラリのヘッダが要ります。ない場合、そうしたシステムの
+  ロードは途中までではなく、探したコンパイラを名指しする一文で止まります。
+- 生成物は**grovel ファイルの隣**、システム自身のツリーに書かれ、元のファイルより
+  新しいうちは作り直されません。
+- コンパイルした `-o Prog.class` / `-o app.jar` は**コンパイル時に** grovel して結果を
+  持ち運び、できたプログラムはコンパイラを実行しません。ラッパーのライブラリは実行時に
+  コンパイルが書いた場所から開くので、そのプログラムはビルドしたマシンで動きます。
+  SBCL がダンプしたイメージと同じです。
+- `.wasm` へのコンパイルは何も作る前に止まります。grovel したバインディングはCを
+  呼び、どちらの WASM バックエンドもそれができないからです。
 
 ## 動かないもの
 
 | | |
 |---|---|
-| `cffi-grovel` | grovel はCプログラムをコンパイル・実行してプラットフォームのヘッダを読むため、ロード時にCツールチェインが要ります。`:defsystem-depends-on` でこれを挙げるシステムは、中途半端にロードせず**その理由を述べて拒否されます**。大半のバインディングは grovel しません |
-| `cffi-libffi` | こちらも拒否されます。理由は逆で、構造体の値渡しがすでに動く（上記）ので、追加する余地がありません |
+| `cffi-libffi` | 拒否されます。構造体の値渡しがすでに動く(上記)ので、追加する余地がありません |
 | `with-pointer-to-vector-data` | ピン留めではなく**コピーイン・コピーアウト**です。本体は新しい外部バッファを見ることになり、C側が書いた内容が Lisp のベクタへ届くのは本体を抜けたときで、その前ではありません。本体の外へ持ち出したポインタはダングリングです |
 | `:long-double` | ここでは外部型ではありません |
 

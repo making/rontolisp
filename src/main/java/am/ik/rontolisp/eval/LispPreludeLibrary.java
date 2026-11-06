@@ -2923,19 +2923,24 @@ public final class LispPreludeLibrary {
 						""");
 		// The uniqueness rule behind uiop:with-temporary-file: create the directory,
 		// then draw random names until one names nothing. Deliberately NOT seeded from
-		// the clock -- (random n) is the one entropy source every backend shares.
+		// the clock -- (random n) is the one entropy source every backend shares. The
+		// name is PREFIX, the draw, SUFFIX and .TYPE, inside DIR unless PREFIX is an
+		// absolute path itself (upstream's ensure-absolute-pathname of the prefix:
+		// cffi-toolchain names its temporary beside the file it stands for).
 		SOURCES.put(LispNames.TEMP_FILE_NAME, """
-				(defun %temp-file-name (%tfn-dir %tfn-prefix %tfn-type)
-				  (let ((%tfn-d (namestring (uiop/pathname:ensure-directory-pathname
-				                              (or %tfn-dir (uiop/stream:default-temporary-directory)))))
-				        (%tfn-p (or %tfn-prefix "tmp"))
-				        (%tfn-t (if %tfn-type (concatenate 'string "." %tfn-type) ""))
-				        (%tfn-n nil))
-				    (ensure-directories-exist %tfn-d)
+				(defun %temp-file-name (%tfn-dir %tfn-prefix %tfn-suffix %tfn-type)
+				  (let* ((%tfn-p (or %tfn-prefix "tmp"))
+				         (%tfn-d (if (and (plusp (length %tfn-p)) (char= (char %tfn-p 0) #\\/))
+				                     ""
+				                     (namestring (uiop/pathname:ensure-directory-pathname
+				                                  (or %tfn-dir (uiop/stream:default-temporary-directory))))))
+				         (%tfn-t (if %tfn-type (concatenate 'string "." %tfn-type) ""))
+				         (%tfn-n nil))
+				    (ensure-directories-exist (concatenate 'string %tfn-d %tfn-p))
 				    (do () (%tfn-n %tfn-n)
 				      (let ((%tfn-c (concatenate 'string %tfn-d %tfn-p
 				                                 (write-to-string (random 1000000000))
-				                                 %tfn-t)))
+				                                 (or %tfn-suffix "") %tfn-t)))
 				        (unless (probe-file %tfn-c) (setq %tfn-n %tfn-c))))))
 				""");
 		// The uiop/stream designator tables (.kb/uiop.md): upstream defines
@@ -4990,13 +4995,23 @@ public final class LispPreludeLibrary {
 				""");
 		// What calling a standard macro function does: the comment and the stray close
 		// parenthesis act here, every other one gives its character back and reads the
-		// datum it starts.
+		// datum it starts by STD's standard syntax -- a plain read would dispatch to
+		// whatever the current readtable installed under the character, a function that
+		// may be the one calling this (pythonic-string-reader's `"` falls back to the
+		// standard one). The read is %rt-read-as: the compiled backends' runtime read
+		// ignores *readtable*, and the interpreter serves a string stream under a
+		// non-standard one natively, reading that one character by STD.
 		SOURCES.put(LispNames.RT_CALL_STANDARD_INTERNAL, """
 				(defun %rt-call-standard (stream char std)
 				  (cond ((char= std #\\;) (read-line stream nil nil) (values))
 				        ((char= std #\\))
 				         (error 'reader-error :format-control "unmatched close parenthesis" :stream stream))
-				        (t (unread-char char stream) (read stream t nil t))))
+				        (t (unread-char char stream) (%rt-read-as stream std))))
+				""");
+		SOURCES.put(LispNames.RT_READ_AS_INTERNAL, """
+				(defun %rt-read-as (stream std)
+				  (declare (ignore std))
+				  (read-preserving-whitespace stream t nil t))
 				""");
 		// The standard dispatch table of #, made once: the CLHS 2.4.8 sub-characters plus
 		// the ones this reader adds (#f( #d( #L #N@). A standard sub-function cannot be

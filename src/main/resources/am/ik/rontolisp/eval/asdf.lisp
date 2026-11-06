@@ -670,6 +670,23 @@
 
 (defclass asdf:program-op (asdf:image-op) ())
 
+;; What cffi-toolchain reaches of the bundle operations besides: the internal
+;; link-op under bundle-op (cffi-toolchain imports it from asdf/bundle and
+;; specializes perform on it), and the pathname type of a bundle output, which
+;; names a groveller's object file and executable. Real ASDF's types, per OS.
+(defclass asdf/bundle::link-op (asdf:bundle-op) ())
+
+(defun asdf::bundle-pathname-type (bundle-type)
+  (etypecase bundle-type
+    ((or null string) bundle-type)
+    ((eql :no-output-file) (error "No output file, therefore no pathname type"))
+    ((eql :fasl) (uiop/lisp-build:compile-file-type))
+    ((eql :image) "image")
+    ((eql :object) "o")
+    ((member :lib :static-library) "a")
+    ((member :dll :shared-library) (if (uiop/os:os-macosx-p) "dylib" "so"))
+    ((eql :program) nil)))
+
 ;; class name -> its one instance: an operation is a singleton per class, as
 ;; real ASDF's make-operation answers it.
 (defvar %asdf-operations% nil)
@@ -944,10 +961,15 @@
   (format nil "~a on ~a" (class-name (class-of (%asdf-operation operation)))
           (asdf:component-name component)))
 
-;; One component's actions, in plan order.
+;; One component's actions, in plan order. Between prepare-op and compile-op
+;; come the actions an extension's class adds on the component itself (the
+;; %asdf-perform-build-actions seam: cffi-grovel's process-op, which writes the file
+;; the component's compile-op reads). An image performs them; a compiled program
+;; performs none, its build having done them.
 (defun %asdf-perform-component (system-name index)
   (let ((component (%asdf-planned-component system-name index)))
     (asdf:perform (asdf:make-operation 'asdf:prepare-op) component)
+    (%asdf-perform-build-actions component)
     (asdf:perform (asdf:make-operation 'asdf:compile-op) component)
     (asdf:perform (asdf:make-operation 'asdf:load-op) component)
     nil))

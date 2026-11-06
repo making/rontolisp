@@ -1345,6 +1345,12 @@ public final class LispNames {
 	/** The body of every standard macro function: what calling one does. */
 	public static final String RT_CALL_STANDARD_INTERNAL = "%RT-CALL-STANDARD";
 
+	/**
+	 * The read a standard macro function makes: its own character read by its standard
+	 * function, the interpreter's string-stream read in front of it.
+	 */
+	public static final String RT_READ_AS_INTERNAL = "%RT-READ-AS";
+
 	/** The memoized dispatching function of a user dispatch macro character. */
 	public static final String RT_DISPATCHER_INTERNAL = "%RT-DISPATCHER";
 
@@ -8534,6 +8540,18 @@ public final class LispNames {
 
 	/** The canonical spelling of {@code rontolisp::%condition-notify}. */
 	public static final String CONDITION_NOTIFY_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONDITION_NOTIFY_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%run-program} primitive behind
+	 * {@code uiop:run-program}: {@code (%run-program argv directory input output
+	 * error-output modes)} starts a program, waits for it and answers its exit code
+	 * ({@code runtime/RontoProcess}). Interpreter and JVM only: no WASM backend starts a
+	 * process, and uiop's definition there signals instead of calling this.
+	 */
+	public static final String RUN_PROGRAM_INTERNAL = "%RUN-PROGRAM";
+
+	/** The canonical spelling of {@code rontolisp::%run-program}. */
+	public static final String RUN_PROGRAM_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + RUN_PROGRAM_INTERNAL;
 
 	/**
 	 * The {@code rontolisp:current-file} read-time literal: the origin file of the source
