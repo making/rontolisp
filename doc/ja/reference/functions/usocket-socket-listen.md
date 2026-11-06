@@ -24,7 +24,8 @@ listen します。`port` が `usocket:*auto-port*`(`0`)なら空いている
 ## バックエンドごとの対応
 
 - **インタープリタ**と **JVM**: フル対応。
-- **WASM**: コンポーネントモードのみ。バインド失敗は `nil` を返します。
+- **WASM**: コンポーネントモードのみ。バインド失敗は `usocket:socket-error` を
+  通知します(`tcp-listen: cannot listen on H:P`、ホスト側の理由は含みません)。
   素の Preview 1 `.wasm` は呼び出し時にエラーを通知します。
 - **ネイティブ実行ファイル**(`--native`): インタープリタ/JVM と同じくフル対応
   -- バインド失敗は `usocket:socket-error` を通知します

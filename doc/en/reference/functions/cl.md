@@ -328,7 +328,7 @@ page.
 | `get-decoded-time` | `(get-decoded-time)` | the current time as the nine decoded values in the local zone |
 | `get-internal-real-time` | `(get-internal-real-time)` | elapsed real time in milliseconds (integer on every backend) |
 | `get-internal-run-time` | `(get-internal-run-time)` | consumed run time in milliseconds (integer on every backend) |
-| `sleep` | `(sleep 0.5)` | block for a non-negative number of seconds and return `nil` (a real host timer everywhere but WASM Preview 1, which busy-waits on the clock, and `--no-wasi`, which signals) |
+| `sleep` | `(sleep 0.5)` | block for a non-negative number of seconds and return `nil` (no CPU spent on any backend; `--no-wasi` signals) |
 | `lisp-implementation-type` `lisp-implementation-version` `software-type` `software-version` `machine-type` `machine-version` `machine-instance` `short-site-name` `long-site-name` | `(lisp-implementation-type)` | `"rontolisp"` — the environment enquiry constants: the version is the build's, `software-type` is `"Unix"`, `machine-type` is the ABI targeted (`"JVM"` / `"WASM32"`), and everything rontolisp cannot know is `nil` |
 | `user-homedir-pathname` | `(user-homedir-pathname)` | The `HOME` directory as a DIRECTORY pathname (trailing separator), or `nil` when the variable is unset |
 | `invoke-debugger` | `(invoke-debugger c)` | Signals the condition and never returns -- no backend has a debugger to enter |

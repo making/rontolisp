@@ -633,7 +633,11 @@ class WasmTreeShakerTest {
 		// NOBODY holds the only 'GIVEN, and nothing calls it: no symbol of that name can
 		// reach the ladder, so GIVEN shakes out with the row and the bytes of its name.
 		// Call NOBODY and all three come back. The same in a reactor whose program spells
-		// nothing live: every row goes, and with them _lookup's loop.
+		// nothing live: every row goes, and with them _lookup's loop. Its size is
+		// compared
+		// as a component, whose data sits above every funcId: on Preview 1 the lambda's
+		// funcId, which the two defuns shift, is an i32.const inside the string blob and
+		// keeps whichever string it lands in.
 		String live = "(defun h (x) x (* x 10)) (print (funcall (car (list 'h)) 3)) ";
 		String defs = "(defun given (x) x (* x 100)) (defun nobody () 'given) ";
 		byte[] unspelled = compile(live, false, OptimizeLevel.DEFAULT);
@@ -649,9 +653,9 @@ class WasmTreeShakerTest {
 		assertThat(contains(made, "GIVEN")).isTrue();
 		String reactor = "(defvar *f* (lambda (x) (+ x 1))) (defun e (x) (funcall *f* x)) "
 				+ "(rontolisp:wasm-export 'e :as \"e\" :params '(:s32) :returns :s32)";
-		byte[] noRow = compile(defs + reactor, true, OptimizeLevel.SIZE);
-		Module.parse(noRow).assertWellFormed();
-		assertThat(noRow.length).isEqualTo(compile(reactor, true, OptimizeLevel.SIZE).length);
+		Module.parse(compile(defs + reactor, true, OptimizeLevel.SIZE)).assertWellFormed();
+		assertThat(compileComponent(defs + reactor, OptimizeLevel.SIZE).length)
+			.isEqualTo(compileComponent(reactor, OptimizeLevel.SIZE).length);
 	}
 
 	@Test

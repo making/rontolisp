@@ -1231,6 +1231,13 @@ examples:
   - path: net/kv-server-tls.lisp
     backends: [jvm-compile]
     note: TLS is a compile error on WASM -- JVM/interpreter only
+  - path: net/dexador-client.lisp
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      unpatched dexador from Quicklisp against net/httpbin.lisp. Compile legs: the
+      run needs that server up, which no leg here starts. What they pin is that the
+      whole dexador load (usocket and cl+ssl shims, babel, chipz, quri, trivial-mimes,
+      cl-cookie) still lowers to a JVM class and to a component.
 
   # --- cloudflare-workers: a wasm-export handler driven by a JavaScript host ---
   - path: cloudflare-workers/hello/worker.lisp

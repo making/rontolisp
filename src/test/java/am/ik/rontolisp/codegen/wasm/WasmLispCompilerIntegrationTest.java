@@ -4689,11 +4689,10 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noWasiModuleRefusesToSleepInsteadOfSpinningForever() throws Exception {
-		// Preview 1 elapses a sleep by SPINNING on the clock (its nine imports carry no
-		// timer). A --no-wasi module has neither a timer nor a clock that can advance
-		// while a call runs -- only a host write moves it, and no host can write it from
-		// inside the call -- so the same spin would hang the instance rather than wait.
-		// It signals instead, which is catchable and immediate.
+		// Preview 1 waits in the host's poll_oneoff. A --no-wasi module has neither a
+		// timer nor a clock that can advance while a call runs -- only a host write moves
+		// it, and no host can write it from inside the call -- so a wait on its clock
+		// would hang the instance. It signals instead, which is catchable and immediate.
 		String program = """
 				(defun nap (n) (if (ignore-errors (progn (sleep n) t)) 1 0))
 				(rontolisp:wasm-export 'nap :params '(:int) :returns :int)
@@ -6815,17 +6814,29 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void sleepSpinsOnTheClockOnPreview1() throws Exception {
-		// Preview 1 imports a clock but no host timer, so sleep loops on
-		// get-internal-real-time -- the interval really elapses, which is what this
-		// checks. The component takes the wait.lisp timer instead (see
+	void sleepBlocksOnPollOneoffOnPreview1() throws Exception {
+		// Preview 1 waits in the host's poll_oneoff on a clock subscription: the
+		// interval elapses within the module's start-up fuel (~17 M), where spinning on
+		// the clock for 0.5 s burned over 100 M, so a regression to the spin runs out.
+		// The component takes the wait.lisp timer instead (see
 		// componentSleepUsesTheHostTimerInsteadOfSpinning).
-		assertThat(compileAndRun("""
+		String sleeper = """
 				(setq s (get-internal-real-time))
-				(sleep 0.05)
-				(print (if (>= (- (get-internal-real-time) s) 40) "slept" "too-fast"))
+				(sleep 0.5)
+				(print (if (>= (- (get-internal-real-time) s) 480) "slept" "too-fast"))
 				(print (sleep 0))
-				""")).isEqualTo("\"slept\"\nNIL");
+				(print (funcall #'sleep 0.01))
+				""";
+		assertThat(compileAndRunWithFuel(sleeper, 40_000_000L)).isEqualTo("\"slept\"\nNIL\nNIL");
+		// The import is appended only to a module that compiles a sleep, so every
+		// other module keeps its import section, even with nothing shaken.
+		WasmLispCompiler unshaken = WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).build();
+		assertThat(new String(unshaken.compile(LispReader.readAllFromString(sleeper)),
+				java.nio.charset.StandardCharsets.ISO_8859_1))
+			.contains("poll_oneoff");
+		assertThat(new String(unshaken.compile(LispReader.readAllFromString("(print (get-internal-real-time))")),
+				java.nio.charset.StandardCharsets.ISO_8859_1))
+			.doesNotContain("poll_oneoff");
 	}
 
 	@Test
@@ -17328,8 +17339,17 @@ class WasmLispCompilerIntegrationTest {
 					(print (handler-case (rontolisp:tls-upgrade 999 "h" :insecure t)
 					         (error () :insecure-signals)))
 					(print (rontolisp:tls-upgrade 999 "h"))
-					""".formatted(port, port);
-			byte[] componentBytes = compileFetchComponent(program);
+					(asdf:load-system "cl+ssl")
+					(print (handler-case
+					           (cl+ssl:make-ssl-client-stream (usocket:socket-connect "127.0.0.1" %d)
+					                                          :hostname "localhost")
+					         (error (e) (princ-to-string e))))
+					""".formatted(port, port, port);
+			byte[] componentBytes = WasmLispCompiler.builder()
+				.component(true)
+				.build()
+				.compile(am.ik.rontolisp.cli.CompileFrontendAccess.withSystemPath(program, List.of(), true, true)
+					.forms());
 			wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("tls-reject.component.wasm"));
 			return wasmtime.execInContainer("sh", "-c", """
 					cd %s || exit 1
@@ -17356,8 +17376,11 @@ class WasmLispCompilerIntegrationTest {
 		// tls-connect (tcp-connect + tls-upgrade) fails the same way. Line 3: a
 		// non-nil :insecure SIGNALS at run time (the draft has no verification
 		// knob; silently verifying would betray the caller). Line 4: a non-socket
-		// handle answers nil.
-		assertThat(result.getStdout().trim()).isEqualTo("NIL\nNIL\n:INSECURE-SIGNALS\nNIL");
+		// handle answers nil. Line 5: the cl+ssl shim turns that nil into the signal
+		// a client expects of make-ssl-client-stream (dexador took the nil for a
+		// stream and reconnected for ever).
+		assertThat(result.getStdout().trim()).isEqualTo("NIL\nNIL\n:INSECURE-SIGNALS\nNIL\n"
+				+ "\"tls-upgrade: cannot upgrade the stream to TLS against localhost\"");
 	}
 
 	@Test

@@ -447,17 +447,18 @@ public final class LispNames {
 	/**
 	 * The {@code sleep} built-in function: block for the given number of seconds (a
 	 * non-negative real; sub-second values are rounded to whole milliseconds) and return
-	 * nil. The interpreter and the JVM park the thread through {@link #SLEEP_MS}; both
-	 * WASM backends BUSY-WAIT on {@link #GET_INTERNAL_REAL_TIME} because no host timer is
-	 * importable there (see {@code .kb/time-environment-builtins.md}).
+	 * nil. The interpreter, the JVM and WASM Preview 1 wait through {@link #SLEEP_MS};
+	 * {@code --component} waits on a {@code wasi:clocks} timer and {@code --no-wasi}
+	 * signals (see {@code .kb/time-environment-builtins.md}).
 	 */
 	public static final String SLEEP = "SLEEP";
 
 	/**
-	 * The {@code %sleep-ms} internal primitive backing {@link #SLEEP} on the interpreter
-	 * and the JVM: park the current thread for a POSITIVE whole number of milliseconds.
-	 * The non-positive case is filtered out by the expansion, so the primitive itself
-	 * never has to decide what a zero or negative duration means.
+	 * The {@code %sleep-ms} internal primitive backing {@link #SLEEP} on the interpreter,
+	 * the JVM and WASM Preview 1: park the current thread (block in WASI
+	 * {@code poll_oneoff}) for a POSITIVE whole number of milliseconds. The non-positive
+	 * case is filtered out by the expansion, so the primitive itself never has to decide
+	 * what a zero or negative duration means.
 	 */
 	public static final String SLEEP_MS = "%SLEEP-MS";
 

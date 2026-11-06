@@ -2251,6 +2251,168 @@ final class WasmIoRuntimeBuilder {
 	}
 
 	/**
+	 * One clock {@code subscription} (48 bytes), its {@code event} (32) and the
+	 * {@code nevents} word: the block {@link #buildSleepMsBody} hands
+	 * {@code poll_oneoff}.
+	 */
+	private static final int POLL_SCRATCH_BYTES = 88;
+
+	/** WASI's {@code clockid::monotonic}. */
+	private static final int CLOCK_MONOTONIC = 1;
+
+	/** The largest millisecond count whose nanoseconds fit an i64. */
+	private static final long MAX_SLEEP_MS = Long.MAX_VALUE / 1_000_000L;
+
+	/**
+	 * Builds the _sleep_ms(ms) function body, Preview 1's {@code %sleep-ms}: blocks in
+	 * the injected {@code poll_oneoff} on a relative monotonic-clock subscription until
+	 * {@code ms} (a positive exact integer, the guard is {@code expandSleep}'s) have
+	 * elapsed, then answers nil. The wait is a loop on the monotonic clock around the
+	 * poll, so a host that wakes early -- or refuses the poll and returns at once -- is
+	 * polled again for the rest: the interval always elapses, at worst by spinning, the
+	 * shape every {@code sleep} had before the import. A count past what an i64 of
+	 * nanoseconds holds (a limb-tier integer included) waits the i64 maximum. The block
+	 * lands at {@code HEAP_PTR}, 8-aligned, advanced over the call and popped after it,
+	 * like {@link #buildTerminalPBody}'s {@code fdstat}.
+	 * @param pollOneoffFunc the placeholder index of the injected {@code poll_oneoff}
+	 * import
+	 * @return the function body bytes
+	 */
+	static byte[] buildSleepMsBody(int pollOneoffFunc) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: MS=0 (ref) ; i64 locals: NS=1, DEADLINE=2, NOW=3 ; i32 locals: OLD=4,
+		// BUF=5
+		w.write(2);
+		w.write(3);
+		w.write(Type.I64);
+		w.write(2);
+		w.write(Type.I32);
+		final int MS = 0, NS = 1, DEADLINE = 2, NOW = 3, OLD = 4, BUF = 5;
+
+		// ns = ms * 10^6, saturating at the i64 maximum
+		i64(w, Long.MAX_VALUE);
+		setLocal(w, NS);
+		getLocal(w, MS);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, MS);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+		setLocal(w, NOW);
+		getLocal(w, NOW);
+		i64(w, MAX_SLEEP_MS);
+		w.write(Instruction.I64_GT_S);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, NOW);
+		i64(w, 1_000_000L);
+		w.write(Instruction.I64_MUL);
+		setLocal(w, NS);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// deadline = now + ns, saturating at the u64 maximum
+		emitMonotonicNanos(w);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(NOW);
+		getLocal(w, NS);
+		w.write(Instruction.I64_ADD);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(DEADLINE);
+		getLocal(w, NOW);
+		w.write(Instruction.I64_LT_U);
+		w.write(Instruction.IF, 0x40);
+		i64(w, -1L);
+		setLocal(w, DEADLINE);
+		w.write(Instruction.END);
+		// buf = align8(HEAP_PTR); HEAP_PTR = buf + 88, the memory grown to cover it
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OLD);
+		getLocal(w, OLD);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, BUF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, BUF);
+			i32(w, POLL_SCRATCH_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, BUF);
+		i32(w, POLL_SCRATCH_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// the subscription: userdata 0, tag clock (0), clock id monotonic, precision 0,
+		// flags 0 (a relative timeout); the timeout is written per poll
+		storeI64At(w, BUF, 0, 0L);
+		storeI64At(w, BUF, 8, 0L);
+		storeI64At(w, BUF, 16, CLOCK_MONOTONIC);
+		storeI64At(w, BUF, 32, 0L);
+		storeI64At(w, BUF, 40, 0L);
+		// loop: now = clock; until now >= deadline, poll for deadline - now
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		emitMonotonicNanos(w);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(NOW);
+		getLocal(w, DEADLINE);
+		w.write(Instruction.I64_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		getLocal(w, BUF);
+		getLocal(w, DEADLINE);
+		getLocal(w, NOW);
+		w.write(Instruction.I64_SUB);
+		w.write(Instruction.I64_STORE, 0x03, 24);
+		// poll_oneoff(in = buf, out = buf + 48, nsubscriptions = 1, nevents = buf + 80)
+		getLocal(w, BUF);
+		getLocal(w, BUF);
+		i32(w, 48);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		getLocal(w, BUF);
+		i32(w, 80);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(pollOneoffFunc);
+		w.write(Instruction.DROP);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// pop HEAP_PTR
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OLD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		emitNil(w);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// Leaves the monotonic clock's nanoseconds on the stack: clock_time_get(monotonic,
+	// precision 1, TIME_SCRATCH_ADDR), then the i64 it wrote.
+	private static void emitMonotonicNanos(WasmWriter w) {
+		i32(w, CLOCK_MONOTONIC);
+		i64(w, 1L);
+		i32(w, WasmLispCompiler.TIME_SCRATCH_ADDR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_CLOCK_TIME_GET);
+		w.write(Instruction.DROP);
+		i32(w, WasmLispCompiler.TIME_SCRATCH_ADDR);
+		w.write(Instruction.I64_LOAD, 0x03, 0x00);
+	}
+
+	// mem64[local + offset] = value
+	private static void storeI64At(WasmWriter w, int local, int offset, long value) {
+		getLocal(w, local);
+		i64(w, value);
+		w.write(Instruction.I64_STORE, 0x03);
+		w.writeUnsignedLeb128(offset);
+	}
+
+	/**
 	 * Builds the _file_write_date(path) function body: the universal time the named file
 	 * was last written, as an exact integer, or {@code ref.null eq} (nil) when it cannot
 	 * be told -- a missing file, a host that refuses the stat, or a host that reports no
@@ -3558,9 +3720,8 @@ final class WasmIoRuntimeBuilder {
 	 * advance calls the setter again -- per request is the natural rhythm, next to the
 	 * seed hook in every {@code examples/cloudflare-workers/*}{@code /src/index.js}.
 	 * Nothing inside the module can move it, which is why {@code sleep} SIGNALS on
-	 * {@code --no-wasi} instead of spinning on the clock the way Preview 1 does: with no
-	 * timer to park on and no clock that can advance while a call is running, the spin
-	 * could never end.
+	 * {@code --no-wasi} instead of waiting the way Preview 1 does: with no timer to park
+	 * on and no clock that can advance while a call is running, a wait could never end.
 	 *
 	 * <p>
 	 * Core-module shape only ({@code --no-wasi} without {@code --component}), for the

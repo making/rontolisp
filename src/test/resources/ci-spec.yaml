@@ -40342,3 +40342,36 @@ standalone:
       12
       :CAUGHT
       :CAUGHT-TEXT
+  - name: cl-ssl-shim-verify-context-and-refusals
+    source: |
+      ;; Standalone: loading cl+ssl splices the client TLS layer, which makes the
+      ;; component import wasi:tls (its run gets -S tls=y) -- a cost no corpus case pays.
+      ;; The cl+ssl shim's own contract, which dexador's https:// branch rides: a
+      ;; context is its verify mode, with-global-context installs it, and
+      ;; ssl-check-verify-p -- make-ssl-client-stream's :verify default -- reads it back,
+      ;; so dex:*not-verify-ssl* reaches tls-upgrade's :insecure. What has no backing
+      ;; signals before any socket is touched, on every backend.
+      (asdf:load-system "cl+ssl")
+      (defun ssl-refusal (thunk)
+        (handler-case (progn (funcall thunk) :accepted)
+          (error (e) (princ-to-string e))))
+      (print (cl+ssl:ensure-initialized))
+      (print (list (cl+ssl:ssl-check-verify-p)
+                   (cl+ssl:with-global-context
+                       ((cl+ssl:make-context :verify-mode cl+ssl:+ssl-verify-none+) :auto-free-p t)
+                     (cl+ssl:ssl-check-verify-p))
+                   (cl+ssl:with-global-context ((cl+ssl:make-context))
+                     (cl+ssl:ssl-check-verify-p))
+                   (cl+ssl:with-global-context ((cl+ssl:make-context :verify-location :default))
+                     (cl+ssl:ssl-check-verify-p))))
+      (print (ssl-refusal (lambda () (cl+ssl:make-ssl-client-stream 99 :hostname "h" :key "k.pem"))))
+      (print (ssl-refusal (lambda () (cl+ssl:make-ssl-client-stream 99))))
+      (print (ssl-refusal (lambda () (cl+ssl:use-certificate-chain-file "c.pem"))))
+      (print (ssl-refusal (lambda () (cl+ssl:make-context :verify-location "/etc/ssl/certs"))))
+    stdout: |
+      T
+      (T NIL T T)
+      "cl+ssl:make-ssl-client-stream: client certificates (:key/:certificate/:password) are not supported (rontolisp:tls-upgrade has no client-identity support)"
+      "cl+ssl:make-ssl-client-stream: :hostname is required (the name the server certificate is verified against, and the SNI sent)"
+      "cl+ssl:use-certificate-chain-file: client certificates are not supported (rontolisp:tls-upgrade has no client-identity support)"
+      "cl+ssl:make-context: :verify-location has no backing here; point the javax.net.ssl.trustStore system properties at your trust store instead (they are re-read on every connection)"

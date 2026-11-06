@@ -27,7 +27,9 @@ import, the `_argv` helper's `args_sizes_get`/`args_get` pair (`WasmArgvRuntimeB
 [[uiop]]), `file-position`'s host call (`--component`'s `file_position_get`/`_set` pair, or
 Preview 1's `fd_seek`, [[read-load-streams]]) and `path_filestat_get` / `path_remove_directory`
 / `path_readlink` behind `file-write-date` / `%delete-file` / `%read-link` (same name and shape
-on both WASI backends, the adapter's over `stat-at` / `remove-directory-at` / `readlink-at`) are
+on both WASI backends, the adapter's over `stat-at` / `remove-directory-at` / `readlink-at`),
+`fd_fdstat_get` behind `%terminal-p` and Preview 1's `poll_oneoff` behind `sleep`
+([[time-environment-builtins]]) are
 appended to `hostImports` LAST, after the
 directive-declared slots, so a program that also writes `rontolisp:wasm-import` keeps its
 ordinals and bytes.

@@ -61,9 +61,9 @@ identically everywhere. Without a time zone they work in the local one, and so d
 [the local time zone](#the-local-time-zone) below.
 
 Waiting is the clock's other half. [`sleep`](../reference/functions/sleep.md) parks
-the thread on the interpreter and the JVM, waits on the real host timer under
-`--component` (costing no CPU), and busy-waits on the clock on WASM Preview 1,
-whose imports include a clock but no timer. On `--no-wasi` it signals — see below.
+the thread on the interpreter and the JVM, blocks in WASI `poll_oneoff` on WASM
+Preview 1 and `--native`, and waits on the real host timer under `--component`,
+none of them costing CPU. On `--no-wasi` it signals — see below.
 
 ## The local time zone
 
