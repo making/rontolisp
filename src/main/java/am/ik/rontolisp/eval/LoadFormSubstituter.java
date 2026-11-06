@@ -1,10 +1,15 @@
 package am.ik.rontolisp.eval;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
+import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispNames;
@@ -31,7 +36,8 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * A type nobody wrote a method for is left alone: rontolisp's built-in default for an
  * instance literal is the structural dump the quote compilers implement, which is the
- * same form {@code make-load-form-saving-slots} spells. See
+ * same form {@code make-load-form-saving-slots} spells -- so an object whose method
+ * answers that form, holding only such objects, is left alone too. See
  * {@code .kb/make-load-form.md}.
  */
 final class LoadFormSubstituter {
@@ -85,6 +91,15 @@ final class LoadFormSubstituter {
 
 		/** Memo so one object dumped twice in a form yields one creation form. */
 		private final Map<LispInstance, LispVal> done = new IdentityHashMap<>();
+
+		/** Whether each object judged so far stays a literal ({@link #staysLiteral}). */
+		private final Map<LispInstance, Boolean> literal = new IdentityHashMap<>();
+
+		/** The objects being judged, whose verdict a cycle back to them cannot use. */
+		private final Map<LispInstance, Boolean> judging = new IdentityHashMap<>();
+
+		/** Each object's make-load-form values, asked once. */
+		private final Map<LispInstance, Optional<List<LispVal>>> asked = new IdentityHashMap<>();
 
 		private int counter;
 
@@ -178,9 +193,12 @@ final class LoadFormSubstituter {
 				throw new IllegalStateException(LispNames.MAKE_LOAD_FORM + " of " + instance.layout().printName()
 						+ " reaches the object itself: a circular creation form cannot be dumped");
 			}
+			if (staysLiteral(instance)) {
+				return null;
+			}
 			this.inProgress.put(instance, Boolean.TRUE);
 			try {
-				List<LispVal> values = this.macroEval.makeLoadFormValues(instance);
+				List<LispVal> values = values(instance);
 				if (values == null || values.isEmpty()) {
 					return null;
 				}
@@ -194,6 +212,87 @@ final class LoadFormSubstituter {
 			finally {
 				this.inProgress.remove(instance);
 			}
+		}
+
+		/** The object's make-load-form values, or null when no method covers its type. */
+		@Nullable private List<LispVal> values(LispInstance instance) {
+			Optional<List<LispVal>> known = this.asked.get(instance);
+			if (known == null) {
+				known = Optional.ofNullable(this.macroEval.makeLoadFormValues(instance));
+				this.asked.put(instance, known);
+			}
+			return known.orElse(null);
+		}
+
+		/**
+		 * Whether an object stays the literal it is: no method covers its type, or its
+		 * method answers exactly the structural dump the quote compilers build
+		 * ({@code make-load-form-saving-slots}) and so does every object its slots reach.
+		 * The quote compilers build such an object where it stands, the objects it holds
+		 * inline and a node two literals reach once ({@code QuotedSharing}), with no
+		 * load-time value of its own: coalton's environment updates carry a million of
+		 * them. A cycle back to an object being judged answers no: its creation form
+		 * reports the cycle, as before.
+		 */
+		private boolean staysLiteral(LispInstance instance) {
+			Boolean known = this.literal.get(instance);
+			if (known != null) {
+				return known;
+			}
+			if (this.judging.containsKey(instance)) {
+				return false;
+			}
+			this.judging.put(instance, Boolean.TRUE);
+			boolean stays;
+			try {
+				List<LispVal> values = values(instance);
+				stays = values == null || savesSlots(instance, values) && holdsOnlyLiterals(instance);
+			}
+			finally {
+				this.judging.remove(instance);
+			}
+			this.literal.put(instance, stays);
+			return stays;
+		}
+
+		/** Whether every object an instance's slots reach stays a literal. */
+		private boolean holdsOnlyLiterals(LispInstance instance) {
+			Set<LispVal> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+			ArrayDeque<LispVal> pending = new ArrayDeque<>();
+			for (int i = 0; i < instance.slotCount(); i++) {
+				LispVal slot = instance.slot(i);
+				if (slot != null) {
+					pending.push(slot);
+				}
+			}
+			while (!pending.isEmpty()) {
+				LispVal value = pending.pop();
+				switch (value) {
+					case LispInstance held -> {
+						if (!staysLiteral(held)) {
+							return false;
+						}
+					}
+					case LispCons cons -> {
+						if (seen.add(cons)) {
+							pending.push(cons.cdr());
+							pending.push(cons.car());
+						}
+					}
+					case LispArray array -> {
+						if (seen.add(array)) {
+							for (LispVal element : array.data()) {
+								if (element != null) {
+									pending.push(element);
+								}
+							}
+						}
+					}
+					default -> {
+					}
+				}
+			}
+			return true;
 		}
 
 		/**
@@ -217,6 +316,42 @@ final class LoadFormSubstituter {
 			}, car -> replaceObject(car, instance, name));
 		}
 
+	}
+
+	/**
+	 * Whether make-load-form values are the structural dump of the instance itself, the
+	 * one form {@code make-load-form-saving-slots} answers:
+	 * {@code (%obj-new 'TAG 'S0 ...)} over the instance's own tag and slots, by identity,
+	 * and no init form.
+	 */
+	private static boolean savesSlots(LispInstance instance, List<LispVal> values) {
+		if (values.size() > 1 && !(values.get(1) instanceof LispNil)) {
+			return false;
+		}
+		if (!(values.get(0) instanceof LispCons form) || !form.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = form.toList();
+		if (parts.size() != instance.slotCount() + 2 || !(parts.get(0) instanceof LispSymbol op)
+				|| !LispNames.OBJ_NEW.equals(memberName(op.name()))
+				|| !(quotedDatum(parts.get(1)) instanceof LispSymbol tag)
+				|| !tag.name().equals(instance.layout().tag())) {
+			return false;
+		}
+		for (int i = 0; i < instance.slotCount(); i++) {
+			LispVal datum = quotedDatum(parts.get(i + 2));
+			if (datum == null || datum != instance.slot(i)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** What a {@code (quote datum)} form quotes, or null for any other form. */
+	private static @Nullable LispVal quotedDatum(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.QUOTE.equals(memberName(op.name())) && cons.cdr() instanceof LispCons rest
+				&& rest.cdr() instanceof LispNil ? rest.car() : null;
 	}
 
 	private static LispVal quoted(LispVal datum) {

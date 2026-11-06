@@ -102,12 +102,13 @@ public final class FreeVarAnalyzer {
 		Set<String> globalsMinusLexicals = globals;
 		Set<String> specialsMinusLexicals = SPECIAL_NAMES;
 		if (!enclosingLexicals.isEmpty()) {
-			functionsMinusLexicals = new HashSet<>(knownFunctions);
-			functionsMinusLexicals.removeAll(enclosingLexicals);
-			globalsMinusLexicals = new HashSet<>(globals);
-			globalsMinusLexicals.removeAll(enclosingLexicals);
-			specialsMinusLexicals = new HashSet<>(SPECIAL_NAMES);
-			specialsMinusLexicals.removeAll(enclosingLexicals);
+			// Views, not copies: a backend asks once per lambda, and a copy of the
+			// program's function and global tables per lambda made the compile quadratic
+			// in the program (coalton's whole library: tens of thousands of names, a
+			// lambda for nearly every one).
+			functionsMinusLexicals = new Without(knownFunctions, enclosingLexicals);
+			globalsMinusLexicals = new Without(globals, enclosingLexicals);
+			specialsMinusLexicals = new Without(SPECIAL_NAMES, enclosingLexicals);
 		}
 		LinkedHashSet<String> freeVars = new LinkedHashSet<>();
 		for (LispVal expr : body) {
@@ -165,6 +166,38 @@ public final class FreeVarAnalyzer {
 		final java.util.IdentityHashMap<LispCons, List<String>> outside = new java.util.IdentityHashMap<>();
 
 		final java.util.IdentityHashMap<LispCons, List<String>> inside = new java.util.IdentityHashMap<>();
+
+	}
+
+	/**
+	 * A set without the members of another, as a view: membership is all the walk asks of
+	 * the exclusion sets.
+	 */
+	private static final class Without extends java.util.AbstractSet<String> {
+
+		private final Set<String> base;
+
+		private final Set<String> removed;
+
+		Without(Set<String> base, Set<String> removed) {
+			this.base = base;
+			this.removed = removed;
+		}
+
+		@Override
+		public boolean contains(Object name) {
+			return this.base.contains(name) && !this.removed.contains(name);
+		}
+
+		@Override
+		public java.util.Iterator<String> iterator() {
+			return this.base.stream().filter(name -> !this.removed.contains(name)).iterator();
+		}
+
+		@Override
+		public int size() {
+			return (int) this.base.stream().filter(name -> !this.removed.contains(name)).count();
+		}
 
 	}
 

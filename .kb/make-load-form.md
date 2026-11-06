@@ -23,15 +23,26 @@ at the end of it -- a form reaches `result` by several routes (kept `eval-when` 
   with the first method or the first call / `#'make-load-form`): an instance signals SBCL's
   `don't know how to dump ~S (default MAKE-LOAD-FORM method called).`, anything else
   no-applicable-method. The substituter never reaches it (below).
-- `LoadFormSubstituter` acts only on an instance whose type has a method
-  (`LispEvaluator.hasMakeLoadFormMethodFor`: CLASS/TYPE specializer matching the type's own name, its
-  class precedence list, or its `:include` chain; **an unspecialized default method does NOT count**
-  -- it would claim every instance). Everything else the quote compilers dump by structure, which IS
+- `LoadFormSubstituter` acts only on an instance whose type a method's CLASS/TYPE specializer covers
+  as the dispatcher tests it (`LispEvaluator.hasMakeLoadFormMethodFor`): the instance's tag among the
+  specializer class's and its descendants' tags, or its struct's and `:include` descendants'; **an
+  unspecialized default method does NOT count** -- it would claim every instance. Not by name
+  (2026-11-06): the package-stripped names it compared made coalton's `Pathname` class
+  (`coalton-library/file::pathname`, which has a method) claim every `cl:pathname` literal (fset's
+  tests, eclector), and the default method signalled `don't know how to dump #P"."` at the end of the
+  library's macro-time pass. Everything else the quote compilers dump by structure, which IS
   rontolisp's built-in default, written in Java: every `#S(...)` literal travels unchanged on every
   backend.
 - `make-load-form-saving-slots` (prelude defun) spells that answer as data --
   `(%obj-new '<tag> 'v1 ... 'vn)` over `%obj-tag` / `%obj-slots`. Lite: `:slot-names` ignored (every
   slot travels); the object is rebuilt, not allocated-then-filled, so no self-reference.
+- **A method answering that form leaves the object a literal** (2026-11-06,
+  `LoadFormSubstituter.staysLiteral`): its tag, its slots by identity and no init form, and every
+  object its slots reach staying a literal too. The quote compilers then build the graph where it
+  stands, a node two literals reach once (`QuotedSharing`). Before, each such object took a
+  `load-time-value` of its own, nested ones inside their parent's: 1.2 million for coalton's library,
+  whose environment updates carry types, schemes and entries that all save their slots. A cycle among
+  them still takes the creation-form path, which reports it.
 - An object with an unspellable slot and NO method still fails with `Cannot quote: ...` -- the signal
   that the type wants a method.
 
@@ -39,8 +50,8 @@ at the end of it -- a form reaches `result` by several routes (kept `eval-when` 
 
 `(make-load-form obj)` runs in the macro-time evaluator; the object becomes
 `(load-time-value <creation-form>)`, so the creation form runs ONCE at load time and every reference
-shares the object. `hoistLoadTimeValues` turns it into a `%LOAD-TIME-VALUE-N` slot filled on first
-use (`.kb/compiler-macros.md`).
+shares the object. `hoistLoadTimeValues` turns it into a slot of `%LOAD-TIME-VALUE-SLOTS` filled on
+first use (`.kb/compiler-macros.md`).
 
 - **init form** (the method's 2nd value):
   `(let ((%LOAD-FORM-OBJECT-1 <creation>)) <init> %LOAD-FORM-OBJECT-1)`. Every occurrence of that same
@@ -50,8 +61,12 @@ use (`.kb/compiler-macros.md`).
 - **inside a quoted constant**: `quote` is not descended into (its argument is data), but a constant
   CONTAINING such an object is rebuilt through `cons` and wrapped in `load-time-value`. Only the cons
   spine is rebuilt -- an object buried in a quoted ARRAY or hash table still fails the compile.
-- One object dumped twice in a top-level form yields one creation form (identity-memoized); a program
-  with no method pays one registry lookup, the walk never starts.
+- One object dumped twice in a top-level form yields one creation form (identity-memoized) and one
+  slot (2026-11-06): the hoist keys an occurrence by identity, and the backends' resolver resolves a
+  `load-time-value` form once per package region (`PackageResolver.loadTimeValueCopies`), as it does a
+  quoted datum. Before, each place took a slot and the two were two objects (ci-spec
+  `make-load-form-literal-object`'s `eq`s answered NIL on the compile paths). A program with no method
+  pays one registry lookup, the walk never starts.
 - **What the substitution writes is read again by the backends' resolver** in the package the form
   sits in (2026-11-06, coalton). The `cons`/`let`/`load-time-value`/`quote` it writes are the reader's
   own (`ReaderSymbols`), which the resolver leaves alone: a bare `cons` in a coalton package was

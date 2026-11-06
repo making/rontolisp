@@ -148,14 +148,22 @@ class AstOutlinerTest {
 	}
 
 	@Test
-	void aTopLevelCallWithSmallArgumentsIsLeftWhole() {
+	void aTopLevelFormOfSmallPartsIsLeftWholeUnlessItIsARunOfStatements() {
 		// Each argument below the smallest piece worth a method: wrapping one would
-		// cost more than it buys, so the form is left whole and no budget asks for a
-		// re-compile.
+		// cost more than it buys, so the call is left whole and no budget asks for a
+		// re-compile. A let of small statements has nothing to cut inside either, but its
+		// body is a run the tail-spine splitter cuts once the form is a method body of
+		// its
+		// own (coalton's environment updates, a statement each in one let).
 		List<LispVal> program = topProgram("(print (opaque " + statement(0) + " " + statement(1) + "))");
 		AstOutliner.Result cut = AstOutliner.outlineTopLevel(program, Map.of(0, new AstOutliner.Budget(70000, 24000)));
 		assertThat(cut.outlinedTop()).isEmpty();
 		assertThat(cut.nextTopBudget(0, 70000, null, 24000, 8000)).isNull();
+		AstOutliner.Result run = AstOutliner.outlineTopLevel(
+				topProgram("(let ((acc 0)) " + statement(0) + " " + statement(1) + " (print acc))"),
+				Map.of(0, new AstOutliner.Budget(70000, 24000)));
+		assertThat(run.outlinedTop()).containsExactly(0);
+		assertThat(run.program().get(0).print()).startsWith("(LET ((|__outlined_0| (LAMBDA NIL (LET ((ACC 0))");
 	}
 
 	@Test

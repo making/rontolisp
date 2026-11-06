@@ -416,6 +416,14 @@ qualified spelling's member only when no class holds the exact spelling. `subtyp
 shortcut (`SubtypepName.namesAnotherTypeThan`) reads the same: two registered types of one member
 are unrelated, a two-class or two-struct pair included. ci-spec
 `defclass-and-defstruct-of-one-name-in-two-packages`, `ClosRegistryTest`.
+**A built-in class's name is cl's** (2026-11-06): no tolerance hands a bare or `cl:` built-in class
+name (`BUILTIN_CLASS_NAMES`, `FIND_CLASS_ONLY_CLASS_NAMES`) another package's class of the member
+(`ClosRegistry.namesBuiltinClass`), and `%class-meta-table%` lists no bare member for such a class.
+Coalton defines `Pathname`, `Vector` and `Symbol` classes in its own packages; `(find-class
+'pathname)` answered coalton's on all four, and the compiled `class-of` of a pathname too. A type
+test of a qualified name a class holds exactly is that class's (`makeTypeTest`), where the member's
+standard type had answered: `(typep (make-instance 'p::pathname) 'p::pathname)` was NIL. ci-spec
+`make-load-form-literal-object`.
 A miss consults `classMissLoader` before answering null, then repeats the lookup once: the
 interpreter installs one loading gray.lisp for a Gray base-class member name
 (`.kb/gray-streams.md`, "Interpreter dispatch"); the compile paths install none. A probe

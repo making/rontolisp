@@ -4197,6 +4197,14 @@ class JvmLispCompilerTest {
 			sb.append("    (list 'branch-").append(b).append(" k)))\n");
 		}
 		sb.append("  (otherwise (list 'other k))))\n");
+		// A top-level let whose body is a run of small statements has no branch or
+		// argument to cut: the form becomes a method whose run the tail-spine splitter
+		// cuts (coalton's environment updates, a statement each in one let).
+		sb.append("(let ((r 0))\n");
+		for (int i = 0; i < 6000; i++) {
+			sb.append("  (setq r (+ r (car (list ").append(i % 7).append(" 0))))\n");
+		}
+		sb.append("  (print r))\n");
 		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(sb.toString()));
 		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
@@ -4210,7 +4218,7 @@ class JvmLispCompilerTest {
 		// The source builds no closure of its own, so a lambda method in the class is
 		// one the outlining introduced for a branch.
 		assertThat(sizes.keySet()).as("a branch became a method of its own").anyMatch(n -> n.startsWith("_lambda_"));
-		assertThat(compileAndRun(forms)).isEqualTo("(BRANCH-3 2239603)");
+		assertThat(compileAndRun(forms)).isEqualTo("(BRANCH-3 2239603)\n17997");
 	}
 
 	@Test

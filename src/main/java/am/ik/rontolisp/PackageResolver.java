@@ -138,6 +138,17 @@ public final class PackageResolver {
 	private int datumCopiesHeld;
 
 	/**
+	 * What the {@code load-time-value} forms resolved so far became, under the same
+	 * package and lifetime as {@link #datumCopies}: one occurrence spliced into two
+	 * places stays one form, which the compilers' hoist gives one slot (the one form
+	 * {@code LoadFormSubstituter} writes for an object a form holds twice is one object,
+	 * CLHS 3.2.4.4).
+	 */
+	private final Map<LispCons, LispVal> loadTimeValueCopies = new IdentityHashMap<>();
+
+	private @Nullable String loadTimeValueCopiesPackage;
+
+	/**
 	 * Whether a name this resolver mints while reading source joins the member table of
 	 * its home package -- CL's reader interning what it reads (see {@link #mint}). Set
 	 * for the resolver of a live image ({@link #recordingReadSymbols}): the interpreter
@@ -586,8 +597,9 @@ public final class PackageResolver {
 	}
 
 	private void releaseDatumCopies() {
-		if (--this.datumCopiesHeld == 0 && !this.datumCopies.isEmpty()) {
+		if (--this.datumCopiesHeld == 0) {
 			this.datumCopies.clear();
+			this.loadTimeValueCopies.clear();
 		}
 	}
 
@@ -2774,6 +2786,24 @@ public final class PackageResolver {
 	}
 
 	private LispVal resolveCons(LispCons cons) {
+		if (this.datumCopiesHeld > 0 && !this.inMacroDefinition && !this.resolvingDatum && !this.probing
+				&& cons.car() instanceof LispSymbol head && LispNames.LOAD_TIME_VALUE.equals(operatorMember(head))) {
+			String current = current();
+			if (!current.equals(this.loadTimeValueCopiesPackage)) {
+				this.loadTimeValueCopies.clear();
+				this.loadTimeValueCopiesPackage = current;
+			}
+			LispVal known = this.loadTimeValueCopies.get(cons);
+			if (known == null) {
+				known = resolveOperatorForm(cons);
+				this.loadTimeValueCopies.put(cons, known);
+			}
+			return known;
+		}
+		return resolveOperatorForm(cons);
+	}
+
+	private LispVal resolveOperatorForm(LispCons cons) {
 		if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(operatorMember(op))
 				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
 			// Only the well-formed (quote DATUM) shape is the special form; a

@@ -1064,20 +1064,41 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
     image ([readtables.md](readtables.md), "The compile paths' read") runs coalton's `(` reader macro, which
     typechecks every library `coalton-toplevel` where it reads it, and the macro-time pass replays the generated
     code, whose environment updates build `*global-environment*` for the program's own `coalton` macros. So the
-    library's hour on the interpreter is the compile's too (`.todo/i75`). What stopped it within a minute, each
-    general: eclector's methods under a top-level `flet` ([clos.md](clos.md)); the image's ASDF knowing no system
-    (coalton's eclector probe, `CST:RAW on SYMBOL`); a `%class-PKG::NAME` tag and a bare `cons` in what
-    `make-load-form` writes ([make-load-form.md](make-load-form.md)); `:direction ':output`
-    ([uiop.md](uiop.md)); fset's `let` in the Gray `format` rewrite ([gray-streams.md](gray-streams.md));
-    coalton-impl/entry's own `compile` keeping `cl:compile` out ([packages.md](packages.md)); a celled tail call's
-    depth ([jvm-tail-bounce.md](jvm-tail-bounce.md)); and a user file's `coalton-toplevel` read only in the
-    image, its definitions missing where its `coalton` forms expanded (`ReaderMacroReads`).
-    Checked against the library's first five files as `coalton/library` (a stand-in `.asd`, the derived forms
-    key on the name): a program with a parameterized `define-type`, `match`, `define-class`/`define-instance`
-    with a superclass constraint and a `Semigroup` instance prints what the interpreter and SBCL print on P1 and
-    the component, with coalton's readtable and without; 256-272 s per compile on a box under load 10-30, 39 MB
-    modules. The JVM stops at fset's `compare`: under the generic-function protocol its dispatcher is past the
-    method limit (`.todo/i77`). The whole library on the compile paths: `.todo/i73`.
+    library's 40 minutes on the interpreter (above) are the compile's too: the image reads the library in
+    2000-2250 s and the pass replays it in 280-300 s more (box under load 10-50), dearest in the math files
+    (`integral.lisp` 62 s, `conversions.lisp` 37 s), whose macros expand to `coalton-toplevel` forms the pass
+    expands, and so typechecks, again. What stopped it within a minute, each general: eclector's methods under a
+    top-level `flet` ([clos.md](clos.md)); the image's ASDF knowing no system (coalton's eclector probe, `CST:RAW
+    on SYMBOL`); a `%class-PKG::NAME` tag and a bare `cons` in what `make-load-form` writes
+    ([make-load-form.md](make-load-form.md)); `:direction ':output` ([uiop.md](uiop.md)); fset's `let` in the Gray
+    `format` rewrite ([gray-streams.md](gray-streams.md)); coalton-impl/entry's own `compile` keeping `cl:compile`
+    out ([packages.md](packages.md)); a celled tail call's depth ([jvm-tail-bounce.md](jvm-tail-bounce.md)); and a
+    user file's `coalton-toplevel` read only in the image, its definitions missing where its `coalton` forms
+    expanded (`ReaderMacroReads`).
+    **The whole library** (2026-11-06): the program the interpreter measured above prints its 37 lines on the JVM,
+    P1 and the component (box under load 10-50). P1 and the component compile in 2780 and 2690 s and run in 83 and
+    87 s (wasmtime 49), modules of 51.8 MB whose largest body is fset's own `test-misc-0` (201 KB); the JVM
+    compiles in 2940 s to 98 MB of classes and runs in 41 s. What it took past the first five files, each general:
+    - a `make-load-form` method claimed instances by name, so coalton's `Pathname` class claimed every
+      `cl:pathname` literal (`don't know how to dump #P"."`), and its `Pathname`, `Vector` and `Symbol` classes
+      answered `find-class` and the compiled `class-of` for cl's ([make-load-form.md](make-load-form.md),
+      [clos.md](clos.md), "Name resolution gotcha");
+    - 1.2 million load-time values, one per object of the environment updates' types and schemes, each a defvar:
+      past wasmtime's 1,000,000 globals and a class's fields, an arm of every by-name dispatch. They are one
+      vector now ([compiler-macros.md](compiler-macros.md)), and an object whose method answers the structural
+      dump stays a literal ([make-load-form.md](make-load-form.md)): 245 MB of wasm before, 52 MB after;
+    - a copy of the program's globals per lambda in the free-variable walk, half an hour of the wasm backend
+      ([core-representation.md](core-representation.md)); a run of small long constants clustering the JVM
+      pool's lookup table ([jvm-method-size-limits.md](jvm-method-size-limits.md));
+    - a unit of shared literal nodes built at every read (a 40 GB heap), and literal builds and a top-level run
+      of statements past one body: JVM `_top$474` 150 KB and `_top$501` 215 KB, wasm bodies of 1 MB that took
+      wasmtime to 76 GB ([quoted-data.md](quoted-data.md); [wasm-function-body-size.md](wasm-function-body-size.md),
+      "Keeping a literal's build bounded"; [hot-path-method-size.md](hot-path-method-size.md), "The branch cut").
+    Checked first against the library's first five files as `coalton/library` (a stand-in `.asd` over a prefix of
+    its components; the derived forms key on the name): a parameterized `define-type`, `match`,
+    `define-class`/`define-instance` with a superclass constraint and a `Semigroup` instance print what the
+    interpreter and SBCL print on all four, with coalton's readtable and without; 2 minutes a compile and 30.4 MB
+    modules since (256-272 s and 39 MB before).
 - **sento 3.4.2** — from the Quicklisp cache, verified manually (measured 2026-11-05, interpreter and JVM):
   `make-actor-system`, `actor-of`, `ask-s`, `ask` with `fcompleted`, a `:time-out`, `*state*`, agents,
   8 threads x 200 `tell`s counted to 1600. On wasm it compiles and `make-actor-system` signals at the first

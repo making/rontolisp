@@ -9005,6 +9005,30 @@ cases:
       (T T T T T T)
       (99 2 3)
       #(99 2 3)
+  # Literals past what one function body builds (coalton's environment updates): a long
+  # list, a list two literals share (one unit of 5000 named cells), a tree of objects a
+  # method dumps as themselves, and many in one form.
+  - name: quoted-builds-larger-than-one-function-body
+    source: |
+      (defparameter *qb-big* (loop for i below 5000 collect i))
+      (defmacro qb-big () `',*qb-big*)
+      (defmacro qb-a () `'(:a . ,*qb-big*))
+      (defmacro qb-b () `'(:b . ,*qb-big*))
+      (print (list (length (qb-big)) (nth 4321 (qb-big)) (eq (cdr (qb-a)) (cdr (qb-b)))
+                   (nth 4999 (qb-a))))
+      (defstruct qb-node l r)
+      (defmethod make-load-form ((n qb-node) &optional env)
+        (make-load-form-saving-slots n :environment env))
+      (defun qb-tree (d) (if (= d 0) nil (make-qb-node :l (qb-tree (1- d)) :r (qb-tree (1- d)))))
+      (defparameter *qb-tree* (qb-tree 12))
+      (defmacro qb-tree-lit () *qb-tree*)
+      (defun qb-count (n) (if n (+ 1 (qb-count (qb-node-l n)) (qb-count (qb-node-r n))) 0))
+      (defmacro qb-many () `(list ,@(loop for i below 300 collect `',(loop for j below 40 collect (+ i j)))))
+      (print (list (qb-count (qb-tree-lit)) (eq (qb-tree-lit) (qb-tree-lit))
+                   (reduce #'+ (mapcar #'fourth (qb-many)))))
+    expected: |
+      (5000 4321 T 4998)
+      (4095 T 45750)
   # What a #n= label shares or closes reaches the compiled constant, through every
   # aggregate. Nothing here prints a circle.
   - name: reader-label-sharing-and-circles-in-a-constant
@@ -12420,34 +12444,52 @@ cases:
       (defmacro mlf-splice-box () *mlf-box*)
       (print (mlf-box-name (mlf-splice-box)))
       ;; make-load-form-saving-slots answers the creation form the compilers dump an
-      ;; instance as, so a method delegating to it gets the built-in behavior.
+      ;; instance as, so a method delegating to it gets the built-in behavior: the
+      ;; object stays the literal it is, and one a literal holds twice is one object.
       (defstruct mlf-pt x y)
       (defmethod make-load-form ((p mlf-pt) &optional env)
         (make-load-form-saving-slots p :environment env))
       (defparameter *mlf-pt* (make-mlf-pt :x 3 :y "four"))
       (defmacro mlf-splice-pt () *mlf-pt*)
+      (defmacro mlf-splice-pts () `'(,*mlf-pt* ,(make-mlf-pt :x *mlf-pt*)))
       (print (make-load-form *mlf-pt*))
-      (print (list (mlf-pt-x (mlf-splice-pt)) (mlf-pt-y (mlf-splice-pt))))
-      ;; A class of another package: the tag its creation form quotes carries the
-      ;; package's name, which is no package qualifier (coalton's source-file). The
-      ;; package has a cons of its own (coalton's list constructor), and the constant
-      ;; holding the object is rebuilt with cl's.
-      (defpackage :mlf-pkg (:use :cl) (:shadow #:cons))
+      (print (list (mlf-pt-x (mlf-splice-pt)) (mlf-pt-y (mlf-splice-pt))
+                   (eq (first (mlf-splice-pts)) (mlf-pt-x (second (mlf-splice-pts))))))
+      ;; A class of another package holding an object only its own method makes: the
+      ;; tag its creation form quotes carries the package's name, which is no package
+      ;; qualifier (coalton's source-file). The package has a cons of its own (coalton's
+      ;; list constructor), and the constant holding the object is rebuilt with cl's.
+      ;; The box two of them hold is one object.
+      (defpackage :mlf-pkg (:use :cl) (:shadow #:cons #:pathname))
       (in-package :mlf-pkg)
       (defun cons (a b) (list :own a b))
-      (defclass spot () ((x :initarg :x :reader spot-x)))
+      (defclass spot () ((x :initarg :x :reader spot-x) (box :initarg :box :reader spot-box)))
       (defmethod make-load-form ((s spot) &optional env)
         (make-load-form-saving-slots s :environment env))
-      (defmacro splice-spot () (make-instance 'spot :x 42))
-      (defmacro splice-spots () `'(:spots ,(make-instance 'spot :x 7)))
+      (defmacro splice-spot () (make-instance 'spot :x 42 :box cl-user::*mlf-box*))
+      (defmacro splice-spots () `'(:spots ,(make-instance 'spot :x 7 :box cl-user::*mlf-box*)))
       (print (list (spot-x (splice-spot)) (eq (class-of (splice-spot)) (find-class 'spot))
+                   (cl-user::mlf-box-name (spot-box (splice-spot)))
+                   (eq (spot-box (splice-spot)) (spot-box (splice-spot)))
                    (first (splice-spots)) (spot-x (second (splice-spots))) (cons 1 2)))
+      ;; A class named like a standard type (coalton's Pathname class): its method is no
+      ;; method of cl's pathname, whose literal a macro splices travels as itself, and
+      ;; each name stays its own class.
+      (defclass pathname () ())
+      (defmethod make-load-form ((p pathname) &optional env)
+        (make-load-form-saving-slots p :environment env))
+      (defmacro splice-path () (cl:pathname "mlf/dir/"))
+      (print (list (namestring (splice-path)) (typep (splice-path) 'cl:pathname)
+                   (eq (class-of (splice-path)) (find-class 'cl:pathname))
+                   (eq (find-class 'pathname) (find-class 'cl:pathname))
+                   (typep (make-instance 'pathname) 'pathname) (typep (splice-path) 'pathname)))
       (in-package :cl-user)
     expected: |
       "dumped"
       (%OBJ-NEW '|%struct-MLF-PT| '3 '"four")
-      (3 "four")
-      (42 T :SPOTS 7 (:OWN 1 2))
+      (3 "four" T)
+      (42 T "dumped" T :SPOTS 7 (:OWN 1 2))
+      ("mlf/dir/" T T NIL T NIL)
   - name: setf-function-definitions
     source: |
       (defvar *sf-mode* :xml)

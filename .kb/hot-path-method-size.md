@@ -74,7 +74,13 @@ chunker can adopt it.
   `block`-wrapped body is ONE item, and `JvmBodyOutliner` would find nothing to cut inside.
 - **The two splitters compose**: this cuts a BRANCH and cannot cut a run of statements;
   `JvmBodyOutliner` the reverse. A sequence buried in a branch arm is reachable by neither until
-  the arm becomes a method.
+  the arm becomes a method. So a top-level `let`/`let*`/`progn` that nothing inside can be cut out
+  of is made one piece whole (`Cutter.cutTopLevel`, 2026-11-06), and its run is the piece's tail
+  spine: coalton's environment updates, one statement per definition in one `let`, stopped the
+  library's JVM compile at `method _top$501: method code exceeds the JVM's 65535-byte limit:
+  214749`. Pins `AstOutlinerTest#aTopLevelFormOfSmallPartsIsLeftWholeUnlessItIsARunOfStatements`,
+  `JvmLispCompilerTest#aTopLevelFormPastTheMethodSizeLimitOutlinesItsBranches` (a 6000-statement
+  `let`).
 - **The budget is measured, not predicted**.
   `JvmLispCompiler.compile` reports an oversized defun through a `MethodTooLarge` signal and
   re-runs with that function's measured bytes-per-node ratio applied to a 6000-byte target; still
