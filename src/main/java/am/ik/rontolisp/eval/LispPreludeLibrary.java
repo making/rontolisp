@@ -4960,13 +4960,23 @@ public final class LispPreludeLibrary {
 				""");
 		// What calling a standard macro function does: the comment and the stray close
 		// parenthesis act here, every other one gives its character back and reads the
-		// datum it starts.
+		// datum it starts by STD's standard syntax -- a plain read would dispatch to
+		// whatever the current readtable installed under the character, a function that
+		// may be the one calling this (pythonic-string-reader's `"` falls back to the
+		// standard one). The read is %rt-read-as: the compiled backends' runtime read
+		// ignores *readtable*, and the interpreter serves a string stream under a
+		// non-standard one natively, reading that one character by STD.
 		SOURCES.put(LispNames.RT_CALL_STANDARD_INTERNAL, """
 				(defun %rt-call-standard (stream char std)
 				  (cond ((char= std #\\;) (read-line stream nil nil) (values))
 				        ((char= std #\\))
 				         (error 'reader-error :format-control "unmatched close parenthesis" :stream stream))
-				        (t (unread-char char stream) (read stream t nil t))))
+				        (t (unread-char char stream) (%rt-read-as stream std))))
+				""");
+		SOURCES.put(LispNames.RT_READ_AS_INTERNAL, """
+				(defun %rt-read-as (stream std)
+				  (declare (ignore std))
+				  (read-preserving-whitespace stream t nil t))
 				""");
 		// The standard dispatch table of #, made once: the CLHS 2.4.8 sub-characters plus
 		// the ones this reader adds (#f( #d( #L #N@). A standard sub-function cannot be

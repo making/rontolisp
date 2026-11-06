@@ -659,6 +659,20 @@ public final class LispReader {
 		}
 
 		/**
+		 * Reads the character the scan stands at by the standard function of {@code as}
+		 * whatever the readtable gives it: a call of that function, which must not
+		 * dispatch back to a reader macro function the readtable installed under the
+		 * character. The datum's elements, and every datum after it, read with the
+		 * readtable ({@code .kb/readtables.md}).
+		 * @param as the standard macro character
+		 * @return this read
+		 */
+		public Forms readingFirstAs(int as) {
+			this.lexer.readingFirstAs(as);
+			return this;
+		}
+
+		/**
 		 * Reads the next top-level datum.
 		 * @param syntax the readtable to read it with, or {@code null} for the standard
 		 * syntax

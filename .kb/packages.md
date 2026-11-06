@@ -181,7 +181,11 @@ rontolisp does not implement (93 on 2026-10-31) are `PackageRegistry.CL_EXPORTED
 because there is no implementation to name, and a name that gains one moves OUT of the set into
 its category. `optimize` and its five qualities left it on 2026-11-05 (`CL_OPTIMIZE_NAMES`):
 `trivial-cltl2:declaration-information` answers them, which serapeum's `policy-quality` looks up with
-a symbol read in its own package.
+a symbol read in its own package. The eight other declaration identifiers (`declaration`,
+`dynamic-extent`, `ftype`, `ignorable`, `ignore`, `inline`, `notinline`, `special`) left it on
+2026-11-06 (`CL_DECLARATION_NAMES`): parse-declarations' EQL methods on `ftype` took serapeum's
+`serapeum::ftype` for a type name, so `fbind`'s `(declare (ftype ...))` failed an assertion
+(the compile paths stopped at serapeum's `heap.lisp`; the interpreter, expanding lazily, at a call).
 
 **The split is the whole design: exported is not the same question as owned.**
 `CL_EXPORTED_ONLY` joins the package's `externals` (and its `symbols`, so externals stay a

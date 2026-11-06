@@ -482,6 +482,7 @@ Preview 1、`--component` を意味します。**特筆事項**列はロード�
 | [function-cache](https://github.com/AccelerationNet/function-cache) 1.0.3 | インタプリタ | 無改変ソースから `(ql:quickload "function-cache")` でメモ化関数を提供します — `defcached` は引数リストごとに一度だけ計算します。`.asd` の冒頭とコンパイルパスで止まる場所は cl-csv と同じです |
 | [parenscript](https://parenscript.common-lisp.dev/) (Quicklisp 2025-06-22) | インタプリタ | 無改変ソースから `(ql:quickload "parenscript")` で Lisp を JavaScript に変換します — `ps`/`ps*` は `chain`/`@`/`create`/`while` や DOM シンボルのパッケージを含め、SBCL と同じ JavaScript を印字します。コンパイルパスは parenscript 自身の `property-bindings` (`Cannot compile symbol reference: PARENSCRIPT:VAR`) で止まります |
 | [jonathan](https://github.com/Rudolph-Miller/jonathan) 0.1 | インタプリタ, JVM | 無改変ソースから `(ql:quickload "jonathan")` で JSON をエンコード・デコードします — `to-json` と `parse` (plist、alist、ハッシュテーブルの結果) は SBCL と同じ結果を印字します。`.wasm` は `Cannot compile symbol: *` で止まります |
+| [40ants-doc](https://github.com/40ants/doc) (Quicklisp 2026-01-01) | インタプリタ | 無改変ソースから `(ql:quickload "40ants-doc")` でドキュメントのセクションを定義します — `defsection` と `section-title` は SBCL と同じ答えを返し、`in-readtable` の下で pythonic-string-reader の `"""..."""` 文字列を読めます。コンパイルパスは serapeum (`internal-definitions.lisp`) で止まります |
 
 ### サイズ向けオプトイン: `tiny-routes/lite`
 

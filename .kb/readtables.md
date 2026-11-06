@@ -24,8 +24,17 @@ as part of a symbol on all four instead of signalling (CLHS 2.4.8; measured 2026
   `set-macro-character` derives STD by reverse lookup (`%rt-std-of`), so `(set-macro-character
   #\] (get-macro-character #\)))` is a `)` under `]`.
 - Calling a standard function: `%rt-call-standard` (`;` reads the line, `)` signals, others
-  unread + `read`). A standard `#` sub-function cannot be called (signals); it is compared and
-  copied only.
+  unread + `%rt-read-as`). A standard `#` sub-function cannot be called (signals); it is compared and
+  copied only. **The unread character reads by the STANDARD function, not by the current
+  readtable** (2026-11-06): a plain `read` dispatched to whatever the readtable installed under
+  it, which is the caller when that function falls back to the standard one
+  (pythonic-string-reader's `"`): a stack overflow, and 40ants-doc did not load. The
+  interpreter serves `%rt-read-as` on a string stream under a view (`readWithSyntax`,
+  `Forms.readingFirstAs`: that ONE lexical unit is `Standard(std)`, the datum's elements and
+  everything after read with the readtable, the trailing whitespace stays); elsewhere it is
+  `read-preserving-whitespace` (the compiled runtime readers ignore `*readtable*`). ci-spec
+  `a-standard-reader-macro-function-reads-its-own-character-by-the-standard-syntax` (`" ' ( ` ,`
+  wrapped, all four).
 - `*readtable*` seeds a fresh standard readtable: interpreter `Environment.newStandardReadtable`,
   compile paths `injectMvSpillGlobal` (`(%obj-new '%READTABLE :upcase (make-hash-table))`, the
   instance gate answered by the variable's name in `mayCreateInstance`). Special on the

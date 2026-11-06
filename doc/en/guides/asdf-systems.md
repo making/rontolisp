@@ -496,6 +496,7 @@ what does not work.
 | [function-cache](https://github.com/AccelerationNet/function-cache) 1.0.3 | interpreter | Memoized functions from its verbatim sources via `(ql:quickload "function-cache")` — `defcached` computes once per argument list. Same `.asd` header and the same compile-path stop as cl-csv |
 | [parenscript](https://parenscript.common-lisp.dev/) (Quicklisp 2025-06-22) | interpreter | Lisp-to-JavaScript translation from its verbatim sources via `(ql:quickload "parenscript")` — `ps`/`ps*` print the JavaScript SBCL prints, `chain`/`@`/`create`/`while` and the DOM symbol packages included. The compile paths stop in its own `property-bindings` (`Cannot compile symbol reference: PARENSCRIPT:VAR`) |
 | [jonathan](https://github.com/Rudolph-Miller/jonathan) 0.1 | interpreter, JVM | JSON encoding and decoding from its verbatim sources via `(ql:quickload "jonathan")` — `to-json` and `parse` (plist, alist and hash-table results) print what SBCL prints. A `.wasm` stops at `Cannot compile symbol: *` |
+| [40ants-doc](https://github.com/40ants/doc) (Quicklisp 2026-01-01) | interpreter | Documentation sections from its verbatim sources via `(ql:quickload "40ants-doc")` — `defsection` and `section-title` answer what SBCL answers, and pythonic-string-reader's `"""..."""` strings read under `in-readtable`. The compile paths stop in serapeum (`internal-definitions.lisp`) |
 
 ### The size opt-in: `tiny-routes/lite`
 

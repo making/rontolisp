@@ -5541,7 +5541,11 @@ public final class LispEvaluator {
 	 * through the reader, which honors the readtable -- the prelude's scanner, which
 	 * delimits a datum by the standard syntax, cannot. Any other call -- the standard
 	 * readtable, another stream -- answers {@code null} and runs the prelude defun.
-	 * @param name {@link LispNames#READ} or {@link LispNames#READ_DELIMITED_LIST}
+	 * {@link LispNames#RT_READ_AS_INTERNAL} is a standard macro function's read: the
+	 * character at the stream reads by the standard function its second argument names,
+	 * not by the function the readtable holds for it, which may be the caller.
+	 * @param name {@link LispNames#READ}, {@link LispNames#READ_PRESERVING_WHITESPACE},
+	 * {@link LispNames#READ_DELIMITED_LIST} or {@link LispNames#RT_READ_AS_INTERNAL}
 	 * @param args the evaluated arguments
 	 * @return the call's value, or {@code null} to decline
 	 */
@@ -5551,6 +5555,7 @@ public final class LispEvaluator {
 			return null;
 		}
 		boolean delimited = LispNames.READ_DELIMITED_LIST.equals(name);
+		boolean standardAs = LispNames.RT_READ_AS_INTERNAL.equals(name);
 		int streamIndex = delimited ? 1 : 0;
 		LispVal designator = args.size() > streamIndex ? args.get(streamIndex) : LispNil.INSTANCE;
 		if (designator instanceof LispNil) {
@@ -5559,7 +5564,8 @@ public final class LispEvaluator {
 		}
 		StringStreamTable table = this.globalEnv.stringStreams();
 		am.ik.rontolisp.runtime.RontoStringInputStream reader = table.reader(designator);
-		if (reader == null || delimited && !(args.get(0) instanceof LispChar)) {
+		if (reader == null || delimited && !(args.get(0) instanceof LispChar)
+				|| standardAs && !(args.size() > 1 && args.get(1) instanceof LispChar)) {
 			return null;
 		}
 		String text = reader.text();
@@ -5569,6 +5575,9 @@ public final class LispEvaluator {
 					table.logicalOffset(designator, reader), false)
 			.homingSymbols(this.packageResolver::readSpelling)
 			.withinTemplates(this.readerMacroTemplateDepth);
+		if (standardAs) {
+			forms.readingFirstAs(((LispChar) args.get(1)).codePoint());
+		}
 		try {
 			if (delimited) {
 				List<LispVal> items = forms.nextDelimited(syntax, ((LispChar) args.get(0)).codePoint());
@@ -5584,14 +5593,14 @@ public final class LispEvaluator {
 			int end = forms.position();
 			if (datum == null) {
 				table.moveTo(designator, reader, end);
-				if (args.size() > 1 && args.get(1) instanceof LispNil) {
+				if (!standardAs && args.size() > 1 && args.get(1) instanceof LispNil) {
 					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
 				}
 				throw new LispEvalException(ClosRegistry.END_OF_FILE_MESSAGE,
 						ClosRegistry.newEndOfFileCondition(designator));
 			}
 			// CLHS 23.2: the whitespace character that ends the datum is consumed.
-			if (!LispNames.READ_PRESERVING_WHITESPACE.equals(name) && end < text.length()
+			if (!LispNames.READ_PRESERVING_WHITESPACE.equals(name) && !standardAs && end < text.length()
 					&& Character.isWhitespace(text.charAt(end))) {
 				end++;
 			}
@@ -12528,6 +12537,7 @@ public final class LispEvaluator {
 			case LispNames.READ:
 			case LispNames.READ_PRESERVING_WHITESPACE:
 			case LispNames.READ_DELIMITED_LIST:
+			case LispNames.RT_READ_AS_INTERNAL:
 				// The prelude defun, with the readtable-honoring read of a string stream
 				// in front of it (.kb/readtables.md). The arm declines to this same call.
 				return singleValue(evalReadCall(cons, env, name));

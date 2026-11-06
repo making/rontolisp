@@ -1121,6 +1121,12 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   `unify`, `find-variable-value`, `match`, `match-case` and `apply-substitution` answer what SBCL 2.2.9 answers.
   What it took: a component type spelled as the class symbol ("The component-class surface"). Pin:
   `AsdfMetaobjectsE2eTest`'s `meta-demo-tree` (`(tree-asd "sub")`); a ci-spec case cannot carry a `.asd`.
+- **40ants-doc** (Quicklisp 2026-01-01) — from the Quicklisp cache, interpreter, verified manually
+  (2026-11-06): `defsection`, `section-title` and pythonic-string-reader's `"""..."""` under
+  `in-readtable` answer what SBCL 2.2.9 answers. What it took: a standard reader macro function called
+  by the one replacing it reads by the standard syntax ([readtables.md](readtables.md)). The compile
+  paths stop in serapeum ([packages.md](packages.md), the declaration identifiers; then
+  `internal-definitions.lisp:411`, `.todo/152`).
 
 - **fset 2.2.0** — from the Quicklisp cache, verified manually on all four (2026-11-05): `set`, `with`,
   `map`, `seq`, `bag`, `tuple`, `lookup`, `convert` and their printed forms, the same text as SBCL 2.2.9

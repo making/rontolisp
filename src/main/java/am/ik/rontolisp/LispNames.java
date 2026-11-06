@@ -1345,6 +1345,12 @@ public final class LispNames {
 	/** The body of every standard macro function: what calling one does. */
 	public static final String RT_CALL_STANDARD_INTERNAL = "%RT-CALL-STANDARD";
 
+	/**
+	 * The read a standard macro function makes: its own character read by its standard
+	 * function, the interpreter's string-stream read in front of it.
+	 */
+	public static final String RT_READ_AS_INTERNAL = "%RT-READ-AS";
+
 	/** The memoized dispatching function of a user dispatch macro character. */
 	public static final String RT_DISPATCHER_INTERNAL = "%RT-DISPATCHER";
 
