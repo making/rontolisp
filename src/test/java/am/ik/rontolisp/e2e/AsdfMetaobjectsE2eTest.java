@@ -239,7 +239,17 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 				(print (asdf:make-plan nil (asdf:make-operation 'demo-op) nil))
 				(print (handler-case (asdf:traverse 'asdf:load-op "meta-demo")
 				         (uiop:not-implemented-error () :not-implemented)))
-				(print (handler-case (asdf:make "meta-demo/hooked") (error () :refused)))
+				;; A program-op system's make dumps an image, which only the command line's
+				;; interpreter compiles: an embedded evaluator and a compiled program refuse,
+				;; naming the command that does.
+				(print (handler-case (asdf:make "meta-demo/hooked")
+				         (error (e) (and (search "rontolisp build meta-demo/hooked" (princ-to-string e))
+				                         :refused))))
+				(print (list (typep (asdf:make-operation 'asdf:program-op) 'asdf:image-op)
+				             (asdf::component-entry-point (asdf:find-system "meta-demo/hooked"))
+				             (asdf::component-build-pathname (asdf:find-system "meta-demo/hooked"))
+				             (asdf::component-entry-point (car (asdf:component-children
+				                                                (asdf:find-system "meta-demo/hooked"))))))
 				(print (handler-case (asdf:compile-system "meta-demo") (error () :refused)))
 				(asdf:make "meta-demo-made")
 				(print (made-fn))
@@ -306,9 +316,9 @@ class AsdfMetaobjectsE2eTest extends AsdfLibraryE2eSupport {
 			"\"meta-demo-central\"", "(\"meta-demo-central\" \"The description\")", "T", "T", "(T T NIL NIL T T)",
 			"((ASDF:LOAD-OP \"meta-demo-central-dep\") (ASDF:DEFINE-OP \"meta-demo-central\"))", "(T NIL T)",
 			"(T NIL T NIL)", "T", "T", "(NIL NIL)", "NIL", "(\"foo\" \"Foo\" \"a\" \"a\")", "NIL", "NIL",
-			"\"meta-demo-nowhere\"", "(T T T T T T)", ":DEMO-PLAN", ":NOT-IMPLEMENTED", ":REFUSED", ":REFUSED", ":MADE",
-			":LATE", "\"testing meta-demo/tests\"", "T", "3",
-			"(CLASSES-TOOL:TOOL-SYSTEM \"META-DEMO-CLASSES\" \"From the class\")",
+			"\"meta-demo-nowhere\"", "(T T T T T T)", ":DEMO-PLAN", ":NOT-IMPLEMENTED", ":REFUSED",
+			"(T \"meta-demo:main\" \"bin/meta-demo\" NIL)", ":REFUSED", ":MADE", ":LATE", "\"testing meta-demo/tests\"",
+			"T", "3", "(CLASSES-TOOL:TOOL-SYSTEM \"META-DEMO-CLASSES\" \"From the class\")",
 			"((\"classes-plain\" CLASSES-TOOL::LOGGED-FILE \"lisp\" \"classes-plain.lisp\")"
 					+ " (\"classes-typed\" ASDF::TYPED-FILE \"tl\" \"classes-typed.tl\")"
 					+ " (\"classes-data\" ASDF::DATA-FILE \"dat\" \"classes-data.dat\")"

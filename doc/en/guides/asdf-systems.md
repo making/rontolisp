@@ -254,8 +254,9 @@ library still has to stay inside the supported subset below.
   `(:read-file-line ...)` indirections, which a `.asd` file reads, or any other
   literal form, which answers nil. `:around-compile`, `:encoding :utf-8`/`:default` and
   `:weakly-depends-on` are honored, and the `program-op` options
-  (`:entry-point`, `:build-operation`, `:build-pathname`) ignored, as
-  [`asdf:defsystem`](../reference/functions/asdf-defsystem.md) describes.
+  (`:entry-point`, `:build-operation`, `:build-pathname`) say what executable
+  `asdf:make` builds, as
+  [Build an Executable from an ASDF System](../compiling/asdf-programs.md) describes.
   Anything else (`:output-files`, ...) is an error naming the clause.
 - `:class :package-inferred-system` is supported — the style ningle, rove and
   array-operations use. Such a system has **no `:components` at all**: a
@@ -357,7 +358,8 @@ library still has to stay inside the supported subset below.
   `perform` therefore runs around every component load on every backend —
   asdf-flv's `:around` method gives fiveam its file-local `*suite*`.
   [`asdf:operate`](../reference/functions/asdf-operate.md) performs `load-op`
-  (`load-system`) or `test-op` (`test-system`); `asdf:make-operation`,
+  (`load-system`), `test-op` (`test-system`) or `program-op` (the system's
+  executable, on the interpreter); `asdf:make-operation`,
   `asdf:input-files`, `asdf:output-files`, `asdf:source-file-type` and
   `asdf:operation-done-p` exist for the methods libraries define. `asdf/interface` and real ASDF's internal
   packages (`asdf/component`, `asdf/action`, ...) name these same symbols.
@@ -481,6 +483,7 @@ what does not work.
 | [fset](https://github.com/slburson/fset) 2.2.0 | all four | Functional sets, maps, seqs, bags and tuples from its verbatim sources via `(ql:quickload "fset")`, with their printed forms. `with-lock`'s `:wait? nil` waits for the lock instead of moving on, which only delays a tuple's key reordering |
 | [sento](https://github.com/mdbergmann/cl-gserver) 3.4.2 | interpreter, JVM | Actors, agents, futures and routers from its verbatim sources via `(ql:quickload "sento")`. It compiles to a `.wasm` too, where `asys:make-actor-system` signals: its dispatchers are threads |
 | [clingon](https://github.com/dnaeon/clingon) 0.5.0 | all four | Command-line parsing — `make-command`, `make-option`, `parse-command-line`, `print-usage`, `getopt`, `run` — over with-user-abort, so on the interpreter Ctrl-C prints `Received SIGINT, exiting.` and exits 130 |
+| [deploy](https://shinmera.com/docs/deploy/) 3.0.0 | builds on the interpreter; its executables run as a JVM jar, a module and natively | `asdf:make` of a `deploy-op` system: the build-time hooks run on the interpreter, the boot and quit hooks in the executable, and `deploy:data-directory` is the executable's directory. See [Build an Executable from an ASDF System](../compiling/asdf-programs.md#deploy) |
 | [cl-reexport](https://github.com/takagi/cl-reexport) | all four | `reexport-from` with a literal package and literal `:include` / `:exclude` makes the names readable for the forms after it. On the compile paths a computed package or list is an ordinary call that changes nothing, since a compiled program's packages are fixed |
 | [iterate](https://gitlab.common-lisp.net/iterate/iterate) 1.6.0 | all four | Jonathan Amsterdam's iteration DSL from its verbatim sources via `(ql:quickload "iterate")` — `iter`/`iterate` with the numeric driver (`from`/`to`/`downto`/`below`/`by`), the sequence drivers (`in`, `on`, `in-string`, `in-vector`, `in-hashtable`), the accumulators (`collect`/`collecting` with and without `into`, `sum`, `multiply`, `maximize`, `minimize`, `counting`, `always`, `thereis`, `appending`, `reducing`) and the control clauses (`repeat`, `with`, `while`, `until`, `if-first-time`, `finally`), plus a nested `iter` feeding a named outer one through `(in outer ...)`. It is a macro over pure computation with no dependencies, so **all four backends are in**. Clause heads are ordinary symbols, so `(use-package :iterate)` — not the `iterate:` prefix — is what makes them recognizable, exactly as on SBCL |
 | [contextl](https://github.com/pcostanza/contextl) (Quicklisp 2024-10-12) | all four | Context-oriented programming from its verbatim sources via `(ql:quickload "contextl")`, layer GC included, in `contextl-user` or `contextl` — `deflayer` (superlayers included), `define-layered-function`/`define-layered-method` with `:in` a layer, qualifiers and `call-next-method`, `with-active-layers`/`with-inactive-layers`, `ensure-active-layer`, `active-layers`, `layer-active-p`, `adjoin-layer-using-class`/`remove-layer-using-class` methods on a `standard-layer-class` subclass, `deflayer` slots, which contextl makes class-allocated (read through `find-layer`, as its grouped layers do), special slots of a `special-class` with `dletf`/`dreletf` and captured dynamic environments, the layer caches a later `define-layered-method` on `adjoin-layer-using-class`/`remove-layer-using-class` clears (the `defmethod` reaches [`add-method`](../reference/functions/add-method.md)), singleton classes and layers redefined with and without `:reinitialize t` slots, `layer-makunbound`, `define-layered-class`'s layered accessors, a class defined again `:in` a layer (a partial class, which may add superclasses and slots), `:layered` slots read through `slot-value-using-layer`, and a special slot a later definition gives existing instances. Each activation makes an anonymous layer class at run time (see [`defclass`](../reference/special-forms/defclass.md)). Redefining a class to make an existing instance's slot special works on the interpreter; on the compilation path an `eval`'d redefinition defines no class |

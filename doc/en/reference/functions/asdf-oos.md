@@ -6,8 +6,9 @@ The old name of [`asdf:operate`](asdf-operate.md), with the same arguments and t
 same answer: `(asdf:oos 'asdf:load-op :my-lib)` is a load. The other spellings of a load
 are `(asdf:load-systems :a :b)`, `(asdf:load-systems* '(:a :b))` and
 `(asdf:require-system :a)`. `(asdf:make :a)` runs the system's `:build-operation`, by
-default a load; any other build operation is refused, and so is `asdf:compile-system`,
-because no image is dumped and no fasl is written here.
+default a load; `program-op` builds the system's executable
+([Build an Executable from an ASDF System](../../compiling/asdf-programs.md)), and any other
+build operation is refused, as is `asdf:compile-system`, because no fasl is written here.
 
 ```console
 (asdf:oos 'asdf:load-op :my-lib)   ; same as (asdf:load-system :my-lib)

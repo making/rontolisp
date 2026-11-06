@@ -16,9 +16,10 @@
   するバックエンドはないので、「このコンディションのバックトレース」の正直な表現
   はコンディションそのものだけです。上流の UIOP 自身も、バックトレース API のない
   処理系向けのフォールバックは同じ形をしています。
-- **ダンプ・復元・生成できるイメージが存在しない**ため、その 3 つはシグナルします。
-  ただし周囲のフックは本物です。フックへの登録は単なるリストへの push だからです。
-  [イメージフック](#image-hooks)を参照してください。
+- **イメージはプログラムです。** ヒープを保存できるバックエンドはないので、
+  インタプリタはイメージをコンパイルしてダンプし、コンパイル済みのプログラムは
+  復元されたイメージと同じように起動します。[イメージのダンプ](#dumping-an-image)を
+  参照してください。
 - **引数ベクタの形はどこでも同じ**で `(program-name user-arg ...)` です。インタプ
   リタで動かすプログラムの引数は `--` セパレータの後ろに置きます。
   [コマンドライン](#the-command-line)を参照してください。
@@ -150,8 +151,8 @@ $ echo $?
 | `uiop:*image-restore-hook*` / `uiop:*image-dump-hook*` | 2 つのリスト |
 | `uiop:*image-prelude*` / `uiop:*image-entry-point*` / `uiop:*image-postlude*` / `uiop:*image-dumped-p*` | `nil` |
 
-イメージをダンプできるものがなくてもフックは**本物**です。ライブラリはロード中に
-フックへ登録することがあり、それがエラーになってはいけないからです。
+フックは**本物**です。ライブラリはロード中にフックへ登録することがあり、ダンプは
+dump フックを呼び、ダンプされたプログラムの起動は restore フックを呼びます。
 
 ```lisp
 (defvar *log* nil)
@@ -160,26 +161,24 @@ $ echo $?
 *log*   ; => (:RESTORED)
 ```
 
-`uiop:*image-dumped-p*` は `nil` であり、`nil` のままです。ダンプするものがない
-ので、誰も設定しません。
+`uiop:*image-dumped-p*` は、起動されたプログラムでは `nil`、イメージをダンプした
+プログラムでは `:executable` です。
 
 ## イメージのダンプ
 
-| 関数 | シグナルする内容 |
-|------|------------------|
-| `uiop:dump-image` | `uiop:not-implemented-error` -- ヒープを保存できるバックエンドはありません。代わりにプログラムをコンパイルしてください |
-| `uiop:restore-image` | `uiop:not-implemented-error` -- プログラムはソースから開始されるもので、再開されるものではありません |
+| 関数 | 動作 |
+|------|------|
+| `uiop:dump-image` | rontolisp のコマンドラインが起動したインタプリタでは、postlude と dump フックを走らせたうえで、ファイル名が示す実行ファイルにイメージをコンパイルする。コンパイル済みのプログラムと、コマンドラインのコンパイラを受け取っていない評価器では `uiop:not-implemented-error` |
+| `uiop:restore-image` | 上流の起動処理: restore フック、prelude、エントリーポイントの順に走らせ、`:lisp-interaction` が真でない限りエントリーポイントの最初の値を終了ステータスにする(真なら 0、`nil` なら 1) |
 | `uiop:create-image` | `uiop:not-implemented-error` -- リンクすべき Lisp オブジェクトファイルがありません |
 
-rontolisp には SBCL 的な意味でのイメージがありません。プログラムは読まれて実行
-されるか、読まれて 1 つの成果物にコンパイルされるかのどちらかです。
-
-```bash
-rontolisp app.lisp -o App.class      # a JVM class
-rontolisp app.lisp -o app.wasm       # a WASM module
-```
-
-`uiop:dump-image` が担っていたのはこの役割です。
+rontolisp には保存できるヒープがないので、ダンプはコンパイルです: イメージがロード
+した各システムをターゲット向けに読み直し、その後に `uiop:*image-entry-point*` の
+`uiop:restore-image` を置きます。実行ファイルの種類はファイル名で決まります -- 拡張子
+なしはネイティブ実行ファイル、`.jar` は JVM のプログラム、`.wasm` はモジュールです。
+`program-op` のシステムの `asdf:make` が行うのはこれです。
+[ASDF システムから実行ファイルをビルドする](../../compiling/asdf-programs.md)を参照
+してください。
 
 ## コマンドライン
 
@@ -221,8 +220,9 @@ $ rontolisp args.lisp -o args.wasm && wasmtime run args.wasm alpha beta
 はベクタの rest、`uiop:argv0` はその first と決められ、バックエンドごとの規則は
 要りません。異なるのはプログラム名だけで、それを知っているのはホストだけだからで
 す。インタプリタでは入力ファイル、JVM ではクラス名（`java` のコマンドラインに
-立っていたもの）、WASM の両バックエンドではホストが `args[0]` に入れたもの
-（`wasmtime run` ならモジュールのパス）です。
+立っていたもの）またはそのクラスを読み込んだ jar のパス（`java -jar app.jar`）、
+WASM の両バックエンドではホストが `args[0]` に入れたもの（`wasmtime run` なら
+モジュールのパス）です。
 
 上流の UIOP がこの答えを返すのは実行可能形式としてダンプされたイメージのときだけ
 で、それ以外では処理系自身の引数を含んだままのベクタから `--` を探します。

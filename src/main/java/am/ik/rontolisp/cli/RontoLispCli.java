@@ -40,6 +40,7 @@ import am.ik.rontolisp.eval.ClojureNrepl;
 import am.ik.rontolisp.eval.CommonLispSwank;
 import am.ik.rontolisp.eval.ClojureDepsRepositories;
 import am.ik.rontolisp.eval.HttpLibrary;
+import am.ik.rontolisp.eval.ImageBuilder;
 import am.ik.rontolisp.eval.LinalgBlas;
 import am.ik.rontolisp.eval.LinalgGpu;
 import am.ik.rontolisp.eval.LispEvalException;
@@ -93,6 +94,9 @@ public final class RontoLispCli {
 	private @Nullable Function<List<RemoteRepository>, MavenResolver> javaDependencyResolver;
 
 	private @Nullable ClojureDepsRepositories clojureRepositories;
+
+	/** What compiles an image a program of this run dumps ({@link #imageBuilder}). */
+	private @Nullable ImageBuilder imageBuilder;
 
 	/**
 	 * Create a new CLI instance.
@@ -168,12 +172,21 @@ public final class RontoLispCli {
 		if (test) {
 			args = Arrays.copyOfRange(args, 1, args.length);
 		}
+		// `build` likewise: asdf:make of a system, interpreted, its compile flags handed
+		// to the image's dump (BuildCommand).
+		boolean build = !test && args.length > 0 && "build".equals(args[0]);
+		if (build) {
+			args = Arrays.copyOfRange(args, 1, args.length);
+		}
 
 		CliOptions options = CliOptions.build(args);
 
 		if (options.contains("-h") || options.contains("--help")) {
 			if (test) {
 				TestCommand.printUsage(this.out);
+			}
+			else if (build) {
+				BuildCommand.printUsage(this.out);
 			}
 			else {
 				printUsage();
@@ -235,6 +248,35 @@ public final class RontoLispCli {
 		// coordinate fails before any file is read; the coordinates resolve where the
 		// program runs or compiles.
 		JavaResolutionOptions javaResolution = JavaResolutionOptions.from(options);
+
+		// What compiles an image the program dumps (uiop:dump-image, asdf:make of a
+		// program-op system), installed on every evaluator this run creates: the run's
+		// own compile flags reach the artifact, as they reach an -o compile.
+		this.imageBuilder = imageBuilder(options, dists, standards, javaResolution);
+
+		if (build) {
+			BuildCommand.Program program = BuildCommand.build(options);
+			if (program == null) {
+				// The command line was wrong, not the build: 2, as `test` answers it.
+				this.exitCode = 2;
+				return;
+			}
+			for (String flag : List.of("--no-main", "--no-wasi", "--emit-wit", "--emit-js-glue", "--host-random",
+					"--host-fetch", "--host-boundary", "--reentrant", "--dump-ir", "--nrepl", "--swank",
+					"--scaffold-wit")) {
+				if (options.contains(flag)) {
+					throw new UnsupportedOperationException("rontolisp build makes an executable program, which " + flag
+							+ " does not describe: compile a library or a reactor with rontolisp FILE -o OUT " + flag);
+				}
+			}
+			// The build image is the interpreter, the artifact its dump: the
+			// acceleration flags reach both, every other compile flag the dump alone.
+			interpret(program.source(), program.baseDir(), systemPath, dists, features, options.contains("--simd"),
+					options.contains("--blas"), options.contains("--gpu"), options.contains("--parallel"), null,
+					commandLine(null, List.of()), null, standards, javaResolution.warnReflection(),
+					javaClassPath(javaResolution));
+			return;
+		}
 
 		// -e/--eval "FORMS": the program is the argument itself rather than a file, and
 		// nothing downstream can tell the difference -- it interprets, and with -o it
@@ -698,7 +740,62 @@ public final class RontoLispCli {
 		}
 		evaluator.setSourceStandards(standards);
 		serveSwankFromPrograms(evaluator);
+		dumpImagesFromPrograms(evaluator);
 		return new Interactive(evaluator, files);
+	}
+
+	/** Lets the program an evaluator runs dump its image ({@code uiop:dump-image}). */
+	private void dumpImagesFromPrograms(LispEvaluator evaluator) {
+		if (this.imageBuilder != null) {
+			evaluator.setImageBuilder(this.imageBuilder);
+		}
+	}
+
+	/**
+	 * The compile of an image a program dumps ({@code uiop:dump-image},
+	 * {@code ImageDump}): the program it wrote, to the artifact the dump names, with this
+	 * run's compile flags, as an {@code -o} compile of a file takes them. The artifact's
+	 * name decides what it is, the way {@code -o} does except for a name with no type,
+	 * which is a native executable here: a program-op's artifact on a Unix host is the
+	 * executable file itself ({@code --native} with no {@code -o} of its own).
+	 */
+	private ImageBuilder imageBuilder(CliOptions options, DistClient dists, SourceStandards standards,
+			JavaResolutionOptions javaResolution) {
+		return image -> {
+			String output = image.output();
+			if (output.endsWith(".war")) {
+				throw new UnsupportedOperationException("uiop:dump-image: " + output + " names a .war, which a servlet"
+						+ " container runs, not an executable program: name a .jar, a .wasm, or no type for a native"
+						+ " executable");
+			}
+			boolean nativeOutput = !jvmOutput(output) && !output.endsWith(".wasm");
+			NativeTarget target = null;
+			if (nativeOutput) {
+				target = NativeTarget.of(options.get("--native-target"), options.get("--native-cpu"));
+			}
+			else {
+				for (String flag : List.of("--native", "--native-target", "--native-cpu")) {
+					if (options.contains(flag)) {
+						throw new UnsupportedOperationException(
+								flag + " describes a native executable, and the image is" + " dumped to " + output
+										+ ": a name with no type is a native executable");
+					}
+				}
+			}
+			compileToFile(image.source(), null, image.systemPath(), dists, image.declaredFeatures(), output,
+					options.contains("--dynamic"), options.contains("--component"), options.contains("--no-wasi"),
+					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"), target,
+					options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"),
+					options.contains("--parallel"), options.contains("--no-prune"), options.contains("--no-main"),
+					options.contains("--emit-wit"), options.contains("--emit-js-glue"),
+					options.contains("--host-random"), options.contains("--host-fetch"),
+					options.contains("--reentrant"),
+					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
+					options.contains("--report-locations")
+							? WasmReportLocations.parse(options.get("--report-locations")) : null,
+					JvmArtifactOptions.from(options), javaResolution, options.contains("--warnings-as-errors"), null,
+					null, standards);
+		};
 	}
 
 	/**
@@ -1017,6 +1114,7 @@ public final class RontoLispCli {
 		SourceLanguage language = SourceLanguage.forFile(entryFile, sourceLanguage);
 		evaluator.setSourceStandards(standards);
 		serveSwankFromPrograms(evaluator);
+		dumpImagesFromPrograms(evaluator);
 		InterruptSignal.listenFor(evaluator);
 		// a whole Clojure program: its library without the arms it can never take, or,
 		// where it lowers as it runs, every arm and its lowering kept for the run
@@ -1677,6 +1775,10 @@ public final class RontoLispCli {
 		this.out.println("                     ran. With -o it compiles the run instead, and the");
 		this.out.println("                     artifact carries the same exit contract.");
 		this.out.println("                     See: rontolisp test --help");
+		this.out.println("  build SYSTEM       asdf:make of a program-op system: the executable its");
+		this.out.println("                     :entry-point runs, at its :build-pathname (no type is a");
+		this.out.println("                     native executable, .jar a JVM program, .wasm a module).");
+		this.out.println("                     See: rontolisp build --help");
 		this.out.println();
 		this.out.println("Options:");
 		this.out.println("  -h, --help         Show this help message");

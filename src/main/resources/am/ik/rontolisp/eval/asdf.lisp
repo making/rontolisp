@@ -105,8 +105,12 @@
    (asdf::source-control :initarg :source-control :initform nil)
    (asdf:source-file :initform nil) (asdf::depends-on :initform nil)
    (asdf::weakly-depends-on :initform nil)
-   (asdf::defsystem-depends-on :initform nil) (asdf::entry-point :initform nil)
-   (asdf::build-operation :initform nil) (asdf::build-pathname :initform nil)
+   (asdf::defsystem-depends-on :initform nil)
+   ;; The program-op trio, real ASDF's accessors: deploy replaces the entry point
+   ;; before its build, and `rontolisp build -o` the build pathname.
+   (asdf::entry-point :initform nil :accessor asdf::component-entry-point)
+   (asdf::build-operation :initform nil :reader asdf::component-build-operation)
+   (asdf::build-pathname :initform nil :accessor asdf::component-build-pathname)
    ;; The .asd's directory, which the :pathname of absolute-pathname is below.
    (%source-directory :initform nil)
    ;; Plan index -> component.
@@ -382,6 +386,26 @@
     (%asdf-clear-system key)
     t))
 
+;; Real ASDF's records of systems an image provides without a definition to load:
+;; deploy's clear-asdf build hook marks every loaded system immutable before it
+;; clears it. Recorded as there; the search here does not read them.
+(defvar asdf::*preloaded-systems* (make-hash-table :test 'equal))
+
+(defvar asdf::*immutable-systems* nil)
+
+(defun asdf:register-preloaded-system
+    (system-name &rest keys &key (version t) &allow-other-keys)
+  (let ((name (asdf:coerce-name system-name)))
+    (setf (gethash name asdf::*preloaded-systems*)
+          (list* :name name :version version keys))))
+
+(defun asdf:register-immutable-system (system-name &rest keys)
+  (let ((name (asdf:coerce-name system-name)))
+    (apply #'asdf:register-preloaded-system name keys)
+    (unless asdf::*immutable-systems*
+      (setq asdf::*immutable-systems* (make-hash-table :test 'equal)))
+    (setf (gethash name asdf::*immutable-systems*) t)))
+
 (defun asdf:map-systems (fn)
   (dolist (name (%asdf-system-names)) (funcall fn (asdf:find-system name))))
 
@@ -533,14 +557,12 @@
 (defun asdf:system-defsystem-depends-on (system)
   (slot-value system 'asdf::defsystem-depends-on))
 
-(defun asdf::component-entry-point (system)
-  (slot-value system 'asdf::entry-point))
+;; Below a system, what real ASDF's methods on a component answer.
+(defmethod asdf::component-entry-point ((component asdf:component)) nil)
 
-(defun asdf::component-build-operation (system)
-  (slot-value system 'asdf::build-operation))
+(defmethod asdf::component-build-operation ((component asdf:component)) nil)
 
-(defun asdf::component-build-pathname (system)
-  (slot-value system 'asdf::build-pathname))
+(defmethod asdf::component-build-pathname ((component asdf:component)) nil)
 
 ;; There are no fasls and no output translations: a path is where it is.
 (defun asdf:apply-output-translations (path) path)
@@ -634,6 +656,19 @@
 (defclass asdf:define-op (asdf:non-propagating-operation) ())
 
 (defclass asdf:build-op (asdf:non-propagating-operation) ())
+
+;; The image ops and the classes real ASDF derives them from. program-op is how a
+;; system says it is an executable (:build-operation "program-op"), and deploy's
+;; deploy-op is a subclass; the other bundle ops stay stubs over these.
+(defclass asdf:bundle-op (asdf:operation) ())
+
+(defclass asdf::monolithic-op (asdf:operation) ())
+
+(defclass asdf:monolithic-bundle-op (asdf:bundle-op asdf::monolithic-op) ())
+
+(defclass asdf:image-op (asdf:monolithic-bundle-op asdf:selfward-operation) ())
+
+(defclass asdf:program-op (asdf:image-op) ())
 
 ;; class name -> its one instance: an operation is a singleton per class, as
 ;; real ASDF's make-operation answers it.
@@ -933,8 +968,9 @@
     (cond ((or (typep op 'asdf:load-op) (typep op 'asdf:load-source-op))
            (apply #'asdf:load-system component keys))
           ((typep op 'asdf:test-op) (%asdf-test component))
-          ((typep op 'asdf:build-op) (apply #'asdf:make component keys))
-          (t (error "ASDF:OPERATE: ~a is not supported: a system is loaded from source with LOAD-OP and tested with TEST-OP"
+          ((typep op 'asdf:build-op) (%asdf-build component keys))
+          ((typep op 'asdf:image-op) (%asdf-perform-image op component keys))
+          (t (error "ASDF:OPERATE: ~a is not supported: a system is loaded from source with LOAD-OP, tested with TEST-OP and built with PROGRAM-OP"
                     (class-name (class-of op)))))
     op))
 
@@ -956,22 +992,58 @@
   (apply #'asdf:load-system system keys)
   nil)
 
-;; Whether a :build-operation names what this ASDF does: load the system.
-(defun %asdf-load-op-name-p (operation)
-  (let* ((name (string-upcase (string operation)))
-         (colon (position #\: name :from-end t))
-         (member (if colon (subseq name (+ colon 1)) name)))
-    (or (string= member "LOAD-OP") (string= member "LOAD-SOURCE-OP"))))
+;; The class a :build-operation string names, as real ASDF's make-operation reads
+;; it in asdf (where deploy imports deploy-op): a PACKAGE:NAME spelling finds NAME
+;; in PACKAGE.
+(defun %asdf-operation-named (designator)
+  (let* ((name (string-upcase designator))
+         (first-colon (position #\: name))
+         (last-colon (position #\: name :from-end t)))
+    (if first-colon
+        (let ((package (find-package (subseq name 0 first-colon))))
+          (and package (find-symbol (subseq name (+ last-colon 1)) package)))
+        (find-symbol name :asdf))))
 
-;; build-op is the system's :build-operation, by default load-op. Any other one
-;; builds something: an image is not dumped here, so it is refused by name.
+;; The operation a :build-operation designates: a string or a keyword is its name
+;; in asdf, another symbol names the class, nil is load-op.
+(defun %asdf-build-operation (system)
+  (let* ((designator (asdf::component-build-operation system))
+         (name
+          (cond ((null designator) 'asdf:load-op)
+           ((keywordp designator) (find-symbol (symbol-name designator) :asdf))
+           ((stringp designator) (%asdf-operation-named designator))
+           (t designator))))
+    (unless (and name (symbolp name) (find-class name nil)
+                 (subtypep name 'asdf:operation))
+      (error "ASDF:MAKE: the :build-operation ~s of ~a names no operation class"
+             designator (asdf:component-name system)))
+    (asdf:make-operation name)))
+
+;; build-op performs the system's :build-operation, by default load-op.
+(defun %asdf-build (system keys)
+  (apply #'asdf:operate (%asdf-build-operation (asdf:find-system system)) system
+         keys))
+
 (defun asdf:make (system &rest keys)
-  (let ((build (asdf::component-build-operation (asdf:find-system system))))
-    (if (and build (not (%asdf-load-op-name-p build)))
-        (error "ASDF:MAKE: ~a is not supported: a system is loaded from source with LOAD-OP and tested with TEST-OP"
-               build)
-        (apply #'asdf:load-system system keys))
-    t))
+  (apply #'asdf:operate 'asdf:build-op system keys)
+  t)
+
+;; An image op: the system loaded first (image-op's selfward load-op, as real
+;; ASDF's plan has it), the directories of its outputs made (what its perform
+;; :before does for every action), then the op performed on the system. Dumping
+;; is the interpreter's, whose image source has the image ops' methods: where the
+;; program is compiled the seam refuses before anything of the build runs.
+(defun %asdf-perform-image (operation system keys)
+  (%asdf-check-image-build (class-name (class-of operation))
+                           (asdf:coerce-name system))
+  (apply #'asdf:load-system system keys)
+  (let ((component (asdf:find-system system)))
+    (uiop/filesystem:ensure-all-directories-exist
+     (asdf:output-files operation component))
+    (asdf:perform operation component)))
+
+(defun asdf:output-file (operation component)
+  (first (asdf:output-files operation component)))
 
 ;; Load the definitions in a .asd; a file that is not there defines nothing, as
 ;; in real ASDF. On a compile path a literal top-level call was consumed while

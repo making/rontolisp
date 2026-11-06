@@ -1070,7 +1070,8 @@ public final class AsdfRuntimeLibrary {
 	// component is not loaded at run time: once the program defines an asdf:perform
 	// method, its forms are a top-level group whose thunk %asdf-load-spliced hands the
 	// protocol (compiler.SplicedComponentGroups), and load-op's primary method runs that
-	// thunk. Any other component load is the error a run-time load-system is.
+	// thunk. Any other component load is the error a run-time load-system is. An image op
+	// (asdf:make of a program-op system) refuses: dumping is the interpreter's.
 	private static final String SEAM_SOURCE = """
 			(defun %asdf-baked-record (key)
 			  (let ((found nil))
@@ -1100,6 +1101,11 @@ public final class AsdfRuntimeLibrary {
 			(defun %asdf-load-asd (path)
 			  (error "ASDF:LOAD-ASD cannot load ~a at run time on the compiled backends (systems are spliced at compile time)"
 			         path))
+			(defun %asdf-check-image-build (operation system)
+			  (error "ASDF:OPERATE: ~a on ~a dumps an image, which a compiled program has no compiler for: run rontolisp build ~a"
+			         operation system system))
+			(defmethod asdf:perform ((operation asdf:image-op) (component asdf:system))
+			  (%asdf-check-image-build (class-name (class-of operation)) (asdf:component-name component)))
 			(defun %asdf-runtime-load (operator name)
 			  (let ((rec (%asdf-baked-record (asdf:coerce-name name))))
 			    (if (and rec (nth 4 rec))
@@ -1152,6 +1158,12 @@ public final class AsdfRuntimeLibrary {
 	// in asdf), and an instance of a class named at run time. A compile path generates
 	// the
 	// second over the classes it spliced, and runs the first in its build image.
+	// And the image ops' methods, ASDF 3.3.1's: where a program-op writes (its
+	// bundle-output-files: :build-pathname below the system's directory, by default the
+	// system's name, no type on a Unix host), the entry point it restores, and the dump.
+	// Only an image dumps (a compiled program's seam refuses before the perform), and
+	// here they keep uiop:ensure-function, and through it eval, out of every compiled
+	// program that loads a system.
 	private static final String IMAGE_SOURCE = """
 			(defun %asdf-class-named (designator)
 			  (let* ((name (cond ((keywordp designator)
@@ -1188,6 +1200,23 @@ public final class AsdfRuntimeLibrary {
 			  (let ((found (%asdf-check-found (asdf:search-for-system-definition key))))
 			    (cond ((typep found 'asdf:system) (%asdf-adopt-system key found) t)
 			          (found (namestring found)))))
+			(defmethod asdf:output-files ((operation asdf:image-op) (component asdf:system))
+			  (let* ((program (typep operation 'asdf:program-op))
+			         (name (or (asdf::component-build-pathname component)
+			                   (if program
+			                       (asdf:component-name component)
+			                       (concatenate 'string (asdf:component-name component) "--all-systems")))))
+			    (values (list (if (and (pathnamep name) (uiop/pathname:absolute-pathname-p name))
+			                      name
+			                      (uiop/pathname:subpathname (asdf:component-pathname component) name
+			                                                 :type (if program nil "image"))))
+			            t)))
+			(defmethod asdf:perform :before ((operation asdf:program-op) (component asdf:system))
+			  (setf uiop/image:*image-entry-point*
+			        (uiop/utility:ensure-function (asdf::component-entry-point component))))
+			(defmethod asdf:perform ((operation asdf:image-op) (component asdf:system))
+			  (uiop/image:dump-image (asdf:output-file operation component)
+			                         :executable (typep operation 'asdf:program-op)))
 			(defun %asdf-derive-system (key)
 			  (and (%asdf-infer-system key) (%asdf-registered-instance key)))
 			(defun %asdf-read-source-registry (parameter)

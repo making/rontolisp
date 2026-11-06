@@ -27293,15 +27293,19 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalUiopImageTheImageItselfIsNotImplemented() {
-		// There is no image: a program is started from source and the compile backends
-		// emit an artifact rather than saving a heap. The three name that instead of
-		// half-doing it.
+	void evalUiopImageRestoresAndDumpsOnlyThroughTheCommandLine() {
+		// An image is dumped by compiling it, which the command line's builder does: an
+		// evaluator without one refuses, as a compiled program does, and nothing links
+		// object files. A program starts fresh everywhere, the restored case, so
+		// restore-image is upstream's start, once.
 		assertThat(evalMulti("""
 				(list (handler-case (uiop:dump-image "x.img") (uiop:not-implemented-error () :dump-image))
-				      (handler-case (uiop:restore-image) (uiop:not-implemented-error () :restore-image))
-				      (handler-case (uiop:create-image "x" nil) (uiop:not-implemented-error () :create-image)))
-				""").print()).isEqualTo("(:DUMP-IMAGE :RESTORE-IMAGE :CREATE-IMAGE)");
+				      (handler-case (uiop:create-image "x" nil) (uiop:not-implemented-error () :create-image))
+				      (multiple-value-list
+				       (uiop:restore-image :lisp-interaction t :entry-point (lambda () (values :entered 2))))
+				      (uiop:restore-image :lisp-interaction t :if-already-restored nil
+				                          :entry-point (lambda () :again)))
+				""").print()).isEqualTo("(:DUMP-IMAGE :CREATE-IMAGE (:ENTERED 2) NIL)");
 	}
 
 	@Test

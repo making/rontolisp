@@ -6,9 +6,10 @@
 `(asdf:oos 'asdf:load-op :my-lib)` はシステムをロードします。ロードの別の書き方として
 `(asdf:load-systems :a :b)`、`(asdf:load-systems* '(:a :b))`、
 `(asdf:require-system :a)` があります。`(asdf:make :a)` はシステムの `:build-operation`
-を実行し、既定ではロードです。それ以外の build operation は拒否します。
-`asdf:compile-system` も同様です。ここではイメージのダンプも fasl の書き出しも
-行わないからです。
+を実行し、既定ではロードです。`program-op` はシステムの実行ファイルをビルドします
+([ASDF システムから実行ファイルをビルドする](../../compiling/asdf-programs.md))。それ以外の
+build operation は拒否し、`asdf:compile-system` も同様です。ここでは fasl を書き出さない
+からです。
 
 ```console
 (asdf:oos 'asdf:load-op :my-lib)   ; same as (asdf:load-system :my-lib)

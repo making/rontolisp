@@ -75,9 +75,9 @@ import org.jspecify.annotations.Nullable;
  * explicit second argument {@code (require NAME "path.lisp")} overrides the file mapping.
  * The provided-module set is threaded through the whole inline recursion, so the diamond
  * case (two files both requiring the same module) loads the module once. Unlike
- * {@code load}, a {@code require}/{@code provide} that is not a literal top-level form
- * cannot be deferred to runtime (the compiled runtime reader does not know them), so the
- * compilers reject any occurrence left after this pass.
+ * {@code load}, a {@code require} that is not a literal top-level form loads nothing at
+ * run time ({@link NestedRequires}); a {@code provide} cannot be deferred to runtime, so
+ * the compilers reject any occurrence left after this pass.
  *
  * <p>
  * The same pass also implements the compile-time side of the limited ASDF subset (see
@@ -277,6 +277,9 @@ public final class LoadInliner {
 			expandInto(program, result, ctx, new Origin(baseDir, entryFile, truename));
 			result.add(marker(LispNames.END_FILE));
 		}
+		// A require left in the program (nested, or a computed name) loads nothing at
+		// run time; the provided set is complete here.
+		result = NestedRequires.lower(result, ctx.provided());
 		// Fold the ASDF/UIOP pathname primitives + bundle with-open-file bodies of
 		// literal-path files: a real library evaluates them at load time to build a path
 		// pointing at a bundled data file (uax-15's precomputed-tables.lisp), and the

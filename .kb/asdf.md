@@ -33,8 +33,9 @@ cl-project, caveman2), even on a line never reached. prove, cl-project and cavem
   default method that signals, so a library's method works; a variable is nil; a class or condition
   has upstream's superclasses. A flattened superclass list keeps only the most specific, as listing
   a class ahead of its subclass has no linearization. A sub-package-only name reads but is defined
-  only if `asdf.lisp` needs it or a stub class inherits from it (`plan-traversal`). The bundle and
-  program ops stay refusals: classes `operate` signals on, by name.
+  only if `asdf.lisp` needs it or a stub class inherits from it (`plan-traversal`). The bundle ops
+  other than the image pair stay refusals: classes `operate` signals on, by name ("Building an
+  executable").
 - **Who carries what**: the interpreter evaluates `asdf.lisp` and every stub on the first ASDF
   name. A compile path splices `asdf.lisp`, the stubs the program names with their superclasses, and
   the registry. It reads the names off a RESOLVED copy (`mentionedMembers`), so a bare
@@ -62,7 +63,8 @@ cl-project, caveman2), even on a line never reached. prove, cl-project and cavem
 - **Other load spellings at top level** (`loadSystemsNames`): `oos`/`operate` with quoted `load-op` or
   `load-source-op`, `load-systems`, `load-systems*`, `require-system` splice and are consumed. `test-op`
   through `oos`/`operate` splices like `test-system` and stays. `make` splices and stays, deciding at run
-  time from `:build-operation`. `load-asd` of a path that folds runs in the build image and is consumed.
+  time from `:build-operation` (an image op refuses there: "Building an executable"). `load-asd` of a
+  path that folds runs in the build image and is consumed.
 - **`clear-system`** on a compile path: the name leaves `registered-system`, `component-loaded-p` and
   `registered-systems` until the next `find-system`, which answers a new instance of the baked record;
   a load loads nothing, so `component-loaded-p` is `t` again from then. Interpreter: the registry forgets,
@@ -439,8 +441,8 @@ its methods in the program too, since `:defsystem-depends-on` splices that sourc
   ASDF signals.
 - **`(require :asdf)`, `(require :uiop)`** load nothing (`AsdfSystems.isImplementationModule`), on all
   four. Every measured script opens with one, and it stopped each before `initialize-source-registry`:
-  the premise "each is a script's first line" had this line ahead of it. A nested `require` stays refused
-  on a compile path.
+  the premise "each is a script's first line" had this line ahead of it. A nested `require` loads nothing at
+  run time on a compile path ([load-inliner.md](load-inliner.md), `NestedRequires`).
 - **Measured** (2026-11-05, interpreter; `source-registry/exercise.lisp` also on SBCL 2.2.9's ASDF 3.3.1):
   fiveam's `build.lisp` succeeds and `test.lisp` runs 57 of 57 checks. cl-json's `test-cl-json.lisp`
   succeeds with fiveam and its dependencies on `RONTOLISP_SOURCE_REGISTRY`; `compile-cl-json.lisp` stops
@@ -617,9 +619,9 @@ propagation mixins `downward-operation` & co., `prepare-op`, `compile-op`, `load
 `make-operation` (one instance per class), the generics `perform`, `input-files`,
 `output-files`, `source-file-type` and `operation-done-p` (default `t`; arnesi's `clean-op`
 adds a method), and `operate` (load-op and load-source-op -> `load-system`, test-op ->
-`test-system`, build-op -> `make`, anything else SIGNALS: there is nothing for compile-op alone
-to produce). `compile-bundle-op` is a stub class (arnesi's `make-single-fasl` names it; `operate`
-refuses it). Default
+`test-system`, build-op -> the system's `:build-operation`, an image op -> the dump of "Building an
+executable", anything else SIGNALS: there is nothing for compile-op alone to produce).
+`compile-bundle-op` is a stub class (arnesi's `make-single-fasl` names it; `operate` refuses it). Default
 methods are ASDF 3.3.1's for the classes the model has: load-op on a `cl-source-file` loads the
 source (`%asdf-load-component`, the seam), compile-op on a source file and everything on a
 parent component is a no-op, any other op on a source file signals, test-op on a system runs the
@@ -683,6 +685,84 @@ recorded body. A designator op (`'asdf:load-op`) dispatches through a `symbol` m
   file-local binding and nesting), `LispEvaluatorTest#loadEvaluatesFileAndReusesDefinitions`
   (a macro call in a loaded file), `UserMacroExpanderTest#macroExpandingToDefmacroIsConsumedToo`
   (fiveam's `(flet () (defmacro ...) 'name)`, `.kb/defmacro-backquote.md`).
+
+## Building an executable: `program-op`, `asdf:make`, `rontolisp build` (i83, 2026-11-06)
+**Decision: the interpreter is the image a build runs in, and `uiop:dump-image` COMPILES that
+image.** No backend has a heap to save, so ECL's model, not SBCL's: the artifact is a program
+compiled from source -- what the image loaded, then its start. `asdf:make` of a program-op system,
+`rontolisp build SYSTEM` and a build script's `(asdf:make :app)` are one path. Rejected: compiling
+the system with its entry point beside ASDF (`rontolisp build` alone, `asdf:make` refusing): the
+build-time half of a library's protocol (deploy's hooks) would have nowhere to run, and every
+Makefile's `--eval '(asdf:make :app)'` would need rewriting.
+- **ASDF 3.3.1's protocol**: `make` -> `operate build-op` -> the `:build-operation` (`%asdf-build-operation`:
+  a string or keyword names a symbol of `asdf`, where deploy imports `deploy-op`; `PACKAGE:NAME`
+  finds NAME there; no reader) -> for an image op (`bundle-op`, `monolithic-op`,
+  `monolithic-bundle-op`, `image-op`, `program-op` are real classes) `%asdf-perform-image`: the load
+  (image-op's selfward load-op), the output directories (what `perform :before` does per action),
+  `perform`. Its methods are upstream's and live in the INTERPRETER's image source
+  (`AsdfRuntimeLibrary.IMAGE_SOURCE`): `output-files` is `bundle-output-files` (`:build-pathname`
+  below the system's `component-pathname`, by default its name, no type for a Unix program; an
+  absolute pathname is itself), `perform :before program-op` sets `*image-entry-point*` from
+  `(ensure-function (component-entry-point c))`, `perform image-op` dumps. Kept out of `asdf.lisp`:
+  `ensure-function` reaches `eval`, and every compiled program loading a system would carry it.
+  `component-entry-point`/`-build-pathname` are accessors (deploy sets the first, `-o` the second).
+- **Where it refuses**: a compile path's `%asdf-check-image-build` seam (before any of the build
+  runs) and its `%dump-image` prelude definition; an evaluator the command line did not create (no
+  `ImageBuilder`). Each names `rontolisp build SYSTEM`. `image-op` alone (`:executable nil`, a core)
+  refuses: there is no Lisp to start from a heap.
+- **The dumped program** (`eval/ImageDump`): `(asdf:load-system NAME)` for each system the program
+  asked for while no other was loading (`imageSystems`, in completion order; `clear-system` does not
+  take one out -- the code stays in the image), then `(setf uiop:*image-dumped-p* :executable)` and
+  `(uiop:restore-image :entry-point ...)`. Found through the `.asd` directories of every loaded
+  system, then `--system-path`, then the dists. The target reads it with its OWN features, so a
+  dependency a target lacks drops (deploy's cffi on a `.wasm`). Carried as source: a function by its
+  global name, a call designator `(F ARG...)` as `(lambda (&rest a) (apply #'F ARG... a))`, a
+  `lambda` form verbatim, a string read in the image, data that prints readably (`*image-prelude*`
+  too). Refused by name: a closure, an instance, a system no `.asd` defines. NOT carried: what the
+  image evaluated outside a system, build-time state (a variable a `:build` hook set), restore hooks
+  registered after the load (the program's own load registers its own).
+- **The start** is upstream's `restore-image` (real on all four): restore hooks, prelude, entry
+  point, `shell-boolean-exit` of its first value, because `*lisp-interaction*` is nil here
+  ([uiop.md](uiop.md)). SBCL's program-op image keeps upstream's default t and exits 0 whatever the
+  entry point answers (measured 2026-11-06, SBCL 2.2.9): the one divergence in the contract.
+- **The artifact's kind follows its name** (`RontoLispCli.imageBuilder`): no type is `--native`
+  (a program-op's Unix executable), `.jar`/`.class` the JVM, `.wasm` a module, `.war` refused. The
+  run's own compile flags reach the compile; `rontolisp build` exists so they can (`--native-target`,
+  `--component`, `--optimize`), and its `-o` replaces the system's build pathname, so a library that
+  derives a location from the operation's output (deploy's data directory) follows it.
+- **A jar's argv0 is its path** (`JvmArgvRuntimeBuilder`: the code source of the class, when it is a
+  `.jar`), the class name otherwise: an executable's directory is where deploy finds its data.
+- **Measured** (2026-11-06): clingon.intro's shape (`program-demo`) prints and exits the same as a
+  JVM jar, a Preview 1 module and a native executable; its SBCL image matches but for the exit status.
+
+### deploy: build-time hooks in the image, boot hooks in the executable
+deploy (Shirakumo, 3.0.0) builds with deploy's own methods on the interpreter, so its build-time
+work happens where SBCL's does: `:load` hooks, the library gathering, `:deploy` hooks (writing the
+data directory next to the artifact), `:build` hooks (source checksum, clear-asdf, uiop's dump
+hooks). Its dump call compiles; the executable boots as deploy boots: `:boot` hooks, the entry point,
+`:quit` hooks. `deploy:data-directory` is the executable's directory, a jar's included.
+- **Derived forms** (tier 4, `eval/DeployForms`, pinned by `AsdfProgramOpE2eTest`): the rontolisp arms of
+  `command-line-arguments` (`uiop:raw-command-line-arguments`) and `envvar` (`uiop:getenv`), which had
+  none and answered nil; `runtime-directory` takes argv0's directory only where argv0 names a file
+  (a class name, a name found on `PATH`, `wasmtime run`'s module name fall to deploy's
+  `*default-pathname-defaults*` arm); and the dump's entry point, a closure over
+  `call-entry-prepared`, becomes `(call-dumped-entry ENTRY *build-time* *source-checksum*
+  *data-location*)`: the build state its boot reads, set again, `deployed-p` made true, then deploy's boot.
+- **Replacement `.asd`** (tier 2, `deploy-rontolisp.asd`): cffi is a dependency except on a `.wasm`,
+  deploy's own mezzano arm, as a `.wasm` refuses `ffi:`. The interpreter's image still loads cffi.
+- **Prerequisites found on the way**: `register-immutable-system`/`register-preloaded-system` (the
+  clear-asdf hook; recorded, the search reads neither); `uiop/image::*image-restored-p*`, upstream's
+  internal (`UiopLibrary.INTERNALS`); a restart's `&optional` default (`(exit (&optional (exit-code
+  0)))`: `restart-case` bound nil, so every boot ended in `(uiop:quit nil)`; ci-spec `restart-system`);
+  uiop's selection now follows a surface callee of a definition it pulled in (`standard-eval-thunk`
+  reached `call-with-input-file` through `eval-input` only by name).
+- **Divergences**: `:pre-load` hooks, which deploy runs from a `make-plan :before` method, never run
+  (the plan is fixed); `*foreign-libraries-to-reload*` is not carried, the program's own load opens
+  its libraries. Measured (2026-11-06) against SBCL 2.2.9 on the todo's `hello`: the build runs the
+  hooks SBCL's runs (its `#+sbcl` finalize-clos aside), the executable prints the same boot lines and
+  checksum on the JVM and natively, `uiop:argv0` aside
+  (SBCL's deploy image answers nil: its `*image-dumped-p*` is `t`, never `:executable`); a module boots
+  too, its runtime directory the default (`wasmtime run`'s argv0 is the module's bare name).
 
 ## The exported surface, measured 2026-11-05
 Against SBCL 2.2.9's ASDF 3.3.1 externals, by `find-symbol` on the interpreter: `asdf` has 230 of
@@ -807,6 +887,7 @@ PATH**, so component files still resolve against the real tree. One entry serves
 | `cl-unicode.asd` | `cl-unicode-built.asd` | drops the build system, `component-depends-on`, fiveam |
 | `uffi.asd` | `uffi-cffi.asd` | guards its whole `defsystem` per implementation; the replacement is cffi's own `uffi-compat/uffi.asd`, over `cffi-uffi-compat` (package nickname `uffi`). Interpreter and JVM; a `.wasm` refuses by naming `ffi:` |
 | `clsql.asd` | `clsql-closer-mop.asd` | loads uffi only for a `perform :after` reading `~/.clsql-init.lisp`, which does not run here, and names no MOP system; the replacement declares `closer-mop` and leaves uffi to the database backends, so the core reaches wasm |
+| `deploy.asd` | `deploy-rontolisp.asd` | cffi copies foreign libraries next to an executable; a `.wasm` has none and refuses `ffi:`, so it reads deploy the mezzano way ("deploy: build-time hooks") |
 
 **Every bundled replacement `.asd` and every leaf-module shim `.lisp` also needs a
 `resource-config.json` entry** (`AsdOverrides` resp. `ShimLibraries` as `typeReachable`). A
@@ -1004,6 +1085,9 @@ Prerequisites found on the way, each a general gap: `(do* () ...)`, a `loop` mix
 `typep` of an external deftype name on the interpreter, `pkg::name` of a name inherited from a used
 package ([packages.md](packages.md)), `*debugger-hook*`, `%check-sequence-bounds` for a program whose
 only Gray stream is a composite one, the MOP names in [clos.md](clos.md).
+
+**`eval/DeployForms`** (pinned by `AsdfProgramOpE2eTest`): deploy's command-line and environment
+arms, its runtime directory and its dump's entry point -- "deploy: build-time hooks" above.
 
 Retired from this tier: `eval.AlexandriaSymbols`, deleted once `*package*` became a genuine
 dynamic variable (`.kb/packages.md`).

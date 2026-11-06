@@ -19980,7 +19980,7 @@ public final class LispMacroExpander {
 		// (defstruct (name option...) slot...): the supported options are
 		// (:constructor name [boa-lambda-list]), (:conc-name prefix-or-nil),
 		// (:copier name-or-nil), (:predicate name-or-nil), (:include parent),
-		// (:type (vector ...)) and the printer pair (:print-object fn) /
+		// (:type (vector ...)), :named and the printer pair (:print-object fn) /
 		// (:print-function fn); anything else is a hard error naming the clause.
 		LispSymbol nameSym;
 		// Every (:constructor ...) option defines its OWN function, so this is a list:
@@ -20010,6 +20010,9 @@ public final class LispMacroExpander {
 		// The packed element width of a (:type (vector (unsigned-byte 8|16|32))) struct,
 		// or 0 for any other typed-vector element type (see the :TYPE case below).
 		int typedVectorElementBits = 0;
+		// :named: a typed struct carries its name in element 0 and has a predicate; on
+		// an untyped struct it changes nothing (CLHS defstruct).
+		boolean named = false;
 		// (:print-object fn) / (:print-function fn): the struct's printer, as a function
 		// DESIGNATOR. Both ride the print-object seam (.kb/clos.md) as a generated
 		// defmethod rather than a printer mechanism of their own; the CLtL1
@@ -20141,6 +20144,13 @@ public final class LispMacroExpander {
 						// keeps the plain (vector ...) construction.
 						typedVectorElementBits = packedElementBits(optValue);
 					}
+					case ":NAMED" -> {
+						if (optParts.size() > 1) {
+							throw new UnsupportedOperationException(
+									LispNames.DEFSTRUCT + " option is not supported: " + option.print());
+						}
+						named = true;
+					}
 					case LispNames.DEFSTRUCT_INTERN_PACKAGE -> {
 						if (!(optValue instanceof LispString pkg)) {
 							throw new UnsupportedOperationException(
@@ -20165,6 +20175,14 @@ public final class LispMacroExpander {
 					+ " :print-object / :print-function on a :type struct is not supported: " + parts.get(1).print());
 		}
 		String structName = nameSym.name();
+		boolean typedNamed = named && typedVector;
+		if (typedNamed && typedVectorElementBits != 0) {
+			// The name symbol cannot be an element of a packed integer vector.
+			throw new UnsupportedOperationException(LispNames.DEFSTRUCT
+					+ " :named on a packed integer :type is not supported: " + parts.get(1).print());
+		}
+		// A :named typed struct's slots start after the name in element 0.
+		int typedOffset = typedNamed ? 1 : 0;
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(structName);
 		// A generated name lands in the package current at the defstruct (the struct
 		// name's own unless the resolver recorded another), spelled exactly as the
@@ -20311,6 +20329,9 @@ public final class LispMacroExpander {
 					// evaluate their initforms in the constructor body.
 					java.util.Map<String, LispSymbol> boaParams = boaParameterSymbols(ctor.boaLambdaList());
 					List<LispVal> boaValues = new java.util.ArrayList<>();
+					if (typedNamed) {
+						boaValues.add(unspelledQuoteOf(structName));
+					}
 					for (int i = 0; i < slotSyms.size(); i++) {
 						LispSymbol param = boaParams.get(slotBases.get(i));
 						boaValues.add(param != null ? param : slotDefaults.get(i));
@@ -20325,10 +20346,14 @@ public final class LispMacroExpander {
 					// than
 					// a cons -- listToCons would blow up casting it.
 					LispVal params0 = lambdaList.isEmpty() ? LispNil.INSTANCE : listToCons(lambdaList);
+					List<LispVal> elements = new java.util.ArrayList<>();
+					if (typedNamed) {
+						elements.add(unspelledQuoteOf(structName));
+					}
+					elements.addAll(slotSyms);
 					forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(ctor.name()), params0,
-							typedList ? listOf(List.copyOf(slotSyms))
-									: typedVector ? vectorOf(List.copyOf(slotSyms), typedVectorElementBits)
-											: objNew(structTag, List.copyOf(slotSyms)))));
+							typedList ? listOf(elements) : typedVector ? vectorOf(elements, typedVectorElementBits)
+									: objNew(structTag, List.copyOf(slotSyms)))));
 				}
 			}
 		}
@@ -20345,6 +20370,21 @@ public final class LispMacroExpander {
 			if (closRegistry != null) {
 				closRegistry.registerStructPredicate(structName, predicateName);
 			}
+		}
+		else if (!suppressPredicate && typedNamed) {
+			// (defun <base>-p (__struct) ...): the name in element 0 is the whole test,
+			// as
+			// in SBCL; a typed struct has no tag to widen, so nothing regenerates it.
+			String predicateName = customPredicate != null ? customPredicate : inPackage.apply(base + "-P");
+			LispVal nameIs = typedList
+					? callOf(LispNames.EQ_GENERAL, callOf(LispNames.CAR, obj), unspelledQuoteOf(structName))
+					: makeIf(callOf(LispNames.PLUSP, callOf(LispNames.LENGTH, obj)),
+							callOf(LispNames.EQ_GENERAL,
+									listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(0))),
+									unspelledQuoteOf(structName)),
+							LispNil.INSTANCE);
+			forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(predicateName), params,
+					makeIf(callOf(typedList ? LispNames.CONSP : LispNames.VECTORP, obj), nameIs, LispNil.INSTANCE))));
 		}
 		// (defun copy-<base> (__struct) (%obj-new '%struct-<name> (%obj-ref __struct 0)
 		// ...)): a shallow copy, like copy-structure -- the slot values are shared. A
@@ -20376,9 +20416,10 @@ public final class LispMacroExpander {
 			String accessor = inPackage.apply(concName + slotBases.get(i));
 			boolean readOnly = readOnlySlots.contains(slotBases.get(i));
 			if (typedVector) {
+				int element = i + typedOffset;
 				LispVal arefRead = typedList
-						? listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(i), obj))
-						: listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(i)));
+						? listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(element), obj))
+						: listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(element)));
 				forms.add(listToCons(
 						List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params, arefRead)));
 				if (readOnly) {
@@ -20388,13 +20429,13 @@ public final class LispMacroExpander {
 				LispSymbol newVal = new LispSymbol(STRUCT_NEWVAL_VAR);
 				LispVal writerParams = listToCons(List.<LispVal>of(newVal, obj));
 				LispVal slotPlace = typedList
-						? listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(i), obj))
-						: listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(i)));
+						? listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(element), obj))
+						: listToCons(List.of(new LispSymbol(LispNames.AREF), obj, new LispInteger(element)));
 				LispVal store = listToCons(List.of(new LispSymbol(LispNames.SETF), slotPlace, newVal));
 				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN),
 						new LispSymbol(setfFunctionName(accessor)), writerParams, store)));
 				// A list slot stores through the writer; a vector one inlines its aref.
-				structAccessors.put(accessor, typedList ? SETF_FUNCTION_MARKER : TYPED_VECTOR_SLOT_BASE - i);
+				structAccessors.put(accessor, typedList ? SETF_FUNCTION_MARKER : TYPED_VECTOR_SLOT_BASE - element);
 			}
 			else {
 				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params,
@@ -20796,7 +20837,9 @@ public final class LispMacroExpander {
 		}
 		else if (parts.get(1) instanceof LispCons header && header.car() instanceof LispSymbol headerName) {
 			nameSym = headerName;
-			for (LispVal option : header.toList().subList(1, header.toList().size())) {
+			for (LispVal written : header.toList().subList(1, header.toList().size())) {
+				LispVal option = written instanceof LispSymbol bare && bare.isKeyword()
+						? new LispCons(bare, LispNil.INSTANCE) : written;
 				if (!(option instanceof LispCons optCons) || !(optCons.car() instanceof LispSymbol optSym)
 						|| !optCons.isProperList()) {
 					continue;
@@ -20957,7 +21000,9 @@ public final class LispMacroExpander {
 		}
 		else if (parts.get(1) instanceof LispCons header && header.car() instanceof LispSymbol headerName) {
 			nameSym = headerName;
-			for (LispVal option : header.toList().subList(1, header.toList().size())) {
+			for (LispVal written : header.toList().subList(1, header.toList().size())) {
+				LispVal option = written instanceof LispSymbol bare && bare.isKeyword()
+						? new LispCons(bare, LispNil.INSTANCE) : written;
 				if (!(option instanceof LispCons optCons) || !(optCons.car() instanceof LispSymbol optSym)
 						|| !optCons.isProperList()) {
 					opaque = true;
@@ -20983,8 +21028,10 @@ public final class LispMacroExpander {
 						concNameGiven = true;
 						concNameOverride = structConcName(optValue);
 					}
-					case ":PREDICATE", ":COPIER", ":PRINT-OBJECT", ":PRINT-FUNCTION" -> {
-						// Readers only: neither defines a slot writer.
+					case ":PREDICATE", ":COPIER", ":PRINT-OBJECT", ":PRINT-FUNCTION", ":NAMED" -> {
+						// Readers only: neither defines a slot writer (:named moves slots
+						// only
+						// beside :type, which is opaque on its own).
 					}
 					case ":INCLUDE" -> {
 						if (optValue instanceof LispSymbol inc) {
@@ -43546,13 +43593,12 @@ public final class LispMacroExpander {
 	 * restart stack; an invoked restart throws {@code (index . args)} to a fresh
 	 * eq-unique catch tag, so control unwinds back to this frame (restoring the stack
 	 * through the unwind-protect cleanup) and the clause body runs INLINE in the
-	 * restart-case's own lexical environment with the invocation arguments bound
-	 * positionally. Normal completion carries the primary form's values through
+	 * restart-case's own lexical environment with the invocation arguments bound by its
+	 * lambda list. Normal completion carries the primary form's values through
 	 * {@code multiple-value-list}/{@code values-list}. Clause options: {@code :report}
 	 * (string or function), {@code :interactive} and {@code :test} are stored in the
 	 * record (nothing in-tree renders or invokes them interactively -- no debugger).
-	 * Lite: {@code &optional} clause parameters take nil instead of their default when
-	 * not supplied, and there is no condition-restart association.
+	 * Lite: there is no condition-restart association.
 	 * @param cons the restart-case expression
 	 * @return the expanded expression
 	 */
@@ -43634,36 +43680,22 @@ public final class LispMacroExpander {
 			LispVal test, List<LispVal> body) {
 
 		/**
-		 * Builds the clause body with the parameters bound positionally from the
-		 * invocation-argument list: required (and {@code &optional}, lite: nil when
-		 * missing, defaults ignored) parameters read {@code (nth k args)}, a
-		 * {@code &rest} parameter reads {@code (nthcdr k args)}.
+		 * Builds the clause body with the parameters bound from the invocation-argument
+		 * list as an ordinary lambda list binds them -- an {@code &optional}'s default
+		 * and supplied-p, {@code &rest}, {@code &key}, {@code &aux} -- through
+		 * {@code destructuring-bind}, whose {@code let*} keeps the body inline. deploy's
+		 * {@code (exit (&optional (exit-code 0)) ...)} is invoked with no argument.
 		 */
 		LispVal bindParams(LispSymbol argsVar) {
-			List<LispVal> bindings = new java.util.ArrayList<>();
-			int pos = 0;
-			boolean rest = false;
-			for (LispVal p : this.params) {
-				if (p instanceof LispSymbol marker && LispNames.LAMBDA_OPTIONAL.equals(marker.name())) {
-					continue;
-				}
-				if (p instanceof LispSymbol marker && LispNames.LAMBDA_REST.equals(marker.name())) {
-					rest = true;
-					continue;
-				}
-				LispVal var = p instanceof LispCons pc ? pc.car() : p;
-				String reader = rest ? LispNames.NTHCDR : LispNames.NTH;
-				bindings.add(listToCons(
-						List.of(var, listToCons(List.of(new LispSymbol(reader), new LispInteger(pos), argsVar)))));
-				if (!rest) {
-					pos++;
-				}
+			if (this.params.isEmpty()) {
+				return prognOrNil(this.body);
 			}
-			LispVal bodyForm = prognOrNil(this.body);
-			if (bindings.isEmpty()) {
-				return bodyForm;
-			}
-			return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), bodyForm));
+			List<LispVal> form = new java.util.ArrayList<>();
+			form.add(new LispSymbol(LispNames.DESTRUCTURING_BIND));
+			form.add(listToCons(this.params));
+			form.add(argsVar);
+			form.addAll(this.body.isEmpty() ? List.of(LispNil.INSTANCE) : this.body);
+			return listToCons(form);
 		}
 	}
 

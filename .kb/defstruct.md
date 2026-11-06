@@ -10,7 +10,7 @@ slot, over a registered `LispLayout`: `%obj-new`, `%obj-is`, `%obj-ref`, `%obj-s
 place, copier a fresh `%obj-new` (shallow). Instances are not `consp`/`listp`; `equal` compares
 slot-wise (deliberate CL deviation); `#S(...)` source reads back via `StructLiteralFolder`.
 
-- Options: `:constructor`/`:conc-name`/`:predicate`/`:copier`/`:include`/`:type`/
+- Options: `:constructor`/`:conc-name`/`:predicate`/`:copier`/`:include`/`:type`/`:named`/
   `:print-object`/`:print-function`, a dropped docstring, parsed-but-ignored slot
   `:type`, a `:read-only` slot (below); anything else throws "DEFSTRUCT option is not supported".
 - BOA `(:constructor name (lambda-list))`: a slot matching a parameter (`boaParameterSymbols`) reads
@@ -121,6 +121,12 @@ constructor, `nth` accessor, the writer registered as `SETF_FUNCTION_MARKER` (no
 
 - A declared `(vector (unsigned-byte 8|16|32))` element type is KEPT, so the constructor's
   `make-array` is packed on every backend and stores MASK to the declared width.
+- `:named` (2026-11-06, queues' `node`): beside `:type` the name is element 0 (an
+  `%unspelled-quote`, `typedOffset` shifts every slot index) and the predicate tests it, `(and
+  (consp x) (eq (car x) 'name))` / `(and (vectorp x) (plusp (length x)) (eq (aref x 0) 'name))`
+  as in SBCL 2.2.9; not in `structPredicates`, nothing widens it. Without `:type` a no-op. A packed
+  element type refuses it. `defstructSlotFlow` treats it as a reader (the `:type` beside it is
+  opaque anyway). ci-spec `defstruct-options`.
 - Stores ride `LispMacroExpander.TYPED_VECTOR_SLOT_BASE`: the accessor registers in
   `structAccessors` as `TYPED_VECTOR_SLOT_BASE - index` (below the `-1` setf-function marker;
   `expandSetf` is the sole reader) and `(setf (acc obj) v)` becomes `(setf (aref obj i) v)`.

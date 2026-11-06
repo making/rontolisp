@@ -25,6 +25,8 @@ sections:
         title: WASMへのコンパイル
       - file: compiling/native.md
         title: ネイティブ実行ファイルへのコンパイル
+      - file: compiling/asdf-programs.md
+        title: ASDF システムから実行ファイルをビルドする
       - file: compiling/dynamic.md
         title: 動的（遅延束縛）
       - file: compiling/warnings.md
