@@ -132,7 +132,7 @@
 | `both-case-p` | `(both-case-p #\a)` | 大小両形を持つ英字なら真(`lower-case-p` または `upper-case-p`) |
 | `special-operator-p` | `(special-operator-p 'if)` | ANSI の 25 個の特殊オペレータで `t`、それ以外は `nil` |
 | `macro-function` | `(macro-function 'when)` | マクロ展開器(インタープリタでは本物、コンパイル済み出力ではシグナルするスタブ)。関数と特殊オペレータには `nil` |
-| `compiler-macro-function` | `(compiler-macro-function 'square)` | `define-compiler-macro` の展開器(インタープリタでは本物、コンパイル済み出力ではシグナルするスタブ)。なければ `nil` |
+| `compiler-macro-function` | `(compiler-macro-function 'square)` | `define-compiler-macro` の展開器(インタープリタでは本物、コンパイル済み出力ではシグナルするスタブ)。なければ `nil`。`setf` で登録できる |
 | `compiled-function-p` | `(compiled-function-p #'car)` | どの関数にも真 |
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | ライト版スタブ: `(values nil t nil)`(ソース未記録) |
 | `list-all-packages` | `(list-all-packages)` | 登録済みの全パッケージを `find-package` が返すキーワードのリストで返します(コンパイラはコンパイル時に焼き込んだテーブルから答えます) |

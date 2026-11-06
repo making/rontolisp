@@ -29,7 +29,7 @@ no-op.
   standard operator (never registered).
 - **Expansion-time output is suppressed everywhere**: compile path writes to a null stream,
   `LispEvaluator` mutes `MutablePrintStream` around the expansion.
-- Not implemented: `notinline` (still rewritten), `(setf compiler-macro-function)`.
+- Not implemented: `notinline` (still rewritten).
 - `compiler-macro-function`: the interpreter answers the real expander off `compilerMacros`;
   the compile path answers `macro-function`'s `%macro-expander-stub` for a registered name
   (`UserMacroExpander.emitCompilerMacroFunctionTable` appends the defun when the program names
@@ -37,6 +37,34 @@ no-op.
   `#'compiler-macro-function` documentation test is the consumer.
 - `LispMacroExpander.expandDefineCompilerMacro` survives as the `--no-gc` nil lowering and for
   `macroexpand-1` of a DEFINITION form.
+
+## `(setf (compiler-macro-function name [env]) function)`
+An ordinary call on every consumer, unlike `(setf macro-function)`: `expandSetf` lowers it to
+`(%set-compiler-macro-function name value)` (an env subform evaluates through a `prog1` on the name).
+
+- Interpreter: `writeCompilerMacroFunction` puts a `UserMacro` with `expander` set in
+  `compilerMacros` (nil removes) and clears the call-site memo (`define-compiler-macro` clears it
+  too). `compiler-macro-function` answers the stored function itself; for a defined one, a function
+  capturing the `UserMacro` it had when asked, so a wrapper stored back does not reach itself.
+  A `(setf name)` name and a `cl` symbol are accepted and not registered; a non-function non-nil
+  value is a `type-error`.
+- Trap, fixed with this: `ensurePreludeSetfPlacesLoaded` loaded the PRELUDE entry of a setf place
+  head even when the interpreter defines the name itself, so the first such setf replaced the
+  interpreter's `compiler-macro-function` with the compile paths' nil-answering defun. It now skips
+  a name the global environment defines.
+- Compile paths: the prelude entry (selected by `usesRuntimeSetfCompilerMacroFunction`, a pruner
+  root) writes `%compiler-macro-function-writes%`; in such a program
+  `emitCompilerMacroFunctionTable` emits a `compiler-macro-function` reading the alist first (the
+  setf also activates the pass). Compiled call sites do not change, as under `compile-file`,
+  EXCEPT the static case: a top-level `(setf (compiler-macro-function 'f) <lambda | #'g | nil>)`
+  (`isStaticCompilerMacroWrite`) also evaluates into the macro-time evaluator, installing it for
+  the call sites after it, and stays in the program. A spliced library's write runs there anyway
+  (replay, `eval-when`): static-dispatch's `add-compiler-macro` installs `#'static-dispatch` for
+  generic-cl's later call sites.
+- Consumers: static-dispatch 20211209 (`common.lisp:294`), cl-environments 20250622
+  (`cl-overrides.lisp:194`). Measured 2026-11-07: `(ql:quickload :generic-cl)` loads on the
+  interpreter and a call runs through its compiler macro; the JVM compile of cl-environments
+  completes and runs.
 
 ## `load-time-value`
 `LispMacroExpander.hoistLoadTimeValues`, first line of `expandTopLevelDefinitions`; each
@@ -71,5 +99,5 @@ identity, as the interpreter's `evalLoadTimeValue` keys it: one form in two plac
   `.evalDefmacroWinsOverCompilerMacro`, `.loadTimeValueEvaluatesOncePerOccurrence`
 - `JvmLispCompilerTest.compileAndRunDefineCompilerMacroRewritesCallSites`, `.compileAndRunLoadTimeValue`
 - `WasmLispCompilerIntegrationTest.defineCompilerMacroAndRestartCase`, `.shiftfAndLoadTimeValue`
-- ci-spec `macrolet-compiler-macro-restart-case`, `makunbound-and-compiler-macro-function` (all four
-  backends)
+- ci-spec `macrolet-compiler-macro-restart-case`, `makunbound-and-compiler-macro-function` (incl.
+  the static and run-time `setf`; all four backends)

@@ -1872,6 +1872,12 @@ public final class PackageResolver {
 				case ":MIX", ":REEXPORT", ":MIX-REEXPORT" -> {
 					for (LispVal arg : args.subList(1, args.size())) {
 						String from = designatedPackage(designator(keyword.name(), "a package name", arg));
+						// The package itself (generic-cl.sequence mixes its own name in):
+						// uiop creates it first, and taking its own symbols changes
+						// nothing.
+						if (from.equals(name)) {
+							continue;
+						}
 						if (!this.registry.contains(from)) {
 							throw DefpackageException.packageError("No such package: " + from, from);
 						}

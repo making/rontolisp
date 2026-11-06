@@ -557,6 +557,34 @@ public final class LispPreludeLibrary {
 				(defun compiler-macro-function (name &optional environment)
 				  nil)
 				""");
+		// The write of a (setf compiler-macro-function): an alist compiler-macro-function
+		// reads first (UserMacroExpander.emitCompilerMacroFunctionTable). Same refusals,
+		// and the same names left unregistered, as
+		// LispEvaluator.writeCompilerMacroFunction.
+		SOURCES.put(LispNames.SET_COMPILER_MACRO_FUNCTION, """
+				(defvar %compiler-macro-function-writes% nil)
+				(defun %set-compiler-macro-function (name function)
+				  (if (or (symbolp name)
+				          (and (consp name) (eq (car name) 'setf) (consp (cdr name))
+				               (symbolp (car (cdr name))) (null (cdr (cdr name)))))
+				      nil
+				      (error 'simple-type-error :datum name :expected-type '(or symbol cons)
+				             :format-control "setf COMPILER-MACRO-FUNCTION expects a function name, got ~S"
+				             :format-arguments (list name)))
+				  (if (or (null function) (functionp function))
+				      nil
+				      (error 'simple-type-error :datum function :expected-type '(or function null)
+				             :format-control "setf COMPILER-MACRO-FUNCTION expects a function or nil, got ~S"
+				             :format-arguments (list function)))
+				  (if (and (symbolp name) (not (eq (symbol-package name) (find-package "COMMON-LISP"))))
+				      (let ((written (assoc name %compiler-macro-function-writes%)))
+				        (if written
+				            (rplacd written function)
+				            (setq %compiler-macro-function-writes%
+				                  (cons (cons name function) %compiler-macro-function-writes%))))
+				      nil)
+				  function)
+				""");
 		SOURCES.put(LispNames.MACRO_FN_INTERNAL, """
 				(defun %%macro-fn (symbol names)
 				  (if (or (member symbol names) (member symbol '(%s)))
@@ -5746,6 +5774,9 @@ public final class LispPreludeLibrary {
 		// expression compilers.
 		if (LispNames.SET_MACRO_FUNCTION.equals(entry)) {
 			return am.ik.rontolisp.macro.LispMacroExpander.usesRuntimeSetfMacroFunction(program);
+		}
+		if (LispNames.SET_COMPILER_MACRO_FUNCTION.equals(entry)) {
+			return am.ik.rontolisp.macro.LispMacroExpander.usesRuntimeSetfCompilerMacroFunction(program);
 		}
 		// write: LispMacroExpander.expandPprintLogicalBlock's atom arm calls it, inside
 		// the expression compilers. The arm exists unless the object is spelled as a

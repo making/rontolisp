@@ -338,7 +338,9 @@ REQUIRED and must canonicalize to `UIOP` or `MGL-PAX` (`isDefinePackageOperator`
 (`resolveDefpackage(cons, true)`), a hard error in a plain `defpackage`: `(:use-reexport PKG...)`;
 `(:mix PKG...)`, each external of each package imported unless shadowed, the earlier package winning a
 name two share (uiop's `ensure-mix`), no use-list entry; `(:reexport PKG...)`, its externals exported;
-`(:mix-reexport PKG...)`, both (every coalton package header). `:recycle` and `:unintern` stay
+`(:mix-reexport PKG...)`, both (every coalton package header). A mix clause naming the package
+being defined is skipped, as uiop creates the package before it mixes (generic-cl.sequence
+mixes itself; it was `No such package` on the first definition). `:recycle` and `:unintern` stay
 errors, as does redefinition tolerance. `mgl-pax:defsection` is consumed
 ADDITIVELY: its `(SYMBOL LOCATIVE)` entries are exported from the current package
 (`consumeDefsectionExports`) -- trivial-utf-8's ONLY export mechanism. Pinned by

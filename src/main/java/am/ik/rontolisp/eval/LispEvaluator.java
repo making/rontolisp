@@ -2173,29 +2173,45 @@ public final class LispEvaluator {
 			});
 		}));
 		// compiler-macro-function: macro-function's twin over the define-compiler-macro
-		// table -- the expander (funcall f form env), or nil when the name has none.
+		// table -- the expander (funcall f form env), or nil when the name has none; the
+		// function a (setf compiler-macro-function) installed, itself.
 		this.globalEnv.defineFunction(LispNames.COMPILER_MACRO_FUNCTION,
 				new LispFunction(LispNames.COMPILER_MACRO_FUNCTION, args -> {
 					if (args.isEmpty() || args.size() > 2) {
 						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 								LispNames.COMPILER_MACRO_FUNCTION + " expects 1 or 2 arguments, got " + args.size());
 					}
-					if (!(args.get(0) instanceof LispSymbol sym) || !this.compilerMacros.containsKey(sym.name())) {
+					UserMacro registered = args.get(0) instanceof LispSymbol sym ? this.compilerMacros.get(sym.name())
+							: null;
+					if (registered == null) {
 						return LispNil.INSTANCE;
 					}
-					String name = sym.name();
+					LispVal written = registered.expander();
+					if (written != null) {
+						return written;
+					}
+					String name = ((LispSymbol) args.get(0)).name();
 					return new LispFunction(LispNames.COMPILER_MACRO_FUNCTION + " " + name, callArgs -> {
 						if (callArgs.size() != 2) {
 							throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 									"a compiler macro function expects 2 arguments, got " + callArgs.size());
 						}
-						UserMacro macro = this.compilerMacros.get(name);
-						if (macro == null || !(macroCallForm(name, callArgs.get(0)) instanceof LispCons form)) {
+						// The macro it had when asked, as macro-function's: a wrapper a
+						// later setf installs around this function must not reach itself.
+						if (!(macroCallForm(name, callArgs.get(0)) instanceof LispCons form)) {
 							return callArgs.get(0);
 						}
 						return inSymbolMacroEnvironment(callArgs.get(1),
-								() -> expandMacroCall(name, macro, form, null));
+								() -> expandMacroCall(name, registered, form, null));
 					});
+				}));
+		this.globalEnv.defineFunction(LispNames.SET_COMPILER_MACRO_FUNCTION,
+				new LispFunction(LispNames.SET_COMPILER_MACRO_FUNCTION, args -> {
+					if (args.size() != 2) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.SET_COMPILER_MACRO_FUNCTION + " expects 2 arguments, got " + args.size());
+					}
+					return writeCompilerMacroFunction(args.get(0), args.get(1));
 				}));
 		this.globalEnv.defineFunction(LispNames.SYMBOL_FUNCTION, new LispFunction(LispNames.SYMBOL_FUNCTION, args -> {
 			if (args.size() != 1) {
@@ -13806,6 +13822,7 @@ public final class LispEvaluator {
 		catch (RuntimeException ex) {
 			this.compilerMacros.remove(name.name());
 		}
+		this.compilerMacroExpansions.clear();
 		bumpCallSiteEpoch();
 		return name;
 	}
@@ -14349,6 +14366,44 @@ public final class LispEvaluator {
 		putUserMacro(sym.name(), new UserMacro(List.of(), null, List.of(), this.globalEnv,
 				this.packageResolver.currentPackageName(), null, expander));
 		return expander;
+	}
+
+	/**
+	 * Carries out {@code (setf (compiler-macro-function name) function)}: the function is
+	 * the name's compiler macro from now on, applied to later call sites like a
+	 * {@code define-compiler-macro}'s, and nil removes it. A {@code (setf name)} function
+	 * name and a standard operator are accepted and not registered, as
+	 * {@link #evalDefineCompilerMacro} leaves them.
+	 * @param name the function name
+	 * @param function the compiler macro function, or nil
+	 * @return the function, what the setf answers
+	 */
+	private LispVal writeCompilerMacroFunction(LispVal name, LispVal function) {
+		boolean setfName = name instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.SETF.equals(op.name()) && cons.cdr() instanceof LispCons tail
+				&& tail.car() instanceof LispSymbol && tail.cdr() instanceof LispNil;
+		if (!(name instanceof LispSymbol) && !setfName) {
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					"setf " + LispNames.COMPILER_MACRO_FUNCTION + " expects a function name, got " + name.print());
+		}
+		if (!(function instanceof LispNil || function instanceof LispFunction || function instanceof LispLambda
+				|| (function instanceof LispInstance instance && instance.layout().funcallable()))) {
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME, "setf "
+					+ LispNames.COMPILER_MACRO_FUNCTION + " expects a function or nil, got " + function.print());
+		}
+		if (name instanceof LispSymbol sym && !PackageRegistry.isClSymbol(sym.name())) {
+			if (function instanceof LispNil) {
+				this.compilerMacros.remove(sym.name());
+			}
+			else {
+				this.compilerMacros.put(sym.name(), new UserMacro(List.of(), null, List.of(), this.globalEnv,
+						this.packageResolver.currentPackageName(), null, function));
+			}
+			// A call site expanded through the old definition expands again.
+			this.compilerMacroExpansions.clear();
+			bumpCallSiteEpoch();
+		}
+		return function;
 	}
 
 	/**
@@ -16891,14 +16946,17 @@ public final class LispEvaluator {
 	 * Loads the prelude entry of every {@code (setf (PLACE ...) v)} place head that is a
 	 * prelude function not yet loaded, so a prelude-provided {@code (defun (setf PLACE)
 	 * ...)} writer (the {@code get} entry) registers its place before the setf expansion
-	 * resolves it.
+	 * resolves it. A name this evaluator defines itself keeps its definition: its prelude
+	 * entry is the compile paths' ({@code compiler-macro-function}'s answers nil).
 	 */
 	private void ensurePreludeSetfPlacesLoaded(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		for (int i = 1; i + 1 < parts.size(); i += 2) {
 			if (parts.get(i) instanceof LispCons placeCons
 					&& LispMacroExpander.setfPlaceFunction(placeCons) instanceof LispSymbol head
-					&& LispPreludeLibrary.isPreludeFunction(head.name()) && this.loadedPreludeNames.add(head.name())) {
+					&& LispPreludeLibrary.isPreludeFunction(head.name())
+					&& this.globalEnv.lookupFunctionOrNull(head.name()) == null
+					&& this.loadedPreludeNames.add(head.name())) {
 				loadPreludeDefinition(head.name());
 			}
 		}

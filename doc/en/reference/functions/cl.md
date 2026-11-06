@@ -132,7 +132,7 @@ page.
 | `both-case-p` | `(both-case-p #\a)` | True for a cased letter (`lower-case-p` or `upper-case-p`) |
 | `special-operator-p` | `(special-operator-p 'if)` | `t` for the 25 ANSI special operators, `nil` for everything else |
 | `macro-function` | `(macro-function 'when)` | The macro expander (real on the interpreter, a signalling stub in compiled output), `nil` for a function or special operator |
-| `compiler-macro-function` | `(compiler-macro-function 'square)` | The `define-compiler-macro` expander (real on the interpreter, a signalling stub in compiled output), `nil` when the name has none |
+| `compiler-macro-function` | `(compiler-macro-function 'square)` | The `define-compiler-macro` expander (real on the interpreter, a signalling stub in compiled output), `nil` when the name has none; `setf` installs one |
 | `compiled-function-p` | `(compiled-function-p #'car)` | True for every function |
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | Lite stub: `(values nil t nil)` (no source recorded) |
 | `list-all-packages` | `(list-all-packages)` | Every registered package, as the keywords `find-package` answers (the compilers answer from a table baked in at compile time) |

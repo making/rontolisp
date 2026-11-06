@@ -4875,6 +4875,21 @@ public final class LispNames {
 	public static final String MACRO_FUNCTION_WRITES = "%MACRO-FUNCTION-WRITES%";
 
 	/**
+	 * The {@code (setf compiler-macro-function)} writer:
+	 * {@code (%set-compiler-macro-function name function)} installs {@code function} as
+	 * the name's compiler macro, or removes it when {@code function} is nil. The
+	 * interpreter's rewrites later call sites; a compiled program only answers it from
+	 * {@link #COMPILER_MACRO_FUNCTION}, its call sites being compiled already.
+	 */
+	public static final String SET_COMPILER_MACRO_FUNCTION = "%SET-COMPILER-MACRO-FUNCTION";
+
+	/**
+	 * The compile paths' alist of {@link #SET_COMPILER_MACRO_FUNCTION} writes, name to
+	 * function (nil for a removal), consulted by {@link #COMPILER_MACRO_FUNCTION} first.
+	 */
+	public static final String COMPILER_MACRO_FUNCTION_WRITES = "%COMPILER-MACRO-FUNCTION-WRITES%";
+
+	/**
 	 * The {@code compiled-function-p} standard function: a prelude defun answering true
 	 * for every function, as {@code (typep x 'compiled-function)} does.
 	 */

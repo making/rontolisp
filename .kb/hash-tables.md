@@ -483,7 +483,10 @@ cursor: one dispatch line each in `LispEvaluator.evalCons`, `Jvm`/`WasmExprCompi
 `PureBuiltinFolder`'s name-headed-spec arm. An entry added or removed DURING the walk is not seen.
 Internal variables are named after the ITERATOR (`__whti_<name>`, `_acc`, `_k`, `_v`, `_e`), not
 gensyms, so nesting shadows as the iterator names do and the emitted form is identical across
-backends and runs.
+backends and runs. The prefix goes on the MEMBER: an uninterned iterator name gives `#:__whti_G1`,
+a qualified one `P::__whti_N`. Spliced onto the whole name, a gensym's `#:` made `__whti_#` a
+package once a `macroexpand-1` handed the expansion to the compilers' resolver (generic-cl's
+iterators through cl-environments' walker, 2026-11-07).
 
 Tests: `LispEvaluatorTest.evalWithHashTableIterator`, `JvmLispCompilerTest`/
 `WasmLispCompilerIntegrationTest`'s `*SharpLAndCommaDotAndWithHashTableIterator`, ci-spec

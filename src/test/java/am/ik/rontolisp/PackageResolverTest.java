@@ -453,7 +453,9 @@ class PackageResolverTest {
 		resolve(resolver, "(in-package :cl-user)");
 		assertThat(resolve(resolver, "(re-mix:frob re-mix:bar)")).isEqualTo("(RE-SRC:FROB RE-OTHER:BAR)");
 		assertThat(resolve(resolver, "(re-mix:baz)")).isEqualTo("(RE-MIX:BAZ)");
-		resolve(resolver, "(uiop:define-package :re-mix-only (:mix :re-src))");
+		// generic-cl.sequence mixes its own name in, which the first definition must
+		// take.
+		resolve(resolver, "(uiop:define-package :re-mix-only (:mix :re-mix-only :re-src))");
 		resolve(resolver, "(in-package :re-mix-only)");
 		assertThat(resolve(resolver, "(frob)")).isEqualTo("(RE-SRC:FROB)");
 		resolve(resolver, "(in-package :cl-user)");

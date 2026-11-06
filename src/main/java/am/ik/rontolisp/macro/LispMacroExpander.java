@@ -4579,6 +4579,19 @@ public final class LispMacroExpander {
 					}
 					yield listToCons(List.of(new LispSymbol(LispNames.SET_MACRO_FUNCTION), placeParts.get(1), value));
 				}
+				case LispNames.COMPILER_MACRO_FUNCTION -> {
+					// An ordinary call on every consumer: the interpreter's writer
+					// installs the compiler macro, a compiled program's records what
+					// compiler-macro-function answers. The environment subform
+					// evaluates in place order and is otherwise unused.
+					if (placeParts.size() < 2 || placeParts.size() > 3) {
+						throw new IllegalArgumentException("setf " + LispNames.COMPILER_MACRO_FUNCTION
+								+ " expects a name and an optional environment: " + cons.print());
+					}
+					LispVal name = placeParts.size() == 2 ? placeParts.get(1) : listToCons(
+							List.of(new LispSymbol(LispNames.PROG1), placeParts.get(1), placeParts.get(2)));
+					yield listToCons(List.of(new LispSymbol(LispNames.SET_COMPILER_MACRO_FUNCTION), name, value));
+				}
 				default ->
 
 				{
@@ -33531,23 +33544,39 @@ public final class LispMacroExpander {
 	 * @return whether it can write macro-function at run time
 	 */
 	public static boolean usesRuntimeSetfMacroFunction(List<LispVal> program) {
-		return program.stream().anyMatch(LispMacroExpander::containsSetfMacroFunction);
+		return program.stream().anyMatch(form -> containsSetfOf(form, LispNames.MACRO_FUNCTION));
 	}
 
-	private static boolean containsSetfMacroFunction(LispVal form) {
+	/**
+	 * Whether the program carries a {@code (setf (compiler-macro-function ...) ...)}
+	 * outside quoted data: it runs {@link LispNames#SET_COMPILER_MACRO_FUNCTION}, so its
+	 * {@code compiler-macro-function} reads what that wrote.
+	 * @param program the program
+	 * @return whether it can write compiler-macro-function at run time
+	 */
+	public static boolean usesRuntimeSetfCompilerMacroFunction(List<LispVal> program) {
+		return program.stream().anyMatch(form -> containsSetfOf(form, LispNames.COMPILER_MACRO_FUNCTION));
+	}
+
+	private static boolean containsSetfOf(LispVal form, String accessorName) {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
 				String member = memberOf(op.name());
 				if (LispNames.isQuote(member)) {
 					return false;
 				}
-				if (LispNames.SETF.equals(member) && cons.cdr() instanceof LispCons pair
-						&& pair.car() instanceof LispCons place && place.car() instanceof LispSymbol accessor
-						&& LispNames.MACRO_FUNCTION.equals(plainTypeName(accessor))) {
-					return true;
+				if (LispNames.SETF.equals(member)) {
+					for (LispVal rest = cons
+						.cdr(); rest instanceof LispCons pair; rest = pair.cdr() instanceof LispCons valueCell
+								? valueCell.cdr() : LispNil.INSTANCE) {
+						if (pair.car() instanceof LispCons place && place.car() instanceof LispSymbol accessor
+								&& accessorName.equals(plainTypeName(accessor))) {
+							return true;
+						}
+					}
 				}
 			}
-			if (containsSetfMacroFunction(cons.car())) {
+			if (containsSetfOf(cons.car(), accessorName)) {
 				return true;
 			}
 			form = cons.cdr();
@@ -41710,12 +41739,28 @@ public final class LispMacroExpander {
 					+ " expects (with-hash-table-iterator (name table) body...): " + cons.print());
 		}
 		LispVal table = specCons.toList().get(1);
-		String stem = "__whti_" + name.name();
-		LispSymbol rest = new LispSymbol(stem);
-		LispSymbol acc = new LispSymbol(stem + "_acc");
-		LispSymbol key = new LispSymbol(stem + "_k");
-		LispSymbol value = new LispSymbol(stem + "_v");
-		LispSymbol entry = new LispSymbol(stem + "_e");
+		// The prefix goes on the member, so an uninterned (generic-cl's gensym) or
+		// package-qualified name stays one.
+		String prefix;
+		String stem;
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name.name());
+		if (name.name().startsWith("#:")) {
+			prefix = "#:";
+			stem = "__whti_" + name.name().substring(2);
+		}
+		else if (qualified != null) {
+			prefix = name.name().substring(0, name.name().length() - qualified.member().length());
+			stem = "__whti_" + qualified.member();
+		}
+		else {
+			prefix = "";
+			stem = "__whti_" + name.name();
+		}
+		LispSymbol rest = new LispSymbol(prefix + stem);
+		LispSymbol acc = new LispSymbol(prefix + stem + "_acc");
+		LispSymbol key = new LispSymbol(prefix + stem + "_k");
+		LispSymbol value = new LispSymbol(prefix + stem + "_v");
+		LispSymbol entry = new LispSymbol(prefix + stem + "_e");
 		// (let ((acc nil)) (maphash (lambda (k v) (setq acc (cons (cons k v) acc)))
 		// TABLE) acc)
 		LispVal collect = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(key, value)),
@@ -42142,6 +42187,11 @@ public final class LispMacroExpander {
 			LispVal deftypeExpansion = closRegistry.findDeftype(sym.name());
 			if (deftypeExpansion != null) {
 				return makeTypeTest(value, deftypeExpansion, closRegistry);
+			}
+			if (closRegistry == EMPTY_CLOS_REGISTRY) {
+				// No registry to ask (macroexpand-1, a code walker's view of typecase):
+				// the type is the program's, decided where the test runs.
+				return callOf(LispNames.TYPEP, value, quoteOf((LispVal) sym));
 			}
 			throw new IllegalArgumentException("Unsupported type specifier: " + sym.name());
 		}

@@ -16195,6 +16195,17 @@ cases:
         (with-hash-table-iterator (ci-whti-next ci-whti-h)
           (multiple-value-bind (ci-whti-more ci-whti-k ci-whti-v) (ci-whti-next)
             (print (list ci-whti-more ci-whti-k ci-whti-v)))))
+      ;; A macro walking its body through macroexpand-1 (cl-environments' walker): a
+      ;; typecase over the program's own class, an iterator a gensym names.
+      (defclass ci-whti-class () ())
+      (defmacro ci-whti-walked (form) (macroexpand-1 form))
+      (defun ci-whti-kind (x) (ci-whti-walked (typecase x (ci-whti-class :instance) (otherwise :other))))
+      (print (list (ci-whti-kind (make-instance 'ci-whti-class)) (ci-whti-kind 1)))
+      (defmacro ci-whti-count (table)
+        (let ((next (gensym "NEXT")))
+          (macroexpand-1 `(with-hash-table-iterator (,next ,table)
+                            (let ((n 0)) (loop (unless (,next) (return n)) (incf n)))))))
+      (print (ci-whti-count (let ((h (make-hash-table))) (setf (gethash 1 h) 2 (gethash 3 h) 4) h)))
     expected: |
       (1 4 9)
       (B C)
@@ -16202,6 +16213,8 @@ cases:
       (1 2 3 4)
       (1 B)
       (T A 1)
+      (:INSTANCE :OTHER)
+      2
 
   - name: backquote-quoted-splice
     source: |
@@ -26372,6 +26385,18 @@ cases:
       (defun mku-square (x) (* x x))
       (print (list (if (compiler-macro-function 'mku-square) t nil) (compiler-macro-function 'mku-a)
                    (if (funcall #'compiler-macro-function 'mku-square) t nil) (mku-square 5)))
+      ;; (setf compiler-macro-function): a top-level one of a lambda rewrites the call
+      ;; sites after it everywhere; a run-time one is what compiler-macro-function answers.
+      (setf (compiler-macro-function 'mku-tag)
+            (lambda (form env) (declare (ignore env)) (if (eql (second form) 0) :rewritten form)))
+      (defun mku-tag (x) (list :called x))
+      (defun mku-tag-user () (list (mku-tag 0) (mku-tag 1)))
+      (defun mku-cm (form env) (declare (ignore env)) form)
+      (defun mku-install (name fn) (setf (compiler-macro-function name) fn))
+      (print (list (mku-tag-user) (funcall (compiler-macro-function 'mku-tag) '(mku-tag 0) nil)
+                   (eq (mku-install 'mku-other #'mku-cm) #'mku-cm) (eq (compiler-macro-function 'mku-other) #'mku-cm)
+                   (progn (setf (compiler-macro-function 'mku-other nil) nil) (compiler-macro-function 'mku-other))
+                   (handler-case (mku-install 'mku-other 42) (type-error () :type-error))))
     expected: |
       (*MKU-A* NIL (:UNBOUND *MKU-A*))
       (T 3)
@@ -26381,6 +26406,7 @@ cases:
       ((T T) 7 5)
       (T NIL)
       (T NIL T 25)
+      ((:REWRITTEN (:CALLED 1)) :REWRITTEN T T NIL :TYPE-ERROR)
 
   # The tokenizer package (tokenizers.lisp, .kb/tokenizers.md): the five byte-level
   # pre-tokenizer shapes, the ranked merge loop, the special-token scan, Llama 3's

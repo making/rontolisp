@@ -115,6 +115,7 @@ public final class UserMacroExpander {
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_SETF_EXPANDER))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFSETF))
 				&& program.stream().noneMatch(UserMacroExpander::writesMacroFunction)
+				&& !LispMacroExpander.usesRuntimeSetfCompilerMacroFunction(program)
 				&& program.stream().noneMatch(UserMacroExpander::usesMacroexpand)
 				&& program.stream().noneMatch(UserMacroExpander::usesMacrolet)
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.SYMBOL_MACROLET))
@@ -952,13 +953,16 @@ public final class UserMacroExpander {
 	 * Appends the program's own {@code compiler-macro-function} when the program names
 	 * the function and defines a compiler macro: the compile path expanded every compiler
 	 * macro away, so the answer is a NAME test against the names this pass registered,
-	 * answering the {@code %macro-expander-stub} {@code macro-function} answers. The
-	 * prelude definition (nil for every name) is suppressed by this one; spelling as
-	 * {@link #emitMacroFunctionTable}.
+	 * answering the {@code %macro-expander-stub} {@code macro-function} answers. In a
+	 * program that runs a {@code (setf compiler-macro-function)}, what that wrote is read
+	 * first. The prelude definition (nil for every name) is suppressed by this one;
+	 * spelling as {@link #emitMacroFunctionTable}.
 	 */
 	private static void emitCompilerMacroFunctionTable(LispEvaluator macroEval, List<LispVal> result) {
 		List<String> names = macroEval.compilerMacroNames();
-		if (names.isEmpty() || result.stream().noneMatch(form -> mentions(form, LispNames.COMPILER_MACRO_FUNCTION))
+		boolean writes = LispMacroExpander.usesRuntimeSetfCompilerMacroFunction(result);
+		if ((names.isEmpty() && !writes)
+				|| result.stream().noneMatch(form -> mentions(form, LispNames.COMPILER_MACRO_FUNCTION))
 				|| result.stream().anyMatch(form -> definesFunction(form, LispNames.COMPILER_MACRO_FUNCTION))) {
 			return;
 		}
@@ -967,9 +971,12 @@ public final class UserMacroExpander {
 			table.append(table.isEmpty() ? "" : " ")
 				.append(PackageRegistry.splitQualified(name) == null ? LispNames.CL_USER_PKG + "::" + name : name);
 		}
+		String lookup = "(if (member name '(" + table + ")) #'" + LispNames.MACRO_EXPANDER_STUB + " nil)";
 		for (LispVal form : LispReader.readAllFromString(
-				"(defun " + LispNames.COMPILER_MACRO_FUNCTION + " (name &optional environment) (if (member name '("
-						+ table + ")) #'" + LispNames.MACRO_EXPANDER_STUB + " nil))",
+				"(defun " + LispNames.COMPILER_MACRO_FUNCTION + " (name &optional environment) "
+						+ (writes ? "(let ((written (assoc name " + LispNames.COMPILER_MACRO_FUNCTION_WRITES
+								+ "))) (if written (cdr written) " + lookup + "))" : lookup)
+						+ ")",
 				Features.INTERPRETER)) {
 			result.add(requalifyShadowedClNames(form, macroEval));
 		}
@@ -1385,6 +1392,19 @@ public final class UserMacroExpander {
 			replayDefinition(form, macroEval);
 			return;
 		}
+		if (isStaticCompilerMacroWrite(form)) {
+			// Installs the compiler macro for the call sites after it, as a
+			// define-compiler-macro does; the form stays, so compiler-macro-function
+			// answers the function at run time. A compiler macro is a hint: one that
+			// cannot be installed here is not honoured.
+			try {
+				macroEval.evalResolved(form);
+			}
+			catch (RuntimeException ex) {
+				// left uninstalled
+			}
+			return;
+		}
 		if (isOperator(form, LispNames.DEFVAR) || isOperator(form, LispNames.DEFPARAMETER)
 				|| isOperator(form, LispNames.DEFCONSTANT)) {
 			macroEval.registerLazyGlobal(form);
@@ -1414,6 +1434,28 @@ public final class UserMacroExpander {
 				throw ex;
 			}
 		}
+	}
+
+	/**
+	 * Whether the form is {@code (setf (compiler-macro-function 'name) value)} whose
+	 * value evaluating has no side effect: a {@code lambda}, a {@code #'} of a name or a
+	 * lambda, or nil.
+	 */
+	private static boolean isStaticCompilerMacroWrite(LispVal form) {
+		if (!isOperator(form, LispNames.SETF) || !(form instanceof LispCons cons) || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3 || !isOperator(parts.get(1), LispNames.COMPILER_MACRO_FUNCTION)
+				|| !(parts.get(1) instanceof LispCons place) || !place.isProperList() || place.toList().size() != 2
+				|| !(place.toList().get(1) instanceof LispCons quoted && isOperator(quoted, LispNames.QUOTE)
+						&& quoted.cdr() instanceof LispCons quotedTail && quotedTail.car() instanceof LispSymbol)) {
+			return false;
+		}
+		LispVal value = parts.get(2);
+		return value instanceof LispNil || isOperator(value, LispNames.LAMBDA) || (isOperator(value, LispNames.FUNCTION)
+				&& value instanceof LispCons function && function.cdr() instanceof LispCons functionTail
+				&& (functionTail.car() instanceof LispSymbol || isOperator(functionTail.car(), LispNames.LAMBDA)));
 	}
 
 	/** A definition form the macro-time evaluator replays; see the caller above. */
