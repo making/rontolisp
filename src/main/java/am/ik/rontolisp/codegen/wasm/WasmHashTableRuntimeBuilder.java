@@ -8,23 +8,32 @@ import am.ik.wasm.WasmWriter;
 
 /**
  * Builds the wasm hash-table runtime, the JVM's {@code runtime/RontoHashTable} over
- * wasm-GC values: a chained table until its first copy, a persistent trie of hash chains
- * from then on, each keeping the entries' insertion order ({@code .kb/hash-tables.md},
- * "Representation" and "Copies share structure").
+ * wasm-GC values: a vector of pairs while a table holds a few keys, a chained table past
+ * them until its first copy, a persistent trie of hash chains from then on, each keeping
+ * the entries' insertion order ({@code .kb/hash-tables.md}, "Representation" and "Copies
+ * share structure").
  *
  * <p>
  * A table is a {@code TYPE_CELL} holding its HEADER, a cons {@code (count . record)}: the
  * count an i31 (tagged with the test in a module that tags, so {@code hash-table-p} and
  * {@code hash-table-count} read it as before) and the RECORD a {@code TYPE_HASH_BUCKETS}
- * array whose length tells the two shapes apart.
+ * array whose length tells the three shapes apart.
  * <ul>
+ * <li>SMALL, {@code [count, key0, value0, key1, value1 ...]}, what
+ * {@code make-hash-table} and {@code clrhash} answer for every test but {@code equalp}:
+ * the pairs in insertion order, scanned with the test, no hash computed ({@link #SFIND}).
+ * Its length is odd (the count and room for pairs), where a flat record's is 4 and a
+ * trie's 6. A store takes the room, else a larger copy; the key past {@link #SMALL_MAX}
+ * turns the table FLAT ({@link #TOFLAT}). A removal copies the record without the pair,
+ * so a walk of the record ({@code maphash} walks it in place) reads the pairs it started
+ * with.</li>
  * <li>An ENTRY is an array {@code [hash, pos, owner, next, key, value]} -- the key an
  * {@code equalp} table's fold, with a seventh slot holding the key as first stored when
  * the fold differs. The hash is the key's {@code _hash} (an eql/eq table's aggregate key
  * its {@code _ihash}) with its high half folded into the low, the JVM's spread, cut to 30
  * bits: an i31.</li>
- * <li>FLAT, {@code [buckets, order, size, dead]}, what {@code make-hash-table} and
- * {@code clrhash} answer: power-of-two {@code buckets} of entries linked through
+ * <li>FLAT, {@code [buckets, order, size, dead]}, what an {@code equalp} table and a
+ * small one past its keys hold: power-of-two {@code buckets} of entries linked through
  * {@code next} (a bucket mixes hashes), doubling past three quarters full, and the
  * entries in insertion order, a removed one's slot nil until {@code dead} reaches half of
  * {@code size} and the order compacts.</li>
@@ -46,7 +55,7 @@ import am.ik.wasm.WasmWriter;
  * gives the copy a fresh record and the source another, both holding the same root and
  * vector, so neither changes in place what the other reads: O(1), where the copy every
  * Clojure map verb takes walked the table. wasm runs one thread, so changing the source's
- * record is no race.
+ * record is no race. A small table's copy is a copy of its record.
  *
  * <p>
  * The functions sit at {@code WasmLispCompiler.FUNC_HT_BASE} + the offsets below (the
@@ -133,8 +142,31 @@ final class WasmHashTableRuntimeBuilder {
 	/** {@code _ht_totrie (flat-record) -> trie-record}: the entries as a trie. */
 	static final int TOTRIE = 24;
 
+	/**
+	 * {@code _ht_sfind (small-record, key, tagbox) -> index}: the pair whose key the key
+	 * is by the table's test, or -1.
+	 */
+	static final int SFIND = 25;
+
+	/** {@code _ht_toflat (header) -> nil}: a full small record turned flat. */
+	static final int TOFLAT = 26;
+
 	/** How many functions the block holds. */
-	static final int FUNC_COUNT = 25;
+	static final int FUNC_COUNT = 27;
+
+	// A small record's slots: how many pairs it holds, then each pair's key and value.
+	static final int S_COUNT = 0;
+
+	static final int S_PAIRS = 1;
+
+	/** The most keys a small record holds: a table storing one more turns flat. */
+	static final int SMALL_MAX = 8;
+
+	// The pairs a new or cleared table has room for.
+	private static final int S_INITIAL = 2;
+
+	// The buckets of a table turned flat: room for twelve keys before they double.
+	private static final int F_FROM_SMALL = 2 * SMALL_MAX;
 
 	// A flat record's slots: the buckets, the entries in order, how many order slots
 	// are used and how many of those are dead.
@@ -220,9 +252,9 @@ final class WasmHashTableRuntimeBuilder {
 	 */
 	static int typeIndexOf(int i) {
 		int arguments = switch (i) {
-			case COPY, REBUILD, FGROW, FCOMPACT, TOTRIE -> 1;
+			case COPY, REBUILD, FGROW, FCOMPACT, TOTRIE, TOFLAT -> 1;
 			case FIND, REM, DEL, VEDIT, OAPPEND, COLLECT -> 2;
-			case GET, PUT, SET, RELINK, EDITABLE, ONEWPATH, OSET -> 3;
+			case GET, PUT, SET, RELINK, EDITABLE, ONEWPATH, OSET, SFIND -> 3;
 			case INSERT, SPLIT, WITHOUT, OPUSH -> 4;
 			case REPLACE, OASSOC, ADD -> 5;
 			default -> throw new IllegalArgumentException("no hash-table runtime function " + i);
@@ -275,6 +307,8 @@ final class WasmHashTableRuntimeBuilder {
 			case FGROW -> buildFgrow();
 			case FCOMPACT -> buildFcompact();
 			case TOTRIE -> buildTotrie();
+			case SFIND -> buildSfind(flags);
+			case TOFLAT -> buildToflat(flags);
 			default -> throw new IllegalArgumentException("no hash-table runtime function " + i);
 		};
 	}
@@ -284,13 +318,50 @@ final class WasmHashTableRuntimeBuilder {
 	}
 
 	/**
-	 * Pushes a fresh empty FLAT record onto the stack -- what a new or cleared table
-	 * holds.
+	 * Pushes a fresh empty FLAT record onto the stack -- what a new or cleared
+	 * {@code equalp} table holds.
 	 * @param w the writer
 	 */
-	static void emitNewRecord(WasmWriter w) {
+	static void emitNewFlatRecord(WasmWriter w) {
+		emitNewFlatRecord(w, F_INITIAL);
+	}
+
+	// Pushes a fresh empty FLAT record of the given buckets (a power of two), its order
+	// as long.
+	private static void emitNewFlatRecord(WasmWriter w, int buckets) {
 		Asm a = new Asm(w);
-		a.i32(F_INITIAL).newArray().i32(F_INITIAL).newArray().i32(0).i31().i32(0).i31().fixed(F_LEN);
+		a.i32(buckets).newArray().i32(buckets).newArray().i32(0).i31().i32(0).i31().fixed(F_LEN);
+	}
+
+	/**
+	 * Pushes a fresh empty SMALL record onto the stack -- what a new or cleared table of
+	 * any other test holds.
+	 * @param w the writer
+	 */
+	static void emitNewSmallRecord(WasmWriter w) {
+		emitNewSmallRecord(w, S_INITIAL);
+	}
+
+	/**
+	 * Pushes a fresh empty SMALL record with room for the given pairs.
+	 * @param w the writer
+	 * @param room the pairs it has room for
+	 */
+	static void emitNewSmallRecord(WasmWriter w, int room) {
+		Asm a = new Asm(w);
+		a.i32(0).i31();
+		for (int i = 0; i < 2 * room; i++) {
+			a.nul();
+		}
+		a.fixed(S_PAIRS + 2 * room);
+	}
+
+	/**
+	 * Leaves the i32 "the record on the stack is a small one": its length is odd.
+	 * @param w the writer
+	 */
+	static void emitIsSmallRecord(WasmWriter w) {
+		new Asm(w).len().i32(1).op(Instruction.I32_AND);
 	}
 
 	// Pushes a fresh empty TRIE record.
@@ -301,6 +372,23 @@ final class WasmHashTableRuntimeBuilder {
 	// i32: whether the record in recLocal is a flat one.
 	private static void emitIsFlat(Asm a, int recLocal) {
 		a.get(recLocal).len().i32(F_LEN).op(Instruction.I32_EQ);
+	}
+
+	// i32: whether the record in recLocal is a small one.
+	private static void emitIsSmall(Asm a, int recLocal) {
+		a.get(recLocal).len().i32(1).op(Instruction.I32_AND);
+	}
+
+	// Pushes the slot of the pair whose index is in indexLocal: its key's, plus offset
+	// (1 for its value's, 2 for the next pair's key).
+	private static void emitPairSlot(Asm a, int indexLocal, int offset) {
+		a.get(indexLocal).i32(1).op(Instruction.I32_SHL).i32(S_PAIRS + offset).op(Instruction.I32_ADD);
+	}
+
+	// indexLocal = the index of the pair of the small record in recLocal whose key is
+	// the one in keyLocal by the test in tagLocal, or -1.
+	private static void emitSmallFind(Asm a, int recLocal, int keyLocal, int tagLocal, int indexLocal) {
+		a.get(recLocal).get(keyLocal).get(tagLocal).i31().call(func(SFIND)).unI31().set(indexLocal);
 	}
 
 	// header.count += delta entries (by four in a module that tags).
@@ -438,12 +526,15 @@ final class WasmHashTableRuntimeBuilder {
 		a.end();
 	}
 
-	// tagLocal = the header's test tag (0 in a module that tags no count), and the key
-	// folded when the table is equalp.
-	private static void emitTagAndFold(Asm a, Flags flags, int headerLocal, int keyLocal, int tagLocal) {
+	// tagLocal = the header's test tag (0 in a module that tags no count).
+	private static void emitTag(Asm a, Flags flags, int headerLocal, int tagLocal) {
 		if (flags.tagged()) {
 			a.get(headerLocal).car().unI31().i32(3).op(Instruction.I32_AND).set(tagLocal);
 		}
+	}
+
+	// The key folded when the table is equalp.
+	private static void emitFold(Asm a, Flags flags, int keyLocal, int tagLocal) {
 		if (flags.equalp()) {
 			a.get(tagLocal).i32(1).op(Instruction.I32_EQ).ifVoid();
 			a.get(keyLocal).call(WasmLispCompiler.FUNC_EQUALP_KEY).set(keyLocal);
@@ -461,38 +552,147 @@ final class WasmHashTableRuntimeBuilder {
 			return;
 		}
 		a.get(tagLocal).i32(2).op(Instruction.I32_GE_S).ifI32();
-		// eql: identity, then a symbol or string by its interned offset, then a fixnum
-		// (eql only to itself, which ref.eq refused), then the tail.
-		a.get(keyLocal).get(entryKeyLocal).refEq().ifI32();
-		a.i32(1);
-		a.elseArm();
-		a.get(keyLocal).refTest(WasmLispCompiler.TYPE_STRING).ifI32();
-		a.get(entryKeyLocal).refTest(WasmLispCompiler.TYPE_STRING).ifI32();
-		a.get(keyLocal).stringOffset().get(entryKeyLocal).stringOffset().op(Instruction.I32_EQ);
-		a.elseArm().i32(0).end();
-		a.elseArm();
-		a.get(keyLocal).isI31().ifI32();
-		a.i32(0);
-		a.elseArm();
-		a.get(keyLocal).get(entryKeyLocal).call(WasmLispCompiler.FUNC_EQL_TAIL);
-		a.end();
-		a.end();
-		a.end();
+		emitEqlTest(a, keyLocal, entryKeyLocal);
 		a.elseArm();
 		a.get(keyLocal).get(entryKeyLocal).call(WasmLispCompiler.FUNC_EQUAL);
 		a.end();
 	}
 
-	// _ht_get (header, key, default) -> the value stored under key, or default. A flat
-	// table's bucket holds other hashes too, a trie's chain only the key's: the walk
-	// skips an entry of another hash either way.
+	// Leaves the i32 "the keys in the two locals are eql": identity, then a symbol or
+	// string by its interned offset, then a fixnum (eql only to itself, which ref.eq
+	// refused), then the tail.
+	private static void emitEqlTest(Asm a, int keyLocal, int otherLocal) {
+		a.get(keyLocal).get(otherLocal).refEq().ifI32();
+		a.i32(1);
+		a.elseArm();
+		a.get(keyLocal).refTest(WasmLispCompiler.TYPE_STRING).ifI32();
+		a.get(otherLocal).refTest(WasmLispCompiler.TYPE_STRING).ifI32();
+		a.get(keyLocal).stringOffset().get(otherLocal).stringOffset().op(Instruction.I32_EQ);
+		a.elseArm().i32(0).end();
+		a.elseArm();
+		a.get(keyLocal).isI31().ifI32();
+		a.i32(0);
+		a.elseArm();
+		a.get(keyLocal).get(otherLocal).call(WasmLispCompiler.FUNC_EQL_TAIL);
+		a.end();
+		a.end();
+		a.end();
+	}
+
+	// _ht_sfind (rec, key, tagbox) -> the index of the pair of a small record whose key
+	// the key is by the table's test (eql for an eql/eq table, else equal), or -1. Under
+	// equal an i31 is only itself and a string no string of another byte length, so
+	// neither key calls _equal for a pair it is not; two strings of one length compare
+	// their bytes (_string_eq, the arm of _equal they would take).
+	// Locals: 3 rec (array), 4 n, 5 i, 6 tag, 7 what the key is (1 an i31, 2 a string,
+	// else 0), 8 a string's byte length (i32), 9 the pair's key (eqref).
+	private static byte[] buildSfind(Flags flags) {
+		Asm a = Asm.function(L.ARR, L.I32, L.I32, L.I32, L.I32, L.I32, L.EQ);
+		a.get(0).arr().set(3);
+		a.get(3).i32(S_COUNT).aget().unI31().set(4);
+		if (flags.identity()) {
+			a.get(2).unI31().set(6);
+			a.get(6).i32(2).op(Instruction.I32_GE_S).ifVoid();
+			a.block().loop();
+			a.get(5).get(4).op(Instruction.I32_GE_S).brIf(1);
+			a.get(3);
+			emitPairSlot(a, 5, 0);
+			a.aget().set(9);
+			emitEqlTest(a, 1, 9);
+			a.ifVoid().get(5).i31().ret().end();
+			a.get(5).i32(1).op(Instruction.I32_ADD).set(5);
+			a.br(0);
+			a.end().end();
+			a.i32(-1).i31().ret();
+			a.end();
+		}
+		a.get(1).isI31().ifVoid();
+		a.i32(1).set(7);
+		a.elseArm();
+		a.get(1).refTest(WasmLispCompiler.TYPE_STRING).ifVoid();
+		a.i32(2).set(7);
+		a.get(1).stringLen().set(8);
+		a.end();
+		a.end();
+		a.block().loop();
+		a.get(5).get(4).op(Instruction.I32_GE_S).brIf(1);
+		a.block();
+		a.get(3);
+		emitPairSlot(a, 5, 0);
+		a.aget().set(9);
+		a.get(1).get(9).refEq().ifVoid().get(5).i31().ret().end();
+		a.get(7).i32(1).op(Instruction.I32_EQ).brIf(0);
+		a.get(7).i32(2).op(Instruction.I32_EQ).ifVoid();
+		a.get(9).refTest(WasmLispCompiler.TYPE_STRING).ifVoid();
+		a.get(9).stringLen().get(8).op(Instruction.I32_NE).brIf(2);
+		a.get(1).get(9).call(WasmLispCompiler.FUNC_STRING_EQ).isNull().op(Instruction.I32_EQZ);
+		a.ifVoid().get(5).i31().ret().end();
+		a.br(2);
+		a.end();
+		a.end();
+		a.get(1).get(9).call(WasmLispCompiler.FUNC_EQUAL).ifVoid().get(5).i31().ret().end();
+		a.end();
+		a.get(5).i32(1).op(Instruction.I32_ADD).set(5);
+		a.br(0);
+		a.end().end();
+		a.i32(-1).i31();
+		return a.finish();
+	}
+
+	// _ht_toflat (header) -> nil: the header's small record, full, replaced by a flat one
+	// of F_FROM_SMALL buckets, which _ht_put fills with its pairs in their order -- the
+	// count back to none of them first, its test tag kept.
+	// Locals: 1 rec (array), 2 n, 3 i (i32).
+	private static byte[] buildToflat(Flags flags) {
+		Asm a = Asm.function(L.ARR, L.I32, L.I32);
+		a.get(0).cdr().arr().set(1);
+		a.get(1).i32(S_COUNT).aget().unI31().set(2);
+		a.get(0).castCons();
+		if (flags.tagged()) {
+			a.get(0).car().unI31().i32(3).op(Instruction.I32_AND).i31();
+		}
+		else {
+			a.i32(0).i31();
+		}
+		a.setCar();
+		a.get(0).castCons();
+		emitNewFlatRecord(a.w, F_FROM_SMALL);
+		a.setCdr();
+		a.block().loop();
+		a.get(3).get(2).op(Instruction.I32_GE_S).brIf(1);
+		a.get(0).get(1);
+		emitPairSlot(a, 3, 0);
+		a.aget().get(1);
+		emitPairSlot(a, 3, 1);
+		a.aget().call(func(PUT)).drop();
+		a.get(3).i32(1).op(Instruction.I32_ADD).set(3);
+		a.br(0);
+		a.end().end();
+		a.nul();
+		return a.finish();
+	}
+
+	// _ht_get (header, key, default) -> the value stored under key, or default. A small
+	// record is scanned; a flat table's bucket holds other hashes too, a trie's chain
+	// only the key's: the walk skips an entry of another hash either way.
 	// Locals: 3 entry (array), 4 tag, 5 h (i32), 6 entry key (eqref), 7 rec, 8 buckets
-	// (arrays).
+	// (arrays), 9 the pair's index (i32).
 	private static byte[] buildGet(Flags flags) {
-		Asm a = Asm.function(L.ARR, L.I32, L.I32, L.EQ, L.ARR, L.ARR);
-		emitTagAndFold(a, flags, 0, 1, 4);
-		emitPlacementHash(a, flags, 1, 4, 5);
+		Asm a = Asm.function(L.ARR, L.I32, L.I32, L.EQ, L.ARR, L.ARR, L.I32);
+		emitTag(a, flags, 0, 4);
 		a.get(0).cdr().arr().set(7);
+		emitIsSmall(a, 7);
+		a.ifVoid();
+		emitSmallFind(a, 7, 1, 4, 9);
+		a.get(9).i32(0).op(Instruction.I32_GE_S).ifVoid();
+		a.get(7);
+		emitPairSlot(a, 9, 1);
+		a.aget().ret();
+		a.end();
+		a.get(2).ret();
+		a.end();
+		emitFold(a, flags, 1, 4);
+		emitPlacementHash(a, flags, 1, 4, 5);
 		emitIsFlat(a, 7);
 		a.ifVoid();
 		a.get(7).i32(F_BUCKETS).aget().arr().set(8);
@@ -515,15 +715,60 @@ final class WasmHashTableRuntimeBuilder {
 
 	// _ht_put (header, key, value) -> value: the found entry's value replaced, else a
 	// fresh entry -- an equalp table's keeping the key as written when its fold differs.
-	// A flat table's entry goes in at its bucket's head, the order array and the buckets
+	// A small record takes the pair in its room, else in a copy with twice the room and
+	// two pairs more (at most SMALL_MAX), and turns flat at the key past SMALL_MAX. A
+	// flat table's entry goes in at its bucket's head, the order array and the buckets
 	// growing as they fill; a trie's through _ht_set or _ht_add.
 	// Locals: 3 entry (array), 4 tag, 5 h (i32), 6 the key as written, 7 entry key
-	// (eqrefs), 8 rec, 9 buckets, 10 fresh entry, 11 order, 12 grown order (arrays),
-	// 13 bucket index, 14 size (i32).
+	// (eqrefs), 8 rec, 9 buckets, 10 fresh entry, 11 order, 12 grown order or record
+	// (arrays), 13 bucket index, 14 size, 15 the pair's index, 16 the pairs, 17 the room
+	// (i32).
 	private static byte[] buildPut(Flags flags) {
-		Asm a = Asm.function(L.ARR, L.I32, L.I32, L.EQ, L.EQ, L.ARR, L.ARR, L.ARR, L.ARR, L.ARR, L.I32, L.I32);
+		Asm a = Asm.function(L.ARR, L.I32, L.I32, L.EQ, L.EQ, L.ARR, L.ARR, L.ARR, L.ARR, L.ARR, L.I32, L.I32, L.I32,
+				L.I32, L.I32);
+		emitTag(a, flags, 0, 4);
+		a.get(0).cdr().arr().set(8);
+		a.block();
+		emitIsSmall(a, 8);
+		a.op(Instruction.I32_EQZ).brIf(0);
+		emitSmallFind(a, 8, 1, 4, 15);
+		a.get(15).i32(0).op(Instruction.I32_GE_S).ifVoid();
+		a.get(8);
+		emitPairSlot(a, 15, 1);
+		a.get(2).aset();
+		a.get(2).ret();
+		a.end();
+		a.get(8).i32(S_COUNT).aget().unI31().set(16);
+		a.get(8).len().i32(1).op(Instruction.I32_SHR_U).set(17);
+		a.get(16).get(17).op(Instruction.I32_GE_S).ifVoid();
+		a.get(16).i32(SMALL_MAX).op(Instruction.I32_GE_S).ifVoid();
+		a.get(0).call(func(TOFLAT)).drop();
+		a.br(2);
+		a.end();
+		// room = min(2 * room + S_INITIAL, SMALL_MAX)
+		a.i32(SMALL_MAX);
+		a.get(17).i32(1).op(Instruction.I32_SHL).i32(S_INITIAL).op(Instruction.I32_ADD);
+		a.get(17).i32((SMALL_MAX - S_INITIAL) / 2).op(Instruction.I32_GT_S);
+		a.op(Instruction.SELECT).set(17);
+		a.get(17).i32(1).op(Instruction.I32_SHL).i32(S_PAIRS).op(Instruction.I32_ADD).newArray().set(12);
+		a.get(12).i32(0).get(8).i32(0);
+		emitPairSlot(a, 16, 0);
+		a.copy();
+		a.get(0).castCons().get(12).setCdr();
+		a.get(12).set(8);
+		a.end();
+		a.get(8);
+		emitPairSlot(a, 16, 0);
+		a.get(1).aset();
+		a.get(8);
+		emitPairSlot(a, 16, 1);
+		a.get(2).aset();
+		a.get(8).i32(S_COUNT).get(16).i32(1).op(Instruction.I32_ADD).i31().aset();
+		emitAddToCount(a, flags, 0, 1);
+		a.get(2).ret();
+		a.end();
 		a.get(1).set(6);
-		emitTagAndFold(a, flags, 0, 1, 4);
+		emitFold(a, flags, 1, 4);
 		emitPlacementHash(a, flags, 1, 4, 5);
 		if (flags.equalp()) {
 			// The key as written rides along only when the fold changed it.
@@ -596,16 +841,39 @@ final class WasmHashTableRuntimeBuilder {
 		return a.finish();
 	}
 
-	// _ht_rem (header, key) -> t when an entry went, else nil: a flat table's entry
-	// unlinked from its bucket and its order slot nil (the order compacting once half
-	// the slots are), a trie's through _ht_del.
+	// _ht_rem (header, key) -> t when an entry went, else nil: a small record copied
+	// without the pair (so a walk of the record reads the pairs it started with), a flat
+	// table's entry unlinked from its bucket and its order slot nil (the order compacting
+	// once half the slots are), a trie's through _ht_del.
 	// Locals: 2 entry (array), 3 tag, 4 h (i32), 5 entry key (eqref), 6 rec, 7 buckets,
-	// 8 previous entry, 9 order (arrays), 10 bucket index, 11 dead (i32).
+	// 8 previous entry, 9 order or the record's copy (arrays), 10 bucket index, 11 dead,
+	// 12 the pair's index, 13 the pairs (i32).
 	private static byte[] buildRem(Flags flags) {
-		Asm a = Asm.function(L.ARR, L.I32, L.I32, L.EQ, L.ARR, L.ARR, L.ARR, L.ARR, L.I32, L.I32);
-		emitTagAndFold(a, flags, 0, 1, 3);
-		emitPlacementHash(a, flags, 1, 3, 4);
+		Asm a = Asm.function(L.ARR, L.I32, L.I32, L.EQ, L.ARR, L.ARR, L.ARR, L.ARR, L.I32, L.I32, L.I32, L.I32);
+		emitTag(a, flags, 0, 3);
 		a.get(0).cdr().arr().set(6);
+		emitIsSmall(a, 6);
+		a.ifVoid();
+		emitSmallFind(a, 6, 1, 3, 12);
+		a.get(12).i32(0).op(Instruction.I32_LT_S).ifVoid().nul().ret().end();
+		a.get(6).i32(S_COUNT).aget().unI31().set(13);
+		a.get(6).len().newArray().set(9);
+		a.get(9).i32(0).get(6).i32(0);
+		emitPairSlot(a, 12, 0);
+		a.copy();
+		a.get(9);
+		emitPairSlot(a, 12, 0);
+		a.get(6);
+		emitPairSlot(a, 12, 2);
+		a.get(13).get(12).op(Instruction.I32_SUB).i32(1).op(Instruction.I32_SUB).i32(1).op(Instruction.I32_SHL);
+		a.copy();
+		a.get(9).i32(S_COUNT).get(13).i32(1).op(Instruction.I32_SUB).i31().aset();
+		a.get(0).castCons().get(9).setCdr();
+		emitAddToCount(a, flags, 0, -1);
+		a.call(WasmLispCompiler.FUNC_T_SYM).ret();
+		a.end();
+		emitFold(a, flags, 1, 3);
+		emitPlacementHash(a, flags, 1, 3, 4);
 		emitIsFlat(a, 6);
 		a.op(Instruction.I32_EQZ).ifVoid();
 		a.get(6).get(4).i31().call(func(FIND)).arr().set(2);
@@ -653,10 +921,10 @@ final class WasmHashTableRuntimeBuilder {
 	}
 
 	// _ht_copy (table) -> a fresh equal table of its entries in its order. An equal
-	// table's copy shares its structure: a flat one becomes a trie first, once; then
-	// both tables take a fresh record over the trie, so neither owns what the other
-	// reads. Any other test's table is re-placed key by key through _ht_put, each key as
-	// first stored.
+	// table's copy shares its structure: a small one's is a copy of its record; a flat
+	// one becomes a trie first, once; then both tables take a fresh record over the trie,
+	// so neither owns what the other reads. Any other test's table is re-placed key by
+	// key through _ht_put, each key as first stored.
 	// Locals: 1 header, 2 record, 3 the copy's record, 4 the source's new record,
 	// 5 the copy, 6 entries, 7 entry (arrays but 1 and 5), 8 i, 9 n (i32), 10 the
 	// copy's header.
@@ -668,6 +936,15 @@ final class WasmHashTableRuntimeBuilder {
 		if (flags.tagged()) {
 			a.get(1).car().unI31().i32(3).op(Instruction.I32_AND).brIf(0);
 		}
+		emitIsSmall(a, 2);
+		a.ifVoid();
+		a.get(2).len().newArray().set(3);
+		a.get(3).i32(0).get(2).i32(0).get(2).len().copy();
+		a.get(1).car().get(3);
+		WasmEmitHelper.emitNewCons(a.w, flags.identity());
+		WasmEmitHelper.emitNewCell(a.w, flags.identity());
+		a.ret();
+		a.end();
 		emitIsFlat(a, 2);
 		a.ifVoid().get(2).call(func(TOTRIE)).arr().set(2).end();
 		a.i32(R_LEN).newArray().set(3);
@@ -682,12 +959,28 @@ final class WasmHashTableRuntimeBuilder {
 		a.ret();
 		a.end();
 		a.i32(0).i31();
-		emitNewRecord(a.w);
+		emitNewSmallRecord(a.w);
 		WasmEmitHelper.emitNewCons(a.w, flags.identity());
 		a.set(10);
 		a.get(10);
 		WasmEmitHelper.emitNewCell(a.w, flags.identity());
 		a.set(5);
+		emitIsSmall(a, 2);
+		a.ifVoid();
+		// A small eql or eq table: its pairs, never folded.
+		a.get(2).i32(S_COUNT).aget().unI31().set(9);
+		a.block().loop();
+		a.get(8).get(9).op(Instruction.I32_GE_S).brIf(1);
+		a.get(10).get(2);
+		emitPairSlot(a, 8, 0);
+		a.aget().get(2);
+		emitPairSlot(a, 8, 1);
+		a.aget().call(func(PUT)).drop();
+		a.get(8).i32(1).op(Instruction.I32_ADD).set(8);
+		a.br(0);
+		a.end().end();
+		a.get(5).ret();
+		a.end();
 		a.get(1).call(WasmLispCompiler.FUNC_HT_ENTRIES).arr().set(6);
 		a.get(6).len().set(9);
 		a.i32(0).set(8);
@@ -1324,10 +1617,12 @@ final class WasmHashTableRuntimeBuilder {
 	}
 
 	/**
-	 * Builds {@code _ht_entries (header) -> array} ({@code FUNC_HT_ENTRIES}): the table's
-	 * live entries in insertion order, a fresh array -- the snapshot {@code maphash}
-	 * walks, so storing into the table or removing the current key from inside the walk
-	 * changes neither the array nor which entries it holds.
+	 * Builds {@code _ht_entries (header) -> array} ({@code FUNC_HT_ENTRIES}): what
+	 * {@code maphash} walks, so storing into the table or removing the current key from
+	 * inside the walk changes neither which keys it walks nor their order. A small
+	 * table's is its record itself (slot 0 the pairs to walk, read once), which no store
+	 * reorders and a removal replaces; any other table's a fresh array of its live
+	 * entries in insertion order.
 	 * @param tagged whether counts carry the test tag
 	 * @return the encoded body
 	 */
@@ -1336,6 +1631,8 @@ final class WasmHashTableRuntimeBuilder {
 		// 8 tail offset, 9 level, 10 i, 11 end, 12 kept (i32).
 		Asm a = Asm.function(L.ARR, L.ARR, L.ARR, L.ARR, L.EQ, L.I32, L.I32, L.I32, L.I32, L.I32, L.I32, L.I32);
 		a.get(0).cdr().arr().set(1);
+		emitIsSmall(a, 1);
+		a.ifVoid().get(1).ret().end();
 		a.get(0).car().unI31();
 		if (tagged) {
 			a.i32(2).op(Instruction.I32_SHR_S);
@@ -1787,6 +2084,17 @@ final class WasmHashTableRuntimeBuilder {
 			gc(Instruction.STRUCT_GET);
 			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
 			this.w.writeUnsignedLeb128(0);
+			return this;
+		}
+
+		// A symbol or string's byte length (TYPE_STRING's field 1), which _string_eq
+		// compares first.
+		Asm stringLen() {
+			gc(Instruction.REF_CAST);
+			this.w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+			gc(Instruction.STRUCT_GET);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+			this.w.writeUnsignedLeb128(1);
 			return this;
 		}
 

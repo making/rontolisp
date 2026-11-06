@@ -208,9 +208,10 @@ and spent across the WHOLE traversal, never handed down per branch.
   before any of that (`WasmRuntimeBuilder.emitTopLevelStringFold`, the string arm's value): it
   descends nowhere. Measured 2026-11-06 on Endive, a 4-to-6-byte key's `_hash` went from 167
   instructions to 99, for 75 bytes; a speed-for-size trade, so not under `--optimize=size`.
-- The JSON decoder builds a parsed object's flat record itself, sized so nothing grows, through
+- The JSON decoder builds a parsed object's record itself: a small one of exactly its pairs for
+  eight keys or fewer, else a flat one sized so nothing grows, through
   `WasmHashTableRuntimeBuilder.emitFlatInsert` (`_ht_put`'s flat arm without its growth tests)
-  and `emitEqualPlacementHash` (`_ht_put`'s `_hash` and spread): a change to the flat layout or
+  and `emitEqualPlacementHash` (`_ht_put`'s `_hash` and spread): a change to either layout or
   the spread changes both (`.kb/json.md`, "The wasm-GC codec").
 
 **The `equalp` fold carries the same budget**, more sharply: it BUILDS the structure it walks (an
@@ -233,9 +234,30 @@ ONE structure on all four backends: CHAINS of entries placed by the key's hash a
 the test, plus the entries in INSERTION ORDER, which `maphash` walks. The interpreter and the JVM
 share the class (`runtime/RontoHashTable`; the interpreter's `LispHashTable` wraps one and
 compares with `LispEquality`, a compiled program's `_hash*` helpers with `_equal`/`_eqv`); WASM
-rebuilds it over wasm-GC arrays (`WasmHashTableRuntimeBuilder`, the `_ht_*` functions).
+rebuilds it over wasm-GC arrays (`WasmHashTableRuntimeBuilder`, the `_ht_*` functions), and
+keeps a table of eight keys or fewer as a vector of pairs (next bullet).
 
-- A table starts FLAT: power-of-two buckets of entries linked through `next` (a bucket mixes
+- **WASM: a table of at most `SMALL_MAX` (8) keys is SMALL (2026-11-06)**, a record
+  `[count, key0, value0, ...]` of odd length (a flat one's is 4, a trie's 6), what
+  `make-hash-table` and `clrhash` answer for every test but `equalp`. The pairs are scanned with
+  the test and no hash is computed (`_ht_sfind`: under `equal` an i31 key is only itself and a
+  string no string of another byte length, before `_equal`). A store takes the record's room,
+  else a copy with twice the room and two pairs more; the ninth key turns the table FLAT
+  (`_ht_toflat`, which `_ht_put` fills). A removal copies the record without the pair, and
+  `maphash` walks the record in place, its count read once, so a walk reads the keys it started
+  with whatever it stores or removes (`HashTableCopyPrograms` pins it on all four). A copy of a
+  small `equal` table copies its record. `equalp` tables stay flat: their entries keep the fold
+  and the key as written. Why: a parsed JSON object of two keys was 1,128 bytes as sluice's
+  `PluginHeap` charges Endive's objects (cell, header, record, two-slot buckets and order, two
+  six-slot entries) and is 424 small (`.kb/json.md`, "The wasm-GC codec"). Measured 2026-11-06
+  in wasmtime fuel: a program of 80,000 lookups in parsed objects of five and three keys 8%
+  less, one building and reading 20,000 tables of four keys 7% less, one of a 2,000-key table
+  the same; the module gains `_ht_sfind`, `_ht_toflat` and about 250 bytes of `_ht_put`
+  (sluice's `json_plugin` at `--optimize=size` 70,585 to 71,049 bytes, a one-table program at
+  the default level 5,677 to 6,373). Not on the JVM and the interpreter: their entry is one
+  pair array, and `RontoHashTable` answers the chains the emitted helpers walk; no consumer
+  measured them.
+- A table starts FLAT (on WASM past its eighth key, or `equalp`): power-of-two buckets of entries linked through `next` (a bucket mixes
   hashes, so a scan skips an entry of another hash), doubling past three quarters full, and an
   order array. A removal unlinks the entry and kills its order slot (`END` on the JVM, nil on
   WASM); the order compacts once half its slots are dead, so each `remhash` is O(1) amortised.

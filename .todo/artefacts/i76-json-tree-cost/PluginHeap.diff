@@ -1,0 +1,49 @@
+--- sluice-client/src/main/java/am/ik/sluice/client/filter/PluginHeap.java
++++ PluginHeap.java
+@@ -127,11 +127,12 @@
+ 	@Override
+ 	public void onExecution(Instruction instruction, MStack stack) {
+ 		switch (instruction.opcode()) {
+-			case STRUCT_NEW, STRUCT_NEW_DEFAULT -> charge(this.structBytes[(int) instruction.operand(0)]);
+-			case ARRAY_NEW, ARRAY_NEW_DEFAULT, ARRAY_NEW_DATA, ARRAY_NEW_ELEM ->
+-				charge(arrayBytes(this.arrayOfReferences[(int) instruction.operand(0)], unsigned(stack.peek())));
+-			case ARRAY_NEW_FIXED ->
+-				charge(arrayBytes(this.arrayOfReferences[(int) instruction.operand(0)], instruction.operand(1)));
++			case STRUCT_NEW, STRUCT_NEW_DEFAULT -> typed((int) instruction.operand(0),
++					this.structBytes[(int) instruction.operand(0)]);
++			case ARRAY_NEW, ARRAY_NEW_DEFAULT, ARRAY_NEW_DATA, ARRAY_NEW_ELEM -> typed((int) instruction.operand(0),
++					arrayBytes(this.arrayOfReferences[(int) instruction.operand(0)], unsigned(stack.peek())));
++			case ARRAY_NEW_FIXED -> typed((int) instruction.operand(0),
++					arrayBytes(this.arrayOfReferences[(int) instruction.operand(0)], instruction.operand(1)));
+ 			case THROW -> charge(exceptionBytes(parameters((int) instruction.operand(0))));
+ 			case TABLE_GROW ->
+ 				charge(unsigned(stack.peek()) * tableEntry(this.tableOfReferences[(int) instruction.operand(0)]));
+@@ -158,8 +159,28 @@
+ 		}
+ 	}
+ 
++	/** A measurement only: everything charged, garbage included. */
++	public static long CHARGED;
++
++	/** A measurement only: the most one call held. */
++	public static long PEAK;
++
++	/** A measurement only: bytes charged per allocating instruction's type index. */
++	public static final long[] BY_TYPE = new long[4096];
++
++	/** A measurement only: allocations per type index. */
++	public static final long[] COUNT_BY_TYPE = new long[4096];
++
++	private void typed(int type, long bytes) {
++		BY_TYPE[type] += bytes;
++		COUNT_BY_TYPE[type]++;
++		charge(bytes);
++	}
++
+ 	private void charge(long bytes) {
++		CHARGED += bytes;
+ 		this.since += bytes;
++		PEAK = Math.max(PEAK, linear() + this.live + this.since);
+ 		check(0);
+ 	}
+ 

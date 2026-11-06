@@ -9134,8 +9134,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmStringRuntimeBuilder.buildCapitalizeBody())
 					.addFunction(WasmStringRuntimeBuilder.buildSubseqBody(this.usesIdentityHashTables, ehMode,
 							subseqBoundsForLength))
-					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(false, stringTable))
-					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(true, stringTable))
+					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(false))
+					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(true))
 					.addFunction(WasmStringRuntimeBuilder.buildTrimBody())
 					.addFunction(WasmIoRuntimeBuilder.buildOpenBody(usesBidirectionalOpen))
 					.addFunction(WasmIoRuntimeBuilder.buildCloseBody(stringTable, ostreamTableGlobalIndex,

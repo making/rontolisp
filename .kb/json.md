@@ -49,12 +49,16 @@ one-argument dispatcher.
   (Endive): a string byte is 8 instructions, the position moving first and a `br_table` sending a
   plain byte back to its loop; a `br_table` switch inside a per-byte loop re-entered its blocks
   on every byte (5 a byte in the first encoder).
-- **What it builds is the walk's**: the same tables (`WasmHashTableRuntimeBuilder.emitFlatInsert`,
-  a flat record sized so nothing grows -- `.kb/hash-tables.md`), vectors, integers (`_int_new`)
+- **What it builds is the walk's**: the same tables -- an object of at most eight keys a small
+  record of exactly its pairs (a repeated key found by its placement hash first), a larger one a
+  flat record sized so nothing grows (`WasmHashTableRuntimeBuilder.emitFlatInsert`;
+  `.kb/hash-tables.md`, "Representation") --, vectors, integers (`_int_new`)
   and floats (`%json-float`'s operations, `(expt 10.0 n)` as fdlibm `pow`; an exponent past 10^15
   saturates, where the scale is infinite or zero either way), and each malformed input's error.
   A `\uXXXX` length check counts characters, not bytes, when a multi-byte character is among the
-  four (`"\u0あ"` is unterminated, `"\u0あ0"` an invalid digit).
+  four (`"\u0あ"` is unterminated, `"\u0あ0"` an invalid digit). The encoder walks a small
+  table's record in place (a `PAIRS` frame) and every object frame branches to one key writer:
+  a copy of it at each of the four places was 2.4 KB more.
 - **Deliberate differences, wasm-GC only**: every parsed string and the stringify result is an
   immutable `TYPE_STRING` (a character vector costs about 100 bytes a character on Endive's
   count; `.kb/string-write-runtime.md`); an object's keys are pooled within one parse, as jzon's
@@ -69,25 +73,31 @@ Measured 2026-11-06, sluice's `json_plugin` (parse a response body, add a field,
 exchange, instructions from an `ExecutionListener`, bytes as sluice's `PluginHeap` charges them
 (`.todo/artefacts/i69-proxy-wasm-instructions/`):
 
-| | json.lisp's walk | the codec |
-| --- | ---: | ---: |
-| 8 KiB: instructions a byte | 1,518 | 109 (`--optimize=size`), 96 (`--optimize`) |
-| 8 KiB: bytes charged a byte | 1,130 | 83 |
-| module, `--optimize=size` | 72,615 | 70,585 |
-| largest body at sluice's defaults (16 MiB, a 1 s call) | 8 KiB | 192 KiB (224 KiB: memory) |
-| 64 KiB / 256 KiB / 1 MiB, limits lifted | 3.4 s / 14.1 s / - | 155 ms / 539 ms / 2.17 s |
+| | json.lisp's walk | the codec | small tables |
+| --- | ---: | ---: | ---: |
+| 8 KiB: instructions a byte | 1,518 | 109 (`--optimize=size`), 96 (`--optimize`) | 107 |
+| 8 KiB: bytes charged a byte | 1,130 | 83 | 58 |
+| 1 MiB: bytes charged a byte | - | 71.7 | 49.9 |
+| module, `--optimize=size` | 72,615 | 70,585 | 71,049 |
+| largest body at sluice's defaults (16 MiB, a 1 s call) | 8 KiB | 192 KiB (224 KiB: memory) | 256 KiB (272 KiB: memory) |
+| 256 KiB / 1 MiB, limits lifted | 14.1 s / - | 731 ms / 2.30 s | 714 ms / 2.10 s |
 
+The last column from 2026-11-06 too, against the codec in interleaved runs (a loaded 64-way
+box: about a tenth of spread); the time per byte, about 2 us, is the instructions'.
 At `--optimize=size` the codec is 76 of the 109, the host copies of `get-buffer` and `set-buffer`
 the other 30 (16 and 14; 9 each where the level allows them eight bytes a round,
 `.kb/wasm-gc-strings.md`). wasmtime 49: 40 rounds over 8,491 bytes 61.5 M fuel with 21.5 M of
 setup, the walk 415 M.
 
-**1 MiB within 16 MiB cannot be reached by any parse that builds the tree**: at 1 MiB 75.2 MB
-is charged, 71.7 bytes a byte, of which the tree is about 46 -- an item's table 1,128 bytes
-(cell, header, record, two-slot buckets and order, two six-slot entries) and its value string
-320 for 32 bytes of JSON -- the input string 8, the output 16 (the result and its chunks). The
-1 s call holds about 450 KiB. Past that it takes an operation that builds no tree (adding a field
-is a splice), or tables of another representation.
+**1 MiB within 16 MiB cannot be reached by `json-parse` and `json-stringify` over strings,
+whatever the tree costs**: Endive holds an element of an `i8` array in a long, so the input
+string is 8 bytes a byte and the output at least 8 more -- 16 MiB at 1 MiB before the tree or
+the linear memory. At 1 MiB 52.3 MB is charged, 49.9 bytes a byte: the tree about 23.5 (an
+item's small table 216 bytes, its header and cell 208, its value string 168 and 136, its vector
+slot 32, for 32 bytes of JSON; it was about 46 with flat tables of 1,128), the decoder's value
+stack 2, the input string 8, the output 16.4 (the result and its chunks). It takes an operation
+over the host's bytes in linear memory, which builds no tree (adding a field is a splice:
+`.todo/i76`).
 
 ## Portability rules inside json.lisp
 - Only ASCII structural characters go through `char-code`; non-ASCII copied by `subseq`.
@@ -110,6 +120,7 @@ is a splice), or tables of another representation.
 `WasmLispCompilerTest.jsonOpsCompileInEveryMode`; `WasmLispCompilerIntegrationTest`
 (`jsonOpsWorkInPreview1Mode`, with the codec's fuel bound, `plistHashTableAndClosObjectsInPreview1Mode`,
 `equalAndHashTablesAcceptRuntimeBuiltStringKeys`); ci-spec `json-parse-and-stringify`,
-`json-codec-edges` (every error, escape and number form, pooled keys, structures, deep nesting
-on all four), `string-equal-content-and-hash-keys`, `alist-plist-conversions`.
+`json-codec-edges` (every error, escape and number form, pooled keys, structures, deep nesting,
+objects either side of eight keys stored into and removed from, on all four),
+`string-equal-content-and-hash-keys`, `alist-plist-conversions`.
 Native binary embeds `json.lisp` via `resource-config.json` (typeReachable `JsonLibrary`).

@@ -90,7 +90,8 @@ Two disciplines share the linear scratch at `HEAP_PTR_ADDR`:
 - `_str_build(off,len)` (`FUNC_STR_BUILD`) -- id = off, for INTERNED names; two occurrences share
   the offset, so `eq`. **The boolean `t` does not build per site**: `emitTrue` calls `_t_sym`
   (`FUNC_T_SYM`), which lazily builds "T" ONCE into the last module global; quoted `'t` still goes
-  through `compileStringLiteral`, id-equal.
+  through `compileStringLiteral`, id-equal. `_string_eq` and `_string_equal` answer it too
+  (2026-11-06): every equal pair of strings `equal` or `string=` compared built a T before.
 - `_str_fresh(off,len)` (`FUNC_STR_FRESH`) -- id = counter++, for RUNTIME strings. Four are built
   WITHOUT it: `_str_stream_contents`, `_string_concat`, `_str_from_mem` and `_iv_utf8_str`
   (`FUNC_IV_UTF8_STR`; one GC-to-GC `array.copy` for valid UTF-8, a two-pass lenient transcode

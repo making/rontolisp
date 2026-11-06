@@ -1,0 +1,51 @@
+--- i69-proxy-wasm-instructions/OpCounter.java
++++ OpCounter.java
+@@ -109,6 +109,17 @@
+ 	/** Calls of an import, per function index. */
+ 	public final long[] hostCalls;
+ 
++	/** Executed instructions per function index and opcode. */
++	public final long[][] fnOps;
++
++	/** Executed instructions per address, for the functions -Dcount.addresses names. */
++	public final java.util.Map<Integer, long[]> byAddress = new java.util.HashMap<>();
++
++	/** The opcode at each address counted. */
++	public final java.util.Map<Integer, OpCode> opAt = new java.util.HashMap<>();
++
++	private final java.util.Set<Integer> addressed = new java.util.HashSet<>();
++
+ 	private final List<String> importNames = new ArrayList<>();
+ 
+ 	private final Map<Integer, Integer> lastAddress = new java.util.HashMap<>();
+@@ -145,6 +156,13 @@
+ 		this.byFunction = new long[bodies + this.imported];
+ 		this.entries = new long[bodies + this.imported];
+ 		this.hostCalls = new long[bodies + this.imported];
++		this.fnOps = new long[bodies + this.imported][];
++		String which = System.getProperty("count.addresses");
++		if (which != null) {
++			for (String f : which.split(",")) {
++				this.addressed.add(Integer.parseInt(f));
++			}
++		}
+ 		current = this;
+ 	}
+ 
+@@ -157,6 +175,16 @@
+ 		int slot = found >= 0 ? found : -found - 2;
+ 		int function = slot >= 0 ? this.funcOf[slot] : -1;
+ 		if (function >= 0) {
++			long[] ops = this.fnOps[function];
++			if (ops == null) {
++				ops = new long[OpCode.values().length];
++				this.fnOps[function] = ops;
++			}
++			ops[opcode.ordinal()]++;
++			if (this.addressed.contains(function)) {
++				this.byAddress.computeIfAbsent(instruction.address(), k -> new long[1])[0]++;
++				this.opAt.putIfAbsent(instruction.address(), opcode);
++			}
+ 			this.byFunction[function]++;
+ 			if (found >= 0) {
+ 				this.entries[function]++;

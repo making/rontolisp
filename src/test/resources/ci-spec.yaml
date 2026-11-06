@@ -11828,6 +11828,15 @@ cases:
         (setf (gethash "more" h) (list t 'null))
         (remhash "more" h)
         (print (rontolisp:json-stringify h)))
+      (let ((small (rontolisp:json-parse "{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7,\"a\":8}"))
+            (wide (rontolisp:json-parse
+                   "{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7,\"h\":8,\"i\":9,\"b\":0}")))
+        (setf (gethash "h" small) 9 (gethash "i" small) 10)
+        (remhash "c" wide)
+        (print (list (hash-table-count small) (gethash "a" small) (gethash "i" small)
+                     (hash-table-count wide) (gethash "b" wide) (gethash "c" wide :gone)))
+        (print (rontolisp:json-stringify small))
+        (print (rontolisp:json-stringify wide)))
       (defstruct json-edge-pair left right)
       (print (rontolisp:json-stringify
               (list (make-array 3 :fill-pointer 2 :initial-contents '(1 2 3)) (vector) :key
@@ -11865,6 +11874,9 @@ cases:
       "\"\\\"\\\\/\\b\\f\\n\\r\\t\\u0001\\u001f😀 aé\""
       (2 3 "{\"a\":3,\"b\":2}")
       "{\"k\":\"replaced\"}"
+      (9 8 10 8 0 :GONE)
+      "{\"a\":8,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7,\"h\":9,\"i\":10}"
+      "{\"a\":1,\"b\":0,\"d\":4,\"e\":5,\"f\":6,\"g\":7,\"h\":8,\"i\":9}"
       "[[1,2],[],\"KEY\",\"a\",1180591620717411303424,0.25,{\"left\":\"l\",\"right\":[1]}]"
       "json-stringify: improper list"
       "{\"255\":[255,1099511627776,1180591620717411303424]}"
