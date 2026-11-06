@@ -2396,9 +2396,9 @@ public final class ClosRegistry {
 		/**
 		 * Whether any method's dispatch test enumerates class tags, so the dispatcher
 		 * must be regenerated when a new class appears: a CLASS specializer (the new
-		 * class may extend its descendant set) or a TYPE specializer whose test carries
-		 * the any-class-instance enumeration ({@code standard-object} matches it,
-		 * {@code cons}/{@code list}/{@code sequence} exclude it).
+		 * class may extend its descendant set) or a {@code standard-object} one, whose
+		 * test is the any-class-instance enumeration. A {@code cons}/{@code list}/
+		 * {@code sequence} test reads no class: an instance is no cons.
 		 * @return true when such a method exists
 		 */
 		public boolean hasClassMethod() {
@@ -2429,9 +2429,7 @@ public final class ClosRegistry {
 			if (specializer.kind() != SpecializerKind.TYPE || specializer.name() == null) {
 				return false;
 			}
-			String plain = plainNameOf(specializer.name());
-			return "STANDARD-OBJECT".equals(plain) || "CONS".equals(plain) || "LIST".equals(plain)
-					|| "SEQUENCE".equals(plain);
+			return "STANDARD-OBJECT".equals(plainNameOf(specializer.name()));
 		}
 
 		/**

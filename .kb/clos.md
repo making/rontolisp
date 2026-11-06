@@ -305,8 +305,11 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
 - **Interpreter**: `evalDefclass` (expands + evals defuns, then REGENERATES the dispatchers the
   class changes: every one with a class-specialized method on a redefinition, for a class never
   defined before only those `GenericInfo.dispatchesOverNewClass` reaches, a class specializer among
-  its ancestors or a `standard-object`/`cons`/`list`/`sequence` one that enumerates instances;
-  measured on `(ql:quickload :clim)`, over 10 minutes before and under 3 after, 2026-11-05),
+  its ancestors or a `standard-object` one, whose test enumerates instances;
+  measured on `(ql:quickload :clim)`, over 10 minutes before and under 3 after, 2026-11-05. A
+  `cons`/`list`/`sequence` test reads no class (an instance is no cons), yet regenerated too until
+  2026-11-06: coalton's load up to `library/math/real.lisp` rebuilt 8512 dispatchers unchanged,
+  fset's `compare` (426 methods) 126 times, 15 s of 221),
   `evalDefstruct` (likewise: every one with a struct method on a redefinition, for a new struct
   those `GenericInfo.dispatchesOverNewStruct` reaches, a struct specializer among its ancestors or
   `structure-object`. Measured 2026-11-05 loading coalton's compiler: dispatchers took 64 s of its

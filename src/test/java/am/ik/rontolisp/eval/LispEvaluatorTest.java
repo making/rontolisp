@@ -19885,14 +19885,19 @@ class LispEvaluatorTest {
 	@Test
 	void defclassDefinedAfterMethodExtendsClassDispatch() {
 		// The interpreter regenerates class-specialized dispatchers on defclass, so a
-		// subclass defined AFTER the method still matches it.
+		// subclass defined AFTER the method still matches it, and a standard-object
+		// method its instances; a list method, whose test reads no class, is left alone.
 		assertThat(evalMulti("""
 				(defclass animal () ())
 				(defgeneric speak (x))
 				(defmethod speak ((x animal)) :animal)
+				(defgeneric kind (x))
+				(defmethod kind ((x list)) :list)
+				(defmethod kind ((x standard-object)) :object)
+				(defmethod kind (x) :other)
 				(defclass cat (animal) ())
-				(speak (make-instance 'cat))
-				""").print()).isEqualTo(":ANIMAL");
+				(list (speak (make-instance 'cat)) (kind (make-instance 'cat)) (kind '(1)) (kind 1))
+				""").print()).isEqualTo("(:ANIMAL :OBJECT :LIST :OTHER)");
 	}
 
 	@Test

@@ -30026,23 +30026,33 @@ public final class LispMacroExpander {
 	 * one combination that needed it.
 	 *
 	 * <p>
-	 * Cost control: the scan is quadratic in the method count and runs only for the
+	 * Cost control: the scan is quadratic in the branch count and runs only for the
 	 * generics that actually have an incomparable pair (a compatible-but-incomparable
 	 * pair is rare -- in cl-dbi's whole surface exactly one qualifies), and every added
 	 * branch is a real dispatcher branch, so a generic with none keeps its emitted code
-	 * byte-identical. The fixpoint terminates because each round can only add strictly
-	 * more specific vectors out of a finite specializer lattice.
+	 * byte-identical. Each pair is scanned once: a scanned pair stays spent (its meet is
+	 * fixed and {@code reps} only grows), so a round resumes each branch's scan where it
+	 * stopped -- the branches and their order are those of rescanning every pair after
+	 * each addition, which took fset's {@code compare} (425 branches, 4 meets) 75 ms per
+	 * dispatcher against 16. The fixpoint terminates because each round can only add
+	 * strictly more specific vectors out of a finite specializer lattice.
 	 */
 	private static void addMeetBranches(java.util.LinkedHashMap<String, ClosRegistry.MethodInfo> reps,
 			List<ClosRegistry.MethodInfo> branches, ClosRegistry closRegistry) {
+		// partner.get(i): the first branch after i whose pair with i is not yet scanned.
+		List<Integer> partner = new java.util.ArrayList<>(branches.size());
+		for (int i = 0; i < branches.size(); i++) {
+			partner.add(i + 1);
+		}
 		boolean grew = true;
 		while (grew) {
 			grew = false;
-			List<ClosRegistry.MethodInfo> current = List.copyOf(branches);
-			for (int i = 0; i < current.size() && !grew; i++) {
-				for (int j = i + 1; j < current.size() && !grew; j++) {
-					List<ClosRegistry.Specializer> meet = specializerMeet(current.get(i).specializers(),
-							current.get(j).specializers(), closRegistry);
+			int size = branches.size();
+			for (int i = 0; i < size && !grew; i++) {
+				for (int j = partner.get(i); j < size && !grew; j++) {
+					partner.set(i, j + 1);
+					List<ClosRegistry.Specializer> meet = specializerMeet(branches.get(i).specializers(),
+							branches.get(j).specializers(), closRegistry);
 					if (meet == null) {
 						continue;
 					}
@@ -30053,6 +30063,7 @@ public final class LispMacroExpander {
 					ClosRegistry.MethodInfo rep = new ClosRegistry.MethodInfo(meet, "%meet-branch", "", false);
 					reps.put(key, rep);
 					branches.add(rep);
+					partner.add(branches.size());
 					grew = true;
 				}
 			}
@@ -30067,25 +30078,32 @@ public final class LispMacroExpander {
 	@Nullable private static List<ClosRegistry.Specializer> specializerMeet(List<ClosRegistry.Specializer> left,
 			List<ClosRegistry.Specializer> right, ClosRegistry closRegistry) {
 		int size = Math.max(left.size(), right.size());
-		List<ClosRegistry.Specializer> meet = new java.util.ArrayList<>(size);
 		boolean leftDominates = true;
 		boolean rightDominates = true;
 		for (int i = 0; i < size; i++) {
 			ClosRegistry.Specializer a = i < left.size() ? left.get(i) : ClosRegistry.Specializer.DEFAULT;
 			ClosRegistry.Specializer b = i < right.size() ? right.get(i) : ClosRegistry.Specializer.DEFAULT;
 			// specApplies(x, y) reads "a y-branch instance satisfies x", i.e. y is at
-			// least as specific as x -- so the meet takes whichever side the other one
-			// applies to.
+			// least as specific as x.
 			boolean aFromB = specApplies(a, b, closRegistry);
 			boolean bFromA = specApplies(b, a, closRegistry);
 			if (!aFromB && !bFromA) {
 				return null;
 			}
-			meet.add(aFromB ? b : a);
 			leftDominates &= bFromA;
 			rightDominates &= aFromB;
 		}
-		return (leftDominates || rightDominates) ? null : List.copyOf(meet);
+		if (leftDominates || rightDominates) {
+			return null;
+		}
+		// A real meet (rare): position by position, the side the other one applies to.
+		List<ClosRegistry.Specializer> meet = new java.util.ArrayList<>(size);
+		for (int i = 0; i < size; i++) {
+			ClosRegistry.Specializer a = i < left.size() ? left.get(i) : ClosRegistry.Specializer.DEFAULT;
+			ClosRegistry.Specializer b = i < right.size() ? right.get(i) : ClosRegistry.Specializer.DEFAULT;
+			meet.add(specApplies(a, b, closRegistry) ? b : a);
+		}
+		return List.copyOf(meet);
 	}
 
 	/**
