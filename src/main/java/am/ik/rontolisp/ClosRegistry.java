@@ -2396,9 +2396,9 @@ public final class ClosRegistry {
 		/**
 		 * Whether any method's dispatch test enumerates class tags, so the dispatcher
 		 * must be regenerated when a new class appears: a CLASS specializer (the new
-		 * class may extend its descendant set) or a TYPE specializer whose test carries
-		 * the any-class-instance enumeration ({@code standard-object} matches it,
-		 * {@code cons}/{@code list}/{@code sequence} exclude it).
+		 * class may extend its descendant set) or a {@code standard-object} one, whose
+		 * test is the any-class-instance enumeration. A {@code cons}/{@code list}/
+		 * {@code sequence} test reads no class: an instance is no cons.
 		 * @return true when such a method exists
 		 */
 		public boolean hasClassMethod() {
@@ -2429,9 +2429,7 @@ public final class ClosRegistry {
 			if (specializer.kind() != SpecializerKind.TYPE || specializer.name() == null) {
 				return false;
 			}
-			String plain = plainNameOf(specializer.name());
-			return "STANDARD-OBJECT".equals(plain) || "CONS".equals(plain) || "LIST".equals(plain)
-					|| "SEQUENCE".equals(plain);
+			return "STANDARD-OBJECT".equals(plainNameOf(specializer.name()));
 		}
 
 		/**
@@ -2480,6 +2478,15 @@ public final class ClosRegistry {
 	private final LinkedHashMap<String, ClassInfo> classes = new LinkedHashMap<>();
 
 	private final LinkedHashMap<String, GenericInfo> generics = new LinkedHashMap<>();
+
+	/**
+	 * The {@link #generics} named {@code initialize-instance} or
+	 * {@code shared-initialize} in any package, keyed and ordered alike: what every
+	 * {@code make-instance} expansion asks of the registry
+	 * ({@link #initializationGeneric}, {@link #initRefillTargets}), which a walk of every
+	 * generic answered once per evaluation (3% of coalton's load).
+	 */
+	private final LinkedHashMap<String, GenericInfo> initializationGenerics = new LinkedHashMap<>();
 
 	/**
 	 * The index in the compile walk's output of the top-level form being walked; negative
@@ -3775,12 +3782,7 @@ public final class ClosRegistry {
 	 */
 	public Set<String> initRefillTargets() {
 		Set<String> targets = new java.util.LinkedHashSet<>();
-		for (GenericInfo generic : this.generics.values()) {
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(generic.name());
-			String plain = qn == null ? generic.name() : qn.member();
-			if (!"INITIALIZE-INSTANCE".equals(plain) && !"SHARED-INITIALIZE".equals(plain)) {
-				continue;
-			}
+		for (GenericInfo generic : this.initializationGenerics.values()) {
 			for (MethodInfo method : generic.methods().values()) {
 				if (":BEFORE".equals(method.qualifier()) && !method.specializers().isEmpty()
 						&& method.specializers().get(0).kind() == SpecializerKind.CLASS) {
@@ -4663,7 +4665,29 @@ public final class ClosRegistry {
 	 */
 	public void registerGeneric(GenericInfo info) {
 		this.hierarchyVersion++;
-		this.generics.put(normalize(info.name()), info);
+		String key = normalize(info.name());
+		this.generics.put(key, info);
+		String plain = plainNameOf(info.name());
+		if (LispNames.INITIALIZE_INSTANCE.equals(plain) || LispNames.SHARED_INITIALIZE.equals(plain)) {
+			this.initializationGenerics.put(key, info);
+		}
+	}
+
+	/**
+	 * The first generic in definition order named {@code initialize-instance} or
+	 * {@code shared-initialize} in any package: CL has one of each, and the registry keys
+	 * generics by their qualified spelling, so a {@code make-instance} in any package
+	 * finds {@code cl-ppcre::initialize-instance}.
+	 * @param plainName {@code INITIALIZE-INSTANCE} or {@code SHARED-INITIALIZE}
+	 * @return the generic, or null when none is registered
+	 */
+	public @Nullable GenericInfo initializationGeneric(String plainName) {
+		for (GenericInfo generic : this.initializationGenerics.values()) {
+			if (plainName.equals(plainNameOf(generic.name()))) {
+				return generic;
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -4786,11 +4810,35 @@ public final class ClosRegistry {
 	 */
 	public List<String> descendantTags(String className) {
 		String key = normalize(className);
-		return this.classes.values()
+		int version = this.hierarchyVersion;
+		DescendantTags known = this.descendantTagsMemo.get(key);
+		if (known != null && known.hierarchyVersion() == version) {
+			return known.tags();
+		}
+		List<String> tags = this.classes.values()
 			.stream()
 			.filter(c -> c.ancestors().contains(key))
 			.map(c -> "%class-" + c.name())
 			.toList();
+		this.descendantTagsMemo.put(key, new DescendantTags(version, tags));
+		return tags;
+	}
+
+	/**
+	 * {@link #descendantTags}'s answers by normalized class name, each stamped with the
+	 * {@link #hierarchyVersion} it holds for: the interpreter expands a type test, a
+	 * handler's clause and a {@code make-instance} on every evaluation, and each asked
+	 * for a walk of every class.
+	 */
+	private final Map<String, DescendantTags> descendantTagsMemo = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
+	 * One {@link #descendantTags} answer.
+	 *
+	 * @param hierarchyVersion the {@link #hierarchyVersion} it was computed under
+	 * @param tags the tags, an unmodifiable list
+	 */
+	private record DescendantTags(int hierarchyVersion, List<String> tags) {
 	}
 
 	/**
@@ -4801,7 +4849,15 @@ public final class ClosRegistry {
 	 */
 	public static String normalize(String name) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
-		return qn == null ? name : qn.pkg() + "::" + qn.member();
+		if (qn == null) {
+			return name;
+		}
+		// A spelling already in that form is the key itself, whose hash is cached.
+		if (qn.internal() && name.length() == qn.pkg().length() + 2 + qn.member().length()
+				&& name.startsWith(qn.pkg())) {
+			return name;
+		}
+		return qn.pkg() + "::" + qn.member();
 	}
 
 	/** The package-stripped member of a possibly qualified name. */

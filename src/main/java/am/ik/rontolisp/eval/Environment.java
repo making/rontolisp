@@ -131,6 +131,21 @@ public final class Environment implements Scope {
 
 		private int size;
 
+		NameMap() {
+		}
+
+		/**
+		 * A map with room for a number of names made up front, so a scope whose names are
+		 * known -- a call's parameters, a let's variables -- never regrows.
+		 * @param capacity the number of names it will hold
+		 */
+		NameMap(int capacity) {
+			if (capacity > 0 && capacity <= LINEAR_MAX) {
+				this.keys = new String[capacity];
+				this.values = new LispVal[capacity];
+			}
+		}
+
 		@Nullable private Map<String, LispVal> overflow;
 
 		@Nullable LispVal get(String name) {
@@ -138,8 +153,12 @@ public final class Environment implements Scope {
 			if (map != null) {
 				return map.get(name);
 			}
+			// The cached hashes first: names of one package share a long prefix, and a
+			// scope of a few names is mostly passed over.
+			int hash = name.hashCode();
 			for (int i = 0; i < this.size; i++) {
-				if (this.keys[i].equals(name)) {
+				String key = this.keys[i];
+				if (key == name || key.hashCode() == hash && key.equals(name)) {
 					return this.values[i];
 				}
 			}
@@ -156,8 +175,10 @@ public final class Environment implements Scope {
 				map.put(name, value);
 				return;
 			}
+			int hash = name.hashCode();
 			for (int i = 0; i < this.size; i++) {
-				if (this.keys[i].equals(name)) {
+				String key = this.keys[i];
+				if (key == name || key.hashCode() == hash && key.equals(name)) {
 					this.values[i] = value;
 					return;
 				}
@@ -213,9 +234,26 @@ public final class Environment implements Scope {
 
 	}
 
-	private final NameMap bindings = new NameMap();
+	private final NameMap bindings;
 
-	private final NameMap functions = new NameMap();
+	/**
+	 * The global function namespace, one cell per name ({@link FunctionCell}); null in
+	 * every scope but the global one, which is where every function is defined.
+	 */
+	private final @Nullable ConcurrentHashMap<String, FunctionCell> functionCells;
+
+	/**
+	 * The cells of {@link #functionCells} by their index, so a note can name one by an
+	 * int ({@link #functionCellAt}); published whole on each growth, written under
+	 * {@link #functionCells}' creation of a cell.
+	 */
+	private volatile FunctionCell @Nullable [] functionCellTable;
+
+	/**
+	 * A scope's own function bindings below the global one, made only on the first
+	 * {@link #defineFunction} there (the evaluator makes none).
+	 */
+	private @Nullable NameMap functions;
 
 	/**
 	 * The {@code %mv-spill} channel ({@link LispNames#MV_SPILL}) of the GLOBAL
@@ -656,7 +694,19 @@ public final class Environment implements Scope {
 	 * @param parent the parent environment, or {@code null} for a top-level scope
 	 */
 	public Environment(@Nullable Environment parent) {
+		this(parent, 0);
+	}
+
+	/**
+	 * Create a new environment with room for a number of bindings made up front.
+	 * @param parent the parent environment, or {@code null} for a top-level scope
+	 * @param bindings the number of variables it will bind
+	 */
+	public Environment(@Nullable Environment parent, int bindings) {
+		this.bindings = new NameMap(bindings);
 		this.parent = parent;
+		this.functionCells = parent == null ? new ConcurrentHashMap<>() : null;
+		this.functionCellTable = parent == null ? new FunctionCell[256] : null;
 		this.mvSpill = parent == null ? new ValueCountRegister() : parent.mvSpill;
 		this.lexicalFunction = parent == null ? null : parent.lexicalFunction;
 		this.lexicalPackage = parent == null ? null : parent.lexicalPackage;
@@ -947,14 +997,56 @@ public final class Environment implements Scope {
 	 * @return the function value, or {@code null} if undefined
 	 */
 	public @Nullable LispVal lookupFunctionOrNull(String name) {
-		LispVal val = this.functions.get(name);
-		if (val != null) {
-			return val;
+		Environment scope = this;
+		while (scope.functionCells == null) {
+			NameMap own = scope.functions;
+			if (own != null) {
+				LispVal val = own.get(name);
+				if (val != null) {
+					return val;
+				}
+			}
+			if (scope.parent == null) {
+				return null;
+			}
+			scope = scope.parent;
 		}
-		if (this.parent != null) {
-			return this.parent.lookupFunctionOrNull(name);
+		FunctionCell cell = scope.functionCells.get(name);
+		return cell == null ? null : cell.value();
+	}
+
+	/**
+	 * The cell holding a name's binding in the global function namespace: asked of the
+	 * global environment by a call site that resolved the name there, so its later calls
+	 * read the binding without a lookup.
+	 * @param name the function name
+	 * @return the cell, or null when the name was never defined (or this is no global
+	 * environment)
+	 */
+	@Nullable FunctionCell functionCell(String name) {
+		return this.functionCells == null ? null : this.functionCells.get(name);
+	}
+
+	/**
+	 * The cell at an index of the global function namespace's table.
+	 * @param index a {@link FunctionCell#index} of this environment's
+	 * @return the cell
+	 */
+	FunctionCell functionCellAt(int index) {
+		return java.util.Objects.requireNonNull(this.functionCellTable)[index];
+	}
+
+	/** A new cell of the global function namespace, at the next index of its table. */
+	private FunctionCell newFunctionCell(Map<String, FunctionCell> cells) {
+		FunctionCell[] table = java.util.Objects.requireNonNull(this.functionCellTable);
+		int index = cells.size();
+		if (index == table.length) {
+			table = java.util.Arrays.copyOf(table, table.length * 2);
 		}
-		return null;
+		FunctionCell cell = new FunctionCell(index);
+		table[index] = cell;
+		this.functionCellTable = table;
+		return cell;
 	}
 
 	/**
@@ -963,6 +1055,24 @@ public final class Environment implements Scope {
 	 * @param value the function value
 	 */
 	public void defineFunction(String name, LispVal value) {
+		if (this.functionCells != null) {
+			Map<String, FunctionCell> cells = this.functionCells;
+			FunctionCell cell = cells.get(name);
+			if (cell == null) {
+				synchronized (cells) {
+					cell = cells.get(name);
+					if (cell == null) {
+						cell = newFunctionCell(cells);
+						cells.put(name, cell);
+					}
+				}
+			}
+			cell.set(value);
+			return;
+		}
+		if (this.functions == null) {
+			this.functions = new NameMap();
+		}
 		this.functions.put(name, value);
 	}
 
@@ -973,7 +1083,15 @@ public final class Environment implements Scope {
 	 * @param name the function name
 	 */
 	public void undefineFunction(String name) {
-		this.functions.remove(name);
+		if (this.functionCells != null) {
+			FunctionCell cell = this.functionCells.get(name);
+			if (cell != null) {
+				cell.set(null);
+			}
+		}
+		else if (this.functions != null) {
+			this.functions.remove(name);
+		}
 	}
 
 	/**
@@ -982,7 +1100,16 @@ public final class Environment implements Scope {
 	 * @return the names
 	 */
 	List<String> functionNames() {
-		return this.functions.names();
+		if (this.functionCells != null) {
+			List<String> names = new ArrayList<>();
+			this.functionCells.forEach((name, cell) -> {
+				if (cell.value() != null) {
+					names.add(name);
+				}
+			});
+			return List.copyOf(names);
+		}
+		return this.functions == null ? List.of() : this.functions.names();
 	}
 
 	/**

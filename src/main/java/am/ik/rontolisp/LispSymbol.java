@@ -1,11 +1,77 @@
 package am.ik.rontolisp;
 
+import java.util.Objects;
+
+import org.jspecify.annotations.Nullable;
+
 /**
- * A symbol value.
+ * A symbol value: its name, compared by content, so two symbol objects of one name are
+ * the same symbol.
  *
- * @param name the symbol name
+ * <p>
+ * <b>The interpreter's note.</b> A symbol object also carries one slot nothing but the
+ * interpreter reads or writes ({@link #evaluatorNote}): what it worked out about the NAME
+ * the last time it met this object, such as the function a call of it reaches
+ * ({@code .kb/interpreter-expansion-memo.md}, "The call-site note"). A fact about a name
+ * holds for every object of that name, so an object shared by several forms keeps one
+ * note for all of them. The slot is free in the native image the CLI ships as (its object
+ * stays 16 bytes) and costs 8 bytes on HotSpot's default layout; a side table keyed by
+ * the form was measured at 6% of an interpreted coalton load, its probes cache misses on
+ * a table of a million entries.
  */
-public record LispSymbol(String name) implements LispVal {
+public final class LispSymbol implements LispVal {
+
+	private final String name;
+
+	private @Nullable Object evaluatorNote;
+
+	/**
+	 * Creates a symbol.
+	 * @param name the symbol name
+	 */
+	public LispSymbol(String name) {
+		this.name = name;
+	}
+
+	/**
+	 * The symbol's name, as the reader and the resolver spell it.
+	 * @return the name
+	 */
+	public String name() {
+		return this.name;
+	}
+
+	/**
+	 * The interpreter's note on this symbol's name: opaque to everything else.
+	 * @return the note, or null
+	 */
+	public @Nullable Object evaluatorNote() {
+		return this.evaluatorNote;
+	}
+
+	/**
+	 * Replaces the interpreter's note. Racing writers each publish an immutable note, so
+	 * a reader sees one of them whole.
+	 * @param note the note
+	 */
+	public void evaluatorNote(@Nullable Object note) {
+		this.evaluatorNote = note;
+	}
+
+	@Override
+	public boolean equals(@Nullable Object other) {
+		return this == other || other instanceof LispSymbol symbol && Objects.equals(this.name, symbol.name);
+	}
+
+	@Override
+	public int hashCode() {
+		return Objects.hashCode(this.name);
+	}
+
+	@Override
+	public String toString() {
+		return "LispSymbol[name=" + this.name + "]";
+	}
 
 	/**
 	 * The canonical spelling of the {@code cl-user} symbol whose name is empty. Every

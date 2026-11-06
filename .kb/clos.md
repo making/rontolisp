@@ -325,14 +325,20 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
 - **Interpreter**: `evalDefclass` (expands + evals defuns, then REGENERATES the dispatchers the
   class changes: every one with a class-specialized method on a redefinition, for a class never
   defined before only those `GenericInfo.dispatchesOverNewClass` reaches, a class specializer among
-  its ancestors or a `standard-object`/`cons`/`list`/`sequence` one that enumerates instances;
-  measured on `(ql:quickload :clim)`, over 10 minutes before and under 3 after, 2026-11-05),
+  its ancestors or a `standard-object` one, whose test enumerates instances;
+  measured on `(ql:quickload :clim)`, over 10 minutes before and under 3 after, 2026-11-05. A
+  `cons`/`list`/`sequence` test reads no class (an instance is no cons), yet regenerated too until
+  2026-11-06: coalton's load up to `library/math/real.lisp` rebuilt 8512 dispatchers unchanged,
+  fset's `compare` (426 methods) 126 times, 15 s of 221),
   `evalDefstruct` (likewise: every one with a struct method on a redefinition, for a new struct
   those `GenericInfo.dispatchesOverNewStruct` reaches, a struct specializer among its ancestors or
   `structure-object`. Measured 2026-11-05 loading coalton's compiler: dispatchers took 64 s of its
   first 240, fset's `compare` regenerated 823 times for its 350 methods),
   `evalDefgeneric`, `evalDefmethod`. A `#'generic` captured BEFORE a later defmethod is NOT
-  stale: `evalFunction` answers a LATE-BOUND wrapper for any name `findGeneric` knows.
+  stale: `evalFunction` answers a LATE-BOUND wrapper for any name `findGeneric` knows. A
+  `funcall`/`apply` of that wrapper runs the current dispatcher in `evalCons`'s frame
+  (`closureCalled`, since 2026-11-06), not through the wrapper and `apply`'s frame: fset's
+  maps call their `#'compare` that way on every key a tree passes.
 - **Compilers**: `expandTopLevelDefinitions(program, structAccessors, closRegistry)` sits at
   the old `expandTopLevelDefstructs` slot (after `flattenTopLevel`, before
   `LambdaLists.desugarProgram` — the constructors use `&key`). It walks the whole program
