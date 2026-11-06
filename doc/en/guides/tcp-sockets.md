@@ -762,18 +762,17 @@ Limitations of the shim (deliberate -- rontolisp's socket model is lite):
   the handle for `nil` instead).
 - **`socket-option` supports `:receive-timeout` only.**
   `(setf (usocket:socket-option sock :receive-timeout) seconds)` sets a real
-  per-socket read deadline on the interpreter and the JVM (via
-  [`rontolisp:tcp-set-timeout`](../reference/functions/rontolisp-tcp-set-timeout.md));
+  per-socket read deadline (via
+  [`rontolisp:tcp-set-timeout`](../reference/functions/rontolisp-tcp-set-timeout.md))
+  on the interpreter, the JVM, the WASM component and in a native executable;
   a timed-out read signals an ordinary catchable `error`, not
-  `usocket:timeout-error`, and the getter reads the set seconds back. A native
-  executable sets the deadline too; on the WASM component the write SIGNALS
-  instead of installing a timeout that never fires. Every other option signals
-  rather than being silently ignored.
-- **`wait-for-input` is a `listen`-based poll**: on the interpreter and the
-  JVM the wait is real (`listen` asks the kernel receive buffer, polled every
-  10 ms until data arrives or `:timeout` elapses; `:ready-only` works). On
-  the WASM backends, native executables included, it returns immediately
-  claiming readiness when nothing is
+  `usocket:timeout-error`, and the getter reads the set seconds back. Every
+  other option signals rather than being silently ignored.
+- **`wait-for-input` is a `listen`-based poll**: `listen` is polled every
+  10 ms until data arrives or `:timeout` elapses (`:ready-only` works). The
+  wait is real on the interpreter and the JVM, where `listen` asks the kernel
+  receive buffer, and on the WASM component, where it asks the host. In a
+  native executable it returns immediately claiming readiness when nothing is
   buffered — reads block anyway, so the common wait-then-read loop behaves
   identically, but a `:timeout` poll cannot be honoured there. Stream sockets
   only (a listener in the list signals), and wait-list objects do not exist.

@@ -72,10 +72,10 @@ TLS-wrapped protocols:
   system properties and `:insecure` have no effect there — a non-`nil`
   `:insecure` value **signals** rather than silently verifying). The
   interface is an explicitly experimental draft, so a wasmtime update may
-  need a matching rontolisp update. The handshake has **no deadline** there
-  (`wasi:sockets` and `wasi:tls` expose none, and `tcp-set-timeout` signals
-  on this backend), so a peer that accepts and never answers TLS blocks the
-  call.
+  need a matching rontolisp update. The handshake has the same
+  **10-second** bound: a peer that accepts and never answers TLS makes the
+  call answer `nil` instead of blocking, and the returned handle carries no
+  read deadline.
 - **WASM Preview 1**: not supported — a **compile error** (no `wasi:tls` host
   API exists for Preview 1).
 - **Browser playground**: not supported — the browser sandbox provides no raw

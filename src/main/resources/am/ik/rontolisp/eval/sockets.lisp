@@ -32,6 +32,13 @@
 ;;;;     (unsigned-byte 8) vector -- with aref, never UTF-8-decoded characters
 ;;;;     (%str-byte-length still guards the WRITE side, where a payload is a
 ;;;;     string whose bytes are the wire's).
+;;;;   - a READ DEADLINE (tcp-set-timeout) has no host knob -- wasi:sockets@0.3.0
+;;;;     has no receive timeout -- so a read the host cannot answer at once races a
+;;;;     wait-for timer (%future-race), and the loser is WITHDRAWN
+;;;;     (stream.cancel-read). Nothing is ever left in flight on a recv stream:
+;;;;     the same withdrawal is what makes listen a real probe (start a read,
+;;;;     take it back when the host has nothing) and what lets close drop a stream
+;;;;     another task is still reading.
 
 ;; The WIT interface is lowered by SocketsLibrary (which calls
 ;; WitImportDirective.lower itself), so this directive never reaches
@@ -41,10 +48,12 @@
                       :interface "wasi:sockets/types@0.3.0"
                       :package %sock)
 
-;;; --- the socket table: fd -> (socket kind recv tx buf cursor eof mid-line) ---
+;;; --- the socket table: fd -> (socket kind recv tx buf cursor eof mid-line
+;;; deadline) ---
 ;;; kind 1 = connected, 2 = listener; recv = the recv byte stream (or, for a
 ;;; listener, the accept stream); tx = the write end of the send pair; mid-line =
-;;; whether the characters written so far left the line open.
+;;; whether the characters written so far left the line open; deadline = the read
+;;; deadline in milliseconds, or nil.
 
 (defvar rontolisp::*sock-table* (make-hash-table))
 (defvar rontolisp::*sock-next-fd* 200)
@@ -76,8 +85,14 @@
 (defun rontolisp::%sock-e-mid-line (e)
   (car (cdr (cdr (cdr (cdr (cdr (cdr (cdr e)))))))))
 
+(defun rontolisp::%sock-e-deadline (e)
+  (car (cdr (cdr (cdr (cdr (cdr (cdr (cdr (cdr e))))))))))
+
 (defun rontolisp::%sock-set-mid-line (e mid-line)
   (rplaca (cdr (cdr (cdr (cdr (cdr (cdr (cdr e))))))) mid-line))
+
+(defun rontolisp::%sock-set-deadline (e ms)
+  (rplaca (cdr (cdr (cdr (cdr (cdr (cdr (cdr (cdr e)))))))) ms))
 
 (defun rontolisp::%sock-set-buf (e chunk cursor)
   (rplaca (cdr (cdr (cdr (cdr e)))) chunk)
@@ -104,7 +119,7 @@
   (let ((fd rontolisp::*sock-next-fd*))
     (setq rontolisp::*sock-next-fd* (+ fd 1))
     (setf (gethash fd rontolisp::*sock-table*)
-          (list sock kind recv tx nil 0 nil nil))
+          (list sock kind recv tx nil 0 nil nil nil))
     (%obj-new '%STREAM fd (if (= kind 2) :socket-server :socket))))
 
 ;;; --- IPv4 literal parsing (hostname lookup is not wired; dotted quads only,
@@ -282,16 +297,49 @@
     (if (consp addr) (getf (cdr addr) :PORT) nil)))
 
 (defun rontolisp:tcp-set-timeout (fd ms)
-  ;; A per-socket read deadline does not exist on this backend:
-  ;; wasi:sockets@0.3.0 exposes no receive-timeout knob and the stream reads
-  ;; are futures with no deadline argument. A LOUD refusal, never a silent
-  ;; no-op -- a timeout that never fires is the failure mode a client sets it
-  ;; to avoid. Catchable (EH mode is always on with sockets spliced), and dead
-  ;; code referencing it still compiles. Re-evaluate when the scheduler gains
-  ;; a future-race/deadline primitive (the timer future exists; racing it
-  ;; against a read does not).
-  (error
-   "tcp-set-timeout: no read deadline exists on the WASM component backend (wasi:sockets has no timeout knob); do not set a read timeout here"))
+  ;; The socket's READ deadline: a read waiting longer than MS milliseconds for
+  ;; its next chunk signals `OP: Read timed out`, the SO_TIMEOUT text of the
+  ;; interpreter and the JVM, and leaves the socket usable. nil clears it, and so
+  ;; does 0 (SO_TIMEOUT's "none"). It lives in the entry -- wasi:sockets@0.3.0 has
+  ;; no receive timeout -- and %sock-fill enforces it by racing the read against a
+  ;; wait-for timer; tls.lisp's handshake honours it the same way. A handle that
+  ;; is no connected socket answers nil (the WASM error convention).
+  (unless (or (null ms) (and (integerp ms) (>= ms 0)))
+    (error
+     "tcp-set-timeout: the deadline must be nil or a non-negative integer"))
+  (let ((e (rontolisp::%sock-entry fd)))
+    (if (and e (= (rontolisp::%sock-e-kind e) 1))
+        (progn
+          (rontolisp::%sock-set-deadline e
+           (if (and ms (> ms 0)) (min ms 2147483647) nil))
+          ms)
+        nil)))
+
+;;; --- the future race: the deadline substrate. A read and a TLS handshake are
+;;; futures, and so is a wait-for timer; a deadline is the race of the two. ---
+
+(defun rontolisp::%future-race (futures)
+  ;; A future settling to the INDEX of the first of FUTURES to settle, fulfilled
+  ;; or rejected. A value that is no future, or a future settled already, settles
+  ;; it at once, the first such in list order winning. The index and not the
+  ;; value, because a winner may answer nil (a timer always does, a read at its
+  ;; end too) and its error is its own: the caller awaits the winner for either.
+  ;; The losers run on -- the race only stops listening to them -- so a loser
+  ;; holding a host operation is the caller's to withdraw. One arm per future, an
+  ;; async-lambda awaiting it: the scheduler's own waiter machinery wakes the
+  ;; race, task ownership included.
+  (let ((race (rontolisp::%future-new)) (i 0))
+    (while futures
+      (rontolisp::%future-race-arm race (car futures) i)
+      (setq futures (cdr futures))
+      (setq i (+ i 1)))
+    race))
+
+(defun rontolisp::%future-race-arm (race f i)
+  (funcall
+   (rontolisp:async-lambda ()
+     (handler-case (rontolisp:await f) (condition () nil))
+     (rontolisp::%future-settle race i))))
 
 ;;; --- buffered reads (chunked; the %...-future internals are async-defuns so an
 ;;; async body's promoted read suspends instead of blocking the task). A chunk
@@ -299,22 +347,38 @@
 ;;; delivered, and the cursor walks those bytes with aref -- never characters:
 ;;; a decoded chunk would collapse binary bytes that happen to form a valid
 ;;; multi-byte sequence (a PostgreSQL BackendKeyData secret, say) into one char
-;;; and shift everything after them. ---
+;;; and shift everything after them. OP names the public operator a timed-out
+;;; read is reported under. ---
 
-(rontolisp:async-defun rontolisp::%sock-fill (e)
+(rontolisp:async-defun rontolisp::%sock-fill (e op)
   ;; Refill the chunk buffer from the recv stream; nil (and the eof mark) at FIN.
   ;; A chunk is a packed (unsigned-byte 8) vector -- the stream<u8> read lifts
   ;; the octets as they are -- so the buffer cursor below walks it with aref.
-  (let ((chunk
-         (rontolisp:await
-          (%sock:sock-stream-read (rontolisp::%sock-e-recv e)))))
-    (if (and chunk (> (length chunk) 0))
-        (progn
-          (rontolisp::%sock-set-buf e chunk 0)
-          t)
-        (progn
-          (rontolisp::%sock-set-eof e)
-          nil))))
+  ;; Under a read deadline, a read the host could not answer at once races a
+  ;; timer. When the timer wins the read is withdrawn; a chunk that landed
+  ;; meanwhile is still taken, and an empty withdrawal (status 2, cancelled) is
+  ;; the timeout. Nothing stays in flight, so the next read starts afresh, as
+  ;; after SO_TIMEOUT.
+  (let* ((recv (rontolisp::%sock-e-recv e))
+         (rd (%sock:sock-stream-read recv))
+         (ms (rontolisp::%sock-e-deadline e))
+         (status nil))
+    (when (and ms (not (rontolisp::%future-settled-p rd)))
+      (let ((winner
+             (rontolisp:await
+              (rontolisp::%future-race (list rd (rontolisp:wait-for ms))))))
+        (when (eql winner 1)
+          (setq status (%sock:sock-stream-cancel-read recv)))))
+    (let ((chunk (rontolisp:await rd)))
+      (if (and chunk (> (length chunk) 0))
+          (progn
+            (rontolisp::%sock-set-buf e chunk 0)
+            t)
+          (if (eql status 2)
+              (error (concatenate 'string op ": Read timed out"))
+              (progn
+                (rontolisp::%sock-set-eof e)
+                nil))))))
 
 (defun rontolisp::%sock-buf-ready (e)
   (let ((buf (rontolisp::%sock-e-buf e)))
@@ -327,21 +391,21 @@
     (rontolisp::%sock-set-buf e buf (+ cursor 1))
     b))
 
-(rontolisp:async-defun rontolisp::%sock-read-byte-f (e)
+(rontolisp:async-defun rontolisp::%sock-read-byte-f (e op)
   (if (rontolisp::%sock-buf-ready e)
       (rontolisp::%sock-pop-byte e)
       (if (rontolisp::%sock-e-eof e)
           nil
-          (if (rontolisp:await (rontolisp::%sock-fill e))
+          (if (rontolisp:await (rontolisp::%sock-fill e op))
               (rontolisp::%sock-pop-byte e)
               nil))))
 
-(rontolisp:async-defun rontolisp::%sock-read-char-f (e)
+(rontolisp:async-defun rontolisp::%sock-read-char-f (e op)
   ;; One UTF-8 sequence assembled byte-wise (a refill may intervene between the
   ;; bytes, so a sequence split across host chunks still decodes whole). An
   ;; invalid lead byte stands alone and decodes to whatever the string layer's
   ;; decoder yields for it -- the same bytes the interpreter's UTF-8 decode sees.
-  (let ((b0 (rontolisp:await (rontolisp::%sock-read-byte-f e))))
+  (let ((b0 (rontolisp:await (rontolisp::%sock-read-byte-f e op))))
     (if (null b0)
         nil
         (if (< b0 128)
@@ -349,7 +413,8 @@
             (let ((n (if (< b0 192) 0 (if (< b0 224) 1 (if (< b0 240) 2 3))))
                   (acc (rontolisp::%str-from-byte b0)))
               (while (> n 0)
-                (let ((bn (rontolisp:await (rontolisp::%sock-read-byte-f e))))
+                (let ((bn
+                       (rontolisp:await (rontolisp::%sock-read-byte-f e op))))
                   (if (null bn)
                       (setq n 0)
                       (progn
@@ -361,7 +426,7 @@
                         (setq n (- n 1))))))
               (char acc 0))))))
 
-(rontolisp:async-defun rontolisp::%sock-read-line-f (e)
+(rontolisp:async-defun rontolisp::%sock-read-line-f (e op)
   ;; Bytes up to \n (one trailing \r stripped, dropped at EOF too), assembled
   ;; into a string whose bytes ARE the wire bytes -- so a UTF-8 line decodes
   ;; exactly like the interpreter's byte-collecting readLine, chunk boundaries
@@ -370,7 +435,7 @@
   ;; missing-newline-p: t when the peer's close, not a \n, ended the line.
   (let ((acc "") (got nil) (done nil) (cr nil) (newline nil))
     (while (not done)
-      (let ((b (rontolisp:await (rontolisp::%sock-read-byte-f e))))
+      (let ((b (rontolisp:await (rontolisp::%sock-read-byte-f e op))))
         (if (null b)
             (setq done t)
             (progn
@@ -405,7 +470,7 @@
 (rontolisp:async-defun rontolisp::%read-line-future (&optional s)
   (let ((e (rontolisp::%sock-entry s)))
     (if e
-        (rontolisp:await (rontolisp::%sock-read-line-f e))
+        (rontolisp:await (rontolisp::%sock-read-line-f e "read-line"))
         (rontolisp:await (rontolisp::%stdin-read-line-or-raw-f s)))))
 
 (rontolisp:async-defun rontolisp::%read-char-future (&optional s)
@@ -418,7 +483,8 @@
   ;; apply the caller's own eof arguments. The stdin arm already signals.
   (let ((e (rontolisp::%sock-entry s)))
     (if e
-        (let ((c (rontolisp:await (rontolisp::%sock-read-char-f e))))
+        (let ((c
+               (rontolisp:await (rontolisp::%sock-read-char-f e "read-char"))))
           (if c c (error 'end-of-file)))
         (rontolisp:await (rontolisp::%stdin-read-char-or-raw-f s)))))
 
@@ -428,7 +494,8 @@
   ;; caller's own eof arguments are applied to the raw nil.
   (let ((e (rontolisp::%sock-entry s)))
     (if e
-        (let ((b (rontolisp:await (rontolisp::%sock-read-byte-f e))))
+        (let ((b
+               (rontolisp:await (rontolisp::%sock-read-byte-f e "read-byte"))))
           (if b b (error 'end-of-file)))
         (rontolisp:await (rontolisp::%stdin-read-byte-or-raw-f s)))))
 
@@ -473,7 +540,9 @@
   ;; NOT updated (CL read-sequence's value), so a short read at EOF stays visible.
   (let ((i start) (stop nil))
     (while (and (< i end) (not stop))
-      (let ((b (rontolisp:await (rontolisp::%sock-read-byte-f e))))
+      (let ((b
+             (rontolisp:await
+              (rontolisp::%sock-read-byte-f e "read-sequence"))))
         (if (null b)
             (setq stop t)
             (progn
@@ -501,7 +570,8 @@
     (s eof-error-p &optional eof-value)
   (let ((e (rontolisp::%sock-entry s)))
     (if e
-        (let ((b (rontolisp:await (rontolisp::%sock-read-byte-f e))))
+        (let ((b
+               (rontolisp:await (rontolisp::%sock-read-byte-f e "read-byte"))))
           (if b b (if eof-error-p (error 'end-of-file) eof-value)))
         (rontolisp::%read-byte-raw s eof-error-p eof-value))))
 
@@ -520,7 +590,8 @@
     (s eof-error-p &optional eof-value)
   (let ((e (rontolisp::%sock-entry s)))
     (if e
-        (let ((c (rontolisp:await (rontolisp::%sock-read-char-f e))))
+        (let ((c
+               (rontolisp:await (rontolisp::%sock-read-char-f e "read-char"))))
           (if c c (if eof-error-p (error 'end-of-file) eof-value)))
         (rontolisp:await
          (rontolisp::%stdin-read-char-eof-or-raw-f s eof-error-p eof-value)))))
@@ -538,7 +609,8 @@
     (if e
         (let* ((vals
                 (%quiet-multiple-value-list
-                 (rontolisp:await (rontolisp::%sock-read-line-f e))))
+                 (rontolisp:await
+                  (rontolisp::%sock-read-line-f e "read-line"))))
                (l (car vals)))
           (if l
               (%quiet-values l (car (cdr vals)))
@@ -651,18 +723,43 @@
           b)
         (rontolisp::%write-byte-raw b stream))))
 
+(rontolisp:async-defun rontolisp::%sock-probe-f (e)
+  ;; Whether a read would answer at once, consuming nothing: bytes left in the
+  ;; chunk, or a chunk the host hands over now. The probe starts a read and, when
+  ;; the host has nothing yet, withdraws it at once -- the question the
+  ;; interpreter's available() asks the kernel -- so nothing stays in flight. A
+  ;; chunk that comes is the next read's; the peer's close marks the eof (nil).
+  (if (rontolisp::%sock-buf-ready e)
+      t
+      (if (rontolisp::%sock-e-eof e)
+          nil
+          (let* ((recv (rontolisp::%sock-e-recv e))
+                 (rd (%sock:sock-stream-read recv))
+                 (status
+                  (if (rontolisp::%future-settled-p rd)
+                      nil
+                      (%sock:sock-stream-cancel-read recv)))
+                 (chunk (rontolisp:await rd)))
+            (if (and chunk (> (length chunk) 0))
+                (progn
+                  (rontolisp::%sock-set-buf e chunk 0)
+                  t)
+                (progn
+                  (unless (eql status 2) (rontolisp::%sock-set-eof e))
+                  nil))))))
+
 (defun rontolisp::%io-listen (&optional s)
-  ;; Immediately-available probe: unconsumed bytes in the socket entry's chunk
-  ;; buffer. The host kernel's receive buffer is not observable without
-  ;; blocking on this backend, so a drained chunk answers nil even when bytes
-  ;; wait host-side (documented divergence -- the chunk IS the readahead
-  ;; buffer here). A non-socket designator falls through to the native listen
-  ;; under its %listen-raw alias -- the same shape %io-read-char's raw twin
-  ;; uses: a string input stream answers from its record, and the alias keeps
-  ;; the compile-time socket rewrite of the public name from recursing.
+  ;; A connected socket answers what the host could hand over now
+  ;; (%sock-probe-f), exactly as the interpreter's and the JVM's kernel probe
+  ;; does; a listener answers nil. A non-socket designator falls through to the
+  ;; native listen under its %listen-raw alias -- the same shape %io-read-char's
+  ;; raw twin uses: a string input stream answers from its record, and the alias
+  ;; keeps the compile-time socket rewrite of the public name from recursing.
   (let ((e (rontolisp::%sock-entry s)))
     (if e
-        (if (rontolisp::%sock-buf-ready e) t nil)
+        (if (= (rontolisp::%sock-e-kind e) 1)
+            (rontolisp::%future-force (rontolisp::%sock-probe-f e))
+            nil)
         (rontolisp::%listen-raw s))))
 
 (defun rontolisp::%io-open-stream-p (s)
@@ -681,11 +778,19 @@
             (rontolisp::%open-stream-p-raw s)))))
 
 (defun rontolisp::%io-close (stream)
+  ;; Out of the table and at its end BEFORE anything is released: a read or an
+  ;; accept another task still has in flight is withdrawn below (a drop of a busy
+  ;; stream traps), which wakes that task at once with nothing -- and a reader that
+  ;; found the socket still open would start another read on the stream being
+  ;; dropped. The withdrawal answers nil, touching nothing, when none is in flight.
   (let ((e (rontolisp::%sock-entry stream)))
     (if e
         (progn
+          (remhash (rontolisp::%sock-handle stream) rontolisp::*sock-table*)
+          (rontolisp::%sock-set-eof e)
           (if (= (rontolisp::%sock-e-kind e) 2)
               (progn
+                (%sock:accept-stream-cancel-read (rontolisp::%sock-e-recv e))
                 (%sock:accept-stream-drop-readable (rontolisp::%sock-e-recv e))
                 (%sock:tcp-socket-drop (rontolisp::%sock-e-sock e)))
               (progn
@@ -694,8 +799,8 @@
                 ;; sends the FIN.
                 (let ((tx (rontolisp::%sock-e-tx e)))
                   (when tx (%sock:sock-stream-drop-writable tx)))
+                (%sock:sock-stream-cancel-read (rontolisp::%sock-e-recv e))
                 (%sock:sock-stream-drop-readable (rontolisp::%sock-e-recv e))
                 (%sock:tcp-socket-drop (rontolisp::%sock-e-sock e))))
-          (remhash (rontolisp::%sock-handle stream) rontolisp::*sock-table*)
           t)
         (rontolisp::%close-raw stream))))

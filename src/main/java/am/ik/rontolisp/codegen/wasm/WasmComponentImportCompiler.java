@@ -130,10 +130,15 @@ final class WasmComponentImportCompiler {
 	record Drop(String lispName, String module, String field, String resource) {
 	}
 
-	/** The async built-in operations a stream/future type alias binds. */
+	/**
+	 * The async built-in operations a stream/future type alias binds. {@code CANCEL_READ}
+	 * is a stream's alone: it withdraws a read an asyncMode {@code READ} left in flight,
+	 * and a future read is never left in flight.
+	 */
 	enum AsyncOp {
 
-		NEW("new"), READ("read"), WRITE("write"), DROP_READABLE("drop-readable"), DROP_WRITABLE("drop-writable");
+		NEW("new"), READ("read"), WRITE("write"), DROP_READABLE("drop-readable"), DROP_WRITABLE("drop-writable"),
+		CANCEL_READ("cancel-read");
 
 		final String suffix;
 
@@ -885,7 +890,8 @@ final class WasmComponentImportCompiler {
 	 * ABI's synchronous stream/future built-ins (the shapes the fixed base adapter
 	 * already exercises): {@code new: [] -> [i64]} (the packed readable/writable pair),
 	 * {@code stream.read/write: [end, ptr, len] -> [status]},
-	 * {@code future.read/write: [end, ptr] -> [status]}, {@code drop-*: [end] -> []}.
+	 * {@code future.read/write: [end, ptr] -> [status]}, {@code drop-*: [end] -> []},
+	 * {@code stream.cancel-read: [end] -> [status]} (the synchronous variant).
 	 * @param async the bound built-in
 	 * @return the flat parameter types
 	 */
@@ -894,7 +900,7 @@ final class WasmComponentImportCompiler {
 			case NEW -> new Type[0];
 			case READ, WRITE ->
 				async.stream() ? new Type[] { Type.I32, Type.I32, Type.I32 } : new Type[] { Type.I32, Type.I32 };
-			case DROP_READABLE, DROP_WRITABLE -> new Type[] { Type.I32 };
+			case DROP_READABLE, DROP_WRITABLE, CANCEL_READ -> new Type[] { Type.I32 };
 		};
 	}
 
@@ -902,7 +908,7 @@ final class WasmComponentImportCompiler {
 	static Type[] asyncResultTypes(Async async) {
 		return switch (async.op()) {
 			case NEW -> new Type[] { Type.I64 };
-			case READ, WRITE -> new Type[] { Type.I32 };
+			case READ, WRITE, CANCEL_READ -> new Type[] { Type.I32 };
 			case DROP_READABLE, DROP_WRITABLE -> new Type[0];
 		};
 	}
@@ -912,7 +918,7 @@ final class WasmComponentImportCompiler {
 		return switch (async.op()) {
 			case NEW -> 0;
 			case WRITE -> 2;
-			case READ, DROP_READABLE, DROP_WRITABLE -> 1;
+			case READ, DROP_READABLE, DROP_WRITABLE, CANCEL_READ -> 1;
 		};
 	}
 
@@ -1417,6 +1423,7 @@ final class WasmComponentImportCompiler {
 						emitFutureWrite(async);
 					}
 				}
+				case CANCEL_READ -> emitStreamCancelRead(async.handleElement());
 			}
 		}
 
@@ -1605,6 +1612,143 @@ final class WasmComponentImportCompiler {
 			newCons();
 			globalSet(wiring.readFreeGlobal());
 			this.w.write(Instruction.END);
+			this.w.write(Instruction.END);
+		}
+
+		// stream.cancel-read: withdraws the read an asyncMode stream.read above left in
+		// flight (a BLOCKED read, registered as a pending future), so that the handle
+		// can be read again or dropped -- a drop with a read in flight traps ("cannot
+		// remove busy stream"). The SYNC built-in returns once the copy has settled,
+		// with what it delivered: bytes the host had already copied (or a completion
+		// that beat the cancel) settle the read's future as the completion event would
+		// have, an empty withdrawal settles it nil, the staged buffer is recycled and a
+		// DROPPED result latches the handle. The registry entry is unlinked and the
+		// handle leaves the task waitable-set BEFORE the built-in runs: a synchronous
+		// built-in traps on a joined waitable (measured, wasmtime 49), and nothing a
+		// blocking cancel lets run can settle the entry twice. Answers the copy
+		// result's status (0 completed, 1 dropped, 2 cancelled), or nil when no read
+		// of the handle is in flight -- always so outside asyncMode, where a read
+		// parks until it completes. Unlike the completion event it runs no close
+		// protocol of an attached TYPE_WASI_STREAM: rontolisp:stream-read, the one
+		// consumer that attaches one, never withdraws its read.
+		private void emitStreamCancelRead(boolean handleElem) {
+			WasmFutureRuntimeBuilder.Sched wiring = this.sched;
+			if (wiring == null) {
+				refNullEq();
+				this.w.write(Instruction.END);
+				return;
+			}
+			WaitOrdinals ordinals = Objects.requireNonNull(this.waitOrdinals,
+					"async built-in wrapper emitted without waitable-set ordinals");
+			int handle = allocI32();
+			int ret = allocI32();
+			int n = allocI32();
+			int buf = allocI32();
+			int prev = this.ctx.allocTemp();
+			int cur = this.ctx.allocTemp();
+			int entry = this.ctx.allocTemp();
+			getLocal(1);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			setLocal(handle);
+			// Find the registry entry (handle . (kind . (future . (buf . stream)))) of
+			// the handle; none means no read is in flight.
+			refNullEq();
+			setLocal(prev);
+			globalGet(wiring.registryGlobal());
+			setLocal(cur);
+			this.w.write(Instruction.BLOCK, 0x40); // $found
+			this.w.write(Instruction.LOOP, 0x40); // $walk
+			getLocal(cur);
+			this.w.write(Instruction.REF_IS_NULL);
+			this.w.write(Instruction.IF, 0x40);
+			refNullEq();
+			this.w.write(Instruction.RETURN);
+			this.w.write(Instruction.END);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 0);
+			setLocal(entry);
+			getLocal(entry);
+			structGet(WasmLispCompiler.TYPE_CONS, 0);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			getLocal(handle);
+			this.w.write(Instruction.I32_EQ);
+			this.w.write(Instruction.BR_IF);
+			this.w.writeUnsignedLeb128(1); // -> $found
+			getLocal(cur);
+			setLocal(prev);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			setLocal(cur);
+			this.w.write(Instruction.BR);
+			this.w.writeUnsignedLeb128(0); // -> $walk
+			this.w.write(Instruction.END); // loop $walk
+			this.w.write(Instruction.END); // block $found
+			// Unlink it.
+			getLocal(prev);
+			this.w.write(Instruction.REF_IS_NULL);
+			this.w.write(Instruction.IF, 0x40);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			globalSet(wiring.registryGlobal());
+			this.w.write(Instruction.ELSE);
+			getLocal(prev);
+			this.w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			this.w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			this.w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			this.w.writeUnsignedLeb128(1);
+			this.w.write(Instruction.END);
+			// The handle leaves the set first -- the synchronous built-in traps on a
+			// waitable that is still joined -- then the withdrawal.
+			getLocal(handle);
+			i32Const(0);
+			callOrdinal(ordinals.join());
+			getLocal(handle);
+			callImport();
+			setLocal(ret);
+			// cur = (future . (buf . stream)); buf = the staged chunk buffer.
+			getLocal(entry);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			setLocal(cur);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			structGet(WasmLispCompiler.TYPE_CONS, 0);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			setLocal(buf);
+			if (this.streamEndedGlobal >= 0) {
+				emitLatchIfDropped(ret, handle);
+			}
+			// entry = what the read delivered (count 0 -> nil).
+			getLocal(ret);
+			i32Const(4);
+			this.w.write(Instruction.I32_SHR_U);
+			this.w.write(Instruction.TEE_LOCAL);
+			this.w.writeUnsignedLeb128(n);
+			this.w.write(Instruction.IF);
+			this.w.writeRefType(true, Type.EQ.code());
+			emitReadLift(handleElem, buf, n);
+			this.w.write(Instruction.ELSE);
+			refNullEq();
+			this.w.write(Instruction.END);
+			setLocal(entry);
+			getLocal(buf);
+			boxI31();
+			globalGet(wiring.readFreeGlobal());
+			newCons();
+			globalSet(wiring.readFreeGlobal());
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 0);
+			getLocal(entry);
+			this.w.write(Instruction.CALL);
+			this.w.writeUnsignedLeb128(this.ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SETTLE);
+			this.w.write(Instruction.DROP);
+			getLocal(ret);
+			i32Const(0xF);
+			this.w.write(Instruction.I32_AND);
+			boxI31();
 			this.w.write(Instruction.END);
 		}
 

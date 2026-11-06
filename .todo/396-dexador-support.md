@@ -22,9 +22,13 @@ Open children:
 1. `.todo/405` -- WASM Preview 1 has no non-blocking input probe, so `listen`
    is a compile error; a dexador program now COMPILES to Preview 1 and refuses
    at run time.
-2. On the component, the `usocket:socket-option` deadline primitive SIGNALS
-   (todo-114), so dexador's default `:read-timeout 10` fails at connect until
-   `.todo/415`; pass `:read-timeout nil` meanwhile.
+
+Done 2026-11-06 (`.todo/415`): the component's read deadline is real, so
+dexador's DEFAULT `:read-timeout 10` runs there unpatched -- two keep-alive
+requests over one pooled connection (the `listen` drain between them),
+`https://1.1.1.1/`, and a stalled origin under `:read-timeout 1` failing with
+`read-byte: Read timed out` as on the interpreter. No `:read-timeout nil`
+workaround is left to carry.
 
 Operational note: trivial-mimes needs `/etc/mime.types` at LOAD time, so the
 component needs `--dir /etc`. Decide at close: document it, or give

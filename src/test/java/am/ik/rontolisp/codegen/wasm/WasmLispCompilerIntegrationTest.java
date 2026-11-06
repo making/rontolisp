@@ -16933,6 +16933,69 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void componentTcpReadDeadlineListenProbeAndWithdrawnReads() throws Exception {
+		// wasi:sockets@0.3.0 has no receive timeout, so tcp-set-timeout's deadline is a
+		// read raced against a wait-for timer, the loser withdrawn (stream.cancel-read;
+		// .kb/tcp-sockets.md, "Read deadlines"). Pinned: the three reads time out with
+		// the texts the interpreter and the JVM print (HandleOperandFixture's
+		// HOST_FAILURE_PROGRAM); a promoted read in an async body suspends under its
+		// deadline, so a timer body runs meanwhile; the socket reads on afterwards
+		// (nothing stays in flight); listen answers from the chunk a read left, and
+		// a probe the host has nothing for answers nil; a read or an accept still in
+		// flight in another body when its socket closes is withdrawn rather than
+		// trapping the close ("cannot remove busy stream"); and the TLS handshake
+		// waits only as long as the socket's deadline allows.
+		String program = """
+				(defun msg (thunk)
+				  (handler-case (progn (funcall thunk) :no-error)
+				    (simple-error (c) (princ-to-string c))
+				    (error (c) (list :other (princ-to-string c)))))
+				(rontolisp:async-defun reader (s)
+				  (handler-case (multiple-value-list (read-line s))
+				    (error (e) (princ-to-string e))))
+				(rontolisp:async-defun ticker () (rontolisp:await (rontolisp:wait-for 10)) :tick)
+				(rontolisp:async-defun acceptor (l) (rontolisp:tcp-accept l))
+				(let* ((l (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (c (rontolisp:tcp-connect "127.0.0.1" (rontolisp:tcp-local-port l)))
+				       (a (rontolisp:tcp-accept l)))
+				  (print (rontolisp:tcp-set-timeout c 50))
+				  (print (msg (lambda () (read-line c))))
+				  (print (msg (lambda () (read-char c))))
+				  (print (msg (lambda () (read-byte c))))
+				  (let ((r (reader c)) (tk (ticker)))
+				    (print (rontolisp:await tk))
+				    (print (rontolisp:await r)))
+				  (write-string (format nil "AB~%CD~%") a)
+				  (print (read-line c))
+				  (print (list (listen c) (read-line c) (listen c)))
+				  (rontolisp:tcp-set-timeout c nil)
+				  (let ((r (reader c)))
+				    (close c)
+				    (print (rontolisp:await r)))
+				  (close a)
+				  (let ((f (acceptor l)))
+				    (close l)
+				    (print (rontolisp:await f))))
+				(let* ((l (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (c (rontolisp:tcp-connect "127.0.0.1" (rontolisp:tcp-local-port l)))
+				       (a (rontolisp:tcp-accept l)))
+				  (rontolisp:tcp-set-timeout c 100)
+				  (print (rontolisp:tls-upgrade c "127.0.0.1"))
+				  (close c)
+				  (close a)
+				  (close l))
+				""";
+		byte[] componentBytes = compileFetchComponent(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("tcp-deadline.component.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+				"tcp=y", "-S", "inherit-network=y", "-S", "tls=y", path("tcp-deadline.component.wasm"));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo(String.join("\n", "50", "\"read-line: Read timed out\"",
+				"\"read-char: Read timed out\"", "\"read-byte: Read timed out\"", ":TICK",
+				"\"read-line: Read timed out\"", "\"AB\"", "(T \"CD\" NIL)", "(NIL T)", "NIL", "NIL"));
+	}
+
+	@Test
 	void componentTcpGrayStreamsFallThroughShapesReachTheSocketDispatch() throws Exception {
 		// GrayStreamsLibrary.process runs BEFORE the component socket rewrite
 		// and normalizes every possibly-CLOS-instance stream call site onto its
@@ -17049,27 +17112,33 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void componentUsocketSocketOptionRefusesAndWaitForInputClaimsReadiness() throws Exception {
-		// The two socket decisions on this backend (.kb/tcp-sockets.md): a
-		// :receive-timeout write SIGNALS loudly and catchably (wasi:sockets has no
-		// read deadline; a timeout that never fires is worse than an error, so the
-		// refusal leaves no bookkeeping behind), and wait-for-input returns
-		// immediately claiming readiness (reads block anyway, so the wait-then-read
-		// loop behaves like the interpreter/JVM; a listen poll would spin forever on
-		// data waiting host-side).
+	void componentUsocketReceiveTimeoutAndWaitForInputAreReal() throws Exception {
+		// The usocket timeout surface as the interpreter/JVM have it (.kb/tcp-sockets.md,
+		// "Read deadlines"): the :receive-timeout write installs a real read deadline
+		// (the getter reads it back), wait-for-input on a quiet socket WAITS its timeout
+		// and answers no socket and no time left -- the listen it polls is a real probe
+		// here, a read started and withdrawn -- the read past the deadline signals the
+		// interpreter's text, and once the peer writes, wait-for-input answers the socket
+		// with time to spare.
 		String program = """
 				(let* ((listener (usocket:socket-listen "127.0.0.1" 0))
 				       (port (usocket:get-local-port listener))
 				       (client (usocket:socket-connect "127.0.0.1" port)))
-				  (print (handler-case (setf (usocket:socket-option client :receive-timeout) 0.2)
-				           (error (e) :refused)))
+				  (setf (usocket:socket-option client :receive-timeout) 0.2)
 				  (print (usocket:socket-option client :receive-timeout))
-				  (let ((server (usocket:socket-accept listener)))
+				  (let ((server (usocket:socket-accept listener))
+				        (start (get-internal-real-time)))
+				    (multiple-value-bind (ready remaining)
+				        (usocket:wait-for-input (list client) :timeout 0.3 :ready-only t)
+				      (print (list ready remaining
+				                   (>= (- (get-internal-real-time) start)
+				                       (* 0.25 internal-time-units-per-second)))))
+				    (print (handler-case (read-line client) (error (e) (princ-to-string e))))
+				    (write-line "ping" server)
 				    (multiple-value-bind (ready remaining)
 				        (usocket:wait-for-input (list client) :timeout 5 :ready-only t)
-				      (print (if ready :claimed :not-ready)))
+				      (print (list (eql (car ready) client) (if remaining t nil))))
 				    (print (eql (usocket:wait-for-input client) client))
-				    (write-line "ping" server)
 				    (print (read-line client))
 				    (usocket:socket-close server))
 				  (usocket:socket-close client)
@@ -17089,7 +17158,8 @@ class WasmLispCompilerIntegrationTest {
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
 				"tcp=y", "-S", "inherit-network=y", path("usocket-option.component.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo(":REFUSED\nNIL\n:CLAIMED\nT\n\"ping\"");
+		assertThat(result.getStdout().trim())
+			.isEqualTo("0.2\n(NIL NIL T)\n\"read-line: Read timed out\"\n(T T)\nT\n\"ping\"");
 	}
 
 	@Test

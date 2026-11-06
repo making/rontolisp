@@ -1361,6 +1361,9 @@ public final class WasmComponentBuilder {
 					: ComponentWriter.canonFutureDropReadable(type);
 			case DROP_WRITABLE -> async.stream() ? ComponentWriter.canonStreamDropWritable(type)
 					: ComponentWriter.canonFutureDropWritable(type);
+			// the SYNCHRONOUS variant: the wrapper needs the settled copy result back
+			case CANCEL_READ -> async.stream() ? ComponentWriter.canonStreamCancelRead(type)
+					: ComponentWriter.canonFutureCancelRead(type);
 		};
 	}
 

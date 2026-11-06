@@ -170,6 +170,16 @@ and the `await-answers-every-value-of-the-async-body` ci-spec case -- plus its s
   kind 1 = stream read with a free-list-recycled staged buffer) settled by `_sched_loop`'s
   EVENT_STREAM_READ. A SECOND read before the first settles is a host trap; interpreter/JVM queue.
   Guest `make-stream`/`stream-write` stay compile errors.
+- **A read in flight can be WITHDRAWN**: a stream alias's `-cancel-read` member (a stream's alone;
+  `WasmComponentImportCompiler.emitStreamCancelRead`) unlinks the registry entry, takes the handle
+  out of the task waitable-set and THEN calls the SYNCHRONOUS `stream.cancel-read` -- joined, the
+  built-in traps `waitable cannot be used synchronously while added to a waitable set` (wasmtime
+  49, measured 2026-11-06). What the copy delivered settles the read's future as the event would
+  have (nothing: nil), the buffer is recycled, DROPPED latches; it answers the status (0
+  completed, 1 dropped, 2 cancelled), or nil when no read of the handle is in flight -- always
+  outside asyncMode, where a read parks until done, so the wrapper calls nothing and the core
+  module keeps no import of it. sockets.lisp's deadline, `listen` probe and close rest on it
+  ([tcp-sockets.md](tcp-sockets.md), "Read deadlines").
 - **A DROPPED read completion is LATCHED per readable handle.** The result is `(n << 4) | code`
   and DROPPED beats COMPLETED, so one read can deliver its last items AND the end (`Dropped(n)`,
   n > 0); the host then traps any further `stream.read` ("cannot read after being notified that
@@ -310,6 +320,29 @@ non-asyncMode WASM `_p1_future_await`; **in asyncMode `_sched_loop`, with TWO sh
 scheduler it blocks on the task waitable-set, without one it is a poll
 (`WasmFutureRuntimeBuilder.buildSyncForce` -> `OFF_POLL`). Used by the host-driven reactor transport
 (`http-reactor.lisp`, `.kb/clack.md`); deliberately undocumented.
+
+## `%future-race`
+Internal, `--component` only, defined in sockets.lisp (2026-11-06): `(%future-race futures)` is a
+future settling to the INDEX of the first of FUTURES to settle, fulfilled or rejected; a non-future
+or an already-settled future wins at once, the first such in list order. The index, not the value,
+because the winner may answer nil (a timer always does) and keeps its own error: the caller awaits
+the winner. It is the deadline substrate -- a socket read and a TLS handshake against a `wait-for`
+timer ([tcp-sockets.md](tcp-sockets.md), "Read deadlines").
+- **Lisp over the scheduler, not a `_sched_*` member**: one `async-lambda` arm per future, awaiting
+  it under `handler-case` and then `%future-settle`-ing the race with its index (first settle
+  wins). The frame machinery wakes it, task ownership and the doorbell included, so a race made in
+  a served handler resumes on its own task (a read under a deadline timed out per request under
+  `wasmtime serve`, sync and async handlers alike, 2026-11-06); a scheduler-level waiter kind
+  would have had to restate that. An arm's await of an EXITED future throws `$block-exit` past it, so a race over
+  an async body that exits non-locally never settles -- no consumer races one.
+- **The losers run on**: the race stops listening, nothing more. A loser holding a host
+  operation is the caller's to withdraw (the socket read's `-cancel-read`); a losing timer fires
+  later into an arm that finds the race settled. No `subtask.cancel` is bound.
+- **Elsewhere**: no other backend needs one -- interpreter/JVM reads carry `SO_TIMEOUT`, and a
+  `--native` read the runner's own deadline. Lifting it (a public `race`, or `.todo/405`'s Preview 1
+  probe over a deferred future, kind 3 above) means a native per backend: `CompletableFuture`
+  composition on the interpreter/JVM, and on Preview 1 a poll of `%future-settled-p` over futures
+  whose host can answer it.
 
 ## `%future-settled-p`
 Internal; whether a future has settled without waiting (`t` for a non-future). Interpreter

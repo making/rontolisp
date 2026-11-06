@@ -6830,17 +6830,19 @@ public final class LispNames {
 	public static final String ASYNC_RUN = "%ASYNC-RUN";
 
 	/**
-	 * The internal {@code rontolisp::%future-new} test primitive of the
-	 * {@code --component} async state machines: a fresh PENDING first-class future.
-	 * Undocumented; it exists so the suspension machinery (spill/restore, waiter cascade)
-	 * is exercisable end-to-end before the import layer produces pending futures of its
-	 * own.
+	 * The internal {@code rontolisp::%future-new} primitive of the {@code --component}
+	 * async state machines: a fresh PENDING first-class future. Undocumented; it makes
+	 * the suspension machinery (spill/restore, waiter cascade) exercisable end-to-end
+	 * without the import layer, and it is the race future of sockets.lisp's
+	 * {@code %future-race} (a socket read or a TLS handshake against its deadline,
+	 * {@code .kb/async-await.md}).
 	 */
 	public static final String FUTURE_NEW_INTERNAL = "%FUTURE-NEW";
 
 	/**
-	 * The internal {@code rontolisp::%future-settle} test primitive: settles a pending
-	 * future with a value, resuming its waiters. See {@link #FUTURE_NEW_INTERNAL}.
+	 * The internal {@code rontolisp::%future-settle} primitive: settles a pending future
+	 * with a value, resuming its waiters; a settled future stays as it is. See
+	 * {@link #FUTURE_NEW_INTERNAL}.
 	 */
 	public static final String FUTURE_SETTLE_INTERNAL = "%FUTURE-SETTLE";
 

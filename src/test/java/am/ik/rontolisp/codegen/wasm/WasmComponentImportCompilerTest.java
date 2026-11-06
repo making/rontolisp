@@ -1087,22 +1087,23 @@ class WasmComponentImportCompilerTest {
 
 	private static byte[] asyncHttpComponent() {
 		return compileComponent("(defpackage h (:use cl) (:export fields-get consume body-stream-new body-stream-read"
-				+ " body-stream-write body-stream-drop-readable body-stream-drop-writable trailers-future-read"
-				+ " trailers-future-write transmit-future-new transmit-future-read))\n"
+				+ " body-stream-write body-stream-drop-readable body-stream-drop-writable body-stream-cancel-read"
+				+ " trailers-future-read trailers-future-write transmit-future-new transmit-future-read))\n"
 				+ importForm(ASYNC_HTTP_ID, ASYNC_HTTP_WIT, "(\"fields-get\" \"H:FIELDS-GET\")",
 						"(\"consume\" \"H:CONSUME\")", "(:async \"body-stream\" \"new\" \"H:BODY-STREAM-NEW\")",
 						"(:async \"body-stream\" \"read\" \"H:BODY-STREAM-READ\")",
 						"(:async \"body-stream\" \"write\" \"H:BODY-STREAM-WRITE\")",
 						"(:async \"body-stream\" \"drop-readable\" \"H:BODY-STREAM-DROP-READABLE\")",
 						"(:async \"body-stream\" \"drop-writable\" \"H:BODY-STREAM-DROP-WRITABLE\")",
+						"(:async \"body-stream\" \"cancel-read\" \"H:BODY-STREAM-CANCEL-READ\")",
 						"(:async \"trailers-future\" \"read\" \"H:TRAILERS-FUTURE-READ\")",
 						"(:async \"trailers-future\" \"write\" \"H:TRAILERS-FUTURE-WRITE\")",
 						"(:async \"transmit-future\" \"new\" \"H:TRANSMIT-FUTURE-NEW\")",
 						"(:async \"transmit-future\" \"read\" \"H:TRANSMIT-FUTURE-READ\")")
 				+ "(let ((ends (h:body-stream-new)))\n" + "  (h:body-stream-write (cdr ends) \"HI\")\n"
 				+ "  (h:body-stream-drop-writable (cdr ends))\n" + "  (print (h:body-stream-read (car ends)))\n"
-				+ "  (h:body-stream-drop-readable (car ends)))\n" + "(let ((pair (h:consume 1)))\n"
-				+ "  (h:trailers-future-write 2 (cons :ok nil))\n"
+				+ "  (print (h:body-stream-cancel-read (car ends)))\n" + "  (h:body-stream-drop-readable (car ends)))\n"
+				+ "(let ((pair (h:consume 1)))\n" + "  (h:trailers-future-write 2 (cons :ok nil))\n"
 				+ "  (print (h:trailers-future-read (car (cdr pair)))))\n"
 				+ "(print (h:transmit-future-read (car (h:transmit-future-new))))\n");
 	}
@@ -1125,6 +1126,12 @@ class WasmComponentImportCompilerTest {
 			assertThat(containsBytes(core, coreFuncImport(ASYNC_HTTP_ID, field))).as(field).isTrue();
 			assertThat(containsAscii(component, field)).as(field).isTrue();
 		}
+		// A stream's cancel-read binds too, but outside asyncMode a read parks until it
+		// completes and never stays in flight, so the wrapper answers nil without the
+		// built-in: the core module keeps no import of it (the asyncMode withdrawal runs
+		// in
+		// WasmLispCompilerIntegrationTest#componentTcpReadDeadlineListenProbeAndWithdrawnReads).
+		assertThat(containsBytes(core, coreFuncImport(ASYNC_HTTP_ID, "[async-cancel-read]body-stream"))).isFalse();
 		assertThat(containsBytes(component, ComponentWriter.definedStream(ComponentWriter.VT_U8))).isTrue();
 		// The trailers future's payload chain re-declares the error-code enum
 		// structurally at component level (value types are structural; only the fields

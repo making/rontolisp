@@ -34,11 +34,15 @@ behind the usocket shim's
   2147483647 waits 2147483647 milliseconds. `milliseconds` outside
   `(OR NULL (INTEGER 0))` signals the operator's `type-error`, and a value that
   is not an open connected socket handle a `simple-error`.
-- **WASM component**: SIGNALS at call time — `wasi:sockets@0.3.0` exposes no
-  receive-timeout knob, and a timeout that silently never fires is the failure
-  mode a client sets it to avoid. Catch it (or do not set a read timeout) on
-  this backend. Call-time error in Preview 1 (core-module) mode, like every
-  tcp built-in.
+- **WASM component**: a real read deadline too. `wasi:sockets@0.3.0` has no
+  receive timeout of its own, so a read that has to wait for its data races a
+  timer; a read past the deadline signals `read-line: Read timed out` (the
+  interpreter's text), and the socket can be read again afterwards, as on the
+  interpreter and the JVM. `0` clears the deadline like `nil`. A value that is
+  not an open connected socket answers `nil` there (the component's error
+  convention), and `milliseconds` that is not `nil` or a non-negative integer
+  signals a `simple-error`. Call-time error in Preview 1 (core-module) mode,
+  like every tcp built-in.
 - **Native executable** (`--native`): a real read deadline, as on the
   interpreter and the JVM; a read past it signals `read-line: Read timed out`
   ([TCP sockets in a native executable](../../compiling/native.md#tcp-sockets)).

@@ -63,7 +63,9 @@ HTTPS requests prefer [`rontolisp:fetch`](rontolisp-fetch.md)):
   place, not a new handle); the handle must not have been **written to** yet
   (the transform has to be interposed before the socket's send side is
   committed — a handle with prior writes answers `nil`); and failures return
-  `nil` instead of signaling (the WASM error convention). Certificates are
+  `nil` instead of signaling (the WASM error convention). The handshake waits
+  as long as the socket's read deadline allows, as on the interpreter and the
+  JVM; past it the upgrade answers `nil`. Certificates are
   verified against the trust anchors compiled into the host (wasmtime bundles
   the Mozilla root store; the trust-store system properties and `:insecure`
   have no effect there — a non-`nil` `:insecure` value **signals** rather
