@@ -174,7 +174,10 @@ public final class LispLexer {
 		this.features = this.features.with(pushed);
 	}
 
-	/** {@return the features the guards test now} */
+	/**
+	 * The features the guards test now.
+	 * @return the features
+	 */
 	Features features() {
 		return this.features;
 	}

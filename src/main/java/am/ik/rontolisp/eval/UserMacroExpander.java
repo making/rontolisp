@@ -50,6 +50,7 @@ public final class UserMacroExpander {
 
 	/**
 	 * A form a reader macro function read in the read-time image, and where.
+	 *
 	 * @param form the form as that read answered it
 	 * @param origin where it was read
 	 */
@@ -130,9 +131,9 @@ public final class UserMacroExpander {
 		// compile path spliced there: implementation source, read without recording.
 		session.programHead = programHead;
 		session.implementationPrefix = programHead != null && program.stream().anyMatch(form -> form == programHead);
-		// A form of the program's own that a reader macro function read in the read-time
-		// image is read again here, where its turn comes, and stands whole until then: the
-		// flatten would have split what the read answered (ReaderMacroReads).
+		// A form of the program's own that a reader macro function read in the
+		// read-time image is read again here, at its turn, and stands whole until then:
+		// the flatten would have split what the read answered (ReaderMacroReads).
 		java.util.Map<LispVal, Reread> rereads = new java.util.IdentityHashMap<>();
 		if (ReaderMacroReads.any()) {
 			List<LispVal> marked = new ArrayList<>(asRead.size());
@@ -293,10 +294,10 @@ public final class UserMacroExpander {
 
 		/**
 		 * Reads again, in this evaluator and at its turn, a form a reader macro function
-		 * read in the read-time image, so this evaluator holds what the read leaves behind
-		 * -- coalton's global environment after a {@code coalton-toplevel} -- for the
-		 * macros of the forms after it ({@link ReaderMacroReads}). The image's read stands
-		 * when this one does not read the same text the same way, no reader macro
+		 * read in the read-time image, so this evaluator holds what the read leaves
+		 * behind -- coalton's global environment after a {@code coalton-toplevel} -- for
+		 * the macros of the forms after it ({@link ReaderMacroReads}). The image's read
+		 * stands when this one does not read the same text the same way, no reader macro
 		 * function running or the read ending elsewhere: a readtable this pass holds
 		 * otherwise (a spliced system's {@code defvar} the image evaluated and this pass
 		 * parks) must not change the program.
@@ -314,8 +315,9 @@ public final class UserMacroExpander {
 				return reread.form();
 			}
 			try {
-				SourceLanguage.Forms forms = SourceLanguage.readFormsFrom(origin.source(), origin.features(),
-						origin.file(), origin.start());
+				SourceLanguage.Forms forms = SourceLanguage
+					.readFormsFrom(origin.source(), origin.features(), origin.file(), origin.start())
+					.readingTOrNil(this.macroEval.packageResolver()::readsClTOrNil);
 				LispVal form = forms.next(syntax);
 				return form != null && calls[0] > 0 && forms.position() == origin.end() ? form : reread.form();
 			}

@@ -33593,11 +33593,9 @@ public final class LispMacroExpander {
 		// package it reads in may shadow let (fset's).
 		LispVal branched = listToCons(List.of(ReaderSymbols.IF, ifParts.get(1),
 				replaceFormatControl(branch, ifParts.get(2)), replaceFormatControl(branch, ifParts.get(3))));
-		return literal ? branched
-				: listToCons(List.of(ReaderSymbols.LET,
-						new LispCons(listToCons(List.of(new LispSymbol(FORMAT_DEST_VAR), parts.get(1))),
-								LispNil.INSTANCE),
-						branched));
+		return literal ? branched : listToCons(List.of(ReaderSymbols.LET,
+				new LispCons(listToCons(List.of(new LispSymbol(FORMAT_DEST_VAR), parts.get(1))), LispNil.INSTANCE),
+				branched));
 	}
 
 	// A distributed format's branches, expanded in place.

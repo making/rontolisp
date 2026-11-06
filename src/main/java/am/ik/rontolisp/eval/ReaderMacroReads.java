@@ -9,10 +9,10 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
 
 /**
- * The top-level forms of a compile path's own files that a reader macro function read,
- * in the read-time image ({@link ReadTimeImage}), and where in their source it read
- * them, so the macro-time pass ({@link UserMacroExpander}) can read each again in its
- * own evaluator ({@code .kb/readtables.md}, "The compile paths' read").
+ * The top-level forms of a compile path's own files that a reader macro function read, in
+ * the read-time image ({@link ReadTimeImage}), and where in their source it read them, so
+ * the macro-time pass ({@link UserMacroExpander}) can read each again in its own
+ * evaluator ({@code .kb/readtables.md}, "The compile paths' read").
  *
  * <p>
  * A read's effects on the image -- coalton's {@code coalton-toplevel} reader macro
@@ -31,6 +31,7 @@ public final class ReaderMacroReads {
 
 	/**
 	 * Where a form was read.
+	 *
 	 * @param source the whole text of its file
 	 * @param file the file, or {@code null} when unknown
 	 * @param features the features its guards were tested with
@@ -60,15 +61,18 @@ public final class ReaderMacroReads {
 	}
 
 	/**
-	 * {@return where a reader macro function read {@code form}, or {@code null} when
-	 * none did}
+	 * {@return where a reader macro function read {@code form}, or {@code null} when none
+	 * did}
 	 * @param form a top-level form, by identity
 	 */
 	static @Nullable Origin originOf(LispVal form) {
 		return ORIGINS.get().get(form);
 	}
 
-	/** {@return whether this thread has recorded any form} */
+	/**
+	 * Whether this thread has recorded any form.
+	 * @return whether it has
+	 */
 	static boolean any() {
 		return !ORIGINS.get().isEmpty();
 	}

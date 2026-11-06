@@ -46,11 +46,11 @@ public final class ReaderSymbols {
 	public static final LispSymbol FIND_CLASS = new LispSymbol(LispNames.FIND_CLASS);
 
 	/*
-	 * What the passes between the macro-time pass and the compilers' resolver write into a
-	 * form the source spelled (GrayStreamsLibrary's format rewrite, LoadFormSubstituter's
-	 * rebuilt constants): the package the form reads in may shadow the name -- fset's let
-	 * is new-let's, coalton's cons is its list constructor -- and its view of the name
-	 * does not apply to code it never spelled.
+	 * What the passes between the macro-time pass and the compilers' resolver write into
+	 * a form the source spelled (GrayStreamsLibrary's format rewrite,
+	 * LoadFormSubstituter's rebuilt constants): the package the form reads in may shadow
+	 * the name -- fset's let is new-let's, coalton's cons is its list constructor -- and
+	 * its view of the name does not apply to code it never spelled.
 	 */
 
 	public static final LispSymbol LOAD_TIME_VALUE = new LispSymbol(LispNames.LOAD_TIME_VALUE);

@@ -52,10 +52,10 @@ import am.ik.rontolisp.reader.ReadSyntax;
  * and the macro-time pass ({@code CompileFrontend.expand}) rewrites and splices the
  * program, and {@link UserMacroExpander} processes the result from scratch, reading again
  * a form of the program's own a reader macro function read ({@link ReaderMacroReads}),
- * for what that read leaves in the compiling image. A form the
- * image cannot process -- one that needs what a later pass splices -- is skipped: that
- * pass reports it. A read only opens an image once a file it reads can change the syntax
- * at all ({@link #changesSyntax}), or computes a push onto {@code *features*}
+ * for what that read leaves in the compiling image. A form the image cannot process --
+ * one that needs what a later pass splices -- is skipped: that pass reports it. A read
+ * only opens an image once a file it reads can change the syntax at all
+ * ({@link #changesSyntax}), or computes a push onto {@code *features*}
  * ({@code FeaturePushes.computesAPush}); until then every form reads with the standard
  * syntax, and a program that never opens one pays nothing for it.
  */

@@ -29,9 +29,9 @@ import am.ik.rontolisp.AsdfExports;
  * ahead of everything and its announced {@code :unix} is in force while the component
  * file is READ (the {@code platform} defun) without ever becoming a sideway dependency,
  * and {@code asdf:system-relative-pathname} has a runtime form on the compile paths --
- * the relative argument is a variable there, so the compile-time fold cannot answer it.
- * A feature the component's compile pushes from {@code asdf:component-version} decides
- * the guards read after it (coalton's eclector probe; the compile paths' read-time image
+ * the relative argument is a variable there, so the compile-time fold cannot answer it. A
+ * feature the component's compile pushes from {@code asdf:component-version} decides the
+ * guards read after it (coalton's eclector probe; the compile paths' read-time image
  * answers from their registry), the {@code build} defun.
  *
  * <p>
