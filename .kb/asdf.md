@@ -1015,7 +1015,10 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   parameterized one with `Ord`, `define-class`/`define-instance`, `define-struct`, `match`, `Result`, cells,
   hashtables, `for` over an iterator, F32 and F64 literals) and 33 `coalton` forms print what SBCL prints over the
   same tree, but for SBCL's `d0` on a double and its infinity's spelling (one float type here). Read with
-  `(named-readtables:in-readtable coalton:coalton)`, as coalton's docs advise; without it see `.todo/i74`. What it
+  `(named-readtables:in-readtable coalton:coalton)`, as coalton's docs advise, or without it since i74
+  (2026-11-06, [packages.md](packages.md), "T and NIL in a package that does not read them as cl's"): `Nil` as a
+  pattern and a value and a `let` of `t` print what SBCL prints; re-measured then, the library loads in 63
+  minutes (box under load 4-10) and the program above prints what it printed. What it
   took past fset, each general but the tier 4 arms: a `:mix-reexport` clause
   ([packages.md](packages.md)); a `:report` naming a function; a `.asd`'s `(:read-file-form ...)` `:version`;
   a computed `*features*` push ([reader-features.md](reader-features.md)); a reader macro's value respelled for
@@ -1040,9 +1043,8 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   - The float traps: `/` over a float is IEEE on every backend ([error-handling.md](error-handling.md),
     "Per operator"), which is what SBCL answers with coalton's traps off, so the shim's `with-float-traps-masked`
     needs nothing: `(/ 1.0d0 0.0d0)` under coalton is an infinity here too.
-  - Not measured: coalton's own tests (`coalton/tests`, through fiasco), `coalton/library/big-float`. A bare
-    `nil` or `t` in a package not using `cl` is `cl`'s here, so a program read without coalton's readtable has
-    `cl:nil` for `Nil` (`.todo/i74`). The compile paths stop before the library (`.todo/i73`).
+  - Not measured: coalton's own tests (`coalton/tests`, through fiasco), `coalton/library/big-float`. The
+    compile paths stop before the library (`.todo/i73`).
 - **sento 3.4.2** — from the Quicklisp cache, verified manually (measured 2026-11-05, interpreter and JVM):
   `make-actor-system`, `actor-of`, `ask-s`, `ask` with `fcompleted`, a `:time-out`, `*state*`, agents,
   8 threads x 200 `tell`s counted to 1600. On wasm it compiles and `make-actor-system` signals at the first
