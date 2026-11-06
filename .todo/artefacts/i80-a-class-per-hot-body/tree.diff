@@ -1,0 +1,714 @@
+diff --git a/src/main/java/am/ik/rontolisp/eval/BlockReturnSignal.java b/src/main/java/am/ik/rontolisp/eval/BlockReturnSignal.java
+index 41a280f04..dc1bfb131 100644
+--- a/src/main/java/am/ik/rontolisp/eval/BlockReturnSignal.java
++++ b/src/main/java/am/ik/rontolisp/eval/BlockReturnSignal.java
+@@ -26,6 +26,7 @@ final class BlockReturnSignal extends RuntimeException {
+ 
+ 	BlockReturnSignal(Object target, String name, LispVal value) {
+ 		super(null, null, false, false);
++		CompiledBody.RETURNS.increment();
+ 		this.target = target;
+ 		this.name = name;
+ 		this.value = value;
+diff --git a/src/main/java/am/ik/rontolisp/eval/BlockTailExit.java b/src/main/java/am/ik/rontolisp/eval/BlockTailExit.java
+index 227563e92..a798913a7 100644
+--- a/src/main/java/am/ik/rontolisp/eval/BlockTailExit.java
++++ b/src/main/java/am/ik/rontolisp/eval/BlockTailExit.java
+@@ -36,6 +36,7 @@ final class BlockTailExit extends RuntimeException {
+ 	 */
+ 	BlockTailExit(Environment target, LispVal form, Environment env, @Nullable CompiledForm compiled) {
+ 		super(null, null, false, false);
++		CompiledBody.TAIL_EXITS.increment();
+ 		this.target = target;
+ 		this.form = form;
+ 		this.env = env;
+diff --git a/src/main/java/am/ik/rontolisp/eval/BodyCompiler.java b/src/main/java/am/ik/rontolisp/eval/BodyCompiler.java
+index 67627c09e..6c726531c 100644
+--- a/src/main/java/am/ik/rontolisp/eval/BodyCompiler.java
++++ b/src/main/java/am/ik/rontolisp/eval/BodyCompiler.java
+@@ -58,8 +58,14 @@ final class BodyCompiler {
+ 
+ 	private int budget = BUDGET;
+ 
+-	private BodyCompiler(LispEvaluator ev) {
++	/**
++	 * What the body's runs and its loops' rounds count up, or null for a site's compile.
++	 */
++	private final CompiledBody.@Nullable Heat heat;
++
++	private BodyCompiler(LispEvaluator ev, CompiledBody.@Nullable Heat heat) {
+ 		this.ev = ev;
++		this.heat = heat;
+ 	}
+ 
+ 	/**
+@@ -134,7 +140,8 @@ final class BodyCompiler {
+ 	static @Nullable CompiledBody compile(LispEvaluator ev, LispLambda lambda, @Nullable Enclosed enclosed,
+ 			int rewriteEpoch) {
+ 		try {
+-			return new BodyCompiler(ev).body(lambda, enclosed == null ? null : enclosed.layout(), rewriteEpoch);
++			return new BodyCompiler(ev, new CompiledBody.Heat()).body(lambda,
++					enclosed == null ? null : enclosed.layout(), rewriteEpoch);
+ 		}
+ 		catch (TooBig | StackOverflowError tooBig) {
+ 			return null;
+@@ -153,7 +160,7 @@ final class BodyCompiler {
+ 	static @Nullable CompiledForm compileSite(LispEvaluator ev, LispCons form, Layout layout,
+ 			@Nullable LocatedCons located) {
+ 		try {
+-			CompiledForm compiled = new BodyCompiler(ev).cons(form, layout, located);
++			CompiledForm compiled = new BodyCompiler(ev, null).cons(form, layout, located);
+ 			return compiled instanceof CompiledForms.Pending ? null : compiled;
+ 		}
+ 		catch (TooBig | StackOverflowError tooBig) {
+@@ -213,7 +220,8 @@ final class BodyCompiler {
+ 		CompiledForm last = body.isEmpty() ? null : form(body.get(body.size() - 1), scope, null);
+ 		return new CompiledBody(this.ev, rewriteEpoch, specialEpoch, bound.toArray(new LispSymbol[0]),
+ 				names.toArray(NO_NAMES), distinct, lambda.params().size(), lambda.rest() != null,
+-				marks.toArray(NO_NAMES), declared, blockName, statements, last);
++				marks.toArray(NO_NAMES), declared, blockName, statements, last,
++				java.util.Objects.requireNonNull(this.heat));
+ 	}
+ 
+ 	/**
+@@ -514,7 +522,7 @@ final class BodyCompiler {
+ 		CompiledForm[] compiledTests = new CompiledForm[tests.length];
+ 		CompiledForm[] compiledArms = new CompiledForm[arms.length];
+ 		try {
+-			BodyCompiler compiler = new BodyCompiler(ev);
++			BodyCompiler compiler = new BodyCompiler(ev, null);
+ 			for (int i = 0; i < tests.length; i++) {
+ 				compiledTests[i] = compiler.form(tests[i], scope, null);
+ 				compiledArms[i] = compiler.form(arms[i], scope, located);
+@@ -806,7 +814,7 @@ final class BodyCompiler {
+ 		for (int i = 0; i < body.length; i++) {
+ 			body[i] = form(parts.get(i + 1), scope, null);
+ 		}
+-		return new CompiledForms.While(this.ev, test, body, here);
++		return new CompiledForms.While(this.ev, test, body, here, this.heat);
+ 	}
+ 
+ 	private CompiledForm tagbody(LispCons cons, Layout scope, @Nullable LocatedCons here) {
+diff --git a/src/main/java/am/ik/rontolisp/eval/CompiledBody.java b/src/main/java/am/ik/rontolisp/eval/CompiledBody.java
+index af4e51447..aa7f438be 100644
+--- a/src/main/java/am/ik/rontolisp/eval/CompiledBody.java
++++ b/src/main/java/am/ik/rontolisp/eval/CompiledBody.java
+@@ -18,6 +18,14 @@ import org.jspecify.annotations.Nullable;
+  */
+ final class CompiledBody {
+ 
++	/**
++	 * How many runs of a compiled body come before its forms are written as a class
++	 * ({@link BodyClassWriter}); {@code -Drontolisp.interpreter.class-after} sets it, 0
++	 * writes none. Never in a native image.
++	 */
++	private static final int CLASS_AFTER_RUNS = BodyClassWriter.ENABLED
++			? Integer.getInteger("rontolisp.interpreter.class-after", 200) : 0;
++
+ 	private final LispEvaluator evaluator;
+ 
+ 	private final int rewriteEpoch;
+@@ -47,6 +55,15 @@ final class CompiledBody {
+ 	/** Set once the body's declared specials are recorded; a race records them twice. */
+ 	private boolean declaredRecorded;
+ 
++	/** The body's runs and its loops' rounds, which decide when its class is written. */
++	private final Heat heat;
++
++	/** Set once a class of the body was tried. */
++	private boolean classTried;
++
++	/** The body's class once written ({@link #CLASS_AFTER_RUNS}), else null. */
++	private volatile @Nullable BodyClass bodyClass;
++
+ 	/**
+ 	 * A compiled body.
+ 	 * @param evaluator the evaluator it was compiled for
+@@ -66,10 +83,11 @@ final class CompiledBody {
+ 	 * null
+ 	 * @param statements the body's forms but the last (the block's, for a block body)
+ 	 * @param last the last form, or null for none
++	 * @param heat what its runs and its loops' rounds count up
+ 	 */
+ 	CompiledBody(LispEvaluator evaluator, int rewriteEpoch, int specialEpoch, LispSymbol[] bound, String[] slots,
+ 			boolean distinct, int parameters, boolean rest, String[] marks, java.util.Set<String> declared,
+-			@Nullable String blockName, CompiledForm[] statements, @Nullable CompiledForm last) {
++			@Nullable String blockName, CompiledForm[] statements, @Nullable CompiledForm last, Heat heat) {
+ 		this.evaluator = evaluator;
+ 		this.rewriteEpoch = rewriteEpoch;
+ 		this.specialEpoch = specialEpoch;
+@@ -83,6 +101,68 @@ final class CompiledBody {
+ 		this.blockName = blockName;
+ 		this.statements = statements;
+ 		this.last = last;
++		this.heat = heat;
++		if (CENSUS) {
++			ALL.add(new java.lang.ref.WeakReference<>(this));
++		}
++	}
++
++	private static final boolean CENSUS = Boolean.getBoolean("rontolisp.interpreter.class-debug");
++
++	static final java.util.concurrent.atomic.LongAdder TAIL_EXITS = new java.util.concurrent.atomic.LongAdder();
++
++	static final java.util.concurrent.atomic.LongAdder RETURNS = new java.util.concurrent.atomic.LongAdder();
++
++	private static final java.util.concurrent.ConcurrentLinkedQueue<java.lang.ref.WeakReference<CompiledBody>> ALL = new java.util.concurrent.ConcurrentLinkedQueue<>();
++
++	static {
++		if (CENSUS) {
++			Runtime.getRuntime().addShutdownHook(new Thread(() -> {
++				long hot = 0;
++				long cold = 0;
++				long bodies = 0;
++				long classes = 0;
++				java.util.List<Long> heats = new java.util.ArrayList<>();
++				for (java.lang.ref.WeakReference<CompiledBody> ref : ALL) {
++					CompiledBody body = ref.get();
++					if (body == null) {
++						continue;
++					}
++					bodies++;
++					heats.add((long) body.heat.count);
++					if (body.bodyClass != null) {
++						classes++;
++						hot += body.heat.count;
++					}
++					else {
++						cold += body.heat.count;
++					}
++				}
++				heats.sort(java.util.Comparator.reverseOrder());
++				long total = hot + cold;
++				long top = 0;
++				StringBuilder cum = new StringBuilder();
++				for (int i = 0; i < heats.size(); i++) {
++					top += heats.get(i);
++					if (i == 9 || i == 99 || i == 999 || i == 9999) {
++						cum.append(" top").append(i + 1).append('=').append(100 * top / Math.max(1, total)).append('%');
++					}
++				}
++				System.err.println("[census] tail exits " + TAIL_EXITS.sum() + " returns " + RETURNS.sum());
++				System.err.println("[census] bodies " + bodies + " classes " + classes + " heat total " + total
++						+ " in classes " + hot + " (" + (100 * hot / Math.max(1, total)) + "%)" + cum);
++			}));
++		}
++	}
++
++	/**
++	 * How hot a body runs: its runs and its loops' rounds, counted without a lock (a
++	 * count two threads lose only puts the class off).
++	 */
++	static final class Heat {
++
++		int count;
++
+ 	}
+ 
+ 	/** The evaluator it was compiled for. */
+@@ -90,6 +170,21 @@ final class CompiledBody {
+ 		return this.evaluator;
+ 	}
+ 
++	/** The block a body that is one {@code block} form establishes, or null. */
++	@Nullable String blockName() {
++		return this.blockName;
++	}
++
++	/** The body's forms but the last. */
++	CompiledForm[] statements() {
++		return this.statements;
++	}
++
++	/** The body's last form, or null for none. */
++	@Nullable CompiledForm last() {
++		return this.last;
++	}
++
+ 	/**
+ 	 * Whether this is the body an evaluator runs now: compiled for it, from the forms it
+ 	 * holds.
+@@ -197,6 +292,22 @@ final class CompiledBody {
+ 	 * @return the value, or the continuation of its tail ({@link CompiledForm#step})
+ 	 */
+ 	Object run(Environment scope, Environment owner) {
++		BodyClass code = this.bodyClass;
++		if (code == null && CLASS_AFTER_RUNS > 0 && ++this.heat.count >= CLASS_AFTER_RUNS && !this.classTried) {
++			this.classTried = true;
++			code = BodyClassWriter.write(this);
++			this.bodyClass = code;
++		}
++		if (code != null) {
++			Object out = code.run(scope, owner);
++			if (out instanceof CompiledForm next) {
++				return steps(next, scope, owner);
++			}
++			if (out instanceof CompiledForm.Scoped scoped) {
++				return steps(scoped.form(), scoped.env(), owner);
++			}
++			return out;
++		}
+ 		CompiledForm form = this.last;
+ 		if (this.blockName != null) {
+ 			// A defun's body is one block, established in the call's own scope.
+@@ -239,4 +350,30 @@ final class CompiledBody {
+ 		}
+ 	}
+ 
++	/**
++	 * Steps the tail on from the form a body's class answered, as {@link #run} steps it.
++	 */
++	private static Object steps(CompiledForm first, Environment scope, Environment owner) {
++		CompiledForm form = first;
++		Environment env = scope;
++		try {
++			while (true) {
++				Object out = form.step(env, owner);
++				if (out instanceof CompiledForm next) {
++					form = next;
++				}
++				else if (out instanceof CompiledForm.Scoped scoped) {
++					form = scoped.form();
++					env = scoped.env();
++				}
++				else {
++					return out;
++				}
++			}
++		}
++		catch (LispEvalException e) {
++			throw CompiledForms.passing(e, form.located, env);
++		}
++	}
++
+ }
+diff --git a/src/main/java/am/ik/rontolisp/eval/CompiledForms.java b/src/main/java/am/ik/rontolisp/eval/CompiledForms.java
+index 068e8326f..ada44ccdd 100644
+--- a/src/main/java/am/ik/rontolisp/eval/CompiledForms.java
++++ b/src/main/java/am/ik/rontolisp/eval/CompiledForms.java
+@@ -49,13 +49,23 @@ final class CompiledForms {
+ 		return LispNil.INSTANCE;
+ 	}
+ 
++	/**
++	 * What a step answered, with a form to step onto next given the scope it runs in.
++	 * @param out the step's answer
++	 * @param env the scope the step ran in
++	 * @return the answer, a bare form made a {@link CompiledForm.Scoped} one
++	 */
++	static Object scoped(Object out, Environment env) {
++		return out instanceof CompiledForm form ? new CompiledForm.Scoped(form, env) : out;
++	}
++
+ 	/**
+ 	 * A self-evaluating value: a number, a string, a character, a keyword, nil, t, a
+ 	 * quoted datum.
+ 	 */
+ 	static final class Constant extends CompiledForm {
+ 
+-		private final LispVal value;
++		final LispVal value;
+ 
+ 		Constant(LispVal value) {
+ 			super(null);
+@@ -111,9 +121,9 @@ final class CompiledForms {
+ 
+ 		private final LispSymbol symbol;
+ 
+-		private final int depth;
++		final int depth;
+ 
+-		private final int index;
++		final int index;
+ 
+ 		private int epoch;
+ 
+@@ -128,7 +138,7 @@ final class CompiledForms {
+ 
+ 		@Override
+ 		LispVal eval(Environment env) {
+-			if (this.epoch != this.ev.specialEpoch() && !stillLexical()) {
++			if (!lexicalNow()) {
+ 				return this.ev.evalAtom(this.symbol, env);
+ 			}
+ 			Environment scope = env;
+@@ -140,6 +150,11 @@ final class CompiledForms {
+ 			return value;
+ 		}
+ 
++		/** Whether the name is still not special, so the binding is the slot's. */
++		boolean lexicalNow() {
++			return this.epoch == this.ev.specialEpoch() || stillLexical();
++		}
++
+ 		private boolean stillLexical() {
+ 			int now = this.ev.specialEpoch();
+ 			if (this.ev.isSpecial(this.symbol)) {
+@@ -154,11 +169,11 @@ final class CompiledForms {
+ 	/** An {@code if} ({@code evalCons}'s arm). */
+ 	static final class If extends CompiledForm {
+ 
+-		private final CompiledForm test;
++		final CompiledForm test;
+ 
+-		private final CompiledForm then;
++		final CompiledForm then;
+ 
+-		private final @Nullable CompiledForm otherwise;
++		final @Nullable CompiledForm otherwise;
+ 
+ 		If(CompiledForm test, CompiledForm then, @Nullable CompiledForm otherwise, @Nullable LocatedCons located) {
+ 			super(located);
+@@ -364,9 +379,9 @@ final class CompiledForms {
+ 	 */
+ 	static final class Body {
+ 
+-		private final CompiledForm[] statements;
++		final CompiledForm[] statements;
+ 
+-		private final @Nullable CompiledForm last;
++		final @Nullable CompiledForm last;
+ 
+ 		Body(CompiledForm[] statements, @Nullable CompiledForm last) {
+ 			this.statements = statements;
+@@ -417,7 +432,7 @@ final class CompiledForms {
+ 	/** A {@code progn}. */
+ 	static final class Progn extends CompiledForm {
+ 
+-		private final Body body;
++		final Body body;
+ 
+ 		Progn(Body body, @Nullable LocatedCons located) {
+ 			super(located);
+@@ -514,6 +529,14 @@ final class CompiledForms {
+ 			this.layout = layout;
+ 		}
+ 
++		/**
++		 * The form's compile as it stands, held or not.
++		 * @return it, or null while there is none
++		 */
++		@Nullable CompiledForm compiledNow() {
++			return this.compiled;
++		}
++
+ 		/** The form's compile, once the walk has run it, while it holds; else null. */
+ 		private @Nullable CompiledForm compiled() {
+ 			CompiledForm done = this.compiled;
+@@ -628,17 +651,17 @@ final class CompiledForms {
+ 
+ 		private final LispSymbol[] bound;
+ 
+-		private final String[] slots;
++		final String[] slots;
+ 
+-		private final boolean distinct;
++		final boolean distinct;
+ 
+-		private final CompiledForm[] inits;
++		final CompiledForm[] inits;
+ 
+ 		private final String[] marks;
+ 
+ 		private final java.util.Set<String> declared;
+ 
+-		private final Body body;
++		final Body body;
+ 
+ 		private int epoch;
+ 
+@@ -658,15 +681,26 @@ final class CompiledForms {
+ 			this.epoch = epoch;
+ 		}
+ 
+-		/** The let's scope, or null when a name it binds is special now. */
+-		private @Nullable Environment bind(Environment env) {
++		/**
++		 * Whether the names it binds are still lexical, the body's declared specials
++		 * recorded once they are: the let binds them in a scope of its own.
++		 */
++		boolean lexicalNow() {
+ 			if (this.epoch != this.ev.specialEpoch() && !stillLexical()) {
+-				return null;
++				return false;
+ 			}
+ 			if (!this.declaredRecorded) {
+ 				this.ev.recordLocalSpecials(this.declared);
+ 				this.declaredRecorded = true;
+ 			}
++			return true;
++		}
++
++		/** The let's scope, or null when a name it binds is special now. */
++		private @Nullable Environment bind(Environment env) {
++			if (!lexicalNow()) {
++				return null;
++			}
+ 			CompiledForm[] inits = this.inits;
+ 			if (this.distinct) {
+ 				LispVal[] values = new LispVal[this.slots.length];
+@@ -972,15 +1006,15 @@ final class CompiledForms {
+ 
+ 		private final LispSymbol[] targets;
+ 
+-		private final int[] depths;
++		final int[] depths;
+ 
+-		private final int[] indexes;
++		final int[] indexes;
+ 
+-		private final CompiledForm[] values;
++		final CompiledForm[] values;
+ 
+ 		private final LispVal[] valueForms;
+ 
+-		private final boolean anyFree;
++		final boolean anyFree;
+ 
+ 		private int epoch;
+ 
+@@ -1017,8 +1051,8 @@ final class CompiledForms {
+ 					}
+ 					value = this.values[i].eval(env);
+ 					// what the name is when it is assigned, as the walk decides it
+-					if (depth < 0 || this.epoch != this.ev.specialEpoch() && !stillLexical()) {
+-						this.ev.assignVariable(this.targets[i].name(), value, env);
++					if (depth < 0 || !lexicalNow()) {
++						assign(i, value, env);
+ 					}
+ 					else {
+ 						Environment scope = env;
+@@ -1036,6 +1070,19 @@ final class CompiledForms {
+ 			}
+ 		}
+ 
++		/**
++		 * Whether the names a compiled scope binds are still not special, so a store is
++		 * the slot's.
++		 */
++		boolean lexicalNow() {
++			return this.epoch == this.ev.specialEpoch() || stillLexical();
++		}
++
++		/** Stores a target the walk's way ({@code assignVariable}). */
++		void assign(int target, LispVal value, Environment env) {
++			this.ev.assignVariable(this.targets[target].name(), value, env);
++		}
++
+ 		private boolean stillLexical() {
+ 			int now = this.ev.specialEpoch();
+ 			for (int i = 0; i < this.targets.length; i++) {
+@@ -1058,9 +1105,9 @@ final class CompiledForms {
+ 
+ 		private final LispEvaluator ev;
+ 
+-		private final String name;
++		final String name;
+ 
+-		private final Body body;
++		final Body body;
+ 
+ 		Block(LispEvaluator ev, String name, Body body, @Nullable LocatedCons located) {
+ 			super(located);
+@@ -1187,13 +1234,13 @@ final class CompiledForms {
+ 	 */
+ 	static final class Exit extends CompiledForm {
+ 
+-		private final LispVal designator;
++		final LispVal designator;
+ 
+-		private final String name;
++		final String name;
+ 
+-		private final @Nullable CompiledForm value;
++		final @Nullable CompiledForm value;
+ 
+-		private final @Nullable LispVal valueForm;
++		final @Nullable LispVal valueForm;
+ 
+ 		Exit(LispVal designator, String name, @Nullable CompiledForm value, @Nullable LispVal valueForm,
+ 				@Nullable LocatedCons located) {
+@@ -1254,20 +1301,28 @@ final class CompiledForms {
+ 
+ 		private final LispEvaluator ev;
+ 
+-		private final CompiledForm test;
++		final CompiledForm test;
++
++		final CompiledForm[] body;
+ 
+-		private final CompiledForm[] body;
++		private final CompiledBody.@Nullable Heat heat;
+ 
+-		While(LispEvaluator ev, CompiledForm test, CompiledForm[] body, @Nullable LocatedCons located) {
++		While(LispEvaluator ev, CompiledForm test, CompiledForm[] body, @Nullable LocatedCons located,
++				CompiledBody.@Nullable Heat heat) {
+ 			super(located);
+ 			this.ev = ev;
+ 			this.test = test;
+ 			this.body = body;
++			this.heat = heat;
+ 		}
+ 
+ 		private LispVal loop(Environment env, @Nullable Environment exitTo) {
++			CompiledBody.Heat counted = this.heat;
+ 			try {
+ 				while (!(this.test.eval(env) instanceof LispNil)) {
++					if (counted != null) {
++						counted.count++;
++					}
+ 					this.ev.pollInterrupt();
+ 					for (CompiledForm statement : this.body) {
+ 						statement.statement(env, null, exitTo, null);
+@@ -1520,9 +1575,9 @@ final class CompiledForms {
+ 
+ 		private final String name;
+ 
+-		private final FunctionCell cell;
++		final FunctionCell cell;
+ 
+-		private final CompiledForm[] args;
++		final CompiledForm[] args;
+ 
+ 		private int epoch;
+ 
+@@ -1553,7 +1608,7 @@ final class CompiledForms {
+ 		 * an ordinary call, or the name unbound, which the walk resolves (a library
+ 		 * loaded on first use) or reports.
+ 		 */
+-		private FunctionCell.@Nullable Binding binding() {
++		FunctionCell.@Nullable Binding binding() {
+ 			if (!holds()) {
+ 				return null;
+ 			}
+@@ -1562,7 +1617,7 @@ final class CompiledForms {
+ 		}
+ 
+ 		/** Whether a built-in is applied where the call stands, not in a frame. */
+-		private boolean appliedInPlace(LispVal function) {
++		boolean appliedInPlace(LispVal function) {
+ 			return function instanceof LispFunction builtIn && builtIn != this.ev.funcallBuiltin()
+ 					&& builtIn != this.ev.applyBuiltin() && builtIn != this.ev.asyncRunBuiltin();
+ 		}
+@@ -1612,8 +1667,7 @@ final class CompiledForms {
+ 		 * A slot reader on an instance: the slot its body would read, as the walk's frame
+ 		 * answers it ({@code FunctionCell.Binding#slotRead}); null for any other call.
+ 		 */
+-		private @Nullable LispVal slotRead(FunctionCell.Binding binding, LispVal function, List<LispVal> values,
+-				Environment env) {
++		@Nullable LispVal slotRead(FunctionCell.Binding binding, LispVal function, List<LispVal> values, Environment env) {
+ 			if (binding.slotRead() == FunctionCell.NO_SLOT_READ || !(function instanceof LispLambda)
+ 					|| values.size() != 1 || !(values.get(0) instanceof LispInstance inst)) {
+ 				return null;
+@@ -1761,7 +1815,7 @@ final class CompiledForms {
+ 	 */
+ 	static final class Expansion extends Guarded {
+ 
+-		private final CompiledForm expansion;
++		final CompiledForm expansion;
+ 
+ 		private final ExpansionKind kind;
+ 
+diff --git a/src/main/java/am/ik/rontolisp/eval/LispEvaluator.java b/src/main/java/am/ik/rontolisp/eval/LispEvaluator.java
+index 3ca1e5153..abaff0297 100644
+--- a/src/main/java/am/ik/rontolisp/eval/LispEvaluator.java
++++ b/src/main/java/am/ik/rontolisp/eval/LispEvaluator.java
+@@ -19701,48 +19701,62 @@ public final class LispEvaluator {
+ 		return form.cdr() instanceof LispCons nameCell ? nameCell : null;
+ 	}
+ 
++	/**
++	 * Applies a built-in to its arguments: {@link #apply}'s arm for one, which a class of
++	 * a compiled body ({@link BodyClassWriter}) calls with the body of the built-in its
++	 * call site found bound.
++	 * @param builtIn the built-in
++	 * @param body its body ({@link LispFunction#body})
++	 * @param args its arguments
++	 * @param env the scope of the call
++	 * @return the value
++	 */
++	LispVal applyBuiltin(LispFunction builtIn, java.util.function.Function<List<LispVal>, LispVal> body,
++			List<LispVal> args, Environment env) {
++		// The signal-point seam: an error a BUILT-IN raises runs the handler-bind
++		// cluster stack HERE, before unwinding (restarts established below the
++		// handler-bind are still active, unwind-protect cleanups have not run --
++		// the CL order). A raw Java failure (a bad index, a negative dimension, a
++		// cast) is wrapped into a LispEvalException first, so handler-case sees it
++		// too. Zero cost until an exception escapes, and zero beyond one boolean
++		// read while the restart runtime is not loaded (no handler can exist).
++		//
++		// A built-in's answer is ONE value unless the built-in itself publishes
++		// or passes values along (LispFunction.passesValues): a callback it ran --
++		// sort's predicate, mapcar's function, a print-object method -- may have
++		// published, and that publish must not travel out as the built-in's own
++		// values. So the channel is cleared after every other built-in returns
++		// (see singleValue).
++		try {
++			LispVal result = body.apply(args);
++			if (!builtIn.passesValues()) {
++				this.globalEnv.clearSpill();
++			}
++			return result;
++		}
++		catch (OperandTypeException e) {
++			// A coercion funnel cannot know which operator it serves; the built-in
++			// whose body raised the error does (OperandTypes).
++			throw signalPoint(wrongCountOr(builtIn, args, e.named(builtIn.name())), env, builtIn, args);
++		}
++		catch (LispEvalException e) {
++			throw signalPoint(wrongCountOr(builtIn, args, e), env, builtIn, args);
++		}
++		catch (IndexOutOfBoundsException | NegativeArraySizeException | ArithmeticException | ClassCastException raw) {
++			LispEvalException wrapped = LispEvalException.ofClass(rawFailureConditionClass(raw),
++					builtinFailureMessage(builtIn.name(), raw));
++			wrapped.initCause(raw);
++			throw signalPoint(wrongCountOr(builtIn, args, wrapped), env, builtIn, args);
++		}
++	}
++
+ 	LispVal apply(LispVal function, List<LispVal> args, Environment env) {
+ 		if (function instanceof LispSymbol sym) {
+ 			// A symbol is a function designator naming its global function (CL-style).
+ 			function = resolveFunction(sym.name());
+ 		}
+ 		if (function instanceof LispFunction builtIn) {
+-			// The signal-point seam: an error a BUILT-IN raises runs the handler-bind
+-			// cluster stack HERE, before unwinding (restarts established below the
+-			// handler-bind are still active, unwind-protect cleanups have not run --
+-			// the CL order). A raw Java failure (a bad index, a negative dimension, a
+-			// cast) is wrapped into a LispEvalException first, so handler-case sees it
+-			// too. Zero cost until an exception escapes, and zero beyond one boolean
+-			// read while the restart runtime is not loaded (no handler can exist).
+-			//
+-			// A built-in's answer is ONE value unless the built-in itself publishes
+-			// or passes values along (LispFunction.passesValues): a callback it ran --
+-			// sort's predicate, mapcar's function, a print-object method -- may have
+-			// published, and that publish must not travel out as the built-in's own
+-			// values. So the channel is cleared after every other built-in returns
+-			// (see singleValue).
+-			try {
+-				LispVal result = builtIn.body().apply(args);
+-				if (!builtIn.passesValues()) {
+-					this.globalEnv.clearSpill();
+-				}
+-				return result;
+-			}
+-			catch (OperandTypeException e) {
+-				// A coercion funnel cannot know which operator it serves; the built-in
+-				// whose body raised the error does (OperandTypes).
+-				throw signalPoint(wrongCountOr(builtIn, args, e.named(builtIn.name())), env, builtIn, args);
+-			}
+-			catch (LispEvalException e) {
+-				throw signalPoint(wrongCountOr(builtIn, args, e), env, builtIn, args);
+-			}
+-			catch (IndexOutOfBoundsException | NegativeArraySizeException | ArithmeticException
+-					| ClassCastException raw) {
+-				LispEvalException wrapped = LispEvalException.ofClass(rawFailureConditionClass(raw),
+-						builtinFailureMessage(builtIn.name(), raw));
+-				wrapped.initCause(raw);
+-				throw signalPoint(wrongCountOr(builtIn, args, wrapped), env, builtIn, args);
+-			}
++			return applyBuiltin(builtIn, builtIn.body(), args, env);
+ 		}
+ 		if (function instanceof LispLambda lambda) {
+ 			// A compiled body binding its parameters lexically runs in a compiled frame.

@@ -41,7 +41,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [dynamic-late-binding.md](dynamic-late-binding.md) -- `--dynamic` late-binding fallback
 - [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output; a value that is no form, an unbound variable, an undefined function; the built-in macros (`eval-macros.lisp`), `loop`'s clauses ported to it, the macros a form binds, restarts, `(setf name)` places; what a form can reach (`EvalReferences`)
 - [interpreter-expansion-memo.md](interpreter-expansion-memo.md) -- the interpreter expands a built-in macro once per call site; which arms must re-expand; the per-site memos as weak identity tables (`FormMemo`), what keeps a user macro site's expansion valid; the call-site note on a head symbol (what a call, a macro site, a `let` and a variable keep of a name, and what drops it)
-- [interpreter-compiled-bodies.md](interpreter-compiled-bodies.md) -- a lambda called twice runs its body as a closure tree compiled from what the walk left on its forms; why not the JVM backend's bytecode (numbers); the guards and epochs, what stays walked, where coalton's time goes now, the frames and tail stepping, the depth numbers
+- [interpreter-compiled-bodies.md](interpreter-compiled-bodies.md) -- a lambda called twice runs its body as a closure tree compiled from what the walk left on its forms; why not the JVM backend's bytecode, why not a class per hot body (numbers); the guards and epochs, what stays walked, where coalton's time goes now, the frames and tail stepping (a loop's exit handed to its frame through the register), the depth numbers
 
 ## Macros, reader, printer
 

@@ -45,16 +45,19 @@ after 50,000-200,000 54.6-55.9 against 56.3; `math/num.lisp` alone 5-13% shorter
 - What a class leaves as it is -- the call protocol and the scopes ("Where the time goes now") --
   is where the load spends its time.
 
+The prototype and its probes: `.todo/artefacts/i80-a-class-per-hot-body/`.
+
 ## Where the time goes now
 
 `math/num.lisp` under JFR (2026-11-06, the `setf` memo in): 95% of the samples run compiled, 5% in
 walks. By the first frame of each sample that is not the JDK's: the compiled nodes 64% (the
 argument arrays 10%, a lexical read 8%, a call's guard and binding 10%, a `let`'s scope 6%,
 `CompiledFrames.call` 4%, a body's run and statements 8%), built-ins applied through `apply`'s
-megamorphic body 10%, package and symbol lookups over names 7% (`symbol-package`,
-`find-package`), the value-count register 3%, the built-ins' own bodies 2%. Of the bytes
-allocated, a scope's `Environment` was a third: 128 bytes, 21 of its 29 fields the global
-environment's, beside a `NameMap`, the argument array and the `ArgList`. The global
+megamorphic body 10%, package and symbol lookups over names 7% (a name split into its package and
+member, `PackageRegistry.splitQualified`, below most of them), the value-count register 3%, the
+built-ins' own bodies 2%. Of the bytes allocated, a scope's `Environment` was a third: 128 bytes,
+20 of its 29 fields the global environment's, beside a `NameMap`, the argument array and the
+`ArgList`. The global
 environment's own state is an object of its own since (`Environment.Globals`; a scope holds
 `Globals.NONE`, every field null as its own were), a scope 56 bytes: the load to
 `math/bounded.lisp` 51.6 -> 46.2 s side by side, `math/num.lisp` 21.9 -> 19.8. The register's

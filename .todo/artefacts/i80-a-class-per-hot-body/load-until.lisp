@@ -1,0 +1,18 @@
+;; Trace coalton's load one line per component; quit when the component named by I75_STOP
+;; (a path suffix such as "library/math/real.lisp") is about to load.
+(defvar *t0* (get-internal-real-time))
+(defun elapsed () (/ (- (get-internal-real-time) *t0*) (float internal-time-units-per-second)))
+(defvar *stop* (uiop:getenv "I75_STOP"))
+(defmethod asdf:perform :before ((op asdf:load-op) (c asdf:cl-source-file))
+  (let ((path (namestring (asdf:component-pathname c))))
+    (format *error-output* "~&@@ ~8,1F ~A~%" (elapsed) path)
+    (finish-output *error-output*)
+    (when (and *stop* (plusp (length *stop*))
+               (>= (length path) (length *stop*))
+               (string= *stop* path :start2 (- (length path) (length *stop*))))
+      (format *error-output* "~&@@ ~8,1F stop~%" (elapsed))
+      (finish-output *error-output*)
+      (uiop:quit 0))))
+(ql:quickload "coalton")
+(format *error-output* "~&@@ ~8,1F loaded~%" (elapsed))
+(finish-output *error-output*)

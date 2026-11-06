@@ -1067,6 +1067,13 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   - A `setf` expanded once per site ([interpreter-expansion-memo.md](interpreter-expansion-memo.md), "The setf
     memo"), four pairs side by side up to `math/real.lisp` (load 7-14): 126-138 s against 111-126, the
     expansion's 7.3-7.6% of the samples gone.
+  - The tree's own costs, on every platform ([interpreter-compiled-bodies.md](interpreter-compiled-bodies.md),
+    "Where the time goes now", 2026-11-06): a loop's exit handed to its frame without a throw, a scope without the
+    global environment's fields, the value register cleared only when it holds something, a compiled `#'name`'s
+    generic key made once. The whole load side by side (load 5-15): 1018 s against 821, every dear file 1.2-1.35
+    times as fast (`seq.lisp` 153 s against 113, `hashmap.lisp` 111 against 88, `list.lisp` 85 against 66,
+    `file.lisp` 71 against 57). A class per hot body, the plan before, was built and measured and is not kept (same
+    file, "A class per hot body").
   - The float traps: `/` over a float is IEEE on every backend ([error-handling.md](error-handling.md),
     "Per operator"), which is what SBCL answers with coalton's traps off, so the shim's `with-float-traps-masked`
     needs nothing: `(/ 1.0d0 0.0d0)` under coalton is an infinity here too.
