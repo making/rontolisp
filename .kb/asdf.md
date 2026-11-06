@@ -1010,9 +1010,13 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   (`defineConditionToDefclass`; coalton's `source-condition`).
 - **coalton** (coalton-20260101-git) — from the Quicklisp cache, interpreter, measured 2026-11-05.
   `(ql:quickload "coalton")` loads `coalton-compiler` and all of `coalton/library` (prelude included), its macros
-  compiling file by file through eclector and the real typechecker and codegen: 67 minutes on a box under load 4-8
-  with a flight recording on (SBCL 2.2.9 compiles and loads the same tree in 61 s). What it took past fset, each
-  general but the tier 4 arms: a `:mix-reexport` clause
+  compiling file by file through eclector and the real typechecker and codegen: 60 minutes on a box under load 3-4
+  (SBCL 2.2.9 compiles and loads the same tree in 61 s). Then a user package's `coalton-toplevel` (`define-type`, a
+  parameterized one with `Ord`, `define-class`/`define-instance`, `define-struct`, `match`, `Result`, cells,
+  hashtables, `for` over an iterator, F32 and F64 literals) and 33 `coalton` forms print what SBCL prints over the
+  same tree, but for SBCL's `d0` on a double and its infinity's spelling (one float type here). Read with
+  `(named-readtables:in-readtable coalton:coalton)`, as coalton's docs advise; without it see `.todo/i74`. What it
+  took past fset, each general but the tier 4 arms: a `:mix-reexport` clause
   ([packages.md](packages.md)); a `:report` naming a function; a `.asd`'s `(:read-file-form ...)` `:version`;
   a computed `*features*` push ([reader-features.md](reader-features.md)); a reader macro's value respelled for
   the resolver and a `cl:` constant keeping its prefix ([readtables.md](readtables.md),
@@ -1037,8 +1041,8 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
     "Per operator"), which is what SBCL answers with coalton's traps off, so the shim's `with-float-traps-masked`
     needs nothing: `(/ 1.0d0 0.0d0)` under coalton is an infinity here too.
   - Not measured: coalton's own tests (`coalton/tests`, through fiasco), `coalton/library/big-float`. A bare
-    `t` in a package not using `cl` is `cl:t` here (`.todo/i74`). The compile paths stop before the library
-    (`.todo/i73`).
+    `nil` or `t` in a package not using `cl` is `cl`'s here, so a program read without coalton's readtable has
+    `cl:nil` for `Nil` (`.todo/i74`). The compile paths stop before the library (`.todo/i73`).
 - **sento 3.4.2** — from the Quicklisp cache, verified manually (measured 2026-11-05, interpreter and JVM):
   `make-actor-system`, `actor-of`, `ask-s`, `ask` with `fcompleted`, a `:time-out`, `*state*`, agents,
   8 threads x 200 `tell`s counted to 1600. On wasm it compiles and `make-actor-system` signals at the first
