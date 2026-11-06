@@ -637,10 +637,14 @@ final class WasmRuntimeBuilder {
 	 * carries neither the globals nor the guard)
 	 * @param gasGlobalIndex the {@code (mut i32)} work-budget global, present exactly
 	 * when {@code depthGlobalIndex} is
+	 * @param charvecPossible whether a character vector can reach it
+	 * @param identityHash whether the module's objects carry the identity-hash slot
+	 * @param stringKeyFirst whether a string or symbol at depth zero folds before the
+	 * counters, a speed-for-size trade
 	 * @return the function body
 	 */
 	static byte[] buildHashBody(int instanceTypeIndex, int[] keyedLayout, int depthGlobalIndex, int gasGlobalIndex,
-			boolean charvecPossible, boolean identityHash) {
+			boolean charvecPossible, boolean identityHash, boolean stringKeyFirst) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -654,6 +658,15 @@ final class WasmRuntimeBuilder {
 		w.write(Type.I32);
 		w.write(1); // 1 local
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
+
+		// A symbol or string KEY -- the outermost entry -- folds its bytes at once: it
+		// descends nowhere, so it needs neither the depth cap nor the work budget, and
+		// the fold is the string arm's below (the same value). An equal table's string
+		// keys were paying the type tests and the counters ahead of it on every put and
+		// get. A speed-for-size trade, so not under --optimize=size.
+		if (stringKeyFirst) {
+			emitTopLevelStringFold(w, depthGlobalIndex);
+		}
 
 		// The OUTERMOST entry -- the one that finds the depth counter at zero -- refills
 		// the work budget, so one placement's gas never depends on the last one's.
@@ -1205,6 +1218,57 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
 		w.writeUnsignedLeb128(0);
+	}
+
+	// _hash's opening for a TYPE_STRING at depth zero (any depth where the module keeps
+	// no counter): h = h * 31 + byte over its bytes, returned. Locals as buildHashBody's:
+	// 2 = h, 3 = idx, 4 = end, 5 = arr.
+	private static void emitTopLevelStringFold(WasmWriter w, int depthGlobalIndex) {
+		refTest(w, 0, WasmLispCompiler.TYPE_STRING);
+		if (depthGlobalIndex >= 0) {
+			w.write(Instruction.GET_GLOBAL);
+			w.writeUnsignedLeb128(depthGlobalIndex);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.I32_AND);
+		}
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, 0);
+		WasmEmitHelper.emitStrBytesArray(w);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		stringLength(w, 0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(4);
+		w.write(Instruction.BLOCK, 0x40);
+		getLocal(w, 4);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 0);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, 2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(31);
+		w.write(Instruction.I32_MUL);
+		getLocal(w, 5);
+		getLocal(w, 3);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		getLocal(w, 3);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(3);
+		getLocal(w, 4);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.BR_IF, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		getLocal(w, 2);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 	}
 
 	private static void stringLength(WasmWriter w, int local) {

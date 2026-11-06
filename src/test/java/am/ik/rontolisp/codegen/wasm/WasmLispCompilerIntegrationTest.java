@@ -573,16 +573,21 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStderr();
 	}
 
-	// JSON tests pre-process with JsonLibrary.process, mirroring the compile-path
-	// pre-pass run by RontoLispCli.
+	// JSON tests pre-process with JsonLibrary.process for this backend, mirroring the
+	// compile-path pre-pass run by RontoLispCli: the entry points over the native codec.
 	private static String compileAndRunJson(String lispCode) throws Exception {
-		List<LispVal> program = am.ik.rontolisp.eval.JsonLibrary.process(LispReader.readAllFromString(lispCode));
+		List<LispVal> program = jsonSpliced(LispReader.readAllFromString(lispCode));
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
 				path("test.wasm"));
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
 		return result.getStdout().trim();
+	}
+
+	private static List<LispVal> jsonSpliced(List<LispVal> program) {
+		return am.ik.rontolisp.eval.JsonLibrary.process(program,
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_GC);
 	}
 
 	// linalg tests pre-process with LinalgLibrary.process, mirroring the compile-path
@@ -900,7 +905,8 @@ class WasmLispCompilerIntegrationTest {
 		// GrayStreamsLibrary mirrors the CLI: the reactor's buffered request body is a
 		// Gray class, so gray.lisp must be spliced like RontoLispCli does.
 		List<LispVal> program = am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
-			.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded))));
+			.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded),
+					am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_GC)));
 		byte[] component = WasmLispCompiler.builder()
 			.component(true)
 			.noWasi(true)
@@ -19501,11 +19507,11 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void jsonOpsWorkInPreview1Mode() throws Exception {
-		// The Lisp-source JSON library (spliced by JsonLibrary.process, mirroring the
-		// cli pre-pass) runs in Preview 1 with jzon's value mapping: objects become
-		// hash tables with string keys, arrays vectors, null the symbol null, plus
-		// escapes (\\uXXXX decoded to UTF-8 bytes), numbers, stringify and the
-		// #' wrappers.
+		// The JSON library's entry points over the native codec (spliced by
+		// JsonLibrary.process, mirroring the cli pre-pass) run in Preview 1 with jzon's
+		// value mapping: objects become hash tables with string keys, arrays vectors,
+		// null the symbol null, plus escapes (\\uXXXX decoded to UTF-8 bytes), numbers,
+		// stringify and the #' wrappers.
 		assertThat(compileAndRunJson("""
 				(let ((h (rontolisp:json-parse "{\\"name\\": \\"rontolisp\\", \\"n\\": 2}")))
 				  (print (list (gethash "name" h) (gethash "n" h))))
@@ -19530,6 +19536,22 @@ class WasmLispCompilerIntegrationTest {
 						"""))
 			.isEqualTo(
 					"\"[1,[2,3],false]\"\n\"{\\\"deep\\\":{\\\"list\\\":[{\\\"k\\\":\\\"v\\\"},2.5,true]}}\"\n\"[1,2]\"");
+		// A byte costs the codec's loops, not a walk of Lisp calls: 40 rounds over an
+		// 8,491-byte document, measured 2026-11-06 (wasmtime 49), fit 61.5 M fuel with
+		// the 21.5 M the document's making takes, where json.lisp's walk took 415 M
+		// (.kb/json.md, "The wasm-GC codec").
+		assertThat(compileAndRunWithFuel(jsonSpliced(LispReader.readAllFromString("""
+				(defvar *doc*
+				  (let ((parts (list "{\\"items\\":[")))
+				    (dotimes (i 300)
+				      (when (> i 0) (push "," parts))
+				      (push (format nil "{\\"id\\":~a,\\"name\\":\\"item-~a\\"}" i i) parts))
+				    (push "]}" parts)
+				    (apply #'concatenate 'string (nreverse parts))))
+				(defvar *out* nil)
+				(dotimes (i 40) (setq *out* (rontolisp:json-stringify (rontolisp:json-parse *doc*))))
+				(print (list (length *doc*) (string= *doc* *out*)))
+				""")), 150_000_000L)).isEqualTo("(8491 T)");
 	}
 
 	@Test
@@ -19538,8 +19560,8 @@ class WasmLispCompilerIntegrationTest {
 		// and json-stringify serializes a CLOS instance as an object (slots in
 		// definition order; a hash-table slot nests as an object) -- single-key
 		// objects keep the output backend-stable.
-		List<LispVal> program = am.ik.rontolisp.eval.JsonLibrary
-			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+		List<LispVal> program = jsonSpliced(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(
 					"""
 							(print (rontolisp:json-stringify (rontolisp:plist-hash-table (list :msg "hi"))))
 							(print (rontolisp:hash-table-plist (rontolisp:plist-hash-table (list :a 1))))

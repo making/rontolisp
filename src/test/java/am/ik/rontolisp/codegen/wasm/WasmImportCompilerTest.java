@@ -479,7 +479,8 @@ class WasmImportCompilerTest {
 		loaded = am.ik.rontolisp.eval.HttpReactorLibrary.process(loaded);
 		loaded = am.ik.rontolisp.eval.HttpServerLibrary.process(loaded, false);
 		List<LispVal> program = am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
-			.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded))));
+			.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded),
+					am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_GC)));
 		return WasmLispCompiler.builder()
 			.noWasi(true)
 			.optimize(OptimizeLevel.NONE)

@@ -30,7 +30,7 @@ rontolisp 上でのみ動作します。
 | `nil` | `false` |
 | `t` | `true` |
 | シンボル `null` | `null` |
-| 整数、浮動小数点数 | number |
+| 整数、浮動小数点数 | number(整数は `*print-base*` によらず 10 進) |
 | 比 | number(`float` で変換) |
 | string | 文字列(引用符・バックスラッシュ・制御文字はエスケープ) |
 | ベクタ、リスト | array |
@@ -86,10 +86,13 @@ JSON からパースした値は構造的にラウンドトリップします:
 - WASM バックエンドでは絶対値が 2³¹ 以上の浮動小数点数はシリアライズ
   できません(浮動小数点数フォーマッタがトラップします)。
   [WASM ガイド](../../compiling/wasm.md) を参照してください。
+- wasm-GC バックエンドでは、返す文字列は文字列リテラルと同じく変更不可
+  です([`rontolisp:json-parse`](rontolisp-json-parse.md) を参照)。
 
 ## バックエンドサポート
 
 [`rontolisp:json-parse`](rontolisp-json-parse.md) と同じく、すべての
 バックエンド・すべての WASM モード(Preview 1 含む)で動作します:
-シリアライザは rontolisp 自身で書かれており、使用時にプログラムへ
-組み込まれてコンパイルされます。
+インタプリタと JVM は rontolisp 自身で書かれたシリアライザを実行し、
+wasm-GC バックエンドは使用時にネイティブのシリアライザをプログラムへ
+組み込みます。

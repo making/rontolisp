@@ -346,11 +346,27 @@
           (when (> n start) (setq parts (cons (subseq name start n) parts)))
           (rontolisp::%json-concat (nreverse parts))))))
 
+(defun rontolisp::%json-decimal (n)
+  ;; An integer's decimal digits whatever *print-base* and *print-radix* say, as
+  ;; jzon's ~D writes them: #xFF is no JSON. Ten prints as "10" exactly when the
+  ;; printer is decimal without a radix; naming either variable, even to read
+  ;; it, would bring the case-aware printer into a compiled program.
+  (if (string= (%princ-piece 10) "10")
+      (%princ-piece n)
+      (let ((parts nil) (m (abs n)))
+        (do ((dummy nil))
+            ((< m 10))
+          (setq parts
+                (cons (rontolisp::%json-char-string (+ 48 (mod m 10))) parts))
+          (setq m (floor m 10)))
+        (setq parts (cons (rontolisp::%json-char-string (+ 48 m)) parts))
+        (rontolisp::%json-concat (if (< n 0) (cons "-" parts) parts)))))
+
 (defun rontolisp::%json-key-name (k)
   ;; Coerce a hash-table key to a string the way jzon's coerce-key does.
   (cond ((stringp k) k)
         ((symbolp k) (rontolisp::%json-downcase-key (string k)))
-        ((integerp k) (%princ-piece k))
+        ((integerp k) (rontolisp::%json-decimal k))
         ((floatp k) (%princ-piece k))
         ((characterp k) (string k))
         (t (error "json-stringify: unsupported hash-table key"))))
@@ -389,24 +405,25 @@
                (setq %json-hash-acc (rontolisp::%json-out v %json-hash-acc))) h)
     (cons "}" %json-hash-acc)))
 
-(defun rontolisp::%json-out-instance (v acc)
+(defun rontolisp::%json-out-instance (v acc out)
   ;; A CLOS instance or a defstruct instance serializes as a JSON object: each
   ;; slot's name (coerced like a symbol object key) maps to its slot-value, in
   ;; definition order -- matching jzon's standard-object serialization. A slot
   ;; may itself hold a hash table (a nested object), a list/vector (an array), or
   ;; any serializable value. Both shapes answer %class-slot-defs and slot-value,
   ;; so one walk covers them. An UNBOUND slot is skipped, not written as null --
-  ;; jzon's coerced-fields does the same, and reading it would signal.
+  ;; jzon's coerced-fields does the same, and reading it would signal. OUT conses
+  ;; a value's fragments onto an accumulator: %json-out, or on wasm-GC the native
+  ;; serializer's text (%json-native-out).
   (let ((a (cons "{" acc)) (firstp t))
     (do ((defs (%class-slot-defs (%class-designator v)) (cdr defs)))
         ((null defs))
       (let ((name (car (car defs))))
         (when (slot-boundp v name)
           (if firstp (setq firstp nil) (setq a (cons "," a)))
-          (setq a
-           (rontolisp::%json-out-string (rontolisp::%json-key-name name) a))
+          (setq a (funcall out (rontolisp::%json-key-name name) a))
           (setq a (cons ":" a))
-          (setq a (rontolisp::%json-out (slot-value v name) a)))))
+          (setq a (funcall out (slot-value v name) a)))))
     (cons "}" a)))
 
 (defun rontolisp::%json-out (v acc)
@@ -417,7 +434,7 @@
   (cond ((eq v t) (cons "true" acc))
         ((eq v 'null) (cons "null" acc))
         ((null v) (cons "false" acc))
-        ((integerp v) (cons (%princ-piece v) acc))
+        ((integerp v) (cons (rontolisp::%json-decimal v) acc))
         ((floatp v) (cons (%princ-piece v) acc))
         ((rationalp v) (cons (%princ-piece (float v)) acc))
         ((stringp v) (rontolisp::%json-out-string v acc))
@@ -425,8 +442,10 @@
         ((vectorp v) (rontolisp::%json-out-vec v acc))
         ((symbolp v) (rontolisp::%json-out-string (string v) acc))
         ((characterp v) (rontolisp::%json-out-string (string v) acc))
-        ((typep v 'standard-object) (rontolisp::%json-out-instance v acc))
-        ((typep v 'structure-object) (rontolisp::%json-out-instance v acc))
+        ((typep v 'standard-object)
+         (rontolisp::%json-out-instance v acc #'rontolisp::%json-out))
+        ((typep v 'structure-object)
+         (rontolisp::%json-out-instance v acc #'rontolisp::%json-out))
         ((consp v) (rontolisp::%json-out-array v acc))
         (t (error "json-stringify: unsupported value"))))
 
@@ -435,3 +454,62 @@
   ;; the one string the CALLER gets back should carry the same writable
   ;; identity every other string producer answers
   (copy-seq (rontolisp::%json-concat (nreverse (rontolisp::%json-out v nil)))))
+
+;; --- the wasm-GC entry points -----------------------------------------------
+;; On a wasm-GC target JsonLibrary routes json-parse and json-stringify here, and
+;; to nothing above but what these call: %json-decode and %json-encode are the
+;; backend's native parser and serializer (WasmJsonRuntimeBuilder, .kb/json.md),
+;; answering what the walk above answers. Every other backend leaves these out.
+
+(defun rontolisp::%json-native-parse (s)
+  (let ((r (rontolisp::%json-decode s 'null)))
+    (if (consp r) (car r) (rontolisp::%json-native-fail r))))
+
+(defun rontolisp::%json-native-fail (code)
+  ;; The error the walk above signals, by the parser's code for it.
+  (cond ((eql code 0) (error "json-parse expects a string"))
+        ((eql code 1) (error "json-parse: unexpected end of input"))
+        ((eql code 2) (error "json-parse: unexpected trailing characters"))
+        ((eql code 3) (error "json-parse: unterminated string"))
+        ((eql code 4) (error "json-parse: unterminated escape"))
+        ((eql code 5) (error "json-parse: invalid escape in string"))
+        ((eql code 6) (error "json-parse: unterminated unicode escape"))
+        ((eql code 7) (error "json-parse: invalid hex digit in unicode escape"))
+        ((eql code 8) (error "json-parse: invalid number"))
+        ((eql code 9) (error "json-parse: invalid literal"))
+        ((eql code 10) (error "json-parse: unexpected character"))
+        ((eql code 11) (error "json-parse: unterminated array"))
+        ((eql code 12) (error "json-parse: expected , or ] in array"))
+        ((eql code 13) (error "json-parse: unterminated object"))
+        ((eql code 14) (error "json-parse: expected an object key string"))
+        ((eql code 15) (error "json-parse: expected : after object key"))
+        (t (error "json-parse: expected , or } in object"))))
+
+(defun rontolisp::%json-native-stringify (v)
+  (let ((r
+         (rontolisp::%json-encode v 'null #'rontolisp::%json-native-other
+                                  #'rontolisp::%json-key-name)))
+    (if (stringp r) r (error "json-stringify: improper list"))))
+
+(defun rontolisp::%json-native-other (v)
+  ;; The JSON text of a value the serializer has no arm for, as %json-out writes
+  ;; it: an integer past 64 bits, a float, a ratio, a vector it cannot walk, a
+  ;; symbol, a character, an instance.
+  (cond ((integerp v) (rontolisp::%json-decimal v))
+        ((floatp v) (%princ-piece v))
+        ((rationalp v) (%princ-piece (float v)))
+        ((vectorp v)
+         (if (= (length v) 0)
+             "[]"
+             (rontolisp::%json-native-stringify (coerce v 'list))))
+        ((symbolp v) (rontolisp::%json-native-stringify (string v)))
+        ((characterp v) (rontolisp::%json-native-stringify (string v)))
+        ((or (typep v 'standard-object) (typep v 'structure-object))
+         (rontolisp::%json-concat
+          (nreverse
+           (rontolisp::%json-out-instance v nil
+                                          #'rontolisp::%json-native-out))))
+        (t (error "json-stringify: unsupported value"))))
+
+(defun rontolisp::%json-native-out (v acc)
+  (cons (rontolisp::%json-native-stringify v) acc))

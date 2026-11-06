@@ -30,7 +30,7 @@ rontolisp.
 | `nil` | `false` |
 | `t` | `true` |
 | the symbol `null` | `null` |
-| integer, float | number |
+| integer, float | number (an integer in decimal, whatever `*print-base*` is) |
 | ratio | number (converted with `float`) |
 | string | string (quote, backslash and control characters are escaped) |
 | vector, list | array |
@@ -83,9 +83,12 @@ A value parsed from JSON round-trips structurally:
 - On the WASM backends a float with magnitude 2³¹ or larger cannot be
   serialized (the float formatter traps); see the
   [WASM guide](../../compiling/wasm.md).
+- On the wasm-GC backends the string it answers is immutable, as a string
+  literal is (see [`rontolisp:json-parse`](rontolisp-json-parse.md)).
 
 ## Backend support
 
 Works on every backend and in every WASM mode (Preview 1 included), like
-[`rontolisp:json-parse`](rontolisp-json-parse.md): the serializer is written
-in rontolisp itself and is compiled into the program when used.
+[`rontolisp:json-parse`](rontolisp-json-parse.md): the interpreter and the JVM
+run a serializer written in rontolisp itself, and the wasm-GC backends compile
+a native one into the program when it is used.

@@ -18540,7 +18540,7 @@ public final class LispEvaluator {
 		synchronized (this.libraryLoadLock) {
 			if (!this.jsonLibraryLoaded) {
 				this.jsonLibraryLoaded = true;
-				for (LispVal form : JsonLibrary.forms()) {
+				for (LispVal form : JsonLibrary.portableForms()) {
 					eval(form, this.globalEnv);
 				}
 			}

@@ -736,6 +736,12 @@ final class WasmExprCompiler {
 					WasmHashTableCompiler.compileCopy(cons, ctx);
 					return;
 				}
+				if (LispNames.JSON_DECODE_INTERNAL.equals(qn.member())
+						|| LispNames.JSON_ENCODE_INTERNAL.equals(qn.member())) {
+					// json.lisp's wasm-GC entry points: the module's JSON codec.
+					WasmJsonCompiler.compile(qn.member(), cons, ctx);
+					return;
+				}
 				if (LispNames.OCTETS_TO_STRING_PACKED_INTERNAL.equals(qn.member())) {
 					// The native half of the prelude's lenient octet decoder: a packed
 					// (unsigned-byte 8) vector decoded (one copy when it is valid UTF-8,

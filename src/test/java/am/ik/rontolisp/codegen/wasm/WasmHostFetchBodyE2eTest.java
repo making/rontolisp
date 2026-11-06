@@ -223,8 +223,8 @@ class WasmHostFetchBodyE2eTest {
 				HostBoundary.STREAMING);
 		loaded = HttpReactorLibrary.process(loaded);
 		loaded = HttpServerLibrary.process(loaded, false);
-		List<LispVal> program = GrayStreamsLibrary
-			.process(LispPreludeLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))));
+		List<LispVal> program = GrayStreamsLibrary.process(LispPreludeLibrary.process(JsonLibrary
+			.process(UserMacroExpander.expand(loaded), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_GC)));
 		return WasmLispCompiler.builder()
 			.noWasi(true)
 			.optimize(OptimizeLevel.NONE)

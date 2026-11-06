@@ -7125,6 +7125,20 @@ public final class LispNames {
 	public static final String JSON_STRINGIFY = "JSON-STRINGIFY";
 
 	/**
+	 * The internal {@code rontolisp::%json-decode} primitive: the wasm-GC backend's
+	 * native JSON parser ({@code WasmJsonRuntimeBuilder}), which {@code json.lisp}'s
+	 * {@code %json-native-parse} calls on that backend alone ({@code .kb/json.md}).
+	 */
+	public static final String JSON_DECODE_INTERNAL = "%JSON-DECODE";
+
+	/**
+	 * The internal {@code rontolisp::%json-encode} primitive: the wasm-GC backend's
+	 * native JSON serializer, the half of {@code json.lisp}'s
+	 * {@code %json-native-stringify}.
+	 */
+	public static final String JSON_ENCODE_INTERNAL = "%JSON-ENCODE";
+
+	/**
 	 * The {@code plist-hash-table} function provided by the {@code rontolisp} package. A
 	 * lightweight subset of {@code alexandria:plist-hash-table}: builds a hash table from
 	 * a property list (odd elements keys, even elements values), passing any trailing
@@ -8593,6 +8607,12 @@ public final class LispNames {
 	 * ({@link #COPY_EQUAL_TABLE_INTERNAL}).
 	 */
 	public static final String COPY_EQUAL_TABLE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + COPY_EQUAL_TABLE_INTERNAL;
+
+	/** The canonical spelling of {@code rontolisp::%json-decode}. */
+	public static final String JSON_DECODE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + JSON_DECODE_INTERNAL;
+
+	/** The canonical spelling of {@code rontolisp::%json-encode}. */
+	public static final String JSON_ENCODE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + JSON_ENCODE_INTERNAL;
 
 	/**
 	 * The canonical internal-qualified spelling of
