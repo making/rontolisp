@@ -172,7 +172,7 @@ verification against the actual Quicklisp dist at probe time)
   - Load, wrong result: `cl-conspack` (doubles encoded as float32, i90; JVM the same).
   - Interpreter only: `snooze` (`handle-request` as SBCL; JVM i91).
   - Since loaded: `cl-unification` (all four, as SBCL; `.kb/asdf.md`, "Libraries that load").
-  - Do not load: `generic-cl` (i82, then i88), `sycamore` (i85; past it
+  - Do not load: `generic-cl` (i88; past i82 since 2026-11-06), `sycamore` (i85; past it
     matches SBCL), `petalisp` (i86 in queues, i89, then i90 in typo), `40ants-doc` (i87; past it
     loads), `osicat` (cffi-grovel refused, i84).
   - Side results: `lparallel` loads now (its h37 stop is gone); `asdf:load-system` of a
