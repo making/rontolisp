@@ -453,7 +453,10 @@ WASM `--component` backend, over wasmtime's experimental
 `wasi:tls@0.3.0-draft` interface — add `-S tls=y` to the socket run flags;
 failures answer `nil` there, `:insecure` signals (the draft exposes no
 verification knob), and `tls-upgrade` upgrades the handle **in place** (it
-answers the same handle, and requires that nothing was written to it yet). The
+answers the same handle, and requires that nothing was written to it yet). On a
+plain Preview 1 `.wasm` and in a [native executable](../compiling/native.md#tcp-sockets)
+a client call signals an error when it runs, so a program whose `https://`
+branch is never taken still compiles there. The
 TLS *server* functions are interpreter/JVM only — a permanent compile error on
 every WASM target, because the `wasi:tls` proposal defines no server
 interface.
@@ -770,12 +773,11 @@ Limitations of the shim (deliberate -- rontolisp's socket model is lite):
   other option signals rather than being silently ignored.
 - **`wait-for-input` is a `listen`-based poll**: `listen` is polled every
   10 ms until data arrives or `:timeout` elapses (`:ready-only` works). The
-  wait is real on the interpreter and the JVM, where `listen` asks the kernel
-  receive buffer, and on the WASM component, where it asks the host. In a
-  native executable it returns immediately claiming readiness when nothing is
-  buffered — reads block anyway, so the common wait-then-read loop behaves
-  identically, but a `:timeout` poll cannot be honoured there. Stream sockets
-  only (a listener in the list signals), and wait-list objects do not exist.
+  wait is real on every backend with sockets: `listen` asks the kernel receive
+  buffer on the interpreter, the JVM and in a native executable, and the host
+  on the WASM component. A socket at end of file is not reported ready
+  (`listen` answers `nil` there). Stream sockets only (a listener in the list
+  signals), and wait-list objects do not exist.
 - **`socket-server` does not exist** (write your own accept loop).
 - **The `with-*` macros close the socket on every exit** on the interpreter
   and the JVM (they expand over

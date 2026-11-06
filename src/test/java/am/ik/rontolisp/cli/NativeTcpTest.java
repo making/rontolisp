@@ -47,7 +47,7 @@ class NativeTcpTest {
 	@Test
 	void aSocketProgramImportsTheRunnersHostAndAUsocketOneTheSame() {
 		// The tree shaker keeps the imports the program reaches: a listener alone binds
-		// three of the twelve, the whole family every one.
+		// three of the thirteen, the whole family every one.
 		byte[] listener = module("(print (rontolisp:tcp-local-port (rontolisp:tcp-listen 0 \"127.0.0.1\")))");
 		assertThat(WasmImports.functionFields(listener, SocketsLibrary.RUNNER_IMPORT_MODULE))
 			.containsExactlyInAnyOrder("listen", "localPort", "lastError");
@@ -59,12 +59,12 @@ class NativeTcpTest {
 				       (s (rontolisp:tcp-accept l)))
 				  (rontolisp:tcp-set-timeout c 10)
 				  (write-line (rontolisp:tcp-local-address l) c)
-				  (print (list (read-line s) (rontolisp:tcp-peer-address s) (rontolisp:tcp-peer-port s)))
+				  (print (list (listen s) (read-line s) (rontolisp:tcp-peer-address s) (rontolisp:tcp-peer-port s)))
 				  (close c))
 				""");
 		assertThat(WasmImports.functionFields(family, SocketsLibrary.RUNNER_IMPORT_MODULE)).containsExactlyInAnyOrder(
 				"connect", "listen", "accept", "read", "write", "close", "localPort", "localAddress", "peerAddress",
-				"peerPort", "setTimeout", "lastError");
+				"peerPort", "setTimeout", "readable", "lastError");
 		// The usocket shim rides the same provider.
 		byte[] usocket = module("(print (usocket:socket-listen \"127.0.0.1\" usocket:*auto-port*))");
 		assertThat(WasmLispCompiler.importModules(usocket)).contains(SocketsLibrary.RUNNER_IMPORT_MODULE);
@@ -76,7 +76,8 @@ class NativeTcpTest {
 	 * the sequence ops and the eof-tolerant reads in a defun and at the top level (the
 	 * sync dispatch and the promoted shape), a bare read signalling end-of-file, the
 	 * usocket shim with its typed re-signal, the address accessors, the read deadline,
-	 * and the host failures with the interpreter's texts.
+	 * and the host failures with the interpreter's texts; then the line-start and
+	 * usocket-wait fixtures the other backends run.
 	 */
 	@SocketTest
 	void anExecutableRunsTheLoopbackProgramsWithTheInterpretersErrorTexts() throws Exception {
@@ -167,18 +168,26 @@ class NativeTcpTest {
 					":EOF", ":SIGNALLED", "\"shim\"", "\"127.0.0.1\"", ":OK", ":OK", ":OK",
 					"\"TCP-ACCEPT expects a listener handle\"", "\"TCP-PEER-PORT expects a connected socket handle\""));
 		assertThat(process.exitValue()).isZero();
-		// The same line start on the runner's provider.
-		Path lineStarts = this.tempDir.resolve("line-starts.lisp");
-		Files.writeString(lineStarts, am.ik.rontolisp.LineStartFixture.SOCKET_PROGRAM);
-		Path lineStartsExecutable = this.tempDir.resolve("line-starts");
-		new RontoLispCli(new ByteArrayInputStream(new byte[0]),
-				new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8))
-			.run(new String[] { lineStarts.toString(), "--native", "-o", lineStartsExecutable.toString() });
-		Process lineStartsProcess = new ProcessBuilder(lineStartsExecutable.toString()).redirectErrorStream(true)
-			.start();
-		String lineStartsOutput = new String(lineStartsProcess.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertThat(lineStartsProcess.waitFor(2, TimeUnit.MINUTES)).as("output: %s", lineStartsOutput).isTrue();
-		assertThat(lineStartsOutput.trim()).isEqualTo(am.ik.rontolisp.LineStartFixture.SOCKET_EXPECTED);
+		// The fixtures the other backends share, on the runner's provider: the same line
+		// start, and the read deadline, listen and wait-for-input -- the kernel's receive
+		// buffer asked, so a quiet socket waits its timeout.
+		String[][] fixtures = {
+				{ "line-starts", am.ik.rontolisp.LineStartFixture.SOCKET_PROGRAM,
+						am.ik.rontolisp.LineStartFixture.SOCKET_EXPECTED },
+				{ "usocket-wait", am.ik.rontolisp.UsocketWaitFixture.PROGRAM,
+						am.ik.rontolisp.UsocketWaitFixture.EXPECTED } };
+		for (String[] fixture : fixtures) {
+			Path fixtureSource = this.tempDir.resolve(fixture[0] + ".lisp");
+			Files.writeString(fixtureSource, fixture[1], StandardCharsets.UTF_8);
+			Path fixtureExecutable = this.tempDir.resolve(fixture[0]);
+			new RontoLispCli(new ByteArrayInputStream(new byte[0]),
+					new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8))
+				.run(new String[] { fixtureSource.toString(), "--native", "-o", fixtureExecutable.toString() });
+			Process fixtureProcess = new ProcessBuilder(fixtureExecutable.toString()).redirectErrorStream(true).start();
+			String fixtureOutput = new String(fixtureProcess.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+			assertThat(fixtureProcess.waitFor(2, TimeUnit.MINUTES)).as("%s: %s", fixture[0], fixtureOutput).isTrue();
+			assertThat(fixtureOutput.trim()).as(fixture[0]).isEqualTo(fixture[2]);
+		}
 	}
 
 }

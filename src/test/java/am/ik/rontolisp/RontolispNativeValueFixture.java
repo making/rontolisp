@@ -13,7 +13,7 @@ package am.ik.rontolisp;
  * undefined-function its call is.</li>
  * <li>{@link #SOCKET_PROGRAM}: the {@code tcp-*} family over a loopback connection, on
  * the interpreter, the JVM and the component; {@link #NO_SOCKET_PROGRAM} is Preview 1's
- * call-time refusal.</li>
+ * call-time refusal, the client {@code tls-*} pair's included.</li>
  * <li>{@link #ASYNC_PROGRAM}: {@code wait-for} and {@code fetch}, on the interpreter, the
  * JVM and the component (Preview 1 refuses either at compile time, as a call).</li>
  * <li>{@link #TLS_PROGRAM}: {@code tls-connect} and {@code tls-upgrade} over a refused
@@ -98,10 +98,15 @@ public final class RontolispNativeValueFixture {
 	/** What {@link #SOCKET_PROGRAM} prints. */
 	public static final String SOCKET_EXPECTED = String.join("\n", "\"hello\"", "(T T T)");
 
-	/** The {@code tcp-*} family on Preview 1: the call-time refusal a call is. */
+	/**
+	 * The {@code tcp-*} family and the client {@code tls-*} pair on Preview 1: the
+	 * call-time refusal a call is.
+	 */
 	public static final String NO_SOCKET_PROGRAM = """
 			(print (handler-case (funcall #'rontolisp:tcp-connect "127.0.0.1" 1) (error (c) (princ-to-string c))))
 			(print (handler-case (mapcar #'rontolisp:tcp-local-port (list 1)) (error (c) (princ-to-string c))))
+			(print (handler-case (funcall #'rontolisp:tls-connect "127.0.0.1" 1) (error (c) (princ-to-string c))))
+			(print (handler-case (rontolisp:tls-upgrade 200 "h" :insecure t) (error (c) (princ-to-string c))))
 			""";
 
 	/** What {@link #NO_SOCKET_PROGRAM} prints. */
@@ -109,7 +114,11 @@ public final class RontolispNativeValueFixture {
 			"\"rontolisp:TCP-CONNECT requires the interpreter, the JVM backend, --component or --native"
 					+ " (no host socket API is wired on Preview 1 WASM)\"",
 			"\"rontolisp:TCP-LOCAL-PORT requires the interpreter, the JVM backend, --component or --native"
-					+ " (no host socket API is wired on Preview 1 WASM)\"");
+					+ " (no host socket API is wired on Preview 1 WASM)\"",
+			"\"rontolisp:TLS-CONNECT requires the interpreter, the JVM backend or --component"
+					+ " (no TLS host API is wired on Preview 1 WASM, --native included)\"",
+			"\"rontolisp:TLS-UPGRADE requires the interpreter, the JVM backend or --component"
+					+ " (no TLS host API is wired on Preview 1 WASM, --native included)\"");
 
 	/** {@code wait-for} and {@code fetch}. */
 	public static final String ASYNC_PROGRAM = """

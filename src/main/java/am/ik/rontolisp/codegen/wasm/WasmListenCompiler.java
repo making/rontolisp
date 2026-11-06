@@ -71,15 +71,14 @@ final class WasmListenCompiler {
 		ctx.writer.write(Instruction.ELSE);
 		// Anything else keeps the call-time unsupported stub. The stream was
 		// already evaluated once into the temp, so the stub errors without
-		// re-running it: drop the temp, then signal.
+		// re-running it: drop the temp, then signal. (A socket program's listen call
+		// sites are rewritten onto the spliced provider's %io-listen first.)
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmp);
 		ctx.writer.write(Instruction.DROP);
-		WasmExprCompiler
-			.compileExpr(
-					LispMacroExpander.callTimeUnsupportedStub("listen requires the interpreter, the JVM backend or a "
-							+ "--component socket stream (no non-blocking input probe exists on this WASM target)"),
-					ctx);
+		WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub("listen requires the interpreter,"
+				+ " the JVM backend, a string stream or a --component or --native socket"
+				+ " (no non-blocking input probe exists for this stream on a WASM target)"), ctx);
 		ctx.writer.write(Instruction.END);
 	}
 

@@ -13,15 +13,27 @@ over `rontolisp:tls-upgrade`, 400 Gray input protocol).
 
 With the spike shims, dexador RUNS on interpreter, JVM and WASM `--component`:
 get/post/headers/UTF-8/gzip/redirect/404 condition/cookie-jar all OK; `https://`
-OK on those three (IP-literal URLs until `.todo/048`). Preview 1 does not run it
-(405 below). Re-probe rows that predate later fixes: `:want-stream t` (400 now
-done) and the secondary values (397 now done).
+OK on those three (IP-literal URLs until `.todo/048`). Re-probe rows that predate
+later fixes: `:want-stream t` (400 now done) and the secondary values (397 now
+done).
 
-Open children:
-
-1. `.todo/405` -- WASM Preview 1 has no non-blocking input probe, so `listen`
-   is a compile error; a dexador program now COMPILES to Preview 1 and refuses
-   at run time.
+No open children. Done 2026-11-06 (`.todo/405`): the Preview 1 leg. WASI
+Preview 1 has no client socket API, so a Preview 1 module reaches sockets only
+under the `--native` runner (`.kb/tcp-sockets.md`, "--native: the runner's
+sockets"); that is the leg, and unpatched dexador's get/post (status, headers,
+a UTF-8 form body, an alist body, a pooled second request) prints there what it
+prints on the interpreter, the JVM and the component. A plain `.wasm` under
+`wasmtime run` compiles and refuses at the first socket call, naming
+`--native`. What it took: the client tls pair is a call-time error on Preview 1
+(it was a compile error, so every dexador program was refused there); a native
+`listen` asks the kernel, so a `:want-stream` body's drain empties the pooled
+connection; `usocket:wait-for-input` has one shape on every backend. On the way:
+since 2026-11-05 no dexador program compiled on the JVM (the eval'd-setf dispatch
+over its 451 setf functions was one method past 64 KB); it is segmented now.
+`https://` from an executable signals (no TLS there, `.kb/tcp-sockets.md`, "Not
+supported"), as the definition of done allows. For the coverage still to add:
+neither `ExamplesE2eTest` nor ci-spec has a `--native` leg -- `NativeTcpTest` is
+where an executable runs a socket program.
 
 Done 2026-11-06 (`.todo/415`): the component's read deadline is real, so
 dexador's DEFAULT `:read-timeout 10` runs there unpatched -- two keep-alive
@@ -31,8 +43,8 @@ requests over one pooled connection (the `listen` drain between them),
 workaround is left to carry.
 
 Operational note: trivial-mimes needs `/etc/mime.types` at LOAD time, so the
-component needs `--dir /etc`. Decide at close: document it, or give
-trivial-mimes a built-in fallback table.
+component needs `--dir /etc` (a native executable preopens `/` and reads it).
+Decide at close: document it, or give trivial-mimes a built-in fallback table.
 
 ## Deferred alternative: a shim over `rontolisp:fetch`
 

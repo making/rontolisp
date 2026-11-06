@@ -70,8 +70,10 @@ HTTPS リクエストには [`rontolisp:fetch`](rontolisp-fetch.md) を使って
   `:insecure` 値は黙って検証する代わりに**エラーを通知**します。この
   インターフェイスは明示的に実験段階のドラフトなので、wasmtime の更新に
   rontolisp 側の追随が必要になることがあります。
-- **WASM Preview 1**: 非サポート — **コンパイルエラー**です(Preview 1 には
-  `wasi:tls` のホスト API が存在しません)。
+- **WASM Preview 1** ([ネイティブ実行ファイル](../../compiling/native.md#tcp-sockets)を含む):
+  非サポート — 呼び出しは**実行時にエラーを通知**します(Preview 1 には TLS の
+  ホスト API が存在しません)。そのため、その呼び出しに到達しないプログラムは
+  コンパイルできます。
 - **ブラウザプレイグラウンド**: サポートされません — ブラウザのサンドボックスには
   生の TCP ソケットがないため、`tls-upgrade` はエラーを通知します。
 
