@@ -114,7 +114,8 @@ print control holds both, and its `%print-object-leaf` hands `%pc-walk` only ato
 **Invariant:** a two-element list headed by `quote`/`function` prints `'x`/`#'x` (CLHS 22.1.3.7,
 unconditional); three or more elements, or an improper tail, print in full. A symbol whose name is
 empty, not upcase-invariant, holds a character the reader rejects in a bare token, or would not read
-as a symbol (below) prints `|...|`-framed under `prin1` with embedded `|`/`\` doubled; `princ` never
+as a symbol (below), or holds a colon (a package marker to a bare re-read, CLHS 2.3.5: `|a:b|`,
+`P::|b:c|`, `:|k:w|`, `#:|u:v|`), prints `|...|`-framed under `prin1` with embedded `|`/`\` doubled; `princ` never
 escapes. Abbreviation applies under BOTH
 `prin1` and `princ` (ECL behavior); the two gate independently.
 
@@ -142,19 +143,26 @@ escapes. Abbreviation applies under BOTH
   (prin1-to-string (intern "10")))` reads the symbol back on all four (`.kb/read-load-streams.md`,
   "Escapes").
 - The empty name: `||`, `#:||`, `:||` and `P::||` come out of the twins' empty-member arm. `cl-user`'s has
-  the spelling of its own `.kb/symbol-runtime-api.md`, "The empty name", describes, and the twins print
-  that one as `||`.
+  the spelling of its own `.kb/symbol-runtime-api.md`, "The empty name", describes, as has a `cl-user`
+  name holding a colon, and the twins print both as bare (`LispSymbol.framedClUserMember`: `_symEsc` drops
+  the `CL-USER::` prefix, `_sym_esc_gc` skips it where the string table can hold such a name,
+  `StringTable.holdsFramedClUserName`).
+- The member princ and `symbol-name` answer is what follows the first colon and a second right behind it
+  (`_lispToDisplayString`, `FUNC_PRINC_VAL`'s symbol arm, `LispSymbol.memberName`), so a member keeps its
+  colons; both took what follows the LAST colon until 2026-11-06.
 - `%print-case-fold` converts only what stands ahead of the first `|`: the escaped member is never
   recased (`|Foo|` under `:downcase`, `pkg::|1E5|`). Until 2026-11-05 it folded the whole text.
 - Non-constituent set (space, tab, newline, CR, form feed, `(`, `)`, `'`, `"`, `;`, `,`, `` ` ``,
   `|`, `\`) is enumerated identically in `LispSymbol.isBareConstituent`, `buildSymEscBody` and
-  `SYM_ESC_FORBIDDEN` — change one, change all three.
+  `SYM_ESC_FORBIDDEN` — change one, change all three. The colon is in the two compiled lists and in
+  `LispSymbol.needsEscape` beside `isBareConstituent` (a constituent, but a package marker).
 - **Trap:** `type-of`/`%symbol-home` read a `%class-`/`%struct-` tag off
   `(prin1-to-string designator)` by substring match; an unqualified tag round-trips as
   `"|%struct-PT|"` and breaks it. Fixed by prelude `%unescaped-symbol-text`
   (`LispNames.UNESCAPED_SYMBOL_TEXT_INTERNAL`), peeling exactly one leading/trailing `|`;
   `print-unreadable-object :type t` (`LispMacroExpander.typeNameOf`) INLINES the identical peel.
-  **Re-evaluate the trio together** if the escaping rule changes shape.
+  **Re-evaluate the trio together** if the escaping rule changes shape. `%symbol-home` answers `cl-user`
+  for a text a bar opens before peeling: the peel made `|a:b|` the qualified `a:b`.
 - `LispVal.print()` is reused by ~100 tests as an AST-dump convenience.
 
 ## The package qualifier follows `*package*` accessibility

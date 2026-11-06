@@ -228,7 +228,8 @@ public final class LispInstance implements LispVal {
 		try {
 			// The type name is a symbol, so princ writes its name alone (CLHS
 			// 22.1.3.3.1).
-			String name = LispSymbol.CL_USER_EMPTY_NAME.equals(this.layout.printName()) ? "" : this.layout.printName();
+			String framed = LispSymbol.framedClUserMember(this.layout.printName());
+			String name = framed != null ? framed : this.layout.printName();
 			StringBuilder sb = new StringBuilder(this.layout.openDelimiter())
 				.append(escape ? name : name.substring(name.lastIndexOf(':') + 1));
 			for (int i = 0; i < this.layout.slotCount(); i++) {

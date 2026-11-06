@@ -671,13 +671,15 @@ public final class LispPreludeLibrary {
 		// spelling: prin1-to-string keeps it, unlike symbol-name. A bare symbol is a cl
 		// or a cl-user one, and symbol-package tells them apart by the table of the
 		// standard names; the package walks, which look the symbol up in that home
-		// anyway, take the spelling's answer and carry no table. The interpreter
+		// anyway, take the spelling's answer and carry no table. A text a bar opens is a
+		// bare spelling's, |a:b| too: a qualifier prints as it is. The interpreter
 		// overrides symbol-package with the registry-backed version.
 		SOURCES.put(LispNames.SYMBOL_HOME_INTERNAL, """
 				(defun %symbol-home (symbol)
-				  (let* ((s (%unescaped-symbol-text (%prin1-to-string symbol)))
+				  (let* ((p (%prin1-to-string symbol))
+				         (s (%unescaped-symbol-text p))
 				         (n (length s)))
-				    (cond ((= n 0) :cl-user)
+				    (cond ((or (= n 0) (char= (char p 0) #\\|)) :cl-user)
 				          ((char= (char s 0) #\\:) :keyword)
 				          ((and (> n 1) (char= (char s 0) #\\#) (char= (char s 1) #\\:)) nil)
 				          (t (let ((idx (position #\\: s)))

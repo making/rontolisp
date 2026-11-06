@@ -19406,15 +19406,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void uninternedSymbolWithAColonPrintsEscapedAndReadsBack() {
-		// A colon in an uninterned member must be |...|-escaped: a bare one behind
-		// #: is a package marker the reader refuses (CLHS 2.4.8.5), so the printer
-		// spells it escaped and the spelling reads back.
+	void aSymbolWithAColonInItsNamePrintsEscapedAndReadsBack() {
+		// A colon in a member must be |...|-escaped: a bare one is a package marker
+		// (CLHS 2.3.5; behind #: one the reader refuses, 2.4.8.5), so the printer spells
+		// it escaped and the spelling reads back. An escaped one is a constituent, so
+		// |a:b| is cl-user's symbol of that name.
 		assertThat(evalMulti("""
 				(list (prin1-to-string (make-symbol ":"))
 				      (symbol-name (read-from-string (prin1-to-string (make-symbol ":"))))
-				      (prin1-to-string (make-symbol "a:b")))
-				""").print()).isEqualTo("(\"#:|:|\" \":\" \"#:|a:b|\")");
+				      (prin1-to-string (make-symbol "a:b"))
+				      (symbol-name '|a:b|) (prin1-to-string 'a\\:b) (package-name (symbol-package '|:x|))
+				      (eq '|a:b| (read-from-string (prin1-to-string '|a:b|)))
+				      (prin1-to-string (read-from-string "(|?:| . 12)")))
+				""").print())
+			.isEqualTo("(\"#:|:|\" \":\" \"#:|a:b|\" \"a:b\" \"|A:B|\" \"COMMON-LISP-USER\" T \"(|?:| . 12)\")");
 	}
 
 	@Test

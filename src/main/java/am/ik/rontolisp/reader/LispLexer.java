@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceLocation;
 import org.jspecify.annotations.Nullable;
 
@@ -1332,6 +1333,12 @@ public final class LispLexer {
 		boolean hashColonPrefix = this.pos + 1 < this.input.length() && this.input.charAt(this.pos) == '#'
 				&& this.input.charAt(this.pos + 1) == ':';
 		boolean unescapedColon = false;
+		// CLHS 2.3.5: only an unescaped colon is a package marker. A token with an
+		// escaped one and no other names a member of the current package, colons and all
+		// (|a:b|, a\:b), which the resolver reads through
+		// PackageRegistry.CURRENT_PACKAGE_QUALIFIER.
+		boolean packageMarker = false;
+		boolean escapedColon = false;
 		StringBuilder sb = new StringBuilder();
 		// A readtable case other than :upcase converts the token as a whole (:invert asks
 		// whether ALL its unescaped letters share a case), so the unescaped characters
@@ -1346,6 +1353,7 @@ public final class LispLexer {
 				if (escaped != null) {
 					escaped.set(sb.length());
 				}
+				escapedColon |= this.input.charAt(this.pos + 1) == ':';
 				sb.append(this.input.charAt(this.pos + 1));
 				this.pos += 2;
 				continue;
@@ -1363,10 +1371,12 @@ public final class LispLexer {
 						escaped.set(sb.length());
 					}
 					if (e == '\\' && this.pos + 1 < this.input.length()) {
+						escapedColon |= this.input.charAt(this.pos + 1) == ':';
 						sb.append(this.input.charAt(this.pos + 1));
 						this.pos += 2;
 						continue;
 					}
+					escapedColon |= e == ':';
 					sb.append(e);
 					this.pos++;
 				}
@@ -1382,17 +1392,17 @@ public final class LispLexer {
 			if (c == ':' && hashColonPrefix && sb.length() >= 2) {
 				unescapedColon = true;
 			}
+			packageMarker |= c == ':';
 			sb.append(upcase ? Character.toUpperCase(c) : c);
 			this.pos++;
 		}
 		if (unescapedColon) {
 			throw err("Package marker in uninterned symbol: " + this.input.substring(start, this.pos));
 		}
-		if (escaped != null) {
-			return new Token.SymbolToken(
-					java.util.Objects.requireNonNull(this.syntax).convertCase(sb.toString(), escaped));
-		}
-		return new Token.SymbolToken(sb.toString());
+		String name = escaped != null
+				? java.util.Objects.requireNonNull(this.syntax).convertCase(sb.toString(), escaped) : sb.toString();
+		return new Token.SymbolToken(
+				escapedColon && !packageMarker ? PackageRegistry.currentPackageSpelling(name) : name);
 	}
 
 	// A token that started as a number but fell back to a symbol (e.g. "1+"). These

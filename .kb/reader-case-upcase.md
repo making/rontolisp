@@ -8,7 +8,10 @@ package members too (`rl:fetch` -> `RL:FETCH`).
 
 ## Reader and runtime
 - Escapes are per-character in `LispLexer.readSymbol` (the ONLY place escape info exists): `\c`
-  or anything inside `|...|` is verbatim, so `|car|` is distinct from `CAR`. The number-fallback
+  or anything inside `|...|` is verbatim, so `|car|` is distinct from `CAR`. An escaped colon is no
+  package marker: a token holding one and no unescaped one leaves the lexer as
+  `PackageRegistry.currentPackageSpelling`, which the resolver reads as a bare token of the whole name
+  (`.kb/read-load-streams.md`, "Emitted reader: frontend parity", the colon bullet). The number-fallback
   token (`numberFallbackSymbol`, e.g. `1+`) upcases like any symbol.
 - `intern`/`make-symbol`/`find-symbol` are VERBATIM on every backend ([[symbol-runtime-api]]);
   `intern` still homes a bare name via `internSpelling`.

@@ -7147,7 +7147,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				rdArrayNBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
 				rdPackedBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
 				rdStructBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
-				rdTokenBody = WasmReadRuntimeBuilder.buildRdI32Stub();
+				rdTokenBody = WasmReadRuntimeBuilder.buildRdTokenStub();
 				rdLenBody = WasmReadRuntimeBuilder.buildRdI32Stub();
 				rdLevelBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
 				rdDimsBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
@@ -7170,7 +7170,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			rdArrayNBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
 			rdPackedBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
 			rdStructBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
-			rdTokenBody = WasmReadRuntimeBuilder.buildRdI32Stub();
+			rdTokenBody = WasmReadRuntimeBuilder.buildRdTokenStub();
 			rdLenBody = WasmReadRuntimeBuilder.buildRdI32Stub();
 			rdLevelBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
 			rdDimsBody = WasmReadRuntimeBuilder.buildRdEqrefStub();
@@ -7521,11 +7521,12 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(1);
 					w.write(Type.I32);
 				});
-				// type 42 (TYPE_RD_TOKEN): _rd_token () -> i32
+				// type 42 (TYPE_RD_TOKEN): _rd_token () -> (i32, i32)
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(0);
-					w.write(1);
+					w.write(2);
+					w.write(Type.I32);
 					w.write(Type.I32);
 				});
 				// type 43 (TYPE_RD_MEMEQ): _rd_memeq (i32, i32, i32) -> i32
@@ -8267,7 +8268,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_READ_LINE_FD); // _rd_arrayn (rank) -> value
 				fnDef.addFunction(TYPE_READ_LINE_FD); // _rd_packed (single) -> value
 				fnDef.addFunction(TYPE_READ_LINE); // _rd_struct () -> value
-				fnDef.addFunction(TYPE_RD_TOKEN); // _rd_token () -> i32
+				fnDef.addFunction(TYPE_RD_TOKEN); // _rd_token () -> (i32, i32)
 				fnDef.addFunction(TYPE_RAT_GET); // _rd_len (v) -> i32
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _rd_level (v) -> value
 				fnDef.addFunction(TYPE_RD_DIMS); // _rd_dims (rows, rank) -> dims
@@ -9271,8 +9272,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringRuntimeBuilder.buildWriteStrGcBody());
 				// _sym_esc_gc (FUNC_SYM_ESC_GC): the |...|-escaping half of
 				// *print-escape* = t for a bare symbol name.
-				code.addFunction(WasmStringRuntimeBuilder
-					.buildSymEscGcBody(stringTable.offsetOrNone(LispSymbol.CL_USER_EMPTY_NAME)));
+				code.addFunction(WasmStringRuntimeBuilder.buildSymEscGcBody(stringTable.holdsFramedClUserName()));
 				// _charvec_to_str (FUNC_CHARVEC_TO_STR): normalize a mutable character
 				// vector into the equivalent runtime string.
 				code.addFunction(WasmStringRuntimeBuilder.buildCharvecToStrBody());
@@ -14587,6 +14587,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		int offsetOrNone(String text) {
 			StringEntry entry = this.cache.get(text);
 			return entry == null ? -1 : entry.offset();
+		}
+
+		/**
+		 * Whether the table holds a spelling {@link LispSymbol#clUserSpelling} qualified,
+		 * or the qualifier a run-time build of one starts with.
+		 */
+		boolean holdsFramedClUserName() {
+			for (String text : this.cache.keySet()) {
+				if (text.startsWith(LispSymbol.CL_USER_EMPTY_NAME)
+						&& (text.length() == LispSymbol.CL_USER_EMPTY_NAME.length()
+								|| LispSymbol.framedClUserMember(text) != null)) {
+					return true;
+				}
+			}
+			return false;
 		}
 
 		/**

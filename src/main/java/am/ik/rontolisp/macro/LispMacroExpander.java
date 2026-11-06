@@ -16095,7 +16095,8 @@ public final class LispMacroExpander {
 	 * it.
 	 */
 	private static String builtSpelling(String pkg, LispString name, BakedSymbolAccess access) {
-		return LispNames.CL_USER_PKG.equalsIgnoreCase(pkg) ? name.value()
+		return LispNames.CL_USER_PKG.equalsIgnoreCase(pkg)
+				? name.value().indexOf(':') < 0 ? name.value() : LispSymbol.clUserSpelling(name.value())
 				: builtQualifier(pkg, name, access) + name.value();
 	}
 
@@ -16154,12 +16155,7 @@ public final class LispMacroExpander {
 		if (LispNames.CL_PKG.equalsIgnoreCase(pkg) && name instanceof LispString str) {
 			return PackageRegistry.isClMemberName(str.value()) ? quoteOf(str.value()) : LispNil.INSTANCE;
 		}
-		if (LispNames.CL_PKG.equalsIgnoreCase(pkg) || LispNames.CL_USER_PKG.equalsIgnoreCase(pkg)) {
-			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name));
-		}
-		LispVal qualified = listToCons(
-				List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"), new LispString(qualifier), name));
-		return listToCons(List.of(new LispSymbol(LispNames.INTERN), qualified));
+		return internSpellingBuild(pkg, qualifier, name);
 	}
 
 	/**
@@ -18247,6 +18243,9 @@ public final class LispMacroExpander {
 
 	private static final String FIND_SYMBOL_NAME_VAR = "%FIND-SYMBOL-NAME";
 
+	/** The temporary a computed name interned in {@code cl-user} is bound to. */
+	private static final String CL_USER_INTERN_NAME_VAR = "%CL-USER-INTERN-NAME";
+
 	/** The temporaries the {@code uiop:symbol-call} lowering binds its arguments to. */
 	private static final String UIOP_SYMBOL_CALL_PKG_VAR = "%UIOP-SC-PKG";
 
@@ -18432,8 +18431,16 @@ public final class LispMacroExpander {
 						listToCons(List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"),
 								new LispString(":"), nameVar)))));
 		for (String bare : List.of(LispNames.CL_PKG, LispNames.CL_USER_PKG)) {
+			// cl-user's name holding a colon keeps its qualifier
+			// (LispSymbol.clUserSpelling)
+			LispVal spelling = LispNames.CL_USER_PKG.equals(bare)
+					? makeIf(listToCons(List.of(new LispSymbol(LispNames.FIND), new LispChar(':'), nameVar)),
+							listToCons(List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"),
+									new LispString(LispSymbol.CL_USER_EMPTY_NAME), nameVar)),
+							nameVar)
+					: nameVar;
 			clauses.add(listToCons(List.of(listToCons(List.of(new LispSymbol(LispNames.STRING_EQ), pkgString,
-					new LispString(bare.toUpperCase(java.util.Locale.ROOT)))), nameVar)));
+					new LispString(bare.toUpperCase(java.util.Locale.ROOT)))), spelling)));
 		}
 		LispVal external = listToCons(List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"), pkgString,
 				new LispString(":"), nameVar));
@@ -18554,13 +18561,31 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The spelling build of {@code (intern NAME PKG)} for a literal package: bare in
-	 * {@code cl} / {@code cl-user}, {@code QUALIFIER NAME} elsewhere
-	 * ({@link #builtQualifier}).
+	 * The spelling build of {@code (intern NAME PKG)} for a literal package, shared with
+	 * {@code find-symbol}'s: bare in {@code cl} / {@code cl-user} (a {@code cl-user} name
+	 * holding a colon spelled {@link LispSymbol#clUserSpelling}'s way), {@code QUALIFIER
+	 * NAME} elsewhere ({@link #builtQualifier}).
 	 */
 	private static LispVal internSpellingBuild(String pkg, String qualifier, LispVal name) {
-		if (LispNames.CL_PKG.equalsIgnoreCase(pkg) || LispNames.CL_USER_PKG.equalsIgnoreCase(pkg)) {
+		if (LispNames.CL_PKG.equalsIgnoreCase(pkg)) {
 			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name));
+		}
+		if (LispNames.CL_USER_PKG.equalsIgnoreCase(pkg)) {
+			// A name holding a colon keeps cl-user's qualifier
+			// (LispSymbol.clUserSpelling),
+			// which the one-argument intern takes as spelled.
+			if (name instanceof LispString str) {
+				return listToCons(List.of(new LispSymbol(LispNames.INTERN),
+						str.value().indexOf(':') < 0 ? str : new LispString(LispSymbol.clUserSpelling(str.value()))));
+			}
+			LispSymbol nameVar = new LispSymbol(CL_USER_INTERN_NAME_VAR);
+			LispVal spelling = makeIf(listToCons(List.of(new LispSymbol(LispNames.FIND), new LispChar(':'), nameVar)),
+					listToCons(List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"),
+							new LispString(LispSymbol.CL_USER_EMPTY_NAME), nameVar)),
+					nameVar);
+			return listToCons(
+					List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(nameVar, name)))),
+							listToCons(List.of(new LispSymbol(LispNames.INTERN), spelling))));
 		}
 		LispVal qualified = listToCons(
 				List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"), new LispString(qualifier), name));
