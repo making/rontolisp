@@ -7125,6 +7125,29 @@ public final class LispNames {
 	public static final String JSON_STRINGIFY = "JSON-STRINGIFY";
 
 	/**
+	 * The {@code json-span} function provided by the {@code rontolisp} package: over a
+	 * JSON document's bytes -- a string, an octet vector, or an address and a size of a
+	 * wasm module's linear memory -- it validates the document and answers the byte range
+	 * of the value a path of keys and indexes leads to, where an edit splices it
+	 * ({@code .kb/json.md}, "json-span").
+	 */
+	public static final String JSON_SPAN = "JSON-SPAN";
+
+	/**
+	 * The {@code json-value} function provided by the {@code rontolisp} package: what
+	 * {@code json-parse} answers for the value {@code json-span} finds, and whether it
+	 * found one.
+	 */
+	public static final String JSON_VALUE = "JSON-VALUE";
+
+	/**
+	 * The internal {@code rontolisp::%json-scan} primitive: the wasm-GC backend's native
+	 * {@code json-span} scan ({@code WasmJsonSpanRuntimeBuilder}), which
+	 * {@code json.lisp}'s {@code %json-native-scan} calls on that backend alone.
+	 */
+	public static final String JSON_SCAN_INTERNAL = "%JSON-SCAN";
+
+	/**
 	 * The internal {@code rontolisp::%json-decode} primitive: the wasm-GC backend's
 	 * native JSON parser ({@code WasmJsonRuntimeBuilder}), which {@code json.lisp}'s
 	 * {@code %json-native-parse} calls on that backend alone ({@code .kb/json.md}).
@@ -8613,6 +8636,9 @@ public final class LispNames {
 
 	/** The canonical spelling of {@code rontolisp::%json-encode}. */
 	public static final String JSON_ENCODE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + JSON_ENCODE_INTERNAL;
+
+	/** The canonical spelling of {@code rontolisp::%json-scan}. */
+	public static final String JSON_SCAN_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + JSON_SCAN_INTERNAL;
 
 	/**
 	 * The canonical internal-qualified spelling of

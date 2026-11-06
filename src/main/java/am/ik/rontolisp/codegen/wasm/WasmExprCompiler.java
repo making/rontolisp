@@ -737,8 +737,9 @@ final class WasmExprCompiler {
 					return;
 				}
 				if (LispNames.JSON_DECODE_INTERNAL.equals(qn.member())
-						|| LispNames.JSON_ENCODE_INTERNAL.equals(qn.member())) {
-					// json.lisp's wasm-GC entry points: the module's JSON codec.
+						|| LispNames.JSON_ENCODE_INTERNAL.equals(qn.member())
+						|| LispNames.JSON_SCAN_INTERNAL.equals(qn.member())) {
+					// json.lisp's wasm-GC entry points: the module's JSON codec and scan.
 					WasmJsonCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}

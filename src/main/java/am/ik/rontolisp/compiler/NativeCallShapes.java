@@ -137,6 +137,9 @@ final class NativeCallShapes {
 			add(rows, rontolisp(member), 1, 2);
 		}
 		add(rows, rontolisp(LispNames.MAKE_THREAD), 1, 3);
+		// the document, then the path's segments
+		add(rows, rontolisp(LispNames.JSON_SPAN), 1, UNBOUNDED);
+		add(rows, rontolisp(LispNames.JSON_VALUE), 1, UNBOUNDED);
 		add(rows, rontolisp(LispNames.TLS_LISTEN), 3, 4);
 		add(rows, rontolisp(LispNames.TLS_LISTEN_PEM), 3, 4);
 		rows.put(LispNames.CLOSE, new Row(LispNames.CLOSE, 1, 3, true));

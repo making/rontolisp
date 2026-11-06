@@ -47,6 +47,8 @@ package system. Each name below links to its own page.
 | `rontolisp:http-handler` | `(rontolisp:http-handler 'handle 8080)` | serve HTTP requests with a handler function taking the Clack environment plist and returning `(status headers body)` (a blocking server; a `wasi:http` component under `--component`) |
 | `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | parse a JSON string (jzon-compatible): objects become hash tables with string keys, arrays vectors |
 | `rontolisp:json-stringify` | `(rontolisp:json-stringify (vector 1 2))` | serialize a value to a JSON string (hash tables and CLOS instances become objects, lists and vectors arrays) |
+| `rontolisp:json-span` | `(rontolisp:json-span "{\"a\": [1]}" "a" 0)` | the byte offsets of the value a path of keys and indexes leads to in a JSON document (a string, octets, or bytes of linear memory), the document checked as `json-parse` checks it; where an edit splices |
+| `rontolisp:json-value` | `(rontolisp:json-value "{\"a\": [1]}" "a" 0)` | the value at a path of a JSON document as `json-parse` makes it, and whether there is one; nothing else of the document becomes Lisp values |
 | `rontolisp:plist-hash-table` | `(rontolisp:plist-hash-table (list :n 1))` | build a hash table from a property list (subset of `alexandria:plist-hash-table`); handy for JSON objects |
 | `rontolisp:hash-table-plist` | `(rontolisp:hash-table-plist h)` | property list of a hash table's pairs (subset of `alexandria:hash-table-plist`) |
 | `rontolisp:alist-hash-table` | `(rontolisp:alist-hash-table al)` | build a hash table from an association list (subset of `alexandria:alist-hash-table`) |
@@ -90,7 +92,10 @@ page for backend support and limitations. `rontolisp:json-parse` and
 fetch response body; see the
 [json-parse](rontolisp-json-parse.md) and
 [json-stringify](rontolisp-json-stringify.md) reference pages for
-the value mapping and limitations. The tcp functions
+the value mapping and limitations. [`rontolisp:json-span`](rontolisp-json-span.md)
+and [`rontolisp:json-value`](rontolisp-json-value.md) read and edit a large
+document without making Lisp values of all of it: byte offsets to splice at, or one
+value. The tcp functions
 (`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port` and
 the [address accessors](rontolisp-tcp-addresses.md))
 open plain TCP sockets whose handles work with the standard stream functions

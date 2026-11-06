@@ -19552,6 +19552,56 @@ class WasmLispCompilerIntegrationTest {
 				(dotimes (i 40) (setq *out* (rontolisp:json-stringify (rontolisp:json-parse *doc*))))
 				(print (list (length *doc*) (string= *doc* *out*)))
 				""")), 150_000_000L)).isEqualTo("(8491 T)");
+		// json-span over an address and a size reads linear memory where it is: the scan
+		// writes its quote past the bytes and puts the byte back (the 33, and the 125 of a
+		// cut document), copies bytes the memory ends with, and refuses bytes past it
+		// (.kb/json.md, "json-span"). The interpreter and the JVM have no address form.
+		String memory = """
+				(rontolisp:wasm-import 'alloc :from "rontolisp:memory" :as "alloc" :params '(:u32) :returns :u32)
+				(rontolisp:wasm-import 'load8 :from "rontolisp:memory" :as "load8" :params '(:u32) :returns :u32)
+				(rontolisp:wasm-import 'store8 :from "rontolisp:memory" :as "store8" :params '(:u32 :u32))
+				(defun put (text address)
+				  (dotimes (i (length text) address)
+				    (store8 (+ address i) (char-code (char text i)))))
+				(defun span (address size &rest path)
+				  (handler-case (multiple-value-list (apply #'rontolisp:json-span address size path))
+				    (error (e) (princ-to-string e))))
+				""";
+		assertThat(compileAndRunProgram(jsonSpliced(LispReader.readAllFromString(memory + """
+				(defvar *doc* "{\\"a\\":[1,{\\"b\\":\\"x\\"}],\\"c\\":true}")
+				(let* ((n (length *doc*)) (address (put *doc* (alloc (+ n 1)))))
+				  (store8 (+ address n) 33)
+				  (print (list (span address n "a" 1 "b") (load8 (+ address n))))
+				  (print (list (span address (- n 1)) (load8 (+ address (- n 1)))))
+				  (print (multiple-value-list (rontolisp:json-value address n "c"))))
+				(let ((lo 0) (hi 4294967295))
+				  (do ()
+				      ((<= (- hi lo) 1))
+				    (let ((mid (floor (+ lo hi) 2)))
+				      (if (search "outside" (span mid 0)) (setq hi mid) (setq lo mid))))
+				  (let ((address (put *doc* (- lo (length *doc*)))))
+				    (print (list (span address (length *doc*) "c") (span lo 1))))))
+				"""))))
+			.isEqualTo("((13 16 NIL 9 16) 33)\n(\"json-span: unterminated object\" 125)\n(T T)\n"
+					+ "((23 27 NIL 18 27) \"json-span: the address and the size name bytes outside the memory\")");
+		// A byte costs the scan's loops: 200 scans of the 8,491 bytes above, in memory,
+		// measured 2026-11-06 (wasmtime 49) at 27.1 M fuel beside the 26.4 M the
+		// document's making takes, 16 a byte, where the codec's parse and stringify took
+		// 118.
+		assertThat(compileAndRunWithFuel(jsonSpliced(LispReader.readAllFromString(memory + """
+				(defvar *doc*
+				  (let ((parts (list "{\\"items\\":[")))
+				    (dotimes (i 300)
+				      (when (> i 0) (push "," parts))
+				      (push (format nil "{\\"id\\":~a,\\"name\\":\\"item-~a\\"}" i i) parts))
+				    (push "]}" parts)
+				    (apply #'concatenate 'string (nreverse parts))))
+				(defvar *address* (put *doc* (alloc (length *doc*))))
+				(defvar *out* nil)
+				(dotimes (i 200)
+				  (setq *out* (span *address* (length *doc*) "items" 299 "name")))
+				(print (list (length *doc*) *out*))
+				""")), 80_000_000L)).isEqualTo("(8491 (8478 8488 NIL 8470 8488))");
 	}
 
 	@Test

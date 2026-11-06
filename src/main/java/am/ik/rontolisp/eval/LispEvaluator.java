@@ -3953,6 +3953,23 @@ public final class LispEvaluator {
 			}
 			return applyJsonHelper(JsonLibrary.HELPER_STRINGIFY, List.of(args.get(0)));
 		}));
+		// json-span and json-value: the document, then the path's segments, as one list.
+		// They pass on the helper's values (passesValues).
+		for (String member : new String[] { LispNames.JSON_SPAN, LispNames.JSON_VALUE }) {
+			String name = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, member);
+			String helper = member.equals(LispNames.JSON_SPAN) ? JsonLibrary.HELPER_SPAN : JsonLibrary.HELPER_VALUE;
+			this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+				if (args.isEmpty()) {
+					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+							Objects.requireNonNull(BuiltinCallArity.wrongCountMessage(name, 0)));
+				}
+				LispVal path = LispNil.INSTANCE;
+				for (int i = args.size() - 1; i >= 1; i--) {
+					path = new LispCons(args.get(i), path);
+				}
+				return applyJsonHelper(helper, List.of(args.get(0), path));
+			}, true));
+		}
 		this.globalEnv.defineFunction(LispNames.MAPCAR, new LispFunction(LispNames.MAPCAR,
 				args -> mapValues(LispNames.MAPCAR, args.get(0), requireMapLists(LispNames.MAPCAR, args), false)));
 		this.globalEnv.defineFunction(LispNames.MAPC, new LispFunction(LispNames.MAPC,

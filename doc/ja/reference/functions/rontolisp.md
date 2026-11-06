@@ -47,6 +47,8 @@
 | `rontolisp:http-handler` | `(rontolisp:http-handler 'handle 8080)` | Clack の環境 plist を受け取り `(status headers body)` を返すハンドラ関数でHTTPリクエストを処理します（ブロッキングサーバ。`--component` では `wasi:http` コンポーネント） |
 | `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | JSON文字列をパースします（jzon互換）: オブジェクトは文字列キーのハッシュテーブル、配列はベクタになります |
 | `rontolisp:json-stringify` | `(rontolisp:json-stringify (vector 1 2))` | 値をJSON文字列にシリアライズします（ハッシュテーブルとCLOSインスタンスはオブジェクト、リストとベクタは配列） |
+| `rontolisp:json-span` | `(rontolisp:json-span "{\"a\": [1]}" "a" 0)` | JSONドキュメント（文字列、オクテット列、線形メモリのバイト列）の中で、キーとインデックスのパスが指す値のバイトオフセットを返します。ドキュメントは `json-parse` と同じ基準で検査します。編集はこの範囲に対して行います |
+| `rontolisp:json-value` | `(rontolisp:json-value "{\"a\": [1]}" "a" 0)` | JSONドキュメントのパスが指す値を `json-parse` と同じ形で返し、値の有無も返します。ドキュメントの残りはLispの値になりません |
 | `rontolisp:plist-hash-table` | `(rontolisp:plist-hash-table (list :n 1))` | プロパティリストからハッシュテーブルを構築します（`alexandria:plist-hash-table` のサブセット）。JSONオブジェクトに便利です |
 | `rontolisp:hash-table-plist` | `(rontolisp:hash-table-plist h)` | ハッシュテーブルのペアのプロパティリスト（`alexandria:hash-table-plist` のサブセット） |
 | `rontolisp:alist-hash-table` | `(rontolisp:alist-hash-table al)` | 連想リストからハッシュテーブルを構築します（`alexandria:alist-hash-table` のサブセット） |
@@ -81,7 +83,7 @@
 [HTTPサーバガイド](../../guides/http-handler.md)を、バックエンドのサポートと制限は
 [http-handler](rontolisp-http-handler.md) のリファレンスページを参照してください。`rontolisp:json-parse` と `rontolisp:json-stringify` はJSONドキュメントとLispの値を相互変換します（`com.inuoe.jzon` 互換の軽量サブセット。fetchレスポンスボディのパースなどに使えます）。値の対応と制限については
 [json-parse](rontolisp-json-parse.md) と
-[json-stringify](rontolisp-json-stringify.md) のリファレンスページを参照してください。tcp関数（`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port` および[アドレスアクセサ](rontolisp-tcp-addresses.md)）は素のTCPソケットを開き、そのハンドルには標準のストリーム関数（`read-line` / `write-line` / `read-byte` / `write-byte` / `close`）がそのまま使えます。echoサーバーの実例は
+[json-stringify](rontolisp-json-stringify.md) のリファレンスページを参照してください。[`rontolisp:json-span`](rontolisp-json-span.md) と [`rontolisp:json-value`](rontolisp-json-value.md) は、大きなドキュメント全体をLispの値にせずに読み書きします。前者は編集するためのバイトオフセットを、後者は1つの値を返します。tcp関数（`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` / `tcp-local-port` および[アドレスアクセサ](rontolisp-tcp-addresses.md)）は素のTCPソケットを開き、そのハンドルには標準のストリーム関数（`read-line` / `write-line` / `read-byte` / `write-byte` / `close`）がそのまま使えます。echoサーバーの実例は
 [TCPソケットガイド](../../guides/tcp-sockets.md)を、バックエンドのサポートと制限は
 [tcp-connect](rontolisp-tcp-connect.md)、
 [tcp-listen](rontolisp-tcp-listen.md)、
