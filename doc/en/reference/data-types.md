@@ -14,7 +14,7 @@
 | Pi | `pi` | The constant π, bound as a global holding the double `3.141592653589793`; a quoted `pi` stays the symbol |
 | Fixnum range | `most-positive-fixnum`, `most-negative-fixnum` | Bound as globals like `pi`; the value is backend-dependent (a WASM fixnum is an unboxed 31-bit reference, the interpreter and the JVM backend use 64-bit longs) |
 | Other limits | `char-code-limit`, `array-total-size-limit`, `array-dimension-limit`, `array-rank-limit`, `call-arguments-limit`, `lambda-parameters-limit`, `multiple-values-limit` | Bound as globals like the fixnum range; `char-code-limit` is `1114112` (full Unicode code points) on every backend, the array limits are backend-dependent |
-| Float range | `most-positive-double-float`, `least-positive-normalized-single-float`, `double-float-epsilon` | The standard float-range constants, bound as globals holding doubles like `pi`. `short-float` is `single-float` and `long-float` is `double-float`; since every float is a double here, a single-float bound answers the exact double of the binary32 number it names |
+| Float range | `most-positive-double-float`, `least-positive-normalized-single-float`, `double-float-epsilon` | The standard float-range constants, bound as globals holding doubles like `pi`. `short-float` is `single-float` and `long-float` is `double-float`; since every float is a double here, a single-float bound answers the exact double of the binary32 number it names (see "Float types" below) |
 | Cons | `(1 2 3)`, `(a . 1)` | Linked list built from cons cells; `(a . b)` is dotted-pair notation for a single cell |
 | Function | `#'car`, `(lambda (x) x)` | Function object obtained via `#'`/`function`/`lambda` |
 | Array | `#(1 2 3)`, `#2A((1 2) (3 4))`, `#0A5` | Fixed-size array of any rank (rank 1 = vector, rank 0 = a boxed scalar); `#(...)`, `#nA(...)` and `#0A<datum>` are self-evaluating array literals |
@@ -32,11 +32,33 @@ Float literals may carry a Common Lisp exponent marker -- a mantissa followed
 by one of `e`, `s`, `f`, `d`, `l` (case-insensitive), an optional sign, and an
 exponent, e.g. `1d0`, `1e0`, `1.5d3` (`1500.0`), `-2e-3`, `6.02e23`. This works
 in all three backends (it is a reader-level feature). **Unlike Common Lisp,
-rontolisp has a single floating-point type, so every marker reads as the same
-64-bit double** -- the single/short/long-float distinction (`1d0` vs `1e0` vs
-`1f0`) is not preserved, and `*read-default-float-format*` changes no read. A marker
-that is not followed by exponent digits is not a float: `1d` and `1d0x` read as
-symbols (like `1+`), not numbers.
+rontolisp has a single floating-point format, so every marker reads as a 64-bit
+double** -- `1d0`, `1e0` and `1l0` are the same value, `*read-default-float-format*`
+changes no read, and an `f` or `s` marker reads as the double nearest a binary32:
+`0.1f0` is `0.10000000149011612`, the value Common Lisp's single-float `0.1` holds
+(see "Float types" below). A marker that is not followed by exponent digits is not a
+float: `1d` and `1d0x` read as symbols (like `1+`), not numbers.
+
+### Float types
+
+Every float is a 64-bit double, so `float`, `double-float` and `long-float` name the
+same type: every float. `single-float` and `short-float` name the floats a binary32
+holds exactly -- a subset, so `(subtypep 'single-float 'double-float)` is `T` and the
+reverse is `NIL`. A library that picks a 32-bit encoding for a `single-float` writes
+those floats without loss and takes its double arm for the rest:
+
+```lisp
+(list (typep 1.5 'single-float) (typep 0.1 'single-float) (typep 0.1 'double-float))
+; => (T NIL T)
+```
+
+`(coerce x 'single-float)` answers the binary32 nearest `x` (through the double `x`
+converts to), and a `single-float` method is more specific than a `double-float` one.
+Arithmetic stays double: `(* 0.1f0 3)` is a double that a binary32 need not hold, and
+`float-digits` answers `53` for every float. `type-of` answers `FLOAT`. Common Lisp's
+standard allows either one float type or distinct ones; a type that is a subset of
+another is neither, and is what keeps a value a 32-bit encoding would truncate out of
+it.
 
 A decimal point does not need digits on both sides: `.4` is `0.4` (so `(a .5)` is the
 two-element list `(A 0.5)` -- a dotted pair must spell the dot bare, `(a . 5)`),

@@ -1854,6 +1854,8 @@ final class WasmExprCompiler {
 				ctx.writer.write(Instruction.F64_PROMOTE_F32);
 				WasmEmitHelper.boxF64(ctx);
 			}
+			case LispNames.SINGLE_FLOAT_P_INTERNAL -> WasmSingleFloatCompiler.compileSingleFloatP(cons, ctx);
+			case LispNames.SINGLE_FLOAT_INTERNAL -> WasmSingleFloatCompiler.compileSingleFloat(cons, ctx);
 			// The identity-hash slot an eq table places an aggregate by: a module
 			// calling this carries the slot (LispMacroExpander.programHashesByIdentity).
 			case LispNames.IDENTITY_HASH -> {

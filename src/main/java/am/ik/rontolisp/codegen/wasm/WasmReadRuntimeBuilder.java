@@ -2553,6 +2553,24 @@ final class WasmReadRuntimeBuilder {
 		ifVoid(w);
 		emitDecimalToF64(w, EXPVAL, EXPSGN, SCALE, K, BITS, MANT, SCALED, FACT, MV, FPOW);
 		setLocal(w, FVAL);
+		// An s or f marker (MARK holds it lowercased once SAWE is set) is a
+		// single-float: the binary32 nearest the double, as the frontend lexer reads it
+		// (am.ik.rontolisp.Binary32).
+		getLocal(w, SAWE);
+		getLocal(w, MARK);
+		i32(w, 's');
+		w.write(Instruction.I32_EQ);
+		getLocal(w, MARK);
+		i32(w, 'f');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		getLocal(w, FVAL);
+		w.write(Instruction.F32_DEMOTE_F64);
+		w.write(Instruction.F64_PROMOTE_F32);
+		setLocal(w, FVAL);
+		end(w);
 		getLocal(w, NEG);
 		ifVoid(w);
 		getLocal(w, FVAL);

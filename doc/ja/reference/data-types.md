@@ -14,7 +14,7 @@
 | Pi | `pi` | 定数 π。double値 `3.141592653589793` を保持するグローバル変数として束縛されます。クォートされた `pi` はシンボルのままです |
 | Fixnum 範囲 | `most-positive-fixnum`、`most-negative-fixnum` | `pi` と同様にグローバル変数として束縛されます。値はバックエンド依存です (WASM の fixnum はアンボックスの 31 ビット参照、インタープリターと JVM バックエンドは 64 ビット long) |
 | その他の限界値 | `char-code-limit`、`array-total-size-limit`、`array-dimension-limit`、`array-rank-limit`、`call-arguments-limit`、`lambda-parameters-limit`、`multiple-values-limit` | Fixnum 範囲と同様にグローバル変数として束縛されます。`char-code-limit` はすべてのバックエンドで `1114112` (Unicode コードポイント全域)、配列の限界値はバックエンド依存です |
-| 浮動小数点の範囲 | `most-positive-double-float`、`least-positive-normalized-single-float`、`double-float-epsilon` | 標準の浮動小数点範囲定数。`pi` と同様に double を保持するグローバル変数として束縛されます。`short-float` は `single-float`、`long-float` は `double-float` と同一で、本処理系の浮動小数点はすべて double のため、single-float の境界値はその binary32 値をそのまま double にした値になります |
+| 浮動小数点の範囲 | `most-positive-double-float`、`least-positive-normalized-single-float`、`double-float-epsilon` | 標準の浮動小数点範囲定数。`pi` と同様に double を保持するグローバル変数として束縛されます。`short-float` は `single-float`、`long-float` は `double-float` と同一で、本処理系の浮動小数点はすべて double のため、single-float の境界値はその binary32 値をそのまま double にした値になります (後述の「浮動小数点の型」を参照) |
 | Cons | `(1 2 3)`, `(a . 1)` | consセルで構築された連結リスト。`(a . b)` は単一セルを表すドット対記法 |
 | Function | `#'car`, `(lambda (x) x)` | `#'`/`function`/`lambda` で得られる関数オブジェクト |
 | Array | `#(1 2 3)`, `#2A((1 2) (3 4))`, `#0A5` | 任意の階数の固定サイズ配列(階数1はベクタ、階数0はスカラーの箱)。`#(...)`、`#nA(...)`、`#0A<datum>` は自己評価される配列リテラルです |
@@ -29,10 +29,28 @@
 浮動小数点リテラルにはCommon Lispの指数マーカーを付けられます。仮数部の後ろに
 `e`, `s`, `f`, `d`, `l` のいずれか(大文字小文字を区別しません)、省略可能な符号、そして指数を続けます。例:
 `1d0`, `1e0`, `1.5d3`(`1500.0`)、`-2e-3`, `6.02e23`。これは3つのバックエンドすべてで機能します(リーダレベルの機能です)。**Common
-Lispとは異なり、rontolispは浮動小数点型を1種類しか持たないため、すべてのマーカーは同じ
-64ビットdoubleとして読み込まれます** -- single/short/long-floatの区別(`1d0` 対 `1e0` 対
-`1f0`)は保持されず、`*read-default-float-format*` は読み取りを変えません。指数の数字が後続しないマーカーは浮動小数点ではありません。`1d`
+Lispとは異なり、rontolispは浮動小数点の形式を1種類しか持たないため、すべてのマーカーは
+64ビットdoubleとして読み込まれます** -- `1d0`、`1e0`、`1l0` は同じ値で、`*read-default-float-format*`
+は読み取りを変えません。`f` または `s` マーカーは binary32 に最も近い double として読み込まれます。`0.1f0` は
+`0.10000000149011612` で、これは Common Lisp の single-float の `0.1` が保持する値です(後述の「浮動小数点の型」を参照)。指数の数字が後続しないマーカーは浮動小数点ではありません。`1d`
 と `1d0x` は(`1+` と同様に)数値ではなくシンボルとして読み込まれます。
+
+### 浮動小数点の型
+
+浮動小数点はすべて64ビットdoubleなので、`float`、`double-float`、`long-float` は同じ型、すなわちすべての浮動小数点を表します。`single-float`
+と `short-float` は binary32 が正確に保持できる浮動小数点を表します。これは部分集合なので、`(subtypep 'single-float 'double-float)`
+は `T`、その逆は `NIL` です。`single-float` に32ビットの符号化を選ぶライブラリは、それらの値を欠損なく書き出し、それ以外は double
+の分岐に進みます。
+
+```lisp
+(list (typep 1.5 'single-float) (typep 0.1 'single-float) (typep 0.1 'double-float))
+; => (T NIL T)
+```
+
+`(coerce x 'single-float)` は `x` に最も近い binary32 を返し(`x` を変換した double を経由します)、`single-float`
+のメソッドは `double-float` のメソッドより特定的です。算術は double のままです。`(* 0.1f0 3)` は binary32
+が保持するとは限らない double で、`float-digits` はすべての浮動小数点で `53` を返します。`type-of` は `FLOAT`
+を返します。Common Lisp の規格は浮動小数点型が1種類の場合と互いに異なる型の場合のどちらも許しますが、一方が他方の部分集合である型はそのどちらでもありません。この形にしているのは、32ビットの符号化で切り詰められる値をこの型から締め出すためです。
 
 小数点の両側に数字は必要ありません。`.4` は `0.4` です(したがって `(a .5)` は 2 要素のリスト
 `(A 0.5)` です。ドット対は `(a . 5)` のようにドットを単独で書きます)。`1.e5` も浮動小数点です。指数を伴わない末尾のドットは 10

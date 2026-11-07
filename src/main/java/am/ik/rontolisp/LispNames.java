@@ -11423,6 +11423,22 @@ public final class LispNames {
 	public static final String IEEE754_SINGLE_FROM_BITS = "%IEEE754-SINGLE-FROM-BITS";
 
 	/**
+	 * {@code %single-float-p} -- the {@code single-float} type test: a float a binary32
+	 * holds exactly (a NaN included), nil for every other value. Every float here is one
+	 * binary64, so {@code single-float} names that SUBSET of the floats
+	 * ({@code .kb/declarations-type-checks.md}, "single-float is the floats a binary32
+	 * holds").
+	 */
+	public static final String SINGLE_FLOAT_P_INTERNAL = "%SINGLE-FLOAT-P";
+
+	/**
+	 * {@code %single-float} -- the binary32 nearest a float, as the float it is: what
+	 * {@code coerce} to {@code single-float} and an {@code f}/{@code s} exponent marker
+	 * answer.
+	 */
+	public static final String SINGLE_FLOAT_INTERNAL = "%SINGLE-FLOAT";
+
+	/**
 	 * {@code %identity-hash} -- the identity hash of an aggregate (a cons, a vector or
 	 * other array, a table, a function, an instance) as a signed 32-bit integer: the same
 	 * for the same object for its whole life whatever its contents do, the hash an

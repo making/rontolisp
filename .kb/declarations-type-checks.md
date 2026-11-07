@@ -50,7 +50,7 @@ Seven `LispMacroExpander` expansions (no per-backend codegen), in `PackageRegist
   run-time error is not copied because a class can be defined at run time on a compile path. The
   deciding measurement is a matrix of 140 specifiers against 55 values, literal `typep`, computed
   `typep` and `check-type`, on all four against SBCL 2.2.9 (fixes below). What differs from SBCL
-  afterwards is deliberate: the float and string name collapses, `standard-class` on a struct's
+  afterwards is deliberate: the binary32 float subset, the string name collapse, `standard-class` on a struct's
   class, `standard-object` on a condition, the `t` stream designator, a package being a keyword.
 - `assert` -> `(if test nil (error ...))`; the places list is dropped (no `continue`/`store-value`
   restart, though the restart system exists, [error-handling.md](error-handling.md)).
@@ -129,7 +129,8 @@ form may be evaluated several times, so callers bind a temp (`__check-type` / `_
   pinned, the `simple-` spelling ANDing `%simple-array-p` like every other `simple-` spelling.
   `CLASS`/`STRUCTURE`/`TYPE` joined CL_TYPES for a different reason: trivia NAMES its patterns with
   them, and the defpattern site and a user's pattern site must resolve to the same bare spelling.
-- **Atomic map** (`atomicTypePredicate`): integer/fixnum/bignum -> `integerp`, float* -> `floatp`,
+- **Atomic map** (`atomicTypePredicate`): integer/fixnum/bignum -> `integerp`, float/double-float/
+  long-float -> `floatp`, single-float/short-float -> `%single-float-p` (the next section),
   number/real -> `numberp`, rational -> `rationalp`, ratio -> `(and (rationalp v) (not (integerp v)))`
   (it was `rationalp` until 2026-10-31: jonathan's `(number)`/`(ratio)` methods sent `3` to the
   ratio one and printed `3.0`; ci-spec `library-shapes-own-while-...`), plus string, symbol, keyword, cons, list,
@@ -155,14 +156,11 @@ form may be evaluated several times, so callers bind a temp (`__check-type` / `_
   are not all registered CL symbols, so in a user package the resolver would qualify e.g.
   `unsigned-byte`. `CL_TYPES` registers the common type-only names so they resolve BARE -- required
   where the name reaches RUNTIME data (symbols compare by name).
-- **The four float type names are ONE type, and `subtypep` says so on purpose**
-  (`canonicalSubtypeName` collapses `single-`/`double-`/`short-`/`long-float` to `FLOAT`; CLHS
-  permits as few as one format, and postmodern's `json-encoder.lisp` probes it). A collapse claims
-  two names denote the SAME SET, so it answers `T` in both directions. **Trigger: if a distinct
-  single-float lands, `canonicalSubtypeName` must stop collapsing AND the lattice must gain the
-  real edges in the SAME pass**, or every library probing the float lattice silently takes the
-  wrong branch. `subtypep` returns ONE value here; `deftype` is a parsed no-op in this path.
-- **`bfloat16` is an EDGE below `FLOAT` (`SUBTYPEP_PARENTS`), never a fifth alias**, because its
+- **The float names are two types**: `float`/`double-float`/`long-float` one, `single-float`/
+  `short-float` the binary32 subset below it (next section). A collapse claims two names denote the
+  SAME SET, so it answers `T` in both directions; an edge answers it one way. `subtypep` returns ONE
+  value here; `deftype` is a parsed no-op in this path.
+- **`bfloat16` is an EDGE below `SINGLE-FLOAT` (`SUBTYPEP_PARENTS`), never an alias**, because its
   set is EMPTY -- no scalar has the type, the width lives in array storage (`.kb/bfloat16.md`) --
   so the symmetric claim is false. It was an alias from 2026-09-03 to 2026-09-08 and that cost
   twice: `(subtypep 'single-float 'bfloat16)` answered `T` against `(typep 1.0 'bfloat16)`'s `NIL`,
@@ -170,6 +168,53 @@ form may be evaluated several times, so callers bind a temp (`__check-type` / `_
   because `subtypepUniverse` derives the edge names from the table and lists the alias names BY
   HAND. **An edge is in the runtime universe by construction; an alias is only as present as that
   list.** Pins: `LispFloatArrayTest`, `JvmBFloat16ArrayTest`, ci-spec `bfloat16-type-lattice`.
+
+## single-float is the floats a binary32 holds
+**Every float is one binary64. `float`/`double-float`/`long-float` are that type; `single-float`/
+`short-float` are the SUBSET a binary32 holds exactly (a NaN included), on all four backends**
+(2026-11-07). One test, `%single-float-p` (`Binary32.holds`; JVM `Double.compare` over `d2f`/`f2d`;
+wasm `f32.demote_f64`/`f64.promote_f32` plus `f64.ne` for a NaN, since a demotion may invent one),
+behind `atomicTypePredicate`, so literal and computed `typep`, `typecase`, `check-type` and a method's
+specializer all take it. Lattice: `SINGLE-FLOAT` an edge below `FLOAT`, `BFLOAT16` below it,
+`SHORT-FLOAT` collapsed onto it, `DOUBLE-FLOAT`/`LONG-FLOAT` onto `FLOAT`; a single-float method ranks
+217, ahead of double-float's 218. `coerce` to it (literal, computed, a complex part) and an `f`/`s`
+exponent marker (the lexer and both runtime readers) answer `%single-float`, the binary32 nearest the
+double the value converts to. Unchanged: arithmetic (binary64), printing (`0.1f0` prints
+`0.10000000149011612`), `float-digits` 53, `type-of`/`class-of` `FLOAT`, `float`'s prototype (`1.0f0`
+and `1.0d0` are one value), array storage, `*read-default-float-format*` (still read by nothing).
+
+- **Why.** Under the collapse every float met a library's single arm first: cl-conspack's
+  `number-type` wrote each double as float32 (`(conspack:decode (conspack:encode 0.1d0))` answered
+  `0.10000000149011612`), cl-postgres's `param-to-oid` and `serialize-for-postgres` sent float4. Now
+  `0.1d0` round-trips (interpreter, JVM, P1, measured), and typo's primitive list keeps SBCL's two
+  float entries (its next stop is the fixnum, below).
+- **Consumers in the Quicklisp cache** (279 releases, 54 naming `single-float` outside tests). A
+  single arm ahead of the double one: cl-conspack, cl-store (lossless: its restore reads the 53-bit
+  significand), cl-postgres, coalton (its float literal is typed by spelling, `CoaltonForms`: a `d`
+  marker F64, any other float F32), petalisp's C++ literal type, lisp-unit's default epsilon,
+  mt19937's `random` (23 random bits for a float a binary32 holds), mcclim, float-features (shimmed).
+  Probes: cl-json and postmodern's json-encoder (short = single, long = double now; output unchanged,
+  `~F` reads no format). Unaffected: jzon (double arm first), numpy-file-format (packed array types),
+  ieee-floats (encodes through `decode-float`, decodes over a `1.0f0` prototype, exact). Not in the
+  cache: cl-messagepack, numcl, magicl; static-vectors names no float type.
+- **Why not a real binary32 value (counted 2026-11-06).** Every numeric operation on four backends
+  would carry a second float: the interpreter's `LispDouble` has 577 references in 101 files, the JVM
+  boxes `Double` (169 `doubleClass` uses in 16 emitters, 46 `instanceof` and 8 `checkcast` sites, 75
+  template sites), wasm's `TYPE_FLOAT` 158 references in 35 files -- arithmetic with contagion,
+  comparison, `eql` and hashing, printing with a marker, the readers, `format`'s float directives, the
+  float functions, `coerce`, complex parts, `aref` of `#f`. And it would buy a library little here:
+  with `*read-default-float-format*` `double-float`, which every program and page assumes, `1.0` stays
+  a double, so SBCL code reaches the arms it reaches now, and `(float 1/3)`, `(sqrt 2)` would have to
+  stay double against CLHS 12.1.3.3; CLHS's initial `single-float` changes the precision and the
+  printed text of every float program (`(+ 0.1 0.2)` prints `0.3`).
+- **Deviation.** CLHS's float arrangements are one format or disjoint ones; a subset is neither.
+  Arithmetic stays binary64, so `(typep (* 0.1f0 3) 'single-float)` is nil where SBCL answers t, and
+  `(typep 0.1 'single-float)` nil where SBCL reads `0.1` as a single. A rational converts through the
+  double, so a token of 17+ digits or a ratio within half a binary64 ulp of a binary32 midpoint
+  rounds twice. **Trigger:** a consumer needing binary32 ARITHMETIC (a result rounded per operation),
+  or a format that a value's history decides, is the item a real binary32 value needs.
+- Pins: ci-spec `single-float-is-the-floats-a-binary32-holds` (all four), `postmodern-language-incidentals`,
+  `bfloat16-type-lattice`; `LispEvaluatorTest#evalExponentFloatLiteral`, `LispFloatArrayTest`.
 
 ## The array type lattice: type-of BUILDS the compound specifier
 **`type-of` answers an array's COMPOUND specifier and `makeTypeTest` takes the same one back -- one

@@ -386,14 +386,16 @@ rounds: the spike, both JITs plus the quantized widths, x64). What it decided, a
   width buys at 1B is tok/s (1.6-2.0x measured, one thread and twenty -- conditional on the
   accumulator count, README section 7) and, on the device, the residency cap (`.kb/gpu.md`).
 - **The name is `bfloat16`, not `short-float`.** `short-float` means an IEEE-ish narrow float in
-  every other Lisp and stays what CL lets it be here -- an alias of the one float format
-  (`.kb/declarations-type-checks.md`) -- and free for an IEEE f16 width if one is ever wanted;
+  every other Lisp and stays what CL lets it be here -- an alias of `single-float`, the binary32
+  subset of the one float format (`.kb/declarations-type-checks.md`) -- and free for an IEEE f16
+  width if one is ever wanted;
   `bfloat16` is what C++23, PyTorch, JAX and `ml_dtypes` call it. Java spells it `BFloat16`
   (`LispBFloat16Array`, `LispNames.BFLOAT16`, `FloatText.bfloat16Text`); prose may say "bf16" for
   the bits, never the code.
 - **In the type lattice it is an EDGE below `float`, not a fifth alias of it** (fixed 2026-09-08
-  at the umbrella's close): an EMPTY type, since no scalar has it, so `(subtypep 'bfloat16 'float)`
-  is T, `(subtypep 'float 'bfloat16)` NIL and `(typep 1.0 'bfloat16)` NIL -- literal or computed,
+  at the umbrella's close; below `single-float` since 2026-11-07): an EMPTY type, since no scalar
+  has it, so `(subtypep 'bfloat16 'float)` is T, `(subtypep 'float 'bfloat16)` NIL and
+  `(typep 1.0 'bfloat16)` NIL -- literal or computed,
   on all four backends (ci-spec `bfloat16-type-lattice`). Collapsed, the reverse direction
   answered T and a COMPUTED pair answered NIL against everything on the compile paths, because
   the runtime universe derives edges and hand-lists aliases (`.kb/declarations-type-checks.md`).

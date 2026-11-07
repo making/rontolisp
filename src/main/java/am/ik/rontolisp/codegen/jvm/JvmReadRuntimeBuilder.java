@@ -2183,16 +2183,17 @@ final class JvmReadRuntimeBuilder {
 		// normalization the frontend lexer applies).
 		a.iload(7);
 		a.ifeq(markersDone);
+		// An S or F marker is a single-float: the binary32 nearest the double, as the
+		// frontend lexer reads it (am.ik.rontolisp.Binary32).
+		MethodCode.Label singleMarker = a.newLabel();
 		a.aload(5);
-		ldc(a, "S");
-		ldc(a, "e");
-		a.invokevirtual(this.stringReplace);
-		a.astore(5);
+		a.loadConstant('S');
+		a.invokevirtual(this.stringIndexOf);
+		a.ifge(singleMarker);
 		a.aload(5);
-		ldc(a, "F");
-		ldc(a, "e");
-		a.invokevirtual(this.stringReplace);
-		a.astore(5);
+		a.loadConstant('F');
+		a.invokevirtual(this.stringIndexOf);
+		a.ifge(singleMarker);
 		a.aload(5);
 		ldc(a, "D");
 		ldc(a, "e");
@@ -2206,6 +2207,19 @@ final class JvmReadRuntimeBuilder {
 		a.labelBinding(markersDone);
 		a.aload(5);
 		a.invokestatic(this.doubleParse);
+		a.invokestatic(this.doubleValueOf);
+		a.areturn();
+		a.labelBinding(singleMarker);
+		a.aload(5);
+		ldc(a, "S");
+		ldc(a, "e");
+		a.invokevirtual(this.stringReplace);
+		ldc(a, "F");
+		ldc(a, "e");
+		a.invokevirtual(this.stringReplace);
+		a.invokestatic(this.doubleParse);
+		a.d2f();
+		a.f2d();
 		a.invokestatic(this.doubleValueOf);
 		a.areturn();
 		a.labelBinding(intPath);

@@ -8,9 +8,10 @@ import org.jspecify.annotations.Nullable;
  * other, at read time. The ccl arms are what holds here: {@code sxhash} answers a
  * non-negative fixnum, and the combination masks a 64-bit mix back to one. Its compiler
  * types a float literal by whether it is a single or a double, and here every float is
- * both, so the literal's spelling decides: its reader keeps a {@code d} marker
- * ({@code interpret-token}, on its own client), its macros print it back
- * ({@code print-form}), and its typechecker asks first.
+ * one binary64 ({@code single-float} the ones a binary32 holds), so the literal's
+ * spelling decides: its reader keeps a {@code d} marker ({@code interpret-token}, on its
+ * own client), its macros print it back ({@code print-form}), and its typechecker asks
+ * first.
  */
 final class CoaltonForms {
 
@@ -46,7 +47,13 @@ final class CoaltonForms {
 
 	private static final String SINGLE_ARM = "\n                (single-float tc:*single-float-type*)";
 
-	private static final String SPELLED_ARM = "\n                ((satisfies rontolisp::%double-spelled-p) tc:*double-float-type*)";
+	/**
+	 * The spelling's two arms: a {@code d} marker is an {@code F64}, any other float an
+	 * {@code F32} -- {@code single-float} is the floats a binary32 holds, so {@code 0.1}
+	 * would miss the upstream single arm, which SBCL's reader sends it to.
+	 */
+	private static final String SPELLED_ARM = "\n                ((satisfies rontolisp::%double-spelled-p) tc:*double-float-type*)"
+			+ "\n                (float tc:*single-float-type*)";
 
 	private CoaltonForms() {
 	}

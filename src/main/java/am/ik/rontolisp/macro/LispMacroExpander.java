@@ -31011,7 +31011,12 @@ public final class LispMacroExpander {
 		for (String name : List.of("STANDARD-CHAR", "BASE-CHAR")) {
 			ranks.put(name, 215);
 		}
-		for (String name : List.of("DOUBLE-FLOAT", "SINGLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT")) {
+		// The binary32 floats are a subset of the floats (Binary32), so a single-float
+		// method is tried before a double-float one, which is any float.
+		for (String name : List.of("SINGLE-FLOAT", "SHORT-FLOAT")) {
+			ranks.put(name, 217);
+		}
+		for (String name : List.of("DOUBLE-FLOAT", "LONG-FLOAT")) {
 			ranks.put(name, 218);
 		}
 		// The stream subtypes, ahead of the default rank STREAM has.
@@ -37916,8 +37921,9 @@ public final class LispMacroExpander {
 			}
 		}
 		if (type != null && isFloatTypeName(type)) {
-			// Every float type is the same double representation here.
-			return mvCall(LispNames.FLOAT, parts.get(1));
+			// Every float type is the same double representation here; a single-float
+			// one is the binary32 nearest it.
+			return floatConversion(parts.get(1), type);
 		}
 		if (coerceResultIsBitVector(parts.get(2), closRegistry)) {
 			// A bit-vector result builds the stamped general array, not the T vector
@@ -38129,8 +38135,10 @@ public final class LispMacroExpander {
 		LispVal complexArm = makeIf(memberOfTypeNames(t, "COMPLEX"), coerceComputedComplex(x, spec), listArm);
 		LispVal realArm = makeIf(memberOfTypeNames(t, "REAL"),
 				makeIf(callOf(LispNames.REALP, x), x, coerceTypeError(x)), complexArm);
-		LispVal body = makeIf(memberOfTypeNames(t, FLOAT_TYPE_NAMES.toArray(new String[0])), mvCall(LispNames.FLOAT, x),
-				realArm);
+		LispVal doubleArm = makeIf(memberOfTypeNames(t, DOUBLE_FLOAT_TYPE_NAMES.toArray(new String[0])),
+				mvCall(LispNames.FLOAT, x), realArm);
+		LispVal body = makeIf(memberOfTypeNames(t, SINGLE_FLOAT_TYPE_NAMES.toArray(new String[0])),
+				floatConversion(x, LispNames.SINGLE_FLOAT), doubleArm);
 		LispVal head = makeIf(callOf(LispNames.CONSP, spec), callOf(LispNames.CAR, spec), spec);
 		// A designator naming a user deftype is resolved into spec BEFORE the head is
 		// read, so an alias of a SEQUENCE type reaches its family arm rather than the
@@ -38243,7 +38251,7 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal coercePartStatic(LispVal valueForm, LispVal partDatum) {
 		if (partDatum instanceof LispSymbol sym && isFloatTypeName(plainTypeName(sym))) {
-			return mvCall(LispNames.FLOAT, valueForm);
+			return floatConversion(valueForm, plainTypeName(sym));
 		}
 		LispVal spec = quotedValue(partDatum);
 		return makeIf(mvCall(LispNames.TYPEP, valueForm, spec), valueForm, listToCons(
@@ -38268,17 +38276,13 @@ public final class LispMacroExpander {
 						listToCons(List.of(new LispSymbol(LispNames.STRING_EQ),
 								listToCons(List.of(new LispSymbol(LispNames.SYMBOL_NAME), p)),
 								new LispString("*")))))));
-		List<LispVal> floatSyms = new java.util.ArrayList<>();
-		for (String floatName : FLOAT_TYPE_NAMES) {
-			floatSyms.add(new LispSymbol(floatName));
-		}
-		LispVal isFloat = mvCall(LispNames.MEMBER, p,
-				listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(floatSyms))));
+		LispVal isSingle = memberOfTypeNames(p, SINGLE_FLOAT_TYPE_NAMES.toArray(new String[0]));
+		LispVal isDouble = memberOfTypeNames(p, DOUBLE_FLOAT_TYPE_NAMES.toArray(new String[0]));
 		LispVal check = mvCall(LispNames.TYPEP, valueForm, p);
 		LispVal fail = listToCons(
 				List.of(new LispSymbol(LispNames.ERROR), new LispString("coerce: unsupported result type ~s"), p));
-		return makeIf(isTrivial, valueForm,
-				makeIf(isFloat, mvCall(LispNames.FLOAT, valueForm), makeIf(check, valueForm, fail)));
+		return makeIf(isTrivial, valueForm, makeIf(isSingle, floatConversion(valueForm, LispNames.SINGLE_FLOAT),
+				makeIf(isDouble, mvCall(LispNames.FLOAT, valueForm), makeIf(check, valueForm, fail))));
 	}
 
 	/**
@@ -39736,8 +39740,32 @@ public final class LispMacroExpander {
 	private static final List<String> FLOAT_TYPE_NAMES = List.of("FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT",
 			"LONG-FLOAT");
 
+	/**
+	 * The float names a conversion ROUNDS to: {@code single-float} is the floats a
+	 * binary32 holds, so {@code coerce} to it answers the binary32 nearest
+	 * ({@code am.ik.rontolisp.Binary32}); the other three answer the double.
+	 */
+	private static final List<String> SINGLE_FLOAT_TYPE_NAMES = List.of("SINGLE-FLOAT", "SHORT-FLOAT");
+
+	/**
+	 * The float names that are every float: {@link #FLOAT_TYPE_NAMES} but the two above.
+	 */
+	private static final List<String> DOUBLE_FLOAT_TYPE_NAMES = List.of("FLOAT", "DOUBLE-FLOAT", "LONG-FLOAT");
+
 	private static boolean isFloatTypeName(String name) {
 		return FLOAT_TYPE_NAMES.contains(name);
+	}
+
+	/**
+	 * The conversion of a value to a float of the named float type: {@code float}, and
+	 * for a {@code single-float} name the binary32 nearest that float.
+	 * @param valueForm the value form
+	 * @param floatName a {@link #FLOAT_TYPE_NAMES} member
+	 * @return the conversion form
+	 */
+	private static LispVal floatConversion(LispVal valueForm, String floatName) {
+		LispVal toFloat = mvCall(LispNames.FLOAT, valueForm);
+		return SINGLE_FLOAT_TYPE_NAMES.contains(floatName) ? callOf(LispNames.SINGLE_FLOAT_INTERNAL, toFloat) : toFloat;
 	}
 
 	private static @Nullable String quotedSymbolName(LispVal form) {
@@ -42359,7 +42387,11 @@ public final class LispMacroExpander {
 	private static @Nullable String atomicTypePredicate(String name) {
 		return switch (name) {
 			case "INTEGER", "FIXNUM", "BIGNUM" -> LispNames.INTEGERP;
-			case "FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT" -> LispNames.FLOATP;
+			case "FLOAT", "DOUBLE-FLOAT", "LONG-FLOAT" -> LispNames.FLOATP;
+			// The floats a binary32 holds (am.ik.rontolisp.Binary32): every float is one
+			// binary64, and a library choosing a 32-bit encoding by this test writes
+			// these without loss.
+			case "SINGLE-FLOAT", "SHORT-FLOAT" -> LispNames.SINGLE_FLOAT_P_INTERNAL;
 			case "NUMBER" -> LispNames.NUMBERP;
 			// REAL is the real numbers only: a complex is a NUMBER but not a REAL
 			// (SBCL parity -- mapping REAL to NUMBERP made (typep #c(1 2) 'real)
@@ -42393,7 +42425,8 @@ public final class LispMacroExpander {
 	 * {@code makeCompoundTypeTest}'s default arm).
 	 */
 	private static final java.util.Set<String> NUMERIC_TYPE_PREDICATES = java.util.Set.of(LispNames.INTEGERP,
-			LispNames.FLOATP, LispNames.NUMBERP, LispNames.RATIONALP, LispNames.REALP);
+			LispNames.FLOATP, LispNames.SINGLE_FLOAT_P_INTERNAL, LispNames.NUMBERP, LispNames.RATIONALP,
+			LispNames.REALP);
 
 	/** True for the {@code *} that stands for "any" in a compound type specifier. */
 	private static boolean isWildcardTypeArgument(LispVal arg) {
@@ -50844,15 +50877,22 @@ public final class LispMacroExpander {
 	 * {@link #canonicalSubtypeName} states.
 	 *
 	 * <p>
-	 * {@code bfloat16} is an edge too, below {@code FLOAT}, and never one of the
-	 * collapsed float aliases: it is a rontolisp extension naming the packed
-	 * {@code #bf16} array's element width, and NO scalar has it ({@code (typep 1.0
-	 * 'bfloat16)} is nil), so the symmetric claim a collapse makes would be false --
-	 * collapsed, as it was from 2026-09-03 to 2026-09-08, {@code (subtypep 'single-float
-	 * 'bfloat16)} answered t. An edge also reaches the runtime universe by derivation
-	 * ({@link #subtypepUniverse}); an alias reaches it only through that method's
-	 * hand-written list, which is why a computed pair naming this width answered nil
-	 * against everything, itself included, on the compile paths for the same five days.
+	 * {@code single-float} is an edge below {@code FLOAT}: every float is one binary64,
+	 * and the type names the SUBSET a binary32 holds ({@code am.ik.rontolisp.Binary32}),
+	 * so {@code (subtypep 'single-float 'double-float)} is t and the reverse nil, where
+	 * {@code double-float} and {@code long-float} stay aliases of {@code FLOAT}
+	 * ({@link #canonicalSubtypeName}).
+	 *
+	 * <p>
+	 * {@code bfloat16} is an edge too, below {@code SINGLE-FLOAT}, and never one of the
+	 * float aliases: it is a rontolisp extension naming the packed {@code #bf16} array's
+	 * element width, and NO scalar has it ({@code (typep 1.0 'bfloat16)} is nil), so the
+	 * symmetric claim a collapse makes would be false -- collapsed, as it was from
+	 * 2026-09-03 to 2026-09-08, {@code (subtypep 'single-float 'bfloat16)} answered t. An
+	 * edge also reaches the runtime universe by derivation ({@link #subtypepUniverse});
+	 * an alias reaches it only through that method's hand-written list, which is why a
+	 * computed pair naming this width answered nil against everything, itself included,
+	 * on the compile paths for the same five days.
 	 */
 	private static final java.util.Map<String, List<String>> SUBTYPEP_PARENTS = orderedMap(
 			java.util.Map.entry("FIXNUM", List.of("INTEGER")), java.util.Map.entry("BIGNUM", List.of("INTEGER")),
@@ -50860,7 +50900,8 @@ public final class LispMacroExpander {
 			java.util.Map.entry("UNSIGNED-BYTE", List.of("INTEGER")),
 			java.util.Map.entry("SIGNED-BYTE", List.of("INTEGER")), java.util.Map.entry("INTEGER", List.of("RATIONAL")),
 			java.util.Map.entry("RATIO", List.of("RATIONAL")), java.util.Map.entry("RATIONAL", List.of("REAL")),
-			java.util.Map.entry("BFLOAT16", List.of("FLOAT")), java.util.Map.entry("FLOAT", List.of("REAL")),
+			java.util.Map.entry("SINGLE-FLOAT", List.of("FLOAT")),
+			java.util.Map.entry("BFLOAT16", List.of("SINGLE-FLOAT")), java.util.Map.entry("FLOAT", List.of("REAL")),
 			java.util.Map.entry("REAL", List.of("NUMBER")), java.util.Map.entry("COMPLEX", List.of("NUMBER")),
 			java.util.Map.entry("COMPILED-FUNCTION", List.of("FUNCTION")),
 			java.util.Map.entry("KEYWORD", List.of("SYMBOL")), java.util.Map.entry("BOOLEAN", List.of("SYMBOL")),
@@ -50928,12 +50969,13 @@ public final class LispMacroExpander {
 	/**
 	 * Collapses the type-name aliases the one runtime representation makes equal -- and
 	 * ONLY those. A collapse is symmetric, so a name belongs here only when it denotes
-	 * exactly the same set of values as its target: the four float names (one float
-	 * format -- not {@code bfloat16}, the EMPTY fifth, which is an edge in
-	 * {@link #SUBTYPEP_PARENTS}), the character names (one character type), and the two
-	 * {@code base-string} spellings, which are "a string of {@code base-char}" and so
-	 * name the same type as {@code string}/{@code simple-string} while every character IS
-	 * a base-char.
+	 * exactly the same set of values as its target: {@code double-float} and
+	 * {@code long-float} onto {@code float} (one float format, binary64), {@code
+	 * short-float} onto {@code single-float} (the binary32 subset, an edge in
+	 * {@link #SUBTYPEP_PARENTS} like {@code bfloat16}, the EMPTY one below it), the
+	 * character names (one character type), and the two {@code base-string} spellings,
+	 * which are "a string of {@code base-char}" and so name the same type as
+	 * {@code string}/{@code simple-string} while every character IS a base-char.
 	 *
 	 * <p>
 	 * {@code simple-string}/{@code simple-vector}/{@code simple-array} were once here and
@@ -50946,7 +50988,8 @@ public final class LispMacroExpander {
 	 */
 	private static String canonicalSubtypeName(String plain) {
 		return switch (plain) {
-			case "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT" -> "FLOAT";
+			case "DOUBLE-FLOAT", "LONG-FLOAT" -> "FLOAT";
+			case "SHORT-FLOAT" -> "SINGLE-FLOAT";
 			case "BASE-CHAR", "STANDARD-CHAR", "EXTENDED-CHAR" -> "CHARACTER";
 			case "BASE-STRING" -> "STRING";
 			case "SIMPLE-BASE-STRING" -> "SIMPLE-STRING";
@@ -55036,11 +55079,11 @@ public final class LispMacroExpander {
 			names.addAll(entry.getValue());
 		}
 		// The alias spellings (canonicalSubtypeName) have no lattice edge of their
-		// own and reach the universe only here; the three simple- names come in
-		// through SUBTYPEP_PARENTS, which is where they are edges.
-		names.addAll(List.of("SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "BASE-CHAR", "STANDARD-CHAR",
-				"EXTENDED-CHAR", "BASE-STRING", "SIMPLE-BASE-STRING", "CHARACTER", "STANDARD-OBJECT", "CONDITION",
-				"ERROR", "SIMPLE-ERROR", "SIMPLE-CONDITION", "PATHNAME", "READTABLE", "RANDOM-STATE"));
+		// own and reach the universe only here; the three simple- names and
+		// single-float come in through SUBTYPEP_PARENTS, which is where they are edges.
+		names.addAll(List.of("DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "BASE-CHAR", "STANDARD-CHAR", "EXTENDED-CHAR",
+				"BASE-STRING", "SIMPLE-BASE-STRING", "CHARACTER", "STANDARD-OBJECT", "CONDITION", "ERROR",
+				"SIMPLE-ERROR", "SIMPLE-CONDITION", "PATHNAME", "READTABLE", "RANDOM-STATE"));
 		// Every atomic name a runtime TYPEP specifier can hold is a runtime SUBTYPEP name
 		// too: a leaf of the lattice (hash-table, function, package, stream, atom) has no
 		// SUBTYPEP_PARENTS entry, so without this it had no row at all and answered nil

@@ -15161,6 +15161,52 @@ cases:
       (T T NIL T T "a 1")
       (:ARITHMETIC :ARITHMETIC :ARITHMETIC :ARITHMETIC :SERIOUS NIL)
       :OTHER
+  # Every float is one binary64, and single-float names the floats a binary32 holds: a
+  # subset, so subtypep answers T one way only, a type dispatch sends 0.1 to its double
+  # arm (cl-conspack and cl-postgres wrote it as a float32), a single-float method is the
+  # more specific one, and coerce and an f/s marker round to the binary32 nearest.
+  - name: single-float-is-the-floats-a-binary32-holds
+    source: |
+      (defun ci-sfb-id (x) (car (list x)))
+      (defgeneric ci-sfb-width (x))
+      (defmethod ci-sfb-width ((x double-float)) :double)
+      (defmethod ci-sfb-width ((x single-float)) :single)
+      (print (list (typep 1.5 'single-float) (typep 0.1 'single-float) (typep 0.1 'double-float)
+                   (typep 0.1 'short-float) (typep -0.0 'single-float) (typep 1 'single-float)
+                   (typep (ci-sfb-id 0.1) (ci-sfb-id 'single-float)) (typep (ci-sfb-id 2.5) (ci-sfb-id 'short-float))
+                   (typep 0.5 '(single-float 0.0 1.0)) (typep 0.1 '(single-float 0.0 1.0))))
+      (print (list (subtypep 'single-float 'double-float) (subtypep 'double-float 'single-float)
+                   (subtypep 'short-float 'single-float) (subtypep 'single-float 'short-float)
+                   (subtypep 'long-float 'double-float) (subtypep 'float 'double-float)
+                   (subtypep 'double-float 'float) (subtypep 'single-float 'float)
+                   (subtypep 'float 'single-float) (subtypep 'bfloat16 'single-float)
+                   (subtypep 'single-float 'bfloat16)
+                   (subtypep (ci-sfb-id 'double-float) (ci-sfb-id 'single-float))
+                   (subtypep (ci-sfb-id 'single-float) (ci-sfb-id 'double-float))
+                   (subtypep '(complex double-float) '(complex single-float))
+                   (subtypep '(complex single-float) '(complex double-float))))
+      (print (multiple-value-list (subtypep 'double-float 'single-float)))
+      (print (list (typecase 0.1d0 (single-float :single) (double-float :double))
+                   (typecase 1.5d0 (single-float :single) (double-float :double))
+                   (ci-sfb-width 0.1) (ci-sfb-width 1.5)))
+      (print (list (coerce 0.1d0 'single-float) (coerce 1/3 'single-float) (coerce 5 'short-float)
+                   (coerce 0.1 'double-float) (coerce (ci-sfb-id 0.1) (ci-sfb-id 'single-float))
+                   (coerce 0.1 '(complex single-float))
+                   (typep (coerce 0.1 'single-float) 'single-float)))
+      (print (list 0.1f0 1.5f0 0.1s0 1.0f10 (read-from-string "0.1f0") (read-from-string "-2.5s-1")
+                   (= 0.1f0 0.1) (typep 0.1f0 'single-float)))
+      (print (list (typep (aref (make-array 1 :element-type 'single-float :initial-element 0.1) 0) 'single-float)
+                   (typep most-positive-single-float 'single-float)
+                   (typep least-positive-single-float 'single-float)
+                   (typep most-positive-double-float 'single-float)))
+    expected: |
+      (T NIL T NIL T NIL NIL T T NIL)
+      (T NIL T T T T T T NIL T NIL NIL T NIL T)
+      (NIL T)
+      (:DOUBLE :SINGLE :DOUBLE :SINGLE)
+      (0.10000000149011612 0.3333333432674408 5.0 0.1 0.10000000149011612 #C(0.10000000149011612 0.0) T)
+      (0.10000000149011612 1.5 0.10000000149011612 1.0e10 0.10000000149011612 -0.25 NIL T)
+      (T T T NIL)
   - name: declared-array-types-single-arm-access
     source: |
       (deftype ci-octet-vec (&optional length)
@@ -20623,9 +20669,9 @@ cases:
         (unless (pm-isolation-level-p level) (error "bad isolation level ~a" level))
         `(progn ,@body))
       (print (pm-with-tx (:serializable) :ok))
-      ;; rontolisp has ONE float format, so all four float type names denote the
-      ;; same type and subtypep says so (CLHS permits it); json-encoder's
-      ;; eval-when probe therefore selects its "only one float type" branch.
+      ;; rontolisp has ONE float format, and single-float names the floats a
+      ;; binary32 holds, a subset; json-encoder's eval-when probe therefore finds
+      ;; short- and single-float one type, long- and double-float another.
       (print (list (subtypep 'long-float 'single-float) (subtypep 'single-float 'double-float)))
       ;; The string/character stream group: the public string-output-stream
       ;; names (execute-file.lisp), with CL's clear-on-read contract.
@@ -20700,7 +20746,7 @@ cases:
       (1 2 3)
       "a_b_c"
       :OK
-      (T T)
+      (NIL T)
       "ab"
       "cd"
       ""

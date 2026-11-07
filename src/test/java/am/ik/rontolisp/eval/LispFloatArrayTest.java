@@ -294,14 +294,15 @@ class LispFloatArrayTest {
 
 	@Test
 	void bfloat16IsAnEmptyFloatSubtypeAndAnArrayElementType() {
-		// A fourth subtype of float, but an EMPTY one: the width lives only in array
-		// storage and aref answers a double, so no value in the language has this type.
-		// short-float answers T to the same question because it is a standard CL float
-		// type this implementation may collapse onto double; bfloat16 is a rontolisp
-		// extension that exists only as an element width, so the asymmetry is intended.
+		// A subtype of float, but an EMPTY one: the width lives only in array storage and
+		// aref answers a double, so no value in the language has this type. short-float
+		// answers T to the same question because it is single-float, the floats a
+		// binary32 holds; bfloat16 is a rontolisp extension that exists only as an
+		// element width, so the asymmetry is intended. It sits below single-float.
 		assertThat(eval("(typep 1.0 'bfloat16)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(typep 1.0 'short-float)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(subtypep 'bfloat16 'float)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(subtypep 'bfloat16 'single-float)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(subtypep 'bfloat16 'real)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(eval("(subtypep 'bfloat16 'bfloat16)")).isEqualTo(LispTrue.INSTANCE);
 		// An EDGE below float, never one of the collapsed float aliases: a collapse

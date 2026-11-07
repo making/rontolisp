@@ -122,11 +122,14 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalExponentFloatLiteral() {
-		// Common Lisp exponent-marker float literals (e/s/f/d/l) all read as a double.
+		// Common Lisp exponent-marker float literals (e/s/f/d/l) all read as a double; an
+		// f or s marker as the binary32 nearest it, a single-float.
 		assertThat(eval("1d0")).isEqualTo(new LispDouble(1.0));
 		assertThat(eval("1.5d3")).isEqualTo(new LispDouble(1500.0));
 		assertThat(eval("6.02e23")).isEqualTo(new LispDouble(6.02e23));
 		assertThat(eval("(* 2 1d0)")).isEqualTo(new LispDouble(2.0));
+		assertThat(eval("(list 0.1e0 0.1f0 0.1S0 -2.5f-1)").print())
+			.isEqualTo("(0.1 0.10000000149011612 0.10000000149011612 -0.25)");
 		// The one value keeps whether a d or an l spelled it, for coalton's F64 literals
 		// to ask, and no standard operator tells them apart.
 		assertThat(eval("""

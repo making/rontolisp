@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.UnaryOperator;
 
+import am.ik.rontolisp.Binary32;
 import am.ik.rontolisp.FloatWidth;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
@@ -1102,8 +1103,10 @@ public final class LispLexer {
 		}
 		if (isFloat) {
 			String text = this.input.substring(start, this.pos);
-			return new Token.DoubleToken(Double.parseDouble(normalizeExponentMarker(stripGrouping(text))),
-					spellsDouble(text));
+			double value = Double.parseDouble(normalizeExponentMarker(stripGrouping(text)));
+			// An f or s marker asks for a single-float: the binary32 nearest the double
+			// the token reads as, as the runtime readers round it (Binary32).
+			return new Token.DoubleToken(spellsSingle(text) ? Binary32.nearest(value) : value, spellsDouble(text));
 		}
 		String digits = stripGrouping(this.input.substring(start, trailingDot ? this.pos - 1 : this.pos));
 		try {
@@ -1257,6 +1260,18 @@ public final class LispLexer {
 		for (int i = 0; i < number.length(); i++) {
 			char c = number.charAt(i);
 			if (c == 'd' || c == 'D' || c == 'l' || c == 'L') {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// A float token's f or s exponent marker: a single-float literal. A float token
+	// holds no other letter.
+	private static boolean spellsSingle(String number) {
+		for (int i = 0; i < number.length(); i++) {
+			char c = number.charAt(i);
+			if (c == 'f' || c == 'F' || c == 's' || c == 'S') {
 				return true;
 			}
 		}

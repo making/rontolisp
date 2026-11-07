@@ -42,6 +42,7 @@ import java.util.function.UnaryOperator;
 import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.BFloat16;
 import am.ik.rontolisp.ArrayGrowth;
+import am.ik.rontolisp.Binary32;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.ClConstants;
 import am.ik.rontolisp.FloatArrayAccessHook;
@@ -3891,6 +3892,18 @@ public final class Environment implements Scope {
 					requireArgCount(LispNames.IEEE754_SINGLE_FROM_BITS, args, 1);
 					return new LispDouble(Float.intBitsToFloat((int) asBigInteger(args.get(0)).longValue()));
 				}));
+		// The single-float type test and conversion: the floats a binary32 holds, and the
+		// binary32 nearest a float (Binary32).
+		env.defineFunction(LispNames.SINGLE_FLOAT_P_INTERNAL,
+				new LispFunction(LispNames.SINGLE_FLOAT_P_INTERNAL, args -> {
+					requireArgCount(LispNames.SINGLE_FLOAT_P_INTERNAL, args, 1);
+					return args.get(0) instanceof LispDouble d && Binary32.holds(d.value()) ? LispTrue.INSTANCE
+							: LispNil.INSTANCE;
+				}));
+		env.defineFunction(LispNames.SINGLE_FLOAT_INTERNAL, new LispFunction(LispNames.SINGLE_FLOAT_INTERNAL, args -> {
+			requireArgCount(LispNames.SINGLE_FLOAT_INTERNAL, args, 1);
+			return new LispDouble(Binary32.nearest(asDouble(args.get(0))));
+		}));
 		// The object's identity hash, the one an eq table places an aggregate by
 		// (.kb/hash-tables.md): a host object's is the wrapped object's, the wrapper
 		// being fresh on every Java call that answers it.
