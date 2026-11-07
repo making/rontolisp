@@ -4342,10 +4342,14 @@ public final class PackageResolver {
 		if ("keyword".equals(pkg)) {
 			return ":" + name;
 		}
+		// The name is the member's whole name, so a colon in it is a constituent, never a
+		// package marker: spelled as a run-time read spells |a:b|. The one-argument
+		// intern keeps taking such a name as spelled (internSpellingExact).
+		String member = name.indexOf(':') >= 0 ? PackageRegistry.currentPackageSpelling(name) : name;
 		String saved = current();
 		setCurrent(pkg);
 		try {
-			return internSpelling(name, record);
+			return internSpelling(member, record);
 		}
 		finally {
 			setCurrent(saved);

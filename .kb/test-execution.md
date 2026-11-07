@@ -509,3 +509,24 @@ methods a `.kb` file or a source comment names, programs a WASM target cannot bu
 inside the whole corpus (`subseq` of a bf16 array printing `#(...)` on the interpreter and
 JVM, a trailing `fresh-line` after `write-line ""` on JVM). A YAML `expected` that ends in a
 blank line needs `|+`; plain `|` drops it.
+
+## A case that ends the corpus, a case that leaks into the next (2026-11-07)
+
+The corpus is one program, so a case that ends it -- a `quit`, an uncaught error, an upstream
+`restore-image` -- fails every case after it on every leg (5994 of 11940 nodes on 2026-11-07),
+and only a native run showed it. **`JvmDeadMethodEliminationCorpusTest` now asserts the JVM run
+printed the spec's line count**: it already compiled and ran the whole corpus in `./mvnw test`, so
+the check costs nothing. It sees the ending, not a wrong line: cases still pin output only in
+`CiSpecE2eTest`.
+
+A case that leaves global state another case reads (`*modules*`, a package, a feature) is not
+caught that way: the interpreter leg runs `cases:` in one process and the compiled legs see the
+whole program. Two measured on 2026-11-07: `nested-require-loads-nothing-when-it-runs`'s `provide`
+reached `esrap-enablement-language-group`'s `(print *modules*)`, and
+`a-colon-inside-a-multiple-escape-is-a-constituent` passed alone and failed after
+`the-empty-name-is-a-symbol-like-any-other` (a real interpreter bug in a two-argument `intern`,
+[symbol-runtime-api.md](symbol-runtime-api.md), that the order exposed). Rejected as too dear: running each case alone (one process per case,
+1491 cases) to compare. The rules instead: a case undoes what it adds to a shared registry, and
+reads a registry by the entry it cares about (`(member "SWANK-INDENTATION" *modules* ...)`),
+never whole. To find which case broke a later one, drop leading cases off the concatenated
+program until the later one passes: the last dropped is the culprit.

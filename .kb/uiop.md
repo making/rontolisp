@@ -203,8 +203,9 @@ fatal-condition quartet is real on `handler-bind`; **`*lisp-interaction*` is NIL
 defaults to T** (trigger: an `invoke-debugger`). The image hooks are REAL; `restore-image` is
 upstream's start on all four (a program starts fresh, the restored case); `dump-image` is upstream's
 protocol around the `%dump-image` primitive -- the interpreter's compile of its image through the
-command line, a refusal in a compiled program (a prelude definition) -- ([asdf.md](asdf.md),
-"Building an executable"); `create-image` signals. `*image-restored-p*`, upstream's internal, is
+command line (of an executable only: any other dump refuses), a refusal in a compiled program (a prelude
+definition) -- ([asdf.md](asdf.md), "Building an executable", "Inside a running program": a
+`restore-image` call without `:lisp-interaction t` EXITS); `create-image` signals. `*image-restored-p*`, upstream's internal, is
 defined because deploy reads it (`UiopLibrary.INTERNALS`). The command-line five are ONE definition over `%host-argv`
 (`LispNames.HOST_ARGV`) answering `(program-name user-arg ...)`, so `raw-command-line-arguments` IS
 the primitive; rontolisp is always upstream's executable case because `CliOptions.arguments()`

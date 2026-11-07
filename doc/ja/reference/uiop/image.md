@@ -168,8 +168,8 @@ dump フックを呼び、ダンプされたプログラムの起動は restore 
 
 | 関数 | 動作 |
 |------|------|
-| `uiop:dump-image` | rontolisp のコマンドラインが起動したインタプリタでは、postlude と dump フックを走らせたうえで、ファイル名が示す実行ファイルにイメージをコンパイルする。コンパイル済みのプログラムと、コマンドラインのコンパイラを受け取っていない評価器では `uiop:not-implemented-error` |
-| `uiop:restore-image` | 上流の起動処理: restore フック、prelude、エントリーポイントの順に走らせ、`:lisp-interaction` が真でない限りエントリーポイントの最初の値を終了ステータスにする(真なら 0、`nil` なら 1) |
+| `uiop:dump-image` | rontolisp のコマンドラインが起動したインタプリタで `:executable t` を渡すと、postlude と dump フックを走らせたうえで、ファイル名が示す実行ファイルにイメージをコンパイルする。`:executable t` がないとき(どのバックエンドも起動できないヒープイメージ)、コンパイル済みのプログラム、コマンドラインのコンパイラを受け取っていない評価器では、フックを走らせる前に `uiop:not-implemented-error` |
+| `uiop:restore-image` | 上流の起動処理: restore フック、prelude、エントリーポイントの順に走らせ、`:lisp-interaction` が真でない限りエントリーポイントの最初の値を終了ステータスにする(真なら 0、`nil` なら 1)。`:lisp-interaction t` を渡さずに呼んだプログラムはそこで終わる |
 | `uiop:create-image` | `uiop:not-implemented-error` -- リンクすべき Lisp オブジェクトファイルがありません |
 
 rontolisp には保存できるヒープがないので、ダンプはコンパイルです: イメージがロード

@@ -217,10 +217,27 @@ class JvmDeadMethodEliminationCorpusTest {
 		CompletableFuture<String> plainRun = CompletableFuture.supplyAsync(() -> run(plain, workDir));
 		String optimizedOutput = run(optimized, workDir);
 		assertThat(optimizedOutput).isEqualTo(join(plainRun));
+		// The one ci-spec check ./mvnw test makes: the program ran to its end. A case
+		// that ends the concatenated program (a quit, an uncaught error) cuts every leg
+		// of CiSpecE2eTest short, and only its native run would show it.
+		assertThat(optimizedOutput.lines().count())
+			.as("lines the corpus printed on the JVM against the spec's (a case ended the program early?)")
+			.isEqualTo(expectedJvmLines());
 		assertThat(am.ik.rontolisp.testsupport.CorpusFixtures.snapshotTopLevel(Path.of(".")))
 			.as("the corpus runs in a private working directory, so the project root -- shared with "
 					+ "the other surefire fork and with every other build on the box -- gains nothing")
 			.containsExactlyInAnyOrderElementsOf(rootBefore);
+	}
+
+	/** The number of lines the spec expects of the JVM leg (CiSpecE2eTest's count). */
+	private static long expectedJvmLines() throws IOException {
+		long lines = 0;
+		for (am.ik.rontolisp.testsupport.YamlResources.Case c : am.ik.rontolisp.testsupport.YamlResources.readCiSpec()
+			.cases()) {
+			String text = c.expectedByBackend() == null ? null : c.expectedByBackend().get("jvm");
+			lines += (text != null ? text : java.util.Objects.requireNonNullElse(c.expected(), "")).lines().count();
+		}
+		return lines;
 	}
 
 	@ParameterizedTest

@@ -744,6 +744,17 @@ Makefile's `--eval '(asdf:make :app)'` would need rewriting.
   point, `shell-boolean-exit` of its first value, because `*lisp-interaction*` is nil here
   ([uiop.md](uiop.md)). SBCL's program-op image keeps upstream's default t and exits 0 whatever the
   entry point answers (measured 2026-11-06, SBCL 2.2.9): the one divergence in the contract.
+- **Inside a running program** (decided 2026-11-07): `dump-image` without `:executable t` signals
+  `uiop:not-implemented-error` on all four, before the protocol (no postlude, no dump hook: a refused
+  dump has no side effect, where upstream runs the hooks and then refuses), as does every dump in a
+  compiled program; only the command line's interpreter with `:executable t` compiles.
+  So the ci-spec driver's legs agree, and a case dumps nothing. `restore-image` is NOT a refusal: under
+  `*lisp-interaction*` nil it ends the process with its entry point's status, upstream's behavior, so a
+  program (a ci-spec case) calls it with `:lisp-interaction t` and binds the variables it sets.
+  Measured on develop `447524848`: it was this call, not `dump-image`, that ended every leg of the
+  concatenated corpus at 5939 of 9849 lines; the case still expected the refusal it made before i83.
+  `JvmDeadMethodEliminationCorpusTest` now counts the corpus's JVM lines, so `./mvnw test` sees a case
+  that ends the program ([test-execution.md](test-execution.md), "A case that ends the corpus").
 - **The artifact's kind follows its name** (`RontoLispCli.imageBuilder`): no type is `--native`
   (a program-op's Unix executable), `.jar`/`.class` the JVM, `.wasm` a module, `.war` refused. The
   run's own compile flags reach the compile; `rontolisp build` exists so they can (`--native-target`,

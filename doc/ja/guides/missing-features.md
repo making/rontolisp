@@ -22,7 +22,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `make-package` / `rename-package` / `delete-package` / `unintern` / `shadow`（ランタイム） | `make-package`、`rename-package`、`delete-package`、`packagep`、`package-nicknames`、`find-all-symbols`、`do-all-symbols`、`apropos`/`apropos-list` は利用可能（後述の二層）。`shadow` / `shadowing-import` / `unintern` はパッケージのメンバーテーブルを変更する。コンパイル済みバックエンドでメンバーテーブルを持つのはプログラム自身が作ったパッケージだけ |
 | `eval-when` | トップレベルではフェーズの区別がなく、どの状況指定でも本体を実行する。それ以外の位置では CL と同じく `:execute` のときだけ実行する |
 | `#:name` | 普通のシンボルとして読まれ、gensym 的な新規性はない |
-| `*modules*` | 利用不可（`require`/`provide` は利用可能） |
+| `*modules*` | コンパイルパスでは `nil`（`provide` はコンパイル時に消費される）。インタプリタでは provide されたモジュールを並べる |
 | 複素数 | `--no-gc` 以外のすべてのバックエンドで利用可（[数値タワー](#numeric-tower)） |
 | `--no-gc` での `catch` / `throw` / `unwind-protect` / 条件 | コンパイルエラー（他のバックエンドでは利用可能） |
 

@@ -1739,6 +1739,9 @@ cases:
       (defun nrq-require (m) (require m))
       (print (list (nrq-require :nrq-present) (nrq-require :asdf)
                    (handler-case (nrq-require :nrq-absent) (error () :absent))))
+      ;; The interpreter's provide pushed the name onto *modules* (a compile path
+      ;; consumed it at compile time): take it off again, so no later case sees it.
+      (setf *modules* (remove "NRQ-PRESENT" *modules* :test #'string=))
     expected: |
       (NRQ-PRESENT ASDF :ABSENT)
   - name: load-and-stream-operators-signal-their-condition
@@ -22754,8 +22757,9 @@ cases:
       ;; cannot be pinned here, where every case shares one program and the
       ;; literals above already turn the arm on).
       (print (let ((c "~/ci-es-brackets/~a")) (format nil c 3 "!")))
-      ;; *modules* is what provide records and require consults
-      (print *modules*)
+      ;; *modules* is what provide records and require consults, read the way
+      ;; esrap's editor support probes it for a swank image
+      (print (member "SWANK-INDENTATION" *modules* :test #'string=))
     expected: |
       #S(CI-ES-BOA :A 1 :B 3 :C 5 :D SIX)
       #S(CI-ES-BOA :A 1 :B 2 :C 3 :D 4)
@@ -23930,7 +23934,7 @@ cases:
       ;; child JVM / WasmLispCompilerIntegrationTest's exit-code helper).
       ;;
       ;; The hooks are REAL lists on every backend: a library may register into
-      ;; one at load time, and only the act of DUMPING an image is impossible.
+      ;; one at load time.
       ;; Both registrars go through register-hook-function, as upstream's do.
       (uiop:register-image-dump-hook 'ci-image-a)
       (uiop:register-image-dump-hook 'ci-image-b)
@@ -23956,14 +23960,29 @@ cases:
                                                :stream s)
                (uiop:print-backtrace :stream s :condition "second")
                (uiop:raw-print-backtrace :stream s)))
-      ;; There is no image to dump, restore or create -- a program is started from
-      ;; source and the compile backends emit an artifact rather than saving a
-      ;; heap -- so the three name that instead of half-doing it.
+      ;; A dump is a compile, and only of an executable (:executable t, what
+      ;; asdf:program-op asks for): the interpreter the command line started
+      ;; refuses any other dump, a compiled program every dump (it has no
+      ;; compiler), both before the dump hooks run and with uiop's own
+      ;; condition. create-image has no object files to link.
       (print (list (handler-case (uiop:dump-image "x.img")
                      (uiop:not-implemented-error () :dump-image))
-                   (handler-case (uiop:restore-image) (uiop:not-implemented-error () :restore-image))
                    (handler-case (uiop:create-image "x" nil)
                      (uiop:not-implemented-error () :create-image))))
+      ;; restore-image is upstream's start, the last form of a dumped program:
+      ;; the restore hooks, the prelude, the entry point. Under the default
+      ;; *lisp-interaction* nil it EXITS with the entry point's first value, so
+      ;; it is called with :lisp-interaction t, and its setfs land on the let's
+      ;; bindings: the corpus is left unrestored for the cases after this one.
+      (print (let ((uiop:*lisp-interaction* nil)
+                   (uiop:*image-restore-hook* uiop:*image-restore-hook*)
+                   (uiop:*image-prelude* nil)
+                   (uiop/image::*image-restored-p* nil))
+               (list (multiple-value-list
+                      (uiop:restore-image :lisp-interaction t
+                                          :entry-point (lambda () (values :entry 2))))
+                     uiop/image::*image-restored-p* uiop:*lisp-interaction* *ci-image-ran*)))
+      (print (list uiop:*lisp-interaction* uiop/image::*image-restored-p*))
     expected: |
       ((CI-IMAGE-B CI-IMAGE-A) (:RESTORED))
       (NIL NIL NIL NIL NIL)
@@ -23971,7 +23990,9 @@ cases:
       "boom
       second
       "
-      (:DUMP-IMAGE :RESTORE-IMAGE :CREATE-IMAGE)
+      (:DUMP-IMAGE :CREATE-IMAGE)
+      ((:ENTRY 2) T T (:RESTORED :RESTORED))
+      (NIL NIL)
   - name: uiop-image-command-line
     source: |
       ;; The command-line family, and with it the ONE thing nothing else here
@@ -36259,6 +36280,9 @@ cases:
       (print (ccm-show (read-from-string "a\\:b")))
       (print (ccm-show (read-from-string "ccm-p::|b:c|")))
       (print (ccm-show (intern "a:b" :cl-user)))
+      ;; a name nothing read before: intern with a package named takes it whole
+      (print (list (ccm-show (intern "c:d" :cl-user)) (ccm-show (intern "e:f" :ccm-p))
+                   (eq (intern "c:d" :cl-user) '|c:d|) (multiple-value-list (find-symbol "e:f" :ccm-p))))
       (print (list (eq '|a:b| (read-from-string "|a:b|")) (eq '|a:b| 'a\:b) (keywordp '|:x|) (keywordp :|a:b|)))
       (print (list :|a:b| (make-symbol "a:b") (read-from-string ":|k:w|") (read-from-string "#:|u:v|")))
       (print (list (read-from-string "(|?:| . 12)") (let ((*print-case* :downcase)) (prin1-to-string '(|A:B| abc)))))
@@ -36277,6 +36301,7 @@ cases:
       ("A:B" "COMMON-LISP-USER" "|A:B|" "A:B" T)
       ("b:c" "CCM-P" "CCM-P::|b:c|" "b:c" T)
       ("a:b" "COMMON-LISP-USER" "|a:b|" "a:b" T)
+      (("c:d" "COMMON-LISP-USER" "|c:d|" "c:d" T) ("e:f" "CCM-P" "CCM-P::|e:f|" "e:f" T) T (CCM-P::|e:f| :INTERNAL))
       (T NIL NIL T)
       (:|a:b| #:|a:b| :|k:w| #:|u:v|)
       ((|?:| . 12) "(|A:B| abc)")

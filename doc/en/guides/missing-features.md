@@ -21,7 +21,7 @@ the [Language Reference](../reference/special-forms.md).
 | `make-package` / `rename-package` / `delete-package` / `unintern` / `shadow` (runtime) | `make-package`, `rename-package`, `delete-package`, `packagep`, `package-nicknames`, `find-all-symbols`, `do-all-symbols` and `apropos`/`apropos-list` are available (two tiers below); `shadow` / `shadowing-import` / `unintern` change a package's member table, which on the compiled backends only the packages the program creates have |
 | `eval-when` | no phase distinction at top level, where any situation runs the body; elsewhere only `:execute` does, as in CL |
 | `#:name` | reads as a plain symbol, without gensym-style freshness |
-| `*modules*` | not available (`require`/`provide` are) |
+| `*modules*` | `nil` on the compile path, where `provide` is consumed at compile time; the interpreter's lists the provided modules |
 | complex numbers | available on every backend but `--no-gc` ([Numeric tower](#numeric-tower)) |
 | `catch` / `throw` / `unwind-protect` / conditions under `--no-gc` | compile error (available on every other backend) |
 

@@ -169,8 +169,8 @@ in one an image was dumped to.
 
 | Function | What it does |
 |----------|--------------|
-| `uiop:dump-image` | on the interpreter the rontolisp command line started: runs the postlude and the dump hooks, then compiles the image into the executable its file names. In a compiled program, and in an evaluator nothing gave the command line's compilers, `uiop:not-implemented-error` |
-| `uiop:restore-image` | upstream's start: the restore hooks, the prelude, then the entry point, whose first value is the exit status (0 for true, 1 for `nil`) unless `:lisp-interaction` is true |
+| `uiop:dump-image` | on the interpreter the rontolisp command line started, with `:executable t`: runs the postlude and the dump hooks, then compiles the image into the executable its file names. Without `:executable t` (a heap image, which no backend can start), in a compiled program, and in an evaluator nothing gave the command line's compilers: `uiop:not-implemented-error`, before any hook runs |
+| `uiop:restore-image` | upstream's start: the restore hooks, the prelude, then the entry point, whose first value is the exit status (0 for true, 1 for `nil`) unless `:lisp-interaction` is true. A program calling it without `:lisp-interaction t` ends there |
 | `uiop:create-image` | `uiop:not-implemented-error` — there are no Lisp object files to link |
 
 rontolisp has no heap to save, so the dump is a compile: each system the image

@@ -67,7 +67,13 @@ already in the set.
   is not seen and keeps the refusal. ci-spec `nested-require-loads-nothing-when-it-runs`,
   `LoadInlinerTest#requiredProgramCompilesAndRunsOnJvm`.
 - Interpreter: runtime functions next to `load` in `LispEvaluator` (`providedModules`, shared
-  `loadFile`), in `PackageRegistry.CL_FUNCTIONS` so `#'require` works. `*modules*` is not exposed.
+  `loadFile`), in `PackageRegistry.CL_FUNCTIONS` so `#'require` works.
+- **`*modules*` diverges, by decision** (2026-11-07): the interpreter's `provide` pushes the name (a
+  string) and `require` reads the variable; on the compile paths it is declared (`injectMvSpillGlobal`)
+  and stays nil, since `provide` is consumed here. Rejected: lowering a consumed `provide` to a run-time
+  push -- it would add a global and an `adjoin` to every program loading a module, `--no-gc` ones
+  (`examples/proxy-wasm/no-gc`) included, for no library that reads it after its own `require` (esrap
+  probes it for swank only). A ci-spec case that `provide`s on the interpreter leg takes the name off again.
 
 ## Load context (`*load-pathname*` / `*load-truename*`)
 

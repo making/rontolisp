@@ -303,7 +303,10 @@ and nothing else tells them apart, so `cl-user`'s `||` is spelled `CL-USER::`
   `|a:b|` is `CL-USER::a:b`, since a bare `a:b` is `A`'s `B` to every reader of a member name or a home.
   The readers frame it (`.kb/read-load-streams.md`, "Emitted reader: frontend parity", the colon bullet), and
   so do `intern` / `find-symbol` with `cl-user` named (`LispMacroExpander.internSpellingBuild`, the
-  computed designator's `cl-user` arm, `builtSpelling`); the printers print it bare like the empty name,
+  computed designator's `cl-user` arm, `builtSpelling`; the interpreter's `PackageResolver.internSpellingIn`,
+  which takes the name whole for ANY package named -- until 2026-11-07 `(intern "c:d" :cl-user)` there was
+  `C`'s `D`; ci-spec `a-colon-inside-a-multiple-escape-is-a-constituent` passed alone and stopped the
+  interpreter leg after the empty-name case); the printers print it bare like the empty name,
   and `%symbol-print-prefix` asks about its member (`collectBareSymbols`, `symbolPrintTable`'s `printsBare`).
   The one-argument `intern` does not, on any backend: it takes a name holding a colon as spelled
   (`internSpellingExact`), the implementation's canonical spellings and `":KW"` among them, so
