@@ -263,8 +263,11 @@ class JvmThreadTest {
 				               (bordeaux-threads:thread-alive-p th)
 				               (get-output-stream-string *bt2-cap*)
 				               *bt2-cfg*
-				               bt2:*default-special-bindings*)))
-				""", "ThreadBt2Prog")).isEqualTo("(T CONFIGURED NIL \"bt2-thread\" UNSET NIL)");
+				               bt2:*default-special-bindings*
+				               (eq (bt2:thread-native-thread th) th)
+				               (handler-case (bt2:join-thread (bt2:make-thread (lambda () (error "boom"))))
+				                 (bt2:abnormal-exit (c) (princ-to-string (bt2:abnormal-exit-condition c)))))))
+				""", "ThreadBt2Prog")).isEqualTo("(T CONFIGURED NIL \"bt2-thread\" UNSET NIL T \"boom\")");
 	}
 
 	@Test

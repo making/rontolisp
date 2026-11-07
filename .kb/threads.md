@@ -106,10 +106,22 @@ own, every operation under it -- upstream's arm for an implementation without a 
 atomic on the interpreter and the JVM and a lock taken for nothing on wasm. The value is a 64-bit word
 stored wrapped, and incf/decf answer the old value plus or minus the delta unwrapped, as upstream's SBCL
 arm does (`(atomic-integer-decf a)` of 0 answers -1 and leaves 18446744073709551615). Pinned by ci-spec
-`bt2-thread-api-portable-surface`. Still absent from bt2's export list against bordeaux-threads 0.9.4's:
-the `native-lock` family, `lock-name`, `lockp`, `semaphorep`, `condition-variable-p`, `thread-native-thread`,
-`signal-in-thread` / `warn-in-thread` / `error-in-thread`, `abnormal-exit`, `bordeaux-threads-error`,
-`not-implemented`, `+supports-threads-p+` -- reading one stops the file.
+`bt2-thread-api-portable-surface`.
+
+**bt2 exports all of bordeaux-threads 0.9.4's names** (2026-11-08; until then a file naming `bt2:lockp`,
+`bt2:abnormal-exit` ... stopped at read time). Behind the ones a backend cannot do is bt2's own
+`not-implemented`: the shim's `bt2::not-supported` (a `simple-error` too, its report the reason) is what
+`interrupt-thread` and its `signal-`/`warn-`/`error-in-thread`, `with-timeout` and the WASM thread entry
+points signal, so a handler for upstream's condition catches them. `join-thread` signals `abnormal-exit`
+over the error that ended the thread (the primitive re-signals it; v1's spelling is the same symbol, and
+upstream's v1 on SBCL signals `join-thread-error` there, not the thread's error either). A lock keeps its
+name (both spellings), `lock-native-lock` answers the mutex handle and `thread-native-thread` the thread.
+`native-lock-p` / `native-recursive-lock-p` (and the two types over them) signal `not-implemented`: a
+mutex handle is opaque by design, an integer on the interpreter, so no predicate can tell one -- a new
+handle type on four backends for a predicate no known library calls is not worth it. The condition
+variable's structure moved to `bt2:condition-variable`, its upstream home (v1 never exported it). Pinned by
+ci-spec `bt2-thread-api-portable-surface` and `ThreadTest`/`JvmThreadTest`
+`bt2ShimSpawnsThroughThePrimitivesWithInitialBindings`.
 
 `current-thread` is **EQ-stable per thread** — what dbi's per-thread connection cache keys on
 (`cache/thread.lisp`'s `steal-cache-table`). Interpreter `AsyncRuntime.currentThreadHandle()`

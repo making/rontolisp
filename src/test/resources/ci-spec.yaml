@@ -19667,12 +19667,29 @@ cases:
                      (progn (setf (bt2:atomic-integer-value ci-bt2-a) 0)
                             (bt2:atomic-integer-decf ci-bt2-a))
                      (bt2:atomic-integer-value ci-bt2-a))))
+      ; The rest of bt2's export list: a lock keeps the name either spelling gives
+      ; it, abnormal-exit reports the condition it carries, and what no backend can
+      ; do signals bt2:not-implemented.
+      (print (list (bt2:lock-name (bt2:make-lock :name "ci-l")) (bt2:lock-name (bt:make-lock "ci-v1"))
+                   (bt2:lock-name (bt2:make-recursive-lock)) (bt2:lockp (bt2:make-lock)) (bt2:lockp 42)
+                   (bt2:semaphorep (bt2:make-semaphore))
+                   (bt2:condition-variable-p (bt2:make-condition-variable))
+                   (typep (bt2:make-condition-variable) 'bt2:condition-variable)
+                   (eq bt2:+supports-threads-p+ bt:*supports-threads-p*)
+                   (princ-to-string
+                    (make-condition 'bt2:abnormal-exit
+                                    :condition (make-condition 'simple-error :format-control "boom"
+                                                                             :format-arguments nil)))
+                   (handler-case (bt2:with-timeout (1) :body) (bt2:not-implemented () :not-implemented))
+                   (handler-case (bt2:native-lock-p (bt2:lock-native-lock (bt2:make-lock)))
+                     (bt2:bordeaux-threads-error () :not-implemented))))
     expected: |
       NIL
       :NOT-A-THREAD
       :HELD
       (T T NIL T T NIL NIL)
       (4 2 NIL T 7 -1 18446744073709551615)
+      ("ci-l" "ci-v1" NIL T NIL T T T T "Thread exited with condition: boom" :NOT-IMPLEMENTED :NOT-IMPLEMENTED)
   - name: equalp-arrays-elementwise
     source: |
       (print (equalp #(1 "A" (2 3)) #(1 "a" (2 3.0))))

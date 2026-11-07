@@ -1460,12 +1460,12 @@ public final class PackageRegistry {
 				LispNames.CONDITION_NOTIFY, LispNames.CONDITION_BROADCAST, LispNames.SEMAPHORE,
 				LispNames.MAKE_SEMAPHORE, LispNames.SIGNAL_SEMAPHORE, LispNames.WAIT_ON_SEMAPHORE, LispNames.THREAD,
 				LispNames.THREAD_NAME, LispNames.THREAD_YIELD, LispNames.ALL_THREADS, LispNames.INTERRUPT_THREAD,
-				LispNames.WITH_TIMEOUT, LispNames.TIMEOUT, LispNames.STANDARD_IO_BINDINGS);
+				LispNames.WITH_TIMEOUT, LispNames.TIMEOUT, LispNames.STANDARD_IO_BINDINGS,
+				LispNames.START_MULTIPROCESSING);
 		Set<String> btV1Externals = new HashSet<>(Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK,
 				LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD, LispNames.SUPPORTS_THREADS_P, LispNames.MAKE_THREAD,
 				LispNames.JOIN_THREAD, LispNames.THREADP, LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD,
-				LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.CURRENT_THREAD, LispNames.LOCK_P, LispNames.SEMAPHORE_P,
-				LispNames.START_MULTIPROCESSING));
+				LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.CURRENT_THREAD, LispNames.LOCK_P, LispNames.SEMAPHORE_P));
 		btV1Externals.addAll(btV1Members);
 		define(new LispPackage(LispNames.BORDEAUX_THREADS_PKG, List.of(), btV1Externals, Set.copyOf(btV1Externals),
 				btThreadImports));
@@ -1478,19 +1478,24 @@ public final class PackageRegistry {
 		Set<String> bt2Externals = new HashSet<>(Set.of(LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
 				LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.DEFAULT_SPECIAL_BINDINGS,
 				LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD,
-				LispNames.CURRENT_THREAD,
-				// The atomic counter (bt2 only): string literals, as nothing in
-				// Java names them -- the trivial-cltl2 precedent below.
-				"ATOMIC-INTEGER", "MAKE-ATOMIC-INTEGER", "ATOMIC-INTEGER-COMPARE-AND-SWAP", "ATOMIC-INTEGER-DECF",
-				"ATOMIC-INTEGER-INCF", "ATOMIC-INTEGER-VALUE"));
+				LispNames.CURRENT_THREAD));
+		// The rest of bordeaux-threads 0.9.4's bt2 export list (bt2 only): string
+		// literals, as nothing in Java names them -- the trivial-cltl2 precedent below.
+		bt2Externals.addAll(List.of("ATOMIC-INTEGER", "MAKE-ATOMIC-INTEGER", "ATOMIC-INTEGER-COMPARE-AND-SWAP",
+				"ATOMIC-INTEGER-DECF", "ATOMIC-INTEGER-INCF", "ATOMIC-INTEGER-VALUE", "+SUPPORTS-THREADS-P+",
+				"BORDEAUX-THREADS-ERROR", "NOT-IMPLEMENTED", "ABNORMAL-EXIT", "ABNORMAL-EXIT-CONDITION",
+				"THREAD-NATIVE-THREAD", "SIGNAL-IN-THREAD", "WARN-IN-THREAD", "ERROR-IN-THREAD", "LOCKP", "LOCK-NAME",
+				"LOCK-NATIVE-LOCK", "NATIVE-LOCK", "NATIVE-LOCK-P", "NATIVE-RECURSIVE-LOCK", "NATIVE-RECURSIVE-LOCK-P",
+				"CONDITION-VARIABLE", "CONDITION-VARIABLE-P", "SEMAPHOREP"));
 		bt2Externals.addAll(btV1Members);
 		Set<String> bt2Symbols = new HashSet<>(bt2Externals);
 		// Internal: the shim's own :initial-bindings value-form resolver, spelled
-		// bt2::resolve-binding-value by its call site, and the atomic counter's
-		// constructor, predicate and slots. Owned by the package rather than left to the
-		// resolver's tolerance for an unknown :: member.
+		// bt2::resolve-binding-value by its call site, the atomic counter's
+		// constructor, predicate and slots, and the shim's not-implemented condition and
+		// its signaller. Owned by the package rather than left to the resolver's
+		// tolerance for an unknown :: member.
 		bt2Symbols.addAll(Set.of(LispNames.RESOLVE_BINDING_VALUE, "%MAKE-ATOMIC-INTEGER", "ATOMIC-INTEGER-P",
-				"%ATOMIC-INTEGER-VALUE", "%ATOMIC-INTEGER-LOCK"));
+				"%ATOMIC-INTEGER-VALUE", "%ATOMIC-INTEGER-LOCK", "NOT-SUPPORTED", "SIGNAL-NOT-SUPPORTED"));
 		define(new LispPackage(LispNames.BT2_PKG, List.of(), bt2Symbols, Set.copyOf(bt2Externals), bt2LockImports));
 		// babel + babel-encodings: the UTF-8 slice of the charset-conversion library,
 		// implemented in babel.lisp (eval.ShimLibraries). Real babel carries 40+ code

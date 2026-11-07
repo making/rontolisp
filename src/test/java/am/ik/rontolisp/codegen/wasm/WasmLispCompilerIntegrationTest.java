@@ -25404,7 +25404,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (handler-case (bt2:thread-alive-p 42)
 				         (type-error (e) (list (type-error-datum e) (type-error-expected-type e)
 				                               (princ-to-string e)))))
-				(print (handler-case (bt2:make-thread (lambda () 1)) (error (e) :spawn-error)))
+				(print (handler-case (bt2:make-thread (lambda () 1)) (bt2:not-implemented (e) :spawn-error)))
 				(print bordeaux-threads:*supports-threads-p*)
 				(let ((s (bt:make-semaphore :count 1))
 				      (cv (bt:make-condition-variable)))
@@ -25414,11 +25414,12 @@ class WasmLispCompilerIntegrationTest {
 				               (bt:condition-notify cv)
 				               (bt:thread-yield)
 				               (handler-case (bt:condition-wait cv (bt:make-lock))
-				                 (error (e) :wait-error)))))
+				                 (bt2:not-implemented (e) :wait-error)))))
 				""", am.ik.rontolisp.reader.Features.WASM, true, false);
 		// thread-alive-p's type-error is the interpreter's and the JVM's
 		// (HandleOperandFixture): every wasm-reachable argument is a non-thread. A
-		// semaphore counts, and a condition wait -- which nothing could end -- signals.
+		// semaphore counts, and a condition wait -- which nothing could end -- signals
+		// bt2:not-implemented, as a spawn does.
 		assertThat(compileAndRunProgram(program)).isEqualTo(
 				"NIL\n(42 (SATISFIES RONTOLISP:THREADP) \"THREAD-ALIVE-P: The value 42 is not of type (SATISFIES RONTOLISP:THREADP)\")\n:SPAWN-ERROR\nNIL\n(T T T NIL NIL :WAIT-ERROR)");
 	}
