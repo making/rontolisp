@@ -14649,6 +14649,12 @@ cases:
       (print (adjoin "a" '("a" "b") :test #'string=))
       (print (adjoin "z" '("a" "b") :test #'string=))
       (print (adjoin '(1 x) '((1 a) (2 b)) :key #'car))
+      ;; pushnew compares as adjoin does: the key applies to the item too
+      ;; (numpy-file-format's dtype table)
+      (print (let ((ci-pn (list (list "a" 1))))
+               (pushnew (list "a" 2) ci-pn :key #'car :test #'string=)
+               (pushnew (list "b" 3) ci-pn :key #'car :test #'string=)
+               ci-pn))
       (print (subsetp '("a" "b") '("a" "b" "c") :test #'string=))
       (print (subsetp '("a" "z") '("a" "b" "c") :test #'string=))
       (print (subsetp '((1 x) (2 y)) '((1 a) (2 b)) :key #'car))
@@ -14675,6 +14681,7 @@ cases:
       ("a" "b")
       ("z" "a" "b")
       ((1 A) (2 B))
+      (("b" 3) ("a" 1))
       T
       NIL
       T

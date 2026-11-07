@@ -5014,14 +5014,18 @@ public final class LispMacroExpander {
 	private static final String PUSH_VAR = "__push_item";
 
 	/**
-	 * Expands (pushnew item place [args...]) into a member-guarded push. Extra arguments
-	 * ({@code :test}/{@code :key}) are passed through to {@code member}. Like
-	 * {@code push}, the place may be evaluated more than once.
+	 * Expands (pushnew item place [args...]) into a member-guarded push, compared as
+	 * {@code adjoin} compares (CLHS {@code pushnew}): the {@code :key} selector applies
+	 * to the item AND to each element, the {@code :test}/{@code :test-not} designator to
+	 * the two keys, while the pushed item stays unkeyed. The item evaluates first, then
+	 * the place's subforms, then the keyword values in the order the call spells them,
+	 * each once ({@link KeywordTail}).
 	 *
 	 * <pre>
-	 * (pushnew item place) ->
+	 * (pushnew item place :key k) ->
 	 *   (let ((__push_item item))
-	 *     (if (member __push_item place) place (setf place (cons __push_item place))))
+	 *     (if (member (funcall k __push_item) place :key k) place
+	 *         (setf place (cons __push_item place))))
 	 * </pre>
 	 *
 	 * A literal quoted-list place is a no-op returning the list unchanged: the one
@@ -5041,16 +5045,25 @@ public final class LispMacroExpander {
 				&& LispNames.QUOTE.equals(quoteOp.name())) {
 			return makeProgn(List.of(item, parts.get(2)));
 		}
+		LispVal keywordError = testKeyKeywordTailError(cons, LispNames.PUSHNEW, parts, 3);
+		if (keywordError != null) {
+			return keywordError;
+		}
 		PlaceTemps temps = new PlaceTemps(cons);
 		LispVal place = temps.once(parts.get(2));
-		List<LispVal> memberParts = new java.util.ArrayList<>();
-		memberParts.add(new LispSymbol(LispNames.MEMBER));
-		memberParts.add(new LispSymbol(PUSH_VAR));
-		memberParts.add(place);
-		memberParts.addAll(parts.subList(3, parts.size()));
-		LispVal consExpr = listToCons(List.of(new LispSymbol(LispNames.CONS), new LispSymbol(PUSH_VAR), place));
+		// Only the keyword values hoist: the item is bound above, and the place is no
+		// value to bind but where the push writes, so both stand as inert placeholders.
+		List<LispVal> keywordCall = new java.util.ArrayList<>(parts);
+		keywordCall.set(1, LispNil.INSTANCE);
+		keywordCall.set(2, LispNil.INSTANCE);
+		KeywordTail tail = KeywordTail.of(keywordCall, 3, "__pushnew");
+		List<LispVal> keywords = tail.parts();
+		LispVal keyForm = keywordValue(keywords, 3, LispNames.KEY_KEYWORD);
+		LispSymbol pushed = new LispSymbol(PUSH_VAR);
+		LispVal memberTest = memberCallForm(keyedForm(keyForm, pushed), place, testSpec(keywords, 3), keyForm);
+		LispVal consExpr = listToCons(List.of(new LispSymbol(LispNames.CONS), pushed, place));
 		LispVal setfExpr = listToCons(List.of(new LispSymbol(LispNames.SETF), place, consExpr));
-		return makeLet(PUSH_VAR, item, temps.wrap(makeIf(listToCons(memberParts), place, setfExpr)));
+		return makeLet(PUSH_VAR, item, temps.wrap(tail.wrap(makeIf(memberTest, place, setfExpr))));
 	}
 
 	/**
