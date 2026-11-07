@@ -493,7 +493,7 @@ asking "is library X loaded" must therefore not be a `findClass` of X's class na
   `structAccessors` under `SETF_FUNCTION_MARKER`, so `expandSetf` is unchanged. A user setf
   method MERGES with accessor-generated writer methods or replaces the same-specializer one.
   **Ordering constraint**: normalization sites are `expandTopLevelDefinitions`'s defmethod AND
-  defgeneric branches, `expandLetNestedDefmethods`/`rewriteNestedDefmethods`, and the
+  defgeneric branches, `expandNestedDefmethods`/`rewriteNestedDefmethods`, and the
   interpreter's `evalDefmethod`/`evalDefgeneric` — all BEFORE anything casts the name position
   to `LispSymbol`. Qualified places produce `%setf-PKG::NAME`.
 - `(setf (find-class 'alias) (find-class 'target))`: **an alias is a second NAME for one
@@ -1419,7 +1419,7 @@ where nested `defmethod`s carry the class METAOBJECT spliced as a literal specia
   driver registers the metaobject BEFORE `finalize-inheritance`.
 - The compile paths' MACRO-TIME evaluator records the body into the splice sink
   `UserMacroExpander` attaches (`setMopEvalSpliceSink`); the pass splices the folded forms right
-  after the triggering defclass, where `expandLetNestedDefmethods` registers them statically.
+  after the triggering defclass, where `expandNestedDefmethods` registers them statically.
 - Run-time re-execution goes through the generated `compile` runtime (`macro/CompileRuntime` +
   `compile-runtime.lisp`, gated on a compile reference without a user defun, in the native-image
   resource-config): a defmethod-containing definition answers a do-nothing function, anything

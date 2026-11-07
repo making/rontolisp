@@ -38,7 +38,7 @@ import org.jspecify.annotations.Nullable;
  * The folded body is then evaluated in place on the interpreter, or recorded through the
  * macro-time evaluator's splice sink and appended to the program as top-level forms on
  * the compile paths ("expand and splice") -- where
- * {@code LispMacroExpander.expandLetNestedDefmethods} registers the nested
+ * {@code LispMacroExpander.expandNestedDefmethods} registers the nested
  * {@code defmethod}s statically and the closure machinery carries the lexical captures.
  */
 public final class MopEvalCapture {

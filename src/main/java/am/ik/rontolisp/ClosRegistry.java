@@ -3031,9 +3031,9 @@ public final class ClosRegistry {
 
 	/**
 	 * The generated method-body defun names ({@code %<generic>--m<i>}) whose defun sits
-	 * inside a top-level {@code let} body rather than at top level -- the
-	 * closure-over-let method idiom
-	 * ({@code expandLetNestedDefmethods}/{@code rewriteNestedDefmethods}). Such a defun
+	 * below a top-level form rather than at top level -- the closure-over-let method
+	 * idiom, a conditional, a loop, a function body
+	 * ({@code expandNestedDefmethods}/{@code rewriteNestedDefmethods}). Such a defun
 	 * compiles to a {@code (setq name (lambda ...))} global-closure assignment, so its
 	 * function value exists only once the {@code defmethod} FORM executes; a dispatcher
 	 * branch calling it before that must be skipped (falling through to the default or to
