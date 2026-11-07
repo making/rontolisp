@@ -2,45 +2,45 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**17,445 / 20,009 tests pass (87.2%)** -- 1,188 fail, 1,376 signal an error.
+**17,456 / 20,078 tests pass (86.9%)** -- 1,261 fail, 1,361 signal an error.
 
-0 top-level forms could not be read, 262 could not be evaluated, 4 did not terminate; every test those forms would have defined is missing from the counts above.
+0 top-level forms could not be read, 257 could not be evaluated, 3 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
 | arrays | 1,356 | 1,319 | 17 | 20 | 97.3% | 8 |
 | characters | 259 | 233 | 4 | 22 | 90.0% | 8 |
-| conditions | 673 | 589 | 30 | 54 | 87.5% | 8 |
-| cons | 1,882 | 1,742 | 77 | 63 | 92.6% | 8 |
-| data-and-control-flow | 1,428 | 1,263 | 67 | 98 | 88.4% | 8 |
-| environment | 210 | 139 | 11 | 60 | 66.2% | 8 |
+| conditions | 673 | 600 | 29 | 44 | 89.2% | 8 |
+| cons | 1,882 | 1,744 | 77 | 61 | 92.7% | 8 |
+| data-and-control-flow | 1,428 | 1,265 | 66 | 97 | 88.6% | 8 |
+| environment | 210 | 142 | 11 | 57 | 67.6% | 8 |
 | eval-and-compile | 306 | 258 | 26 | 22 | 84.3% | 8 |
 | files | 87 | 37 | 10 | 40 | 42.5% | 8 |
 | hash-tables | 157 | 134 | 17 | 6 | 85.4% | 10 |
 | iteration | 843 | 777 | 44 | 22 | 92.2% | 8 |
-| misc | 740 | 734 | 6 | 0 | 99.2% | 8 |
-| numbers | 1,444 | 1,315 | 38 | 91 | 91.1% | 11 |
+| misc | 740 | 730 | 10 | 0 | 98.6% | 8 |
+| numbers | 1,444 | 1,250 | 105 | 89 | 86.6% | 11 |
 | objects | 846 | 595 | 131 | 120 | 70.3% | 19 |
 | packages | 500 | 436 | 38 | 26 | 87.2% | 8 |
 | pathnames | 215 | 144 | 27 | 44 | 67.0% | 8 |
-| printer | 731 | 469 | 160 | 102 | 64.2% | 39 |
+| printer | 732 | 464 | 165 | 103 | 63.4% | 38 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 8 |
-| reader | 668 | 544 | 80 | 44 | 81.4% | 11 |
+| reader | 668 | 547 | 77 | 44 | 81.9% | 11 |
 | sequences | 3,287 | 3,128 | 54 | 105 | 95.2% | 8 |
 | streams | 801 | 671 | 73 | 57 | 83.8% | 8 |
-| strings | 509 | 437 | 54 | 18 | 85.9% | 9 |
-| structures | 1,219 | 956 | 69 | 194 | 78.4% | 22 |
+| strings | 509 | 436 | 54 | 19 | 85.7% | 9 |
+| structures | 1,287 | 1,022 | 70 | 195 | 79.4% | 17 |
 | symbols | 1,145 | 1,090 | 23 | 32 | 95.2% | 8 |
 | system-construction | 77 | 28 | 1 | 48 | 36.4% | 8 |
-| types-and-classes | 626 | 407 | 131 | 88 | 65.0% | 9 |
-| **total** | **20,009** | **17,445** | **1,188** | **1,376** | **87.2%** | **266** |
+| types-and-classes | 626 | 406 | 132 | 88 | 64.9% | 9 |
+| **total** | **20,078** | **17,456** | **1,261** | **1,361** | **86.9%** | **260** |
 
 ## Most frequent failure reasons
 
 | count | reason |
 |---:|---|
 | 259 | `The variable *MINI-UNIVERSE* is unbound` |
-| 229 | `The variable *UNIVERSE* is unbound` |
+| 233 | `The variable *UNIVERSE* is unbound` |
 | 71 | `The function CLASS-PRECEDENCE-LIST-FOO is undefined` |
 | 50 | `LispEvalException: X cannot redefine the standard operator X` |
 | 50 | `The variable *METHODS* is unbound` |
@@ -65,7 +65,6 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 11 | `X expects (reduce fn list) or (reduce fn list :initial-value init)` |
 | 11 | `X: unsupported option :X` |
 | 11 | `make-sequence: unsupported result type #X :X X :X X :X X :X X :X X` |
-| 10 | `The function FORMATTER is undefined` |
 | 10 | `X: no clause matches 1` |
 | 10 | `end of file` |
 | 9 | `The function COMPILE-AND-LOAD is undefined` |
@@ -79,4 +78,5 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 8 | `The function MAKE-STRUCT-TEST-64 is undefined` |
 | 8 | `The function MAKE-STRUCT-TEST-65 is undefined` |
 | 8 | `The function MAKE-STRUCT-TEST-66 is undefined` |
+| 7 | `X expects a pathname designator` |
 
