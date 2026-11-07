@@ -403,7 +403,8 @@ table is GENERATED from it. **Change them together.**
   against is a tagged fixnum narrower than a word. typo's primitive list puts `(unsigned-byte 63)` after
   `fixnum` and asserts no later entry is a subtype of an earlier one, so it needs 33..63 bits (coalton
   needs at least 32); every implementation typo supports has that. `sxhash` masks by the constant, so it
-  stays a fixnum. Pin: ci-spec `subtypep-fixnum-is-a-63-bit-interval` (SBCL's answers).
+  stays a fixnum. Pin: ci-spec `subtypep-fixnum-is-a-63-bit-interval` (SBCL's answers). typo's load
+  now stops at `vm/predicates.lisp` on a `shared-initialize` method's initargs (`.todo/j01`).
 - **The stream subtypes are edges to `STREAM`** (`file-stream` ... `concatenated-stream`), and a
   Gray class (ancestor `rontolisp:fundamental-stream`) is below `STREAM` in `namedSubtypep`. The
   edges join the runtime universe only for the names `runtimeStreamTypeNames` keeps, so a
