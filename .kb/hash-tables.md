@@ -35,7 +35,11 @@ Pinned by `LispEvaluatorTest.aHashTableReportsAndPrintsTheTestItImplements`, its
 `compileEqualpHashTablePrintsAndReportsItsTest` JVM/P1 twins and ci-spec
 `hash-table-computed-test`.
 
-- `equal`: the structural hash plus real `equal` in the bucket.
+- `equal`: the structural hash plus real `equal` in the bucket. A structure or CLOS instance, which
+  `equal` compares by identity ([instance-syntax.md](instance-syntax.md)), hashes by identity:
+  `System.identityHashCode` on the interpreter and the JVM, on WASM its identity-hash slot where the
+  module's objects carry one and its LAYOUT ADDRESS where they do not -- one bucket per type, which no
+  slot write can move (the vector's bucket-0 precedent below; the slot's gate stays the eq/eql one).
 - `equalp`: the `equalp` key fold below, then the same pair.
 - `eql`/`eq`: the `eql`/`eq` predicate (`LispEquality.eql`/`eq`) in the bucket.
   Aggregates (conses, vectors, instances, tables, allocated strings, mutable
@@ -121,7 +125,14 @@ read the same on all four backends:
 `equalp` on two values is `equal` on their folds, so one structural table carries both tests.
 Fold: string/character to UPPER CASE code point by code point; a finite float to the exact rational
 it equals, read out of `mantissa * 2^exponent` (`1`, `1.0`, `2/2` are one key, and so are `0.5` and
-`1/2`; the least subnormal folds to `1/2^1074`); a cons element-wise; everything else is its own key
+`1/2`; the least subnormal folds to `1/2^1074`); a cons element-wise; a structure or CLOS instance
+(identity under `equal`) to the list `(marker tag slot-fold...)`, the marker a value equal to nothing
+but itself (interpreter: a `LispJavaObject` over a private `Object`; JVM: a private `Object` in
+`RontoHashTable`; WASM: one cell made on first use and kept in a `(mut (ref null eq))` global beside
+the fold's two counters, `equalpMarkerGlobalIndex`, only in a module that folds and can build an
+instance), the tag a layout's (its string; wasm its record's address as an i31) -- so the table
+matches two instances slot by slot as the `equalp` predicate does (petalisp's shape tables), and no
+key a program writes matches a fold; everything else is its own key
 (NaN and the infinities included). One deliberate ANSI deviation, a MISS and never a false match:
 an ARRAY does not fold (`equal` on a vector is identity). The fraction fold waited on WASM
 `TYPE_RATIO`'s two i32 components, too narrow for a power-of-two denominator, until they became

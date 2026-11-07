@@ -19450,13 +19450,15 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void structLiteralIsEqualToTheConstructedInstance() {
+	void structLiteralIsEqualpToTheConstructedInstance() {
+		// equal compares two structures by identity (CLHS equal), equalp slot by slot.
 		assertThat(evalMulti(
 				"""
 						(defstruct point x y)
-						(list (equal #S(POINT :X 1 :Y 2) (make-point :x 1 :y 2)) (equal #S(POINT :X 1 :Y 2) (make-point :x 9 :y 2)))
+						(list (equalp #S(POINT :X 1 :Y 2) (make-point :x 1 :y 2)) (equalp #S(POINT :X 1 :Y 2) (make-point :x 9 :y 2))
+						      (equal #S(POINT :X 1 :Y 2) (make-point :x 1 :y 2)))
 						""")
-			.print()).isEqualTo("(T NIL)");
+			.print()).isEqualTo("(T NIL NIL)");
 	}
 
 	@Test

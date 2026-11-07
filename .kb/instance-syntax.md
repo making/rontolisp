@@ -94,9 +94,16 @@ knows nothing about `ClosRegistry`, so reading is split in two:
   defstructs: `torch::%t-topo`'s visited set and `torch::%m-collect`'s parameter dedup are `member`
   (i.e. `eql`) over records and BOTH mean identity (`.kb/torch.md`). An `eq`/`eql`
   hash table keys instances the same way on every backend (`.kb/hash-tables.md`).
-- `equal` on two instances is STRUCTURAL: same layout, every slot recursively `equal`. **A deliberate
-  deviation from CL**, where distinct structures are never `equal`; re-evaluate if a real program
-  depends on CL's rule (one arm in each of the three `_equal`s).
+- `equal` on two STRUCTURE or CLOS instances (a condition included) is IDENTITY on all four backends,
+  CL's rule (`LispEquality.equalByIdentity`; the JVM `_equal` reads the layout's kind letter, wasm the
+  record's `OFF_KIND`); a pathname and an opaque built-in (a stream, a readtable, a random state) stay
+  structural, same layout and every slot recursively `equal`. An `equal` table places such an instance
+  by its identity, so a key whose slots change after it is stored keeps its bucket, and an `equalp` table
+  by its fold ([hash-tables.md](hash-tables.md)). Structural from the tagged-list days until
+  2026-11-07, recorded as a deviation to re-evaluate when a real program depends on CL's rule: petalisp
+  did, twice -- a default table (EQUAL here, `.todo/012`) of layouts whose slots it writes lost every
+  key, and its ucons blueprints, whose slots reach a cache holding their children, sent the structural
+  `equal` round a cycle until the stack ran out (`lazy-sort`'s kernels).
 - `equalp` descends slot-wise on top of that: the prelude compares `(%obj-tag a)` with `(%obj-tag b)`
   and hands `(%obj-slots a)`/`(%obj-slots b)` back to `equalp`, so the cons arm recurses. That is WHY
   `%obj-slots` exists — walking slots through `%class-slot-defs` + runtime-name `slot-value`
@@ -124,7 +131,7 @@ with `setf`/`incf`/`push` without their own case.
 ## Per-backend representation
 
 - **Interpreter**: `LispInstance` (layout + `LispVal[]`), a `LispVal` sealed permit, self-evaluating,
-  `equals`/`hashCode` structural.
+  Java's `equals`/`hashCode` structural (what Lisp's `equal` reads for a pathname or an opaque one only).
 - **JVM**: `Object[]{ String[] layout, v1..vn }`. The `String[]` in slot 0 is both the layout
   (`{tag, printName, "S"|"C", slot0, ...}`) and the type DISCRIMINATOR: no other value this backend
   produces has a `String[]` there (a cons is `Object[2]` of Lisp values, a function value has an

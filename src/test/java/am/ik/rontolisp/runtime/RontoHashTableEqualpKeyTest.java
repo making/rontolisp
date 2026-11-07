@@ -1,11 +1,14 @@
 package am.ik.rontolisp.runtime;
 
 import java.math.BigInteger;
+import java.util.List;
 
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispEquality;
+import am.ik.rontolisp.LispInstance;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -86,13 +89,27 @@ class RontoHashTableEqualpKeyTest {
 	}
 
 	@Test
-	void aConsFoldsElementWiseInBothModels() {
+	void aConsAndAStructureFoldElementWiseInBothModels() {
 		LispVal folded = interpreterFold(
 				new LispCons(new LispString("Lu"), new LispCons(new LispDouble(2.0), LispNil.INSTANCE)));
 		assertThat(folded.print()).isEqualTo("(\"LU\" 2)");
 		Object[] pair = (Object[]) jvmFold(new Object[] { "\"Lu\"", new Object[] { Double.valueOf(2.0), null } });
 		assertThat(pair[0]).isEqualTo("\"LU\"");
 		assertThat(((Object[]) pair[1])[0]).isEqualTo(Long.valueOf(2));
+		// A structure, which equal compares by identity, folds to (marker tag
+		// slot-fold...) in both models: two with equalp slots fold to equal lists, and
+		// the marker heads a list no key a program writes can be equal to.
+		LispLayout layout = LispLayout.ofStruct("PT", List.of("X"), List.of(LispNil.INSTANCE));
+		LispVal one = interpreterFold(new LispInstance(layout, new LispVal[] { new LispString("Lu") }));
+		LispVal other = interpreterFold(new LispInstance(layout, new LispVal[] { new LispString("lU") }));
+		assertThat(LispEquality.equal(one, other)).isTrue();
+		assertThat(((LispCons) one).cdr().print()).isEqualTo("(\"" + layout.tag() + "\" \"LU\")");
+		String[] jvmLayout = { layout.tag(), "PT", "S", "X" };
+		Object[] jvmOne = (Object[]) jvmFold(new Object[] { jvmLayout, "\"Lu\"" });
+		Object[] jvmOther = (Object[]) jvmFold(new Object[] { jvmLayout, "\"lU\"" });
+		assertThat(jvmOne[0]).isSameAs(jvmOther[0]);
+		assertThat(((Object[]) jvmOne[1])[0]).isEqualTo(layout.tag());
+		assertThat(((Object[]) ((Object[]) jvmOne[1])[1])[0]).isEqualTo("\"LU\"");
 	}
 
 	@Test

@@ -453,8 +453,11 @@ final class WasmRuntimeBuilder {
 
 	/**
 	 * Opens the both-instances arm of {@code _equal} (nothing when there is no instance
-	 * type): same layout record and every slot recursively equal. The caller closes the
-	 * {@code if} after the remaining eql arms, so this leaves the ELSE open.
+	 * type): a structure or CLOS instance is equal only to itself, which the
+	 * {@code ref.eq} test ahead of the arm settled; two pathnames or opaque built-ins
+	 * need the same layout record and every slot recursively equal
+	 * ({@code LispEquality.equalByIdentity}). The caller closes the {@code if} after the
+	 * remaining eql arms, so this leaves the ELSE open.
 	 */
 	private static void emitInstanceEqual(WasmWriter w, int instanceTypeIndex, int[] keyedLayout) {
 		if (instanceTypeIndex < 0) {
@@ -472,6 +475,14 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF);
 		w.write(Type.I32);
+		// A structure or CLOS instance (not of the address-keyed layout, whose first slot
+		// is its identity) answers 0 here: ref.eq already failed.
+		emitComparesByIdentity(w, 0, instanceTypeIndex, keyedLayout);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.ELSE);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.SET_LOCAL);
@@ -512,11 +523,31 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // end loop
 		w.write(Instruction.END); // end block
 		getLocal(w, 4);
+		w.write(Instruction.END); // end identity-kind if
 		w.write(Instruction.ELSE);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.END); // end same-layout if
 		w.write(Instruction.ELSE);
+	}
+
+	/**
+	 * Pushes whether {@code equal} compares the instance in {@code local} by identity:
+	 * its layout record's kind is a structure's or a CLOS class's
+	 * ({@link WasmInstanceLayouts#KIND_STRUCT}, {@link WasmInstanceLayouts#KIND_CLASS}),
+	 * and it is not of the address-keyed layout, whose first slot is its identity.
+	 */
+	static void emitComparesByIdentity(WasmWriter w, int local, int instanceTypeIndex, int[] keyedLayout) {
+		instanceField(w, local, instanceTypeIndex, 0);
+		w.write(Instruction.I32_LOAD, 0x02, WasmInstanceLayouts.OFF_KIND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmInstanceLayouts.KIND_PATHNAME);
+		w.write(Instruction.I32_LT_U);
+		if (keyedLayout.length > 0) {
+			emitLayoutIs(w, local, instanceTypeIndex, keyedLayout);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.I32_AND);
+		}
 	}
 
 	/**
@@ -554,7 +585,7 @@ final class WasmRuntimeBuilder {
 	}
 
 	/** Pushes field {@code field} of the instance in {@code local}. */
-	private static void instanceField(WasmWriter w, int local, int instanceTypeIndex, int field) {
+	static void instanceField(WasmWriter w, int local, int instanceTypeIndex, int field) {
 		getLocal(w, local);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(instanceTypeIndex);
@@ -569,7 +600,7 @@ final class WasmRuntimeBuilder {
 	 * (change-class room, a Gray input stream's parked {@code unread-char}) are no part
 	 * of the value {@code _equal} compares and {@code _hash} folds.
 	 */
-	private static void pushLayoutSlotCount(WasmWriter w, int local, int instanceTypeIndex) {
+	static void pushLayoutSlotCount(WasmWriter w, int local, int instanceTypeIndex) {
 		instanceField(w, local, instanceTypeIndex, 0);
 		w.write(Instruction.I32_LOAD, 0x02, WasmInstanceLayouts.OFF_SLOT_COUNT);
 	}
@@ -591,7 +622,7 @@ final class WasmRuntimeBuilder {
 	}
 
 	/** Pushes slot {@code local(indexLocal)} of the instance in {@code local}. */
-	private static void instanceSlot(WasmWriter w, int local, int instanceTypeIndex, int indexLocal) {
+	static void instanceSlot(WasmWriter w, int local, int instanceTypeIndex, int indexLocal) {
 		instanceSlots(w, local, instanceTypeIndex);
 		getLocal(w, indexLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
@@ -872,11 +903,27 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.ELSE);
 
-		// instance -> fold the layout address, then every slot hash (h = h * 31 + hash)
+		// instance -> a structure or CLOS instance, which _equal compares by identity, by
+		// its identity-hash slot where the module's objects carry one and by its layout
+		// address where they do not (one bucket per type, which no write of a slot can
+		// move); any other instance folds the layout address, then every slot hash
+		// (h = h * 31 + hash)
 		if (instanceTypeIndex >= 0) {
 			refTest(w, 0, instanceTypeIndex);
 			w.write(Instruction.IF);
 			w.write(Type.I32);
+			emitComparesByIdentity(w, 0, instanceTypeIndex, keyedLayout);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			if (identityHash) {
+				getLocal(w, 0);
+				w.write(Instruction.CALL);
+				w.writeUnsignedLeb128(WasmLispCompiler.FUNC_IHASH);
+			}
+			else {
+				instanceField(w, 0, instanceTypeIndex, 0);
+			}
+			w.write(Instruction.ELSE);
 			instanceField(w, 0, instanceTypeIndex, 0);
 			w.write(Instruction.SET_LOCAL);
 			w.writeUnsignedLeb128(2); // h = layout address
@@ -914,6 +961,7 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.END); // end loop
 			w.write(Instruction.END); // end block
 			getLocal(w, 2);
+			w.write(Instruction.END); // end identity-kind if
 			w.write(Instruction.ELSE);
 		}
 

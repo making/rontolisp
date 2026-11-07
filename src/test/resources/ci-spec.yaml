@@ -12417,9 +12417,20 @@ cases:
       ;; class-of answers the class metaobject; class-name reads its name
       (print (class-name (class-of (make-ips-pt :x 1 :y 2))))
       (print (princ-to-string (make-instance 'ips-box :w 1 :h 2)))
-      (let ((ips-h (make-hash-table :test 'equal)))
-        (setf (gethash (make-ips-pt :x 1 :y 2) ips-h) :ips-v)
-        (print (gethash (make-ips-pt :x 1 :y 2) ips-h)))
+      ;; equal is eq on a structure or CLOS instance: an equal table finds a key whose
+      ;; slots changed, and no other instance; an equalp table compares them slot by slot
+      (let ((ips-h (make-hash-table :test 'equal))
+            (ips-q (make-hash-table :test 'equalp))
+            (ips-k (make-ips-pt :x 1 :y 2)))
+        (setf (gethash (make-ips-pt :x 1 :y 2) ips-h) :ips-v
+              (gethash ips-k ips-h) :ips-k
+              (gethash (list (make-ips-pt :x 1 :y "A")) ips-q) :ips-q)
+        (setf (ips-pt-y ips-k) 9)
+        (print (list (gethash (make-ips-pt :x 1 :y 2) ips-h) (gethash ips-k ips-h)
+                     (gethash (list (make-ips-pt :x 1 :y "a")) ips-q)
+                     (gethash (list (make-ips-pt :x 2 :y "a")) ips-q)
+                     (equal ips-k ips-k) (equal (list ips-k) (list ips-k))
+                     (equal (make-instance 'ips-box :w 1) (make-instance 'ips-box :w 1)))))
       (print (rontolisp:json-stringify (make-ips-pt :x 1 :y "s")))
     expected: |
       #S(IPS-PT :X 1 :Y "hi")
@@ -12429,10 +12440,10 @@ cases:
       #<IPS-BOX :W 3 :H 4>
       #S(IPS-PT :X 1 :Y "s")|#S(IPS-PT :X 1 :Y s)
       (NIL NIL T T T)
-      (T NIL T)
+      (NIL NIL T)
       IPS-PT
       "#<IPS-BOX :W 1 :H 2>"
-      :IPS-V
+      (NIL :IPS-K :IPS-Q NIL T T NIL)
       "{\"x\":1,\"y\":\"s\"}"
   - name: struct-literal-read-syntax
     source: |
@@ -12458,7 +12469,7 @@ cases:
       #S(SLR-PT :X 10 :Y 2)
       #S(SLR-PT :X 1 :Y 2)
       #S(SLR-EMPTY)
-      (T NIL 7 T)
+      (T NIL 7 NIL)
       (+ 1 2)
       (1 3)
   - name: a-literal-holds-symbols-of-the-current-package

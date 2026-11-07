@@ -68,12 +68,13 @@ public final class LispEquality {
 
 	/**
 	 * The {@code equal} predicate: identical objects are equal; two conses are equal when
-	 * their cars and cdrs are recursively equal; everything else falls back to
-	 * {@code eql} (numbers and characters by value and type, strings and instances
-	 * structurally through their own {@code equals}, other aggregates by identity). A
-	 * host object on the left asks its own {@code equals} with the right operand as Java
-	 * receives it ({@link LispJavaObject#receiverObject}, {@code .kb/eq-numbers.md},
-	 * "Host objects").
+	 * their cars and cdrs are recursively equal; a structure, a CLOS object and a
+	 * condition are equal only to themselves ({@link #equalByIdentity}); everything else
+	 * falls back to {@code eql} (numbers and characters by value and type, strings, a
+	 * pathname and the opaque built-ins structurally through their own {@code equals},
+	 * other aggregates by identity). A host object on the left asks its own
+	 * {@code equals} with the right operand as Java receives it
+	 * ({@link LispJavaObject#receiverObject}, {@code .kb/eq-numbers.md}, "Host objects").
 	 * @param a the first value
 	 * @param b the second value
 	 * @return whether the two values are {@code equal}
@@ -118,7 +119,26 @@ public final class LispEquality {
 		if (a instanceof LispNil || b instanceof LispNil) {
 			return a instanceof LispNil && b instanceof LispNil;
 		}
+		if (equalByIdentity(a) || equalByIdentity(b)) {
+			return false;
+		}
 		return a.equals(b);
+	}
+
+	/**
+	 * Whether {@code equal} compares a value by identity although it is an instance: a
+	 * structure, a CLOS object or a condition -- CLHS {@code equal} descends only conses,
+	 * strings, bit vectors and pathnames. A pathname, and an opaque built-in (a stream, a
+	 * readtable, a random state, whose backend-local handle slot is what tells two
+	 * apart), compare by their slots. An {@code equal} hash table places such an instance
+	 * by its identity ({@link #hash}), so a key whose slots change after it is stored
+	 * keeps its bucket ({@code .kb/instance-syntax.md}).
+	 * @param v the value
+	 * @return whether it is a structure, CLOS or condition instance
+	 */
+	public static boolean equalByIdentity(LispVal v) {
+		return v instanceof LispInstance instance && (instance.layout().kind() == LispLayout.Kind.STRUCT
+				|| instance.layout().kind() == LispLayout.Kind.CLASS);
 	}
 
 	/**
@@ -187,12 +207,16 @@ public final class LispEquality {
 	 * canonical representative of everything {@code equalp} calls the same. A string and
 	 * a character fold to their upper case, a finite float to the exact rational it
 	 * equals (so {@code 1}, {@code 1.0} and {@code 2/2} are one key, and so are
-	 * {@code 0.5} and {@code 1/2}), and a cons folds element-wise. Everything else is its
-	 * own representative, and one of those is a real deviation from ANSI {@code equalp}
-	 * tables, recorded in {@code .kb/hash-tables.md}: an ARRAY does not fold, since
-	 * {@link #equal} on a vector is identity on every backend and a folded copy would
-	 * never find itself. The deviation is a MISS, never a false match: the fold only ever
-	 * refuses to merge two keys {@code equalp} would call the same.
+	 * {@code 0.5} and {@code 1/2}), and a cons folds element-wise. A structure or CLOS
+	 * instance, which {@link #equal} compares by identity, folds to the list
+	 * {@code (marker tag slot...)} of its slots' folds behind a marker no other value is
+	 * equal to ({@link #EQUALP_INSTANCE_MARKER}), so the table matches it slot by slot as
+	 * the {@code equalp} predicate does. Everything else is its own representative, and
+	 * one of those is a real deviation from ANSI {@code equalp} tables, recorded in
+	 * {@code .kb/hash-tables.md}: an ARRAY does not fold, since {@link #equal} on a
+	 * vector is identity on every backend and a folded copy would never find itself. The
+	 * deviation is a MISS, never a false match: the fold only ever refuses to merge two
+	 * keys {@code equalp} would call the same.
 	 *
 	 * <p>
 	 * Folding rather than a second hash/compare pair is what keeps ONE structural table
@@ -227,8 +251,27 @@ public final class LispEquality {
 				equalpKey(complex.real(), depth - 1, budget);
 			case LispCons cons ->
 				new LispCons(equalpKey(cons.car(), depth - 1, budget), equalpKey(cons.cdr(), depth - 1, budget));
+			case LispInstance instance when equalByIdentity(instance) -> equalpInstanceKey(instance, depth, budget);
 			default -> v;
 		};
+	}
+
+	/**
+	 * The head of an instance's {@code equalp} fold: a host object no program can reach,
+	 * so it is {@link #equal} to nothing but itself and no key a program writes can match
+	 * a fold that starts with it.
+	 */
+	private static final LispVal EQUALP_INSTANCE_MARKER = new LispJavaObject(new Object());
+
+	// (marker tag slot-fold...): the layout's tag tells two types apart, and the slots
+	// fold one level down, as a cons's elements do -- the same depth and budget, so a
+	// cyclic instance graph still folds to a finite list.
+	private static LispVal equalpInstanceKey(LispInstance instance, int depth, int[] budget) {
+		LispVal slots = LispNil.INSTANCE;
+		for (int i = instance.slotCount() - 1; i >= 0; i--) {
+			slots = new LispCons(equalpKey(instance.slot(i), depth - 1, budget), slots);
+		}
+		return new LispCons(EQUALP_INSTANCE_MARKER, new LispCons(new LispString(instance.layout().tag()), slots));
 	}
 
 	/**
@@ -276,9 +319,10 @@ public final class LispEquality {
 
 	// The two recursive containers -- a cons and an instance -- are folded here rather
 	// than through their own hashCode, which recurses without a bound (and is what a
-	// cyclic key used to run out of stack on). Everything else answers with its own
-	// hashCode, which its equals agrees with by the Java contract, and which is identity
-	// exactly where equal is identity.
+	// cyclic key used to run out of stack on); a structure or CLOS instance, which equal
+	// compares by identity, hashes by identity, so writing its slots never moves its
+	// bucket. Everything else answers with its own hashCode, which its equals agrees with
+	// by the Java contract, and which is identity exactly where equal is identity.
 	//
 	// budget is the WHOLE traversal's remaining node visits, a one-cell array because it
 	// has to be shared by the siblings rather than handed down each branch -- a
@@ -293,6 +337,9 @@ public final class LispEquality {
 			return 31 * hash(cons.car(), depth - 1, budget) + hash(cons.cdr(), depth - 1, budget) + 1;
 		}
 		if (v instanceof LispInstance inst) {
+			if (equalByIdentity(inst)) {
+				return System.identityHashCode(inst);
+			}
 			int h = inst.layout().tag().hashCode();
 			for (int i = 0; i < inst.slotCount(); i++) {
 				h = 31 * h + hash(inst.slot(i), depth - 1, budget);

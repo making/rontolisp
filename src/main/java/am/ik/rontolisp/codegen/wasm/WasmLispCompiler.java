@@ -4886,13 +4886,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		// structure, so an unbudgeted walk of a shared key does not merely take
 		// exponential time, it allocates exponential space.
 		int equalpGasGlobalIndex = equalpDepthGlobalIndex >= 0 ? equalpDepthGlobalIndex + 1 : -1;
+		// The head of an instance's equalp fold (WasmEqualpKeyRuntimeBuilder), a
+		// (mut (ref null eq)) = null the fold fills with one cell on first use: a value
+		// _equal compares by identity, so no key a program writes can match a fold that
+		// starts with it. Only beside the fold of a program that can build an instance.
+		int equalpMarkerGlobalIndex = equalpGasGlobalIndex >= 0 && this.usesInstances ? equalpGasGlobalIndex + 1 : -1;
+		int lastEqualpGlobalIndex = equalpMarkerGlobalIndex >= 0 ? equalpMarkerGlobalIndex : equalpGasGlobalIndex;
 		// The identity-hash sequence _ihash draws from (WasmIdentityHashRuntimeBuilder):
 		// present exactly when the module's conses, cells and instances carry the slot
 		// it fills, i.e. when the program makes an eq/eql table -- which also makes it a
 		// hash-table-using program, so the two hash counters above are there too. After
-		// the equalp pair, so every other module keeps the globals it had.
+		// the equalp globals, so every other module keeps the globals it had.
 		int identityHashSeqGlobalIndex = this.usesIdentityHashTables
-				? (equalpGasGlobalIndex >= 0 ? equalpGasGlobalIndex : hashGasGlobalIndex) + 1 : -1;
+				? (lastEqualpGlobalIndex >= 0 ? lastEqualpGlobalIndex : hashGasGlobalIndex) + 1 : -1;
 		// The renderers' shared cycle guard (the wasm twin of RenderCycleGuard): the
 		// current rendering path -- a TYPE_HASH_BUCKETS array lazily allocated by the
 		// print branch -- and its depth. A value already on the path, or the frame past
@@ -4901,7 +4907,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Unconditional -- the cons arm is in every module -- and
 		// appended after the recursion counters for the same reason they are last.
 		int lastCounterGlobalIndex = identityHashSeqGlobalIndex >= 0 ? identityHashSeqGlobalIndex
-				: equalpGasGlobalIndex >= 0 ? equalpGasGlobalIndex
+				: lastEqualpGlobalIndex >= 0 ? lastEqualpGlobalIndex
 						: hashGasGlobalIndex >= 0 ? hashGasGlobalIndex : ostreamTableGlobalIndex;
 		int renderPathGlobalIndex = lastCounterGlobalIndex + 1;
 		int renderDepthGlobalIndex = lastCounterGlobalIndex + 2;
@@ -8881,6 +8887,17 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(Instruction.END);
 					});
 				}
+				// The instance fold's marker at equalpMarkerGlobalIndex, a
+				// (mut (ref null eq)) = null the fold fills on first use.
+				if (equalpMarkerGlobalIndex >= 0) {
+					gs.add(g -> {
+						g.writeRefType(true, Type.EQ.code());
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.REF_NULL);
+						g.writeHeapType(Type.EQ.code());
+						g.write(Instruction.END);
+					});
+				}
 				// The identity-hash sequence at identityHashSeqGlobalIndex, a (mut i32)
 				// = 0 that _ihash advances before mixing, so the first hash it hands out
 				// is fmix32(1) and never the unassigned 0. Present exactly when the
@@ -9425,7 +9442,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				// program writes a :test 'equalp table, since nothing else calls it.
 				code.addFunction(equalpDepthGlobalIndex < 0 ? WasmEqualpKeyRuntimeBuilder.buildStub()
 						: WasmEqualpKeyRuntimeBuilder.build(equalpDepthGlobalIndex, equalpGasGlobalIndex,
-								this.charvecPossible, this.usesIdentityHashTables));
+								this.charvecPossible, this.usesIdentityHashTables,
+								equalpMarkerGlobalIndex >= 0 ? instanceTypeBase() : -1, this.addressKeyedLayout,
+								equalpMarkerGlobalIndex));
 				// file-length body (FUNC_FILE_LENGTH), over the fd_filestat_get import.
 				code.addFunction(WasmIoRuntimeBuilder.buildFileLengthBody());
 				// file-position bodies (FUNC_FILE_POSITION / FUNC_FILE_POSITION_SET):

@@ -68,9 +68,15 @@ final class WasmEqualpKeyRuntimeBuilder {
 	 * The real fold.
 	 * @param depthGlobalIndex the {@code (mut i32)} recursion-depth global
 	 * @param gasGlobalIndex the {@code (mut i32)} work-budget global
+	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1 when the program
+	 * builds no instance (and no instance arm is emitted)
+	 * @param keyedLayout the address-keyed layouts, whose instances are their own key
+	 * @param markerGlobalIndex the {@code (mut (ref null eq))} global holding the head of
+	 * an instance's fold, present exactly when {@code instanceTypeIndex} is
 	 * @return the function body
 	 */
-	static byte[] build(int depthGlobalIndex, int gasGlobalIndex, boolean charvecPossible, boolean identityHash) {
+	static byte[] build(int depthGlobalIndex, int gasGlobalIndex, boolean charvecPossible, boolean identityHash,
+			int instanceTypeIndex, int[] keyedLayout, int markerGlobalIndex) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -178,9 +184,29 @@ final class WasmEqualpKeyRuntimeBuilder {
 		WasmEmitHelper.emitNewCons(w, identityHash);
 		w.write(Instruction.ELSE);
 
+		// A structure or CLOS instance, which _equal compares by identity -> the list
+		// (marker tag slot-fold...), LispEquality.equalpKey's shape; any other instance
+		// is its own key
+		if (instanceTypeIndex >= 0) {
+			refTest(w, instanceTypeIndex);
+			w.write(Instruction.IF);
+			w.writeRefType(true, Type.EQ.code());
+			WasmRuntimeBuilder.emitComparesByIdentity(w, 0, instanceTypeIndex, keyedLayout);
+			w.write(Instruction.IF);
+			w.writeRefType(true, Type.EQ.code());
+			emitInstanceFold(w, instanceTypeIndex, markerGlobalIndex, identityHash);
+			w.write(Instruction.ELSE);
+			getLocal(w, 0);
+			w.write(Instruction.END); // end identity-kind if
+			w.write(Instruction.ELSE);
+		}
+
 		// Everything else is its own key
 		getLocal(w, 0);
 
+		if (instanceTypeIndex >= 0) {
+			w.write(Instruction.END); // end instance if
+		}
 		w.write(Instruction.END); // end cons if
 		w.write(Instruction.END); // end float if
 		w.write(Instruction.END); // end char if
@@ -189,6 +215,54 @@ final class WasmEqualpKeyRuntimeBuilder {
 		w.write(Instruction.END); // end depth-cap if
 		w.write(Instruction.END); // end function
 		return body.toByteArray();
+	}
+
+	// The fold of the instance in local 0: (marker tag slot-fold...), where the marker
+	// is one cell made on first use and kept in its global (equal to nothing but
+	// itself), the tag is the layout record's address as an i31, and the slots fold
+	// from the last one back, into local 4 with local 3 counting down.
+	private static void emitInstanceFold(WasmWriter w, int instanceTypeIndex, int markerGlobalIndex,
+			boolean identityHash) {
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(markerGlobalIndex);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		WasmEmitHelper.emitNewCell(w, identityHash);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(markerGlobalIndex);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(markerGlobalIndex);
+		WasmRuntimeBuilder.instanceField(w, 0, instanceTypeIndex, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		setLocal(w, 4);
+		WasmRuntimeBuilder.pushLayoutSlotCount(w, 0, instanceTypeIndex);
+		setLocal(w, 3);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, 3);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		getLocal(w, 3);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, 3);
+		WasmRuntimeBuilder.instanceSlot(w, 0, instanceTypeIndex, 3);
+		call(w, WasmLispCompiler.FUNC_EQUALP_KEY);
+		getLocal(w, 4);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		setLocal(w, 4);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // end loop
+		w.write(Instruction.END); // end block
+		getLocal(w, 4);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		WasmEmitHelper.emitNewCons(w, identityHash);
 	}
 
 	// A finite double is exactly mantissa * 2^exponent. Strip the trailing zero bits the

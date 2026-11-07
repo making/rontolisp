@@ -1031,6 +1031,17 @@ public final class RontoHashTable {
 		if (key instanceof Double number) {
 			return exactValue(number.doubleValue());
 		}
+		// A structure or CLOS instance (its interned String[] layout {tag, printName,
+		// kind, slot...} in slot 0, kind S or C), which _equal compares by identity,
+		// folds to the list (marker tag slot-fold...), LispEquality.equalpKey's shape.
+		if (key instanceof Object[] instance && instance.length > 0 && instance[0] instanceof String[] layout
+				&& layout.length >= 3 && ("S".equals(layout[2]) || "C".equals(layout[2]))) {
+			Object slots = null;
+			for (int i = layout.length - 3; i >= 1; i--) {
+				slots = new Object[] { equalpKey(instance[i], depth - 1, gas), slots };
+			}
+			return new Object[] { EQUALP_INSTANCE_MARKER, new Object[] { layout[0], slots } };
+		}
 		// The cons discrimination the emitted _hash makes: an Object[] that is neither a
 		// ratio (a BigInteger[]) nor a function reference (an Integer funcId in slot 0)
 		// nor an instance (its interned String[] layout in slot 0).
@@ -1040,6 +1051,11 @@ public final class RontoHashTable {
 		}
 		return key;
 	}
+
+	// The head of an instance's equalp fold: an object no program can reach, which _equal
+	// compares by identity and _hash by its own hashCode, so no key a program writes can
+	// match a fold that starts with it.
+	private static final Object EQUALP_INSTANCE_MARKER = new Object();
 
 	// Upper case one code point at a time -- the mapping every backend's char-upcase
 	// applies, which a whole-string toUpperCase would part company with wherever one

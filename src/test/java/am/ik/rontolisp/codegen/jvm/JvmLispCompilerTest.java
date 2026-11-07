@@ -14919,7 +14919,7 @@ class JvmLispCompilerTest {
 				(print (list (equal (make-point :x 1 :y 2) (make-point :x 1 :y 2))
 				             (equal (make-point :x 1 :y 2) (make-point :x 1 :y 9))
 				             (equal (make-point :x 1 :y 2) (list 1 2))))
-				""")).isEqualTo("((1 \"hi\") NIL NIL NIL)\n(T NIL T T NIL)\n(T NIL NIL)");
+				""")).isEqualTo("((1 \"hi\") NIL NIL NIL)\n(T NIL T T NIL)\n(NIL NIL NIL)");
 		assertThat(compileAndRun("""
 				(defstruct point x y)
 				(defstruct empty)
@@ -14950,7 +14950,7 @@ class JvmLispCompilerTest {
 				(print #S(POINT :X 1 :Y "hi"))
 				(print (list (point-p #S(POINT :X 1 :Y 2)) (consp #S(POINT :X 1 :Y 2)) (point-x #S(POINT :X 7 :Y 2))))
 				(print (equal #S(POINT :X 1 :Y 2) (make-point :x 1 :y 2)))
-				""")).isEqualTo("#S(POINT :X 1 :Y \"hi\")\n(T NIL 7)\nT");
+				""")).isEqualTo("#S(POINT :X 1 :Y \"hi\")\n(T NIL 7)\nNIL");
 	}
 
 	@Test

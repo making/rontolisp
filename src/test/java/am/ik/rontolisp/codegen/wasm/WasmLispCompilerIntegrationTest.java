@@ -20050,7 +20050,7 @@ class WasmLispCompilerIntegrationTest {
 	// instance-descending equalp is pinned end-to-end by the ci-spec case
 	// instance-print-syntax-and-identity (all four backends through the real CLI).
 	@Test
-	void compileAndRunInstanceSlotsAndStructuralEqual() throws Exception {
+	void compileAndRunInstanceSlotsAndIdentityEqual() throws Exception {
 		assertThat(compileAndRun("""
 				(defstruct point x y)
 				(defstruct empty)
@@ -20061,7 +20061,7 @@ class WasmLispCompilerIntegrationTest {
 				             (equal (make-point :x 1 :y 2) (make-point :x 1 :y 9))
 				             (equal (make-point :x 1 :y 2) (list 1 2))
 				             (equal (make-point :x 1 :y 2) 5)))
-				""")).isEqualTo("((1 \"hi\") NIL NIL NIL)\n(T NIL NIL NIL)");
+				""")).isEqualTo("((1 \"hi\") NIL NIL NIL)\n(NIL NIL NIL NIL)");
 		assertThat(compileAndRun("""
 				(defstruct point x y)
 				(defstruct empty)
@@ -20106,7 +20106,7 @@ class WasmLispCompilerIntegrationTest {
 				(print #S(POINT :X 1 :Y "hi"))
 				(print (list (point-p #S(POINT :X 1 :Y 2)) (consp #S(POINT :X 1 :Y 2)) (point-x #S(POINT :X 7 :Y 2))))
 				(print (equal #S(POINT :X 1 :Y 2) (make-point :x 1 :y 2)))
-				""")).isEqualTo("#S(POINT :X 1 :Y \"hi\")\n(T NIL 7)\nT");
+				""")).isEqualTo("#S(POINT :X 1 :Y \"hi\")\n(T NIL 7)\nNIL");
 	}
 
 	@Test

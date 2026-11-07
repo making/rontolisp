@@ -2897,13 +2897,13 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(ifANotNull);
 		// Instances first (emitted only when the program can build one, so an
 		// instance-free class is byte-identical): an instance is an Object[] with the
-		// interned String[] layout in slot 0, and two of them are equal when they share
-		// that layout and every slot is recursively _equal. This keeps compiled `equal`
-		// structural over struct/CLOS instances, matching the interpreter's
-		// LispInstance.equals -- and it must be checked BEFORE the cons branch, whose
-		// Object[] shape an instance would otherwise satisfy.
+		// interned String[] layout in slot 0. A structure or CLOS instance is equal only
+		// to itself, which the identity test above settled; two pathnames or two opaque
+		// built-ins are equal when they share a layout and every slot is recursively
+		// _equal (LispEquality.equalByIdentity) -- and it must be checked BEFORE the cons
+		// branch, whose Object[] shape an instance would otherwise satisfy.
 		if (strArrClass != null) {
-			emitInstanceEqual(c, objArrClass, strArrClass, equal);
+			emitInstanceEqual(c, objArrClass, strArrClass, equal, strings.charAt());
 		}
 		// Detect both cons: instanceof Object[], not BigInteger[], head not Integer.
 		MethodCode.Label notBothCons = c.newLabel();
@@ -2976,11 +2976,12 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// The instance arm of _equal: if either argument is an instance, the whole answer is
-	// decided here (t only when both are, over the same layout, with every slot equal),
-	// so control falls through to the cons/eqv code only for two non-instances. Local 2
-	// is the slot cursor.
+	// decided here (t only when both are pathnames or opaque built-ins over the same
+	// layout, with every slot equal -- two distinct structure or CLOS instances never
+	// are), so control falls through to the cons/eqv code only for two non-instances.
+	// Local 2 is the slot cursor, and first the kind letter.
 	private static void emitInstanceEqual(MethodCode c, ClassEntry objArrClass, ClassEntry strArrClass,
-			MethodRefEntry equal) {
+			MethodRefEntry equal, MethodRefEntry charAt) {
 		MethodCode.Label aNotInstance = c.newLabel();
 		emitInstanceGuard(c, 0, objArrClass, strArrClass, aNotInstance);
 		// a IS an instance: b must be one too, or they differ.
@@ -2991,6 +2992,21 @@ final class JvmNumericRuntimeBuilder {
 		emitArrayElement(c, 0, objArrClass, 0);
 		emitArrayElement(c, 1, objArrClass, 0);
 		c.if_acmpne(toFalse);
+		// The layout's kind letter ({tag, printName, kind, slot...}): a structure (S) or
+		// a CLOS instance (C) is equal only to itself, and identity already failed.
+		emitArrayElement(c, 0, objArrClass, 0);
+		c.checkcast(strArrClass);
+		c.iconst_2();
+		c.aaload();
+		c.iconst_0();
+		c.invokevirtual(charAt);
+		c.istore(2);
+		c.iload(2);
+		c.loadConstant('S');
+		c.if_icmpeq(toFalse);
+		c.iload(2);
+		c.loadConstant('C');
+		c.if_icmpeq(toFalse);
 		// for (int i = 1; i < layout.length - 2; i++) if (!_equal(a[i], b[i])) return 0;
 		// The bound is the LAYOUT's slot count (its String[] is {tag, printName, kind,
 		// slot...}), not the array length: the cells a layout reserves past its slots

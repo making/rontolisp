@@ -456,9 +456,11 @@ final class JvmHashRuntimeBuilder {
 			a.invokestatic(strvMethod);
 			a.astore(0);
 		}
-		// An instance folds its interned layout (compared by identity in _equal, so an
-		// identity hash agrees) and then every slot. Checked BEFORE the cons arm, whose
-		// Object[] shape an instance would otherwise satisfy.
+		// A structure or CLOS instance -- equal only to itself in _equal -- hashes by
+		// identity, so writing its slots never moves its bucket; any other instance (a
+		// pathname, an opaque built-in) folds its interned layout (compared by identity
+		// in _equal, so an identity hash agrees) and then every slot. Checked BEFORE the
+		// cons arm, whose Object[] shape an instance would otherwise satisfy.
 		if (stringArrayClass != null) {
 			MethodCode.Label notInstance = a.newLabel();
 			a.aload(0);
@@ -474,6 +476,32 @@ final class JvmHashRuntimeBuilder {
 			a.aaload();
 			a.instanceOf(stringArrayClass);
 			a.ifeq(notInstance);
+			// The layout's kind letter ({tag, printName, kind, slot...}).
+			MethodCode.Label byIdentity = a.newLabel();
+			MethodCode.Label bySlots = a.newLabel();
+			a.aload(0);
+			a.checkcast(objectArrayClass);
+			a.loadConstant(0);
+			a.aaload();
+			a.checkcast(stringArrayClass);
+			a.loadConstant(2);
+			a.aaload();
+			a.loadConstant(0);
+			a.invokevirtual(cp.methodRef(cp.classEntry("java/lang/String"), "charAt", "(I)C"));
+			a.dup();
+			a.loadConstant('S');
+			MethodCode.Label notStruct = a.newLabel();
+			a.if_icmpne(notStruct);
+			a.pop();
+			a.goto_(byIdentity);
+			a.labelBinding(notStruct);
+			a.loadConstant('C');
+			a.if_icmpne(bySlots);
+			a.labelBinding(byIdentity);
+			a.aload(0);
+			a.invokestatic(identityHashCode);
+			a.ireturn();
+			a.labelBinding(bySlots);
 			a.aload(0);
 			a.checkcast(objectArrayClass);
 			a.astore(3);

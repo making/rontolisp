@@ -8,7 +8,7 @@ Returns a fresh instance of `structure`'s type (CLHS 18.3): the slots are freshl
 (defstruct point x y)
 (let* ((p (make-point :x 1 :y 2))
        (q (copy-structure p)))
-  (list (eq p q) (equal p q) (point-x q))) ; => (NIL T 1)
+  (list (eq p q) (equal p q) (equalp p q) (point-x q))) ; => (NIL NIL T 1)
 ```
 
 Mutating the copy leaves the original untouched, since only the slot storage is fresh:
