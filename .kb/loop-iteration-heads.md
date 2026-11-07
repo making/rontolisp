@@ -9,6 +9,14 @@ pins it. `head-k` =
 order inside the `while`; a terminating clause short-circuits, so no later clause's assignments
 run. Cursors step at the END of the body; heads only test them.
 
+**A `for`/`with` variable's simple type** is `of-type TYPE`, `t`, `nil` or one of the standard type
+symbols SBCL's loop universe takes (`LoopExpander.LOOP_SIMPLE_TYPES`, the same list in
+`%eval-loop-skip-type`: `short-float`, `vector`, `hash-table` ...; `unsigned-byte` is no simple type
+there either). CLHS 6.1.1.7 names `fixnum` and `float` only, and until 2026-11-07 that was all both
+parsers took: petalisp's test suite (`for u short-float = ...`, a macro's expansion) stopped every
+compile path at `loop: incomplete for clause`, while the interpreter, expanding it only when called,
+loaded it. Pins: ci-spec `loop-macro-type-spec` and `eval-runs-the-keyword-clauses-of-loop`.
+
 **Invariant: an assignment nobody is supposed to observe must not happen.** Element variables
 (`for x in`, destructuring `in`/`on ... by`, `for x across`) are assigned in the head AFTER their
 own end test passed (`ForPiece.headSyncs`), never at end of body. A loop variable is ONE binding

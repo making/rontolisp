@@ -284,7 +284,9 @@
       (setq forms (cons (%eval-loop-next state) forms)))
     (if forms (reverse forms) (list nil))))
 
-;; A type specifier carries nothing here: of-type TYPE, or a bare fixnum, float, t or nil.
+;; A type specifier carries nothing here: of-type TYPE, or a bare t, nil or one of
+;; the standard type symbols SBCL's loop takes as a simple type (CLHS lists fixnum
+;; and float; petalisp's test suite writes for u short-float = ...).
 (defun %eval-loop-skip-type (state)
   (let ((tokens (%eval-loop-get state :tokens)))
     (cond ((null tokens) nil)
@@ -294,7 +296,18 @@
           ((or (null (car tokens)) (eq (car tokens) t)) (%eval-loop-skip state))
           ((and (null (%eval-loop-peek state))
                 (%eval-loop-word-in (%eval-loop-plain-name (car tokens))
-                                    '("FIXNUM" "FLOAT")))
+                                    '("ARRAY" "ATOM" "BIGNUM" "BIT" "BIT-VECTOR"
+                                      "CHARACTER" "COMPILED-FUNCTION" "COMPLEX"
+                                      "CONS" "DOUBLE-FLOAT" "FIXNUM" "FLOAT"
+                                      "FUNCTION" "HASH-TABLE" "INTEGER"
+                                      "KEYWORD" "LIST" "LONG-FLOAT" "NULL"
+                                      "NUMBER" "PACKAGE" "PATHNAME"
+                                      "RANDOM-STATE" "RATIO" "RATIONAL"
+                                      "READTABLE" "SEQUENCE" "SHORT-FLOAT"
+                                      "SIMPLE-ARRAY" "SIMPLE-BIT-VECTOR"
+                                      "SIMPLE-STRING" "SIMPLE-VECTOR"
+                                      "SINGLE-FLOAT" "STANDARD-CHAR" "STREAM"
+                                      "STRING" "BASE-CHAR" "SYMBOL" "VECTOR")))
            (%eval-loop-skip state)))))
 
 ;; ---- forms the expansion is made of ----

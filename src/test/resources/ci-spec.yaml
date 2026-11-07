@@ -6749,16 +6749,21 @@ cases:
   - name: loop-macro-type-spec
     # ANSI's for-as-clause is `for var [type-spec] ...`, and type-spec has two
     # spellings: explicit `of-type d-type-spec` and the simple bare
-    # fixnum/float/t/nil written straight after the variable. `with` takes the
-    # same type-spec. Neither carries semantics here, so both are just skipped.
+    # fixnum/float/t/nil written straight after the variable -- and, as SBCL's
+    # loop takes them, the other standard type symbols (petalisp's test suite
+    # writes for u short-float = ...). `with` takes the same type-spec. Neither
+    # carries semantics here, so both are just skipped.
     source: |
       (print (loop for v fixnum = 0 then (1+ v) for i from 1 to 3 collect v))
       (print (loop for v of-type fixnum = 0 then (1+ v) for i from 1 to 3 collect v))
       (print (loop with a fixnum = 10 for i from 1 to 3 collect (+ a i)))
+      (print (loop for u short-float = 1.5 for v vector = #(1) with h hash-table = nil
+                   repeat 1 collect (list u v h)))
     expected: |
       (0 1 2)
       (0 1 2)
       (11 12 13)
+      ((1.5 #(1) NIL))
   # A loop variable is ONE binding stepped in place, so after the loop it still
   # holds the value from the final iteration -- the assignment that reads the
   # exhausted cursor must never happen. Every expectation below was measured on
@@ -36948,6 +36953,7 @@ cases:
       (print (el-report '(loop for x in 1 collect x)))
       (print (el-report '(loop for x from 1 from 2)))
       (print (el-report '(loop collect 1 thereis 2)))
+      (print (eval '(loop for u short-float = 1.5 for v vector = #(1) repeat 1 collect (list u v))))
     expected: |
       (0 1 2 3)
       (1 3)
@@ -37014,6 +37020,7 @@ cases:
       :ERROR
       :ERROR
       :ERROR
+      ((1.5 #(1)))
   - name: eval-binds-macros-in-its-environment
     source: |
       (defun eb-report (form)

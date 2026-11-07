@@ -2612,10 +2612,24 @@ public final class LispMacroExpander {
 				return;
 			}
 			String simple = plainName(next);
-			if (peekKeyword() == null && ("fixnum".equals(simple) || "float".equals(simple))) {
+			if (peekKeyword() == null && simple != null && LOOP_SIMPLE_TYPES.contains(simple)) {
 				pos++;
 			}
 		}
+
+		/**
+		 * The type symbols a {@code for}/{@code with} variable may be followed by without
+		 * {@code of-type}: SBCL's loop universe takes the standard ones, where CLHS
+		 * 6.1.1.7 lists {@code fixnum} and {@code float} only, and petalisp's test suite
+		 * writes {@code for u short-float = ...}. The eval runtime's loop
+		 * ({@code eval-macros.lisp}) takes the same set.
+		 */
+		private static final java.util.Set<String> LOOP_SIMPLE_TYPES = java.util.Set.of("array", "atom", "bignum",
+				"bit", "bit-vector", "character", "compiled-function", "complex", "cons", "double-float", "fixnum",
+				"float", "function", "hash-table", "integer", "keyword", "list", "long-float", "null", "number",
+				"package", "pathname", "random-state", "ratio", "rational", "readtable", "sequence", "short-float",
+				"simple-array", "simple-bit-vector", "simple-string", "simple-vector", "single-float", "standard-char",
+				"stream", "string", "base-char", "symbol", "vector");
 
 		/** The init form for an accumulator of the given kind. */
 		private LispVal accInit(String kw) {
