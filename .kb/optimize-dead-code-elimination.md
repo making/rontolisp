@@ -193,11 +193,19 @@ had**.
   ~330 on a small program) fall inside the blob that starts at 256: each live one keeps the
   string it lands in, and a dead defun earlier in the numbering moves which. Measured
   2026-11-06 on `WasmTreeShakerTest#aNameOnlyAFunctionNothingReachesSpellsHasNoCaseAndNoRow`'s
-  reactor at `--optimize=size`, with / without two dead defuns: funcIds 324 / 326 both kept the
+  reactor at `--optimize=size`, without / with two dead defuns: funcIds 324 / 326 both kept the
   33-byte `#<HASH-TABLE :TEST EQUAL :COUNT ` (906 = 906 bytes); six more runtime defuns
   (`2f9bfd82e`) moved them to 330 / 332, which keep `>` / `#(` (875 vs 870, one segment split).
   Exact size equality across a funcId shift holds only under `--component`, whose data starts at
   0x60000 above every funcId (1108 = 1108); the test pins it there.
+  **An i64 field does not pay, so the funcId stays i32** (measured 2026-11-07, the size-report
+  rows and the Worker family). The prototype spelled every funcId as `i64.const` (creation,
+  `_funcref (i64)`, `_uc_frame_p`) and wrapped it back at each reader. No data section of the
+  corpus shrank: a Worker's blob is nearly all live (hello-clack keeps 688,252 of its 688,572
+  bytes, and 188 of the 195 funcIds inside it land in kept bytes). The code grew by 3 to 33 B on
+  every Worker, 10 on `zlib` (both WASI modes) and 0 on the small programs; on those few bytes
+  gzip swung -1,365..+467 B per Worker (-415 B over all 15). The only gain was the test
+  reactor's, 875 / 870 B (without / with the two dead defuns) to 869 / 869.
 - **The COMPILER decides candidacy through a window**: `StringTable.attributing(true/false)`
   brackets passes 2a-2c, where a body's own `i32.const` is the only consumer;
   `StringTable.addBodyString` is the same grant spelled explicitly. **Interning with the window
