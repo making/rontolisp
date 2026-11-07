@@ -74,7 +74,7 @@ standard `(status headers body)` list:
 | `:url-scheme` | `"http"` or `"https"` |
 | `:headers` | a hash table (`:test 'equal`) keyed by lowercased header names; duplicate request headers join with `", "` in wire order |
 | `:content-type` / `:content-length` | from that table (`nil` when absent; `:content-length` an integer) |
-| `:raw-body` | the request body as a synchronous in-memory bivalent stream — `read-line`/`read-char` and `read-byte`/`read-sequence` both work, with a real `file-position` (what lack-request and http-body need); `nil` for a bodiless request |
+| `:raw-body` | the request body as a synchronous in-memory bivalent stream — `read-line`/`read-char` and `read-byte`/`read-sequence` both work, with a real `file-position` (what lack-request and http-body need); `nil` for a request without a body, an empty stream for an empty body sent with `Content-Length: 0` |
 | `:remote-addr` / `:remote-port` | the real peer on the interpreter, the JVM and a native executable; `nil` on the WASI component (`wasi:http@0.3.0` exposes no peer accessor) |
 
 The response `body` may be a list of strings, a
@@ -447,7 +447,9 @@ about code points) costs nothing: `read-all` decodes the whole body once.
 A source that is empty at its **first** call is no body at all — `:raw-body`
 stays `nil`, exactly as for a request whose `"body"` is absent, because that is
 what upstream's `(when raw-body ...)` guards expect and a bodiless `GET` must
-not pay for a stream it would only find empty.
+not pay for a stream it would only find empty. A request whose headers frame an
+empty body (`Content-Length: 0`) gets an empty stream instead, because a
+middleware reads `:raw-body` whenever `:content-length` is set.
 
 The envelope's `"body"` key is exactly the string case, and it is what is used
 when no source is passed — or when the source turns out to be empty, so a host

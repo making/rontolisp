@@ -186,6 +186,12 @@ class FetchSpecE2eTest {
 		});
 		server.createContext("/echo", exchange -> answer(exchange, 200, exchange.getRequestMethod() + ":"
 				+ new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)));
+		server.createContext("/framing", exchange -> {
+			String upgrade = exchange.getRequestHeaders().getFirst("Upgrade");
+			String length = exchange.getRequestHeaders().getFirst("Content-Length");
+			answer(exchange, 200, exchange.getRequestMethod() + " upgrade=" + (upgrade == null ? "-" : upgrade)
+					+ " content-length=" + (length == null ? "-" : length));
+		});
 		server.createContext("/agent", exchange -> {
 			List<String> agents = exchange.getRequestHeaders().get("User-Agent");
 			answer(exchange, 200, String.join("|", agents == null ? List.of() : agents));

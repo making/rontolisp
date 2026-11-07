@@ -53,8 +53,9 @@ With the optional directive argument
 instead read in full up front and handed over as a **synchronous** in-memory
 bivalent stream — readable with `read-line`/`read-char` *and*
 `read-byte`/`read-sequence`, with a real `file-position` — which is what a
-Clack application (lack-request, http-body) needs; a bodiless request then
-gets `:raw-body nil`.
+Clack application (lack-request, http-body) needs; a request without a body
+(no `Content-Length` or `Transfer-Encoding` field) then gets `:raw-body nil`,
+and an empty body sent with `Content-Length: 0` gets an empty stream.
 
 The handler returns Clack's positional response list `(status headers body)`:
 

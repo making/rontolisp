@@ -76,21 +76,7 @@ public final class RontoFetch {
 	public static Object start(String url, String method, List<String> headers, Object body, String defaultUserAgent) {
 		HttpRequest request;
 		try {
-			HttpRequest.BodyPublisher publisher = switch (body) {
-				case String text -> HttpRequest.BodyPublishers.ofString(text);
-				case byte[] octets -> HttpRequest.BodyPublishers.ofByteArray(octets);
-				case null, default -> HttpRequest.BodyPublishers.noBody();
-			};
-			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).method(method, publisher);
-			boolean userAgentSet = false;
-			for (int i = 0; i + 1 < headers.size(); i += 2) {
-				builder.header(headers.get(i), headers.get(i + 1));
-				userAgentSet = userAgentSet || USER_AGENT_HEADER.equalsIgnoreCase(headers.get(i));
-			}
-			if (!userAgentSet) {
-				builder.header(USER_AGENT_HEADER, defaultUserAgent);
-			}
-			request = builder.build();
+			request = request(url, method, headers, body, defaultUserAgent);
 		}
 		catch (RuntimeException ex) {
 			return RontoFuture.of(CompletableFuture
@@ -103,6 +89,59 @@ public final class RontoFetch {
 		return RontoFuture.of(HttpClient.newHttpClient()
 			.sendAsync(request, HttpResponse.BodyHandlers.ofPublisher())
 			.thenApply(RontoFetch::plist));
+	}
+
+	/**
+	 * Builds the request every JDK-backed {@code fetch} sends (the interpreter's
+	 * {@code HttpSupport} calls it too), so the two put the same request on the wire:
+	 * <ul>
+	 * <li>an {@code http:} URL speaks HTTP/1.1 -- the client's default would offer the
+	 * HTTP/2 cleartext upgrade ({@code Connection: Upgrade, HTTP2-Settings},
+	 * {@code Upgrade: h2c}), which RFC 9113 deprecates and the runner and the component
+	 * never send; an {@code https:} URL keeps HTTP/2 through ALPN;</li>
+	 * <li>a GET, HEAD or DELETE without a body states no {@code Content-Length}, as the
+	 * runner does (RFC 9110 section 8.6: a request whose method anticipates no content
+	 * should not); the client's builder writes {@code Content-Length: 0} for any method
+	 * given a body publisher, so those three take its bodiless builders;</li>
+	 * <li>the default user-agent is added when the caller's fields name none.</li>
+	 * </ul>
+	 * @param url the request URL
+	 * @param method the canonical (upper-case) method
+	 * @param headers the caller's request fields as a flat name, value, ... list
+	 * @param body the request body -- its text, sent as UTF-8, or an octet vector (a
+	 * {@code byte[]}), sent as it is -- or {@code null} for none
+	 * @param defaultUserAgent the user-agent a request whose fields name none carries
+	 * @return the request
+	 * @throws RuntimeException when the client refuses the URL or a field
+	 */
+	public static HttpRequest request(String url, String method, List<String> headers, Object body,
+			String defaultUserAgent) {
+		URI uri = URI.create(url);
+		HttpRequest.Builder builder = HttpRequest.newBuilder(uri);
+		if ("http".equalsIgnoreCase(uri.getScheme())) {
+			builder.version(HttpClient.Version.HTTP_1_1);
+		}
+		switch (body) {
+			case String text -> builder.method(method, HttpRequest.BodyPublishers.ofString(text));
+			case byte[] octets -> builder.method(method, HttpRequest.BodyPublishers.ofByteArray(octets));
+			case null, default -> {
+				switch (method) {
+					case "GET" -> builder.GET();
+					case "HEAD" -> builder.HEAD();
+					case "DELETE" -> builder.DELETE();
+					default -> builder.method(method, HttpRequest.BodyPublishers.noBody());
+				}
+			}
+		}
+		boolean userAgentSet = false;
+		for (int i = 0; i + 1 < headers.size(); i += 2) {
+			builder.header(headers.get(i), headers.get(i + 1));
+			userAgentSet = userAgentSet || USER_AGENT_HEADER.equalsIgnoreCase(headers.get(i));
+		}
+		if (!userAgentSet) {
+			builder.header(USER_AGENT_HEADER, defaultUserAgent);
+		}
+		return builder.build();
 	}
 
 	/**

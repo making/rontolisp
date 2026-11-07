@@ -75,7 +75,7 @@ Hello, Clack! GET /hello
 | `:url-scheme` | `"http"` または `"https"` |
 | `:headers` | 小文字化したヘッダ名をキーとするハッシュテーブル (`:test 'equal`)。重複したリクエストヘッダはワイヤ順に `", "` で結合されます |
 | `:content-type` / `:content-length` | 上のテーブルから (なければ `nil`。`:content-length` は整数) |
-| `:raw-body` | リクエストボディの同期・インメモリな bivalent ストリーム — `read-line`/`read-char` と `read-byte`/`read-sequence` の両方が動き、本物の `file-position` を持ちます (lack-request と http-body が必要とする形)。ボディの無いリクエストでは `nil` |
+| `:raw-body` | リクエストボディの同期・インメモリな bivalent ストリーム — `read-line`/`read-char` と `read-byte`/`read-sequence` の両方が動き、本物の `file-position` を持ちます (lack-request と http-body が必要とする形)。ボディの無いリクエストでは `nil`、`Content-Length: 0` で送られた空のボディでは空のストリーム |
 | `:remote-addr` / `:remote-port` | インタープリタ、JVM、ネイティブ実行ファイルでは実際のピア。WASI コンポーネントでは `nil` (`wasi:http@0.3.0` はピアのアクセサを公開しません) |
 
 レスポンスの `body` は文字列のリスト・
@@ -455,7 +455,9 @@ report を載せた 500 を返します。
 **最初の**呼び出しで空を返すソースはボディなしそのものです — `:raw-body` は
 `"body"` のないリクエストとまったく同じく `nil` のままになります。上流の
 `(when raw-body ...)` はそれを前提にしており、ボディのない `GET` が中身の
-ないストリームの代金を払う理由もありません。
+ないストリームの代金を払う理由もありません。ヘッダーが空のボディを示す
+(`Content-Length: 0`) リクエストには代わりに空のストリームを渡します。
+`:content-length` があれば `:raw-body` を読むミドルウェアがあるためです。
 
 エンベロープの `"body"` キーはちょうどこの文字列のケースであり、ソースを
 渡さなかったとき — およびソースが空だったとき — に使われます。ホストは

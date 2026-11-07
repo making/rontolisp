@@ -1,6 +1,5 @@
 package am.ik.rontolisp.eval;
 
-import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -79,24 +78,16 @@ final class HttpSupport {
 		HttpClient client;
 		HttpRequest request;
 		try {
-			HttpRequest.BodyPublisher publisher = switch (body) {
-				case String text -> HttpRequest.BodyPublishers.ofString(text);
-				case byte[] octets -> HttpRequest.BodyPublishers.ofByteArray(octets);
-				case null, default -> HttpRequest.BodyPublishers.noBody();
-			};
-			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).method(method, publisher);
-			boolean userAgentSet = false;
+			List<String> fields = new ArrayList<>(2 * requestHeaders.size());
 			for (Header header : requestHeaders) {
-				builder.header(header.name(), header.value());
-				userAgentSet = userAgentSet || FetchResponseShape.isUserAgentHeader(header.name());
+				fields.add(header.name());
+				fields.add(header.value());
 			}
-			if (!userAgentSet) {
-				// Set it EXPLICITLY rather than letting the JDK write its own
-				// Java-http-client/<jdk>: fetch sends the same request on every backend
-				// (FetchResponseShape.USER_AGENT_HEADER).
-				builder.header(FetchResponseShape.USER_AGENT_HEADER, FetchResponseShape.defaultUserAgent());
-			}
-			request = builder.build();
+			// The JVM backend's request builder: the same request on the wire from both
+			// JDK backends -- HTTP/1.1 over http:, no Content-Length on a bodiless GET,
+			// and the default user-agent set EXPLICITLY rather than the JDK's own
+			// Java-http-client/<jdk> (FetchResponseShape.USER_AGENT_HEADER).
+			request = request(method, url, fields, body);
 			client = HttpClient.newHttpClient();
 		}
 		catch (RuntimeException ex) {
@@ -114,6 +105,13 @@ final class HttpSupport {
 			response.body().subscribe(new BodyPump(stream));
 			return new Start(response.statusCode(), responseHeaders, stream);
 		});
+	}
+
+	// RontoFetch cannot annotate its parameter (the runtime package imports nothing that
+	// would travel), so no body crosses as the null its contract documents.
+	@SuppressWarnings("NullAway")
+	private static HttpRequest request(String method, String url, List<String> fields, @Nullable Object body) {
+		return RontoFetch.request(url, method, fields, body, FetchResponseShape.defaultUserAgent());
 	}
 
 	/**

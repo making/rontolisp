@@ -366,7 +366,7 @@
          (stream
           (%http-body-value (function %http:request-consume-body) request nil)))
     (%http:fields-drop rheaders)
-    (let* ((body (rontolisp:await (%serve-request-body stream)))
+    (let* ((body (rontolisp:await (%serve-request-body stream headers)))
            ;; The raw tuple %http-make-env consumes. wasi:http@0.3.0 exposes no peer
            ;; address on the request resource at all, so :remote-addr / :remote-port
            ;; are nil here while the interpreter and the JVM carry the real peer; the

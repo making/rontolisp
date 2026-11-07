@@ -8,7 +8,8 @@
 #
 # The origin's endpoints (FetchSpecE2eTest.origin): /hello (200, "hello-from-fetch",
 # X-Test: ok; "got-header" when the request carries X-Custom: abc), /echo ("<METHOD>:
-# <request body>"), /agent (the User-Agent values, joined by "|"), /status/404 (404,
+# <request body>"), /framing ("<METHOD> upgrade=<Upgrade> content-length=<Content-Length>",
+# "-" for an absent field), /agent (the User-Agent values, joined by "|"), /status/404 (404,
 # "missing"), /status/204, /redirect (302 to /hello), /chunked ("first-", then after a
 # pause "second", chunked), /octets (ff fe 41 00 80 7f), /utf8 (UTF-8 text), /big
 # (300000 octets, i mod 251), /cut-short (Content-Length: 1000, ten octets, then the
@@ -130,6 +131,18 @@ cases:
     expected: |
       "hello-from-fetch"
       NIL
+  - name: a-bodiless-request-offers-no-upgrade-and-states-no-length
+    source: |
+      ;; HTTP/1.1 on every leg: no h2c upgrade offer (the JDK client's default),
+      ;; and no Content-Length on a request without a body whose method
+      ;; anticipates none. How a body is framed is the transport's (the component
+      ;; sends one chunked), so no case pins it.
+      (dolist (m (list "GET" "DELETE"))
+        (print (rontolisp:await
+                (body-text (rontolisp:await (rontolisp:fetch (url "/framing") (list :method m)))))))
+    expected: |
+      "GET upgrade=- content-length=-"
+      "DELETE upgrade=- content-length=-"
   - name: the-default-user-agent-and-the-callers-own
     source: |
       (let ((agent (rontolisp:await (body-text (rontolisp:await (rontolisp:fetch (url "/agent")))))))

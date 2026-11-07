@@ -54,7 +54,9 @@
 ストリーム — `read-line`/`read-char` *と* `read-byte`/`read-sequence`
 の両方で読め、本物の `file-position` を持つ — として渡します。これが
 Clack アプリケーション（lack-request、http-body）が必要とする形です。
-ボディの無いリクエストでは `:raw-body` は `nil` になります。
+ボディの無いリクエスト (`Content-Length` も `Transfer-Encoding` も無いもの) では
+`:raw-body` は `nil` になり、`Content-Length: 0` で送られた空のボディは空のストリームに
+なります。
 
 ハンドラは Clack の位置引数のレスポンスリスト `(status headers body)`
 を返します:

@@ -143,6 +143,29 @@ public final class RontoHttpServer {
 			return new String(this.body, StandardCharsets.UTF_8);
 		}
 
+		/**
+		 * Whether the request has a body, possibly an empty one: octets arrived, or the
+		 * head frames one with a {@code Content-Length} or {@code Transfer-Encoding}
+		 * field (RFC 9112 section 6). The buffered {@code :raw-body} is a stream exactly
+		 * then, so a middleware that reads it because {@code :content-length} is set
+		 * (tiny-routes' {@code wrap-request-body}) always finds one;
+		 * {@code http-server.lisp}'s {@code %http-declared-body} is the same rule for the
+		 * transports written in Lisp.
+		 * @return whether the request has a body
+		 */
+		public boolean declaresBody() {
+			if (this.body.length > 0) {
+				return true;
+			}
+			for (Header header : this.headers) {
+				if (header.name().equalsIgnoreCase("content-length")
+						|| header.name().equalsIgnoreCase("transfer-encoding")) {
+					return true;
+				}
+			}
+			return false;
+		}
+
 	}
 
 	/**

@@ -185,12 +185,16 @@
 ;; -- and the Host header supplies :server-name / :server-port, so the two
 ;; placeholders below never win when the host sends one. The body is DRAINED
 ;; here rather than streamed: the endpoints echo it whole, and buffering it is
-;; the one thing Clack's :raw-body would do anyway.
+;; the one thing Clack's :raw-body would do anyway -- nil for a request without
+;; a body, a stream for one the head frames even when it is empty.
 (defun %request-tuple (req)
-  (list (or (gethash "method" req) "GET") (or (gethash "target" req) "/")
-        (%header-alist (gethash "headers" req))
-        (rontolisp::%http-body-stream (%body-source req)) "HTTP/1.1"
-        (gethash "scheme" req) "localhost" 80 (gethash "remote-addr" req) nil))
+  (let ((headers (%header-alist (gethash "headers" req))))
+    (list (or (gethash "method" req) "GET") (or (gethash "target" req) "/")
+          headers
+          (rontolisp::%http-body-stream
+           (rontolisp::%http-declared-body (%body-source req) headers))
+          "HTTP/1.1" (gethash "scheme" req) "localhost" 80
+          (gethash "remote-addr" req) nil)))
 
 ;; With a SINK the body crosses out of band and the "body" key is ABSENT -- not
 ;; empty: a host has to be able to tell "the body crossed" from "the body is the

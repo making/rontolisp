@@ -33,8 +33,9 @@ as is (see [Clack Web Applications](../../guides/clack.md)):
   :buffered)` the body is instead read in full and handed over as a
   synchronous in-memory bivalent stream readable with `read-line`/`read-char`
   and `read-byte`/`read-sequence`, with a real `file-position` — what a Clack
-  application (lack-request, http-body) needs; a bodiless request then gets
-  `:raw-body nil`.
+  application (lack-request, http-body) needs; a request without a body (no
+  `Content-Length` or `Transfer-Encoding` field) then gets `:raw-body nil`, and
+  an empty body sent with `Content-Length: 0` gets an empty stream.
 - **response** — the positional list `(status headers body)`. `status` is a
   required integer (a non-integer car signals an error). `headers` is a
   keyword plist (`'(:content-type "text/plain")`) or a dotted alist (so a

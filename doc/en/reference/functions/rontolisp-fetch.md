@@ -91,7 +91,10 @@ request `:body` from an s-expression.
 ## Backend support
 
 - **Interpreter** and **JVM**: use the JDK `java.net.http.HttpClient`; the
-  request runs on a background thread from the moment `fetch` returns.
+  request runs on a background thread from the moment `fetch` returns. An
+  `http:` URL is requested over HTTP/1.1 (no `h2c` upgrade offer); `https:`
+  negotiates HTTP/2 where the server offers it. A `GET`, `HEAD` or `DELETE`
+  without a `:body` sends no `Content-Length`.
 - **WASM**: component-only, over the async `wasi:http@0.3.0` — fetch is
   ordinary Lisp glue calling the wit-imported `wasi:http/client@0.3.0`, so the
   component is uniformly WASI 0.3. The future wraps the in-flight async

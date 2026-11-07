@@ -434,14 +434,21 @@ class HttpHandlerTest {
 	}
 
 	@Test
-	void directiveGivesNilRawBodyForABodylessBufferedRequest() throws Exception {
+	void aBufferedRawBodyIsNilExactlyForARequestWithoutABody() throws Exception {
+		// A GET states no Content-Length and has no body; an empty POST states
+		// Content-Length: 0, and a middleware that reads :raw-body because
+		// :content-length is set (tiny-routes' wrap-request-body) must find a stream.
 		int port = freePort();
 		serveInBackground("""
 				(defun handle (env)
-				  (list 200 nil (list (if (getf env :raw-body) "body" "none"))))
+				  (let ((s (getf env :raw-body)))
+				    (list 200 nil
+				          (list (format nil "~a/~a" (getf env :content-length)
+				                        (if s (read-line s nil :eof) "none"))))))
 				(rontolisp:http-handler 'handle %d :raw-body :buffered)
 				""".formatted(port), port);
-		assertThat(get(port, "/").body()).isEqualTo("none");
+		assertThat(get(port, "/").body()).isEqualTo("NIL/none");
+		assertThat(post(port, "/", "").body()).isEqualTo("0/EOF");
 	}
 
 	@Test

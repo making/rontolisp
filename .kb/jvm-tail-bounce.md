@@ -88,8 +88,10 @@ before. Self and mutual tail calls the compiler can name are jumps instead
   stopped on every other: a stream an async body drained skipped a close shaped like
   http.lisp's `(lambda () (funcall release nil))`,
   `JvmAsyncCompilerTest#aPullStreamsCloseThunkMakesTheCallsItsTailMakesThroughAValue`), a
-  `jvm-export` wrapper of a bouncing defun, the linalg/geom/simd scalar fallbacks and
-  `%check-sequence-runtime`'s call. On a
+  `jvm-export` wrapper of a bouncing defun, the linalg/geom/simd scalar fallbacks,
+  `%check-sequence-runtime`'s call and the http entry's calls of the compiled http-server.lisp
+  defuns (read off their `FunctionInfo`; assumed unary until 2026-11-07, `.kb/http-server.md`).
+  A runtime builder calling a compiled defun asks its `bounceVisible`. On a
   bounce `_unw` hands it to `_tramp`, which re-enters `_invoke_<n>` -- or the raw apply
   `_applyRaw` for a spread bounce, so a chain of applies keeps no frame -- in a loop until a
   real value comes back: the deferred call runs in the checking frame.

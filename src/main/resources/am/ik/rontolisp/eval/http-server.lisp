@@ -382,10 +382,36 @@
                (setf (rontolisp::%http-body-index stream) i)
                (%quiet-values line (not ended))))))
 
+(defun rontolisp::%http-declares-body-p (headers)
+  ;; Whether a request head frames a body -- a Content-Length or a
+  ;; Transfer-Encoding field (RFC 9112 section 6) -- in a header alist of any
+  ;; name case.
+  (let ((found nil) (rest headers))
+    (while (and rest (not found))
+      (let ((name (car (car rest))))
+        (when (or (string-equal name "content-length")
+                  (string-equal name "transfer-encoding"))
+          (setq found t)))
+      (setq rest (cdr rest)))
+    found))
+
+(defun rontolisp::%http-declared-body (body headers)
+  ;; The body a transport read, or nil when the request has none: octets
+  ;; arrived, or the head frames an EMPTY body. A bodiless request's buffered
+  ;; :raw-body is nil -- upstream guards it with (when raw-body ...), and most
+  ;; requests are bodiless, so this is also the allocation a GET does not pay --
+  ;; but an empty one a Content-Length frames is a stream, because a middleware
+  ;; reads :raw-body whenever :content-length is set (tiny-routes'
+  ;; wrap-request-body). The JDK transports apply the same rule in Java
+  ;; (RontoHttpServer.Request#declaresBody).
+  (if (or (and body (> (length body) 0))
+          (rontolisp::%http-declares-body-p headers))
+      (or body "")
+      nil))
+
 (defun rontolisp::%http-body-stream (body)
-  ;; nil for an absent or empty body -- upstream guards :raw-body with
-  ;; (when raw-body ...), and most requests are bodiless, so this is also the
-  ;; allocation a GET does not pay.
+  ;; nil for no body (the transport decided, %http-declared-body); any other
+  ;; BODY, the empty one included, is a stream.
   ;;
   ;; BODY is the TEXT a transport read, or the OCTETS a byte-shaped one did.
   ;; Taking both is not a convenience: the class below is bivalent over octets,
@@ -394,7 +420,7 @@
   ;; starts no sequence answers its own character -- so a binary body decoded to
   ;; text and encoded again comes back doubled (ff fe 41 -> c3 bf c3 be 41),
   ;; which is the same loss %http-body-string stopped inflicting on the way out.
-  (if (or (null body) (= (length body) 0))
+  (if (null body)
       nil
       (let ((v (if (stringp body) (rontolisp::%http-utf8-encode body) body)))
         (make-instance 'rontolisp::http-request-body-stream

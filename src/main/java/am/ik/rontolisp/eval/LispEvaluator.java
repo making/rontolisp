@@ -19694,11 +19694,13 @@ public final class LispEvaluator {
 		// file-position. The buffered form is a stream-table handle, so it is closed
 		// here, when the request ends -- upstream handlers never close :raw-body, and a
 		// long-running server must not grow its table per request. Only a request that
-		// HAS a body pays for it (upstream guards :raw-body with (when raw-body ...)).
+		// HAS a body pays for it -- one whose head frames even an empty body is one
+		// (RontoHttpServer.Request#declaresBody), because a middleware reads :raw-body
+		// whenever :content-length is set.
 		long bodyHandle = -1;
 		final LispVal rawBody;
 		if (bufferBody) {
-			if (request.body().length == 0) {
+			if (!request.declaresBody()) {
 				rawBody = LispNil.INSTANCE;
 			}
 			else {

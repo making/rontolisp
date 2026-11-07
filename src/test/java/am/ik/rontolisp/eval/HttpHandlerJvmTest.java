@@ -142,11 +142,11 @@ class HttpHandlerJvmTest {
 	// Compiles the program to a standalone class, then runs its main() on a daemon
 	// background thread (http-handler blocks in serve) and waits until the port is
 	// accepting connections.
-	private void compileAndServeInBackground(String program, int port) throws Exception {
-		compileAndServeInBackground(program, port, OptimizeLevel.NONE);
+	private Class<?> compileAndServeInBackground(String program, int port) throws Exception {
+		return compileAndServeInBackground(program, port, OptimizeLevel.NONE);
 	}
 
-	private void compileAndServeInBackground(String program, int port, OptimizeLevel optimize) throws Exception {
+	private Class<?> compileAndServeInBackground(String program, int port, OptimizeLevel optimize) throws Exception {
 		JvmLispCompiler compiler = JvmLispCompiler.builder().className("TestHttpServe").optimize(optimize).build();
 		// mirror the CLI pipeline's splices: http-server.lisp (the shared server value
 		// model the injected handle() calls into), then the Gray call-site rewrite its
@@ -172,6 +172,7 @@ class HttpHandlerJvmTest {
 		thread.setDaemon(true);
 		thread.start();
 		waitForPort(port);
+		return clazz;
 	}
 
 	@am.ik.rontolisp.testsupport.SocketTest
@@ -240,9 +241,26 @@ class HttpHandlerJvmTest {
 	void compiledDirectiveDecodesPathInfoAndServesBufferedRawBody() throws Exception {
 		// :raw-body :buffered on the JVM backend: the compiled %http-body-stream Gray
 		// instance, read through the compiled Gray dispatch -- read-line and read-byte
-		// share one cursor and file-position is a real byte index.
+		// share one cursor and file-position is a real byte index. An empty POST states
+		// Content-Length: 0 and gets an empty stream; a GET has no body and gets nil.
+		//
+		// The prefix makes the two defuns handle() calls take the value-tail depth: the
+		// ERROR and MAKE-INSTANCE wrappers the function values need tail-call
+		// %error-runtime, which enough condition classes make long enough to be
+		// outlined -- a call through a value. A unary call to either was a method the
+		// class did not declare (the tiny-routes application of ClackE2eTest).
+		StringBuilder conditions = new StringBuilder("(defpackage :conds (:use :cl))\n(in-package :conds)\n");
+		for (int i = 0; i < 45; i++) {
+			conditions.append("(define-condition c").append(i).append(" (error) ())\n");
+		}
+		conditions.append("""
+				(in-package :cl-user)
+				(defvar *signallers* (list #'error #'make-instance))
+				(print (handler-case (apply (car *signallers*) (list (read-from-string "conds::c3")))
+				         (error (e) (type-of e))))
+				""");
 		int port = freePort();
-		compileAndServeInBackground("""
+		Class<?> served = compileAndServeInBackground(conditions + """
 				(defun handle (env)
 				  (let* ((s (getf env :raw-body))
 				         (line (if s (read-line s nil nil) "none"))
@@ -253,7 +271,14 @@ class HttpHandlerJvmTest {
 				(rontolisp:http-handler 'handle %d :raw-body :buffered)
 				""".formatted(port), port);
 		assertThat(post(port, "/a%20b", "first\nsecond").body()).isEqualTo("/a b/first/115/7");
+		assertThat(post(port, "/empty", "").body()).isEqualTo("/empty/NIL/NIL/0");
 		assertThat(get(port, "/plain").body()).isEqualTo("/plain/none/0/0");
+		for (String member : java.util.List.of("HTTP-BODY-STREAM", "HTTP-NORMALIZE-RESPONSE")) {
+			// RONTOLISP::%<member>, mangled; getDeclaredMethod throws when it is absent.
+			assertThat(served.getDeclaredMethod("RONTOLISP$colon$colon$pct" + member, Object.class, int.class))
+				.as("%s takes the depth, the shape this test exists for", member)
+				.isNotNull();
+		}
 	}
 
 	@Test

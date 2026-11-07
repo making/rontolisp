@@ -37,8 +37,9 @@ Clack のレスポンスリスト `(status headers body)` を返します — Cl
   `read-line`/`read-char` と `read-byte`/`read-sequence` の両方で読めて
   本物の `file-position` を持つ、同期のインメモリな bivalent ストリーム
   として渡します — Clack アプリケーション（lack-request、http-body）が
-  必要とする形です。ボディの無いリクエストでは
-  `:raw-body` は `nil` になります。
+  必要とする形です。ボディの無いリクエスト (`Content-Length` も
+  `Transfer-Encoding` も無いもの) では `:raw-body` は `nil` になり、
+  `Content-Length: 0` で送られた空のボディは空のストリームになります。
 - **レスポンス** — 位置引数のリスト `(status headers body)`。`status` は
   必須の整数です（car が整数でなければエラーを送出します）。`headers` は
   キーワード plist（`'(:content-type "text/plain")`）またはドット対の

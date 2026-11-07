@@ -372,6 +372,25 @@ Pins: `fetch-spec.yaml` `an-octet-vector-body-is-sent-as-it-is` (four legs),
 boundary: the envelope carries a reply body as text, so a binary reply cannot round-trip there),
 the runner's `reads_the_request_record_the_module_writes`.
 
+## The request on the wire (JDK backends)
+
+**Both JDK backends build the request in ONE place, `RontoFetch.request`** (`HttpSupport` calls
+it), and put on the wire what the runner does (decided 2026-11-07):
+- **`http:` speaks HTTP/1.1.** `HttpClient`'s default HTTP/2 sent `Connection: Upgrade,
+  HTTP2-Settings` / `Upgrade: h2c` on every cleartext request; RFC 9113 section 3.1 deprecates
+  that upgrade, and the runner and the component never send it. `https:` keeps HTTP/2 through
+  ALPN (the per-request `version`, not the client's).
+- **A bodiless GET / HEAD / DELETE states no `Content-Length`** (RFC 9110 section 8.6).
+  `method(m, noBody())` writes `Content-Length: 0` for any method; `GET()` / `HEAD()` /
+  `DELETE()` write none. Measured on JDK 25 against a raw socket. Residual: a bodiless OPTIONS
+  still says `Content-Length: 0` (no bodiless builder); an empty POST/PUT/PATCH says it on
+  purpose, as the runner does.
+- Found through the tiny-routes Clack E2E: a GET with `Content-Length: 0` made
+  `wrap-request-body` read a nil `:raw-body` (the server half is `.kb/http-server.md`).
+- A body's framing is the transport's: the component sends one chunked, with no
+  `Content-Length` even for an empty POST. Pin: `fetch-spec.yaml`
+  `a-bodiless-request-offers-no-upgrade-and-states-no-length` (four legs).
+
 ## The default User-Agent
 
 **The ONE request header added on the caller's behalf is `User-Agent: rontolisp/<version>

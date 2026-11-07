@@ -2676,7 +2676,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime = usesHttpHandler
 				? JvmHttpHandlerRuntimeBuilder.build(cp, thisClass, objectArrayClass, stringLength, stringConcat,
-						am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(program))
+						am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(program), functions::get)
 				: null;
 		// Validate the jvm-export directives now that every defun (and its mangled
 		// method name) is known. Each names an existing, fixed-arity top-level defun;

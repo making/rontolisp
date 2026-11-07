@@ -23321,7 +23321,14 @@ cases:
       (print (read-line *ci-body* nil :eof))
       (file-position *ci-body* 0)
       (print (read-line *ci-body* nil nil))
-      (print (rontolisp::%http-body-stream ""))
+      ;; nil only for a request without a body: an empty one the head frames
+      ;; with a Content-Length is a stream, because a middleware reads :raw-body
+      ;; whenever :content-length is set (tiny-routes' wrap-request-body).
+      (print (rontolisp::%http-body-stream (rontolisp::%http-declared-body "" nil)))
+      (print (read-line
+              (rontolisp::%http-body-stream
+               (rontolisp::%http-declared-body "" '(("Content-Length" . "0"))))
+              nil :eof))
       ;; Bivalent means the ELEMENT TYPE is the character one: what a portable
       ;; middleware asks the stream is which buffer to allocate, and only a
       ;; character buffer can then be written to a text sink. This is
@@ -23344,6 +23351,7 @@ cases:
       :EOF
       "line1"
       NIL
+      :EOF
       CHARACTER
       "あい"
   - name: http-buffered-body-stream-lenient-utf8

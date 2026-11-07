@@ -17,7 +17,13 @@ a rontolisp handler. `rontolisp:fetch` keeps `(:status :headers :body)`
 - JVM: `JvmHttpHandlerRuntimeBuilder` over `runtime/RontoHttpClack.buildEnv`/`toResponse`,
   with a DIRECT INVOKESTATIC of compiled `%http-normalize-response`
   (`ClackEnv.NORMALIZE_RESPONSE`, survives `--optimize`'s class shaker); `usesHttpHandler`
-  forces `usesHashTables`. `RontoHttpClack`/`RontoHttpServer`/`RontoClackEnv`/
+  forces `usesHashTables`. **The direct calls take the defun's calling convention from its
+  `FunctionInfo`** (`LibraryCall`): a `bounceVisible` defun takes the value-tail depth and
+  its answer is unwrapped (`.kb/jvm-tail-bounce.md`). Which defuns bounce is whole-program:
+  a program taking `#'error` gets an ERROR wrapper tail-calling `%error-runtime`, which 45
+  condition classes make long enough to be outlined (a call through a value), so the
+  normalizer and `%http-body-stream` (via MAKE-INSTANCE) bounced and the unary call named an
+  undeclared method -- the tiny-routes Clack application's compile error (2026-11-07). `RontoHttpClack`/`RontoHttpServer`/`RontoClackEnv`/
   `RontoHashTable` TRAVEL with the output (`.kb/jvm-export.md`).
 - WASM component: http.lisp `%serve-handle` -> raw tuple -> `%http-serve-request` (ONE
   async frame).
@@ -132,7 +138,20 @@ decides at RUN time, via `%http-reactor-register app [:buffered]` (`.kb/clack.md
 - `:buffered` — what Clack needs (its `:raw-body` is SYNCHRONOUS, cannot block on a WASI
   future): a BIVALENT in-memory stream, character and byte reads off ONE byte cursor with a
   REAL `file-position`; lets `lack:builder` -> `circular-streams` -> `http-body:parse` run
-  natively. A bodiless request gets `:raw-body nil`.
+  natively. **`:raw-body` is nil exactly for a request WITHOUT a body**: no octets and no
+  `Content-Length` / `Transfer-Encoding` field (RFC 9112 section 6). An empty body the head
+  frames (`Content-Length: 0`) is an empty stream. Decided 2026-11-07: tiny-routes'
+  `wrap-request-body` reads `:raw-body` whenever `:content-length` is non-nil and 500'd on
+  every `Content-Length: 0` request; Clack types `:raw-body` as a stream and hunchentoot's,
+  toot's and wookie's handlers always hand one, lack's own mock (`lack/test`) pairs
+  `:content-length` with `:raw-body`. Always-a-stream was rejected: it costs the GET the
+  allocation this rule spares. One rule, two spellings: `RontoHttpServer.Request#declaresBody`
+  (interpreter; JVM via `RontoHttpClack.bufferedBody`) and http-server.lisp's
+  `%http-declared-body` / `%http-declares-body-p` (component `%serve-request-body`, reactor
+  `%http-reactor-request-body`, hand-written reactors). `%http-body-stream` answers nil for
+  nil and a stream for anything else, the empty body included. Pins: ci-spec
+  `http-buffered-body-stream`, `HttpHandlerTest#aBufferedRawBodyIsNilExactlyForARequestWithoutABody`,
+  `HttpHandlerJvmTest#compiledDirectiveDecodesPathInfoAndServesBufferedRawBody`.
 - Interpreter: `eval/HttpRequestBodyStream`, `byte[]` + cursor in the stream table
   (`Environment`'s `httpBodyStreamOpener/Closer`; the TRANSPORT closes it at request end; a
   program's `close` answers t and keeps the entry, like the Gray class's default close) —

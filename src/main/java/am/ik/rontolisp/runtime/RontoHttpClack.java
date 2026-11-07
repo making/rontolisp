@@ -190,16 +190,32 @@ public final class RontoHttpClack {
 	/**
 	 * The request body as the {@code (unsigned-byte 8)} vector of the JVM runtime -- the
 	 * bare {@code byte[]} the compiled {@code _iv*} helpers take, so the octets as they
-	 * came, uncopied, as the interpreter wraps them -- for both {@code :raw-body} modes:
-	 * the emitted {@code handle} hands them to the compiled {@code %http-body-stream} (a
-	 * byte stream, which must never see a re-encoded body) or writes them as the default
-	 * asynchronous stream's one chunk (an octet stream on every backend). A bodiless
-	 * request answers an empty vector.
+	 * came, uncopied, as the interpreter wraps them -- which the emitted {@code handle}
+	 * writes as the default asynchronous stream's one chunk (an octet stream on every
+	 * backend; {@link #bufferedBody} is the buffered mode's). A bodiless request answers
+	 * an empty vector.
 	 * @param request the served request
 	 * @return the body octets
 	 */
 	public static byte[] bodyOctets(RontoHttpServer.Request request) {
 		return request.body();
+	}
+
+	/**
+	 * What the emitted {@code handle} hands the compiled {@code %http-body-stream} under
+	 * {@code :raw-body :buffered} -- a byte stream, which must never see a re-encoded
+	 * body: the body octets, uncopied and possibly empty, when the request has a body
+	 * ({@link RontoHttpServer.Request#declaresBody}), and nil -- a real {@code null} in
+	 * this representation -- when it has none, so the buffered {@code :raw-body} is nil
+	 * exactly for a bodiless request.
+	 * @param request the served request
+	 * @return the body octets, or {@code null} for a request without a body
+	 */
+	// nil is null in the compiled representation; this package cannot import the
+	// annotation that would say so (it would travel with the class).
+	@SuppressWarnings("NullAway")
+	public static Object bufferedBody(RontoHttpServer.Request request) {
+		return request.declaresBody() ? request.body() : null;
 	}
 
 	// long[]{width, e0, ...} -> the raw octets, each element narrowed to its low byte.

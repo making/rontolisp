@@ -179,16 +179,21 @@ public final class HttpLibrary {
 			// time: the default passes rontolisp's asynchronous request stream through
 			// untouched (nothing is buffered, the body streams from the host), while
 			// :buffered drains it and wraps the text in the synchronously readable Gray
-			// stream a Clack application needs. Synthesizing the matching body -- rather
-			// than branching on a runtime flag -- is what keeps a default-mode component
-			// free of http-server.lisp's buffered-body machinery entirely (the
+			// stream a Clack application needs -- nil for a request without a body, which
+			// the header alist decides too (an empty body a Content-Length frames is a
+			// stream, rontolisp::%http-declared-body). Synthesizing the matching body --
+			// rather than branching on a runtime flag -- is what keeps a default-mode
+			// component free of http-server.lisp's buffered-body machinery entirely (the
 			// HttpServerLibrary splice filters on the same mode).
 			String requestBody = bufferBody ? """
-					(rontolisp:async-defun cl-user::%serve-request-body (%serve-body-stream)
+					(rontolisp:async-defun cl-user::%serve-request-body (%serve-body-stream %serve-body-headers)
 					  (let ((%serve-body-drained (rontolisp:await (rontolisp::%http-drain %serve-body-stream))))
-					    (rontolisp::%http-body-stream %serve-body-drained)))
+					    (rontolisp::%http-body-stream
+					     (rontolisp::%http-declared-body %serve-body-drained %serve-body-headers))))
 					""" : """
-					(rontolisp:async-defun cl-user::%serve-request-body (%serve-body-stream) %serve-body-stream)
+					(rontolisp:async-defun cl-user::%serve-request-body (%serve-body-stream %serve-body-headers)
+					  %serve-body-headers
+					  %serve-body-stream)
 					""";
 			out.addAll(LispReader.readAllFromString("""
 					(defun cl-user::%%serve-dispatch (%%serve-req) (%s %%serve-req))

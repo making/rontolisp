@@ -172,9 +172,10 @@ it; this transport is synchronous code where `await` is not legal).
   `%http-reactor-text-source`'s rule is "never answer `""` before the end"; `sent` starts true
   for an empty source.
 - **An EMPTY source is no body, and costs one look-ahead**: `%http-reactor-raw-body` pulls
-  once before deciding and pushes the chunk back (`%http-reactor-pushback`), preserving
-  upstream's rule that `:raw-body` is nil for a bodiless request in BOTH modes. The same
-  look-ahead lets an empty source FALL BACK to the envelope's `"body"` key.
+  once before deciding and pushes the chunk back (`%http-reactor-pushback`), so `:raw-body`
+  is nil for a bodiless request in BOTH modes. The same look-ahead lets an empty source FALL
+  BACK to the envelope's `"body"` key. A head that frames an empty body (`Content-Length: 0`)
+  still gets an empty stream (`%http-reactor-request-body`, `.kb/http-server.md`).
 
 ### Body SINK
 An optional SINK is a function of one chunk, possibly answering a FUTURE
@@ -284,7 +285,8 @@ reactor has no `http-handler` call at run time:
   `(await (read-all (getf env :raw-body)))` drain works and answering the stream as a response
   body relays byte-exact. Before it, `HttpReactorInliner.lowerHttpHandler` DROPPED the
   `:raw-body` argument and the reactor always buffered.
-- An empty or absent body stays `nil` in BOTH modes. `--no-gc` has neither: it rejects the
+- An absent body is `nil` in BOTH modes; an empty one the head frames is an empty stream.
+  `--no-gc` has neither: it rejects the
   async surface by name and `%http-drain`/`%http-serve-request` are `async-defun`s, so it
   cannot carry the HTTP transport at all.
 - Pinned by ci-spec `http-reactor-body-source` and `http-reactor-body-sink` (all four

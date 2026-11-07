@@ -92,6 +92,9 @@ JSON のレスポンスボディは
 
 - **インタプリタ** および **JVM**: JDK の `java.net.http.HttpClient` を使用します。
   `fetch` が返った瞬間からリクエストはバックグラウンドスレッドで実行されます。
+  `http:` の URL は HTTP/1.1 で要求します (`h2c` へのアップグレードは申し出ません)。
+  `https:` はサーバーが応じれば HTTP/2 を使います。`:body` のない `GET`、`HEAD`、
+  `DELETE` は `Content-Length` を送りません。
 - **WASM**: コンポーネント専用で、非同期の `wasi:http@0.3.0` の上で動作します —
   fetch は wit-import した `wasi:http/client@0.3.0` を呼ぶ通常の Lisp グルーであり、
   コンポーネントは一様に WASI 0.3 です。future は処理中の非同期 `client.send`

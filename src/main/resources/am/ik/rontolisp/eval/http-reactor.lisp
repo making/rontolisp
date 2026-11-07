@@ -393,9 +393,10 @@
 
 (defun rontolisp::%http-reactor-raw-body (source buffered)
   ;; The body source -> the :raw-body value the registered mode asks for. nil
-  ;; (and an EMPTY source of either spelling) stays nil in BOTH modes: upstream
-  ;; guards :raw-body with (when raw-body ...), and a bodiless GET must not pay
-  ;; for a stream it would only find empty.
+  ;; (and an EMPTY source of either spelling) is nil here in BOTH modes:
+  ;; upstream guards :raw-body with (when raw-body ...), and a bodiless GET must
+  ;; not pay for a stream it would only find empty. An empty body the head
+  ;; frames is %http-reactor-request-body's to turn into a stream.
   ;;
   ;; Which costs a pull source ONE look-ahead, because "is there a body" is a
   ;; question only the host can answer once the body stopped riding the
@@ -421,14 +422,24 @@
                         (rontolisp::%http-reactor-body-octets rest))
                        (rontolisp::%http-reactor-body-stream rest))))))))
 
-(defun rontolisp::%http-reactor-request-body (source in-band buffered)
+(defun rontolisp::%http-reactor-request-body (source in-band buffered headers)
   ;; SOURCE is the body the host passed out of band, IN-BAND the envelope's own
   ;; "body" key. The source wins -- and an empty one falls back to the key,
   ;; which is what lets a host hand over a reader that answers "no body" for a
   ;; GET without also having to stop filling the envelope. Both are the same
   ;; abstract source, so this is one function twice, not a second policy.
-  (let ((body (rontolisp::%http-reactor-raw-body source buffered)))
-    (if body body (rontolisp::%http-reactor-raw-body in-band buffered))))
+  ;; Neither having content, a head that frames a body (HEADERS, the request's
+  ;; alist) still gets an empty stream: a middleware reads :raw-body whenever
+  ;; :content-length is set (http-server.lisp's %http-declared-body).
+  (let ((body
+         (or (rontolisp::%http-reactor-raw-body source buffered)
+             (rontolisp::%http-reactor-raw-body in-band buffered))))
+    (cond (body body)
+          ((rontolisp::%http-declares-body-p headers)
+           (if buffered
+               (rontolisp::%http-body-stream "")
+               (rontolisp::%http-reactor-body-stream "")))
+          (t nil))))
 
 (defun rontolisp::%http-reactor-request-tuple (req body buffered)
   ;; The positional raw tuple %http-make-env consumes:
@@ -443,13 +454,16 @@
   ;; "script-name" is the envelope's optional mount point (a host that mounts
   ;; a Worker under a path has the same problem the Servlet war has), a RAW
   ;; prefix of "target"; absent means root-mounted.
-  (list (or (gethash "method" req) "GET") (or (gethash "target" req) "/")
-   (rontolisp::%http-reactor-header-alist (gethash "headers" req))
-   (rontolisp::%http-reactor-request-body body (gethash "body" req) buffered)
-   (or (gethash "protocol" req) "HTTP/1.1") (gethash "scheme" req)
-   (or (gethash "local-addr" req) "localhost")
-   (or (gethash "local-port" req) 80) (gethash "remote-addr" req)
-   (gethash "remote-port" req) (or (gethash "script-name" req) "")))
+  (let ((headers
+         (rontolisp::%http-reactor-header-alist (gethash "headers" req))))
+    (list (or (gethash "method" req) "GET") (or (gethash "target" req) "/")
+          headers
+          (rontolisp::%http-reactor-request-body body (gethash "body" req)
+                                                 buffered headers)
+          (or (gethash "protocol" req) "HTTP/1.1") (gethash "scheme" req)
+          (or (gethash "local-addr" req) "localhost")
+          (or (gethash "local-port" req) 80) (gethash "remote-addr" req)
+          (gethash "remote-port" req) (or (gethash "script-name" req) ""))))
 
 (defun rontolisp::%http-reactor-write (sink chunk)
   ;; One response chunk out, RESOLVED. A host writer that suspends answers a

@@ -6,12 +6,14 @@ import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.ClackEnv;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Builds the JVM-backend runtime for the {@code rontolisp:http-handler} directive. The
@@ -137,10 +139,13 @@ final class JvmHttpHandlerRuntimeBuilder {
 	 * @param stringConcat {@code String.concat(String)}
 	 * @param bufferBody the program's {@code :raw-body} mode (a compile-time constant --
 	 * one handler slot, one mode)
+	 * @param defun the compiled defun of a qualified name, or {@code null} when the
+	 * program has none
 	 * @return the runtime refs and method body
 	 */
 	static HttpHandlerRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectArrayClass,
-			MethodRefEntry stringLength, MethodRefEntry stringConcat, boolean bufferBody) {
+			MethodRefEntry stringLength, MethodRefEntry stringConcat, boolean bufferBody,
+			Function<String, JvmLispCompiler.@Nullable FunctionInfo> defun) {
 		ClassEntry handlerInterface = cp.classEntry(SUPPORT_CLASS + "$Handler");
 		ClassEntry requestClass = cp.classEntry(SUPPORT_CLASS + "$Request");
 		ClassEntry supportClass = cp.classEntry(SUPPORT_CLASS);
@@ -161,20 +166,16 @@ final class JvmHttpHandlerRuntimeBuilder {
 		MethodRefEntry drainBody = cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.DRAIN_BODY_METHOD,
 				JvmAsyncRuntimeBuilder.UNARY_DESC);
 
-		Utf8Entry unaryDesc = cp.utf8Entry(JvmAsyncRuntimeBuilder.UNARY_DESC);
-		// The compiled http-server.lisp entry points, called directly by their mangled
-		// method names (they are methods of this same generated class; the splice
-		// guarantees their presence in every serving program, and the direct call is
-		// the shaker-visible edge).
-		MethodRefEntry normalizeResponse = cp.methodRef(thisClass,
-				cp.utf8Entry(JvmLispCompiler.mangleMethodName(
-						PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.NORMALIZE_RESPONSE))),
-				unaryDesc);
-		// The request body crosses as OCTETS -- RontoHttpClack.bodyOctets answers
-		// the byte[] vector -- for both :raw-body modes: the buffered Gray stream
-		// is a byte stream and stores them as they are (encoding a decoded body doubled
-		// every octet >= #x80 of a binary POST), and the default asynchronous stream is
-		// an octet stream on every backend, one settled chunk here.
+		// The compiled http-server.lisp entry points, called directly (they are methods
+		// of this same generated class; the splice guarantees their presence in every
+		// serving program, and the direct call is the shaker-visible edge).
+		LibraryCall normalizeResponse = LibraryCall.of(cp, thisClass, ClackEnv.NORMALIZE_RESPONSE, defun);
+		// The request body crosses as OCTETS -- RontoHttpClack.bodyOctets and
+		// bufferedBody answer the byte[] vector -- for both :raw-body modes: the buffered
+		// Gray stream is a byte stream and stores them as they are (encoding a decoded
+		// body doubled every octet >= #x80 of a binary POST), and the default
+		// asynchronous stream is an octet stream on every backend, one settled chunk
+		// here.
 		MethodRefEntry bodyOctets = cp.methodRef(runtimeClass, "bodyOctets", "(L" + SUPPORT_CLASS + "$Request;)[B");
 		MethodRefEntry buildEnv = cp.methodRef(runtimeClass, "buildEnv",
 				"(L" + SUPPORT_CLASS + "$Request;Ljava/lang/Object;)Ljava/lang/Object;");
@@ -192,16 +193,15 @@ final class JvmHttpHandlerRuntimeBuilder {
 		// env, 4 result / triple, 5 drained body.
 		MethodCode a = new MethodCode();
 		if (bufferBody) {
-			// rawBody = %http-body-stream(bodyOctets(request)) -- the compiled Gray
-			// instance over the octets as they came; the defun itself answers nil for
-			// an empty body.
-			MethodRefEntry bodyStream = cp.methodRef(thisClass,
-					cp.utf8Entry(JvmLispCompiler.mangleMethodName(
-							PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.BODY_STREAM))),
-					unaryDesc);
+			// rawBody = %http-body-stream(bufferedBody(request)) -- the compiled Gray
+			// instance over the octets as they came, or nil for a request without a
+			// body (an EMPTY body a Content-Length frames is still a stream).
+			LibraryCall bodyStream = LibraryCall.of(cp, thisClass, ClackEnv.BODY_STREAM, defun);
+			MethodRefEntry bufferedBody = cp.methodRef(runtimeClass, "bufferedBody",
+					"(L" + SUPPORT_CLASS + "$Request;)Ljava/lang/Object;");
 			a.aload(1);
-			a.invokestatic(bodyOctets);
-			a.invokestatic(bodyStream);
+			a.invokestatic(bufferedBody);
+			bodyStream.emit(a, cp, thisClass);
 			a.astore(2);
 		}
 		else {
@@ -239,7 +239,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 		JvmTailBounce.unwrapRaw(a, cp, thisClass);
 		a.invokestatic(awaitHelper);
 		// triple = %http-normalize-response(result)
-		a.invokestatic(normalizeResponse);
+		normalizeResponse.emit(a, cp, thisClass);
 		a.astore(4);
 		// drained = _drain_body(third(triple))
 		a.aload(4);
@@ -264,6 +264,47 @@ final class JvmHttpHandlerRuntimeBuilder {
 				cp.utf8Entry("(L" + SUPPORT_CLASS + "$Request;)L" + SUPPORT_CLASS + "$Response;"), a);
 		return new HttpHandlerRuntime(handlerInterface, handlerFieldName, handlerFieldDesc, handlerField, serve,
 				thisClass, progInit, handle);
+	}
+
+	/**
+	 * A direct call into one compiled {@code http-server.lisp} defun of one argument, by
+	 * the calling convention its method was given: a defun the tail-bounce analysis marks
+	 * ({@link JvmTailBounce}) takes the value-tail depth after its argument and may
+	 * answer a bounce, which the caller unwraps. Which defuns it marks depends on the
+	 * whole program, so the convention is read off the compiled function rather than
+	 * assumed -- a large program (tiny-routes) turned both entry points bounce-visible,
+	 * and the unary call then named a method the class did not declare.
+	 *
+	 * @param method the defun's method
+	 * @param bounces whether the method takes the depth and may answer a bounce
+	 */
+	private record LibraryCall(MethodRefEntry method, boolean bounces) {
+
+		static LibraryCall of(ConstantPool cp, ClassEntry thisClass, String member,
+				Function<String, JvmLispCompiler.@Nullable FunctionInfo> defun) {
+			String name = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, member);
+			JvmLispCompiler.FunctionInfo fi = defun.apply(name);
+			if (fi == null) {
+				// Absent: the unary reference the class check reports as undeclared.
+				return new LibraryCall(cp.methodRef(thisClass, cp.utf8Entry(JvmLispCompiler.mangleMethodName(name)),
+						cp.utf8Entry(JvmAsyncRuntimeBuilder.UNARY_DESC)), false);
+			}
+			if (fi.paramCount() != 1 || fi.variadic() || fi.optionals() != 0) {
+				throw new IllegalStateException(name + " must be a defun of exactly one argument");
+			}
+			return new LibraryCall(fi.methodref(), fi.bounceVisible());
+		}
+
+		void emit(MethodCode a, ConstantPool cp, ClassEntry thisClass) {
+			if (this.bounces) {
+				a.loadConstant(0);
+			}
+			a.invokestatic(this.method);
+			if (this.bounces) {
+				JvmTailBounce.unwrapRaw(a, cp, thisClass);
+			}
+		}
+
 	}
 
 }
