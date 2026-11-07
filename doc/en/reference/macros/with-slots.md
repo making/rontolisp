@@ -6,6 +6,8 @@ Binds the slot names of a CLOS-subset instance ([`defclass`](../special-forms/de
 
 Lite: code GENERATED at run time inside the body (e.g. a `macrolet` template mentioning a slot name) resolves the name through a fallback binding holding the slot's value at entry -- reads work, but a write from such generated code updates that local copy only.
 
+[`macroexpand-1`](../functions/macroexpand-1.md) answers CL's expansion, a `let` of the instance around a [`symbol-macrolet`](symbol-macrolet.md) of the names, so a code walker that expands the body after it keeps them in scope.
+
 `with-slots` only BINDS -- it never reads a slot on entry -- so a body that merely assigns a slot declared without an `:initform` works, and the fallback binding above holds `nil` for such a slot. A read the body really performs still signals `unbound-slot`.
 
 ```lisp

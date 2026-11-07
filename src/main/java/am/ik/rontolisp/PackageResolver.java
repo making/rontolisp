@@ -690,6 +690,10 @@ public final class PackageResolver {
 				recordReadSymbols(cons);
 				return quotedSymbol(current());
 			}
+			if (LispNames.IMAGE_PACKAGES.equals(member)) {
+				applyImagePackages(cons);
+				return quotedSymbol(current());
+			}
 			if (LispNames.PUSH_PACKAGE.equals(member)) {
 				// The save needs no runtime counterpart: the run-time *package* already
 				// holds the package this pass has current, and the restore below
@@ -3807,6 +3811,118 @@ public final class PackageResolver {
 	}
 
 	/**
+	 * The named packages as this resolver's registry holds them now, as the
+	 * {@code (%image-packages ROW...)} marker ({@link LispNames#IMAGE_PACKAGES}): how a
+	 * compile path's macro-time evaluator hands what its code did to its packages -- made
+	 * one, exported into one -- to the compilers' resolution pass, which sees no
+	 * directive doing it ({@code .kb/packages.md}, "The compile image's packages"). A row
+	 * is {@code (NAME (USE...) (NICKNAME...) (MEMBER...) (EXTERNAL...)
+	 * (SPELLED-EXTERNAL...) ((MEMBER HOME)...) (SHADOW...) (RECORDED...) SEALED)}: the
+	 * members by name, the spelled externals the set the members' spelling follows
+	 * ({@link #spellsExternal}), the imports to their homes, the recorded members those a
+	 * runtime {@code intern} minted.
+	 * @param names the canonical package names
+	 * @return the marker, or null when none of the names is registered
+	 */
+	public synchronized @Nullable LispVal imagePackagesMarker(java.util.Collection<String> names) {
+		List<LispVal> marker = new ArrayList<>();
+		marker.add(new LispSymbol(LispNames.IMAGE_PACKAGES));
+		Map<String, Set<String>> recorded = this.registry.recordedMembers();
+		for (String name : names) {
+			if (!this.registry.contains(name)) {
+				continue;
+			}
+			LispPackage pkg = this.registry.get(name);
+			Set<String> spelled = this.declaredExternals.getOrDefault(pkg.name(), pkg.externals());
+			List<LispVal> imports = new ArrayList<>();
+			new java.util.TreeMap<>(pkg.imports()).forEach(
+					(member, home) -> imports.add(properList(List.of(new LispString(member), new LispString(home)))));
+			marker.add(properList(List.of(new LispString(pkg.name()), strings(pkg.useList()),
+					strings(this.registry.nicknamesFor(pkg.name())), strings(new java.util.TreeSet<>(pkg.symbols())),
+					strings(new java.util.TreeSet<>(pkg.externals())), strings(new java.util.TreeSet<>(spelled)),
+					properList(imports), strings(new java.util.TreeSet<>(pkg.shadows())),
+					strings(recorded.getOrDefault(pkg.name(), Set.of())),
+					this.registry.isSealed(pkg.name()) ? LispTrue.INSTANCE : LispNil.INSTANCE)));
+		}
+		return marker.size() == 1 ? null : properList(marker);
+	}
+
+	private static LispVal strings(java.util.Collection<String> values) {
+		List<LispVal> elements = new ArrayList<>(values.size());
+		values.forEach(value -> elements.add(new LispString(value)));
+		return properList(elements);
+	}
+
+	private static List<String> strings(LispVal list) {
+		List<String> values = new ArrayList<>();
+		for (LispVal cursor = list; cursor instanceof LispCons cell; cursor = cell.cdr()) {
+			values.add(((LispString) cell.car()).value());
+		}
+		return values;
+	}
+
+	/**
+	 * Takes in an {@link #imagePackagesMarker}: each package becomes what the compile
+	 * image holds, its members spelled as the image spells them. One not registered here
+	 * is one the image made by running code ({@link PackageRegistry#markImagePackage}); a
+	 * registered one keeps what this pass minted in it. A name that is another package's
+	 * nickname here is left alone.
+	 */
+	private void applyImagePackages(LispCons marker) {
+		for (LispVal rows = marker.cdr(); rows instanceof LispCons cell; rows = cell.cdr()) {
+			List<LispVal> row = ((LispCons) cell.car()).toList();
+			String name = ((LispString) row.get(0)).value();
+			if (!this.registry.canonicalName(name).equals(name)) {
+				continue;
+			}
+			LispPackage existing = this.registry.contains(name) ? this.registry.get(name) : null;
+			Set<String> owned = new HashSet<>(strings(row.get(3)));
+			if (existing != null) {
+				owned.addAll(existing.symbols());
+			}
+			Map<String, String> imports = new HashMap<>();
+			for (LispVal entries = row.get(6); entries instanceof LispCons entry; entries = entry.cdr()) {
+				List<String> pair = strings(entry.car());
+				imports.put(pair.get(0), pair.get(1));
+			}
+			this.registry.define(new LispPackage(name, strings(row.get(1)), owned, Set.copyOf(strings(row.get(4))),
+					Map.copyOf(imports), Set.copyOf(strings(row.get(7)))));
+			for (String nickname : strings(row.get(2))) {
+				if (!this.registry.contains(nickname)) {
+					this.registry.defineNickname(nickname, name);
+				}
+			}
+			this.declaredExternals.put(name, Set.copyOf(strings(row.get(5))));
+			for (String member : strings(row.get(8))) {
+				this.registry.markRecorded(name, member);
+			}
+			if (existing == null) {
+				this.registry.markImagePackage(name);
+				if (!(row.get(9) instanceof LispNil)) {
+					this.registry.markSealed(name);
+				}
+			}
+		}
+	}
+
+	/**
+	 * A count that changes whenever a package is registered, replaced, removed, renamed
+	 * or nicknamed ({@link PackageRegistry#modifications}).
+	 * @return the count
+	 */
+	public synchronized long packageModifications() {
+		return this.registry.modifications();
+	}
+
+	/**
+	 * The registered packages by canonical name ({@link PackageRegistry#packageRecords}).
+	 * @return a copy of the table
+	 */
+	public synchronized Map<String, LispPackage> packageRecords() {
+		return this.registry.packageRecords();
+	}
+
+	/**
 	 * Takes in a {@link #readSymbolsMarker}. A package this resolver does not have (one
 	 * only the macro-time evaluator made) contributes nothing.
 	 */
@@ -4469,10 +4585,13 @@ public final class PackageResolver {
 	 * home
 	 * @param shadows the canonically spelled shadowing symbols (the
 	 * {@code package-shadowing-symbols} answer)
+	 * @param madeInImage whether the compile image made the package by running code
+	 * ({@link PackageRegistry#isImagePackage}), which the program's {@code make-package}
+	 * of that name answers once
 	 */
 	public record BakedPackage(String name, java.util.List<String> use, java.util.List<String> nicknames,
 			java.util.List<LispSymbol> accessible, java.util.List<LispSymbol> externals,
-			java.util.List<java.util.List<String>> imports, java.util.List<LispSymbol> shadows) {
+			java.util.List<java.util.List<String>> imports, java.util.List<LispSymbol> shadows, boolean madeInImage) {
 	}
 
 	/**
@@ -4529,11 +4648,12 @@ public final class PackageResolver {
 					.add(java.util.List.of(member, home.toUpperCase(java.util.Locale.ROOT))));
 			}
 			out.add(new BakedPackage(upcased, java.util.List.copyOf(used), nicknames, accessible, externals,
-					java.util.List.copyOf(imports), java.util.List.copyOf(shadows)));
+					java.util.List.copyOf(imports), java.util.List.copyOf(shadows),
+					this.registry.isImagePackage(canonical)));
 		}
 		if (out.stream().noneMatch(entry -> "KEYWORD".equals(entry.name()))) {
 			out.add(new BakedPackage("KEYWORD", java.util.List.of(), java.util.List.of(), java.util.List.of(),
-					java.util.List.of(), java.util.List.of(), java.util.List.of()));
+					java.util.List.of(), java.util.List.of(), java.util.List.of(), false));
 		}
 		return out;
 	}

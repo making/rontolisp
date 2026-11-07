@@ -14780,7 +14780,8 @@ public final class LispEvaluator {
 	 * (arguments 1, 3, 5, ...) until each place is no longer a user-macro call, so a
 	 * {@code defmacro}-defined accessor is a valid setf place (CL's macroexpanding setf,
 	 * limited to user macros; the compile path gets this for free from
-	 * {@link UserMacroExpander} expanding the whole tree first).
+	 * {@link UserMacroExpander} expanding the whole tree first). A macro whose name also
+	 * has a user setf expander stays: the expander writes the place.
 	 * @param cons the setf form
 	 * @param env the scope the setf form runs in
 	 * @return the setf form with macro places expanded, and whether a macro expanded per
@@ -14792,8 +14793,10 @@ public final class LispEvaluator {
 		boolean perScope = false;
 		for (int i = 1; i + 1 < parts.size(); i += 2) {
 			LispVal place = parts.get(i);
+			// A user setf expander of the operator comes before its macro (CLHS 5.1.2.7).
 			while (place instanceof LispCons placeCons && placeCons.car() instanceof LispSymbol placeSym
-					&& this.userMacros.get(placeSym.name()) instanceof UserMacro macro) {
+					&& this.userMacros.get(placeSym.name()) instanceof UserMacro macro
+					&& lookupSetfExpander(placeSym.name()) == null) {
 				perScope |= expandsPerScope(macro);
 				place = expandUserMacro(placeCons, env);
 				changed = true;
@@ -15455,7 +15458,10 @@ public final class LispEvaluator {
 			if (!isMacroName(sym.name())) {
 				return form;
 			}
-			LispVal expanded = LispMacroExpander.expandBuiltinMacro(cons);
+			LispVal expanded = LispMacroExpander.expandSlotVariablesForWalker(cons);
+			if (expanded == null) {
+				expanded = LispMacroExpander.expandBuiltinMacro(cons);
+			}
 			if (expanded == null) {
 				expanded = LispMacroExpander.expandNativeMacro(cons);
 			}
@@ -15614,7 +15620,12 @@ public final class LispEvaluator {
 	 */
 	private LispVal expandSymbolMacrolet(LispCons cons, Environment env,
 			java.util.function.Function<LispCons, LispVal> substitution) {
-		return expandedPerSite(cons, () -> substitution.apply((LispCons) expandAllAtSite(cons, env)));
+		return expandedPerSite(cons, () -> {
+			LispVal walked = expandAllAtSite(cons, env);
+			// A walk that substituted the names itself (an expansion that is a user setf
+			// place) answered the progn they became.
+			return walked instanceof LispCons form && form.car() == cons.car() ? substitution.apply(form) : walked;
+		});
 	}
 
 	/**

@@ -70,7 +70,8 @@ An ordinary call on every consumer, unlike `(setf macro-function)`: `expandSetf`
 - Consumers: static-dispatch 20211209 (`common.lisp:294`), cl-environments 20250622
   (`cl-overrides.lisp:194`). Measured 2026-11-07: `(ql:quickload :generic-cl)` loads on the
   interpreter and a call runs through its compiler macro; the JVM compile of cl-environments
-  completes and runs.
+  completes and runs; and generic-cl's `(generic-cl:+ 1 2)` prints `3` on all four
+  ([packages.md](packages.md), "The compile image's packages").
 
 ## `load-time-value`
 `LispMacroExpander.hoistLoadTimeValues`, first line of `expandTopLevelDefinitions`; each

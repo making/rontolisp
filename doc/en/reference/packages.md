@@ -202,6 +202,14 @@ another form (not top-level) registers its package when that form runs, also in
 the runtime tier -- which the interpreter supports and the compiled backends
 refuse, having no registry to register into.
 
+Code that runs while a program compiles -- a compile-time `eval-when`, a macro
+body, a system the program loads -- may make a package (`make-package`) or change
+one (an `export` of a computed list). A compiled program reads the forms after it
+against the package as that code left it, and carries the package in the
+read/compile-time tier, as it carries a `defpackage` product. The program's own
+`make-package` of such a package answers it the first time it runs; a second
+signals, as for any existing package.
+
 A package keeps a **member table**: what [`intern`](functions/intern.md),
 [`export`](functions/export.md), [`import`](functions/import.md),
 [`shadowing-import`](functions/shadowing-import.md) and

@@ -17,6 +17,10 @@ recorded in its member table -- on every backend -- so [`find-symbol`](find-symb
 A name or nickname that collides with a registered package or nickname signals a
 catchable `package-error`, as does an unknown `:use` entry. Read/compile-time
 packages are never affected: creating over one signals instead of replacing it.
+A package a `make-package` made while the program compiled (in a compile-time
+`eval-when` or a system the program loads) is one of those in a compiled program,
+and the program's `make-package` of it answers it the first time it runs
+([packages](../packages.md)).
 
 ```lisp
 (make-package :doc-mp :use '(:cl) :nicknames '(:dmp)) ; => :DOC-MP

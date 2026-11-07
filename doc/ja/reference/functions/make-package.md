@@ -17,7 +17,11 @@
 登録済みのパッケージやニックネームと衝突する名前、未知の `:use`
 項目は、捕捉可能な `package-error` を signal する。読込/compile
 時パッケージに影響することはない: その名前での作成は置換ではなく signal
-である。
+である。プログラムのコンパイル中に(コンパイル時に評価される `eval-when`
+やプログラムがロードするシステムの中で)`make-package` が作ったパッケージは、
+コンパイル済みプログラムではその読込/compile 時パッケージであり、それに対する
+プログラムの `make-package` は最初に実行されたときにそのパッケージを返す
+([パッケージ](../packages.md))。
 
 ```lisp
 (make-package :doc-mp :use '(:cl) :nicknames '(:dmp)) ; => :DOC-MP

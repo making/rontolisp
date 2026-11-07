@@ -6,6 +6,8 @@ Binds each `var` as a symbol-macro-style place standing for `(accessor instance)
 
 Lite: the substitution is textual over the body (quoted data is skipped); an inner binding shadowing one of the names is still substituted.
 
+[`macroexpand-1`](../functions/macroexpand-1.md) answers CL's expansion, a `let` of the instance around a [`symbol-macrolet`](symbol-macrolet.md) of the names, so a code walker that expands the body after it keeps them in scope.
+
 ```lisp
 (defclass wa-point () ((x :initarg :x :accessor wa-x) (y :initarg :y :accessor wa-y)))
 (let ((p (make-instance 'wa-point :x 3 :y 4)))

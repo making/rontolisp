@@ -1019,6 +1019,18 @@ public final class PackageRegistry {
 	private final Set<String> sealed = new HashSet<>();
 
 	/**
+	 * The canonical names of the packages the compile image made by running code
+	 * ({@link #markImagePackage}).
+	 */
+	private final Set<String> imagePackages = new HashSet<>();
+
+	/**
+	 * Bumped by every registration, removal, rename and nickname
+	 * ({@link #modifications}).
+	 */
+	private long modifications;
+
+	/**
 	 * The canonical names of the packages the constructor seeds (plus {@code keyword},
 	 * the designator of the keyword package accepted by {@code intern}). Kept in sync
 	 * with the constructor by hand -- except the 15 uiop sub-packages, which come from
@@ -1796,6 +1808,45 @@ public final class PackageRegistry {
 	 */
 	public void define(LispPackage pkg) {
 		this.packages.put(pkg.name(), pkg);
+		this.modifications++;
+	}
+
+	/**
+	 * A count that changes whenever a package is registered, replaced, removed, renamed
+	 * or nicknamed: what tells a caller watching the packages ({@link #packageRecords})
+	 * that one may have moved. The member table's own writes do not count.
+	 * @return the count
+	 */
+	public long modifications() {
+		return this.modifications;
+	}
+
+	/**
+	 * The registered packages by canonical name. A package changes by being registered
+	 * again as a new record, so a caller compares the records by identity.
+	 * @return a copy of the table
+	 */
+	public Map<String, LispPackage> packageRecords() {
+		return Map.copyOf(this.packages);
+	}
+
+	/**
+	 * Records that the package is one the compile image made by running code
+	 * ({@code .kb/packages.md}, "The compile image's packages"): the program's
+	 * {@code make-package} of its name is the call that made it.
+	 * @param canonicalName the canonical package name
+	 */
+	public void markImagePackage(String canonicalName) {
+		this.imagePackages.add(canonicalName);
+	}
+
+	/**
+	 * Whether {@link #markImagePackage} recorded the package.
+	 * @param canonicalName the canonical package name
+	 * @return {@code true} for a package the compile image made
+	 */
+	public boolean isImagePackage(String canonicalName) {
+		return this.imagePackages.contains(canonicalName);
 	}
 
 	/**
@@ -1806,6 +1857,7 @@ public final class PackageRegistry {
 	 */
 	public void defineNickname(String nickname, String packageName) {
 		this.nicknames.put(nickname, packageName);
+		this.modifications++;
 	}
 
 	/**
@@ -1910,6 +1962,7 @@ public final class PackageRegistry {
 		if (this.packages.remove(canonicalName) == null) {
 			return false;
 		}
+		this.modifications++;
 		this.nicknames.entrySet().removeIf(entry -> entry.getValue().equals(canonicalName));
 		this.localNicknames.remove(canonicalName);
 		this.localNicknames.values().forEach(table -> table.values().removeIf(canonicalName::equals));
@@ -1917,6 +1970,7 @@ public final class PackageRegistry {
 		this.unhomed.remove(canonicalName);
 		this.recorded.remove(canonicalName);
 		this.sealed.remove(canonicalName);
+		this.imagePackages.remove(canonicalName);
 		return true;
 	}
 
@@ -2046,6 +2100,7 @@ public final class PackageRegistry {
 		if (pkg == null) {
 			throw new LispPackageException("No such package: " + oldName);
 		}
+		this.modifications++;
 		this.nicknames.entrySet().removeIf(entry -> entry.getValue().equals(oldName));
 		boolean runtime = this.runtimePackages.remove(oldName);
 		this.packages.put(newName,
@@ -2071,6 +2126,9 @@ public final class PackageRegistry {
 		}
 		if (this.sealed.remove(oldName)) {
 			this.sealed.add(newName);
+		}
+		if (this.imagePackages.remove(oldName)) {
+			this.imagePackages.add(newName);
 		}
 	}
 

@@ -168,6 +168,30 @@ public final class LispSymbol implements LispVal {
 		return displayName(name);
 	}
 
+	/**
+	 * The spelling of a name an expansion generates from a symbol -- a variable it binds
+	 * beside it -- in that symbol's package: the prefix goes on the member, so a
+	 * qualified spelling stays qualified (internal, as nothing exports a generated name)
+	 * and an uninterned one uninterned. Glued in front of a qualified spelling, the
+	 * prefix would name a member of another package ({@code __ll_cell_PKG:X} reads as
+	 * {@code X} in {@code __ll_cell_PKG}), which the compilers' resolver refuses when it
+	 * reads an expansion made at macro time.
+	 * @param prefix the generated part
+	 * @param name the stored name of the symbol the generated one derives from
+	 * @return the generated spelling
+	 */
+	public static String derivedName(String prefix, String name) {
+		if (name.startsWith("#:")) {
+			return "#:" + prefix + name.substring(2);
+		}
+		int colon = name.indexOf(':');
+		if (colon <= 0) {
+			return prefix + name;
+		}
+		int member = colon + 1 < name.length() && name.charAt(colon + 1) == ':' ? colon + 2 : colon + 1;
+		return name.substring(0, colon) + "::" + prefix + name.substring(member);
+	}
+
 	@Override
 	public String print() {
 		if (this.isKeyword()) {

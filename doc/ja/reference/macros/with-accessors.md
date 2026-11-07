@@ -6,6 +6,8 @@
 
 lite: 置換は本体のテキストに対して行われます（クォートされたデータはスキップされます）。名前をシャドウする内側の束縛も置換されます。
 
+[`macroexpand-1`](../functions/macroexpand-1.md) は CL の展開形、すなわちインスタンスの `let` が名前の [`symbol-macrolet`](symbol-macrolet.md) を囲む形を返します。そのため、その後で本体を展開するコードウォーカーからも名前はスコープ内に見えます。
+
 ```lisp
 (defclass wa-point () ((x :initarg :x :accessor wa-x) (y :initarg :y :accessor wa-y)))
 (let ((p (make-instance 'wa-point :x 3 :y 4)))

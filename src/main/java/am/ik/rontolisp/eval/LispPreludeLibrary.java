@@ -2515,6 +2515,17 @@ public final class LispPreludeLibrary {
 						        (%mp-nn (if (null nicknames) nil (if (listp nicknames) nicknames (list nicknames)))))
 						    (if (string= %mp-n "")
 						        (error 'package-error :package nil :format-control "MAKE-PACKAGE expects a package name"))
+						    ;; A package the compile image made by running this call: the
+						    ;; program carries it from the start, and the call answers it the
+						    ;; first time it runs (.kb/packages.md, "The compile image's
+						    ;; packages").
+						    (let ((%mp-b (%baked-package-find %mp-n)))
+						      (if (and %mp-b (nth 7 %mp-b) (string= %mp-n (car %mp-b)))
+						          (progn
+						            (setq %baked-packages%
+						                  (mapcar (lambda (%mp-e) (if (eq %mp-e %mp-b) (subseq %mp-e 0 7) %mp-e))
+						                          %baked-packages%))
+						            (return-from make-package (intern %mp-n :keyword)))))
 						    (if (or (%baked-package-find %mp-n) (%runtime-package-find %mp-n))
 						        (error 'package-error :package (intern %mp-n :keyword) :format-control (concatenate 'string "MAKE-PACKAGE: package already exists: " %mp-n)))
 						    (setq %mp-u (mapcar (lambda (%mp-e)

@@ -243,7 +243,8 @@ fixpoint.
   cl-environments 20250622, whose `walker/cl-environments.lisp` pushes `:cl-environments-full` and every
   later walker file guards on it; it LOADS on the interpreter now (measured 2026-11-06), and since
   2026-11-07 (`(setf compiler-macro-function)`, [compiler-macros.md](compiler-macros.md)) generic-cl
-  loads on the interpreter and cl-environments compiles and runs on the JVM. Pinned by `LoadContextE2eTest` (a component's push read by the next component
+  loads on the interpreter and cl-environments compiles and runs on the JVM; generic-cl runs on all
+  four since ([packages.md](packages.md), "The compile image's packages"). Pinned by `LoadContextE2eTest` (a component's push read by the next component
   and by a later top-level load, a computed push read by the file loaded after it; four backends),
   `LoadInlinerTest.aDefsystemDependsOnEntryIsSplicedAheadOfTheDependenciesAndAnnouncesItsFeatures`,
   `RontoLispCliTest.replEvaluatesExpression`.

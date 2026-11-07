@@ -172,7 +172,10 @@ package when the form around it runs, on the interpreter only.
 `unexport` and [`import`](../reference/functions/import.md) exist as the same
 kind of read/compile-time directive `in-package` is: a literal top-level call
 takes effect for the forms that follow it, on every backend, and a
-runtime-computed call works on the interpreter only. Packages created at run
+runtime-computed call works on the interpreter only -- except one that runs
+while the program compiles (a compile-time `eval-when`, a system the program
+loads), whose effect a compiled program reads the forms after it with
+([packages](../reference/packages.md)). Packages created at run
 time form the second tier: [`make-package`](../reference/functions/make-package.md)
 creates an empty package (upcased name, `:use` entries that must already exist),
 [`rename-package`](../reference/functions/rename-package.md) renames one

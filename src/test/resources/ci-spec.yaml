@@ -4980,6 +4980,30 @@ cases:
       NIL
       CI-FSR::ZAP
       T
+  # What compile-time code did to the packages -- make-package, a computed export --
+  # reaches the compilers' resolver where it ran, as SBCL's compile-file image holds it.
+  # The program's own make-package of a package the image made answers it the first time.
+  - name: a-package-the-compile-image-made-or-changed
+    source: |
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (defvar *ci-image-package* (make-package :ci-image-made :use '(:cl))))
+      (defmacro ci-image-mint (name) `',(intern (symbol-name name) *ci-image-package*))
+      (print (ci-image-mint ci-image-hello))
+      (print (package-name (symbol-package (ci-image-mint ci-image-hello))))
+      (print (eq (ci-image-mint ci-image-hello) (find-symbol "CI-IMAGE-HELLO" :ci-image-made)))
+      (print (handler-case (make-package :ci-image-made) (package-error () :exists)))
+      (defpackage :ci-image-exports (:use :cl))
+      (eval-when (:compile-toplevel :load-toplevel :execute)
+        (export (intern "CI-COMPUTED" :ci-image-exports) :ci-image-exports))
+      (print (eq 'ci-image-exports:ci-computed (find-symbol "CI-COMPUTED" :ci-image-exports)))
+      (print (nth-value 1 (find-symbol "CI-COMPUTED" :ci-image-exports)))
+    expected: |
+      CI-IMAGE-MADE::CI-IMAGE-HELLO
+      "CI-IMAGE-MADE"
+      T
+      :EXISTS
+      T
+      :EXTERNAL
   # remprop, the plist REMOVER: one prelude defun over the same %symbol-plists store
   # get / (setf get) / symbol-plist share.
   - name: symbol-plist-remprop
@@ -16136,6 +16160,29 @@ cases:
       (99 2)
       ON
       100
+  # A macro with a user setf expander is that expander's place (CLHS 5.1.2.7: the
+  # expander before the macro), also as what a symbol macro names -- anaphora's slet,
+  # whose IT is an internal-symbol-macrolet place.
+  - name: a-symbol-macro-naming-a-user-setf-place-writes-through-its-expander
+    source: |
+      (defvar *ci-usp-cell* (list 1 2 3))
+      (defmacro ci-usp-place (&rest whatever) `(symbol-macrolet ,@whatever))
+      (define-setf-expander ci-usp-place (binding-forms place &environment env)
+        (multiple-value-bind (dummies vals newvals setter getter) (get-setf-expansion place env)
+          (values dummies vals newvals `(symbol-macrolet ,binding-forms ,setter)
+                  `(symbol-macrolet ,binding-forms ,getter))))
+      (setf (ci-usp-place ((ci-usp-y 1)) (car *ci-usp-cell*)) 5)
+      (symbol-macrolet ((ci-usp-x (ci-usp-place ((ci-usp-y 1)) (cadr *ci-usp-cell*))))
+        (setf ci-usp-x (+ ci-usp-x 20)))
+      (print *ci-usp-cell*)
+      (defun ci-usp-scale (c)
+        (symbol-macrolet ((ci-usp-x (ci-usp-place ((ci-usp-y 1)) (car c))))
+          (setf ci-usp-x (* ci-usp-x 7)))
+        c)
+      (print (ci-usp-scale (list 3 4)))
+    expected: |
+      (5 22 3)
+      (21 4)
   # define-symbol-macro is the GLOBAL sibling: the definition is dropped on the
   # compile paths and every later top-level form substituted, while the interpreter
   # consults its table at the reference. Reads, setq/setf/incf write-through, a
@@ -16272,6 +16319,31 @@ cases:
       (T T T T NIL T 5)
       ((+ 1 6) (+ 1 6) CMX-G (+ 1 6))
       (CMX-S (+ 1 6))
+  # A code walker emits what macroexpand-1 answers and expands the body after it
+  # (cl-environments over generic-cl): with-slots and with-accessors answer CL's
+  # symbol-macrolet, so what a macrolet in the body expands to still names the
+  # variables; and a lambda list's generated names stay in their package.
+  - name: a-walker-expanding-with-slots-keeps-the-names-in-scope
+    source: |
+      (defstruct ci-wa-cell head tail)
+      (defmacro ci-wa-walked (form) (macroexpand-1 form))
+      (defun ci-wa-tail (c)
+        (ci-wa-walked (with-accessors ((tail ci-wa-cell-tail)) c
+                        (macrolet ((rest-of () 'tail)) (rest-of)))))
+      (print (ci-wa-tail (make-ci-wa-cell :head 1 :tail 2)))
+      (defclass ci-wa-box () ((content :initarg :content)))
+      (defun ci-wa-double (b)
+        (ci-wa-walked (with-slots (content) b
+                        (macrolet ((it () 'content)) (setf (it) (* 2 (it))) (it)))))
+      (print (ci-wa-double (make-instance 'ci-wa-box :content 21)))
+      (defpackage :ci-wa-keys (:use :cl))
+      (defun ci-wa-start (args)
+        (ci-wa-walked (destructuring-bind (&key ((:start ci-wa-keys::start) 0)) args ci-wa-keys::start)))
+      (print (list (ci-wa-start '(:start 5)) (ci-wa-start nil)))
+    expected: |
+      2
+      42
+      (5 0)
   # ',@xs in a backquote template = (quote ,@xs) = (cons 'quote xs): the
   # one-element splice yields 'x (trivia level0's `(equal ,*what* ',@args)),
   # the empty splice (QUOTE), the two-element splice (QUOTE A B).

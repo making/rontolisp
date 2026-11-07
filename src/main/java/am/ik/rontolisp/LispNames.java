@@ -6360,6 +6360,16 @@ public final class LispNames {
 	public static final String READ_SYMBOLS = "%READ-SYMBOLS";
 
 	/**
+	 * Internal marker {@code (%image-packages ROW...)}, everything a string but one flag,
+	 * the compile path's macro expander leaves in front of the next form wherever code
+	 * its evaluator ran made or changed a package ({@code make-package}, a computed
+	 * {@code export}): each such package as the compile image holds it there, which the
+	 * compilers' resolution pass takes over. Consumed by the resolver, never reaching the
+	 * backends.
+	 */
+	public static final String IMAGE_PACKAGES = "%IMAGE-PACKAGES";
+
+	/**
 	 * Internal marker inserted by {@code LoadInliner} before the spliced forms of a
 	 * loaded file: it makes the {@code PackageResolver} save the current package so a
 	 * file's internal {@code in-package} cannot leak past the load, mirroring Common Lisp

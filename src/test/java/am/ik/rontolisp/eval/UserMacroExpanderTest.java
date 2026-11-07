@@ -166,6 +166,29 @@ class UserMacroExpanderTest {
 	}
 
 	@Test
+	void whatCompileTimeCodeDidToThePackagesReachesTheCompilersResolver() {
+		// No macro in the program: a compile-time eval-when opens the pass by itself.
+		// Each
+		// change reaches the compilers' resolver in front of the form after it.
+		List<LispVal> emitted = UserMacroExpander.expand(LispReader.readAllFromString("""
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (unless (find-package :ume-made) (make-package :ume-made :use '(:cl))))
+				(print 'ume-made::made)
+				(defpackage :ume-exports (:use :cl))
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (export (intern "COMPUTED" :ume-exports) :ume-exports))
+				(print 'ume-exports:computed)
+				"""));
+		List<String> resolved = new am.ik.rontolisp.PackageResolver().resolveProgram(emitted)
+			.stream()
+			.map(LispVal::print)
+			.toList();
+		assertThat(resolved).contains("(PRINT 'UME-MADE::MADE)", "(PRINT 'UME-EXPORTS::COMPUTED)");
+		assertThat(emitted.stream().filter(form -> form.print().startsWith("(%IMAGE-PACKAGES (\"UME-")).count())
+			.isEqualTo(2);
+	}
+
+	@Test
 	void anExpansionKeepsClsWhileAfterThePackageTakesTheName() {
 		// The compilers' resolver re-reads the emitted forms after the %own-symbol claim:
 		// cl's while, quoted or not, must still read as cl's there.

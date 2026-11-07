@@ -15292,7 +15292,7 @@ public final class LispMacroExpander {
 				throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WHILE_COLLECTING)
 						+ " expects symbols as collector names: " + cons.print());
 			}
-			LispSymbol acc = new LispSymbol(WHILE_COLLECTING_ACC_PREFIX + name.name());
+			LispSymbol acc = new LispSymbol(LispSymbol.derivedName(WHILE_COLLECTING_ACC_PREFIX, name.name()));
 			LispSymbol arg = new LispSymbol(WHILE_COLLECTING_ARG_VAR);
 			bindings.add(listToCons(List.of(acc, LispNil.INSTANCE)));
 			functions.add(listToCons(List.of(name, listToCons(List.of(arg)),
@@ -17764,12 +17764,13 @@ public final class LispMacroExpander {
 	/**
 	 * Prepends the {@code (defvar %baked-packages% '...)} table a program needing the
 	 * runtime package API reads at run time: one entry per registered package --
-	 * {@code (name use nicknames accessible externals imports)}, everything a string
-	 * (names upcased, symbol universes in their canonical spellings, imports as dotted
-	 * {@code (member . home)} pairs with the home upcased) -- built from the resolver's
-	 * final registry. A no-op for every other program, which stays byte-identical. Runs
-	 * after package resolution, so the data is already canonical and needs no further
-	 * pass.
+	 * {@code (name use nicknames accessible externals imports shadows)}, everything a
+	 * string (names upcased, symbol universes in their canonical spellings, imports as
+	 * dotted {@code (member . home)} pairs with the home upcased), and a {@code t} after
+	 * them for a package the compile image made by running code -- built from the
+	 * resolver's final registry. A no-op for every other program, which stays
+	 * byte-identical. Runs after package resolution, so the data is already canonical and
+	 * needs no further pass.
 	 *
 	 * <p>
 	 * Strings rather than symbols and keywords on purpose: the table is quoted program
@@ -17806,6 +17807,12 @@ public final class LispMacroExpander {
 			// The shadowing symbols, packed like the universes (package-shadowing-symbols
 			// answers them for a read/compile-time package).
 			entry.add(new LispString(packSpellings(pkg.shadows())));
+			// A package the compile image made by running code is the one the program's
+			// make-package of its name makes: the call answers it once (.kb/packages.md,
+			// "The compile image's packages").
+			if (pkg.madeInImage()) {
+				entry.add(LispTrue.INSTANCE);
+			}
 			entries.add(listToCons(entry));
 		}
 		LispVal table = listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(entries)));
@@ -26544,6 +26551,41 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandWithSlots(LispCons cons) {
+		return expandWithSlots(cons, false);
+	}
+
+	/**
+	 * What {@code macroexpand-1} answers for {@code with-slots} and
+	 * {@code with-accessors}: CL's own shape, a {@code let} of the instance around a
+	 * {@code symbol-macrolet} of the variables. A code walker expands the body after it,
+	 * and keeps the names in scope for what a {@code macrolet} in the body expands to;
+	 * the substitution {@link #expandWithSlots} makes up front cannot reach that
+	 * (cl-environments' walk of generic-cl's lazy sequences). The compile passes and the
+	 * interpreter's arm keep the substitution, expanding the body's macros first.
+	 * @param cons the form
+	 * @return the expansion, or {@code null} for any other operator
+	 */
+	public static @Nullable LispVal expandSlotVariablesForWalker(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol sym)) {
+			return null;
+		}
+		return switch (sym.name()) {
+			case LispNames.WITH_SLOTS -> expandWithSlots(cons, true);
+			case LispNames.WITH_ACCESSORS -> expandWithAccessors(cons, true);
+			default -> null;
+		};
+	}
+
+	// (let ((OBJ instance)) (symbol-macrolet ((var expansion)...) body...)).
+	private static LispVal slotVariablesMacrolet(String objVar, LispVal instance,
+			java.util.Map<String, LispVal> substitutions, List<LispVal> body) {
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		substitutions.forEach((var, expansion) -> bindings.add(listToCons(List.of(new LispSymbol(var), expansion))));
+		return makeLet(objVar, instance, listToCons(
+				concatForms(List.of(new LispSymbol(LispNames.SYMBOL_MACROLET), listToCons(bindings)), body)));
+	}
+
+	private static LispVal expandWithSlots(LispCons cons, boolean forWalker) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3) {
 			throw new IllegalArgumentException(
@@ -26580,6 +26622,9 @@ public final class LispMacroExpander {
 		else if (!(parts.get(1) instanceof LispNil)) {
 			throw new IllegalArgumentException(
 					LispNames.WITH_SLOTS + " expects a slot list as the first argument: " + cons.print());
+		}
+		if (forWalker) {
+			return slotVariablesMacrolet(objVar, parts.get(2), substitutions, parts.subList(3, parts.size()));
 		}
 		List<LispVal> body = new java.util.ArrayList<>();
 		for (LispVal form : parts.subList(3, parts.size())) {
@@ -26674,6 +26719,10 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandWithAccessors(LispCons cons) {
+		return expandWithAccessors(cons, false);
+	}
+
+	private static LispVal expandWithAccessors(LispCons cons, boolean forWalker) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3) {
 			throw new IllegalArgumentException(LispNames.WITH_ACCESSORS
@@ -26696,6 +26745,9 @@ public final class LispMacroExpander {
 		else if (!(parts.get(1) instanceof LispNil)) {
 			throw new IllegalArgumentException(
 					LispNames.WITH_ACCESSORS + " expects an accessor list as the first argument: " + cons.print());
+		}
+		if (forWalker) {
+			return slotVariablesMacrolet(objVar, parts.get(2), substitutions, parts.subList(3, parts.size()));
 		}
 		List<LispVal> body = new java.util.ArrayList<>();
 		for (LispVal form : parts.subList(3, parts.size())) {
@@ -41943,7 +41995,7 @@ public final class LispMacroExpander {
 			}
 		}
 		// (let ((%WPI-NAME (list (%package-iterator-entries PKGS '(TYPES...))))) ...)
-		LispSymbol cursor = new LispSymbol(WITH_PACKAGE_ITERATOR_CURSOR_PREFIX + name.name());
+		LispSymbol cursor = new LispSymbol(LispSymbol.derivedName(WITH_PACKAGE_ITERATOR_CURSOR_PREFIX, name.name()));
 		LispVal entries = listToCons(List.of(new LispSymbol(LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL), spec.get(1),
 				listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(new java.util.ArrayList<>(types))))));
 		LispVal cell = listToCons(List.of(new LispSymbol(LispNames.LIST), entries));

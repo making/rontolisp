@@ -869,6 +869,12 @@ what the program signals without the generic, so an uncovered read is unchanged.
   the substitution, and the expansion refused `(slot-value ...)` as a slot name. Each path expands the
   body's macros first (the interpreter once per call site, `expandSlotVariables`), so a macro sees the
   name, not `(slot-value ...)`. ci-spec `with-slots-variable-is-shadowed-by-an-inner-binding`.
+- **`macroexpand-1` answers CL's shape instead** (i97, 2026-11-07): `(let ((obj instance))
+  (symbol-macrolet ((var (accessor obj))...) body...))`
+  (`LispMacroExpander.expandSlotVariablesForWalker`), since a code walker expands the body after it.
+  The substitution up front never reached what a `macrolet` in the body later expands to (a data
+  position for it): under cl-environments' walker generic-cl's `remove-from-lazy-seq` compiled a
+  bare `TAIL`, unbound. ci-spec `a-walker-expanding-with-slots-keeps-the-names-in-scope`.
 - **`with-slots`' entry-time fallback binding is BOUNDNESS-GUARDED**: besides substituting each
   slot variable, `expandWithSlots` `let`-binds it to
   `(if (slot-boundp obj 'slot) (slot-value obj 'slot) nil)` (`boundOrNil`) so code GENERATED

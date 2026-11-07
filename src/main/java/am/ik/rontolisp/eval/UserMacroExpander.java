@@ -11,9 +11,11 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.CompiledTemplates;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.MethodCombinations;
 import am.ik.rontolisp.macro.MopEvalCapture;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispPackage;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrees;
@@ -106,9 +108,11 @@ public final class UserMacroExpander {
 		// per top-level form, mirroring the interpreter's loadFile timing.
 		// A program that can ask what a package holds activates it for that evaluator's
 		// reader, which leaves what it read for the compilers (.kb/packages.md, "What a
-		// program read").
+		// program read"). So does an eval-when evaluating a member at compile time, as
+		// compile-file does: what it makes -- a package -- is there for the forms after
+		// it.
 		boolean asksWhatWasRead = LispPreludeLibrary.asksWhatWasRead(program);
-		if (program.stream().noneMatch(form -> isOperator(form, LispNames.DEFMACRO))
+		if (compileTime.isEmpty() && program.stream().noneMatch(form -> isOperator(form, LispNames.DEFMACRO))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_COMPILER_MACRO))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_MODIFY_MACRO))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_METHOD_COMBINATION))
@@ -163,6 +167,8 @@ public final class UserMacroExpander {
 			session.accept(rawForm, compileTime.contains(rawForm));
 		}
 		List<LispVal> expanded = session.finish();
+		// What the last forms' code did to the packages, for the baked tables.
+		session.emitPackages();
 		LispVal readSymbols = asksWhatWasRead ? session.macroEval.readSymbolsMarker() : null;
 		if (readSymbols != null) {
 			expanded.add(readSymbols);
@@ -209,6 +215,9 @@ public final class UserMacroExpander {
 
 		private final Set<String> templateKeys = new java.util.HashSet<>();
 
+		// The emitted program. A form joins it through emit, which hands over first what
+		// code did to the packages; only finish's tables, written once the forms are in,
+		// add to it directly.
 		private final List<LispVal> result = new ArrayList<>();
 
 		// Every top-level form as this pass RESOLVED it (canonical spellings), whatever
@@ -262,6 +271,18 @@ public final class UserMacroExpander {
 		// which restore the enclosing file's for free.
 		private final java.util.Deque<Boolean> openFiles = new java.util.ArrayDeque<>();
 
+		// The macro-time registry's packages when last looked at, and the count of its
+		// modifications then: a package registered anew between two looks was made or
+		// changed either by a directive this pass resolved, which the compilers' resolver
+		// consumes as well, or by code the macro-time evaluator ran -- make-package, a
+		// computed export -- which only this pass saw (changedByCode, until emit hands
+		// them over).
+		private long seenModifications;
+
+		private final java.util.Map<String, LispPackage> seenPackages = new java.util.HashMap<>();
+
+		private final Set<String> changedByCode = new java.util.TreeSet<>();
+
 		/**
 		 * A session.
 		 * @param shallow whether it expands top-level macro calls only and emits and
@@ -272,6 +293,92 @@ public final class UserMacroExpander {
 			this.macroEval.setDeclaredFeatures(features.declaredNames());
 			this.macroEval.setMopEvalSpliceSink(this.mopSplice);
 			this.macroEval.setCompiledTemplateSink(this.templateCaptures);
+			this.seenModifications = this.macroEval.packageResolver().packageModifications();
+			this.seenPackages.putAll(this.macroEval.packageResolver().packageRecords());
+		}
+
+		/**
+		 * Takes note of the packages made or changed since the last look: by a directive
+		 * this pass resolved, or else by code the macro-time evaluator ran.
+		 * @param directive whether what ran since is a directive's resolution
+		 */
+		private void notePackages(boolean directive) {
+			PackageResolver resolver = this.macroEval.packageResolver();
+			if (this.shallow || resolver.packageModifications() == this.seenModifications) {
+				return;
+			}
+			java.util.Map<String, LispPackage> packages = resolver.packageRecords();
+			packages.forEach((name, pkg) -> {
+				if (this.seenPackages.put(name, pkg) != pkg && !directive) {
+					this.changedByCode.add(name);
+				}
+			});
+			this.seenPackages.keySet().retainAll(packages.keySet());
+			this.changedByCode.retainAll(packages.keySet());
+			this.seenModifications = resolver.packageModifications();
+		}
+
+		/**
+		 * Runs what the macro-time resolver left of a package directive when it could not
+		 * consume it -- a computed {@code export}, still a call -- where the compile
+		 * image runs a form of its position: at compile time in a compile-time
+		 * {@code eval-when} ({@link #evalAtCompileTime}), and in a system the compile
+		 * loads ({@link #replayLibraryTopLevel}). A consumed directive left a value, not
+		 * a directive.
+		 * @param resolved the directive as the macro-time resolver answered it
+		 * @param compileTime whether an {@code eval-when} evaluates it at compile time
+		 */
+		private void runUnconsumedDirective(LispVal resolved, boolean compileTime) {
+			if (!isPackageDirective(resolved)) {
+				return;
+			}
+			if (compileTime) {
+				evalAtCompileTime(resolved);
+			}
+			else if (this.systemDepth > 0) {
+				replayLibraryTopLevel(resolved);
+			}
+		}
+
+		/**
+		 * Resolves a top-level form through the macro-time resolver, where a package
+		 * directive takes effect: what it makes, the compilers' resolver makes from the
+		 * emitted form too.
+		 * @param implementation whether the form is implementation source
+		 * ({@link #implementationPrefix})
+		 */
+		private LispVal resolveTopLevel(LispVal form, boolean implementation) {
+			notePackages(false);
+			LispVal resolved = implementation ? this.macroEval.resolveImplementationPackages(form)
+					: this.macroEval.resolvePackages(form);
+			notePackages(true);
+			return resolved;
+		}
+
+		/**
+		 * Adds the next top-level form to the program, behind what the code the
+		 * macro-time evaluator ran did to its packages since the last one: the
+		 * {@code (%image-packages ...)} marker of each package it made or changed, as it
+		 * holds them now ({@code .kb/packages.md}, "The compile image's packages"). The
+		 * form may name a package the code made while expanding it.
+		 * @param form the form
+		 */
+		private void emit(LispVal form) {
+			emitPackages();
+			this.result.add(form);
+		}
+
+		/** Adds the marker {@link #emit} puts in front of a form, when there is one. */
+		void emitPackages() {
+			notePackages(false);
+			if (this.changedByCode.isEmpty()) {
+				return;
+			}
+			LispVal marker = this.macroEval.packageResolver().imagePackagesMarker(this.changedByCode);
+			this.changedByCode.clear();
+			if (marker != null) {
+				this.result.add(marker);
+			}
 		}
 
 		/**
@@ -415,20 +522,23 @@ public final class UserMacroExpander {
 			// its template symbols resolve against P) and is kept verbatim for the
 			// compilers' own resolution pass (which tracks the same state itself).
 			if (isPackageDirective(form)) {
-				macroEval.resolvePackages(form);
-				this.result.add(form);
+				// One the resolver could not consume -- a computed export -- is a call,
+				// which the compile image runs where it runs any other form of the
+				// position: at compile time in a compile-time eval-when, and in a system
+				// it loads.
+				runUnconsumedDirective(resolveTopLevel(form, false), compileTime);
+				emit(form);
 				return;
 			}
 			// Resolve through the same resolver so macro CALL SITES match the
 			// canonical registered names (a defmacro under (in-package P) registers
 			// P-qualified).
-			LispVal resolved = this.implementationPrefix ? macroEval.resolveImplementationPackages(form)
-					: macroEval.resolvePackages(form);
+			LispVal resolved = resolveTopLevel(form, this.implementationPrefix);
 			if (isOperator(resolved, LispNames.DEFMACRO)) {
 				macroEval.evalResolved(resolved);
 				LispVal ownSymbol = ownSymbolMarker(form, resolved);
 				if (ownSymbol != null) {
-					this.result.add(ownSymbol);
+					emit(ownSymbol);
 				}
 				return;
 			}
@@ -457,12 +567,12 @@ public final class UserMacroExpander {
 				// simple-octet-vector in an etypecase) resolves on every backend.
 				LispVal folded = macroEval.foldDeftype(deftype);
 				if (folded != null && deftype.toList().get(1) instanceof LispSymbol typeName) {
-					this.result.add(requalifyShadowedClNames(properList(List.of(new LispSymbol(LispNames.DEFTYPE),
-							typeName, LispNil.INSTANCE, properList(List.of(new LispSymbol(LispNames.QUOTE), folded)))),
+					emit(requalifyShadowedClNames(properList(List.of(new LispSymbol(LispNames.DEFTYPE), typeName,
+							LispNil.INSTANCE, properList(List.of(new LispSymbol(LispNames.QUOTE), folded)))),
 							macroEval));
 					return;
 				}
-				this.result.add(form);
+				emit(form);
 				return;
 			}
 			if (isOperator(resolved, LispNames.DEFINE_SETF_EXPANDER) || isOperator(resolved, LispNames.DEFSETF)) {
@@ -482,7 +592,7 @@ public final class UserMacroExpander {
 			// which that pass consumes in the section's place.
 			LispVal defsectionExport = paxDefsectionExportForm(form);
 			if (defsectionExport != null) {
-				this.result.add(defsectionExport);
+				emit(defsectionExport);
 			}
 			LispVal expanded = expand(resolved);
 			// A macro may expand into the (rontolisp:async (defun ...)) wrapper; rewrite
@@ -544,9 +654,9 @@ public final class UserMacroExpander {
 
 		private void acceptExpansionMember(LispVal member, boolean compileTime) {
 			if (isPackageDirective(member)) {
-				this.macroEval.resolvePackages(member);
+				runUnconsumedDirective(resolveTopLevel(member, false), compileTime);
 				if (!this.shallow) {
-					this.result.add(requalifyShadowedClNames(member, this.macroEval));
+					emit(requalifyShadowedClNames(member, this.macroEval));
 				}
 			}
 			else {
@@ -579,7 +689,7 @@ public final class UserMacroExpander {
 				// (defreadtable ...) -- (eval-when (:load-toplevel :execute) ...) -- in
 				// an
 				// eval-when that evaluates at compile time defines its readtable then.
-				processExpandedEvalWhen((LispCons) expanded, this.result, compileTime);
+				processExpandedEvalWhen((LispCons) expanded, compileTime);
 				return;
 			}
 			if (this.systemDepth > 0) {
@@ -633,10 +743,10 @@ public final class UserMacroExpander {
 			// form that mentions a symbol macro cannot keep it either: the definition
 			// registered the resolved name, which the original spelling need not be (a
 			// bare SM under (in-package P), registered P::SM).
-			emitCompiledTemplates(this.result);
+			emitCompiledTemplates();
 			if (!this.shallow) {
 				boolean untouched = !member && (expanded == resolved || expanded.print().equals(resolved.print()));
-				this.result.add(untouched && !mentionsSymbolMacro(expanded) ? form : emitted(expanded));
+				emit(untouched && !mentionsSymbolMacro(expanded) ? form : emitted(expanded));
 			}
 			// Drain the definition-time method constructions the form's macro-time
 			// evaluation captured (a :metaclass defclass whose finalize-inheritance hook
@@ -649,7 +759,7 @@ public final class UserMacroExpander {
 				for (LispVal spliced : new ArrayList<>(this.mopSplice)) {
 					LispVal splicedExpansion = expand(spliced);
 					if (!this.shallow) {
-						this.result.add(emitted(splicedExpansion));
+						emit(emitted(splicedExpansion));
 					}
 				}
 				this.mopSplice.clear();
@@ -679,6 +789,7 @@ public final class UserMacroExpander {
 				SourceProvenance.enterTopLevelForm(result.get(i));
 				result.set(i, LoadFormSubstituter.substitute(result.get(i), macroEval));
 			}
+			emitPackages();
 			emitMacroGeneratedDeftypes(macroEval, result);
 			emitDeftypeInstances(macroEval, this.canonicalForms, result);
 			emitMacroFunctionTable(macroEval, result);
@@ -737,7 +848,7 @@ public final class UserMacroExpander {
 		 * member is replayed like the system's plain forms.
 		 * @param compileTimeToo whether the form is processed in compile-time-too mode
 		 */
-		private void processExpandedEvalWhen(LispCons evalWhen, List<LispVal> result, boolean compileTimeToo) {
+		private void processExpandedEvalWhen(LispCons evalWhen, boolean compileTimeToo) {
 			LispEvaluator macroEval = this.macroEval;
 			List<LispVal> parts = evalWhen.toList();
 			boolean compileTime = false;
@@ -764,12 +875,18 @@ public final class UserMacroExpander {
 			}
 			for (LispVal member : members) {
 				if (isOperator(member, LispNames.EVAL_WHEN) && member instanceof LispCons nested) {
-					processExpandedEvalWhen(nested, result, evaluated);
+					processExpandedEvalWhen(nested, evaluated);
 					continue;
 				}
 				if (isOperator(member, LispNames.DEFMACRO)) {
 					macroEval.evalResolved(member);
 					continue;
+				}
+				// A directive kept at top level makes its package for the compilers'
+				// resolver too: it is no package only this pass saw.
+				boolean keptDirective = loadTime && isPackageDirective(member);
+				if (keptDirective) {
+					notePackages(false);
 				}
 				if (evaluated) {
 					evalAtCompileTime(member);
@@ -780,12 +897,15 @@ public final class UserMacroExpander {
 				else {
 					registerMacroTimeDefinitions(member, macroEval);
 				}
+				if (keptDirective) {
+					notePackages(true);
+				}
 				if (loadTime) {
-					emitCompiledTemplates(result);
+					emitCompiledTemplates();
 				}
 				this.templateCaptures.clear();
 				if (loadTime && !this.shallow) {
-					result.add(emitted(foldMacroFboundp(member, macroEval)));
+					emit(emitted(foldMacroFboundp(member, macroEval)));
 				}
 			}
 		}
@@ -795,12 +915,12 @@ public final class UserMacroExpander {
 		 * ({@link #templateCaptures}), each pattern once, ahead of the form whose replay
 		 * compiled them: at run time that form compiles them again.
 		 */
-		private void emitCompiledTemplates(List<LispVal> result) {
+		private void emitCompiledTemplates() {
 			List<LispVal> captured = List.copyOf(this.templateCaptures);
 			this.templateCaptures.clear();
 			for (LispVal registration : captured) {
 				if (!this.shallow && this.templateKeys.add(CompiledTemplates.key(registration))) {
-					result.add(emitted(expand(registration)));
+					emit(emitted(expand(registration)));
 				}
 			}
 			// What expanding them compiled ran at expansion time only.
@@ -814,6 +934,12 @@ public final class UserMacroExpander {
 		 * the state it would have built fail later, plain runtime uses are unaffected.
 		 */
 		private void evalAtCompileTime(LispVal form) {
+			// What a define-method-combination this pass ran left for the backend's
+			// registry (stripDefmacroDefinitions): the combination is registered here
+			// already, and the marker names no function.
+			if (isOperator(form, MethodCombinations.MARKER)) {
+				return;
+			}
 			try {
 				this.macroEval.evalResolved(form);
 			}
@@ -837,8 +963,9 @@ public final class UserMacroExpander {
 		 * to a null stream), and the form stays in the program either way.
 		 */
 		private void replayLibraryTopLevel(LispVal form) {
+			// A method-combination marker has nothing to replay (evalAtCompileTime).
 			if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
-					|| LispNames.QUOTE.equals(op.name())) {
+					|| LispNames.QUOTE.equals(op.name()) || isOperator(form, MethodCombinations.MARKER)) {
 				return;
 			}
 			if (isOperator(form, LispNames.PROGN) && cons.isProperList()) {
@@ -2609,19 +2736,32 @@ public final class UserMacroExpander {
 					}
 					java.util.Map<String, LispVal> outer = macroEval.symbolMacroScope();
 					macroEval.symbolMacroScope(symbolMacrosWith(outer, parts.get(1)));
+					// An expansion naming a user setf place is that place to a setf of
+					// the name, its expander taking precedence over its macro (CLHS
+					// 5.1.2.7): it stays as written, the substitution runs here, and what
+					// the body became is walked again -- anaphora's slet, whose IT is
+					// an internal-symbol-macrolet place.
+					boolean placesAsWritten = bindsUserSetfPlace(parts.get(1), macroEval);
+					LispVal substituted;
 					try {
-						LispVal bindings = expandBindings(parts.get(1), macroEval);
-						if (!topLevel) {
+						LispVal bindings = placesAsWritten ? parts.get(1) : expandBindings(parts.get(1), macroEval);
+						if (!topLevel && !placesAsWritten) {
 							return rebuild(cons, parts, 2, macroEval, bindings);
 						}
 						List<LispVal> bound = new ArrayList<>(parts);
 						bound.set(1, bindings);
-						return SourceProvenance.inherit(cons, LispMacroExpander
-							.expandSymbolMacrolet((LispCons) expandTopLevelMembers(cons, bound, 2, macroEval, true)));
+						LispVal walked = topLevel ? expandTopLevelMembers(cons, bound, 2, macroEval, true)
+								: rebuild(cons, bound, 2, macroEval, bindings);
+						substituted = SourceProvenance.inherit(cons,
+								LispMacroExpander.expandSymbolMacrolet((LispCons) walked));
+						if (!placesAsWritten) {
+							return substituted;
+						}
 					}
 					finally {
 						macroEval.symbolMacroScope(outer);
 					}
+					return expandAll(substituted, macroEval, topLevel);
 				}
 				case LispNames.EVAL_WHEN: {
 					// The situation list is data, a member named like a macro included.
@@ -3193,6 +3333,19 @@ public final class UserMacroExpander {
 			result = new LispCons(out.get(i), result);
 		}
 		return result;
+	}
+
+	// Whether a symbol-macrolet binding's expansion is a form whose operator has a user
+	// setf expander.
+	private static boolean bindsUserSetfPlace(LispVal bindings, LispEvaluator macroEval) {
+		for (LispVal cursor = bindings; cursor instanceof LispCons cell; cursor = cell.cdr()) {
+			if (cell.car() instanceof LispCons binding && binding.cdr() instanceof LispCons expansion
+					&& expansion.car() instanceof LispCons place && place.car() instanceof LispSymbol operator
+					&& macroEval.hasSetfExpander(operator.name())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// Expands the init/step forms of a let/do binding list, keeping the bound names.

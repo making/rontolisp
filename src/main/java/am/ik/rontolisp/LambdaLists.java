@@ -1181,7 +1181,7 @@ public final class LambdaLists {
 		}
 		LispSymbol keySource = parsed.rest() != null ? parsed.rest() : restVar;
 		for (KeyParam key : parsed.keys()) {
-			LispSymbol cell = new LispSymbol(CELL_VAR_PREFIX + key.name().name());
+			LispSymbol cell = new LispSymbol(LispSymbol.derivedName(CELL_VAR_PREFIX, key.name().name()));
 			bindings.add(list(cell, keyCellScan(keySource, key.keyword())));
 			if (key.suppliedP() != null) {
 				bindings.add(list(key.suppliedP(),

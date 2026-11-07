@@ -577,7 +577,9 @@ keeps reading the LIVE set. Consequence: a LATE-exported symbol prints `PKG::NAM
 **A COMPUTED `export` never reaches the resolver**: only a LITERAL export folds
 (`tryConsumeExport`). The RUNTIME designator route works (`.kb/symbol-runtime-api.md`), so the gap
 is purely compile-time spelling; deliberately not widened, because the widening would accept ANY
-`pkg:x` and swallow typos.
+`pkg:x` and swallow typos. One the compile image RUNS -- in a compile-time `eval-when`, in a
+spliced system -- reaches the compilers as the package the image holds after it, not as a
+widening ("The compile image's packages").
 A library computing its exports from literal arguments gets them through a compiler macro over its
 own helpers instead (`.kb/asdf.md`, `eval/ClReexportForms`). `'()` names no symbol: it was read as the
 symbol `NIL` until 2026-11-04, so `(export '())` made `p:nil` readable
@@ -797,7 +799,9 @@ made table-aware. The model:
   mints read/compile-time packages, a lone `resolve` (the interpreter, resolving one
   top-level form at a time against a LIVE registry with nothing baked) mints runtime
   ones, so an interpreted program may define a package, use it and tear it down again.
-  A `defpackage` MODIFYING an existing package keeps that package's tier. Names/nicknames colliding, unknown `:use` entries, unknown
+  A `defpackage` MODIFYING an existing package keeps that package's tier. A package the compile
+  paths' macro-time evaluator made by running code is a read/compile-time one too ("The compile
+  image's packages"). Names/nicknames colliding, unknown `:use` entries, unknown
   designators likewise. Every failure is handler-case-catchable, carrying the
   offending designator (upcased keyword, nil for an empty name) in the `package`
   slot -- the `PACKAGE-ERROR` seed carries `PACKAGE` + `FORMAT-CONTROL` /
@@ -1225,6 +1229,65 @@ the conversion in the nested-`defpackage` seam only, but `signals-error` and
 `handle-non-abort-restart` run the form through `(eval 'FORM)`, which reaches the TOP-LEVEL
 directive path -- the `eval` native had to route a `defpackage` datum to the same seam.
 `defpackage.26` was not validation but `:intern` of an inherited name (above).
+
+## The compile image's packages (i97, 2026-11-07)
+**Decision: what code the compile paths' macro-time evaluator ran did to its packages joins the
+compile-time tier, where the code ran.** That evaluator is the compile image (SBCL's compile-file
+image, which holds every package its loaded systems and compile-time `eval-when`s made); the
+compilers' resolver learns packages only from the directives it consumes, so a package made by
+`make-package` or a nested `defpackage`, and an `export`/`import`/`use-package`/`shadow` computed
+there, never reached it. Consumers: static-dispatch's `(defvar *method-function-package*
+(make-package ...))`, whose `defmethod` expansions `gentemp` method-function names in it
+(`No such package: STATIC-DISPATCH.METHOD-FUNCTIONS`); cl-environments' `cl-overrides.lisp`, which
+re-exports every `cl` external through a computed `export` in an `eval-when`, so generic-cl's
+`(:mix ... :static-dispatch-cl)` packages took `setf` for their own symbol.
+- **Mechanism**: `UserMacroExpander.Session` watches the macro-time registry's package records
+  (`PackageRegistry.modifications`, records by identity: a change re-registers the record).
+  What changes while a top-level form's directives resolve (`resolveTopLevel`) the compilers'
+  resolver makes from the emitted directive itself; what changes anywhere else was code. Each
+  such package goes, as the image holds it then, into an `(%image-packages ROW...)` marker in front
+  of the next emitted form (`emit`; `PackageResolver.imagePackagesMarker`), so the form whose
+  expansion made it -- a `gentemp` forcing the lazy defvar -- can name it. The compilers'
+  resolver takes the row over (`applyImagePackages`): use list, members, externals, imports,
+  shadows, nicknames, and the spelled-external set (`spellsExternal`), so a member spells as in the
+  image (`PKG::NAME` for a `make-package` product's). A package it did not know is marked
+  `PackageRegistry.markImagePackage`.
+- **The program's `make-package` of it answers it once**: the baked `%baked-packages%` entry of an
+  image package carries a trailing `t`, and the prelude's `make-package` of exactly that name drops
+  the flag and answers the package; a second call signals, as any `make-package` of an existing
+  name. In SBCL the fasls name the symbols by package name, and a fresh image's load of the
+  library's own `make-package` creates the package before them; here the compiled program carries
+  it from the start, as it carries a `defpackage` product, and the call that made it in the image
+  is the one that answers it.
+- **A directive the resolver cannot consume runs at compile time** where the position runs a form
+  (`runUnconsumedDirective`): a computed `export` in a compile-time `eval-when`, or at a spliced
+  system's top level. It used to be emitted unrun. And a compile-time `eval-when` opens the macro
+  pass by itself (`expand`'s gate): a program with no macro skipped its compile-time members.
+- **Rejected**: keeping the package runtime-tier, made by the program's `make-package` at run time
+  as in a fresh SBCL image -- every baked table (`designatorTable`, the use table,
+  `%baked-packages%`, the access rows, the print table) would need a third kind of package,
+  resolvable but not baked, and the run-time package would lack the members its compiled symbols
+  are in. One marker of every package's FINAL state, registered on its first lookup: a change by
+  code would take effect before the form that made it, and a package used by a later `defpackage`
+  would not exist for it yet.
+- **Divergences**: `find-package` of an image package answers it before the program's
+  `make-package` ran (SBCL's fresh image answers nil), and `delete-package`/`rename-package`
+  refuse it, as every compile-time package. What only the member table records (`intern`,
+  `gentemp`) is not handed over: the compilers mint the spelling, and a program that enumerates
+  gets the names through `%read-symbols` ("What a program read"). A package the image deleted or
+  renamed by code stays under its old name for the compilers; local nicknames made by code are
+  not handed over.
+- **Measured** (2026-11-07): `(ql:quickload :generic-cl) (print (generic-cl:+ 1 2))` prints `3` on
+  the interpreter, the JVM, wasm Preview 1 and the component, and so do generic-cl's `=`, `map`,
+  list iterators (`advance` through anaphora's `slet`) and lazy-sequence `remove`. What stopped
+  after the package, in order: the `%define-method-combination` marker replayed as a call
+  (`replayLibraryTopLevel` and `evalAtCompileTime` skip it); a lambda list's `&key` cell named
+  `__ll_cell_` + a qualified spelling, another package (`LispSymbol.derivedName`, also
+  `while-collecting`'s and `with-package-iterator`'s generated names); the computed exports; a
+  `setf` of anaphora's `it` (`.kb/symbol-macrolet.md`, "An expansion that is a user setf
+  place"); `with-accessors` under cl-environments' walker (`.kb/clos.md`, "Slot shadowing").
+- Pinned by ci-spec `a-package-the-compile-image-made-or-changed`,
+  `UserMacroExpanderTest#whatCompileTimeCodeDidToThePackagesReachesTheCompilersResolver`.
 
 ## Tests
 `PackageResolverTest` (the `::` cases, the defpackage clause/error cases, the json.lisp fixed-point

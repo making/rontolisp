@@ -220,6 +220,14 @@ export している場合は、Common Lisp と同様にそのシンボルを継�
 これをサポートし、登録先のレジストリを持たないコンパイル済みバックエンドは
 拒否します。
 
+プログラムのコンパイル中に走るコード(コンパイル時に評価される `eval-when`、
+マクロ本体、プログラムがロードするシステム)は、パッケージを作ったり
+(`make-package`)、変えたり(計算したリストの `export`)できます。コンパイル済み
+プログラムはそれ以降のフォームを、そのコードが残したパッケージに対して読み、
+そのパッケージを `defpackage` の成果物と同じく読込/compile 時層に持ちます。
+そのようなパッケージに対するプログラム自身の `make-package` は、最初に実行された
+ときにそのパッケージを返し、2 回目は既存のパッケージと同じく signal します。
+
 パッケージは**メンバーテーブル**を持ちます。[`intern`](functions/intern.md)、
 [`export`](functions/export.md)、[`import`](functions/import.md)、
 [`shadowing-import`](functions/shadowing-import.md)、[`shadow`](functions/shadow.md)
