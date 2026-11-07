@@ -27,8 +27,12 @@ array limits vary by backend:
 
 | name | interpreter / JVM | WASM (all three) |
 |---|---|---|
-| `most-positive-fixnum` | `Long.MAX_VALUE` | `(1L << 30) - 1` |
-| `most-negative-fixnum` | `Long.MIN_VALUE` | `-(1L << 30)` |
+| `most-positive-fixnum` | `(1L << 62) - 1` | `(1L << 30) - 1` |
+| `most-negative-fixnum` | `-(1L << 62)` | `-(1L << 30)` |
+
+The interpreter and JVM pair is `fixnum`'s type, SBCL's `(signed-byte 63)` on all four
+(`.kb/declarations-type-checks.md`, "fixnum is SBCL's (signed-byte 63)"); it was the long's
+range until 2026-11-07.
 | `array-dimension-limit` / `array-total-size-limit` | `2147483639` | `(1L << 30) - 1` |
 
 The array limits are `ClConstants.arraySizeLimit(wasm)`, which `make-array`'s dimension check

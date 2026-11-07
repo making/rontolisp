@@ -187,7 +187,8 @@ and `1.0d0` are one value), array storage, `*read-default-float-format*` (still 
   `number-type` wrote each double as float32 (`(conspack:decode (conspack:encode 0.1d0))` answered
   `0.10000000149011612`), cl-postgres's `param-to-oid` and `serialize-for-postgres` sent float4. Now
   `0.1d0` round-trips (interpreter, JVM, P1, measured), and typo's primitive list keeps SBCL's two
-  float entries (its next stop is the fixnum, below).
+  float entries (its other assumption, the fixnum width, is "fixnum is SBCL's (signed-byte 63)"
+  below).
 - **Consumers in the Quicklisp cache** (279 releases, 54 naming `single-float` outside tests). A
   single arm ahead of the double one: cl-conspack, cl-store (lossless: its restore reads the 53-bit
   significand), cl-postgres, coalton (its float literal is typed by spelling, `CoaltonForms`: a `d`
@@ -349,9 +350,9 @@ table is GENERATED from it. **Change them together.**
   nil (SBCL agrees). `(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)` stay unknown
   (`OPAQUE_COMPOUND_TYPE_HEADS`) but for two enumerations, below, which the VALID-P below reports as such.
 - **Integer INTERVALS decide by containment** (`.todo/919`): `(unsigned-byte n)`, `(signed-byte n)`,
-  `(integer lo hi)` (exclusive `(k)` bounds, `*`), `(mod n)` and the names `bit` / `fixnum` (64 bits on
-  all four, since 2026-11-05: coalton's load asks `(subtypep '(signed-byte 32) 'fixnum)`; ci-spec
-  `subtypep-fixnum-is-a-64-bit-interval`) / `unsigned-byte` / `signed-byte` / `integer`, and an `(and ...)` of
+  `(integer lo hi)` (exclusive `(k)` bounds, `*`), `(mod n)` and the names `bit` / `fixnum` (SBCL's
+  `(signed-byte 63)` on all four, "fixnum is SBCL's (signed-byte 63)" below) / `unsigned-byte` /
+  `signed-byte` / `integer`, and an `(and ...)` of
   those, each read as one interval (`macro/IntegerTypeRange`), and with a
   COMPOUND on at least one side two intervals answer containment -- exact, so a nil there is still
   `nil nil` only because the valid-p rule below says compound. An `(or ...)` SUB is covered by its
@@ -392,7 +393,17 @@ table is GENERATED from it. **Change them together.**
   `SUBTYPEP_PARENTS` key, since `findClass`'s tolerance for a bare spelling answered `coalton:bit`, a class, for
   `cl:bit`, so `(subtypep 'bit 'integer)` was nil and coalton's `Bit` conversions asked for `Bounded Integer`.
   `bit` is below `fixnum` in the lattice, and a deftype name joins the run-time table in its one-colon spelling
-  too (`(subtypep x 'p:num)` answered nil compiled). ci-spec `subtypep-fixnum-is-a-64-bit-interval`.
+  too (`(subtypep x 'p:num)` answered nil compiled). ci-spec `subtypep-fixnum-is-a-63-bit-interval`.
+- **fixnum is SBCL's (signed-byte 63)** on all four (2026-11-07; 64 bits from 2026-11-05, when coalton's load
+  asked `(subtypep '(signed-byte 32) 'fixnum)`): `IntegerTypeRange`, its run-time twin `%subtypep-interval`,
+  and `most-positive-fixnum` `2^62-1` on the interpreter and the JVM (`ClConstants`; wasm keeps its i31
+  bound). **The width is ours to change, not typo's to absorb:** `typep` of `fixnum` is `integerp` and an
+  integer is a long up to 2^63 whatever the constant says, so the type is a convention, not a
+  representation -- on wasm it was never the representation -- and the convention libraries were written
+  against is a tagged fixnum narrower than a word. typo's primitive list puts `(unsigned-byte 63)` after
+  `fixnum` and asserts no later entry is a subtype of an earlier one, so it needs 33..63 bits (coalton
+  needs at least 32); every implementation typo supports has that. `sxhash` masks by the constant, so it
+  stays a fixnum. Pin: ci-spec `subtypep-fixnum-is-a-63-bit-interval` (SBCL's answers).
 - **The stream subtypes are edges to `STREAM`** (`file-stream` ... `concatenated-stream`), and a
   Gray class (ancestor `rontolisp:fundamental-stream`) is below `STREAM` in `namedSubtypep`. The
   edges join the runtime universe only for the names `runtimeStreamTypeNames` keeps, so a

@@ -12,7 +12,7 @@
 | Nil | `nil` | 偽 / 空リスト |
 | T | `t` | 真 |
 | Pi | `pi` | 定数 π。double値 `3.141592653589793` を保持するグローバル変数として束縛されます。クォートされた `pi` はシンボルのままです |
-| Fixnum 範囲 | `most-positive-fixnum`、`most-negative-fixnum` | `pi` と同様にグローバル変数として束縛されます。値はバックエンド依存です (WASM の fixnum はアンボックスの 31 ビット参照、インタープリターと JVM バックエンドは 64 ビット long) |
+| Fixnum 範囲 | `most-positive-fixnum`、`most-negative-fixnum` | `pi` と同様にグローバル変数として束縛されます。値はバックエンド依存です (WASM の fixnum はアンボックスの 31 ビット参照。インタープリターと JVM バックエンドは `fixnum` の範囲である `4611686018427387903` と `-4611686018427387904` を返します。`fixnum` はどのバックエンドでも SBCL と同じ `(signed-byte 63)` で、整数自体はこれらのバックエンドで 64 ビット long に保持されます) |
 | その他の限界値 | `char-code-limit`、`array-total-size-limit`、`array-dimension-limit`、`array-rank-limit`、`call-arguments-limit`、`lambda-parameters-limit`、`multiple-values-limit` | Fixnum 範囲と同様にグローバル変数として束縛されます。`char-code-limit` はすべてのバックエンドで `1114112` (Unicode コードポイント全域)、配列の限界値はバックエンド依存です |
 | 浮動小数点の範囲 | `most-positive-double-float`、`least-positive-normalized-single-float`、`double-float-epsilon` | 標準の浮動小数点範囲定数。`pi` と同様に double を保持するグローバル変数として束縛されます。`short-float` は `single-float`、`long-float` は `double-float` と同一で、本処理系の浮動小数点はすべて double のため、single-float の境界値はその binary32 値をそのまま double にした値になります (後述の「浮動小数点の型」を参照) |
 | Cons | `(1 2 3)`, `(a . 1)` | consセルで構築された連結リスト。`(a . b)` は単一セルを表すドット対記法 |

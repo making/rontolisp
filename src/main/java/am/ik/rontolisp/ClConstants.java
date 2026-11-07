@@ -207,7 +207,9 @@ public final class ClConstants {
 	 * <p>
 	 * The fixnum and array limits are backend-dependent: a WASM fixnum is an unboxed i31
 	 * reference, so the WASM value stays inside that range, while the interpreter and the
-	 * JVM backend hold a Java long.
+	 * JVM backend answer {@code fixnum}'s type, {@code (signed-byte 63)} -- SBCL's, which
+	 * libraries written against tagged fixnums assume ({@code macro/IntegerTypeRange}),
+	 * inside the Java long the two hold an integer in.
 	 * @param member the unqualified constant name
 	 * @param wasm whether the value is for a WASM backend
 	 * @return the value, or {@code null}
@@ -217,10 +219,10 @@ public final class ClConstants {
 			return new LispDouble(Math.PI);
 		}
 		if (LispNames.MOST_POSITIVE_FIXNUM.equals(member)) {
-			return new LispInteger(wasm ? (1L << 30) - 1 : Long.MAX_VALUE);
+			return new LispInteger(wasm ? (1L << 30) - 1 : (1L << 62) - 1);
 		}
 		if (LispNames.MOST_NEGATIVE_FIXNUM.equals(member)) {
-			return new LispInteger(wasm ? -(1L << 30) : Long.MIN_VALUE);
+			return new LispInteger(wasm ? -(1L << 30) : -(1L << 62));
 		}
 		if (LispNames.ARRAY_DIMENSION_LIMIT.equals(member) || LispNames.ARRAY_TOTAL_SIZE_LIMIT.equals(member)) {
 			return new LispInteger(arraySizeLimit(wasm));

@@ -52260,7 +52260,7 @@ public final class LispMacroExpander {
 			                      (t ""))))
 			    (cond ((symbolp %sti-s)
 			           (cond ((string= %sti-n "BIT") (cons 0 1))
-			                 ((string= %sti-n "FIXNUM") (cons -9223372036854775808 9223372036854775807))
+			                 ((string= %sti-n "FIXNUM") (cons -4611686018427387904 4611686018427387903))
 			                 ((string= %sti-n "UNSIGNED-BYTE") (cons 0 nil))
 			                 ((or (string= %sti-n "SIGNED-BYTE") (string= %sti-n "INTEGER")) (cons nil nil))
 			                 (t :none)))

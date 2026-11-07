@@ -35984,14 +35984,19 @@ cases:
     expected: |
       "(*PRINT-READABLY*)"
 
-  - name: subtypep-fixnum-is-a-64-bit-interval
-    # Expected is SBCL 2.2.9's.
+  - name: subtypep-fixnum-is-a-63-bit-interval
+    # Expected is SBCL 2.2.9's: fixnum is (signed-byte 63) on every backend, so typo's
+    # primitive list, which puts (unsigned-byte 63) after fixnum, stays ordered.
     source: |
       (defun ci-stf-probe (a b) (subtypep a b))
       (print (list (subtypep '(signed-byte 32) 'fixnum) (subtypep 'fixnum '(signed-byte 64))
                    (subtypep 'fixnum '(signed-byte 32)) (subtypep '(integer 0 1) 'fixnum)))
       (print (list (ci-stf-probe '(signed-byte 32) 'fixnum) (ci-stf-probe 'fixnum '(signed-byte 64))
                    (ci-stf-probe 'fixnum '(signed-byte 32))))
+      (print (list (subtypep '(unsigned-byte 63) 'fixnum) (subtypep '(signed-byte 64) 'fixnum)
+                   (subtypep '(signed-byte 63) 'fixnum) (subtypep 'fixnum '(signed-byte 63))
+                   (ci-stf-probe '(unsigned-byte 63) 'fixnum) (ci-stf-probe 'fixnum '(signed-byte 63))
+                   (subtypep (list 'integer most-negative-fixnum most-positive-fixnum) 'fixnum)))
       ;; coalton's integer conversions: an (and ...) of intervals is one, a nil between two
       ;; is a decision, and bit is below fixnum.
       (defvar *ci-stf-ufix* '(and fixnum unsigned-byte))
@@ -36015,6 +36020,7 @@ cases:
     expected: |
       (T T NIL T)
       (T T NIL)
+      (NIL NIL T T NIL T T)
       (T T)
       (NIL T)
       (NIL T)

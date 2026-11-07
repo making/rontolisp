@@ -12,7 +12,7 @@
 | Nil | `nil` | False / empty list |
 | T | `t` | True |
 | Pi | `pi` | The constant π, bound as a global holding the double `3.141592653589793`; a quoted `pi` stays the symbol |
-| Fixnum range | `most-positive-fixnum`, `most-negative-fixnum` | Bound as globals like `pi`; the value is backend-dependent (a WASM fixnum is an unboxed 31-bit reference, the interpreter and the JVM backend use 64-bit longs) |
+| Fixnum range | `most-positive-fixnum`, `most-negative-fixnum` | Bound as globals like `pi`; the value is backend-dependent (a WASM fixnum is an unboxed 31-bit reference; the interpreter and the JVM backend answer `4611686018427387903` and `-4611686018427387904`, the bounds of `fixnum`, which is `(signed-byte 63)` as in SBCL on every backend, although an integer is held in a 64-bit long there) |
 | Other limits | `char-code-limit`, `array-total-size-limit`, `array-dimension-limit`, `array-rank-limit`, `call-arguments-limit`, `lambda-parameters-limit`, `multiple-values-limit` | Bound as globals like the fixnum range; `char-code-limit` is `1114112` (full Unicode code points) on every backend, the array limits are backend-dependent |
 | Float range | `most-positive-double-float`, `least-positive-normalized-single-float`, `double-float-epsilon` | The standard float-range constants, bound as globals holding doubles like `pi`. `short-float` is `single-float` and `long-float` is `double-float`; since every float is a double here, a single-float bound answers the exact double of the binary32 number it names (see "Float types" below) |
 | Cons | `(1 2 3)`, `(a . 1)` | Linked list built from cons cells; `(a . b)` is dotted-pair notation for a single cell |
