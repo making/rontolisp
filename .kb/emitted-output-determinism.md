@@ -25,8 +25,14 @@ occurrences, both fixed:
 definition order".
 
 ## Sweep status
-Every such site in `src/main/java` walked twice (313, then 384 sites; 0 in `src/web/java`).
-**There is no third emission-reaching site.** `am.ik.wasm` holds no hash collection at all. Five
+Every such site in `src/main/java` walked twice (313, then 384 sites; 0 in `src/web/java`), and
+neither walk found a third emission-reaching site. A third came later:
+`ClosRegistry.VALUE_LAYOUT_CLASS_NAMES` (added 2026-11-05), a `Map.of` whose entries
+`expandClassOf` turns into `class-of`'s arms on both compiled backends. It was found 2026-11-07
+when two builds of one clack Worker differed in five ASDF bodies, and is now a `SequencedMap`,
+pinned by `LispMacroExpanderTest#classOfTestsTheValueLayoutsInDeclarationOrder`. After the fix the
+concatenated `ci-spec` corpus (Preview 1, component, JVM) and every size-report and Worker row
+compile byte-identically twice. `am.ik.wasm` holds no hash collection at all. Five
 are one careless refactor from the same bug: `BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS`,
 `WasmComponentBuilder.FIXED_BLOCK_IFACES`, `WasmSocketsRewrite.SYNC_DISPATCH`,
 `UiopLibrary.RESOURCES`, and the `LinkedHashSet` chains in `FreeVarAnalyzer`/`GlobalVarCollector`.
@@ -76,7 +82,7 @@ Parameters that genuinely carry emission order are all typed `SequencedSet`:
 reproducible even when the JVM build is not; `CiSpecE2eTest` runs the native binary and `./mvnw
 test` compares behavior, not bytes. Check it the way the bugs were found: compile the same program
 N times with `java -jar` and compare bytes, to a FIXED output path (the emitted class name derives
-from the `-o` path).
+from the `-o` path) from a FIXED source path (a module embeds its source file's path as a string).
 
 **Comparing two BUILDS (a refactor that must not change output) has one more variable: the build
 itself.** `am/ik/rontolisp/version.properties` carries the build timestamp and git commit, and a

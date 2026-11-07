@@ -1,9 +1,11 @@
 package am.ik.rontolisp;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.SequencedMap;
 import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
@@ -1474,10 +1476,20 @@ public final class ClosRegistry {
 	/**
 	 * The fixed layouts whose instances are values of a built-in class rather than of a
 	 * registered one: the instance tag to the {@link #BUILTIN_CLASS_NAMES} name
-	 * {@code class-of} answers.
+	 * {@code class-of} answers. A {@link SequencedMap} because the compiled
+	 * {@code class-of} tests them in its order: a {@code Map.of} iterates in an order
+	 * drawn once per JVM run, so each compile emitted its own
+	 * ({@code .kb/emitted-output-determinism.md}).
 	 */
-	public static final Map<String, String> VALUE_LAYOUT_CLASS_NAMES = Map.of(LispLayout.PATHNAME_TAG, "PATHNAME",
-			LispLayout.READTABLE_TAG, "READTABLE", LispLayout.RANDOM_STATE_TAG, "RANDOM-STATE");
+	public static final SequencedMap<String, String> VALUE_LAYOUT_CLASS_NAMES = valueLayoutClassNames();
+
+	private static SequencedMap<String, String> valueLayoutClassNames() {
+		SequencedMap<String, String> names = new LinkedHashMap<>();
+		names.put(LispLayout.PATHNAME_TAG, "PATHNAME");
+		names.put(LispLayout.READTABLE_TAG, "READTABLE");
+		names.put(LispLayout.RANDOM_STATE_TAG, "RANDOM-STATE");
+		return Collections.unmodifiableSequencedMap(names);
+	}
 
 	/**
 	 * The {@code define-method-combination} functions, normalized name to what computes

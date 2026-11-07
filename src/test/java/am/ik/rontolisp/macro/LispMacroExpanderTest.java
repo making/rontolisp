@@ -7,6 +7,7 @@ import java.util.Map;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -380,6 +381,21 @@ class LispMacroExpanderTest {
 	void theRuntimeSubtypepTableDoesNotDependOnWhatWasCompiledBefore() {
 		String source = "(defclass sh () ()) (defclass ci (sh) ()) (defun st (a b) (subtypep a b)) (print (st 'ci 'sh))";
 		assertThat(ancestorTableNames(source)).isEqualTo(ancestorTableNames(source));
+	}
+
+	@Test
+	void classOfTestsTheValueLayoutsInDeclarationOrder() {
+		// The same trap in class-of: its arms for the fixed value layouts came from a
+		// Map.of, so every compile of a program calling class-of emitted them in its own
+		// order (a clack Worker's five ASDF bodies differed between two builds). Each
+		// entry of ClosRegistry.VALUE_LAYOUT_CLASS_NAMES wraps the arms before it, so the
+		// last declared is tested first.
+		LispCons classOf = (LispCons) LispReader.readAllFromString("(class-of x)").get(0);
+		List<String> names = new ArrayList<>();
+		collectSymbols(LispMacroExpander.expandClassOf(classOf, true, false, false, new ClosRegistry()), names);
+		names.retainAll(List.of(LispLayout.PATHNAME_TAG, LispLayout.READTABLE_TAG, LispLayout.RANDOM_STATE_TAG));
+		assertThat(names).containsExactly(LispLayout.RANDOM_STATE_TAG, LispLayout.READTABLE_TAG,
+				LispLayout.PATHNAME_TAG);
 	}
 
 	@Test
