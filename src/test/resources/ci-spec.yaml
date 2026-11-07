@@ -22174,8 +22174,9 @@ cases:
       ;; finalizes eagerly; find-class/class-of answer the metaclass instance,
       ;; while instances of the class stay ordinary. The :before's reset of
       ;; direct-keys is upstream dao-class's exact move: CL fills the initargs
-      ;; AFTER the :before methods, so (ID) below pins the initarg re-fill --
-      ;; while table-name (no declared :initarg) keeps the :before's write.
+      ;; AFTER the :before methods, so (ID) below pins that order, on the
+      ;; driver's construction and on #'make-instance's -- while table-name (no
+      ;; declared :initarg) keeps the :before's write.
       (defvar *direct-column-slot* nil)
       (defclass mcp-dao-class (standard-class)
         ((direct-keys :initarg :keys :initform nil :accessor mcp-direct-keys)
@@ -22218,6 +22219,7 @@ cases:
                      (%obj-ref c 4))))
       (let ((u (make-instance 'mcp-user :id 7)))
         (print (list (mcp-user-id u) (slot-value u 'note) (eq (class-of u) (find-class 'mcp-user)))))
+      (print (mcp-direct-keys (apply #'make-instance (list 'mcp-dao-class :name 'raw :keys '(k)))))
       (print (mapcar (lambda (s)
                        (list (%obj-ref s 0)
                              (if (typep s 'mcp-effective-column-slot)
@@ -22250,6 +22252,7 @@ cases:
     expected: |
       (MCP-USER T T "users" (ID) (MCP-USER) T)
       (7 "n/a" T)
+      (K)
       ((ID INTEGER) (NOTE :PLAIN))
       (T NAMED "x" NIL)
       ((STRING 30) INTEGER T)
@@ -24601,6 +24604,76 @@ cases:
         (print (list (clsurf-n o) (slot-value o 'm))))
     expected: |
       (2 10)
+  - name: an-initialization-method-runs-before-the-fill
+    source: |
+      ;; A primary, :before or :around initialization method runs before the
+      ;; system shared-initialize fills the slots (CLHS 7.1.4-7.1.5): the slots are
+      ;; unbound there, and what the method hands the fill is what fills them, so
+      ;; an initform runs only for a slot nothing supplied (typo's full-fnrecord
+      ;; computes :min-arguments over an initform that signals).
+      (defclass simf-rec ()
+        ((a :initarg :a :initform (error "a is required") :reader simf-a)
+         (b :initarg :b :initform 2 :reader simf-b)))
+      (defmethod shared-initialize ((instance simf-rec) slot-names &rest initargs
+                                    &key (a 10) &allow-other-keys)
+        (apply #'call-next-method instance slot-names :a a initargs))
+      (print (let ((r (make-instance 'simf-rec))) (list (simf-a r) (simf-b r))))
+      (print (let ((r (make-instance 'simf-rec :a 5))) (list (simf-a r) (simf-b r))))
+      (print (let ((r (apply #'make-instance 'simf-rec (list :b 3)))) (list (simf-a r) (simf-b r))))
+      (print (let ((r (make-instance 'simf-rec :a 1 :b 1)))
+               (reinitialize-instance r)
+               (list (simf-a r) (simf-b r))))
+      (defvar *simf-log* nil)
+      (defclass simf-seen () ((v :initarg :v :initform 1 :reader simf-v)))
+      (defmethod initialize-instance :before ((o simf-seen) &key)
+        (push (slot-boundp o 'v) *simf-log*))
+      (print (list (simf-v (make-instance 'simf-seen)) *simf-log*))
+      ;; change-class calls shared-initialize on the slots the new class adds
+      ;; (CLHS 7.2), literal or computed: its methods run, and a slot the old
+      ;; class had keeps its value.
+      (setq *simf-log* nil)
+      (defclass simf-min () ((name :initarg :name :reader simf-name)))
+      (defclass simf-full (simf-min)
+        ((arity :initarg :arity :initform (error "arity is required") :reader simf-arity)
+         (props :initarg :props :initform '(:p) :reader simf-props)))
+      (defmethod shared-initialize ((r simf-full) slot-names &rest initargs
+                                    &key (arity 0) &allow-other-keys)
+        (apply #'call-next-method r slot-names :arity arity initargs))
+      (defmethod shared-initialize :after ((r simf-full) slot-names &rest initargs)
+        (declare (ignore initargs))
+        (push (list (simf-name r) (if (listp slot-names) (length slot-names) slot-names)) *simf-log*))
+      (let ((r (make-instance 'simf-min :name 'x)))
+        (change-class r 'simf-full :arity 2)
+        (print (list (simf-name r) (simf-arity r) (simf-props r))))
+      (let ((r (make-instance 'simf-min :name 'y)) (class 'simf-full))
+        (apply #'change-class r class (list :props nil))
+        (print (list (simf-name r) (simf-arity r) (simf-props r) (reverse *simf-log*))))
+      ;; The slot-names choose the unbound slots that take their initforms, and an
+      ;; initarg of a class-allocated slot fills the shared slot.
+      (defclass simf-pair () ((p :initform 1 :accessor simf-p) (q :initform 2 :accessor simf-q)))
+      (let ((o (make-instance 'simf-pair)))
+        (slot-makunbound o 'p)
+        (slot-makunbound o 'q)
+        (shared-initialize o '(q))
+        (print (list (slot-boundp o 'p) (simf-q o))))
+      (defclass simf-counted ()
+        ((count :initarg :count :initform 0 :allocation :class :reader simf-count)))
+      (let ((o (make-instance 'simf-counted)))
+        (reinitialize-instance o :count 5)
+        (print (list (simf-count o) (simf-count (make-instance 'simf-counted))))
+        (change-class (make-instance 'simf-pair) 'simf-counted :count 7)
+        (print (simf-count o)))
+    expected: |
+      (10 2)
+      (5 2)
+      (10 3)
+      (10 1)
+      (1 (NIL))
+      (X 2 (:P))
+      (Y 0 NIL ((X 2) (Y 2)))
+      (NIL 2)
+      (5 5)
+      7
   - name: clos-computed-change-class
     source: |
       ;; change-class takes a COMPUTED class designator -- a runtime symbol or a

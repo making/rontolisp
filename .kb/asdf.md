@@ -1107,7 +1107,8 @@ JVM, P1 and the component with no warning, as interpreted; on the way out went
 `with-simple-restart`/`cerror` over a variable control ([error-handling.md](error-handling.md)) and
 36 `Can't check exhaustiveness` warnings ([declarations-type-checks.md](declarations-type-checks.md),
 the compound `subtypep`). The `%define-method-combination` compile-time failure the same compile
-printed was i97's replay fix. typo stops on `.todo/i90`.
+printed was i97's replay fix. typo stops on `.todo/j03` (measured 2026-11-07: past
+`vm/predicates.lisp` on all three it was run on, the interpreter, the JVM and P1).
 
 **`eval/ClReexportForms`** (pinned by `ClReexportE2eTest`, all four, SBCL 2.2.9's answers). clingon's
 `src/package.lisp` is `(defpackage :clingon (:use :cl))` plus top-level

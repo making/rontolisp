@@ -23321,20 +23321,21 @@ public final class LispMacroExpander {
 			call.addAll(parts.subList(2, parts.size()));
 			return listToCons(call);
 		}
-		// A METAOBJECT class (a metaclass, a slot-definition class) under the loaded
-		// metaclass protocol constructs through the CHAIN FILL instead: allocate the
-		// instance with every slot unbound, then run the initialization generic --
-		// whose system shared-initialize primary (mop-protocol.lisp + the generated
-		// %mop-fill-slots) performs the initarg fill INSIDE the chain, so a user
-		// initialize-instance :around's munged initargs (mito's :direct-superclasses /
-		// :direct-slots rewrites) take effect. CL's ordering (:before -> fill) holds
-		// natively here, so the refill replay below is skipped.
-		boolean chainFill = closRegistry.isMopProtocolActive()
-				&& (isMetaobjectClass(info) || protocolFill || allocateGeneric);
-		// A user initialize-instance method exists (an :after in practice; make-instance
-		// runs it on the fresh instance with the initargs, like CL). Each initarg
-		// expression is hoisted into a let* temp so the constructor call and the
-		// initialize-instance call cannot evaluate it twice.
+		// A class an initialization method running before the fill applies to (a
+		// metaclass or slot-definition class under the loaded metaclass protocol among
+		// them, through mop-protocol.lisp's shared-initialize methods) constructs through
+		// the CHAIN FILL: allocate the instance with every slot unbound, then run the
+		// initialization generic, whose system shared-initialize primary (the
+		// synthesized default, mop-protocol.lisp's, both over %mop-fill-slots) fills it
+		// from the initargs that reach it, then the initforms of the slots still unbound
+		// (CLHS 7.1.4). A user method's munged initargs take effect (mito's
+		// :direct-superclasses, typo's computed :min-arguments), and an initform an
+		// initarg supplies never runs. Every other class keeps the constructor, whose
+		// fill only an :after method follows.
+		boolean chainFill = closRegistry.initializesThroughMethods(info)
+				|| closRegistry.isMopProtocolActive() && (protocolFill || allocateGeneric);
+		// Each initarg expression is hoisted into a let* temp so the constructor call and
+		// the initialization generic call cannot evaluate it twice.
 		String prefix = "__mi" + MV_COUNTER.getAndIncrement();
 		List<LispVal> ctorCall = new java.util.ArrayList<>();
 		ctorCall.add(new LispSymbol(ctor));
@@ -23367,31 +23368,6 @@ public final class LispMacroExpander {
 		letParts.add(new LispSymbol(LispNames.LET_STAR));
 		letParts.add(listToCons(bindings));
 		letParts.add(listToCons(initCall));
-		// CL runs the initialization :before methods BEFORE the initargs fill the
-		// slots; the constructor above fills first. For a class a :before method
-		// specializes, every declared-initarg slot the call supplies is re-set AFTER
-		// the initialization generic returns, so a :before writing such a slot
-		// (postmodern's dao-class resetting direct-keys) is overwritten exactly like
-		// CL's fill would overwrite it -- while undeclared (slot-name-default)
-		// initargs and unsupplied slots keep the hook's writes.
-		if (!chainFill && closRegistry.needsInitRefill(info)) {
-			List<ClosRegistry.SlotSpec> slots = info.slots();
-			for (int s = 0; s < slots.size(); s++) {
-				ClosRegistry.SlotSpec slot = slots.get(s);
-				if (!slot.initargSupplied()) {
-					continue;
-				}
-				// Leftmost initarg wins, per CL's duplicate-initarg rule.
-				for (int k = 2; k < parts.size() - 1; k += 2) {
-					LispSymbol keyword = literalInitarg(parts.get(k));
-					if (keyword != null && slot.acceptsInitarg(keyword.name())) {
-						letParts.add(listToCons(List.of(new LispSymbol(LispNames.OBJ_SET), objVar, new LispInteger(s),
-								new LispSymbol(prefix + "_a" + (k - 1)))));
-						break;
-					}
-				}
-			}
-		}
 		letParts.add(objVar);
 		return listToCons(letParts);
 	}
@@ -25195,23 +25171,24 @@ public final class LispMacroExpander {
 		LispSymbol val = new LispSymbol("%cca_v");
 		List<LispVal> body = new java.util.ArrayList<>();
 		body.add(objBecome(obj, LispLayout.CLASS_TAG_PREFIX + target.name()));
-		LispVal fill = changeClassInitformFill(obj, tagVar, target, closRegistry,
-				slot -> slot.initformSupplied()
-						? callOf(LispNames.NOT,
-								fmtCall(LispNames.EQUAL, plistInitargOrUnsupplied(args, slot), quoteOf(CCR_UNSUPPLIED)))
-						: null);
-		if (fill != null) {
-			body.add(fill);
+		if (closRegistry.updatesThroughSharedInitialize(target)) {
+			body.add(changeClassViaSharedInitialize(obj, tagVar, target, closRegistry, null, args));
 		}
-		List<ClosRegistry.SlotSpec> slots = target.slots();
-		for (int i = 0; i < slots.size(); i++) {
-			ClosRegistry.SlotSpec slot = slots.get(i);
-			String cell = slot.sharedCellVar();
-			LispVal store = cell != null
-					? listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(cell), val))
-					: objSet(obj, i, val);
-			body.add(makeLet(val.name(), plistInitargOrUnsupplied(args, slot),
-					makeIf(fmtCall(LispNames.EQUAL, val, quoteOf(CCR_UNSUPPLIED)), LispNil.INSTANCE, store)));
+		else {
+			LispVal fill = changeClassInitformFill(obj, tagVar, target, closRegistry,
+					slot -> slot.initformSupplied() ? callOf(LispNames.NOT,
+							fmtCall(LispNames.EQUAL, plistInitargOrUnsupplied(args, slot), quoteOf(CCR_UNSUPPLIED)))
+							: null);
+			if (fill != null) {
+				body.add(fill);
+			}
+			List<ClosRegistry.SlotSpec> slots = target.slots();
+			for (int i = 0; i < slots.size(); i++) {
+				ClosRegistry.SlotSpec slot = slots.get(i);
+				body.add(makeLet(val.name(), plistInitargOrUnsupplied(args, slot),
+						makeIf(fmtCall(LispNames.EQUAL, val, quoteOf(CCR_UNSUPPLIED)), LispNil.INSTANCE,
+								changeClassInitargStore(obj, i, slot, val))));
+			}
 		}
 		body.add(obj);
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), listToCons(List.of(obj, args)),
@@ -25332,16 +25309,26 @@ public final class LispMacroExpander {
 		bindings.add(1, listToCons(List.of(tagVar, objTag(objVar))));
 		List<LispVal> body = new java.util.ArrayList<>();
 		body.add(objBecome(objVar, LispLayout.CLASS_TAG_PREFIX + target.name()));
-		LispVal fill = changeClassInitformFill(objVar, tagVar, target, closRegistry,
-				slot -> leftmostLiteralInitarg(initargKeys, initargTemps, slot) != null ? LispTrue.INSTANCE : null);
-		if (fill != null) {
-			body.add(fill);
+		if (closRegistry.updatesThroughSharedInitialize(target)) {
+			List<LispVal> initargs = new java.util.ArrayList<>();
+			for (int i = 0; i < initargKeys.size(); i++) {
+				initargs.add(initargKeys.get(i));
+				initargs.add(initargTemps.get(i));
+			}
+			body.add(changeClassViaSharedInitialize(objVar, tagVar, target, closRegistry, initargs, null));
 		}
-		List<ClosRegistry.SlotSpec> slots = target.slots();
-		for (int i = 0; i < slots.size(); i++) {
-			LispVal supplied = leftmostLiteralInitarg(initargKeys, initargTemps, slots.get(i));
-			if (supplied != null) {
-				body.add(objSet(objVar, i, supplied));
+		else {
+			LispVal fill = changeClassInitformFill(objVar, tagVar, target, closRegistry,
+					slot -> leftmostLiteralInitarg(initargKeys, initargTemps, slot) != null ? LispTrue.INSTANCE : null);
+			if (fill != null) {
+				body.add(fill);
+			}
+			List<ClosRegistry.SlotSpec> slots = target.slots();
+			for (int i = 0; i < slots.size(); i++) {
+				LispVal supplied = leftmostLiteralInitarg(initargKeys, initargTemps, slots.get(i));
+				if (supplied != null) {
+					body.add(changeClassInitargStore(objVar, i, slots.get(i), supplied));
+				}
 			}
 		}
 		body.add(objVar);
@@ -25350,6 +25337,58 @@ public final class LispMacroExpander {
 		letParts.add(listToCons(bindings));
 		letParts.addAll(body);
 		return listToCons(letParts);
+	}
+
+	/**
+	 * Stores a supplied {@code change-class} initarg: into the shared cell for an
+	 * {@code :allocation :class} slot (CLHS 7.1.4, as the constructor does), into the
+	 * instance slot otherwise.
+	 */
+	private static LispVal changeClassInitargStore(LispSymbol objVar, int index, ClosRegistry.SlotSpec slot,
+			LispVal value) {
+		return slot.sharedCellVar() instanceof String cell
+				? listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(cell), value))
+				: objSet(objVar, index, value);
+	}
+
+	/**
+	 * What {@code change-class} does after the layout swap when the target class has a
+	 * {@code shared-initialize} method of the program
+	 * ({@link ClosRegistry#updatesThroughSharedInitialize}): CLHS 7.2's
+	 * {@code update-instance-for-different-class} system method, which calls
+	 * {@code shared-initialize} with the local slots the target adds, left unbound, and
+	 * the initargs. Its system method stores the initargs, then fills those slots that
+	 * are still unbound from their initforms, so a method computing initargs (typo's
+	 * {@code full-fnrecord}) supplies a slot whose initform signals, and its
+	 * {@code :after} methods run.
+	 * @param initargs the literal call's initarg and value forms, or null for
+	 * {@code plist}
+	 * @param plist the variable holding a run-time initarg list, or null
+	 */
+	private static LispVal changeClassViaSharedInitialize(LispSymbol objVar, LispSymbol oldTagVar,
+			ClosRegistry.ClassInfo target, ClosRegistry closRegistry, @Nullable List<LispVal> initargs,
+			@Nullable LispSymbol plist) {
+		LispVal added = changeClassSlotFill(objVar, oldTagVar, target, closRegistry, slot -> null, true);
+		String generic = java.util.Objects
+			.requireNonNull(closRegistry.initializationGeneric(LispNames.SHARED_INITIALIZE))
+			.name();
+		List<LispVal> call = new java.util.ArrayList<>();
+		if (plist != null) {
+			call.add(new LispSymbol(LispNames.APPLY));
+			call.add(functionRef(generic));
+		}
+		else {
+			call.add(new LispSymbol(generic));
+		}
+		call.add(objVar);
+		call.add(added == null ? LispNil.INSTANCE : added);
+		if (plist != null) {
+			call.add(plist);
+		}
+		else {
+			call.addAll(java.util.Objects.requireNonNull(initargs));
+		}
+		return listToCons(call);
 	}
 
 	/**
@@ -25372,6 +25411,19 @@ public final class LispMacroExpander {
 	@Nullable private static LispVal changeClassInitformFill(LispSymbol objVar, LispSymbol oldTagVar,
 			ClosRegistry.ClassInfo target, ClosRegistry closRegistry,
 			java.util.function.Function<ClosRegistry.SlotSpec, @Nullable LispVal> supplied) {
+		return changeClassSlotFill(objVar, oldTagVar, target, closRegistry, supplied, false);
+	}
+
+	/**
+	 * The {@code cond} of {@link #changeClassInitformFill}, or, when {@code added} holds,
+	 * the one {@link #changeClassViaSharedInitialize} takes: a slot the old class lacks
+	 * is left unbound for {@code shared-initialize} to fill, and each arm answers the
+	 * list of such slots' names (CLHS 7.2's added local slots), every other old class
+	 * nil.
+	 */
+	@Nullable private static LispVal changeClassSlotFill(LispSymbol objVar, LispSymbol oldTagVar, ClosRegistry.ClassInfo target,
+			ClosRegistry closRegistry, java.util.function.Function<ClosRegistry.SlotSpec, @Nullable LispVal> supplied,
+			boolean added) {
 		String targetKey = ClosRegistry.normalize(target.name());
 		java.util.Map<List<ChangeClassSlotOrigin>, List<String>> tagsByOrigins = new java.util.LinkedHashMap<>();
 		for (ClosRegistry.ClassInfo source : closRegistry.classes().values()) {
@@ -25388,7 +25440,7 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		for (java.util.Map.Entry<List<ChangeClassSlotOrigin>, List<String>> entry : tagsByOrigins.entrySet()) {
-			LispVal remap = changeClassSlotRemap(objVar, entry.getKey(), target, supplied);
+			LispVal remap = changeClassSlotRemap(objVar, entry.getKey(), target, supplied, added);
 			if (remap == null) {
 				continue;
 			}
@@ -25458,14 +25510,18 @@ public final class LispMacroExpander {
 	/**
 	 * The stores turning an instance of an old class with these {@code origins}, already
 	 * swapped to the target's layout, into one of {@code target} by slot name; null when
-	 * every instance slot of the target already holds its value in place.
+	 * every instance slot of the target already holds its value in place. With
+	 * {@code added}, a slot the old class lacks is made unbound instead of filled, and
+	 * the stores answer the list of those slots' names.
 	 */
 	@Nullable private static LispVal changeClassSlotRemap(LispSymbol objVar, List<ChangeClassSlotOrigin> origins,
 			ClosRegistry.ClassInfo target,
-			java.util.function.Function<ClosRegistry.SlotSpec, @Nullable LispVal> supplied) {
+			java.util.function.Function<ClosRegistry.SlotSpec, @Nullable LispVal> supplied, boolean added) {
 		List<ClosRegistry.SlotSpec> to = target.slots();
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		List<LispVal> stores = new java.util.ArrayList<>();
+		List<LispVal> addedNames = new java.util.ArrayList<>();
+		addedNames.add(new LispSymbol(LispNames.LIST));
 		for (int i = 0; i < to.size(); i++) {
 			ClosRegistry.SlotSpec slot = to.get(i);
 			ChangeClassSlotOrigin origin = origins.get(i);
@@ -25473,7 +25529,11 @@ public final class LispMacroExpander {
 				continue;
 			}
 			LispVal value;
-			if (origin.equals(ChangeClassSlotOrigin.ABSENT)) {
+			if (origin.equals(ChangeClassSlotOrigin.ABSENT) && added) {
+				addedNames.add(unspelledQuoteOf(slotNameSpelling(slot.name())));
+				value = unboundMarker();
+			}
+			else if (origin.equals(ChangeClassSlotOrigin.ABSENT)) {
 				LispVal initarg = supplied.apply(slot);
 				if (initarg instanceof LispTrue) {
 					continue;
@@ -25496,6 +25556,9 @@ public final class LispMacroExpander {
 		}
 		if (stores.isEmpty()) {
 			return null;
+		}
+		if (added) {
+			stores.add(addedNames.size() == 1 ? LispNil.INSTANCE : listToCons(addedNames));
 		}
 		if (bindings.isEmpty()) {
 			return makeProgn(stores);
@@ -54538,14 +54601,6 @@ public final class LispMacroExpander {
 				new LispString(LispNames.MOP_MAKE_INSTANCE + ": not an instantiable class: ~A"), name));
 		List<LispVal> defuns = new java.util.ArrayList<>();
 		List<LispVal> clauses = new java.util.ArrayList<>();
-		// The runtime twin of expandMakeInstance's re-fill: after the initialization
-		// generic returns, re-set the declared-initarg slots the call supplied, for the
-		// classes an initialization :before method specializes (it runs before CL's
-		// initarg fill, but after the constructor's). Bounded by that :before set, so
-		// the dispatch stays one defun.
-		java.util.Set<String> refillTargets = init == null ? java.util.Set.of() : closRegistry.initRefillTargets();
-		List<LispVal> refillClauses = new java.util.ArrayList<>();
-		LispVal refillCall = mvCall(MMI_REFILL, name, obj, args);
 		java.util.Set<String> seen = new java.util.HashSet<>();
 		List<String> helperNames = new java.util.ArrayList<>();
 		List<LispVal> defaultClauses = new java.util.ArrayList<>();
@@ -54579,20 +54634,13 @@ public final class LispMacroExpander {
 				defaultClauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, name, quotedSymbolList(spellings)),
 						mvCall(MMI_APPEND_DEFAULTS, args, listToCons(pairs)))));
 			}
-			// A metaobject class under the loaded metaclass protocol constructs through
-			// the CHAIN FILL (see expandMakeInstance): the arm allocates the instance
+			// The CHAIN FILL of expandMakeInstance: the arm allocates the instance
 			// UNBOUND and the initialization generic -- whose system shared-initialize
 			// primary performs the fill -- runs on it like on any other construction.
-			// CL's ordering holds natively there, so the refill replay is skipped.
 			boolean allocateGeneric = closRegistry.allocatesThroughGeneric(info.name());
-			boolean chainFill = closRegistry.isMopProtocolActive() && (isMetaobjectClass(info)
-					|| closRegistry.fillsThroughSlotProtocol(info.name()) || allocateGeneric) && initCallOnObj != null;
-			LispVal refillForms = !chainFill && info.ancestors().stream().anyMatch(refillTargets::contains)
-					? initRefillFormsFor(info, obj, args) : null;
-			if (refillForms != null) {
-				refillClauses
-					.add(listToCons(List.of(mvCall(LispNames.MEMBER, name, quotedSymbolList(spellings)), refillForms)));
-			}
+			boolean chainFill = initCallOnObj != null
+					&& (closRegistry.initializesThroughMethods(info) || closRegistry.isMopProtocolActive()
+							&& (closRegistry.fillsThroughSlotProtocol(info.name()) || allocateGeneric));
 			String ctor = qn == null ? "%MAKE-" + info.name() : qn.pkg() + "::" + "%MAKE-" + qn.member();
 			LispVal construct;
 			if (allocateGeneric) {
@@ -54622,10 +54670,6 @@ public final class LispMacroExpander {
 				// the public defun runs the initialization generic on the result.
 				arm = construct;
 			}
-			else if (refillForms != null) {
-				arm = listToCons(List.of(new LispSymbol(LispNames.LET),
-						listToCons(List.of(listToCons(List.of(obj, construct)))), initCallOnObj, refillCall, obj));
-			}
 			else {
 				arm = listToCons(List.of(new LispSymbol(LispNames.LET),
 						listToCons(List.of(listToCons(List.of(obj, construct)))), initCallOnObj, obj));
@@ -54640,9 +54684,6 @@ public final class LispMacroExpander {
 					clauseNodes = 0;
 				}
 			}
-		}
-		if (!refillClauses.isEmpty()) {
-			defuns.addAll(0, initRefillDefuns(refillClauses, name, obj, args));
 		}
 		// The class's default initargs join the initargs before it is constructed.
 		LispVal defaulting = null;
@@ -54680,9 +54721,6 @@ public final class LispMacroExpander {
 		List<LispVal> foundParts = new java.util.ArrayList<>();
 		if (initCallOnObj != null) {
 			foundParts.add(initCallOnObj);
-			if (!refillClauses.isEmpty()) {
-				foundParts.add(refillCall);
-			}
 		}
 		foundParts.add(obj);
 		LispVal found = foundParts.size() == 1 ? obj : makeProgn(foundParts);
@@ -54693,9 +54731,6 @@ public final class LispMacroExpander {
 				listToCons(List.of(cls, new LispSymbol(LispNames.LAMBDA_REST), args)), body)));
 		return defuns;
 	}
-
-	/** The generated re-fill dispatch defun's name. */
-	private static final String MMI_REFILL = "%MMI-REFILL";
 
 	/** The generated default-initarg appender's name. */
 	private static final String MMI_APPEND_DEFAULTS = "%MMI-APPEND-DEFAULTS";
@@ -54715,64 +54750,6 @@ public final class LispMacroExpander {
 			          (setq extra (cons (funcall (cdr default)) (cons (car default) extra)))))
 			    (if extra (append initargs (reverse extra)) initargs)))
 			""";
-
-	/** The generated first-matching-initarg-tail helper's name. */
-	private static final String MMI_INIT_TAIL = "%MMI-INIT-TAIL";
-
-	/**
-	 * The per-class re-fill body of the {@code %MMI-REFILL} dispatch: for each
-	 * declared-initarg slot, the leftmost supplied initarg pair (if any) overwrites the
-	 * slot -- CL's shared-initialize fill outcome, replayed after the initialization
-	 * generic so a {@code :before}'s write to such a slot does not survive it. Null when
-	 * the class declares no initargs.
-	 */
-	private static @org.jspecify.annotations.Nullable LispVal initRefillFormsFor(ClosRegistry.ClassInfo info,
-			LispSymbol obj, LispSymbol args) {
-		List<LispVal> forms = new java.util.ArrayList<>();
-		List<ClosRegistry.SlotSpec> slots = info.slots();
-		for (int s = 0; s < slots.size(); s++) {
-			ClosRegistry.SlotSpec slot = slots.get(s);
-			if (!slot.initargSupplied()) {
-				continue;
-			}
-			LispSymbol tail = new LispSymbol("%mmi_tail");
-			LispVal scan = slot.initargs().size() == 1
-					? mvCall(MMI_INIT_TAIL, args, initargForm(slot.initargs().get(0)))
-					: initargTailScan(args, slot.initargs());
-			forms.add(makeLet(tail.name(), scan,
-					makeIf(tail, mvCall(LispNames.OBJ_SET, obj, new LispInteger(s), callOf(LispNames.CAR, tail)),
-							LispNil.INSTANCE)));
-		}
-		return forms.isEmpty() ? null : makeProgn(forms);
-	}
-
-	/**
-	 * The {@code %MMI-INIT-TAIL} plist scanner (the leftmost pair whose key is the given
-	 * keyword, answered as its value tail, nil when absent) and the {@code %MMI-REFILL}
-	 * dispatch over the given per-class clauses.
-	 */
-	private static List<LispVal> initRefillDefuns(List<LispVal> refillClauses, LispSymbol name, LispSymbol obj,
-			LispSymbol args) {
-		LispSymbol plist = new LispSymbol("%mmi_plist");
-		LispSymbol key = new LispSymbol("%mmi_key");
-		LispSymbol cursor = new LispSymbol("%mmi_cursor");
-		LispVal step = callOf(LispNames.CDR, callOf(LispNames.CDR, cursor));
-		LispVal scan = listToCons(
-				List.of(new LispSymbol(LispNames.DO), listToCons(List.of(listToCons(List.of(cursor, plist, step)))),
-						listToCons(List.of(callOf(LispNames.NULL, cursor), LispNil.INSTANCE)),
-						makeIf(mvCall(LispNames.EQ_GENERAL, callOf(LispNames.CAR, cursor), key),
-								listToCons(List.of(new LispSymbol(LispNames.RETURN), callOf(LispNames.CDR, cursor))),
-								LispNil.INSTANCE)));
-		LispVal tailDefun = listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(MMI_INIT_TAIL),
-				listToCons(List.of(plist, key)), scan));
-		List<LispVal> condParts = new java.util.ArrayList<>();
-		condParts.add(new LispSymbol(LispNames.COND));
-		condParts.addAll(refillClauses);
-		condParts.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
-		LispVal refillDefun = listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(MMI_REFILL),
-				listToCons(List.of(name, obj, args)), listToCons(condParts)));
-		return List.of(tailDefun, refillDefun);
-	}
 
 	/** One {@code %MMI-<n>} helper: a cond over its chunk's construction arms. */
 	private static LispVal mopMakeInstanceHelperDefun(List<String> helperNames, List<LispVal> clauses, LispSymbol name,
@@ -54800,20 +54777,21 @@ public final class LispMacroExpander {
 
 	/**
 	 * Builds the generated {@code %mop-fill-slots} defun (plus its chunked
-	 * {@code %MOP-FILL-<n>} helpers): the metaclass protocol's system initarg fill,
-	 * called by the {@code shared-initialize} primaries of {@code mop-protocol.lisp}. One
-	 * arm per METAOBJECT-ancestored class -- the only classes the chain-fill construction
-	 * allocates unbound -- storing, per slot, the leftmost supplied initarg
-	 * ({@code %mop-initarg-tail}, the protocol's plist scanner) or, when the third
-	 * argument is true (initialize, not reinitialize) and the slot is still unbound, the
-	 * slot's initform. The interpreter serves the same name as a registry-backed builtin,
-	 * which stays correct as its registry grows.
+	 * {@code %MOP-FILL-<n>} helpers and {@code %mop-initform-wanted-p}): the system
+	 * {@code shared-initialize} method's fill, called by the synthesized default and the
+	 * primaries of {@code mop-protocol.lisp}. One arm per registered class, storing, per
+	 * slot, the leftmost supplied initarg ({@code %mop-initarg-tail}, the protocol's
+	 * plist scanner) or, when the third argument (the slot-names: {@code t}, nil or a
+	 * list) selects the slot and it is still unbound, the slot's initform (CLHS 7.1.4).
+	 * The interpreter serves the same name as a registry-backed builtin, which stays
+	 * correct as its registry grows.
 	 */
 	private static List<LispVal> mopFillSlotsDefuns(ClosRegistry closRegistry) {
 		LispSymbol obj = new LispSymbol("%mf_obj");
 		LispSymbol args = new LispSymbol("%mf_args");
 		LispSymbol initforms = new LispSymbol("%mf_forms");
 		List<LispVal> defuns = new java.util.ArrayList<>();
+		defuns.add(mopInitformWantedDefun());
 		List<String> helperNames = new java.util.ArrayList<>();
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		int clauseNodes = 0;
@@ -54835,10 +54813,8 @@ public final class LispMacroExpander {
 				// rides slot-boundp on exactly that).
 				LispVal initformFill = !slot.initformSupplied() ? LispNil.INSTANCE
 						: makeIf(
-								makeIf(initforms,
-										objIs(mvCall(LispNames.OBJ_REF, obj, new LispInteger(s)),
-												List.of(ClosRegistry.UNBOUND_TAG)),
-										LispNil.INSTANCE),
+								mvCall(MOP_INITFORM_WANTED, initforms, obj, new LispInteger(s),
+										unspelledQuoteOf(slotNameSpelling(slot.name()))),
 								mvCall(LispNames.OBJ_SET, obj, new LispInteger(s), slot.initform()), LispNil.INSTANCE);
 				// Only a DECLARED :initarg fills from the initargs, per CL -- the
 				// slot-name-default keyword the lite constructors accept must not
@@ -54848,11 +54824,15 @@ public final class LispMacroExpander {
 				LispVal scan = slot.initargs().size() == 1
 						? mvCall(MOP_INITARG_TAIL, args, quoteOf(slot.initargs().get(0)))
 						: initargTailScan(args, slot.initargs());
-				fills
-					.add(!slot.initargSupplied() ? initformFill
-							: makeLet(tail.name(), scan, makeIf(tail,
-									mvCall(LispNames.OBJ_SET, obj, new LispInteger(s), callOf(LispNames.CAR, tail)),
-									initformFill)));
+				LispVal supplied = callOf(LispNames.CAR, tail);
+				if (slot.sharedCellVar() != null) {
+					// An initarg fills a class-allocated slot's shared cell, as the
+					// constructor's (setq cell ...) does; the instance keeps the mirror.
+					supplied = listToCons(
+							List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(slot.sharedCellVar()), supplied));
+				}
+				fills.add(!slot.initargSupplied() ? initformFill : makeLet(tail.name(), scan,
+						makeIf(tail, mvCall(LispNames.OBJ_SET, obj, new LispInteger(s), supplied), initformFill)));
 			}
 			fills.add(LispTrue.INSTANCE);
 			LispVal clause = listToCons(
@@ -54886,6 +54866,28 @@ public final class LispMacroExpander {
 
 	/** The protocol's plist scanner defun name (defined in {@code mop-protocol.lisp}). */
 	private static final String MOP_INITARG_TAIL = "%MOP-INITARG-TAIL";
+
+	/** The generated fill's initform test; see {@link #mopInitformWantedDefun()}. */
+	private static final String MOP_INITFORM_WANTED = "%MOP-INITFORM-WANTED-P";
+
+	/**
+	 * {@code (%mop-initform-wanted-p slot-names obj index name)}: whether the fill gives
+	 * slot {@code index} its initform -- {@code slot-names} selects it ({@code t} every
+	 * slot, a list the slots it names: {@code change-class}'s added slots, a
+	 * redefinition's) and it is still unbound (CLHS 7.1.4).
+	 */
+	private static LispVal mopInitformWantedDefun() {
+		LispSymbol names = new LispSymbol("%mfw_names");
+		LispSymbol obj = new LispSymbol("%mfw_obj");
+		LispSymbol index = new LispSymbol("%mfw_index");
+		LispSymbol name = new LispSymbol("%mfw_name");
+		LispVal selects = makeIf(mvCall(LispNames.EQ_GENERAL, names, LispTrue.INSTANCE), LispTrue.INSTANCE,
+				makeIf(callOf(LispNames.LISTP, names), mvCall(LispNames.MEMBER, name, names), LispTrue.INSTANCE));
+		LispVal body = makeIf(selects, objIs(mvCall(LispNames.OBJ_REF, obj, index), List.of(ClosRegistry.UNBOUND_TAG)),
+				LispNil.INSTANCE);
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(MOP_INITFORM_WANTED),
+				listToCons(List.of(names, obj, index, name)), body));
+	}
 
 	/** One {@code %MOP-FILL-<n>} helper: a cond over its chunk's per-class fill arms. */
 	private static LispVal mopFillHelperDefun(List<String> helperNames, List<LispVal> clauses, LispSymbol obj,

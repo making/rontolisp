@@ -642,7 +642,7 @@ chain while another's hooks never fire.
 They have no system primary in the static subset, so `expandDefmethod` SYNTHESIZES one the
 first time any method is defined on one, plus the CL chain (`initialize-instance` /
 `reinitialize-instance` -> `(apply #'shared-initialize instance t/nil initargs)`,
-`shared-initialize` -> the instance); a missing `shared-initialize` generic is CREATED here.
+`shared-initialize` -> the fill, `%mop-fill-slots`); a missing `shared-initialize` generic is CREATED here.
 `expandMakeInstance` calls `shared-initialize` DIRECTLY (slot-names `t`) when only that
 generic exists. **The synthesis condition is the absence of an ALL-DEFAULT primary, not of any
 primary**: a class-specialized primary must not displace the system method a sibling's
@@ -650,6 +650,43 @@ primary**: a class-specialized primary must not displace the system method a sib
 three names when the program only CALLS one — so a program merely calling
 `reinitialize-instance` gains a `shared-initialize` generic and `expandMakeInstance` routes
 construction through the chain (same values, different emitted shape).
+
+**Who fills the slots** (2026-11-07). The constructor `%make-<name>` fills every slot before any
+method runs; CL's system `shared-initialize` fills from the initargs it is handed, then the
+initforms of the unbound slots its slot-names select (CLHS 7.1.4). Only a method running before
+that fill can tell, so the rule is per class (`ClosRegistry.initializesThroughMethods`): when a
+primary, `:before` or `:around` method of `initialize-instance` or `shared-initialize` applies to
+it (first specializer the class or an ancestor, `t`, `standard-object`), `make-instance` -- literal
+and `%mop-make-instance`'s arm -- allocates it with every slot unbound and the generic fills it;
+every other class keeps the constructor. typo's `full-fnrecord` computes `:min-arguments` in a
+`shared-initialize` primary over an initform that signals, which the constructor ran first.
+- **Per class, not per program**: an `:after` method runs after either fill. Census 2026-11-07 of
+  the 279 cached Quicklisp releases: 321 `initialize-instance :after`, 50 `shared-initialize :after`,
+  49 primary/`:before`/`:around`, every one class-specialized; an `:after`-only class keeps its
+  one-call construction.
+- **Replaced** the re-fill replay (`initRefillTargets`, `%MMI-REFILL`: a `:before`-specialized
+  class's supplied initargs stored again after the generic) and its residuals: a primary never
+  calling the next method leaves the slots unbound, as in CL.
+- **A program's own all-`t` primary** displaces the system method (no `standard-object` method
+  below it here), so the chain never reaches the fill: every class keeps the constructor then.
+- **Only a declared `:initarg` fills** through the generic; the slot-name keyword the constructor
+  also takes does not (CL: an invalid initarg).
+- **A class-allocated slot's initarg fills the shared cell**, as the constructor's `(setq cell
+  ...)` does. The fill wrote the instance's dead mirror: `(reinitialize-instance o :count 5)` left
+  the class slot unchanged on all four. A literal `change-class` did the same.
+- **The slot-names are honored** (`%mop-initform-wanted-p`, the interpreter's `selectsSlot`): a
+  list selects the slots it names, as `%slot-protocol-fill` did. Before, any non-nil value
+  selected every slot.
+- `make-condition` and the signalling operators run no initialization method (SBCL 2.2.9 agrees).
+- **`change-class`** (`ClosRegistry.updatesThroughSharedInitialize`): when a `shared-initialize`
+  method of any qualifier applies to the target, the instance keeps its retained slots, its added
+  ones are left unbound, and `(shared-initialize obj added-names initargs...)` runs -- CLHS 7.2's
+  `update-instance-for-different-class` system method, inlined (`changeClassViaSharedInitialize`;
+  each source arm answers its added names). Any other target keeps the inline fill. typo's
+  `update-fnrecord` changes a `minimal-fnrecord` into a `full-fnrecord`. A method on
+  `update-instance-for-different-class` is never called (census: metatilities' two `:after`s).
+- Pinned by ci-spec `an-initialization-method-runs-before-the-fill` (SBCL 2.2.9 agrees) and
+  `defclass-metaclass-protocol`'s `#'make-instance` leg.
 
 Three congruence rules:
 - **A `&key` method never rejects a sibling's keyword** — the lite model appends
@@ -732,7 +769,7 @@ registered canonically as `PKG::MEMBER`, and every generated designator dispatch
 SPELLING. The fix is at the LOOKUP: `LispMacroExpander.addDesignatorSpellings` is the ONE
 place turning a registered name into the spellings that designate it, and every generated
 table/dispatch built from a class, struct, condition or alias name goes through it:
-`%class-meta-table%`, `%mop-make-instance` (and `%MMI-REFILL`), `%allocate-instance`,
+`%class-meta-table%`, `%mop-make-instance`, `%allocate-instance`,
 `%class-direct-subclasses`, the runtime `typep` tag table, the `subtypep` universe,
 `%error-runtime`. One package cannot house two distinct symbols with one member name, so the
 added spelling can never designate another class; a `cl-user` program is byte-identical.
@@ -747,7 +784,9 @@ stored, the instance is the value.
   (`let`) before any store, missing slots get the target's initform (unbound without one), NOT
   when an initarg supplies the slot (`changeClassInitformFill`'s `supplied`: Drei's narrowed marks
   have `:initform (error ...)`, ci-spec `clos-computed-change-class`) ->
-  the initarg stores. **The tag is captured BEFORE the swap.** Sources mapping alike share one arm
+  the initarg stores. A target a `shared-initialize` method applies to leaves the added slots
+  unbound and calls `shared-initialize` instead ("The instance-initialization protocol").
+  **The tag is captured BEFORE the swap.** Sources mapping alike share one arm
   (`ChangeClassSlotOrigin`): most share nothing with the target, and an arm each repeated one fill
   per source. The computed path's dispatch is quadratic in user classes in its tag tests alone (a
   runtime layout-driven remap would make it linear). Measured 2026-11-05 on
@@ -1324,25 +1363,13 @@ symbol, a non-keyword one passed quoted, and the tail may be dotted -- contextl'
   `:direct-superclasses` crosses as NAMES, resolved inside the chain after user `:around`s may
   munge the list. "Existing" is tracked in the protocol's own `%mop-ensured-classes%` alist,
   deliberately NOT via find-class.
-- **Chain-fill initialization of METAOBJECT instances**: for a class whose ancestors include a
-  seeded MOP base class, and only when `isMopProtocolActive`, `expandMakeInstance` and the
-  `%mop-make-instance` arms allocate UNBOUND instead of calling the keyword constructor, then
-  run the initialization generic; the system `shared-initialize` primaries fill via
-  `%mop-fill-slots` (slot-names nil = supplied initargs only, non-nil = plus initforms for
-  still-unbound slots), which is what makes a user `initialize-instance :around`'s MUNGED
-  initargs take effect — so metaobject classes are EXCLUDED from the re-fill replay below.
-- **Lite divergence + the initarg RE-FILL repair.** For REGULAR classes, shared-initialize hooks
-  run AFTER constructor slot-filling, which IS observable (dao-class's `shared-initialize
-  :before` RESETS `direct-keys`). Repair: for a REGULAR class specialized by a `:before` method
-  on initialize-instance/shared-initialize (`ClosRegistry.initRefillTargets`, ancestor-inclusive
-  via `needsInitRefill`), make-instance re-sets every DECLARED-initarg slot the call supplies
-  (`SlotSpec.initargSupplied`; the slot-name-default keyword an `:initarg`-less slot gets is
-  deliberately NOT refilled) after the initialization generic returns, leftmost initarg wins.
-  Three emission sites, one semantic: `expandMakeInstance` folds it per literal call site
-  (`literalKeyword` unwraps both quoted spellings) and `%mop-make-instance` carries
-  `%MMI-REFILL` + `%MMI-INIT-TAIL`. **Residual (accepted)**: a specialized PRIMARY without
-  call-next-method should suppress the fill entirely, and an `:after` writing a supplied
-  declared-initarg slot on a refill-target class would be re-clobbered.
+- **Chain-fill initialization of METAOBJECT instances**: mop-protocol.lisp's `shared-initialize`
+  primaries on `class` and the two slot-definition classes make every metaobject class one
+  `initializesThroughMethods` answers for ("The instance-initialization protocol"), so
+  `expandMakeInstance` and the `%mop-make-instance` arms allocate it UNBOUND and the
+  initialization generic fills it through `%mop-fill-slots`: a user `initialize-instance
+  :around`'s MUNGED initargs take effect, and a `:before`'s reset of a supplied slot
+  (dao-class's `direct-keys`) is overwritten, as in CL.
 - **Class REdefinition** reinitializes the SAME metaobject (identity survives) and re-finalizes.
   **Divergence**: the INTERPRETER does real redefinition; the COMPILE paths keep the LAST
   definition in the static tables (`classDefunSlots` nil-s the earlier constructor defun; two
@@ -1805,8 +1832,9 @@ chunk-loop wrapper).
 - Still OUT of the MOP (classes are compile-time-static; `--optimize` DCE and the dispatch
   tables depend on it): runtime class construction beyond `make-instance` of a metaclass
   ("Classes made at run time": `ensure-class` from computed data, a class made at run time with
-  slots), `update-instance-for-*`. A literal `defclass` below the top level is IN ("A class
-  defined below the top level").
+  slots), a method on `update-instance-for-different-class` (`change-class` inlines its system
+  method; `update-instance-for-redefined-class` is a system generic, "Instance updating"). A
+  literal `defclass` below the top level is IN ("A class defined below the top level").
   Methods made at run time are IN ("The generic-function protocol"). Class REdefinition of a
   statically-known name is IN; redefinition from computed data is out.
 - **Known static-model seam**: on the compile paths `find-class`/`class-of` see the WHOLE
@@ -1930,7 +1958,6 @@ computed `change-class`, `withSlots` write-only + nested capture, writer / class
 `compileInterceptsDefinitionTimeMethodConstruction` /
 `defclassMetaclassEnsureClassUsingClassAndInitargMunging` (sharing
 `MopWideningFixture.MITO_SHAPE_SOURCE`) /
-`defclassMetaclassSharedInitializeBeforeRunsBeforeInitargFilling` /
 `slotExistsPAnswersDeclaredSlotsRegardlessOfBoundness`,
 `*PrintObjectMethodDefinedBelowItsFirstUse` /
 `*NestedDefmethodCallBeforeItsFormFallsThrough*` (todo 445). Plus `ShadowedBuiltinsTest`,
@@ -1940,7 +1967,7 @@ computed `change-class`, `withSlots` write-only + nested capture, writer / class
 ci-spec: `clos-defgeneric-defmethod-eql-dispatch`,
 `clos-defclass-slots-inheritance-and-dispatch`, `clos-method-qualifiers-and-call-next-method`,
 `clos-multiple-inheritance-cpl-slots-and-dispatch`, `clos-setf-methods-and-setf-generic`,
-`clos-computed-change-class`, `clos-reinitialize`,
+`clos-computed-change-class`, `clos-reinitialize`, `an-initialization-method-runs-before-the-fill`,
 `clos-slot-options-and-metaobject-types`, `clos-defmethod-eql-specializer-over-a-constant`,
 `clos-defmethod-bit-vector-specializer`, `clos-print-object-method-defined-below-its-first-use`,
 `classes-and-methods-defined-below-the-top-level`,

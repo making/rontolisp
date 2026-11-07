@@ -2686,16 +2686,16 @@ public final class LispEvaluator {
 				// protocol.
 				return apply(resolveFunction(LispNames.SLOT_PROTOCOL_FILL), args, this.globalEnv);
 			}
-			// (%mop-fill-slots obj initargs initforms-p) -- the metaclass
-			// protocol's system initarg fill (the shared-initialize primaries of
-			// mop-protocol.lisp call it): store each supplied initarg into its
-			// slot (leftmost wins), then -- when initforms-p is true, i.e.
-			// initialize rather than reinitialize -- each still-unbound slot's
-			// initform. Registry-backed, so it stays correct as classes are
-			// defined; the compile paths generate a per-class dispatch defun of
-			// the same name.
+			// (%mop-fill-slots obj initargs slot-names) -- the system
+			// shared-initialize method's fill (the synthesized default and the
+			// primaries of mop-protocol.lisp call it): store each supplied initarg
+			// into its slot (leftmost wins), then each still-unbound slot the
+			// slot-names select (t every slot, a list those it names) its initform
+			// (CLHS 7.1.4). Registry-backed, so it stays correct as classes are
+			// defined; the compile paths generate a per-class dispatch defun of the
+			// same name.
 			if (args.size() != 3 || !(args.get(0) instanceof LispInstance obj)) {
-				throw new LispEvalException(LispNames.MOP_FILL_SLOTS + " expects (instance initargs initforms-p)");
+				throw new LispEvalException(LispNames.MOP_FILL_SLOTS + " expects (instance initargs slot-names)");
 			}
 			ClosRegistry.ClassInfo info = this.closRegistry.findClass(obj.layout().printName());
 			if (info == null) {
@@ -2705,7 +2705,7 @@ public final class LispEvaluator {
 				// instance.
 				return obj;
 			}
-			boolean initforms = !(args.get(2) instanceof LispNil);
+			LispVal slotNames = args.get(2);
 			java.util.List<ClosRegistry.SlotSpec> slots = info.slots();
 			for (int i = 0; i < slots.size() && i < obj.slotCount(); i++) {
 				ClosRegistry.SlotSpec slot = slots.get(i);
@@ -2713,10 +2713,13 @@ public final class LispEvaluator {
 				// generated twin in LispMacroExpander.
 				LispVal supplied = slot.initargSupplied() ? leftmostInitargValue(args.get(1), slot) : null;
 				if (supplied != null) {
+					if (slot.sharedCellVar() != null) {
+						// A class-allocated slot: the initarg fills the shared cell.
+						this.globalEnv.set(slot.sharedCellVar(), supplied);
+					}
 					obj.setSlot(i, supplied);
 				}
-				else if (initforms && slot.initformSupplied() && obj.slot(i) instanceof LispInstance marker
-						&& marker.hasTag(ClosRegistry.UNBOUND_TAG)) {
+				else if (slot.initformSupplied() && selectsSlot(slotNames, slot) && isUnboundMarker(obj.slot(i))) {
 					obj.setSlot(i, eval(slot.initform(), this.globalEnv));
 				}
 			}
@@ -6247,6 +6250,23 @@ public final class LispEvaluator {
 	 */
 	private static boolean isUnboundMarker(LispVal value) {
 		return value instanceof LispInstance instance && instance.hasTag(ClosRegistry.UNBOUND_TAG);
+	}
+
+	/**
+	 * Whether a {@code shared-initialize} slot-names argument selects the slot for its
+	 * initform (CLHS 7.1.4): {@code t} every slot, a list the slots it names (by base
+	 * name, as every slot lookup here), nil none.
+	 */
+	private static boolean selectsSlot(LispVal slotNames, ClosRegistry.SlotSpec slot) {
+		if (!(slotNames instanceof LispCons)) {
+			return !(slotNames instanceof LispNil);
+		}
+		for (LispVal cursor = slotNames; cursor instanceof LispCons cell; cursor = cell.cdr()) {
+			if (cell.car() instanceof LispSymbol name && plainName(name.name()).equalsIgnoreCase(slot.baseName())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** A fresh slot-unbound marker instance (what {@code slot-makunbound} stores). */

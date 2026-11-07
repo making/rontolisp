@@ -176,8 +176,8 @@ verification against the actual Quicklisp dist at probe time)
     interpreter, the JVM and P1), `40ants-doc` (interpreter, as SBCL, since i87; the compile paths
     stop in serapeum on i99).
   - Interpreter only: `generic-cl` (since i88, 2026-11-07; JVM i97).
-  - Do not load: `petalisp` (i86 in queues,
-    then i90 in typo), `osicat` (cffi-grovel refused, i84).
+  - Do not load: `petalisp` (i86 in queues, then i90 and j01 in typo, which now stops on
+    j03), `osicat` (cffi-grovel refused, i84).
   - Side results: `lparallel` loads now (its h37 stop is gone); `asdf:load-system` of a
     `:defsystem-depends-on` that only Quicklisp holds is `.todo/418`.
 

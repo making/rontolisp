@@ -1979,6 +1979,15 @@ public final class ClosRegistry {
 		}
 
 		/**
+		 * Whether the method is one the system supplies ({@link #putSystemDefault}).
+		 * @param method a method of this generic
+		 * @return true for a system method
+		 */
+		public boolean isSystemDefault(MethodInfo method) {
+			return this.systemDefaults.containsValue(method);
+		}
+
+		/**
 		 * The recorded changes, in definition order.
 		 * @return the changes
 		 */
@@ -2497,8 +2506,8 @@ public final class ClosRegistry {
 	 * The {@link #generics} named {@code initialize-instance} or
 	 * {@code shared-initialize} in any package, keyed and ordered alike: what every
 	 * {@code make-instance} expansion asks of the registry
-	 * ({@link #initializationGeneric}, {@link #initRefillTargets}), which a walk of every
-	 * generic answered once per evaluation (3% of coalton's load).
+	 * ({@link #initializationGeneric}, {@link #initializesThroughMethods}), which a walk
+	 * of every generic answered once per evaluation (3% of coalton's load).
 	 */
 	private final LinkedHashMap<String, GenericInfo> initializationGenerics = new LinkedHashMap<>();
 
@@ -3809,43 +3818,67 @@ public final class ClosRegistry {
 	}
 
 	/**
-	 * The class names carrying a {@code :before} method (through their first parameter
-	 * specializer) on an instance-initialization generic ({@code initialize-instance} or
-	 * {@code shared-initialize}). In CL such a {@code :before} runs BEFORE the initargs
-	 * fill the slots; the static model's constructor fills first, so
-	 * {@code make-instance} (literal and {@code %mop-make-instance} alike) re-fills the
-	 * declared-initarg slots of these classes -- and only these -- after the
-	 * initialization generic returns, restoring the observable CL order (postmodern's
-	 * {@code dao-class} resets its {@code direct-keys} slot that way and relies on the
-	 * {@code :keys} class option surviving).
-	 * @return the specialized class names, possibly empty
+	 * Whether {@code make-instance} of the class allocates the instance with every slot
+	 * unbound and leaves the fill to the system {@code shared-initialize} method, which
+	 * stores the initargs it is handed and then the initforms of the slots still unbound
+	 * (CLHS 7.1.4): an {@code initialize-instance} or {@code shared-initialize} method of
+	 * the program runs before that fill and applies to the class -- a {@code :before} or
+	 * {@code :around} method, or a primary that is not the generic's default. Such a
+	 * method may read or write the slots, or hand the fill other initargs (typo's
+	 * {@code full-fnrecord} computes {@code :min-arguments}, whose initform signals),
+	 * which the constructor, filling before any method runs, would not let it do. An
+	 * {@code :after} method runs after the fill either way, so a class with only those
+	 * keeps the constructor. A program's own default primary stands where the system
+	 * method would (the lite model has no {@code standard-object} method below it), so
+	 * the chain could never reach the fill: every class keeps the constructor then.
+	 * @param info the class
+	 * @return true when the initialization generic fills the class's instances
 	 */
-	public Set<String> initRefillTargets() {
-		Set<String> targets = new java.util.LinkedHashSet<>();
-		for (GenericInfo generic : this.initializationGenerics.values()) {
-			for (MethodInfo method : generic.methods().values()) {
-				if (":BEFORE".equals(method.qualifier()) && !method.specializers().isEmpty()
-						&& method.specializers().get(0).kind() == SpecializerKind.CLASS) {
-					targets.add(java.util.Objects.requireNonNull(method.specializers().get(0).name()));
-				}
-			}
-		}
-		return targets;
+	public boolean initializesThroughMethods(ClassInfo info) {
+		return initializationMethodApplies(info, false);
 	}
 
 	/**
-	 * Whether {@code make-instance} of the class must re-fill its declared-initarg slots
-	 * after the initialization generic returns -- see {@link #initRefillTargets()}.
-	 * @param info the class
-	 * @return true when a {@code :before} initialization method specializes the class or
-	 * one of its ancestors
+	 * Whether {@code change-class} to the class calls {@code shared-initialize} on the
+	 * slots it adds, as CLHS 7.2's {@code update-instance-for-different-class} system
+	 * method does, instead of filling them inline: a {@code shared-initialize} method of
+	 * the program, of any qualifier, applies to the class, so the call is observable (an
+	 * {@code :after} method runs, a primary may compute the initargs). With none the
+	 * inline fill stores what that method would. Never when the program's own default
+	 * primary stands in for the system method ({@link #initializesThroughMethods}).
+	 * @param target the class changed to
+	 * @return true when the change runs {@code shared-initialize}
 	 */
-	public boolean needsInitRefill(ClassInfo info) {
-		Set<String> targets = initRefillTargets();
-		if (targets.isEmpty()) {
-			return false;
+	public boolean updatesThroughSharedInitialize(ClassInfo target) {
+		return initializationMethodApplies(target, true);
+	}
+
+	private boolean initializationMethodApplies(ClassInfo info, boolean changeClass) {
+		boolean applies = false;
+		for (GenericInfo generic : this.initializationGenerics.values()) {
+			boolean shared = LispNames.SHARED_INITIALIZE.equals(plainNameOf(generic.name()));
+			if (changeClass && !shared) {
+				continue;
+			}
+			for (MethodInfo method : generic.methods().values()) {
+				if (method.isPrimary() && method.isDefault()) {
+					if (!generic.isSystemDefault(method)) {
+						return false;
+					}
+				}
+				else if (!applies && (changeClass || !":AFTER".equals(method.qualifier()))) {
+					Specializer first = method.specializers().isEmpty() ? Specializer.DEFAULT
+							: method.specializers().get(0);
+					applies = switch (first.kind()) {
+						case DEFAULT -> true;
+						case CLASS -> info.ancestors().contains(first.name());
+						case TYPE -> first.name() != null && STANDARD_OBJECT_NAME.equals(plainNameOf(first.name()));
+						case EQL -> false;
+					};
+				}
+			}
 		}
-		return info.ancestors().stream().anyMatch(targets::contains);
+		return applies;
 	}
 
 	/**

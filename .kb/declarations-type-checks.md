@@ -411,7 +411,9 @@ table is GENERATED from it. **Change them together.**
   `fixnum` and asserts no later entry is a subtype of an earlier one, so it needs 33..63 bits (coalton
   needs at least 32); every implementation typo supports has that. `sxhash` masks by the constant, so it
   stays a fixnum. Pin: ci-spec `subtypep-fixnum-is-a-63-bit-interval` (SBCL's answers). typo's load
-  now stops at `vm/predicates.lisp` on a `shared-initialize` method's initargs (`.todo/j01`).
+  then passed `vm/predicates.lisp` once a `shared-initialize` method's initargs reached the slots
+  ([clos.md](clos.md), "The instance-initialization protocol") and stops in
+  `vm/data-and-control-flow.lisp` on `(fdefinition 'if)` (`.todo/j03`, measured 2026-11-07).
 - **The stream subtypes are edges to `STREAM`** (`file-stream` ... `concatenated-stream`), and a
   Gray class (ancestor `rontolisp:fundamental-stream`) is below `STREAM` in `namedSubtypep`. The
   edges join the runtime universe only for the names `runtimeStreamTypeNames` keeps, so a
