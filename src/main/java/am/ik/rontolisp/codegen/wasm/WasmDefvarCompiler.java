@@ -7,15 +7,17 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.DefvarGuards;
 import am.ik.wasm.Instruction;
 
 /**
  * Compiles the {@code defvar} special form. A top-level variable is stored in a plain
  * local, mirroring a top-level {@code setq}; the assignment is idempotent (Common Lisp
  * semantics): the initial value is bound only when the variable has not already been
- * bound, the compile-time analog of "if not already bound". The form returns the variable
- * name symbol. {@code defparameter}/{@code defconstant} pass {@code force=true} and
- * always (re)bind the initial value.
+ * bound -- decided at compile time from the top-level order, or, for a name
+ * {@code compiler.DefvarGuards} answers, tested at run time. The form returns the
+ * variable name symbol. {@code defparameter}/{@code defconstant} pass {@code force=true}
+ * and always (re)bind the initial value.
  */
 final class WasmDefvarCompiler {
 
@@ -36,7 +38,13 @@ final class WasmDefvarCompiler {
 		List<LispVal> parts = cons.toList();
 		LispSymbol name = (LispSymbol) parts.get(1);
 		Integer globalIndex = ctx.globalIndices.get(name.name());
-		if (globalIndex != null) {
+		if (!force && parts.size() > 2 && ctx.guardedDefvars.contains(name.name())) {
+			// A defvar the top-level order cannot decide stores only while the variable
+			// -- the active binding -- holds the UNBOUND marker (compiler/DefvarGuards).
+			WasmAsyncEmit.spine(DefvarGuards.guardedStore(cons), ctx);
+			ctx.writer.write(Instruction.DROP);
+		}
+		else if (globalIndex != null) {
 			// A top-level global: store into its module-level wasm global. defvar binds
 			// only if not already bound (idempotent); defparameter/defconstant (force)
 			// always rebind. definedGlobals tracks compile-time "already bound".

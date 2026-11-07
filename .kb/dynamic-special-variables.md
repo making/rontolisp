@@ -597,6 +597,51 @@ Landed with `.todo/h32`.
   `makunbound-and-compiler-macro-function` answers the same text everywhere. Pins: that case,
   `SpecialVarCollectorTest`.
 
+## A defvar's "only if unbound" (all four backends, 2026-11-07)
+
+**Invariant: a `defvar` with a value stores only while the variable -- the active binding --
+has no value, each time it runs, wherever it stands: a function body, a conditional, a loop, a
+`let` of the name, as at the top level; a `defparameter` stores into the active binding.**
+Landed with `.todo/j02`. Before, the compile paths decided it at compile time for every
+`defvar` (`Jvm/WasmDefvarCompiler`, `ctx.definedGlobals`: the first one COMPILED stores),
+which holds for straight-line top-level forms only, and one in a function body stored a local
+of that function.
+
+- `compiler/DefvarGuards.collect` names the rest, a non-`cl` name with a valued `defvar` when:
+  one of its valued `defvar`s is below the top level; a `(makunbound 'it)` exists (a computed
+  `makunbound` takes every name); or a top-level form before its first top-level `defvar`
+  holds a store of it at any depth (assignment, modify macro, nested definer; a top-level
+  `defparameter`/`defconstant` of it aside, which `definedGlobals` counts) or a store by a
+  computed name (`programUsesSet`) -- a `defun` holding one counts only when a form that can
+  call it (`runsCode`) stands between it and that `defvar`. STORES, not mentions: a draft
+  counting every mention guarded yason's `true`/`false`, which a method READS before their
+  `defvar`.
+- A guarded name joins the unbound globals (marker start, checked reads, never a JVM raw
+  global), and its every valued `defvar` compiles `DefvarGuards.guardedStore`, `(if
+  (%global-boundp 'N) nil (setq N init))`: the binding's test and store, mirror included. JVM:
+  `UnboundMarker.guardedDefvars`; a thread-scoped one needs `_dbound`, so it is built for a
+  guarded name in `boundSpecialVars` too. Wasm: `Ctx.guardedDefvars`, the test on the spine.
+  Without the eval mirror a literal `boundp` of it reads the variable
+  (`collectProbedUnbound`'s `guarded`); with it, the mirror, as limitation 2 above.
+- A `defvar`/`defparameter` below the top level proclaims its name for the whole program
+  (`SpecialVarCollector.collect`, `collectNestedDefiners`; `collectLocallyDeclaredOnly` counts it
+  too), so a function body's has a global; the interpreter proclaims it when it runs.
+- Interpreter (`evalDefvar`): the test and the store reach the active dynamic binding; before,
+  the global environment (`(let ((*c* 5)) (defvar *c* 2))` left `*c*` bound after the `let`, a
+  `defparameter` there assigned the global).
+- Checked 2026-11-07 on SBCL 2.2.9 / interpreter / JVM / P1 / component: the todo's table
+  (`(when nil (defvar *a* 1)) (defvar *a* 2)` read NIL, a `dotimes` stored twice, a function's
+  `defvar` overrode the top-level one, `(boundp '*d*)` after a function's was NIL, `(defun h (x)
+  (defvar *e* x))` did not compile), `(setq *a* 1) (defvar *a* 2)` (2 compiled), the `let` and
+  `make-thread` shapes: all now answer SBCL's. Byte identity: of 246 example sources compiled to
+  a JVM class none has a guarded name; error-handling, tiny-llm and httpbin-ningle compile
+  identically (class, P1, component).
+- Not revisited: i91's hoisted class-allocated cells (`.kb/clos.md`, "A class defined below the
+  top level") stay top-level `defvar`s.
+- Pins: `DefvarGuardsTest`, `SpecialVarCollectorTest#aLocalSpecialDeclarationIsNoProclamation`,
+  `GlobalVarCollectorTest#aLiteralProbeOfAGlobalWithoutAValueIsReadOffItsVariable`, ci-spec
+  `defvar-below-the-top-level-binds-only-while-unbound`.
+
 ## Local special declarations; a special is never captured (all four backends, 2026-10-05)
 
 **Invariant: a reference to a special reads the binding active WHEN IT RUNS -- never one a

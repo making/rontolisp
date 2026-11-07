@@ -7,14 +7,16 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.DefvarGuards;
 
 /**
  * Compiles the {@code defvar} special form. A top-level variable is stored in a main()
  * local, mirroring a top-level {@code setq}; the assignment is idempotent (Common Lisp
  * semantics): the initial value is bound only when the variable has not already been
- * bound, the compile-time analog of "if not already bound". The form returns the variable
- * name symbol. {@code defparameter}/{@code defconstant} pass {@code force=true} and
- * always (re)bind the initial value.
+ * bound -- decided at compile time from the top-level order, or, for a name
+ * {@code compiler.DefvarGuards} answers, tested at run time. The form returns the
+ * variable name symbol. {@code defparameter}/{@code defconstant} pass {@code force=true}
+ * and always (re)bind the initial value.
  */
 final class JvmDefvarCompiler {
 
@@ -34,7 +36,13 @@ final class JvmDefvarCompiler {
 		}
 		List<LispVal> parts = cons.toList();
 		LispSymbol name = (LispSymbol) parts.get(1);
-		if (ctx.globals.contains(name.name())) {
+		JvmDynVarRuntimeBuilder.UnboundMarker marker = ctx.unboundMarker;
+		if (!force && parts.size() > 2 && marker != null && marker.guardedDefvars().contains(name.name())) {
+			// A defvar the top-level order cannot decide stores only while the variable
+			// -- the active binding -- holds the UNBOUND marker (compiler/DefvarGuards).
+			JvmExprCompiler.compileForEffect(DefvarGuards.guardedStore(cons), ctx, className);
+		}
+		else if (ctx.globals.contains(name.name())) {
 			// A top-level global: store into its dedicated static field. defvar binds
 			// only
 			// if not already bound (idempotent); defparameter/defconstant (force) always

@@ -64,7 +64,10 @@ public final class SpecialVarCollector {
 	 * Returns the set of special-variable names declared by the given top-level forms:
 	 * the proclaimed ones and, on the compile paths, the locally declared ones too --
 	 * once {@code compiler.SpecialDeclarationScoping} has renamed a locally declared
-	 * name's lexical bindings apart, every occurrence left of it is special.
+	 * name's lexical bindings apart, every occurrence left of it is special. A
+	 * {@code defvar} or {@code defparameter} below the top level proclaims its name when
+	 * it runs; a compiled program has one set for its whole run, so the name is special
+	 * throughout ({@link #collectNestedDefiners}).
 	 * @param topLevelExprs the top-level forms
 	 * @return the special variable names in declaration order
 	 */
@@ -74,7 +77,35 @@ public final class SpecialVarCollector {
 			collectForm(expr, specials);
 			collectLocalDeclares(expr, specials);
 		}
+		for (LispVal expr : topLevelExprs) {
+			collectNestedDefiners(expr, specials);
+		}
 		return specials;
+	}
+
+	/**
+	 * Records the name of every {@code defvar} and {@code defparameter} BELOW the top
+	 * level of {@code form} -- in a function body, a conditional, a binding form --
+	 * quoted data skipped. A top-level one is {@link #collectProclaimed}'s.
+	 * @param form a top-level form
+	 * @param out the set to add the names to
+	 */
+	static void collectNestedDefiners(LispVal form, Set<String> out) {
+		// A definer is matched as an ELEMENT of a list, so the top-level form itself is
+		// not one.
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name())) {
+				return;
+			}
+			if (cons.car() instanceof LispCons inner && inner.car() instanceof LispSymbol head
+					&& (LispNames.DEFVAR.equals(head.name()) || LispNames.DEFPARAMETER.equals(head.name()))
+					&& inner.cdr() instanceof LispCons nameCell && nameCell.car() instanceof LispSymbol name) {
+				out.add(name.name());
+			}
+			collectNestedDefiners(cons.car(), out);
+			node = cons.cdr();
+		}
 	}
 
 	/**
@@ -136,6 +167,7 @@ public final class SpecialVarCollector {
 		Set<String> proclaimed = new HashSet<>();
 		for (LispVal form : program) {
 			collectProclaimed(form, proclaimed);
+			collectNestedDefiners(form, proclaimed);
 		}
 		local.removeIf(name -> proclaimed.contains(name) || PackageRegistry.isClSymbol(name)
 				|| PackageRegistry.isClSymbol(member(name)));
@@ -393,10 +425,13 @@ public final class SpecialVarCollector {
 	 * dynamically bound special is {@link #collectProbedValueless}'s.
 	 * @param forms the program's forms, the injected runtime's included
 	 * @param globals the candidate names: the program's globals
+	 * @param guarded the names whose every {@code defvar} stores only while the variable
+	 * holds the marker ({@code compiler.DefvarGuards}): a value only such a
+	 * {@code defvar} gives counts as none
 	 * @return those globals, in {@code globals} order
 	 */
 	public static LinkedHashSet<String> collectLiterallyProbedValueless(Collection<LispVal> forms,
-			SequencedSet<String> globals) {
+			SequencedSet<String> globals, Set<String> guarded) {
 		LinkedHashSet<String> out = new LinkedHashSet<>();
 		Set<String> probed = new HashSet<>();
 		for (LispVal form : forms) {
@@ -411,8 +446,8 @@ public final class SpecialVarCollector {
 			collectValued(form, valued);
 		}
 		for (String name : globals) {
-			if (probed.contains(name) && !valued.contains(name) && !PackageRegistry.isClSymbol(name)
-					&& !PackageRegistry.isClSymbol(member(name))) {
+			if (probed.contains(name) && (guarded.contains(name) || !valued.contains(name))
+					&& !PackageRegistry.isClSymbol(name) && !PackageRegistry.isClSymbol(member(name))) {
 				out.add(name);
 			}
 		}

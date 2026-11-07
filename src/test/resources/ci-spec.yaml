@@ -34515,6 +34515,37 @@ cases:
       ((0) 10 (1 20) NIL NCD-VALUED)
       (:BECAUSE (:BASE 10) (:EQL :NCD-TAG) :NO-METHOD :NOT-YET)
       ((:STRING "s") NCD-LATER)
+  - name: defvar-below-the-top-level-binds-only-while-unbound
+    source: |
+      ;; A defvar binds only while its variable is unbound: below the top level (a
+      ;; conditional, a loop, a function body), after a store the top-level order does
+      ;; not decide, and inside a dynamic binding of the name, whose value it tests and
+      ;; sets. defparameter sets that binding too.
+      (defvar *dvn-off* nil)
+      (when *dvn-off* (defvar *dvn-a* 1))
+      (defvar *dvn-a* 2)
+      (dotimes (i 2) (defvar *dvn-b* (list i)))
+      (defun dvn-inner () (defvar *dvn-c* :inner))
+      (defvar *dvn-c* :outer)
+      (dvn-inner)
+      (defun dvn-define () (defvar *dvn-d* 2))
+      (dvn-define)
+      (defun dvn-define-from (x) (defvar *dvn-e* x))
+      (print (list (handler-case *dvn-e* (unbound-variable () :unbound))
+                   (dvn-define-from 1) (dvn-define-from 3)))
+      (print (list *dvn-a* *dvn-b* *dvn-c* (boundp '*dvn-d*) *dvn-e*))
+      (declaim (special *dvn-s*))
+      (setq *dvn-s* :stored)
+      (defvar *dvn-s* :default)
+      (defvar *dvn-l*)
+      (defparameter *dvn-p* 1)
+      (print (list *dvn-s*
+                   (let ((*dvn-l* 5)) (defvar *dvn-l* 2) *dvn-l*) (boundp '*dvn-l*)
+                   (let ((*dvn-p* 5)) (defparameter *dvn-p* 2) *dvn-p*) *dvn-p*))
+    expected: |
+      (:UNBOUND *DVN-E* *DVN-E*)
+      (2 (0) :OUTER T 1)
+      (:STORED 5 NIL 2 1)
   - name: negative-zero-literal-keeps-its-sign
     source: |
       (print -0.0)

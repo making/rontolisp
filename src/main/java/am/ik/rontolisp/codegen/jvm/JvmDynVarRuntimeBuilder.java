@@ -80,7 +80,8 @@ final class JvmDynVarRuntimeBuilder {
 	 * @param methods the helper method bodies to register
 	 * @param clinitCode the {@code <clinit>} fragment creating every ThreadLocal
 	 * @param dbound the {@code _dbound} helper ref, or null when the program probes the
-	 * bound-ness of no bound special that starts as the UNBOUND marker
+	 * bound-ness of no bound special that starts as the UNBOUND marker, and guards the
+	 * {@code defvar} of none ({@code compiler.DefvarGuards})
 	 */
 	record DynVarRuntime(Map<String, FieldRefEntry> fields, List<Utf8Entry> fieldNameUtfs, Utf8Entry fieldDescUtf,
 			MethodRefEntry tlSet, MethodRefEntry dget, MethodRefEntry dbind, MethodRefEntry dset,
@@ -101,6 +102,8 @@ final class JvmDynVarRuntimeBuilder {
 	 * ({@code LispMacroExpander.dynamicFirstBoundp}), in the order a computed probe's
 	 * inline chain tests them; every other name's {@code boundp} probes the eval mirror,
 	 * which agrees for a global no binding changes
+	 * @param guardedDefvars the ones among them whose {@code defvar} stores only while
+	 * the variable holds the marker ({@code compiler.DefvarGuards})
 	 * @param field the marker field
 	 * @param fieldName its name constant
 	 * @param fieldDesc its descriptor constant
@@ -112,9 +115,9 @@ final class JvmDynVarRuntimeBuilder {
 	 * {@code unbound-variable} naming the variable when the value is the marker
 	 * @param boundMethod its name, descriptor and body
 	 */
-	record UnboundMarker(SequencedSet<String> globals, SequencedSet<String> probed, FieldRefEntry field,
-			Utf8Entry fieldName, Utf8Entry fieldDesc, MethodCode clinitCode, Utf8Entry clinitName, Utf8Entry clinitDesc,
-			MethodRefEntry bound, HelperMethod boundMethod) {
+	record UnboundMarker(SequencedSet<String> globals, SequencedSet<String> probed, SequencedSet<String> guardedDefvars,
+			FieldRefEntry field, Utf8Entry fieldName, Utf8Entry fieldDesc, MethodCode clinitCode, Utf8Entry clinitName,
+			Utf8Entry clinitDesc, MethodRefEntry bound, HelperMethod boundMethod) {
 	}
 
 	/** One helper method: its name/descriptor constants and body. */
@@ -133,11 +136,13 @@ final class JvmDynVarRuntimeBuilder {
 	 * them checked
 	 * @param seeded the ones among them whose {@code _g$} starts as the marker
 	 * @param probed the ones among them whose {@code boundp} reads the variable
+	 * @param guardedDefvars the ones among them whose {@code defvar} tests the variable
 	 * @param globalFields every global's {@code _g$} field
 	 * @return the marker, or null when {@code globals} is empty
 	 */
 	static @Nullable UnboundMarker unboundMarker(ConstantPool cp, ClassEntry thisClass, SequencedSet<String> globals,
-			SequencedSet<String> seeded, SequencedSet<String> probed, Map<String, FieldRefEntry> globalFields) {
+			SequencedSet<String> seeded, SequencedSet<String> probed, SequencedSet<String> guardedDefvars,
+			Map<String, FieldRefEntry> globalFields) {
 		if (globals.isEmpty()) {
 			return null;
 		}
@@ -157,8 +162,9 @@ final class JvmDynVarRuntimeBuilder {
 		Utf8Entry boundName = cp.utf8Entry(BOUND_METHOD);
 		Utf8Entry boundDesc = cp.utf8Entry("(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;");
 		return new UnboundMarker(Collections.unmodifiableSequencedSet(globals),
-				Collections.unmodifiableSequencedSet(probed), field, fieldName, fieldDesc, clinitCode,
-				cp.utf8Entry("<clinit>"), cp.utf8Entry("()V"), cp.methodRef(thisClass, boundName, boundDesc),
+				Collections.unmodifiableSequencedSet(probed), Collections.unmodifiableSequencedSet(guardedDefvars),
+				field, fieldName, fieldDesc, clinitCode, cp.utf8Entry("<clinit>"), cp.utf8Entry("()V"),
+				cp.methodRef(thisClass, boundName, boundDesc),
 				new HelperMethod(boundName, boundDesc, boundCode(cp, field)));
 	}
 

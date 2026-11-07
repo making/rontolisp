@@ -113,23 +113,25 @@ public final class GlobalVarCollector {
 	/**
 	 * The globals a literal {@code (boundp 'G)} in a program WITHOUT the eval mirror
 	 * reads off their own variable: no definer gives them a value
-	 * ({@link SpecialVarCollector#collectLiterallyProbedValueless}), so the compile paths
-	 * seed the variable with an UNBOUND marker the first store overwrites. With the
-	 * mirror the probe asks it instead, and in a program calling {@code progv}, which can
-	 * bind a name no special declaration covers and reaches the mirror for it, none is
-	 * answered this way.
+	 * ({@link SpecialVarCollector#collectLiterallyProbedValueless}), or only a guarded
+	 * {@code defvar} does ({@code DefvarGuards}), so the compile paths seed the variable
+	 * with an UNBOUND marker the first store overwrites. With the mirror the probe asks
+	 * it instead, and in a program calling {@code progv}, which can bind a name no
+	 * special declaration covers and reaches the mirror for it, none is answered this
+	 * way.
 	 * @param forms the program's forms, the injected runtime's and the condition reports'
 	 * included
 	 * @param program the program's forms
 	 * @param globals the program's globals
+	 * @param guarded the program's guarded {@code defvar} names
 	 * @return those globals, in {@code globals} order
 	 */
 	public static LinkedHashSet<String> collectProbedUnbound(Collection<LispVal> forms, List<LispVal> program,
-			SequencedSet<String> globals) {
+			SequencedSet<String> globals, Set<String> guarded) {
 		if (LispMacroExpander.programCallsProgv(program)) {
 			return new LinkedHashSet<>();
 		}
-		return SpecialVarCollector.collectLiterallyProbedValueless(forms, globals);
+		return SpecialVarCollector.collectLiterallyProbedValueless(forms, globals, guarded);
 	}
 
 	/**
@@ -147,10 +149,11 @@ public final class GlobalVarCollector {
 	 * @param specials the program's special-variable names
 	 * @param everyBound whether every special is runtime-bindable by name (the JVM's
 	 * {@code make-thread} hand-over)
+	 * @param guarded the program's guarded {@code defvar} names
 	 * @return those globals
 	 */
 	public static LinkedHashSet<String> collectProbedUnboundBeforeInjection(List<LispVal> program,
-			Collection<LispVal> reports, SequencedSet<String> specials, boolean everyBound) {
+			Collection<LispVal> reports, SequencedSet<String> specials, boolean everyBound, Set<String> guarded) {
 		LinkedHashSet<String> tracked = SpecialVarCollector.collectProbedValuelessBound(program, reports, specials,
 				everyBound);
 		List<LispVal> topLevel = new ArrayList<>();
@@ -166,7 +169,7 @@ public final class GlobalVarCollector {
 		globals.addAll(collectFreeAssigned(program));
 		List<LispVal> probed = new ArrayList<>(program);
 		probed.addAll(reports);
-		tracked.addAll(collectProbedUnbound(probed, program, globals));
+		tracked.addAll(collectProbedUnbound(probed, program, globals, guarded));
 		return tracked;
 	}
 

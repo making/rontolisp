@@ -49,6 +49,7 @@ import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
+import am.ik.rontolisp.compiler.DefvarGuards;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.MutableStringProducers;
@@ -4022,8 +4023,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// a global whose variable carries its bound-ness reads that variable alone, so a
 		// program whose every boundp is such a literal probe does not (the tracked set is
 		// checked again once the runtime is injected).
-		SequencedSet<String> probedBeforeInjection = programUsesSymbol(program, LispNames.BOUNDP) ? GlobalVarCollector
-			.collectProbedUnboundBeforeInjection(program, closRegistry.conditionReports().values(), specialVars, false)
+		// A defvar whose store the top-level order cannot decide tests its variable at
+		// run
+		// time (compiler/DefvarGuards): its name starts as the UNBOUND marker, and a
+		// literal boundp of it reads that variable.
+		SequencedSet<String> guardedDefvars = DefvarGuards.collect(program);
+		SequencedSet<String> probedBeforeInjection = programUsesSymbol(program, LispNames.BOUNDP)
+				? GlobalVarCollector.collectProbedUnboundBeforeInjection(program,
+						closRegistry.conditionReports().values(), specialVars, false, guardedDefvars)
 				: new LinkedHashSet<>();
 		boolean boundpReadsMirror = programUsesSymbol(program, LispNames.BOUNDP)
 				&& LispMacroExpander.boundpReachesMirror(program, probedBeforeInjection);
@@ -4035,9 +4042,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Whether a read can find a global's UNBOUND marker (Ctx.unboundGlobals) and
 		// signal its unbound-variable: a special only a binding or an assignment gives a
 		// value, a literally probed global without one, a global a read can reach
-		// before its first store, or a special a progv short of values binds.
+		// before its first store, a name a guarded defvar tests (compiler/DefvarGuards),
+		// or a special a progv short of values binds.
 		boolean readsUnboundGlobal = !readBeforeStore.isEmpty() || !probedBeforeInjection.isEmpty()
-				|| !SpecialVarCollector.collectValueless(program, specialVars).isEmpty()
+				|| !guardedDefvars.isEmpty() || !SpecialVarCollector.collectValueless(program, specialVars).isEmpty()
 				|| !SpecialVarCollector.collectUnbindable(program, specialVars).isEmpty();
 		// Every reason for the runtime except the four pure READERS: the program can
 		// write GLOBAL_FENV (eval's defun, load, fmakunbound, a (setf (symbol-function
@@ -4761,13 +4769,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			probedUnboundGlobals.retainAll(boundSpecials);
 		}
 		if (!usesEval && programUsesSymbol(program, LispNames.BOUNDP)) {
-			probedUnboundGlobals.addAll(GlobalVarCollector.collectProbedUnbound(probedForms, program, globals));
+			probedUnboundGlobals
+				.addAll(GlobalVarCollector.collectProbedUnbound(probedForms, program, globals, guardedDefvars));
 			LispMacroExpander.requireBoundpOffMirror(compiledForms, probedUnboundGlobals);
 		}
 		SequencedSet<String> unboundGlobals = SpecialVarCollector.collectValueless(probedForms, specialVars);
 		unboundGlobals.addAll(probedUnboundGlobals);
 		readBeforeStore.retainAll(globals);
 		unboundGlobals.addAll(readBeforeStore);
+		unboundGlobals.addAll(guardedDefvars);
 		// A progv short of values binds the symbols it has no value for to the marker
 		// (LispNames.PROGV_UNBOUND), and any special can be one of them: in a program
 		// that calls progv every read of a special is checked, the ones that start with a
@@ -5301,6 +5311,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.specialVars(specialVars)
 			.unboundGlobals(checkedGlobals)
 			.probedUnboundGlobals(probedUnboundGlobals)
+			.guardedDefvars(guardedDefvars)
 			.globalIndices(globalIndices)
 			.quoteGlobals(quoteGlobals)
 			.futureTypeIndex(this.asyncMode ? asyncTypeBase() : -1)
@@ -12881,6 +12892,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> probedUnboundGlobals = Set.of();
 
 		/**
+		 * The globals of {@link #unboundGlobals} whose {@code defvar} stores only while
+		 * the variable holds the UNBOUND marker ({@code compiler.DefvarGuards}).
+		 */
+		Set<String> guardedDefvars = Set.of();
+
+		/**
 		 * Maps a top-level global variable name to its module-level wasm global index.
 		 */
 		Map<String, Integer> globalIndices = Map.of();
@@ -13278,6 +13295,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.specialVars = builder.specialVars;
 			this.unboundGlobals = builder.unboundGlobals;
 			this.probedUnboundGlobals = builder.probedUnboundGlobals;
+			this.guardedDefvars = builder.guardedDefvars;
 			this.globalIndices = builder.globalIndices;
 			this.quoteGlobals = builder.quoteGlobals;
 			this.futureTypeIndex = builder.futureTypeIndex;
@@ -13515,6 +13533,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private Set<String> probedUnboundGlobals = Set.of();
 
+			private Set<String> guardedDefvars = Set.of();
+
 			private Map<String, Integer> globalIndices = Map.of();
 
 			private QuoteGlobals quoteGlobals = new QuoteGlobals(0);
@@ -13657,6 +13677,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.specialVars = proto.specialVars;
 				this.unboundGlobals = proto.unboundGlobals;
 				this.probedUnboundGlobals = proto.probedUnboundGlobals;
+				this.guardedDefvars = proto.guardedDefvars;
 				this.globalIndices = proto.globalIndices;
 				this.quoteGlobals = proto.quoteGlobals;
 				this.futureTypeIndex = proto.futureTypeIndex;
@@ -14138,6 +14159,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder probedUnboundGlobals(Set<String> probedUnboundGlobals) {
 				this.probedUnboundGlobals = probedUnboundGlobals;
+				return this;
+			}
+
+			Builder guardedDefvars(Set<String> guardedDefvars) {
+				this.guardedDefvars = guardedDefvars;
 				return this;
 			}
 

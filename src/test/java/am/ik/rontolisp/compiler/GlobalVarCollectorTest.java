@@ -82,9 +82,10 @@ class GlobalVarCollectorTest {
 
 	/**
 	 * The globals a literal {@code boundp} reads off their own variable when the program
-	 * has no eval mirror: probed, no definer gives them a value, not a {@code cl} symbol,
-	 * and no {@code progv} in the program. The gate's set, read before injection, holds
-	 * the bound specials besides and only names the program certainly makes globals.
+	 * has no eval mirror: probed, no definer but a guarded {@code defvar} gives them a
+	 * value, not a {@code cl} symbol, and no {@code progv} in the program. The gate's
+	 * set, read before injection, holds the bound specials besides and only names the
+	 * program certainly makes globals.
 	 */
 	@Test
 	void aLiteralProbeOfAGlobalWithoutAValueIsReadOffItsVariable() {
@@ -100,14 +101,18 @@ class GlobalVarCollectorTest {
 		java.util.SequencedSet<String> specials = new java.util.LinkedHashSet<>(java.util.List.of("*A*", "*B*"));
 		java.util.SequencedSet<String> globals = new java.util.LinkedHashSet<>(
 				java.util.List.of("*E*", "*A*", "*B*", "*C*", "*D*", "*PRINT-BASE*"));
-		assertThat(GlobalVarCollector.collectProbedUnbound(program, program, globals)).containsExactly("*E*", "*A*",
-				"*C*");
-		assertThat(
-				GlobalVarCollector.collectProbedUnboundBeforeInjection(program, java.util.List.of(), specials, false))
+		assertThat(GlobalVarCollector.collectProbedUnbound(program, program, globals, java.util.Set.of()))
+			.containsExactly("*E*", "*A*", "*C*");
+		assertThat(GlobalVarCollector.collectProbedUnboundBeforeInjection(program, java.util.List.of(), specials, false,
+				java.util.Set.of()))
 			.containsExactlyInAnyOrder("*A*", "*C*", "*E*");
+		// A value only a guarded defvar gives counts as none: the variable starts as the
+		// marker.
+		assertThat(GlobalVarCollector.collectProbedUnbound(program, program, globals, java.util.Set.of("*B*")))
+			.containsExactly("*E*", "*A*", "*B*", "*C*");
 		java.util.List<am.ik.rontolisp.LispVal> progv = new java.util.ArrayList<>(program);
 		progv.addAll(LispReader.readAllFromString("(progv '(*x*) '(1) (q))"));
-		assertThat(GlobalVarCollector.collectProbedUnbound(progv, progv, globals)).isEmpty();
+		assertThat(GlobalVarCollector.collectProbedUnbound(progv, progv, globals, java.util.Set.of())).isEmpty();
 	}
 
 }

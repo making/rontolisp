@@ -69,7 +69,8 @@ unbound.
 **A literal probe the fold cannot answer reads the variable, not the eval mirror, in a
 program without the mirror.** The globals (`GlobalVarCollector.collectProbedUnbound`): a
 literal `(boundp 'G)` names G, G is a global (special or not), no `defvar` with a value /
-`defparameter` / `defconstant` names it, not a `cl` symbol, and the program calls no
+`defparameter` / `defconstant` names it -- or G's `defvar`s are guarded
+(`.kb/dynamic-special-variables.md`, "A defvar's") --, not a `cl` symbol, and the program calls no
 `progv` (whose lowering binds a non-special name in the mirror). They join the tracked set
 of `.kb/dynamic-special-variables.md` ("Bound-ness of a special without a value"): the
 variable starts as the UNBOUND marker, a store overwrites it, a read of it signals the

@@ -15922,9 +15922,20 @@ public final class LispEvaluator {
 		// already bound. (defvar name) with no value leaves it unbound. defparameter and
 		// defconstant pass force=true and always (re)assign the initial value. The global
 		// binding is the special's default value, seen whenever no dynamic binding is in
-		// effect. Returns the variable name like Common Lisp.
-		if (parts.size() > 2 && (force || !this.globalEnv.isBound(name.name()))) {
-			this.globalEnv.define(name.name(), eval(parts.get(2), env));
+		// effect. Inside a dynamic binding of the name both the test and the store reach
+		// that binding, as SBCL's do. Returns the variable name like Common Lisp.
+		if (parts.size() > 2) {
+			boolean bound = this.dynamicBindings.isBound(name.name()) ? this.dynamicBindings.get(name.name()) != null
+					: this.globalEnv.isBound(name.name());
+			if (force || !bound) {
+				LispVal value = eval(parts.get(2), env);
+				if (this.dynamicBindings.isBound(name.name())) {
+					this.dynamicBindings.setCurrent(name.name(), value);
+				}
+				else {
+					this.globalEnv.define(name.name(), value);
+				}
+			}
 		}
 		return singleValue(name);
 	}

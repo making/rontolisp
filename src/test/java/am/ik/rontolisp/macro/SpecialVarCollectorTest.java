@@ -90,7 +90,9 @@ class SpecialVarCollectorTest {
 	 * {@code collectLocallyDeclaredOnly} the names only local declarations name -- the
 	 * names whose other bindings are lexical, which the compile paths rename apart. A
 	 * proclaimed name and a {@code cl} symbol are never one. {@code collect}, the compile
-	 * paths' set after that renaming, still holds both kinds, in declaration order.
+	 * paths' set after that renaming, still holds both kinds, in declaration order, and
+	 * the names a {@code defvar} or {@code defparameter} below the top level proclaims
+	 * when it runs -- no local declaration's alone then.
 	 */
 	@Test
 	void aLocalSpecialDeclarationIsNoProclamation() {
@@ -98,12 +100,13 @@ class SpecialVarCollectorTest {
 				(defvar *p* 1)
 				(defun f (x) (declare (special x *p* *print-base*)) (let ((y 2)) (declare (special y)) (g)))
 				(defun h () '(declare (special quoted)))
+				(defun k () (declare (special *n*)) (when (g) (defvar *n* 1) (defparameter *m* 2)) '(defvar *q* 3))
 				""");
 		java.util.Set<String> proclaimed = new LinkedHashSet<>();
 		program.forEach(form -> SpecialVarCollector.collectForm(form, proclaimed));
 		assertThat(proclaimed).containsExactly("*P*");
 		assertThat(SpecialVarCollector.collectLocallyDeclaredOnly(program)).containsExactly("X", "Y");
-		assertThat(SpecialVarCollector.collect(program)).containsExactly("*P*", "X", "*PRINT-BASE*", "Y");
+		assertThat(SpecialVarCollector.collect(program)).containsExactly("*P*", "X", "*PRINT-BASE*", "Y", "*N*", "*M*");
 	}
 
 	/**

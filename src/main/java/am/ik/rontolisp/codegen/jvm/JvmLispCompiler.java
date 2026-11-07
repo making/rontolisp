@@ -45,6 +45,7 @@ import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
+import am.ik.rontolisp.compiler.DefvarGuards;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.MutableStringProducers;
 import am.ik.rontolisp.compiler.AstOutliner;
@@ -2096,9 +2097,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// _fenv. A boundp of a global whose variable carries its bound-ness reads that
 		// variable alone, so a program whose every boundp is such a literal probe does
 		// not (the tracked set is checked again once the runtime is injected).
+		// A defvar whose store the top-level order cannot decide tests its variable at
+		// run
+		// time (compiler/DefvarGuards): its name starts as the UNBOUND marker, and a
+		// literal boundp of it reads that variable.
+		SequencedSet<String> guardedDefvars = DefvarGuards.collect(program);
 		boolean boundpReadsMirror = programUsesSymbol(program, LispNames.BOUNDP) && LispMacroExpander
 			.boundpReachesMirror(program, GlobalVarCollector.collectProbedUnboundBeforeInjection(program,
-					closRegistry.conditionReports().values(), specialVars, usesThreads));
+					closRegistry.conditionReports().values(), specialVars, usesThreads, guardedDefvars));
 		// Every reason for the runtime except the four pure READERS: the program can
 		// write _fenv (eval's defun, load, fmakunbound, a (setf (symbol-function ...))
 		// whose raw place shape is scanned, since the lowering to %set-symbol-function
@@ -2545,7 +2551,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		unboundSpecials.retainAll(boundSpecialVars);
 		SequencedSet<String> probedGlobals = new java.util.LinkedHashSet<>(unboundSpecials);
 		if (!usesEval && programUsesSymbol(program, LispNames.BOUNDP)) {
-			probedGlobals.addAll(GlobalVarCollector.collectProbedUnbound(probedForms, program, globals));
+			probedGlobals
+				.addAll(GlobalVarCollector.collectProbedUnbound(probedForms, program, globals, guardedDefvars));
 			LispMacroExpander.requireBoundpOffMirror(compiledForms, probedGlobals);
 		}
 		SequencedSet<String> unboundGlobals = SpecialVarCollector.collectValueless(probedForms, specialVars);
@@ -2557,6 +2564,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				closRegistry.conditionReports().values(), specialVars, closRegistry);
 		readBeforeStore.retainAll(globals);
 		unboundGlobals.addAll(readBeforeStore);
+		unboundGlobals.addAll(guardedDefvars);
 		// A progv short of values binds the symbols it has no value for to the marker
 		// (LispNames.PROGV_UNBOUND), and any special can be one of them: in a program
 		// that calls progv every read of a special is checked, the ones that start with a
@@ -2580,11 +2588,15 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		final JvmDynVarRuntimeBuilder.@Nullable UnboundMarker unboundMarker = JvmDynVarRuntimeBuilder.unboundMarker(cp,
-				thisClass, checkedGlobals, unboundGlobals, probedGlobals, globalFields);
+				thisClass, checkedGlobals, unboundGlobals, probedGlobals, guardedDefvars, globalFields);
+		// _dbound answers %global-boundp of a thread-scoped special: a probed one's, and
+		// the test of a guarded defvar of one.
+		boolean threadScopedBoundp = !unboundSpecials.isEmpty()
+				|| guardedDefvars.stream().anyMatch(boundSpecialVars::contains);
 		final JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVarRuntime = boundSpecialVars.isEmpty()
 				|| !lispOnOtherThreads ? null
 						: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars,
-								unboundSpecials.isEmpty() ? null : Objects.requireNonNull(unboundMarker).field());
+								threadScopedBoundp ? Objects.requireNonNull(unboundMarker).field() : null);
 
 		// Assign funcIds and register in CP
 		// The defuns whose tail calls to each other cycle: each such set is a tail group,
