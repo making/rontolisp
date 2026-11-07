@@ -2868,6 +2868,41 @@ public final class UserMacroExpander {
 					}
 					return rebuild(cons, parts, 2, macroEval, spec);
 				}
+				case LispNames.WITH_OPEN_FILE, LispNames.WITH_OPEN_STREAM, LispNames.WITH_OUTPUT_TO_STRING,
+						LispNames.WITH_INPUT_FROM_STRING, LispNames.DO_SYMBOLS, LispNames.DO_EXTERNAL_SYMBOLS,
+						LispNames.DO_ALL_SYMBOLS, LispNames.WITH_HASH_TABLE_ITERATOR, LispNames.WITH_PACKAGE_ITERATOR,
+						LispNames.WITH_SIMPLE_RESTART, LispNames.PPRINT_LOGICAL_BLOCK:
+					// (operator (name form...) body...): the name (a variable, a
+					// restart's) stays, its forms and the body are expressions -- the
+					// spec is no call of a macro named like the variable.
+					return expandSpecForm(cons, parts, 1, macroEval);
+				case LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_MUTEX_QUALIFIED,
+						LispNames.WITH_LOCK_HELD_QUALIFIED, LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED:
+					// (print-unreadable-object (object stream &key ...) body...): every
+					// element of the spec is an expression, its head included -- an
+					// object form named like a function with a compiler macro is a
+					// variable, not that call (petalisp's range printer).
+					return expandSpecForm(cons, parts, 0, macroEval);
+				case LispNames.WITH_SLOTS, LispNames.WITH_ACCESSORS, LispNames.THE:
+					// (with-slots (entry...) instance body...), (the type form):
+					// the entries and the type are data.
+					return parts.size() < 2 ? form : rebuild(cons, parts, 2, macroEval, parts.get(1));
+				case LispNames.HANDLER_CASE, LispNames.RESTART_CASE:
+					// (handler-case form (type ([var]) body...)...): a clause's type (a
+					// restart's name) and lambda list are data, its body expressions.
+					return expandClauses(cons, parts, 2, macroEval);
+				case LispNames.HANDLER_BIND, LispNames.RESTART_BIND: {
+					// (handler-bind ((type handler)...) body...): a binding's type (a
+					// restart's name) is data, the rest of it expressions.
+					if (parts.size() < 2 || !(parts.get(1) instanceof LispCons bindings) || !bindings.isProperList()) {
+						return rebuild(cons, parts, 1, macroEval);
+					}
+					List<LispVal> newBindings = new ArrayList<>();
+					for (LispVal binding : bindings.toList()) {
+						newBindings.add(expandClause(binding, 1, macroEval));
+					}
+					return rebuild(cons, parts, 2, macroEval, LispCons.rebuiltList(bindings, newBindings));
+				}
 				case LispNames.MACROEXPAND, LispNames.MACROEXPAND_1: {
 					// Fold a literal quoted argument to its expansion at compile time
 					// (the only form the compilers can support: the macro table does not
@@ -3287,6 +3322,50 @@ public final class UserMacroExpander {
 			newParts.add(expandAll(parts.get(i), macroEval));
 		}
 		return LispCons.rebuiltList(original, newParts);
+	}
+
+	/**
+	 * Expands {@code (operator (data... form...) body...)}: the spec's first {@code keep}
+	 * elements are data, the rest of it and the body expressions. A malformed spec is
+	 * left for the expansion to report.
+	 */
+	private static LispVal expandSpecForm(LispCons cons, List<LispVal> parts, int keep, LispEvaluator macroEval) {
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons)) {
+			return cons;
+		}
+		return rebuild(cons, parts, 2, macroEval, expandClause(parts.get(1), keep, macroEval));
+	}
+
+	/**
+	 * Expands {@code (operator form clause...)} whose clauses each start with
+	 * {@code keep} elements of data ({@code handler-case}'s type and lambda list).
+	 */
+	private static LispVal expandClauses(LispCons cons, List<LispVal> parts, int keep, LispEvaluator macroEval) {
+		List<LispVal> newParts = new ArrayList<>(parts.size());
+		newParts.add(parts.get(0));
+		if (parts.size() > 1) {
+			newParts.add(expandAll(parts.get(1), macroEval));
+		}
+		for (int i = 2; i < parts.size(); i++) {
+			newParts.add(expandClause(parts.get(i), keep, macroEval));
+		}
+		return LispCons.rebuiltList(cons, newParts);
+	}
+
+	/**
+	 * A list whose first {@code keep} elements are data and whose rest are expressions;
+	 * anything that is not a proper list is data.
+	 */
+	private static LispVal expandClause(LispVal clause, int keep, LispEvaluator macroEval) {
+		if (!(clause instanceof LispCons cons) || !cons.isProperList()) {
+			return clause;
+		}
+		List<LispVal> parts = cons.toList();
+		List<LispVal> newParts = new ArrayList<>(parts);
+		for (int i = keep; i < parts.size(); i++) {
+			newParts.set(i, expandAll(parts.get(i), macroEval));
+		}
+		return LispCons.rebuiltList(cons, newParts);
 	}
 
 	/**

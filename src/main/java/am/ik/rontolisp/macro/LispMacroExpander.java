@@ -27382,9 +27382,10 @@ public final class LispMacroExpander {
 				return substituteSymbolMacros(expandProg(cons, true), macros);
 			}
 			case LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED,
-					LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED: {
-				// (with-mutex (mutex-form) body...): the lock spec's one element is an
-				// expression, the head a call's walk would keep.
+					LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED, LispNames.PRINT_UNREADABLE_OBJECT: {
+				// (with-mutex (mutex-form) body...), (print-unreadable-object
+				// (object stream &key ...) body...): every element of the spec is
+				// an expression, the head a call's walk would keep.
 				return parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || !spec.isProperList() ? form
 						: substituteSymbolMacroTail(parts, 2, macros,
 								substituteSymbolMacroTail(spec.toList(), 0, macros));

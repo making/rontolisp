@@ -15539,6 +15539,17 @@ cases:
       (defun ci-mysafe (x) (+ x 1))
       (define-compiler-macro ci-mysafe (x) (error "no"))
       (print (ci-mysafe 10))
+      ;; print-unreadable-object's object form is a variable even when it is named
+      ;; like a function with a compiler macro, under with-accessors too (petalisp's
+      ;; ranges).
+      (defstruct ci-rng lo)
+      (defun ci-rng (x) (make-ci-rng :lo x))
+      (define-compiler-macro ci-rng (x) `(make-ci-rng :lo (+ ,x 1000)))
+      (defmethod print-object ((ci-rng ci-rng) stream)
+        (with-accessors ((lo ci-rng-lo)) ci-rng
+          (print-unreadable-object (ci-rng stream)
+            (format stream "CI-RNG ~D" lo))))
+      (print (make-ci-rng :lo 5))
       ;; load-time-value: evaluated once per occurrence, however often it is reached.
       (defvar ci-ltv-n 0)
       (defun ci-ltv-bump () (setq ci-ltv-n (+ ci-ltv-n 1)) ci-ltv-n)
@@ -15559,6 +15570,7 @@ cases:
       T
       4
       11
+      #<CI-RNG 5>
       1
       1
       2

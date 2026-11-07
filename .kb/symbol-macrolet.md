@@ -11,6 +11,16 @@ Consumers: trivia `match`, dbi `driver.lisp`, mito `core/type.lisp`.
   `go` tags, `block` names, `tagbody` atom tags, type tails, `eval-when` situations,
   `defmacro`/`macrolet` bodies, and the `defclass`/`defstruct`/`defgeneric`/`deftype`/
   `define-condition`/`defsetf` family. `typecase` is walked structurally.
+- **A spec list is no call**: `print-unreadable-object`'s `(object stream ...)` and the lock macros'
+  `(mutex)` are expressions element by element, the head included -- a call's walk keeps a head, so
+  `(with-slots (inner) w (print-unreadable-object (inner s) ...))` left `inner` unsubstituted. The
+  macro-expansion walk (`UserMacroExpander.expandAllLocated`) and `CallSiteWalk` know the same shapes,
+  with the `(var form...)` ones (`with-open-file`, `do-symbols`, `with-hash-table-iterator`,
+  `with-simple-restart`, `pprint-logical-block` ...), `with-slots`/`with-accessors` entries, `the`'s
+  type and `handler-case`/`handler-bind` clauses as data: walked as calls, a variable named like a
+  macro or a compiler macro expanded there (petalisp's `(print-unreadable-object (range stream))`,
+  `range` having a compiler macro, became `(make-range 0 stream 1)`, 2026-11-07). Pin: ci-spec
+  `macrolet-compiler-macro-restart-case`.
 - `(setq name v)` whose substituted target is a cons becomes `setf`. `loop` and `prog`/`prog*` are
   expanded one step first (`expandLoop`/`expandProg`). Declarations directly in the body are
   DROPPED.

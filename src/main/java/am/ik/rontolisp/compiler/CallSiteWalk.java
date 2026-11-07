@@ -151,12 +151,15 @@ public final class CallSiteWalk {
 			case LispNames.DO, LispNames.DO_STAR -> withBindings(cons, parts, rewriter, 2);
 			case LispNames.DOLIST, LispNames.DOTIMES, LispNames.DO_SYMBOLS, LispNames.DO_EXTERNAL_SYMBOLS,
 					LispNames.DO_ALL_SYMBOLS, LispNames.WITH_OPEN_FILE, LispNames.WITH_OPEN_STREAM,
-					LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING -> {
-				List<LispVal> out = new ArrayList<>(parts);
-				out.set(1, clause(parts.get(1), 1, rewriter));
-				walkFrom(out, parts, 2, rewriter);
-				yield LispCons.rebuiltList(cons, out);
-			}
+					LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING,
+					LispNames.WITH_HASH_TABLE_ITERATOR, LispNames.WITH_PACKAGE_ITERATOR, LispNames.WITH_SIMPLE_RESTART,
+					LispNames.PPRINT_LOGICAL_BLOCK ->
+				specThenWalk(cons, parts, 1, rewriter);
+			// (print-unreadable-object (object stream &key ...) body...): every
+			// element of the spec is a form, its head included.
+			case LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED,
+					LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED ->
+				specThenWalk(cons, parts, 0, rewriter);
 			case LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_SETQ, LispNames.DESTRUCTURING_BIND,
 					LispNames.WITH_SLOTS, LispNames.WITH_ACCESSORS, LispNames.THE ->
 				keepThenWalk(cons, parts, 2, rewriter);
@@ -327,6 +330,14 @@ public final class CallSiteWalk {
 			case LispNames.SHIFTF -> index < size - 1;
 			default -> index == 1;
 		};
+	}
+
+	// (op (data... form...) body...): the spec's first keep elements are data.
+	private static LispVal specThenWalk(LispCons cons, List<LispVal> parts, int keep, Rewriter rewriter) {
+		List<LispVal> out = new ArrayList<>(parts);
+		out.set(1, clause(parts.get(1), keep, rewriter));
+		walkFrom(out, parts, 2, rewriter);
+		return LispCons.rebuiltList(cons, out);
 	}
 
 	private static LispVal keepThenWalk(LispCons cons, List<LispVal> parts, int from, Rewriter rewriter) {
