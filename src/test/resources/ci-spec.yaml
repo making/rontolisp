@@ -12358,7 +12358,7 @@ cases:
       (defstruct (cps-point3 (:include cps-point)) z)
       (setq cps-p (make-cps-point3 :x 1 :y 2 :z 3))
       (setq cps-q (copy-structure cps-p))
-      (print (list (eq cps-p cps-q) (equal cps-p cps-q)))
+      (print (list (eq cps-p cps-q) (equalp cps-p cps-q)))
       (setf (cps-point3-z cps-q) 99)
       (print (list (cps-point3-z cps-p) (cps-point3-z cps-q)))
       (print (copy-structure (make-cps-point3 :x 1 :y 2 :z 3)))
