@@ -63,12 +63,11 @@ final class JvmDefvarCompiler {
 					return;
 				}
 				JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
-				ctx.body.dup();
-				ctx.body.putstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name.name())));
-				// Mirror into the eval runtime's global env (no-op unless eval is used);
-				// leaves the stack as it was (the DUP'd copy is consumed by
-				// the
-				// mirror's _store, which returns it, then we pop it).
+				// The store a setq makes: a thread-scoped special's active binding when
+				// one exists, as a shallow binding's field is (a defparameter inside a
+				// let of its name). Then the eval mirror (no-op unless eval is used);
+				// both leave the value on the stack, popped here.
+				JvmSetqCompiler.emitGlobalStore(name.name(), ctx);
 				JvmSetqCompiler.mirrorGlobal(name.name(), ctx);
 				ctx.body.pop();
 				ctx.definedGlobals.add(name.name());

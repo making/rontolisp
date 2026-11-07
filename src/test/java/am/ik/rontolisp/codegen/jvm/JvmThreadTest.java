@@ -205,14 +205,17 @@ class JvmThreadTest {
 		// The plain-ThreadLocal rule of .kb/dynamic-special-variables.md, now with user
 		// code as the spawner: the new thread reads the global default -- a closure built
 		// inside the binding too, since no special binding has a lexical twin to capture.
+		// A defparameter inside the binding sets that binding, not the global default.
 		assertThat(compileAndRun("""
 				(defvar *who* 'global)
 				(defun who-reader () *who*)
 				(let ((*who* 'spawner))
+				  (defparameter *who* 'param)
 				  (print (list (who-reader)
 				               (rontolisp:join-thread (rontolisp:make-thread #'who-reader))
 				               (rontolisp:join-thread (rontolisp:make-thread (lambda () *who*))))))
-				""", "ThreadScopeProg")).isEqualTo("(SPAWNER GLOBAL GLOBAL)");
+				(print *who*)
+				""", "ThreadScopeProg")).isEqualTo("(PARAM GLOBAL GLOBAL)\nGLOBAL");
 		// The emitted reader reads *read-base* as the program's own reads do.
 		assertThat(compileAndRun("""
 				(defun read-ten () (read-from-string "10"))

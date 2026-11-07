@@ -626,6 +626,13 @@ of that function.
 - A `defvar`/`defparameter` below the top level proclaims its name for the whole program
   (`SpecialVarCollector.collect`, `collectNestedDefiners`; `collectLocallyDeclaredOnly` counts it
   too), so a function body's has a global; the interpreter proclaims it when it runs.
+- JVM: an unguarded `defvar`/`defparameter` of a global stores through
+  `JvmSetqCompiler.emitGlobalStore`, as a `setq` does. A bare `putstatic` set the shallow
+  binding's field, but a thread-scoped special's binding lives in its `_d$` cell, so the
+  store reached the global default instead: `.todo/j04`, where the ci-spec corpus program (an
+  `async-defun` sets `lispOnOtherThreads`) printed `(5 2)` for `(let ((*p* 5))
+  (defparameter *p* 2) *p*) *p*` while the case alone printed `(2 1)`. Pinned in
+  `JvmThreadTest`.
 - Interpreter (`evalDefvar`): the test and the store reach the active dynamic binding; before,
   the global environment (`(let ((*c* 5)) (defvar *c* 2))` left `*c*` bound after the `let`, a
   `defparameter` there assigned the global).
