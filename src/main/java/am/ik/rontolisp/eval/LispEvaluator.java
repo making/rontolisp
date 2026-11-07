@@ -1984,6 +1984,31 @@ public final class LispEvaluator {
 		}));
 	}
 
+	/**
+	 * Defines {@code rontolisp::%macroexpand-all}, trivial-macroexpand-all's
+	 * {@code macroexpand-all} here ({@code eval/TrivialMacroexpandAllForms}): the form
+	 * with every macro in it expanded by this evaluator's macros
+	 * ({@link MacroexpandAll}), the symbol macros of the {@code &environment} given as
+	 * the second argument (nil: the global ones) in scope, and the two {@code t}s SBCL's
+	 * arm answers beside it. The compile paths' prelude answers the form unexpanded and
+	 * two nils: a compiled program keeps no macro table, while a macro calling it as the
+	 * compile runs is answered by the compile-time evaluator, this one.
+	 */
+	private void registerMacroexpandAll() {
+		String name = LispNames.MACROEXPAND_ALL_INTERNAL_QUALIFIED;
+		this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.MACROEXPAND_ALL_INTERNAL + " expects 1 or 2 arguments, got " + args.size());
+			}
+			LispVal environment = args.size() > 1 ? args.get(1) : LispNil.INSTANCE;
+			LispVal expansion = MacroexpandAll.expand(args.get(0), this, symbolMacrosOf(environment));
+			this.globalEnv
+				.publishSpill(new LispCons(LispTrue.INSTANCE, new LispCons(LispTrue.INSTANCE, LispNil.INSTANCE)));
+			return expansion;
+		}, true));
+	}
+
 	private @Nullable LispVal functionLambdaList(LispVal designator) {
 		String name = switch (designator) {
 			case LispSymbol symbol -> symbol.name();
@@ -4453,6 +4478,7 @@ public final class LispEvaluator {
 		}));
 		registerSwankHost();
 		registerFunctionLambdaList();
+		registerMacroexpandAll();
 		// The JSON functions live here because they dispatch to the Lisp-source
 		// library (JsonLibrary), evaluated into the global environment on first use.
 		String jsonParseName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JSON_PARSE);

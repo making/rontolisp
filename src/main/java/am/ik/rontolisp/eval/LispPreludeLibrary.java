@@ -185,6 +185,12 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.FUNCTION_LAMBDA_LIST_INTERNAL, """
 				(defun rontolisp::%function-lambda-list (function) (declare (ignore function)) :unknown)
 				""");
+		// The macro table is the interpreter's (MacroexpandAll): a compiled program keeps
+		// none at run time, so it answers trivial-macroexpand-all's "not expanded" -- a
+		// macro calling it as the compile runs is answered by the compile-time evaluator.
+		SOURCES.put(LispNames.MACROEXPAND_ALL_INTERNAL, """
+				(defun rontolisp::%macroexpand-all (form &optional env) (declare (ignore env)) (values form nil nil))
+				""");
 		SOURCES.put(LispNames.PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL, """
 				(defun rontolisp::%prin1-keeping-float-spelling (object) (prin1-to-string object))
 				""");

@@ -1186,6 +1186,9 @@ public final class PackageRegistry {
 		// Internal: a function's lambda list, spelled rontolisp::%... by
 		// trivial-arguments' rewrite.
 		rontolispSymbols.add(LispNames.FUNCTION_LAMBDA_LIST_INTERNAL);
+		// Internal: every macro in a form expanded, spelled rontolisp::%... by
+		// trivial-macroexpand-all's rewrite.
+		rontolispSymbols.add(LispNames.MACROEXPAND_ALL_INTERNAL);
 		// Internal: the interpreter's SWANK server hook behind the swank shim's
 		// create-server / stop-server, spelled rontolisp::%swank-* by its call sites.
 		rontolispSymbols.add(LispNames.SWANK_LISTEN);

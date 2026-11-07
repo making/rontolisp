@@ -11830,6 +11830,20 @@ cases:
       ;; find-symbol answers every keyword name, and gentemp asks it for a free one.
       (print (list (keywordp (gentemp "CI-GT-" :keyword))
                    (keywordp (gentemp "CI-GT-" (find-package :keyword)))))
+      ;; macroexpand-all (trivial-macroexpand-all's arm) expands a symbol macro where
+      ;; it is referenced and a macrolet's macro there, so a macro finds the variables
+      ;; an expression mentions as it expands (petalisp's transform); a binding hides
+      ;; one, and the call answers the expansion.
+      (defvar *ci-mxa-seen* nil)
+      (defmacro ci-mxa-vars (expression &rest candidates)
+        (let ((*ci-mxa-seen* '()))
+          (rontolisp::%macroexpand-all
+           `(macrolet ,(mapcar (lambda (c) `(,c () (push ',c *ci-mxa-seen*) 0)) candidates)
+              (symbol-macrolet ,(mapcar (lambda (c) `(,c (,c))) candidates)
+                ,expression)))
+          `',(reverse *ci-mxa-seen*)))
+      (print (list (ci-mxa-vars (+ i 1) i j) (ci-mxa-vars (* j (let ((i 2)) i)) i j)
+                   (ci-mxa-vars (list j i) i j)))
     expected: |
       #:G1
       #:|ci2|
@@ -11841,6 +11855,7 @@ cases:
       (+ 41 1)
       (+ 1 2)
       (T T)
+      ((I) (J) (J I))
   # JSON: the Lisp-source library (json.lisp) is spliced by the compile path and
   # loaded lazily by the interpreter; on the wasm-GC backends its entry points call
   # the native codec (json-codec-edges below). The value mapping matches

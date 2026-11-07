@@ -46,7 +46,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 ## Macros, reader, printer
 
 - [defmacro-backquote.md](defmacro-backquote.md) -- `defmacro`, read-time backquote, compile-time expansion
-- [gensym-macroexpand.md](gensym-macroexpand.md) -- `gensym`, `macroexpand`/`macroexpand-1`
+- [gensym-macroexpand.md](gensym-macroexpand.md) -- `gensym`, `macroexpand`/`macroexpand-1`, `macroexpand-all` (trivial-macroexpand-all's arm: a symbol macro expanded where it is referenced)
 - [compiler-macros.md](compiler-macros.md) -- `define-compiler-macro` at call sites + `load-time-value` once per occurrence, `compiler-macro-function`
 - [make-load-form.md](make-load-form.md) -- a literal object is dumped by its own `make-load-form` method
 - [reader-case-upcase.md](reader-case-upcase.md) -- uppercase-canonical reader model, verbatim `intern`/`find-symbol`

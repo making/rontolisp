@@ -387,6 +387,9 @@ public final class ShimLibraries {
 		else if (TrivialArgumentsForms.SYSTEM.equals(systemName)) {
 			rewritten = TrivialArgumentsForms.rewrite(componentFile, source);
 		}
+		else if (TrivialMacroexpandAllForms.SYSTEM.equals(systemName)) {
+			rewritten = TrivialMacroexpandAllForms.rewrite(componentFile, source);
+		}
 		return rewritten == null ? source : rewritten;
 	}
 

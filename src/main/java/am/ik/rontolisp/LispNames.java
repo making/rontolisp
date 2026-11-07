@@ -8537,6 +8537,15 @@ public final class LispNames {
 	public static final String FUNCTION_LAMBDA_LIST_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
 			+ FUNCTION_LAMBDA_LIST_INTERNAL;
 
+	/**
+	 * The internal {@code rontolisp::%macroexpand-all}: a form with every macro in it
+	 * expanded (trivial-macroexpand-all's {@code macroexpand-all}).
+	 */
+	public static final String MACROEXPAND_ALL_INTERNAL = "%MACROEXPAND-ALL";
+
+	/** The canonical spelling of {@code rontolisp::%macroexpand-all}. */
+	public static final String MACROEXPAND_ALL_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + MACROEXPAND_ALL_INTERNAL;
+
 	/** The canonical spelling of {@code rontolisp::%cons-cas-car}. */
 	public static final String CONS_CAS_CAR_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONS_CAS_CAR_INTERNAL;
 

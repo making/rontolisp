@@ -1117,6 +1117,13 @@ signals for an implementation it does not list, and whose backend reads a Lisp a
 through `sb-ext:array-storage-vector` / `static-vector-pointer` (`#-(or sbcl ccl)` is "Not
 implemented yet."; `.todo/j05`).
 
+**`eval/TrivialMacroexpandAllForms`** (cache only, by hand; the arm's walk is pinned by ci-spec
+`gensym-and-macroexpand`). trivial-macroexpand-all is one `macroexpand-all` per `#+impl` arm over the
+implementation's walker, and its last arm answers the form unexpanded with a nil second value: here
+petalisp's `transform` then found no variable in any expression. One span: a `#+rontolisp` arm over
+`rontolisp::%macroexpand-all` ([gensym-macroexpand.md](gensym-macroexpand.md)) ahead of the fallback,
+whose feature list gains `rontolisp`.
+
 **`eval/ClReexportForms`** (pinned by `ClReexportE2eTest`, all four, SBCL 2.2.9's answers). clingon's
 `src/package.lisp` is `(defpackage :clingon (:use :cl))` plus top-level
 `(cl-reexport:reexport-from :clingon.command)` calls: a function computing `import` and `export` at
