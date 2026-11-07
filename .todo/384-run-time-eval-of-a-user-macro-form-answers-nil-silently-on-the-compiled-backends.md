@@ -48,3 +48,9 @@ and the same program with a `#'read-char` anywhere answers the character.
 `(function name)` through the eval runtime, gets nil, and the dispatcher then reports
 `The function NIL is undefined` with `cell-error-name` NIL instead of the name the call
 spelled (found 2026-10-07 beside the undefined-function name slot fix, `.kb/error-handling.md`).
+
+Measured 2026-11-07 with petalisp (`.kb/asdf.md`, "petalisp"): a compiled JVM class now SIGNALS
+`undefined-function` for a run-time `compile` naming a user macro (outcome (a)'s floor holds there),
+and option (b) is what stands between petalisp and the compile paths: its native backend `compile`s
+forms naming its own macros as it runs -- `petalisp.utilities:with-pinned-objects` in the evaluator
+template, `petalisp.codegen:with-unsafe-optimization` and `bind` in every kernel.

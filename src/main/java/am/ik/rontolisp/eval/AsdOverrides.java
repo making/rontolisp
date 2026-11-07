@@ -88,7 +88,12 @@ public final class AsdOverrides {
 			// foreign libraries next to an executable, which a module has none of (its
 			// mezzano arm), and a .wasm refuses ffi: by name. The replacement skips cffi
 			// there; every other target reads upstream's dependencies.
-			Map.entry("deploy.asd", "deploy-rontolisp.asd"));
+			Map.entry("deploy.asd", "deploy-rontolisp.asd"),
+			// Not unparseable but MIS-DECLARED here: static-vectors serves the SBCL and
+			// CCL arms that read an array's storage by its address, and its own .asd
+			// refuses rontolisp. The rontolisp arm (PetalispForms) reads none, so the
+			// replacement drops it; every other dependency and component is upstream's.
+			Map.entry("petalisp.native-backend.asd", "petalisp-native-backend-rontolisp.asd"));
 
 	private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
 

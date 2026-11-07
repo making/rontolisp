@@ -390,6 +390,9 @@ public final class ShimLibraries {
 		else if (TrivialMacroexpandAllForms.SYSTEM.equals(systemName)) {
 			rewritten = TrivialMacroexpandAllForms.rewrite(componentFile, source);
 		}
+		else if (PetalispForms.SYSTEMS.contains(systemName)) {
+			rewritten = PetalispForms.rewrite(componentFile, source);
+		}
 		return rewritten == null ? source : rewritten;
 	}
 

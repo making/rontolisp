@@ -653,6 +653,12 @@
         "condition": {
           "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
         },
+        "pattern": "am/ik/rontolisp/eval/petalisp-native-backend-rontolisp\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
         "pattern": "am/ik/rontolisp/eval/cl-postgres-deps\\.asd"
       },
       {

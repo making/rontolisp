@@ -81,6 +81,9 @@ its type. The correct spelling is `foreign-funcall-varargs`.
 - **static-vectors** -- does not load, and cannot: a SECOND implementation seam needing a vector
   in non-moving memory, which rontolisp has no array type for. Use `cffi:foreign-alloc`.
   pngload requires it on every path, so pngload stops at its `.asd` (measured 2026-11-04).
+  petalisp's native backend needs it only in the SBCL and CCL arms that read storage by address;
+  its rontolisp arm reads none, and a replacement `.asd` drops the dependency
+  ([asdf.md](asdf.md), "petalisp").
 - **mmap, 3bz** -- load and run on the interpreter and a compiled class: a deflate stream
   decompresses, a file maps, and a failing `mmap` reads `errno` into an `mmap-error` (2026-11-04).
 - **cl+ssl** (the real one) -- LOADS, completes a real TLS handshake through its LISP BIO (OpenSSL

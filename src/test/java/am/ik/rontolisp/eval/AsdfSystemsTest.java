@@ -545,7 +545,8 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void uffiIsTheSameSystemNameOverCffisCompatibilityLayer() {
+	void aReplacementKeepsTheSystemNameOverOtherDependencies() {
+		// uffi: the same system over cffi's compatibility layer.
 		String source = AsdOverrides.replacementSource("uffi.asd");
 		assertThat(source).isNotNull();
 		List<AsdfSystems.LispSystem> systems = loadAsd(source, "sw/uffi.asd", Features.INTERPRETER);
@@ -553,6 +554,18 @@ class AsdfSystemsTest {
 		assertThat(systems.get(0).name()).isEqualTo("uffi");
 		assertThat(systems.get(0).dependsOn()).containsExactly("cffi-uffi-compat");
 		assertThat(systems.get(0).files()).isEmpty();
+		// petalisp's native backend: upstream's components, without the static-vectors
+		// its SBCL and CCL arms read storage through (PetalispForms).
+		String petalisp = AsdOverrides.replacementSource("petalisp.native-backend.asd");
+		assertThat(petalisp).isNotNull();
+		List<AsdfSystems.LispSystem> backend = loadAsd(petalisp, "sw/code/native-backend/petalisp.native-backend.asd",
+				Features.INTERPRETER);
+		assertThat(backend).hasSize(1);
+		assertThat(backend.get(0).name()).isEqualTo("petalisp.native-backend");
+		assertThat(backend.get(0).dependsOn()).contains("cffi", "lparallel", "typo").doesNotContain("static-vectors");
+		assertThat(backend.get(0).files()).containsExactly("packages.lisp", "request.lisp", "pin-current-thread.lisp",
+				"worker-pool.lisp", "backend.lisp", "scheduling.lisp", "allocation.lisp", "evaluator.lisp",
+				"compilation.lisp");
 	}
 
 	@Test

@@ -483,6 +483,7 @@ Preview 1、`--component` を意味します。**特筆事項**列はロード�
 | [parenscript](https://parenscript.common-lisp.dev/) (Quicklisp 2025-06-22) | インタプリタ | 無改変ソースから `(ql:quickload "parenscript")` で Lisp を JavaScript に変換します — `ps`/`ps*` は `chain`/`@`/`create`/`while` や DOM シンボルのパッケージを含め、SBCL と同じ JavaScript を印字します。コンパイルパスは parenscript 自身の `property-bindings` (`Cannot compile symbol reference: PARENSCRIPT:VAR`) で止まります |
 | [jonathan](https://github.com/Rudolph-Miller/jonathan) 0.1 | インタプリタ, JVM | 無改変ソースから `(ql:quickload "jonathan")` で JSON をエンコード・デコードします — `to-json` と `parse` (plist、alist、ハッシュテーブルの結果) は SBCL と同じ結果を印字します。`.wasm` は `Cannot compile symbol: *` で止まります |
 | [40ants-doc](https://github.com/40ants/doc) (Quicklisp 2026-01-01) | インタプリタ | 無改変ソースから `(ql:quickload "40ants-doc")` でドキュメントのセクションを定義します — `defsection` と `section-title` は SBCL と同じ答えを返し、`in-readtable` の下で pythonic-string-reader の `"""..."""` 文字列を読めます。コンパイルパスは serapeum (`internal-definitions.lisp`) で止まります |
+| [petalisp](https://github.com/marcoheisig/Petalisp) (Quicklisp 2026-01-01) | インタプリタ | 無改変ソースから `(ql:quickload "petalisp")` で遅延評価の並列配列計算を使えます — `lazy`、`lazy-reshape`、`lazy-fuse`、`lazy-overwrite`、`lazy-reduce`、`lazy-sort`、`lazy-multiple-value`、`transform`、`compute` は SBCL と同じ答えを返し、計算は petalisp 自身のネイティブバックエンドがワーカースレッド (ここでは仮想スレッド) の上で行います。バッファはアドレスで受け渡す static vector ではなく要素ごとに読み書きする通常の Lisp ベクタなので、依存の `static-vectors` は外しています。コンパイルパスは止まります。バックエンドが実行時に生成するカーネルは petalisp 自身のマクロを使うためコンパイル済みプログラムではコンパイルできず、`.wasm` は依存の cffi を受け付けません |
 
 ### サイズ向けオプトイン: `tiny-routes/lite`
 

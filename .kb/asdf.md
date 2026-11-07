@@ -921,6 +921,7 @@ PATH**, so component files still resolve against the real tree. One entry serves
 | `uffi.asd` | `uffi-cffi.asd` | guards its whole `defsystem` per implementation; the replacement is cffi's own `uffi-compat/uffi.asd`, over `cffi-uffi-compat` (package nickname `uffi`). Interpreter and JVM; a `.wasm` refuses by naming `ffi:` |
 | `clsql.asd` | `clsql-closer-mop.asd` | loads uffi only for a `perform :after` reading `~/.clsql-init.lisp`, which does not run here, and names no MOP system; the replacement declares `closer-mop` and leaves uffi to the database backends, so the core reaches wasm |
 | `deploy.asd` | `deploy-rontolisp.asd` | cffi copies foreign libraries next to an executable; a `.wasm` has none and refuses `ffi:`, so it reads deploy the mezzano way ("deploy: build-time hooks") |
+| `petalisp.native-backend.asd` | `petalisp-native-backend-rontolisp.asd` | `static-vectors` serves the SBCL/CCL arms that read storage by address, and its `.asd` refuses rontolisp; the rontolisp arm (`eval/PetalispForms`, below) reads none |
 
 **Every bundled replacement `.asd` and every leaf-module shim `.lisp` also needs a
 `resource-config.json` entry** (`AsdOverrides` resp. `ShimLibraries` as `typeReachable`). A
@@ -1111,11 +1112,8 @@ printed was i97's replay fix. Measured 2026-11-07 after `symbol-function` of an 
 ([symbol-runtime-api.md](symbol-runtime-api.md)) and an eval'd `(defun (setf name) ...)`
 ([eval-runtime.md](eval-runtime.md)): `(ql:quickload :typo)` loads on the interpreter, the JVM and P1,
 and `find-fnrecord` / `type-specifier-ntype` answer what SBCL 2.2.9 answers (but
-`call-arguments-limit`, ours). petalisp's `petalisp.core`, `.ir` and `.codegen` load on the
-interpreter; `petalisp` itself stops at `petalisp.native-backend`'s `static-vectors`, whose `.asd`
-signals for an implementation it does not list, and whose backend reads a Lisp array's storage
-through `sb-ext:array-storage-vector` / `static-vector-pointer` (`#-(or sbcl ccl)` is "Not
-implemented yet."; `.todo/j05`).
+`call-arguments-limit`, ours). petalisp, typo's consumer, loads on the interpreter since
+(`eval/PetalispForms` below, "Libraries that load").
 
 **`eval/TrivialMacroexpandAllForms`** (cache only, by hand; the arm's walk is pinned by ci-spec
 `gensym-and-macroexpand`). trivial-macroexpand-all is one `macroexpand-all` per `#+impl` arm over the
@@ -1123,6 +1121,18 @@ implementation's walker, and its last arm answers the form unexpanded with a nil
 petalisp's `transform` then found no variable in any expression. One span: a `#+rontolisp` arm over
 `rontolisp::%macroexpand-all` ([gensym-macroexpand.md](gensym-macroexpand.md)) ahead of the fallback,
 whose feature list gains `rontolisp`.
+
+**`eval/PetalispForms`** (cache only, by hand; "Libraries that load", petalisp). petalisp's native
+backend hands its kernels a static vector's address or foreign memory and reads elements through
+pointer accessors, an arm per implementation for the storage and `(error "Not implemented yet.")`
+for any other. Nine spans in `petalisp.native-backend`, each a `#+rontolisp` arm beside upstream's
+kept under `#-rontolisp`: `array-storage-vector` and `array-storage-pointer` answer the array,
+`get-result`'s `cffi:pointer-eq` is `eq`, `ntype-unboxed-p` is nil and `ntype-bits-per-element` 8 (so
+every allocation is upstream's boxed one, a simple vector of one slot per element), `load-function`
+is `row-major-aref` and the unpack type `array`, `+n-fixnum-tag-bits+` is 0 (upstream reads it
+through `cffi:mem-ref`), `*pin-current-thread-library*` is nil. One in `petalisp.utilities`:
+`with-pinned-objects`' portable arm answered the last pinned object instead of its body's values,
+so an evaluator of two results answered one (`harmonize`); the rontolisp arm answers the body's.
 
 **`eval/ClReexportForms`** (pinned by `ClReexportE2eTest`, all four, SBCL 2.2.9's answers). clingon's
 `src/package.lisp` is `(defpackage :clingon (:use :cl))` plus top-level
@@ -1205,6 +1215,56 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   paths stop in serapeum ([packages.md](packages.md), the declaration identifiers; then
   `internal-definitions.lisp:411`, `.todo/152`).
 
+- **petalisp** (petalisp-20260101-git, `.todo/j05`) — from the Quicklisp cache, interpreter, verified manually
+  (2026-11-07): `(ql:quickload :petalisp)` loads the API, the native backend, the examples, the test suite and
+  graphviz in 33 s, and `(petalisp:compute (petalisp:lazy #'+ #(1 2 3) 1))` prints `#(2 3 4)`. Loading runs the
+  examples of 115 docstrings through the native backend; with the text each docstring gets printed on both
+  sides, the results are SBCL 2.2.9's over the same tree but for SBCL's right-margin wrapping of the example
+  forms ([pretty-printer.md](pretty-printer.md)), `5.0d0` printing as `5.0` and typing as a single float (one
+  float format, [declarations-type-checks.md](declarations-type-checks.md)), and typo's union of `(eql foo)`,
+  a string, a keyword and 42 coming out `t` where SBCL's is `(not null)` (`subtypep` of a `(not ...)` type
+  stays unknown here, same file).
+  - **The decision: an arm in petalisp's native backend, not a backend of rontolisp's own.** Weighed: a tier-4
+    arm giving the backend a memory model without addresses, against a backend behind petalisp's protocol
+    (`backend-compute`/`backend-evaluator`, as `petalisp.core`'s reference backend and `petalisp.codegen`'s IR
+    backend implement it). The arm won. What reads an address is nine forms and the worker pinning
+    (`eval/PetalispForms`, tier 4 above); partitioning, the ghost-layer schedule, allocation reuse, the worker
+    pool and its barrier, the evaluator templates and the compiled kernels stay upstream's and run as on SBCL,
+    and petalisp's own test suite, which compares this backend with the reference one, keeps testing upstream's
+    backend. A backend of ours would be a second implementation of the protocol to keep in step with upstream,
+    with neither the parallel schedule nor the objects graphviz's scheduling view reads
+    (`petalisp.native-backend::action-work-invocations`). The memory model is the one upstream already gives a
+    buffer of boxed elements, a simple vector of one slot per element, extended to every element type
+    (`row-major-aref` reads a result or a constant array in place, any rank or element type), so the arm adds
+    no third representation. `static-vectors` is not admitted at all: the arm names nothing of it, so the
+    replacement `.asd` drops it and it still refuses to load ([cffi.md](cffi.md)).
+  - **What it took**, each general: bt2's atomic counter ([threads.md](threads.md)); a compiler macro applied
+    to `print-unreadable-object`'s `(object stream)` spec as if it were a call ([symbol-macrolet.md](symbol-macrolet.md));
+    a real `macroexpand-all` behind trivial-macroexpand-all ([gensym-macroexpand.md](gensym-macroexpand.md));
+    `pushnew`'s `:key` applied to the item (numpy-file-format, under petalisp.examples); `equal` on a
+    structure being identity ([instance-syntax.md](instance-syntax.md)) -- the allocator's default table of
+    layouts lost every key whose slots it then wrote, and `lazy-sort`'s ucons blueprints sent the structural
+    `equal` round a cycle; a `~:<` block's default parentheses (a shape prints `(~ 3)`, [format.md](format.md));
+    `for u short-float = ...` in `loop` (the test suite's generators; SBCL's loop takes the standard type
+    symbols as simple types, [loop-iteration-heads.md](loop-iteration-heads.md)).
+  - **Threads**: `make-native-backend` starts `(ceiling cpus 2)` workers as `*backend*` loads, which nothing
+    joins (`trivial-garbage:finalize` registers nothing); they are virtual, so they do not keep the process
+    alive. The barrier spins on a slot, a core per waiting worker while a step runs, as on SBCL.
+  - **The compile paths** (measured 2026-11-07, the program above). The JVM compiles in about 100 s (five
+    `undefined; looked up when the call runs` warnings, on calls no load reaches: `queues::make-priority-queue`,
+    `named-readtables::break`, `ucons::pprint-linear`, `petalisp.codegen::cuda-compile-blueprint` -- upstream
+    leaves the CUDA compiler out of its own system -- and `(setf cffi:mem-ref)`), and the class stops at run
+    time: the backend `compile`s forms naming the program's own macros, which the embedded eval runtime does
+    not expand (`.todo/384`, its option (b)). Run as the program above, the documentation examples run until
+    `lazy-sort`'s, whose kernel stops at `PETALISP.CODEGEN:WITH-UNSAFE-OPTIMIZATION is undefined`; a program
+    loading `petalisp.native-backend` alone stops at its first `compute`, in the evaluator template
+    (`PETALISP.UTILITIES:WITH-PINNED-OBJECTS is undefined`). One compile of six did not finish within
+    590 s while the compile-time evaluator replayed the documentation examples (27 of its 32 workers spinning
+    at the barrier, five gone, the error unknown) -- a race not reproduced in the five after it, nor in any of
+    the interpreter's runs. Preview 1 and the component stop at `Cannot compile: FFI:POINTERP`: `petalisp.codegen`
+    and the backend depend on cffi, which no `.wasm` takes ([cffi.md](cffi.md)); past it, `make-native-backend`
+    makes threads, which a module signals on ([threads.md](threads.md)).
+  - Not measured: petalisp's own test suite (`(asdf:test-system :petalisp)`), the examples beyond loading them.
 - **fset 2.2.0** — from the Quicklisp cache, verified manually on all four (2026-11-05): `set`, `with`,
   `map`, `seq`, `bag`, `tuple`, `lookup`, `convert` and their printed forms, the same text as SBCL 2.2.9
   on the same program. What it took, each a general fix but the first: the port arm (tier 4 above);
