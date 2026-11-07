@@ -121,6 +121,66 @@ Both paths run the same `expandDefclass`; `ClosRegistry.ForwardClass` is what wa
   `LispEvaluatorTest.aForwardReferenceCannotCloseACycleOrNameANonClass` and the warning in
   `RontoLispCliStreamsTest.aReferenceToAnUndefinedFunctionWarnsAtTheReferenceOnEveryBackend`.
 
+## A class defined below the top level (compile paths, since 2026-11-07)
+snooze's `define-content` expands to `(unless (find-class 'text nil) (setf (get 'text 'name) ...)
+(defclass text (content) ()))`, its `defroute` to `(unless (find-resource 'r) (defgeneric r ...
+(:generic-function-class resource-generic-function)))`, and contextl's `test/layer-gc.lisp`
+defines layer classes and layered methods in a `(loop repeat 2 do ...)`. The interpreter always
+ran them; the compile paths refused each ("only supported as a top-level form").
+- **The decision: hoist, not a run-time `ensure-class`.** Such a form's name, superclasses,
+  slots and options are literal, so the static tables -- layout, tag, ancestors, dispatch,
+  `%class-meta-table%`, `--optimize`'s narrowing -- hold the class as for a top-level one; only
+  WHEN the form runs is dynamic. A run-time path would be a second object system (layouts,
+  constructors, slot access, `typep` and dispatch over classes no table knows) for definitions
+  with no computed part. "Classes made at run time" stays the path for computed ones.
+- `NestedClassDefinitions.split`, first in `expandTopLevelDefinitions`, so every scan for
+  definers after it sees a top-level definition: each `defclass`/`define-condition` below a
+  top-level form (outside quoted data, of a definition's shape) moves ahead of that form, and a
+  `(%nested-class-defined ID)` marker stays. The walk registers the hoisted definition there and
+  keeps its constructor, accessors and class-allocated cells at top level; at the marker it puts
+  what the definition does as it runs (`placeClassDefinitionRuns`): the metaclass driver
+  (`%ensure-class-with-metaclass`, the inherited initfunctions) and the end of the pending state
+  below. Where the form's value is used (`split`'s walk follows `progn`/`if`/`when`/`cond`/`let`
+  bodies), `(find-class 'C)` follows the marker (`define-condition`: the name).
+- **Pending until it runs**: a class some definition of which stands below the top level starts
+  as a forgotten name of the public `find-class` (`%find-class-overrides%`, "Setf methods and
+  class-name aliases"), under every designator spelling, and each of its definitions, top-level
+  or nested, ends that where it runs (`classDefinedForms`). So snooze's `unless` runs its branch
+  once. Only the public `find-class` sees it: `class-of`, `typep`, `subtypep`, `make-instance`
+  and dispatch answer the static class from the start, the residual a top-level class has.
+- **Capture is refused**: initforms and default initargs are inlined into top-level
+  constructors, so one mentioning a variable a form around the class binds (a `let`, a lambda
+  list, a `dolist`/`loop` variable, a `handler-case` clause's) is a compile error naming the
+  variable. The interpreter runs it. An initfunction closure made where the form runs would
+  lift that, at a funcall per construction; no program needing it is known.
+- **Methods and generics below any top-level form** take the closure-over-let path ("Where each
+  path hooks in"). Under the generic-function protocol a nested `defgeneric` makes its metaobject
+  where it runs (`%gf-declare`: snooze's `defresource` registers the resource from its
+  `initialize-instance :after`), and a nested `defmethod` reaches `add-method` there
+  (`%gf-static-method-added` over the body's variable: contextl's layer GC clears its caches).
+  A computed `eql` specializer's cell is assigned where the method is defined
+  (`splitNestedMethodExpansion`; it was hoisted ahead of the form, so contextl's
+  `(eql (find-layer-class 'bar))` in the loop ran before `bar` existed).
+- **A nested `:metaclass` defclass is widened** like a top-level one: `UserMacroExpander` replays
+  it in the macro-time evaluator (`replayNestedMetaclassDefclasses`) and rewrites it in place
+  (`widenMetaclassDefclasses`), so contextl's `deflayer` in a loop gains its
+  `%STATIC-SUPERCLASSES standard-layer-object`. A library's top-level forms were replayed whole
+  already; a user file's are not, so the definition alone is.
+- **Combined dispatch while a nested method is undefined**: the static branch skips every method
+  it combines with an unassigned nested one (`nestedBranchGuard`). Where the run-time arm exists
+  (the generic-function protocol, classes made at run time), every call takes the run-time
+  combination while a nested method of the generic is unassigned (`dynamicArmTests`), which
+  leaves out that method alone: layer-gc's `adjoin-layer` needs its `:after` while the loop has
+  not reached its `:before` yet. Without the arm the conservative skip stays.
+- Residuals: class-allocated cells are initialized at the hoisted position, once, even where the
+  branch never runs; a class only a false branch defines still has its static class
+  (`make-instance` constructs one); `class-direct-subclasses` lists a pending class; the
+  instance tracking of a redefined `:metaclass` class ("Instance updating") ends at the first run
+  of a last definition that stands in a loop.
+- Measured 2026-11-07: snooze's `defroute` + three `handle-request` results agree with SBCL
+  2.2.9 on all four backends, as does contextl's `layer-gc.lisp` as written (`ContextlE2eTest`).
+  Pinned by ci-spec `classes-and-methods-defined-below-the-top-level` (SBCL 2.2.9 agrees).
+
 ## `generateDispatcher(name, registry[, builtinFallback])`
 ONE dispatcher defun per generic: a nested-if chain, most specific first. An ordinary defun,
 so `#'name`/`funcall`/`mapcar` work with no `BuiltinFunctionWrappers` entry.
@@ -345,23 +405,20 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
   collecting classes/methods, splices defuns in place, and inserts each generic's dispatcher
   at its defgeneric's position (or the first defmethod's) AFTER the walk, so descendant and
   method sets are complete regardless of definition order (a call that runs earlier still sees
-  the earlier table: "Method definitions take effect in program order"). Non-top-level
-  defclass/defgeneric/defmethod -> "only supported as a top-level form", with ONE
-  exception: a `defmethod` or `defgeneric` anywhere in a top-level `let`/`let*` body (the
-  closure-over-let idiom) is registered statically by
-  `expandLetNestedDefmethods`/`rewriteNestedDefmethods` while its body defun stays in the
-  let (a global-closure `setq`). A nested `defgeneric` (`expandNestedDefgeneric`) leaves
+  the earlier table: "Method definitions take effect in program order"). A `defmethod` or
+  `defgeneric` below a top-level form that is no definition of its own is registered
+  statically by `expandNestedDefmethods`/`rewriteNestedDefmethods` while its body defun stays
+  where the method stood (a global-closure `setq`): first the closure-over-let idiom, a
+  top-level `let`/`let*` body. A nested `defgeneric` (`expandNestedDefgeneric`) leaves
   its `(:method ...)` clauses' defuns plus `'name` in place; the dispatcher goes after the
   let. cl-qrencode's `rs-ecc.lisp` needs it (2026-10-31: `encode-symbol` agrees on all
   four). A top-level `flet`/`labels` is the same shape (body at index 2) and takes the same
   path since 2026-11-06: eclector's `messages-english.lisp` puts two `report-condition` methods
   under `(flet ((package-name* ...)) ...)`, which failed every compile of eclector, and so of
-  coalton. ci-spec `generics-defined-in-a-top-level-let-close-over-it`.
-  `defclass`/`define-condition`/`defstruct` in a let stay refused: their initforms
-  are inlined into top-level constructors (the class's and every subclass's) and the
-  metaobject table, so they cannot close over the let, and hoisting a capture-free one
-  would have to happen before the many earlier top-level scans that look for definers. No
-  program needing it is known.
+  coalton. ci-spec `generics-defined-in-a-top-level-let-close-over-it`. Since 2026-11-07 any
+  other such form takes it too -- a conditional, a loop, a function body -- and a `defclass`
+  or `define-condition` there is hoisted ("A class defined below the top level"). A
+  `defstruct` below the top level stays refused.
 - **`defclass` answers the class object** (CLHS; the name until 2026-10-31): the interpreter's
   `evalDefclass` returns `classMetaobject`, `find-class`'s object. `define-condition`, evaluated
   through it, still answers the NAME (CLHS): the same day's switch had made it the object too,
@@ -388,7 +445,8 @@ sort in `computeCpl`; inconsistent local orders are an `IllegalArgumentException
   is hoisted to top level instead of guarded, so the fall-through itself never reads
   an unassigned global. Combined-method branches are guarded conservatively: the
   whole branch is skipped when ANY nested participant is unassigned, even when the
-  remaining ones could still run (residual).
+  remaining ones could still run (residual), but for a program carrying the run-time
+  arm, where such a call takes the arm ("A class defined below the top level").
 - **`make-instance`/`slot-value`** are `CL_MACROS`, expanding at the three dispatch sites
   (`evalCons` + both ExprCompilers); a literal quoted name gets the static expansion.
   `expandSetf` has a `closRegistry` parameter with a SLOT_VALUE place case. `#'make-instance`
@@ -1638,7 +1696,7 @@ methods merge), `find-method`, `method-qualifiers`, `compute-applicable-methods`
   generic with run-time methods computes every applicable method's entry on every call (no
   effective-method cache): the figure editor's 1000 runs do not finish in minutes.
 - Pinned by ci-spec standalone `generic-function-protocol` (SBCL 2.2.9 + closer-mop agrees) and
-  `ContextlE2eTest` (contextl's `test/layer-gc.lisp` at top level).
+  `ContextlE2eTest` (contextl's `test/layer-gc.lisp`, its loop included).
 
 ### Layered classes (contextl's `define-layered-class`)
 On all four backends since 2026-11-01 (h89 item 1): layered accessors, partial classes, special
@@ -1740,8 +1798,9 @@ chunk-loop wrapper).
   default method.
 - Still OUT of the MOP (classes are compile-time-static; `--optimize` DCE and the dispatch
   tables depend on it): runtime class construction beyond `make-instance` of a metaclass
-  ("Classes made at run time": `ensure-class` from computed data, a non-top-level `defclass`, a
-  class made at run time with slots), `update-instance-for-*`.
+  ("Classes made at run time": `ensure-class` from computed data, a class made at run time with
+  slots), `update-instance-for-*`. A literal `defclass` below the top level is IN ("A class
+  defined below the top level").
   Methods made at run time are IN ("The generic-function protocol"). Class REdefinition of a
   statically-known name is IN; redefinition from computed data is out.
 - **Known static-model seam**: on the compile paths `find-class`/`class-of` see the WHOLE
@@ -1791,11 +1850,12 @@ chunk-loop wrapper).
   instead of 1000 ("Layered classes", "Instance updating") -- and on the three compile backends
   but for `special-slots-1/2/3`, whose handler `eval`s the class redefinition (a compiled `eval`
   defines no class: measured on the JVM, no output in 120 s -- the handler's `continue` re-enters
-  the `dletf` check forever) and `layer-gc`'s `(loop repeat 2 do ...)` of definitions, which the
-  compile paths refuse ("DEFCLASS is only supported as a top-level form"; `ContextlE2eTest` runs
-  its body once at top level). The full 1000-run `fe` is a benchmark: on the JVM its untimed and
-  timed non-layered halves took 172 s each and the layered half did not finish in the rest of
-  500 s (layered functions dispatch their run-time methods afresh on every call).
+  the `dletf` check forever). `layer-gc`'s `(loop repeat 2 do ...)` of definitions, which the
+  compile paths refused ("DEFCLASS is only supported as a top-level form") until 2026-11-07, runs
+  as written ("A class defined below the top level"). The full 1000-run `fe` is a benchmark: on
+  the JVM its untimed and timed non-layered halves took 172 s each and the layered half did not
+  finish in the rest of 500 s (layered functions dispatch their run-time methods afresh on every
+  call).
   `ContextlE2eTest` carries `grouped-layers` (`slot-definition-allocation` and the `:allocation`
   reconciliation above), `dynenv` (the slot-access protocol), `spx`, `layer-gc`, `demo3` and the
   figure editors' `call-next-method` shapes. On the compile paths `dynenv` first needed
@@ -1841,7 +1901,7 @@ chunk-loop wrapper).
 ## Tests
 Core: `LispEvaluatorTest#defgeneric*`/`defclass*`/`defmethod*`/`closInUserPackage`,
 `JvmLispCompilerTest#compileAndRunDefgeneric*`/`compileAndRunDefclass*`/
-`compileAndRunMacroCallingGenericAtExpansionTime`/`compileNestedDefmethodFails` and the WASM
+`compileAndRunMacroCallingGenericAtExpansionTime` and the WASM
 twins, `UserMacroExpanderTest#defmethodLambdaListStaysVerbatim*`/`defclassKeepsNamesAndOptions*`/
 `macroBodyMayCallAGenericFunctionAtExpansionTime`,
 `LispMacroExpanderTest.theDispatcherLastResortIsOneCallOfTheSharedNoApplicableMethodSignal`,
@@ -1877,6 +1937,7 @@ ci-spec: `clos-defgeneric-defmethod-eql-dispatch`,
 `clos-computed-change-class`, `clos-reinitialize`,
 `clos-slot-options-and-metaobject-types`, `clos-defmethod-eql-specializer-over-a-constant`,
 `clos-defmethod-bit-vector-specializer`, `clos-print-object-method-defined-below-its-first-use`,
+`classes-and-methods-defined-below-the-top-level`,
 `package-defmethod-specializer`, `defmethod-on-a-builtin-name-keeps-the-builtin`,
 `defgeneric-short-form-method-combination`, `find-class-metaobject-substrate`,
 `defclass-metaclass-protocol`, `mop-widening-for-mito`,

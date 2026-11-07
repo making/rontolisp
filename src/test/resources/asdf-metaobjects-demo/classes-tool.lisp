@@ -102,11 +102,16 @@
 (defmethod asdf:operation-done-p ((op generate-op) (c generated-file))
   nil)
 
+;; Written beside the output and renamed onto it: AsdfMetaobjectsE2eTest builds on its
+;; four backends at once, and a :supersede of the output itself let one build read the
+;; file another had just emptied.
 (defmethod asdf:perform ((op generate-op) (c generated-file))
-  (let ((spec (with-open-file (in (first (asdf:input-files op c))) (read in))))
-    (with-open-file (out (first (asdf:output-files op c))
-                         :direction :output :if-exists :supersede)
-      (print `(defvar ,(first spec) ',(second spec)) out))))
+  (let* ((spec (with-open-file (in (first (asdf:input-files op c))) (read in)))
+         (output (first (asdf:output-files op c)))
+         (written (format nil "~A.~36R" (namestring output) (random (expt 36 8) (make-random-state t)))))
+    (with-open-file (out written :direction :output :if-exists :supersede)
+      (print `(defvar ,(first spec) ',(second spec)) out))
+    (rename-file written output)))
 
 ;; coalton-asdf: extending ASDF from inside its package, the keyword finding the class
 ;; there, the file type in the slot's initform.

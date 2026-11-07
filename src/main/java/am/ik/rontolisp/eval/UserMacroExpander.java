@@ -122,7 +122,7 @@ public final class UserMacroExpander {
 				&& program.stream().noneMatch(UserMacroExpander::usesDefineSymbolMacro)
 				&& program.stream().noneMatch(UserMacroExpander::usesReadEvalMarker)
 				&& program.stream().noneMatch(UserMacroExpander::isParameterizedDeftype)
-				&& program.stream().noneMatch(UserMacroExpander::isMetaclassDefclass) && !asksWhatWasRead) {
+				&& program.stream().noneMatch(UserMacroExpander::holdsMetaclassDefclass) && !asksWhatWasRead) {
 			return program;
 		}
 		Session session = new Session(false, features);
@@ -1386,6 +1386,9 @@ public final class UserMacroExpander {
 			if (allDefinitions) {
 				replayDefinition(form, macroEval);
 			}
+			else {
+				replayNestedMetaclassDefclasses(form, macroEval);
+			}
 			return;
 		}
 		if (isDefinitionForm(form)) {
@@ -1408,7 +1411,9 @@ public final class UserMacroExpander {
 		if (isOperator(form, LispNames.DEFVAR) || isOperator(form, LispNames.DEFPARAMETER)
 				|| isOperator(form, LispNames.DEFCONSTANT)) {
 			macroEval.registerLazyGlobal(form);
+			return;
 		}
+		replayNestedMetaclassDefclasses(form, macroEval);
 	}
 
 	/** A provenance-marker form, matched by member name in any package spelling. */
@@ -1502,8 +1507,9 @@ public final class UserMacroExpander {
 	}
 
 	/**
-	 * Rewrites every top-level {@code :metaclass} defclass in the form (a bare one, or
-	 * members of a top-level {@code progn} a macro expanded into) onto the
+	 * Rewrites every {@code :metaclass} defclass in the form -- a bare one, a member of a
+	 * {@code progn} a macro expanded into, or one below a conditional or a loop
+	 * ({@code .kb/clos.md}, "A class defined below the top level") -- onto the
 	 * direct-superclass list its driver-built metaobject holds in the macro-time
 	 * evaluator ({@link LispEvaluator#widenedMetaclassDefclassOrNull}); forms without an
 	 * injection come back identical.
@@ -1513,18 +1519,64 @@ public final class UserMacroExpander {
 			LispCons widened = macroEval.widenedMetaclassDefclassOrNull(defclass);
 			return widened != null ? widened : form;
 		}
-		if (isOperator(form, LispNames.PROGN) && form instanceof LispCons progn && progn.isProperList()) {
-			List<LispVal> parts = progn.toList();
-			List<LispVal> out = new ArrayList<>(parts.size());
-			boolean changed = false;
-			for (LispVal member : parts) {
-				LispVal widened = widenMetaclassDefclasses(member, macroEval);
-				changed = changed || widened != member;
-				out.add(widened);
-			}
-			return changed ? properList(out) : form;
+		if (!(form instanceof LispCons cons) || isOperator(form, LispNames.QUOTE) || !cons.isProperList()
+				|| !holdsMetaclassDefclass(form)) {
+			return form;
 		}
-		return form;
+		List<LispVal> parts = cons.toList();
+		List<LispVal> out = new ArrayList<>(parts.size());
+		boolean changed = false;
+		for (LispVal member : parts) {
+			LispVal widened = widenMetaclassDefclasses(member, macroEval);
+			changed = changed || widened != member;
+			out.add(widened);
+		}
+		return changed ? SourceProvenance.inherit(cons, properList(out)) : form;
+	}
+
+	/**
+	 * Whether a {@code :metaclass} defclass stands anywhere in the form outside quoted
+	 * data.
+	 */
+	private static boolean holdsMetaclassDefclass(LispVal form) {
+		if (!(form instanceof LispCons cons) || isOperator(form, LispNames.QUOTE)) {
+			return false;
+		}
+		if (isMetaclassDefclass(form)) {
+			return true;
+		}
+		for (LispVal cell = cons; cell instanceof LispCons c; cell = c.cdr()) {
+			if (holdsMetaclassDefclass(c.car())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Replays each {@code :metaclass} defclass below a top-level form that is no
+	 * definition into the macro-time evaluator, in order, so the compile paths register
+	 * the class from what its metaclass protocol makes of it, as a top-level one's
+	 * ({@link #widenMetaclassDefclasses}): contextl's {@code deflayer} in a {@code loop}
+	 * gains its {@code standard-layer-object} superclass there. A definition that cannot
+	 * run here keeps the form as written.
+	 */
+	private static void replayNestedMetaclassDefclasses(LispVal form, LispEvaluator macroEval) {
+		if (!(form instanceof LispCons cons) || isOperator(form, LispNames.QUOTE)) {
+			return;
+		}
+		if (isMetaclassDefclass(form)) {
+			try {
+				macroEval.evalResolved(form);
+			}
+			catch (RuntimeException ex) {
+				// The static registration takes the form as written.
+			}
+			return;
+		}
+		for (LispVal cell = cons; cell instanceof LispCons c; cell = c.cdr()) {
+			replayNestedMetaclassDefclasses(c.car(), macroEval);
+		}
 	}
 
 	/**

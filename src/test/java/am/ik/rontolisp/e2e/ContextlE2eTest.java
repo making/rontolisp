@@ -36,17 +36,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  * protocol ({@code .kb/clos.md}), as its {@code test/dynenv.lisp} does, and special layer
  * slots bound by a layer activation's initargs, singleton classes and layers redefined
  * with and without {@code :reinitialize t} slots, and a layer forgotten with
- * {@code layer-makunbound}, as its {@code test/spx.lisp} does. Every activation makes an
- * anonymous {@code standard-layer-class} at RUN time and dispatches on its prototype,
- * which prints through contextl's {@code print-object} method ({@code .kb/clos.md},
- * "Classes made at run time"). The last line prints {@code contextl-user} symbols inside
- * a form that activates a layer, which the interpreter used to spell qualified
- * ({@code .kb/pretty-printer.md}, "The package qualifier follows `*package*`
- * accessibility"). Then contextl's {@code test/demo3.lisp} and figure editor:
- * {@code define-layered-class} with layered accessors, defined again {@code :in} a layer
- * (partial classes, one gaining a superclass, one giving an existing instance a special
- * slot), {@code slot-value-using-layer} over a {@code :layered} slot, and
- * {@code call-next-method} a macro builds or a method passes as a value
+ * {@code layer-makunbound}, as its {@code test/spx.lisp} does, and its
+ * {@code test/layer-gc.lisp} as written, the layer classes and layered methods defined in
+ * a {@code (loop repeat 2 do ...)} ({@code .kb/clos.md}, "A class defined below the top
+ * level"). Every activation makes an anonymous {@code standard-layer-class} at RUN time
+ * and dispatches on its prototype, which prints through contextl's {@code print-object}
+ * method ({@code .kb/clos.md}, "Classes made at run time"). The last line prints
+ * {@code contextl-user} symbols inside a form that activates a layer, which the
+ * interpreter used to spell qualified ({@code .kb/pretty-printer.md}, "The package
+ * qualifier follows `*package*` accessibility"). Then contextl's {@code test/demo3.lisp}
+ * and figure editor: {@code define-layered-class} with layered accessors, defined again
+ * {@code :in} a layer (partial classes, one gaining a superclass, one giving an existing
+ * instance a special slot), {@code slot-value-using-layer} over a {@code :layered} slot,
+ * and {@code call-next-method} a macro builds or a method passes as a value
  * ({@code .kb/clos.md}, "Layered classes").
  */
 class ContextlE2eTest extends AsdfLibraryE2eSupport {
@@ -177,6 +179,7 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			(defvar *default-context*)
 			(defvar *new-context*)
 			(defclass my-layer-class (standard-layer-class) ())
+			(loop repeat 2 do
 			(clear-layer-caches)
 			(defclass my-layer-class (standard-layer-class) ())
 			(define-layered-method adjoin-layer-using-class :after
@@ -337,7 +340,7 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			(assert *removed*)
 			(setf *removed* nil)
 			(remove-layer 'bar *new-context*)
-			(assert (not *removed*))
+			(assert (not *removed*)))
 			(define-layered-class person ()
 			  ((name :initarg :name :layered-accessor person-name)))
 			(define-layered-function display-object (object))
@@ -393,9 +396,9 @@ class ContextlE2eTest extends AsdfLibraryE2eSupport {
 			"((:OUTPUT) ((:PLAIN :OUTPUT) ((:HTML :OUTPUT) ((:XML :OUTPUT) (:PLAIN :OUTPUT)))))",
 			"(NIL (1 2) (2 3) (2 3) NIL)", "(10 (20 20) 10 NIL)", "\"#<LAYER NIL>\"",
 			"(INFO-LAYER INFO-LAYER (INFO-LAYER T))", "(FOO BAR (4711 BAR) FOO)", "(1 1)", "(2 2)", "3", "(4 5 5)",
-			"(FOO 6 6)", "(NIL LAYER3)", "1", "2", "3", "4", "5", "6", "7", "8", "(PERSON :NAME ROB)",
-			"(PERSON :NAME ROB :CITY ILM :EMPLOYER (EMPLOYER :NAME DOC :CITY MUC))", "(NIL (NAME CITY) NIL)",
-			"(ROB (ROB :SLOT-ACCESS))", "((1 1) (:THUNK 2))", ":DONE");
+			"(FOO 6 6)", "(NIL LAYER3)", "1", "2", "3", "4", "5", "6", "7", "8", "1", "2", "3", "4", "5", "6", "7", "8",
+			"(PERSON :NAME ROB)", "(PERSON :NAME ROB :CITY ILM :EMPLOYER (EMPLOYER :NAME DOC :CITY MUC))",
+			"(NIL (NAME CITY) NIL)", "(ROB (ROB :SLOT-ACCESS))", "((1 1) (:THUNK 2))", ":DONE");
 
 	/**
 	 * A handler {@code eval}s a redefinition that makes the slot of an existing instance

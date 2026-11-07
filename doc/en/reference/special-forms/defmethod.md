@@ -73,7 +73,7 @@ Inside a primary or `:around` method, `(call-next-method)` invokes the next less
 (describe-point (make-instance 'point3d :x 1 :z 3)) ; => (:POINT (:X 1 :Z 3))
 ```
 
-Lite subset: standard method combination is supported for class and default methods (an `:around`/`:before`/`:after` with an `eql` or built-in-type specializer combines only with primaries of the same specializer plus the default method). On the compilation path `defmethod` is only supported as a top-level form or inside the body of a top-level `let`/`let*`, whose bindings the method body may close over; the methods a compiled program can dispatch to are fixed at compile time. A method takes effect where its form runs, on every backend: a call that runs before the form does not see it.
+Lite subset: standard method combination is supported for class and default methods (an `:around`/`:before`/`:after` with an `eql` or built-in-type specializer combines only with primaries of the same specializer plus the default method). On the compilation path `defmethod` is supported below the top level too -- in a `let`/`let*` body, whose bindings the method body may close over, under a conditional, in a loop, in a function body; the methods a compiled program can dispatch to are fixed at compile time. A method takes effect where its form runs, on every backend: a call that runs before the form does not see it.
 
 ## A method on a built-in name
 

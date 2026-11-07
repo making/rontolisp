@@ -169,8 +169,9 @@ verification against the actual Quicklisp dist at probe time)
   - Load and match SBCL: `chanl` (bounded/unbounded channels, `select`, `pexec`; JVM too),
     `deploy` (`deploy-op` over `program-op`; `asdf:make` refuses, i83).
   - Load, wrong result: `cl-conspack` (doubles encoded as float32, i90; JVM the same).
-  - Interpreter only: `snooze` (`handle-request` as SBCL; JVM i91).
-  - Since loaded: `cl-unification` (all four, as SBCL; `.kb/asdf.md`, "Libraries that load"),
+  - Since loaded: `snooze` (since i91, 2026-11-07: a `defroute`'s `handle-request` results as
+    SBCL on all four and `--native`; `.kb/clos.md`, "A class defined below the top level"),
+    `cl-unification` (all four, as SBCL; `.kb/asdf.md`, "Libraries that load"),
     `sycamore` (since i85: ropes, tree sets / maps, hash sets and `cgen`'s `|?:|` as SBCL on the
     interpreter, the JVM and P1), `40ants-doc` (interpreter, as SBCL, since i87; the compile paths
     stop in serapeum on i99).

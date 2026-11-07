@@ -15615,13 +15615,6 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileNestedDefmethodFails() {
-		assertThatThrownBy(() -> compileAndRun("(defun f () (defmethod g (x) x)) (f)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("DEFMETHOD is only supported as a top-level form");
-	}
-
-	@Test
 	void compilePrintObjectMethodDefinedBelowItsFirstUse() throws Exception {
 		// A print-object method defined BELOW its first use used to crash
 		// with a raw NullPointerException (the whole-program registry routes the

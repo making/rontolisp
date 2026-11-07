@@ -28289,7 +28289,9 @@ public final class LispMacroExpander {
 	 * The {@code (%gf-static-method-added ...)} form handing the method a
 	 * {@code defmethod} defined to {@code add-method} as a method metaobject, for a
 	 * generic whose {@code defgeneric} named its metaobject classes (contextl's layered
-	 * functions); null for any other generic, a nested method, or an unknown key.
+	 * functions); null for any other generic or an unknown key. A method defined below
+	 * the top level is handed over through the variable its body is held in, so the form
+	 * belongs where that definition runs.
 	 * @param generic the generic
 	 * @param key the method's key
 	 * @param closRegistry the registry
@@ -28298,12 +28300,13 @@ public final class LispMacroExpander {
 	public static @Nullable LispVal staticMethodAdded(ClosRegistry.GenericInfo generic, String key,
 			ClosRegistry closRegistry) {
 		ClosRegistry.MethodInfo method = generic.methods().get(key);
-		if (method == null || (generic.genericFunctionClass() == null && generic.methodClass() == null)
-				|| closRegistry.isNestedMethodFunction(method.functionName())) {
+		if (method == null || (generic.genericFunctionClass() == null && generic.methodClass() == null)) {
 			return null;
 		}
 		LispVal call = staticMethodCall("%GF-STATIC-METHOD-ADDED", generic, key, method,
-				functionRef(method.functionName()), closRegistry);
+				closRegistry.isNestedMethodFunction(method.functionName()) ? new LispSymbol(method.functionName())
+						: functionRef(method.functionName()),
+				closRegistry);
 		return new LispCons(((LispCons) call).car(),
 				new LispCons(quotedData(new LispSymbol(generic.name())), ((LispCons) call).cdr()));
 	}
@@ -29675,6 +29678,19 @@ public final class LispMacroExpander {
 						if (seen.add(test.print())) {
 							tests.add(test);
 						}
+					}
+				}
+			}
+			// So does every call while a method defined below the top level has not been
+			// defined yet: the static branch skips each method it combines with it
+			// (nestedBranchGuard), the run-time combination only the method itself
+			// (contextl's layer GC, whose methods a loop defines one after another).
+			for (ClosRegistry.MethodInfo m : generic.methods().values()) {
+				if (closRegistry.isNestedMethodFunction(m.functionName())) {
+					LispVal unassigned = listToCons(
+							List.of(new LispSymbol(LispNames.NULL), new LispSymbol(m.functionName())));
+					if (seen.add(unassigned.print())) {
+						tests.add(unassigned);
 					}
 				}
 			}
@@ -31414,6 +31430,12 @@ public final class LispMacroExpander {
 		// A (defun (setf name) ...) below the top level (over a let, in a function body)
 		// takes its writer's name here, so every later pass sees a symbol-named defun.
 		program = renameNestedSetfFunctionDefuns(program, structAccessors);
+		// A defclass or define-condition below the top level -- snooze's (unless
+		// (find-class 'text nil) ... (defclass text ...)) -- is hoisted ahead of the
+		// form it stands in, where every scan below and the walk see a top-level
+		// definition, and leaves a marker where what it runs as it is defined goes back.
+		NestedClassDefinitions.Split nestedClasses = NestedClassDefinitions.split(program);
+		program = nestedClasses.program();
 		// A defclass carrying (:metaclass M) switches the metaclass protocol on: the
 		// protocol's default methods and driver (MopProtocol) are PREPENDED so the walk
 		// below registers them like user definitions -- ahead of the reference scans,
@@ -31529,7 +31551,12 @@ public final class LispMacroExpander {
 		// naming either needs class-of as well.
 		// A run-time (setf (find-class ...)) (contextl's layer-makunbound): the public
 		// find-class consults its overrides, and every defclass ends one.
-		boolean findClassOverrides = usesRuntimeSetfFindClass(program);
+		boolean runtimeSetfFindClass = usesRuntimeSetfFindClass(program);
+		// A class defined below the top level is no class the public find-class answers
+		// until a definition of it has run: its names start out as forgotten overrides,
+		// which each of its definitions ends where it runs.
+		java.util.Set<String> pendingClasses = findClassDefun ? nestedClasses.classNames() : java.util.Set.of();
+		boolean findClassOverrides = runtimeSetfFindClass || !pendingClasses.isEmpty();
 		boolean metaobjectRuntime = findClassDefun || referencesClassOf(program) || classDirectSubclasses
 				|| findClassOverrides || program.stream()
 					.anyMatch(f -> usesSymbol(f, LispNames.SLOT_UNBOUND) || usesSymbol(f, LispNames.SLOT_MISSING));
@@ -31617,7 +31644,7 @@ public final class LispMacroExpander {
 				&& !changeClassRuntime && !readsSlots(program) && !closRegistry.routesConditionReports()
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || structDefinitionPayload(f) != null || isClosDefinitionForm(f)
-							|| isSetfFunctionDefun(f) || isLetWithNestedMethodDefinition(f)
+							|| isSetfFunctionDefun(f) || holdsNestedMethodDefinition(f)
 							|| isNamedForm(f, LispNames.DEFTYPE) || deftypeInstanceDeclamation(f) != null)) {
 			// No definitions to splice, so the registry stays as seeded: a #S(...)
 			// literal
@@ -31642,6 +31669,10 @@ public final class LispMacroExpander {
 		// nil-ed, the static "last definition wins" half of the redefinition story
 		// (the runtime half is the driver's reinitialize-instance path).
 		java.util.Map<String, Integer> classDefunSlots = new java.util.HashMap<>();
+		// What each class definition hoisted from below the top level runs where it
+		// stood,
+		// by its marker's id: filled at the definition, which precedes its form.
+		java.util.Map<Integer, List<LispVal>> nestedRuns = new java.util.HashMap<>();
 		int formIndex = -1;
 		for (LispVal rawForm : program) {
 			formIndex++;
@@ -31651,6 +31682,11 @@ public final class LispMacroExpander {
 			// read-time rule, which a whole-program fold after the walk would silently
 			// relax.
 			LispVal form = StructLiteralFolder.fold(rawForm, closRegistry);
+			if (nestedClasses.marked().contains(rawForm)) {
+				form = NestedClassDefinitions.substitute(form, nestedRuns);
+			}
+			Integer nestedId = nestedClasses.ids().get(rawForm);
+			int definitionStart = out.size();
 			if (isSetfFunctionDefun(form)) {
 				// (defun (setf name) ...) -> a plain (defun %setf-name ...); register the
 				// place so (setf (name ...) v) expands to a call through the writer
@@ -31683,16 +31719,12 @@ public final class LispMacroExpander {
 				// expansion + dispatcher placement as a top-level defmethod.
 				addExpandedClass(expandDefclass((LispCons) form, closRegistry, structAccessors), out, closRegistry,
 						structAccessors, classDefunSlots, dispatcherSlots, placedDispatchers);
-				if (findClassOverrides && ((LispCons) form).cdr() instanceof LispCons named
-						&& named.car() instanceof LispSymbol className) {
-					// A class defined again after it was forgotten is found again.
-					out.add(listToCons(
-							List.of(new LispSymbol(LispNames.FIND_CLASS_DEFINED), quoteOf(className.name()))));
-				}
+				List<LispVal> defined = classDefinedForms((LispCons) form, runtimeSetfFindClass, pendingClasses);
 				if (formIndex == lastTrackedRedefinition) {
 					// No definition left to update the instances made so far.
-					out.add(listToCons(List.of(new LispSymbol(END_INSTANCE_TRACKING))));
+					defined.add(listToCons(List.of(new LispSymbol(END_INSTANCE_TRACKING))));
 				}
+				placeClassDefinitionRuns(nestedId, out, definitionStart, defined, nestedRuns);
 			}
 			else if (isNamedForm(form, LispNames.DEFINE_CONDITION)) {
 				// A condition type is an ordinary CLOS-subset class over the built-in
@@ -31702,6 +31734,8 @@ public final class LispMacroExpander {
 						expandDefclass((LispCons) defineConditionToDefclass((LispCons) form, closRegistry),
 								closRegistry, structAccessors),
 						out, closRegistry, structAccessors, classDefunSlots, dispatcherSlots, placedDispatchers);
+				placeClassDefinitionRuns(nestedId, out, definitionStart,
+						classDefinedForms((LispCons) form, false, pendingClasses), nestedRuns);
 			}
 			else if (isNamedForm(form, LispNames.DEFGENERIC)) {
 				List<LispVal> methodDefuns = new java.util.ArrayList<>();
@@ -31765,7 +31799,7 @@ public final class LispMacroExpander {
 				registerDefconstant((LispCons) form, closRegistry);
 				out.add(form);
 			}
-			else if (isLetWithNestedMethodDefinition(form)) {
+			else if (holdsNestedMethodDefinition(form)) {
 				// The closure-over-let method idiom (cl-ppcre's
 				// build-replacement-template capturing reg-scanner): each defmethod (and
 				// defgeneric) in the let's body is registered and expanded in place, so
@@ -31773,8 +31807,10 @@ public final class LispMacroExpander {
 				// method-body defun stays INSIDE the let and compiles to (setq name
 				// (lambda ...)) -- a global closure the dispatcher (placed at top
 				// level, after the let) reaches through the call-through-variable
-				// fallback.
-				expandLetNestedDefmethods((LispCons) form, closRegistry, out, dispatcherSlots, placedDispatchers,
+				// fallback. A definition under a conditional, in a loop or in a function
+				// body takes the same path (snooze's (unless (find-resource 'r)
+				// (defgeneric r ...))).
+				expandNestedDefmethods((LispCons) form, closRegistry, out, dispatcherSlots, placedDispatchers,
 						structAccessors);
 			}
 			else {
@@ -31869,8 +31905,17 @@ public final class LispMacroExpander {
 			out.addAll(findClassRuntimeDefuns(findClassDefun, findClassOverrides));
 			out.addAll(0, classMetaTableForms(closRegistry));
 			if (findClassOverrides) {
-				out.add(0, listToCons(List.of(new LispSymbol(LispNames.DEFVAR),
-						new LispSymbol(LispNames.FIND_CLASS_OVERRIDES), LispNil.INSTANCE)));
+				// A pending class starts out forgotten: (spelling) is (spelling . nil).
+				List<LispVal> forgotten = new java.util.ArrayList<>();
+				for (String pending : pendingClasses) {
+					for (String pendingName : pendingClassSpellings(pending, pending)) {
+						forgotten.add(new LispCons(new LispSymbol(pendingName), LispNil.INSTANCE));
+					}
+				}
+				out.add(0,
+						listToCons(List.of(new LispSymbol(LispNames.DEFVAR),
+								new LispSymbol(LispNames.FIND_CLASS_OVERRIDES),
+								forgotten.isEmpty() ? LispNil.INSTANCE : quotedData(listToCons(forgotten)))));
 			}
 			if (classDirectSubclasses) {
 				out.addAll(classDirectSubclassesDefuns(closRegistry));
@@ -32840,6 +32885,78 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * What a class definition ends as it runs, in the public {@code find-class}'s
+	 * overrides: the forgetting of its name a run-time {@code (setf find-class)} made
+	 * ({@code everyClass}, a {@code defclass} of a program carrying one), and the pending
+	 * state of a class defined below the top level, under every spelling a run-time name
+	 * can take ({@link #pendingClassSpellings}).
+	 * @param definition the {@code defclass} or {@code define-condition}
+	 * @param everyClass whether every class ends its name's forgetting
+	 * @param pendingClasses the normalized names of the pending classes
+	 * @return the {@code %find-class-defined} calls, a fresh list
+	 */
+	private static List<LispVal> classDefinedForms(LispCons definition, boolean everyClass,
+			java.util.Set<String> pendingClasses) {
+		List<LispVal> forms = new java.util.ArrayList<>();
+		if (!(definition.cdr() instanceof LispCons named) || !(named.car() instanceof LispSymbol className)) {
+			return forms;
+		}
+		String normalized = ClosRegistry.normalize(className.name());
+		if (pendingClasses.contains(normalized)) {
+			for (String spelling : pendingClassSpellings(normalized, className.name())) {
+				forms.add(listToCons(List.of(new LispSymbol(LispNames.FIND_CLASS_DEFINED), quoteOf(spelling))));
+			}
+		}
+		else if (everyClass) {
+			forms.add(listToCons(List.of(new LispSymbol(LispNames.FIND_CLASS_DEFINED), quoteOf(className.name()))));
+		}
+		return forms;
+	}
+
+	/**
+	 * The spellings the public {@code find-class} may be asked a pending class under: the
+	 * written one and every designator spelling ({@link #addDesignatorSpellings}).
+	 */
+	private static java.util.Set<String> pendingClassSpellings(String normalized, String written) {
+		java.util.Set<String> spellings = new java.util.LinkedHashSet<>();
+		addDesignatorSpellings(spellings, normalized);
+		spellings.add(written);
+		return spellings;
+	}
+
+	/**
+	 * Puts what a class definition does as it runs where it runs. A top-level definition
+	 * runs it at top level: {@code ended} follows the definition's forms. A definition
+	 * hoisted from below the top level ({@link NestedClassDefinitions}) runs it where it
+	 * stood: its metaclass protocol's driver, and the definition's {@code ended} forms,
+	 * leave the definition's top-level forms (a {@code nil} keeps every index the walk
+	 * recorded) for its marker, whose form follows. Its constructor and accessors are
+	 * definitions, and its class-allocated cells are initialized once, so they stay.
+	 * @param nestedId the marker id of a hoisted definition, or null
+	 * @param out the walk's output
+	 * @param start where the definition's forms begin in {@code out}
+	 * @param ended what the definition ends as it runs ({@link #classDefinedForms})
+	 * @param nestedRuns mutated: the forms each hoisted definition runs, by id
+	 */
+	private static void placeClassDefinitionRuns(@Nullable Integer nestedId, List<LispVal> out, int start,
+			List<LispVal> ended, java.util.Map<Integer, List<LispVal>> nestedRuns) {
+		if (nestedId == null) {
+			out.addAll(ended);
+			return;
+		}
+		List<LispVal> runs = new java.util.ArrayList<>();
+		for (int i = start; i < out.size(); i++) {
+			if (isNamedForm(out.get(i), LispNames.ENSURE_CLASS_WITH_METACLASS)
+					|| isNamedForm(out.get(i), LispNames.SLOT_PROTOCOL_INHERIT_INITFUNCTIONS)) {
+				runs.add(out.get(i));
+				out.set(i, LispNil.INSTANCE);
+			}
+		}
+		runs.addAll(ended);
+		nestedRuns.put(nestedId, runs);
+	}
+
+	/**
 	 * Marks where a class still waits at the end of the program for a superclass nothing
 	 * defines: an interpreter only refuses its instances, and so does the compiled
 	 * program, but a whole-program compile can also say so.
@@ -32988,6 +33105,49 @@ public final class LispMacroExpander {
 		return false;
 	}
 
+	/**
+	 * Whether the form holds a {@code defmethod} or {@code defgeneric} below its top
+	 * level that the walk registers where it stands: a top-level {@code let},
+	 * {@code let*}, {@code flet} or {@code labels}
+	 * ({@link #isLetWithNestedMethodDefinition}), or any other form that is no definition
+	 * of its own -- a conditional, a loop, a function body (snooze's
+	 * {@code (unless (find-resource 'r) (defgeneric r ...))}).
+	 */
+	private static boolean holdsNestedMethodDefinition(LispVal form) {
+		if (isLetWithNestedMethodDefinition(form)) {
+			return true;
+		}
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()
+				|| LispNames.isQuote(op.name()) || isClosDefinitionForm(form) || isDefstructForm(form)
+				|| isNamedForm(form, LispNames.DEFTYPE)) {
+			return false;
+		}
+		return definesMethodsOrGenerics(form);
+	}
+
+	/**
+	 * Whether a cons headed by {@code defmethod} or {@code defgeneric} has a definition's
+	 * shape -- a function name and a lambda list -- rather than being a list a
+	 * {@code case} clause or data spells with the operator's name.
+	 */
+	private static boolean isMethodDefinitionShape(LispCons cons, boolean method) {
+		if (!cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol name && !name.isKeyword()
+				|| LambdaLists.setfFunctionPlaceName(parts.get(1)) != null)) {
+			return false;
+		}
+		// A method's qualifiers are atoms ahead of its lambda list.
+		for (int i = 2; i < parts.size() && (method || i == 2); i++) {
+			if (parts.get(i) instanceof LispCons || parts.get(i) instanceof LispNil) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private static boolean definesMethodsOrGenerics(LispVal form) {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
@@ -32995,7 +33155,8 @@ public final class LispMacroExpander {
 				if (LispNames.isQuote(member)) {
 					return false;
 				}
-				if (LispNames.DEFMETHOD.equals(member) || LispNames.DEFGENERIC.equals(member)) {
+				if ((LispNames.DEFMETHOD.equals(member) || LispNames.DEFGENERIC.equals(member))
+						&& isMethodDefinitionShape(cons, LispNames.DEFMETHOD.equals(member))) {
 					return true;
 				}
 			}
@@ -33008,37 +33169,46 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands the {@code defmethod} forms in a top-level {@code let}/{@code let*} body in
-	 * place: each is registered with the registry and replaced by its method-body defun
-	 * (which, being nested, compiles to a global-closure {@code setq}); the rebuilt let
-	 * is added to {@code out} and each generic's dispatcher slot is reserved at top level
-	 * after it. A defmethod that is a DIRECT body member has its expansion progn spliced
-	 * into the body (cl-ppcre's closure-over-let idiom, kept byte-identical); one nested
-	 * DEEPER -- under the {@code labels}/{@code when} structure of a captured
-	 * {@code build-dao-methods} splice (see {@link MopEvalCapture}) -- is rewritten in
-	 * place, its expansion progn standing where the defmethod stood. A method under a
-	 * conditional registers unconditionally (dispatch is static); when the guard is false
-	 * at run time its body global is never assigned, so calling it falls through to the
-	 * default or to no-applicable-method -- the branch is guarded on the body's
-	 * assignment ({@code .kb/clos.md}), which is also what the interpreter answers when
-	 * the defmethod never runs. A {@code defgeneric} at any depth is registered the same
-	 * way ({@link #expandNestedDefgeneric}).
+	 * Expands the {@code defmethod} forms below a top-level form in place
+	 * ({@link #holdsNestedMethodDefinition}): each is registered with the registry and
+	 * replaced by its method-body defun (which, being nested, compiles to a
+	 * global-closure {@code setq}); the rebuilt form is added to {@code out} and each
+	 * generic's dispatcher slot is reserved at top level after it. A defmethod that is a
+	 * DIRECT member of a {@code let} body has its expansion progn spliced into the body
+	 * (cl-ppcre's closure-over-let idiom, kept byte-identical); one nested DEEPER --
+	 * under the {@code labels}/{@code when} structure of a captured
+	 * {@code build-dao-methods} splice (see {@link MopEvalCapture}), or below any other
+	 * top-level form -- is rewritten in place, its expansion progn standing where the
+	 * defmethod stood. A method under a conditional registers unconditionally (dispatch
+	 * is static); when the guard is false at run time its body global is never assigned,
+	 * so calling it falls through to the default or to no-applicable-method -- the branch
+	 * is guarded on the body's assignment ({@code .kb/clos.md}), which is also what the
+	 * interpreter answers when the defmethod never runs. A {@code defgeneric} at any
+	 * depth is registered the same way ({@link #expandNestedDefgeneric}).
 	 */
-	private static void expandLetNestedDefmethods(LispCons letForm, ClosRegistry closRegistry, List<LispVal> out,
+	private static void expandNestedDefmethods(LispCons form, ClosRegistry closRegistry, List<LispVal> out,
 			java.util.Map<Integer, String> dispatcherSlots, java.util.Set<String> placedDispatchers,
 			java.util.Map<String, Integer> structAccessors) {
-		List<LispVal> parts = letForm.toList();
-		List<LispVal> rebuilt = new java.util.ArrayList<>(parts.subList(0, 2));
 		List<String> generics = new java.util.ArrayList<>();
 		List<LispVal> hoisted = new java.util.ArrayList<>();
-		for (LispVal rawBodyForm : parts.subList(2, parts.size())) {
-			if (!isNamedForm(rawBodyForm, LispNames.DEFMETHOD)) {
-				rebuilt.add(rewriteNestedDefmethods(rawBodyForm, closRegistry, generics, structAccessors, hoisted));
-				continue;
+		java.util.Set<String> registeredBefore = new java.util.HashSet<>();
+		closRegistry.generics().values().forEach(info -> registeredBefore.add(ClosRegistry.normalize(info.name())));
+		LispVal rebuilt;
+		if (isLetWithNestedMethodDefinition(form)) {
+			List<LispVal> parts = form.toList();
+			List<LispVal> body = new java.util.ArrayList<>(parts.subList(0, 2));
+			for (LispVal rawBodyForm : parts.subList(2, parts.size())) {
+				if (!isNamedForm(rawBodyForm, LispNames.DEFMETHOD)) {
+					body.add(rewriteNestedDefmethods(rawBodyForm, closRegistry, generics, structAccessors, hoisted));
+					continue;
+				}
+				body.add(expandNestedDefmethod((LispCons) rawBodyForm, closRegistry, structAccessors, generics,
+						hoisted));
 			}
-			LispCons bodyForm = normalizeSetfMethodForm((LispCons) rawBodyForm, structAccessors);
-			rebuilt.add(splitNestedMethodExpansion(expandDefmethod(bodyForm, closRegistry, true), hoisted));
-			generics.add(ClosRegistry.normalize(((LispSymbol) bodyForm.toList().get(1)).name()));
+			rebuilt = listToCons(body);
+		}
+		else {
+			rebuilt = rewriteNestedDefmethods(form, closRegistry, generics, structAccessors, hoisted);
 		}
 		// A synthesized system default (the instance-initialization or print-object
 		// default primary) is position-independent: it closes over nothing, so it is
@@ -33047,30 +33217,73 @@ public final class LispMacroExpander {
 		// the default would sit unassigned beside the user method and even the
 		// fall-through would read an unassigned global.
 		out.addAll(hoisted);
-		out.add(listToCons(rebuilt));
+		out.add(rebuilt);
 		for (String generic : generics) {
 			if (placedDispatchers.add(generic)) {
 				dispatcherSlots.put(out.size(), generic);
 				out.add(LispNil.INSTANCE);
 			}
 		}
+		// A generic an expansion registered on the side (the shared-initialize a first
+		// initialize-instance method chains to) needs its dispatcher too, as at top
+		// level.
+		for (ClosRegistry.GenericInfo info : closRegistry.generics().values()) {
+			String name = ClosRegistry.normalize(info.name());
+			if (!registeredBefore.contains(name) && placedDispatchers.add(name)) {
+				dispatcherSlots.put(out.size(), name);
+				out.add(LispNil.INSTANCE);
+			}
+		}
+	}
+
+	/**
+	 * One {@code defmethod} below the top level: registered, and answered as what stands
+	 * where it stood ({@link #splitNestedMethodExpansion}). Under the generic-function
+	 * protocol a generic naming its metaobject classes hears of the method there, as of a
+	 * top-level one ({@link #staticMethodAdded}), through the variable the nested body is
+	 * held in: contextl's layer GC clears its caches from {@code add-method}.
+	 * @param cons the defmethod
+	 * @param closRegistry the registry
+	 * @param structAccessors mutated: a setf method's place
+	 * @param generics mutated: the method's generic
+	 * @param hoisted mutated: synthesized system defaults for top-level emission
+	 * @return what stands where the method stood
+	 */
+	private static LispVal expandNestedDefmethod(LispCons cons, ClosRegistry closRegistry,
+			java.util.Map<String, Integer> structAccessors, List<String> generics, List<LispVal> hoisted) {
+		LispCons normalized = normalizeSetfMethodForm(cons, structAccessors);
+		String name = ((LispSymbol) normalized.toList().get(1)).name();
+		ClosRegistry.GenericInfo before = closRegistry.findGeneric(name);
+		if (before != null) {
+			before.methodDefined(null, LispNil.INSTANCE);
+		}
+		LispVal inPlace = splitNestedMethodExpansion(expandDefmethod(normalized, closRegistry, true), hoisted);
+		generics.add(ClosRegistry.normalize(name));
+		LispVal added = closRegistry.gfProtocol() ? staticMethodAdded(normalized, closRegistry) : null;
+		return added == null ? inPlace : makeProgn(List.of(inPlace, added));
 	}
 
 	/**
 	 * Splits a nested {@code defmethod} expansion into its hoisted and its in-place
-	 * halves: every member but the last is a synthesized system-default defun and is
+	 * halves: a defun ahead of the last member is a synthesized system default and is
 	 * appended to {@code hoisted} for top-level emission; the last member is the user
-	 * method's own body defun and is answered for the let body. A lone defun (no
-	 * synthesized default) is answered unchanged.
+	 * method's own body defun and stays where the method stood, behind the assignments of
+	 * its computed {@code eql} specializers' cells, which evaluate their forms where the
+	 * method is defined (CLHS 7.6.2; contextl's {@code (eql (find-layer-class 'bar))} in
+	 * a loop that defines {@code bar}). A lone defun is answered unchanged.
 	 * @param expandedMethod the {@code expandDefmethod} result
 	 * @param hoisted mutated: the synthesized system-default defuns, if any
-	 * @return the user method's body defun
+	 * @return what stands where the method stood
 	 */
 	private static LispVal splitNestedMethodExpansion(LispVal expandedMethod, List<LispVal> hoisted) {
 		if (isNamedForm(expandedMethod, LispNames.PROGN) && expandedMethod instanceof LispCons prognCons) {
 			List<LispVal> members = prognCons.toList();
-			hoisted.addAll(members.subList(1, members.size() - 1));
-			return members.get(members.size() - 1);
+			List<LispVal> inPlace = new java.util.ArrayList<>();
+			for (LispVal member : members.subList(1, members.size() - 1)) {
+				(isNamedForm(member, LispNames.DEFUN) ? hoisted : inPlace).add(member);
+			}
+			inPlace.add(members.get(members.size() - 1));
+			return inPlace.size() == 1 ? inPlace.get(0) : makeProgn(inPlace);
 		}
 		return expandedMethod;
 	}
@@ -33087,9 +33300,16 @@ public final class LispMacroExpander {
 			java.util.Map<String, Integer> structAccessors, List<LispVal> hoisted) {
 		LispCons defgeneric = normalizeSetfMethodForm(cons, structAccessors);
 		List<LispVal> methodDefuns = new java.util.ArrayList<>();
-		generics.add(registerCompiledDefgeneric(defgeneric, closRegistry, structAccessors, methodDefuns, true));
+		String generic = registerCompiledDefgeneric(defgeneric, closRegistry, structAccessors, methodDefuns, true);
+		generics.add(generic);
 		LispVal name = quoteOf(defgeneric.toList().get(1));
-		if (methodDefuns.isEmpty()) {
+		// Under the generic-function protocol the generic's metaobject is made where the
+		// form runs, as at top level: snooze's defresource registers its resource from
+		// the metaobject's initialize-instance.
+		List<LispVal> protocol = closRegistry.gfProtocol()
+				? genericProtocolForms(closRegistry.findGeneric(generic), cons.toList().get(1), closRegistry)
+				: List.of();
+		if (methodDefuns.isEmpty() && protocol.isEmpty()) {
 			return name;
 		}
 		List<LispVal> inPlace = new java.util.ArrayList<>();
@@ -33097,6 +33317,7 @@ public final class LispMacroExpander {
 		for (LispVal methodDefun : methodDefuns) {
 			inPlace.add(splitNestedMethodExpansion(methodDefun, hoisted));
 		}
+		inPlace.addAll(protocol);
 		inPlace.add(name);
 		return listToCons(inPlace);
 	}
@@ -33118,14 +33339,10 @@ public final class LispMacroExpander {
 				if (LispNames.isQuote(member)) {
 					return node;
 				}
-				if (LispNames.DEFMETHOD.equals(member) && cons.isProperList()) {
-					LispCons normalized = normalizeSetfMethodForm(cons, structAccessors);
-					LispVal inPlace = splitNestedMethodExpansion(expandDefmethod(normalized, closRegistry, true),
-							hoisted);
-					generics.add(ClosRegistry.normalize(((LispSymbol) normalized.toList().get(1)).name()));
-					return inPlace;
+				if (LispNames.DEFMETHOD.equals(member) && isMethodDefinitionShape(cons, true)) {
+					return expandNestedDefmethod(cons, closRegistry, structAccessors, generics, hoisted);
 				}
-				if (LispNames.DEFGENERIC.equals(member) && cons.isProperList()) {
+				if (LispNames.DEFGENERIC.equals(member) && isMethodDefinitionShape(cons, false)) {
 					return expandNestedDefgeneric(cons, closRegistry, generics, structAccessors, hoisted);
 				}
 			}

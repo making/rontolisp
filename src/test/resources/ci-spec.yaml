@@ -34296,6 +34296,44 @@ cases:
       GL-DEEP
       (6 (2 "a") (10) (:DEEP 2 1))
       ((:TAG A) (:TAG (:TAG 1.5)) ((#\c)) 8)
+  - name: classes-and-methods-defined-below-the-top-level
+    source: |
+      ;; snooze's (unless (find-class 'x nil) ... (defclass x ...)), contextl's
+      ;; definitions in a loop: a class is no class find-class answers until its
+      ;; definition has run, a method exists once its form has run, and an eql
+      ;; specializer's form is evaluated where its method is defined.
+      (defvar *ncd-on* t)
+      (defvar *ncd-off* nil)
+      (defvar *ncd-log* nil)
+      (print (list (find-class 'ncd-base nil) (find-class 'ncd-later nil)))
+      (dotimes (i 2)
+        (unless (find-class 'ncd-base nil)
+          (push i *ncd-log*)
+          (defclass ncd-base () ((x :initarg :x :initform 10 :accessor ncd-x)))))
+      (defclass ncd-sub (ncd-base) ((y :initform 20 :reader ncd-y)))
+      (when *ncd-off* (defclass ncd-never () ()))
+      (defparameter *ncd-class* (when *ncd-on* (defclass ncd-valued () ())))
+      (print (list *ncd-log* (ncd-x (make-instance 'ncd-base))
+                   (let ((o (make-instance 'ncd-sub :x 1))) (list (ncd-x o) (ncd-y o)))
+                   (find-class 'ncd-never nil) (class-name *ncd-class*)))
+      (when *ncd-on* (define-condition ncd-error (error) ((why :initarg :why :reader ncd-why))))
+      (unless *ncd-off* (defgeneric ncd-show (x)))
+      (when *ncd-on* (defmethod ncd-show ((x ncd-base)) (list :base (ncd-x x))))
+      (when *ncd-off* (defmethod ncd-show ((x integer)) (list :never x)))
+      (let ((tag :ncd-tag)) (defmethod ncd-show ((x (eql tag))) (list :eql x)))
+      (defun ncd-install () (defmethod ncd-show ((x string)) (list :string x)))
+      (print (list (handler-case (error 'ncd-error :why :because) (ncd-error (e) (ncd-why e)))
+                   (ncd-show (make-instance 'ncd-sub)) (ncd-show :ncd-tag)
+                   (handler-case (ncd-show 7) (error () :no-method))
+                   (handler-case (ncd-show "s") (error () :not-yet))))
+      (ncd-install)
+      (when *ncd-on* (defclass ncd-later () ()))
+      (print (list (ncd-show "s") (class-name (find-class 'ncd-later))))
+    expected: |
+      (NIL NIL)
+      ((0) 10 (1 20) NIL NCD-VALUED)
+      (:BECAUSE (:BASE 10) (:EQL :NCD-TAG) :NO-METHOD :NOT-YET)
+      ((:STRING "s") NCD-LATER)
   - name: negative-zero-literal-keeps-its-sign
     source: |
       (print -0.0)
