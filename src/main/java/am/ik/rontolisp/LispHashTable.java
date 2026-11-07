@@ -136,7 +136,8 @@ public final class LispHashTable implements LispVal {
 	// equal compares them -- hashes structurally.
 	private static int placementHash(LispVal val, int testCode) {
 		if (testCode == TEST_EQL || testCode == TEST_EQ) {
-			if (LispEquality.isIdentityAggregate(val)) {
+			// An array too: equal folds a bit vector's elements, which eql does not see.
+			if (LispEquality.isIdentityAggregate(val) || val instanceof LispArray) {
 				return System.identityHashCode(val);
 			}
 			if (val instanceof LispJavaObject host) {

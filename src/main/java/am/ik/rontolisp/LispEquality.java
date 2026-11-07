@@ -69,9 +69,10 @@ public final class LispEquality {
 	/**
 	 * The {@code equal} predicate: identical objects are equal; two conses are equal when
 	 * their cars and cdrs are recursively equal; a structure, a CLOS object and a
-	 * condition are equal only to themselves ({@link #equalByIdentity}); everything else
-	 * falls back to {@code eql} (numbers and characters by value and type, strings, a
-	 * pathname and the opaque built-ins structurally through their own {@code equals},
+	 * condition are equal only to themselves ({@link #equalByIdentity}); two bit vectors
+	 * compare their active elements with {@code eql} ({@link #isBitVector}); everything
+	 * else falls back to {@code eql} (numbers and characters by value and type, strings,
+	 * a pathname and the opaque built-ins structurally through their own {@code equals},
 	 * other aggregates by identity). A host object on the left asks its own
 	 * {@code equals} with the right operand as Java receives it
 	 * ({@link LispJavaObject#receiverObject}, {@code .kb/eq-numbers.md}, "Host objects").
@@ -122,7 +123,41 @@ public final class LispEquality {
 		if (equalByIdentity(a) || equalByIdentity(b)) {
 			return false;
 		}
+		if (a instanceof LispArray x && b instanceof LispArray y && isBitVector(x) && isBitVector(y)) {
+			return bitVectorsEqual(x, y);
+		}
 		return a.equals(b);
+	}
+
+	/**
+	 * Whether {@code equal} compares an array element by element: a bit vector, which is
+	 * the rank-1 general array stamped {@code bit} ({@code .kb/array-literals.md}, "The
+	 * degraded array REMEMBERS its element type"). Every other array is compared by
+	 * identity (CLHS {@code equal}).
+	 * @param array the array
+	 * @return whether it is a bit vector
+	 */
+	public static boolean isBitVector(LispArray array) {
+		return array.dimensions().length == 1 && array.elementTypeCode() == ArrayElementTypes.BIT;
+	}
+
+	// CLHS 5.3: the ACTIVE elements (up to a fill pointer) compared with eql.
+	private static boolean bitVectorsEqual(LispArray a, LispArray b) {
+		int length = a.effectiveLength();
+		if (length != b.effectiveLength()) {
+			return false;
+		}
+		for (int i = 0; i < length; i++) {
+			if (!eql(bitVectorElement(a, i), bitVectorElement(b, i))) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static LispVal bitVectorElement(LispArray array, int i) {
+		LispVal element = array.readFlat(i);
+		return element != null ? element : LispNil.INSTANCE;
 	}
 
 	/**
@@ -214,9 +249,9 @@ public final class LispEquality {
 	 * the {@code equalp} predicate does. Everything else is its own representative, and
 	 * one of those is a real deviation from ANSI {@code equalp} tables, recorded in
 	 * {@code .kb/hash-tables.md}: an ARRAY does not fold, since {@link #equal} on a
-	 * vector is identity on every backend and a folded copy would never find itself. The
-	 * deviation is a MISS, never a false match: the fold only ever refuses to merge two
-	 * keys {@code equalp} would call the same.
+	 * vector other than a bit vector is identity on every backend and a folded copy would
+	 * never find itself. The deviation is a MISS, never a false match: the fold only ever
+	 * refuses to merge two keys {@code equalp} would call the same.
 	 *
 	 * <p>
 	 * Folding rather than a second hash/compare pair is what keeps ONE structural table
@@ -321,8 +356,9 @@ public final class LispEquality {
 	// than through their own hashCode, which recurses without a bound (and is what a
 	// cyclic key used to run out of stack on); a structure or CLOS instance, which equal
 	// compares by identity, hashes by identity, so writing its slots never moves its
-	// bucket. Everything else answers with its own hashCode, which its equals agrees with
-	// by the Java contract, and which is identity exactly where equal is identity.
+	// bucket. A bit vector folds its active elements, as equal compares them. Everything
+	// else answers with its own hashCode, which its equals agrees with by the Java
+	// contract, and which is identity exactly where equal is identity.
 	//
 	// budget is the WHOLE traversal's remaining node visits, a one-cell array because it
 	// has to be shared by the siblings rather than handed down each branch -- a
@@ -343,6 +379,15 @@ public final class LispEquality {
 			int h = inst.layout().tag().hashCode();
 			for (int i = 0; i < inst.slotCount(); i++) {
 				h = 31 * h + hash(inst.slot(i), depth - 1, budget);
+			}
+			return h;
+		}
+		if (v instanceof LispArray array && isBitVector(array)) {
+			// The active elements, as equal compares them, each a node of the budget.
+			int length = array.effectiveLength();
+			int h = length;
+			for (int i = 0; i < length && budget[0] > 0; i++) {
+				h = 31 * h + hash(bitVectorElement(array, i), depth - 1, budget);
 			}
 			return h;
 		}

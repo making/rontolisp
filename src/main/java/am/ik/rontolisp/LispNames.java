@@ -4568,16 +4568,14 @@ public final class LispNames {
 
 	/**
 	 * The {@code bit-vector-p} prelude function: exactly what
-	 * {@code (typep object 'bit-vector)} answers. No bit-vector value exists yet (a
-	 * {@code :element-type 'bit} array is a plain vector), so it answers nil for every
-	 * value today; the function exists so portable code calling it loads.
+	 * {@code (typep object 'bit-vector)} answers: true for the rank-1 general array
+	 * stamped {@code bit}.
 	 */
 	public static final String BIT_VECTOR_P = "BIT-VECTOR-P";
 
 	/**
 	 * The {@code simple-bit-vector-p} prelude function: exactly what
-	 * {@code (typep object 'simple-bit-vector)} answers (nil for every value, like
-	 * {@link #BIT_VECTOR_P}, until a bit-vector representation lands).
+	 * {@code (typep object 'simple-bit-vector)} answers.
 	 */
 	public static final String SIMPLE_BIT_VECTOR_P = "SIMPLE-BIT-VECTOR-P";
 

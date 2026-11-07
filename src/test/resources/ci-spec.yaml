@@ -19705,11 +19705,27 @@ cases:
                      (equalp (ci-fpv 5 nil) (ci-fpv 5 nil))
                      (equalp (ci-fpv 5 nil) (ci-fpv 6 nil))
                      (equalp (ci-fpv 3 nil) #(0 1 2)))))
+      ;; equal compares two bit vectors by their active elements (CLHS 5.3) and an
+      ;; equal table places them so; an eql table still keys one by identity
+      (let ((h (make-hash-table :test 'equal))
+            (e (make-hash-table :test 'eql))
+            (k (make-array 2 :element-type 'bit))
+            (fp (make-array 4 :element-type 'bit :fill-pointer 2 :initial-element 1)))
+        (setf (gethash #*10 h) 1)
+        (setf (gethash k e) 'k)
+        (setf (sbit k 0) 1)
+        (print (list (equal #*101 #*101)
+                     (equal (make-array 3 :element-type 'bit :initial-contents '(1 0 1)) #*101)
+                     (equalp #*101 #*101)
+                     (gethash (copy-seq #*10) h)
+                     (equal fp #*11) (equal fp #*1111) (equal #*101 #(1 0 1))
+                     (gethash k e) (gethash (copy-seq k) e))))
     expected: |
       T
       NIL
       NIL
       (T T NIL T)
+      (T T T 1 T NIL NIL K NIL)
   - name: streamp-standard-output-designator
     source: |
       (print (streamp t))

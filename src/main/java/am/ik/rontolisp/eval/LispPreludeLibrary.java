@@ -475,10 +475,7 @@ public final class LispPreludeLibrary {
 				""");
 		// simple-vector-p/bit-vector-p/simple-bit-vector-p: exactly what the
 		// matching typep answers, so the predicate and the specifier cannot
-		// drift apart. No bit-vector value exists yet (a :element-type 'bit
-		// array is a plain vector), so the two bit spellings answer nil for
-		// every value today; the functions exist so portable code calling
-		// them loads.
+		// drift apart. A bit vector is the rank-1 general array stamped bit.
 		SOURCES.put(LispNames.SIMPLE_VECTOR_P, """
 				(defun simple-vector-p (x)
 				  (typep x 'simple-vector))

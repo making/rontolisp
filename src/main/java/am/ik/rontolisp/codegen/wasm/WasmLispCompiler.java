@@ -895,6 +895,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// fixed runtime bodies emitted below.
 	private boolean charvecPossible = true;
 
+	// Whether a bit vector can exist at run time: the bit width of the element-type mask
+	// (LispMacroExpander.makeArrayElementTypeCodes). _equal compares two bit vectors and
+	// _hash folds one by the elements only then, so every other module keeps the bodies
+	// it had.
+	private boolean bitVectorsPossible = false;
+
 	/**
 	 * Whether the program writes {@code (make-hash-table :test 'equalp)} somewhere. It
 	 * adds one {@code (mut i32)} global and one real body in the fixed function slot
@@ -5227,6 +5233,8 @@ public final class WasmLispCompiler implements LispCompiler {
 						this.asyncMode || programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED),
 						this.asyncMode || this.usesFailedFutures)
 				: null;
+		int typedArrayCodes = LispMacroExpander.makeArrayElementTypeCodes(program, closRegistry);
+		this.bitVectorsPossible = (typedArrayCodes & (1 << am.ik.rontolisp.ArrayElementTypes.BIT)) != 0;
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.stringTable(stringTable)
 			.ehMode(ehMode)
@@ -5332,7 +5340,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.usesEqualpHashTables(this.usesEqualpHashTables)
 			.usesIdentityHashTables(this.usesIdentityHashTables)
 			.usesStreamValues(usesStreamValues)
-			.typedArrayCodes(LispMacroExpander.makeArrayElementTypeCodes(program, closRegistry))
+			.typedArrayCodes(typedArrayCodes)
 			.layoutAddresses(layoutAddresses)
 			.asyncFuncBase(this.asyncMode ? asyncFuncBase() : -1)
 			.asyncDefunNames(Set.copyOf(asyncDefunNames))
@@ -9237,7 +9245,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmIoRuntimeBuilder.buildWriteLineBody(stringTable, this.charvecPossible,
 							lineStartTable >= 0))
 					.addFunction(WasmRuntimeBuilder.buildEqualBody(this.usesInstances ? instanceTypeBase() : -1,
-							this.addressKeyedLayout, this.charvecPossible))
+							this.addressKeyedLayout, this.charvecPossible, this.bitVectorsPossible))
 					.addFunction(WasmGetenvRuntimeBuilder.build(scratchBase));
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
@@ -9248,7 +9256,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// Hash-table runtime helper bodies (FUNC_HASH, FUNC_HT_ENTRIES)
 				code.addFunction(WasmRuntimeBuilder.buildHashBody(this.usesInstances ? instanceTypeBase() : -1,
 						this.addressKeyedLayout, hashDepthGlobalIndex, hashGasGlobalIndex, this.charvecPossible,
-						this.usesIdentityHashTables, !this.optimize.prefersSizeOverSpeed()));
+						this.usesIdentityHashTables, !this.optimize.prefersSizeOverSpeed(), this.bitVectorsPossible));
 				code.addFunction(WasmHashTableRuntimeBuilder
 					.buildEntries(this.usesEqualpHashTables || this.usesIdentityHashTables));
 				// Modulo / remainder runtime helper bodies (FUNC_RAT_REM, FUNC_RAT_MOD)

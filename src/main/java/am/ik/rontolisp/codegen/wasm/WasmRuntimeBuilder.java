@@ -167,13 +167,28 @@ final class WasmRuntimeBuilder {
 	 * compares its first slot only (see {@link #buildEqlTailBody}).
 	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1
 	 * @param keyedLayout the address-keyed layout records, possibly none
+	 * @param charvecPossible whether a character vector can reach it
+	 * @param bitVectors whether a bit vector can exist, in which case two bit vectors
+	 * compare their active elements with {@code eql} (CLHS 5.3) where every other pair of
+	 * cells compares by identity
 	 * @return the function body
 	 */
-	static byte[] buildEqualBody(int instanceTypeIndex, int[] keyedLayout, boolean charvecPossible) {
+	static byte[] buildEqualBody(int instanceTypeIndex, int[] keyedLayout, boolean charvecPossible,
+			boolean bitVectors) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
-		if (instanceTypeIndex < 0) {
+		if (bitVectors) {
+			// The instance slot walk's three i32s (2..4) double as the bit-vector arm's
+			// two lengths and index; 5..9 are its two headers, the walk cursor and the
+			// two elements.
+			w.write(2);
+			w.write(3);
+			w.write(Type.I32);
+			w.write(5);
+			w.writeRefType(true, Type.EQ.code());
+		}
+		else if (instanceTypeIndex < 0) {
 			w.write(0); // 0 extra locals; params (local 0 = a, local 1 = b) suffice
 		}
 		else {
@@ -223,6 +238,10 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.ELSE);
 
 		emitInstanceEqual(w, instanceTypeIndex, keyedLayout);
+
+		if (bitVectors) {
+			emitBitVectorEqual(w);
+		}
 
 		// else (ref.eq already false): eql base case for value types.
 		// both characters -> code points equal
@@ -307,6 +326,9 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // end limb-integer if
 		w.write(Instruction.END); // end bignum if
 		w.write(Instruction.END); // end char if
+		if (bitVectors) {
+			w.write(Instruction.END); // end both-cells if
+		}
 		if (instanceTypeIndex >= 0) {
 			w.write(Instruction.END); // end both-instance if
 		}
@@ -315,6 +337,253 @@ final class WasmRuntimeBuilder {
 
 		w.write(Instruction.END); // end function
 		return body.toByteArray();
+	}
+
+	/**
+	 * Opens the both-cells arm of {@code _equal} (locals as {@link #buildEqualBody}
+	 * declares them for it): two bit vectors of one active length are equal when their
+	 * elements are pairwise {@code eql}, and any other two cells -- arrays, hash tables
+	 * -- are not, identity having failed. Leaves an {@code else} open for the caller's
+	 * value arms and its {@code end}.
+	 */
+	private static void emitBitVectorEqual(WasmWriter w) {
+		int lenA = 2, lenB = 3, index = 4, headerA = 5, headerB = 6, cursor = 7, elemA = 8, elemB = 9;
+		refTest(w, 0, WasmLispCompiler.TYPE_CELL);
+		refTest(w, 1, WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.BLOCK);
+		w.write(Type.I32);
+		emitBitVectorLength(w, 0, headerA, cursor, lenA);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		getLocal(w, lenA);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.BR_IF, 0);
+		w.write(Instruction.DROP);
+		emitBitVectorLength(w, 1, headerB, cursor, lenB);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		getLocal(w, lenA);
+		getLocal(w, lenB);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		w.write(Instruction.DROP);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, index);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		getLocal(w, index);
+		getLocal(w, lenA);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.DROP);
+		emitArrGet(w, headerA, index);
+		setLocal(w, elemA);
+		emitArrGet(w, headerB, index);
+		setLocal(w, elemB);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		emitEqlOfLocals(w, elemA, elemB);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.DROP);
+		getLocal(w, index);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, index);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END); // block
+		w.write(Instruction.ELSE);
+	}
+
+	/**
+	 * Sets {@code lenSlot} to the active length of the bit vector in {@code valueSlot} --
+	 * its fill pointer, else its one dimension -- or to -1 when it is no bit vector, and
+	 * {@code headerSlot} to its header. The value must be a {@code TYPE_CELL}. A bit
+	 * vector is the rank-1 general array whose element-type marker, read at the end of
+	 * its displacement chain as {@code WasmArrayCompiler}'s
+	 * {@code emitRememberedElementType} reads it, is {@code bit}'s.
+	 */
+	private static void emitBitVectorLength(WasmWriter w, int valueSlot, int headerSlot, int cursorSlot, int lenSlot) {
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(-1);
+		setLocal(w, lenSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		getLocal(w, valueSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		setLocal(w, headerSlot);
+		// An array's header is a cons whose car is the dims array (a hash table's is
+		// its count), of length 1 for a vector.
+		refTest(w, headerSlot, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 0);
+		consField(w, headerSlot, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 0);
+		consField(w, headerSlot, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		// Hop a displaced chain to the header that owns the storage.
+		getLocal(w, headerSlot);
+		setLocal(w, cursorSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		emitDataSlotOf(w, cursorSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		emitDataSlotOf(w, cursorSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		setLocal(w, cursorSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// A string or packed chain end is no bit vector; a buckets one carries the marker
+		// in meta.cdr.cdr.
+		emitDataSlotOf(w, cursorSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 0);
+		emitMetaOf(w, cursorSlot);
+		castConsGetTop(w, 1);
+		castConsGetTop(w, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmArrayCompiler.elementTypeMarker(am.ik.rontolisp.ArrayElementTypes.BIT));
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 0);
+		// The fill pointer (meta.car, an i31 or null), else dims[0].
+		emitMetaOf(w, headerSlot);
+		castConsGetTop(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		emitMetaOf(w, headerSlot);
+		castConsGetTop(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		consField(w, headerSlot, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.END);
+		setLocal(w, lenSlot);
+		w.write(Instruction.END); // block
+	}
+
+	// Pushes element i (the i32 in indexSlot) of the array whose header is in headerSlot,
+	// through _arr_get's displacement walk.
+	private static void emitArrGet(WasmWriter w, int headerSlot, int indexSlot) {
+		getLocal(w, headerSlot);
+		getLocal(w, indexSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ARR_GET);
+	}
+
+	// Pushes whether the values in two locals are eql, in
+	// WasmEmitHelper.emitEqlComparison's order: identity, a symbol or string by its
+	// interned offset, an i31 only by identity, anything else through _eql_tail.
+	private static void emitEqlOfLocals(WasmWriter w, int a, int b) {
+		getLocal(w, a);
+		getLocal(w, b);
+		w.write(Instruction.REF_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.ELSE);
+		refTest(w, a, WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		refTest(w, b, WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		emitStringOffsetOf(w, a);
+		emitStringOffsetOf(w, b);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		refTest(w, a, Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.ELSE);
+		getLocal(w, a);
+		getLocal(w, b);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQL_TAIL);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	private static void emitStringOffsetOf(WasmWriter w, int local) {
+		getLocal(w, local);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(0);
+	}
+
+	// An array header is (dims . (meta . data)).
+	private static void emitDataSlotOf(WasmWriter w, int headerSlot) {
+		consField(w, headerSlot, 1);
+		castConsGetTop(w, 1);
+	}
+
+	private static void emitMetaOf(WasmWriter w, int headerSlot) {
+		consField(w, headerSlot, 1);
+		castConsGetTop(w, 0);
+	}
+
+	private static void castConsGetTop(WasmWriter w, int field) {
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(field);
 	}
 
 	/**
@@ -672,23 +941,30 @@ final class WasmRuntimeBuilder {
 	 * @param identityHash whether the module's objects carry the identity-hash slot
 	 * @param stringKeyFirst whether a string or symbol at depth zero folds before the
 	 * counters, a speed-for-size trade
+	 * @param bitVectors whether a bit vector can exist, in which case one folds its
+	 * active elements, as {@link #buildEqualBody _equal} compares them
 	 * @return the function body
 	 */
 	static byte[] buildHashBody(int instanceTypeIndex, int[] keyedLayout, int depthGlobalIndex, int gasGlobalIndex,
-			boolean charvecPossible, boolean identityHash, boolean stringKeyFirst) {
+			boolean charvecPossible, boolean identityHash, boolean stringKeyFirst, boolean bitVectors) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// one i64 local (index 1) used to fold a float's 64-bit pattern into i32,
 		// three i32 locals (2 = h, 3 = idx, 4 = end) for the string byte fold, and one
-		// $str_bytes ref (5 = arr) holding the string's data array.
-		w.write(3); // 3 local groups
+		// $str_bytes ref (5 = arr) holding the string's data array; a bit vector's fold
+		// adds its header and a displacement-walk cursor (6, 7).
+		w.write(bitVectors ? 4 : 3); // local groups
 		w.write(1); // 1 local
 		w.write(Type.I64);
 		w.write(3); // 3 locals
 		w.write(Type.I32);
 		w.write(1); // 1 local
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
+		if (bitVectors) {
+			w.write(2);
+			w.writeRefType(true, Type.EQ.code());
+		}
 
 		// A symbol or string KEY -- the outermost entry -- folds its bytes at once: it
 		// descends nowhere, so it needs neither the depth cap nor the work budget, and
@@ -967,14 +1243,73 @@ final class WasmRuntimeBuilder {
 
 		// a cell (a general array, a hash table) -> its identity-hash slot when the
 		// module's cells carry one: equal on a cell IS identity, so this is the one
-		// hash that agrees with it and survives the array being written
-		if (identityHash) {
+		// hash that agrees with it and survives the array being written -- except a bit
+		// vector, which equal compares by its active elements and which folds them:
+		// h = length, then h = h * 31 + hash(element) while the work budget lasts.
+		boolean cellArm = identityHash || bitVectors;
+		if (cellArm) {
 			refTest(w, 0, WasmLispCompiler.TYPE_CELL);
 			w.write(Instruction.IF);
 			w.write(Type.I32);
-			getLocal(w, 0);
-			w.write(Instruction.CALL);
-			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_IHASH);
+			if (bitVectors) {
+				emitBitVectorLength(w, 0, 6, 7, 4);
+				getLocal(w, 4);
+				w.write(Instruction.I32_CONST);
+				w.writeSignedLeb128(0);
+				w.write(Instruction.I32_GE_S);
+				w.write(Instruction.IF);
+				w.write(Type.I32);
+				getLocal(w, 4);
+				setLocal(w, 2); // h = length
+				w.write(Instruction.I32_CONST);
+				w.writeSignedLeb128(0);
+				setLocal(w, 3); // idx = 0
+				w.write(Instruction.BLOCK, 0x40);
+				w.write(Instruction.LOOP, 0x40);
+				getLocal(w, 3);
+				getLocal(w, 4);
+				w.write(Instruction.I32_GE_S);
+				w.write(Instruction.BR_IF, 1);
+				if (gasGlobalIndex >= 0) {
+					w.write(Instruction.GET_GLOBAL);
+					w.writeUnsignedLeb128(gasGlobalIndex);
+					w.write(Instruction.I32_CONST);
+					w.writeSignedLeb128(0);
+					w.write(Instruction.I32_LE_S);
+					w.write(Instruction.BR_IF, 1);
+				}
+				getLocal(w, 2);
+				w.write(Instruction.I32_CONST);
+				w.writeSignedLeb128(31);
+				w.write(Instruction.I32_MUL);
+				emitArrGet(w, 6, 3);
+				w.write(Instruction.CALL);
+				w.writeUnsignedLeb128(WasmLispCompiler.FUNC_HASH);
+				w.write(Instruction.I32_ADD);
+				setLocal(w, 2);
+				getLocal(w, 3);
+				w.write(Instruction.I32_CONST);
+				w.writeSignedLeb128(1);
+				w.write(Instruction.I32_ADD);
+				setLocal(w, 3);
+				w.write(Instruction.BR, 0);
+				w.write(Instruction.END); // loop
+				w.write(Instruction.END); // block
+				getLocal(w, 2);
+				w.write(Instruction.ELSE);
+			}
+			if (identityHash) {
+				getLocal(w, 0);
+				w.write(Instruction.CALL);
+				w.writeUnsignedLeb128(WasmLispCompiler.FUNC_IHASH);
+			}
+			else {
+				w.write(Instruction.I32_CONST);
+				w.writeSignedLeb128(0);
+			}
+			if (bitVectors) {
+				w.write(Instruction.END); // end bit-vector if
+			}
 			w.write(Instruction.ELSE);
 		}
 
@@ -982,7 +1317,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 
-		if (identityHash) {
+		if (cellArm) {
 			w.write(Instruction.END); // end cell if
 		}
 		if (instanceTypeIndex >= 0) {

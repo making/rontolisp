@@ -298,12 +298,17 @@ final class JvmHashRuntimeBuilder {
 	 * identity, as {@code _eqv} compares it, and {@code _hash} (an equal table's) by its
 	 * own {@code hashCode}, as {@code _equal} compares it by {@code equals}; null
 	 * elsewhere
+	 * @param bitVectorHash in a program that can build a bit vector,
+	 * {@code JvmBitVectorRuntimeBuilder}'s {@code _bvHash}, which {@code _hash} answers
+	 * an array with (a bit vector by its elements, as {@code _equal} compares it); null
+	 * elsewhere, where an array hashes by identity
 	 * @return the helper methods
 	 */
 	static List<HashMethod> build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
 			ClassEntry objectArrayClass, MemberRefEntry longValueOf, MemberRefEntry equalMethod,
 			MemberRefEntry eqvMethod, @Nullable MemberRefEntry strvMethod, @Nullable ClassEntry stringArrayClass,
-			boolean equalpFold, boolean identityTables, @Nullable MemberRefEntry hostTest) {
+			boolean equalpFold, boolean identityTables, @Nullable MemberRefEntry hostTest,
+			@Nullable MemberRefEntry bitVectorHash) {
 		Runtime rt = Runtime.of(cp);
 		ClassEntry listClass = cp.classEntry("java/util/ArrayList");
 		ClassEntry integerClass = cp.classEntry("java/lang/Integer");
@@ -329,7 +334,7 @@ final class JvmHashRuntimeBuilder {
 
 		List<HashMethod> methods = new ArrayList<>();
 		methods.add(buildHash(cp, objectArrayClass, ratArrClass, intArrClass, integerClass, stringArrayClass,
-				strvMethod, objectHashCode, hashRef, listClass, rt.table(), identityHashCode, hostTest));
+				strvMethod, objectHashCode, hashRef, listClass, rt.table(), identityHashCode, hostTest, bitVectorHash));
 
 		methods.add(new HashMethod(cp.utf8Entry(MAKE), cp.utf8Entry(MAKE_DESC), newTable(rt, 0)));
 		methods.add(buildGet(cp, rt, keyRef, identityTables, keyHash, compare));
@@ -417,7 +422,7 @@ final class JvmHashRuntimeBuilder {
 			ClassEntry intArrClass, ClassEntry integerClass, @Nullable ClassEntry stringArrayClass,
 			@Nullable MemberRefEntry strvMethod, MethodRefEntry objectHashCode, MethodRefEntry hashRef,
 			ClassEntry listClass, ClassEntry tableClass, MethodRefEntry identityHashCode,
-			@Nullable MemberRefEntry hostTest) {
+			@Nullable MemberRefEntry hostTest, @Nullable MemberRefEntry bitVectorHash) {
 		MethodCode a = new MethodCode();
 		// if (d <= 0) return 0
 		a.iload(1);
@@ -630,6 +635,19 @@ final class JvmHashRuntimeBuilder {
 			a.aload(0);
 			a.invokestatic(hostTest);
 			a.ifne(notAggregate);
+		}
+		if (bitVectorHash != null) {
+			// ... except a bit vector, which equal compares by its elements.
+			MethodCode.Label notArray = a.newLabel();
+			a.aload(0);
+			a.instanceOf(listClass);
+			a.ifeq(notArray);
+			a.aload(0);
+			a.iload(1);
+			a.aload(2);
+			a.invokestatic(bitVectorHash);
+			a.ireturn();
+			a.labelBinding(notArray);
 		}
 		a.aload(0);
 		a.instanceOf(listClass);

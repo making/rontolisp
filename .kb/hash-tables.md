@@ -134,7 +134,8 @@ instance), the tag a layout's (its string; wasm its record's address as an i31) 
 matches two instances slot by slot as the `equalp` predicate does (petalisp's shape tables), and no
 key a program writes matches a fold; everything else is its own key
 (NaN and the infinities included). One deliberate ANSI deviation, a MISS and never a false match:
-an ARRAY does not fold (`equal` on a vector is identity). The fraction fold waited on WASM
+an ARRAY does not fold (`equal` on a vector is identity; a bit vector, which `equal` compares
+by its elements, needs no fold to match). The fraction fold waited on WASM
 `TYPE_RATIO`'s two i32 components, too narrow for a power-of-two denominator, until they became
 exact integers ([[wasm-bignum]], "Ratios").
 The fold only PLACES the key; the key as first stored is what every reader hands back ("The key
@@ -316,7 +317,8 @@ keeps a table of eight keys or fewer as a vector of pairs (next bullet).
   `equal` table (ci-spec `instance-print-syntax-and-identity`) -- and a BACK-REFERENCE
   makes it the WORST CASE for the work budget. In an `eql`/`eq` table the same key
   hashes by identity instead, so the two instances are two keys. A GENERAL ARRAY key
-  is the opposite: `equal` is identity, hash is an identity hash. On the JVM a general
+  is the opposite: `equal` is identity, hash is an identity hash -- except a bit vector,
+  folded by its elements ([array-literals.md](array-literals.md)). On the JVM a general
   vector is an `ArrayList`, whose own `hashCode` walks the elements: `_hash` asks
   `System.identityHashCode` for it explicitly. Before that a vector holding itself
   overflowed the stack as a key and a vector grown after it was stored lost its entry

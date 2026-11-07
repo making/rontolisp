@@ -2879,8 +2879,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// or any array literal carries a remembered one (#*1011 is stamped bit) -- the
 		// only ways a general array can carry a remembered element type, and so the
 		// gate on array-element-type's general arm.
-		final boolean usesTypedArray = usesArrays
-				&& LispMacroExpander.makeArrayElementTypeCodes(program, closRegistry) != 0;
+		final int typedArrayCodes = usesArrays ? LispMacroExpander.makeArrayElementTypeCodes(program, closRegistry) : 0;
+		final boolean usesTypedArray = typedArrayCodes != 0;
+		// A bit vector is the general array stamped bit, which equal compares and its
+		// hash folds by the elements (JvmBitVectorRuntimeBuilder); a program that cannot
+		// stamp one keeps the _equal and _hash it had.
+		final boolean usesBitVectors = (typedArrayCodes & (1 << am.ik.rontolisp.ArrayElementTypes.BIT)) != 0;
 		MethodRefEntry strvMethod = usesArrays
 				? cp.methodRef(thisClass, JvmArrayRuntimeBuilder.STRV, JvmArrayRuntimeBuilder.STRV_DESC) : null;
 		if (javaSites != null) {
@@ -2966,7 +2970,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// conversion are built on first use, so a program without java: names neither.
 		JvmNumericRuntimeBuilder.NumericRuntime numericRuntime = JvmNumericRuntimeBuilder.build(cp, thisClass,
 				strvMethod, instanceLayoutClass, usesComplex, javaSites != null ? javaSites.direct().host() : null,
-				javaSites != null ? javaSites.direct().receiver() : null);
+				javaSites != null ? javaSites.direct().receiver() : null, usesBitVectors ? cp.methodRef(thisClass,
+						JvmBitVectorRuntimeBuilder.EQUAL, JvmBitVectorRuntimeBuilder.EQUAL_DESC) : null);
 		// A wrong-type operand's report names the operator (JvmOperandTypeRuntime); the
 		// thread-local record a pad reads the datum from exists only when a pad does.
 		final Utf8Entry teTlName = hasLandingPad ? cp.utf8Entry(JvmOperandTypeRuntime.TL_FIELD) : null;
@@ -4214,7 +4219,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)),
 				Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQV)),
 				strvMethod != null ? strvMethod : null, instanceLayoutClass != null ? instanceLayoutClass : null,
-				usesEqualpHashTables, usesIdentityHashTables, javaSites != null ? javaSites.direct().host() : null)
+				usesEqualpHashTables, usesIdentityHashTables, javaSites != null ? javaSites.direct().host() : null,
+				usesBitVectors
+						? cp.methodRef(thisClass, JvmBitVectorRuntimeBuilder.HASH, JvmHashRuntimeBuilder.HASH_DESC)
+						: null)
 				: List.of();
 
 		// Build the array runtime helpers, only when the program uses arrays. Includes
@@ -4240,6 +4248,9 @@ public final class JvmLispCompiler implements LispCompiler {
 					objectClass, objectArrayClass, thisClass, usesFloatArray, usesQuantized, subseqRuntime, consShape));
 			built.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToStringMethod, lispToDisplayStringMethod,
 					thisClass, renderGuard));
+			if (usesBitVectors) {
+				built.addAll(JvmBitVectorRuntimeBuilder.build(cp, thisClass, usesHashTables));
+			}
 			// The packed float-array helpers (_fv*) dispatch on instanceof double[] and
 			// delegate to the general _array* helpers above for a non-packed array, so
 			// they are emitted alongside (and depend on) them.

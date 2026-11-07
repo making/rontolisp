@@ -482,13 +482,17 @@ final class JvmNumericRuntimeBuilder {
 	 * conversion of a Lisp value to the one object Java sees
 	 * ({@code JvmJavaDirectSites#receiver}): what {@code _equal} hands a host object's
 	 * {@code equals}
+	 * @param bitVectorEqual in a program that can build a bit vector,
+	 * {@code JvmBitVectorRuntimeBuilder}'s {@code _bvEqual}, which {@code _equal} answers
+	 * two arrays with; null elsewhere, where {@code _equal} keeps the body it had
 	 * @return the helper methods and the invokable references compiled code calls
 	 */
 	static NumericRuntime build(ConstantPool cp, ClassEntry thisClass,
 			@org.jspecify.annotations.Nullable MethodRefEntry strvMethod,
 			@org.jspecify.annotations.Nullable ClassEntry strArrClass, boolean usesComplex,
 			@org.jspecify.annotations.Nullable MethodRefEntry hostTest,
-			@org.jspecify.annotations.Nullable MethodRefEntry hostReceiver) {
+			@org.jspecify.annotations.Nullable MethodRefEntry hostReceiver,
+			@org.jspecify.annotations.Nullable MethodRefEntry bitVectorEqual) {
 		ClassEntry longClass = cp.classEntry("java/lang/Long");
 		ClassEntry bigClass = cp.classEntry("java/math/BigInteger");
 		ClassEntry arithEx = cp.classEntry("java/lang/ArithmeticException");
@@ -809,7 +813,7 @@ final class JvmNumericRuntimeBuilder {
 				cp.methodRef(stringClass, "charAt", "(I)C"));
 		methods.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, objEquals, stringRefs, hostTest));
 		methods.add(buildEqual(nEqual, dCmp, objArrClass, ratArrClass, integerClass, rEqv, rEqual, strArrClass,
-				strvMethod, stringRefs, objEquals, hostTest, hostReceiver));
+				strvMethod, stringRefs, objEquals, hostTest, hostReceiver, bitVectorEqual));
 		methods.add(buildRatTrunc(nRatTrunc, dUnary, rRatNum, rRatDen, rNorm, biDiv));
 		methods.add(buildRatFloor(nRatFloor, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, null, null));
 		methods.add(buildRatFloor(nRatCeil, dUnary, rRatNum, rRatDen, rNorm, biMod, biSub, biDiv, biOne, biAdd));
@@ -2868,7 +2872,8 @@ final class JvmNumericRuntimeBuilder {
 			@org.jspecify.annotations.Nullable ClassEntry strArrClass,
 			@org.jspecify.annotations.Nullable MethodRefEntry strvMethod, StringRefs strings, MethodRefEntry objEquals,
 			@org.jspecify.annotations.Nullable MethodRefEntry hostTest,
-			@org.jspecify.annotations.Nullable MethodRefEntry hostReceiver) {
+			@org.jspecify.annotations.Nullable MethodRefEntry hostReceiver,
+			@org.jspecify.annotations.Nullable MethodRefEntry bitVectorEqual) {
 		MethodCode c = new MethodCode();
 		// if (a == b) return 1 -- identity BEFORE any recursion, which is what makes a
 		// cyclic value comparable to itself (a hash table storing and retrieving under
@@ -2967,6 +2972,22 @@ final class JvmNumericRuntimeBuilder {
 			c.invokevirtual(objEquals);
 			c.ireturn();
 			c.labelBinding(notHost);
+		}
+		// Two arrays: _eqv compares them by identity, which already failed, except two
+		// bit vectors, which compare their active elements (CLHS 5.3).
+		if (bitVectorEqual != null) {
+			MethodCode.Label notBothArrays = c.newLabel();
+			c.aload(0);
+			c.instanceOf(strings.listClass());
+			c.ifeq(notBothArrays);
+			c.aload(1);
+			c.instanceOf(strings.listClass());
+			c.ifeq(notBothArrays);
+			c.aload(0);
+			c.aload(1);
+			c.invokestatic(bitVectorEqual);
+			c.ireturn();
+			c.labelBinding(notBothArrays);
 		}
 		c.aload(0);
 		c.aload(1);

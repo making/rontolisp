@@ -150,9 +150,34 @@ slot it already had, so no array grew:
   `simple-vector` case, then `(simple-array et dims)`. That needed
   `array-has-fill-pointer-p` and `adjustable-array-p` to answer **NIL** for a packed array
   instead of refusing it.
-- Size cost ~+0.2-0.4% inside the gate. **A DISPLACED view answers `t` on all four, on
-  purpose**: its meta slot carries the offset, not a type. `adjust-array` COPIES the
-  remembered type (`.kb/adjustable-arrays.md`).
+- Size cost ~+0.2-0.4% inside the gate. **A DISPLACED view answers its chain end's type on
+  all four** (its own meta slot carries the offset, so every reader hops: `LispArray`'s
+  constructor, `_arrayElementType`, wasm's `emitRememberedElementType`); this file said `t`
+  until 2026-11-08, when the four answered `bit` for a view of a bit vector.
+  `adjust-array` COPIES the remembered type (`.kb/adjustable-arrays.md`).
+
+## `equal` on a bit vector compares its elements
+**Invariant (CLHS 5.3, all four backends since 2026-11-08): two bit vectors -- rank 1, stamped
+`bit`, read through a displaced chain as above -- are `equal` when their ACTIVE elements (up to
+a fill pointer) are pairwise `eql`; an `equal` hash folds those elements under the depth cap
+and work budget (`.kb/hash-tables.md`, "The two caps").** Every other array stays identity.
+Before, all four compared a bit vector by identity: `(equal #*101 #*101)` was `NIL`.
+
+- Interpreter: `LispEquality.equal`/`hash`'s bit-vector arm (`isBitVector`). An `eql`/`eq`
+  table now places every `LispArray` by identity (`LispHashTable.placementHash`), since the
+  structural hash no longer is identity for a bit vector.
+- JVM: `JvmBitVectorRuntimeBuilder` (`_bvLen`, `_bvEqual`, `_bvHash` beside `_hash`);
+  `_equal` hands two `List`s to `_bvEqual`, `_hash` a `List` to `_bvHash`. An eql/eq table
+  already sends a `List` to `identityHashCode` before `_hash`.
+- WASM: an inline arm in `_equal` and in `_hash`'s cell arm (`WasmRuntimeBuilder`
+  `emitBitVectorLength`), elements through `_arr_get`. An eql/eq table places a cell by
+  `_ihash`.
+- **Gated on the `bit` width of `makeArrayElementTypeCodes`**: a program that cannot stamp a
+  bit vector gets the `_equal`/`_hash` it had, byte for byte (checked 2026-11-08 on a
+  program with arrays and an `equal` table: `.class`, P1 and component identical).
+- `equalp` tables gain it too: the key fold leaves an array as is, and the table's
+  `equal`/hash pair now matches two bit vectors. Pinned by ci-spec
+  `equalp-arrays-elementwise`.
 
 ## A RUNTIME `:element-type` reaches the same array a literal one does
 **Invariant: `(make-array n :element-type et)` with `et` a VALUE builds what the literal
