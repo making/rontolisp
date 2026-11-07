@@ -13811,12 +13811,17 @@ class LispEvaluatorTest {
 		// SBCL prints the same: the value form of an exit sees the loop's bindings and
 		// runs inside every special binding, unwind-protect, handler-case and catch
 		// between it and the loop body -- a tagbody with labels too, which a go in the
-		// value form returns to -- so only an exit with none of them in between runs
-		// its value form in the block's frame.
+		// value form returns to, and a block, which a return-from in it exits (trivia's
+		// fail) -- so only an exit with none of them in between runs its value form in
+		// the block's frame. The defun runs twice: walked, then compiled.
 		assertThat(evalMulti("""
 				(defvar *s* :outer)
 				(defvar *log* nil)
-				(list (dolist (x '(1 2 3)) (when (= x 2) (return (* x 10))))
+				(defun exit-through-a-block ()
+				  (list (block outer (block inner (return-from outer (return-from inner :inner))) :after)
+				        (dolist (x '(1) :done) (block inner (return (return-from inner :inner))))))
+				(list (exit-through-a-block) (exit-through-a-block)
+				      (dolist (x '(1 2 3)) (when (= x 2) (return (* x 10))))
 				      (multiple-value-list (dolist (x '(1)) (return (values 1 2))))
 				      (funcall (dolist (x '(7)) (return (lambda () x))))
 				      (dolist (x '(1)) (let ((*s* :inner)) (return *s*)))
@@ -13826,7 +13831,8 @@ class LispEvaluatorTest {
 				      (block nil (dolist (x '(1)) (catch 'k (return (throw 'k :thrown)))) :after)
 				      (block outer (dolist (x '(1)) (block inner (return-from outer (list x :outer)))))
 				      (block outer (tagbody (return-from outer (progn (go :eof) 1)) :eof (return-from outer :eof))))
-				""").print()).isEqualTo("(20 (1 2) 7 :INNER :UP (:CLEANUP :VALUE) :CAUGHT :AFTER (1 :OUTER) :EOF)");
+				""").print()).isEqualTo(
+				"((:AFTER :DONE) (:AFTER :DONE) 20 (1 2) 7 :INNER :UP (:CLEANUP :VALUE) :CAUGHT :AFTER (1 :OUTER) :EOF)");
 	}
 
 	@Test

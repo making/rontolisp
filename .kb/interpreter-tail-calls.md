@@ -46,7 +46,12 @@ compiled frame's, takes in place ([interpreter-compiled-bodies.md](interpreter-c
   (`evalTagbody`): a `go` in the value form must find it, and a deferred form ran after it was
   gone (`(block b (tagbody (return-from b (progn (go :eof) 1)) :eof ...))` escaped as a
   `GoSignal`: jonathan's `parse` through proc-parse's `(go :eof)`, h58). A label-less one
-  (`prog`, the 100,000-deep pin) still hands its owner on. Entering a function body drops `deferTo`: an exit
+  (`prog`, the 100,000-deep pin) still hands its owner on. **A statement frame that has
+  entered a block defers no exit** (`defersExit`, walked and compiled, 2026-11-07): a
+  `return-from` in the value form may exit that block -- trivia's `(fail)` is a
+  `(return-from clause nil)` inside the value form of a `(return-from whole ...)` -- and the
+  deferred form ran after the block was gone (`no enclosing block named CLAUSE`, typo's
+  `define-fnrecord`; JVM and wasm answered right). Entering a function body drops `deferTo`: an exit
   there evaluates its value form inside the call (its `funcallSeam`). An exit to a block of a frame further out than the innermost owner
   still evaluates and throws. Not a `BlockReturnSignal`, whose other catchers
   (`runBlockIn`, `apply`) take its value as is.

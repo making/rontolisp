@@ -1274,9 +1274,10 @@ final class CompiledForms {
 						throw passing(e, this.located, env);
 					}
 				}
-				if (deferTo != null && LispEvaluator.exitsOwnedBlock(this.designator, env, deferTo)) {
+				if (LispEvaluator.defersExit(this.designator, env, owner, deferTo)) {
 					// handed up to the frame, with nothing between that opens an extent
-					env.deferExit(new BlockTailExit(deferTo, this.valueForm, env, this.value));
+					env.deferExit(new BlockTailExit(java.util.Objects.requireNonNull(deferTo), this.valueForm, env,
+							this.value));
 					return EXITED;
 				}
 			}

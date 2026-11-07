@@ -17954,8 +17954,9 @@ public final class LispEvaluator {
 	 * Whether an exit with value form {@code form} continues the current frame with that
 	 * form: its block is one the frame owns ({@link #exitsOwnedBlock}). One aimed at
 	 * {@code deferTo} -- the owner of a frame below, reached with no dynamic extent in
-	 * between -- hands the form to that frame instead ({@link BlockTailExit}); any other
-	 * answers false and is evaluated and thrown as before.
+	 * between -- hands the form to that frame instead ({@link BlockTailExit}), unless
+	 * this frame has entered a block of its own ({@link #defersExit}); any other answers
+	 * false and is evaluated and thrown as before.
 	 * @throws BlockTailExit when the exit's block is {@code deferTo}'s
 	 */
 	private static boolean exitsToFrame(LispVal designator, LispVal form, Environment env, @Nullable Environment owner,
@@ -17963,10 +17964,28 @@ public final class LispEvaluator {
 		if (exitsOwnedBlock(designator, env, owner)) {
 			return true;
 		}
-		if (deferTo != null && exitsOwnedBlock(designator, env, deferTo)) {
-			throw new BlockTailExit(deferTo, form, env);
+		if (defersExit(designator, env, owner, deferTo)) {
+			throw new BlockTailExit(Objects.requireNonNull(deferTo), form, env);
 		}
 		return false;
+	}
+
+	/**
+	 * Whether an exit hands its value form to the frame below, {@code deferTo}: it is
+	 * aimed at a block of that frame and this frame owns no block. A block this frame
+	 * entered lies between the exit and its target, and the value form may exit it --
+	 * trivia's {@code (fail)} is a {@code (return-from clause nil)} inside the value form
+	 * of a {@code (return-from whole ...)} -- which, run in the frame below, would find
+	 * that block gone. Then the form runs here and the exit is thrown.
+	 * @param designator the exit's block designator
+	 * @param env the exit's environment
+	 * @param owner the current frame's owner, or null while it has entered no block
+	 * @param deferTo the owner of the frame below, or null
+	 * @return whether the exit is deferred
+	 */
+	static boolean defersExit(LispVal designator, Environment env, @Nullable Environment owner,
+			@Nullable Environment deferTo) {
+		return deferTo != null && owner == null && exitsOwnedBlock(designator, env, deferTo);
 	}
 
 	/**
